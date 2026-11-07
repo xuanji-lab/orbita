@@ -27,6 +27,7 @@ import { parsePluginInstallRow } from "../../../../shared/plugin.ts";
 import { parseAutomationModeRow, type AutomationModeRow } from "../../../../shared/automation.ts";
 import { parsePluginBoardDetails, type PluginBoardResult } from "../../../../shared/plugin-board.ts";
 import { gatedCommandTimeout, PLUGIN_BOARD_TOOL } from "../../../../shared/permission.ts";
+import { builtinCommand, isBuiltinCommand, PINNED_CARD_COMMANDS } from "./builtin-commands.ts";
 // 值导入必须走相对路径带 .ts 后缀（同上一行的纪律：本文件被 node --test 直接加载）
 import { skillForReadPath } from "../../../../shared/skill.ts";
 import { parseQualifiedToolName } from "../../../../shared/mcp.ts";
@@ -230,7 +231,7 @@ function isChannelToolCall(entry: RenderEntry): boolean {
  * 面向用户的输出。常见节奏（show 完就给结尾回复）下，豁免让画廊正好钉在
  * 折叠行之后、回复之前——「正文前面见图」不需要上浮收集就自然成立。
  */
-const PINNED_TOOL_NAMES: ReadonlySet<string> = new Set(["show_image", PLUGIN_BOARD_TOOL]);
+const PINNED_TOOL_NAMES: ReadonlySet<string> = new Set(["show_image", PLUGIN_BOARD_TOOL, ...PINNED_CARD_COMMANDS]);
 
 function isPinnedToolCall(entry: RenderEntry): boolean {
   return entry.kind === "toolCall" && PINNED_TOOL_NAMES.has(entry.toolName);
@@ -291,6 +292,8 @@ export function groupToolUnits(
       !CHANNEL_TOOL_NAMES.has(unit.toolName) &&
       unit.toolName !== HANDOFF_TOOL_NAME &&
       unit.toolName !== PLUGIN_INSTALL_TOOL_NAME &&
+      // 内置命令（slides_* …）各自一行、各带摘要：并成「slides_write 3 calls」就看不到每次写了哪几页
+      !isBuiltinCommand(unit.toolName) &&
       !PINNED_TOOL_NAMES.has(unit.toolName);
     if (groupable && (head === undefined || head.toolName === unit.toolName)) {
       run.push(unit);
@@ -1583,7 +1586,8 @@ export function toolCallSummary(toolName: string, input: unknown): string | null
     case "request_user_action":
       return str("reason");
     default:
-      return null;
+      // 内置命令（builtin-commands.ts）：摘要由注册表项给
+      return builtinCommand(toolName)?.summary(input) ?? null;
   }
 }
 

@@ -81,6 +81,8 @@ import { FilesPanel } from "./features/files/FilesPanel";
 import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { ReviewPanel } from "./features/review/ReviewPanel";
 import { DocsPanel } from "./features/doc-panel/DocsPanel";
+import { useAutoOpenPanel } from "./features/chat/auto-open-panel.ts";
+import { onOpenPanelRequest } from "./shell/open-panel.ts";
 import type { ExcerptJump } from "./features/review/ExcerptsTab";
 import type { ExcerptJumpRequest } from "./features/chat/ChatView";
 import { BOARD_DAYS_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
@@ -346,6 +348,28 @@ export function App() {
   useEffect(() => {
     if (focus.fileOpen !== null) setDocOpenRequest(null);
   }, [focus.fileOpen]);
+
+  // ── 内置命令让右栏打开某个文件（聊天里的完成卡点击 / agent 新建·打开时自动开）──
+  // 请求总线见 shell/open-panel.ts；slides 面板收到路径直接打开，文档走文件面板
+  const [docOpenRequest, setDocOpenRequest] = useState<{ path: string; nonce: number } | null>(null);
+  const openFileInFocus = focus.openFile;
+  useEffect(
+    () =>
+      onOpenPanelRequest((hint) => {
+        if (hint.kind === "slides") {
+          setRightPanel("slides");
+          setDocOpenRequest({ path: hint.path, nonce: Date.now() });
+        } else {
+          openFileInFocus(hint.path);
+        }
+      }),
+    [openFileInFocus],
+  );
+  // 面板关了就忘掉请求：下回从右栏图标打开，走「上次打开的那份」而不是重放旧请求
+  useEffect(() => {
+    if (rightPanel !== "slides" && rightPanel !== null) setDocOpenRequest(null);
+  }, [rightPanel]);
+  useAutoOpenPanel(session.sessionId ?? session.opened?.id ?? null, session.transcript, session.phase !== "idle");
 
   /**
    * 收起态页头的「新任务」：退出设置页、回到展开侧栏（新任务要落在看得见的列表里），
@@ -1600,6 +1624,7 @@ export function App() {
                   sessionId={session.sessionId ?? session.opened?.id ?? null}
                   workspaceId={session.workspaceId}
                   onQuote={session.addQuote}
+                  openRequest={docOpenRequest}
                 />
               ) : shownPanel === "review" ? (
                 <ReviewPanel

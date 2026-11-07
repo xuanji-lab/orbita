@@ -52,6 +52,22 @@ import fileJson2 from "../../../../design-system/assets/icons/lucide/file-json-2
 import fileSpreadsheet from "../../../../design-system/assets/icons/lucide/file-spreadsheet.svg?raw";
 import fileVideo2 from "../../../../design-system/assets/icons/lucide/file-video-2.svg?raw";
 import presentation from "../../../../design-system/assets/icons/lucide/presentation.svg?raw";
+import typeIcon from "../../../../design-system/assets/icons/lucide/type.svg?raw";
+import shapes from "../../../../design-system/assets/icons/lucide/shapes.svg?raw";
+import table from "../../../../design-system/assets/icons/lucide/table.svg?raw";
+import circle from "../../../../design-system/assets/icons/lucide/circle.svg?raw";
+import triangle from "../../../../design-system/assets/icons/lucide/triangle.svg?raw";
+import squareRoundCorner from "../../../../design-system/assets/icons/lucide/square-round-corner.svg?raw";
+import redo2 from "../../../../design-system/assets/icons/lucide/redo-2.svg?raw";
+import italic from "../../../../design-system/assets/icons/lucide/italic.svg?raw";
+import underline from "../../../../design-system/assets/icons/lucide/underline.svg?raw";
+import alignLeft from "../../../../design-system/assets/icons/lucide/align-left.svg?raw";
+import alignCenter from "../../../../design-system/assets/icons/lucide/align-center.svg?raw";
+import alignRight from "../../../../design-system/assets/icons/lucide/align-right.svg?raw";
+import monitorPlay from "../../../../design-system/assets/icons/lucide/monitor-play.svg?raw";
+import expand from "../../../../design-system/assets/icons/lucide/expand.svg?raw";
+import minimize2 from "../../../../design-system/assets/icons/lucide/minimize-2.svg?raw";
+import imagePlus from "../../../../design-system/assets/icons/lucide/image-plus.svg?raw";
 import scrollText from "../../../../design-system/assets/icons/lucide/scroll-text.svg?raw";
 import image from "../../../../design-system/assets/icons/lucide/image.svg?raw";
 import info from "../../../../design-system/assets/icons/lucide/info.svg?raw";
@@ -286,6 +302,23 @@ const ICONS = {
   "zoom-in": zoomIn,
   "zoom-out": zoomOut,
   maximize,
+  // 演示文稿编辑器（2026-11-07）：工具条 / 形状菜单 / 文字样式
+  "type": typeIcon,
+  "shapes": shapes,
+  "table": table,
+  "circle": circle,
+  "triangle": triangle,
+  "square-round-corner": squareRoundCorner,
+  "redo-2": redo2,
+  "italic": italic,
+  "underline": underline,
+  "align-left": alignLeft,
+  "align-center": alignCenter,
+  "align-right": alignRight,
+  "monitor-play": monitorPlay,
+  "expand": expand,
+  "minimize-2": minimize2,
+  "image-plus": imagePlus,
 } as const;
 
 export type IconName = keyof typeof ICONS;
