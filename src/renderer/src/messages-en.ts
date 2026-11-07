@@ -479,6 +479,22 @@ export const en = {
     unreadFailed: "Stopped with an error · not viewed yet",
   },
 
+  /** 首页会话卡：一句「此刻在干什么」+ 一行「在哪 · 状态 · 多久前」（home-cards.ts 的 homeCardLine） */
+  homeCard: {
+    state: {
+      running: "Running",
+      waiting: "Waiting for you",
+      done: "Finished",
+      failed: "Error",
+    },
+    thinking: "Thinking",
+    doing: (step: string, now: string) => `${step}: ${now}`,
+    approve: (what: string) => `Waiting for your approval: ${what}`,
+    childWaiting: "A sub-session is waiting for your approval",
+    failed: "Stopped with an error",
+    done: "Finished — open it to see the result",
+  },
+
   /** 后台会话跑完时，辅助对话图标旁弹出的卡片 */
   notice: {
     finished: "Task finished",
@@ -588,7 +604,8 @@ export const en = {
     addFolder: "Add a folder…",
     workspaceName: "Workspace name",
     loadingWorkspaces: "Loading workspaces…",
-    noWorkspace: "No workspace yet. Add the folder the agent may read.",
+    noWorkspace: "No workspace yet.",
+    noWorkspaceExit: "Add a folder the agent may read",
     tasks: "Tasks",
     loadingTasks: "Loading tasks…",
     noTask: "No task yet. The one you start lands here.",
@@ -1674,6 +1691,9 @@ export const en = {
     retryLine: (attempt: number, max: number, wait: string) => `Retry ${attempt}/${max} · ${wait}`,
     // 「一轮一行」过程显示（turn-process.ts）
     processSteps: (n: number) => plural(n, "step"),
+    /** 一轮里一步工具都没跑：只想了想就答 / 只写了计划（以前这里写「0 steps」） */
+    processThoughtOnly: "Thought it through",
+    processPlanOnly: "Updated the plan",
     processStepAt: (n: number) => `Step ${n}`,
     processWrote: (n: number) => `wrote ${plural(n, "file")}`,
     processFailed: (n: number) => `${n} failed`,
@@ -1932,7 +1952,8 @@ export const en = {
   },
 
   terminal: {
-    empty: "No terminal open. Press + to start one.",
+    empty: "No terminal open.",
+    startOne: "Start one",
     title: "Terminal",
     newTerminal: "New terminal",
     closeTab: "Close terminal",

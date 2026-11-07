@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useT } from "../../locale.ts";
 import { runStateLabel } from "./completion-notice.ts";
 import { StatusPie } from "../../shell/StatusPie";
+import { PanelEmpty } from "../../shell/PanelEmpty";
 
 /** 清单里的一行：状态饼状态 + 会话名 + 工作区名（数据由 App 按 sessionRunState 算好） */
 export interface NoticeRow {
@@ -58,7 +59,9 @@ export function BellCard(props: {
         )}
       </div>
       {props.entries.length === 0 ? (
-        <div className="bell-card-empty">{t.bell.empty}</div>
+        <PanelEmpty icon="bell" className="bell-card-empty">
+          {t.bell.empty}
+        </PanelEmpty>
       ) : (
         <div className="bell-card-list">
           {props.entries.map((row) => (

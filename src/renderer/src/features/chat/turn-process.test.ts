@@ -12,7 +12,7 @@ import {
   type TurnProcessUnit,
   type TurnViewEntry,
 } from "./tool-results.ts";
-import { firstLine, processChapters, processCounts, processLive } from "./turn-process.ts";
+import { firstLine, processChapters, processCounts, processLive, processOutcome } from "./turn-process.ts";
 
 const user = (id: string, timestamp: number): TranscriptItem =>
   ({ id, role: "user", content: [{ type: "text", text: "hi" }], timestamp }) as TranscriptItem;
@@ -130,5 +130,30 @@ describe("processLive", () => {
     assert.ok(proc !== undefined);
     const live = processLive(proc, indexToolResults(records), () => null);
     assert.deepEqual(live.now, { kind: "think", since: 4100, preview: null });
+  });
+});
+
+describe("processOutcome —— 落定那一行开头说什么（不写「0 步」）", () => {
+  test("纯思考的一轮（想了就答）：说想了想，不是 0 步", () => {
+    const records = [user("u", 1), assistant("a", 2, [{ type: "thinking", thinking: "想一想" }, { type: "text", text: "答" }])];
+    const proc = procOf(view(records, false))[0];
+    assert.ok(proc !== undefined, "纯思考的轮也有一块过程（思考是过程的一步）——否则这条考题测不到");
+    const counts = processCounts(proc.steps, indexToolResults(records));
+    assert.equal(counts.steps, 0);
+    assert.deepEqual(processOutcome(counts, proc.steps), { kind: "thought" });
+  });
+
+  test("只写了计划的一轮：说更新了计划", () => {
+    const records = [user("u", 1), assistant("a", 2, [call("p", "update_plan", { items: [] })]), tool({ toolCallId: "p", toolName: "update_plan", timestamp: 3 }), assistant("z", 4, [{ type: "text", text: "好" }])];
+    const proc = procOf(view(records, false))[0];
+    assert.ok(proc !== undefined);
+    assert.deepEqual(processOutcome(processCounts(proc.steps, indexToolResults(records)), proc.steps), { kind: "plan" });
+  });
+
+  test("跑过工具：步数与写过的文件照旧", () => {
+    const results = indexToolResults(turn);
+    const proc = procOf(view(turn, false))[0];
+    assert.ok(proc !== undefined);
+    assert.deepEqual(processOutcome(processCounts(proc.steps, results), proc.steps), { kind: "work", steps: 3, files: 1 });
   });
 });

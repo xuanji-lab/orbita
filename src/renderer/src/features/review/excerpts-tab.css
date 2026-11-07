@@ -140,15 +140,9 @@
   color: var(--color-text-primary);
 }
 
-.excerpts-empty {
-  display: grid;
-  justify-items: start;
-  gap: var(--space-1);
-  padding: var(--space-3) var(--space-2);
-}
-
-.excerpts-hint {
-  color: var(--color-text-tertiary);
+/* 空态（PanelEmpty）：页签自带一圈 --space-2 内边距，图标再进一个 --space-2 就落在行首槽 */
+.panel-empty.excerpts-empty {
+  padding-inline: var(--space-2);
 }
 
 .excerpts-list {

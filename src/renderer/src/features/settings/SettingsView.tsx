@@ -1,8 +1,8 @@
 import "./settings-view.css";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
-import { Chip } from "../../shell/Chip";
 import { Icon, type IconName } from "../../shell/Icon";
+import { PanelEmpty } from "../../shell/PanelEmpty";
 import { Menu } from "../../shell/Menu";
 import type { MenuItem } from "../../shell/Menu";
 import { PanelButton } from "../../shell/RightPanel";
@@ -23,6 +23,7 @@ import { allShownTicked, importedFirst, setShown } from "./login-sites.ts";
 import { formatDay } from "./migration-groups.ts";
 import { MigrationView } from "./MigrationView";
 import { SettingGroup, SettingRow } from "./SettingRow";
+import { Segmented, SelectButton, Switch } from "./SettingControls";
 import { UpdateCard } from "./UpdateCard";
 import { ProvidersView } from "./ProvidersView";
 import { ThemePicker } from "./ThemeCard";
@@ -332,18 +333,13 @@ function General(props: {
         <SettingRow name={t.settings.language} info={t.settings.languageInfo}>
           {/* 单语主题下两个芯片都置灰、亮的是主题定的那门语言，旁边说清为什么——
               设置里存的值不动，切回双语主题就恢复 */}
-          <span className="set-chips" role="group" aria-label={t.settings.language}>
-            {LANGUAGES.map((language) => (
-              <Chip
-                key={language}
-                active={shownLanguage === language}
-                disabled={lockedLanguage !== null}
-                onClick={() => props.onChange({ language })}
-              >
-                {LANGUAGE_NAMES[language]}
-              </Chip>
-            ))}
-          </span>
+          <Segmented
+            label={t.settings.language}
+            value={shownLanguage}
+            options={LANGUAGES.map((language) => ({ value: language, label: LANGUAGE_NAMES[language] }))}
+            disabled={lockedLanguage !== null}
+            onChange={(language) => props.onChange({ language })}
+          />
           {lockedLanguage !== null && (
             <span className="set-row-hint">
               {lockedLanguage === "zh" ? t.settings.languageLockedZh : t.settings.languageLockedEn}
@@ -364,23 +360,17 @@ function General(props: {
             </>
           }
         >
-          <span className="set-chips" role="group" aria-label={t.settings.autoCompact}>
-            <Chip
-              active={compaction.enabled === false}
-              onClick={() => setCompaction({ ...compaction, enabled: false })}
-            >
-              {t.common.off}
-            </Chip>
-            {COMPACTION_CHOICES.map((value) => (
-              <Chip
-                key={value}
-                active={compaction.enabled !== false && compaction.reservePercent === value}
-                onClick={() => setCompaction({ enabled: true, reservePercent: value })}
-              >
-                {value}%
-              </Chip>
-            ))}
-          </span>
+          <Segmented<number | "off">
+            label={t.settings.autoCompact}
+            value={compaction.enabled === false ? "off" : compaction.reservePercent}
+            options={[
+              { value: "off", label: t.common.off },
+              ...COMPACTION_CHOICES.map((value) => ({ value, label: `${value}%` })),
+            ]}
+            onChange={(value) =>
+              setCompaction(value === "off" ? { ...compaction, enabled: false } : { enabled: true, reservePercent: value })
+            }
+          />
           {/* Off 时整条可视化不渲染（条件渲染，不是隐藏）——没有折叠点可画 */}
           {compaction.enabled !== false && <CompactViz percent={compaction.reservePercent} />}
         </SettingRow>
@@ -400,18 +390,17 @@ function General(props: {
             onSelect={(providerId, modelId) => props.onChange({ choreModel: { providerId, modelId } })}
             leading={[choreFallback]}
             trigger={({ open, toggle }) => (
-              <Chip
-                active={open}
+              <SelectButton
+                open={open}
                 title={
                   choreModel === undefined
                     ? t.settings.choreModelTip
                     : `${choreModel.providerId} · ${choreModel.modelId}`
                 }
                 onClick={toggle}
-                chevron
               >
                 {choreModel?.modelId ?? t.settings.sameAsSession}
-              </Chip>
+              </SelectButton>
             )}
           />
         </SettingRow>
@@ -434,18 +423,17 @@ function General(props: {
                 props.onChange({ subSessionModel: { providerId, modelId }, subSessionThinking: null })}
               leading={[subSessionFallback]}
               trigger={({ open, toggle }) => (
-                <Chip
-                  active={open}
+                <SelectButton
+                  open={open}
                   title={
                     subSessionModel === undefined
                       ? t.settings.subSessionModelTip
                       : `${subSessionModel.providerId} · ${subSessionModel.modelId}`
                   }
                   onClick={toggle}
-                  chevron
                 >
                   {subSessionModel?.modelId ?? t.settings.sameAsParent}
-                </Chip>
+                </SelectButton>
               )}
             />
             {subSessionThinkingModel !== null && (
@@ -453,18 +441,17 @@ function General(props: {
                 items={subSessionThinkingItems}
                 panelMinWidth={112}
                 trigger={({ open, toggle }) => (
-                  <Chip
-                    active={open}
+                  <SelectButton
+                    open={open}
                     title={t.settings.thinkingLevelFor(subSessionThinkingModel.modelId)}
                     onClick={toggle}
-                    chevron
                   >
                     {subSessionThinking === undefined
                       ? t.settings.defaultThinking(
                           t.thinkingLevel(subSessionThinkingModel.fallback, subSessionThinkingModel.modelId),
                         )
                       : t.thinkingLevel(subSessionThinking, subSessionThinkingModel.modelId)}
-                  </Chip>
+                  </SelectButton>
                 )}
               />
             )}
@@ -474,57 +461,44 @@ function General(props: {
           name={t.settings.attribution}
           info={t.settings.attributionInfo}
         >
-          {/* 设计系统里没有 Switch，开关就用两个 Chip——与 Auto-compact 的 Off 同一个形状 */}
-          <span className="set-chips" role="group" aria-label={t.settings.attributionAria}>
-            <Chip active={gitAttribution} onClick={() => props.onChange({ gitAttribution: true })}>
-              {t.common.on}
-            </Chip>
-            <Chip active={!gitAttribution} onClick={() => props.onChange({ gitAttribution: false })}>
-              {t.common.off}
-            </Chip>
-          </span>
+          <Switch
+            label={t.settings.attributionAria}
+            checked={gitAttribution}
+            onChange={(next) => props.onChange({ gitAttribution: next })}
+          />
           <AttributionPreview enabled={gitAttribution} language={shownLanguage} />
         </SettingRow>
         <SettingRow name={t.settings.processView} info={t.settings.processViewInfo}>
-          <span className="set-chips" role="group" aria-label={t.settings.processViewAria}>
-            <Chip active={processView === "turn"} onClick={() => props.onChange({ processView: "turn" })}>
-              {t.settings.processViewTurn}
-            </Chip>
-            <Chip active={processView === "steps"} onClick={() => props.onChange({ processView: "steps" })}>
-              {t.settings.processViewSteps}
-            </Chip>
-          </span>
+          <Segmented
+            label={t.settings.processViewAria}
+            value={processView}
+            options={[
+              { value: "turn" as const, label: t.settings.processViewTurn },
+              { value: "steps" as const, label: t.settings.processViewSteps },
+            ]}
+            onChange={(next) => props.onChange({ processView: next })}
+          />
         </SettingRow>
         <SettingRow
           name={t.settings.pastedCollapse}
           info={t.settings.pastedCollapseInfo}
         >
-          {/* 设计系统里没有 Switch，开关就用两个 Chip——与署名开关同一个形状 */}
-          <span className="set-chips" role="group" aria-label={t.settings.pastedCollapseAria}>
-            <Chip active={pastedCollapse} onClick={() => props.onChange({ collapsePastedText: true })}>
-              {t.common.on}
-            </Chip>
-            <Chip active={!pastedCollapse} onClick={() => props.onChange({ collapsePastedText: false })}>
-              {t.common.off}
-            </Chip>
-          </span>
+          <Switch
+            label={t.settings.pastedCollapseAria}
+            checked={pastedCollapse}
+            onChange={(next) => props.onChange({ collapsePastedText: next })}
+          />
         </SettingRow>
         <SettingRow name={t.settings.completionSound} info={t.settings.completionSoundInfo}>
-          <span className="set-chips" role="group" aria-label={t.settings.completionSoundAria}>
-            <Chip
-              active={completionSound}
-              onClick={() => {
-                props.onChange({ completionSound: true });
-                // 打开时当场响一声：开关的意义就是这个声音，让人先听到它是什么
-                playCompletionChime();
-              }}
-            >
-              {t.common.on}
-            </Chip>
-            <Chip active={!completionSound} onClick={() => props.onChange({ completionSound: false })}>
-              {t.common.off}
-            </Chip>
-          </span>
+          <Switch
+            label={t.settings.completionSoundAria}
+            checked={completionSound}
+            onChange={(next) => {
+              props.onChange({ completionSound: next });
+              // 打开时当场响一声：开关的意义就是这个声音，让人先听到它是什么
+              if (next) playCompletionChime();
+            }}
+          />
         </SettingRow>
       </SettingGroup>
       <SettingGroup label={t.settings.data}>
@@ -653,22 +627,15 @@ function IntentSettingsSection(props: {
             )}
         </span>
         <div className="set-row-ctl">
-          <span className="set-chips" role="group" aria-label={t.settings.intentChannel}>
-            <Chip
-              active={effective.channel === "proma"}
-              onClick={() => patchIntent({ channel: "proma" })}
-              title={t.settings.intentChannelProma}
-            >
-              {t.settings.intentChannelProma}
-            </Chip>
-            <Chip
-              active={effective.channel === "deepseek"}
-              onClick={() => patchIntent({ channel: "deepseek" })}
-              title={t.settings.intentChannelDeepseek}
-            >
-              {t.settings.intentChannelDeepseek}
-            </Chip>
-          </span>
+          <Segmented
+            label={t.settings.intentChannel}
+            value={effective.channel}
+            options={[
+              { value: "proma" as const, label: t.settings.intentChannelProma, title: t.settings.intentChannelProma },
+              { value: "deepseek" as const, label: t.settings.intentChannelDeepseek, title: t.settings.intentChannelDeepseek },
+            ]}
+            onChange={(channel) => patchIntent({ channel })}
+          />
         </div>
       </div>
       <div className="set-row">
@@ -676,14 +643,11 @@ function IntentSettingsSection(props: {
           <span className="set-row-name">{t.settings.intentNewSessionOn}</span>
         </span>
         <div className="set-row-ctl">
-          <span className="set-chips" role="group" aria-label={t.settings.intentNewSessionOn}>
-            <Chip active={effective.newSessionOn} onClick={() => patchIntent({ newSessionOn: true })}>
-              {t.common.on}
-            </Chip>
-            <Chip active={!effective.newSessionOn} onClick={() => patchIntent({ newSessionOn: false })}>
-              {t.common.off}
-            </Chip>
-          </span>
+          <Switch
+            label={t.settings.intentNewSessionOn}
+            checked={effective.newSessionOn}
+            onChange={(newSessionOn) => patchIntent({ newSessionOn })}
+          />
         </div>
       </div>
     </section>
@@ -715,15 +679,7 @@ function ExperimentalFeatureCard(props: {
           <Icon name={feature.icon} size={16} strokeWidth={1.8} />
         </span>
         <span className="exp-card-name">{name}</span>
-        {/* 开关用两个 Chip——设计系统里没有 Switch，与署名行同一个形状 */}
-        <span className="set-chips" role="group" aria-label={name}>
-          <Chip active={props.on} onClick={() => props.onSwitch(true)}>
-            {t.common.on}
-          </Chip>
-          <Chip active={!props.on} onClick={() => props.onSwitch(false)}>
-            {t.common.off}
-          </Chip>
-        </span>
+        <Switch label={name} checked={props.on} onChange={props.onSwitch} />
       </div>
       <p className="exp-card-sum">{feature.summary[language]}</p>
       {props.open ? (
@@ -858,13 +814,13 @@ function DictationEngineGroup() {
         {selection === null ? (
           <span className="set-row-hint">…</span>
         ) : (
-          <span className="set-chips" role="group" aria-label={t.voice.dictationEngine}>
-            {DICTATION_PROVIDERS.map((provider) => (
-              <Chip key={provider} active={selection.provider === provider} disabled={busy} onClick={() => select(provider)}>
-                {t.voice.providers[provider]}
-              </Chip>
-            ))}
-          </span>
+          <Segmented
+            label={t.voice.dictationEngine}
+            value={selection.provider}
+            options={DICTATION_PROVIDERS.map((provider) => ({ value: provider, label: t.voice.providers[provider] }))}
+            disabled={busy}
+            onChange={select}
+          />
         )}
       </SettingRow>
     </SettingGroup>
@@ -1302,9 +1258,9 @@ function LoginImportSection(props: { clearedCount: number }) {
               items={menuItems}
               searchable={sources.list.length > 8}
               trigger={({ open, toggle }) => (
-                <Chip active={open} onClick={toggle} chevron title={t.settings.loginImportSource}>
+                <SelectButton open={open} onClick={toggle} title={t.settings.loginImportSource}>
                   {current !== undefined ? `${current.browserName} · ${current.profileName}` : "…"}
-                </Chip>
+                </SelectButton>
               )}
             />
             <PanelButton
@@ -1451,10 +1407,10 @@ function LoginSitesPanel(props: {
           </label>
         ))}
         {shown.length === 0 && (
-          <span className="login-sites-empty">
-            {/* 读到零个网站（全是过期 / 解不开的）与搜索没命中是两回事 */}
+          // 读到零个网站（全是过期 / 解不开的）与搜索没命中是两回事
+          <PanelEmpty icon={props.sites.length === 0 ? "globe" : "search"} className="login-sites-empty">
             {props.sites.length === 0 ? t.settings.loginImportErrors.noCookies : t.settings.loginImportNoMatch}
-          </span>
+          </PanelEmpty>
         )}
       </div>
       <div className="login-sites-footer">

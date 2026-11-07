@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Icon } from "../../shell/Icon";
+import { PanelEmpty } from "../../shell/PanelEmpty";
 import { Chip } from "../../shell/Chip";
 import {
   PanelButton,
@@ -65,9 +66,7 @@ export function McpServerDetail(props: {
     >
       <div className="panel-list" style={{ paddingTop: "var(--space-2)" }}>
         {error !== null && (
-          <p className="panel-empty" role="alert" style={{ color: "var(--color-danger)" }}>
-            {error}
-          </p>
+          <PanelEmpty tone="danger">{error}</PanelEmpty>
         )}
         <McpServerCard
           server={server}

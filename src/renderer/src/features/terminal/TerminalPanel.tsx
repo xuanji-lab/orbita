@@ -13,6 +13,7 @@ import { api } from "../../api.ts";
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
 import { IconButton } from "../../shell/IconButton";
+import { PanelEmpty } from "../../shell/PanelEmpty";
 import { PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
 import type { TerminalInfo } from "@shared/terminal";
 import { TerminalView } from "./TerminalView";
@@ -191,10 +192,10 @@ export function TerminalPanel(props: {
           ))}
         </div>
       ) : (
-        // 空态：一行浅灰字（右栏统一），新建在标题行的 +
-        <p className="panel-empty" style={{ paddingTop: "var(--space-3)" }}>
+        // 空态（PanelEmpty）：一句现状 + 出口；标题行的 + 是同一个动作
+        <PanelEmpty icon="square-terminal" exit={{ label: t.terminal.startOne, onClick: openTerminal }}>
           {t.terminal.empty}
-        </p>
+        </PanelEmpty>
       )}
     </RightPanelFrame>
   );

@@ -24,6 +24,7 @@ import { isSubmitKey } from "../../shell/composer-keys.ts";
 import { composerBoxHeight } from "../../shell/composer-height.ts";
 import { relativeTime } from "../../shell/relative-time.ts";
 import { PanelIconButton, PanelLine, PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
+import { PanelEmpty } from "../../shell/PanelEmpty";
 import { ToolbarPanelSlotContext } from "../../shell/Toolbar";
 import { Chip } from "../../shell/Chip";
 import { Menu, type MenuItem } from "../../shell/Menu";
@@ -162,9 +163,7 @@ export function SubSessionsPanel(props: {
         {child === undefined && (
           // 极少见：子会话在面板开着时被删了。ChatView 会走它自己的「这条会话不存在」
           // 降级，这里只补一行说明面板为什么显示得空落落的
-          <div style={{ padding: "var(--space-3)" }}>
-            <PanelLine>{t.subSessions.gone}</PanelLine>
-          </div>
+          <PanelEmpty icon="git-fork">{t.subSessions.gone}</PanelEmpty>
         )}
       </div>
     );
@@ -199,9 +198,7 @@ export function SubSessionsPanel(props: {
       contentKey="list"
     >
       {rows.length === 0 ? (
-        <div style={{ padding: "var(--space-3)" }}>
-          <PanelLine>{t.subSessions.none}</PanelLine>
-        </div>
+        <PanelEmpty icon="git-fork">{t.subSessions.none}</PanelEmpty>
       ) : (
         <div className="inbox-rows">
           {rows.map((row) => (

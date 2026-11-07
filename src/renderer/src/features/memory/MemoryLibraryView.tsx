@@ -6,6 +6,7 @@ import {
   type MemoryScopeSummary,
 } from "@shared/memory";
 import { Icon } from "../../shell/Icon";
+import { PanelEmpty } from "../../shell/PanelEmpty";
 import { useT } from "../../locale.ts";
 import { MEMORY_TYPE_ICON, MemoryEntryCard } from "./MemoryEntryCard";
 import { VectorModelView } from "./VectorModelView";
@@ -131,20 +132,21 @@ function ScopePage(props: {
       )}
 
       {entries.error !== null && items === null ? (
-        <div className="mem-empty" role="alert">
-          <span>{t.memory.loadFailed}</span>
-          <button type="button" className="mem-btn" onClick={entries.reload}>
-            {t.memory.retry}
-          </button>
-        </div>
+        <PanelEmpty tone="danger" className="mem-empty" exit={{ label: t.memory.retry, onClick: entries.reload }}>
+          {t.memory.loadFailed}
+        </PanelEmpty>
       ) : items === null ? (
-        <p className="mem-empty">{t.common.loading}</p>
+        <PanelEmpty busy className="mem-empty">
+          {t.common.loading}
+        </PanelEmpty>
       ) : shown.length === 0 ? (
-        <div className="mem-empty">
-          <Icon name="brain-circuit" size={16} strokeWidth={1.6} />
-          <span>{items.length === 0 ? t.memory.empty : t.memory.noMatch}</span>
-          {items.length === 0 && <span className="hint">{t.memory.emptyHint}</span>}
-        </div>
+        <PanelEmpty
+          icon={items.length === 0 ? "brain-circuit" : "search"}
+          className="mem-empty"
+          hint={items.length === 0 ? t.memory.emptyHint : undefined}
+        >
+          {items.length === 0 ? t.memory.empty : t.memory.noMatch}
+        </PanelEmpty>
       ) : (
         <>
           {groups.map((group) => (

@@ -4,6 +4,7 @@ import { Menu, type MenuItem } from "../../shell/Menu";
 import { ContextMenu } from "../../shell/ContextMenu";
 import { RowHoverAction } from "../../shell/RowHoverAction";
 import { PanelButton, PanelIconButton, RightPanelFrame } from "../../shell/RightPanel";
+import { PanelEmpty } from "../../shell/PanelEmpty";
 import { DiffBody } from "../../shell/DiffView";
 import { useT } from "../../locale.ts";
 import { api } from "../../api";
@@ -382,24 +383,26 @@ export function ReviewPanel(props: {
       ) : tab === "memory" ? (
         <MemoryTab sessionId={props.sessionId} />
       ) : props.sessionId === null ? (
-        <EmptyState title={t.review.noTask} />
+        <PanelEmpty icon="file-diff">{t.review.noTask}</PanelEmpty>
       ) : loading && list === null ? (
-        <EmptyState title={t.common.loading} />
+        <PanelEmpty busy>{t.common.loading}</PanelEmpty>
       ) : list === null || (list.kind === "ok" && entries.length === 0) ? (
-        <EmptyState title={t.review.emptyNoChanges} detail={t.review.emptyNoChangesDetail(source)} />
+        <PanelEmpty icon="file-diff" hint={t.review.emptyNoChangesDetail(source)}>
+          {t.review.emptyNoChanges}
+        </PanelEmpty>
       ) : list.kind !== "ok" ? (
-        <EmptyState
-          title={reviewEmptyTitle(list, t)}
-          detail={reviewEmptyText(list, t, source)}
-          danger={list.kind === "error"}
-        />
+        <PanelEmpty
+          icon={list.kind === "error" ? undefined : "git-branch"}
+          tone={list.kind === "error" ? "danger" : undefined}
+          hint={reviewEmptyText(list, t, source)}
+        >
+          {reviewEmptyTitle(list, t)}
+        </PanelEmpty>
       ) : (
         // minmax(0,1fr)：grid 项默认 min-width:auto，长文件名会把行撑出面板、把右端统计挤出视野（实机）
         <div className="panel-list" style={{ paddingTop: "var(--space-2)" }}>
           {source === "branch" && list.upstream !== undefined && (
-            <p className="panel-empty" style={{ padding: "0 var(--space-2) var(--space-2)" }}>
-              {t.review.againstUpstream(list.upstream)}
-            </p>
+            <p className="review-note">{t.review.againstUpstream(list.upstream)}</p>
           )}
           {entries.map((entry) => {
             const open = expanded === entry.path;
@@ -654,16 +657,3 @@ function RowName(props: { path: string; cwd: string | null; disambig: string | n
   );
 }
 
-/** 空态 / 提示：一行浅灰字（右栏统一：不居中、不放大图标、不加粗；出错时红字） */
-function EmptyState(props: { title: string; detail?: string; danger?: boolean }) {
-  return (
-    <p
-      className="panel-empty"
-      role={props.danger === true ? "alert" : undefined}
-      style={{ paddingTop: "var(--space-3)", color: props.danger === true ? "var(--color-danger)" : undefined }}
-    >
-      {props.title}
-      {props.detail !== undefined && ` ${props.detail}`}
-    </p>
-  );
-}

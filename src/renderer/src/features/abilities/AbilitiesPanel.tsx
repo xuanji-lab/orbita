@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../../shell/Icon";
+import { PanelEmpty } from "../../shell/PanelEmpty";
 import { Menu, type MenuItem } from "../../shell/Menu";
 import { StatusPie } from "../../shell/StatusPie";
 import {
@@ -337,12 +338,24 @@ function AbilityList(props: {
     rows.length === 0 && (skills.load.kind === "loading" || skills.serversLoad.kind === "loading");
   const q = query.trim();
 
-  /** 列表空着时那一行字：有词说没匹配；没词按页签说没有什么、怎么来 */
-  const emptyLine = (): string => {
-    if (q !== "") return t.abilities.noMatch(q);
-    if (tab === "skill") return `${t.skills.none} ${t.skills.noneHint}`;
-    if (tab === "mcp") return `${t.mcp.emptyTitle} ${t.mcp.emptyDesc}`;
-    return t.abilities.none;
+  /** 列表空着时的空态：有词说没匹配；没词按页签说没有什么、怎么来，出口是那一类的「添加」 */
+  const emptyState = (): React.ReactNode => {
+    if (q !== "") return <PanelEmpty icon="search">{t.abilities.noMatch(q)}</PanelEmpty>;
+    if (tab === "skill") {
+      return (
+        <PanelEmpty icon="book" hint={t.skills.noneHint} exit={{ label: t.skills.create, onClick: props.onCreateSkill }}>
+          {t.skills.none}
+        </PanelEmpty>
+      );
+    }
+    if (tab === "mcp") {
+      return (
+        <PanelEmpty icon="plug" hint={t.mcp.emptyDesc} exit={{ label: t.abilities.addServer, onClick: props.onAddServer }}>
+          {t.mcp.emptyTitle}
+        </PanelEmpty>
+      );
+    }
+    return <PanelEmpty icon="blocks">{t.abilities.none}</PanelEmpty>;
   };
 
   const groupHead = (group: AbilityGroup): React.ReactNode => {
@@ -383,13 +396,15 @@ function AbilityList(props: {
 
   let body: React.ReactNode;
   if (loading) {
-    body = <p className="panel-empty">{t.common.loading}</p>;
+    body = <PanelEmpty busy>{t.common.loading}</PanelEmpty>;
   } else if (picking) {
     let index = 0;
     body = (
       <>
         {pick.pickable.length === 0 && (
-          <p className="panel-empty">{q === "" ? t.abilities.pickerEmpty : t.abilities.noMatch(q)}</p>
+          <PanelEmpty icon={q === "" ? "blocks" : "search"}>
+            {q === "" ? t.abilities.pickerEmpty : t.abilities.noMatch(q)}
+          </PanelEmpty>
         )}
         {pick.groups.map((group) => (
           <div key={group.kind} role="group" aria-label={group.kind === "skill" ? t.abilities.kindSkill : t.abilities.kindMcp}>
@@ -412,7 +427,7 @@ function AbilityList(props: {
       </>
     );
   } else if (shown.length === 0) {
-    body = <p className="panel-empty">{emptyLine()}</p>;
+    body = emptyState();
   } else {
     body = browse.map((group) => (
       <div key={group.kind}>

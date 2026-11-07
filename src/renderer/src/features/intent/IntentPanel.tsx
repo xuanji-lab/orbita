@@ -25,6 +25,7 @@ import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon.tsx";
 import { Menu, type MenuItem } from "../../shell/Menu.tsx";
 import { PanelTitle, RightPanelFrame } from "../../shell/RightPanel.tsx";
+import { PanelEmpty } from "../../shell/PanelEmpty.tsx";
 import { INTENT_SLOTS, type IntentEdges } from "@shared/intent-edges";
 import type { IntentRecallRecord } from "@shared/session";
 import type { IntentAskView, RecallCardState } from "@shared/intent-recall";
@@ -263,7 +264,7 @@ export function IntentPanel(props: {
   if (rounds.length === 0 && props.liveRun === null) {
     return (
       <RightPanelFrame header={<PanelTitle icon="waypoints" title={t.intentPanel.title} />} contentKey="empty">
-        <p style={emptyStyle}>{t.intentPanel.emptyNoTurns}</p>
+        <PanelEmpty icon="waypoints">{t.intentPanel.emptyNoTurns}</PanelEmpty>
       </RightPanelFrame>
     );
   }
@@ -921,9 +922,3 @@ function shortWhen(ts: number): string {
 
 const DEFAULT_GRAPH_H = 340;
 
-const emptyStyle: React.CSSProperties = {
-  margin: 0,
-  padding: "var(--space-4)",
-  fontSize: "var(--font-size-sm)",
-  color: "var(--color-text-tertiary)",
-};

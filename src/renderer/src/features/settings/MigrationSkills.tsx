@@ -2,6 +2,7 @@ import type { ImportSkillGroup, ImportSkillItem, ImportSkillMode, ImportSkillSco
 import type { Workspace } from "@shared/workspace";
 import { Chip } from "../../shell/Chip";
 import { Icon } from "../../shell/Icon";
+import { PanelEmpty } from "../../shell/PanelEmpty";
 import { Menu, type MenuItem } from "../../shell/Menu";
 import { InfoTip, useSettingTip } from "./InfoTip";
 import { Step } from "./MigrationStep.tsx";
@@ -62,7 +63,7 @@ export function SkillsSection(props: {
       tools={
         selectable.length > 0 && (
           <span className="mg-tools">
-            <span className="mg-seg" role="group" aria-label={t.migration.skillModeAria}>
+            <span className="seg-control" role="group" aria-label={t.migration.skillModeAria}>
               {(["copy", "link"] as const).map((mode) => (
                 <ModeButton
                   key={mode}
@@ -87,9 +88,10 @@ export function SkillsSection(props: {
           {t.migration.skillsCaption}
         </p>
       ) : groups.length === 0 ? (
-        <div className="mg-block mg-empty">
-          <Icon name="circle-check" size={15} />
-          {t.migration.noSkillsInSources}
+        <div className="mg-block">
+          <PanelEmpty icon="circle-check" className="mg-empty done">
+            {t.migration.noSkillsInSources}
+          </PanelEmpty>
         </div>
       ) : (
         <>
@@ -137,7 +139,6 @@ function ModeButton(props: { mode: ImportSkillMode; pressed: boolean; disabled: 
     <>
       <button
         type="button"
-        className="quiet-control mg-seg-btn"
         aria-pressed={props.pressed}
         disabled={props.disabled}
         onClick={props.onClick}
