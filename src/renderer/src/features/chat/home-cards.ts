@@ -112,6 +112,8 @@ export interface HomeCardLineText {
   done: string;
   /** 工具调用的动词（与过程行的计数词同一套：t.chat.rollupTool(rollupToolKey(...))） */
   verb: (toolName: string, input: unknown) => string;
+  /** 工具调用的一句话（缺省 toolCallSummary）；读技能时写技能名而不是路径 */
+  summary?: (toolName: string, input: unknown) => string | null;
 }
 
 export interface HomeCardLineInput {
@@ -174,7 +176,7 @@ function runningLine(turn: readonly TranscriptRecord[], text: HomeCardLineText):
   if (live.chapter !== null) return live.chapter.title;
   if (live.now.kind === "tool") {
     const { toolName, input } = live.now.call;
-    const summary = toolCallSummary(toolName, input);
+    const summary = text.summary === undefined ? toolCallSummary(toolName, input) : text.summary(toolName, input);
     const verb = text.verb(toolName, input);
     return summary === null ? verb : `${verb} ${summary}`;
   }

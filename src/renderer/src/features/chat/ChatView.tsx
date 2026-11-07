@@ -99,6 +99,7 @@ import {
   thinkingDurationText,
   thinkingPreview,
   toolCallSummary,
+  toolCallSummaryForRow,
   toolDurationText,
   toolExpandable,
   toolGroupStatus,
@@ -1210,6 +1211,7 @@ function ChatViewBody(props: {
       failed: t.homeCard.failed,
       done: t.homeCard.done,
       verb: (toolName, input) => toolWord(t.chat.rollupTool, rollupToolKey(toolName, input, skills), input),
+      summary: (toolName, input) => toolCallSummaryForRow(toolName, input, skills),
     };
     // 点击：卡与行都进该会话（openSession）——滚动定位到 sourceMessageRange 的基建
     // 还未立项（PR-4 面板同款 TODO），落定后行点击可升级为定位，卡保持进会话
@@ -3822,7 +3824,7 @@ function TurnProcessLine(props: {
                 <Icon name={item.failed ? "x" : "check"} size={12} strokeWidth={2} />
               </span>
               <span className="proc-verb">{verb(item.call.toolName, item.call.input)}</span>
-              <code>{toolCallSummary(item.call.toolName, item.call.input) ?? ""}</code>
+              <code>{toolCallSummaryForRow(item.call.toolName, item.call.input, props.skills) ?? ""}</code>
               {/* 一秒内落定的不标时长：一排 0.0s 是噪音，慢的那几步才值得看 */}
               {item.ms !== null && item.ms >= 1000 && <span className="proc-dur">{formatToolDuration(item.ms, t)}</span>}
             </div>
@@ -3834,7 +3836,7 @@ function TurnProcessLine(props: {
             {current.kind === "tool" ? (
               <>
                 <span className="proc-verb">{verb(current.call.toolName, current.call.input)}</span>
-                <code>{toolCallSummary(current.call.toolName, current.call.input) ?? ""}</code>
+                <code>{toolCallSummaryForRow(current.call.toolName, current.call.input, props.skills) ?? ""}</code>
               </>
             ) : (
               <>
@@ -3940,7 +3942,7 @@ function ProcessChapterItem(props: {
             {shown.map((call) => (
               <span key={call.toolCallId} className={props.toolResults.get(call.toolCallId)?.status === "error" ? "bad" : undefined}>
                 {toolWord(t.chat.rollupTool, rollupToolKey(call.toolName, call.input, props.skills), call.input)}{" "}
-                {docEditCallLabel(call.toolName, call.input, props.toolResults.get(call.toolCallId)) ?? toolCallSummary(call.toolName, call.input) ?? ""}
+                {docEditCallLabel(call.toolName, call.input, props.toolResults.get(call.toolCallId)) ?? toolCallSummaryForRow(call.toolName, call.input, props.skills) ?? ""}
               </span>
             ))}
             {chapter.calls.length > shown.length && <span>{t.chat.processMore(chapter.calls.length - shown.length)}</span>}

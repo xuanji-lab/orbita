@@ -23,6 +23,7 @@ import {
   expectedSecondsOf,
   groupToolUnits,
   rollupToolKey,
+  toolCallSummaryForRow,
   indexToolResults,
   intraLineTokens,
   interruptedToolCallIds,
@@ -292,6 +293,18 @@ describe("groupToolUnits", () => {
       entries.map((entry) => (entry.kind === "toolGroup" ? `group:${entry.calls.length}` : entry.kind)),
       ["toolCall", "toolCall", "toolCall"],
     );
+  });
+});
+
+describe("toolCallSummaryForRow（过程行里读技能写技能名，不写绝对路径）", () => {
+  const skills = [{ slug: "slides", name: "slides" }];
+  test("read 内置插件技能的 SKILL.md → 技能名；别的 read / 不认识的 SKILL.md 仍是路径", () => {
+    assert.equal(toolCallSummaryForRow("read", { path: "/Users/x/repo/resources/builtin-plugins/docs-slides/skills/slides/SKILL.md" }, skills), "slides");
+    assert.equal(toolCallSummaryForRow("read", { path: "C:\\app\\resources\\builtin-plugins\\docs-slides\\skills\\slides\\SKILL.md" }, skills), "slides");
+    assert.equal(toolCallSummaryForRow("read", { path: "/a/b.ts" }, skills), "/a/b.ts");
+    assert.equal(toolCallSummaryForRow("read", { path: "/a/nope/SKILL.md" }, skills), "/a/nope/SKILL.md");
+    assert.equal(toolCallSummaryForRow("read", { path: "/a/slides/SKILL.md" }, []), "/a/slides/SKILL.md");
+    assert.equal(toolCallSummaryForRow("bash", { command: "ls" }, skills), "ls");
   });
 });
 
