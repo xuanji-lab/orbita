@@ -80,3 +80,17 @@ export interface SlidesAddedAsset {
   width: number;
   height: number;
 }
+
+/** `slides:convert-marp`：旧 .md 演示文稿 → 新格式 */
+export interface SlidesConvertRequest {
+  sessionId: string | null;
+  workspaceId: string | null;
+  /** 旧 .md 的绝对路径 */
+  path: string;
+}
+
+export interface SlidesConverted {
+  /** 新建的 .slides.json 绝对路径 */
+  path: string;
+  pages: number;
+}

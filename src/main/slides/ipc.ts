@@ -4,8 +4,8 @@
  * 导出的实现在 `export.ts`，与 agent 的 slides_export 共用。
  */
 import { BrowserWindow, dialog, ipcMain } from "electron";
-import { readFile, stat } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { open, readFile, stat } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import { IMAGE_MIME, readImageInfo } from "../../shared/image-size.ts";
 import {
@@ -14,11 +14,15 @@ import {
   type SlidesAddAssetRequest,
   type SlidesAddedAsset,
   type SlidesAssetBytes,
+  type SlidesConvertRequest,
+  type SlidesConverted,
   type SlidesExportRequest,
   type SlidesExportResult,
   type SlidesReadAssetRequest,
 } from "../../shared/slides-export.ts";
-import { safeRelativePath } from "../../shared/slides.ts";
+import { collectMarpImages, marpToDeck, type ConvertedImage } from "../../shared/slides-marp.ts";
+import { safeRelativePath, serializeDeck } from "../../shared/slides.ts";
+import { errorCode } from "../fs-errors.ts";
 import { writeBytesAtomic } from "../atomic-write.ts";
 import { resolveDocPath } from "../doc-panel/service.ts";
 import { resolveFileRoots } from "../files/roots.ts";
@@ -66,6 +70,45 @@ export function registerSlidesIpc(workspaces: WorkspaceStore, sessions: SessionS
     const info = readImageInfo(bytes);
     if (info === null) throw new Error("不是支持的图片");
     return { bytes, mime: IMAGE_MIME[info.format] };
+  });
+
+  ipcMain.handle(ipcChannels.slidesConvertMarp, async (_event, req: SlidesConvertRequest): Promise<SlidesConverted> => {
+    const roots = await rootsOf(req);
+    const source = await resolveDocPath(roots, req.path);
+    if (!/\.md$/i.test(source)) throw new Error("只能转换 .md 演示文稿");
+    const text = await readFile(source, "utf8");
+    const stem = basename(source).replace(/\.md$/i, "");
+    const dir = dirname(source);
+    const allowed = roots.filter((root) => root.exists && root.kind !== "attachments").map((root) => root.path);
+    // 先占住新文件名（wx 独占创建，重名加序号），assets 目录名跟着它走
+    let target = "";
+    for (let n = 1; n < 1000; n += 1) {
+      const candidate = join(dir, `${n === 1 ? stem : `${stem} ${n}`}.slides.json`);
+      try {
+        const handle = await open(candidate, "wx");
+        await handle.close();
+        target = candidate;
+        break;
+      } catch (cause) {
+        if (errorCode(cause) !== "EEXIST") throw cause;
+      }
+    }
+    if (target === "") throw new Error("同名演示文稿太多，换个名字再转");
+    const images = new Map<string, ConvertedImage>();
+    for (const src of collectMarpImages(text)) {
+      const path = resolve(isAbsolute(src) ? src : join(dir, src));
+      const real = await realpathInside(path, allowed);
+      if (real === null) continue; // 找不到 / 在工作区外：转换结果里留一行文字说明
+      try {
+        const saved = await saveAssetBytes(target, basename(real), new Uint8Array(await readFile(real)));
+        images.set(src, { src: saved.src, width: saved.info.width, height: saved.info.height });
+      } catch {
+        // 不是图片 / 太大：同上
+      }
+    }
+    const deck = marpToDeck(text, stem, images);
+    await writeBytesAtomic(target, Buffer.from(serializeDeck(deck), "utf8"));
+    return { path: target, pages: deck.slides.length };
   });
 
   ipcMain.handle(ipcChannels.slidesAddAsset, async (_event, req: SlidesAddAssetRequest): Promise<SlidesAddedAsset> => {

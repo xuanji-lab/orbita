@@ -27,6 +27,8 @@ export interface RenderContext {
   deck: Pick<Deck, "aspect" | "theme" | "title">;
   /** 资源路径 → 可加载的 URL；null = 找不到（画占位） */
   imageUrl(src: string): string | null;
+  /** 编辑器里：线条多画一条透明的粗线当点选区（细线很难点中）；导出不要 */
+  editing?: boolean;
 }
 
 /** 页容器与元素的基础样式。渲染层注入一次，网页导出内联 */
@@ -124,7 +126,7 @@ function shapeInner(element: ShapeElement, deck: RenderContext["deck"]): string 
   return `${shapeSvg(element)}${text}`;
 }
 
-function lineInner(element: LineElement): string {
+function lineInner(element: LineElement, editing: boolean): string {
   const [[x1, y1], [x2, y2]] = element.points;
   const markerId = `mk-${element.id}`;
   const needMarker = element.startArrow === "arrow" || element.endArrow === "arrow";
@@ -134,7 +136,10 @@ function lineInner(element: LineElement): string {
   const dash = element.dash ? ` stroke-dasharray="${n(element.strokeWidth * 2.5)} ${n(element.strokeWidth * 2)}"` : "";
   const start = element.startArrow === "arrow" ? ` marker-start="url(#${markerId})"` : "";
   const end = element.endArrow === "arrow" ? ` marker-end="url(#${markerId})"` : "";
-  return `<svg class="sl-svg" viewBox="0 0 ${n(element.w)} ${n(element.h)}" preserveAspectRatio="none">${marker}<line x1="${n(x1)}" y1="${n(y1)}" x2="${n(x2)}" y2="${n(y2)}" stroke="${element.stroke}" stroke-width="${n(element.strokeWidth)}" stroke-linecap="round"${dash}${start}${end}/></svg>`;
+  const hit = editing
+    ? `<line x1="${n(x1)}" y1="${n(y1)}" x2="${n(x2)}" y2="${n(y2)}" stroke="transparent" stroke-width="${n(Math.max(element.strokeWidth, 18))}" pointer-events="stroke"/>`
+    : "";
+  return `<svg class="sl-svg" viewBox="0 0 ${n(element.w)} ${n(element.h)}" preserveAspectRatio="none">${marker}<line x1="${n(x1)}" y1="${n(y1)}" x2="${n(x2)}" y2="${n(y2)}" stroke="${element.stroke}" stroke-width="${n(element.strokeWidth)}" stroke-linecap="round"${dash}${start}${end}/>${hit}</svg>`;
 }
 
 /** 元素内部的 HTML（不含外框）：编辑器把它塞进自己的节点 */
@@ -149,7 +154,7 @@ export function renderElementInner(element: SlideElement, ctx: RenderContext): s
     case "shape":
       return shapeInner(element, ctx.deck);
     case "line":
-      return lineInner(element);
+      return lineInner(element, ctx.editing === true);
   }
 }
 

@@ -46,6 +46,8 @@ export interface TextQuote {
   lines?: { from: number; to: number };
   /** 演示文稿里第几页（1 起）；只有演示文稿的引用带 */
   slide?: number;
+  /** v2 演示文稿（.slides.json）：引用的是这一页上的哪个元素（slides_read 给的 id）；整页引用没有 */
+  element?: string;
   /**
    * 被选文字前后各约 20 字的上下文。**只活在输入框里**（不进正文）：发送时按当前文档重新定位引用
    * （quote-anchor.ts），原文在文件里出现多次时靠它挑出用户划选的那一处
@@ -151,7 +153,7 @@ function encodeAttribute(value: string): string {
 function quoteBlock(quote: TextQuote, index: number): string {
   if (quote.filePath !== undefined) {
     const lines = quote.lines === undefined ? "" : ` lines="${quote.lines.from}-${quote.lines.to}"`;
-    const slide = quote.slide === undefined ? "" : ` slide="${quote.slide}"`;
+    const slide = quote.slide === undefined ? "" : ` slide="${quote.slide}"${quote.element === undefined ? "" : ` element="${encodeAttribute(quote.element)}"`}`;
     const missing = quote.missing === true ? ' missing="true"' : "";
     // 同一段原文在文件里出现多次：说清是第几处，并把这一处前后的字**按原文逐字**写在块体里（不放属性：
     // 属性要转义换行与引号，模型拼 oldText 时把字面 `\n` 带进去，edit 失败重试——一次花了 172 秒）
@@ -235,6 +237,11 @@ export const QUOTE_GUIDELINE = [
     "Markdown separated by lines containing only `+++`, then a closing line `:::` (2–4 columns). Change the file with your normal read / edit / write tools — " +
     "the panel merges changes live, so prefer small edits to rewriting the file, and never touch pages or " +
     "paragraphs you were not asked about.",
+  'When the open document path ends in .slides.json it is a slide deck in the app\'s native format (a JSON list of slides, each a ' +
+    "list of positioned elements) — not Marp markdown, ignore the Marp advice above for it. Never edit it with read / edit / write: " +
+    "use slides_read, slides_write, slides_edit, slides_insert_image (and slides_export). A quote with slide=\"k\" is the whole " +
+    'k-th slide ("this page"); with element="id" it is that element on slide k (ids come from slides_read). The quoted text is only a ' +
+    "text preview of the page — call slides_read for the real structure before changing it.",
   "</orbita-quotes>",
 ].join("\n");
 
@@ -281,6 +288,7 @@ export function parseQuotedMessage(message: string): { quotes: TextQuote[]; text
         filePath,
         ...(lines === undefined ? {} : { lines }),
         ...(Number.isInteger(slide) && slide > 0 ? { slide } : {}),
+        ...(attribute(attrs, "element") === undefined ? {} : { element: attribute(attrs, "element") as string }),
         ...(attribute(attrs, "missing") === "true" ? { missing: true as const } : {}),
         ...(attribute(attrs, "ambiguous") === "true"
           ? {

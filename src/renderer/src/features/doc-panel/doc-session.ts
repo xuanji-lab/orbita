@@ -35,6 +35,9 @@ export interface ExternalChange {
   inserted: { from: number; to: number }[];
 }
 
+/** 外来改动怎么并进本地：默认逐字三向合并（文档）；演示文稿换成结构级的（slides-editor/deck-merge.ts） */
+export type MergeFn = (base: string, local: string, disk: string) => { text: string; changes: TextChange[]; inserted: { from: number; to: number }[] };
+
 export interface DocSessionHooks {
   onState(state: SyncState, error: string | null): void;
   onExternal(change: ExternalChange): void;
@@ -57,8 +60,10 @@ export class DocSession {
   private readonly io: DocIo;
   private readonly hooks: DocSessionHooks;
   private readonly debounceMs: number;
+  private readonly merge: MergeFn;
 
-  constructor(io: DocIo, initial: DocFile, hooks: DocSessionHooks, debounceMs = 500) {
+  constructor(io: DocIo, initial: DocFile, hooks: DocSessionHooks, debounceMs = 500, merge: MergeFn = merge3) {
+    this.merge = merge;
     this.io = io;
     this.hooks = hooks;
     this.debounceMs = debounceMs;
@@ -176,7 +181,7 @@ export class DocSession {
 
   /** 把盘上的现状并进 local，更新基线；有实质变化就通知编辑器 */
   private absorb(file: DocFile): void {
-    const result = merge3(this.baseText, this.local, file.text);
+    const result = this.merge(this.baseText, this.local, file.text);
     this.baseText = file.text;
     this.baseHash = file.hash;
     if (result.text !== this.local) {

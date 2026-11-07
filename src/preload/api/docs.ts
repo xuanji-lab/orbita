@@ -23,6 +23,8 @@ import type {
   SlidesAddAssetRequest,
   SlidesAddedAsset,
   SlidesAssetBytes,
+  SlidesConvertRequest,
+  SlidesConverted,
   SlidesExportRequest,
   SlidesExportResult,
   SlidesReadAssetRequest,
@@ -52,6 +54,8 @@ export const docsApi = {
   export: (req: DocExportRequest): Promise<DocExportResult> => ipcRenderer.invoke(ipcChannels.docExport, req),
   /** 演示文稿 v2：导出 pdf / html / png / pptx（先弹保存对话框） */
   exportSlides: (req: SlidesExportRequest): Promise<SlidesExportResult> => ipcRenderer.invoke(ipcChannels.slidesExport, req),
+  /** 演示文稿 v2：旧 Marp .md → 新格式 .slides.json */
+  convertMarpDeck: (req: SlidesConvertRequest): Promise<SlidesConverted> => ipcRenderer.invoke(ipcChannels.slidesConvertMarp, req),
   /** 演示文稿 v2：读一张 assets 里的图（画布显示用） */
   readSlideAsset: (req: SlidesReadAssetRequest): Promise<SlidesAssetBytes> => ipcRenderer.invoke(ipcChannels.slidesReadAsset, req),
   /** 演示文稿 v2：把拖入 / 粘贴 / 选择的图片字节放进 assets */

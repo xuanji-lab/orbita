@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { TextQuote } from "@shared/quote";
 import { DOC_GONE, docTitle } from "@shared/doc";
 import { isDeckText } from "@shared/doc-slides";
+import { isDeckPath } from "@shared/slides";
+import { SlidesEditorPane } from "../slides-editor/SlidesEditor";
 import { DOC_PAPERS, type DocPaper } from "@shared/settings";
 import { api } from "../../api";
 import { ipcErrorText } from "../../utils/ipc-error.ts";
@@ -28,7 +30,23 @@ import "./doc-panel.css";
  * 两者共用这一层：读盘 / 自动保存 / 监听 agent 的改动并最小差异合并（`useOpenDoc` + `DocSession`）、
  * 工具栏、保存状态、纸面切换、导出，以及「此刻开着哪份文件」的登记（发送消息时让模型知道）。
  */
-export function DocEditPane(props: {
+export function DocEditPane(props: DocEditPaneProps) {
+  // v2 演示文稿（.slides.json）走新编辑器；.md（文档 / 旧 Marp 演示文稿）走下面这个
+  if (isDeckPath(props.path)) {
+    return (
+      <SlidesEditorPane
+        sessionId={props.sessionId}
+        workspaceId={props.workspaceId}
+        path={props.path}
+        {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
+        {...(props.onClose === undefined ? {} : { onClose: props.onClose })}
+      />
+    );
+  }
+  return <MarkdownEditPane {...props} />;
+}
+
+export interface DocEditPaneProps {
   sessionId: string | null;
   workspaceId: string | null;
   /** 文件绝对路径 */
@@ -39,7 +57,9 @@ export function DocEditPane(props: {
   onClose?: () => void;
   /** 另存为落在可写根之内时，切过去打开新文件；缺席 = 只提示已另存 */
   onOpenPath?: (path: string) => void;
-}) {
+}
+
+function MarkdownEditPane(props: DocEditPaneProps) {
   const t = useT();
   const { sessionId, workspaceId, path } = props;
   const { paper, locked, setPaper } = useDocPaper();
@@ -96,6 +116,25 @@ export function DocEditPane(props: {
       setNote({ text: t.doc.saveAsFailed(ipcErrorText(cause)), tone: "danger" });
     }
   }, [doc.session, sessionId, workspaceId, path, props, t]);
+
+  const [converting, setConverting] = useState(false);
+  /** 旧 Marp .md → 新格式（.slides.json，原文件不动），转完切到新文件 */
+  const convertDeck = useCallback(async (): Promise<void> => {
+    const session = doc.session;
+    if (session === null || converting) return;
+    setConverting(true);
+    setNote(null);
+    try {
+      await session.flush();
+      const converted = await api.docs.convertMarpDeck({ sessionId, workspaceId, path });
+      if (props.onOpenPath !== undefined) props.onOpenPath(converted.path);
+      else setNote({ text: `${t.slides.newFormat}：${converted.path}`, tone: "ok" });
+    } catch (cause) {
+      setNote({ text: t.slides.convertFailed(ipcErrorText(cause)), tone: "danger" });
+    } finally {
+      setConverting(false);
+    }
+  }, [doc.session, converting, sessionId, workspaceId, path, props, t]);
 
   const exportNow = useCallback(async (): Promise<void> => {
     const session = doc.session;
@@ -256,6 +295,16 @@ export function DocEditPane(props: {
           )}
         </div>
       )}
+      {deck && (
+        <div className="dp-banner" role="status">
+          <span className="dp-banner-text" title={t.slides.legacyNotice}>
+            {t.slides.legacyNotice}
+          </span>
+          <button type="button" className="dp-text-action" disabled={converting} onClick={() => void convertDeck()}>
+            {converting ? t.slides.converting : t.slides.convertDeck}
+          </button>
+        </div>
+      )}
       {note !== null && (
         <div className="dp-note" role={note.tone === "danger" ? "alert" : "status"} data-tone={note.tone}>
           {note.text}
@@ -263,6 +312,7 @@ export function DocEditPane(props: {
       )}
       {deck ? (
         <SlidesView
+          readOnly
           session={doc.session}
           path={path}
           text={doc.text}

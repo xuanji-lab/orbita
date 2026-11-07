@@ -316,6 +316,8 @@ export const ipcChannels = {
   docExport: "doc:export",
   /** 演示文稿 v2 导出：pdf / html / 当前页 png / pptx（保留字体 · 通用字体）；先弹保存对话框（`SlidesExportRequest`） */
   slidesExport: "slides:export",
+  /** 演示文稿 v2：旧 Marp .md → 新格式 .slides.json（图片复制进 assets；原文件不动），回新文件路径 */
+  slidesConvertMarp: "slides:convert-marp",
   /** 演示文稿 v2：读一张图（相对路径，白名单：演示文稿所在目录内）回字节，画布 / 缩略图显示用 */
   slidesReadAsset: "slides:read-asset",
   /** 演示文稿 v2：把用户拖入 / 粘贴 / 选择的图片字节复制进 `<名字>.assets/`，回相对路径与尺寸 */

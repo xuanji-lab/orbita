@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import { ipcErrorText } from "../../utils/ipc-error.ts";
 import type { DocFile, DocTarget } from "../../../../shared/doc.ts";
-import { DocSession, type ExternalChange, type SyncState } from "./doc-session.ts";
+import { DocSession, type ExternalChange, type MergeFn, type SyncState } from "./doc-session.ts";
 
 export interface OpenDocState {
   phase: "loading" | "ready" | "error";
@@ -37,6 +37,7 @@ export function useOpenDoc(
   target: DocTarget | null,
   onExternal: (change: ExternalChange) => void,
   live: boolean,
+  merge?: MergeFn,
 ): OpenDocState {
   const [state, setState] = useState<OpenDocState>(IDLE);
   const externalRef = useRef(onExternal);
@@ -83,6 +84,8 @@ export function useOpenDoc(
               if (liveRef.current) setState((prev) => (prev.session === created ? { ...prev, text } : prev));
             },
           },
+          500,
+          ...(merge === undefined ? [] : [merge]),
         );
         session = created;
         setState({ ...IDLE, phase: "ready", session: created, initial: file, text: file.text });

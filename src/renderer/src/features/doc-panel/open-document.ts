@@ -1,5 +1,6 @@
 import type { OpenDocument, TextQuote } from "../../../../shared/quote.ts";
 import { resolveDocQuotes } from "../../../../shared/quote-anchor.ts";
+import { isDeckPath } from "../../../../shared/slides.ts";
 import { loadTracked } from "./quote-track.ts";
 
 /**
@@ -42,6 +43,8 @@ export function resolveQuotes(quotes: readonly TextQuote[]): TextQuote[] {
   const from = source;
   return quotes.map((quote) => {
     if (quote.filePath === undefined) return quote;
+    // v2 演示文稿（.slides.json）的引用以页号 / 元素 id 为锚，不靠在文本里重新定位
+    if (isDeckPath(quote.filePath)) return quote;
     if (open !== null && from !== null && quote.filePath === open.path) {
       return resolveDocQuotes(from.text(), open.path, (anchor) => from.trackedRange(anchor), [quote])[0] as TextQuote;
     }

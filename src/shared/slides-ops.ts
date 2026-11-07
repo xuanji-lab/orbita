@@ -6,6 +6,7 @@
  * 全部不可变：输入的 Deck 不改，返回新 Deck（编辑器的撤销栈直接存快照，未改动的页 / 元素引用不变，
  * 缩略图靠引用相等跳过重画）。页号一律 **1 起**（用户说「第 3 页」），内部下标是 页号 - 1。
  */
+import { DEFAULT_SHAPE_FILL, DEFAULT_SHAPE_STROKE, SLIDE_DEFAULT_TEXT, SLIDE_TABLE_BORDER, SLIDE_TABLE_HEADER_FILL } from "./slides-palette.ts";
 import {
   CANVAS_SIZE,
   DECK_MAX_SLIDES,
@@ -15,11 +16,13 @@ import {
   normalizeElement,
   normalizeSlide,
   newId,
+  plainToRichHtml,
   richTextToPlain,
   type Aspect,
   type Deck,
   type DeckTheme,
   type ImageElement,
+  type LineElement,
   type NormalizeContext,
   type Slide,
   type SlideElement,
@@ -440,4 +443,80 @@ export function lintSlide(deck: Deck, page: number): string[] {
     }
   }
   return out;
+}
+
+// ─── 编辑器新建元素的默认外观（画布 / 粘贴 / 插表格共用，一处真源） ──────
+
+export type DrawTool = "text" | "rect" | "roundRect" | "ellipse" | "triangle" | "line" | "arrow";
+
+export interface DrawBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** 线元素：两个端点（画布坐标）→ 框与相对点；框至少 1px 厚 */
+export function lineGeometry(a: [number, number], b: [number, number]): Pick<LineElement, "x" | "y" | "w" | "h" | "points"> {
+  const x = Math.min(a[0], b[0]);
+  const y = Math.min(a[1], b[1]);
+  return {
+    x,
+    y,
+    w: Math.max(Math.abs(b[0] - a[0]), 1),
+    h: Math.max(Math.abs(b[1] - a[1]), 1),
+    points: [[a[0] - x, a[1] - y], [b[0] - x, b[1] - y]],
+  };
+}
+
+/** 工具画出的新元素：拖出了框就用框，只点了一下就用默认大小 */
+export function newDrawnElement(tool: DrawTool, box: DrawBox, textColor: string, dragged: boolean): SlideElement {
+  const id = newId();
+  switch (tool) {
+    case "text":
+      return { id, kind: "text", x: box.x, y: box.y, w: dragged ? Math.max(box.w, 80) : 420, h: dragged ? Math.max(box.h, 48) : 80, html: "", fontSize: 32, color: textColor, align: "left", valign: "top" };
+    case "line":
+    case "arrow":
+      return { id, kind: "line", ...lineGeometry([box.x, box.y], [box.x + box.w, box.y + box.h]), startArrow: "none", endArrow: tool === "arrow" ? "arrow" : "none", stroke: textColor, strokeWidth: 5, dash: false };
+    default:
+      return {
+        id,
+        kind: "shape",
+        shape: tool,
+        x: box.x,
+        y: box.y,
+        w: dragged ? Math.max(box.w, 16) : 240,
+        h: dragged ? Math.max(box.h, 16) : tool === "triangle" ? 200 : 160,
+        fill: DEFAULT_SHAPE_FILL,
+        stroke: DEFAULT_SHAPE_STROKE,
+        strokeWidth: 2,
+        fontSize: 28,
+        color: textColor,
+      };
+  }
+}
+
+/** 居中的 3×3 空表格 */
+export function newTableElement(deck: Deck): SlideElement {
+  const canvas = CANVAS_SIZE[deck.aspect];
+  return {
+    id: newId(),
+    kind: "table",
+    x: (canvas.w - 720) / 2,
+    y: (canvas.h - 300) / 2,
+    w: 720,
+    h: 300,
+    rows: [["", "", ""], ["", "", ""], ["", "", ""]],
+    header: true,
+    fontSize: 24,
+    color: deck.theme?.color ?? SLIDE_DEFAULT_TEXT,
+    headerFill: SLIDE_TABLE_HEADER_FILL,
+    headerColor: "#ffffff",
+    borderColor: SLIDE_TABLE_BORDER,
+  };
+}
+
+/** 粘贴进来的纯文字 → 文字框（每行一段） */
+export function newTextBoxFromPlain(text: string, color: string): SlideElement {
+  return { id: newId(), kind: "text", x: 80, y: 80, w: 640, h: 160, html: plainToRichHtml(text), fontSize: 28, color, align: "left", valign: "top" };
 }

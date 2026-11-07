@@ -30,9 +30,12 @@ export function SlidesView(props: {
   text: string;
   externalRef: { current: (change: ExternalChange) => void };
   onQuote?: (quote: TextQuote) => void;
+  /** 旧格式只读：不给改页、加页、删页（要改先「转换成新格式」） */
+  readOnly?: boolean;
 }) {
   const t = useT();
   const { session, path, text, externalRef } = props;
+  const readOnly = props.readOnly === true;
   const deck = useMemo(() => parseDeck(text), [text]);
   const title = docTitle(path);
   const total = deck.pages.length;
@@ -178,16 +181,18 @@ export function SlidesView(props: {
             </span>
           </button>
         ))}
-        <button type="button" className="dp-thumb-add" onClick={addPage}>
-          <Icon name="plus" size={14} strokeWidth={2} />
-          <span>{t.doc.addPage}</span>
-        </button>
+        {!readOnly && (
+          <button type="button" className="dp-thumb-add" onClick={addPage}>
+            <Icon name="plus" size={14} strokeWidth={2} />
+            <span>{t.doc.addPage}</span>
+          </button>
+        )}
       </div>
       <div className="dp-slide-main" data-editing={editing ? "true" : undefined}>
         <div
           className="dp-slide-stage"
           data-new={flashPages.has(index) ? "true" : undefined}
-          onDoubleClick={() => setEditing((value) => !value)}
+          onDoubleClick={() => (readOnly ? undefined : setEditing((value) => !value))}
         >
           <SlideCanvas text={page.text} number={index + 1} total={total} title={title} overflowLabel={t.doc.slideOverflow} />
         </div>
@@ -196,19 +201,23 @@ export function SlidesView(props: {
             {t.doc.pageLabel(index + 1)} · {t.doc.pageCount(total)}
           </span>
           <span className="dp-bar-grow" />
-          <button type="button" className="dp-text-action" onClick={() => setEditing((value) => !value)}>
-            <Icon name="pencil-line" size={14} strokeWidth={1.8} />
-            {editing ? t.doc.doneEdit : t.doc.editPage}
-          </button>
+          {!readOnly && (
+            <button type="button" className="dp-text-action" onClick={() => setEditing((value) => !value)}>
+              <Icon name="pencil-line" size={14} strokeWidth={1.8} />
+              {editing ? t.doc.doneEdit : t.doc.editPage}
+            </button>
+          )}
           <button type="button" className="dp-text-action" onClick={quotePage}>
             <Icon name="quote" size={14} strokeWidth={1.8} />
             {t.doc.quotePage}
           </button>
-          <IconButton label={t.doc.deletePage} size={28} onClick={deletePage}>
-            <Icon name="trash-2" size={16} strokeWidth={1.8} />
-          </IconButton>
+          {!readOnly && (
+            <IconButton label={t.doc.deletePage} size={28} onClick={deletePage}>
+              <Icon name="trash-2" size={16} strokeWidth={1.8} />
+            </IconButton>
+          )}
         </div>
-        {editing && (
+        {editing && !readOnly && (
           <div className="dp-slide-source" aria-label={t.doc.pageSource}>
             <DocEditor
               key={index}
