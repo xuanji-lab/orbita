@@ -578,7 +578,7 @@ export interface PluginAgentListItem {
 export type PluginAgentListOutcome = { ok: true; plugins: PluginAgentListItem[] } | { ok: false; error: string };
 
 /** 内置插件的名字表：随应用带的、默认对所有工作区启用、不可卸载。内容目录与它同名。 */
-export const BUILTIN_PLUGIN_NAMES = ["plugin-creator", "skill-kit", "docs-slides"] as const;
+export const BUILTIN_PLUGIN_NAMES = ["plugin-creator", "skill-kit", "docs-slides", "browser"] as const;
 
 export function isBuiltinPluginName(name: string): boolean {
   return (BUILTIN_PLUGIN_NAMES as readonly string[]).includes(name);
