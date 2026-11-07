@@ -294,7 +294,7 @@ function QuoteRow(props: {
       )}
       <span
         className={`material-quote-note row-trailing${note.file === null ? "" : " has-file"}`}
-        title={note.file === null ? props.item.quote.text : `${note.file} · ${props.item.quote.text}`}
+        title={props.item.quote.filePath === undefined ? props.item.quote.text : `${props.item.quote.filePath}\n${props.item.quote.text}`}
       >
         {note.file !== null && <span className="material-quote-note-file">{note.file + " · "}</span>}
         {note.lead !== null && <span>{note.lead}</span>}

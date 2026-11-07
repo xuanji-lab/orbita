@@ -4115,8 +4115,7 @@ textarea.text-field {
 
 /* 窄卡回落：两列格子偏窄时注脚藏「谁说的」；再窄回落一列 */
 @container (max-width: 639px) {
-  .material-quote-note-who,
-  .material-quote-note-file {
+  .material-quote-note-who {
     display: none;
   }
 }
@@ -4125,8 +4124,7 @@ textarea.text-field {
   .material-quote-card {
     grid-template-columns: minmax(0, 1fr);
   }
-  .material-quote-note-who,
-  .material-quote-note-file {
+  .material-quote-note-who {
     display: inline;
   }
 }
@@ -4189,16 +4187,20 @@ textarea.text-field {
 
 /* 引用卡格子注脚：尾部元素，钉在格右血线上（动作键绝对定位，悬停时它让位——
    D 项同款）；用 .row-trailing 同一套推右 */
-/* 文件引用的注脚「文件名 · 第 N 行 · 字数」：位置与字数留着，先省文件名（两枚芯片并排时也至少看得到第几行） */
+/* 文件引用的注脚「文件名 · 第 N 页 / 行 · 字数」：文件名与位置是出处，不先省 */
 .material-quote-note.has-file {
   display: inline-flex;
+  /* 注脚是这一行的主角：自然宽度先给它，正文让位；实在放不下再从末尾（字数）裁 */
+  flex: 0 1 auto;
 }
 .material-quote-note-file {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* 文件名不被 CSS 挤成「新…」——长名字在 quote-label.ts 里已经从中间省略过 */
+  flex: 0 0 auto;
   white-space: nowrap;
+}
+.material-quote-row:has(.material-quote-note.has-file) .material-quote-text {
+  flex: 1 1 0;
+  min-width: 2em;
 }
 .material-quote-note.has-file > span:not(.material-quote-note-file) {
   flex: 0 0 auto;

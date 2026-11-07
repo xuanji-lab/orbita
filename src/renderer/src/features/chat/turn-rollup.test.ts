@@ -434,6 +434,50 @@ describe("groupTurns", () => {
     assert.equal(board?.kind === "toolCall" ? board.toolName : "", "show_plugin_board");
   });
 
+  test("内置命令的完成卡留在调用位置：先新建、后写幻灯片，落定后仍按这个顺序读（不被挂到轮尾排到写幻灯片之后）", () => {
+    const records = [
+      userItem("u1", 1000),
+      assistantItem("a1", 2000, [
+        { type: "toolCall", toolCallId: "c1", toolName: "slides_create", input: { title: "新加坡" } },
+      ]),
+      toolItem({ toolCallId: "c1", toolName: "slides_create", timestamp: 2500 }),
+      assistantItem("a2", 3000, [
+        { type: "toolCall", toolCallId: "w1", toolName: "slides_write", input: { slides: [] } },
+        { type: "toolCall", toolCallId: "w2", toolName: "slides_write", input: { slides: [] } },
+      ]),
+      toolItem({ toolCallId: "w1", toolName: "slides_write", timestamp: 3500 }),
+      toolItem({ toolCallId: "w2", toolName: "slides_write", timestamp: 3600 }),
+      assistantItem("a3", 9000, [{ type: "text", text: "做好了" }]),
+    ];
+    const view = turnView(records, false);
+    assert.deepEqual(
+      view.map((entry) => entry.kind),
+      ["user", "toolCall", "turnGroup", "text"],
+    );
+    const card = view[1];
+    assert.equal(card?.kind === "toolCall" ? card.toolName : "", "slides_create");
+    // 写幻灯片收进它后面的折叠，不在卡之前
+    const fold = foldUnits(view)[0];
+    assert.ok(fold !== undefined);
+    assert.ok(fold.members.every((member) => !(member.kind === "toolCall" && member.toolName === "slides_create")));
+  });
+
+  test("导出卡在最后一步之后：折叠在前、导出卡在后，回复仍在最末", () => {
+    const records = [
+      userItem("u1", 1000),
+      assistantItem("a1", 2000, [{ type: "toolCall", toolCallId: "w1", toolName: "slides_write", input: {} }]),
+      toolItem({ toolCallId: "w1", toolName: "slides_write", timestamp: 2500 }),
+      assistantItem("a2", 3000, [{ type: "toolCall", toolCallId: "x1", toolName: "slides_export", input: { format: "pdf" } }]),
+      toolItem({ toolCallId: "x1", toolName: "slides_export", timestamp: 3500 }),
+      assistantItem("a3", 9000, [{ type: "text", text: "导出好了" }]),
+    ];
+    const view = turnView(records, false);
+    assert.deepEqual(
+      view.map((entry) => entry.kind),
+      ["user", "turnGroup", "toolCall", "text"],
+    );
+  });
+
   test("通道工具夹在两次真实工具调用中间时同样被抠出来，前后各自成一个折叠，位置不变", () => {
     const records = [
       userItem("u1", 1000),

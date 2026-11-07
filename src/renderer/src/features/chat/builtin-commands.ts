@@ -98,6 +98,20 @@ function join(parts: readonly (string | null)[]): string | null {
   return real.length === 0 ? null : real.join(" · ");
 }
 
+/**
+ * 版式的图片槽位（slots.image）→ 「插图 hawker.jpg」：用户一眼看到这一步放了图。
+ * 图片槽位取代了单独的「插入图片」调用（主会话裁决 2026-11-07），所以写幻灯片这一步要自己说出来。
+ * 文件路径取文件名（完整，不省略）；`attached` / `attached:N` 是用户附在对话里的图——附件副本只记
+ * `<uuid>.<扩展名>`，没有原文件名可显示，写「附图」「附图 2」。
+ */
+export function imageSlotLabel(image: unknown): string | null {
+  if (typeof image !== "string" || image.trim() === "") return null;
+  const value = image.trim();
+  const attached = /^attached(?::(\d+))?$/i.exec(value);
+  if (attached !== null) return attached[1] === undefined || attached[1] === "1" ? "附图" : `附图 ${attached[1]}`;
+  return value.split(/[\\/]/).pop() ?? value;
+}
+
 function slidesWriteSummary(input: unknown): string | null {
   const slides = record(input)?.["slides"];
   if (!Array.isArray(slides) || slides.length === 0) {
@@ -110,16 +124,19 @@ function slidesWriteSummary(input: unknown): string | null {
   const numbered: number[] = [];
   let appended = 0;
   const all: unknown[] = [];
+  const images: string[] = [];
   for (const entry of slides) {
     const item = record(entry);
     if (item === null) continue;
+    const image = imageSlotLabel(record(item["slots"])?.["image"]);
+    if (image !== null) images.push(image);
     const at = item["at"];
     if (typeof at === "number") numbered.push(at);
     else appended += 1;
     if (Array.isArray(item["elements"])) all.push(...(item["elements"] as unknown[]));
   }
   const where = join([pagesLabel(numbered), appended > 0 ? `追加 ${appended} 页` : null]);
-  return join([where, elementTally(all)]);
+  return join([where, images.length > 0 ? `插图 ${images.join("、")}` : null, elementTally(all)]);
 }
 
 function slidesEditSummary(input: unknown): string | null {

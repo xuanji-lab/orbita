@@ -51,6 +51,24 @@ describe("参数摘要", () => {
     assert.equal(toolCallSummary("slides_create", null), null);
   });
 
+  it("slides_write：版式的图片槽位在摘要里写「插图 文件名」（取代单独的插入图片调用，用户一眼看到放了图）", () => {
+    assert.equal(
+      toolCallSummary("slides_write", { slides: [{ at: 3, layout: "image-right", slots: { title: "小贩中心", image: "素材/hawker.jpg" } }] }),
+      "第 3 页 · 插图 hawker.jpg",
+    );
+    assert.equal(
+      toolCallSummary("slides_write", { slides: [{ layout: "image-full", slots: { image: "/Users/x/图 库/滨海湾.png" } }] }),
+      "追加 1 页 · 插图 滨海湾.png",
+    );
+    // 文件名完整不省略
+    assert.match(toolCallSummary("slides_write", { slides: [{ at: 2, slots: { image: "a/一个很长很长的文件名-final-v3.jpeg" } }] }) ?? "", /插图 一个很长很长的文件名-final-v3\.jpeg$/);
+    // 用户附在对话里的图：没有原文件名，写「附图」
+    assert.equal(toolCallSummary("slides_write", { slides: [{ at: 3, slots: { image: "attached" } }] }), "第 3 页 · 插图 附图");
+    assert.equal(toolCallSummary("slides_write", { slides: [{ at: 3, slots: { image: "attached:2" } }] }), "第 3 页 · 插图 附图 2");
+    // 没有图片槽位的版式页不多出「插图」
+    assert.equal(toolCallSummary("slides_write", { slides: [{ at: 1, layout: "cover", slots: { title: "T" } }] }), "第 1 页");
+  });
+
   it("slides_write：页号 + 元素统计，箭头线单独叫箭头", () => {
     const summary = toolCallSummary("slides_write", {
       slides: [

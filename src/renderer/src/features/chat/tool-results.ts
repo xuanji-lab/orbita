@@ -237,6 +237,16 @@ function isPinnedToolCall(entry: RenderEntry): boolean {
   return entry.kind === "toolCall" && PINNED_TOOL_NAMES.has(entry.toolName);
 }
 
+/**
+ * 内置命令里要出完成卡的那几个（新建演示文稿 / 打开文档 / 导出 …）：不挂轮尾，**留在它被调用的位置**。
+ * 过程行是时间线——先「新建演示文稿」、后「写幻灯片」就该按这个顺序读；挂到轮尾会让它排到后面的写幻灯片折叠之下
+ * （验收 S1：新建画在写幻灯片那组下面）。做法同通道工具：在这里把块切开，卡原位放进视图，前后各自成折叠。
+ * show_image / 插件看板仍是挂轮尾（给用户看的成品，贴在回复之前）。
+ */
+function isInPlaceCardCall(entry: RenderEntry): boolean {
+  return entry.kind === "toolCall" && PINNED_CARD_COMMANDS.has(entry.toolName);
+}
+
 /** 这条 toolCall 是不是在 read 某条已知 skill 的 SKILL.md（分组排除用，同 ToolLine 的判定） */
 function isSkillRead(
   unit: ToolCallUnit,
@@ -553,6 +563,11 @@ function foldSegment(
     chunk = [];
   };
   for (const entry of segment) {
+    if (isInPlaceCardCall(entry)) {
+      flushChunk(false);
+      view.push(entry);
+      continue;
+    }
     if (isPinnedToolCall(entry)) {
       pinned.push(entry);
       continue;

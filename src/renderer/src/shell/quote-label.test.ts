@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { quoteMeta, quoteNoteParts, quotePreview, quoteRowPreview, quoteSource, QUOTE_ROW_PREVIEW_MAX_CHARS } from "./quote-label.ts";
+import { middleTruncate, quoteMeta, quoteNoteParts, quotePreview, quoteRowPreview, quoteSource, QUOTE_ROW_PREVIEW_MAX_CHARS } from "./quote-label.ts";
 import { en } from "../messages-en.ts";
 import { zh } from "../messages-zh.ts";
 
@@ -75,5 +75,24 @@ describe("引用 chip 文案", () => {
     const within = quoteRowPreview({ text: "一二三四五六七八九十".repeat(30), messageId: "m", role: "assistant", turn: 1 });
     assert.equal(Array.from(within).length, 300);
     assert.equal(Array.from(within).at(-1), "十");
+  });
+});
+
+describe("芯片上的文件名：先保文件名与页号，太长从中间省略", () => {
+  test("middleTruncate：不超限原样；超限保头保尾（扩展名在）；按码点算", () => {
+    assert.equal(middleTruncate("新加坡夜空.slides.json"), "新加坡夜空.slides.json");
+    const out = middleTruncate("花园城市新加坡介绍的最终修订版（给董事会）.slides.json");
+    assert.equal(Array.from(out).length, 20);
+    assert.match(out, /^花园城市新加坡/);
+    assert.match(out, /….*son$/);
+    assert.equal(middleTruncate("😀".repeat(30)).includes("…"), true);
+  });
+
+  test("演示文稿的引用：注脚是「文件名 · 第 n 页」，文件名整名给出（不再靠 CSS 挤成「新…」）", () => {
+    const deck = { text: "[图片]", messageId: "", role: "user" as const, filePath: "/ws/新加坡夜空.slides.json", slide: 2 };
+    assert.deepEqual(quoteNoteParts(deck, zh), { lead: "第 2 页", who: null, size: "4 字", file: "新加坡夜空.slides.json" });
+    const long = quoteNoteParts({ ...deck, filePath: "/ws/花园城市新加坡介绍的最终修订版（给董事会）.slides.json" }, zh);
+    assert.ok(Array.from(long.file ?? "").length <= 20);
+    assert.equal(long.lead, "第 2 页");
   });
 });

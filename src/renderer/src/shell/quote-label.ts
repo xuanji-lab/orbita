@@ -15,6 +15,18 @@ const SUMMARY_CHARS = 20;
  */
 export const QUOTE_ROW_PREVIEW_MAX_CHARS = 300;
 
+/** 芯片里文件名的最长码点数；再长从中间省略（保头保尾：扩展名与结尾的版本号 / 日期比中段更能认出是哪份） */
+export const QUOTE_FILE_NAME_MAX = 20;
+
+/** 中间省略：`花园城市新加坡介绍的最终修订版.slides.json` → `花园城市新加坡介…s.json`；不超限原样 */
+export function middleTruncate(name: string, max: number = QUOTE_FILE_NAME_MAX): string {
+  const chars = Array.from(name);
+  if (chars.length <= max) return name;
+  const tail = Math.min(7, Math.floor((max - 1) / 3));
+  const head = max - 1 - tail;
+  return `${chars.slice(0, head).join("")}…${chars.slice(chars.length - tail).join("")}`;
+}
+
 /** 文件引用的出处拆成两段：文件名、位置（页号 / 行号 / 原文已改）。窄格里先省文件名、位置留着 */
 function fileSourceParts(quote: TextQuote, t: Messages): { name: string; position: string } {
   const name = (quote.filePath ?? "").split(/[\\/]/).pop() || (quote.filePath ?? "");
@@ -51,7 +63,9 @@ export function quoteNoteParts(
   const size =
     quote.truncated === true ? t.quote.truncated(countChars(quote.text)) : t.quote.chars(countChars(quote.text));
   if (quote.filePath !== undefined) {
-    const { name, position } = fileSourceParts(quote, t);
+    const { name: fullName, position } = fileSourceParts(quote, t);
+    // 芯片上文件名不被 CSS 挤成「新…」：太长就在这里从中间省略，其余宽度紧张时先让正文与字数让位
+    const name = middleTruncate(fullName);
     // 有位置：位置是 lead，文件名单列（CSS 窄格里先省文件名）；没有位置就和从前一样，文件名当 lead
     return position === "" ? { lead: name, who: null, size, file: null } : { lead: position, who: null, size, file: name };
   }
