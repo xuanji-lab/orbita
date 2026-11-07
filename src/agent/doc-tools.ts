@@ -159,7 +159,8 @@ export function createDocTools(broker: RequestBroker, sessionId: string, options
         subtitle: `文档 · ${toPosix(relative(cwd, shown)) || basename(real)}${lineCount > 0 ? ` · ${lineCount} 行` : ""}`,
       };
       return ok(
-        `${created ? "Created and opened" : "Opened"} ${real} in the Files panel (${lineCount} lines).\nOutline:\n${outline}\n` +
+        // 回给模型的也是用户看到的路径：模型会把它转述给用户，symlink 工作区里不该冒出 realpath
+        `${created ? "Created and opened" : "Opened"} ${shown} in the Files panel (${lineCount} lines).\nOutline:\n${outline}\n` +
           "Edit it with the normal read / edit / write tools; the panel updates live.",
         { ...openDetails(shown, created), card },
       );

@@ -102,6 +102,9 @@ describe("doc_open", () => {
       assert.equal(readCommandCard(result.details)?.path, join(base, "Home", "周报", "w.md"));
       // 卡片副标题的相对路径也以用户看到的工作区为准（曾显示成 ../real/周报/w.md）
       assert.match(readCommandCard(result.details)?.subtitle ?? "", /^文档 · 周报\/w\.md/);
+      // 回给模型的文字也用这个路径（模型会转述给用户，不该冒出 real/ 开头的真实路径）
+      assert.ok(((result as { content?: { text: string }[] }).content?.[0]?.text ?? "").includes(join(base, "Home", "周报", "w.md")));
+      assert.ok(!((result as { content?: { text: string }[] }).content?.[0]?.text ?? "").includes(join(base, "real")));
     } finally {
       await rm(base, { recursive: true, force: true });
     }
