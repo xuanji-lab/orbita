@@ -102,9 +102,21 @@
 .dp-editor .cm-cursor {
   border-left-color: var(--dp-ink);
 }
-.dp-editor .cm-selectionBackground,
-.dp-editor .cm-focused .cm-selectionBackground {
-  background: color-mix(in srgb, var(--color-info) 22%, transparent);
+/* 选区：不透明的 info 色与纸面混出来的实底（不是半透明叠色）——字是主墨色，对比度由这一个混色决定：
+   浅 ≈ 9.9、黛 / 玄 ≈ 7.8（实测数字见返工 #5 报告）。选择器要压过 CodeMirror 基础主题里带 4 层的
+   `.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground`（它给的是一块浅薰衣草色，
+   玄主题下压在浅色字上几乎看不清），所以这里写满五层 */
+.dp {
+  --dp-select: color-mix(in srgb, var(--color-info) 32%, var(--dp-bg));
+}
+.dp-editor .cm-editor .cm-scroller .cm-selectionLayer .cm-selectionBackground,
+.dp-editor .cm-editor.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground {
+  background: var(--dp-select);
+}
+.dp-editor .cm-editor .cm-content ::selection,
+.dp-editor .cm-editor .cm-line::selection {
+  background: var(--dp-select);
+  color: var(--dp-ink);
 }
 .dp-editor .cm-placeholder {
   color: var(--color-text-tertiary);

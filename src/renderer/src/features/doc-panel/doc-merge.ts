@@ -117,20 +117,61 @@ export function merge3(base: string, local: string, disk: string): MergeResult {
   const theirs = toChangeSet(base.length, diffToChanges(base, disk));
   const mapped = theirs.map(user);
   const merged = mapped.apply(Text.of(local.split("\n")));
-  return collect(mapped, merged.toString());
+  return collect(mapped, merged.toString(), local);
 }
 
 function fromLocalTo(local: string, target: string): MergeResult {
   const set = toChangeSet(local.length, diffToChanges(local, target));
-  return collect(set, target);
+  return collect(set, target, local);
 }
 
-function collect(set: ChangeSet, text: string): MergeResult {
-  const inserted: { from: number; to: number }[] = [];
+/**
+ * 新增 / 改动的**整行**区间（坐标在 `after` 里，不含行尾换行）：用行级 diff 现算。
+ * 不能直接拿最小差异的字符区间去标绿：最小差异先剥公共前缀，agent 在「## 下周计划」前面插入一节时，
+ * 公共前缀会吃掉新增节末尾那个 `## `，插入区间于是落进下一个标题的行首、把没变的标题也标绿
+ * （2026-11-07 引导界面实走发现）。行级 diff 里只有真新增 / 改动的行才在 added 里，边界上没变的行不算。
+ */
+export function addedLineRanges(before: string, after: string): { from: number; to: number }[] {
+  const out: { from: number; to: number }[] = [];
+  let pos = 0;
+  // 两边都补一个结尾换行再比：文末没有换行的最后一行，不会因为「后面接了新内容」被当成改过
+  for (const part of diffLines(before.endsWith("\n") ? before : `${before}\n`, after.endsWith("\n") ? after : `${after}\n`)) {
+    if (part.removed) continue;
+    if (part.added) {
+      // 一块新增可能含好几行（和空行）：逐行切开，空行不标
+      let at = pos;
+      for (const line of part.value.split("\n")) {
+        const trimmedEnd = line.replace(/\r$/, "");
+        if (trimmedEnd.trim() !== "") out.push({ from: at, to: at + trimmedEnd.length });
+        at += line.length + 1;
+      }
+    }
+    pos += part.value.length;
+  }
+  return out;
+}
+
+function collect(set: ChangeSet, text: string, before: string): MergeResult {
   const changes: TextChange[] = [];
-  set.iterChanges((fromA, toA, fromB, toB, insert) => {
+  let anyInsert = false;
+  set.iterChanges((fromA, toA, _fromB, toB, insert) => {
     changes.push({ from: fromA, to: toA, insert: insert.toString() });
-    if (toB > fromB) inserted.push({ from: fromB, to: toB });
+    if (insert.length > 0 && toB >= 0) anyInsert = true;
   });
+  // 行级 diff 的体量闸同 diffToChanges：太大就退回字符区间（只会多标，不会少标）
+  const inserted =
+    !anyInsert
+      ? []
+      : before.length + text.length > 2 * LINE_DIFF_MAX_CHARS
+        ? charRanges(set)
+        : addedLineRanges(before, text);
   return { text, inserted, changes };
+}
+
+function charRanges(set: ChangeSet): { from: number; to: number }[] {
+  const out: { from: number; to: number }[] = [];
+  set.iterChanges((_fromA, _toA, fromB, toB) => {
+    if (toB > fromB) out.push({ from: fromB, to: toB });
+  });
+  return out;
 }

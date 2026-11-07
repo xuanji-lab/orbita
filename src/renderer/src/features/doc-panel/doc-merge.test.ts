@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { diffToChanges, merge3, type TextChange } from "./doc-merge.ts";
+import { addedLineRanges, diffToChanges, merge3, type TextChange } from "./doc-merge.ts";
 
 const apply = (text: string, changes: readonly TextChange[]): string => {
   let out = text;
@@ -70,7 +70,8 @@ describe("merge3 —— 三向合并", () => {
     assert.equal(result.inserted.length, 1);
     const range = result.inserted[0]!;
     assert.match(result.text.slice(range.from, range.to), /每个版本先写验收剧本/);
-    assert.equal(result.text.slice(0, range.from) + result.text.slice(range.to), DOC);
+    // 标的是整行（新增那一行本身），不含它前后的空行与别的行
+    assert.equal(result.text.slice(range.from, range.to), "每个版本先写验收剧本。");
   });
 
   it("B2：用户在第一段打字（未落盘），agent 同时在末尾追加一段 → 两边都在", () => {
@@ -102,7 +103,8 @@ describe("merge3 —— 三向合并", () => {
     assert.equal(apply(local, result.changes), result.text);
     assert.ok(result.text.includes("（用户）") && result.text.includes("（agent）"));
     assert.equal(result.inserted.length, 1);
-    assert.equal(result.text.slice(result.inserted[0]!.from, result.inserted[0]!.to), "（agent）");
+    // 改动的那一行整行标（agent 在句末加了字，那一行算「改动」）；用户自己打的字那行不标
+    assert.equal(result.text.slice(result.inserted[0]!.from, result.inserted[0]!.to), `${P3}（agent）`);
   });
 
   it("盘上没变（回声）：什么都不做", () => {
@@ -123,5 +125,46 @@ describe("merge3 —— 三向合并", () => {
     const result = merge3(DOC, local, disk);
     // 用户改的那一行已被 agent 整段替换：至少合并结果是合法文本、包含 agent 的全部内容
     assert.ok(result.text.includes("全新内容"));
+  });
+});
+
+describe("标绿范围只取真新增 / 改动的行（边界上没变的行不算）", () => {
+  const lines = (text: string, ranges: { from: number; to: number }[]): string[] => ranges.map((r) => text.slice(r.from, r.to));
+
+  it("agent 在「## 下周计划」前插入一节：只标新增的两段，下一个标题不标（引导界面实走的复现）", () => {
+    const before = "# 周报\n\n## 方法\n\n复现按基线走。\n\n## 下周计划\n\n- 写完 E1\n";
+    const after = "# 周报\n\n## 方法\n\n复现按基线走。\n\n## 数据\n\n实验数据用 data/nyc.csv，共 192 条。\n\n## 下周计划\n\n- 写完 E1\n";
+    // 前提：字符级最小差异确实把插入区间推进了下一个标题的 `## `（这正是旧实现把「下周计划」也标绿的来路）
+    const [change] = diffToChanges(before, after);
+    assert.ok(after.slice(change!.from, change!.from + change!.insert.length).endsWith("## "), "字符级插入以 `## ` 收尾");
+    const result = merge3(before, before, after);
+    assert.deepEqual(lines(result.text, result.inserted), ["## 数据", "实验数据用 data/nyc.csv，共 192 条。"]);
+    assert.ok(!result.inserted.some((r) => result.text.slice(r.from, r.to).includes("下周计划")));
+  });
+
+  it("用户同时在打字（三向合并路径）：同样只标 agent 新增的行", () => {
+    const base = "# 周报\n\n## 方法\n\n正文。\n\n## 下周计划\n";
+    const local = base.replace("正文。", "正文。用户在打字");
+    const disk = base.replace("## 下周计划", "## 数据\n\n数据一行。\n\n## 下周计划");
+    const result = merge3(base, local, disk);
+    assert.ok(result.text.includes("正文。用户在打字"));
+    assert.deepEqual(lines(result.text, result.inserted), ["## 数据", "数据一行。"]);
+  });
+
+  it("改动的行：整行标（改了几个字的那一行算「改动」）；没动的行不标；只删不加不标", () => {
+    assert.deepEqual(lines("甲\n乙改\n丙\n", addedLineRanges("甲\n乙\n丙\n", "甲\n乙改\n丙\n")), ["乙改"]);
+    assert.deepEqual(addedLineRanges("甲\n乙\n丙\n", "甲\n丙\n"), []);
+    assert.deepEqual(addedLineRanges("甲\n", "甲\n"), []);
+  });
+
+  it("在文末追加、在文首插入：边界行同样不连带", () => {
+    const tail = merge3("甲\n\n乙", "甲\n\n乙", "甲\n\n乙\n\n新一段");
+    assert.deepEqual(lines(tail.text, tail.inserted), ["新一段"]);
+    const head = merge3("乙\n", "乙\n", "新开头\n\n乙\n");
+    assert.deepEqual(lines(head.text, head.inserted), ["新开头"]);
+  });
+
+  it("只有空行的新增不标（段与段之间的空行不是「新增的段」）", () => {
+    assert.deepEqual(addedLineRanges("甲\n乙\n", "甲\n\n乙\n"), []);
   });
 });
