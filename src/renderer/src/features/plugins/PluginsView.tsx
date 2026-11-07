@@ -117,6 +117,8 @@ export function PluginsView(props: {
   const [installing, setInstalling] = useState(false);
   const [query, setQuery] = useState("");
   const [toggleError, setToggleError] = useState<string | null>(null);
+  /** 刚才那份「正在做」的草稿文件夹没了、自动退回列表：列表顶上说一句（名字）；打开别的草稿 / 详情时清掉 */
+  const [draftGoneName, setDraftGoneName] = useState<string | null>(null);
   // 大 / 小与「仅显示已启用」记在设置里（同模型服务页）：本地先切，不等写盘回来；右栏版恒为全部显示
   const [cardSize, setCardSizeState] = useState<CardSize>(props.page?.cardSize ?? "large");
   const [onlyEnabledState, setOnlyEnabledState] = useState(props.page?.onlyEnabled ?? false);
@@ -157,6 +159,10 @@ export function PluginsView(props: {
     }
   }, []);
   const { draft: shownDraftTarget, onLeaveDraft } = props;
+  // 又打开了一份草稿：上一条「草稿文件夹没了」的说明作废
+  useEffect(() => {
+    if (shownDraftTarget != null) setDraftGoneName(null);
+  }, [shownDraftTarget]);
   useEffect(() => {
     if (picker === undefined) return;
     // 每次「/ + 空格」从干净的状态起：回列表（不在详情 / 草稿里）、清词、不展开、亮第一行
@@ -409,6 +415,12 @@ export function PluginsView(props: {
           <span>{toggleError}</span>
         </div>
       )}
+      {draftGoneName !== null && (
+        <div className="pl-note warn" role="status">
+          <Icon name="info" size={14} strokeWidth={1.8} />
+          <span>{t.draftGone(draftGoneName)}</span>
+        </div>
+      )}
       {(legacy.skills > 0 || legacy.mcp > 0) && (
         <div className="pl-note">
           <Icon name="info" size={14} strokeWidth={1.8} />
@@ -541,7 +553,17 @@ export function PluginsView(props: {
 
   // 正在做的草稿优先于列表与详情（智能体刚预览了它，用户要看的就是它）；点返回回到列表
   if (rail && props.draft !== undefined && props.draft !== null) {
-    return <PluginDraftView path={props.draft.path} workspaceId={props.draft.workspaceId} onBack={() => props.onLeaveDraft?.()} />;
+    return (
+      <PluginDraftView
+        path={props.draft.path}
+        workspaceId={props.draft.workspaceId}
+        onBack={() => props.onLeaveDraft?.()}
+        onGone={(name) => {
+          setDraftGoneName(name);
+          props.onLeaveDraft?.();
+        }}
+      />
+    );
   }
 
   if (rail) {

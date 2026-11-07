@@ -20,6 +20,7 @@ import {
   SUB_SESSIONS_LIST,
   escapeFrom,
   openSubSession,
+  panelAfterSubSessionsGone,
   syncToMainSession,
   type SubSessionsView,
 } from "./features/chat/sub-sessions-state";
@@ -534,8 +535,9 @@ export function App() {
   // 主槽不再是「有子会话的根会话」→ 入口消失，面板若开着就关（不止是不显示入口，
   // 面板本身也不该继续挂着一条够不到数据的内容）。在按会话恢复面板之后跑：恢复出
   // 的 subsessions 若在新主槽下已不合法，由这里兜底关掉
+  // 函数式更新：读的是排在前面的「按会话恢复」的结果，不是闭包里切换前的旧值（见 panelAfterSubSessionsGone）
   useEffect(() => {
-    if (rightPanel === "subsessions" && !hasSubSessions) setRightPanel(null);
+    if (rightPanel === "subsessions" && !hasSubSessions) setRightPanel((prev) => panelAfterSubSessionsGone(prev, hasSubSessions));
   }, [rightPanel, hasSubSessions]);
 
   // 会话层换了目标 id → 查看槽跟着 openSession；openSession 内部本身有「已经是

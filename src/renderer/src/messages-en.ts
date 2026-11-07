@@ -2471,6 +2471,7 @@ export const en = {
     draftGoToChatTip: (title: string | null) => (title === null ? "Open the chat where this plugin was being made" : `Open the chat “${title}”`),
     draftManifestProblem: "Manifest has problems",
     draftsLoadFailed: "Couldn't read the in-progress list.",
+    draftGone: (name: string) => `The draft folder for "${name}" is gone (deleted or moved), so you're back at the list.`,
     notChatted: "Not discussed yet",
     phLead: "Not discussed yet: what this plugin is for will be written here once the need is clear.",
     phAbilities: "Once the need is clear, the skills, scripts and outside services it uses are listed here.",

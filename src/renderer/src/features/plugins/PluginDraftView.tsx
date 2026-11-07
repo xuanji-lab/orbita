@@ -7,23 +7,37 @@
  * 只给右栏版：页头住工具栏的右栏胶囊（返回 + 「正在做 · 插件名」）。草稿没装，所以没有开关、没有设置，
  * 卡里点的按钮也不记录（BoardGrid 的 actionName 为 null）。
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { basename } from "./draft-path.ts";
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
 import { PanelIconButton, RightPanelFrame } from "../../shell/RightPanel";
 import { PluginBoardView } from "./PluginBoardView.tsx";
 import { PluginDetail } from "./PluginDetail.tsx";
+import { draftFolderGone } from "./plugin-draft.ts";
 import { useDraftScan } from "./useBoardFeed.ts";
 import "./plugins.css";
 
-export function PluginDraftView(props: { path: string; workspaceId: string | null; onBack: () => void }) {
+export function PluginDraftView(props: {
+  path: string;
+  workspaceId: string | null;
+  onBack: () => void;
+  /** 草稿文件夹已经不在了：调用方退回列表并说明（参数是最后知道的名字）；不给就照旧停在红字上 */
+  onGone?: (name: string) => void;
+}) {
   const messages = useT();
   const t = messages.pluginPanel;
   const scan = useDraftScan(props.path, props.workspaceId);
   const [boardOpen, setBoardOpen] = useState(false);
   // 名字：清单里的显示名；还没有清单时退回文件夹名
   const name = scan.kind === "ready" ? scan.view.name : basename(props.path);
+  // 最后一次读到的显示名（文件夹没了以后 scan 里就没有名字了，提示里要用之前的）
+  const lastName = useRef(name);
+  if (scan.kind === "ready") lastName.current = scan.view.name;
+  const { onGone } = props;
+  useEffect(() => {
+    if (onGone !== undefined && draftFolderGone(scan)) onGone(lastName.current);
+  }, [scan, onGone]);
   const header = boardOpen ? (
     <>
       <PanelIconButton title={t.boardBack} onClick={() => setBoardOpen(false)}>
