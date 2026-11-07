@@ -39,6 +39,15 @@
   --ob-paper: var(--color-bg-panel);
 }
 
+/* Windows / Linux 没有系统红绿灯：最小化 / 最大化 / 关闭是工具栏 brand row 里的 DOM 键。
+ * 覆盖层全屏会盖住它们，右上角的「跳过引导」还正好压在最小化 / 最大化键上（点最小化会误跳过引导，
+ * 关闭键被盖住点了没反应；2026-11-07 Windows 验收）。所以这两个平台上覆盖层从 brand row 下沿起铺，
+ * 整条 brand row（商标 + 自绘三键，本身就是拖拽区）原样露在引导上面，「跳过」自然落在三键下方。
+ * macOS 的红绿灯由系统画在窗口之上，覆盖层仍全屏，布局不变。 */
+:root:not([data-platform="darwin"]) .ob {
+  top: var(--titlebar-brand-row);
+}
+
 /* 两档暗色：截图本身就深，压暗与纸面几乎同色，边界靠一圈发丝线撑——提亮一档（中性，不是 accent 光晕） */
 :root[data-theme="graphite"] .ob-win,
 :root[data-theme="black"] .ob-win,
