@@ -8,6 +8,7 @@ import { usePaneTotalWidth } from "./side-width.ts";
 import { useT } from "../locale.ts";
 import { ToolbarPanelSlotContext } from "./Toolbar";
 import { useScrolledEdge } from "./WorkspaceFilterBar.tsx";
+import { docOverlayWidth } from "../features/doc-panel/doc-panel-width.ts";
 
 /**
  * 右侧面板壳（2026-09-13 裁决）：Skills / MCP / 辅助对话三个菜单共用这**一个**
@@ -66,7 +67,7 @@ export function RightPanelSlot(props: {
   const width =
     own !== undefined
       ? narrow
-        ? Math.max(280, Math.min(640, windowWidth - 48))
+        ? docOverlayWidth(windowWidth)
         : own.width
       : narrow
         ? RIGHT_PANEL_WIDTH_DEFAULT

@@ -6,6 +6,7 @@ import type { DocSession, ExternalChange } from "./doc-session.ts";
 import { quoteOfSelection } from "./doc-quote.ts";
 import { useQuoteCandidate } from "./useQuoteCandidate";
 import { getView, setView } from "./view-memory.ts";
+import { loadTracked, mapRanges, newAnchorId, saveTracked } from "./quote-track.ts";
 
 /** 文档视图：一页纸 + 所见即所得式的 markdown 编辑器。agent 的改动按最小差异并进来，新增的行标绿边 */
 export function DocView(props: {
@@ -19,7 +20,12 @@ export function DocView(props: {
   const t = useT();
   const { session, path, handleRef, externalRef } = props;
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const anchorSeq = useRef(0);
+  // 重新挂载时恢复上次的引用追踪：关面板期间盘上若被 agent 改过，按差异把区间映射到现在的文字上
+  const restored = useRef<Record<string, { from: number; to: number }> | undefined>(undefined);
+  if (restored.current === undefined) {
+    const saved = loadTracked(path);
+    restored.current = saved === null ? {} : mapRanges(saved.text, props.initialText, saved.ranges);
+  }
 
   // 滚动位置：回到上次停的地方；滚动时（防抖）与卸载时记下
   useEffect(() => {
@@ -69,8 +75,7 @@ export function DocView(props: {
       const quote = quoteOfSelection({ path, text, from: selection.from, to: selection.to });
       if (quote === null) return null;
       // 登记区间：发送前编辑器怎么改，这段的位置都跟着走（重复句时靠它分得清是哪一处）
-      anchorSeq.current += 1;
-      const anchor = `q${anchorSeq.current}`;
+      const anchor = newAnchorId();
       handleRef.current?.trackQuote(anchor, selection.from, selection.to);
       return { quote: { ...quote, anchor }, raw: text.slice(selection.from, selection.to) };
     },
@@ -101,6 +106,8 @@ export function DocView(props: {
           handleRef={handleRef}
           ariaLabel={t.doc.editorLabel}
           documentMode
+          restoreTracked={restored.current}
+          onDestroy={(snapshot) => saveTracked(path, snapshot)}
         />
       </div>
       {toolbar}

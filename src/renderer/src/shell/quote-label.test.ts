@@ -19,6 +19,12 @@ describe("引用 chip 文案", () => {
     assert.equal(quoteMeta(doc, zh), "Q4 计划.md · 第 12–14 行 · 4 字");
   });
 
+  test("文件引用有位置时：位置是 lead、文件名单列（窄格先省文件名）", () => {
+    const doc = { text: "abc", messageId: "", role: "user" as const, filePath: "/ws/Q4 计划.md", lines: { from: 9, to: 9 } };
+    assert.deepEqual(quoteNoteParts(doc, zh), { lead: "第 9 行", who: null, size: "3 字", file: "Q4 计划.md" });
+    assert.equal(quoteNoteParts({ ...doc, ambiguous: { was: 9, at: [9, 11] } }, zh).lead, "待确认哪一处");
+  });
+
   test("meta 带字数；截过的如实标出", () => {
     assert.equal(quoteMeta({ text: "a汉😀", messageId: "m", role: "user", turn: 1 }, zh), "第 1 轮 · 你的消息 · 3 字");
     assert.equal(
@@ -32,17 +38,19 @@ describe("引用 chip 文案", () => {
       lead: "Turn 2",
       who: "Your message",
       size: "3 chars",
+      file: null,
     });
     // 没有轮号：lead 为 null，拼时不多出一个空段
     assert.deepEqual(quoteNoteParts({ text: "abc", messageId: "m", role: "assistant" }, en), {
       lead: null,
       who: "Agent reply",
       size: "3 chars",
+      file: null,
     });
     // 文件来源：不拆 who
     assert.deepEqual(
       quoteNoteParts({ text: "abc", messageId: "", role: "user", filePath: "/a/b/notes.md" }, en),
-      { lead: "notes.md", who: null, size: "3 chars" },
+      { lead: "notes.md", who: null, size: "3 chars", file: null },
     );
   });
 

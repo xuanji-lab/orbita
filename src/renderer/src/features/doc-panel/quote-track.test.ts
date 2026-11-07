@@ -49,3 +49,38 @@ describe("引用位置追踪（M3）", () => {
     assert.equal(r.from, r.to);
   });
 });
+
+describe("面板卸载后追踪不丢（N2）", () => {
+  it("存 → 取：区间原样还在；盘上在关面板期间被 agent 改过，按差异映射过去", async () => {
+    const { saveTracked, loadTracked, mapRanges, clearTrackedStore, newAnchorId } = await import("./quote-track.ts");
+    clearTrackedStore();
+    const { state, from, to } = track(DOC, SENTENCE);
+    // 用户在原句行首紧贴着打了一模一样的一句（追踪把区间推到原句上）
+    const after = state.update({ changes: { from, insert: `${SENTENCE}\n\n` } }).state;
+    const range = after.field(quoteTrackField).get("a")!;
+    saveTracked("/ws/a.md", { text: after.doc.toString(), ranges: { a: { from: range.from, to: range.to } } });
+    // ——面板卸载，编辑器没了——
+    const saved = loadTracked("/ws/a.md")!;
+    const text = saved.text;
+    assert.equal(text.slice(saved.ranges["a"]!.from, saved.ranges["a"]!.to), SENTENCE);
+    // 重新打开、盘上没变：原样
+    assert.deepEqual(mapRanges(text, text, saved.ranges), saved.ranges);
+    // 期间 agent 在文首加了一段：区间整体后移，仍是原句（第二处，不是复制句）
+    const edited = `agent 加的一段\n\n${text}`;
+    const mapped = mapRanges(text, edited, saved.ranges)["a"]!;
+    assert.equal(edited.slice(mapped.from, mapped.to), SENTENCE);
+    assert.equal(mapped.from, edited.lastIndexOf(SENTENCE));
+    assert.notEqual(newAnchorId(), newAnchorId());
+    void to;
+  });
+
+  it("没有区间就不占位；超出份数上限丢最早的", async () => {
+    const { saveTracked, loadTracked, clearTrackedStore } = await import("./quote-track.ts");
+    clearTrackedStore();
+    saveTracked("/e.md", { text: "x", ranges: {} });
+    assert.equal(loadTracked("/e.md"), null);
+    for (let i = 0; i < 25; i += 1) saveTracked(`/f${i}.md`, { text: "x", ranges: { a: { from: 0, to: 1 } } });
+    assert.equal(loadTracked("/f0.md"), null);
+    assert.notEqual(loadTracked("/f24.md"), null);
+  });
+});

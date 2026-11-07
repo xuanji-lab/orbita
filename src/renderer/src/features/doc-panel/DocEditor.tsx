@@ -1,11 +1,13 @@
 import { useEffect, useRef } from "react";
 import { defaultKeymap, history, historyKeymap, redo, undo } from "@codemirror/commands";
-import { Annotation, EditorState, Transaction } from "@codemirror/state";
+import { EditorState, Transaction } from "@codemirror/state";
 import { drawSelection, EditorView, keymap, placeholder } from "@codemirror/view";
 import { clearFlash, flashRanges, liveMarkdown } from "./cm-live-markdown.ts";
 import { diffToChanges, type TextChange } from "./doc-merge.ts";
 import { quoteTrackField, quoteTracker, trackRange } from "./quote-track.ts";
-import { cycleHeading, insertParagraph, insertSoftBreak, toggleBold, toggleList } from "./doc-commands.ts";
+import type { TrackedSnapshot } from "./quote-track.ts";
+import { cycleHeading, toggleBold, toggleList } from "./doc-commands.ts";
+import { documentKeymap, External, titleAfterComposition, titleFirstFilter } from "./doc-extensions.ts";
 
 /** 编辑器里一次选区（偏移按编辑器自己的文本算） */
 export interface EditorSelectionInfo {
@@ -34,28 +36,6 @@ export interface DocEditorHandle {
   trackedRange(id: string): { from: number; to: number } | null;
 }
 
-/** 外部改动（agent / 重新对齐）的事务打这个标：不回报给 onChange、不进撤销栈 */
-const External = Annotation.define<boolean>();
-
-/**
- * 空文档里用户打的第一个字：前面补 `# `（第一行就是标题）。只认用户输入（外部合并带 External 标记、撤销不算）。
- * 不动已经以 `#` 起头的内容（粘贴一整段 markdown 时别二次加）。
- */
-const titleFirstFilter = EditorState.transactionFilter.of((tr) => {
-  if (!tr.docChanged || tr.startState.doc.length !== 0 || tr.annotation(External) === true) return tr;
-  const userEvent = tr.annotation(Transaction.userEvent);
-  if (userEvent === undefined || !userEvent.startsWith("input")) return tr;
-  const text = tr.newDoc.toString();
-  if (text === "" || text.startsWith("#") || text.startsWith("\n")) return tr;
-  return [
-    {
-      changes: { from: 0, insert: `# ${text}` },
-      selection: { anchor: tr.newSelection.main.head + 2 },
-      userEvent,
-    },
-  ];
-});
-
 /** 新增段落绿边保持多久（CSS 动画淡出，到点再清装饰） */
 const FLASH_MS = 3200;
 
@@ -72,6 +52,10 @@ export function DocEditor(props: {
    * 一级标题（落盘 `# `，占位写的「标题」就是这个意思）。幻灯片页内的源码编辑器不开（那是写 markdown 源码）。
    */
   documentMode?: boolean;
+  /** 卸载前把引用追踪的区间交出去（面板关闭 / 切页签后，重新打开要接着用） */
+  onDestroy?: (snapshot: TrackedSnapshot) => void;
+  /** 挂载后恢复的追踪区间（坐标在 `initialText` 里） */
+  restoreTracked?: Record<string, { from: number; to: number }>;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   // 回调放 ref：视图只建一次，之后回调怎么换都不用重建编辑器（重建会丢光标与撤销栈）
@@ -139,18 +123,8 @@ export function DocEditor(props: {
           liveMarkdown(),
           quoteTracker(),
           ...(hint() === undefined ? [] : [placeholder(hint() as HTMLElement)]),
-          ...(callbacks.current.documentMode === true ? [titleFirstFilter] : []),
-          keymap.of([
-            ...(callbacks.current.documentMode === true
-              ? [
-                  { key: "Enter", run: insertParagraph, preventDefault: true },
-                  { key: "Shift-Enter", run: insertSoftBreak, preventDefault: true },
-                ]
-              : []),
-            { key: "Mod-b", run: toggleBold, preventDefault: true },
-            ...defaultKeymap,
-            ...historyKeymap,
-          ]),
+          ...(callbacks.current.documentMode === true ? [documentKeymap(), titleFirstFilter, titleAfterComposition()] : []),
+          keymap.of([{ key: "Mod-b", run: toggleBold, preventDefault: true }, ...defaultKeymap, ...historyKeymap]),
           EditorView.updateListener.of((update) => {
             const external = update.transactions.some((tr) => tr.annotation(External) === true);
             if (update.docChanged && !external) callbacks.current.onChange(update.state.doc.toString());
@@ -166,6 +140,10 @@ export function DocEditor(props: {
       if (flashTimer !== null) clearTimeout(flashTimer);
       flashTimer = setTimeout(() => view.dispatch({ effects: clearFlash.of(null) }), FLASH_MS);
     };
+
+    for (const [id, range] of Object.entries(callbacks.current.restoreTracked ?? {})) {
+      view.dispatch({ effects: trackRange.of({ id, from: range.from, to: range.to }) });
+    }
 
     callbacks.current.handleRef.current = {
       applyChanges(changes, ranges) {
@@ -210,6 +188,9 @@ export function DocEditor(props: {
     return () => {
       if (flashTimer !== null) clearTimeout(flashTimer);
       callbacks.current.handleRef.current = null;
+      const ranges: Record<string, { from: number; to: number }> = {};
+      for (const [id, range] of view.state.field(quoteTrackField)) ranges[id] = { from: range.from, to: range.to };
+      callbacks.current.onDestroy?.({ text: view.state.doc.toString(), ranges });
       view.destroy();
     };
     // 只建一次：换文档由父组件换 key 重建

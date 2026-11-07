@@ -248,14 +248,37 @@ export function App() {
    * 共用同一份状态。断点自动收起（960 以下）也在这里；手动开合不持久化——窗口
    * 宽度本身不持久化，持久化一个和宽度绑定的状态会打架。
    */
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsedRaw] = useState(false);
+  /**
+   * 文档 / 演示文稿面板放不下并排时先自动收起左侧栏（docSidebar）：
+   * none = 这次打开面板还没动过；auto = 是我们收的（关面板时恢复）；user = 用户在此期间手动开合过（不再替他收、也不替他恢复）
+   */
+  const docSidebar = useRef<"none" | "auto" | "user">("none");
+  const setSidebarCollapsed = useCallback((next: boolean | ((current: boolean) => boolean)): void => {
+    if (docSidebar.current === "auto") docSidebar.current = "user";
+    setSidebarCollapsedRaw(next);
+  }, []);
   useEffect(() => {
     const query = window.matchMedia(`(max-width: ${COLLAPSE_BREAKPOINT - 1}px)`);
-    const sync = () => setSidebarCollapsed(query.matches);
+    const sync = () => setSidebarCollapsedRaw(query.matches);
     sync();
     query.addEventListener("change", sync);
     return () => query.removeEventListener("change", sync);
   }, []);
+  const docPanelOpen = rightPanel === "docs" || rightPanel === "slides";
+  useEffect(() => {
+    if (!docPanelOpen) {
+      // 关面板：是我们收的就还原；用户动过就不碰
+      if (docSidebar.current === "auto") setSidebarCollapsedRaw(false);
+      docSidebar.current = "none";
+      return;
+    }
+    // 打开着、放不下并排（覆盖层态）、侧栏还展开着、这次还没动过：先收侧栏腾地方
+    if (panelOverlay && !sidebarCollapsed && docSidebar.current === "none") {
+      docSidebar.current = "auto";
+      setSidebarCollapsedRaw(true);
+    }
+  }, [docPanelOpen, panelOverlay, sidebarCollapsed]);
 
   const { session, engine } = useChatSession(providers, t);
 

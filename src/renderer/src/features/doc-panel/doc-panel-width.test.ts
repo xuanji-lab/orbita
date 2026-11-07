@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { docPanelLayout, DOC_CHAT_HARD_MIN, DOC_CHAT_MIN, DOC_PANEL_FLOOR } from "./doc-panel-width.ts";
+import { docOverlayWidth, docPanelLayout, DOC_INPUT_MIN, DOC_CHAT_HARD_MIN, DOC_CHAT_MIN, DOC_PANEL_FLOOR } from "./doc-panel-width.ts";
 
 describe("docPanelLayout —— 聊天列留底线、放不下转覆盖层", () => {
   it("宽窗口：默认 0.58 × pane，不超过 2/3", () => {
@@ -23,9 +23,14 @@ describe("docPanelLayout —— 聊天列留底线、放不下转覆盖层", () 
     assert.equal(docPanelLayout(829, null, 1159).overlay, true);
   });
 
-  it("覆盖层宽 = min(640, 窗口 − 48)", () => {
-    assert.equal(docPanelLayout(700, null, 800).width, 640);
-    assert.equal(docPanelLayout(500, null, 600).width, 552);
+  it("覆盖层宽 = min(640, 窗口 − 输入框最小可用宽 410 − 边距 56)，输入框必须露出来", () => {
+    assert.equal(docOverlayWidth(1400), 640);
+    assert.equal(docOverlayWidth(1000), 534);
+    assert.equal(docOverlayWidth(900), 434);
+    assert.equal(docOverlayWidth(800), 334);
+    assert.equal(docOverlayWidth(600), 300, "再窄也不低于下限");
+    assert.equal(docPanelLayout(700, null, 800).width, 334);
+    for (const w of [800, 900, 1000]) assert.ok(w - docOverlayWidth(w) >= DOC_INPUT_MIN, `窗口 ${w} 左边露出 ${w - docOverlayWidth(w)}`);
   });
 
   it("还没量到 pane：按想要的宽并排，不当覆盖层", () => {

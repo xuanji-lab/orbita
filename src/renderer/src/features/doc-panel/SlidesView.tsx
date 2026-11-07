@@ -11,6 +11,7 @@ import { DocEditor, type DocEditorHandle, type EditorSelectionInfo } from "./Doc
 import type { DocSession, ExternalChange } from "./doc-session.ts";
 import { quoteOfPageSelection, quoteOfSlide } from "./doc-quote.ts";
 import { SlideCanvas } from "./slide-render";
+import { pageCaption } from "./slide-columns.ts";
 import { useQuoteCandidate } from "./useQuoteCandidate";
 import { getView, setView } from "./view-memory.ts";
 
@@ -171,7 +172,10 @@ export function SlidesView(props: {
             onClick={() => setCurrent(i)}
           >
             <SlideCanvas text={each.text} number={i + 1} total={total} title={title} />
-            <span className="dp-thumb-n">{i + 1}</span>
+            <span className="dp-thumb-cap">
+              <span className="dp-thumb-n">{i + 1}</span>
+              <span className="dp-thumb-title">{pageCaption(each.text) || t.doc.blankPage}</span>
+            </span>
           </button>
         ))}
         <button type="button" className="dp-thumb-add" onClick={addPage}>

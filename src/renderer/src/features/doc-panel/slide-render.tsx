@@ -6,6 +6,7 @@ import remarkCjkFriendly from "remark-cjk-friendly";
 import remarkBreaks from "remark-breaks";
 import type { DocPaper } from "@shared/settings";
 import { splitColumns } from "./slide-columns.ts";
+import { useDocPaper } from "./doc-paper.ts";
 import { Icon } from "../../shell/Icon";
 // 屏幕上用样式表（副作用导入），导出 PDF 时再把同一份源码当字符串塞进 HTML
 import "./slide.css";
@@ -85,11 +86,13 @@ export function SlideCanvas(props: {
   const frameRef = useRef<HTMLDivElement | null>(null);
   const [scale, setScale] = useState(0);
   const [overflow, setOverflow] = useState(false);
+  // 换纸面会换字体字号与页边，超出与否要重算
+  const { paper } = useDocPaper();
   // 内容超出 16:9 的页：页体是 overflow:hidden，超出的部分会被静默裁掉——量出来、告诉用户
   useLayoutEffect(() => {
     const body = frameRef.current?.querySelector<HTMLElement>(".dp-slide-body") ?? null;
     setOverflow(body !== null && body.scrollHeight > body.clientHeight + 1);
-  }, [props.text, props.number, scale]);
+  }, [props.text, props.number, scale, paper]);
   useLayoutEffect(() => {
     const frame = frameRef.current;
     if (frame === null) return undefined;
@@ -173,4 +176,27 @@ export function deckHtml(
     )
     .join("\n");
   return `<!doctype html><html data-paper="${opts.paper}" data-theme="${escapeHtml(opts.theme)}"><head><meta charset="utf-8"><title>${escapeHtml(opts.title)}</title><style>${opts.tokens}${slideCss}${PRINT_CSS}</style></head><body>${body}</body></html>`;
+}
+
+/**
+ * 哪几页的内容超出了 16:9（会被裁掉）：把每页渲染进一个看不见的容器、按当前纸面量页体的滚动高度。
+ * 导出 PDF 时用它在完成提示里列出页号（页体是 overflow:hidden，超出的部分在 PDF 里是静默裁掉的）。返回 1 起的页号。
+ */
+export function overflowPages(pages: readonly string[], paper: DocPaper): number[] {
+  const host = document.createElement("div");
+  host.setAttribute("data-paper", paper);
+  host.style.cssText = "position:fixed;left:-99999px;top:0;visibility:hidden;pointer-events:none";
+  host.innerHTML = pages
+    .map((text, index) => renderToStaticMarkup(<SlidePage text={text} number={index + 1} total={pages.length} title="" />))
+    .join("");
+  document.body.append(host);
+  try {
+    const found: number[] = [];
+    host.querySelectorAll<HTMLElement>(".dp-slide-body").forEach((body, index) => {
+      if (body.scrollHeight > body.clientHeight + 1) found.push(index + 1);
+    });
+    return found;
+  } finally {
+    host.remove();
+  }
 }

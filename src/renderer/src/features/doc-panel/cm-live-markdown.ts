@@ -239,5 +239,5 @@ export const flashField = StateField.define<DecorationSet>({
 
 /** markdown 语言 + 所见即所得外观 */
 export function liveMarkdown() {
-  return [markdown({ base: markdownLanguage }), livePlugin, flashField];
+  return [markdown({ base: markdownLanguage, addKeymap: false }), livePlugin, flashField];
 }

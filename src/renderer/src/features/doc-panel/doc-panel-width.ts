@@ -7,7 +7,7 @@
  *   宽 = clamp(下限 420, 想要的, min(pane × 2/3, pane − 聊天列首选 480))
  * 聊天列 480 是首选；面板已经缩到下限 420 还放不下时，聊天列可以再让到硬底线 410（1200 窗口实测：
  * 输入框按钮不重叠、引用芯片有正文）；连「面板 420 + 聊天 410」都放不下才不再并排，转右侧覆盖层，宽 = min(640, 窗口 − 48)。
- * 覆盖层会盖住聊天列右侧，想边看边聊要收起左侧栏。
+ * 覆盖层会盖住聊天列右侧——所以打开面板时 App 先自动收起左侧栏（见 App 的 docSidebar 逻辑），收完还放不下才到这一步。
  * 其它右栏页不走这里（它们的规则在 clampRightPanelWidth）。
  */
 export const DOC_PANEL_FRACTION = 0.58;
@@ -15,7 +15,15 @@ export const DOC_CHAT_MIN = 480;
 export const DOC_CHAT_HARD_MIN = 410;
 export const DOC_PANEL_FLOOR = 420;
 export const DOC_OVERLAY_MAX = 640;
-export const DOC_OVERLAY_MARGIN = 48;
+/** 覆盖层态下聊天输入框要露出来的最小宽（输入框按钮不重叠的实测下限）+ 右栏图标条与边距 */
+export const DOC_INPUT_MIN = 410;
+export const DOC_OVERLAY_MARGIN = 56;
+export const DOC_OVERLAY_FLOOR = 300;
+
+/** 覆盖层宽 = min(640, 窗口 − 输入框最小可用宽 − 边距)：输入框必须露出来可用（2026-11-07 验收：640 宽的覆盖层把输入框整个盖住） */
+export function docOverlayWidth(windowWidth: number): number {
+  return Math.max(DOC_OVERLAY_FLOOR, Math.min(DOC_OVERLAY_MAX, Math.round(windowWidth - DOC_INPUT_MIN - DOC_OVERLAY_MARGIN)));
+}
 
 export interface DocPanelLayout {
   overlay: boolean;
@@ -28,7 +36,7 @@ export interface DocPanelLayout {
  * @param windowWidth 窗口宽，覆盖层宽度用
  */
 export function docPanelLayout(pane: number, wanted: number | null, windowWidth: number): DocPanelLayout {
-  const overlayWidth = Math.max(280, Math.min(DOC_OVERLAY_MAX, windowWidth - DOC_OVERLAY_MARGIN));
+  const overlayWidth = docOverlayWidth(windowWidth);
   if (!Number.isFinite(pane) || pane <= 0) {
     return { overlay: false, width: Math.round(wanted ?? DOC_PANEL_FLOOR) };
   }

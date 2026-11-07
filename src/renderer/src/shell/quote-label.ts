@@ -15,14 +15,21 @@ const SUMMARY_CHARS = 20;
  */
 export const QUOTE_ROW_PREVIEW_MAX_CHARS = 300;
 
-/** 文件引用的出处：文件名，演示文稿再加页号，有行号再加行号（`计划.md · 第 12–14 行`） */
-function fileSource(quote: TextQuote, t: Messages): string {
+/** 文件引用的出处拆成两段：文件名、位置（页号 / 行号 / 原文已改）。窄格里先省文件名、位置留着 */
+function fileSourceParts(quote: TextQuote, t: Messages): { name: string; position: string } {
   const name = (quote.filePath ?? "").split(/[\\/]/).pop() || (quote.filePath ?? "");
-  const parts = [name];
+  const parts: string[] = [];
   if (quote.slide !== undefined) parts.push(t.quote.slide(quote.slide));
   if (quote.missing === true) parts.push(t.quote.missing);
+  else if (quote.ambiguous !== undefined) parts.push(t.quote.ambiguous);
   else if (quote.lines !== undefined) parts.push(t.quote.lines(quote.lines.from, quote.lines.to));
-  return parts.join(" · ");
+  return { name, position: parts.join(" · ") };
+}
+
+/** 文件引用的出处：文件名，演示文稿再加页号，有行号再加行号（`计划.md · 第 12–14 行`） */
+function fileSource(quote: TextQuote, t: Messages): string {
+  const { name, position } = fileSourceParts(quote, t);
+  return position === "" ? name : `${name} · ${position}`;
 }
 
 /** 来源：文件取文件名；历史消息是「第 N 轮 · 谁说的」（迁移来的旧块可能没有轮号） */
@@ -40,14 +47,16 @@ export function quoteSource(quote: TextQuote, t: Messages): string {
 export function quoteNoteParts(
   quote: TextQuote,
   t: Messages,
-): { lead: string | null; who: string | null; size: string } {
+): { lead: string | null; who: string | null; size: string; file: string | null } {
   const size =
     quote.truncated === true ? t.quote.truncated(countChars(quote.text)) : t.quote.chars(countChars(quote.text));
   if (quote.filePath !== undefined) {
-    return { lead: fileSource(quote, t), who: null, size };
+    const { name, position } = fileSourceParts(quote, t);
+    // 有位置：位置是 lead，文件名单列（CSS 窄格里先省文件名）；没有位置就和从前一样，文件名当 lead
+    return position === "" ? { lead: name, who: null, size, file: null } : { lead: position, who: null, size, file: name };
   }
   const who = quote.role === "user" ? t.quote.userMessage : t.quote.agentReply;
-  return { lead: quote.turn === undefined ? null : t.quote.turn(quote.turn), who, size };
+  return { lead: quote.turn === undefined ? null : t.quote.turn(quote.turn), who, size, file: null };
 }
 
 /** 展开态的 meta 行：来源 · 字数（截过的标出来） */

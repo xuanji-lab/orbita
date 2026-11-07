@@ -61,6 +61,11 @@ export interface TextQuote {
    * （连同当前位置前后的上下文），让模型能构造只命中这一处的 edit——模型数行号不可靠（实测数错过两行）
    */
   occurrence?: { index: number; of: number };
+  /**
+   * 发送时这段原文在文件里出现好几处，又没有可靠的位置追踪、上下文也分不出是哪一处：不猜。
+   * `was` 是划选时的行号，`at` 是现在每一处的起始行号。进正文，模型不改、先问用户
+   */
+  ambiguous?: { was: number; at: number[] };
   /** 发送时在文件里已找不到这段原文（被用户或 agent 改掉了）：进正文，告诉模型别改 */
   missing?: true;
   /**
@@ -155,7 +160,11 @@ function quoteBlock(quote: TextQuote, index: number): string {
       quote.occurrence !== undefined && quote.occurrence.of > 1 && quote.context !== undefined
         ? ` occurrence="${quote.occurrence.index}/${quote.occurrence.of}" before="${encodeAttribute(escapeNewlines(quote.context.before))}" after="${encodeAttribute(escapeNewlines(quote.context.after))}"`
         : "";
-    return `<quoted_file index="${index}" path="${encodeAttribute(quote.filePath)}"${lines}${slide}${missing}${several}>\n${sanitizeBody(quote.text)}\n</quoted_file>\n\n`;
+    const unsure =
+      quote.ambiguous === undefined
+        ? ""
+        : ` ambiguous="true" was_line="${quote.ambiguous.was}" occurs_at_lines="${quote.ambiguous.at.join(",")}"`;
+    return `<quoted_file index="${index}" path="${encodeAttribute(quote.filePath)}"${lines}${slide}${missing}${several}${unsure}>\n${sanitizeBody(quote.text)}\n</quoted_file>\n\n`;
   }
   const turn = quote.turn !== undefined ? ` turn="${quote.turn}"` : "";
   return `<quoted_context index="${index}" role="${quote.role}"${turn}>\n${sanitizeBody(quote.text)}\n</quoted_context>\n\n`;
@@ -211,7 +220,10 @@ export const QUOTE_GUIDELINE = [
     "occurrence — include them in the edit's old text so it matches only that occurrence. Line numbers are counted " +
     'like `cat -n`, blank lines included; do not trust your own counting when it disagrees. missing="true" means ' +
     "the quoted text no longer exists in the file (it was edited since): do " +
-    "not edit anything for that quote, tell the user the passage has changed, and ask what they want.",
+    "not edit anything for that quote, tell the user the passage has changed, and ask what they want. " +
+    'ambiguous="true" means the same text now occurs at several places (occurs_at_lines) and the app could not ' +
+    "tell which one the user selected (was_line is where it was when selected): do not guess and do not edit; " +
+    "list the candidate lines and ask the user which one.",
   '<open_document path="…" kind="doc|slides"/> at the start of a message means the user has that file open ' +
     'in the document panel beside the chat; "the document", "the slides", "this page" mean it. kind=doc is ' +
     "plain Markdown. kind=slides is a Marp-style deck: optional front matter (keep `marp: true`), pages " +
@@ -265,6 +277,14 @@ export function parseQuotedMessage(message: string): { quotes: TextQuote[]; text
         ...(lines === undefined ? {} : { lines }),
         ...(Number.isInteger(slide) && slide > 0 ? { slide } : {}),
         ...(attribute(attrs, "missing") === "true" ? { missing: true as const } : {}),
+        ...(attribute(attrs, "ambiguous") === "true"
+          ? {
+              ambiguous: {
+                was: Number(attribute(attrs, "was_line")) || 0,
+                at: (attribute(attrs, "occurs_at_lines") ?? "").split(",").map(Number).filter((n) => Number.isInteger(n) && n > 0),
+              },
+            }
+          : {}),
       });
       return "";
     }

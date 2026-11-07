@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { splitColumns } from "./slide-columns.ts";
+import { pageCaption, splitColumns } from "./slide-columns.ts";
 
 describe("splitColumns —— 安全的分栏写法", () => {
   it("三栏：标题 / 前后文留在普通块里", () => {
@@ -38,5 +38,14 @@ describe("splitColumns —— 安全的分栏写法", () => {
   it("两栏与 CRLF", () => {
     const blocks = splitColumns("::: columns\r\n左\r\n+++\r\n右\r\n:::\r\n");
     assert.equal(blocks.some((b) => b.kind === "columns" && b.columns.length === 2), true);
+  });
+});
+
+describe("pageCaption —— 缩略图下的标题", () => {
+  it("取第一个非空行，去掉标题 / 列表 / 引用标记与行内记号；空页返回空串", () => {
+    assert.equal(pageCaption("\n\n# **插件**是什么\n正文"), "插件是什么");
+    assert.equal(pageCaption("- 要点一"), "要点一");
+    assert.equal(pageCaption("> 引语"), "引语");
+    assert.equal(pageCaption("   \n  "), "");
   });
 });

@@ -4163,6 +4163,22 @@ textarea.text-field {
 
 /* 引用卡格子注脚：尾部元素，钉在格右血线上（动作键绝对定位，悬停时它让位——
    D 项同款）；用 .row-trailing 同一套推右 */
+/* 文件引用的注脚「文件名 · 第 N 行 · 字数」：位置与字数留着，先省文件名（两枚芯片并排时也至少看得到第几行） */
+.material-quote-note.has-file {
+  display: inline-flex;
+  min-width: 7.5em;
+}
+.material-quote-note-file {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.material-quote-note.has-file > span:not(.material-quote-note-file) {
+  flex: 0 0 auto;
+}
+
 .material-quote-note {
   flex: 0 100 auto;
   min-width: 0;

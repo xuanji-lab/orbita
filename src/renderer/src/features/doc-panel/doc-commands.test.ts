@@ -44,7 +44,7 @@ describe("回车 = 新段落（M2）", () => {
     insertParagraph(a.view);
     assert.equal(a.text(), "- 一项\n- ");
     insertParagraph(a.view);
-    assert.equal(a.text(), "- 一项\n");
+    assert.equal(a.text(), "- 一项\n\n");
     const b = fake("1. 第一步", 6);
     insertParagraph(b.view);
     assert.equal(b.text(), "1. 第一步\n2. ");

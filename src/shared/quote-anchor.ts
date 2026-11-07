@@ -5,7 +5,7 @@
  * 尤其是同一句话在文件里出现两次时，旧行号正好指到新复制出来的那一句，agent 就改错位置
  * （2026-11-07 独立验收的「重复句」场景）。所以引用以**原文 + 上下文**为锚，发送时按当前文档现算：
  * - 原文只出现一次 → 用它现在的行号；
- * - 出现多次 → 先比上下文（前后各 20 字，谁更像划选时的），再比谁离原行号最近；
+ * - 出现多次 → 只认「前后各 20 字与划选时完全一致」的那一处；认不出就不猜，标 ambiguous；
  * - 一次都找不到 → 标 missing，发给模型时说「原文已不在文件里」，不让它凭行号去改别处。
  */
 import { parseDeck } from "./doc-slides.ts";
@@ -29,18 +29,6 @@ function lineOf(text: string, offset: number): number {
   return line;
 }
 
-function commonSuffix(a: string, b: string): number {
-  let n = 0;
-  while (n < a.length && n < b.length && a[a.length - 1 - n] === b[b.length - 1 - n]) n += 1;
-  return n;
-}
-
-function commonPrefix(a: string, b: string): number {
-  let n = 0;
-  while (n < a.length && n < b.length && a[n] === b[n]) n += 1;
-  return n;
-}
-
 /** 原文在 `text` 里的所有出现位置（起点偏移） */
 export function occurrences(text: string, needle: string): number[] {
   const found: number[] = [];
@@ -51,32 +39,20 @@ export function occurrences(text: string, needle: string): number[] {
   return found;
 }
 
-/** 选哪一处：上下文最像的；并列取离原行号最近的 */
-function pick(text: string, quote: TextQuote, at: readonly number[]): number {
-  const length = quote.text.length;
-  const originLine = quote.lines?.from;
-  let best = at[0] as number;
-  let bestScore = -1;
-  let bestDistance = Number.POSITIVE_INFINITY;
-  for (const index of at) {
-    const around = contextAround(text, index, index + length);
-    const score =
-      quote.context === undefined
-        ? 0
-        : commonSuffix(quote.context.before, around.before) + commonPrefix(quote.context.after, around.after);
-    const distance = originLine === undefined ? 0 : Math.abs(lineOf(text, index) - originLine);
-    if (score > bestScore || (score === bestScore && distance < bestDistance)) {
-      best = index;
-      bestScore = score;
-      bestDistance = distance;
-    }
-  }
-  return best;
+/**
+ * 这一处的前后文与划选时记的**完全一致**（划选时的前 20 字、后 20 字原样还在）——说明它周围一个字没动，
+ * 才敢认它是用户划选的那一处。只比相似度不行：「紧贴着复制出一模一样的一句」时，复制出来的那句前文和
+ * 原句划选时的前文一模一样，相似度反而更高（第二次独立验收 m3f / m3g 就是这么改错的）。
+ */
+function sameSurroundings(text: string, quote: TextQuote, index: number): boolean {
+  if (quote.context === undefined) return false;
+  const around = contextAround(text, index, index + quote.text.length);
+  return around.before === quote.context.before && around.after === quote.context.after;
 }
 
 /** 引用原文就在 `index` 处：算出现在的行号（演示文稿还有页号），清掉 missing */
 export function quoteAt(text: string, quote: TextQuote, index: number): TextQuote {
-  const { missing: _missing, ...rest } = quote;
+  const { missing: _missing, ambiguous: _ambiguous, ...rest } = quote;
   const end = index + quote.text.length;
   const lastChar = end > index && text[end - 1] === "\n" ? end - 1 : end;
   const from = lineOf(text, index);
@@ -97,17 +73,24 @@ export function quoteAt(text: string, quote: TextQuote, index: number): TextQuot
 }
 
 /**
- * 按文件当前内容重新定位一条文件引用。非文件引用原样返回。
- * 成功：lines（演示文稿还有 slide）换成现在的位置，清掉 missing；失败：标 missing，lines 原样留着（只是提示）。
+ * 按文件当前内容重新定位一条文件引用（没有可靠的位置追踪时的兜底）。非文件引用原样返回。
+ * - 原文只出现一次：用它现在的行号；
+ * - 出现多次：只有恰好一处「前后文与划选时完全一致」才认它；否则**不猜**，标 ambiguous
+ *   （划选时的行号 + 现在每一处的行号），模型被告知不改、先问用户是哪一处；
+ * - 一次都找不到：标 missing，lines 原样留着（只是提示）。
  */
 export function relocateQuote(text: string, quote: TextQuote): TextQuote {
   if (quote.filePath === undefined || quote.text === "") return quote;
   const found = occurrences(text, quote.text);
-  if (found.length === 0) {
-    const { missing: _missing, ...rest } = quote;
-    return { ...rest, missing: true };
-  }
-  return quoteAt(text, quote, pick(text, quote, found));
+  const { missing: _missing, ambiguous: _ambiguous, ...rest } = quote;
+  if (found.length === 0) return { ...rest, missing: true };
+  if (found.length === 1) return quoteAt(text, quote, found[0] as number);
+  const sure = found.filter((index) => sameSurroundings(text, quote, index));
+  if (sure.length === 1) return quoteAt(text, quote, sure[0] as number);
+  return {
+    ...rest,
+    ambiguous: { was: quote.lines?.from ?? 0, at: found.map((index) => lineOf(text, index)) },
+  };
 }
 
 /**

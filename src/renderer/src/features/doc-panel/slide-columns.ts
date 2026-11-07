@@ -91,3 +91,12 @@ export function splitColumns(text: string): SlideBlock[] {
   flush();
   return blocks;
 }
+
+/** 一页的标题（缩略图下的说明）：第一个非空行去掉 markdown 标记；空页返回 "" */
+export function pageCaption(text: string): string {
+  for (const line of text.split("\n")) {
+    const plain = line.replace(/^\s{0,3}(#{1,6}|[-*+]|\d+[.)]|>)\s*/, "").replace(/[*_`~]/g, "").trim();
+    if (plain !== "") return plain;
+  }
+  return "";
+}

@@ -288,7 +288,11 @@ function QuoteRow(props: {
           {preview}
         </button>
       )}
-      <span className="material-quote-note row-trailing" title={props.item.quote.text}>
+      <span
+        className={`material-quote-note row-trailing${note.file === null ? "" : " has-file"}`}
+        title={note.file === null ? props.item.quote.text : `${note.file} · ${props.item.quote.text}`}
+      >
+        {note.file !== null && <span className="material-quote-note-file">{note.file + " · "}</span>}
         {note.lead !== null && <span>{note.lead}</span>}
         {note.who !== null && <span className="material-quote-note-who">{(note.lead !== null ? " · " : "") + note.who}</span>}
         <span>{(note.lead !== null || note.who !== null ? " · " : "") + note.size}</span>

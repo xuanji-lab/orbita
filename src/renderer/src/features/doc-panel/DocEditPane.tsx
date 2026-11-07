@@ -17,7 +17,7 @@ import { useDocPaper } from "./doc-paper.ts";
 import { setOpenDocument } from "./open-document.ts";
 import { DocView } from "./DocView";
 import { SlidesView } from "./SlidesView";
-import { deckHtml, resolvedTokenCss } from "./slide-render";
+import { deckHtml, overflowPages, resolvedTokenCss } from "./slide-render";
 import { parseDeck } from "@shared/doc-slides";
 import type { DocEditorHandle } from "./DocEditor";
 import "./doc-panel.css";
@@ -79,7 +79,7 @@ export function DocEditPane(props: {
   const [exporting, setExporting] = useState(false);
   useEffect(() => {
     if (note === null) return undefined;
-    const timer = window.setTimeout(() => setNote(null), 4000);
+    const timer = window.setTimeout(() => setNote(null), note.tone === "danger" ? 10000 : 4000);
     return () => window.clearTimeout(timer);
   }, [note]);
 
@@ -123,7 +123,15 @@ export function DocEditPane(props: {
             });
           })()
         : await api.docs.export({ ...target, format: "docx", text: session.text });
-      if (result.saved !== null) setNote({ text: t.doc.exported(result.saved), tone: "ok" });
+      if (result.saved !== null) {
+        // 超出 16:9 的页在 PDF 里是被裁掉的：导出完成提示里把页号列出来
+        const cut = deck ? overflowPages(parseDeck(session.text).pages.map((page) => page.text), paper) : [];
+        setNote(
+          cut.length === 0
+            ? { text: t.doc.exported(result.saved), tone: "ok" }
+            : { text: t.doc.exportedCut(result.saved, cut.join("、")), tone: "danger" },
+        );
+      }
     } catch (cause) {
       setNote({ text: t.doc.exportFailed(ipcErrorText(cause)), tone: "danger" });
     } finally {

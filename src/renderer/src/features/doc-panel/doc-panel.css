@@ -261,16 +261,28 @@
     box-shadow: 0 0 0 2px transparent;
   }
 }
-.dp-thumb-n {
-  position: absolute;
-  left: var(--space-1);
-  bottom: var(--space-1);
-  padding: 0 var(--space-1);
-  border-radius: var(--radius-xs);
-  background: var(--color-bg-panel);
-  color: var(--color-text-secondary);
+/* 缩略图下一行：页号 + 这页的标题（1280 的画布缩到 96px 字读不出，标题放在图下面才分得出是哪一页） */
+.dp-thumb-cap {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-0-5) var(--space-1);
+  border-top: 1px solid var(--color-border-subtle);
   font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  text-align: left;
+}
+.dp-thumb-n {
+  flex: 0 0 auto;
   font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.dp-thumb-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .dp-thumb-add {
   display: flex;

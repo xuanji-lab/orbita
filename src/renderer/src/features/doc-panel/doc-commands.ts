@@ -123,8 +123,14 @@ export function insertParagraph(view: EditorView): boolean {
   const prefixLength = item === null ? 0 : (item[1] as string).length + (item[2] as string).length + (item[3] as string).length;
   if (item !== null && range.from - line.from >= prefixLength) {
     if ((item[4] as string).trim() === "" && range.empty) {
-      // 空项：去掉标记，退出列表
-      view.dispatch({ changes: { from: line.from, to: line.to, insert: "" }, selection: { anchor: line.from }, userEvent: "delete" });
+      // 空项：去掉标记，退出列表——并补一个空行：列表项后面紧跟的文字在 markdown 里是「懒续行」，
+      // 会被并进最后一项（编辑器里看着是独立一段，预览与别的渲染器里却是列表的一部分）
+      const hasPrevious = line.number > 1 && state.doc.line(line.number - 1).text.trim() !== "";
+      view.dispatch({
+        changes: { from: line.from, to: line.to, insert: hasPrevious ? "\n" : "" },
+        selection: { anchor: line.from + (hasPrevious ? 1 : 0) },
+        userEvent: "delete",
+      });
       return true;
     }
     const marker = item[2] as string;
