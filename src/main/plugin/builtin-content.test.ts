@@ -13,6 +13,8 @@ import { BUILTIN_PLUGIN_NAMES } from "../../shared/plugin.ts";
 import { LAYOUT_GUIDE, LAYOUT_NAMES } from "../../shared/slides-layouts.ts";
 import { DEFAULT_THEME_ID, THEME_BLURBS, THEME_IDS } from "../../shared/slides-theme.ts";
 import { SLIDES_EXPORT_FORMATS } from "../../shared/slides-export.ts";
+import { TERMINAL_READ_DEFAULT_LIMIT, TERMINAL_READ_MAX_LIMIT } from "../../shared/terminal.ts";
+import { TERMINAL_TOOL_NAMES } from "../../agent/terminal-tools.ts";
 import type { SecretsPort } from "../provider/store.ts";
 import { scanPlugin } from "./manifest.ts";
 import { PluginStore } from "./store.ts";
@@ -23,6 +25,7 @@ const CREATOR = join(BUILTIN, "plugin-creator");
 
 const SKILL_KIT = join(BUILTIN, "skill-kit");
 const DOCS_SLIDES = join(BUILTIN, "docs-slides");
+const TERMINAL = join(BUILTIN, "terminal");
 
 class NoSecrets implements SecretsPort {
   async set(): Promise<void> {}
@@ -332,6 +335,33 @@ describe("内置插件 docs-slides", () => {
   });
 });
 
+describe("内置插件 terminal", () => {
+  test("一条技能 terminal；workflow 点名对得上；description 写明何时读、何时不用（模型靠它想起技能）", async () => {
+    const scanned = await scanPlugin(TERMINAL, "terminal");
+    assert.deepEqual(scanned.skills.map((skill) => skill.slug), ["terminal"]);
+    assert.equal(scanned.workflow.length >= 4, true);
+    for (const step of scanned.workflow) assert.notEqual(step.skillSlug, null, `workflow 步骤「${step.title}」点名的技能 ${step.skill} 对不上`);
+    const skill = scanned.skills[0];
+    assert.match(skill?.description ?? "", /BEFORE the first terminal_\* call/);
+    assert.match(skill?.description ?? "", /watch/);
+    assert.match(skill?.description ?? "", /use bash/);
+  });
+
+  // 工具名单与读取上限的真源在代码里（权限档描述认 TERMINAL_TOOL_NAMES；上限在 shared/terminal.ts）；技能里是给模型读的那一份，不许分叉
+  test("terminal 技能与代码同源：六个工具各占表里一行且一个不多；读取默认 / 上限数字一致；红线与「没有退出码事件」原文在", async () => {
+    const text = await readFile(join(TERMINAL, "skills", "terminal", "SKILL.md"), "utf8");
+    const tableSection = text.split("## The six tools")[1]?.split("## Red line")[0] ?? "";
+    const rows = tableSection.split("\n").filter((line) => /^\| `terminal_[a-z]+` \|/.test(line));
+    assert.deepEqual(rows.map((line) => /^\| `(terminal_[a-z]+)` \|/.exec(line)?.[1]), [...TERMINAL_TOOL_NAMES]);
+    const grouped = (value: number): string => value.toLocaleString("en-US");
+    assert.equal(text.includes(`last ${grouped(TERMINAL_READ_DEFAULT_LIMIT)} characters`), true, "技能里的默认读取字符数与 TERMINAL_READ_DEFAULT_LIMIT 不一致");
+    assert.equal(text.includes(`1–${grouped(TERMINAL_READ_MAX_LIMIT)}, default ${grouped(TERMINAL_READ_DEFAULT_LIMIT)}`), true, "技能里的 limit 范围与 TERMINAL_READ_MAX_LIMIT 不一致");
+    assert.match(text, /Red line: never type into a busy terminal/);
+    assert.match(text, /There is no exit-code event/);
+    assert.match(text, /outputSharedWithAgent: false/);
+  });
+});
+
 describe("内置插件与用户自己的同名技能（用真实资源跑 PluginStore）", () => {
   /** 用真实 resources/builtin-plugins 当 builtinRoot；userSkills 由用例给。不碰任何用户目录。 */
   async function withUserSkills(userSkills: { slug: string; name: string }[]): Promise<{ store: PluginStore; cleanup: () => Promise<void> }> {
@@ -340,7 +370,7 @@ describe("内置插件与用户自己的同名技能（用真实资源跑 Plugin
     return { store, cleanup: () => rm(configDir, { recursive: true, force: true }) };
   }
 
-  test("没有重名：三个内置插件的技能都叠进开轮装配，无冲突", async () => {
+  test("没有重名：四个内置插件的技能都叠进开轮装配，无冲突", async () => {
     const { store, cleanup } = await withUserSkills([]);
     try {
       const assembled = await store.assemble(null);
@@ -352,6 +382,7 @@ describe("内置插件与用户自己的同名技能（用真实资源跑 Plugin
         "plugin-creator/plugin-creator",
         "skill-kit/find-skills",
         "skill-kit/skill-creator",
+        "terminal/terminal",
       ]);
       assert.deepEqual((await store.listViews()).flatMap((view) => view.conflicts), []);
     } finally {
