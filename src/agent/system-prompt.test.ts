@@ -27,6 +27,7 @@ const input = (patch: Partial<SystemPromptInput> = {}): SystemPromptInput => ({
   attributionLanguage: "en",
   intentGuideline: false,
   memoryToolsGuideline: false,
+  longTaskAutomationGuideline: false,
   ...patch,
 });
 
@@ -105,6 +106,18 @@ describe("orbitaSystemSegments —— 段序与空段", () => {
     const on = orbitaSystemSegments(input({ memoryToolsGuideline: true })).map((segment) => segment.name);
     assert.ok(!off.includes("memory-tools"));
     assert.equal(on[on.indexOf("channel-role") + 1], "memory-tools");
+  });
+
+  test("longTaskAutomationGuideline：automation_create 已注册时多一段长任务指引（紧跟 expected-seconds），未注册时没有", () => {
+    const off = joinSystemPrompt(orbitaSystemSegments(input()));
+    assert.ok(!off.includes("background"), "未注册自动化时不讲长任务指引");
+    const on = orbitaSystemSegments(input({ longTaskAutomationGuideline: true }));
+    assert.equal(on[on.findIndex((segment) => segment.name === "expected-seconds") + 1]?.name, "long-task-automation");
+    const text = on.find((segment) => segment.name === "long-task-automation")?.text ?? "";
+    for (const needle of ["10 minutes", "background", "log file", "this_session automation", "end your turn"])
+      assert.ok(text.includes(needle), `长任务指引里该有「${needle}」`);
+    // 讲的是「别在前台 bash 里干等」，不是让人不跑长命令
+    assert.ok(text.includes("do not wait it out in a foreground bash call"));
   });
 
   test("intentGuideline 开时多一段 intent，关时没有", () => {

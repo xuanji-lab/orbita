@@ -7,6 +7,7 @@ import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-prot
 import {
   flattenRenderUnits,
   groupToolUnits,
+  groupTurns,
   groupTurnsByTurn,
   indexToolResults,
   type TurnProcessUnit,
@@ -96,7 +97,8 @@ describe("章节与计数", () => {
     assert.equal(counts.steps, 3);
     assert.equal(counts.failed, 1);
     assert.deepEqual(counts.files, ["notes/a.md"]);
-    assert.deepEqual(counts.byTool.map((b) => b.key).sort(), ["bash", "read", "write"]);
+    // 这里写的是 notes/a.md：落在文档文件上的 write 单算「doc_write」（统计行写「写文档」），其余照旧
+    assert.deepEqual(counts.byTool.map((b) => b.key).sort(), ["bash", "doc_write", "read"]);
   });
 
   test("写计划不算一步", () => {
@@ -156,4 +158,33 @@ describe("processOutcome —— 落定那一行开头说什么（不写「0 步�
     assert.ok(proc !== undefined);
     assert.deepEqual(processOutcome(processCounts(proc.steps, results), proc.steps), { kind: "work", steps: 3, files: 1 });
   });
+});
+
+describe("钉住的看板 / 画廊不随轮尾文件卡换位（2026-11-06：看板回复完变灰 not found）", () => {
+  // 插件跑完写了数据文件：轮结束后才补进一张「N 个文件已更改」卡。补卡前后看板的位置必须不变——
+  // 换位 = React 搬动它的 DOM 节点 = iframe 重新加载，而看板卡地址是一次性的，重载拿到 404
+  const board = [
+    user("u1", 1000),
+    assistant("a1", 2000, [{ type: "text", text: "我先读技能。" }, call("r1")]),
+    tool({ toolCallId: "r1", timestamp: 2100 }),
+    assistant("a2", 3000, [call("b1", "bash", { command: "python run.py" })]),
+    tool({ toolCallId: "b1", toolName: "bash", timestamp: 3100 }),
+    assistant("a3", 4000, [call("sb", "show_plugin_board", { plugin: "lit" })]),
+    tool({ toolCallId: "sb", toolName: "show_plugin_board", timestamp: 4100 }),
+    assistant("a4", 5000, [{ type: "text", text: "看板在上面。" }]),
+  ];
+  const fileTurn = { role: "file-turn", id: "ft1", timestamp: 5500, changes: [] } as unknown as TranscriptItem;
+  for (const [name, group] of [["一轮一行", groupTurnsByTurn], ["逐步铺开", groupTurns]] as const) {
+    test(`${name}：有文件卡时看板仍在结尾回复之前，文件卡殿后`, () => {
+      const keys = (records: readonly TranscriptItem[]) =>
+        group(groupToolUnits(flattenRenderUnits(records)), false, indexToolResults(records)).map((e) => e.key);
+      const before = keys(board);
+      const after = keys([...board, fileTurn]);
+      const boardAt = after.indexOf("a3:0");
+      assert.ok(boardAt >= 0 && boardAt < after.indexOf("a4:0"), `看板应在回复前：${after.join(" ")}`);
+      assert.equal(after[after.length - 1], "ft1");
+      // 补卡只在末尾追加，其余顺序与补卡前逐个相同（React 不搬动任何已有节点）
+      assert.deepEqual(after.slice(0, -1), before);
+    });
+  }
 });

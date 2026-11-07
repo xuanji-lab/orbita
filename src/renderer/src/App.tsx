@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTheme } from "./useTheme";
 import { LocaleContext, messagesOf } from "./locale.ts";
 import { ExperimentalFeaturesContext } from "./experimental.ts";
 import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
-import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type ModelPair, type SettingsPatch } from "@shared/settings";
+import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type DocPaper, type ModelPair, type SettingsPatch } from "@shared/settings";
 import { childSessions, rootSessions, type Carryover } from "@shared/session";
 import type { ChimeReason } from "@shared/notify";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
@@ -20,26 +20,53 @@ import {
   SUB_SESSIONS_LIST,
   escapeFrom,
   openSubSession,
+  panelAfterSubSessionsGone,
   syncToMainSession,
   type SubSessionsView,
 } from "./features/chat/sub-sessions-state";
-import { SettingsView, type SettingsTab } from "./features/settings/SettingsView";
-import { useSkills } from "./features/skills/useSkills";
+import { SettingsView } from "./features/settings/SettingsView";
+import { BoardWeekView } from "./features/board/BoardWeekView";
+import type { SettingsTab } from "./features/settings/settings-tabs.ts";
+import { OnboardingView } from "./features/onboarding/OnboardingView";
+import { shouldAutoOpenOnboarding } from "./features/onboarding/onboarding-nav.ts";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
 import { COLLAPSE_BREAKPOINT } from "./shell/window-tools.ts";
 import { Toolbar, ToolbarPanelSlotContext } from "./shell/Toolbar";
 import { SessionCapsule } from "./shell/SessionCapsule";
 import { useFocusShell } from "./features/focus/use-focus-shell.tsx";
-import { Icon } from "./shell/Icon";
+import { docPanelLayout } from "./features/doc-panel/doc-panel-width.ts";
+import { docScope, getLast } from "./features/doc-panel/view-memory.ts";
+import { DocPaperContext, effectivePaper } from "./features/doc-panel/doc-paper.ts";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
-import { recallPanel, rememberPanel, type PanelMemory } from "./shell/right-panel-memory.ts";
+import {
+  CLOSED_ENTRY,
+  composeEntry,
+  forgetMissing,
+  hasEntry,
+  hasSubLayer,
+  mergeLoaded,
+  panelFromHome,
+  parseMemoryFile,
+  parsePath,
+  recallEntry,
+  rememberEntry,
+  resolveSubSessionsSub,
+  taskTabOf,
+  toMemoryFile,
+  type PanelEntry,
+  type PanelMemory,
+  type PanelPath,
+} from "./shell/right-panel-memory.ts";
+import { dropDraft, putDraft, shouldOpenDraft, draftOf, type PluginDraftTarget, type PluginDrafts } from "./features/plugins/plugin-draft.ts";
+import type { PluginOpenRequest } from "./features/plugins/PluginsView.tsx";
 import { RightPanelSlot } from "./shell/RightPanel";
 import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
-import { type PanelInsertRequest, type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
+import { FEATURE_ICON } from "./shell/feature-icons.ts";
+import { type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
 import { PastedTextCollapseContext } from "./shell/attachment-chips";
 import { ProcessViewContext } from "./features/chat/process-view-context";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
-import { AbilitiesPanel } from "./features/abilities/AbilitiesPanel";
+import { isUnclaimedEscape } from "./shell/escape-key.ts";
 import { AutomationPanel } from "./features/automation/AutomationPanel";
 import {
   AutomationContext,
@@ -54,9 +81,12 @@ import type { PdfCitation } from "@shared/pdf-quote";
 import { FilesPanel } from "./features/files/FilesPanel";
 import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { ReviewPanel } from "./features/review/ReviewPanel";
+import { DocsPanel } from "./features/doc-panel/DocsPanel";
+import { useAutoOpenPanel } from "./features/chat/auto-open-panel.ts";
+import { onOpenPanelRequest, requestOpenPanel } from "./shell/open-panel.ts";
 import type { ExcerptJump } from "./features/review/ExcerptsTab";
 import type { ExcerptJumpRequest } from "./features/chat/ChatView";
-import { RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
+import { BOARD_DAYS_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
 import { Drawer, type DockedTab } from "./shell/Drawer";
 import { NEW_TASK_TAB, dockTab } from "./shell/drawer-state";
 import { isWindowInactive } from "./shell/window-activity.ts";
@@ -72,8 +102,7 @@ import {
 } from "./features/notify/completion-notice.ts";
 import { playCompletionChime } from "./features/notify/chime.ts";
 import { MemoryLibraryView } from "./features/memory/MemoryLibraryView";
-import type { MemoryNav } from "./features/memory/memory-view.ts";
-import { useMemoryScopes } from "./features/memory/useMemory.ts";
+import { PluginsView } from "./features/plugins/PluginsView.tsx";
 import type { MemoryEntryView } from "@shared/memory";
 import type { PanelUsageKey } from "@shared/panel-usage";
 
@@ -94,6 +123,9 @@ import type { PanelUsageKey } from "@shared/panel-usage";
  * （Archived / Carryovers / Settings，wafo 2026-09-22 裁决，覆盖同日之前的
  * 「底部只放会话动作」——复制按钮已并入会话行的「导出」）。
  */
+/** 右栏「文档」入口发出的打开请求的 token 起点（与 focus.fileOpen 的自增 token 分开，避免撞号被当成已消费） */
+const DOC_OPEN_TOKEN_BASE = 1_000_000;
+
 export function App() {
   usePlatform();
   const [providers, setProviders] = useState<ProviderDto[]>([]);
@@ -119,8 +151,6 @@ export function App() {
     return () => query.removeEventListener("change", sync);
   }, []);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
-  /** 记忆库盖层（实验功能 memory-system）里看的是哪一页：某个范围 / 待你确认 / 向量模型 */
-  const [memoryNav, setMemoryNav] = useState<MemoryNav>({ kind: "scope", token: "all" });
   // 初始 state 的主题跟 main.tsx 首帧写的 data-theme 对齐（api.initialTheme），
   // 否则这里先落 DEFAULT_SETTINGS 的 "system"，useTheme 首次 apply 会把主题切到
   // 系统色，api.settings.get() 读回真设置后再切回来——当着用户的面闪两次。
@@ -144,16 +174,30 @@ export function App() {
     }
   }, []);
 
+  /** 设置真的从主进程读回来了没有（读回之前手里是默认值，「看没看过引导」不能按它判） */
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   useEffect(() => {
     void refresh();
     // 读不到设置就用默认——主题是可以随时再选的，不值得为此让外壳起不来
-    void api.settings.get().then(setSettings).catch(() => setSettings(DEFAULT_SETTINGS));
+    void api.settings
+      .get()
+      .then((loaded) => {
+        setSettings(loaded);
+        setSettingsLoaded(true);
+      })
+      .catch(() => setSettings(DEFAULT_SETTINGS));
   }, [refresh]);
 
   /** 先落盘再回填：写失败时 UI 不该显示一个其实没存下来的选择 */
   const changeSettings = useCallback((patch: SettingsPatch) => {
     void api.settings.set(patch).then(setSettings);
   }, []);
+
+  /** 文档面板的纸面：设置里的值按当前主题折算（纸面主题下回落 quiet 并锁住切换） */
+  const docPaper = useMemo(() => {
+    const { paper, locked } = effectivePaper(settings.docPaper, resolvedTheme);
+    return { paper, locked, setPaper: (next: DocPaper) => changeSettings({ docPaper: next }) };
+  }, [settings.docPaper, resolvedTheme, changeSettings]);
 
   /**
    * 星标是个**开关**：在库里就取消、不在就加到最后（新星的排在末尾，
@@ -189,9 +233,18 @@ export function App() {
   const [panelWidth, setPanelWidth] = useState(RIGHT_PANEL_WIDTH_DEFAULT);
   /** 右栏实际渲染宽（RightPanelSlot 夹过 1/3–2/3 后报上来）：工具栏右栏胶囊只认它 */
   const [panelRenderedWidth, setPanelRenderedWidth] = useState(RIGHT_PANEL_WIDTH_DEFAULT);
+  /** 右栏此刻是不是覆盖层（窄窗，或文档面板按聊天列底线判定放不下）：工具栏的右栏胶囊跟它 */
+  const [panelOverlay, setPanelOverlay] = useState(false);
+  /** 文档面板并排但被挤得比下限还窄 */
+  const [panelTight, setPanelTight] = useState(false);
   useEffect(() => {
     if (settings.rightPanelWidth !== undefined) setPanelWidth(settings.rightPanelWidth);
   }, [settings.rightPanelWidth]);
+  /** 文档 / 演示文稿面板的宽度：单独记（null = 没拖过，RightPanelSlot 按比例给默认） */
+  const [docPanelWidth, setDocPanelWidth] = useState<number | null>(null);
+  useEffect(() => {
+    setDocPanelWidth(settings.docPanelWidth ?? null);
+  }, [settings.docPanelWidth]);
 
   /** 左侧栏宽度：同一套口径——拖动中只改本地，松手才落 settings（避免写风暴） */
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_WIDTH_DEFAULT);
@@ -205,14 +258,40 @@ export function App() {
    * 共用同一份状态。断点自动收起（960 以下）也在这里；手动开合不持久化——窗口
    * 宽度本身不持久化，持久化一个和宽度绑定的状态会打架。
    */
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsedRaw] = useState(false);
+  /**
+   * 文档 / 演示文稿面板放不下并排时先自动收起左侧栏（docSidebar）：
+   * none = 这次打开面板还没动过；auto = 是我们收的（关面板时恢复）；user = 用户在此期间手动开合过（不再替他收、也不替他恢复）
+   */
+  const docSidebar = useRef<"none" | "auto" | "user">("none");
+  const setSidebarCollapsed = useCallback((next: boolean | ((current: boolean) => boolean)): void => {
+    if (docSidebar.current === "auto") docSidebar.current = "user";
+    setSidebarCollapsedRaw(next);
+  }, []);
   useEffect(() => {
     const query = window.matchMedia(`(max-width: ${COLLAPSE_BREAKPOINT - 1}px)`);
-    const sync = () => setSidebarCollapsed(query.matches);
+    const sync = () => setSidebarCollapsedRaw(query.matches);
     sync();
     query.addEventListener("change", sync);
     return () => query.removeEventListener("change", sync);
   }, []);
+  /** 文件面板此刻显示的是一份文档（md / txt）：与「演示文稿」面板同一套宽面板规则（写东西的面板 320 太局促） */
+  const [filesShowsDoc, setFilesShowsDoc] = useState(false);
+  const docPanelOpen = rightPanel === "docs" || rightPanel === "slides" || (rightPanel === "files" && filesShowsDoc);
+  useEffect(() => {
+    if (!docPanelOpen) {
+      // 关面板：是我们收的就还原；用户动过就不碰
+      if (docSidebar.current === "auto") setSidebarCollapsedRaw(false);
+      docSidebar.current = "none";
+      return;
+    }
+    // 打开着、放不下并排（覆盖层态）、侧栏还展开着、这次还没动过：先收侧栏腾地方
+    // （或者能并排但被挤得比下限还窄：收了侧栏面板就能宽松些）
+    if ((panelOverlay || panelTight) && !sidebarCollapsed && docSidebar.current === "none") {
+      docSidebar.current = "auto";
+      setSidebarCollapsedRaw(true);
+    }
+  }, [docPanelOpen, panelOverlay, panelTight, sidebarCollapsed]);
 
   const { session, engine } = useChatSession(providers, t);
 
@@ -239,6 +318,10 @@ export function App() {
   };
   const expandSidebar = useCallback((): void => setSidebarCollapsed(false), []);
   const openFilesPanel = useCallback((): void => setRightPanel("files"), []);
+  // 记忆里恢复出来的旧「文档」面板（合并之前存的）：并入文件面板
+  useEffect(() => {
+    if (rightPanel === "docs") setRightPanel("files");
+  }, [rightPanel]);
   const focus = useFocusShell({
     t,
     workspaces: session.workspaces,
@@ -256,7 +339,38 @@ export function App() {
   });
   /** `<FilesPanel>` 那两行的别名：保持 B1 之前的原文，#281 要在它旁边插 `focusDone` */
   const focusFilesView = focus.filesView;
-  const fileOpenRequest = focus.fileOpen;
+  /**
+   * 文件面板的「打开这个文件」请求：两个来源——左栏专注视图的双击（focus.fileOpen，token 自增）和右栏「文档」入口
+   * （railDocOpen，token 从 DOC_OPEN_TOKEN_BASE 起，两边不撞号）。谁最后来用谁
+   */
+  const [railDocOpen, setRailDocOpen] = useState<{ path: string; token: number } | null>(null);
+  const fileOpenRequest = railDocOpen ?? focus.fileOpen;
+  // 左栏专注视图又发了新的打开请求：它比右栏入口那条新，让位
+  useEffect(() => {
+    if (focus.fileOpen !== null) setRailDocOpen(null);
+  }, [focus.fileOpen]);
+
+  // ── 内置命令让右栏打开某个文件（聊天里的完成卡点击 / agent 新建·打开时自动开）──
+  // 请求总线见 shell/open-panel.ts；slides 面板收到路径直接打开，文档走文件面板
+  const [docOpenRequest, setDocOpenRequest] = useState<{ path: string; nonce: number } | null>(null);
+  const openFileInFocus = focus.openFile;
+  useEffect(
+    () =>
+      onOpenPanelRequest((hint) => {
+        if (hint.kind === "slides") {
+          setRightPanel("slides");
+          setDocOpenRequest({ path: hint.path, nonce: Date.now() });
+        } else {
+          openFileInFocus(hint.path);
+        }
+      }),
+    [openFileInFocus],
+  );
+  // 面板关了就忘掉请求：下回从右栏图标打开，走「上次打开的那份」而不是重放旧请求
+  useEffect(() => {
+    if (rightPanel !== "slides" && rightPanel !== null) setDocOpenRequest(null);
+  }, [rightPanel]);
+  useAutoOpenPanel(session.sessionId ?? session.opened?.id ?? null, session.transcript, session.phase !== "idle");
 
   /**
    * 收起态页头的「新任务」：退出设置页、回到展开侧栏（新任务要落在看得见的列表里），
@@ -478,36 +592,39 @@ export function App() {
     subSessionsMainIdRef.current = nextMainId;
   }, [mainOpenId]);
 
-  // 每条会话记住自己离开时右栏开的是哪个面板（right-panel-memory.ts，用户
-  // 2026-10-18：「每个 session，应该记住自己离开的时候，右侧面板是啥」）。切主槽
-  // 会话的那一拍：把离开会话此刻的面板记下，再恢复目标会话记着的面板（没记过 =
-  // 关着）。只记种类、只记在 renderer 内存：文件面板里的标签不跟着恢复（切会话清
-  // 标签的既有设计不变），重启后都从「关着」起步，右栏宽度仍全局共用。首页
-  // （mainOpenId ""）不是会话：不记也不恢复，面板沿用当前值（与改前一致）。抽屉 /
-  // 辅助对话不开转例：右栏面板位属于主槽视图，一律按主槽会话记。
+  // 每条会话记住自己的右栏路径（right-panel-memory.ts，用户 2026-10-18：「每个 session，应该记住自己离开的
+  // 时候，右侧面板是啥」；2026-11-07：「这个树节点要往下探呀」）：开着哪个面板，再往下一层
+  // （进了哪个插件 / 哪条自动化 / 哪个页签……由面板经 sub + onSubChange 报上来）。
+  // 面板一变就写进记忆（见下方「写穿」），切主槽会话的那一拍只管**取**：恢复目标会话
+  // 记着的路径（没记过 = 关着），并换新右栏的 epoch——面板内容的 key 带着它，切会话必定重挂，
+  // 面板里的状态只从记忆里来、不会从上一条会话原样带过去。
+  // 文件面板的标签仍不跟着恢复（切会话清标签的既有设计），终端 / 辅助对话状态全局共用，三者不重挂、不记第二层。
+  // 记忆落盘到 <userData>/right-panel-memory.json（防抖），重启后保留；右栏宽度仍全局共用。
+  // 首页（mainOpenId ""）不是会话：不记；回到首页面板关着（与改前一致）。抽屉 / 辅助对话不开转例：
+  // 右栏面板位属于主槽视图，一律按主槽会话记。
   // rightPanel 进依赖是为了让切换那一拍读到「离开时」的面板值；面板自身变化时
   // previous === mainOpenId 早退，自然空跑
   const panelMemoryRef = useRef<PanelMemory>(new Map());
   /** 下一次右栏变化是「按会话恢复」而不是用户打开的（面板打开次数要跳过它） */
   const panelRestoredRef = useRef(false);
   const panelMainIdRef = useRef(mainOpenId);
-  useEffect(() => {
-    const previous = panelMainIdRef.current;
-    panelMainIdRef.current = mainOpenId;
-    if (previous === mainOpenId) return;
-    const sessionOf = (id: string): string | null => (id === "" ? null : id);
-    panelMemoryRef.current = rememberPanel(panelMemoryRef.current, sessionOf(previous), rightPanel);
-    const recalled = recallPanel(panelMemoryRef.current, sessionOf(mainOpenId));
-    // 恢复出来的面板不是用户打开的：面板打开次数不记它（见下方 countPanel 的效果）
-    if (recalled !== rightPanel) panelRestoredRef.current = true;
-    setRightPanel(recalled);
-  }, [mainOpenId, rightPanel]);
+  /** 右栏此刻属于哪条会话（null = 首页 / 还没有会话，不写记忆）与第几次恢复；面板内容的 key 用 */
+  const [railCtx, setRailCtx] = useState<{ owner: string | null; epoch: number }>(() => ({ owner: mainOpenId === "" ? null : mainOpenId, epoch: 0 }));
+  /** 当前面板自己报上来的「停在哪一层」；panel 与 rightPanel 不一致的那份是过期的，下面的 effect 会清掉 */
+  const [railPath, setRailPath] = useState<PanelPath>(CLOSED_ENTRY);
+  /**
+   * 一次性：恢复成这个面板，而不是会话自己的记忆。`sessionId` 为 null = 下一条**还没记过面板的新会话**拿到 id 时
+   * （「和智能体一起做一个」用）；给了 id = 只在切到**那一条**会话时（「正在做」的「回到对话」用：它早就有自己的面板记忆）。
+   * 只带这一次，之后切会话照会话记忆。
+   */
+  const carryPanelRef = useRef<{ panel: RightPanelKind; sessionId: string | null } | null>(null);
 
   // 主槽不再是「有子会话的根会话」→ 入口消失，面板若开着就关（不止是不显示入口，
   // 面板本身也不该继续挂着一条够不到数据的内容）。在按会话恢复面板之后跑：恢复出
   // 的 subsessions 若在新主槽下已不合法，由这里兜底关掉
+  // 函数式更新：读的是排在前面的「按会话恢复」的结果，不是闭包里切换前的旧值（见 panelAfterSubSessionsGone）
   useEffect(() => {
-    if (rightPanel === "subsessions" && !hasSubSessions) setRightPanel(null);
+    if (rightPanel === "subsessions" && !hasSubSessions) setRightPanel((prev) => panelAfterSubSessionsGone(prev, hasSubSessions));
   }, [rightPanel, hasSubSessions]);
 
   // 会话层换了目标 id → 查看槽跟着 openSession；openSession 内部本身有「已经是
@@ -789,8 +906,29 @@ export function App() {
   /** 右侧三个图标共用**一个面板位**（2026-09-12 裁决）：同一时刻至多展开一个，
    *  "drawer" 即辅助对话——三个菜单在同一个壳里只是三种内容。 */
   const handlePanel = useCallback((next: RightPanelKind | null) => {
+    // 「文档」入口 = 在文件面板里打开最近的文档（没有就新建一份）：文档与文件合并成一个面板，不再有第二个
+    if (next === "docs") {
+      setRightPanel("files");
+      void openRecentDocument();
+      return;
+    }
     setRightPanel(next);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.workspaceId, session.sessionId, session.opened?.id]);
+  /** 右栏「文档」入口：上次在这个工作区打开的文档 → 否则最近改的 .md → 否则新建一份空文档，在文件面板里打开 */
+  async function openRecentDocument(): Promise<void> {
+    const sessionId = session.sessionId ?? session.opened?.id ?? null;
+    const workspaceId = session.workspaceId;
+    try {
+      const docs = (await api.docs.list({ sessionId, workspaceId })).filter((entry) => entry.kind === "doc");
+      const last = getLast(docScope(workspaceId, "doc"));
+      const target =
+        docs.find((entry) => entry.path === last)?.path ?? docs[0]?.path ?? (await api.docs.create({ sessionId, workspaceId, kind: "doc" })).path;
+      setRailDocOpen((prev) => ({ path: target, token: Math.max(prev?.token ?? 0, DOC_OPEN_TOKEN_BASE) + 1 }));
+    } catch {
+      // 列 / 建都失败（工作区目录不在）：文件面板自己会显示根的状态，这里不另报错
+    }
+  }
   /** 召回终态卡的「在右栏看图谱」（2026-10-14 终态卡重写）：直达右栏意图面板。引用稳定（TranscriptColumn 是 memo） */
   const openIntentPanel = useCallback(() => handlePanel("intent"), [handlePanel]);
   /** 输入框旁上下文环菜单的「查看上下文」：直达右栏上下文面板 */
@@ -801,7 +939,7 @@ export function App() {
     handlePanel("context");
   }, [handlePanel]);
 
-  // ── 面板打开次数（shared/panel-usage.ts，实验功能「精简右栏」的数据）──────
+  // ── 面板打开次数（shared/panel-usage.ts，本机的统计）──────
   // 只记用户自己打开的：右栏换成别的面板（不管从哪个入口：图标条、「更多」、对话里的
   // 链接、快捷键、「/ + 空格」），「这条任务」开着时切到上下文页签，记忆库 / 遗留 / 归档
   // 打开，铃铛与内置浏览器在各自的入口记。按会话恢复的面板不记（panelRestoredRef）。
@@ -835,11 +973,12 @@ export function App() {
   const tokenPickNonceRef = useRef(0);
   /** 发起号：面板可能已开着，选取态可能已在——靠它重新聚焦/重置 */
   const [tokenPickRequest, setTokenPickRequest] = useState(0);
+  // 选取态开在插件面板里（插件已转正，面板常在）
   const openTokenPicker = useCallback((position: number): boolean => {
     tokenPickAnchorRef.current = position;
     setTokenPickerOn(true);
     setTokenPickRequest((n) => n + 1);
-    setRightPanel("abilities");
+    setRightPanel("plugins");
     return true;
   }, []);
   const finishTokenPick = useCallback(
@@ -856,40 +995,24 @@ export function App() {
   );
   // 面板被切走 / 关掉（rail 点了别的、× 、全局 Esc）：选取态跟着退，锚点一并丢
   useEffect(() => {
-    if (tokenPickerOn && rightPanel !== "abilities") {
+    if (tokenPickerOn && rightPanel !== "plugins") {
       setTokenPickerOn(false);
       tokenPickAnchorRef.current = null;
     }
   }, [rightPanel, tokenPickerOn]);
-  // Tab 在能力面板里轮换「全部 / 技能 / MCP」页签，不再经这里换面板
-  const abilityPicker: TokenPickerControl = {
+  const tokenPicker: TokenPickerControl = {
     onSelect: finishTokenPick,
     onCancel: () => finishTokenPick(null),
     request: tokenPickRequest,
   };
-  /** 能力面板的「这个工作区」：主槽会话所在的（首页 = 输入框选着的）；可用性与 Skill 开关都按它 */
-  const abilityWorkspace = useMemo(() => {
-    const found = session.workspaces.find((w) => w.id === session.workspaceId);
-    return found === undefined ? null : { id: found.id, name: found.name };
-  }, [session.workspaces, session.workspaceId]);
-
-  // ── 面板行内「插入」按钮的插入（panel-token.ts）─────────────────
-  // 能力面板行上（与 MCP 服务详情里）的插入键：token 落到主槽输入框当前
-  // 光标处（从未聚焦过则草稿末尾）、焦点回输入框。与选取的锚点回执分开走：
-  // 按钮是浏览态入口，面板不关，可以连插几条
-  const [panelInsert, setPanelInsert] = useState<PanelInsertRequest | null>(null);
-  const panelInsertNonceRef = useRef(0);
-  const insertPanelToken = useCallback((token: string): void => {
-    panelInsertNonceRef.current += 1;
-    setPanelInsert({ token, nonce: panelInsertNonceRef.current });
-  }, []);
 
   // Esc 关面板（再点图标 / 面板内 × 之外的第二出口）。Sub-sessions 面板开着且在
   // 会话层时，Esc 只退一层回列表（escapeFrom），不直接关掉整个面板——与面板内部
   // 「返回」按钮同一个退出台阶（子会话 PR4c 2.1）。
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape") return;
+      // 菜单 / 重命名框等已经认领的这一下不再接（它们 preventDefault 但不 stopPropagation，见 escape-key.ts）
+      if (!isUnclaimedEscape(event)) return;
       if (rightPanel === "subsessions") {
         const next = escapeFrom(subSessionsNav);
         if (next === null) setRightPanel(null);
@@ -898,11 +1021,14 @@ export function App() {
         // 文件面板开着预览：这一下 Esc 只关预览（退一层），面板留着
       } else if (rightPanel !== null) {
         setRightPanel(null);
+      } else if (overlay === "board") {
+        // 全局周看板没有别的层要先退：Esc 直接回到对话
+        setOverlay(null);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [rightPanel, subSessionsNav]);
+  }, [rightPanel, subSessionsNav, overlay]);
 
   // Ctrl+Alt+D 开关辅助对话（与右图标条按钮同源）。判定抽在 shell/drawer-shortcut.ts：
   // macOS 上 Option 会把 event.key 变成 ∂，只看 key 在 mac 上永远匹配不到
@@ -936,21 +1062,21 @@ export function App() {
 
   /** 壳里此刻渲染的内容：active 优先，收起窗口里保持原面板直到收完 */
   const shownPanel = rightPanel ?? mountedPanel;
-  // 能力面板（Skills + MCP 一张列表）用这个 hook：skills 与 servers 都在里面，面板开着才读盘。
-  // workspaces 传的是 session.workspaces（侧栏渲染用的同一份，来自会话引擎）：
-  // 两份列表不同步会导致侧栏删了工作区、面板还显示旧的（2026-09-23 真机复现的 bug）
-  const skills = useSkills(shownPanel === "abilities", session.workspaces);
-
+  const isDocPanel = shownPanel === "docs" || shownPanel === "slides" || (shownPanel === "files" && filesShowsDoc);
   /**
-   * Create skill…（4-7）：新建会话并预填 composer——skill 正文是给 agent 读的，
-   * 创建走对话里的 create_skill 工具。**面板不关**（用户可能对着现有 skill 参考），
-   * 新会话落在当前 workspace（有的话，agent 的默认 scope 才对）。
+   * 「和智能体一起做一个」（插件页）：在当前工作区（没有则 Home）新开一条任务，输入框预填一句引导，
+   * 开头的 `/skill:plugin-creator` 点名内置的做插件技能（发送时由主进程展开成指令块）。
+   * 草稿写进新任务槽自己的键（startTaskWithDraft）；从设置里的全屏版触发时设置页盖在主槽上，先退场才看得到新任务；
+   * 右栏版触发时右栏保持开着（按会话记忆，新任务槽自己的面板状态）。
    */
-  const createSkillDraft = useCallback(() => {
-    const intent = session.workspaces.find((w) => w.id === session.workspaceId);
-    if (intent !== undefined) session.newTaskIn(intent);
-    else session.newTask();
-    session.setDraft(t.app.skillDraft);
+  const makePluginWithAgent = useCallback(() => {
+    const workspace = session.workspaces.find((w) => w.id === session.workspaceId) ?? null;
+    // 从设置页签的全屏版点：先退出设置，新任务才不会落在设置页后面
+    setOverlay(null);
+    // 一边聊一边看插件页（用户 2026-11-05）：这条新会话拿到 id 时，右栏恢复成插件页而不是「没记过 = 关」。
+    // 只带这一次；之后切会话照会话记忆（用户定：插件页不做应用级例外）
+    carryPanelRef.current = { panel: "plugins", sessionId: null };
+    session.startTaskWithDraft(workspace, t.plugins.makeWithAgentDraft);
   }, [session, t]);
   /** 抽屉选择器要排除的：主槽正看着的那条（它已经在中间了） */
   const mainSessionId = session.sessionId ?? session.opened?.id ?? null;
@@ -973,12 +1099,96 @@ export function App() {
   const archivedCount = rootSessions(session.sessions).filter((m) => m.archived).length;
   const openCarryoverCount = session.carryovers.filter((item) => item.status === "open").length;
   const experimentalFeatures = settings.experimentalFeatures ?? {};
-  // 记忆库（实验功能 memory-system）：开关关掉时盖层退回聊天；左栏导航与页面共用一份数据
-  const memoryOn = experimentalFeatures["memory-system"] === true;
-  if (overlay === "memory" && !memoryOn) setOverlay(null);
-  const memoryScopes = useMemoryScopes(overlay === "memory");
+  // 「正在做」的插件草稿：agent 的 preview_plugin 扫过一个还没安装的文件夹时，按会话记下它的路径；
+  // 正看着该会话就同时把右栏切到插件页（右栏版见 PluginDraftView）。这份只记在 renderer 内存里、只管「agent 预览时自动切右栏」；
+  // 草稿本身是磁盘上的文件夹，用户中途离开 / 重开应用后回来的入口是插件页列表最上面的「正在做」组（主进程 plugin:drafts 扫出来）
+  const [pluginDrafts, setPluginDrafts] = useState<PluginDrafts>(new Map());
+  // 用户在「正在做」组里点开的草稿（优先于 agent 预览的那一条）；点返回清掉
+  const [openedDraft, setOpenedDraft] = useState<PluginDraftTarget | null>(null);
+  const draftContext = useRef(mainSessionId);
+  draftContext.current = mainSessionId;
+  useEffect(
+    () =>
+      api.agent.onEvent((event) => {
+        if (event.type !== "pluginDraft") return;
+        setPluginDrafts((drafts) => putDraft(drafts, event.sessionId, event.path));
+        if (shouldOpenDraft({ eventSessionId: event.sessionId, viewedSessionId: draftContext.current })) {
+          setRightPanel("plugins");
+        }
+      }),
+    [],
+  );
+  // 「在右栏打开这个插件」：右栏打开插件页，选中那个插件；`board` 为真直接进它的看板视图
+  // （设置页全屏版详情里点「打开看板」），否则停在详情（装好之后）
+  const [pluginOpenRequest, setPluginOpenRequest] = useState<PluginOpenRequest | null>(null);
+  const openPlugin = useCallback(
+    (name: string, board: boolean) => {
+      setPluginOpenRequest((previous) => ({ name, nonce: (previous?.nonce ?? 0) + 1, board }));
+      // 要看的是已装的这个插件：这条会话若正挂着草稿视图，先让位给它
+      if (mainSessionId !== null) setPluginDrafts((drafts) => dropDraft(drafts, mainSessionId));
+      setOpenedDraft(null);
+      setRightPanel("plugins");
+    },
+    [mainSessionId],
+  );
+  const handlePluginOpenHandled = useCallback(() => setPluginOpenRequest(null), []);
+  /**
+   * agent 的 install_plugin 装上了插件、或用户点了对话里那一行的「安装」，而且是**正看着的这条会话**里装的：
+   * 右栏打开插件页、选中它停在详情（要看看板再点「打开看板」）。别的会话里装的不抢右栏。
+   */
+  const openPluginRef = useRef(openPlugin);
+  openPluginRef.current = openPlugin;
+  const viewedForInstallRef = useRef(mainSessionId);
+  viewedForInstallRef.current = mainSessionId;
+  useEffect(
+    () =>
+      api.agent.onEvent((event) => {
+        if (event.type !== "pluginsChanged" || event.installed === undefined) return;
+        if (event.installed.sessionId !== viewedForInstallRef.current) return;
+        openPluginRef.current(event.installed.name, false);
+      }),
+    [],
+  );
+  const leavePluginDraft = useCallback(() => {
+    setOpenedDraft(null);
+    if (mainSessionId !== null) setPluginDrafts((drafts) => dropDraft(drafts, mainSessionId));
+  }, [mainSessionId]);
+  /** 「正在做」组里点一行：右栏打开插件页，进该草稿的长页（设置里的全屏版点时先退出设置） */
+  const openPluginDraft = useCallback((draft: PluginDraftTarget) => {
+    setOverlay(null);
+    setOpenedDraft(draft);
+    setRightPanel("plugins");
+  }, []);
+  /**
+   * 「正在做」组里的「回到对话」：退出设置、打开做这个插件的那条会话，右栏直接是这份草稿的「正在做」长页
+   * （用户回去就是要接着做它）：草稿写进那条会话的 pluginDrafts，右栏一次性带上插件页（carry 只带这一次，
+   * 之后切走切回照那条会话自己的面板记忆）。已经在看那条会话时没有「切到」，直接开右栏。
+   */
+  const openDraftSession = useCallback(
+    (sessionId: string, draftPath: string) => {
+      setOverlay(null);
+      setOpenedDraft(null);
+      setPluginDrafts((drafts) => putDraft(drafts, sessionId, draftPath));
+      if (sessionId === mainSessionId) {
+        setRightPanel("plugins");
+        return;
+      }
+      carryPanelRef.current = { panel: "plugins", sessionId };
+      void session.openSession(sessionId);
+    },
+    [session, mainSessionId],
+  );
+  const sessionDraft = draftOf(pluginDrafts, mainSessionId);
+  const shownDraft: PluginDraftTarget | null =
+    openedDraft ?? (sessionDraft === null ? null : { path: sessionDraft, workspaceId: session.workspaceId });
+  const shownSettingsTab = settingsTab;
+  // 记忆库住在设置的页签里：打开那个页签才算一次
   useEffect(() => {
-    if (overlay === "memory") countPanel("memory");
+    if (overlay === "settings" && shownSettingsTab === "memory") countPanel("memory");
+  }, [overlay, shownSettingsTab, countPanel]);
+  useEffect(() => {
+    if (overlay === "board") countPanel("board");
+    if (overlay === "settings") countPanel("settings");
   }, [overlay, countPanel]);
   useEffect(() => {
     if (showCarryovers) countPanel("carryovers");
@@ -986,21 +1196,166 @@ export function App() {
   useEffect(() => {
     if (showArchived) countPanel("archived");
   }, [showArchived, countPanel]);
-  // 精简右栏（实验功能）：常驻只留「这条任务」、终端、内置浏览器，其余收进「更多」
-  const leanRail = experimentalFeatures["lean-rail"] === true;
-  // 自动化（实验功能 automation）：数据钩子 App 持有一份，右栏面板与对话里的卡片共用
-  const automationOn = experimentalFeatures["automation"] === true;
-  const automations = useAutomations(automationOn);
+  // 自动化：数据钩子 App 持有一份，右栏面板与对话里的卡片共用
+  const automations = useAutomations();
   const [automationFocus, setAutomationFocus] = useState<{ id: string; nonce: number } | null>(null);
   const openAutomationPanel = useCallback((automationId?: string): void => {
     setRightPanel("automation");
     if (automationId !== undefined) setAutomationFocus((current) => ({ id: automationId, nonce: (current?.nonce ?? 0) + 1 }));
   }, []);
-  // 开关关掉：面板位上若正开着自动化面板就收起（入口一并从右栏消失）
-  if (!automationOn && rightPanel === "automation") setRightPanel(null);
+
+  // ── 右栏路径：恢复 / 写穿 / 落盘（right-panel-memory.ts；说明见上方 panelMemoryRef）──────────
+  const sessionsRef = useRef(session.sessions);
+  sessionsRef.current = session.sessions;
+  /** 面板换了：上一个面板报的第二层作废（面板自己挂上后会报新的） */
+  useEffect(() => {
+    setRailPath((current) => (current.panel === rightPanel ? current : (parsePath({ panel: rightPanel }) ?? CLOSED_ENTRY)));
+  }, [rightPanel]);
+  /** 点开的草稿属于插件面板：面板换走就放下（同其余面板「换走回到根」） */
+  useEffect(() => {
+    if (rightPanel !== "plugins") setOpenedDraft(null);
+  }, [rightPanel]);
+  // 切主槽会话：恢复目标会话记着的路径（没记过 = 关着）。面板、页签、第二层、子会话面板的层、
+  // 草稿在同一批里设好；epoch +1 让面板内容重挂。一次性信号（审查定位、记忆页签、「/ + 空格」选取态）
+  // 都属于离开的那条会话，不带过去——否则重挂后会拿着旧会话的路径去定位
+  useEffect(() => {
+    const previous = panelMainIdRef.current;
+    panelMainIdRef.current = mainOpenId;
+    if (previous === mainOpenId) return;
+    const target = mainOpenId === "" ? null : mainOpenId;
+    let recalled: PanelEntry = recallEntry(panelMemoryRef.current, target);
+    const carry = carryPanelRef.current;
+    if (carry !== null && target !== null && (carry.sessionId === null ? !hasEntry(panelMemoryRef.current, target) : carry.sessionId === target)) {
+      const bare = parsePath({ panel: carry.panel }) ?? CLOSED_ENTRY;
+      recalled = recalled.taskTab === undefined ? bare : { ...bare, taskTab: recalled.taskTab };
+      carryPanelRef.current = null;
+    }
+    // 从首页发第一句：开着的是文档 / 演示文稿面板就留着（panelFromHome）
+    const keepFromHome = panelFromHome(panelMemoryRef.current, previous, target, rightPanel);
+    if (keepFromHome !== null) {
+      const bare = parsePath({ panel: keepFromHome }) ?? CLOSED_ENTRY;
+      recalled = recalled.taskTab === undefined ? bare : { ...bare, taskTab: recalled.taskTab };
+    }
+    const nextTab = taskTabOf(recalled);
+    // 恢复出来的面板不是用户打开的：面板打开次数不记它（见下方 countPanel 的效果）
+    if (recalled.panel !== rightPanel || nextTab !== taskTab) panelRestoredRef.current = true;
+    const children = new Set(target === null ? [] : childSessions(sessionsRef.current, target).map((meta) => meta.id));
+    const nav = recalled.panel === "subsessions" ? resolveSubSessionsSub(recalled.sub, children) : undefined;
+    setRightPanel(recalled.panel);
+    setTaskTab(nextTab);
+    setRailPath(parsePath(recalled) ?? CLOSED_ENTRY);
+    setOpenedDraft(recalled.panel === "plugins" ? (recalled.sub?.draft ?? null) : null);
+    setSubSessionsNav(nav === undefined ? SUB_SESSIONS_LIST : openSubSession(nav.sessionId));
+    setReviewFocus(null);
+    setMemoryFocus(null);
+    setTokenPickerOn(false);
+    tokenPickAnchorRef.current = null;
+    setRailCtx((current) => ({ owner: target, epoch: current.epoch + 1 }));
+  }, [mainOpenId, rightPanel, taskTab]);
+
+  // 写穿：右栏路径一变就记进这条会话的记忆（不等切走那一拍——切会话时离开的会话已经是最新）
+  const memoryLoadedRef = useRef(false);
+  const [memoryLoaded, setMemoryLoaded] = useState(false);
+  const saveTimerRef = useRef<number | null>(null);
+  const flushMemory = useCallback((): void => {
+    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = null;
+    if (!memoryLoadedRef.current) return; // 旧记忆还没读回来：现在写会把它覆盖掉
+    void api.rightPanelMemory.save(toMemoryFile(panelMemoryRef.current)).catch(() => undefined);
+  }, []);
+  /** 防抖 1 秒落盘：连着点几下面板只写一次；失败就算了（便利功能，不值得打扰用户） */
+  const scheduleMemorySave = useCallback((): void => {
+    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(flushMemory, 1000);
+  }, [flushMemory]);
+  const openedSubSessionId = subSessionsNav.kind === "session" ? subSessionsNav.sessionId : null;
+  useEffect(() => {
+    if (railCtx.owner === null) return;
+    const entry = composeEntry({ rightPanel, path: railPath, openedDraft, subSessionId: openedSubSessionId, taskTab });
+    const next = rememberEntry(panelMemoryRef.current, railCtx.owner, entry);
+    if (next === panelMemoryRef.current) return;
+    panelMemoryRef.current = next;
+    scheduleMemorySave();
+  }, [railCtx.owner, rightPanel, railPath, openedDraft, openedSubSessionId, taskTab, scheduleMemorySave]);
+  // 启动读一次上次的记忆；读回来之前本次运行已记下的（极少）压在上面
+  useEffect(() => {
+    let cancelled = false;
+    void api.rightPanelMemory
+      .load()
+      .catch(() => null)
+      .then((file) => {
+        if (cancelled) return;
+        const hadCurrent = panelMemoryRef.current.size > 0;
+        panelMemoryRef.current = mergeLoaded(parseMemoryFile(file), panelMemoryRef.current);
+        memoryLoadedRef.current = true;
+        setMemoryLoaded(true);
+        if (hadCurrent) scheduleMemorySave();
+      });
+    const onUnload = (): void => flushMemory();
+    window.addEventListener("beforeunload", onUnload);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("beforeunload", onUnload);
+    };
+  }, [flushMemory, scheduleMemorySave]);
+  // 会话被删：顺手清掉它的条目。列表为空（还没读回 / 读失败）时不清——否则一次失败会抹掉全部记忆
+  useEffect(() => {
+    if (!memoryLoaded || !session.sessionsLoaded || session.sessions.length === 0) return;
+    const alive = new Set(session.sessions.map((meta) => meta.id));
+    if (mainOpenId !== "") alive.add(mainOpenId);
+    const next = forgetMissing(panelMemoryRef.current, alive);
+    if (next === panelMemoryRef.current) return;
+    panelMemoryRef.current = next;
+    scheduleMemorySave();
+  }, [memoryLoaded, session.sessions, session.sessionsLoaded, mainOpenId, scheduleMemorySave]);
+  /** 面板报上来的第二层：只收当前面板的（面板收起动画里的残余报告不算） */
+  const rightPanelRef = useRef(rightPanel);
+  rightPanelRef.current = rightPanel;
+  const reportRailPath = useCallback((path: PanelPath): void => {
+    if (path.panel !== rightPanelRef.current) return;
+    setRailPath((current) => (JSON.stringify(current) === JSON.stringify(path) ? current : path));
+  }, []);
+  /**
+   * 新手引导：全屏盖住整个窗口。只在**第一次打开**（设置读回后 onboardingSeen 不是 true）自动弹一次；
+   * 看完、跳过、Esc 都写 onboardingSeen = true，之后只能从设置 › 新手引导页签打开（不改这个键）。
+   */
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
+  /** 打开引导时从摊平后的第几页开始：自动弹出 / 「从头看」是 0，设置 › 新手引导里点某章是那章的章首页 */
+  const [onboardingStart, setOnboardingStart] = useState(0);
+  const onboardingAutoRef = useRef(false);
+  useEffect(() => {
+    if (onboardingAutoRef.current || !shouldAutoOpenOnboarding(settingsLoaded, settings)) return;
+    onboardingAutoRef.current = true;
+    setOnboardingOpen(true);
+  }, [settingsLoaded, settings]);
+  const closeOnboarding = useCallback(() => {
+    setOnboardingOpen(false);
+    if (settings.onboardingSeen !== true) changeSettings({ onboardingSeen: true });
+  }, [settings.onboardingSeen, changeSettings]);
+  /**
+   * 「试试」：关掉引导与设置页。text 不是 null 就把那句话放进当前看着的会话（首页就是新任务）的输入框；
+   * open 给了（文档与演示章的动作提示页）就把右栏的演示文稿面板摆好：`slides` 回到上次那份，
+   * `slides-new` 新建一份空的并打开——读者还没有演示文稿时，提示里的动作也有地方做。
+   */
+  const tryFromOnboarding = useCallback(
+    (text: string | null, open?: "slides" | "slides-new") => {
+      closeOnboarding();
+      setOverlay(null);
+      if (text !== null) session.setDraft(text);
+      if (open === "slides") setRightPanel("slides");
+      if (open === "slides-new") {
+        void api.docs
+          .create({ sessionId: session.sessionId ?? session.opened?.id ?? null, workspaceId: session.workspaceId, kind: "slides" })
+          .then((created) => requestOpenPanel({ kind: "slides", path: created.path, force: true }))
+          // 建不出来（目录不可写等）：面板照开，里面的「新建」会给出真正的原因
+          .catch(() => setRightPanel("slides"));
+      }
+    },
+    [closeOnboarding, session],
+  );
   const automationUi = useMemo<AutomationUi>(
-    () => ({ automations: automations.automations, openPanel: openAutomationPanel, act: automations.act }),
-    [automations.automations, automations.act, openAutomationPanel],
+    () => ({ automations: automations.automations, loaded: automations.load.kind === "ready", openPanel: openAutomationPanel, act: automations.act }),
+    [automations.automations, automations.load.kind, automations.act, openAutomationPanel],
   );
   // 运行会话 id 集：按**内容**稳定——会话列表每跑完一轮都会换新数组，集合没变就别让订阅它的每条用户消息重渲染
   const runSessionKey = session.sessions
@@ -1023,10 +1378,12 @@ export function App() {
    * 首页 = 不渲染。
    */
   const sessionSlot =
-    overlay === "settings" || overlay === "memory" ? (
+    overlay === "settings" || overlay === "board" ? (
       <div className="cap-sess">
         <div className="cap-sc">
-          <strong className="cap-title">{overlay === "memory" ? t.memory.title : t.settings.tabs[settingsTab]}</strong>
+          <strong className="cap-title">
+            {overlay === "board" ? t.board.title : t.settings.tabs[settingsTab]}
+          </strong>
         </div>
       </div>
     ) : mainOpenId === "" && session.opened === null ? null : (
@@ -1063,14 +1420,14 @@ export function App() {
     // 遗留事项入口（收尾扫描的下游）
     {
       id: "carryovers",
-      icon: "list-todo" as const,
+      icon: FEATURE_ICON.carryovers,
       label: t.app.carryoversEntry(openCarryoverCount),
       lit: railSubviewLit(subviewState, "carryovers"),
       onClick: () => applySubviewState(toggleRailSubview(subviewState, "carryovers")),
     },
     {
       id: "archived",
-      icon: "archive" as const,
+      icon: FEATURE_ICON.archived,
       label: t.app.archivedEntry(archivedCount),
       lit: railSubviewLit(subviewState, "archived"),
       onClick: () => applySubviewState(toggleRailSubview(subviewState, "archived")),
@@ -1079,7 +1436,7 @@ export function App() {
       // 受管浏览器是独立的沙盒窗口（不占右栏面板位）：点了就打开或聚焦它，没有「亮」的状态。
       // 它是 agent 的工具，这个入口给用户提前登录、看一眼 agent 停在哪
       id: "browser",
-      icon: "globe" as const,
+      icon: FEATURE_ICON.browser,
       label: t.rail.browser,
       lit: false,
       onClick: () => {
@@ -1087,21 +1444,17 @@ export function App() {
         api.browser.open().catch((cause: unknown) => console.error("[browser] 打开沙盒窗口失败", cause));
       },
     },
-    ...(memoryOn
-      ? [
-          {
-            // 记忆库是应用级入口（跨会话、跨工作区），与设置同住右栏底部
-            id: "memory" as const,
-            icon: "brain-circuit" as const,
-            label: t.memory.rail,
-            lit: overlay === "memory",
-            onClick: () => setOverlay(overlay === "memory" ? null : "memory"),
-          },
-        ]
-      : []),
+    {
+      // 全局周看板：占满主区域（同设置、记忆库），再点一下或 Esc 退出
+      id: "board" as const,
+      icon: FEATURE_ICON.board,
+      label: t.rail.board,
+      lit: overlay === "board",
+      onClick: () => setOverlay(overlay === "board" ? null : "board"),
+    },
     {
       id: "settings",
-      icon: "settings" as const,
+      icon: FEATURE_ICON.settings,
       label: t.common.settings,
       lit: overlay === "settings",
       onClick: () => setOverlay(overlay === "settings" ? null : "settings"),
@@ -1110,6 +1463,7 @@ export function App() {
 
   return (
     <LocaleContext.Provider value={locale}>
+    <DocPaperContext.Provider value={docPaper}>
     <ExperimentalFeaturesContext.Provider value={experimentalFeatures}>
     <ProcessViewContext.Provider value={settings.processView ?? "turn"}>
     <AutomationContext.Provider value={automationUi}>
@@ -1128,7 +1482,7 @@ export function App() {
           windowWidth={windowWidth}
           panelOpen={rightPanel !== null}
           panelWidth={panelRenderedWidth}
-          narrow={narrow}
+          narrow={docPanelOpen ? panelOverlay : narrow || panelOverlay}
           sessionSlot={sessionSlot}
           onPanelSlot={setPanelSlot}
           onToggleDrawer={() => setRightPanel(rightPanel === null ? "drawer" : null)}
@@ -1140,9 +1494,6 @@ export function App() {
           settingsTab={settingsTab}
           onSettingsTab={setSettingsTab}
           onOverlay={setOverlay}
-          memoryNav={memoryNav}
-          onMemoryNav={setMemoryNav}
-          memoryScopes={memoryScopes.data}
           showArchived={showArchived}
           showCarryovers={showCarryovers}
           onShowArchived={setShowArchived}
@@ -1154,6 +1505,8 @@ export function App() {
             setSidebarWidth(width);
             changeSettings({ sidebarWidth: width });
           }}
+          ageDays={settings.sidebarAgeDays ?? null}
+          onAgeDaysChange={(sidebarAgeDays) => changeSettings({ sidebarAgeDays })}
           usagePet={settings.usagePet}
           onUsagePetChange={(usagePet) => changeSettings({ usagePet })}
           usageSay={focus.say}
@@ -1174,16 +1527,13 @@ export function App() {
             {/* 主槽内的弹出宿主（完成提醒卡 / 铃铛清单）：卡片属于内容面这一层，
                 与主槽边框隔一条血线；右栏面板开着时停在主槽这一侧 */}
             <div className="pane-pop-host" ref={setPopHost} />
-            {overlay === "memory" ? (
-              <MemoryLibraryView
-                nav={memoryNav}
-                onNav={setMemoryNav}
-                scopes={memoryScopes.data}
-                onJump={jumpToMemorySource}
-                choreLabel={settings.choreModel?.modelId ?? null}
-                onOpenGeneral={() => {
-                  setSettingsTab("general");
-                  setOverlay("settings");
+            {overlay === "board" ? (
+              <BoardWeekView
+                days={settings.boardDays ?? BOARD_DAYS_DEFAULT}
+                onDaysChange={(boardDays) => changeSettings({ boardDays })}
+                onOpenSession={(id) => {
+                  setOverlay(null);
+                  void session.openSession(id);
                 }}
               />
             ) : overlay === "settings" ? (
@@ -1200,7 +1550,24 @@ export function App() {
                   engine.refreshWorkspaces();
                 }}
                 workspaces={session.workspaces}
+                plugins={{
+                  currentWorkspaceId: session.workspaceId,
+                  onMakeWithAgent: makePluginWithAgent,
+                  // 从设置页签点「打开看板」：退出设置，回到对话，右栏开这个插件的看板视图
+                  onOpenBoard: (name) => {
+                    setOverlay(null);
+                    openPlugin(name, true);
+                  },
+                  onOpenDraft: openPluginDraft,
+                  onOpenSession: openDraftSession,
+                }}
                 onTab={setSettingsTab}
+                onOpenOnboarding={(startAt) => {
+                  setOnboardingStart(startAt);
+                  setOnboardingOpen(true);
+                }}
+                onJumpToMemorySource={jumpToMemorySource}
+                onCollapseRail={rightPanel === null ? null : () => setRightPanel(null)}
               />
             ) : (
               <ChatView
@@ -1220,7 +1587,6 @@ export function App() {
                 scrollToEndHotkey
                 onSlashSpace={openTokenPicker}
                 tokenPickResult={tokenPickResult}
-                panelInsert={panelInsert}
                 intentNewSessionDefault={effectiveIntentSettings(settings.intent).newSessionOn}
                 onOpenIntentPanel={openIntentPanel}
                 onOpenMemoryReview={openMemoryReview}
@@ -1233,10 +1599,15 @@ export function App() {
           {/* 右侧面板壳：三菜单共用的常驻分栏。展开/收起/切换只有一条动画路径 */}
           <RightPanelSlot
             open={rightPanel !== null}
-            width={panelWidth}
+            width={isDocPanel ? docPanelWidth : panelWidth}
+            {...(isDocPanel ? { resolveLayout: docPanelLayout } : {})}
             narrow={narrow}
-            onWidthChange={setPanelWidth}
-            onWidthCommit={(width) => changeSettings({ rightPanelWidth: width })}
+            onOverlay={setPanelOverlay}
+            onTight={setPanelTight}
+            onWidthChange={isDocPanel ? setDocPanelWidth : setPanelWidth}
+            onWidthCommit={(width) =>
+              changeSettings(isDocPanel ? { docPanelWidth: width } : { rightPanelWidth: width })
+            }
             onRenderedWidth={setPanelRenderedWidth}
           >
             {/* 收起动画期间保持原内容；切换时 key 变化触发 120ms 内容淡入 */}
@@ -1247,6 +1618,10 @@ export function App() {
                 animation: "right-panel-fade 120ms var(--ease-out-quint)",
               }}
             >
+              {/* 带第二层的面板：key 带上「属于哪条会话 + 第几次恢复」，切会话必定重挂，状态只从记忆里来
+                  （不会把上一条会话停的那一层原样带过去）；淡入动画仍只跟面板种类走。
+                  文件 / 终端 / 辅助对话不重挂（它们的状态本就全局共用或另有清理） */}
+              <Fragment key={hasSubLayer(shownPanel) ? `${railCtx.owner ?? ""}#${railCtx.epoch}` : "-"}>
               {shownPanel === "files" ? (
                 <FilesPanel
                 session={session}
@@ -1255,7 +1630,15 @@ export function App() {
                 focusWorkspaceId={focusFilesView?.workspaceId ?? null}
                 focusDone={focus.status.kind === "done"}
                 fileOpen={fileOpenRequest}
+                onDocShown={setFilesShowsDoc}
               />
+              ) : shownPanel === "slides" ? (
+                <DocsPanel
+                  sessionId={session.sessionId ?? session.opened?.id ?? null}
+                  workspaceId={session.workspaceId}
+                  onQuote={session.addQuote}
+                  openRequest={docOpenRequest}
+                />
               ) : shownPanel === "review" ? (
                 <ReviewPanel
                   sessionId={session.sessionId ?? session.opened?.id ?? null}
@@ -1267,14 +1650,8 @@ export function App() {
                   onJumpExcerpt={openExcerpt}
                   onOpenInFiles={focus.openFile}
                   memoryFocus={memoryFocus}
-                />
-              ) : shownPanel === "abilities" ? (
-                <AbilitiesPanel
-                  skills={skills}
-                  workspace={abilityWorkspace}
-                  onCreateSkill={createSkillDraft}
-                  picker={tokenPickerOn ? abilityPicker : undefined}
-                  onInsert={insertPanelToken}
+                  {...(railPath.panel === "review" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  onSubChange={(sub) => reportRailPath({ panel: "review", ...(sub === undefined ? {} : { sub }) })}
                 />
               ) : shownPanel === "automation" ? (
                 <AutomationPanel
@@ -1287,11 +1664,14 @@ export function App() {
                   keepAwake={settings.automationKeepAwake === true}
                   onKeepAwakeChange={(next) => changeSettings({ automationKeepAwake: next })}
                   focus={automationFocus}
+                  onFocusConsumed={() => setAutomationFocus(null)}
                   onOpenSession={(id) => {
                     setOverlay(null);
                     void session.openSession(id);
                   }}
                   onAskInChat={() => session.setDraft(t.automation.addByChatDraft)}
+                  {...(railPath.panel === "automation" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  onSubChange={(sub) => reportRailPath({ panel: "automation", ...(sub === undefined ? {} : { sub }) })}
                 />
               ) : shownPanel === "terminal" ? (
                 <TerminalPanel
@@ -1325,12 +1705,31 @@ export function App() {
                   cwd={session.cwd ?? ""}
                   tab={taskTab}
                   onTab={setTaskTab}
+                  {...(railPath.panel === "context" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  onSubChange={(sub) => reportRailPath({ panel: "context", ...(sub === undefined ? {} : { sub }) })}
                   runState={mainMeta === undefined ? null : runStateOf(session, mainMeta)}
                   carryovers={session.carryovers.filter((item) => item.sourceSessionId === mainSessionId && item.status !== "done")}
                   onSetCarryoverStatus={session.setCarryoverStatus}
                   onStartCarryoverTask={startCarryoverTask}
                   onDoCarryoverNow={session.continueCarryoverInSource}
                   onStartGoalTask={startGoalTask}
+                />
+              ) : shownPanel === "plugins" ? (
+                <PluginsView
+                  workspaces={session.workspaces}
+                  chrome="rail"
+                  currentWorkspaceId={session.workspaceId}
+                  onMakeWithAgent={makePluginWithAgent}
+                  onOpenBoard={(name) => openPlugin(name, true)}
+                  openRequest={pluginOpenRequest}
+                  onOpenRequestHandled={handlePluginOpenHandled}
+                  draft={shownDraft}
+                  onLeaveDraft={leavePluginDraft}
+                  onOpenDraft={openPluginDraft}
+                  onOpenSession={openDraftSession}
+                  picker={tokenPickerOn ? tokenPicker : undefined}
+                  {...(railPath.panel === "plugins" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  onSubChange={(sub) => reportRailPath({ panel: "plugins", ...(sub === undefined ? {} : { sub }) })}
                 />
               ) : shownPanel === "intent" ? (
                 <IntentPanel
@@ -1345,6 +1744,8 @@ export function App() {
                   liveTurnIds={intentLiveTurnIds}
                   openableSessionIds={intentOpenableIds}
                   onOpenSession={openInSideChat}
+                  {...(railPath.panel === "intent" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  onSubChange={(sub) => reportRailPath({ panel: "intent", ...(sub === undefined ? {} : { sub }) })}
                 />
               ) : shownPanel === "subsessions" && channelParentId !== null ? (
                 <SubSessionsPanel
@@ -1362,6 +1763,7 @@ export function App() {
                   onToggleStarModel={toggleStarModel}
                 />
               ) : null}
+              </Fragment>
             </div>
           </RightPanelSlot>
         </main>
@@ -1369,11 +1771,9 @@ export function App() {
         <RightRail
           panel={rightPanel}
           onPanel={handlePanel}
-          lean={leanRail}
-          onOpenContext={openContextPanel}
           railEntries={railEntries}
           intentAvailable={settings.experimentalFeatures?.["intent-system"] === true}
-          automation={automationOn ? { running: runningCount(automations.automations) } : null}
+          automation={{ running: runningCount(automations.automations) }}
           subSessions={
             channelParentId !== null && hasSubSessions
               ? { count: subSessionChildren.length, waiting: waitingOnYou }
@@ -1391,6 +1791,7 @@ export function App() {
           }}
         />
       </div>
+      {onboardingOpen && <OnboardingView theme={resolvedTheme} startAt={onboardingStart} onClose={closeOnboarding} onTry={tryFromOnboarding} />}
     </div>
     </ToolbarPanelSlotContext.Provider>
     </CitationOpenContext.Provider>
@@ -1399,6 +1800,7 @@ export function App() {
     </AutomationContext.Provider>
     </ProcessViewContext.Provider>
     </ExperimentalFeaturesContext.Provider>
+    </DocPaperContext.Provider>
     </LocaleContext.Provider>
   );
 }
@@ -1407,11 +1809,12 @@ export function App() {
 const PANEL_USAGE_KEY_OF: Partial<Record<RightPanelKind, PanelUsageKey>> = {
   files: "files",
   review: "review",
-  abilities: "abilities",
   terminal: "terminal",
   drawer: "sidechat",
   subsessions: "subsessions",
   intent: "intent",
+  automation: "automation",
+  plugins: "plugins",
 };
 
 /**

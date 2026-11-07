@@ -20,6 +20,8 @@ import type { PromptImage, SentImage } from "./prompt-images.ts";
 import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
+import type { SlidesAgentRequest, SlidesOutcome } from "./slides-export.ts";
+import type { DocAgentRequest, DocOutcome } from "./doc.ts";
 import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
 import type {
   ChannelDelivery,
@@ -32,6 +34,8 @@ import type { AutomationToolOutcome, AutomationToolRequest } from "./automation.
 import type { IntentRecallModels } from "./intent-lab.ts";
 import type { IntentAskView, IntentRecallStreamEvent } from "./intent-recall.ts";
 import type { IntentConfirmDecision } from "./intent-confirm.ts";
+import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPreviewOutcome, PluginAgentScope } from "./plugin.ts";
+import type { PluginBoardOutcome } from "./plugin-board.ts";
 import type { IntentRecallRecord } from "./session.ts";
 import type {
   MemoryBackfillProgress,
@@ -48,6 +52,8 @@ export const ipcChannels = {
   providerRemove: "provider:remove",
   /** 拖拽排序的落盘：载荷是全量 id 的新顺序 */
   providerReorder: "provider:reorder",
+  /** 开 / 关一家服务商（载荷 ProviderSetDisabledInput）：配置与密钥不动，只是哪里都不用它；返回改完的 ProviderDto，id 不存在返回 null */
+  providerSetDisabled: "provider:set-disabled",
   agentSubmit: "agent:submit",
   agentAbort: "agent:abort",
   /** 把排队中的某一条**立即**发出：打断当前轮（含正在跑的工具调用），它成为新一轮 */
@@ -124,25 +130,25 @@ export const ipcChannels = {
    * 不复用 `fs:reveal`（白名单只放会话的三类根）也不复用 `provider:reveal`（那条取的是 API key）。
    */
   settingsRevealDataDir: "settings:reveal-data-dir",
-  /** 记忆库（实验功能 memory-system）的四条读写通道。读在主进程（纯模块直读
+  /** 记忆库的四条读写通道。读在主进程（纯模块直读
    * JSONL），写经记忆服务进程（唯一写者），变更经 agent:event 的 memoryChanged 推 */
   memoryScopes: "memory:scopes",
   memoryEntries: "memory:entries",
   memorySession: "memory:session",
   memoryMutate: "memory:mutate",
-  /** 向量召回（实验功能 memory-system 的向量部分）：设置页的三条——状态快照 /
+  /** 向量召回（记忆系统的向量部分）：设置页的三条——状态快照 /
    *  改设置（换模型会触发整库重算，界面前先警告）/ 开始下载模型（进度走事件） */
   memoryVectorStatus: "memory:vector-status",
   memoryVectorSet: "memory:vector-set",
   memoryVectorDownload: "memory:vector-download",
-  /** 从历史生成（实验功能 memory-system）：预估（选中的作用域才读转录）/ 开始 /
+  /** 从历史生成：预估（选中的作用域才读转录）/ 开始 /
    *  暂停·继续·停止 / 状态快照；进度走 agent:event 的 memoryHistory */
   memoryHistoryEstimate: "memory:history-estimate",
   memoryHistoryStart: "memory:history-start",
   memoryHistoryControl: "memory:history-control",
   memoryHistoryStatus: "memory:history-status",
   /**
-   * 自动化（实验功能 automation）的六条通道。list 回全部工作区的 `Automation[]`（面板「全部」范围与
+   * 自动化的六条通道。list 回全部工作区的 `Automation[]`（面板「全部」范围与
    * 侧栏徽标要跨工作区，面板按 target.workspaceId 过滤）；create 载荷 `AutomationCreateInput`
    * （用户在面板里手建，只能是新开会话，直接 active）；update 载荷 `(id, AutomationPatch)`；
    * act 载荷 `(id, AutomationAction)`——面板上的按钮就是状态转移；promote 载荷 sessionId，
@@ -155,6 +161,8 @@ export const ipcChannels = {
   automationUpdate: "automation:update",
   automationAct: "automation:act",
   automationPromote: "automation:promote",
+  /** 对话里「改权限」那一行的按钮（入参 AutomationModeRowRequest，回 AutomationModeRowResult；结局以数据返回，不抛） */
+  automationModeFromRow: "automation:mode-from-row",
   /** 主进程 → renderer 推送（`AutomationEvent`）：任何一条自动化变了 */
   automationEvent: "automation:event",
   sessionList: "session:list",
@@ -289,6 +297,38 @@ export const ipcChannels = {
    * 同时 openFile + openDirectory，文件与文件夹只能分两个入口（文件仍走隐藏 input）。
    */
   fsPickFolders: "fs:pick-folders",
+  /** 文档 / 演示文稿面板（契约在 `doc.ts`）：读一份 .md，回内容 + 摘要。白名单同文件面板，只认 .md */
+  docRead: "doc:read",
+  /** 写回（原子写）：带 expectedHash，盘上已被改过就不写、回盘上的现状（比较后交换） */
+  docWrite: "doc:write",
+  /** 在当前会话的工作区根下新建一份文档 / 演示文稿（重名加序号） */
+  docCreate: "doc:create",
+  /** 列工作区里的 .md（打开已有文档） */
+  docList: "doc:list",
+  /** 开始监听一份文档（同一窗口按路径去重）；盘上变化经 docChanged 推回来 */
+  docWatch: "doc:watch",
+  /** 停止监听 */
+  docUnwatch: "doc:unwatch",
+  /** 主进程 → renderer 推送（`DocChangedEvent`）：被监听的文档在盘上变了（含自己刚写的，renderer 按摘要去回声） */
+  docChanged: "doc:changed",
+  /** 另存为：把当前文字存成新文件（先弹保存对话框）；原文件只读 / 被删时的出路 */
+  docSaveAs: "doc:save-as",
+  /** 导出：演示文稿 → PDF（先弹保存对话框） */
+  docExport: "doc:export",
+  /** 演示文稿 v2 导出：pdf / html / 当前页 png / pptx（保留字体 · 通用字体）；先弹保存对话框（`SlidesExportRequest`） */
+  slidesExport: "slides:export",
+  /** 演示文稿 v2：旧 Marp .md → 新格式 .slides.json（图片复制进 assets；原文件不动），回新文件路径 */
+  slidesConvertMarp: "slides:convert-marp",
+  /** 演示文稿 v2：读一张图（相对路径，白名单：演示文稿所在目录内）回字节，画布 / 缩略图显示用 */
+  slidesReadAsset: "slides:read-asset",
+  /** 演示文稿 v2：把用户拖入 / 粘贴 / 选择的图片字节复制进 `<名字>.assets/`，回相对路径与尺寸 */
+  slidesAddAsset: "slides:add-asset",
+  /** 文档导出：docx / pdf / md / 通用 md（先弹保存对话框） */
+  docExportDoc: "doc:export-doc",
+  /** 解析文档里的双链 / 图片目标（工作区同目录优先、再同名文件） */
+  docOfmResolve: "doc:ofm-resolve",
+  /** 插图：复制进附件目录，回要插入的 markdown */
+  docInsertImage: "doc:insert-image",
   /** 遗留事项（收尾仪式收割）：全部清单。侧栏面板、角标与「Has todos」筛选都吃它，按 sourceSessionId 现算 */
   carryoverList: "carryover:list",
   /** 每日 token 用量：最近 7 天（含今天，旧的在前；载荷形状在 shared/usage.ts）。回 `UsageDayTotal[]`，回填还在跑时可能是全 0——跑完会经 usage:event 推一份真值 */
@@ -398,6 +438,14 @@ export const ipcChannels = {
   skillWrite: "skill:write",
   /** 在系统文件管理器里揭示该 skill 目录（新建 / 删除走这里，不自建 UI） */
   skillReveal: "skill:reveal",
+  /** 归档一条你自己的技能：文件夹挪到 skills-archive，链接全删，记下原范围（可恢复） */
+  skillArchive: "skill:archive",
+  /** 已归档的技能列表（能力面板底部的折叠分组） */
+  skillArchived: "skill:archived",
+  /** 恢复一条归档：挪回原 slug、按记录的范围重建链接；重名以数据返回，不抛 */
+  skillRestore: "skill:restore",
+  /** 移除一条你自己的技能：文件夹移到系统废纸篓（可找回），链接全删 */
+  skillTrash: "skill:trash",
   /** MCP server 列表与它们此刻的连接状态 */
   mcpList: "mcp:list",
   /** 用系统默认编辑器打开 mcp.json（加减 server 走文件，不做表单） */
@@ -410,6 +458,61 @@ export const ipcChannels = {
   mcpRemove: "mcp:remove",
   /** 启停一台 server（4-2）：改 disabled 字段后自动重连 */
   mcpSetDisabled: "mcp:set-disabled",
+  /**
+   * 插件。已装页的一切读写：列表 = 真插件 + 原来的技能 / MCP 显示成的
+   * 「一样东西的插件」（PluginView），范围与配置的写入按视图 id 的前缀分派到各自的真源。
+   */
+  pluginList: "plugin:list",
+  /** 开轮之外的技能选取面（右栏 `/` 选取、聊天里的 read SKILL.md 徽标）要认的插件技能，SkillMeta 形状 */
+  pluginSkills: "plugin:skills",
+  /** 目录选择框（renderer 无文件系统权，主进程开）：选中返回绝对路径，取消返回 null */
+  pluginPickFolder: "plugin:pick-folder",
+  /** 安装前预览：读出它带了什么、MCP 命令行、冲突；复制 / git 先暂存，确认的就是装上的 */
+  pluginPreview: "plugin:preview",
+  /** 放弃一次预览：清掉暂存目录 */
+  pluginDiscard: "plugin:discard",
+  /** 确认安装（入参 PluginInstallRequest）；冲突 / 暂存失效以数据返回，不抛 */
+  pluginInstall: "plugin:install",
+  /** 改启用范围（入参视图 id + PluginScope）；旧技能 / MCP 映射到 skill link 与 mcp.json */
+  pluginSetScope: "plugin:set-scope",
+  /** 改一个配置项（入参插件名、键、值或 null=清除）；敏感值进系统密钥库 */
+  pluginSetConfig: "plugin:set-config",
+  /** 卸载 = 归档不是删除（链接安装只归档记录，绝不碰源文件夹） */
+  pluginUninstall: "plugin:uninstall",
+  /** 卸载归档的只读清单（plugins-archive/*.json；无入参）：能力面板底部「已归档」按工作区列出，不含恢复 */
+  pluginArchived: "plugin:archived",
+  /** 在系统文件管理器里打开插件目录 */
+  pluginReveal: "plugin:reveal",
+  /** 重新读目录（改了源文件夹、清单后）并让 MCP 连接按新配置重建 */
+  pluginReload: "plugin:reload",
+  /** 读一条插件技能的 SKILL.md 原文（详情页「工作流」里点技能只读查看；入参插件名 + 技能 slug） */
+  pluginSkillFile: "plugin:skill-file",
+  /** 载入 / 轮询一个插件的看板（契约在 plugin-panel.ts）：每张卡的 iframe 地址 + 数据；stamp 没变回 unchanged（只是几次 stat） */
+  pluginBoardLoad: "plugin:board-load",
+  /** 草稿预览（一）：工作区里**还没安装**的插件文件夹的扫描结果，与已装页同一形状的 PluginView（入参 PluginDraftLoadRequest；路径必须在该工作区根内） */
+  pluginDraftLoad: "plugin:draft-load",
+  /** 草稿预览（二）：同一个草稿文件夹的看板，给出与 `plugin:board-load` 同形的快照 */
+  pluginDraftBoardLoad: "plugin:draft-board-load",
+  /**
+   * 「正在做」列表：所有工作区里 `<工作区根>/plugins/*\/` 下有清单、还没安装的插件文件夹（无入参，回 PluginDraftEntry[]）。
+   * 用户中途离开、之后回来接着做的入口；每一行还带着最近对它 preview_plugin 的会话。
+   */
+  pluginDrafts: "plugin:drafts",
+  /** 卡里点按钮的回传：校验后原子追加到插件数据目录的 actions.jsonl（带 card 字段），不做别的 */
+  pluginPanelAction: "plugin:panel-action",
+  /**
+   * 全局周看板（契约在 plugin-board.ts）：入参 BoardWeekRequest（当地周一 00:00），回 BoardWeekResponse——
+   * 7 天各自的 items（过去的自动化运行 + 那次会话里 show_plugin_board 的卡快照）与 planned（按排期推算、还没到的）。
+   */
+  boardWeek: "board:week",
+  /** 按快照画卡：模板哈希 → 一次性 iframe 地址（入参 BoardFrameRequest，回 BoardFrameResult；哈希不合规 / 仓库里没有回 null） */
+  boardFrame: "board:frame",
+  /**
+   * 对话里「装上插件」那一行的「安装」（入参 PluginRowInstallRequest，回 PluginRowInstallResult）。
+   * 那一行是 agent 的 install_plugin 留下的（带 MCP / 范围是所有工作区 / manual 档）：主进程重新校验会话、
+   * 路径与指纹，对得上才装；不对以数据返回，不抛
+   */
+  pluginInstallFromRow: "plugin:install-from-row",
 } as const;
 
 export type IpcChannel = (typeof ipcChannels)[keyof typeof ipcChannels];
@@ -805,6 +908,11 @@ export type AgentCommand =
       /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
       planFirst?: boolean;
       /**
+       * 插件工具的注册开关。用户开轮时主进程恒带 true（插件 2026-11-06 转正）；runtime 据此注册
+       * install_plugin / list_plugins / preview_plugin（只给根会话）。缺席 = 不注册（不经 submitTurn 的开轮）
+       */
+      pluginTools?: boolean;
+      /**
        * 意图系统（实验功能 intent-system）：开关开且这是根会话的用户原话时主进程
        * 装配（intentTurnEnv 的纯推导）。缺席 = 不召回，runtime 走与 main 完全
        * 一致的路径（不调 recall、不发卡片事件）。
@@ -818,14 +926,12 @@ export type AgentCommand =
        */
       backfill?: string[];
       /**
-       * 记忆系统（实验功能 memory-system）的轮前召回开关。**主进程从设置装配**
-       * （同 pdfCitations）：实验开关开着就带 true——召回对根会话与子会话都生效
-       * （子会话读不写，写入门禁在主进程的轮后路径）。缺席 = 关，runtime 不问
-       * 记忆、命令形状与 main 一字不差。
+       * 记忆系统的轮前召回开关。用户开轮时主进程恒带 true（记忆系统 2026-11-06 转正）——召回对根会话与子会话都生效
+       * （子会话读不写，写入门禁在主进程的轮后路径）。缺席 = runtime 不问记忆。
        */
       sessionMemory?: boolean;
       /**
-       * 自动化工具（实验功能 automation）的注册开关。**主进程装配**：实验开关开着、且这条会话
+       * 自动化工具的注册开关。**主进程装配**：这条会话
        * 既不是子会话也不是自动化自己跑出来的（防递归）才带 true；runtime 据此注册
        * automation_create / list / cancel。缺席 = 不注册，命令形状与 main 一字不差。
        */
@@ -944,6 +1050,8 @@ export type AgentCommand =
       pdfCitations?: boolean;
       /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
       planFirst?: boolean;
+      /** 插件工具的注册开关，语义同 submit */
+      pluginTools?: boolean;
       /** 意图系统（实验），语义同 submit：开关开时主进程装配；缺席 = 走与 main 一致的路径 */
       intent?: IntentTurnContext;
       /** 待补记的 user 原话尾巴，语义同 submit */
@@ -1011,6 +1119,8 @@ export type AgentCommand =
       pdfCitations?: boolean;
       /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
       planFirst?: boolean;
+      /** 插件工具的注册开关，语义同 submit */
+      pluginTools?: boolean;
     }
   | { type: "listBuiltins" }
   /**
@@ -1049,8 +1159,16 @@ export type AgentCommand =
     }
   /** B-1：主进程对 readTaskRequest 的回执（requestId 问答的第三对） */
   | ({ type: "readTaskResult"; requestId: string } & ReadTaskOutcome)
+  /** 插件：主进程对 pluginInstallRequest 的回执（立即回，不等用户；ok 双分支） */
+  | ({ type: "pluginInstallResult"; requestId: string } & PluginAgentInstallOutcome)
+  /** 插件：主进程对 pluginPreviewRequest 的回执 */
+  | ({ type: "pluginPreviewResult"; requestId: string } & PluginAgentPreviewOutcome)
+  /** 插件：主进程对 pluginListRequest 的回执 */
+  | ({ type: "pluginListResult"; requestId: string } & PluginAgentListOutcome)
+  /** 插件：主进程对 pluginBoardRequest 的回执（show_plugin_board 的卡快照） */
+  | ({ type: "pluginBoardResult"; requestId: string } & PluginBoardOutcome)
   /**
-   * 记忆系统（实验功能 memory-system）：主进程对 memoryRecallRequest 的回执
+   * 记忆系统：主进程对 memoryRecallRequest 的回执
    * （readTaskResult 同款 ok 双分支）。服务不在 / 超时 / 出错都回 ok:false——
    * 调用方（轮前召回）对任何失败按「不注入、照常开轮」处理，记忆的失败不拦对话。
    */
@@ -1062,6 +1180,10 @@ export type AgentCommand =
   | ({ type: "memoryToolResult"; requestId: string } & MemoryAgentOutcome)
   /** 受管浏览器：主进程对 browserRequest 的回执（readTaskResult 同款） */
   | ({ type: "browserResult"; requestId: string } & BrowserToolOutcome)
+  /** 演示文稿：主进程对 slidesRequest 的回执（browserResult 同款 ok 双分支） */
+  | ({ type: "slidesResult"; requestId: string } & SlidesOutcome)
+  /** 文档导出：主进程对 docRequest 的回执（browserResult 同款 ok 双分支） */
+  | ({ type: "docResult"; requestId: string } & DocOutcome)
   /** 终端：主进程对 terminalRequest 的回执（browserResult 同款） */
   | ({ type: "terminalResult"; requestId: string } & TerminalToolOutcome)
   /** 子会话：主进程对 delegateRequest 的回执（requestId 问答，readTaskResult 同款） */
@@ -1070,7 +1192,7 @@ export type AgentCommand =
   | ({ type: "modelCostsResult"; requestId: string } & ModelCostsOutcome)
   /** 子会话：主进程对 channelSendRequest 的回执；kind 与方向不匹配等错误走 ok: false */
   | ({ type: "channelSendResult"; requestId: string } & ChannelSendOutcome)
-  /** 自动化（实验功能 automation）：主进程对 automationRequest 的回执（delegateResult 同款） */
+  /** 自动化：主进程对 automationRequest 的回执（delegateResult 同款） */
   | ({ type: "automationResult"; requestId: string } & AutomationToolOutcome)
   | {
       /**
@@ -1265,6 +1387,47 @@ export type AgentEvent =
       server: McpServer;
     }
   /**
+   * 插件：agent 工具 install_plugin 的请求。**预览与安装都在主进程**
+   * （PluginStore）：主进程校验路径（必须在这条会话的工作区 / 工作目录之内）、读出它带了什么，
+   * 然后**立即**回 pluginInstallResult，不等用户：低风险直接装；其余在对话里留一行带「安装」的行
+   * （数据在工具结果的 details 里，随会话落盘），用户点了走 pluginInstallFromRow。
+   * scope 的 workspace 一侧由主进程按会话归属解析（agent 不知道 workspaceId，同 skillWriteRequest）。
+   * `mode` 是此刻的权限档：manual 档任何插件都不直接装（那一行就是用户的点头）。
+   */
+  | {
+      type: "pluginInstallRequest";
+      requestId: string;
+      sessionId: string;
+      path: string;
+      scope: PluginAgentScope | null;
+      mode: PermissionMode;
+    }
+  /**
+   * 已装的插件变了（agent 的 install_plugin 装好了一个、用户点了对话里那一行的「安装」；
+   * 主进程 → renderer，不进 agent 进程、不落盘）。插件页与对话里那一行听它重读已装列表。
+   * `installed`：这次变化是**装上了某个插件**（哪条会话里装的）——正看着那条会话的窗口据此把右栏切到插件页
+   * 并选中它；缺席 = 别的变化（卸载、改范围……）。
+   */
+  | { type: "pluginsChanged"; installed?: { name: string; sessionId: string } }
+  /** 插件：agent 工具 list_plugins 的读请求（回 pluginListResult） */
+  | { type: "pluginListRequest"; requestId: string; sessionId: string }
+  /**
+   * 插件：agent 工具 preview_plugin 的请求（回 pluginPreviewResult）。主进程校验路径在这条会话的工作区内、
+   * 只扫描不安装；成功后广播 pluginDraft，然后回执。
+   */
+  | { type: "pluginPreviewRequest"; requestId: string; sessionId: string; path: string }
+  /**
+   * 插件：agent 工具 show_plugin_board 的请求（回 pluginBoardResult）。`plugin` 是已装插件名，或本会话工作区里
+   * 草稿文件夹的路径 / 名字（主进程解析并校验在工作区内）；`cards` 缺席 = 全部卡。主进程读模板与数据、
+   * 模板按哈希存进 board-templates/，数据快照回执——随工具结果的 details 落盘。
+   */
+  | { type: "pluginBoardRequest"; requestId: string; sessionId: string; plugin: string; cards: string[] | null }
+  /**
+   * 草稿插件（还没装的文件夹）做出了能看的东西：右栏打开插件页的「正在做」视图（主进程 → renderer，
+   * 不进 agent 进程、不落盘）。`path` 已是主进程校验过的真实路径；renderer 只在正看着 `sessionId` 这条会话时响应。
+   */
+  | { type: "pluginDraft"; sessionId: string; path: string }
+  /**
    * B-1：agent 工具 read_task 的读盘请求。**读在主进程**（agent 进程不碰
    * userData，skillWriteRequest 的同一条边界）：主进程解析引用 → 读
    * SessionStore → 组简报 → 回 readTaskResult。rounds 缺席 = 简报
@@ -1276,7 +1439,7 @@ export type AgentEvent =
    */
   | { type: "readTaskRequest"; requestId: string; sessionId: string; task?: string; rounds?: string }
   /**
-   * 记忆系统（实验功能 memory-system）：轮前召回的问答（readTaskRequest 同一条
+   * 记忆系统：轮前召回的问答（readTaskRequest 同一条
    * requestId 边界）。agent 进程不碰 userData——存储在记忆服务进程，主进程转发。
    * 查询是本轮用户原话，回执 memoryRecallResult；agent 侧 5 秒硬超时，超时 /
    * 出错 / 无命中都不注入（记忆的失败不拦开轮）。
@@ -1314,6 +1477,11 @@ export type AgentEvent =
    */
   | { type: "browserRequest"; requestId: string; sessionId: string; request: BrowserToolRequest }
   /**
+   * 演示文稿：agent 的 slides_export。PDF / PNG 要主进程开隐藏窗口，所以导出整体在主进程
+   * （菜单点导出走同一个实现），agent 进程只剩工具定义 → requestId 问答。回 slidesResult。
+   */
+  | { type: "slidesRequest"; requestId: string; sessionId: string; workspaceId: string | null; request: SlidesAgentRequest }
+  /**
    * 终端：agent 的终端工具请求（terminal_open / execute / read / list /
    * interrupt / close，形状见 shared/terminal.ts 的 TerminalToolRequest）。
    * **PTY 在主进程**（TerminalService，browserRequest 同一条边界）：agent 进程
@@ -1322,6 +1490,11 @@ export type AgentEvent =
    * 回 terminalResult。
    */
   | { type: "terminalRequest"; requestId: string; sessionId: string; request: TerminalToolRequest }
+  /**
+   * 文档导出：agent 的 `doc_export` 请求（形状见 shared/doc.ts 的 DocAgentRequest）。
+   * 导出在主进程（PDF 要隐藏窗口，agent 进程不碰 electron）；路径白名单按会话的根现算。回 docResult。
+   */
+  | { type: "docRequest"; requestId: string; sessionId: string; workspaceId: string | null; request: DocAgentRequest }
   /**
    * 子会话：父模型的 delegate 工具请求。**建会话在主进程**（agent 进程不碰
    * userData，readTaskRequest 同一条边界）：主进程建子会话（parentId = sessionId、
@@ -1353,13 +1526,15 @@ export type AgentEvent =
    */
   | { type: "modelCostsRequest"; requestId: string; sessionId: string }
   /**
-   * 自动化（实验功能 automation）：agent 的 automation_create / list / cancel 请求。
+   * 自动化：agent 的 automation_create / list / cancel / update 请求。
    * **存盘在主进程**（agent 进程不碰 userData，delegateRequest 同一条边界）：主进程校验入参、
    * 按这条会话所在的工作区落 `automations.json`（只能管当前工作区的）、回 automationResult。
    * 建出来**直接生效**（2026-10-31 用户裁决，不再有待启用）：默认绑定这条会话（this_session），
    * 到点把指令送回来。自动化新开的会话与子会话的请求主进程直接拒（防递归，不只靠不注册工具）。
+   * `mode` 是这条会话此刻的权限档：agent 给自动化的权限不能高于它——请求 skip 只有会话本身是「放行」才直接改，
+   * 其余在对话里留一行让用户点「允许」（automation_update / automation_create 的 mode 参数）。
    */
-  | { type: "automationRequest"; requestId: string; sessionId: string; request: AutomationToolRequest }
+  | { type: "automationRequest"; requestId: string; sessionId: string; mode: PermissionMode; request: AutomationToolRequest }
   /**
    * 子会话：通道发信请求，主进程写账本并回 channelSendResult。父的 reply_subsession
    * （to = { childId }，kind 恒 reply）与子的 report_to_parent（to = "parent"，
@@ -1388,23 +1563,23 @@ export type AgentEvent =
  */
 | { type: "carryoversChanged" }
 /**
- * 记忆系统（实验功能 memory-system）：记忆服务进程写盘后经主进程广播（提取落
+ * 记忆系统：记忆服务进程写盘后经主进程广播（提取落
  * 条目、事件段收尾 / 归档、记忆库写操作）。无载荷、无 sessionId——界面听到就
  * 重拉（skillsChanged 同款）；谁变了由拉取方自己看。
  */
 | { type: "memoryChanged" }
 /**
- * 记忆系统（实验功能 memory-system）：模型下载进度（服务 → 主进程转发）。
+ * 记忆系统：模型下载进度（服务 → 主进程转发）。
  * 载荷 MemoryDownloadProgress（phase: downloading/verifying/done/failed）。
  */
 | { type: "vectorDownload"; progress: MemoryDownloadProgress }
 /**
- * 记忆系统（实验功能 memory-system）：后台补算进度（running / deferred-battery /
+ * 记忆系统：后台补算进度（running / deferred-battery /
  * idle 收尾）。载荷 MemoryBackfillProgress。
  */
 | { type: "vectorBackfill"; progress: MemoryBackfillProgress }
 /**
- * 记忆系统（实验功能 memory-system）：「从历史生成」的进度快照（每喂完一轮、状态变化时推）。
+ * 记忆系统：「从历史生成」的进度快照（每喂完一轮、状态变化时推）。
  */
 | { type: "memoryHistory"; status: MemoryHistoryStatus }
   /** piSessionFile：pi 这一次用的那份 session 文件，主进程要把它记进会话 meta 里 */
@@ -1564,4 +1739,10 @@ export type AgentEvent =
    * 每轮推一次。纯 ephemeral，不落盘——规则每轮重注入，最新一份就是当前事实；
    * 纯浏览的旧会话收不到，面板按「未知」显示。
    */
-  | { type: "contextInventory"; sessionId: string; inventory: ContextRulesInventory };
+  | { type: "contextInventory"; sessionId: string; inventory: ContextRulesInventory }
+  /**
+   * agent 工具 `preview_plugin` 扫过了一个还没安装的插件文件夹：renderer 正看着该会话时，
+   * 右栏打开插件页的「正在做」视图（详情长页，经 `plugin:draft-load` / `plugin:draft-board-load` 轮询）。
+   * `path` 是工作区内的插件文件夹（绝对路径或相对工作区根）；纯 ephemeral，不落盘。
+   */
+  | { type: "pluginDraft"; sessionId: string; path: string };

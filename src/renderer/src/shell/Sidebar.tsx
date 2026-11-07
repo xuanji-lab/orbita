@@ -1,11 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { IconButton } from "./IconButton";
 import { PanelEmpty } from "./PanelEmpty";
+import { FEATURE_ICON } from "./feature-icons.ts";
 import { Chip } from "./Chip";
 import { InlineName } from "./InlineName";
 import { Menu, type MenuItem } from "./Menu";
 import { UsageMeter } from "./UsageMeter";
+import { WorkspaceFilterBar, useScrolledEdge, useWorkspaceFilter } from "./WorkspaceFilterBar.tsx";
+import { carryoverCounts, groupCarryoversByWorkspace, type CarryoverWorkspaceGroup } from "./carryover-groups.ts";
+import { bucketCounts, buildOptions, defaultFilter, groupByWorkspace, type WsAllow, type WsFilter } from "./workspace-filter.ts";
 import { WorkspaceFiles } from "./focus/WorkspaceFiles.tsx";
 import {
   EMPTY_SELECTION,
@@ -19,16 +23,24 @@ import { api } from "../api";
 import type { ChatSession } from "../features/chat/useChatSession";
 import { childSessions, isSessionDone, rootSessions, type Carryover, type SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
-import { SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN, type UsagePetPref } from "@shared/settings";
-import { SETTINGS_TABS, type SettingsTab } from "../features/settings/SettingsView";
-import type { MemoryScopeSummary } from "@shared/memory";
-import type { MemoryNav } from "../features/memory/memory-view.ts";
+import {
+  SIDEBAR_AGE_CHOICES,
+  SIDEBAR_WIDTH_DEFAULT,
+  SIDEBAR_WIDTH_MAX,
+  SIDEBAR_WIDTH_MIN,
+  type SidebarAgeDays,
+  type UsagePetPref,
+} from "@shared/settings";
+import { SETTINGS_TABS, type SettingsTab } from "../features/settings/settings-tabs.ts";
 import { describeList } from "../features/chat/load-state.ts";
 import { nextCompletion } from "./completion-mark.ts";
 import { rowStatusIcon } from "./row-status.ts";
 import { aggregateRunStates, runStateLabel, runStateOf } from "../features/notify/completion-notice.ts";
 import { StatusPie } from "./StatusPie";
-import { nextFilterRowMode } from "./filter-row-compact.ts";
+import { chipCompactAt, nextCompactLevel } from "./filter-row-compact.ts";
+import { ageCounts, filterByAge } from "./sidebar-age.ts";
+import { sessionAgeLabel } from "./relative-time.ts";
+import { useMinuteTick } from "./use-minute-tick.ts";
 import { canResumeInSource } from "../features/chat/carryover-resume.ts";
 import {
   effectiveSidebarFilters,
@@ -47,10 +59,15 @@ import {
   type SidebarGroupState,
 } from "./sidebar-fold.ts";
 import { useT } from "../locale.ts";
+import { startPointerDrag } from "./pointer-drag.ts";
 import type { Messages } from "../messages-en.ts";
 
-/** 中卡盖着的面。`null` = 聊天。三者互斥，所以是联合类型而不是几个 boolean。 */
-export type Overlay = "settings" | "memory" | null;
+/**
+ * 中卡盖着的非聊天页。`null` = 聊天。settings / memory 是「整页盖层」（侧栏换成它们自己的导航），
+ * 两者互斥，所以是联合类型而不是几个 boolean。插件页不在这里：右栏单列版走右栏面板位，
+ * 全屏版是设置页的一个页签。
+ */
+export type Overlay = "settings" | "board" | null;
 
 /**
  * 闲置建议线：open 且未归档、最后一次活动超过这个天数的会话，行内轻提示
@@ -77,32 +94,8 @@ function barLabel(state: "running" | "waiting" | "done" | "failed", t: Messages)
   return runStateLabel(state, t);
 }
 
-/**
- * 以后再做面板的分组：按来源会话归堆，组序跟会话列表（最近的在前）；
- * 来源会话已删的堆到最后（标题换占位，跳转不可用）。丢掉的（dismissed）不列——它们只在那条任务的进度面板里能找回。
- */
-function groupCarryovers(
-  carryovers: readonly Carryover[],
-  sessions: readonly SessionMeta[],
-): { session: SessionMeta | null; items: Carryover[] }[] {
-  const bySource = new Map<string, Carryover[]>();
-  for (const item of carryovers) {
-    if (item.status === "dismissed") continue;
-    const list = bySource.get(item.sourceSessionId) ?? [];
-    list.push(item);
-    bySource.set(item.sourceSessionId, list);
-  }
-  const groups: { session: SessionMeta | null; items: Carryover[] }[] = [];
-  for (const meta of sessions) {
-    const items = bySource.get(meta.id);
-    if (items !== undefined) groups.push({ session: meta, items });
-  }
-  for (const [source, items] of bySource) {
-    if (sessions.some((meta) => meta.id === source)) continue;
-    groups.push({ session: null, items });
-  }
-  return groups;
-}
+/** 已归档 / 以后再做的选择条：有「任务」档，没有「全局」档 */
+const SESSION_FILTER_ALLOW: WsAllow = { tasks: true, global: false };
 
 /**
  * 筛选扑空的空态文案：按激活的组合说清「为什么什么都没有、怎么才有」，
@@ -112,8 +105,11 @@ function filterEmptyText(
   status: StatusFilter,
   starredOnly: boolean,
   hasTodosOnly: boolean,
+  /** 非 null = 时间范围开着，且去掉它之后本来是有会话的（范围才是「扑空」的原因） */
+  emptiedByAge: SidebarAgeDays | null,
   t: Messages,
 ): string {
+  if (emptiedByAge !== null) return t.sidebar.emptyInRange(emptiedByAge);
   if (hasTodosOnly) return t.sidebar.emptyHasTodos;
   if (status === "done") return starredOnly ? t.sidebar.emptyDoneStarred : t.sidebar.emptyDone;
   return t.sidebar.emptyStarred;
@@ -142,13 +138,6 @@ export function Sidebar(props: {
   onSettingsTab: (tab: SettingsTab) => void;
   onOverlay: (next: Overlay) => void;
   /**
-   * 记忆库盖层（实验功能 memory-system）下侧栏换成它的导航：范围（全部 / 所有工作区 /
-   * 各工作区）+ 管理（向量模型）。数据由 App 拉（页面本体也要用）。
-   */
-  memoryNav: MemoryNav;
-  onMemoryNav: (next: MemoryNav) => void;
-  memoryScopes: readonly MemoryScopeSummary[] | null;
-  /**
    * Archived / Carryovers 两个子视图的开关由 App 持有（2026-09-22：入口迁到右栏
    * 底部，状态跟着入口走，侧栏只剩受控渲染）。**子视图本体仍在侧栏**：换掉
    * 主列表区，不弹窗。
@@ -163,6 +152,9 @@ export function Sidebar(props: {
   unread: ReadonlySet<string>;
   onWidthChange: (width: number) => void;
   onWidthCommit: (width: number) => void;
+  /** 时间范围筛选（settings.sidebarAgeDays；null = 不限）与改它的回调（落盘由 App 做） */
+  ageDays: SidebarAgeDays | null;
+  onAgeDaysChange: (next: SidebarAgeDays | null) => void;
   /** 左下角星云的摆放偏好（settings.usagePet）与改它的回调 */
   usagePet: UsagePetPref | undefined;
   onUsagePetChange: (next: UsagePetPref) => void;
@@ -204,32 +196,52 @@ export function Sidebar(props: {
 }) {
   const t = useT();
   const { session } = props;
+  // 每分钟重渲染一次：行尾「刚刚 / N 分钟」与时间范围都在渲染时按 Date.now() 现算（理由见 use-minute-tick.ts）
+  useMinuteTick();
   const asideRef = useRef<HTMLElement | null>(null);
   /** 拖宽中禁掉 width 过渡——实时跟手（同右侧面板的 .dragging 纪律） */
   const [resizing, setResizing] = useState(false);
   const settingsOpen = props.overlay === "settings";
-  const memoryOpen = props.overlay === "memory";
-  /** 任一整页盖层（设置 / 记忆库）开着：主列表、筛选行、子视图都让位 */
-  const overlayOpen = props.overlay !== null;
+  /** 任一整页盖层（设置）开着：主列表、筛选行、子视图都让位 */
+  const overlayOpen = props.overlay === "settings";
   /**
-   * 筛选行的完整 / 紧凑态：容器比四个带字 chip 的自然宽度窄就只画图标。
-   * 判定在 `filter-row-compact.ts`（纯函数，带 hysteresis），这里只负责量宽度。
+   * 筛选行的「收几个 chip 成图标」档位：容器放不下五个带字 chip 时，从最右边的字 chip 起往左
+   * 逐个只画图标（设计稿 c 图；判定在 `filter-row-compact.ts`，纯函数、不抖），这里只负责量宽度。
+   * 每个 chip 完整态的宽度量到就记住（图标态的宽度不可信）；语言或时间范围的有无变了、chip 宽度随之变，
+   * 就先回到 0 档重新量一遍（useLayoutEffect，首帧前完成，不闪）。
    */
   const filterRowRef = useRef<HTMLDivElement | null>(null);
-  const [filterCompact, setFilterCompact] = useState(false);
-  const filterFullWidth = useRef<number | null>(null);
-  useEffect(() => {
+  const [filterLevel, setFilterLevel] = useState(0);
+  const chipFullWidths = useRef<(number | null)[]>([null, null, null, null, null]);
+  const chipWidthKey = useRef<{ t: Messages; aged: boolean } | null>(null);
+  useLayoutEffect(() => {
     const row = filterRowRef.current;
     if (row === null) return;
+    const aged = props.ageDays !== null;
+    if (chipWidthKey.current === null || chipWidthKey.current.t !== t || chipWidthKey.current.aged !== aged) {
+      chipWidthKey.current = { t, aged };
+      chipFullWidths.current = [null, null, null, null, null];
+      if (filterLevel !== 0) {
+        // 完整态才量得到完整宽度：先回 0 档，下一轮（依赖 filterLevel 变）再量
+        setFilterLevel(0);
+        return;
+      }
+    }
     const measure = (): void => {
-      const next = nextFilterRowMode({
-        compact: filterCompact,
-        fullWidth: filterFullWidth.current,
-        containerWidth: row.clientWidth,
-        contentWidth: row.scrollWidth,
+      const chips = Array.from(row.querySelectorAll<HTMLElement>("button.chip"));
+      let compactWidth = 24;
+      chips.forEach((chip, index) => {
+        const width = chip.getBoundingClientRect().width;
+        if (chipCompactAt(filterLevel, index)) compactWidth = width;
+        else chipFullWidths.current[index] = width;
       });
-      filterFullWidth.current = next.fullWidth;
-      if (next.compact !== filterCompact) setFilterCompact(next.compact);
+      const next = nextCompactLevel({
+        fullWidths: chipFullWidths.current,
+        compactWidth,
+        gap: 4,
+        containerWidth: row.clientWidth,
+      });
+      if (next !== filterLevel) setFilterLevel(next);
     };
     measure();
     const observer = new ResizeObserver(measure);
@@ -238,7 +250,7 @@ export function Sidebar(props: {
     // 筛选行可能整个不渲染（无会话 / Archived / Settings 视图），ref 空时不装观察者；
     // 它回来时靠下面这几个依赖重跑一次。live 在后面才算，这里用 session.sessions.length 代替
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterCompact, session.sessions.length, overlayOpen, props.showArchived, props.showCarryovers]);
+  }, [filterLevel, props.ageDays, t, session.sessions.length, overlayOpen, props.showArchived, props.showCarryovers]);
   /**
    * 「Starred」叠加开关的开合，与状态筛选正交——星标是价值标记，与任务
    * 做没做完是两个问题，组合起来（如 Active + Starred）是合法且有意义的视图。
@@ -325,6 +337,46 @@ export function Sidebar(props: {
   /** 归档的从主列表里移走——**不是删除**，它们收在底部那一行后面 */
   const live = roots.filter((m) => !m.archived);
   const archived = roots.filter((m) => m.archived);
+  // 已归档 / 以后再做各记一份「上次选的工作区」（没选过时默认当前会话所在的工作区）
+  const subviewFallback = defaultFilter(openWorkspaceId, session.workspaces);
+  const [archivedFilter, setArchivedFilter] = useWorkspaceFilter("archived", subviewFallback, session.workspaces, SESSION_FILTER_ALLOW);
+  const [carryoverFilter, setCarryoverFilter] = useWorkspaceFilter("carryovers", subviewFallback, session.workspaces, SESSION_FILTER_ALLOW);
+  // 组内按归档时间新→旧：meta 没存归档时刻，以最后活动时间代之（归档的多是做完不再动的会话，两者基本一致）
+  const archivedGroups = groupByWorkspace(
+    [...archived].sort((a, b) => b.updatedAt - a.updatedAt),
+    (meta) => meta.workspaceId,
+    session.workspaces,
+    archivedFilter,
+  );
+  const archivedCounts = bucketCounts(archived, (meta) => meta.workspaceId, session.workspaces);
+  const archivedOptions = buildOptions({
+    workspaces: session.workspaces,
+    total: archived.length,
+    perWorkspace: archivedCounts.perWorkspace,
+    tasks: archivedCounts.tasks,
+    global: null,
+    selected: archivedFilter,
+    hideEmpty: true,
+  });
+  const carryCounts = carryoverCounts(session.carryovers, session.sessions, session.workspaces);
+  const carryoverOptions = buildOptions({
+    workspaces: session.workspaces,
+    total: carryCounts.total,
+    perWorkspace: carryCounts.perWorkspace,
+    tasks: carryCounts.tasks,
+    global: null,
+    selected: carryoverFilter,
+    hideEmpty: true,
+    present: carryCounts.listed,
+  });
+  // 子视图的标题 + 选择条钉在列表外：列表滚起来时在它们下面画发丝线（内容被滚动区上缘裁掉时不至于像被盖住）
+  const subviewEdge = useScrolledEdge(props.showArchived ? "archived" : "carryovers");
+  const carryoverGroups = groupCarryoversByWorkspace(session.carryovers, session.sessions, session.workspaces, carryoverFilter);
+  /** 选了某档却没有东西时空态里写的名字 */
+  const filterName = (filter: WsFilter): string =>
+    filter.kind === "workspace"
+      ? (session.workspaces.find((w) => w.id === filter.id)?.name ?? filter.id)
+      : t.sidebar.wsFilterTasks;
   // 两个节点各自的读取进度：加载中 / 读失败 / 真的空（D-3）
   const workspaceList = describeList(session.loads.workspaces, session.workspaces.length);
   // 用 roots.length 不用 session.sessions.length：这里描述的是左栏那份列表
@@ -336,19 +388,32 @@ export function Sidebar(props: {
    * 列表**——Archived / Carryovers 是存储与事项视图，不受（也不该隐形地受）筛选。
    * 有效值过 effectiveSidebarFilters（全是默认值时 null = 不过滤），见 sidebar-filters.ts。
    */
+  const ageDays = props.ageDays;
   const filters = effectiveSidebarFilters({
     status: statusFilter,
     starredOnly,
     hasTodosOnly,
+    ageDays,
   });
   const filtered = filters !== null;
-  const scoped = live.filter((m) => {
+  const now = Date.now();
+  // 先过前三项；时间范围下拉每一档的命中条数以它为底（「选这一档我会看到几条」，与其它筛选叠加后的数）
+  const beforeAge = live.filter((m) => {
     if (filters === null) return true;
     if (filters.status === "done" && !isSessionDone(m)) return false;
     if (filters.starredOnly && m.starred !== true) return false;
     if (filters.hasTodosOnly && openTodoCount(session.carryovers, m.id) === 0) return false;
     return true;
   });
+  const ageCountsNow = ageCounts(beforeAge, now);
+  // 再过时间范围；正在看的那条出了窗口也留着（同 visibleWithOpen 的思路）
+  const scoped = filterByAge(beforeAge, now, ageDays, openId);
+  /**
+   * 时间范围开着时每组**全部列出**，不截 5 条、也没有「再显示 N 条」（范围本身就是截断）；
+   * 不限时照旧走分组状态里的上限与翻页。
+   */
+  const limitFor = (key: string): number =>
+    ageDays === null ? groupVisibleLimit(groups, key) : Number.POSITIVE_INFINITY;
   const loose = scoped.filter((m) => m.workspaceId === null || !known.has(m.workspaceId));
   // 筛选开着时，没有命中会话的工作区组整个不显示——一排空组头比没有更吵
   const workspaceMatches = filtered
@@ -356,7 +421,7 @@ export function Sidebar(props: {
     : session.workspaces;
   const tasksFolded = isGroupFolded(groups, TASKS_FOLD_KEY);
   // TASKS 的超长截断：默认列前 N 条，其余收进「Show N more」
-  const looseVisible = visibleWithOpen(loose, groupVisibleLimit(groups, TASKS_FOLD_KEY), openId);
+  const looseVisible = visibleWithOpen(loose, limitFor(TASKS_FOLD_KEY), openId);
   const open = (id: string) => {
     props.onOverlay(null);
     session.openSession(id);
@@ -371,7 +436,7 @@ export function Sidebar(props: {
       const key = foldKeyForWorkspace(workspace.id);
       if (isGroupFolded(groups, key)) return [];
       const members = scoped.filter((m) => m.workspaceId === workspace.id);
-      return visibleWithOpen(members, groupVisibleLimit(groups, key), openId).map((m) => m.id);
+      return visibleWithOpen(members, limitFor(key), openId).map((m) => m.id);
     }),
     ...(tasksFolded || sessionList.body !== "list" ? [] : looseVisible.map((m) => m.id)),
   ];
@@ -486,32 +551,21 @@ export function Sidebar(props: {
    * 对话面（`main.pane`）是 `flex: 1`，侧栏变宽它自己就让出来——用户要的正是
    * 「靠右侧 chat view 的宽度来调节」（2026-09-22 wafo）。
    */
-  const startResize = (event: React.PointerEvent): void => {
-    if (event.button !== 0) return;
+  const startResize = (event: React.PointerEvent<HTMLElement>): void => {
     const aside = asideRef.current;
     if (aside === null) return;
-    event.preventDefault();
-    setResizing(true);
-    const startX = event.clientX;
     const startWidth = aside.getBoundingClientRect().width;
     const clamp = (value: number): number =>
       Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, Math.round(value)));
-    const previousSelect = document.body.style.userSelect;
-    const previousCursor = document.body.style.cursor;
-    document.body.style.userSelect = "none";
-    document.body.style.cursor = "col-resize";
-    const move = (ev: PointerEvent): void => {
-      props.onWidthChange(clamp(startWidth + (ev.clientX - startX)));
-    };
-    const up = (ev: PointerEvent): void => {
-      window.removeEventListener("pointermove", move);
-      document.body.style.userSelect = previousSelect;
-      document.body.style.cursor = previousCursor;
-      setResizing(false);
-      props.onWidthCommit(clamp(startWidth + (ev.clientX - startX)));
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up, { once: true });
+    const started = startPointerDrag(event, {
+      cursor: "col-resize",
+      onMove: (delta) => props.onWidthChange(clamp(startWidth + delta.x)),
+      onEnd: (delta) => {
+        setResizing(false);
+        props.onWidthCommit(clamp(startWidth + delta.x));
+      },
+    });
+    if (started) setResizing(true);
   };
 
   // —— 收起态：什么都不渲染，主区域向左铺满。侧栏开关与新任务住工具栏左胶囊
@@ -526,6 +580,7 @@ export function Sidebar(props: {
     <>
     <aside
       ref={asideRef}
+      className="sidebar"
       style={{
         width,
         flex: `0 0 ${width}px`,
@@ -572,7 +627,7 @@ export function Sidebar(props: {
         >
           <Chip
             icon="list"
-            compact={filterCompact}
+            compact={chipCompactAt(filterLevel, 0)}
             active={statusFilter === "all"}
             title={t.sidebar.filterAllTip}
             onClick={() => setStatusFilter("all")}
@@ -581,7 +636,7 @@ export function Sidebar(props: {
           </Chip>
           <Chip
             icon="check"
-            compact={filterCompact}
+            compact={chipCompactAt(filterLevel, 1)}
             active={statusFilter === "done"}
             title={t.sidebar.filterDoneTip}
             onClick={() => setStatusFilter("done")}
@@ -590,7 +645,7 @@ export function Sidebar(props: {
           </Chip>
           <Chip
             icon="star"
-            compact={filterCompact}
+            compact={chipCompactAt(filterLevel, 2)}
             active={starredOnly}
             title={t.sidebar.filterStarredTip}
             onClick={() => setStarredOnly((value) => !value)}
@@ -600,13 +655,53 @@ export function Sidebar(props: {
           {/* 灯泡 = 「这条会话还留着 idea / 没办完的事」（wafo 2026-09-22 裁决） */}
           <Chip
             icon="lightbulb"
-            compact={filterCompact}
+            compact={chipCompactAt(filterLevel, 3)}
             active={hasTodosOnly}
             title={t.sidebar.filterTodosTip}
             onClick={() => setHasTodosOnly((value) => !value)}
           >
             {t.sidebar.filterTodos}
           </Chip>
+          {/*
+            时间范围（2026-11-07）：只列最近 N 天动过的。不限时只画「时钟 + ˅」不带字——第五个带字的
+            chip 会把 288px 的筛选行挤进紧凑态；选了某档才露出「3 天」，一眼看出范围开着。
+            菜单每档后面写命中条数（在其它筛选之上算的）。选择落盘（settings.sidebarAgeDays）。
+          */}
+          <Menu
+            items={[
+              { id: "age-header", label: t.sidebar.filterAgeHeader, header: true },
+              ...SIDEBAR_AGE_CHOICES.map(
+                (days): MenuItem => ({
+                  id: `age-${days}`,
+                  label: t.sidebar.filterAgeChoice(days),
+                  hint: String(ageCountsNow[days]),
+                  checked: ageDays === days,
+                  onSelect: () => props.onAgeDaysChange(days),
+                }),
+              ),
+              {
+                id: "age-any",
+                label: t.sidebar.filterAgeAny,
+                hint: String(ageCountsNow.any),
+                checked: ageDays === null,
+                onSelect: () => props.onAgeDaysChange(null),
+              },
+            ]}
+            align="end"
+            panelMinWidth={200}
+            trigger={({ toggle }) => (
+              <Chip
+                icon="clock"
+                compact={chipCompactAt(filterLevel, 4)}
+                chevron={!chipCompactAt(filterLevel, 4)}
+                active={ageDays !== null}
+                title={ageDays === null ? t.sidebar.filterAgeTip : t.sidebar.filterAgeChoice(ageDays)}
+                onClick={toggle}
+              >
+                {ageDays === null ? null : t.sidebar.filterAgeChip(ageDays)}
+              </Chip>
+            )}
+          />
         </div>
       )}
 
@@ -655,6 +750,35 @@ export function Sidebar(props: {
         </div>
       )}
 
+      {/*
+        标题行左端的返回键是子视图的**显式出口**。以前出去只能再点一次底部那条 toggle，
+        而它既不像一个「返回」，又会在归档空了时禁用。这是一个子视图，子视图就该在它自己的
+        标题旁边带着回去的路。标题与工作区选择条**钉在列表外面**：列表滚下去了，一排工作区还在手边。
+      */}
+      {(props.showArchived || props.showCarryovers) && !overlayOpen && (
+        // minmax(0,1fr)：不加的话 grid 的 auto 列按选择条的内容宽撑开，横向滚动永远触发不了
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr)", gap: "var(--space-1)", paddingBottom: "var(--space-1)", ...subviewEdge.edgeStyle }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
+            <IconButton
+              label={t.sidebar.backToTasks}
+              title={t.sidebar.backToTasksTip}
+              size={20}
+              onClick={() => (props.showArchived ? props.onShowArchived(false) : props.onShowCarryovers(false))}
+              style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-secondary)" }}
+            >
+              <Icon name="chevron-left" size={13} strokeWidth={1.8} />
+            </IconButton>
+            <NodeLabel>{props.showArchived ? t.sidebar.archived : t.sidebar.carryovers}</NodeLabel>
+          </div>
+          <WorkspaceFilterBar
+            options={props.showArchived ? archivedOptions : carryoverOptions}
+            workspaces={session.workspaces}
+            selected={props.showArchived ? archivedFilter : carryoverFilter}
+            onSelect={props.showArchived ? setArchivedFilter : setCarryoverFilter}
+          />
+        </div>
+      )}
+
       <div
         className="scroll"
         style={{
@@ -663,50 +787,42 @@ export function Sidebar(props: {
           marginRight: "calc(-1 * var(--space-3))",
           paddingRight: "var(--space-3)",
         }}
+        onScroll={subviewEdge.onScroll}
       >
         {props.showArchived && !overlayOpen ? (
           <>
-            {/*
-              标题行左端的返回键是 Archived 视图的**显式出口**。以前出去只能再点一次
-              底部那条 toggle，而它既不像一个「返回」，又会在归档空了时禁用。
-              这是一个子视图，子视图就该在它自己的标题旁边带着回去的路。
-            */}
-            <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
-              <IconButton
-                label={t.sidebar.backToTasks}
-                title={t.sidebar.backToTasksTip}
-                size={20}
-                onClick={() => props.onShowArchived(false)}
-                style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-secondary)" }}
-              >
-                <Icon name="chevron-left" size={13} strokeWidth={1.8} />
-              </IconButton>
-              <NodeLabel>{t.sidebar.archived}</NodeLabel>
-            </div>
             {/*
               空了也停在这里、显示空态（2026-09-27 wafo：空的时候自动弹回主列表，点入口像按钮坏了）。
               以前会自动退回，是因为出口只有底部那条会在 0 条时禁用的入口——现在标题旁有返回键、
               入口常驻右栏，死胡同已不存在。与遗留事项面板（09-25 起 0 条也能进）同一口径。
             */}
-            {archived.length === 0 && <Empty icon="archive">{t.sidebar.noArchived}</Empty>}
-            {archived.map((meta) => (
-              <SessionRow
-                key={meta.id}
-                meta={meta}
-                session={session}
-                active={meta.id === openId}
-                onClick={() => open(meta.id)}
-                moveIds={[meta.id]}
-                onMove={moveBatch}
-              />
+            {archived.length === 0 && <Empty icon={FEATURE_ICON.archived}>{t.sidebar.noArchived}</Empty>}
+            {archived.length > 0 && archivedGroups.length === 0 && (
+              <Empty icon={FEATURE_ICON.archived}>{t.sidebar.wsFilterNoneIn(filterName(archivedFilter))}</Empty>
+            )}
+            {archivedGroups.map((group) => (
+              <div key={group.workspace?.id ?? "tasks"} style={{ marginBottom: "var(--space-2)" }}>
+                <WsGroupHead workspace={group.workspace} count={group.items.length} />
+                {group.items.map((meta) => (
+                  <SessionRow
+                    key={meta.id}
+                    meta={meta}
+                    session={session}
+                    active={meta.id === openId}
+                    onClick={() => open(meta.id)}
+                    moveIds={[meta.id]}
+                    onMove={moveBatch}
+                  />
+                ))}
+              </div>
             ))}
           </>
         ) : props.showCarryovers && !overlayOpen ? (
           <CarryoverPanel
-            carryovers={session.carryovers}
+            workspaceGroups={carryoverGroups}
+            emptyForFilter={carryCounts.listed.total > 0 ? filterName(carryoverFilter) : null}
             sessions={session.sessions}
             onSetStatus={session.setCarryoverStatus}
-            onBack={() => props.onShowCarryovers(false)}
             // 开工即回对话：退出面板、新会话落在来源会话的组里并展开那一组——App 的
             // startCarryoverTask，右栏「这条任务 › 留到以后」的「转成任务」走同一条路
             onResumeNew={props.onStartCarryoverTask}
@@ -722,36 +838,6 @@ export function Sidebar(props: {
               open(id);
             }}
           />
-        ) : memoryOpen ? (
-          <>
-            <NodeLabel>{t.memory.navScopes}</NodeLabel>
-            <NavRow
-              icon="layers"
-              label={t.memory.navAll}
-              active={props.memoryNav.kind === "scope" && props.memoryNav.token === "all"}
-              count={props.memoryScopes?.reduce((sum, scope) => sum + scope.count, 0)}
-              onClick={() => props.onMemoryNav({ kind: "scope", token: "all" })}
-            />
-            {(props.memoryScopes ?? []).map((scope) => (
-              <NavRow
-                key={scope.token}
-                icon={scope.kind === "user" ? "user" : scope.kind === "missing" ? "archive" : "folder"}
-                label={scope.kind === "user" ? t.memory.scopeUser : scope.name}
-                {...(scope.kind === "missing" ? { hint: t.memory.scopeMissingHint(scope.path ?? scope.name) } : {})}
-                active={props.memoryNav.kind === "scope" && props.memoryNav.token === scope.token}
-                count={scope.count}
-                onClick={() => props.onMemoryNav({ kind: "scope", token: scope.token })}
-              />
-            ))}
-            <span style={{ display: "block", height: "var(--space-3)" }} />
-            <NodeLabel>{t.memory.navManage}</NodeLabel>
-            <NavRow
-              icon="cpu"
-              label={t.memory.vector}
-              active={props.memoryNav.kind === "vector"}
-              onClick={() => props.onMemoryNav({ kind: "vector" })}
-            />
-          </>
         ) : settingsOpen ? (
           <>
             <NodeLabel>{t.common.settings}</NodeLabel>
@@ -767,7 +853,9 @@ export function Sidebar(props: {
           </>
         ) : filtered && scoped.length === 0 ? (
           /* 筛选扑空：一条空态说清「为什么什么都没有、怎么才有」，而非留白两节空头 */
-          <Empty icon="list-filter">{filterEmptyText(statusFilter, starredOnly, hasTodosOnly, t)}</Empty>
+          <Empty icon="list-filter">
+            {filterEmptyText(statusFilter, starredOnly, hasTodosOnly, ageDays !== null && beforeAge.length > 0 ? ageDays : null, t)}
+          </Empty>
         ) : (
           <>
             {(!filtered || workspaceMatches.length > 0) && (
@@ -858,8 +946,9 @@ export function Sidebar(props: {
                           toggleGroupFold(current, foldKeyForWorkspace(workspace.id)),
                         )
                       }
-                      limit={groupVisibleLimit(groups, foldKeyForWorkspace(workspace.id))}
-                      expanded={groups.pages.has(foldKeyForWorkspace(workspace.id))}
+                      limit={limitFor(foldKeyForWorkspace(workspace.id))}
+                      expanded={ageDays === null && groups.pages.has(foldKeyForWorkspace(workspace.id))}
+                      count={ageDays === null ? undefined : scoped.filter((m) => m.workspaceId === workspace.id).length}
                       onMore={() =>
                         setGroups((current) => showMoreInGroup(current, foldKeyForWorkspace(workspace.id)))
                       }
@@ -871,6 +960,8 @@ export function Sidebar(props: {
                         setGroups((current) =>
                           unfoldGroup(current, foldKeyForWorkspace(workspace.id)),
                         );
+                        // 插件页只占主槽、侧栏列表还在：新任务要把它退掉，不然点了没反应
+                        props.onOverlay(null);
                         session.newTaskIn(workspace);
                       }}
                       onRename={(name) => session.renameWorkspace(workspace.id, name)}
@@ -904,8 +995,10 @@ export function Sidebar(props: {
                   onAdd={() => {
                     // 同上：新任务落 TASKS，先展开再建
                     setGroups((current) => unfoldGroup(current, TASKS_FOLD_KEY));
+                    props.onOverlay(null);
                     session.newTask();
                   }}
+                  count={ageDays === null ? undefined : loose.length}
                   folded={tasksFolded}
                   onToggleFold={
                     loose.length > 0
@@ -936,7 +1029,7 @@ export function Sidebar(props: {
                     <ShowMoreRow
                       hidden={loose.length - looseVisible.length}
                       next={nextPageSize(TASKS_FOLD_KEY, loose.length - looseVisible.length)}
-                      expanded={groups.pages.has(TASKS_FOLD_KEY)}
+                      expanded={ageDays === null && groups.pages.has(TASKS_FOLD_KEY)}
                       onMore={() => setGroups((current) => showMoreInGroup(current, TASKS_FOLD_KEY))}
                       onLess={() => setGroups((current) => showLessInGroup(current, TASKS_FOLD_KEY))}
                     />
@@ -1002,9 +1095,11 @@ function WorkspaceGroup(props: {
   unread: ReadonlySet<string>;
   folded: boolean;
   onToggleFold: () => void;
-  /** 眼下最多列几条（groupVisibleLimit）；expanded = 点过 Show more */
+  /** 眼下最多列几条（groupVisibleLimit；时间范围开着时是 Infinity）；expanded = 点过 Show more */
   limit: number;
   expanded: boolean;
+  /** 时间范围开着时组头写这一组命中的条数；undefined = 不写 */
+  count?: number | undefined;
   onMore: () => void;
   onLess: () => void;
   onNewTask: () => void;
@@ -1049,7 +1144,8 @@ function WorkspaceGroup(props: {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "24px 24px minmax(0,1fr) auto 28px",
+          gridTemplateColumns:
+            props.count === undefined ? "24px 24px minmax(0,1fr) auto 28px" : "24px 24px minmax(0,1fr) auto auto 28px",
           alignItems: "center",
           gap: "var(--space-1)",
           minHeight: "var(--control-height-md)",
@@ -1193,6 +1289,9 @@ function WorkspaceGroup(props: {
           </IconButton>
         </span>
 
+        {/* 命中条数：单独占一列、不随悬停淡出（它是信息，不是动作）；落在「+」左边 */}
+        {props.count !== undefined && <GroupCount n={props.count} />}
+
         <IconButton label={t.sidebar.newTaskInWorkspace} size={26} onClick={props.onNewTask}>
           <Icon name="plus" size={14} />
         </IconButton>
@@ -1223,6 +1322,23 @@ function WorkspaceGroup(props: {
         </div>
       )}
     </div>
+  );
+}
+
+/** 时间范围开着时组头的命中条数：sm、tabular、tertiary（与已归档视图的 WsGroupHead 计数同一写法） */
+function GroupCount(props: { n: number }) {
+  return (
+    <span
+      style={{
+        fontSize: "var(--font-size-sm)",
+        fontVariantNumeric: "tabular-nums",
+        color: "var(--color-text-tertiary)",
+        whiteSpace: "nowrap",
+        paddingInline: "var(--space-1)",
+      }}
+    >
+      {props.n}
+    </span>
   );
 }
 
@@ -1258,6 +1374,8 @@ function NodeHeader(props: {
   /** 传了 onToggleFold 就说明这个节点的孩子可折叠：label 变成开合按钮（chevron + 名字） */
   folded?: boolean;
   onToggleFold?: (() => void) | undefined;
+  /** 时间范围开着时组头写命中条数（与工作区组头同口径）；undefined = 不写 */
+  count?: number | undefined;
 }) {
   const addButton = (onClick: () => void, open: boolean): React.ReactNode => (
     <IconButton label={props.addLabel} size={26} active={open} onClick={onClick}>
@@ -1268,7 +1386,7 @@ function NodeHeader(props: {
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "minmax(0,1fr) 26px",
+        gridTemplateColumns: props.count === undefined ? "minmax(0,1fr) 26px" : "minmax(0,1fr) auto 26px",
         alignItems: "center",
         gap: 2,
         minHeight: 28,
@@ -1283,6 +1401,7 @@ function NodeHeader(props: {
       ) : (
         <NodeLabel>{props.label}</NodeLabel>
       )}
+      {props.count !== undefined && <GroupCount n={props.count} />}
       {props.addMenu !== undefined ? (
         <Menu
           items={props.addMenu}
@@ -1447,10 +1566,6 @@ function NavRow(props: {
   bar?: "running" | "waiting" | "done" | "failed" | undefined;
   /** 状态饼的悬停说明（状态的可读名字） */
   barTitle?: string;
-  /** 行尾的条数（记忆库导航）；undefined = 不画。钉在行右内边距（.row-trailing） */
-  count?: number | undefined;
-  /** 条数的颜色（待你确认用警示色——颜色是第二信号，名字已经说了是什么） */
-  countTone?: string;
   style?: React.CSSProperties;
 }) {
   const disabled = props.disabled === true;
@@ -1509,19 +1624,6 @@ function NavRow(props: {
       >
         {props.label}
       </span>
-      {props.count !== undefined && (
-        <span
-          className="row-trailing"
-          style={{
-            fontFamily: "var(--font-family-business)",
-            fontSize: "var(--font-size-xs)",
-            fontVariantNumeric: "tabular-nums",
-            color: props.countTone ?? "var(--color-text-tertiary)",
-          }}
-        >
-          {props.count}
-        </span>
-      )}
     </button>
   );
 }
@@ -1595,6 +1697,8 @@ function SessionRow(props: {
    * updatedAt 现算，不落盘），hover 才出现的一个轻提示，不弹通知不加角标。
    */
   const idleSuggested = !done && !meta.archived && Date.now() - meta.updatedAt > IDLE_SUGGEST_MS;
+  // 行尾常显的「多久没动了」（按最后活动 updatedAt，格式见 sessionAgeLabel）；每分钟随 Sidebar 重渲染刷新
+  const ageLabel = sessionAgeLabel(meta.updatedAt, Date.now(), t);
   // 删父连带删子（session.ts 的级联契约）：删除确认要把这个后果说出来，不能只
   // 提工作台文件数——子会话数是更容易被忽略、也更重的一条后果（子会话 PR4c 2.4）
   const childCount = children.length;
@@ -1772,6 +1876,7 @@ function SessionRow(props: {
             )
           }
           label={meta.title === "" ? t.common.newTask : meta.title}
+          hint={t.time.lastActiveAt(meta.updatedAt)}
           tone={status?.tone}
           iconTitle={status?.label}
           active={props.active}
@@ -1782,119 +1887,150 @@ function SessionRow(props: {
         />
       )}
       {/**
-        星标：**既是标识也是开关**，独立小槽，不占状态位——状态位归运行态
-        （running/failed/idle），置顶已占了 idle 档，再挤进去就要三选一。
-        已星标常显（实心，**accent 色**），未星标只在悬停/键盘聚焦时浮出描边形（tertiary）——
-        列表静止时不摆一排灰星星。星标用 accent 是 wafo 2026-09-22 的裁决（「主题的 accent
-        是什么色就是什么色」）：它是用户亲手点亮的标记，靠颜色一眼找到是它的全部目的，
-        与「accent 只给主操作」的冲突在于：它不是操作入口，是状态。
+        行尾是**叠在同一格里的两层**（2026-11-07 用户：「不 hover 的时候看不出会话是几天前的」）：
+        - 静止层 `.task-row-rest`：已星标 / 已完成 / 遗留角标（常显的标记，accent）+ 「多久没动了」。
+          纯视觉（aria-hidden、不接指针）——要点任何东西必须先把指针移上这一行，那时已换成悬停层。
+        - 悬停层 `.task-row-acts`：星标 / 完成 / 角标 / 更多四个真按钮，静止全透明（含已标记的，它们的
+          常显改由静止层画），悬停 / 键盘聚焦 / 菜单开着时浮出，同时静止层淡出。
+        两层同格重叠、格宽取两者较宽的，所以悬停时行高与标题截断位置都不跳；常见情形（至多一枚标记 +
+        不超过 4 个字的时间）静止层不比悬停层宽，罕见的「星标 + 完成 + 角标」才会把这一行的格撑宽一点。
+        分层规则与淡出信号在 styles.css 的 `.task-row-tail`。
       */}
-      <IconButton
-        label={meta.starred === true ? t.sidebar.unstar : t.sidebar.star}
-        title={meta.starred === true ? t.sidebar.starredTip : t.sidebar.star}
-        size={20}
-        onClick={() => session.starSession(meta.id, meta.starred !== true)}
-        className="reveal"
-        style={{
-          borderRadius: "var(--radius-xs)",
-          color: meta.starred === true ? "var(--color-accent)" : "var(--color-text-tertiary)",
-          // 已星标常显，不等 hover / 键盘聚焦
-          opacity: meta.starred === true ? 1 : undefined,
-        }}
-      >
-        <Icon name="star" size={13} strokeWidth={1.8} fill={meta.starred === true} />
-      </IconButton>
-      {/**
-        完成标记：**与星标同一条行内标记规则**（wafo 2026-09-22，「之后的标也沿用这个逻辑」）：
-        hover / 键盘聚焦时浮出描边勾（tertiary），点一下即落定；落定后常显、accent；再点 = Reopen。
-        图标是单纯的 `check`，不是圈勾——行首状态槽不再画完成，勾只在这里出现一次。
-        tooltip 兼任闲置建议：超过 7 天没动静的任务，建议写在这个开关的 tooltip 里，
-        不另摆一个建议按钮。done_with_todos 不换这里的图标——完成就是完成，
-        「还差几件」由右边那个灯泡角标单独说。
-      */}
-      <IconButton
-        label={done ? t.sidebar.reopen : t.sidebar.markDone}
-        title={
-          done
-            ? openTodos > 0
-              ? t.sidebar.doneWithTodos(openTodos)
-              : t.sidebar.doneTip
-            : idleSuggested
-              ? t.sidebar.idleSuggest(IDLE_SUGGEST_DAYS)
-              : t.sidebar.markDone
-        }
-        size={20}
-        onClick={() =>
-          session.setCompletionSession(meta.id, nextCompletion(meta.completion ?? "open"))
-        }
-        className="reveal"
-        style={{
-          borderRadius: "var(--radius-xs)",
-          color: done ? "var(--color-accent)" : "var(--color-text-tertiary)",
-          // 已完成常显，不等 hover / 键盘聚焦
-          opacity: done ? 1 : undefined,
-        }}
-      >
-        <Icon name="check" size={13} strokeWidth={done ? 3 : 1.8} />
-      </IconButton>
-      {/**
-        遗留角标：完成标记右边的一个数字——收尾时扫出来、这条会话还没办的事项数
-        （按 sourceSessionId 现算，与 Has todos 筛选同口径），办完就消失。
-        **不再画第二个 circle-check**：完成这件事左边那个标记已经说了，
-        角标只补「还差几件」这一句。槽序：星 → 完成 → 角标。
-      */}
-      {done && openTodos > 0 && (
-        <span
-          title={t.sidebar.openTodosLeft(openTodos)}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 2,
-            flex: "0 0 auto",
-            marginInlineStart: -2,
-            fontFamily: "var(--font-family-business)",
-            fontSize: "var(--font-size-xs)",
-            fontWeight: "var(--weight-semibold)",
-            lineHeight: 1,
-            color: "var(--color-text-secondary)",
-          }}
-        >
-          {/* 灯泡与「Has todos」筛选同一个符号：光看数字读不出它数的是什么 */}
-          <Icon name="lightbulb" size={12} strokeWidth={1.8} />
-          {openTodos}
+      <span className="task-row-tail">
+        <span className="task-row-rest" aria-hidden="true">
+          {meta.starred === true && (
+            <span className="task-row-mark" style={{ color: "var(--color-accent)" }}>
+              <Icon name="star" size={13} strokeWidth={1.8} fill />
+            </span>
+          )}
+          {done && (
+            <span className="task-row-mark" style={{ color: "var(--color-accent)" }}>
+              <Icon name="check" size={13} strokeWidth={3} />
+            </span>
+          )}
+          {done && openTodos > 0 && <TodoBadge n={openTodos} t={t} />}
+          <span className="task-row-age">{ageLabel}</span>
         </span>
-      )}
-      <Menu
-        items={items}
-        align="end"
-        // 会话行的菜单开在**行的右侧**：开在下方会盖住紧挨着的下一条会话，
-        // 想看别的会话就得先关菜单（2026-09-22 wafo）。窄窗右侧装不下时
-        // placeMenu 自己回落到下方。宽度按 Proma 的行动作菜单收到 160，上限 240：
-        // 200 装不下「Delete permanently」+ 工作台文件数 hint，label 会被截成半句
-        placement="right"
-        panelMinWidth={160}
-        panelMaxWidth={240}
-        trigger={({ open, toggle }) => (
+        <span className="task-row-acts">
+          {/**
+            星标：**既是标识也是开关**，独立小槽，不占状态位——状态位归运行态
+            （running/failed/idle），置顶已占了 idle 档，再挤进去就要三选一。
+            已星标时静止层常显实心 accent 星，未星标只在悬停 / 键盘聚焦时浮出描边形（tertiary）——
+            列表静止时不摆一排灰星星。星标用 accent 是 wafo 2026-09-22 的裁决（「主题的 accent
+            是什么色就是什么色」）：它是用户亲手点亮的标记，靠颜色一眼找到是它的全部目的，
+            与「accent 只给主操作」的冲突在于：它不是操作入口，是状态。
+          */}
           <IconButton
-            label={t.sidebar.taskActions}
+            label={meta.starred === true ? t.sidebar.unstar : t.sidebar.star}
+            title={meta.starred === true ? t.sidebar.starredTip : t.sidebar.star}
             size={20}
-            onClick={() => {
-              exitDeleteStep();
-              toggle();
-            }}
+            onClick={() => session.starSession(meta.id, meta.starred !== true)}
             className="reveal"
             style={{
               borderRadius: "var(--radius-xs)",
-              color: open ? "var(--color-text-primary)" : "var(--color-text-tertiary)",
-              // 菜单开着时常显，不等 hover / 键盘聚焦
-              opacity: open ? 1 : undefined,
+              color: meta.starred === true ? "var(--color-accent)" : "var(--color-text-tertiary)",
             }}
           >
-            <Icon name="ellipsis-vertical" size={13} />
+            <Icon name="star" size={13} strokeWidth={1.8} fill={meta.starred === true} />
           </IconButton>
-        )}
-      />
+          {/**
+            完成标记：**与星标同一条行内标记规则**（wafo 2026-09-22，「之后的标也沿用这个逻辑」）：
+            hover / 键盘聚焦时浮出描边勾（tertiary），点一下即落定；落定后静止层常显、accent；再点 = Reopen。
+            图标是单纯的 `check`，不是圈勾——行首状态槽不再画完成，勾只在这里出现一次。
+            tooltip 兼任闲置建议：超过 7 天没动静的任务，建议写在这个开关的 tooltip 里，
+            不另摆一个建议按钮。done_with_todos 不换这里的图标——完成就是完成，
+            「还差几件」由右边那个灯泡角标单独说。
+          */}
+          <IconButton
+            label={done ? t.sidebar.reopen : t.sidebar.markDone}
+            title={
+              done
+                ? openTodos > 0
+                  ? t.sidebar.doneWithTodos(openTodos)
+                  : t.sidebar.doneTip
+                : idleSuggested
+                  ? t.sidebar.idleSuggest(IDLE_SUGGEST_DAYS)
+                  : t.sidebar.markDone
+            }
+            size={20}
+            onClick={() =>
+              session.setCompletionSession(meta.id, nextCompletion(meta.completion ?? "open"))
+            }
+            className="reveal"
+            style={{
+              borderRadius: "var(--radius-xs)",
+              color: done ? "var(--color-accent)" : "var(--color-text-tertiary)",
+            }}
+          >
+            <Icon name="check" size={13} strokeWidth={done ? 3 : 1.8} />
+          </IconButton>
+          {/**
+            遗留角标：完成标记右边的一个数字——收尾时扫出来、这条会话还没办的事项数
+            （按 sourceSessionId 现算，与 Has todos 筛选同口径），办完就消失。
+            **不再画第二个 circle-check**：完成这件事左边那个标记已经说了，
+            角标只补「还差几件」这一句。槽序：星 → 完成 → 角标。
+          */}
+          {done && openTodos > 0 && <TodoBadge n={openTodos} t={t} className="reveal" />}
+          <Menu
+            items={items}
+            align="end"
+            // 会话行的菜单开在**行的右侧**：开在下方会盖住紧挨着的下一条会话，
+            // 想看别的会话就得先关菜单（2026-09-22 wafo）。窄窗右侧装不下时
+            // placeMenu 自己回落到下方。宽度按 Proma 的行动作菜单收到 160，上限 240：
+            // 200 装不下「Delete permanently」+ 工作台文件数 hint，label 会被截成半句
+            placement="right"
+            panelMinWidth={160}
+            panelMaxWidth={240}
+            trigger={({ open, toggle }) => (
+              <IconButton
+                label={t.sidebar.taskActions}
+                size={20}
+                // 菜单开着时 CSS 的 :has([aria-expanded="true"]) 让悬停层继续显示、静止层继续让位
+                ariaExpanded={open}
+                onClick={() => {
+                  exitDeleteStep();
+                  toggle();
+                }}
+                className="reveal"
+                style={{
+                  borderRadius: "var(--radius-xs)",
+                  color: open ? "var(--color-text-primary)" : "var(--color-text-tertiary)",
+                  // 菜单开着时常显，不等 hover / 键盘聚焦
+                  opacity: open ? 1 : undefined,
+                }}
+              >
+                <Icon name="ellipsis-vertical" size={13} />
+              </IconButton>
+            )}
+          />
+        </span>
+      </span>
     </div>
+  );
+}
+
+/** 遗留角标（灯泡 + 数字）：静止层与悬停层各画一份，悬停层的那份带 reveal 淡入 */
+function TodoBadge(props: { n: number; t: Messages; className?: string }) {
+  return (
+    <span
+      className={props.className}
+      title={props.t.sidebar.openTodosLeft(props.n)}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 2,
+        flex: "0 0 auto",
+        fontFamily: "var(--font-family-business)",
+        fontSize: "var(--font-size-xs)",
+        fontWeight: "var(--weight-semibold)",
+        lineHeight: 1,
+        color: "var(--color-text-secondary)",
+      }}
+    >
+      {/* 灯泡与「Has todos」筛选同一个符号：光看数字读不出它数的是什么 */}
+      <Icon name="lightbulb" size={12} strokeWidth={1.8} />
+      {props.n}
+    </span>
   );
 }
 
@@ -1909,7 +2045,10 @@ function SessionRow(props: {
  * 「跳回原文」的滚动定位，等定位基建立项后接 sourceMessageRange[0]）。
  */
 function CarryoverPanel(props: {
-  carryovers: readonly Carryover[];
+  /** 已按选择条分好的两层：工作区 → 来源会话 → 事项 */
+  workspaceGroups: readonly CarryoverWorkspaceGroup[];
+  /** 选了某档却没有东西时那一档的名字；null = 整个面板就是空的（还没记过任何事项） */
+  emptyForFilter: string | null;
   sessions: readonly SessionMeta[];
   onSetStatus: (id: string, status: Carryover["status"]) => void;
   /** 方案 A：新开一单带上下文开工（面板主入口） */
@@ -1917,11 +2056,8 @@ function CarryoverPanel(props: {
   /** 方案 B：以遗留事项为用户消息续跑原会话（同一按钮的右键备选） */
   onResumeInSource: (item: Carryover) => void;
   onOpenTask: (sessionId: string) => void;
-  /** 显式出口：标题行左端的返回键 */
-  onBack: () => void;
 }) {
   const t = useT();
-  const groups = groupCarryovers(props.carryovers, props.sessions);
   // 默认全折叠：一眼只看到「哪几个任务还有几项」，不是一整面待办墙
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const toggle = (key: string): void =>
@@ -1931,36 +2067,19 @@ function CarryoverPanel(props: {
       else next.add(key);
       return next;
     });
-  /**
-   * 标题行左端的返回键是本面板的**显式出口**（与 Archived 同款）：出去不该只能
-   * 再点一次底部那条 toggle——它既不像一个「返回」，又会在清单空了时禁用。
-   */
-  const header = (
-    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
-      <IconButton
-        label={t.sidebar.backToTasks}
-        title={t.sidebar.backToTasksTip}
-        size={20}
-        onClick={props.onBack}
-        style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-secondary)" }}
-      >
-        <Icon name="chevron-left" size={13} strokeWidth={1.8} />
-      </IconButton>
-      <NodeLabel>{t.sidebar.carryovers}</NodeLabel>
-    </div>
-  );
-  if (groups.length === 0) {
+  if (props.workspaceGroups.length === 0) {
     return (
-      <>
-        {header}
-        <Empty icon="list-todo">{t.sidebar.noCarryovers}</Empty>
-      </>
+      <Empty icon={FEATURE_ICON.carryovers}>
+        {props.emptyForFilter === null ? t.sidebar.noCarryovers : t.sidebar.wsFilterNoneIn(props.emptyForFilter)}
+      </Empty>
     );
   }
   return (
     <>
-      {header}
-      {groups.map((group) => {
+      {props.workspaceGroups.map((workspaceGroup) => (
+        <div key={workspaceGroup.workspace?.id ?? "tasks"} style={{ marginBottom: "var(--space-2)" }}>
+          <WsGroupHead workspace={workspaceGroup.workspace} count={workspaceGroup.count} />
+          {workspaceGroup.groups.map((group) => {
         const groupKey = group.session?.id ?? group.items[0]?.sourceSessionId ?? "";
         const isOpen = expanded.has(groupKey);
         const openCount = group.items.filter((item) => item.status === "open").length;
@@ -2053,8 +2172,52 @@ function CarryoverPanel(props: {
           ))}
         </div>
         );
-      })}
+          })}
+        </div>
+      ))}
     </>
+  );
+}
+
+/**
+ * 已归档 / 以后再做里的工作区组头：folder 图标（与侧栏工作区组头同一枚）+ 名字 + 条数，条数钉在行右。
+ * 「任务」组（没有工作区的）不画图标，与侧栏 TASKS 节点一样只有名字。
+ */
+function WsGroupHead(props: { workspace: Workspace | null; count: number }) {
+  const t = useT();
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)", minHeight: "var(--control-height-md)" }}>
+      {props.workspace !== null && (
+        <span style={{ display: "grid", placeItems: "center", width: 20, flex: "none", color: "var(--color-text-tertiary)" }}>
+          <Icon name="folder" size={13} strokeWidth={1.8} />
+        </span>
+      )}
+      <strong
+        title={props.workspace?.name}
+        style={{
+          flex: "1 1 auto",
+          minWidth: 0,
+          fontSize: "var(--font-size-sm)",
+          fontWeight: "var(--weight-semibold)",
+          color: "var(--color-text-secondary)",
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
+      >
+        {props.workspace?.name ?? t.sidebar.tasks}
+      </strong>
+      <span
+        style={{
+          flex: "none",
+          fontSize: "var(--font-size-sm)",
+          fontVariantNumeric: "tabular-nums",
+          color: "var(--color-text-tertiary)",
+        }}
+      >
+        {props.count}
+      </span>
+    </div>
   );
 }
 

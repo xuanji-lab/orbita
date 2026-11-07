@@ -12,8 +12,10 @@ import { isNotFound } from "../fs-errors.ts";
 import { KNOWN_PROVIDERS, knownProviderOf } from "../../shared/known-providers.ts";
 import { refreshOauthCredential } from "./oauth-flows.ts";
 import {
+  isProviderEnabled,
   maskSecret,
   normalizeBaseUrl,
+  providerDisabledText,
   validateProvider,
   type OauthCredential,
   type Provider,
@@ -49,6 +51,25 @@ export class ProviderValidationError extends Error {
     this.name = "ProviderValidationError";
     this.issues = issues;
   }
+}
+
+/**
+ * 关着的服务商被拿来开轮 / 换模型时抛。**不替用户换模型**（渠道不归我们选）：
+ * 由 agent IPC 按界面语言转成一句能行动的话（providerDisabledText）交给界面。
+ */
+export class ProviderDisabledError extends Error {
+  readonly displayName: string;
+
+  constructor(displayName: string) {
+    super(providerDisabledText(displayName, "zh"));
+    this.name = "ProviderDisabledError";
+    this.displayName = displayName;
+  }
+}
+
+/** 开轮 / 换模型前的统一拦截：关着的服务商一律拒，开着的放行。 */
+export function assertProviderEnabled(provider: Pick<ProviderDto, "displayName" | "disabled">): void {
+  if (!isProviderEnabled(provider)) throw new ProviderDisabledError(provider.displayName);
 }
 
 /** providers.json 的落盘形状。version 供将来迁移判定用。 */
@@ -127,6 +148,8 @@ export class ProviderStore {
       },
       models: { declared: draft.models.declared },
       auth: { scheme: "none" },
+      // 停用开关只由 setDisabled 改写：编辑表单 / 登录重连 / 只改模型的写回都不该悄悄把关着的服务商打开
+      ...(existing?.disabled === true ? { disabled: true } : {}),
     };
 
     if (draft.auth.scheme === "api_key") {
@@ -177,6 +200,21 @@ export class ProviderStore {
       await this.secrets.delete(target.auth.secretRef.account);
     }
     await this.persist(providers.filter((p) => p.id !== id));
+  }
+
+  /**
+   * 开 / 关一家服务商。**只翻 disabled**：配置、密钥、模型列表一字不动，再打开一切照旧。
+   * id 不存在返回 null；状态没变不写盘。关着时去掉字段而不是写 false（旧数据形状不变）。
+   */
+  async setDisabled(id: ProviderId, disabled: boolean): Promise<ProviderDto | null> {
+    const providers = await this.load();
+    const target = providers.find((p) => p.id === id);
+    if (target === undefined) return null;
+    if ((target.disabled === true) === disabled) return this.toDto(target);
+    const { disabled: _previous, ...rest } = target;
+    const next: Provider = disabled ? { ...rest, disabled: true } : rest;
+    await this.persist(providers.map((p) => (p.id === id ? next : p)));
+    return this.toDto(next);
   }
 
   /**

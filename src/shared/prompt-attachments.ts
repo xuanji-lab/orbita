@@ -78,6 +78,14 @@ function fileLine(ref: { path: string; kind: "file" | "dir" }): string {
 }
 
 /**
+ * 系统附加块的声明：块里这几句英文是 Orbita 写的，不是用户写的。回复语言按用户自己的字判断
+ * （见 agent/prompt-narration.ts），这句让块自己也说明白，不靠系统提示词单边兜底。
+ * 与 invocation.ts 的同名语义保持一致；单行（FILES_BLOCK 的解析认第二行是整段说明）。
+ */
+const LANGUAGE_NOTE =
+  "(This note was added by Orbita, not written by the user; its language is not the language the user writes in.)";
+
+/**
  * 文件引用 → 带标签的清单块。给模型的一句话说清这是什么、该怎么用——
  * 没有它，模型看到一串路径不知道是附件还是散文。目录行补尾斜杠（约定俗成的目录记号）。
  * PDF 单独点名 read_pdf：pi 的 read 对 PDF 只会吐二进制乱码，文本层归 read_pdf 提取
@@ -87,7 +95,8 @@ export function filesBlockOf(files: readonly { path: string; kind: "file" | "dir
   return [
     "<attached-files>",
     "The user attached these files from their disk. Read them with the read tool when you need their contents. " +
-      "PDF files: use the read_pdf tool instead of read. Word (.docx) files: use the read_docx tool instead of read.",
+      "PDF files: use the read_pdf tool instead of read. Word (.docx) files: use the read_docx tool instead of read. " +
+      LANGUAGE_NOTE,
     ...files.map(fileLine),
     "</attached-files>",
   ].join("\n");

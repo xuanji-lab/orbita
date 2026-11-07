@@ -86,12 +86,19 @@ export function previousPlanFrom(branch: readonly unknown[], excludeCallId: stri
   return null;
 }
 
-/** 回给模型的一句话：几步做完、当前在做哪步。短——模型自己刚写的清单，不用复述 */
+/** 回给模型的一句话：几步做完、当前在做哪步、哪些在等（waiting）。短——模型自己刚写的清单，不用复述 */
 export function planReceipt(items: readonly PlanItem[]): string {
   const done = items.filter((item) => item.status === "done").length;
   const current = items.find((item) => item.status === "in_progress");
-  const tail = current !== undefined ? ` Now: ${current.text}` : done === items.length ? " All steps done." : "";
-  return `Plan updated: ${done}/${items.length} done.${tail}`;
+  const waiting = items.filter((item) => item.status === "waiting");
+  const parts = [`Plan updated: ${done}/${items.length} done.`];
+  if (current !== undefined) parts.push(`Now: ${current.text}`);
+  else if (done === items.length) parts.push("All steps done.");
+  if (waiting.length > 0) {
+    const list = waiting.map((item) => (item.waitingFor === undefined ? item.text : `${item.text} (${item.waitingFor})`)).join("; ");
+    parts.push(`Waiting: ${list}.`);
+  }
+  return parts.join(" ");
 }
 
 /** 停下时回给模型的话：讲清为什么停、该用正文说什么、别再调工具 */
@@ -178,10 +185,14 @@ export function createPlanTools(options: PlanToolOptions): ToolDefinition[] {
       "it for quick questions and one-step changes. Write it as soon as you know the steps: right away, or " +
       "after a first look around. Each step should end in something checkable: a changed file, a passing " +
       "check, or a decision; most tasks need 3-7 steps. Send the whole list every time (it replaces the " +
-      "previous one). Exactly one step is in_progress while you work. Tick as you go: each time you move on, " +
-      "call update_plan again in the same batch as the next step's first tool call, marking the finished step " +
-      "done and the next one in_progress. Do not start a later step while an earlier one still shows " +
-      "in_progress, and do not save the ticks for the end. If you find work the plan does not cover (a bug in " +
+      "previous one). in_progress is the step you are actually working on right now, and at most one step is " +
+      "in_progress at a time; steps do not have to be done in the order listed. Tick as you go: each time you " +
+      "move on, call update_plan again in the same batch as the next step's first tool call, marking the " +
+      "finished step done and the next one in_progress; do not save the ticks for the end. A step that is stuck " +
+      "on the user or on something outside your control (the user must change a setting, approve, answer, or an " +
+      "external job must finish) is `waiting`, not in_progress: set `waitingFor` to a short phrase in the user's " +
+      "language (for example \"等你改权限\" or \"waiting for your review\"), and go on to the next step you can really do. " +
+      "If you find work the plan does not cover (a bug in " +
       "code you depend on, a missing prerequisite, a failing check), send the list again with that work as its " +
       "own step before you do it; never fold it silently into another step. Whenever you add, drop, split, " +
       "merge, reword or reorder steps, pass `why`: one short clause the user will read (for example \"tests " +
@@ -193,13 +204,20 @@ export function createPlanTools(options: PlanToolOptions): ToolDefinition[] {
       "the user answers in the chat box, there are no buttons, and you make no more tool calls until they do. " +
       "Otherwise do not stop to ask; write the plan and get on with it. Steps are short, " +
       "outcome-focused phrases in the user's language.",
+    // 第三条（2026-11-06 用户）：用户中途提了计划外的新活（「先修一个 bug」），智能体直接开干、计划还停在
+    // 旧任务上——「它不会去适当地调整那个 plan 然后再开始干活」。前两条只管「做的过程中发现的」活。
     // 规则放进系统提示的 Guidelines（promptGuidelines，随工具启用、整会话不变）：只写在工具说明里时，
     // Kimi K3.1 Pro 实测两次发现计划没覆盖的问题（顺带修了 completeTask、兼容了旧日期），嘴上说了
     // 「我会先修正」却照旧只打勾、没加步骤、没写 why / later（2026-10-30）
+    // 第四条（2026-11-06 用户）：和智能体对齐了 todo，让它「先做第二个」，它却在卡着的第一个底下做第二个的活——
+    // 原规则写死「一次只有一个 in_progress、前一步没完不能开后一步」，卡在用户身上的步骤只能占着「在做」。
+    // 现在卡住的标 waiting，「在做」只给此刻真在做的那一步；用户点名先做哪一步就把它提到前面。
     promptSnippet: "Write and update the task's plan; the user follows it as a checklist",
     promptGuidelines: [
       "Keep the plan honest. When you find work it does not cover (a bug you have to fix first, a missing prerequisite, a failing check), call update_plan with that work as its own step and a `why` BEFORE you do it. Saying it in prose, or folding it into another step, leaves the user's checklist wrong.",
       "When you notice something worth doing but decide not to do it in this task, put it in update_plan's `later` right then, not at the end.",
+      "When the user's new message asks for something the current plan does not cover (a bug to look into, another change, a side question that takes several steps), update the plan before you start on it: add it as its own step or steps with a `why` that names the request, keep the unfinished earlier steps (mark them done, or keep them pending if you will come back to them), and if earlier work keeps running alongside (a sub-session you delegated), say so in that step's text. A new request is not a reason to drop the plan or to work outside it.",
+      "in_progress is the step you are doing at this moment, not just the first unfinished step in the list. When the user asks you to do some step first, or to switch to a different one, call update_plan before you start: move that step to the front of the unfinished steps, mark it in_progress, and pass a `why` saying the user asked to do this first (in the user's language). The step you were on goes back to pending if you will return to it, or to waiting with `waitingFor` if it is stuck on the user or something external. Never do the requested step's work under another step's row, and never keep a stuck step in_progress.",
     ],
     parameters: {
       type: "object",
@@ -211,7 +229,16 @@ export function createPlanTools(options: PlanToolOptions): ToolDefinition[] {
             type: "object",
             properties: {
               text: { type: "string", description: "What this step achieves, one short phrase." },
-              status: { type: "string", enum: PLAN_STATUSES, description: "pending, in_progress or done." },
+              status: {
+                type: "string",
+                enum: PLAN_STATUSES,
+                description:
+                  "pending, in_progress (the step you are working on right now; at most one), waiting (stuck on the user or something external; set waitingFor) or done.",
+              },
+              waitingFor: {
+                type: "string",
+                description: "Only with status waiting: what the step is waiting for, a short phrase in the user's language, e.g. \"等你改权限\".",
+              },
             },
             required: ["text", "status"],
           },

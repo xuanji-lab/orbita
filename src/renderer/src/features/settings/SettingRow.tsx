@@ -13,7 +13,7 @@
 export function SettingGroup(props: { label: string; children: React.ReactNode }) {
   return (
     <section className="set-group">
-      <span className="section-label">{props.label}</span>
+      <h2 className="section-label">{props.label}</h2>
       {props.children}
     </section>
   );

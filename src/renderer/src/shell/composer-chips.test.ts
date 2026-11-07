@@ -2,6 +2,7 @@ import { deepStrictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   CHIPS_MAX_LENGTH,
+  chipIconName,
   chipRangeAfter,
   chipRangeBefore,
   chipRemovalRange,
@@ -53,6 +54,18 @@ describe("parseChips", () => {
       { start: 13, end: 28, kind: "mcp", target: "filesystem" },
     ]);
     deepStrictEqual(parseChips("/mcp:x"), [{ start: 0, end: 6, kind: "mcp", target: "x" }]);
+  });
+
+  it("/plugin: 同一函数认，kind 为 plugin；前导与空 target 规则同 skill", () => {
+    deepStrictEqual(parseChips("再用 /plugin:lit-tracker 看一下"), [
+      { start: 3, end: 22, kind: "plugin", target: "lit-tracker" },
+    ]);
+    deepStrictEqual(parseChips("/plugin: 后"), []);
+    deepStrictEqual(parseChips("用/plugin:x"), []);
+  });
+
+  it("chipIconName：技能书、MCP 插头、插件积木（FEATURE_ICON.plugins）", () => {
+    deepStrictEqual([chipIconName("skill"), chipIconName("mcp"), chipIconName("plugin")], ["book-open", "plug", "blocks"]);
   });
 
   it("/mcp: 空 target 与非空白前导同样不认", () => {

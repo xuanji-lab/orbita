@@ -58,6 +58,26 @@ export function focusBubbleOf(
 }
 
 /**
+ * 星云头顶的两个槽（气泡 / 收工卡）此刻有没有东西。UsageMeter 只认 `null` 才算「没在说话」：
+ * 槽里给了元素（哪怕元素自己渲染成空），星云就一直钉在「今天」、悬停格子不再冒用量气泡、
+ * 也不跟着格子走——2026-11-06 用户报「左下角用量块的交互失效」就是这么来的
+ * （a6cde24e 把接线收进 use-focus-shell 时，两个槽改成了无条件给元素）。
+ */
+export function focusSlotsOf(
+  status: FocusStatus,
+  summary: FocusSummary,
+  sayDismissed: boolean,
+  cardClosed: boolean,
+  hasRun: boolean,
+): { say: Exclude<FocusBubbleView, { kind: "hidden" }> | null; card: boolean } {
+  const bubble = focusBubbleOf(status, summary, sayDismissed);
+  return {
+    say: bubble.kind === "hidden" ? null : bubble,
+    card: hasRun && focusCardVisibleOf(status, summary, cardClosed),
+  };
+}
+
+/**
  * 收工卡出不出现：时间到（总结还没跑完也先出，卡里转圈）；提前结束点了「要」且
  * 落定（ready / failed / none）后才出。卡自己的关闭键压住它——只藏卡，不结束专注。
  */

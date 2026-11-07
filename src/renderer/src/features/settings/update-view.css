@@ -112,6 +112,16 @@ a.upd-link {
   text-decoration: none;
 }
 
+/* 常驻的一句说明（更新需要能访问 GitHub / 受限网络的出口）：安静的文字，不是第四条状态。
+   它占行底整幅那格（和进度条同一格），所以不出现在两列的任何一列里 */
+.upd-hint {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-reading);
+  color: var(--color-text-tertiary);
+}
+
 .upd-link:hover {
   color: var(--color-text-primary);
 }

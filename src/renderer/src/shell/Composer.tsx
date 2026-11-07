@@ -29,6 +29,7 @@ import {
   chipRangeAfter,
   chipRangeBefore,
   chipRemovalRange,
+  chipIconName,
   mirrorSegments,
   parseChips,
   snapSelection,
@@ -40,6 +41,8 @@ import type { DominantScript } from "../features/chat/dominant-script.ts";
 import { useDictation } from "../features/voice/useDictation.ts";
 import { DictationStatus } from "../features/voice/DictationStatus.tsx";
 import { useT } from "../locale.ts";
+import { pluginChipName } from "../features/plugins/plugin-names.ts";
+import { usePluginNames } from "../features/plugins/usePluginNames.ts";
 
 /**
  * 输入框。**跨首页与聊天页是同一个组件、同一个宽度**（R8-01 ②：宽度连续性）——
@@ -100,11 +103,13 @@ function chipCloseAt(mirror: HTMLDivElement | null, x: number, y: number): numbe
  * locateText 靠它）——图标是无文本的 SVG，名字走 ::before 的 attr(data-name)。
  * 名字继承输入框的字（同字体、同字号、同字距），所以它的宽度就是原文里名字那一截的宽度，
  * 藏掉的 `/skill:`（34px）/ `/mcp:`（37.5px）正好让给图标、× 与左右留白。
+ * 插件 chip 写的是**显示名**（可能是中文，宽度与标识不同）：名字槽可收缩、放不下时省略号截断，
+ * 胶囊永远不超出 token 原文占的格子（超出会盖住后面的字）。
  */
 function ChipFace(props: { kind: ChipKind; name: string; start: number }) {
   return (
     <span className="composer-chip-face" aria-hidden="true">
-      <Icon name={props.kind === "mcp" ? "plug" : "book-open"} size={12} strokeWidth={1.8} />
+      <Icon name={chipIconName(props.kind)} size={12} strokeWidth={1.8} />
       <span className="composer-chip-name" data-name={props.name} />
       <span className="composer-chip-x" data-chip-start={props.start}>
         <Icon name="x" size={12} strokeWidth={2} />
@@ -188,6 +193,8 @@ export function Composer(props: {
   // textarea 的滚动位置：展开段的收起标签跟着内容滚（标签在镜像上量坐标，量法吃它）
   const [scrollTop, setScrollTop] = useState(0);
   const chips = useMemo(() => parseChips(props.value), [props.value]);
+  // 插件 chip 写显示名（中文）；表由插件页与首次订阅填
+  const pluginNames = usePluginNames();
   // 镜像里的 chip 段按起点找回那颗 chip（胶囊的名字、× 的归属都要它）
   const chipAt = useMemo(() => new Map(chips.map((chip) => [chip.start, chip])), [chips]);
   // 指针停在哪颗胶囊的 × 上（chip 起点）：× 提亮、指针变手
@@ -403,7 +410,9 @@ export function Composer(props: {
                 data-close-hover={chip !== undefined && closeHover === offset ? "" : undefined}
               >
                 {segment.text}
-                {chip !== undefined && <ChipFace kind={chip.kind} name={chip.target} start={chip.start} />}
+                {chip !== undefined && (
+                  <ChipFace kind={chip.kind} name={chip.kind === "plugin" ? pluginChipName(pluginNames, chip.target) : chip.target} start={chip.start} />
+                )}
               </span>
             ) : segment.pasteRun ? (
               <span key={index} className="composer-paste-run">

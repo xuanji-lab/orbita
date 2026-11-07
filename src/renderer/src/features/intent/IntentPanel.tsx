@@ -23,6 +23,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api.ts";
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon.tsx";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { Menu, type MenuItem } from "../../shell/Menu.tsx";
 import { PanelTitle, RightPanelFrame } from "../../shell/RightPanel.tsx";
 import { PanelEmpty } from "../../shell/PanelEmpty.tsx";
@@ -49,6 +50,9 @@ import {
 import { GraphRenderer, nebulaFill, type SceneBuilder } from "./GraphRenderer.ts";
 import { ZOOM_MAX, ZOOM_MIN } from "./graph-view.ts";
 import { MarkdownBlock } from "../chat/MarkdownBlock.tsx";
+import { startPointerDrag } from "../../shell/pointer-drag.ts";
+import { intentSubOf, type IntentSub } from "../../shell/right-panel-memory.ts";
+import { useReportSub } from "../../shell/use-report-sub.ts";
 
 type IntentView = "slots" | "questions";
 
@@ -79,6 +83,12 @@ export function IntentPanel(props: {
   openableSessionIds: ReadonlySet<string>;
   /** 「打开会话」：在辅助对话里打开那条来源会话（主槽不动）；turnId 是那一问（能定位更好） */
   onOpenSession: (sessionId: string, turnId: string | null) => void;
+  /**
+   * 第二层（按会话记忆，right-panel-memory.ts）：看的哪一轮、视图。选中的节点不记。
+   * 只在挂载时读一次当初值（App 按会话换 key 重挂）；之后经 onSubChange 报给 App。
+   */
+  sub?: IntentSub;
+  onSubChange?: (sub: IntentSub | undefined) => void;
 }) {
   const t = useT();
   const liveTurns = useMemo(
@@ -97,8 +107,9 @@ export function IntentPanel(props: {
   const latestRound = rounds.length > 0 ? rounds[rounds.length - 1]! : null;
   const isLive = props.liveRun !== null;
 
-  const [pickedRound, setPickedRound] = useState<number | null>(null);
-  const [view, setView] = useState<IntentView>("slots");
+  const [pickedRound, setPickedRound] = useState<number | null>(() => props.sub?.round ?? null);
+  const [view, setView] = useState<IntentView>(() => props.sub?.view ?? "slots");
+  useReportSub(intentSubOf(pickedRound, view), props.onSubChange);
   const [colorWeight, setColorWeight] = useState<GraphColorWeight>(DEFAULT_COLOR_WEIGHT);
   const [graphH, setGraphH] = useState(DEFAULT_GRAPH_H);
   const [folded, setFolded] = useState(false);
@@ -263,8 +274,8 @@ export function IntentPanel(props: {
 
   if (rounds.length === 0 && props.liveRun === null) {
     return (
-      <RightPanelFrame header={<PanelTitle icon="waypoints" title={t.intentPanel.title} />} contentKey="empty">
-        <PanelEmpty icon="waypoints">{t.intentPanel.emptyNoTurns}</PanelEmpty>
+      <RightPanelFrame header={<PanelTitle icon={FEATURE_ICON.intent} title={t.intentPanel.title} />} contentKey="empty">
+        <PanelEmpty icon={FEATURE_ICON.intent}>{t.intentPanel.emptyNoTurns}</PanelEmpty>
       </RightPanelFrame>
     );
   }
@@ -294,7 +305,7 @@ export function IntentPanel(props: {
     <RightPanelFrame
       header={
         <>
-          <PanelTitle icon="waypoints" title={t.intentPanel.title} />
+          <PanelTitle icon={FEATURE_ICON.intent} title={t.intentPanel.title} />
           <Menu
             items={roundItems}
             placement="below"
@@ -634,19 +645,17 @@ function IntentSplitBar(props: {
     if ((event.target as HTMLElement).closest("button") !== null) return;
     const body = hostRef.current?.parentElement;
     if (body === null || body === undefined) return;
-    const y0 = event.clientY;
     const h0 = body.querySelector<HTMLElement>(".intent-graph-area")?.clientHeight ?? 0;
     const max = body.clientHeight - 48 - 32;
-    const move = (ev: PointerEvent): void => {
-      props.onDrag(Math.max(0, Math.min(max, h0 + ev.clientY - y0)));
-    };
-    const up = (ev: PointerEvent): void => {
-      window.removeEventListener("pointermove", move);
-      const h = Math.max(0, Math.min(max, h0 + ev.clientY - y0));
-      props.onDrag(h < 60 ? 0 : h);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up, { once: true });
+    const heightAt = (dy: number): number => Math.max(0, Math.min(max, h0 + dy));
+    startPointerDrag(event, {
+      cursor: "row-resize",
+      onMove: (delta) => props.onDrag(heightAt(delta.y)),
+      onEnd: (delta) => {
+        const h = heightAt(delta.y);
+        props.onDrag(h < 60 ? 0 : h);
+      },
+    });
   };
   return (
     <div

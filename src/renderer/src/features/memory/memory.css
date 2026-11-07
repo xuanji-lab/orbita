@@ -366,6 +366,98 @@
 
 /* ── 记忆库整页 ── */
 
+/*
+ * 记忆库页签的外壳：.mem-lib 是容器（同插件页 .pl-page 的做法，容器与内容分两个元素），
+ * 宽 ≥ 640px 页内左右两栏（范围导航 | 页），窄了上下叠（导航收成一排可折行的按钮）。
+ * 宽窄只看容器宽度，所以右栏开着、设置面被挤窄时也对。
+ */
+.mem-lib {
+  container: mem / inline-size;
+}
+
+.mem-lib-grid {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+  padding: var(--space-6) var(--space-5);
+}
+
+.mem-nav {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.mem-nav-label {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-tertiary);
+}
+
+.mem-nav-manage {
+  margin-top: var(--space-3);
+}
+
+.mem-nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--control-height-md);
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  text-align: left;
+  cursor: pointer;
+}
+
+.mem-nav-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mem-nav-count {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+
+@container mem (max-width: 639px) {
+  .mem-lib-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-3);
+    padding: var(--space-4);
+  }
+
+  .mem-nav {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+  }
+
+  .mem-nav-label {
+    display: none;
+  }
+
+  .mem-nav-item {
+    width: auto;
+    max-width: 100%;
+    margin: 0;
+  }
+}
+
 /* 列宽同设置页思路：条目是一段话 + 一行元信息，太宽眼睛要横跨半屏 */
 .mem-page {
   width: min(100%, 860px);

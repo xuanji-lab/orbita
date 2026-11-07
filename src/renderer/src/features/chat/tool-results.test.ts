@@ -23,6 +23,7 @@ import {
   expectedSecondsOf,
   groupToolUnits,
   rollupToolKey,
+  toolCallSummaryForRow,
   indexToolResults,
   intraLineTokens,
   interruptedToolCallIds,
@@ -30,6 +31,9 @@ import {
   parseDiffLines,
   parseEditDiff,
   parseGrepLine,
+  pluginBoardOf,
+  pluginInstallRowOf,
+  automationModeRowOf,
   readTaskCard,
   formatToolDuration,
   recordToolFrame,
@@ -292,6 +296,18 @@ describe("groupToolUnits", () => {
   });
 });
 
+describe("toolCallSummaryForRow（过程行里读技能写技能名，不写绝对路径）", () => {
+  const skills = [{ slug: "slides", name: "slides" }];
+  test("read 内置插件技能的 SKILL.md → 技能名；别的 read / 不认识的 SKILL.md 仍是路径", () => {
+    assert.equal(toolCallSummaryForRow("read", { path: "/Users/x/repo/resources/builtin-plugins/docs-slides/skills/slides/SKILL.md" }, skills), "slides");
+    assert.equal(toolCallSummaryForRow("read", { path: "C:\\app\\resources\\builtin-plugins\\docs-slides\\skills\\slides\\SKILL.md" }, skills), "slides");
+    assert.equal(toolCallSummaryForRow("read", { path: "/a/b.ts" }, skills), "/a/b.ts");
+    assert.equal(toolCallSummaryForRow("read", { path: "/a/nope/SKILL.md" }, skills), "/a/nope/SKILL.md");
+    assert.equal(toolCallSummaryForRow("read", { path: "/a/slides/SKILL.md" }, []), "/a/slides/SKILL.md");
+    assert.equal(toolCallSummaryForRow("bash", { command: "ls" }, skills), "ls");
+  });
+});
+
 describe("rollupToolKey（折叠统计行的统计词汇）", () => {
   const skills = [{ slug: "tdd", name: "TDD" }];
   test("read SKILL.md 记作 skill、mcp__ 名记作 mcp（家族聚合）", () => {
@@ -392,6 +408,160 @@ describe("rollupToolKey（折叠统计行的统计词汇）", () => {
       entries.map((entry) => entry.kind),
       ["toolCall", "toolCall"],
     );
+  });
+});
+
+describe("install_plugin 留下的那一行", () => {
+  const ROW = {
+    state: "pending",
+    reason: "mcp",
+    name: "lit",
+    displayName: "文献追踪",
+    path: "/w/plugins/lit",
+    scope: "workspace",
+    workspaceName: "文献组",
+    skills: ["lit-scan"],
+    commands: ["node server.js"],
+    fingerprint: "f",
+  };
+  const installItem = (details: unknown, status: "complete" | "running" | "error" = "complete"): ToolTranscriptItem =>
+    ({
+      id: "item-i1",
+      role: "tool",
+      toolCallId: "i1",
+      toolName: "install_plugin",
+      input: {},
+      content: [],
+      details,
+      timestamp: 0,
+      status,
+      isError: status === "error",
+    }) as ToolTranscriptItem;
+
+  test("install_plugin 不成组——那一行要一直露在外面", () => {
+    const entries = groupToolUnits(
+      flattenRenderUnits([
+        assistantItem("a1", [{ type: "toolCall", toolCallId: "i1", toolName: "install_plugin", input: {} }]),
+        toolItem({ toolCallId: "i1", toolName: "install_plugin" }),
+        assistantItem("a2", [{ type: "toolCall", toolCallId: "i2", toolName: "install_plugin", input: {} }]),
+      ]),
+    );
+    assert.deepEqual(entries.map((entry) => entry.kind), ["toolCall", "toolCall"]);
+  });
+
+  test("从 details.pluginInstall 取；落盘后 JSON 来回照样取得出", () => {
+    assert.deepEqual(pluginInstallRowOf(installItem({ pluginInstall: ROW })), ROW);
+    assert.deepEqual(pluginInstallRowOf(JSON.parse(JSON.stringify(installItem({ pluginInstall: ROW }))) as ToolTranscriptItem), ROW);
+  });
+
+  test("没有结果 / 还在跑 / 失败 / 没有行（already）/ 坏形状：都是 null，退回通用工具行", () => {
+    assert.equal(pluginInstallRowOf(undefined), null);
+    assert.equal(pluginInstallRowOf(installItem({ pluginInstall: ROW }, "running")), null);
+    assert.equal(pluginInstallRowOf(installItem({ pluginInstall: ROW }, "error")), null);
+    assert.equal(pluginInstallRowOf(installItem(undefined)), null);
+    assert.equal(pluginInstallRowOf(installItem({})), null);
+    assert.equal(pluginInstallRowOf(installItem({ pluginInstall: { ...ROW, state: "maybe" } })), null);
+    assert.equal(pluginInstallRowOf(installItem({ pluginInstall: { ...ROW, scope: "everywhere" } })), null);
+    assert.equal(pluginInstallRowOf(installItem({ pluginInstall: { ...ROW, commands: "node" } })), null);
+    assert.equal(pluginInstallRowOf(installItem({ pluginInstall: { ...ROW, path: "" } })), null);
+    assert.equal(pluginInstallRowOf(installItem({ pluginInstall: { ...ROW, fingerprint: 3 } })), null);
+  });
+});
+
+describe("automation_update 留下的「改权限」那一行", () => {
+  const ROW = { state: "pending", requestId: "r1", automationId: "au1", title: "每日一篇", sessionMode: "manual" };
+  const updateItem = (details: unknown, status: "complete" | "running" | "error" = "complete"): ToolTranscriptItem =>
+    ({
+      id: "item-u1",
+      role: "tool",
+      toolCallId: "u1",
+      toolName: "automation_update",
+      input: {},
+      content: [],
+      details,
+      timestamp: 0,
+      status,
+      isError: status === "error",
+    }) as ToolTranscriptItem;
+
+  test("automation_update 不成组——那一行要一直露在外面（agent 已结束这一轮在等用户点）", () => {
+    const entries = groupToolUnits(
+      flattenRenderUnits([
+        assistantItem("a1", [{ type: "toolCall", toolCallId: "u1", toolName: "automation_update", input: {} }]),
+        toolItem({ toolCallId: "u1", toolName: "automation_update" }),
+        assistantItem("a2", [{ type: "toolCall", toolCallId: "u2", toolName: "automation_update", input: {} }]),
+      ]),
+    );
+    assert.deepEqual(entries.map((entry) => entry.kind), ["toolCall", "toolCall"]);
+  });
+
+  test("从 details.automationMode 取；落盘后 JSON 来回照样取得出；create 的结果（卡 + 行）同样取得出", () => {
+    assert.deepEqual(automationModeRowOf(updateItem({ automationMode: ROW })), ROW);
+    assert.deepEqual(automationModeRowOf(JSON.parse(JSON.stringify(updateItem({ automationMode: ROW }))) as ToolTranscriptItem), ROW);
+    assert.deepEqual(automationModeRowOf(updateItem({ automation: { id: "au1" }, automationMode: { ...ROW, state: "applied", sessionMode: "skip" } })), {
+      ...ROW,
+      state: "applied",
+      sessionMode: "skip",
+    });
+  });
+
+  test("没有结果 / 还在跑 / 失败 / 没留行（改成只读）/ 坏形状：都是 null，退回通用工具行", () => {
+    assert.equal(automationModeRowOf(undefined), null);
+    assert.equal(automationModeRowOf(updateItem({ automationMode: ROW }, "running")), null);
+    assert.equal(automationModeRowOf(updateItem({ automationMode: ROW }, "error")), null);
+    assert.equal(automationModeRowOf(updateItem(undefined)), null);
+    assert.equal(automationModeRowOf(updateItem({})), null);
+    assert.equal(automationModeRowOf(updateItem({ automationMode: { ...ROW, state: "maybe" } })), null);
+    assert.equal(automationModeRowOf(updateItem({ automationMode: { ...ROW, sessionMode: "root" } })), null);
+    assert.equal(automationModeRowOf(updateItem({ automationMode: { ...ROW, requestId: "" } })), null);
+    assert.equal(automationModeRowOf(updateItem({ automationMode: { ...ROW, automationId: 3 } })), null);
+    assert.equal(automationModeRowOf(updateItem({ automationMode: { ...ROW, title: undefined } })), null);
+  });
+});
+
+describe("pluginBoardOf（show_plugin_board 的结果行）", () => {
+  const HASH = "a".repeat(64);
+  const BOARD = {
+    plugin: "lit-tracker",
+    displayName: "文献追踪",
+    title: "文献追踪",
+    source: "installed",
+    draftPath: null,
+    at: 1_000,
+    tuned: false,
+    cards: [{ id: "today", title: "今日一篇", size: "2x2", index: 0, template: HASH, data: { n: 1 }, state: "ready", usingSample: false, updatedAt: 900 }],
+    skipped: [{ id: "x", reason: "too-large", detail: "300000" }],
+  };
+  const boardItem = (details: unknown, status: "complete" | "running" | "error" = "complete"): ToolTranscriptItem =>
+    ({ id: "b1", role: "tool", toolCallId: "b1", toolName: "show_plugin_board", input: {}, content: [], details, timestamp: 0, status, isError: status === "error" }) as ToolTranscriptItem;
+
+  test("show_plugin_board 不成组也不进折叠——看板要一直露在外面", () => {
+    const entries = groupToolUnits(
+      flattenRenderUnits([
+        assistantItem("a1", [{ type: "toolCall", toolCallId: "b1", toolName: "show_plugin_board", input: {} }]),
+        toolItem({ toolCallId: "b1", toolName: "show_plugin_board" }),
+        assistantItem("a2", [{ type: "toolCall", toolCallId: "b2", toolName: "show_plugin_board", input: {} }]),
+      ]),
+    );
+    assert.deepEqual(entries.map((entry) => entry.kind), ["toolCall", "toolCall"]);
+  });
+
+  test("从 details.pluginBoard 取；落盘后 JSON 来回照样取得出", () => {
+    const board = pluginBoardOf(JSON.parse(JSON.stringify(boardItem({ pluginBoard: BOARD }))) as ToolTranscriptItem);
+    assert.equal(board?.plugin, "lit-tracker");
+    assert.equal(board?.cards.length, 1);
+    assert.equal(board?.cards[0]?.size, "2x2");
+    assert.deepEqual(board?.skipped, [{ id: "x", reason: "too-large", detail: "300000" }]);
+  });
+
+  test("没有结果 / 还在跑 / 失败 / 坏形状：null，退回通用工具行；单张坏卡丢掉不毁整份", () => {
+    assert.equal(pluginBoardOf(undefined), null);
+    assert.equal(pluginBoardOf(boardItem({ pluginBoard: BOARD }, "running")), null);
+    assert.equal(pluginBoardOf(boardItem({ pluginBoard: BOARD }, "error")), null);
+    assert.equal(pluginBoardOf(boardItem(undefined)), null);
+    assert.equal(pluginBoardOf(boardItem({ pluginBoard: { ...BOARD, source: "elsewhere" } })), null);
+    const oneBad = pluginBoardOf(boardItem({ pluginBoard: { ...BOARD, cards: [...BOARD.cards, { id: "BAD ID" }] } }));
+    assert.equal(oneBad?.cards.length, 1);
   });
 });
 

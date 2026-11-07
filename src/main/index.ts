@@ -66,6 +66,18 @@ import { moveSessions } from "./session/move.ts";
 import { registerWrapupIpc } from "./session/wrapup-ipc.ts";
 import { registerMcpIpc } from "./mcp/ipc.ts";
 import { McpStore } from "./mcp/store.ts";
+import { PluginAgentRequests } from "./plugin/agent-requests.ts";
+import { DraftSessionBook } from "./plugin/draft-sessions.ts";
+import { scanDrafts } from "./plugin/drafts.ts";
+import { builtinPluginsDir } from "./plugin/builtin.ts";
+import { BoardTemplateStore, PluginBoards, boardPluginsIn } from "./plugin/board-snapshot.ts";
+import { registerBoardIpc } from "./plugin/board-ipc.ts";
+import { BOARD_TEMPLATES_DIR } from "../shared/plugin-board.ts";
+import { registerPluginIpc } from "./plugin/ipc.ts";
+import { PanelFrames, isPanelFrameUrl } from "./plugin/panel-frame.ts";
+import { installPanelProtocol, registerPanelScheme } from "./plugin/panel-protocol.ts";
+import { PluginPanels } from "./plugin/panel-service.ts";
+import { PluginStore } from "./plugin/store.ts";
 import { registerSkillIpc } from "./skill/ipc.ts";
 import { SkillStore } from "./skill/store.ts";
 import { createSessionRecorder } from "./session/recorder.ts";
@@ -77,6 +89,8 @@ import { applyModelCosts } from "./usage/model-costs.ts";
 import { readPiThinkingTimeline, TaskLedger } from "./usage/task-ledger.ts";
 import { Updater } from "./updater/service.ts";
 import { registerUpdaterIpc } from "./updater/ipc.ts";
+import { GitHubClient } from "./updater/github-client.ts";
+import { applyEnvProxy, electronGitHubTransport } from "./updater/github-net.ts";
 import { createRecentReleases } from "./updater/recent-releases.ts";
 import { applyNativeTheme, registerSettingsIpc } from "./settings/ipc.ts";
 import { SettingsStore } from "./settings/store.ts";
@@ -85,6 +99,13 @@ import { installCloseToTray, loadTrayIcon, type AppTray } from "./window/tray.ts
 import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
 import { registerFilesIpc } from "./files/ipc.ts";
+import { applyDocRequest } from "./doc-panel/agent-requests.ts";
+import { printDocPdf } from "./doc-panel/print-doc-pdf.ts";
+import { registerDocIpc } from "./doc-panel/ipc.ts";
+import { applySlidesRequest } from "./slides/agent-requests.ts";
+import { exportDeck } from "./slides/export.ts";
+import { registerSlidesIpc } from "./slides/ipc.ts";
+import { resolveFileRoots } from "./files/roots.ts";
 import { TerminalService } from "./terminal/service.ts";
 import { registerTerminalIpc } from "./terminal/ipc.ts";
 import { registerReviewIpc } from "./review/ipc.ts";
@@ -95,6 +116,8 @@ import { registerBrowserIpc } from "./browser/ipc.ts";
 import { registerExcerptIpc } from "./excerpt/ipc.ts";
 import { registerPanelUsageIpc } from "./panel-usage/ipc.ts";
 import { PanelUsageStore } from "./panel-usage/store.ts";
+import { registerRightPanelMemoryIpc } from "./right-panel-memory/ipc.ts";
+import { RightPanelMemoryStore } from "./right-panel-memory/store.ts";
 import { isSystemHandoffLink, isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
 import { pageBackgroundColor } from "./browser/page-background.ts";
@@ -115,6 +138,9 @@ import { VoiceStore } from "./voice/store.ts";
 
 // 出站固定 IPv4：双栈 WAF + 本机无全局 v6 的间歇超时，见 dial-v4.ts 的取证
 preferIPv4();
+
+// 插件面板的 iframe 协议（orbita-panel://）：Electron 要求自定义协议在 app ready 之前登记
+registerPanelScheme();
 
 // Windows 的系统通知按 AUMID 归到应用（否则打包版可能根本不弹，或弹成 Electron 的
 // 默认名）。与 electron-builder 的 appId 同值；要在任何通知发出前设（模块顶层即可）。
@@ -221,7 +247,7 @@ function createMainWindow(
       : // Windows/Linux：转帧式窗口——最小化/最大化/关闭由渲染层标题栏自绘
         // （标题栏上还有「复制 transcript」与「抽屉开关」，这是 right-drawer-X 的落位）。
         // resizable 的帧式窗口在 Windows 上保留系统缩放边，不受 frame:false 影响。
-        { frame: false, backgroundColor: "#f3f4f1" }),
+        { frame: false, backgroundColor: "#e7ebef" }),
     webPreferences: rendererPreferences(theme, language),
   });
   mainWindows.track(window);
@@ -246,6 +272,16 @@ function createMainWindow(
     if (isOwnRendererPage(url, ownRendererOrigin())) return;
     event.preventDefault();
     openLink(url);
+  });
+
+  /*
+   * 子框架的导航：renderer 里唯一的子框架是插件面板的 iframe（orbita-panel://），它是不可信模板的家——
+   * 模板里 location.href / <a> / <meta refresh> 想把自己（或拿着 preload 的主框架）带去别处，一律拦。
+   * 主框架由上面的 will-navigate 管；这里只管 isMainFrame 为 false 的。
+   */
+  window.webContents.on("will-frame-navigate", (event) => {
+    if (event.isMainFrame) return;
+    if (!isPanelFrameUrl(event.url)) event.preventDefault();
   });
 
   /*
@@ -381,19 +417,11 @@ void app.whenReady().then(async () => {
    * additionalArguments，渲染层首帧同步读出，见 preload/initial-theme.ts）。
    */
   const settings = new SettingsStore(configDir);
-  // 记忆服务（实验功能 memory-system）的开关观察：开了就拉起、关了就停
-  // （memoryHost 在后面定义；设置写入只发生在窗口起来之后，那时已就绪）。
-  // 其余设置的写入也会过这道：开关没变时拉起 / 停都是空操作，无副作用
-  registerSettingsIpc(settings, (next) => {
-    // 自动化：开关刚打开立刻 tick 一次（不等 30 秒）；「阻止睡眠」设置变了按当前在跑数重对一次。
-    // 两者都在窗口起来之后才可能被触发，此时 automationScheduler / keepAwake 已就绪
-    if (next.experimentalFeatures?.["automation"] === true) void automationScheduler.tick().catch(() => undefined);
+  // 设置写入的观察：「阻止睡眠」设置变了按当前在跑数重对一次（keepAwake 在后面定义；
+  // 设置写入只发生在窗口起来之后，那时已就绪）。记忆服务与自动化 2026-11-06 转正，
+  // 不再随设置开关拉起 / 停
+  registerSettingsIpc(settings, () => {
     void keepAwake.sync().catch(() => undefined);
-    if (next.experimentalFeatures?.["memory-system"] === true) {
-      void ensureMemoryService().catch((cause: unknown) => console.error("[memory] 启动 / 同步服务失败", cause));
-    } else {
-      memoryHost?.stop();
-    }
   });
   registerWindowIpc();
   const initialSettings = await settings.read();
@@ -427,9 +455,12 @@ void app.whenReady().then(async () => {
   // 同一个实例也喂给专注小结（摘抄是素材之一）
   const excerpts = new ExcerptStore(join(configDir, "excerpts.jsonl"));
   registerExcerptIpc(excerpts, sessions);
-  // 面板打开次数（panel-usage:*，实验功能「精简右栏」的数据）：只在本机、不上传，
+  // 面板打开次数（panel-usage:*）：只在本机、不上传，
   // 设置 › 实验功能里给一行只读统计
   registerPanelUsageIpc(new PanelUsageStore(join(configDir, "panel-usage.json")));
+  // 右栏按会话记忆（right-panel-memory:*）：每条会话离开时右栏开着哪个面板、停在面板的哪一层，
+  // 只存路径数据；跨重启保留。独立小文件而不挤进 settings：整份几百条、改得勤，不该走设置的广播
+  registerRightPanelMemoryIpc(new RightPanelMemoryStore(join(configDir, "right-panel-memory.json")));
   const mcp = new McpStore(configDir);
   // 一份工作区存储给两处用：下面的 workspace IPC，与 read_task 的目录模式（要工作区名）
   // 工作区根：正式版沿用默认的 ~/Orbita，开发版挪到 ~/Orbita-dev（同 userData 的理由）
@@ -528,6 +559,36 @@ void app.whenReady().then(async () => {
       );
       return;
     }
+    // 插件：agent 的 install_plugin / preview_plugin / list_plugins，都立即回执（不等用户）。
+    // 任何路径都回执，否则 agent 进程里那次工具调用挂到超时
+    if (event.type === "pluginInstallRequest") {
+      void pluginAgent
+        .install(event)
+        .catch((cause: unknown) => ({ ok: false as const, error: cause instanceof Error ? cause.message : String(cause) }))
+        .then((outcome) => agentHost.answerPluginInstall(event.requestId, outcome));
+      return;
+    }
+    if (event.type === "pluginPreviewRequest") {
+      void pluginAgent
+        .previewDraft(event)
+        .catch((cause: unknown) => ({ ok: false as const, error: cause instanceof Error ? cause.message : String(cause) }))
+        .then((outcome) => agentHost.answerPluginPreview(event.requestId, outcome));
+      return;
+    }
+    if (event.type === "pluginBoardRequest") {
+      void pluginBoards
+        .snapshot(event)
+        .catch((cause: unknown) => ({ ok: false as const, error: cause instanceof Error ? cause.message : String(cause) }))
+        .then((outcome) => agentHost.answerPluginBoard(event.requestId, outcome));
+      return;
+    }
+    if (event.type === "pluginListRequest") {
+      void pluginAgent
+        .list(event)
+        .catch((cause: unknown) => ({ ok: false as const, error: cause instanceof Error ? cause.message : String(cause) }))
+        .then((outcome) => agentHost.answerPluginList(event.requestId, outcome));
+      return;
+    }
     // 子会话：delegate 工具 / 通道发信请求——照 readTaskRequest 的形态，任何路径
     // 都必须回执，否则 agent 进程里的工具调用永远挂着。deps 声明在本文件靠后的
     // 位置（拿 registerAgentIpc 返回的 submitTurn），这里引用它安全：onEvent 只在
@@ -605,6 +666,32 @@ void app.whenReady().then(async () => {
         );
       return;
     }
+    // 演示文稿导出：PDF / PNG 要隐藏窗口，只能在主进程。同样任何路径都回执
+    if (event.type === "slidesRequest") {
+      void resolveFileRoots(workspaces, sessions, { sessionId: event.sessionId, workspaceId: event.workspaceId })
+        .then((roots) => applySlidesRequest({ roots, exportDeck }, event.request))
+        .then((outcome) => agentHost.answerSlides(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerSlides(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
+    // 文档导出：docx / pdf / md 的生成在主进程（PDF 要隐藏窗口），UI 的导出菜单与 agent 共用同一套函数。同样任何路径都回执
+    if (event.type === "docRequest") {
+      void resolveFileRoots(workspaces, sessions, { sessionId: event.sessionId, workspaceId: event.workspaceId })
+        .then((roots) => applyDocRequest({ roots, printPdf: printDocPdf }, event.request))
+        .then((outcome) => agentHost.answerDoc(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerDoc(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
     // 终端：agent 的终端工具——PTY 在主进程的 TerminalService（浏览器同一条边界）。
     // 同样任何路径都回执：挂着不回，agent 进程里那次工具调用永远等下去
     if (event.type === "terminalRequest") {
@@ -629,7 +716,7 @@ void app.whenReady().then(async () => {
         );
       return;
     }
-    // 记忆系统（实验功能 memory-system）：agent 的轮前召回问答——转发给记忆服务
+    // 记忆系统：agent 的轮前召回问答——转发给记忆服务
     // 进程（主进程按 scope 解析作用域），任何路径都回执（readTaskRequest 同款
     // 纪律：不回的话 agent 进程里那次调用挂到超时）。服务不在先试拉一把（开关
     // 刚开的第一轮 / 崩溃后的一次自愈）；拉不起 / 超时都回空命中，不拦开轮
@@ -703,7 +790,7 @@ void app.whenReady().then(async () => {
     // 意图存档（实验功能）：盯回显 / 回答完成 / 轮落定，落定时发 /ingest。
     // 在 record 之前喂：与 recorder 各自独立，互不阻塞
     intentIngest.onEvent(event);
-    // 记忆构建（实验功能 memory-system）同一处喂：盯轮落定，正常结束的一轮
+    // 记忆构建同一处喂：盯轮落定，正常结束的一轮
     // 交给记忆服务（跟踪器在下面定义，TDZ 说明同 intentIngest）
     memoryTurns.onEvent(event);
     record(event);
@@ -751,7 +838,7 @@ void app.whenReady().then(async () => {
     }
   };
   /*
-   * 记忆系统（实验功能 memory-system）的主进程两件套：
+   * 记忆系统的主进程两件套：
    * 1. 记忆服务进程的管家（开关开着时拉起，与 agent 进程同级的 utility 进程，
    *    env 沿 agent 那份——模型目录缓存的 env 变量在里面）；
    * 2. 轮次跟踪器：submit 时 begin（ipc.ts 已判根会话 + 用户原话），事件泵喂
@@ -842,11 +929,9 @@ void app.whenReady().then(async () => {
       return detail === null ? null : { transcript: detail.transcript };
     },
     readMeta: (id) => sessions.readMeta(id),
-    isMemoryOn: async () =>
-      (await settings.read()).experimentalFeatures?.["memory-system"] === true,
     readChore: () => choreModelPayload(settings, providers),
     settle: async (payload) => {
-      // 轮后兑现时确保服务在跑（开关中途打开也接得上；已拉起时这里是空操作）。
+      // 轮后兑现时确保服务在跑（崩溃后自愈；已拉起时这里是空操作）。
       // 没拉起来照样交给 host：它在「服务不在」时记一行带会话 / 轮号的丢弃诊断。
       // 抛错由跟踪器的 deliver 接住记日志（settle 的 Promise 在那里被 await）
       await ensureMemoryService();
@@ -855,12 +940,11 @@ void app.whenReady().then(async () => {
   });
   /**
    * 会话回退后的记忆钩子：第 fromTurn 轮起被撤回 → 服务截段（重说的轮照常收）+ 停用来源轮
-   * 全被撤回的条目。只给根会话发（子会话不写记忆，发了也是一次白扫全库）；开关关着不发、
-   * 不为它拉起服务。失败只记日志，回退本身已经完成
+   * 全被撤回的条目。只给根会话发（子会话不写记忆，发了也是一次白扫全库）。
+   * 失败只记日志，回退本身已经完成
    */
   const memoryOnReverted = async (sessionId: string, fromTurn: number): Promise<void> => {
     try {
-      if ((await settings.read()).experimentalFeatures?.["memory-system"] !== true) return;
       const meta = await sessions.readMeta(sessionId);
       if (meta === null || meta.parentId !== undefined) return;
       await ensureMemoryService();
@@ -869,13 +953,11 @@ void app.whenReady().then(async () => {
       console.error("[memory] 回退后的记忆停用 / 截段没送成（不影响回退）", cause);
     }
   };
-  // 启动时开关已开：先拉起服务——启动清扫要处理上次退出留下的旧段（闲置追认 /
+  // 启动即拉起服务——启动清扫要处理上次退出留下的旧段（闲置追认 /
   // 半路提取续跑），不等第一轮对话才动。失败只记日志（下次轮后再试拉起）
-  if (initialSettings.experimentalFeatures?.["memory-system"] === true) {
-    void ensureMemoryService().catch((cause: unknown) => console.error("[memory] 启动 / 同步服务失败", cause));
-  }
+  void ensureMemoryService().catch((cause: unknown) => console.error("[memory] 启动 / 同步服务失败", cause));
   /*
-   * 从历史生成（实验功能 memory-system）：开关打开前的聊天记录按历史时间正序逐轮喂给
+   * 从历史生成：记忆系统上线前的聊天记录按历史时间正序逐轮喂给
    * 记忆服务。「处理过没有」只问段文件（主进程只读），任务快照落在 memory/ 外面——
    * memory/ 只有服务一个写者
    */
@@ -890,9 +972,6 @@ void app.whenReady().then(async () => {
       return choice === undefined ? null : { providerId: choice.providerId, modelId: choice.modelId };
     },
     prepare: async () => {
-      if ((await settings.read()).experimentalFeatures?.["memory-system"] !== true) {
-        return "记忆实验开关没开";
-      }
       const chore = await choreModelPayload(settings, providers);
       if (chore === undefined) return "没配家务活模型（设置 › 模型服务 › 家务活模型）";
       memoryHost.setChore(chore);
@@ -911,7 +990,7 @@ void app.whenReady().then(async () => {
     emit: (status) => broadcastAgentEvent({ type: "memoryHistory", status }),
     gapMs: EPISODE_IDLE_CLOSE_MS,
   });
-  // 记忆库的读写面（实验功能 memory-system）：读在主进程直读 JSONL，写转发给
+  // 记忆库的读写面：读在主进程直读 JSONL，写转发给
   // 记忆服务（唯一写者）；会话标题 / 工作区名这些连接属性在这里注入
   registerMemoryIpc({
     history: memoryHistory,
@@ -936,11 +1015,7 @@ void app.whenReady().then(async () => {
         if (vectorChangeCancelsDownload(before, effectiveVectorSettings(next.vector))) {
           memoryHost.cancelModelDownload();
         }
-        if (next.experimentalFeatures?.["memory-system"] === true) {
-          await ensureMemoryService();
-        } else {
-          await syncVectorConfig();
-        }
+        await ensureMemoryService();
       },
       userDataDir: configDir,
       device: () => ({
@@ -1034,7 +1109,81 @@ void app.whenReady().then(async () => {
   void skills.ensureDirs().catch((error: unknown) => {
     console.error("[main] 建不了 skills 目录，skills 可能不生效", error);
   });
-  registerSkillIpc(skills);
+  registerSkillIpc(skills, workspaces);
+  /*
+   * 插件：记录 / 副本 / 数据 / 归档都在 userData 下，不写进上面这个 skills
+   * 目录也不写 mcp.json。冲突检测与开轮装配要避开用户自己的技能，所以把它们的身份读法注入进去
+   * （missing 的断链不算：它没有真实文件）。敏感配置值共用 provider 那把密钥存储。
+   */
+  const plugins = new PluginStore({
+    configDir,
+    secrets,
+    builtinRoot: builtinPluginsDir({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() }),
+    userSkills: async () => (await skills.list()).filter((meta) => !meta.missing).map(({ slug, name }) => ({ slug, name })),
+  });
+  void plugins.init().catch((error: unknown) => {
+    console.error("[main] 清不了插件暂存目录（不影响使用，下次启动再试）", error);
+  });
+  // agent 的 install_plugin / preview_plugin / list_plugins 在主进程的落地（草稿与刷新事件经 broadcastAgentEvent 到 renderer；
+  // 对话里那一行的「安装」走 plugin ipc 的 pluginInstallFromRow）
+  const draftSessions = new DraftSessionBook(join(configDir, "plugin-draft-sessions.json"));
+  const pluginAgent = new PluginAgentRequests({
+    plugins,
+    session: async (sessionId) => {
+      const meta = await sessions.readMeta(sessionId);
+      return meta === null ? null : { cwd: meta.cwd, workspaceId: meta.workspaceId };
+    },
+    workspace: async (id) => {
+      const found = (await workspaces.list()).find((workspace) => workspace.id === id);
+      return found === undefined ? null : { name: found.name, path: found.path };
+    },
+    draft: (event) => broadcastAgentEvent(event),
+    rememberDraft: (path, sessionId) => draftSessions.remember(path, sessionId),
+    installed: (info) => {
+      broadcastAgentEvent({ type: "pluginsChanged", installed: info });
+      broadcastAgentEvent({ type: "skillsChanged" });
+    },
+  });
+  // 面板文档仓库：模板由主进程按一次性 token 从内存给 iframe，CSP 走响应头（plugin/panel-frame.ts）
+  const panelFrames = new PanelFrames();
+  installPanelProtocol(panelFrames, (url) => isOwnRendererPage(url, ownRendererOrigin()));
+  const panels = new PluginPanels({
+    plugins,
+    frames: panelFrames,
+    workspaceRoot: async (id) => (id === null ? null : ((await workspaces.list()).find((each) => each.id === id)?.path ?? null)),
+  });
+  registerPluginIpc({
+    plugins,
+    panels,
+    skills,
+    mcp,
+    workspaces,
+    reloadMcp: () => agentHost.mcpReload(),
+    agentRequests: pluginAgent,
+    listDrafts: () =>
+      scanDrafts({
+        workspaces: () => workspaces.list(),
+        records: () => plugins.records(),
+        // 会话删了（meta 读不到）就当没记过：「回到对话」不出现
+        sessionOf: async (path) => {
+          const sessionId = await draftSessions.sessionOf(path);
+          if (sessionId === null) return null;
+          const meta = await sessions.readMeta(sessionId);
+          return meta === null ? null : { sessionId, title: meta.title };
+        },
+      }),
+  });
+  // 看板结果（agent 的 show_plugin_board）：模板按内容哈希存进 <userData>/board-templates/，数据快照进工具结果
+  const boardTemplates = new BoardTemplateStore(join(configDir, BOARD_TEMPLATES_DIR));
+  const pluginBoards = new PluginBoards({
+    plugins,
+    templates: boardTemplates,
+    session: async (sessionId) => {
+      const meta = await sessions.readMeta(sessionId);
+      return meta === null ? null : { cwd: meta.cwd, workspaceId: meta.workspaceId };
+    },
+    workspaceRoot: async (id) => (await workspaces.list()).find((workspace) => workspace.id === id)?.path ?? null,
+  });
   // 迁移（设置 › Migration）：扫描/执行都在主进程，agent 进程不参与；skills 落进上面这个中心存储
   registerImportIpc(
     sessions,
@@ -1057,9 +1206,16 @@ void app.whenReady().then(async () => {
     console.error("[main] 建不了 Home 目录，Home 任务的文件可能落不了盘", error);
   });
   // 工作区移除时连带删它的 skill 集合目录（只是链接，不伤中心存储）
-  registerWorkspaceIpc(workspaces, (id) => skills.removeWorkspace(id));
+  registerWorkspaceIpc(workspaces, async (id) => {
+    await skills.removeWorkspace(id);
+    // 插件的「只在这些工作区」名单里摘掉它（摘空转停用）
+    await plugins.removeWorkspace(id);
+  });
   // 文件面板（fs:roots / fs:list / fs:reveal）：根每次现算，不缓存
   registerFilesIpc(workspaces, sessions, (path, roots) => browserSandbox.openLocalFile(path, roots));
+  // 文档 / 演示文稿面板（doc:*）：白名单同文件面板，写入比较后交换 + 原子写
+  registerDocIpc(workspaces, sessions);
+  registerSlidesIpc(workspaces, sessions);
   // 审查面板（review:list / review:diff）：task 来源读会话快照账，git 来源只读
   registerReviewIpc(sessions);
   // 专注模式（focus:changes / focus:notify-done / focus:summarize）：U/M 只读跑 git，
@@ -1098,6 +1254,7 @@ void app.whenReady().then(async () => {
     [join(configDir, "sessions"), join(configDir, "pi-sessions")],
     (workspaceId) => skills.linkDirs(workspaceId),
     skills,
+    plugins,
     mcp,
     settings,
     intentIngest,
@@ -1122,13 +1279,21 @@ void app.whenReady().then(async () => {
   registerChannelIpc(deps);
 
   /*
-   * 自动化（实验功能 automation）：定时任务的存盘、调度与「阻止睡眠」。开关关着时调度器每次 tick 直接
+   * GitHub 出口只有一个：检查更新（provider）与「所有版本」列表共用同一个客户端——
+   * 同一套网络 / 代理（electron-updater 的 session，下载器也在上面）、同一份缓存、
+   * 同一本限流账（见 main/updater/github-client.ts）。
+   * 代理在启动时就按 HTTPS_PROXY / HTTP_PROXY 设上，不等更新器接线：dev（未打包）里
+   * 历史版本列表同样要能用（以前只有打包后的 Windows 实例才会设）。失败只警告，不拖启动。
+   */
+  const github = new GitHubClient({ transport: electronGitHubTransport() });
+  await applyEnvProxy();
+
+  /*
+   * 自动化：定时任务的存盘、调度与「阻止睡眠」。开关关着时调度器每次 tick 直接
    * 返回、工具不注册、list 回空。两种去处都走 agentIpc.submitTurn——与用户发消息、delegate 同一套开轮装配。
    * 睡眠唤醒（powerMonitor resume）立刻 tick 一次：Mac 睡眠时定时器不走。
    */
   const automationStore = new AutomationStore(configDir);
-  const automationEnabled = async (): Promise<boolean> =>
-    (await settings.read()).experimentalFeatures?.["automation"] === true;
   const keepAwake = new KeepAwake(
     powerSaveBlocker,
     async () => (await settings.read()).automationKeepAwake === true,
@@ -1144,7 +1309,6 @@ void app.whenReady().then(async () => {
   const automationScheduler = new AutomationScheduler({
     store: automationStore,
     now: Date.now,
-    enabled: automationEnabled,
     launch: (input) => launchAutomationRun(launchDeps, input),
     deliver: (input) => deliverAutomationRun(launchDeps, input),
     sessionExists: async (sessionId) => (await sessions.readMeta(sessionId)) !== null,
@@ -1159,12 +1323,23 @@ void app.whenReady().then(async () => {
     sessions,
     providers,
     workspaces,
-    enabled: automationEnabled,
+    // 选插件：这个工作区此刻装着、启用着、且带看板的插件（没有看板的插件，自动化到点没有东西可显示）
+    plugins: { enabledIn: (workspaceId) => boardPluginsIn(plugins, workspaceId) },
     now: Date.now,
     newId: randomUUID,
     notify: broadcastAutomationEvent,
   };
   registerAutomationIpc(automationDeps);
+  // 全局周看板：自动化的运行记录 + 会话里 show_plugin_board 的快照
+  registerBoardIpc({
+    week: {
+      automations: () => automationStore.list(),
+      recordPath: (sessionId) => sessions.recordPath(sessionId),
+      now: Date.now,
+    },
+    templates: boardTemplates,
+    frames: panelFrames,
+  });
   automationScheduler.start();
   setTimeout(() => void automationScheduler.tick().catch(() => undefined), 5_000);
   powerMonitor.on("resume", () => void automationScheduler.tick().catch(() => undefined));
@@ -1182,11 +1357,15 @@ void app.whenReady().then(async () => {
     platform: process.platform,
     version: app.getVersion(),
     beforeInstall: () => agentHost.dispose(),
+    github,
   });
-  // 「所有版本」展开体的最近版本列表：纯网络请求 + 内存缓存（10 分钟），
+  // 「所有版本」展开体的最近版本列表：走同一个客户端（原文缓存由它管）+ 本层组装缓存，
   // 与更新器接不接线无关——dev 下也照常能用（见 main/updater/recent-releases.ts）
-  registerUpdaterIpc(updater, createRecentReleases());
-  updater.start();
+  registerUpdaterIpc(updater, createRecentReleases({ client: github }));
+  updater.start().catch((error: unknown) => {
+    // start 只会在 Electron session 初始化时失败；更新是可选功能，不能拖住主窗口启动
+    console.warn("[更新] 初始化失败：", error instanceof Error ? error.message : String(error));
+  });
 
   app.on("before-quit", () => {
     automationScheduler.stop();

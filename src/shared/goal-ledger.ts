@@ -71,7 +71,7 @@ export interface GoalLedger {
   /** 全部改动，旧 → 新（第一次写下计划不是改动，不入账） */
   entries: LedgerEntry[];
   /** 这个会话里做完的 todo（跨计划累计，去重）与当前计划里还没做完的 */
-  todos: { done: string[]; open: string[] };
+  todos: { done: string[]; open: string[]; /** open 里卡在用户 / 外部身上的（当前计划里 waiting 的步），waitingFor 缺 = null */ waiting: { text: string; waitingFor: string | null }[] };
 }
 
 /** 用户消息的头一行：去空白，超长截断 */
@@ -144,7 +144,10 @@ export function buildGoalLedger(events: readonly LedgerEvent[]): GoalLedger {
   }
 
   const open = (prevItems ?? []).filter((item) => item.status !== "done" && !done.includes(item.text)).map((item) => item.text);
-  return { goal: current.goal, entries, todos: { done, open } };
+  const waiting = (prevItems ?? [])
+    .filter((item) => item.status === "waiting" && !done.includes(item.text))
+    .map((item) => ({ text: item.text, waitingFor: item.waitingFor ?? null }));
+  return { goal: current.goal, entries, todos: { done, open, waiting } };
 }
 
 // —— 给模型看的文字（英文；用户的话原样引用）——
@@ -214,7 +217,10 @@ function changeEn(change: PlanChange): string {
     case "reworded":
       return `reworded ${q(change.from)} → ${q(change.to)}`;
     case "moved":
-      return change.before === null ? `moved ${q(change.text)} to the end` : `moved ${q(change.text)} before ${q(change.before)}`;
+      if (change.before === null) return `moved ${q(change.text)} to the end`;
+      return `${change.earlier ? "moved up" : "moved"} ${q(change.text)} before ${q(change.before)}`;
+    case "waiting":
+      return `${q(change.text)} is waiting${change.waitingFor === null ? "" : ` (${change.waitingFor})`}`;
     case "split":
       return `split ${q(change.from)} into ${change.into.map((text) => q(text)).join(", ")}`;
     case "merged":
@@ -268,5 +274,9 @@ export function renderLedgerForModel(ledger: GoalLedger): string | null {
   }
   if (ledger.todos.done.length > 0) lines.push(`Todos done: ${ledger.todos.done.slice(-MAX_TODOS).map((text) => q(text, 100)).join("; ")}`);
   if (ledger.todos.open.length > 0) lines.push(`Todos still open: ${ledger.todos.open.slice(0, MAX_TODOS).map((text) => q(text, 100)).join("; ")}`);
+  if (ledger.todos.waiting.length > 0) {
+    const waits = ledger.todos.waiting.slice(0, MAX_TODOS).map((item) => `${q(item.text, 100)}${item.waitingFor === null ? "" : ` (${item.waitingFor})`}`);
+    lines.push(`Todos waiting on the user or something external (not in progress): ${waits.join("; ")}`);
+  }
   return lines.join("\n");
 }

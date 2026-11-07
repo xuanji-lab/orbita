@@ -11,11 +11,18 @@ import { largeTextNotice, textPreviewMode, textRenderKind } from "./preview-view
 import { WindowedText } from "./WindowedText";
 import { RangeTextPreview } from "./RangeTextPreview";
 import { EmptyPreview, PreviewNotice } from "./PreviewChrome";
+import { DOC_MAX_BYTES } from "@shared/doc";
 import { isPdfFile, isWebPageFile, type FilePreview } from "@shared/files";
 import type { PromptImage } from "@shared/prompt-images";
 import { PdfView, type PdfJump } from "./PdfView";
+import { DocEditPane } from "../doc-panel/DocEditPane";
+import { watchDocMeta } from "./doc-meta-refresh.ts";
+import type { TextQuote } from "@shared/quote";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { useT } from "../../locale.ts";
+
+/** 用文档视图（阅读 / 编辑 / 源码）打开的文件：md / markdown / txt；.slides.json 由 DocEditPane 路由到演示文稿编辑器 */
+const DOC_FILE = /\.(?:md|markdown|txt|slides\.json)$/i;
 
 /**
  * 文件预览面板（标签页模型的标签体：激活哪个标签就渲染哪个文件，见 FilesPanel）。
@@ -45,6 +52,14 @@ export function FilePreviewPane(props: {
   rootLabel: string;
   /** PDF 引用跳转（点了正文里的引用编号）：滚到原文处并高亮。非 PDF / 没有跳转时 null */
   jump?: PdfJump | null;
+  /** 一打开就进「编辑」模式（刚新建的文档 / 演示文稿） */
+  openInEdit?: boolean;
+  /** 编辑模式里划选后「引用」进输入框；缺席 = 工具栏只剩复制 */
+  onQuote?: (quote: TextQuote) => void;
+  /** 文档里点双链 / 嵌入：在文件面板里开解析到的文件（root = 它所在的根，path = 文件绝对路径） */
+  onOpenTarget?: (root: string, path: string) => void;
+  /** 文档文件被移走时横幅上的「关闭」：关掉这个标签 */
+  onCloseTab?: () => void;
 }) {
   const t = useT();
   const { sessionId, workspaceId, root, path } = props;
@@ -75,9 +90,9 @@ export function FilePreviewPane(props: {
       ? imageState.status === "loading"
       : state.status === "loading" || refreshing;
 
-  const [mode, setMode] = useState<"rendered" | "source">("rendered");
-  // 切文件（标签重挂载或换 path）：Source 模式不带过去，新文件一律先看 Rendered
-  useEffect(() => setMode("rendered"), [root, path]);
+  const [mode, setMode] = useState<"rendered" | "source" | "edit">(props.openInEdit === true ? "edit" : "rendered");
+  // 切文件（标签重挂载或换 path）：Source / 编辑模式不带过去，新文件一律先看 Rendered（刚新建的直接进编辑）
+  useEffect(() => setMode(props.openInEdit === true ? "edit" : "rendered"), [root, path, props.openInEdit]);
 
   const [copied, setCopied] = useState(false);
   // 分段预览（>16 MB）也要能被「刷新」顶一下：文件没变时 mtime 不变，光靠 props 看不出来
@@ -125,10 +140,37 @@ export function FilePreviewPane(props: {
 
   // md 文件才有 Rendered/Source；一旦知道读回来的不是文本（binary / too-large）或是
   // 空文件，没有源文本可切，藏起来——避免切换器亮着但切了没反应；附图没有这一排
+  // 文档（.md / .markdown / .txt，且小到能整份读进来）整个交给文档视图：阅读 / 编辑 / 源码三视图都在它里面，
+  // 这里不再画「渲染 / 源码 / 编辑」那一排
+  const asDocument =
+    sentImage === undefined &&
+    DOC_FILE.test(name) &&
+    state.status === "ready" &&
+    state.data.kind === "text" &&
+    state.data.size <= DOC_MAX_BYTES;
+  // 文档视图自己读盘、自己监听；头部的「大小 · 修改时间」来自这里的预览读数，盘上变了（agent / 插图 / 自己存盘）要跟着重读
+  useEffect(() => {
+    if (!asDocument) return undefined;
+    return watchDocMeta(api.docs.onChanged, path, refresh);
+  }, [asDocument, sessionId, workspaceId, extraWorkspaceId, root, path]);
   const showModeToggle =
     sentImage === undefined &&
+    !asDocument &&
     previewMode === "markdown" &&
     (state.status !== "ready" || (state.data.kind === "text" && state.data.text !== ""));
+  // 编辑：只给读得出文本的 .md（小到能整份读进来的）；新建的空文档也要能进，所以不看 text 是否为空
+  const canEdit =
+    sentImage === undefined &&
+    !asDocument &&
+    previewMode === "markdown" &&
+    state.status === "ready" &&
+    state.data.kind === "text";
+  const editing = mode === "edit" && canEdit;
+  // 离开编辑回到渲染：agent 或用户刚改过盘，预览重读一次
+  const pickMode = (next: "rendered" | "source" | "edit"): void => {
+    if (mode === "edit" && next !== "edit") refresh();
+    setMode(next);
+  };
 
   return (
     <div className="files-panel-preview">
@@ -195,18 +237,51 @@ export function FilePreviewPane(props: {
           </div>
         )}
       </header>
-      {showModeToggle && (
+      {(showModeToggle || canEdit) && (
         <div className="file-preview-mode-row">
-          <Chip active={mode === "rendered"} onClick={() => setMode("rendered")}>
-            {t.files.rendered}
-          </Chip>
-          <Chip active={mode === "source"} onClick={() => setMode("source")}>
-            {t.files.source}
-          </Chip>
+          {showModeToggle && (
+            <>
+              <Chip active={mode === "rendered"} onClick={() => pickMode("rendered")}>
+                {t.files.rendered}
+              </Chip>
+              <Chip active={mode === "source"} onClick={() => pickMode("source")}>
+                {t.files.source}
+              </Chip>
+            </>
+          )}
+          {canEdit && (
+            <Chip active={editing} onClick={() => pickMode("edit")}>
+              {t.doc.edit}
+            </Chip>
+          )}
         </div>
       )}
-      <div className="file-preview-body" data-kind={pdf ? "pdf" : undefined} ref={bodyRef}>
-        {pdf ? (
+      <div
+        className="file-preview-body"
+        data-kind={pdf ? "pdf" : editing || asDocument ? "edit" : undefined}
+        ref={bodyRef}
+      >
+        {asDocument ? (
+          <DocEditPane
+            sessionId={sessionId}
+            workspaceId={workspaceId}
+            path={path}
+            startInEdit={props.openInEdit === true}
+            {...(props.onCloseTab === undefined ? {} : { onClose: props.onCloseTab })}
+            {...(props.onOpenTarget === undefined
+              ? {}
+              : { onOpenFile: (target: { root: string; path: string }) => props.onOpenTarget?.(target.root, target.path) })}
+            {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
+          />
+        ) : editing ? (
+          <DocEditPane
+            sessionId={sessionId}
+            workspaceId={workspaceId}
+            path={path}
+            onClose={() => pickMode("rendered")}
+            {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
+          />
+        ) : pdf ? (
           <PdfView
             request={{ sessionId, workspaceId, ...extra, root, dir: path }}
             jump={props.jump ?? null}
@@ -223,7 +298,7 @@ export function FilePreviewPane(props: {
             path={path}
             reloadKey={textReload}
             scroller={bodyRef}
-            mode={mode}
+            mode={mode === "source" ? "source" : "rendered"}
             previewMode={previewMode}
             state={state}
             onRetry={refresh}

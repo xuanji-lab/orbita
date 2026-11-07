@@ -81,7 +81,10 @@ import { attachGoalLedger, type LedgerAttachCache } from "./goal-compaction.ts";
 import { createGoalTools } from "./goal-tools.ts";
 import { createPlanGate, createPlanTools, type PlanToolOptions } from "./plan-tools.ts";
 import { createDocxTools } from "./docx-tools.ts";
+import { createDocTools } from "./doc-tools.ts";
 import { createPdfTools } from "./pdf-tools.ts";
+import { createSlidesTools } from "./slides-tools.ts";
+import { createPluginTools, PLUGIN_TOOL_NAMES } from "./plugin-tools.ts";
 import { RequestBroker } from "./request-broker.ts";
 import { createStoreTools } from "./store-tools.ts";
 import { createMemoryTools, MEMORY_TOOL_NAMES } from "./memory-tools.ts";
@@ -792,6 +795,7 @@ function extraToolNames(
   workspaceId: string | null,
   memoryTools: boolean,
   automationTools: boolean,
+  pluginTools: boolean,
 ): string[] {
   return [
     ...mcpHub.toolsFor(workspaceId ?? "").map((tool) => tool.name),
@@ -802,6 +806,7 @@ function extraToolNames(
     ...(role === "root" ? ["delegate", "reply_subsession", "model_costs"] : ["report_to_parent"]),
     ...(memoryTools ? MEMORY_TOOL_NAMES : []),
     ...(automationTools ? AUTOMATION_TOOL_NAMES : []),
+    ...(pluginTools ? PLUGIN_TOOL_NAMES : []),
   ];
 }
 
@@ -899,7 +904,7 @@ interface OpenedTurn {
   webWatch: WebArtifactWatch;
   /** 本轮的图片字节预算状态（水位 + 附件引用），见 image-byte-budget.ts */
   budget: TurnImageBudget;
-  /** 本轮的记忆附件（实验功能 memory-system）：本子读回的各轮块 + 本轮待认领的块，见 memory-inject.ts */
+  /** 本轮的记忆附件：本子读回的各轮块 + 本轮待认领的块，见 memory-inject.ts */
   memory: TurnMemoryAttach;
   /** 意图召回的中止器：停止 / 抢跑 / 删会话时拆掉 /recall 的 HTTP 流（无意图时闲置） */
   intentAbort: AbortController;
@@ -972,10 +977,12 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    */
   const memoryTools = "sessionMemory" in command && command.sessionMemory === true && role === "root";
   /**
-   * 自动化工具（实验功能 automation）：主进程只在开关开、且这条会话不是自动化跑出来的时候带
+   * 自动化工具：主进程只在这条会话不是自动化跑出来的时候带
    * automationTools；这里再叠一道「只给根会话」。与记忆工具同一个装配方式，提示词名单里也同步。
    */
   const automationTools = "automationTools" in command && command.automationTools === true && role === "root";
+  // 插件工具：命令带 pluginTools 才注册 install_plugin / preview_plugin / list_plugins（子会话不装插件，只有根会话注册）
+  const pluginTools = command.pluginTools === true && role === "root";
 
   // 审批走 pi 官方的 `tool_call` 扩展钩子：block 即拒绝，原地改 input 即改写入参。
   // 内建工具默认全开，不需要我们自己装配。
@@ -1084,7 +1091,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
               // 提示词逐字节相同」这类断言可以直接对着它测，指纹记账也吃同一份段名单。
               // 开轮目录清单同样逐轮重讲：工作区挂新目录、换工作区，下一轮就生效。
               // 父子会话行不进系统提示词（本 PR）：对方工作台由 delegate 回执与通道信封告知。
-              const extra = extraToolNames(role, command.workspaceId, memoryTools, automationTools);
+              const extra = extraToolNames(role, command.workspaceId, memoryTools, automationTools, pluginTools);
               const segments = orbitaSystemSegments({
                 piBase: adaptSystemPrompt(event.systemPrompt),
                 mode: currentMode(),
@@ -1099,6 +1106,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                 // 讲了它、这轮却没有上下文文件，模型会去找一个不存在的东西
                 intentGuideline: "intent" in command && command.intent !== undefined,
                 memoryToolsGuideline: memoryTools,
+                longTaskAutomationGuideline: automationTools,
               });
               notePromptStability(command.sessionId, segments, [...ENABLED_BUILTIN_TOOLS, ...extra]);
               // 上下文面板的「规则与说明」组：每轮推一次最新清单。pi 基底单独计（它的估算
@@ -1353,7 +1361,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     pendingRefs: new Map(),
     protectedFloor: Number.MAX_SAFE_INTEGER,
   };
-  // 记忆附件（实验功能 memory-system）：各轮召回块从本子（当前叶子路径）读回，
+  // 记忆附件：各轮召回块从本子（当前叶子路径）读回，
   // 本轮的块在 echoAndPrompt 召回后放进 pending，首个 LLM 调用时认领落本。
   // 定义在 extensionFactories 之后是安全的（同 budget 的说明）
   const memory: TurnMemoryAttach = { attached: memoryAttachments(sessionManager.getBranch()), pending: null };
@@ -1387,8 +1395,28 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     // update_goal（./goal-tools.ts）：agent 替用户记下会话级目标；目标就在转录里，不另存
     ...createGoalTools({ branch: () => sessionManager.getBranch() }),
     ...createStoreTools(requestBroker, command.sessionId),
+    ...(pluginTools ? createPluginTools(requestBroker, command.sessionId, currentMode) : []),
     ...createTaskTools(requestBroker, command.sessionId),
     ...createBrowserTools(requestBroker, command.sessionId),
+    // 演示文稿（./slides-tools.ts）：slides_create / read / write / edit / insert_image / export。
+    // 文件读写在本进程直做（路径限工作区 + 附加目录），只有导出过 broker 找主进程
+    ...createSlidesTools(requestBroker, command.sessionId, {
+      cwd: command.cwd,
+      writeRoots: [command.cwd, ...(command.directories?.attached ?? [])],
+      workspaceId: command.workspaceId,
+      imageReadRoots: imageReadRoots(command),
+      // 用户附的图：预算账里记着 hash → 附件副本路径（本轮的在 pendingRefs，旧轮的在 refs）；最近的在前
+      attachedImages: () => [...new Set([...budget.refs.values(), ...budget.pendingRefs.values()])].reverse(),
+    }),
+    // 文档（./doc-tools.ts）：doc_open / doc_insert_image / doc_export。文件读写在本进程直做（路径限工作区 + 附加目录），
+    // 只有导出过 broker 找主进程（PDF 要隐藏窗口）
+    ...createDocTools(requestBroker, command.sessionId, {
+      cwd: command.cwd,
+      writeRoots: [command.cwd, ...(command.directories?.attached ?? [])],
+      workspaceId: command.workspaceId,
+      imageReadRoots: imageReadRoots(command),
+      mode: currentMode,
+    }),
     // agent 的终端工具组（PR2）：开可见终端、写命令、读输出。
     // 本分支只有用户发起这一种来源（没有定时任务 / 委派 / 外部桥），所以这里不按来源
     // 拦；将来自动化入口出现时，在这里按来源决定要不要注册——Proma 的判据是
@@ -1406,7 +1434,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
           turn: () => memory.turn ?? 1,
         })
       : []),
-    ...(automationTools ? createAutomationTools(requestBroker, command.sessionId) : []),
+    ...(automationTools ? createAutomationTools(requestBroker, command.sessionId, currentMode) : []),
   ];
   const { session } = await createAgentSessionFromServices({
     services,
@@ -1953,6 +1981,22 @@ function flushBackfill(session: AgentSession, texts: readonly string[] | undefin
 }
 
 /**
+ * 拷图进文档 / 演示文稿时，工作区与附加目录之外额外放行的读根：会话工作台、本会话的附件副本目录、
+ * 浏览器下载目录——系统提示词里都明说「可以去读」。其余位置（含 `../` 与工作区外绝对路径）一律不放。
+ */
+function imageReadRoots(command: {
+  attachmentsDir: string;
+  directories?: { workbench: string; browserDownloads?: string };
+}): string[] {
+  const roots = [command.attachmentsDir];
+  if (command.directories !== undefined) {
+    roots.push(command.directories.workbench);
+    if (command.directories.browserDownloads !== undefined) roots.push(command.directories.browserDownloads);
+  }
+  return roots.filter((root) => root !== "");
+}
+
+/**
  * 子会话身份：开轮目录清单的 related 里有 `relation === "parent"` 的一项 → 本会话是被
  * 派出的子会话。通道工具、记忆工具的注册与召回块的纠错提示都认它一处。
  */
@@ -1967,7 +2011,7 @@ function isChildSession(command: { directories?: { related?: readonly { relation
 const MEMORY_RECALL_TIMEOUT_MS = 6_000;
 
 /**
- * 轮前召回（实验功能 memory-system）：拿用户原话问主进程要相关记忆（主进程再
+ * 轮前召回：拿用户原话问主进程要相关记忆（主进程再
  * 转发给记忆服务进程），组装注入块。**任何失败都返回 null**（超时 / ok:false /
  * 异常 / 空命中）——轮前是同步等的，记忆的任何问题都不该拦住开轮（#228 的纪律）。
  */
@@ -2010,7 +2054,7 @@ async function echoAndPrompt(
   // 历史里数用户消息 +1（#228 的口径，与 renderer 划选引用一致）
   const turn = opened.session.messages.filter((message) => message.role === "user").length + 1;
   opened.memory.turn = turn;
-  // 轮前记忆召回（实验功能 memory-system）：召回块**不拼进用户原话**，放进本轮的
+  // 轮前记忆召回：召回块**不拼进用户原话**，放进本轮的
   // pending，首个 LLM 调用时由 orbita-memory-attach 扩展作为独立块挂到这条消息上
   // （见 memory-inject.ts）。超时 / 报错 / 空命中都不挂——记忆的失败不拦开轮。
   // 子会话也召回（读不写，写入门禁在主进程的轮后路径）
@@ -2259,6 +2303,11 @@ async function handle(command: AgentCommand): Promise<void> {
     requestBroker.resolve(command.requestId, command);
     return;
   }
+  if (command.type === "pluginInstallResult" || command.type === "pluginListResult" || command.type === "pluginPreviewResult" || command.type === "pluginBoardResult") {
+    // 插件工具的回执：形状即契约（ok 双分支），原样结掉在途 promise（主进程任何路径都回执）
+    requestBroker.resolve(command.requestId, command);
+    return;
+  }
   if (command.type === "memoryRecallResult") {
     // 记忆召回的回执：形状即契约（ok 双分支），原样结掉在途 promise。
     // 轮前调用方对超时 / ok:false / 空 hits 统一按「不注入」处理
@@ -2282,6 +2331,11 @@ async function handle(command: AgentCommand): Promise<void> {
           }
         : { ok: false, error: command.error ?? "Browser request failed" },
     );
+    return;
+  }
+  if (command.type === "slidesResult" || command.type === "docResult") {
+    // 演示文稿 / 文档导出的回执：形状即契约（ok 双分支），原样结掉在途 promise
+    requestBroker.resolve(command.requestId, command);
     return;
   }
   if (command.type === "terminalResult") {

@@ -221,6 +221,14 @@ describe("applyAgentEvent —— 每会话一槽", () => {
     assert.equal(states.get("B")?.approvals.length, 1, "别的会话的审批不受影响");
   });
 
+  test("pluginsChanged 是全局信号，不属于任何会话槽：归约原样返回同一引用", () => {
+    const states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "turn" });
+    assert.equal(applyAgentEvent(states, { type: "pluginsChanged" }), states);
+    assert.equal(applyAgentEvent(states, { type: "pluginsChanged", installed: { name: "lit", sessionId: "A" } }), states);
+    // 草稿事件也是给 App 层的信号，会话槽不接
+    assert.equal(applyAgentEvent(states, { type: "pluginDraft", sessionId: "A", path: "/w/plugins/lit" }), states);
+  });
+
   test("phase turn / compaction 不清审批卡——工具还在等回答", () => {
     let states = applyAgentEvent(new Map(), permission("A", "A:tc1"));
     states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "turn" });

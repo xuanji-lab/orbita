@@ -80,8 +80,6 @@ export interface MemoryTurnDeps {
   load: (sessionId: string) => Promise<{ transcript: readonly SessionRecord[] } | null>;
   /** 读会话归属（解析作用域）；null = meta 读不到（宁可不记，不猜作用域） */
   readMeta: (sessionId: string) => Promise<{ workspaceId: string | null; cwd: string } | null>;
-  /** settle 时现读实验开关（用户可能刚把开关关了） */
-  isMemoryOn: () => Promise<boolean>;
   /** settle 时现装配家务活模型；undefined = 没配（服务侧记日志后跳过） */
   readChore: () => Promise<MemoryChoreModel | undefined>;
   /** 交给记忆服务（host.turnSettled）；返回 Promise 时失败由这里接住记日志 */
@@ -200,10 +198,6 @@ export class MemoryTurnTracker {
 
   private async deliver(sessionId: string, current: TurnState, echoedAt: number): Promise<void> {
     try {
-      if (!(await this.deps.isMemoryOn())) {
-        this.dropped(sessionId, current, "落定时实验开关已关");
-        return;
-      }
       const [detail, meta] = await Promise.all([this.deps.load(sessionId), this.deps.readMeta(sessionId)]);
       // 读不到就放弃（宁可不记，不记半截或猜错作用域）
       if (detail === null || meta === null) {

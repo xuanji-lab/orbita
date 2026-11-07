@@ -1,5 +1,5 @@
 /**
- * 自动化的一次触发（实验功能 automation）：两种去处各一个入口——
+ * 自动化的一次触发：两种去处各一个入口——
  * `launchAutomationRun`（new_session）开一条新会话并开一轮；`deliverAutomationRun`（this_session）
  * 把指令送回创建它的那条会话。
  *
@@ -20,7 +20,7 @@ import {
   type AutomationRunTrigger,
 } from "../../shared/automation.ts";
 import type { SubmitAgentInput } from "../../shared/agent-ipc.ts";
-import type { ProviderDto } from "../../shared/provider.ts";
+import { isProviderEnabled, type ProviderDto } from "../../shared/provider.ts";
 import { UNASSIGNED_MODEL_ID, UNASSIGNED_PROVIDER_ID } from "../../shared/session.ts";
 import type { AppSettings } from "../../shared/settings.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
@@ -61,13 +61,20 @@ export function resolveAutomationModel(input: {
   const lastUsed =
     last?.providerId !== undefined &&
     last.modelId !== undefined &&
-    providers.some((provider) => provider.id === last.providerId)
+    providers.some((provider) => provider.id === last.providerId && isProviderEnabled(provider))
       ? { providerId: last.providerId, modelId: last.modelId }
       : undefined;
 
   if (automation.providerId !== undefined && automation.modelId !== undefined) {
     const { providerId, modelId } = automation;
     const provider = providers.find((candidate) => candidate.id === providerId);
+    // 卡上指名的服务商被关了：不静默改选别家（渠道不替用户选），和服务商被删同口径报错，但把原因写明
+    if (provider !== undefined && !isProviderEnabled(provider)) {
+      return {
+        ok: false,
+        error: `The model ${providerId}/${modelId} set on this automation is on a provider that is turned off (${provider.displayName}). Turn it back on in Model services, or edit the automation to pick another model.`,
+      };
+    }
     if (provider?.models.declared.some((model) => model.id === modelId) !== true) {
       return {
         ok: false,
@@ -123,6 +130,8 @@ export function composeAutomationPrompt(input: {
   at: number;
   prompt: string;
   lastResult?: string;
+  /** 自动化选的插件名：提示词里让 agent 用它，最后调 show_plugin_board 出看板 */
+  plugin?: string;
 }): string {
   const head = composeAutomationHeader({
     title: input.title,
@@ -134,7 +143,16 @@ export function composeAutomationPrompt(input: {
     input.lastResult !== undefined && input.lastResult.trim() !== ""
       ? `\n\n上次结果（供对照，说出这次有什么新的）：\n${clipText(input.lastResult.trim(), AUTOMATION_LAST_RESULT_MAX)}`
       : "";
-  return `${head}\n\n${input.prompt.trim()}${last}`;
+  const plugin = input.plugin === undefined ? "" : `\n\n${pluginInstruction(input.plugin)}`;
+  return `${head}\n\n${input.prompt.trim()}${plugin}${last}`;
+}
+
+/**
+ * 选了插件的自动化在提示词里加的一段：用这个插件做，最后调 show_plugin_board 把看板结果显示出来——
+ * 全局周看板只认这次运行里 show_plugin_board 的结果（运行记录的 boardSnapshotIds）。
+ */
+export function pluginInstruction(name: string): string {
+  return `用插件「${name}」完成这次任务（按它的技能与工作流做）。做完最后调用 show_plugin_board（plugin: "${name}"），把它的看板卡片作为这次的结果显示出来。`;
 }
 
 /** 目标会话已经不在了（被删）：调度器据此把 this_session 任务翻成 completed(sessionDeleted) */
@@ -211,6 +229,7 @@ export async function launchAutomationRun(
         at: input.at,
         prompt: automation.prompt,
         ...(automation.lastResult === undefined ? {} : { lastResult: automation.lastResult }),
+        ...(automation.plugin === undefined ? {} : { plugin: automation.plugin.name }),
       }),
     });
   } catch (cause) {
@@ -252,6 +271,7 @@ export async function deliverAutomationRun(
       ...(automation.maxRuns === undefined ? {} : { max: automation.maxRuns }),
       at: input.at,
       prompt: automation.prompt,
+      ...(automation.plugin === undefined ? {} : { plugin: automation.plugin.name }),
     }),
   });
 }

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api } from "../../api";
 import { Icon } from "../../shell/Icon";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { useT } from "../../locale.ts";
 import type { SessionMeta } from "@shared/session";
 import { formatWhen } from "./automation-view.ts";
@@ -34,7 +35,7 @@ export function AutomationRunBar(props: { meta: SessionMeta; onPromoted: () => v
   return (
     <div className="auto-runbar" role="note">
       <span className="auto-runbar-label">
-        <Icon name="calendar-clock" size={14} strokeWidth={1.8} />
+        <Icon name={FEATURE_ICON.automation} size={14} strokeWidth={1.8} />
         <span className="auto-runbar-text">
           {run === undefined
             ? props.meta.title

@@ -89,7 +89,7 @@ const AGENT_TAB_MAX = 8;
 const AGENT_TAB_SWEEP_MS = 60_000;
 
 /** 空白 tab 在第一次读到设置之前的垫底色（明主题壳底）。按档取色见 page-background.ts */
-const PAGE_BACKGROUND_FALLBACK = "#f3f4f1";
+const PAGE_BACKGROUND_FALLBACK = "#e7ebef";
 
 /** 网页视图与弹窗子窗口共用的 webPreferences：无 preload，三条安全不变量全开 */
 const PAGE_PREFERENCES = {

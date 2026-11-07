@@ -11,6 +11,8 @@ import {
   parseAutomation,
   parseAutomationCard,
   parseAutomationHeader,
+  parseAutomationModeRow,
+  parseAutomationPlugin,
   parseAutomationRunLabel,
   parseClockTime,
   parseSchedule,
@@ -372,5 +374,85 @@ describe("会话上的运行标注", () => {
     assert.equal(parseAutomationRunLabel({ title: "t", number: 3, trigger: "manual" }), null);
     assert.equal(parseAutomationRunLabel({ title: "t", number: 3, at: 5, trigger: "cron" }), null);
     assert.equal(parseAutomationRunLabel(undefined), null);
+  });
+});
+
+describe("插件与看板快照 id", () => {
+  const raw = {
+    id: "a",
+    title: "t",
+    prompt: "p",
+    schedule: { kind: "daily", time: "09:00" },
+    target: { kind: "new_session", workspaceId: null },
+    status: "active",
+    mode: "plan",
+    plugin: { name: "lit" },
+    runs: [
+      { id: "r1", runAt: 1, trigger: "schedule", status: "success", sessionId: "s", boardSnapshotIds: ["c1", "c1", "", 3, "c2"] },
+      { id: "r2", runAt: 2, trigger: "schedule", status: "success", sessionId: "s", boardSnapshotIds: "x" },
+    ],
+  };
+
+  test("parseAutomation 读回插件与快照 id（去重、丢坏值）；坏插件名当没有", () => {
+    const parsed = parseAutomation(raw);
+    assert.deepEqual(parsed?.plugin, { name: "lit" });
+    assert.deepEqual(parsed?.runs[0]?.boardSnapshotIds, ["c1", "c2"]);
+    assert.equal(parsed?.runs[1]?.boardSnapshotIds, undefined);
+    assert.equal(parseAutomation({ ...raw, plugin: { name: "Bad Name" } })?.plugin, undefined);
+  });
+
+  test("parseAutomationPlugin 与对话卡", () => {
+    assert.deepEqual(parseAutomationPlugin({ name: "lit" }), { name: "lit" });
+    assert.equal(parseAutomationPlugin({ name: "" }), null);
+    assert.equal(parseAutomationPlugin("lit"), null);
+    const parsed = parseAutomation(raw);
+    assert.ok(parsed !== null);
+    const card = automationCardOf(parsed);
+    assert.equal(card.plugin, "lit");
+    assert.equal(parseAutomationCard(card)?.plugin, "lit");
+  });
+});
+
+describe("parseAutomationModeRow（工具结果 details 里「改权限」那一行）", () => {
+  const row = { state: "pending", requestId: "r1", automationId: "au1", title: "每日一篇", sessionMode: "manual" };
+  test("合法的原样取出，JSON 来回不变", () => {
+    assert.deepEqual(parseAutomationModeRow({ automationMode: row }), row);
+    assert.deepEqual(parseAutomationModeRow(JSON.parse(JSON.stringify({ automationMode: { ...row, state: "applied", sessionMode: "skip" } }))), {
+      ...row,
+      state: "applied",
+      sessionMode: "skip",
+    });
+  });
+  test("别的工具的 details / 缺字段 / 坏值：都是 null", () => {
+    for (const bad of [undefined, null, "x", {}, { automation: {} }, { automationMode: null }, { automationMode: { ...row, state: "x" } }, { automationMode: { ...row, sessionMode: "x" } }, { automationMode: { ...row, requestId: "" } }, { automationMode: { ...row, automationId: undefined } }, { automationMode: { ...row, title: 1 } }]) {
+      assert.equal(parseAutomationModeRow(bad), null, JSON.stringify(bad));
+    }
+  });
+});
+
+describe("Automation.modeDeclined（磁盘解析）", () => {
+  const base = {
+    id: "a",
+    title: "t",
+    prompt: "p",
+    schedule: { kind: "interval", unit: "minute", every: 15 },
+    target: { kind: "new_session", workspaceId: null },
+    mode: "plan",
+    status: "active",
+    createdBy: { kind: "user" },
+    nextRunAt: 1,
+    runs: [],
+    runCount: 0,
+    consecutiveFailures: 0,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  test("只留非空字符串、最近 10 个；没有 / 坏了就不带这个字段", () => {
+    assert.equal(parseAutomation(base)?.modeDeclined, undefined);
+    assert.equal(parseAutomation({ ...base, modeDeclined: "r1" })?.modeDeclined, undefined);
+    assert.equal(parseAutomation({ ...base, modeDeclined: [] })?.modeDeclined, undefined);
+    assert.deepEqual(parseAutomation({ ...base, modeDeclined: ["r1", 3, "", "r2"] })?.modeDeclined, ["r1", "r2"]);
+    const many = Array.from({ length: 14 }, (_, i) => `r${i}`);
+    assert.deepEqual(parseAutomation({ ...base, modeDeclined: many })?.modeDeclined, many.slice(-10));
   });
 });

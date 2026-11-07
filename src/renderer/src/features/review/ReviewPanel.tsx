@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../../shell/Icon";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { Menu, type MenuItem } from "../../shell/Menu";
 import { ContextMenu } from "../../shell/ContextMenu";
 import { RowHoverAction } from "../../shell/RowHoverAction";
@@ -22,8 +23,9 @@ import {
 import { pathParts } from "../chat/path-parts.ts";
 import { Stats } from "../chat/FileTurnCard";
 import { ExcerptsTab, type ExcerptJump } from "./ExcerptsTab";
+import { reviewSubOf, type ReviewSub } from "../../shell/right-panel-memory.ts";
+import { useReportSub } from "../../shell/use-report-sub.ts";
 import { MemoryTab } from "../memory/MemoryTab";
-import { useExperimentalFeature } from "../../experimental";
 
 /**
  * 悬停动作键的几何（与文件面板树行同一套 --list-item-compact 行配方：22px 方块、
@@ -67,16 +69,20 @@ export function ReviewPanel(props: {
   onOpenInFiles: (absPath: string) => void;
   /** 对话里记忆行的「在审查面板里看」：token 递增的一次性请求，切到记忆页签 */
   memoryFocus: number | null;
+  /**
+   * 第二层（按会话记忆，right-panel-memory.ts）：页签、来源。展开的文件不记。只在挂载时读一次当初值
+   * （App 按会话换 key 重挂）；之后经 onSubChange 报给 App。
+   */
+  sub?: ReviewSub;
+  onSubChange?: (sub: ReviewSub | undefined) => void;
 }) {
   const t = useT();
-  const memoryOn = useExperimentalFeature("memory-system");
-  const [tab, setTab] = useState<"changes" | "excerpts" | "memory">("changes");
-  // 实验开关关掉时记忆页签整个不在：停在它上面的退回改动页签
-  if (tab === "memory" && !memoryOn) setTab("changes");
+  const [tab, setTab] = useState<"changes" | "excerpts" | "memory">(() => props.sub?.tab ?? "changes");
   useEffect(() => {
     if (props.memoryFocus !== null) setTab("memory");
   }, [props.memoryFocus]);
-  const [source, setSource] = useState<ReviewSource>("task");
+  const [source, setSource] = useState<ReviewSource>(() => props.sub?.source ?? "task");
+  useReportSub(reviewSubOf(tab, source), props.onSubChange);
   const [list, setList] = useState<ReviewList | null>(null);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -321,19 +327,17 @@ export function ReviewPanel(props: {
               放不下时轨道压缩，页签组顺排 + 横滚渐隐退化 */}
           <div className="cap-tabs" role="tablist" aria-label={t.review.title}>
             <button type="button" role="tab" className="cap-tab no-drag" aria-selected={tab === "changes"} onClick={() => setTab("changes")}>
-              <Icon name="file-diff" size={12} strokeWidth={1.8} />
+              <Icon name={FEATURE_ICON.review} size={12} strokeWidth={1.8} />
               {t.review.tabChanges}
             </button>
             <button type="button" role="tab" className="cap-tab no-drag" aria-selected={tab === "excerpts"} onClick={() => setTab("excerpts")}>
               <Icon name="quote" size={12} strokeWidth={1.8} />
               {t.review.tabExcerpts}
             </button>
-            {memoryOn && (
-              <button type="button" role="tab" className="cap-tab no-drag" aria-selected={tab === "memory"} onClick={() => setTab("memory")}>
-                <Icon name="brain-circuit" size={12} strokeWidth={1.8} />
-                {t.review.tabMemory}
-              </button>
-            )}
+            <button type="button" role="tab" className="cap-tab no-drag" aria-selected={tab === "memory"} onClick={() => setTab("memory")}>
+              <Icon name={FEATURE_ICON.memory} size={12} strokeWidth={1.8} />
+              {t.review.tabMemory}
+            </button>
           </div>
           <div className="cap-slot-right">
             {/* 审查来源（本任务 / 工作区 / 分支）：收成图标键（点开同一个菜单，tooltip
@@ -383,11 +387,11 @@ export function ReviewPanel(props: {
       ) : tab === "memory" ? (
         <MemoryTab sessionId={props.sessionId} />
       ) : props.sessionId === null ? (
-        <PanelEmpty icon="file-diff">{t.review.noTask}</PanelEmpty>
+        <PanelEmpty icon={FEATURE_ICON.review}>{t.review.noTask}</PanelEmpty>
       ) : loading && list === null ? (
         <PanelEmpty busy>{t.common.loading}</PanelEmpty>
       ) : list === null || (list.kind === "ok" && entries.length === 0) ? (
-        <PanelEmpty icon="file-diff" hint={t.review.emptyNoChangesDetail(source)}>
+        <PanelEmpty icon={FEATURE_ICON.review} hint={t.review.emptyNoChangesDetail(source)}>
           {t.review.emptyNoChanges}
         </PanelEmpty>
       ) : list.kind !== "ok" ? (

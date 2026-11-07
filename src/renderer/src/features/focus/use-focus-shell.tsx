@@ -24,7 +24,7 @@ import { useFocus } from "../../shell/focus/use-focus.ts";
 import type { FocusStatus } from "../../shell/focus/use-focus.ts";
 import { isWindowInactive } from "../../shell/window-activity.ts";
 import { FocusCardLayer, FocusSay } from "./FocusLayer.tsx";
-import { focusBubbleOf, focusFilesViewOf, focusSuspendActionOf, type FocusFilesView } from "./focus-shell.ts";
+import { focusFilesViewOf, focusSlotsOf, focusSuspendActionOf, type FocusFilesView } from "./focus-shell.ts";
 
 interface FocusShellOptions {
   /** 文案表（到点通知的正文按它写；星云气泡与卡在组件里自己取） */
@@ -54,10 +54,10 @@ interface FocusShell {
   status: FocusStatus;
   /** 工具栏左胶囊那一格（闪电 / 倒计时） */
   control: ReactNode;
-  /** 星云头顶的气泡（Sidebar 的 usageSay） */
-  say: ReactNode;
-  /** 星云头顶的收工卡（Sidebar 的 usageCard） */
-  card: ReactNode;
+  /** 星云头顶的气泡（Sidebar 的 usageSay）；null = 此刻不说话（UsageMeter 靠它判断能不能悬停看用量） */
+  say: ReactNode | null;
+  /** 星云头顶的收工卡（Sidebar 的 usageCard）；null = 没有卡 */
+  card: ReactNode | null;
   /** 左栏此刻的文件视图；null = 会话列表 */
   filesView: FocusFilesView | null;
   /** 左栏双击打开请求（递到右栏文件面板，留在 App 接线） */
@@ -245,16 +245,18 @@ export function useFocusShell(options: FocusShellOptions): FocusShell {
     />
   );
 
-  const say = (
+  // 两个槽没东西时必须给 null，不能给一个渲染成空的元素（见 focusSlotsOf）
+  const slots = focusSlotsOf(focus.status, focus.summary, sayDismissed, summaryCardClosed, focusRun !== null);
+  const say = slots.say === null ? null : (
     <FocusSay
-      view={focusBubbleOf(focus.status, focus.summary, sayDismissed)}
+      view={slots.say}
       onDismiss={() => setSayDismissed(true)}
       onRequestSummary={focus.requestSummary}
       onEnd={focus.end}
     />
   );
 
-  const card = (
+  const card = !slots.card ? null : (
     <FocusCardLayer
       status={focus.status}
       run={focusRun}

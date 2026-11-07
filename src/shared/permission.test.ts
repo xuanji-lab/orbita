@@ -9,6 +9,10 @@ import {
   DEFAULT_PERMISSION_MODE,
   isBrowserReadTool,
   isChannelTool,
+  isSelfConfirmingTool,
+  PLUGIN_BOARD_TOOL,
+  PLUGIN_DRAFT_TOOL,
+  SELF_CONFIRMING_TOOLS,
   USER_ACTION_TOOL,
   isReadOnlyTool,
   MEMORY_TOOLS,
@@ -95,7 +99,7 @@ describe("decidePermission", () => {
     assert.equal(decidePermission("plan", "memory_delete").behavior, "deny");
   });
 
-  test("自动化三件套：建出来是待启用，确认在启用那一下——三档全放行，名字相似的不沾光", () => {
+  test("自动化四件套（含只改权限档的 automation_update）：三档全放行，闸在主进程；名字相似的不沾光", () => {
     for (const mode of PERMISSION_MODES) {
       for (const tool of AUTOMATION_TOOLS) {
         assert.deepEqual(decidePermission(mode, tool), { behavior: "allow" }, `${mode}/${tool}`);
@@ -185,5 +189,48 @@ describe("update_goal（会话级目标）", () => {
     for (const mode of PERMISSION_MODES) {
       assert.deepEqual(decidePermission(mode, "update_goal"), { behavior: "allow" }, mode);
     }
+  });
+});
+
+describe("插件工具", () => {
+  test("list_plugins 是只读：plan 放行、manual 问、skip 放（与 read 同待遇）", () => {
+    assert.equal(isReadOnlyTool("list_plugins"), true);
+    assert.deepEqual(decidePermission("plan", "list_plugins"), { behavior: "allow" });
+    assert.deepEqual(decidePermission("manual", "list_plugins"), { behavior: "ask" });
+    assert.deepEqual(decidePermission("skip", "list_plugins"), { behavior: "allow" });
+  });
+
+  test("install_plugin 自带确认（对话里那一行）：manual 不再弹一次审批（那一行就是询问），skip 放行，plan 照拒", () => {
+    assert.deepEqual(SELF_CONFIRMING_TOOLS, ["install_plugin"]);
+    assert.equal(isSelfConfirmingTool("install_plugin"), true);
+    assert.deepEqual(decidePermission("manual", "install_plugin"), { behavior: "allow" });
+    assert.deepEqual(decidePermission("skip", "install_plugin"), { behavior: "allow" });
+    const plan = decidePermission("plan", "install_plugin");
+    assert.equal(plan.behavior, "deny");
+    if (plan.behavior === "deny") assert.match(plan.message, /install_plugin/);
+  });
+
+  test("preview_plugin 只扫描、让右栏显示草稿：三档一律放行（含 plan 与 manual）", () => {
+    for (const mode of PERMISSION_MODES) {
+      assert.deepEqual(decidePermission(mode, PLUGIN_DRAFT_TOOL), { behavior: "allow" }, mode);
+    }
+    assert.equal(isReadOnlyTool(PLUGIN_DRAFT_TOOL), false);
+  });
+
+  test("show_plugin_board 只显示插件已写好的卡：三档一律放行（manual 也不问），不进只读名单", () => {
+    assert.equal(PLUGIN_BOARD_TOOL, "show_plugin_board");
+    for (const mode of PERMISSION_MODES) {
+      assert.deepEqual(decidePermission(mode, PLUGIN_BOARD_TOOL), { behavior: "allow" }, mode);
+    }
+    assert.equal(isReadOnlyTool(PLUGIN_BOARD_TOOL), false);
+    // 名字相近的不沾光
+    assert.deepEqual(decidePermission("manual", "show_plugin_boards"), { behavior: "ask" });
+  });
+
+  test("自带确认不是通用后门：名字相近的工具、create_skill 都照写操作过闸；不混进只读名单", () => {
+    assert.equal(isSelfConfirmingTool("install_plugins"), false);
+    assert.equal(isReadOnlyTool("install_plugin"), false);
+    assert.equal(decidePermission("manual", "create_skill").behavior, "ask");
+    assert.equal(decidePermission("manual", "add_mcp_server").behavior, "ask");
   });
 });

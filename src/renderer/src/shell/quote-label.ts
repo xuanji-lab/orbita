@@ -15,9 +15,38 @@ const SUMMARY_CHARS = 20;
  */
 export const QUOTE_ROW_PREVIEW_MAX_CHARS = 300;
 
+/** 芯片里文件名的最长码点数；再长从中间省略（保头保尾：扩展名与结尾的版本号 / 日期比中段更能认出是哪份） */
+export const QUOTE_FILE_NAME_MAX = 20;
+
+/** 中间省略：`花园城市新加坡介绍的最终修订版.slides.json` → `花园城市新加坡介…s.json`；不超限原样 */
+export function middleTruncate(name: string, max: number = QUOTE_FILE_NAME_MAX): string {
+  const chars = Array.from(name);
+  if (chars.length <= max) return name;
+  const tail = Math.min(7, Math.floor((max - 1) / 3));
+  const head = max - 1 - tail;
+  return `${chars.slice(0, head).join("")}…${chars.slice(chars.length - tail).join("")}`;
+}
+
+/** 文件引用的出处拆成两段：文件名、位置（页号 / 行号 / 原文已改）。窄格里先省文件名、位置留着 */
+function fileSourceParts(quote: TextQuote, t: Messages): { name: string; position: string } {
+  const name = (quote.filePath ?? "").split(/[\\/]/).pop() || (quote.filePath ?? "");
+  const parts: string[] = [];
+  if (quote.slide !== undefined) parts.push(t.quote.slide(quote.slide));
+  if (quote.missing === true) parts.push(t.quote.missing);
+  else if (quote.ambiguous !== undefined) parts.push(t.quote.ambiguous);
+  else if (quote.lines !== undefined) parts.push(t.quote.lines(quote.lines.from, quote.lines.to));
+  return { name, position: parts.join(" · ") };
+}
+
+/** 文件引用的出处：文件名，演示文稿再加页号，有行号再加行号（`计划.md · 第 12–14 行`） */
+function fileSource(quote: TextQuote, t: Messages): string {
+  const { name, position } = fileSourceParts(quote, t);
+  return position === "" ? name : `${name} · ${position}`;
+}
+
 /** 来源：文件取文件名；历史消息是「第 N 轮 · 谁说的」（迁移来的旧块可能没有轮号） */
 export function quoteSource(quote: TextQuote, t: Messages): string {
-  if (quote.filePath !== undefined) return quote.filePath.split(/[\\/]/).pop() || quote.filePath;
+  if (quote.filePath !== undefined) return fileSource(quote, t);
   const who = quote.role === "user" ? t.quote.userMessage : t.quote.agentReply;
   return quote.turn === undefined ? who : `${t.quote.turn(quote.turn)} · ${who}`;
 }
@@ -30,14 +59,18 @@ export function quoteSource(quote: TextQuote, t: Messages): string {
 export function quoteNoteParts(
   quote: TextQuote,
   t: Messages,
-): { lead: string | null; who: string | null; size: string } {
+): { lead: string | null; who: string | null; size: string; file: string | null } {
   const size =
     quote.truncated === true ? t.quote.truncated(countChars(quote.text)) : t.quote.chars(countChars(quote.text));
   if (quote.filePath !== undefined) {
-    return { lead: quote.filePath.split(/[\\/]/).pop() || quote.filePath, who: null, size };
+    const { name: fullName, position } = fileSourceParts(quote, t);
+    // 芯片上文件名不被 CSS 挤成「新…」：太长就在这里从中间省略，其余宽度紧张时先让正文与字数让位
+    const name = middleTruncate(fullName);
+    // 有位置：位置是 lead，文件名单列（CSS 窄格里先省文件名）；没有位置就和从前一样，文件名当 lead
+    return position === "" ? { lead: name, who: null, size, file: null } : { lead: position, who: null, size, file: name };
   }
   const who = quote.role === "user" ? t.quote.userMessage : t.quote.agentReply;
-  return { lead: quote.turn === undefined ? null : t.quote.turn(quote.turn), who, size };
+  return { lead: quote.turn === undefined ? null : t.quote.turn(quote.turn), who, size, file: null };
 }
 
 /** 展开态的 meta 行：来源 · 字数（截过的标出来） */

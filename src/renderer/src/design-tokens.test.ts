@@ -437,18 +437,20 @@ const OFF_SCALE_SPACING_BUDGET = new Map<string, number>([
   ["src/renderer/src/browser-toolbar/browser-toolbar.css", 1],
   ["src/renderer/src/features/context/context-panel.css", 2], // #375 合入时带来，未收
   ["src/renderer/src/features/memory/memory.css", 1], // #374 合入时带来，未收
+  ["src/renderer/src/features/plugins/plugins.css", 6], // 插件页与面板（#416–#418），体验合并包里记账，合 main 时随这几个 PR 收
+  ["src/renderer/src/features/settings/card-wall.css", 2], // 从 providers-view.css 搬出的卡片墙（#416），原值照搬
   ["src/renderer/src/features/review/excerpts-tab.css", 3],
   ["src/renderer/src/features/settings/info-tip.css", 1],
   ["src/renderer/src/features/settings/migration-view.css", 10],
   ["src/renderer/src/features/settings/price-chart.css", 7],
-  ["src/renderer/src/features/settings/providers-view.css", 8],
+  ["src/renderer/src/features/settings/providers-view.css", 6],
   ["src/renderer/src/features/settings/settings-view.css", 5],
   ["src/renderer/src/features/settings/update-view.css", 1],
   ["src/renderer/src/paper-themes.css", 2],
   ["src/renderer/src/shell/focus/focus.css", 8],
   ["src/renderer/src/shell/toolbar.css", 2],
   ["src/renderer/src/shell/usage.css", 7],
-  ["src/renderer/src/styles.css", 38], // 能力面板删掉旧的 skill 行 tooltip（9px 11px / 3px）
+  ["src/renderer/src/styles.css", 32], // 能力面板删掉旧的 skill 行 tooltip（9px 11px / 3px）；MCP 卡片视图随能力面板删除（−4）；辅助对话旧标签行 .drawer-tab* 随页头上移胶囊删除（−2）
 ]);
 
 describe("design-tokens —— 间距走刻度", () => {
@@ -508,5 +510,19 @@ describe("design-tokens —— z 轴走层", () => {
     scan(rendererCssFiles, CSS_Z_RE, false);
     scan(rendererTsFiles, TS_Z_RE, true);
     assert.deepEqual(hits, [], `以下 z-index 自造了层级数字：\n${hits.join("\n")}`);
+  });
+});
+
+describe("design-tokens —— 等宽字体栈带中文回退", () => {
+  const css = readFileSync(join(TOKENS_DIR, "typography.css"), "utf8");
+  const stack = /--font-family-mono:\s*([^;]+);/.exec(css)?.[1] ?? "";
+  const families = stack.split(",").map((each) => each.trim().replace(/^"|"$/g, ""));
+
+  test("拉丁等宽在前、CJK 回退在后、泛 monospace 殿后（Windows 汉字不再落到宋体）", () => {
+    for (const latin of ["ui-monospace", "Menlo", "Consolas"]) assert.ok(families.includes(latin), `缺 ${latin}`);
+    for (const cjk of ["PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei"]) assert.ok(families.includes(cjk), `缺 ${cjk}`);
+    const firstCjk = Math.min(...["PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei"].map((each) => families.indexOf(each)));
+    assert.ok(families.indexOf("Consolas") < firstCjk && families.indexOf("Menlo") < firstCjk, "CJK 回退必须在拉丁等宽之后");
+    assert.equal(families.at(-1), "monospace");
   });
 });

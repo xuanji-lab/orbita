@@ -19,6 +19,11 @@
     "icon:win": "node scripts/make-icon-win.mjs"
   },
   "dependencies": {
+    "@codemirror/commands": "6.11.1",
+    "@codemirror/lang-markdown": "6.5.2",
+    "@codemirror/language": "6.13.1",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.15",
     "@earendil-works/pi-ai": "0.84.3",
     "@earendil-works/pi-client": "0.84.3",
     "@earendil-works/pi-coding-agent": "0.84.3",
@@ -28,24 +33,33 @@
     "@xterm/addon-fit": "0.11.0",
     "@xterm/xterm": "6.0.0",
     "diff": "^9.0.0",
+    "docx": "9.15.2",
     "electron-updater": "6.8.9",
     "jszip": "3.10.2",
     "katex": "0.16.47",
     "mammoth": "1.13.0",
     "node-pty": "1.1.0",
     "pdfjs-dist": "6.1.200",
+    "pele": "1.13.0",
+    "pptxgenjs": "4.0.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",
+    "rehype-callouts": "2.2.0",
     "rehype-katex": "7.0.1",
     "rehype-raw": "7.0.0",
     "rehype-sanitize": "6.0.0",
+    "rehype-stringify": "10.0.1",
     "remark-breaks": "^4.0.0",
     "remark-cjk-friendly": "2.3.2",
+    "remark-frontmatter": "5.0.0",
     "remark-gfm": "^4.0.1",
     "remark-math": "6.0.0",
+    "remark-parse": "11.0.0",
+    "remark-rehype": "11.1.2",
     "shiki": "^4.4.3",
     "undici": "8.9.0",
+    "unified": "11.0.5",
     "unpdf": "1.8.1"
   },
   "devDependencies": {
@@ -78,6 +92,10 @@
       {
         "from": "build/tray.png",
         "to": "tray.png"
+      },
+      {
+        "from": "resources/builtin-plugins",
+        "to": "builtin-plugins"
       },
       {
         "from": "node_modules/@earendil-works/pi-coding-agent/package.json",

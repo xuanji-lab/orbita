@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import "./automation.css";
 import { Icon } from "../../shell/Icon";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import {
   PanelButton,
   PanelGroupHead,
@@ -15,6 +16,7 @@ import type { ProviderDto } from "@shared/provider";
 import type { SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 import { automationWorkspaceId, type Automation, type AutomationAction } from "../../../../shared/automation.ts";
+import { AutomationDetailView } from "./AutomationDetailView";
 import { AutomationEditView, type AutomationSeed } from "./AutomationEditView";
 import { AutomationRow } from "./AutomationRow";
 import {
@@ -23,6 +25,9 @@ import {
   type AutomationScope,
   type AutomationTemplate,
 } from "./automation-view.ts";
+import { sparkScale } from "./automation-spark.ts";
+import { automationSubOf, resolveAutomationSub, type AutomationSub } from "../../shell/right-panel-memory.ts";
+import { useReportSub } from "../../shell/use-report-sub.ts";
 import type { AutomationsState } from "./useAutomations.ts";
 
 /** 「N 分钟后」这类相对文案要跟着走：每分钟重算一次 now（面板开着才有这个定时器） */
@@ -35,10 +40,14 @@ function useNow(intervalMs: number): number {
   return now;
 }
 
-type View = { kind: "list" } | { kind: "edit"; id: string | null; seed: AutomationSeed | null };
+type View =
+  | { kind: "list" }
+  | { kind: "detail"; id: string }
+  /** from = "detail"：从详情的「改设置」进来，保存 / 返回后回到那条的详情 */
+  | { kind: "edit"; id: string | null; seed: AutomationSeed | null; from?: "detail" };
 
 /**
- * 右栏「自动化」面板（实验功能 automation）：列表 / 运行记录 / 新建与编辑子页 / 空态模板，
+ * 右栏「自动化」面板：列表 / 运行记录 / 新建与编辑子页 / 空态模板，
  * 底部常驻「有任务在跑时阻止系统睡眠」开关。入口在右栏 rail（MCP 之后），壳与宽度同 Skills / MCP。
  *
  * 分组：「本会话」（对话里建的、投回当前这条会话的）与「这个工作区」（其余）；范围切到「全部」按工作区各一组。
@@ -55,22 +64,31 @@ export function AutomationPanel(props: {
   providers: readonly ProviderDto[];
   keepAwake: boolean;
   onKeepAwakeChange: (next: boolean) => void;
-  /** 对话卡的「在右栏查看」：定位到这一条并展开（nonce 递增，同一条重复点也生效） */
+  /** 对话卡的「在右栏查看」：直接打开这一条的详情（nonce 递增，同一条重复点也生效） */
   focus: { id: string; nonce: number } | null;
+  /**
+   * 这次 focus 已经用掉：App 清回 null。不清的话面板每次重新挂载（关了右栏再点自动化）都会被
+   * 同一个 focus 再拉进那条的详情——2026-11-06 用户报「不管在哪个会话点自动化，都回到同一条」。
+   */
+  onFocusConsumed: () => void;
   onOpenSession: (sessionId: string) => void;
   /** 「在这条会话里说一句」：往输入框预填一句引导 */
   onAskInChat: () => void;
+  /**
+   * 第二层（按会话记忆，right-panel-memory.ts）：看哪一条的详情、范围。只在挂载时读一次当初值
+   * （App 按会话换 key 重挂）；之后经 onSubChange 报给 App。编辑页不记（表单里有没存的字）。
+   */
+  sub?: AutomationSub;
+  onSubChange?: (sub: AutomationSub | undefined) => void;
 }) {
   const t = useT();
   const a = t.automation;
   const { state } = props;
   const now = useNow(60_000);
-  const [view, setView] = useState<View>({ kind: "list" });
-  const [scope, setScope] = useState<AutomationScope>("workspace");
+  const [view, setView] = useState<View>(() => (props.sub?.detail === undefined ? { kind: "list" } : { kind: "detail", id: props.sub.detail }));
+  const [scope, setScope] = useState<AutomationScope>(() => props.sub?.scope ?? "workspace");
   const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
-  const [focusedId, setFocusedId] = useState<string | null>(null);
 
   // 工作区被移除之后它名下的自动化还在（会话 id 同理）：组头如实说「已移除的工作区」，不留一个空标题
   const nameOf = (id: string | null): string =>
@@ -79,21 +97,31 @@ export function AutomationPanel(props: {
   const sessionById = useMemo(() => new Map(props.sessions.map((meta) => [meta.id, meta])), [props.sessions]);
   const knownSessionIds = useMemo(() => new Set(props.sessions.map((meta) => meta.id)), [props.sessions]);
 
-  // 从对话卡跳来：回到列表、必要时把范围切到「全部」、展开并高亮那一条
+  // 从对话卡跳来：直接打开那一条的详情（它不在当前范围里就把范围切到「全部」，返回列表时看得到它）
   useEffect(() => {
     if (props.focus === null) return;
     const target = state.automations.find((automation) => automation.id === props.focus?.id);
-    setView({ kind: "list" });
+    // 一次性：用完就让 App 清掉（见 onFocusConsumed）
+    props.onFocusConsumed();
     setMenuOpen(false);
-    if (target === undefined) return;
+    if (target === undefined) {
+      setView({ kind: "list" });
+      return;
+    }
     if (automationWorkspaceId(target) !== props.workspaceId) setScope("all");
-    setOpen((current) => new Set(current).add(target.id));
-    setFocusedId(target.id);
-    const timer = window.setTimeout(() => setFocusedId(null), 2000);
-    return () => window.clearTimeout(timer);
-    // focus 的 nonce 变了才重来；列表刷新不该把高亮再点一遍
+    setView({ kind: "detail", id: target.id });
+    // focus 的 nonce 变了才重来；列表刷新不该把详情再打开一遍
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.focus?.nonce]);
+
+  // 把第二层报给 App：详情里的那一条（编辑页退回它来源的那一层：从详情进的回详情，新建回列表）、范围。
+  // 详情指向的那一条不在了（别处删的 / 重启后已不存在）：列表读回来后按「回列表」报（resolveAutomationSub），面板自己也渲染成回列表
+  const detailId = view.kind === "detail" || (view.kind === "edit" && view.from === "detail") ? view.id : null;
+  const knownIds = useMemo(
+    () => (state.load.kind === "ready" ? new Set(state.automations.map((automation) => automation.id)) : null),
+    [state.load.kind, state.automations],
+  );
+  useReportSub(resolveAutomationSub(automationSubOf(detailId, scope), knownIds), props.onSubChange);
 
   const act = async (automation: Automation, action: AutomationAction): Promise<void> => {
     const outcome = await state.act(automation.id, action);
@@ -102,10 +130,18 @@ export function AutomationPanel(props: {
 
   const groups = groupAutomations(state.automations, scope, { workspaceId: props.workspaceId, sessionId: props.sessionId });
 
+  // 一把尺只按当前显示出来的那些行算（「本工作区 / 全部」切换时跟着变）
+  const sparkMax = sparkScale(
+    groups.flatMap((group) => group.items),
+    now,
+  );
+
   if (view.kind === "edit") {
     const target = view.id === null ? null : (state.automations.find((automation) => automation.id === view.id) ?? null);
     // 编辑的那一条被删了（别处删的 / 会话级联）：回列表
-    if (view.id !== null && target === null) return <BackToList onBack={() => setView({ kind: "list" })} />;
+    if (view.id !== null && target === null) {
+      return state.load.kind === "loading" ? <LoadingFrame /> : <BackToList onBack={() => setView({ kind: "list" })} />;
+    }
     return (
       <AutomationEditView
         key={view.id ?? "new"}
@@ -117,12 +153,19 @@ export function AutomationPanel(props: {
         create={state.create}
         update={state.update}
         remove={(id) => state.act(id, { type: "delete" })}
-        onBack={() => setView({ kind: "list" })}
+        onBack={() => setView(view.from === "detail" && view.id !== null ? { kind: "detail", id: view.id } : { kind: "list" })}
       />
     );
   }
 
-  const header = <PanelTitle icon="calendar-clock" title={a.title} />;
+  const header = <PanelTitle icon={FEATURE_ICON.automation} title={a.title} />;
+  const detailTarget =
+    view.kind === "detail" ? (state.automations.find((automation) => automation.id === view.id) ?? null) : null;
+  // 看的那一条被删了（别处删的 / 会话级联）：回列表
+  // 列表还没读回来（刚重启 / 刚挂载）时别急着判「没了」：记着的详情要等数据到了再认
+  if (view.kind === "detail" && detailTarget === null) {
+    return state.load.kind === "loading" ? <LoadingFrame /> : <BackToList onBack={() => setView({ kind: "list" })} />;
+  }
   const headerExtra = (
     <>
       <PanelHelp label={a.helpLabel} text={a.help} />
@@ -159,6 +202,30 @@ export function AutomationPanel(props: {
       },
     });
   };
+
+  if (view.kind === "detail" && detailTarget !== null) {
+    const bound = detailTarget.target.kind === "this_session" ? sessionById.get(detailTarget.target.sessionId) : undefined;
+    return (
+      <RightPanelFrame header={header} headerExtra={headerExtra} contentKey={`detail:${detailTarget.id}`} footer={footer}>
+        <div className="auto-detail-wrap">
+          <button type="button" className="auto-back" onClick={() => setView({ kind: "list" })}>
+            <Icon name="chevron-left" size={14} strokeWidth={2} /> {a.detail.back}
+          </button>
+        </div>
+        <AutomationDetailView
+          key={detailTarget.id}
+          automation={detailTarget}
+          now={now}
+          boundSession={bound === undefined ? null : { mode: bound.mode, title: bound.title }}
+          knownSessionIds={knownSessionIds}
+          act={(action) => state.act(detailTarget.id, action)}
+          onEdit={() => setView({ kind: "edit", id: detailTarget.id, seed: null, from: "detail" })}
+          onDeleted={() => setView({ kind: "list" })}
+          onOpenSession={props.onOpenSession}
+        />
+      </RightPanelFrame>
+    );
+  }
 
   return (
     <RightPanelFrame header={header} headerExtra={headerExtra} contentKey="list" footer={footer}>
@@ -219,7 +286,7 @@ export function AutomationPanel(props: {
         <>
           <div className="auto-empty">
             <span className="auto-empty-icon">
-              <Icon name="calendar-clock" size={18} strokeWidth={1.8} />
+              <Icon name={FEATURE_ICON.automation} size={18} strokeWidth={1.8} />
             </span>
             <strong>{scope === "all" ? a.empty.titleAll : a.empty.title}</strong>
             <p>{a.empty.body}</p>
@@ -257,21 +324,10 @@ export function AutomationPanel(props: {
                   key={automation.id}
                   automation={automation}
                   now={now}
+                  sparkMax={sparkMax}
                   boundSession={bound === undefined ? null : { mode: bound.mode, title: bound.title }}
-                  knownSessionIds={knownSessionIds}
-                  open={open.has(automation.id)}
-                  focused={focusedId === automation.id}
-                  onToggle={() =>
-                    setOpen((current) => {
-                      const next = new Set(current);
-                      if (next.has(automation.id)) next.delete(automation.id);
-                      else next.add(automation.id);
-                      return next;
-                    })
-                  }
+                  onOpen={() => setView({ kind: "detail", id: automation.id })}
                   onAct={(action) => void act(automation, action)}
-                  onEdit={() => setView({ kind: "edit", id: automation.id, seed: null })}
-                  onOpenSession={props.onOpenSession}
                 />
               );
             })}
@@ -283,6 +339,16 @@ export function AutomationPanel(props: {
 }
 
 /** 正在编辑的那条自动化已经不在了：一帧空页后回列表（effect 里切视图，避免渲染期 setState） */
+/** 记着的详情在等列表读回来：只画壳与「加载中」，不抢着回列表 */
+function LoadingFrame() {
+  const a = useT().automation;
+  return (
+    <RightPanelFrame header={<PanelTitle icon={FEATURE_ICON.automation} title={a.title} />} contentKey="loading">
+      <p className="panel-empty">{a.loading}</p>
+    </RightPanelFrame>
+  );
+}
+
 function BackToList(props: { onBack: () => void }) {
   useEffect(props.onBack, [props.onBack]);
   return null;

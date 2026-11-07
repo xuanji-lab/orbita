@@ -49,7 +49,7 @@ function task(modelId: string, level: ThinkingLevel, cost: number): ChartTask {
   return { providerId: "kimi-coding", modelId, level, totals };
 }
 
-function setup(tasks: ChartTask[]) {
+function setup(tasks: ChartTask[], providers: () => Promise<Provider[]> = async () => [provider]) {
   const state = { version: 1, tasks, builds: 0, sessions: [] as SessionMeta[] };
   const source = createPriceChartSource({
     ledger: {
@@ -60,7 +60,7 @@ function setup(tasks: ChartTask[]) {
         return state.tasks;
       },
     },
-    providers: async () => [provider],
+    providers,
     catalog: async () => [],
     sessions: async () => state.sessions,
     snapshot,
@@ -107,5 +107,24 @@ describe("createPriceChartSource", () => {
     const { source } = setup([task("k3", "max", 2), task("claude-opus-5-5", "max", 9)]);
     const text = formatModelCosts(await source());
     assert.ok(!text.includes("claude-opus-5-5"));
+  });
+
+  test("服务商开关：关着的服务商不进图也不进 model_costs 的表；翻回来立即重算", async () => {
+    const live = { provider: { ...provider } as Provider };
+    const { source } = setup([task("k3", "max", 2), task("k3", "max", 3), task("k3", "max", 4)], async () => [live.provider]);
+    assert.ok(formatModelCosts(await source()).includes("k3 |"));
+    live.provider = { ...provider, disabled: true };
+    assert.ok(!formatModelCosts(await source()).includes("k3 |"), "关着的服务商的型号不该再被推荐");
+    live.provider = { ...provider };
+    assert.ok(formatModelCosts(await source()).includes("k3 |"), "再打开一切照旧");
+  });
+
+  test("服务商开关：同一型号另有开着的服务商声明时，型号仍在表里", async () => {
+    const twin: Provider = { ...provider, id: "kimi-2", displayName: "Kimi 2" };
+    const { source } = setup([task("k3", "max", 2), task("k3", "max", 3), task("k3", "max", 4)], async () => [
+      { ...provider, disabled: true },
+      twin,
+    ]);
+    assert.ok(formatModelCosts(await source()).includes("k3 |"));
   });
 });

@@ -233,6 +233,21 @@
 .tp-plan li[data-status="in_progress"] .tp-text {
   font-weight: var(--weight-semibold);
 }
+/* 等你 / 等外部：沙漏（黄）+ 文字旁一枚黄签写等什么。不占「正在做」，不加粗、不退成三级色（还没做完） */
+.tp-plan li[data-status="waiting"] .tp-slot {
+  color: var(--color-warning);
+}
+.tp-wait {
+  display: inline-block;
+  margin-left: var(--space-1-5);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-height-ui);
+  color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 14%, transparent);
+}
 .tp-ring {
   width: 10px;
   height: 10px;

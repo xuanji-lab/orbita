@@ -9,6 +9,8 @@ import type {
   AutomationAction,
   AutomationCreateInput,
   AutomationEvent,
+  AutomationModeRowRequest,
+  AutomationModeRowResult,
   AutomationOutcome,
   AutomationPatch,
 } from "../../shared/automation.ts";
@@ -26,6 +28,9 @@ export const automationApi = {
   /** 「转成普通会话」：自动化新开的会话进左侧栏 */
   promote: (sessionId: string): Promise<{ ok: true } | { ok: false; error: string }> =>
     ipcRenderer.invoke(ipcChannels.automationPromote, sessionId),
+  /** 对话里「改权限」那一行的按钮（允许 / 改回只读 / 保持只读）；主进程重验会话与自动化后才改，结局以数据返回 */
+  modeFromRow: (request: AutomationModeRowRequest): Promise<AutomationModeRowResult> =>
+    ipcRenderer.invoke(ipcChannels.automationModeFromRow, request),
   onEvent: (listener: (event: AutomationEvent) => void): (() => void) => {
     const handler = (_e: unknown, event: AutomationEvent) => listener(event);
     ipcRenderer.on(ipcChannels.automationEvent, handler);

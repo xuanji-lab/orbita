@@ -28,7 +28,8 @@ import type { ProcessChapter } from "../chat/turn-process.ts";
 
 /** 一步的出处：它是这张计划写下之后才出现的（加 / 改说法 / 拆出），面板在行下写一句 */
 export interface StepNote {
-  kind: "added" | "reworded" | "split";
+  /** moved = 用户要求先做它，被提到了前面（只记往前提的；被让位的那步靠 waiting / pending 的状态说话） */
+  kind: "added" | "reworded" | "split" | "moved";
   /** 那一版写的理由；没写 = null */
   why: string | null;
   /** 原文字（改说法 / 拆出时）；加了 = null */
@@ -53,6 +54,8 @@ export interface PlanVersion {
   later: PlanLater[];
   /** 相对上一版的改动；只打勾 / 第一版 = 空 */
   changes: PlanChange[];
+  /** 这一版新变成 waiting 的步（不算「改动」：不进 changes、不计入 edits，只给对话里的提示行用） */
+  waits: { text: string; waitingFor: string | null }[];
   /** 这一版去掉的步（含 id）与原位置（排在新清单第几步之后，-1 = 最前） */
   removed: { id: string; text: string; afterNext: number }[];
   /** 这一次调用让这一轮先停下、等你在聊天框里回答（工具结果 details.awaiting；还在跑的版本没有） */
@@ -126,15 +129,24 @@ export function planTimeline(records: readonly TranscriptRecord[]): PlanTimeline
       const origin = diff.origins.get(i);
       const pairedPrev = diff.pairs[i];
       let note: StepNote | null = null;
+      const movedUp = diff.changes.some((change) => change.kind === "moved" && change.earlier && change.text === item.text);
       if (origin !== undefined && !diff.fresh) {
         note = { kind: origin.kind, why: raw.why, from: origin.from, version: n };
+      } else if (movedUp && !diff.fresh) {
+        note = { kind: "moved", why: raw.why, from: null, version: n };
       } else if (pairedPrev !== null && pairedPrev !== undefined && prev !== undefined) {
         // 配上的步沿用上一版的出处
         note = prev.items[pairedPrev]?.note ?? null;
       } else if (prev !== undefined && !diff.fresh && pairedPrev === null) {
         note = { kind: "added", why: raw.why, from: null, version: n };
       }
-      return { id: stepIds[i] ?? mint(), text: item.text, status: item.status, note };
+      return {
+        id: stepIds[i] ?? mint(),
+        text: item.text,
+        status: item.status,
+        ...(item.waitingFor === undefined ? {} : { waitingFor: item.waitingFor }),
+        note,
+      };
     });
     const removed = diff.fresh
       ? []
@@ -151,6 +163,7 @@ export function planTimeline(records: readonly TranscriptRecord[]): PlanTimeline
       why: raw.why,
       later: raw.later,
       changes: diff.fresh ? [] : diff.changes,
+      waits: diff.fresh ? [] : diff.waits,
       removed,
       awaiting: awaitingOf(raw.record),
     });
@@ -285,7 +298,7 @@ export function groupBySteps(
   return out;
 }
 
-/** 一个过程块里发生的计划改动（对话里「计划改了：…」那一行的素材）；没有改动 = null */
+/** 一个过程块里发生的计划改动（对话里「计划改了：…」那一行的素材，含「X 在等你」）；没有改动 = null */
 export interface PlanNotice {
   changes: PlanChange[];
   /** 最后一条带理由的版本的 why；都没写 = null */
@@ -302,8 +315,11 @@ export function planNoticeOf(timeline: PlanTimeline | null, toolCallIds: readonl
   const changes: PlanChange[] = [];
   let why: string | null = null;
   for (const version of timeline.versions) {
-    if (!wanted.has(version.toolCallId) || version.changes.length === 0) continue;
-    changes.push(...version.changes);
+    if (!wanted.has(version.toolCallId)) continue;
+    // 「X 在等你」排在结构改动之后：对话里先说「把 X 提到前面」，再说被让位的那步在等什么
+    const waits = version.waits.map((wait): PlanChange => ({ kind: "waiting", text: wait.text, waitingFor: wait.waitingFor }));
+    if (version.changes.length === 0 && waits.length === 0) continue;
+    changes.push(...version.changes, ...waits);
     if (version.why !== null) why = version.why;
   }
   return changes.length === 0 ? null : { changes, why };

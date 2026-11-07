@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
-import { liveTail, settledEnd, stepClockFrom, stepDisplay, taskHeadState, turnDigests } from "./task-progress.ts";
+import { chapterTitle, liveTail, settledEnd, stepClockFrom, stepDisplay, taskHeadState, turnDigests } from "./task-progress.ts";
 import { planTimeline, planView, type PlanView } from "./plan-timeline.ts";
 
 /** 当前这张计划（面板头一行与计时吃的形状） */
@@ -199,5 +199,43 @@ describe("stepDisplay（计划里一步怎么画）", () => {
     // 其余步不受影响（写完计划等确认时，做完的步照样是勾）
     assert.deepEqual(stepDisplay("done", { working: true, awaiting: true }), { status: "done", active: false });
     assert.deepEqual(stepDisplay("pending", { working: true, awaiting: true }), { status: "pending", active: false });
+  });
+});
+
+describe("stepDisplay：waiting（等你 / 等外部）", () => {
+  test("waiting 不是蓝饼、不算在做：会话在跑也画成 waiting，active 为假", () => {
+    assert.deepEqual(stepDisplay("waiting", { working: true, awaiting: false }), { status: "waiting", active: false });
+    assert.deepEqual(stepDisplay("waiting", { working: false, awaiting: false }), { status: "waiting", active: false });
+  });
+
+  test("计划停下等你确认时 waiting 照样是 waiting（只有 in_progress 被按待做画）", () => {
+    assert.deepEqual(stepDisplay("waiting", { working: true, awaiting: true }), { status: "waiting", active: false });
+  });
+});
+
+describe("taskHeadState：waiting 的步不算做完", () => {
+  test("计划里还有 waiting 的步、会话停了 = 停下了（不是做完了）", () => {
+    const plan = latestPlan([plan_("p1", 1)]);
+    assert.ok(plan !== null);
+    const withWaiting = { ...plan, items: [{ text: "a", status: "done" as const }, { text: "b", status: "waiting" as const }], done: 1 };
+    assert.equal(taskHeadState({ run: "done", turnError: false, turns: 1, plan: withWaiting }), "stopped");
+  });
+});
+
+describe("chapterTitle（面板里一章的标题：别把看不懂的英文思考当标题）", () => {
+  const think = { title: "I've got all 25 entries already annotated, now building the table", source: "think" as const };
+
+  test("用户写中文、思考标题是纯英文：不用它（退回按工具归类的名字）", () => {
+    assert.equal(chapterTitle(think, "先做第 3 步"), null);
+  });
+
+  test("用户写英文、或思考标题里有汉字：照用", () => {
+    assert.equal(chapterTitle(think, "do step 3 first"), think.title);
+    assert.equal(chapterTitle({ title: "整理 25 条标注", source: "think" }, "先做第 3 步"), "整理 25 条标注");
+  });
+
+  test("正文旁白（say）永远用：语言由回复语言规则负责；没有标题 = null", () => {
+    assert.equal(chapterTitle({ title: "Reading the files", source: "say" }, "先做第 3 步"), "Reading the files");
+    assert.equal(chapterTitle({ title: null, source: "tools" }, "先做第 3 步"), null);
   });
 });

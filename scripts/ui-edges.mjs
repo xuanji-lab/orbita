@@ -67,6 +67,15 @@ const CHECKS = [
     skipNoTrailing: true,
   },
   {
+    name: "文档面板·挑选列表行：改动时间钉在右血线",
+    row: ".dp-picker-row",
+    leading: ".orbita-icon",
+    trailing: ".dp-picker-age",
+    // .dp-picker-row 的左右内边距 var(--space-2)；面板里没有已有文档（挑选列表不出现）时跳过
+    rightPad: 8,
+    skipNoTrailing: true,
+  },
+  {
     name: "能力面板·行：开关钉在右血线",
     row: ".ability-row",
     leading: ".ability-dot-slot",
@@ -113,6 +122,15 @@ const CHECKS = [
     trailing: ".auto-count",
     // .auto-row 的横向内边距 var(--space-3)；没有运行记录的行次数为空串，元素仍在 DOM
     rightPad: 12,
+    skipNoTrailing: true,
+  },
+  {
+    name: "左栏·会话行：「多久没动了」钉在右血线（悬停层的键叠在同一格里，静止不占位）",
+    row: ".task-row",
+    leading: ".option-row span",
+    trailing: ".task-row-age",
+    // 静止层 padding-inline-end var(--space-1) = 行首状态槽的左内边距（NavRow 的 padding-left）
+    rightPad: 4,
     skipNoTrailing: true,
   },
 ];
@@ -186,7 +204,11 @@ const column = await evaluate(`(() => {
   const transcript = document.querySelector(".chat-transcript > div");
   const composer = document.querySelector(".composer-card");
   if (transcript === null || composer === null) return null;
-  const t = transcript.getBoundingClientRect();
+  const box = transcript.getBoundingClientRect();
+  // 方向 N（2026-11-07）：消息列左侧有一条索引边栏（padding-left: --gutter），「外线」是它的内容盒边缘，
+  // 不是列的 border box——输入卡与正文都坐在内容盒里。纸面两档没有边栏，padding 为 0，口径不变
+  const style = getComputedStyle(transcript);
+  const t = { left: box.left + parseFloat(style.paddingLeft), right: box.right - parseFloat(style.paddingRight) };
   const c = composer.getBoundingClientRect();
   const para = document.querySelector(".assistant-prose .chat-md > *");
   const hem = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--space-3")) + 1;

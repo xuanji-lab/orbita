@@ -4,14 +4,14 @@ import { slashTokenAt } from "./slash-trigger.ts";
  * 右栏面板 → 输入框的「token 通道」纯逻辑：
  *
  * 「`/` + 空格」选取：行首或空白后孤立的 `/` 按空格 → 删掉 `/`、打开右栏
- * 能力面板（Skills + MCP 一张列表）进入选取模式，选中后把 token 插回原光标位置。**句中同样触发**
+ * 插件面板进入选取模式（零散技能 / MCP 在插件页里也是一行插件），选中后把 token 插回原光标位置。**句中同样触发**
  *（2026-10-11 用户裁定：只认消息开头是 bug，句中打 `/` 加空格要和开头完全
  * 一样）；防误触靠 slashTokenAt 自带的前导空白闸门与字符集闸门。
  *（曾有第二条路——面板卡片长按后 HTML5 拖入输入框；2026-10 用户裁决删去。）
  *
- * token 形态由发送端定义：skill → `/skill:<slug> `，MCP → `/mcp:<server> `
+ * token 形态由发送端定义：skill → `/skill:<slug> `，MCP → `/mcp:<server> `，插件 → `/plugin:<name> `
  * （`/skill:` 的展开边界在 `@shared/skill` 的 findSkillTokens，同一套 token 语法）。
- * 两个 token 都带尾随空格——尾随空格让 token 天然终止、光标落在继续打字的位置。
+ * 三种 token 都带尾随空格——尾随空格让 token 天然终止、光标落在继续打字的位置。
  *
  * 纯函数：不 import React，可被 `node --test` 直接加载。
  */
@@ -24,6 +24,11 @@ export function skillToken(slug: string): string {
 /** MCP server 的插入 token：`/mcp:<name> ` */
 export function mcpToken(name: string): string {
   return `/mcp:${name} `;
+}
+
+/** 插件的插入 token：`/plugin:<name> `（name 是插件标识，不是显示名） */
+export function pluginToken(name: string): string {
+  return `/plugin:${name} `;
 }
 
 /**
@@ -51,7 +56,7 @@ export function insertToken(
 }
 
 /**
- * 「`/` + 空格」是否打开右栏能力面板：光标紧跟在孤立 `/` 之后（`/` 之前
+ * 「`/` + 空格」是否打开右栏插件面板：光标紧跟在孤立 `/` 之后（`/` 之前
  * 是行首或空白，`/` 之后还没打任何字）。与 slash-trigger 的 token 规则同源；
  * **句中同样开**（2026-10-11 用户裁定：只认消息开头是 bug）——防误触由
  * slashTokenAt 的前导空白闸门与字符集闸门把关：`a/ `、`https:/ `、`C:/ `、
@@ -70,9 +75,8 @@ export function slashSpaceOpensPanel(value: string, cursor: number): number | nu
 /**
  * 选取模式的受控接口：App 持有（面板开在哪个槽、插入锚点都在那边），面板只管
  * 上报。锚点 = 输入框里被删掉的那个 `/` 的位置——选中后 token 插回原处。
- * Tab 在面板里轮换「全部 / 技能 / MCP」三个页签（2026-10-30 合成一张列表后），
- * 不再经 App 换面板，所以这里没有「切到另一边」的回调。
- * 候选按哪个工作区筛，由面板自己拿主槽会话的工作区（App 传给能力面板的 workspace）。
+ * ↑↓ ↵ → ← Esc 都在面板内部处理（plugin-picker.ts），只有「选中」与「取消」经这里上报。
+ * 候选按哪个工作区筛，由面板自己拿主槽会话的工作区（PluginsView 的 currentWorkspaceId）。
  */
 export interface TokenPickerControl {
   /** 选中一条：token 插回锚点、焦点回输入框 */
@@ -90,24 +94,4 @@ export interface TokenPickResult {
   token: string | null;
   position: number;
   nonce: number;
-}
-
-/** 面板行内「选用」按钮的一次性插入请求（nonce 单调递增，先例同
- *  TokenPickResult）。与选取模式的锚点不同：按钮是浏览态入口，没有锚点——
- *  插到输入框**当前光标处**，面板不关（可以连插几条） */
-export interface PanelInsertRequest {
-  token: string;
-  nonce: number;
-}
-
-/**
- * 行内按钮的插入位置：输入框带着光标历史（selectionStart > 0，失焦后仍停在
- * 最后一次的位置）或草稿为空 → 当前光标；selectionStart 停在 0 而草稿非空 →
- * textarea 从未拿到过焦点，按「没碰过输入框」处理，落到草稿末尾——免得把
- * token 前插到恢复出来的草稿头上。越位（草稿被外部改短后光标停在旧位置
- * 之外）夹回草稿长度。
- */
-export function panelInsertPosition(selectionStart: number, draftLength: number): number {
-  const start = Math.max(0, Math.min(selectionStart, draftLength));
-  return start > 0 || draftLength === 0 ? start : draftLength;
 }

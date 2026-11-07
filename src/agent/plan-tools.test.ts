@@ -44,6 +44,21 @@ describe("update_plan", () => {
     assert.equal(planReceipt([{ text: "a", status: "done" }]), "Plan updated: 1/1 done. All steps done.");
   });
 
+  test("回执：waiting 的步列在后面带上等什么，不算完成；没有在做的也不说「All steps done」", () => {
+    assert.equal(
+      planReceipt([
+        { text: "a", status: "done" },
+        { text: "b", status: "waiting", waitingFor: "等你改权限" },
+        { text: "c", status: "in_progress" },
+      ]),
+      "Plan updated: 1/3 done. Now: c Waiting: b (等你改权限).",
+    );
+    assert.equal(
+      planReceipt([{ text: "a", status: "done" }, { text: "b", status: "waiting" }]),
+      "Plan updated: 1/2 done. Waiting: b.",
+    );
+  });
+
   test("执行：回执给模型，整张计划进 details；坏入参照样拒（校验在 shared/plan.ts）", async () => {
     const { run } = setup();
     const out = await run("c1", { items: [{ text: "a", status: "in_progress" }] });
@@ -58,6 +73,67 @@ describe("update_plan", () => {
     }
   });
 
+  test("规则：in_progress 是此刻真在做的那一步，卡住的标 waiting（取代「前一步没完不能开后一步」）", () => {
+    const { tool } = setup();
+    const description = tool.description;
+    assert.match(description, /in_progress is the step you are actually working on right now/);
+    assert.match(description, /at most one step is in_progress at a time/);
+    assert.match(description, /`waiting`, not in_progress/);
+    assert.match(description, /`waitingFor`/);
+    assert.match(description, /do not save the ticks for the end/);
+    assert.doesNotMatch(description, /Do not start a later step while an earlier one/);
+    assert.doesNotMatch(description, /Exactly one step is in_progress/);
+  });
+
+  test("用户要求先做某一步：提到未完成步骤最前、标 in_progress、写 why，原来那步回 pending 或 waiting（promptGuidelines）", () => {
+    const { tool } = setup();
+    const guidelines = (tool.promptGuidelines ?? []).join("\n");
+    assert.match(guidelines, /asks you to do some step first/);
+    assert.match(guidelines, /move that step to the front of the unfinished steps, mark it in_progress/);
+    assert.match(guidelines, /the user asked to do this first/);
+    assert.match(guidelines, /goes back to pending .* or to waiting with `waitingFor`/);
+    assert.match(guidelines, /never keep a stuck step in_progress/);
+    // 主会话 PR #446 的第三条（计划外新活先进计划）没被冲掉
+    assert.match(guidelines, /user's new message asks for something the current plan does not cover/);
+  });
+
+  test("schema：status 枚举含 waiting，items 里有可选的 waitingFor", () => {
+    const { tool } = setup();
+    const itemSchema = (tool.parameters as unknown as { properties: { items: { items: { properties: Record<string, { enum?: string[] }>; required: string[] } } } })
+      .properties.items.items;
+    assert.deepEqual(itemSchema.properties["status"]?.enum, ["pending", "in_progress", "waiting", "done"]);
+    assert.ok("waitingFor" in itemSchema.properties);
+    assert.deepEqual(itemSchema.required, ["text", "status"]);
+  });
+
+  test("跳步：先做第 3 步 + 第 2 步 waiting 的调用能过校验，details 带 waitingFor；挪了顺序没写 why 会被提醒、写了不提醒", async () => {
+    const two = items(["装好", "in_progress"], ["立场表", "pending"], ["检验", "pending"]);
+    const jumped = {
+      items: [
+        { text: "立场表", status: "in_progress" },
+        { text: "装好", status: "waiting", waitingFor: "等你改权限" },
+        { text: "检验", status: "pending" },
+      ],
+    };
+    const { run } = setup({ branch: [planEntry("p1", two), planEntry("p2", parsePlanCall(jumped).items)] });
+    const out = await run("p2", jumped);
+    const text = (out as { content: { text: string }[] }).content[0]?.text ?? "";
+    assert.match(text, /Now: 立场表 Waiting: 装好 \(等你改权限\)/);
+    assert.match(text, /pass `why`/);
+    assert.deepEqual((out as { details: { plan: PlanItem[] } }).details.plan[1], { text: "装好", status: "waiting", waitingFor: "等你改权限" });
+    const withWhy = await run("p2", { ...jumped, why: "user asked to do this first" });
+    assert.doesNotMatch((withWhy as { content: { text: string }[] }).content[0]?.text ?? "", /pass `why`/);
+  });
+
+  test("只是把卡住的步标 waiting（顺序不变）：不算结构改动，不提醒 why、plan 档也不因此停下", async () => {
+    const before = items(["装好", "in_progress"], ["立场表", "pending"]);
+    const call = { items: [{ text: "装好", status: "waiting", waitingFor: "等你" }, { text: "立场表", status: "in_progress" }] };
+    const { run } = setup({ branch: [planEntry("p1", before), planEntry("p2", parsePlanCall(call).items)], getMode: () => "plan" });
+    const out = await run("p2", call);
+    assert.doesNotMatch((out as { content: { text: string }[] }).content[0]?.text ?? "", /pass `why`/);
+    assert.equal((out as { details: { awaiting?: boolean } }).details.awaiting, undefined);
+  });
+
   test("schema v4：why / later / confirm 都是可选字段，说明里讲了怎么用", () => {
     const { tool } = setup();
     const schema = tool.parameters as unknown as { properties: Record<string, unknown>; required: string[] };
@@ -66,6 +142,14 @@ describe("update_plan", () => {
     for (const word of ["`why`", "`later`", "`confirm`", "same batch as the next step's first tool call"]) {
       assert.ok(tool.description.includes(word), word);
     }
+  });
+
+  test("用户中途提计划外的新活：先进计划（自成步骤 + why）再开干，并行的旧活在步骤里写明", () => {
+    const { tool } = setup();
+    const guidelines = (tool.promptGuidelines ?? []).join("\n");
+    assert.match(guidelines, /user's new message asks for something the current plan does not cover/);
+    assert.match(guidelines, /update the plan before you start on it/);
+    assert.match(guidelines, /keeps running alongside/);
   });
 
   test("计划外的活要先加步骤、顺手看到的写 later：规则在 promptGuidelines（随工具启用、整会话不变），不只在说明里", () => {

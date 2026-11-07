@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Icon, type IconName } from "./Icon";
+import { isMenuDismissKey } from "./escape-key.ts";
 import { placeMenu, type MenuBox, type MenuPlacementSide } from "./menu-position";
 import { useT } from "../locale.ts";
 
@@ -363,11 +364,21 @@ export function Menu(props: {
     };
     // 滚动与改窗口大小：追着重定位而不是关门。锚点跟着界面动了，菜单跟着锚点走；
     // 锚点整个出屏（placeMenu 判 visible=false）才关门——那时跟着走是挂在天上
+    // 焦点不在菜单里（触发键还留着焦点）时菜单自己的 onKeyDown 收不到 Esc，全局的「关面板」会把文档标签一起关掉：
+    // 开着的时候在文档捕获阶段认领 Esc（见 escape-key.ts）
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!isMenuDismissKey(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+    };
     document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
     window.addEventListener("resize", positionMenu);
     window.addEventListener("scroll", positionMenu, true);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("resize", positionMenu);
       window.removeEventListener("scroll", positionMenu, true);
     };

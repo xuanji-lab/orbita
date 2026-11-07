@@ -65,11 +65,6 @@
   color: var(--color-text-tertiary);
 }
 
-/* 从对话卡「在右栏查看」跳来的那一条：accent 描边亮一下，不位移 */
-.auto-item[data-focus="true"] {
-  box-shadow: 0 0 0 1px var(--color-accent);
-}
-
 .auto-row {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr) auto;
@@ -119,18 +114,77 @@
   line-height: var(--line-height-ui);
 }
 
-/* 行尾次数：钉在行右内边距（.row-trailing）；悬停动作簇浮出时让位 */
+/*
+ * 行右侧固定一块：近 7 天小柱状图 + 「累计 N 次」。每行同宽，图与累计跨行上下对齐；钉在行右内边距（.row-trailing）。
+ * 柱高由 TSX 内联（共用一把尺），颜色 / 宽度在这里：今天墨色、其余 tertiary、有失败 danger、没跑一道细线。
+ */
+.auto-list {
+  container: auto-list / inline-size;
+  --auto-run-size: 22px; /* 悬停 ▶ 的边长（IconButton size） */
+}
+
+.auto-trail {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  transition: var(--transition-hover);
+}
+
+.auto-spark {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-0-5);
+  width: calc(7 * var(--space-1-5) + 6 * var(--space-0-5));
+  height: 18px;
+  flex: none;
+}
+
+.auto-bar {
+  flex: none;
+  width: var(--space-1-5);
+  border-radius: 1px;
+  background: var(--color-text-secondary);
+}
+.auto-bar[data-today] {
+  background: var(--color-text-primary);
+}
+/* 创建之前：什么都不画，只占位 */
+.auto-bar[data-kind="na"] {
+  background: transparent;
+}
+/* 没跑：浅线，和跑过的柱拉开 */
+.auto-bar[data-kind="none"] {
+  background: var(--color-border-strong);
+}
+.auto-bar[data-kind="failed"] {
+  background: var(--color-danger);
+}
+/* 正在跑：空心描边柱，跑完变实心 */
+.auto-bar[data-kind="running"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--color-text-primary);
+}
+
+/* 暂停 / 已完成：整张图变淡（失败行保持，红柱本身是信号） */
+.auto-item[data-state="paused"] .auto-spark,
+.auto-item[data-state="completed"] .auto-spark {
+  opacity: 0.5;
+}
+
 .auto-count {
-  padding-top: var(--space-0-5);
+  width: 5.5em;
+  text-align: right;
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  transition: var(--transition-hover);
 }
 
 .auto-sub {
-  grid-column: 2 / 4;
+  grid-column: 2;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -139,11 +193,12 @@
   color: var(--color-text-secondary);
 }
 
-/* 悬停动作簇：绝对定位盖在行尾，静止时不占位 */
+/* 悬停动作簇：绝对定位盖在行尾，静止时不占位；▶ 出现时右侧那块整体左让 */
 .auto-acts {
   position: absolute;
-  top: var(--space-2);
+  top: 50%;
   right: var(--space-2);
+  transform: translateY(-50%);
   display: inline-flex;
   align-items: center;
   gap: var(--space-0-5);
@@ -153,16 +208,36 @@
 }
 
 .auto-item:hover .auto-acts,
-.auto-item:focus-within .auto-acts,
-.auto-item[data-menu="true"] .auto-acts {
+.auto-item:focus-within .auto-acts {
   opacity: 1;
   pointer-events: auto;
 }
 
-.auto-item:hover .auto-count,
-.auto-item:focus-within .auto-count,
-.auto-item[data-menu="true"] .auto-count {
-  opacity: 0;
+/* 只有 ▶ 真出现（能运行）的行才让位：行右内边距让出 ▶ 的宽（22px）+ 间距，次数不被盖住 */
+.auto-row {
+  transition: padding-right var(--duration-fast) ease;
+}
+.auto-item[data-runnable="true"]:hover .auto-row,
+.auto-item[data-runnable="true"]:focus-within .auto-row {
+  padding-right: calc(var(--space-2) + var(--auto-run-size) + var(--space-2));
+}
+
+/* 右栏窄（容器 < 360px）：先藏柱状图，名字优先，只留「累计 N 次」，回到标题行右上 */
+@container auto-list (max-width: 343px) {
+  .auto-spark {
+    display: none;
+  }
+  .auto-trail {
+    grid-row: 1;
+    align-self: start;
+    padding-top: var(--space-0-5);
+  }
+  .auto-count {
+    width: auto;
+  }
+  .auto-sub {
+    grid-column: 2 / 4;
+  }
 }
 
 /* 一句话提醒（失败原因 / 会卡在审批）：行内左缘与标题对齐 */
@@ -181,21 +256,6 @@
   color: var(--color-warning);
 }
 
-/* 删除二次确认：先讲后果再动作 */
-.auto-confirm {
-  display: grid;
-  gap: var(--space-2);
-  margin: 0 var(--space-2) var(--space-2);
-  padding: var(--space-3);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-muted);
-  font-size: var(--font-size-sm);
-}
-.auto-confirm-actions {
-  display: flex;
-  gap: var(--space-2);
-  justify-content: flex-end;
-}
 
 /* ── 运行记录 ── */
 
@@ -608,4 +668,290 @@
 }
 .auto-runbar-error {
   color: var(--color-danger);
+}
+
+/* ── 详情视图（列表单击一行进来） ── */
+
+.auto-detail {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-3) var(--space-4);
+}
+
+.auto-back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  justify-self: start;
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-1);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+.auto-back:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.auto-dhead {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.auto-dtitle {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--font-size-lg);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-height-ui);
+}
+.auto-dsub {
+  margin: calc(var(--space-2) * -1) 0 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
+}
+.auto-dnote {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+.auto-dnote[data-tone="danger"] {
+  color: var(--color-danger);
+}
+.auto-dnote[data-tone="warn"] {
+  color: var(--color-warning);
+}
+
+/* 状态徽标：文字说话，底色是第二信号（同列表行状态图标的色口径） */
+.auto-badge {
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-medium);
+  line-height: var(--line-height-ui);
+  white-space: nowrap;
+}
+.auto-badge[data-state="running"] {
+  background: color-mix(in srgb, var(--color-info) 12%, var(--color-bg-panel));
+  color: var(--color-info);
+}
+.auto-badge[data-state="active"] {
+  background: color-mix(in srgb, var(--color-success) 12%, var(--color-bg-panel));
+  color: var(--color-success);
+}
+.auto-badge[data-state="paused"] {
+  background: color-mix(in srgb, var(--color-warning) 12%, var(--color-bg-panel));
+  color: var(--color-warning);
+}
+.auto-badge[data-state="failed"] {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+/* 动作排：删除钉右 */
+.auto-dacts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.auto-dacts-end {
+  margin-left: auto;
+}
+
+/* 按钮：安静控件 + 发丝框，与插件详情的 .pl-btn 同一套 token */
+.auto-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  flex: none;
+  height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  box-shadow: inset 0 0 0 1px var(--color-border-default);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.auto-btn:hover {
+  background: var(--option-hover-bg);
+  color: var(--color-text-primary);
+}
+.auto-btn.danger {
+  color: var(--color-danger);
+}
+.auto-btn.danger:hover {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+.auto-btn.solid-danger,
+.auto-btn.solid-danger:hover {
+  background: var(--color-danger-solid);
+  color: var(--color-danger-fg);
+  box-shadow: none;
+}
+.auto-btn:disabled {
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+}
+.auto-btn.solid-danger:disabled {
+  background: var(--color-bg-hover);
+}
+.auto-btn:focus-visible,
+.auto-back:focus-visible {
+  outline: 1px solid var(--color-accent);
+  box-shadow: var(--focus-ring);
+}
+
+/* 就地删除确认：按钮那一行原地换成红底条 + 实心红主按钮 + 取消，后果小字挂在下面（同插件详情） */
+.auto-ic {
+  display: grid;
+  gap: var(--space-1);
+}
+.auto-ic-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-lg);
+  background: var(--color-danger-soft);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+.auto-ic-bar .orbita-icon {
+  flex: none;
+  color: var(--color-danger);
+}
+.auto-ic-ask {
+  flex: 1 1 8em;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.auto-ic-hint {
+  margin: 0;
+  padding: 0 var(--space-3);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+
+/* 卡：标题 sm 半粗灰、正文 base，至多两档 */
+.auto-card {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-border);
+  background: var(--color-bg-panel);
+  min-width: 0;
+}
+.auto-card-title {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+.auto-prompt {
+  margin: 0;
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.auto-prompt[data-clamp="true"] {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+}
+.auto-linkbtn {
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.auto-linkbtn:hover {
+  color: var(--color-text-primary);
+}
+.auto-dmute {
+  margin: 0;
+  font-size: var(--font-size-base);
+  color: var(--color-text-tertiary);
+}
+
+.auto-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: var(--space-4);
+  row-gap: var(--space-1);
+  margin: 0;
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-ui);
+}
+.auto-facts dt {
+  color: var(--color-text-tertiary);
+}
+.auto-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.auto-card-foot {
+  display: flex;
+  margin-top: var(--space-1);
+}
+
+/* 最近运行放进卡里：不再自带顶线与外边距 */
+.auto-runs-flat {
+  padding: 0;
+  border-top: 0;
+  margin: 0 calc(var(--space-2) * -1);
+}
+
+.auto-detail-wrap {
+  display: flex;
+  padding: var(--space-2) var(--space-2) 0;
+}
+
+/* ---------- 对话里「改权限」那一行（AutomationModeLine）：行本身复用 plugins.css 的 .pl-line，这里只管外壳与行下说明 ---------- */
+
+.aml {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+/* 为什么要点一下：行外、行下一小句灰字（xs），左缘对齐行内文字 */
+.aml-note {
+  padding: 0 var(--space-3);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
 }

@@ -14,11 +14,14 @@ import {
   parseSchedule,
   type Automation,
   type AutomationIntervalUnit,
+  type AutomationModeRow,
+  type AutomationModeRowResult,
   type AutomationRun,
   type AutomationSchedule,
 } from "../../../../shared/automation.ts";
 import type { Messages } from "../../messages-en.ts";
 import type { IconName } from "../../shell/Icon.tsx";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 
 export type AutomationMessages = Messages["automation"];
 
@@ -35,7 +38,7 @@ export function rowStateOf(automation: Automation): RowState {
 /** 状态 → 图标（状态优先图标与文字，颜色是第二信号）。running 的转圈由调用方给 Icon 的 spin */
 export const ROW_STATE_ICON: Record<RowState, IconName> = {
   running: "loader-circle",
-  active: "calendar-clock",
+  active: FEATURE_ICON.automation,
   paused: "pause",
   failed: "triangle-alert",
   completed: "circle-check",
@@ -108,9 +111,20 @@ export function groupAutomations(
   return groups;
 }
 
-/** 面板里能「展开看运行记录」的：有过运行记录的任务 */
-export function hasRuns(automation: Automation): boolean {
-  return automation.runs.length > 0;
+/** 能「立即运行」：排期中或暂停的任务，且此刻没有一次运行在跑（列表行悬停的 ▶ 与详情页的按钮共用） */
+export function canRunNow(automation: Automation): boolean {
+  return (automation.status === "active" || automation.status === "paused") && rowStateOf(automation) !== "running";
+}
+
+/** 详情页按钮排：立即运行出不出、第二个按钮是暂停 / 继续 / 重新启动（按状态） */
+export function detailActions(automation: Automation): { runNow: boolean; toggle: "pause" | "resume" | "restart" } {
+  const toggle = automation.status === "active" ? "pause" : automation.status === "paused" ? "resume" : "restart";
+  return { runNow: canRunNow(automation), toggle };
+}
+
+/** 「做什么」卡里指令太长就折起（行数或字数超过其一） */
+export function promptIsLong(prompt: string): boolean {
+  return prompt.length > 140 || prompt.split("\n").length > 4;
 }
 
 /** 运行记录：默认只列最近 30 次，其余按「更早 N 次」折起（不删，只是不默认铺开） */
@@ -198,10 +212,9 @@ export function subtitleOf(automation: Automation, now: number, t: AutomationMes
   }
 }
 
-/** 行右上角的次数：有上限写 3/12 次，没有写「已运行 6 次」；一次都没跑过写空串 */
+/** 行右侧的累计次数：「累计 N 次」（N = runCount，不含 skipped；没有跑过也写 0） */
 export function countLabel(automation: Automation, t: AutomationMessages): string {
-  if (automation.maxRuns !== undefined) return t.countOf(automation.runCount, automation.maxRuns);
-  return automation.runCount === 0 ? "" : t.countPlain(automation.runCount);
+  return t.countTotal(automation.runCount);
 }
 
 /** 这一行要单独提醒的一句话（失败原因 / 最近一次失败 / 会话是 manual 档会卡在审批）；没有返回 null */
@@ -448,3 +461,40 @@ export const AUTOMATION_TEMPLATES: readonly AutomationTemplate[] = [
   { id: "changes", icon: "git-branch", schedule: { kind: "daily", time: "09:00", weekdays: [1, 2, 3, 4, 5] } },
   { id: "watch", icon: "scroll-text", schedule: { kind: "interval", unit: "minute", every: 15 }, maxRuns: 12 },
 ];
+
+/* ---------- 对话里「改权限」那一行（AutomationModeLine） ---------- */
+
+/** 这一行此刻画哪一种：allowed = 已放行 [改回只读]；pending = 待确认 [允许][保持只读]；kept = 保持只读；gone = 自动化已不存在 */
+export type ModeRowView = "allowed" | "pending" | "kept" | "gone";
+
+/**
+ * 看**此刻**那条自动化，不看这一行落盘时的样子（用户在面板里改了、点了按钮，行都照实说）：
+ * - 已经是 skip → allowed（不论这一行怎么来的）；
+ * - 是 plan：点过「保持只读 / 改回只读」（requestId 在 modeDeclined 里）→ kept；
+ *   落盘时就是「已改成放行」、后来被改回只读的（在别处改的）也 kept；没点过的待确认 → pending；
+ * - 自动化没了 → gone。列表还没读到（live 为 null）按落盘时的样子画，免得闪成「已不存在」。
+ */
+export function modeRowView(
+  row: Pick<AutomationModeRow, "state" | "requestId">,
+  live: Pick<Automation, "mode" | "modeDeclined"> | undefined | null,
+): ModeRowView {
+  if (live === null) return row.state === "applied" ? "allowed" : "pending";
+  if (live === undefined) return "gone";
+  if (live.mode === "skip") return "allowed";
+  if (row.state === "applied" || (live.modeDeclined ?? []).includes(row.requestId)) return "kept";
+  return "pending";
+}
+
+/** 点按钮没成的原因（主进程给稳定的代码，句子在这里出） */
+export function modeRowFailureText(t: AutomationMessages["modeRow"], failure: Extract<AutomationModeRowResult, { ok: false }>): string {
+  switch (failure.reason) {
+    case "noSession":
+      return t.failed.noSession;
+    case "notFound":
+      return t.failed.notFound;
+    case "notApplicable":
+      return t.failed.notApplicable;
+    case "finished":
+      return t.failed.finished;
+  }
+}

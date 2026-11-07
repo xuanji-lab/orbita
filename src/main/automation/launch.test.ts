@@ -60,6 +60,33 @@ describe("resolveAutomationModel", () => {
     assert.equal(noProvider.ok, false);
   });
 
+  test("指名的服务商被关了：报错写明原因，不悄悄换别家", () => {
+    const closed = [provider("zai", ["glm-5.3"]), { ...provider("kimi", ["k3"]), disabled: true }];
+    const result = resolveAutomationModel({
+      automation: { providerId: "kimi", modelId: "k3" },
+      settings: { subSessionModel: { providerId: "zai", modelId: "glm-5.3" } },
+      providers: closed,
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.ok ? "" : result.error, /turned off/);
+  });
+
+  test("没指名：设置指向关着的服务商就落到 lastUsed，lastUsed 也关着就报错", () => {
+    const closed = [{ ...provider("zai", ["glm-5.3"]), disabled: true }, provider("kimi", ["k3"])];
+    const viaLast = resolveAutomationModel({
+      automation: {},
+      settings: { subSessionModel: { providerId: "zai", modelId: "glm-5.3" }, lastUsed: { providerId: "kimi", modelId: "k3" } },
+      providers: closed,
+    });
+    assert.equal(viaLast.ok && viaLast.providerId, "kimi");
+    const allClosed = resolveAutomationModel({
+      automation: {},
+      settings: { subSessionModel: { providerId: "zai", modelId: "glm-5.3" }, lastUsed: { providerId: "zai", modelId: "glm-5.3" } },
+      providers: closed,
+    });
+    assert.equal(allClosed.ok, false);
+  });
+
   test("没指名：设置里的子会话默认模型（带它的思考档）", () => {
     const result = resolveAutomationModel({
       ...base,
@@ -171,6 +198,15 @@ describe("launchAutomationRun（new_session）", () => {
     assert.equal(input?.modelId, "glm-5.3");
     assert.ok(input?.text.startsWith("[定时任务「开源 CLI 速览」第 3/12 次 · 10-31 01:45]"));
     assert.ok(input?.text.includes("上周说了 A"));
+  });
+
+  test("选了插件：提示词里让它用这个插件、最后调 show_plugin_board；没选不加", async () => {
+    const { launchDeps, submitted } = deps();
+    await launchAutomationRun(launchDeps, { automation: automation({ plugin: { name: "lit" } }), sessionId: "44444444-4444-4444-4444-444444444444", number: 1, at: AT, trigger: "schedule" });
+    await launchAutomationRun(launchDeps, { automation: automation(), sessionId: "55555555-5555-5555-5555-555555555555", number: 1, at: AT, trigger: "schedule" });
+    assert.ok(submitted[0]?.text.includes("用插件「lit」"));
+    assert.ok(submitted[0]?.text.includes('show_plugin_board（plugin: "lit"）'));
+    assert.ok(!(submitted[1]?.text.includes("show_plugin_board") ?? true));
   });
 
   test("Home 任务落在 Home 目录；工作区被删：抛错，且不留下会话", async () => {

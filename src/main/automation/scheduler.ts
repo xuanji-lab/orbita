@@ -1,5 +1,5 @@
 /**
- * 自动化调度器（实验功能 automation）：「nextRunAt 时间戳 + 30 秒短 tick」。
+ * 自动化调度器：「nextRunAt 时间戳 + 30 秒短 tick」。
  *
  * **为什么不是一个 setTimeout 等到点**：Mac 睡眠时定时器不走，醒来后一个长 setTimeout 要么早要么晚且不可知；
  * 每 30 秒看一眼「有没有 nextRunAt ≤ 现在」，睡醒后（`powerMonitor` 的 resume 立刻再 tick 一次）
@@ -38,6 +38,7 @@ import {
   type AutomationRunTrigger,
   type AutomationSkipReason,
 } from "../../shared/automation.ts";
+import { PLUGIN_BOARD_TOOL } from "../../shared/permission.ts";
 import { clipText } from "./launch.ts";
 import type { AutomationStore } from "./store.ts";
 
@@ -248,6 +249,8 @@ export interface RunResult {
   noSession?: boolean;
   /** 失败不计入「连续失败」（应用退出时被打断的那类：不是自动化自己的错） */
   notCounted?: boolean;
+  /** 这次运行里 show_plugin_board 成功的工具调用 id（按调用顺序）；全局周看板据此回会话找卡快照 */
+  boardSnapshotIds?: string[];
 }
 
 /**
@@ -267,6 +270,8 @@ export function applyRunResult(automation: Automation, runId: string, result: Ru
     ...(result.noSession === true ? { sessionId: null } : {}),
     ...(result.error !== undefined ? { error: result.error } : {}),
     ...(result.status === "success" && answer !== "" ? { resultExcerpt: clipText(answer, AUTOMATION_EXCERPT_MAX) } : {}),
+    // 失败的运行也留着：看板已经显示过的卡就是那次的产出
+    ...(result.boardSnapshotIds !== undefined && result.boardSnapshotIds.length > 0 ? { boardSnapshotIds: [...result.boardSnapshotIds] } : {}),
   };
   const runs = [...automation.runs];
   runs[index] = run;
@@ -305,8 +310,6 @@ export function applyRunResult(automation: Automation, runId: string, result: Ru
 export interface SchedulerDeps {
   store: AutomationStore;
   now(): number;
-  /** 实验开关（每次 tick 现读：关着调度器什么都不做） */
-  enabled(): Promise<boolean>;
   /** new_session：开一条会话并开轮（launch.ts 的 launchAutomationRun 套好依赖）；失败抛错，会话已回滚 */
   launch(input: { automation: Automation; sessionId: string; number: number; at: number; trigger: AutomationRunTrigger }): Promise<void>;
   /** this_session：把指令送回目标会话（launch.ts 的 deliverAutomationRun）；会话没了抛 SessionGoneError */
@@ -342,6 +345,8 @@ interface ActiveRun {
   softFailure: string | null;
   /** 是否测 token：this_session 的会话 stats 是整条会话累计的，量不出这一次 */
   trackTokens: boolean;
+  /** 这次运行里 show_plugin_board 成功的工具调用 id */
+  boardSnapshotIds: string[];
 }
 
 export type RunNowOutcome = { ok: true } | { ok: false; error: string };
@@ -405,7 +410,6 @@ export class AutomationScheduler {
 
   /** 看一眼有没有到点的。睡眠唤醒（powerMonitor resume）与启动后都直接调它 */
   async tick(): Promise<void> {
-    if (!(await this.deps.enabled())) return;
     // 队列里已经有一个等着的 tick 就不再叠：开会话慢的时候别攒一串
     if (this.tickQueued) return;
     this.tickQueued = true;
@@ -434,7 +438,6 @@ export class AutomationScheduler {
   /** 面板上的「立即运行」：不动排期，开 / 送一次 */
   runNow(automationId: string): Promise<RunNowOutcome> {
     return this.enqueue(async () => {
-      if (!(await this.deps.enabled())) return { ok: false, error: "Automations are turned off." };
       const automation = await this.deps.store.get(automationId);
       if (automation === null) return { ok: false, error: "Automation not found." };
       if (automation.target.kind === "this_session" && !(await this.deps.sessionExists(automation.target.sessionId))) {
@@ -528,6 +531,7 @@ export class AutomationScheduler {
       turnFailure: null,
       softFailure: null,
       trackTokens: before.target.kind === "new_session",
+      boardSnapshotIds: [],
     };
     this.setActive(run);
     try {
@@ -578,6 +582,13 @@ export class AutomationScheduler {
       const run = this.runOfSession(event.sessionId);
       if (run === undefined || event.progress.type !== "item_finished") return;
       const item = event.progress.item;
+      if (item.role === "tool") {
+        // 看板结果：记下工具调用 id（快照本身随会话落盘，不复制进运行记录）
+        if (item.toolName === PLUGIN_BOARD_TOOL && item.status === "complete" && !run.boardSnapshotIds.includes(item.toolCallId)) {
+          run.boardSnapshotIds.push(item.toolCallId);
+        }
+        return;
+      }
       if (item.role !== "assistant") return;
       run.lastStatus = item.status === "complete" ? "complete" : item.status === "aborted" ? "aborted" : "error";
       run.lastErrorMessage = item.status === "error" ? (item.errorMessage ?? null) : null;
@@ -631,10 +642,11 @@ export class AutomationScheduler {
           : run.answer === "" && run.softFailure !== null
             ? run.softFailure
             : null);
+    const boards = run.boardSnapshotIds.length > 0 ? { boardSnapshotIds: run.boardSnapshotIds } : {};
     const result: RunResult =
       failure === null
-        ? { status: "success", durationMs: now - run.startedAt, tokens: run.tokens, answer: run.answer }
-        : { status: "error", durationMs: now - run.startedAt, tokens: run.tokens, error: failure };
+        ? { status: "success", durationMs: now - run.startedAt, tokens: run.tokens, answer: run.answer, ...boards }
+        : { status: "error", durationMs: now - run.startedAt, tokens: run.tokens, error: failure, ...boards };
     await this.deps.store.update(run.automationId, (current) => applyRunResult(current, run.runId, result, now));
     this.deps.notify();
   }

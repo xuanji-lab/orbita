@@ -7,43 +7,52 @@
 [data-theme-preview="light"] {
   color-scheme: light;
 
-  /* surfaces */
-  --color-bg-app: #f3f4f1;
-  --color-bg-sidebar: #f7f7f3;
-  --color-bg-panel: #ffffff;
-  /* muted 是白面板上成块的中性底（说明卡、胶囊、徽标、控件静止底、图片占位）。冷灰，不是暖米白
-     （wafo 2026-10-18）：旧值 #f8f8f5 对白只有 1.06:1，叠在本来就偏暖的玻璃面上基本融成一片；
-     #eef0f2 是 1.14:1，与冷调的次级字色、蓝 accent 同一色系。不用 accent-soft：那是「选中」的底 */
-  --color-bg-muted: #eef0f2;
-  /* hover 是**半透明**的一层，不是一块实色（wafo 2026-09-23）：实色 #f0f1ed 叠在白面板上
-     看得清，叠在侧栏的米白壳底（#f3f4f1）上几乎同色、等于没有 hover。半透明压暗的量
-     与底色无关，面板与侧栏一样清楚。取次级文字色（#5f6368，略带冷）12%：冷灰与蓝 accent 相配 */
+  /* surfaces — 月白的壳 + 纸面的井（2026-11-07 方向 N）。壳带一点冷（#e7ebef），井是近白的纸
+     （#fbfcfd）；两者的台阶靠颜色、不靠阴影，静止的面不再透明（--glass-alpha 1，见 glass.css）。
+     旧值：壳 #f3f4f1 / 侧栏 #f7f7f3 / 井 #ffffff——壳与井只差 1.07:1 的暖米白，又靠 60% 玻璃
+     透出桌面，亮度随壁纸漂；换成实色壳以后，同一张纸在任何桌面上都是同一个色 */
+  --color-bg-app: #e7ebef;
+  --color-bg-sidebar: #e7ebef;
+  --color-bg-panel: #fbfcfd;
+  /* muted 是井上成块的中性底（说明卡、胶囊、徽标、控件静止底、图片占位、用户消息、行内代码）。
+     冷灰，与壳同色系、比壳浅一档（2026-11-07 起 #eef1f4，原 #eef0f2 2026-10-18）。
+     不用 accent-soft：那是「选中」的底 */
+  --color-bg-muted: #eef1f4;
+  /* hover 是**半透明**的一层，不是一块实色（wafo 2026-09-23）：压暗的量与底色无关，
+     壳与井一样清楚。取次级文字色 12% */
   --color-bg-hover: color-mix(in srgb, var(--color-text-secondary) 12%, transparent);
-  --color-bg-active: #e7eefd;
+  /* 选中 / 按下是**中性**的墨色底，不是 accent 淡底（2026-11-07 推翻 2026-08-25 的方案 A）：
+     侧栏一列里 accent 同时出现三处（新建实心、模式淡底、选中淡底）读出来就是「蓝色撒满屏」，
+     而 readme 自己写的是「accent 只给主操作」。Linear / Things / Claude 三家都是灰选中 */
+  --color-bg-active: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
 
   /* text */
-  --color-text-primary: #202124;
-  --color-text-secondary: #5f6368;
-  --color-text-tertiary: #8b8f94;
+  /* 黛墨三档（2026-11-07）：在它会落的每一种地上都过线——井 16.0 / 8.8 / 5.6，壳 13.7 / 7.5 / 4.8。
+     原 #202124 / #5f6368 / #8b8f94 的三级在白井上 3.20:1、在壳上 2.95:1，而它承载的恰恰是
+     「等你」「改了几个文件」「时间」这类关键信息；墨阶只能抬，不许再降到 4.5 以下 */
+  --color-text-primary: #18202a;
+  --color-text-secondary: #3f4a57;
+  --color-text-tertiary: #5d6774;
   --color-text-inverse: #ffffff;
   /* 永远压在深色地上的字（遮罩 / toast / 图片预览控件），不随主题翻转 */
   --color-text-on-dark: #ffffff;
 
   /* borders */
-  --color-border-subtle: #e5e5df;
-  --color-border-default: #dfdfd7;
-  --color-border-strong: #d7d7cf;
+  --color-border-subtle: #e3e7eb;
+  --color-border-default: #d5dbe1;
+  --color-border-strong: #c3cbd3;
 
-  /* accent — reserved for the primary action and selection. Nothing else.
+  /* accent — reserved for the primary action and a checked box. Nothing else (selection is
+     neutral since 2026-11-07).
      Light theme is white + blue; the dark theme is black + yellow. */
   --color-accent: #1d4ed8;
   --color-accent-strong: #16379c;
   /* text/glyph colour on a filled accent surface */
   --color-accent-fg: #ffffff;
 
-  /* selected mode / panel — same hue as the accent */
-  --color-mode-active-bg: #e7eefd;
-  --color-mode-active-fg: #1d4ed8;
+  /* selected mode / pressed rail icon — neutral ink wash, ink on top (2026-11-07; was the accent hue) */
+  --color-mode-active-bg: color-mix(in srgb, var(--color-text-primary) 7%, transparent);
+  --color-mode-active-fg: var(--color-text-primary);
 
   /* status — prefers icons and words; color is the quiet second signal.
      A filled status surface takes its own foreground token: --color-*-fg. The plain
@@ -62,9 +71,9 @@
   --color-success-soft: color-mix(in srgb, var(--color-success) 16%, transparent);
 
   /* chat surfaces */
-  --color-chat-card-bg: #fafafa;
-  --color-chat-muted-bg: #f4f4f5;
-  --color-chat-table-bg: #ffffff;
+  --color-chat-card-bg: #eef1f4;
+  --color-chat-muted-bg: #eef1f4;
+  --color-chat-table-bg: #fbfcfd;
   --color-chat-link: #2762ea;
 
   /* 类别色（2026-10 起，读法见 readme *Category colours*）：文档 / 演示 / 表格三族的
@@ -117,7 +126,9 @@
   --color-bg-panel: #151517;
   --color-bg-muted: #282829;
   --color-bg-hover: color-mix(in srgb, var(--color-text-secondary) 8%, transparent);
-  --color-bg-active: rgba(214, 194, 69, 0.08);
+  /* 选中 / 按下是中性白 7% / 10%，不是 accent 黄 8%（2026-11-07）：黄 8% 压在 #2b2b2b 上合成 #39372d 橄榄褐，
+     而 accent 只给主操作 */
+  --color-bg-active: rgba(255, 255, 255, 0.1);
   --color-text-primary: #f9fafb;
   --color-text-secondary: #cfd3d6;
   --color-text-tertiary: #adb2b8;
@@ -129,8 +140,8 @@
   --color-accent: #d6c245;
   --color-accent-strong: #e2d05e;
   --color-accent-fg: #1b1a15;
-  --color-mode-active-bg: rgba(214, 194, 69, 0.08);
-  --color-mode-active-fg: #d6c245;
+  --color-mode-active-bg: rgba(255, 255, 255, 0.07);
+  --color-mode-active-fg: var(--color-text-primary);
   --color-danger: #ff7b72;
   --color-danger-solid: #c9372c;
   --color-danger-fg: #ffffff;
@@ -163,25 +174,30 @@
 :root[data-theme="black"],
 [data-theme-preview="black"] {
   color-scheme: dark;
-  --color-bg-app: #2b2b2b;
-  --color-bg-sidebar: #2b2b2b;
-  --color-bg-panel: #161616;
-  --color-bg-muted: #202020;
+  /* 夜空（2026-11-07 方向 N）：带蓝的黑，黄 accent 就是星。壳 #1b1e23 / 井 #121418 / 卡面 #1f232a，
+     三层台阶靠亮度走（壳比井亮 ΔL* ≈ 5），不靠阴影。原纯灰 #2b2b2b / #161616 / #262626 ZCode 档
+     台阶 10.3 过大，壳成了一块「灰板」 */
+  --color-bg-app: #1b1e23;
+  --color-bg-sidebar: #1b1e23;
+  --color-bg-panel: #121418;
+  --color-bg-muted: #1f232a;
   --color-bg-hover: color-mix(in srgb, var(--color-text-secondary) 8%, transparent);
-  --color-bg-active: rgba(214, 194, 69, 0.08);
-  --color-text-primary: #e5e5e5;
-  --color-text-secondary: #b8b8b8;
-  --color-text-tertiary: #808080;
-  --color-text-inverse: #2b2b2b;
+  --color-bg-active: rgba(255, 255, 255, 0.1);
+  /* 墨三档（2026-11-07）：井 14.9 / 9.4 / 6.1，卡面 #1f232a 上 12.7 / 8.1 / 5.2，壳上三级 ≥ 5。
+     原三级 #808080 在卡面 #262626 上只有 3.83:1 */
+  --color-text-primary: #e4e7eb;
+  --color-text-secondary: #b4bac3;
+  --color-text-tertiary: #8d95a0;
+  --color-text-inverse: #1b1e23;
   --color-text-on-dark: #ffffff;
-  --color-border-subtle: rgba(255, 255, 255, 0.08);
-  --color-border-default: rgba(255, 255, 255, 0.1);
+  --color-border-subtle: rgba(255, 255, 255, 0.07);
+  --color-border-default: rgba(255, 255, 255, 0.11);
   --color-border-strong: rgba(255, 255, 255, 0.16);
   --color-accent: #d6c245;
   --color-accent-strong: #e2d05e;
   --color-accent-fg: #1b1a15;
-  --color-mode-active-bg: rgba(214, 194, 69, 0.08);
-  --color-mode-active-fg: #d6c245;
+  --color-mode-active-bg: rgba(255, 255, 255, 0.07);
+  --color-mode-active-fg: var(--color-text-primary);
   --color-danger: #ff7b72;
   --color-danger-solid: #c9372c;
   --color-danger-fg: #ffffff;
@@ -190,9 +206,9 @@
   --color-info: #52a8ff;
   --color-info-fg: #1b1a15;
   --color-success: #56d364;
-  --color-chat-card-bg: #262626;
-  --color-chat-muted-bg: rgba(255, 255, 255, 0.05);
-  --color-chat-table-bg: #161616;
+  --color-chat-card-bg: #1f232a;
+  --color-chat-muted-bg: rgba(255, 255, 255, 0.07);
+  --color-chat-table-bg: #121418;
   --color-chat-link: #52a8ff;  /* 类别色（同明档，换亮值；读法见 readme *Category colours* 与亮档注释）：三色在黛 /
      玄的井、卡与壳上都 ≥ 3:1，色相彼此分开 */
   --color-filetype-doc: #6ea8fe;

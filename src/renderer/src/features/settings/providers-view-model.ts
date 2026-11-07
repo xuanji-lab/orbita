@@ -4,6 +4,7 @@
  */
 import type { CatalogPreference, ModelDefaults } from "@shared/model-defaults";
 import type { ModelCostDecl, ModelDecl, ProviderApi, ProviderDto } from "@shared/provider";
+import { isProviderEnabled } from "../../../../shared/provider.ts";
 // 值 import 必须走相对路径：node --test 解析不了 @shared 别名（type import 剥离后无此问题）
 import { THINKING_LEVELS, type ThinkingLevel } from "../../../../shared/thinking.ts";
 import {
@@ -226,6 +227,35 @@ export function hasCredentials(auth: ProviderDto["auth"]): boolean {
   if (auth.scheme === "api_key") return auth.hasSecret;
   if (auth.scheme === "oauth") return auth.loggedIn;
   return auth.scheme === "env";
+}
+
+/**
+ * 服务商开关的菜单口径：模型菜单只列**开着**的（isProviderEnabled，主进程解析器同一个判定），
+ * 关着的折成菜单底部一行灰字「已关闭的服务 · N 个模型」。
+ * 注意这里只管「列出来给人选」：查找某条会话 / 设置正在用的服务商（芯片名字、思考档、能否看图）
+ * 仍要在含关着的清单里找——正用着关着服务商的会话不被悄悄换模型。
+ */
+export function enabledProviders(providers: readonly ProviderDto[]): ProviderDto[] {
+  return providers.filter(isProviderEnabled);
+}
+
+/** 关着的服务商摘要（菜单底部灰字用）；一家也没关返回 null。 */
+export function closedProvidersSummary(
+  providers: readonly ProviderDto[],
+): { providers: number; models: number } | null {
+  const closed = providers.filter((provider) => !isProviderEnabled(provider));
+  if (closed.length === 0) return null;
+  return { providers: closed.length, models: closed.reduce((sum, provider) => sum + provider.models.declared.length, 0) };
+}
+
+/** 某个（服务商，型号）选择指向的服务商是不是被关了（设置里的模型选择旁据此提示「这家已关闭」）。 */
+export function isPairOnClosedProvider(
+  providers: readonly ProviderDto[],
+  pair: { providerId: string } | undefined,
+): boolean {
+  if (pair === undefined) return false;
+  const provider = providers.find((candidate) => candidate.id === pair.providerId);
+  return provider !== undefined && !isProviderEnabled(provider);
 }
 
 /**

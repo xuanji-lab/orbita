@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { isInside, realpathInside } from "./path-boundary.ts";
+import { isInside, pathUnderRoots, realpathInside } from "./path-boundary.ts";
 
 describe("isInside（纯词法）", () => {
   const root = resolve("/ws/root");
@@ -57,5 +57,22 @@ describe("realpathInside（realpath 后再判）", () => {
       await realpathInside(join(outside, "secret.txt"), [join(base, "not-created"), outside]),
       await realpath(join(outside, "secret.txt")),
     );
+  });
+});
+
+describe("pathUnderRoots（真实路径 → 用户挂的根下的路径）", () => {
+  test("根是 symlink：真实路径换回根下的原样路径；不在任何根里 / 根读不出来原样返回", async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "orbita-under-roots-")));
+    try {
+      await mkdir(join(base, "real", "sub"), { recursive: true });
+      await writeFile(join(base, "real", "sub", "a.md"), "a", "utf8");
+      await symlink(join(base, "real"), join(base, "Home"));
+      const real = join(base, "real", "sub", "a.md");
+      assert.equal(await pathUnderRoots(real, [join(base, "Home")]), join(base, "Home", "sub", "a.md"));
+      assert.equal(await pathUnderRoots(real, [join(base, "nope")]), real);
+      assert.equal(await pathUnderRoots(join(base, "elsewhere.md"), [join(base, "Home")]), join(base, "elsewhere.md"));
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
   });
 });

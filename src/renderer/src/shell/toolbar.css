@@ -120,6 +120,12 @@
   background: var(--glass-bg);
   box-shadow: var(--shadow-border);
 }
+/* 方向 N（2026-11-07）：胶囊去底去影，只剩字与线框图标（Claude 面板顶栏同法）——壳已经是
+   有颜色的实色，胶囊再叠一层白底就成了「壳上的三个药丸」。纸面两档保留材料芯片的面。 */
+:root:not([data-theme="copybook"], [data-theme="typescript"]) .toolbar-capsule {
+  background: transparent;
+  box-shadow: none;
+}
 /* 左胶囊的内容层：宽随内容（专注格从圆格变成「zap + 倒计时」），Toolbar 量它
  * 定胶囊宽（胶囊自己定宽，量它永远重不触发）。其余胶囊定宽，用不上 */
 .toolbar-capsule-in {
@@ -260,6 +266,50 @@
   justify-self: end;
   gap: var(--space-0-5);
 }
+/*
+ * 方向 N 返工（2026-11-07）：胶囊去底以后，「标题居中、右端 id / 收工键靠边」的三栏网格在壳上就成了
+ * 三个各自漂着的字串（标题与 hash 隔 74px，父会话的 ⑂ N 又在更左边）——有底的药丸「装」着它们时看不出来。
+ * 改成按内容宽度居中成一组：[⑂ N / ↑ 父标题] [标题] [hash] [复制] | [✓]，间距统一一个 --space-1，
+ * 整组居中在会话列上。悬停才出现的铅笔 / 复制键仍用 visibility 占位（显形时一个像素都不挪），
+ * 所以组内会有两处 24px 的空位——和相邻两组的间距同一个节奏。标题是唯一能缩的（min-width: 0 +
+ * 省略号），其余各保住自己的宽；再窄时的让位顺序（短 id → 子会话文字）不变。
+ * 左边那个对称用的铅笔占位在成组之后没有意义，去掉。纸面两档保留三栏网格（它们的胶囊还有底）。
+ */
+:root:not([data-theme="copybook"], [data-theme="typescript"]) {
+  .cap-sess {
+    display: flex;
+    justify-content: center;
+    gap: var(--space-1);
+  }
+  .cap-sess .cap-sl:empty {
+    display: none;
+  }
+  .cap-sess .cap-sc {
+    flex: 0 1 auto;
+    justify-self: auto;
+    grid-column: auto;
+  }
+  .cap-sess .cap-sc > .cap-mini:first-child {
+    display: none;
+  }
+  .cap-sess .cap-sr {
+    flex: 0 0 auto;
+    justify-self: auto;
+  }
+  /* 悬停才显形的铅笔 / 复制键占位 24 → 20：组内相邻两件的间距收在同一个节奏上（标题 ↔ id、id ↔ 收工线
+     各约 30px，⑂N ↔ 标题 16px），不再是「标题与 hash 隔一大截」 */
+  .cap-sess .cap-sc > .cap-mini,
+  .cap-sess .cap-sr > .cap-mini {
+    width: var(--space-5);
+    height: var(--space-5);
+  }
+  .cap-sess .cap-sl {
+    margin-right: var(--space-2);
+  }
+  .cap-sess .cap-sid {
+    padding-left: 0;
+  }
+}
 /* 标题是唯一的主体：titlebar 档、半粗、正墨 */
 .cap-title {
   font-size: var(--font-size-titlebar);
@@ -384,6 +434,13 @@
   height: var(--titlebar-control);
   padding: 0 var(--space-2) 0 var(--space-2-5);
   border-radius: var(--radius-pill);
+  /* 可缩：标题是文件名时（演示文稿 / 文档）会很长，960 宽里不缩就把行尾动作格（关闭这份文件）
+     挤出胶囊、被旁边的「辅助对话」键盖住点不到（2026-11-07 独立验收）。中段 .cap-grow 先让，
+     还不够才轮到标题收省略号；图标与 chevron 不缩 */
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.cap-pt > .orbita-icon {
   flex: 0 0 auto;
 }
 .cap-pt strong {
@@ -391,6 +448,9 @@
   font-size: var(--font-size-titlebar);
   color: var(--color-text-primary);
   white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .cap-pt .orbita-icon:first-child {
   color: var(--color-text-secondary);
@@ -594,4 +654,118 @@
 .win-ctl-btn.close:hover {
   background: var(--color-danger-solid);
   color: var(--color-danger-fg);
+}
+
+/* —— 辅助对话的胶囊页头（DrawerCap）：左段 = 激活的会话（标题 · 短 id），
+ *    右段 = 完成键 · 其它标签（横滚）· 「+」 —— */
+.cap-dcap {
+  padding-left: var(--space-1);
+}
+/* 左段吃剩余宽、是胶囊里第一个让位的：标题先省略号，标签区与「+」不被挤没 */
+.cap-dseg {
+  display: flex;
+  align-items: center;
+  gap: var(--space-0-5);
+  flex: 0 1 auto;
+  /* 标题再窄也留这么多（图标 + 两三个字）；让位到这里为止，右段不再被挤 */
+  min-width: 72px;
+}
+.cap-dseg > .cap-mini,
+.cap-dseg > .cap-sid {
+  flex: 0 0 auto;
+}
+/* 改名中：标题变成输入框，左段吃满剩余宽（输入框要够写字），悬停小键让开 */
+.cap-dseg:has(input) {
+  flex: 1 1 auto;
+}
+.cap-dcap .cap-dseg:has(input) .cap-hov,
+.toolbar-capsule:hover .cap-dcap .cap-dseg:has(input) .cap-hov {
+  display: none;
+}
+/* 左段是左对齐排的、右边有一截弹性空白（.cap-grow）：悬停才出现的小键（铅笔 / 复制 / 关闭）
+ * 直接 display 切换、吃那截空白，不像居中的会话胶囊那样 visibility 占位——占位会在窄栏里
+ * 白白抢走标题的宽度 */
+.cap-dcap .cap-hov {
+  display: none;
+}
+.toolbar-capsule:hover .cap-dcap .cap-hov,
+.toolbar-capsule:focus-within .cap-dcap .cap-hov {
+  display: grid;
+}
+.cap-dseg-icon {
+  flex: 0 0 auto;
+  margin-left: var(--space-1-5);
+  color: var(--color-text-secondary);
+}
+/* 标签区：封顶占胶囊 38% 宽，超出横滚（h-scroll）。**自己不 shrink**：让位全由左段（标题）
+ * 承担——悬停时左段的小键显形、窗口缩窄，标签区的宽与位置都不动，点下去不会点歪 */
+.cap-dtabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-0-5);
+  flex: 0 0 auto;
+  max-width: 38%;
+}
+/* 一枚灰标签：名字键 + × 键并排（两个独立的 button，不嵌套） */
+.cap-dtab {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  height: var(--titlebar-field);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+.cap-dtab:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.cap-dtab-main {
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 var(--space-0-5) 0 var(--space-2-5);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.cap-dtab-name {
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cap-dtab-x {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 100%;
+  padding: 0;
+  margin-right: var(--space-0-5);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+.cap-dtab-x:hover {
+  color: var(--color-text-primary);
+}
+/* 窄右栏：短 id 先让位（复制键仍在悬停里），把宽度还给标题 */
+@container (max-width: 440px) {
+  .cap-dcap .cap-dseg .cap-sid {
+    display: none;
+  }
+}
+/* 更窄：悬停才出现的铅笔 / 复制也不挂（改名仍可双击标题）。关闭当前这条的 × 不让：
+ * 它是激活会话唯一的出口 */
+@container (max-width: 340px) {
+  .cap-dcap .cap-dseg .cap-hov:not(.cap-dclose),
+  .toolbar-capsule:hover .cap-dcap .cap-dseg .cap-hov:not(.cap-dclose),
+  .toolbar-capsule:focus-within .cap-dcap .cap-dseg .cap-hov:not(.cap-dclose) {
+    display: none;
+  }
 }

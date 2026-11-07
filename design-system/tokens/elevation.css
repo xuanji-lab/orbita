@@ -1,9 +1,9 @@
 :root {
-  --shadow-border: 0 0 0 1px rgba(20, 24, 31, 0.06);
-  /* 静止的卡（会话卡、主题缩略卡）：一层贴边 + 一层短扩散。--shadow-composer 的 28px
-     模糊落在 225px 的小卡上就是「小东西背了个大影子」——真正浮起的只有输入卡。 */
-  --shadow-card: 0 1px 2px rgba(20, 24, 31, 0.06), 0 4px 12px rgba(20, 24, 31, 0.06);
-  --shadow-composer: 0 8px 28px rgba(20, 24, 31, 0.08);
+  --shadow-border: 0 0 0 1px var(--color-border-subtle);
+  /* 方向 N（2026-11-07）：静止的面零阴影，输入卡贴在井底成台沿，层次让给发丝线与壳 / 井的色阶
+     （Claude：「几乎没有阴影」）。只有真浮起来的弹层 / 对话框留影。纸面两档保持旧值（下面）。 */
+  --shadow-card: none;
+  --shadow-composer: none;
   --shadow-popover: 0 12px 32px rgba(20, 24, 31, 0.12);
   --shadow-modal: 0 24px 80px rgba(20, 24, 31, 0.22);
   --focus-ring: 0 0 0 2px rgba(29, 78, 216, 0.16);
@@ -13,15 +13,24 @@
 }
 
 /* 两个暗档同阶（原 dark/black 同阶的延续，2026-09-03 修订）：井结构下阴影不需要
-   更深；focus ring 用 accent 黄。两档合并声明——值本来就相同，分块只是历史结构。 */
+   更深；focus ring 用 accent 黄。两档合并声明——值本来就相同，分块只是历史结构。
+   静止卡与输入卡同浅色，零阴影（方向 N，2026-11-07）。 */
 :root[data-theme="graphite"],
 :root[data-theme="black"] {
   --shadow-border: 0 0 0 1px rgba(255, 255, 255, 0.06);
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.24), 0 4px 12px rgba(0, 0, 0, 0.2);
-  --shadow-composer: 0 8px 28px rgba(0, 0, 0, 0.28);
+  --shadow-card: none;
+  --shadow-composer: none;
   --shadow-popover: 0 14px 36px rgba(0, 0, 0, 0.38);
   --shadow-modal: 0 24px 80px rgba(0, 0, 0, 0.55);
   --focus-ring: 0 0 0 2px rgba(214, 194, 69, 0.28);
   --overlay-backdrop: rgba(0, 0, 0, 0.48);
   --overlay-backdrop-subtle: rgba(0, 0, 0, 0.24);
+}
+
+/* 纸面两档不套方向 N：纸是有阴影的东西，会话卡与输入卡保持原先的浮起（2026-11-07 前的值） */
+:root[data-theme="copybook"],
+:root[data-theme="typescript"] {
+  --shadow-border: 0 0 0 1px rgba(20, 24, 31, 0.06);
+  --shadow-card: 0 1px 2px rgba(20, 24, 31, 0.06), 0 4px 12px rgba(20, 24, 31, 0.06);
+  --shadow-composer: 0 8px 28px rgba(20, 24, 31, 0.08);
 }

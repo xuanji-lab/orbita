@@ -17,9 +17,13 @@ import type { ChannelDelivery } from "../../shared/channel.ts";
 import type { McpStatus } from "../../shared/mcp.ts";
 import type { AutomationToolOutcome } from "../../shared/automation.ts";
 import type { BrowserToolOutcome } from "../../shared/browser.ts";
+import type { DocOutcome } from "../../shared/doc.ts";
 import type { TerminalToolOutcome } from "../../shared/terminal.ts";
+import type { SlidesOutcome } from "../../shared/slides-export.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
+import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPreviewOutcome } from "../../shared/plugin.ts";
+import type { PluginBoardOutcome } from "../../shared/plugin-board.ts";
 import type { MemoryAgentOutcome, MemoryRecallOutcome } from "../../shared/memory.ts";
 
 /** host 对「子进程」的全部要求——Electron 的 UtilityProcess 结构上满足，测试用脚本假货顶上。 */
@@ -566,8 +570,28 @@ export class AgentHostCore {
     } satisfies AgentCommand);
   }
 
+  /** 插件：install_plugin 的回执（立即回，不等用户）。同上：不 ensure、发完即回。 */
+  answerPluginInstall(requestId: string, outcome: PluginAgentInstallOutcome): void {
+    this.child?.postMessage({ type: "pluginInstallResult", requestId, ...outcome } satisfies AgentCommand);
+  }
+
+  /** 插件：preview_plugin 的回执。同上。 */
+  answerPluginPreview(requestId: string, outcome: PluginAgentPreviewOutcome): void {
+    this.child?.postMessage({ type: "pluginPreviewResult", requestId, ...outcome } satisfies AgentCommand);
+  }
+
+  /** 插件：list_plugins 的回执。同上。 */
+  answerPluginList(requestId: string, outcome: PluginAgentListOutcome): void {
+    this.child?.postMessage({ type: "pluginListResult", requestId, ...outcome } satisfies AgentCommand);
+  }
+
+  /** 插件：show_plugin_board 的回执（卡快照）。同上。 */
+  answerPluginBoard(requestId: string, outcome: PluginBoardOutcome): void {
+    this.child?.postMessage({ type: "pluginBoardResult", requestId, ...outcome } satisfies AgentCommand);
+  }
+
   /**
-   * 记忆召回（实验功能 memory-system）：memoryRecallRequest 的回执。同
+   * 记忆召回：memoryRecallRequest 的回执。同
    * answerReadTask 的理由：不 ensure、发完即回——调用方（主进程的转发层）自己
    * 兑超时，agent 侧另有一层硬超时兑底。
    */
@@ -613,6 +637,16 @@ export class AgentHostCore {
     } satisfies AgentCommand);
   }
 
+  /** 演示文稿导出：slidesRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。 */
+  answerSlides(requestId: string, outcome: SlidesOutcome): void {
+    this.child?.postMessage({ type: "slidesResult", requestId, ...outcome } satisfies AgentCommand);
+  }
+
+  /** 文档导出：docRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。 */
+  answerDoc(requestId: string, outcome: DocOutcome): void {
+    this.child?.postMessage({ type: "docResult", requestId, ...outcome } satisfies AgentCommand);
+  }
+
   /** 终端：terminalRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。 */
   answerTerminal(requestId: string, outcome: TerminalToolOutcome): void {
     this.child?.postMessage({
@@ -635,6 +669,8 @@ export class AgentHostCore {
             text: outcome.text,
             ...(outcome.automation === undefined ? {} : { automation: outcome.automation }),
             ...(outcome.automations === undefined ? {} : { automations: outcome.automations }),
+            // 「改权限」那一行的数据：漏了它，工具结果里就没有那一行（2026-11-06 验收时抓到：按字段拷贝丢了新字段）
+            ...(outcome.modeRow === undefined ? {} : { modeRow: outcome.modeRow }),
           }
         : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);

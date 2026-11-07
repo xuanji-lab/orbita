@@ -103,6 +103,12 @@ export const READ_ONLY_TOOLS = [
   "read_pdf",
   "read_docx",
   "show_image",
+  // 演示文稿：读摘要，零副作用（./slides-tools.ts）
+  "slides_read",
+  // 打开文档：在右栏打开 / 读大纲。create:true 只会新建一个空文件（绝不覆盖），plan 档由工具自己拒绝
+  "doc_open",
+  // 插件列表：读已装插件的名字与技能，不改任何东西
+  "list_plugins",
 ] as const;
 
 export function isReadOnlyTool(toolName: string): boolean {
@@ -149,19 +155,22 @@ export function isMemoryTool(toolName: string): boolean {
 }
 
 /**
- * 自动化三件套（实验功能 automation）：automation_create / automation_list /
- * automation_cancel，三档模式一律放行。
+ * 自动化四件套：automation_create / automation_list /
+ * automation_cancel / automation_update，三档模式一律放行。
  *
  * 它们只写我们自己的 `automations.json`，不碰用户的文件与 shell；建出来的任务**直接生效**
  * （2026-10-31 用户裁决），到点才真正动手——那时的动作照任务所绑会话 / 新会话自己的权限档过闸。
  * 所以这里问了也没意义：建的这一下不改用户能看到的任何东西，用户在对话里能看到那张卡并随时暂停。
  * plan 档同样放行：规划「要定期查什么」本就是 plan 的一部分。
+ * automation_update 只开放权限档一项，**放行这个工具本身不放行它的效果**：把自动化调成 skip（无人值守写盘）
+ * 的上限在主进程——只有会话此刻本来就是 skip 才直接改，manual / plan 档只在对话里留一行让用户点「允许」
+ * （agent 给自动化的权限不能高于这条会话此刻的权限）。所以这里同样三档放行，闸在主进程而不在工具门口。
  * 只在根会话注册；自动化新开的会话与子会话不注册（防递归），主进程另有一道会话身份校验。
  * 条数有护栏（每会话活跃 ≤ 5、全局 ≤ 20，间隔 ≥ 5 分钟，24 小时 ≤ 24 次，agent 建的必有终点）。
  *
  * **否决「并进 CHANNEL_TOOLS」**：语义不同（通道是协调、这是排期），将来收紧时不该连坐。
  */
-export const AUTOMATION_TOOLS = ["automation_create", "automation_list", "automation_cancel"] as const;
+export const AUTOMATION_TOOLS = ["automation_create", "automation_list", "automation_cancel", "automation_update"] as const;
 
 export function isAutomationTool(toolName: string): boolean {
   return (AUTOMATION_TOOLS as readonly string[]).includes(toolName);
@@ -214,6 +223,42 @@ export const PLAN_TOOL = "update_plan";
 export const GOAL_TOOL = "update_goal";
 
 /**
+ * 自己带确认的工具：install_plugin 不靠审批条，它**自己**在对话里留一行（「装上 X　[安装] [看详情]」，
+ * 或低风险时直接装上后的「已装上 X · [卸载]」）。权限档的语义：
+ *
+ * - **plan**：拒（装插件改的是用户已装的东西，plan 的语义是「描述而不动手」）。
+ * - **manual**（Ask before every tool call）：不再另弹审批条（那一行就是那次询问，再弹是套娃），
+ *   但**永不直接装**——主进程见 manual 档一律只留带「安装」的那一行，用户点了才装。
+ * - **skip**：低风险（会话工作区内、链接安装、不带 MCP、范围是工作区、无冲突）直接装；
+ *   带 MCP / 范围是所有工作区 / 有冲突仍留那一行——放行档放的是审批，不是「看一眼」。
+ *
+ * 以前的做法（挂起等用户点的确认卡 + 15 分钟超时）已删：agent 一直等着，用户吃饭回来它还挂着。
+ */
+export const SELF_CONFIRMING_TOOLS = ["install_plugin"] as const;
+
+export function isSelfConfirmingTool(toolName: string): boolean {
+  return (SELF_CONFIRMING_TOOLS as readonly string[]).includes(toolName);
+}
+
+/**
+ * 草稿预览：preview_plugin 只扫描会话工作区里的插件文件夹、让右栏显示「正在做」视图，不装也不写任何东西。
+ * 三档一律放行（含 plan：它只是把已经写好的文件给用户看；manual 下为一次预览弹审批，会把「边聊边改卡片」
+ * 的节奏打断成一问一答）。
+ */
+export const PLUGIN_DRAFT_TOOL = "preview_plugin";
+
+/**
+ * 看板结果：show_plugin_board 把插件**已经写好的**卡（模板 + 此刻的数据）快照进工具结果、显示在对话里。
+ * 它不碰用户的文件与 shell，唯一的写是 userData 里我们自己的模板缓存（board-templates/，按哈希去重）。
+ * 三档一律放行（同 preview_plugin）：
+ * - plan：只是把结果给用户看，不改用户的工作成果；
+ * - manual：每跑一次插件弹一次审批会把「看结果」打断成一问一答；this_session 自动化跟随会话的档，
+ *   manual 会话里无人值守的那一轮会卡在这张审批上。
+ * **否决「并进 READ_ONLY_TOOLS」**：那张表在 manual 档仍要问（2026-11-05 主会话裁决）。
+ */
+export const PLUGIN_BOARD_TOOL = "show_plugin_board";
+
+/**
  * 交接：agent 请用户亲手做一步（登录、验证码、授权）。三档一律放行——它本身就是在问用户，
  * 再为「要不要问用户」弹一次审批是套娃。名字不带 browser 前缀：终端的 sudo / 2FA 是同一件事，
  * 将来复用这个名字。
@@ -236,12 +281,18 @@ export function decidePermission(mode: PermissionMode, toolName: string): Permis
   if (isChannelTool(toolName)) return { behavior: "allow" };
   // 记忆三件套：三档一律放行，理由见 MEMORY_TOOLS 的注释
   if (isMemoryTool(toolName)) return { behavior: "allow" };
-  // 自动化三件套：三档一律放行（建出来是待启用，确认在启用那一下），理由见 AUTOMATION_TOOLS 的注释
+  // 自动化四件套：三档一律放行（建出来是待启用，确认在启用那一下），理由见 AUTOMATION_TOOLS 的注释
   if (isAutomationTool(toolName)) return { behavior: "allow" };
   // 浏览器只读工具与交接：三档一律放行，理由见 BROWSER_READ_TOOLS / USER_ACTION_TOOL 的注释
   if (isBrowserReadTool(toolName) || toolName === USER_ACTION_TOOL) return { behavior: "allow" };
   // 写计划：三档一律放行，理由见 PLAN_TOOL 的注释
   if (toolName === PLAN_TOOL || toolName === GOAL_TOOL) return { behavior: "allow" };
+  // 草稿预览：三档一律放行（理由见 PLUGIN_DRAFT_TOOL）
+  if (toolName === PLUGIN_DRAFT_TOOL) return { behavior: "allow" };
+  // 看板结果：三档一律放行（理由见 PLUGIN_BOARD_TOOL）
+  if (toolName === PLUGIN_BOARD_TOOL) return { behavior: "allow" };
+  // 自带确认的工具：manual 不再问一次（对话里那一行就是询问），plan 照拒（理由见 SELF_CONFIRMING_TOOLS）
+  if (isSelfConfirmingTool(toolName) && mode === "manual") return { behavior: "allow" };
   if (isReadOnlyTool(toolName)) {
     // plan 下只读工具静默放行；manual 下用户要求「全都问」，只读也问
     return mode === "plan" ? { behavior: "allow" } : { behavior: "ask" };

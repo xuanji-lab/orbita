@@ -8,7 +8,7 @@ import {
 } from "../shared/memory.ts";
 
 /**
- * agent 的记忆工具（实验功能 memory-system）：memory_search / memory_revise / memory_retire。
+ * agent 的记忆工具：memory_search / memory_revise / memory_retire。
  *
  * 为什么有它（2026-10-29 用户）：「比如有记忆召回是错误的，我一句话，agent 就可以找到错误
  * 东西，标记为过时，换上我新的陈述。一种一直在对齐的状态」「我不想去确认记忆，agent 应该

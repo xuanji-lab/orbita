@@ -38,6 +38,24 @@ export function stepDisplay(status: PlanItemStatus, ctx: { working: boolean; awa
   return { status, active: status === "in_progress" && ctx.working };
 }
 
+/** 汉字（含扩展 A 与兼容区）：判「用户在写中文」「标题里有没有中文」，不区分日韩 */
+const HAN = /[\u3400-\u9fff\uf900-\ufaff]/;
+
+/**
+ * 面板里一章的标题（null = 别用它，退回按工具归类的名字）。
+ *
+ * 没写旁白的章，标题取这一章第一段思考的第一行（turn-process.ts）——而思考常常是英文的：2026-11-06 用户截图里，
+ * 用中文对话的任务，计划步骤下面挂着「I've got all 25 entries already annotated…」。回复语言规则管的是
+ * 「用户可见的正文」，思考不在其内。所以：用户这一轮写的是中文、而思考来的标题里一个汉字也没有，就不用它——
+ * 一段看不懂的英文原话，不如「读文件 · 搜索」这种按工具归类的名字可靠。正文（source = say）永远用：
+ * 那是模型对用户说的话，语言由回复语言规则负责。
+ */
+export function chapterTitle(chapter: { title: string | null; source: "say" | "think" | "tools" }, ask: string): string | null {
+  if (chapter.title === null) return null;
+  if (chapter.source === "think" && HAN.test(ask) && !HAN.test(chapter.title)) return null;
+  return chapter.title;
+}
+
 /**
  * 头一行说什么。
  *

@@ -11,6 +11,7 @@ import {
   type Automation,
   type AutomationToolRequest,
 } from "../../shared/automation.ts";
+import type { PermissionMode } from "../../shared/permission.ts";
 import type { ProviderDto } from "../../shared/provider.ts";
 import type { SessionMeta } from "../../shared/session.ts";
 import type { Workspace } from "../../shared/workspace.ts";
@@ -18,10 +19,12 @@ import { makeAutomation } from "./fixtures.ts";
 import {
   applyAutomationAct,
   applyAutomationCreate,
+  applyAutomationModeFromRow,
   applyAutomationPromote,
   applyAutomationRequest,
   applyAutomationUpdate,
   listAutomations,
+  parseAutomationModeRowRequest,
   type AutomationRequestDeps,
 } from "./requests.ts";
 import type { RunNowOutcome } from "./scheduler.ts";
@@ -74,10 +77,10 @@ afterEach(async () => {
 });
 
 /** 同一个测试里要两套互不相干的存储时，给不同的 name */
-function setup(options: { enabled?: boolean; metas?: SessionMeta[]; runNow?: RunNowOutcome; name?: string } = {}) {
+function setup(options: { metas?: SessionMeta[]; runNow?: RunNowOutcome; name?: string } = {}) {
   const store = new AutomationStore(join(dir, options.name ?? "main"));
   const metas = new Map((options.metas ?? []).map((m) => [m.id, m]));
-  const state = { enabled: options.enabled ?? true, notifies: 0, promoted: [] as string[], runNowCalls: [] as string[], ids: 0 };
+  const state = { notifies: 0, promoted: [] as string[], runNowCalls: [] as string[], ids: 0 };
   const deps: AutomationRequestDeps = {
     store,
     scheduler: {
@@ -95,7 +98,6 @@ function setup(options: { enabled?: boolean; metas?: SessionMeta[]; runNow?: Run
     },
     providers: { list: async () => [provider("zai", ["glm-5.3", "glm-5.3-flash"]), provider("kimi", ["k3"])] },
     workspaces: { list: async () => workspaces },
-    enabled: async () => state.enabled,
     now: () => NOW,
     newId: () => `id${(state.ids += 1)}`,
     notify: () => {
@@ -112,26 +114,6 @@ const validCreate = {
   schedule: { kind: "daily", time: "18:00", weekdays: [5] },
   mode: "skip",
 };
-
-describe("开关关着", () => {
-  test("list 回空，所有写操作与工具请求都回「已关闭」，什么都不落盘", async () => {
-    const { deps, store, state } = setup({ enabled: false, metas: [meta({ id: "s1" })] });
-    await store.insert(makeAutomation({ id: "a" }));
-    assert.deepEqual(await listAutomations(deps), []);
-    for (const result of [
-      await applyAutomationCreate(deps, validCreate),
-      await applyAutomationUpdate(deps, "a", { title: "x" }),
-      await applyAutomationAct(deps, "a", { type: "pause" }),
-      await applyAutomationPromote(deps, "s1"),
-      await applyAutomationRequest(deps, toolEvent("s1", { op: "list" })),
-    ]) {
-      assert.equal(result.ok, false);
-      assert.match(result.ok ? "" : result.error, /turned off/);
-    }
-    assert.equal((await store.list()).length, 1);
-    assert.equal(state.notifies, 0);
-  });
-});
 
 describe("applyAutomationCreate（面板手建）", () => {
   test("合法：直接 active、只能新开会话、nextRunAt 从现在排好、通知 renderer", async () => {
@@ -357,8 +339,12 @@ describe("applyAutomationPromote（转成普通会话）", () => {
 
 /* ---------- agent 工具 ---------- */
 
-function toolEvent(sessionId: string, request: AutomationToolRequest): Extract<AgentEvent, { type: "automationRequest" }> {
-  return { type: "automationRequest", requestId: "req", sessionId, request };
+function toolEvent(
+  sessionId: string,
+  request: AutomationToolRequest,
+  mode: PermissionMode = "skip",
+): Extract<AgentEvent, { type: "automationRequest" }> {
+  return { type: "automationRequest", requestId: "req", sessionId, mode, request };
 }
 
 const createRequest = (patch: Partial<Extract<AutomationToolRequest, { op: "create" }>> = {}): AutomationToolRequest => ({
@@ -487,5 +473,253 @@ describe("applyAutomationRequest：list / cancel（只管当前工作区）", ()
     assert.equal(foreign.ok, false);
     assert.equal((await store.get("theirs"))?.status, "active", "别的工作区的任务纹丝不动");
     assert.equal((await applyAutomationRequest(deps, toolEvent("S", { op: "cancel", automationId: "" }))).ok, false);
+  });
+});
+
+describe("选插件", () => {
+  const withPlugins = (enabledIn: Record<string, string[]>, metas: SessionMeta[] = []) => {
+    const built = setup({ metas });
+    built.deps.plugins = { enabledIn: async (workspaceId) => enabledIn[workspaceId ?? "home"] ?? [] };
+    return built;
+  };
+
+  test("面板新建：插件要在这个工作区启用着；名字不合规 / 没装都拒；不给就没有", async () => {
+    const { deps, store } = withPlugins({ ws1: ["lit"] });
+    const ok = await applyAutomationCreate(deps, { ...validCreate, plugin: { name: "lit" } });
+    assert.equal(ok.ok, true);
+    assert.deepEqual((await store.list())[0]?.plugin, { name: "lit" });
+    const missing = await applyAutomationCreate(deps, { ...validCreate, plugin: { name: "other" } });
+    assert.match(missing.ok ? "" : missing.error, /not installed, not enabled in this workspace, or has no board/);
+    const bad = await applyAutomationCreate(deps, { ...validCreate, plugin: { name: "../x" } });
+    assert.match(bad.ok ? "" : bad.error, /valid plugin name/);
+    const elsewhere = await applyAutomationCreate(deps, { ...validCreate, workspaceId: "ws2", plugin: { name: "lit" } });
+    assert.equal(elsewhere.ok, false);
+    const none = await applyAutomationCreate(deps, validCreate);
+    assert.equal(none.ok && none.automation?.plugin, undefined);
+  });
+
+  test("编辑：换插件要校验；null 清掉", async () => {
+    const { deps, store } = withPlugins({ ws1: ["lit", "weekly"] });
+    await store.insert(makeAutomation({ id: "a", plugin: { name: "lit" }, target: { kind: "new_session", workspaceId: "ws1" } }));
+    assert.equal((await applyAutomationUpdate(deps, "a", { plugin: { name: "weekly" } })).ok, true);
+    assert.deepEqual((await store.get("a"))?.plugin, { name: "weekly" });
+    assert.equal((await applyAutomationUpdate(deps, "a", { plugin: { name: "nope" } })).ok, false);
+    assert.equal((await applyAutomationUpdate(deps, "a", { plugin: null })).ok, true);
+    assert.equal((await store.get("a"))?.plugin, undefined);
+  });
+
+  test("agent 建：plugin 参数按会话工作区校验，回执提到插件，对话卡带插件名", async () => {
+    const { deps, store } = withPlugins({ ws1: ["lit"] }, [meta({ id: "S", workspaceId: "ws1" })]);
+    const result = await applyAutomationRequest(deps, toolEvent("S", createRequest({ target: "new_session", plugin: "lit" })));
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.match(result.text, /use the plugin "lit"/);
+    // 新会话档先落 Plan：回执要求模型转告用户「定时跑默认只读」，并先口头问、同意后再 automation_update（不再让用户去面板里改）
+    assert.match(result.text, /tell the user/);
+    assert.match(result.text, /read-only by default/);
+    assert.match(result.text, /call automation_update with mode "skip"/);
+    assert.doesNotMatch(result.text, /Do not try to change it yourself|Automations panel/);
+    assert.equal(result.automation?.plugin, "lit");
+    assert.deepEqual((await store.list())[0]?.plugin, { name: "lit" });
+    const refused = await applyAutomationRequest(deps, toolEvent("S", createRequest({ plugin: "other" })));
+    assert.equal(refused.ok, false);
+  });
+
+  test("agent 建：没带插件、或回到本会话的自动化，回执里没有「转告用户改权限」那句", async () => {
+    const { deps } = withPlugins({ ws1: ["lit"] }, [meta({ id: "S", workspaceId: "ws1" })]);
+    const plain = await applyAutomationRequest(deps, toolEvent("S", createRequest({ target: "new_session" })));
+    assert.equal(plain.ok && /tell the user/.test(plain.text), false);
+    const sameSession = await applyAutomationRequest(deps, toolEvent("S", createRequest({ target: "this_session", plugin: "lit" })));
+    assert.equal(sameSession.ok && /tell the user/.test(sameSession.text), false);
+  });
+});
+
+describe("agent 改自动化权限档：automation_update / create.mode（不高于会话此刻的档）", () => {
+  const updateSkip = (id: string): AutomationToolRequest => ({ op: "update", automationId: id, mode: "skip" });
+  const seed = async (store: AutomationStore, patch: Partial<Automation> = {}) =>
+    store.insert(makeAutomation({ id: "a", target: { kind: "new_session", workspaceId: "ws1" }, ...patch }));
+
+  test("会话是放行档：直接改成 skip，回「已改成放行」行数据，并通知界面", async () => {
+    const { deps, store, state } = setup({ metas: [meta({ id: "S", mode: "skip" })] });
+    await seed(store);
+    const result = await applyAutomationRequest(deps, toolEvent("S", updateSkip("a"), "skip"));
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal((await store.get("a"))?.mode, "skip");
+    assert.equal(result.modeRow?.state, "applied");
+    assert.equal(result.modeRow?.automationId, "a");
+    assert.equal(result.modeRow?.sessionMode, "skip");
+    assert.match(result.text, /now runs with full permissions/);
+    assert.equal(state.notifies, 1);
+  });
+
+  test("会话是手动 / 计划档：不改，留「待你确认」行，回执让模型结束这一轮、别重调", async () => {
+    for (const mode of ["manual", "plan"] as const) {
+      const { deps, store } = setup({ name: mode, metas: [meta({ id: "S", mode })] });
+      await seed(store);
+      const result = await applyAutomationRequest(deps, toolEvent("S", updateSkip("a"), mode));
+      assert.equal(result.ok, true);
+      if (!result.ok) return;
+      assert.equal((await store.get("a"))?.mode, "plan", `${mode} 档下 mode 纹丝不动`);
+      assert.equal(result.modeRow?.state, "pending");
+      assert.equal(result.modeRow?.sessionMode, mode);
+      assert.match(result.text, /NOT changed/);
+      assert.match(result.text, /End your turn/);
+      assert.match(result.text, /do not call automation_update again/);
+    }
+  });
+
+  test("agent 账本说放行、落盘 meta 不是放行（或反过来）：按更严的算，不直接改", async () => {
+    const lagging = setup({ metas: [meta({ id: "S", mode: "manual" })] });
+    await seed(lagging.store);
+    const a = await applyAutomationRequest(lagging.deps, toolEvent("S", updateSkip("a"), "skip"));
+    assert.equal(a.ok && a.modeRow?.state, "pending");
+    assert.equal(a.ok && a.modeRow?.sessionMode, "manual");
+    assert.equal((await lagging.store.get("a"))?.mode, "plan");
+    const lowered = setup({ name: "b", metas: [meta({ id: "S", mode: "skip" })] });
+    await seed(lowered.store);
+    const b = await applyAutomationRequest(lowered.deps, toolEvent("S", updateSkip("a"), "manual"));
+    assert.equal(b.ok && b.modeRow?.state, "pending");
+  });
+
+  test("请求 plan 永远直接改（任何档），没有行；本来就是 skip 再请求 skip 不重复留行", async () => {
+    const { deps, store } = setup({ metas: [meta({ id: "S", mode: "manual" })] });
+    await seed(store, { mode: "skip" });
+    const same = await applyAutomationRequest(deps, toolEvent("S", updateSkip("a"), "manual"));
+    assert.equal(same.ok && same.modeRow, undefined);
+    assert.equal((await store.get("a"))?.mode, "skip", "manual 档请求 skip 而它已是 skip：不动");
+    const down = await applyAutomationRequest(deps, toolEvent("S", { op: "update", automationId: "a", mode: "plan" }, "manual"));
+    assert.equal(down.ok && down.modeRow, undefined);
+    assert.equal((await store.get("a"))?.mode, "plan");
+  });
+
+  test("越权与不合法：别的工作区的当作不存在；this_session / 已结束 / 坏 mode / 空 id 都拒，什么都不改", async () => {
+    const { deps, store, state } = setup({ metas: [meta({ id: "S", mode: "skip" })] });
+    await seed(store, { id: "theirs", target: { kind: "new_session", workspaceId: "ws2" } });
+    await seed(store, { id: "bound", target: { kind: "this_session", sessionId: "S", workspaceId: "ws1" } });
+    await seed(store, { id: "done", status: "completed", endReason: "cancelled", nextRunAt: null });
+    for (const id of ["theirs", "bound", "done", "不存在", ""]) {
+      const result = await applyAutomationRequest(deps, toolEvent("S", updateSkip(id), "skip"));
+      assert.equal(result.ok, false, id);
+    }
+    const bad = await applyAutomationRequest(deps, toolEvent("S", { op: "update", automationId: "bound", mode: "manual" as "skip" }, "skip"));
+    assert.equal(bad.ok, false);
+    for (const id of ["theirs", "bound", "done"]) assert.equal((await store.get(id))?.mode, "plan");
+    assert.equal(state.notifies, 0);
+  });
+
+  test("自动化新开的会话 / 子会话 / 开关关着：update 一样被拒（与其它工具同一道门）", async () => {
+    const { deps, store } = setup({
+      metas: [meta({ id: "RUN", automationId: "x" }), meta({ id: "CHILD", parentId: "S" }), meta({ id: "S" })],
+    });
+    await seed(store);
+    for (const id of ["RUN", "CHILD", "不存在"]) {
+      assert.equal((await applyAutomationRequest(deps, toolEvent(id, updateSkip("a"), "skip"))).ok, false, id);
+    }
+    assert.equal((await store.get("a"))?.mode, "plan");
+  });
+
+  test("create 带 mode:skip：放行档直接建成 skip 并带行；手动档建成 plan 并带待确认行；this_session 忽略 mode", async () => {
+    const direct = setup({ metas: [meta({ id: "S", mode: "skip" })] });
+    const a = await applyAutomationRequest(direct.deps, toolEvent("S", createRequest({ target: "new_session", mode: "skip" }), "skip"));
+    assert.equal(a.ok && a.modeRow?.state, "applied");
+    assert.equal((await direct.store.list())[0]?.mode, "skip");
+    assert.equal(a.ok && a.modeRow?.automationId, (await direct.store.list())[0]?.id);
+
+    const ask = setup({ name: "m", metas: [meta({ id: "S", mode: "manual" })] });
+    const b = await applyAutomationRequest(ask.deps, toolEvent("S", createRequest({ target: "new_session", mode: "skip" }), "manual"));
+    assert.equal(b.ok && b.modeRow?.state, "pending");
+    assert.equal((await ask.store.list())[0]?.mode, "plan");
+    assert.match(b.ok ? b.text : "", /do not call automation_update again/);
+
+    const bound = setup({ name: "t", metas: [meta({ id: "S", mode: "skip" })] });
+    const c = await applyAutomationRequest(bound.deps, toolEvent("S", createRequest({ mode: "skip" }), "skip"));
+    assert.equal(c.ok && c.modeRow, undefined);
+    assert.match(c.ok ? c.text : "", /ignored/);
+
+    const wrong = await applyAutomationRequest(direct.deps, toolEvent("S", createRequest({ mode: "manual" as "skip" }), "skip"));
+    assert.equal(wrong.ok, false);
+  });
+
+  test("create 不带 mode：回执里不再说「别自己改」，而是让模型先口头问、同意后再 automation_update", async () => {
+    const { deps } = setup({ metas: [meta({ id: "S" })] });
+    const plain = await applyAutomationRequest(deps, toolEvent("S", createRequest({ target: "new_session" })));
+    assert.match(plain.ok ? plain.text : "", /ask the user in one sentence/);
+    assert.match(plain.ok ? plain.text : "", /automation_update/);
+    assert.doesNotMatch(plain.ok ? plain.text : "", /Do not try to change it yourself|Automations panel/);
+  });
+});
+
+describe("applyAutomationModeFromRow（用户点那一行的按钮：主进程重验后才改）", () => {
+  const click = (patch: Record<string, unknown> = {}) => ({ sessionId: "S", automationId: "a", requestId: "r1", action: "allow", ...patch });
+  const seed = async (store: AutomationStore, patch: Partial<Automation> = {}) =>
+    store.insert(
+      makeAutomation({ id: "a", target: { kind: "new_session", workspaceId: "ws1" }, createdBy: { kind: "agent", sessionId: "S" }, ...patch }),
+    );
+
+  test("允许：改成 skip 并通知；改回只读：改成 plan 并记下 requestId；保持只读：只记下，不动档", async () => {
+    const { deps, store, state } = setup({ metas: [meta({ id: "S", mode: "manual" })] });
+    await seed(store);
+    assert.deepEqual(await applyAutomationModeFromRow(deps, click()), { ok: true });
+    assert.equal((await store.get("a"))?.mode, "skip");
+    assert.equal((await store.get("a"))?.modeDeclined, undefined);
+    assert.deepEqual(await applyAutomationModeFromRow(deps, click({ action: "readonly" })), { ok: true });
+    assert.equal((await store.get("a"))?.mode, "plan");
+    assert.deepEqual((await store.get("a"))?.modeDeclined, ["r1"]);
+    assert.deepEqual(await applyAutomationModeFromRow(deps, click({ requestId: "r2", action: "keep" })), { ok: true });
+    assert.equal((await store.get("a"))?.mode, "plan");
+    assert.deepEqual((await store.get("a"))?.modeDeclined, ["r1", "r2"]);
+    assert.equal(state.notifies, 3);
+  });
+
+  test("重验失败：会话没了 / 自动化没了 / 别的工作区且不是这条会话建的 / this_session / 已结束时「允许」→ 稳定代码，不改", async () => {
+    const { deps, store, state } = setup({ metas: [meta({ id: "S" }), meta({ id: "RUN", automationId: "x" })] });
+    await seed(store);
+    await seed(store, { id: "foreign", target: { kind: "new_session", workspaceId: "ws2" }, createdBy: { kind: "user" } });
+    await seed(store, { id: "bound", target: { kind: "this_session", sessionId: "S", workspaceId: "ws1" } });
+    await seed(store, { id: "done", status: "completed", endReason: "cancelled", nextRunAt: null });
+    const reason = async (patch: Record<string, unknown>) => {
+      const result = await applyAutomationModeFromRow(deps, click(patch));
+      return result.ok ? "ok" : result.reason;
+    };
+    assert.equal(await reason({ sessionId: "不存在的会话" }), "noSession");
+    assert.equal(await reason({ sessionId: "RUN" }), "noSession", "自动化新开的会话不能管自动化");
+    assert.equal(await reason({ automationId: "不存在" }), "notFound");
+    assert.equal(await reason({ automationId: "foreign" }), "notFound");
+    assert.equal(await reason({ automationId: "bound" }), "notApplicable");
+    assert.equal(await reason({ automationId: "done" }), "finished");
+    assert.equal(await reason({ automationId: "done", action: "keep" }), "ok", "已结束的「保持只读」只是记一笔，不算失败");
+    for (const id of ["a", "foreign", "bound"]) assert.equal((await store.get(id))?.mode, "plan");
+    assert.equal(state.notifies, 1);
+  });
+
+  test("不是这条会话建的、但在同一工作区（用户手建的）也能改", async () => {
+    const { deps, store } = setup({ metas: [meta({ id: "S" })] });
+    await seed(store, { id: "panel", createdBy: { kind: "user" } });
+    assert.deepEqual(await applyAutomationModeFromRow(deps, click({ automationId: "panel" })), { ok: true });
+    assert.equal((await store.get("panel"))?.mode, "skip");
+  });
+
+  test("modeDeclined 只留最近 10 个；同一个 requestId 不重复", async () => {
+    const { deps, store } = setup({ metas: [meta({ id: "S" })] });
+    await seed(store);
+    for (let i = 0; i < 12; i += 1) await applyAutomationModeFromRow(deps, click({ requestId: `r${i}`, action: "keep" }));
+    await applyAutomationModeFromRow(deps, click({ requestId: "r11", action: "keep" }));
+    const declined = (await store.get("a"))?.modeDeclined ?? [];
+    assert.equal(declined.length, 10);
+    assert.deepEqual(declined.slice(-2), ["r10", "r11"]);
+  });
+});
+
+describe("parseAutomationModeRowRequest（IPC 入参校验）", () => {
+  const good = { sessionId: "S", automationId: "a", requestId: "r", action: "allow" };
+  test("合法的原样通过", () => {
+    assert.deepEqual(parseAutomationModeRowRequest(good), { ok: true, value: good });
+    for (const action of ["allow", "readonly", "keep"]) assert.equal(parseAutomationModeRowRequest({ ...good, action }).ok, true);
+  });
+  test("非对象 / 缺字段 / 空串 / 非字符串 / 超长 / 未知 action 一律拒", () => {
+    for (const bad of [null, "x", 1, [], {}, { ...good, sessionId: "" }, { ...good, automationId: 3 }, { ...good, requestId: undefined }, { ...good, sessionId: "x".repeat(201) }, { ...good, action: "skip" }, { ...good, action: undefined }]) {
+      assert.equal(parseAutomationModeRowRequest(bad).ok, false, JSON.stringify(bad));
+    }
   });
 });

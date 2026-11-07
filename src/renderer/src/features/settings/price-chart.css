@@ -73,10 +73,32 @@
   gap: var(--space-5);
   align-items: start;
 }
-@media (max-width: 900px) {
-  .pc-wrap {
-    grid-template-columns: 1fr;
-  }
+/* 并排 / 堆叠由组件按 .pc-block 自身宽度定（priceChartLayout），不用视口媒体查询：
+   右栏开着时视口很宽、这一块却只剩 ~470px */
+.pc-wrap.stack {
+  grid-template-columns: 1fr;
+}
+
+/* 太窄不画图：一行说明 + 「收起右栏」按钮 */
+.pc-off {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+.pc-off .icon,
+.pc-off svg {
+  flex: none;
+}
+.pc-off-action {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
 }
 .pc-main {
   min-width: 0;

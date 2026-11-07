@@ -62,6 +62,7 @@ import {
   repositionBlocks,
   type ComposerPasteBlock,
 } from "../../shell/paste-blocks.ts";
+import { getOpenDocument, resolveQuotes } from "../doc-panel/open-document.ts";
 import { acceptQuote, composeQuotedMessage, parseQuotedMessage, QUOTE_MAX_TOTAL_CHARS, type TextQuote } from "../../../../shared/quote.ts";
 import { recordAssistantStart } from "./stats-format.ts";
 import { atMostManual, DEFAULT_PERMISSION_MODE, type PermissionAnswer, type PermissionMode } from "@shared/permission";
@@ -72,7 +73,8 @@ import type { AgentEvent, AgentStats, BuiltinProvider, RetryStatus, SubmitAgentI
 import { composeChannelPrompt, userRepliesNote, userRepliesSincePreviousReport } from "@shared/channel";
 import type { ProviderDto } from "@shared/provider";
 import { useBuiltinCatalog, usableProviders } from "../settings/model-menu";
-import { declaredThinkingLevels, modelPreferenceById } from "../settings/providers-view-model.ts";
+import { isProviderEnabled } from "../../../../shared/provider.ts";
+import { declaredThinkingLevels, enabledProviders, modelPreferenceById } from "../settings/providers-view-model.ts";
 import { reconcileThinkingLevel, resolveThinkingLevel } from "./thinking-choice.ts";
 import { modelRequiredText } from "./model-required.ts";
 import { collectScanAnswer, locateMessageRange, scanSubmitInput } from "./carryover-parse.ts";
@@ -422,6 +424,11 @@ export interface ChatSession {
   newTask: () => void;
   /** 这个工作区里的新任务：cwd 与 workspaceId 一起按它填好 */
   newTaskIn: (workspace: Workspace) => void;
+  /**
+   * 新开一条任务（落在 workspace 里；null = 不属于任何工作区，落 Home）并把输入框预填成 text。
+   * 草稿写进**新任务槽自己的键**：newTaskIn 之后立刻 setDraft 写的是旧会话的键（闭包里的 draftKey 还是旧的）。
+   */
+  startTaskWithDraft: (workspace: Workspace | null, text: string) => void;
   answerApproval: (requestId: string, answer: PermissionAnswer) => void;
   /* ---------- 意图系统（实验功能 intent-system） ---------- */
   /** 终态召回卡（实时事件 + 盘上种子；同一 turn 只留最后一张） */
@@ -1496,6 +1503,15 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     if (!engine.usable.some((p) => p.id === model.providerId)) setModel(null);
   }, [engine.usable, model]);
 
+  // 服务商开关：**还没起会话的新任务槽**不该带着关着的服务商起步（启动恢复的 lastUsed 可能指着它）。
+  // 清掉后由下面的默认播种落到第一个开着的。已经有会话的槽不碰——正用着关着服务商的会话
+  // 不自动换模型（渠道不替用户选），发消息时主进程拦下并提示
+  useEffect(() => {
+    if (model === null || opened !== null || sessionRef.current !== null) return;
+    const provider = engine.usable.find((p) => p.id === model.providerId);
+    if (provider !== undefined && !isProviderEnabled(provider)) setModel(null);
+  }, [engine.usable, model, opened]);
+
   // 清空的补种：正开着的会话 meta 从占位变成真实模型（设置 › 服务商的「分配
   // 模型」），列表刷新把新 meta 送来时种回模型栏——此前它被上面清成了「没有模型」。
   // 只补 null：用户手选的（非 null）永远不动，不替任何人改选择。
@@ -2019,7 +2035,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     // 引用展开进正文：模型、转录、pi 的本子看到的都是这一整段（解析回 chip 在显示时做）。
     // 句中粘贴胶囊就地组装成 <pasted-text> 块——位置保留（方案 C），展开的区间本就是
     // 正文。组装后的 text 从这里往下走：排队、投递都以它为准（回填快照另存草稿原文）
-    const raw = composeQuotedMessage(quotes, own);
+    const raw = composeQuotedMessage(resolveQuotes(quotes), own, getOpenDocument() ?? undefined);
     const text = assemblePasteDraft(raw, pasted);
     engine.setError(null);
     // 手动压缩指令在本地拦下，**不发给模型**——发出去模型会角色扮演一段
@@ -2427,6 +2443,16 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     },
     [engine],
   );
+  const startTaskWithDraft = useCallback(
+    (workspace: Workspace | null, text: string) => {
+      reset();
+      setCwd(workspace === null ? null : workspace.path);
+      setWorkspaceId(workspace === null ? null : workspace.id);
+      writeDraft(`home:${key}`, text);
+    },
+    [reset, writeDraft, key],
+  );
+
 
   /** 加好一个工作区之后：默认把本槽的下一条新任务落进去；moveCurrent 时把正看着的这条迁进去 */
   const landIn = useCallback(
@@ -2996,7 +3022,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   // 如实显示「没有模型」，发送时引导先选（model-required.ts）
   useEffect(() => {
     if (model !== null || opened !== null) return;
-    const first = engine.usable[0];
+    // 关着的服务商不当默认（服务商开关）：新任务槽只在开着的里挑第一个
+    const first = enabledProviders(engine.usable)[0];
     const firstModel = first?.models.declared[0];
     if (first === undefined || firstModel === undefined) return;
     setModel({ providerId: first.id, modelId: firstModel.id });
@@ -3437,6 +3464,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     moveQueuedTo,
     newTask,
     newTaskIn,
+    startTaskWithDraft,
     answerApproval: engine.answerApproval,
   };
 }

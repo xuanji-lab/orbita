@@ -20,9 +20,14 @@ import type { DelegateCard, ReadTaskCard } from "@shared/agent-ipc";
 import type { ChannelMessageKind } from "@shared/channel";
 import type { CompactedRecord, IntentRecallRecord, SessionRecord, TranscriptRecord } from "@shared/session";
 import type { FileTurnRecord, FileTurnView, RevertRecord } from "@shared/revert";
+import type { PluginInstallRow } from "@shared/plugin";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载，@shared 别名只能解析类型（AGENTS.md 硬规则）
 import { parseChannelPrompt } from "../../../../shared/channel.ts";
-import { gatedCommandTimeout } from "../../../../shared/permission.ts";
+import { parsePluginInstallRow } from "../../../../shared/plugin.ts";
+import { parseAutomationModeRow, type AutomationModeRow } from "../../../../shared/automation.ts";
+import { parsePluginBoardDetails, type PluginBoardResult } from "../../../../shared/plugin-board.ts";
+import { gatedCommandTimeout, PLUGIN_BOARD_TOOL } from "../../../../shared/permission.ts";
+import { builtinCommand, DOC_EDIT_KEY, DOC_WRITE_KEY, docEditPath, isBuiltinCommand, PINNED_CARD_COMMANDS } from "./builtin-commands.ts";
 // 值导入必须走相对路径带 .ts 后缀（同上一行的纪律：本文件被 node --test 直接加载）
 import { skillForReadPath } from "../../../../shared/skill.ts";
 import { parseQualifiedToolName } from "../../../../shared/mcp.ts";
@@ -188,6 +193,9 @@ const CHANNEL_TOOL_NAMES: ReadonlySet<string> = new Set([
   "report_to_parent",
   // 自动化：建出来的那张卡是给用户看的结果（在右栏查看 / 暂停），不是「工作过程」，不该被折叠吞掉
   "automation_create",
+  // 自动化改权限：留下的那一行（已改成放行 [改回只读] / 让它到点能写文件？[允许] [保持只读]）要用户看见、可能要点，
+  // 折进「N 个工具调用」里用户就找不到了——而 agent 已经结束这一轮在等
+  "automation_update",
 ]);
 
 /**
@@ -196,26 +204,47 @@ const CHANNEL_TOOL_NAMES: ReadonlySet<string> = new Set([
  */
 const HANDOFF_TOOL_NAME = "request_user_action";
 
+/**
+ * install_plugin 同样独立成行、不进折叠：它留下的那一行（「已装上 X · [卸载]」或「装上 X　[安装] [看详情]」）
+ * 是要用户看见、可能要用户点的东西，折进「N 个工具调用」里用户就找不到了——而 agent 已经结束这一轮在等。
+ */
+const PLUGIN_INSTALL_TOOL_NAME = "install_plugin";
+
 // 故意不写成类型谓词（`entry is ToolCallUnit`）：只有「toolCall 且工具名在名单里」
 // 那一部分该被排除，谓词的假分支会让 TS 把整个 "toolCall" kind 都窄掉，
 // 下游 `entry.kind === "toolCall"` 判断就报「没有交集」。
 // 名字沿用 isChannelToolCall：通道工具与交接都是「独立成卡、不参与合并与折叠」的那一类。
 function isChannelToolCall(entry: RenderEntry): boolean {
-  return entry.kind === "toolCall" && (CHANNEL_TOOL_NAMES.has(entry.toolName) || entry.toolName === HANDOFF_TOOL_NAME);
+  return (
+    entry.kind === "toolCall" &&
+    (CHANNEL_TOOL_NAMES.has(entry.toolName) || entry.toolName === HANDOFF_TOOL_NAME || entry.toolName === PLUGIN_INSTALL_TOOL_NAME)
+  );
 }
 
 /**
  * 钉住工具（2026-09-27 裁决）：show_image 是**给用户的展示**，不是「工作过程」——
+ * show_plugin_board（插件的看板结果，2026-11-05）同理：用户默认只想要这块看板，读技能、写数据那些步骤照常收进折叠，
+ * 看板卡钉在折叠之后、结尾回复之前。
  * 大折叠把轮内工具吞进统计行时会把它递出的画廊一起吞走，等于模型递完照片当场
  * 收回。与通道工具同一套豁免口径（不进工具组 / 不锚折叠边界 / 折叠区间在它处
  * 切开 / 不计统计——它根本不进 members），但语义不同：通道是父子通信，这是
  * 面向用户的输出。常见节奏（show 完就给结尾回复）下，豁免让画廊正好钉在
  * 折叠行之后、回复之前——「正文前面见图」不需要上浮收集就自然成立。
  */
-const PINNED_TOOL_NAMES: ReadonlySet<string> = new Set(["show_image"]);
+const PINNED_TOOL_NAMES: ReadonlySet<string> = new Set(["show_image", PLUGIN_BOARD_TOOL, ...PINNED_CARD_COMMANDS]);
 
 function isPinnedToolCall(entry: RenderEntry): boolean {
   return entry.kind === "toolCall" && PINNED_TOOL_NAMES.has(entry.toolName);
+}
+
+/**
+ * 内置命令里要出完成卡的那几个（新建演示文稿 / 打开文档 / 导出 …）：不挂轮尾，**留在它被调用的位置**。
+ * 过程行是时间线——先「新建演示文稿」、后「写幻灯片」就该按这个顺序读；挂到轮尾会让它排到后面的写幻灯片折叠之下
+ * （验收 S1：新建画在写幻灯片那组下面）。做法同通道工具：在这里把块切开，卡原位放进视图，前后各自成折叠。
+ * show_image / 插件看板仍是挂轮尾（给用户看的成品，贴在回复之前）。
+ */
+function isInPlaceCardCall(entry: RenderEntry): boolean {
+  return entry.kind === "toolCall" && PINNED_CARD_COMMANDS.has(entry.toolName);
 }
 
 /** 这条 toolCall 是不是在 read 某条已知 skill 的 SKILL.md（分组排除用，同 ToolLine 的判定） */
@@ -272,6 +301,9 @@ export function groupToolUnits(
       !skillRead &&
       !CHANNEL_TOOL_NAMES.has(unit.toolName) &&
       unit.toolName !== HANDOFF_TOOL_NAME &&
+      unit.toolName !== PLUGIN_INSTALL_TOOL_NAME &&
+      // 内置命令（slides_* …）各自一行、各带摘要：并成「slides_write 3 calls」就看不到每次写了哪几页
+      !isBuiltinCommand(unit.toolName) &&
       !PINNED_TOOL_NAMES.has(unit.toolName);
     if (groupable && (head === undefined || head.toolName === unit.toolName)) {
       run.push(unit);
@@ -531,6 +563,11 @@ function foldSegment(
     chunk = [];
   };
   for (const entry of segment) {
+    if (isInPlaceCardCall(entry)) {
+      flushChunk(false);
+      view.push(entry);
+      continue;
+    }
     if (isPinnedToolCall(entry)) {
       pinned.push(entry);
       continue;
@@ -550,12 +587,17 @@ function foldSegment(
     chunk.push(entry);
   }
   flushChunk(true);
+  // 先钉画廊 / 看板、后追加轮尾文件卡：顺序反过来时，「尾部连续的正文」被文件卡挡住、找不到结尾回复，
+  // 钉住项就掉到文件卡之后（2026-11-06 用户：看板回复完变灰 not found）。更要紧的是位置**不随轮尾卡
+  // 出现而变**：文件卡在轮结束后才补进来，钉住项若因此换位，React 会搬动它的 DOM 节点，而 iframe 被搬动
+  // 会重新加载——看板卡的地址是一次性的，重载拿到 404。
+  if (pinned.length > 0) {
+    // 插在结尾回复（视图尾部连续的正文）之前；没有正文就挂段尾
+    let insertAt = view.length;
+    while (insertAt > 0 && view[insertAt - 1]?.kind === "text") insertAt -= 1;
+    view.splice(insertAt, 0, ...pinned);
+  }
   if (tailCards.length > 0) view.push(...tailCards);
-  if (pinned.length === 0) return view;
-  // 插在结尾回复（视图尾部连续的正文）之前；没有正文就挂段尾
-  let insertAt = view.length;
-  while (insertAt > 0 && view[insertAt - 1]?.kind === "text") insertAt -= 1;
-  view.splice(insertAt, 0, ...pinned);
   return view;
 }
 
@@ -741,7 +783,27 @@ export function rollupToolKey(
     const path = (input as Record<string, unknown> | null)?.["path"];
     if (typeof path === "string" && skillForReadPath(path, skills) !== null) return "skill";
   }
+  // 落在文档文件上的 edit / write 单算一类（统计行写「改文档 / 写文档」，不和改代码的 edit 混成「编辑 3」）
+  if (docEditPath(toolName, input) !== null) return toolName === "edit" ? DOC_EDIT_KEY : DOC_WRITE_KEY;
   return parseQualifiedToolName(toolName) !== null ? "mcp" : toolName;
+}
+
+/**
+ * 过程行（章节摘要、跑着时的步骤、首页卡）里工具调用的一句话：read 的是已知技能的 SKILL.md 时写技能名
+ * （与动词「skill」配成「skill slides」），不写绝对路径；其余原样走 toolCallSummary。
+ * 判法与 rollupToolKey / skillForReadPath 同源（尾巴 <slug>/SKILL.md 命中已知技能），插件内置技能同样认。
+ */
+export function toolCallSummaryForRow(
+  toolName: string,
+  input: unknown,
+  skills: ReadonlyArray<{ slug: string; name: string }> = [],
+): string | null {
+  if (toolName === "read") {
+    const path = (input as Record<string, unknown> | null)?.["path"];
+    const skill = typeof path === "string" ? skillForReadPath(path, skills) : null;
+    if (skill !== null) return skill.name;
+  }
+  return toolCallSummary(toolName, input);
 }
 
 export function turnStats(
@@ -1172,6 +1234,32 @@ export function delegateCard(result: ToolTranscriptItem | undefined): DelegateCa
   return { childId, title, modelId, workbench, thinkingLevel };
 }
 
+/**
+ * install_plugin 结果 `details.pluginInstall` 里「装上插件」那一行的数据（主进程写的，随会话落盘）。
+ * 没有结果 / 还在跑 / 失败 / 形状不对 / `already`（没有行）都为 null——调用方退回通用工具行。
+ */
+export function pluginInstallRowOf(result: ToolTranscriptItem | undefined): PluginInstallRow | null {
+  if (result === undefined || result.status === "running" || result.status === "error") return null;
+  return parsePluginInstallRow(result.details);
+}
+
+/**
+ * automation_create / automation_update 结果 `details.automationMode` 里「改权限」那一行的数据（主进程写的，随会话落盘）。
+ * 没有结果 / 还在跑 / 失败 / 形状不对 / 这次调用没留行（改成只读、本来就是放行）都为 null。
+ */
+export function automationModeRowOf(result: ToolTranscriptItem | undefined): AutomationModeRow | null {
+  if (result === undefined || result.status === "running" || result.status === "error") return null;
+  return parseAutomationModeRow(result.details);
+}
+
+/**
+ * show_plugin_board 结果 `details.pluginBoard` 的看板（主进程写的快照，随会话落盘）。
+ * 没有结果 / 还在跑 / 失败 / 形状不对都为 null——调用方退回通用工具行。
+ */
+export function pluginBoardOf(result: ToolTranscriptItem | undefined): PluginBoardResult | null {
+  if (result === undefined || result.status === "running" || result.status === "error") return null;
+  return parsePluginBoardDetails(result.details);
+}
 
 /** channelMarkLabel 的 tone：颜色是第二信号，与 ChannelMarkLine 的取色一一对应。 */
 export type ChannelMarkTone = "question" | "reply" | "neutral" | "done" | "failed";
@@ -1533,7 +1621,8 @@ export function toolCallSummary(toolName: string, input: unknown): string | null
     case "request_user_action":
       return str("reason");
     default:
-      return null;
+      // 内置命令（builtin-commands.ts）：摘要由注册表项给
+      return builtinCommand(toolName)?.summary(input) ?? null;
   }
 }
 

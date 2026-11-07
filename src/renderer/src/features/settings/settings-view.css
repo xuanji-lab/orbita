@@ -17,8 +17,9 @@
 }
 
 /* ===== General 页的行与分组（SettingsView.tsx 的 SettingGroup / SettingRow）=====
- * 列宽 720px，不跟聊天页的 --content-max-width（1000px）：设置行是「名字 ↔ 控件」
- * 两端对齐，1000px 宽时两端隔得太远，眼睛要横跨半个屏幕才对得上一行。 */
+ * 列宽 720px（纸面两档仍用它；其余主题见文件末尾的「两栏设置」），不跟聊天页的 --content-max-width
+ * （2026-11-07 起 900，此前 1000px）：设置行是「名字 ↔ 控件」两端对齐，列再宽两端就隔得太远，
+ * 眼睛要横跨半个屏幕才对得上一行。 */
 .set-page {
   width: min(100%, 720px);
   margin: 0 auto;
@@ -32,7 +33,7 @@
 }
 
 .set-group > .section-label {
-  margin-bottom: var(--space-2);
+  margin: 0 0 var(--space-2);
 }
 
 .set-row {
@@ -97,6 +98,9 @@
 /* 控件列：控件在上、效果预览在下，一律靠右 */
 .set-row-ctl {
   display: grid;
+  /* 单列设成 minmax(0, 1fr)：隐式 auto 列的最小宽 = 控件自己的固有宽，控件列收窄（右栏开着）时
+   * 它撑出控件列、把输入框推出行外；0 起步才让 max-width: 100% 有被收窄的列可对（语音页的 320px 输入框） */
+  grid-template-columns: minmax(0, 1fr);
   justify-items: end;
   gap: var(--space-2);
   min-width: 0;
@@ -570,7 +574,7 @@
 }
 
 /* ===== 设置 › 实验功能（卡片墙，原型 exp-B；同「服务商」页的配方） =====
- * 卡片本体复用 providers-view.css 的 .pv-vcard / .pv-cards.large（设置页顶部
+ * 卡片本体复用 card-wall.css 的 .pv-vcard / .pv-cards.large（设置页顶部
  * import ProvidersView，样式已在产物里）；这里只补实验卡自己的部分：
  * 卡不是按钮（去 cursor / hover 抬升）、展开横跨两列、头部图标砖、
  * 底部发丝线 + 最近一次更新、展开的日志与安静文字钮。 */
@@ -587,7 +591,7 @@
 }
 
 /* 卡不是可点的（开关 / 链接 / 展开钮各自可点）：去掉厂商卡的指针与 hover 抬升。
- * 选择器带上 .pv-vcard 提高特异性：providers-view.css 在本文件之后进包，
+ * 选择器带上 .pv-vcard 提高特异性：card-wall.css 在本文件之后进包，
  * 同特异的规则会被它压回去 */
 .pv-vcard.exp-card {
   cursor: default;
@@ -751,4 +755,150 @@ a.exp-pr:hover {
 
 .panel-usage-count {
   font-family: var(--font-family-mono);
+}
+
+/* ===== 「新手引导」页签（GuideSettings.tsx）=====
+ * 行就是设置行（.set-row）：名字 + 下面一行说明；前面多一列等宽章号（同引导左侧目录的 .ob-ch-no），
+ * 后面一枚 chevron 表示「点开」。整行是按钮：左右各让出 space-2 再用负外边距找回，文字位置与别的设置行一致，
+ * 悬停底与键盘焦点描边都落在圆角框里。 */
+.set-guide-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-4);
+  align-items: center;
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.set-guide-lead {
+  margin: 0;
+  max-width: 52ch;
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-reading);
+  color: var(--color-text-secondary);
+}
+
+.set-guide-start {
+  display: grid;
+  justify-items: end;
+  gap: var(--space-1-5);
+}
+
+.set-guide-btn {
+  display: inline-flex;
+  gap: var(--space-1-5);
+  align-items: center;
+  height: var(--control-height-md);
+  padding: 0 var(--space-4);
+  border: 0;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-semibold);
+}
+
+.set-guide-seen {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.set-guide-row {
+  grid-template-columns: var(--space-6) minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  width: calc(100% + var(--space-4));
+  margin-inline: calc(-1 * var(--space-2));
+  padding-inline: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  /* 行间发丝线：画成底部一条 1px 的渐变图（两头各缩进 space-2，与文字对齐）。不用 border-bottom / inset 阴影——
+     它们都跟着圆角往上弯，一排行就像一排小卡片 */
+  background: linear-gradient(var(--color-border-subtle), var(--color-border-subtle)) no-repeat bottom center / calc(100% - var(--space-4)) 1px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.set-group:last-child .set-guide-row:last-child {
+  background-image: none;
+}
+
+.set-guide-row:hover {
+  background-color: var(--color-bg-hover);
+}
+
+.set-guide-no {
+  align-self: start;
+  padding-top: var(--space-0-5);
+}
+
+.set-guide-go {
+  color: var(--color-text-tertiary);
+}
+
+/*
+ * ===== 方向 N（2026-11-07）· 两栏设置：节名落进索引边栏 =====
+ * 版式「两栏设置」（登记）：节名在左栏（右对齐，与本节第一行的行名同一条基线），行在右栏，
+ * 行内一律顶对齐；节与节之间留 32 的空，行与行之间不再画线。它是现有设置行（.set-row）的
+ * 同一套行，只是节名从行的上方挪进了左边的索引边栏——和对话里放时间、首页里放组名是同一种语法。
+ * 只对非纸面主题生效；设置面的宽度不再借内容列的 --content-max-width（原 1000，现 900；一行里「名字 ↔ 控件」
+ * 隔得太远），固定为 节名栏 120 + 间距 24 + 行栏 640。
+ *
+ * 节名字号：样张里是 base / 500 / 次级墨，这里取 base / 600 / 正墨。2026-10-24 用户的原话是
+ * 「分组标题文字太小了」——比它统领的行名还小；base 与行名同档，层级靠字重与颜色，不再靠缩小
+ * （设计系统：层级先靠字重与颜色，字号最后）。
+ *
+ * 窄于 620px（窄窗 / 右栏占位）退成一栏：节名回到节的上方、左对齐，行占满。
+ */
+.set-page {
+  container: setpage / inline-size;
+}
+:root:not([data-theme="copybook"], [data-theme="typescript"]) {
+  .set-page {
+    width: min(100%, calc(120px + var(--space-6) + 640px));
+    gap: var(--space-8);
+  }
+  .set-page > .set-group {
+    grid-template-columns: 120px minmax(0, 1fr);
+    column-gap: var(--space-6);
+    align-items: start;
+  }
+  .set-page > .set-group > .section-label {
+    grid-column: 1;
+    grid-row: 1 / span 9;
+    margin: 0;
+    padding-top: var(--space-2);
+    font-size: var(--font-size-base);
+    font-weight: var(--weight-semibold);
+    text-align: right;
+  }
+  .set-page > .set-group > :not(.section-label) {
+    grid-column: 2;
+  }
+  /* 行之间靠留白分，不再每行一条底线（发丝线只放在真正的边界：节与节之间） */
+  .set-page > .set-group > .set-row {
+    align-items: start;
+    min-height: 0;
+    padding: var(--space-2) 0;
+    border-bottom: 0;
+  }
+}
+@container setpage (max-width: 620px) {
+  :root:not([data-theme="copybook"], [data-theme="typescript"]) {
+    .set-page > .set-group {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .set-page > .set-group > .section-label {
+      grid-row: auto;
+      padding-top: 0;
+      margin-bottom: var(--space-1);
+      text-align: left;
+      font-size: var(--font-size-lg); /* 一栏时它又是标题：回到 2026-10-24 定的 lg */
+    }
+    /* 行也回到第 1 栏——否则 grid-column: 2 会凭空造出第二条隐式列，把节名挤成一个字宽 */
+    .set-page > .set-group > :not(.section-label) {
+      grid-column: 1;
+    }
+  }
 }

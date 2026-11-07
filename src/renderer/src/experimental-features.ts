@@ -20,6 +20,7 @@
  */
 import type { ExperimentalFeatureId } from "@shared/settings";
 import type { IconName } from "./shell/Icon.tsx";
+import { FEATURE_ICON } from "./shell/feature-icons.ts";
 
 /** 中英两份文案（界面语言二选一） */
 export interface LocalizedText {
@@ -142,7 +143,7 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
   },
   {
     id: "intent-system",
-    icon: "waypoints",
+    icon: FEATURE_ICON.intent,
     name: { zh: "意图系统", en: "Intent system" },
     summary: {
       zh: "发消息前先召回相关旧对话：门卫拦截寒暄，过岗打分入选进上下文，拿不准的先问你。右栏「意图」看每一问的入选图谱；召回走本机 intent-lab 服务（自己 bun run serve 起）。",
@@ -155,71 +156,6 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
         note: {
           zh: "首版：意图闸门（门卫 → 理解 → 打分 → 理由 → 摘句 → 确认 → 上下文）插在回显与回答之间；回答前确认卡（对 / 不对 / 不表态 / 改字）；右栏意图图谱（六岗泳道 + 本问 + 历史联系）；会话级开关与渠道（Proma / DeepSeek）；token 记进 7 天用量；回退作废、每轮存档。",
           en: "First version: the intent gate (gate → understand → score → reasons → excerpt → confirm → context) sits between your message and the answer; a confirm-before-answering card (right / wrong / skip / reword); the Intent graph in the right rail (six slot lanes + this question + past links); per-task switch and pipeline (Proma / DeepSeek); recall tokens counted into the 7-day usage; revert invalidates, every turn archived.",
-        },
-      },
-    ],
-  },
-  {
-    id: "memory-system",
-    icon: "brain",
-    name: { zh: "记忆系统", en: "Memory system" },
-    summary: {
-      zh: "对话按事件整理成事实 / 偏好 / 经验三类原子记忆，每轮开始前召回相关的注入上下文（需要先在设置里配好家务活模型）。",
-      en: "Conversations are distilled into atomic memories of fact / preference / insight by event, and relevant ones are recalled into context before each turn (needs a chore model configured first).",
-    },
-    changelog: [
-      {
-        pr: 374,
-        date: "2026-10-29",
-        note: {
-          zh: "首版后端：独立记忆服务进程，对话按事件段切分、每段整理成事实 / 偏好 / 经验，每轮开始前召回注入；条目与注入记录的界面在后续版本里加。",
-          en: "First backend version: a separate memory service process, conversations segmented by event and distilled into facts / preferences / insights, with per-turn recall injection; the UI for entries and injections comes later.",
-        },
-      },
-    ],
-  },
-  {
-    id: "lean-rail",
-    icon: "panel-right",
-    name: { zh: "精简右栏", en: "Lean right rail" },
-    summary: {
-      zh: "右栏常驻只留「这条任务」、文件、终端、内置浏览器和设置；审查、上下文、能力、记忆、意图、遗留、归档、通知收进「更多」，各自原来的入口照常能用。条上与「更多」里的入口按同一套类分组，类与类之间一条细线。本机记下每个面板打开了几次（不上传），统计在本页底部。",
-      en: "The right rail keeps only This task, Files, the terminal, the built-in browser and Settings. Review, context, abilities, memory, intent, carryovers, archive and notifications move into More, and every other way in still works. The rail and More group their entries the same way, with a thin line between groups. This computer counts how often each panel is opened (nothing is uploaded); the counts are at the bottom of this page.",
-    },
-    changelog: [
-      {
-        pr: null,
-        date: "2026-10-30",
-        note: {
-          zh: "首版：精简右栏 + 本机的面板打开次数。",
-          en: "First version: the lean rail and local counts of how often each panel is opened.",
-        },
-      },
-      {
-        pr: null,
-        date: "2026-10-31",
-        note: {
-          zh: "文件常驻，不再收进「更多」；条上与「更多」里的入口按类分组，组间一条细线。",
-          en: "Files stays on the rail instead of folding into More; the rail and More group their entries, with a thin line between groups.",
-        },
-      },
-    ],
-  },
-  {
-    id: "automation",
-    icon: "calendar-clock",
-    name: { zh: "自动化", en: "Automations" },
-    summary: {
-      zh: "定时任务：到点把一段指令交给 agent，可以每次新开一条会话跑（收在右栏自动化面板里，不进左侧栏），也可以投回创建它的那条会话继续做。在对话里说「每周五帮我看……」「15 分钟后回来看下日志」，agent 会直接建好。右栏「自动化」进入。",
-      en: "Scheduled tasks: at the due time a prompt goes to the agent, either in a fresh task per run (kept inside the Automations panel in the right rail, not in the left sidebar) or sent back into the task that created it. Say \"every Friday, check …\" or \"come back in 15 minutes and look at the log\" and the agent sets it up directly. Open it from Automations in the right rail.",
-    },
-    changelog: [
-      {
-        pr: 407,
-        date: "2026-10-31",
-        note: {
-          zh: "首版：右栏自动化面板；调度（一次 / 每小时 / 每天 / 每工作日 / 每周 / 每月 / 自定义间隔）；每次新开会话或投回原会话；agent 的 automation_create / list / cancel 工具，对话里出一张卡；有任务在跑时阻止系统睡眠的开关；护栏：间隔 ≥ 5 分钟、24 小时最多 24 次、连续失败 3 次进入失败态、agent 建的必有终点。",
-          en: "First version: an Automations panel in the right rail; schedules (once / hourly / daily / weekdays / weekly / monthly / custom interval); a fresh task per run or back into the original task; agent tools automation_create / list / cancel with a card in the conversation; a switch to keep the system awake while a run is going; guardrails: intervals of at least 5 minutes, at most 24 runs per 24 hours, a failed state after 3 consecutive failures, agent-created ones always have an end.",
         },
       },
     ],

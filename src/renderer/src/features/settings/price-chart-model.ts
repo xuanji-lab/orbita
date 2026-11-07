@@ -17,6 +17,25 @@ export function shouldShowPriceChart(providers: readonly Pick<ProviderDto, "mode
   return addedModelCount(providers) >= 2;
 }
 
+/**
+ * 这一块（.pc-block）自身的宽度档位（2026-11-05 用户：「给帕累托这一块设置一个阈值，低于就隐藏掉」）。
+ * 右栏开着时设置页内容区只剩 ~470px：散点挤成一团、横轴刻度重叠、右侧列表被截断。
+ * 量块自己的宽度而不是视口宽度——右栏开合、侧栏开合都会改它，视口宽度反映不出来。
+ * - ≥ 880：图与「帕累托最优」列表并排（236px 列 + 间距后，图仍有 ~600px）
+ * - 600–880：列表挪到图下方
+ * - < 600：不画图，只留一行说明和「收起右栏」
+ */
+export const PRICE_CHART_SIDE_MIN_WIDTH = 880;
+export const PRICE_CHART_STACK_MIN_WIDTH = 600;
+
+export type PriceChartLayout = "side" | "stack" | "hidden";
+
+export function priceChartLayout(width: number): PriceChartLayout {
+  if (width >= PRICE_CHART_SIDE_MIN_WIDTH) return "side";
+  if (width >= PRICE_CHART_STACK_MIN_WIDTH) return "stack";
+  return "hidden";
+}
+
 /** 左右按钮循环切分类 */
 export function cycleCategory(current: PriceChartCategory, step: 1 | -1): PriceChartCategory {
   const index = PRICE_CHART_CATEGORIES.indexOf(current);

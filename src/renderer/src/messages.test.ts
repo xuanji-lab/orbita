@@ -1,4 +1,4 @@
-import { deepStrictEqual } from "node:assert/strict";
+import { deepStrictEqual, doesNotMatch, match, ok } from "node:assert/strict";
 import { describe, test } from "node:test";
 import { en } from "./messages-en.ts";
 import { zh } from "./messages-zh.ts";
@@ -11,6 +11,10 @@ import { zh } from "./messages-zh.ts";
  * 新增文案撞到这里时：先想能不能说成中文；确实是专名，再加进白名单并写明它属于哪一类。
  */
 const ALLOWED_LATIN = new Set([
+  // 文件格式 / 产品专名：演示文稿导出菜单「PowerPoint」（2026-11-07，slides.* 文案）
+  "PowerPoint",
+  // 新手引导「文档与演示」一章：文档的写法跟 Obsidian 一致（笔记应用的产品名）
+  "Obsidian",
   // 品牌
   "orbita",
   "GitHub",
@@ -24,9 +28,22 @@ const ALLOWED_LATIN = new Set([
   "SSE",
   "HTTP",
   "Markdown",
+  // 文档面板的导出格式名
+  "Word",
+  "PDF",
+  "mermaid",
   "stdio",
   "http",
   "https",
+  // 插件页：git 仓库地址、ssh 地址、WebSocket（协议名，原样照写）
+  "git",
+  "ssh",
+  "WebSocket",
+  // 内置技能名（插件页「和智能体一起做一个」预填的 /skill: 点名，照写的字面量）
+  "plugin-creator",
+  // SKILL.md 头里的字段名（冲突提示让用户改的就是它们，要照写的字面量）
+  "name",
+  "description",
   // 图片格式名（附图的准入提示）
   "PNG",
   "JPEG",
@@ -43,6 +60,9 @@ const ALLOWED_LATIN = new Set([
   // 工具名（带着目标开新会话的种子消息里，请 agent 调 update_goal——工具名是字面量，翻了它就不认）
   "update",
   "goal",
+  // 更新出口的环境变量名（HTTPS_PROXY / HTTP_PROXY，用户照抄进终端或启动脚本）
+  "HTTPS",
+  "PROXY",
   // 命令名与工具名前缀（用户照抄的字面量）
   "node",
   "npx",
@@ -92,8 +112,15 @@ const ALLOWED_LATIN = new Set([
   "Chromium",
   // 技术名：登录状态导入的对象就是 cookie（说「登录 cookie」最准，不译成「小甜饼」）
   "cookie",
-  // 系统名（macOS 钥匙串授权的提示）
+  // 系统名（macOS 钥匙串授权的提示；新手引导常见问题里分平台说托盘 / 程序坞）
   "macOS",
+  "Windows",
+  // 新手引导贯穿全程的研究课题案例：论文与模型的名字、论文网站名（专名，没有中文写法）
+  "UrbanGPT",
+  "STG-LLM",
+  "UniST",
+  "UrbanCLIP",
+  "arXiv",
   // 文件名
   "mcp.json",
   "SKILL.md",
@@ -221,5 +248,27 @@ describe("messages —— 中英两张表", () => {
       "1 sub-session",
       "2 sub-sessions",
     ]);
+  });
+});
+
+describe("读技能的过程行用词", () => {
+  test("折叠统计行与技能芯片的类型词：中文写「技能」（不是英文 skill），英文写 skill——与用户技能同一套", () => {
+    deepStrictEqual(zh.chat.rollupTool("skill"), "技能");
+    deepStrictEqual(en.chat.rollupTool("skill"), "skill");
+  });
+});
+
+describe("「和智能体一起做一个」的预填首句", () => {
+  test("点名内置技能，后面是**完整的一句话**，不以冒号（半句话）收尾——用户看到的、智能体读到的都是一句完整的话", () => {
+    for (const draft of [zh.plugins.makeWithAgentDraft, en.plugins.makeWithAgentDraft]) {
+      ok(draft.startsWith("/skill:plugin-creator "), draft);
+      const sentence = draft.slice("/skill:plugin-creator ".length).trim();
+      ok(sentence.length >= 8, `句子太短：${sentence}`);
+      doesNotMatch(sentence, /[:：]$/, `不能以冒号结尾：${sentence}`);
+      match(sentence, /[.。!！?？]$/, `要以句号一类的标点收尾：${sentence}`);
+    }
+    // 中文界面预填中文、英文界面预填英文（语言信号跟着用户走，不是整条英文包装）
+    match(zh.plugins.makeWithAgentDraft, /[\u4e00-\u9fff]/);
+    doesNotMatch(en.plugins.makeWithAgentDraft, /[\u4e00-\u9fff]/);
   });
 });
