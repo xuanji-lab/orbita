@@ -95,6 +95,40 @@ function toHex(r: number, g: number, b: number): string {
 }
 
 const CJK = /[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f]/;
+const CJK_SPLIT = /([\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f]+)/;
+
+/** 字体栈里认得的东亚（中日韩）字体名；取栈里第一个当「东亚字体」 */
+const EAST_ASIAN_FONTS: readonly string[] = [
+  "PingFang SC",
+  "PingFang TC",
+  "Hiragino Sans GB",
+  "Heiti SC",
+  "STHeiti",
+  "Songti SC",
+  "STSong",
+  "Noto Sans CJK SC",
+  "Noto Serif CJK SC",
+  "Noto Sans SC",
+  "Noto Serif SC",
+  "Source Han Sans SC",
+  "Source Han Serif SC",
+  "Microsoft YaHei",
+  "SimSun",
+  "SimHei",
+  "Yu Gothic",
+  "Malgun Gothic",
+];
+const EAST_ASIAN_DEFAULT = "PingFang SC";
+
+/** 字体栈里的东亚字体：栈里第一个认得的 CJK 字体；栈里没有就用 PingFang SC */
+export function eastAsianFont(stack: string): string {
+  const known = new Set(EAST_ASIAN_FONTS.map((name) => name.toLowerCase()));
+  for (const part of stack.split(",")) {
+    const name = part.trim().replace(/^["']|["']$/g, "");
+    if (known.has(name.toLowerCase())) return name;
+  }
+  return EAST_ASIAN_DEFAULT;
+}
 
 /** 字体栈的第一个字体名（去引号） */
 export function firstFont(stack: string): string {
@@ -105,6 +139,22 @@ export function firstFont(stack: string): string {
 function fontFor(text: string, stack: string, basic: boolean): string {
   if (!basic) return firstFont(stack);
   return CJK.test(text) ? (BASIC_FONTS[1] as string) : (BASIC_FONTS[0] as string);
+}
+
+/**
+ * 一段文字 → 带字体的片段。保留字体版：只写拉丁字体（栈里第一个，如 Helvetica Neue）时，中文在对方机器上
+ * 回落成什么不可预测，所以按字符切开——中日韩字符用栈里的东亚字体（`a:latin` 与 `a:ea` 都写它），其余用拉丁字体；
+ * 通用字体版仍是整段一个保底字体（含中日韩 → Microsoft YaHei，否则 Arial，ea 也写它）。
+ */
+export function fontSegments(text: string, stack: string, basic: boolean): { text: string; fontFace: string }[] {
+  if (basic) return [{ text, fontFace: fontFor(text, stack, true) }];
+  const latin = firstFont(stack);
+  if (!CJK.test(text)) return [{ text, fontFace: latin }];
+  const east = eastAsianFont(stack);
+  return text
+    .split(CJK_SPLIT)
+    .filter((part) => part !== "")
+    .map((part) => ({ text: part, fontFace: CJK.test(part) ? east : latin }));
 }
 
 function fill(css: string): { color: string; transparency?: number } | undefined {
@@ -123,17 +173,21 @@ function textRuns(paragraphs: readonly TextParagraph[], base: { stack: string; s
     const source = paragraph.runs.length > 0 ? paragraph.runs : [{ text: " " }];
     source.forEach((run, runIndex) => {
       const color = pptxColor(run.color ?? base.color);
-      const options: PptxGenJS.TextPropsOptions = {
-        fontFace: fontFor(run.text, base.stack, base.basic),
-        fontSize: Math.round((run.size ?? base.size) * PT * 10) / 10,
-        ...(color === null ? {} : { color: color.color }),
-        ...(run.bold === true ? { bold: true } : {}),
-        ...(run.italic === true ? { italic: true } : {}),
-        ...(run.underline === true ? { underline: { style: "sng" as const } } : {}),
-        ...(paragraph.list === "bullet" ? { bullet: true } : paragraph.list === "number" ? { bullet: { type: "number" as const } } : {}),
-        ...(runIndex === source.length - 1 && !last ? { breakLine: true } : {}),
-      };
-      runs.push({ text: run.text, options });
+      const lastRun = runIndex === source.length - 1;
+      const segments = fontSegments(run.text, base.stack, base.basic);
+      segments.forEach((segment, segmentIndex) => {
+        const options: PptxGenJS.TextPropsOptions = {
+          fontFace: segment.fontFace,
+          fontSize: Math.round((run.size ?? base.size) * PT * 10) / 10,
+          ...(color === null ? {} : { color: color.color }),
+          ...(run.bold === true ? { bold: true } : {}),
+          ...(run.italic === true ? { italic: true } : {}),
+          ...(run.underline === true ? { underline: { style: "sng" as const } } : {}),
+          ...(paragraph.list === "bullet" ? { bullet: true } : paragraph.list === "number" ? { bullet: { type: "number" as const } } : {}),
+          ...(lastRun && segmentIndex === segments.length - 1 && !last ? { breakLine: true } : {}),
+        };
+        runs.push({ text: segment.text, options });
+      });
     });
   });
   return runs;
@@ -243,19 +297,19 @@ function addTable(slide: PptxGenJS.Slide, element: TableElement, deck: Deck, opt
       const head = element.header && rowIndex === 0;
       const color = pptxColor(head ? element.headerColor : element.color);
       const bg = head ? pptxColor(element.headerFill) : null;
-      return {
-        text: cell,
-        options: {
-          fontFace: fontFor(cell, stack, opts.basicFonts),
-          fontSize: Math.round(element.fontSize * PT * 10) / 10,
-          ...(color === null ? {} : { color: color.color }),
-          ...(head ? { bold: true } : {}),
-          ...(bg === null ? {} : { fill: { color: bg.color } }),
-          valign: "middle" as const,
-          align: "left" as const,
-          margin: [0.04, 0.12, 0.04, 0.12],
-        },
+      const options = {
+        fontSize: Math.round(element.fontSize * PT * 10) / 10,
+        ...(color === null ? {} : { color: color.color }),
+        ...(head ? { bold: true } : {}),
+        ...(bg === null ? {} : { fill: { color: bg.color } }),
+        valign: "middle" as const,
+        align: "left" as const,
+        margin: [0.04, 0.12, 0.04, 0.12] as [number, number, number, number],
       };
+      const segments = fontSegments(cell, stack, opts.basicFonts);
+      // 单一字体：整格一个字体；中英混排：按片段切开，中文片段用东亚字体（同文本框的规矩）
+      if (segments.length === 1) return { text: cell, options: { ...options, fontFace: (segments[0] as { fontFace: string }).fontFace } };
+      return { text: segments.map((segment) => ({ text: segment.text, options: { ...options, fontFace: segment.fontFace } })), options };
     }),
   );
   slide.addTable(rows, {
@@ -305,15 +359,17 @@ function addShape(pptx: PptxGenJS, slide: PptxGenJS.Slide, element: ShapeElement
   }
   const stack = deck.theme?.fontFamily ?? DEFAULT_FONT_FAMILY;
   const color = pptxColor(element.color);
-  slide.addText(element.text, {
+  const size = Math.round(element.fontSize * PT * 10) / 10;
+  const runs: TextProps[] = fontSegments(element.text, stack, opts.basicFonts).map((segment) => ({
+    text: segment.text,
+    options: { fontFace: segment.fontFace, fontSize: size, ...(color === null ? {} : { color: color.color }) },
+  }));
+  slide.addText(runs, {
     ...common,
     shape: type,
     align: "center",
     valign: "middle",
     margin: 4,
-    fontFace: fontFor(element.text, stack, opts.basicFonts),
-    fontSize: Math.round(element.fontSize * PT * 10) / 10,
-    ...(color === null ? {} : { color: color.color }),
   });
 }
 

@@ -262,3 +262,52 @@ describe("元素类型守卫", () => {
     assert.throws(() => patchElement(deck, el, { kind: "image" }), /不能改/);
   });
 });
+
+describe("换画幅（16:9 ↔ 4:3）", () => {
+  const buildAll = (id: string): Deck => {
+    let deck = themed(id);
+    for (const layout of LAYOUT_NAMES) deck = applyWrite(deck, [{ layout, slots: layout === "stat" ? { title: "数字", stats: [{ value: "735", label: "平方公里" }, { value: "47%", label: "绿化率" }, { value: "600万", label: "人口" }] } : sample(layout), images: { image } }]).deck;
+    return deck;
+  };
+
+  for (const id of THEME_IDS) {
+    it(`${id}：16:9 → 4:3 后没有元素伸出画布（原本就出血的装饰按比例仍出血），体检无「伸出画布」「文字溢出」`, () => {
+      const before = buildAll(id);
+      const after = applyEdit(before, [{ op: "set_deck", aspect: "4:3" }]).deck;
+      assert.equal(after.aspect, "4:3");
+      const canvas = CANVAS_SIZE["4:3"];
+      after.slides.forEach((slide, si) => {
+        slide.elements.forEach((el, ei) => {
+          const old = before.slides[si]!.elements[ei]!;
+          const bled = old.x + old.w > CANVAS_SIZE["16:9"].w + 1;
+          if (!bled) assert.ok(el.x + el.w <= canvas.w + 0.5, `第 ${si + 1} 页 ${el.kind} 右缘 ${el.x + el.w} 伸出 ${canvas.w}`);
+          assert.equal(el.y, old.y, "垂直方向不动");
+        });
+        assert.deepEqual(lintSlide(after, si + 1), [], `第 ${si + 1} 页（${slide.layout}）体检`);
+      });
+    });
+  }
+
+  it("来回切换不累积误差：16:9 → 4:3 → 16:9 后位置宽度回到原值，线的端点也是", () => {
+    let deck = applyWrite(themed("night"), [
+      { at: 1, elements: [{ kind: "text", html: "你好", x: 101, y: 50, w: 777, h: 90, fontSize: 30 }, { kind: "line", x: 100, y: 400, w: 400, h: 120, points: [[0, 120], [400, 0]], endArrow: "arrow", stroke: "#c2410c", strokeWidth: 6 }] },
+    ]).deck;
+    const original = deck.slides[0]!.elements.map((e) => ({ x: e.x, w: e.w }));
+    for (let i = 0; i < 3; i += 1) {
+      deck = applyEdit(deck, [{ op: "set_deck", aspect: "4:3" }]).deck;
+      deck = applyEdit(deck, [{ op: "set_deck", aspect: "16:9" }]).deck;
+    }
+    deck.slides[0]!.elements.forEach((e, i) => {
+      assert.ok(Math.abs(e.x - original[i]!.x) < 0.02 && Math.abs(e.w - original[i]!.w) < 0.02, `${e.kind} ${e.x}/${e.w} ≠ ${original[i]!.x}/${original[i]!.w}`);
+    });
+    const line = deck.slides[0]!.elements[1]!;
+    assert.ok(line.kind === "line" && Math.abs(line.points[1][0] - 400) < 0.02);
+  });
+
+  it("文字框变窄折行变多时，h 撑到装得下（不超出画布底边）；同画幅不动", () => {
+    const deck = applyWrite(themed("ink"), [{ at: 1, elements: [{ kind: "text", html: "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五", x: 100, y: 100, w: 1000, h: 50, fontSize: 28 }] }]).deck;
+    const narrow = applyEdit(deck, [{ op: "set_deck", aspect: "4:3" }]).deck.slides[0]!.elements[0]!;
+    assert.ok(narrow.h > 50 && narrow.y + narrow.h <= CANVAS_SIZE["4:3"].h);
+    assert.deepEqual(applyEdit(deck, [{ op: "set_deck", aspect: "16:9" }]).deck, deck, "同画幅是空操作");
+  });
+});

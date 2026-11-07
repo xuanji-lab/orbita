@@ -333,14 +333,43 @@ export function applyEdit(deck: Deck, ops: readonly EditOp[]): EditResult {
         next = {
           ...next,
           ...(op.title === undefined ? {} : { title: op.title.slice(0, 200) }),
-          ...(op.aspect === undefined ? {} : { aspect: op.aspect }),
         };
+        if (op.aspect !== undefined && op.aspect !== next.aspect) next = reflowAspect(next, op.aspect);
         if (op.theme !== undefined) next = applyTheme(next, op.theme);
         break;
       }
     }
   }
   return { deck: next, pages: [...pages].sort((a, b) => a - b) };
+}
+
+/**
+ * 换画幅（16:9 ↔ 4:3）：两种画布一样高（720），只是宽 1280 ↔ 960。元素在水平方向按比例缩放（x / w / 线的端点），
+ * 垂直方向不动——否则换成 4:3 后右边 25% 的元素整块伸出画布被裁（验收 S7：「200+」与表格第三列被裁）。
+ * 文字框变窄后折行变多：高度不够的文字框把 h 撑到装得下（不超出画布底边），其余元素不动。
+ * 来回切换不累积误差：坐标保留两位小数（1280 ↔ 960 的比是 3/4，整数坐标来回都落回原值）。
+ */
+export function reflowAspect(deck: Deck, aspect: Aspect): Deck {
+  const from = CANVAS_SIZE[deck.aspect];
+  const to = CANVAS_SIZE[aspect];
+  const factor = to.w / from.w;
+  const r2 = (n: number): number => Math.round(n * 100) / 100;
+  const slides = deck.slides.map((slide) => ({
+    ...slide,
+    elements: slide.elements.map((element): SlideElement => {
+      const scaled = { ...element, x: r2(element.x * factor), w: r2(element.w * factor) };
+      if (scaled.kind === "line") {
+        const [[x1, y1], [x2, y2]] = scaled.points;
+        return { ...scaled, points: [[r2(x1 * factor), y1], [r2(x2 * factor), y2]] };
+      }
+      if (scaled.kind === "text") {
+        const need = estimateTextHeight(richTextToPlain(scaled.html), scaled.fontSize, scaled.w, { lineHeight: scaled.lineHeight ?? 1.25, letterSpacing: scaled.letterSpacing ?? 0 });
+        if (need > scaled.h) return { ...scaled, h: Math.max(scaled.h, Math.min(Math.ceil(need) + 4, Math.max(to.h - scaled.y, scaled.h))) };
+      }
+      return scaled;
+    }),
+  }));
+  return { ...deck, aspect, slides };
 }
 
 export function moveItem<T>(list: readonly T[], from: number, to: number): T[] {

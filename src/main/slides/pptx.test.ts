@@ -2,8 +2,9 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import JSZip from "jszip";
-import { firstFont, pptxColor, buildPptx, type PptxAsset } from "./pptx.ts";
-import { applyWrite, createDeck } from "../../shared/slides-ops.ts";
+import { eastAsianFont, firstFont, fontSegments, pptxColor, buildPptx, type PptxAsset } from "./pptx.ts";
+import { applyEdit, applyWrite, createDeck } from "../../shared/slides-ops.ts";
+import { FONT_SANS, FONT_SERIF, presetTheme } from "../../shared/slides-theme.ts";
 import { BASIC_FONTS } from "../../shared/slides-export.ts";
 
 const PNG_1x1 = Buffer.from(
@@ -141,5 +142,82 @@ describe("buildPptx", () => {
     assert.equal(center.length, 2, "两条居中列表项都带项目符号");
     const left = paragraphs.filter((p) => /algn="l"/.test(p) && /<a:buChar/.test(p));
     assert.equal(left.length, 1);
+  });
+});
+
+describe("东亚字体：中文不只拿到拉丁字体", () => {
+  it("eastAsianFont：取字体栈里第一个东亚字体；栈里没有就 PingFang SC", () => {
+    assert.equal(eastAsianFont(FONT_SANS), "PingFang SC");
+    assert.equal(eastAsianFont(FONT_SERIF), "Songti SC");
+    assert.equal(eastAsianFont('"Helvetica Neue", Arial, sans-serif'), "PingFang SC");
+    assert.equal(eastAsianFont('Arial, "Microsoft YaHei"'), "Microsoft YaHei");
+  });
+
+  it("fontSegments：保留字体版按字符切开（中文用东亚字体，其余用拉丁字体）；通用字体版整段一个保底字体", () => {
+    assert.deepEqual(fontSegments("你好 Hello，世界 2026", FONT_SANS, false), [
+      { text: "你好", fontFace: "PingFang SC" },
+      { text: " Hello", fontFace: "Helvetica Neue" },
+      { text: "，世界", fontFace: "PingFang SC" },
+      { text: " 2026", fontFace: "Helvetica Neue" },
+    ]);
+    assert.deepEqual(fontSegments("Hello", FONT_SANS, false), [{ text: "Hello", fontFace: "Helvetica Neue" }]);
+    assert.deepEqual(fontSegments("你好 Hello", FONT_SANS, true), [{ text: "你好 Hello", fontFace: "Microsoft YaHei" }]);
+  });
+
+  it("保留字体版的 pptx：含中文的 run 的 latin / ea 都是东亚字体，拉丁 run 仍是 Helvetica Neue；每个 run 都写了 a:ea；表格与形状文字同样", async () => {
+    const deck = applyWrite(createDeck({ title: "t" }), [
+      {
+        at: 1,
+        elements: [
+          { kind: "text", html: "你好 Hello，世界", x: 0, y: 0, w: 400, h: 80, fontSize: 30, fontFamily: FONT_SANS },
+          { kind: "table", rows: [["语言 Lang", "x"]], x: 0, y: 100, w: 300, h: 60 },
+          { kind: "shape", shape: "rect", text: "圆 a", x: 0, y: 200, w: 100, h: 50 },
+        ],
+      },
+    ]).deck;
+    const keep = await text(await unzip(await buildPptx(deck, { basicFonts: false, assets: new Map() })), "ppt/slides/slide1.xml");
+    const pairs = [...keep.matchAll(/<a:latin typeface="([^"]+)"[^>]*\/><a:ea typeface="([^"]+)"/g)].map((m) => `${m[1]}/${m[2]}`);
+    assert.ok(pairs.length >= 8);
+    // 每个 run 的 ea 与 latin 同源：没有「中文 run 只拿到 Helvetica Neue」
+    assert.ok(pairs.every((pair) => pair.split("/")[0] === pair.split("/")[1]));
+    assert.ok(pairs.includes("PingFang SC/PingFang SC"));
+    assert.ok(pairs.includes("Helvetica Neue/Helvetica Neue"));
+    // 含中文字符的 run 不能是 Helvetica Neue
+    for (const run of keep.matchAll(/<a:r>(.*?)<\/a:r>/gs)) {
+      const body = run[1] as string;
+      if (/[\u4e00-\u9fff]/.test(body)) assert.doesNotMatch(body, /typeface="Helvetica Neue"/);
+    }
+    const basic = await text(await unzip(await buildPptx(deck, { basicFonts: true, assets: new Map() })), "ppt/slides/slide1.xml");
+    const eas = new Set([...basic.matchAll(/<a:ea typeface="([^"]+)"/g)].map((m) => m[1] as string));
+    for (const face of eas) assert.ok(BASIC_FONTS.includes(face), `通用字体版的 ea 不是保底字体：${face}`);
+    assert.ok(eas.has("Microsoft YaHei"));
+  });
+});
+
+describe("4:3 的 pptx 读回与画布一致", () => {
+  it("版式页从 16:9 切到 4:3 后导出：每个形状都在 10×7.5 英寸的页内，位置宽度与画布元素一一对上", async () => {
+    let deck = createDeck({ title: "切画幅", theme: presetTheme("night") });
+    const slots: Record<string, Record<string, unknown>> = {
+      bullets: { title: "概况", bullets: ["面积约 735 平方公里", "四种官方语言并行"] },
+      "two-column": { title: "对比", columns: [{ heading: "甲", bullets: ["a", "b"] }, { heading: "乙", bullets: ["c", "d"] }] },
+      table: { title: "语言", rows: [["语言", "占比"], ["英语", "48%"]] },
+      stat: { title: "数字", stats: [{ value: "735", label: "平方公里" }, { value: "47%", label: "绿化率" }, { value: "600万", label: "人口" }] },
+    };
+    for (const [layout, slot] of Object.entries(slots)) deck = applyWrite(deck, [{ layout: layout as "bullets", slots: slot }]).deck;
+    deck = applyEdit(deck, [{ op: "set_deck", aspect: "4:3" }]).deck;
+    const zip = await unzip(await buildPptx(deck, { basicFonts: false, assets: new Map() }));
+    const PAGE_W = 9144000;
+    const emu = (px: number): number => Math.round((px / 96) * 914400);
+    for (let n = 1; n <= deck.slides.length; n += 1) {
+      const xml = await text(zip, `ppt/slides/slide${n}.xml`);
+      const boxes = [...xml.matchAll(/<a:off x="(-?\d+)" y="(-?\d+)"\/><a:ext cx="(\d+)" cy="(\d+)"\/>/g)].map((m) => ({ x: Number(m[1]), w: Number(m[3]) }));
+      assert.ok(boxes.length > 0);
+      for (const box of boxes) assert.ok(box.x >= 0 && box.x + box.w <= PAGE_W + 1000, `第 ${n} 页形状伸出页面：x=${box.x} w=${box.w}`);
+      // 画布上的文字 / 形状元素的 x、w 都能在 pptx 里找到（±1 EMU 级取整）
+      for (const el of deck.slides[n - 1]!.elements.filter((e) => e.kind === "text" || e.kind === "shape")) {
+        const hit = boxes.some((box) => Math.abs(box.x - emu(el.x)) <= 2000 && Math.abs(box.w - emu(el.w)) <= 2000);
+        assert.ok(hit, `第 ${n} 页 ${el.kind} x=${el.x} w=${el.w} 在 pptx 里找不到`);
+      }
+    }
   });
 });
