@@ -1,4 +1,5 @@
 import type { Messages } from "./messages-en.ts";
+import { zhRevealLabel, zhTrashName } from "./file-manager.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import type { AutomationIntervalUnit } from "../../shared/automation.ts";
 import type { DictationProvider } from "../../shared/voice.ts";
@@ -2600,8 +2601,8 @@ export const zh: Messages = {
     sourceCopyLine: (path) => `复制自 ${path}`,
     sourceLinkLine: (path) => `链接到 ${path}`,
     sourceGitLine: (url) => url,
-    legacySkillNote: (path) =>
-      `这是你自己的技能，放在 ${path}。要删除，点「在访达中显示」，把它的文件夹挪走即可。`,
+    legacySkillNote: (path, kind) =>
+      `这是你自己的技能，放在 ${path}。要删除，点「${zhRevealLabel(kind)}」，把它的文件夹挪走即可。`,
     // 行尾小字标：面板叫「能力」，每一项仍按自己的种类叫
     rowKind: { plugin: "插件", builtin: "内置", skill: "技能", mcp: "MCP" },
     // 零散技能详情：内容三格 + 在哪儿可用
@@ -2613,7 +2614,7 @@ export const zh: Messages = {
     contentSaving: "正在保存…",
     contentSaveFailed: (reason) => `没存上：${reason}`,
     contentReadFailed: (reason) => `读不了这条技能：${reason}`,
-    revealInFinder: "在访达中显示",
+    revealInManager: (kind) => zhRevealLabel(kind),
     skillMissingNote: "这个技能的文件夹在磁盘上找不到了（在 Orbita 之外被挪走或改名）。",
     skillMissingClean: "清理断链引用",
     skillMissingCleanTip: "清掉残留的链接，它就不再出现在列表里；想留着就把文件夹放回去。",
@@ -2657,7 +2658,7 @@ export const zh: Messages = {
     skillArchiving: "正在归档…",
     skillTrash: "移除",
     skillTrashAsk: (name) => `移除「${name}」？`,
-    skillTrashHint: "移到废纸篓，可以从废纸篓找回；所有工作区都不再加载它。",
+    skillTrashHint: (kind) => `移到${zhTrashName(kind)}，可以从${zhTrashName(kind)}找回；所有工作区都不再加载它。`,
     skillTrashHintLinked: (path) => `这是你导入的技能：只移除这里的入口，你原来的文件夹（${path}）不动。`,
     skillTrashAction: "移除",
     skillTrashing: "正在移除…",

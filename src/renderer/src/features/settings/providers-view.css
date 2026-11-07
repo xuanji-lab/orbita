@@ -486,6 +486,9 @@
 
 .pv-wall {
   display: grid;
+  /* 单列 minmax(0, 1fr)：只定义行不定义列时是隐式 auto 列，最小宽 = 内容的固有宽，右栏打开、
+   * 设置内容区收窄后工具条把整列撑出 26px（经典滚动条下就是横向滚动条） */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-3);
   align-content: start;
 }
@@ -534,6 +537,7 @@
 
 .pv-wall-group {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-2);
   margin-top: var(--space-2);
 }

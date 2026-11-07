@@ -512,3 +512,17 @@ describe("design-tokens —— z 轴走层", () => {
     assert.deepEqual(hits, [], `以下 z-index 自造了层级数字：\n${hits.join("\n")}`);
   });
 });
+
+describe("design-tokens —— 等宽字体栈带中文回退", () => {
+  const css = readFileSync(join(TOKENS_DIR, "typography.css"), "utf8");
+  const stack = /--font-family-mono:\s*([^;]+);/.exec(css)?.[1] ?? "";
+  const families = stack.split(",").map((each) => each.trim().replace(/^"|"$/g, ""));
+
+  test("拉丁等宽在前、CJK 回退在后、泛 monospace 殿后（Windows 汉字不再落到宋体）", () => {
+    for (const latin of ["ui-monospace", "Menlo", "Consolas"]) assert.ok(families.includes(latin), `缺 ${latin}`);
+    for (const cjk of ["PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei"]) assert.ok(families.includes(cjk), `缺 ${cjk}`);
+    const firstCjk = Math.min(...["PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei"].map((each) => families.indexOf(each)));
+    assert.ok(families.indexOf("Consolas") < firstCjk && families.indexOf("Menlo") < firstCjk, "CJK 回退必须在拉丁等宽之后");
+    assert.equal(families.at(-1), "monospace");
+  });
+});

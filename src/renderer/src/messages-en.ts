@@ -6,6 +6,7 @@ import type { ReviewDiffErrorReason, ReviewSource } from "../../shared/review.ts
 import type { PanelUsageKey } from "../../shared/panel-usage.ts";
 import { REVIEW_DIFF_MAX_BYTES, REVIEW_DIFF_MAX_LINES } from "../../shared/review.ts";
 import type { AutomationIntervalUnit } from "../../shared/automation.ts";
+import { enRevealLabel, enTrashName, type FileManagerKind } from "./file-manager.ts";
 /**
  * 界面文案表——英文，**真源**。`messages-zh.ts` 的类型由这里推出（`Messages`），
  * 少一个键、参数签名不一致，typecheck 就不过。
@@ -2792,8 +2793,8 @@ export const en = {
     sourceCopyLine: (path: string) => `Copied from ${path}`,
     sourceLinkLine: (path: string) => `Linked to ${path}`,
     sourceGitLine: (url: string) => url,
-    legacySkillNote: (path: string) =>
-      `This is one of your own skills, stored at ${path}. To delete it, choose "Show in Finder" and move its folder away.`,
+    legacySkillNote: (path: string, kind: FileManagerKind) =>
+      `This is one of your own skills, stored at ${path}. To delete it, choose "${enRevealLabel(kind)}" and move its folder away.`,
     // 行尾小字标：面板叫「能力」，每一项仍按自己的种类叫
     rowKind: { plugin: "Plugin", builtin: "Built-in", skill: "Skill", mcp: "MCP" },
     // 零散技能详情：内容三格 + 在哪儿可用
@@ -2805,7 +2806,7 @@ export const en = {
     contentSaving: "Saving…",
     contentSaveFailed: (reason: string) => `Not saved: ${reason}`,
     contentReadFailed: (reason: string) => `Couldn't read this skill: ${reason}`,
-    revealInFinder: "Show in Finder",
+    revealInManager: (kind: FileManagerKind) => enRevealLabel(kind),
     skillMissingNote: "This skill's folder can't be found on disk (moved or renamed outside Orbita).",
     skillMissingClean: "Clean up dangling references",
     skillMissingCleanTip: "Remove the leftover links so it stops listing here; put the folder back instead if you want to keep it.",
@@ -2849,7 +2850,7 @@ export const en = {
     skillArchiving: "Archiving…",
     skillTrash: "Remove",
     skillTrashAsk: (name: string) => `Remove "${name}"?`,
-    skillTrashHint: "Moved to the Trash, where you can get it back; no workspace loads it any more.",
+    skillTrashHint: (kind: FileManagerKind) => `Moved to the ${enTrashName(kind)}, where you can get it back; no workspace loads it any more.`,
     skillTrashHintLinked: (path: string) => `This is a skill you imported: only the entry here is removed; your original folder (${path}) stays where it is.`,
     skillTrashAction: "Remove",
     skillTrashing: "Removing…",
