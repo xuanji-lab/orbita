@@ -266,13 +266,13 @@ export const SHOT_BOXES: Readonly<Record<string, Readonly<Record<string, Box>>>>
     },
     "row": {
       "x": 0.0222,
-      "y": 0.4061,
+      "y": 0.3789,
       "w": 0.3646,
       "h": 0.0356
     },
     "card": {
       "x": 0.0222,
-      "y": 0.4461,
+      "y": 0.4189,
       "w": 0.3646,
       "h": 0.0767
     }
@@ -292,14 +292,14 @@ export const SHOT_BOXES: Readonly<Record<string, Readonly<Record<string, Box>>>>
     },
     "bubble": {
       "x": 0.2077,
-      "y": 0.1345,
+      "y": 0.1367,
       "w": 0.1694,
       "h": 0.0272
     },
     "chip": {
-      "x": 0.0819,
-      "y": 0.0878,
-      "w": 0.2987,
+      "x": 0.0722,
+      "y": 0.09,
+      "w": 0.3083,
       "h": 0.0233
     }
   },
@@ -331,20 +331,20 @@ export const SHOT_BOXES: Readonly<Record<string, Readonly<Record<string, Box>>>>
       "h": 0.0267
     },
     "props": {
-      "x": 0.4622,
+      "x": 0.466,
       "y": 0.1844,
       "w": 0.4389,
       "h": 0.0733
     },
     "mark": {
-      "x": 0.4622,
-      "y": 0.4628,
+      "x": 0.466,
+      "y": 0.4006,
       "w": 0.4342,
       "h": 0.0889
     },
     "callout": {
-      "x": 0.4622,
-      "y": 0.5984,
+      "x": 0.466,
+      "y": 0.5362,
       "w": 0.4389,
       "h": 0.0494
     },

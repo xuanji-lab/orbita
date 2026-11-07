@@ -68,7 +68,7 @@ const BROWSE = "arXiv检索";
 const PLUGIN = "创建 arXiv";
 const PDF = "UrbanGPT零样本";
 // 文档与演示章（seed.mjs docs 的两幕）：任务名由家务活模型起，按关键词找
-const DECK = "课题演示";
+const DECK = "零样本时空预测";
 const NOTE = "读书小记";
 
 export const SCENES = [
@@ -178,10 +178,11 @@ export const SCENES = [
     measure: { panel: PANEL, menu: { js: EXPORT_MENU }, pptx: { js: "[...document.querySelectorAll('.menu-panel *')].filter((e) => e.children.length === 0 && e.textContent.includes('PowerPoint')).map((e) => e.closest('button, [role=menuitem]') ?? e)" } } },
   { id: "doc-note", steps: [...openTask(NOTE), rail("文件"), { wait: 1500 }, { clickText: [`${PANEL} button.file-row`, "读书小记.md"] }, { wait: 2500 }, { clickText: [`${PANEL} button`, "阅读"] }, { wait: 1200 }],
     measure: { panel: PANEL, views: `${PANEL} .dp-views`, props: `${PANEL} .ofm-properties`, mark: `${PANEL} .ofm-mark`, callout: `${PANEL} .callout`, exportBtn: `${PANEL} .dp-bar button:has(.lucide-download)` } },
-  // 现跑的一轮：点第 3 页 → 引用这一页 → 说一句 → 等它改完。浅、玄取同一帧（both）
+  // 现跑的一轮：在工作区新开一条任务（旧任务里重拍会叠出好几轮同样的话）→ 开演示文稿面板 → 点第 3 页 → 引用这一页 → 说一句 → 等它改完。浅、玄取同一帧（both）
   { id: "deck-quote", both: true,
-    steps: [...openTask(DECK), rail("演示文稿"), { wait: 2500 }, { click: "button[aria-label='第 3 页']" }, { wait: 800 }, { clickText: [".right-panel-slot button", "引用这一页"] }, { wait: 800 },
-      { click: "textarea.composer-input" }, { type: DOC_SAY.quote }, { key: "Enter" }, { until: "!!document.querySelector('.btn-accent[data-tone=danger]')", timeout: 20000 }, { until: IDLE, timeout: 240000 }, { wait: 2500 }, BOTTOM, { wait: 600 }],
+    steps: [RESET, { eval: CLOSE_CARRYOVERS }, { wait: 500 }, { eval: "document.querySelectorAll('.workspace-group button[aria-expanded=false]').forEach((b) => b.click()), 1" }, { wait: 500 },
+      { click: "aside button[aria-label='在此工作区新建任务']" }, { wait: 1500 }, rail("演示文稿"), { wait: 2500 }, { click: "button[aria-label='第 3 页']" }, { wait: 800 }, { clickText: [".right-panel-slot button", "引用这一页"] }, { wait: 800 },
+      { click: "textarea.composer-input" }, { type: DOC_SAY.quote }, { key: "Enter" }, { until: "!!document.querySelector('.btn-accent[data-tone=danger]')", timeout: 20000 }, { until: IDLE, timeout: 150000, soft: true }, { wait: 2500 }, BOTTOM, { wait: 600 }],
     measure: { panel: PANEL, quoteBtn: [`${PANEL} button`, "引用这一页"], bubble: { js: "[...document.querySelectorAll('.bubble-md')].at(-1)" },
       // 重拍过几次，聊天里会留着几条这样的引用：取最后一条（最新那轮）的整条芯片
       chip: { js: "[...document.querySelectorAll('.chat-transcript *')].filter((e) => e.children.length === 0 && /第 3 页 ·/.test(e.textContent)).at(-1)?.parentElement" } } },

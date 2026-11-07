@@ -353,7 +353,7 @@ export const GUIDE: readonly GuideChapter[] = [
       }),
       step("doc", "doc-note", {
         focus: box("doc-note", "panel", 0),
-        pins: [pin(1, box("doc-note", "views"), "tl"), pin(2, box("doc-note", "callout"), "tl"), pin(3, box("doc-note", "exportBtn"), "b")],
+        pins: [pin(1, box("doc-note", "views"), "tl"), pin(2, box("doc-note", "callout"), "l"), pin(3, box("doc-note", "exportBtn"), "b")],
         say: true,
       }),
       step("quote", "deck-quote", {
