@@ -1,18 +1,19 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { textRows, textWindow, type TextWindow } from "./preview-view.ts";
+import { useRowHeight } from "./useRowHeight.ts";
 
 /**
- * 大文本的窗口化渲染（大文件预览，见 preview-view.ts 的 WINDOW_TEXT_LIMIT）：只把
+ * 大文本的窗口化渲染（大文件预览，见 shared/files.ts 的 PREVIEW_WINDOW_LIMIT）：只把
  * 可视区上下各 WINDOW_OVERSCAN 行放进 DOM，滚动时滑动这个窗口——`main.log`、
  * `.bib`、长 `.tex` 这类 600 KB+ 的文件才不至于整篇建 DOM / 整篇重排。
  *
- * 窗口是**按显示行**算的：超过 MAX_ROW_CHARS 的单行先被硬切成多条显示行（`textRows`），
+ * 窗口是**按显示行**算的：超过 PREVIEW_ROW_CHARS 的单行先被硬切成多条显示行（`textRows`），
  * 否则一条 minified JSON 那样几十 MB 的行会把整条行盒一次性建出来——32 MB 单行实测
  * 到屏 1.9 s，硬切后 24 ms。当前面板没有行号 gutter，所以「显示行」与「原始行」的差别
  * 只在滚动的总高度上，不影响任何行号语义。
  *
  * **行高必须固定**，所以窗口化一律不折行（`white-space: pre` + 横向滚动，与超过
- * HIGHLIGHT_LIMIT 的代码同一条规矩）：`pre-wrap` 会让一行占多行高，窗口算出来的
+ * PREVIEW_HIGHLIGHT_LIMIT 的代码同一条规矩）：`pre-wrap` 会让一行占多行高，窗口算出来的
  * 位置与实际排版对不上，滚动就会漂。行高由 CSS 决定（`--font-size-sm` ×
  * `--line-height-code-block`，随界面字号缩放），所以首帧先量一次探针，量到之前
  * 只渲染首屏 + overscan，绝不先全渲染再收。
@@ -29,31 +30,14 @@ export function WindowedText(props: {
   resetKey: string;
 }) {
   const rows = useMemo(() => textRows(props.text), [props.text]);
-  const [rowHeight, setRowHeight] = useState(0);
+  // 行块容器：量行高时用「整块高度 / 行数」（单个元素离视口远时 rect 会被吸附成整数）
+  const linesRef = useRef<HTMLDivElement | null>(null);
+  const { probeRef, rowHeight } = useRowHeight(linesRef);
   const [win, setWin] = useState<TextWindow>(() => textWindow(rows.length, 0, 0, 0));
-  const probeRef = useRef<HTMLDivElement | null>(null);
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
   const rowHeightRef = useRef(rowHeight);
   rowHeightRef.current = rowHeight;
-
-  // 量行高：探针与正文行同一套字体 / 行高，量出来的就是一行的高度。行高由
-  // `--ui-font-size` 派生，**界面字号一改它就会变**——所以用 ResizeObserver 盯住探针，
-  // 尺寸一变就重新量：总高度（= 行数 × 行高）与 translateY 都按行高算，行高留着旧值
-  // 会让滚动条长度与滚动位置一起漂。
-  useLayoutEffect(() => {
-    const probe = probeRef.current;
-    if (probe === null) return;
-    const measure = (): void => {
-      const measured = probe.getBoundingClientRect().height;
-      if (measured <= 0) return;
-      setRowHeight((prev) => (Math.abs(measured - prev) > 0.5 ? measured : prev));
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(probe);
-    return () => observer.disconnect();
-  }, []);
 
   // 换文件：回到顶部，窗口重算（新文件行数不同）。
   // 现实的换文件路径是**重挂载**（FilesPanel 给 FilePreviewPane 挂了 key=path），
@@ -101,6 +85,7 @@ export function WindowedText(props: {
       </div>
       <div
         className="file-preview-window-lines"
+        ref={linesRef}
         style={{ transform: `translateY(${win.start * rowHeight}px)` }}
       >
         {rows.slice(win.start, win.end).map((row, index) => (
