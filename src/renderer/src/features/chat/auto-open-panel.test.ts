@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
-import { collectOpenHints } from "./auto-open-panel.ts";
+import { collectOpenHints, resetOpenedAfterTurn } from "./auto-open-panel.ts";
 import { readCommandCard, readOpenPanel } from "../../../../shared/builtin-command.ts";
 
 const tool = (toolCallId: string, details: unknown, status: "running" | "complete" | "error" = "complete"): TranscriptItem =>
@@ -61,5 +61,17 @@ describe("details 校验", () => {
     assert.equal(readCommandCard({ card: { kind: "slides", path: "/a", title: 3 } }), null);
     assert.equal(readCommandCard({ card: { kind: "weird", path: "/a", title: "t" } }), null);
     assert.equal(readCommandCard({ card: { kind: "doc", path: "/a", title: "t", subtitle: "s" } })?.subtitle, "s");
+  });
+});
+
+describe("一轮结束后忘掉已开过的路径", () => {
+  it("同一轮里同一个文件只开一次；下一轮再说「打开 X」还能开（用户可能已关掉标签）", () => {
+    const seen = new Set<string>();
+    const opened = new Set<string>();
+    assert.equal(collectOpenHints([tool("a", hint("/w/x.md"))], seen, opened, true).length, 1);
+    resetOpenedAfterTurn(opened, true, true); // 还在跑：不清
+    assert.equal(collectOpenHints([tool("b", hint("/w/x.md"))], seen, opened, true).length, 0);
+    resetOpenedAfterTurn(opened, true, false); // 本轮结束：清
+    assert.equal(collectOpenHints([tool("c", hint("/w/x.md"))], seen, opened, true).length, 1);
   });
 });

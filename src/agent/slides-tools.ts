@@ -20,7 +20,7 @@ import { imageSlotOf, isLayoutName, LAYOUT_GUIDE, LAYOUT_NAMES, type LayoutImage
 import { DEFAULT_THEME_ID, presetTheme, THEME_BLURBS, THEME_IDS, THEME_PRESETS } from "../shared/slides-theme.ts";
 import { writeTextAtomic } from "../main/atomic-write.ts";
 import { ASSET_MAX_BYTES, saveAssetBytes } from "../main/slides/assets.ts";
-import { isInside, realpathInside } from "../main/path-boundary.ts";
+import { isInside, pathUnderRoots, realpathInside } from "../main/path-boundary.ts";
 import type { RequestBroker } from "./request-broker.ts";
 
 /**
@@ -99,6 +99,9 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
   const { cwd } = options;
   const roots = options.writeRoots.length > 0 ? options.writeRoots : [cwd];
 
+  /** 真实路径 → 面板认得的路径（用户挂的根下的原样路径）；openPanel 请求与完成卡用它 */
+  const shown = new Map<string, string>();
+
   /** 演示文稿路径 → 绝对路径；必须 `.slides.json`、必须落在可写根内（含 symlink 解析后） */
   const resolveDeck = async (raw: unknown, mode: "existing" | "new"): Promise<string> => {
     const value = text(raw);
@@ -109,6 +112,7 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
     if (mode === "existing") {
       const real = await realpathInside(absolute, roots);
       if (real === null) fail(`Presentation not found (or outside the workspace): ${value}. Create it with slides_create first.`);
+      shown.set(real, await pathUnderRoots(real, roots));
       return real;
     }
     return absolute;
@@ -130,7 +134,7 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
   };
 
   const openDetails = (path: string, force: boolean): { openPanel: OpenPanelHint } => ({
-    openPanel: { kind: "slides", path, ...(force ? { force: true as const } : {}) },
+    openPanel: { kind: "slides", path: shown.get(path) ?? path, ...(force ? { force: true as const } : {}) },
   });
 
   const ok = (message: string, details?: Record<string, unknown>) => ({

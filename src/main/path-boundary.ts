@@ -10,7 +10,7 @@
  * 会话导入（session/importer.ts，索引里记的源文件路径）。
  */
 import { realpath as fsRealpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 /**
  * path 是不是 root 本身或在它下面。用 relative 判断，不用前缀比较（拼 `${root}/`、
@@ -52,4 +52,29 @@ export async function realpathInside(
     if (isInside(realRoot, real)) return real;
   }
   return null;
+}
+
+/**
+ * 真实路径 → 「用户看到的路径」：落在哪个根里，就写成该根（原样，没解析 symlink）下的路径。
+ *
+ * 为什么要有它：agent 工具用 `realpathInside` 校验并读写，拿到的是解析了 symlink 的真实路径；但右栏文件面板
+ * 的根是用户挂的那个路径（原样）。把真实路径直接交给面板，symlink 工作区里面板认不出它在哪个根里，
+ * 报「超出面板能看到的目录」、不打开文档（`~/x/Home → Home-real` 实测）。打开面板的请求与完成卡用这个路径。
+ * 落不进任何根（或根读不出来）原样返回。
+ */
+export async function pathUnderRoots(
+  real: string,
+  roots: readonly string[],
+  realpath: (path: string) => Promise<string> = fsRealpath,
+): Promise<string> {
+  for (const root of roots) {
+    let realRoot: string;
+    try {
+      realRoot = await realpath(root);
+    } catch {
+      continue;
+    }
+    if (isInside(realRoot, real)) return join(root, relative(realRoot, real));
+  }
+  return real;
 }

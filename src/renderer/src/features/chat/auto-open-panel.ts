@@ -34,6 +34,15 @@ export function collectOpenHints(
 }
 
 /**
+ * 一轮结束时忘掉「已自动开过的路径」。非 force 的请求（agent 打开 / 读已有文件）本意是「别在同一轮里反复抢右栏」，
+ * 不是「这个会话里只开一次」：用户关掉标签后下一轮再说「打开 X」，面板必须能再开（以前 `opened` 活到会话结束，
+ * 第二次 doc_open 静默不开）。纯函数，可测。
+ */
+export function resetOpenedAfterTurn(opened: Set<string>, wasActive: boolean, nowActive: boolean): void {
+  if (wasActive && !nowActive) opened.clear();
+}
+
+/**
  * App 里调用：本轮在跑时，转录里新落定的内置命令结果带 `details.openPanel` 就请求右栏打开它。
  * 换会话重置账本（旧会话的结果全算已处理）。
  */
@@ -50,8 +59,11 @@ export function useAutoOpenPanel(
   if (book.current.sessionId !== sessionId) {
     book.current = { sessionId, seen: new Set(), opened: new Set() };
   }
+  const wasActive = useRef(turnActive);
   useEffect(() => {
     const { seen, opened } = book.current;
     for (const hint of collectOpenHints(transcript, seen, opened, turnActive)) requestOpenPanel(hint);
+    resetOpenedAfterTurn(opened, wasActive.current, turnActive);
+    wasActive.current = turnActive;
   }, [transcript, turnActive, sessionId]);
 }

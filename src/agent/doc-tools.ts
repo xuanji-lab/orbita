@@ -8,7 +8,7 @@ import { splitFrontmatter } from "../shared/ofm/properties.ts";
 import { isDocumentName, isImageName } from "../shared/ofm/syntax.ts";
 import { saveAttachment } from "../main/doc-panel/ofm-files.ts";
 import { writeTextAtomic } from "../main/atomic-write.ts";
-import { isInside, realpathInside } from "../main/path-boundary.ts";
+import { isInside, pathUnderRoots, realpathInside } from "../main/path-boundary.ts";
 import type { RequestBroker } from "./request-broker.ts";
 
 /**
@@ -139,6 +139,8 @@ export function createDocTools(broker: RequestBroker, sessionId: string, options
         created = true;
       }
       const real = (await realpathInside(target, roots)) ?? fail(`Document is outside the workspace: ${target}`);
+      // 面板与完成卡认「用户挂的那个路径」：工作区在 symlink 下时 real 与面板的根对不上，面板报「超出能看到的目录」
+      const shown = await pathUnderRoots(real, roots);
       const content = await readFile(real, "utf8");
       const lineCount = content === "" ? 0 : content.replace(/\n$/, "").split("\n").length;
       const headings = outlineOf(content);
@@ -148,14 +150,14 @@ export function createDocTools(broker: RequestBroker, sessionId: string, options
           : headings.map((h) => `${"  ".repeat(h.level - 1)}L${h.line} ${"#".repeat(h.level)} ${h.title}`).join("\n");
       const card: CommandCardData = {
         kind: "doc",
-        path: real,
+        path: shown,
         title: docTitle(real),
         subtitle: `文档 · ${toPosix(relative(cwd, real)) || basename(real)}${lineCount > 0 ? ` · ${lineCount} 行` : ""}`,
       };
       return ok(
         `${created ? "Created and opened" : "Opened"} ${real} in the Files panel (${lineCount} lines).\nOutline:\n${outline}\n` +
           "Edit it with the normal read / edit / write tools; the panel updates live.",
-        { ...openDetails(real, created), card },
+        { ...openDetails(shown, created), card },
       );
     },
   };

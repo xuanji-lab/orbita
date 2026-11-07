@@ -1,6 +1,6 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -85,6 +85,24 @@ describe("doc_open", () => {
     await assert.rejects(run("doc_open", { path: "a.png" }), /must end with/);
     await assert.rejects(run("doc_open", { path: "没有.md" }), /not found/i);
     await assert.rejects(run("doc_open", {}), /required/);
+  });
+
+  it("工作区在 symlink 下：openPanel 与卡带的是面板认得的路径（用户挂的根下的原样路径），不是解析后的真实路径", async () => {
+    // 实测：~/x/Home → Home-real，agent 返回真实路径，文件面板找不到所在的根，报「超出能看到的目录」、不开文档
+    const base = await realpath(await mkdtemp(join(tmpdir(), "doc-tools-link-")));
+    try {
+      await mkdir(join(base, "real", "周报"), { recursive: true });
+      await writeFile(join(base, "real", "周报", "w.md"), "# 周报\n");
+      await symlink(join(base, "real"), join(base, "Home"));
+      const broker = new RequestBroker(() => undefined);
+      const list = createDocTools(broker, "s2", { cwd: join(base, "Home"), writeRoots: [join(base, "Home")], workspaceId: "w2", mode: () => "skip" });
+      const open = list.find((tool) => tool.name === "doc_open") as ToolDefinition;
+      const result = (await open.execute("c2", { path: "周报/w.md" } as never, undefined as never, undefined as never, undefined as never)) as { details?: Record<string, unknown> };
+      assert.equal(readOpenPanel(result.details)?.path, join(base, "Home", "周报", "w.md"));
+      assert.equal(readCommandCard(result.details)?.path, join(base, "Home", "周报", "w.md"));
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
   });
 
   it("大纲函数的边界", () => {
