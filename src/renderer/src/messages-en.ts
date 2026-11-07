@@ -381,6 +381,20 @@ export const en = {
     daysAgo: (n: number) => `${n}d ago`,
     /** 绝对时间（文件修改时间等）：跟界面语言走，不跟系统 */
     dateTime: (ms: number) => new Date(ms).toLocaleString("en-US"),
+    /** 左栏会话行尾的「多久没动了」：比 minutesAgo 等再短一档，行尾只有几个字的位置 */
+    ageNow: "now",
+    ageMinutes: (n: number) => `${n}m`,
+    ageHours: (n: number) => `${n}h`,
+    ageYesterday: "1d",
+    ageDays: (n: number) => `${n}d`,
+    /** 行 tooltip 里的完整时间；跨年才带年份 */
+    lastActiveAt: (ms: number) => {
+      const at = new Date(ms);
+      const month = at.toLocaleString("en-US", { month: "short" });
+      const clock = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+      const year = at.getFullYear() === new Date().getFullYear() ? "" : `, ${at.getFullYear()}`;
+      return `Last active ${month} ${at.getDate()}${year}, ${clock}`;
+    },
   },
 
   app: {
@@ -954,6 +968,13 @@ export const en = {
     filterStarredTip: "Show starred tasks only",
     filterTodos: "Has todos",
     filterTodosTip: "Show tasks with open carryover items only",
+    filterAge: "Time range",
+    filterAgeTip: "Only tasks active within a recent period",
+    filterAgeChip: (days: number) => `${days}d`,
+    filterAgeHeader: "Only tasks active in the last…",
+    filterAgeChoice: (days: number) => (days === 1 ? "Last 1 day" : `Last ${days} days`),
+    filterAgeAny: "Any time",
+    emptyInRange: (days: number) => `No matching tasks were active in the last ${days === 1 ? "day" : `${days} days`}.`,
     backToTasks: "Back to tasks",
     backToTasksTip: "Back to the task list",
     archived: "Archived",

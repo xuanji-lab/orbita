@@ -115,6 +115,15 @@ const CHECKS = [
     rightPad: 12,
     skipNoTrailing: true,
   },
+  {
+    name: "左栏·会话行：「多久没动了」钉在右血线（悬停层的键叠在同一格里，静止不占位）",
+    row: ".task-row",
+    leading: ".option-row span",
+    trailing: ".task-row-age",
+    // 静止层 padding-inline-end var(--space-1) = 行首状态槽的左内边距（NavRow 的 padding-left）
+    rightPad: 4,
+    skipNoTrailing: true,
+  },
 ];
 
 const { evaluate, close } = await connectCdp({ cdpPort, devPort, watchdogMs: 60_000 });

@@ -50,6 +50,16 @@ describe("SettingsStore", () => {
     assert.deepEqual(await readdir(dir), ["settings.json"]);
   });
 
+  test("sidebarAgeDays：选了落盘、换实例读得到，补丁发 null 清除回「不限」，别的键不受影响", async () => {
+    await store.write({ theme: "graphite", sidebarAgeDays: 3 });
+    assert.equal((await new SettingsStore(dir).read()).sidebarAgeDays, 3);
+    const cleared = await store.write({ sidebarAgeDays: null });
+    assert.equal("sidebarAgeDays" in cleared, false);
+    assert.equal(cleared.theme, "graphite");
+    const onDisk = JSON.parse(await readFile(join(dir, "settings.json"), "utf8")) as Record<string, unknown>;
+    assert.equal("sidebarAgeDays" in onDisk, false);
+  });
+
   test("drawer 的部分更新按键合并，不整块覆盖", async () => {
     await store.write({ drawer: { width: 380, docked: ["a"] } });
     // 只发改一个键：其余两个保持——渲染层闭包里的旧值不许冲掉它（真机实测过的竞态）

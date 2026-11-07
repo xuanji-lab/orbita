@@ -600,6 +600,23 @@ describe("parseSettings 的 boardDays（周看板一屏几天）", () => {
   });
 });
 
+describe("parseSettings 的 sidebarAgeDays（左栏时间范围）", () => {
+  it("只认 1 / 3 / 5 / 7；缺席、旧数据、坏值与 null 都不落键（读侧缺席 = 不限）", () => {
+    for (const days of [1, 3, 5, 7]) deepStrictEqual(parseSettings({ sidebarAgeDays: days }).sidebarAgeDays, days);
+    for (const bad of [0, 2, 14, "3", null, 3.5, [3], "all"]) {
+      deepStrictEqual("sidebarAgeDays" in parseSettings({ sidebarAgeDays: bad }), false);
+    }
+    // 旧数据（没有这个键）原样解析，与加字段之前的产物逐字相同
+    deepStrictEqual(parseSettings({ theme: "graphite", drawer: {} }), { theme: "graphite", drawer: DEFAULT_SETTINGS.drawer });
+  });
+
+  it("补丁里发 null = 清除：{...current, ...patch} 经 parseSettings 退回不限", () => {
+    const current = parseSettings({ sidebarAgeDays: 3 });
+    deepStrictEqual(current.sidebarAgeDays, 3);
+    deepStrictEqual("sidebarAgeDays" in parseSettings({ ...current, sidebarAgeDays: null }), false);
+  });
+});
+
 describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
   it("缺席 = 键不在：全部默认关，不为此落一个空对象", () => {
     deepStrictEqual("experimentalFeatures" in parseSettings({}), false);
