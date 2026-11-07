@@ -4510,7 +4510,7 @@ function ToolLine(props: {
           <span style={SLOT.status}>{t.chat.lines(writeLines)}</span>
         )}
         {/* 有统计时「N lines」是同一量级的第二遍，让位 */}
-        {summary !== null && !active && stats === null && writeLines === null && (
+        {summary !== null && !active && stats === null && writeLines === null && builtin === null && (
           <span
             style={failed ? { ...SLOT.status, color: "var(--color-danger)" } : SLOT.status}
           >

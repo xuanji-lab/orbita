@@ -214,16 +214,19 @@ function DeckWorkspace(props: {
   }, [path, session]);
 
   // ── 画布尺寸与缩放 ──
-  const stageHostRef = useRef<HTMLDivElement>(null);
+  // 回调 ref：画布区在「没有页」与「有页」之间会卸载 / 重挂（agent 刚建的文稿一开始是 0 页），
+  // 用 useEffect([]) 只在首次挂载时量一次的话，后来挂上的那个元素永远没人量——缩放比就是默认值（实测 44%、画布被裁）
   const [hostSize, setHostSize] = useState({ w: 640, h: 360 });
-  useEffect(() => {
-    const host = stageHostRef.current;
-    if (host === null) return undefined;
+  const observerRef = useRef<ResizeObserver | null>(null);
+  const stageHostRef = useCallback((host: HTMLDivElement | null): void => {
+    observerRef.current?.disconnect();
+    observerRef.current = null;
+    if (host === null) return;
     const measure = (): void => setHostSize({ w: host.clientWidth, h: host.clientHeight });
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(host);
-    return () => observer.disconnect();
+    observerRef.current = observer;
   }, []);
   const canvas = CANVAS_SIZE[deck.aspect];
   const scale = zoom === "fit" ? fitScale(hostSize, canvas, 20) : zoom / 100;
