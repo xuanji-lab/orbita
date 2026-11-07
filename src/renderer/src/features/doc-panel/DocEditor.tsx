@@ -5,6 +5,7 @@ import { drawSelection, EditorView, keymap, placeholder } from "@codemirror/view
 import { clearFlash, flashRanges, flashField, liveMarkdown } from "./cm-live-markdown.ts";
 import { ofmLive, type OfmLive } from "./cm-ofm.tsx";
 import { sourceMarkdown } from "./cm-source.ts";
+import { placeInsertion } from "./insert-placement.ts";
 import type { OfmEnv } from "./ofm-env.ts";
 import { diffToChanges, type TextChange } from "./doc-merge.ts";
 import { quoteTrackField, quoteTracker, trackRange } from "./quote-track.ts";
@@ -238,9 +239,10 @@ export function DocEditor(props: {
       },
       insertText(text) {
         const { from, to } = view.state.selection.main;
+        const place = placeInsertion(view.state.doc.toString(), from, to, text);
         view.dispatch({
-          changes: { from, to, insert: text },
-          selection: { anchor: from + text.length },
+          changes: { from: place.from, to: place.to, insert: place.insert },
+          selection: { anchor: place.from + place.insert.length },
           userEvent: "input.paste",
         });
         view.focus();
