@@ -4,8 +4,8 @@ import { DOC_GONE } from "@shared/doc";
 import type { SlidesExportFormat } from "@shared/slides-export";
 import { richTextToPlain, CANVAS_SIZE, newId, type Aspect, type Deck, type SlideElement } from "../../../../shared/slides.ts";
 import { addSlide, appendElements, applyEdit, duplicateSlide, insertImage, newTableElement, newTextBoxFromPlain, removeElements, slideTitle, updateElements, type DrawTool } from "../../../../shared/slides-ops.ts";
-import { SLIDE_DEFAULT_TEXT } from "../../../../shared/slides-palette.ts";
-import type { RenderContext } from "../../../../shared/slides-render.ts";
+import { SLIDE_BACKGROUNDS, SLIDE_DEFAULT_TEXT, SLIDE_PAGE_WHITE } from "../../../../shared/slides-palette.ts";
+import { SLIDE_CSS, type RenderContext } from "../../../../shared/slides-render.ts";
 import { api } from "../../api";
 import { ipcErrorText } from "../../utils/ipc-error.ts";
 import { Icon } from "../../shell/Icon";
@@ -20,7 +20,7 @@ import type { ExternalChange } from "../doc-panel/doc-session.ts";
 import { setOpenDocument } from "../doc-panel/open-document.ts";
 import { useAssetUrls } from "./asset-urls.ts";
 import { Filmstrip } from "./Filmstrip";
-import { FormatBar } from "./FormatBar";
+import { ColorButton, FormatBar } from "./FormatBar";
 import { fitScale } from "./geometry.ts";
 import { PlayMode } from "./PlayMode";
 import { SlideStage } from "./SlideStage";
@@ -193,6 +193,15 @@ function DeckWorkspace(props: {
     },
     [editor],
   );
+  // 撤销 / 重做是用户自己的动作，缩略图不该当成 agent 改动标绿
+  const undo = useCallback((): void => {
+    fromSelf.current = true;
+    editor.undo();
+  }, [editor]);
+  const redo = useCallback((): void => {
+    fromSelf.current = true;
+    editor.redo();
+  }, [editor]);
   const commitRef = useRef(commit);
   commitRef.current = commit;
   const deckRef = useRef(deck);
@@ -353,13 +362,13 @@ function DeckWorkspace(props: {
     if (isTypingTarget(event.target)) return;
     if (mod && event.key.toLowerCase() === "z") {
       event.preventDefault();
-      if (event.shiftKey) editor.redo();
-      else editor.undo();
+      if (event.shiftKey) redo();
+      else undo();
       return;
     }
     if (mod && event.key.toLowerCase() === "y") {
       event.preventDefault();
-      editor.redo();
+      redo();
       return;
     }
     if (mod && event.key.toLowerCase() === "d") {
@@ -510,6 +519,8 @@ function DeckWorkspace(props: {
 
   return (
     <div className="dp se" data-kind="slides" onKeyDown={onKeyDown} onCopy={(e) => onCopyOrCut(e, false)} onCut={(e) => onCopyOrCut(e, true)} onPaste={onPaste}>
+      {/* 页面本身的样式（位置 / 文字 / 表格 / 形状），与导出共用同一份字符串 */}
+      <style>{SLIDE_CSS}</style>
       <div className="se-bar" role="toolbar" aria-label={t.slides.toolbar}>
         {toolButton(t.slides.text, "type", () => setTool((v) => (v === "text" ? null : "text")), tool === "text")}
         {toolButton(t.slides.image, "image", () => fileInputRef.current?.click())}
@@ -525,14 +536,15 @@ function DeckWorkspace(props: {
           )}
         />
         <span className="dp-bar-grow" />
-        <IconButton label={t.doc.undo} size={28} disabled={!editor.canUndo} onClick={editor.undo}>
+        <IconButton label={t.doc.undo} size={28} disabled={!editor.canUndo} onClick={undo}>
           <Icon name="undo-2" size={16} strokeWidth={1.8} />
         </IconButton>
-        <IconButton label={t.slides.redo} size={28} disabled={!editor.canRedo} onClick={editor.redo}>
+        <IconButton label={t.slides.redo} size={28} disabled={!editor.canRedo} onClick={redo}>
           <Icon name="redo-2" size={16} strokeWidth={1.8} />
         </IconButton>
-        <span className="dp-status" data-state={props.syncState} role="status" title={props.syncError ?? undefined}>
-          {props.status}
+        {/* 已保存是常态，不占位；只有保存中 / 没存 / 失败才出字 */}
+        <span className="dp-status" data-state={props.syncState} role="status" title={props.syncError ?? props.status}>
+          {props.syncState === "saved" ? <Icon name="check" size={14} strokeWidth={2} /> : props.status}
         </span>
         <Menu
           align="end"
@@ -630,6 +642,21 @@ function DeckWorkspace(props: {
         onDelete={deletePage}
         notesOpen={notesOpen}
         onToggleNotes={() => setNotesOpen((v) => !v)}
+        extra={
+          <>
+            <ColorButton
+              label={t.slides.background}
+              value={slide.background ?? deck.theme?.background ?? SLIDE_PAGE_WHITE}
+              palette={SLIDE_BACKGROUNDS}
+              up
+              onPick={(color) => commit(applyEdit(deck, [{ op: "set_slide", slide: index + 1, background: color }]).deck)}
+            />
+            <button type="button" className="se-notes-toggle" onClick={quote} title={t.slides.quotePage}>
+              <Icon name="quote" size={14} strokeWidth={1.8} />
+              {t.slides.quotePage}
+            </button>
+          </>
+        }
       />
       {notesOpen && (
         <div className="se-notes">

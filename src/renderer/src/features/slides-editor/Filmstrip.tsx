@@ -26,6 +26,8 @@ export function Filmstrip(props: {
   onDelete: (index: number) => void;
   notesOpen: boolean;
   onToggleNotes: () => void;
+  /** 缩略条右侧的页级动作（页背景 / 引用这一页） */
+  extra?: React.ReactNode;
 }) {
   const t = useT();
   const { deck, ctx, currentId } = props;
@@ -104,6 +106,7 @@ export function Filmstrip(props: {
           <Icon name="plus" size={16} strokeWidth={1.8} />
         </button>
       </div>
+      {props.extra}
       <button type="button" className="se-notes-toggle" aria-pressed={props.notesOpen} onClick={props.onToggleNotes}>
         <Icon name="notebook-pen" size={14} strokeWidth={1.8} />
         {t.slides.notes}

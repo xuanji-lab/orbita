@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import type { Deck, Slide, SlideElement } from "../../../../shared/slides.ts";
 import { updateElements } from "../../../../shared/slides-ops.ts";
-import { SLIDE_BACKGROUNDS, SLIDE_PAGE_WHITE, SLIDE_PALETTE, SLIDE_PICKER_FALLBACK } from "../../../../shared/slides-palette.ts";
+import { SLIDE_PALETTE, SLIDE_PICKER_FALLBACK } from "../../../../shared/slides-palette.ts";
 import { Icon, type IconName } from "../../shell/Icon";
 import { IconButton } from "../../shell/IconButton";
 import { useT } from "../../locale.ts";
 
 /** 色块 + 弹出色板（常用色 + 系统取色器）。色是文稿里的内容数据，不是界面色 */
-function ColorButton(props: { label: string; value: string; palette?: readonly string[]; allowNone?: boolean; onPick: (color: string) => void }) {
+export function ColorButton(props: { label: string; value: string; palette?: readonly string[]; allowNone?: boolean; /** 向上弹（贴着窗口底的缩略条里用） */ up?: boolean; onPick: (color: string) => void }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const hostRef = useRef<HTMLSpanElement>(null);
@@ -26,7 +26,7 @@ function ColorButton(props: { label: string; value: string; palette?: readonly s
         <span className="se-swatch" data-none={props.value === "none" ? "true" : undefined} style={props.value === "none" ? undefined : { background: props.value }} />
       </button>
       {open && (
-        <div className="se-color-pop" role="dialog" aria-label={props.label}>
+        <div className="se-color-pop" data-up={props.up === true ? "true" : undefined} role="dialog" aria-label={props.label}>
           <div className="se-swatches">
             {palette.map((color) => (
               <button
@@ -118,17 +118,7 @@ export function FormatBar(props: {
 
   let body: React.ReactNode = null;
   if (selected.length === 0) {
-    body = (
-      <>
-        <span className="se-format-label">{t.slides.background}</span>
-        <ColorButton
-          label={t.slides.background}
-          value={slide.background ?? deck.theme?.background ?? SLIDE_PAGE_WHITE}
-          palette={SLIDE_BACKGROUNDS}
-          onPick={(color) => props.commit({ ...deck, slides: deck.slides.map((s) => (s.id === slide.id ? { ...s, background: color } : s)) })}
-        />
-      </>
-    );
+    return null;
   } else if (same && first !== undefined) {
     switch (first.kind) {
       case "text":
@@ -265,10 +255,7 @@ export function FormatBar(props: {
           {btn(t.slides.delete, "trash-2", props.onDelete)}
         </>
       )}
-      <button type="button" className="dp-text-action" onClick={props.onQuote}>
-        <Icon name="quote" size={14} strokeWidth={1.8} />
-        {selected.length > 0 ? t.slides.quoteElement : t.slides.quotePage}
-      </button>
+      {btn(t.slides.quoteElement, "quote", props.onQuote)}
     </div>
   );
 }

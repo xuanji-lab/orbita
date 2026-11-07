@@ -152,6 +152,10 @@
   background: var(--color-bg-panel);
   box-shadow: var(--shadow-popover);
 }
+.se-color-pop[data-up="true"] {
+  top: auto;
+  bottom: calc(100% + var(--space-1));
+}
 .se-swatches {
   display: grid;
   grid-template-columns: repeat(6, auto);

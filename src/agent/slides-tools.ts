@@ -64,6 +64,11 @@ export interface SlidesToolsOptions {
   writeRoots: readonly string[];
   /** 会话所属工作区（主进程据此现算可写根，校验导出路径） */
   workspaceId: string | null;
+  /**
+   * 用户附在对话里的图片（附件副本的绝对路径，**最近的在前**）。模型看得见图但不知道它在盘上哪里，
+   * 所以 `slides_insert_image` 认 `attached` / `attached:2`（第 N 张最近附的图）。缺席 = 不支持
+   */
+  attachedImages?: () => readonly string[];
 }
 
 function fail(message: string): never {
@@ -328,19 +333,37 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
     },
   };
 
+  /** `attached` / `attached:N` → 第 N 张最近附的图；其余按路径（相对工作区或绝对） */
+  const resolveImagePath = (raw: string): string => {
+    const match = /^attached(?::(\d+))?$/i.exec(raw);
+    if (match === null) return isAbsolute(raw) ? raw : join(cwd, raw);
+    const list = options.attachedImages?.() ?? [];
+    const n = match[1] === undefined ? 1 : Number(match[1]);
+    const found = list[n - 1];
+    if (found === undefined) {
+      return fail(
+        list.length === 0
+          ? "The user has not attached any image to this conversation — pass a file path in image_path instead"
+          : `Only ${list.length} attached image(s) — use attached or attached:1 … attached:${list.length}`,
+      );
+    }
+    return found;
+  };
+
   const insertImageTool: ToolDefinition = {
     name: "slides_insert_image",
     label: "slides_insert_image",
     description:
       "Put a picture on a slide: copies the image (PNG / JPEG / GIF / WebP, ≤30 MB) from image_path — a workspace file, or a file the user attached to this conversation — " +
-      "into the deck's .assets folder and adds an image element. Size and position default to a centred box at the picture's own aspect ratio (≤ half the canvas); " +
+      "into the deck's .assets folder and adds an image element. " +
+      "For a picture the user attached to the chat (you may see it but it has no path) pass image_path \"attached\" (the most recent one) or \"attached:2\" (the second most recent). Size and position default to a centred box at the picture's own aspect ratio (≤ half the canvas); " +
       "pass w / h / x / y (px) to place it exactly, fit contain|cover.",
     parameters: {
       type: "object",
       properties: {
         path: { type: "string", description: "The .slides.json file" },
         slide: { type: "number", description: "1-based page" },
-        image_path: { type: "string", description: "Path of the picture to insert (absolute, or relative to the workspace)" },
+        image_path: { type: "string", description: 'Path of the picture to insert (absolute, or relative to the workspace), or "attached" / "attached:N" for a picture the user attached to the chat' },
         x: { type: "number" },
         y: { type: "number" },
         w: { type: "number" },
@@ -355,7 +378,7 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
       const path = await resolveDeck(args["path"], "existing");
       const slide = typeof args["slide"] === "number" ? args["slide"] : fail('"slide" (1-based page number) is required');
       const imageRaw = text(args["image_path"]) ?? fail('"image_path" is required');
-      const imagePath = isAbsolute(imageRaw) ? imageRaw : join(cwd, imageRaw);
+      const imagePath = resolveImagePath(imageRaw);
       let bytes: Buffer;
       try {
         const info = await stat(imagePath);

@@ -24,7 +24,7 @@ before(async () => {
     const requestId = (event as { requestId: string }).requestId;
     queueMicrotask(() => broker.resolve(requestId, { ok: true, path: join(dir, "x.pdf"), bytes: 2048, pages: 3 }));
   });
-  const list = createSlidesTools(broker, "s1", { cwd: dir, writeRoots: [dir], workspaceId: "w1" });
+  const list = createSlidesTools(broker, "s1", { cwd: dir, writeRoots: [dir], workspaceId: "w1", attachedImages: () => [join(dir, "hawker.png")] });
   tools = Object.fromEntries(list.map((tool) => [tool.name, tool]));
 });
 after(async () => {
@@ -123,6 +123,13 @@ describe("slides tools", () => {
     await assert.rejects(() => run("slides_insert_image", { path, slide: 3, image_path: "fake.png" }), /Not a supported image/);
     await assert.rejects(() => run("slides_insert_image", { path, slide: 3, image_path: "nope.png" }), /not found/);
     await assert.rejects(() => run("slides_insert_image", { path, slide: 99, image_path: "hawker.png" }), /没有第 99 页/);
+  });
+
+  it("insert_image：attached 取用户附在对话里的图；没附图给出指引", async () => {
+    const path = "花园城市新加坡.slides.json";
+    const out = await run("slides_insert_image", { path, slide: 4, image_path: "attached" });
+    assert.match(out.text, /Inserted .*hawker\.png/);
+    await assert.rejects(() => run("slides_insert_image", { path, slide: 4, image_path: "attached:3" }), /Only 1 attached image/);
   });
 
   it("write 引用不存在的图 → 体检里提醒", async () => {

@@ -3,6 +3,7 @@ import type { ThinkingLevel } from "../../shared/thinking.ts";
 import type { AutomationIntervalUnit } from "../../shared/automation.ts";
 import type { DictationProvider } from "../../shared/voice.ts";
 import { REVIEW_DIFF_MAX_BYTES, REVIEW_DIFF_MAX_LINES } from "../../shared/review.ts";
+import { builtinCommand } from "./features/chat/builtin-commands.ts";
 
 const THINKING_ZH: Record<ThinkingLevel, string> = {
   off: "关",
@@ -2093,7 +2094,8 @@ export const zh: Messages = {
     toolEdit: "编辑",
     toolList: "列目录",
     // 内建的读写工具说中文动词（同原型「bash 3 · 读取 5」），其余是工具 ID 原样
-    rollupTool: (toolName) => ROLLUP_TOOL_ZH[toolName] ?? toolName,
+    // 内置命令（features/chat/builtin-commands.ts）在统计行里也叫中文名，不露 slides_write 这类英文 id
+    rollupTool: (toolName) => ROLLUP_TOOL_ZH[toolName] ?? builtinCommand(toolName)?.label ?? toolName,
     openTaskCard: (title) => `打开「${title}」`,
     open: "打开",
     repliedSteer: (child) => `回复了 ${child} · 引导`,

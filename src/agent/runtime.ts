@@ -1403,6 +1403,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
       cwd: command.cwd,
       writeRoots: [command.cwd, ...(command.directories?.attached ?? [])],
       workspaceId: command.workspaceId,
+      // 用户附的图：预算账里记着 hash → 附件副本路径（本轮的在 pendingRefs，旧轮的在 refs）；最近的在前
+      attachedImages: () => [...new Set([...budget.refs.values(), ...budget.pendingRefs.values()])].reverse(),
     }),
     // agent 的终端工具组（PR2）：开可见终端、写命令、读输出。
     // 本分支只有用户发起这一种来源（没有定时任务 / 委派 / 外部桥），所以这里不按来源
