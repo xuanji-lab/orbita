@@ -1,5 +1,8 @@
 :root {
   --shadow-border: 0 0 0 1px rgba(20, 24, 31, 0.06);
+  /* 静止的卡（会话卡、主题缩略卡）：一层贴边 + 一层短扩散。--shadow-composer 的 28px
+     模糊落在 225px 的小卡上就是「小东西背了个大影子」——真正浮起的只有输入卡。 */
+  --shadow-card: 0 1px 2px rgba(20, 24, 31, 0.06), 0 4px 12px rgba(20, 24, 31, 0.06);
   --shadow-composer: 0 8px 28px rgba(20, 24, 31, 0.08);
   --shadow-popover: 0 12px 32px rgba(20, 24, 31, 0.12);
   --shadow-modal: 0 24px 80px rgba(20, 24, 31, 0.22);
@@ -14,6 +17,7 @@
 :root[data-theme="graphite"],
 :root[data-theme="black"] {
   --shadow-border: 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.24), 0 4px 12px rgba(0, 0, 0, 0.2);
   --shadow-composer: 0 8px 28px rgba(0, 0, 0, 0.28);
   --shadow-popover: 0 14px 36px rgba(0, 0, 0, 0.38);
   --shadow-modal: 0 24px 80px rgba(0, 0, 0, 0.55);

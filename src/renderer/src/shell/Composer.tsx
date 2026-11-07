@@ -281,7 +281,7 @@ export function Composer(props: {
     <div className="composer-stack" style={{ width: "100%", minWidth: 0, display: "grid", gap: "var(--space-2)" }}>
       <MaterialStack materials={materials} imageUnsupported={props.imageUnsupported} jumpToQuote={props.jumpToQuote} />
       <div
-        className="glass-card"
+        className="glass-card composer-card"
         style={{
           width: "100%",
           minWidth: 0,

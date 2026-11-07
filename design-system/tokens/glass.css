@@ -48,10 +48,12 @@
   --glass-bg: rgba(253, 252, 248, 0.92);
 }
 
-/* The single card recipe. Reused everywhere by changing only width/height. */
+/* The single card recipe. Reused everywhere by changing only width/height.
+   A resting card takes --shadow-card; the composer (the one card that floats)
+   and floating layers lift it with a modifier (.composer-card / .glass-float). */
 .glass-card {
   background: var(--glass-bg);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-composer);
+  box-shadow: var(--shadow-card);
 }

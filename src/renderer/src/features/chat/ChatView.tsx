@@ -2850,7 +2850,7 @@ function EntryView(props: {
     // streaming：正在流式的那条渲染成便宜的帧（不排公式、不高亮代码，见 stream-render.ts），
     // 落定后自动补渲
     return (
-      <div data-quote-id={entry.messageId} data-quote-role="assistant">
+      <div className="assistant-prose" data-quote-id={entry.messageId} data-quote-role="assistant">
         <MarkdownBlock text={entry.text} streaming={props.streamingIds.has(entry.messageId)} />
       </div>
     );
@@ -2938,26 +2938,29 @@ function TurnRollupLine(props: {
   // 加粗开头：有时长是「用时」，量不到时由第一段统计顶上（rollupLead）。顶上来的那段
   // 首字母大写（英文 thought / tools 本是小写的统计词；中文不受影响）
   const lead = rollupLead(stats);
-  const leadStyle: React.CSSProperties = { ...headLabel(false), textTransform: "capitalize" };
+  // 整行一个字级（2026-10-29 精装第三笔）：12px / 500 / tertiary。原来开头是 14px / 650
+  // （工具名那一档），比正文还重，读者先看见日志、后看见结论；后面各段又是 11px——
+  // 一行两种元数据写法。轮折叠头是注脚，退回元数据档
+  const leadStyle: React.CSSProperties = { ...ROLLUP_SEGMENT, fontFamily: "var(--font-family-base)", textTransform: "capitalize" };
   if (stats.durationMs !== null) {
     segments.push(
-      <span style={headLabel(false)}>
+      <span style={{ ...ROLLUP_SEGMENT, fontFamily: "var(--font-family-base)" }}>
         {t.chat.worked} {formatToolDuration(stats.durationMs, t)}
       </span>,
     );
   }
   if (stats.thinkingCount > 0) {
     segments.push(
-      <span style={lead === "thinking" ? leadStyle : SLOT.status}>
+      <span style={lead === "thinking" ? leadStyle : ROLLUP_SEGMENT}>
         {t.chat.thought} {stats.thinkingCount}
       </span>,
     );
   }
   if (stats.calls > 0) {
-    segments.push(<span style={lead === "tools" ? leadStyle : SLOT.status}>{t.chat.tools(stats.calls)}</span>);
+    segments.push(<span style={lead === "tools" ? leadStyle : ROLLUP_SEGMENT}>{t.chat.tools(stats.calls)}</span>);
   }  for (const { toolName, count, failed } of stats.byTool) {
     segments.push(
-      <span style={SLOT.status}>
+      <span style={ROLLUP_SEGMENT}>
         {t.chat.rollupTool(toolName)} {count}
         {/* 失败数不写词，红色数字直接跟在次数后面——红即失败的语义 */}
         {failed > 0 && <span style={{ color: "var(--color-danger)" }}> {failed}</span>}
@@ -2968,7 +2971,7 @@ function TurnRollupLine(props: {
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
       {/* 轮头时间（用户裁决 2026-10-12）：这轮开始流式回复的时刻，放在「用时」
           那行上面——时长与起点摆在一起看。左缘对齐 CollapseRow 的文本起点（按钮
-          padding 10px）。缺时间戳（诚实未知）不渲染 */}
+          左内边距 = 血线 RAIL_X）。缺时间戳（诚实未知）不渲染 */}
       {group.startedAt !== null && (
         <div
           className="turn-start-time"
@@ -2978,7 +2981,7 @@ function TurnRollupLine(props: {
           {formatMessageTime(group.startedAt, today)}
         </div>
       )}
-      <CollapseRow open={open} onToggle={() => setOpen((value) => !value)}>
+      <CollapseRow dense open={open} onToggle={() => setOpen((value) => !value)}>
         {props.turnFailed && (
           <span style={{ color: "var(--color-danger)", flex: "0 0 auto" }}>
             <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
@@ -3519,7 +3522,16 @@ function BranchRow(props: {
     return () => window.clearTimeout(timer);
   }, [copied]);
   return (
-    <div style={{ display: "flex", width: "100%", alignItems: "center", gap: "calc(var(--space-3) / 2)" }}>
+    // 图标按钮自带 4px 内边距：行左缩「血线 − 4」，字形落在正文同一根线上
+    <div
+      style={{
+        display: "flex",
+        width: "100%",
+        alignItems: "center",
+        gap: "calc(var(--space-3) / 2)",
+        paddingLeft: "calc(var(--content-hem) - var(--space-1))",
+      }}
+    >
       <button
         type="button"
         title={copied ? t.chat.copied : t.chat.copyAnswer}
@@ -3582,6 +3594,8 @@ function BranchRow(props: {
 function CollapseRow(props: {
   open: boolean;
   disabled?: boolean;
+  /** 28px 的元数据行（轮折叠头）：它是注脚，不该和工具行一样高 */
+  dense?: boolean;
   onToggle: () => void;
   children: React.ReactNode;
 }) {
@@ -3599,8 +3613,8 @@ function CollapseRow(props: {
           alignItems: "center",
           gap: "var(--space-2)",
           width: "100%",
-          minHeight: 32,
-          padding: "6px 10px",
+          minHeight: props.dense === true ? "var(--control-height-sm)" : "var(--control-height-md)",
+          padding: `${props.dense === true ? "var(--space-1)" : "var(--space-1-5)"} ${RAIL_X}`,
           border: "none",
           color: "var(--color-text-secondary)",
           fontFamily: "var(--font-family-base)",
@@ -3676,6 +3690,16 @@ const HEAD_WRAP = {
 } satisfies React.CSSProperties;
 
 /** 大折叠统计段的分隔点：段落边界的标点，最淡一档——它是标点不是内容。 */
+/** 轮折叠头的每一段：12px / 500 / tertiary，数字等宽（开头那段换回正文字族） */
+const ROLLUP_SEGMENT = {
+  flex: "0 0 auto",
+  color: "var(--color-text-tertiary)",
+  fontFamily: "var(--font-family-business)",
+  fontSize: "var(--font-size-sm)",
+  fontWeight: "var(--weight-medium)",
+  fontVariantNumeric: "tabular-nums",
+} satisfies React.CSSProperties;
+
 const SEP_DOT = {
   flex: "0 0 auto",
   color: "var(--color-text-tertiary)",
