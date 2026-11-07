@@ -111,7 +111,7 @@ export function Filmstrip(props: {
               setMenu({ x: event.clientX, y: event.clientY, index });
             }}
           >
-            <SlideStatic slide={slide} aspect={deck.aspect} ctx={ctx} width={thumbWidth} />
+            <SlideStatic slide={slide} aspect={deck.aspect} ctx={ctx} width={thumbWidth} index={index} />
             <span className="se-thumb-n">{index + 1}</span>
           </button>
         ))}

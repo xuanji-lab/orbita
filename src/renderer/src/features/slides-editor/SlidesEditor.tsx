@@ -3,14 +3,15 @@ import type { TextQuote } from "@shared/quote";
 import { DOC_GONE } from "@shared/doc";
 import type { SlidesExportFormat } from "@shared/slides-export";
 import { richTextToPlain, CANVAS_SIZE, newId, type Aspect, type Deck, type SlideElement } from "../../../../shared/slides.ts";
-import { addSlide, appendElements, applyEdit, duplicateSlide, insertImage, newTableElement, newTextBoxFromPlain, removeElements, slideTitle, updateElements, type DrawTool } from "../../../../shared/slides-ops.ts";
+import { addSlide, appendElements, applyEdit, applyTheme, duplicateSlide, insertImage, newTableElement, newTextBoxFromPlain, removeElements, slideTitle, themeNewElement, updateElements, type DrawTool } from "../../../../shared/slides-ops.ts";
 import { SLIDE_BACKGROUNDS, SLIDE_DEFAULT_TEXT, SLIDE_PAGE_WHITE } from "../../../../shared/slides-palette.ts";
+import { THEME_IDS, presetTheme, resolveTheme } from "../../../../shared/slides-theme.ts";
 import { SLIDE_CSS, type RenderContext } from "../../../../shared/slides-render.ts";
 import { api } from "../../api";
 import { ipcErrorText } from "../../utils/ipc-error.ts";
 import { Icon } from "../../shell/Icon";
 import { IconButton } from "../../shell/IconButton";
-import { Menu } from "../../shell/Menu";
+import { Menu, type MenuItem } from "../../shell/Menu";
 import { PanelEmpty } from "../../shell/PanelEmpty";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { SelectButton } from "../settings/SettingControls";
@@ -357,7 +358,7 @@ function DeckWorkspace(props: {
     }
     if (text.trim() !== "") {
       event.preventDefault();
-      insertSimple(newTextBoxFromPlain(text, deck.theme?.color ?? SLIDE_DEFAULT_TEXT));
+      insertSimple(themeNewElement(deck, newTextBoxFromPlain(text, deck.theme?.color ?? SLIDE_DEFAULT_TEXT)));
     }
   };
 
@@ -484,6 +485,13 @@ function DeckWorkspace(props: {
     if (aspect !== deck.aspect) commit(applyEdit(deck, [{ op: "set_deck", aspect }]).deck);
   };
 
+  /** 换主题：整份里绑定了主题的颜色 / 字号 / 字体 / 页背景跟着变；手动改过的值保持（applyTheme），一步可撤销 */
+  const setTheme = (id: string): void => {
+    const theme = presetTheme(id);
+    if (theme !== undefined && deck.theme?.id !== id) commit(applyTheme(deck, theme));
+  };
+  const currentThemeId = deck.theme?.palette === undefined ? null : (deck.theme.id ?? null);
+
   const exportItems = [
     { id: "pdf", format: "pdf", label: t.slides.exportPdf, hint: ".pdf" },
     { id: "html", format: "html", label: t.slides.exportHtml, hint: ".html" },
@@ -493,6 +501,34 @@ function DeckWorkspace(props: {
     { id: "pptx-basic", format: "pptx-basic", label: t.slides.exportPptxBasic, hint: ".pptx" },
     { id: "note", fact: true, label: t.slides.exportFontNote },
   ] as const;
+
+  const aspectItems: MenuItem[] = (["16:9", "4:3"] as const).map((aspect) => ({ id: aspect, label: aspect, checked: deck.aspect === aspect, onSelect: () => setAspect(aspect) }));
+  const themeItems: MenuItem[] = THEME_IDS.map((id) => ({ id: `theme-${id}`, label: (t.slides.themes as Readonly<Record<string, string>>)[id] ?? id, checked: currentThemeId === id, onSelect: () => setTheme(id) }));
+  const zoomItems: MenuItem[] = [
+    { id: "fit", label: t.slides.zoomFit, checked: zoom === "fit", onSelect: () => setZoom("fit") },
+    ...ZOOMS.map((z) => ({ id: String(z), label: `${z}%`, checked: zoom === z, onSelect: () => setZoom(z) })),
+  ];
+  const exportMenuItems: MenuItem[] = exportItems.map((item) =>
+    "rule" in item
+      ? { id: item.id, label: "", rule: true }
+      : "fact" in item
+        ? { id: item.id, label: item.label, fact: true }
+        : { id: item.id, label: item.label, hint: item.hint, disabled: exporting, onSelect: () => void exportAs(item.format as SlidesExportFormat) },
+  );
+  /** 窄面板的「…」：导出 / 比例 / 主题 / 缩放都收在这一个菜单里（与平铺时是同一批动作） */
+  const moreItems: MenuItem[] = [
+    { id: "export-head", label: t.slides.export, header: true },
+    ...exportMenuItems.map((item) => ({ ...item, id: `more-${item.id}` })),
+    { id: "rule-aspect", label: "", rule: true },
+    { id: "aspect-head", label: t.slides.aspect, header: true },
+    ...aspectItems.map((item) => ({ ...item, id: `more-${item.id}` })),
+    { id: "rule-theme", label: "", rule: true },
+    { id: "theme-head", label: t.slides.theme, header: true },
+    ...themeItems.map((item) => ({ ...item, id: `more-${item.id}` })),
+    { id: "rule-zoom", label: "", rule: true },
+    { id: "zoom-head", label: t.slides.zoom, header: true },
+    ...zoomItems.map((item) => ({ ...item, id: `more-${item.id}` })),
+  ];
 
   const toolButton = (label: string, icon: Parameters<typeof Icon>[0]["name"], onClick: () => void, active = false) => (
     <button type="button" className="se-tool" aria-pressed={active} title={label} onClick={onClick}>
@@ -558,48 +594,61 @@ function DeckWorkspace(props: {
         <span className="dp-status" data-state={props.syncState} role="status" title={props.syncError ?? props.status}>
           {props.syncState === "saved" ? <Icon name="check" size={14} strokeWidth={2} /> : props.status}
         </span>
-        <Menu
-          align="end"
-          items={exportItems.map((item) =>
-            "rule" in item
-              ? { id: item.id, label: "", rule: true }
-              : "fact" in item
-                ? { id: item.id, label: item.label, fact: true }
-                : { id: item.id, label: item.label, hint: item.hint, disabled: exporting, onSelect: () => void exportAs(item.format as SlidesExportFormat) },
-          )}
-          trigger={({ open, toggle }) => (
-            <button type="button" className="se-tool se-tool-menu" aria-expanded={open} disabled={exporting} onClick={toggle}>
-              <Icon name={exporting ? "loader-circle" : "download"} size={16} strokeWidth={1.8} spin={exporting} />
-              <span className="se-tool-label">{t.slides.export}</span>
-              <Icon name="chevron-down" size={12} strokeWidth={2} />
-            </button>
-          )}
-        />
+        <span className="se-bar-wide">
+          <Menu
+            align="end"
+            items={exportMenuItems}
+            trigger={({ open, toggle }) => (
+              <button type="button" className="se-tool se-tool-menu" aria-expanded={open} disabled={exporting} onClick={toggle}>
+                <Icon name={exporting ? "loader-circle" : "download"} size={16} strokeWidth={1.8} spin={exporting} />
+                <span className="se-tool-label">{t.slides.export}</span>
+                <Icon name="chevron-down" size={12} strokeWidth={2} />
+              </button>
+            )}
+          />
+        </span>
         <button type="button" className="se-tool se-tool-primary" onClick={() => setPlaying(true)}>
           <Icon name="play" size={16} strokeWidth={1.8} />
           <span className="se-tool-label">{t.slides.play}</span>
         </button>
-        <Menu
-          align="end"
-          items={(["16:9", "4:3"] as const).map((aspect) => ({ id: aspect, label: aspect, checked: deck.aspect === aspect, onSelect: () => setAspect(aspect) }))}
-          trigger={({ open, toggle }) => (
-            <SelectButton open={open} onClick={toggle} title={t.slides.aspect}>
-              {deck.aspect}
-            </SelectButton>
-          )}
-        />
-        <Menu
-          align="end"
-          items={[
-            { id: "fit", label: t.slides.zoomFit, checked: zoom === "fit", onSelect: () => setZoom("fit") },
-            ...ZOOMS.map((z) => ({ id: String(z), label: `${z}%`, checked: zoom === z, onSelect: () => setZoom(z) })),
-          ]}
-          trigger={({ open, toggle }) => (
-            <SelectButton open={open} onClick={toggle} title={t.slides.zoom}>
-              {scaleLabel}
-            </SelectButton>
-          )}
-        />
+        <span className="se-bar-wide">
+          {/* 页面设置：画面比例 + 主题（换主题整份跟着变） */}
+          <Menu
+            align="end"
+            items={[
+              { id: "aspect-head", label: t.slides.aspect, header: true },
+              ...aspectItems,
+              { id: "rule-theme", label: "", rule: true },
+              { id: "theme-head", label: t.slides.theme, header: true },
+              ...themeItems,
+            ]}
+            trigger={({ open, toggle }) => (
+              <SelectButton open={open} onClick={toggle} title={`${t.slides.aspect} · ${t.slides.theme}`}>
+                {deck.aspect}
+              </SelectButton>
+            )}
+          />
+          <Menu
+            align="end"
+            items={zoomItems}
+            trigger={({ open, toggle }) => (
+              <SelectButton open={open} onClick={toggle} title={t.slides.zoom}>
+                {scaleLabel}
+              </SelectButton>
+            )}
+          />
+        </span>
+        <span className="se-bar-more">
+          <Menu
+            items={moreItems}
+            align="end"
+            trigger={({ open, toggle }) => (
+              <IconButton label={t.slides.moreActions} size={28} ariaExpanded={open} onClick={toggle}>
+                <Icon name="ellipsis-vertical" size={16} strokeWidth={1.8} />
+              </IconButton>
+            )}
+          />
+        </span>
       </div>
       <FormatBar
         deck={deck}

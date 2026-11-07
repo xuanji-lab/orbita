@@ -15,6 +15,7 @@
 import PptxGenJS from "pptxgenjs";
 import { IMAGE_MIME, type ImageInfo } from "../../shared/image-size.ts";
 import { BASIC_FONTS } from "../../shared/slides-export.ts";
+import { footerElement } from "../../shared/slides-footer.ts";
 import {
   CANVAS_SIZE,
   DEFAULT_FONT_FAMILY,
@@ -153,8 +154,11 @@ function addText(slide: PptxGenJS.Slide, element: TextElement, deck: Deck, opts:
     margin: 0,
     fit: "none",
     wrap: true,
-    paraSpaceAfter: 0,
+    // 段后间距（列表项之间的 paraGap）、行高倍数、字距：版式落出来的文字带这三项，画布与 pptx 要一致
+    paraSpaceAfter: element.paraGap === undefined ? 0 : Math.round(element.paraGap * PT * 10) / 10,
     paraSpaceBefore: 0,
+    ...(element.lineHeight === undefined ? {} : { lineSpacingMultiple: element.lineHeight / 1.2 }),
+    ...(element.letterSpacing === undefined || element.letterSpacing === 0 ? {} : { charSpacing: Math.round(element.letterSpacing * PT * 10) / 10 }),
     ...(element.rotate === undefined ? {} : { rotate: element.rotate }),
   });
 }
@@ -337,7 +341,7 @@ function addLine(pptx: PptxGenJS, slide: PptxGenJS.Slide, element: LineElement):
   });
 }
 
-function addSlide(pptx: PptxGenJS, deck: Deck, source: Slide, opts: PptxOptions): void {
+function addSlide(pptx: PptxGenJS, deck: Deck, source: Slide, index: number, opts: PptxOptions): void {
   const slide = pptx.addSlide();
   const background = pptxColor(source.background ?? deck.theme?.background ?? "#ffffff");
   slide.background = { color: background?.color ?? "FFFFFF" };
@@ -360,6 +364,9 @@ function addSlide(pptx: PptxGenJS, deck: Deck, source: Slide, opts: PptxOptions)
         break;
     }
   }
+  // 页脚「标题 · 页码」：与画布同一个函数给出的文字元素
+  const footer = footerElement(deck, source, index);
+  if (footer !== null) addText(slide, footer, deck, opts);
   if (source.notes !== undefined && source.notes !== "") slide.addNotes(source.notes);
 }
 
@@ -370,7 +377,7 @@ export async function buildPptx(deck: Deck, opts: PptxOptions): Promise<Buffer> 
   pptx.layout = "ORBITA";
   pptx.title = deck.title;
   pptx.company = "Orbita";
-  for (const slide of deck.slides) addSlide(pptx, deck, slide, opts);
+  deck.slides.forEach((slide, index) => addSlide(pptx, deck, slide, index, opts));
   const out = await pptx.write({ outputType: "nodebuffer" });
   return Buffer.from(out as Buffer);
 }

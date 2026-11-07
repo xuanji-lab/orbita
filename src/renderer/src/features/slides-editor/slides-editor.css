@@ -12,7 +12,7 @@
 .se-bar {
   display: flex;
   flex: 0 0 auto;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: var(--space-1);
   padding: var(--space-1) var(--space-3);
@@ -57,10 +57,33 @@
   background: var(--color-accent-strong);
   color: var(--color-accent-fg);
 }
-/* 面板窄时只留图标（容器查询：跟面板宽，不跟窗口宽） */
+.se-bar > * {
+  flex-shrink: 0;
+}
+/* 导出 / 画面比例·主题 / 缩放：面板够宽时平铺（display: contents 让它们直接参与工具条的 flex）；「…」只在窄档出现 */
+.se-bar-wide {
+  display: contents;
+}
+.se-bar-more {
+  display: none;
+}
+/*
+ * 工具条三档（以面板宽度为准，容器查询，不靠 JS 量宽；与文档工具栏同一思路）：
+ *  1. 够宽：文字标签平铺；
+ *  2. ≤800：工具只留图标（tooltip 仍写全名）；
+ *  3. ≤560：导出 / 比例·主题 / 缩放收进一个「…」菜单，永远一行。
+ */
 @container dp (max-width: 800px) {
   .se-tool-label {
     display: none;
+  }
+}
+@container dp (max-width: 560px) {
+  .se-bar-wide {
+    display: none;
+  }
+  .se-bar-more {
+    display: inline-flex;
   }
 }
 
@@ -509,4 +532,9 @@
   color: var(--color-text-secondary);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-sm);
+}
+
+/* 页脚「标题 · 页码」：由主题画的装饰层，不可点选、不挡拖动 */
+.se-chrome {
+  pointer-events: none;
 }

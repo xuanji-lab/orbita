@@ -79,7 +79,7 @@ export function PlayMode(props: { deck: Deck; ctx: RenderContext; startIndex: nu
           go(event.clientX - rect.left > rect.width / 3 ? 1 : -1);
         }}
       >
-        {slide !== undefined && <SlideStatic slide={slide} aspect={deck.aspect} ctx={ctx} width={Math.max(canvas.w * scale, 1)} />}
+        {slide !== undefined && <SlideStatic slide={slide} aspect={deck.aspect} ctx={ctx} width={Math.max(canvas.w * scale, 1)} index={index} />}
       </div>
       <div className="se-play-bar" onClick={(event) => event.stopPropagation()}>
         <span className="se-play-count" role="status">

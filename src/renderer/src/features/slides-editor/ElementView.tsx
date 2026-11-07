@@ -44,6 +44,8 @@ export const SlideStatic = memo(function SlideStatic(props: {
   ctx: RenderContext;
   /** 渲染宽度（px）；高度按比例 */
   width: number;
+  /** 这一页在 deck 里的下标（0 起）：页脚「标题 · 页码」要用；缺席 = 不画页脚 */
+  index?: number;
 }) {
   const canvas = CANVAS_SIZE[props.aspect];
   const scale = props.width / canvas.w;
@@ -52,7 +54,7 @@ export const SlideStatic = memo(function SlideStatic(props: {
       <div
         className="se-static-inner"
         style={{ width: canvas.w, height: canvas.h, transform: `scale(${scale})` }}
-        dangerouslySetInnerHTML={{ __html: renderSlide(props.slide, props.ctx) }}
+        dangerouslySetInnerHTML={{ __html: renderSlide(props.slide, props.ctx, props.index) }}
       />
     </div>
   );

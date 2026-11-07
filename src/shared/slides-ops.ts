@@ -584,7 +584,7 @@ export function newDrawnElement(tool: DrawTool, box: DrawBox, textColor: string,
 /** 居中的 3×3 空表格 */
 export function newTableElement(deck: Deck): SlideElement {
   const canvas = CANVAS_SIZE[deck.aspect];
-  return {
+  return themeNewElement(deck, {
     id: newId(),
     kind: "table",
     x: (canvas.w - 720) / 2,
@@ -598,10 +598,39 @@ export function newTableElement(deck: Deck): SlideElement {
     headerFill: SLIDE_TABLE_HEADER_FILL,
     headerColor: "#ffffff",
     borderColor: SLIDE_TABLE_BORDER,
-  };
+  });
 }
 
 /** 粘贴进来的纯文字 → 文字框（每行一段） */
 export function newTextBoxFromPlain(text: string, color: string): SlideElement {
   return { id: newId(), kind: "text", x: 80, y: 80, w: 640, h: 160, html: plainToRichHtml(text), fontSize: 28, color, align: "left", valign: "top" };
+}
+
+/**
+ * 带色板主题的文稿里，用户新建的元素也绑定主题（文字 = ink、形状 = accent 底 + onAccent 字、线 = ink、表格 = accent 表头），
+ * 这样之后换主题它们不会留在旧配色里（比如换成深色主题后冒出一块深色字）。老文稿（无色板）保持原样。
+ */
+export function themeNewElement(deck: Deck, element: SlideElement): SlideElement {
+  if (deck.theme?.palette === undefined) return element;
+  const rt = resolveTheme(deck.theme);
+  const pick = (field: BindField, token: string): string => String(tokenValue(rt, field, token));
+  switch (element.kind) {
+    case "text":
+      return { ...element, color: pick("color", "ink"), bind: { color: "ink" } };
+    case "line":
+      return { ...element, stroke: pick("stroke", "ink"), bind: { stroke: "ink" } };
+    case "shape":
+      return { ...element, fill: pick("fill", "accent"), stroke: "none", color: pick("color", "onAccent"), bind: { fill: "accent", color: "onAccent" } };
+    case "table":
+      return {
+        ...element,
+        color: pick("color", "ink"),
+        headerFill: pick("headerFill", "accent"),
+        headerColor: pick("headerColor", "onAccent"),
+        borderColor: pick("borderColor", "line"),
+        bind: { color: "ink", headerFill: "accent", headerColor: "onAccent", borderColor: "line" },
+      };
+    default:
+      return element;
+  }
 }

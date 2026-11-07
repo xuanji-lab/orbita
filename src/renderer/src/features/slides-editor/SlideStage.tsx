@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { CANVAS_SIZE, newId, sanitizeRichHtml, type Deck, type LineElement, type Slide, type SlideElement } from "../../../../shared/slides.ts";
-import { appendElements, newDrawnElement, removeElements, updateElements, type DrawTool } from "../../../../shared/slides-ops.ts";
+import { appendElements, newDrawnElement, removeElements, themeNewElement, updateElements, type DrawTool } from "../../../../shared/slides-ops.ts";
 import { SLIDE_DEFAULT_TEXT } from "../../../../shared/slides-palette.ts";
+import { footerElement } from "../../../../shared/slides-footer.ts";
 import { renderElementInner, slideBackground, type RenderContext } from "../../../../shared/slides-render.ts";
-import { ElementView } from "./ElementView";
+import { ElementView, boxStyle } from "./ElementView";
 import {
   HANDLES,
   boxFromPoints,
@@ -64,6 +65,8 @@ export function SlideStage(props: {
   const [marquee, setMarquee] = useState<Box | null>(null);
   const [drawBox, setDrawBox] = useState<{ tool: DrawTool; box: Box; a: [number, number]; b: [number, number] } | null>(null);
   const textColor = deck.theme?.color ?? SLIDE_DEFAULT_TEXT;
+  // 页脚由主题统一画（不是元素，点不中、不进撤销栈）
+  const footer = useMemo(() => footerElement(deck, slide, deck.slides.indexOf(slide)), [deck, slide]);
 
   const pointer = useCallback(
     (event: { clientX: number; clientY: number }): [number, number] => {
@@ -239,9 +242,9 @@ export function SlideStage(props: {
         if (drag.tool === "line" || drag.tool === "arrow") {
           const a: [number, number] = [drag.ox, drag.oy];
           const b: [number, number] = dragged && drawBox !== null ? drawBox.b : [drag.ox + 320, drag.oy];
-          element = { ...(newDrawnElement(drag.tool, boxFromPoints(a[0], a[1], b[0], b[1]), textColor, true) as LineElement), ...lineFromEnds(a, b) };
+          element = { ...(themeNewElement(deck, newDrawnElement(drag.tool, boxFromPoints(a[0], a[1], b[0], b[1]), textColor, true)) as LineElement), ...lineFromEnds(a, b) };
         } else {
-          const base = newDrawnElement(drag.tool, box, textColor, dragged);
+          const base = themeNewElement(deck, newDrawnElement(drag.tool, box, textColor, dragged));
           // 点一下插入：以点击处为中心
           element = dragged ? base : { ...base, x: base.x - base.w / 2, y: base.y - base.h / 2 };
         }
@@ -318,6 +321,7 @@ export function SlideStage(props: {
               />
             );
           })}
+          {footer !== null && <div className="sl-el se-chrome" style={boxStyle(footer)} dangerouslySetInnerHTML={{ __html: renderElementInner(footer, ctx) }} />}
         </section>
 
         {/* 选中框与手柄（画布坐标；线宽 / 手柄大小除以缩放，屏幕上恒定） */}

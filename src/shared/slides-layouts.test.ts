@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { applyEdit, applyTheme, applyWrite, createDeck, lintSlide, patchElement, updateElements, unbindChanged } from "./slides-ops.ts";
+import { applyEdit, applyTheme, applyWrite, createDeck, lintSlide, newDrawnElement, newTableElement, patchElement, themeNewElement, updateElements, unbindChanged } from "./slides-ops.ts";
 import { CANVAS_SIZE, ElementError, normalizeElement, normalizeTheme, parseDeck, serializeDeck, type Deck, type SlideElement, type TextElement } from "./slides.ts";
 import { footerElement } from "./slides-footer.ts";
 import { buildLayout, LAYOUT_NAMES, type LayoutImage } from "./slides-layouts.ts";
@@ -107,6 +107,24 @@ describe("主题 token", () => {
     assert.equal(custom?.palette?.bg, "#ffffff");
     assert.equal(custom?.background, "#ffffff", "旧字段由色板派生");
     assert.deepEqual(normalizeTheme({ color: "#111111", background: "#fafafa" }), { color: "#111111", background: "#fafafa" });
+  });
+});
+
+describe("用户新建的元素也跟主题", () => {
+  it("带色板的文稿里新建文字 / 形状 / 表格 / 线绑定主题，换主题后颜色跟着变；老文稿保持原样", () => {
+    const deck = themed("night");
+    const box = { x: 10, y: 10, w: 100, h: 60 };
+    const text = themeNewElement(deck, newDrawnElement("text", box, "#000000", true)) as TextElement;
+    assert.equal(text.bind?.color, "ink");
+    assert.equal(text.color, resolveTheme(deck.theme).palette.ink);
+    const table = newTableElement(deck);
+    assert.equal(table.kind === "table" && table.bind?.headerFill, "accent");
+    const withText = { ...deck, slides: [{ id: "s", elements: [text] }] };
+    const after = applyTheme(withText, presetTheme("ink")).slides[0]!.elements[0] as TextElement;
+    assert.equal(after.color, resolveTheme(presetTheme("ink")).palette.ink);
+    const legacy = createDeck({ title: "老稿" });
+    const plain = newDrawnElement("text", box, "#111111", true);
+    assert.equal(themeNewElement(legacy, plain), plain);
   });
 });
 
