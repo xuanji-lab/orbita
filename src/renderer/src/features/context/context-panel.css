@@ -128,3 +128,268 @@
 .panel-empty[data-tone="danger"] {
   color: var(--color-danger);
 }
+
+/* 上下文页签顶部的视野切换（本轮 / 整个任务）：原来在胶囊里，胶囊让给了「进度 / 上下文」 */
+.ctx-scope {
+  padding: var(--space-2) var(--space-4) 0;
+  justify-content: flex-start;
+}
+
+/* ===== 进度页签（TaskProgress.tsx） =====
+ * 字在内线上（右栏行的左内边距 --space-4，与上下文页签同一根线）；行首 14px 状态槽与侧栏同款。
+ * 一屏三种字：头一行 base/600、正文 base、元信息 sm/tertiary。 */
+.tp-body {
+  display: grid;
+  align-content: start;
+  gap: var(--space-1);
+  padding: var(--space-2) 0 var(--space-4);
+}
+.tp-slot {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+.tp-now {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-height-md);
+  padding: 0 var(--space-4);
+}
+.tp-now b {
+  font-weight: var(--weight-semibold);
+}
+.tp-sub {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+.tp-clock {
+  margin-left: auto;
+  flex: none;
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.tp-sec {
+  display: grid;
+  gap: var(--space-0-5);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border-subtle);
+  margin: var(--space-1) var(--space-4) 0;
+}
+.tp-gh {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+.tp-n {
+  font-weight: var(--weight-regular);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.tp-hint {
+  margin: 0;
+  padding: var(--space-1) var(--space-4);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+.tp-sec .tp-hint {
+  padding: var(--space-1) 0;
+}
+
+/* 计划：空圈 / 在做（蓝饼）/ 勾；做完的退到三级色 */
+.tp-plan {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-0-5);
+}
+.tp-plan li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  line-height: var(--line-height-ui);
+}
+.tp-plan .tp-slot {
+  height: calc(var(--font-size-base) * 1.5);
+}
+.tp-plan li[data-status="done"] {
+  color: var(--color-text-tertiary);
+}
+.tp-plan li[data-status="done"] .tp-slot {
+  color: var(--color-success);
+}
+.tp-plan li[data-status="in_progress"] .tp-text {
+  font-weight: var(--weight-semibold);
+}
+.tp-ring {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--color-text-tertiary);
+}
+.tp-text {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+/* 做过的：一轮一块；头是时刻 + 用户那句话，下一行计数；展开是章节时间线 */
+.tp-turn {
+  display: grid;
+  gap: var(--space-0-5);
+  padding: var(--space-1) 0;
+}
+.tp-turn-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tp-time {
+  flex: none;
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.tp-ask {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--color-text-secondary);
+}
+.tp-turn[data-open] .tp-ask {
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+}
+.tp-meta {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+.tp-turn > .tp-meta {
+  padding-left: calc(5ch + var(--space-2));
+}
+.tp-chapters {
+  list-style: none;
+  margin: var(--space-1) 0 0 var(--space-1);
+  padding: 0 0 0 var(--space-3);
+  border-left: 1px solid var(--color-border-subtle);
+  display: grid;
+  gap: var(--space-0-5);
+}
+.tp-chapters li {
+  position: relative;
+}
+.tp-chapters li::before {
+  content: "";
+  position: absolute;
+  left: calc(-1 * var(--space-3) - 4.5px);
+  top: 10px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  box-sizing: border-box;
+  background: var(--color-bg-panel);
+  border: 1.5px solid var(--color-text-tertiary);
+}
+.tp-chapters li[data-failed]::before {
+  border-color: var(--color-danger);
+  background: var(--color-danger);
+}
+.tp-chapters li[data-live]::before {
+  border-color: var(--color-info);
+  background: var(--color-info);
+}
+.tp-chapters button {
+  display: grid;
+  gap: 0;
+  width: 100%;
+  padding: var(--space-1) var(--space-1-5);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.tp-chapters button:hover {
+  background: var(--color-bg-hover);
+}
+.tp-ch {
+  line-height: var(--line-height-ui);
+  color: var(--color-text-primary);
+}
+.tp-ch.think {
+  color: var(--color-text-secondary);
+}
+
+/* 留到以后：勾掉即完成 */
+.tp-later {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  line-height: var(--line-height-ui);
+  cursor: pointer;
+}
+.tp-later input {
+  margin: var(--space-1) 0 0;
+  accent-color: var(--color-accent);
+}
+
+/* 页底一行上下文用量：点进「上下文」页签 */
+.tp-ctx {
+  display: grid;
+  gap: var(--space-1-5);
+  margin: var(--space-3) var(--space-4) 0;
+  padding: var(--space-2) var(--space-2-5);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.tp-ctx:hover {
+  background: var(--color-bg-hover);
+}
+.tp-ctx-line {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.tp-ctx-bar {
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+}
+.tp-ctx-bar i {
+  display: block;
+  height: 100%;
+  background: var(--color-text-tertiary);
+}

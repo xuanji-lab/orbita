@@ -124,9 +124,9 @@ export function RightRail(props: {
         lit={props.panel === "review"}
         onClick={() => props.onPanel(props.panel === "review" ? null : "review")}
       />
-      {/* 上下文：智能体此刻装了什么（按来源分组）。紧跟审查——两者都是「看这条会话」 */}
+      {/* 这条任务（进度 + 上下文，2026-10-30）：它在做什么、做过什么、脑子里装了什么。紧跟审查——两者都是「看这条会话」 */}
       <RailEntryButton
-        icon="layers"
+        icon="list-todo"
         label={t.rail.context}
         lit={props.panel === "context"}
         onClick={() => props.onPanel(props.panel === "context" ? null : "context")}

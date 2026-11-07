@@ -30,6 +30,7 @@ import { ExitCard } from "./ExitCard";
 import { PanelButton } from "../../shell/RightPanel";
 import { ProcessViewContext } from "./process-view-context";
 import { runStateOf } from "../notify/completion-notice.ts";
+import { REVEAL_ENTRY_EVENT } from "../context/task-progress.ts";
 import {
   CHAPTER_STEPS_SHOWN,
   SLOW_GAP_MS,
@@ -1735,6 +1736,20 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
     [previewMessageId, turnView],
   );
   const cutRef = useRef<HTMLDivElement | null>(null);
+  // 「这条任务 › 进度」点一章：对话滚到那个过程块并闪一下（面板与对话不共享状态，走一次性事件）
+  useEffect(() => {
+    const onReveal = (event: Event) => {
+      const key = (event as CustomEvent<string>).detail;
+      const target = document.querySelector(`[data-entry-key="${CSS.escape(key)}"]`);
+      if (!(target instanceof HTMLElement)) return;
+      target.scrollIntoView({ block: "center", behavior: "smooth" });
+      target.classList.remove("entry-revealed");
+      void target.offsetWidth;
+      target.classList.add("entry-revealed");
+    };
+    window.addEventListener(REVEAL_ENTRY_EVENT, onReveal);
+    return () => window.removeEventListener(REVEAL_ENTRY_EVENT, onReveal);
+  }, []);
   useEffect(() => {
     if (cutIndex >= 0) cutRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [cutIndex]);
@@ -1816,7 +1831,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 {t.chat.previewCut}
               </div>
             )}
-            <div className={doomed ? "revert-doomed" : "revert-keep"}>
+            <div className={doomed ? "revert-doomed" : "revert-keep"} data-entry-key={entry.key}>
             {entry.kind === "turnProcess" ? (
               <TurnProcessLine
                 unit={entry}

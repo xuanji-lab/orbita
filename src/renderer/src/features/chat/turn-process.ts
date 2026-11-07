@@ -61,7 +61,8 @@ export function processCounts(
   results: ToolResultIndex,
   skills: ReadonlyArray<{ slug: string; name: string }> = [],
 ): ProcessCounts {
-  const calls = processCalls(steps);
+  // 写计划不是干活的一步：它是记账（计划本身在右栏「这条任务 › 进度」），不进步数与次数
+  const calls = processCalls(steps).filter((call) => call.toolName !== "update_plan");
   const by = new Map<string, number>();
   const files = new Set<string>();
   let failed = 0;
