@@ -26,7 +26,7 @@
  */
 import { copyFile, mkdir, open, readdir, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
   parseSessionEntries,
   migrateSessionEntries,
@@ -44,6 +44,8 @@ import type {
 } from "@earendil-works/pi-protocol";
 import { writeTextAtomic } from "../atomic-write.ts";
 import { isNotFound } from "../fs-errors.ts";
+// path 是不是在 root 下面：原来在本文件里，欠了审查面板 / 文件面板 / 内置浏览器都要同一条判据，搬到共用处
+import { isInside } from "../path-boundary.ts";
 import { isEmptyErrorAssistantEntry } from "../../agent/branch-cut.ts";
 import { parseThinkingLevel } from "../../shared/thinking.ts";
 import { deriveWorkspaceName, normalizeWorkspaceName, type Workspace } from "../../shared/workspace.ts";
@@ -1074,19 +1076,6 @@ function usableCwd(headerCwd: string, promaRoots: readonly string[], defaultCwd:
   if (headerCwd === "") return defaultCwd;
   if (promaRoots.some((root) => isInside(root, headerCwd))) return defaultCwd;
   return headerCwd;
-}
-
-/**
- * path 是不是 root 本身或在它下面。用 relative 判断，不用前缀比较（拼 `${root}/`、
- * `${root}${sep}`，或 shared/path 的 pathWithin）：
- * - 写死 `/` 在 Windows 上永远不成立（resolve 产出反斜杠），数据根里每个文件都被判「越界」；
- * - 前缀比较区分大小写，而 Windows 路径不区分——盘符 `c:` / `C:`、索引里记的用户目录与
- *   homedir() 的大小写不一致时同样误判越界。path.win32.relative 按不区分大小写比较。
- * pathWithin 留给 renderer（那里没有 node:path）；主进程判越界走这里。
- */
-function isInside(root: string, path: string): boolean {
-  const rel = relative(resolve(root), resolve(path));
-  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
 // ---------------------------------------------------------------------------

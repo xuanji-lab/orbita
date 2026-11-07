@@ -3,13 +3,13 @@
  * 现算好传进来，这里只管校验与列目录——ipc.ts import electron，逻辑放那里没法直接测。
  *
  * 白名单两道都在这里：`root` 必须是 `fs:roots` 回过的路径之一；`dir` 与 `root` 都过
- * realpath 再判包含（`relative` 不以 `..` 开头且不是绝对路径）。**realpath 解析顺带堵住
- * symlink 跳板**：根内一个链接指向根外，解析后落在根外，当场拒绝。两侧都过 realpath 后
- * 天然是同一规范形（permission.ts 的 foldPath 只在 win 上需要，那是 resolve 不解析的场合）。
+ * realpath 再判包含（path-boundary.ts 的 isInside，与审查面板 / 内置浏览器同一条判据）。
+ * **realpath 解析顺带堵住 symlink 跳板**：根内一个链接指向根外，解析后落在根外，当场拒绝。
+ * 两侧都过 realpath 后天然是同一规范形（permission.ts 的 foldPath 只在 win 上需要，那是 resolve 不解析的场合）。
  */
 import { lstat, readdir, realpath } from "node:fs/promises";
 import type { Stats } from "node:fs";
-import { isAbsolute, join, relative } from "node:path";
+import { join } from "node:path";
 import {
   sortFileEntries,
   type FileEntry,
@@ -18,6 +18,7 @@ import {
   type FileRoot,
 } from "../../shared/files.ts";
 import { isNotFound } from "../fs-errors.ts";
+import { isInside } from "../path-boundary.ts";
 
 /**
  * 白名单校验，返回 `dir` realpath 后的真实路径。`fs:list` 与 `fs:reveal` 共用——
@@ -40,8 +41,8 @@ export async function whitelistedPath(roots: readonly FileRoot[], req: FileListR
   } catch {
     throw new Error(`目录不存在：${req.dir}`);
   }
-  const rel = relative(rootReal, dirReal);
-  if (rel.startsWith("..") || isAbsolute(rel)) {
+  // 以前是 `relative(...).startsWith("..")`：根里名叫 `..cache` 的目录也被当成「跑出根」
+  if (!isInside(rootReal, dirReal)) {
     throw new Error(`「${req.dir}」不在允许的根之内`);
   }
   return dirReal;

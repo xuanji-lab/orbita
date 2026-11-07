@@ -4,6 +4,7 @@
  */
 import { ipcRenderer } from "electron";
 import { ipcChannels, type SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
+import type { ArtifactOpenResult } from "../../shared/browser.ts";
 import type { PromptImage } from "../../shared/prompt-images.ts";
 import type { RevertPlan, UndoPlan } from "../../shared/revert.ts";
 import type {
@@ -109,8 +110,11 @@ export const sessionApi = {
   /** 执行单轮撤销：只还原这一轮的文件，pi 本子追加一条告知模型 */
   undo: (id: string, turnId: string): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionUndo, id, turnId),
-  /** 轮尾产物在内置浏览器打开（仅会话文件账里的网页文件） */
-  openArtifactInBrowser: (id: string, path: string): Promise<void> =>
+  /**
+   * 轮尾产物在内置浏览器打开：文件账上有、realpath 后在本会话的目录里、是网页文件，才打开。
+   * 不放行时回原因码（卡片照着说），不抛错
+   */
+  openArtifactInBrowser: (id: string, path: string): Promise<ArtifactOpenResult> =>
     ipcRenderer.invoke(ipcChannels.sessionOpenArtifactInBrowser, id, path),
   /** 轮尾产物在系统文件管理器里定位（仅会话文件账里记过的文件） */
   revealArtifact: (id: string, path: string): Promise<void> =>

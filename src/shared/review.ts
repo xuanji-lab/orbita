@@ -10,6 +10,11 @@
  *
  * git 三个来源**只读**（status / diff / rev-parse，绝不写）；列表与统计在主进程算好，
  * renderer 不碰 git。diff 正文按需拉（`review:diff`）——一屏只展开一个文件。
+ *
+ * **读盘边界**：`review:diff` 的 path 是 renderer 传来的，主进程不信——git 来源只认工作区相对、
+ * resolve / realpath 后仍在工作区里的路径；task 来源只认本任务文件账上的路径。符号链接（git 未跟踪 /
+ * task 来源）不跟到目标读，只报「这是个链接、指向哪」。拒绝与失败走 `ReviewDiff.error`，
+ * 不再伪装成「二进制」。
  */
 
 export type ReviewSource = "task" | "unstaged" | "staged" | "branch";
@@ -32,6 +37,11 @@ export interface ReviewEntry {
   restored?: boolean;
   /** task 来源专用：快照不可用（超限 / 非 utf8 / blob 丢失），出不了基线 diff */
   noBaseline?: boolean;
+  /**
+   * 这一项是符号链接（git 未跟踪 / task 来源）：面板不跟到目标去读，added / removed 恒为 0。
+   * 值是链接里写的目标（readlink 原文，可能是相对路径），界面标「链接」并给出它指向哪
+   */
+  symlink?: string;
 }
 
 /**
@@ -69,6 +79,30 @@ export interface ReviewDiff {
   binary: boolean;
   /** task 来源：基线与现状一致，没有正文可展开 */
   restored: boolean;
+  /** 同 ReviewEntry.symlink：链接本身，正文不读（diff 恒 null） */
+  symlink?: string;
+  /**
+   * 拒绝或失败：diff 恒 null、binary / restored 恒 false，面板按 reason 说清楚。以前这些情况
+   * 一律回 `{ diff: null, binary: false }`，界面显示成「二进制」。message 是英文原句（日志 / 悬停用）
+   */
+  error?: { reason: ReviewDiffErrorReason; message: string };
+}
+
+export type ReviewDiffErrorReason =
+  /** 入参形状不对（renderer 侧 bug） */
+  | "invalid-request"
+  /** 会话不在了（meta 读不到） */
+  | "task-not-found"
+  /** git 来源：绝对路径，或 resolve / realpath 之后不在工作区（会话 cwd）里 */
+  | "outside-workspace"
+  /** task 来源：路径不在本任务的文件账上 */
+  | "not-in-record"
+  /** 跑 git / 读盘抛错 */
+  | "failed";
+
+/** 拒绝 / 失败的回执（主进程三处共用：ipc 入口、git 来源、task 来源） */
+export function reviewDiffError(reason: ReviewDiffErrorReason, message: string): ReviewDiff {
+  return { diff: null, binary: false, restored: false, error: { reason, message } };
 }
 
 // ————————————————————————————————————————————————
