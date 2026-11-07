@@ -4,8 +4,10 @@ import {
   CHIPS_MAX_LENGTH,
   chipRangeAfter,
   chipRangeBefore,
+  chipRemovalRange,
   mirrorSegments,
   parseChips,
+  snapSelection,
 } from "./composer-chips.ts";
 import { whiteoutSegments } from "./whiteout-segments.ts";
 
@@ -186,5 +188,96 @@ describe("mirrorSegments —— 修正液与 chip 的叠加", () => {
       { text: "english", whiteout: false, chip: false, pasteRun: true },
       { text: "话", whiteout: false, chip: false, pasteRun: false },
     ]);
+  });
+});
+
+describe("mirrorSegments —— chip 整颗不切（胶囊盖在整颗 token 上）", () => {
+  it("小学作业：名字里有中文的 token 跨了修正液的两段，仍是一颗 chip", () => {
+    const text = "用 /skill:笔记 整理";
+    const segments = mirrorSegments(whiteoutSegments(text), parseChips(text));
+    deepStrictEqual(
+      segments.filter((seg) => seg.chip),
+      [{ text: "/skill:笔记", whiteout: false, chip: true, chipKind: "skill", pasteRun: false }],
+    );
+    // 拼回去仍是原文：镜像的 textContent 必须与 textarea 逐字一致（caret-point 靠它）
+    deepStrictEqual(segments.map((seg) => seg.text).join(""), text);
+  });
+
+  it("展开段先开头、与后面的 chip 交叠：chip 仍是整颗，展开段在它前面截断", () => {
+    deepStrictEqual(
+      mirrorSegments([{ text: "0123456789", whiteout: false }], [{ start: 3, end: 6 }], [{ start: 1, end: 5 }]),
+      [
+        { text: "0", whiteout: false, chip: false, pasteRun: false },
+        { text: "12", whiteout: false, chip: false, pasteRun: true },
+        { text: "345", whiteout: false, chip: true, pasteRun: false },
+        { text: "6789", whiteout: false, chip: false, pasteRun: false },
+      ],
+    );
+  });
+});
+
+describe("snapSelection —— 光标与选区不停在胶囊中间", () => {
+  // 「看 /skill:ab 再」：chip [2, 11)
+  const text = "看 /skill:ab 再";
+  const chips = parseChips(text);
+  const at = (position: number) => ({ start: position, end: position });
+
+  it("没有 chip、或端点不在 chip 中间：原样", () => {
+    deepStrictEqual(snapSelection([], at(5), null), at(5));
+    deepStrictEqual(snapSelection(chips, at(2), at(1)), at(2));
+    deepStrictEqual(snapSelection(chips, at(11), at(12)), at(11));
+    deepStrictEqual(snapSelection(chips, { start: 0, end: 13 }, null), { start: 0, end: 13 });
+  });
+
+  it("← 从胶囊尾进来：一步跨到胶囊头", () => {
+    deepStrictEqual(snapSelection(chips, at(10), at(11)), at(2));
+  });
+
+  it("→ 从胶囊头进来：一步跨到胶囊尾", () => {
+    deepStrictEqual(snapSelection(chips, at(3), at(2)), at(11));
+  });
+
+  it("↑↓ 从别的行落进来：按来的方向（上一次光标在左 = 往右走）", () => {
+    deepStrictEqual(snapSelection(chips, at(6), at(0)), at(11));
+    deepStrictEqual(snapSelection(chips, at(6), at(13)), at(2));
+  });
+
+  it("点进胶囊（没有方向）：落到最近的一边，正中间算尾", () => {
+    deepStrictEqual(snapSelection(chips, at(4), null), at(2));
+    deepStrictEqual(snapSelection(chips, at(9), null), at(11));
+  });
+
+  it("Shift+→ 扩选进胶囊：整颗选上", () => {
+    deepStrictEqual(snapSelection(chips, { start: 2, end: 3 }, at(2)), { start: 2, end: 11 });
+  });
+
+  it("Shift+← 缩选退进胶囊：整颗让出去", () => {
+    deepStrictEqual(snapSelection(chips, { start: 0, end: 10 }, { start: 0, end: 11 }), { start: 0, end: 2 });
+  });
+
+  it("起点往左扩进胶囊：整颗选上；起点往右缩进胶囊：整颗让出去", () => {
+    deepStrictEqual(snapSelection(chips, { start: 10, end: 13 }, { start: 11, end: 13 }), { start: 2, end: 13 });
+    deepStrictEqual(snapSelection(chips, { start: 3, end: 13 }, { start: 2, end: 13 }), { start: 11, end: 13 });
+  });
+
+  it("双击 / 拖选落在胶囊里（指针，没有方向）：向外扩成整颗", () => {
+    deepStrictEqual(snapSelection(chips, { start: 4, end: 9 }, null), { start: 2, end: 11 });
+  });
+});
+
+describe("chipRemovalRange —— 点 × 删整颗", () => {
+  it("连带后面的一个空格（插入 token 自带的那个）", () => {
+    const text = "看 /skill:ab 再";
+    deepStrictEqual(chipRemovalRange(text, parseChips(text)[0]!), { start: 2, end: 12 });
+  });
+
+  it("句末没有后空格：带走前面的一个，不留行尾空格", () => {
+    const text = "看 /skill:ab";
+    deepStrictEqual(chipRemovalRange(text, parseChips(text)[0]!), { start: 1, end: 11 });
+  });
+
+  it("行首、后面紧跟换行：只删 token，换行不动", () => {
+    const text = "/mcp:git\n下一行";
+    deepStrictEqual(chipRemovalRange(text, parseChips(text)[0]!), { start: 0, end: 8 });
   });
 });

@@ -67,6 +67,7 @@ import { MemoryLibraryView } from "./features/memory/MemoryLibraryView";
 import type { MemoryNav } from "./features/memory/memory-view.ts";
 import { useMemoryScopes } from "./features/memory/useMemory.ts";
 import type { MemoryEntryView } from "@shared/memory";
+import type { PanelUsageKey } from "@shared/panel-usage";
 
 /**
  * App shell —— 设计系统的构图，不只是它的 token。
@@ -464,6 +465,8 @@ export function App() {
   // rightPanel 进依赖是为了让切换那一拍读到「离开时」的面板值；面板自身变化时
   // previous === mainOpenId 早退，自然空跑
   const panelMemoryRef = useRef<PanelMemory>(new Map());
+  /** 下一次右栏变化是「按会话恢复」而不是用户打开的（面板打开次数要跳过它） */
+  const panelRestoredRef = useRef(false);
   const panelMainIdRef = useRef(mainOpenId);
   useEffect(() => {
     const previous = panelMainIdRef.current;
@@ -471,7 +474,10 @@ export function App() {
     if (previous === mainOpenId) return;
     const sessionOf = (id: string): string | null => (id === "" ? null : id);
     panelMemoryRef.current = rememberPanel(panelMemoryRef.current, sessionOf(previous), rightPanel);
-    setRightPanel(recallPanel(panelMemoryRef.current, sessionOf(mainOpenId)));
+    const recalled = recallPanel(panelMemoryRef.current, sessionOf(mainOpenId));
+    // 恢复出来的面板不是用户打开的：面板打开次数不记它（见下方 countPanel 的效果）
+    if (recalled !== rightPanel) panelRestoredRef.current = true;
+    setRightPanel(recalled);
   }, [mainOpenId, rightPanel]);
 
   // 主槽不再是「有子会话的根会话」→ 入口消失，面板若开着就关（不止是不显示入口，
@@ -768,6 +774,28 @@ export function App() {
     handlePanel("context");
   }, [handlePanel]);
 
+  // ── 面板打开次数（shared/panel-usage.ts，实验功能「精简右栏」的数据）──────
+  // 只记用户自己打开的：右栏换成别的面板（不管从哪个入口：图标条、「更多」、对话里的
+  // 链接、快捷键、「/ + 空格」），「这条任务」开着时切到上下文页签，记忆库 / 遗留 / 归档
+  // 打开，铃铛与内置浏览器在各自的入口记。按会话恢复的面板不记（panelRestoredRef）。
+  // 只在本机、不上传；失败就算了——这是一份看个大概的统计，不值得打扰用户
+  const countPanel = useCallback((key: PanelUsageKey) => {
+    void api.panelUsage.bump(key).catch(() => undefined);
+  }, []);
+  const usageSeenRef = useRef<{ panel: RightPanelKind | null; tab: TaskPanelTab }>({ panel: null, tab: "progress" });
+  useEffect(() => {
+    const seen = usageSeenRef.current;
+    usageSeenRef.current = { panel: rightPanel, tab: taskTab };
+    if (panelRestoredRef.current) {
+      panelRestoredRef.current = false;
+      return;
+    }
+    const opened = rightPanel !== null && rightPanel !== seen.panel;
+    const tabSwitched = rightPanel === "context" && seen.panel === "context" && taskTab !== seen.tab;
+    if (rightPanel === null || (!opened && !tabSwitched)) return;
+    countPanel(PANEL_USAGE_KEY_OF[rightPanel] ?? (taskTab === "context" ? "context" : "task"));
+  }, [rightPanel, taskTab, countPanel]);
+
   // ── 「/ + 空格」右栏 token 选取（panel-token.ts）────────────────────
   // Composer 把行首或空白后孤立的 / 按空格时（句中同样触发，2026-10-11 用户裁定）
   // 交来插入锚点（那个 / 的位置）；面板选中后
@@ -922,6 +950,17 @@ export function App() {
   const memoryOn = experimentalFeatures["memory-system"] === true;
   if (overlay === "memory" && !memoryOn) setOverlay(null);
   const memoryScopes = useMemoryScopes(overlay === "memory");
+  useEffect(() => {
+    if (overlay === "memory") countPanel("memory");
+  }, [overlay, countPanel]);
+  useEffect(() => {
+    if (showCarryovers) countPanel("carryovers");
+  }, [showCarryovers, countPanel]);
+  useEffect(() => {
+    if (showArchived) countPanel("archived");
+  }, [showArchived, countPanel]);
+  // 精简右栏（实验功能）：常驻只留「这条任务」、终端、内置浏览器，其余收进「更多」
+  const leanRail = experimentalFeatures["lean-rail"] === true;
   const subviewState: RailSubviewState = { overlay, showArchived, showCarryovers };
   const applySubviewState = (next: RailSubviewState): void => {
     setOverlay(next.overlay);
@@ -972,12 +1011,14 @@ export function App() {
   const railEntries: RailEntry[] = [
     // 遗留事项入口（收尾扫描的下游）
     {
+      id: "carryovers",
       icon: "list-todo" as const,
       label: t.app.carryoversEntry(openCarryoverCount),
       lit: railSubviewLit(subviewState, "carryovers"),
       onClick: () => applySubviewState(toggleRailSubview(subviewState, "carryovers")),
     },
     {
+      id: "archived",
       icon: "archive" as const,
       label: t.app.archivedEntry(archivedCount),
       lit: railSubviewLit(subviewState, "archived"),
@@ -986,10 +1027,12 @@ export function App() {
     {
       // 受管浏览器是独立的沙盒窗口（不占右栏面板位）：点了就打开或聚焦它，没有「亮」的状态。
       // 它是 agent 的工具，这个入口给用户提前登录、看一眼 agent 停在哪
+      id: "browser",
       icon: "globe" as const,
       label: t.rail.browser,
       lit: false,
       onClick: () => {
+        countPanel("browser");
         api.browser.open().catch((cause: unknown) => console.error("[browser] 打开沙盒窗口失败", cause));
       },
     },
@@ -997,6 +1040,7 @@ export function App() {
       ? [
           {
             // 记忆库是应用级入口（跨会话、跨工作区），与设置同住右栏底部
+            id: "memory" as const,
             icon: "brain-circuit" as const,
             label: t.memory.rail,
             lit: overlay === "memory",
@@ -1005,6 +1049,7 @@ export function App() {
         ]
       : []),
     {
+      id: "settings",
       icon: "settings" as const,
       label: t.common.settings,
       lit: overlay === "settings",
@@ -1252,6 +1297,8 @@ export function App() {
         <RightRail
           panel={rightPanel}
           onPanel={handlePanel}
+          lean={leanRail}
+          onOpenContext={openContextPanel}
           railEntries={railEntries}
           intentAvailable={settings.experimentalFeatures?.["intent-system"] === true}
           subSessions={
@@ -1267,6 +1314,7 @@ export function App() {
             onOpen: openFromNotice,
             onSideChat: openInSideChat,
             onMarkAllRead: () => clearUnreadOf(unreadSessions.map((meta) => meta.id)),
+            onOpened: () => countPanel("bell"),
           }}
         />
       </div>
@@ -1279,6 +1327,17 @@ export function App() {
     </LocaleContext.Provider>
   );
 }
+
+/** 右栏面板种类 → 面板打开次数的键。「这条任务」（context）按页签分成 task / context，不在表里 */
+const PANEL_USAGE_KEY_OF: Partial<Record<RightPanelKind, PanelUsageKey>> = {
+  files: "files",
+  review: "review",
+  abilities: "abilities",
+  terminal: "terminal",
+  drawer: "sidechat",
+  subsessions: "subsessions",
+  intent: "intent",
+};
 
 /**
  * 平台写到 `<html data-platform>` 上。CSS 需要它：macOS 的窗口是透明的

@@ -3,6 +3,7 @@ import { PERMISSION_MODE_LABELS } from "../../shared/permission.ts";
 import type { DictationProvider } from "../../shared/voice.ts";
 import type { ArtifactOpenResult } from "../../shared/browser.ts";
 import type { ReviewDiffErrorReason, ReviewSource } from "../../shared/review.ts";
+import type { PanelUsageKey } from "../../shared/panel-usage.ts";
 import { REVIEW_DIFF_MAX_BYTES, REVIEW_DIFF_MAX_LINES } from "../../shared/review.ts";
 /**
  * 界面文案表——英文，**真源**。`messages-zh.ts` 的类型由这里推出（`Messages`），
@@ -206,12 +207,14 @@ export const en = {
     sourceName: (source: string): string =>
       source === "chat" ? "From chats" : source === "agent" ? "Corrected in chat" : "Added by hand",
     add: "Add",
-    reasonLabel: (type: string): string => (type === "insight" ? "Evidence: " : "Reason: "),
+    /** 展开后的理由行只有一个前缀（原型：原来 Reason / Why it changed / Evidence / Why it was dropped 四种） */
+    why: "Why",
+    /** 展开后的出处行：「From 会话标题 · turn 3」 */
+    from: "From",
     origin: (title: string, turn: number) => `${title} · turn ${turn}`,
     originManual: "Added by hand",
     originDeleted: "Task deleted",
     scopeUser: "All workspaces",
-    evolution: (count: number) => `Evolved ×${count}`,
     quoteLabel: "Original words",
     jumpSource: "Back to the conversation",
     evolutionTitle: "How this evolved",
@@ -219,8 +222,6 @@ export const en = {
     agentRevisedHint: "The agent rewrote this in the conversation after you corrected it",
     autoPromoted: "Applied to all workspaces",
     autoPromotedHint: "Judged to be about you rather than this project, so it applies in every workspace",
-    reviseReasonLabel: "Why it changed: ",
-    retireReasonLabel: "Why it was dropped: ",
     revertMuted: "Dropped with a rewind",
     revertMutedHint:
       "You went back to an earlier turn in the conversation, which took back the turns this came from, so it's no longer used. Choose \"Use again\" to keep it",
@@ -229,7 +230,18 @@ export const en = {
     returnToWorkspace: "Keep it in its workspace only",
     returnToWorkspaceHint: "Move it back to the workspace it came from",
     statusMuted: "Not used",
+    /** 停用时 agent 给的理由跟在状态后面 */
+    mutedBecause: (reason: string) => `Not used: ${reason}`,
     statusStale: "Outdated",
+    /** 行尾「用过几次 · 最近一次」（注入账本现算） */
+    usedTimes: (count: number) => (count === 1 ? "Used once" : `Used ${count} times`),
+    neverUsed: "Not used yet",
+    /** 日期只有一种写法：今天写时间，今年写月日，更早带年份 */
+    monthDay: (month: number, day: number) =>
+      `${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][month - 1] ?? month} ${day}`,
+    yearMonthDay: (year: number, month: number, day: number) =>
+      `${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][month - 1] ?? month} ${day}, ${year}`,
+    collapse: "Collapse",
     /** 记忆库底部的折叠：过时 / 停用的条目收在这里，不和在用的混排 */
     inactiveFold: (count: number) => `Outdated or not used · ${count}`,
     edit: "Edit",
@@ -261,8 +273,10 @@ export const en = {
     sessionEmptyHint:
       "After a stretch of conversation goes quiet it's distilled; what gets remembered shows up here.",
     noTask: "Open a task to see what it remembered.",
-    rowLabel: "Memory",
-    rowRemembered: (count: number) => `remembered ${count}`,
+    /** 用户消息动作行里的「用到 N」：这一轮开始前召回进上下文的记忆 */
+    used: (count: number) => `Used ${count}`,
+    usedHint: "Memories recalled into this turn",
+    rememberedHint: "What this turn was distilled into",
     openReview: "Open in the review panel",
     vectorIntro:
       "Also finds memories phrased differently from your question. Off by default; when on, a small model runs on this computer and nothing leaves it.",
@@ -773,6 +787,27 @@ export const en = {
       "Still being polished — they may change or break. Each feature has its own switch; turning one off only hides its entries, the data stays.",
     experimentalAllChanges: (count: number) => `All ${count} entries`,
     experimentalCollapse: "Collapse",
+    /* ---------- 面板打开次数（实验功能「精简右栏」的数据，只在本机） ---------- */
+    panelUsageTitle: "How often each panel is opened",
+    panelUsageSince: (month: number, day: number) =>
+      `Counted on this computer since ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][month - 1] ?? month} ${day}; nothing is uploaded. Switching tasks does not count.`,
+    panelUsageName: (key: PanelUsageKey) =>
+      ({
+        task: "This task",
+        context: "Context",
+        terminal: "Terminal",
+        browser: "Browser",
+        files: "Files",
+        review: "Review",
+        abilities: "Skills & MCP",
+        memory: "Memory",
+        intent: "Intent",
+        carryovers: "Carryovers",
+        archived: "Archive",
+        bell: "Notifications",
+        subsessions: "Sub-sessions",
+        sidechat: "Side chat",
+      })[key] ?? String(key),
     /* ---------- 意图系统（实验）：实验开关打开才出现的设置区 ---------- */
     intentTitle: "Intent system",
     intentBaseUrl: "intent-lab address",

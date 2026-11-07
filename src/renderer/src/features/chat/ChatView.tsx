@@ -970,7 +970,7 @@ function ChatViewBody(props: {
 
   /** 这一屏是哪条会话：活着的优先，否则是打开的那条 */
   const openId = session.sessionId ?? session.opened?.id ?? "";
-  // 记忆（实验功能 memory-system）：记住了东西的那条用户消息下挂「记忆 · 记住 M 条」行。
+  // 记忆（实验功能 memory-system）：用户消息的动作行里挂「用到 N · 记住 M」（UserBubble）。
   // 账本按轮记，这里按时间把轮配到气泡上（不按计数，见 pairMemoryTurns）
   const memoryOn = useExperimentalFeature("memory-system");
   const memorySession = useMemorySession(memoryOn && openId !== "" ? openId : null);
@@ -2926,17 +2926,14 @@ function EntryView(props: {
   if (entry.kind === "user") {
     const memoryRow = props.memory?.rows.get(entry.item.id);
     return (
-      <>
-        <UserBubble
-          item={entry.item}
-          onRevertTo={props.onRevertTo}
-          revertDisabled={props.actionsBusy || props.readOnly === true}
-          revertDisabledWhy={props.readOnly ? t.chat.revertReadOnly : t.chat.revertBusy}
-        />
-        {memoryRow !== undefined && memoryRow.remembered.length > 0 && (
-          <MemoryLine row={memoryRow} onOpenReview={props.onOpenMemoryReview} />
-        )}
-      </>
+      <UserBubble
+        item={entry.item}
+        onRevertTo={props.onRevertTo}
+        revertDisabled={props.actionsBusy || props.readOnly === true}
+        revertDisabledWhy={props.readOnly ? t.chat.revertReadOnly : t.chat.revertBusy}
+        memory={memoryRow}
+        onOpenMemoryReview={props.onOpenMemoryReview}
+      />
     );
   }
   if (entry.kind === "fileTurn") {
@@ -3191,10 +3188,18 @@ function UserBubble(props: {
   /** 运行中 / 排队非空 / 只读：入口禁用（tooltip 说明） */
   revertDisabled: boolean;
   revertDisabledWhy?: string;
+  /** 记忆（实验功能 memory-system）：这一轮用到 / 记住的；undefined = 这一轮没账（不画） */
+  memory?: MemorySessionTurnView;
+  /** 展开清单底部的「在审查面板里看」（改 / 删 / 别再用在那里） */
+  onOpenMemoryReview?: () => void;
 }) {
   const t = useT();
   const today = useToday();
   const [copied, setCopied] = useState(false);
+  // 记忆清单开着哪一份（用到 / 记住）；同一时刻至多一份，再点同一个收起
+  const [memoryOpen, setMemoryOpen] = useState<"used" | "remembered" | null>(null);
+  const usedMemories = props.memory?.used ?? [];
+  const rememberedMemories = props.memory?.remembered ?? [];
   // 垂直 clamp 到约 4 行（composer 上限 12 行的 1/3，wafo 2026-09-20）：溢出时底部
   // 渐变遮罩 + Show more/less 开合。overflowing 只在折叠态量——展开后
   // scrollHeight == clientHeight，结论会丢，按钮就再也收不回了。
@@ -3391,6 +3396,33 @@ function UserBubble(props: {
         </div>
       )}
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
+        {/* 记忆挂在用到它的那句话旁边（原型 .memrow，2026-10-30「信息挂在用到它的地方、按需展开」）：
+            「用到 N」= 这一轮开始前召回注入的条目，「记住 M」= 这一轮整理出的新条目。点开在下面列出是哪几条；
+            0 条的那枚不画。图标只给排在前面的那一枚 */}
+        {usedMemories.length > 0 && (
+          <button
+            type="button"
+            className="memrow-btn"
+            title={t.memory.usedHint}
+            aria-pressed={memoryOpen === "used"}
+            onClick={() => setMemoryOpen((open) => (open === "used" ? null : "used"))}
+          >
+            <Icon name="brain-circuit" size={12} strokeWidth={1.8} />
+            {t.memory.used(usedMemories.length)}
+          </button>
+        )}
+        {rememberedMemories.length > 0 && (
+          <button
+            type="button"
+            className="memrow-btn"
+            title={t.memory.rememberedHint}
+            aria-pressed={memoryOpen === "remembered"}
+            onClick={() => setMemoryOpen((open) => (open === "remembered" ? null : "remembered"))}
+          >
+            {usedMemories.length === 0 && <Icon name="brain-circuit" size={12} strokeWidth={1.8} />}
+            {t.memory.remembered(rememberedMemories.length)}
+          </button>
+        )}
         {overflowing && (
           <button
             type="button"
@@ -3485,6 +3517,21 @@ function UserBubble(props: {
           {formatMessageTime(props.item.timestamp, today)}
         </span>
       </div>
+      {memoryOpen !== null && (
+        <div className="memrow-list">
+          <ul>
+            {memoryOpen === "used"
+              ? usedMemories.map((hit) => <li key={hit.id}>{hit.text}</li>)
+              : rememberedMemories.map((view) => <li key={view.entry.id}>{view.entry.text}</li>)}
+          </ul>
+          {props.onOpenMemoryReview !== undefined && (
+            <button type="button" className="mem-link" onClick={props.onOpenMemoryReview}>
+              {t.memory.openReview}
+              <Icon name="arrow-right" size={12} strokeWidth={1.8} />
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -5287,49 +5334,6 @@ function toolBodyLine(toolName: string, line: string, key: number): ReactNode {
 /** 记忆行的数据：气泡 id → 那一轮的账。 */
 interface MemoryLines {
   rows: ReadonlyMap<string, MemorySessionTurnView>;
-}
-
-/**
- * 记忆行（实验功能 memory-system）：挂在「从这一轮记住了东西」的用户气泡下，只说
- * 记住了什么——确认系统在记、记得对不对（用户 2026-10-29：「我只需要知道，有在
- * 记录记忆，记得对……其他的我不需要感知到」）。这一轮用到了哪些记忆是输入，去
- * 上下文面板看；「整理中」不在对话里出现，也没有待确认（agent 判断直接生效）。
- * 与思考 / 工具行同一份 CollapseRow 契约；改 / 删 / 别再用去审查面板的记忆页签。
- */
-function MemoryLine(props: { row: MemorySessionTurnView; onOpenReview?: () => void }) {
-  const t = useT();
-  const [open, setOpen] = useState(false);
-  const { row } = props;
-  return (
-    <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0, marginTop: "var(--space-4)" }}>
-      <CollapseRow open={open} onToggle={() => setOpen((value) => !value)}>
-        <span style={HEAD_WRAP}>
-          <span style={{ color: headIconColor(false) }}>
-            <Icon name="brain-circuit" size={14} strokeWidth={1.8} />
-          </span>
-          <span style={headLabel(false)}>{t.memory.rowLabel}</span>
-        </span>
-        <span style={{ ...SLOT.sub, fontFamily: "var(--font-family-base)" }}>
-          {t.memory.rowRemembered(row.remembered.length)}
-        </span>
-      </CollapseRow>
-      {open && (
-        <div style={{ ...EXPANDED_BODY, fontFamily: "var(--font-family-base)", whiteSpace: "normal", display: "grid", gap: "var(--space-1)" }}>
-          {row.remembered.map((item) => (
-            <span key={item.entry.id} style={{ color: "var(--color-text-primary)" }}>
-              {item.entry.text}
-            </span>
-          ))}
-          {props.onOpenReview !== undefined && (
-            <button type="button" className="mem-link" onClick={props.onOpenReview}>
-              {t.memory.openReview}
-              <Icon name="arrow-right" size={12} strokeWidth={1.8} />
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
 }
 
 /**

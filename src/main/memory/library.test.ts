@@ -265,3 +265,25 @@ test("sessionView：meta 读不到 → token null 但视图照常（零轮）", 
   assert.equal(view.token, null);
   assert.deepEqual(view.turns, []);
 });
+
+test("listEntries / sessionView：用过几次 = 注入账本里出现的轮数，最近一次取最晚那轮", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "orbita-lib-"));
+  await seed(dir);
+  // 再记两轮：user 层那条又用了一次（更晚），ws-1 的新偏好第一次被用
+  const entries = new MemoryEntryStore(dir);
+  const userId = (await entries.listByToken("user"))[0]!.id;
+  const newerId = (await entries.listByToken(WS_TOKEN)).find((entry) => entry.conflictWith !== undefined)!.id;
+  await entries.recordInjection({ sessionId: "s2", turn: 1, at: 5000, hits: [{ id: userId, text: "本地优先", score: 1, pinned: true }] });
+  await entries.recordInjection({ sessionId: "s2", turn: 2, at: 4000, hits: [{ id: newerId, text: "x", score: 0.5 }] });
+  const library = makeLibrary(dir, { metas: { s1: { workspaceId: "ws-1", cwd: "/x" } } });
+  const all = await library.listEntries({ token: "all" });
+  const usage = (id: string) => all.find((item) => item.entry.id === id)?.usage;
+  assert.deepEqual(usage(userId), { count: 2, lastAt: 5000 });
+  assert.deepEqual(usage(newerId), { count: 1, lastAt: 4000 });
+  // 从没用过：0 / null（不是缺席）
+  const never = all.find((item) => item.entry.text === "ws-2 的事实")!;
+  assert.deepEqual(never.usage, { count: 0, lastAt: null });
+  // 审查页签（按轮视图）记住的条目同样带上
+  const view = await library.sessionView("s1");
+  assert.deepEqual(view.turns[0]?.remembered[0]?.usage, { count: 1, lastAt: 4000 });
+});
