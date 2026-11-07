@@ -93,10 +93,16 @@ the English copy; the Chinese copy follows the same voice.
   headers and card kickers: UI sans, `--font-size-sm`, semibold, secondary grey (tertiary for card
   kickers), no uppercase, no tracking. They name a group; they never stand in for a heading or a
   button. Mono is for machine facts, not for titles (uppercase mono labels retired 2026-10-14).
-- **Settings section titles are the exception: `--font-size-lg`, semibold, primary text.** A settings
+- **Settings section titles are the exception: never smaller than the rows they head.** A settings
   page is a document of groups whose rows and cards are `base`; a `sm` grey label there was smaller
   than what it heads and read as noise (2026-10-24: "the title text is too small to read"). The
-  `.section-label` class carries this; other group labels keep the quiet treatment above.
+  `.section-label` class carries this; other group labels keep the quiet treatment above. **Two columns
+  (2026-11-07):** on a wide settings page the section name lives in the left index gutter (120px, right-aligned,
+  `base` semibold primary — same size as the row names, set apart by weight and ink, level three before size)
+  on the same baseline as the section's first row; below 620px of page the page is one column again and the title
+  returns above its rows at `--font-size-lg`. Rows sit top-aligned with no hairline between them (8px above and
+  below, 32px between sections); the page is 120 + 24 + 640 wide, not the content column's measure — 1000px put
+  "name ↔ control" half a screen apart. The paper themes keep the one-column page with row hairlines.
 - **A setting explains itself in place.** Name `base`/500, then its description below in `sm`
   tertiary, wrapping instead of truncating (`.set-row-desc`). Before 2026-10-30, General hid
   descriptions behind an ⓘ next to the name while Voice wrote them out — two ways of explaining on
