@@ -69,6 +69,7 @@ import hand from "../../../../design-system/assets/icons/lucide/hand.svg?raw";
 import logIn from "../../../../design-system/assets/icons/lucide/log-in.svg?raw";
 import logOut from "../../../../design-system/assets/icons/lucide/log-out.svg?raw";
 import globe from "../../../../design-system/assets/icons/lucide/globe.svg?raw";
+import graduationCap from "../../../../design-system/assets/icons/lucide/graduation-cap.svg?raw";
 import hardDrive from "../../../../design-system/assets/icons/lucide/hard-drive.svg?raw";
 import history from "../../../../design-system/assets/icons/lucide/history.svg?raw";
 import fileDiff from "../../../../design-system/assets/icons/lucide/file-diff.svg?raw";
@@ -205,6 +206,7 @@ const ICONS = {
   "git-fork": gitFork,
   "git-pull-request": gitPullRequest,
   globe,
+  "graduation-cap": graduationCap,
   hand,
   "log-in": logIn,
   "log-out": logOut,

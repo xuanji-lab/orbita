@@ -3,12 +3,15 @@ import { describe, test } from "node:test";
 import { GUIDE } from "./onboarding-pages.ts";
 import {
   boldRuns,
+  chapterNumber,
   chapterProgress,
   chapterStart,
   flattenGuide,
+  guideParts,
   isLastPage,
   shotTheme,
   shouldAutoOpenOnboarding,
+  startIndexOfChapter,
   stepGuide,
 } from "./onboarding-nav.ts";
 
@@ -100,5 +103,41 @@ describe("boldRuns：正文里的 **粗体**", () => {
       { text: "一根柱", bold: false },
     ]);
     assert.deepEqual(boldRuns("**全粗**"), [{ text: "全粗", bold: true }]);
+  });
+});
+
+describe("设置 › 新手引导页签：点某章 → 全屏打开到那章首页", () => {
+  const flat = flattenGuide(GUIDE);
+
+  test("startIndexOfChapter：每一章都落在它自己的章首页（第 10 章 = 插件）", () => {
+    for (const [ci, chapter] of GUIDE.entries()) {
+      const index = startIndexOfChapter(GUIDE, chapter.id);
+      assert.deepEqual(flat[index], { chapter: ci, page: 0 }, chapter.id);
+    }
+    const plugins = startIndexOfChapter(GUIDE, "plugins");
+    assert.equal(GUIDE[flat[plugins]?.chapter ?? -1]?.id, "plugins");
+    assert.equal(chapterNumber(GUIDE, flat[plugins]?.chapter ?? 0), "10");
+  });
+
+  test("从某章进入后 ← 仍能翻到上一章（落在上一章最后一页）；从头看是第 0 页", () => {
+    const task = startIndexOfChapter(GUIDE, "task");
+    const back = flat[stepGuide(task, -1, flat.length)];
+    assert.equal(back?.chapter, 0);
+    assert.equal(back?.page, (GUIDE[0]?.pages.length ?? 0) - 1);
+    assert.equal(startIndexOfChapter(GUIDE, "start"), 0);
+  });
+
+  test("章 id 不认识时从头开始，不崩", () => {
+    assert.equal(startIndexOfChapter(GUIDE, "nope" as never), 0);
+    assert.equal(startIndexOfChapter([], "start"), 0);
+  });
+
+  test("guideParts：入门篇 7 / 进阶篇 6 / 附录 1，每章恰好出现一次，章号与引导目录同一套", () => {
+    const parts = guideParts(GUIDE);
+    assert.deepEqual(parts.map((group) => [group.part, group.chapters.length]), [["basics", 7], ["tools", 6], ["appendix", 1]]);
+    assert.deepEqual(parts.flatMap((group) => group.chapters.map((chapter) => chapter.id)), GUIDE.map((chapter) => chapter.id));
+    assert.equal(parts[0]?.chapters[0]?.no, "01");
+    assert.equal(parts[1]?.chapters[0]?.no, "08");
+    assert.equal(parts[2]?.chapters[0]?.no, "··");
   });
 });
