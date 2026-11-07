@@ -6,6 +6,15 @@ import { useT } from "../locale.ts";
 import type { Messages } from "../messages-en.ts";
 import type { SessionCompletion } from "@shared/session";
 
+export interface CapCompletionState {
+  state: SessionCompletion;
+  closing: boolean;
+  busy: boolean;
+  scanless: boolean;
+  onMark: () => void;
+  onSet: (next: "open" | "done") => void;
+}
+
 /**
  * 会话胶囊（工具栏居中那颗，排法甲 · 地址栏式，2026-10-19 用户裁决）：固定宽，
  * 三栏网格——**标题永远在胶囊正中**（像 Safari 地址栏里的域名）；左端子会话芯片 /
@@ -23,14 +32,7 @@ export function SessionCapsule(props: {
    * 完成入口（open → 收工，非 open → Reopen）；null = 不摆（没落盘 / 生命周期关）。
    * 与 ChatView 页头同源的降级矩阵：扫描中转圈、在跑禁用、只读在 tooltip 说明。
    */
-  completion: {
-    state: SessionCompletion;
-    closing: boolean;
-    busy: boolean;
-    scanless: boolean;
-    onMark: () => void;
-    onSet: (next: "open" | "done") => void;
-  } | null;
+  completion: CapCompletionState | null;
   /** 左端子会话芯片；null = 留空（用户默认：不放「0」占位，可推翻） */
   subChip: { count: number; waiting: number } | null;
   onOpenSubSessions?: () => void;
@@ -38,20 +40,6 @@ export function SessionCapsule(props: {
   crumb: { title: string; onClick: () => void } | null;
 }) {
   const t = useT();
-  const [editing, setEditing] = useState(false);
-  /** 复制成功的对勾 + 轻提示（1.2s 淡出） */
-  const [copied, setCopied] = useState(false);
-  const copyTimer = useRef<number | null>(null);
-  useEffect(() => () => {
-    if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
-  }, []);
-  const copyId = (): void => {
-    if (props.shortId === null) return;
-    void navigator.clipboard.writeText(props.shortId);
-    setCopied(true);
-    if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
-    copyTimer.current = window.setTimeout(() => setCopied(false), 1200);
-  };
   const completion = props.completion;
 
   return (
@@ -88,83 +76,139 @@ export function SessionCapsule(props: {
 
       {/* 正中：标题（重命名就地变输入框，外框不动）。左右各留一个铅笔位，悬停显形 */}
       <div className="cap-sc">
-        <span className="cap-mini cap-hov" aria-hidden="true" />
-        <InlineName
-          editing={editing}
-          value={props.title}
-          onCommit={(value) => {
-            setEditing(false);
-            props.onRename?.(value);
-          }}
-          onCancel={() => setEditing(false)}
-        >
-          <strong
-            className="cap-title"
-            onDoubleClick={() => props.onRename !== undefined && setEditing(true)}
-          >
-            {props.title}
-          </strong>
-        </InlineName>
-        {props.onRename !== undefined && !editing && (
-          <button
-            type="button"
-            className="quiet-control cap-mini cap-hov"
-            title={t.chat.renameTask}
-            aria-label={t.chat.renameTask}
-            onClick={() => setEditing(true)}
-          >
-            <Icon name="pencil-line" size={14} strokeWidth={1.8} />
-          </button>
-        )}
+        <CapTitle title={props.title} onRename={props.onRename} balance />
       </div>
 
       {/* 右端：短 id · 复制（悬停）· 竖线 · 收工（一直显示） */}
       <div className="cap-sr">
-        {props.shortId !== null && (
-          <>
-            <span className="cap-sid">{props.shortId}</span>
-            <button
-              type="button"
-              className="quiet-control cap-mini cap-hov"
-              title={copied ? t.toolbar.copiedId(props.shortId) : t.toolbar.copyId}
-              aria-label={t.toolbar.copyId}
-              onClick={copyId}
-            >
-              <Icon name={copied ? "check" : "copy"} size={13} strokeWidth={1.9} />
-            </button>
-          </>
-        )}
+        <CapSessionId shortId={props.shortId} />
         {completion !== null && (
           <>
             {props.shortId !== null && <span className="cap-vsep" />}
-            <button
-              type="button"
-              className="quiet-control cap-seg solo"
-              title={completionTitle(completion, t)}
-              aria-label={completion.state === "open" ? t.chat.markTaskDone : t.chat.reopenTask}
-              disabled={completion.state === "open" && (completion.closing || completion.busy)}
-              aria-disabled={completion.state === "open" && (completion.closing || completion.busy)}
-              onClick={() =>
-                completion.state === "open" ? completion.onMark() : completion.onSet("open")
-              }
-            >
-              <Icon
-                name={completion.state === "open" ? (completion.closing ? "loader-circle" : "check") : "rotate-ccw"}
-                size={16}
-                strokeWidth={2}
-                spin={completion.closing}
-              />
-            </button>
+            <CapCompletion completion={completion} />
           </>
-        )}
-        {copied && props.shortId !== null && (
-          <span className="cap-toast">
-            <Icon name="check" size={12} strokeWidth={2.4} />
-            {t.toolbar.copiedId(props.shortId)}
-          </span>
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * 会话标题：双击或点铅笔就地改名（InlineName，外框不动）。会话胶囊与辅助对话胶囊共用，
+ * 改名的手势、悬停显形的铅笔都只有这一份。`balance`：标题左侧再留一个同宽的隐形铅笔位，
+ * 让标题在居中的会话胶囊里真正居中；辅助对话胶囊的标题靠左排，不留。
+ */
+export function CapTitle(props: {
+  title: string;
+  onRename?: ((title: string) => void) | undefined;
+  balance?: boolean;
+  /** 标题前的小图标（辅助对话用会话图标与主会话的分支图标区分），可选 */
+  leading?: React.ReactNode;
+}) {
+  const t = useT();
+  const [editing, setEditing] = useState(false);
+  return (
+    <>
+      {props.balance === true && <span className="cap-mini cap-hov" aria-hidden="true" />}
+      {props.leading}
+      <InlineName
+        editing={editing}
+        value={props.title}
+        onCommit={(value) => {
+          setEditing(false);
+          props.onRename?.(value);
+        }}
+        onCancel={() => setEditing(false)}
+      >
+        <strong
+          className="cap-title"
+          onDoubleClick={() => props.onRename !== undefined && setEditing(true)}
+        >
+          {props.title}
+        </strong>
+      </InlineName>
+      {props.onRename !== undefined && !editing && (
+        <button
+          type="button"
+          className="quiet-control cap-mini cap-hov"
+          title={t.chat.renameTask}
+          aria-label={t.chat.renameTask}
+          onClick={() => setEditing(true)}
+        >
+          <Icon name="pencil-line" size={14} strokeWidth={1.8} />
+        </button>
+      )}
+    </>
+  );
+}
+
+/**
+ * 短 id（等宽 · xs · 三级墨）+ 悬停显形的复制键；复制后按钮变对勾、下方浮「已复制 a3f9c1」约 1.2s。
+ * shortId 为 null（会话还没落盘）什么都不摆。
+ */
+export function CapSessionId(props: { shortId: string | null }) {
+  const t = useT();
+  /** 复制成功的对勾 + 轻提示（1.2s 淡出） */
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
+  }, []);
+  if (props.shortId === null) return null;
+  const shortId = props.shortId;
+  const copyId = (): void => {
+    void navigator.clipboard.writeText(shortId);
+    setCopied(true);
+    if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
+    copyTimer.current = window.setTimeout(() => setCopied(false), 1200);
+  };
+  return (
+    <>
+      <span className="cap-sid">{shortId}</span>
+      <button
+        type="button"
+        className="quiet-control cap-mini cap-hov"
+        title={copied ? t.toolbar.copiedId(shortId) : t.toolbar.copyId}
+        aria-label={t.toolbar.copyId}
+        onClick={copyId}
+      >
+        <Icon name={copied ? "check" : "copy"} size={13} strokeWidth={1.9} />
+      </button>
+      {copied && (
+        <span className="cap-toast">
+          <Icon name="check" size={12} strokeWidth={2.4} />
+          {t.toolbar.copiedId(shortId)}
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
+ * 完成键（open → 收工，非 open → Reopen），一直显示——它是会话的主要出口。
+ * 降级矩阵（扫描中转圈、在跑禁用、只读在 tooltip 说明）与 ChatView 页头同口径。
+ */
+export function CapCompletion(props: { completion: CapCompletionState }) {
+  const t = useT();
+  const completion = props.completion;
+  const blocked = completion.state === "open" && (completion.closing || completion.busy);
+  return (
+    <button
+      type="button"
+      className="quiet-control cap-seg solo"
+      title={completionTitle(completion, t)}
+      aria-label={completion.state === "open" ? t.chat.markTaskDone : t.chat.reopenTask}
+      disabled={blocked}
+      aria-disabled={blocked}
+      onClick={() => (completion.state === "open" ? completion.onMark() : completion.onSet("open"))}
+    >
+      <Icon
+        name={completion.state === "open" ? (completion.closing ? "loader-circle" : "check") : "rotate-ccw"}
+        size={16}
+        strokeWidth={2}
+        spin={completion.closing}
+      />
+    </button>
   );
 }
 

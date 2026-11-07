@@ -450,7 +450,7 @@ const OFF_SCALE_SPACING_BUDGET = new Map<string, number>([
   ["src/renderer/src/shell/focus/focus.css", 8],
   ["src/renderer/src/shell/toolbar.css", 2],
   ["src/renderer/src/shell/usage.css", 7],
-  ["src/renderer/src/styles.css", 34], // 能力面板删掉旧的 skill 行 tooltip（9px 11px / 3px）；MCP 卡片视图随能力面板删除（−4）
+  ["src/renderer/src/styles.css", 32], // 能力面板删掉旧的 skill 行 tooltip（9px 11px / 3px）；MCP 卡片视图随能力面板删除（−4）；辅助对话旧标签行 .drawer-tab* 随页头上移胶囊删除（−2）
 ]);
 
 describe("design-tokens —— 间距走刻度", () => {
