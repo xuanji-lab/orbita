@@ -2,7 +2,7 @@ import { readFile, stat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import * as ncanvas from "@napi-rs/canvas";
 import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { extractText, getDocumentProxy, renderPageAsImage } from "unpdf";
+import { createIsomorphicCanvasFactory, extractText, getDocumentProxy, renderPageAsImage } from "unpdf";
 import {
   displayText,
   findQuote,
@@ -272,6 +272,23 @@ async function renderPages(
   return { images, sizeNotes };
 }
 
+/**
+ * 打开 PDF（read_pdf 用：文本与页图共用一个文档对象）。
+ *
+ * **显式传 Node 画布工厂**：agent 跑在 Electron utilityProcess，process.type === "utility"，
+ * pdf.js 的 isNodeJS 判定（排除「electron 且 type 非 browser」）为 false → 把自己当浏览器 →
+ * 文档默认的画布工厂是 DOMCanvasFactory → 页里一碰图像 / 软蒙版 / 透明组就
+ * `document.createElement`，渲染报「Cannot read properties of undefined (reading 'createElement')」。
+ * unpdf 的 `renderPageAsImage` 只给**自己那一块目标画布**用了 Node 工厂，文档内部（paintInlineImageXObject
+ * 等）用的仍是文档创建时定下的工厂——所以得在 getDocumentProxy 时就把 Node 工厂传进去。
+ * 只动 agent 进程这一处；主进程与 renderer 的 pdf.js（pdfjs-dist 直装）不经过这里。
+ * 纯文字页不碰画布工厂，所以此前只有带图的页（几乎所有论文页）才暴露。
+ */
+async function openPdf(data: Uint8Array): Promise<Awaited<ReturnType<typeof getDocumentProxy>>> {
+  const CanvasFactory = await createIsomorphicCanvasFactory(() => Promise.resolve(ncanvas));
+  return getDocumentProxy(data, { CanvasFactory });
+}
+
 export function createPdfTools(cwd: string, options: { pdfCitations?: boolean } = {}): ToolDefinition[] {
   const readPdf: ToolDefinition = {
     name: "read_pdf",
@@ -347,7 +364,7 @@ export function createPdfTools(cwd: string, options: { pdfCitations?: boolean } 
 
       let pdf: Awaited<ReturnType<typeof getDocumentProxy>>;
       try {
-        pdf = await getDocumentProxy(new Uint8Array(buffer));
+        pdf = await openPdf(new Uint8Array(buffer));
       } catch (error: unknown) {
         if (error instanceof Error && error.name === "PasswordException") {
           throw new Error(`The PDF is password-protected and cannot be read: ${pathRaw}`);

@@ -6,9 +6,12 @@
  */
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { createReadToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
   createPdfTools,
@@ -89,6 +92,35 @@ function buildPdf(pageTexts: readonly string[], encrypted = false): Buffer {
   return Buffer.from(chunks.join("\n"), "latin1");
 }
 
+/**
+ * 带一张 1×1 图像 XObject 的单页 PDF。**纯文字页渲染不会碰画布工厂**——pdf.js 只有画图像 / 软蒙版 /
+ * 透明组时才走 canvasFactory.create；要复现 utility 进程里的 createElement 报错，页里必须有图
+ * （真实论文页几乎都有 logo / 插图）。
+ */
+function buildImagePdf(): Buffer {
+  const content = "q 100 0 0 100 72 600 cm /Im0 Do Q\nBT /F1 12 Tf 1 0 0 1 72 560 Tm (image page) Tj ET";
+  const objects: string[] = [];
+  objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
+  objects[2] = "<< /Type /Pages /Kids [ 4 0 R ] /Count 1 >>";
+  objects[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
+  objects[4] =
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> /XObject << /Im0 5 0 R >> >> /Contents 6 0 R >>";
+  objects[5] =
+    "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 3 >>\nstream\n\u00ff\u0000\u0000\nendstream";
+  objects[6] = `<< /Length ${content.length} >>\nstream\n${content}\nendstream`;
+  const chunks = ["%PDF-1.4"];
+  const offsets: number[] = [];
+  for (let num = 1; num < objects.length; num++) {
+    offsets[num] = Buffer.byteLength(chunks.join("\n"), "latin1");
+    chunks.push(`${num} 0 obj\n${objects[num]}\nendobj`);
+  }
+  const xrefStart = Buffer.byteLength(chunks.join("\n"), "latin1");
+  let xref = `xref\n0 ${objects.length}\n0000000000 65535 f \n`;
+  for (let num = 1; num < objects.length; num++) xref += `${String(offsets[num]).padStart(10, "0")} 00000 n \n`;
+  chunks.push(xref, `trailer\n<< /Size ${objects.length} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`);
+  return Buffer.from(chunks.join("\n"), "latin1");
+}
+
 let dir: string;
 let tool: ReturnType<typeof createPdfTools>[number];
 
@@ -103,6 +135,7 @@ before(async () => {
       PAGE_BODY, PAGE_BODY, PAGE_BODY, PAGE_BODY, PAGE_BODY]),
   );
   await writeFile(join(dir, "scanned.pdf"), buildPdf(["", ""]));
+  await writeFile(join(dir, "with-image.pdf"), buildImagePdf());
   await writeFile(join(dir, "plain.txt"), "just text, not a pdf");
   // header 前有垃圾（邮件系统前置字节的真实形态）——规范允许 header 落在前 1024 字节内
   await writeFile(join(dir, "junk-prefix.pdf"), Buffer.concat([Buffer.from("JUNKJUNK"), buildPdf([PAGE_BODY, PAGE_BODY])]));
@@ -125,6 +158,51 @@ before(async () => {
 
 after(async () => {
   await rm(dir, { recursive: true, force: true });
+});
+
+/**
+ * agent 跑在 Electron utilityProcess 里：process.type === "utility"。pdf.js 的 isNodeJS 判定
+ * 排除了「electron 且 type 非 browser」，于是把它当浏览器、默认画布工厂走 DOMCanvasFactory →
+ * document.createElement → 页图渲染报「Cannot read properties of undefined (reading 'createElement')」。
+ * isNodeJS 是 pdf.js 模块加载时求值的常量，同进程里事后改不了——所以必须起**子进程**，
+ * 在 import 之前伪造 process.type / versions.electron，再跑 image_pages。
+ */
+describe("read_pdf 在 Electron utility 进程里渲染页图", () => {
+  const execFileAsync = promisify(execFile);
+
+  /** 子进程里跑一次带图页的 image_pages；fakeUtility 时在 import 之前伪造 utility 进程的两个标志 */
+  const renderInChild = async (fakeUtility: boolean): Promise<{ types?: string[]; error?: string }> => {
+    const toolsUrl = pathToFileURL(fileURLToPath(new URL("./pdf-tools.ts", import.meta.url))).href;
+    const script = `
+      if (${fakeUtility}) {
+        process.type = "utility";
+        Object.defineProperty(process.versions, "electron", { value: "1.0.0" });
+      }
+      const { createPdfTools } = await import(${JSON.stringify(toolsUrl)});
+      const [readPdf] = createPdfTools(${JSON.stringify(dir)});
+      try {
+        const result = await readPdf.execute("x", { path: "with-image.pdf", image_pages: "1", limit: 1 }, undefined, undefined, { model: { input: ["text", "image"] } });
+        console.log(JSON.stringify({ types: result.content.map((block) => block.type) }));
+      } catch (error) {
+        console.log(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+      }
+    `;
+    const { stdout } = await execFileAsync(process.execPath, ["--input-type=module", "-e", script], { timeout: 60_000 });
+    const line = stdout.trim().split("\n").filter((entry) => entry.startsWith("{")).pop() ?? "";
+    return JSON.parse(line) as { types?: string[]; error?: string };
+  };
+
+  test("伪造 process.type=utility + versions.electron：带图页的 image_pages 仍返回页图，不报 createElement", async () => {
+    const outcome = await renderInChild(true);
+    assert.equal(outcome.error, undefined, `渲染页图报错：${outcome.error}`);
+    assert.deepEqual(outcome.types, ["text", "image"]);
+  });
+
+  test("对照：普通 Node 进程里同一份带图 PDF 照常渲染（修复不改变非 utility 进程的行为）", async () => {
+    const outcome = await renderInChild(false);
+    assert.equal(outcome.error, undefined, `渲染页图报错：${outcome.error}`);
+    assert.deepEqual(outcome.types, ["text", "image"]);
+  });
 });
 
 const run = async (path: string, args: Record<string, unknown> = {}): Promise<string> => {
