@@ -1201,9 +1201,11 @@ export function App() {
   }, []);
   /**
    * 新手引导：全屏盖住整个窗口。只在**第一次打开**（设置读回后 onboardingSeen 不是 true）自动弹一次；
-   * 看完、跳过、Esc 都写 onboardingSeen = true，之后只能从设置 › 通用「再看一遍」打开（不改这个键）。
+   * 看完、跳过、Esc 都写 onboardingSeen = true，之后只能从设置 › 新手引导页签打开（不改这个键）。
    */
   const [onboardingOpen, setOnboardingOpen] = useState(false);
+  /** 打开引导时从摊平后的第几页开始：自动弹出 / 「从头看」是 0，设置 › 新手引导里点某章是那章的章首页 */
+  const [onboardingStart, setOnboardingStart] = useState(0);
   const onboardingAutoRef = useRef(false);
   useEffect(() => {
     if (onboardingAutoRef.current || !shouldAutoOpenOnboarding(settingsLoaded, settings)) return;
@@ -1429,7 +1431,10 @@ export function App() {
                   onOpenSession: openDraftSession,
                 }}
                 onTab={setSettingsTab}
-                onOpenOnboarding={() => setOnboardingOpen(true)}
+                onOpenOnboarding={(startAt) => {
+                  setOnboardingStart(startAt);
+                  setOnboardingOpen(true);
+                }}
                 onJumpToMemorySource={jumpToMemorySource}
                 onCollapseRail={rightPanel === null ? null : () => setRightPanel(null)}
               />
@@ -1642,7 +1647,7 @@ export function App() {
           }}
         />
       </div>
-      {onboardingOpen && <OnboardingView theme={resolvedTheme} onClose={closeOnboarding} onTry={tryFromOnboarding} />}
+      {onboardingOpen && <OnboardingView theme={resolvedTheme} startAt={onboardingStart} onClose={closeOnboarding} onTry={tryFromOnboarding} />}
     </div>
     </ToolbarPanelSlotContext.Provider>
     </CitationOpenContext.Provider>

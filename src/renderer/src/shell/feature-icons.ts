@@ -40,6 +40,8 @@ export const FEATURE_ICON = {
   intent: "waypoints",
   /** 已归档（archive 同时是「归档状态」的通用图标） */
   archived: "archive",
+  /** 新手引导：设置页签 */
+  guide: "graduation-cap",
   /** 设置 */
   settings: "settings",
   /** 通知（右栏铃铛与通知卡空态） */

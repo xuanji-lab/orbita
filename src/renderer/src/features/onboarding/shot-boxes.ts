@@ -13,13 +13,13 @@ export const SHOT_BOXES: Readonly<Record<string, Readonly<Record<string, Box>>>>
       "h": 0.9289
     },
     "daily": {
-      "x": 0.5778,
+      "x": 0.5785,
       "y": 0.2567,
       "w": 0.3778,
       "h": 0.0722
     },
     "failing": {
-      "x": 0.5778,
+      "x": 0.5785,
       "y": 0.4189,
       "w": 0.3778,
       "h": 0.0722
@@ -158,6 +158,12 @@ export const SHOT_BOXES: Readonly<Record<string, Readonly<Record<string, Box>>>>
       "x": 0.4219,
       "y": 0.9367,
       "w": 0.0685,
+      "h": 0.0267
+    },
+    "think": {
+      "x": 0.4945,
+      "y": 0.9367,
+      "w": 0.0583,
       "h": 0.0267
     },
     "card": {
@@ -316,17 +322,11 @@ export const SHOT_BOXES: Readonly<Record<string, Readonly<Record<string, Box>>>>
       "w": 0.1389,
       "h": 0.21
     },
-    "kinds": {
-      "x": 0.6847,
-      "y": 0.0878,
-      "w": 0.0389,
-      "h": 0.0267
-    },
-    "first": {
+    "entries": {
       "x": 0.3833,
       "y": 0.1711,
       "w": 0.5563,
-      "h": 1.5644
+      "h": 0.1778
     }
   },
   "migration": {
@@ -418,7 +418,7 @@ export const SHOT_BOXES: Readonly<Record<string, Readonly<Record<string, Box>>>>
   "plugin-board": {
     "card": {
       "x": 0.2378,
-      "y": 0.3284,
+      "y": -0.1961,
       "w": 0.6944,
       "h": 0.496
     }
@@ -445,8 +445,8 @@ export const SHOT_BOXES: Readonly<Record<string, Readonly<Record<string, Box>>>>
       "h": 0.1906
     },
     "make": {
-      "x": 0.6681,
-      "y": 0.0667,
+      "x": 0.6687,
+      "y": 0.1078,
       "w": 0.1042,
       "h": 0.0311
     }
@@ -459,30 +459,30 @@ export const SHOT_BOXES: Readonly<Record<string, Readonly<Record<string, Box>>>>
       "h": 0.9289
     },
     "make": {
-      "x": 0.6681,
-      "y": 0.0667,
+      "x": 0.6687,
+      "y": 0.1078,
       "w": 0.1042,
       "h": 0.0311
     },
     "local": {
-      "x": 0.5833,
-      "y": 0.0667,
+      "x": 0.584,
+      "y": 0.1078,
       "w": 0.0792,
       "h": 0.0311
     },
     "drafting": {
-      "x": 0.5778,
-      "y": 0.2044,
+      "x": 0.5785,
+      "y": 0.2456,
       "w": 0.3639,
       "h": 0.0794
     }
   },
   "providers": {
     "added": {
-      "x": 0.3523,
+      "x": 0.3766,
       "y": 0.8003,
-      "w": 0.0437,
-      "h": 0.0222
+      "w": 0.0194,
+      "h": 0.0267
     },
     "plan": {
       "x": 0.2333,
@@ -614,9 +614,9 @@ export const SHOT_BOXES: Readonly<Record<string, Readonly<Record<string, Box>>>>
   "working": {
     "block": {
       "x": 0.2378,
-      "y": 0.6439,
+      "y": 0.2078,
       "w": 0.6944,
-      "h": 0.1661
+      "h": 0.1894
     },
     "stop": {
       "x": 0.9038,

@@ -15,7 +15,7 @@
 .ob {
   --ob-paper: color-mix(in srgb, var(--color-bg-app) 70%, var(--color-bg-panel));
   --ob-spine-w: 232px;
-  --ob-copy-w: clamp(260px, 28%, 380px);
+  --ob-copy-w: clamp(280px, 31%, 440px);
   --font-size-ob-display: calc(var(--ui-font-size) * 3.4);
   --font-size-ob-title: calc(var(--ui-font-size) * 2.3);
   --font-size-ob-brand: calc(var(--ui-font-size) + 8px);
@@ -37,6 +37,14 @@
 :root[data-theme="graphite"] .ob,
 :root[data-theme="black"] .ob {
   --ob-paper: var(--color-bg-panel);
+}
+
+/* 两档暗色：截图本身就深，压暗与纸面几乎同色，边界靠一圈发丝线撑——提亮一档（中性，不是 accent 光晕） */
+:root[data-theme="graphite"] .ob-win,
+:root[data-theme="black"] .ob-win,
+:root[data-theme="graphite"] .ob-loupe,
+:root[data-theme="black"] .ob-loupe {
+  box-shadow: var(--shadow-modal), 0 0 0 1px var(--color-border-strong);
 }
 
 /* 根节点只为接键盘焦点（打开时聚焦），不画全局的焦点描边——那会给整个窗口描一圈 */
@@ -103,9 +111,12 @@
   display: flex;
   gap: var(--space-2-5);
   align-items: baseline;
-  width: 100%;
-  padding: var(--space-1) 0;
+  /* 左右各留 space-2 内边距、用负外边距找回：文字位置不变，全局 :focus-visible 的描边落在圆角框里（不是贴字的直角框） */
+  width: calc(100% + var(--space-4));
+  margin-inline: calc(-1 * var(--space-2));
+  padding: var(--space-1) var(--space-2);
   border: 0;
+  border-radius: var(--radius-md);
   background: none;
   color: var(--color-text-secondary);
   font: inherit;
@@ -140,14 +151,15 @@
   display: grid;
   gap: var(--space-0-5);
   margin: var(--space-0-5) 0 var(--space-1-5) var(--space-8);
-  padding-left: var(--space-2-5);
+  padding-left: var(--space-1);
   border-left: 1px solid var(--color-border-default);
 }
 
 .ob-pg {
   position: relative;
-  padding: var(--space-0-5) 0;
+  padding: var(--space-0-5) var(--space-1-5);
   border: 0;
+  border-radius: var(--radius-md);
   background: none;
   color: var(--color-text-tertiary);
   font: inherit;
@@ -169,7 +181,7 @@
 .ob-pg[data-state="on"]::before {
   content: "";
   position: absolute;
-  left: calc(-1 * var(--space-2-5) - 2px);
+  left: calc(-1 * var(--space-1) - 2px);
   top: 50%;
   width: 3px;
   height: var(--space-3);
@@ -293,6 +305,11 @@
   transform: translate(-50%, -50%);
 }
 
+/* 放大镜里的编号点：圆心落在放大镜外沿（边框外缘）上，一半在外面、一半压住边框与顶上一小截留白 */
+.ob-pin-edge {
+  top: calc(-1 * var(--space-1-5));
+}
+
 .ob-pin-inline {
   position: static;
   flex: none;
@@ -349,15 +366,19 @@
 .ob-display {
   font-size: var(--font-size-ob-display);
   line-height: var(--line-height-ob-display);
+  /* 折行均衡：末行不会只剩一个字（「…看文 / 件」「…记住 / 了」） */
+  text-wrap: balance;
 }
 
 .ob-title {
   font-size: var(--font-size-ob-title);
   line-height: var(--line-height-ob-title);
+  text-wrap: balance;
 }
 
 .ob-lead {
   margin: 0;
+  text-wrap: pretty;
   font-size: var(--font-size-lg);
   line-height: var(--line-height-reading);
   color: var(--color-text-secondary);
@@ -393,12 +414,14 @@
 
 .ob-case {
   margin: var(--space-2) 0 0;
+  text-wrap: pretty;
   font-size: var(--font-size-base);
   line-height: var(--line-height-reading);
   color: var(--color-text-secondary);
 }
 
 .ob-note {
+  text-wrap: pretty;
   display: flex;
   gap: var(--space-2-5);
   align-items: flex-start;

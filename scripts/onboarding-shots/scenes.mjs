@@ -37,7 +37,8 @@ function openTask(keyword) {
 const SETTINGS_OPEN = "document.querySelector(\"button[aria-label='设置'][aria-pressed=true]\")";
 /** 设置页是开关：已经开着就不再点 */
 function settingsTab(name) {
-  return [{ eval: CLOSE_CARRYOVERS }, { clickIf: [`!(${SETTINGS_OPEN})`, "button[aria-label='设置']"] }, { until: "[...document.querySelectorAll('aside .option-row')].some((b) => b.getBoundingClientRect().width > 0)", timeout: 8000 }, { clickText: ["aside .option-row, aside button", name] }, { wait: 1200 }];
+  // 先收右栏面板：上一个场景留下的面板会把设置页挤窄（记忆库页一窄就变成两列）
+  return [RESET, { wait: 300 }, { eval: CLOSE_CARRYOVERS }, { clickIf: [`!(${SETTINGS_OPEN})`, "button[aria-label='设置']"] }, { until: "[...document.querySelectorAll('aside .option-row')].some((b) => b.getBoundingClientRect().width > 0)", timeout: 8000 }, { clickText: ["aside .option-row, aside button", name] }, { wait: 1200 }];
 }
 const CLOSE_SETTINGS = { clickIf: [`!!(${SETTINGS_OPEN})`, "button[aria-label='设置']"] };
 /** 打开右栏某面板：每条任务会记住自己上次开着的面板，已经亮着就别再点（再点是收起） */
@@ -46,6 +47,9 @@ const PANEL = ".right-panel-slot";
 
 /** 当前任务没在跑（停止键不在） */
 const IDLE = "!document.querySelector('.btn-accent[data-tone=danger]')";
+
+/** 每次（浅、玄各一遍）给「现跑的一轮」一个新文件名：同一件事做过就不会再动手（实测：重发同一句，它回「昨晚已经做过」） */
+const stamp = () => new Date().toTimeString().slice(0, 8).replace(/:/g, "");
 
 export const READ = "复现 UrbanGPT";
 const SUBS = "UrbanGPT三篇";
@@ -58,22 +62,27 @@ export const SCENES = [
   { id: "home", steps: [RESET, { wait: 300 }, { click: "aside button[aria-label='在此工作区新建任务']" }, { wait: 1500 }],
     measure: { sidebar: ".workspace-group", composer: ".composer-stack .glass-card", rail: ".rail-stack", cards: ".home-stage .glass-card", newTask: "aside button[aria-label='在此工作区新建任务']" } },
   { id: "providers", steps: settingsTab("模型服务"), after: [CLOSE_SETTINGS],
-    measure: { added: ".pv-added-badge", plan: [".pv-vcard", "GLM Coding Plan"], deepseek: [".pv-vcard", "DeepSeek 官方"], filter: ["button", "仅显示已添加"] } },
+    measure: { added: { js: "[...document.querySelectorAll('.pv-vcard')].find((c) => c.textContent.includes('GLM Coding Plan'))?.querySelector('.pv-card-switch')" }, plan: [".pv-vcard", "GLM Coding Plan"], deepseek: [".pv-vcard", "DeepSeek"], filter: ["button", "仅显示已添加"] } },
   { id: "general", steps: [...settingsTab("通用"), { until: "[...document.querySelectorAll('.set-row-name')].some((e) => e.textContent.trim() === '家务活模型')", timeout: 8000 }, { eval: "[...document.querySelectorAll('.set-row-name')].find((e) => e.textContent.trim() === '家务活模型').scrollIntoView({ block: 'center' }), 1" }, { wait: 400 }], after: [CLOSE_SETTINGS],
     measure: { chore: [".set-row", "给任务起名"], sub: [".set-row", "任务委派出去"] } },
   { id: "migration", steps: [...settingsTab("迁移"), { wait: 1000 }], after: [CLOSE_SETTINGS],
     measure: { scan: ["button", "扫描"], readonly: ["span", "只读"], importBtn: ["button", "导入"] } },
   { id: "composer", steps: [...openTask(READ), BOTTOM, { wait: 400 }],
-    measure: { clip: "button[aria-label^='附加文件']", ws: [".composer-bottom-bar button", "城市感知课题"], perm: [".composer-bottom-bar button", "放行"], model: [".composer-bottom-bar button", "GLM"], card: ".composer-stack .glass-card", bar: ".composer-bottom-bar" } },
+    measure: { clip: "button[aria-label^='附加文件']", ws: [".composer-bottom-bar button", "城市感知课题"], perm: [".composer-bottom-bar button", "放行"], model: [".composer-bottom-bar button", "GLM"], think: [".composer-bottom-bar button", "最高"], card: ".composer-stack .glass-card", bar: ".composer-bottom-bar" } },
   { id: "permission", steps: [...openTask(READ), BOTTOM, { clickText: [".composer-bottom-bar button", "放行"] }, { wait: 600 }], after: [{ key: "Escape" }],
     measure: { menu: ".menu-panel", perm: [".composer-bottom-bar button", "放行"] } },
   { id: "rewind", steps: [...openTask(READ), { eval: "[...document.querySelectorAll('.bubble-md')].find((b) => b.textContent.includes('小标题'))?.scrollIntoView({ block: 'start' }), 1" }, { wait: 400 }],
     measure: { rewind: { js: "[...document.querySelectorAll('.bubble-md')].find((b) => b.textContent.includes('小标题'))?.parentElement?.parentElement?.parentElement?.querySelector(\"button[aria-label^='回到这里']\")" },
       undo: "last:button[aria-label^='撤销这一轮']", bubble: [".bubble-md", "小标题"] } },
-  // 现跑的一轮：在 PDF 那条任务里交一件要好几步的新活，开跑十来秒时拍（计划已列、工具在跑）。每次重拍都会多一轮对话
-  { id: "working",
-    steps: [...openTask(PDF), { if: IDLE, click: "textarea.composer-input" }, { if: IDLE, type: "把论文 Table 1 里各模型在 NYC-taxi 上的 MAE 抄成一张 CSV 存到 data/table1_mae.csv，再用 matplotlib 画一张对比柱状图存到 figures/。先用 update_plan 列计划。" }, { if: IDLE, key: "Enter" },
-      { until: "document.querySelectorAll('.chat-transcript .bubble-md').length > 0 && !!document.querySelector('.btn-accent[data-tone=danger]')", timeout: 20000 }, { wait: 11000 }, BOTTOM, { wait: 300 }],
+  // 现跑的一轮：在工作区里新开一条任务交一件要好几步的活，开跑十来秒时拍（计划已列、工具在跑）。
+  // 每次重拍都会多一条任务——不在老任务里重发：同一句话发到第 N 遍，它会开始讲「第 N 份副本」，露馅。
+  // both：浅、玄两张取自同一帧（capture.mjs 里浅色这一遍直接切 data-theme 再拍玄），量的框才对得上两张图。
+  { id: "working", both: true,
+    steps: [RESET, { eval: CLOSE_CARRYOVERS }, { wait: 500 }, { eval: "document.querySelectorAll('.workspace-group button[aria-expanded=false]').forEach((b) => b.click()), 1" }, { wait: 500 },
+      { click: "aside button[aria-label='在此工作区新建任务']" }, { wait: 1500 }, { click: "textarea.composer-input" },
+      { type: () => `把论文 Table 1 里各模型在 NYC-taxi 上的 MAE 抄成一张 CSV 存到 data/mae_${stamp()}.csv，再用 matplotlib 画一张对比柱状图存到 figures/。先用 update_plan 列计划，用中文，命令里只写相对路径。` }, { key: "Enter" },
+      { until: "document.querySelectorAll('.chat-transcript .bubble-md').length > 0 && !!document.querySelector('.btn-accent[data-tone=danger]')", timeout: 20000 }, { wait: 12000 }, BOTTOM, { wait: 300 }],
+    after: [{ until: IDLE, timeout: 180000 }, { wait: 3000 }],
     measure: { block: { js: "(() => { const last = [...document.querySelectorAll('.bubble-md')].at(-1); const floor = last ? last.getBoundingClientRect().bottom + 30 : 0; return [...document.querySelectorAll('.chat-transcript *')].filter((e) => e.children.length === 0 && e.getBoundingClientRect().top > floor && e.getBoundingClientRect().bottom < innerHeight - 150); })()" }, stop: ".btn-accent[data-tone=danger]" } },
   { id: "plan", steps: [...openTask(READ), rail("这条任务"), { wait: 800 }, { clickText: ["[role=tab], .toolbar button", "进度"] }, { wait: 800 }],
     measure: { panel: PANEL, goal: ".right-panel-slot section.tp-goal",
@@ -104,20 +113,20 @@ export const SCENES = [
   { id: "memory", steps: [...openTask(PDF), { click: "button.memrow-btn" }, { wait: 1200 }], after: [{ key: "Escape" }],
     measure: { row: "button.memrow-btn", list: { js: "[...document.querySelectorAll('.chat-transcript *')].find((e) => e.textContent.includes('在审查面板里看'))?.parentElement" } } },
   { id: "memory-library", steps: settingsTab("记忆库"), after: [CLOSE_SETTINGS],
-    measure: { scopes: { js: "[...document.querySelectorAll('*')].find((e) => e.children.length === 0 && e.textContent.trim() === '范围')?.parentElement" }, kinds: ["button", "偏好"], first: { js: "[...document.querySelectorAll('*')].find((e) => e.children.length === 0 && e.textContent.trim() === '偏好')?.parentElement?.nextElementSibling" } } },
+    measure: { scopes: { js: "[...document.querySelectorAll('*')].find((e) => e.children.length === 0 && e.textContent.trim() === '范围')?.parentElement" }, entries: { js: "[...document.querySelectorAll('.mem-entry')].slice(0, 2)" } } },
   { id: "terminal", steps: [...openTask(TERM), rail("终端"), { until: "!!document.querySelector('.xterm-screen')", timeout: 20000 }, { wait: 2000 }, { click: ".xterm-screen" }, { type: "PROMPT='%1~ %% '; clear" }, { key: "Enter" }, { wait: 400 }, { type: "python3 code/repro_zero_shot.py" }, { key: "Enter" }, { wait: 800 }, { type: "tail -3 logs/train.log" }, { key: "Enter" }, { wait: 800 }],
     measure: { term: ".xterm-screen", rail: ".right-rail button[aria-label='终端']" } },
   { id: "background", steps: [...openTask(TERM), { eval: "[...document.querySelectorAll('button')].find((b) => b.textContent.includes('在右栏查看'))?.scrollIntoView({ block: 'center' }), 1" }, { wait: 400 }],
     measure: { card: { js: "[...document.querySelectorAll('button')].find((e) => e.textContent.includes('在右栏查看'))?.parentElement?.parentElement" } } },
   { id: "browser-chat", steps: [...openTask(BROWSE), TOP, { wait: 300 }],
     measure: { turn: "button.collapse-row-btn", answer: ".assistant-prose", rail: ".right-rail button[aria-label='内置浏览器']" } },
-  { id: "browser", composite: { base: "browser-chat", url: "https://arxiv.org/search/?query=urban+spatio-temporal+large+language+model&searchtype=all" },
+  { id: "browser", composite: { base: "browser-chat", url: "https://arxiv.org/search/?query=urban+spatio-temporal+LLM&searchtype=all" },
     measure: {} },
-  { id: "plugins", steps: [...openTask(PLUGIN), rail("插件"), { wait: 1500 }],
+  { id: "plugins", steps: [...openTask(PLUGIN), rail("能力"), { wait: 1500 }],
     measure: { panel: PANEL, make: [`${PANEL} button`, "和智能体一起做一个"], local: [`${PANEL} button`, "接入本地插件"], drafting: ["button.pl-draft-main", "组会纪要"] } },
-  { id: "plugin-make", steps: [...openTask(PLUGIN), rail("插件"), { wait: 1500 }, TOP, { wait: 300 }],
+  { id: "plugin-make", steps: [...openTask(PLUGIN), rail("能力"), { wait: 1500 }, TOP, { wait: 300 }],
     measure: { bubble: ".bubble-md", make: [`${PANEL} button`, "和智能体一起做一个"] } },
-  { id: "plugin-draft", steps: [...openTask(PLUGIN), rail("插件"), { wait: 1500 }, { eval: "document.querySelector('button.pl-draft-main') ? 1 : ([...document.querySelectorAll('.toolbar button')].find((b) => /返回|全部插件/.test(b.getAttribute('aria-label') ?? b.textContent))?.click(), 1)" }, { wait: 800 }, { clickText: ["button.pl-draft-main", "组会纪要"] }, { wait: 1500 }],
+  { id: "plugin-draft", steps: [...openTask(PLUGIN), rail("能力"), { wait: 1500 }, { eval: "document.querySelector('button.pl-draft-main') ? 1 : ([...document.querySelectorAll('.toolbar button')].find((b) => /返回|全部插件/.test(b.getAttribute('aria-label') ?? b.textContent))?.click(), 1)" }, { wait: 800 }, { clickText: ["button.pl-draft-main", "组会纪要"] }, { wait: 1500 }],
     measure: { panel: PANEL, workflow: [".right-panel-slot .pl-card", "工作流"],
       pending: { js: "[...document.querySelectorAll('.right-panel-slot *')].find((e) => e.children.length === 0 && e.textContent.trim() === '看板样式')?.parentElement?.parentElement" } } },
   { id: "plugin-board", steps: [...openTask(PLUGIN), BOTTOM, { wait: 1000 }],

@@ -70,7 +70,10 @@ export interface Pin {
 
 /**
  * 放大镜：把截图上的 from 那块放大 scale 倍，贴在截图框里的 at 处（左上角，比例，可越出
- * 截图框——设计稿里放大镜压在窗口右下缘外）。pins 落在放大镜自己身上（比例）。
+ * 截图框——设计稿里放大镜压在窗口右下缘外）。pins 只有 x 有意义（放大镜内的比例）：编号点
+ * 一律骑在放大镜的上边框上、对着被放大的那个元素，不压在放大的字上。
+ * 放大镜自己占的地方（at 起，宽 from.w × scale、高 from.h × scale，都是截图框的比例）不许盖住
+ * 它的来源 from——盖住了读者分不清哪边是原件（onboarding-pages.test.ts 把关）。
  */
 export interface Loupe {
   from: Box;
@@ -153,6 +156,13 @@ function padded(b: Box, pad: number): Box {
   return { x, y, w: Math.min(1, b.x + b.w + pad) - x, h: Math.min(1, b.y + b.h + pad) - y };
 }
 
+/** 放大镜取景：一排东西，横向多留 padX、纵向只留 padY——上下别切到相邻行的字 */
+function rowLoupe(b: Box, padX: number, padY: number): Box {
+  const x = Math.max(0, b.x - padX);
+  const y = Math.max(0, b.y - padY);
+  return { x, y, w: Math.min(1, b.x + b.w + padX) - x, h: Math.min(1, b.y + b.h + padY) - y };
+}
+
 /** 两块合成一块（框住一行里的几样东西） */
 function union(a: Box, b: Box): Box {
   const x = Math.min(a.x, b.x);
@@ -174,9 +184,10 @@ function pin(n: number, b: Box, at: Anchor = "tl"): Pin {
   return { n, x, y };
 }
 
-/** 放大镜：把 from 放大 scale 倍贴在 at；pins 给的是截图坐标，换算到放大镜自己身上 */
-function loupe(from: Box, at: { x: number; y: number }, scale: number, pins: readonly Pin[] = []): Loupe {
-  return { from, at, scale, pins: pins.map((p) => ({ n: p.n, x: (p.x - from.x) / from.w, y: (p.y - from.y) / from.h })) };
+/** 放大镜：把 from 放大 scale 倍贴在 at；marks 给「第几号 → 被放大的那个元素」，编号点按元素中线落在放大镜上沿 */
+function loupe(from: Box, at: { x: number; y: number }, scale: number, marks: readonly (readonly [number, Box])[] = []): Loupe {
+  const clamp = (value: number): number => Math.min(0.96, Math.max(0.04, value));
+  return { from, at, scale, pins: marks.map(([n, target]) => ({ n, x: clamp((target.x + target.w / 2 - from.x) / from.w), y: 0 })) };
 }
 
 const opener = (shot: ShotId): OpenerPage => ({ kind: "opener", id: "opener", shot });
@@ -186,8 +197,20 @@ const faq = (id: string): FaqPage => ({ kind: "faq", id });
 // —— 每页的取景。框名对应 scripts/onboarding-shots/scenes.mjs 里各场景的 measure ——
 
 const home = { sidebar: box("home", "sidebar"), composer: box("home", "composer"), rail: box("home", "rail", 0.004), newTask: box("home", "newTask", 0.004) };
-const composer = { card: box("composer", "card"), clip: box("composer", "clip", 0.003), ws: box("composer", "ws", 0.003), perm: box("composer", "perm", 0.003), model: box("composer", "model", 0.003) };
-const composerBar = union(composer.clip, composer.model);
+const composer = {
+  card: box("composer", "card"),
+  clip: box("composer", "clip", 0.003),
+  ws: box("composer", "ws", 0.003),
+  perm: box("composer", "perm", 0.003),
+  model: box("composer", "model", 0.003),
+  think: box("composer", "think", 0.003),
+};
+const composerBar = union(union(composer.clip, composer.model), composer.think);
+/** 放大镜取景：底栏一整排（回形针到思考档），上沿多留一截——编号点骑在放大镜上边框上，不压字 */
+const composerLoupe: Box = (() => {
+  const b = padded(composerBar, 0.012);
+  return { x: b.x, y: b.y - 0.022, w: b.w, h: b.h + 0.022 };
+})();
 const general = { chore: box("general", "chore"), sub: box("general", "sub") };
 const plan = box("plan", "panel", 0);
 const automationRow = box("automation", "daily");
@@ -202,12 +225,12 @@ export const GUIDE: readonly GuideChapter[] = [
       step("providers", "providers", {
         focus: box("providers", "plan"),
         pins: [pin(1, box("providers", "added", 0.003), "tl"), pin(2, box("providers", "deepseek"))],
-        loupe: loupe(box("providers", "plan"), { x: 0.42, y: 0.5 }, 1.8, [pin(1, box("providers", "added", 0.003), "tl")]),
+        loupe: loupe(box("providers", "plan"), { x: 0.42, y: 0.5 }, 1.8, [[1, box("providers", "added", 0.003)]]),
       }),
       step("roles", "general", {
         focus: union(general.chore, general.sub),
         pins: [pin(1, general.chore), pin(2, general.sub)],
-        loupe: loupe(union(general.chore, general.sub), { x: 0.3, y: 0.73 }, 1.35),
+        loupe: loupe(union(general.chore, general.sub), { x: 0.3, y: 0.71 }, 1.25),
       }),
       step("import", "migration", {
         focus: union(box("migration", "readonly"), box("migration", "scan")),
@@ -222,8 +245,9 @@ export const GUIDE: readonly GuideChapter[] = [
       opener("working"),
       step("composer", "composer", {
         focus: composer.card,
-        pins: [pin(1, composer.clip, "t"), pin(2, composer.ws, "t"), pin(3, composer.perm, "t"), pin(4, composer.card, "tl")],
-        loupe: loupe(padded(composerBar, 0.02), { x: 0.3, y: 0.42 }, 1.9, [pin(1, composer.clip, "t"), pin(2, composer.ws, "t"), pin(3, composer.perm, "t")]),
+        // 1–3 只在放大镜里（底栏小字原图里看不清）；原图上只留框住整张输入卡的 4，一页一套编号
+        pins: [pin(4, composer.card, "tl")],
+        loupe: loupe(composerLoupe, { x: 0.2, y: 0.62 }, 2, [[1, composer.clip], [2, composer.ws], [3, composer.perm]]),
         say: true,
       }),
       step("permission", "permission", {
@@ -238,7 +262,7 @@ export const GUIDE: readonly GuideChapter[] = [
       step("rewind", "rewind", {
         focus: box("rewind", "rewind", 0.008),
         pins: [pin(1, box("rewind", "rewind", 0.008), "l"), pin(2, box("rewind", "undo", 0.006), "l")],
-        loupe: loupe(padded(box("rewind", "rewind"), 0.05), { x: 0.55, y: 0.5 }, 3),
+        loupe: loupe(rowLoupe(box("rewind", "rewind"), 0.05, 0.012), { x: 0.55, y: 0.5 }, 3),
       }),
     ],
   },
@@ -250,7 +274,8 @@ export const GUIDE: readonly GuideChapter[] = [
       step("plan", "plan", {
         focus: box("plan", "plan"),
         pins: [pin(1, box("plan", "plan"), "tl"), pin(2, box("plan", "done"), "l")],
-        loupe: loupe(box("plan", "plan"), { x: 0.12, y: 0.2 }, 1.5, [pin(1, box("plan", "plan"), "tl")]),
+        // 放大镜放在来源（右栏计划）左边的空地上：不盖住框，右栏上的 1、2 才看得见
+        loupe: loupe(box("plan", "plan"), { x: 0.03, y: 0.2 }, 1.4, [[1, part(box("plan", "plan"), { w: 0.16 })]]),
       }),
       step("goal", "plan", { focus: box("plan", "goal"), pins: [pin(1, box("plan", "goal"), "tl")], loupe: loupe(box("plan", "goal"), { x: 0.15, y: 0.45 }, 1.8) }),
       step("context", "context", {
@@ -279,7 +304,7 @@ export const GUIDE: readonly GuideChapter[] = [
       opener("quote"),
       step("quote", "quote", {
         pins: [pin(1, box("quote", "toolbar"), "tl"), pin(2, box("quote", "quote"), "tl")],
-        loupe: loupe(padded(box("quote", "toolbar"), 0.03), { x: 0.35, y: 0.55 }, 2.4, [pin(1, box("quote", "toolbar"), "tl")]),
+        loupe: loupe(padded(box("quote", "toolbar"), 0.03), { x: 0.35, y: 0.55 }, 2.4, [[1, box("quote", "toolbar")]]),
         say: true,
       }),
       step("excerpt", "excerpts", { focus: box("excerpts", "panel", 0), pins: [pin(1, box("excerpts", "first"), "tl"), pin(2, box("excerpts", "first"), "bl")] }),
@@ -301,9 +326,10 @@ export const GUIDE: readonly GuideChapter[] = [
       step("waiting", "subsessions", {
         focus: part(box("subsessions", "panel", 0), { h: 0.1 }),
         pins: [pin(1, box("subsessions", "rail", 0.004), "l")],
-        loupe: loupe(part(box("subsessions", "panel", 0), { h: 0.1 }), { x: 0.05, y: 0.5 }, 1.5),
+        // 取景比框多留一截底：回答框完整进镜，不切成半行
+        loupe: loupe(part(box("subsessions", "panel", 0), { h: 0.135 }), { x: 0.05, y: 0.47 }, 1.5),
       }),
-      step("cost", "general", { focus: general.sub, pins: [pin(1, general.sub)], loupe: loupe(general.sub, { x: 0.3, y: 0.72 }, 1.4) }),
+      step("cost", "general", { focus: general.sub, pins: [pin(1, general.sub)], loupe: loupe(general.sub, { x: 0.27, y: 0.72 }, 1.35) }),
     ],
   },
   {
@@ -311,7 +337,7 @@ export const GUIDE: readonly GuideChapter[] = [
     part: "basics",
     pages: [
       opener("memory-library"),
-      step("remember", "memory-library", { focus: box("memory-library", "kinds", 0.01), pins: [pin(1, box("memory-library", "kinds", 0.01), "b")] }),
+      step("remember", "memory-library", { focus: box("memory-library", "entries", 0.004), pins: [pin(1, box("memory-library", "entries", 0.004), "tl")] }),
       step("used", "memory", {
         focus: union(box("memory", "row"), box("memory", "list")),
         pins: [pin(1, box("memory", "row"), "tl")],
@@ -364,7 +390,7 @@ export const GUIDE: readonly GuideChapter[] = [
       step("chart", "automation", {
         focus: automationRow,
         pins: [pin(1, part(automationRow, { x: 0.62, w: 0.2 }), "t")],
-        loupe: loupe(automationRow, { x: 0.3, y: 0.62 }, 1.55, [pin(1, part(automationRow, { x: 0.62, w: 0.2 }), "t"), pin(2, part(automationRow, { x: 0.86, w: 0.12 }), "t")]),
+        loupe: loupe(automationRow, { x: 0.3, y: 0.62 }, 1.55, [[1, part(automationRow, { x: 0.62, w: 0.2 })], [2, part(automationRow, { x: 0.86, w: 0.12 })]]),
       }),
     ],
   },

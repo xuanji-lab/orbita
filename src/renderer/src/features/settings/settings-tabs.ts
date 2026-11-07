@@ -5,7 +5,7 @@
 import type { IconName } from "../../shell/Icon";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 
-export type SettingsTab = "general" | "providers" | "migration" | "browser" | "voice" | "plugins" | "memory" | "experimental";
+export type SettingsTab = "general" | "guide" | "providers" | "migration" | "browser" | "voice" | "plugins" | "memory" | "experimental";
 
 export interface SettingsTabDef {
   id: SettingsTab;
@@ -14,6 +14,8 @@ export interface SettingsTabDef {
 
 export const SETTINGS_TABS: readonly SettingsTabDef[] = [
   { id: "general", icon: "sliders" },
+  // 新手引导：全屏引导的唯一常驻入口（2026-11-07 用户：「应该在设置里有个独立的 tab」）
+  { id: "guide", icon: FEATURE_ICON.guide },
   { id: "providers", icon: "cpu" },
   { id: "migration", icon: "download" },
   { id: "browser", icon: FEATURE_ICON.browser },

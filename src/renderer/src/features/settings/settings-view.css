@@ -752,3 +752,83 @@ a.exp-pr:hover {
 .panel-usage-count {
   font-family: var(--font-family-mono);
 }
+
+/* ===== 「新手引导」页签（GuideSettings.tsx）=====
+ * 行就是设置行（.set-row）：名字 + 下面一行说明；前面多一列等宽章号（同引导左侧目录的 .ob-ch-no），
+ * 后面一枚 chevron 表示「点开」。整行是按钮：左右各让出 space-2 再用负外边距找回，文字位置与别的设置行一致，
+ * 悬停底与键盘焦点描边都落在圆角框里。 */
+.set-guide-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-4);
+  align-items: center;
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.set-guide-lead {
+  margin: 0;
+  max-width: 52ch;
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-reading);
+  color: var(--color-text-secondary);
+}
+
+.set-guide-start {
+  display: grid;
+  justify-items: end;
+  gap: var(--space-1-5);
+}
+
+.set-guide-btn {
+  display: inline-flex;
+  gap: var(--space-1-5);
+  align-items: center;
+  height: var(--control-height-md);
+  padding: 0 var(--space-4);
+  border: 0;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-semibold);
+}
+
+.set-guide-seen {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.set-guide-row {
+  grid-template-columns: var(--space-6) minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  width: calc(100% + var(--space-4));
+  margin-inline: calc(-1 * var(--space-2));
+  padding-inline: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  /* 行间发丝线：画成底部一条 1px 的渐变图（两头各缩进 space-2，与文字对齐）。不用 border-bottom / inset 阴影——
+     它们都跟着圆角往上弯，一排行就像一排小卡片 */
+  background: linear-gradient(var(--color-border-subtle), var(--color-border-subtle)) no-repeat bottom center / calc(100% - var(--space-4)) 1px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.set-group:last-child .set-guide-row:last-child {
+  background-image: none;
+}
+
+.set-guide-row:hover {
+  background-color: var(--color-bg-hover);
+}
+
+.set-guide-no {
+  align-self: start;
+  padding-top: var(--space-0-5);
+}
+
+.set-guide-go {
+  color: var(--color-text-tertiary);
+}

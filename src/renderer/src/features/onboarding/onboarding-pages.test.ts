@@ -102,6 +102,58 @@ describe("几何：框、编号点、放大镜都落在截图里", () => {
   });
 });
 
+/** 放大镜的边框（--space-1-5 × 2 ≈ 12px）占截图框宽度的比例，按 1440×900 下约 744×465 的截图框：横向 0.017、纵向 0.027 */
+const BORDER_X = 0.017;
+const BORDER_Y = 0.027;
+
+describe("放大镜：不盖住自己的来源，也不出截图框", () => {
+  test("放大镜占的地方（at 起，宽 from.w × scale、高 from.h × scale）与来源 from 不相交", () => {
+    for (const chapter of GUIDE) {
+      for (const page of chapter.pages as readonly GuidePage[]) {
+        if (page.kind !== "step" || page.loupe === undefined) continue;
+        const { from, at, scale } = page.loupe;
+        // 放大镜两边各有一圈边框（约 0.01 个截图框）：算进去，免得贴着来源的框边
+        const w = from.w * scale + BORDER_X;
+        const h = from.h * scale + BORDER_Y;
+        const overlap = at.x < from.x + from.w && at.x + w > from.x && at.y < from.y + from.h && at.y + h > from.y;
+        assert.ok(!overlap, `${chapter.id}.${page.id}：放大镜 (${at.x.toFixed(2)},${at.y.toFixed(2)} ${w.toFixed(2)}×${h.toFixed(2)}) 盖住了它放大的那一块`);
+        assert.ok(at.x >= 0 && at.y >= 0 && at.x + w <= 1.0001 && at.y + h <= 1.0001, `${chapter.id}.${page.id}：放大镜越出截图框`);
+      }
+    }
+  });
+
+  test("放大镜也不盖住同页的编号点原件（原图上的编号点不落在放大镜里）", () => {
+    for (const chapter of GUIDE) {
+      for (const page of chapter.pages as readonly GuidePage[]) {
+        if (page.kind !== "step" || page.loupe === undefined) continue;
+        const { from, at, scale } = page.loupe;
+        for (const pin of page.pins ?? []) {
+          const inside = pin.x > at.x && pin.x < at.x + from.w * scale + BORDER_X && pin.y > at.y && pin.y < at.y + from.h * scale + BORDER_Y;
+          assert.ok(!inside, `${chapter.id}.${page.id}：原图上的 ${pin.n} 号点被放大镜盖住`);
+        }
+      }
+    }
+  });
+
+  test("输入框一览：1–3 只在放大镜里，原图上只留框住整张输入卡的 4（审查：一页两套编号层级混乱）", () => {
+    const composer = GUIDE.find((chapter) => chapter.id === "task")?.pages.find((page) => page.id === "composer");
+    assert.equal(composer?.kind, "step");
+    if (composer?.kind !== "step") return;
+    assert.deepEqual((composer.pins ?? []).map((pin) => pin.n), [4]);
+    assert.deepEqual((composer.loupe?.pins ?? []).map((pin) => pin.n), [1, 2, 3]);
+  });
+
+  test("原图上同一个编号不画两次（放大镜里允许有同号的放大版）", () => {
+    for (const chapter of GUIDE) {
+      for (const page of chapter.pages as readonly GuidePage[]) {
+        if (page.kind !== "step") continue;
+        const onShot = (page.pins ?? []).map((pin) => pin.n);
+        assert.equal(new Set(onShot).size, onShot.length, `${chapter.id}.${page.id}：原图上编号重复 ${onShot.join(",")}`);
+      }
+    }
+  });
+});
+
 describe("截图资源：用到的浅色 / 玄两套都在，单张不过大", () => {
   const used = new Set(GUIDE.flatMap((chapter) => chapter.pages.flatMap((page) => (page.kind === "faq" ? [] : [page.shot]))));
   test("数据表用到的截图 id 都在 SHOT_IDS 里，SHOT_IDS 里没有没人用的", () => {

@@ -1135,6 +1135,7 @@ export const en = {
   settings: {
     tabs: {
       general: "General",
+      guide: "Guide",
       providers: "Providers",
       migration: "Migration",
       browser: "Browser",
@@ -1150,9 +1151,12 @@ export const en = {
       "Light, Dark and Black come in both languages. Copybook is Chinese-only and Typescript English-only — their ruled lines are drawn for that script. Commit and PR attribution follows the interface language.",
     languageLockedZh: "This theme is Chinese-only",
     languageLockedEn: "This theme is English-only",
-    onboarding: "Getting started",
-    onboardingInfo: "The full-screen guide that opened the first time: what Orbita can do, one research project from start to finish.",
-    onboardingReplay: "Watch again",
+    /** The "Guide" tab: one line of intro + "Start from the top", then the whole chapter list */
+    guideLead: "One research project from start to finish — what Orbita can do. Pick any chapter below to jump straight to it.",
+    guideStart: "Start from the top",
+    guideSeen: "Seen · watch again any time",
+    guideUnseen: "Not finished yet",
+    guideChapterOpen: (name: string) => `Open: ${name}`,
     experimentalLead:
       "Still being polished — they may change or break. Each feature has its own switch; turning one off only hides its entries, the data stays.",
     experimentalAllChanges: (count: number) => `All ${count} entries`,
@@ -3110,6 +3114,7 @@ export const en = {
     chapters: {
       start: {
         name: "Start",
+        blurb: "Connect a model; meet workspaces and the three model roles.",
         case: "Case: opening it for the first time",
         lead: "Connect it to a model first. After that, one sentence is enough: it gets to work on your computer — reading files, running commands, looking things up.",
         pages: {
@@ -3127,7 +3132,7 @@ export const en = {
             name: "Add a provider",
             title: "Connect one model first",
             body: "In Settings › **Model providers**, pick a provider and paste its API key. One is enough to start; add more later and pick per job.",
-            notes: ["Providers you have connected sit first.", "Each card opens its key and model list."],
+            notes: ["A connected provider has its switch on, top right of the card.", "Each card opens its key and model list."],
           },
           roles: {
             name: "Who does what",
@@ -3145,6 +3150,7 @@ export const en = {
       },
       task: {
         name: "Do one thing with it",
+        blurb: "Hand it a job, watch it work, take it back if you misspoke.",
         case: "Case: “Read this paper and list the experiments we can reproduce”",
         lead: "Hand over one job and watch it work through it step by step. Not happy? Take it back and say it again.",
         pages: {
@@ -3182,6 +3188,7 @@ export const en = {
       },
       progress: {
         name: "Progress and context",
+        blurb: "Where the plan stands and how much context is left.",
         case: "Case: how far along it is, how much room is left",
         lead: "The right panel's This task tells you at any moment: which step of the plan it's on, and how much of its context is left.",
         pages: {
@@ -3207,6 +3214,7 @@ export const en = {
       },
       files: {
         name: "Files",
+        blurb: "Give it a project folder and review what it changed.",
         case: "Case: handing it the project folder",
         lead: "A workspace is just a folder on your computer. Hand it over and it reads and writes inside.",
         pages: {
@@ -3232,6 +3240,7 @@ export const en = {
       },
       quote: {
         name: "Quotes and excerpts",
+        blurb: "Quote a line to follow up, save excerpts, cite PDF passages.",
         case: "Case: highlight a passage, ask about it, keep it",
         lead: "Found a useful sentence in an answer? Highlight it: ask a follow-up about it, or keep it as an excerpt.",
         pages: {
@@ -3265,6 +3274,7 @@ export const en = {
       },
       subsessions: {
         name: "Sub-sessions",
+        blurb: "Split a job and let helpers work in parallel.",
         case: "Case: three helpers researching in parallel",
         lead: "When work splits apart, it sends out sub-sessions to do the pieces in parallel; you only read the summary.",
         pages: {
@@ -3297,14 +3307,15 @@ export const en = {
       },
       memory: {
         name: "Memory",
+        blurb: "It remembers facts and preferences; you can correct it any time.",
         case: "Case: you don't have to do anything",
         lead: "It remembers your preferences and the facts of your project on its own, so you don't repeat yourself. You only need to know it's there.",
         pages: {
           remember: {
             name: "It remembers by itself",
             title: "It learns as you talk",
-            body: "When a conversation goes quiet it turns it into a few memories — **facts**, **preferences**, **lessons**. In your next task the relevant ones come along by themselves.",
-            notes: ["It needs a chore model (chapter 1)."],
+            body: "When a conversation goes quiet it turns it into a few memories — **facts**, **preferences**, **lessons**. In your next task the relevant ones come along by themselves. It needs a **chore model** set up first (chapter 1).",
+            notes: ["Each memory is a sentence or two; on the right, how many times it has been used."],
           },
           used: {
             name: "Which memories it used",
@@ -3323,6 +3334,7 @@ export const en = {
       },
       terminal: {
         name: "Terminal",
+        blurb: "Commands run where you can see them; long jobs go to the background.",
         case: "Case: running the reproduction code",
         lead: "When it runs commands, it uses a terminal you can see — and take over at any time.",
         pages: {
@@ -3344,6 +3356,7 @@ export const en = {
       },
       browser: {
         name: "Built-in browser",
+        blurb: "It browses and downloads for you, and hands the browser back for logins.",
         case: "Case: finding papers on arXiv",
         lead: "It has its own browser: reads pages, clicks buttons, downloads files.",
         pages: {
@@ -3364,6 +3377,7 @@ export const en = {
       },
       plugins: {
         name: "Plugins",
+        blurb: "Turn a repeatable workflow into a plugin that runs on one sentence.",
         case: "Case: turning it into a “Paper tracker”",
         lead: "A routine you repeat becomes a plugin — skills, scripts and a board — and runs with one sentence from then on.",
         pages: {
@@ -3396,15 +3410,16 @@ export const en = {
       },
       automation: {
         name: "Automations",
+        blurb: "At the scheduled time it opens a new session and does the job.",
         case: "Case: running by itself every morning",
         lead: "When the time comes, it opens a new task and gets it done. You only say **what and when**; the result stays in that task and shows up on the board.",
         pages: {
           create: {
             name: "Create one",
             title: "One sentence, and it's set up",
-            body: "Say “every morning at 8:30 …” in a conversation and it creates it; or create one by hand in the **Automations** panel on the right.",
+            body: "Say “every morning at 9:00 …” in a conversation and it creates it; or create one by hand in the **Automations** panel on the right.",
             notes: ["Your automations, with their next run."],
-            say: "Every morning at 8:30, use the paper tracker to find a new paper and show me the board when it's done.",
+            say: "Every morning at 9:00, use the paper tracker to find a new paper and show me the board when it's done.",
           },
           plugin: {
             name: "Plugin and permission",
@@ -3425,6 +3440,7 @@ export const en = {
       },
       board: {
         name: "Board",
+        blurb: "Cards from plugins and automations, laid out by day.",
         case: "Case: a week's results at a glance",
         lead: "Cards from plugins and automations, laid out day by day on one sheet.",
         pages: {
@@ -3444,6 +3460,7 @@ export const en = {
       },
       focus: {
         name: "Focus and wrap-up",
+        blurb: "Focus for a while, wrap up, keep what's unfinished for later.",
         case: "Case: getting one thing done",
         lead: "Focus for a stretch, then wrap up: it lists what's left undone and keeps it for later.",
         pages: {
@@ -3469,6 +3486,7 @@ export const en = {
       },
       faq: {
         name: "FAQ",
+        blurb: "Six questions: system permissions, where your data lives, updates and more.",
         case: "",
         lead: "",
         pages: {

@@ -28,6 +28,7 @@ import { COMPACTION_CHOICES } from "./compact-viz.ts";
 import { allShownTicked, importedFirst, setShown } from "./login-sites.ts";
 import { formatDay } from "./migration-groups.ts";
 import { MigrationView } from "./MigrationView";
+import { GuideSettings } from "./GuideSettings";
 import { SettingGroup, SettingRow } from "./SettingRow";
 import { Segmented, SelectButton, Switch } from "./SettingControls";
 import { UpdateCard } from "./UpdateCard";
@@ -90,8 +91,8 @@ export function SettingsView(props: {
     onOpenDraft: (draft: PluginDraftTarget) => void;
     onOpenSession: (sessionId: string, draftPath: string) => void;
   };
-  /** 通用页「再看一遍新手引导」：全屏打开引导（不改「看过」的设置键） */
-  onOpenOnboarding: () => void;
+  /** 「新手引导」页签：全屏打开引导，从第几页开始（0 = 从头；点某章 = 那章的章首页）。不改「看过」的设置键 */
+  onOpenOnboarding: (startAt: number) => void;
   /** 记忆库页签里「回到原文」：退出设置、打开出处会话并滚到那一轮 */
   onJumpToMemorySource: (view: MemoryEntryView) => void;
   /** 收起右栏；右栏没开就是 null。模型服务页的价格 · 能力图太窄时给「收起右栏」按钮用 */
@@ -153,6 +154,10 @@ export function SettingsView(props: {
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
           <VoiceSettings />
         </div>
+      ) : props.tab === "guide" ? (
+        <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
+          <GuideSettings seen={props.settings.onboardingSeen === true} onOpen={props.onOpenOnboarding} />
+        </div>
       ) : props.tab === "plugins" ? (
         // 插件页的全屏版：自己带滚动区；窄了（右栏同时开着）由它自己的容器查询收成单列
         <PluginsView
@@ -196,7 +201,6 @@ export function SettingsView(props: {
             onChange={props.onSettingsChange}
             highlightChore={highlightChore}
             onHighlightConsumed={() => setHighlightChore(false)}
-            onOpenOnboarding={props.onOpenOnboarding}
             onOpenProviders={() => props.onTab("providers")}
           />
         </div>
@@ -257,7 +261,6 @@ function General(props: {
   /** 迁移页三步清单第②步跳过来时：滚到家务活模型行、短暂高亮、焦点落到选择器 */
   highlightChore?: boolean;
   onHighlightConsumed?: () => void;
-  onOpenOnboarding: () => void;
   /** 模型菜单底部「已关闭的服务 · 去模型服务打开」的去向 */
   onOpenProviders: () => void;
 }) {
@@ -398,11 +401,6 @@ function General(props: {
               {lockedLanguage === "zh" ? t.settings.languageLockedZh : t.settings.languageLockedEn}
             </span>
           )}
-        </SettingRow>
-        <SettingRow name={t.settings.onboarding} info={t.settings.onboardingInfo}>
-          <PanelButton onClick={props.onOpenOnboarding}>
-            <Icon name="book-open" size={14} /> {t.settings.onboardingReplay}
-          </PanelButton>
         </SettingRow>
       </SettingGroup>
       {/* 原来的 Context / Git / Sessions 各只有一两行，三个分组标题比内容还显眼；

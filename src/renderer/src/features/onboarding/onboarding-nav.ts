@@ -6,7 +6,7 @@
  * 「上一页」，最后一页的「下一页」是「看完了」（由调用方关掉引导）。
  */
 import type { AppSettings, ThemePreference } from "@shared/settings";
-import type { GuideChapter } from "./onboarding-pages.ts";
+import type { ChapterId, GuideChapter, GuidePart } from "./onboarding-pages.ts";
 
 /** 摊平后的一页：第几章、章内第几页 */
 export interface GuidePosition {
@@ -66,4 +66,26 @@ export function boldRuns(text: string): { text: string; bold: boolean }[] {
     .split("**")
     .map((part, index) => ({ text: part, bold: index % 2 === 1 }))
     .filter((run) => run.text !== "");
+}
+
+/** 章号：目录与章首页的大号补成两位，附录没有章号（「··」） */
+export function chapterNumber(chapters: readonly GuideChapter[], chapter: number): string {
+  return chapters[chapter]?.part === "appendix" ? "··" : String(chapter + 1).padStart(2, "0");
+}
+
+/**
+ * 设置页「新手引导」页签点某一章：全屏引导打开到那一章的章首页，返回摊平后的页序号
+ * （OnboardingView 的 startAt）。从那一页起 ← 仍能翻回上一章；章 id 不存在时从头开始。
+ */
+export function startIndexOfChapter(chapters: readonly GuideChapter[], id: ChapterId): number {
+  const chapter = chapters.findIndex((each) => each.id === id);
+  return chapter === -1 ? 0 : chapterStart(flattenGuide(chapters), chapter, 0);
+}
+
+/** 章节目录按「入门篇 / 进阶篇 / 附录」分组（组内保持章序），每章带上章号：设置页签与引导左侧目录同一份 */
+export function guideParts(chapters: readonly GuideChapter[]): { part: GuidePart; chapters: { id: ChapterId; no: string }[] }[] {
+  return (["basics", "tools", "appendix"] as const).map((part) => ({
+    part,
+    chapters: chapters.flatMap((chapter, index) => (chapter.part === part ? [{ id: chapter.id, no: chapterNumber(chapters, index) }] : [])),
+  }));
 }
