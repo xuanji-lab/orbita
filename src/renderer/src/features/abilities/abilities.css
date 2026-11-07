@@ -1,0 +1,338 @@
+/*
+ * 能力面板（AbilitiesPanel.tsx，2026-10-30）：Skills 与 MCP 服务一张列表。
+ *
+ * 两根线：面（行的悬停底、高亮底、页签底）站在外线——面板内缩 --space-2；字站在
+ * --space-4（行首状态槽、组头、页签字、空态、底部按键提示都在这一根上）。
+ * 这份样式随组件 import，排在 styles.css 之前：与共享原语（.reveal、.row-trailing、
+ * .panel-empty）同名的覆盖一律多挂一个类，保证赢在优先级上，不靠先后。
+ */
+
+.ability-list {
+  /* 行尾开关的宽：「插入」键压在开关左边，位置从它算 */
+  --ability-switch-w: 28px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  padding: 0 var(--space-2) var(--space-3);
+}
+.ability-list .panel-empty {
+  padding-inline: var(--space-2);
+}
+.ability-error {
+  padding: var(--space-1) var(--space-2);
+}
+
+/* ===== 页签：全部 / 技能 / MCP（24 高，选中走选中底 + 半粗；计数等宽数字，不跳） ===== */
+.ability-tabs {
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-2) 0 var(--space-1);
+}
+.ability-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-height-xs);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.ability-tab:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.ability-tab[aria-selected="true"] {
+  background: var(--option-active-bg);
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+}
+.ability-tab-count {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ===== 组头：类别色描边小标签 · 范围 · 能用 / 一共 · （浏览态）开关管什么 ===== */
+.ability-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-height: var(--control-height-sm);
+  margin-top: var(--space-2);
+  padding: 0 var(--space-2);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.ability-group-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ability-group-count {
+  flex: 0 0 auto;
+  font-weight: var(--weight-regular);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+/* 行尾那句说明钉在行右血线（.row-trailing），窄时先省略它，不挤范围名 */
+.ability-group-note.row-trailing {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: var(--weight-regular);
+  color: var(--color-text-tertiary);
+}
+/*
+ * 类别小标签：设计系统「类别色」的芯片配方——同色淡底 + 全色描边、字用正墨。
+ * 技能 = 表格绿、MCP = 文档蓝，与输入框里两种 token 胶囊同一组颜色。
+ */
+.ability-kind {
+  --ability-kind-color: var(--color-filetype-sheet);
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  height: 16px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--ability-kind-color) 15%, transparent);
+  box-shadow: inset 0 0 0 1px var(--ability-kind-color);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+.ability-kind[data-kind="mcp"] {
+  --ability-kind-color: var(--color-filetype-doc);
+}
+
+/* ===== 一行：状态槽 · 名字（base/500）· 第二行（sm/tertiary）· 插入 · 开关 ===== */
+.ability-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-md);
+  transition: var(--transition-hover);
+}
+.ability-row:hover {
+  background: var(--color-bg-hover);
+}
+/* 点行的语义在这颗按钮上（行里还有插入键与开关，按钮不能套按钮） */
+.ability-row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  column-gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-1-5) 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+/* 状态槽与名字那一行同高、居中，第二行下面空着 */
+.ability-dot-slot {
+  grid-row: 1 / 3;
+  align-self: start;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: calc(var(--font-size-base) * var(--line-height-ui));
+}
+/* 空圈：与状态饼同一个外径（10px），关着 / 还没连上 */
+.ability-dot-off {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--color-text-tertiary);
+}
+.ability-row-name {
+  grid-column: 2;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-medium);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-primary);
+}
+.ability-row-sub {
+  grid-column: 2;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+.ability-row-sub.bad {
+  color: var(--color-danger);
+}
+/* 浏览态：这个工作区没启用的，名字退一档 */
+.ability-row.off .ability-row-name {
+  color: var(--color-text-secondary);
+}
+/* 选取态：没启用的灰着、不可点（玻璃上用实色淡字，不用透明度） */
+.ability-row.unusable:hover {
+  background: transparent;
+}
+.ability-row.unusable .ability-row-main {
+  cursor: default;
+}
+.ability-row.unusable .ability-row-name,
+.ability-row.unusable .ability-row-sub {
+  color: var(--color-text-tertiary);
+}
+/* 选取态的高亮行：选中底 + 半粗（.option-row 选中同一口径），盖过悬停 */
+.ability-row[data-active="true"],
+.ability-row[data-active="true"]:hover {
+  background: var(--option-active-bg);
+}
+.ability-row[data-active="true"] .ability-row-name {
+  font-weight: var(--weight-semibold);
+}
+
+/*
+ * 「插入」：浏览态悬停 / 键盘聚焦才出现，绝对定位压在开关左边——不占位（行尾血线的
+ * 悬停组合例外），面是实色带发丝描边，压住底下被省略的字。选取态只在高亮行上出一个
+ * 同样子的提示（不可点：回车就是它）。
+ */
+.ability-insert {
+  position: absolute;
+  top: 50%;
+  right: calc(var(--space-2) + var(--ability-switch-w) + var(--space-2));
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-height-xs);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-border);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+}
+button.ability-insert:hover {
+  color: var(--color-text-primary);
+}
+.ability-row.picking .ability-insert {
+  right: var(--space-2);
+  cursor: default;
+}
+.ability-row:hover .ability-insert.reveal,
+.ability-row:has(:focus-visible) .ability-insert.reveal {
+  opacity: 1;
+}
+
+/*
+ * 行尾开关：开 = accent（与勾选框同一个职责：一项被选上了），关 = 淡灰轨道。锁住的
+ * （全局 skill、会话不在工作区里、只来自工作区 .mcp.json 的服务）半透明 + 禁止光标，
+ * 原因在 tooltip 里。在途（写盘 + 回读）时已显示成拨过去的样子。
+ */
+.ability-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: var(--ability-switch-w);
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--color-text-tertiary) 45%, transparent);
+  cursor: pointer;
+  transition: background-color var(--duration-instant) var(--ease-standard);
+}
+.ability-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-card);
+  transition: transform var(--duration-instant) var(--ease-standard);
+}
+.ability-switch[aria-checked="true"] {
+  background: var(--color-accent);
+}
+.ability-switch[aria-checked="true"]::after {
+  transform: translateX(12px);
+}
+.ability-switch[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.ability-switch[aria-busy="true"] {
+  cursor: progress;
+}
+
+/*
+ * 选取态：面板内容面一圈 accent 内描边（键盘正对着这里）。画在右栏壳自己的 ::after 上、贴它
+ * 去掉边框后的可见盒：不随列表滚动，底部按键提示条也在圈里。不描在内层（.right-panel-slot-inner）
+ * 上——内层定宽 = 右栏宽，比壳去掉边框的可见宽多 1–2px，描在它上面右边会被裁掉（窄窗覆盖层
+ * 实测右边整条不见）。并排时右侧两个角跟内容面（.pane）的圆角；窄窗覆盖层四角都圆、边框
+ * 1px，内角少 1px。断点与 App 的 narrow（matchMedia max-width: 959px）是同一条。
+ */
+.right-panel-slot:has(.ability-picking)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  border-radius: 0 var(--radius-xl) var(--radius-xl) 0;
+  box-shadow: inset 0 0 0 1.5px var(--color-accent);
+}
+@media (max-width: 959px) {
+  .right-panel-slot:has(.ability-picking)::after {
+    border-radius: calc(var(--radius-xl) - 1px);
+  }
+}
+
+/* 底部吸底的按键提示（RightPanelFrame 的 footer：发丝顶线、字在 --space-4） */
+.ability-pickbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--space-3);
+  row-gap: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.ability-pickbar > span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.ability-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-xs);
+  box-shadow: inset 0 0 0 1px var(--color-border-strong);
+  font-family: inherit;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}

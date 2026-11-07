@@ -32,8 +32,9 @@ export interface SkillsState {
   selected: string | null;
   select: (slug: string | null) => void;
   reload: () => void;
-  link: (slug: string, scope: SkillScope) => void;
-  unlink: (slug: string, scope: SkillScope) => void;
+  /** 落盘并回读完成后 resolve（能力面板的开关靠它知道「拨过去了」）；失败照旧记进 load，不抛 */
+  link: (slug: string, scope: SkillScope) => Promise<void>;
+  unlink: (slug: string, scope: SkillScope) => Promise<void>;
   /** 清一条 skill 的全部断链引用（missing 的收尾） */
   clean: (slug: string) => void;
   importFolder: (scope: SkillScope | null) => Promise<string | null>;
@@ -56,15 +57,17 @@ export function useSkills(active: boolean, workspaces: Workspace[]): SkillsState
   const [serversLoad, setServersLoad] = useState<LoadState>(LOADING);
 
   /** **读失败不清空手里那份**：刷新失败时上一份还列着，错误贴在它上面。 */
-  const refresh = useCallback(() => {
-    void api.skill
-      .list()
-      .then((list) => {
-        setSkills(list);
-        setLoad(READY);
-      })
-      .catch((cause: unknown) => setLoad(failed(cause)));
-  }, []);
+  const refresh = useCallback(
+    (): Promise<void> =>
+      api.skill
+        .list()
+        .then((list) => {
+          setSkills(list);
+          setLoad(READY);
+        })
+        .catch((cause: unknown) => setLoad(failed(cause))),
+    [],
+  );
 
   const refreshServers = useCallback(() => {
     void api.mcp
@@ -80,7 +83,7 @@ export function useSkills(active: boolean, workspaces: Workspace[]): SkillsState
   // 每次打开都重读：用户很可能刚在文件管理器里加了一个
   useEffect(() => {
     if (!active) return;
-    refresh();
+    void refresh();
     refreshServers();
   }, [active, refresh, refreshServers]);
 
@@ -106,12 +109,12 @@ export function useSkills(active: boolean, workspaces: Workspace[]): SkillsState
   useEffect(() => {
     const changed = !sameWorkspaceIds(seenWorkspacesRef.current, workspaces);
     seenWorkspacesRef.current = workspaces;
-    if (active && changed) refresh();
+    if (active && changed) void refresh();
   }, [active, workspaces, refresh]);
 
   const reload = useCallback(() => {
     setLoad(LOADING);
-    refresh();
+    void refresh();
   }, [refresh]);
 
   /**
@@ -119,22 +122,20 @@ export function useSkills(active: boolean, workspaces: Workspace[]): SkillsState
    * （链进 global 会静默删 workspace 链接），乐观更新会把被删的那条留在屏幕上。
    */
   const link = useCallback(
-    (slug: string, scope: SkillScope) => {
-      void api.skill
+    (slug: string, scope: SkillScope): Promise<void> =>
+      api.skill
         .link(slug, scope)
         .then(refresh)
-        .catch((cause: unknown) => setLoad(failed(cause)));
-    },
+        .catch((cause: unknown) => setLoad(failed(cause))),
     [refresh],
   );
 
   const unlink = useCallback(
-    (slug: string, scope: SkillScope) => {
-      void api.skill
+    (slug: string, scope: SkillScope): Promise<void> =>
+      api.skill
         .unlink(slug, scope)
         .then(refresh)
-        .catch((cause: unknown) => setLoad(failed(cause)));
-    },
+        .catch((cause: unknown) => setLoad(failed(cause))),
     [refresh],
   );
 

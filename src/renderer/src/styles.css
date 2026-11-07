@@ -971,25 +971,6 @@ body {
 }
 
 /*
- * 行尾悬停动作键的公共形态（shell/RowHoverAction.tsx 的默认 class）：显隐仍由
- * 调用方的配对机制管（文件面板 .file-hover-act 的 display、skill 行 / MCP 卡
- * .reveal 的 opacity），这里只定配色与居中——文件 / skill 两处带自己的配色
- * class，这条只服务 MCP 卡动作组里的静态排布（与 PanelIconButton 同一副
- * hover 语言：透明底 → hover 抬底色 + 正墨）。
- */
-.row-hover-act {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  color: var(--color-text-secondary);
-}
-.row-hover-act:hover {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
-}
-
-/*
  * 工作区组头：hover 到组内任意位置（含下方的会话行）就浮出悬停动作键（「查看
  * 工作区文件」与删除键），原 onMouseEnter 挂在组的外层 div 上，:hover 的命中范围
  * 原样对应。**只点名 `.workspace-group-act`，不用通用的 `.reveal`**——组头与它
@@ -2708,190 +2689,6 @@ body {
   }
 }
 
-/* ===== Skills 列表（过滤行、归属点阵、行 hover tooltip、missing 就地清理） ===== */
-
-/*
- * 「/ + 空格」选取模式的键盘提示行（panel-token.ts）：过滤行下方一条微字，
- * 说清 ↑↓ / Enter / Tab / Esc 各自干什么。不加粗——那是组标签的待遇。
- */
-.panel-picker-hint {
-  /* 右栏窄时一行放不下（英文三段提示约 52 字符）：写死 24px 高会把第二行裁掉一半
-     （验收截图里「Esc cancels」只剩上半截）。改最小高度 + 纵向内边距，允许换行 */
-  display: flex;
-  align-items: center;
-  min-height: 24px;
-  padding: var(--space-1-5) var(--space-4) 0;
-  line-height: var(--line-height-ui);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
-/* 选取模式的键盘高亮：淡底 + semibold（.option-row 选中同款口径），盖过 hover */
-.skill-row.picker-active {
-  background: var(--option-active-bg);
-}
-.skill-row.picker-active .skill-row-name {
-  font-weight: var(--weight-semibold);
-}
-.mcp-card.picker-active {
-  background: var(--option-active-bg);
-}
-
-/*
- * 一行 skill：外层 div 只管 hover 背景与布局，真正可点的是里面的
- * `.skill-row-main`（见 SkillsPanel.tsx 的 SkillRow 注释——missing 行要在行内
- * 浮出真正的清理键，`<button>` 不能嵌 `<button>`，点击语义拆成两层）。
- * `:has(:focus-visible)` 让键盘 Tab 到行内任意控件（主按钮或浮现的清理键）都点亮
- * 同一背景，同 `.task-row` 的先例。
- */
-.skill-row {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  width: 100%;
-  height: var(--list-item-compact);
-  /* 右栏统一：内缩在 .panel-list 里、圆角 md，内边距 = 行左右血线 */
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-md);
-}
-.skill-row:hover,
-.skill-row:has(:focus-visible) {
-  background: var(--color-bg-hover);
-}
-.skill-row:hover .reveal,
-.skill-row:has(:focus-visible) .reveal {
-  opacity: 1;
-}
-.skill-row-main {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  font: inherit;
-  font-size: var(--font-size-base);
-  font-weight: var(--weight-medium);
-  color: var(--color-text-primary);
-  text-align: left;
-  cursor: pointer;
-}
-.skill-row-name {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.skill-row-dim .skill-row-name {
-  color: var(--color-text-tertiary);
-}
-.skill-row-missing .skill-row-name {
-  color: var(--color-danger);
-}
-
-/* missing 就地清理的两段式确认：替换整行内容，不额外占空间（单行 36px 不破） */
-.skill-row-confirm-text {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-tertiary);
-}
-
-/*
- * 行尾「选用」键（RowHoverAction，reveal 家族）：绝对定位盖在行尾——血线规则
- * 的悬停组合例外，静止态尾部（归属点阵）钉血线，悬停 / 键盘聚焦时让位淡出。
- * 集合信息不丢：行 tooltip（skill-row-tip，350ms）里有 slug · 集合全名。按钮本身
- * 无底色（右栏统一的安静控件，配方在文件末尾「右栏面板统一」段）。
- */
-.skill-row .set-dots {
-  transition: opacity var(--transition-hover);
-}
-.skill-row:hover .set-dots,
-.skill-row:has(:focus-visible) .set-dots {
-  opacity: 0;
-}
-
-/*
- * 归属点阵：环点 = Global、实心点 = 一个 workspace，与韦恩图共用的符号学
- * （SetDots 组件注释）。**颜色只用中性灰阶**（secondary），不用 accent——
- * accent 已经有自己的职责（主操作 + 当前模式），颜色各有职责。
- */
-.set-dots {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  flex: 0 0 auto;
-}
-.set-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--color-text-secondary);
-}
-.set-dot-ring {
-  position: relative;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  border: 1.3px solid var(--color-text-secondary);
-}
-.set-dot-ring::after {
-  content: "";
-  position: absolute;
-  inset: 2.4px;
-  border-radius: 50%;
-  background: var(--color-text-secondary);
-}
-
-/*
- * 行 hover tooltip：实色 --color-bg-panel + 发丝边 + --shadow-popover（现行
- * *Transparency* 规则——浮在内容之上的层不用 blur、不用半透明；设计稿画的是
- * 玻璃 tooltip，那是去 blur 之前的稿，这里按现行规则实色）。`top`/`left`/
- * `opacity` 由 useHoverTooltip 算出后内联——那是运行时才知道的一次性布局值。
- */
-.skill-row-tip {
-  position: fixed;
-  z-index: var(--z-tooltip);
-  max-width: 260px;
-  padding: 9px 11px;
-  display: grid;
-  gap: 3px;
-  background: var(--color-bg-panel);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-popover);
-  pointer-events: none;
-  transition: opacity var(--duration-instant) ease;
-}
-.skill-row-tip-name {
-  font-size: var(--font-size-base);
-  font-weight: var(--weight-semibold);
-  color: var(--color-text-primary);
-}
-.skill-row-tip-desc {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-  line-height: var(--line-height-ui);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.skill-row-tip-sets {
-  font-family: var(--font-family-business);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  margin-top: var(--space-0-5);
-}
-
 /*
  * 文件面板：树行与根分组标签的 hover 动作（Reveal / Detach）——hover 才浮现。
  * 用 CSS 而不是逐行 state：树的行数随目录增长，逐行订阅 mouseenter 是浪费。
@@ -3539,9 +3336,9 @@ body {
  * 加深，呼应稿子的「filesystem 卡演示 hover」帧。
  */
 /*
- * MCP 条目（右栏统一）：不再是玻璃卡，是一块圆角行——内缩在 .panel-list 里、无边框、
- * hover 用 --color-bg-hover（与文件 / 技能行同一配方）；第一行状态 + 名字 + 动作，
- * 第二行起是命令 / 范围 / 实例状态（tertiary）。
+ * MCP 服务卡（能力面板里点一台服务打开的详情，2026-10-30）：一块圆角区——内缩在
+ * .panel-list 里、无边框；第一行状态 + 名字 + 动作（常显），第二行起是命令 / 范围 /
+ * 实例状态（tertiary）。列表在能力面板，这张卡只在详情里，所以没有悬停底色与悬停浮现。
  */
 .mcp-card {
   position: relative;
@@ -3549,11 +3346,6 @@ body {
   gap: var(--space-0-5);
   padding: var(--space-1-5) var(--space-2);
   border-radius: var(--radius-md);
-  transition: var(--transition-hover);
-}
-.mcp-card:hover,
-.mcp-card:focus-within {
-  background: var(--color-bg-hover);
 }
 .mcp-name {
   flex: 1;
@@ -3564,39 +3356,10 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/*
- * power / trash 悬停浮现（简报 3）：与 `.task-row` / `.skill-row` 同一套
- * `.reveal` 机制（styles.css 顶部），只多挂一个 `.mcp-card` 宿主。删除二次
- * 确认行出现时强制常显——由 McpPanel.tsx 内联 `opacity: 1` 覆盖（同侧栏星标
- * 「已星标常显」的先例），不靠这里的选择器兜底。
- */
-.mcp-card:hover .reveal,
-.mcp-card:focus-within .reveal {
-  opacity: 1;
-}
 .mcp-actions {
   display: inline-flex;
   gap: var(--space-0-5);
   flex: 0 0 auto;
-}
-/*
- * 悬停动作键不占位（设计系统 Implementation rules「行尾血线」）：平时动作组收成零宽，
- * 名字拿满整行；悬停 / 键盘聚焦时动作组展开、状态文字让位——名字不会被三颗键与状态
- * 一起挤成「de…」。用 max-width 收而不用 display:none：收起的键仍可 Tab 聚焦，
- * focus-within 一到就展开。删除二次确认时常显（data-confirming）。
- */
-.mcp-card .mcp-actions {
-  max-width: 0;
-  overflow: hidden;
-}
-.mcp-card:hover .mcp-actions,
-.mcp-card:focus-within .mcp-actions,
-.mcp-actions[data-confirming] {
-  max-width: 120px;
-}
-.mcp-card:hover .mcp-status-text,
-.mcp-card:focus-within .mcp-status-text {
-  display: none;
 }
 
 /*
@@ -4206,10 +3969,10 @@ button.panel-group-toggle:hover {
   color: var(--color-text-tertiary);
 }
 
-/* 行尾悬停动作键：无底色的安静控件，悬停时只有 bg-hover */
+/* 行尾悬停动作键：无底色的安静控件，悬停时只有 bg-hover。.row-hover-act 是
+ * RowHoverAction 不给 class 时的公共配方（显隐交给宿主） */
 .row-hover-act,
-.file-row-act,
-.skill-row-act {
+.file-row-act {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -4219,8 +3982,7 @@ button.panel-group-toggle:hover {
   transition: var(--transition-hover);
 }
 .row-hover-act:hover,
-.file-row-act:hover,
-.skill-row-act:hover {
+.file-row-act:hover {
   background: var(--color-bg-hover);
   color: var(--color-text-primary);
 }
@@ -5593,27 +5355,6 @@ mark.intent-mark {
   gap: var(--space-1);
   /* 逐条的工具行字在内线上（RAIL_X）；挪到与章节标题同一根线（按钮左内边距 space-2） */
   margin-left: calc(var(--space-2) - var(--content-hem));
-}
-
-/* 能力面板头的 Skills / MCP 页签（shell/AbilityTabs.tsx）：绿点 Skills、蓝点 MCP，
-   与输入框里两种 token chip 同一组类别色（.composer-chip[data-kind]） */
-.ability-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex: none;
-  background: var(--color-filetype-sheet);
-}
-.ability-tab[data-kind="mcp"] .ability-dot {
-  background: var(--color-filetype-doc);
-}
-.ability-tab[aria-selected="false"] .ability-dot {
-  opacity: 0.6;
-}
-/* 两个页签是面板的标题，不让过滤框挤：不压缩、不裁 */
-.ability-tabs {
-  flex: none;
-  overflow: visible;
 }
 
 /* 「这条任务 › 进度」点一章跳过来：被跳到的那块闪一下底色（一次，不循环） */

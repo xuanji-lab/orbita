@@ -1,12 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { Icon } from "../../shell/Icon";
 import { Chip } from "../../shell/Chip";
-import { IconButton } from "../../shell/IconButton";
-import { RowHoverAction } from "../../shell/RowHoverAction";
-import { Menu } from "../../shell/Menu";
 import {
   PanelButton,
-  PanelFilter,
   PanelHelp,
   PanelIconButton,
   PanelLine,
@@ -17,244 +13,95 @@ import type { SkillsState } from "../skills/useSkills";
 import type { McpServer, McpStatus, McpInstanceInfo, McpServerInfo } from "@shared/mcp";
 import { isMcpServerName, parseMcpConfig } from "@shared/mcp";
 import { headIconKind, statusLine, summarizeInstances } from "./row-display.ts";
-import { mcpToken, type TokenPickerControl } from "../../shell/panel-token.ts";
+import { mcpToken } from "../../shell/panel-token.ts";
 import { useT } from "../../locale.ts";
-import { AbilityTabs, type AbilityKind } from "../../shell/AbilityTabs";
 
 /**
- * MCP 面板（1-1 renderer / §7 + 4-2）：套共享模板，页头无 view toggle——MCP 不分
- * workspace、没有集合概念，map 视图对它没有意义。
- *
- * 4-2：页头 + 进添加表单（Form / Paste JSON 两态 Chip 切换）；每行启停（power）
- * 与删除（trash + 面板内二次确认行，不弹窗）。写盘在主进程，成功后自动 reload。
- * Reload 的进行中态：按钮 loading、非 disabled 行实时转 connecting、列表不清空
- * （invoke 在 agent 重连完、新快照已缓存时才返回，见 host 的回执等待）。
+ * 一台 MCP 服务的详情（2026-10-30 能力面板）：列表在能力面板里（Skills 与 MCP 合成一张，
+ * features/abilities/AbilitiesPanel.tsx），点一行打开这里——就是原来列表里那张卡，动作
+ * 常显（命令、限定范围、工具、错误全文与重试；各工作区实例照旧点展开键才出——默认展开
+ * 的话只有一个实例时同一段错误会出两遍：实例块一遍、整台的错误块一遍）。
+ * 写盘在主进程，成功后自动重连；Reload 进行中非停用的实例转「连接中」。
  */
-export function McpPanel(props: {
+export function McpServerDetail(props: {
   skills: SkillsState;
-  /** 「/ + 空格」右栏选取模式（panel-token.ts）：从 Skills 侧 Tab 切过来 */
-  picker?: TokenPickerControl;
-  /** 卡上「选用」键：把 /mcp:<server> 插到主槽输入框当前光标处（PanelInsertRequest） */
+  server: McpServerInfo;
+  onBack: () => void;
+  /** 「插入」：把 /mcp:<name> 插到主槽输入框当前光标处（面板不关） */
   onInsert: (token: string) => void;
-  /** 面板头的 Skills / MCP 页签：切到另一页（App 换 rightPanel，选取态不退） */
-  onKind?: (kind: AbilityKind) => void;
 }) {
   const t = useT();
-  const { servers, serversLoad, serverWarnings, openMcpConfig, reloadMcp } = props.skills;
+  const { skills, server } = props;
   const [reloading, setReloading] = useState(false);
-  const [adding, setAdding] = useState(false);
-  /** 删除二次确认：正要删哪一台（面板内一行确认，不弹窗） */
-  const [confirming, setConfirming] = useState<string | null>(null);
-  /** 工具 chips 已展开的 server 名字集合（简报 1，一次展开不再收回） */
-  const [expandedTools, setExpandedTools] = useState<ReadonlySet<string>>(new Set());
-  /** 实例明细展开的 server 名字集合。**不记**：面板关掉组件就卸载——
-      失败行自己会穿透红字，诊断入口不需要记忆 */
-  const [expandedInstances, setExpandedInstances] = useState<ReadonlySet<string>>(new Set());
-  const toggleInstances = (name: string): void =>
-    setExpandedInstances((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
-  const error = serversLoad.kind === "failed" ? serversLoad.message : null;
-
-  // ── 选取模式（「/ + 空格」从 Skills 侧 Tab 切过来）─────────────────
-  const picker = props.picker;
-  /** 过滤词：标题行过滤框（右栏统一后常驻）；选取模式下另外只留启用中的 server */
-  const [query, setQuery] = useState("");
-  const filterRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-  /** 选取模式的高亮卡（↑↓ 移动，Enter 选中）；-1 = 无高亮 */
-  const [pickIndex, setPickIndex] = useState(-1);
-  // 可选行：没被文件停用的 server（停用的展不开工具，token 落进输入框也没用）
-  const pickRows =
-    picker !== undefined
-      ? servers.filter(
-          (s) => !s.disabled && s.name.toLowerCase().includes(query.trim().toLowerCase()),
-        )
-      : [];
-  useEffect(() => {
-    if (picker === undefined) return;
-    setQuery("");
-    setPickIndex(-1);
-    filterRef.current?.focus();
-  }, [picker?.request]);
-  // 列表还在读盘 / 过滤后越界：补首行高亮 / 夹回
-  useEffect(() => {
-    if (picker === undefined) return;
-    setPickIndex((i) => (pickRows.length === 0 ? -1 : i === -1 ? 0 : Math.min(i, pickRows.length - 1)));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pickRows.length]);
-  useEffect(() => {
-    listRef.current?.querySelector('[data-picker-active="true"]')?.scrollIntoView({ block: "nearest" });
-  }, [pickIndex]);
-  const onPickerKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
-    if (picker === undefined) return;
-    const count = pickRows.length;
-    if (event.key === "ArrowDown" && count > 0) {
-      event.preventDefault();
-      setPickIndex((i) => (i === -1 ? 0 : (i + 1) % count));
-    } else if (event.key === "ArrowUp" && count > 0) {
-      event.preventDefault();
-      setPickIndex((i) => (i === -1 ? count - 1 : (i - 1 + count) % count));
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      const row = pickRows[pickIndex >= 0 ? pickIndex : 0];
-      if (row !== undefined) picker.onSelect(mcpToken(row.name));
-    } else if (event.key === "Tab") {
-      event.preventDefault();
-      picker.onSwitch();
-    } else if (event.key === "Escape") {
-      event.stopPropagation();
-      if (query !== "") setQuery("");
-      else picker.onCancel();
-    }
-  };
+  /** 删除二次确认（面板内一行确认，不弹窗） */
+  const [confirming, setConfirming] = useState(false);
+  const [expandedTools, setExpandedTools] = useState(false);
+  const [expandedInstances, setExpandedInstances] = useState(false);
+  /** 启停 / 删除写失败的原因（一行红字） */
+  const [error, setError] = useState<string | null>(null);
+  const fail = (cause: unknown): void => setError(cause instanceof Error ? cause.message : String(cause));
 
   // Reload 期间：非 disabled 行都转 connecting（实时状态还没回来，不装作不变）
   const statusOf = (status: McpStatus): McpStatus =>
     reloading && status.kind !== "disabled" ? { kind: "connecting" } : status;
-
-  /** Retry 与页头 Reload 同一路（简报 2：不新增契约），忙的时候两处按钮一起禁用 */
+  /** Retry 与「更多」里的重新加载同一路（不新增契约） */
   const runReload = (): void => {
     setReloading(true);
-    void Promise.resolve(reloadMcp()).finally(() => setReloading(false));
+    void Promise.resolve(skills.reloadMcp()).finally(() => setReloading(false));
   };
-
-  const q = query.trim().toLowerCase();
-  const shown = servers.filter(
-    (server) => (picker === undefined || !server.disabled) && server.name.toLowerCase().includes(q),
-  );
-  const header = (
-    <>
-      <AbilityTabs kind="mcp" onKind={props.onKind} />
-      <PanelFilter
-        inputRef={filterRef}
-        value={query}
-        onChange={setQuery}
-        placeholder={t.mcp.filterPlaceholder}
-        count={q === "" ? String(servers.length) : `${shown.length} / ${servers.length}`}
-        onKeyDown={picker !== undefined ? onPickerKeyDown : undefined}
-      />
-    </>
-  );
-
-  if (adding) {
-    return (
-      <AddServerForm
-        skills={props.skills}
-        onCancel={() => setAdding(false)}
-        onAdded={() => setAdding(false)}
-      />
-    );
-  }
 
   return (
     <RightPanelFrame
-      header={header}
-      contentKey="mcp"
-      headerExtra={
+      contentKey={`mcp:${server.name}`}
+      header={
         <>
-          {/* 原先铺在列表底部的两段说明（重载语义、工作区限定）收进「?」（右栏统一） */}
-          <PanelHelp label={t.mcp.helpLabel} text={`${t.mcp.reloadNote} ${t.mcp.workspaceHint}`} />
-          <PanelIconButton title={t.mcp.addServer} onClick={() => setAdding(true)}>
-            <Icon name="plus" size={16} strokeWidth={2} />
+          <PanelIconButton title={t.mcp.backToList} onClick={props.onBack}>
+            <Icon name="chevron-left" size={16} strokeWidth={2} />
           </PanelIconButton>
-          {/* 低频的两件（编辑 mcp.json、重新加载）收进「更多」：320 宽的面板标题行
-              放不下过滤框 + 四颗键（右栏统一验收实测 + 被挤出视野） */}
-          <Menu
-            align="end"
-            items={[
-              { id: "edit", label: t.mcp.editConfig, icon: "pencil-line", onSelect: openMcpConfig },
-              {
-                id: "reload",
-                label: reloading ? t.mcp.reloading : t.mcp.reload,
-                icon: "refresh-cw",
-                disabled: reloading,
-                onSelect: runReload,
-              },
-            ]}
-            trigger={({ toggle }) => (
-              <PanelIconButton title={t.common.more} onClick={toggle}>
-                <Icon name={reloading ? "loader-circle" : "ellipsis-vertical"} size={16} spin={reloading} />
-              </PanelIconButton>
-            )}
-          />
+          <strong className="cap-title">{server.name}</strong>
         </>
       }
+      headerExtra={<PanelHelp label={t.mcp.helpLabel} text={`${t.mcp.reloadNote} ${t.mcp.workspaceHint}`} />}
     >
-      {picker !== undefined && (
-        <div className="panel-picker-hint" aria-hidden="true">
-          {t.mcp.pickerHint}
-        </div>
-      )}
-      <div ref={listRef} className="panel-list" style={{ paddingTop: "var(--space-2)", gap: 2 }}>
+      <div className="panel-list" style={{ paddingTop: "var(--space-2)" }}>
         {error !== null && (
           <p className="panel-empty" role="alert" style={{ color: "var(--color-danger)" }}>
             {error}
           </p>
         )}
-        {serverWarnings.map((warning) => (
-          <p key={warning} className="panel-empty" role="alert" style={{ color: "var(--color-danger)" }}>
-            {warning}
-          </p>
-        ))}
-        {serversLoad.kind === "loading" && servers.length === 0 ? (
-          <p className="panel-empty">{t.mcp.loadingServers}</p>
-        ) : servers.length === 0 ? (
-          // 空态：一行浅灰字（右栏统一）；添加与编辑配置都在标题行
-          <p className="panel-empty">
-            {t.mcp.emptyTitle} {t.mcp.emptyDesc}
-          </p>
-        ) : shown.length === 0 ? (
-          <p className="panel-empty">{t.skills.noMatch(query.trim())}</p>
-        ) : (
-          <>
-            {shown.map((server, index) => (
-                <McpServerCard
-                  key={server.name}
-                  server={server}
-                  reloading={reloading}
-                  statusOf={statusOf}
-                  confirming={confirming === server.name}
-                  expandedTools={expandedTools.has(server.name)}
-                  expandedInstances={expandedInstances.has(server.name)}
-                  onExpandTools={() =>
-                    setExpandedTools((prev) => {
-                      const next = new Set(prev);
-                      next.add(server.name);
-                      return next;
-                    })
-                  }
-                  onToggleInstances={() => toggleInstances(server.name)}
-                  onSetDisabled={(disabled) => props.skills.setServerDisabled(server.name, disabled)}
-                  onAskRemove={() => setConfirming(server.name)}
-                  onConfirmRemove={() => {
-                    setConfirming(null);
-                    void props.skills.removeServer(server.name).catch(() => undefined);
-                  }}
-                  onCancelRemove={() => setConfirming(null)}
-                  onReload={runReload}
-                  onInsert={() => props.onInsert(mcpToken(server.name))}
-                  pickerActive={picker !== undefined && index === pickIndex}
-                  onPickerSelect={
-                    picker !== undefined ? () => picker.onSelect(mcpToken(server.name)) : undefined
-                  }
-                />
-              ))}
-          </>
-        )}
+        <McpServerCard
+          server={server}
+          reloading={reloading}
+          statusOf={statusOf}
+          confirming={confirming}
+          expandedTools={expandedTools}
+          expandedInstances={expandedInstances}
+          onExpandTools={() => setExpandedTools(true)}
+          onToggleInstances={() => setExpandedInstances((open) => !open)}
+          onSetDisabled={(disabled) => {
+            setError(null);
+            void skills.setServerDisabled(server.name, disabled).catch(fail);
+          }}
+          onAskRemove={() => setConfirming(true)}
+          onConfirmRemove={() => {
+            setConfirming(false);
+            setError(null);
+            // 删掉之后这一项不在了：能力面板发现找不到就回列表
+            void skills.removeServer(server.name).catch(fail);
+          }}
+          onCancelRemove={() => setConfirming(false)}
+          onReload={runReload}
+          onInsert={() => props.onInsert(mcpToken(server.name))}
+        />
       </div>
     </RightPanelFrame>
   );
 }
 
 /*
- * 一台 server 的卡片（从 McpPanel 列表里提出来的组件）：卡头动作组里带「选用」
- * 键（RowHoverAction，随组 reveal）——插 /mcp:<name> 进输入框；选取模式下点
- * 选即插 token、高亮卡随 ↑↓ 移动。短按的原行为（启停 / 删除 / 展开实例与
- * 工具）不变。
+ * 一台 server 的卡片：头行状态 + 名字 + 动作（插入 / 启停 / 删除，详情里常显——
+ * 列表时代是悬停才浮现）+ 实例展开键；下面是命令、限定范围、定义来源、各工作区
+ * 实例与错误块、工具 chips、删除确认行。
  */
 function McpServerCard(props: {
   server: McpServerInfo;
@@ -271,10 +118,8 @@ function McpServerCard(props: {
   onConfirmRemove: () => void;
   onCancelRemove: () => void;
   onReload: () => void;
-  /** 「选用」键：插 token 进输入框（停用的 server 没有——展不开工具，token 没用） */
+  /** 「插入」键：插 token 进输入框（停用的 server 没有——展不开工具，token 没用） */
   onInsert: () => void;
-  pickerActive?: boolean;
-  onPickerSelect?: () => void;
 }) {
   const t = useT();
   const { server } = props;
@@ -285,38 +130,19 @@ function McpServerCard(props: {
       instance.status.kind === "failed",
   );
   return (
-    <div
-      className={`mcp-card${props.pickerActive === true ? " picker-active" : ""}`}
-      data-picker-active={props.pickerActive === true ? "true" : undefined}
-      onClick={(event) => {
-        if (props.onPickerSelect === undefined) return;
-        // 行内动作键（启停 / 删除 / 展开实例与工具）各自干活，不当作整卡选取
-        if ((event.target as HTMLElement).closest("button, a, input, textarea") !== null) return;
-        props.onPickerSelect();
-      }}
-      style={{ cursor: props.onPickerSelect !== undefined ? "pointer" : undefined }}
-    >
+    <div className="mcp-card">
       <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
         {/* 有实例失败就红三角——哪怕合并状态是就绪（失败不许被遮住） */}
         <StatusIcon kind={headIconKind(props.statusOf(server.status), summary)} />
         <strong className="mcp-name">{server.name}</strong>
         <StatusText status={props.statusOf(server.status)} />
-        {/* 悬停/键盘聚焦浮现（简报 3）；删除确认行出现时强制常显，见 .reveal 注释 */}
-        <span
-          className="mcp-actions reveal"
-          data-confirming={props.confirming ? "true" : undefined}
-          style={{ opacity: props.confirming ? 1 : undefined }}
-        >
-          {/* 「选用」键排在启停 / 删除之前（建设性动作在前）；与 PanelIconButton
-              同尺寸，随本组 reveal。停用的 server 不给（展不开工具） */}
+        {/* 详情里动作常显（列表时代悬停才浮现，现在列表在能力面板，这张卡只在详情里） */}
+        <span className="mcp-actions">
+          {/* 「插入」排在启停 / 删除之前（建设性动作在前）。停用的 server 不给（展不开工具） */}
           {!server.disabled && (
-            <RowHoverAction
-              icon="corner-down-left"
-              title={t.mcp.use}
-              onClick={props.onInsert}
-              size={26}
-              iconSize={14}
-            />
+            <PanelIconButton title={t.abilities.insertTip} onClick={props.onInsert}>
+              <Icon name="corner-down-left" size={14} />
+            </PanelIconButton>
           )}
           {/* 只来自工作区自带 .mcp.json 的：写全局文件够不着它，
               按钮禁用并指到真正的文件（遮蔽不是编辑） */}
@@ -470,7 +296,7 @@ function McpServerCard(props: {
  * Claude Desktop 的 `{"mcpServers":{...}}` 或单个 `{"name":{...}}`。
  * 解析在渲染层用 shared 的 parseMcpConfig（纯函数），坏的当场报错。
  */
-function AddServerForm(props: {
+export function AddServerForm(props: {
   skills: SkillsState;
   onCancel: () => void;
   onAdded: () => void;

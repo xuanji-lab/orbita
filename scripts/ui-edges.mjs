@@ -67,19 +67,30 @@ const CHECKS = [
     skipNoTrailing: true,
   },
   {
-    name: "Skills·行：归属点阵钉在右血线",
-    row: ".skill-row",
-    leading: ".skill-row-main",
-    trailing: ".set-dots",
-    // .skill-row 的右内边距 var(--space-2)（右栏统一：行内缩在 .panel-list 里）；
-    // dim / missing 行没有点阵，跳过。悬停时点阵让位给「选用」键是血线规则的悬停
-    // 组合例外，这里量静止态
+    name: "能力面板·行：开关钉在右血线",
+    row: ".ability-row",
+    leading: ".ability-dot-slot",
+    trailing: ".ability-switch",
+    // .ability-row 的左右内边距 var(--space-2)（行内缩在 .ability-list 里）；选取态的行、
+    // 文件夹不在了的 skill 没有开关，跳过。悬停才出的「插入」压在开关左边、不占位
+    rightPad: 8,
+    skipNoTrailing: true,
+  },
+  {
+    name: "能力面板·组头：开关说明钉在右血线",
+    row: ".ability-group-head",
+    leading: ".ability-kind",
+    trailing: ".ability-group-note",
+    // .ability-group-head 的左右内边距 var(--space-2)；选取态组头没有这句，跳过
     rightPad: 8,
     skipNoTrailing: true,
   },
   {
     name: "MCP·卡头行：展开键钉在卡右血线",
-    row: ".mcp-card > span:first-of-type",
+    // 量卡本身：展开键与状态图标都在卡头那一行（querySelector 取到的第一颗就是它们）。
+    // 原先量的是卡头那个 span——它没有内边距，差值恒为 0，这条从来过不了（2026-10-30
+    // 能力面板把这张卡挪进详情后第一次真跑到）
+    row: ".mcp-card",
     leading: ".orbita-icon",
     trailing: ".mcp-expand",
     // .mcp-card 的横向内边距 var(--space-2)（右栏统一）；没有实例的卡不出展开键，跳过

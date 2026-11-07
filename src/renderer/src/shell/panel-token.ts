@@ -4,7 +4,7 @@ import { slashTokenAt } from "./slash-trigger.ts";
  * 右栏面板 → 输入框的「token 通道」纯逻辑：
  *
  * 「`/` + 空格」选取：行首或空白后孤立的 `/` 按空格 → 删掉 `/`、打开右栏
- * Skills 面板进入选取模式，选中后把 token 插回原光标位置。**句中同样触发**
+ * 能力面板（Skills + MCP 一张列表）进入选取模式，选中后把 token 插回原光标位置。**句中同样触发**
  *（2026-10-11 用户裁定：只认消息开头是 bug，句中打 `/` 加空格要和开头完全
  * 一样）；防误触靠 slashTokenAt 自带的前导空白闸门与字符集闸门。
  *（曾有第二条路——面板卡片长按后 HTML5 拖入输入框；2026-10 用户裁决删去。）
@@ -51,7 +51,7 @@ export function insertToken(
 }
 
 /**
- * 「`/` + 空格」是否打开右栏 Skills 面板：光标紧跟在孤立 `/` 之后（`/` 之前
+ * 「`/` + 空格」是否打开右栏能力面板：光标紧跟在孤立 `/` 之后（`/` 之前
  * 是行首或空白，`/` 之后还没打任何字）。与 slash-trigger 的 token 规则同源；
  * **句中同样开**（2026-10-11 用户裁定：只认消息开头是 bug）——防误触由
  * slashTokenAt 的前导空白闸门与字符集闸门把关：`a/ `、`https:/ `、`C:/ `、
@@ -70,22 +70,19 @@ export function slashSpaceOpensPanel(value: string, cursor: number): number | nu
 /**
  * 选取模式的受控接口：App 持有（面板开在哪个槽、插入锚点都在那边），面板只管
  * 上报。锚点 = 输入框里被删掉的那个 `/` 的位置——选中后 token 插回原处。
+ * Tab 在面板里轮换「全部 / 技能 / MCP」三个页签（2026-10-30 合成一张列表后），
+ * 不再经 App 换面板，所以这里没有「切到另一边」的回调。
+ * 候选按哪个工作区筛，由面板自己拿主槽会话的工作区（App 传给能力面板的 workspace）。
  */
 export interface TokenPickerControl {
   /** 选中一条：token 插回锚点、焦点回输入框 */
   onSelect: (token: string) => void;
   /** 取消（Esc）：不插入，焦点回输入框 */
   onCancel: () => void;
-  /** Tab：切到另一边（skills ↔ MCP），锚点保留 */
-  onSwitch: () => void;
   /** 发起号：每次「/ + 空格」递增——面板可能已开着（选取态也在），只看
    * 「在不在选取态」会在第二次 / + 空格时什么也不做，靠它重入选取态（重新
-   * 聚焦、重置过滗词） */
+   * 聚焦、重置筛选词） */
   request: number;
-  /** 发起选取的那个输入框所在的工作区（主槽 = session.workspaceId）。Skills
-   * 选取模式用它过滤候选（isSkillAvailable，与发送端同一谓词）；
-   * MCP 面板无工作区概念，不消费它 */
-  workspaceId: string | null;
 }
 
 /** 面板选取的回执：token 为 null 表示取消（只把焦点送回输入框）。nonce 单调递增 */
