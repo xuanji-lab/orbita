@@ -32,7 +32,7 @@ const CODE_NODES = new Set(["InlineCode", "FencedCode", "CodeBlock", "CodeText",
 
 const CALLOUT_ICONS: Readonly<Record<string, IconName>> = {
   note: "pencil-line",
-  abstract: "clipboard-list",
+  abstract: "scroll-text",
   info: "info",
   todo: "list-todo",
   tip: "lightbulb",

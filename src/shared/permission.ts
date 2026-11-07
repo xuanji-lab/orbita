@@ -103,6 +103,8 @@ export const READ_ONLY_TOOLS = [
   "read_pdf",
   "read_docx",
   "show_image",
+  // 打开文档：在右栏打开 / 读大纲。create:true 只会新建一个空文件（绝不覆盖），plan 档由工具自己拒绝
+  "doc_open",
   // 插件列表：读已装插件的名字与技能，不改任何东西
   "list_plugins",
 ] as const;

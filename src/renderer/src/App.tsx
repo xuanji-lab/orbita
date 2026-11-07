@@ -340,13 +340,13 @@ export function App() {
   const focusFilesView = focus.filesView;
   /**
    * 文件面板的「打开这个文件」请求：两个来源——左栏专注视图的双击（focus.fileOpen，token 自增）和右栏「文档」入口
-   * （docOpenRequest，token 从 DOC_OPEN_TOKEN_BASE 起，两边不撞号）。谁最后来用谁
+   * （railDocOpen，token 从 DOC_OPEN_TOKEN_BASE 起，两边不撞号）。谁最后来用谁
    */
-  const [docOpenRequest, setDocOpenRequest] = useState<{ path: string; token: number } | null>(null);
-  const fileOpenRequest = docOpenRequest ?? focus.fileOpen;
+  const [railDocOpen, setRailDocOpen] = useState<{ path: string; token: number } | null>(null);
+  const fileOpenRequest = railDocOpen ?? focus.fileOpen;
   // 左栏专注视图又发了新的打开请求：它比右栏入口那条新，让位
   useEffect(() => {
-    if (focus.fileOpen !== null) setDocOpenRequest(null);
+    if (focus.fileOpen !== null) setRailDocOpen(null);
   }, [focus.fileOpen]);
 
   // ── 内置命令让右栏打开某个文件（聊天里的完成卡点击 / agent 新建·打开时自动开）──
@@ -923,7 +923,7 @@ export function App() {
       const last = getLast(docScope(workspaceId, "doc"));
       const target =
         docs.find((entry) => entry.path === last)?.path ?? docs[0]?.path ?? (await api.docs.create({ sessionId, workspaceId, kind: "doc" })).path;
-      setDocOpenRequest((prev) => ({ path: target, token: Math.max(prev?.token ?? 0, DOC_OPEN_TOKEN_BASE) + 1 }));
+      setRailDocOpen((prev) => ({ path: target, token: Math.max(prev?.token ?? 0, DOC_OPEN_TOKEN_BASE) + 1 }));
     } catch {
       // 列 / 建都失败（工作区目录不在）：文件面板自己会显示根的状态，这里不另报错
     }

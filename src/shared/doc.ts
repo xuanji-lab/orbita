@@ -130,7 +130,28 @@ export interface DocExportResult {
  */
 export type DocExportDocFormat = "docx" | "pdf" | "md" | "md-plain";
 
+/** 各导出格式的扩展名（不带点） */
+export const DOC_EXPORT_EXT: Readonly<Record<DocExportDocFormat, string>> = {
+  docx: "docx",
+  pdf: "pdf",
+  md: "md",
+  "md-plain": "md",
+};
+
 export type DocExportDocRequest = DocTarget & { format: DocExportDocFormat; text?: string };
+
+/**
+ * agent 的 `doc_export` 请求（经 agent-ipc 的 docRequest / docResult 问答通道，照 browser_* 工具的做法）：
+ * 导出整体在主进程做（PDF 要隐藏窗口），菜单点导出与 agent 共用同一套生成函数（`main/doc-panel/doc-export.ts`）。
+ * `out` 缺席 = 文档旁边的默认文件名（md 写 `<名字> 副本.md`，通用 md 写 `<名字> (通用).md`，绝不覆盖文档本身）。
+ */
+export interface DocAgentRequest {
+  path: string;
+  format: DocExportDocFormat;
+  out?: string;
+}
+
+export type DocOutcome = { ok: true; path: string; bytes: number } | { ok: false; error: string };
 
 /** `doc:ofm-resolve`：把文档里的 `[[双链]]` / `![[图]]` / `![](相对路径)` 目标解析成工作区里的真文件 */
 export type OfmTargetKind = "link" | "image";

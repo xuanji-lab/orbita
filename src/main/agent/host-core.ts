@@ -17,6 +17,7 @@ import type { ChannelDelivery } from "../../shared/channel.ts";
 import type { McpStatus } from "../../shared/mcp.ts";
 import type { AutomationToolOutcome } from "../../shared/automation.ts";
 import type { BrowserToolOutcome } from "../../shared/browser.ts";
+import type { DocOutcome } from "../../shared/doc.ts";
 import type { TerminalToolOutcome } from "../../shared/terminal.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
@@ -633,6 +634,11 @@ export class AgentHostCore {
           }
         : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);
+  }
+
+  /** 文档导出：docRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。 */
+  answerDoc(requestId: string, outcome: DocOutcome): void {
+    this.child?.postMessage({ type: "docResult", requestId, ...outcome } satisfies AgentCommand);
   }
 
   /** 终端：terminalRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。 */

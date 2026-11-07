@@ -81,6 +81,7 @@ import { attachGoalLedger, type LedgerAttachCache } from "./goal-compaction.ts";
 import { createGoalTools } from "./goal-tools.ts";
 import { createPlanGate, createPlanTools, type PlanToolOptions } from "./plan-tools.ts";
 import { createDocxTools } from "./docx-tools.ts";
+import { createDocTools } from "./doc-tools.ts";
 import { createPdfTools } from "./pdf-tools.ts";
 import { createPluginTools, PLUGIN_TOOL_NAMES } from "./plugin-tools.ts";
 import { RequestBroker } from "./request-broker.ts";
@@ -1396,6 +1397,14 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     ...(pluginTools ? createPluginTools(requestBroker, command.sessionId, currentMode) : []),
     ...createTaskTools(requestBroker, command.sessionId),
     ...createBrowserTools(requestBroker, command.sessionId),
+    // 文档（./doc-tools.ts）：doc_open / doc_insert_image / doc_export。文件读写在本进程直做（路径限工作区 + 附加目录），
+    // 只有导出过 broker 找主进程（PDF 要隐藏窗口）
+    ...createDocTools(requestBroker, command.sessionId, {
+      cwd: command.cwd,
+      writeRoots: [command.cwd, ...(command.directories?.attached ?? [])],
+      workspaceId: command.workspaceId,
+      mode: currentMode,
+    }),
     // agent 的终端工具组（PR2）：开可见终端、写命令、读输出。
     // 本分支只有用户发起这一种来源（没有定时任务 / 委派 / 外部桥），所以这里不按来源
     // 拦；将来自动化入口出现时，在这里按来源决定要不要注册——Proma 的判据是
@@ -2294,6 +2303,11 @@ async function handle(command: AgentCommand): Promise<void> {
           }
         : { ok: false, error: command.error ?? "Browser request failed" },
     );
+    return;
+  }
+  if (command.type === "docResult") {
+    // 文档导出的回执：形状即契约（ok 双分支），原样结掉在途 promise
+    requestBroker.resolve(command.requestId, command);
     return;
   }
   if (command.type === "terminalResult") {

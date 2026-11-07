@@ -20,6 +20,7 @@ import type { PromptImage, SentImage } from "./prompt-images.ts";
 import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
+import type { DocAgentRequest, DocOutcome } from "./doc.ts";
 import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
 import type {
   ChannelDelivery,
@@ -1170,6 +1171,8 @@ export type AgentCommand =
   | ({ type: "memoryToolResult"; requestId: string } & MemoryAgentOutcome)
   /** 受管浏览器：主进程对 browserRequest 的回执（readTaskResult 同款） */
   | ({ type: "browserResult"; requestId: string } & BrowserToolOutcome)
+  /** 文档导出：主进程对 docRequest 的回执（browserResult 同款 ok 双分支） */
+  | ({ type: "docResult"; requestId: string } & DocOutcome)
   /** 终端：主进程对 terminalRequest 的回执（browserResult 同款） */
   | ({ type: "terminalResult"; requestId: string } & TerminalToolOutcome)
   /** 子会话：主进程对 delegateRequest 的回执（requestId 问答，readTaskResult 同款） */
@@ -1471,6 +1474,11 @@ export type AgentEvent =
    * 回 terminalResult。
    */
   | { type: "terminalRequest"; requestId: string; sessionId: string; request: TerminalToolRequest }
+  /**
+   * 文档导出：agent 的 `doc_export` 请求（形状见 shared/doc.ts 的 DocAgentRequest）。
+   * 导出在主进程（PDF 要隐藏窗口，agent 进程不碰 electron）；路径白名单按会话的根现算。回 docResult。
+   */
+  | { type: "docRequest"; requestId: string; sessionId: string; workspaceId: string | null; request: DocAgentRequest }
   /**
    * 子会话：父模型的 delegate 工具请求。**建会话在主进程**（agent 进程不碰
    * userData，readTaskRequest 同一条边界）：主进程建子会话（parentId = sessionId、
