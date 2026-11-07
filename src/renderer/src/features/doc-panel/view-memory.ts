@@ -72,6 +72,15 @@ export function setView(path: string, patch: ViewState, storage: MemoryStorage |
   write(storage, memory);
 }
 
+/**
+ * 「这个面板上次开的是哪份」的记忆键：<工作区 id 或 home>:<doc | slides>。
+ * DocsPanel 与新手引导的「试试」（预先新建并登记一份）共用这一个，两边不准各写一份——
+ * 写成两份一旦形状不同，引导造的文档面板就认不出来。
+ */
+export function docScope(workspaceId: string | null | undefined, kind: "doc" | "slides"): string {
+  return `${workspaceId ?? "home"}:${kind}`;
+}
+
 export function getLast(scope: string, storage: MemoryStorage | null = browserStorage()): string | null {
   return read(storage).last[scope] ?? null;
 }

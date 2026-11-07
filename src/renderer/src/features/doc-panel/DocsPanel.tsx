@@ -10,7 +10,7 @@ import { PanelIconButton, PanelLine, PanelTitle, RightPanelFrame } from "../../s
 import { useT } from "../../locale.ts";
 import { formatAge } from "../files/tree-view";
 import { DocEditPane } from "./DocEditPane";
-import { getLast, setLast } from "./view-memory.ts";
+import { docScope, getLast, setLast } from "./view-memory.ts";
 
 /**
  * 右栏的「文档」「演示文稿」面板（同一个组件，`kind` 决定列哪一类、新建哪一类）。
@@ -30,7 +30,7 @@ export function DocsPanel(props: {
   // 文档用的都是工作区根下的路径，不依赖会话（会话 id 只多出一个工作台根）——别因为 id 从 null 变成真 id
   // 就把文档重读一遍、编辑器重建、光标没了
   const [sessionId] = useState(props.sessionId);
-  const scope = `${workspaceId ?? "home"}:${kind}`;
+  const scope = docScope(workspaceId, kind);
   const [entries, setEntries] = useState<DocListEntry[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [openPath, setOpenPath] = useState<string | null>(null);

@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { getLast, getView, setLast, setView, type MemoryStorage } from "./view-memory.ts";
+import { docScope, getLast, getView, setLast, setView, type MemoryStorage } from "./view-memory.ts";
 
 function fake(): MemoryStorage {
   const map = new Map<string, string>();
@@ -36,5 +36,13 @@ describe("view-memory（S2 / S4）", () => {
     assert.deepEqual(getView("/f69.md", s), { page: 69 });
     s.setItem("orbita.docpanel.v1", "{坏的");
     assert.deepEqual(getView("/f69.md", s), {});
+  });
+});
+
+describe("docScope", () => {
+  it("工作区 id 或 home 加面板种类——DocsPanel 与新手引导共用这一个", () => {
+    assert.equal(docScope("ws-1", "doc"), "ws-1:doc");
+    assert.equal(docScope(null, "slides"), "home:slides");
+    assert.equal(docScope(undefined, "doc"), "home:doc");
   });
 });
