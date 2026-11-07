@@ -4439,7 +4439,7 @@ function ToolLine(props: {
               }}
             />
             <span style={{ ...SLOT.status, color: "var(--color-text-secondary)" }}>
-              {skillUse !== null ? "skill" : "mcp"}
+              {skillUse !== null ? t.chat.rollupTool("skill") : "mcp"}
             </span>
             <span
               style={{
