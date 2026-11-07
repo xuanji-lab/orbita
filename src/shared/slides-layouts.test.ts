@@ -205,6 +205,17 @@ describe("版式", () => {
   });
 });
 
+describe("stat 版式", () => {
+  it("几个大数字用同一个字号（取装得下的最小档），4:3 窄列里「600万」不被裁", () => {
+    const built = buildLayout({ layout: "stat", slots: { title: "数字", stats: [{ value: "735", label: "a" }, { value: "47%", label: "b" }, { value: "600万", label: "c" }] }, aspect: "4:3", theme: presetTheme("forest") }, "slide 1");
+    const sizes = built.elements.filter((e) => e["fontFamily"] === "$heading" && e["fontSize"] !== "$title" ? true : e["fontFamily"] === "$heading").map((e) => e["fontSize"]);
+    // 第一个 heading 字体的是页标题（$title），其后三个数字同字号
+    const valueSizes = sizes.slice(1);
+    assert.equal(valueSizes.length, 3);
+    assert.equal(new Set(valueSizes).size, 1, `大数字字号不一致：${valueSizes.join(",")}`);
+  });
+});
+
 describe("体检：自由元素不许比 body 小、不许压页脚", () => {
   it("带主题的文稿里手加的 16px 来源行、压在页脚上的字都会被指出；脚注 caption 档与版式生成的不报", () => {
     let deck = applyWrite(themed("academic"), [{ layout: "stat", slots: sample("stat") }]).deck;

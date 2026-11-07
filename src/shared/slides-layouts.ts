@@ -600,6 +600,15 @@ function buildStat(c: Ctx, slots: Record<string, unknown>, label: string): Layou
   const n = stats.length;
   const colW = Math.floor(c.cw / n);
   const innerW = colW - 48;
+  // 几个大数字用同一个字号（取装得下的最小那档），并排时才整齐
+  const ladder: readonly ScaleKey[] = ["display", "title", "h2"];
+  const rank = (size: ScaleKey): number => ladder.indexOf(size);
+  const valueSize = stats.reduce<ScaleKey>((smallest, stat) => {
+    const text = str(stat["value"]);
+    if (text === undefined) return smallest;
+    const fit = fitLadder(c, text, innerW, ladder, { maxLines: 1 }, 1.05, c.rt.headingBold);
+    return rank(fit.size) > rank(smallest) ? fit.size : smallest;
+  }, "display");
   stats.forEach((stat, i) => {
     const value = str(stat["value"]) ?? needSlot(label, `stats[${i}].value`);
     const caption = str(stat["label"]);
@@ -607,7 +616,7 @@ function buildStat(c: Ctx, slots: Record<string, unknown>, label: string): Layou
     const x = c.mx + i * colW;
     if (visualLength(value) > 8) c.warnings.push(`${label}: stat value "${value}" is long — keep big numbers ≤6 characters`);
     els.push(shapeEl("rect", x, y, innerW, 4, "$accent"));
-    const fit = fitLadder(c, value, innerW, ["display", "title", "h2"], { maxLines: 1 }, 1.05, c.rt.headingBold);
+    const fit = fitLadder(c, value, innerW, [valueSize], { maxLines: 1 }, 1.05, c.rt.headingBold);
     const valueH = Math.ceil(fit.height) + 8;
     els.push(textEl({ x, y: y + 28, w: innerW, h: valueH, html: paragraphsHtml([value], c.rt.headingBold), size: fit.size, color: c.accentOn("$bg") === "$accent" ? "$accent" : "$ink", font: "heading", lineHeight: 1.05 }));
     let ty = y + 28 + valueH + 12;
