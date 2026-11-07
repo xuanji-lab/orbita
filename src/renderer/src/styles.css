@@ -301,7 +301,7 @@
 .composer-field > textarea {
   position: relative;
   color: transparent;
-  caret-color: var(--color-text-primary);
+  caret-color: var(--color-accent);
 }
 
 /* 收起标签不进格子：`.composer-field > *` 给了所有子项 grid-area 1/1，绝对定位的
@@ -6250,5 +6250,55 @@ mark.intent-mark {
     .chat-col .turn-start-time {
       top: 14.5px;
     }
+  }
+}
+
+/*
+ * ======================================================================
+ * 浏览器表面（2026-11-07 方向 N）：浏览器自带、却没人逐个决定过的几处
+ * ======================================================================
+ * 一个应用的精致感，一半在「默认值被决定过」：选中文字是系统蓝（玄档里蓝撞黄 accent）、光标是黑的、
+ * 数字一跳一跳。这几条不是新外观，是把浏览器默认换成「属于这个应用」的值。
+ *
+ * - ::selection：accent 22% 混透明——明档是淡蓝、暗档是淡黄，字色不变（仍是正墨，对比度不降）。
+ *   全主题通用（取各主题自己的 accent，纸面档是笔色的淡绿 / 淡蓝）。
+ * - caret-color：accent。所有可输入处（输入框、设置里的输入、重命名）光标都是主操作色；输入框的 textarea
+ *   字是透明的（镜像层代画），它自己的 caret 规则也同改。
+ * - tabular-nums：凡数字会变、会排成列的地方——元信息、行尾、分段控件（30% 25% 20%…）、时间戳、
+ *   文件预览元信息——一律等宽数字，数字变了行不跳。diff 行号早已是（DiffView），不重复。
+ * - 图标线宽：物理 1.5px。lucide 在 24 视口里画 stroke-width 2；缩到 16 / 14 / 12px 时物理线宽是
+ *   1.33 / 1.05（1.8 档）/ 1.0 ——同屏三种笔重，14px 的比旁边 16px 的细 21%。vector-effect: non-scaling-stroke
+ *   让笔画脱离缩放，直接写物理值；调用点传的 strokeWidth 仍当「强调」读：≤2 的一律 1.5，
+ *   2.2（关闭键、发送箭头）→ 1.65，3（主题勾）→ 2.25（clamp）。纸面两档保持原样。
+ * - text-wrap: pretty：成段中文的末行不留孤字（卡片里只剩一个「准」、列表项末行只剩「度；」）。
+ */
+::selection {
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+}
+html {
+  caret-color: var(--color-accent);
+}
+.session-card-meta,
+.seg-control,
+.file-preview-meta,
+.row-trailing,
+.user-msg-time,
+.turn-start-time,
+.log-time {
+  font-variant-numeric: tabular-nums;
+}
+.chat-md p,
+.chat-md li,
+.session-card-line,
+.set-row-desc,
+.log-line {
+  text-wrap: pretty;
+}
+:root:not([data-theme="copybook"], [data-theme="typescript"]) {
+  .orbita-icon svg {
+    stroke-width: clamp(1.5px, calc(var(--icon-stroke, 2) * 0.75px), 2.25px);
+  }
+  .orbita-icon svg * {
+    vector-effect: non-scaling-stroke;
   }
 }

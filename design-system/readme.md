@@ -612,6 +612,15 @@ into a React re-render, and keyboard focus ends up needing its own JS shim to co
 accent outline on every focusable control. Components do not reset their own `outline` unless they
 draw their own focus expression (a card's own text field, say, expresses focus for the card).
 
+**Browser surfaces are decided, not inherited (2026-11-07).** Four things the browser would otherwise choose for us:
+`::selection` is the accent at 22% over whatever it lands on (pale blue on light, pale yellow on the dark tiers; ink
+stays ink); `caret-color` is the accent on every editable surface, the composer's transparent-text textarea
+included; every number that changes or lines up in a column — meta lines, trailing slots, segmented controls,
+timestamps, file-preview meta, diff line numbers — is `font-variant-numeric: tabular-nums`, so a changed number
+never re-flows its row; running Chinese text takes `text-wrap: pretty` so a line never ends on one orphan
+character. These apply to every theme (they read each theme's own accent); the icon stroke rule above is the one
+that the paper themes opt out of.
+
 **Tokens are checked.** `src/renderer/src/design-tokens.test.ts` fails on any `var(--x)` that is
 never declared, on any token in `tokens/` that nothing references, and on any hex colour outside
 `tokens/`. A value that serves one feature only lives
@@ -663,8 +672,13 @@ model list) are native `<input type="checkbox">` tinted with `accent-color: var(
   table ship — no CDN, no substitution, no hand-drawn SVG. (No count is kept here: it changes with
   almost every feature and went stale twice; `ls` and the `ICONS` table are the answer.)
 - **Sizes**: three steps, enforced by `Icon` — 16 in the rail, headers and dialogs; 14 in list rows
-  and card headers; 12 in chips and inline affordances (locks, filters, counts). **Stroke weight** 1.8 in lists and trees,
-  2 for controls, 2.2 for the modal close.
+  and card headers; 12 in chips and inline affordances (locks, filters, counts). **Stroke weight: 1.5 physical px, every size**
+  (2026-11-07). Lucide draws `stroke-width: 2` in a 24 viewBox, so at 16 / 14 / 12px the old `2 / 1.8 / 2` came out as
+  1.33 / 1.05 / 1.0 physical px — three pen weights on one screen, the 14px list icon 21% thinner than the 16px
+  rail icon beside it. `vector-effect: non-scaling-stroke` takes the stroke out of the scaling and the value is written
+  as the physical one (`clamp(1.5px, strokeWidth × 0.75px, 2.25px)`: every `strokeWidth ≤ 2` is 1.5; an
+  explicit emphasis stays an emphasis — 2.2 on the modal close and the send arrow is 1.65, 3 on the theme check is
+  2.25). The paper themes keep the old per-call weights.
 - Icons inherit `currentColor` — tertiary grey at rest, primary on hover, `--color-info` for the
   thinking glyph, the accent inside the send button. The `Icon` component inlines the SVG so this works.
 - **Recurring vocabulary**: `bot` = agent mode, `workflow` = orchestration, `folder` = a workspace,
