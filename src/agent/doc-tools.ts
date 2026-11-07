@@ -155,7 +155,8 @@ export function createDocTools(broker: RequestBroker, sessionId: string, options
         kind: "doc",
         path: shown,
         title: docTitle(real),
-        subtitle: `文档 · ${toPosix(relative(cwd, real)) || basename(real)}${lineCount > 0 ? ` · ${lineCount} 行` : ""}`,
+        // 相对用户看到的工作区（symlink 原样路径）算，不是 realpath：否则 symlink 工作区里显示成 ../real-xxx/笔记/周报.md
+        subtitle: `文档 · ${toPosix(relative(cwd, shown)) || basename(real)}${lineCount > 0 ? ` · ${lineCount} 行` : ""}`,
       };
       return ok(
         `${created ? "Created and opened" : "Opened"} ${real} in the Files panel (${lineCount} lines).\nOutline:\n${outline}\n` +

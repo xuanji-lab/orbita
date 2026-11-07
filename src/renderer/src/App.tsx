@@ -66,6 +66,7 @@ import { type TokenPickerControl, type TokenPickResult } from "./shell/panel-tok
 import { PastedTextCollapseContext } from "./shell/attachment-chips";
 import { ProcessViewContext } from "./features/chat/process-view-context";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
+import { isUnclaimedEscape } from "./shell/escape-key.ts";
 import { AutomationPanel } from "./features/automation/AutomationPanel";
 import {
   AutomationContext,
@@ -1010,7 +1011,8 @@ export function App() {
   // 「返回」按钮同一个退出台阶（子会话 PR4c 2.1）。
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape") return;
+      // 菜单 / 重命名框等已经认领的这一下不再接（它们 preventDefault 但不 stopPropagation，见 escape-key.ts）
+      if (!isUnclaimedEscape(event)) return;
       if (rightPanel === "subsessions") {
         const next = escapeFrom(subSessionsNav);
         if (next === null) setRightPanel(null);

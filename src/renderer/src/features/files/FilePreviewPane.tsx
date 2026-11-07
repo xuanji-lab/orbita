@@ -16,6 +16,7 @@ import { isPdfFile, isWebPageFile, type FilePreview } from "@shared/files";
 import type { PromptImage } from "@shared/prompt-images";
 import { PdfView, type PdfJump } from "./PdfView";
 import { DocEditPane } from "../doc-panel/DocEditPane";
+import { watchDocMeta } from "./doc-meta-refresh.ts";
 import type { TextQuote } from "@shared/quote";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { useT } from "../../locale.ts";
@@ -147,6 +148,11 @@ export function FilePreviewPane(props: {
     state.status === "ready" &&
     state.data.kind === "text" &&
     state.data.size <= DOC_MAX_BYTES;
+  // 文档视图自己读盘、自己监听；头部的「大小 · 修改时间」来自这里的预览读数，盘上变了（agent / 插图 / 自己存盘）要跟着重读
+  useEffect(() => {
+    if (!asDocument) return undefined;
+    return watchDocMeta(api.docs.onChanged, path, refresh);
+  }, [asDocument, sessionId, workspaceId, extraWorkspaceId, root, path]);
   const showModeToggle =
     sentImage === undefined &&
     !asDocument &&

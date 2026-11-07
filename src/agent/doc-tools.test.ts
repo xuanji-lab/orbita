@@ -100,6 +100,8 @@ describe("doc_open", () => {
       const result = (await open.execute("c2", { path: "周报/w.md" } as never, undefined as never, undefined as never, undefined as never)) as { details?: Record<string, unknown> };
       assert.equal(readOpenPanel(result.details)?.path, join(base, "Home", "周报", "w.md"));
       assert.equal(readCommandCard(result.details)?.path, join(base, "Home", "周报", "w.md"));
+      // 卡片副标题的相对路径也以用户看到的工作区为准（曾显示成 ../real/周报/w.md）
+      assert.match(readCommandCard(result.details)?.subtitle ?? "", /^文档 · 周报\/w\.md/);
     } finally {
       await rm(base, { recursive: true, force: true });
     }
