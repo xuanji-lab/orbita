@@ -328,6 +328,13 @@ export interface AppSettings {
    */
   boardDays?: BoardDays;
   /**
+   * 左栏会话列表的「时间范围」筛选（用户 2026-11-07：「会话生命周期如果可以有一个用最近一天、
+   * 最近三天、最近五天、最近七天来筛选要显示的会话就好了」）：只列最后活动（updatedAt）落在
+   * 最近 N 天内的会话。**缺席 = 不限**（打开后行为与此前完全一致）；只认 1 / 3 / 5 / 7，其余丢掉。
+   * 选「不限」靠补丁里发 null 清除（见 SettingsPatch）。
+   */
+  sidebarAgeDays?: SidebarAgeDays;
+  /**
    * 实验功能的逐项开关（2026-10-12 用户裁决：每个 feature 自己的 switch，不再设总开关）。
    * **缺省全部关闭**：缺席的键 = 这一项关着；开过的项写 true、关掉写 false
    * （逐项记账，不是只有「开」才落盘）。全关 / 空表不落这个键。关着只藏入口
@@ -378,6 +385,14 @@ export const BOARD_DAYS_CHOICES = [3, 5, 7] as const;
 export type BoardDays = (typeof BOARD_DAYS_CHOICES)[number];
 export const BOARD_DAYS_DEFAULT: BoardDays = 5;
 
+/** 左栏时间范围筛选的可选天数（缺席 = 不限） */
+export const SIDEBAR_AGE_CHOICES = [1, 3, 5, 7] as const;
+export type SidebarAgeDays = (typeof SIDEBAR_AGE_CHOICES)[number];
+
+export function isSidebarAgeDays(value: unknown): value is SidebarAgeDays {
+  return (SIDEBAR_AGE_CHOICES as readonly unknown[]).includes(value);
+}
+
 export function isBoardDays(value: unknown): value is BoardDays {
   return (BOARD_DAYS_CHOICES as readonly unknown[]).includes(value);
 }
@@ -392,8 +407,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
  * 渲染层各处只发自己改的键——整块回写会带上闭包里的旧值，先后覆盖有竞态。
  */
 export type SettingsPatch = Partial<
-  Omit<AppSettings, "drawer" | "lastUsed" | "choreModel" | "subSessionModel" | "subSessionThinking">
+  Omit<
+    AppSettings,
+    "drawer" | "lastUsed" | "choreModel" | "subSessionModel" | "subSessionThinking" | "sidebarAgeDays"
+  >
 > & {
+  /** `null` = 清除，退回「不限」（同 choreModel：undefined 在补丁里是「没改」，选不回默认） */
+  sidebarAgeDays?: SidebarAgeDays | null;
   drawer?: Partial<DrawerSettings>;
   lastUsed?: Partial<LastUsedIntent>;
   /**
@@ -559,6 +579,7 @@ export function parseSettings(raw: unknown): AppSettings {
     providersPage?: unknown;
     pluginsPage?: unknown;
     boardDays?: unknown;
+    sidebarAgeDays?: unknown;
     /** 旧键（2026-10-25 之前）：providersPage.cardSize 缺席时读它，任何一次写入都把它从盘上带走 */
     providerCardSize?: unknown;
     experimentalFeatures?: unknown;
@@ -641,6 +662,8 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(pluginsPage === undefined ? {} : { pluginsPage }),
     // 只认 3 / 5 / 7：别的数当作没选过（缺席 = 5）
     ...(isBoardDays(record.boardDays) ? { boardDays: record.boardDays } : {}),
+    // 只认 1 / 3 / 5 / 7：别的值（含补丁里的 null）当作「不限」，不落键
+    ...(isSidebarAgeDays(record.sidebarAgeDays) ? { sidebarAgeDays: record.sidebarAgeDays } : {}),
     // 只认绝对路径（POSIX 以 / 开头，Windows 盘符或 UNC）：相对路径会随 cwd 漂，当作没设
     ...(typeof record.browserDownloadDir === "string" && isAbsolutePath(record.browserDownloadDir)
       ? { browserDownloadDir: record.browserDownloadDir }
