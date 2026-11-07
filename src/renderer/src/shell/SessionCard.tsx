@@ -1,5 +1,8 @@
 import { Icon, type IconName } from "./Icon";
 import { useT } from "../locale.ts";
+import { StatusPie } from "./StatusPie";
+import type { PieFill } from "./status-pie.ts";
+import { runStateLabel } from "../features/notify/completion-notice.ts";
 
 /**
  * 首页的最近会话卡（设计系统 components/surfaces/SessionCard 的实现）：
@@ -15,8 +18,12 @@ export function SessionCard(props: {
   items?: readonly { icon?: IconName; text: string }[];
   /** 恒渲染槽位数；默认 3（普通卡的提问槽） */
   slots?: number;
-  /** 这条会话里有 agent 在跑：名字行尾一枚 accent 圆点 */
-  running?: boolean;
+  /**
+   * 这条会话的运行态（runStateOf，与侧栏同一份推导）：名字前的状态饼，与侧栏同一套
+   * 份数与颜色（2026-10-30，取代名字行尾那枚呼吸的 accent 圆点——暗色主题的 accent
+   * 是黄，与「等你」的橙混；侧栏说饼、首页说圆点，同一件事两种符号）
+   */
+  state?: PieFill | null;
   /** 列表还在读时的骨架态 */
   loading?: boolean;
   onClick?: () => void;
@@ -52,7 +59,10 @@ export function SessionCard(props: {
         </>
       ) : (
         <>
-          <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+          <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0 }}>
+            {props.state !== undefined && props.state !== null && (
+              <StatusPie state={props.state} title={runStateLabel(props.state, t)} />
+            )}
             <span
               style={{
                 minWidth: 0,
@@ -66,19 +76,6 @@ export function SessionCard(props: {
             >
               {props.name}
             </span>
-            {props.running === true && (
-              <span
-                title={t.common.running}
-                className="orbita-breath"
-                style={{
-                  flex: "0 0 auto",
-                  width: 6,
-                  height: 6,
-                  borderRadius: 999,
-                  background: "var(--color-accent)",
-                }}
-              />
-            )}
           </span>
           {Array.from({ length: slots }, (_, slot) => {
             const item = items[slot];

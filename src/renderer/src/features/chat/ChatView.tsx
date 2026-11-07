@@ -29,6 +29,7 @@ import { noticeIconBoxStyle, noticeParagraphStyle, noticeTextStyle } from "./not
 import { ExitCard } from "./ExitCard";
 import { PanelButton } from "../../shell/RightPanel";
 import { ProcessViewContext } from "./process-view-context";
+import { runStateOf } from "../notify/completion-notice.ts";
 import {
   CHAPTER_STEPS_SHOWN,
   SLOW_GAP_MS,
@@ -1373,7 +1374,10 @@ function ChatViewBody(props: {
                         text: row.text,
                       }))}
                       slots={card.todo ? HOME_CARD_CARRYOVER_ROWS : HOME_CARD_QUERY_ROWS}
-                      running={session.phaseOf(card.sessionId) !== "idle"}
+                      state={(() => {
+                        const meta = session.sessions.find((m) => m.id === card.sessionId);
+                        return meta === undefined ? null : runStateOf(session, meta);
+                      })()}
                       onClick={() => {
                         startLeave();
                         session.openSession(card.sessionId);
