@@ -91,7 +91,7 @@ h1 { font-size: 22pt; margin-top: 0; } h2 { font-size: 16pt; } h3 { font-size: 1
 p { margin: 0.6em 0; }
 a { color: #1a5fd0; text-decoration: none; border-bottom: 1px solid #b7cdf2; }
 a.ofm-wikilink { color: #1a5fd0; }
-code { font: 9.5pt/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; background: #f1f1f3; padding: 0.1em 0.35em; border-radius: 3px; }
+code { font: 9.5pt/1.5 ui-monospace, "SF Mono", Menlo, Consolas, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", monospace; background: #f1f1f3; padding: 0.1em 0.35em; border-radius: 3px; }
 pre { background: #f6f6f8; border: 1px solid #e4e4e8; border-radius: 6px; padding: 10px 12px; overflow: hidden; white-space: pre-wrap; word-break: break-all; break-inside: avoid; }
 pre code { background: none; padding: 0; }
 blockquote { margin: 0.8em 0; padding: 0.1em 0 0.1em 14px; border-left: 3px solid #c7c7cc; color: #48484a; }
