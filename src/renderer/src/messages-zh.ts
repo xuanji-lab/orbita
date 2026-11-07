@@ -2001,7 +2001,17 @@ export const zh: Messages = {
     tabProgress: "进度",
     tabContext: "上下文",
     state: (state) =>
-      state === "running" ? "在跑" : state === "waiting" ? "等你" : state === "failed" ? "出错了" : state === "done" ? "做完了" : "空闲",
+      state === "running"
+        ? "在跑"
+        : state === "waiting"
+          ? "等你"
+          : state === "failed"
+            ? "出错了"
+            : state === "stopped"
+              ? "停下了"
+              : state === "done"
+                ? "做完了"
+                : "空闲",
     turns: (count) => `${count} 轮`,
     plan: "计划",
     planCount: (done, total) => `${done} / ${total}`,
@@ -2011,7 +2021,11 @@ export const zh: Messages = {
     later: "留到以后",
     markDone: "标为完成",
     reopen: "重新打开",
+    toTask: "转成任务：带着这一项的上下文开新任务",
     jump: "在对话里看这一段",
+    notInChat: "对话里还没加载到这一轮，往上翻到它就能跳过去。",
+    olderNotLoaded: "更早的轮还没载入。",
+    loadOlder: "载入",
     noTask: "打开一个任务就能看到进度。",
     contextLine: "上下文",
   },

@@ -343,7 +343,12 @@ the agent's plan (from `update_plan`: an empty ring for pending, a blue pie for 
 a check for done), what was done (one row per turn, with the latest turn opened into its chapters;
 clicking a chapter scrolls the conversation to it), and the leftovers saved for later. Its Context tab
 is what the agent is holding. `update_plan` is bookkeeping, not a step: it never counts toward step
-totals.
+totals. The panel only says what is happening: the blue pie and the step clock show only while the
+session is running or waiting for you; once it stops with steps left the head reads **Stopped** —
+words only, the pie keeps its four states — and the step it stopped on keeps its ring, in semibold.
+Earlier turns than the conversation has loaded come in on demand (one quiet "Load them" line, shared
+with the Context tab's whole-task fetch). A leftover becomes a new task through the row's hover action,
+the same action and glyph as the sidebar's carryover list.
 Solid panels (dialogs, drawers, menus, popovers) are white with a hairline and a heavier shadow.
 
 **Shadows.** Five steps, all cool-grey and soft, **scaled to how high a surface floats, not to its
