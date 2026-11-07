@@ -51,12 +51,6 @@
   /* 成段阅读微微放开字距，中文不挤（照 ZCode 的 tracking-wide） */
   --tracking-reading: 0.025em;
   --tracking-model: 0.01em;
-
-  /* semantic aliases */
-  --text-slogan-family: var(--font-family-brand);
-  --text-wordmark-family: var(--font-family-brand);
-  --text-body-family: var(--font-family-base);
-  --text-code-family: var(--font-family-mono);
 }
 
 /* 纸面两档换字：小学作业是手写的纸面，正文用衬线（Literata + 思源宋体）；打字稿是打字机，

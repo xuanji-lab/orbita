@@ -612,7 +612,7 @@ button.mem-tag:hover {
 .mem-code {
   padding: 1px 6px;
   border-radius: var(--radius-sm);
-  background: var(--color-code-bg);
+  background: var(--color-bg-muted);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
   color: var(--color-text-primary);

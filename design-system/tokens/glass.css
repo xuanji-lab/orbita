@@ -9,9 +9,10 @@
    (numbers in the commit that removed it). Translucency now comes from the
    alpha ladder alone — stacking, not blurring.
 
-   Dark is the MORE opaque theme (.70 vs .60). Light text needs a dark, settled
-   ground: at a low alpha the wallpaper bleeds through and light-on-grey loses
-   its contrast. Dark glass therefore blocks more, not less. */
+   Dark blocks more than light: light text needs a dark, settled ground, and at
+   a low alpha the wallpaper bleeds through and light-on-grey loses its
+   contrast. The two dark tiers take that to its end point — their glass is
+   solid (--glass-alpha: 1, see below). */
 :root {
   --glass-alpha: 0.6; /* @kind other */
   --glass-border: rgba(255, 255, 255, 0.55);

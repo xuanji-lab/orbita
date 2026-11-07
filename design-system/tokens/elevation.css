@@ -3,11 +3,9 @@
   --shadow-composer: 0 8px 28px rgba(20, 24, 31, 0.08);
   --shadow-popover: 0 12px 32px rgba(20, 24, 31, 0.12);
   --shadow-modal: 0 24px 80px rgba(20, 24, 31, 0.22);
-  --shadow-drawer: -8px 0 24px rgba(20, 24, 31, 0.05);
   --focus-ring: 0 0 0 2px rgba(29, 78, 216, 0.16);
 
   --overlay-backdrop: rgba(15, 18, 24, 0.35);
-  --overlay-backdrop-soft: rgba(15, 23, 42, 0.14);
   --overlay-backdrop-subtle: rgba(15, 23, 42, 0.08);
 }
 
@@ -19,9 +17,7 @@
   --shadow-composer: 0 8px 28px rgba(0, 0, 0, 0.28);
   --shadow-popover: 0 14px 36px rgba(0, 0, 0, 0.38);
   --shadow-modal: 0 24px 80px rgba(0, 0, 0, 0.55);
-  --shadow-drawer: -8px 0 24px rgba(0, 0, 0, 0.32);
   --focus-ring: 0 0 0 2px rgba(214, 194, 69, 0.28);
   --overlay-backdrop: rgba(0, 0, 0, 0.48);
-  --overlay-backdrop-soft: rgba(0, 0, 0, 0.4);
   --overlay-backdrop-subtle: rgba(0, 0, 0, 0.24);
 }

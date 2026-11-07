@@ -38,10 +38,8 @@ import { useT } from "../locale.ts";
  *
  * 它是第三层玻璃：浮在内容面之上，不在文档流里当一个方盒子。
  *
- * 圆角取 `--radius-xl`，**不取** `--radius-composer`(14px)。设计系统对这条自相矛盾：
- * readme 的 *Corners and borders* 说 composer 是唯一的例外，而 `Composer.jsx` 与
- * `spacing.css` 的注释说「它首先是玻璃卡，所以吃 --radius-xl」。取后者：
- * 玻璃卡就该有统一标准，一个例外换不来任何东西（2026-08-25 wafo 定）。
+ * 圆角取 `--radius-xl`：它首先是玻璃卡，玻璃卡就该有统一标准，一个例外换不来任何东西
+ * （2026-08-25 wafo 定；readme *Corners and borders* 已同步，14px 只留给用户气泡）。
  */
 /** 按内容把输入框的高度量好、设上。行高与 padding 从实际样式来（主题会换它们）。 */
 function fitComposerHeight(el: HTMLTextAreaElement): void {
