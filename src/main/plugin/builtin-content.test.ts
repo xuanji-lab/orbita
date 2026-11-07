@@ -391,6 +391,9 @@ describe("内置插件 terminal", () => {
     assert.match(text, /Red line: never type into a busy terminal/);
     assert.match(text, /There is no exit-code event/);
     assert.match(text, /outputSharedWithAgent: false/);
+  });
+});
+
 describe("内置插件 automation", () => {
   const readSkill = (): Promise<string> => readFile(join(AUTOMATION, "skills", "automation", "SKILL.md"), "utf8");
 
@@ -441,6 +444,9 @@ describe("内置插件 automation", () => {
       `instruction at most ${AUTOMATION_PROMPT_MAX.toLocaleString("en-US")} characters`,
     ];
     for (const needle of expected) assert.equal(text.includes(needle), true, `技能里缺「${needle}」（与代码常量不一致？）`);
+  });
+});
+
 describe("内置插件 reading", () => {
   test("一条技能 reading；workflow 点名对得上；description 写明「读 PDF 用 read_pdf、读 docx 用 read_docx，不用 read」与何时读它（模型靠它想起技能）", async () => {
     const scanned = await scanPlugin(READING, "reading");
