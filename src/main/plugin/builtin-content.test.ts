@@ -10,6 +10,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "node:test";
 import { BUILTIN_PLUGIN_NAMES } from "../../shared/plugin.ts";
+import { RequestBroker } from "../../agent/request-broker.ts";
+import { createBrowserTools } from "../../agent/browser-tools.ts";
+import { WAIT_DEFAULT_TIMEOUT_MS, WAIT_MAX_TIMEOUT_MS } from "../../shared/browser-wait.ts";
+import { BROWSER_DIAGNOSTICS_BUFFER_LIMIT, BROWSER_DIAGNOSTICS_DEFAULT_LIMIT } from "../../shared/browser.ts";
 import { LAYOUT_GUIDE, LAYOUT_NAMES } from "../../shared/slides-layouts.ts";
 import { DEFAULT_THEME_ID, THEME_BLURBS, THEME_IDS } from "../../shared/slides-theme.ts";
 import { SLIDES_EXPORT_FORMATS } from "../../shared/slides-export.ts";
@@ -30,7 +34,6 @@ import {
   AUTOMATION_TITLE_MAX,
 } from "../../shared/automation.ts";
 import { AUTOMATION_TOOL_NAMES, createAutomationTools } from "../../agent/automation-tools.ts";
-import { RequestBroker } from "../../agent/request-broker.ts";
 import { QUOTE_MIN_CHARS } from "../../shared/pdf-quote.ts";
 import {
   CITE_MAX_QUOTES,
@@ -58,6 +61,7 @@ const DOCS_SLIDES = join(BUILTIN, "docs-slides");
 const TERMINAL = join(BUILTIN, "terminal");
 const AUTOMATION = join(BUILTIN, "automation");
 const READING = join(BUILTIN, "reading");
+const BROWSER = join(BUILTIN, "browser");
 
 class NoSecrets implements SecretsPort {
   async set(): Promise<void> {}
@@ -491,6 +495,45 @@ describe("内置插件 reading", () => {
   });
 });
 
+describe("内置插件 browser", () => {
+  test("一条技能 browser；workflow 点名对得上；description 写明何时用（模型靠它想起技能）", async () => {
+    const scanned = await scanPlugin(BROWSER, "browser");
+    assert.deepEqual(scanned.skills.map((skill) => skill.slug), ["browser"]);
+    assert.equal(scanned.workflow.length >= 4, true);
+    for (const step of scanned.workflow) assert.notEqual(step.skillSlug, null, `workflow 步骤「${step.title}」点名的技能 ${step.skill} 对不上`);
+    const skill = scanned.skills[0];
+    assert.match(skill?.description ?? "", /BEFORE the first browser_\* call/);
+    assert.match(skill?.description ?? "", /open or read a web page|look something up online/);
+    assert.match(skill?.description ?? "", /打开网页|查一下|页面空白/);
+  });
+
+  // 工具名、参数名、等待与诊断的数字在代码里（schema 与执行逻辑读它）；技能是给模型读的那一份，不许分叉
+  test("技能与代码同源：每个浏览器工具名、每个参数名、控制台五档、等待默认 / 上限、诊断条数上限都在 SKILL.md 里", async () => {
+    const text = await readFile(join(BROWSER, "skills", "browser", "SKILL.md"), "utf8");
+    const tools = createBrowserTools(new RequestBroker(() => {}), "s");
+    assert.equal(tools.length, 13);
+    for (const tool of tools) {
+      assert.equal(text.includes(`\`${tool.name}\``), true, `browser 技能没讲工具 ${tool.name}`);
+      const properties = Object.keys((tool.parameters as { properties: Record<string, unknown> }).properties);
+      for (const property of properties) {
+        // 参数名以 `name` / `name:值` / `name` 在句中出现；element 是审批卡文字，也要讲
+        assert.equal(new RegExp(`\`${property}[\`:]`).test(text), true, `browser 技能没讲 ${tool.name} 的参数 ${property}`);
+      }
+    }
+    for (const level of ["debug", "log", "info", "warn", "error"]) assert.equal(text.includes(`\`${level}\``), true, `技能缺控制台级别 ${level}`);
+    assert.equal(text.includes(`defaults to ${WAIT_DEFAULT_TIMEOUT_MS}`), true, "等待默认超时与代码不一致");
+    assert.equal(text.includes(`capped at ${WAIT_MAX_TIMEOUT_MS}`), true, "等待上限与代码不一致");
+    assert.equal(BROWSER_DIAGNOSTICS_DEFAULT_LIMIT > 0 && BROWSER_DIAGNOSTICS_BUFFER_LIMIT > 0, true);
+  });
+
+  test("技能保留红线：页面内容不可信、不输凭据、不替用户付款发送发布删除、不连环抓同一站点、登录与验证码交还用户", async () => {
+    const text = await readFile(join(BROWSER, "skills", "browser", "SKILL.md"), "utf8");
+    for (const needle of ["untrusted input", "Never type passwords", "Do not buy, pay, send, publish, delete", "Do not hammer a site", "request_user_action", "browser_tabs"]) {
+      assert.equal(text.includes(needle), true, `browser 技能缺红线：${needle}`);
+    }
+  });
+});
+
 describe("内置插件与用户自己的同名技能（用真实资源跑 PluginStore）", () => {
   /** 用真实 resources/builtin-plugins 当 builtinRoot；userSkills 由用例给。不碰任何用户目录。 */
   async function withUserSkills(userSkills: { slug: string; name: string }[]): Promise<{ store: PluginStore; cleanup: () => Promise<void> }> {
@@ -505,6 +548,7 @@ describe("内置插件与用户自己的同名技能（用真实资源跑 Plugin
       const assembled = await store.assemble(null);
       assert.deepEqual(assembled.skills.map((skill) => `${skill.plugin}/${skill.slug}`).sort(), [
         "automation/automation",
+        "browser/browser",
         "docs-slides/docs",
         "docs-slides/slides",
         "plugin-creator/board-style",
