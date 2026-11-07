@@ -9,3 +9,15 @@
 export function isUnclaimedEscape(event: Pick<KeyboardEvent, "key" | "defaultPrevented" | "isComposing">): boolean {
   return event.key === "Escape" && !event.defaultPrevented && !event.isComposing;
 }
+
+/**
+ * 打开着的菜单要不要在**文档级**接管 Esc。
+ *
+ * 菜单自己的 onKeyDown 只在焦点落在菜单里时才收得到 Esc；而下拉菜单的触发键常常还留着焦点
+ * （文档面板的「纸面」下拉实测：点开后 activeElement 仍是触发键），这时 Esc 的 target 是触发键，菜单收不到，
+ * 一路冒泡到全局监听把文档标签 / 右栏关掉。所以菜单开着的时候在 document 捕获阶段认领 Esc：
+ * 关菜单、preventDefault + stopPropagation，焦点在哪都一样。输入法组词中的 Esc 是取消组词，不接。
+ */
+export function isMenuDismissKey(event: Pick<KeyboardEvent, "key" | "isComposing">): boolean {
+  return event.key === "Escape" && !event.isComposing;
+}
