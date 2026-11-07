@@ -50,6 +50,7 @@ import { DirMarkName } from "../../shell/DirMarkName.tsx";
 import type { FileEntryKind, FileRoot, FileRootKind, FsEntryFact } from "@shared/files";
 import type { DocKind } from "@shared/doc";
 import { pathTail, pathWithin } from "../../../../shared/path.ts";
+import { isDocumentName } from "@shared/ofm/syntax";
 import { useT } from "../../locale.ts";
 
 /** 占位 Session 组（还没有会话）的折叠键：真实根的键是绝对路径，常量撞不上 */
@@ -101,6 +102,8 @@ export function FilesPanel(props: {
    * 同一个文件连点两次也重新激活。null = 没有请求
    */
   fileOpen?: { path: string; token: number } | null;
+  /** 当前激活的标签是不是一份文档（md / txt）：App 据此给面板「写东西」的宽度（与演示文稿面板同一套规则） */
+  onDocShown?: (shown: boolean) => void;
 }) {
   const t = useT();
   const session = props.session;
@@ -206,6 +209,13 @@ export function FilesPanel(props: {
    * 挡的是同一个判决、同一个根，effect 在下一拍把状态也收掉。
    */
   const shownTab = activeTab !== null && activeTab.root === focusDrop.rootPath ? null : activeTab;
+  // 报给 App：显示的是文档就用宽面板；卸载（切走面板）时还原
+  const docShown = shownTab !== null && shownTab.name === undefined && isDocumentName(shownTab.path);
+  const onDocShown = props.onDocShown;
+  useEffect(() => {
+    onDocShown?.(docShown);
+    return () => onDocShown?.(false);
+  }, [docShown, onDocShown]);
 
   // Session · 附件：已发送过的文件引用与附图从已加载转录派生（sent-attachments.ts，
   // 不动盘、不建链接不建副本）；盘上事实（还在不在 / 类型）走已有的 fs:stat-kind 现问，

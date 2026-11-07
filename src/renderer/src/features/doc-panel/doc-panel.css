@@ -882,3 +882,16 @@
 .dp-editor[data-view="plain"] .cm-editor {
   font-size: var(--font-size-lg);
 }
+
+/* 任务列表：复选框就是标记，不再叠一个圆点 */
+.dp-read .chat-md ul.contains-task-list {
+  padding-inline-start: var(--space-1);
+  list-style: none;
+}
+.dp-read .chat-md li.task-list-item {
+  list-style: none;
+}
+.dp-read .chat-md li.task-list-item > input[type="checkbox"] {
+  margin: 0 var(--space-2) 0 0;
+  vertical-align: baseline;
+}

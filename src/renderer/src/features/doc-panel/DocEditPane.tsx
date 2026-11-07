@@ -20,7 +20,7 @@ import { DocView } from "./DocView";
 import { OfmReader, PlainTextReader } from "./OfmReader";
 import { createTargetResolver } from "./ofm-targets.ts";
 import type { OfmEnv } from "./ofm-env.ts";
-import { getView, setView } from "./view-memory.ts";
+import { docScope, getView, setLast, setView } from "./view-memory.ts";
 import { SlidesView } from "./SlidesView";
 import { deckHtml, overflowPages, resolvedTokenCss } from "./slide-render";
 import { parseDeck } from "@shared/doc-slides";
@@ -84,6 +84,10 @@ export function DocEditPane(props: {
   }, [doc.initial, path]);
 
   const ready = doc.phase === "ready" && doc.session !== null && doc.initial !== null;
+  // 记下「这个工作区最近开的文档」：右栏「文档」入口据此回到它
+  useEffect(() => {
+    if (ready && !deck) setLast(docScope(workspaceId, "doc"), path);
+  }, [ready, deck, workspaceId, path]);
   useEffect(() => {
     if (!ready) return undefined;
     const session = doc.session;
@@ -358,8 +362,13 @@ export function DocEditPane(props: {
           }))}
           align="end"
           trigger={({ open, toggle }) => (
-            <SelectButton open={open} onClick={toggle} disabled={locked} title={locked ? t.doc.paperLocked : t.doc.paperLabel}>
-              {t.doc.paperLabel}：{paperName(paper, t)}
+            <SelectButton
+              open={open}
+              onClick={toggle}
+              disabled={locked}
+              title={`${t.doc.paperLabel}：${paperName(paper, t)}${locked ? `（${t.doc.paperLocked}）` : ""}`}
+            >
+              {paperName(paper, t)}
             </SelectButton>
           )}
         />

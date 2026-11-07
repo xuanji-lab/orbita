@@ -35,6 +35,7 @@ import { Toolbar, ToolbarPanelSlotContext } from "./shell/Toolbar";
 import { SessionCapsule } from "./shell/SessionCapsule";
 import { useFocusShell } from "./features/focus/use-focus-shell.tsx";
 import { docPanelLayout } from "./features/doc-panel/doc-panel-width.ts";
+import { docScope, getLast } from "./features/doc-panel/view-memory.ts";
 import { DocPaperContext, effectivePaper } from "./features/doc-panel/doc-paper.ts";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
 import {
@@ -119,6 +120,9 @@ import type { PanelUsageKey } from "@shared/panel-usage";
  * （Archived / Carryovers / Settings，wafo 2026-09-22 裁决，覆盖同日之前的
  * 「底部只放会话动作」——复制按钮已并入会话行的「导出」）。
  */
+/** 右栏「文档」入口发出的打开请求的 token 起点（与 focus.fileOpen 的自增 token 分开，避免撞号被当成已消费） */
+const DOC_OPEN_TOKEN_BASE = 1_000_000;
+
 export function App() {
   usePlatform();
   const [providers, setProviders] = useState<ProviderDto[]>([]);
@@ -268,7 +272,9 @@ export function App() {
     query.addEventListener("change", sync);
     return () => query.removeEventListener("change", sync);
   }, []);
-  const docPanelOpen = rightPanel === "docs" || rightPanel === "slides";
+  /** 文件面板此刻显示的是一份文档（md / txt）：与「演示文稿」面板同一套宽面板规则（写东西的面板 320 太局促） */
+  const [filesShowsDoc, setFilesShowsDoc] = useState(false);
+  const docPanelOpen = rightPanel === "docs" || rightPanel === "slides" || (rightPanel === "files" && filesShowsDoc);
   useEffect(() => {
     if (!docPanelOpen) {
       // 关面板：是我们收的就还原；用户动过就不碰
@@ -309,6 +315,10 @@ export function App() {
   };
   const expandSidebar = useCallback((): void => setSidebarCollapsed(false), []);
   const openFilesPanel = useCallback((): void => setRightPanel("files"), []);
+  // 记忆里恢复出来的旧「文档」面板（合并之前存的）：并入文件面板
+  useEffect(() => {
+    if (rightPanel === "docs") setRightPanel("files");
+  }, [rightPanel]);
   const focus = useFocusShell({
     t,
     workspaces: session.workspaces,
@@ -326,7 +336,16 @@ export function App() {
   });
   /** `<FilesPanel>` 那两行的别名：保持 B1 之前的原文，#281 要在它旁边插 `focusDone` */
   const focusFilesView = focus.filesView;
-  const fileOpenRequest = focus.fileOpen;
+  /**
+   * 文件面板的「打开这个文件」请求：两个来源——左栏专注视图的双击（focus.fileOpen，token 自增）和右栏「文档」入口
+   * （docOpenRequest，token 从 DOC_OPEN_TOKEN_BASE 起，两边不撞号）。谁最后来用谁
+   */
+  const [docOpenRequest, setDocOpenRequest] = useState<{ path: string; token: number } | null>(null);
+  const fileOpenRequest = docOpenRequest ?? focus.fileOpen;
+  // 左栏专注视图又发了新的打开请求：它比右栏入口那条新，让位
+  useEffect(() => {
+    if (focus.fileOpen !== null) setDocOpenRequest(null);
+  }, [focus.fileOpen]);
 
   /**
    * 收起态页头的「新任务」：退出设置页、回到展开侧栏（新任务要落在看得见的列表里），
@@ -862,8 +881,29 @@ export function App() {
   /** 右侧三个图标共用**一个面板位**（2026-09-12 裁决）：同一时刻至多展开一个，
    *  "drawer" 即辅助对话——三个菜单在同一个壳里只是三种内容。 */
   const handlePanel = useCallback((next: RightPanelKind | null) => {
+    // 「文档」入口 = 在文件面板里打开最近的文档（没有就新建一份）：文档与文件合并成一个面板，不再有第二个
+    if (next === "docs") {
+      setRightPanel("files");
+      void openRecentDocument();
+      return;
+    }
     setRightPanel(next);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.workspaceId, session.sessionId, session.opened?.id]);
+  /** 右栏「文档」入口：上次在这个工作区打开的文档 → 否则最近改的 .md → 否则新建一份空文档，在文件面板里打开 */
+  async function openRecentDocument(): Promise<void> {
+    const sessionId = session.sessionId ?? session.opened?.id ?? null;
+    const workspaceId = session.workspaceId;
+    try {
+      const docs = (await api.docs.list({ sessionId, workspaceId })).filter((entry) => entry.kind === "doc");
+      const last = getLast(docScope(workspaceId, "doc"));
+      const target =
+        docs.find((entry) => entry.path === last)?.path ?? docs[0]?.path ?? (await api.docs.create({ sessionId, workspaceId, kind: "doc" })).path;
+      setDocOpenRequest((prev) => ({ path: target, token: Math.max(prev?.token ?? 0, DOC_OPEN_TOKEN_BASE) + 1 }));
+    } catch {
+      // 列 / 建都失败（工作区目录不在）：文件面板自己会显示根的状态，这里不另报错
+    }
+  }
   /** 召回终态卡的「在右栏看图谱」（2026-10-14 终态卡重写）：直达右栏意图面板。引用稳定（TranscriptColumn 是 memo） */
   const openIntentPanel = useCallback(() => handlePanel("intent"), [handlePanel]);
   /** 输入框旁上下文环菜单的「查看上下文」：直达右栏上下文面板 */
@@ -996,7 +1036,7 @@ export function App() {
 
   /** 壳里此刻渲染的内容：active 优先，收起窗口里保持原面板直到收完 */
   const shownPanel = rightPanel ?? mountedPanel;
-  const isDocPanel = shownPanel === "docs" || shownPanel === "slides";
+  const isDocPanel = shownPanel === "docs" || shownPanel === "slides" || (shownPanel === "files" && filesShowsDoc);
   /**
    * 「和智能体一起做一个」（插件页）：在当前工作区（没有则 Home）新开一条任务，输入框预填一句引导，
    * 开头的 `/skill:plugin-creator` 点名内置的做插件技能（发送时由主进程展开成指令块）。
@@ -1552,6 +1592,7 @@ export function App() {
                 focusWorkspaceId={focusFilesView?.workspaceId ?? null}
                 focusDone={focus.status.kind === "done"}
                 fileOpen={fileOpenRequest}
+                onDocShown={setFilesShowsDoc}
               />
               ) : shownPanel === "docs" || shownPanel === "slides" ? (
                 <DocsPanel
