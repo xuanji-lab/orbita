@@ -1155,12 +1155,14 @@ export function App() {
                   onCreateSkill={createSkillDraft}
                   picker={tokenPickerOn ? skillsPicker : undefined}
                   onInsert={insertPanelToken}
+                  onKind={setRightPanel}
                 />
               ) : shownPanel === "mcp" ? (
                 <McpPanel
                   skills={skills}
                   picker={tokenPickerOn ? mcpPicker : undefined}
                   onInsert={insertPanelToken}
+                  onKind={setRightPanel}
                 />
               ) : shownPanel === "terminal" ? (
                 <TerminalPanel

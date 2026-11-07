@@ -88,6 +88,8 @@ export function RightRail(props: {
   };
 }) {
   const t = useT();
+  /** 能力入口上次开的那页（Skills / MCP），收起再开时回到它 */
+  const lastAbility = useRef<"skills" | "mcp">("skills");
   // 铃铛锚点（外部关闭判定要排除它）+ 弹层开关；开关在本体（右栏不重建），不随内容变
   const [bellOpen, setBellOpen] = useState(false);
   const [bellAnchor, setBellAnchor] = useState<HTMLSpanElement | null>(null);
@@ -129,17 +131,17 @@ export function RightRail(props: {
         lit={props.panel === "context"}
         onClick={() => props.onPanel(props.panel === "context" ? null : "context")}
       />
+      {/* Skills 与 MCP 一个入口（2026-10-30）：面板头两个页签切；再点收起，下次开回上次那页 */}
       <RailEntryButton
         icon="book-open"
-        label={t.rail.skills}
-        lit={props.panel === "skills"}
-        onClick={() => props.onPanel(props.panel === "skills" ? null : "skills")}
-      />
-      <RailEntryButton
-        icon="plug"
-        label={t.rail.mcp}
-        lit={props.panel === "mcp"}
-        onClick={() => props.onPanel(props.panel === "mcp" ? null : "mcp")}
+        label={t.rail.abilities}
+        lit={props.panel === "skills" || props.panel === "mcp"}
+        onClick={() => {
+          if (props.panel === "skills" || props.panel === "mcp") {
+            lastAbility.current = props.panel;
+            props.onPanel(null);
+          } else props.onPanel(lastAbility.current);
+        }}
       />
       {/* 终端（人工验收自己的开发）：与 Files 等共用面板位，收起面板不杀 PTY */}
       <RailEntryButton
