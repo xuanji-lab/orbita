@@ -788,6 +788,24 @@ export function rollupToolKey(
   return parseQualifiedToolName(toolName) !== null ? "mcp" : toolName;
 }
 
+/**
+ * 过程行（章节摘要、跑着时的步骤、首页卡）里工具调用的一句话：read 的是已知技能的 SKILL.md 时写技能名
+ * （与动词「skill」配成「skill slides」），不写绝对路径；其余原样走 toolCallSummary。
+ * 判法与 rollupToolKey / skillForReadPath 同源（尾巴 <slug>/SKILL.md 命中已知技能），插件内置技能同样认。
+ */
+export function toolCallSummaryForRow(
+  toolName: string,
+  input: unknown,
+  skills: ReadonlyArray<{ slug: string; name: string }> = [],
+): string | null {
+  if (toolName === "read") {
+    const path = (input as Record<string, unknown> | null)?.["path"];
+    const skill = typeof path === "string" ? skillForReadPath(path, skills) : null;
+    if (skill !== null) return skill.name;
+  }
+  return toolCallSummary(toolName, input);
+}
+
 export function turnStats(
   group: TurnGroupUnit,
   results: ToolResultIndex,

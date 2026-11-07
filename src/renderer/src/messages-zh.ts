@@ -24,7 +24,7 @@ const VENDOR_NAMES_ZH: Record<DictationProvider, string> = {
 
 const INTERVAL_UNIT_ZH: Record<AutomationIntervalUnit, string> = { minute: "分钟", hour: "小时", day: "天" };
 
-const ROLLUP_TOOL_ZH: Record<string, string> = { read: "读取", write: "写入", edit: "编辑", ls: "列目录", update_plan: "计划", update_goal: "目标" };
+const ROLLUP_TOOL_ZH: Record<string, string> = { read: "读取", write: "写入", edit: "编辑", ls: "列目录", update_plan: "计划", update_goal: "目标", skill: "技能" };
 
 /**
  * 界面文案表——中文，Copybook（小学作业）主题下使用。类型由英文真源推出。

@@ -112,17 +112,14 @@ export function createDocTools(broker: RequestBroker, sessionId: string, options
     name: "doc_open",
     label: "doc_open",
     description:
-      "Open a document (.md / .markdown / .txt) in the Files panel on the right, and return its outline (headings with line numbers). " +
-      "Use it whenever the user asks you to open / show / work on a document, before editing it with read / edit / write — " +
-      "the panel then shows your edits live. create:true makes a new empty document if the path does not exist (never overwrites). " +
-      "The document panel understands Obsidian-flavoured markdown: [[wikilinks]], ![[image.png]], > [!warning] callouts " +
-      "(> [!tip]- is collapsible), ==highlight==, #tags, YAML frontmatter, task lists, tables, $math$. " +
-      "Write plain markdown unless the user's notes already use that syntax.",
+      "Open a document (.md / .markdown / .txt) in the Files panel and return its outline (headings with line numbers). " +
+      "Use it whenever the user asks to open / show / work on a document, before editing it with read / edit / write — the panel shows your edits live. create:true makes a new empty document (never overwrites). " +
+      "Before the first doc_* call in a conversation, read the `docs` skill (Obsidian syntax, image and export rules).",
     parameters: {
       type: "object",
       properties: {
-        path: { type: "string", description: "The document file (relative to the workspace, or absolute inside it)" },
-        create: { type: "boolean", description: "Create the document (empty) if it does not exist" },
+        path: { type: "string", description: "The document file" },
+        create: { type: "boolean", description: "Create it (empty) if missing" },
       },
       required: ["path"],
     } as never,
@@ -171,18 +168,15 @@ export function createDocTools(broker: RequestBroker, sessionId: string, options
     name: "doc_insert_image",
     label: "doc_insert_image",
     description:
-      "Insert an image into a document: copies the picture into the document's attachments folder " +
-      "(the vault's attachmentFolderPath from .obsidian/app.json when present, else attachments/) and inserts the reference " +
-      "(![[name.png]] in an Obsidian vault, ![](attachments/name.png) otherwise) as its own paragraph. " +
-      "Use it instead of hand-writing image paths. The image must be a png / jpg / gif / webp / svg / bmp / avif file ≤ 25 MB.",
+      "Insert an image into a document: copies it into the attachments folder and inserts the reference as its own paragraph. Use it instead of hand-writing image paths. Rules: `docs` skill.",
     parameters: {
       type: "object",
       properties: {
         path: { type: "string", description: "The document (.md / .markdown / .txt)" },
-        image_path: { type: "string", description: "The picture to insert (a file path)" },
+        image_path: { type: "string", description: "The picture (file path)" },
         after_line: {
           type: "number",
-          description: "Insert after this 1-based line of the document (0 = right after the frontmatter / at the top). Default: end of the document",
+          description: "Insert after this 1-based line (0 = top, after the frontmatter). Default: end",
         },
       },
       required: ["path", "image_path"],
@@ -245,17 +239,13 @@ export function createDocTools(broker: RequestBroker, sessionId: string, options
     name: "doc_export",
     label: "doc_export",
     description:
-      "Export a document: docx (Word: headings, lists, tables, images, code, callouts become quote blocks with a coloured bar, " +
-      "wikilinks become plain text, ==highlights== get a shading), pdf (rendered with the reading view's page style, images inlined), " +
-      "md (a copy of the markdown as is) or md-plain (a universal markdown: Obsidian syntax is converted — wikilinks to text, callouts to quotes, " +
-      "embeds to ![](path), ==x== to <mark>). Returns the output path. By default the file is written next to the document " +
-      "(<name>.docx / <name>.pdf / <name> 副本.md / <name> (通用).md); out must stay inside the workspace.",
+      "Export a document: docx, pdf, md or md-plain (universal markdown). Written next to the document by default; returns the path. Conversions: `docs` skill.",
     parameters: {
       type: "object",
       properties: {
         path: { type: "string", description: "The document (.md / .markdown / .txt)" },
         format: { type: "string", enum: ["docx", "pdf", "md", "md-plain"] },
-        out: { type: "string", description: "Output file (relative to the document's folder). Must end with the format's extension (.docx / .pdf / .md)" },
+        out: { type: "string", description: "Relative to the document's folder; ends with the format's extension" },
       },
       required: ["path", "format"],
     } as never,

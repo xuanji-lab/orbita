@@ -7,6 +7,7 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { RequestBroker } from "./request-broker.ts";
 import { createSlidesTools } from "./slides-tools.ts";
 import { parseDeck } from "../shared/slides.ts";
+import { LAYOUT_GUIDE } from "../shared/slides-layouts.ts";
 import { readCommandCard, readOpenPanel } from "../shared/builtin-command.ts";
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
@@ -40,9 +41,14 @@ async function run(name: string, params: Record<string, unknown>) {
 }
 
 describe("slides tools", () => {
-  it("六个工具齐全，描述里有 schema 说明", () => {
+  it("六个工具齐全；描述只留一两句 + 指路 slides 技能（细则在内置插件里，不再每轮发给模型）", () => {
     assert.deepEqual(Object.keys(tools).sort(), ["slides_create", "slides_edit", "slides_export", "slides_insert_image", "slides_read", "slides_write"]);
-    assert.match(tools["slides_write"]?.description ?? "", /1280×720/);
+    for (const name of ["slides_create", "slides_write"]) assert.match(tools[name]?.description ?? "", /read the `slides` skill/, `${name} 的描述要指路 slides 技能`);
+    for (const name of ["slides_edit", "slides_export"]) assert.match(tools[name]?.description ?? "", /`slides` skill/, `${name} 的描述要指路 slides 技能`);
+    // 瘦身守门：描述合计 ≤2500 字符（此前 11.8k，单 slides_write 5.4k）；谁往描述里塞回版式清单，这里先红
+    const total = Object.values(tools).reduce((sum, tool) => sum + tool.description.length, 0);
+    assert.equal(total <= 1800, true, `slides 六个工具的描述合计 ${total} 字符，超了——细则写进 slides 技能，不写进描述`);
+    for (const tool of Object.values(tools)) assert.doesNotMatch(tool.description, /DESIGN RULES|1280×720/);
   });
 
   it("create：落盘 0 页、details 带 openPanel(force) 与 card", async () => {
@@ -187,12 +193,11 @@ describe("slides tools", () => {
   });
 
   it("主题与版式：create 选主题；write 用 layout + slots（含 attached 图），描述教设计，超限出 warning 不报错", async () => {
-    const guide = tools["slides_write"]?.description ?? "";
-    assert.match(guide, /DESIGN RULES/);
-    assert.match(guide, /≤16 characters/);
-    assert.match(guide, /image-left/);
-    assert.match(tools["slides_create"]?.description ?? "", /forest/);
-    await run("slides_create", { title: "主题测试", theme: "forest" });
+    // 兜底：create 的结果带版式名与技能指路 + 所选主题的说明，没读技能的模型至少看得到版式名
+    const created = await run("slides_create", { title: "主题测试", theme: "forest" });
+    assert.match(created.text, /Layouts: cover, section, bullets, two-column, image-left, image-right, image-full, table, quote, stat, closing — full rules/);
+    assert.match(created.text, /`slides` skill/);
+    assert.match(created.text, /theme forest — deep green with orange/);
     const path = join(dir, "主题测试.slides.json");
     assert.equal(parseDeck(await readFile(path, "utf8")).deck.theme?.id, "forest");
     await writeFile(join(dir, "hawker.png"), PNG);
@@ -217,6 +222,11 @@ describe("slides tools", () => {
     assert.equal(after.theme?.id, "mono");
     assert.equal(after.slides[1]!.background, "#ffffff");
     await assert.rejects(() => run("slides_write", { path, slides: [{ layout: "poster", slots: {} }] }), /unknown layout/);
+    // 版式用错（two-column 缺 columns）：错误里带上这个版式的说明，模型不必再去翻技能
+    await assert.rejects(
+      () => run("slides_write", { path, slides: [{ layout: "two-column", slots: { title: "对比" } }] }),
+      (cause: unknown) => cause instanceof Error && /needs slots\.columns/.test(cause.message) && cause.message.includes(`Layout reference:\n- ${LAYOUT_GUIDE["two-column"]}`),
+    );
   });
 
   it("export：走 broker，带 workspaceId，返回卡片", async () => {

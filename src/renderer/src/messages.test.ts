@@ -251,6 +251,13 @@ describe("messages —— 中英两张表", () => {
   });
 });
 
+describe("读技能的过程行用词", () => {
+  test("折叠统计行与技能芯片的类型词：中文写「技能」（不是英文 skill），英文写 skill——与用户技能同一套", () => {
+    deepStrictEqual(zh.chat.rollupTool("skill"), "技能");
+    deepStrictEqual(en.chat.rollupTool("skill"), "skill");
+  });
+});
+
 describe("「和智能体一起做一个」的预填首句", () => {
   test("点名内置技能，后面是**完整的一句话**，不以冒号（半句话）收尾——用户看到的、智能体读到的都是一句完整的话", () => {
     for (const draft of [zh.plugins.makeWithAgentDraft, en.plugins.makeWithAgentDraft]) {

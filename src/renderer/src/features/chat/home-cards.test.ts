@@ -182,6 +182,15 @@ describe("homeCardLine —— 卡上「此刻在干什么」那一句", () => {
     assert.equal(homeCardLine({ ...base, state: "running", records: null }, text), "在想");
   });
 
+  test("正在读技能：配了 summary 就写技能名，不写绝对路径", () => {
+    const records = [
+      user("u1", 1000),
+      assistant("a1", 2000, [{ type: "toolCall", toolCallId: "s1", toolName: "read", input: { path: "/r/builtin-plugins/docs-slides/skills/slides/SKILL.md" } }]),
+    ];
+    const withSummary: HomeCardLineText = { ...text, verb: () => "skill", summary: (_tool, input) => ((input as { path?: string }).path?.includes("slides/SKILL.md") === true ? "slides" : null) };
+    assert.equal(homeCardLine({ ...base, state: "running", records }, withSummary), "skill slides");
+  });
+
   test("只看最后一轮：上一轮的章节不串进这一轮", () => {
     const records = [
       user("u1", 1000),
