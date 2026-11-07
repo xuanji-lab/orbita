@@ -642,7 +642,7 @@ export function Sidebar(props: {
                   <div
                     style={{
                       display: "grid",
-                      gridTemplateColumns: "20px 24px minmax(0,1fr)",
+                      gridTemplateColumns: "24px 24px minmax(0,1fr)",
                       alignItems: "center",
                       gap: "var(--space-1)",
                       minHeight: "var(--control-height-md)",
@@ -868,7 +868,7 @@ function WorkspaceGroup(props: {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "20px 24px minmax(0,1fr) auto 26px",
+          gridTemplateColumns: "24px 24px minmax(0,1fr) auto 28px",
           alignItems: "center",
           gap: "var(--space-1)",
           minHeight: "var(--control-height-md)",
@@ -1258,7 +1258,7 @@ function NavRow(props: {
       >
         {props.icon === null ? (
           // 空槽：不画任何东西，但占与图标等宽的位置——有标记的行和没标记的行标题对齐
-          <span style={{ width: 13, height: 13 }} />
+          <span style={{ width: 14, height: 14 }} />
         ) : (
           <Icon name={props.icon} size={13} strokeWidth={1.8} spin={props.spin ?? false} />
         )}
@@ -1989,10 +1989,11 @@ function ModeChip(props: {
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        gap: 5,
+        gap: "var(--space-1-5)",
         flex: 1,
         minWidth: 0,
-        padding: "4px 8px",
+        height: "var(--control-height-sm)",
+        padding: "0 var(--space-2)",
         border: 0,
         borderRadius: "var(--radius-md)",
         fontFamily: "var(--font-family-base)",

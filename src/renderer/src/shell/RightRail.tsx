@@ -229,8 +229,8 @@ function RailEntryButton(props: {
       aria-pressed={props.lit}
       onClick={props.onClick}
       style={{
-        width: 26,
-        height: 26,
+        width: 28, // 控件台阶 24·28·32（control-scale.ts）
+        height: 28,
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",

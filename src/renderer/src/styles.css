@@ -718,6 +718,18 @@
   box-sizing: border-box;
 }
 
+/* 表单控件不继承字体是浏览器默认（button 13.33px / 400），组件各自补 font: inherit 补漏了
+   就落回默认：2026-10-29 审计 35 屏，控件文字有 176 处落回 400（正文 450），会话卡按钮
+   落到 13.33px。全局一次补齐；组件自己的字号 / 字重照常覆盖 */
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+}
+
 html,
 body,
 #root {
@@ -1352,14 +1364,14 @@ body {
  * 侧栏树：工作区下的会话行，字形落在父项名字的同一根竖线上（2026-10-29 精装审计）。
  * 改前子项文字在 49、父项名字在 76——子项比父项靠左 27px，读起来像会话不属于这个工作区。
  * 两个量都从各自的版式推出来，不写魔数：
- * - 组头（Sidebar.tsx 的 workspace-group）：开合键 20 + 文件夹格 24 + 两道 --space-1 的 gap
- * - 会话行（NavRow）：左内边距 --space-1 + 13px 图标槽 + --space-2 的 gap
+ * - 组头（Sidebar.tsx 的 workspace-group）：开合键 24 + 文件夹格 24 + 两道 --space-1 的 gap
+ * - 会话行（NavRow）：左内边距 --space-1 + 14px 图标槽 + --space-2 的 gap
  * 行的图标槽（子会话 git-fork / 置顶图钉）因此落在父项文件夹图标的那一列下面；
  * 悬停与选中的底跟着行一起缩进。
  */
 .workspace-group {
-  --tree-name-x: calc(20px + 24px + 2 * var(--space-1));
-  --row-glyph-x: calc(var(--space-1) + 13px + var(--space-2));
+  --tree-name-x: calc(24px + 24px + 2 * var(--space-1));
+  --row-glyph-x: calc(var(--space-1) + 14px + var(--space-2));
 }
 
 .tree-children {
@@ -1796,6 +1808,16 @@ body {
   min-height: 0;
   display: grid;
   overflow: hidden;
+}
+
+/* 消息列与输入卡同一根外线（ChatView 的 Pane 量滚动条宽、写进 --transcript-scrollbar）：
+   滚动段恒留滚动条位，页脚右内边距补同样多 */
+.chat-transcript {
+  scrollbar-gutter: stable;
+}
+
+.chat-footer {
+  padding: var(--space-1) calc(var(--space-5) + var(--transcript-scrollbar, 0px)) var(--space-2-5) var(--space-5);
 }
 
 /*
