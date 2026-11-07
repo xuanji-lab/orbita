@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { applyWrite, createDeck } from "../../../../shared/slides-ops.ts";
 import { composeQuotedMessage, parseQuotedMessage } from "../../../../shared/quote.ts";
+import { CANVAS_SIZE, normalizeElement, type SlideElement } from "../../../../shared/slides.ts";
 import { elementPreview, quoteOfDeckPage } from "./slides-quote.ts";
 
 const { deck } = applyWrite(createDeck({ title: "T" }), [
@@ -38,6 +39,10 @@ describe("quoteOfDeckPage", () => {
   });
 });
 
+// 形状元素的必填字段交给规整函数补默认值（测试里不手写颜色 / 字号）
+const shape = (kind: "rect" | "roundRect" | "ellipse" | "triangle", text?: string): SlideElement =>
+  normalizeElement({ kind: "shape", shape: kind, ...(text === undefined ? {} : { text }) }, { canvas: CANVAS_SIZE["16:9"], theme: undefined });
+
 describe("引用正文里元素的人话描述（不露 uuid 文件名与内部类型名）", () => {
   it("图片：有替代文字用替代文字；生成名（uuid / image-1）不露；真文件名照写", () => {
     const base = { kind: "image" as const, id: "i", x: 0, y: 0, w: 1, h: 1, fit: "cover" as const };
@@ -47,11 +52,10 @@ describe("引用正文里元素的人话描述（不露 uuid 文件名与内部�
     assert.equal(elementPreview({ ...base, src: "d.assets/hawker.jpg" }), "[图片 hawker.jpg]");
   });
   it("形状用中文名，带文字时接在后面", () => {
-    const base = { id: "s", x: 0, y: 0, w: 1, h: 1, fill: "#fff", stroke: "#000", strokeWidth: 1, fontSize: 20, color: "#000" };
-    assert.equal(elementPreview({ ...base, kind: "shape", shape: "rect" }), "[矩形]");
-    assert.equal(elementPreview({ ...base, kind: "shape", shape: "roundRect", text: "03 · 经济" }), "[圆角矩形] 03 · 经济");
-    assert.equal(elementPreview({ ...base, kind: "shape", shape: "ellipse" }), "[椭圆]");
-    assert.equal(elementPreview({ ...base, kind: "shape", shape: "triangle" }), "[三角形]");
+    assert.equal(elementPreview(shape("rect")), "[矩形]");
+    assert.equal(elementPreview(shape("roundRect", "03 · 经济")), "[圆角矩形] 03 · 经济");
+    assert.equal(elementPreview(shape("ellipse")), "[椭圆]");
+    assert.equal(elementPreview(shape("triangle")), "[三角形]");
   });
   it("整页引用里不出现 [rect] 之类内部名", () => {
     const { deck: d } = applyWrite(createDeck({ title: "T" }), [
