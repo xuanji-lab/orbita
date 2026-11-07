@@ -9,6 +9,15 @@ import { visualLength } from "./slides-measure.ts";
 
 export const FOOTER_ID = "__footer";
 
+/**
+ * 页脚行的几何与安全距离（版式与体检共用这一处，不各写各的数）。页脚文字框 y = H − FOOTER_TOP、高 FOOTER_H；
+ * 版式把正文区下沿放在页脚之上 FOOTER_GAP（表格 / 列表不贴着页脚）；体检对手写页的底线是 FOOTER_MIN_GAP。
+ */
+export const FOOTER_TOP = 62;
+export const FOOTER_H = 30;
+export const FOOTER_GAP = 40;
+export const FOOTER_MIN_GAP = 16;
+
 export function footerElement(deck: Pick<Deck, "aspect" | "theme" | "title">, slide: Slide, index: number): TextElement | null {
   if (deck.theme?.palette === undefined || slide.footer === "none") return null;
   const rt = resolveTheme(deck.theme);
@@ -29,9 +38,9 @@ export function footerElement(deck: Pick<Deck, "aspect" | "theme" | "title">, sl
     id: FOOTER_ID,
     kind: "text",
     x: right ? W - mx - width : mx,
-    y: H - 62,
+    y: H - FOOTER_TOP,
     w: width,
-    h: 30,
+    h: FOOTER_H,
     html: plainToRichHtml(label),
     fontSize: rt.scale.caption,
     color,

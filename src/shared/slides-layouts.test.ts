@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { applyEdit, applyTheme, applyWrite, createDeck, lintSlide, newDrawnElement, newTableElement, patchElement, themeNewElement, updateElements, unbindChanged } from "./slides-ops.ts";
-import { CANVAS_SIZE, ElementError, normalizeElement, normalizeTheme, parseDeck, serializeDeck, type Deck, type SlideElement, type TextElement } from "./slides.ts";
-import { footerElement } from "./slides-footer.ts";
-import { buildLayout, LAYOUT_NAMES, type LayoutImage } from "./slides-layouts.ts";
+import { CANVAS_SIZE, ElementError, normalizeElement, normalizeTheme, parseDeck, serializeDeck, type Deck, type ShapeElement, type SlideElement, type TextElement } from "./slides.ts";
+import { FOOTER_GAP, FOOTER_MIN_GAP, footerElement } from "./slides-footer.ts";
+import { buildLayout, LAYOUT_NAMES, settleY, type LayoutImage } from "./slides-layouts.ts";
 import { countLines, visualLength } from "./slides-measure.ts";
 import { THEME_IDS, presetTheme, resolveTheme } from "./slides-theme.ts";
 
@@ -309,5 +309,94 @@ describe("换画幅（16:9 ↔ 4:3）", () => {
     const narrow = applyEdit(deck, [{ op: "set_deck", aspect: "4:3" }]).deck.slides[0]!.elements[0]!;
     assert.ok(narrow.h > 50 && narrow.y + narrow.h <= CANVAS_SIZE["4:3"].h);
     assert.deepEqual(applyEdit(deck, [{ op: "set_deck", aspect: "16:9" }]).deck, deck, "同画幅是空操作");
+  });
+});
+
+describe("页面质量：留白、装饰落位、页脚安全距离", () => {
+  it("settleY：块比区域小得多时居中（封顶 140px）、越接近填满越靠上、装满顶对齐", () => {
+    assert.equal(settleY(200, 400, 400), 200, "装满：顶对齐");
+    assert.equal(settleY(200, 400, 360), 200, "接近装满：几乎不动");
+    const centered = settleY(200, 400, 120);
+    assert.ok(centered > 200 && centered <= 200 + 140);
+    assert.equal(settleY(200, 800, 100), 340, "留白很大时封顶 140px");
+    // 单调：块越大起点越靠上
+    let last = Infinity;
+    for (let need = 60; need <= 400; need += 20) {
+      const y = settleY(200, 400, need);
+      assert.ok(y <= last, `need=${need} y=${y} > ${last}`);
+      last = y;
+    }
+  });
+
+  for (const id of THEME_IDS) {
+    for (const aspect of ["16:9", "4:3"] as const) {
+      for (const n of [3, 4, 5]) {
+        it(`${id} · ${aspect}：${n} 条要点的页，下半页不再空着（内容块下沿到页脚行 ≤ 页高 21%），也不与标题脱开（≤170px）`, () => {
+          const canvas = CANVAS_SIZE[aspect];
+          const bullets = ["面积约 735 平方公里", "四种官方语言并行", "全球重要的港口", "公共住房覆盖八成", "绿化率接近一半"].slice(0, n);
+          const deck = applyWrite(themed(id, aspect), [{ layout: "bullets", slots: { eyebrow: "01 · 概况", title: "一座城市国家", bullets } }]).deck;
+          const slide = deck.slides[0]!;
+          const list = slide.elements.find((e): e is TextElement => e.kind === "text" && e.html.includes("<li>"))!;
+          const title = slide.elements.find((e): e is TextElement => e.kind === "text" && e.bind?.fontFamily === "heading")!;
+          const footer = footerElement(deck, slide, 0)!;
+          const bottomGap = footer.y - (list.y + list.h);
+          const topGap = list.y - (title.y + title.h);
+          assert.ok(bottomGap <= canvas.h * 0.21, `${id} ${aspect} ${n} 条：下方空 ${Math.round(bottomGap)}px（${Math.round((bottomGap / canvas.h) * 100)}%）`);
+          assert.ok(topGap <= 170, `${id} ${aspect} ${n} 条：与标题隔了 ${Math.round(topGap)}px`);
+        });
+      }
+
+      it(`${id} · ${aspect}：装饰图形不出画布、不贴边、不骑在大色块的分界线上`, () => {
+        const canvas = CANVAS_SIZE[aspect];
+        const mx = canvas.w >= 1200 ? 96 : 72;
+        let deck = themed(id, aspect);
+        for (const layout of LAYOUT_NAMES) deck = applyWrite(deck, [{ layout, slots: sample(layout), images: { image } }]).deck;
+        deck.slides.forEach((slide, si) => {
+          const shapes = slide.elements.filter((e): e is ShapeElement => e.kind === "shape" && e.text === undefined);
+          const big = shapes.filter((e) => e.w >= canvas.w * 0.15 && e.shape === "rect");
+          for (const el of shapes) {
+            if (el.w > canvas.w * 0.2 || el.h > canvas.w * 0.2) continue; // 大块是有意出血的构图
+            const where = `第 ${si + 1} 页（${slide.layout}）${el.shape} ${Math.round(el.x)},${Math.round(el.y)} ${Math.round(el.w)}×${Math.round(el.h)}`;
+            assert.ok(el.x >= 0 && el.y >= 0 && el.x + el.w <= canvas.w - 1 && el.y + el.h <= canvas.h - 1, `${where} 出画布或贴边`);
+            if (el.shape !== "rect") continue;
+            for (const other of big) {
+              if (other === el) continue;
+              const overlap = el.x < other.x + other.w && el.x + el.w > other.x && el.y < other.y + other.h && el.y + el.h > other.y;
+              if (!overlap) continue;
+              const inside = el.x >= other.x - 0.5 && el.y >= other.y - 0.5 && el.x + el.w <= other.x + other.w + 0.5 && el.y + el.h <= other.y + other.h + 0.5;
+              assert.ok(inside, `${where} 骑在大色块 ${Math.round(other.x)},${Math.round(other.y)} ${Math.round(other.w)}×${Math.round(other.h)} 的边界上`);
+            }
+          }
+        });
+        assert.ok(mx > 0);
+      });
+    }
+  }
+
+  it("版式页的正文下沿留出页脚安全距离（FOOTER_GAP）：文字 / 表格底边到页脚行 ≥ FOOTER_GAP − 容差", () => {
+    for (const aspect of ["16:9", "4:3"] as const) {
+      let deck = themed("night", aspect);
+      for (const layout of ["bullets", "two-column", "table", "stat", "image-left"] as const) deck = applyWrite(deck, [{ layout, slots: sample(layout), images: { image } }]).deck;
+      deck.slides.forEach((slide, si) => {
+        const footer = footerElement(deck, slide, si);
+        assert.ok(footer !== null);
+        for (const el of slide.elements) {
+          if (el.kind !== "text" && el.kind !== "table") continue;
+          assert.ok(el.y + el.h <= footer.y - FOOTER_GAP + 14, `${slide.layout}: ${el.kind} 底边 ${el.y + el.h} 离页脚 ${footer.y} 不足 ${FOOTER_GAP}`);
+        }
+      });
+    }
+  });
+
+  it("体检：手写的表格 / 文字贴着页脚会提示（离页脚行不足安全距离），留够距离不提示", () => {
+    let deck = applyWrite(themed("night"), [{ layout: "bullets", slots: sample("bullets") }]).deck;
+    const footer = footerElement(deck, deck.slides[0]!, 0)!;
+    const table = (bottom: number) => ({ kind: "table", rows: [["a", "b"], ["c", "d"]], x: 96, y: bottom - 160, w: 600, h: 160 });
+    deck = applyWrite(deck, [{ at: "append", elements: [table(footer.y - 6)] }]).deck;
+    assert.match(lintSlide(deck, 2).join("\n"), /table .* too close to the page footer/);
+    deck = applyWrite(deck, [{ at: "append", elements: [table(footer.y - FOOTER_MIN_GAP - 4)] }]).deck;
+    assert.deepEqual(lintSlide(deck, 3).filter((m) => m.includes("footer")), []);
+    deck = applyWrite(deck, [{ at: "append", elements: [table(footer.y + 20)] }]).deck;
+    assert.match(lintSlide(deck, 4).join("\n"), /table .* overlaps the page footer/);
   });
 });

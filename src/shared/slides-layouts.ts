@@ -13,6 +13,7 @@
  * 不会比正文还小）；正文区装不下**不缩字**（正文不许小于主题 body），而是在警告里让 agent 拆页。
  */
 import { CANVAS_SIZE, serializeRichText, type Aspect, type SlideFooter, type TextParagraph, type TextRun } from "./slides.ts";
+import { FOOTER_GAP, FOOTER_H, FOOTER_TOP } from "./slides-footer.ts";
 import { estimateListHeight, estimateTextHeight, countLines, visualLength } from "./slides-measure.ts";
 import { contrastRatio, luminance, resolveTheme, type DeckTheme, type ResolvedTheme, type ScaleKey } from "./slides-theme.ts";
 
@@ -173,6 +174,18 @@ function lineEl(x: number, y: number, w: number, color: string, thickness: numbe
 const LH_DISPLAY = 1.12;
 const LH_BODY = 1.35;
 
+/**
+ * 内容块在正文区里落在哪一行：块比区域小得多时居中（留白上下均分，不再「上半页有字、下半页空着」），
+ * 块越接近填满区域越靠上，装满则顶对齐——过渡是线性的，免得 5 条与 6 条之间位置突跳。
+ * 下移量封顶 140px：标题与内容之间留白太大会让两者看起来是两件事。
+ */
+export function settleY(top: number, avail: number, need: number): number {
+  const spare = avail - need;
+  if (spare <= 0 || avail <= 0) return top;
+  const t = Math.min(1, Math.max(0, (0.85 - need / avail) / 0.35));
+  return Math.round(top + Math.min(140, (spare / 2) * t));
+}
+
 interface Ctx {
   W: number;
   H: number;
@@ -197,7 +210,7 @@ function makeCtx(input: LayoutInput, warnings: string[]): Ctx {
     H,
     mx,
     cw: W - mx * 2,
-    bottom: H - 100,
+    bottom: H - FOOTER_TOP - FOOTER_GAP,
     rt,
     warnings,
     images: input.images ?? {},
@@ -297,8 +310,9 @@ function buildCover(c: Ctx, slots: Record<string, unknown>, label: string): Layo
   } else if (motif === "block") {
     const x1 = W * 0.66;
     els.push(shapeEl("rect", x1, 0, W - x1, H, "$accent"));
-    const s = W * 0.1;
-    els.push(shapeEl("rect", x1 - s / 2, H * 0.6, s, s, "$accent2"));
+    // 小方块整块落在色块里：右缘贴页边距线、下缘贴下页边距线（与文字同一条边距网格），不再骑在色块分界线上
+    const s = Math.round(W * 0.1);
+    els.push(shapeEl("rect", W - mx - s, H - mx - s, s, s, "$accent2"));
     textW = Math.min(640, x1 - mx - 56);
   } else {
     els.push(shapeEl("rect", 0, H - 148, W, 148, "$accent"));
@@ -365,31 +379,47 @@ function buildSection(c: Ctx, slots: Record<string, unknown>, label: string): La
   return { elements: els, background: "$accent", footer: "none", warnings: c.warnings };
 }
 
-/** 页内右下角的小装饰：跟主题母题走，给内容页一点签名感又不抢字 */
+/**
+ * 内容页的小签名：落在页脚那一行的右端（右缘贴页边距线、垂直中心与页脚文字同线），跟主题母题走。
+ * 之前是 88px 的方块 / 横条悬在正文区右下角，不靠任何线、像排版错误；现在小而定位明确，不占正文区、不会出画布。
+ */
 function cornerDecor(c: Ctx): Raw[] {
-  const size = c.W >= 1200 ? 88 : 72;
-  const x = c.W - c.mx - size;
-  const y = c.bottom - size;
+  const centerY = c.H - FOOTER_TOP + FOOTER_H / 2;
+  const right = c.W - c.mx;
   switch (c.rt.motif) {
     case "circle":
-      return [shapeEl("ellipse", x, y, size, size, "$accent2")];
+      return [shapeEl("ellipse", right - 22, centerY - 11, 22, 22, "$accent2")];
     case "block":
-      return [shapeEl("rect", x, y, size, size, "$accent2")];
+      return [shapeEl("rect", right - 22, centerY - 11, 22, 22, "$accent2")];
     default:
-      return [shapeEl("rect", x - size * 0.6, y + size - 10, size * 1.6, 10, "$accent")];
+      return [shapeEl("rect", right - 80, centerY - 3, 80, 6, "$accent")];
   }
 }
 
+interface BulletsPlan {
+  size: ScaleKey;
+  gap: number;
+  need: number;
+}
+
 /** 条目少时用更大一档（h2），装得宽松才用，否则正文档；永远不会比 body 小 */
-function bulletsBox(c: Ctx, items: readonly string[], x: number, y: number, w: number, availH: number, label: string, allowLarge = true): Raw {
+function bulletsPlan(c: Ctx, items: readonly string[], w: number, availH: number, allowLarge: boolean): BulletsPlan {
   const plain = items.map(plainOf);
   const gapFor = (size: ScaleKey): number => Math.round(c.scale(size) * 0.55);
   const largeNeed = estimateListHeight(plain, c.scale("h2"), w, gapFor("h2"), { lineHeight: LH_BODY });
-  const size: ScaleKey = allowLarge && items.length <= 4 && largeNeed <= availH * 0.7 ? "h2" : "body";
+  const size: ScaleKey = allowLarge && items.length <= 5 && largeNeed <= availH * 0.75 ? "h2" : "body";
   const gap = gapFor(size);
   const need = size === "h2" ? largeNeed : estimateListHeight(plain, c.scale("body"), w, gap, { lineHeight: LH_BODY });
-  checkBody(c, label, "the bullet list", need, availH);
-  return textEl({ x, y, w, h: Math.min(Math.max(need + 12, 60), Math.max(availH, 60)), html: listHtml(items), size, color: "$ink", lineHeight: LH_BODY, paraGap: gap });
+  return { size, gap, need };
+}
+
+function bulletsEl(c: Ctx, items: readonly string[], plan: BulletsPlan, x: number, y: number, w: number, availH: number, label: string): Raw {
+  checkBody(c, label, "the bullet list", plan.need, availH);
+  return textEl({ x, y, w, h: Math.min(Math.max(plan.need + 12, 60), Math.max(availH, 60)), html: listHtml(items), size: plan.size, color: "$ink", lineHeight: LH_BODY, paraGap: plan.gap });
+}
+
+function bodyNeed(c: Ctx, lines: readonly string[], w: number): number {
+  return estimateTextHeight(lines.map(plainOf).join("\n"), c.scale("body"), w, { lineHeight: LH_BODY }) + (lines.length - 1) * 14;
 }
 
 function bodyBox(c: Ctx, lines: readonly string[], x: number, y: number, w: number, availH: number, label: string): Raw {
@@ -409,7 +439,15 @@ function buildBullets(c: Ctx, slots: Record<string, unknown>, label: string): La
   const w = Math.round(c.cw * 0.82);
   const els = [...head.elements];
   const avail = c.bottom - head.y;
-  els.push(bullets !== undefined ? bulletsBox(c, bullets, c.mx, head.y, w, avail, label) : bodyBox(c, body as string[], c.mx, head.y, w, avail, label));
+  if (bullets !== undefined) {
+    const plan = bulletsPlan(c, bullets, w, avail, true);
+    const y = settleY(head.y, avail, plan.need);
+    els.push(bulletsEl(c, bullets, plan, c.mx, y, w, avail - (y - head.y), label));
+  } else {
+    const need = bodyNeed(c, body as string[], w);
+    const y = settleY(head.y, avail, need);
+    els.push(bodyBox(c, body as string[], c.mx, y, w, avail - (y - head.y), label));
+  }
   els.push(...cornerDecor(c));
   warnLimits(c, label, { title, ...(bullets === undefined ? {} : { bullets }) });
   return { elements: els, background: "$bg", footer: "left", warnings: c.warnings };
@@ -424,23 +462,37 @@ function buildTwoColumn(c: Ctx, slots: Record<string, unknown>, label: string): 
   const els = [...head.elements];
   const gap = 72;
   const colW = Math.floor((c.cw - gap) / 2);
-  rawColumns.slice(0, 2).forEach((raw, i) => {
+  // 两栏先各自算高度，整组按最高的那栏在正文区里落位（两栏共用一个起点，标题横线才对齐）
+  const cols = rawColumns.slice(0, 2).map((raw, i) => {
     const col = record(raw) ?? {};
     const heading = str(col["heading"]);
     const bullets = strList(col["bullets"]);
     const body = strList(col["body"]);
     if (bullets === undefined && body === undefined) throw new LayoutError(`${label}: column ${i + 1} needs bullets or body`);
+    const headH = heading === undefined ? 0 : 80;
+    const availCol = c.bottom - head.y - headH;
+    const plan = bullets === undefined ? null : bulletsPlan(c, bullets, colW, availCol, true);
+    const need = headH + (plan !== null ? plan.need : bodyNeed(c, body as string[], colW));
+    return { heading, bullets, body, plan, need };
+  });
+  const avail = c.bottom - head.y;
+  const top = settleY(head.y, avail, Math.max(...cols.map((col) => col.need)));
+  cols.forEach((col, i) => {
     const x = c.mx + i * (colW + gap);
-    let y = head.y;
-    if (heading !== undefined) {
-      els.push(textEl({ x, y, w: colW, h: 44, html: paragraphsHtml([heading], true), size: "h2", color: c.accentOn("$bg"), font: "heading", lineHeight: 1.2 }));
+    let y = top;
+    if (col.heading !== undefined) {
+      els.push(textEl({ x, y, w: colW, h: 44, html: paragraphsHtml([col.heading], true), size: "h2", color: c.accentOn("$bg"), font: "heading", lineHeight: 1.2 }));
       y += 56;
       els.push(lineEl(x, y, colW, "$line", 2));
       y += 24;
     }
-    const avail = c.bottom - y;
-    if (bullets !== undefined && bullets.length > 4) c.warnings.push(`${label}: column ${i + 1} has ${bullets.length} bullets — keep ≤4 per column`);
-    els.push(bullets !== undefined ? bulletsBox(c, bullets, x, y, colW, avail, `${label} column ${i + 1}`, false) : bodyBox(c, body as string[], x, y, colW, avail, `${label} column ${i + 1}`));
+    const availCol = c.bottom - y;
+    if (col.bullets !== undefined && col.bullets.length > 4) c.warnings.push(`${label}: column ${i + 1} has ${col.bullets.length} bullets — keep ≤4 per column`);
+    els.push(
+      col.bullets !== undefined && col.plan !== null
+        ? bulletsEl(c, col.bullets, col.plan, x, y, colW, availCol, `${label} column ${i + 1}`)
+        : bodyBox(c, col.body as string[], x, y, colW, availCol, `${label} column ${i + 1}`),
+    );
   });
   warnLimits(c, label, { title });
   return { elements: els, background: "$bg", footer: "left", warnings: c.warnings };
@@ -472,8 +524,13 @@ function buildImageSide(c: Ctx, slots: Record<string, unknown>, label: string, s
   const avail = c.bottom - head.y;
   if (bullets !== undefined) {
     if (bullets.length > 5) c.warnings.push(`${label}: ${bullets.length} bullets next to a picture — keep ≤5`);
-    els.push(bulletsBox(c, bullets, textX, head.y, textW, avail, label, false));
-  } else if (body !== undefined) els.push(bodyBox(c, body, textX, head.y, textW, avail, label));
+    const plan = bulletsPlan(c, bullets, textW, avail, true);
+    const y = settleY(head.y, avail, plan.need);
+    els.push(bulletsEl(c, bullets, plan, textX, y, textW, avail - (y - head.y), label));
+  } else if (body !== undefined) {
+    const y = settleY(head.y, avail, bodyNeed(c, body, textW));
+    els.push(bodyBox(c, body, textX, y, textW, avail - (y - head.y), label));
+  }
   warnLimits(c, label, { title, ...(bullets === undefined ? {} : { bullets }) });
   return { elements: els, background: "$bg", footer: side === "left" ? "right" : "left", warnings: c.warnings };
 }
@@ -588,14 +645,14 @@ function buildStat(c: Ctx, slots: Record<string, unknown>, label: string): Layou
   const title = str(slots["title"]);
   const eyebrow = str(slots["eyebrow"]);
   const els: Raw[] = [];
-  let y: number;
+  let regionTop: number;
   if (title !== undefined) {
     const head = pageHead(c, c.mx, c.cw, { title, ...(eyebrow === undefined ? {} : { eyebrow }) }, label, "$bg");
     els.push(...head.elements);
-    y = Math.max(head.y + 40, c.H * 0.4);
+    regionTop = head.y + 20;
   } else {
     if (eyebrow !== undefined) els.push(textEl({ x: c.mx, y: 60, w: c.cw, h: 28, html: paragraphsHtml([eyebrow], true), size: "caption", color: c.accentOn("$bg"), letterSpacing: 3 }));
-    y = c.H * 0.3;
+    regionTop = eyebrow === undefined ? 72 : 120;
   }
   const n = stats.length;
   const colW = Math.floor(c.cw / n);
@@ -609,26 +666,33 @@ function buildStat(c: Ctx, slots: Record<string, unknown>, label: string): Layou
     const fit = fitLadder(c, text, innerW, ladder, { maxLines: 1 }, 1.05, c.rt.headingBold);
     return rank(fit.size) > rank(smallest) ? fit.size : smallest;
   }, "display");
-  stats.forEach((stat, i) => {
+  // 先量每一列的高度，整块在正文区里落位（大数字块居中，不再贴在页面中上部、下半页空着）
+  const measured = stats.map((stat, i) => {
     const value = str(stat["value"]) ?? needSlot(label, `stats[${i}].value`);
     const caption = str(stat["label"]);
     const detail = str(stat["detail"]);
-    const x = c.mx + i * colW;
-    if (visualLength(value) > 8) c.warnings.push(`${label}: stat value "${value}" is long — keep big numbers ≤6 characters`);
-    els.push(shapeEl("rect", x, y, innerW, 4, "$accent"));
     const fit = fitLadder(c, value, innerW, [valueSize], { maxLines: 1 }, 1.05, c.rt.headingBold);
     const valueH = Math.ceil(fit.height) + 8;
-    els.push(textEl({ x, y: y + 28, w: innerW, h: valueH, html: paragraphsHtml([value], c.rt.headingBold), size: fit.size, color: c.accentOn("$bg") === "$accent" ? "$accent" : "$ink", font: "heading", lineHeight: 1.05 }));
-    let ty = y + 28 + valueH + 12;
-    if (caption !== undefined) {
-      const h = Math.ceil(estimateTextHeight(plainOf(caption), c.scale("body"), innerW, { lineHeight: LH_BODY, bold: true })) + 6;
-      els.push(textEl({ x, y: ty, w: innerW, h, html: paragraphsHtml([caption], true), size: "body", color: "$ink", lineHeight: LH_BODY }));
-      ty += h + 6;
+    const capH = caption === undefined ? 0 : Math.ceil(estimateTextHeight(plainOf(caption), c.scale("body"), innerW, { lineHeight: LH_BODY, bold: true })) + 6;
+    const detailH = detail === undefined ? 0 : Math.ceil(estimateTextHeight(plainOf(detail), c.scale("body"), innerW, { lineHeight: LH_BODY })) + 6;
+    const total = 28 + valueH + 12 + (capH > 0 ? capH + 6 : 0) + detailH;
+    return { value, caption, detail, fit, valueH, capH, detailH, total };
+  });
+  const avail = c.bottom - regionTop;
+  const y = settleY(regionTop, avail, Math.max(...measured.map((m) => m.total)));
+  measured.forEach((m, i) => {
+    const x = c.mx + i * colW;
+    if (visualLength(m.value) > 8) c.warnings.push(`${label}: stat value "${m.value}" is long — keep big numbers ≤6 characters`);
+    els.push(shapeEl("rect", x, y, innerW, 4, "$accent"));
+    els.push(textEl({ x, y: y + 28, w: innerW, h: m.valueH, html: paragraphsHtml([m.value], c.rt.headingBold), size: m.fit.size, color: c.accentOn("$bg") === "$accent" ? "$accent" : "$ink", font: "heading", lineHeight: 1.05 }));
+    let ty = y + 28 + m.valueH + 12;
+    if (m.caption !== undefined) {
+      els.push(textEl({ x, y: ty, w: innerW, h: m.capH, html: paragraphsHtml([m.caption], true), size: "body", color: "$ink", lineHeight: LH_BODY }));
+      ty += m.capH + 6;
     }
-    if (detail !== undefined) {
-      const h = Math.ceil(estimateTextHeight(plainOf(detail), c.scale("body"), innerW, { lineHeight: LH_BODY })) + 6;
-      checkBody(c, `${label} stat ${i + 1}`, "the detail text", ty + h - y, c.bottom - y);
-      els.push(textEl({ x, y: ty, w: innerW, h, html: paragraphsHtml([detail], false), size: "body", color: "$muted", lineHeight: LH_BODY }));
+    if (m.detail !== undefined) {
+      checkBody(c, `${label} stat ${i + 1}`, "the detail text", ty + m.detailH - y, c.bottom - y);
+      els.push(textEl({ x, y: ty, w: innerW, h: m.detailH, html: paragraphsHtml([m.detail], false), size: "body", color: "$muted", lineHeight: LH_BODY }));
     }
   });
   warnLimits(c, label, title === undefined ? {} : { title });
@@ -652,7 +716,9 @@ function buildClosing(c: Ctx, slots: Record<string, unknown>, label: string): La
   } else if (c.rt.motif === "block") {
     const w = W * 0.2;
     els.push(shapeEl("rect", W - w, 0, w, H, "$accent"));
-    els.push(shapeEl("rect", W - w - W * 0.045, H - W * 0.09, W * 0.09, W * 0.09, "$accent2"));
+    // 方块在右侧色条里水平居中、下缘贴下页边距线：不骑分界线、不贴画布底边
+    const sq = Math.round(Math.min(W * 0.09, w - mx));
+    els.push(shapeEl("rect", W - w + (w - sq) / 2, H - mx - sq, sq, sq, "$accent2"));
     textW = Math.min(700, W - w - mx - 56);
   } else {
     els.push(shapeEl("rect", 0, 0, W, H * 0.2, "$accent"));

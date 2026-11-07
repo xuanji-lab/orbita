@@ -28,7 +28,7 @@ import {
   type SlideElement,
 } from "./slides.ts";
 import { buildLayout, isLayoutName, LAYOUT_NAMES, LayoutError, type LayoutImage } from "./slides-layouts.ts";
-import { footerElement } from "./slides-footer.ts";
+import { FOOTER_MIN_GAP, footerElement } from "./slides-footer.ts";
 import { estimateTextHeight } from "./slides-measure.ts";
 import { BINDABLE_FIELDS, DEFAULT_THEME_ID, presetTheme, resolveTheme, tokenName, tokenValue, type BindField, type ElementBindings } from "./slides-theme.ts";
 
@@ -549,8 +549,14 @@ export function lintSlide(deck: Deck, page: number): string[] {
     if (themed !== null && element.kind === "text" && element.fontSize < themed.scale.body - 0.5 && Math.abs(element.fontSize - themed.scale.caption) > 0.5) {
       out.push(`slide ${page}: text ${element.id} is ${Math.round(element.fontSize)}px, smaller than the theme's body size (${themed.scale.body}px) — set fontSize to "$body" (or "$caption" only for a footer / source line, and keep it clear of the page footer)`);
     }
-    if (footer !== null && element.kind === "text" && element.y < footer.y + footer.h && element.y + element.h > footer.y && element.x < footer.x + footer.w && element.x + element.w > footer.x) {
-      out.push(`slide ${page}: text ${element.id} overlaps the page footer line (y≈${Math.round(footer.y)}–${Math.round(footer.y + footer.h)}) — move it up or drop it`);
+    if (footer !== null && (element.kind === "text" || element.kind === "table") && element.x < footer.x + footer.w && element.x + element.w > footer.x) {
+      const bottom = element.y + element.h;
+      if (element.y < footer.y + footer.h && bottom > footer.y) {
+        out.push(`slide ${page}: ${element.kind} ${element.id} overlaps the page footer line (y≈${Math.round(footer.y)}–${Math.round(footer.y + footer.h)}) — move it up or drop it`);
+      } else if (element.y < footer.y && bottom > footer.y - FOOTER_MIN_GAP) {
+        // 贴着页脚：文字 / 表格底边离页脚行不足 FOOTER_MIN_GAP（版式页留 FOOTER_GAP）
+        out.push(`slide ${page}: ${element.kind} ${element.id} sits too close to the page footer (${Math.round(footer.y - bottom)}px gap, keep ≥${FOOTER_MIN_GAP}px) — move it up or shorten it`);
+      }
     }
     if (element.kind === "text") {
       const need = estimateTextHeight(richTextToPlain(element.html), element.fontSize, element.w, { lineHeight: element.lineHeight ?? 1.25, letterSpacing: element.letterSpacing ?? 0 });
