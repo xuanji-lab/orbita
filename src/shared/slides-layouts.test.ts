@@ -4,7 +4,7 @@ import { applyEdit, applyTheme, applyWrite, createDeck, lintSlide, newDrawnEleme
 import { CANVAS_SIZE, ElementError, normalizeElement, normalizeTheme, parseDeck, serializeDeck, type Deck, type ShapeElement, type SlideElement, type TextElement } from "./slides.ts";
 import { FOOTER_GAP, FOOTER_MIN_GAP, footerElement } from "./slides-footer.ts";
 import { buildLayout, LAYOUT_NAMES, settleY, type LayoutImage } from "./slides-layouts.ts";
-import { countLines, visualLength } from "./slides-measure.ts";
+import { countLines, estimateTextHeight, visualLength } from "./slides-measure.ts";
 import { THEME_IDS, presetTheme, resolveTheme } from "./slides-theme.ts";
 
 const image: LayoutImage = { src: "d.assets/a.png", width: 1200, height: 1600 };
@@ -287,6 +287,44 @@ describe("换画幅（16:9 ↔ 4:3）", () => {
       });
     });
   }
+
+  it("文字框变窄折行时：大数字先缩字号装进原框高，说明文字撑高并把下面的元素下推——不再出现 + 掉到第二行压住说明（真实例复测）", () => {
+    let deck = themed("warm");
+    deck = applyWrite(deck, [{ layout: "stat", slots: { title: "亚洲金融与航运枢纽", stats: [{ value: "第2", label: "全球最繁忙港口之一", detail: "按集装箱吞吐量" }, { value: "约 8万", label: "美元人均 GDP", detail: "居全球前列" }, { value: "7000+", label: "跨国公司区域总部", detail: "含亚太总部" }] } }]).deck;
+    const after = applyEdit(deck, [{ op: "set_deck", aspect: "4:3" }]).deck;
+    const texts = after.slides[0]!.elements.filter((e): e is TextElement => e.kind === "text");
+    for (const t of texts) {
+      const plain = t.html.replace(/<[^>]+>/g, "");
+      const need = estimateTextHeight(plain, t.fontSize, t.w, { lineHeight: t.lineHeight ?? 1.25, letterSpacing: t.letterSpacing ?? 0 });
+      assert.ok(need <= t.h * 1.05 + 3, `「${plain}」需要 ${Math.round(need)}px，框高只有 ${Math.round(t.h)}`);
+    }
+    // 同一水平范围内的文字框上下不重叠
+    for (const a of texts) for (const b of texts) {
+      if (a === b || !(a.x < b.x + b.w && a.x + a.w > b.x)) continue;
+      assert.ok(a.y + a.h <= b.y + 1 || b.y + b.h <= a.y + 1, `文字框重叠：${a.html} / ${b.html}`);
+    }
+    const big = texts.find((t) => t.html.includes("7000"))!;
+    const before = deck.slides[0]!.elements.find((e): e is TextElement => e.kind === "text" && e.html.includes("7000"))!;
+    assert.ok(big.fontSize <= before.fontSize && big.fontSize >= before.fontSize * 0.8, `大数字字号 ${big.fontSize}（原 ${before.fontSize}）`);
+    assert.equal(big.bind?.fontSize, undefined, "字号被改了就拆掉主题绑定");
+  });
+
+  it("6 个主题 × 全部版式切 4:3 后，同一水平范围内的文字框上下不重叠、都装得下", () => {
+    for (const id of THEME_IDS) {
+      const after = applyEdit(buildAll(id), [{ op: "set_deck", aspect: "4:3" }]).deck;
+      after.slides.forEach((slide, si) => {
+        const texts = slide.elements.filter((e): e is TextElement => e.kind === "text");
+        for (const t of texts) {
+          const need = estimateTextHeight(t.html.replace(/<[^>]+>/g, ""), t.fontSize, t.w, { lineHeight: t.lineHeight ?? 1.25, letterSpacing: t.letterSpacing ?? 0 });
+          assert.ok(need <= t.h * 1.05 + 3, `${id} 第 ${si + 1} 页（${slide.layout}）「${t.html.replace(/<[^>]+>/g, "").slice(0, 12)}」装不下`);
+        }
+        for (const a of texts) for (const b of texts) {
+          if (a === b || !(a.x < b.x + b.w && a.x + a.w > b.x)) continue;
+          assert.ok(a.y + a.h <= b.y + 1 || b.y + b.h <= a.y + 1, `${id} 第 ${si + 1} 页（${slide.layout}）文字框重叠`);
+        }
+      });
+    }
+  });
 
   it("来回切换不累积误差：16:9 → 4:3 → 16:9 后位置宽度回到原值，线的端点也是", () => {
     let deck = applyWrite(themed("night"), [

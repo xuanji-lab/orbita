@@ -346,29 +346,56 @@ export function applyEdit(deck: Deck, ops: readonly EditOp[]): EditResult {
 /**
  * 换画幅（16:9 ↔ 4:3）：两种画布一样高（720），只是宽 1280 ↔ 960。元素在水平方向按比例缩放（x / w / 线的端点），
  * 垂直方向不动——否则换成 4:3 后右边 25% 的元素整块伸出画布被裁（验收 S7：「200+」与表格第三列被裁）。
- * 文字框变窄后折行变多：高度不够的文字框把 h 撑到装得下（不超出画布底边），其余元素不动。
- * 来回切换不累积误差：坐标保留两位小数（1280 ↔ 960 的比是 3/4，整数坐标来回都落回原值）。
+ *
+ * 文字框变窄后折行会变多（真实例复测：「7000+」的 + 掉到第二行压住下面的说明），所以自上而下逐个文字框处理：
+ * 1. 大字（比主题 body 大的标题 / 大数字）先在 80% 的范围内逐档缩小字号，装得进原来的框高就用，版面几乎不动；
+ *    字号变了的字段拆掉主题绑定（手改值语义，换主题不再改回去）。正文不缩（正文不许小于主题 body）；
+ * 2. 还是装不下就把 h 撑到装得下（不超画布底边），并把同一水平范围内、在它下方的元素整体下推同样的距离
+ *    （下推也不超画布底边；占满整页的底图 / 色块不动）。
+ * 坐标保留两位小数，来回切换不累积误差。
  */
 export function reflowAspect(deck: Deck, aspect: Aspect): Deck {
   const from = CANVAS_SIZE[deck.aspect];
   const to = CANVAS_SIZE[aspect];
   const factor = to.w / from.w;
   const r2 = (n: number): number => Math.round(n * 100) / 100;
-  const slides = deck.slides.map((slide) => ({
-    ...slide,
-    elements: slide.elements.map((element): SlideElement => {
-      const scaled = { ...element, x: r2(element.x * factor), w: r2(element.w * factor) };
-      if (scaled.kind === "line") {
-        const [[x1, y1], [x2, y2]] = scaled.points;
-        return { ...scaled, points: [[r2(x1 * factor), y1], [r2(x2 * factor), y2]] };
+  const bodyFloor = deck.theme?.palette === undefined ? null : resolveTheme(deck.theme).scale.body;
+  const slides = deck.slides.map((slide) => {
+    const scaled: SlideElement[] = slide.elements.map((element): SlideElement => {
+      const next = { ...element, x: r2(element.x * factor), w: r2(element.w * factor) };
+      if (next.kind === "line") {
+        const [[x1, y1], [x2, y2]] = next.points;
+        return { ...next, points: [[r2(x1 * factor), y1], [r2(x2 * factor), y2]] };
       }
-      if (scaled.kind === "text") {
-        const need = estimateTextHeight(richTextToPlain(scaled.html), scaled.fontSize, scaled.w, { lineHeight: scaled.lineHeight ?? 1.25, letterSpacing: scaled.letterSpacing ?? 0 });
-        if (need > scaled.h) return { ...scaled, h: Math.max(scaled.h, Math.min(Math.ceil(need) + 4, Math.max(to.h - scaled.y, scaled.h))) };
-      }
-      return scaled;
-    }),
-  }));
+      return next;
+    });
+    const order = scaled.map((element, index) => index).filter((index) => scaled[index]?.kind === "text").sort((i, j) => (scaled[i] as SlideElement).y - (scaled[j] as SlideElement).y);
+    const out = [...scaled];
+    for (const index of order) {
+      const text = out[index];
+      if (text === undefined || text.kind !== "text") continue;
+      const plain = richTextToPlain(text.html);
+      const measure = (size: number): number => estimateTextHeight(plain, size, text.w, { lineHeight: text.lineHeight ?? 1.25, letterSpacing: text.letterSpacing ?? 0 });
+      let size = text.fontSize;
+      const floor = Math.max(bodyFloor !== null && text.fontSize > bodyFloor ? bodyFloor : text.fontSize, text.fontSize * 0.8);
+      while (measure(size) > text.h * 1.05 + 2 && size * 0.95 >= floor) size = Math.round(size * 0.95 * 10) / 10;
+      let grown = text.h;
+      if (measure(size) > text.h * 1.05 + 2) grown = Math.max(text.h, Math.min(Math.ceil(measure(size)) + 4, Math.max(to.h - text.y, text.h)));
+      const dy = grown - text.h;
+      const resized: SlideElement = size === text.fontSize ? { ...text, h: grown } : unbindChanged(text, { ...text, fontSize: size, h: grown });
+      out[index] = resized;
+      if (dy <= 0) continue;
+      const bottom = text.y + text.h;
+      out.forEach((other, otherIndex) => {
+        if (otherIndex === index || other.y < bottom - 2) return;
+        if (other.w >= to.w * 0.9 || other.h >= to.h * 0.9) return; // 满幅底图 / 色块不动
+        if (!(other.x < text.x + text.w && other.x + other.w > text.x)) return;
+        const room = Math.max(0, to.h - (other.y + other.h));
+        out[otherIndex] = { ...other, y: r2(other.y + Math.min(dy, room)) };
+      });
+    }
+    return { ...slide, elements: out };
+  });
   return { ...deck, aspect, slides };
 }
 
