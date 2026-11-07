@@ -10,6 +10,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "node:test";
 import { BUILTIN_PLUGIN_NAMES } from "../../shared/plugin.ts";
+import { LAYOUT_GUIDE, LAYOUT_NAMES } from "../../shared/slides-layouts.ts";
+import { DEFAULT_THEME_ID, THEME_BLURBS, THEME_IDS } from "../../shared/slides-theme.ts";
+import { SLIDES_EXPORT_FORMATS } from "../../shared/slides-export.ts";
 import type { SecretsPort } from "../provider/store.ts";
 import { scanPlugin } from "./manifest.ts";
 import { PluginStore } from "./store.ts";
@@ -19,6 +22,7 @@ const BUILTIN = join(REPO, "resources", "builtin-plugins");
 const CREATOR = join(BUILTIN, "plugin-creator");
 
 const SKILL_KIT = join(BUILTIN, "skill-kit");
+const DOCS_SLIDES = join(BUILTIN, "docs-slides");
 
 class NoSecrets implements SecretsPort {
   async set(): Promise<void> {}
@@ -289,6 +293,45 @@ describe("内置插件 skill-kit", () => {
   });
 });
 
+describe("内置插件 docs-slides", () => {
+  test("两条技能 slides 与 docs；workflow 点名都对得上；description 写明何时用（模型靠它想起技能）", async () => {
+    const scanned = await scanPlugin(DOCS_SLIDES, "docs-slides");
+    assert.deepEqual(scanned.skills.map((skill) => skill.slug), ["docs", "slides"]);
+    assert.equal(scanned.workflow.length >= 4, true);
+    for (const step of scanned.workflow) assert.notEqual(step.skillSlug, null, `workflow 步骤「${step.title}」点名的技能 ${step.skill} 对不上`);
+    const slides = scanned.skills.find((skill) => skill.slug === "slides");
+    assert.match(slides?.description ?? "", /BEFORE the first slides_create/);
+    assert.match(slides?.description ?? "", /presentation|slides|deck|PPT/i);
+    const docs = scanned.skills.find((skill) => skill.slug === "docs");
+    assert.match(docs?.description ?? "", /BEFORE the first doc_open/);
+  });
+
+  // 版式清单与主题清单的真源在代码里（工具与版式生成都读它）；技能里是给模型读的那一份，两边不许分叉
+  test("slides 技能与代码同源：每个版式的说明原文、每个主题「id — 说明」原文都在 SKILL.md 里；多一个少一个都不行", async () => {
+    const text = await readFile(join(DOCS_SLIDES, "skills", "slides", "SKILL.md"), "utf8");
+    for (const name of LAYOUT_NAMES) assert.equal(text.includes(`- ${LAYOUT_GUIDE[name]}`), true, `slides 技能缺版式 ${name} 的说明原文（与 LAYOUT_GUIDE 不一致）`);
+    for (const id of THEME_IDS) assert.equal(text.includes(`- ${id} — ${THEME_BLURBS[id]?.en ?? "<无说明>"}`), true, `slides 技能缺主题 ${id} 的说明原文（与 THEME_BLURBS 不一致）`);
+    // 反向：技能里列出的版式行 / 主题行，不能比代码多（删了版式忘了删技能里那行）
+    const layoutSection = text.split("## Layouts")[1]?.split("## Themes")[0] ?? "";
+    const layoutLines = layoutSection.split("\n").filter((line) => /^- [a-z-]+ — /.test(line));
+    assert.deepEqual(layoutLines.map((line) => /^- ([a-z-]+) — /.exec(line)?.[1]), [...LAYOUT_NAMES]);
+    const themeSection = text.split("## Themes")[1]?.split("## slides_edit operations")[0] ?? "";
+    const themeLines = themeSection.split("\n").filter((line) => /^- [a-z]+ — /.test(line));
+    assert.deepEqual(themeLines.map((line) => /^- ([a-z]+) — /.exec(line)?.[1]), [...THEME_IDS]);
+    assert.match(text, new RegExp(`default ${DEFAULT_THEME_ID}\\b`), "默认主题与 DEFAULT_THEME_ID 不一致");
+    // 导出格式一个不漏
+    for (const format of SLIDES_EXPORT_FORMATS) assert.equal(text.includes(`\`${format}\``), true, `slides 技能没讲导出格式 ${format}`);
+    // slides_edit 的七种操作都讲到
+    for (const op of ["patch", "add", "delete", "set_slide", "delete_slide", "move_slide", "set_deck"]) assert.equal(text.includes(`op:"${op}"`), true, `slides 技能没讲 slides_edit 的 ${op}`);
+  });
+
+  test("docs 技能讲到三个工具、四种导出格式与「无该语法就写纯 md」的规矩", async () => {
+    const text = await readFile(join(DOCS_SLIDES, "skills", "docs", "SKILL.md"), "utf8");
+    for (const needle of ["doc_open", "doc_insert_image", "doc_export", "attachmentFolderPath", "attachments/", "md-plain", "`docx`", "`pdf`", "`md`", "[!warning]"]) assert.equal(text.includes(needle), true, `docs 技能缺 ${needle}`);
+    assert.match(text, /Write plain markdown unless the user's notes already use that syntax/);
+  });
+});
+
 describe("内置插件与用户自己的同名技能（用真实资源跑 PluginStore）", () => {
   /** 用真实 resources/builtin-plugins 当 builtinRoot；userSkills 由用例给。不碰任何用户目录。 */
   async function withUserSkills(userSkills: { slug: string; name: string }[]): Promise<{ store: PluginStore; cleanup: () => Promise<void> }> {
@@ -297,11 +340,13 @@ describe("内置插件与用户自己的同名技能（用真实资源跑 Plugin
     return { store, cleanup: () => rm(configDir, { recursive: true, force: true }) };
   }
 
-  test("没有重名：两个内置插件的技能都叠进开轮装配，无冲突", async () => {
+  test("没有重名：三个内置插件的技能都叠进开轮装配，无冲突", async () => {
     const { store, cleanup } = await withUserSkills([]);
     try {
       const assembled = await store.assemble(null);
       assert.deepEqual(assembled.skills.map((skill) => `${skill.plugin}/${skill.slug}`).sort(), [
+        "docs-slides/docs",
+        "docs-slides/slides",
         "plugin-creator/board-style",
         "plugin-creator/find-existing",
         "plugin-creator/plugin-creator",
