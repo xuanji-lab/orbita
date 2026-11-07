@@ -50,19 +50,44 @@ describe("工具名与权限桶同源", () => {
     assert.deepEqual(tools.map((tool) => tool.name), [...AUTOMATION_TOOLS]);
   });
 
-  test("create 的说明把关键语义讲给模型：直接生效、this_session 默认、别 sleep 轮询、默认 12 次、间隔下限", () => {
+  test("create 的说明留下触发词、关键语义与硬限制：直接生效、两种去处、别 sleep 轮询、先查 list、默认 12 次、间隔下限、每日上限，并指路 automation 技能", () => {
     const description = harness({ ok: true, text: "" }).byName("automation_create").description;
-    for (const needle of ["immediately", "this_session", "Do NOT sleep or poll", "12 runs", "5 minutes", "END YOUR TURN", "new_session"]) {
+    for (const needle of [
+      "immediately",
+      "this_session",
+      "new_session",
+      "Do NOT sleep or poll",
+      "END YOUR TURN",
+      "automation_list first",
+      "every Friday",
+      "remind me",
+      "12 runs",
+      "at least 5 minutes",
+      "24 runs per 24 hours",
+      "read the `automation` skill",
+    ]) {
       assert.ok(description.includes(needle), needle);
     }
   });
 
-  test("create 的说明让模型先口头问再请求放行，不再说「去面板里改」", () => {
-    const description = harness({ ok: true, text: "" }).byName("automation_create").description;
-    for (const needle of ["ask the user in ONE plain sentence", 'automation_update with mode "skip"', "Never request", "allow button", "user's language"]) {
-      assert.ok(description.includes(needle), needle);
-    }
-    assert.doesNotMatch(description, /Automations panel|yourself/);
+  test("写盘权限的红线留在描述里：先口头问再请求放行；update 讲清「会话不是 Skip 就不改、留一行让用户点、别重调」，不再说「去面板里改」", () => {
+    const tools = harness({ ok: true, text: "" });
+    const create = tools.byName("automation_create").description;
+    for (const needle of ["ask the user in ONE plain sentence", "automation_update", "never pass mode"]) assert.ok(create.includes(needle), needle);
+    const update = tools.byName("automation_update").description;
+    for (const needle of ["Ask the user in one plain sentence", "allow button", "do not call it again", "NOTHING changes"]) assert.ok(update.includes(needle), needle);
+    assert.doesNotMatch(create + update, /Automations panel|yourself to/);
+  });
+
+  test("描述瘦身守门：四个工具的描述合计 ≤2,200 字符（create ≤1,300），细则在 automation 技能里；list / cancel / update 也讲得清各自何时用", () => {
+    const { tools, byName } = harness({ ok: true, text: "" });
+    const total = tools.reduce((sum, tool) => sum + tool.description.length, 0);
+    assert.equal(total <= 2200, true, `automation 四个工具的描述合计 ${total} 字符，超了——细则写进 automation 技能`);
+    const create = byName("automation_create").description.length;
+    assert.equal(create <= 1300, true, `automation_create 的描述 ${create} 字符，超了`);
+    assert.match(byName("automation_list").description, /duplicate/);
+    assert.match(byName("automation_cancel").description, /this_session/);
+    assert.match(byName("automation_update").description, /`automation` skill/);
   });
 });
 
