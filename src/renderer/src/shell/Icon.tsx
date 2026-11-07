@@ -19,6 +19,7 @@ import bookOpen from "../../../../design-system/assets/icons/lucide/book-open.sv
 import bot from "../../../../design-system/assets/icons/lucide/bot.svg?raw";
 import brain from "../../../../design-system/assets/icons/lucide/brain.svg?raw";
 import brainCircuit from "../../../../design-system/assets/icons/lucide/brain-circuit.svg?raw";
+import calendarClock from "../../../../design-system/assets/icons/lucide/calendar-clock.svg?raw";
 import check from "../../../../design-system/assets/icons/lucide/check.svg?raw";
 import circleCheck from "../../../../design-system/assets/icons/lucide/circle-check.svg?raw";
 import chevronDown from "../../../../design-system/assets/icons/lucide/chevron-down.svg?raw";
@@ -152,6 +153,7 @@ const ICONS = {
   bot,
   brain,
   "brain-circuit": brainCircuit,
+  "calendar-clock": calendarClock,
   check,
   "circle-check": circleCheck,
   "chevron-down": chevronDown,

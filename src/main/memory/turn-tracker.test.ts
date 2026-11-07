@@ -26,6 +26,8 @@ test("memoryBuildEligible：根会话的用户原话才算，子会话 / 信封 
   assert.equal(memoryBuildEligible(null, "帮我改一下 bug"), true);
   assert.equal(memoryBuildEligible({}, "帮我改一下 bug"), true);
   assert.equal(memoryBuildEligible({ parentId: "p1" }, "子会话的话"), false);
+  // 自动化新开的会话：指令是排期时定好的，不是用户此刻亲口说的
+  assert.equal(memoryBuildEligible({ automationId: "au1" }, "[定时任务「x」第 1 次 · 10-31 01:45]\n\n看日志"), false);
   assert.equal(memoryBuildEligible({}, ENVELOPE), false);
   assert.equal(memoryBuildEligible({}, LEGACY_CLOSING_SCAN_PROMPT), false);
   assert.equal(memoryBuildEligible({}, "   "), false);
