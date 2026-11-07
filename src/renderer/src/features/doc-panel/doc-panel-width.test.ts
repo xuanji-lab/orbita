@@ -9,7 +9,7 @@ describe("docPanelLayout —— 聊天列留底线、放不下转覆盖层", () 
   });
 
   it("聊天列首选 ≥ 480；面板到下限后聊天列可让到硬底线 410，不再低", () => {
-    assert.deepEqual(docPanelLayout(1000, null, 1330), { overlay: false, width: 520 });
+    assert.deepEqual(docPanelLayout(1000, null, 1330), { overlay: false, width: 520, squeezed: true });
     for (const pane of [830, 880, 900, 1000, 1100, 1200, 1400]) {
       const { overlay, width } = docPanelLayout(pane, null, pane + 330);
       assert.equal(overlay, false, `pane ${pane}`);
@@ -19,7 +19,7 @@ describe("docPanelLayout —— 聊天列留底线、放不下转覆盖层", () 
   });
 
   it("面板先缩到下限 420，再挤窄到 300（聊天列守硬底线 410），再放不下才走覆盖层", () => {
-    assert.deepEqual(docPanelLayout(830, null, 1160), { overlay: false, width: DOC_PANEL_FLOOR });
+    assert.deepEqual(docPanelLayout(830, null, 1160), { overlay: false, width: DOC_PANEL_FLOOR, squeezed: true });
     assert.deepEqual(docPanelLayout(760, null, 1090), { overlay: false, width: 350, tight: true });
     assert.deepEqual(docPanelLayout(710, null, 800), { overlay: false, width: DOC_PANEL_SQUEEZE, tight: true });
     for (const pane of [710, 730, 760, 829]) {
@@ -46,6 +46,18 @@ describe("docPanelLayout —— 聊天列留底线、放不下转覆盖层", () 
     assert.equal(docOverlayWidth(600), 300, "再窄也不低于下限");
     assert.equal(docPanelLayout(650, null, 740).width, docOverlayWidth(740));
     for (const w of [800, 900, 1000]) assert.ok(w - docOverlayWidth(w) >= DOC_INPUT_MIN, `窗口 ${w} 左边露出 ${w - docOverlayWidth(w)}`);
+  });
+
+  it("同一窗口宽度忽大忽小（侧栏展开 420 / 收起 650）：被聊天列压低的会标 squeezed，让 App 先收侧栏", () => {
+    // 1200 窗口：侧栏展开 pane≈832 → 想要 482、只给 420；侧栏收起 pane≈1132 → 652（想要 657，差 5 是舍入，不算被压）
+    assert.equal(docPanelLayout(832, null, 1200).squeezed, true);
+    assert.equal(docPanelLayout(832, null, 1200).width, 420);
+    assert.equal(docPanelLayout(1132, null, 1200).squeezed, undefined);
+    assert.equal(docPanelLayout(1132, null, 1200).width, 652);
+    // 用户存过 650 的宽度：侧栏展开时也算被压
+    assert.equal(docPanelLayout(832, 650, 1200).squeezed, true);
+    // 宽窗口、想要的给得下：不标
+    assert.equal(docPanelLayout(1400, null, 1700).squeezed, undefined);
   });
 
   it("还没量到 pane：按想要的宽并排，不当覆盖层", () => {

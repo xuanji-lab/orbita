@@ -27,7 +27,7 @@ export function RightPanelSlot(props: {
    * 自带版式规则的面板（文档 / 演示文稿）：给了它，宽度与是否转覆盖层都由它按量到的 pane 宽决定
    * （聊天列留底线、放不下转覆盖层），不再走 1/3–2/3 夹取与 <960 的窗口判定。
    */
-  resolveLayout?: (pane: number, wanted: number | null, windowWidth: number) => { overlay: boolean; width: number; tight?: boolean };
+  resolveLayout?: (pane: number, wanted: number | null, windowWidth: number) => { overlay: boolean; width: number; tight?: boolean; squeezed?: boolean };
   narrow: boolean;
   /** 实际是不是覆盖层（窄窗，或 resolveLayout 判定放不下）：工具栏的右栏胶囊要跟 */
   onOverlay?: (overlay: boolean) => void;
@@ -59,6 +59,11 @@ export function RightPanelSlot(props: {
   // 所以量它不会因为转覆盖层而变（不会来回跳）
   const paneWidth = useParentWidth(asideRef, resolveLayout !== undefined);
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
+  // 切到文档 / 演示文稿版式（resolveLayout 出现）时重读一次窗口宽：它只在 resize 事件里更新，不重读就是旧值
+  const hasOwnLayout = resolveLayout !== undefined;
+  useEffect(() => {
+    setWindowWidth(window.innerWidth);
+  }, [hasOwnLayout]);
   useEffect(() => {
     const onResize = (): void => setWindowWidth(window.innerWidth);
     window.addEventListener("resize", onResize);
@@ -76,7 +81,8 @@ export function RightPanelSlot(props: {
           ? clampRightPanelWidth(props.width ?? RIGHT_PANEL_WIDTH_DEFAULT, paneTotal)
           : (props.width ?? RIGHT_PANEL_WIDTH_DEFAULT);
   const renderedWidth = width;
-  const tight = own !== undefined && !own.overlay && own.tight === true;
+  // squeezed（想要的宽被聊天列底线压低）与 tight 一样要让 App 先收侧栏，所以一起报
+  const tight = own !== undefined && !own.overlay && (own.tight === true || own.squeezed === true);
   const onTight = props.onTight;
   useEffect(() => {
     onTight?.(tight);

@@ -31,11 +31,22 @@ export function docOverlayWidth(windowWidth: number): number {
   return Math.max(DOC_OVERLAY_FLOOR, Math.min(DOC_OVERLAY_MAX, Math.round(windowWidth - DOC_INPUT_MIN - DOC_OVERLAY_MARGIN)));
 }
 
+/** 想要的宽度比实际给的宽超过这么多，才算「被聊天列底线压住了」（避免 5px 的舍入差触发收侧栏） */
+export const DOC_SQUEEZE_TOLERANCE = 24;
+
 export interface DocPanelLayout {
   overlay: boolean;
   width: number;
   /** 并排但被挤得比下限 420 还窄 */
   tight?: boolean;
+  /**
+   * 并排、没低于下限，但想要的宽（0.58 × pane 或用户拖过的）被聊天列底线压低了：
+   * 同一个窗口里，侧栏展开时面板 420、侧栏收起时 650——宽度取决于「侧栏此刻展没展开」，
+   * 而侧栏状态又取决于用户之前怎么开关过，于是同一窗口里看到的宽度忽大忽小。
+   * App 看到它就在打开文档面板时先收侧栏（与 tight / 覆盖层同一条自动收起纪律，关面板时还原），
+   * 同一个窗口里打开文档永远是同一个宽度。
+   */
+  squeezed?: boolean;
 }
 
 /**
@@ -58,6 +69,7 @@ export function docPanelLayout(pane: number, wanted: number | null, windowWidth:
   // 放不下 420 的下限：面板被挤窄（工具栏会折行，但聊天输入框完整可用）——比覆盖层盖住输入框强
   if (room < DOC_PANEL_FLOOR) return { overlay: false, width: Math.round(room), tight: true };
   const ceiling = Math.max(DOC_PANEL_FLOOR, Math.min(Math.round((pane * 2) / 3), pane - DOC_CHAT_MIN));
-  const want = wanted ?? Math.round(pane * DOC_PANEL_FRACTION);
-  return { overlay: false, width: Math.max(DOC_PANEL_FLOOR, Math.min(ceiling, Math.round(want))) };
+  const want = Math.round(wanted ?? pane * DOC_PANEL_FRACTION);
+  const width = Math.max(DOC_PANEL_FLOOR, Math.min(ceiling, want));
+  return { overlay: false, width, ...(want - width > DOC_SQUEEZE_TOLERANCE ? { squeezed: true } : {}) };
 }
