@@ -1,8 +1,11 @@
 import { useEffect, useRef } from "react";
 import { defaultKeymap, history, historyKeymap, redo, undo } from "@codemirror/commands";
-import { EditorState, Transaction } from "@codemirror/state";
+import { Compartment, EditorState, Transaction, type Extension } from "@codemirror/state";
 import { drawSelection, EditorView, keymap, placeholder } from "@codemirror/view";
-import { clearFlash, flashRanges, liveMarkdown } from "./cm-live-markdown.ts";
+import { clearFlash, flashRanges, flashField, liveMarkdown } from "./cm-live-markdown.ts";
+import { ofmLive, type OfmLive } from "./cm-ofm.tsx";
+import { sourceMarkdown } from "./cm-source.ts";
+import type { OfmEnv } from "./ofm-env.ts";
 import { diffToChanges, type TextChange } from "./doc-merge.ts";
 import { quoteTrackField, quoteTracker, trackRange } from "./quote-track.ts";
 import type { TrackedSnapshot } from "./quote-track.ts";
@@ -19,6 +22,9 @@ export interface EditorSelectionInfo {
   rect: { x: number; top: number; bottom: number };
 }
 
+/** 编辑器的外观：实时预览 / 源码 / 纯文本（.txt：不当 markdown） */
+export type EditorView_ = "live" | "source" | "plain";
+
 export type EditorCommand = "heading" | "bold" | "list" | "undo" | "redo";
 
 /** 父组件拿到的把手：把外部合并结果并进来、跑工具栏命令 */
@@ -30,6 +36,10 @@ export interface DocEditorHandle {
   getText(): string;
   command(name: EditorCommand): void;
   focus(): void;
+  /** 在光标处（或替换选区）插入文字，光标停在插入之后 */
+  insertText(text: string): void;
+  /** 文档 / 工作区文件可能变了：重问双链「找到没找到」、重画 */
+  refreshOfm(): void;
   /** 收起选区（引用 / 摘抄做完后） */
   clearSelection(): void;
   /** 登记一段被引用的区间，之后随每次改动映射（quote-track.ts） */
@@ -54,6 +64,12 @@ export function DocEditor(props: {
    * 一级标题（落盘 `# `，占位写的「标题」就是这个意思）。幻灯片页内的源码编辑器不开（那是写 markdown 源码）。
    */
   documentMode?: boolean;
+  /** 外观；缺省实时预览（幻灯片页内编辑器不传）。运行中可换，光标与撤销栈保留 */
+  view?: EditorView_;
+  /** Obsidian 语法的环境（图片 / 双链解析、点击打开）；缺省不装 OFM 外观 */
+  ofm?: { env: OfmEnv; missingText: (name: string) => string };
+  /** 粘贴 / 拖入了图片文件 */
+  onImages?: (files: File[]) => void;
   /** 卸载前把引用追踪的区间交出去（面板关闭 / 切页签后，重新打开要接着用） */
   onDestroy?: (snapshot: TrackedSnapshot) => void;
   /** 挂载后恢复的追踪区间（坐标在 `initialText` 里） */
@@ -64,6 +80,12 @@ export function DocEditor(props: {
   const callbacks = useRef(props);
   callbacks.current = props;
 
+  // 外观切换的把手（由挂载 effect 在建好视图后赋值）
+  const switchRef = useRef<(mode: EditorView_) => void>(() => undefined);
+  const wantedView = props.view ?? "live";
+  useEffect(() => {
+    switchRef.current(wantedView);
+  }, [wantedView]);
   useEffect(() => {
     const host = hostRef.current;
     if (host === null) return undefined;
@@ -110,6 +132,22 @@ export function DocEditor(props: {
       });
     };
 
+    const modeCompartment = new Compartment();
+    let ofmLiveRef: OfmLive | null = null;
+    const modeExtensions = (mode: EditorView_): Extension => {
+      if (mode === "source") return sourceMarkdown();
+      if (mode === "plain") return [];
+      const ofm = callbacks.current.ofm;
+      ofmLiveRef = ofm === undefined ? null : ofmLive(ofm.env, ofm.missingText);
+      return [
+        liveMarkdown(),
+        ...(ofmLiveRef === null ? [] : [ofmLiveRef.extension]),
+        ...(callbacks.current.documentMode === true ? [documentKeymap(), titleFirstFilter, titleAfterComposition()] : []),
+      ];
+    };
+    const initialMode = callbacks.current.view ?? "live";
+    let currentMode: EditorView_ = initialMode;
+
     const view = new EditorView({
       parent: host,
       state: EditorState.create({
@@ -123,10 +161,27 @@ export function DocEditor(props: {
             "aria-multiline": "true",
             spellcheck: "false",
           }),
-          liveMarkdown(),
+          modeCompartment.of(modeExtensions(initialMode)),
+          flashField,
           quoteTracker(),
           ...(hint() === undefined ? [] : [placeholder(hint() as HTMLElement)]),
-          ...(callbacks.current.documentMode === true ? [documentKeymap(), titleFirstFilter, titleAfterComposition()] : []),
+          EditorView.domEventHandlers({
+            // 粘贴 / 拖入图片文件：交给父组件放进附件目录并插入引用（文字粘贴照常）
+            paste(event) {
+              const files = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith("image/"));
+              if (files.length === 0 || callbacks.current.onImages === undefined) return false;
+              event.preventDefault();
+              callbacks.current.onImages(files);
+              return true;
+            },
+            drop(event) {
+              const files = [...(event.dataTransfer?.files ?? [])].filter((file) => file.type.startsWith("image/"));
+              if (files.length === 0 || callbacks.current.onImages === undefined) return false;
+              event.preventDefault();
+              callbacks.current.onImages(files);
+              return true;
+            },
+          }),
           keymap.of([{ key: "Mod-b", run: toggleBold, preventDefault: true }, ...defaultKeymap, ...historyKeymap]),
           EditorView.updateListener.of((update) => {
             const external = update.transactions.some((tr) => tr.annotation(External) === true);
@@ -181,6 +236,18 @@ export function DocEditor(props: {
       focus: () => {
         view.focus();
       },
+      insertText(text) {
+        const { from, to } = view.state.selection.main;
+        view.dispatch({
+          changes: { from, to, insert: text },
+          selection: { anchor: from + text.length },
+          userEvent: "input.paste",
+        });
+        view.focus();
+      },
+      refreshOfm() {
+        ofmLiveRef?.reset(view);
+      },
       trackQuote: (id, from, to, docVersion) => {
         // 选区是 SETTLE 延迟后才拿来登记的：这期间文档若变过（例如紧贴着打了同样的一句），
         // 这对坐标已经指到别处——登记了就是一个错的锚点。文本比对分不出（复制句和原句一字不差），只能比文档版本
@@ -194,7 +261,15 @@ export function DocEditor(props: {
       },
     };
 
+    // 外观切换（编辑 ↔ 源码）：同一个编辑器换扩展，光标、撤销栈、滚动都留着
+    switchRef.current = (mode) => {
+      if (mode === currentMode) return;
+      currentMode = mode;
+      view.dispatch({ effects: modeCompartment.reconfigure(modeExtensions(mode)) });
+    };
+
     return () => {
+      switchRef.current = () => undefined;
       if (flashTimer !== null) clearTimeout(flashTimer);
       callbacks.current.handleRef.current = null;
       const ranges: Record<string, { from: number; to: number }> = {};
@@ -206,6 +281,6 @@ export function DocEditor(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return <div ref={hostRef} className="dp-editor" />;
+  return <div ref={hostRef} className="dp-editor" data-view={wantedView} />;
 }
 

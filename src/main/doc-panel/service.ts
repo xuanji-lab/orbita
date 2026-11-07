@@ -48,14 +48,15 @@ export function hashText(text: string): string {
   return createHash("sha1").update(text).digest("hex");
 }
 
-const isMarkdownPath = (path: string): boolean => /\.md$/i.test(path);
+/** 文档：md / markdown / txt（文件面板用文档编辑器接管的类型） */
+const isMarkdownPath = (path: string): boolean => /\.(?:md|markdown|txt)$/i.test(path);
 
 /**
  * 白名单：path realpath 之后落在可写根之内、是 `.md`、是个文件。返回真实路径。
  * 越界 / 不存在 / 不是 .md 一律抛——这条通道不能变成读写任意文件的后门。
  */
 export async function resolveDocPath(roots: readonly FileRoot[], path: string): Promise<string> {
-  if (!isMarkdownPath(path)) throw new Error(`只能打开 .md 文件：${path}`);
+  if (!isMarkdownPath(path)) throw new Error(`只能打开文档文件（.md / .markdown / .txt）：${path}`);
   const allowed = roots.filter((root) => root.exists && WRITABLE_KINDS.has(root.kind)).map((root) => root.path);
   const real = await realpathInside(path, allowed);
   if (real === null) {
@@ -69,7 +70,7 @@ export async function resolveDocPath(roots: readonly FileRoot[], path: string): 
     if (gone) throw new Error(`${DOC_GONE}: 文件被移走或删除了`);
     throw new Error(`「${path}」不在这条会话允许的目录里`);
   }
-  if (!isMarkdownPath(real)) throw new Error(`只能打开 .md 文件：${real}`);
+  if (!isMarkdownPath(real)) throw new Error(`只能打开文档文件（.md / .markdown / .txt）：${real}`);
   const stats = await stat(real);
   if (!stats.isFile()) throw new Error(`不是文件：${real}`);
   return real;
@@ -209,7 +210,7 @@ export async function listDocs(roots: readonly FileRoot[]): Promise<DocListEntry
       const full = join(dir, dirent.name);
       if (dirent.isDirectory()) {
         if (depth < DOC_LIST_DEPTH && !SKIP_DIRS.has(dirent.name)) queue.push({ dir: full, depth: depth + 1 });
-      } else if (dirent.isFile() && isMarkdownPath(dirent.name)) {
+      } else if (dirent.isFile() && /\.(?:md|markdown)$/i.test(dirent.name)) {
         try {
           found.push({ path: full, modifiedAt: (await stat(full)).mtimeMs });
         } catch {

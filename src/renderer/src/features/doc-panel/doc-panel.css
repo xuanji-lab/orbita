@@ -568,3 +568,317 @@
   color: var(--color-danger);
   font-size: var(--font-size-xs);
 }
+
+/* ======================================================================
+ * 文档视图的三个视图（阅读 / 编辑 / 源码）与 Obsidian 语法的外观
+ * 阅读视图复用聊天正文的 `.chat-md`（同一套 remark 排版、shiki 代码块、KaTeX），这里只改成「一页纸」的字号与标题层级，
+ * 再补 OFM 自己的元素：属性表、双链、标签、高亮、提醒框、图片。
+ * ====================================================================== */
+.dp-views {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-0-5);
+}
+
+/* ---- 阅读视图：与编辑视图同一张纸 ---- */
+.dp-read .chat-md {
+  color: var(--dp-ink);
+  font-family: var(--font-family-brand);
+  font-size: var(--font-size-lg);
+}
+.dp-read .chat-md h1,
+.dp-read .chat-md h2,
+.dp-read .chat-md h3,
+.dp-read .chat-md h4 {
+  font-weight: 500;
+  line-height: var(--line-height-tight);
+}
+.dp-read .chat-md h1 {
+  margin-top: var(--space-4);
+  font-size: 190%;
+}
+.dp-read .chat-md h2 {
+  font-size: 135%;
+}
+.dp-read .chat-md h3 {
+  font-size: 112%;
+}
+.dp-read .chat-md > h1:first-child,
+.dp-read .chat-md > .ofm-properties + h1 {
+  margin-top: var(--space-2);
+}
+.dp-read .chat-md code,
+.dp-read .chat-md pre {
+  font-size: 88%;
+}
+.dp-read .chat-md img.ofm-img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: var(--space-3) 0;
+  border-radius: var(--radius-md);
+}
+.dp-read .ofm-note {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+.dp-read .ofm-plain {
+  white-space: pre-wrap;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+}
+/* .txt：保留换行与缩进，按段排版 */
+.dp-read .ofm-plain-text p {
+  white-space: pre-wrap;
+}
+.dp[data-paper="print"] .dp-read .chat-md p {
+  margin: 0;
+  text-indent: 2em;
+}
+.dp[data-paper="print"] .dp-read .chat-md h1,
+.dp[data-paper="print"] .dp-read .chat-md h2,
+.dp[data-paper="print"] .dp-read .chat-md h3 {
+  text-align: center;
+  letter-spacing: 0.14em;
+  font-weight: 400;
+}
+.dp[data-paper="focus"] .dp-read .chat-md {
+  font-size: var(--font-size-xl);
+}
+
+/* ---- 属性表（frontmatter） ---- */
+.ofm-properties {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-1) var(--space-6);
+  margin: 0 0 var(--space-5);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--dp-rule, var(--color-border-subtle));
+  border-bottom: 1px solid var(--dp-rule, var(--color-border-subtle));
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+}
+.ofm-prop {
+  display: contents;
+}
+.ofm-prop-key {
+  color: var(--color-text-tertiary);
+}
+.ofm-prop-val {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  min-width: 0;
+  color: var(--color-text-primary);
+}
+
+/* ---- 标签、高亮、双链 ---- */
+.ofm-tag,
+.dp-editor .cm-ofm-tag {
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-info) 14%, transparent);
+  color: var(--color-info);
+  font-family: var(--font-family-base);
+  font-size: 88%;
+  white-space: nowrap;
+}
+.ofm-mark,
+.dp-editor .cm-ofm-mark {
+  padding: 0 var(--space-0-5);
+  border-radius: var(--radius-xs);
+  /* 荧光笔黄：warning 与纸面混出来的底，字仍是主墨色 */
+  background: color-mix(in srgb, var(--color-warning) 34%, transparent);
+  color: inherit;
+}
+.chat-md a.ofm-wikilink,
+.dp-editor .cm-wikilink {
+  color: var(--color-chat-link, var(--color-info));
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-underline-offset: 0.18em;
+  cursor: pointer;
+}
+.chat-md a.ofm-wikilink:hover {
+  text-decoration-color: currentColor;
+}
+/* 找不到的目标：灰色，不是链接蓝 */
+.chat-md a.ofm-missing-link,
+.dp-editor .cm-wikilink-missing {
+  color: var(--color-text-tertiary);
+  text-decoration-style: dashed;
+}
+.dp-editor .cm-embed-src {
+  color: var(--color-text-tertiary);
+}
+.ofm-img-pending {
+  display: inline-block;
+  width: 100%;
+  height: var(--space-8);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+}
+.ofm-img-missing,
+.dp-editor .cm-ofm-img[data-state="missing"] {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-0-5) var(--space-2);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-tertiary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+}
+
+/* ---- 提醒框（阅读视图：rehype-callouts 的 .callout；编辑视图：行装饰 .cm-callout）---- */
+.callout,
+.dp-editor .cm-callout {
+  --callout: var(--color-info);
+}
+.callout[data-kind="tip"],
+.callout[data-kind="success"],
+.dp-editor .cm-callout-tip,
+.dp-editor .cm-callout-success {
+  --callout: var(--color-success);
+}
+.callout[data-kind="question"],
+.callout[data-kind="warning"],
+.dp-editor .cm-callout-question,
+.dp-editor .cm-callout-warning {
+  --callout: var(--color-warning);
+}
+.callout[data-kind="failure"],
+.callout[data-kind="danger"],
+.callout[data-kind="bug"],
+.dp-editor .cm-callout-failure,
+.dp-editor .cm-callout-danger,
+.dp-editor .cm-callout-bug {
+  --callout: var(--color-danger);
+}
+.callout[data-kind="example"],
+.callout[data-kind="quote"],
+.dp-editor .cm-callout-example,
+.dp-editor .cm-callout-quote {
+  --callout: var(--color-text-secondary);
+}
+.chat-md .callout {
+  margin: var(--space-3) 0;
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-3);
+  border-left: 3px solid var(--callout);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: color-mix(in srgb, var(--callout) 10%, var(--dp-bg, var(--color-bg-panel)));
+}
+.chat-md .callout > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.chat-md .callout > summary::-webkit-details-marker {
+  display: none;
+}
+.chat-md .callout-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--callout);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-semibold);
+}
+.chat-md .callout-title-icon,
+.chat-md .callout-fold-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.chat-md .callout-title-icon svg,
+.chat-md .callout-fold-icon svg {
+  width: 14px;
+  height: 14px;
+}
+.chat-md .callout-fold-icon {
+  margin-left: auto;
+  transition: transform var(--duration-fast) ease-out;
+}
+.chat-md details.callout[open] .callout-fold-icon {
+  transform: rotate(180deg);
+}
+.chat-md .callout-content {
+  margin-top: var(--space-1);
+}
+.chat-md .callout-content > :first-child {
+  margin-top: 0;
+}
+.chat-md .callout-content > :last-child {
+  margin-bottom: 0;
+}
+
+/* ---- 编辑视图：提醒框 / 属性区 / 图片 / 源码 ---- */
+.dp-editor .cm-callout {
+  padding-left: var(--space-3);
+  border-left: 3px solid var(--callout);
+  background: color-mix(in srgb, var(--callout) 10%, var(--dp-bg));
+  color: var(--dp-ink);
+}
+.dp-editor .cm-callout.cm-callout-head {
+  margin-top: var(--space-3);
+  padding-top: var(--space-1);
+  border-top-right-radius: var(--radius-md);
+}
+.dp-editor .cm-callout.cm-callout-last {
+  margin-bottom: var(--space-3);
+  padding-bottom: var(--space-1);
+  border-bottom-right-radius: var(--radius-md);
+}
+.dp-editor .cm-callout-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--callout);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-semibold);
+}
+.dp-editor .cm-callout-icon {
+  display: inline-flex;
+}
+.dp-editor .cm-frontmatter {
+  color: var(--color-text-tertiary);
+  font-family: var(--font-family-mono);
+  font-size: 80%;
+  line-height: var(--line-height-code);
+}
+.dp-editor .cm-ofm-img {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: top;
+}
+.dp-editor .cm-ofm-img img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: var(--space-1) 0;
+  border-radius: var(--radius-md);
+}
+.dp-editor .cm-ofm-img[data-state="pending"] {
+  width: 100%;
+  height: var(--space-8);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+}
+
+/* 源码视图：等宽、不收符号 */
+.dp-editor[data-view="source"] .cm-editor {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+}
+.dp-editor[data-view="source"] .cm-scroller {
+  line-height: var(--line-height-code);
+}
+.dp-editor[data-view="source"] .cm-src-h {
+  font-weight: var(--weight-semibold);
+}
+/* 纯文本（.txt）：不当 markdown，正文字体、保留空白 */
+.dp-editor[data-view="plain"] .cm-editor {
+  font-size: var(--font-size-lg);
+}

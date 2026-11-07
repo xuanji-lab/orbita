@@ -804,6 +804,11 @@ export function FilesPanel(props: {
               jump={jump !== null && jump.citation.path === shownTab.path ? jump : null}
               openInEdit={openInEdit.has(shownTab.path)}
               onQuote={session.addQuote}
+              onCloseTab={() => closeOne(shownTab.path)}
+              onOpenTarget={(root, path) => {
+                setTabs((prev) => openTab(prev, root, path));
+                setActivePath(path);
+              }}
             />
           )}
         </div>

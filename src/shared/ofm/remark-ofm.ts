@@ -16,7 +16,7 @@
  * 提醒框（`> [!warning]`）在 hast 层由 rehype-callouts 处理，不在这里。
  * 不引 unist-util-visit：递归 40 行，不值得多一条依赖。
  */
-import { parseEmbedHint, tagRe, wikiLinkLabel, wikiLinkRe, parseWikiLink, isImageName } from "./syntax.ts";
+import { calloutDefaultTitle, isKnownCalloutType, parseCalloutHead, parseEmbedHint, tagRe, wikiLinkLabel, wikiLinkRe, parseWikiLink, isImageName } from "./syntax.ts";
 import { parseProperties } from "./properties.ts";
 
 /** 够用的 mdast 子集：本插件只读 type / value / children，写入自己的节点 */
@@ -186,8 +186,24 @@ function mergeText(children: MdNode[]): MdNode[] {
   return out;
 }
 
+/**
+ * 不认识的提醒框类型（`> [!custom]`）：rehype-callouts 不当提醒框画（原样留下 `[!custom]` 文字），
+ * 而 Obsidian 当 note 画、标题写类型名——这里改写头行成 `[!note] Custom`，下游就一致了
+ */
+function normalizeCalloutHead(node: MdNode): void {
+  const lead = node.children?.[0]?.children?.[0];
+  if (node.children?.[0]?.type !== "paragraph" || lead?.type !== "text" || lead.value === undefined) return;
+  const nl = lead.value.indexOf("\n");
+  const headLine = nl === -1 ? lead.value : lead.value.slice(0, nl);
+  const head = parseCalloutHead(headLine);
+  if (head === null || isKnownCalloutType(head.type)) return;
+  const title = head.title === "" ? calloutDefaultTitle(head.type) : head.title;
+  lead.value = `[!note]${head.fold ?? ""} ${title}${nl === -1 ? "" : lead.value.slice(nl)}`;
+}
+
 function walk(node: MdNode): void {
   const children = node.children;
+  if (node.type === "blockquote") normalizeCalloutHead(node);
   if (children === undefined || SKIP_CHILDREN.has(node.type)) return;
   const next: MdNode[] = [];
   for (const child of children) {

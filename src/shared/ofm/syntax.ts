@@ -148,26 +148,33 @@ const CALLOUT_ALIASES: Readonly<Record<string, string>> = {
   cite: "quote",
 };
 
+const CALLOUT_KINDS: readonly string[] = [
+  "note",
+  "abstract",
+  "info",
+  "todo",
+  "tip",
+  "success",
+  "question",
+  "warning",
+  "failure",
+  "danger",
+  "bug",
+  "example",
+  "quote",
+];
+
+/** 认得的提醒框类型名（视觉类型 + 别名）；其它名字 Obsidian 当 note 画，标题写类型名 */
+export function isKnownCalloutType(type: string): boolean {
+  const t = type.toLowerCase();
+  return CALLOUT_KINDS.includes(t) || CALLOUT_ALIASES[t] !== undefined;
+}
+
 /** 提醒框视觉类型：note / abstract / info / todo / tip / success / question / warning / failure / danger / bug / example / quote；不认识的当 note */
 export function calloutKind(type: string): string {
-  const known = new Set([
-    "note",
-    "abstract",
-    "info",
-    "todo",
-    "tip",
-    "success",
-    "question",
-    "warning",
-    "failure",
-    "danger",
-    "bug",
-    "example",
-    "quote",
-  ]);
   const t = type.toLowerCase();
   const mapped = CALLOUT_ALIASES[t] ?? t;
-  return known.has(mapped) ? mapped : "note";
+  return CALLOUT_KINDS.includes(mapped) ? mapped : "note";
 }
 
 /**

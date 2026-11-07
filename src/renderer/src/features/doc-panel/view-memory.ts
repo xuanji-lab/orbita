@@ -17,6 +17,8 @@ interface ViewState {
   page?: number;
   /** 文档：滚动位置（px） */
   scroll?: number;
+  /** 文档：上次停在哪个视图（阅读 / 编辑 / 源码） */
+  view?: "read" | "edit" | "source";
 }
 
 interface Memory {

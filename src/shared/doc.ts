@@ -104,32 +104,67 @@ export interface DocChangedEvent {
 /** 文档能读写的最大体量（字节）：再大不是「文档」，是日志——拒绝而不是卡死 */
 export const DOC_MAX_BYTES = 8 * 1024 * 1024;
 
-export type DocExportFormat = "docx" | "pdf";
+export type DocExportFormat = "pdf";
 
 /**
- * `doc:export`：文档导出 docx、演示文稿导出 PDF。
- * - docx：主进程读盘上那份 `.md` 转（renderer 已先把未落盘的改动写盘）；
+ * `doc:export`：演示文稿导出 PDF（文档的导出走 `doc:export-doc`）。
  * - pdf：renderer 渲染好整份幻灯片的**自包含 HTML**（每页一个 `<section class="slide">`，
  *   `markdown → HTML` 复用 renderer 的管线，主进程没有 react），主进程用隐藏窗口
  *   `printToPDF`，页数 = `pages`。HTML 在隐藏窗口里**禁用脚本**加载。
  * 都先弹系统保存对话框，取消回 `saved: null`。
  */
-export type DocExportRequest =
-  /** text：renderer 此刻的全文（含没写进盘的——文件只读存不进去时，导出的也该是用户眼前这份）；缺席读盘 */
-  | (DocTarget & { format: "docx"; text?: string })
-  | (DocTarget & { format: "pdf"; html: string; pages: number });
+export type DocExportRequest = DocTarget & { format: "pdf"; html: string; pages: number };
 
 export interface DocExportResult {
   /** 写到哪了；用户在保存对话框里取消 = null */
   saved: string | null;
 }
 
+/**
+ * `doc:export-doc`：文档（.md / .markdown / .txt）导出成 Word / PDF / Markdown。
+ * - docx：段落、列表、表格、图片、代码块；提醒框 → 引用块（粗体标题）、双链 → 纯文字、高亮 → 底色、标签 → 文字；
+ * - pdf：主进程把 markdown 渲成自包含 HTML（图片内联、提醒框 / 属性表有样式），隐藏窗口 `printToPDF`；
+ * - md：原样另存；md-plain：「转成通用 md」（OFM 语法降级，见 `shared/ofm/plain.ts`）。
+ * `text`：renderer 此刻的全文（含没写进盘的）；缺席读盘。先弹保存对话框，取消回 `saved: null`。
+ * agent 的 `doc_export` 走同一套生成函数，只是不弹对话框（路径由参数给）。
+ */
+export type DocExportDocFormat = "docx" | "pdf" | "md" | "md-plain";
+
+export type DocExportDocRequest = DocTarget & { format: DocExportDocFormat; text?: string };
+
+/** `doc:ofm-resolve`：把文档里的 `[[双链]]` / `![[图]]` / `![](相对路径)` 目标解析成工作区里的真文件 */
+export type OfmTargetKind = "link" | "image";
+
+export interface OfmResolveRequest extends DocTarget {
+  items: { target: string; kind: OfmTargetKind }[];
+}
+
+/** 解析结果：绝对路径 + 所在根（读图 / 在文件面板打开要带 root）+ 相对工作区的路径；找不到 = null */
+export type OfmResolved = { path: string; root: string; relative: string } | null;
+
+/**
+ * `doc:insert-image`：插图。图片复制进附件目录（工作区有 `.obsidian/app.json` 就用它的
+ * `attachmentFolderPath`，否则 `attachments/`），回要插进文档的那段 markdown：
+ * Obsidian 库（有 `.obsidian`）写 `![[名.png]]`，其它写 `![](attachments/名.png)`。
+ * `pick`：主进程弹系统选图对话框；`bytes`：拖入 / 粘贴来的图（renderer 已读成 base64）。
+ */
+export interface DocInsertImageRequest extends DocTarget {
+  source: { kind: "pick" } | { kind: "bytes"; name: string; base64: string };
+}
+
+export interface DocInserted {
+  /** 落盘后的文件名（重名会加序号） */
+  name: string;
+  path: string;
+  markdown: string;
+}
+
 /** 新建文档的默认名（重名加序号由主进程做） */
 export const NEW_DOC_NAME = "未命名文档";
 export const NEW_DECK_NAME = "未命名演示文稿";
 
-/** 面板上显示的名字：去掉 .md */
+/** 面板上显示的名字：去掉 .md / .markdown / .txt */
 export function docTitle(path: string): string {
   const name = path.split(/[\\/]/).pop() ?? path;
-  return name.replace(/\.md$/i, "");
+  return name.replace(/\.(?:md|markdown|txt)$/i, "");
 }

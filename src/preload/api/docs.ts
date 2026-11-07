@@ -8,8 +8,13 @@ import type {
   DocChangedEvent,
   DocCreated,
   DocCreateRequest,
+  DocExportDocRequest,
   DocExportRequest,
   DocExportResult,
+  DocInsertImageRequest,
+  DocInserted,
+  OfmResolved,
+  OfmResolveRequest,
   DocSaveAsRequest,
   DocSaveAsResult,
   DocFile,
@@ -40,6 +45,12 @@ export const docsApi = {
   },
   /** 另存为：把当前文字存成新文件（先弹保存对话框） */
   saveAs: (req: DocSaveAsRequest): Promise<DocSaveAsResult> => ipcRenderer.invoke(ipcChannels.docSaveAs, req),
-  /** 导出：文档 → docx、演示文稿 → PDF（先弹保存对话框） */
+  /** 导出：演示文稿 → PDF（先弹保存对话框） */
   export: (req: DocExportRequest): Promise<DocExportResult> => ipcRenderer.invoke(ipcChannels.docExport, req),
+  /** 文档导出：docx / pdf / md / 通用 md（先弹保存对话框） */
+  exportDoc: (req: DocExportDocRequest): Promise<DocExportResult> => ipcRenderer.invoke(ipcChannels.docExportDoc, req),
+  /** 解析文档里的双链 / 图片目标（工作区里同目录优先，再同名文件）；找不到 = null */
+  resolveTargets: (req: OfmResolveRequest): Promise<OfmResolved[]> => ipcRenderer.invoke(ipcChannels.docOfmResolve, req),
+  /** 插图：复制进附件目录，回要插入的 markdown；选图时取消 = null */
+  insertImage: (req: DocInsertImageRequest): Promise<DocInserted | null> => ipcRenderer.invoke(ipcChannels.docInsertImage, req),
 } as const;

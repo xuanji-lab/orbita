@@ -28,8 +28,11 @@ describe("白名单", () => {
     await assert.rejects(readDoc(roots, join(outside, "secret.md")), /不在这条会话允许/);
     await symlink(join(outside, "secret.md"), join(dir, "link.md"));
     await assert.rejects(readDoc(roots, join(dir, "link.md")), /不在这条会话允许/);
-    await writeFile(join(dir, "a.txt"), "x");
-    await assert.rejects(readDoc(roots, join(dir, "a.txt")), /只能打开 .md/);
+    await writeFile(join(dir, "a.png"), "x");
+    await assert.rejects(readDoc(roots, join(dir, "a.png")), /只能打开文档文件/);
+    // .txt / .markdown 与 .md 一样可当文档打开
+    await writeFile(join(dir, "a.txt"), "纯文本");
+    assert.equal((await readDoc(roots, join(dir, "a.txt"))).text, "纯文本");
     await assert.rejects(readDoc(roots, join(dir, "nope.md")), /DOC_GONE|不在这条会话允许/);
     await assert.rejects(resolveDocPath([{ kind: "attachments", label: "a", path: dir, exists: true }], join(dir, "link.md")));
   });

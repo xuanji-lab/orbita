@@ -311,8 +311,14 @@ export const ipcChannels = {
   docChanged: "doc:changed",
   /** 另存为：把当前文字存成新文件（先弹保存对话框）；原文件只读 / 被删时的出路 */
   docSaveAs: "doc:save-as",
-  /** 导出：文档 → docx，演示文稿 → PDF（先弹保存对话框） */
+  /** 导出：演示文稿 → PDF（先弹保存对话框） */
   docExport: "doc:export",
+  /** 文档导出：docx / pdf / md / 通用 md（先弹保存对话框） */
+  docExportDoc: "doc:export-doc",
+  /** 解析文档里的双链 / 图片目标（工作区同目录优先、再同名文件） */
+  docOfmResolve: "doc:ofm-resolve",
+  /** 插图：复制进附件目录，回要插入的 markdown */
+  docInsertImage: "doc:insert-image",
   /** 遗留事项（收尾仪式收割）：全部清单。侧栏面板、角标与「Has todos」筛选都吃它，按 sourceSessionId 现算 */
   carryoverList: "carryover:list",
   /** 每日 token 用量：最近 7 天（含今天，旧的在前；载荷形状在 shared/usage.ts）。回 `UsageDayTotal[]`，回填还在跑时可能是全 0——跑完会经 usage:event 推一份真值 */

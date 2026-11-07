@@ -9,8 +9,13 @@ import {
   type DocChangedEvent,
   type DocCreated,
   type DocCreateRequest,
+  type DocExportDocRequest,
   type DocExportRequest,
   type DocExportResult,
+  type DocInsertImageRequest,
+  type DocInserted,
+  type OfmResolved,
+  type OfmResolveRequest,
   type DocSaveAsRequest,
   type DocSaveAsResult,
   type DocFile,
@@ -25,7 +30,9 @@ import { realpathInside } from "../path-boundary.ts";
 import { resolveFileRoots } from "../files/roots.ts";
 import type { SessionStore } from "../session/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
-import { markdownToDocx } from "./export-docx.ts";
+import { buildDocExport } from "./doc-export.ts";
+import { resolveTargets, saveAttachment } from "./ofm-files.ts";
+import { printDocPdf } from "./print-doc-pdf.ts";
 import { printSlidesPdf } from "./export-pdf.ts";
 import { createDoc, DocWatchers, listDocs, normalizeNewlines, readDoc, resolveDocPath, writeDoc } from "./service.ts";
 
@@ -96,20 +103,60 @@ export function registerDocIpc(workspaces: WorkspaceStore, sessions: SessionStor
     const real = await resolveDocPath(await rootsOf(req), req.path);
     const window = BrowserWindow.fromWebContents(event.sender);
     const title = basename(real).replace(/\.md$/i, "");
-    const ext = req.format === "docx" ? "docx" : "pdf";
-    // 先生成再问存哪：对话框取消不浪费一次生成没关系，生成失败则不必打扰用户弹对话框
-    const bytes =
-      req.format === "docx"
-        ? await markdownToDocx(req.text ?? (await readDoc(await rootsOf(req), real)).text)
-        : await printSlidesPdf(req.html, req.pages);
+    // 先生成再问存哪：生成失败则不必打扰用户弹对话框
+    const bytes = await printSlidesPdf(req.html, req.pages);
     const options = {
-      defaultPath: join(dirname(real), `${title}.${ext}`),
-      filters: [{ name: ext.toUpperCase(), extensions: [ext] }],
+      defaultPath: join(dirname(real), `${title}.pdf`),
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
     };
     const picked = await (window === null ? dialog.showSaveDialog(options) : dialog.showSaveDialog(window, options));
     if (picked.canceled || picked.filePath === "") return { saved: null };
     await writeBytesAtomic(picked.filePath, bytes);
     return { saved: picked.filePath };
+  });
+
+  // 文档导出：docx / pdf / md / 通用 md。生成函数与 agent 的 doc_export 共用（doc-export.ts）
+  ipcMain.handle(ipcChannels.docExportDoc, async (event, req: DocExportDocRequest): Promise<DocExportResult> => {
+    const roots = await rootsOf(req);
+    const real = await resolveDocPath(roots, req.path);
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const title = basename(real).replace(/\.(?:md|markdown|txt)$/i, "");
+    const text = req.text ?? (await readDoc(roots, real)).text;
+    const built = await buildDocExport({ format: req.format, text, docReal: real, roots, title, printPdf: printDocPdf });
+    const suffix = req.format === "md-plain" ? " (通用)" : "";
+    const options = {
+      defaultPath: join(dirname(real), `${title}${suffix}.${built.ext}`),
+      filters: [{ name: built.ext.toUpperCase(), extensions: [built.ext] }],
+    };
+    const picked = await (window === null ? dialog.showSaveDialog(options) : dialog.showSaveDialog(window, options));
+    if (picked.canceled || picked.filePath === "") return { saved: null };
+    await writeBytesAtomic(picked.filePath, built.bytes);
+    return { saved: picked.filePath };
+  });
+
+  ipcMain.handle(ipcChannels.docOfmResolve, async (_event, req: OfmResolveRequest): Promise<OfmResolved[]> => {
+    const roots = await rootsOf(req);
+    // 文档本身要过白名单；找不到文档（刚被移走）就当全部解析不到，不抛——阅读视图仍能画出文字
+    const real = await resolveDocPath(roots, req.path).catch(() => null);
+    if (real === null) return req.items.map(() => null);
+    return resolveTargets(roots, real, req.items.slice(0, 500));
+  });
+
+  ipcMain.handle(ipcChannels.docInsertImage, async (event, req: DocInsertImageRequest): Promise<DocInserted | null> => {
+    const roots = await rootsOf(req);
+    const real = await resolveDocPath(roots, req.path);
+    if (req.source.kind === "bytes") {
+      return saveAttachment(roots, real, { kind: "bytes", name: req.source.name, bytes: Buffer.from(req.source.base64, "base64") });
+    }
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const options = {
+      properties: ["openFile" as const],
+      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif"] }],
+    };
+    const picked = await (window === null ? dialog.showOpenDialog(options) : dialog.showOpenDialog(window, options));
+    const file = picked.filePaths[0];
+    if (picked.canceled || file === undefined) return null;
+    return saveAttachment(roots, real, { kind: "file", path: file });
   });
 }
 
