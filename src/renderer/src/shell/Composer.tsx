@@ -600,7 +600,9 @@ export function Composer(props: {
             borderRadius: "var(--radius-pill)",
           }}
         >
-          <Icon name={sendable ? "arrow-up" : "square"} size={sendable ? 16 : 12} />
+          {/* 停止方块只在真能停的时候画：空输入框上的禁用键画「停止」，读起来像「可以停」，
+              点了却没反应（2026-10-29 精装审计）。禁用态仍是发送，只是压暗 */}
+          <Icon name={stopping ? "square" : "arrow-up"} size={stopping ? 12 : 16} />
         </button>
       </div>
       </div>

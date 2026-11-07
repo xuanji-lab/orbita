@@ -462,8 +462,10 @@
   background: var(--color-accent-strong);
 }
 
+/* 禁用：实色 muted 底压住（玻璃上禁用要用实色，半透明 hover 底叠在玻璃上读不出「不可点」）。
+   图标不换——空输入框上的发送键仍画 arrow-up，只是压暗；停止方块只给真正能停的时候 */
 .btn-accent:disabled {
-  background: var(--color-bg-hover);
+  background: var(--color-bg-muted);
   color: var(--color-text-tertiary);
   cursor: not-allowed;
 }
@@ -1344,6 +1346,24 @@ body {
 
 .collapse-row-btn:hover {
   background: color-mix(in srgb, var(--color-bg-hover) 50%, transparent);
+}
+
+/*
+ * 侧栏树：工作区下的会话行，字形落在父项名字的同一根竖线上（2026-10-29 精装审计）。
+ * 改前子项文字在 49、父项名字在 76——子项比父项靠左 27px，读起来像会话不属于这个工作区。
+ * 两个量都从各自的版式推出来，不写魔数：
+ * - 组头（Sidebar.tsx 的 workspace-group）：开合键 20 + 文件夹格 24 + 两道 --space-1 的 gap
+ * - 会话行（NavRow）：左内边距 --space-1 + 13px 图标槽 + --space-2 的 gap
+ * 行的图标槽（子会话 git-fork / 置顶图钉）因此落在父项文件夹图标的那一列下面；
+ * 悬停与选中的底跟着行一起缩进。
+ */
+.workspace-group {
+  --tree-name-x: calc(20px + 24px + 2 * var(--space-1));
+  --row-glyph-x: calc(var(--space-1) + 13px + var(--space-2));
+}
+
+.tree-children {
+  padding-left: calc(var(--tree-name-x) - var(--row-glyph-x));
 }
 
 /* ===== Sub-sessions 收件箱（2026-10-12：列表层改为收件箱） =====
