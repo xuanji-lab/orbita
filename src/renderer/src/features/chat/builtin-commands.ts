@@ -1,5 +1,7 @@
 import type { IconName } from "../../shell/Icon.tsx";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
+import { readCommandCard } from "../../../../shared/builtin-command.ts";
+import { CANVAS_SIZE } from "../../../../shared/slides.ts";
 
 /**
  * 内置命令注册表 —— 聊天过程行怎么显示「原生内置命令」的**唯一真源**。
@@ -22,6 +24,18 @@ export interface BuiltinCommand {
   summary(input: unknown): string | null;
   /** 完成后钉一张卡（折叠之外、结尾回复之前）；缺席 = 只有过程行 */
   pinCard?: boolean;
+  /**
+   * 展开体：给人看的「参数 + 结果」几行。缺席（或返回 null）= 展开体走通用的原样结果文本——
+   * 那是写给模型的话（「Created … 0 slides … Next: fill it with …」），用户看了只会困惑。
+   */
+  detail?: (input: unknown, details: unknown) => DetailRow[] | null;
+}
+
+export interface DetailRow {
+  label: string;
+  value: string;
+  /** 路径这类机器事实用等宽字体 */
+  mono?: boolean;
 }
 
 function record(input: unknown): Record<string, unknown> | null {
@@ -128,6 +142,18 @@ const FORMAT_NAME: Readonly<Record<string, string>> = {
   "pptx-basic": "PowerPoint · 通用字体",
 };
 
+/** 导出类命令的展开体：格式 / 文件 / 卡上的说明（「PPTX 通用字体 · 7 页」） */
+function exportDetail(input: unknown, details: unknown, names: Readonly<Record<string, string>>): DetailRow[] | null {
+  const card = readCommandCard(details);
+  const format = str(input, "format");
+  const rows: DetailRow[] = [
+    ...(format === null ? [] : [{ label: "格式", value: names[format] ?? format }]),
+    ...(card === null ? [] : [{ label: "文件", value: card.path, mono: true }]),
+    ...(card?.subtitle === undefined ? [] : [{ label: "说明", value: card.subtitle }]),
+  ];
+  return rows.length === 0 ? null : rows;
+}
+
 const DOC_FORMAT_NAME: Readonly<Record<string, string>> = {
   docx: "Word",
   pdf: "PDF",
@@ -144,6 +170,15 @@ export const BUILTIN_COMMANDS: Readonly<Record<string, BuiltinCommand>> = {
       return join([path === null ? null : fileLabel(path), record(input)?.["create"] === true ? "新建" : null]);
     },
     pinCard: true,
+    detail: (input, details) => {
+      const card = readCommandCard(details);
+      const path = card?.path ?? str(input, "path");
+      if (path === null) return null;
+      return [
+        { label: "文件", value: path, mono: true },
+        { label: "方式", value: record(input)?.["create"] === true ? "新建空文档并在文件面板打开" : "在文件面板打开" },
+      ];
+    },
   },
   doc_insert_image: {
     label: "插入图片",
@@ -168,12 +203,28 @@ export const BUILTIN_COMMANDS: Readonly<Record<string, BuiltinCommand>> = {
       return join([format === null ? null : (DOC_FORMAT_NAME[format] ?? format), path === null ? null : fileLabel(path)]);
     },
     pinCard: true,
+    detail: (input, details) => exportDetail(input, details, DOC_FORMAT_NAME),
   },
   slides_create: {
     label: "新建演示文稿",
     icon: FEATURE_ICON.slides,
-    summary: (input) => join([str(input, "title"), str(input, "aspect")]),
+    // 摘要 = 标题 · 画幅（没给画幅就是默认的 16:9）；其余（画布尺寸、文件）进展开体
+    summary: (input) => {
+      const title = str(input, "title");
+      const aspect = str(input, "aspect");
+      return title === null && aspect === null ? null : join([title, aspect ?? "16:9"]);
+    },
     pinCard: true,
+    detail: (input, details) => {
+      const aspect = str(input, "aspect") === "4:3" ? "4:3" : "16:9";
+      const canvas = CANVAS_SIZE[aspect];
+      const card = readCommandCard(details);
+      return [
+        { label: "标题", value: str(input, "title") ?? card?.title ?? "" },
+        { label: "画幅", value: `${aspect} · 画布 ${canvas.w}×${canvas.h}` },
+        ...(card === null ? [] : [{ label: "文件", value: card.path, mono: true }]),
+      ].filter((row) => row.value !== "");
+    },
   },
   slides_read: {
     label: "读演示文稿",
@@ -213,6 +264,7 @@ export const BUILTIN_COMMANDS: Readonly<Record<string, BuiltinCommand>> = {
       return join([name, format === "png" && page !== null ? pagesLabel([page]) : null]);
     },
     pinCard: true,
+    detail: (input, details) => exportDetail(input, details, FORMAT_NAME),
   },
 };
 

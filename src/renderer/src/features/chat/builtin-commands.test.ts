@@ -44,7 +44,9 @@ describe("内置命令注册表", () => {
 describe("参数摘要", () => {
   it("slides_create：标题 · 比例", () => {
     assert.equal(toolCallSummary("slides_create", { title: "花园城市新加坡", aspect: "16:9" }), "花园城市新加坡 · 16:9");
-    assert.equal(toolCallSummary("slides_create", { title: "x" }), "x");
+    // 没给画幅 = 默认的 16:9，摘要始终是「标题 · 画幅」，不带别的
+    assert.equal(toolCallSummary("slides_create", { title: "x" }), "x · 16:9");
+    assert.equal(toolCallSummary("slides_create", { title: "x", aspect: "4:3" }), "x · 4:3");
     assert.equal(toolCallSummary("slides_create", {}), null);
     assert.equal(toolCallSummary("slides_create", null), null);
   });
@@ -82,5 +84,37 @@ describe("分组与钉卡", () => {
     assert.ok(PINNED_CARD_COMMANDS.has("slides_create"));
     assert.ok(PINNED_CARD_COMMANDS.has("slides_export"));
     assert.ok(!PINNED_CARD_COMMANDS.has("slides_write"));
+  });
+
+  it("展开体：内置命令给人看的几行，而不是写给模型的结果文本", () => {
+    const card = { kind: "slides", path: "/w/东京.slides.json", title: "东京", subtitle: "演示文稿 · 5 页" };
+    const rows = BUILTIN_COMMANDS["slides_create"]?.detail?.({ title: "东京" }, { card });
+    assert.deepEqual(rows, [
+      { label: "标题", value: "东京" },
+      { label: "画幅", value: "16:9 · 画布 1280×720" },
+      { label: "文件", value: "/w/东京.slides.json", mono: true },
+    ]);
+    const four = BUILTIN_COMMANDS["slides_create"]?.detail?.({ title: "东京", aspect: "4:3" }, undefined);
+    assert.equal(four?.[1]?.value, "4:3 · 画布 960×720");
+    // 没有卡（坏 details）：不编文件路径
+    assert.equal(four?.some((row) => row.label === "文件"), false);
+
+    const exported = BUILTIN_COMMANDS["slides_export"]?.detail?.(
+      { format: "pptx-basic" },
+      { card: { kind: "export", path: "/w/东京-basic.pptx", title: "东京-basic.pptx", subtitle: "PPTX 通用字体 · 7 页" } },
+    );
+    assert.deepEqual(exported, [
+      { label: "格式", value: "PowerPoint · 通用字体" },
+      { label: "文件", value: "/w/东京-basic.pptx", mono: true },
+      { label: "说明", value: "PPTX 通用字体 · 7 页" },
+    ]);
+    // 入参和卡都拿不到：null → 展开体退回原样结果文本
+    assert.equal(BUILTIN_COMMANDS["slides_export"]?.detail?.({}, undefined), null);
+    // 写 / 改没有 detail：展开体仍是通用结果文本
+    assert.equal(BUILTIN_COMMANDS["slides_write"]?.detail, undefined);
+    assert.deepEqual(BUILTIN_COMMANDS["doc_open"]?.detail?.({ path: "/w/a.md", create: true }, undefined), [
+      { label: "文件", value: "/w/a.md", mono: true },
+      { label: "方式", value: "新建空文档并在文件面板打开" },
+    ]);
   });
 });

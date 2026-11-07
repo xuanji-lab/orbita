@@ -27,7 +27,7 @@ import { clampToolBody } from "./tool-body-clamp.ts";
 import { noticeIconBoxStyle, noticeParagraphStyle, noticeTextStyle } from "./notice.ts";
 import { PluginInstallLine } from "../plugins/PluginInstallLine.tsx";
 import { PluginBoardResultView } from "../board/PluginBoardResult.tsx";
-import { builtinCommand, docEditLabel, docEditPath, docEditSection, docEditSummary, toolWord } from "./builtin-commands.ts";
+import { builtinCommand, type DetailRow, docEditLabel, docEditPath, docEditSection, docEditSummary, toolWord } from "./builtin-commands.ts";
 import { getOpenDocumentText } from "../doc-panel/open-document.ts";
 import { CommandCard } from "./CommandCard.tsx";
 import { ExitCard } from "./ExitCard";
@@ -4348,6 +4348,8 @@ function ToolLine(props: {
   // （实测单条最大 479KB），而折叠着的工具行只有两处需要它——展开体（open）与
   // 跑着的 shell 的活尾预览（shellActive）。活跃轮的组行默认铺开，一轮几十个工具时
   // 这条 join 会随每一帧流式更新重跑几十遍，全是白付的分配；落定的成员行更不必说。
+  // 内置命令成功后展开：给人看的几行（失败 / 没有 detail 的命令走原样结果文本）
+  const builtinRows = builtin !== null && finished && !failed && result !== undefined ? (builtin.detail?.(props.input, result.details) ?? null) : null;
   const needBody = open || shellActive;
   const rawBody = needBody && result !== undefined ? toolResultText(result, t) : "";
   // 跑着时只渲染尾部：partial 是累积快照、每帧整条重渲染，万行输出会拖垮 DOM
@@ -4593,7 +4595,8 @@ function ToolLine(props: {
       {open && expandable && diff === null && fileView !== null && (
         <FileContentView text={fileView.text} startLine={fileView.startLine} lang={fileLang} />
       )}
-      {open && expandable && diff === null && fileView === null && (
+      {open && expandable && diff === null && fileView === null && builtinRows !== null && <BuiltinDetailBody rows={builtinRows} />}
+      {open && expandable && diff === null && fileView === null && builtinRows === null && (
         <PlainToolBody
           toolName={props.toolName}
           text={imagelessBody}
@@ -4602,6 +4605,42 @@ function ToolLine(props: {
           images={toolImages}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * 内置命令的展开体：给人看的几行「标题 / 画幅 / 文件」，替代写给模型的原样结果文本
+ * （builtin-commands.ts 的 `detail`）。失败时不走这里——错误原文才有用。
+ */
+function BuiltinDetailBody(props: { rows: readonly DetailRow[] }) {
+  return (
+    <div
+      style={{
+        ...EXPANDED_FRAME,
+        display: "grid",
+        gridTemplateColumns: "auto minmax(0, 1fr)",
+        columnGap: "var(--space-3)",
+        rowGap: "var(--space-1)",
+        padding: "var(--space-2)",
+        fontSize: "var(--font-size-sm)",
+        lineHeight: "var(--line-height-code)",
+      }}
+    >
+      {props.rows.map((row) => (
+        <Fragment key={row.label}>
+          <span style={{ color: "var(--color-text-tertiary)" }}>{row.label}</span>
+          <span
+            style={{
+              color: "var(--color-text-primary)",
+              overflowWrap: "anywhere",
+              ...(row.mono === true ? { fontFamily: "var(--font-family-mono)" } : {}),
+            }}
+          >
+            {row.value}
+          </span>
+        </Fragment>
+      ))}
     </div>
   );
 }
