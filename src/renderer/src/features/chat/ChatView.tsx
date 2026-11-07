@@ -28,6 +28,16 @@ import { clampToolBody } from "./tool-body-clamp.ts";
 import { noticeIconBoxStyle, noticeParagraphStyle, noticeTextStyle } from "./notice.ts";
 import { ExitCard } from "./ExitCard";
 import { PanelButton } from "../../shell/RightPanel";
+import { ProcessViewContext } from "./process-view-context";
+import {
+  CHAPTER_STEPS_SHOWN,
+  SLOW_GAP_MS,
+  TAIL_AFTER_MS,
+  processChapters,
+  processCounts,
+  processLive,
+  type ProcessChapter,
+} from "./turn-process.ts";
 import {
   branchAnchorEntries,
   branchAnchorIds,
@@ -42,6 +52,8 @@ import {
   formatThinkingDuration,
   groupToolUnits,
   groupTurns,
+  groupTurnsByTurn,
+  rollupToolKey,
   indexToolResults,
   interruptedToolCallIds,
   mcpFailureLead,
@@ -76,6 +88,8 @@ import {
   rollupLead,
   turnAssistantRecords,
   turnStats,
+  type ProcessStep,
+  type TurnProcessUnit,
   writeLineCount,
   type ChannelMarkTone,
   type IntraToken,
@@ -1647,8 +1661,18 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
     () => interruptedToolCallIds(records, toolResults, turnActive),
     [records, toolResults, turnActive],
   );
-  // 大折叠：已落定轮次的思考与工具收成一行统计（活跃轮原样铺开，见 groupTurns）
-  const turnView = useMemo(() => groupTurns(entries, turnActive, toolResults), [entries, turnActive, toolResults]);
+  // 过程显示（设置 › 过程显示）：一轮一行 = groupTurnsByTurn（旁白收进块、活跃轮成现场块）；
+  // 逐步铺开 = groupTurns（落定轮按旁白收成几条 Worked，活跃轮原样铺开）
+  const processView = useContext(ProcessViewContext);
+  const turnView = useMemo(
+    () =>
+      processView === "turn"
+        ? groupTurnsByTurn(entries, turnActive, toolResults)
+        : groupTurns(entries, turnActive, toolResults),
+    [entries, turnActive, toolResults, processView],
+  );
+  // 现场块在场且后面没有正文在流时，它自己就是「在干活」的那一行——底下的 Responding 不再重复
+  const liveBlockShown = turnView.some((entry) => entry.kind === "turnProcess" && entry.live && !entry.answering);
   // 流式中的思考块（行首呼吸的判定）：本轮未结束且它是流式 assistant 消息的最后一块
   const activeThinkingKey = useMemo(
     () => streamingThinkingKey(records, turnActive),
@@ -1789,7 +1813,38 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
               </div>
             )}
             <div className={doomed ? "revert-doomed" : "revert-keep"}>
-            {entry.kind === "turnGroup" ? (
+            {entry.kind === "turnProcess" ? (
+              <TurnProcessLine
+                unit={entry}
+                toolResults={toolResults}
+                turnFailed={entry.key === failedFold}
+                skills={props.skills}
+                interruptedCalls={interruptedCalls}
+                renderStep={(step) => (
+                  <EntryView
+                    key={step.key}
+                    entry={step}
+                    toolResults={toolResults}
+                    activeThinkingKey={null}
+                    turnActive={false}
+                    interruptedCalls={interruptedCalls}
+                    onOpenTask={props.onOpenTask}
+                    carryoverCards={carryoverCards}
+                    channel={props.channel}
+                    skills={props.skills}
+                    cwd={props.cwd}
+                    undoneTurnIds={undoneTurnIds}
+                    onUndoTurn={props.onUndoTurn}
+                    actionsBusy={props.actionsBusy}
+                    onOpenReviewAt={props.onOpenReviewAt}
+                    onOpenIntentPanel={props.onOpenIntentPanel}
+                    sessionId={props.sessionId}
+                    onRevertTo={props.onRevertTo}
+                    streamingIds={streamingIds}
+                  />
+                )}
+              />
+            ) : entry.kind === "turnGroup" ? (
               <TurnRollupLine
                 group={entry}
                 toolResults={toolResults}
@@ -1869,7 +1924,11 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
         </div>
       )}
       {props.phase === "turn" &&
-        (props.retry !== null ? <Retrying status={props.retry} /> : <Responding transcript={transcript} />)}
+        (props.retry !== null ? (
+          <Retrying status={props.retry} />
+        ) : liveBlockShown ? null : (
+          <Responding transcript={transcript} />
+        ))}
       {props.phase === "compaction" && (
         <>
           <Compacting />
@@ -3600,6 +3659,194 @@ function BranchRow(props: {
  * 圆角裁边。行首（图标+label）是「状态」本体，副标是注脚（tertiary mono），
  * 状态词是机器事实（xs mono 等宽数字）。
  */
+/**
+ * 「一轮一行」的过程块（设置 › 过程显示 = turn；推导在 turn-process.ts）。
+ *
+ * - **活跃**：定高的现场块——头行（第几步 · 各工具次数 · 失败 · 总用时，每秒走表）、
+ *   当前章节一行、最近三步（越旧越淡）、当前这一步（自带计时；没有工具在跑就是
+ *   「在想 · Ns」）、末行留给输出尾巴或「比平时久」。行数固定，只换字不加行：
+ *   太安静像卡住，太吵像一直在走却不出结果（真链条的节奏见 turn-process.ts 头注释）。
+ * - **落定**：一行结论（写了几个文件 · 几步 · 各工具次数 · 失败 · 用时），展开成按
+ *   旁白切开的章节时间线；每章平铺前几步，点章节看这一章的每一步（原样的工具行）。
+ */
+function TurnProcessLine(props: {
+  unit: TurnProcessUnit;
+  toolResults: ToolResultIndex;
+  turnFailed: boolean;
+  skills: SkillMeta[];
+  interruptedCalls: ReadonlySet<string>;
+  renderStep: (step: ProcessStep) => ReactNode;
+}) {
+  const t = useT();
+  const today = useToday();
+  const { unit } = props;
+  const [open, setOpen] = useState(false);
+  const live = unit.live && !unit.answering;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!unit.live) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [unit.live]);
+  const counts = processCounts(unit.steps, props.toolResults, props.skills);
+  const toolChips = counts.byTool.slice(0, 4).map(({ key, count }) => (
+    <span key={key}>
+      {t.chat.rollupTool(key)} {count}
+    </span>
+  ));
+  const failed = counts.failed > 0 && <span className="proc-bad">{t.chat.processFailed(counts.failed)}</span>;
+  const timeLabel = unit.startedAt !== null && (
+    <div className="turn-start-time" style={{ ...TIME_LABEL, paddingLeft: RAIL_X }} title={fullTimestamp(unit.startedAt, t.chat.timeWeekdays)}>
+      {formatMessageTime(unit.startedAt, today)}
+    </div>
+  );
+
+  if (live) {
+    const snap = processLive(unit, props.toolResults, (call) => toolStartAt(call.toolCallId), props.interruptedCalls);
+    const elapsed = unit.startedAt === null ? null : now - unit.startedAt;
+    const current = snap.now;
+    const runMs =
+      current.kind === "tool"
+        ? current.startedAt === null ? null : now - current.startedAt
+        : current.since === null ? null : now - current.since;
+    let tail: string | null = null;
+    if (current.kind === "tool" && runMs !== null && runMs > TAIL_AFTER_MS) {
+      const result = props.toolResults.get(current.call.toolCallId);
+      if (result !== undefined) tail = tailPreviewLines(toolResultText(result, t), 1, 200)[0] ?? null;
+    }
+    const slow = current.kind === "think" && runMs !== null && runMs > SLOW_GAP_MS;
+    const verb = (toolName: string, input: unknown) => t.chat.rollupTool(rollupToolKey(toolName, input, props.skills));
+    return (
+      <div className="proc-live" aria-live="off">
+        {timeLabel}
+        <div className="proc-head">
+          <Icon name="loader-circle" size={12} strokeWidth={1.8} spin />
+          <span className="proc-strong">{t.chat.processStepAt(Math.max(1, counts.steps))}</span>
+          <span className="proc-num">
+            {toolChips}
+            {failed}
+          </span>
+          {elapsed !== null && <span className="proc-time">{formatRunClock(elapsed)}</span>}
+        </div>
+        <div className={`proc-chapter${snap.chapter?.source === "think" ? " think" : ""}`}>{snap.chapter?.title ?? ""}</div>
+        <div className="proc-trail">
+          {Array.from({ length: 3 - snap.trail.length }, (_, i) => (
+            <div key={`pad${i}`} className="proc-step" aria-hidden="true" />
+          ))}
+          {snap.trail.map((item, index) => (
+            <div key={item.call.toolCallId} className={`proc-step fade-${snap.trail.length - index}`}>
+              <span className={item.failed ? "proc-mark bad" : "proc-mark ok"}>
+                <Icon name={item.failed ? "x" : "check"} size={12} strokeWidth={2} />
+              </span>
+              <span className="proc-verb">{verb(item.call.toolName, item.call.input)}</span>
+              <code>{toolCallSummary(item.call.toolName, item.call.input) ?? ""}</code>
+              {/* 一秒内落定的不标时长：一排 0.0s 是噪音，慢的那几步才值得看 */}
+              {item.ms !== null && item.ms >= 1000 && <span className="proc-dur">{formatToolDuration(item.ms, t)}</span>}
+            </div>
+          ))}
+          <div className="proc-step now">
+            <span className="proc-mark">
+              <Icon name="loader-circle" size={12} strokeWidth={1.8} spin />
+            </span>
+            {current.kind === "tool" ? (
+              <>
+                <span className="proc-verb">{verb(current.call.toolName, current.call.input)}</span>
+                <code>{toolCallSummary(current.call.toolName, current.call.input) ?? ""}</code>
+              </>
+            ) : (
+              <>
+                <span className="proc-verb orbita-breath">{t.chat.processThinking}</span>
+                {/* 章节行已经是这段思考时不重复；章节是旁白时，这里补「此刻在想什么」 */}
+                <code className="proc-preview">{snap.chapter?.source === "think" ? "" : (current.preview ?? "")}</code>
+              </>
+            )}
+            {runMs !== null && <span className="proc-dur">{formatRunClock(runMs)}</span>}
+          </div>
+        </div>
+        <div className={slow ? "proc-foot slow" : "proc-foot"}>{slow ? t.chat.processSlow : (tail ?? "")}</div>
+      </div>
+    );
+  }
+
+  const outcome = [
+    ...(counts.files.length > 0 ? [t.chat.processWrote(counts.files.length)] : []),
+    t.chat.processSteps(counts.steps),
+  ].join(" · ");
+  return (
+    <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
+      {timeLabel}
+      <CollapseRow dense open={open} onToggle={() => setOpen((value) => !value)}>
+        {props.turnFailed && (
+          <span style={{ color: "var(--color-danger)", flex: "0 0 auto" }}>
+            <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
+          </span>
+        )}
+        <span className="proc-head-row">
+          <span className="proc-strong">{outcome}</span>
+          <span className="proc-num">
+            {toolChips}
+            {failed}
+          </span>
+          {unit.durationMs !== null && <span className="proc-time">{formatToolDuration(unit.durationMs, t)}</span>}
+        </span>
+      </CollapseRow>
+      {open && (
+        <ol className="proc-chapters">
+          {processChapters(unit.steps).map((chapter) => (
+            <ProcessChapterItem key={chapter.key} chapter={chapter} {...props} />
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+/** 章节时间线的一章：标题 + 前几步的小标签；点开看这一章的每一步（原样的工具行） */
+function ProcessChapterItem(props: {
+  chapter: ProcessChapter;
+  toolResults: ToolResultIndex;
+  skills: SkillMeta[];
+  renderStep: (step: ProcessStep) => ReactNode;
+}) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const { chapter } = props;
+  const failed = chapter.calls.some((call) => props.toolResults.get(call.toolCallId)?.status === "error");
+  const title =
+    chapter.title ??
+    t.chat.processToolsTitle(
+      processCounts(chapter.steps, props.toolResults, props.skills)
+        .byTool.map(({ key, count }) => t.chat.processToolPart(t.chat.rollupTool(key), count))
+        .join(t.common.listSeparator),
+    );
+  const shown = chapter.calls.slice(0, CHAPTER_STEPS_SHOWN);
+  return (
+    <li className={failed ? "bad" : undefined}>
+      <button
+        type="button"
+        className="proc-chapter-btn"
+        aria-expanded={open}
+        title={t.chat.processChapterSteps}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className={chapter.source === "say" ? "proc-ch-title" : "proc-ch-title think"}>{title}</span>
+        {chapter.calls.length > 0 && (
+          <span className="proc-ch-steps">
+            {shown.map((call) => (
+              <span key={call.toolCallId} className={props.toolResults.get(call.toolCallId)?.status === "error" ? "bad" : undefined}>
+                {t.chat.rollupTool(rollupToolKey(call.toolName, call.input, props.skills))}{" "}
+                {toolCallSummary(call.toolName, call.input) ?? ""}
+              </span>
+            ))}
+            {chapter.calls.length > shown.length && <span>{t.chat.processMore(chapter.calls.length - shown.length)}</span>}
+          </span>
+        )}
+      </button>
+      {open && <div className="proc-ch-body">{chapter.steps.filter((step) => step.kind !== "text").map((step) => props.renderStep(step))}</div>}
+    </li>
+  );
+}
+
 function CollapseRow(props: {
   open: boolean;
   disabled?: boolean;

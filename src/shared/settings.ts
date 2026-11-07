@@ -178,6 +178,9 @@ export interface UsagePetPref {
   hidden?: true;
 }
 
+/** 过程显示的两种形态，见 AppSettings.processView */
+export type ProcessView = "turn" | "steps";
+
 export interface AppSettings {
   theme: ThemePreference;
   /**
@@ -219,6 +222,15 @@ export interface AppSettings {
    * 卡片不受它影响（静音的人同样需要知道任务完了）。只认布尔，同 gitAttribution。
    */
   completionSound?: boolean;
+  /**
+   * 聊天里 agent 的思考与工具调用怎么显示（2026-10-30）。**缺席 = "turn"**：
+   * - "turn"：一轮一行——干活时一块定高的现场块（走表 + 当前这一步），落定收成一行结论，
+   *   展开成按旁白切开的几段（features/chat/turn-process.ts）；
+   * - "steps"：逐步铺开——每次思考 / 工具调用各一行，活跃轮全铺开、落定按旁白收成几条
+   *   Worked（肖志芬的原设计，groupTurns）。
+   * 其余值丢掉。
+   */
+  processView?: ProcessView;
   /**
    * 代用户提交时在 commit / PR 里留下 Orbita 标识。**缺席 = 开启**：默认署名，
    * 不想要的人关一次就够；默认关则绝大多数人不会知道有这件事。
@@ -474,6 +486,7 @@ export function parseSettings(raw: unknown): AppSettings {
     compaction?: unknown;
     collapsePastedText?: unknown;
     completionSound?: unknown;
+    processView?: unknown;
     gitAttribution?: unknown;
     choreModel?: unknown;
     /** 旧键（只管起名的时代）：choreModel 缺席时读它，选过的用户不用重选 */
@@ -542,6 +555,9 @@ export function parseSettings(raw: unknown): AppSettings {
     // 同 gitAttribution 的纪律：非布尔丢掉，缺席 = 折叠（现状）
     ...(typeof record.collapsePastedText === "boolean"
       ? { collapsePastedText: record.collapsePastedText }
+      : {}),
+    ...(record.processView === "turn" || record.processView === "steps"
+      ? { processView: record.processView }
       : {}),
     // 同上：非布尔丢掉，缺席 = 响
     ...(typeof record.completionSound === "boolean"
