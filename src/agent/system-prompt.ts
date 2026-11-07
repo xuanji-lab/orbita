@@ -6,7 +6,7 @@
  * 父子会话清单不进系统提示词，对方工作台由 delegate 回执和通道信封告知。
  */
 import type { TurnDirectories } from "../shared/agent-ipc.ts";
-import { COMMAND_TIMEOUT_FLOOR_SECONDS, type PermissionMode } from "../shared/permission.ts";
+import { COMMAND_TIMEOUT_DEFAULT_SECONDS, COMMAND_TIMEOUT_FLOOR_SECONDS, type PermissionMode } from "../shared/permission.ts";
 import { QUOTE_GUIDELINE } from "../shared/quote.ts";
 import type { Language } from "../shared/settings.ts";
 import { INTENT_CONTEXT_GUIDELINE } from "../shared/intent-recall.ts";
@@ -18,9 +18,15 @@ import { gitAttributionGuideline } from "./git-attribution.ts";
 import { REPLY_LANGUAGE_GUIDELINE } from "./prompt-narration.ts";
 import { MEMORY_TOOLS_GUIDELINE } from "./memory-tools.ts";
 
+/**
+ * bash 的 timeout 指引。数字与权限闸门同源（shared 的 `gatedCommandTimeout`）：小于下限的抬到下限，
+ * 不填的补默认上限。后半句要讲：模型不知道有这条上限，就会把真要跑一小时以上的命令（长训练、
+ * 大构建）也不带 timeout 发出去，到点被杀。
+ */
 const TOOL_GUIDELINES =
-  "For commands that may take a while (installing dependencies, builds, tests), do not pass a timeout to bash/powershell: " +
-  `these are slow on Windows and a short timeout kills a normal slow command halfway; values under ${COMMAND_TIMEOUT_FLOOR_SECONDS} seconds are ignored anyway.`;
+  "For commands that may take a while (installing dependencies, builds, tests), do not pass a short timeout to bash/powershell: " +
+  `these are slow on Windows and a short timeout kills a normal slow command halfway; values under ${COMMAND_TIMEOUT_FLOOR_SECONDS} seconds are raised to ${COMMAND_TIMEOUT_FLOOR_SECONDS}. ` +
+  `A command without a timeout is stopped after ${COMMAND_TIMEOUT_DEFAULT_SECONDS} seconds; pass a larger timeout only when a command really needs to run longer than that.`;
 
 const EXPECTED_SECONDS_GUIDELINE =
   "When calling bash/powershell with a command you expect to run longer than 10 seconds (tests, builds, installs, sleep, " +
