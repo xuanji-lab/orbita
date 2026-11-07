@@ -113,7 +113,7 @@ export function createDocTools(broker: RequestBroker, sessionId: string, options
     label: "doc_open",
     description:
       "Open a document (.md / .markdown / .txt) in the Files panel and return its outline (headings with line numbers). " +
-      "Use it before editing a document with read / edit / write — the panel shows your edits live. create:true makes a new empty document (never overwrites). " +
+      "Use it whenever the user asks to open / show / work on a document, before editing it with read / edit / write — the panel shows your edits live. create:true makes a new empty document (never overwrites). " +
       "Before the first doc_* call in a conversation, read the `docs` skill (Obsidian syntax, image and export rules).",
     parameters: {
       type: "object",

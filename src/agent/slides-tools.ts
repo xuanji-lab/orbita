@@ -134,7 +134,7 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
     label: "slides_create",
     description:
       "Create a presentation (<name>.slides.json) and open it in the right panel; it starts empty — fill it with slides_write. " +
-      "Use it, not markdown / html, whenever the user wants slides / a deck. Pick a theme that fits the topic. " +
+      "Use it, not markdown or html files, whenever the user wants a presentation / slides / a deck / a PPT / a talk. Pick a theme that fits the topic. " +
       SKILL_HINT,
     parameters: {
       type: "object",
