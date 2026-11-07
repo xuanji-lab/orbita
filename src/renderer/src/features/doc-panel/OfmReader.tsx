@@ -14,6 +14,8 @@ import type { PluggableList } from "unified";
 import "katex/dist/katex.min.css";
 import type { OfmResolved } from "../../../../shared/doc.ts";
 import { rehypeCalloutKind } from "../../../../shared/ofm/rehype-callout-kind.ts";
+import { rehypeSourceLines } from "../../../../shared/ofm/rehype-source-lines.ts";
+import { plainParagraphs } from "./read-quote.ts";
 import { remarkOfm } from "../../../../shared/ofm/remark-ofm.ts";
 import { normalizeEmphasisInnerSpace } from "../chat/emphasis-space.ts";
 import { MdPre } from "../chat/CodeBlock";
@@ -71,7 +73,7 @@ const REMARK: PluggableList = [
   remarkDemoteBoundaryMath,
   [remarkOfm, { properties: true }],
 ];
-const REHYPE: PluggableList = [rehypeRaw, [rehypeSanitize, SCHEMA], rehypeCallouts, rehypeCalloutKind, KATEX];
+const REHYPE: PluggableList = [rehypeRaw, [rehypeSanitize, SCHEMA], rehypeCallouts, rehypeCalloutKind, KATEX, rehypeSourceLines];
 
 type Props<T extends keyof React.JSX.IntrinsicElements> = ComponentPropsWithoutRef<T> & { node?: unknown };
 
@@ -246,8 +248,10 @@ export const OfmReader = memo(function OfmReader(props: { text: string; env: Ofm
 export function PlainTextReader(props: { text: string }) {
   return (
     <div className="chat-md ofm-doc ofm-plain-text" data-script={dominantScript(props.text)}>
-      {props.text.split(/\n{2,}/).map((paragraph, index) => (
-        <p key={index}>{paragraph}</p>
+      {plainParagraphs(props.text).map((paragraph, index) => (
+        <p key={index} data-sl={paragraph.sl} data-el={paragraph.el}>
+          {paragraph.text}
+        </p>
       ))}
     </div>
   );

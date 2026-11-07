@@ -19,6 +19,7 @@ import { useOpenDoc } from "./useOpenDoc.ts";
 import { useDocPaper } from "./doc-paper.ts";
 import { setOpenDocument } from "./open-document.ts";
 import { DocView } from "./DocView";
+import { useReadQuote } from "./useReadQuote";
 import { OfmReader, PlainTextReader } from "./OfmReader";
 import { createTargetResolver } from "./ofm-targets.ts";
 import type { OfmEnv } from "./ofm-env.ts";
@@ -531,7 +532,13 @@ function MarkdownEditPane(props: DocEditPaneProps) {
         />
       ) : (
         viewMode === "read" ? (
-          <DocReadBody text={readText} plain={plainText} env={env} />
+          <DocReadBody
+            text={readText}
+            plain={plainText}
+            env={env}
+            path={path}
+            {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
+          />
         ) : (
           <DocView
             session={doc.session}
@@ -550,13 +557,27 @@ function MarkdownEditPane(props: DocEditPaneProps) {
   );
 }
 
-/** 阅读视图：一页纸（与编辑视图同一个 .dp-page，纸面主题一并生效） */
-function DocReadBody(props: { text: string; plain: boolean; env: OfmEnv }) {
+/** 阅读视图：一页纸（与编辑视图同一个 .dp-page，纸面主题一并生效）；划选 → 复制 / 引用浮条（引用给源码原文与行号） */
+function DocReadBody(props: {
+  text: string;
+  plain: boolean;
+  env: OfmEnv;
+  path: string;
+  onQuote?: (quote: TextQuote) => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const toolbar = useReadQuote({
+    path: props.path,
+    text: props.text,
+    scrollRef,
+    ...(props.onQuote === undefined ? {} : { onQuote: props.onQuote }),
+  });
   return (
-    <div className="dp-scroll">
+    <div className="dp-scroll" ref={scrollRef}>
       <div className="dp-page dp-read">
         {props.plain ? <PlainTextReader text={props.text} /> : <OfmReader text={props.text} env={props.env} />}
       </div>
+      {toolbar}
     </div>
   );
 }
