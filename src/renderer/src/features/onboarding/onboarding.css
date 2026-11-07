@@ -340,7 +340,7 @@
 .ob-copy {
   display: grid;
   gap: var(--space-3);
-  align-content: center;
+  align-content: safe center; /* 溢出时退回顶对齐：center 会把溢出的上半截推到滚不到的地方（Windows 1200×800 第 06 章第 4 页标题被裁） */
   min-width: 0;
   max-height: 100%;
   overflow-y: auto;
