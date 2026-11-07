@@ -27,6 +27,8 @@ import { clampToolBody } from "./tool-body-clamp.ts";
 import { noticeIconBoxStyle, noticeParagraphStyle, noticeTextStyle } from "./notice.ts";
 import { PluginInstallLine } from "../plugins/PluginInstallLine.tsx";
 import { PluginBoardResultView } from "../board/PluginBoardResult.tsx";
+import { builtinCommand } from "./builtin-commands.ts";
+import { CommandCard } from "./CommandCard.tsx";
 import { ExitCard } from "./ExitCard";
 import { PanelButton } from "../../shell/RightPanel";
 import { ProcessViewContext } from "./process-view-context";
@@ -4118,8 +4120,9 @@ function toolIcon(toolName: string): IconName {
     case "browser_press":
       return "globe";
     default:
+      // 内置命令（builtin-commands.ts）：图标由注册表项给
       // MCP 工具（mcp__server__tool）：专属插头图标——外部能力，与内置工具一眼区分
-      return parseQualifiedToolName(toolName) !== null ? "plug" : "wrench";
+      return builtinCommand(toolName)?.icon ?? (parseQualifiedToolName(toolName) !== null ? "plug" : "wrench");
   }
 }
 
@@ -4311,6 +4314,7 @@ function ToolLine(props: {
       : null;
   const summary = mcp === null ? summarizeToolResult(result, t) : summarizeMcpResult(result, t);
   const callSummary = toolCallSummary(props.toolName, props.input);
+  const builtin = builtinCommand(props.toolName);
   // 路径类工具的摘要只显示文件名——Windows 上模型几乎总传绝对路径，整条 C:\... 是噪音；
   // 完整路径进 tooltip。toolCallSummary 本身保持原始 path 语义（editGroupFileCount 靠它去重）
   const pathTool =
@@ -4478,9 +4482,13 @@ function ToolLine(props: {
               strokeWidth={1.8}
             />
           </span>
-          <span style={headLabel(active)}>
-            {props.toolName}
-          </span>
+          {builtin !== null ? (
+            <span className="command-pill" style={headLabel(active)}>
+              {builtin.label}
+            </span>
+          ) : (
+            <span style={headLabel(active)}>{props.toolName}</span>
+          )}
         </span>
         {callLabel !== null && (
           <span
@@ -4542,6 +4550,8 @@ function ToolLine(props: {
           </button>
         )}
       </CollapseRow>
+      {/* 内置命令的完成卡（pinCard 的命令，如 slides_create）：折叠之外、点击在右栏打开 */}
+      {builtin?.pinCard === true && finished && !failed && <CommandCard details={result?.details} />}
       {/* 活尾预览：跑着的 shell 有流式输出时，折叠行下贴几行末尾——「它在动」
           不展开也看得见。与展开体同一个圆角虚线框（用户 2026-10-12：从开始显示
           活尾的那一刻起就该有框，无框的裸文本像渲染错误）；行也走展开体同一套

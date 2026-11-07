@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { docTitle, type DocKind, type DocListEntry } from "@shared/doc";
 import type { TextQuote } from "@shared/quote";
 import { api } from "../../api";
@@ -23,6 +23,8 @@ export function DocsPanel(props: {
   sessionId: string | null;
   workspaceId: string | null;
   onQuote?: (quote: TextQuote) => void;
+  /** 内置命令（agent 新建 / 打开、聊天里的卡）要求打开某份：nonce 变了就打开 path */
+  openRequest?: { path: string; nonce: number } | null;
 }) {
   const t = useT();
   const { kind, workspaceId } = props;
@@ -35,6 +37,10 @@ export function DocsPanel(props: {
   const [listError, setListError] = useState<string | null>(null);
   const [openPath, setOpenPath] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  // 外部要求打开的路径：挂载时的列表回调不能再用「上次打开的」把它盖掉
+  const requested = props.openRequest?.path ?? null;
+  const requestedRef = useRef<string | null>(requested);
+  requestedRef.current = requested;
 
   const reload = useCallback(async (): Promise<DocListEntry[]> => {
     try {
@@ -57,6 +63,7 @@ export function DocsPanel(props: {
     setEntries(null);
     void reload().then((mine) => {
       if (!alive) return;
+      if (requestedRef.current !== null) return;
       const last = getLast(scope);
       if (last !== null && mine.some((entry) => entry.path === last)) setOpenPath(last);
     });
@@ -70,6 +77,17 @@ export function DocsPanel(props: {
     setActionError(null);
     setOpenPath(path);
   };
+  const nonce = props.openRequest?.nonce ?? null;
+  useEffect(() => {
+    if (requested !== null) {
+      setLast(scope, requested);
+      setActionError(null);
+      setOpenPath(requested);
+      void reload();
+    }
+    // nonce 是触发器：同一路径再次请求也要重开（比如用户关了又点卡）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nonce]);
   const close = (): void => {
     setLast(scope, null);
     setOpenPath(null);

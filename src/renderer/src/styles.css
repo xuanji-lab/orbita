@@ -5901,3 +5901,75 @@ mark.intent-mark {
   flex: 0 0 auto;
   margin-top: var(--space-0-5);
 }
+
+/* 内置命令的完成卡（features/chat/CommandCard.tsx）：图标 + 标题 + 副标题 + 「在右栏打开」。
+   骨架同 FileTurnCard（chat-card-bg + subtle 边 + radius-md）；accent 不用——它不是主操作。 */
+.command-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-3);
+  background: var(--color-chat-card-bg);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.command-card:disabled {
+  cursor: default;
+}
+.command-card:not(:disabled):hover {
+  border-color: var(--color-border-strong);
+}
+.command-card:focus-visible {
+  outline: 2px solid var(--color-border-strong);
+  outline-offset: 2px;
+}
+.command-card-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+}
+.command-card-text {
+  display: grid;
+  flex: 1 1 auto;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.command-card-title {
+  overflow: hidden;
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.command-card-sub {
+  overflow: hidden;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.command-card-open {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+.command-pill {
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-muted);
+}

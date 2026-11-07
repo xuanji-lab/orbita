@@ -2179,6 +2179,7 @@ export const en = {
     tools: (n: number) => `tools ${n}`,
     failedCount: (n: number) => `${n} failed`,
     toolInterrupted: "Interrupted · not run",
+    commandCardOpen: "Open in panel",
     interruptedCount: (n: number) => `${n} interrupted`,
     toolRead: "Read",
     toolSearch: "Search",
