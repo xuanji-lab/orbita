@@ -1922,6 +1922,28 @@ body {
  * （--shiki-dark），见下方 pre.shiki 规则。
  */
 
+/* 提示行的出口（ChatView 的 Notice exit）：句尾一个文字按钮——主墨、半粗、发丝下划线，
+   与句子同字级；不做成按钮块，提示仍是安静的一行 */
+.notice-exit {
+  margin-left: var(--space-1-5);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+  text-decoration-color: var(--color-border-strong);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.notice-exit:hover {
+  text-decoration-color: currentColor;
+}
+
 /* 正文落在血线上：agent 回复的段落与卡内文字、输入框里的字同一个左起点（--content-hem）。
    只缩左边——右缘照旧贴满整列（agent 回复不留右白，2026-10-10 裁决） */
 .assistant-prose {
