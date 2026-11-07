@@ -123,4 +123,23 @@ describe("buildPptx", () => {
     const zip = await unzip(buffer);
     assert.match(await text(zip, "ppt/presentation.xml"), /<p:sldSz cx="9144000" cy="6858000"/);
   });
+
+  it("居中的项目符号段落：标记是段落属性（algn=ctr + buChar），跟着文字居中，不是钉在框左边", async () => {
+    const deck = applyWrite(createDeck({ title: "居中列表" }), [
+      {
+        at: 1,
+        elements: [
+          { kind: "text", html: "<ul><li>全年皆宜</li><li>地铁便捷</li></ul>", x: 80, y: 80, w: 800, h: 300, align: "center" },
+          { kind: "text", html: "<ul><li>靠左</li></ul>", x: 80, y: 420, w: 800, h: 100, align: "left" },
+        ],
+      },
+    ]).deck;
+    const zip = await unzip(await buildPptx(deck, { basicFonts: false, assets: new Map() }));
+    const xml = await text(zip, "ppt/slides/slide1.xml");
+    const paragraphs = xml.match(/<a:p>.*?<\/a:p>/gs) ?? [];
+    const center = paragraphs.filter((p) => /algn="ctr"/.test(p) && /<a:buChar/.test(p));
+    assert.equal(center.length, 2, "两条居中列表项都带项目符号");
+    const left = paragraphs.filter((p) => /algn="l"/.test(p) && /<a:buChar/.test(p));
+    assert.equal(left.length, 1);
+  });
 });

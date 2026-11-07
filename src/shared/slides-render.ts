@@ -40,6 +40,8 @@ export const SLIDE_CSS = `
 .sl-rich{min-height:1em;white-space:pre-wrap}
 .sl-rich ul,.sl-rich ol{margin:0;padding-left:1.3em}
 .sl-rich li{margin:0}
+/* 居中 / 右对齐的文字里，列表标记跟着文字走（inside），而不是钉在框的最左边；左对齐保留悬挂缩进 */
+.sl-text[data-align="center"] .sl-rich ul,.sl-text[data-align="center"] .sl-rich ol,.sl-text[data-align="right"] .sl-rich ul,.sl-text[data-align="right"] .sl-rich ol{padding-left:0;list-style-position:inside}
 .sl-table{width:100%;height:100%;border-collapse:collapse;table-layout:fixed}
 .sl-table td,.sl-table th{padding:6px 12px;vertical-align:middle;text-align:left;overflow-wrap:anywhere;border-width:1px;border-style:solid}
 .sl-table th{font-weight:700}
@@ -69,7 +71,7 @@ function textInner(element: TextElement, deck: RenderContext["deck"]): string {
   const justify = element.valign === "middle" ? "center" : element.valign === "bottom" ? "flex-end" : "flex-start";
   const style = `justify-content:${justify};text-align:${element.align};font-family:${escapeHtml(fontOf(element, deck))};font-size:${n(element.fontSize)}px;color:${element.color}`;
   // html 已在写入 / 读入时 sanitize；这里不再二次转义（那会把 <b> 变成文字）
-  return `<div class="sl-text" style="${style}"><div class="sl-rich">${element.html}</div></div>`;
+  return `<div class="sl-text" data-align="${element.align}" style="${style}"><div class="sl-rich">${element.html}</div></div>`;
 }
 
 function imageInner(element: ImageElement, ctx: RenderContext): string {

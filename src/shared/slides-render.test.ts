@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { applyWrite, createDeck } from "./slides-ops.ts";
-import { renderDeckDocument, renderSlide } from "./slides-render.ts";
+import { renderDeckDocument, renderSlide, SLIDE_CSS } from "./slides-render.ts";
 
 const ctxFor = (deck: ReturnType<typeof createDeck>) => ({
   deck,
@@ -65,5 +65,31 @@ describe("renderDeckDocument", () => {
     const doc = renderDeckDocument(two, ctxFor(two), "png", 1);
     assert.equal((doc.match(/<section class="sl"/g) ?? []).length, 1);
     assert.match(doc, /width:2560px;height:1440px/);
+  });
+});
+
+describe("居中文字里的列表标记跟着文字走", () => {
+  const listDeck = applyWrite(createDeck({ title: "列表" }), [
+    {
+      at: 1,
+      elements: [
+        { kind: "text", html: "<ul><li>全年皆宜</li><li>地铁便捷</li></ul>", x: 80, y: 80, w: 800, h: 300, align: "center" },
+        { kind: "text", html: "<ol><li>一</li></ol>", x: 80, y: 400, w: 800, h: 100, align: "right" },
+        { kind: "text", html: "<ul><li>左对齐</li></ul>", x: 80, y: 520, w: 800, h: 100, align: "left" },
+      ],
+    },
+  ]).deck;
+  const html = renderSlide(listDeck.slides[0]!, ctxFor(listDeck));
+
+  it("每个文字块带 data-align，居中 / 右对齐的列表用 inside 并去掉左缩进，左对齐保留悬挂缩进", () => {
+    assert.match(html, /class="sl-text" data-align="center"/);
+    assert.match(html, /class="sl-text" data-align="right"/);
+    assert.match(html, /class="sl-text" data-align="left"/);
+    assert.match(
+      SLIDE_CSS,
+      /\.sl-text\[data-align="center"\] \.sl-rich ul[^{]*\{padding-left:0;list-style-position:inside\}/,
+    );
+    assert.ok(!/data-align="left"\] \.sl-rich/.test(SLIDE_CSS), "左对齐不该被 inside 规则命中");
+    assert.match(SLIDE_CSS, /\.sl-rich ul,\.sl-rich ol\{margin:0;padding-left:1\.3em\}/);
   });
 });
