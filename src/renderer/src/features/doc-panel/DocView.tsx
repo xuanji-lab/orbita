@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { TextQuote } from "@shared/quote";
 import { useT } from "../../locale.ts";
-import { DocEditor, type DocEditorHandle, type EditorSelectionInfo } from "./DocEditor";
+import { DocEditor, type DocEditorHandle, type EditorSelectionInfo, type EditorView_ } from "./DocEditor";
+import type { OfmEnv } from "./ofm-env.ts";
 import type { DocSession, ExternalChange } from "./doc-session.ts";
 import { quoteOfSelection } from "./doc-quote.ts";
 import { useQuoteCandidate } from "./useQuoteCandidate";
@@ -16,6 +17,10 @@ export function DocView(props: {
   handleRef: { current: DocEditorHandle | null };
   externalRef: { current: (change: ExternalChange) => void };
   onQuote?: (quote: TextQuote) => void;
+  /** 编辑器外观：实时预览 / 源码 / 纯文本；缺省实时预览 */
+  view?: EditorView_;
+  ofm?: { env: OfmEnv; missingText: (name: string) => string };
+  onImages?: (files: File[]) => void;
 }) {
   const t = useT();
   const { session, path, handleRef, externalRef } = props;
@@ -106,6 +111,9 @@ export function DocView(props: {
           handleRef={handleRef}
           ariaLabel={t.doc.editorLabel}
           documentMode
+          {...(props.view === undefined ? {} : { view: props.view })}
+          {...(props.ofm === undefined ? {} : { ofm: props.ofm })}
+          {...(props.onImages === undefined ? {} : { onImages: props.onImages })}
           restoreTracked={restored.current}
           onDestroy={(snapshot) => saveTracked(path, snapshot)}
         />

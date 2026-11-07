@@ -41,7 +41,7 @@ function num(input: unknown, key: string): number | null {
 /** 路径取文件名；演示文稿去掉 .slides.json，让摘要读起来是「标题」而不是文件名 */
 export function fileLabel(path: string): string {
   const name = path.split(/[\\/]/).pop() ?? path;
-  return name.replace(/\.slides\.json$/i, "").replace(/\.md$/i, "");
+  return name.replace(/\.slides\.json$/i, "").replace(/\.(?:md|markdown|txt)$/i, "");
 }
 
 /** 1-based 页号集合 → 「第 3 页」「第 1–5 页」「第 1、3、5 页」 */
@@ -128,7 +128,47 @@ const FORMAT_NAME: Readonly<Record<string, string>> = {
   "pptx-basic": "PowerPoint · 通用字体",
 };
 
+const DOC_FORMAT_NAME: Readonly<Record<string, string>> = {
+  docx: "Word",
+  pdf: "PDF",
+  md: "Markdown",
+  "md-plain": "Markdown · 通用格式",
+};
+
 export const BUILTIN_COMMANDS: Readonly<Record<string, BuiltinCommand>> = {
+  doc_open: {
+    label: "打开文档",
+    icon: FEATURE_ICON.doc,
+    summary: (input) => {
+      const path = str(input, "path");
+      return join([path === null ? null : fileLabel(path), record(input)?.["create"] === true ? "新建" : null]);
+    },
+    pinCard: true,
+  },
+  doc_insert_image: {
+    label: "插入图片",
+    icon: "image",
+    summary: (input) => {
+      const path = str(input, "path");
+      const image = str(input, "image_path");
+      const line = num(input, "after_line");
+      return join([
+        path === null ? null : fileLabel(path),
+        image === null ? null : (image.split(/[\\/]/).pop() ?? image),
+        line === null ? null : `第 ${line} 行后`,
+      ]);
+    },
+  },
+  doc_export: {
+    label: "导出文档",
+    icon: "download",
+    summary: (input) => {
+      const path = str(input, "path");
+      const format = str(input, "format");
+      return join([format === null ? null : (DOC_FORMAT_NAME[format] ?? format), path === null ? null : fileLabel(path)]);
+    },
+    pinCard: true,
+  },
   slides_create: {
     label: "新建演示文稿",
     icon: FEATURE_ICON.slides,
@@ -175,6 +215,25 @@ export const BUILTIN_COMMANDS: Readonly<Record<string, BuiltinCommand>> = {
     pinCard: true,
   },
 };
+
+/**
+ * 文档正文的改写仍是通用的 edit / write（`.md` 是真身）；落在文档文件（.md / .markdown / .txt）上时
+ * 过程行的药丸写「改文档 / 写文档」而不是英文工具名。只改药丸文字，分组、diff 统计、展开体都照旧。
+ */
+export function docEditLabel(toolName: string, input: unknown): string | null {
+  if (toolName !== "edit" && toolName !== "write") return null;
+  const path = str(input, "path");
+  if (path === null || !/\.(?:md|markdown|txt)$/i.test(path)) return null;
+  return toolName === "edit" ? "改文档" : "写文档";
+}
+
+/**
+ * 统计 / 步骤行里的「工具词」：内置命令写中文名（不是 `doc_export` 这种英文 id），落在文档上的 edit / write
+ * 写「改文档 / 写文档」（给了 input 才认得出），其余走原来的词表。
+ */
+export function toolWord(rollupTool: (key: string) => string, key: string, input?: unknown): string {
+  return docEditLabel(key, input) ?? builtinCommand(key)?.label ?? rollupTool(key);
+}
 
 export function builtinCommand(toolName: string): BuiltinCommand | null {
   return Object.hasOwn(BUILTIN_COMMANDS, toolName) ? (BUILTIN_COMMANDS[toolName] as BuiltinCommand) : null;

@@ -237,7 +237,7 @@ export const flashField = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 });
 
-/** markdown 语言 + 所见即所得外观 */
+/** markdown 语言 + 所见即所得外观（agent 改动的标绿 `flashField` 由 DocEditor 常驻装，各外观共用） */
 export function liveMarkdown() {
-  return [markdown({ base: markdownLanguage, addKeymap: false }), livePlugin, flashField];
+  return [markdown({ base: markdownLanguage, addKeymap: false }), livePlugin];
 }

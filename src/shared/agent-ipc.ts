@@ -21,6 +21,7 @@ import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
 import type { SlidesAgentRequest, SlidesOutcome } from "./slides-export.ts";
+import type { DocAgentRequest, DocOutcome } from "./doc.ts";
 import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
 import type {
   ChannelDelivery,
@@ -312,7 +313,7 @@ export const ipcChannels = {
   docChanged: "doc:changed",
   /** 另存为：把当前文字存成新文件（先弹保存对话框）；原文件只读 / 被删时的出路 */
   docSaveAs: "doc:save-as",
-  /** 导出：文档 → docx，演示文稿 → PDF（先弹保存对话框） */
+  /** 导出：演示文稿 → PDF（先弹保存对话框） */
   docExport: "doc:export",
   /** 演示文稿 v2 导出：pdf / html / 当前页 png / pptx（保留字体 · 通用字体）；先弹保存对话框（`SlidesExportRequest`） */
   slidesExport: "slides:export",
@@ -322,6 +323,12 @@ export const ipcChannels = {
   slidesReadAsset: "slides:read-asset",
   /** 演示文稿 v2：把用户拖入 / 粘贴 / 选择的图片字节复制进 `<名字>.assets/`，回相对路径与尺寸 */
   slidesAddAsset: "slides:add-asset",
+  /** 文档导出：docx / pdf / md / 通用 md（先弹保存对话框） */
+  docExportDoc: "doc:export-doc",
+  /** 解析文档里的双链 / 图片目标（工作区同目录优先、再同名文件） */
+  docOfmResolve: "doc:ofm-resolve",
+  /** 插图：复制进附件目录，回要插入的 markdown */
+  docInsertImage: "doc:insert-image",
   /** 遗留事项（收尾仪式收割）：全部清单。侧栏面板、角标与「Has todos」筛选都吃它，按 sourceSessionId 现算 */
   carryoverList: "carryover:list",
   /** 每日 token 用量：最近 7 天（含今天，旧的在前；载荷形状在 shared/usage.ts）。回 `UsageDayTotal[]`，回填还在跑时可能是全 0——跑完会经 usage:event 推一份真值 */
@@ -1175,6 +1182,8 @@ export type AgentCommand =
   | ({ type: "browserResult"; requestId: string } & BrowserToolOutcome)
   /** 演示文稿：主进程对 slidesRequest 的回执（browserResult 同款 ok 双分支） */
   | ({ type: "slidesResult"; requestId: string } & SlidesOutcome)
+  /** 文档导出：主进程对 docRequest 的回执（browserResult 同款 ok 双分支） */
+  | ({ type: "docResult"; requestId: string } & DocOutcome)
   /** 终端：主进程对 terminalRequest 的回执（browserResult 同款） */
   | ({ type: "terminalResult"; requestId: string } & TerminalToolOutcome)
   /** 子会话：主进程对 delegateRequest 的回执（requestId 问答，readTaskResult 同款） */
@@ -1481,6 +1490,11 @@ export type AgentEvent =
    * 回 terminalResult。
    */
   | { type: "terminalRequest"; requestId: string; sessionId: string; request: TerminalToolRequest }
+  /**
+   * 文档导出：agent 的 `doc_export` 请求（形状见 shared/doc.ts 的 DocAgentRequest）。
+   * 导出在主进程（PDF 要隐藏窗口，agent 进程不碰 electron）；路径白名单按会话的根现算。回 docResult。
+   */
+  | { type: "docRequest"; requestId: string; sessionId: string; workspaceId: string | null; request: DocAgentRequest }
   /**
    * 子会话：父模型的 delegate 工具请求。**建会话在主进程**（agent 进程不碰
    * userData，readTaskRequest 同一条边界）：主进程建子会话（parentId = sessionId、

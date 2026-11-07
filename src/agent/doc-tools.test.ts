@@ -1,0 +1,147 @@
+import { after, before, describe, it } from "node:test";
+import assert from "node:assert/strict";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { readCommandCard, readOpenPanel } from "../shared/builtin-command.ts";
+import { createDocTools, outlineOf } from "./doc-tools.ts";
+import { RequestBroker } from "./request-broker.ts";
+
+const PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+let dir = "";
+let outside = "";
+let mode = "skip";
+const sent: Record<string, unknown>[] = [];
+let reply: (event: Record<string, unknown>) => unknown = () => ({ ok: false, error: "no reply" });
+
+let tools: Record<string, ToolDefinition> = {};
+
+before(async () => {
+  dir = await realpath(await mkdtemp(join(tmpdir(), "doc-tools-")));
+  outside = await realpath(await mkdtemp(join(tmpdir(), "doc-tools-out-")));
+  await mkdir(join(dir, "周报"), { recursive: true });
+  await writeFile(join(dir, "周报", "w.md"), "---\ntags: [a]\n---\n# 周报\n\n正文\n\n## 小节\n\n```\n# 不是标题\n```\n");
+  await writeFile(join(dir, "pic.png"), PNG);
+  await writeFile(join(outside, "secret.md"), "x");
+  const broker: RequestBroker = new RequestBroker((event) => {
+    const e = event as Record<string, unknown>;
+    sent.push(e);
+    queueMicrotask(() => broker.resolve(e["requestId"] as string, reply(e)));
+  });
+  const list = createDocTools(broker, "s1", { cwd: dir, writeRoots: [dir], workspaceId: "w1", mode: () => mode });
+  tools = Object.fromEntries(list.map((tool) => [tool.name, tool]));
+});
+after(async () => {
+  await rm(dir, { recursive: true, force: true });
+  await rm(outside, { recursive: true, force: true });
+});
+
+const run = async (name: string, params: Record<string, unknown>) => {
+  const tool = tools[name] as ToolDefinition;
+  return (await tool.execute("c1", params as never, undefined as never, undefined as never, undefined as never)) as {
+    content: { type: string; text: string }[];
+    details?: Record<string, unknown>;
+  };
+};
+const textOf = (r: { content: { text: string }[] }): string => r.content.map((c) => c.text).join("");
+
+describe("doc_open", () => {
+  it("返回大纲（跳过 frontmatter 与围栏里的 #），details 带 openPanel(files) 与卡", async () => {
+    const result = await run("doc_open", { path: "周报/w.md" });
+    const text = textOf(result);
+    assert.match(text, /L4 # 周报/);
+    assert.match(text, / {2}L8 ## 小节/);
+    assert.equal(text.includes("不是标题"), false);
+    const open = readOpenPanel(result.details);
+    assert.deepEqual(open, { kind: "files", path: join(dir, "周报", "w.md") });
+    const card = readCommandCard(result.details);
+    assert.equal(card?.kind, "doc");
+    assert.equal(card?.title, "w");
+    assert.match(card?.subtitle ?? "", /周报\/w\.md · 12 行/);
+  });
+
+  it("create:true 新建空文档（force 打开）；已存在不覆盖；plan 档拒绝新建", async () => {
+    const created = await run("doc_open", { path: "新笔记.md", create: true });
+    assert.match(textOf(created), /Created and opened/);
+    assert.equal(readOpenPanel(created.details)?.force, true);
+    assert.equal(await readFile(join(dir, "新笔记.md"), "utf8"), "");
+    await writeFile(join(dir, "新笔记.md"), "# 已有内容\n");
+    const again = await run("doc_open", { path: "新笔记.md", create: true });
+    assert.match(textOf(again), /^Opened/);
+    assert.equal(await readFile(join(dir, "新笔记.md"), "utf8"), "# 已有内容\n");
+    mode = "plan";
+    await assert.rejects(run("doc_open", { path: "plan.md", create: true }), /Plan mode/);
+    mode = "skip";
+  });
+
+  it("拒绝：根外、非文档扩展名、不存在（没给 create）、越界相对路径", async () => {
+    await assert.rejects(run("doc_open", { path: join(outside, "secret.md") }), /inside the workspace/);
+    await assert.rejects(run("doc_open", { path: "../x.md" }), /inside the workspace/);
+    await assert.rejects(run("doc_open", { path: "a.png" }), /must end with/);
+    await assert.rejects(run("doc_open", { path: "没有.md" }), /not found/i);
+    await assert.rejects(run("doc_open", {}), /required/);
+  });
+
+  it("大纲函数的边界", () => {
+    assert.deepEqual(outlineOf(""), []);
+    assert.deepEqual(outlineOf("# a\n```\n# b\n```\n## c"), [
+      { line: 1, level: 1, title: "a" },
+      { line: 5, level: 2, title: "c" },
+    ]);
+  });
+});
+
+describe("doc_insert_image", () => {
+  it("复制进 attachments/，图片自成一段，frontmatter 之后；之后的文字不被吞", async () => {
+    await writeFile(join(dir, "周报", "i.md"), "---\ntitle: x\n---\n# 标题\n\n正文一\n正文二\n");
+    const result = await run("doc_insert_image", { path: "周报/i.md", image_path: "pic.png", after_line: 6 });
+    assert.match(textOf(result), /Inserted !\[\]\(\.\.\/attachments\/pic\.png\)/);
+    assert.equal(readOpenPanel(result.details)?.kind, "files");
+    const next = await readFile(join(dir, "周报", "i.md"), "utf8");
+    assert.equal(next, "---\ntitle: x\n---\n# 标题\n\n正文一\n\n![](../attachments/pic.png)\n\n正文二\n");
+    assert.deepEqual(await readFile(join(dir, "attachments", "pic.png")), PNG);
+  });
+
+  it("after_line 落在 frontmatter 里 / 越界 / 非图片 / 找不到图：报错且不改文档", async () => {
+    const before = await readFile(join(dir, "周报", "w.md"), "utf8");
+    await assert.rejects(run("doc_insert_image", { path: "周报/w.md", image_path: "pic.png", after_line: 2 }), /inside the frontmatter/);
+    await assert.rejects(run("doc_insert_image", { path: "周报/w.md", image_path: "pic.png", after_line: 999 }), /between 0 and/);
+    await assert.rejects(run("doc_insert_image", { path: "周报/w.md", image_path: "w.md" }), /Not an image/);
+    await assert.rejects(run("doc_insert_image", { path: "周报/w.md", image_path: "nope.png" }), /not found/i);
+    assert.equal(await readFile(join(dir, "周报", "w.md"), "utf8"), before);
+  });
+
+  it("默认插在文末；Obsidian 库写 ![[名]]", async () => {
+    await mkdir(join(dir, "库", ".obsidian"), { recursive: true });
+    await writeFile(join(dir, "库", "n.md"), "# 库\n");
+    const result = await run("doc_insert_image", { path: "库/n.md", image_path: "pic.png" });
+    assert.match(textOf(result), /!\[\[pic\.png\]\]/);
+    assert.equal(await readFile(join(dir, "库", "n.md"), "utf8"), "# 库\n\n![[pic.png]]\n");
+  });
+});
+
+describe("doc_export", () => {
+  it("经 broker 发 docRequest（带路径与格式），成功回导出卡；失败原样报错", async () => {
+    sent.length = 0;
+    reply = () => ({ ok: true, path: join(dir, "周报", "w.docx"), bytes: 4096 });
+    const result = await run("doc_export", { path: "周报/w.md", format: "docx" });
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0]?.["type"], "docRequest");
+    assert.equal(sent[0]?.["workspaceId"], "w1");
+    assert.deepEqual(sent[0]?.["request"], { path: join(dir, "周报", "w.md"), format: "docx" });
+    assert.match(textOf(result), /Exported .* \(4\.0 KB, \.docx\)/);
+    const card = readCommandCard(result.details);
+    assert.equal(card?.kind, "export");
+    assert.equal(card?.subtitle, "Word · 4.0 KB");
+    reply = () => ({ ok: false, error: "输出路径不在工作区内" });
+    await assert.rejects(run("doc_export", { path: "周报/w.md", format: "pdf", out: "/tmp/x.pdf" }), /输出路径不在工作区内/);
+    assert.deepEqual((sent[1]?.["request"] as Record<string, unknown>)["out"], "/tmp/x.pdf");
+    await assert.rejects(run("doc_export", { path: "周报/w.md", format: "rtf" }), /format/);
+    await assert.rejects(run("doc_export", { path: join(outside, "secret.md"), format: "md" }), /inside the workspace/);
+  });
+});

@@ -99,6 +99,8 @@ import { installCloseToTray, loadTrayIcon, type AppTray } from "./window/tray.ts
 import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
 import { registerFilesIpc } from "./files/ipc.ts";
+import { applyDocRequest } from "./doc-panel/agent-requests.ts";
+import { printDocPdf } from "./doc-panel/print-doc-pdf.ts";
 import { registerDocIpc } from "./doc-panel/ipc.ts";
 import { applySlidesRequest } from "./slides/agent-requests.ts";
 import { exportDeck } from "./slides/export.ts";
@@ -671,6 +673,19 @@ void app.whenReady().then(async () => {
         .then((outcome) => agentHost.answerSlides(event.requestId, outcome))
         .catch((cause: unknown) =>
           agentHost.answerSlides(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
+    // 文档导出：docx / pdf / md 的生成在主进程（PDF 要隐藏窗口），UI 的导出菜单与 agent 共用同一套函数。同样任何路径都回执
+    if (event.type === "docRequest") {
+      void resolveFileRoots(workspaces, sessions, { sessionId: event.sessionId, workspaceId: event.workspaceId })
+        .then((roots) => applyDocRequest({ roots, printPdf: printDocPdf }, event.request))
+        .then((outcome) => agentHost.answerDoc(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerDoc(event.requestId, {
             ok: false,
             error: cause instanceof Error ? cause.message : String(cause),
           }),

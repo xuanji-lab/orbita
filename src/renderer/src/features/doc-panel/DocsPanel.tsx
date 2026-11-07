@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { docTitle, type DocKind, type DocListEntry } from "@shared/doc";
+import { docTitle, type DocListEntry } from "@shared/doc";
 import type { TextQuote } from "@shared/quote";
 import { api } from "../../api";
 import { ipcErrorText } from "../../utils/ipc-error.ts";
@@ -13,13 +13,12 @@ import { DocEditPane } from "./DocEditPane";
 import { docScope, getLast, setLast } from "./view-memory.ts";
 
 /**
- * 右栏的「文档」「演示文稿」面板（同一个组件，`kind` 决定列哪一类、新建哪一类）。
+ * 右栏的「演示文稿」面板（「文档」已并进文件面板，这里只剩演示文稿）。
  * 点开 = 打开**上次在这个面板里打开过的**那一份（按工作区 × 类型记）；没有（或那份已不在了）就是空态：
  * 新建一份，或从工作区已有的里挑——不替用户从仓库里随便挑一份 .md 打开（可能正是 agent 刚改的 CHANGELOG）。
  * 编辑本身是 `DocEditPane`——与文件面板里 .md 预览的「编辑」模式是同一个组件，两条路通到同一处。
  */
 export function DocsPanel(props: {
-  kind: DocKind;
   sessionId: string | null;
   workspaceId: string | null;
   onQuote?: (quote: TextQuote) => void;
@@ -27,7 +26,8 @@ export function DocsPanel(props: {
   openRequest?: { path: string; nonce: number } | null;
 }) {
   const t = useT();
-  const { kind, workspaceId } = props;
+  const { workspaceId } = props;
+  const kind = "slides";
   // 会话 id 只在挂载时取一次：从首页发第一句话、新会话诞生时面板要原地留着（App 的 panelFromHome），
   // 文档用的都是工作区根下的路径，不依赖会话（会话 id 只多出一个工作台根）——别因为 id 从 null 变成真 id
   // 就把文档重读一遍、编辑器重建、光标没了
@@ -106,8 +106,8 @@ export function DocsPanel(props: {
       });
   };
 
-  const icon = kind === "slides" ? FEATURE_ICON.slides : FEATURE_ICON.doc;
-  const panelName = kind === "slides" ? t.doc.panelSlides : t.doc.panelDoc;
+  const icon = FEATURE_ICON.slides;
+  const panelName = t.doc.panelSlides;
 
   return (
     <RightPanelFrame
@@ -115,7 +115,7 @@ export function DocsPanel(props: {
       header={<PanelTitle icon={icon} title={openPath === null ? panelName : docTitle(openPath)} />}
       headerExtra={
         <>
-          <PanelIconButton title={kind === "slides" ? t.doc.newDeck : t.doc.newDoc} onClick={create}>
+          <PanelIconButton title={t.doc.newDeck} onClick={create}>
             <Icon name="file-plus" size={16} strokeWidth={1.8} />
           </PanelIconButton>
           {openPath !== null && (
@@ -146,9 +146,9 @@ export function DocsPanel(props: {
           ) : (
             <PanelEmpty
               icon={icon}
-              exit={{ label: kind === "slides" ? t.doc.newDeck : t.doc.newDoc, onClick: create }}
+              exit={{ label: t.doc.newDeck, onClick: create }}
             >
-              {kind === "slides" ? t.doc.emptySlides : t.doc.emptyDoc}
+              {t.doc.emptySlides}
             </PanelEmpty>
           )}
           {actionError !== null && (
@@ -163,7 +163,7 @@ export function DocsPanel(props: {
           )}
           {entries !== null && entries.length > 0 && (
             <div className="dp-picker-list">
-              <div className="dp-picker-head">{kind === "slides" ? t.doc.existingSlides : t.doc.existingDoc}</div>
+              <div className="dp-picker-head">{t.doc.existingSlides}</div>
               {entries.map((entry) => (
                 <button
                   key={entry.path}

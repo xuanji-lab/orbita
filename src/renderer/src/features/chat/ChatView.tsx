@@ -27,7 +27,7 @@ import { clampToolBody } from "./tool-body-clamp.ts";
 import { noticeIconBoxStyle, noticeParagraphStyle, noticeTextStyle } from "./notice.ts";
 import { PluginInstallLine } from "../plugins/PluginInstallLine.tsx";
 import { PluginBoardResultView } from "../board/PluginBoardResult.tsx";
-import { builtinCommand } from "./builtin-commands.ts";
+import { builtinCommand, docEditLabel, toolWord } from "./builtin-commands.ts";
 import { CommandCard } from "./CommandCard.tsx";
 import { ExitCard } from "./ExitCard";
 import { PanelButton } from "../../shell/RightPanel";
@@ -1207,7 +1207,7 @@ function ChatViewBody(props: {
       childWaiting: t.homeCard.childWaiting,
       failed: t.homeCard.failed,
       done: t.homeCard.done,
-      verb: (toolName, input) => t.chat.rollupTool(rollupToolKey(toolName, input, skills)),
+      verb: (toolName, input) => toolWord(t.chat.rollupTool, rollupToolKey(toolName, input, skills), input),
     };
     // 点击：卡与行都进该会话（openSession）——滚动定位到 sourceMessageRange 的基建
     // 还未立项（PR-4 面板同款 TODO），落定后行点击可升级为定位，卡保持进会话
@@ -3034,7 +3034,7 @@ function TurnRollupLine(props: {
   }  for (const { toolName, count, failed } of stats.byTool) {
     segments.push(
       <span style={ROLLUP_SEGMENT}>
-        {t.chat.rollupTool(toolName)} {count}
+        {toolWord(t.chat.rollupTool, toolName)} {count}
         {/* 失败数不写词，红色数字直接跟在次数后面——红即失败的语义 */}
         {failed > 0 && <span style={{ color: "var(--color-danger)" }}> {failed}</span>}
       </span>,
@@ -3769,7 +3769,7 @@ function TurnProcessLine(props: {
   const planStepNow = props.plan?.current.items.find((item) => item.status === "in_progress")?.text ?? null;
   const toolChips = counts.byTool.slice(0, 4).map(({ key, count }) => (
     <span key={key}>
-      {t.chat.rollupTool(key)} {count}
+      {toolWord(t.chat.rollupTool, key)} {count}
     </span>
   ));
   const failed = counts.failed > 0 && <span className="proc-bad">{t.chat.processFailed(counts.failed)}</span>;
@@ -3793,7 +3793,7 @@ function TurnProcessLine(props: {
       if (result !== undefined) tail = tailPreviewLines(toolResultText(result, t), 1, 200)[0] ?? null;
     }
     const slow = current.kind === "think" && runMs !== null && runMs > SLOW_GAP_MS;
-    const verb = (toolName: string, input: unknown) => t.chat.rollupTool(rollupToolKey(toolName, input, props.skills));
+    const verb = (toolName: string, input: unknown) => toolWord(t.chat.rollupTool, rollupToolKey(toolName, input, props.skills), input);
     return (
       <div className="proc-live" aria-live="off">
         {timeLabel}
@@ -3906,7 +3906,7 @@ function ProcessChapterItem(props: {
     chapter.title ??
     t.chat.processToolsTitle(
       processCounts(chapter.steps, props.toolResults, props.skills)
-        .byTool.map(({ key, count }) => t.chat.processToolPart(t.chat.rollupTool(key), count))
+        .byTool.map(({ key, count }) => t.chat.processToolPart(toolWord(t.chat.rollupTool, key), count))
         .join(t.common.listSeparator),
     );
   const shown = chapter.calls.slice(0, CHAPTER_STEPS_SHOWN);
@@ -3926,7 +3926,7 @@ function ProcessChapterItem(props: {
           <span className="proc-ch-steps">
             {shown.map((call) => (
               <span key={call.toolCallId} className={props.toolResults.get(call.toolCallId)?.status === "error" ? "bad" : undefined}>
-                {t.chat.rollupTool(rollupToolKey(call.toolName, call.input, props.skills))}{" "}
+                {toolWord(t.chat.rollupTool, rollupToolKey(call.toolName, call.input, props.skills), call.input)}{" "}
                 {toolCallSummary(call.toolName, call.input) ?? ""}
               </span>
             ))}
@@ -4315,6 +4315,8 @@ function ToolLine(props: {
   const summary = mcp === null ? summarizeToolResult(result, t) : summarizeMcpResult(result, t);
   const callSummary = toolCallSummary(props.toolName, props.input);
   const builtin = builtinCommand(props.toolName);
+  // 落在文档文件上的 edit / write：药丸写「改文档 / 写文档」（其余照旧）
+  const docEdit = docEditLabel(props.toolName, props.input);
   // 路径类工具的摘要只显示文件名——Windows 上模型几乎总传绝对路径，整条 C:\... 是噪音；
   // 完整路径进 tooltip。toolCallSummary 本身保持原始 path 语义（editGroupFileCount 靠它去重）
   const pathTool =
@@ -4482,9 +4484,9 @@ function ToolLine(props: {
               strokeWidth={1.8}
             />
           </span>
-          {builtin !== null ? (
+          {builtin !== null || docEdit !== null ? (
             <span className="command-pill" style={headLabel(active)}>
-              {builtin.label}
+              {builtin?.label ?? docEdit}
             </span>
           ) : (
             <span style={headLabel(active)}>{props.toolName}</span>

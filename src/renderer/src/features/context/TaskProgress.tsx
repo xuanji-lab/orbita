@@ -1,3 +1,4 @@
+import { toolWord } from "../chat/builtin-commands.ts";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Carryover } from "@shared/session";
 import { useT } from "../../locale.ts";
@@ -348,7 +349,7 @@ function ChapterList(props: { rows: readonly ChapterRow[]; statusOf: (toolCallId
         const failed = chapter.calls.some((call) => props.statusOf(call.toolCallId) === "error");
         const work = chapter.calls.filter((call) => !isBookkeepingTool(call.toolName)).length;
         const label =
-          chapterTitle(chapter, ask) ?? chapter.calls.map((call) => t.chat.rollupTool(call.toolName)).filter((v, i, a) => a.indexOf(v) === i).join(" · ");
+          chapterTitle(chapter, ask) ?? chapter.calls.map((call) => toolWord(t.chat.rollupTool, call.toolName, call.input)).filter((v, i, a) => a.indexOf(v) === i).join(" · ");
         const text = (
           <>
             {/* 章节名最多两行（真模型的旁白常有三四行、一段英文思考能到七行），全文在悬停里 */}
