@@ -28,6 +28,7 @@ import {
   type SlideElement,
 } from "./slides.ts";
 import { buildLayout, isLayoutName, LAYOUT_NAMES, LayoutError, type LayoutImage } from "./slides-layouts.ts";
+import { footerElement } from "./slides-footer.ts";
 import { estimateTextHeight } from "./slides-measure.ts";
 import { BINDABLE_FIELDS, DEFAULT_THEME_ID, presetTheme, resolveTheme, tokenName, tokenValue, type BindField, type ElementBindings } from "./slides-theme.ts";
 
@@ -512,7 +513,16 @@ export function lintSlide(deck: Deck, page: number): string[] {
   if (slide === undefined) return [];
   const canvas = CANVAS_SIZE[deck.aspect];
   const out: string[] = [];
+  // 带色板主题的文稿：正文不小于主题 body（脚注 / 来源行用 $caption）；文字不压页脚那一行
+  const themed = deck.theme?.palette !== undefined ? resolveTheme(deck.theme) : null;
+  const footer = themed === null ? null : footerElement(deck, slide, page - 1);
   for (const element of slide.elements) {
+    if (themed !== null && element.kind === "text" && element.fontSize < themed.scale.body - 0.5 && Math.abs(element.fontSize - themed.scale.caption) > 0.5) {
+      out.push(`slide ${page}: text ${element.id} is ${Math.round(element.fontSize)}px, smaller than the theme's body size (${themed.scale.body}px) — set fontSize to "$body" (or "$caption" only for a footer / source line, and keep it clear of the page footer)`);
+    }
+    if (footer !== null && element.kind === "text" && element.y < footer.y + footer.h && element.y + element.h > footer.y && element.x < footer.x + footer.w && element.x + element.w > footer.x) {
+      out.push(`slide ${page}: text ${element.id} overlaps the page footer line (y≈${Math.round(footer.y)}–${Math.round(footer.y + footer.h)}) — move it up or drop it`);
+    }
     if (element.kind === "text") {
       const need = estimateTextHeight(richTextToPlain(element.html), element.fontSize, element.w, { lineHeight: element.lineHeight ?? 1.25, letterSpacing: element.letterSpacing ?? 0 });
       if (need > element.h * 1.15 + 4) {

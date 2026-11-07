@@ -338,7 +338,7 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
       '- { op:"set_slide", slide, background?, notes? }\n' +
       '- { op:"delete_slide", slide } and { op:"move_slide", slide, to }\n' +
       `- { op:"set_deck", title?, aspect?, theme? } — theme: one of ${THEME_IDS.join(" / ")} (re-colours every element bound to a theme token; hand-set values stay), or an object { id?, palette:{bg,surface,ink,muted,accent,accent2}, fonts:{heading,body}, scale:{display,title,h2,body,caption} }\n` +
-      "The user may be looking at another slide; the panel is not moved.\n" +
+      "The user may be looking at another slide; the panel is not moved. In a themed deck write new text with theme tokens (fontSize \"$body\", color \"$ink\"); body text must not be smaller than $body, and a footnote / source line uses $caption and stays above the page footer.\n" +
       ELEMENT_GUIDE,
     parameters: {
       type: "object",

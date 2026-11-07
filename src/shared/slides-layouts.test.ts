@@ -205,6 +205,20 @@ describe("版式", () => {
   });
 });
 
+describe("体检：自由元素不许比 body 小、不许压页脚", () => {
+  it("带主题的文稿里手加的 16px 来源行、压在页脚上的字都会被指出；脚注 caption 档与版式生成的不报", () => {
+    let deck = applyWrite(themed("academic"), [{ layout: "stat", slots: sample("stat") }]).deck;
+    assert.deepEqual(lintSlide(deck, 1), []);
+    deck = applyEdit(deck, [
+      { op: "add", slide: 1, element: { kind: "text", html: "数据来源：IMF", x: 340, y: 640, w: 600, h: 40, fontSize: 16 } },
+      { op: "add", slide: 1, element: { kind: "text", html: "脚注", x: 96, y: 580, w: 600, h: 30, fontSize: "$caption" } },
+    ]).deck;
+    const issues = lintSlide(deck, 1);
+    assert.equal(issues.filter((i) => /smaller than the theme's body size/.test(i)).length, 1);
+    assert.equal(issues.filter((i) => /overlaps the page footer/.test(i)).length, 1);
+  });
+});
+
 describe("页脚", () => {
   it("带色板的文稿每页画「标题 · 页码」，封面 / 结尾 / 满版图不画，左图版式放右下；老文稿不画", () => {
     let deck = themed("academic");
