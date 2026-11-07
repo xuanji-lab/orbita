@@ -319,6 +319,27 @@ export type MemoryServiceCommand =
    */
   | { type: "cancelModelDownload" }
   /**
+   * 从历史生成（主进程按时间正序逐轮喂）：一条历史轮并入该会话的**历史开段**（与实时开段
+   * 分开存，同一会话正在实时聊也不互相顶掉）。收尾按历史时间判——任何历史开段与这一轮的
+   * 间隔 ≥ 闲置阈值就收尾，判新事件也收尾；closeAfter = 这是该会话在计划里的最后一轮，
+   * 并入后立即收尾。收尾的段走与实时同一套三类提取（「当前日期」取段的历史时间）。
+   * 回执 historyStepResult（处理完才回：主进程等它再喂下一轮，实时轮得以插队）。
+   */
+  | {
+      type: "historyTurn";
+      requestId: string;
+      sessionId: string;
+      scopeId: string;
+      turn: MemoryEpisodeTurn;
+      closeAfter: boolean;
+      chore?: MemoryChoreModel;
+    }
+  /**
+   * 从历史生成停止 / 跑完：所有历史开段立即收尾提取（它们的轮从此算已处理，下次开始不重喂）。
+   * 回执 historyStepResult。
+   */
+  | { type: "historyFlush"; requestId: string; chore?: MemoryChoreModel }
+  /**
    * 停机（开关关 / 应用退出）：服务停 llama-server、取消下载后自行退出。
    * 主进程发完不等回执（退出路上等不起），紧接着按 embedServerPid 补杀引擎、再 kill
    * 服务进程——这条命令是「来得及就优雅」的那一层，不是唯一一层。
@@ -338,6 +359,8 @@ export type MemoryServiceMessage =
    * 目标条目不在 / 入参不合法时 ok: false。
    */
   | ({ type: "mutateResult"; requestId: string } & MemoryMutationOutcome)
+  /** historyTurn / historyFlush 的回执：这一步里收尾了几段、写了几条、调了几次模型 */
+  | { type: "historyStepResult"; requestId: string; outcome: MemoryHistoryStepOutcome }
   /** agentTool 的回执（服务不在 / 超时由主进程兜成 ok:false） */
   | ({ type: "agentToolResult"; requestId: string } & MemoryAgentOutcome)
   /** vectorState 的回执（设置页 status 的服务侧那部分） */
@@ -370,6 +393,87 @@ export type MemoryServiceMessage =
    */
   | { type: "changed" };
 
+/* ---------- 从历史生成（开关打开之前的聊天也提取成记忆） ---------- */
+
+/** 记忆服务处理一步历史轮（或一次收尾）的结果。 */
+export interface MemoryHistoryStepOutcome {
+  /** 这一步收尾并提取完的段数（提取有类失败的段也算收尾——它留在待提取，下次启动重试） */
+  closed: number;
+  /** 新落盘的条目数（按类） */
+  written: { fact: number; preference: number; insight: number };
+  /** 这一步调家务活模型的次数（含失败重试） */
+  calls: number;
+  /** 重试用尽仍失败的提取类次（段留在待提取，不中断任务） */
+  failed: number;
+  /** 这一步没做成的原因（服务没初始化 / 没配家务活模型）；缺席 = 做了 */
+  error?: string;
+}
+
+/** 「从历史生成」可选的一个作用域（工作区，或没有工作区的会话按 cwd 归的作用域）。 */
+export interface MemoryHistoryScope {
+  /** memoryScopeOf 的口径：工作区 id 或 cwd 路径 */
+  scopeId: string;
+  /** 记忆库里这个作用域的寻址 token（界面据此默认勾上正在看的那个范围） */
+  token: MemoryScopeToken;
+  /** missing = 会话指向的工作区已不在（同 MemoryScopeSummary 的 missing） */
+  kind: "workspace" | "cwd" | "missing";
+  /** 工作区名；cwd 作用域是路径本身；已不在的工作区是多数 cwd 的末段目录名（不露 uuid） */
+  name: string;
+  /** cwd 与 missing 的完整路径（悬停用） */
+  path?: string;
+  /** 根会话数（子会话不写记忆，不计） */
+  sessions: number;
+  /** 轮次统计（要读转录，只对请求里点名的作用域算；null = 没算） */
+  stats: {
+    /** 还没处理过、这次会喂给记忆服务的轮数 */
+    turns: number;
+    /** 已经处理过（实时整理过或上次生成过）、这次跳过的轮数 */
+    processed: number;
+    /** 预计家务活模型调用次数（切段判断 + 每段三类提取；切段按间隔估，实际可能更多） */
+    calls: number;
+  } | null;
+}
+
+/** 预估请求：只对 scopeIds 里的作用域读转录算轮数（全量读一遍转录太贵）。 */
+export interface MemoryHistoryEstimateRequest {
+  scopeIds: readonly string[];
+}
+
+export interface MemoryHistoryEstimate {
+  /** 现存工作区在前（按名字），cwd 作用域其次（按会话数），已不在的工作区最后（按名字） */
+  scopes: MemoryHistoryScope[];
+  /** 当前家务活模型；null = 没配（不能开始） */
+  chore: { providerId: string; modelId: string } | null;
+  status: MemoryHistoryStatus;
+}
+
+export type MemoryHistoryState = "idle" | "running" | "paused" | "stopping" | "stopped" | "done" | "failed";
+
+/**
+ * 「从历史生成」任务的进度快照。主进程落盘（应用退出后能续：重启时 running 的任务
+ * 恢复成 paused），每喂完一轮推一次 agent:event 的 memoryHistory。计数跨暂停 / 继续累计。
+ */
+export interface MemoryHistoryStatus {
+  state: MemoryHistoryState;
+  scopeIds: string[];
+  /** 本次任务要喂的轮数（已喂 + 剩下的） */
+  totalTurns: number;
+  doneTurns: number;
+  /** 已收尾提取的段数 */
+  episodes: number;
+  written: { fact: number; preference: number; insight: number };
+  calls: number;
+  /** 重试用尽仍失败的提取类次 */
+  failed: number;
+  /** state = failed 时的原因（一句人话） */
+  error?: string;
+  startedAt: number | null;
+  updatedAt: number | null;
+}
+
+export type MemoryHistoryStartRequest = { scopeIds: readonly string[] };
+export type MemoryHistoryControl = { action: "pause" | "resume" | "stop" };
+
 /* ---------- 记忆库的读写面（renderer ↔ 主进程，四层契约的读接口） ---------- */
 
 /**
@@ -384,9 +488,14 @@ export const MEMORY_USER_TOKEN = "user";
 /** 记忆库左栏 / 范围选择的一行。 */
 export interface MemoryScopeSummary {
   token: MemoryScopeToken;
-  kind: "user" | "workspace" | "home";
-  /** 显示名：所有工作区 / 工作区名 / Home（多个 Home 带短 token 后缀区分） */
+  /** missing = 会话指向的工作区已不在 workspaces.json（导入的旧会话 / 工作区被删）——存储照旧按
+   * 那个 workspaceId，只是显示名回落到会话 cwd 的末段目录名，界面上不露 uuid */
+  kind: "user" | "workspace" | "home" | "missing";
+  /** 显示名：所有工作区 / 工作区名 / Home（多个 Home 带短 token 后缀区分）/ 已不在的工作区取
+   * 这些会话出现最多的 cwd 的末段目录名 */
   name: string;
+  /** missing 的完整路径（悬停用） */
+  path?: string;
   /** 条数 */
   count: number;
 }

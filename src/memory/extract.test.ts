@@ -40,11 +40,12 @@ test("buildExtractPrompt：日期锚 + 轮快照 + 偏好候选节", () => {
   const prompt = buildExtractPrompt({
     turns: [{ turn: 2, at: new Date(2026, 9, 29, 12, 0).getTime(), userText: "问", assistantText: "答" }],
     now: new Date(2026, 9, 29, 12, 5).getTime(),
-    candidates: [entry({ id: "mem_old" })],
+    candidates: [entry({ id: "mem_old", at: new Date(2026, 10, 3, 9, 0).getTime() })],
   });
   assert.ok(prompt.includes("<date>2026-10-29</date>"));
   assert.ok(prompt.includes('<turn n="2"'));
-  assert.ok(prompt.includes("[mem_old] 用户偏好用中文回复"));
+  // 候选带记下它的日期：比段晚的说法模型才认得出是「后来的」
+  assert.ok(prompt.includes("[mem_old] (2026-11-03) 用户偏好用中文回复"));
 });
 
 test("parseExtractReply：剥围栏、取中括号段、逐条校验", () => {
@@ -144,7 +145,9 @@ test("agentRecordedIn：只挑同会话、出处轮落在段内的 agent 条目�
 });
 
 test("偏好提示词讲清 conflictsWith / crossWorkspace 会直接生效、拿不准就不加", () => {
-  assert.ok(PREFERENCE_SYSTEM_PROMPT.includes("会被直接标为过时"));
+  assert.ok(PREFERENCE_SYSTEM_PROMPT.includes("按日期把较早的那条标为过时"));
+  // 从历史生成：比段晚的已有条目是后来的说法，不能把段里的旧话当成改口
+  assert.ok(PREFERENCE_SYSTEM_PROMPT.includes("日期比 <date> 晚的条目是这段对话**之后**用户的说法"));
   assert.ok(PREFERENCE_SYSTEM_PROMPT.includes("会被直接记到所有工作区"));
   assert.ok(PREFERENCE_SYSTEM_PROMPT.includes("拿不准写 false"));
   // 2026-10-29 实例实测：「一句话说理由」这类一次性的回答要求被记成偏好、又被升到所有工作区

@@ -180,6 +180,13 @@ parentPort.on("message", (event: { data: unknown }) => {
     core.turnSettled(command);
     return;
   }
+  if (command.type === "historyTurn" || command.type === "historyFlush") {
+    if (command.chore !== undefined) chore = command.chore;
+    const { requestId } = command;
+    const step = command.type === "historyTurn" ? core.historyTurn(command) : core.historyFlush(command);
+    void step.then((outcome) => post({ type: "historyStepResult", requestId, outcome }));
+    return;
+  }
   if (command.type === "sessionReverted") {
     void core.sessionReverted(command);
     return;

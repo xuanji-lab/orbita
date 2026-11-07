@@ -104,3 +104,30 @@ export function parseMutation(raw: unknown): MemoryMutation {
       throw new Error(`unknown memory mutation op: ${String(op)}`);
   }
 }
+
+/** 作用域 id（工作区 id 或 cwd 路径）：只当查表的键用，不拼路径；限长防滥用。 */
+function parseScopeIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) throw new Error("memory history request needs scopeIds: string[]");
+  if (raw.length > 500) throw new Error("memory history scopeIds too many (>500)");
+  return raw.map((item) => {
+    if (typeof item !== "string" || item === "" || item.length > 4096) {
+      throw new Error("memory history scopeIds must be non-empty strings");
+    }
+    return item;
+  });
+}
+
+/** 从历史生成的预估 / 开始：{ scopeIds: string[] } */
+export function parseHistoryScopes(raw: unknown): { scopeIds: string[] } {
+  if (typeof raw !== "object" || raw === null) throw new Error("memory history request must be an object");
+  return { scopeIds: parseScopeIds((raw as { scopeIds?: unknown }).scopeIds) };
+}
+
+/** 从历史生成的暂停 / 继续 / 停止 */
+export function parseHistoryControl(raw: unknown): { action: "pause" | "resume" | "stop" } {
+  const action = typeof raw === "object" && raw !== null ? (raw as { action?: unknown }).action : undefined;
+  if (action !== "pause" && action !== "resume" && action !== "stop") {
+    throw new Error("memory history action must be pause | resume | stop");
+  }
+  return { action };
+}

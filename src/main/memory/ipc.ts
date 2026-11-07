@@ -16,7 +16,14 @@ import type {
 import { MEMORY_VECTOR_MODELS } from "../../shared/memory.ts";
 import { tokenOfScope } from "../../memory/entries.ts";
 import { MemoryLibrary, type MemoryLibraryDeps } from "./library.ts";
-import { parseEntriesRequest, parseMutation, parseSessionId } from "./requests.ts";
+import {
+  parseEntriesRequest,
+  parseHistoryControl,
+  parseHistoryScopes,
+  parseMutation,
+  parseSessionId,
+} from "./requests.ts";
+import type { MemoryHistoryJob } from "./history-job.ts";
 import {
   deviceStatusOf,
   effectiveVectorSettings,
@@ -53,8 +60,21 @@ export function registerMemoryIpc(input: {
   mutate: (mutation: MemoryMutation) => Promise<MemoryMutationOutcome>;
   /** 向量召回的装配依赖（status / set / download 三条 IPC 用） */
   vector: MemoryVectorDeps;
+  /** 从历史生成的任务（预估 / 开始 / 暂停·继续·停止 / 状态四条 IPC） */
+  history: MemoryHistoryJob;
 }): void {
   const library = new MemoryLibrary(input.dir, input.deps);
+
+  ipcMain.handle(ipcChannels.memoryHistoryEstimate, (_event, raw: unknown) =>
+    input.history.estimate(parseHistoryScopes(raw).scopeIds),
+  );
+  ipcMain.handle(ipcChannels.memoryHistoryStart, (_event, raw: unknown) =>
+    input.history.start(parseHistoryScopes(raw).scopeIds),
+  );
+  ipcMain.handle(ipcChannels.memoryHistoryControl, (_event, raw: unknown) =>
+    input.history.control(parseHistoryControl(raw).action),
+  );
+  ipcMain.handle(ipcChannels.memoryHistoryStatus, () => input.history.current());
 
   ipcMain.handle(ipcChannels.memoryScopes, () => library.scopes());
 
