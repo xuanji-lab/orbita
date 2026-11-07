@@ -277,13 +277,11 @@ export function createPdfTools(cwd: string, options: { pdfCitations?: boolean } 
     name: "read_pdf",
     label: "read_pdf",
     description:
-      "Read a PDF file page by page. Default returns the extracted text (up to 20 pages per call), a list of " +
-      "pages with little text (likely figures), and a figures/tables index with page numbers — when the user " +
-      "asks about a specific figure or table (\"图 3.2\", \"Table 5\"), look it up in that index and call again " +
-      "with image_pages set to its page to render it as an image and look closely. images=true renders the whole " +
-      "current range instead (at most 5 pages). Scanned PDFs (no text layer) come back automatically as page " +
-      "images on vision models. Image output requires a vision model; otherwise text is returned with a note. " +
-      "Use this instead of read for any .pdf file — read cannot show PDF content.",
+      "Read a PDF file page by page: the extracted text (up to 20 pages per call; continue with offset) plus, in " +
+      "the header, a list of figures/tables with page numbers. Use this instead of read for any .pdf file — read " +
+      "cannot show PDF content. When the user asks about a specific figure or table (\"图 3.2\", \"Table 5\"), " +
+      "look its page up in the header and call again with image_pages set to that page to see it (vision models). " +
+      "For image options, crop, scanned PDFs and reading figures well, read the `reading` skill.",
     parameters: {
       type: "object",
       properties: {
@@ -293,40 +291,31 @@ export function createPdfTools(cwd: string, options: { pdfCitations?: boolean } 
         },
         offset: {
           type: "number",
-          description: "Page number to start reading text from (1-indexed). Default 1.",
+          description: "First page to read (1-indexed). Default 1.",
         },
         limit: {
           type: "number",
-          description: "Number of text pages to read. Default and maximum: 20 text pages, 5 with images=true.",
+          description: "Number of pages to read. Default and maximum 20 (5 with images=true).",
         },
         image_pages: {
           type: "string",
           description:
-            'Specific pages to render as high-resolution images (~2000px wide) for looking at figures and ' +
-            'layout closely, e.g. "3" or "2-5" or "1,4" (absolute page numbers, at most 5; the text range is ' +
-            "unaffected). Prefer this over images=true — read the text first, then look closely at the pages " +
-            "that matter.",
+            'Pages to render as high-resolution images, e.g. "3", "2-5", "1,4" (absolute page numbers, at most 5; ' +
+            "the text range is unaffected). Prefer this over images=true.",
         },
         images: {
           type: "boolean",
-          description:
-            "Render every page of the current text range as an image (default ~1080px wide, see width). " +
-            "At most 5 pages per call. Prefer image_pages for targeted looking.",
+          description: "Render every page of the current text range as an image (at most 5 pages). Prefer image_pages.",
         },
         width: {
           type: "number",
-          description:
-            "Render width in pixels for image output, 600-2000 (values outside are clamped). " +
-            "Default 2000 for image_pages, 1080 for images=true.",
+          description: "Image width in pixels, 600-2000. Default 2000 for image_pages, 1080 for images=true.",
         },
         crop: {
           type: "string",
           description:
-            'Requires image_pages. Render only a region of each requested page, as "x1,y1,x2,y2" in PIXELS ' +
-            'on the page image you already saw (left-top origin; the header reports each image\'s exact size, ' +
-            'e.g. "200,300,1600,1200" on a 2000px-wide page). The region comes out at full render width — a ' +
-            "close-up of a figure without paying tokens for the rest of the page. Look at the whole page first, " +
-            "then crop by pixel coordinates.",
+            'With image_pages: render only the region "x1,y1,x2,y2" of each page, in pixels on the page image you ' +
+            "already saw (details in the `reading` skill).",
         },
       },
       required: ["path"],
@@ -571,13 +560,11 @@ export function createCitePdfTool(cwd: string): ToolDefinition {
     name: "cite_pdf",
     label: "cite_pdf",
     description:
-      "Verify passages you want to cite from a PDF and get citation markers for them. Use it when you explain " +
-      "a PDF to the user and a statement relies on specific wording in the document: pass the exact original " +
-      "text (copy it from read_pdf output; line breaks and spacing do not matter), optionally with the page. " +
-      "Each verified quote returns a marker like [^c4k2] — put the marker right after the sentence it supports, " +
-      "in your reply. The user can click it to open the PDF at that passage, highlighted. Quotes that cannot be " +
-      "found come back as errors with the closest passage; fix them and call again instead of citing from " +
-      "memory. Do not paste the quoted text into your reply as well — the marker already shows it.",
+      "Verify passages you want to quote from a PDF and get clickable citation markers. Use it when you explain a " +
+      "PDF and a statement relies on specific wording in it, or the user asks for the original text: pass the " +
+      "exact original text copied from read_pdf output. Each verified quote returns a marker like [^c4k2] — put " +
+      "it right after the sentence it supports; the user clicks it to open the PDF at that passage, highlighted. " +
+      "Quotes that cannot be found come back as errors — never cite from memory. Details: the `reading` skill.",
     promptSnippet: "cite_pdf: verify quotes from a PDF and get clickable citation markers for your reply",
     parameters: {
       type: "object",
@@ -594,12 +581,11 @@ export function createCitePdfTool(cwd: string): ToolDefinition {
             properties: {
               text: {
                 type: "string",
-                description:
-                  "The original text exactly as it appears in the PDF — a sentence or phrase, not a paraphrase.",
+                description: "The original text exactly as it appears in the PDF, not a paraphrase.",
               },
               page: {
                 type: "number",
-                description: "Page number where it appears (1-indexed), if known. Only a hint.",
+                description: "Page number (1-indexed), if known. Only a hint.",
               },
             },
             required: ["text"],
