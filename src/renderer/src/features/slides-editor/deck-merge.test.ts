@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { applyEdit, applyWrite, createDeck } from "../../../../shared/slides-ops.ts";
 import { serializeDeck, type Deck } from "../../../../shared/slides.ts";
-import { mergeDecks, mergeDeckTexts } from "./deck-merge.ts";
+import { mergeDecks, mergeDeckTexts, shareStructure } from "./deck-merge.ts";
 
 const base = (): Deck =>
   applyWrite(createDeck({ title: "T" }), [1, 2, 3, 4].map((n) => ({ at: n, elements: [{ kind: "text", id: `t${n}`, html: `页${n}` }, { kind: "shape", id: `s${n}` }] }))).deck;
@@ -81,5 +81,28 @@ describe("mergeDecks", () => {
     const b = base();
     const merged = mergeDeckTexts(serializeDeck(b), serializeDeck(b), "{oops");
     assert.equal(merged.slides.length, 4, "盘上那份坏了：本地原样保留，不被清空");
+  });
+});
+
+describe("shareStructure", () => {
+  it("没变的页 / 元素沿用旧对象，被改的页是新对象", () => {
+    const b = base();
+    const reparsed = JSON.parse(JSON.stringify(applyEdit(b, [{ op: "patch", slide: 2, id: "t2", patch: { html: "新" } }]).deck)) as Deck;
+    const shared = shareStructure(b, reparsed);
+    assert.equal(shared.slides[0], b.slides[0]);
+    assert.notEqual(shared.slides[1], b.slides[1]);
+    assert.equal(shared.slides[1]?.elements[1], b.slides[1]?.elements[1], "同一页里没改的元素也沿用");
+    assert.equal(shared.slides[2], b.slides[2]);
+  });
+  it("完全没变 → 返回旧 Deck 本身", () => {
+    const b = base();
+    assert.equal(shareStructure(b, JSON.parse(JSON.stringify(b)) as Deck), b);
+  });
+  it("新增页保留", () => {
+    const b = base();
+    const next = JSON.parse(JSON.stringify(applyWrite(b, [{ elements: [] }]).deck)) as Deck;
+    const shared = shareStructure(b, next);
+    assert.equal(shared.slides.length, 5);
+    assert.equal(shared.slides[0], b.slides[0]);
   });
 });

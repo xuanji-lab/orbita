@@ -258,7 +258,10 @@ export function SlideStage(props: {
   };
 
   const onDoubleClick = (event: React.MouseEvent<HTMLDivElement>): void => {
-    const hit = (event.target as HTMLElement).closest<HTMLElement>(".sl-el");
+    // 指针被画布捕获后，click / dblclick 的 target 就是画布本身（不是点到的元素）：按坐标现找
+    const hit = document
+      .elementsFromPoint(event.clientX, event.clientY)
+      .find((node): node is HTMLElement => node instanceof HTMLElement && node.classList.contains("sl-el") && !node.classList.contains("se-editing"));
     const id = hit?.dataset["id"];
     if (id === undefined) return;
     const element = byId.get(id);
@@ -483,7 +486,9 @@ function InlineEditor(props: {
       }}
       onKeyDown={(event) => {
         if (event.key === "Escape") {
+          // 这一下 Esc 只结束编辑；不让它冒到 App 的「Esc 关右栏」
           event.preventDefault();
+          event.stopPropagation();
           finish();
         }
       }}

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { parseDeck, serializeDeck, type Deck } from "../../../../shared/slides.ts";
 import type { DocSession, ExternalChange } from "../doc-panel/doc-session.ts";
 import { createHistory, pushState, redo as redoState, replacePresent, undo as undoState, type History } from "./history.ts";
-import { mergeDeckTexts } from "./deck-merge.ts";
+import { mergeDeckTexts, shareStructure } from "./deck-merge.ts";
 import type { MergeFn } from "../doc-panel/doc-session.ts";
 
 /** 演示文稿的合并函数：交给 DocSession（结构级三向合并，见 deck-merge.ts） */
@@ -59,7 +59,7 @@ export function useDeckEditor(session: DocSession, initialText: string, external
     externalRef.current = (change) => {
       const parsed = parseDeckSafe(change.text);
       if (parsed.error !== null) return;
-      apply(replacePresent(ref.current, parsed.deck), false);
+      apply(replacePresent(ref.current, shareStructure(ref.current.present, parsed.deck)), false);
     };
     return () => {
       externalRef.current = () => undefined;

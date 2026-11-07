@@ -113,3 +113,25 @@ export function mergeDeckTexts(base: string, local: string, disk: string): Deck 
   if (l === null) return d;
   return mergeDecks(parse(base) ?? l, l, d);
 }
+
+/**
+ * 结构共享：外部（agent）写进来的新 Deck 是整份重新解析的，每一页每个元素都是新对象。
+ * 把与旧 Deck **内容相同**的页 / 元素换回旧对象——缩略图与画布按引用 memo，没被改的页不重画；
+ * 「哪几页被改了」（缩略图标绿边）也靠引用比，不会五页全亮。
+ */
+export function shareStructure(prev: Deck, next: Deck): Deck {
+  const prevSlides = new Map(prev.slides.map((slide) => [slide.id, slide]));
+  const slides = next.slides.map((slide) => {
+    const old = prevSlides.get(slide.id);
+    if (old === undefined) return slide;
+    if (same(old, slide)) return old;
+    const prevElements = new Map(old.elements.map((element) => [element.id, element]));
+    const elements = slide.elements.map((element) => {
+      const was = prevElements.get(element.id);
+      return was !== undefined && same(was, element) ? was : element;
+    });
+    return { ...slide, elements };
+  });
+  const same_ = slides.length === prev.slides.length && slides.every((slide, i) => slide === prev.slides[i]);
+  return same_ && same({ ...prev, slides: [] }, { ...next, slides: [] }) ? prev : { ...next, slides };
+}

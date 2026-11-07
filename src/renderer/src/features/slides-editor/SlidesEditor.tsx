@@ -306,8 +306,11 @@ function DeckWorkspace(props: {
               ? {}
               : (() => {
                   const ratio = added.width > 0 && added.height > 0 ? added.width / added.height : 4 / 3;
-                  const w = Math.min(CANVAS_SIZE[working.aspect].w * 0.5, CANVAS_SIZE[working.aspect].h * 0.6 * ratio);
-                  return { x: at.x - w / 2, y: at.y - w / ratio / 2 };
+                  const canvasSize = CANVAS_SIZE[working.aspect];
+                  const w = Math.min(canvasSize.w * 0.5, canvasSize.h * 0.6 * ratio);
+                  const h = w / ratio;
+                  // 以落点为中心，但整张图要落在画布里（落在边上不该有一半伸出去）
+                  return { x: Math.max(0, Math.min(at.x - w / 2, canvasSize.w - w)), y: Math.max(0, Math.min(at.y - h / 2, canvasSize.h - h)) };
                 })();
           const placed = insertImage(working, lastIndex.current + 1, added.src, { w: added.width, h: added.height }, placement);
           working = placed.deck;
@@ -428,8 +431,14 @@ function DeckWorkspace(props: {
         }
         break;
       case "Escape":
-        if (tool !== null) setTool(null);
-        else setSelection(new Set());
+        // 有东西可退（画图工具 / 选中）就只退这一层，别冒到 App 把右栏整个关掉；都没有才放行
+        if (tool !== null) {
+          setTool(null);
+          event.stopPropagation();
+        } else if (selection.size > 0) {
+          setSelection(new Set());
+          event.stopPropagation();
+        }
         break;
       case "PageDown":
         event.preventDefault();

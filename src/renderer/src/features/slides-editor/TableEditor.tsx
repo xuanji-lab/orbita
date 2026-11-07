@@ -37,6 +37,7 @@ export function TableEditor(props: { element: TableElement; scale: number; onDon
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.preventDefault();
+          event.stopPropagation();
           finish(true);
         }
       }}
