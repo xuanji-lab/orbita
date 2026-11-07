@@ -42,6 +42,53 @@ const HOME_CARD_COUNT = 3;
 /** 要你注意的先占卡，按这个顺序（与铃铛清单、折叠组头的汇总同序，跑完没看算「最近」） */
 const ATTENTION_ORDER: readonly Exclude<SessionRunState, null>[] = ["waiting", "failed", "running"];
 
+/**
+ * 首页「记录」的三组上限（2026-11-07 方向 N：首页从三张等重的卡改成按状态分组的记录行）。
+ * 等你 / 进行中各留 4 行：多于此说明同时在跑的活已经超出一眼能读的量，再多只是堆；最近 5 行。
+ * 合计最多 13 行，一屏放得下（行高 32）。
+ */
+const HOME_LOG_LIMITS = { waiting: 4, running: 4, recent: 5 } as const;
+
+/** 首页记录的三个组：等你（含出错——它也在等你处置）> 进行中 > 最近（含跑完没看的） */
+export type HomeLogGroupId = keyof typeof HOME_LOG_LIMITS;
+
+/** 记录里的一行：只给会话 id 与标题，其余（状态 / 那一句 / 时间）由调用方按槽里的实况现算 */
+export interface HomeLogRow {
+  sessionId: string;
+  title: string;
+}
+
+export interface HomeLogGroup {
+  group: HomeLogGroupId;
+  rows: HomeLogRow[];
+}
+
+/**
+ * 首页记录的选行与分组（取代 selectHomeCards 在非纸面主题下的位置；纸面两档仍是三张卡，
+ * 它们的版式是田字格 / 打字稿的整套，不套 N）。
+ *
+ * 候选与卡同一排除（子会话、归档、无标题）。顺序沿用列表序（sortSessions：置顶优先 + 最近活跃）。
+ * 分组按运行态：waiting / failed → 「等你」，running → 「进行中」，其余（没在跑、跑完没看）→ 「最近」。
+ * 没有行的组不返回——空组只会在边栏里留一个无所指的组名。
+ */
+export function selectHomeLog(
+  sessions: readonly SessionMeta[],
+  stateOf: (meta: SessionMeta) => SessionRunState,
+): HomeLogGroup[] {
+  const eligible = rootSessions(sessions).filter((m) => !m.archived && m.title !== "");
+  const buckets: Record<HomeLogGroupId, HomeLogRow[]> = { waiting: [], running: [], recent: [] };
+  for (const meta of eligible) {
+    const state = stateOf(meta);
+    const group: HomeLogGroupId =
+      state === "waiting" || state === "failed" ? "waiting" : state === "running" ? "running" : "recent";
+    if (buckets[group].length >= HOME_LOG_LIMITS[group]) continue;
+    buckets[group].push({ sessionId: meta.id, title: meta.title });
+  }
+  return (["waiting", "running", "recent"] as const)
+    .filter((group) => buckets[group].length > 0)
+    .map((group) => ({ group, rows: buckets[group] }));
+}
+
 /** 卡内一行的数据：最近提问，纯文本 */
 export interface HomeCardRow {
   text: string;

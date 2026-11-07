@@ -1210,6 +1210,9 @@ body {
   flex: 1;
   min-width: 0;
   min-height: 0;
+  /* 容器查询的容器：索引边栏在「会话列」窄于 760px 时收成 32（右栏打开 / 窄窗）。量的是会话列自己
+     的宽，不是窗口宽——右栏一开，同一扇窗口里的会话列就窄了 */
+  container: pane / inline-size;
 }
 
 /*
@@ -2763,6 +2766,32 @@ html[data-pointer-drag] iframe {
   display: flex;
   flex-direction: column;
   align-items: center;
+}
+
+/* 首页舞台与内容列（原先是 ChatView 里的 inline style；方向 N 要在非纸面主题下改写它的宽、
+   对齐与纵向位置，inline 压得过任何主题规则，所以挪成 class——纸面两档保持原样：垂直居中、
+   居中对齐、三张卡） */
+.home-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+}
+.home-col {
+  position: relative;
+  z-index: 1;
+  width: min(100%, var(--content-max-width));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-5);
+}
+.home-fade {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-5);
 }
 
 .home-slogan {
@@ -5819,4 +5848,160 @@ mark.intent-mark {
 .sidebar-move-note svg {
   flex: 0 0 auto;
   margin-top: var(--space-0-5);
+}
+
+/*
+ * ======================================================================
+ * 方向 N（2026-11-07）· 索引边栏 / 子午线 / 记录行 —— 首页
+ * ======================================================================
+ * 三个版式在这里登记（它们是现有界面里没有的）：
+ *
+ * | 版式 | 用途 | 结构 | 现有最近的同类 |
+ * |---|---|---|---|
+ * | 索引边栏 | 给一列内容配一条索引：首页是状态组名（对话里是时间、设置里是节名，后续 commit） | 内容列左侧 `--gutter`；索引右对齐到子午线左侧 18px；列窄于 760px 时 gutter 收成 32，索引改落在组上方一行 | 文件预览的行号列（左窄栏放索引、右侧放内容） |
+ * | 子午线 | 把「谁在等我 / 在跑 / 没状态」钉在一根轴上 | 1px 竖线，`--gutter - 20px` 处；状态饼圆心压线，没状态的是线上一个 5px 小点 | 无（新） |
+ * | 记录行 | 首页的会话列表 | 32px 行：名字（13em）｜一句此刻在干什么（次级墨、单行省略）｜行尾时间 | 侧栏会话行 + 原会话卡的 `.session-card-line` |
+ *
+ * 只对非纸面主题生效（首页的 DOM 也只在那时渲染记录；纸面两档仍是三张卡，见 ChatView）。
+ */
+:root:not([data-theme="copybook"], [data-theme="typescript"]) {
+  .home-stage {
+    align-items: flex-start;
+    padding-top: 14vh;
+  }
+  .home-col {
+    width: min(100%, calc(var(--content-max-width) + var(--gutter)));
+    box-sizing: border-box;
+    padding-left: var(--gutter);
+    align-items: stretch;
+  }
+  .home-fade {
+    align-items: stretch;
+  }
+  .home-hero {
+    align-items: flex-start;
+  }
+  .home-slogan {
+    text-align: left;
+    font-weight: var(--weight-regular); /* 越大越轻：全屏最大的字是最轻的 */
+  }
+  .home-fade-log {
+    margin-top: var(--space-4);
+  }
+
+  /* 记录：一根子午线 + 若干组 */
+  .home-log {
+    position: relative;
+    display: grid;
+    gap: var(--space-4);
+  }
+  .home-log::before {
+    content: "";
+    position: absolute;
+    left: -20px;
+    top: 10px;
+    bottom: 10px;
+    width: 1px;
+    background: var(--color-border-default);
+  }
+  .log-group {
+    position: relative;
+    display: grid;
+  }
+  /* 组名：右缘钉在子午线左侧 18px（= 内容列左缘 - 38），向左自由生长（「进行中」「Running」都放得下） */
+  .log-head {
+    position: absolute;
+    right: calc(100% + 38px);
+    top: 0;
+    margin: 0;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    height: var(--list-item-compact);
+    line-height: var(--line-height-ui);
+    font-size: var(--font-size-sm);
+    font-weight: var(--weight-medium);
+    color: var(--color-text-tertiary);
+  }
+  .log-group[data-g="waiting"] .log-head {
+    color: var(--color-text-primary); /* 「等你」是全屏唯一要你动手的一组：正墨 */
+  }
+  .log-row {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 13em) minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-4);
+    width: calc(100% + var(--space-4));
+    min-height: var(--list-item-compact);
+    margin-left: calc(-1 * var(--space-2));
+    padding: 0 var(--space-2);
+    box-sizing: border-box;
+    border: 0;
+    border-radius: var(--radius-md);
+    font: inherit;
+    font-size: var(--font-size-base);
+    text-align: left;
+    cursor: pointer;
+  }
+  .log-name {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+  }
+  .log-name .t {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: var(--weight-medium);
+  }
+  /* 状态饼 / 小点落在子午线上：行比内容列左缘外挪了 8px，所以饼的圆心要补回 8px 才压线 */
+  .log-row .status-pie {
+    position: absolute;
+    left: -17px;
+    width: 10px;
+    height: 10px;
+  }
+  .log-dot {
+    position: absolute;
+    left: -14.5px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--color-text-tertiary);
+  }
+  .log-line {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+  }
+  .log-time {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-tertiary);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .log-skel {
+    height: 10px;
+    border-radius: var(--radius-xs);
+    background: var(--color-bg-hover);
+  }
+}
+
+/* 会话列窄于 760：边栏收成 32，只留子午线；首页的组名改落在组上方一行（信息不丢） */
+@container pane (max-width: 760px) {
+  :root:not([data-theme="copybook"], [data-theme="typescript"]) {
+    .home-stage {
+      --gutter: 32px;
+    }
+    .log-head {
+      position: static;
+      height: var(--control-height-xs);
+      margin-left: 0;
+    }
+  }
 }

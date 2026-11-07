@@ -712,6 +712,11 @@ export const zh: Messages = {
   },
 
   homeCard: {
+    group: {
+      waiting: "等你",
+      running: "进行中",
+      recent: "最近",
+    },
     state: {
       running: "在跑",
       waiting: "等你",

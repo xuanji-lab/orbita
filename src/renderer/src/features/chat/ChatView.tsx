@@ -16,7 +16,7 @@ import {
 } from "./ChannelViews";
 import { useChannelMessages, useParentChannels } from "./useChannelMessages";
 import { useChannelSummaries } from "./useChannelSummaries";
-import { HOME_CARD_QUERY_ROWS, homeCardLine, selectHomeCards, type HomeCardLineText } from "./home-cards";
+import { HOME_CARD_QUERY_ROWS, homeCardLine, selectHomeCards, selectHomeLog, type HomeCardLineText } from "./home-cards";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
 import { relativeTime } from "../../shell/relative-time.ts";
 import { InlineMarks } from "../../shell/InlineMarks";
@@ -130,6 +130,8 @@ import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { HomeHero } from "./HomeHero";
+import { HomeLog, type HomeLogRowView } from "./HomeLog";
+import { heroFace } from "./home-hero.ts";
 import { WrapupCard } from "./WrapupCard";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { FileTurnCard, RevertMarkView } from "./FileTurnCard";
@@ -991,6 +993,8 @@ function ChatViewBody(props: {
   // 目的地没就绪（create / load 慢于动画）就宁可不动画，硬切也不闪回。
   const [travel, setTravel] = useState<"none" | "leaving" | "prep" | "entering">("none");
   const stageRef = useRef<HTMLDivElement | null>(null);
+  // 输入框那一组：方向 N 的首页里它在中间（slogan → 输入框 → 记录），滑落距离要量它自己的底
+  const travelRef = useRef<HTMLDivElement | null>(null);
   const leaveTimer = useRef<number | undefined>(undefined);
   const chattedRef = useRef(false);
   const homeActive = session.sessionId === null && session.opened === null;
@@ -999,8 +1003,15 @@ function ChatViewBody(props: {
   const measureTravel = () => {
     const el = stageRef.current;
     if (el === null) return;
-    const rect = el.getBoundingClientRect();
-    el.style.setProperty("--travel-dy", `${Math.max(0, window.innerHeight - rect.bottom - 32)}px`);
+    // 量输入框那一组的底——它不再是整列的最后一个孩子。回场的 prep 拍这一组自己带着 transform，
+    // 所以不能量它的 getBoundingClientRect，改用 offsetTop + offsetHeight（布局值，不含 transform）
+    // 加上 offsetParent（.home-stage，不动）的上沿
+    const group = travelRef.current;
+    const bottom =
+      group === null || group.offsetParent === null
+        ? el.getBoundingClientRect().bottom
+        : group.offsetParent.getBoundingClientRect().top + group.offsetTop + group.offsetHeight;
+    el.style.setProperty("--travel-dy", `${Math.max(0, window.innerHeight - bottom - 32)}px`);
   };
 
   const startLeave = () => {
@@ -1318,6 +1329,9 @@ function ChatViewBody(props: {
         unread: meta.unread ?? null,
       });
     const homeCards = selectHomeCards(session.sessions, stateOf);
+    // 纸面两档（小学作业 / 打字稿）首页仍是三张卡：它们的版式是田字格 / 横线的整套，不套方向 N；
+    // 别的主题是按状态分组的记录行（2026-11-07）。两条路读同一份运行态推导，只是形状不同。
+    const logMode = heroFace(props.theme) === "plain";
     const lineText: HomeCardLineText = {
       thinking: t.homeCard.thinking,
       doing: t.homeCard.doing,
@@ -1327,8 +1341,54 @@ function ChatViewBody(props: {
       done: t.homeCard.done,
       verb: (toolName, input) => t.chat.rollupTool(rollupToolKey(toolName, input, skills)),
     };
+    /** 一条会话在首页上的实况：运行态、那一句「此刻在干什么」、在哪、多久前（卡与记录行共用） */
+    const homeFacts = (sessionId: string) => {
+      const meta = session.sessions.find((m) => m.id === sessionId);
+      const state = meta === undefined ? null : stateOf(meta);
+      // 槽只在说「此刻」时才读：没在跑的会话说最近一次提问，不碰转录
+      const entry = state === null ? undefined : session.entryOf(sessionId);
+      const approval = session.approvalsOf(sessionId)[0];
+      const where =
+        meta?.workspaceId === null || meta === undefined
+          ? t.sidebar.tasks
+          : (session.workspaces.find((w) => w.id === meta.workspaceId)?.name ?? t.sidebar.tasks);
+      const line = homeCardLine(
+        {
+          state,
+          records: entry === undefined ? null : selectTranscript(entry.transcript),
+          approval: approval === undefined ? null : { toolName: approval.toolName, input: approval.input },
+          turnError: session.turnErrorOf(sessionId),
+          lastAsk: meta?.recentQueries[0] ?? null,
+        },
+        lineText,
+      );
+      // 在跑 / 等你不写时间：不走表的「刚刚」比不写更误导
+      const time =
+        state === "running" || state === "waiting" || meta === undefined ? null : relativeTime(meta.updatedAt, t);
+      return { state, where, line, time };
+    };
     // 点击：卡与行都进该会话（openSession）——滚动定位到 sourceMessageRange 的基建
     // 还未立项（PR-4 面板同款 TODO），落定后行点击可升级为定位，卡保持进会话
+    const openFromHome = (sessionId: string): void => {
+      startLeave();
+      session.openSession(sessionId);
+    };
+    const logGroups = logMode
+      ? selectHomeLog(session.sessions, stateOf).map((group) => ({
+          group: group.group,
+          rows: group.rows.map((row): HomeLogRowView => {
+            const facts = homeFacts(row.sessionId);
+            return {
+              sessionId: row.sessionId,
+              title: row.title,
+              state: facts.state,
+              line: facts.line,
+              where: facts.where,
+              time: facts.time,
+            };
+          }),
+        }))
+      : [];
     return (
       <div
         className="home-stage"
@@ -1341,108 +1401,64 @@ function ChatViewBody(props: {
           flex: 1,
           minWidth: 0,
           height: "100%",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: "var(--space-5)",
           overflow: "hidden",
         }}
       >
-        <div
-          ref={stageRef}
-          style={{
-            position: "relative",
-            zIndex: 1,
-            width: "min(100%, var(--content-max-width))",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            gap: "var(--space-5)",
-          }}
-        >
-          {/* 淡出组：slogan 与会话卡一起向上走（--transition-layer，220ms） */}
-          <div
-            className="home-fade"
-            style={{
-              width: "100%",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              gap: "var(--space-5)",
-            }}
-          >
+        <div ref={stageRef} className="home-col" data-mode={logMode ? "log" : "cards"}>
+          {/* 淡出组：slogan（与纸面档的会话卡）一起向上走（--transition-layer，220ms） */}
+          <div className="home-fade home-fade-head">
             {/* 门面：slogan（纸面两档再加红笔批语），样子与理由在 HomeHero.tsx */}
             <HomeHero theme={props.theme} />
-            {/* 一排最近会话卡（SessionCard 规格：恒三槽、等高、hover 只抬阴影） */}
-            {!session.sessionsLoaded ? (
-              <div style={{ width: "100%", display: "flex", gap: "var(--space-3)" }}>
-                {[0, 1, 2].map((index) => (
-                  <SessionCard key={index} name="" loading />
-                ))}
-              </div>
-            ) : (
-              homeCards.length > 0 && (
+            {/* 纸面档：一排最近会话卡（SessionCard 规格：恒三槽、等高、hover 只抬阴影） */}
+            {!logMode &&
+              (!session.sessionsLoaded ? (
                 <div style={{ width: "100%", display: "flex", gap: "var(--space-3)" }}>
-                  {homeCards.map((card) => {
-                    const meta = session.sessions.find((m) => m.id === card.sessionId);
-                    const state = meta === undefined ? null : stateOf(meta);
-                    // 槽只在说「此刻」时才读：没在跑的卡说最近一次提问，不碰转录
-                    const entry = state === null ? undefined : session.entryOf(card.sessionId);
-                    const approval = session.approvalsOf(card.sessionId)[0];
-                    const where =
-                      meta?.workspaceId === null || meta === undefined
-                        ? t.sidebar.tasks
-                        : (session.workspaces.find((w) => w.id === meta.workspaceId)?.name ?? t.sidebar.tasks);
-                    const metaLine = [
-                      where,
-                      ...(state === null ? [] : [t.homeCard.state[state]]),
-                      // 在跑 / 等你不写时间：不走表的「刚刚」比不写更误导
-                      ...(state === "running" || state === "waiting" || meta === undefined
-                        ? []
-                        : [relativeTime(meta.updatedAt, t)]),
-                    ].join(" · ");
-                    return (
-                      <SessionCard
-                        key={card.sessionId}
-                        name={card.title}
-                        items={card.rows.map((row) => ({ text: row.text }))}
-                        slots={HOME_CARD_QUERY_ROWS}
-                        line={
-                          homeCardLine(
-                                {
-                                  state,
-                                  records: entry === undefined ? null : selectTranscript(entry.transcript),
-                                  approval:
-                                    approval === undefined
-                                      ? null
-                                      : { toolName: approval.toolName, input: approval.input },
-                                  turnError: session.turnErrorOf(card.sessionId),
-                                  lastAsk: meta?.recentQueries[0] ?? null,
-                                },
-                                lineText,
-                              )
-                        }
-                        meta={metaLine}
-                        state={state}
-                        onClick={() => {
-                          startLeave();
-                          session.openSession(card.sessionId);
-                        }}
-                      />
-                    );
-                  })}
+                  {[0, 1, 2].map((index) => (
+                    <SessionCard key={index} name="" loading />
+                  ))}
                 </div>
-              )
-            )}
+              ) : (
+                homeCards.length > 0 && (
+                  <div style={{ width: "100%", display: "flex", gap: "var(--space-3)" }}>
+                    {homeCards.map((card) => {
+                      const facts = homeFacts(card.sessionId);
+                      const metaLine = [
+                        facts.where,
+                        ...(facts.state === null ? [] : [t.homeCard.state[facts.state]]),
+                        ...(facts.time === null ? [] : [facts.time]),
+                      ].join(" · ");
+                      return (
+                        <SessionCard
+                          key={card.sessionId}
+                          name={card.title}
+                          items={card.rows.map((row) => ({ text: row.text }))}
+                          slots={HOME_CARD_QUERY_ROWS}
+                          line={facts.line}
+                          meta={metaLine}
+                          state={facts.state}
+                          onClick={() => openFromHome(card.sessionId)}
+                        />
+                      );
+                    })}
+                  </div>
+                )
+              ))}
           </div>
           {/* 滑落组：notices 与 composer 一起滑向窗口底部（--transition-composer-exit，240ms） */}
           <div
+            ref={travelRef}
             className="home-travel"
             style={{ width: "100%", display: "grid", gap: "var(--space-2)" }}
           >
             {notices}
             {composer}
           </div>
+          {/* 记录组：在输入框下面（先写，再读别的活的进展），随 slogan 一起淡出 */}
+          {logMode && (
+            <div className="home-fade home-fade-log">
+              <HomeLog groups={logGroups} loading={!session.sessionsLoaded} onOpen={openFromHome} />
+            </div>
+          )}
         </div>
       </div>
     );

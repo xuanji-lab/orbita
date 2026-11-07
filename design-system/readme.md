@@ -141,7 +141,9 @@ the English copy; the Chinese copy follows the same voice.
 - **Mono for machine facts.** Paths, ids, branch names, durations, model names and counts are set in
   the mono/tabular face so a number never re-flows a row.
 - **The slogan is the one lyrical line in the product**: 璇玑运转，诸事得序 — set in the brand
-  serif at 36px, letter-spaced, centred. Nothing else on the home screen competes with it. The two
+  serif, letter-spaced, **left-aligned at 28px and the lightest weight on screen** (2026-11-07; the two paper
+  themes keep their centred 36 / 30px stagings). Under it come the input box and the record of what is
+  waiting, running and recent; nothing else on the home screen competes with the line. The two
   paper themes restage it (see *Paper themes*) and add one teacher's mark beneath it in red pen
   (「字迹工整」/ "Neat."); that mark is decoration, not copy — screen readers skip it.
 
@@ -286,8 +288,10 @@ are unbounded — no fill, no border, no dividers — so the pane's edges are th
 sidebar lists two nodes: **Workspaces** (each holding tasks, with its own new-task control — a workspace's tasks indent so
 their titles start on the workspace name's line, their marker slot under its folder icon, `.tree-children`) and
 **Tasks** for anything belonging to no workspace. One shared measure — `--content-max-width: 1000px` — governs the
-transcript, the composer and the home card, which is why the input box keeps the same width from the
-home screen to the chat page. Density is balanced: 32/36/48px row heights, 24–36px controls — **a control's height is a step, never
+transcript, the composer and the home record, which is why the input box keeps the same width from the
+home screen to the chat page. **Index gutter** (`--gutter`, 88px, 2026-11-07): the content column carries a
+narrow gutter on its left for an index — group names on home (conversation timestamps and settings section
+names follow); the meridian runs at `gutter − 20px`. The column's own measure is unchanged. Density is balanced: 32/36/48px row heights, 24–36px controls — **a control's height is a step, never
 what its content happens to add up to**: chips are `--control-height-xs` (24), not 12px text plus
 padding (that came to 22.5–23px). Never IDE-crowded.
 
@@ -447,13 +451,21 @@ working or waiting; it yields to the hover actions. The same pie (same derivatio
 heads each row of the notifications list behind the `bell`, the sub-session inbox and the
 completion card; unread marks persist in the session meta, so it survives a restart.
 
-**The home cards say what each task is doing now** (2026-10-30, `features/chat/home-cards.ts`):
-pie + title, one sentence held at two lines, then one plain line "where · state · how long ago".
-The sentence is derived, never stored — running: the current chapter, led by the plan step in
+**The home record says what each task is doing now** (2026-11-07 replaced the three equal-weight cards that
+2026-10-30 introduced; `features/chat/home-cards.ts` `selectHomeLog`, `HomeLog.tsx`). Home reads top to
+bottom: slogan → input box → **the record**, grouped **Waiting for you / Running / Recent** (caps 4 / 4 / 5; a
+failed task counts as waiting — it needs you). One 32px **record row** per task: pie on the meridian · title
+(13em, medium) · the sentence, one line, secondary ink · how long ago at the row's right hem (running and
+waiting rows carry no time: a "just now" that does not tick is worse than none). The workspace name is the
+row's tooltip. The group names live in the **index gutter** left of the content column; the status pie sits
+on the **meridian**, a 1px line at gutter − 20px, with a 5px dot for tasks that have no state. Rows are
+buttons: keyboard reachable, hover is the `.option-row` wash. Under 760px of conversation column the gutter
+shrinks to 32px and the group name moves onto its own line above the group. The two paper themes keep the
+three cards (their staging is the grid / typewriter page). The sentence is derived, never stored — running: the current chapter, led by the plan step in
 progress ("Re-check the status: the path was wrong, trying src"), else the tool running, else
 "Thinking"; waiting: what the pending approval wants to do; failed: the error's first line;
 finished unread: the answer's first line; idle: the last thing you asked (an idle task's own last
-line would mean reading its whole transcript). Tasks that want you take the cards first —
+line would mean reading its whole transcript). Tasks that want you take the first rows —
 waiting › failed › running — then the carryover and recency rules as before. A single line of
 markdown taken as a title (chapters, this sentence) renders inline `code` in the mono face and
 drops `**` markers (`shell/inline-marks.ts`).

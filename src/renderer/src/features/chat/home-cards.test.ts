@@ -7,6 +7,7 @@ import {
   HOME_CARD_QUERY_ROWS,
   homeCardLine,
   selectHomeCards,
+  selectHomeLog,
   type HomeCardLineText,
 } from "./home-cards.ts";
 
@@ -210,5 +211,61 @@ describe("homeCardLine —— 卡上「此刻在干什么」那一句", () => {
   test("没在跑：最近一次提问；没有提问（老会话）是 null", () => {
     assert.equal(homeCardLine({ ...base, state: null, records: null }, text), "上次问的");
     assert.equal(homeCardLine({ ...base, state: null, records: null, lastAsk: null }, text), null);
+  });
+});
+
+describe("selectHomeLog", () => {
+  const stateById =
+    (map: Record<string, SessionRunState>) =>
+    (m: SessionMeta): SessionRunState =>
+      map[m.id] ?? null;
+
+  test("按运行态分三组：等你（含出错）> 进行中 > 最近（含跑完没看），组内保持列表序", () => {
+    const sessions = [
+      meta({ id: "idle1", updatedAt: 90 }),
+      meta({ id: "run", updatedAt: 80 }),
+      meta({ id: "wait", updatedAt: 70 }),
+      meta({ id: "fail", updatedAt: 60 }),
+      meta({ id: "done", updatedAt: 50 }),
+      meta({ id: "idle2", updatedAt: 40 }),
+    ];
+    const groups = selectHomeLog(sessions, stateById({ run: "running", wait: "waiting", fail: "failed", done: "done" }));
+    assert.deepEqual(
+      groups.map((g) => [g.group, g.rows.map((r) => r.sessionId)]),
+      [
+        ["waiting", ["wait", "fail"]],
+        ["running", ["run"]],
+        ["recent", ["idle1", "done", "idle2"]],
+      ],
+    );
+  });
+
+  test("没有行的组不返回；全是闲置会话只剩「最近」", () => {
+    const groups = selectHomeLog([meta({ id: "a", updatedAt: 2 }), meta({ id: "b", updatedAt: 1 })], stateById({}));
+    assert.deepEqual(
+      groups.map((g) => g.group),
+      ["recent"],
+    );
+    assert.deepEqual(selectHomeLog([], stateById({})), []);
+  });
+
+  test("子会话 / 归档 / 无标题不进记录；每组各有上限（等你 4、进行中 4、最近 5）", () => {
+    const many = (prefix: string, n: number, base: number): SessionMeta[] =>
+      Array.from({ length: n }, (_, i) => meta({ id: `${prefix}${i}`, updatedAt: base - i }));
+    const sessions = [
+      ...many("w", 6, 600),
+      ...many("r", 6, 500),
+      ...many("x", 8, 400),
+      meta({ id: "child", updatedAt: 999, parentId: "w0" }),
+      meta({ id: "arch", updatedAt: 998, archived: true }),
+      meta({ id: "blank", updatedAt: 997, title: "" }),
+    ];
+    const state = (m: SessionMeta): SessionRunState =>
+      m.id.startsWith("w") ? "waiting" : m.id.startsWith("r") ? "running" : null;
+    const groups = selectHomeLog(sessions, state);
+    const sizes = Object.fromEntries(groups.map((g) => [g.group, g.rows.length]));
+    assert.deepEqual(sizes, { waiting: 4, running: 4, recent: 5 });
+    const ids = groups.flatMap((g) => g.rows.map((r) => r.sessionId));
+    for (const bad of ["child", "arch", "blank"]) assert.ok(!ids.includes(bad), `${bad} 不该出现`);
   });
 });

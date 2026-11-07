@@ -70,3 +70,9 @@
   /* Special Elite 字面宽，九个字的 slogan 放 36px 会挤出窄槽 */
   --font-size-slogan: 30px;
 }
+
+/* 方向 N（2026-11-07）：slogan 左对齐、不再居中称王，降一档到 28px（它之下还有输入框与记录要读）。
+   纸面两档各有自己的字号（田字格 / Special Elite 30px），不跟。 */
+:root:not([data-theme="copybook"], [data-theme="typescript"]) {
+  --font-size-slogan: 28px;
+}
