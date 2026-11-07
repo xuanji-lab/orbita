@@ -1885,7 +1885,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                   {t.chat.previewCut}
                 </div>
               )}
-              <div className={cutIndex >= 0 && index >= cutIndex ? "revert-doomed" : "revert-keep"}>
+              <div className={cutIndex >= 0 && index >= cutIndex ? "revert-doomed" : "revert-keep"} data-kind="toolCall">
               <ShowImageGalleryGroup cards={cards} />
               {branchAfter !== undefined && (
                 <BranchRow
@@ -1910,7 +1910,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 {t.chat.previewCut}
               </div>
             )}
-            <div className={doomed ? "revert-doomed" : "revert-keep"} data-entry-key={entry.key}>
+            <div className={doomed ? "revert-doomed" : "revert-keep"} data-entry-key={entry.key} data-kind={entry.kind}>
             {entry.kind === "turnProcess" ? (
               <TurnProcessLine
                 unit={entry}
@@ -1999,7 +1999,12 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
           </Fragment>
         );
       })}
-      {props.pendingEcho !== null && <PendingEchoRow blocks={props.pendingEcho.blocks} />}
+      {props.pendingEcho !== null && (
+        // 与真回显同一个包裹层与 data-kind：发出即画的这一行也要有空心星 / 时间（子午线认 data-kind）
+        <div className="revert-keep" data-kind="user">
+          <PendingEchoRow blocks={props.pendingEcho.blocks} />
+        </div>
+      )}
       {/* 等确认态（done 且有待表态、终态记录还没落盘）也由运行卡画：环停 86%、
           确认胶囊换气泡图标——确认卡此刻浮在输入框上方，两处互为上下文 */}
       {props.intentRun !== null &&
@@ -2028,7 +2033,9 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
         (props.retry !== null ? (
           <Retrying status={props.retry} />
         ) : liveBlockShown ? null : (
-          <Responding transcript={transcript} />
+          <div className="revert-keep" data-kind="responding">
+            <Responding transcript={transcript} />
+          </div>
         ))}
       {props.phase === "compaction" && (
         <>
@@ -2115,6 +2122,7 @@ function Pane(props: {
   return (
     <div
       ref={paneRef}
+      className="chat-pane"
       style={{
         height: "100%",
         minHeight: 0,
@@ -2255,17 +2263,8 @@ function Pane(props: {
           className="scroll chat-transcript"
           style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}
         >
-          <div
-            style={{
-              width: "min(100%, var(--content-max-width))",
-              margin: "0 auto",
-              display: "flex",
-              flexDirection: "column",
-              gap: "var(--space-4)",
-            }}
-          >
-            {props.children}
-          </div>
+          {/* 消息列：宽 / 居中 / 间距在 styles.css 的 .chat-col（非纸面主题要在左侧留一条索引边栏） */}
+          <div className="chat-col">{props.children}</div>
         </div>
         {/* 一键回底浮钮（feat/scroll-to-bottom-X）：盖一层 pointer-events:none 的定位层，
             内衬与消息列同宽同边距的列、按钮靠右缘——对齐的是消息列而不是面板边。
@@ -2282,14 +2281,7 @@ function Pane(props: {
               alignItems: "flex-end",
             }}
           >
-            <div
-              style={{
-                width: "min(100%, var(--content-max-width))",
-                margin: "0 auto",
-                display: "flex",
-                justifyContent: "flex-end",
-              }}
-            >
+            <div className="chat-float-col">
               <IconButton
                 label={t.chat.scrollToBottom}
                 title={t.chat.scrollToBottom}
@@ -2310,16 +2302,7 @@ function Pane(props: {
       </div>
 
       <div className="chat-footer">
-        <div
-          style={{
-            width: "min(100%, var(--content-max-width))",
-            margin: "0 auto",
-            display: "grid",
-            gap: "var(--space-2)",
-          }}
-        >
-          {props.footer}
-        </div>
+        <div className="chat-foot-col">{props.footer}</div>
       </div>
     </div>
   );
@@ -3339,26 +3322,10 @@ function UserBubble(props: {
     return () => observer.disconnect();
   }, [text, expanded]);
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "flex-end",
-        width: "100%",
-        gap: 2,
-      }}
-    >
+    <div className="user-turn" data-clamped={!expanded && overflowing ? "true" : undefined}>
       {images.length > 0 && <UserImages images={images} />}
       {quotes.length > 0 && (
-        <div
-          style={{
-            display: "grid",
-            justifyItems: "end",
-            gap: "var(--space-1)",
-            maxWidth: "var(--bubble-max-width)",
-            marginBottom: "var(--space-1)",
-          }}
-        >
+        <div className="user-mat user-mat-grid">
           {quotes.map((quote, index) => (
             <QuoteChip
               key={index}
@@ -3374,16 +3341,7 @@ function UserBubble(props: {
         // 文件引用行。发送后排布的统一规则（2026-09-27 定稿）：
         // 图片 → 引用 → 文件 → skill → 粘贴文字 → 文字气泡——前三类是「带进来的
         // 材料」（对话里的 / 磁盘上的），粘贴文字是用户写的内容、贴着气泡
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: "var(--space-2)",
-            justifyContent: "flex-end",
-            maxWidth: "var(--bubble-max-width)",
-            marginBottom: "var(--space-1)",
-          }}
-        >
+        <div className="user-mat user-mat-wrap">
           {fileRefs.map((ref, index) => (
             <FileRefChip
               key={`file:${index}`}
@@ -3404,39 +3362,14 @@ function UserBubble(props: {
       {pastedBlocks.length > 0 && (
         // 粘贴文字行：贴着气泡（它是用户写的内容，不是从磁盘带来的材料）；
         // 折叠成一行——发出去之后它是背景，不该在对话流里再刷一次屏
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: "var(--space-2)",
-            justifyContent: "flex-end",
-            maxWidth: "var(--bubble-max-width)",
-            marginBottom: "var(--space-1)",
-          }}
-        >
+        <div className="user-mat user-mat-wrap">
           {pastedBlocks.map((block, index) => (
             <PastedTextChip key={`pasted:${index}`} text={block.content} lines={block.lines} />
           ))}
         </div>
       )}
       {hasText && (
-        <div
-          data-quote-id={props.item.id}
-          data-quote-role="user"
-          style={{
-            position: "relative",
-            width: "fit-content",
-            maxWidth: "var(--bubble-max-width)",
-            minWidth: 0,
-            padding: "9px 13px",
-            background: "var(--color-chat-card-bg)",
-            border: "1px solid var(--color-border-subtle)",
-            borderRadius: "var(--radius-bubble)",
-            fontSize: "var(--font-size-base)",
-            lineHeight: "var(--line-height-reading)",
-            overflowWrap: "anywhere",
-          }}
-        >
+        <div className="user-bubble" data-quote-id={props.item.id} data-quote-role="user">
           {/* 折叠裁剪落在内容自己的 wrapper 上（无 padding / 边框）：裁剪边正好是
               第 4 行底边，第 5 行整体藏在裁剪线以下。旧实现把 maxHeight 加在气泡
               本体，裁剪边（padding box）比第 4 行低出一条 bottom padding，第 5 行
@@ -3462,7 +3395,7 @@ function UserBubble(props: {
           )}
         </div>
       )}
-      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
+      <div className="msg-acts">
         {/* 记忆挂在用到它的那句话旁边（原型 .memrow，2026-10-30「信息挂在用到它的地方、按需展开」）：
             「用到 N」= 这一轮开始前召回注入的条目，「记住 M」= 这一轮整理出的新条目。点开在下面列出是哪几条；
             0 条的那枚不画。图标只给排在前面的那一枚 */}

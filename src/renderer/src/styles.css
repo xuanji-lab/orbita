@@ -1210,9 +1210,6 @@ body {
   flex: 1;
   min-width: 0;
   min-height: 0;
-  /* 容器查询的容器：索引边栏在「会话列」窄于 760px 时收成 32（右栏打开 / 窄窗）。量的是会话列自己
-     的宽，不是窗口宽——右栏一开，同一扇窗口里的会话列就窄了 */
-  container: pane / inline-size;
 }
 
 /*
@@ -5992,16 +5989,266 @@ mark.intent-mark {
   }
 }
 
-/* 会话列窄于 760：边栏收成 32，只留子午线；首页的组名改落在组上方一行（信息不丢） */
-@container pane (max-width: 760px) {
+/*
+ * 容器查询的容器：索引边栏在「会话列」窄于 760px 时收成 32（右栏打开 / 窄窗 / 右抽屉里的小对话）。
+ * 量的是会话列自己的宽，不是窗口宽——右栏一开，同一扇窗口里的会话列就窄了。首页与聊天页各是
+ * 自己的容器（它们是兄弟，不是父子）；查询只改它们**孩子**身上的 --gutter。
+ */
+.home-stage,
+.chat-pane {
+  container: convo / inline-size;
+}
+@container convo (max-width: 760px) {
   :root:not([data-theme="copybook"], [data-theme="typescript"]) {
-    .home-stage {
+    .home-col,
+    .chat-col,
+    .chat-foot-col,
+    .chat-float-col {
       --gutter: 32px;
     }
     .log-head {
       position: static;
       height: var(--control-height-xs);
       margin-left: 0;
+    }
+  }
+}
+
+/*
+ * ======================================================================
+ * 对话：消息列 / 用户消息 / 输入框的骨架，以及方向 N 的「子午线」
+ * ======================================================================
+ * 下面第一段是原先 ChatView 里的 inline style 原样挪成 class（宽、对齐、气泡配方一个字没变）——
+ * 方向 N 要在非纸面主题下改写它们，inline 压得过任何主题规则。第二段才是 N。
+ */
+.chat-col {
+  width: min(100%, var(--content-max-width));
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.chat-float-col {
+  width: min(100%, var(--content-max-width));
+  margin: 0 auto;
+  display: flex;
+  justify-content: flex-end;
+}
+.chat-foot-col {
+  width: min(100%, var(--content-max-width));
+  margin: 0 auto;
+  display: grid;
+  gap: var(--space-2);
+}
+.user-turn {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  width: 100%;
+  gap: var(--space-0-5);
+}
+.user-mat {
+  max-width: var(--bubble-max-width);
+  margin-bottom: var(--space-1);
+}
+.user-mat-grid {
+  display: grid;
+  justify-items: end;
+  gap: var(--space-1);
+}
+.user-mat-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+.user-bubble {
+  position: relative;
+  width: fit-content;
+  max-width: var(--bubble-max-width);
+  min-width: 0;
+  padding: calc(var(--space-2) + 1px) var(--content-hem);
+  background: var(--color-chat-card-bg);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-bubble);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-reading);
+  overflow-wrap: anywhere;
+}
+.msg-acts {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/*
+ * 方向 N（2026-11-07）· 子午线 —— 签名元素，只此一处
+ *
+ * 一根竖线贯穿整列对话，把「谁说的 / 几点 / 做了几步」钉在同一根轴上：
+ *   用户消息 = 空心星，助手回合 = 实心星，每次工具 / 思考调用 = 一道横刻度；
+ *   时间落在左侧索引边栏里，右对齐到子午线左侧 18px（不再是消息上下两行小字）。
+ * 对话里是现有界面没有的版式：「索引边栏」（首页那节已登记）+「子午线」（同上）。
+ * 用户消息不再是右侧的圆气泡，是一整块左对齐的纸签（冷灰底，无描边）。
+ * 输入框贴在井底成「台沿」：页脚顶一条发丝线，卡自己只剩底、不描边、不浮起。
+ *
+ * 实现取舍：消息列是平的一串 `<div data-kind>`（没有「回合」容器），所以星与刻度靠
+ * `data-kind` + 相邻选择器认：user → 空心星；紧随 user 的第一个非 user 条目 → 实心星
+ * （它若是回合折叠头，时间也在它身上）；thinking / toolCall / toolGroup → 刻度。
+ */
+:root:not([data-theme="copybook"], [data-theme="typescript"]) {
+  .chat-col,
+  .chat-foot-col,
+  .chat-float-col {
+    width: min(100%, calc(var(--content-max-width) + var(--gutter)));
+    box-sizing: border-box;
+    padding-left: var(--gutter);
+  }
+  .chat-col {
+    position: relative;
+    gap: var(--space-5);
+  }
+  .chat-col::before {
+    content: "";
+    position: absolute;
+    left: calc(var(--gutter) - 20px);
+    top: var(--space-1);
+    bottom: 0;
+    width: 1px;
+    background: var(--color-border-default);
+  }
+  /* 条目包裹层 .revert-keep 原本是 display: contents（无盒，回退预演时才变成 grid），星与刻度要一个
+     可定位的盒：N 下把它实化成与预演态 .revert-doomed 同款的 grid（gap 继承，「条目 + 分支行」间距不变；
+     minmax(0,1fr) 防宽表格把轨道撑出列外） */
+  .chat-col > .revert-keep {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: inherit;
+    position: relative;
+  }
+
+  /* 星：圆心压在子午线上（线在条目左缘 -20px，星 9px 宽）。星盖住线，所以填井色 */
+  .chat-col > [data-kind="user"]::before,
+  .chat-col > [data-kind="user"] + [data-kind]:not([data-kind="user"])::before {
+    content: "";
+    position: absolute;
+    left: calc(-20px - 4.5px);
+    width: 9px;
+    height: 9px;
+    box-sizing: border-box;
+    border-radius: 50%;
+    background: var(--color-bg-panel);
+    z-index: 1;
+  }
+  .chat-col > [data-kind="user"]::before {
+    top: 15px;
+    border: 1.5px solid var(--color-text-secondary);
+  }
+  .chat-col > [data-kind="user"] + [data-kind]:not([data-kind="user"])::before {
+    top: 10px;
+    background: var(--color-text-secondary);
+  }
+  /* 刻度：一道横短线跨过子午线；回合头那一行已经有实心星，不再叠刻度 */
+  .chat-col > :is([data-kind="thinking"], [data-kind="toolCall"], [data-kind="toolGroup"]):not([data-kind="user"] + *)::after {
+    content: "";
+    position: absolute;
+    left: -26px;
+    top: 14px;
+    width: 13px;
+    height: 1px;
+    background: var(--color-text-tertiary);
+  }
+
+  /* 用户消息：左对齐的整块纸签，不再是右侧圆气泡 */
+  .user-turn {
+    align-items: stretch;
+  }
+  .user-bubble {
+    width: auto;
+    max-width: none;
+    border: 0;
+    border-radius: var(--radius-md);
+  }
+  .user-mat {
+    max-width: none;
+  }
+  .user-mat-grid {
+    justify-items: start;
+  }
+  .user-mat-wrap {
+    justify-content: flex-start;
+  }
+  .user-turn .memrow-list {
+    justify-items: start;
+  }
+  /* 复制 / 回退 / 记忆这排动作悬停（或键盘聚焦）才出：静止时它是一排每条消息都有的小灰图标。
+     行尾的时间已经搬进边栏，这排里剩下的都是操作。不用 visibility:hidden——那会把键盘用户挡在外面；
+     用 opacity + pointer-events（没出现时点不到，免得误触「回到这里」）。折叠的长消息要看得到展开键，常显 */
+  .user-turn .msg-acts > button {
+    opacity: 0;
+    pointer-events: none;
+    transition: var(--transition-hover);
+  }
+  .user-turn:hover .msg-acts > button,
+  .user-turn .msg-acts:focus-within > button,
+  .user-turn[data-clamped="true"] .msg-acts > button {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .user-turn .msg-acts {
+    margin-bottom: calc(-1 * var(--control-height-xs));
+  }
+  /* 窄列里时间回到动作行：钉行尾（行尾血线）。宽列里它是绝对定位进边栏的，这条不起作用 */
+  .user-turn .user-msg-time {
+    margin-left: auto;
+  }
+  .user-turn[data-clamped="true"] .msg-acts {
+    margin-bottom: 0;
+  }
+
+  /* 输入框贴井底成台沿：顶一条发丝线，卡自己只剩底、不描边、不浮起 */
+  .chat-footer {
+    border-top: 1px solid var(--color-border-subtle);
+    padding-top: var(--space-3);
+  }
+  /* 输入卡只留描边、不填底（容器一种语言）：首页它是一个细描边框；页脚里连描边也去掉，成为台沿 */
+  .composer-card {
+    background: transparent;
+  }
+  .chat-footer .composer-card {
+    border-color: transparent;
+  }
+  .chat-transcript {
+    padding-bottom: var(--space-3);
+  }
+}
+
+/*
+ * 时间落在索引边栏里——只在边栏有 88px 时（会话列 ≥ 761px）。边栏收成 32 的窄列放不下，
+ * 退回原来的位置（回合头的时间在折叠行上方一行，用户消息的时间在动作行最右），信息不丢。
+ */
+@container convo (min-width: 761px) {
+  :root:not([data-theme="copybook"], [data-theme="typescript"]) {
+    /* 时间落在边栏里：用户消息的时间钉在星的左边，回合头的时间钉在折叠头那一行的左边。
+       回合头的时间原先是折叠行上方独占一行（inline paddingLeft 把它推到血线上），N 把它请出流，
+       !important 只为压过那条 inline 内边距 */
+    .user-turn .user-msg-time,
+    .chat-col .turn-start-time {
+      position: absolute;
+      left: calc(-1 * var(--gutter));
+      width: calc(var(--gutter) - 38px);
+      text-align: right;
+      padding-left: 0 !important;
+      /* 非今天的消息是「08-23 18:23」，比 50px 宽：在空格处折成两行（日期 / 时分），
+         以星心为中线居中，不撞星也不撑宽边栏 */
+      line-height: var(--line-height-tight);
+      transform: translateY(-50%);
+    }
+    .user-turn .user-msg-time {
+      top: 19.5px;
+    }
+    .chat-col .turn-start-time {
+      top: 14.5px;
     }
   }
 }

@@ -533,6 +533,22 @@ measured scrollbar width (`--transcript-scrollbar`, 0 with overlay scrollbars). 
 transcript centred inside "pane minus scrollbar" and sat half a scrollbar left of the composer.
 `scripts/ui-edges.mjs` checks both edges and the inner line.
 
+**The meridian and the index gutter (conversation, 2026-11-07, direction N).** One 1px line (`--color-border-default`)
+runs the whole length of the conversation at `gutter − 20px` from the column edge, and pins three things to one
+axis: **who spoke** (a hollow star = you, a filled star = the agent's turn), **what it did** (a short tick across
+the line for each thinking / tool call row), and **when** (the time sits in the gutter, right edge 18px left of the
+line; a time that is not today, "08-23 18:23", breaks at its space into two lines centred on the star). It is the
+one signature element; it is not decoration — every mark is data. The user message stops being a right-aligned
+rounded bubble: it is a full-width, left-aligned **paper tab** (`--color-chat-card-bg`, no border, `--radius-md`),
+and its copy / revert / memory row appears on hover or keyboard focus only (opacity + pointer-events, never
+`visibility`, so Tab still reaches it; a clamped long message keeps its expand key visible). The composer is the
+**ledge** at the foot of the well: a hairline across the page, then the card with no fill, no border, no shadow.
+Below 760px of conversation column the gutter is 32px — only the line and its marks remain, and the times go
+back where they were (above the turn's rollup row; under the user tab, right-aligned). The turn's wrapper
+`.revert-keep` (formerly `display: contents`) becomes a real grid box on these themes so a star can be anchored;
+stars and ticks are chosen by `data-kind` and sibling selectors, because the transcript is a flat list, not a
+list of turns. The two paper themes keep the right-hand bubble and the floating composer.
+
 **Controls stand on steps.** Icon buttons are 24 (inline, in rows) · 28 (capsules, panel heads,
 rails) · 32; icon glyphs are 12 (inline, chips) · 14 (rows) · 16 (toolbar, panel heads). The steps
 live in the components — `IconButton` and `Icon` snap whatever they are given to the next step up
@@ -736,7 +752,7 @@ classes listed under *Implementation rules*.
 | 按钮 | 主操作 accent 实底（`.btn-accent`，一屏一个）；安静控件透明底、hover 铺半透明冷灰、不出边框（`.quiet-control`）；纯图标用 IconButton；危险红字、hover `--color-danger-soft`；卡片本身可为按钮（SessionCard、ThemeCard）。设置页次按钮现有两种写法：Providers 的 `.pv-btn` hover 加 `--color-border-strong` 描边，设置页导入入口（Import 行，其后的 Migration 页沿用）常驻 1px 发丝内描边——尚未统一 |
 | 选中态 | 列表选中行铺 `--color-bg-active` 淡底 + semibold（2026-08-25 选定）；模式按钮与安静控件的 pressed 用 `--color-mode-active-*`；hover 只铺中性半透明底 |
 | 长信息 | 默认折叠单行摘要，点击展开（tool 输出 / 文档阅读 / 日志统一） |
-| 消息形态 | Hybrid：用户指令独立气泡；agent 输出全宽文档式、默认折叠一行 |
+| 消息形态 | Hybrid：用户指令是左对齐的纸签（纸面两档仍是右侧气泡）；agent 输出全宽文档式、默认折叠一行；时间 / 谁说的 / 做了几步钉在左侧子午线上（2026-11-07） |
 | 强调色 | 仅选中 + 主操作，辅以有限语义色；颜色绝不作唯一状态信号 |
 | 文字 | 按角色分规则（导航/正文/代码/元数据）；UI 无衬线 + 代码等宽；表达性字体仅品牌标 |
 | 动效 | 白名单制：仅解释来源（面板开合/消息到达），无 idle 装饰 |
