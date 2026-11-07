@@ -266,6 +266,50 @@
   justify-self: end;
   gap: var(--space-0-5);
 }
+/*
+ * 方向 N 返工（2026-11-07）：胶囊去底以后，「标题居中、右端 id / 收工键靠边」的三栏网格在壳上就成了
+ * 三个各自漂着的字串（标题与 hash 隔 74px，父会话的 ⑂ N 又在更左边）——有底的药丸「装」着它们时看不出来。
+ * 改成按内容宽度居中成一组：[⑂ N / ↑ 父标题] [标题] [hash] [复制] | [✓]，间距统一一个 --space-1，
+ * 整组居中在会话列上。悬停才出现的铅笔 / 复制键仍用 visibility 占位（显形时一个像素都不挪），
+ * 所以组内会有两处 24px 的空位——和相邻两组的间距同一个节奏。标题是唯一能缩的（min-width: 0 +
+ * 省略号），其余各保住自己的宽；再窄时的让位顺序（短 id → 子会话文字）不变。
+ * 左边那个对称用的铅笔占位在成组之后没有意义，去掉。纸面两档保留三栏网格（它们的胶囊还有底）。
+ */
+:root:not([data-theme="copybook"], [data-theme="typescript"]) {
+  .cap-sess {
+    display: flex;
+    justify-content: center;
+    gap: var(--space-1);
+  }
+  .cap-sess .cap-sl:empty {
+    display: none;
+  }
+  .cap-sess .cap-sc {
+    flex: 0 1 auto;
+    justify-self: auto;
+    grid-column: auto;
+  }
+  .cap-sess .cap-sc > .cap-mini:first-child {
+    display: none;
+  }
+  .cap-sess .cap-sr {
+    flex: 0 0 auto;
+    justify-self: auto;
+  }
+  /* 悬停才显形的铅笔 / 复制键占位 24 → 20：组内相邻两件的间距收在同一个节奏上（标题 ↔ id、id ↔ 收工线
+     各约 30px，⑂N ↔ 标题 16px），不再是「标题与 hash 隔一大截」 */
+  .cap-sess .cap-sc > .cap-mini,
+  .cap-sess .cap-sr > .cap-mini {
+    width: var(--space-5);
+    height: var(--space-5);
+  }
+  .cap-sess .cap-sl {
+    margin-right: var(--space-2);
+  }
+  .cap-sess .cap-sid {
+    padding-left: 0;
+  }
+}
 /* 标题是唯一的主体：titlebar 档、半粗、正墨 */
 .cap-title {
   font-size: var(--font-size-titlebar);

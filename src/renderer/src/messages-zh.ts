@@ -729,6 +729,7 @@ export const zh: Messages = {
     childWaiting: "子会话在等你批准",
     failed: "出错停下了",
     done: "跑完了，打开看结果",
+    noText: "（没有文字）",
   },
 
   notice: {

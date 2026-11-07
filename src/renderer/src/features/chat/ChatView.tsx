@@ -1339,6 +1339,7 @@ function ChatViewBody(props: {
       childWaiting: t.homeCard.childWaiting,
       failed: t.homeCard.failed,
       done: t.homeCard.done,
+      noText: t.homeCard.noText,
       verb: (toolName, input) => t.chat.rollupTool(rollupToolKey(toolName, input, skills)),
     };
     /** 一条会话在首页上的实况：运行态、那一句「此刻在干什么」、在哪、多久前（卡与记录行共用） */

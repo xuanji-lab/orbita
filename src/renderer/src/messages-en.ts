@@ -811,6 +811,7 @@ export const en = {
     childWaiting: "A sub-session is waiting for your approval",
     failed: "Stopped with an error",
     done: "Finished — open it to see the result",
+    noText: "(no text)",
   },
 
   /** 后台会话跑完时，辅助对话图标旁弹出的卡片 */

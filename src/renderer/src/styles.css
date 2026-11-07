@@ -1160,9 +1160,6 @@ body {
   background: var(--color-bg-panel);
 }
 
-:root:is([data-theme="graphite"], [data-theme="black"]) .pane {
-  border: 1px solid var(--color-border-subtle);
-}
 
 /*
  * 方向 N（2026-11-07）：浅色也是「有颜色的壳 + 平的纸面井」，不再是半透明玻璃叠在桌面上——
@@ -1190,6 +1187,17 @@ body {
   .file-row[aria-selected="true"] {
     font-weight: var(--weight-regular);
   }
+}
+
+/*
+ * 暗档壳上的选中：壳与井只差一个台阶（对比度 1.10 / 1.12），「井的纸色摊在壳上」在暗档读不出来
+ * （审查：选中行与壳的底差贴着可见下限）。暗档改用中性白 10% 压在壳上（实测 ≥1.25），仍是中性、不借 accent；
+ * 浅色的纸色摊在台面上保持原样（1.17，清楚）。
+ * 暗档的井也不再画 1px 描边（底 + 线混用）：壳 → 井的台阶（ΔL* ≈ 5）已经在分层，线是第二种语言。
+ */
+:root:is([data-theme="graphite"], [data-theme="black"]) :is(.sidebar, .right-rail, .toolbar) {
+  --option-active-bg: rgba(255, 255, 255, 0.1);
+  --color-mode-active-bg: rgba(255, 255, 255, 0.1);
 }
 
 /*
@@ -5566,6 +5574,8 @@ mark.intent-mark {
 .proc-strong {
   flex: none;
   color: var(--color-text-secondary);
+  /* 「第 3 步」「3 步」的数字会变，等宽不跳 */
+  font-variant-numeric: tabular-nums;
 }
 .proc-num {
   display: inline-flex;
@@ -5696,17 +5706,17 @@ mark.intent-mark {
 .proc-chapters > li::before {
   content: "";
   position: absolute;
-  left: calc(-1 * var(--space-3) - 4.5px);
-  top: 9px;
-  width: 8px;
-  height: 8px;
+  left: calc(-1 * var(--space-3) - 3px);
+  top: 10.5px;
+  /* 实心小点，不是空心圆：子午线上的空心圆只留给「你」（返工 2026-11-07，同一列里空心圆有两个意思，
+     扫读时会把展开的步骤误认成用户消息）。5px、三级墨，比回合头的实心圆小一档。 */
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
-  background: var(--color-bg-panel);
-  border: 1.5px solid var(--color-text-tertiary);
+  background: var(--color-text-tertiary);
   box-sizing: border-box;
 }
 .proc-chapters > li.bad::before {
-  border-color: var(--color-danger);
   background: var(--color-danger);
 }
 .proc-chapter-btn {
@@ -6127,9 +6137,19 @@ mark.intent-mark {
     position: relative;
   }
 
-  /* 星：圆心压在子午线上（线在条目左缘 -20px，星 9px 宽）。星盖住线，所以填井色 */
-  .chat-col > [data-kind="user"]::before,
-  .chat-col > [data-kind="user"] + [data-kind]:not([data-kind="user"])::before {
+  /*
+   * 记号图例（返工 2026-11-07，子午线上只有四种形状，每种只有一个意思）：
+   *   空心圆   = 你说的话（user）
+   *   空心菱形 = 另一个 agent 说的话（channelMark：子会话里父会话派来的任务，父会话里子会话的回报）
+   *   实心圆   = 这个 agent 的一轮（回合头）
+   *   短横刻度 = 一步（思考 / 工具调用，只在逐步铺开的活跃轮与委派卡前出现）
+   * 展开后的过程成员行用的是一颗实心小点（.proc-chapters 里），不是任何一种空心记号。
+   * 菱形 = 空心圆转 45° 的方块：同一套线宽与色，形状一变就读得出「不是你」；它们都是「有人开口」的记号，
+   * 所以都配一个紧随其后的实心圆（agent 回应）。
+   */
+  .chat-col > :is([data-kind="user"], [data-kind="channelMark"])::before,
+  .chat-col > :is([data-kind="turnGroup"], [data-kind="turnProcess"])::before,
+  .chat-col > :is([data-kind="user"], [data-kind="channelMark"]) + [data-kind]:not(:is([data-kind="user"], [data-kind="channelMark"]))::before {
     content: "";
     position: absolute;
     left: calc(-20px - 4.5px);
@@ -6137,19 +6157,32 @@ mark.intent-mark {
     height: 9px;
     box-sizing: border-box;
     border-radius: 50%;
-    background: var(--color-bg-panel);
+    background: var(--color-text-secondary);
     z-index: 1;
   }
   .chat-col > [data-kind="user"]::before {
     top: 15px;
+    background: var(--color-bg-panel);
     border: 1.5px solid var(--color-text-secondary);
   }
-  .chat-col > [data-kind="user"] + [data-kind]:not([data-kind="user"])::before {
-    top: 10px;
-    background: var(--color-text-secondary);
+  .chat-col > [data-kind="channelMark"]::before {
+    top: 15px;
+    left: calc(-20px - 4px);
+    width: 8px;
+    height: 8px;
+    border-radius: 1px;
+    background: var(--color-bg-panel);
+    border: 1.5px solid var(--color-text-secondary);
+    transform: rotate(45deg);
   }
-  /* 刻度：一道横短线跨过子午线；回合头那一行已经有实心星，不再叠刻度 */
-  .chat-col > :is([data-kind="thinking"], [data-kind="toolCall"], [data-kind="toolGroup"]):not([data-kind="user"] + *)::after {
+  /* 回合头与紧随其后的第一个条目：实心圆。落在 turnGroup / turnProcess 上也画——它们才带时间，
+     委派卡之后那一轮曾经「有时间没有圆」（审查 §3.10） */
+  .chat-col > :is([data-kind="turnGroup"], [data-kind="turnProcess"])::before,
+  .chat-col > :is([data-kind="user"], [data-kind="channelMark"]) + [data-kind]:not(:is([data-kind="user"], [data-kind="channelMark"]))::before {
+    top: 10px;
+  }
+  /* 刻度：一道横短线跨过子午线；紧随开口记号的那一行已经有实心圆，不再叠刻度 */
+  .chat-col > :is([data-kind="thinking"], [data-kind="toolCall"], [data-kind="toolGroup"]):not(:is([data-kind="user"], [data-kind="channelMark"]) + *)::after {
     content: "";
     position: absolute;
     left: -26px;

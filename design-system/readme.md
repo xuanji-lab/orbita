@@ -190,7 +190,8 @@ everywhere — never the accent hue: 2026-08-25 chose the accent wash (option A)
 (a sidebar column showed the accent three times: New task, the mode tab and the selected row, which is the
 "blue everywhere" look this file forbids). **On the shell** (sidebar, right rail, toolbar) the selected row and
 the pressed key instead take the well's own paper colour — "laid on the table", the same material as the page
-that is open beside it; inside the well and in menus, which are paper already, the neutral wash stays
+that is open beside it (**on the two dark tiers the shell and the well are only one step apart — 1.10 / 1.12:1 — so
+there the pressed row takes a neutral white 10% wash over the shell instead, 1.36:1**); inside the well and in menus, which are paper already, the neutral wash stays
 (`:root … :is(.sidebar, .right-rail, .toolbar)` in `styles.css`). Max two background colours per screen.
 
 **Muted surface** (`--color-bg-muted`): the one neutral fill for anything that sits as a block on a
@@ -229,8 +230,9 @@ red-pen vermilion `#c0442e`.
 **Two dark tiers** (re-cut 2026-09-30; values lifted from the packaged colour systems of the
 user's two comfort apps — DeepSeek Harness and ZCode — not eyeballed). The layering grammar: **the
 shell (the ground the left rail and right icon strip sit on) is the lighter step, the chat panel is
-the well, cards and the composer float back up; hairlines are white at low translucency; grounds
-paint solid** (`.layer` / `.pane` overrides in `src/renderer/src/styles.css`; glass is reserved for
+the well, cards and the composer float back up; hairlines are white at low translucency (**the well itself
+has no edge line since 2026-11-07 — a fill plus a 1px ring is two languages on one container; the shell → well step does
+the layering**); grounds paint solid** (`.layer` / `.pane` overrides in `src/renderer/src/styles.css`; glass is reserved for
 floating layers, whose `--glass-bg` is the tier's card colour). Both wells sit at the same depth;
 the tiers differ in the shell, and **each shell must clear its well by a step the eye can see**
 (黛 ΔL\* 5.5, 玄 ≈ 5 — since 2026-11-07 玄 is a blue-black night sky rather than ZCode's pure grey, whose 10.3
@@ -473,7 +475,10 @@ completion card; unread marks persist in the session meta, so it survives a rest
 **The home record says what each task is doing now** (2026-11-07 replaced the three equal-weight cards that
 2026-10-30 introduced; `features/chat/home-cards.ts` `selectHomeLog`, `HomeLog.tsx`). Home reads top to
 bottom: slogan → input box → **the record**, grouped **Waiting for you / Running / Recent** (caps 4 / 4 / 5; a
-failed task counts as waiting — it needs you). One 32px **record row** per task: pie on the meridian · title
+failed task counts as waiting — it needs you). The sentence for a task not currently running is the last thing you asked — **only the words you could see**: the
+system wrappers a message carries (`<user_context>`, `<orbita-memory>`, `<referenced_task>`, HTML comments …) are
+stripped (`visibleAsk`), and a message that was nothing but wrapper reads "(no text)", not the system prompt.
+One 32px **record row** per task: pie on the meridian · title
 (13em, medium) · the sentence, one line, secondary ink · how long ago at the row's right hem (running and
 waiting rows carry no time: a "just now" that does not tick is worse than none). The workspace name is the
 row's tooltip. The group names live in the **index gutter** left of the content column; the status pie sits
@@ -534,7 +539,10 @@ cells `--titlebar-control` (28), fields / tabs `--titlebar-field` (24), icons 16
 titles `--font-size-titlebar` (= base, semibold). Four capsules: the left one (sidebar toggle · New task ·
 Focus slot — the toggle never changes container, so its coordinates are identical collapsed or expanded),
 the session capsule (address-bar layout, fixed 480 shrinking to fit, centred on the conversation column,
-min 12 from its neighbours), the right-panel capsule (left edge pinned to the panel divider, width =
+min 12 from its neighbours; **on the non-paper themes its content is one group centred by content width** —
+[sub-session count / back-to-parent] [title] [id] [copy] | [done], gaps on one rhythm, the title the only thing
+that shrinks (ellipsis) — because with the capsule's fill gone, a fixed three-column grid left the title, the id and
+the count drifting apart on the shell; the paper themes keep the grid), the right-panel capsule (left edge pinned to the panel divider, width =
 `--right-panel-w`; panel headers portal into it; below 300 the filter collapses to a search cell),
 and the right-panel toggle. Cards start at y=52 — conversation / settings cards have **no header row**
 (session info lives in the session capsule; panel headers live in the right-panel capsule), and the
@@ -554,9 +562,12 @@ transcript centred inside "pane minus scrollbar" and sat half a scrollbar left o
 
 **The meridian and the index gutter (conversation, 2026-11-07, direction N).** One 1px line (`--color-border-default`)
 runs the whole length of the conversation at `gutter − 20px` from the column edge, and pins three things to one
-axis: **who spoke** (a hollow star = you, a filled star = the agent's turn), **what it did** (a short tick across
-the line for each thinking / tool call row), and **when** (the time sits in the gutter, right edge 18px left of the
-line; a time that is not today, "08-23 18:23", breaks at its space into two lines centred on the star). It is the
+axis: **who spoke**, **what it did** (a short tick across the line for each thinking / tool call row), and **when** (the time sits in the gutter, right edge 18px left of the
+line; a time that is not today, "08-23 18:23", breaks at its space into two lines centred on the star). **Legend — four shapes, each with one meaning**: **hollow circle = you**; **hollow diamond =
+another agent** (the task a parent sent into a sub-session, a sub-session's report in the parent — a `channelMark`
+entry); **filled circle = this agent's turn** (the turn head, and the first entry after a hollow mark);
+**short tick = a step**. The folded steps that open under a turn head hang off their own thin rule with a *solid* 5px
+dot, never a hollow mark — a hollow circle in that column once read as a second user message. It is the
 one signature element; it is not decoration — every mark is data. The user message stops being a right-aligned
 rounded bubble: it is a full-width, left-aligned **paper tab** (`--color-chat-card-bg`, no border, `--radius-md`),
 and its copy / revert / memory row appears on hover or keyboard focus only (opacity + pointer-events, never

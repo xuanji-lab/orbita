@@ -2,6 +2,7 @@ import type { SessionMeta, TranscriptRecord } from "@shared/session";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载，@shared 别名
 // 只在构建期由 electron-vite 解析（同 stats-format.ts:13 的先例）
 import { rootSessions } from "../../../../shared/session.ts";
+import { withoutQuotes } from "../../../../shared/quote.ts";
 import type { SessionRunState } from "../notify/completion-notice.ts";
 import { planTimeline } from "../context/plan-timeline.ts";
 import { toolIndexOf } from "../context/task-progress.ts";
@@ -89,6 +90,37 @@ export function selectHomeLog(
     .map((group) => ({ group, rows: buckets[group] }));
 }
 
+/**
+ * 一条提问里「用户看得见」的文字（2026-11-07 返工：首页记录行把「此刻在干什么」放在行中段最醒目的位置，
+ * 老会话的 recentQueries[0] 直接露出了系统提示原文，如 `<!-- 你正在通过 Proma 飞书桥…`）。
+ * 剥掉系统加的包装：成对标签块（<user_context>、<orbita-memory>、<referenced_task>…）、
+ * 自闭合标签、HTML 注释（没闭合的注释吞到结尾——它之后全是系统文字）、引用块（<quoted_context>）。
+ * 剥完压缩空白；空串由调用方换成「（没有文字）」，不把空行留成一个没有解释的空格。
+ */
+const WRAPPER_TAGS = [
+  "user_context",
+  "orbita-memory",
+  "referenced_task",
+  "attached-files",
+  "mentioned_tools",
+  "system-reminder",
+  "orbita-quotes",
+  "orbita-git-attribution",
+  "channel",
+] as const;
+const WRAPPER_BLOCK = new RegExp(`<(${WRAPPER_TAGS.join("|")})\\b[^>]*>[\\s\\S]*?</\\1>`, "g");
+const WRAPPER_SELF_CLOSING = new RegExp(`<(?:${WRAPPER_TAGS.join("|")})\\b[^>]*/>`, "g");
+
+export function visibleAsk(text: string): string {
+  return withoutQuotes(text)
+    .replace(WRAPPER_BLOCK, "")
+    .replace(WRAPPER_SELF_CLOSING, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<!--[\s\S]*$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /** 卡内一行的数据：最近提问，纯文本 */
 export interface HomeCardRow {
   text: string;
@@ -157,6 +189,8 @@ export interface HomeCardLineText {
   childWaiting: string;
   failed: string;
   done: string;
+  /** 最近一次提问剥完系统包装后什么都没剩（整条是系统文字） */
+  noText: string;
   /** 工具调用的动词（与过程行的计数词同一套：t.chat.rollupTool(rollupToolKey(...))） */
   verb: (toolName: string, input: unknown) => string;
 }
@@ -181,7 +215,7 @@ export interface HomeCardLineInput {
  * - 等你：挂着的那个审批要做什么；自己没有审批（是子会话在等）就说子会话在等你批准。
  * - 出错：这一轮的错误原文第一行；槽没载过（重启后只剩未读标记）说「出错停下了」。
  * - 跑完没看：最后一段正文的第一行（结果）；槽没载过说「跑完了」。
- * - 没在跑：最近一次提问——这条任务最后在说什么。要写「agent 最后一句话」得读它的整份
+ * - 没在跑：最近一次提问（只取用户看得见的文字，剥掉系统包装，见 visibleAsk）——这条任务最后在说什么。要写「agent 最后一句话」得读它的整份
  *   记录（主进程全量读 + 折叠，百 MB 级会话也有）或在 meta 里另存一份，两样都不做。
  *
  * 返回 null = 什么都说不出来（老会话没有 recentQueries），卡上那一行留空。
@@ -208,7 +242,9 @@ export function homeCardLine(input: HomeCardLineInput, text: HomeCardLineText): 
     const answer = flattenRenderUnits(lastTurn(records)).filter((unit) => unit.kind === "text").at(-1);
     return (answer?.kind === "text" ? firstLine(answer.text) : null) ?? text.done;
   }
-  return input.lastAsk === null || input.lastAsk.trim() === "" ? null : input.lastAsk;
+  if (input.lastAsk === null || input.lastAsk.trim() === "") return null;
+  const ask = visibleAsk(input.lastAsk);
+  return ask === "" ? text.noText : ask;
 }
 
 /** 在跑那一轮的一句：当前章节 > 正在跑的工具 > 在想 */
