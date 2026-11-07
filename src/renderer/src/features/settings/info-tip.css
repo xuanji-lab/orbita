@@ -28,9 +28,9 @@
    z-index 与 IconButton 的 tooltip 同档（70），高于 Menu 的 portal（40）。 */
 .setting-tip {
   position: fixed;
-  z-index: 70;
+  z-index: var(--z-tooltip);
   max-width: 300px;
-  padding: 7px 10px;
+  padding: 7px var(--space-2-5);
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-lg);
   background: var(--color-bg-panel);

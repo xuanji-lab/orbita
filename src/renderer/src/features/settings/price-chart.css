@@ -36,8 +36,8 @@
 .pc-switch {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  padding: 2px;
+  gap: var(--space-0-5);
+  padding: var(--space-0-5);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
 }
@@ -170,7 +170,7 @@
   translate: -50% -50%;
   display: grid;
   place-items: center;
-  padding: 2px;
+  padding: var(--space-0-5);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -208,7 +208,7 @@
   top: 50%;
   left: calc(100% + 6px);
   translate: 0 -50%;
-  padding: 1px 6px;
+  padding: 1px var(--space-1-5);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
   background: var(--color-bg-panel);
@@ -247,13 +247,13 @@
   opacity: 0;
 }
 .pc-label-level {
-  margin-left: 4px;
+  margin-left: var(--space-1);
   font-family: var(--font-family-mono);
   color: var(--color-text-tertiary);
 }
 /* 借分点的后缀：正文字体（中文用等宽字体会被拉开） */
 .pc-label-tag {
-  margin-left: 6px;
+  margin-left: var(--space-1-5);
   color: var(--color-text-tertiary);
 }
 
@@ -270,7 +270,7 @@
   top: 50%;
   left: calc(100% + 6px);
   translate: 0 -50%;
-  padding: 1px 6px;
+  padding: 1px var(--space-1-5);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
   background: var(--color-bg-panel);
@@ -308,7 +308,7 @@
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
   display: grid;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 .pc-pop.right {
   transform: translateX(16px);
@@ -328,8 +328,8 @@
 .pc-tip-name {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 2px;
+  gap: var(--space-1-5);
+  margin-bottom: var(--space-0-5);
   color: var(--color-text-primary);
   font-weight: var(--weight-semibold);
 }
@@ -351,7 +351,7 @@
   color: var(--color-text-tertiary);
 }
 .pc-tip-basis {
-  margin-left: 6px;
+  margin-left: var(--space-1-5);
   color: var(--color-text-tertiary);
 }
 .pc-mono {
@@ -405,7 +405,7 @@
 .pc-best-head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--color-border-subtle);
   font-size: var(--font-size-sm);
@@ -478,7 +478,7 @@
 .pc-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   height: 26px;
   padding: 0 9px;
   border: 1px solid var(--color-border-subtle);

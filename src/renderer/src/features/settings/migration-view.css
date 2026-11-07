@@ -109,7 +109,7 @@
 .mg-step-sum {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
   overflow: hidden;
   font-size: var(--font-size-sm);
@@ -131,7 +131,7 @@
   display: inline-flex;
   flex: none;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 
 .mg-sep {
@@ -148,9 +148,9 @@
   display: inline-flex;
   flex: none;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   height: 18px;
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   border-radius: var(--radius-pill);
   background: var(--color-bg-muted);
   font-size: var(--font-size-xs);
@@ -201,14 +201,14 @@
 }
 
 .mg-fact .mg-link {
-  margin-left: 2px;
+  margin-left: var(--space-0-5);
 }
 
 /* 一行带图标的说明：占位、隐私声明、错误 */
 .mg-caption {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
+  gap: var(--space-1-5);
   margin: var(--space-2) 0 0;
   font-size: var(--font-size-sm);
   line-height: var(--line-height-ui);
@@ -231,7 +231,7 @@
 
 .mg-caption > .orbita-icon {
   flex: none;
-  margin-top: 2px;
+  margin-top: var(--space-0-5);
 }
 
 .mg-error {
@@ -286,7 +286,7 @@
 .mg-tip-paths {
   display: grid;
   gap: 1px;
-  margin-bottom: 6px;
+  margin-bottom: var(--space-1-5);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
   line-height: var(--line-height-ui);
@@ -347,7 +347,7 @@
 
 .mg-colhead > :last-child {
   justify-content: flex-start;
-  padding-left: 8px;
+  padding-left: var(--space-2);
 }
 
 .mg-group + .mg-group {
@@ -356,7 +356,7 @@
 
 .mg-grow {
   min-height: 48px;
-  padding: 6px var(--space-3);
+  padding: var(--space-1-5) var(--space-3);
   cursor: pointer;
   transition: var(--transition-hover);
 }
@@ -380,7 +380,7 @@
 .mg-lead {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .mg-chev {
@@ -416,7 +416,7 @@
 .mg-gname {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
 }
 
@@ -428,7 +428,7 @@
 /* 路径缩进到名字下（让开 14px 图标 + 6px 间距） */
 .mg-gpath {
   overflow: hidden;
-  padding-left: 20px;
+  padding-left: var(--space-5);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
   line-height: var(--line-height-ui);
@@ -505,7 +505,7 @@
 .mg-status {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
   white-space: nowrap;
@@ -533,7 +533,7 @@
   align-items: center;
   gap: 5px;
   height: 26px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   font-size: var(--font-size-base);
   color: var(--color-text-tertiary);
   white-space: nowrap;
@@ -598,7 +598,7 @@
 .mg-model {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
   color: var(--color-text-secondary);
@@ -607,7 +607,7 @@
 }
 
 .mg-more {
-  padding: 4px 0 6px 34px;
+  padding: var(--space-1) 0 var(--space-1-5) 34px;
   border-top: 1px solid var(--color-border-subtle);
 }
 
@@ -640,7 +640,7 @@
 
 .mg-skips {
   display: grid;
-  gap: 2px;
+  gap: var(--space-0-5);
   margin: var(--space-2) 0 0;
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
@@ -720,7 +720,7 @@
 .mg-path-line {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
@@ -881,7 +881,7 @@
   align-items: center;
   column-gap: var(--space-3);
   min-height: 48px;
-  padding: 6px var(--space-3);
+  padding: var(--space-1-5) var(--space-3);
   cursor: pointer;
   transition: var(--transition-hover);
 }
@@ -916,7 +916,7 @@
 .mg-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   height: var(--control-height-sm);
   padding: 0 var(--space-3);
   border: 0;
@@ -945,7 +945,7 @@
 /* Skills 段头的 Copy / Link：两个安静按钮并排，按下的那个用 mode-active 底 */
 .mg-seg {
   display: inline-flex;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 
 .mg-seg-btn {
@@ -976,14 +976,14 @@
 
 .mg-foot-copy {
   display: grid;
-  gap: 2px;
+  gap: var(--space-0-5);
   min-width: 0;
 }
 
 .mg-foot-main {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
   font-size: var(--font-size-base);
   font-weight: var(--weight-medium);
@@ -1007,7 +1007,7 @@
 .mg-foot-fact {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   white-space: nowrap;
   cursor: help;
 }
@@ -1036,7 +1036,7 @@
 .mg-prereq {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1046,7 +1046,7 @@
 .mg-prereq-item {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   font-size: var(--font-size-sm);
   line-height: var(--line-height-ui);
   color: var(--color-text-secondary);
@@ -1110,7 +1110,7 @@
 .mg-greet-copy {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
   min-width: 0;
 }
 

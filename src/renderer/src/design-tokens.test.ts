@@ -413,3 +413,100 @@ describe("型号头像：每个文件都在 model-avatars/NOTICE 里登记", () 
     assert.deepEqual(missing, [], `这些头像没有在 NOTICE 里登记：${missing.join(", ")}`);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 放线：间距走刻度、z 轴走层
+// ---------------------------------------------------------------------------
+
+/**
+ * 间距（padding / margin / gap 一族）只取 `--space-*`：4px 刻度 + 2 / 6 / 10 三个半档
+ * （`tokens/spacing.css`）。2026-10-29 机械迁移了 374 处等值裸 px，像素一处没变。
+ *
+ * - **刻度上的值不许裸写**：`8px` 就写 `var(--space-2)`，直接报错。
+ * - **刻度外的值（3 / 5 / 7 / 9 / 11px…）按文件数着、只许减不许加**：它们是「没站齐」的
+ *   来源，但改一个就动一处像素，要逐处对着截图收——不能在迁移里顺手改。修掉几处就把
+ *   下表对应的数改小（改小也会让本测试失败，提醒你把账记上）；新文件不许出现。
+ * - `0` / `1px` 不算：1px 是发丝补偿（让出边框那一像素）。
+ * - 只查 css；ts/tsx 里 inline style 的间距暂不在这条检查里。
+ */
+const SPACE_DECL_RE =
+  /(?<![-\w])((?:padding|margin|scroll-padding|scroll-margin)(?:-(?:top|right|bottom|left|inline|block)(?:-(?:start|end))?)?|gap|row-gap|column-gap)\s*:\s*([^;{}\n]*)/g;
+const SPACE_PX_RE = /(?<![\w.-])-?(\d+(?:\.\d+)?)px\b/g;
+const ON_SCALE_PX = new Set(["2", "4", "6", "8", "10", "12", "16", "20", "24", "32"]);
+const OFF_SCALE_SPACING_BUDGET = new Map<string, number>([
+  ["src/renderer/src/browser-toolbar/browser-toolbar.css", 1],
+  ["src/renderer/src/features/context/context-panel.css", 2], // #375 合入时带来，未收
+  ["src/renderer/src/features/memory/memory.css", 3], // #374 合入时带来，未收
+  ["src/renderer/src/features/review/excerpts-tab.css", 3],
+  ["src/renderer/src/features/settings/info-tip.css", 1],
+  ["src/renderer/src/features/settings/migration-view.css", 10],
+  ["src/renderer/src/features/settings/price-chart.css", 7],
+  ["src/renderer/src/features/settings/providers-view.css", 8],
+  ["src/renderer/src/features/settings/settings-view.css", 5],
+  ["src/renderer/src/features/settings/update-view.css", 1],
+  ["src/renderer/src/paper-themes.css", 2],
+  ["src/renderer/src/shell/focus/focus.css", 8],
+  ["src/renderer/src/shell/toolbar.css", 2],
+  ["src/renderer/src/shell/usage.css", 7],
+  ["src/renderer/src/styles.css", 42],
+]);
+
+describe("design-tokens —— 间距走刻度", () => {
+  const onScale: string[] = [];
+  const offScale = new Map<string, number>();
+  for (const file of rendererCssFiles) {
+    const rel = relPath(file);
+    const lines = readClean(file, false).split("\n");
+    lines.forEach((line, i) => {
+      for (const decl of line.matchAll(SPACE_DECL_RE)) {
+        for (const px of (decl[2] ?? "").matchAll(SPACE_PX_RE)) {
+          const n = group1(px);
+          if (n === "0" || n === "1") continue;
+          if (ON_SCALE_PX.has(n)) onScale.push(`  ${rel}:${i + 1}: ${decl[0].trim()}`);
+          else offScale.set(rel, (offScale.get(rel) ?? 0) + 1);
+        }
+      }
+    });
+  }
+
+  test("刻度上的间距不裸写 px（用 var(--space-*)）", () => {
+    assert.deepEqual(onScale, [], `以下间距写了刻度上的裸 px：\n${onScale.join("\n")}`);
+  });
+
+  test("刻度外的间距只减不增（按文件记账）", () => {
+    const drift: string[] = [];
+    for (const rel of new Set([...offScale.keys(), ...OFF_SCALE_SPACING_BUDGET.keys()])) {
+      const now = offScale.get(rel) ?? 0;
+      const budget = OFF_SCALE_SPACING_BUDGET.get(rel) ?? 0;
+      if (now > budget) drift.push(`  ${rel}: ${now} 处，账上只有 ${budget}——新写的间距请取刻度`);
+      if (now < budget) drift.push(`  ${rel}: 已降到 ${now} 处（账上 ${budget}），把 OFF_SCALE_SPACING_BUDGET 改小`);
+    }
+    assert.deepEqual(drift, [], `刻度外间距的账对不上：\n${drift.join("\n")}`);
+  });
+});
+
+/**
+ * z 轴只有四个全局层（`tokens/spacing.css` 的 `--z-*`）：10 及以上的 z-index 必须取层 token，
+ * 组件内部的叠放（1–9）就地写整数。css 与 tsx 的 `zIndex` 都查。
+ */
+const CSS_Z_RE = /(?<![-\w])z-index\s*:\s*(-?\d+)/g;
+const TS_Z_RE = /\bzIndex\s*:\s*(-?\d+)/g;
+
+describe("design-tokens —— z 轴走层", () => {
+  test("10 及以上的 z-index 取 --z-* 层，不写整数", () => {
+    const hits: string[] = [];
+    const scan = (files: string[], re: RegExp, isTs: boolean) => {
+      for (const file of files) {
+        const lines = readClean(file, isTs).split("\n");
+        lines.forEach((line, i) => {
+          for (const m of line.matchAll(re)) {
+            if (Math.abs(Number(group1(m))) >= 10) hits.push(`  ${relPath(file)}:${i + 1}: ${m[0]}`);
+          }
+        });
+      }
+    };
+    scan(rendererCssFiles, CSS_Z_RE, false);
+    scan(rendererTsFiles, TS_Z_RE, true);
+    assert.deepEqual(hits, [], `以下 z-index 自造了层级数字：\n${hits.join("\n")}`);
+  });
+});

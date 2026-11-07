@@ -538,7 +538,7 @@ function QuoteSelectionLayer(props: {
         left: candidate.x,
         top: below ? candidate.bottom + 8 : candidate.top - 8,
         transform: below ? "translateX(-50%)" : "translate(-50%, -100%)",
-        zIndex: 40,
+        zIndex: "var(--z-popover)",
         display: "inline-flex",
         alignItems: "center",
         gap: 2,

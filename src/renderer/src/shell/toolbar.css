@@ -86,25 +86,25 @@
 /* 专注倒计时同理：被上面的 padding:0 / font:inherit 吃掉后，数字离胶囊右缘只剩 2.5px
  * （2026-10-19 用户：「左上角太顶到了」）——重申 .cap-focus-run 的内边距与字号 */
 .toolbar-capsule .cap-focus-run {
-  padding: 0 12px 0 10px;
+  padding: 0 var(--space-3) 0 var(--space-2-5);
   font-size: var(--font-size-titlebar);
 }
 .toolbar-capsule .cap-sel {
-  padding: 0 8px 0 10px;
+  padding: 0 var(--space-2) 0 var(--space-2-5);
   width: auto;
 }
 .toolbar-capsule .cap-subchip {
-  padding: 0 8px 0 6px;
+  padding: 0 var(--space-2) 0 var(--space-1-5);
   width: auto;
 }
 .toolbar-capsule .cap-crumb {
-  padding: 0 6px 0 0;
+  padding: 0 var(--space-1-5) 0 0;
   width: auto;
 }
 /* 标题键是开关形态时（文件面板：点了收 / 放文件树）渲染成 button，同样要豁免 padding:0——
  * 2026-10-19 实测：漏了它时文件胶囊的图标距胶囊左缘只有 2px，而非开关形态（span）的审查标题是正常的 */
 .toolbar-capsule .cap-pt {
-  padding: 0 8px 0 10px;
+  padding: 0 var(--space-2) 0 var(--space-2-5);
   width: auto;
 }
 
@@ -115,7 +115,7 @@
   height: var(--titlebar-capsule);
   display: flex;
   align-items: center;
-  padding: 0 2px;
+  padding: 0 var(--space-0-5);
   border-radius: var(--radius-pill);
   background: var(--glass-bg);
   box-shadow: var(--shadow-border);
@@ -149,7 +149,7 @@
   align-items: center;
   gap: 5px;
   height: var(--titlebar-control);
-  padding: 0 12px 0 10px;
+  padding: 0 var(--space-3) 0 var(--space-2-5);
   border-radius: var(--radius-pill);
   flex: 0 0 auto;
   font-size: var(--font-size-titlebar);
@@ -198,7 +198,7 @@
    * （2026-10-19 用户验收：窗口缩小后「…3」压在标题上） */
   grid-template-columns: 1fr minmax(0, max-content) 1fr;
   align-items: center;
-  padding: 0 2px 0 4px;
+  padding: 0 var(--space-0-5) 0 var(--space-1);
   /* 胶囊宽由工具栏几何给（sessionCapsule），这里按自身宽逐级让位 */
   container-type: inline-size;
   /* container-type: inline-size 让元素的宽**不再随内容撑开**——必须显式铺满胶囊。
@@ -254,11 +254,11 @@
   justify-self: stretch;
   justify-content: center;
   overflow: hidden;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 .cap-sess .cap-sr {
   justify-self: end;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 /* 标题是唯一的主体：titlebar 档、半粗、正墨 */
 .cap-title {
@@ -268,7 +268,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   /* flex 子项默认 min-width:auto = 内容宽，ellipsis 永远不生效——必须能缩到 0 */
   min-width: 0;
   flex: 0 1 auto;
@@ -296,15 +296,15 @@
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   letter-spacing: 0.02em;
-  padding: 0 2px 0 6px;
+  padding: 0 var(--space-0-5) 0 var(--space-1-5);
 }
 /* 左端子会话小芯片 / 面包屑 */
 .cap-subchip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   height: 22px;
-  padding: 0 8px 0 6px;
+  padding: 0 var(--space-2) 0 var(--space-1-5);
   font: inherit;
   border-radius: var(--radius-pill);
   background: var(--color-bg-muted);
@@ -323,7 +323,7 @@
 .cap-crumb {
   border: 0;
   background: transparent;
-  padding: 0 6px 0 0;
+  padding: 0 var(--space-1-5) 0 0;
   display: inline-flex;
   align-items: center;
   gap: 3px;
@@ -345,7 +345,7 @@
   width: 1px;
   height: 16px;
   background: var(--color-border-default);
-  margin: 0 4px;
+  margin: 0 var(--space-1);
   flex: 0 0 auto;
 }
 /* 「已复制」轻提示：胶囊下方浮一颗小药丸，1.2s 后淡出（动画在组件里掐） */
@@ -354,9 +354,9 @@
   top: 38px;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   height: 24px;
-  padding: 0 10px;
+  padding: 0 var(--space-2-5);
   border-radius: var(--radius-pill);
   background: var(--color-bg-panel);
   box-shadow: var(--shadow-popover);
@@ -372,7 +372,7 @@
 /* —— 右栏胶囊：左缘钉右栏分隔线、宽 = 右栏宽（几何由 Toolbar 算）；内容配方固定：
  *      标题键 · 中段（筛选 / 页签 / 选择，吃剩余宽）· 动作格 —— */
 .cap-panel {
-  gap: 2px;
+  gap: var(--space-0-5);
   /* 窄于断点时筛选框收成搜索格（container query；断点值与 window-tools.ts 对账） */
   container-type: size;
 }
@@ -380,9 +380,9 @@
 .cap-pt {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   height: var(--titlebar-control);
-  padding: 0 8px 0 10px;
+  padding: 0 var(--space-2) 0 var(--space-2-5);
   border-radius: var(--radius-pill);
   flex: 0 0 auto;
 }
@@ -404,9 +404,9 @@
 .cap-pf {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   height: var(--titlebar-field);
-  padding: 0 10px;
+  padding: 0 var(--space-2-5);
   border-radius: var(--radius-pill);
   background: var(--color-bg-muted);
   font-size: var(--font-size-sm);
@@ -436,9 +436,9 @@
 .cap-sel {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   height: var(--titlebar-field);
-  padding: 0 8px 0 10px;
+  padding: 0 var(--space-2) 0 var(--space-2-5);
   border-radius: var(--radius-pill);
   background: var(--color-bg-muted);
   font: inherit;
@@ -453,7 +453,7 @@
   align-items: center;
   gap: var(--space-1);
   height: var(--titlebar-field);
-  padding: 0 6px 0 10px;
+  padding: 0 var(--space-1-5) 0 var(--space-2-5);
   border-radius: var(--radius-pill);
   font: inherit;
   font-size: var(--font-size-sm);
@@ -468,7 +468,7 @@
 }
 .cap-tabs {
   display: flex;
-  gap: 2px;
+  gap: var(--space-0-5);
   overflow: hidden;
 }
 /* 右缘渐隐只在「真的装不下、右边还有」时出现（2026-10-19 用户：「摘抄的抄字有过渡消失的
@@ -517,7 +517,7 @@
   background: var(--color-bg-panel);
   box-shadow: 0 0 0 1px var(--color-accent), var(--focus-ring);
   color: var(--color-text-primary);
-  padding: 0 4px 0 10px;
+  padding: 0 var(--space-1) 0 var(--space-2-5);
 }
 /* 右栏胶囊的宿主：铺满胶囊，portal 进来的内容自带 .cap-panel-content */
 .cap-panel-slot {
@@ -533,7 +533,7 @@
   position: relative; /* .cap-center 的绝对居中基准（= 胶囊内容） */
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0-5);
   min-width: 0;
   width: 100%;
   height: 100%;
@@ -561,7 +561,7 @@
   justify-self: end;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0-5);
   min-width: 0;
 }
 

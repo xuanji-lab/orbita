@@ -544,7 +544,7 @@ export function Menu(props: {
                 : position.fixed
                   ? { height: position.cap }
                   : { maxHeight: position.cap }),
-              zIndex: 40,
+              zIndex: "var(--z-popover)",
               minWidth: props.panelMinWidth ?? 180,
               // 上限夹一道视口（面板是 fixed 的，100vw 就是可用宽）——
               // 窄窗下宁可窄、也不让右边半截出屏

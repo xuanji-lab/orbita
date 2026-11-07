@@ -182,14 +182,14 @@
 /* 标点在格子里靠左下，手写进格子的规矩 */
 :root[data-theme="copybook"] .home-slogan-cell.punct {
   place-items: end start;
-  padding: 0 0 6px 8px;
+  padding: 0 0 var(--space-1-5) var(--space-2);
 }
 
 /* 打字稿：英文 slogan 打在一页打字纸上——左边一条整高的红页边线，底下一条蓝横线；
    字是 Special Elite（色带不匀的打字机字，只有常规体，所以不加粗） */
 :root[data-theme="typescript"] .home-hero {
   position: relative;
-  padding: 0 20px 8px 44px;
+  padding: 0 var(--space-5) var(--space-2) 44px;
   border-bottom: 1px solid var(--color-paper-rule);
 }
 
@@ -212,7 +212,7 @@
 
 /* 两档共用：slogan 下老师的红笔批语，手写（龙藏体子集），微微歪着 */
 :root:is([data-theme="copybook"], [data-theme="typescript"]) .home-mark {
-  margin: 10px 0 0;
+  margin: var(--space-2-5) 0 0;
   font-family: "Long Cang", "Bradley Hand", cursive;
   font-size: var(--font-size-slogan-mark);
   line-height: var(--line-height-brand-mark);

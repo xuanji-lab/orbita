@@ -16,7 +16,7 @@
 .upd-status {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   font-size: var(--font-size-sm);
   line-height: var(--line-height-ui);
   color: var(--color-text-secondary);
@@ -202,7 +202,7 @@ a.upd-link {
 .upd-recent {
   grid-column: 1 / -1;
   display: grid;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 
 .upd-recent-quiet {
@@ -298,7 +298,7 @@ a.upd-link {
 /* 嵌套的说明块：与主说明同一版式，只是不再铺 muted 底、向左缩 10px（定稿小样） */
 .upd-notes--nested {
   background: none;
-  padding: 0 0 0 10px;
+  padding: 0 0 0 var(--space-2-5);
 }
 
 /* 主 / 次操作的尺寸：颜色与状态照 .btn-accent / .quiet-control 两个配方走，
@@ -306,7 +306,7 @@ a.upd-link {
 .upd-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   height: var(--control-height-md);
   padding: 0 var(--space-3);
   border: 0;
