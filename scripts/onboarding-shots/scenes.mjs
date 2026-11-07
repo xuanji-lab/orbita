@@ -9,6 +9,8 @@
  * 场景依赖 seed.mjs 的剧本产出的任务（按标题关键词找）；界面改了，改这里的选择器即可，坐标不手写。
  */
 
+import { DOC_SAY } from "./demo.mjs";
+
 /** 收起右栏面板与整页盖层（设置、看板）；「更多」亮着是子视图开着，点它只会弹菜单，跳过 */
 const RESET = { eval: "[...document.querySelectorAll('.right-rail button[aria-pressed=true]')].filter((b) => b.getAttribute('aria-label') !== '更多').forEach((b) => b.click()), 1" };
 const BOTTOM = { eval: "document.querySelector('.chat-transcript').scrollTop = 1e7, 1" };
@@ -51,12 +53,23 @@ const IDLE = "!document.querySelector('.btn-accent[data-tone=danger]')";
 /** 每次（浅、玄各一遍）给「现跑的一轮」一个新文件名：同一件事做过就不会再动手（实测：重发同一句，它回「昨晚已经做过」） */
 const stamp = () => new Date().toTimeString().slice(0, 8).replace(/:/g, "");
 
+/** 聊天里「新建演示文稿」那一行与它下面的完成卡（卡整张是一个按钮，右端写着「在右栏打开」） */
+const ROW_DECK = "[...document.querySelectorAll('.chat-transcript button.collapse-row-btn')].find((b) => b.textContent.includes('新建演示文稿'))";
+const CARD_DECK = "[...document.querySelectorAll('.chat-transcript button')].find((b) => b.textContent.includes('在右栏打开'))";
+/** 画布里挑一个有字的元素点一下（选中后出手柄） */
+const PICK_EL = { js: "[...document.querySelectorAll('.se-canvas .sl-el:not(.se-chrome)')].filter((e) => e.textContent.trim().length > 6).sort((a, b) => b.getBoundingClientRect().width * b.getBoundingClientRect().height - a.getBoundingClientRect().width * a.getBoundingClientRect().height)[0]" };
+const THEME_BTN = "[...document.querySelectorAll('.se-bar button')].find((b) => (b.getAttribute('aria-label') ?? b.title) === '画面比例 · 主题')";
+const EXPORT_MENU = "[...document.querySelectorAll('.menu-panel')].find((m) => m.textContent.includes('PowerPoint'))";
+
 export const READ = "复现 UrbanGPT";
 const SUBS = "UrbanGPT三篇";
 const TERM = "跑基线";
 const BROWSE = "arXiv检索";
 const PLUGIN = "创建 arXiv";
 const PDF = "UrbanGPT零样本";
+// 文档与演示章（seed.mjs docs 的两幕）：任务名由家务活模型起，按关键词找
+const DECK = "课题演示";
+const NOTE = "读书小记";
 
 export const SCENES = [
   { id: "home", steps: [RESET, { wait: 300 }, { click: "aside button[aria-label='在此工作区新建任务']" }, { wait: 1500 }],
@@ -153,4 +166,23 @@ export const SCENES = [
   { id: "carryovers", steps: [RESET, { wait: 300 }, { eval: OPEN_CARRYOVERS }, { wait: 1200 }, { eval: "document.querySelectorAll(\"aside button[aria-label='展开分组']\").forEach((b) => b.click()), 1" }, { wait: 800 }],
     after: [{ eval: CLOSE_CARRYOVERS }],
     measure: { more: "button[aria-label='更多']", list: "aside" } },
+  // —— 第 06 章：文档与演示（seed.mjs docs 先跑出两条任务：一份演示文稿、一份读书小记）——
+  // 文档 / 演示文稿面板一开，面板宽度要 1–2 秒才落到视口里（窗口是 1200，拍图视口是 1440）：开了面板都多等一拍
+  { id: "deck-make", steps: [...openTask(DECK), rail("演示文稿"), { wait: 2500 }, { eval: `${ROW_DECK}?.scrollIntoView({ block: "center" }), 1` }, { wait: 600 }],
+    measure: { panel: PANEL, rail: ".right-rail button[aria-label^='演示文稿']", row: { js: ROW_DECK }, card: { js: CARD_DECK } } },
+  // 选第 4 页：第 3 页是 deck-quote 现场改的，浅、玄两遍拍到的内容会不一样
+  { id: "deck-edit", steps: [...openTask(DECK), rail("演示文稿"), { wait: 2500 }, { click: "button[aria-label='第 4 页']" }, { wait: 800 }, { click: PICK_EL }, { wait: 800 }],
+    measure: { panel: PANEL, tools: { js: "[...document.querySelectorAll('.se-bar .se-tool')].slice(0, 4)" }, picked: ".se-selection", theme: { js: THEME_BTN }, thumbs: { js: "document.querySelector('.se-thumb')?.parentElement" } } },
+  { id: "deck-export", steps: [...openTask(DECK), rail("演示文稿"), { wait: 2500 }, { click: ".se-tool-menu:has(.lucide-download)" }, { wait: 700 }],
+    after: [{ key: "Escape" }],
+    measure: { panel: PANEL, menu: { js: EXPORT_MENU }, pptx: { js: "[...document.querySelectorAll('.menu-panel *')].filter((e) => e.children.length === 0 && e.textContent.includes('PowerPoint')).map((e) => e.closest('button, [role=menuitem]') ?? e)" } } },
+  { id: "doc-note", steps: [...openTask(NOTE), rail("文件"), { wait: 1500 }, { clickText: [`${PANEL} button.file-row`, "读书小记.md"] }, { wait: 2500 }, { clickText: [`${PANEL} button`, "阅读"] }, { wait: 1200 }],
+    measure: { panel: PANEL, views: `${PANEL} .dp-views`, props: `${PANEL} .ofm-properties`, mark: `${PANEL} .ofm-mark`, callout: `${PANEL} .callout`, exportBtn: `${PANEL} .dp-bar button:has(.lucide-download)` } },
+  // 现跑的一轮：点第 3 页 → 引用这一页 → 说一句 → 等它改完。浅、玄取同一帧（both）
+  { id: "deck-quote", both: true,
+    steps: [...openTask(DECK), rail("演示文稿"), { wait: 2500 }, { click: "button[aria-label='第 3 页']" }, { wait: 800 }, { clickText: [".right-panel-slot button", "引用这一页"] }, { wait: 800 },
+      { click: "textarea.composer-input" }, { type: DOC_SAY.quote }, { key: "Enter" }, { until: "!!document.querySelector('.btn-accent[data-tone=danger]')", timeout: 20000 }, { until: IDLE, timeout: 240000 }, { wait: 2500 }, BOTTOM, { wait: 600 }],
+    measure: { panel: PANEL, quoteBtn: [`${PANEL} button`, "引用这一页"], bubble: { js: "[...document.querySelectorAll('.bubble-md')].at(-1)" },
+      // 重拍过几次，聊天里会留着几条这样的引用：取最后一条（最新那轮）的整条芯片
+      chip: { js: "[...document.querySelectorAll('.chat-transcript *')].filter((e) => e.children.length === 0 && /第 3 页 ·/.test(e.textContent)).at(-1)?.parentElement" } } },
 ];

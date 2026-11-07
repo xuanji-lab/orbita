@@ -83,7 +83,7 @@ import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { ReviewPanel } from "./features/review/ReviewPanel";
 import { DocsPanel } from "./features/doc-panel/DocsPanel";
 import { useAutoOpenPanel } from "./features/chat/auto-open-panel.ts";
-import { onOpenPanelRequest } from "./shell/open-panel.ts";
+import { onOpenPanelRequest, requestOpenPanel } from "./shell/open-panel.ts";
 import type { ExcerptJump } from "./features/review/ExcerptsTab";
 import type { ExcerptJumpRequest } from "./features/chat/ChatView";
 import { BOARD_DAYS_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
@@ -1332,12 +1332,24 @@ export function App() {
     setOnboardingOpen(false);
     if (settings.onboardingSeen !== true) changeSettings({ onboardingSeen: true });
   }, [settings.onboardingSeen, changeSettings]);
-  /** 「放进输入框试试」：关掉引导与设置页，把那句话放进当前看着的会话（首页就是新任务）的输入框 */
+  /**
+   * 「试试」：关掉引导与设置页。text 不是 null 就把那句话放进当前看着的会话（首页就是新任务）的输入框；
+   * open 给了（文档与演示章的动作提示页）就把右栏的演示文稿面板摆好：`slides` 回到上次那份，
+   * `slides-new` 新建一份空的并打开——读者还没有演示文稿时，提示里的动作也有地方做。
+   */
   const tryFromOnboarding = useCallback(
-    (text: string) => {
+    (text: string | null, open?: "slides" | "slides-new") => {
       closeOnboarding();
       setOverlay(null);
-      session.setDraft(text);
+      if (text !== null) session.setDraft(text);
+      if (open === "slides") setRightPanel("slides");
+      if (open === "slides-new") {
+        void api.docs
+          .create({ sessionId: session.sessionId ?? session.opened?.id ?? null, workspaceId: session.workspaceId, kind: "slides" })
+          .then((created) => requestOpenPanel({ kind: "slides", path: created.path, force: true }))
+          // 建不出来（目录不可写等）：面板照开，里面的「新建」会给出真正的原因
+          .catch(() => setRightPanel("slides"));
+      }
     },
     [closeOnboarding, session],
   );

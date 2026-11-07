@@ -13,6 +13,8 @@ import { zh } from "./messages-zh.ts";
 const ALLOWED_LATIN = new Set([
   // 文件格式 / 产品专名：演示文稿导出菜单「PowerPoint」（2026-11-07，slides.* 文案）
   "PowerPoint",
+  // 新手引导「文档与演示」一章：文档的写法跟 Obsidian 一致（笔记应用的产品名）
+  "Obsidian",
   // 品牌
   "orbita",
   "GitHub",

@@ -32,6 +32,11 @@ export const SHOT_IDS = [
   "excerpts",
   "pdf-cite",
   "task-ref",
+  "deck-make",
+  "deck-edit",
+  "deck-export",
+  "doc-note",
+  "deck-quote",
   "delegate",
   "subsessions",
   "memory",
@@ -101,6 +106,16 @@ export interface StepPage {
   pins?: readonly Pin[];
   loupe?: Loupe;
   say?: boolean;
+  /**
+   * 这页的 say 是**动作提示**而不是能直接发的话（要先在界面里点一页、划一处才成立）：
+   * 样例框里没有发送键，「试试」不往输入框放字，只按 open 把右栏面板摆好。文案仍放在 say 里。
+   */
+  hint?: boolean;
+  /**
+   * 点「试试」时先摆好右栏：`slides` = 打开演示文稿面板（回到上次那份）；`slides-new` = 新建一份空的并打开
+   * （读者还没有演示文稿时，提示里的动作也有地方做）
+   */
+  open?: "slides" | "slides-new";
 }
 
 /** 常见问题：一页一问，纯文字 */
@@ -125,6 +140,7 @@ export const CHAPTER_IDS = [
   "progress",
   "files",
   "quote",
+  "docs",
   "subsessions",
   "memory",
   "terminal",
@@ -314,6 +330,39 @@ export const GUIDE: readonly GuideChapter[] = [
         loupe: loupe(padded(box("pdf-cite", "mark"), 0.03), { x: 0.08, y: 0.6 }, 2.6),
       }),
       step("session", "task-ref", { focus: union(box("task-ref", "turn"), box("task-ref", "answer")), pins: [pin(1, box("task-ref", "turn"), "tl")], say: true }),
+    ],
+  },
+  {
+    id: "docs",
+    part: "basics",
+    pages: [
+      opener("deck-make"),
+      step("make", "deck-make", {
+        pins: [pin(1, box("deck-make", "row"), "l"), pin(2, box("deck-make", "card"), "bl"), pin(3, box("deck-make", "rail", 0.004), "l")],
+        say: true,
+      }),
+      step("edit", "deck-edit", {
+        focus: box("deck-edit", "panel", 0),
+        pins: [pin(1, box("deck-edit", "tools"), "tl"), pin(2, box("deck-edit", "picked"), "tl"), pin(3, box("deck-edit", "theme"), "b"), pin(4, box("deck-edit", "thumbs"), "tl")],
+        hint: true,
+        open: "slides-new",
+      }),
+      step("export", "deck-export", {
+        focus: box("deck-export", "menu"),
+        pins: [pin(1, box("deck-export", "menu"), "tl"), pin(2, box("deck-export", "pptx"), "bl")],
+      }),
+      step("doc", "doc-note", {
+        focus: box("doc-note", "panel", 0),
+        pins: [pin(1, box("doc-note", "views"), "tl"), pin(2, box("doc-note", "callout"), "tl"), pin(3, box("doc-note", "exportBtn"), "b")],
+        say: true,
+      }),
+      step("quote", "deck-quote", {
+        pins: [pin(1, box("deck-quote", "quoteBtn"), "t"), pin(2, box("deck-quote", "chip"), "tl")],
+        // 放大镜放在聊天栏中段的空处：发出去的那一条（引用芯片 + 气泡）放大看，文件名与页号才读得清
+        loupe: loupe(padded(union(box("deck-quote", "chip"), box("deck-quote", "bubble")), 0.01), { x: 0.02, y: 0.3 }, 1.25),
+        hint: true,
+        open: "slides",
+      }),
     ],
   },
   {

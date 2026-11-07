@@ -15,9 +15,9 @@ import { CHAPTER_IDS, GUIDE, MISSING_BOXES, SHOT_IDS, type Box, type GuidePage }
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 describe("章与页：照章节稿第三版", () => {
-  test("入门篇 7 章、进阶篇 6 章、附一章常见问题，顺序与 CHAPTER_IDS 一致", () => {
+  test("入门篇 8 章、进阶篇 6 章、附一章常见问题，顺序与 CHAPTER_IDS 一致", () => {
     assert.deepEqual(GUIDE.map((chapter) => chapter.id), [...CHAPTER_IDS]);
-    assert.equal(GUIDE.filter((chapter) => chapter.part === "basics").length, 7);
+    assert.equal(GUIDE.filter((chapter) => chapter.part === "basics").length, 8);
     assert.equal(GUIDE.filter((chapter) => chapter.part === "tools").length, 6);
     assert.deepEqual(GUIDE.filter((chapter) => chapter.part === "appendix").map((chapter) => chapter.id), ["faq"]);
   });
@@ -25,7 +25,7 @@ describe("章与页：照章节稿第三版", () => {
   test("每章步骤页数照章节稿（第 13 章的虚线页先不做：3 页）；常见问题约 6 问", () => {
     const steps = Object.fromEntries(GUIDE.map((chapter) => [chapter.id, chapter.pages.filter((page) => page.kind !== "opener").length]));
     assert.deepEqual(steps, {
-      start: 4, task: 4, progress: 3, files: 3, quote: 4, subsessions: 4, memory: 3,
+      start: 4, task: 4, progress: 3, files: 3, quote: 4, docs: 5, subsessions: 4, memory: 3,
       terminal: 2, browser: 2, plugins: 4, automation: 3, board: 2, focus: 3, faq: 6,
     });
   });
@@ -63,7 +63,7 @@ describe("文案：每页中英都有，编号与配文对得上", () => {
           const text = pages[page.id];
           assert.ok(text !== undefined, `${lang} ${chapter.id}.${page.id} 没有文案`);
           assert.ok(text.name !== "" && text.title !== "" && text.body !== "", `${lang} ${chapter.id}.${page.id} 有空字段`);
-          if (page.kind === "step" && page.say === true) assert.ok((text.say ?? "") !== "", `${lang} ${chapter.id}.${page.id} 缺 say`);
+          if (page.kind === "step" && (page.say === true || page.hint === true)) assert.ok((text.say ?? "") !== "", `${lang} ${chapter.id}.${page.id} 缺 say`);
           if (page.kind === "step" && page.pins !== undefined) {
             const numbers = new Set([...page.pins, ...(page.loupe?.pins ?? [])].map((pin) => pin.n));
             assert.equal(text.notes?.length ?? 0, numbers.size, `${lang} ${chapter.id}.${page.id}：编号 ${numbers.size} 个、配文 ${text.notes?.length ?? 0} 条`);
@@ -79,6 +79,41 @@ describe("文案：每页中英都有，编号与配文对得上", () => {
 });
 
 const inUnit = (box: Box): boolean => box.x >= 0 && box.y >= 0 && box.w > 0 && box.h > 0 && box.x + box.w <= 1.0001 && box.y + box.h <= 1.0001;
+
+describe("文档与演示章的「试试」：数据表里的约定", () => {
+  const docs = GUIDE.find((chapter) => chapter.id === "docs");
+  const steps = (docs?.pages ?? []).filter((page): page is Extract<GuidePage, { kind: "step" }> => page.kind === "step");
+  const by = (id: string) => steps.find((page) => page.id === id);
+
+  test("第 1、4 页是能直接发的话（say，不开面板）；第 2、5 页是动作提示（hint，只开面板、不放字）；第 3 页不挂", () => {
+    for (const id of ["make", "doc"]) assert.ok(by(id)?.say === true && by(id)?.hint !== true && by(id)?.open === undefined, id);
+    assert.ok(by("edit")?.hint === true && by("edit")?.say !== true && by("edit")?.open === "slides-new");
+    assert.ok(by("quote")?.hint === true && by("quote")?.say !== true && by("quote")?.open === "slides");
+    const exported = by("export");
+    assert.ok(exported?.say !== true && exported?.hint !== true && exported?.open === undefined);
+  });
+
+  test("全书 hint 与 say 不同时出现，open 只在动作提示页上、只在文档与演示章", () => {
+    for (const chapter of GUIDE) {
+      for (const page of chapter.pages as readonly GuidePage[]) {
+        if (page.kind !== "step") continue;
+        assert.ok(!(page.say === true && page.hint === true), `${chapter.id}.${page.id}`);
+        if (page.open !== undefined) assert.ok(page.hint === true && chapter.id === "docs", `${chapter.id}.${page.id}`);
+      }
+    }
+  });
+
+  test("可直接发的话自带材料：没有「这份 / 那份 / 刚才的」这类指代（新工作区里什么都没有）", () => {
+    for (const [lang, table] of [["zh", zh], ["en", en]] as const) {
+      const pages = table.onboarding.chapters.docs.pages;
+      for (const id of ["make", "doc"] as const) {
+        const say = pages[id].say;
+        assert.ok(!/这份|那份|刚才|上面|this document|this deck|above/i.test(say), `${lang} docs.${id}：say 里有指代 ${say}`);
+        assert.ok(say.length > 40, `${lang} docs.${id}：say 太短，多半没带材料`);
+      }
+    }
+  });
+});
 
 describe("几何：框、编号点、放大镜都落在截图里", () => {
   test("数据表引用的框都量到了（scripts/onboarding-shots/capture.mjs 写进 shot-boxes.ts）", () => {

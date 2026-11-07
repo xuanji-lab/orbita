@@ -45,7 +45,7 @@ describe("flattenGuide / stepGuide：跨章连续翻页，越界夹回首尾", (
 
 describe("chapterStart：目录点章名跳到那章第一页", () => {
   const flat = flattenGuide(GUIDE);
-  test("跳到第 11 章（自动化）的章首页", () => {
+  test("跳到自动化一章的章首页", () => {
     const automation = GUIDE.findIndex((chapter) => chapter.id === "automation");
     const index = chapterStart(flat, automation, 0);
     assert.deepEqual(flat[index], { chapter: automation, page: 0 });
@@ -109,14 +109,14 @@ describe("boldRuns：正文里的 **粗体**", () => {
 describe("设置 › 新手引导页签：点某章 → 全屏打开到那章首页", () => {
   const flat = flattenGuide(GUIDE);
 
-  test("startIndexOfChapter：每一章都落在它自己的章首页（第 10 章 = 插件）", () => {
+  test("startIndexOfChapter：每一章都落在它自己的章首页（插件章在第 11 位）", () => {
     for (const [ci, chapter] of GUIDE.entries()) {
       const index = startIndexOfChapter(GUIDE, chapter.id);
       assert.deepEqual(flat[index], { chapter: ci, page: 0 }, chapter.id);
     }
     const plugins = startIndexOfChapter(GUIDE, "plugins");
     assert.equal(GUIDE[flat[plugins]?.chapter ?? -1]?.id, "plugins");
-    assert.equal(chapterNumber(GUIDE, flat[plugins]?.chapter ?? 0), "10");
+    assert.equal(chapterNumber(GUIDE, flat[plugins]?.chapter ?? 0), "11");
   });
 
   test("从某章进入后 ← 仍能翻到上一章（落在上一章最后一页）；从头看是第 0 页", () => {
@@ -132,12 +132,12 @@ describe("设置 › 新手引导页签：点某章 → 全屏打开到那章首
     assert.equal(startIndexOfChapter([], "start"), 0);
   });
 
-  test("guideParts：入门篇 7 / 进阶篇 6 / 附录 1，每章恰好出现一次，章号与引导目录同一套", () => {
+  test("guideParts：入门篇 8 / 进阶篇 6 / 附录 1，每章恰好出现一次，章号与引导目录同一套", () => {
     const parts = guideParts(GUIDE);
-    assert.deepEqual(parts.map((group) => [group.part, group.chapters.length]), [["basics", 7], ["tools", 6], ["appendix", 1]]);
+    assert.deepEqual(parts.map((group) => [group.part, group.chapters.length]), [["basics", 8], ["tools", 6], ["appendix", 1]]);
     assert.deepEqual(parts.flatMap((group) => group.chapters.map((chapter) => chapter.id)), GUIDE.map((chapter) => chapter.id));
     assert.equal(parts[0]?.chapters[0]?.no, "01");
-    assert.equal(parts[1]?.chapters[0]?.no, "08");
+    assert.equal(parts[1]?.chapters[0]?.no, "09");
     assert.equal(parts[2]?.chapters[0]?.no, "··");
   });
 });

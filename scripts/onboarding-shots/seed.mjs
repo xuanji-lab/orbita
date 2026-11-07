@@ -21,6 +21,10 @@
  *      （同一条会话、同一张看板快照）往前铺 6 天，另加两条演示自动化（每周组会纪要、失败中的日志巡检）。
  *        node scripts/onboarding-shots/seed.mjs fixup --instance onboarding-shots
  *
+ *   4. 文档与演示章（第 06 章，实例在跑、带 CDP；可单独跑，不需要上面的 drive）：只跑 DOC_SCREENPLAY 两幕——
+ *      一句话做一份演示文稿、新建一份带 Obsidian 语法的文档，真模型真跑，约 3–5 分钟。之后 capture.mjs --chapter docs。
+ *        node scripts/onboarding-shots/seed.mjs docs --cdp 39350 --dev 5350
+ *
  * 收尾：node scripts/.../instance-data.py clean <实例名> --yes（或手动删 userData 与 ~/Orbita-dev-<实例名>）。
  * 截图里不能出现真实数据：终端提示符在 capture 里改成「目录名 %」，插件作者写成「城市感知课题组」。
  */
@@ -30,7 +34,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import { connectCdp, step } from "../cdp.mjs";
-import { PROJECT_FILES, SCREENPLAY, WORKSPACE_NAME, GROUP_MEETING_DRAFT } from "./demo.mjs";
+import { PROJECT_FILES, SCREENPLAY, DOC_SCREENPLAY, WORKSPACE_NAME, GROUP_MEETING_DRAFT } from "./demo.mjs";
 
 const { positionals, values: opt } = parseArgs({
   allowPositionals: true,
@@ -65,7 +69,14 @@ function seedFiles() {
     writeFileSync(path, content);
   }
   const pdf = join(workspaceDir, "papers", "UrbanGPT-2403.00813.pdf");
-  if (!existsSync(pdf)) execFileSync("curl", ["-sL", "-m", "120", "-o", pdf, "https://arxiv.org/pdf/2403.00813"]);
+  // 下载失败（没网 / arXiv 不通）不拦整个灌数据：只有「读论文」那几章要 PDF，文档与演示章用不着
+  if (!existsSync(pdf)) {
+    try {
+      execFileSync("curl", ["-sfL", "-m", "120", "-o", pdf, "https://arxiv.org/pdf/2403.00813"]);
+    } catch {
+      console.warn("⚠ 论文 PDF 没下下来（跳过，只影响读论文那几章）");
+    }
+  }
   if (!existsSync(join(workspaceDir, ".git"))) {
     execFileSync("git", ["init", "-q"], { cwd: workspaceDir });
     execFileSync("git", ["add", "."], { cwd: workspaceDir });
@@ -100,7 +111,7 @@ function seedFiles() {
 }
 
 /** 剧本：每一幕在指定任务里发一句话，等它跑完（停止键消失）再下一幕 */
-async function drive() {
+async function drive(screenplay = SCREENPLAY, { finish = true } = {}) {
   const cdp = await connectCdp({ cdpPort: Number(opt.cdp), devPort: Number(opt.dev), commandTimeoutMs: 60_000, watchdogMs: 3 * 3600_000 });
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const click = async (expr) => {
@@ -122,10 +133,12 @@ async function drive() {
   await cdp.evaluate(`window.orbita.workspace.create(${JSON.stringify(WORKSPACE_NAME)}).then(() => 1)`);
   await cdp.evaluate("location.reload(), 1");
   await sleep(4000);
-  const start = SCREENPLAY.findIndex((scene) => scene.id === (opt.from ?? SCREENPLAY[0].id));
-  for (const scene of SCREENPLAY.slice(Math.max(0, start))) {
+  const start = screenplay.findIndex((scene) => scene.id === (opt.from ?? screenplay[0].id));
+  for (const scene of screenplay.slice(Math.max(0, start))) {
     step(`第 ${scene.id} 幕：${scene.prompt.slice(0, 30)}…`);
     await cdp.evaluate(`[...document.querySelectorAll(".right-rail button[aria-pressed=true]")].forEach((b) => b.click()), 1`);
+    // 文档 / 演示文稿面板开着时左栏会收起；等面板收回、左栏回来再找「新建任务」
+    await sleep(1500);
     if (scene.task === "new") {
       await cdp.evaluate(`document.querySelectorAll(".workspace-group button[aria-expanded=false]").forEach((b) => b.click()), 1`);
       await click(`document.querySelector('aside button[aria-label="在此工作区新建任务"]')`);
@@ -149,6 +162,11 @@ async function drive() {
     await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
     await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter" });
     if (scene.wait !== false) await idle((scene.minutes ?? 12) * 60_000);
+  }
+  if (!finish) {
+    cdp.close();
+    console.log("✔ 剧本跑完。");
+    return;
   }
   // 插件作者别带出机器用户名
   const manifest = join(workspaceDir, "plugins", "arxiv-daily", ".claude-plugin", "plugin.json");
@@ -231,7 +249,9 @@ function fixup() {
 if (mode === "files") seedFiles();
 else if (mode === "drive") await drive();
 else if (mode === "fixup") fixup();
+// 文档与演示章：只跑 DOC_SCREENPLAY 两幕（约 3–5 分钟，真模型）；不依赖 drive 的那 9 幕，也不需要 fixup
+else if (mode === "docs") await drive(DOC_SCREENPLAY, { finish: false });
 else {
-  console.error("用法见文件头：files | drive | fixup");
+  console.error("用法见文件头：files | drive | fixup | docs");
   process.exit(1);
 }
