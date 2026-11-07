@@ -18,11 +18,19 @@ export interface MeasureOptions {
 /** 字号达到它的文字按「标题折行」排：word-break:keep-all（只在标点 / 空格处断行，实在放不下才硬断）+ text-wrap:balance。渲染层与估算共用这个阈值 */
 export const HEADING_WRAP_MIN_SIZE = 36;
 
+const DIGIT_LIKE = /[0-9%+$¥€.,]/;
+
+/** 单个字符的显示宽度（px）：CJK = 字号；数字与 % + 等 ≈ 0.6（等宽数字比平均拉丁字母宽，大号统计数字实测会比 0.55 估的宽 8%）；其余拉丁 ≈ 0.55 */
+function charWidth(ch: string, fontSize: number, bold: boolean): number {
+  if (CJK_CHAR.test(ch)) return fontSize;
+  if (DIGIT_LIKE.test(ch)) return fontSize * (bold ? 0.66 : 0.6);
+  return fontSize * (bold ? 0.6 : 0.55);
+}
+
 /** 一行（不含换行）的显示宽度（px，不折行） */
 export function textWidth(line: string, fontSize: number, options: MeasureOptions = {}): number {
-  const latin = options.bold === true ? 0.6 : 0.55;
   let used = 0;
-  for (const ch of line) used += (CJK_CHAR.test(ch) ? fontSize : fontSize * latin) + (options.letterSpacing ?? 0);
+  for (const ch of line) used += charWidth(ch, fontSize, options.bold === true) + (options.letterSpacing ?? 0);
   return used;
 }
 
@@ -47,9 +55,8 @@ function segmentsOf(line: string): string[] {
 /** 一段文字（可含 \n）折行后的行数 */
 export function countLines(plain: string, fontSize: number, width: number, options: MeasureOptions = {}): number {
   const usable = Math.max(width, fontSize);
-  const latin = options.bold === true ? 0.6 : 0.55;
   const extra = options.letterSpacing ?? 0;
-  const step = (ch: string): number => (CJK_CHAR.test(ch) ? fontSize : fontSize * latin) + extra;
+  const step = (ch: string): number => charWidth(ch, fontSize, options.bold === true) + extra;
   const keepAll = fontSize >= HEADING_WRAP_MIN_SIZE;
   let lines = 0;
   for (const line of plain.split("\n")) {
