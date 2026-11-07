@@ -930,6 +930,7 @@ export const zh: Messages = {
     viewRead: "阅读",
     viewSource: "源码",
     viewSwitch: "文档视图",
+    moreActions: "更多操作",
     insertImage: "插图",
     insertImageFailed: (message: string) => `没能插入图片：${message}`,
     exportMenu: "导出",

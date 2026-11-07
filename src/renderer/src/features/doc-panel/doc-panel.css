@@ -29,7 +29,9 @@
 .dp-bar {
   display: flex;
   flex: 0 0 auto;
-  flex-wrap: wrap;
+  /* 单行：放不下的动作按容器宽度逐级收起（见下方 @container dp 的三档），不折行 */
+  flex-wrap: nowrap;
+  min-width: 0;
   align-items: center;
   gap: var(--space-1);
   padding: var(--space-1) var(--space-3);
@@ -43,6 +45,53 @@
 }
 .dp-bar-grow {
   flex: 1 1 auto;
+  min-width: 0;
+}
+.dp-bar > * {
+  flex-shrink: 0;
+}
+/* 纸面 / 插图 / 导出：面板够宽时平铺（display: contents 让它们直接参与工具栏的 flex）；「…」只在窄档出现 */
+.dp-bar-wide {
+  display: contents;
+}
+.dp-bar-more {
+  display: none;
+}
+/*
+ * 工具栏三档（以 .dp 的宽度为准，不是窗口宽度）：
+ *  1. 够宽：全部文字标签平铺；
+ *  2. 收成图标：插图 / 导出只留图标（tooltip 仍写全名）；
+ *  3. 更窄：纸面 / 插图 / 导出收进一个「…」菜单。
+ * 编辑视图多一组 H / B / 列表 / 撤销（约 130px），各档的阈值比阅读视图大一截。
+ */
+@container dp (max-width: 520px) {
+  .dp[data-view="read"] .dp-act-label,
+  .dp[data-view="source"] .dp-act-label {
+    display: none;
+  }
+}
+@container dp (max-width: 640px) {
+  .dp[data-view="edit"] .dp-act-label {
+    display: none;
+  }
+}
+@container dp (max-width: 440px) {
+  .dp[data-view="read"] .dp-bar-wide,
+  .dp[data-view="source"] .dp-bar-wide {
+    display: none;
+  }
+  .dp[data-view="read"] .dp-bar-more,
+  .dp[data-view="source"] .dp-bar-more {
+    display: inline-flex;
+  }
+}
+@container dp (max-width: 560px) {
+  .dp[data-view="edit"] .dp-bar-wide {
+    display: none;
+  }
+  .dp[data-view="edit"] .dp-bar-more {
+    display: inline-flex;
+  }
 }
 .dp-status {
   font-size: var(--font-size-sm);

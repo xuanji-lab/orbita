@@ -11,7 +11,7 @@ import { Icon } from "../../shell/Icon";
 import { IconButton } from "../../shell/IconButton";
 import { Chip } from "../../shell/Chip";
 import { PanelEmpty } from "../../shell/PanelEmpty";
-import { Menu } from "../../shell/Menu";
+import { Menu, type MenuItem } from "../../shell/Menu";
 import { SelectButton } from "../settings/SettingControls";
 import { useT } from "../../locale.ts";
 import type { ExternalChange } from "./doc-session.ts";
@@ -342,11 +342,57 @@ function MarkdownEditPane(props: DocEditPaneProps) {
           ? { text: t.doc.saveFailed(doc.syncError ?? ""), saveAs: false, close: false }
           : null;
 
+  const paperItems = DOC_PAPERS.map((value) => ({
+    id: value,
+    label: paperName(value, t),
+    checked: paper === value,
+    disabled: locked,
+    onSelect: () => setPaper(value),
+  }));
+  const paperMenu = (
+    <Menu
+      items={paperItems}
+      align="end"
+      trigger={({ open, toggle }) => (
+        <SelectButton
+          open={open}
+          onClick={toggle}
+          disabled={locked}
+          title={`${t.doc.paperLabel}：${paperName(paper, t)}${locked ? `（${t.doc.paperLocked}）` : ""}`}
+        >
+          {paperName(paper, t)}
+        </SelectButton>
+      )}
+    />
+  );
+  const exportFormats: MenuItem[] = [
+    { id: "docx", label: t.doc.exportDocx, hint: ".docx", onSelect: () => void exportDocument("docx") },
+    { id: "pdf", label: t.doc.exportPdfMenu, hint: ".pdf", onSelect: () => void exportDocument("pdf") },
+    { id: "md", label: t.doc.exportMd, hint: ".md", onSelect: () => void exportDocument("md") },
+    { id: "md-plain", label: t.doc.exportMdPlain, hint: ".md", onSelect: () => void exportDocument("md-plain") },
+  ];
+  const exportItems: MenuItem[] = [
+    ...exportFormats,
+    { id: "rule", label: "", rule: true },
+    { id: "hint", label: t.doc.exportOfmHint, fact: true },
+  ];
+  /** 窄面板的「…」：纸面、插图、导出都收在这一个菜单里 */
+  const moreItems: MenuItem[] = [
+    { id: "paper-head", label: t.doc.paperLabel, header: true },
+    ...paperItems,
+    { id: "rule-1", label: "", rule: true },
+    { id: "insert-image", label: t.doc.insertImage, icon: "image", onSelect: () => void insertImages() },
+    { id: "rule-2", label: "", rule: true },
+    { id: "export-head", label: t.doc.exportMenu, header: true },
+    ...exportFormats.map((item) => ({ ...item, id: `export-${item.id}` })),
+  ];
+
   return (
     <div
       className="dp"
       data-paper={paper}
       data-kind={deck ? "slides" : "doc"}
+      data-view={deck ? undefined : viewMode}
       data-typing={typing ? "true" : undefined}
       onKeyDownCapture={onKeyActivity}
       onMouseMove={() => {
@@ -392,53 +438,53 @@ function MarkdownEditPane(props: DocEditPaneProps) {
         <span className="dp-status" data-state={doc.state} role="status" title={doc.syncError ?? undefined}>
           {status}
         </span>
-        <Menu
-          items={DOC_PAPERS.map((value) => ({
-            id: value,
-            label: paperName(value, t),
-            checked: paper === value,
-            onSelect: () => setPaper(value),
-          }))}
-          align="end"
-          trigger={({ open, toggle }) => (
-            <SelectButton
-              open={open}
-              onClick={toggle}
-              disabled={locked}
-              title={`${t.doc.paperLabel}：${paperName(paper, t)}${locked ? `（${t.doc.paperLocked}）` : ""}`}
-            >
-              {paperName(paper, t)}
-            </SelectButton>
-          )}
-        />
         {deck ? (
-          <IconButton label={t.doc.exportPdf} size={28} disabled={exporting} onClick={() => void exportNow()}>
-            <Icon name={exporting ? "loader-circle" : "download"} size={16} strokeWidth={1.8} spin={exporting} />
-          </IconButton>
+          <>
+            {paperMenu}
+            <IconButton label={t.doc.exportPdf} size={28} disabled={exporting} onClick={() => void exportNow()}>
+              <Icon name={exporting ? "loader-circle" : "download"} size={16} strokeWidth={1.8} spin={exporting} />
+            </IconButton>
+          </>
         ) : (
           <>
-            <button type="button" className="dp-text-action" onClick={() => void insertImages()}>
-              <Icon name="image" size={14} strokeWidth={1.8} />
-              {t.doc.insertImage}
-            </button>
-            <Menu
-              items={[
-                { id: "docx", label: t.doc.exportDocx, hint: ".docx", onSelect: () => void exportDocument("docx") },
-                { id: "pdf", label: t.doc.exportPdfMenu, hint: ".pdf", onSelect: () => void exportDocument("pdf") },
-                { id: "md", label: t.doc.exportMd, hint: ".md", onSelect: () => void exportDocument("md") },
-                { id: "md-plain", label: t.doc.exportMdPlain, hint: ".md", onSelect: () => void exportDocument("md-plain") },
-                { id: "rule", label: "", rule: true },
-                { id: "hint", label: t.doc.exportOfmHint, fact: true },
-              ]}
-              align="end"
-              trigger={({ open, toggle }) => (
-                <button type="button" className="dp-text-action" aria-expanded={open} disabled={exporting} onClick={toggle}>
-                  <Icon name={exporting ? "loader-circle" : "download"} size={14} strokeWidth={1.8} spin={exporting} />
-                  {t.doc.exportMenu}
-                  <Icon name="chevron-down" size={12} strokeWidth={2} />
-                </button>
-              )}
-            />
+            {/* 单行工具栏：面板够宽时三个动作平铺；变窄先收成图标，再收进「…」（容器查询在 doc-panel.css，不靠 JS 量宽） */}
+            <span className="dp-bar-wide">
+              {paperMenu}
+              <button type="button" className="dp-text-action" title={t.doc.insertImage} aria-label={t.doc.insertImage} onClick={() => void insertImages()}>
+                <Icon name="image" size={14} strokeWidth={1.8} />
+                <span className="dp-act-label">{t.doc.insertImage}</span>
+              </button>
+              <Menu
+                items={exportItems}
+                align="end"
+                trigger={({ open, toggle }) => (
+                  <button
+                    type="button"
+                    className="dp-text-action"
+                    title={t.doc.exportMenu}
+                    aria-label={t.doc.exportMenu}
+                    aria-expanded={open}
+                    disabled={exporting}
+                    onClick={toggle}
+                  >
+                    <Icon name={exporting ? "loader-circle" : "download"} size={14} strokeWidth={1.8} spin={exporting} />
+                    <span className="dp-act-label">{t.doc.exportMenu}</span>
+                    <Icon name="chevron-down" size={12} strokeWidth={2} />
+                  </button>
+                )}
+              />
+            </span>
+            <span className="dp-bar-more">
+              <Menu
+                items={moreItems}
+                align="end"
+                trigger={({ open, toggle }) => (
+                  <IconButton label={t.doc.moreActions} size={28} ariaExpanded={open} onClick={toggle}>
+                    <Icon name="ellipsis-vertical" size={16} strokeWidth={1.8} />
+                  </IconButton>
+                )}
+              />
+            </span>
           </>
         )}
       </div>

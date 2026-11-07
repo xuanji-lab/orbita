@@ -1011,6 +1011,7 @@ export const en = {
     viewRead: "Read",
     viewSource: "Source",
     viewSwitch: "Document view",
+    moreActions: "More actions",
     insertImage: "Insert image",
     insertImageFailed: (message: string) => `Couldn't insert the image: ${message}`,
     exportMenu: "Export",
