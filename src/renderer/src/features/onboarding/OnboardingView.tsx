@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ThemePreference } from "@shared/settings";
 import { Icon } from "../../shell/Icon";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 import { GUIDE, type Box, type GuideChapter, type GuidePage, type Loupe, type Pin, type ShotId, type StepPage } from "./onboarding-pages.ts";
@@ -114,8 +115,11 @@ export function OnboardingView(props: {
   theme: Exclude<ThemePreference, "system">;
   /** 跳过 / Esc / 看完：都记为看过（调用方写设置） */
   onClose: () => void;
-  /** 「放进输入框试试」：关掉引导，把这句话放进输入框 */
-  onTry: (text: string) => void;
+  /**
+   * 「试试」：关掉引导。text 不是 null 就把这句话放进输入框；open 给了就先把右栏的演示文稿面板摆好
+   * （动作提示页只开面板、text 是 null）
+   */
+  onTry: (text: string | null, open?: "slides" | "slides-new") => void;
   /** 测试 / 预览用：从第几页开始（缺席 = 第一页） */
   startAt?: number;
 }) {
@@ -270,18 +274,24 @@ export function OnboardingView(props: {
                     </span>
                   </div>
                 ))}
-                {page.say === true && pCopy.say !== undefined && (
+                {(page.say === true || page.hint === true) && pCopy.say !== undefined && (
                   <div className="ob-try">
-                    <span className="ob-try-label">{copy.sayLabel}</span>
+                    <span className="ob-try-label">{page.hint === true ? copy.hintLabel : copy.sayLabel}</span>
                     <div className="ob-composer">
                       <span>{pCopy.say}</span>
-                      <span className="ob-send" aria-hidden="true">
-                        <Icon name="arrow-up" size={16} />
-                      </span>
+                      {page.hint !== true && (
+                        <span className="ob-send" aria-hidden="true">
+                          <Icon name="arrow-up" size={16} />
+                        </span>
+                      )}
                     </div>
-                    <button type="button" className="ob-try-btn" onClick={() => props.onTry(pCopy.say ?? "")}>
-                      <Icon name="corner-down-left" size={14} />
-                      {copy.tryIt}
+                    <button
+                      type="button"
+                      className="ob-try-btn"
+                      onClick={() => props.onTry(page.hint === true ? null : (pCopy.say ?? ""), page.open)}
+                    >
+                      <Icon name={page.open === undefined ? "corner-down-left" : FEATURE_ICON.slides} size={14} />
+                      {page.open === undefined ? copy.tryIt : page.open === "slides-new" ? copy.openNewSlides : copy.openSlides}
                     </button>
                   </div>
                 )}

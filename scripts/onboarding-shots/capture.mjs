@@ -129,7 +129,11 @@ async function run(steps) {
     if (s.until) {
       const end = Date.now() + (s.timeout ?? 120_000);
       while (!(await cdp.evaluate(s.until))) {
-        if (Date.now() > end) throw new Error(`等不到：${s.until.slice(0, 80)}`);
+        if (Date.now() > end) {
+          // soft：到点不算失败，往下拍（agent 改完后可能还在自己检查，不影响取景）
+          if (s.soft) break;
+          throw new Error(`等不到：${s.until.slice(0, 80)}`);
+        }
         await sleep(2000);
       }
     }
