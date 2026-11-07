@@ -103,6 +103,8 @@ export const READ_ONLY_TOOLS = [
   "read_pdf",
   "read_docx",
   "show_image",
+  // 演示文稿：读摘要，零副作用（./slides-tools.ts）
+  "slides_read",
   // 插件列表：读已装插件的名字与技能，不改任何东西
   "list_plugins",
 ] as const;

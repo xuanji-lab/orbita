@@ -19,6 +19,14 @@ import type {
   DocWriteRequest,
   DocWriteResult,
 } from "../../shared/doc.ts";
+import type {
+  SlidesAddAssetRequest,
+  SlidesAddedAsset,
+  SlidesAssetBytes,
+  SlidesExportRequest,
+  SlidesExportResult,
+  SlidesReadAssetRequest,
+} from "../../shared/slides-export.ts";
 
 export const docsApi = {
   /** 读一份 .md（白名单同文件面板），回内容 + 摘要 */
@@ -42,4 +50,10 @@ export const docsApi = {
   saveAs: (req: DocSaveAsRequest): Promise<DocSaveAsResult> => ipcRenderer.invoke(ipcChannels.docSaveAs, req),
   /** 导出：文档 → docx、演示文稿 → PDF（先弹保存对话框） */
   export: (req: DocExportRequest): Promise<DocExportResult> => ipcRenderer.invoke(ipcChannels.docExport, req),
+  /** 演示文稿 v2：导出 pdf / html / png / pptx（先弹保存对话框） */
+  exportSlides: (req: SlidesExportRequest): Promise<SlidesExportResult> => ipcRenderer.invoke(ipcChannels.slidesExport, req),
+  /** 演示文稿 v2：读一张 assets 里的图（画布显示用） */
+  readSlideAsset: (req: SlidesReadAssetRequest): Promise<SlidesAssetBytes> => ipcRenderer.invoke(ipcChannels.slidesReadAsset, req),
+  /** 演示文稿 v2：把拖入 / 粘贴 / 选择的图片字节放进 assets */
+  addSlideAsset: (req: SlidesAddAssetRequest): Promise<SlidesAddedAsset> => ipcRenderer.invoke(ipcChannels.slidesAddAsset, req),
 } as const;

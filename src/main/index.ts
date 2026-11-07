@@ -100,6 +100,10 @@ import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
 import { registerFilesIpc } from "./files/ipc.ts";
 import { registerDocIpc } from "./doc-panel/ipc.ts";
+import { applySlidesRequest } from "./slides/agent-requests.ts";
+import { exportDeck } from "./slides/export.ts";
+import { registerSlidesIpc } from "./slides/ipc.ts";
+import { resolveFileRoots } from "./files/roots.ts";
 import { TerminalService } from "./terminal/service.ts";
 import { registerTerminalIpc } from "./terminal/ipc.ts";
 import { registerReviewIpc } from "./review/ipc.ts";
@@ -660,6 +664,19 @@ void app.whenReady().then(async () => {
         );
       return;
     }
+    // 演示文稿导出：PDF / PNG 要隐藏窗口，只能在主进程。同样任何路径都回执
+    if (event.type === "slidesRequest") {
+      void resolveFileRoots(workspaces, sessions, { sessionId: event.sessionId, workspaceId: event.workspaceId })
+        .then((roots) => applySlidesRequest({ roots, exportDeck }, event.request))
+        .then((outcome) => agentHost.answerSlides(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerSlides(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
     // 终端：agent 的终端工具——PTY 在主进程的 TerminalService（浏览器同一条边界）。
     // 同样任何路径都回执：挂着不回，agent 进程里那次工具调用永远等下去
     if (event.type === "terminalRequest") {
@@ -1183,6 +1200,7 @@ void app.whenReady().then(async () => {
   registerFilesIpc(workspaces, sessions, (path, roots) => browserSandbox.openLocalFile(path, roots));
   // 文档 / 演示文稿面板（doc:*）：白名单同文件面板，写入比较后交换 + 原子写
   registerDocIpc(workspaces, sessions);
+  registerSlidesIpc(workspaces, sessions);
   // 审查面板（review:list / review:diff）：task 来源读会话快照账，git 来源只读
   registerReviewIpc(sessions);
   // 专注模式（focus:changes / focus:notify-done / focus:summarize）：U/M 只读跑 git，

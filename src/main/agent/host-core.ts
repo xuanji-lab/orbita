@@ -18,6 +18,7 @@ import type { McpStatus } from "../../shared/mcp.ts";
 import type { AutomationToolOutcome } from "../../shared/automation.ts";
 import type { BrowserToolOutcome } from "../../shared/browser.ts";
 import type { TerminalToolOutcome } from "../../shared/terminal.ts";
+import type { SlidesOutcome } from "../../shared/slides-export.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPreviewOutcome } from "../../shared/plugin.ts";
@@ -633,6 +634,11 @@ export class AgentHostCore {
           }
         : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);
+  }
+
+  /** 演示文稿导出：slidesRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。 */
+  answerSlides(requestId: string, outcome: SlidesOutcome): void {
+    this.child?.postMessage({ type: "slidesResult", requestId, ...outcome } satisfies AgentCommand);
   }
 
   /** 终端：terminalRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。 */

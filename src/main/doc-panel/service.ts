@@ -31,7 +31,9 @@ import {
   type DocWriteRequest,
   type DocWriteResult,
 } from "../../shared/doc.ts";
-import { isDeckText, NEW_DECK_TEXT } from "../../shared/doc-slides.ts";
+import { isDeckText } from "../../shared/doc-slides.ts";
+import { createDeck } from "../../shared/slides-ops.ts";
+import { isDeckPath, serializeDeck } from "../../shared/slides.ts";
 import type { FileRoot } from "../../shared/files.ts";
 import { writeTextAtomic } from "../atomic-write.ts";
 import { errorCode, isNotFound } from "../fs-errors.ts";
@@ -49,13 +51,15 @@ export function hashText(text: string): string {
 }
 
 const isMarkdownPath = (path: string): boolean => /\.md$/i.test(path);
+/** 能当「文档」打开的文件：Markdown 文档 / 旧版 .md 演示文稿，和 v2 的 .slides.json 演示文稿 */
+const isDocFilePath = (path: string): boolean => isMarkdownPath(path) || isDeckPath(path);
 
 /**
  * 白名单：path realpath 之后落在可写根之内、是 `.md`、是个文件。返回真实路径。
  * 越界 / 不存在 / 不是 .md 一律抛——这条通道不能变成读写任意文件的后门。
  */
 export async function resolveDocPath(roots: readonly FileRoot[], path: string): Promise<string> {
-  if (!isMarkdownPath(path)) throw new Error(`只能打开 .md 文件：${path}`);
+  if (!isDocFilePath(path)) throw new Error(`只能打开 .md / .slides.json 文件：${path}`);
   const allowed = roots.filter((root) => root.exists && WRITABLE_KINDS.has(root.kind)).map((root) => root.path);
   const real = await realpathInside(path, allowed);
   if (real === null) {
@@ -69,7 +73,7 @@ export async function resolveDocPath(roots: readonly FileRoot[], path: string): 
     if (gone) throw new Error(`${DOC_GONE}: 文件被移走或删除了`);
     throw new Error(`「${path}」不在这条会话允许的目录里`);
   }
-  if (!isMarkdownPath(real)) throw new Error(`只能打开 .md 文件：${real}`);
+  if (!isDocFilePath(real)) throw new Error(`只能打开 .md / .slides.json 文件：${real}`);
   const stats = await stat(real);
   if (!stats.isFile()) throw new Error(`不是文件：${real}`);
   return real;
@@ -138,9 +142,12 @@ export async function createDoc(roots: readonly FileRoot[], req: DocCreateReques
   const root = roots.find((candidate) => candidate.kind === "workspace" && candidate.exists);
   if (root === undefined) throw new Error("工作区目录不存在，无处新建文档");
   const base = req.kind === "slides" ? NEW_DECK_NAME : NEW_DOC_NAME;
-  const initial = req.kind === "slides" ? NEW_DECK_TEXT : "";
+  const ext = req.kind === "slides" ? ".slides.json" : ".md";
   for (let n = 1; n < 1000; n += 1) {
-    const path = join(root.path, `${n === 1 ? base : `${base} ${n}`}.md`);
+    const name = n === 1 ? base : `${base} ${n}`;
+    const path = join(root.path, `${name}${ext}`);
+    // 演示文稿：标题取文件名，带一页空白——打开就能动手
+    const initial = req.kind === "slides" ? serializeDeck(createDeck({ title: name })) : "";
     try {
       // wx：已存在就 EEXIST，不覆盖；并发新建各拿各的序号
       const handle = await open(path, "wx");
@@ -175,6 +182,7 @@ const LIST_DIR_BUDGET = 1500;
 const HEAD_BYTES = 1024;
 
 async function kindOfFile(path: string): Promise<DocKind> {
+  if (isDeckPath(path)) return "slides";
   let handle;
   try {
     handle = await open(path, "r");
@@ -209,7 +217,7 @@ export async function listDocs(roots: readonly FileRoot[]): Promise<DocListEntry
       const full = join(dir, dirent.name);
       if (dirent.isDirectory()) {
         if (depth < DOC_LIST_DEPTH && !SKIP_DIRS.has(dirent.name)) queue.push({ dir: full, depth: depth + 1 });
-      } else if (dirent.isFile() && isMarkdownPath(dirent.name)) {
+      } else if (dirent.isFile() && isDocFilePath(dirent.name)) {
         try {
           found.push({ path: full, modifiedAt: (await stat(full)).mtimeMs });
         } catch {

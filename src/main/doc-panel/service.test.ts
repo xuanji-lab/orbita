@@ -155,8 +155,13 @@ describe("新建", () => {
     assert.match(second.path, /未命名文档 2\.md$/);
     assert.equal(await readFile(first.path, "utf8"), "用户已经写了字");
     const deck = await createDoc(roots, { sessionId: null, workspaceId: null, kind: "slides" });
-    assert.match(deck.path, /未命名演示文稿\.md$/);
-    assert.match(deck.text, /marp: true/);
+    // v2：演示文稿是 .slides.json（JSON 元素数组），带一页空白、标题取文件名
+    assert.match(deck.path, /未命名演示文稿\.slides\.json$/);
+    const parsed = JSON.parse(deck.text) as { title: string; slides: unknown[] };
+    assert.equal(parsed.title, "未命名演示文稿");
+    assert.equal(parsed.slides.length, 1);
+    const second2 = await createDoc(roots, { sessionId: null, workspaceId: null, kind: "slides" });
+    assert.match(second2.path, /未命名演示文稿 2\.slides\.json$/);
   });
 
   it("并发新建拿到不同的名字", async () => {
@@ -191,12 +196,14 @@ describe("列表", () => {
       await writeFile(join(lroot, "node_modules", "x", "readme.md"), "# 依赖");
       await writeFile(join(lroot, ".hidden", "h.md"), "# 隐");
       await writeFile(join(lroot, "note.txt"), "不是");
+      await writeFile(join(lroot, "v2.slides.json"), "{}");
       await utimes(join(lroot, "old.md"), new Date(2020, 1, 1), new Date(2020, 1, 1));
       const entries = await listDocs([{ kind: "workspace", label: "l", path: lroot, exists: true }]);
-      assert.deepEqual(entries.map((e) => e.relative).sort(), ["deck.md", join("sub", "deep.md"), "old.md"].sort());
+      assert.deepEqual(entries.map((e) => e.relative).sort(), ["deck.md", join("sub", "deep.md"), "old.md", "v2.slides.json"].sort());
       assert.equal(entries[entries.length - 1]?.name, "old.md");
       assert.equal(entries.find((e) => e.name === "deck.md")?.kind, "slides");
       assert.equal(entries.find((e) => e.name === "old.md")?.kind, "doc");
+      assert.equal(entries.find((e) => e.name === "v2.slides.json")?.kind, "slides");
     } finally {
       await rm(lroot, { recursive: true, force: true });
     }

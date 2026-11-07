@@ -20,6 +20,7 @@ import type { PromptImage, SentImage } from "./prompt-images.ts";
 import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
+import type { SlidesAgentRequest, SlidesOutcome } from "./slides-export.ts";
 import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
 import type {
   ChannelDelivery,
@@ -313,6 +314,12 @@ export const ipcChannels = {
   docSaveAs: "doc:save-as",
   /** 导出：文档 → docx，演示文稿 → PDF（先弹保存对话框） */
   docExport: "doc:export",
+  /** 演示文稿 v2 导出：pdf / html / 当前页 png / pptx（保留字体 · 通用字体）；先弹保存对话框（`SlidesExportRequest`） */
+  slidesExport: "slides:export",
+  /** 演示文稿 v2：读一张图（相对路径，白名单：演示文稿所在目录内）回字节，画布 / 缩略图显示用 */
+  slidesReadAsset: "slides:read-asset",
+  /** 演示文稿 v2：把用户拖入 / 粘贴 / 选择的图片字节复制进 `<名字>.assets/`，回相对路径与尺寸 */
+  slidesAddAsset: "slides:add-asset",
   /** 遗留事项（收尾仪式收割）：全部清单。侧栏面板、角标与「Has todos」筛选都吃它，按 sourceSessionId 现算 */
   carryoverList: "carryover:list",
   /** 每日 token 用量：最近 7 天（含今天，旧的在前；载荷形状在 shared/usage.ts）。回 `UsageDayTotal[]`，回填还在跑时可能是全 0——跑完会经 usage:event 推一份真值 */
@@ -1164,6 +1171,8 @@ export type AgentCommand =
   | ({ type: "memoryToolResult"; requestId: string } & MemoryAgentOutcome)
   /** 受管浏览器：主进程对 browserRequest 的回执（readTaskResult 同款） */
   | ({ type: "browserResult"; requestId: string } & BrowserToolOutcome)
+  /** 演示文稿：主进程对 slidesRequest 的回执（browserResult 同款 ok 双分支） */
+  | ({ type: "slidesResult"; requestId: string } & SlidesOutcome)
   /** 终端：主进程对 terminalRequest 的回执（browserResult 同款） */
   | ({ type: "terminalResult"; requestId: string } & TerminalToolOutcome)
   /** 子会话：主进程对 delegateRequest 的回执（requestId 问答，readTaskResult 同款） */
@@ -1456,6 +1465,11 @@ export type AgentEvent =
    * 作用于该会话自己的 agent tab（没有就建）。回 browserResult。
    */
   | { type: "browserRequest"; requestId: string; sessionId: string; request: BrowserToolRequest }
+  /**
+   * 演示文稿：agent 的 slides_export。PDF / PNG 要主进程开隐藏窗口，所以导出整体在主进程
+   * （菜单点导出走同一个实现），agent 进程只剩工具定义 → requestId 问答。回 slidesResult。
+   */
+  | { type: "slidesRequest"; requestId: string; sessionId: string; workspaceId: string | null; request: SlidesAgentRequest }
   /**
    * 终端：agent 的终端工具请求（terminal_open / execute / read / list /
    * interrupt / close，形状见 shared/terminal.ts 的 TerminalToolRequest）。

@@ -604,7 +604,7 @@ export function normalizeBackground(value: unknown): string | undefined {
   return color === "" ? undefined : color;
 }
 
-function normalizeTheme(value: unknown): DeckTheme | undefined {
+export function normalizeTheme(value: unknown): DeckTheme | undefined {
   const item = record(value);
   if (item === null) return undefined;
   const fontFamily = safeFontFamily(item["fontFamily"]);

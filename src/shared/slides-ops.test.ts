@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { DeckOpError, addSlide, applyEdit, applyWrite, createDeck, duplicateSlide, insertImage, slideTitle, summarizeDeck } from "./slides-ops.ts";
+import { DeckOpError, addSlide, applyEdit, applyWrite, createDeck, duplicateSlide, insertImage, lintSlide, slideTitle, summarizeDeck } from "./slides-ops.ts";
 
 const deck5 = () => {
   const { deck } = applyWrite(createDeck({ title: "新加坡" }), [
@@ -122,5 +122,24 @@ describe("摘要与页管理", () => {
     const dup = duplicateSlide(deck, 0);
     assert.notEqual(dup.deck.slides[1]?.elements[0]?.id, deck.slides[0]?.elements[0]?.id);
     assert.equal(slideTitle(dup.deck.slides[1] as never), "封面");
+  });
+});
+
+describe("lintSlide", () => {
+  it("文字溢出框与伸出画布会被指出，正常的不报", () => {
+    const { deck } = applyWrite(createDeck({ title: "x" }), [
+      {
+        at: 1,
+        elements: [
+          { kind: "text", html: "很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长", x: 60, y: 60, w: 200, h: 40, fontSize: 28 },
+          { kind: "text", html: "短", x: 60, y: 200, w: 400, h: 60, fontSize: 28 },
+          { kind: "shape", x: 1200, y: 600, w: 200, h: 200 },
+        ],
+      },
+    ]);
+    const issues = lintSlide(deck, 1);
+    assert.equal(issues.length, 2);
+    assert.match(issues[0] as string, /probably overflows/);
+    assert.match(issues[1] as string, /extends past/);
   });
 });

@@ -131,5 +131,5 @@ export const NEW_DECK_NAME = "未命名演示文稿";
 /** 面板上显示的名字：去掉 .md */
 export function docTitle(path: string): string {
   const name = path.split(/[\\/]/).pop() ?? path;
-  return name.replace(/\.md$/i, "");
+  return name.replace(/\.slides\.json$/i, "").replace(/\.md$/i, "");
 }

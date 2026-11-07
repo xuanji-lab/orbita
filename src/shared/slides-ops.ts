@@ -393,3 +393,51 @@ export function appendElements(deck: Deck, slideId: string, elements: readonly S
 }
 
 export { ElementError };
+
+// ─── 写完后的体检（回给 agent，让它自己修） ─────────────────────────────
+
+const CJK_CHAR = /[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f]/;
+
+/** 估算一段文字在宽 width 的框里要多高（px）：CJK 字宽 ≈ 字号，拉丁 ≈ 0.55 字号，行高 1.25 */
+export function estimateTextHeight(plain: string, fontSize: number, width: number): number {
+  const usable = Math.max(width, fontSize);
+  let lines = 0;
+  for (const line of plain.split("\n")) {
+    let used = 0;
+    let count = 1;
+    for (const ch of line) {
+      const step = CJK_CHAR.test(ch) ? fontSize : fontSize * 0.55;
+      if (used + step > usable) {
+        count += 1;
+        used = step;
+      } else used += step;
+    }
+    lines += count;
+  }
+  return lines * fontSize * 1.25;
+}
+
+/**
+ * 一页的体检：文字溢出框、元素伸出画布。只报**大概率是问题**的（宽松阈值，免得吓到模型反复改），
+ * 每条带页号与元素 id，模型能直接 slides_edit 修。
+ */
+export function lintSlide(deck: Deck, page: number): string[] {
+  const slide = deck.slides[page - 1];
+  if (slide === undefined) return [];
+  const canvas = CANVAS_SIZE[deck.aspect];
+  const out: string[] = [];
+  for (const element of slide.elements) {
+    if (element.kind === "text") {
+      const need = estimateTextHeight(richTextToPlain(element.html), element.fontSize, element.w);
+      if (need > element.h * 1.15 + 4) {
+        out.push(`slide ${page}: text ${element.id} probably overflows its box (needs ≈${Math.round(need)}px, box h=${Math.round(element.h)}) — enlarge h, shorten the text or reduce fontSize`);
+      }
+    }
+    const right = element.x + element.w;
+    const bottom = element.y + element.h;
+    if (element.kind !== "line" && (element.x < -4 || element.y < -4 || right > canvas.w + 4 || bottom > canvas.h + 4)) {
+      out.push(`slide ${page}: ${element.kind} ${element.id} extends past the ${canvas.w}×${canvas.h} canvas (x=${Math.round(element.x)} y=${Math.round(element.y)} right=${Math.round(right)} bottom=${Math.round(bottom)})`);
+    }
+  }
+  return out;
+}
