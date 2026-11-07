@@ -1,5 +1,5 @@
 /**
- * 右栏「这条任务 › 进度」的推导（2026-10-30）：计划（update_plan 的最后一次入参）与「做过的」
+ * 右栏「这条任务 › 进度」的推导（2026-10-30）：头一行的状态与「做过的」（计划的版本线在 plan-timeline.ts）
  * （按轮列，轮下是章节——与对话里过程块展开后的章节同一份推导，turn-process.ts）。
  *
  * 全部从转录推，不另存：回退、分支、重开会话都跟着转录走。
@@ -7,7 +7,7 @@
  */
 import type { TranscriptRecord } from "@shared/session";
 import type { SessionRunState } from "../notify/completion-notice.ts";
-import { parsePlan, PLAN_STATUSES, PLAN_TOOL_NAME, type PlanItem } from "../../../../shared/plan.ts";
+import type { PlanView } from "./plan-timeline.ts";
 import {
   flattenRenderUnits,
   groupToolUnits,
@@ -20,37 +20,6 @@ import { processChapters, processCounts, type ProcessChapter } from "../chat/tur
 
 /** 让对话滚到某个过程块（ChatView 的 TranscriptColumn 监听）：面板与对话不共享状态，走一次性事件 */
 export const REVEAL_ENTRY_EVENT = "orbita:reveal-entry";
-
-export interface PlanView {
-  items: PlanItem[];
-  /** 这张计划写下的时刻（update_plan 开跑帧的时间戳）：「在做」那步的计时从这里起 */
-  at: number;
-  done: number;
-}
-
-/**
- * 最后一张计划 = 最后一次没被拒的 update_plan 的入参。
- *
- * - 被拒的（error：入参坏了）不算——模型会改了重调；
- * - **还在跑的算**：它的入参在开跑帧（tool_execution_start）里就是定稿，执行只是校验 + 回执。
- *   pi 的并行批次先让同批每个调用依次过审批闸门、全部过完才统一执行（agent-loop 的
- *   executeToolCallsParallel），手动档下 update_plan 会和同批等你批准的 read / bash 一起挂着——
- *   只认执行完的，面板在你批准之前一直是上一张计划，而对话里那一行已经是新计划（2026-10-30 实测）。
- *   还没执行就没经过工具的校验，所以用工具同一个 parsePlan 判，过不了的跳过（工具会拒）；
- * - 执行完的入参宽松解析：坏条目跳过，不让一条坏数据把整张计划弄没（工具端已经校验过，
- *   这里只防旧数据 / 手改）。
- */
-export function latestPlan(records: readonly TranscriptRecord[]): PlanView | null {
-  for (let i = records.length - 1; i >= 0; i--) {
-    const record = records[i];
-    if (record === undefined || record.role !== "tool" || record.toolName !== PLAN_TOOL_NAME) continue;
-    if (record.status === "error") continue;
-    const items = record.status === "complete" ? looseItems(record.input) : strictItems(record.input);
-    if (items.length === 0) continue;
-    return { items, at: record.timestamp, done: items.filter((item) => item.status === "done").length };
-  }
-  return null;
-}
 
 /** 头一行的状态：侧栏状态饼的四档，再加一个只说字、不画饼的「停下了」 */
 export type TaskHeadState = "running" | "waiting" | "done" | "failed" | "stopped";
@@ -81,34 +50,12 @@ export function taskHeadState(input: {
 }
 
 /**
- * 「在做」那步从几点开始计：计划写下的时刻。计划是前几轮写的、这一轮模型没再更新（续聊）时
- * 从这一轮开始算——不然两轮之间闲着的时间都算进去，隔夜续聊就是十几个小时。
+ * 「在做」那步从几点开始计：它这一次变成「在做」的时刻（plan-timeline 的 stepActiveSince）。
+ * 那是前几轮的事、这一轮模型没再更新（续聊）时从这一轮开始算——不然两轮之间闲着的时间都算进去，隔夜续聊就是十几个小时。
  */
-export function stepClockFrom(plan: PlanView, turns: readonly TurnDigest[]): number {
+export function stepClockFrom(since: number, turns: readonly TurnDigest[]): number {
   const last = turns.at(-1);
-  return last === undefined ? plan.at : Math.max(plan.at, last.at);
-}
-
-/** 还没执行的入参：过工具同一套校验，过不了 = 空（这张不算） */
-function strictItems(input: unknown): PlanItem[] {
-  try {
-    return parsePlan(input);
-  } catch {
-    return [];
-  }
-}
-
-/** 执行完的入参：坏条目跳过 */
-function looseItems(input: unknown): PlanItem[] {
-  const raw = (input as { items?: unknown } | null)?.items;
-  if (!Array.isArray(raw)) return [];
-  return raw.flatMap((item) => {
-    const value = (item ?? {}) as Record<string, unknown>;
-    const text = typeof value["text"] === "string" ? value["text"].trim() : "";
-    const status = value["status"];
-    if (text === "" || typeof status !== "string" || !(PLAN_STATUSES as readonly string[]).includes(status)) return [];
-    return [{ text, status: status as PlanItem["status"] }];
-  });
+  return last === undefined ? since : Math.max(since, last.at);
 }
 
 /** 一轮的摘要：用户那句话 + 这轮的过程块（章节、步数、写过的文件、失败、用时） */

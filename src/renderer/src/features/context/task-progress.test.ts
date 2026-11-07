@@ -1,7 +1,14 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
-import { latestPlan, liveTail, settledEnd, stepClockFrom, taskHeadState, turnDigests, type PlanView } from "./task-progress.ts";
+import { liveTail, settledEnd, stepClockFrom, taskHeadState, turnDigests } from "./task-progress.ts";
+import { planTimeline, planView, type PlanView } from "./plan-timeline.ts";
+
+/** 当前这张计划（面板头一行与计时吃的形状） */
+const latestPlan = (records: Parameters<typeof planTimeline>[0]): PlanView | null => {
+  const view = planView(planTimeline(records));
+  return view === null ? null : { ...view, items: view.items.map(({ text, status }) => ({ text, status })) };
+};
 import { mergeHistory } from "../chat/task-inventory.ts";
 
 const user = (id: string, timestamp: number, text = "hi"): TranscriptItem =>
@@ -127,14 +134,13 @@ describe("taskHeadState（头一行：在跑 / 等你 / 做完了 / 出错了 / 
 });
 
 describe("stepClockFrom（「在做」那步从几点开始计）", () => {
-  const plan: PlanView = { items: [{ text: "改", status: "in_progress" }], at: 1_000, done: 0 };
-  test("计划是这一轮写的：从写下的时刻起", () => {
+  test("这一步是这一轮变成在做的：从那一刻起", () => {
     const turns = turnDigests([user("u1", 500), plan_("p1", 1_000)], true);
-    assert.equal(stepClockFrom(plan, turns), 1_000);
+    assert.equal(stepClockFrom(1_000, turns), 1_000);
   });
   test("计划是前几轮写的、这一轮没更新（续聊）：从这一轮开始算，不把中间闲着的时间算进去", () => {
     const turns = turnDigests([user("u1", 500), plan_("p1", 1_000), user("u2", 90_000_000)], true);
-    assert.equal(stepClockFrom(plan, turns), 90_000_000);
+    assert.equal(stepClockFrom(1_000, turns), 90_000_000);
   });
 });
 

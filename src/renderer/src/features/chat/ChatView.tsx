@@ -16,7 +16,7 @@ import {
 } from "./ChannelViews";
 import { useChannelMessages, useParentChannels } from "./useChannelMessages";
 import { useChannelSummaries } from "./useChannelSummaries";
-import { HOME_CARD_CARRYOVER_ROWS, homeCardLine, selectHomeCards, type HomeCardLineText } from "./home-cards";
+import { HOME_CARD_QUERY_ROWS, homeCardLine, selectHomeCards, type HomeCardLineText } from "./home-cards";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
 import { relativeTime } from "../../shell/relative-time.ts";
 import { InlineMarks } from "../../shell/InlineMarks";
@@ -30,6 +30,10 @@ import { PanelButton } from "../../shell/RightPanel";
 import { ProcessViewContext } from "./process-view-context";
 import { sessionRunState, type SessionRunState } from "../notify/completion-notice.ts";
 import { REVEAL_ENTRY_EVENT } from "../context/task-progress.ts";
+import { planAwaitingIn, planNoticeOf, planTimeline, type PlanTimeline, type PlanVersion } from "../context/plan-timeline.ts";
+import { PlanCard } from "./PlanCard";
+import { planNoticeText } from "../context/plan-text.ts";
+import { PLAN_TOOL_NAME } from "../../../../shared/plan.ts";
 import {
   CHAPTER_STEPS_SHOWN,
   processOutcome,
@@ -37,6 +41,7 @@ import {
   TAIL_AFTER_MS,
   processChapters,
   processCounts,
+  processCalls,
   processLive,
   type ProcessChapter,
 } from "./turn-process.ts";
@@ -1314,14 +1319,19 @@ function ChatViewBody(props: {
     }
     const stateOf = (meta: SessionMeta): SessionRunState =>
       sessionRunState({
-        slot: { phase: session.phaseOf(meta.id), approvals: session.approvalsOf(meta.id).length },
+        slot: {
+          phase: session.phaseOf(meta.id),
+          approvals: session.approvalsOf(meta.id).length,
+          planAwaiting: session.planAwaitingOf(meta.id),
+        },
         children: (childrenOf.get(meta.id) ?? []).map((child) => ({
           phase: session.phaseOf(child.id),
           approvals: session.approvalsOf(child.id).length,
+          planAwaiting: session.planAwaitingOf(child.id),
         })),
         unread: meta.unread ?? null,
       });
-    const homeCards = selectHomeCards(session.sessions, session.carryovers, stateOf);
+    const homeCards = selectHomeCards(session.sessions, stateOf);
     const lineText: HomeCardLineText = {
       thinking: t.homeCard.thinking,
       doing: t.homeCard.doing,
@@ -1409,16 +1419,10 @@ function ChatViewBody(props: {
                       <SessionCard
                         key={card.sessionId}
                         name={card.title}
-                        // 没在跑的待办卡：行位是遗留标题（图标与遗留事项面板的跳转按钮同款）
-                        items={card.rows.map((row) => ({
-                          icon: row.kind === "carryover" ? ("corner-down-left" as const) : undefined,
-                          text: row.text,
-                        }))}
-                        slots={HOME_CARD_CARRYOVER_ROWS}
+                        items={card.rows.map((row) => ({ text: row.text }))}
+                        slots={HOME_CARD_QUERY_ROWS}
                         line={
-                          card.todo && state === null
-                            ? undefined
-                            : homeCardLine(
+                          homeCardLine(
                                 {
                                   state,
                                   records: entry === undefined ? null : selectTranscript(entry.transcript),
@@ -1677,6 +1681,16 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   const { transcript } = props;
   // 派生链按引用记忆：没变的部分不重复对账（phase / retry / turnError 槽变化时只补差额）
   const toolResults = useMemo(() => indexToolResults(transcript), [transcript]);
+  // 计划的版本线（对话里每个过程块的「计划改了：…」一行、现场块里「在做哪一步」都吃它）：只挑 update_plan 那几条算
+  const plan = useMemo(
+    () => planTimeline(transcript.filter((item) => item.role === "tool" && item.toolName === PLAN_TOOL_NAME)),
+    [transcript],
+  );
+  // 停在「计划等你确认」上的那一版（最后一次 update_plan 要求确认、之后用户还没回应）：画成计划卡
+  const awaitingPlan = useMemo(
+    () => (plan !== null && plan.current.awaiting && planAwaitingIn(transcript) ? plan.current : null),
+    [plan, transcript],
+  );
   // 界碑、通道标记、轮尾账与回退界碑按发生位置插回往来流：压缩摘要收进「已压缩」
   // 折叠行、通道标记画成一行虚线标记、轮尾账是卡片、回退界碑是标记行 + 还原卡
   const records = useMemo(
@@ -1891,6 +1905,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
             {entry.kind === "turnProcess" ? (
               <TurnProcessLine
                 unit={entry}
+                plan={plan}
+                awaitingPlan={awaitingPlan}
                 toolResults={toolResults}
                 turnFailed={entry.key === failedFold}
                 skills={props.skills}
@@ -3793,6 +3809,10 @@ function BranchRow(props: {
  */
 function TurnProcessLine(props: {
   unit: TurnProcessUnit;
+  /** 计划的版本线（没写过计划 = null） */
+  plan: PlanTimeline | null;
+  /** 停下来等你回答的那一版；这个块里的计划调用正是它时画（只读的）计划卡 */
+  awaitingPlan: PlanVersion | null;
   toolResults: ToolResultIndex;
   turnFailed: boolean;
   skills: SkillMeta[];
@@ -3811,6 +3831,13 @@ function TurnProcessLine(props: {
     return () => window.clearInterval(timer);
   }, [unit.live]);
   const counts = processCounts(unit.steps, props.toolResults, props.skills);
+  // 这个块里计划改了什么（每块最多一行；只打勾不提示），与现在在做的是计划里哪一步
+  const planCallIds = processCalls(unit.steps)
+    .filter((call) => call.toolName === PLAN_TOOL_NAME)
+    .map((call) => call.toolCallId);
+  const planNotice = planNoticeOf(props.plan, planCallIds);
+  const planNoticeLine = planNotice === null ? null : planNoticeText(t, planNotice);
+  const planStepNow = props.plan?.current.items.find((item) => item.status === "in_progress")?.text ?? null;
   const toolChips = counts.byTool.slice(0, 4).map(({ key, count }) => (
     <span key={key}>
       {t.chat.rollupTool(key)} {count}
@@ -3851,6 +3878,7 @@ function TurnProcessLine(props: {
           {elapsed !== null && <span className="proc-time">{formatRunClock(elapsed)}</span>}
         </div>
         <div className={`proc-chapter${snap.chapter?.source === "think" ? " think" : ""}`}>
+          {planStepNow !== null && <span className="proc-plan-step">{planStepNow}</span>}
           {snap.chapter !== null && <InlineMarks text={snap.chapter.title} />}
         </div>
         <div className="proc-trail">
@@ -3887,7 +3915,7 @@ function TurnProcessLine(props: {
             {runMs !== null && <span className="proc-dur">{formatRunClock(runMs)}</span>}
           </div>
         </div>
-        <div className={slow ? "proc-foot slow" : "proc-foot"}>{slow ? t.chat.processSlow : (tail ?? "")}</div>
+        <div className={slow ? "proc-foot slow" : "proc-foot"}>{slow ? t.chat.processSlow : (tail ?? planNoticeLine ?? "")}</div>
       </div>
     );
   }
@@ -3924,6 +3952,10 @@ function TurnProcessLine(props: {
             <ProcessChapterItem key={chapter.key} chapter={chapter} {...props} />
           ))}
         </ol>
+      )}
+      {planNoticeLine !== null && <Notice icon="pencil-line">{planNoticeLine}</Notice>}
+      {props.awaitingPlan !== null && planCallIds.includes(props.awaitingPlan.toolCallId) && (
+        <PlanCard version={props.awaitingPlan} />
       )}
     </div>
   );

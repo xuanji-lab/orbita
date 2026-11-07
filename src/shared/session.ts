@@ -338,10 +338,25 @@ export interface Carryover {
   sourceSessionId: string;
   /** transcript 里的消息序号区间锚点；跳回原文定位用，算不出就 null */
   sourceMessageRange: [number, number] | null;
-  status: "open" | "done";
+  /**
+   * 来源（2026-10-30「以后再做」：future work 与遗留事项合并成一个概念）：
+   * - noticed：做的过程中当场记下（agent 在 update_plan 的 later 里写的）；
+   * - wrapup：收尾时确认的（计划里没做完的步、老会话的回看收割、用户自己加的）。
+   * 旧记录没有这个键 = wrapup。
+   */
+  origin: CarryoverOrigin;
+  /**
+   * 锚点：记下它的那次 update_plan 调用的 toolCallId（点了让对话滚到那一章）；
+   * 没有锚点（收尾时确认的、旧记录）= null。
+   */
+  anchor: string | null;
+  /** open：待办；done：做完了；dismissed：丢掉（可找回，回 open） */
+  status: "open" | "done" | "dismissed";
   createdAt: number;
   doneAt: number | null;
 }
+
+export type CarryoverOrigin = "noticed" | "wrapup";
 
 /** carryover 的 status 取值（独立出来给 store 与 IPC 复用）。 */
 export type CarryoverStatus = Carryover["status"];
@@ -356,6 +371,10 @@ export interface CarryoverDraft {
   title: string;
   detail: string;
   sourceMessageRange: [number, number] | null;
+  /** 缺席 = wrapup */
+  origin?: CarryoverOrigin;
+  /** 缺席 = null */
+  anchor?: string | null;
 }
 
 /**
@@ -392,7 +411,9 @@ export function parseCarryover(raw: unknown): Carryover | null {
     detail: value["detail"],
     sourceSessionId,
     sourceMessageRange: range as [number, number] | null,
-    status: value["status"] === "done" ? "done" : "open",
+    origin: value["origin"] === "noticed" ? "noticed" : "wrapup",
+    anchor: str(value["anchor"]),
+    status: value["status"] === "done" ? "done" : value["status"] === "dismissed" ? "dismissed" : "open",
     createdAt,
     doneAt,
   };

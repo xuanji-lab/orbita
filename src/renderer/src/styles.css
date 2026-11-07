@@ -1575,6 +1575,45 @@ body {
   color: var(--color-accent-fg);
 }
 
+/* 计划卡（PlanConfirmCard）：停在「等你确认」上时画在过程行下面，骨架同离开卡（ExitCard） */
+.plan-card {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: var(--space-1) var(--content-hem) 0;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-panel);
+}
+.plan-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+.plan-card-kicker {
+  font-weight: var(--weight-semibold);
+}
+.plan-card-count {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.plan-card-steps {
+  margin: 0;
+  padding-left: var(--space-5);
+  display: grid;
+  gap: var(--space-0-5);
+  line-height: var(--line-height-ui);
+}
+.plan-card-steps li {
+  color: var(--color-text-primary);
+}
+.plan-card-steps li::marker {
+  color: var(--color-text-tertiary);
+}
+
 /* 折叠行共用骨架（CollapseRow：ToolCard / ThinkingCard）：hover 淡底，disabled 时
    原生 :disabled 天然不触发 :hover，不用另外判 interactive */
 .collapse-row-btn {
@@ -5535,6 +5574,15 @@ mark.intent-mark {
 }
 .proc-chapter.think {
   color: var(--color-text-secondary);
+}
+/* 计划里在做的那一步：半粗放在章节名前，「· 」隔开（计划就是这一轮的主线，章节是它下面的细节） */
+.proc-plan-step {
+  font-weight: var(--weight-semibold);
+}
+.proc-plan-step::after {
+  content: " · ";
+  font-weight: var(--weight-regular);
+  color: var(--color-text-tertiary);
 }
 .proc-trail {
   display: grid;

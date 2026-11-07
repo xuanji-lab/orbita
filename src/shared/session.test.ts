@@ -6,6 +6,7 @@ import {
   isChannelMarkRecord,
   isCompactedRecord,
   parseAgentStats,
+  parseCarryover,
   parseSessionMeta,
   childSessions,
   pushRecentQuery,
@@ -678,5 +679,37 @@ describe("引用块不进标题与导出正文", () => {
     const md = transcriptToMarkdown([{ id: "u", role: "user", content: [{ type: "text", text: quoted }], timestamp: 1 }]);
     match(md, /> 被引用的话\n\n我的问题/);
     doesNotMatch(md, /quoted_context/);
+  });
+});
+
+describe("parseCarryover 的来源与状态", () => {
+  const base = {
+    id: "c1",
+    title: "日期解析不一致",
+    detail: "",
+    sourceSessionId: "s1",
+    sourceMessageRange: null,
+    status: "open",
+    createdAt: 1,
+    doneAt: null,
+  };
+
+  it("旧记录没有 origin / anchor：读成 wrapup / null", () => {
+    const parsed = parseCarryover(base);
+    strictEqual(parsed?.origin, "wrapup");
+    strictEqual(parsed?.anchor, null);
+  });
+
+  it("noticed 与锚点原样保留", () => {
+    const parsed = parseCarryover({ ...base, origin: "noticed", anchor: "call_9" });
+    strictEqual(parsed?.origin, "noticed");
+    strictEqual(parsed?.anchor, "call_9");
+  });
+
+  it("状态认 done / dismissed，其余回落 open", () => {
+    strictEqual(parseCarryover({ ...base, status: "dismissed" })?.status, "dismissed");
+    strictEqual(parseCarryover({ ...base, status: "done", doneAt: 5 })?.status, "done");
+    strictEqual(parseCarryover({ ...base, status: "weird" })?.status, "open");
+    strictEqual(parseCarryover({ ...base, origin: "other" })?.origin, "wrapup");
   });
 });

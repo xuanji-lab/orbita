@@ -169,6 +169,12 @@ export interface RunSlot {
   phase: "idle" | "turn" | "compaction";
   /** 挂着的工具审批数（0 = 没有） */
   approvals: number;
+  /**
+   * 停在「计划等你确认」上（最后一次 update_plan 要求确认，且之后还没有用户消息；plan-timeline 的
+   * planAwaitingIn）。算「等你」的第二个来源——不加的话 plan 档写完计划停下，侧栏 / 铃铛 / 首页卡
+   * 会把它画成跑完的绿饼。缺席 = 否。
+   */
+  planAwaiting?: boolean;
 }
 
 export function sessionRunState(input: {
@@ -180,7 +186,7 @@ export function sessionRunState(input: {
   unread: { at: number; failed: boolean } | null;
 }): SessionRunState {
   const slots = [input.slot, ...input.children];
-  if (slots.some((slot) => slot !== undefined && slot.approvals > 0)) return "waiting";
+  if (slots.some((slot) => slot !== undefined && (slot.approvals > 0 || slot.planAwaiting === true))) return "waiting";
   if (slots.some((slot) => slot !== undefined && slot.phase !== "idle")) return "running";
   if (input.unread === null) return null;
   return input.unread.failed ? "failed" : "done";
@@ -249,6 +255,8 @@ export interface RunStateSource {
   readonly sessions: readonly SessionMeta[];
   phaseOf(id: string): RunSlot["phase"];
   approvalsOf(id: string): readonly unknown[];
+  /** 停在「计划等你确认」上（缺席 = 不认这个来源） */
+  planAwaitingOf?(id: string): boolean;
 }
 
 /**
@@ -259,10 +267,15 @@ export interface RunStateSource {
  */
 export function runStateOf(source: RunStateSource, meta: SessionMeta): SessionRunState {
   return sessionRunState({
-    slot: { phase: source.phaseOf(meta.id), approvals: source.approvalsOf(meta.id).length },
+    slot: {
+      phase: source.phaseOf(meta.id),
+      approvals: source.approvalsOf(meta.id).length,
+      planAwaiting: source.planAwaitingOf?.(meta.id) ?? false,
+    },
     children: childSessions(source.sessions, meta.id).map((child) => ({
       phase: source.phaseOf(child.id),
       approvals: source.approvalsOf(child.id).length,
+      planAwaiting: source.planAwaitingOf?.(child.id) ?? false,
     })),
     unread: meta.unread ?? null,
   });
