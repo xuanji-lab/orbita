@@ -33,7 +33,7 @@ export interface DeckTheme {
   fonts?: ThemeFonts;
   scale?: ThemeScale;
   motif?: ThemeMotif;
-  /** 标题是否加粗（无衬线主题加粗，衬线主题常规字重） */
+  /** 标题是否加粗。内置主题都是常规字重：大标题越大越轻（界面去 AI 味规矩：强调靠字号与留白，不靠 700），加粗留给自定义主题 */
   headingBold?: boolean;
   /** 页脚「标题 · 页码」；false = 整份都不画 */
   footer?: boolean;
@@ -89,14 +89,14 @@ export const THEME_PRESETS: Readonly<Record<string, DeckTheme>> = {
     motif: "band",
     headingBold: false,
   },
-  // 黑白高对比：无衬线粗标题，红色只做点睛
+  // 黑白高对比：无衬线大标题（常规字重），红色只做点睛
   mono: {
     id: "mono",
     palette: palette("#ffffff", "#efefef", "#0a0a0a", "#555555", "#0a0a0a", "#e5251b"),
     fonts: { heading: FONT_SANS, body: FONT_SANS },
     scale: { display: 92, title: 54, h2: 36, body: 28, caption: 18 },
     motif: "block",
-    headingBold: true,
+    headingBold: false,
   },
   // 学术蓝灰：冷静、信息密度高
   academic: {
@@ -123,7 +123,7 @@ export const THEME_PRESETS: Readonly<Record<string, DeckTheme>> = {
     fonts: { heading: FONT_SANS, body: FONT_SANS },
     scale: { display: 88, title: 54, h2: 36, body: 28, caption: 18 },
     motif: "block",
-    headingBold: true,
+    headingBold: false,
   },
 };
 
