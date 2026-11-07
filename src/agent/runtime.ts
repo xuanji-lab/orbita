@@ -76,6 +76,8 @@ import {
 import { createChannelTools } from "./channel-tools.ts";
 import { McpHub } from "./mcp.ts";
 import { createImageTools } from "./image-tools.ts";
+import { attachGoalLedger, type LedgerAttachCache } from "./goal-compaction.ts";
+import { createGoalTools } from "./goal-tools.ts";
 import { createPlanGate, createPlanTools, type PlanToolOptions } from "./plan-tools.ts";
 import { createDocxTools } from "./docx-tools.ts";
 import { createPdfTools } from "./pdf-tools.ts";
@@ -983,6 +985,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     state: { stopping: false },
   };
   const planGate = createPlanGate(planOptions);
+  // 压缩后挂在摘要末尾的目标与改动账（goal-compaction.ts）：按压缩条目 id 缓存，一轮之内只算一次
+  const goalLedgerCache: LedgerAttachCache = new Map();
   // 文件快照跟踪：闸门**放行之后**才记 before（拒掉的调用不会执行，记了是假账；
   // ask 档等用户点了允许，读到的才是「这一批动手前」的内容）。prepare 阶段
   // pi 顺序跑钩子，同批并行调用的 before 互不踩。
@@ -1153,6 +1157,29 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
               } catch (cause) {
                 // fail-open：预算模块自己的故障不该砸掉对话，本轮按原样发送
                 console.error("[image-budget] 处理失败，本轮请求按原样发送", cause);
+                return undefined;
+              }
+            });
+          },
+        },
+        {
+          // 压缩后目标与改动账原样保留（goal-compaction.ts）：摘要由模型改写，账不能。
+          // wire-only 挂在压缩摘要消息末尾；不放系统提示词（会打断缓存），理由见该文件头注释
+          name: "orbita-goal-ledger",
+          hidden: true,
+          factory: (pi: PiExtensionApi) => {
+            pi.on("context", (event) => {
+              try {
+                const messages = attachGoalLedger(
+                  event.messages,
+                  () => sessionManager.getBranch(),
+                  goalLedgerCache,
+                  (text) => console.error(`[goal-ledger] 压缩摘要后挂账：${text === null ? "账是空的，不挂" : `${text.length} 字`}`),
+                );
+                return messages === null ? undefined : { messages };
+              } catch (cause) {
+                // fail-open：账是附带的，挂载出错本轮按原样发送
+                console.error("[goal-ledger] 挂载失败，本轮请求按原样发送", cause);
                 return undefined;
               }
             });
@@ -1345,6 +1372,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     ...createImageTools(command.cwd),
     // update_plan（./plan-tools.ts）：agent 写下计划、做一步勾一步；计划就在转录里，不另存
     ...createPlanTools(planOptions),
+    // update_goal（./goal-tools.ts）：agent 替用户记下会话级目标；目标就在转录里，不另存
+    ...createGoalTools({ branch: () => sessionManager.getBranch() }),
     ...createStoreTools(requestBroker, command.sessionId),
     ...createTaskTools(requestBroker, command.sessionId),
     ...createBrowserTools(requestBroker, command.sessionId),

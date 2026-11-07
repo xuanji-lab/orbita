@@ -26,6 +26,7 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { diffPlans } from "../shared/plan-diff.ts";
 import {
   parsePlanCall,
+  parsePlanItemsLoose,
   PLAN_MAX_CONFIRM,
   PLAN_MAX_ITEMS,
   PLAN_MAX_LATER,
@@ -78,23 +79,11 @@ export function previousPlanFrom(branch: readonly unknown[], excludeCallId: stri
     for (let b = blocks.length - 1; b >= 0; b--) {
       const block = blocks[b];
       if (block?.type !== "toolCall" || block.name !== PLAN_TOOL_NAME || block.id === excludeCallId) continue;
-      const items = looseItems(block.arguments);
+      const items = parsePlanItemsLoose(block.arguments);
       if (items.length > 0) return items;
     }
   }
   return null;
-}
-
-function looseItems(input: unknown): PlanItem[] {
-  const raw = (input as { items?: unknown } | null)?.items;
-  if (!Array.isArray(raw)) return [];
-  return raw.flatMap((item) => {
-    const value = (item ?? {}) as Record<string, unknown>;
-    const text = typeof value["text"] === "string" ? value["text"].trim() : "";
-    const status = value["status"];
-    if (text === "" || typeof status !== "string" || !(PLAN_STATUSES as readonly string[]).includes(status)) return [];
-    return [{ text, status: status as PlanItem["status"] }];
-  });
 }
 
 /** 回给模型的一句话：几步做完、当前在做哪步。短——模型自己刚写的清单，不用复述 */

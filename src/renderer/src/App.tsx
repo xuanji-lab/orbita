@@ -282,6 +282,21 @@ export function App() {
     }
     session.startCarryoverTask(item);
   };
+  /**
+   * 带着会话目标开新会话（右栏进度「目标」上的动作）：与转成任务同一条路——开工即回对话、侧栏展开、
+   * 新会话落在来源会话的组里。
+   */
+  const startGoalTask = (sourceSessionId: string, makeSeed: (sourceTitle: string | null) => string | null): void => {
+    setShowCarryovers(false);
+    setOverlay(null);
+    setSidebarCollapsed(false);
+    const source = session.sessions.find((meta) => meta.id === sourceSessionId);
+    if (source?.workspaceId == null) {
+      newTaskNonceRef.current += 1;
+      setNewTaskSignal(newTaskNonceRef.current);
+    }
+    session.startGoalTask(sourceSessionId, makeSeed);
+  };
   /** 窗口宽（胶囊几何要用：会话胶囊居中于对话列、右栏胶囊钉分隔线） */
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
   useEffect(() => {
@@ -1262,6 +1277,7 @@ export function App() {
                   onSetCarryoverStatus={session.setCarryoverStatus}
                   onStartCarryoverTask={startCarryoverTask}
                   onDoCarryoverNow={session.continueCarryoverInSource}
+                  onStartGoalTask={startGoalTask}
                 />
               ) : shownPanel === "intent" ? (
                 <IntentPanel

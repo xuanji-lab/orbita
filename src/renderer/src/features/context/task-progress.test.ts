@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
-import { liveTail, settledEnd, stepClockFrom, taskHeadState, turnDigests } from "./task-progress.ts";
+import { liveTail, settledEnd, stepClockFrom, stepDisplay, taskHeadState, turnDigests } from "./task-progress.ts";
 import { planTimeline, planView, type PlanView } from "./plan-timeline.ts";
 
 /** 当前这张计划（面板头一行与计时吃的形状） */
@@ -179,5 +179,25 @@ describe("整个任务的轮：落定段 + 每次重算的尾巴 = 全量一次�
     assert.equal(settledEnd(all.slice(0, 6)), 4);
     assert.equal(settledEnd(all.slice(1, 4)), 0);
     assert.equal(settledEnd([]), 0);
+  });
+});
+
+describe("stepDisplay（计划里一步怎么画）", () => {
+  test("在跑：在做的那步是蓝饼，其余照样画", () => {
+    assert.deepEqual(stepDisplay("in_progress", { working: true, awaiting: false }), { status: "in_progress", active: true });
+    assert.deepEqual(stepDisplay("done", { working: true, awaiting: false }), { status: "done", active: false });
+    assert.deepEqual(stepDisplay("pending", { working: true, awaiting: false }), { status: "pending", active: false });
+  });
+
+  test("停下之后（没在跑）：在做的那步画空圈、不是蓝饼", () => {
+    assert.deepEqual(stepDisplay("in_progress", { working: false, awaiting: false }), { status: "in_progress", active: false });
+  });
+
+  test("计划停下等你确认：计划里不出现在做的步——第一步还没开始，画成待做，不是蓝饼也不加粗", () => {
+    // 头一行此时是「等你」，working 为真——这正是第 0 期把第一步画成蓝饼的原因
+    assert.deepEqual(stepDisplay("in_progress", { working: true, awaiting: true }), { status: "pending", active: false });
+    // 其余步不受影响（写完计划等确认时，做完的步照样是勾）
+    assert.deepEqual(stepDisplay("done", { working: true, awaiting: true }), { status: "done", active: false });
+    assert.deepEqual(stepDisplay("pending", { working: true, awaiting: true }), { status: "pending", active: false });
   });
 });

@@ -40,6 +40,9 @@ const ALLOWED_LATIN = new Set([
   // 格式记号（环境变量 / 请求头一行的写法，原样照填）
   "KEY",
   "VALUE",
+  // 工具名（带着目标开新会话的种子消息里，请 agent 调 update_goal——工具名是字面量，翻了它就不认）
+  "update",
+  "goal",
   // 命令名与工具名前缀（用户照抄的字面量）
   "node",
   "npx",
