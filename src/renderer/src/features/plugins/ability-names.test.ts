@@ -25,7 +25,7 @@ describe("面板改名：插件面板对用户叫「能力」（只改面板名�
   test("两种语言的新文案都有（零散技能 / MCP 详情）", () => {
     for (const messages of [zh, en]) {
       const p = messages.plugins;
-      for (const text of [p.contentTitle, p.availableTitle, p.availableGlobal, p.mcpStatusTitle, p.mcpEnabled, p.mcpRetry, p.mcpReconnect, p.mcpCommandTitle, p.skillMissingClean, p.revealInFinder]) {
+      for (const text of [p.contentTitle, p.availableTitle, p.availableGlobal, p.mcpStatusTitle, p.mcpEnabled, p.mcpRetry, p.mcpReconnect, p.mcpCommandTitle, p.skillMissingClean, p.revealInManager("finder")]) {
         assert.notEqual(text, "");
       }
       for (const kind of ["ready", "connecting", "failed", "idle", "disabled"] as const) assert.notEqual(p.mcpState[kind], "");
@@ -34,13 +34,13 @@ describe("面板改名：插件面板对用户叫「能力」（只改面板名�
     }
     for (const messages of [zh, en]) {
       const p = messages.plugins;
-      for (const text of [p.skillArchive, p.skillTrash, p.skillArchiveAction, p.skillTrashAction, p.archivedRestore, p.skillArchiveHint, p.skillTrashHint]) assert.notEqual(text, "");
+      for (const text of [p.skillArchive, p.skillTrash, p.skillArchiveAction, p.skillTrashAction, p.archivedRestore, p.skillArchiveHint, p.skillTrashHint("finder")]) assert.notEqual(text, "");
       assert.notEqual(p.archivedTitle(3), "");
       assert.notEqual(p.skillTrashHintLinked("/x"), "");
       assert.notEqual(p.archivedExists("s"), "");
     }
     // 移除的确认条要写清「移到废纸篓、可以找回」
-    assert.match(zh.plugins.skillTrashHint, /废纸篓.*找回/);
+    assert.match(zh.plugins.skillTrashHint("finder"), /废纸篓.*找回/);
     assert.equal(zh.plugins.availableTitle, "在哪儿可用");
     assert.equal(zh.plugins.mcpToolsTitle(3), "工具 3");
   });

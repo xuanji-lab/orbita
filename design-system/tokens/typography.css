@@ -2,7 +2,10 @@
   /* families */
   --font-family-base: "Manrope", "Source Han Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
   --font-family-brand: "Literata", "Source Han Serif SC", Georgia, "Songti SC", serif;
-  --font-family-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  /* 拉丁等宽在前；CJK 回退紧跟其后、泛 monospace 殿后：Consolas / Menlo 没有汉字，
+     Windows 上汉字原先落到泛 monospace = 宋体（衬线，与黑体混排突兀）；
+     现在 macOS 走苹方（与系统自动回退同一款，显示不变）、Windows 走微软雅黑，Linux 走 Noto CJK */
+  --font-family-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", monospace;
   /* numerals, ids, durations, paths — same family as mono, separate job */
   --font-family-business: var(--font-family-mono);
 
