@@ -1,7 +1,8 @@
 /*
  * 记忆界面（记忆库页、审查面板 › 记忆页签、对话里的记忆行）共用样式。
  * 值只用 token；悬停 / 展开 / 状态全在类与 data 属性上。
- * 层级先靠字重与颜色：正文 base、理由 sm 次要色、元信息 xs 三级色——一张卡三档。
+ * 层级先靠字重与颜色（2026-10-30 收敛）：页标题 xl、组头 base/600、正文 base、元信息 sm
+ * 三级色——一屏四种文字。元信息是一行纯文字，段间「·」；不用带图标的描边标签、不用等宽日期。
  */
 
 /* ── 条目卡 ── */
@@ -24,6 +25,11 @@
   padding: var(--space-2);
   border-radius: var(--radius-md);
   transition: var(--transition-hover);
+}
+
+/* 没有行首类型图标（记忆库按类型分好了组）：正文直接站在行的内边距上 */
+.mem-entry:not([data-icon]) {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .mem-entry:hover,
@@ -74,59 +80,31 @@
   word-break: break-word;
 }
 
-/* 不换行：出处（会话标题常很长）收省略号，日期钉在同一行的右缘 */
-/* 标签多了（智能体改正 / 已记到所有工作区 / 状态 / 演变）会超过审查面板的窄栏：折行，
- * 不撑宽卡片——nowrap 时整张卡被撑出右栏、正文被裁（2026-10-29 实例 memalign 实测） */
+/* 一行元信息：纯文字，段间「·」；出处（会话标题常很长）收省略号，其余段不缩 */
 .mem-entry-meta {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-1) var(--space-1-5);
-  min-height: 20px;
-  font-size: var(--font-size-xs);
+  align-items: baseline;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.mem-entry-meta > span {
+  flex: none;
+}
+.mem-entry-meta > span + span::before {
+  content: "·";
+  padding: 0 var(--space-1-5);
   color: var(--color-text-tertiary);
 }
-
-.mem-entry-origin {
+.mem-entry-meta > .grow {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
-
-/* 日期钉在行右内边距（行尾血线）；悬停动作键浮在右上，不占它的位 */
-.mem-entry-date {
-  flex: 0 0 auto;
-  margin-left: auto;
-  font-family: var(--font-family-mono);
-}
-
-.mem-tag {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  height: 18px;
-  padding: 0 5px;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-sm);
-  color: var(--color-text-secondary);
-  white-space: nowrap;
-}
-
-button.mem-tag {
-  font: inherit;
-  background: transparent;
-  cursor: pointer;
-}
-
-button.mem-tag:hover {
-  color: var(--color-text-primary);
-  border-color: var(--color-border-default);
-}
-
-.mem-tag[data-tone="warn"] {
+.mem-entry-meta > .warn {
   color: var(--color-warning);
 }
 
@@ -240,7 +218,7 @@ button.mem-tag:hover {
 }
 
 .mem-detail-label {
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
 
@@ -310,18 +288,6 @@ button.mem-tag:hover {
 
 .mem-chain li[data-stale="true"] .mem-chain-text {
   text-decoration: line-through;
-}
-
-.mem-chain .mem-tag {
-  margin-left: var(--space-1-5);
-  vertical-align: 1px;
-  font-size: var(--font-size-xs);
-}
-
-.mem-chain .mono {
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
 }
 
 .mem-edit {
@@ -414,9 +380,13 @@ button.mem-tag:hover {
 
 .mem-page-head {
   display: flex;
-  align-items: baseline;
-  gap: var(--space-3);
+  align-items: center;
+  gap: var(--space-2);
   flex-wrap: wrap;
+}
+.mem-page-head .mem-page-title {
+  flex: none;
+  margin-right: var(--space-2);
 }
 
 .mem-page-title {
@@ -442,12 +412,12 @@ button.mem-tag:hover {
 }
 
 .mem-search {
-  flex: 1 1 240px;
+  flex: 1 1 200px;
   min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--space-1-5);
-  height: 30px;
+  height: var(--control-height-sm);
   padding: 0 var(--space-2);
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);
@@ -523,7 +493,7 @@ button.mem-tag:hover {
 }
 
 .mem-group-title {
-  font-size: var(--font-size-lg);
+  font-size: var(--font-size-base);
   font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
 }
@@ -563,7 +533,7 @@ button.mem-tag:hover {
 }
 
 .mem-input {
-  height: 30px;
+  height: var(--control-height-sm);
   padding: 0 var(--space-2);
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);
@@ -648,4 +618,38 @@ button.mem-tag:hover {
   height: 100%;
   background: var(--color-accent);
   transition: width var(--duration-fast) var(--ease-standard);
+}
+
+/* 页底的「过时或停用 · N」折叠：与组头同一根线，安静的次要色 */
+.mem-fold {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  justify-self: start;
+  height: var(--control-height-sm);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.mem-fold:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+/* 演变链里的日期与状态注：同元信息一档，不用等宽、不用标签 */
+.mem-chain-date {
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.mem-chain-note {
+  color: var(--color-text-tertiary);
+}
+.mem-chain-note.warn {
+  color: var(--color-warning);
 }

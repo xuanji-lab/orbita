@@ -13,7 +13,6 @@ import {
   filterMemoryEntries,
   groupMemoryEntries,
   manualDraftProblem,
-  MEMORY_SOURCE_FILTERS,
   MEMORY_TYPE_ORDER,
   scopeNameOf,
   type MemoryNav,
@@ -60,7 +59,10 @@ function ScopePage(props: {
   const t = useT();
   const entries = useMemoryEntries(props.token);
   const [type, setType] = useState<MemoryTypeFilter>("all");
-  const [source, setSource] = useState<MemorySourceFilter>("all");
+  // 来源筛选（来自对话 / 对话里改正 / 手动）从页面上撤了（2026-10-30 收敛：三层筛选太多）；
+  // filterMemoryEntries 的口径不变，这里恒「全部」
+  const source: MemorySourceFilter = "all";
+  const [showInactive, setShowInactive] = useState(false);
   const [query, setQuery] = useState("");
   const [adding, setAdding] = useState(false);
   const all = props.token === "all";
@@ -70,30 +72,18 @@ function ScopePage(props: {
     () => (items === null ? [] : filterMemoryEntries(items, { type, source, query })),
     [items, type, source, query],
   );
-  const groups = groupMemoryEntries(shown);
+  // 在用的按类型分组；过时 / 停用的收进页底一个折叠，不和在用的混排
+  const active = shown.filter((view) => (view.entry.status ?? "active") === "active");
+  const inactive = shown.filter((view) => (view.entry.status ?? "active") !== "active");
+  const groups = groupMemoryEntries(active);
 
   return (
     <>
+      {/* 一行页头：标题 · 搜索 · 类型 · 添加（2026-10-30：原来标题行 + 说明 + 两行筛选，三层） */}
       <header className="mem-page-head">
         <h2 className="mem-page-title">
           {scope === null ? t.memory.allTitle : scopeNameOf(props.scopes, scope.token, t.memory.scopeUser)}
         </h2>
-        <span className="mem-page-hint">{t.memory.pageHint}</span>
-        <button type="button" className="mem-btn row-trailing" onClick={() => setAdding((value) => !value)}>
-          <Icon name="plus" size={12} strokeWidth={1.8} />
-          {t.memory.add}
-        </button>
-      </header>
-
-      {adding && (
-        <ManualForm
-          token={all ? MEMORY_USER_TOKEN : props.token}
-          scopeName={all ? t.memory.scopeUser : scopeNameOf(props.scopes, props.token, t.memory.scopeUser)}
-          onDone={() => setAdding(false)}
-        />
-      )}
-
-      <div className="mem-tools">
         <label className="mem-search">
           <Icon name="search" size={12} strokeWidth={1.8} />
           <input
@@ -111,7 +101,7 @@ function ScopePage(props: {
           />
           {query !== "" && (
             <button type="button" className="mem-icon-btn" aria-label={t.memory.clearSearch} onClick={() => setQuery("")}>
-              <Icon name="x" size={11} strokeWidth={1.8} />
+              <Icon name="x" size={12} strokeWidth={1.8} />
             </button>
           )}
         </label>
@@ -126,14 +116,19 @@ function ScopePage(props: {
             </button>
           ))}
         </div>
-        <div className="mem-seg" role="group" aria-label={t.memory.sourceAll}>
-          {MEMORY_SOURCE_FILTERS.map((each) => (
-            <button key={each} type="button" aria-pressed={source === each} onClick={() => setSource(each)}>
-              {each === "all" ? t.memory.sourceAll : t.memory.sourceName(each)}
-            </button>
-          ))}
-        </div>
-      </div>
+        <button type="button" className="mem-btn" onClick={() => setAdding((value) => !value)}>
+          <Icon name="plus" size={12} strokeWidth={1.8} />
+          {t.memory.add}
+        </button>
+      </header>
+
+      {adding && (
+        <ManualForm
+          token={all ? MEMORY_USER_TOKEN : props.token}
+          scopeName={all ? t.memory.scopeUser : scopeNameOf(props.scopes, props.token, t.memory.scopeUser)}
+          onDone={() => setAdding(false)}
+        />
+      )}
 
       {entries.error !== null && items === null ? (
         <div className="mem-empty" role="alert">
@@ -151,27 +146,56 @@ function ScopePage(props: {
           {items.length === 0 && <span className="hint">{t.memory.emptyHint}</span>}
         </div>
       ) : (
-        groups.map((group) => (
-          <section key={group.type} className="mem-group">
-            <header className="mem-group-head">
-              <Icon name={MEMORY_TYPE_ICON[group.type]} size={14} strokeWidth={1.8} />
-              <span className="mem-group-title">{t.memory.typeName(group.type)}</span>
-              <span className="mem-group-hint">{t.memory.typeHint(group.type)}</span>
-              <span className="mem-group-count row-trailing">{group.items.length}</span>
-            </header>
-            <ul className="mem-list">
-              {group.items.map((view) => (
-                <MemoryEntryCard
-                  key={view.entry.id}
-                  view={view}
-                  scopeName={all ? scopeNameOf(props.scopes, view.token, t.memory.scopeUser) : null}
-                  showOrigin
-                  onJump={props.onJump}
-                />
-              ))}
-            </ul>
-          </section>
-        ))
+        <>
+          {groups.map((group) => (
+            <section key={group.type} className="mem-group">
+              {/* 组头：图标 + 类型名 + 计数；类型说明放悬停（原来常驻一行灰字，每组都在） */}
+              <header className="mem-group-head" title={t.memory.typeHint(group.type)}>
+                <Icon name={MEMORY_TYPE_ICON[group.type]} size={14} strokeWidth={1.8} />
+                <span className="mem-group-title">{t.memory.typeName(group.type)}</span>
+                <span className="mem-group-count">{group.items.length}</span>
+              </header>
+              <ul className="mem-list">
+                {group.items.map((view) => (
+                  <MemoryEntryCard
+                    key={view.entry.id}
+                    view={view}
+                    scopeName={all ? scopeNameOf(props.scopes, view.token, t.memory.scopeUser) : null}
+                    showOrigin
+                    showTypeIcon={false}
+                    onJump={props.onJump}
+                  />
+                ))}
+              </ul>
+            </section>
+          ))}
+          {inactive.length > 0 && (
+            <section className="mem-group">
+              <button
+                type="button"
+                className="mem-fold"
+                aria-expanded={showInactive}
+                onClick={() => setShowInactive((value) => !value)}
+              >
+                <Icon name={showInactive ? "chevron-down" : "chevron-right"} size={12} strokeWidth={1.8} />
+                {t.memory.inactiveFold(inactive.length)}
+              </button>
+              {showInactive && (
+                <ul className="mem-list">
+                  {inactive.map((view) => (
+                    <MemoryEntryCard
+                      key={view.entry.id}
+                      view={view}
+                      scopeName={all ? scopeNameOf(props.scopes, view.token, t.memory.scopeUser) : null}
+                      showOrigin
+                      onJump={props.onJump}
+                    />
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
+        </>
       )}
     </>
   );

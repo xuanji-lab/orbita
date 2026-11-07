@@ -16,7 +16,8 @@ export const MEMORY_TYPE_ICON: Record<MemoryEntryType, IconName> = {
 
 /**
  * 一条记忆。记忆库页与审查 › 记忆页签共用：
- * - 点正文展开：原话（出处那一轮的用户话）、「回到原文」、演变链，以及撤销入口；
+ * - 收起：正文 + 一行纯文字元信息（状态 · 改过 · 范围 · 演变 · 出处 · 日期）；
+ * - 点正文展开：理由、原话（出处那一轮的用户话）、「回到原文」、演变链，以及撤销入口；
  * - 悬停右上角出编辑 / 别再用 / 删除（删除要再点一次确认）；
  * - 不再使用 / 已过时的条目正文退成次要色，元信息里写明状态——颜色只是第二信号。
  *
@@ -36,6 +37,8 @@ export function MemoryEntryCard(props: {
   showOrigin: boolean;
   /** 「回到原文」；undefined = 不给（会话已删 / 手动添加） */
   onJump?: (view: MemoryEntryView) => void;
+  /** 行首类型图标：记忆库按类型分好组了（组头有图标），行里不再重复；审查页签按轮分组，要它 */
+  showTypeIcon?: boolean;
 }) {
   const t = useT();
   const { entry, token } = props.view;
@@ -84,17 +87,33 @@ export function MemoryEntryCard(props: {
   const restorable = undo.restorePrevious;
   const returnable = undo.returnToWorkspace;
   const undoable = restorable || returnable;
+  const reason = entry.reason !== undefined && entry.reason !== "" ? entry.reason : null;
+  const mutedReason = state === "muted" && entry.mutedReason !== undefined && !revertMuted ? entry.mutedReason : null;
+  const metaParts: { text: string; tone?: "warn"; grow?: boolean; title?: string }[] = [];
+  if (revertMuted) metaParts.push({ text: t.memory.revertMuted, title: t.memory.revertMutedHint });
+  else if (state === "stale") metaParts.push({ text: t.memory.statusStale, tone: "warn" });
+  else if (state === "muted") metaParts.push({ text: t.memory.statusMuted });
+  if (entry.source === "agent") metaParts.push({ text: t.memory.agentRevised, title: t.memory.agentRevisedHint });
+  if (returnable) metaParts.push({ text: t.memory.autoPromoted, title: t.memory.autoPromotedHint });
+  else if (props.scopeName !== null) metaParts.push({ text: props.scopeName });
+  if (evolution.length > 1) metaParts.push({ text: t.memory.evolution(evolution.length) });
+  if (props.showOrigin) metaParts.push({ text: origin, grow: true, title: origin });
+  metaParts.push({ text: formatDay(entry.at, now) });
+  const detailed = reason !== null || mutedReason !== null || props.view.quote !== null || evolution.length > 1 || jumpable || undoable;
 
   return (
     <li
       className="mem-entry"
+      data-icon={props.showTypeIcon !== false || undefined}
       data-open={open || undefined}
       data-busy={busy || confirming || editing !== null || undefined}
       data-state={state === "active" ? undefined : state}
     >
-      <span className="mem-entry-icon" title={t.memory.typeOne(entry.type)}>
-        <Icon name={MEMORY_TYPE_ICON[entry.type]} size={14} strokeWidth={1.8} />
-      </span>
+      {props.showTypeIcon !== false && (
+        <span className="mem-entry-icon" title={t.memory.typeOne(entry.type)}>
+          <Icon name={MEMORY_TYPE_ICON[entry.type]} size={14} strokeWidth={1.8} />
+        </span>
+      )}
       <div className="mem-entry-body">
         {editing !== null ? (
           <>
@@ -132,67 +151,32 @@ export function MemoryEntryCard(props: {
             {entry.text}
           </button>
         )}
-        {entry.reason !== undefined && entry.reason !== "" && (
-          <p className="mem-entry-reason">
-            {entry.source === "agent" ? t.memory.reviseReasonLabel : t.memory.reasonLabel(entry.type)}
-            {entry.reason}
-          </p>
-        )}
-        {state === "muted" && entry.mutedReason !== undefined && !revertMuted && (
-          <p className="mem-entry-reason">
-            {t.memory.retireReasonLabel}
-            {entry.mutedReason}
-          </p>
-        )}
+        {/* 收起时只有一行元信息：纯文字、一种字号，段间「·」（2026-10-30 收敛：原来是带图标
+            的描边标签 + 理由行 + 等宽日期，一张卡五种写法）。理由、原话、演变都在展开里 */}
         <span className="mem-entry-meta">
-          {revertMuted ? (
-            <span className="mem-tag" title={t.memory.revertMutedHint}>
-              <Icon name="undo-2" size={11} strokeWidth={1.8} />
-              {t.memory.revertMuted}
+          {metaParts.map((part, index) => (
+            <span key={index} className={part.tone === "warn" ? "warn" : part.grow ? "grow" : undefined} title={part.title}>
+              {part.text}
             </span>
-          ) : (
-            state !== "active" && (
-              <span className="mem-tag" data-tone={state === "stale" ? "warn" : undefined}>
-                <Icon name={state === "muted" ? "eye-off" : "history"} size={11} strokeWidth={1.8} />
-                {state === "muted" ? t.memory.statusMuted : t.memory.statusStale}
-              </span>
-            )
-          )}
-          {entry.source === "agent" && (
-            <button type="button" className="mem-tag" title={t.memory.agentRevisedHint} onClick={() => setOpen(true)}>
-              <Icon name="bot" size={11} strokeWidth={1.8} />
-              {t.memory.agentRevised}
-            </button>
-          )}
-          {returnable && (
-            <button type="button" className="mem-tag" title={t.memory.autoPromotedHint} onClick={() => setOpen(true)}>
-              <Icon name="user" size={11} strokeWidth={1.8} />
-              {t.memory.autoPromoted}
-            </button>
-          )}
-          {/* 自动升层的条目已有「已记到所有工作区」，不再重复一个「所有工作区」范围标签 */}
-          {props.scopeName !== null && !returnable && (
-            <span className="mem-tag">
-              <Icon name={entry.layer === "user" ? "user" : "folder"} size={11} strokeWidth={1.8} />
-              {props.scopeName}
-            </span>
-          )}
-          {evolution.length > 1 && (
-            <button type="button" className="mem-tag" onClick={() => setOpen(true)}>
-              <Icon name="history" size={11} strokeWidth={1.8} />
-              {t.memory.evolution(evolution.length)}
-            </button>
-          )}
-          {props.showOrigin && (
-            <span className="mem-entry-origin" title={origin}>
-              {origin}
-            </span>
-          )}
-          <span className="mem-entry-date">{formatDay(entry.at, now)}</span>
+          ))}
         </span>
         {problem !== null && <p className="mem-error">{problem}</p>}
-        {open && (props.view.quote !== null || evolution.length > 1 || jumpable || undoable) && (
+        {open && detailed && (
           <div className="mem-detail">
+            {reason !== null && (
+              <p className="mem-entry-reason">
+                <span className="mem-detail-label">
+                  {entry.source === "agent" ? t.memory.reviseReasonLabel : t.memory.reasonLabel(entry.type)}
+                </span>
+                {reason}
+              </p>
+            )}
+            {mutedReason !== null && (
+              <p className="mem-entry-reason">
+                <span className="mem-detail-label">{t.memory.retireReasonLabel}</span>
+                {mutedReason}
+              </p>
+            )}
             {props.view.quote !== null && (
               <>
                 <span className="mem-detail-label">{t.memory.quoteLabel}</span>
@@ -217,21 +201,12 @@ export function MemoryEntryCard(props: {
                       data-current={node.id === entry.id || undefined}
                       data-stale={node.status === "stale" || undefined}
                     >
-                      <span className="mono">{formatDay(node.at, now)}</span>
+                      <span className="mem-chain-date">{formatDay(node.at, now)}</span>
                       <span>
                         <span className="mem-chain-text">{node.text}</span>
-                        {node.source === "agent" && (
-                          <span className="mem-tag">
-                            <Icon name="bot" size={11} strokeWidth={1.8} />
-                            {t.memory.agentRevised}
-                          </span>
-                        )}
-                        {node.status === "stale" && (
-                          <span className="mem-tag" data-tone="warn">
-                            {t.memory.statusStale}
-                          </span>
-                        )}
-                        {node.status === "muted" && <span className="mem-tag">{t.memory.statusMuted}</span>}
+                        {node.source === "agent" && <span className="mem-chain-note"> · {t.memory.agentRevised}</span>}
+                        {node.status === "stale" && <span className="mem-chain-note warn"> · {t.memory.statusStale}</span>}
+                        {node.status === "muted" && <span className="mem-chain-note"> · {t.memory.statusMuted}</span>}
                       </span>
                     </li>
                   ))}
