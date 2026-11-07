@@ -1,7 +1,8 @@
-import { useRef, useState, type ComponentProps } from "react";
+import { Fragment, useRef, useState, type ComponentProps } from "react";
 import { Icon, type IconName } from "./Icon";
 import { Menu, type MenuItem } from "./Menu";
 import { useT } from "../locale.ts";
+import { layoutRail, withGroupRules, type RailPlacement } from "./rail-groups.ts";
 import { CompletionCard } from "../features/notify/CompletionCard";
 import { BellCard, useBellDismiss, type NoticeRow } from "../features/notify/BellCard";
 
@@ -10,22 +11,27 @@ import { BellCard, useBellDismiss, type NoticeRow } from "../features/notify/Bel
  * layer 1 上。wafo 2026-09-12 裁定保持 32px 不加宽到 48——「左右对称」不取字面
  * 同宽，只保留「都是无面的窄条」。
  *
- * 顶部：几个入口（文件 / 审查 / 这条任务 / 能力 / 终端…），**共用一个面板位**（2026-09-12 裁决）：
- * 同一时刻至多点亮一个，再点已点亮的 = 收起。点亮 = 单层
+ * **入口按类分组**（2026-10-31 用户裁决，原话：「会对右栏进行分类……每一类之间没有分隔，
+ * 但是类和类之间有一个小横线做分隔」「全部都在右上，然后右下就简单一点」）：
+ * 组的划分与理由见 `rail-groups.ts`，规矩见设计系统 readme「Rail entries are grouped」。
+ * 右上堆前四组（这条会话 / 工作面 / 智能体 / 收纳），右下只留「应用」组（设置、通知）。
+ * 此前是「上面一串、下面一串」，两串之间靠弹性空隙隔开，入口归哪串凭历史而不凭类。
+ *
+ * 面板类入口（文件 / 审查 / 这条任务 / 能力 / 终端 / 意图 / 子会话）**共用一个面板位**
+ * （2026-09-12 裁决）：同一时刻至多点亮一个，再点已点亮的 = 收起。点亮 = 单层
  * `--glass-bg` + `--shadow-composer`：图标与面板都是 layer 1 的子级，各自的
  * 背景都在 layer 1 之上再叠一层 .60，合成同色——所以用同一个单层 token 就
  * 天然与面板融合，不需要手调第二层值（规格 §1.1）。32px 条里 26px 的方块用
  * `--radius-sm`（md 太圆）。点亮与开关由 App 按模式算好传入。
  *
- * 底部：应用入口（Archived / Carryovers / Settings），**首页常驻**——它们是
- * 应用入口不是会话动作，不随会话消失（wafo 2026-09-22 裁决，覆盖 2026-09-12
- * 「底部只放会话动作」：复制转录已并入会话行的「导出」，右栏不再挂会话动作）。
- * 中间用弹性空隙隔开两组的语义。
+ * 应用入口（Archived / Carryovers / Memory / Settings / 浏览器）由 App 组装成 `railEntries`
+ * 传入，**首页常驻**——它们是应用入口不是会话动作，不随会话消失（wafo 2026-09-22 裁决，
+ * 覆盖 2026-09-12「底部只放会话动作」：复制转录已并入会话行的「导出」，右栏不再挂会话动作）。
  *
- * 顶部第五个入口 Sub-sessions（子会话 PR4c）：与 Files/Skills/MCP/辅助对话
- * 共用同一个面板位（互斥），只在主槽正看着一条**有子会话的根会话**时出现——
- * 入口数据（要不要出现、N 是多少、「在等你」几个）由 App 传入，本组件不自己算。
- * 面板删除后（2026-10-12）这里是父子沟通的唯一面板位：收件箱。
+ * 子会话入口（子会话 PR4c）：与 Files/Skills/MCP/辅助对话共用同一个面板位（互斥），
+ * 只在主槽正看着一条**有子会话的根会话**时出现——入口数据（要不要出现、N 是多少、
+ * 「在等你」几个）由 App 传入，本组件不自己算。面板删除后（2026-10-12）这里是父子沟通的
+ * 唯一面板位：收件箱。
  */
 
 /** 右栏面板位里放什么（"channels" 随父子会话面板一起删除：沟通回到两边对话流，子会话面板变收件箱） */
@@ -40,9 +46,11 @@ export type RightPanelKind =
   | "intent"
   | "context";
 
-/** 右栏的一个入口：顶部三入口与底部应用入口共用这一个 26px 方块规格 */
+/**
+ * App 传给右栏的应用级入口（右栏上其余入口由面板状态推出，不走这里）。
+ * 它们在条上的分组与精简态去留不由调用方定，由 RightRail 按 id 登记（见本文件的 `items`）。
+ */
 export interface RailEntry {
-  /** 精简右栏按它分拣：哪些常驻、哪些收进「更多」 */
   id: "carryovers" | "archived" | "browser" | "memory" | "settings";
   icon: IconName;
   /** tooltip 与读屏共用这一句 */
@@ -56,13 +64,14 @@ export function RightRail(props: {
   panel: RightPanelKind | null;
   onPanel: (next: RightPanelKind | null) => void;
   /**
-   * 精简右栏（实验功能 lean-rail，2026-10-30）：常驻只留「这条任务」、终端、内置浏览器
-   * （文件面板开着时它也露出来，子会话有就露），其余收进底部的「更多」。
+   * 精简右栏（实验功能 lean-rail，2026-10-30）：常驻只留「这条任务」、文件、终端、内置浏览器
+   * （子会话有就露）和设置，其余收进右下的「更多」。文件常驻是 2026-10-31 用户的裁决
+   * （「文件面板不应该被收纳」）；条上与「更多」里都沿用常规态的分组，组间一条线。
    */
   lean: boolean;
   /** 「更多 › 上下文」：直接落在「这条任务」的上下文页签（与输入框旁用量环同一条路） */
   onOpenContext: () => void;
-  /** 底部应用入口组（Carryovers / Archived / Settings），调用方组装；顺序即堆叠顺序 */
+  /** 应用级入口（遗留 / 归档 / 浏览器 / 记忆 / 设置），调用方组装；条上的组与顺序由 RightRail 定，与数组顺序无关 */
   railEntries: RailEntry[];
   /**
    * Sub-sessions 面板入口（子会话 PR4c）：null = 不出现（没在看根会话，或这条
@@ -111,6 +120,13 @@ export function RightRail(props: {
   };
   const toggle = (kind: RightPanelKind) => () => props.onPanel(props.panel === kind ? null : kind);
   const entry = (id: RailEntry["id"]): RailEntry | undefined => props.railEntries.find((each) => each.id === id);
+  /** App 传入的入口 → 右栏条目（没传 = 对应功能没开，不出现） */
+  const fromApp = (id: RailEntry["id"], place: RailPlacement): RailItem[] => {
+    const found = entry(id);
+    return found === undefined
+      ? []
+      : [{ id, ...place, icon: found.icon, label: found.label, lit: found.lit, onSelect: found.onClick }];
+  };
   const bellCard = bellOpen && (
     <BellCard
       host={props.popHost}
@@ -127,99 +143,143 @@ export function RightRail(props: {
       onMarkAllRead={props.bell.count > 0 ? props.bell.onMarkAllRead : null}
     />
   );
-  const subSessionsEntry = props.subSessions !== null && (
-    <RailEntryButton
-      icon="git-fork"
-      label={t.rail.subSessions(props.subSessions.count)}
-      lit={props.panel === "subsessions"}
-      onClick={toggle("subsessions")}
-      badge={props.subSessions.waiting}
-    />
+
+  // 全部入口，**组内顺序即数组顺序**（常规态的堆叠顺序，也是精简态「更多」里的行序）。
+  // 分组的理由见 rail-groups.ts；pinned = 精简态常驻在条上
+  const items: RailItem[] = [
+    // 这条会话在做什么、做过什么、脑子里装了什么
+    { id: "context", group: "session", pinned: true, icon: "list-todo", label: t.rail.context, lit: props.panel === "context", onSelect: toggle("context") },
+    { id: "review", group: "session", pinned: false, icon: "file-diff", label: t.rail.review, lit: props.panel === "review", onSelect: toggle("review") },
+    // 「更多 › 上下文」：直接落在「这条任务」的上下文页签（与输入框旁用量环同一条路）；常规态条上没有它
+    { id: "context-tab", group: "session", pinned: false, moreOnly: true, icon: "layers", label: t.taskPanel.tabContext, lit: false, onSelect: props.onOpenContext },
+    ...(props.subSessions === null
+      ? []
+      : [
+          {
+            id: "subsessions",
+            group: "session" as const,
+            pinned: true,
+            icon: "git-fork" as const,
+            label: t.rail.subSessions(props.subSessions.count),
+            lit: props.panel === "subsessions",
+            onSelect: toggle("subsessions"),
+            badge: props.subSessions.waiting,
+          },
+        ]),
+    // 东西在哪、在哪动手。文件在精简态也常驻（用户 2026-10-31：文件面板不应该被收纳）
+    { id: "files", group: "workbench", pinned: true, icon: "folder", label: t.rail.files, lit: props.panel === "files", onSelect: toggle("files") },
+    // 终端（人工验收自己的开发）：收起面板不杀 PTY
+    { id: "terminal", group: "workbench", pinned: true, icon: "square-terminal", label: t.rail.terminal, lit: props.panel === "terminal", onSelect: toggle("terminal") },
+    ...fromApp("browser", { group: "workbench", pinned: true }),
+    // 智能体会什么、记得什么。能力：Skills 与 MCP 服务一张列表，页签在面板里（上次停在哪个页签由面板自己记）
+    { id: "abilities", group: "agent", pinned: false, icon: "book-open", label: t.rail.abilities, lit: props.panel === "abilities", onSelect: toggle("abilities") },
+    ...fromApp("memory", { group: "agent", pinned: false }),
+    ...(props.intentAvailable
+      ? [
+          {
+            id: "intent",
+            group: "agent" as const,
+            pinned: false,
+            icon: "waypoints" as const,
+            label: t.rail.intent,
+            lit: props.panel === "intent",
+            onSelect: toggle("intent"),
+          },
+        ]
+      : []),
+    // 收起来以后再看的
+    ...fromApp("carryovers", { group: "shelf", pinned: false }),
+    ...fromApp("archived", { group: "shelf", pinned: false }),
+    // 应用级：设置、通知。铃铛在右下角最底：它是常驻的状态入口，位置稳才扫得到
+    ...fromApp("settings", { group: "app", pinned: true }),
+    { id: "bell", group: "app", pinned: false, icon: "bell", label: t.rail.bell(props.bell.count), lit: bellOpen, onSelect: openBell, badge: props.bell.count },
+  ];
+  const layout = layoutRail(items, props.lean);
+  const renderItem = (item: RailItem) => {
+    const button = (
+      <RailEntryButton
+        key={item.id}
+        icon={item.icon}
+        label={item.label}
+        lit={item.lit}
+        onClick={item.onSelect}
+        badge={item.badge}
+      />
+    );
+    // 铃铛的清单从它自己（常规态）或「更多」（精简态）弹出，外部点击判定要排除这个锚点
+    return item.id === "bell" ? (
+      <span key={item.id} ref={setBellAnchor} style={{ display: "inline-flex" }}>
+        {button}
+      </span>
+    ) : (
+      button
+    );
+  };
+  const moreItems = layout.more.flatMap((part) => part.items);
+  // 「更多」菜单：与条上同一套组序，组间一条分隔线。菜单不画点亮（点亮只用来让「更多」键自己亮）
+  const moreMenu = withGroupRules<MenuItem, MenuItem>(
+    layout.more.map((part) => ({
+      group: part.group,
+      items: part.items.map((item) => ({ id: item.id, label: item.label, icon: item.icon, onSelect: item.onSelect })),
+    })),
+    (before) => ({ id: `rule:${before}`, label: "", rule: true }),
   );
 
-  if (props.lean) {
-    const browser = entry("browser");
-    const settings = entry("settings");
-    // 收进「更多」的：各自的点法与原来的入口一样（面板仍是开 / 关切换，子视图仍是互斥开关）
-    const folded: (MenuItem & { lit: boolean })[] = [
-      { id: "review", label: t.rail.review, icon: "file-diff", lit: props.panel === "review", onSelect: toggle("review") },
-      { id: "context", label: t.taskPanel.tabContext, icon: "layers", lit: false, onSelect: props.onOpenContext },
-      { id: "files", label: t.rail.files, icon: "folder", lit: props.panel === "files", onSelect: toggle("files") },
-      { id: "abilities", label: t.rail.abilities, icon: "book-open", lit: props.panel === "abilities", onSelect: toggle("abilities") },
-      ...(["memory", "carryovers", "archived"] as const).flatMap((id) => {
-        const found = entry(id);
-        return found === undefined
-          ? []
-          : [{ id, label: found.label, icon: found.icon, lit: found.lit, onSelect: found.onClick }];
-      }),
-      ...(props.intentAvailable
-        ? [{ id: "intent", label: t.rail.intent, icon: "waypoints" as const, lit: props.panel === "intent", onSelect: toggle("intent") }]
-        : []),
-      { id: "bell", label: t.rail.bell(props.bell.count), icon: "bell", lit: bellOpen, onSelect: openBell },
-    ];
-    const foldedLit = folded.some((item) => item.lit);
-    return (
-      <aside className="right-rail" data-lean="">
-        <RailEntryButton icon="list-todo" label={t.rail.context} lit={props.panel === "context"} onClick={toggle("context")} />
-        <RailEntryButton icon="square-terminal" label={t.rail.terminal} lit={props.panel === "terminal"} onClick={toggle("terminal")} />
-        {browser !== undefined && (
-          <RailEntryButton icon={browser.icon} label={browser.label} lit={browser.lit} onClick={browser.onClick} />
-        )}
-        {/* 文件面板只在开着时露面：从链接 / 引用 / 左栏双击打开预览时有个地方关它 */}
-        {props.panel === "files" && (
-          <RailEntryButton icon="folder" label={t.rail.files} lit onClick={toggle("files")} />
-        )}
-        {subSessionsEntry}
-        <span style={{ flex: 1 }} />
-        {/* 「更多」也是通知清单的锚点：清单从菜单里打开，外部点击判定排除这颗键 */}
-        <span ref={setBellAnchor} style={{ display: "inline-flex" }}>
-          <Menu
-            items={folded.map(({ lit: _lit, ...item }) => item)}
-            placement="above"
-            align="end"
-            panelMinWidth={200}
-            trigger={({ open, toggle: toggleMenu }) => (
-              <RailEntryButton icon="ellipsis-vertical" label={t.common.more} lit={open || foldedLit} onClick={toggleMenu} />
-            )}
-          />
-        </span>
-        {settings !== undefined && (
-          <RailEntryButton icon={settings.icon} label={settings.label} lit={settings.lit} onClick={settings.onClick} />
-        )}
-        {bellCard}
-      </aside>
-    );
-  }
-
   return (
-    <aside className="right-rail">
-      <RailEntryButton icon="folder" label={t.rail.files} lit={props.panel === "files"} onClick={toggle("files")} />
-      <RailEntryButton icon="file-diff" label={t.rail.review} lit={props.panel === "review"} onClick={toggle("review")} />
-      {/* 这条任务（进度 + 上下文，2026-10-30）：它在做什么、做过什么、脑子里装了什么。紧跟审查——两者都是「看这条会话」 */}
-      <RailEntryButton icon="list-todo" label={t.rail.context} lit={props.panel === "context"} onClick={toggle("context")} />
-      {/* 能力（2026-10-30）：Skills 与 MCP 服务一张列表，页签在面板里（上次停在哪个页签由面板自己记） */}
-      <RailEntryButton icon="book-open" label={t.rail.abilities} lit={props.panel === "abilities"} onClick={toggle("abilities")} />
-      {/* 终端（人工验收自己的开发）：与 Files 等共用面板位，收起面板不杀 PTY */}
-      <RailEntryButton icon="square-terminal" label={t.rail.terminal} lit={props.panel === "terminal"} onClick={toggle("terminal")} />
-      {props.intentAvailable && (
-        <RailEntryButton icon="waypoints" label={t.rail.intent} lit={props.panel === "intent"} onClick={toggle("intent")} />
-      )}
-      {subSessionsEntry}
-      <span style={{ flex: 1 }} />
-      {props.railEntries.map((each) => (
-        <RailEntryButton key={each.id} icon={each.icon} label={each.label} lit={each.lit} onClick={each.onClick} />
-      ))}
-      {/* 铃铛在入口组最底（右下角）：它是常驻的状态入口，位置稳才扫得到 */}
-      <span ref={setBellAnchor} style={{ display: "inline-flex" }}>
-        <RailEntryButton icon="bell" label={t.rail.bell(props.bell.count)} lit={bellOpen} onClick={openBell} badge={props.bell.count} />
-      </span>
+    <aside className="right-rail" data-lean={props.lean ? "" : undefined}>
+      <div className="rail-stack">
+        {layout.stack.map((part, index) => (
+          <Fragment key={part.group}>
+            {/* 组间一条细线；组内没有分隔。线是装饰，组的语义由 group 的标签给读屏 */}
+            {index > 0 && <span className="rail-sep" aria-hidden="true" />}
+            <div className="rail-group" role="group" aria-label={t.rail.groups[part.group]}>
+              {part.items.map(renderItem)}
+            </div>
+          </Fragment>
+        ))}
+      </div>
+      <span className="rail-spacer" />
+      <div className="rail-group" role="group" aria-label={t.rail.groups.app}>
+        {props.lean && moreItems.length > 0 && (
+          // 「更多」也是通知清单的锚点：清单从菜单里打开，外部点击判定排除这颗键
+          <span ref={setBellAnchor} style={{ display: "inline-flex" }}>
+            <Menu
+              items={moreMenu}
+              placement="above"
+              align="end"
+              panelMinWidth={200}
+              trigger={({ open, toggle: toggleMenu }) => (
+                <RailEntryButton
+                  icon="ellipsis-vertical"
+                  label={t.common.more}
+                  lit={open || moreItems.some((item) => item.lit)}
+                  onClick={toggleMenu}
+                />
+              )}
+            />
+          </span>
+        )}
+        {layout.dock.map(renderItem)}
+      </div>
       {bellCard}
     </aside>
   );
 }
 
+/** 右栏上的一个入口：排布信息（RailPlacement）+ 条上画它所需要的图标、文案与点法 */
+interface RailItem extends RailPlacement {
+  id: string;
+  icon: IconName;
+  /** tooltip 与读屏共用这一句 */
+  label: string;
+  lit: boolean;
+  onSelect: () => void;
+  /** 角标（铃铛未读 / 子会话在等你）；缺席或 0 不渲染 */
+  badge?: number;
+}
+
 /**
- * 26px 入口方块：顶部三入口与底部应用入口**同规格同点亮配方**——点亮走
+ * 28px 入口方块（控件台阶 24·28·32）：右栏所有入口**同规格同点亮配方**——点亮走
  * `.quiet-control[aria-pressed]` 的 mode 选中底（浅蓝 / 暗档黄，2026-10-19
  * 方案 B v2 用户点名保留；此前是 inline 的 `--glass-bg` 玻璃白，看不出选中）。
  * hover 也交给 CSS（quiet-control:hover），不再用 JS 模拟。再点已点亮的由
