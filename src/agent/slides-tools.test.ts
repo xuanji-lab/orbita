@@ -137,6 +137,39 @@ describe("slides tools", () => {
     assert.match(out.text, /does not exist/);
   });
 
+  it("主题与版式：create 选主题；write 用 layout + slots（含 attached 图），描述教设计，超限出 warning 不报错", async () => {
+    const guide = tools["slides_write"]?.description ?? "";
+    assert.match(guide, /DESIGN RULES/);
+    assert.match(guide, /≤16 characters/);
+    assert.match(guide, /image-left/);
+    assert.match(tools["slides_create"]?.description ?? "", /forest/);
+    await run("slides_create", { title: "主题测试", theme: "forest" });
+    const path = join(dir, "主题测试.slides.json");
+    assert.equal(parseDeck(await readFile(path, "utf8")).deck.theme?.id, "forest");
+    await writeFile(join(dir, "hawker.png"), PNG);
+    const out = await run("slides_write", {
+      path,
+      slides: [
+        { layout: "cover", slots: { title: "新加坡简介", subtitle: "一座花园城市" } },
+        { layout: "bullets", slots: { title: "这是一个非常非常非常长的标题，远远超过十六个字", bullets: ["a", "b", "c", "d", "e", "f", "g"] } },
+        { layout: "image-right", slots: { title: "小贩中心", bullets: ["平价", "多元"], image: "attached" } },
+      ],
+    });
+    assert.match(out.text, /Warnings/);
+    assert.match(out.text, /7 bullets/);
+    const deck = parseDeck(await readFile(path, "utf8")).deck;
+    assert.equal(deck.slides.length, 3);
+    assert.deepEqual(deck.slides.map((s) => s.layout), ["cover", "bullets", "image-right"]);
+    const pic = deck.slides[2]!.elements.find((e) => e.kind === "image");
+    assert.ok(pic !== undefined && pic.kind === "image" && /主题测试\.assets\//.test(pic.src));
+    // 换主题：整份跟着变
+    await run("slides_edit", { path, ops: [{ op: "set_deck", theme: "mono" }] });
+    const after = parseDeck(await readFile(path, "utf8")).deck;
+    assert.equal(after.theme?.id, "mono");
+    assert.equal(after.slides[1]!.background, "#ffffff");
+    await assert.rejects(() => run("slides_write", { path, slides: [{ layout: "poster", slots: {} }] }), /unknown layout/);
+  });
+
   it("export：走 broker，带 workspaceId，返回卡片", async () => {
     sent.length = 0;
     const out = await run("slides_export", { path: "花园城市新加坡.slides.json", format: "pdf" });

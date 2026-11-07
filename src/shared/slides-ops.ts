@@ -521,8 +521,8 @@ export function lintSlide(deck: Deck, page: number): string[] {
     }
     const right = element.x + element.w;
     const bottom = element.y + element.h;
-    // 没字的色块 / 圆是有意出血的装饰；图片满版也常出血——只管会丢字的元素
-    const bleed = (element.kind === "shape" && element.text === undefined);
+    // 版式页上没字的色块 / 圆是有意出血的装饰；手写页上的则照常报
+    const bleed = slide.layout !== undefined && element.kind === "shape" && element.text === undefined;
     if (element.kind !== "line" && !bleed && (element.x < -4 || element.y < -4 || right > canvas.w + 4 || bottom > canvas.h + 4)) {
       out.push(`slide ${page}: ${element.kind} ${element.id} extends past the ${canvas.w}×${canvas.h} canvas (x=${Math.round(element.x)} y=${Math.round(element.y)} right=${Math.round(right)} bottom=${Math.round(bottom)})`);
     }

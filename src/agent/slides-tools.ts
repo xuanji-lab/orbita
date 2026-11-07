@@ -16,6 +16,8 @@ import {
   type WriteEntry,
 } from "../shared/slides-ops.ts";
 import { CANVAS_SIZE, DECK_MAX_BYTES, ElementError, isDeckPath, normalizeTheme, parseDeck, serializeDeck, type Aspect, type Deck } from "../shared/slides.ts";
+import { imageSlotOf, isLayoutName, LAYOUT_GUIDE, LAYOUT_NAMES, type LayoutImage } from "../shared/slides-layouts.ts";
+import { DEFAULT_THEME_ID, presetTheme, THEME_BLURBS, THEME_IDS, THEME_PRESETS } from "../shared/slides-theme.ts";
 import { writeTextAtomic } from "../main/atomic-write.ts";
 import { ASSET_MAX_BYTES, saveAssetBytes } from "../main/slides/assets.ts";
 import { isInside, realpathInside } from "../main/path-boundary.ts";
@@ -44,10 +46,23 @@ const ELEMENT_GUIDE =
   '- shape: { kind:"shape", shape: rect|roundRect|ellipse|triangle, fill:"#rrggbb"|"none", stroke:"#rrggbb"|"none", strokeWidth, text?, fontSize, color }\n' +
   '- line / arrow: { kind:"line", points:[[x1,y1],[x2,y2]] (relative to the element box), startArrow:"none"|"arrow", endArrow:"none"|"arrow", stroke, strokeWidth, dash? } — the box x,y,w,h must contain both points (e.g. left→right arrow: x=100,y=300,w=400,h=1, points [[0,0],[400,0]], endArrow "arrow").';
 
+const THEME_GUIDE = THEME_IDS.map((id) => `${id} — ${THEME_BLURBS[id]?.en ?? ""}`).join("; ");
+
+const LAYOUT_LIST = LAYOUT_NAMES.map((name) => `- ${LAYOUT_GUIDE[name]}`).join("\n");
+
+/**
+ * 教 agent 做设计的规矩：写进 slides_create / slides_write 的描述里，超限时工具再用 warning 提醒（不报错）。
+ * 数字与 slides-layouts.ts 的 warnLimits 一致：标题 ≤16 字、要点 ≤6 条每条 ≤20 字。
+ */
 const DESIGN_GUIDE =
-  "Design rules: keep 60–80px margins; one idea per slide; title 44–56px, body 24–32px (never below 20px); high contrast; " +
-  "size each text box for its text (a line is ≈ fontSize×1.25 px tall; CJK glyph width ≈ fontSize); use full-bleed shapes / background colors for rhythm; " +
-  "do not stack elements on top of each other unless on purpose; give every slide speaker notes when the user asked for a talk.";
+  "DESIGN RULES (a deck made from raw coordinates looks bad — follow these):\n" +
+  "1. Use layouts, not coordinates. Give { layout, slots } and the app lays the slide out with the deck's theme (colours, serif headings, eyebrow label, footer \"title · page\"). Only fall back to raw `elements` for something no layout covers (a diagram, arrows).\n" +
+  "2. One idea per slide. Title ≤16 characters (a short claim, not a topic word list). At most 6 bullets, each ≤20 characters — cut words, do not shrink the font. A slide that needs more is two slides.\n" +
+  "3. Body text is never smaller than the theme's body size (28px on 16:9). If a warning says the text does not fit, split the slide; never reduce the font or squeeze the box.\n" +
+  "4. A slide with a picture AND text always uses image-left / image-right (or image-full). Never place a picture on a bullets slide by coordinates.\n" +
+  "5. Rhythm: start with cover, end with closing; in 7+ slides add a section slide between groups; alternate layouts (bullets → image-right → stat → quote → two-column) — never the same layout 4 times in a row. Give every content slide a short `eyebrow` label (e.g. \"02 · 景观\").\n" +
+  "6. Colours and sizes are theme tokens ($ink $muted $accent $accent2 $bg $surface $onAccent $line; $display $title $h2 $body $caption; $heading $body fonts) — write \"color\":\"$accent\" instead of hex so a later theme switch re-colours the whole deck. No emoji as decoration, no gradients.\n" +
+  "7. Give every slide speaker notes when the user asked for a talk.";
 
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
@@ -130,12 +145,14 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
       "Create a new presentation file (<name>.slides.json) in the workspace and open it in the right panel. " +
       "The deck starts with 0 slides — fill it with slides_write. The file is JSON (a list of slides, each a list of positioned elements), " +
       "pictures live in a sibling <name>.assets/ folder; the user can edit everything by hand in the panel and export to PDF / PPTX / HTML / PNG. " +
-      "Use this (not markdown or html files) whenever the user wants a presentation / slides / deck.",
+      "Use this (not markdown or html files) whenever the user wants a presentation / slides / deck. " +
+      `Pick a theme that fits the topic (the user can change it later in the panel): ${THEME_GUIDE}. Default ${DEFAULT_THEME_ID}.`,
     parameters: {
       type: "object",
       properties: {
         title: { type: "string", description: "Deck title (also used for the default file name)" },
         aspect: { type: "string", enum: ["16:9", "4:3"], description: "Slide ratio, default 16:9" },
+        theme: { type: "string", enum: [...THEME_IDS], description: `Visual theme (palette + fonts + type scale). Default ${DEFAULT_THEME_ID}` },
         path: { type: "string", description: "Where to create it (relative to the workspace, must end with .slides.json). Default: <title>.slides.json in the workspace root" },
       },
       required: ["title"],
@@ -166,14 +183,15 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
         }
       }
       await mkdir(dirname(target), { recursive: true });
-      const deck: Deck = { ...createDeck({ title, aspect }), slides: [] };
+      const themeId = typeof args["theme"] === "string" && THEME_PRESETS[args["theme"].trim().toLowerCase()] !== undefined ? args["theme"].trim().toLowerCase() : DEFAULT_THEME_ID;
+      const theme = presetTheme(themeId);
+      const deck: Deck = { ...createDeck({ title, aspect, ...(theme === undefined ? {} : { theme }) }), slides: [] };
       await writeTextAtomic(target, serializeDeck(deck));
       const canvas = CANVAS_SIZE[aspect];
       const card: CommandCardData = { kind: "slides", path: target, title, subtitle: `演示文稿 · ${basename(target)}` };
       return ok(
-        `Created ${target} (${aspect}, canvas ${canvas.w}×${canvas.h}, 0 slides) and opened it in the right panel.\n` +
-          "Next: fill it with slides_write (slides:[{at:1,elements:[...]}, {at:2,...}] — at is a 1-based page number or \"append\"), " +
-          "and add pictures with slides_insert_image.\n" +
+        `Created ${target} (${aspect}, canvas ${canvas.w}×${canvas.h}, theme ${themeId}, 0 slides) and opened it in the right panel.\n` +
+          "Next: fill it with slides_write (slides:[{layout:\"cover\", slots:{...}}, {layout:\"bullets\", slots:{...}}, …] — pictures go in slots.image, no separate insert step needed).\n" +
           DESIGN_GUIDE,
         { ...openDetails(target, true), card },
       );
@@ -209,13 +227,18 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
     name: "slides_write",
     label: "slides_write",
     description:
-      "Add slides or replace whole slides in a presentation. slides is a list of { at, elements, background, notes }: " +
+      "Add slides or replace whole slides in a presentation. slides is a list of { at, layout + slots, notes } (preferred) or { at, elements, background, notes } (free-form): " +
       'at = a 1-based page number (replaces that slide; page = current count + 1 appends) or "append" (default). ' +
-      "elements replaces the slide's elements (omit it to keep them and only change background / notes). background = css color. notes = speaker notes (plain text). " +
-      "Several slides can be written in one call. The result lists layout problems (text overflowing its box, elements outside the canvas) — fix them with slides_edit.\n" +
-      ELEMENT_GUIDE +
-      "\n" +
-      DESIGN_GUIDE,
+      "layout + slots: the app lays the slide out in the deck's theme — you give content only, no coordinates. Text slots take plain text; **double asterisks** make a phrase bold; lists are string arrays. " +
+      'Picture slots (slots.image) take a workspace file path, or "attached" / "attached:2" for a picture the user attached to the chat; the file is copied into the deck for you. ' +
+      "Layouts:\n" +
+      LAYOUT_LIST +
+      "\nThe layout becomes ordinary editable elements (the user can drag them). Replace a slide by writing at its page number again. " +
+      "elements (free-form, no layout) replaces the slide's elements; omit both to keep them and only change background / notes. background = css color or a $token ($surface, $accent …). notes = speaker notes (plain text). " +
+      "Several slides can be written in one call. The result lists problems (title too long, too many bullets, text that does not fit, elements outside the canvas) as warnings — fix them by rewriting that slide shorter or splitting it.\n" +
+      DESIGN_GUIDE +
+      "\nFree-form elements only:\n" +
+      ELEMENT_GUIDE,
     parameters: {
       type: "object",
       properties: {
@@ -227,6 +250,8 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
             type: "object",
             properties: {
               at: { description: '1-based page number, or "append"' },
+              layout: { type: "string", enum: [...LAYOUT_NAMES], description: "Page type; see the layout list. Mutually exclusive with elements" },
+              slots: { type: "object", description: "Content for the layout: eyebrow, title, subtitle, bullets[], body, columns[], rows[][], stats[], quote, source, image, caption, note, number, meta, contact (which ones depends on the layout)" },
               elements: { type: "array", items: { type: "object", properties: { kind: { type: "string", enum: ["text", "image", "table", "shape", "line"] } }, required: ["kind"] } },
               background: { type: "string" },
               notes: { type: "string" },
@@ -241,16 +266,26 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
       const path = await resolveDeck(args["path"], "existing");
       const rawSlides = Array.isArray(args["slides"]) ? args["slides"] : fail('"slides" must be an array');
       if (rawSlides.length === 0) fail('"slides" is empty');
-      const entries: WriteEntry[] = rawSlides.map((item) => {
+      const entries: WriteEntry[] = [];
+      for (const item of rawSlides) {
         const entry = asRecord(item);
         const at = entry["at"];
-        return {
+        const layout = typeof entry["layout"] === "string" ? entry["layout"] : undefined;
+        const slots = asRecord(entry["slots"]);
+        let images: Record<string, LayoutImage> | undefined;
+        if (layout !== undefined && isLayoutName(layout) && imageSlotOf(layout) !== null) {
+          const ref = text(slots["image"]);
+          if (ref !== null) images = { image: await stageLayoutImage(path, ref) };
+        }
+        entries.push({
           at: typeof at === "number" ? at : "append",
+          ...(layout === undefined ? {} : { layout, slots }),
+          ...(images === undefined ? {} : { images }),
           ...(Array.isArray(entry["elements"]) ? { elements: entry["elements"] as unknown[] } : {}),
           ...(typeof entry["background"] === "string" ? { background: entry["background"] } : {}),
           ...(typeof entry["notes"] === "string" ? { notes: entry["notes"] } : {}),
-        };
-      });
+        });
+      }
       let outcome;
       try {
         outcome = await updateDeck(path, (deck) => {
@@ -263,9 +298,10 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
       const { deck, result } = outcome;
       const issues = result.pages.flatMap((page) => lintSlide(deck, page));
       const missing = await missingImages(path, deck, result.pages);
+      const notes = [...result.warnings, ...issues, ...missing];
       return ok(
         `Wrote slide(s) ${result.pages.join(", ")}; the deck now has ${deck.slides.length} slide(s).` +
-          (issues.length + missing.length > 0 ? `\nLayout notes:\n${[...issues, ...missing].join("\n")}` : ""),
+          (notes.length > 0 ? `\nWarnings (fix by rewriting the slide shorter / splitting it, not by shrinking text):\n${notes.join("\n")}` : ""),
         openDetails(path, false),
       );
     },
@@ -297,7 +333,7 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
       '- { op:"delete", slide, id } — remove an element\n' +
       '- { op:"set_slide", slide, background?, notes? }\n' +
       '- { op:"delete_slide", slide } and { op:"move_slide", slide, to }\n' +
-      '- { op:"set_deck", title?, aspect?, theme? } — theme: { fontFamily, color, background }\n' +
+      `- { op:"set_deck", title?, aspect?, theme? } — theme: one of ${THEME_IDS.join(" / ")} (re-colours every element bound to a theme token; hand-set values stay), or an object { id?, palette:{bg,surface,ink,muted,accent,accent2}, fonts:{heading,body}, scale:{display,title,h2,body,caption} }\n` +
       "The user may be looking at another slide; the panel is not moved.\n" +
       ELEMENT_GUIDE,
     parameters: {
@@ -350,6 +386,23 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
     return found;
   };
 
+  /** 版式的图片槽位：读图 → 校验 → 复制进 .assets，返回相对路径与像素尺寸（slides_insert_image 与 slides_write 共用） */
+  const stageLayoutImage = async (deckPath: string, raw: string): Promise<LayoutImage> => {
+    const imagePath = resolveImagePath(raw);
+    let bytes: Buffer;
+    try {
+      const info = await stat(imagePath);
+      if (!info.isFile()) fail(`Not a file: ${raw}`);
+      if (info.size > ASSET_MAX_BYTES) fail(`Image is too large (${Math.round(info.size / 1024 / 1024)} MB, limit 30 MB)`);
+      bytes = await readFile(imagePath);
+    } catch (cause) {
+      throw new Error(cause instanceof Error && (cause as NodeJS.ErrnoException).code === "ENOENT" ? `Image not found: ${raw}` : describeError(cause));
+    }
+    if (readImageInfo(bytes) === null) fail(`Not a supported image (PNG / JPEG / GIF / WebP): ${raw}`);
+    const saved = await saveAssetBytes(deckPath, basename(imagePath), bytes);
+    return { src: saved.src, width: saved.info.width, height: saved.info.height };
+  };
+
   const insertImageTool: ToolDefinition = {
     name: "slides_insert_image",
     label: "slides_insert_image",
@@ -378,23 +431,12 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
       const path = await resolveDeck(args["path"], "existing");
       const slide = typeof args["slide"] === "number" ? args["slide"] : fail('"slide" (1-based page number) is required');
       const imageRaw = text(args["image_path"]) ?? fail('"image_path" is required');
-      const imagePath = resolveImagePath(imageRaw);
-      let bytes: Buffer;
-      try {
-        const info = await stat(imagePath);
-        if (!info.isFile()) fail(`Not a file: ${imageRaw}`);
-        if (info.size > ASSET_MAX_BYTES) fail(`Image is too large (${Math.round(info.size / 1024 / 1024)} MB, limit 30 MB)`);
-        bytes = await readFile(imagePath);
-      } catch (cause) {
-        throw new Error(cause instanceof Error && (cause as NodeJS.ErrnoException).code === "ENOENT" ? `Image not found: ${imageRaw}` : describeError(cause));
-      }
-      if (readImageInfo(bytes) === null) fail(`Not a supported image (PNG / JPEG / GIF / WebP): ${imageRaw}`);
-      const saved = await saveAssetBytes(path, basename(imagePath), bytes);
+      const saved = await stageLayoutImage(path, imageRaw);
       const num = (key: string): number | undefined => (typeof args[key] === "number" ? (args[key] as number) : undefined);
       let outcome;
       try {
         outcome = await updateDeck(path, (deck) => {
-          const placed = insertImage(deck, slide, saved.src, { w: saved.info.width, h: saved.info.height }, {
+          const placed = insertImage(deck, slide, saved.src, { w: saved.width, h: saved.height }, {
             ...(num("x") === undefined ? {} : { x: num("x") as number }),
             ...(num("y") === undefined ? {} : { y: num("y") as number }),
             ...(num("w") === undefined ? {} : { w: num("w") as number }),
@@ -409,7 +451,7 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
       }
       const el = outcome.result;
       return ok(
-        `Inserted ${saved.src} (${saved.info.width}×${saved.info.height}px) on slide ${slide} as element ${el.id} at x=${Math.round(el.x)} y=${Math.round(el.y)} w=${Math.round(el.w)} h=${Math.round(el.h)}.`,
+        `Inserted ${saved.src} (${saved.width}×${saved.height}px) on slide ${slide} as element ${el.id} at x=${Math.round(el.x)} y=${Math.round(el.y)} w=${Math.round(el.w)} h=${Math.round(el.h)}.`,
         openDetails(path, false),
       );
     },
@@ -487,12 +529,14 @@ function parseOp(item: unknown, index: number): EditOp {
     case "move_slide":
       return { op: "move_slide", slide: num("slide"), to: num("to") };
     case "set_deck": {
-      const theme = asRecord(raw["theme"]);
+      const rawTheme = raw["theme"];
+      const theme = rawTheme === undefined ? undefined : normalizeTheme(rawTheme);
+      if (rawTheme !== undefined && theme === undefined) fail(`${label}: unknown theme ${JSON.stringify(rawTheme)} (available: ${THEME_IDS.join(", ")}, or an object with palette / fonts / scale)`);
       return {
         op: "set_deck",
         ...(typeof raw["title"] === "string" ? { title: raw["title"] } : {}),
         ...(raw["aspect"] === "16:9" || raw["aspect"] === "4:3" ? { aspect: raw["aspect"] } : {}),
-        ...(Object.keys(theme).length > 0 ? { theme: normalizeTheme(theme) ?? {} } : {}),
+        ...(theme === undefined ? {} : { theme }),
       };
     }
     default:
