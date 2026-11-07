@@ -794,8 +794,9 @@ function ChatViewBody(props: {
    *  可选：副槽（抽屉 / 子会话面板）不传——那里不出开关 */
   intentNewSessionDefault?: boolean;
   /**
-   * 主槽传 true：对话卡不再有页头（2026-10-19 方案 B v2，会话信息住工具栏的
-   * 会话胶囊）；辅助对话抽屉不传，抽屉里的 ChatView 保留卡内标题行。
+   * 传 true：对话卡不再有页头。主槽（2026-10-19 方案 B v2，会话信息住工具栏的会话
+   * 胶囊）与辅助对话（2026-11-07，会话名 / 标签住右栏胶囊 DrawerCap）都传；
+   * 子会话面板不传，那里的 ChatView 保留卡内标题行。
    */
   bareHeader?: boolean;
 }) {
@@ -2063,8 +2064,8 @@ function Pane(props: {
    */
   scrollToEnd?: { visible: boolean; onClick: () => void } | null;
   /**
-   * 主槽传 true：不渲染卡内页头（2026-10-19 方案 B v2——会话信息住工具栏的会话
-   * 胶囊，对话卡从工具栏下直接开始）；抽屉里的 ChatView 保留页头。
+   * 传 true：不渲染卡内页头（主槽：会话信息住工具栏的会话胶囊；辅助对话：住右栏胶囊，
+   * 对话卡从面板顶上直接开始）；子会话面板里的 ChatView 保留页头。
    */
   hideHeader?: boolean;
   /** 页头与消息列之间的一条通栏（自动化新开的会话：「任务名 · 第 n 次」+ 转成普通会话）；缺席不渲染 */
@@ -2109,8 +2110,8 @@ function Pane(props: {
         gridTemplateRows: `${props.hideHeader === true ? "" : "auto "}${props.banner === undefined ? "" : "auto "}minmax(0,1fr) auto`,
       }}
     >
-      {/* 抽屉里保留的卡内页头（主槽 hideHeader，2026-10-19 方案 B v2：会话信息住
-          工具栏的会话胶囊）；窗口拖拽由顶部工具栏整条接管，这里只是内容行 */}
+      {/* 卡内页头：主槽与辅助对话都 hideHeader（会话信息住顶部胶囊），目前只有子会话
+          面板还在用；窗口拖拽由顶部工具栏整条接管，这里只是内容行 */}
       {props.hideHeader !== true && (
       <header
         style={{
