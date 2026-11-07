@@ -5,9 +5,7 @@ import { Icon } from "../../shell/Icon";
 import { ContextMenu } from "../../shell/ContextMenu";
 import { useT } from "../../locale.ts";
 import { SlideStatic } from "./ElementView";
-
-/** 缩略图宽度（px，高度按画布比例） */
-const THUMB_WIDTH = 148;
+import { thumbWidthFor } from "./filmstrip-layout.ts";
 
 /**
  * 底部缩略条：每页一张（与画布同一份渲染）、点选、拖动排序、右键 复制 / 删除 / 其后新建、末尾「+」加页。
@@ -35,15 +33,30 @@ export function Filmstrip(props: {
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [dropAt, setDropAt] = useState<number | null>(null);
   const currentRef = useRef<HTMLButtonElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const [listWidth, setListWidth] = useState(0);
+  const thumbWidth = thumbWidthFor(listWidth);
 
+  // 缩略图宽度跟列表可用宽度走（面板宽度变了重算）
+  useEffect(() => {
+    const list = listRef.current;
+    if (list === null || typeof ResizeObserver === "undefined") return undefined;
+    setListWidth(list.clientWidth);
+    const observer = new ResizeObserver(() => setListWidth(list.clientWidth));
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, []);
+
+  // 当前页始终在视野里：换页、或缩略图宽度变了（面板被拖宽 / 拖窄）都重新对齐
   useEffect(() => {
     currentRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [currentId]);
+  }, [currentId, thumbWidth]);
 
   const total = deck.slides.length;
   return (
     <div className="se-strip">
       <div
+        ref={listRef}
         className="se-strip-list"
         role="listbox"
         aria-label={t.slides.pagesAria}
@@ -98,7 +111,7 @@ export function Filmstrip(props: {
               setMenu({ x: event.clientX, y: event.clientY, index });
             }}
           >
-            <SlideStatic slide={slide} aspect={deck.aspect} ctx={ctx} width={THUMB_WIDTH} />
+            <SlideStatic slide={slide} aspect={deck.aspect} ctx={ctx} width={thumbWidth} />
             <span className="se-thumb-n">{index + 1}</span>
           </button>
         ))}
@@ -106,11 +119,14 @@ export function Filmstrip(props: {
           <Icon name="plus" size={16} strokeWidth={1.8} />
         </button>
       </div>
-      {props.extra}
-      <button type="button" className="se-notes-toggle" aria-pressed={props.notesOpen} onClick={props.onToggleNotes}>
-        <Icon name="notebook-pen" size={14} strokeWidth={1.8} />
-        {t.slides.notes}
-      </button>
+      {/* 页级动作单独一行、靠右：不挤占缩略图的横向空间（窄面板里缩略图要留够 3 张） */}
+      <div className="se-strip-actions">
+        {props.extra}
+        <button type="button" className="se-notes-toggle" aria-pressed={props.notesOpen} onClick={props.onToggleNotes}>
+          <Icon name="notebook-pen" size={14} strokeWidth={1.8} />
+          {t.slides.notes}
+        </button>
+      </div>
       <ContextMenu
         position={menu === null ? null : { x: menu.x, y: menu.y }}
         onClose={() => setMenu(null)}

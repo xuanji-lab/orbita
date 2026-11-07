@@ -351,15 +351,24 @@
 .se-strip {
   display: flex;
   flex: 0 0 auto;
-  align-items: center;
-  gap: var(--space-2);
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-1-5);
   padding: var(--space-2) var(--space-3);
   border-top: 1px solid var(--dp-rule);
   background: var(--dp-bg);
 }
+/* 页级动作（页背景 / 引用这一页 / 备注）：缩略图下面单独一行，靠右 */
+.se-strip-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
 .se-strip-list {
   display: flex;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
