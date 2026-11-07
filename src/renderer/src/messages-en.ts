@@ -812,6 +812,12 @@ export const en = {
 
   /** 首页会话卡：一句「此刻在干什么」+ 一行「在哪 · 状态 · 多久前」（home-cards.ts 的 homeCardLine） */
   homeCard: {
+    /** 首页记录的三组名（落在左侧索引边栏里，窄栏时落在组上方一行） */
+    group: {
+      waiting: "Waiting",
+      running: "Running",
+      recent: "Recent",
+    },
     state: {
       running: "Running",
       waiting: "Waiting for you",
@@ -824,6 +830,7 @@ export const en = {
     childWaiting: "A sub-session is waiting for your approval",
     failed: "Stopped with an error",
     done: "Finished — open it to see the result",
+    noText: "(no text)",
   },
 
   /** 后台会话跑完时，辅助对话图标旁弹出的卡片 */

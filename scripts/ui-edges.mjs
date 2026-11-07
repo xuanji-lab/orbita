@@ -204,7 +204,11 @@ const column = await evaluate(`(() => {
   const transcript = document.querySelector(".chat-transcript > div");
   const composer = document.querySelector(".composer-card");
   if (transcript === null || composer === null) return null;
-  const t = transcript.getBoundingClientRect();
+  const box = transcript.getBoundingClientRect();
+  // 方向 N（2026-11-07）：消息列左侧有一条索引边栏（padding-left: --gutter），「外线」是它的内容盒边缘，
+  // 不是列的 border box——输入卡与正文都坐在内容盒里。纸面两档没有边栏，padding 为 0，口径不变
+  const style = getComputedStyle(transcript);
+  const t = { left: box.left + parseFloat(style.paddingLeft), right: box.right - parseFloat(style.paddingRight) };
   const c = composer.getBoundingClientRect();
   const para = document.querySelector(".assistant-prose .chat-md > *");
   const hem = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--space-3")) + 1;

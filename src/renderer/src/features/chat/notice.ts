@@ -34,6 +34,8 @@ export const noticeIconBoxStyle: CSSProperties = {
 export const noticeTextStyle: CSSProperties = {
   minWidth: 0,
   overflowWrap: "anywhere",
+  // 末行不留孤字（800 窗口里「……新开一个任务继续吧。」曾折出一个「吧。」）
+  textWrap: "pretty",
 };
 
 /** 提示行本体：flex 子项默认 `min-width: auto` 是溢出的另一半根因，显式放开。 */

@@ -17,8 +17,9 @@
 }
 
 /* ===== General 页的行与分组（SettingsView.tsx 的 SettingGroup / SettingRow）=====
- * 列宽 720px，不跟聊天页的 --content-max-width（1000px）：设置行是「名字 ↔ 控件」
- * 两端对齐，1000px 宽时两端隔得太远，眼睛要横跨半个屏幕才对得上一行。 */
+ * 列宽 720px（纸面两档仍用它；其余主题见文件末尾的「两栏设置」），不跟聊天页的 --content-max-width
+ * （2026-11-07 起 900，此前 1000px）：设置行是「名字 ↔ 控件」两端对齐，列再宽两端就隔得太远，
+ * 眼睛要横跨半个屏幕才对得上一行。 */
 .set-page {
   width: min(100%, 720px);
   margin: 0 auto;
@@ -32,7 +33,7 @@
 }
 
 .set-group > .section-label {
-  margin-bottom: var(--space-2);
+  margin: 0 0 var(--space-2);
 }
 
 .set-row {
@@ -834,4 +835,70 @@ a.exp-pr:hover {
 
 .set-guide-go {
   color: var(--color-text-tertiary);
+}
+
+/*
+ * ===== 方向 N（2026-11-07）· 两栏设置：节名落进索引边栏 =====
+ * 版式「两栏设置」（登记）：节名在左栏（右对齐，与本节第一行的行名同一条基线），行在右栏，
+ * 行内一律顶对齐；节与节之间留 32 的空，行与行之间不再画线。它是现有设置行（.set-row）的
+ * 同一套行，只是节名从行的上方挪进了左边的索引边栏——和对话里放时间、首页里放组名是同一种语法。
+ * 只对非纸面主题生效；设置面的宽度不再借内容列的 --content-max-width（原 1000，现 900；一行里「名字 ↔ 控件」
+ * 隔得太远），固定为 节名栏 120 + 间距 24 + 行栏 640。
+ *
+ * 节名字号：样张里是 base / 500 / 次级墨，这里取 base / 600 / 正墨。2026-10-24 用户的原话是
+ * 「分组标题文字太小了」——比它统领的行名还小；base 与行名同档，层级靠字重与颜色，不再靠缩小
+ * （设计系统：层级先靠字重与颜色，字号最后）。
+ *
+ * 窄于 620px（窄窗 / 右栏占位）退成一栏：节名回到节的上方、左对齐，行占满。
+ */
+.set-page {
+  container: setpage / inline-size;
+}
+:root:not([data-theme="copybook"], [data-theme="typescript"]) {
+  .set-page {
+    width: min(100%, calc(120px + var(--space-6) + 640px));
+    gap: var(--space-8);
+  }
+  .set-page > .set-group {
+    grid-template-columns: 120px minmax(0, 1fr);
+    column-gap: var(--space-6);
+    align-items: start;
+  }
+  .set-page > .set-group > .section-label {
+    grid-column: 1;
+    grid-row: 1 / span 9;
+    margin: 0;
+    padding-top: var(--space-2);
+    font-size: var(--font-size-base);
+    font-weight: var(--weight-semibold);
+    text-align: right;
+  }
+  .set-page > .set-group > :not(.section-label) {
+    grid-column: 2;
+  }
+  /* 行之间靠留白分，不再每行一条底线（发丝线只放在真正的边界：节与节之间） */
+  .set-page > .set-group > .set-row {
+    align-items: start;
+    min-height: 0;
+    padding: var(--space-2) 0;
+    border-bottom: 0;
+  }
+}
+@container setpage (max-width: 620px) {
+  :root:not([data-theme="copybook"], [data-theme="typescript"]) {
+    .set-page > .set-group {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .set-page > .set-group > .section-label {
+      grid-row: auto;
+      padding-top: 0;
+      margin-bottom: var(--space-1);
+      text-align: left;
+      font-size: var(--font-size-lg); /* 一栏时它又是标题：回到 2026-10-24 定的 lg */
+    }
+    /* 行也回到第 1 栏——否则 grid-column: 2 会凭空造出第二条隐式列，把节名挤成一个字宽 */
+    .set-page > .set-group > :not(.section-label) {
+      grid-column: 1;
+    }
+  }
 }

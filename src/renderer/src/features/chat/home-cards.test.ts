@@ -7,6 +7,8 @@ import {
   HOME_CARD_QUERY_ROWS,
   homeCardLine,
   selectHomeCards,
+  selectHomeLog,
+  visibleAsk,
   type HomeCardLineText,
 } from "./home-cards.ts";
 
@@ -136,6 +138,7 @@ describe("homeCardLine —— 卡上「此刻在干什么」那一句", () => {
     childWaiting: "子会话在等你批准",
     failed: "出错停下了",
     done: "跑完了",
+    noText: "（没有文字）",
     verb: (toolName) => toolName,
   };
   const user = (id: string, timestamp: number, body = "hi"): TranscriptItem =>
@@ -210,5 +213,100 @@ describe("homeCardLine —— 卡上「此刻在干什么」那一句", () => {
   test("没在跑：最近一次提问；没有提问（老会话）是 null", () => {
     assert.equal(homeCardLine({ ...base, state: null, records: null }, text), "上次问的");
     assert.equal(homeCardLine({ ...base, state: null, records: null, lastAsk: null }, text), null);
+  });
+});
+
+describe("selectHomeLog", () => {
+  const stateById =
+    (map: Record<string, SessionRunState>) =>
+    (m: SessionMeta): SessionRunState =>
+      map[m.id] ?? null;
+
+  test("按运行态分三组：等你（含出错）> 进行中 > 最近（含跑完没看），组内保持列表序", () => {
+    const sessions = [
+      meta({ id: "idle1", updatedAt: 90 }),
+      meta({ id: "run", updatedAt: 80 }),
+      meta({ id: "wait", updatedAt: 70 }),
+      meta({ id: "fail", updatedAt: 60 }),
+      meta({ id: "done", updatedAt: 50 }),
+      meta({ id: "idle2", updatedAt: 40 }),
+    ];
+    const groups = selectHomeLog(sessions, stateById({ run: "running", wait: "waiting", fail: "failed", done: "done" }));
+    assert.deepEqual(
+      groups.map((g) => [g.group, g.rows.map((r) => r.sessionId)]),
+      [
+        ["waiting", ["wait", "fail"]],
+        ["running", ["run"]],
+        ["recent", ["idle1", "done", "idle2"]],
+      ],
+    );
+  });
+
+  test("没有行的组不返回；全是闲置会话只剩「最近」", () => {
+    const groups = selectHomeLog([meta({ id: "a", updatedAt: 2 }), meta({ id: "b", updatedAt: 1 })], stateById({}));
+    assert.deepEqual(
+      groups.map((g) => g.group),
+      ["recent"],
+    );
+    assert.deepEqual(selectHomeLog([], stateById({})), []);
+  });
+
+  test("子会话 / 归档 / 无标题不进记录；每组各有上限（等你 4、进行中 4、最近 5）", () => {
+    const many = (prefix: string, n: number, base: number): SessionMeta[] =>
+      Array.from({ length: n }, (_, i) => meta({ id: `${prefix}${i}`, updatedAt: base - i }));
+    const sessions = [
+      ...many("w", 6, 600),
+      ...many("r", 6, 500),
+      ...many("x", 8, 400),
+      meta({ id: "child", updatedAt: 999, parentId: "w0" }),
+      meta({ id: "arch", updatedAt: 998, archived: true }),
+      meta({ id: "blank", updatedAt: 997, title: "" }),
+    ];
+    const state = (m: SessionMeta): SessionRunState =>
+      m.id.startsWith("w") ? "waiting" : m.id.startsWith("r") ? "running" : null;
+    const groups = selectHomeLog(sessions, state);
+    const sizes = Object.fromEntries(groups.map((g) => [g.group, g.rows.length]));
+    assert.deepEqual(sizes, { waiting: 4, running: 4, recent: 5 });
+    const ids = groups.flatMap((g) => g.rows.map((r) => r.sessionId));
+    for (const bad of ["child", "arch", "blank"]) assert.ok(!ids.includes(bad), `${bad} 不该出现`);
+  });
+});
+
+describe("visibleAsk / 首页记录行的「此刻」一格不露系统提示", () => {
+  const text: HomeCardLineText = {
+    thinking: "在想",
+    doing: (step, now) => `${step}：${now}`,
+    approve: (what) => `等你批准：${what}`,
+    childWaiting: "子会话在等你批准",
+    failed: "出错停下了",
+    done: "跑完了",
+    noText: "（没有文字）",
+    verb: (toolName) => toolName,
+  };
+  const idle = (lastAsk: string | null) => homeCardLine({ state: null, records: null, approval: null, turnError: null, lastAsk }, text);
+
+  test("成对的系统包装块、自闭合标签整段剥掉，只留用户写的话", () => {
+    assert.equal(
+      visibleAsk('<user_context>\nsent_at: 2026-11-07\n</user_context><orbita-memory>\n- 偏好 A\n</orbita-memory>帮我看下首页'),
+      "帮我看下首页",
+    );
+    assert.equal(visibleAsk('<referenced_task id="x" title="y" />继续做这个'), "继续做这个");
+    assert.equal(visibleAsk("普通的一句话"), "普通的一句话");
+  });
+
+  test("HTML 注释剥掉；没闭合的注释吞到结尾（它之后全是系统文字）", () => {
+    assert.equal(visibleAsk("<!-- 系统说明 -->总结一下"), "总结一下");
+    assert.equal(visibleAsk("<!-- 你正在通过 Proma 飞书桥收到消息，下面是系统提示……"), "");
+  });
+
+  test("引用块也剥（用户看到的是引用芯片，不是文字）", () => {
+    assert.equal(visibleAsk('<quoted_context role="assistant" turn="2">\n被引的一段\n</quoted_context>\n\n基于这段改'), "基于这段改");
+  });
+
+  test("homeCardLine：剥完为空 → 「（没有文字）」；本来就空 → null；有文字 → 剥后的文字", () => {
+    assert.equal(idle("<!-- 你正在通过 Proma 飞书桥…"), "（没有文字）");
+    assert.equal(idle("   "), null);
+    assert.equal(idle(null), null);
+    assert.equal(idle("<user_context>x</user_context>写个测试"), "写个测试");
   });
 });

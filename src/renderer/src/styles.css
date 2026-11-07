@@ -301,7 +301,7 @@
 .composer-field > textarea {
   position: relative;
   color: transparent;
-  caret-color: var(--color-text-primary);
+  caret-color: var(--color-accent);
 }
 
 /* 收起标签不进格子：`.composer-field > *` 给了所有子项 grid-area 1/1，绝对定位的
@@ -1172,13 +1172,61 @@ body {
  * 暗档里它 = 卡面色（glass.css），压在井上就是浮起的那一层。浅色与纸面档
  * 维持玻璃阶梯不变；macOS 暗档因此不再透出桌面。
  */
-:root:is([data-theme="graphite"], [data-theme="black"]) .layer {
+:root:not([data-theme="copybook"], [data-theme="typescript"]) .layer {
   background: var(--color-bg-app);
 }
 
-:root:is([data-theme="graphite"], [data-theme="black"]) .pane {
+:root:not([data-theme="copybook"], [data-theme="typescript"]) .pane {
   background: var(--color-bg-panel);
-  border: 1px solid var(--color-border-subtle);
+}
+
+
+/*
+ * 方向 N（2026-11-07）：浅色也是「有颜色的壳 + 平的纸面井」，不再是半透明玻璃叠在桌面上——
+ * 上面两条把原先只给暗档的实色覆写扩到所有非纸面主题。纸面两档（小学作业 / 打字稿）仍是
+ * 0.92 的纸 + 浮起的阴影，不套 N。
+ *
+ * 选中 = 「摊在台面上」：壳上（侧栏、右图标条、顶栏）被选中的行与按下的键，用井的纸色，
+ * 和旁边打开的那一页是同一种材料；井里与菜单里（它们本身就是纸）仍是中性墨底——
+ * 否则「纸摊在纸上」什么都看不见。
+ */
+:root:not([data-theme="copybook"], [data-theme="typescript"]) :is(.sidebar, .right-rail, .toolbar) {
+  --option-active-bg: var(--color-bg-panel);
+  --color-mode-active-bg: var(--color-bg-panel);
+}
+
+/*
+ * 选中只换底，不换字重（方向 N，2026-11-07）：选中行字重 450 → 600，字变宽、整列文字抖一下
+ * （Linear / Things / Raycast 都不这么做）。纸面两档保持原样。分段控件的按下段仍是 600——它的段是
+ * 定宽的小框，靠底色加字重才分得出哪一段是当前。
+ */
+:root:not([data-theme="copybook"], [data-theme="typescript"]) {
+  .option-row[aria-pressed="true"],
+  .option-row[aria-selected="true"],
+  .option-row[data-active="true"],
+  .file-row[aria-selected="true"] {
+    font-weight: var(--weight-regular);
+  }
+}
+
+/*
+ * 暗档壳上的选中：壳与井只差一个台阶（对比度 1.10 / 1.12），「井的纸色摊在壳上」在暗档读不出来
+ * （审查：选中行与壳的底差贴着可见下限）。暗档改用中性白 10% 压在壳上（实测 ≥1.25），仍是中性、不借 accent；
+ * 浅色的纸色摊在台面上保持原样（1.17，清楚）。
+ * 暗档的井也不再画 1px 描边（底 + 线混用）：壳 → 井的台阶（ΔL* ≈ 5）已经在分层，线是第二种语言。
+ */
+:root:is([data-theme="graphite"], [data-theme="black"]) :is(.sidebar, .right-rail, .toolbar) {
+  --option-active-bg: rgba(255, 255, 255, 0.1);
+  --color-mode-active-bg: rgba(255, 255, 255, 0.1);
+}
+
+/*
+ * 容器一种语言：底色或描边，不混用（方向 N，2026-11-07）。代码块原先是 muted 底 + 1px 发丝线——
+ * 两种语言叠在同一个面上；N 只留底（暗档的底已抬到白 7%，比旧的 5% 多一档，靠底分得开）。
+ * 用 `--color-chat-muted-bg` 的块与行内代码同一份底。纸面两档保持原样（它们的底与纸几乎同色，靠线）。
+ */
+:root:not([data-theme="copybook"], [data-theme="typescript"]) .chat-md pre {
+  border: 0;
 }
 
 /*
@@ -2551,16 +2599,18 @@ html[data-pointer-drag] iframe {
    深色下 muted 底与地面只差几阶，块的边界靠线不靠色。 */
 .chat-md code {
   font-family: var(--font-family-business);
-  font-size: 0.9em;
+  font-size: var(--font-size-sm);
   background: var(--color-chat-muted-bg);
   padding: 1px 5px;
   border-radius: var(--radius-sm);
 }
 
 /*
- * 行内 code（正文里的文件名、路径、标识符——「机器内容」）用链接色，与正文墨色
- * 分层：Light 墨蓝 / 暗档亮蓝（2026-09-04 用户反馈：深色下与正文难分辨）。
- * 只上行内：块内是语法色的领地，无语法色的裸块继承正文色，不能整块变链接色。
+ * 行内 code（正文里的文件名、路径、标识符——「机器内容」）：链接蓝字 + 冷灰底，等宽字。
+ * 2026-09-04 用户反馈「深色下与正文难分辨」定的是链接色；2026-11-07 方向 N 一度改成正墨，
+ * 同日用户拍板：**保留灰底药丸，字回到链接蓝**（各档用各档的 --color-chat-link）。
+ * 三档蓝字压灰底都 ≥4.5（浅 #2762ea 压 #eef1f4 = 4.61；黛 / 玄 #52a8ff 压白 7% 底 ≈ 6.1–6.2）；
+ * 以后调这两个底的深浅，先对着这条线算。块内是语法色的领地，只上行内。
  */
 .chat-md :not(pre) > code {
   color: var(--color-chat-link);
@@ -2733,6 +2783,32 @@ html[data-pointer-drag] iframe {
   display: flex;
   flex-direction: column;
   align-items: center;
+}
+
+/* 首页舞台与内容列（原先是 ChatView 里的 inline style；方向 N 要在非纸面主题下改写它的宽、
+   对齐与纵向位置，inline 压得过任何主题规则，所以挪成 class——纸面两档保持原样：垂直居中、
+   居中对齐、三张卡） */
+.home-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+}
+.home-col {
+  position: relative;
+  z-index: 1;
+  width: min(100%, var(--content-max-width));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-5);
+}
+.home-fade {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-5);
 }
 
 .home-slogan {
@@ -5538,6 +5614,8 @@ mark.intent-mark {
 .proc-strong {
   flex: none;
   color: var(--color-text-secondary);
+  /* 「第 3 步」「3 步」的数字会变，等宽不跳 */
+  font-variant-numeric: tabular-nums;
 }
 .proc-num {
   display: inline-flex;
@@ -5668,17 +5746,17 @@ mark.intent-mark {
 .proc-chapters > li::before {
   content: "";
   position: absolute;
-  left: calc(-1 * var(--space-3) - 4.5px);
-  top: 9px;
-  width: 8px;
-  height: 8px;
+  left: calc(-1 * var(--space-3) - 3px);
+  top: 10.5px;
+  /* 实心小点，不是空心圆：子午线上的空心圆只留给「你」（返工 2026-11-07，同一列里空心圆有两个意思，
+     扫读时会把展开的步骤误认成用户消息）。5px、三级墨，比回合头的实心圆小一档。 */
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
-  background: var(--color-bg-panel);
-  border: 1.5px solid var(--color-text-tertiary);
+  background: var(--color-text-tertiary);
   box-sizing: border-box;
 }
 .proc-chapters > li.bad::before {
-  border-color: var(--color-danger);
   background: var(--color-danger);
 }
 .proc-chapter-btn {
@@ -5889,4 +5967,483 @@ mark.intent-mark {
   padding: 1px var(--space-2);
   border-radius: var(--radius-sm);
   background: var(--color-bg-muted);
+}
+
+/*
+ * ======================================================================
+ * 方向 N（2026-11-07）· 索引边栏 / 子午线 / 记录行 —— 首页
+ * ======================================================================
+ * 三个版式在这里登记（它们是现有界面里没有的）：
+ *
+ * | 版式 | 用途 | 结构 | 现有最近的同类 |
+ * |---|---|---|---|
+ * | 索引边栏 | 给一列内容配一条索引：首页是状态组名（对话里是时间、设置里是节名，后续 commit） | 内容列左侧 `--gutter`；索引右对齐到子午线左侧 18px；列窄于 760px 时 gutter 收成 32，索引改落在组上方一行 | 文件预览的行号列（左窄栏放索引、右侧放内容） |
+ * | 子午线 | 把「谁在等我 / 在跑 / 没状态」钉在一根轴上 | 1px 竖线，`--gutter - 20px` 处；状态饼圆心压线，没状态的是线上一个 5px 小点 | 无（新） |
+ * | 记录行 | 首页的会话列表 | 32px 行：名字（13em）｜一句此刻在干什么（次级墨、单行省略）｜行尾时间 | 侧栏会话行 + 原会话卡的 `.session-card-line` |
+ *
+ * 只对非纸面主题生效（首页的 DOM 也只在那时渲染记录；纸面两档仍是三张卡，见 ChatView）。
+ */
+:root:not([data-theme="copybook"], [data-theme="typescript"]) {
+  .home-stage {
+    align-items: flex-start;
+    padding-top: 14vh;
+  }
+  .home-col {
+    width: min(100%, calc(var(--content-max-width) + var(--gutter)));
+    box-sizing: border-box;
+    padding-left: var(--gutter);
+    align-items: stretch;
+  }
+  .home-fade {
+    align-items: stretch;
+  }
+  .home-hero {
+    align-items: flex-start;
+  }
+  .home-slogan {
+    text-align: left;
+    font-weight: var(--weight-regular); /* 越大越轻：全屏最大的字是最轻的 */
+  }
+  .home-fade-log {
+    margin-top: var(--space-4);
+  }
+
+  /* 记录：一根子午线 + 若干组 */
+  .home-log {
+    position: relative;
+    display: grid;
+    gap: var(--space-4);
+  }
+  .home-log::before {
+    content: "";
+    position: absolute;
+    left: -20px;
+    top: 10px;
+    bottom: 10px;
+    width: 1px;
+    background: var(--color-border-default);
+  }
+  .log-group {
+    position: relative;
+    display: grid;
+  }
+  /* 组名：右缘钉在子午线左侧 18px（= 内容列左缘 - 38），向左自由生长（「进行中」「Running」都放得下） */
+  .log-head {
+    position: absolute;
+    right: calc(100% + 38px);
+    top: 0;
+    margin: 0;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    height: var(--list-item-compact);
+    line-height: var(--line-height-ui);
+    font-size: var(--font-size-sm);
+    font-weight: var(--weight-medium);
+    color: var(--color-text-tertiary);
+  }
+  .log-group[data-g="waiting"] .log-head {
+    color: var(--color-text-primary); /* 「等你」是全屏唯一要你动手的一组：正墨 */
+  }
+  .log-row {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 13em) minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-4);
+    width: calc(100% + var(--space-4));
+    min-height: var(--list-item-compact);
+    margin-left: calc(-1 * var(--space-2));
+    padding: 0 var(--space-2);
+    box-sizing: border-box;
+    border: 0;
+    border-radius: var(--radius-md);
+    font: inherit;
+    font-size: var(--font-size-base);
+    text-align: left;
+    cursor: pointer;
+  }
+  .log-name {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+  }
+  .log-name .t {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: var(--weight-medium);
+  }
+  /* 状态饼 / 小点落在子午线上：行比内容列左缘外挪了 8px，所以饼的圆心要补回 8px 才压线 */
+  .log-row .status-pie {
+    position: absolute;
+    left: -17px;
+    width: 10px;
+    height: 10px;
+  }
+  .log-dot {
+    position: absolute;
+    left: -14.5px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--color-text-tertiary);
+  }
+  .log-line {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+  }
+  .log-time {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-tertiary);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .log-skel {
+    height: 10px;
+    border-radius: var(--radius-xs);
+    background: var(--color-bg-hover);
+  }
+}
+
+/*
+ * 容器查询的容器：索引边栏在「会话列」窄于 760px 时收成 32（右栏打开 / 窄窗 / 右抽屉里的小对话）。
+ * 量的是会话列自己的宽，不是窗口宽——右栏一开，同一扇窗口里的会话列就窄了。首页与聊天页各是
+ * 自己的容器（它们是兄弟，不是父子）；查询只改它们**孩子**身上的 --gutter。
+ */
+.home-stage,
+.chat-pane {
+  container: convo / inline-size;
+}
+@container convo (max-width: 760px) {
+  :root:not([data-theme="copybook"], [data-theme="typescript"]) {
+    .home-col,
+    .chat-col,
+    .chat-foot-col,
+    .chat-float-col {
+      --gutter: 32px;
+    }
+    .log-head {
+      position: static;
+      height: var(--control-height-xs);
+      margin-left: 0;
+    }
+  }
+}
+
+/*
+ * ======================================================================
+ * 对话：消息列 / 用户消息 / 输入框的骨架，以及方向 N 的「子午线」
+ * ======================================================================
+ * 下面第一段是原先 ChatView 里的 inline style 原样挪成 class（宽、对齐、气泡配方一个字没变）——
+ * 方向 N 要在非纸面主题下改写它们，inline 压得过任何主题规则。第二段才是 N。
+ */
+.chat-col {
+  width: min(100%, var(--content-max-width));
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.chat-float-col {
+  width: min(100%, var(--content-max-width));
+  margin: 0 auto;
+  display: flex;
+  justify-content: flex-end;
+}
+.chat-foot-col {
+  width: min(100%, var(--content-max-width));
+  margin: 0 auto;
+  display: grid;
+  gap: var(--space-2);
+}
+.user-turn {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  width: 100%;
+  gap: var(--space-0-5);
+}
+.user-mat {
+  max-width: var(--bubble-max-width);
+  margin-bottom: var(--space-1);
+}
+.user-mat-grid {
+  display: grid;
+  justify-items: end;
+  gap: var(--space-1);
+}
+.user-mat-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+.user-bubble {
+  position: relative;
+  width: fit-content;
+  max-width: var(--bubble-max-width);
+  min-width: 0;
+  padding: calc(var(--space-2) + 1px) var(--content-hem);
+  background: var(--color-chat-card-bg);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-bubble);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-reading);
+  overflow-wrap: anywhere;
+}
+.msg-acts {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/*
+ * 方向 N（2026-11-07）· 子午线 —— 签名元素，只此一处
+ *
+ * 一根竖线贯穿整列对话，把「谁说的 / 几点 / 做了几步」钉在同一根轴上：
+ *   用户消息 = 空心星，助手回合 = 实心星，每次工具 / 思考调用 = 一道横刻度；
+ *   时间落在左侧索引边栏里，右对齐到子午线左侧 18px（不再是消息上下两行小字）。
+ * 对话里是现有界面没有的版式：「索引边栏」（首页那节已登记）+「子午线」（同上）。
+ * 用户消息不再是右侧的圆气泡，是一整块左对齐的纸签（冷灰底，无描边）。
+ * 输入框贴在井底成「台沿」：页脚顶一条发丝线，卡自己只剩底、不描边、不浮起。
+ *
+ * 实现取舍：消息列是平的一串 `<div data-kind>`（没有「回合」容器），所以星与刻度靠
+ * `data-kind` + 相邻选择器认：user → 空心星；紧随 user 的第一个非 user 条目 → 实心星
+ * （它若是回合折叠头，时间也在它身上）；thinking / toolCall / toolGroup → 刻度。
+ */
+:root:not([data-theme="copybook"], [data-theme="typescript"]) {
+  .chat-col,
+  .chat-foot-col,
+  .chat-float-col {
+    width: min(100%, calc(var(--content-max-width) + var(--gutter)));
+    box-sizing: border-box;
+    padding-left: var(--gutter);
+  }
+  .chat-col {
+    position: relative;
+    gap: var(--space-5);
+  }
+  .chat-col::before {
+    content: "";
+    position: absolute;
+    left: calc(var(--gutter) - 20px);
+    top: var(--space-1);
+    bottom: 0;
+    width: 1px;
+    background: var(--color-border-default);
+  }
+  /* 条目包裹层 .revert-keep 原本是 display: contents（无盒，回退预演时才变成 grid），星与刻度要一个
+     可定位的盒：N 下把它实化成与预演态 .revert-doomed 同款的 grid（gap 继承，「条目 + 分支行」间距不变；
+     minmax(0,1fr) 防宽表格把轨道撑出列外） */
+  .chat-col > .revert-keep {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: inherit;
+    position: relative;
+  }
+
+  /*
+   * 记号图例（返工 2026-11-07，子午线上只有四种形状，每种只有一个意思）：
+   *   空心圆   = 你说的话（user）
+   *   空心菱形 = 另一个 agent 说的话（channelMark：子会话里父会话派来的任务，父会话里子会话的回报）
+   *   实心圆   = 这个 agent 的一轮（回合头）
+   *   短横刻度 = 一步（思考 / 工具调用，只在逐步铺开的活跃轮与委派卡前出现）
+   * 展开后的过程成员行用的是一颗实心小点（.proc-chapters 里），不是任何一种空心记号。
+   * 菱形 = 空心圆转 45° 的方块：同一套线宽与色，形状一变就读得出「不是你」；它们都是「有人开口」的记号，
+   * 所以都配一个紧随其后的实心圆（agent 回应）。
+   */
+  .chat-col > :is([data-kind="user"], [data-kind="channelMark"])::before,
+  .chat-col > :is([data-kind="turnGroup"], [data-kind="turnProcess"])::before,
+  .chat-col > :is([data-kind="user"], [data-kind="channelMark"]) + [data-kind]:not(:is([data-kind="user"], [data-kind="channelMark"]))::before {
+    content: "";
+    position: absolute;
+    left: calc(-20px - 4.5px);
+    width: 9px;
+    height: 9px;
+    box-sizing: border-box;
+    border-radius: 50%;
+    background: var(--color-text-secondary);
+    z-index: 1;
+  }
+  .chat-col > [data-kind="user"]::before {
+    top: 15px;
+    background: var(--color-bg-panel);
+    border: 1.5px solid var(--color-text-secondary);
+  }
+  .chat-col > [data-kind="channelMark"]::before {
+    top: 15px;
+    left: calc(-20px - 4px);
+    width: 8px;
+    height: 8px;
+    border-radius: 1px;
+    background: var(--color-bg-panel);
+    border: 1.5px solid var(--color-text-secondary);
+    transform: rotate(45deg);
+  }
+  /* 回合头与紧随其后的第一个条目：实心圆。落在 turnGroup / turnProcess 上也画——它们才带时间，
+     委派卡之后那一轮曾经「有时间没有圆」（审查 §3.10） */
+  .chat-col > :is([data-kind="turnGroup"], [data-kind="turnProcess"])::before,
+  .chat-col > :is([data-kind="user"], [data-kind="channelMark"]) + [data-kind]:not(:is([data-kind="user"], [data-kind="channelMark"]))::before {
+    top: 10px;
+  }
+  /* 刻度：一道横短线跨过子午线；紧随开口记号的那一行已经有实心圆，不再叠刻度 */
+  .chat-col > :is([data-kind="thinking"], [data-kind="toolCall"], [data-kind="toolGroup"]):not(:is([data-kind="user"], [data-kind="channelMark"]) + *)::after {
+    content: "";
+    position: absolute;
+    left: -26px;
+    top: 14px;
+    width: 13px;
+    height: 1px;
+    background: var(--color-text-tertiary);
+  }
+
+  /* 用户消息：左对齐的整块纸签，不再是右侧圆气泡 */
+  .user-turn {
+    align-items: stretch;
+  }
+  .user-bubble {
+    width: auto;
+    max-width: none;
+    border: 0;
+    border-radius: var(--radius-md);
+  }
+  .user-mat {
+    max-width: none;
+  }
+  .user-mat-grid {
+    justify-items: start;
+  }
+  .user-mat-wrap {
+    justify-content: flex-start;
+  }
+  .user-turn .memrow-list {
+    justify-items: start;
+  }
+  /* 复制 / 回退 / 记忆这排动作悬停（或键盘聚焦）才出：静止时它是一排每条消息都有的小灰图标。
+     行尾的时间已经搬进边栏，这排里剩下的都是操作。不用 visibility:hidden——那会把键盘用户挡在外面；
+     用 opacity + pointer-events（没出现时点不到，免得误触「回到这里」）。折叠的长消息要看得到展开键，常显 */
+  .user-turn .msg-acts > button {
+    opacity: 0;
+    pointer-events: none;
+    transition: var(--transition-hover);
+  }
+  .user-turn:hover .msg-acts > button,
+  .user-turn .msg-acts:focus-within > button,
+  .user-turn[data-clamped="true"] .msg-acts > button {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .user-turn .msg-acts {
+    margin-bottom: calc(-1 * var(--control-height-xs));
+  }
+  /* 窄列里时间回到动作行：钉行尾（行尾血线）。宽列里它是绝对定位进边栏的，这条不起作用 */
+  .user-turn .user-msg-time {
+    margin-left: auto;
+  }
+  .user-turn[data-clamped="true"] .msg-acts {
+    margin-bottom: 0;
+  }
+
+  /* 输入框贴井底成台沿：顶一条发丝线，卡自己只剩底、不描边、不浮起 */
+  .chat-footer {
+    border-top: 1px solid var(--color-border-subtle);
+    padding-top: var(--space-3);
+  }
+  /* 输入卡只留描边、不填底（容器一种语言）：首页它是一个细描边框；页脚里连描边也去掉，成为台沿 */
+  .composer-card {
+    background: transparent;
+  }
+  .chat-footer .composer-card {
+    border-color: transparent;
+  }
+  .chat-transcript {
+    padding-bottom: var(--space-3);
+  }
+}
+
+/*
+ * 时间落在索引边栏里——只在边栏有 88px 时（会话列 ≥ 761px）。边栏收成 32 的窄列放不下，
+ * 退回原来的位置（回合头的时间在折叠行上方一行，用户消息的时间在动作行最右），信息不丢。
+ */
+@container convo (min-width: 761px) {
+  :root:not([data-theme="copybook"], [data-theme="typescript"]) {
+    /* 时间落在边栏里：用户消息的时间钉在星的左边，回合头的时间钉在折叠头那一行的左边。
+       回合头的时间原先是折叠行上方独占一行（inline paddingLeft 把它推到血线上），N 把它请出流，
+       !important 只为压过那条 inline 内边距 */
+    .user-turn .user-msg-time,
+    .chat-col .turn-start-time {
+      position: absolute;
+      left: calc(-1 * var(--gutter));
+      width: calc(var(--gutter) - 38px);
+      text-align: right;
+      padding-left: 0 !important;
+      /* 非今天的消息是「08-23 18:23」，比 50px 宽：在空格处折成两行（日期 / 时分），
+         以星心为中线居中，不撞星也不撑宽边栏 */
+      line-height: var(--line-height-tight);
+      transform: translateY(-50%);
+    }
+    .user-turn .user-msg-time {
+      top: 19.5px;
+    }
+    .chat-col .turn-start-time {
+      top: 14.5px;
+    }
+  }
+}
+
+/*
+ * ======================================================================
+ * 浏览器表面（2026-11-07 方向 N）：浏览器自带、却没人逐个决定过的几处
+ * ======================================================================
+ * 一个应用的精致感，一半在「默认值被决定过」：选中文字是系统蓝（玄档里蓝撞黄 accent）、光标是黑的、
+ * 数字一跳一跳。这几条不是新外观，是把浏览器默认换成「属于这个应用」的值。
+ *
+ * - ::selection：accent 22% 混透明——明档是淡蓝、暗档是淡黄，字色不变（仍是正墨，对比度不降）。
+ *   全主题通用（取各主题自己的 accent，纸面档是笔色的淡绿 / 淡蓝）。
+ * - caret-color：accent。所有可输入处（输入框、设置里的输入、重命名）光标都是主操作色；输入框的 textarea
+ *   字是透明的（镜像层代画），它自己的 caret 规则也同改。
+ * - tabular-nums：凡数字会变、会排成列的地方——元信息、行尾、分段控件（30% 25% 20%…）、时间戳、
+ *   文件预览元信息——一律等宽数字，数字变了行不跳。diff 行号早已是（DiffView），不重复。
+ * - 图标线宽：物理 1.5px。lucide 在 24 视口里画 stroke-width 2；缩到 16 / 14 / 12px 时物理线宽是
+ *   1.33 / 1.05（1.8 档）/ 1.0 ——同屏三种笔重，14px 的比旁边 16px 的细 21%。vector-effect: non-scaling-stroke
+ *   让笔画脱离缩放，直接写物理值；调用点传的 strokeWidth 仍当「强调」读：≤2 的一律 1.5，
+ *   2.2（关闭键、发送箭头）→ 1.65，3（主题勾）→ 2.25（clamp）。纸面两档保持原样。
+ * - text-wrap: pretty：成段中文的末行不留孤字（卡片里只剩一个「准」、列表项末行只剩「度；」）。
+ */
+::selection {
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+}
+html {
+  caret-color: var(--color-accent);
+}
+.session-card-meta,
+.seg-control,
+.file-preview-meta,
+.row-trailing,
+.user-msg-time,
+.turn-start-time,
+.log-time {
+  font-variant-numeric: tabular-nums;
+}
+.chat-md p,
+.chat-md li,
+.session-card-line,
+.set-row-desc,
+.log-line {
+  text-wrap: pretty;
+}
+:root:not([data-theme="copybook"], [data-theme="typescript"]) {
+  .orbita-icon svg {
+    stroke-width: clamp(1.5px, calc(var(--icon-stroke, 2) * 0.75px), 2.25px);
+  }
+  .orbita-icon svg * {
+    vector-effect: non-scaling-stroke;
+  }
 }
