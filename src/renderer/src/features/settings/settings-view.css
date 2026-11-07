@@ -64,6 +64,14 @@
   font-weight: var(--weight-medium);
 }
 
+/* 名字下面的一行说明（SettingRow 的 info）：常驻，长了折行；比名字退一档字号、两档颜色 */
+.set-row-desc {
+  max-width: 52ch;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+
 /* 控件旁的一句说明（如单语主题下语言芯片为何置灰）：状态用文字讲，颜色退到次要 */
 .set-row-hint {
   font-size: var(--font-size-sm);

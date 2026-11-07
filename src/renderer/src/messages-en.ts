@@ -857,7 +857,6 @@ export const en = {
     unavailable: "Unavailable",
     openDataDirectory: "Open the data directory",
     reveal: "Reveal",
-    aboutSetting: (name: string) => `About ${name}`,
     browserData: "Browser data",
     clearBrowserData: "Clear all browser data",
     clearBrowserDataInfo:
