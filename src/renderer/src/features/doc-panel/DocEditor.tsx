@@ -13,6 +13,8 @@ import { documentKeymap, External, titleAfterComposition, titleFirstFilter } fro
 export interface EditorSelectionInfo {
   from: number;
   to: number;
+  /** 报告这次选区时的文档快照（不透明对象）：`trackQuote` 拿它核对「文档自那以后没变过」，防止用过期坐标登记 */
+  docVersion: unknown;
   /** 选区在视口里的位置（划选浮条用，同对话里划选的 candidate）：x 取选区水平中点 */
   rect: { x: number; top: number; bottom: number };
 }
@@ -31,7 +33,7 @@ export interface DocEditorHandle {
   /** 收起选区（引用 / 摘抄做完后） */
   clearSelection(): void;
   /** 登记一段被引用的区间，之后随每次改动映射（quote-track.ts） */
-  trackQuote(id: string, from: number, to: number): void;
+  trackQuote(id: string, from: number, to: number, docVersion: unknown): boolean;
   /** 被引用区间现在在哪；追踪不到 = null */
   trackedRange(id: string): { from: number; to: number } | null;
 }
@@ -99,6 +101,7 @@ export function DocEditor(props: {
       callbacks.current.onSelection({
         from,
         to,
+        docVersion: view.state.doc,
         rect: {
           x: sameLine ? (start.left + end.left) / 2 : end.left,
           top: Math.min(start.top, end.top),
@@ -178,7 +181,13 @@ export function DocEditor(props: {
       focus: () => {
         view.focus();
       },
-      trackQuote: (id, from, to) => view.dispatch({ effects: trackRange.of({ id, from, to }) }),
+      trackQuote: (id, from, to, docVersion) => {
+        // 选区是 SETTLE 延迟后才拿来登记的：这期间文档若变过（例如紧贴着打了同样的一句），
+        // 这对坐标已经指到别处——登记了就是一个错的锚点。文本比对分不出（复制句和原句一字不差），只能比文档版本
+        if (view.state.doc !== docVersion) return false;
+        view.dispatch({ effects: trackRange.of({ id, from, to }) });
+        return true;
+      },
       trackedRange: (id) => view.state.field(quoteTrackField).get(id) ?? null,
       clearSelection: () => {
         view.dispatch({ selection: { anchor: view.state.selection.main.head } });

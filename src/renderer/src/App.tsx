@@ -227,6 +227,8 @@ export function App() {
   const [panelRenderedWidth, setPanelRenderedWidth] = useState(RIGHT_PANEL_WIDTH_DEFAULT);
   /** 右栏此刻是不是覆盖层（窄窗，或文档面板按聊天列底线判定放不下）：工具栏的右栏胶囊跟它 */
   const [panelOverlay, setPanelOverlay] = useState(false);
+  /** 文档面板并排但被挤得比下限还窄 */
+  const [panelTight, setPanelTight] = useState(false);
   useEffect(() => {
     if (settings.rightPanelWidth !== undefined) setPanelWidth(settings.rightPanelWidth);
   }, [settings.rightPanelWidth]);
@@ -274,11 +276,12 @@ export function App() {
       return;
     }
     // 打开着、放不下并排（覆盖层态）、侧栏还展开着、这次还没动过：先收侧栏腾地方
-    if (panelOverlay && !sidebarCollapsed && docSidebar.current === "none") {
+    // （或者能并排但被挤得比下限还窄：收了侧栏面板就能宽松些）
+    if ((panelOverlay || panelTight) && !sidebarCollapsed && docSidebar.current === "none") {
       docSidebar.current = "auto";
       setSidebarCollapsedRaw(true);
     }
-  }, [docPanelOpen, panelOverlay, sidebarCollapsed]);
+  }, [docPanelOpen, panelOverlay, panelTight, sidebarCollapsed]);
 
   const { session, engine } = useChatSession(providers, t);
 
@@ -1394,7 +1397,7 @@ export function App() {
           windowWidth={windowWidth}
           panelOpen={rightPanel !== null}
           panelWidth={panelRenderedWidth}
-          narrow={narrow || panelOverlay}
+          narrow={docPanelOpen ? panelOverlay : narrow || panelOverlay}
           sessionSlot={sessionSlot}
           onPanelSlot={setPanelSlot}
           onToggleDrawer={() => setRightPanel(rightPanel === null ? "drawer" : null)}
@@ -1515,6 +1518,7 @@ export function App() {
             {...(isDocPanel ? { resolveLayout: docPanelLayout } : {})}
             narrow={narrow}
             onOverlay={setPanelOverlay}
+            onTight={setPanelTight}
             onWidthChange={isDocPanel ? setDocPanelWidth : setPanelWidth}
             onWidthCommit={(width) =>
               changeSettings(isDocPanel ? { docPanelWidth: width } : { rightPanelWidth: width })

@@ -1,5 +1,6 @@
-import type { OpenDocument, TextQuote } from "@shared/quote";
-import { resolveDocQuotes } from "@shared/quote-anchor";
+import type { OpenDocument, TextQuote } from "../../../../shared/quote.ts";
+import { resolveDocQuotes } from "../../../../shared/quote-anchor.ts";
+import { loadTracked } from "./quote-track.ts";
 
 /**
  * 右栏正开着编辑的那份文档（模块级一格）。编辑面板挂载时登记、卸载时清掉；发送消息时
@@ -37,7 +38,17 @@ export function getOpenDocument(): OpenDocument | null {
  * 退回「原文 + 上下文」定位；都找不到就标 missing。
  */
 export function resolveQuotes(quotes: readonly TextQuote[]): TextQuote[] {
-  if (current === null || source === null) return [...quotes];
+  const open = current;
   const from = source;
-  return resolveDocQuotes(from.text(), current.path, (anchor) => from.trackedRange(anchor), quotes);
+  return quotes.map((quote) => {
+    if (quote.filePath === undefined) return quote;
+    if (open !== null && from !== null && quote.filePath === open.path) {
+      return resolveDocQuotes(from.text(), open.path, (anchor) => from.trackedRange(anchor), [quote])[0] as TextQuote;
+    }
+    // 面板关着（或开着别的文件）时发送：编辑器已经卸载，但卸载时存了全文与追踪区间，
+    // 按它重新定位——总比拿划选时的行号去发强（那正是「关面板再发就改错」的来路）
+    const saved = loadTracked(quote.filePath);
+    if (saved === null) return quote;
+    return resolveDocQuotes(saved.text, quote.filePath, (anchor) => saved.ranges[anchor] ?? null, [quote])[0] as TextQuote;
+  });
 }

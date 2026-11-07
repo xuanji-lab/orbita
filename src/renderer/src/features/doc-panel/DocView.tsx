@@ -76,7 +76,7 @@ export function DocView(props: {
       if (quote === null) return null;
       // 登记区间：发送前编辑器怎么改，这段的位置都跟着走（重复句时靠它分得清是哪一处）
       const anchor = newAnchorId();
-      handleRef.current?.trackQuote(anchor, selection.from, selection.to);
+      if (handleRef.current?.trackQuote(anchor, selection.from, selection.to, selection.docVersion) !== true) return null;
       return { quote: { ...quote, anchor }, raw: text.slice(selection.from, selection.to) };
     },
     [session, path],

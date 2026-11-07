@@ -4080,6 +4080,10 @@ textarea.text-field {
    外层只排两列网格、不画卡、不加内边距：左卡左缘贴输入卡左缘，右卡右缘贴输入卡右缘；
    卡与卡之间上下左右 8px。卡高统一（正文最多两行，长引用省略、title 挂全文），
    折叠态 10 张（两列五行），其余收进「还有 N 条」 */
+.material-quote-host {
+  container-type: inline-size;
+  min-width: 0;
+}
 .material-quote-card {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4091,7 +4095,8 @@ textarea.text-field {
 
 /* 窄卡回落：两列格子偏窄时注脚藏「谁说的」；再窄回落一列 */
 @container (max-width: 639px) {
-  .material-quote-note-who {
+  .material-quote-note-who,
+  .material-quote-note-file {
     display: none;
   }
 }
@@ -4100,7 +4105,8 @@ textarea.text-field {
   .material-quote-card {
     grid-template-columns: minmax(0, 1fr);
   }
-  .material-quote-note-who {
+  .material-quote-note-who,
+  .material-quote-note-file {
     display: inline;
   }
 }
@@ -4166,7 +4172,6 @@ textarea.text-field {
 /* 文件引用的注脚「文件名 · 第 N 行 · 字数」：位置与字数留着，先省文件名（两枚芯片并排时也至少看得到第几行） */
 .material-quote-note.has-file {
   display: inline-flex;
-  min-width: 7.5em;
 }
 .material-quote-note-file {
   flex: 0 1 auto;

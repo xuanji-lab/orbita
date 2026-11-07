@@ -27,10 +27,12 @@ export function RightPanelSlot(props: {
    * 自带版式规则的面板（文档 / 演示文稿）：给了它，宽度与是否转覆盖层都由它按量到的 pane 宽决定
    * （聊天列留底线、放不下转覆盖层），不再走 1/3–2/3 夹取与 <960 的窗口判定。
    */
-  resolveLayout?: (pane: number, wanted: number | null, windowWidth: number) => { overlay: boolean; width: number };
+  resolveLayout?: (pane: number, wanted: number | null, windowWidth: number) => { overlay: boolean; width: number; tight?: boolean };
   narrow: boolean;
   /** 实际是不是覆盖层（窄窗，或 resolveLayout 判定放不下）：工具栏的右栏胶囊要跟 */
   onOverlay?: (overlay: boolean) => void;
+  /** 自带版式的面板：并排但被挤得比它自己的下限还窄（调用方可据此腾地方，比如收起左侧栏） */
+  onTight?: (tight: boolean) => void;
   onWidthChange: (width: number) => void;
   onWidthCommit: (width: number) => void;
   /**
@@ -63,18 +65,22 @@ export function RightPanelSlot(props: {
     return () => window.removeEventListener("resize", onResize);
   }, []);
   const own = resolveLayout?.(paneWidth, props.width, windowWidth);
-  const overlay = own === undefined ? narrow : own.overlay || narrow;
+  // 自带版式的面板自己判定并排还是覆盖层，不看 <960 的窗口断点（窄窗里它照样能并排：聊天列守底线、面板挤窄）
+  const overlay = own === undefined ? narrow : own.overlay;
   const width =
     own !== undefined
-      ? narrow
-        ? docOverlayWidth(windowWidth)
-        : own.width
+      ? own.width
       : narrow
         ? RIGHT_PANEL_WIDTH_DEFAULT
         : paneTotal > 0
           ? clampRightPanelWidth(props.width ?? RIGHT_PANEL_WIDTH_DEFAULT, paneTotal)
           : (props.width ?? RIGHT_PANEL_WIDTH_DEFAULT);
   const renderedWidth = width;
+  const tight = own !== undefined && !own.overlay && own.tight === true;
+  const onTight = props.onTight;
+  useEffect(() => {
+    onTight?.(tight);
+  }, [tight, onTight]);
   const onOverlay = props.onOverlay;
   useEffect(() => {
     onOverlay?.(overlay);

@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { docOverlayWidth, docPanelLayout, DOC_INPUT_MIN, DOC_CHAT_HARD_MIN, DOC_CHAT_MIN, DOC_PANEL_FLOOR } from "./doc-panel-width.ts";
+import { docOverlayWidth, docPanelLayout, DOC_INPUT_MIN, DOC_PANEL_SQUEEZE, DOC_CHAT_HARD_MIN, DOC_CHAT_MIN, DOC_PANEL_FLOOR } from "./doc-panel-width.ts";
 
 describe("docPanelLayout —— 聊天列留底线、放不下转覆盖层", () => {
   it("宽窗口：默认 0.58 × pane，不超过 2/3", () => {
@@ -18,9 +18,15 @@ describe("docPanelLayout —— 聊天列留底线、放不下转覆盖层", () 
     }
   });
 
-  it("面板先缩到下限 420，聊天列硬底线都保不住才走覆盖层", () => {
+  it("面板先缩到下限 420，再挤窄到 300（聊天列守硬底线 410），再放不下才走覆盖层", () => {
     assert.deepEqual(docPanelLayout(830, null, 1160), { overlay: false, width: DOC_PANEL_FLOOR });
-    assert.equal(docPanelLayout(829, null, 1159).overlay, true);
+    assert.deepEqual(docPanelLayout(760, null, 1090), { overlay: false, width: 350, tight: true });
+    assert.deepEqual(docPanelLayout(710, null, 800), { overlay: false, width: DOC_PANEL_SQUEEZE, tight: true });
+    assert.equal(docPanelLayout(709, null, 800).overlay, true);
+    for (const pane of [710, 730, 760, 829]) {
+      const l = docPanelLayout(pane, null, pane + 90);
+      assert.ok(pane - l.width >= DOC_CHAT_HARD_MIN, `pane ${pane} 聊天列 ${pane - l.width}`);
+    }
   });
 
   it("覆盖层宽 = min(640, 窗口 − 输入框最小可用宽 410 − 边距 56)，输入框必须露出来", () => {
@@ -29,7 +35,7 @@ describe("docPanelLayout —— 聊天列留底线、放不下转覆盖层", () 
     assert.equal(docOverlayWidth(900), 434);
     assert.equal(docOverlayWidth(800), 334);
     assert.equal(docOverlayWidth(600), 300, "再窄也不低于下限");
-    assert.equal(docPanelLayout(700, null, 800).width, 334);
+    assert.equal(docPanelLayout(650, null, 740).width, docOverlayWidth(740));
     for (const w of [800, 900, 1000]) assert.ok(w - docOverlayWidth(w) >= DOC_INPUT_MIN, `窗口 ${w} 左边露出 ${w - docOverlayWidth(w)}`);
   });
 
