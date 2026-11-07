@@ -2,7 +2,7 @@ import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { readCommandCard, readOpenPanel } from "../shared/builtin-command.ts";
 import { createDocTools, outlineOf } from "./doc-tools.ts";
@@ -132,6 +132,41 @@ describe("doc_insert_image", () => {
     await assert.rejects(run("doc_insert_image", { path: "周报/w.md", image_path: "w.md" }), /Not an image/);
     await assert.rejects(run("doc_insert_image", { path: "周报/w.md", image_path: "nope.png" }), /not found/i);
     assert.equal(await readFile(join(dir, "周报", "w.md"), "utf8"), before);
+  });
+
+  it("图片来源闸：../ 越界、工作区外绝对路径、symlink 指到外面都拒，且不拷进 attachments", async () => {
+    await writeFile(join(outside, "secret.png"), PNG);
+    await writeFile(join(dir, "周报", "g.md"), "# g\n");
+    const before = await readFile(join(dir, "周报", "g.md"), "utf8");
+    // 相对路径按工作区根解析，outside 是 dir 在 tmpdir 下的兄弟
+    const rel = `../${basename(outside)}/secret.png`;
+    await assert.rejects(run("doc_insert_image", { path: "周报/g.md", image_path: rel }), /outside the workspace/);
+    await assert.rejects(run("doc_insert_image", { path: "周报/g.md", image_path: join(outside, "secret.png") }), /outside the workspace/);
+    await symlink(join(outside, "secret.png"), join(dir, "sneaky.png"));
+    await assert.rejects(run("doc_insert_image", { path: "周报/g.md", image_path: "sneaky.png" }), /outside the workspace/);
+    assert.equal(await readFile(join(dir, "周报", "g.md"), "utf8"), before);
+    await assert.rejects(readFile(join(dir, "attachments", "secret.png")));
+  });
+
+  it("图片来源闸：附加目录与额外读根（工作台 / 附件副本）里的图照常放行", async () => {
+    const attachedDir = await realpath(await mkdtemp(join(tmpdir(), "doc-tools-att-")));
+    const extra = await realpath(await mkdtemp(join(tmpdir(), "doc-tools-extra-")));
+    try {
+      await writeFile(join(attachedDir, "a.png"), PNG);
+      await writeFile(join(extra, "wb.png"), PNG);
+      await writeFile(join(dir, "周报", "h.md"), "# h\n");
+      const broker = new RequestBroker(() => undefined);
+      const wide = Object.fromEntries(
+        createDocTools(broker, "s2", { cwd: dir, writeRoots: [dir, attachedDir], imageReadRoots: [extra], workspaceId: "w1", mode: () => "skip" }).map((tool) => [tool.name, tool]),
+      );
+      const call = (image: string) => (wide["doc_insert_image"] as ToolDefinition).execute("c", { path: "周报/h.md", image_path: image } as never, undefined as never, undefined as never, undefined as never);
+      assert.match(JSON.stringify(await call(join(attachedDir, "a.png"))), /Inserted/);
+      assert.match(JSON.stringify(await call(join(extra, "wb.png"))), /Inserted/);
+      await assert.rejects(run("doc_insert_image", { path: "周报/h.md", image_path: join(extra, "wb.png") }), /outside the workspace/);
+    } finally {
+      await rm(attachedDir, { recursive: true, force: true });
+      await rm(extra, { recursive: true, force: true });
+    }
   });
 
   it("默认插在文末；Obsidian 库写 ![[名]]", async () => {

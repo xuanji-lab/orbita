@@ -1404,6 +1404,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
       cwd: command.cwd,
       writeRoots: [command.cwd, ...(command.directories?.attached ?? [])],
       workspaceId: command.workspaceId,
+      imageReadRoots: imageReadRoots(command),
       // 用户附的图：预算账里记着 hash → 附件副本路径（本轮的在 pendingRefs，旧轮的在 refs）；最近的在前
       attachedImages: () => [...new Set([...budget.refs.values(), ...budget.pendingRefs.values()])].reverse(),
     }),
@@ -1413,6 +1414,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
       cwd: command.cwd,
       writeRoots: [command.cwd, ...(command.directories?.attached ?? [])],
       workspaceId: command.workspaceId,
+      imageReadRoots: imageReadRoots(command),
       mode: currentMode,
     }),
     // agent 的终端工具组（PR2）：开可见终端、写命令、读输出。
@@ -1976,6 +1978,22 @@ function flushBackfill(session: AgentSession, texts: readonly string[] | undefin
       console.error("[intent-recall] backfill 补记失败", cause);
     }
   }
+}
+
+/**
+ * 拷图进文档 / 演示文稿时，工作区与附加目录之外额外放行的读根：会话工作台、本会话的附件副本目录、
+ * 浏览器下载目录——系统提示词里都明说「可以去读」。其余位置（含 `../` 与工作区外绝对路径）一律不放。
+ */
+function imageReadRoots(command: {
+  attachmentsDir: string;
+  directories?: { workbench: string; browserDownloads?: string };
+}): string[] {
+  const roots = [command.attachmentsDir];
+  if (command.directories !== undefined) {
+    roots.push(command.directories.workbench);
+    if (command.directories.browserDownloads !== undefined) roots.push(command.directories.browserDownloads);
+  }
+  return roots.filter((root) => root !== "");
 }
 
 /**

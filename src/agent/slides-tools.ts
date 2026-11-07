@@ -21,6 +21,7 @@ import { DEFAULT_THEME_ID, presetTheme, THEME_BLURBS, THEME_IDS, THEME_PRESETS }
 import { writeTextAtomic } from "../main/atomic-write.ts";
 import { ASSET_MAX_BYTES, saveAssetBytes } from "../main/slides/assets.ts";
 import { isInside, pathUnderRoots, realpathInside } from "../main/path-boundary.ts";
+import { resolveImageSource } from "./image-source.ts";
 import type { RequestBroker } from "./request-broker.ts";
 
 /**
@@ -84,6 +85,8 @@ export interface SlidesToolsOptions {
    * 所以 `slides_insert_image` 认 `attached` / `attached:2`（第 N 张最近附的图）。缺席 = 不支持
    */
   attachedImages?: () => readonly string[];
+  /** 读图额外允许的根（会话工作台、本会话附件副本、浏览器下载目录）；工作区与附加目录（writeRoots）恒允许 */
+  imageReadRoots?: readonly string[];
 }
 
 function fail(message: string): never {
@@ -373,10 +376,20 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
     },
   };
 
-  /** `attached` / `attached:N` → 第 N 张最近附的图；其余按路径（相对工作区或绝对） */
-  const resolveImagePath = (raw: string): string => {
+  /**
+   * `attached` / `attached:N` → 第 N 张最近附的图（附件副本，走附件清单，不过边界闸）；
+   * 其余按路径（相对工作区或绝对），realpath 后必须落在工作区 / 附加目录 / 额外读根内
+   */
+  const resolveImagePath = async (raw: string): Promise<string> => {
     const match = /^attached(?::(\d+))?$/i.exec(raw);
-    if (match === null) return isAbsolute(raw) ? raw : join(cwd, raw);
+    if (match === null) {
+      const source = await resolveImageSource(raw, cwd, [...roots, ...(options.imageReadRoots ?? [])]);
+      if (source.kind === "missing") return fail(`Image not found: ${raw}`);
+      if (source.kind === "outside") {
+        return fail(`Image is outside the workspace: ${raw}. Pass a file inside the workspace (or an attached directory), or copy it there first`);
+      }
+      return source.path;
+    }
     const list = options.attachedImages?.() ?? [];
     const n = match[1] === undefined ? 1 : Number(match[1]);
     const found = list[n - 1];
@@ -392,7 +405,7 @@ export function createSlidesTools(broker: RequestBroker, sessionId: string, opti
 
   /** 版式的图片槽位：读图 → 校验 → 复制进 .assets，返回相对路径与像素尺寸（slides_insert_image 与 slides_write 共用） */
   const stageLayoutImage = async (deckPath: string, raw: string): Promise<LayoutImage> => {
-    const imagePath = resolveImagePath(raw);
+    const imagePath = await resolveImagePath(raw);
     let bytes: Buffer;
     try {
       const info = await stat(imagePath);

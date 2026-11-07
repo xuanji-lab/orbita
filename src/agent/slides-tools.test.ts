@@ -1,6 +1,6 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -130,6 +130,55 @@ describe("slides tools", () => {
     const out = await run("slides_insert_image", { path, slide: 4, image_path: "attached" });
     assert.match(out.text, /Inserted .*hawker\.png/);
     await assert.rejects(() => run("slides_insert_image", { path, slide: 4, image_path: "attached:3" }), /Only 1 attached image/);
+  });
+
+  it("图片来源闸：../ 越界、工作区外绝对路径、symlink 指到外面都拒（insert_image 与 write 的图片槽位同一道闸）", async () => {
+    const path = "花园城市新加坡.slides.json";
+    await writeFile(join(outside, "secret.png"), PNG);
+    // ../ 越界：outside 与 dir 同在 tmpdir 下，是 dir 的兄弟
+    const parentRelative = `../${join(outside, "secret.png").split("/").slice(-2).join("/")}`;
+    await assert.rejects(() => run("slides_insert_image", { path, slide: 3, image_path: parentRelative }), /outside the workspace/);
+    await assert.rejects(() => run("slides_insert_image", { path, slide: 3, image_path: join(outside, "secret.png") }), /outside the workspace/);
+    await symlink(join(outside, "secret.png"), join(dir, "link.png"));
+    await assert.rejects(() => run("slides_insert_image", { path, slide: 3, image_path: "link.png" }), /outside the workspace/);
+    await assert.rejects(
+      () => run("slides_write", { path, slides: [{ layout: "image-right", slots: { title: "x", bullets: ["a"], image: join(outside, "secret.png") } }] }),
+      /outside the workspace/,
+    );
+    // 越界的图没有被拷进 assets
+    assert.equal((await readdir(join(dir, "花园城市新加坡.assets"))).includes("secret.png"), false);
+    // 根外且不存在：仍报找不到（不泄露「外面有没有这个文件」之外的信息，也不当成越界）
+    await assert.rejects(() => run("slides_insert_image", { path, slide: 3, image_path: join(outside, "none.png") }), /not found/);
+  });
+
+  it("图片来源闸：工作区、附加目录、额外读根（工作台 / 附件副本）里的图照常放行", async () => {
+    const path = "花园城市新加坡.slides.json";
+    const attachedDir = await mkdtemp(join(tmpdir(), "orbita-slides-tools-att-"));
+    const extra = await mkdtemp(join(tmpdir(), "orbita-slides-tools-extra-"));
+    try {
+      await writeFile(join(attachedDir, "in-attached.png"), PNG);
+      await mkdir(join(dir, "素材"), { recursive: true });
+      await writeFile(join(dir, "素材", "in-ws.png"), PNG);
+      await writeFile(join(extra, "wb.png"), PNG);
+      const broker = new RequestBroker(() => undefined);
+      const wide = Object.fromEntries(
+        createSlidesTools(broker, "s2", { cwd: dir, writeRoots: [dir, attachedDir], imageReadRoots: [extra], workspaceId: "w1" }).map((tool) => [tool.name, tool]),
+      );
+      const call = async (image: string): Promise<string> => {
+        const result = await (wide["slides_insert_image"] as ToolDefinition).execute("t", { path, slide: 3, image_path: image } as never, undefined, undefined, undefined as never);
+        const first = result.content[0];
+        return first !== undefined && first.type === "text" ? first.text : "";
+      };
+      assert.match(await call("素材/in-ws.png"), /Inserted/);
+      assert.match(await call(join(dir, "素材", "in-ws.png")), /Inserted/);
+      assert.match(await call(join(attachedDir, "in-attached.png")), /Inserted/);
+      assert.match(await call(join(extra, "wb.png")), /Inserted/);
+      // 额外读根不是写根：窄实例（没给 extra）拒绝同一张图
+      await assert.rejects(() => run("slides_insert_image", { path, slide: 3, image_path: join(extra, "wb.png") }), /outside the workspace/);
+    } finally {
+      await rm(attachedDir, { recursive: true, force: true });
+      await rm(extra, { recursive: true, force: true });
+    }
   });
 
   it("write 引用不存在的图 → 体检里提醒", async () => {

@@ -9,6 +9,7 @@ import { isDocumentName, isImageName } from "../shared/ofm/syntax.ts";
 import { saveAttachment } from "../main/doc-panel/ofm-files.ts";
 import { writeTextAtomic } from "../main/atomic-write.ts";
 import { isInside, pathUnderRoots, realpathInside } from "../main/path-boundary.ts";
+import { resolveImageSource } from "./image-source.ts";
 import type { RequestBroker } from "./request-broker.ts";
 
 /**
@@ -31,6 +32,8 @@ export interface DocToolsOptions {
   writeRoots: readonly string[];
   /** 会话所属工作区（主进程据此现算可写根，校验导出路径） */
   workspaceId: string | null;
+  /** 读图额外允许的根（会话工作台、本会话附件副本、浏览器下载目录）；工作区与附加目录（writeRoots）恒允许 */
+  imageReadRoots?: readonly string[];
   /** 当前权限档（plan 档不许新建文件） */
   mode: () => string;
 }
@@ -186,8 +189,14 @@ export function createDocTools(broker: RequestBroker, sessionId: string, options
       const args = asRecord(params);
       const doc = await resolveDoc(args["path"], "existing");
       const imageRaw = text(args["image_path"]) ?? fail('"image_path" is required');
-      const image = resolve(isAbsolute(imageRaw) ? imageRaw : join(cwd, imageRaw));
-      if (!isImageName(image)) fail(`Not an image file: ${imageRaw}`);
+      if (!isImageName(imageRaw)) fail(`Not an image file: ${imageRaw}`);
+      // 来源闸：realpath 后必须在工作区 / 附加目录 / 额外读根内（../ 与根外绝对路径、symlink 跳板都不放）
+      const source = await resolveImageSource(imageRaw, cwd, [...roots, ...(options.imageReadRoots ?? [])]);
+      if (source.kind === "missing") return fail(`Image not found: ${imageRaw}`);
+      if (source.kind === "outside") {
+        return fail(`Image is outside the workspace: ${imageRaw}. Pass a file inside the workspace (or an attached directory), or copy it there first`);
+      }
+      const image = source.path;
       let imageInfo;
       try {
         imageInfo = await stat(image);
