@@ -306,9 +306,9 @@ their own (see *The top toolbar is one regulated zone* under Implementation rule
 are unbounded — no fill, no border, no dividers — so the pane's edges are the only structure. The
 sidebar lists two nodes: **Workspaces** (each holding tasks, with its own new-task control — a workspace's tasks indent so
 their titles start on the workspace name's line, their marker slot under its folder icon, `.tree-children`) and
-**Tasks** for anything belonging to no workspace. One shared measure — `--content-max-width: 1000px` — governs the
-transcript, the composer and the home record, which is why the input box keeps the same width from the
-home screen to the chat page. **Index gutter** (`--gutter`, 88px, 2026-11-07): the content column carries a
+**Tasks** for anything belonging to no workspace. One shared measure — `--content-max-width: 680px` (≈ 47 Chinese characters a line; it was 1000px = 71 on a 1440 window; the basis is line length, not pixels — 30–45 is comfortable, and Claude / Linear / Things all set their text column at 680–770px) — governs the
+transcript, the composer, the home record and the page measure of the plugins / automation / migration pages, which is why the input box keeps the same width from the
+home screen to the chat page. (2026-11-07; the 2026-10-10 ruling "agent replies fill the whole column" still holds — it is the column that is narrower.) **Index gutter** (`--gutter`, 88px, 2026-11-07): the content column carries a
 narrow gutter on its left for an index — group names on home (conversation timestamps and settings section
 names follow); the meridian runs at `gutter − 20px`. The column's own measure is unchanged. Density is balanced: 32/36/48px row heights, 24–36px controls — **a control's height is a step, never
 what its content happens to add up to**: chips are `--control-height-xs` (24), not 12px text plus
@@ -772,7 +772,7 @@ classes listed under *Implementation rules*.
 ### 首页交互（2026-08-22 验收定案）
 
 - **新会话一律先进首页**：全局/工作区内/图标条/新建菜单的「会话、单 agent」入口都先呈现三卡首页（不立即创建 agent），**首条消息提交才 createAgent + prompt**；编排入口除外（保持原子创建）。
-- **输入框宽度连续性**：首页中卡宽度 = 聊天页内容区宽度（`settings.contentMaxWidth`，默认 1000px）——首页与聊天页的差别只有 slogan/会话卡消失 + 输入框滑落。
+- **输入框宽度连续性**：首页中卡宽度 = 聊天页内容区宽度（`--content-max-width`，2026-11-07 起 680px；原默认 1000px）——首页与聊天页的差别只有 slogan/会话卡消失 + 输入框滑落。
 - **首发过渡动画**（R5-05 白名单项）：首条消息发出时 slogan 与会话卡向上淡出、composer 卡向下滑向窗口底部（~240ms），随后聊天页 composer 落位。
 - **slogan 规格**：标题字体（见 §2.1 字体栈）+ `--font-size-slogan`（36px；打字稿主题 30px）品牌级字号。
 - **模式选中色**（修正 R4-03 的"绿底"）：明主题蓝、暗主题黄——`--color-mode-active-bg` / `--color-mode-active-fg`，用于模式按钮与图标条当前项。
