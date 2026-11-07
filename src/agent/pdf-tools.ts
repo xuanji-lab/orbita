@@ -144,7 +144,7 @@ const CAPTION_PATTERNS: readonly { normalize: (id: string) => string; pattern: R
 ];
 
 /** 图表索引最多列几条。论文级文档图表几十个，全列会刷屏——截断即够指路 */
-const FIGURE_INDEX_MAX = 15;
+export const FIGURE_INDEX_MAX = 15;
 
 /**
  * 全文档扫出图表索引（图号 → 首次出现页）。头注把它列给模型：用户问「看一下

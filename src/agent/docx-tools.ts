@@ -40,10 +40,10 @@ import { imageMimeOf, shrinkIfNeeded } from "./image-tools.ts";
  */
 
 /** 单次最多输出多少字符的正文。上下文护栏：read_pdf 20 页密排文本同量级 */
-const DOCX_MAX_CHARS_PER_CALL = 30000;
+export const DOCX_MAX_CHARS_PER_CALL = 30000;
 
 /** images=true 时单次最多带几张内嵌图（show_image 的画廊上限同款） */
-const DOCX_IMAGE_MAX_COUNT = 6;
+export const DOCX_IMAGE_MAX_COUNT = 6;
 
 /** 内嵌图长边上限（转录不存原图——show_image 的 SHOW_IMAGE_MAX_EDGE 同款纪律） */
 const DOCX_IMAGE_MAX_EDGE = 2000;
@@ -52,7 +52,7 @@ const DOCX_IMAGE_MAX_EDGE = 2000;
 const DOCX_IMAGE_MAX_BYTES = 30 * 1024 * 1024;
 
 /** 头注大纲最多列几个 heading（read_pdf 图表索引 15 条同款护栏） */
-const DOCX_OUTLINE_MAX = 15;
+export const DOCX_OUTLINE_MAX = 15;
 
 // ─── HTML → markdown 薄转换 ────────────────────────────────────────────────
 // mammoth 的输出是单行拼接的规整 HTML（它自己生成的，属性无裸 >），标签
