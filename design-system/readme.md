@@ -148,11 +148,13 @@ the English copy; the Chinese copy follows the same voice.
 ## Visual foundations
 
 **Colour.** Themes: **white + blue** (light), the two dark tiers **黛 Slate + yellow** and
-**玄 Onyx + yellow**, and the two paper faces (below). A warm off-white shell (`#f3f4f1`) with
-pure-white panels, three text greys, three hairline greys. Every colour has exactly one job: the
-accent is blue `#1d4ed8` on light and yellow `#d6c245` on dark, and it means the single primary
-action (the send button, "New task", "Start Agent"), the selected mode, and a checked checkbox
-(native `accent-color`, settled 2026-09-24 on the migration page, which lists many) — nothing else; amber
+**玄 Onyx + yellow**, and the two paper faces (below). A cool **moon-white shell** (`#e7ebef`)
+with a near-white **paper well** (`#fbfcfd`), three text inks, three hairline greys — the two grounds are
+opaque colours one step apart, not glass over the desktop (2026-11-07, direction N). Every colour has exactly
+one job: the accent is blue `#1d4ed8` on light and yellow `#d6c245` on dark, and it means the single primary
+action (the send button, "New task", "Start Agent") and a checked checkbox
+(native `accent-color`, settled 2026-09-24 on the migration page, which lists many) — nothing else; **selection
+is neutral** (below), the selected mode no longer reads blue or yellow; amber
 `#b7791f` means running; info blue `#2563eb` marks the thinking glyph; red `#b42318` is failure;
 green `#1a7f37` (dark `#56d364`) is success — git additions, passed validation, editor badges.
 **A filled status surface carries its own foreground token** (`--color-danger-fg`, `--color-info-fg`,
@@ -161,18 +163,24 @@ on the theme ground, and as a fill they leave white text at 2.5:1. Filled danger
 `--color-danger-solid`, which is darker.
 Status prefers icons and words over colour — a spinner, a check, a lock glyph. List rows (sidebar
 sessions, settings tabs, menu items — one recipe, `.option-row`) hover with the neutral translucent
-fill; the selected row takes `--color-bg-active`, the same soft wash as the selected mode (light
-`#e7eefd`; the dark tiers share a `.08` yellow wash), plus semibold weight — chosen 2026-08-25 over a
-neutral ink fill, trade-off recorded beside `--option-active-bg` in `src/renderer/src/styles.css`. Max two
-background colours per screen.
+fill; the selected row takes `--option-active-bg` and **does not change weight** (a bolder selected row widens
+its text and makes the list jitter). Selection is a **neutral ink wash** (ink 7%; white 7% on the dark tiers)
+everywhere — never the accent hue: 2026-08-25 chose the accent wash (option A) and 2026-11-07 reversed it
+(a sidebar column showed the accent three times: New task, the mode tab and the selected row, which is the
+"blue everywhere" look this file forbids). **On the shell** (sidebar, right rail, toolbar) the selected row and
+the pressed key instead take the well's own paper colour — "laid on the table", the same material as the page
+that is open beside it; inside the well and in menus, which are paper already, the neutral wash stays
+(`:root … :is(.sidebar, .right-rail, .toolbar)` in `styles.css`). Max two background colours per screen.
 
 **Muted surface** (`--color-bg-muted`): the one neutral fill for anything that sits as a block on a
 panel — expandable detail cards (release notes, migration lists), chips and badges, a control's
-resting fill, image placeholders. On light it is a **cool grey `#eef0f2`, not a warm off-white**
-(settled 2026-10-18): the old `#f8f8f5` was 1.06:1 against white and vanished on the warm glass, so
-cards and chips read as bare text; the cool grey matches the text greys and the blue accent. It is
-never the selection wash — `--color-bg-active` means *selected*, and a release-notes card or a badge
-in that colour reads as chosen. The paper faces keep their own warm `#f4f4ef` (paper is warm on
+resting fill, image placeholders. On light it is a **cool grey `#eef1f4`, not a warm off-white**
+(settled 2026-10-18 as `#eef0f2`, one step cooler since 2026-11-07): the old `#f8f8f5` was 1.06:1 against
+white and vanished on the warm glass, so cards and chips read as bare text; the cool grey matches the text
+greys and the blue accent. The user message, inline `code` and code blocks sit on it (inline `code` no longer
+borrows the link colour, 2026-11-07: the link blue was one of five near-identical blues). It is
+never the selection wash — `--color-bg-active` means *pressed*, and a release-notes card or a badge
+in that colour reads as pressed. The paper faces keep their own warm `#f4f4ef` (paper is warm on
 purpose); the dark tiers are unaffected.
 
 **Category colours** (`--color-filetype-doc / -slides / -sheet`, added 2026-10): a shared
@@ -204,19 +212,24 @@ the well, cards and the composer float back up; hairlines are white at low trans
 paint solid** (`.layer` / `.pane` overrides in `src/renderer/src/styles.css`; glass is reserved for
 floating layers, whose `--glass-bg` is the tier's card colour). Both wells sit at the same depth;
 the tiers differ in the shell, and **each shell must clear its well by a step the eye can see**
-(黛 ΔL\* 5.5, 玄 10.3) — a shell a hair above the well reads as one murk, which is what retired the
-earlier 石墨 / Ink pairing (ΔL\* 5.0).
+(黛 ΔL\* 5.5, 玄 ≈ 5 — since 2026-11-07 玄 is a blue-black night sky rather than ZCode's pure grey, whose 10.3
+step made the shell a grey slab; the yellow accent is the star) — a shell a hair above the well reads as one
+murk, which is what retired the earlier 石墨 / Ink pairing (ΔL\* 5.0).
 
 | Tier | id | Shell | Well | Card | Ink (primary / secondary / tertiary) |
 | --- | --- | --- | --- | --- | --- |
 | **黛 Slate** (DeepSeek Harness) | `graphite` | `#202021` (lifted from DeepSeek's own ΔL\* 3.0 to 5.5) | `#151517` | `#2c2c2e` | `#f9fafb / #cfd3d6 / #adb2b8` |
-| **玄 Onyx** (ZCode zai-dark) | `black` | `#2b2b2b` (ΔL\* 10.3) | `#161616` | `#262626` | `#e5e5e5 / #b8b8b8 / #808080` |
+| **玄 Onyx** (night sky, 2026-11-07; was ZCode zai-dark `#2b2b2b / #161616 / #262626`) | `black` | `#1b1e23` (ΔL\* ≈ 5) | `#121418` | `#1f232a` | `#e4e7eb / #b4bac3 / #8d95a0` |
 
 Inks are pinned solid, never derived by alpha (ZCode's 30%-white tertiary fails the 4.5 floor on the
 well), and the secondary step must clear 7:1 on the **lighter shell**, where the rail's section
-labels and empty-state hints sit — `dark-contrast.test.ts` guards both grounds. **玄 is the dark
+labels and empty-state hints sit. **The tertiary ink clears 4.5:1 on every ground it can land on — well, shell,
+muted, chat card — in all three tiers, light included** (2026-11-07; before it was 3.20 on the light well, 2.95
+on the light shell, 3.83 on the 玄 card, and it carries "waiting for you", "edited 1 file" and every timestamp):
+`dark-contrast.test.ts` guards it. **玄 is the dark
 landing of `system`**; both are manual choices too, both keep the yellow accent (`#d6c245`) on
-`--color-accent-fg`, and selection washes at `.08` — carried by weight and ink, not fill. Tier ids
+`--color-accent-fg`, and selection is a white `.07` wash (the accent yellow `.08` it replaced composed to an
+olive-brown `#39372d` on the shell). Tier ids
 stay `graphite` / `black` (the settings / IPC contract); the display names live in the message
 catalogues. Earlier dark pairings and their bounces live in those days' commits.
 
@@ -279,21 +292,23 @@ what its content happens to add up to**: chips are `--control-height-xs` (24), n
 padding (that came to 22.5–23px). Never IDE-crowded.
 
 **Backgrounds.** No imagery, no illustration, no pattern, no texture, no photography — the product
-ships none and this system adds none. The app paints no background of its own: on macOS the window
-is transparent and the user's desktop shows through the glass; elsewhere `body` falls back to
-`--color-bg-app`. Gradients appear only where they do a job — the nebula creature's radial glow and
+ships none and this system adds none. Since 2026-11-07 the app paints **opaque** grounds on every
+non-paper theme (`.layer` = the shell `--color-bg-app`, `.pane` = the well `--color-bg-panel`): the macOS
+window is still transparent, but nothing of the desktop shows through any more — the paper faces' `.92` paper
+is the only near-translucent ground left. Gradients appear only where they do a job — the nebula creature's radial glow and
 its legend bar (`--color-nebula` tiers), a mask that fades overflowing toolbar text, and a
-`linear-gradient` used as a flat overlay to stack hover over a card fill. Depth comes from
-translucency and hairlines, not from colour.
+`linear-gradient` used as a flat overlay to stack hover over a card fill. Depth comes from three written colours (shell → well → card
+face) and 1px hairlines — not from translucency stacking, not from shadow.
 
-**Transparency.** No blur (2026-09-23): translucency comes from a single `--glass-bg` alpha, stacked
-by nesting rather than blurred behind — a moving pixel anywhere on screen used to force the GPU to
-recomposite the whole window every frame, so the depth cue now comes from compositing alone. One
-alpha, applied at every level; nesting produces the ladder (`1-(1-a)ⁿ`), so light reads
-`.60 / .84 / .936` and the paper faces `.92`. The two dark tiers left the ladder on 2026-09-27:
-their glass is now **solid** (`--glass-alpha: 1`, `--glass-bg` = the tier's card colour) — dark
-grounds must block, not transmit, and Windows' opaque light window base turned translucent dark
-grounds to mud; solid is the endpoint of **dark blocks more than light**.
+**Transparency.** No blur (2026-09-23): a moving pixel anywhere on screen used to force the GPU to
+recomposite the whole window every frame. The two dark tiers left the translucency ladder on 2026-09-27
+(their glass became **solid**: dark grounds must block, not transmit), and **light followed on 2026-11-07**:
+`--glass-alpha: 1` on light too, `--glass-bg` a plain `#ffffff` — the shell and the well are opaque colours,
+so the same page reads the same on every desktop (the old `.60 / .84 / .936` ladder made the brightness drift
+with the wallpaper and with how deeply a surface happened to be nested). Layers are now three written colours
+— shell → well → card face — and the boundary between them is a hairline or the colour step itself.
+Only the two paper faces keep a translucent ladder (`.92`: paper, not glass). The class name `.glass-card`
+stays (renaming it touches the whole repo); it names "the one card recipe", not a material.
 Text is always a solid `--color-text-*`; never a translucent glyph, and never a dimmed tertiary on
 glass, which reads as neither theme's ink. Layer 3 is close enough to opaque that content on it
 reads as if on paper.
@@ -302,16 +317,19 @@ exception: they skip the glass ladder for a solid `--color-bg-panel` fill, a hai
 and `--shadow-popover` — without blur behind them, a translucent float would let whatever text sits
 under it bleed straight through and become unreadable.
 
-**Corners and borders.** 8px base radius: 4/6/8/10px steps, a literal 14px for the user bubble
-(`--radius-bubble`), and `999px` only for true circles (dots, spinners, the round send button).
-**Radius follows the surface**: every glass card takes `--radius-xl` (10px) whatever its layer —
+**Corners and borders.** 8px base radius: 4/6/8px steps (the paper faces still have a 10px `--radius-xl`),
+a literal 14px for the user bubble (`--radius-bubble`), and `999px` only for true circles (dots, spinners,
+the round send button). **One surface radius, 8** (2026-11-07): `--radius-xl` collapses onto the base on every
+non-paper theme — 10 and 8 on one screen were two almost-equal radii that only made alignment uncertain.
+**Radius follows the surface**: every card takes `--radius-xl` whatever its layer —
 the composer included (2026-08-25: a glass card is a glass card; one exception buys nothing).
 Borders are always 1px hairlines; glass cards border with
 `rgba(255,255,255,.55)`, though the app shell and content pane run borderless and rely on the
 translucency step alone. No thick rules, no coloured left-border accents.
 
-**Cards.** One recipe: the single `--glass-bg`, 1px light border, `--shadow-card`, 10px radius.
-The composer is the one card that floats and lifts to `--shadow-composer` (`.composer-card`). Chat-internal process cards (tool, thinking) have **no**
+**Cards.** One recipe: the single `--glass-bg`, 1px hairline `--glass-border`, `--shadow-card`, `--radius-xl`
+(8px; 10px on the paper themes). Shadows are `none` on every non-paper theme since 2026-11-07, so the composer is
+told apart by its hairline and its colour step, not by lift (`.composer-card` still names it). Chat-internal process cards (tool, thinking) have **no**
 border and **no** fill — they sit directly on the chat surface and are separated by 16px of space.
 External-capability events (skill use, MCP calls) render as **chip rows**: their identity (icon +
 kind word + name) sits in one pill chip — 1px hairline, fully rounded, no fill — the same language
@@ -383,10 +401,11 @@ the same action and glyph as the sidebar's carryover list.
 Solid panels (dialogs, drawers, menus, popovers) are white with a hairline and a heavier shadow.
 
 **Shadows.** Five steps, all cool-grey and soft, **scaled to how high a surface floats, not to its
-size**: `--shadow-border` (a 1px inner hairline), `--shadow-card` (resting cards — a 1px contact
-shadow plus a short 12px spread), `--shadow-composer` (the input box and the content pane),
-`--shadow-popover` (menus, card hover), `--shadow-modal` (dialogs). One 28px blur on a 225px session
-card read as a small thing carrying a big shadow (2026-10-29). Focus is a 2px accent ring at 16% opacity, plus a solid accent outline
+size**: `--shadow-border` (a 1px inner hairline), `--shadow-card` and `--shadow-composer` (**none**, since
+2026-11-07 — a resting card, the input box and the content pane are told apart by hairline and colour step;
+the paper faces keep their old lift), `--shadow-popover` (menus, card hover), `--shadow-modal` (dialogs).
+Only what really floats over other content — a menu, a dialog — casts a shadow. (2026-10-29: one 28px blur
+on a 225px session card read as a small thing carrying a big shadow; N removes the question.) Focus is a 2px accent ring at 16% opacity, plus a solid accent outline
 on `:focus-visible`.
 
 **Hover, press, disabled.** Hover lays a translucent grey over whatever is underneath
@@ -473,7 +492,9 @@ reads as misalignment, not hierarchy. Separate levels with **weight and colour f
 **The top toolbar is one regulated zone (顶部工具栏，方案 B v2, 2026-10-19).** The window's top is a
 single 52px toolbar (`.toolbar`, `--titlebar-row`) spanning the full width on the card, outside every
 content card — the whole strip is the drag region and **its direct children are capsules only**
-(`.toolbar-capsule`, the material-chip face: full radius · `--glass-bg` · `--shadow-border`); Windows'
+(`.toolbar-capsule`: full radius, **no fill and no ring on every non-paper theme since 2026-11-07** — just the text
+and line icons on the shell, as Claude's panel header does; the paper themes keep the material-chip face:
+`--glass-bg` · `--shadow-border`); Windows'
 own min / max / close group (`.win-ctl`) is the one declared exception. Every capsule shares the height
 `--titlebar-capsule` (32 = `--control-height-md`) and sits at `--titlebar-capsule-top` (9) so the capsule
 **centre is the traffic-light centre line, y = 25** (`trafficLightPosition` stays at `{x:18, y:19}`, user

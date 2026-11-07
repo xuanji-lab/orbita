@@ -14,9 +14,9 @@ import type { ThemePreference } from "../../shared/settings.ts";
 import { resolveTheme } from "../../shared/theme-resolve.ts";
 
 export const PAGE_BACKGROUNDS: Record<Exclude<ThemePreference, "system">, string> = {
-  light: "#f3f4f1",
+  light: "#e7ebef",
   graphite: "#202021",
-  black: "#2b2b2b",
+  black: "#1b1e23",
   copybook: "#e6e4dc",
   typescript: "#e6e4dc",
 };

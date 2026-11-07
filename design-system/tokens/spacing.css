@@ -65,3 +65,9 @@
   --message-gutter: clamp(32px, 12%, 120px); /* @kind spacing */
   --bubble-max-width: calc(100% - var(--message-gutter)); /* @kind spacing */
 }
+
+/* 方向 N（2026-11-07）：面圆角只有一档 8，控件 6，圆。--radius-xl（原 10）收回到基准 8——
+   10 与 8 两档面圆角在同屏并存，肉眼分不出谁是谁，只让对齐变得不确定。纸面两档保持 10。 */
+:root:not([data-theme="copybook"], [data-theme="typescript"]) {
+  --radius-xl: var(--radius);
+}

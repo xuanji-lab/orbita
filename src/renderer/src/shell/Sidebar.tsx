@@ -530,6 +530,7 @@ export function Sidebar(props: {
     <>
     <aside
       ref={asideRef}
+      className="sidebar"
       style={{
         width,
         flex: `0 0 ${width}px`,

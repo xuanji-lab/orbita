@@ -240,7 +240,7 @@ function createMainWindow(
       : // Windows/Linux：转帧式窗口——最小化/最大化/关闭由渲染层标题栏自绘
         // （标题栏上还有「复制 transcript」与「抽屉开关」，这是 right-drawer-X 的落位）。
         // resizable 的帧式窗口在 Windows 上保留系统缩放边，不受 frame:false 影响。
-        { frame: false, backgroundColor: "#f3f4f1" }),
+        { frame: false, backgroundColor: "#e7ebef" }),
     webPreferences: rendererPreferences(theme, language),
   });
   mainWindows.track(window);

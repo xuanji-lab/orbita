@@ -1152,13 +1152,53 @@ body {
  * 暗档里它 = 卡面色（glass.css），压在井上就是浮起的那一层。浅色与纸面档
  * 维持玻璃阶梯不变；macOS 暗档因此不再透出桌面。
  */
-:root:is([data-theme="graphite"], [data-theme="black"]) .layer {
+:root:not([data-theme="copybook"], [data-theme="typescript"]) .layer {
   background: var(--color-bg-app);
 }
 
-:root:is([data-theme="graphite"], [data-theme="black"]) .pane {
+:root:not([data-theme="copybook"], [data-theme="typescript"]) .pane {
   background: var(--color-bg-panel);
+}
+
+:root:is([data-theme="graphite"], [data-theme="black"]) .pane {
   border: 1px solid var(--color-border-subtle);
+}
+
+/*
+ * 方向 N（2026-11-07）：浅色也是「有颜色的壳 + 平的纸面井」，不再是半透明玻璃叠在桌面上——
+ * 上面两条把原先只给暗档的实色覆写扩到所有非纸面主题。纸面两档（小学作业 / 打字稿）仍是
+ * 0.92 的纸 + 浮起的阴影，不套 N。
+ *
+ * 选中 = 「摊在台面上」：壳上（侧栏、右图标条、顶栏）被选中的行与按下的键，用井的纸色，
+ * 和旁边打开的那一页是同一种材料；井里与菜单里（它们本身就是纸）仍是中性墨底——
+ * 否则「纸摊在纸上」什么都看不见。
+ */
+:root:not([data-theme="copybook"], [data-theme="typescript"]) :is(.sidebar, .right-rail, .toolbar) {
+  --option-active-bg: var(--color-bg-panel);
+  --color-mode-active-bg: var(--color-bg-panel);
+}
+
+/*
+ * 选中只换底，不换字重（方向 N，2026-11-07）：选中行字重 450 → 600，字变宽、整列文字抖一下
+ * （Linear / Things / Raycast 都不这么做）。纸面两档保持原样。分段控件的按下段仍是 600——它的段是
+ * 定宽的小框，靠底色加字重才分得出哪一段是当前。
+ */
+:root:not([data-theme="copybook"], [data-theme="typescript"]) {
+  .option-row[aria-pressed="true"],
+  .option-row[aria-selected="true"],
+  .option-row[data-active="true"],
+  .file-row[aria-selected="true"] {
+    font-weight: var(--weight-regular);
+  }
+}
+
+/*
+ * 容器一种语言：底色或描边，不混用（方向 N，2026-11-07）。代码块原先是 muted 底 + 1px 发丝线——
+ * 两种语言叠在同一个面上；N 只留底（暗档的底已抬到白 7%，比旧的 5% 多一档，靠底分得开）。
+ * 用 `--color-chat-muted-bg` 的块与行内代码同一份底。纸面两档保持原样（它们的底与纸几乎同色，靠线）。
+ */
+:root:not([data-theme="copybook"], [data-theme="typescript"]) .chat-md pre {
+  border: 0;
 }
 
 /*
@@ -2539,19 +2579,21 @@ html[data-pointer-drag] iframe {
    深色下 muted 底与地面只差几阶，块的边界靠线不靠色。 */
 .chat-md code {
   font-family: var(--font-family-business);
-  font-size: 0.9em;
+  font-size: var(--font-size-sm);
   background: var(--color-chat-muted-bg);
   padding: 1px 5px;
   border-radius: var(--radius-sm);
 }
 
 /*
- * 行内 code（正文里的文件名、路径、标识符——「机器内容」）用链接色，与正文墨色
- * 分层：Light 墨蓝 / 暗档亮蓝（2026-09-04 用户反馈：深色下与正文难分辨）。
- * 只上行内：块内是语法色的领地，无语法色的裸块继承正文色，不能整块变链接色。
+ * 行内 code（正文里的文件名、路径、标识符——「机器内容」）：正墨 + 冷灰底，等宽字
+ * 与底色两样就够分层（2026-11-07 方向 N：accent 之外还有 5 种近似蓝各管一件事，行内代码
+ * 借链接色是其中最大的一片；推翻 2026-09-04「用链接色」——那条要解决的是深色下与正文难
+ * 分辨，现在玄 / 黛的代码底是白 7%，比原先的 5% 多一档，靠底而不靠色）。
+ * 块内是语法色的领地，只上行内。
  */
 .chat-md :not(pre) > code {
-  color: var(--color-chat-link);
+  color: var(--color-text-primary);
 }
 
 .chat-md pre {
