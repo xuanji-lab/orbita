@@ -546,12 +546,22 @@
  * 来源下拉收成图标键（cap-sel-compact），左右固定区近似等宽（68 / 60） */
 .cap-review-head {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  /* 两侧 1fr 让页签组构造性居中；但标题比 1fr 宽时（「Context」+ 两个页签，2026-10-30
+     实测叠在页签底下）不能溢出去盖住页签——两侧下限取内容宽，放不下时页签组让位右移 */
+  grid-template-columns: minmax(max-content, 1fr) auto minmax(max-content, 1fr);
   align-items: center;
   gap: var(--space-1);
   width: 100%;
   min-width: 0;
   height: 100%;
+}
+/* 没有标题、页签打头的胶囊（审查面板）：页签组靠左、可收（溢出时横滚渐隐），右槽靠右 */
+.cap-review-head.tabs-as-title {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.cap-review-head.tabs-as-title > .cap-tabs {
+  justify-self: start;
+  min-width: 0;
 }
 .cap-review-head > .cap-slot-left {
   justify-self: start;
