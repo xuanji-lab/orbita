@@ -14,6 +14,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { parsePluginViewId, type PluginScope, type PluginView } from "@shared/plugin";
 import type { Workspace } from "@shared/workspace";
 import { api } from "../../api";
+import { fileManagerKind } from "../../file-manager.ts";
 import { useT } from "../../locale.ts";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { Icon } from "../../shell/Icon";
@@ -59,6 +60,7 @@ export function PluginDetail(props: {
 }) {
   const messages = useT();
   const t = messages.plugins;
+  const fileManager = fileManagerKind(api.platform);
   const { view } = props;
   const draft = props.draftPath !== undefined && props.draftPath !== null;
   const parsed = parsePluginViewId(view.id);
@@ -409,7 +411,7 @@ export function PluginDetail(props: {
       {view.origin === "user-skill" && !parts.skillMissing && (
         <button type="button" className="pl-btn" onClick={() => void run(() => api.skill.reveal(parsed?.key ?? null))}>
           <Icon name="folder-open" size={13} strokeWidth={1.8} />
-          {t.revealInFinder}
+          {t.revealInManager(fileManager)}
         </button>
       )}
       {parts.skillContent && (
@@ -480,7 +482,7 @@ export function PluginDetail(props: {
         : confirming === "skill-archive"
           ? { ask: t.skillArchiveAsk(view.name), hint: t.skillArchiveHint, action: t.skillArchiveAction, doing: t.skillArchiving, busy: "archive" as const, act: () => api.skill.archive(skillKey) }
           : confirming === "skill-trash"
-            ? { ask: t.skillTrashAsk(view.name), hint: linkedSkillPath !== null ? t.skillTrashHintLinked(linkedSkillPath) : t.skillTrashHint, action: t.skillTrashAction, doing: t.skillTrashing, busy: "trash" as const, act: () => api.skill.trash(skillKey) }
+            ? { ask: t.skillTrashAsk(view.name), hint: linkedSkillPath !== null ? t.skillTrashHintLinked(linkedSkillPath) : t.skillTrashHint(fileManager), action: t.skillTrashAction, doing: t.skillTrashing, busy: "trash" as const, act: () => api.skill.trash(skillKey) }
             : null;
 
   /**
