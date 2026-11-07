@@ -3,13 +3,14 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseNumstatLine, parseUntrackedLine } from "../../shared/review.ts";
+import { parseNumstatLine, parseUntrackedLine, REVIEW_DIFF_MAX_LINES } from "../../shared/review.ts";
 import {
   gitReviewDiff,
   gitReviewList,
   gitRunnerWithTimeout,
   GitTimeoutError,
   gitWorkdirChanges,
+  realDiffRunner,
   realGitRunner,
   type GitRunner,
 } from "./git-source.ts";
@@ -39,12 +40,12 @@ function fakeProbe(read: (path: string) => Buffer | null): UntrackedProbe {
 }
 
 /** 假 git：args → 预设输出。没预设到的 args 抛（测试写错立刻暴露）。 */
-function fakeGit(scripts: Record<string, { code?: number; stdout: string }>): GitRunner {
+function fakeGit(scripts: Record<string, { code?: number; stdout: string; truncated?: boolean }>): GitRunner {
   return async (args) => {
     const key = args.join(" ");
     const hit = scripts[key];
     if (hit === undefined) throw new Error(`fake git: unexpected args "${key}"`);
-    return { code: hit.code ?? 0, stdout: hit.stdout };
+    return { code: hit.code ?? 0, stdout: hit.stdout, ...(hit.truncated === true ? { truncated: true } : {}) };
   };
 }
 
@@ -591,5 +592,227 @@ describe("status 参数与 git 超时", () => {
       await assert.rejects(gitWorkdirChanges(timingOut(which), "/w", fakeProbe(() => null)), GitTimeoutError);
       await assert.rejects(gitReviewList(timingOut(which), "/w", "unstaged", fakeProbe(() => null)), GitTimeoutError);
     }
+  });
+});
+
+// ————————————————————————————————————————————————
+// code 非 0 / maxBuffer 截断：如实报错，不再静默把半份输出当完整结果
+// ————————————————————————————————————————————————
+describe("gitReviewList × code 非 0 / 截断", () => {
+  test("status 退出码非 0：error 回执说明原因，不当「没有改动」", async () => {
+    const runner = fakeGit({
+      "rev-parse --show-toplevel": { stdout: "/w\n" },
+      "-c status.relativePaths=true status --porcelain=v2 --untracked-files=all --no-renames": { code: 128, stdout: "" },
+    });
+    const list = await gitReviewList(runner, "/w", "unstaged");
+    assert.equal(list.kind, "error");
+    if (list.kind === "error") assert.match(list.message, /status exited with code 128/);
+  });
+
+  test("numstat 输出撞 maxBuffer 被截断：error 说明被截断，不给半份清单（G4 回归）", async () => {
+    const runner = fakeGit({
+      "rev-parse --show-toplevel": { stdout: "/w\n" },
+      "diff --cached --no-renames --relative --numstat": { code: 1, stdout: "1\t1\ta.ts\n", truncated: true },
+    });
+    const list = await gitReviewList(runner, "/w", "staged");
+    assert.equal(list.kind, "error");
+    if (list.kind === "error") assert.match(list.message, /cut short/);
+  });
+
+  test("branch 的 numstat 退出码非 0：同样如实报错", async () => {
+    const runner = fakeGit({
+      "rev-parse --show-toplevel": { stdout: "/w\n" },
+      "rev-parse --abbrev-ref @{upstream}": { stdout: "origin/main\n" },
+      "diff --no-renames --relative --numstat origin/main...HEAD": { code: 1, stdout: "" },
+    });
+    const list = await gitReviewList(runner, "/w", "branch");
+    assert.equal(list.kind, "error");
+  });
+
+  test("rev-parse 128 仍是 not-repo 空态（退出码在这里是语义，不是错误）", async () => {
+    const runner = fakeGit({ "rev-parse --show-toplevel": { code: 128, stdout: "" } });
+    assert.deepEqual(await gitReviewList(runner, "/w", "staged"), { kind: "empty", reason: "not-repo", cwd: "/w" });
+  });
+
+  test("真 runner：maxBuffer 溢出折成 truncated，不再伪装成普通 code 1（溢出发信号时 killed 也是 true）", { timeout: 20_000 }, async (t) => {
+    const probe = await realGitRunner(["--version"], tmpdir()).catch(() => null);
+    if (probe === null) return t.skip("环境没有 git");
+    // git 别名跑 seq：输出 ~588 KB，远超这里给的 4 KB maxBuffer
+    const outcome = await gitRunnerWithTimeout(60_000, 4096)(["-c", "alias.orbita-spam=!seq 1 100000", "orbita-spam"], tmpdir());
+    assert.equal(outcome.truncated, true);
+    assert.equal(outcome.code, 1);
+    assert.ok(outcome.stdout.length > 0 && outcome.stdout.length < 4096 * 2, "stdout 应只有被截断的前半份");
+  });
+});
+
+// ————————————————————————————————————————————————
+// 先判断再生成：超过上限（5000 行 / 1 MB）不读盘、不生成正文，回「改动太大」
+// ————————————————————————————————————————————————
+describe("gitReviewDiff × 上限", () => {
+  const bigLinesDiff = (): string => {
+    const head = "--- a/a.ts\n+++ b/a.ts\n@@ -0,0 +1 @@\n";
+    return head + Array.from({ length: REVIEW_DIFF_MAX_LINES + 1 }, (_, i) => `+line${i}`).join("\n") + "\n";
+  };
+
+  test("已跟踪：diff 增删行超上限 → tooLarge(lines)，不再往下走", async () => {
+    const runner = fakeGit({ "diff --no-renames --relative -- a.ts": { stdout: bigLinesDiff() } });
+    const result = await gitReviewDiff(runner, "/w", "unstaged", "a.ts");
+    assert.equal(result.tooLarge?.exceeded, "lines");
+    assert.equal(result.diff, null);
+    assert.equal(result.binary, false);
+    assert.equal(result.restored, false);
+    assert.equal(result.error, undefined);
+  });
+
+  test("已跟踪：diff 字节超上限（单条超长行）→ tooLarge(bytes)", async () => {
+    const diff = `--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-${"x".repeat(600 * 1024)}\n+${"y".repeat(600 * 1024)}\n`;
+    const runner = fakeGit({ "diff --no-renames --relative -- a.ts": { stdout: diff } });
+    const result = await gitReviewDiff(runner, "/w", "unstaged", "a.ts");
+    assert.equal(result.tooLarge?.exceeded, "bytes");
+  });
+
+  test("已跟踪：输出撞 maxBuffer 被截断 → tooLarge(bytes)，不把半份当正文（G3/G4 回归）", async () => {
+    const runner = fakeGit({ "diff --no-renames --relative -- a.ts": { code: 1, stdout: "--- a\n+++ b\n", truncated: true } });
+    const result = await gitReviewDiff(runner, "/w", "unstaged", "a.ts");
+    assert.equal(result.tooLarge?.exceeded, "bytes");
+    assert.equal(result.diff, null);
+  });
+
+  test("已跟踪：diff 退出码非 0 → error(failed)，不再伪装成 restored / 二进制", async () => {
+    const runner = fakeGit({ "diff --no-renames --relative -- a.ts": { code: 128, stdout: "" } });
+    const result = await gitReviewDiff(runner, "/w", "unstaged", "a.ts");
+    assert.equal(result.error?.reason, "failed");
+    assert.match(result.error?.message ?? "", /exited with code 128/);
+    assert.equal(result.diff, null);
+    assert.equal(result.restored, false);
+  });
+
+  test("未跟踪：读盘面报 tooLarge（文件超 1 MB，只嗅探过开头）→ tooLarge(bytes)，主进程不整读", async () => {
+    const runner = fakeGit({
+      "diff --no-renames --relative -- big.bin": { stdout: "" },
+      "ls-files -- big.bin": { stdout: "" },
+    });
+    const reads: string[] = [];
+    const readUntracked = async (path: string) => {
+      reads.push(path);
+      return { tooLarge: true } as const;
+    };
+    const result = await gitReviewDiff(runner, "/w", "unstaged", "big.bin", readUntracked);
+    assert.equal(result.tooLarge?.exceeded, "bytes");
+    assert.deepEqual(reads, ["/w/big.bin"]);
+  });
+
+  test("未跟踪：超限的文件是二进制（开头有 NUL）→ 如实报 binary，不报「太大」", async () => {
+    const runner = fakeGit({
+      "diff --no-renames --relative -- video.mp4": { stdout: "" },
+      "ls-files -- video.mp4": { stdout: "" },
+    });
+    const readUntracked = async () => ({ binary: true } as const);
+    const result = await gitReviewDiff(runner, "/w", "unstaged", "video.mp4", readUntracked);
+    assert.deepEqual([result.diff, result.binary, result.restored, result.tooLarge], [null, true, false, undefined]);
+  });
+
+  test("未跟踪：字节没超但行数超（极短行文件）→ tooLarge(lines)，不造 patch", async () => {
+    const runner = fakeGit({
+      "diff --no-renames --relative -- tiny-lines.txt": { stdout: "" },
+      "ls-files -- tiny-lines.txt": { stdout: "" },
+    });
+    const readUntracked = async () => Buffer.from("a\n".repeat(REVIEW_DIFF_MAX_LINES + 1), "utf8");
+    const result = await gitReviewDiff(runner, "/w", "unstaged", "tiny-lines.txt", readUntracked);
+    assert.equal(result.tooLarge?.exceeded, "lines");
+  });
+
+  test("未跟踪：行数在限内、字节在限内（含单条近 1 MB 的长行）→ 正常出全量新增正文", async () => {
+    const runner = fakeGit({
+      "diff --no-renames --relative -- one-line.txt": { stdout: "" },
+      "ls-files -- one-line.txt": { stdout: "" },
+    });
+    // 单条 ~900 KB 的长行：行数 1、字节 < 1 MB，必须打得开
+    const readUntracked = async () => Buffer.from("x".repeat(900 * 1024), "utf8");
+    const result = await gitReviewDiff(runner, "/w", "unstaged", "one-line.txt", readUntracked);
+    assert.equal(result.error, undefined);
+    assert.equal(result.tooLarge, undefined);
+    assert.ok(result.diff !== null && result.diff.length > 900 * 1024, `应保留完整正文：${result.diff?.length}`);
+  });
+
+  test("ls-files 退出码非 0：判不了跟踪状态就如实报错，不折成空正文误显 restored", async () => {
+    const runner = fakeGit({
+      "diff --no-renames --relative -- a.ts": { stdout: "" },
+      "ls-files -- a.ts": { code: 128, stdout: "" },
+    });
+    await assert.rejects(gitReviewDiff(runner, "/w", "unstaged", "a.ts"), /ls-files exited with code 128/);
+  });
+});
+
+// ————————————————————————————————————————————————
+// 上限 × 真 git + 真盘：未跟踪的超限文件不整读；已跟踪的大改动在 2 MB 缓冲就被拦下
+// ————————————————————————————————————————————————
+describe("gitReviewDiff × 上限（真 git + 真盘）", () => {
+  let repo: string | null = null;
+
+  before(async () => {
+    const hasGit = await realGitRunner(["--version"], tmpdir()).then(
+      () => true,
+      () => false,
+    );
+    if (!hasGit) return;
+    repo = await mkdtemp(join(tmpdir(), "orbita-git-too-large-"));
+    await realGitRunner(["init"], repo);
+    await realGitRunner(["config", "user.email", "test@orbita.local"], repo);
+    await realGitRunner(["config", "user.name", "orbita-test"], repo);
+    await realGitRunner(["config", "core.autocrlf", "false"], repo);
+    await writeFile(join(repo, "base.txt"), "one\ntwo\n", "utf8");
+    // 1 MB 的极短行文件（已提交、只改一行）：文件大 ≠ 改动大，必须照常展开
+    await writeFile(join(repo, "big-unchanged.txt"), `${"x".repeat(200)}\n`.repeat(5120), "utf8");
+    await realGitRunner(["add", "-A"], repo);
+    await realGitRunner(["commit", "-m", "init"], repo);
+  });
+
+  after(async () => {
+    if (repo !== null) await rm(repo, { recursive: true, force: true });
+  });
+
+  test("未跟踪的超限文本：tooLarge(bytes)，不把文件读进内存", async (t) => {
+    if (repo === null) return t.skip("环境没有 git");
+    const big = join(repo, "big-fresh.txt");
+    await writeFile(big, `${"x".repeat(120)}\n`.repeat(10_000), "utf8"); // ~1.2 MB
+    try {
+      const result = await gitReviewDiff(realDiffRunner, repo, "unstaged", "big-fresh.txt");
+      assert.equal(result.tooLarge?.exceeded, "bytes", JSON.stringify(result).slice(0, 200));
+      assert.equal(result.diff, null);
+    } finally {
+      await rm(big, { force: true });
+    }
+  });
+
+  test("未跟踪的超限二进制：如实报 binary（只嗅探了开头 8000 字节）", async (t) => {
+    if (repo === null) return t.skip("环境没有 git");
+    const big = join(repo, "big-fresh.bin");
+    await writeFile(big, Buffer.concat([Buffer.from([0, 1, 2, 0]), Buffer.alloc(2 * 1024 * 1024, 7)]));
+    try {
+      const result = await gitReviewDiff(realDiffRunner, repo, "unstaged", "big-fresh.bin");
+      assert.deepEqual([result.diff, result.binary, result.tooLarge], [null, true, undefined]);
+    } finally {
+      await rm(big, { force: true });
+    }
+  });
+
+  test("已跟踪的大改动：diff 输出撞 2 MB 缓冲被截断 → tooLarge(bytes)，不攒 32 MB 再回头", async (t) => {
+    if (repo === null) return t.skip("环境没有 git");
+    // 追加 3 MB 的改动行：正常文本（每行 120 字节），numstat 语义上是几万行
+    const lines = Array.from({ length: 30_000 }, (_, i) => `appended line ${i} ${"y".repeat(100)}`).join("\n");
+    await writeFile(join(repo, "base.txt"), `one\ntwo\n${lines}\n`, "utf8");
+    const result = await gitReviewDiff(realDiffRunner, repo, "unstaged", "base.txt");
+    assert.equal(result.tooLarge?.exceeded, "bytes", JSON.stringify(result).slice(0, 200));
+    assert.equal(result.diff, null);
+  });
+
+  test("1 MB 的已跟踪文件只改一行：照常出正文（判的是 diff 不是文件大小）", async (t) => {
+    if (repo === null) return t.skip("环境没有 git");
+    await writeFile(join(repo, "big-unchanged.txt"), `${"x".repeat(200)}\n`.repeat(5120) + "CHANGED\n", "utf8");
+    const result = await gitReviewDiff(realDiffRunner, repo, "unstaged", "big-unchanged.txt");
+    assert.equal(result.tooLarge, undefined, JSON.stringify(result).slice(0, 200));
+    assert.equal(result.error, undefined);
+    assert.ok(result.diff?.includes("+CHANGED"), `大文件的小改动应有正文：${result.diff?.slice(0, 120)}`);
   });
 });

@@ -3,6 +3,7 @@ import { PERMISSION_MODE_LABELS } from "../../shared/permission.ts";
 import type { DictationProvider } from "../../shared/voice.ts";
 import type { ArtifactOpenResult } from "../../shared/browser.ts";
 import type { ReviewDiffErrorReason, ReviewSource } from "../../shared/review.ts";
+import { REVIEW_DIFF_MAX_BYTES, REVIEW_DIFF_MAX_LINES } from "../../shared/review.ts";
 /**
  * 界面文案表——英文，**真源**。`messages-zh.ts` 的类型由这里推出（`Messages`），
  * 少一个键、参数签名不一致，typecheck 就不过。
@@ -166,6 +167,13 @@ export const en = {
     },
     /** 未跟踪文件超过行数上限（与专注左栏同口径）：不拿 +0 冒充没改动 */
     linesUnknown: "Count unknown",
+    /** 改动超过正文上限（REVIEW_DIFF_MAX_*）：不生成 diff 正文，给外部打开的出口 */
+    tooLarge: (exceeded: "bytes" | "lines"): string =>
+      exceeded === "lines"
+        ? `This change is over the ${REVIEW_DIFF_MAX_LINES.toLocaleString("en-US")}-line limit, so the panel doesn't build a diff for it.`
+        : `This change is over the ${REVIEW_DIFF_MAX_BYTES / (1024 * 1024)} MB limit, so the panel doesn't build a diff for it.`,
+    /** 「改动太大」的出口之一：在文件面板里打开这个文件 */
+    openInFilesPanel: "Open in the Files panel",
   },
 
   /** 思考档的显示名：英文沿用 shared 的词（含模型家族专属叫法，如 claude 的 Extra） */

@@ -23,6 +23,10 @@ import {
   parseStatusChangedLine,
   parseUntrackedLine,
   reviewDiffError,
+  reviewDiffOverflow,
+  reviewDiffTooLarge,
+  REVIEW_DIFF_MAX_BYTES,
+  REVIEW_DIFF_MAX_LINES,
   type ReviewDiff,
   type ReviewEntry,
   type ReviewList,
@@ -30,20 +34,33 @@ import {
 } from "../../shared/review.ts";
 import type { FocusChangeEntry, FocusChanges } from "../../shared/focus.ts";
 import { isInside, realpathInside } from "../path-boundary.ts";
-import { diskUntrackedProbe, untrackedLineStats, type UntrackedProbe } from "./untracked-lines.ts";
+import {
+  bufferLineCount,
+  diskUntrackedProbe,
+  sniffBinary,
+  untrackedLineStats,
+  type UntrackedProbe,
+} from "./untracked-lines.ts";
 
 const execFileAsync = promisify(execFile);
 
 export interface GitRunOutcome {
   code: number;
   stdout: string;
+  /**
+   * 输出撞到了 maxBuffer 被拦腰截断（execFile 的 ERR_CHILD_PROCESS_STDIO_MAXBUFFER）：
+   * stdout 只有前半份，code 被折成 1。以前这个情形被当普通非零码静默吞掉——
+   * 部分输出被当成完整结果用（列表少文件、diff 少 hunk）。调用方必须看它：
+   * 列表侧如实报错，diff 正文侧翻译成「改动太大」。
+   */
+  truncated?: boolean;
 }
 
 /**
  * 退出码非 0 不是异常（not-repo / no-upstream 都用它表达）；两种情况抛给上层：
  * ENOENT（没有 git，上层翻成 no-git 空态）与超时（GitTimeoutError，上层如实报错）。
  */
-export type GitRunner = (args: string[], cwd: string) => Promise<GitRunOutcome>;
+export type GitRunner = (args: readonly string[], cwd: string) => Promise<GitRunOutcome>;
 
 /**
  * 单条 git 命令的时限：60 秒。git 会卡住（网络盘挂了、fsmonitor 钩子不返回、杀毒软件锁着文件），
@@ -71,7 +88,7 @@ function subcommandOf(args: readonly string[]): string {
 }
 
 /** 带时限的真 git runner（execFile，不带 shell）。测试用短时限造卡死；应用里只用 realGitRunner */
-export function gitRunnerWithTimeout(timeoutMs: number): GitRunner {
+export function gitRunnerWithTimeout(timeoutMs: number, maxBufferBytes = 32 * 1024 * 1024): GitRunner {
   return async (args, cwd) => {
     try {
       // -c core.quotepath=false：非 ASCII 路径原样输出。git 默认把中文路径 C 转义成
@@ -79,7 +96,7 @@ export function gitRunnerWithTimeout(timeoutMs: number): GitRunner {
       // 误显「与基线一致」。加在 runner 一处，rev-parse / status / diff 全部生效。
       const { stdout } = await execFileAsync("git", ["-c", "core.quotepath=false", ...args], {
         cwd,
-        maxBuffer: 32 * 1024 * 1024,
+        maxBuffer: maxBufferBytes,
         encoding: "utf8",
         // 到点 execFile 发 SIGTERM（Windows 上直接结束进程），error.killed = true
         timeout: timeoutMs,
@@ -88,9 +105,18 @@ export function gitRunnerWithTimeout(timeoutMs: number): GitRunner {
     } catch (cause) {
       // 非零退出码不是异常（not-repo / no-upstream 靠它表达）：stdout 在 error 上原样带回；
       // ENOENT（没有 git）重新抛，上层翻成 no-git 空态
-      const failure = cause as { code?: number | string | null; stdout?: string; errno?: string; killed?: boolean };
+      const failure = cause as {
+        code?: number | string | null;
+        stdout?: string;
+        errno?: string;
+        killed?: boolean;
+      };
       if (failure.code === "ENOENT" || failure.errno === "ENOENT") throw cause;
-      // killed 只在我们自己发信号时为 true（这里只有超时会发；maxBuffer 溢出不带这个标记）
+      // maxBuffer 溢出要先于 killed 判：溢出也会发信号杀进程，killed 同样为 true
+      if (failure.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+        return { code: 1, stdout: failure.stdout ?? "", truncated: true };
+      }
+      // killed 只在我们自己发信号时为 true（这里只有超时会发；maxBuffer 溢出已在上面分流）
       if (failure.killed === true) {
         throw new GitTimeoutError(`git ${subcommandOf(args)} timed out after ${Math.round(timeoutMs / 1000)} s`);
       }
@@ -100,6 +126,14 @@ export function gitRunnerWithTimeout(timeoutMs: number): GitRunner {
 }
 
 export const realGitRunner: GitRunner = gitRunnerWithTimeout(GIT_TIMEOUT_MS);
+
+/**
+ * diff 正文专用的 runner：maxBuffer 收到上限的两倍（2 MB）。超过正文上限的 diff 本来就不该
+ * 生成——用共享 runner（32 MB）拉一个 50 MB 的改动，主进程会先在整个 32 MB 的缓冲里攒满
+ * 再被杀，白做一遍；收小后最坏只攢 2 MB，撞顶即判「改动太大」。status / numstat 输出
+ * 与改动体积无关（一行一个文件），仍用 realGitRunner。
+ */
+export const realDiffRunner: GitRunner = gitRunnerWithTimeout(GIT_TIMEOUT_MS, REVIEW_DIFF_MAX_BYTES * 2);
 
 /**
  * 专注左栏与审查面板（unstaged）的 status 是同一组参数，两处共用这一份（以前各写一遍，审查那边
@@ -138,16 +172,21 @@ function numstatEntries(stdout: string): ReviewEntry[] {
 
 /**
  * 未跟踪路径在盘上的样子：普通文件给字节；符号链接只给链接里写的目标（readlink 原文），
- * 不跟过去；realpath 后跑出工作区的给 outside。
+ * 不跟过去；realpath 后跑出工作区的给 outside；超过正文上限的普通文件给 tooLarge
+ * （只读开头判过二进制，没有整读）；开头有 NUL 的超大文件给 binary（同样只读了开头）。
  */
-export type UntrackedRead = Buffer | { symlink: string } | { outside: true };
+export type UntrackedRead = Buffer | { symlink: string } | { outside: true } | { tooLarge: true } | { binary: true };
 
 /**
- * 未跟踪文件正文的读盘面（review:diff 展开一个文件时整份读；测试注入假货）：null = 读不了 / 不是文件。
+ * 未跟踪文件正文的读盘面（review:diff 展开一个文件时用；测试注入假货）：null = 读不了 / 不是文件。
  * workspace 给了 = 路径来自 renderer，读之前先 realpath 判所在目录仍在工作区里。
  * 列表只数行、不走这里（untracked-lines.ts）：列表的路径是 git status 给的（git 不进链接目录，
  * 只把链接本身当一项列），省掉这两次 realpath——2000 个未跟踪文件实测要多 84 ms，而专注左栏
  * 30 秒就整轮问一遍。
+ *
+ * 超过 REVIEW_DIFF_MAX_BYTES 的文件不整读：patch 至少和文件一样大，读了也出不了正文。
+ * 只读开头 GIT_BINARY_SNIFF_BYTES 字节判二进制（同 git 口径）：是二进制如实报 binary
+ * （50 MB 的视频谈不到「太大」），是文本才报 tooLarge。
  */
 export type UntrackedReader = (path: string, workspace?: string) => Promise<UntrackedRead | null>;
 
@@ -163,7 +202,10 @@ const diskUntrackedReader: UntrackedReader = async (path, workspace) => {
     const info = await lstat(path);
     if (info.isSymbolicLink()) return { symlink: await readlink(path) };
     if (!info.isFile()) return null;
-    return await readFile(path);
+    if (info.size <= REVIEW_DIFF_MAX_BYTES) return await readFile(path);
+    // 超限文件只喳开头判二进制（同 untracked-lines 的 git 口径）：是二进制如实报，是文本才报 tooLarge
+    const binary = await sniffBinary(path);
+    return binary === null ? null : binary ? { binary: true } : { tooLarge: true };
   } catch {
     return null;
   }
@@ -263,6 +305,22 @@ function diffArgs(
   return null;
 }
 
+/**
+ * `review:list` 里 status / numstat 一类「输出会被当清单用」的调用：code 非 0 或输出被
+ * maxBuffer 截断都不是「没有改动」，如实报错。rev-parse（not-repo / no-upstream 靠退出码
+ * 表达）不走这里。
+ */
+async function runForList(
+  runner: GitRunner,
+  args: readonly string[],
+  cwd: string,
+): Promise<{ ok: true; stdout: string } | { ok: false; message: string }> {
+  const result = await runner(args, cwd);
+  if (result.code === 0 && result.truncated !== true) return { ok: true, stdout: result.stdout };
+  const cut = result.truncated === true ? " (output hit the runner's buffer cap and was cut short)" : "";
+  return { ok: false, message: `git ${subcommandOf(args)} exited with code ${result.code}${cut}` };
+}
+
 /** `review:list` 的 git 侧实现。probe 只为测试注入（未跟踪文件的读盘面）。 */
 export async function gitReviewList(
   runner: GitRunner,
@@ -285,7 +343,9 @@ export async function gitReviewList(
     if (upstream === null) return { kind: "empty", reason: "no-upstream", cwd };
     const args = diffArgs(source, upstream, { numstat: true });
     if (args === null) return { kind: "empty", reason: "no-upstream", cwd };
-    const entries = numstatEntries((await runner(args, cwd)).stdout);
+    const numstat = await runForList(runner, args, cwd);
+    if (!numstat.ok) return { kind: "error", message: numstat.message, cwd };
+    const entries = numstatEntries(numstat.stdout);
     return entries.length === 0
       ? { kind: "empty", reason: "no-changes", cwd }
       : { kind: "ok", cwd, entries, upstream };
@@ -293,8 +353,10 @@ export async function gitReviewList(
 
   if (source === "unstaged") {
     // 路径口径与专注左栏同一组 status 参数（STATUS_ARGS 的注释写了为什么要钉死工作区相对）
-    const status = await runner(STATUS_ARGS, cwd);
-    const diff = await runner(diffArgs(source, null, { numstat: true }) ?? [], cwd);
+    const status = await runForList(runner, STATUS_ARGS, cwd);
+    if (!status.ok) return { kind: "error", message: status.message, cwd };
+    const diff = await runForList(runner, diffArgs(source, null, { numstat: true }) ?? [], cwd);
+    if (!diff.ok) return { kind: "error", message: diff.message, cwd };
     const entries = [...numstatEntries(diff.stdout), ...(await untrackedEntries(cwd, status.stdout, probe))];
     if (entries.length === 0) return { kind: "empty", reason: "no-changes", cwd };
     // 同一路径可能两处出现（已改 + 未跟踪不会同路径；稳妥起见去重保序）
@@ -303,17 +365,23 @@ export async function gitReviewList(
     return { kind: "ok", cwd, entries: unique };
   }
 
-  const diff = await runner(diffArgs(source, null, { numstat: true }) ?? [], cwd);
+  const diff = await runForList(runner, diffArgs(source, null, { numstat: true }) ?? [], cwd);
+  if (!diff.ok) return { kind: "error", message: diff.message, cwd };
   const entries = numstatEntries(diff.stdout);
   return entries.length === 0
     ? { kind: "empty", reason: "no-changes", cwd }
     : { kind: "ok", cwd, entries };
 }
 
-/** `git ls-files -- <path>` 空 = 未跟踪（exit 0、无输出）。只读，不改 index。 */
+/**
+ * `git ls-files -- <path>` 空 = 未跟踪（exit 0、无输出）。只读，不改 index。
+ * code 非 0（index 坏了之类）地抛——上层如实报错，不能把「判不了」当「已跟踪」
+ * 折成空正文误显「已还原」。
+ */
 async function isUntracked(runner: GitRunner, cwd: string, path: string): Promise<boolean> {
   const result = await runner(["ls-files", "--", path], cwd);
-  return result.code === 0 && result.stdout.trim() === "";
+  if (result.code !== 0) throw new Error(`git ls-files exited with code ${result.code}`);
+  return result.stdout.trim() === "";
 }
 
 /** 当前分支短名（`rev-parse --abbrev-ref HEAD`，如 `feat/focus-mode`）；不是仓库 / 分离头 / 出错都 null */
@@ -422,6 +490,11 @@ export async function gitWorkdirChanges(
 /**
  * `review:diff` 的 git 侧实现（unified diff 原样返回）。path 是 renderer 传来的：先判它在不在
  * 工作区里，不在的连 git 都不跑（审查报告 R06：传 `../x` 曾读到工作区外、仓库内的未跟踪文件）。
+ *
+ * **先判断再生成**：超过正文上限（REVIEW_DIFF_MAX_*）的改动不读盘、不生成 patch，回
+ * 「改动太大」——已跟踪的看 git 拉回来的 diff 本身（拉的时候 maxBuffer 已收小，最坏攢 2 MB
+ * 就被拦腰）；未跟踪的看 lstat 的字节数，超限只读开头 8000 字节判二进制。判的是 diff 的
+ * 增删行数与字节数，不是文件大小：只改了几行的大文件照常展开。
  */
 export async function gitReviewDiff(
   runner: GitRunner,
@@ -438,7 +511,21 @@ export async function gitReviewDiff(
   const args = diffArgs(source, upstream, { path });
   if (args === null) return { diff: null, binary: false, restored: false };
   const result = await runner(args, cwd);
+  // 输出撞 maxBuffer = 改动远超正文上限：被杀时只攢了上限两倍的缓冲，不重拉、不攒了
+  if (result.truncated === true) {
+    return reviewDiffTooLarge("bytes", `git ${subcommandOf(args)} output hit the buffer cap`);
+  }
+  if (result.code !== 0) {
+    return reviewDiffError("failed", `git ${subcommandOf(args)} exited with code ${result.code}`);
+  }
   let diff = result.stdout.trimEnd();
+  // 已跟踪改动的正文就是 git 的输出：先判超限，超了这份字符串就是全部成本
+  if (diff !== "") {
+    const overflow = reviewDiffOverflow(diff);
+    if (overflow !== null) {
+      return reviewDiffTooLarge(overflow, `the diff for ${path} exceeds the inline limits`);
+    }
+  }
   // 未跟踪文件不在 git diff 的覆盖面里（恒空输出）——曾把空正文当 restored，新建文件
   // 被说成「与基线一致」。列表侧（untrackedEntries）把它算全量新增，正文侧同口径：
   // 读盘对着空文件造一份 diff（带 NUL 的按 binary 处理，同列表侧）。
@@ -448,8 +535,21 @@ export async function gitReviewDiff(
       if ("outside" in found) return reviewDiffError("outside-workspace", `${path} resolves outside the workspace ${cwd}`);
       // 未跟踪的符号链接：不跟到目标读（R06 探针二：曾读到仓库外的文件），只报它指向哪
       if ("symlink" in found) return { diff: null, binary: false, restored: false, symlink: found.symlink };
+      // 超限的未跟踪文件在读盘面就没整读（只喳了开头判二进制）：视频等二进制如实报 binary
+      if ("binary" in found) return { diff: null, binary: true, restored: false };
+      if ("tooLarge" in found) {
+        return reviewDiffTooLarge("bytes", `${path} is larger than the inline diff limit`);
+      }
       if (found.includes(0)) return { diff: null, binary: true, restored: false };
+      // 字节没超限但行数超限（极短行）：不用造 patch 就能判——patch 的 + 行数就是文件行数
+      if (bufferLineCount(found) > REVIEW_DIFF_MAX_LINES) {
+        return reviewDiffTooLarge("lines", `${path} has more lines than the inline diff limit`);
+      }
       diff = createTwoFilesPatch("/dev/null", path, "", found.toString("utf8"));
+      const overflow = reviewDiffOverflow(diff);
+      if (overflow !== null) {
+        return reviewDiffTooLarge(overflow, `the diff for ${path} exceeds the inline limits`);
+      }
     }
   }
   return { diff: diff === "" ? null : diff, binary: false, restored: diff === "" };

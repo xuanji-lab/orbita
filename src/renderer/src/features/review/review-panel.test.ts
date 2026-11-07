@@ -1,6 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { zh } from "../../messages-zh.ts";
+import { REVIEW_DIFF_MAX_LINES } from "../../../../shared/review.ts";
 import {
   absoluteReviewPath,
   disambiguatedDirs,
@@ -159,21 +160,39 @@ describe("reviewDiffNotice", () => {
       { diff: null, binary: false, restored: false, error: { reason: "outside-workspace", message: "\"../x\" is not a path inside the workspace /w" } },
       zh,
     );
-    assert.deepEqual(refused, { text: zh.review.diffError("outside-workspace"), tone: "danger" });
-    assert.notEqual(refused?.text, zh.review.binary);
+    assert.deepEqual(refused, { kind: "notice", text: zh.review.diffError("outside-workspace"), tone: "danger" });
+    assert.notEqual(refused?.kind === "notice" ? refused.text : "", zh.review.binary);
     const failed = reviewDiffNotice({ diff: null, binary: false, restored: false, error: { reason: "failed", message: "boom" } }, zh);
-    assert.equal(failed?.tone, "danger");
+    assert.equal(failed?.kind === "notice" ? failed.tone : undefined, "danger");
   });
 
   test("符号链接：说它指向哪、不读目标", () => {
     const notice = reviewDiffNotice({ diff: null, binary: false, restored: false, symlink: "/outside/secret.txt" }, zh);
-    assert.equal(notice?.tone, "muted");
-    assert.ok(notice?.text.includes("/outside/secret.txt"));
+    assert.equal(notice?.kind === "notice" ? notice.tone : undefined, "muted");
+    assert.ok((notice?.kind === "notice" ? notice.text : "").includes("/outside/secret.txt"));
   });
 
   test("已还原 / 二进制照旧；有正文 → null（交给 DiffBody）", () => {
-    assert.equal(reviewDiffNotice({ diff: null, binary: false, restored: true }, zh)?.text, zh.review.restoredEmpty);
-    assert.equal(reviewDiffNotice({ diff: null, binary: true, restored: false }, zh)?.text, zh.review.binary);
+    const restored = reviewDiffNotice({ diff: null, binary: false, restored: true }, zh);
+    assert.equal(restored?.kind === "notice" ? restored.text : "", zh.review.restoredEmpty);
+    const binary = reviewDiffNotice({ diff: null, binary: true, restored: false }, zh);
+    assert.equal(binary?.kind === "notice" ? binary.text : "", zh.review.binary);
     assert.equal(reviewDiffNotice({ diff: "@@\n+x", binary: false, restored: false }, zh), null);
+  });
+
+  test("改动太大：too-large 形态（正文区换说明 + 两个出口），排在链接 / 二进制之前", () => {
+    const bytes = reviewDiffNotice(
+      { diff: null, binary: false, restored: false, tooLarge: { exceeded: "bytes", message: "over the limit" } },
+      zh,
+    );
+    assert.deepEqual(bytes, { kind: "too-large", exceeded: "bytes" });
+    const lines = reviewDiffNotice(
+      { diff: null, binary: false, restored: false, tooLarge: { exceeded: "lines", message: "over the limit" } },
+      zh,
+    );
+    assert.deepEqual(lines, { kind: "too-large", exceeded: "lines" });
+    // 中文 / 英文文案都带上限数字，用户能对上「为什么拦」
+    assert.ok(zh.review.tooLarge("lines").includes(String(REVIEW_DIFF_MAX_LINES)));
+    assert.ok(zh.review.tooLarge("bytes").includes("1 MB"));
   });
 });

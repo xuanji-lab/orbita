@@ -3,7 +3,7 @@ import { Icon } from "../../shell/Icon";
 import { Menu, type MenuItem } from "../../shell/Menu";
 import { ContextMenu } from "../../shell/ContextMenu";
 import { RowHoverAction } from "../../shell/RowHoverAction";
-import { PanelIconButton, PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
+import { PanelButton, PanelIconButton, PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
 import { DiffBody } from "../../shell/DiffView";
 import { useT } from "../../locale.ts";
 import { api } from "../../api";
@@ -62,6 +62,8 @@ export function ReviewPanel(props: {
   excerptRevision: number;
   /** 摘抄页签点一条「回到原文」 */
   onJumpExcerpt: (jump: ExcerptJump) => void;
+  /** 「改动太大」的出口之一：在文件面板里打开这个文件（App 层接 openFocusFile） */
+  onOpenInFiles: (absPath: string) => void;
   /** 对话里记忆行的「在审查面板里看」：token 递增的一次性请求，切到记忆页签 */
   memoryFocus: number | null;
 }) {
@@ -98,14 +100,16 @@ export function ReviewPanel(props: {
   }, []);
 
   /**
-   * 「在访达中显示」的宿主根（git 来源）：git 条目是仓库相对路径，拼成绝对路径后
+   * 「在访达中显示」的宿主根：git 条目是仓库相对路径，拼成绝对路径后
    * 必须落在会话允许的某条根之内才能走 fs:reveal（白名单在主进程，同文件面板的
-   * 纪律）。task 来源不走这里——它的白名单就是本任务文件账（session:reveal-artifact）。
-   * 根没回来 / 都不收留：按钮不出现（同附件行「不在根内的只展示不可点」）。
+   * 纪律）。task 来源的悬停键不走这里（白名单 = session:reveal-artifact），但
+   * 「改动太大」的「用默认应用打开」出口同样要找宿主根（fs:open 共用这道白名单），
+   * 所以不分公司来源都拉一次。
+   * 根没回来 / 都不收留：相关按钮不出现（同附件行「不在根内的只展示不可点」）。
    */
   const [revealRoots, setRevealRoots] = useState<readonly FileRoot[] | null>(null);
   useEffect(() => {
-    if (source === "task" || props.sessionId === null) {
+    if (props.sessionId === null) {
       setRevealRoots(null);
       return;
     }
@@ -121,26 +125,34 @@ export function ReviewPanel(props: {
     return () => {
       alive = false;
     };
-  }, [source, props.sessionId, props.workspaceId]);
+  }, [props.sessionId, props.workspaceId]);
 
+  /** 列表请求的代次：切来源 / 换会话后旧请求晚到，不能盖掉新来源的结果（k3.1 R10 / fable O3） */
+  const listGenRef = useRef(0);
   const refresh = useCallback(
     (wanted: ReviewSource) => {
       if (props.sessionId === null) return;
+      const gen = listGenRef.current + 1;
+      listGenRef.current = gen;
       setLoading(true);
       void api.review
         .list(props.sessionId, wanted)
         .then((result) => {
+          if (listGenRef.current !== gen) return;
           setList(result);
           setDiffs(new Map());
         })
-        .catch((cause: unknown) =>
+        .catch((cause: unknown) => {
+          if (listGenRef.current !== gen) return;
           setList({
             kind: "error",
             message: cause instanceof Error ? cause.message : String(cause),
             cwd: "",
-          }),
-        )
-        .finally(() => setLoading(false));
+          });
+        })
+        .finally(() => {
+          if (listGenRef.current === gen) setLoading(false);
+        });
     },
     [props.sessionId],
   );
@@ -223,6 +235,26 @@ export function ReviewPanel(props: {
         });
     },
     [source, props.sessionId, props.workspaceId, gitRevealTarget, flashHint],
+  );
+
+  /**
+   * 「改动太大」的出口之一：用系统默认应用打开。与 git 来源的 reveal 同一道白名单
+   * （fs:open / fs:reveal 共用）：找不到收留它的根就不出这个按钮（task 来源的路径
+   * 本就是绝对路径，同一套找去）。
+   */
+  const openEntryDefault = useCallback(
+    (path: string): void => {
+      if (props.sessionId === null) return;
+      const target = gitRevealTarget(path);
+      if (target === null) return;
+      void api.files
+        .open({ sessionId: props.sessionId, workspaceId: props.workspaceId, root: target.root, dir: target.dir })
+        .catch((cause: unknown) => {
+          console.error("[review] 用默认应用打开失败", cause);
+          flashHint(path, cause instanceof Error ? cause.message : String(cause), "bad");
+        });
+    },
+    [props.sessionId, props.workspaceId, gitRevealTarget, flashHint],
   );
 
   const toggle = useCallback((entry: ReviewEntry) => {
@@ -502,6 +534,47 @@ export function ReviewPanel(props: {
                       <span style={{ fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
                         {t.common.loading}
                       </span>
+                    ) : notice !== null && notice.kind === "too-large" ? (
+                      // 改动太大：主进程没读盘没生成，这里给说明 + 两个出口（不做首尾截断：会切断
+                      // hunk、丢行号）。英文原句放悬停，排查用
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "flex-start",
+                          gap: "var(--space-2)",
+                          padding: "0 var(--space-2)",
+                        }}
+                      >
+                        <span
+                          title={diff.tooLarge?.message}
+                          style={{
+                            display: "flex",
+                            gap: 4,
+                            alignItems: "flex-start",
+                            fontSize: "var(--font-size-sm)",
+                            color: "var(--color-text-tertiary)",
+                            overflowWrap: "anywhere",
+                          }}
+                        >
+                          <span style={{ display: "inline-flex", alignItems: "center", height: "1lh", flex: "0 0 auto" }}>
+                            <Icon name="file" size={11} strokeWidth={1.8} />
+                          </span>
+                          <span>{t.review.tooLarge(notice.exceeded)}</span>
+                        </span>
+                        <div style={{ display: "flex", gap: "var(--space-1)", flexWrap: "wrap" }}>
+                          {gitRevealTarget(entry.path) !== null && (
+                            <PanelButton onClick={() => openEntryDefault(entry.path)}>
+                              <Icon name="external-link" size={13} strokeWidth={1.8} />
+                              {t.files.openDefault}
+                            </PanelButton>
+                          )}
+                          <PanelButton onClick={() => props.onOpenInFiles(absolute)}>
+                            <Icon name="panel-right" size={13} strokeWidth={1.8} />
+                            {t.review.openInFilesPanel}
+                          </PanelButton>
+                        </div>
+                      </div>
                     ) : notice !== null ? (
                       // 拒绝 / 失败用图标 + 文字说（颜色只是第二信号）；英文原句放悬停，排查用
                       <span
