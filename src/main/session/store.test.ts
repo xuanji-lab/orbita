@@ -1,7 +1,7 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import { buildClosingScanPrompt } from "../../shared/wrapup-scan.ts";
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
@@ -1178,11 +1178,19 @@ const turnBlock = (n: number, tools: number): SessionRecord[] => {
 
 /** 直接落一份 JSONL（record() 每条一次原子写，几百条的构造太慢） */
 const seedLog = async (id: string, records: readonly SessionRecord[]): Promise<void> => {
+  await seedRawLog(id, records.map((record) => JSON.stringify(record)));
+};
+
+/**
+ * 按行落任意原始内容（坏行 / CRLF / 无尾换行 / 空文件的构造用）。
+ * trailingNewline=false 时不补最后那个 \n，模拟断电写了一半的形状。
+ */
+const seedRawLog = async (id: string, lines: readonly string[], trailingNewline = true): Promise<void> => {
   await store.ensureSession(meta({ id }));
   await mkdir(join(dir, "sessions"), { recursive: true });
   await writeFile(
     join(dir, "sessions", `${id}.jsonl`),
-    `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+    lines.length === 0 ? "" : `${lines.join("\n")}${trailingNewline ? "\n" : ""}`,
     "utf8",
   );
 };
@@ -1373,5 +1381,338 @@ describe("SessionStore · 窗口分页", () => {
     assert.equal(detail?.transcript.some((record) => record.role === "revert"), true);
     assert.equal(detail?.transcript.some((record) => record.id === "u5"), false);
     assert.equal(detail?.window.hasMore, true);
+  });
+});
+
+describe("SessionStore · 窗口分页的行级语义", () => {
+  // 这一组锁的是 readLogEntries 逐行落地与 foldReverts 的细粒度语义——
+  // 换流式实现前后都必须逐位不变。
+
+  test("中段的坏行（JSON 断裂）被跳过：total 与尾窗都当它不存在，落在窗口字节区间里的坏行也不进窗", async () => {
+    const records = Array.from({ length: 240 }, (_, n) => turnBlock(n, 3)).flat();
+    const lines = records.map((record) => JSON.stringify(record));
+    // 一条断在半截的行：在窗口之前（100）与窗口区间内（1150）各放一条
+    lines[100] = '{"id":"broken-1","role":"assistant","content":[{"type":"text","text":"断在半截';
+    lines[1150] = '{"id":"broken-2","role":"user","content":[{"type":"text","text":"也断';
+    await seedRawLog(ID, lines);
+    const detail = await store.loadWindow(ID);
+    assert.equal(detail?.window.total, 1198);
+    // 生效视图去掉两条坏行后，切点 1198-500=698 对回原始下标 699（t139-2，工具行），
+    // 向前对齐到 u140（699）：窗口 499 条，坏行不在其中
+    assert.equal(detail?.transcript[0]?.id, "u140");
+    assert.equal(detail?.transcript.length, 499);
+    const ids = new Set(detail?.transcript.map((record) => record.id));
+    assert.equal(ids.has("broken-1"), false);
+    assert.equal(ids.has("broken-2"), false);
+  });
+
+  test("末尾没有换行的最后一行（合法 JSON）照常进窗", async () => {
+    const records = [...turnBlock(0, 1), ...turnBlock(1, 1)];
+    await seedRawLog(ID, records.map((record) => JSON.stringify(record)), false);
+    const detail = await store.loadWindow(ID);
+    assert.equal(detail?.window.total, 6);
+    assert.equal(detail?.transcript.at(-1)?.id, "t1-0");
+  });
+
+  test("末尾写了一半的行（断电形状）被跳过，前面的照常返回", async () => {
+    const records = turnBlock(0, 1);
+    await seedRawLog(
+      ID,
+      [...records.map((record) => JSON.stringify(record)), '{"id":"half","role":"user","content":[{"type":"text"'],
+      false,
+    );
+    const detail = await store.loadWindow(ID);
+    assert.equal(detail?.window.total, 3);
+    assert.deepEqual(detail?.transcript.map((record) => record.id), ["u0", "a0", "t0-0"]);
+  });
+
+  test("CRLF 行结尾照常解析；只有 \r 的行与空白行不算记录", async () => {
+    const records = [...turnBlock(0, 1), ...turnBlock(1, 1)];
+    const lines = [
+      `${JSON.stringify(records[0])}\r`, // \r 留在行尾，JSON.parse 容忍
+      "\r", // 只有 \r 的行：trim 后是空行
+      "   ", // 空白行
+      "",
+      JSON.stringify(records[1]),
+      `${JSON.stringify(records[2])}\r`,
+      `${JSON.stringify(records[3])}\r`,
+      `${JSON.stringify(records[4])}\r`,
+      `${JSON.stringify(records[5])}\r`,
+    ];
+    await seedRawLog(ID, lines);
+    const detail = await store.loadWindow(ID);
+    assert.equal(detail?.window.total, 6);
+    assert.deepEqual(
+      detail?.transcript.map((record) => record.id),
+      ["u0", "a0", "t0-0", "u1", "a1", "t1-0"],
+    );
+  });
+
+  test("空文件（0 字节）与没有文件同待遇：空窗口；分页锚点找不到回空页", async () => {
+    await seedRawLog(ID, []);
+    const detail = await store.loadWindow(ID);
+    assert.equal(detail?.window.total, 0);
+    assert.deepEqual(detail?.transcript, []);
+    const page = await store.loadOlder(ID, "u0", 10);
+    assert.deepEqual(page, { records: [], hasMore: false });
+  });
+
+  test("行首 BOM 的第一行 JSON.parse 失败被跳过（与旧读取同款行为）", async () => {
+    const first = JSON.stringify({
+      id: "u-bom",
+      role: "user",
+      content: [{ type: "text", text: "带 BOM 的行" }],
+      timestamp: 1000,
+    });
+    await seedRawLog(ID, [`\u{feff}${first}`, ...turnBlock(0, 1).map((record) => JSON.stringify(record))]);
+    const detail = await store.loadWindow(ID);
+    assert.equal(detail?.window.total, 3);
+    assert.equal(detail?.transcript.some((record) => record.id === "u-bom"), false);
+  });
+
+  test("长着特殊角色的脸但字段不齐的行跳过；字段齐的界碑照常进窗并折叠", async () => {
+    const lines = [
+      JSON.stringify({ role: "compacted", id: "c-bad", tokensBefore: 1, timestamp: 1 }), // 缺 summary
+      JSON.stringify({ role: "compacted", id: "c1", summary: "s", tokensBefore: 1, timestamp: 2 }),
+      ...turnBlock(0, 1).map((record) => JSON.stringify(record)),
+      JSON.stringify({ role: "revert", id: "r-bad", timestamp: 3 }), // 缺 targetMessageId / restored
+      JSON.stringify({ role: "channel-mark", id: "k-bad", peerId: "p" }), // 缺 messageId / from / kind
+      JSON.stringify({ role: "file-turn", id: "f-bad", changes: "nope", timestamp: 4 }), // changes 不是数组
+      JSON.stringify({ role: "undo", id: "z-bad", restored: [], timestamp: 5 }), // 缺 turnId
+      JSON.stringify({ role: "revert", id: "r1", targetMessageId: "u0", restored: [], timestamp: 6 }),
+    ];
+    await seedRawLog(ID, lines);
+    const detail = await store.loadWindow(ID);
+    // 只有 c1、turn 0 的三条与 r1 落地；r1 把视图折到 u0 之前 → [c1, r1]
+    assert.equal(detail?.window.total, 2);
+    assert.deepEqual(
+      detail?.transcript.map((record) => record.role),
+      ["compacted", "revert"],
+    );
+  });
+
+  test("回退目标不在生效视图（已被更早的回退折掉）：只留界碑不折叠", async () => {
+    const records: SessionRecord[] = [
+      ...turnBlock(0, 0),
+      ...turnBlock(1, 0),
+      { role: "revert", id: "rv1", targetMessageId: "u1", restored: [], timestamp: 9000 },
+      { role: "revert", id: "rv2", targetMessageId: "u1", restored: [], timestamp: 9001 },
+    ];
+    await seedLog(ID, records);
+    // rv1 折掉 u1 及之后 → [u0, a0, rv1]；rv2 找不到 u1 → 不折叠只留界碑
+    const detail = await store.loadWindow(ID);
+    assert.equal(detail?.window.total, 4);
+    assert.deepEqual(
+      detail?.transcript.map((record) => record.id),
+      ["u0", "a0", "rv1", "rv2"],
+    );
+  });
+
+  test("窗口内含回退界碑：被折掉的行也落在同一段字节里，但不进窗", async () => {
+    const records: SessionRecord[] = [
+      ...turnBlock(0, 1),
+      ...turnBlock(1, 1),
+      ...turnBlock(2, 1),
+      { role: "revert", id: "r1", targetMessageId: "a1", restored: [], timestamp: 9000 },
+    ];
+    await seedLog(ID, records);
+    // rv 折到 a1 之前：生效视图 = [u0, a0, t0-0, u1, r1]，共 5 条；窗口从 u0 起，
+    // 字节区间横跨被折掉的 a1..t2-0，返回的必须只有生效视图那 5 条
+    const detail = await store.loadWindow(ID);
+    assert.equal(detail?.window.total, 5);
+    assert.deepEqual(
+      detail?.transcript.map((record) => record.id),
+      ["u0", "a0", "t0-0", "u1", "r1"],
+    );
+  });
+
+  test("loadOlder 切点落在轮中间：起点向前对齐到下一条 user，被对齐吃掉的下一页还会取到", async () => {
+    const records = Array.from({ length: 240 }, (_, n) => turnBlock(n, 3)).flat();
+    await seedLog(ID, records);
+    // before=u100（下标 500），limit=98：切点 402 = t80-2（工具行）→ 对齐到 u81（405）
+    const page1 = await store.loadOlder(ID, "u100", 98);
+    assert.equal(page1.records[0]?.id, "u81");
+    assert.equal(page1.records.length, 95);
+    assert.equal(page1.records.at(-1)?.id, "t99-2");
+    assert.equal(page1.hasMore, true);
+    // 下一页从 u81 往前取：对齐吃掉的 402..404（t80-0..t80-2）在这一页里回来
+    const page2 = await store.loadOlder(ID, "u81", 98);
+    assert.equal(page2.records[0]?.id, "u62");
+    assert.equal(page2.records.length, 95);
+    assert.equal(page2.records.some((record) => record.id === "t80-0"), true);
+  });
+
+  test("loadOlder 的锚点可以是界碑类记录（channel-mark 也在生效视图里按 id 定位）", async () => {
+    const records: SessionRecord[] = [
+      ...turnBlock(0, 8),
+      {
+        role: "channel-mark",
+        id: "k1",
+        peerId: "child-1",
+        messageId: "msg-1",
+        from: "child",
+        kind: "question",
+        timestamp: 5000,
+      },
+      ...turnBlock(1, 19).slice(1),
+    ];
+    await seedLog(ID, records);
+    const page = await store.loadOlder(ID, "k1", 10);
+    assert.equal(page.records[0]?.id, "u0");
+    assert.equal(page.records.length, 10);
+    assert.equal(page.records.at(-1)?.id, "t0-7");
+    assert.equal(page.hasMore, false);
+  });
+
+  test("limit 的坏值与上限：0 / 负数 / 小数按 1 条再对齐，NaN 用默认 500，超上限夹到 2000", async () => {
+    const records = Array.from({ length: 240 }, (_, n) => turnBlock(n, 3)).flat();
+    await seedLog(ID, records);
+    // 1 条 → 切点 1199（工具行）→ 前面没有 user、回溯到本轮轮首 u239
+    for (const bad of [0, -3, 1.9]) {
+      const detail = await store.loadWindow(ID, bad);
+      assert.equal(detail?.transcript[0]?.id, "u239", `limit=${bad}`);
+      assert.equal(detail?.transcript.length, 5, `limit=${bad}`);
+      assert.equal(detail?.window.hasMore, true, `limit=${bad}`);
+    }
+    // NaN → 默认 500 条，切点 700 恰好是 u140 的轮首
+    const nan = await store.loadWindow(ID, Number.NaN);
+    assert.equal(nan?.transcript.length, 500);
+    assert.equal(nan?.transcript[0]?.id, "u140");
+    // 超上限 → 夹到 2000，整条会话进窗
+    const huge = await store.loadWindow(ID, 5000);
+    assert.equal(huge?.transcript.length, 1200);
+    assert.equal(huge?.window.hasMore, false);
+  });
+
+  test("整条会话一条 user 也没有：起点不对齐，按切点切", async () => {
+    const records: SessionRecord[] = [];
+    for (let i = 0; i < 600; i += 1) {
+      records.push({
+        id: `t${i}`,
+        role: "tool",
+        toolCallId: `call-${i}`,
+        toolName: "bash",
+        input: {},
+        content: [{ type: "text", text: "ok" }],
+        timestamp: 2000 + i,
+        status: "complete",
+        isError: false,
+      } as TranscriptItem);
+    }
+    await seedLog(ID, records);
+    const detail = await store.loadWindow(ID);
+    assert.equal(detail?.window.total, 600);
+    assert.equal(detail?.transcript.length, 500);
+    assert.equal(detail?.transcript[0]?.id, "t100");
+    assert.equal(detail?.window.hasMore, true);
+  });
+
+  test("几 MB 的多字节大行跨流式块边界：窗口内完整返回", async () => {
+    const big = "果".repeat(600_000); // 1.8MB 的 utf8，跨多个 256KB 读块
+    const records: SessionRecord[] = [
+      ...turnBlock(0, 0),
+      {
+        id: "b1",
+        role: "assistant",
+        content: [{ type: "text", text: big }],
+        model: { provider: "zai", id: "glm-5.3" },
+        timestamp: 4000,
+        status: "complete",
+        stopReason: "stop",
+      } as TranscriptItem,
+      ...turnBlock(1, 0),
+    ];
+    await seedLog(ID, records);
+    const detail = await store.loadWindow(ID);
+    assert.equal(detail?.window.total, 5);
+    const bigRecord = detail?.transcript.find((record) => record.id === "b1");
+    const text =
+      bigRecord !== undefined && bigRecord.role === "assistant"
+        ? bigRecord.content.find((block) => block.type === "text")
+        : undefined;
+    assert.equal(text !== undefined && text.type === "text" ? text.text.length : 0, 600_000);
+  });
+});
+
+// ── 两遍之间的原子替换：两遍必须读到同一份文件 ──
+
+describe("SessionStore · 窗口分页两遍之间的原子替换", () => {
+  // commitImportUpdate（再导入落盘）用 temp+rename 原子替换整个日志。第二遍另开 fd
+  // 重 open 路径时，替换恰好插进两遍之间会读到新文件、配的却是第一遍在旧文件上建好
+  // 的索引；替换文件与原文件逐行同字节长时甚至不触发兑底，直接漏出「新记录 +
+  // 旧 total / hasMore」的混合世界。两遍共用同一个 fd 后，rename 换的是路径指向的
+  // inode、换不动已打开的 fd：两遍必是同一份文件，返回打开那一刻的完整旧快照。
+
+  /**
+   * 在第一遍（scanEffectiveIndex）返回之后、第二遍回读之前把日志原子替换掉，
+   * 复现「替换恰好插进两遍之间」。scanEffectiveIndex 是私有方法，按运行时形状包一层
+   * （两版签名都是首参 path，修后多传一个 fd）。
+   */
+  const raceStoreWithReplacement = (replacement: string): SessionStore => {
+    const racer = new SessionStore(join(dir, "sessions"));
+    const holder = racer as unknown as {
+      scanEffectiveIndex: (path: string, fd?: number) => Promise<unknown>;
+    };
+    const scan = holder.scanEffectiveIndex.bind(racer);
+    let pending: string | null = replacement;
+    holder.scanEffectiveIndex = async (path, fd) => {
+      const index = await scan(path, fd);
+      if (pending !== null) {
+        await rename(pending, path);
+        pending = null;
+      }
+      return index;
+    };
+    return racer;
+  };
+
+  test("替换成逐行同字节长、不同 id 的文件：返回打开那一刻的完整旧快照，不再新记录配旧索引", async () => {
+    const records = Array.from({ length: 240 }, (_, n) => turnBlock(n, 3)).flat();
+    await seedLog(ID, records);
+    // 每行同字节长（行界与字节偏移与原文件全对得上）、id 换成另一套——这是修前唯一
+    // 不触发兑底、直接把错配漏出去的形状
+    const swapId = (id: string): string => (id[0] === "u" ? "p" : id[0] === "a" ? "q" : "r") + id.slice(1);
+    const replacement = join(dir, "replacement.jsonl");
+    await writeFile(
+      replacement,
+      `${records.map((record) => JSON.stringify({ ...record, id: swapId(record.id) })).join("\n")}\n`,
+      "utf8",
+    );
+    const detail = await raceStoreWithReplacement(replacement).loadWindow(ID);
+    // 窗口统计按第一遍（旧文件）算：1200 条、切点 700 对齐 u140、还有更多
+    assert.equal(detail?.window.total, 1200);
+    assert.equal(detail?.window.hasMore, true);
+    assert.equal(detail?.transcript.length, 500);
+    // 记录也必须整个来自旧文件——修前这里是 p140…（新文件的记录），total / hasMore
+    // 却按旧文件算
+    assert.equal(detail?.transcript[0]?.id, "u140");
+    assert.equal(detail?.transcript.at(-1)?.id, "t239-2");
+    const stranger = detail?.transcript.find(
+      (record) => record.id.startsWith("p") || record.id.startsWith("q") || record.id.startsWith("r"),
+    );
+    assert.equal(stranger, undefined, "窗口里混进了替换文件的记录");
+  });
+
+  test("替换成更短的不同形状文件：同样只认打开时那份（旧快照）；下一次 load 才是新世界", async () => {
+    const records = Array.from({ length: 240 }, (_, n) => turnBlock(n, 3)).flat();
+    await seedLog(ID, records);
+    const replacement = join(dir, "replacement.jsonl");
+    await writeFile(
+      replacement,
+      `${turnBlock(0, 1).map((record) => JSON.stringify(record)).join("\n")}\n`,
+      "utf8",
+    );
+    const racer = raceStoreWithReplacement(replacement);
+    const detail = await racer.loadWindow(ID);
+    assert.equal(detail?.window.total, 1200);
+    assert.equal(detail?.transcript.length, 500);
+    assert.equal(detail?.transcript[0]?.id, "u140");
+    // 不再注替换，下一次 load 打开的就是替换后的文件
+    const fresh = await racer.loadWindow(ID);
+    assert.equal(fresh?.window.total, 3);
+    assert.deepEqual(
+      fresh?.transcript.map((record) => record.id),
+      ["u0", "a0", "t0-0"],
+    );
   });
 });
