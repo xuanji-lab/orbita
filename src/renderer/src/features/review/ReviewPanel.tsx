@@ -124,7 +124,7 @@ export function ReviewPanel(props: {
     void api.files
       .roots({ sessionId: props.sessionId, workspaceId: props.workspaceId })
       .then((all) => {
-        if (alive) setRevealRoots(all.filter((root) => root.kind !== "attachments" && root.exists));
+        if (alive) setRevealRoots(all.filter((root) => root.kind !== "attachments" && root.kind !== "cited" && root.exists));
       })
       .catch(() => {
         if (alive) setRevealRoots(null);
