@@ -9,15 +9,16 @@ import {
   type ConnectorStatus,
   type TokenProblem,
 } from "../../../../shared/connectors.ts";
+import type { McpOauthLoginResult } from "../../../../shared/mcp-oauth.ts";
 import type { Messages } from "../../messages-en.ts";
 import type { IconName } from "../../shell/Icon";
 
 export type ProbeState = { kind: "checking" } | ConnectorStatus;
 
-export type Phase = "checking" | "unset" | "connected" | "failed" | "soon";
+export type Phase = "checking" | "logging-in" | "unset" | "connected" | "failed";
 
 export function phaseOf(state: ProbeState): Phase {
-  return state.kind === "coming-soon" ? "soon" : state.kind;
+  return state.kind;
 }
 
 /** messages.connectors.items 里一条的形状（有的有 tokenHint，各条字面量类型不同，这里统一读法） */
@@ -33,7 +34,11 @@ export function textOf(t: Messages["connectors"], id: ConnectorId): ConnectorTex
   return t.items[id] as ConnectorText;
 }
 
-export type ActionKind = "configure" | "reconfigure" | "manage";
+/**
+ * 按钮的语义。命令行 / 引导 / token 型：configure → reconfigure → manage；
+ * OAuth 型：connect（浏览器登录）→ cancel（登录中，放弃）→ disconnect（已连接）/ login（失败后重新登录）。
+ */
+export type ActionKind = "configure" | "reconfigure" | "manage" | "connect" | "login" | "cancel" | "disconnect";
 
 export interface ActionModel {
   kind: ActionKind;
@@ -41,16 +46,26 @@ export interface ActionModel {
   tip: string;
 }
 
-/**
- * 卡片 / 行尾的那个按钮。即将支持的**没有按钮**（返回 null）：它没有可点的事，
- * 灰着一个「配置」会让人以为是暂时点不了——其实是做不了。
- */
-export function actionOf(t: Messages["connectors"], entry: ConnectorEntry, state: ProbeState): ActionModel | null {
+/** 卡片 / 行尾的那个按钮。每个阶段都有一个能点的事（OAuth 型登录中的那个是「取消」）。 */
+export function actionOf(t: Messages["connectors"], entry: ConnectorEntry, state: ProbeState): ActionModel {
   const token = entry.kind === "mcp-token";
+  if (entry.kind === "mcp-oauth") {
+    switch (phaseOf(state)) {
+      case "checking":
+        return { kind: "connect", disabled: true, tip: t.actionTip.checking };
+      case "logging-in":
+        return { kind: "cancel", disabled: false, tip: t.actionTip.cancelLogin };
+      case "connected":
+        return { kind: "disconnect", disabled: false, tip: t.actionTip.disconnect };
+      case "failed":
+        return { kind: "login", disabled: false, tip: t.actionTip.login };
+      case "unset":
+        return { kind: "connect", disabled: false, tip: t.actionTip.connect };
+    }
+  }
   switch (phaseOf(state)) {
-    case "soon":
-      return null;
     case "checking":
+    case "logging-in":
       return { kind: "configure", disabled: true, tip: t.actionTip.checking };
     case "connected":
       return { kind: "manage", disabled: false, tip: manageRoute(entry, state) === "installed" ? t.actionTip.manageInstalled : t.actionTip.manageSession };
@@ -61,7 +76,7 @@ export function actionOf(t: Messages["connectors"], entry: ConnectorEntry, state
   }
 }
 
-/** 点「配置」：开会话（cli / guided）还是卡内贴 token（mcp-token）。 */
+/** 点「配置」：开会话（cli / guided）还是卡内贴 token（mcp-token）。OAuth 型不走「配置」（它的按钮是连接 / 登录），返回 null。 */
 export function configureRoute(entry: ConnectorEntry): "session" | "token" | null {
   if (opensSetupSession(entry)) return "session";
   return entry.kind === "mcp-token" ? "token" : null;
@@ -77,8 +92,8 @@ export function statusLine(t: Messages["connectors"], entry: ConnectorEntry, sta
   switch (state.kind) {
     case "checking":
       return { icon: "loader-circle", text: t.status.checking, note: "" };
-    case "coming-soon":
-      return { icon: "clock", text: t.status.soon, note: "" };
+    case "logging-in":
+      return { icon: "loader-circle", text: t.status.loggingIn, note: t.loggingInNote };
     case "connected":
       return {
         icon: "circle-check",
@@ -86,7 +101,7 @@ export function statusLine(t: Messages["connectors"], entry: ConnectorEntry, sta
         note: state.by === "mcp" ? t.connectedBy.mcp(state.tools ?? 0) : state.by === "cli" ? t.connectedBy.cli : t.connectedBy.local,
       };
     case "failed":
-      return { icon: "triangle-alert", text: t.status.failed, note: failedNote(t, entry, state) };
+      return { icon: "triangle-alert", text: state.code === "login" ? t.status.login : t.status.failed, note: failedNote(t, entry, state) };
     case "unset": {
       const command = entry.cli?.command ?? "";
       const note =
@@ -102,6 +117,7 @@ export function statusLine(t: Messages["connectors"], entry: ConnectorEntry, sta
  */
 function failedNote(t: Messages["connectors"], entry: ConnectorEntry, state: Extract<ConnectorStatus, { kind: "failed" }>): string {
   if (state.code === "timeout") return t.failedTimeout;
+  if (state.code === "login") return t.failedLogin;
   // 贴 token 的那两家：服务端对不对的 token 有回 401 / 403 的，也有回 400 的（百度网盘 SSE 实测是 400）
   const rejected = entry.kind === "mcp-token" ? /\b(400|401|403)\b/ : /\b(401|403)\b/;
   if (state.code === "mcp" && rejected.test(state.message)) return t.failedAuth;
@@ -118,9 +134,26 @@ export function firstLine(message: string): string {
 export function rowSubline(t: Messages["connectors"], entry: ConnectorEntry, state: ProbeState): string {
   const line = statusLine(t, entry, state);
   const how = textOf(t, entry.id).how;
-  if (state.kind === "connected" || state.kind === "failed") return line.note === "" ? how : line.note;
+  if (state.kind === "connected" || state.kind === "failed" || state.kind === "logging-in") return line.note === "" ? how : line.note;
   if (state.kind === "unset" && line.note !== "") return line.note;
   return how;
+}
+
+/** 登录没成时卡上那一句（取消不算失败，不显示）。已知的几种说成本地话，其余原样给原因。 */
+export function loginFailureText(t: Messages["connectors"]["oauth"], failure: Exclude<McpOauthLoginResult, { ok: true }>): string | null {
+  switch (failure.code) {
+    case "cancelled":
+      return null;
+    case "timeout":
+      return t.errorTimeout;
+    case "denied":
+      return t.errorDenied;
+    case "discovery":
+      return t.errorDiscovery(firstLine(failure.message));
+    case "unsupported":
+    case "failed":
+      return t.errorFailed(firstLine(failure.message));
+  }
 }
 
 export function tokenProblemText(t: Messages["connectors"]["token"], problem: TokenProblem | "unsupported" | "write-failed", message: string): string {

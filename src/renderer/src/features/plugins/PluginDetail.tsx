@@ -10,7 +10,7 @@
  * 技能 = 内容三格（失焦即存）+ 在哪儿可用；MCP = 状态（启用开关、连接状态、错误全文与重试）+ 工具 + 命令 + 在哪儿可用。
  * 插件带的技能只读，带的 MCP 显示状态与工具、不单独启停。
  */
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { parsePluginViewId, type PluginScope, type PluginView } from "@shared/plugin";
 import type { Workspace } from "@shared/workspace";
 import { api } from "../../api";
@@ -36,6 +36,9 @@ import {
 import { conflictText, problemText } from "./plugin-text.ts";
 import { namedInstances } from "./mcp-row-display.ts";
 import { useMcpRows } from "./useMcpRows.ts";
+import { loginFailureText } from "../connectors/connectors-view.ts";
+import { McpLoginContext } from "./McpLoginButton.tsx";
+import { useMcpLogin } from "./useMcpLogin.ts";
 import { availabilityScopeOf, canRemoveMcpView, isBuiltinView, sourceKey, workspaceName } from "./plugin-view.ts";
 
 const DATE = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "2-digit", day: "2-digit" });
@@ -146,6 +149,10 @@ export function PluginDetail(props: {
   const mcpEnabled = mcpServer !== null ? !mcpServer.disabled : view.scope.kind !== "off";
   const pluginRuntimeRow = (row: (typeof mcpRows.pluginServers)[number] | undefined) =>
     row === undefined ? null : { status: row.status, instances: namedInstances(row.instances, (id) => workspaceName(props.workspaces, id)) };
+  // 你自己配的远程 MCP 需要登录时，状态行里的「登录」钮（和「已装」列表同一套流程）
+  const describeLoginFailure = useCallback((failure: Parameters<typeof loginFailureText>[1]) => loginFailureText(messages.connectors.oauth, failure), [messages]);
+  const mcpLogin = useMcpLogin(mcpRows.refresh, setError, describeLoginFailure);
+  const mcpLoginState = useMemo(() => ({ needed: new Set<string>(), login: mcpLogin }), [mcpLogin]);
   const reconnect = (): void =>
     void run(async () => {
       setReconnecting(true);
@@ -499,6 +506,7 @@ export function PluginDetail(props: {
   };
 
   return (
+    <McpLoginContext.Provider value={mcpLoginState}>
     <div className="pl-detail" data-draft={draft ? "true" : undefined}>
       {props.showBack && (
         <button type="button" className="pl-back" onClick={props.onBack}>
@@ -637,7 +645,13 @@ export function PluginDetail(props: {
                     />
                   </span>
                 </div>
-                <McpStatusLine status={mcpStatus} instances={mcpServer?.instances ?? []} reconnecting={reconnecting} onRetry={reconnect} />
+                <McpStatusLine
+                  status={mcpStatus}
+                  instances={mcpServer?.instances ?? []}
+                  reconnecting={reconnecting}
+                  onRetry={reconnect}
+                  {...(view.origin === "user-mcp" ? { loginServer: parsed?.key ?? view.name } : {})}
+                />
                 {mcpRows.error !== null && (
                   <span className="pl-field-error" role="alert">
                     {mcpRows.error}
@@ -689,6 +703,7 @@ export function PluginDetail(props: {
         </>
       )}
     </div>
+    </McpLoginContext.Provider>
   );
 }
 

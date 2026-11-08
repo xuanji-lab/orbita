@@ -3,6 +3,7 @@ import ctrip from "../../../../../design-system/assets/connector-logos/ctrip.png
 import dingtalk from "../../../../../design-system/assets/connector-logos/dingtalk.png";
 import feishu from "../../../../../design-system/assets/connector-logos/feishu.svg";
 import githubMono from "../../../../../design-system/assets/connector-logos/github.svg?raw";
+import pangram from "../../../../../design-system/assets/connector-logos/pangram.svg";
 import notionMono from "../../../../../design-system/assets/connector-logos/notion.svg?raw";
 import supabase from "../../../../../design-system/assets/connector-logos/supabase.svg";
 import tabbit from "../../../../../design-system/assets/connector-logos/tabbit.png";
@@ -26,6 +27,7 @@ const IMAGES: Record<string, string> = {
   "ctrip.png": ctrip,
   "baidu-netdisk.png": baiduNetdisk,
   "supabase.svg": supabase,
+  "pangram.svg": pangram,
 };
 
 const MONO: Record<string, string> = {

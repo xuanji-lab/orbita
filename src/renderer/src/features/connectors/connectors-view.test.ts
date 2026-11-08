@@ -8,6 +8,7 @@ import {
   configureRoute,
   filterConnectors,
   firstLine,
+  loginFailureText,
   manageRoute,
   phaseOf,
   rowSubline,
@@ -24,7 +25,7 @@ const entry = (id: string): ConnectorEntry => {
 };
 
 describe("文案齐全", () => {
-  test("中英文案都有 10 家，名字 / 说明 / 能力词 / 接入方式不为空；token 型有取 token 的指路", () => {
+  test("中英文案都有 11 家，名字 / 说明 / 能力词 / 接入方式不为空；token 型有取 token 的指路", () => {
     for (const messages of [zh, en]) {
       for (const each of CONNECTORS) {
         const text = textOf(messages.connectors, each.id);
@@ -49,21 +50,28 @@ describe("按钮", () => {
   const unset: ProbeState = { kind: "unset", reason: "no-config" };
   const failed: ProbeState = { kind: "failed", code: "mcp", message: "401" };
 
-  test("即将支持的没有按钮（不是灰着一个「配置」）", () => {
-    assert.equal(actionOf(t, entry("notion"), { kind: "coming-soon" }), null);
-    assert.equal(actionOf(t, entry("supabase"), { kind: "coming-soon" }), null);
+  test("OAuth 型：未连接 → 连接；检测中禁用；登录中 → 取消；已连接 → 断开；失败（含需要登录）→ 重新登录；每个阶段都有按钮", () => {
+    for (const id of ["notion", "supabase", "pangram"]) {
+      const e = entry(id);
+      assert.deepEqual(actionOf(t, e, unset), { kind: "connect", disabled: false, tip: t.actionTip.connect });
+      assert.deepEqual(actionOf(t, e, checking), { kind: "connect", disabled: true, tip: "检测中…" });
+      assert.deepEqual(actionOf(t, e, { kind: "logging-in" }), { kind: "cancel", disabled: false, tip: t.actionTip.cancelLogin });
+      assert.deepEqual(actionOf(t, e, { kind: "connected", by: "mcp", tools: 3 }), { kind: "disconnect", disabled: false, tip: t.actionTip.disconnect });
+      assert.equal(actionOf(t, e, failed).kind, "login");
+      assert.equal(actionOf(t, e, { kind: "failed", code: "login", message: "x" }).kind, "login");
+    }
   });
 
   test("检测中：按钮禁用；未配置 → 配置；失败 → 重新配置；已连接 → 管理", () => {
     const tencent = entry("tencent-docs");
     assert.deepEqual(actionOf(t, tencent, checking), { kind: "configure", disabled: true, tip: "检测中…" });
-    assert.equal(actionOf(t, tencent, unset)?.kind, "configure");
-    assert.equal(actionOf(t, tencent, failed)?.kind, "reconfigure");
-    assert.equal(actionOf(t, tencent, { kind: "connected", by: "mcp", tools: 3 })?.kind, "manage");
-    for (const state of [unset, failed, { kind: "connected", by: "cli" } as ProbeState]) assert.equal(actionOf(t, entry("feishu"), state)?.disabled, false);
+    assert.equal(actionOf(t, tencent, unset).kind, "configure");
+    assert.equal(actionOf(t, tencent, failed).kind, "reconfigure");
+    assert.equal(actionOf(t, tencent, { kind: "connected", by: "mcp", tools: 3 }).kind, "manage");
+    for (const state of [unset, failed, { kind: "connected", by: "cli" } as ProbeState]) assert.equal(actionOf(t, entry("feishu"), state).disabled, false);
   });
 
-  test("「配置」去哪：命令行与引导型开会话，token 型卡内贴，即将支持没有", () => {
+  test("「配置」去哪：命令行与引导型开会话，token 型卡内贴，OAuth 型不走「配置」", () => {
     assert.equal(configureRoute(entry("feishu")), "session");
     assert.equal(configureRoute(entry("github")), "session");
     assert.equal(configureRoute(entry("tabbit")), "session");
@@ -90,7 +98,8 @@ describe("状态行", () => {
       [{ kind: "unset", reason: "no-config" }, "circle-dashed", "未配置"],
       [{ kind: "connected", by: "local" }, "circle-check", "已连接"],
       [{ kind: "failed", code: "mcp", message: "401 unauthorized" }, "triangle-alert", "连接失败"],
-      [{ kind: "coming-soon" }, "clock", "即将支持"],
+      [{ kind: "logging-in" }, "loader-circle", "登录中…"],
+      [{ kind: "failed", code: "login", message: "x" }, "triangle-alert", "需要登录"],
     ];
     for (const [state, icon, text] of cases) {
       const line = statusLine(t, entry("tencent-docs"), state);
@@ -131,13 +140,23 @@ describe("状态行", () => {
     assert.equal(rowSubline(t, entry("feishu"), { kind: "unset", reason: "cli-missing" }), "没找到 lark-cli");
     assert.equal(rowSubline(t, entry("tabbit"), { kind: "connected", by: "local" }), "已检测到本机安装");
     assert.equal(rowSubline(t, entry("baidu-netdisk"), { kind: "failed", code: "mcp", message: "timeout waiting" }), "timeout waiting");
-    assert.equal(rowSubline(t, entry("notion"), { kind: "coming-soon" }), "远程 MCP · OAuth");
+    assert.equal(rowSubline(t, entry("notion"), { kind: "unset", reason: "no-config" }), "远程 MCP · OAuth");
+    assert.equal(rowSubline(t, entry("notion"), { kind: "logging-in" }), "在浏览器里完成授权");
+    assert.equal(rowSubline(t, entry("pangram"), { kind: "failed", code: "login", message: "pangram 还没有登录" }), "授权失效或还没登录");
     assert.equal(rowSubline(t, entry("tencent-docs"), { kind: "checking" }), "远程 MCP · token");
   });
 
-  test("phase 把 coming-soon 归成 soon", () => {
-    assert.equal(phaseOf({ kind: "coming-soon" }), "soon");
+  test("phase 就是状态本身（含登录中）", () => {
+    assert.equal(phaseOf({ kind: "logging-in" }), "logging-in");
     assert.equal(phaseOf({ kind: "checking" }), "checking");
+  });
+
+  test("需要登录的失败：状态行写「需要登录」+ 一句本地话，不摆服务端原文；别的 mcp 失败仍是「连接失败」", () => {
+    const line = statusLine(t, entry("notion"), { kind: "failed", code: "login", message: "notion 要求登录（服务端返回 401 并要求 OAuth 授权）" });
+    assert.deepEqual([line.text, line.note], ["需要登录", "授权失效或还没登录"]);
+    assert.equal(statusLine(t, entry("notion"), { kind: "failed", code: "mcp", message: "ECONNREFUSED" }).text, "连接失败");
+    // OAuth 卡的 401 不是「token 被拒绝」（没有 token 可言）
+    assert.equal(statusLine(t, entry("notion"), { kind: "failed", code: "mcp", message: "HTTP 401" }).note, "token 被拒绝");
   });
 });
 
@@ -153,12 +172,30 @@ describe("token 错误文案与筛选", () => {
 
   test("筛选：按名字 / 说明 / 能力词 / id 搜，大小写不敏感；空串全留；顺序不变", () => {
     const t = zh.connectors;
-    assert.equal(filterConnectors(t, CONNECTORS, "").length, 10);
+    assert.equal(filterConnectors(t, CONNECTORS, "").length, 11);
     assert.deepEqual(filterConnectors(t, CONNECTORS, "飞书").map((e) => e.id), ["feishu"]);
     assert.deepEqual(filterConnectors(t, CONNECTORS, "GITHUB").map((e) => e.id), ["github"]);
     assert.ok(filterConnectors(t, CONNECTORS, "token").map((e) => e.id).includes("baidu-netdisk"));
     assert.deepEqual(filterConnectors(t, CONNECTORS, "不存在的词"), []);
     const ids = filterConnectors(t, CONNECTORS, "文档").map((e) => e.id);
     assert.deepEqual(ids, CONNECTORS.map((e) => e.id).filter((id) => ids.includes(id)));
+  });
+});
+
+describe("登录没成时卡上的话", () => {
+  const t = zh.connectors.oauth;
+  test("取消不算失败（不留话）；超时 / 拒绝说本地话；发现失败与其余带原因第一行", () => {
+    assert.equal(loginFailureText(t, { ok: false, code: "cancelled", message: "登录已取消" }), null);
+    assert.match(loginFailureText(t, { ok: false, code: "timeout", message: "x" }) ?? "", /5 分钟/);
+    assert.match(loginFailureText(t, { ok: false, code: "denied", message: "x" }) ?? "", /拒绝/);
+    assert.match(loginFailureText(t, { ok: false, code: "discovery", message: "no dcr\nstack" }) ?? "", /授权信息读不到.*no dcr$/);
+    assert.equal(loginFailureText(t, { ok: false, code: "failed", message: "boom\nstack" }), "登录没有成功：boom");
+    assert.equal(loginFailureText(t, { ok: false, code: "unsupported", message: "只有远程 MCP" }), "登录没有成功：只有远程 MCP");
+  });
+
+  test("中英的 oauth 文案同形状（函数对函数、字符串对字符串）", () => {
+    for (const key of Object.keys(zh.connectors.oauth) as (keyof typeof zh.connectors.oauth)[]) {
+      assert.equal(typeof en.connectors.oauth[key], typeof zh.connectors.oauth[key], key);
+    }
   });
 });

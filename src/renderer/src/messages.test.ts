@@ -82,6 +82,9 @@ const ALLOWED_LATIN = new Set([
   "Tabbit",
   "Notion",
   "Supabase",
+  "Pangram",
+  // 「AI 写作」：Pangram 这类检测工具的名目，中文里一直这么写
+  "AI",
   "Storage",
   "Issue",
   "OAuth",

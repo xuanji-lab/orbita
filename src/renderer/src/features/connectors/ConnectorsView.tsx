@@ -3,11 +3,13 @@
  * 宽档（设置 › 能力，容器 ≥ 640px）是两列卡片墙，窄档（右栏、被挤窄的设置页）退成安静列表——
  * 哪棵显示由 plugins.css 的 `@container pl` 定，JS 不量宽度（同「已装」页）。
  * 状态一律来自主进程实测；「配置」要么开一条新会话让智能体带着接（命令行 / 引导型），
- * 要么就在卡内贴 token（远程 MCP 类）。即将支持的没有按钮。
+ * 要么就在卡内贴 token（远程 MCP 类）；OAuth 型（Notion / Supabase / Pangram）点「连接」在系统浏览器里登录，
+ * 回来自动实测，已连接时「断开」（行内二次确认）。
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import "./connectors.css";
 import { CONNECTORS, connectorSetupPrompt, type ConnectorEntry, type ConnectorId, type ConnectorSaveResult, type ConnectorVia } from "@shared/connectors";
+import type { McpOauthLoginResult } from "@shared/mcp-oauth";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 import { Icon } from "../../shell/Icon";
@@ -16,6 +18,7 @@ import {
   actionOf,
   configureRoute,
   filterConnectors,
+  loginFailureText,
   manageRoute,
   phaseOf,
   rowSubline,
@@ -39,6 +42,10 @@ export interface ConnectorsViewProps {
   /** 远程 MCP 类连上之后的「管理」：切到「已装」页签 */
   onShowInstalled: () => void;
   saveToken: (id: ConnectorId, token: string) => Promise<ConnectorSaveResult>;
+  /** OAuth 型：浏览器登录，等到结束 */
+  login: (id: ConnectorId) => Promise<McpOauthLoginResult>;
+  cancelLogin: (id: ConnectorId) => void;
+  disconnect: (id: ConnectorId) => Promise<void>;
 }
 
 function ViaTag(props: { via: ConnectorVia; t: Messages["connectors"] }) {
@@ -173,15 +180,74 @@ function TokenField(props: { entry: ConnectorEntry; onSave: (token: string) => P
   );
 }
 
+/** 行内二次确认：就在状态 / 按钮那一行原地换成这条（插件详情「移除」的同一个做法），后果小字挂在下面 */
+function DisconnectConfirm(props: { name: string; onConfirm: () => void; onCancel: () => void }) {
+  const t = useT();
+  const text = t.connectors.oauth;
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  // 破坏性确认的焦点落在「取消」上：手快按回车不会误断开
+  useEffect(() => cancelRef.current?.focus(), []);
+  return (
+    <div
+      className="pl-ic cn-confirm"
+      role="alertdialog"
+      aria-label={text.disconnectAsk(props.name)}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          props.onCancel();
+        }
+      }}
+    >
+      <div className="pl-ic-bar">
+        <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
+        <span className="pl-ic-ask">{text.disconnectAsk(props.name)}</span>
+        <button type="button" className="pl-btn solid-danger" onClick={props.onConfirm}>
+          {text.disconnectAction}
+        </button>
+        <button type="button" className="pl-btn" ref={cancelRef} onClick={props.onCancel}>
+          {t.common.cancel}
+        </button>
+      </div>
+      <p className="pl-ic-hint">{text.disconnectHint}</p>
+    </div>
+  );
+}
+
 export function ConnectorsView(props: ConnectorsViewProps) {
   const t = useT().connectors;
   const [editing, setEditing] = useState<ConnectorId | null>(null);
+  /** 正在二次确认「断开」的那一家 */
+  const [confirming, setConfirming] = useState<ConnectorId | null>(null);
+  /** 登录没成时每家卡上留的一句话（下一次登录开始时清掉；取消不算失败，不留） */
+  const [notices, setNotices] = useState<Partial<Record<ConnectorId, string>>>({});
   const entries = filterConnectors(t, CONNECTORS, props.query);
+
+  const startLogin = (entry: ConnectorEntry): void => {
+    setNotices((prev) => ({ ...prev, [entry.id]: undefined }));
+    void props.login(entry.id).then((result) => {
+      if (result.ok) return;
+      const text = loginFailureText(t.oauth, result);
+      if (text !== null) setNotices((prev) => ({ ...prev, [entry.id]: text }));
+    });
+  };
 
   /** 点按钮：按条目与状态决定去哪 */
   const act = (entry: ConnectorEntry, action: ActionModel): void => {
     const state = props.states[entry.id];
     const name = textOf(t, entry.id).name;
+    if (action.kind === "connect" || action.kind === "login") {
+      startLogin(entry);
+      return;
+    }
+    if (action.kind === "cancel") {
+      props.cancelLogin(entry.id);
+      return;
+    }
+    if (action.kind === "disconnect") {
+      setConfirming(entry.id);
+      return;
+    }
     if (action.kind === "manage") {
       if (manageRoute(entry, state) === "installed") props.onShowInstalled();
       else props.onStartSession(connectorSetupPrompt(entry, name, props.locale, "manage"));
@@ -192,12 +258,19 @@ export function ConnectorsView(props: ConnectorsViewProps) {
   };
 
   const save = (entry: ConnectorEntry) => (token: string) => props.saveToken(entry.id, token);
+  const confirmDisconnect = (entry: ConnectorEntry): void => {
+    setConfirming(null);
+    setNotices((prev) => ({ ...prev, [entry.id]: undefined }));
+    void props.disconnect(entry.id);
+  };
 
   const cards = entries.map((entry) => {
     const state = props.states[entry.id];
     const text = textOf(t, entry.id);
     const action = actionOf(t, entry, state);
     const open = editing === entry.id;
+    const asking = confirming === entry.id && state.kind === "connected";
+    const notice = notices[entry.id];
     return (
       <article key={entry.id} className="pv-vcard cn-card" data-phase={phaseOf(state)} aria-label={text.name}>
         <div className="cn-card-main">
@@ -214,15 +287,19 @@ export function ConnectorsView(props: ConnectorsViewProps) {
           <span className="cn-caps">{text.caps.join(" · ")}</span>
         </div>
         {open && <TokenField entry={entry} onSave={save(entry)} onCancel={() => setEditing(null)} />}
-        {!open && (
+        {asking && <DisconnectConfirm name={text.name} onConfirm={() => confirmDisconnect(entry)} onCancel={() => setConfirming(null)} />}
+        {!open && !asking && (
           <div className="cn-foot">
             <Status entry={entry} state={state} />
-            {action !== null && (
-              <span className="cn-actions row-trailing">
-                <ActionButton action={action} onClick={() => act(entry, action)} />
-              </span>
-            )}
+            <span className="cn-actions row-trailing">
+              <ActionButton action={action} onClick={() => act(entry, action)} />
+            </span>
           </div>
+        )}
+        {notice !== undefined && !asking && (
+          <span className="pl-field-error cn-notice" role="alert">
+            {notice}
+          </span>
         )}
       </article>
     );
@@ -233,11 +310,13 @@ export function ConnectorsView(props: ConnectorsViewProps) {
     const text = textOf(t, entry.id);
     const action = actionOf(t, entry, state);
     const open = editing === entry.id;
+    const asking = confirming === entry.id && state.kind === "connected";
+    const notice = notices[entry.id];
     const sub = rowSubline(t, entry, state);
     return (
       <div key={entry.id} className="cn-rowwrap">
         <div className="pl-row cn-row" data-phase={phaseOf(state)}>
-          <div className="pl-row-main cn-row-main" aria-label={text.name} title={entry.kind === "coming-soon" ? t.actionTip.soon : undefined}>
+          <div className="pl-row-main cn-row-main" aria-label={text.name}>
             <ConnectorLogo entry={entry} size="row" />
             <span className="pl-name">
               <b>{text.name}</b>
@@ -252,11 +331,23 @@ export function ConnectorsView(props: ConnectorsViewProps) {
               </small>
             </span>
           </div>
-          {action !== null && !open && <ActionButton action={action} onClick={() => act(entry, action)} />}
+          {!open && !asking && <ActionButton action={action} onClick={() => act(entry, action)} />}
         </div>
         {open && (
           <div className="cn-row-edit">
             <TokenField entry={entry} onSave={save(entry)} onCancel={() => setEditing(null)} />
+          </div>
+        )}
+        {asking && (
+          <div className="cn-row-edit">
+            <DisconnectConfirm name={text.name} onConfirm={() => confirmDisconnect(entry)} onCancel={() => setConfirming(null)} />
+          </div>
+        )}
+        {notice !== undefined && !asking && (
+          <div className="cn-row-edit">
+            <span className="pl-field-error cn-notice" role="alert">
+              {notice}
+            </span>
           </div>
         )}
       </div>

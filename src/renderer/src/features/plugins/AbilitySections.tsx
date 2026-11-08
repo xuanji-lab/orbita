@@ -13,7 +13,9 @@ import { api } from "../../api";
 import { useT } from "../../locale.ts";
 import { Chip } from "../../shell/Chip";
 import { Icon } from "../../shell/Icon";
+import { McpLoginAction } from "./McpLoginButton.tsx";
 import { PluginAvatar } from "./PluginParts.tsx";
+import { statusNeedsLogin } from "./mcp-login.ts";
 import { mcpErrors, readyWorkspaces } from "./mcp-row-display.ts";
 import { TOOL_CHIP_LIMIT, shortToolName, visibleTools } from "./mcp-tool-chips.ts";
 import type { WsFilter } from "../../shell/workspace-filter.ts";
@@ -171,6 +173,8 @@ export function McpStatusLine(props: {
   /** 重连进行中：非停用的都显示成连接中（实时状态还没回来，不装作不变） */
   reconnecting: boolean;
   onRetry: (() => void) | null;
+  /** 这是你自己配的远程 MCP 时给 server 名：失败是「需要登录」就在状态行里放登录钮（同「已装」列表那个） */
+  loginServer?: string;
 }) {
   const t = useT();
   const p = t.plugins;
@@ -192,6 +196,14 @@ export function McpStatusLine(props: {
           <p>{error.message}</p>
         </div>
       ))}
+      {props.loginServer !== undefined && statusNeedsLogin(status, props.instances) && (
+        <div className="pl-mcp-error">
+          <p>{p.mcpLoginNeeded}</p>
+          <span>
+            <McpLoginAction serverName={props.loginServer} />
+          </span>
+        </div>
+      )}
       {errors.length > 0 && props.onRetry !== null && (
         <span>
           <button type="button" className="pl-btn" disabled={props.reconnecting} onClick={props.onRetry}>

@@ -2618,11 +2618,12 @@ export const en = {
   /** 能力页「连接」页签：待配置的品牌入口（目录事实在 shared/connectors.ts，这里只有界面文案） */
   connectors: {
     tab: "Connections",
-    intro: "Click \"Set up\" and the agent walks you through it.",
+    intro: "Click \"Set up\" and the agent walks you through it. Ones marked OAuth: click \"Connect\" and sign in in your browser.",
     recheck: "Check again",
     recheckTip: "Test every connection again",
     empty: (query: string) => `No connection matches "${query}".`,
-    status: { unset: "Not set up", checking: "Checking…", connected: "Connected", failed: "Connection failed", soon: "Coming soon" },
+    status: { unset: "Not set up", checking: "Checking…", connected: "Connected", failed: "Connection failed", login: "Sign-in needed", loggingIn: "Signing in…" },
+    loggingInNote: "Finish authorizing in the browser",
     // 「未配置」后面的一句具体原因（实测得来）
     reason: {
       cliMissing: (command: string) => `${command} not found`,
@@ -2637,10 +2638,15 @@ export const en = {
     },
     failedAuth: "The token was rejected",
     failedTimeout: "Check timed out",
+    failedLogin: "Authorization expired or not signed in",
     action: {
       configure: "Set up",
       reconfigure: "Set up again",
       manage: "Manage",
+      connect: "Connect",
+      login: "Sign in again",
+      cancel: "Cancel",
+      disconnect: "Disconnect",
     },
     actionTip: {
       configure: "Open a new task and let the agent walk you through it",
@@ -2649,7 +2655,10 @@ export const en = {
       reconfigureToken: "Paste a new token",
       manageSession: "Open a new task where the agent re-checks it and explains how to use it",
       manageInstalled: "Show it in the Installed list, where you can turn it off or remove it",
-      soon: "Needs OAuth sign-in, which Orbita doesn't support yet",
+      connect: "Sign in and authorize in your browser; it checks itself when you come back",
+      login: "Go through the browser sign-in again",
+      cancelLogin: "Stop waiting and give up this sign-in",
+      disconnect: "Revoke the authorization and delete the sign-in saved on this computer",
       checking: "Checking…",
     },
     via: {
@@ -2659,6 +2668,17 @@ export const en = {
       skill: "Official skill",
       oauth: "OAuth",
       cliBuiltin: "Built-in CLI",
+    },
+    oauth: {
+      disconnectAsk: (name: string) => `Disconnect ${name}?`,
+      disconnectAction: "Disconnect",
+      disconnecting: "Disconnecting…",
+      disconnectHint: "This revokes the authorization, deletes the sign-in saved on this computer, and removes the entry from the MCP config. To use it again you sign in again.",
+      stored: "The sign-in is stored encrypted on this computer and never written to mcp.json.",
+      errorTimeout: "Authorization wasn't finished in the browser within 5 minutes. Click \"Connect\" to try again.",
+      errorDenied: "You declined on the authorization page, so nothing was connected.",
+      errorDiscovery: (message: string) => `This service's authorization info can't be read, or it doesn't support the sign-in Orbita uses: ${message}`,
+      errorFailed: (message: string) => `Sign-in didn't succeed: ${message}`,
     },
     token: {
       label: "MCP token",
@@ -2684,6 +2704,7 @@ export const en = {
       "baidu-netdisk": { name: "Baidu Netdisk", desc: "Search, manage and share the files in your Netdisk.", caps: ["Files", "Search"], how: "Remote MCP · token", tokenHint: "Authorize by QR code from the official \"custom use in an agent\" doc and copy access_token from the address bar (valid 30 days)." },
       notion: { name: "Notion", desc: "Pages, databases and comments.", caps: ["Pages", "Databases"], how: "Remote MCP · OAuth" },
       supabase: { name: "Supabase", desc: "Projects, databases and Storage.", caps: ["Database", "Storage"], how: "Remote MCP · OAuth" },
+      pangram: { name: "Pangram", desc: "Detect whether text is AI-written and find similar sources. Billed against your API credits.", caps: ["AI-text detection", "Similar sources"], how: "Remote MCP · OAuth" },
     },
   },
   plugins: {
@@ -2923,6 +2944,11 @@ export const en = {
     mcpReadyIn: (names: string) => `Connected · ${names}`,
     mcpErrorIn: (names: string) => `In ${names}`,
     mcpRetry: "Retry",
+    mcpLogin: "Sign in",
+    mcpLoginCancel: "Cancel",
+    mcpLoginTip: (name: string) => `${name} needs a sign-in: authorize in your browser and it connects when you come back`,
+    mcpLoginCancelTip: "Stop waiting and give up this sign-in",
+    mcpLoginNeeded: "This service asks for a sign-in (OAuth) and you haven't signed in, or the authorization expired.",
     mcpReconnect: "Reconnect",
     mcpReconnecting: "Reconnecting…",
     mcpToolsTitle: (count: number) => `Tools ${count}`,

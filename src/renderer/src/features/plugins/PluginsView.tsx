@@ -39,6 +39,11 @@ import { useReportSub } from "../../shell/use-report-sub.ts";
 import { describeList } from "../chat/load-state";
 import { InstallDialog } from "./InstallDialog.tsx";
 import { ConnectorsView } from "../connectors/ConnectorsView.tsx";
+import { loginFailureText } from "../connectors/connectors-view.ts";
+import { McpLoginButton, McpLoginContext } from "./McpLoginButton.tsx";
+import { statusNeedsLogin } from "./mcp-login.ts";
+import { useMcpLogin } from "./useMcpLogin.ts";
+import { useMcpRows } from "./useMcpRows.ts";
 import { useConnectors } from "../connectors/useConnectors.ts";
 import { PluginDetail } from "./PluginDetail.tsx";
 import { PluginDraftView } from "./PluginDraftView.tsx";
@@ -332,6 +337,15 @@ export function PluginsView(props: {
   const list = describeList(state.load, state.plugins.length);
   // 连接页签：只在看着它时才实测（探测会跑命令、连远端）
   const connectors = useConnectors(tab === "connect" && selected === null && !picking);
+  // 「已装」里需要登录的远程 MCP：状态来自 agent 的快照，列表行 / 卡片给「登录」入口（同连接目录的登录流程）
+  const mcpRows = useMcpRows(tab === "installed" && selected === null);
+  const refreshMcpRows = mcpRows.refresh;
+  const describeLoginFailure = useCallback((failure: Parameters<typeof loginFailureText>[1]) => loginFailureText(messages.connectors.oauth, failure), [messages]);
+  const mcpLogin = useMcpLogin(refreshMcpRows, setToggleError, describeLoginFailure);
+  const mcpLoginState = useMemo(
+    () => ({ needed: new Set(mcpRows.servers.filter((row) => !row.disabled && statusNeedsLogin(row.status, row.instances)).map((row) => row.name)), login: mcpLogin }),
+    [mcpRows.servers, mcpLogin],
+  );
   const filtering = query.trim() !== "";
   const makeAvailable = creatorAvailable(state.plugins);
   const enabledCount = state.plugins.filter(isActive).length;
@@ -375,6 +389,9 @@ export function PluginsView(props: {
       onStartSession={props.onStartConnectorSession}
       onShowInstalled={() => setTab("installed")}
       saveToken={connectors.saveToken}
+      login={connectors.login}
+      cancelLogin={connectors.cancelLogin}
+      disconnect={connectors.disconnect}
     />
   );
 
@@ -395,7 +412,7 @@ export function PluginsView(props: {
     </span>
   );
 
-  const listBody = (
+  const listInner = (
     <>
       {rail ? (
         <div className="pl-top">{actions}</div>
@@ -518,6 +535,8 @@ export function PluginsView(props: {
       {!filtering && <ArchivedAbilities refreshKey={state.plugins} workspaces={workspaces} filter={wsFilter} onRestored={state.refresh} />}
     </>
   );
+
+  const listBody = <McpLoginContext.Provider value={mcpLoginState}>{listInner}</McpLoginContext.Provider>;
 
   let pickOffset = 0;
   const pickBody = (
@@ -791,6 +810,7 @@ function PluginCard(props: { view: PluginView; range: RangeLabel | null; size: C
       {large && <span>{t.enabled}</span>}
     </span>
   ) : null;
+  const login = <McpLoginButton view={view} />;
   const toggle = (
     // 点开关不该同时进详情
     <span className="pl-card-switch" onClick={(event) => event.stopPropagation()}>
@@ -824,12 +844,14 @@ function PluginCard(props: { view: PluginView; range: RangeLabel | null; size: C
             <span className={`pv-vcard-note pl-vcard-note${view.origin === "user-mcp" ? " mono" : ""}`}>{view.description}</span>
           </span>
           <span className="pv-vcard-foot">{foot}</span>
+          {login}
         </>
       ) : (
         <>
           <PluginAvatar view={view} />
           <span className="pv-vcard-name">{view.name}</span>
           {badge}
+          {login}
         </>
       )}
       {toggle}
@@ -870,6 +892,7 @@ function PluginRow(props: { view: PluginView; range: RangeLabel | null; onOpen: 
         <span className="pl-from">{sourceLabel}</span>
         <KindTag view={view} />
       </button>
+      <McpLoginButton view={view} />
       {/* 断链的技能没有东西可开关：开关停着，点进去清理 */}
       <PluginSwitch checked={active} label={active ? t.toggleOff(view.name) : t.toggleOn(view.name)} disabled={isMissingSkillView(view)} onChange={props.onToggle} />
     </div>

@@ -176,13 +176,9 @@
   justify-content: flex-end;
 }
 
-/* 即将支持：沿用 .pv-vcard.closed 的先例——底色换 muted，图块与文字退到次要；没有按钮 */
-.cn-card[data-phase="soon"] {
-  background: var(--color-bg-muted);
-}
-
-.cn-card[data-phase="soon"] :is(.cn-logo, .cn-card-text, .cn-chips) {
-  opacity: 0.55;
+/* 登录没成的一句话：挂在卡底 */
+.cn-notice {
+  display: block;
 }
 
 /* ---------- 列表行（窄档） ---------- */
@@ -226,10 +222,6 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.cn-row[data-phase="soon"] :is(.cn-logo, .pl-name b) {
-  opacity: 0.55;
 }
 
 /* 行下展开的 token 输入：左缘与行内文字对齐（图块 28 + 间距） */
