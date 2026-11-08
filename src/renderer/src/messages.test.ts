@@ -121,6 +121,9 @@ const ALLOWED_LATIN = new Set([
   "UniST",
   "UrbanCLIP",
   "arXiv",
+  // 故事版引导辨伪环节：论文里的数据集名与 PPT（导出格式名，同 Word / PDF）
+  "CHI-bike",
+  "PPT",
   // 文件名
   "mcp.json",
   "SKILL.md",
