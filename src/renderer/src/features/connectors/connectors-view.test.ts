@@ -107,6 +107,12 @@ describe("状态行", () => {
     }
   });
 
+  test("OAuth 型没连的时候说「未连接」（按钮是「连接」），其余仍是「未配置」", () => {
+    assert.equal(statusLine(zh.connectors, entry("notion"), { kind: "unset", reason: "no-config" }).text, "未连接");
+    assert.equal(statusLine(zh.connectors, entry("tencent-docs"), { kind: "unset", reason: "no-config" }).text, "未配置");
+    assert.equal(statusLine(en.connectors, entry("pangram"), { kind: "unset", reason: "no-config" }).text, "Not connected");
+  });
+
   test("未配置带实测得来的原因：没找到命令（写命令名）/ 未登录 / 已停用；没原因就空", () => {
     assert.equal(statusLine(t, entry("feishu"), { kind: "unset", reason: "cli-missing" }).note, "没找到 lark-cli");
     assert.equal(statusLine(t, entry("feishu"), { kind: "unset", reason: "not-logged-in" }).note, "未登录");

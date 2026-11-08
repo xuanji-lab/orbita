@@ -2618,11 +2618,11 @@ export const en = {
   /** 能力页「连接」页签：待配置的品牌入口（目录事实在 shared/connectors.ts，这里只有界面文案） */
   connectors: {
     tab: "Connections",
-    intro: "Click \"Set up\" and the agent walks you through it. Ones marked OAuth: click \"Connect\" and sign in in your browser.",
+    intro: "Click \"Set up\" and the agent walks you through it. For ones marked OAuth, click \"Connect\".",
     recheck: "Check again",
     recheckTip: "Test every connection again",
     empty: (query: string) => `No connection matches "${query}".`,
-    status: { unset: "Not set up", checking: "Checking…", connected: "Connected", failed: "Connection failed", login: "Sign-in needed", loggingIn: "Signing in…" },
+    status: { unset: "Not set up", checking: "Checking…", connected: "Connected", failed: "Connection failed", login: "Sign-in needed", loggingIn: "Signing in…", notConnected: "Not connected" },
     loggingInNote: "Finish authorizing in the browser",
     // 「未配置」后面的一句具体原因（实测得来）
     reason: {

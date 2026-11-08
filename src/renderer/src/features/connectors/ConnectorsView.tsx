@@ -202,12 +202,14 @@ function DisconnectConfirm(props: { name: string; onConfirm: () => void; onCance
       <div className="pl-ic-bar">
         <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
         <span className="pl-ic-ask">{text.disconnectAsk(props.name)}</span>
-        <button type="button" className="pl-btn solid-danger" onClick={props.onConfirm}>
-          {text.disconnectAction}
-        </button>
-        <button type="button" className="pl-btn" ref={cancelRef} onClick={props.onCancel}>
-          {t.common.cancel}
-        </button>
+        <span className="cn-confirm-acts">
+          <button type="button" className="pl-btn solid-danger" onClick={props.onConfirm}>
+            {text.disconnectAction}
+          </button>
+          <button type="button" className="pl-btn" ref={cancelRef} onClick={props.onCancel}>
+            {t.common.cancel}
+          </button>
+        </span>
       </div>
       <p className="pl-ic-hint">{text.disconnectHint}</p>
     </div>

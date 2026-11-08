@@ -23,6 +23,8 @@ export interface FixtureOptions {
   authorizeEndpoint?: string;
   /** token 端点不给 refresh_token（模拟没有 offline_access） */
   noRefreshToken?: boolean;
+  /** 指定端口（默认 0 = OS 分配）。长驻自测时重启要回到同一个地址用 */
+  port?: number;
 }
 
 export interface OauthFixture {
@@ -213,7 +215,7 @@ export async function startOauthFixture(options: FixtureOptions = {}): Promise<O
       if (!res.headersSent) json(res, 500, { error: "server_error", error_description: String(cause) });
     });
   });
-  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => http.listen(options.port ?? 0, "127.0.0.1", resolve));
   base = `http://127.0.0.1:${(http.address() as AddressInfo).port}`;
   return {
     base,

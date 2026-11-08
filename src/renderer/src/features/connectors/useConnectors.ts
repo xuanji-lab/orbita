@@ -9,6 +9,9 @@ import type { McpOauthLoginResult } from "@shared/mcp-oauth";
 import { api } from "../../api";
 import type { ProbeState } from "./connectors-view.ts";
 
+/** 有卡片停在「登录中」时的静默重探间隔 */
+const LOGGING_IN_POLL_MS = 2500;
+
 export type ConnectorStates = Readonly<Record<ConnectorId, ProbeState>>;
 
 /** 初始：每家先「检测中」（每家都会被探一遍） */
@@ -35,6 +38,8 @@ export interface Connectors {
 
 export function useConnectors(active: boolean): Connectors {
   const [states, setStates] = useState<ConnectorStates>(initial);
+  const statesRef = useRef(states);
+  statesRef.current = states;
   /** 每家最新一次探测的序号 */
   const seq = useRef<Partial<Record<ConnectorId, number>>>({});
 
@@ -91,6 +96,17 @@ export function useConnectors(active: boolean): Connectors {
     },
     [apply, probe],
   );
+
+  // 登录进行中的卡片（本页发起的，或页面重开 / 切回来时主进程告诉我们的）：浏览器那头结束的时刻 renderer 不一定在听
+  // （发起登录的那次调用随页面一起没了），所以只要还有卡片停在「登录中」就每隔几秒静默重探，结果落地就换。
+  const anyLoggingIn = CONNECTORS.some((entry) => states[entry.id].kind === "logging-in");
+  useEffect(() => {
+    if (!active || !anyLoggingIn) return;
+    const timer = window.setInterval(() => {
+      for (const entry of CONNECTORS) if (statesRef.current[entry.id].kind === "logging-in") probe(entry.id, false);
+    }, LOGGING_IN_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [active, anyLoggingIn, probe]);
 
   const login = useCallback(
     async (id: ConnectorId): Promise<McpOauthLoginResult> => {

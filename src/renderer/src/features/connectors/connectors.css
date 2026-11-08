@@ -224,6 +224,12 @@
   text-overflow: ellipsis;
 }
 
+/* 断开确认里的两个按钮成一组：窄档放不下时整组掉到下一行靠左，不拆开 */
+.cn-confirm-acts {
+  display: inline-flex;
+  gap: var(--space-2);
+}
+
 /* 行下展开的 token 输入：左缘与行内文字对齐（图块 28 + 间距） */
 .cn-row-edit {
   --cn-tile: 28px;

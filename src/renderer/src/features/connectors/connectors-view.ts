@@ -106,7 +106,8 @@ export function statusLine(t: Messages["connectors"], entry: ConnectorEntry, sta
       const command = entry.cli?.command ?? "";
       const note =
         state.reason === "cli-missing" ? t.reason.cliMissing(command) : state.reason === "not-logged-in" ? t.reason.notLoggedIn : state.reason === "disabled" ? t.reason.disabled : t.reason.noConfig;
-      return { icon: "circle-dashed", text: t.status.unset, note };
+      // OAuth 型没有「配置」这回事，按钮是「连接」，状态也说「未连接」
+      return { icon: "circle-dashed", text: entry.kind === "mcp-oauth" ? t.status.notConnected : t.status.unset, note };
     }
   }
 }

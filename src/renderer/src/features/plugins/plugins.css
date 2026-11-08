@@ -510,6 +510,20 @@
   border-top: 1px solid var(--color-border-subtle);
 }
 
+/* 需要登录的远程 MCP 多一个「登录」钮：夹在主体与开关之间（不加这一列，开关会被挤到下一行） */
+.pl-row:has(> .pl-login) {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.pl-login {
+  white-space: nowrap;
+}
+
+/* 卡片里它是一个小钮、靠左（右下角是启用开关的位置），不撑满卡宽 */
+.pl-vcard .pl-login {
+  justify-self: start;
+}
+
 /* 点这一块进详情；开关在它外面（<button> 不能嵌 <button>） */
 .pl-row-main {
   display: grid;

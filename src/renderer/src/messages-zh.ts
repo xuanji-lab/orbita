@@ -2426,11 +2426,11 @@ export const zh: Messages = {
   /** 能力页「连接」页签：待配置的品牌入口（目录事实在 shared/connectors.ts，这里只有界面文案） */
   connectors: {
     tab: "连接",
-    intro: "点「配置」，让智能体带你接好；标着 OAuth 的点「连接」，在浏览器里登录就行。",
+    intro: "点「配置」，让智能体带你接好；标着 OAuth 的点「连接」。",
     recheck: "重新检测",
     recheckTip: "把每一项重新实测一遍",
     empty: (query: string) => `没有匹配「${query}」的连接。`,
-    status: { unset: "未配置", checking: "检测中…", connected: "已连接", failed: "连接失败", login: "需要登录", loggingIn: "登录中…" },
+    status: { unset: "未配置", checking: "检测中…", connected: "已连接", failed: "连接失败", login: "需要登录", loggingIn: "登录中…", notConnected: "未连接" },
     loggingInNote: "在浏览器里完成授权",
     reason: {
       cliMissing: (command: string) => `没找到 ${command}`,
