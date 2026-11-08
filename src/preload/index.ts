@@ -25,6 +25,7 @@ import { usageApi } from "./api/usage.ts";
 import { updaterApi } from "./api/updater.ts";
 import { voiceApi } from "./api/voice.ts";
 import { mcpApi, skillApi } from "./api/skill.ts";
+import { connectorApi } from "./api/connector.ts";
 import { memoryApi } from "./api/memory.ts";
 import { panelUsageApi } from "./api/panel-usage.ts";
 import { rightPanelMemoryApi } from "./api/right-panel-memory.ts";
@@ -46,6 +47,7 @@ const api = {
   plugin: pluginApi,
   memory: memoryApi,
   mcp: mcpApi,
+  connector: connectorApi,
   window: windowApi,
   workspace: workspaceApi,
   files: filesApi,

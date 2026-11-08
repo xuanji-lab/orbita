@@ -13,7 +13,7 @@ import type { AddressInfo } from "node:net";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { McpHub } from "./mcp.ts";
+import { McpHub, probeRemoteMcp } from "./mcp.ts";
 
 const TOKEN = "Bearer k";
 
@@ -107,6 +107,43 @@ describe("SSE 传输", () => {
       assert.equal(hub.describe()[0]?.status.kind, "failed");
     } finally {
       await hub.dispose();
+    }
+  });
+});
+
+describe("probeRemoteMcp（连接目录的一次性实测）", () => {
+  test("通：连上、数出工具；连续探两次都通（上一次没留下半开的连接）", async () => {
+    seen.length = 0;
+    const result = await probeRemoteMcp({ transport: "sse", url: `${base}/sse`, headers: { Authorization: TOKEN } });
+    assert.deepEqual(result, { ok: true, tools: 1 });
+    assert.deepEqual(await probeRemoteMcp({ transport: "sse", url: `${base}/sse`, headers: { Authorization: TOKEN } }), { ok: true, tools: 1 });
+  });
+
+  test("401：失败并带原因；原因里不会出现 token（错误文案里的凭据被抹成 ***）", async () => {
+    const result = await probeRemoteMcp({ transport: "sse", url: `${base}/sse`, headers: { Authorization: "Bearer wrong-token-123" } });
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.match(result.message, /401/);
+      assert.ok(!result.message.includes("wrong-token-123"));
+    }
+  });
+
+  test("连不上的地址 / 超时：失败而不是挂住", async () => {
+    const refused = await probeRemoteMcp({ transport: "http", url: "http://127.0.0.1:1/mcp" });
+    assert.equal(refused.ok, false);
+    // 一个接了连接却永不回话的服务端：按给定超时放弃
+    const hang = createServer(() => undefined);
+    await new Promise<void>((resolve) => hang.listen(0, "127.0.0.1", resolve));
+    try {
+      const url = `http://127.0.0.1:${(hang.address() as AddressInfo).port}/sse`;
+      const started = Date.now();
+      const result = await probeRemoteMcp({ transport: "sse", url }, 400);
+      assert.equal(result.ok, false);
+      assert.ok(Date.now() - started < 3000, "超时没生效");
+      if (!result.ok) assert.match(result.message, /超时/);
+    } finally {
+      hang.closeAllConnections();
+      await new Promise<void>((resolve) => hang.close(() => resolve()));
     }
   });
 });

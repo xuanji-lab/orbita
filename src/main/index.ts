@@ -64,7 +64,10 @@ import { registerProviderIpc } from "./provider/ipc.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
 import { moveSessions } from "./session/move.ts";
 import { registerWrapupIpc } from "./session/wrapup-ipc.ts";
+import { registerConnectorIpc } from "./connector/ipc.ts";
+import { realProbeDeps } from "./connector/probe.ts";
 import { registerMcpIpc } from "./mcp/ipc.ts";
+import { probeRemoteMcp } from "../agent/mcp.ts";
 import { McpStore } from "./mcp/store.ts";
 import { PluginAgentRequests } from "./plugin/agent-requests.ts";
 import { DraftSessionBook } from "./plugin/draft-sessions.ts";
@@ -800,6 +803,15 @@ void app.whenReady().then(async () => {
   // MCP 的 IPC 面（1-1 起含热重载）。reload 回调闭包引用 agentHost——
   // 事件回调只在事件到达时执行，那时两边都已定义，不存在 TDZ 问题
   const mcpIpc = registerMcpIpc(mcp, workspaces, () => agentHost.mcpReload());
+  // 连接目录（能力页「连接」页签）：逐卡实测 + 保存 token。远程 MCP 的实测是一次性的连上即关，
+  // 不进 agent 进程的连接表（那里按工作区分片、有闲置回收）；命令行状态命令是 5 秒内的本地读
+  registerConnectorIpc(mcp, () => agentHost.mcpReload(), () =>
+    realProbeDeps({
+      readMcpConfig: () => mcp.read(),
+      probeMcp: (server) => probeRemoteMcp(server),
+      runtimeStatus: (name) => mcpIpc.statusOf(name),
+    }),
+  );
   // 删除会话时把 runtime 里那条 pi 会话也放掉——不然每开一条任务就多一份驻留，
   // 活到退出应用（刀 0-4 债务 A）。会话分支（session:branch）也要走 agent 进程裁 pi 本子
   // 遗留事项（收尾仪式）全局一份；与 sessions/ 目录平级，一眼看得出哪份归谁

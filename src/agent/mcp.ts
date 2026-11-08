@@ -26,6 +26,7 @@ import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import {
   isHttpServer,
   qualifiedToolName,
+  type McpHttpServer,
   type McpServer,
   type McpStatus,
   type McpStatusSnapshot,
@@ -516,6 +517,52 @@ function toResultContent(content: unknown): McpResultContent[] {
     }
   }
   return out;
+}
+
+/** 一次性实测远端 MCP 的结果：连通并列了工具 / 失败带原因（已抹掉请求头里的凭据） */
+export type McpProbeResult = { ok: true; tools: number } | { ok: false; message: string };
+
+const PROBE_TIMEOUT_MS = 15_000;
+
+/**
+ * 一次性实测一台**远端** MCP（Streamable HTTP / SSE）：连上、列完工具、立刻关。
+ * 连接目录判「已连接」用它——真连一次，不看配置文件里「写着有」。
+ *
+ * 不进 McpHub：Hub 的实例按 (工作区, server) 分片、有闲置回收与代数，探一下的连接不该混进去，
+ * 也不该占住一个工作区的实例名额。只收 url 型：stdio 要起子进程，探一下的代价与副作用都大，
+ * 目录里没有这样的消费者。错误文案里凭据值一律替换成 `***`（SDK 的错误有时会带请求细节）。
+ */
+export async function probeRemoteMcp(server: McpHttpServer, timeoutMs: number = PROBE_TIMEOUT_MS): Promise<McpProbeResult> {
+  const client = new Client({ name: "orbita-probe", version: packageJson.version }, { capabilities: {} });
+  const scrub = (message: string): string => {
+    let out = message;
+    for (const value of Object.values(server.headers ?? {})) {
+      // 值本身与去掉 `Bearer ` 的 token 部分都抹
+      for (const secret of [value, value.replace(/^Bearer\s+/i, "")]) {
+        if (secret.length >= 4) out = out.split(secret).join("***");
+      }
+    }
+    return out;
+  };
+  try {
+    await withTimeout(client.connect(createTransport(server)), timeoutMs, `连接超时（${Math.round(timeoutMs / 1000)} 秒）`);
+    let tools = 0;
+    let cursor: string | undefined;
+    do {
+      const page = await withTimeout(
+        client.listTools(cursor === undefined ? {} : { cursor }),
+        timeoutMs,
+        `列工具超时（${Math.round(timeoutMs / 1000)} 秒）`,
+      );
+      tools += page.tools.length;
+      cursor = page.nextCursor;
+    } while (cursor !== undefined);
+    return { ok: true, tools };
+  } catch (error) {
+    return { ok: false, message: scrub(error instanceof Error ? error.message : String(error)) };
+  } finally {
+    await client.close().catch(() => undefined);
+  }
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
