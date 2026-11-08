@@ -218,15 +218,17 @@ export function openingModelScope(
 }
 
 /**
- * 「这个厂商能不能用」的唯一判定：凭据已就位 = api_key 且已存密钥，或密钥来自环境变量
- * （env 档没有 hasSecret 可查，scheme 本身就是「已配置」的声明）；none 恒为假。
+ * 「这个厂商能不能用」的唯一判定：凭据已就位 = api_key 且已存密钥，或 env 档声明了要读的
+ * 环境变量名（envKeys 非空；变量此刻有没有值 renderer 看不到，由主进程装配时取）；none 恒为假。
+ * env 档 envKeys 为空时算未配置：主进程装配无从取密钥，菜单放行就会「能选、一发就炸」
+ * （2026-11-08 Windows 验收实测）。
  * nav 状态点与模型菜单的 usableProviders 是两个真实消费者——此前各写各的判定，
  * env 档厂商在模型菜单里能选、nav 却挂空心环，同一个问题给出两个答案。
  */
 export function hasCredentials(auth: ProviderDto["auth"]): boolean {
   if (auth.scheme === "api_key") return auth.hasSecret;
   if (auth.scheme === "oauth") return auth.loggedIn;
-  return auth.scheme === "env";
+  return auth.scheme === "env" && auth.envKeys.length > 0;
 }
 
 /**

@@ -238,6 +238,24 @@ export class ProviderStore {
     return this.secrets.get(provider.auth.secretRef.account);
   }
 
+  /**
+   * env 档的密钥：按 envKeys 顺序取第一个非空的环境变量，都没有就 null。
+   * 只给主进程里真要发请求的两处用（会话装配、测试连接），**不并进 resolveApiKey**——
+   * 后者还接着「显示明文密钥」那条 IPC（providerReveal），并进去就会把用户的环境变量
+   * 明文送进 renderer。envKeys 只来自已落盘的配置：upsert 不收 renderer 传来的变量名，
+   * renderer 没法指定主进程去读哪个环境变量。
+   * 与模型菜单的判定对齐：hasCredentials 只在 envKeys 非空时把 env 档算作已配置。
+   */
+  async resolveEnvKey(id: ProviderId): Promise<string | null> {
+    const provider = (await this.load()).find((p) => p.id === id);
+    if (!provider || provider.auth.scheme !== "env") return null;
+    for (const key of provider.auth.envKeys) {
+      const value = process.env[key];
+      if (value !== undefined && value !== "") return value;
+    }
+    return null;
+  }
+
   /** 登录成功后落盘 OAuth 凭据（JSON 整体加密进密钥库）。 */
   async saveOauthCredential(id: ProviderId, credential: OauthCredential): Promise<void> {
     const provider = (await this.load()).find((p) => p.id === id);

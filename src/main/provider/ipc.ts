@@ -35,7 +35,7 @@ async function resolveKey(
   if (providerId === undefined) return null;
   const oauth = await store.resolveOauthApiKey(providerId);
   if (oauth !== null) return oauth;
-  return store.resolveApiKey(providerId);
+  return (await store.resolveApiKey(providerId)) ?? (await store.resolveEnvKey(providerId));
 }
 
 export function registerProviderIpc(store: ProviderStore, host?: AgentHostCore): void {

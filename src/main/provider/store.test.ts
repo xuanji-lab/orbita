@@ -90,6 +90,56 @@ describe("ProviderStore", () => {
     assert.equal(await store.resolveApiKey("missing"), null);
   });
 
+  test("env 档：resolveEnvKey 按 envKeys 顺序取第一个非空环境变量；resolveApiKey 不读环境变量", async () => {
+    // envKeys 只来自已落盘的配置（upsert 不收 renderer 传来的变量名），这里直接写文件造
+    await writeFile(
+      join(dir, "providers.json"),
+      JSON.stringify({
+        version: 1,
+        providers: [
+          {
+            id: "env-prov",
+            displayName: "EnvProv",
+            endpoint: { baseUrl: "https://api.example.com/v1/", api: "openai-completions" },
+            models: { declared: [{ id: "m-1" }] },
+            auth: { scheme: "env", envKeys: ["ORBITA_TEST_ENV_KEY_A", "ORBITA_TEST_ENV_KEY_B"] },
+          },
+        ],
+      }),
+      "utf8",
+    );
+    const fresh = new ProviderStore(dir, secrets);
+    try {
+      process.env.ORBITA_TEST_ENV_KEY_A = "";
+      process.env.ORBITA_TEST_ENV_KEY_B = "sk-from-env-6789";
+      assert.equal(await fresh.resolveEnvKey("env-prov"), "sk-from-env-6789", "空串跳过，取第一个非空");
+      // 「显示明文密钥」那条 IPC 走 resolveApiKey：不能顺手把环境变量的明文吐给 renderer
+      assert.equal(await fresh.resolveApiKey("env-prov"), null);
+      process.env.ORBITA_TEST_ENV_KEY_B = "";
+      assert.equal(await fresh.resolveEnvKey("env-prov"), null, "全空如实返回 null");
+      assert.equal(await fresh.resolveEnvKey("missing"), null);
+    } finally {
+      delete process.env.ORBITA_TEST_ENV_KEY_A;
+      delete process.env.ORBITA_TEST_ENV_KEY_B;
+    }
+  });
+
+  test("upsert 不收 renderer 传来的 envKeys：新建 env 档时变量名一律为空", async () => {
+    const draft = (envKeys: string[]): ProviderUpsertInput => ({
+      provider: {
+        id: "env-prov",
+        displayName: "EnvProv",
+        endpoint: { baseUrl: "https://api.example.com/v1/", api: "openai-completions" },
+        models: { declared: [{ id: "m-1" }] },
+        // 类型上不允许带 envKeys；这里模拟 renderer 硬塞一个进来
+        auth: { scheme: "env", envKeys } as ProviderUpsertInput["provider"]["auth"],
+      },
+    });
+    await store.upsert(draft(["GITHUB_TOKEN"]));
+    const created = (await store.list()).find((p) => p.id === "env-prov");
+    assert.deepEqual(created?.auth, { scheme: "env", envKeys: [] });
+  });
+
   test("改其它字段而不传 apiKey：密钥保留，不被清空", async () => {
     await store.upsert(input());
     const before = [...secrets.values.entries()][0];
