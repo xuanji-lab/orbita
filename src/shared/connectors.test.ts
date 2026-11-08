@@ -4,6 +4,7 @@ import { describe, test } from "node:test";
 import {
   CONNECTORS,
   CONNECTOR_IDS,
+  connectorOauthServerConfig,
   connectorServerConfig,
   connectorSetupPrompt,
   deriveConnectorStatus,
@@ -24,11 +25,11 @@ function entry(id: string): ConnectorEntry {
 const logoDir = new URL("../../design-system/assets/connector-logos/", import.meta.url);
 
 describe("目录数据完整性", () => {
-  test("10 家、id 不重复、顺序固定（即将支持的沉底）", () => {
+  test("11 家、id 不重复、顺序固定（OAuth 登录的三家沉底）", () => {
     assert.deepEqual(CONNECTORS.map((each) => each.id), [...CONNECTOR_IDS]);
-    assert.equal(new Set(CONNECTORS.map((each) => each.id)).size, 10);
-    assert.deepEqual(CONNECTORS.filter((each) => each.kind === "coming-soon").map((each) => each.id), ["notion", "supabase"]);
-    assert.deepEqual(CONNECTORS.slice(-2).map((each) => each.kind), ["coming-soon", "coming-soon"]);
+    assert.equal(new Set(CONNECTORS.map((each) => each.id)).size, 11);
+    assert.deepEqual(CONNECTORS.filter((each) => each.kind === "mcp-oauth").map((each) => each.id), ["notion", "supabase", "pangram"]);
+    assert.deepEqual(CONNECTORS.slice(-3).map((each) => each.kind), ["mcp-oauth", "mcp-oauth", "mcp-oauth"]);
   });
 
   test("每家有官方入口（https）、核验日期、接入小标、能找到的品牌标文件", () => {
@@ -49,7 +50,7 @@ describe("目录数据完整性", () => {
     }
   });
 
-  test("kind 与字段对得上：cli 有命令、mcp-token 有 token 头与合法 server 名、coming-soon 没有可配置面", () => {
+  test("kind 与字段对得上：cli 有命令、mcp-token 有 token 头与合法 server 名、mcp-oauth 是 https 的远程 MCP、不带 token 头、不开配置会话", () => {
     for (const each of CONNECTORS) {
       if (each.kind === "cli") assert.ok(each.cli, `${each.id} 缺 cli`);
       if (each.kind === "mcp-token") {
@@ -57,7 +58,13 @@ describe("目录数据完整性", () => {
         assert.match(each.mcp.url, /^https:\/\//);
       }
       if (each.mcp !== undefined) assert.ok(isMcpServerName(each.mcp.serverName), each.id);
-      if (each.kind === "coming-soon") assert.equal(opensSetupSession(each), false);
+      if (each.kind === "mcp-oauth") {
+        assert.match(each.mcp?.url ?? "", /^https:\/\//, each.id);
+        assert.equal(each.mcp?.tokenHeader, undefined, each.id);
+        assert.equal(each.mcp?.transport, "http", each.id);
+        assert.equal(opensSetupSession(each), false);
+        assert.ok(each.via.some((via) => via.kind === "oauth"), `${each.id} 的小标要写明 OAuth`);
+      }
     }
     // mcp.json 里的 server 名不能撞
     const names = CONNECTORS.flatMap((each) => (each.mcp === undefined ? [] : [each.mcp.serverName]));
@@ -135,9 +142,21 @@ describe("状态推导（只认实测）", () => {
     assert.deepEqual(deriveConnectorStatus(github, { cli: run({ exitCode: 1 }), mcp: mcpNone }), { kind: "unset", reason: "not-logged-in" });
   });
 
-  test("即将支持的永远是即将支持；引导型（携程）没有可测通路，恒为未配置", () => {
-    assert.deepEqual(deriveConnectorStatus(entry("notion"), {}), { kind: "coming-soon" });
-    assert.deepEqual(deriveConnectorStatus(entry("supabase"), { mcp: { present: true, disabled: false, probe: { ok: true, tools: 1 } } }), { kind: "coming-soon" });
+  test("OAuth 型：没写进 mcp.json 是未配置；实测通是已连接；要登录（从没登录 / 授权失效）是 failed + login；其余失败是 mcp", () => {
+    const notion = entry("notion");
+    assert.deepEqual(deriveConnectorStatus(notion, { mcp: { present: false, disabled: false, probe: null } }), { kind: "unset", reason: "no-config" });
+    assert.deepEqual(deriveConnectorStatus(notion, { mcp: { present: true, disabled: false, probe: { ok: true, tools: 14 } } }), { kind: "connected", by: "mcp", tools: 14 });
+    assert.deepEqual(
+      deriveConnectorStatus(notion, { mcp: { present: true, disabled: false, probe: { ok: false, message: "notion 还没有登录", needsLogin: true } } }),
+      { kind: "failed", code: "login", message: "notion 还没有登录" },
+    );
+    assert.deepEqual(
+      deriveConnectorStatus(notion, { mcp: { present: true, disabled: false, probe: { ok: false, message: "boom" } } }),
+      { kind: "failed", code: "mcp", message: "boom" },
+    );
+  });
+
+  test("引导型（携程）没有可测通路，恒为未配置", () => {
     assert.deepEqual(deriveConnectorStatus(entry("ctrip"), {}), { kind: "unset", reason: "no-config" });
   });
 });
@@ -176,6 +195,15 @@ describe("token 校验与 mcp.json 条目", () => {
 
   test("不是 mcp-token 的卡不给条目", () => {
     for (const id of ["feishu", "github", "ctrip", "notion", "tabbit"]) assert.equal(connectorServerConfig(entry(id), "tok"), null, id);
+  });
+
+  test("OAuth 卡写进 mcp.json 的条目只有地址与 auth 标记（不含任何凭据），能被 parseServer 原样读回；其余卡不给", () => {
+    for (const [id, url] of [["notion", "https://mcp.notion.com/mcp"], ["supabase", "https://mcp.supabase.com/mcp"], ["pangram", "https://www.pangram.com/mcp"]] as const) {
+      const config = connectorOauthServerConfig(entry(id));
+      assert.deepEqual(config, { transport: "http", url, auth: "oauth" }, id);
+      assert.deepEqual(parseServer(config), config, id);
+    }
+    for (const id of ["feishu", "github", "tencent-docs", "baidu-netdisk", "ctrip"]) assert.equal(connectorOauthServerConfig(entry(id)), null, id);
   });
 });
 

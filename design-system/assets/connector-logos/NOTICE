@@ -7,6 +7,7 @@
 - tencent-docs.svg  腾讯文档官方 https://docs.gtimg.com/docs-design-resources/pc/svg/list_logo-27e58348b7.svg，viewBox 裁到 0 0 24 24
 - supabase.svg      Supabase 官方 https://supabase.com/docs/supabase-dark.svg，viewBox 裁到图标部分 0 0 110 113
 - tabbit.png        本机 /Applications/Tabbit.app/Contents/Resources/app.icns 导出的 256px（Tabbit 浏览器自带的应用图标）
+- pangram.svg       Pangram 官方站 https://www.pangram.com/favicon.svg（品牌色，橙 #FF6106 + 浅桃 #FECAB9），只去掉了 width / height 属性，viewBox 不变（116 116 488 488）
 - dingtalk.png / wecom.png / ctrip.png / baidu-netdisk.png
                     这四家没找到官方单独提供的 SVG，暂用 Proma（AGPL-3.0，与本仓同许可）
                     apps/electron/src/renderer/assets/integrations/ 的 256px PNG。
@@ -16,4 +17,4 @@
                     ../vendor-logos/LICENSE）。单色。本地改动：去掉 <title>、width / height / style 属性；
                     填色是 currentColor，界面里跟着主题的文字色走（暗色下变白，不另做底）。
 
-核对状态：各家官方品牌资源页是否另有规定，2026-11-08 未核实。
+核对状态：各家官方品牌资源页是否另有规定，2026-11-08 未核实（Pangram 一家 2026-11-09 取用，同样未核实）。

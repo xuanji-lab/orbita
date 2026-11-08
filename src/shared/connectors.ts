@@ -27,6 +27,7 @@ export const CONNECTOR_IDS = [
   "baidu-netdisk",
   "notion",
   "supabase",
+  "pangram",
 ] as const;
 
 export type ConnectorId = (typeof CONNECTOR_IDS)[number];
@@ -36,9 +37,9 @@ export type ConnectorId = (typeof CONNECTOR_IDS)[number];
  * - `cli`：官方命令行（可兼带官方远程 MCP，GitHub）；点「配置」开会话让智能体带着装 / 登录
  * - `mcp-token`：远程 MCP，只需用户贴一个 token——卡内就地填，不开会话
  * - `guided`：要用户去官方页拿凭据、再配 skill / token，步骤多——开会话让智能体带着走
- * - `coming-soon`：远程 MCP 但要 OAuth，Orbita 还不支持——没有「配置」按钮
+ * - `mcp-oauth`：远程 MCP，靠 OAuth 登录——点「连接」开系统浏览器授权，回来自动实测（Orbita 自己实现的 OAuth 客户端）
  */
-export type ConnectorKind = "cli" | "mcp-token" | "guided" | "coming-soon";
+export type ConnectorKind = "cli" | "mcp-token" | "guided" | "mcp-oauth";
 
 /** 接入方式小标（卡片第二行的灰底药丸）。命令名是机器事实，界面用等宽字。 */
 export type ConnectorVia =
@@ -93,7 +94,7 @@ const VERIFIED_ON = "2026-11-08";
  */
 const NOT_AUTHED = "not (logged|signed) in|not authenticated|unauthenticated|no (valid )?(credential|token|account|login)|未登录|未授权|未认证|未配置|请先登录";
 
-/** 目录顺序固定（即将支持的沉底）：连上之后卡片不跳位，用户的位置记忆不被打乱。 */
+/** 目录顺序固定（OAuth 的沉底）：连上之后卡片不跳位，用户的位置记忆不被打乱。 */
 export const CONNECTORS: readonly ConnectorEntry[] = [
   {
     id: "feishu",
@@ -184,7 +185,7 @@ export const CONNECTORS: readonly ConnectorEntry[] = [
   },
   {
     id: "notion",
-    kind: "coming-soon",
+    kind: "mcp-oauth",
     logo: { file: "notion.svg", mono: true },
     via: [{ kind: "mcp" }, { kind: "oauth" }],
     officialUrl: "https://developers.notion.com/guides/mcp/get-started-with-mcp",
@@ -193,12 +194,21 @@ export const CONNECTORS: readonly ConnectorEntry[] = [
   },
   {
     id: "supabase",
-    kind: "coming-soon",
+    kind: "mcp-oauth",
     logo: { file: "supabase.svg", mono: false },
     via: [{ kind: "mcp" }, { kind: "oauth" }],
     officialUrl: "https://supabase.com/docs/guides/ai-tools/mcp",
     verifiedOn: VERIFIED_ON,
     mcp: { serverName: "supabase", url: "https://mcp.supabase.com/mcp", transport: "http" },
+  },
+  {
+    id: "pangram",
+    kind: "mcp-oauth",
+    logo: { file: "pangram.svg", mono: false },
+    via: [{ kind: "mcp" }, { kind: "oauth" }],
+    officialUrl: "https://www.pangram.com/",
+    verifiedOn: VERIFIED_ON,
+    mcp: { serverName: "pangram", url: "https://www.pangram.com/mcp", transport: "http" },
   },
 ];
 
@@ -206,7 +216,7 @@ export function findConnector(id: string): ConnectorEntry | undefined {
   return CONNECTORS.find((entry) => entry.id === id);
 }
 
-/** 点「配置」是不是会开一条会话（cli / guided）；mcp-token 卡内就地填，coming-soon 没有配置。 */
+/** 点「配置」是不是会开一条会话（cli / guided）；mcp-token 卡内就地填，mcp-oauth 卡点「连接」走浏览器登录。 */
 export function opensSetupSession(entry: ConnectorEntry): boolean {
   return entry.kind === "cli" || entry.kind === "guided";
 }
@@ -222,9 +232,13 @@ export type ConnectorTestedBy = "cli" | "mcp" | "local";
 export type ConnectorStatus =
   | { kind: "unset"; reason: ConnectorUnsetReason }
   | { kind: "connected"; by: ConnectorTestedBy; tools?: number }
-  /** 探测本身出了事（超时 / 没权限 / MCP 连不上）。`code` 让界面把已知的几种说成本地话，其余原样显示 message */
-  | { kind: "failed"; code: "timeout" | "error" | "mcp"; message: string }
-  | { kind: "coming-soon" };
+  /**
+   * 探测本身出了事（超时 / 没权限 / MCP 连不上）。`code` 让界面把已知的几种说成本地话，其余原样显示 message；
+   * `login` = 服务端要求登录（OAuth 型从没登录过 / 授权已失效 / 手写的远端回了 401 + resource_metadata）
+   */
+  | { kind: "failed"; code: "timeout" | "error" | "mcp" | "login"; message: string }
+  /** 浏览器登录进行中（主进程记着：切页签、窗口聚焦重探时也能看到） */
+  | { kind: "logging-in" };
 
 /** 命令行探测的原始事实（主进程跑完交给纯函数推导，好测） */
 export interface CliRun {
@@ -245,7 +259,7 @@ export interface McpProbeFacts {
   present: boolean;
   disabled: boolean;
   /** 真连了一次：成功带工具数，失败带原因；没连（没条目 / 停用）为 null */
-  probe: { ok: true; tools: number } | { ok: false; message: string } | null;
+  probe: { ok: true; tools: number } | { ok: false; message: string; needsLogin?: boolean } | null;
 }
 
 export interface ConnectorFacts {
@@ -277,7 +291,7 @@ function mcpStatus(facts: McpProbeFacts): ConnectorStatus {
   if (facts.probe === null) return { kind: "unset", reason: "no-config" };
   return facts.probe.ok
     ? { kind: "connected", by: "mcp", tools: facts.probe.tools }
-    : { kind: "failed", code: "mcp", message: facts.probe.message };
+    : { kind: "failed", code: facts.probe.needsLogin === true ? "login" : "mcp", message: facts.probe.message };
 }
 
 /**
@@ -286,7 +300,6 @@ function mcpStatus(facts: McpProbeFacts): ConnectorStatus {
  * 都没配才是未配置，原因取最具体的那条（命令行优先于 MCP——它是第一入口）。
  */
 export function deriveConnectorStatus(entry: ConnectorEntry, facts: ConnectorFacts): ConnectorStatus {
-  if (entry.kind === "coming-soon") return { kind: "coming-soon" };
   const channels: ConnectorStatus[] = [];
   if (entry.cli !== undefined && facts.cli !== undefined) channels.push(cliStatus(entry, facts.cli, facts.filesOk === true));
   if (entry.mcp !== undefined && facts.mcp !== undefined) channels.push(mcpStatus(facts.mcp));
@@ -331,6 +344,12 @@ export function connectorServerConfig(entry: ConnectorEntry, token: string): Mcp
     url: mcp.url,
     headers: { [mcp.tokenHeader.name]: `${mcp.tokenHeader.prefix}${token}` },
   };
+}
+
+/** 一张 mcp-oauth 卡 → 登录成功后写进 mcp.json 的那条（只有地址与 `auth` 标记，凭据另存）。不是 mcp-oauth 卡返回 null。 */
+export function connectorOauthServerConfig(entry: ConnectorEntry): McpHttpServer | null {
+  if (entry.kind !== "mcp-oauth" || entry.mcp === undefined) return null;
+  return { transport: entry.mcp.transport, url: entry.mcp.url, auth: "oauth" };
 }
 
 // ───────────────────────────── IPC ─────────────────────────────

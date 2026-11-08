@@ -44,6 +44,12 @@ export interface McpHttpServer extends McpWorkspaceScope {
   transport: "http" | "sse";
   url: string;
   headers?: Record<string, string>;
+  /**
+   * `"oauth"` = 这台远端靠 OAuth 登录（MCP 授权规范：Protected Resource Metadata → 动态注册 → PKCE 授权码）。
+   * **只是个标记**：client 信息与 token 加密存在 `mcp-oauth.secrets.json`，不进 mcp.json；
+   * 登录由主进程做，连接时 agent 进程向主进程要当前的 access token（见 shared/mcp-oauth.ts）。
+   */
+  auth?: "oauth";
   disabled?: boolean;
 }
 
@@ -60,7 +66,8 @@ export type McpStatus =
   | { kind: "idle" }
   | { kind: "connecting" }
   | { kind: "ready"; tools: string[] }
-  | { kind: "failed"; message: string };
+  /** `needsLogin` = 服务端要求 OAuth 登录（或已存的授权失效了），不是配置错 / 网络问题——界面给「登录」入口 */
+  | { kind: "failed"; message: string; needsLogin?: true };
 
 /** 插件自带 MCP 的服务名前缀：`plugin_<插件>_<服务>`（主进程拼名字与按名字筛运行时快照共用这一份）。 */
 export const PLUGIN_SERVER_PREFIX = "plugin_";
@@ -216,6 +223,7 @@ export function parseServer(raw: unknown): McpServer | null {
       transport: declared === "sse" ? "sse" : "http",
       url,
       ...(record(value["headers"]) !== null ? { headers: record(value["headers"]) as Record<string, string> } : {}),
+      ...(value["auth"] === "oauth" ? { auth: "oauth" as const } : {}),
       ...(disabled ? { disabled } : {}),
       ...scoped(value["workspaces"]),
     };

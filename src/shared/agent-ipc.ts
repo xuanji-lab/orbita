@@ -13,6 +13,7 @@ import type { SessionPhase, ThinkingLevel as PiThinkingLevel, TranscriptProgress
 import type { PermissionAnswer, PermissionMode } from "./permission.ts";
 import type { ThinkingLevel } from "./thinking.ts";
 import type { McpServer, McpStatus, McpStatusSnapshot } from "./mcp.ts";
+import type { McpTokenOutcome } from "./mcp-oauth.ts";
 import type { ModelDecl } from "./provider.ts";
 import type { CompactedRecord } from "./session.ts";
 import type { FileChangePayload, FileChangeView } from "./revert.ts";
@@ -465,6 +466,19 @@ export const ipcChannels = {
   connectorProbe: "connector:probe",
   /** 连接目录：把用户贴的 token 写进 mcp.json（原子写、重名则替换那一条）、重连并实测（入参 ConnectorId + token，返回 ConnectorSaveResult） */
   connectorSaveToken: "connector:save-token",
+  /**
+   * 远程 MCP 的 OAuth 登录（入参 McpOauthTarget，返回 McpOauthLoginResult）：主进程开系统浏览器、本机 127.0.0.1 回调接码、
+   * 换 token 加密存下、写 `auth: "oauth"` 进 mcp.json、让 agent 进程重连。浏览器里要逗留一阵，所以这个 invoke 会等到登录结束
+   * （成功 / 取消 / 超时 / 拒绝）才回；不会抛——失败以数据返回。同一台已在登录中的重复调用并入那一次。
+   */
+  mcpOauthLogin: "mcp-oauth:login",
+  /** 取消一台正在进行的登录（入参 server 名）：关掉本机回调、让上面那个 invoke 以 cancelled 返回。没有在登录的是空操作 */
+  mcpOauthCancel: "mcp-oauth:cancel",
+  /**
+   * 连接目录「断开」一家 OAuth 型（入参 ConnectorId，返回断开后的 ConnectorStatus）：能撤销就调撤销端点，
+   * 删本机加密的凭据，把这条从 mcp.json 里移除，让 agent 进程重连。不是 OAuth 型的卡拒绝。
+   */
+  connectorDisconnect: "connector:disconnect",
   /**
    * 插件。已装页的一切读写：列表 = 真插件 + 原来的技能 / MCP 显示成的
    * 「一样东西的插件」（PluginView），范围与配置的写入按视图 id 的前缀分派到各自的真源。
@@ -1155,6 +1169,8 @@ export type AgentCommand =
       path?: string;
       error?: string;
     }
+  /** 主进程对 mcpTokenRequest 的回执 */
+  | ({ type: "mcpTokenResult"; requestId: string } & McpTokenOutcome)
   /** 4-3：主进程对 mcpWriteRequest 的回执 */
   | {
       type: "mcpWriteResult";
@@ -1385,6 +1401,18 @@ export type AgentEvent =
       description: string;
       body: string;
       scope: "global" | "workspace";
+    }
+  /**
+   * OAuth 型远程 MCP 每次发请求前向主进程要此刻能用的 access token（requestId 问答的又一对）。
+   * `url` 是 agent 要连的地址——主进程核对它与登录时是同一个资源才给 token；`forceRefresh` = 刚被服务端 401 过，
+   * 别再给缓存里的，续期一次再给。refresh token 不经这条线。
+   */
+  | {
+      type: "mcpTokenRequest";
+      requestId: string;
+      serverName: string;
+      url: string;
+      forceRefresh: boolean;
     }
   /** 4-3：agent 工具 add_mcp_server 的写盘请求（MCP 无 workspace 语义） */
   | {
