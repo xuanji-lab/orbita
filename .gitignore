@@ -63,3 +63,6 @@ UPDATE_NOTES.md
 CLAUDE.md
 # 本地打包输出到别名目录（dist-1106 等）
 dist-*/
+
+# 性能测量结果（scripts/bench），只在本地
+bench-results/
