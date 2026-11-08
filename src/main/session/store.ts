@@ -23,6 +23,7 @@ import {
 } from "../../shared/prompt-images.ts";
 import { isNotFound } from "../fs-errors.ts";
 import { headStringField, scanJsonlLines } from "../jsonl-scan.ts";
+import { CitedPdfIndex } from "./cited-pdfs.ts";
 import { EXTERNAL_FILE_COPY_MAX_BYTES, type PromptFileRef, type SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
 import type { PermissionMode } from "../../shared/permission.ts";
@@ -197,6 +198,9 @@ export class SessionStore {
    */
   private readonly metaWrites = new Map<string, Promise<unknown>>();
 
+  /** 每条会话 cite_pdf 核验过的 PDF（增量缓存，见 cited-pdfs.ts）：文件面板的 cited 根的来源 */
+  private readonly citedPdfs: CitedPdfIndex;
+
   /**
    * 通道账本的持有者（子会话 2026-09-23）。**可选**——旧的调用点（测试、
    * 未接线的场景）不传它，remove() 就只删会话本身，不级联通道文件。
@@ -208,6 +212,7 @@ export class SessionStore {
     this.workbenchesDir = workbenchesDir ?? join(dirname(dir), "workbenches");
     this.channels = channels;
     this.snapshots = new SnapshotStore(dir);
+    this.citedPdfs = new CitedPdfIndex((id) => this.logPath(id));
   }
 
   private metaPath(id: string): string {
@@ -218,6 +223,14 @@ export class SessionStore {
   private logPath(id: string): string {
     if (!SESSION_ID.test(id)) throw new Error(`invalid session id "${id}"`);
     return join(this.dir, `${id}.jsonl`);
+  }
+
+  /**
+   * 本会话 cite_pdf 核验过的 PDF 的绝对路径（含已被回退折掉的轮次：核验这件事发生过，
+   * 回退不抹掉）。每次只 stat 一下日志，新增的部分才读；会话不存在返回空。
+   */
+  citedPdfPaths(id: string): Promise<string[]> {
+    return this.citedPdfs.paths(id);
   }
 
   /**
@@ -1016,6 +1029,7 @@ export class SessionStore {
     // 把 meta 文件又写回去（`update` 内部读不到才跳过，它已经读到了）。
     await this.queueMeta(id, async () => undefined);
     this.metaWrites.delete(id);
+    this.citedPdfs.forget(id);
     await rm(this.logPath(id), { force: true });
     await rm(this.metaPath(id), { force: true });
     // 原图在 meta 之后删：删失败最多残留一个没人引用的目录，不会出现「会话还在、图没了」

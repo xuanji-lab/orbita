@@ -8,6 +8,11 @@
  *   attachments 本会话已发送附件的副本目录 `sessions/<id>.attachments/`——**不进树**，
  *               只为白名单：拖进来的外部文件发送时复制到这里（不在上面三根之内），
  *               没有它，附件列表与 PDF 引用都打不开这份副本
+ *   cited      本会话的 cite_pdf 核验过的 PDF——**每个文件一个根、根路径就是文件本身**（不是它所在的
+ *               目录），同样**不进树**、只为白名单：PDF 在会话看得到的目录之外（别的仓库、下载目录）
+ *               也能原地打开引用，不用拷进会话。来源是本会话 JSONL 里 cite_pdf 工具结果的
+ *               details.pdfCitations（主进程现读，renderer 传不进任何路径）；同目录里没被引用过的
+ *               PDF 不在其内，也借不到别的会话的授权——根清单本来就按 sessionId 现算
  *
  * **renderer 侧 IPC 有白名单，agent 工具面没有**——两者不冲突：工具面「只告知」是
  * 关于模型的（Q2）；这里的白名单是关于 renderer 的：sandbox 里的 renderer 只能列
@@ -16,7 +21,7 @@
 
 import { pathTail } from "./path.ts";
 
-export type FileRootKind = "session" | "workspace" | "attached" | "attachments";
+export type FileRootKind = "session" | "workspace" | "attached" | "attachments" | "cited";
 
 export interface FileRoot {
   kind: FileRootKind;
@@ -96,7 +101,7 @@ export function sortFileEntries(entries: readonly FileEntry[]): FileEntry[] {
  * 空标题（会话还没命名）退回 fallback，不留空行。
  */
 export function fileRootLabel(kind: FileRootKind, path: string, title: string, fallback: string): string {
-  if (kind === "attached" || kind === "attachments") {
+  if (kind === "attached" || kind === "attachments" || kind === "cited") {
     const last = pathTail(path);
     return last === "" ? path : last;
   }

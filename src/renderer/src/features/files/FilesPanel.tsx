@@ -136,6 +136,12 @@ export function FilesPanel(props: {
   const focusWorkspaceId = props.focusWorkspaceId ?? null;
   const focusDone = props.focusDone === true;
   const tree = useFileTree(sessionId, workspaceId, session.workspaces, focusWorkspaceId);
+  // 可以当「宿主」的全部根：画进树的根 + 不进树的附件副本根 + 本会话引用过的 PDF（cited，每个文件一根）。
+  // 预览白名单、引用跳转、左栏双击打开都认这一份
+  const hostRoots = useMemo(
+    () => [...tree.roots, ...(tree.attachmentsRoot === null ? [] : [tree.attachmentsRoot]), ...tree.citedRoots],
+    [tree.roots, tree.attachmentsRoot, tree.citedRoots],
+  );
 
   // 专注 / 浏览态结束（或换到另一个工作区）、以及专注到点（run → done）：之前那个
   // 额外根失去 fs:read 白名单（roots.ts 只认会话根 + 当前 extraWorkspaceId），留着的
@@ -163,7 +169,7 @@ export function FilesPanel(props: {
     nextDone: focusDone,
     sessionWorkspaceId: session.workspaceId,
     workspaces: session.workspaces,
-    roots: tree.attachmentsRoot === null ? tree.roots : [...tree.roots, tree.attachmentsRoot],
+    roots: hostRoots,
   });
   useEffect(() => {
     // 判决用更新前的 ref（与渲染期同一份输入），然后记下这一拍
@@ -174,7 +180,7 @@ export function FilesPanel(props: {
       nextDone: focusDone,
       sessionWorkspaceId: session.workspaceId,
       workspaces: session.workspaces,
-      roots: tree.attachmentsRoot === null ? tree.roots : [...tree.roots, tree.attachmentsRoot],
+      roots: hostRoots,
     });
     previousFocusRef.current = focusWorkspaceId;
     previousFocusDoneRef.current = focusDone;
@@ -189,8 +195,7 @@ export function FilesPanel(props: {
     focusDone,
     session.workspaceId,
     session.workspaces,
-    tree.roots,
-    tree.attachmentsRoot,
+    hostRoots,
     tabs,
     activePath,
   ]);
@@ -333,8 +338,7 @@ export function FilesPanel(props: {
       request: citeFocus,
       consumedToken: consumedCiteRef.current,
       session: sessionId,
-      roots: tree.roots,
-      attachmentsRoot: tree.attachmentsRoot,
+      roots: hostRoots,
       rootsLoading: tree.rootsLoading,
     });
     if (outcome.kind === "idle" || outcome.kind === "wait") return;
@@ -345,12 +349,16 @@ export function FilesPanel(props: {
       setActionError(t.files.citeOutside(pathTail(path) || path));
       return;
     }
+    if (outcome.kind === "missing") {
+      setActionError(t.files.citeMissing(pathTail(path) || path));
+      return;
+    }
     setActionError(null);
     setTabs((prev) => openTab(prev, outcome.root, path));
     setActivePath(path);
     if (narrowRef.current) setTreeOn(false);
     setJump(citeFocus);
-  }, [citeFocus, sessionId, tree.roots, tree.attachmentsRoot, tree.rootsLoading, t]);
+  }, [citeFocus, sessionId, hostRoots, tree.rootsLoading, t]);
 
   // 左栏（专注 / 浏览态的文件树）双击打开：与 citeFocus 同一套——找到路径所在的根
   // （额外预览根让专注工作区总在清单里），开它的标签；根清单没回来先等
@@ -358,7 +366,7 @@ export function FilesPanel(props: {
   const consumedOpenRef = useRef<number | null>(null);
   useEffect(() => {
     if (focusFileOpen === null || consumedOpenRef.current === focusFileOpen.token) return;
-    const candidates = tree.attachmentsRoot === null ? tree.roots : [...tree.roots, tree.attachmentsRoot];
+    const candidates = hostRoots;
     const owner = candidates.find((root) => root.exists && pathWithin(root.path, focusFileOpen.path)) ?? null;
     if (owner === null) {
       if (tree.rootsLoading) return;
@@ -369,7 +377,7 @@ export function FilesPanel(props: {
     consumedOpenRef.current = focusFileOpen.token;
     setActionError(null);
     openFile(owner, focusFileOpen.path);
-  }, [focusFileOpen, tree.roots, tree.attachmentsRoot, tree.rootsLoading, t]);
+  }, [focusFileOpen, hostRoots, tree.rootsLoading, t]);
 
   // 切换或新开标签：把激活标签滚进标签栏可视区（纯函数 tabScrollTarget 裁决
   // 目标；已完整可见就不动）。关掉非激活标签时 activePath 不变、tabs.length 变，
@@ -542,7 +550,7 @@ export function FilesPanel(props: {
                 attachments={filteredAttachments}
                 facts={attachFacts}
                 // 附件副本在不进树的 attachments 根里：拼进来当白名单 root，副本才点得开
-                roots={tree.attachmentsRoot === null ? tree.roots : [...tree.roots, tree.attachmentsRoot]}
+                roots={hostRoots}
                 onSelectPreview={openFile}
                 onOpenImage={openSentImage}
                 onReveal={tree.reveal}

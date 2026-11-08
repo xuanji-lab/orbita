@@ -679,10 +679,14 @@ export function createCitePdfTool(cwd: string): ToolDefinition {
         citations.length === quotes.length
           ? `Verified ${citations.length} quote${citations.length === 1 ? "" : "s"}.`
           : `Verified ${citations.length} of ${quotes.length} quotes; fix the ones marked NOT CITED and call again.`;
+      // 结果文本在模型写回答的当口才到手，比 description 管用：模型会模仿 miyo 检索的
+      // 「Sources section」在末尾补脚注定义，那会让标记不再是可点的引用链接
+      const firstId = citations[0]?.id ?? "";
       const footer =
         citations.length > 0
-          ? "Put each marker right after the sentence it supports, e.g. \"…uses double buffering[^" +
-            `${citations[0]!.id}].\" Write markers exactly as shown.`
+          ? `Put each marker right after the sentence it supports, e.g. "…uses double buffering[^${firstId}]." ` +
+            "Write markers exactly as shown, inline only — do not add footnote definitions " +
+            `(\`[^${firstId}]: …\`) or a sources list at the end; that breaks the click-through.`
           : "";
       return {
         content: [{ type: "text", text: [header, ...lines, footer].filter((part) => part !== "").join("\n") }],

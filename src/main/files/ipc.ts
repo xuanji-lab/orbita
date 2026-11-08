@@ -151,7 +151,11 @@ export function registerFilesIpc(
     const roots = await resolveFileRoots(workspaces, sessions, req);
     const path = await whitelistedPath(roots, req);
     if (!isWebPageFile(path)) throw new Error(`Only web pages open in the built-in browser; ${path} is not one.`);
-    await openInBrowser(path, roots.filter((root) => root.exists).map((root) => root.path));
+    // cited 根是「某一份引用过的 PDF」本身，不该顺带成为网页能读的范围
+    await openInBrowser(
+      path,
+      roots.filter((root) => root.exists && root.kind !== "cited").map((root) => root.path),
+    );
   });
 
   /**
