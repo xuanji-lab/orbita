@@ -32,8 +32,20 @@ describe("story.css 的动效与配色约束", () => {
     assert.doesNotMatch(css, /text-shadow|drop-shadow|filter\s*:/);
   });
 
+  test("站不用 nebula 当色（浅色下它与 accent 肉眼同蓝）：nebula 只出现在通讯连线那一个变量里", () => {
+    const uses = [...css.matchAll(/[^\n]*--color-nebula[^\n]*/g)].map((m) => m[0].trim());
+    assert.equal(uses.length, 1, `nebula 出现了 ${uses.length} 处：${uses.join(" | ")}`);
+    assert.match(uses[0] ?? "", /^--sv-comm:/);
+    assert.match(css, /--sv-fill:\s*var\(--sv-ink\)/);
+  });
+
+  test("航行日志永远走夜空：夜空变量只靠 data-night，journal 自己不覆盖成浅色", () => {
+    assert.match(css, /\.sv\[data-night="true"\]\s*\{/);
+    assert.match(css, /\.sv\[data-style="journal"\]\[data-night="true"\]/);
+  });
+
   test("持续的动效（转 / 抖 / 闪）都在窗口失焦暂停的清单里", () => {
-    for (const selector of [".sv-ring", ".sv-ov-ring", ".sv-lbl-in", ".sv-shake", ".sv-hollow", '.sv-card[data-state="lost"]']) {
+    for (const selector of [".sv-ring", ".sv-ov-ring", ".sv-lbl-in", ".sv-shake", ".sv-hollow", ".sv-moon-orbit", ".sv-hintring", '.sv-card[data-state="lost"]']) {
       assert.ok(css.includes(`[data-window-inactive="true"] ${selector}`), `${selector} 不在失焦暂停清单里`);
     }
   });

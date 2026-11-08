@@ -67,6 +67,23 @@ function round(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+/**
+ * 失步的站偏离自己的位置多少（viewBox 单位）：开场十座站全部歪在轨道 / 线路 / 版面之外，接通时锁回原位。
+ * 领航站在中心不偏（它是被通电的那颗）；其余九座朝不同方向偏 14–24。
+ */
+export const DRIFT: Record<StationId, Point> = {
+  pilot: { x: 0, y: 0 },
+  archive: { x: 16, y: -20 },
+  observatory: { x: -22, y: 12 },
+  verify: { x: 20, y: 16 },
+  wing: { x: -16, y: -18 },
+  route: { x: 24, y: -8 },
+  log: { x: -14, y: 22 },
+  hq: { x: 18, y: -18 },
+  protocol: { x: -24, y: -6 },
+  patrol: { x: 12, y: 22 },
+};
+
 const below: LabelPlace = { dx: 0, dy: 27, side: "middle" };
 
 function observeLayout(): Layout {

@@ -1324,6 +1324,8 @@ export function App() {
    * 手册可以盖在故事版上面（右上「手册」）：手册退出后回到故事版停下的那一步。
    */
   const [storyOpen, setStoryOpen] = useState(false);
+  /** 故事版收起来了：玩家在通电那一步点了「现在就去接一个」，去设置 › 服务商接模型；设置一关，故事版回来接着走 */
+  const [storyParked, setStoryParked] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   /** 打开手册时从摊平后的第几页开始：故事版里点「手册」/ 页签里「从头看」是 0，设置 › 新手引导里点某章是那章的章首页 */
   const [onboardingStart, setOnboardingStart] = useState(0);
@@ -1343,8 +1345,12 @@ export function App() {
   }, [markOnboardingSeen]);
   const closeStory = useCallback(() => {
     setStoryOpen(false);
+    setStoryParked(false);
     markOnboardingSeen();
   }, [markOnboardingSeen]);
+  useEffect(() => {
+    if (storyParked && overlay !== "settings") setStoryParked(false);
+  }, [storyParked, overlay]);
   /**
    * 「试试」：关掉引导与设置页。text 不是 null 就把那句话放进当前看着的会话（首页就是新任务）的输入框；
    * open 给了（文档与演示章的动作提示页）就把右栏的演示文稿面板摆好：`slides` 回到上次那份，
@@ -1817,8 +1823,16 @@ export function App() {
             setOnboardingOpen(true);
           }}
           manualOpen={onboardingOpen}
-          onOpenProviders={() => {
-            closeStory();
+          hasProvider={session.usable.length > 0}
+          parked={storyParked}
+          onResume={() => {
+            setOverlay(null);
+            setStoryParked(false);
+            // 回来时再拉一次：设置里刚接好的模型，故事版要立刻认得
+            void refresh();
+          }}
+          onGoProviders={() => {
+            setStoryParked(true);
             openProvidersTab();
           }}
         />

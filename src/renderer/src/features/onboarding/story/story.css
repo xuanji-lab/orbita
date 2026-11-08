@@ -20,10 +20,14 @@
   --sv-ink-3: var(--color-text-tertiary);
   --sv-hair: var(--color-border-default);
   --sv-hair-strong: var(--color-border-strong);
-  --sv-fill: var(--color-nebula);
-  --sv-line-1: var(--color-nebula);
+  /* 接通 = 实心墨色星（设计系统的「实心 = 助手 / 已就绪」）；不用 nebula 当站色（浅色下与 accent 肉眼同蓝）。
+     通讯连线才用 nebula，且淡一档 */
+  --sv-fill: var(--sv-ink);
+  --sv-comm: color-mix(in srgb, var(--color-nebula) 50%, var(--color-border-strong));
+  /* 线路图三条线：浅色 绿 / 琥珀 / 紫（避开 accent 的蓝，也不用红——红在这里是「出错」）；夜空 绿 / 蓝 / 珊瑚（避开 accent 的黄） */
+  --sv-line-1: var(--color-success);
   --sv-line-2: var(--color-warning);
-  --sv-line-3: var(--color-success);
+  --sv-line-3: color-mix(in srgb, var(--color-danger) 40%, var(--color-info));
   --sv-dust-o: 0.2;
   --sv-traffic: 56px; /* macOS 红绿灯占的宽度 */
   --sv-mark: var(--space-3);
@@ -43,10 +47,12 @@
   animation: sv-in 220ms var(--ease-out-quint);
 }
 
-:root[data-theme="graphite"] .sv,
-:root[data-theme="black"] .sv {
+/* 夜空档：两档暗色，以及航行日志（永远走夜空，浅色主题下 JS 给它挂 data-theme-preview="black"，整棵子树用玄的 token） */
+.sv[data-night="true"] {
   --ob-paper: var(--color-bg-panel);
   --sv-dust-o: 0.55;
+  --sv-line-2: var(--color-info);
+  --sv-line-3: var(--color-danger);
 }
 
 /* 线路图：纸面用井的颜色（比壳亮 / 暗一档），线用三个类别色，一幕一条 */
@@ -55,17 +61,19 @@
   --ob-paper: var(--color-bg-panel);
 }
 
-/* 航行日志：浅色是月白的壳上贴白色纸条；两档暗色是最深的夜空上贴略亮的卡片 */
+/* 航行日志：永远是夜空——最深的一层上贴略亮的卡片 */
 .sv[data-style="journal"] {
   --sv-paper: var(--color-bg-app);
   --ob-paper: var(--color-bg-app);
-  --sv-fill: var(--sv-ink);
 }
 
-:root[data-theme="graphite"] .sv[data-style="journal"],
-:root[data-theme="black"] .sv[data-style="journal"] {
+.sv[data-style="journal"][data-night="true"] {
   --sv-paper: var(--color-bg-panel);
   --ob-paper: var(--color-bg-panel);
+}
+
+.sv[hidden] {
+  display: none;
 }
 
 /* Windows / Linux：商标行与自绘三键露在引导上面（同手册 .ob 的做法） */
@@ -269,12 +277,6 @@
 }
 
 /* ---------- 星图：站（三层图形按状态淡入淡出） ---------- */
-.sv-dot {
-  fill: var(--sv-ink-3);
-  opacity: 0;
-  transition: opacity 260ms var(--ease-out-quint);
-}
-
 .sv-hollow {
   fill: var(--sv-paper);
   stroke: var(--sv-ink);
@@ -293,6 +295,57 @@
   transition:
     opacity 260ms var(--ease-out-quint),
     transform 320ms var(--ease-out-quint);
+}
+
+.sv-drift {
+  transition: transform 700ms var(--ease-out-quint) var(--arrive, 0ms);
+}
+
+/* 失步：偏离自己的位置（轨道 / 线路外），接通时锁回 */
+.sv-node[data-state="lost"] .sv-drift {
+  transform: translate(calc(var(--dx, 0) * 1px), calc(var(--dy, 0) * 1px));
+}
+
+.sv-core {
+  fill: var(--sv-ink);
+  opacity: 0;
+  display: none;
+  transition: opacity 260ms var(--ease-out-quint) var(--arrive, 0ms);
+}
+
+.sv-hintring {
+  fill: none;
+  stroke: var(--sv-ink);
+  stroke-width: 1.5;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: sv-hint 1.8s ease-in-out infinite alternate;
+}
+
+.sv-nope {
+  animation: sv-nope 380ms linear both;
+}
+
+@keyframes sv-nope {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  25% {
+    transform: translate(-5px, 0);
+  }
+  75% {
+    transform: translate(5px, 0);
+  }
+}
+
+.sv-moon-orbit {
+  animation: sv-spin 7s linear infinite;
+  animation-delay: var(--phase, 0s);
+}
+
+.sv-moon {
+  fill: var(--sv-ink);
 }
 
 .sv-focus {
@@ -315,10 +368,6 @@
   opacity: 0.55;
 }
 
-.sv-node[data-state="dim"] .sv-dot {
-  opacity: 0.6;
-}
-
 .sv-node[data-state="lost"] .sv-hollow {
   opacity: 1;
 }
@@ -335,11 +384,6 @@
 
 .sv-node[data-state="linked"] .sv-halo {
   opacity: 0.45;
-}
-
-/* 领航站：实心圆 = 助手（设计系统图例），用墨色，不用 nebula */
-.sv-node[data-id="pilot"] {
-  --sv-fill: var(--sv-ink);
 }
 
 /* 抖 = 失步：出场了、没接通的站原地小幅跳动、忽明忽暗 */
@@ -417,7 +461,7 @@
 .sv-link,
 .sv-ghost {
   fill: none;
-  stroke: var(--sv-hair-strong);
+  stroke: var(--sv-comm);
   stroke-width: 1;
   stroke-linecap: round;
   vector-effect: non-scaling-stroke;
@@ -435,6 +479,7 @@
 }
 
 .sv-ghost {
+  stroke: var(--sv-hair-strong);
   stroke-dasharray: 2 6;
   opacity: 0.55;
 }
@@ -525,6 +570,43 @@
   position: absolute;
   width: 0;
   height: 0;
+  /* 失步的站偏离自己的位置，标签跟着偏；接通时一起锁回 */
+  translate: calc(var(--dx0, 0) * var(--u)) calc(var(--dy0, 0) * var(--u));
+  transition: translate 700ms var(--ease-out-quint) var(--arrive, 0ms);
+}
+
+.sv-lbl[data-state="linked"] {
+  translate: 0 0;
+}
+
+/* 站是按钮：热区是个 50 单位的圆，看不见；悬停淡淡一圈，键盘焦点一圈实线 */
+.sv-hit {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: calc(var(--u) * 50);
+  height: calc(var(--u) * 50);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: none;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.sv-hit:disabled {
+  pointer-events: none;
+  cursor: default;
+}
+
+.sv-hit:not(:disabled):hover {
+  background: color-mix(in srgb, var(--sv-ink) 8%, transparent);
+}
+
+.sv-hit:focus-visible {
+  outline: 2px solid var(--sv-ink);
+  outline-offset: 1px;
 }
 
 .sv-lbl-txt {
@@ -561,10 +643,6 @@
 .sv-lbl-txt small {
   font-size: var(--font-size-xs);
   color: var(--sv-ink-3);
-}
-
-.sv-lbl[data-state="dim"] .sv-lbl-txt {
-  opacity: 0;
 }
 
 .sv-lbl[data-state="linked"] .sv-lbl-txt {
@@ -616,6 +694,14 @@
   stroke-width: 4.5;
 }
 
+.sv[data-style="lines"] .sv-core {
+  display: inline;
+}
+
+.sv[data-style="lines"] .sv-node[data-state="linked"] .sv-core {
+  opacity: 1;
+}
+
 .sv[data-style="lines"] .sv-node[data-id="pilot"] .sv-fill {
   stroke: var(--sv-ink);
   stroke-width: 5;
@@ -653,18 +739,40 @@
   justify-items: center;
   gap: var(--space-0-5);
   padding: var(--space-1-5) var(--space-2);
-  border: 1px solid var(--sv-hair-strong);
+  border: 0;
   border-radius: var(--radius-md);
-  background: var(--color-bg-panel);
+  /* 容器只用一种语言——底色，不描边：失步是 muted，接通是卡面 */
+  background: var(--color-bg-muted);
   color: var(--sv-ink);
+  font: inherit;
   text-align: center;
   line-height: var(--line-height-tight);
   transform: translate(-50%, -50%) rotate(var(--tilt, 0deg));
-  transition: opacity 260ms var(--ease-out-quint);
+  /* 失步：偏离自己的位置（translate 属性，与下面抖动用的 transform 互不打架），接通时锁回 */
+  translate: calc(var(--dx, 0) * var(--u)) calc(var(--dy, 0) * var(--u));
+  transition:
+    translate 700ms var(--ease-out-quint) var(--arrive, 0ms),
+    background-color 300ms var(--ease-out-quint) var(--arrive, 0ms);
+  cursor: default;
+  pointer-events: none;
 }
 
-:root[data-theme="graphite"] .sv-card,
-:root[data-theme="black"] .sv-card {
+.sv-card:not(:disabled) {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.sv-card:focus-visible {
+  outline: 2px solid var(--sv-ink);
+  outline-offset: 2px;
+}
+
+.sv-card[data-state="linked"] {
+  translate: 0 0;
+  background: var(--color-bg-panel);
+}
+
+.sv[data-night="true"] .sv-card[data-state="linked"] {
   background: var(--color-bg-app);
 }
 
@@ -680,12 +788,6 @@
   white-space: nowrap;
 }
 
-.sv-card-q {
-  font-family: var(--font-family-brand);
-  font-size: var(--font-size-lg);
-  color: var(--sv-ink-3);
-}
-
 .sv-card-pin {
   position: absolute;
   top: calc(-1 * var(--space-1));
@@ -698,15 +800,8 @@
   background: var(--sv-paper);
 }
 
-.sv-card[data-state="dim"] {
-  border-style: dashed;
-  border-color: var(--sv-hair);
-  background: transparent;
-  opacity: 0.7;
-}
 
 .sv-card[data-state="lost"] {
-  border-style: dashed;
   animation: sv-card-shake 2.6s steps(1, end) infinite;
   animation-delay: calc(var(--i, 0) * -0.43s);
 }
@@ -720,8 +815,38 @@
   animation: sv-stamp 420ms var(--ease-out-quint) var(--arrive, 0ms) both;
 }
 
-.sv-card[data-focus="true"] {
-  border-color: var(--sv-ink);
+.sv-card[data-focus="true"] .sv-card-name {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+}
+
+.sv-card[data-hint="true"]::after {
+  content: "";
+  position: absolute;
+  inset: calc(-1 * var(--space-1-5));
+  border: 1.5px solid var(--sv-ink);
+  border-radius: var(--radius-lg);
+  animation: sv-hint 1.8s ease-in-out infinite alternate;
+}
+
+.sv-card[data-nope="true"] {
+  animation: sv-card-nope 380ms linear both;
+}
+
+.sv-card-moons {
+  position: absolute;
+  right: var(--space-1-5);
+  bottom: var(--space-1);
+  display: flex;
+  gap: var(--space-0-5);
+}
+
+.sv-card-moons i {
+  width: var(--space-1-5);
+  height: var(--space-1-5);
+  border-radius: var(--radius-pill);
+  background: var(--sv-ink);
 }
 
 .sv-card[data-id="pilot"] {
@@ -736,22 +861,46 @@
 @keyframes sv-card-shake {
   0%,
   100% {
-    translate: 0 0;
+    transform: translate(-50%, -50%) rotate(calc(var(--tilt, 0deg) + 2.5deg));
     opacity: 1;
   }
   18% {
-    translate: 1.4px -0.8px;
+    transform: translate(calc(-50% + 1.4px), calc(-50% - 0.8px)) rotate(calc(var(--tilt, 0deg) + 3deg));
   }
   34% {
-    translate: -1.2px 1px;
-    opacity: 0.55;
+    transform: translate(calc(-50% - 1.2px), calc(-50% + 1px)) rotate(calc(var(--tilt, 0deg) + 2deg));
+    opacity: 0.6;
   }
   52% {
-    translate: 0.6px 0.8px;
+    transform: translate(calc(-50% + 0.6px), calc(-50% + 0.8px)) rotate(calc(var(--tilt, 0deg) + 3deg));
     opacity: 1;
   }
   71% {
-    translate: -0.9px -0.5px;
+    transform: translate(calc(-50% - 0.9px), calc(-50% - 0.5px)) rotate(calc(var(--tilt, 0deg) + 2.2deg));
+  }
+}
+
+@keyframes sv-card-nope {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) rotate(var(--tilt, 0deg));
+  }
+  25% {
+    transform: translate(calc(-50% - 5px), -50%) rotate(var(--tilt, 0deg));
+  }
+  75% {
+    transform: translate(calc(-50% + 5px), -50%) rotate(var(--tilt, 0deg));
+  }
+}
+
+@keyframes sv-hint {
+  from {
+    opacity: 0.15;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 0.85;
+    transform: scale(1.04);
   }
 }
 
@@ -944,6 +1093,153 @@
   margin-left: 0;
 }
 
+/* ---------- 玩家的动作：选项、任务提示、放僚机、按顺序点站 ---------- */
+.sv-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* 选项 / 小按钮：底色一种语言（muted），不描边 */
+.sv-opt {
+  min-height: var(--control-height-md);
+  padding: var(--space-1) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  color: var(--sv-ink);
+  font: inherit;
+  font-size: var(--font-size-base);
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.sv-opt:hover:not(:disabled) {
+  background: var(--color-bg-active);
+}
+
+.sv-opt:focus-visible,
+.sv-pick:focus-visible,
+.sv-look:focus-visible {
+  outline: 2px solid var(--sv-ink);
+  outline-offset: 1px;
+}
+
+.sv-opt:disabled {
+  color: var(--sv-ink-3);
+  cursor: default;
+}
+
+.sv-task {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  align-items: baseline;
+  margin: calc(-1 * var(--space-1)) 0 0 calc(var(--sv-mark) + var(--space-3));
+  font-size: var(--font-size-sm);
+  color: var(--sv-ink-2);
+}
+
+.sv-task-text {
+  font-weight: var(--weight-semibold);
+  color: var(--sv-ink);
+}
+
+.sv-task[data-nudge="true"] {
+  animation: sv-nudge 360ms linear both;
+}
+
+@keyframes sv-nudge {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-6px);
+  }
+  75% {
+    transform: translateX(6px);
+  }
+}
+
+.sv-assist {
+  margin-left: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-regular);
+  color: var(--sv-ink-2);
+}
+
+.sv-exits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-left: calc(var(--sv-mark) + var(--space-3));
+}
+
+.sv-jobs,
+.sv-slots {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0 0 0 calc(var(--sv-mark) + var(--space-3));
+  padding: 0;
+  list-style: none;
+}
+
+.sv-job {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-1-5) var(--space-1-5) var(--space-1-5) var(--space-3);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-muted);
+  font-size: var(--font-size-base);
+}
+
+.sv-job .sv-opt {
+  background: var(--color-bg-panel);
+}
+
+.sv-job[data-sent="true"] .sv-job-name {
+  color: var(--sv-ink-3);
+}
+
+.sv-slots {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.sv-slot {
+  display: grid;
+  gap: var(--space-0-5);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-muted);
+  font-size: var(--font-size-sm);
+  color: var(--sv-ink-3);
+}
+
+.sv-slot b {
+  font-weight: var(--weight-semibold);
+}
+
+.sv-slot em {
+  min-height: calc(var(--font-size-xs) * 1.4);
+  font-style: normal;
+  font-size: var(--font-size-xs);
+}
+
+.sv-slot[data-filled="true"] {
+  background: var(--color-bg-panel);
+  color: var(--sv-ink);
+  animation: sv-line-in 320ms var(--ease-out-quint) both;
+}
+
+.sv-slot-n {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+
 /* ---------- 站内窗口：功能真截图 + 一句「它替你解决了什么」 ---------- */
 .sv-win {
   display: flex;
@@ -1101,7 +1397,7 @@
 .sv-pick {
   height: var(--control-height-sm);
   padding: 0 var(--space-3);
-  border: 1px solid var(--sv-hair-strong);
+  border: 0;
   border-radius: var(--radius-md);
   background: var(--color-bg-panel);
   color: var(--sv-ink);
@@ -1117,7 +1413,7 @@
 }
 
 .sv-pick:disabled {
-  border-style: dashed;
+  background: transparent;
   color: var(--sv-ink-3);
   font-weight: var(--weight-regular);
   cursor: not-allowed;
@@ -1129,18 +1425,17 @@
   align-items: center;
   font-size: var(--font-size-sm);
   font-weight: var(--weight-semibold);
-  color: var(--color-success);
+  color: color-mix(in srgb, var(--color-success) 55%, var(--sv-ink));
 }
 
 .sv-verdict[data-fake="true"] {
-  color: var(--color-danger);
+  color: color-mix(in srgb, var(--color-danger) 60%, var(--sv-ink));
 }
 
 /* 原文：一张纸（井的颜色 + 发丝线），衬线字，被引的那一句像 PDF 里的荧光笔 */
 .sv-original {
-  border: 1px solid var(--sv-hair);
   border-radius: var(--radius-lg);
-  background: var(--color-bg-panel);
+  background: var(--color-bg-muted);
 }
 
 .sv-original-open {
@@ -1151,6 +1446,7 @@
   width: 100%;
   padding: var(--space-3);
   border: 0;
+  border-radius: var(--radius-lg);
   background: none;
   color: var(--sv-ink);
   font: inherit;
@@ -1158,15 +1454,16 @@
   font-weight: var(--weight-semibold);
   text-align: left;
   cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.sv-original-open:hover {
+  background: var(--color-bg-hover);
 }
 
 .sv-original[data-open="true"] {
   padding: var(--space-3);
   animation: sv-line-in 380ms var(--ease-out-quint) both;
-}
-
-.sv-original:not([data-open="true"]) {
-  border-style: dashed;
 }
 
 .sv-original-hint {
@@ -1347,6 +1644,22 @@
     gap: var(--space-2);
   }
 
+  .sv-win {
+    min-height: 120px;
+  }
+
+  .sv-solve-label {
+    display: none;
+  }
+
+  .sv-slot {
+    padding: var(--space-1-5) var(--space-3);
+  }
+
+  .sv-job {
+    padding-block: var(--space-1);
+  }
+
   /* 辨伪环节：矮窗里把两张报告与原文收紧，过关后的台词也不用滚 */
   .sv-gate {
     gap: var(--space-2);
@@ -1381,6 +1694,28 @@
 [data-window-inactive="true"] .sv-lbl-in,
 [data-window-inactive="true"] .sv-shake,
 [data-window-inactive="true"] .sv-hollow,
+[data-window-inactive="true"] .sv-moon-orbit,
+[data-window-inactive="true"] .sv-hintring,
+[data-window-inactive="true"] .sv-card[data-hint="true"]::after,
 [data-window-inactive="true"] .sv-card[data-state="lost"] {
   animation-play-state: paused !important;
+}
+
+/* 故事版收起来去设置接模型时，窗口底部留一枚「回到故事」（主操作，用 accent；z 在设置之上） */
+.sv-resume {
+  position: fixed;
+  left: 50%;
+  bottom: var(--space-6);
+  z-index: var(--z-tooltip);
+  display: inline-flex;
+  gap: var(--space-1-5);
+  align-items: center;
+  height: var(--control-height-lg);
+  padding: 0 var(--space-4);
+  border: 0;
+  border-radius: var(--radius-lg);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  transform: translateX(-50%);
 }
