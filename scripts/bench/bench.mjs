@@ -277,7 +277,11 @@ async function end(c, pids) {
 /** 侧栏里标题恰好是 title 的那一行，用真鼠标点（走完整输入管线）；点之前装好「何时静止」的观察器 */
 async function clickRow(r, title) {
   const box = await r.evaluate(`(() => {
-    const el = [...document.querySelectorAll('button,[role=button],a')].filter(e => e.textContent.trim() === ${JSON.stringify(title)}).pop();
+    // 0.1.18 起侧栏行尾常显「多久没动」、首页记录行带一句现状，整行文字不再等于标题：
+    // 先认侧栏行（button.option-row[aria-pressed]）里文字恰好是标题的叶子，取它所在的按钮；认不到再退回旧写法
+    const want = ${JSON.stringify(title)};
+    const leaf = [...document.querySelectorAll('button.option-row[aria-pressed] *')].find(e => e.children.length === 0 && e.textContent.trim() === want);
+    const el = leaf?.closest('button') ?? [...document.querySelectorAll('button,[role=button],a')].filter(e => e.textContent.trim() === want).pop();
     if (!el) return null; el.scrollIntoView({ block: 'center' }); const b = el.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
   })()`);
   if (!box) throw new Error(`侧栏里找不到「${title}」`);

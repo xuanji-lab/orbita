@@ -208,7 +208,8 @@ export function seedInstance({ fx, userData, ws, mockPort, spec }) {
       }],
     }, null, 2),
   );
-  writeFileSync(join(userData, "settings.json"), JSON.stringify({ theme: "black" }, null, 2));
+  // onboardingSeen：0.1.18 起新 userData 首启会自动弹全屏新手引导，盖住整个窗口，点侧栏全点在引导上
+  writeFileSync(join(userData, "settings.json"), JSON.stringify({ theme: "black", onboardingSeen: true }, null, 2));
 
   const srcAttach = fx.manifest.sourceAttachmentsDir;
   const put = (id, title, data, updatedAt, files) => {
