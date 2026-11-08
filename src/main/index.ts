@@ -69,6 +69,9 @@ import { realProbeDeps } from "./connector/probe.ts";
 import { registerMcpIpc } from "./mcp/ipc.ts";
 import { probeRemoteMcp } from "../agent/mcp.ts";
 import { McpStore } from "./mcp/store.ts";
+import { registerMcpOauthIpc } from "./mcp-oauth/ipc.ts";
+import { McpOauthCredentialStore } from "./mcp-oauth/credential-store.ts";
+import { McpOauthManager } from "./mcp-oauth/manager.ts";
 import { PluginAgentRequests } from "./plugin/agent-requests.ts";
 import { DraftSessionBook } from "./plugin/draft-sessions.ts";
 import { scanDrafts } from "./plugin/drafts.ts";
@@ -465,6 +468,12 @@ void app.whenReady().then(async () => {
   // 只存路径数据；跨重启保留。独立小文件而不挤进 settings：整份几百条、改得勤，不该走设置的广播
   registerRightPanelMemoryIpc(new RightPanelMemoryStore(join(configDir, "right-panel-memory.json")));
   const mcp = new McpStore(configDir);
+  // 远程 MCP 的 OAuth：凭据（client 信息 + token）整条经 safeStorage 加密，落自己的 mcp-oauth.secrets.json
+  // （与模型服务商的 secrets.json 分开：SafeStorageSecrets 是读全量再整体换名，两个实例写同一个文件会互相覆盖）
+  const mcpOauth = new McpOauthManager(
+    new McpOauthCredentialStore(new SafeStorageSecrets(configDir, "mcp-oauth.secrets.json")),
+    { openExternal: (url) => shell.openExternal(url) },
+  );
   // 一份工作区存储给两处用：下面的 workspace IPC，与 read_task 的目录模式（要工作区名）
   // 工作区根：正式版沿用默认的 ~/Orbita，开发版挪到 ~/Orbita-dev（同 userData 的理由）
   const workspaces = new WorkspaceStore(configDir, devDirs?.orbitaRoot);
@@ -552,6 +561,15 @@ void app.whenReady().then(async () => {
         agentHost.answerSkillWrite(event.requestId, result);
         if (result.ok) broadcastAgentEvent({ type: "skillsChanged" });
       });
+      return;
+    }
+    // OAuth 型远程 MCP 要 access token：主进程独占 refresh token，只把此刻能用的 access token 交给 agent。
+    // 任何路径都回执（manager 不抛，但兜底：agent 那头否则要等 45 秒超时）
+    if (event.type === "mcpTokenRequest") {
+      void mcpOauth
+        .accessToken(event.serverName, event.url, event.forceRefresh)
+        .catch((cause: unknown) => ({ ok: false as const, code: "error" as const, error: cause instanceof Error ? cause.message : String(cause) }))
+        .then((outcome) => agentHost.answerMcpToken(event.requestId, outcome));
       return;
     }
     if (event.type === "mcpWriteRequest") {
@@ -805,13 +823,26 @@ void app.whenReady().then(async () => {
   const mcpIpc = registerMcpIpc(mcp, workspaces, () => agentHost.mcpReload());
   // 连接目录（能力页「连接」页签）：逐卡实测 + 保存 token。远程 MCP 的实测是一次性的连上即关，
   // 不进 agent 进程的连接表（那里按工作区分片、有闲置回收）；命令行状态命令是 5 秒内的本地读
-  registerConnectorIpc(mcp, () => agentHost.mcpReload(), () =>
+  const probeDeps = () =>
     realProbeDeps({
       readMcpConfig: () => mcp.read(),
-      probeMcp: (server) => probeRemoteMcp(server),
+      // OAuth 型的实测跑在主进程，直接向凭据库要 token（必要时当场续期），不绕 agent 进程
+      probeMcp: (server, serverName) =>
+        probeRemoteMcp(server, undefined, {
+          serverName,
+          tokenSource: (forceRefresh) => mcpOauth.accessToken(serverName, server.url, forceRefresh),
+        }),
       runtimeStatus: (name) => mcpIpc.statusOf(name),
-    }),
-  );
+      loginInProgress: (name) => mcpOauth.isLoggingIn(name),
+    });
+  const connectorIpc = registerConnectorIpc(mcp, () => agentHost.mcpReload(), probeDeps);
+  // 登录 / 断开：成功后把 `auth: "oauth"` 写进 mcp.json（或移除那条）并让 agent 进程重连
+  registerMcpOauthIpc({
+    oauth: mcpOauth,
+    store: mcp,
+    reload: () => agentHost.mcpReload(),
+    probe: (id) => connectorIpc.probeFresh(id),
+  });
   // 删除会话时把 runtime 里那条 pi 会话也放掉——不然每开一条任务就多一份驻留，
   // 活到退出应用（刀 0-4 债务 A）。会话分支（session:branch）也要走 agent 进程裁 pi 本子
   // 遗留事项（收尾仪式）全局一份；与 sessions/ 目录平级，一眼看得出哪份归谁

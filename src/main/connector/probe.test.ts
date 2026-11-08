@@ -13,6 +13,7 @@ interface Fake {
   deps: ProbeDeps;
   execCalls: { file: string; args: readonly string[]; env: Record<string, string | undefined>; shell: boolean; timeoutMs: number }[];
   probed: McpServer[];
+  probedNames: string[];
 }
 
 function fake(over: {
@@ -21,6 +22,7 @@ function fake(over: {
   config?: Record<string, McpServer>;
   mcp?: Awaited<ReturnType<ProbeDeps["probeMcp"]>>;
   runtime?: McpStatus;
+  loggingIn?: string[];
   platform?: NodeJS.Platform;
   env?: Record<string, string | undefined>;
   dirs?: Record<string, string[]>;
@@ -28,6 +30,7 @@ function fake(over: {
   const files = new Set(over.files ?? []);
   const execCalls: Fake["execCalls"] = [];
   const probed: McpServer[] = [];
+  const probedNames: string[] = [];
   const deps: ProbeDeps = {
     platform: over.platform ?? "darwin",
     home: "/h",
@@ -39,13 +42,15 @@ function fake(over: {
       return Promise.resolve(over.exec ?? ok());
     },
     readMcpConfig: () => Promise.resolve(over.config ?? {}),
-    probeMcp: (server) => {
+    probeMcp: (server, serverName) => {
       probed.push(server);
+      probedNames.push(serverName);
       return Promise.resolve(over.mcp ?? { ok: true, tools: 2 });
     },
     runtimeStatus: () => over.runtime,
+    loginInProgress: (name) => over.loggingIn?.includes(name) === true,
   };
-  return { deps, execCalls, probed };
+  return { deps, execCalls, probed, probedNames };
 }
 
 const entry = (id: string) => {
@@ -170,10 +175,31 @@ describe("远程 MCP 类实测", () => {
     assert.deepEqual(await probeConnector(entry("github"), f.deps), { kind: "connected", by: "mcp", tools: 2 });
   });
 
-  test("即将支持的不探测（哪怕 mcp.json 里碰巧有同名条目）", async () => {
-    const f = fake({ config: { notion: { transport: "http", url: "https://mcp.notion.com/mcp" } } });
-    assert.deepEqual(await probeConnector(entry("notion"), f.deps), { kind: "coming-soon" });
+  test("OAuth 型：mcp.json 里没有 → 未配置，不探测", async () => {
+    const f = fake({});
+    assert.deepEqual(await probeConnector(entry("notion"), f.deps), { kind: "unset", reason: "no-config" });
     assert.equal(f.probed.length, 0);
+  });
+
+  test("OAuth 型：有条目就真连一次（带上 server 名，主进程凭它去凭据库要 token）；通 → 已连接并数出工具", async () => {
+    const f = fake({ config: { pangram: { transport: "http", url: "https://www.pangram.com/mcp", auth: "oauth" } }, mcp: { ok: true, tools: 6 } });
+    assert.deepEqual(await probeConnector(entry("pangram"), f.deps), { kind: "connected", by: "mcp", tools: 6 });
+    assert.deepEqual(f.probedNames, ["pangram"]);
+  });
+
+  test("OAuth 型：实测说要登录 → failed + login；别的失败 → failed + mcp", async () => {
+    const config = { notion: { transport: "http" as const, url: "https://mcp.notion.com/mcp", auth: "oauth" as const } };
+    const needs = fake({ config, mcp: { ok: false, message: "notion 还没有登录", needsLogin: true } });
+    assert.deepEqual(await probeConnector(entry("notion"), needs.deps), { kind: "failed", code: "login", message: "notion 还没有登录" });
+    const broken = fake({ config, mcp: { ok: false, message: "ECONNREFUSED" } });
+    assert.deepEqual(await probeConnector(entry("notion"), broken.deps), { kind: "failed", code: "mcp", message: "ECONNREFUSED" });
+  });
+
+  test("OAuth 型：浏览器登录进行中 → logging-in，不去探测（切页签、窗口聚焦重探都能看到）；别家不受影响", async () => {
+    const f = fake({ loggingIn: ["notion"], config: { notion: { transport: "http", url: "https://mcp.notion.com/mcp", auth: "oauth" } } });
+    assert.deepEqual(await probeConnector(entry("notion"), f.deps), { kind: "logging-in" });
+    assert.equal(f.probed.length, 0);
+    assert.deepEqual(await probeConnector(entry("supabase"), f.deps), { kind: "unset", reason: "no-config" });
   });
 
   test("引导型（携程）没有可测通路：未配置，什么都不跑", async () => {

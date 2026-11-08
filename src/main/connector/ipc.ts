@@ -10,7 +10,14 @@ import { findConnector, type ConnectorSaveResult, type ConnectorStatus } from ".
 import { probeConnector, type ProbeDeps } from "./probe.ts";
 import { saveConnectorToken, type ConnectorMcpStore } from "./save-token.ts";
 
-export function registerConnectorIpc(store: ConnectorMcpStore, reload: () => Promise<void>, makeDeps: () => ProbeDeps): void {
+export function registerConnectorIpc(
+  store: ConnectorMcpStore,
+  reload: () => Promise<void>,
+  makeDeps: () => ProbeDeps,
+): {
+  /** 现测一次（不合并进已在飞的探测）：断开 / 登录之后要的是新状态，不是登录前就在飞的那次 */
+  probeFresh: (id: string) => Promise<ConnectorStatus>;
+} {
   const inFlight = new Map<string, Promise<ConnectorStatus>>();
   /** 逐卡实测。同一家在飞的合成一份。 */
   const probe = (id: string): Promise<ConnectorStatus> => {
@@ -34,4 +41,5 @@ export function registerConnectorIpc(store: ConnectorMcpStore, reload: () => Pro
     (_e, id: string, token: string): Promise<ConnectorSaveResult> =>
       saveConnectorToken(String(id), String(token), { store, reload, probe: probeFresh }),
   );
+  return { probeFresh };
 }

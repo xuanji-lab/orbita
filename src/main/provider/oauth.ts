@@ -200,19 +200,41 @@ export async function fetchAccountEmail(
   }
 }
 
+/** 回调服务器等到的结果：授权码 / 授权页回了 error（用户拒绝等）/ 被关掉（取消或超时由调用方判） */
+export type CallbackOutcome =
+  | { kind: "code"; code: string; state: string }
+  | { kind: "error"; error: string; description: string | null }
+  | { kind: "closed" };
+
 export interface CallbackServer {
   /** 实际拿到回调的 redirect_uri（端口由 OS 分配，拼进授权 URL） */
   redirectUri: string;
-  /** 等授权码；null = 被取消。state 不匹配视为无效重试等待 */
+  /** 等授权码；null = 被取消或授权页回了 error。state 不匹配视为无效重试等待 */
   waitForCode: () => Promise<{ code: string; state: string } | null>;
+  /** 同上，但把「授权页回了 error」与「被关掉」分开，让调用方能对用户说清楚原因 */
+  waitForOutcome: () => Promise<CallbackOutcome>;
   close: () => void;
 }
 
-/** 起本机回调服务器（127.0.0.1 + OS 分配端口）。redirect_uri 用 localhost 写法——Claude Code 同款。 */
-export function listenForCallback(expectedState: string): Promise<CallbackServer> {
+export interface CallbackOptions {
+  /** redirect_uri 里写的主机：默认 `localhost`（Claude Code 同款）；MCP 授权用 `127.0.0.1`（RFC 8252 推荐，不依赖 localhost 解析到哪个地址族） */
+  redirectHost?: "localhost" | "127.0.0.1";
+  /** 指定端口（默认 0 = OS 分配）。只有测试「端口被占」时用 */
+  port?: number;
+  /**
+   * 授权页回的 error 也要 state 对得上才算数（默认不要，沿用 Claude 登录的老行为）。
+   * 开着时，别的本机进程或网页往回调地址发 `?error=x` 取消不了用户的登录。
+   */
+  strictErrors?: boolean;
+}
+
+const CALLBACK_HEADERS = { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } as const;
+
+/** 起本机回调服务器（只绑 127.0.0.1，端口默认由 OS 分配）。 */
+export function listenForCallback(expectedState: string, options: CallbackOptions = {}): Promise<CallbackServer> {
   return new Promise((resolve, reject) => {
-    let settled: ((value: { code: string; state: string } | null) => void) | undefined;
-    const waitForCode = new Promise<{ code: string; state: string } | null>((resolveWait) => {
+    let settled: ((value: CallbackOutcome) => void) | undefined;
+    const waitForOutcome = new Promise<CallbackOutcome>((resolveWait) => {
       let done = false;
       settled = (value) => {
         if (done) return;
@@ -223,13 +245,22 @@ export function listenForCallback(expectedState: string): Promise<CallbackServer
     const server: Server = createServer((req, res) => {
       const url = new URL(req.url ?? "/", "http://localhost");
       const done = (html: string, status: number) => {
-        res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
+        res.writeHead(status, CALLBACK_HEADERS);
         res.end(html);
       };
+      // 只认 /callback：别的路径（浏览器自动请求的 favicon 等）不当回调
+      if (url.pathname !== "/callback") {
+        done("<html><body><p>Not found.</p></body></html>", 404);
+        return;
+      }
       const parsed = parseCallbackQuery(url.search.replace(/^\?/, ""));
       if (parsed.error !== undefined) {
+        if (options.strictErrors === true && parsed.state !== expectedState) {
+          done("<html><body><p>state 不匹配，已忽略。</p></body></html>", 400);
+          return;
+        }
         done("<html><body><p>授权未完成，可以关掉这个页面回到 Orbita。</p></body></html>", 400);
-        settled?.(null);
+        settled?.({ kind: "error", error: parsed.error, description: new URLSearchParams(url.search).get("error_description") });
         return;
       }
       if (parsed.code === undefined || parsed.state === undefined) {
@@ -244,11 +275,11 @@ export function listenForCallback(expectedState: string): Promise<CallbackServer
         "<html><body><p>授权完成，可以关掉这个页面回到 Orbita。</p></body></html>",
         200,
       );
-      settled?.({ code: parsed.code, state: parsed.state });
+      settled?.({ kind: "code", code: parsed.code, state: parsed.state });
     });
     server.on("error", (error) => reject(error));
-    // 端口 0 = OS 分配。只绑 127.0.0.1：回调不需要对外可见，也不谈 IPv6 双栈的歧义
-    server.listen(0, "127.0.0.1", () => {
+    // 默认端口 0 = OS 分配。只绑 127.0.0.1：回调不需要对外可见，也不谈 IPv6 双栈的歧义
+    server.listen(options.port ?? 0, "127.0.0.1", () => {
       const address = server.address();
       if (address === null || typeof address === "string") {
         server.close();
@@ -256,10 +287,14 @@ export function listenForCallback(expectedState: string): Promise<CallbackServer
         return;
       }
       resolve({
-        redirectUri: `http://localhost:${address.port}/callback`,
-        waitForCode: () => waitForCode,
+        redirectUri: `http://${options.redirectHost ?? "localhost"}:${address.port}/callback`,
+        waitForCode: async () => {
+          const outcome = await waitForOutcome;
+          return outcome.kind === "code" ? { code: outcome.code, state: outcome.state } : null;
+        },
+        waitForOutcome: () => waitForOutcome,
         close: () => {
-          settled?.(null);
+          settled?.({ kind: "closed" });
           server.close();
         },
       });

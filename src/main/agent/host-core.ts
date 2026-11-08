@@ -15,6 +15,7 @@ import type {
 } from "../../shared/agent-ipc.ts";
 import type { ChannelDelivery } from "../../shared/channel.ts";
 import type { McpStatus } from "../../shared/mcp.ts";
+import type { McpTokenOutcome } from "../../shared/mcp-oauth.ts";
 import type { AutomationToolOutcome } from "../../shared/automation.ts";
 import type { BrowserToolOutcome } from "../../shared/browser.ts";
 import type { DocOutcome } from "../../shared/doc.ts";
@@ -557,6 +558,11 @@ export class AgentHostCore {
       ...(result.status === undefined ? {} : { status: result.status }),
       ...(result.error === undefined ? {} : { error: result.error }),
     } satisfies AgentCommand);
+  }
+
+  /** OAuth 型 MCP 的 access token 回执：同 answerMcpWrite，发完即回、不 ensure（进程没了就丢，agent 那头超时兜底） */
+  answerMcpToken(requestId: string, outcome: McpTokenOutcome): void {
+    this.child?.postMessage({ type: "mcpTokenResult", requestId, ...outcome } satisfies AgentCommand);
   }
 
   /** B-1 读 task 请求的回执。同 answerSkillWrite 的理由：不 ensure、发完即回。 */

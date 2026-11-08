@@ -46,8 +46,11 @@ export interface ProbeDeps {
   listDir: (path: string) => string[];
   exec: (file: string, args: readonly string[], options: { env: Record<string, string | undefined>; timeoutMs: number; shell: boolean }) => Promise<ExecResult>;
   readMcpConfig: () => Promise<Record<string, McpServer>>;
-  probeMcp: (server: McpHttpServer) => Promise<McpProbeResult>;
+  /** 真连一次远程 MCP；`serverName` 用来在 OAuth 型时向凭据库要 token */
+  probeMcp: (server: McpHttpServer, serverName: string) => Promise<McpProbeResult>;
   runtimeStatus: (name: string) => McpStatus | undefined;
+  /** 这台 server 正在浏览器里登录（主进程记着）：卡片显示「登录中」 */
+  loginInProgress: (serverName: string) => boolean;
 }
 
 /** 找可执行文件的目录：常见安装位置 + 进程 PATH。越靠前越优先（用户级目录在系统目录前面）。 */
@@ -121,7 +124,7 @@ async function mcpFacts(entry: ConnectorEntry, deps: ProbeDeps): Promise<McpProb
   if (server === undefined) return { present: false, disabled: false, probe: null };
   if (server.disabled === true) return { present: true, disabled: true, probe: null };
   if (isHttpServer(server)) {
-    const result = await deps.probeMcp(server);
+    const result = await deps.probeMcp(server, mcp.serverName);
     return { present: true, disabled: false, probe: result };
   }
   // 用户自己配的同名 stdio：我们不替它起子进程探，看运行时已有的连接状态
@@ -133,7 +136,7 @@ async function mcpFacts(entry: ConnectorEntry, deps: ProbeDeps): Promise<McpProb
 
 /** 实测一家，给出状态。不抛：任何意外都收成 failed。 */
 export async function probeConnector(entry: ConnectorEntry, deps: ProbeDeps): Promise<ConnectorStatus> {
-  if (entry.kind === "coming-soon") return { kind: "coming-soon" };
+  if (entry.mcp !== undefined && entry.kind === "mcp-oauth" && deps.loginInProgress(entry.mcp.serverName)) return { kind: "logging-in" };
   try {
     const facts: ConnectorFacts = {};
     if (entry.cli !== undefined) facts.cli = await runCliProbe(entry, deps);
@@ -179,7 +182,7 @@ export function execCommand(
 }
 
 /** 生产环境的依赖（测试注入假的）。 */
-export function realProbeDeps(parts: Pick<ProbeDeps, "readMcpConfig" | "probeMcp" | "runtimeStatus">): ProbeDeps {
+export function realProbeDeps(parts: Pick<ProbeDeps, "readMcpConfig" | "probeMcp" | "runtimeStatus" | "loginInProgress">): ProbeDeps {
   return {
     platform: process.platform,
     home: homedir(),

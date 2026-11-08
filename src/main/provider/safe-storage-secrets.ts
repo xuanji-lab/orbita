@@ -18,9 +18,13 @@ export class SafeStorageSecrets implements SecretsPort {
   private readonly dir: string;
   private readonly filePath: string;
 
-  constructor(dir: string) {
+  /**
+   * `fileName` 默认 secrets.json（模型服务商的密钥）。别的使用方（MCP 的 OAuth 凭据）传自己的文件名：
+   * 本类对文件是「读全量 → 改一项 → 整体换名」，两个实例写同一个文件会互相覆盖对方刚写的那一项。
+   */
+  constructor(dir: string, fileName: string = "secrets.json") {
     this.dir = dir;
-    this.filePath = join(dir, "secrets.json");
+    this.filePath = join(dir, fileName);
   }
 
   async set(account: string, plaintext: string): Promise<void> {
