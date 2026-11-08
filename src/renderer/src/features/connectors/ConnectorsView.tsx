@@ -128,9 +128,9 @@ function TokenField(props: { entry: ConnectorEntry; onSave: (token: string) => P
       setError(tokenProblemText(t.token, result.code, result.message));
       return;
     }
-    // 写进去了：连得上就收起；连不上字段留着让用户改，卡片状态已经是「连接失败」
-    if (result.status.kind === "failed") setError(t.token.savedFailed(result.status.code === "timeout" ? t.failedTimeout : result.status.message));
-    else props.onCancel();
+    // 写进去了就收起：连上了卡片显示「已连接」，连不上卡片显示「连接失败 + 原因」和「重新配置」（不把字段留在那里
+    // 摆一条「已保存但失败」）。没写进去（校验 / 写盘失败）才留着字段，让用户改
+    props.onCancel();
   };
   return (
     <div className="pl-field cn-edit">

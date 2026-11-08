@@ -27,14 +27,18 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: var(--space-2);
-  /* 展开 token 输入的那张不把同行的卡撑出一块空白 */
+}
+
+/* 平时同一行的卡等高（说明有一行也有两行，不齐的下沿很乱）；有一张展开了 token 输入时各卡回到自然高度，
+   免得展开的那张把同行的邻居撑出一大块空白 */
+.cn-wall:has(.cn-edit) {
   align-items: start;
 }
 
 .cn-card {
   cursor: default;
-  display: grid;
-  align-content: start;
+  display: flex;
+  flex-direction: column;
   gap: var(--space-2);
   padding: var(--space-3);
 }
@@ -117,6 +121,8 @@
   align-items: center;
   gap: var(--space-2);
   min-height: var(--control-height-sm);
+  /* 卡被拉高时，状态与按钮仍贴着卡底 */
+  margin-top: auto;
 }
 
 .cn-actions {

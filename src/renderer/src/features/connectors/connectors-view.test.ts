@@ -110,6 +110,14 @@ describe("状态行", () => {
     assert.equal(statusLine(t, entry("tencent-docs"), { kind: "connected", by: "mcp", tools: 7 }).note, "已连通，7 个工具");
     assert.equal(statusLine(t, entry("feishu"), { kind: "failed", code: "timeout", message: "" }).note, "检测超时");
     assert.equal(statusLine(t, entry("feishu"), { kind: "failed", code: "error", message: "EACCES\nstack..." }).note, "EACCES");
+    // 服务端回 401 / 403：说成「token 被拒绝」，不摆英文原文；别的错误照原样
+    assert.equal(statusLine(t, entry("tencent-docs"), { kind: "failed", code: "mcp", message: "SSE error: Non-200 status code (401)" }).note, "token 被拒绝");
+    assert.equal(statusLine(t, entry("tencent-docs"), { kind: "failed", code: "mcp", message: "HTTP 403 Forbidden" }).note, "token 被拒绝");
+    // 百度网盘对不对的 token 回 400（实测）：贴 token 的卡把 400 也算被拒；GitHub 这类的 400 不算
+    assert.equal(statusLine(t, entry("baidu-netdisk"), { kind: "failed", code: "mcp", message: "SSE error: Non-200 status code (400)" }).note, "token 被拒绝");
+    assert.equal(statusLine(t, entry("github"), { kind: "failed", code: "mcp", message: "Non-200 status code (400)" }).note, "Non-200 status code (400)");
+    assert.equal(statusLine(t, entry("tencent-docs"), { kind: "failed", code: "mcp", message: "connect ECONNREFUSED 127.0.0.1:9" }).note, "connect ECONNREFUSED 127.0.0.1:9");
+    assert.equal(statusLine(t, entry("feishu"), { kind: "failed", code: "error", message: "exit 401" }).note, "exit 401");
   });
 
   test("原文第一行并限长", () => {
@@ -122,7 +130,7 @@ describe("状态行", () => {
     assert.equal(rowSubline(t, entry("feishu"), { kind: "unset", reason: "no-config" }), "官方 CLI");
     assert.equal(rowSubline(t, entry("feishu"), { kind: "unset", reason: "cli-missing" }), "没找到 lark-cli");
     assert.equal(rowSubline(t, entry("tabbit"), { kind: "connected", by: "local" }), "已检测到本机安装");
-    assert.equal(rowSubline(t, entry("baidu-netdisk"), { kind: "failed", code: "mcp", message: "401" }), "401");
+    assert.equal(rowSubline(t, entry("baidu-netdisk"), { kind: "failed", code: "mcp", message: "timeout waiting" }), "timeout waiting");
     assert.equal(rowSubline(t, entry("notion"), { kind: "coming-soon" }), "远程 MCP · OAuth");
     assert.equal(rowSubline(t, entry("tencent-docs"), { kind: "checking" }), "远程 MCP · token");
   });

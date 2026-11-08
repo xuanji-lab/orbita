@@ -2442,6 +2442,7 @@ export const zh: Messages = {
       mcp: (tools: number) => `已连通，${tools} 个工具`,
       local: "已检测到本机安装",
     },
+    failedAuth: "token 被拒绝",
     failedTimeout: "检测超时",
     action: {
       configure: "配置",
@@ -2478,7 +2479,6 @@ export const zh: Messages = {
       errorTooLong: "太长了，不像一个 token。",
       errorWrite: (message: string) => `没能保存：${message}`,
       errorUnsupported: "这一项不用贴 token。",
-      savedFailed: (message: string) => `已保存，但连接失败：${message}`,
     },
     items: {
       feishu: { name: "飞书", desc: "让智能体读写飞书的消息、日历、文档和多维表格。", caps: ["消息", "文档", "日历"], how: "官方 CLI" },

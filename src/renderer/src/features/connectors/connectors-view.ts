@@ -86,7 +86,7 @@ export function statusLine(t: Messages["connectors"], entry: ConnectorEntry, sta
         note: state.by === "mcp" ? t.connectedBy.mcp(state.tools ?? 0) : state.by === "cli" ? t.connectedBy.cli : t.connectedBy.local,
       };
     case "failed":
-      return { icon: "triangle-alert", text: t.status.failed, note: state.code === "timeout" ? t.failedTimeout : firstLine(state.message) };
+      return { icon: "triangle-alert", text: t.status.failed, note: failedNote(t, entry, state) };
     case "unset": {
       const command = entry.cli?.command ?? "";
       const note =
@@ -94,6 +94,18 @@ export function statusLine(t: Messages["connectors"], entry: ConnectorEntry, sta
       return { icon: "circle-dashed", text: t.status.unset, note };
     }
   }
+}
+
+/**
+ * 失败原因的一句话：超时与「服务端回 401 / 403」（贴 token 的卡还有 400）说成本地话（几乎就是 token 无效或过期），
+ * 其余原样给第一行。SDK 的错误文案是英文原文（「SSE error: Non-200 status code (401)」），直接摆出来用户看不懂。
+ */
+function failedNote(t: Messages["connectors"], entry: ConnectorEntry, state: Extract<ConnectorStatus, { kind: "failed" }>): string {
+  if (state.code === "timeout") return t.failedTimeout;
+  // 贴 token 的那两家：服务端对不对的 token 有回 401 / 403 的，也有回 400 的（百度网盘 SSE 实测是 400）
+  const rejected = entry.kind === "mcp-token" ? /\b(400|401|403)\b/ : /\b(401|403)\b/;
+  if (state.code === "mcp" && rejected.test(state.message)) return t.failedAuth;
+  return firstLine(state.message);
 }
 
 /** 错误原文只取第一行、限长：卡片上一行放得下，全文在 title 里 */

@@ -2635,6 +2635,7 @@ export const en = {
       mcp: (tools: number) => `Reached it, ${tools} tools`,
       local: "Found on this computer",
     },
+    failedAuth: "The token was rejected",
     failedTimeout: "Check timed out",
     action: {
       configure: "Set up",
@@ -2671,7 +2672,6 @@ export const en = {
       errorTooLong: "That's too long for a token.",
       errorWrite: (message: string) => `Couldn't save: ${message}`,
       errorUnsupported: "This connection doesn't take a token.",
-      savedFailed: (message: string) => `Saved, but the connection failed: ${message}`,
     },
     items: {
       feishu: { name: "Feishu", desc: "Let the agent read and write Feishu messages, calendar, docs and Bitable.", caps: ["Messages", "Docs", "Calendar"], how: "Official CLI" },
