@@ -503,6 +503,9 @@ describe("cite_pdf", () => {
     assert.equal(c?.text, "lazy dog near the river bank every morning. The valley keeps its slow pace");
     assert.ok(text.includes(`[^${c?.id}] page 2`), text);
     assert.ok(text.startsWith("Verified 1 quote."), text);
+    // 结果文本明说只写行内标记、不补脚注定义 / 来源列表（模型模仿 miyo 的 Sources 会让标记点不开 PDF）
+    assert.ok(text.includes("inline only — do not add footnote definitions"), text);
+    assert.ok(text.includes(`[^${c?.id}]: …`), text);
   });
 
   test("编造的引文不发编号，回最近处；其余照常核验", async () => {
@@ -515,6 +518,14 @@ describe("cite_pdf", () => {
     assert.ok(text.includes("NOT CITED — not found"), text);
     assert.ok(text.includes("Closest passage, page 1"), text);
     assert.ok(text.includes("appears 3 times"), text);
+  });
+
+  test("一条都没核验通过时不带标记用法提示", async () => {
+    const { text, citations } = await cite("three-pages.pdf", [
+      { text: "The quick brown fox jumps over the sleeping cat in the barn at noon" },
+    ]);
+    assert.equal(citations.length, 0);
+    assert.ok(!text.includes("inline only"), text);
   });
 
   test("扫描件（无文本层）直说不能引", async () => {
