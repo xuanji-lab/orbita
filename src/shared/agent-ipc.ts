@@ -459,6 +459,13 @@ export const ipcChannels = {
   /** 启停一台 server（4-2）：改 disabled 字段后自动重连 */
   mcpSetDisabled: "mcp:set-disabled",
   /**
+   * 连接目录：实测一家的状态（入参 ConnectorId，返回 ConnectorStatus）。命令行类跑官方状态命令、
+   * 远程 MCP 类真连一次；每张卡各发一次，所以「检测中」是逐卡的。不会抛——探测失败以 failed 数据返回。
+   */
+  connectorProbe: "connector:probe",
+  /** 连接目录：把用户贴的 token 写进 mcp.json（原子写、重名则替换那一条）、重连并实测（入参 ConnectorId + token，返回 ConnectorSaveResult） */
+  connectorSaveToken: "connector:save-token",
+  /**
    * 插件。已装页的一切读写：列表 = 真插件 + 原来的技能 / MCP 显示成的
    * 「一样东西的插件」（PluginView），范围与配置的写入按视图 id 的前缀分派到各自的真源。
    */

@@ -1,0 +1,19 @@
+连接目录（能力页「连接」页签）里各品牌的标。它们是各家的商标，只用来标明「这是接哪一家」，
+不是 Orbita 的图标；这是设计系统「图标只用 lucide」一条的用户批准例外（2026-11-08）。
+
+来源（逐个）：
+
+- feishu.svg        飞书官方文档站 CDN 上的横标（lf-package-cn.feishucdn.com/obj/feishu-static/lark/open/doc/frontend/images/899fa60e60151c73aaea2e25871102dc.svg），viewBox 裁到图标部分 0 0 32 32
+- tencent-docs.svg  腾讯文档官方 https://docs.gtimg.com/docs-design-resources/pc/svg/list_logo-27e58348b7.svg，viewBox 裁到 0 0 24 24
+- supabase.svg      Supabase 官方 https://supabase.com/docs/supabase-dark.svg，viewBox 裁到图标部分 0 0 110 113
+- tabbit.png        本机 /Applications/Tabbit.app/Contents/Resources/app.icns 导出的 256px（Tabbit 浏览器自带的应用图标）
+- dingtalk.png / wecom.png / ctrip.png / baidu-netdisk.png
+                    这四家没找到官方单独提供的 SVG，暂用 Proma（AGPL-3.0，与本仓同许可）
+                    apps/electron/src/renderer/assets/integrations/ 的 256px PNG。
+                    拿到官方 SVG 后替换（文件名不变，目录里 logo.file 改后缀）。
+- github.svg / notion.svg
+                    @lobehub/icons-static-svg@1.102.0（MIT，Copyright (c) 2023 LobeHub，许可文本见
+                    ../vendor-logos/LICENSE）。单色。本地改动：去掉 <title>、width / height / style 属性；
+                    填色是 currentColor，界面里跟着主题的文字色走（暗色下变白，不另做底）。
+
+核对状态：各家官方品牌资源页是否另有规定，2026-11-08 未核实。
