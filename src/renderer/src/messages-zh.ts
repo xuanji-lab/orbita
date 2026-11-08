@@ -2572,7 +2572,7 @@ export const zh: Messages = {
     mcpHttp: "连接到",
     mcpProblemUnknownVariable: (variable) => `用到了 ${variable}，orbita 没有这个变量，这台服务不会启动。`,
     mcpProblemConfigMissing: (key) => `先填好「${key}」，填之前这台服务不会启动。`,
-    mcpProblemInvalid: "不是受支持的服务配置（要有命令或 https 地址；不支持 SSE 与 WebSocket），已跳过。",
+    mcpProblemInvalid: "不是受支持的服务配置（要有命令或 https 地址；可用 SSE；不支持 WebSocket），已跳过。",
     mcpProblemCommandMissing: (command) => `本机找不到 ${command}，这台服务会连不上。`,
     scopeTitle: "装在哪",
     scopeAll: "所有工作区",

@@ -637,17 +637,28 @@ describe("parseMcpConfig", () => {
     assert.deepEqual(parsed["b"], { transport: "http", url: "https://b.example/mcp" });
   });
 
-  test("只给 url（无传输声明无 command）当 http；已废弃的 sse 不认", () => {
+  test("只给 url（无传输声明无 command）当 http，不去猜它是不是 SSE；缺 url 的丢掉", () => {
     const parsed = parseMcpConfig({
       mcpServers: {
-        bare: { url: "https://bare.example/mcp" },
-        sse: { type: "sse", url: "https://sse.example/mcp" },
+        bare: { url: "https://bare.example/sse" },
         noUrl: { type: "http" },
+        sseNoUrl: { type: "sse" },
       },
     });
-    assert.deepEqual(parsed["bare"], { transport: "http", url: "https://bare.example/mcp" });
-    assert.equal(parsed["sse"], undefined);
+    assert.deepEqual(parsed["bare"], { transport: "http", url: "https://bare.example/sse" });
     assert.equal(parsed["noUrl"], undefined);
+    assert.equal(parsed["sseNoUrl"], undefined);
+  });
+
+  test("SSE 只在显式声明时才认：自家 transport 与 Claude Desktop 系的 type 都行，headers 带过来", () => {
+    const parsed = parseMcpConfig({
+      mcpServers: {
+        own: { transport: "sse", url: "https://own.example/sse", headers: { Authorization: "Bearer k" } },
+        desktop: { type: "sse", url: "https://desktop.example/sse", disabled: true },
+      },
+    });
+    assert.deepEqual(parsed["own"], { transport: "sse", url: "https://own.example/sse", headers: { Authorization: "Bearer k" } });
+    assert.deepEqual(parsed["desktop"], { transport: "sse", url: "https://desktop.example/sse", disabled: true });
   });
 
   test("command 与 url 同给（无传输声明）：按 stdio 的 command 认", () => {

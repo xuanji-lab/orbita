@@ -2765,7 +2765,7 @@ export const en = {
     mcpProblemUnknownVariable: (variable: string) =>
       `Uses ${variable}, which Orbita doesn't provide — this server won't start.`,
     mcpProblemConfigMissing: (key: string) => `Fill in “${key}” first — this server won't start until then.`,
-    mcpProblemInvalid: "Not a supported server config (needs a command or an https URL; SSE and WebSocket aren't supported) — skipped.",
+    mcpProblemInvalid: "Not a supported server config (needs a command or an https URL; SSE works; WebSocket isn't supported) — skipped.",
     mcpProblemCommandMissing: (command: string) => `${command} isn't on this machine — the server will fail to connect.`,
     scopeTitle: "Where it's active",
     scopeAll: "All workspaces",

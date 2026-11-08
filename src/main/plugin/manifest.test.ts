@@ -195,8 +195,8 @@ describe("scanPlugin MCP", () => {
     assert.deepEqual((await scanPlugin(dir, "p")).mcpServers.map((s) => s.name), ["filed"]);
   });
 
-  test("认不出的配置（SSE、缺 command）列出来并说明原因，不静默丢", async () => {
-    await put(".mcp.json", JSON.stringify({ mcpServers: { old: { type: "sse", url: "https://x/sse" }, broken: { args: ["x"] } } }));
+  test("认不出的配置（未知传输、缺 command）列出来并说明原因，不静默丢", async () => {
+    await put(".mcp.json", JSON.stringify({ mcpServers: { old: { type: "websocket", url: "wss://x/ws" }, broken: { args: ["x"] } } }));
     const servers = (await scanPlugin(dir, "p")).mcpServers;
     assert.equal(servers.length, 2);
     for (const entry of servers) {

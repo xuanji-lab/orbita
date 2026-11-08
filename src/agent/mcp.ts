@@ -18,6 +18,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 // 原生加载本文件的要求（裸导入 JSON 报 ERR_IMPORT_ATTRIBUTE_MISSING）
 import packageJson from "../../package.json" with { type: "json" };
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -400,9 +401,11 @@ function mergeStatus(a: McpStatus, b: McpStatus): McpStatus {
 
 function createTransport(server: McpServer): Transport {
   if (isHttpServer(server)) {
-    return new StreamableHTTPClientTransport(new URL(server.url), {
-      requestInit: server.headers === undefined ? {} : { headers: server.headers },
-    }) as Transport;
+    const requestInit = server.headers === undefined ? {} : { headers: server.headers };
+    // SSE：只在配置显式写了 transport:"sse" 时才走。SDK 的 SSE 传输把 requestInit.headers 同时用在
+    // 开流的 GET 与之后的 POST 上（_commonHeaders），带 Authorization 的服务（百度网盘）两头都认得
+    if (server.transport === "sse") return new SSEClientTransport(new URL(server.url), { requestInit }) as Transport;
+    return new StreamableHTTPClientTransport(new URL(server.url), { requestInit }) as Transport;
   }
   return new StdioClientTransport({
     command: server.command,

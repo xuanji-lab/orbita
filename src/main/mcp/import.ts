@@ -11,13 +11,13 @@
  * - opencode：`~/.config/opencode/opencode.json` 的 `mcp` → `{ 名: { type: local, command: [命令, …参数],
  *   environment } | { type: remote, url, headers } }`（另有 enabled），形状不同，单独转。
  *
- * 转成 orbita 的形状（McpServer）：stdio → command / args / env / cwd；http → url / headers。
- * **SSE 传输 orbita 不支持**（只有 stdio 与 streamable HTTP），列出来标 unsupported，不硬转成 http——
- * 协议不同，转过去也连不上，还会让人以为导成功了。
+ * 转成 orbita 的形状（McpServer）：stdio → command / args / env / cwd；http → url / headers；
+ * `type: "sse"` → `transport: "sse"`（保留旧 SSE 传输，**不**悄悄转成 http——协议不同，转过去连不上）。
+ * opencode 的 remote 没有 sse 之分，一律按 http。
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { describeServer, isMcpServerName, type McpServer } from "../../shared/mcp.ts";
+import { describeServer, isHttpServer, isMcpServerName, type McpServer } from "../../shared/mcp.ts";
 import type { ImportMcpItem, ImportMcpOrigin } from "../../shared/import.ts";
 
 /** 源里的一台 server：出处 + 名字 + 转换结果（转不了时 server 为 null、reason 写原因）。 */
@@ -53,12 +53,11 @@ function stringList(value: unknown): string[] | null {
 export function toOrbitaServer(raw: unknown): McpServer | string {
   if (!isRecord(raw)) return "not a server entry";
   const type = raw["type"];
-  if (type === "sse") return "SSE transport isn't supported here";
   const url = typeof raw["url"] === "string" && raw["url"] !== "" ? raw["url"] : null;
-  if (type === "http" || type === "streamable-http" || (type === undefined && url !== null && raw["command"] === undefined)) {
+  if (type === "http" || type === "streamable-http" || type === "sse" || (type === undefined && url !== null && raw["command"] === undefined)) {
     if (url === null) return "no URL";
     const headers = stringRecord(raw["headers"]);
-    return { transport: "http", url, ...(headers === null ? null : { headers }) };
+    return { transport: type === "sse" ? "sse" : "http", url, ...(headers === null ? null : { headers }) };
   }
   if (type !== undefined && type !== "stdio") return `unknown transport: ${String(type)}`;
   const command = typeof raw["command"] === "string" && raw["command"] !== "" ? raw["command"] : null;
@@ -186,11 +185,11 @@ export function mergeMcpEntries(entries: readonly McpSourceEntry[], existing: Re
     const status: ImportMcpItem["status"] = existing.has(name) ? "in-orbita" : reason !== null ? "unsupported" : "new";
     items.push({
       name,
-      transport: server?.transport === "http" ? "http" : "stdio",
+      transport: server !== null && isHttpServer(server) ? "http" : "stdio",
       detail: server === null ? "" : describeServer(server),
       carriesSecrets:
         server !== null &&
-        ((server.transport === "http" && server.headers !== undefined) || (server.transport !== "http" && server.env !== undefined)),
+        (isHttpServer(server) ? server.headers !== undefined : server.env !== undefined),
       origins,
       status,
       reason: status === "unsupported" ? reason : null,

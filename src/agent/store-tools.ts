@@ -133,7 +133,7 @@ export function createStoreTools(broker: RequestBroker, sessionId: string): Tool
     description:
       "Add an MCP server to this agent's mcp.json (writes the config and reloads connections; " +
       "the new server's tools are available in sessions opened afterwards, not in the current one). " +
-      "stdio: {transport:'stdio', command, args, env}; http: {transport:'http', url, headers}.",
+      "stdio: {transport:'stdio', command, args, env}; http: {transport:'http', url, headers}; legacy SSE services: {transport:'sse', url, headers}.",
     parameters: {
       type: "object",
       properties: {
@@ -141,7 +141,7 @@ export function createStoreTools(broker: RequestBroker, sessionId: string): Tool
         server: {
           type: "object",
           description:
-            "Server config: stdio {transport:'stdio', command, args?, env?} or http {transport:'http', url, headers?}.",
+            "Server config: stdio {transport:'stdio', command, args?, env?} or http {transport:'http', url, headers?} (use transport 'sse' only for a service that is documented as SSE).",
         },
       },
       required: ["name", "server"],
