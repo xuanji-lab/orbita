@@ -1069,15 +1069,19 @@ export function App() {
    * 草稿写进新任务槽自己的键（startTaskWithDraft）；从设置里的全屏版触发时设置页盖在主槽上，先退场才看得到新任务；
    * 右栏版触发时右栏保持开着（按会话记忆，新任务槽自己的面板状态）。
    */
-  const makePluginWithAgent = useCallback(() => {
-    const workspace = session.workspaces.find((w) => w.id === session.workspaceId) ?? null;
-    // 从设置页签的全屏版点：先退出设置，新任务才不会落在设置页后面
-    setOverlay(null);
-    // 一边聊一边看插件页（用户 2026-11-05）：这条新会话拿到 id 时，右栏恢复成插件页而不是「没记过 = 关」。
-    // 只带这一次；之后切会话照会话记忆（用户定：插件页不做应用级例外）
-    carryPanelRef.current = { panel: "plugins", sessionId: null };
-    session.startTaskWithDraft(workspace, t.plugins.makeWithAgentDraft);
-  }, [session, t]);
+  const startPluginsTask = useCallback(
+    (draft: string) => {
+      const workspace = session.workspaces.find((w) => w.id === session.workspaceId) ?? null;
+      // 从设置页签的全屏版点：先退出设置，新任务才不会落在设置页后面
+      setOverlay(null);
+      // 一边聊一边看插件页（用户 2026-11-05）：这条新会话拿到 id 时，右栏恢复成插件页而不是「没记过 = 关」。
+      // 只带这一次；之后切会话照会话记忆（用户定：插件页不做应用级例外）
+      carryPanelRef.current = { panel: "plugins", sessionId: null };
+      session.startTaskWithDraft(workspace, draft);
+    },
+    [session],
+  );
+  const makePluginWithAgent = useCallback(() => startPluginsTask(t.plugins.makeWithAgentDraft), [startPluginsTask, t]);
   /** 抽屉选择器要排除的：主槽正看着的那条（它已经在中间了） */
   const mainSessionId = session.sessionId ?? session.opened?.id ?? null;
   /** 「这条任务」头一行的在跑 / 等你：与侧栏状态饼同一个推导（runStateOf，含子会话），所以要 meta */
@@ -1553,6 +1557,7 @@ export function App() {
                 plugins={{
                   currentWorkspaceId: session.workspaceId,
                   onMakeWithAgent: makePluginWithAgent,
+                  onStartConnectorSession: startPluginsTask,
                   // 从设置页签点「打开看板」：退出设置，回到对话，右栏开这个插件的看板视图
                   onOpenBoard: (name) => {
                     setOverlay(null);
@@ -1720,6 +1725,7 @@ export function App() {
                   chrome="rail"
                   currentWorkspaceId={session.workspaceId}
                   onMakeWithAgent={makePluginWithAgent}
+                  onStartConnectorSession={startPluginsTask}
                   onOpenBoard={(name) => openPlugin(name, true)}
                   openRequest={pluginOpenRequest}
                   onOpenRequestHandled={handlePluginOpenHandled}

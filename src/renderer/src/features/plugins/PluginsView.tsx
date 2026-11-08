@@ -21,11 +21,11 @@
  * → 展开里面的技能、Esc 取消；这个工作区没启用的排下面灰着、选了只提示（PluginPicker.tsx、plugin-picker.ts）。
  * 选中某个插件时同一槽里换成详情（一张长页）；详情里点「打开看板」右栏换成看板视图；旧技能 / MCP 面板本期保留不动。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { parsePluginViewId, type PluginDraftEntry, type PluginView } from "@shared/plugin";
 import type { Workspace } from "@shared/workspace";
 import type { CardSize, PluginsPageSettings } from "@shared/settings";
-import { useT } from "../../locale.ts";
+import { LocaleContext, useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 import { Icon } from "../../shell/Icon";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
@@ -38,6 +38,8 @@ import { parsePluginsSub, resolvePluginsSub, type PluginsSub } from "../../shell
 import { useReportSub } from "../../shell/use-report-sub.ts";
 import { describeList } from "../chat/load-state";
 import { InstallDialog } from "./InstallDialog.tsx";
+import { ConnectorsView } from "../connectors/ConnectorsView.tsx";
+import { useConnectors } from "../connectors/useConnectors.ts";
 import { PluginDetail } from "./PluginDetail.tsx";
 import { PluginDraftView } from "./PluginDraftView.tsx";
 import { PluginBoardView } from "./PluginBoardView.tsx";
@@ -82,6 +84,8 @@ export function PluginsView(props: {
   onPage?: (patch: PluginsPageSettings) => void;
   /** 「和智能体一起做一个」：新开一条会话并预填引导（App 接到会话引擎上；设置里的全屏版随之退场） */
   onMakeWithAgent: () => void;
+  /** 「连接」页签里命令行 / 引导型的「配置」「管理」：新开一条会话并预填这句话（App 接到会话引擎上） */
+  onStartConnectorSession: (draft: string) => void;
   /** 右栏版收到的请求：选中该插件（并按请求进它的看板视图）；处理完调 onOpenRequestHandled（全屏版不传） */
   openRequest?: PluginOpenRequest | null;
   onOpenRequestHandled?: () => void;
@@ -106,6 +110,9 @@ export function PluginsView(props: {
   const t = messages.plugins;
   const rail = props.chrome === "rail";
   const state = usePlugins(true);
+  const locale = useContext(LocaleContext);
+  // 页签：已装 / 连接（与「已装」并列，不并进禁用的「发现」）。连接是整台机器的事，不分工作区——选择条只属于「已装」
+  const [tab, setTab] = useState<"installed" | "connect">("installed");
   const draftList = useDraftList(true, state.plugins, props.draft?.path ?? null);
   const [selectedId, setSelectedIdRaw] = useState<string | null>(() => (rail ? (props.sub?.selected ?? null) : null));
   // 右栏里看的是详情还是看板视图：换了插件就回详情
@@ -113,6 +120,7 @@ export function PluginsView(props: {
   const setSelectedId = (id: string | null): void => {
     setSelectedIdRaw(id);
     setBoardOpen(false);
+    if (id !== null) setTab("installed");
   };
   const [installing, setInstalling] = useState(false);
   const [query, setQuery] = useState("");
@@ -168,6 +176,7 @@ export function PluginsView(props: {
     // 每次「/ + 空格」从干净的状态起：回列表（不在详情 / 草稿里）、清词、不展开、亮第一行
     setSelectedIdRaw(null);
     setBoardOpen(false);
+    setTab("installed");
     if (shownDraftTarget != null) onLeaveDraft?.();
     setQuery("");
     setPickIndex(0);
@@ -269,6 +278,7 @@ export function PluginsView(props: {
     const target = state.plugins.find((view) => view.origin === "plugin" && parsePluginViewId(view.id)?.key === openRequest.name);
     if (target !== undefined) {
       setSelectedIdRaw(target.id);
+      setTab("installed");
       setBoardOpen(openRequest.board);
       onOpenRequestHandled?.();
       return;
@@ -320,6 +330,8 @@ export function PluginsView(props: {
 
   const legacy = legacyCounts(state.plugins);
   const list = describeList(state.load, state.plugins.length);
+  // 连接页签：只在看着它时才实测（探测会跑命令、连远端）
+  const connectors = useConnectors(tab === "connect" && selected === null && !picking);
   const filtering = query.trim() !== "";
   const makeAvailable = creatorAvailable(state.plugins);
   const enabledCount = state.plugins.filter(isActive).length;
@@ -351,6 +363,36 @@ export function PluginsView(props: {
         {t.makeWithAgent}
       </button>
     </>
+  );
+
+  const connectBody = (
+    <ConnectorsView
+      chrome={rail ? "rail" : "page"}
+      locale={locale}
+      states={connectors.states}
+      query={query}
+      onRecheck={connectors.recheck}
+      onStartSession={props.onStartConnectorSession}
+      onShowInstalled={() => setTab("installed")}
+      saveToken={connectors.saveToken}
+    />
+  );
+
+  /** 页签分段：右栏只有「已装 | 连接」（发现是计划中、右栏本来就没有它）；全屏版三格 */
+  const tabSeg = (
+    <span className={`pl-seg${rail ? " cn-seg-rail" : ""}`} role="group" aria-label={t.title}>
+      {!rail && (
+        <button type="button" disabled title={t.tabFindTip} aria-pressed={false}>
+          {t.tabFind}
+        </button>
+      )}
+      <button type="button" aria-pressed={tab === "installed"} onClick={() => setTab("installed")}>
+        {t.tabInstalled} <span className="pl-seg-count">{state.plugins.length}</span>
+      </button>
+      <button type="button" aria-pressed={tab === "connect"} onClick={() => setTab("connect")}>
+        {messages.connectors.tab}
+      </button>
+    </span>
   );
 
   const listBody = (
@@ -597,7 +639,7 @@ export function PluginsView(props: {
               onChange={setQuery}
               placeholder={t.filterPlaceholder}
               ariaLabel={t.filterAria}
-              count={filtering ? `${filtered.length} / ${state.plugins.length}` : String(state.plugins.length)}
+              count={tab === "connect" ? undefined : filtering ? `${filtered.length} / ${state.plugins.length}` : String(state.plugins.length)}
             />
           )}
         </>
@@ -613,9 +655,16 @@ export function PluginsView(props: {
       <>
         <RightPanelFrame
           header={header}
-          contentKey={selected === null ? (restoring ? "restoring" : "list") : `${boardOf === null ? "detail" : "board"}:${selected.id}`}
+          contentKey={selected === null ? (restoring ? "restoring" : tab === "connect" ? "connect" : "list") : `${boardOf === null ? "detail" : "board"}:${selected.id}`}
           // 工作区选择条钉在列表上方（列表滚下去它还在）；详情 / 看板 / 选取态里不出
-          subheader={selected === null && !picking && !restoring ? <div className="pl-wsbar" data-chrome="rail">{wsBar}</div> : undefined}
+          subheader={
+            selected === null && !picking && !restoring ? (
+              <div className="pl-wsbar" data-chrome="rail">
+                {tabSeg}
+                {tab === "installed" && wsBar}
+              </div>
+            ) : undefined
+          }
           footer={picking && selected === null ? <PluginPickerBar expanded={collapseRow(pickModel.flat[pickIndex]).kind !== "none"} /> : undefined}
         >
           <div className="pl-page" data-chrome="rail" data-picking={picking && selected === null}>
@@ -623,7 +672,7 @@ export function PluginsView(props: {
               {boardOf !== null ? (
                 <PluginBoardView target={{ kind: "installed", name: parsePluginViewId(boardOf.id)?.key ?? "", workspaceId: props.currentWorkspaceId }} />
               ) : selected === null ? (
-                restoring ? <p className="pl-empty">{messages.common.loading}</p> : picking ? pickBody : listBody
+                restoring ? <p className="pl-empty">{messages.common.loading}</p> : picking ? pickBody : tab === "connect" ? connectBody : listBody
               ) : (
                 detailBody
               )}
@@ -639,23 +688,16 @@ export function PluginsView(props: {
     <div className="pl-page" data-chrome="page">
       {selected === null && (
         <div className="pl-head">
-          <span className="pl-seg" role="group" aria-label={t.title}>
-            <button type="button" disabled title={t.tabFindTip} aria-pressed={false}>
-              {t.tabFind}
-            </button>
-            <button type="button" aria-pressed={true}>
-              {t.tabInstalled} <span className="pl-seg-count">{state.plugins.length}</span>
-            </button>
-          </span>
+          {tabSeg}
           <span className="pl-head-actions">{actions}</span>
         </div>
       )}
-      {selected === null && (
+      {selected === null && tab === "installed" && (
         <div style={pageEdge.edgeStyle}>
           <div className="pl-wsbar">{wsBar}</div>
         </div>
       )}
-      <div className="pl-body scroll" onScroll={pageEdge.onScroll}>{selected === null ? listBody : detailBody}</div>
+      <div className="pl-body scroll" onScroll={pageEdge.onScroll}>{selected === null ? (tab === "connect" ? connectBody : listBody) : detailBody}</div>
       {dialog}
     </div>
   );

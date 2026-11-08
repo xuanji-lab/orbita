@@ -78,6 +78,19 @@ const ALLOWED_LATIN = new Set([
   "Co-Authored-By",
   // 迁移来源（其他应用的名字）
   "Proma",
+  // 能力页「连接」：各家产品名与官方接入方式的名字（原样照写，用户去官方文档里对得上）
+  "Tabbit",
+  "Notion",
+  "Supabase",
+  "Storage",
+  "Issue",
+  "OAuth",
+  "Bearer",
+  "CLI",
+  "skill",
+  "gh",
+  // 百度网盘官方授权页地址栏里的字段名 access_token（用户要从地址栏里认出它）
+  "access",
   // 价格 · 能力图的分数出处（榜单名、数据集名、授权名、数据集版本号——署名义务，原样照写）
   "Arena",
   "arena.ai",

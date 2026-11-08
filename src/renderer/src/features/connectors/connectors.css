@@ -1,0 +1,259 @@
+/*
+ * 能力页「连接」页签。卡片壳沿用 .pv-vcard（card-wall.css），行沿用 .pl-grp / .pl-row（plugins.css），
+ * 图块沿用 .pl-av。宽窄由 plugins.css 的 `@container pl`（640px）定：宽档两列卡片墙，窄档退成列表——
+ * 这里只补连接页签自己的几处，窄档的两条规则（藏墙、显列表）也收在文件末尾那一个 @container pl 里。
+ * 一张卡至多三档字号：名称 base 半粗、说明 / 状态 / 按钮 sm、接入小标 / 能力词 xs。
+ * accent 一个都不用，除非用户进到「填 token」那一步（保存并检测是整页唯一的 accent）。
+ */
+
+.cn-intro {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.cn-intro p {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+
+/* ---------- 卡片墙（宽档） ---------- */
+
+.cn-wall {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--space-2);
+  /* 展开 token 输入的那张不把同行的卡撑出一块空白 */
+  align-items: start;
+}
+
+.cn-card {
+  cursor: default;
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+/* 卡不是整张可点（里面有状态和按钮两个意图），hover 不抬阴影 */
+.cn-card:hover {
+  border-color: var(--color-border-subtle);
+  box-shadow: none;
+}
+
+.cn-card-main {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.cn-card-text {
+  display: grid;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+
+.cn-logo img,
+.cn-logo svg {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  display: block;
+}
+
+.cn-logo.row {
+  width: 28px;
+  height: 28px;
+}
+
+.cn-logo.row img,
+.cn-logo.row svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* 单色标：随主题文字色走（暗色下变白，不另做浅底） */
+.cn-logo.mono {
+  color: var(--color-text-primary);
+}
+
+.cn-logo-mono {
+  display: contents;
+}
+
+/* 接入方式小标 + 能力词 */
+.cn-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  align-content: start;
+  gap: var(--space-1);
+}
+
+.pl-tag.cn-via .orbita-icon {
+  color: var(--color-text-tertiary);
+}
+
+/* 命令名是机器事实用等宽（.pl-tag 的默认）；其余是文字，用界面字体 */
+.pl-tag.cn-via.plain {
+  font-family: var(--font-family-base);
+}
+
+.cn-caps {
+  padding-left: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* 底行：左状态、右按钮（行尾血线：按钮右缘钉在行右内边距，不靠固定宽度撑） */
+.cn-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-height-sm);
+}
+
+.cn-actions {
+  display: inline-flex;
+  gap: var(--space-2);
+}
+
+.cn-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.cn-status .orbita-icon {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+
+.cn-status[data-kind="connected"] .orbita-icon {
+  color: var(--color-success);
+}
+
+.cn-status[data-kind="failed"],
+.cn-status[data-kind="failed"] .orbita-icon {
+  color: var(--color-danger);
+}
+
+.cn-status-note {
+  margin-left: var(--space-1);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-text-tertiary);
+}
+
+.cn-status[data-kind="failed"] .cn-status-note {
+  color: var(--color-danger);
+}
+
+/* 卡内就地填 token */
+.cn-edit {
+  margin-top: var(--space-1);
+}
+
+.cn-edit .cn-actions {
+  margin-top: var(--space-1);
+  justify-content: flex-end;
+}
+
+/* 即将支持：沿用 .pv-vcard.closed 的先例——底色换 muted，图块与文字退到次要；没有按钮 */
+.cn-card[data-phase="soon"] {
+  background: var(--color-bg-muted);
+}
+
+.cn-card[data-phase="soon"] :is(.cn-logo, .cn-card-text, .cn-chips) {
+  opacity: 0.55;
+}
+
+/* ---------- 列表行（窄档） ---------- */
+
+.cn-row-main {
+  grid-template-columns: 28px minmax(0, 1fr);
+  cursor: default;
+}
+
+.cn-row-main:hover {
+  background: transparent;
+}
+
+.cn-row .pl-name small {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.cn-row .cn-status.sm {
+  flex: none;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.cn-row[data-phase="connected"] .cn-status.sm {
+  color: var(--color-text-secondary);
+}
+
+.cn-row[data-phase="failed"] .cn-status.sm,
+.cn-row[data-phase="failed"] .pl-name small {
+  color: var(--color-danger);
+}
+
+.cn-sep {
+  flex: none;
+  margin: 0 var(--space-1);
+}
+
+.cn-sub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cn-row[data-phase="soon"] :is(.cn-logo, .pl-name b) {
+  opacity: 0.55;
+}
+
+/* 行下展开的 token 输入：左缘与行内文字对齐（图块 28 + 间距） */
+.cn-row-edit {
+  --cn-tile: 28px;
+  padding: var(--space-1) var(--space-2) var(--space-2) calc(var(--space-2) + var(--cn-tile) + var(--space-3));
+}
+
+/* 宽档里列表藏起来（plugins.css 的 `.pl-page[data-chrome="page"] .pl-grp`）；窄档藏墙、显列表 */
+@container pl (max-width: 639px) {
+  .cn-wall {
+    display: none;
+  }
+
+  .cn-row {
+    padding: 0 var(--space-2) 0 0;
+    border-top: 0;
+    border-radius: var(--radius-md);
+  }
+
+  .cn-row:hover {
+    background: var(--option-hover-bg);
+  }
+
+  .cn-row-main {
+    padding-left: var(--space-2);
+  }
+}
+
+/* 右栏版：分段与「已装」页同一个位置（选择条那一格） */
+.pl-wsbar .cn-seg-rail {
+  margin-bottom: var(--space-1);
+}
