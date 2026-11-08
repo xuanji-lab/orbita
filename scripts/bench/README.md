@@ -53,6 +53,18 @@ node scripts/bench/bench.mjs --fixture <fb46e6be.zip> --fixture <6df79261.zip> -
 
 **动作的先后就是测量的顺序**：冷打开 → switch → idle → turn → type，打开探针（含主进程 / agent 里的 readParse ×3）放在整条动作序列的**最后**——它的即弃对象（约三倍文件体积）若排在前面，会叠进后面动作的进程内存读数；idle 开始前还会经 inspector 对主进程与 agent 各做一次手动 GC，让 idle 的工作集反映真实驻留而不是「垃圾挂多久」。探针自己量的是 CPU 计时，放在最后不受先前动作影响；session:load 的尾窗量此时会含 turn / type 追加的轮次。
 
+## 用你自己的会话当素材（pack.mjs）
+
+上面三个 zip 是维护者 Mac 上的会话。要量自己机器上最重的会话，先在终端里（不是在 Orbita 的对话里——Orbita 的 agent 读不了 sessions/ 与 pi-sessions/）列出来，再打成素材目录：
+
+```powershell
+node scripts\bench\pack.mjs --list
+node scripts\bench\pack.mjs --session <id 前 8 位>
+node scripts\bench\bench.mjs --fixture bench-fixtures\<id 前 8 位> --label <机器名>-own
+```
+
+`--fixture` 接目录也接 zip。素材目录的默认刻度按压缩次数定（压缩 ≥ 2 次：pre2 / 最后一次压缩前 / end；没压缩：10 / 30 / 60 / end）。并发场景把母会话换成自己的：`--scenario concurrency --conc-mother <id8>:end --conc-child <另一条的 id8>`。素材是原样副本，不要传出本机。
+
 ## 跑的时候要注意
 
 **窗口要一直看得见。** 窗口被盖住或最小化时，Chromium 会停掉 `requestAnimationFrame`，帧相关的数会变成 0。脚本会在 `result.md` 的「警告」里标出这种情况，但不会去动窗口层级。跑的这段时间里不要用这台机器，也不要让它睡眠（脚本不会替你改电源设置）。每个刻度会新起一个 Orbita 窗口，这是正常的。
