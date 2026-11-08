@@ -232,8 +232,9 @@ describe("hasCredentials —— nav 状态点与模型菜单共用同一个判�
     assert.equal(hasCredentials({ scheme: "oauth", loggedIn: true, account: "a@b.c" }), true);
     assert.equal(hasCredentials({ scheme: "oauth", loggedIn: false, account: null }), false);
   });
-  test("env 档密钥来自环境变量，恒为 true", () => {
+  test("env 档声明了变量名才算配好；变量名为空时主进程无从取密钥，不能放进菜单", () => {
     assert.equal(hasCredentials({ scheme: "env", envKeys: ["OPENAI_API_KEY"] }), true);
+    assert.equal(hasCredentials({ scheme: "env", envKeys: [] }), false);
   });
   test("none 恒为 false", () => {
     assert.equal(hasCredentials({ scheme: "none" }), false);

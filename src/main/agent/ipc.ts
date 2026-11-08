@@ -88,7 +88,8 @@ export async function resolveProviderSecrets(
   });
   // 凭据 → 请求鉴权：多数就是令牌本身；Copilot 的令牌里还写着这个账号该打的地址（proxy-ep）
   const oauth = credential === null ? null : await oauthRequestAuth(known.id, credential);
-  const apiKey = oauth?.apiKey ?? (await providers.resolveApiKey(providerId));
+  const apiKey =
+    oauth?.apiKey ?? (await providers.resolveApiKey(providerId)) ?? (await providers.resolveEnvKey(providerId));
   if (apiKey === null) {
     throw new Error(`provider "${providerId}" has no API key stored`);
   }
