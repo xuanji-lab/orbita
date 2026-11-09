@@ -88,6 +88,12 @@ export function isSessionId(id: string): boolean {
 const META_SUFFIX = ".meta.json";
 
 /**
+ * `list()` 一批同时读几个 meta。16 是折中：libuv 的文件线程池默认 4，并发再大也
+ * 只能摊到 4 个线程上；批太大反而让 JSON.parse（同步、在主线程）与其它 IPC 抢时间。
+ */
+const META_READ_BATCH = 16;
+
+/**
  * 一次分支的全部预制件（C-2）。prepareBranch 只读不写；pi 那边把分支文件落了
  * （agent 进程的 createBranchedSession），才由 commitBranch 落盘——顺序保证中途
  * 失败最多留下一个孤儿 pi 文件，而不是一条「看得见历史但 pi 没有前文」的半残会话。
@@ -883,7 +889,14 @@ export class SessionStore {
     });
   }
 
-  /** 会话列表：置顶在前，其余最近的在前。**坏掉的 meta 直接跳过**，不让一条坏记录挡住整张列表。 */
+  /**
+   * 会话列表：置顶在前，其余最近的在前。**坏掉的 meta 直接跳过**，不让一条坏记录挡住整张列表。
+   *
+   * meta 按 `META_READ_BATCH` 个一批 `Promise.all` 读：串行时一个会话一次
+   * `readFile` 往返，1432 条实测约 126ms；有上限并发把往返叠起来。批内顺序不影响
+   * 结果——最后统一走 `sortSessions`（只认 pinned / updatedAt），与串行逐条读到
+   * 的那份逐条一致（store.test.ts 有一条 >16 条的对照用例）。
+   */
   async list(): Promise<SessionMeta[]> {
     let names: string[];
     try {
@@ -894,11 +907,16 @@ export class SessionStore {
       if (isNotFound(cause)) return [];
       throw cause;
     }
+    const ids = names
+      .filter((name) => name.endsWith(META_SUFFIX))
+      .map((name) => name.slice(0, -META_SUFFIX.length));
     const metas: SessionMeta[] = [];
-    for (const name of names) {
-      if (!name.endsWith(META_SUFFIX)) continue;
-      const meta = await this.readMeta(name.slice(0, -META_SUFFIX.length)).catch(() => null);
-      if (meta !== null) metas.push(meta);
+    for (let start = 0; start < ids.length; start += META_READ_BATCH) {
+      const batch = ids.slice(start, start + META_READ_BATCH);
+      const read = await Promise.all(batch.map((id) => this.readMeta(id).catch(() => null)));
+      for (const meta of read) {
+        if (meta !== null) metas.push(meta);
+      }
     }
     return sortSessions(metas);
   }

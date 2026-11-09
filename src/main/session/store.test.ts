@@ -7,7 +7,7 @@ import { join } from "node:path";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { branchRoles, SessionStore } from "./store.ts";
 import { ChannelStore } from "../channel/store.ts";
-import { UNASSIGNED_PROVIDER_ID, SESSION_PAGE_RECORDS, type ChannelMarkRecord, type SessionMeta, type SessionRecord } from "../../shared/session.ts";
+import { UNASSIGNED_PROVIDER_ID, SESSION_PAGE_RECORDS, sortSessions, type ChannelMarkRecord, type SessionMeta, type SessionRecord } from "../../shared/session.ts";
 import type { ChannelMessage } from "../../shared/channel.ts";
 
 const ID = "a7f3c1d2-4b8e-4f21-9c3a-0d1e2f3a4b5c";
@@ -101,6 +101,35 @@ describe("SessionStore", () => {
     assert.deepEqual((await store.list()).map((m) => m.id), [ID]);
     assert.deepEqual((await store.load(ID))?.meta.id, ID);
     assert.deepEqual((await store.load(ID))?.transcript, []);
+  });
+
+  // list() 按 16 条一批并发读 meta：批边界前后顺序、坏 meta 跳过都必须与逐条读一致
+  test("list() 分批并发：>16 条仍按 sortSessions 排，坏 meta 照旧跳过", async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 40; i += 1) {
+      const id = `c0ffee00-0000-4000-8000-${i.toString(16).padStart(12, "0")}`;
+      ids.push(id);
+      await store.ensureSession(
+        meta({
+          id,
+          title: `任务 ${i}`,
+          updatedAt: 1000 + ((i * 17) % 40),
+          pinned: i === 7,
+        }),
+      );
+    }
+    // 坏 meta：解析失败的那条不进列表，也不挡住其它条
+    await writeFile(join(dir, "sessions", `c0ffee00-0000-4000-8000-${"f".repeat(12)}.meta.json`), "{ 坏掉", "utf8");
+
+    const serial = sortSessions(
+      (await Promise.all(ids.map((id) => store.readMeta(id)))).filter(
+        (entry): entry is SessionMeta => entry !== null,
+      ),
+    );
+    const listed = await store.list();
+    assert.deepEqual(listed, serial);
+    assert.equal(listed.length, ids.length);
+    assert.equal(listed[0]?.pinned, true);
   });
 
   test("记一条就追加一行，并把 updatedAt 推到那条的时间", async () => {
