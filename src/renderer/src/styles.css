@@ -153,6 +153,23 @@
 .revert-keep {
   display: contents;
 }
+/*
+ * 对话条目：屏幕外跳过排版与绘制（2026-11-10，切会话与长会话滚动的主笔开销——
+ * 500 条记录一次全排版，往上翻时旧页只加不卸）。
+ *
+ * 包裹层只包**记录内容**，不包 .revert-keep 自己：子午线的星 / 刻度画在盒子外侧
+ * （left: -24.5px），而 content-visibility 附带 paint containment，会把盒子外的
+ * 内容裁掉——记号挂在 .revert-keep 上就正好落在裁切线外。
+ *
+ * contain-intrinsic-size 的 auto 让浏览器记住上次渲染的真实高度，只有从未渲染过的
+ * 条目才吃估值。估值取 120px：一条用户消息约 44px、一张工具卡约 140px，取偏小的一侧
+ * ——估小只会让屏幕外内容的 scrollHeight 略低，不会凭空多出空白，滚动锚定（ChatView
+ * 用新旧 scrollHeight 差补 scrollTop）也不会被高估的空白顶出去。
+ */
+.transcript-entry {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
+}
 .revert-doomed {
   display: grid;
   gap: inherit;

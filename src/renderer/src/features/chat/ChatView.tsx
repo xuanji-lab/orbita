@@ -745,6 +745,13 @@ function ChatViewBody(props: {
   // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
   // 用 ref 不用 state——没有 UI 依赖它，不值得为每次滚动触发重渲染。
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  // 屏幕外条目的滚动锚定：观察器与已挂的转录列（换会话 / 列重建时重挂）
+  const anchorObserverRef = useRef<ResizeObserver | null>(null);
+  const anchorColRef = useRef<HTMLElement | null>(null);
+  // 程序化滚动（分页补 scrollTop）之后重新取基准：那一跳是**有意的**位移，不该再被补回来
+  const anchorResyncRef = useRef<(() => void) | null>(null);
+  // 重挂时先摘掉旧的滚动监听
+  const anchorDetachRef = useRef<(() => void) | null>(null);
   // 收尾卡上的型号名：与模型菜单同一套显示名（声明名 > 白名单 > 目录名 > id）
   const wrapupModelName = useCallback(
     (modelId: string): string => {
@@ -837,6 +844,9 @@ function ChatViewBody(props: {
     olderAnchorRef.current = null;
     if (followRef.current) return;
     el.scrollTop = anchor.scrollTop + (el.scrollHeight - anchor.scrollHeight);
+    // 这一跳已经按新旧 scrollHeight 差把视口钉住了；锚点跟着换基准，否则屏幕外条目换成
+    // 真高时会被再补一次（实测多滚一整页，约 20000px）
+    anchorResyncRef.current?.();
   });
 
   // 每次 commit 后钉底：不挑触发源——流式输出、忙碌指示出现、折叠展开全兜住；scrollTop 赋值廉价。
@@ -849,6 +859,97 @@ function ChatViewBody(props: {
 
   /** 这一屏是哪条会话：活着的优先，否则是打开的那条 */
   const openId = session.sessionId ?? session.opened?.id ?? "";
+
+  /**
+   * 屏幕外条目的滚动锚定（styles.css 的 .transcript-entry / content-visibility: auto 的配套）。
+   * 条目滚到附近之前只占 contain-intrinsic-size 的估值，换成真高时列高会变；浏览器不替我们
+   * 钉住视口（Chromium 的滚动锚定不管这种变化，实测往上读历史时每滚 500px 会被额外推走
+   * 0–900px）。这里拿视口顶上那条 .transcript-entry 当锚，它**内容坐标**变大就说明锚上方长高了，
+   * 把同量补进 scrollTop——内容坐标不受滚动与程序化跳底影响，所以不用和钉底 / 分页锚定对账。
+   * 贴底态由上面那支钉底负责，但它只跟 commit：最后几屏条目换成真高发生在跳底之后的下一帧，
+   * 所以这里贴底时也重新钉一次（只改 scrollTop，不再触发尺寸变化，不会自激）。
+   */
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const col = el?.querySelector<HTMLElement>(".chat-col") ?? null;
+    if (el === null || col === null) return;
+    // 转录列要等会话数据到了才挂上（切会话那一刻还是首页），所以不能只在 openId 变化时挂一次：
+    // 每轮对一下目标，换列了才重建。观察器的断开在下面那支 [] 里做（每轮都清会把观察器抖掉）。
+    if (anchorObserverRef.current !== null && anchorColRef.current === col) return;
+    anchorObserverRef.current?.disconnect();
+    const previousDetach = anchorDetachRef.current;
+    anchorDetachRef.current = null;
+    previousDetach?.();
+    anchorColRef.current = col;
+    let anchor: HTMLElement | null = null;
+    let anchorTop = 0;
+    /**
+     * 单步跳了不止一屏 = 脚本 / 滚动条把视口搬走的（引用、摘抄跳转），锚要换。
+     * 用滚动事件量每一步，而不是拿「上次观察到现在」的累计差——滚轮连续几步没有尺寸变化时
+     * 累计差会超过阈值，把正常上滚误判成跳转，那一步的估值换真高就没人补了（实测 694px 一跳）。
+     */
+    let seenScrollTop = el.scrollTop;
+    let jumped = false;
+    const onScroll = (): void => {
+      const next = el.scrollTop;
+      if (Math.abs(next - seenScrollTop) > el.clientHeight * 2) jumped = true;
+      seenScrollTop = next;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    /** 内容坐标：滚动容器的视口位移会变，这条不会 */
+    const contentTop = (node: HTMLElement): number =>
+      node.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
+    const pick = (): void => {
+      const top = el.getBoundingClientRect().top;
+      anchor = null;
+      for (const node of col.querySelectorAll<HTMLElement>(":scope > .revert-keep > .transcript-entry")) {
+        if (node.getBoundingClientRect().bottom > top + 1) {
+          anchor = node;
+          break;
+        }
+      }
+      anchorTop = anchor === null ? 0 : contentTop(anchor);
+      seenScrollTop = el.scrollTop;
+    };
+    pick();
+    anchorResyncRef.current = pick;
+    const observer = new ResizeObserver(() => {
+      // 贴底态：屏幕外条目换成真高后底部也下移了，重新钉一次——切会话时那一屏的
+      // 「估值→真高」发生在跳底之后的下一帧，不补这一步会停在离底一千多像素的地方
+      if (followRef.current) {
+        el.scrollTop = el.scrollHeight;
+        jumped = false;
+        seenScrollTop = el.scrollTop;
+        if (anchor !== null && anchor.isConnected) anchorTop = contentTop(anchor);
+        return;
+      }
+      if (jumped || anchor === null || !anchor.isConnected) {
+        jumped = false;
+        pick();
+        return;
+      }
+      const top = contentTop(anchor);
+      if (top !== anchorTop) el.scrollTop += top - anchorTop;
+      anchorTop = top;
+      seenScrollTop = el.scrollTop;
+    });
+    observer.observe(col);
+    anchorObserverRef.current = observer;
+    anchorDetachRef.current = () => el.removeEventListener("scroll", onScroll);
+  });
+
+  useEffect(
+    () => () => {
+      anchorObserverRef.current?.disconnect();
+      anchorObserverRef.current = null;
+      anchorDetachRef.current?.();
+      anchorDetachRef.current = null;
+      anchorColRef.current = null;
+      anchorResyncRef.current = null;
+    },
+    [],
+  );
+
   // 记忆：用户消息的动作行里挂「用到 N · 记住 M」（UserBubble）。
   // 账本按轮记，这里按时间把轮配到气泡上（不按计数，见 pairMemoryTurns）
   const memorySession = useMemorySession(openId !== "" ? openId : null);
@@ -1773,7 +1874,9 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 </div>
               )}
               <div className={cutIndex >= 0 && index >= cutIndex ? "revert-doomed" : "revert-keep"} data-kind="toolCall">
+              <div className="transcript-entry">
               <ShowImageGalleryGroup cards={cards} />
+              </div>
               {branchAfter !== undefined && (
                 <BranchRow
                   /* 挂点照常渲染：被吸收的 entry 只把主行换 null，分支行各归各 */
@@ -1798,6 +1901,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
               </div>
             )}
             <div className={doomed ? "revert-doomed" : "revert-keep"} data-entry-key={entry.key} data-kind={entry.kind}>
+            <div className="transcript-entry">
             {entry.kind === "turnProcess" ? (
               <TurnProcessLine
                 unit={entry}
@@ -1873,6 +1977,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
                 onOpenMemoryReview={props.onOpenMemoryReview}
               />
             )}
+            </div>
             {branchAfter !== undefined && (
               <BranchRow
                 anchorItemId={branchAfter}
@@ -1889,7 +1994,9 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       {props.pendingEcho !== null && (
         // 与真回显同一个包裹层与 data-kind：发出即画的这一行也要有空心星 / 时间（子午线认 data-kind）
         <div className="revert-keep" data-kind="user">
-          <PendingEchoRow blocks={props.pendingEcho.blocks} />
+          <div className="transcript-entry">
+            <PendingEchoRow blocks={props.pendingEcho.blocks} />
+          </div>
         </div>
       )}
       {/* 等确认态（done 且有待表态、终态记录还没落盘）也由运行卡画：环停 86%、
@@ -1921,7 +2028,9 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
           <Retrying status={props.retry} />
         ) : liveBlockShown ? null : (
           <div className="revert-keep" data-kind="responding">
-            <Responding transcript={transcript} />
+            <div className="transcript-entry">
+              <Responding transcript={transcript} />
+            </div>
           </div>
         ))}
       {props.phase === "compaction" && (
