@@ -167,6 +167,12 @@ export const ipcChannels = {
   automationEvent: "automation:event",
   sessionList: "session:list",
   /**
+   * 读**单条**会话的 meta（列表增量刷新用）：载荷是会话 id，回 `SessionMeta | null`。
+   * null = 会话不存在 / meta 坏了——与 `list()` 跳过坏记录同口径，调用方据此从列表移除。
+   * 不读 transcript、不排序，消费者只拿它替换列表里那一条。
+   */
+  sessionMeta: "session:meta",
+  /**
    * 打开一条会话：只回**尾窗**（SESSION_PAGE_RECORDS 条，起点对齐到轮边界）+ 窗口信息。
    * 主进程仍全量读盘 + 折叠，切的是 IPC 传输量与 renderer 渲染量（瓶颈所在）。
    */

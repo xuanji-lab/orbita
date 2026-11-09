@@ -26,6 +26,12 @@ import type {
 export const sessionApi = {
   /** 会话列表，新的在前 */
   list: (): Promise<SessionMeta[]> => ipcRenderer.invoke(ipcChannels.sessionList),
+  /**
+   * 读单条会话的 meta（列表增量刷新：只替换这一条）。null = 不存在 / meta 坏了，
+   * 与 `list()` 跳过坏记录同口径
+   */
+  meta: (id: string): Promise<SessionMeta | null> =>
+    ipcRenderer.invoke(ipcChannels.sessionMeta, id),
   /** 读一条会话的元数据与 transcript；不存在返回 null */
   load: (id: string): Promise<SessionWindowDetail | null> =>
     ipcRenderer.invoke(ipcChannels.sessionLoad, id),
