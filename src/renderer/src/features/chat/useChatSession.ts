@@ -39,7 +39,11 @@ import {
 import { LOADING, READY, failed, type LoadState } from "./load-state.ts";
 import { createProgressCoalescer } from "./progress-coalescer.ts";
 import { recordToolFrame } from "./tool-results.ts";
-import { shouldRefreshSessions } from "./session-list-refresh.ts";
+import {
+  applySessionMeta,
+  SessionListRefreshQueue,
+  sessionRefreshNeed,
+} from "./session-list-refresh.ts";
 import { appendWithdrawn } from "./withdraw-draft.ts";
 import { admitImages, promptImagesBytes, readAsPromptImage, rejectionText, type ComposerImage } from "../../shell/composer-images.ts";
 import { PROMPT_IMAGE_MIME_TYPES, PROMPT_IMAGE_MAX_COUNT, type PromptImage } from "../../../../shared/prompt-images.ts";
@@ -809,21 +813,56 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
   );
 
   /**
+   * 一份完整的会话列表落地：列表、ref 镜像、加载态、各查看槽的「正开着的那条」。
+   * 整表重拉（主动操作 / 增量的 full）共用这一处——两处落地方式不一致时
+   * 同一条会话会在刷新前后跳位置或顶栏不更新。
+   */
+  const applySessionList = useCallback((list: SessionMeta[]) => {
+    setSessions(list);
+    sessionsRef.current = list;
+    setLoads((prev) => ({ ...prev, sessions: READY }));
+    // **正看着的会话的 meta 必须从这里拿真值**——活会话（首页直接开的那条）
+    // opened 一路是 null，不种上的话顶栏永远读 transcript 推导的旧标题，
+    // 改名与模型标题都换不掉它（真实事故：改名后侧栏变了顶栏不变）。
+    for (const view of views.current) view.syncOpened(list);
+  }, []);
+
+  /**
+   * 事件驱动的**增量**刷新（判定与合并在 session-list-refresh.ts）。列表里已有的
+   * 会话只读这一条 meta；只有列表里没见过的会话才整表重拉。突发请求合并成一批。
+   */
+  const [refreshQueue] = useState(
+    () =>
+      new SessionListRefreshQueue({
+        loadAll: () => api.session.list(),
+        loadMeta: (id) => api.session.meta(id),
+        onAll: applySessionList,
+        onMeta: (id, meta) => {
+          const next = applySessionMeta(sessionsRef.current, id, meta);
+          setSessions(next);
+          sessionsRef.current = next;
+          // 顶栏标题 / 模型读的就是这条 meta（与整表重拉同一处同步）
+          for (const view of views.current) view.syncOpened(next);
+        },
+        onError: (cause: unknown) => setLoads((prev) => ({ ...prev, sessions: failed(cause) })),
+      }),
+  );
+  useEffect(() => () => refreshQueue.dispose(), [refreshQueue]);
+
+  /**
    * **读失败不清空。** 以前这里会 `.catch(() => setSessions([]))`，磁盘权限坏了就显示成
    * 「你的会话全没了」。现在失败只记到 `loads` 里，手里那份原样保留。
    * 刷新完通知各查看槽同步「正开着的那条」的 meta——那份真值只在这里读得到。
+   *
+   * 主动操作（改名 / 置顶 / 星标 / 归档 / 删除 / 导入 / 移动 / reloadSessions）
+   * 仍然直接走它整表重拉：那些动作一次改多条或改的不只是 meta，走增量反而容易漏。
    */
   const refreshSessions = useCallback(() => {
-    void api.session.list().then((list) => {
-      setSessions(list);
-      sessionsRef.current = list;
-      setLoads((prev) => ({ ...prev, sessions: READY }));
-      // **正看着的会话的 meta 必须从这里拿真值**——活会话（首页直接开的那条）
-      // opened 一路是 null，不种上的话顶栏永远读 transcript 推导的旧标题，
-      // 改名与模型标题都换不掉它（真实事故：改名后侧栏变了顶栏不变）。
-      for (const view of views.current) view.syncOpened(list);
-    }).catch((cause: unknown) => setLoads((prev) => ({ ...prev, sessions: failed(cause) })));
-  }, []);
+    void api.session
+      .list()
+      .then(applySessionList)
+      .catch((cause: unknown) => setLoads((prev) => ({ ...prev, sessions: failed(cause) })));
+  }, [applySessionList]);
 
   useEffect(refreshSessions, [refreshSessions]);
 
@@ -970,10 +1009,15 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
         // 新一轮真的跑起来了（重试成功 / 用户重发 / 压缩开始）：上一次的失败已成
         // 过去，红字不再挂着——只有最后状态是失败时才该看到失败提示
         if (event.type === "phase" && event.phase !== "idle") setError(null);
-        // 会话列表何时重拉（一轮跑完 / 模型标题 / 换模型 / 列表里没有的会话开轮）：
-        // 规则与理由在 session-list-refresh.ts。refreshSessions 是异步的（IPC 回来才
-        // 回填），排在下面 model 的 alignModel 前面调用不改变先后
-        if (shouldRefreshSessions(event, sessionsRef.current)) refreshSessions();
+        // 会话列表何时刷新（一轮跑完 / 模型标题 / 换模型 / 列表里没有的会话开轮）：
+        // 规则与理由在 session-list-refresh.ts。列表里已有的只取这一条 meta，
+        // 只有没见过的会话才整表重拉；突发请求由队列合并（同 id 在途不重复拉）。
+        // 异步（IPC 回来才回填），排在下面 model 的 alignModel 前面调用不改变先后
+        const need = sessionRefreshNeed(event, sessionsRef.current);
+        if (need !== "none") {
+          if (need.kind === "full") refreshQueue.requestFull();
+          else refreshQueue.requestMeta(need.id);
+        }
         // 会话内模型切换成功（C-4，主进程已落 meta）：对齐**正看着那条**的槽——
         // 双槽下事件泵不知道哪个槽在看，路由交给已注册的查看槽。按 viewedId
         // （活会话 ?? 盘上打开的）路由：盘上打开的会话切模型后事件可能要几秒才回
@@ -1030,7 +1074,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
       off();
       coalescer.dispose();
     };
-  }, [applyStates, deliverNext, refreshSessions, refreshCarryovers]);
+  }, [applyStates, deliverNext, refreshQueue, refreshCarryovers]);
 
   /**
    * 子会话 PR4a：子→父投递。通道消息落账 + 广播是主进程的事（`applyChannelSend` /
