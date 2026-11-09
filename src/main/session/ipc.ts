@@ -55,6 +55,9 @@ export function registerSessionIpc(
   onReverted?: (sessionId: string, reverted: { turnIds: readonly string[]; fromTurn: number }) => Promise<void>,
 ): void {
   ipcMain.handle(ipcChannels.sessionList, () => store.list());
+  // 单条 meta（列表增量刷新）：只读这一条的 `.meta.json`，不读 transcript。
+  // 坏 meta / 不存在回 null——与 list() 跳过坏记录一个口径，renderer 据此从列表移除
+  ipcMain.handle(ipcChannels.sessionMeta, (_event, id: string) => store.readMeta(id));
   // 打开会话：**只回尾窗**（主进程仍全量读 + 折叠，见 store.loadWindow 的注释）——
   // 25MB / 2948 条的会话一次过 IPC 是瓶颈所在，renderer 也无力一次渲染完
   ipcMain.handle(ipcChannels.sessionLoad, (_event, id: string) => store.loadWindow(id));
