@@ -333,4 +333,19 @@ describe("SessionListRefreshQueue", () => {
     assert.equal(h.calls.all, 0);
     assert.equal(h.applied.length, 0);
   });
+
+  // React StrictMode 在开发环境把 effect 跑成 setup → cleanup → setup：同一个队列实例
+  // 会先被 dispose 一次。没有 revive 时开发模式下增量刷新永久失效（生产不双挂载，
+  // 所以打包版性能测量验不出来；2026-11-10 隔离 dev 实例 E2E 抓到）。
+  test("StrictMode 双挂载：dispose 后 revive 仍能继续刷新", async () => {
+    const changed = { ...parent, title: "双挂载后", updatedAt: 120 };
+    const h = makeQueue({ initial: [parent], metas: new Map([["parent", changed]]) });
+    h.queue.dispose();
+    h.queue.revive();
+    h.queue.requestMeta("parent");
+    await until(() => h.applied.length === 1, "revive 后的 meta 回填");
+    assert.deepEqual(h.calls.meta, ["parent"]);
+    assert.deepEqual(h.applied[0], { kind: "meta", id: "parent", meta: changed });
+    h.queue.dispose();
+  });
 });

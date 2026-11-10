@@ -847,7 +847,13 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
         onError: (cause: unknown) => setLoads((prev) => ({ ...prev, sessions: failed(cause) })),
       }),
   );
-  useEffect(() => () => refreshQueue.dispose(), [refreshQueue]);
+  useEffect(() => {
+    // StrictMode 在开发环境会把 effect 跑成 setup → cleanup → setup。useState 里那个
+    // 队列实例是同一个，cleanup 的 dispose 会把它永久停住——这里在每次 setup 时重新
+    // 启用；真实卸载仍由返回的 cleanup 清定时器。
+    refreshQueue.revive();
+    return () => refreshQueue.dispose();
+  }, [refreshQueue]);
 
   /**
    * **读失败不清空。** 以前这里会 `.catch(() => setSessions([]))`，磁盘权限坏了就显示成

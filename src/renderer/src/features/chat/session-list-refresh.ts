@@ -139,12 +139,26 @@ export class SessionListRefreshQueue {
   }
 
   /** 卸载时调用：清掉定时器；在途请求的回调不再落地 */
+  /**
+   * 卸载时调用：清掉定时器与还没发出的请求；在途请求的回调不再落地。
+   *
+   * **之后可以 `revive()` 复用同一实例**：React StrictMode 在开发环境会
+   * setup → cleanup → setup，同一个队列会被 dispose 一次再继续用；没有 revive
+   * 的话开发模式下增量刷新会永久失效（生产不双挂载，验不出来）。
+   */
   dispose(): void {
     this.disposed = true;
+    this.pendingFull = false;
+    this.pendingMetaIds.clear();
     if (this.timer !== null) {
       clearTimeout(this.timer);
       this.timer = null;
     }
+  }
+
+  /** 重新启用（StrictMode 第二次 setup / 热更新后的同一个实例） */
+  revive(): void {
+    this.disposed = false;
   }
 
   private hasPending(): boolean {
