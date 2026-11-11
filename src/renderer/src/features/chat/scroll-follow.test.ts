@@ -6,6 +6,7 @@ import {
   PROGRAMMATIC_GRACE_MS,
   createFollowTracker,
   forceFollowLatest,
+  forceReading,
   isFollowing,
   isScrollbarPointer,
   scrollIntentDirection,
@@ -215,5 +216,25 @@ describe("键盘意图与滚动条判定", () => {
     noteFollowIntent(tracker, 0, "up");
     noteFollowJump(tracker, 100);
     assert.equal(mayPinToBottom(tracker, 100 + JUMP_WINDOW_MS + 1), true);
+  });
+});
+
+
+describe("forceReading（程序化跳转）", () => {
+  test("从 Latest 进 Reading，之后的贴底判定不再成立", () => {
+    const tracker = createFollowTracker();
+    assert.equal(isFollowing(tracker), true);
+    forceReading(tracker);
+    assert.equal(isFollowing(tracker), false);
+    assert.equal(tracker.state, "reading");
+    assert.equal(tracker.jumpUntil, 0);
+  });
+
+  test("清掉未决的向上意图：跳转后的布局滚动不会被当成用户滚动", () => {
+    const tracker = createFollowTracker();
+    noteFollowIntent(tracker, 1000, "up");
+    forceReading(tracker);
+    assert.equal(tracker.intentUntil, 0);
+    assert.equal(tracker.intentSettled, false);
   });
 });

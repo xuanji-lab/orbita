@@ -99,6 +99,18 @@ export function forceFollowLatest(tracker: FollowTracker): void {
 }
 
 /**
+ * 无条件进入 Reading（跳转到某条历史 / 回退预演切点）：程序化定位之后，贴底逻辑
+ * 不得在下一帧把视口拉回底部；用户滚回底部自然恢复 Latest。
+ */
+export function forceReading(tracker: FollowTracker): void {
+  tracker.state = "reading";
+  tracker.intentUntil = 0;
+  tracker.intentSettled = false;
+  tracker.intentDirection = "unknown";
+  tracker.jumpUntil = 0;
+}
+
+/**
  * 程序化「滚到底」动画（回底按钮）：直接进 Latest，并在动画窗口内锁住状态
  * （smooth 滚动途中的 scroll 事件不能把状态改成 Reading，否则动画到不了底）。
  * 钉底不受这个窗口限制：真在流式输出时提前钉到底，等于把动画收个尾。

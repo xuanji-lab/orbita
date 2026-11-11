@@ -1,5 +1,6 @@
 import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { QuoteToolbar, type QuoteCandidate } from "../../shell/QuoteToolbar";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
@@ -25,6 +26,7 @@ import { isAtBottom, isBeyondScrollDown, shouldJumpToEnd, shouldLoadOlder } from
 import {
   createFollowTracker,
   forceFollowLatest,
+  forceReading,
   isFollowing,
   isScrollbarPointer,
   mayPinToBottom,
@@ -33,10 +35,23 @@ import {
   noteFollowScroll,
   notePinnedScroll,
   scrollIntentDirection,
+  type FollowTracker,
 } from "./scroll-follow.ts";
 // 历史段 / 实时尾段的切分与派生复用（纯模块，可与整段一次性计算等价）
 import { deriveHistorySegment, type HistoryCache } from "./history-segment.ts";
 import { splitAtLastUser } from "./transcript-split.ts";
+import { readFoldState, writeFoldState } from "./fold-state.ts";
+// 历史段虚拟化：行过滤 / 下标映射 / 高度 LRU / 锚点换算（纯模块）
+import {
+  createHeightCache,
+  messageRowIndex,
+  prependAnchorTarget,
+  rowIndexByKey,
+  viewRowIndex,
+  virtualHistoryRows,
+  type HeightCache,
+  type VirtualHistoryRow,
+} from "./virtual-history.ts";
 import { bubbleClampStyle, isBubbleOverflowing } from "./user-bubble-clamp.ts";
 import { EXPANDED_FRAME, RAIL_X } from "./expanded-body.ts";
 import { clampToolBody } from "./tool-body-clamp.ts";
@@ -596,6 +611,20 @@ let consumedPickNonce = 0;
 const mainComposerTextarea = (): HTMLTextAreaElement | null =>
   document.querySelector<HTMLTextAreaElement>(".pane-main textarea.composer-input");
 
+/**
+ * 历史段虚拟器向滚动层（ChatViewBody）暴露的最小接口。滚动容器与跟随态在父组件，
+ * 历史段派生与行映射在 TranscriptColumn；两者只通过这个接口交接「首个可见行」
+ * 与前插锚点，不互传虚拟器实例。
+ */
+interface HistoryVirtualController {
+  /** 引用跳转：按消息 id 找行；不在已加载窗口里先翻页 */
+  jumpToMessage(messageId: string): void;
+  /** 触顶前一瞬的首个可见行（key + 行顶相对视口偏移）；历史段为空时 null */
+  captureAnchor(scrollTop: number): { key: string; offsetTop: number } | null;
+  /** 前插后同一 key 的新坐标反算出的目标 scrollTop；行已被过滤/找不到时 null */
+  scrollTopForAnchor(key: string, offsetTop: number): number | null;
+}
+
 function ChatViewBody(props: {
   /** 有文件正拖在这个面板上方：输入框亮起落点虚线（拖放本身由外层 ChatView 接） */
   dropActive?: boolean;
@@ -779,7 +808,22 @@ function ChatViewBody(props: {
   hasMoreRef.current = session.hasMoreHistory;
   const loadOlderRef = useRef(session.loadOlder);
   loadOlderRef.current = session.loadOlder;
+
+  // —— 历史段虚拟化的跨组件引用 ——
+  // 虚拟器住在 TranscriptColumn（它拿得到历史段派生与行数组）；滚动 / 分页锚定在
+  // ChatViewBody（它拿得到滚动容器与跟随态）。控制器由子组件每次渲染写入，父组件在
+  // 事件与布局 effect 里调用——两边都不需要把虚拟器实例当 prop 传。
+  const historyControllerRef = useRef<HistoryVirtualController | null>(null);
+  /** 前插锚点落定窗口：窗口内虚拟器的逐行补偿关闭，由按 key 的重算统一接管 */
+  const pageSettleRef = useRef<{ key: string; offsetTop: number; until: number } | null>(null);
+
   const jumpToMessage = useCallback((messageId: string) => {
+    const controller = historyControllerRef.current;
+    if (controller !== null) {
+      controller.jumpToMessage(messageId);
+      return;
+    }
+    // 列还没挂载（极少）：只查当前 DOM，必要时翻页
     let tries = 0;
     const attempt = () => {
       const pane = scrollRef.current;
@@ -802,9 +846,17 @@ function ChatViewBody(props: {
   const followNow = useCallback(() => performance.now(), []);
   /**
    * 触顶拉更早一页那一刻的滚动几何（源侧分页的滚动锚定）：
-   * pages = 当时的并入页数（回执后它变了就说明真并进来了一页）。
+   * - pages = 当时的并入页数（回执后它变了就说明真并进来了一页）；
+   * - key / offsetTop = 首个可见历史行的 key 与它相对视口顶的偏移（语义锚点）；
+   * - scrollHeight / scrollTop = 没有历史行可锚时的几何差兜底。
    */
-  const olderAnchorRef = useRef<{ pages: number; scrollHeight: number; scrollTop: number } | null>(null);
+  const olderAnchorRef = useRef<{
+    pages: number;
+    scrollHeight: number;
+    scrollTop: number;
+    key: string | null;
+    offsetTop: number;
+  } | null>(null);
 
   /**
    * 用户意图捕获（捕获阶段）：wheel / touchmove / 滚动条 pointerdown。落在滚动容器上，
@@ -812,6 +864,8 @@ function ChatViewBody(props: {
    * scroll 事件按位置表态——上滚意图会先暂停钉底，避免那一帧把用户的上滚吃掉。
    */
   const onWheelIntent = (event: React.WheelEvent<HTMLDivElement>) => {
+    // 用户重新接管滚动：前插锚点的落定窗口立刻让位，不再按旧锚点纠偏
+    pageSettleRef.current = null;
     noteFollowIntent(
       followTrackerRef.current,
       followNow(),
@@ -819,6 +873,7 @@ function ChatViewBody(props: {
     );
   };
   const onTouchMoveIntent = () => {
+    pageSettleRef.current = null;
     noteFollowIntent(followTrackerRef.current, followNow(), "unknown");
   };
   const onPointerDownIntent = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -832,6 +887,7 @@ function ChatViewBody(props: {
         el.clientHeight,
       )
     ) {
+      pageSettleRef.current = null;
       noteFollowIntent(followTrackerRef.current, followNow(), "unknown");
     }
   };
@@ -851,6 +907,7 @@ function ChatViewBody(props: {
       if (el === null) return;
       // 焦点在聊天面里，或没有焦点（body / html）：这次按键是在滚这列转录
       if (target !== document.body && target !== document.documentElement && !el.contains(target)) return;
+      pageSettleRef.current = null;
       noteFollowIntent(followTrackerRef.current, performance.now(), direction);
     };
     window.addEventListener("keydown", onKeyDown, true);
@@ -894,19 +951,26 @@ function ChatViewBody(props: {
       !session.loadingOlder &&
       shouldLoadOlder(el.scrollTop)
     ) {
+      // 语义锚点：首个可见历史行的 key + 它相对视口顶的偏移。虚拟化后旧可见行可能
+      // 在前插那一刻之后被卸下，DOM 不能当锚点；`start` 来自虚拟器的测量缓存，
+      // prepend 后同一 key 的新 start 减旧偏移就是目标 scrollTop。
+      const captured = historyControllerRef.current?.captureAnchor(el.scrollTop) ?? null;
+      pageSettleRef.current = null;
       olderAnchorRef.current = {
         pages: session.olderPages,
         scrollHeight: el.scrollHeight,
         scrollTop: el.scrollTop,
+        key: captured === null ? null : captured.key,
+        offsetTop: captured === null ? 0 : captured.offsetTop,
       };
       session.loadOlder();
     }
   };
 
-  // 滚动锚定（源侧分页）：更早的一页 prepend 之后，把 scrollTop 补上新旧 scrollHeight
-  // 之差——前面插进来多高，视口就往下走多远，用户视角纹丝不动。绘制前同步执行
-  // （useLayoutEffect），不会闪一下再跳。**声明在这支之前**：用户已经回到底部时
-  // 交给下面那支钉底，不拿旧几何再补一次。
+  // 滚动锚定（源侧分页）：更早的一页 prepend 之后，按**同一行的 key** 反算 scrollTop
+  // ——前面插进来多高，视口就跟着走多远。有历史行可锚时用虚拟器的 measurement.start；
+  // 没有（历史段还是空的）退回新旧 scrollHeight 差。绘制前同步执行（useLayoutEffect），
+  // 不会闪一下再跳。**声明在钉底那支之前**：已经回到底部时交给钉底，不拿旧锚点再补。
   useLayoutEffect(() => {
     const el = scrollRef.current;
     const anchor = olderAnchorRef.current;
@@ -918,9 +982,42 @@ function ChatViewBody(props: {
     }
     olderAnchorRef.current = null;
     if (isFollowing(followTrackerRef.current)) return;
+    if (anchor.key !== null) {
+      const target = historyControllerRef.current?.scrollTopForAnchor(anchor.key, anchor.offsetTop) ?? null;
+      if (target !== null) {
+        // 同一批新行的逐行测高由这个窗口统一补偿（虚拟器默认补偿被 override 关掉）
+        pageSettleRef.current = { key: anchor.key, offsetTop: anchor.offsetTop, until: followNow() + 1500 };
+        el.scrollTop = target;
+        notePinnedScroll(followTrackerRef.current, followNow());
+        return;
+      }
+    }
     el.scrollTop = anchor.scrollTop + (el.scrollHeight - anchor.scrollHeight);
     // 这是程序化改 scrollTop：给「位置离底」的兜底判定一个静默期
     notePinnedScroll(followTrackerRef.current, followNow());
+  });
+
+  // 前插锚点的落定窗口：新行从估值变实测会逐条改 start，这里每 commit 按同一 key
+  // 重算一次。窗口内虚拟器的逐行补偿被 override 关掉（它的补偿按旧 scrollOffset
+  // 累计，会把刚设好的锚点又拉走）；用户重新滚（wheel / 触摸 / 键 / 拖滚动条）时
+  // 窗口立即让位，窗口到期后恢复虚拟器的默认补偿。
+  useLayoutEffect(() => {
+    const settle = pageSettleRef.current;
+    if (settle === null) return;
+    const el = scrollRef.current;
+    if (el === null || isFollowing(followTrackerRef.current) || performance.now() >= settle.until) {
+      pageSettleRef.current = null;
+      return;
+    }
+    const target = historyControllerRef.current?.scrollTopForAnchor(settle.key, settle.offsetTop) ?? null;
+    if (target === null) {
+      pageSettleRef.current = null;
+      return;
+    }
+    if (Math.abs(el.scrollTop - target) > 0.5) {
+      el.scrollTop = target;
+      notePinnedScroll(followTrackerRef.current, followNow());
+    }
   });
 
   // 每次 commit 后钉底：不挑触发源——流式输出、忙碌指示出现、折叠展开全兜住；scrollTop 赋值廉价。
@@ -1583,6 +1680,12 @@ function ChatViewBody(props: {
           memoryView={memorySession.data}
           onOpenMemoryReview={props.onOpenMemoryReview}
           sessionId={openId}
+          scrollRef={scrollRef}
+          followTrackerRef={followTrackerRef}
+          pageSettleRef={pageSettleRef}
+          historyControllerRef={historyControllerRef}
+          hasMoreOlderRef={hasMoreRef}
+          loadOlderRef={loadOlderRef}
         />
         </RevertPreviewContext.Provider>
       </Pane>
@@ -1655,6 +1758,18 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   onAbort: () => void;
   /** 乐观回显：发出即画的用户气泡（真回显事件一到即清）。ephemeral */
   pendingEcho: { blocks: readonly string[] } | null;
+  /** 滚动容器（ChatViewBody 持有）：历史段虚拟器按它测视口、挂滚动监听 */
+  scrollRef: React.RefObject<HTMLDivElement | null>;
+  /** 跟随态（Latest | Reading）：测高补偿 override 要读它，避免把 Reading 拉回 */
+  followTrackerRef: React.RefObject<FollowTracker>;
+  /** 前插锚点落定窗口（父组件置位）：窗口内虚拟器的逐行测高补偿一律关闭 */
+  pageSettleRef: React.RefObject<{ key: string; offsetTop: number; until: number } | null>;
+  /** 回父组件的跳转 / 锚点入口（每次渲染覆写，方法在调用时读最新行映射） */
+  historyControllerRef: React.RefObject<HistoryVirtualController | null>;
+  /** 还有更早的历史可翻（引用随记录窗口变） */
+  hasMoreOlderRef: React.RefObject<boolean>;
+  /** 翻更早一页（引用稳定） */
+  loadOlderRef: React.RefObject<() => void>;
 }) {
   const t = useT();
   // 意图系统开关：关着时终态记录照渲染（历史还在），运行卡与入口全藏
@@ -1920,40 +2035,270 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       props.onOpenMemoryReview,
     ],
   );
-  // 历史行的元素数组按引用记忆：流式期间只有尾段变，这里整段复用（连元素创建都省掉）。
-  // 只有回退预演切点（doomed / isCut）变化时才重算，且那是用户动作，不在流式热路径上。
-  const historyRows = useMemo(
-    () =>
-      historySegment.turnView.map((entry, index) => (
-        <TranscriptRow
-          key={entry.key}
-          entry={entry}
-          index={index}
-          isCut={index === cutIndex}
-          doomed={cutIndex >= 0 && index >= cutIndex}
-          branchAfter={historySegment.branchRows.get(index)}
-          scope={historyScope}
-        />
-      )),
-    [historySegment.turnView, historySegment.branchRows, cutIndex, historyScope],
+  // —— 历史段虚拟化的本地状态 ——
+  // 滚动容器 / 跟随态 / 前插落定窗口归父组件（ChatViewBody）；这里只持有虚拟器、
+  // 行映射与高度缓存。把所有方法写进父组件的 controller ref，父组件的事件与
+  // layout effect 调它时总能读到最新一版行数组。
+  const scrollRef = props.scrollRef;
+  const followTrackerRef = props.followTrackerRef;
+  const pageSettleRef = props.pageSettleRef;
+  const hasMoreRef = props.hasMoreOlderRef;
+  const loadOlderRef = props.loadOlderRef;
+  const virtualizerRef = useRef<Virtualizer<HTMLDivElement, HTMLDivElement> | null>(null);
+  const virtualRowsRef = useRef<readonly VirtualHistoryRow[]>([]);
+  const rowIndexByKeyRef = useRef<ReadonlyMap<string, number>>(new Map());
+  const messageRowIndexRef = useRef<ReadonlyMap<string, number>>(new Map());
+  const viewRowIndexRef = useRef<ReadonlyMap<number, number>>(new Map());
+  const heightCacheRef = useRef<HeightCache | null>(null);
+  if (heightCacheRef.current === null) heightCacheRef.current = createHeightCache(4000);
+
+  /**
+   * 把一个历史行滚进视口：先用虚拟器按未测估值粗定位，等 `data-index` 对上的
+   * 那一行真的挂载、且渲染位置入账后再交给 `done` 精确对齐。未挂载时不能只靠
+   * `querySelector`——虚拟化之后「没挂载」不等于「没加载」。
+   */
+  const revealVirtualRow = useCallback((key: string, done: (row: HTMLElement) => void) => {
+    // 程序化跳转先脱离跟随：否则 Latest 的钉底 effect 会在下一帧把视口拉回底部，
+    // 和 scrollIntoView 抢滚动权（回退预演切点尤其明显）。
+    forceReading(followTrackerRef.current);
+    const virtualizer = virtualizerRef.current;
+    if (virtualizer === null) return;
+    const selector = `.chat-virtual-row[data-virtual-key="${CSS.escape(key)}"]`;
+    const mounted = document.querySelector<HTMLElement>(selector);
+    if (mounted !== null) {
+      done(mounted);
+      return;
+    }
+    const firstIndex = rowIndexByKeyRef.current.get(key);
+    if (firstIndex === undefined) return;
+    virtualizer.scrollToIndex(firstIndex, { align: "center" });
+    let lastIndex = firstIndex;
+    let frames = 0;
+    const settle = () => {
+      const row = document.querySelector<HTMLElement>(selector);
+      if (row !== null) {
+        done(row);
+        return;
+      }
+      // 前插可能在这几帧里发生：index 会变，按 key 重新解析后再粗定位一次
+      const latest = rowIndexByKeyRef.current.get(key);
+      if (latest !== undefined && latest !== lastIndex) {
+        lastIndex = latest;
+        virtualizer.scrollToIndex(latest, { align: "center" });
+      }
+      frames += 1;
+      if (frames <= 20) window.requestAnimationFrame(settle);
+    };
+    window.requestAnimationFrame(settle);
+  }, []);
+
+  /** 引用 / 收尾卡跳转：按消息 id 找行；不在已加载窗口里先翻页（最多 20 页） */
+  const jumpToMessage = useCallback(
+    (messageId: string) => {
+      let tries = 0;
+      const attempt = () => {
+        const pane = scrollRef.current;
+        if (pane === null) return;
+        if (pane.querySelector(`[data-quote-id="${CSS.escape(messageId)}"]`) !== null) {
+          highlightQuote(pane, messageId, "", "auto");
+          return;
+        }
+        // 历史段里的消息可能只是被虚拟化卸下了：按数据索引粗定位，再等它挂载
+        const index = messageRowIndexRef.current.get(messageId);
+        const row = index === undefined ? undefined : virtualRowsRef.current[index];
+        if (row !== undefined) {
+          revealVirtualRow(row.entry.key, () => {
+            const current = scrollRef.current;
+            if (current !== null) highlightQuote(current, messageId, "", "auto");
+          });
+          return;
+        }
+        if (!hasMoreRef.current || tries >= 20) return;
+        tries += 1;
+        loadOlderRef.current();
+        window.setTimeout(attempt, 400);
+      };
+      attempt();
+    },
+    [revealVirtualRow, scrollRef, hasMoreRef, loadOlderRef],
   );
+
+  // 前插落定：虚拟器的测高通知只重渲本列，不重渲父组件——锚点重算必须挂在这里，
+  // 否则父组件的 settle effect 收不到后续测量帧，行会停在估值坐标上。窗口内每帧
+  // 按同一 key 把 scrollTop 拉回「新 start − 旧视口偏移」；用户滚动由父组件清窗。
+  useLayoutEffect(() => {
+    const settle = pageSettleRef.current;
+    if (settle === null) return;
+    const el = scrollRef.current;
+    if (el === null || isFollowing(followTrackerRef.current) || performance.now() >= settle.until) {
+      pageSettleRef.current = null;
+      return;
+    }
+    const index = rowIndexByKeyRef.current.get(settle.key);
+    const measurement = index === undefined ? undefined : virtualizer.measurementsCache[index];
+    const target = prependAnchorTarget(measurement?.start, settle.offsetTop);
+    if (target === null) {
+      pageSettleRef.current = null;
+      return;
+    }
+    if (Math.abs(el.scrollTop - target) > 0.5) {
+      el.scrollTop = target;
+      notePinnedScroll(followTrackerRef.current, performance.now());
+    }
+  });
+
+  // 历史段真正会产出 DOM 的行（相邻 show_image 的吸收行 / 被扫描卡吸收的后续正文块
+  // 不进虚拟列表，否则会留下空行与假 gap）。
+  const historyVirtualRows = useMemo(
+    () =>
+      virtualHistoryRows(
+        historySegment.turnView,
+        historySegment.toolResults,
+        historySegment.carryoverCards,
+        props.channel.ownSide,
+        historySegment.branchRows,
+      ),
+    [
+      historySegment.turnView,
+      historySegment.toolResults,
+      historySegment.carryoverCards,
+      historySegment.branchRows,
+      props.channel.ownSide,
+    ],
+  );
+  // 事件 / 布局 effect 里读最新映射（它们不在渲染期执行，但闭包不能拿旧数组）
+  const historyRowByKey = useMemo(() => rowIndexByKey(historyVirtualRows), [historyVirtualRows]);
+  const historyRowByMessage = useMemo(() => messageRowIndex(historyVirtualRows), [historyVirtualRows]);
+  const historyRowByViewIndex = useMemo(() => viewRowIndex(historyVirtualRows), [historyVirtualRows]);
+  virtualRowsRef.current = historyVirtualRows;
+  rowIndexByKeyRef.current = historyRowByKey;
+  messageRowIndexRef.current = historyRowByMessage;
+  viewRowIndexRef.current = historyRowByViewIndex;
+
+  // 只虚拟化历史段；实时尾段继续按普通流渲染在虚拟占位之后。行仍是 `TurnViewEntry`
+  // 粗粒度行（user / 回合折叠 / 过程块 / 正文），保留 `.chat-col` 原有的子午线几何。
+  const virtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
+    count: historyVirtualRows.length,
+    getScrollElement: useCallback(() => scrollRef.current, []),
+    // 未测行估值 = 一屏高（不是固定 72px）：首屏只挂视口内外两行 + overscan，
+    // 快速拖动滚动条时再靠实测收敛。已测过的高度从 LRU 缓存直达。
+    estimateSize: useCallback((index: number) => {
+      const key = virtualRowsRef.current[index]?.entry.key;
+      const cached = key === undefined ? undefined : heightCacheRef.current?.get(key);
+      return cached ?? (scrollRef.current?.clientHeight || 72);
+    }, []),
+    getItemKey: useCallback((index: number) => virtualRowsRef.current[index]?.entry.key ?? `#${index}`, []),
+    overscan: 2,
+    measureElement: useCallback((element: Element, entry: ResizeObserverEntry | undefined) => {
+      // ResizeObserver 的 borderBox 是内容真实高度；测量值回写 LRU，抗重挂 / StrictMode
+      const box = entry?.borderBoxSize[0];
+      const height = Math.round(box?.blockSize ?? element.getBoundingClientRect().height);
+      const key = element.getAttribute("data-virtual-key");
+      if (key !== null) heightCacheRef.current?.set(key, height);
+      return height;
+    }, []),
+  });
+  // 测高补偿：跟随中不补（钉底统一接管）；前插落定窗口里也不补——虚拟器的补偿
+  // 按它自己的旧 scrollOffset 累计，会把刚设好的 key 锚点又拽走，这段由
+  // TranscriptColumn 的 settle effect 每帧按同一 key 重算。其余只补「整行都在
+  // 视口上方」的行，避免同一批 RO 里把视口下方的行也当成上方。
+  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item) => {
+    if (isFollowing(followTrackerRef.current) || pageSettleRef.current !== null) return false;
+    const scrollTop = scrollRef.current?.scrollTop ?? virtualizer.scrollOffset ?? 0;
+    return item.end <= scrollTop + 1;
+  };
+  virtualizerRef.current = virtualizer;
+
+  // 回父组件的锚点 / 跳转入口。每次渲染覆写：方法体读的是本次渲染的行映射与
+  // 虚拟器，父组件在事件 / layout effect 里调用时不会拿到过期闭包。
+  props.historyControllerRef.current = {
+    jumpToMessage,
+    captureAnchor: (scrollTop: number) => {
+      const item = virtualizer.getVirtualItemForOffset(scrollTop);
+      const row = item === undefined ? undefined : virtualRowsRef.current[item.index];
+      if (item === undefined || row === undefined) return null;
+      return { key: row.entry.key, offsetTop: item.start - scrollTop };
+    },
+    scrollTopForAnchor: (key: string, offsetTop: number) => {
+      const index = rowIndexByKeyRef.current.get(key);
+      const measurement = index === undefined ? undefined : virtualizer.measurementsCache[index];
+      return prependAnchorTarget(measurement?.start, offsetTop);
+    },
+  };
+
+  const virtualHistoryItems = virtualizer.getVirtualItems();
+  const historyVirtualSize = virtualizer.getTotalSize();
   // 「这条任务 › 进度」点一章：对话滚到那个过程块并闪一下（面板与对话不共享状态，走一次性事件）
+  const flashEntry = useCallback((target: HTMLElement) => {
+    // 瞬时定位：虚拟化后 smooth 动画会被测高补偿打断，位置可能停在半路
+    target.scrollIntoView({ block: "center", behavior: "auto" });
+    target.classList.remove("entry-revealed");
+    void target.offsetWidth;
+    target.classList.add("entry-revealed");
+  }, []);
   useEffect(() => {
     const onReveal = (event: Event) => {
       const key = (event as CustomEvent<string>).detail;
-      const target = document.querySelector(`[data-entry-key="${CSS.escape(key)}"]`);
-      if (!(target instanceof HTMLElement)) return;
-      target.scrollIntoView({ block: "center", behavior: "smooth" });
-      target.classList.remove("entry-revealed");
-      void target.offsetWidth;
-      target.classList.add("entry-revealed");
+      const findMounted = (): HTMLElement | null => {
+        const target = document.querySelector(`[data-entry-key="${CSS.escape(key)}"]`);
+        return target instanceof HTMLElement ? target : null;
+      };
+      const index = rowIndexByKeyRef.current.get(key);
+      if (index !== undefined) {
+        revealVirtualRow(key, (row) => {
+          const target = findMounted();
+          if (target !== null) {
+            flashEntry(target);
+            return;
+          }
+          // 行已挂载但目标条目在折叠里 / 被画廊吸收：闪整行，至少把人带到位置
+          flashEntry(row);
+        });
+        return;
+      }
+      const mounted = findMounted();
+      if (mounted !== null) {
+        flashEntry(mounted);
+        return;
+      }
+      // 不在已加载窗口里：先翻页（最多 20 页），每次回来再试
+      let loads = 0;
+      const retry = () => {
+        const target = findMounted();
+        if (target !== null) {
+          flashEntry(target);
+          return;
+        }
+        const nextIndex = rowIndexByKeyRef.current.get(key);
+        if (nextIndex !== undefined) {
+          revealVirtualRow(key, (row) => flashEntry(findMounted() ?? row));
+          return;
+        }
+        if (!hasMoreRef.current || loads >= 20) return;
+        loads += 1;
+        loadOlderRef.current();
+        window.setTimeout(retry, 400);
+      };
+      retry();
     };
     window.addEventListener(REVEAL_ENTRY_EVENT, onReveal);
     return () => window.removeEventListener(REVEAL_ENTRY_EVENT, onReveal);
-  }, []);
+  }, [flashEntry, revealVirtualRow]);
   useEffect(() => {
-    if (cutIndex >= 0) cutRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
-  }, [cutIndex]);
+    if (cutIndex < 0) return;
+    forceReading(followTrackerRef.current);
+    // 切点在历史段：先让虚拟器把那一行挂上，再对虚线与切点行做精确对齐
+    const virtualIndex = viewRowIndexRef.current.get(cutIndex);
+    const cutRow = virtualIndex === undefined ? undefined : virtualRowsRef.current[virtualIndex];
+    if (cutRow !== undefined) {
+      revealVirtualRow(cutRow.entry.key, () => {
+        // 瞬时定位：smooth 动画期间虚拟器的测高补偿会改写 scrollTop，动画会被打断
+        cutRef.current?.scrollIntoView({ block: "center", behavior: "auto" });
+      });
+      return;
+    }
+    cutRef.current?.scrollIntoView({ block: "center", behavior: "auto" });
+  }, [cutIndex, revealVirtualRow]);
 
   return (
     <>
@@ -1968,7 +2313,37 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
         props.turnError === null && (
           <StatusLine>{t.chat.noMessages}</StatusLine>
         )}
-      {historyRows}
+      {/* 历史段：只挂视口 + overscan 内的行；尾段与状态行仍在虚拟占位块之后按普通流渲染。
+          虚拟行仍是 .revert-keep（data-kind 不变），子午线选择器在 styles.css 里同步认
+          .chat-virtual-row 这层包裹。行距用行自身 padding-bottom；容器负 margin 抵消
+          最后一行的那一段，使「历史段末尾 → 尾段首行」仍只有一个行列间距。 */}
+      {historyVirtualRows.length > 0 && (
+        <div className="chat-virtual" style={{ height: historyVirtualSize }}>
+          {virtualHistoryItems.map((item) => {
+            const row = historyVirtualRows[item.index];
+            if (row === undefined) return null;
+            return (
+              <div
+                key={item.key}
+                className="chat-virtual-row"
+                data-index={item.index}
+                data-virtual-key={row.entry.key}
+                ref={virtualizer.measureElement}
+                style={{ transform: `translateY(${item.start}px)` }}
+              >
+                <TranscriptRow
+                  entry={row.entry}
+                  index={row.index}
+                  isCut={row.index === cutIndex}
+                  doomed={cutIndex >= 0 && row.index >= cutIndex}
+                  branchAfter={historySegment.branchRows.get(row.index)}
+                  scope={historyScope}
+                />
+              </div>
+            );
+          })}
+        </div>
+      )}
       {tailTurnView.map((entry, index) => {
         const globalIndex = historySegment.turnView.length + index;
         return (
@@ -2073,6 +2448,28 @@ interface RowScope {
   onOpenMemoryReview?: () => void;
   /** 回退预演切点那条虚线的落点 */
   cutRef: React.RefObject<HTMLDivElement | null>;
+}
+
+/**
+ * 展开态记忆（模块级 Map，上限 1000）：行被虚拟化卸下再挂回来时恢复用户/自动
+ * 最后选择的状态；没有记录时用组件自己的默认值。key 必须是稳定标识。
+ */
+function useFoldState(
+  key: string,
+  fallback = false,
+): [boolean, (next: boolean | ((prev: boolean) => boolean)) => void] {
+  const [open, setOpen] = useState(() => readFoldState(key) ?? fallback);
+  const update = useCallback(
+    (next: boolean | ((prev: boolean) => boolean)) => {
+      setOpen((prev) => {
+        const value = typeof next === "function" ? next(prev) : next;
+        writeFoldState(key, value);
+        return value;
+      });
+    },
+    [key],
+  );
+  return [open, update];
 }
 
 /**
@@ -3326,7 +3723,7 @@ function TurnRollupLine(props: {
   interruptedCalls: ReadonlySet<string>;
 }) {
   const t = useT();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useFoldState(`rollup:${props.group.key}`);
   const { group } = props;
   // 「今天只写时分」的档位随日历日走：跨午夜翻档（today.ts 的 useToday）
   const today = useToday();
@@ -3754,7 +4151,7 @@ function UserBubble(props: {
  * fit-content 宽度，不复用 CollapseRow（那套是全宽的工具行骨架）。
  */
 function SkillInvocationCard(props: { name: string; content: string }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useFoldState(`skill:${props.name}`);
   return (
     <div
       style={{
@@ -4019,7 +4416,7 @@ function TurnProcessLine(props: {
   const t = useT();
   const today = useToday();
   const { unit } = props;
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useFoldState(`proc:${unit.key}`);
   const live = unit.live && !unit.answering;
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -4186,7 +4583,7 @@ function ProcessChapterItem(props: {
   renderStep: (step: ProcessStep) => ReactNode;
 }) {
   const t = useT();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useFoldState(`chapter:${props.chapter.key}`);
   const { chapter } = props;
   const failed = chapter.calls.some((call) => props.toolResults.get(call.toolCallId)?.status === "error");
   const title =
@@ -4483,7 +4880,7 @@ function ToolLine(props: {
   sessionId?: string;
 }) {
   const t = useT();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useFoldState(`tool:${props.toolCallId}`);
   const { result } = props;
   const failed = result?.status === "error";
   // 已中断：无结果帧且判定永不回来——不算运行中（不呼吸、不展开、状态词换「已中断」）
@@ -5133,11 +5530,14 @@ function ToolGroupLine(props: {
 }) {
   const t = useT();
   const { group } = props;
-  // 挂载时的相态决定初始展开：活跃轮里长出来的组铺开，idle 会话（旧历史）收着
-  const [open, setOpen] = useState(props.turnActive);
+  // 挂载时的相态决定初始展开：活跃轮里长出来的组铺开，idle 会话（旧历史）收着。
+  // 卸载再挂回时优先恢复用户最后的选择；只有「活跃 → 落定」这个真转场才自动收。
+  const [open, setOpen] = useFoldState(`toolgroup:${group.key}`, props.turnActive);
+  const wasActive = useRef(props.turnActive);
   useEffect(() => {
-    if (!props.turnActive) setOpen(false);
-  }, [props.turnActive]);
+    if (wasActive.current && !props.turnActive) setOpen(false);
+    wasActive.current = props.turnActive;
+  }, [props.turnActive, setOpen]);
 
   const status = toolGroupStatus(group.calls, props.toolResults, props.interruptedCalls);
   const active = status.running > 0;
@@ -5671,7 +6071,7 @@ interface MemoryLines {
  */
 function ThinkingLine(props: { text: string; active: boolean; blockKey: string }) {
   const t = useT();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useFoldState(`thinking:${props.blockKey}`);
   const { active } = props;
   const body = props.text.trim();
   const follow = useFollowScroll(active);
@@ -5720,7 +6120,7 @@ function ThinkingLine(props: { text: string; active: boolean; blockKey: string }
  */
 function CompactedLine(props: { record: CompactedRecord }) {
   const t = useT();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useFoldState(`compacted:${props.record.id}`);
   return (
     <div
       style={{
