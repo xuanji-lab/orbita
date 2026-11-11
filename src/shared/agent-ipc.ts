@@ -173,7 +173,7 @@ export const ipcChannels = {
    */
   sessionMeta: "session:meta",
   /**
-   * 打开一条会话：只回**尾窗**（SESSION_PAGE_RECORDS 条，起点对齐到轮边界）+ 窗口信息。
+   * 打开一条会话：只回**首屏尾窗**（SESSION_INITIAL_RECORDS 条，起点对齐到轮边界）+ 窗口信息。
    * 主进程仍全量读盘 + 折叠，切的是 IPC 传输量与 renderer 渲染量（瓶颈所在）。
    */
   sessionLoad: "session:load",
