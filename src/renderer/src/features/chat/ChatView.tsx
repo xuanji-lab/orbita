@@ -35,7 +35,7 @@ import {
   scrollIntentDirection,
 } from "./scroll-follow.ts";
 // 历史段 / 实时尾段的切分与派生复用（纯模块，可与整段一次性计算等价）
-import { deriveHistorySegment, type HistoryCache, type HistorySegment } from "./history-segment.ts";
+import { deriveHistorySegment, type HistoryCache } from "./history-segment.ts";
 import { splitAtLastUser } from "./transcript-split.ts";
 import { bubbleClampStyle, isBubbleOverflowing } from "./user-bubble-clamp.ts";
 import { EXPANDED_FRAME, RAIL_X } from "./expanded-body.ts";
