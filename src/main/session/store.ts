@@ -47,6 +47,7 @@ import {
   parseSessionMeta,
   pushRecentQuery,
   recentQueriesFromRecords,
+  SESSION_INITIAL_RECORDS,
   SESSION_PAGE_RECORDS,
   sortSessions,
   UNASSIGNED_PROVIDER_ID,
@@ -928,7 +929,8 @@ export class SessionStore {
   }
 
   /**
-   * 打开一条会话的**尾窗**（IPC 的 session:load 走这条）。
+   * 打开一条会话的**首屏尾窗**（IPC 的 session:load 走这条），默认只取
+   * `SESSION_INITIAL_RECORDS` 条；更早的由 `loadOlder` 按 `SESSION_PAGE_RECORDS` 一页页补。
    *
    * **主进程仍然全量读盘 + `foldReverts`**（实测 25MB / 2948 条的会话读盘解析折叠
    * 约 120ms，可接受）——瓶颈是 IPC 传输量与 renderer 的渲染量，那两处才是分页的对象。
@@ -940,7 +942,7 @@ export class SessionStore {
    *
    * 要**全量**的消费者照旧走 `load`：导出、回退、intent 归档、read_task。
    */
-  async loadWindow(id: string, limit: number = SESSION_PAGE_RECORDS): Promise<SessionWindowDetail | null> {
+  async loadWindow(id: string, limit: number = SESSION_INITIAL_RECORDS): Promise<SessionWindowDetail | null> {
     const meta = await this.readMeta(id);
     if (meta === null) return null;
     const effective = await this.readLog(id);
@@ -1196,7 +1198,7 @@ export class SessionStore {
 /** IPC 进来的 limit 在这条线上夹住：它来自 renderer，不设上限就是给了一条自选的传输量 */
 const PAGE_RECORDS_MAX = 2000;
 
-/** 一页的条数：坏值 / 缺席退默认，再夹在 [1, PAGE_RECORDS_MAX] */
+/** 一页的条数：坏值 / 缺席退**翻页**默认值（不是首屏值），再夹在 [1, PAGE_RECORDS_MAX] */
 function pageRecords(limit: number): number {
   if (!Number.isFinite(limit)) return SESSION_PAGE_RECORDS;
   return Math.min(Math.max(1, Math.floor(limit)), PAGE_RECORDS_MAX);

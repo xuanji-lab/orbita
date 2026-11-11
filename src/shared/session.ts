@@ -598,13 +598,27 @@ export interface SessionDetail {
 }
 
 /**
- * 源侧分页的一页有多少条记录（尾窗与 loadOlder 共用同一个数）。
+ * **首屏尾窗**的条数（`store.loadWindow` 的默认值：打开会话时一次给多少）。
  *
- * 500 条 ≈ 60 轮 × 平均 8 条/轮（一轮 = 一条 user + 回答与工具调用各若干条），
- * 贴 ZCode 的冷订阅尾窗 60 行 / 滚顶每次再取 200 行的思路。**只分 IPC 传输量与
- * renderer 渲染量**：主进程照样全量读盘 + 折叠，窗口是读时投影（见 store.loadWindow）。
+ * 120 条 ≈ 7–10 轮（一轮 = 一条 user + 回答与工具行若干，平均 12–17 条），
+ * 取同类产品尾窗量级的保守值：Proma 首屏 10 条消息、ZCode 冷订阅 60 行、
+ * dsh 50 条、codex 5 轮。首屏只要「一眼看到最近发生了什么」，更早的由
+ * `loadOlder` 按页补；窗口起点对齐到轮边界（`alignToTurnStart`），实际条数可能略多。
+ *
+ * 与下面的 `SESSION_PAGE_RECORDS` 分工：这个管**首屏**，那个管**再往前一页**。
+ * **只切 IPC 传输量与 renderer 渲染量**：主进程照样全量读盘 + 折叠，窗口是读时投影
+ * （见 store.loadWindow）。
  */
-export const SESSION_PAGE_RECORDS = 500;
+export const SESSION_INITIAL_RECORDS = 120;
+
+/**
+ * **翻页一页**的条数（`store.loadOlder` 的默认值，也是 renderer 触顶加载时传的值）。
+ *
+ * 200 条 ≈ 12–16 轮，取 ZCode 单页上限 200 行的量级。比首屏大，是因为翻页是
+ * 用户主动要更早的历史，宁可一次多给一点、少触发几次 IPC；与首屏窗口互不影响，
+ * 分页语义不变。**只切 IPC 传输量与 renderer 渲染量**：主进程照样全量读盘 + 折叠。
+ */
+export const SESSION_PAGE_RECORDS = 200;
 
 /** 一条会话的窗口信息：已加载窗口之外还有多少历史 */
 export interface SessionWindow {
