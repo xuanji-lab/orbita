@@ -43,6 +43,7 @@ const BOARD_MODEL_IDS: Readonly<Record<string, readonly string[]>> = {
   "DeepSeek-V4-Flash": ["deepseek-v4-flash"],
   "Qwen3.8-Max": ["qwen3.8-max"],
   "MiniMax-M3": ["minimax-m3"],
+  "MiniMax-M3.1-Flash": ["minimax-m3.1-flash"],
   "Step 5 Preview": ["step-5-preview", "step-5-preview-free"],
   "MiMo-V2.6-Pro": ["mimo-v2.6-pro", "mimo-v2.6-pro-ultraspeed"],
   "MiMo-V2.6-Flash": ["mimo-v2.6-flash"],
