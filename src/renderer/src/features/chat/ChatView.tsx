@@ -2063,8 +2063,12 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
 
   /**
    * 把一个历史行滚进视口：先用虚拟器按未测估值粗定位，等 `data-index` 对上的
-   * 那一行真的挂载、且渲染位置入账后再交给 `done` 精确对齐。未挂载时不能只靠
+   * 那一行真的挂载、测高落定、且落在视口内后再交给 `done` 精确对齐。未挂载时不能只靠
    * `querySelector`——虚拟化之后「没挂载」不等于「没加载」。
+   *
+   * 深跳（底部 → 最老行）不能挂载后立即交付：上方几十行是估值，它们逐帧测高后
+   * 内容会继续位移，一行会从「已挂载」滑到视口上方（L3b 实测落点 top −771）。
+   * 所以这里等到同一行连续两帧高度一致、且视口中心落在行内再交付。
    */
   const revealVirtualRow = useCallback((key: string, done: (row: HTMLElement) => void) => {
     // 程序化跳转先脱离跟随：否则 Latest 的钉底 effect 会在下一帧把视口拉回底部，
@@ -2083,20 +2087,42 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
     virtualizer.scrollToIndex(firstIndex, { align: "center" });
     let lastIndex = firstIndex;
     let frames = 0;
+    let lastHeight = -1;
+    let stable = 0;
     const settle = () => {
       const row = document.querySelector<HTMLElement>(selector);
-      if (row !== null) {
-        done(row);
-        return;
-      }
       // 前插可能在这几帧里发生：index 会变，按 key 重新解析后再粗定位一次
-      const latest = rowIndexByKeyRef.current.get(key);
-      if (latest !== undefined && latest !== lastIndex) {
-        lastIndex = latest;
-        virtualizer.scrollToIndex(latest, { align: "center" });
+      const index = rowIndexByKeyRef.current.get(key);
+      if (row !== null && index !== undefined) {
+        const pane = scrollRef.current;
+        let inView = false;
+        if (pane !== null) {
+          const r = row.getBoundingClientRect();
+          const p = pane.getBoundingClientRect();
+          const center = (p.top + p.bottom) / 2;
+          // 高过一屏的行也满足：视口中心落在行内
+          inView = r.top <= center && r.bottom >= center;
+        }
+        const height = Math.round(row.getBoundingClientRect().height);
+        stable = height === lastHeight ? stable + 1 : 0;
+        lastHeight = height;
+        if (inView && stable >= 1) {
+          done(row);
+          return;
+        }
+        // 还没稳：按最新的 measurements 再居中一次（估值已换成实测）
+        virtualizer.scrollToIndex(index, { align: "center" });
+      } else if (index !== undefined && index !== lastIndex) {
+        lastIndex = index;
+        virtualizer.scrollToIndex(index, { align: "center" });
       }
       frames += 1;
-      if (frames <= 20) window.requestAnimationFrame(settle);
+      if (frames <= 24) {
+        window.requestAnimationFrame(settle);
+      } else if (row !== null) {
+        // 高度始终不稳（图片 / 懒加载内容）：尽力交付当前行，不再等
+        done(row);
+      }
     };
     window.requestAnimationFrame(settle);
   }, []);
