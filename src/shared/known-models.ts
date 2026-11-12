@@ -65,8 +65,10 @@ export interface ModelParams {
    * 套餐折算、基元律动的官方价，见 main/usage/task-cost 的 officialRates），**不进会话注册**——
    * 套餐与网关的真实计费不是它。
    *
-   * 与其余字段相反，它**排在全部目录之后**：价格会变，pi 目录联网刷新跟得上，白名单跟不上；这里只补
-   * 「没有任何目录给出非零单价」的 id（厂商改了型号 id、目录快照还没收录）。目录收录之后删掉。
+   * 与其余字段相反，它**排在目录里同 id 的价之后**：价格会变，pi 目录联网刷新跟得上，白名单跟不上；
+   * 这里只补「没有任何目录给出这个 id 的非零单价」的型号（厂商改了型号 id、目录快照还没收录）。
+   * 但它排在 Claude 家族借价之前——借来的是同家族另一个型号的价（见 task-cost 的 officialRates）。
+   * 目录收录之后删掉。
    * 有峰谷价的厂商记峰时价（宁可估高，不把花费藏起来），注释里写明。
    */
   officialCost?: ModelCostDecl;
@@ -298,7 +300,12 @@ export const KNOWN_MODELS: Readonly<Record<string, ModelParams>> = {
   // 「Adaptive (always on)」、五档 low→max、API 默认 high，与 fable-5-1 同一口径。
   // 窗口 1M / 输出 128K / 收图与只收 adaptive（forceAdaptiveThinking）由 Claude 家族兜底从
   // 目录的 fable 条目借到，数值与官方一致，不重复声明；pi 0.84.3 快照与 pi.dev 都还没收录它。
-  "claude-fable-5-2": CLAUDE_ALWAYS_THINKING,
+  // 单价不同于家族：官方 about-claude/pricing（2026-11-12）输入 $8、5 分钟缓存写入 $10、
+  // 缓存命中 $0.20（0.025x）、输出 $40；不写就借到 fable-5 的 $10 / $50。
+  "claude-fable-5-2": {
+    ...CLAUDE_ALWAYS_THINKING,
+    officialCost: { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 },
+  },
   /*
    * pi 目录还没收录 opus-5-5（也借不到家族参数：opus-5-5 ≠ opus-5），不补就落
    * 128k 兜底、且被当成不能思考。窗口 / 输出上限取官方型号总览（1M / 128K）。
