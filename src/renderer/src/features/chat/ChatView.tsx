@@ -4417,17 +4417,9 @@ function UserImages(props: { images: readonly PromptImage[] }) {
   const t = useT();
   const [viewing, setViewing] = useState<number | null>(null);
   return (
-    <div
-      style={{
-        display: "flex",
-        flexWrap: "wrap",
-        justifyContent: "flex-end",
-        // 回形针半露在每张图左上角外面，图间距留出它的位置
-        gap: "var(--space-3)",
-        maxWidth: "var(--bubble-max-width)",
-        marginBottom: "var(--space-1)",
-      }}
-    >
+    // 排版在 styles.css 的 .user-images：靠左还是靠右跟着主题的用户消息版式走，
+    // 写在内联 style 里主题块覆盖不到（子午线版式上线后图片就这样落在了右边）
+    <div className="user-images">
       {viewing !== null && (
         <ImageLightbox images={props.images} startIndex={viewing} onClose={() => setViewing(null)} />
       )}
