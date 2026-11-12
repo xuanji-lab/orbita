@@ -2119,6 +2119,8 @@ export const en = {
     copied: "Copied",
     copyMessage: "Copy message",
     copyAnswer: "Copy answer",
+    transcriptCopied: (count: number) => `Copied whole conversation · ${count} chars`,
+    transcriptCopyFailed: "Copy failed — select the text manually",
     messageRenderFailed: "This message failed to render:",
     mermaidFailed: "This mermaid block could not be drawn: ",
     responding: "Responding",

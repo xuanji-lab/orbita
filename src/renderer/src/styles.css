@@ -2217,6 +2217,36 @@ html[data-pointer-drag] iframe {
   overflow: hidden;
 }
 
+/*
+ * 整段复制的轻提示（L3d）：浮在滚动段底缘，绝对定位、不进文档流——虚拟化后
+ * Ctrl+A 走数据回退，给一次 1.5s 的回执；提示不能改变转录可滚高度或推动视口。
+ */
+.chat-copy-notice {
+  position: absolute;
+  left: 50%;
+  bottom: var(--space-4);
+  transform: translateX(-50%);
+  z-index: var(--z-float);
+  pointer-events: none;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg);
+  box-shadow: var(--shadow-popover);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+  animation: chat-copy-notice-in var(--duration-enter) var(--ease-out-quint);
+}
+
+@keyframes chat-copy-notice-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 4px);
+  }
+}
+
 /* 消息列与输入卡同一根外线（ChatView 的 Pane 量滚动条宽、写进 --transcript-scrollbar）：
    滚动段恒留滚动条位，页脚右内边距补同样多 */
 .chat-transcript {
@@ -6163,11 +6193,34 @@ mark.intent-mark {
  * 方向 N 要在非纸面主题下改写它们，inline 压得过任何主题规则。第二段才是 N。
  */
 .chat-col {
+  --chat-row-gap: var(--space-4);
+  /* 滚动锚定自己管（前插按行 key 反算）：Chromium 会把虚拟行的 transform 变化
+     当成内容位移去改 scrollTop，和我们的锚点/测高补偿叠成两套坐标系。 */
+  overflow-anchor: none;
   width: min(100%, var(--content-max-width));
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--chat-row-gap);
+}
+/* 历史段的虚拟占位块：行绝对定位在里面，按 transform 落位。行距写进每一行自己的
+   padding-bottom（虚拟器按行 border-box 测高，天然带着这一截），容器负 margin 抵消
+   最后一行的那一段——「历史段 → 实时尾段」仍然只有一个 .chat-col 的行距。 */
+.chat-virtual {
+  position: relative;
+  width: 100%;
+  margin-bottom: calc(-1 * var(--chat-row-gap));
+}
+.chat-virtual-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--chat-row-gap);
+  padding-bottom: var(--chat-row-gap);
 }
 .chat-float-col {
   width: min(100%, var(--content-max-width));
@@ -6246,8 +6299,9 @@ mark.intent-mark {
     padding-left: var(--gutter);
   }
   .chat-col {
+    --chat-row-gap: var(--space-5);
     position: relative;
-    gap: var(--space-5);
+    gap: var(--chat-row-gap);
   }
   .chat-col::before {
     content: "";
@@ -6260,8 +6314,9 @@ mark.intent-mark {
   }
   /* 条目包裹层 .revert-keep 原本是 display: contents（无盒，回退预演时才变成 grid），星与刻度要一个
      可定位的盒：N 下把它实化成与预演态 .revert-doomed 同款的 grid（gap 继承，「条目 + 分支行」间距不变；
-     minmax(0,1fr) 防宽表格把轨道撑出列外） */
-  .chat-col > .revert-keep {
+     minmax(0,1fr) 防宽表格把轨道撑出列外）。历史段的虚拟行是它的直接父层。 */
+  .chat-col > .revert-keep,
+  .chat-virtual-row > .revert-keep {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     gap: inherit;
@@ -6280,7 +6335,10 @@ mark.intent-mark {
    */
   .chat-col > :is([data-kind="user"], [data-kind="channelMark"])::before,
   .chat-col > :is([data-kind="turnGroup"], [data-kind="turnProcess"])::before,
-  .chat-col > :is([data-kind="user"], [data-kind="channelMark"]) + [data-kind]:not(:is([data-kind="user"], [data-kind="channelMark"]))::before {
+  .chat-col > :is([data-kind="user"], [data-kind="channelMark"]) + [data-kind]:not(:is([data-kind="user"], [data-kind="channelMark"]))::before,
+  .chat-virtual-row > :is([data-kind="user"], [data-kind="channelMark"])::before,
+  .chat-virtual-row > :is([data-kind="turnGroup"], [data-kind="turnProcess"])::before,
+  .chat-virtual-row:has(> :is([data-kind="user"], [data-kind="channelMark"])) + .chat-virtual-row > [data-kind]:not(:is([data-kind="user"], [data-kind="channelMark"]))::before {
     content: "";
     position: absolute;
     left: calc(-20px - 4.5px);
@@ -6291,12 +6349,14 @@ mark.intent-mark {
     background: var(--color-text-secondary);
     z-index: 1;
   }
-  .chat-col > [data-kind="user"]::before {
+  .chat-col > [data-kind="user"]::before,
+  .chat-virtual-row > [data-kind="user"]::before {
     top: 15px;
     background: var(--color-bg-panel);
     border: 1.5px solid var(--color-text-secondary);
   }
-  .chat-col > [data-kind="channelMark"]::before {
+  .chat-col > [data-kind="channelMark"]::before,
+  .chat-virtual-row > [data-kind="channelMark"]::before {
     top: 15px;
     left: calc(-20px - 4px);
     width: 8px;
@@ -6309,11 +6369,14 @@ mark.intent-mark {
   /* 回合头与紧随其后的第一个条目：实心圆。落在 turnGroup / turnProcess 上也画——它们才带时间，
      委派卡之后那一轮曾经「有时间没有圆」（审查 §3.10） */
   .chat-col > :is([data-kind="turnGroup"], [data-kind="turnProcess"])::before,
-  .chat-col > :is([data-kind="user"], [data-kind="channelMark"]) + [data-kind]:not(:is([data-kind="user"], [data-kind="channelMark"]))::before {
+  .chat-col > :is([data-kind="user"], [data-kind="channelMark"]) + [data-kind]:not(:is([data-kind="user"], [data-kind="channelMark"]))::before,
+  .chat-virtual-row > :is([data-kind="turnGroup"], [data-kind="turnProcess"])::before,
+  .chat-virtual-row:has(> :is([data-kind="user"], [data-kind="channelMark"])) + .chat-virtual-row > [data-kind]:not(:is([data-kind="user"], [data-kind="channelMark"]))::before {
     top: 10px;
   }
   /* 刻度：一道横短线跨过子午线；紧随开口记号的那一行已经有实心圆，不再叠刻度 */
-  .chat-col > :is([data-kind="thinking"], [data-kind="toolCall"], [data-kind="toolGroup"]):not(:is([data-kind="user"], [data-kind="channelMark"]) + *)::after {
+  .chat-col > :is([data-kind="thinking"], [data-kind="toolCall"], [data-kind="toolGroup"]):not(:is([data-kind="user"], [data-kind="channelMark"]) + *)::after,
+  .chat-virtual-row > :is([data-kind="thinking"], [data-kind="toolCall"], [data-kind="toolGroup"])::after {
     content: "";
     position: absolute;
     left: -26px;
@@ -6321,6 +6384,11 @@ mark.intent-mark {
     width: 13px;
     height: 1px;
     background: var(--color-text-tertiary);
+  }
+  /* 虚拟行里「上一行是 user / 通道标记」没有同父相邻选择器可用，用 :has 从上一行认；
+     下一行已经拿到实心圆，这里把它自己的刻度撤掉 */
+  .chat-virtual-row:has(> :is([data-kind="user"], [data-kind="channelMark"])) + .chat-virtual-row > :is([data-kind="thinking"], [data-kind="toolCall"], [data-kind="toolGroup"])::after {
+    content: none;
   }
 
   /* 用户消息：左对齐的整块纸签，不再是右侧圆气泡 */
