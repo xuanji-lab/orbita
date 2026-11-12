@@ -130,6 +130,19 @@ describe("随应用分发的快照", () => {
     }
   });
 
+  test("真实快照：Claude Fable 5.2 在 Agent（Max）与 WebDev（xHigh）上对得到 claude-fable-5-2", () => {
+    const agent = snapshot.categories.agent;
+    const webdev = snapshot.categories.webdev;
+    assert.deepEqual(
+      boardEntriesFor(agent.rows as BoardRow[], "claude-fable-5-2", agent.publishDate).map((e) => e.thinking),
+      ["max"],
+    );
+    assert.deepEqual(
+      boardEntriesFor(webdev.rows as BoardRow[], "claude-fable-5-2", webdev.publishDate).map((e) => e.thinking),
+      ["xhigh"],
+    );
+  });
+
   test("真实快照：MiniMax-M3.1-Flash 在 Agent 榜上对得到 minimax-m3.1-flash（榜单没标档）", () => {
     const board = snapshot.categories.agent;
     const entries = boardEntriesFor(board.rows as BoardRow[], "minimax-m3.1-flash", board.publishDate);
