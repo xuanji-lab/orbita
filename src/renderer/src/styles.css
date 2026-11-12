@@ -6257,6 +6257,15 @@ mark.intent-mark {
   gap: var(--space-2);
   justify-content: flex-end;
 }
+/* 用户消息里的图片附件：回形针半露在每张图左上角外面，图间距留出它的位置 */
+.user-images {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  max-width: var(--bubble-max-width);
+  margin-bottom: var(--space-1);
+}
 .user-bubble {
   position: relative;
   width: fit-content;
@@ -6407,8 +6416,12 @@ mark.intent-mark {
   .user-mat-grid {
     justify-items: start;
   }
-  .user-mat-wrap {
+  .user-mat-wrap,
+  .user-images {
     justify-content: flex-start;
+  }
+  .user-images {
+    max-width: none;
   }
   .user-turn .memrow-list {
     justify-items: start;
