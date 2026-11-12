@@ -1949,6 +1949,8 @@ export const zh: Messages = {
     copied: "已复制",
     copyMessage: "复制消息",
     copyAnswer: "复制回答",
+    transcriptCopied: (count) => `已复制整段对话 · ${count} 字`,
+    transcriptCopyFailed: "复制失败——请手动选中复制",
     messageRenderFailed: "这条消息渲染失败：",
     mermaidFailed: "这段 mermaid 没画出来：",
     responding: "回应中",

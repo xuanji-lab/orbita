@@ -22,6 +22,7 @@ import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
 import { relativeTime } from "../../shell/relative-time.ts";
 import { InlineMarks } from "../../shell/InlineMarks";
 import { isAtBottom, isBeyondScrollDown, shouldJumpToEnd, shouldLoadOlder } from "./scroll.ts";
+import { shouldInterceptSelectAll, transcriptCopyText } from "./transcript-copy.ts";
 // 显式跟随态（Latest | Reading）：用户意图捕获与钉底判定全在这个纯模块里，聊天面只接线
 import {
   createFollowTracker,
@@ -616,6 +617,47 @@ const mainComposerTextarea = (): HTMLTextAreaElement | null =>
   document.querySelector<HTMLTextAreaElement>(".pane-main textarea.composer-input");
 
 /**
+ * 剪贴板回退（L3d）：`navigator.clipboard` 不可用或被拒时，用隐藏 textarea +
+ * `execCommand("copy")` 再试一次。textarea 放在视口外、不参与布局，复制完把焦点还给
+ * 原来的元素（成功路径不碰焦点）。
+ */
+function execCommandCopy(text: string): boolean {
+  const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.top = "0";
+  area.style.left = "-9999px";
+  document.body.appendChild(area);
+  area.select();
+  area.setSelectionRange(0, text.length);
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  }
+  area.remove();
+  previous?.focus({ preventScroll: true });
+  return copied;
+}
+
+/** 写剪贴板：先走标准 API，失败退回 execCommand；返回是否真的写进去了 */
+async function writeClipboardText(text: string): Promise<boolean> {
+  try {
+    const clipboard = navigator.clipboard;
+    if (clipboard !== undefined) {
+      await clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // 权限被拒 / 没有安全上下文：落到 execCommand 回退
+  }
+  return execCommandCopy(text);
+}
+
+/**
  * 历史段虚拟器向滚动层（ChatViewBody）暴露的最小接口。滚动容器与跟随态在父组件，
  * 历史段派生与行映射在 TranscriptColumn；两者只通过这个接口交接「首个可见行」
  * 与前插锚点，不互传虚拟器实例。
@@ -798,6 +840,58 @@ function ChatViewBody(props: {
   // 跟随态（pi 的 followingEnd 语义）：贴底时内容增长钉住底部；用户上滚脱离，滚回底部恢复。
   // 用 ref 不用 state——没有 UI 依赖它，不值得为每次滚动触发重渲染。
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  // 已加载的往来记录（复制用）：与 TranscriptColumn 的 records 里 user/assistant 子集
+  // 完全一致（侧记录压缩界碑 / 通道标记 / 轮尾账都会被 transcriptCopyText 跳过）。
+  // 用 ref 传值：流式期间 transcript 逐帧换引用，不能因此每帧重挂 window 监听。
+  const copySourceRef = useRef(session.transcript);
+  copySourceRef.current = session.transcript;
+  // —— 整段复制（L3d）——
+  // 虚拟化只挂载视口附近的行，跨页拖选拿不到 DOM；Ctrl/Cmd+A 改为从已加载的记录
+  // 拼纯文本写剪贴板。监听挂 window 捕获：点正文后焦点常落在 body，挂在滚动容器上
+  // 收不到这次按键。多个会话面同时开着时，只有焦点/选区在自己转录里的那个会接管。
+  const [copyNotice, setCopyNotice] = useState<string | null>(null);
+  const copyNoticeTimerRef = useRef<number | undefined>(undefined);
+  const showCopyNotice = useCallback((text: string) => {
+    setCopyNotice(text);
+    window.clearTimeout(copyNoticeTimerRef.current);
+    copyNoticeTimerRef.current = window.setTimeout(() => {
+      copyNoticeTimerRef.current = undefined;
+      setCopyNotice(null);
+    }, 1500);
+  }, []);
+  useEffect(() => () => window.clearTimeout(copyNoticeTimerRef.current), []);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const el = scrollRef.current;
+      if (el === null) return;
+      const active = document.activeElement;
+      const selection = document.getSelection();
+      const inTranscript =
+        (active !== null && el.contains(active)) ||
+        (selection !== null &&
+          ((selection.anchorNode !== null && el.contains(selection.anchorNode)) ||
+            (selection.focusNode !== null && el.contains(selection.focusNode))));
+      const focus = {
+        tagName: active instanceof HTMLElement ? active.tagName : "",
+        isContentEditable: active instanceof HTMLElement ? active.isContentEditable : false,
+        inTranscript,
+      };
+      if (!shouldInterceptSelectAll(event, focus)) return;
+      const text = transcriptCopyText(copySourceRef.current);
+      // 空文本不复制，也不挡原生全选（新任务还没有记录）
+      if (text === "") return;
+      event.preventDefault();
+      void writeClipboardText(text).then((copied) => {
+        showCopyNotice(
+          copied
+            ? t.chat.transcriptCopied(Array.from(text).length)
+            : t.chat.transcriptCopyFailed,
+        );
+      });
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [showCopyNotice, t]);
   // 收尾卡上的型号名：与模型菜单同一套显示名（声明名 > 白名单 > 目录名 > id）
   const wrapupModelName = useCallback(
     (modelId: string): string => {
@@ -1565,6 +1659,7 @@ function ChatViewBody(props: {
         // 只要这条会话已经落盘就能改名——刚发完第一句正是最想改名的时候
         onRename={openId === "" ? undefined : (title) => session.renameSession(openId, title)}
         hideHeader={props.bareHeader === true}
+        transcriptNotice={copyNotice}
         banner={
           openMeta != null && openMeta.automationId !== undefined && openMeta.promoted !== true ? (
             <AutomationRunBar meta={openMeta} onPromoted={session.reloadSessions} />
@@ -2769,6 +2864,11 @@ function Pane(props: {
   hideHeader?: boolean;
   /** 页头与消息列之间的一条通栏（自动化新开的会话：「任务名 · 第 n 次」+ 转成普通会话）；缺席不渲染 */
   banner?: React.ReactNode;
+  /**
+   * 转录上的悬浮提示（整段复制成功/失败）：绝对定位在滚动段底缘，不进文档流、
+   * 不改变滚动高度；null 不渲染。
+   */
+  transcriptNotice?: string | null;
   children: React.ReactNode;
   footer: React.ReactNode;
 }) {
@@ -2946,6 +3046,11 @@ function Pane(props: {
           {/* 消息列：宽 / 居中 / 间距在 styles.css 的 .chat-col（非纸面主题要在左侧留一条索引边栏） */}
           <div className="chat-col">{props.children}</div>
         </div>
+        {props.transcriptNotice != null && (
+          <div className="chat-copy-notice" role="status" aria-live="polite">
+            {props.transcriptNotice}
+          </div>
+        )}
         {/* 一键回底浮钮（feat/scroll-to-bottom-X）：盖一层 pointer-events:none 的定位层，
             内衬与消息列同宽同边距的列、按钮靠右缘——对齐的是消息列而不是面板边。
             只盖按钮自身可点，正文照常选中/点击。 */}

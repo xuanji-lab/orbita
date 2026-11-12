@@ -2217,6 +2217,36 @@ html[data-pointer-drag] iframe {
   overflow: hidden;
 }
 
+/*
+ * 整段复制的轻提示（L3d）：浮在滚动段底缘，绝对定位、不进文档流——虚拟化后
+ * Ctrl+A 走数据回退，给一次 1.5s 的回执；提示不能改变转录可滚高度或推动视口。
+ */
+.chat-copy-notice {
+  position: absolute;
+  left: 50%;
+  bottom: var(--space-4);
+  transform: translateX(-50%);
+  z-index: var(--z-float);
+  pointer-events: none;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg);
+  box-shadow: var(--shadow-popover);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+  animation: chat-copy-notice-in var(--duration-enter) var(--ease-out-quint);
+}
+
+@keyframes chat-copy-notice-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 4px);
+  }
+}
+
 /* 消息列与输入卡同一根外线（ChatView 的 Pane 量滚动条宽、写进 --transcript-scrollbar）：
    滚动段恒留滚动条位，页脚右内边距补同样多 */
 .chat-transcript {
