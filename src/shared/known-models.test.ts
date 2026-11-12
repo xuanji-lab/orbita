@@ -88,9 +88,15 @@ describe("默认思考档（wafo 2026-09-23：重启落模型默认档）", () =
 
   test("同一型号的两种写法共用一份口径：deepseek-flash / deepseek-v4.1-flash，K3.1 Pro 的四个 id", () => {
     assert.deepEqual(knownModelParams("deepseek-v4.1-flash"), knownModelParams("deepseek-flash"));
+    // 参数四个 id 一样；单价 Pro 与 Highspeed 不同，各自成对（Kimi Code 与开放平台同一价）
+    const { officialCost: _pro, ...pro } = knownModelParams("k3.1-pro");
     for (const id of ["k3.1-pro-highspeed", "kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"]) {
-      assert.deepEqual(knownModelParams(id), knownModelParams("k3.1-pro"), id);
+      const { officialCost: _cost, ...params } = knownModelParams(id);
+      assert.deepEqual(params, pro, id);
     }
+    assert.deepEqual(knownModelParams("kimi-k3.1-pro").officialCost, knownModelParams("k3.1-pro").officialCost);
+    assert.deepEqual(knownModelParams("kimi-k3.1-pro-highspeed").officialCost, knownModelParams("k3.1-pro-highspeed").officialCost);
+    assert.notDeepEqual(knownModelParams("k3.1-pro").officialCost, knownModelParams("k3.1-pro-highspeed").officialCost);
   });
 
   test("K3 两处默认档不同：Kimi Code 的 k3 / k3-256k 默认 high，开放平台的 kimi-k3 默认 max", () => {

@@ -137,6 +137,18 @@ const KIMI_K31_PRO: ModelParams = {
   thinkingLevels: KIMI_THINKING_LEVELS,
   defaultThinkingLevel: "max",
   adaptiveThinking: true,
+  /*
+   * 官方按量价（platform.kimi.ai/docs/pricing/chat 的 K3 Series 表，2026-11-12 核对，美元 / 百万 token）：
+   * 输入 2、输出 10、缓存命中 0.2、缓存写入记默认 TTL 5m 的 2（1h 是 4）。目录没收录，不写就「缺官方单价」，
+   * 价格 · 能力图上画不出点。Kimi Code 的 k3.1-pro 是套餐，折算同样按这份官方价。
+   */
+  officialCost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2 },
+};
+
+/** Highspeed 与 Pro 只差单价：同一张表里输入 4、输出 20、缓存命中 0.2、5m 写入 4（1h 是 8） */
+const KIMI_K31_PRO_HIGHSPEED: ModelParams = {
+  ...KIMI_K31_PRO,
+  officialCost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 4 },
 };
 
 export const KNOWN_MODELS: Readonly<Record<string, ModelParams>> = {
@@ -370,9 +382,9 @@ export const KNOWN_MODELS: Readonly<Record<string, ModelParams>> = {
   "k3-256k": { thinkingLevels: KIMI_THINKING_LEVELS, defaultThinkingLevel: "high" },
   "kimi-k3": { thinkingLevels: KIMI_THINKING_LEVELS, defaultThinkingLevel: "max" },
   "k3.1-pro": KIMI_K31_PRO,
-  "k3.1-pro-highspeed": KIMI_K31_PRO,
+  "k3.1-pro-highspeed": KIMI_K31_PRO_HIGHSPEED,
   "kimi-k3.1-pro": KIMI_K31_PRO,
-  "kimi-k3.1-pro-highspeed": KIMI_K31_PRO,
+  "kimi-k3.1-pro-highspeed": KIMI_K31_PRO_HIGHSPEED,
   /*
    * K2.8 Preview（Kimi Code 里原地升级了 kimi-for-coding 这个 id）：1M、三档、默认 max。
    * pi 0.84.3 的内建目录还是 256K、没有档位表——目录联网刷新之前，白名单先纠过来。

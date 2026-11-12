@@ -275,6 +275,19 @@ describe("官方单价", () => {
     });
   });
 
+  test("Kimi K3.1 Pro：目录没收录，取白名单的官方价；Highspeed 单价翻倍、缓存命中同价（Kimi 定价页 2026-11-12）", () => {
+    // 2026-11-12 用户：「你更新了 k3.1 pro，但是没更新它的单价？」——四个 id 原来都是 null
+    const kimi: BuiltinProvider[] = [
+      { id: "moonshotai", name: "Moonshot", baseUrl: "", api: "openai-completions", models: [model("kimi-k3", [3, 15, 0.3, 0])] },
+    ];
+    const pro = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2 };
+    const fast = { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 4 };
+    assert.deepEqual(officialRates(kimi, "kimi-k3.1-pro", { catalogId: "moonshotai" }, undefined), pro);
+    assert.deepEqual(officialRates(kimi, "k3.1-pro", { catalogId: "kimi-coding" }, undefined), pro);
+    assert.deepEqual(officialRates(kimi, "kimi-k3.1-pro-highspeed", {}, undefined), fast);
+    assert.deepEqual(officialRates(kimi, "k3.1-pro-highspeed", {}, undefined), fast);
+  });
+
   describe("Claude 家族借价排在白名单之后", () => {
     // 2026-11-12 用户：fable-5-2 官方 $8 / $40，图上却是借来的 fable-5 的 $10 / $50
     const anthropic: BuiltinProvider[] = [
