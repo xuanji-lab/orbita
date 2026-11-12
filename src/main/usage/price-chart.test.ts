@@ -25,6 +25,8 @@ const snapshot: ArenaSnapshot = {
         ["Claude Opus 5.5 (Max)", 0.2077, 0.18, 0.23, 100, 1],
         ["Grok 4.7 (xHigh)", 0.05, 0.04, 0.06, 100, 6],
         ["Claude Fable 5.1 (Max)", 0.1394, 0.12, 0.16, 100, 4],
+        // 在榜、哪里都查不到官方价的虚构型号（claude-opus-5-5 以前当这个角色，2026-11-12 白名单补了价）
+        ["Mystery 1 (Max)", 0.01, 0.0, 0.02, 100, 40],
       ],
     },
     webdev: {
@@ -134,7 +136,7 @@ function sources(logs: Record<string, SessionRecord[]>, metas: SessionMeta[], pr
 const providers = [
   provider("kimi-coding", "kimi-coding", [{ id: "k3" }, { id: "k3.1-pro" }, { id: "kimi-for-coding" }]),
   provider("opencode-go", "opencode-go", [{ id: "qwen3.8-max" }, { id: "glm-5.3-flash" }]),
-  provider("anthropic-compatible", "anthropic-compatible", [{ id: "claude-opus-5-5" }]),
+  provider("anthropic-compatible", "anthropic-compatible", [{ id: "mystery-1" }]),
 ];
 
 describe("buildPriceChart", () => {
@@ -198,11 +200,11 @@ describe("buildPriceChart", () => {
     });
 
     test("不够门槛又找不到官方单价：定不了横轴，列进缺官方单价", async () => {
-      const opusLogs = { o1: [reply("oa", "anthropic-compatible", "claude-opus-5-5", "max", 2)] };
+      const opusLogs = { o1: [reply("oa", "anthropic-compatible", "mystery-1", "max", 2)] };
       const data = await buildPriceChart(sources(opusLogs, [meta("o1", 1)], providers), snapshot);
       const agent = data.categories.find((c) => c.category === "agent");
-      assert.ok(!agent?.points.some((p) => p.modelId === "claude-opus-5-5"));
-      assert.ok(agent?.unpriced.some((u) => u.modelId === "claude-opus-5-5"));
+      assert.ok(!agent?.points.some((p) => p.modelId === "mystery-1"));
+      assert.ok(agent?.unpriced.some((u) => u.modelId === "mystery-1"));
     });
   });
 
@@ -213,7 +215,7 @@ describe("buildPriceChart", () => {
     assert.equal(qwen?.costBasis, "estimated");
     assert.equal(qwen?.samples, 0);
     assert.ok((qwen?.cost ?? 0) > 0);
-    assert.deepEqual(agent?.unpriced, [{ modelId: "claude-opus-5-5" }]);
+    assert.deepEqual(agent?.unpriced, [{ modelId: "mystery-1" }]);
   });
 
   test("当前分类查不到的已添加型号列为未上榜；换一类就换一批", async () => {

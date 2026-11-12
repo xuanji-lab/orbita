@@ -105,6 +105,9 @@ const STEP_5_PREVIEW: ModelParams = {
   reasoning: true,
   thinkingLevels: ["low", "medium", "high"],
   defaultThinkingLevel: "medium",
+  // 官方价（platform.stepfun.ai/docs/en/pricing/details，2026-11-12，USD）：未命中 1.00 / 命中 0.10 /
+  // 输出 2.70；写入缓存含在未命中的输入价里，不另计。免费档 step-5-preview-free 是同一个模型，按它折算
+  officialCost: { input: 1, output: 2.7, cacheRead: 0.1, cacheWrite: 0 },
 };
 
 /** 能关思考的 claude：off + low→max（没有 minimal），API 与 Claude Code 默认都是 high */
@@ -192,6 +195,9 @@ export const KNOWN_MODELS: Readonly<Record<string, ModelParams>> = {
     // 目录查不到这个 id（快速通道）：抄 glm-5.3 家族口径，支持集里连 medium 都没有
     thinkingLevels: ["low", "high", "max"],
     defaultThinkingLevel: "max",
+    // 官方价（docs.z.ai/guides/overview/pricing，2026-11-12，USD）：输入 0.15 / 缓存 0.03 / 输出 0.50；
+    // 缓存存储限时免费。zai-coding-cn 是套餐目录，联网缓存里的价不一定拉得到
+    officialCost: { input: 0.15, output: 0.5, cacheRead: 0.03, cacheWrite: 0 },
   },
   /*
    * 默认档（2026-09-23，源：docs.z.ai 的 GLM-5.3 页与 Coding Plan 的 Claude Code 接入页）：
@@ -228,17 +234,20 @@ export const KNOWN_MODELS: Readonly<Record<string, ModelParams>> = {
    * （step-5-preview 与 input 字段由 @XIAOZF99 在 #180 补，移植到本表。）
    */
   "step-5-preview": STEP_5_PREVIEW,
+  // 三条的单价同 STEP_5_PREVIEW 的出处（stepfun 英文定价页，2026-11-12）
   "step-3.7-flash": {
     contextWindow: 256_000,
     reasoning: true,
     thinkingLevels: ["low", "medium", "high"],
     defaultThinkingLevel: "medium",
+    officialCost: { input: 0.2, output: 1.15, cacheRead: 0.04, cacheWrite: 0 },
   },
   "step-3.5-flash": {
     contextWindow: 256_000,
     reasoning: true,
     input: ["text"],
     thinkingLevels: ["low", "medium", "high"],
+    officialCost: { input: 0.1, output: 0.3, cacheRead: 0.02, cacheWrite: 0 },
   },
   "step-3.5-flash-2603": {
     contextWindow: 256_000,
@@ -246,6 +255,7 @@ export const KNOWN_MODELS: Readonly<Record<string, ModelParams>> = {
     input: ["text"],
     thinkingLevels: ["low", "high"],
     defaultThinkingLevel: "high",
+    officialCost: { input: 0.1, output: 0.3, cacheRead: 0.02, cacheWrite: 0 },
   },
 
   // ── OpenCode Go 网关上、pi 目录还没收录的型号 ──
@@ -276,15 +286,33 @@ export const KNOWN_MODELS: Readonly<Record<string, ModelParams>> = {
     reasoning: true,
     // models.dev 的档位表就是 low → max 五档，medium 在集内（默认档落它，安全）
     thinkingLevels: ["low", "medium", "high", "xhigh", "max"],
+    // OpenCode 自家的型号，只有它报价：models.dev opencode-go 条目（2026-11-12）
+    officialCost: { input: 0.15, output: 0.6, cacheRead: 0.03, cacheWrite: 0 },
   },
+  // 单价（mimo / hy4）：没找到能直接读的厂商定价页，取 models.dev 里厂商本家条目（xiaomi、
+  // tencent-tokenhub，2026-11-12），十几家网关报价与之一致。longcat-2.5-preview-free 只有免费档、
+  // 没有按量价，不写（图上列「缺官方单价」就是实情）。
   // 这四条 models.dev 没给档位：只写数字，不碰思考（档位只写有把握的，见上）。
   // longcat 与 mimo 收图（兜底 image 正好），不用写模态；hy4-preview 是**纯文本**
   // （models.dev 上 4 家 provider 的输入类型一致），写 ["text"] 纠掉兜底的 image——
   // 不写的话每一次附图都会被网关 400
   "longcat-2.5-preview-free": { contextWindow: 1_000_000, maxTokens: 131_072 },
-  "mimo-v2.6-flash": { contextWindow: 1_048_576, maxTokens: 131_072 },
-  "mimo-v2.6-pro": { contextWindow: 1_048_576, maxTokens: 131_072 },
-  "hy4-preview": { contextWindow: 1_024_000, maxTokens: 64_000, input: ["text"] },
+  "mimo-v2.6-flash": {
+    contextWindow: 1_048_576,
+    maxTokens: 131_072,
+    officialCost: { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+  },
+  "mimo-v2.6-pro": {
+    contextWindow: 1_048_576,
+    maxTokens: 131_072,
+    officialCost: { input: 0.435, output: 0.87, cacheRead: 0.0036, cacheWrite: 0 },
+  },
+  "hy4-preview": {
+    contextWindow: 1_024_000,
+    maxTokens: 64_000,
+    input: ["text"],
+    officialCost: { input: 0.834, output: 2.501, cacheRead: 0.042, cacheWrite: 0 },
+  },
 
   // ── Claude ──
   // claude 的思考档**按型号**，不按家族一刀切（wafo 2026-09-23；推翻 09-22「claude
@@ -331,6 +359,10 @@ export const KNOWN_MODELS: Readonly<Record<string, ModelParams>> = {
     // 只收 adaptive + effort（官方：extended / budget 思考在 4.6 之后的型号上不被接受）；
     // 目录没它，借不到 compat.forceAdaptiveThinking，只能在这里声明
     adaptiveThinking: true,
+    // claude 5.5 三条的单价：platform.claude.com about-claude/pricing（2026-11-12）。pi.dev 的
+    // anthropic 目录已有它们，但只有添加了 Anthropic 服务商才会拉到（只用兼容网关的拿不到）；
+    // 目录价在时以目录为准（officialRates 的顺序）。缓存写入记 5m 档
+    officialCost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
   },
   /*
    * claude 5.5 两兄弟（2026-10-10，@XIAOZF99 在 #180 补，源：platform.claude.com 的
@@ -356,6 +388,7 @@ export const KNOWN_MODELS: Readonly<Record<string, ModelParams>> = {
     thinkingLevels: ["low", "medium", "high", "xhigh", "max"],
     defaultThinkingLevel: "high",
     adaptiveThinking: true,
+    officialCost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
   },
   "claude-haiku-5-5": {
     contextWindow: 1_000_000,
@@ -364,6 +397,9 @@ export const KNOWN_MODELS: Readonly<Record<string, ModelParams>> = {
     thinkingLevels: ["off", "low", "medium", "high", "xhigh", "max"],
     defaultThinkingLevel: "medium",
     adaptiveThinking: true,
+    // 官方按提示长度分两档：≤ 10 万 token 0.1 / 0.5，超过 0.5 / 2.5。这个字段没有分档，按「宁可估高」
+    // 记高档（智能体会话带上工具与历史，提示常常超过 10 万）。目录拉到时以目录价为准，这条不生效
+    officialCost: { input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 0.625 },
   },
 
   // ── Kimi ──
