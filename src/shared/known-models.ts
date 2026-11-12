@@ -294,6 +294,11 @@ export const KNOWN_MODELS: Readonly<Record<string, ModelParams>> = {
   },
   "claude-fable-5": CLAUDE_ALWAYS_THINKING,
   "claude-fable-5-1": CLAUDE_ALWAYS_THINKING,
+  // 2026-11-12 补（源：platform.claude.com models/fable-5-2/overview 与 build-with-claude/effort）：
+  // 「Adaptive (always on)」、五档 low→max、API 默认 high，与 fable-5-1 同一口径。
+  // 窗口 1M / 输出 128K / 收图与只收 adaptive（forceAdaptiveThinking）由 Claude 家族兜底从
+  // 目录的 fable 条目借到，数值与官方一致，不重复声明；pi 0.84.3 快照与 pi.dev 都还没收录它。
+  "claude-fable-5-2": CLAUDE_ALWAYS_THINKING,
   /*
    * pi 目录还没收录 opus-5-5（也借不到家族参数：opus-5-5 ≠ opus-5），不补就落
    * 128k 兜底、且被当成不能思考。窗口 / 输出上限取官方型号总览（1M / 128K）。
@@ -393,6 +398,9 @@ const MODEL_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   "kimi-for-coding-highspeed": "Kimi K2.7 Code HighSpeed",
   "deepseek-flash": "DeepSeek V4.1 Flash",
   "step-5-preview": "Step 5 Preview",
+  // pi 0.84.3 快照与 pi.dev 都没收录（家族兜底借得到参数、借不到名字），不写就显示成小写 id；
+  // 名字取官方型号总览（2026-11-12）。目录收录后可删
+  "claude-fable-5-2": "Claude Fable 5.2",
 };
 
 /** 这个型号 id 在白名单里的显示名；没写返回 undefined（调用方接着查目录） */
