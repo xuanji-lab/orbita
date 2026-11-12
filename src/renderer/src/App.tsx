@@ -28,6 +28,7 @@ import { SettingsView } from "./features/settings/SettingsView";
 import { BoardWeekView } from "./features/board/BoardWeekView";
 import type { SettingsTab } from "./features/settings/settings-tabs.ts";
 import { OnboardingView } from "./features/onboarding/OnboardingView";
+import { StoryView } from "./features/onboarding/story/StoryView";
 import { shouldAutoOpenOnboarding } from "./features/onboarding/onboarding-nav.ts";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
 import { COLLAPSE_BREAKPOINT } from "./shell/window-tools.ts";
@@ -1316,22 +1317,40 @@ export function App() {
     setRailPath((current) => (JSON.stringify(current) === JSON.stringify(path) ? current : path));
   }, []);
   /**
-   * 新手引导：全屏盖住整个窗口。只在**第一次打开**（设置读回后 onboardingSeen 不是 true）自动弹一次；
-   * 看完、跳过、Esc 都写 onboardingSeen = true，之后只能从设置 › 新手引导页签打开（不改这个键）。
+   * 新手引导有两本：**故事版「璇玑对接」**（主）与**手册**（13 章，原来的引导降级而来）。
+   * 都是全屏盖住整个窗口。只在**第一次打开**（设置读回后 onboardingSeen 不是 true）自动弹一次，弹的是故事版；
+   * 故事版看完 / 跳过 / Esc、手册看完 / 跳过 / Esc 都写 onboardingSeen = true，之后只能从
+   * 设置 › 新手引导页签（或故事版右上的「手册」）打开，不再改这个键。
+   * 手册可以盖在故事版上面（右上「手册」）：手册退出后回到故事版停下的那一步。
    */
+  const [storyOpen, setStoryOpen] = useState(false);
+  /** 故事版收起来了：玩家在通电那一步点了「现在就去接一个」，去设置 › 服务商接模型；设置一关，故事版回来接着走 */
+  const [storyParked, setStoryParked] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
-  /** 打开引导时从摊平后的第几页开始：自动弹出 / 「从头看」是 0，设置 › 新手引导里点某章是那章的章首页 */
+  /** 打开手册时从摊平后的第几页开始：故事版里点「手册」/ 页签里「从头看」是 0，设置 › 新手引导里点某章是那章的章首页 */
   const [onboardingStart, setOnboardingStart] = useState(0);
   const onboardingAutoRef = useRef(false);
   useEffect(() => {
     if (onboardingAutoRef.current || !shouldAutoOpenOnboarding(settingsLoaded, settings)) return;
     onboardingAutoRef.current = true;
-    setOnboardingOpen(true);
+    setStoryOpen(true);
   }, [settingsLoaded, settings]);
-  const closeOnboarding = useCallback(() => {
-    setOnboardingOpen(false);
+  const markOnboardingSeen = useCallback(() => {
     if (settings.onboardingSeen !== true) changeSettings({ onboardingSeen: true });
   }, [settings.onboardingSeen, changeSettings]);
+  /** 手册关了（跳过 / Esc / 看完）：只关手册；故事版若在下面，停在原来那一步 */
+  const closeOnboarding = useCallback(() => {
+    setOnboardingOpen(false);
+    markOnboardingSeen();
+  }, [markOnboardingSeen]);
+  const closeStory = useCallback(() => {
+    setStoryOpen(false);
+    setStoryParked(false);
+    markOnboardingSeen();
+  }, [markOnboardingSeen]);
+  useEffect(() => {
+    if (storyParked && overlay !== "settings") setStoryParked(false);
+  }, [storyParked, overlay]);
   /**
    * 「试试」：关掉引导与设置页。text 不是 null 就把那句话放进当前看着的会话（首页就是新任务）的输入框；
    * open 给了（文档与演示章的动作提示页）就把右栏的演示文稿面板摆好：`slides` 回到上次那份，
@@ -1340,6 +1359,7 @@ export function App() {
   const tryFromOnboarding = useCallback(
     (text: string | null, open?: "slides" | "slides-new") => {
       closeOnboarding();
+      closeStory();
       setOverlay(null);
       if (text !== null) session.setDraft(text);
       if (open === "slides") setRightPanel("slides");
@@ -1351,7 +1371,7 @@ export function App() {
           .catch(() => setRightPanel("slides"));
       }
     },
-    [closeOnboarding, session],
+    [closeOnboarding, closeStory, session],
   );
   const automationUi = useMemo<AutomationUi>(
     () => ({ automations: automations.automations, loaded: automations.load.kind === "ready", openPanel: openAutomationPanel, act: automations.act }),
@@ -1566,6 +1586,7 @@ export function App() {
                   setOnboardingStart(startAt);
                   setOnboardingOpen(true);
                 }}
+                onOpenStory={() => setStoryOpen(true)}
                 onJumpToMemorySource={jumpToMemorySource}
                 onCollapseRail={rightPanel === null ? null : () => setRightPanel(null)}
               />
@@ -1791,6 +1812,31 @@ export function App() {
           }}
         />
       </div>
+      {storyOpen && (
+        <StoryView
+          theme={resolvedTheme}
+          style={settings.onboardingStyle}
+          onStyle={(next) => changeSettings({ onboardingStyle: next })}
+          onClose={closeStory}
+          onOpenManual={() => {
+            setOnboardingStart(0);
+            setOnboardingOpen(true);
+          }}
+          manualOpen={onboardingOpen}
+          hasProvider={session.usable.length > 0}
+          parked={storyParked}
+          onResume={() => {
+            setOverlay(null);
+            setStoryParked(false);
+            // 回来时再拉一次：设置里刚接好的模型，故事版要立刻认得
+            void refresh();
+          }}
+          onGoProviders={() => {
+            setStoryParked(true);
+            openProvidersTab();
+          }}
+        />
+      )}
       {onboardingOpen && <OnboardingView theme={resolvedTheme} startAt={onboardingStart} onClose={closeOnboarding} onTry={tryFromOnboarding} />}
     </div>
     </ToolbarPanelSlotContext.Provider>

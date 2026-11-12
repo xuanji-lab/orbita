@@ -93,6 +93,8 @@ export function SettingsView(props: {
   };
   /** 「新手引导」页签：全屏打开引导，从第几页开始（0 = 从头；点某章 = 那章的章首页）。不改「看过」的设置键 */
   onOpenOnboarding: (startAt: number) => void;
+  /** 「新手引导」页签的主按钮：全屏打开故事版「璇玑对接」 */
+  onOpenStory: () => void;
   /** 记忆库页签里「回到原文」：退出设置、打开出处会话并滚到那一轮 */
   onJumpToMemorySource: (view: MemoryEntryView) => void;
   /** 收起右栏；右栏没开就是 null。模型服务页的价格 · 能力图太窄时给「收起右栏」按钮用 */
@@ -156,7 +158,7 @@ export function SettingsView(props: {
         </div>
       ) : props.tab === "guide" ? (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
-          <GuideSettings seen={props.settings.onboardingSeen === true} onOpen={props.onOpenOnboarding} />
+          <GuideSettings seen={props.settings.onboardingSeen === true} onOpen={props.onOpenOnboarding} onOpenStory={props.onOpenStory} />
         </div>
       ) : props.tab === "plugins" ? (
         // 插件页的全屏版：自己带滚动区；窄了（右栏同时开着）由它自己的容器查询收成单列

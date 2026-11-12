@@ -1,4 +1,3 @@
-/// <reference types="vite/client" />
 /**
  * 新手引导：盖住整个窗口的全屏覆盖层（不是首页卡片）。左侧一整列目录（当前章展开页名，
  * 点章名跳章），右边是这一页（章首页 / 步骤页 / 常见问题），底部分段进度 + 上一页 / 下一页。
@@ -8,13 +7,14 @@
  * 纸色底、宋体（品牌衬线）标题、截图压暗 + 框出一块 + 编号点 + 放大镜、右侧配文编号对应。
  * 页的内容全在数据表（onboarding-pages.ts）与文案（messages 的 onboarding），这里只管画。
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ThemePreference } from "@shared/settings";
 import { Icon } from "../../shell/Icon";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
-import { GUIDE, type Box, type GuideChapter, type GuidePage, type Loupe, type Pin, type ShotId, type StepPage } from "./onboarding-pages.ts";
+import { GUIDE, type GuideChapter, type GuidePage } from "./onboarding-pages.ts";
+import { Shot } from "./OnboardingShot";
 import {
   boldRuns,
   chapterNumber,
@@ -26,16 +26,6 @@ import {
   stepGuide,
 } from "./onboarding-nav.ts";
 import "./onboarding.css";
-
-/** 截图随应用打包：shots/<light|dark>/<id>.webp → 构建后的资源地址 */
-const SHOT_URLS = import.meta.glob("./shots/*/*.webp", { eager: true, query: "?url", import: "default" }) as Record<string, string>;
-
-function shotUrl(set: "light" | "dark", id: ShotId): string | undefined {
-  return SHOT_URLS[`./shots/${set}/${id}.webp`];
-}
-
-/** 截图的宽高比（拍图统一 1440×900） */
-const SHOT_RATIO = 1440 / 900;
 
 type GuideCopy = Messages["onboarding"];
 type ChapterCopy = GuideCopy["chapters"][keyof GuideCopy["chapters"]];
@@ -55,59 +45,6 @@ function Rich(props: { text: string }) {
     <>
       {boldRuns(props.text).map((run, index) => (run.bold ? <b key={index}>{run.text}</b> : <span key={index}>{run.text}</span>))}
     </>
-  );
-}
-
-const pct = (value: number): string => `${(value * 100).toFixed(3)}%`;
-
-function boxStyle(box: Box): CSSProperties {
-  return { left: pct(box.x), top: pct(box.y), width: pct(box.w), height: pct(box.h) };
-}
-
-/** edge：放大镜里的编号点，只取 x，竖向骑在放大镜上边框上（见 .ob-pin-edge），不压住放大的字 */
-function PinMark(props: { pin: Pin; edge?: boolean }) {
-  const style: CSSProperties = props.edge === true ? { left: pct(props.pin.x) } : { left: pct(props.pin.x), top: pct(props.pin.y) };
-  return (
-    <span className={props.edge === true ? "ob-pin ob-pin-edge" : "ob-pin"} style={style} aria-hidden="true">
-      {props.pin.n}
-    </span>
-  );
-}
-
-/** 放大镜：同一张截图，背景按比例放大到 from 那一块 */
-function LoupeView(props: { loupe: Loupe; url: string | undefined }) {
-  const { from, at, scale } = props.loupe;
-  const style: CSSProperties = {
-    left: pct(at.x),
-    top: pct(at.y),
-    width: pct(from.w * scale),
-    aspectRatio: `${from.w * SHOT_RATIO} / ${from.h}`,
-    backgroundImage: props.url === undefined ? undefined : `url("${props.url}")`,
-    backgroundSize: `${(100 / from.w).toFixed(3)}% auto`,
-    backgroundPosition: `${from.w >= 1 ? 0 : ((from.x / (1 - from.w)) * 100).toFixed(3)}% ${from.h >= 1 ? 0 : ((from.y / (1 - from.h)) * 100).toFixed(3)}%`,
-  };
-  return (
-    <div className="ob-loupe" style={style} aria-hidden="true">
-      {props.loupe.pins?.map((pin) => <PinMark key={`l${pin.n}-${pin.x}`} pin={pin} edge />)}
-    </div>
-  );
-}
-
-/** 截图框：压暗 + 框出 focus + 编号点 + 放大镜 */
-function Shot(props: { page: { shot: ShotId } & Partial<Pick<StepPage, "focus" | "pins" | "loupe">>; set: "light" | "dark"; alt: string }) {
-  const url = shotUrl(props.set, props.page.shot);
-  const { focus, pins, loupe } = props.page;
-  return (
-    <div className="ob-figure">
-      <div className="ob-frame">
-        <div className="ob-win">
-          {url === undefined ? <div className="ob-win-missing" /> : <img src={url} alt={props.alt} draggable={false} />}
-          {focus !== undefined && <div className="ob-spot" style={boxStyle(focus)} />}
-        </div>
-        {pins?.map((pin) => <PinMark key={`${pin.n}-${pin.x}-${pin.y}`} pin={pin} />)}
-        {loupe !== undefined && <LoupeView loupe={loupe} url={url} />}
-      </div>
-    </div>
   );
 }
 
