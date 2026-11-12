@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { SessionRecord } from "../../shared/session.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import type { BuiltinProvider } from "../../shared/agent-ipc.ts";
+import { KNOWN_MODELS, knownModelParams } from "../../shared/known-models.ts";
 import {
   estimateTaskCost,
   median,
@@ -245,7 +246,8 @@ describe("官方单价", () => {
   });
 
   test("哪儿都没有：null", () => {
-    assert.equal(officialRates(catalog, "claude-opus-5-5", {}, undefined), null);
+    // 不在任何目录、也不在白名单的 id（claude-opus-5-5 以前当这个角色，2026-11-12 白名单补了价）
+    assert.equal(officialRates(catalog, "mystery-1", {}, undefined), null);
   });
 
   describe("型号白名单的官方价：只补目录全都缺价的 id，排在全部目录之后", () => {
@@ -273,6 +275,36 @@ describe("官方单价", () => {
       ];
       assert.deepEqual(officialRates(planOnly, "deepseek-v4.1-flash", {}, undefined), flashPeak);
     });
+  });
+
+  test("Kimi K3.1 Pro：目录没收录，取白名单的官方价；Highspeed 单价翻倍、缓存命中同价（Kimi 定价页 2026-11-12）", () => {
+    // 2026-11-12 用户：「你更新了 k3.1 pro，但是没更新它的单价？」——四个 id 原来都是 null
+    const kimi: BuiltinProvider[] = [
+      { id: "moonshotai", name: "Moonshot", baseUrl: "", api: "openai-completions", models: [model("kimi-k3", [3, 15, 0.3, 0])] },
+    ];
+    const pro = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2 };
+    const fast = { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 4 };
+    assert.deepEqual(officialRates(kimi, "kimi-k3.1-pro", { catalogId: "moonshotai" }, undefined), pro);
+    assert.deepEqual(officialRates(kimi, "k3.1-pro", { catalogId: "kimi-coding" }, undefined), pro);
+    assert.deepEqual(officialRates(kimi, "kimi-k3.1-pro-highspeed", {}, undefined), fast);
+    assert.deepEqual(officialRates(kimi, "k3.1-pro-highspeed", {}, undefined), fast);
+  });
+
+  test("白名单里的型号在目录全缺时也查得到官方价；只有没有按量价的两条例外", () => {
+    // 2026-11-12 用户：「你看看还有谁漏掉了，一起补了」。新加型号忘了写价，这条会红
+    const unpriced = new Set([
+      "longcat-2.5-preview-free", // 只有免费档
+      "k3-256k", // 只在 Kimi Code 套餐里，没有公开按量价
+    ]);
+    for (const id of Object.keys(KNOWN_MODELS)) {
+      const rates = officialRates([], id, {}, undefined);
+      if (unpriced.has(id)) assert.equal(rates, null, id);
+      else if (knownModelParams(id).officialCost !== undefined) assert.ok(rates !== null && rates.input > 0, id);
+    }
+    // 这次补的：以前只靠联网缓存（claude 5.5、glm-5.3-flash）或哪里都没有（其余）
+    for (const id of ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "glm-5.3-flash", "step-5-preview-free", "mimo-v2.6-pro", "hy4-preview"]) {
+      assert.ok(officialRates([], id, {}, undefined) !== null, id);
+    }
   });
 
   describe("Claude 家族借价排在白名单之后", () => {
