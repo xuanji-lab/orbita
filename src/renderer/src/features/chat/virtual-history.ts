@@ -122,6 +122,125 @@ export function prependAnchorTarget(start: number | undefined, offsetTop: number
   return Math.max(0, start - offsetTop);
 }
 
+/**
+ * 历史段未测行的典型行高。**不是一屏高**：L3a 用滚动容器 `clientHeight`（实测
+ * 581px）估未测行，滚动时逐行换成真实高度，`scrollHeight` 一路收缩、Layout 跟着
+ * 抖（B2 卡帧 32/38 含 Layout）。实测 86 MB fixture 三页 190 行，平均真实行高
+ * 236px（首屏 36 行 238px）；取 230 略低一档——宁可让总高估大一点，也别让视口
+ * 上方的未测行在滚动中把内容高度往下拉。
+ */
+export const DEFAULT_ROW_ESTIMATE = 230;
+
+/**
+ * 未测行估值的上下界：32 以下会把总高估得太短（滚动条与 scrollHeight 一起抖），
+ * 1200 以上会让程序化跳转的落点偏太多；更大的行长靠实测，不靠猜。实测最小行
+ * 38px（revertMark），工具/压缩/折叠行 62–81px——下限取 80 会把这类行抬贵。
+ */
+export const MIN_ROW_ESTIMATE = 32;
+export const MAX_ROW_ESTIMATE = 1200;
+
+/** 把估值夹进合理范围；非有限值回退典型初值（测量失败不该把总高变成 0）。 */
+export function clampRowEstimate(height: number): number {
+  if (!Number.isFinite(height)) return DEFAULT_ROW_ESTIMATE;
+  return Math.min(MAX_ROW_ESTIMATE, Math.max(MIN_ROW_ESTIMATE, Math.round(height)));
+}
+
+/**
+ * 按行 kind 的初始估值——实测 86 MB fixture 三页 190 行：text 804、toolCall 234、
+ * user 122、turnProcess 69、fileTurn 62、compacted 81、revertMark 38；没采到的
+ * toolGroup / turnGroup / thinking / channelMark / intentRecall 按折叠卡量级取
+ * 80–120。
+ *
+ * 这些只是先验，不是硬编码结论：每类收到实测后由 EMA（`factor`）校准，换会话 /
+ * 换字号会自己跟过去；没有样本的种类才一直用它。
+ */
+export const ROW_KIND_ESTIMATES: Readonly<Record<string, number>> = {
+  user: 120,
+  text: 800,
+  thinking: 90,
+  toolCall: 230,
+  toolGroup: 90,
+  turnGroup: 90,
+  turnProcess: 69,
+  fileTurn: 62,
+  compacted: 81,
+  revertMark: 38,
+  intentRecall: 120,
+  channelMark: 80,
+};
+
+export interface RowHeightEstimator {
+  /** 记一次实测行高；`kind` 让同类行单独积累估计（null / 未知走全局） */
+  push(kind: string | null, height: number): void;
+  /** 该类行的估值（已夹取）；该类还没有样本时用它的先验（未知种类回退全局值） */
+  value(kind: string | null): number;
+  /** 全局典型值（全部样本的滑动均值），给未知种类兜底 */
+  readonly typical: number;
+}
+
+/**
+ * 在线典型行高：全局 + 按 `kind` 各一份滑动均值（EMA），样本值先夹进合理范围。
+ *
+ * 为什么用滑动均值而不是中位数：虚拟器的总高是各行之和，要贴近的是**均值**。
+ * 实测该会话 133 行：全体均值 224（初值 230 刚好），但中位数只有 81——长回答
+ * （text 均值 752，占 58% 总高）会把中位数带偏，用它估未测行会让总高系统性偏短，
+ * 滚动时反而向上长高。
+ *
+ * 为什么还要按 kind：同一均值 224 下，text 752、toolCall 221、user 129、
+ * turnProcess 69、fileTurn 62——单值让每行都差几百 px，滚动测高时逐行补偿就把
+ * 视口拉走。按 kind 分开后，每类从 `ROW_KIND_ESTIMATES` 的先验起步，收到实测
+ * 再按 EMA 收敛；未知种类用全局典型值。
+ *
+ * `factor` 是 EMA 的步长：单次样本只走 5%，避免首屏恰好挂上一张超大卡片就把
+ * 所有未测行抬到上限。只在 ref 里更新，不触发 React 渲染；下一次虚拟器测高本来
+ * 就会重算测量缓存。
+ */
+export function createRowHeightEstimator(
+  options: { initial?: number; factor?: number; kindInitial?: Readonly<Record<string, number>> } = {},
+): RowHeightEstimator {
+  const initial = clampRowEstimate(options.initial ?? DEFAULT_ROW_ESTIMATE);
+  const factor = Math.min(0.5, Math.max(0.01, options.factor ?? 0.05));
+  const kindInitial = options.kindInitial ?? ROW_KIND_ESTIMATES;
+  let typical = initial;
+  const byKind = new Map<string, number>();
+  return {
+    push(kind, height) {
+      if (!Number.isFinite(height) || height <= 0) return;
+      // 单次样本先夹进合理范围：展开到几万 px 的一张卡不该把整段估值拖走
+      const sample = clampRowEstimate(height);
+      const key = kind ?? "";
+      const seed = kind === null ? undefined : kindInitial[key];
+      const current = byKind.get(key) ?? (seed === undefined ? typical : clampRowEstimate(seed));
+      byKind.set(key, current + (sample - current) * factor);
+      typical += (sample - typical) * factor;
+    },
+    value(kind) {
+      const key = kind ?? "";
+      const own = byKind.get(key);
+      if (own !== undefined) return clampRowEstimate(own);
+      const seed = kind === null ? undefined : kindInitial[key];
+      return seed === undefined ? clampRowEstimate(typical) : clampRowEstimate(seed);
+    },
+    get typical() {
+      return clampRowEstimate(typical);
+    },
+  };
+}
+
+/**
+ * 未测行的估值：同一 key 有实测缓存就先用缓存（重挂 / 会话切回时首帧即真实高度），
+ * 否则用该 kind 的在线估值（没有样本时用该类先验，未知种类用全局典型值）。缓存
+ * 不做夹取——实测值就该是多少是多少。
+ */
+export function estimateRowHeight(
+  key: string,
+  kind: string | null,
+  cache: Pick<HeightCache, "get">,
+  estimator: Pick<RowHeightEstimator, "value">,
+): number {
+  return cache.get(key) ?? estimator.value(kind);
+}
+
 export interface HeightCache {
   get(key: string): number | undefined;
   set(key: string, height: number): void;

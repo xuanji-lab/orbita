@@ -1,7 +1,14 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
+  clampRowEstimate,
   createHeightCache,
+  createRowHeightEstimator,
+  DEFAULT_ROW_ESTIMATE,
+  estimateRowHeight,
+  MAX_ROW_ESTIMATE,
+  MIN_ROW_ESTIMATE,
+  ROW_KIND_ESTIMATES,
   messageRowIndex,
   prependAnchorTarget,
   rowIndexByKey,
@@ -182,6 +189,130 @@ describe("prependAnchorTarget", () => {
     assert.equal(prependAnchorTarget(undefined, 0), null);
     assert.equal(prependAnchorTarget(Number.NaN, 0), null);
     assert.equal(prependAnchorTarget(10, Number.POSITIVE_INFINITY), null);
+  });
+});
+
+describe("clampRowEstimate", () => {
+  test("正常值四舍五入后原样返回", () => {
+    assert.equal(clampRowEstimate(230), 230);
+    assert.equal(clampRowEstimate(218.6), 219);
+  });
+
+  test("低于下限夹到 32，高于上限夹到 1200", () => {
+    assert.equal(clampRowEstimate(10), MIN_ROW_ESTIMATE);
+    assert.equal(clampRowEstimate(0), MIN_ROW_ESTIMATE);
+    assert.equal(clampRowEstimate(5000), MAX_ROW_ESTIMATE);
+  });
+
+  test("边界值不夹", () => {
+    assert.equal(clampRowEstimate(MIN_ROW_ESTIMATE), MIN_ROW_ESTIMATE);
+    assert.equal(clampRowEstimate(MAX_ROW_ESTIMATE), MAX_ROW_ESTIMATE);
+  });
+
+  test("非有限值回退典型初值", () => {
+    assert.equal(clampRowEstimate(Number.NaN), DEFAULT_ROW_ESTIMATE);
+    assert.equal(clampRowEstimate(Number.POSITIVE_INFINITY), DEFAULT_ROW_ESTIMATE);
+    assert.equal(clampRowEstimate(Number.NEGATIVE_INFINITY), DEFAULT_ROW_ESTIMATE);
+  });
+});
+
+describe("createRowHeightEstimator", () => {
+  test("没有样本时：全局用初值，已知 kind 用先验，未知 kind 回退全局", () => {
+    const estimator = createRowHeightEstimator();
+    assert.equal(estimator.typical, DEFAULT_ROW_ESTIMATE);
+    assert.equal(estimator.value(null), DEFAULT_ROW_ESTIMATE);
+    assert.equal(estimator.value("text"), ROW_KIND_ESTIMATES["text"]);
+    assert.equal(estimator.value("turnProcess"), ROW_KIND_ESTIMATES["turnProcess"]);
+    assert.equal(estimator.value("mystery"), DEFAULT_ROW_ESTIMATE);
+  });
+
+  test("同类首个样本从该类的先验起步，而不是从全局值起步", () => {
+    const estimator = createRowHeightEstimator({ factor: 0.15 });
+    estimator.push("text", 100); // text 先验 800
+    const value = estimator.value("text");
+    assert.ok(value < ROW_KIND_ESTIMATES["text"]!, `text=${value} 应向样本下降`);
+    assert.ok(value > 600, `text=${value} 不该一步跳到 100`);
+  });
+
+  test("kindInitial 可覆盖先验", () => {
+    const estimator = createRowHeightEstimator({ kindInitial: { text: 300 } });
+    assert.equal(estimator.value("text"), 300);
+    assert.equal(estimator.value("user"), DEFAULT_ROW_ESTIMATE);
+  });
+
+  test("单个样本只走一步 EMA，不会直接跳到实测值", () => {
+    const estimator = createRowHeightEstimator({ factor: 0.15 });
+    estimator.push(null, 5000); // 先夹到 1200
+    const value = estimator.value(null);
+    assert.ok(value > DEFAULT_ROW_ESTIMATE, `${value} 应大于初值`);
+    assert.ok(value < 500, `${value} 不该一步跳到 1200`);
+    assert.equal(value, 376);
+  });
+
+  test("同类样本逐步收敛到该类均值", () => {
+    const estimator = createRowHeightEstimator({ factor: 0.15, kindInitial: {} });
+    const values = [];
+    for (let i = 0; i < 20; i += 1) {
+      estimator.push("text", 752);
+      values.push(estimator.value("text"));
+    }
+    assert.ok(values[0]! < values[19]!, "估值应随样本增加而上升");
+    assert.ok(values[19]! > 700, `20 个样本后应接近 752，实际 ${values[19]}`);
+    assert.ok(values[19]! <= 752, "不该超过实测均值");
+  });
+
+  test("不同 kind 分开积累", () => {
+    const estimator = createRowHeightEstimator({ factor: 0.5 });
+    for (let i = 0; i < 10; i += 1) {
+      estimator.push("text", 750);
+      estimator.push("turnProcess", 69);
+    }
+    assert.ok(estimator.value("text") > 600, `text=${estimator.value("text")}`);
+    assert.ok(estimator.value("turnProcess") < 120, `turnProcess=${estimator.value("turnProcess")}`);
+    assert.ok(estimator.value("text") - estimator.value("turnProcess") > 400);
+  });
+
+  test("估计值始终夹在 32–1200", () => {
+    const low = createRowHeightEstimator({ factor: 0.5 });
+    for (let i = 0; i < 40; i += 1) low.push("tiny", 1);
+    assert.equal(low.value("tiny"), MIN_ROW_ESTIMATE);
+    const high = createRowHeightEstimator({ factor: 0.5 });
+    for (let i = 0; i < 40; i += 1) high.push("huge", 50000);
+    assert.equal(high.value("huge"), MAX_ROW_ESTIMATE);
+  });
+
+  test("非有限 / 非正高度忽略，不改变估计", () => {
+    const estimator = createRowHeightEstimator();
+    for (const height of [Number.NaN, Number.POSITIVE_INFINITY, 0, -5]) {
+      estimator.push("text", height);
+    }
+    assert.equal(estimator.value("text"), ROW_KIND_ESTIMATES["text"]);
+    assert.equal(estimator.typical, DEFAULT_ROW_ESTIMATE);
+  });
+});
+
+describe("estimateRowHeight", () => {
+  test("缓存命中优先于估值", () => {
+    const cache = createHeightCache(4);
+    cache.set("a", 640);
+    const estimator = createRowHeightEstimator({ factor: 0.5 });
+    estimator.push("text", 180);
+    assert.equal(estimateRowHeight("a", "text", cache, estimator), 640);
+  });
+
+  test("缓存未命中时用该 kind 的估值", () => {
+    const cache = createHeightCache(4);
+    const estimator = createRowHeightEstimator({ factor: 0.5 });
+    estimator.push("text", 180);
+    assert.equal(estimateRowHeight("missing", "text", cache, estimator), estimator.value("text"));
+    assert.equal(estimateRowHeight("missing", "mystery", cache, estimator), estimator.typical);
+  });
+
+  test("缓存里的实测高度不被估值夹取改写", () => {
+    const cache = createHeightCache(4);
+    cache.set("tall", 3200);
+    const estimator = createRowHeightEstimator();
+    assert.equal(estimateRowHeight("tall", "text", cache, estimator), 3200);
   });
 });
 

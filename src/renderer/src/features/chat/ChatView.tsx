@@ -44,12 +44,16 @@ import { readFoldState, writeFoldState } from "./fold-state.ts";
 // 历史段虚拟化：行过滤 / 下标映射 / 高度 LRU / 锚点换算（纯模块）
 import {
   createHeightCache,
+  createRowHeightEstimator,
+  DEFAULT_ROW_ESTIMATE,
+  estimateRowHeight,
   messageRowIndex,
   prependAnchorTarget,
   rowIndexByKey,
   viewRowIndex,
   virtualHistoryRows,
   type HeightCache,
+  type RowHeightEstimator,
   type VirtualHistoryRow,
 } from "./virtual-history.ts";
 import { bubbleClampStyle, isBubbleOverflowing } from "./user-bubble-clamp.ts";
@@ -2051,6 +2055,11 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   const viewRowIndexRef = useRef<ReadonlyMap<number, number>>(new Map());
   const heightCacheRef = useRef<HeightCache | null>(null);
   if (heightCacheRef.current === null) heightCacheRef.current = createHeightCache(4000);
+  // 未测行的在线典型高度：由 measureElement 的真实高度喂出来的滑动均值（全局 + 按 kind，
+  // ref，不触发渲染）。L3a 用「一屏高」估，逐行换成实测值时总高一路收缩；这里让它从
+  // 首帧就接近真实。
+  const typicalHeightRef = useRef<RowHeightEstimator | null>(null);
+  if (typicalHeightRef.current === null) typicalHeightRef.current = createRowHeightEstimator();
 
   /**
    * 把一个历史行滚进视口：先用虚拟器按未测估值粗定位，等 `data-index` 对上的
@@ -2180,21 +2189,31 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   const virtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
     count: historyVirtualRows.length,
     getScrollElement: useCallback(() => scrollRef.current, []),
-    // 未测行估值 = 一屏高（不是固定 72px）：首屏只挂视口内外两行 + overscan，
-    // 快速拖动滚动条时再靠实测收敛。已测过的高度从 LRU 缓存直达。
+    // 未测行估值：同一 key 有实测缓存就用缓存，否则用在线典型行高（初值 230，
+    // 之后由真实高度校准，夹 80–1200）。不再用「一屏高」——那会让滚动期每测一行
+    // 都收缩一次总高，Layout 跟着抖（L3a 实测 B2 17.5%，卡帧 32/38 含 Layout）。
     estimateSize: useCallback((index: number) => {
-      const key = virtualRowsRef.current[index]?.entry.key;
-      const cached = key === undefined ? undefined : heightCacheRef.current?.get(key);
-      return cached ?? (scrollRef.current?.clientHeight || 72);
+      const row = virtualRowsRef.current[index];
+      const key = row?.entry.key;
+      const cache = heightCacheRef.current;
+      const typical = typicalHeightRef.current;
+      if (key === undefined || cache === null || typical === null) return DEFAULT_ROW_ESTIMATE;
+      return estimateRowHeight(key, row?.entry.kind ?? null, cache, typical);
     }, []),
     getItemKey: useCallback((index: number) => virtualRowsRef.current[index]?.entry.key ?? `#${index}`, []),
-    overscan: 2,
+    overscan: 3,
     measureElement: useCallback((element: Element, entry: ResizeObserverEntry | undefined) => {
-      // ResizeObserver 的 borderBox 是内容真实高度；测量值回写 LRU，抗重挂 / StrictMode
+      // ResizeObserver 的 borderBox 是内容真实高度；测量值回写 LRU，抗重挂 / StrictMode。
+      // 同一份实测也喂给典型行高估计器——下一次未测行重算时就有了数据驱动的估值。
       const box = entry?.borderBoxSize[0];
       const height = Math.round(box?.blockSize ?? element.getBoundingClientRect().height);
       const key = element.getAttribute("data-virtual-key");
-      if (key !== null) heightCacheRef.current?.set(key, height);
+      if (key !== null) {
+        // data-kind 在行内的 .revert-keep 上：同类行分开积累估值（文字行远高于工具行）
+        const kind = element.querySelector("[data-kind]")?.getAttribute("data-kind") ?? null;
+        heightCacheRef.current?.set(key, height);
+        typicalHeightRef.current?.push(kind, height);
+      }
       return height;
     }, []),
   });
