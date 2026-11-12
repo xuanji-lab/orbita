@@ -2060,6 +2060,10 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   // 首帧就接近真实。
   const typicalHeightRef = useRef<RowHeightEstimator | null>(null);
   if (typicalHeightRef.current === null) typicalHeightRef.current = createRowHeightEstimator();
+  // 测高补偿的合并窗口：同一次提交 / 同一批 ResizeObserver 里多行的实测高度差先
+  // 累加，等本列提交后一次性写一次 scrollTop。逐行同步写会让每个刻度都产生一次
+  // 强制 layout + 滚动事件（L3b 实测慢帧 33.1–33.6 ms 的主因之一）。
+  const pendingCorrectionRef = useRef(0);
 
   /**
    * 把一个历史行滚进视口：先用虚拟器按未测估值粗定位，等 `data-index` 对上的
@@ -2213,6 +2217,9 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   // 只虚拟化历史段；实时尾段继续按普通流渲染在虚拟占位之后。行仍是 `TurnViewEntry`
   // 粗粒度行（user / 回合折叠 / 过程块 / 正文），保留 `.chat-col` 原有的子午线几何。
   const virtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
+    // 滚动事件里同步 flushSync 渲染会把滚动管线本身拖慢（每个刻度一次同步
+    // render+commit）；异步渲染由 React 合并到帧内，视口内容晚一帧但不再挡滚动。
+    useFlushSync: false,
     count: historyVirtualRows.length,
     getScrollElement: useCallback(() => scrollRef.current, []),
     // 未测行估值：同一 key 有实测缓存就用缓存，否则用在线典型行高（初值 230，
@@ -2227,7 +2234,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       return estimateRowHeight(key, row?.entry.kind ?? null, cache, typical);
     }, []),
     getItemKey: useCallback((index: number) => virtualRowsRef.current[index]?.entry.key ?? `#${index}`, []),
-    overscan: 3,
+    overscan: 4,
     measureElement: useCallback((element: Element, entry: ResizeObserverEntry | undefined) => {
       // ResizeObserver 的 borderBox 是内容真实高度；测量值回写 LRU，抗重挂 / StrictMode。
       // 同一份实测也喂给典型行高估计器——下一次未测行重算时就有了数据驱动的估值。
@@ -2237,22 +2244,44 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       if (key !== null) {
         // data-kind 在行内的 .revert-keep 上：同类行分开积累估值（文字行远高于工具行）
         const kind = element.querySelector("[data-kind]")?.getAttribute("data-kind") ?? null;
-        heightCacheRef.current?.set(key, height);
-        typicalHeightRef.current?.push(kind, height);
+        const cache = heightCacheRef.current;
+        const typical = typicalHeightRef.current;
+        // prev 与 estimateSize 同口径：有实测缓存用缓存，否则用该类估值。
+        const prev = cache?.get(key) ?? typical?.value(kind) ?? DEFAULT_ROW_ESTIMATE;
+        cache?.set(key, height);
+        typical?.push(kind, height);
+        // 只累加「整行都在视口上方」的实测变化（与虚拟器默认补偿同口径）；跟随 /
+        // 前插落定在 flush 时再判一次。行下标来自 data-index，measure 时缓存里
+        // 还是本次测高前的坐标。
+        const index = Number(element.getAttribute("data-index"));
+        const item = Number.isInteger(index) ? virtualizerRef.current?.measurementsCache[index] : undefined;
+        const scrollTop = scrollRef.current?.scrollTop ?? 0;
+        if (item !== undefined && item.end <= scrollTop + 1) {
+          pendingCorrectionRef.current += height - prev;
+        }
       }
       return height;
     }, []),
   });
-  // 测高补偿：跟随中不补（钉底统一接管）；前插落定窗口里也不补——虚拟器的补偿
-  // 按它自己的旧 scrollOffset 累计，会把刚设好的 key 锚点又拽走，这段由
-  // TranscriptColumn 的 settle effect 每帧按同一 key 重算。其余只补「整行都在
-  // 视口上方」的行，避免同一批 RO 里把视口下方的行也当成上方。
-  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item) => {
-    if (isFollowing(followTrackerRef.current) || pageSettleRef.current !== null) return false;
-    const scrollTop = scrollRef.current?.scrollTop ?? virtualizer.scrollOffset ?? 0;
-    return item.end <= scrollTop + 1;
-  };
+  // 测高补偿改为在本列提交后合并写一次（见 pendingCorrectionRef）：虚拟器自带的
+  // 逐行补偿（resizeItem 里同步写 scrollTop）关掉，否则会和合并那次叠成两次写入。
+  // 跟随中不补（钉底统一接管）；前插落定窗口里也不补——那段由 settle effect 按
+  // 同一行的 key 每帧重算。
+  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false;
   virtualizerRef.current = virtualizer;
+
+  // 合并补偿：一次提交里攒下的高度差只写一次 scrollTop。测高回调在 layout 之后、
+  // 绘制之前触发，notify 后的这次提交里写完，视口不会先跳一下再回来。
+  useLayoutEffect(() => {
+    const pending = pendingCorrectionRef.current;
+    if (pending === 0) return;
+    pendingCorrectionRef.current = 0;
+    if (isFollowing(followTrackerRef.current) || pageSettleRef.current !== null) return;
+    const el = scrollRef.current;
+    if (el === null) return;
+    const next = Math.max(0, el.scrollTop + pending);
+    if (Math.abs(next - el.scrollTop) > 0.5) el.scrollTop = next;
+  });
 
   // 回父组件的锚点 / 跳转入口。每次渲染覆写：方法体读的是本次渲染的行映射与
   // 虚拟器，父组件在事件 / layout effect 里调用时不会拿到过期闭包。
