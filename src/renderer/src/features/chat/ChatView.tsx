@@ -5,6 +5,10 @@ import { QuoteToolbar, type QuoteCandidate } from "../../shell/QuoteToolbar";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
 import { QueueStrip } from "./QueueStrip";
+import { BackgroundStrip } from "./BackgroundStrip";
+import { BackgroundStripStyleContext } from "./background-strip-context";
+import { useBackgroundItems } from "./useBackgroundItems";
+import { useAutomationUi } from "../automation/automation-context.ts";
 import { compactionBoundaryStatus, mergeSideRecords } from "./session-states";
 import {
   ChannelFromChildPill,
@@ -251,6 +255,9 @@ import type { ModelPair, ThemePreference } from "@shared/settings";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 import { scopeChipAction } from "./scope-chip.ts";
+
+/** 后台任务条在没有对应入口的视图里的空回调（条只在给了入口的主槽里渲染，类型上仍要一个函数） */
+const noop = (): void => undefined;
 
 /**
  * 展开体的贴底跟随：chat 级滚动（上方 ChatView）同款语义的缩小版——内容增长
@@ -696,6 +703,11 @@ function ChatViewBody(props: {
    * 也符合「UI 只做一层」：面板里查看的子会话不再嵌一层它自己的 Sub-sessions 入口。
    */
   onOpenSubSession?: (childId: string) => void;
+  /**
+   * 后台任务条的「+N」：打开右栏子会话面板的列表层（头部子会话芯片同一个入口）。
+   * 与 onOpenSubSession 同门槛——只有主槽拿到。
+   */
+  onOpenSubSessionsList?: () => void;
   /**
    * 解析后的主题：只给首页门面用（纸面两档的 slogan 与批语，HomeHero.tsx）。
    * 只有主槽的 ChatView 拿到它；辅助对话是 homeBare，本来就不出门面。
@@ -1322,6 +1334,19 @@ function ChatViewBody(props: {
     ],
   );
 
+  // 后台任务条（输入框上方，与排队条 / 审批条同一族位置）：只在主槽的根会话视图里有——
+  // 与派出卡同一道门槛（onOpenSubSession 只有主槽给），首页（openId 为空）、子会话视图、
+  // 面板内查看的子会话都没有。hooks 必须在首页分支之外无条件调用，门槛只决定算不算。
+  const bgDensity = useContext(BackgroundStripStyleContext);
+  const automationUi = useAutomationUi();
+  const bgItems = useBackgroundItems({
+    parentId: ownSide === "parent" && props.onOpenSubSession !== undefined && hideComposer !== true && openId !== "" ? openId : null,
+    sessions: session.sessions,
+    summaries: channelSummaries,
+    phaseOf: session.phaseOf,
+    approvalsOf: session.approvalsOf,
+  });
+
   /**
    * 头部次要芯片「N sub-sessions · M waiting」（子会话 PR4c，2.2）：只在
    * `ownSide` 为 "parent" 且这条根会话确有子会话时才有内容——与派出卡同一条
@@ -1689,6 +1714,21 @@ function ChatViewBody(props: {
                 onConfirm={session.confirmUndo}
                 onCancel={session.cancelUndo}
                 onOpenFile={props.onOpenReviewAt}
+              />
+            )}
+            {/* 后台任务条：三条同族条里最靠上（常驻的背景事实），审批与排队更靠近输入框；
+                没有后台项时 BackgroundStrip 渲染 null，页脚网格里不留空行 */}
+            {bgItems.length > 0 && (
+              <BackgroundStrip
+                items={bgItems}
+                density={bgDensity}
+                channels={parentChannels}
+                entryOf={session.entryOf}
+                approvalsOf={session.approvalsOf}
+                onOpenSubSession={props.onOpenSubSession ?? noop}
+                onOpenAutomation={automationUi.openPanel}
+                onOpenSubSessionsList={props.onOpenSubSessionsList ?? noop}
+                onOpenAutomationPanel={automationUi.openPanel}
               />
             )}
             {session.approvals[0] && (

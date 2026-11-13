@@ -6234,6 +6234,173 @@ mark.intent-mark {
   display: grid;
   gap: var(--space-2);
 }
+
+/* ===== 后台任务条（2026-11-13，features/chat/BackgroundStrip.tsx） =====
+ * 输入框正上方，与排队条 / 审批条同一族位置；一张 .glass-card（面 + 发丝线，静止不浮——
+ * 它是常驻的背景事实，不是要你回答的浮层，所以不加 .glass-float 的阴影）。
+ * 两种密度结构一样，只差版式：data-density="summary"（一行）/ "rows"（每项一行）。
+ * 字号只有 sm 一档：层级靠字重与墨色（名字 strong · 步骤 secondary · 计数 secondary）。
+ * 容器查询按条自己的宽度，不按窗口：右栏开着、辅助对话占位时条的宽度才是真的宽度。 */
+.bg-strip {
+  container: bgstrip / inline-size;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-1) var(--space-1);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+.bg-strip[data-density="rows"] {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+}
+.bg-strip-head {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: var(--space-2);
+  min-width: 0;
+  height: var(--control-height-xs);
+  padding: 0 var(--space-2);
+  white-space: nowrap;
+}
+.bg-strip[data-density="rows"] .bg-strip-head {
+  flex: none;
+}
+.bg-strip-label {
+  font-weight: var(--weight-strong);
+  color: var(--color-text-primary);
+}
+.bg-strip-count {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.bg-count-part[data-tone="waiting"] {
+  color: var(--color-warning);
+}
+.bg-count-part[data-tone="failed"] {
+  color: var(--color-danger);
+}
+.bg-strip-items {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: var(--space-1);
+}
+.bg-strip[data-density="rows"] .bg-strip-items {
+  flex-direction: column;
+  flex: none;
+  gap: 0;
+}
+.bg-item {
+  display: flex;
+  align-items: center;
+  flex: 1 1 0;
+  gap: var(--space-2);
+  min-width: 0;
+  height: var(--control-height-xs);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.bg-strip[data-density="rows"] .bg-item {
+  flex: none;
+  width: 100%;
+}
+.bg-item:hover {
+  background: var(--color-bg-hover);
+}
+.bg-item:hover .bg-item-text {
+  color: var(--color-text-primary);
+}
+/* 行首状态槽：饼（10）与闹钟图标（12）落在同一根 14 宽的中线上 */
+.bg-lead {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+}
+.bg-lead-icon {
+  color: var(--color-text-tertiary);
+}
+.bg-item-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 12em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--weight-strong);
+  color: var(--color-text-primary);
+}
+.bg-strip[data-density="rows"] .bg-item-name {
+  flex: 0 1 12em;
+}
+.bg-item-text {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 在等你的项：步骤那句提到主墨色（饼已经是橙，字再压一档不要） */
+.bg-item[data-status="waiting"] .bg-item-text,
+.bg-item[data-status="approval"] .bg-item-text {
+  color: var(--color-text-primary);
+}
+.bg-item-clock {
+  flex: none;
+  font-family: var(--font-family-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.bg-item-open {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+/* 「+N」/「还有 N 项」：一个文字键，没有框 */
+.bg-more {
+  flex: none;
+  height: var(--control-height-xs);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.bg-more:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+/* 窄：先收步骤与时钟，只留「饼 + 名字」；再窄连计数也收，留「后台」二字 + 各项 */
+@container bgstrip (max-width: 560px) {
+  .bg-strip[data-density="summary"] .bg-item-text,
+  .bg-strip .bg-item-clock,
+  .bg-strip .bg-item-open {
+    display: none;
+  }
+}
+@container bgstrip (max-width: 400px) {
+  .bg-strip[data-density="summary"] .bg-strip-count {
+    display: none;
+  }
+}
 .user-turn {
   position: relative;
   display: flex;

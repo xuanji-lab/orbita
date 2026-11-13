@@ -299,6 +299,7 @@ function General(props: {
   const completionSound = props.settings.completionSound ?? true;
   // 过程显示：缺席 = 一轮一行（2026-10-30）
   const processView = props.settings.processView ?? "turn";
+  const backgroundStrip = props.settings.backgroundStrip ?? "summary";
 
   const catalog = useBuiltinCatalog();
   const usable = usableProviders(props.providers);
@@ -401,6 +402,17 @@ function General(props: {
               {lockedLanguage === "zh" ? t.settings.languageLockedZh : t.settings.languageLockedEn}
             </span>
           )}
+        </SettingRow>
+        <SettingRow name={t.settings.backgroundStrip} info={t.settings.backgroundStripInfo}>
+          <Segmented
+            label={t.settings.backgroundStripAria}
+            value={backgroundStrip}
+            options={[
+              { value: "summary" as const, label: t.settings.backgroundStripSummary },
+              { value: "rows" as const, label: t.settings.backgroundStripRows },
+            ]}
+            onChange={(next) => props.onChange({ backgroundStrip: next })}
+          />
         </SettingRow>
       </SettingGroup>
       {/* 原来的 Context / Git / Sessions 各只有一两行，三个分组标题比内容还显眼；

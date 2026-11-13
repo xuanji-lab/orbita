@@ -65,6 +65,7 @@ import { FEATURE_ICON } from "./shell/feature-icons.ts";
 import { type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
 import { PastedTextCollapseContext } from "./shell/attachment-chips";
 import { ProcessViewContext } from "./features/chat/process-view-context";
+import { BackgroundStripStyleContext } from "./features/chat/background-strip-context";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
 import { isUnclaimedEscape } from "./shell/escape-key.ts";
 import { AutomationPanel } from "./features/automation/AutomationPanel";
@@ -1466,6 +1467,7 @@ export function App() {
     <DocPaperContext.Provider value={docPaper}>
     <ExperimentalFeaturesContext.Provider value={experimentalFeatures}>
     <ProcessViewContext.Provider value={settings.processView ?? "turn"}>
+    <BackgroundStripStyleContext.Provider value={settings.backgroundStrip ?? "summary"}>
     <AutomationContext.Provider value={automationUi}>
     <AutomationRunSessionsContext.Provider value={runSessionIds}>
     <PastedTextCollapseContext.Provider value={settings.collapsePastedText ?? true}>
@@ -1578,6 +1580,7 @@ export function App() {
                 excerptJump={excerptJump}
                 onExcerptSaved={bumpExcerpts}
                 onOpenSubSession={openSubSessionInPanel}
+                onOpenSubSessionsList={openSubSessionsList}
                 litSubSessionId={litSubSessionId}
                 theme={resolvedTheme}
                 starredModels={settings.starredModels ?? []}
@@ -1798,6 +1801,7 @@ export function App() {
     </PastedTextCollapseContext.Provider>
     </AutomationRunSessionsContext.Provider>
     </AutomationContext.Provider>
+    </BackgroundStripStyleContext.Provider>
     </ProcessViewContext.Provider>
     </ExperimentalFeaturesContext.Provider>
     </DocPaperContext.Provider>

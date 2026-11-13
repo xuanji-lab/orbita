@@ -1448,6 +1448,12 @@ export const en = {
       "One line per turn: while it works, a fixed-height block ticks with the current step; when it's done, one line you can open into parts · Every step: each thought and tool call on its own row",
     processViewTurn: "One line per turn",
     processViewSteps: "Every step",
+    backgroundStrip: "Background strip",
+    backgroundStripAria: "How the strip above the input box shows background work",
+    backgroundStripInfo:
+      "Sub-sessions and automations that are working or waiting for this task · Summary: one line with up to three items · Rows: one row per item, with how long it has run",
+    backgroundStripSummary: "Summary",
+    backgroundStripRows: "Rows",
     completionSound: "Completion sound",
     completionSoundAria: "Completion sound",
     completionSoundInfo:
@@ -2422,6 +2428,24 @@ export const en = {
     latestDone: "Done",
     latestFailed: "Failed",
     latestReply: (text: string) => `Replied: ${text}`,
+  },
+
+  /** 输入框上方的后台任务条（features/chat/BackgroundStrip.tsx）：这条会话的子会话与等下次运行的自动化 */
+  bgStrip: {
+    aria: "Background work",
+    label: "Background",
+    running: (count: number) => `${count} running`,
+    waiting: (count: number) => `${count} waiting on you`,
+    failed: (count: number) => `${count} failed`,
+    done: (count: number) => `${count} finished`,
+    scheduled: (count: number) => `${count} scheduled`,
+    /** 汇总条里放不下的项数（「+2」） */
+    moreInline: (count: number) => `+${count}`,
+    moreInlineTip: (count: number) => `${count} more not shown — open the full list`,
+    /** 分行条超出 4 行的折叠行 */
+    moreRows: (count: number) => `${count} more`,
+    open: "Open",
+    automationDue: "Due — sends when this turn ends",
   },
 
   queue: {

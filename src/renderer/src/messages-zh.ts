@@ -1337,6 +1337,11 @@ export const zh: Messages = {
     processViewInfo: "一轮一行：干活时一块定高的现场，只走表和当前这一步；做完收成一行，可展开成几段 · 逐步铺开：每次思考与工具调用各占一行",
     processViewTurn: "一轮一行",
     processViewSteps: "逐步铺开",
+    backgroundStrip: "后台任务条",
+    backgroundStripAria: "输入框上方的后台任务条怎么显示",
+    backgroundStripInfo: "这条任务派出去的子会话、等下次运行的自动化 · 汇总：一行，最多并排三项 · 分行：每项一行，带已跑多久",
+    backgroundStripSummary: "汇总",
+    backgroundStripRows: "分行",
     completionSound: "完成提示音",
     completionSoundAria: "完成提示音",
     completionSoundInfo: "你在看别处时任务跑完，响一声客舱呼唤铃 · 关掉后侧栏高亮与提醒卡片照常出现",
@@ -2239,6 +2244,21 @@ export const zh: Messages = {
     latestDone: "完成",
     latestFailed: "失败",
     latestReply: (text) => `回复：${text}`,
+  },
+
+  bgStrip: {
+    aria: "后台任务",
+    label: "后台",
+    running: (count) => `${count} 项在跑`,
+    waiting: (count) => `${count} 项等你`,
+    failed: (count) => `${count} 项失败`,
+    done: (count) => `${count} 项完成`,
+    scheduled: (count) => `${count} 项待运行`,
+    moreInline: (count) => `+${count}`,
+    moreInlineTip: (count) => `还有 ${count} 项没显示，打开完整列表`,
+    moreRows: (count) => `还有 ${count} 项`,
+    open: "打开",
+    automationDue: "已到点，这一轮结束后送达",
   },
 
   queue: {
