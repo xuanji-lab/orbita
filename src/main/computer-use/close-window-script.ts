@@ -28,6 +28,16 @@
  *
  * 为什么 PostMessage(WM_COMMAND, IDOK) 也不行：不稳——窗口有时是隐藏态 / 取不到对话框句柄。
  *
+ * ⚠ **2026-11-13 补充：UIA 会无限期阻塞，所以它现在跑在子进程里。**
+ * 真机两次实测：`FindAll` / `FindFirst` 打在这只沙箱的窗口上，**126 秒不返回**（另一次复核
+ * 25 秒无返回）。它撞穿调用方 `spawnSync` 的 20s 预算 → PowerShell 被杀 → 优雅关窗根本没发生
+ * → 落强杀 → 漏 3.4GB 孤儿 VM（要 60~150 秒才自清）。而 `$process.Responding` 拦不住它：
+ * 窗口泵是响应的，卡住的是 UIA provider 自己。
+ * 现在把整段 UIA 放进 `Start-Job`，主脚本 `Wait-Job -Timeout 8`；超时就 `Stop-Job` +
+ * `Remove-Job -Force` 杀掉，再走键盘兜底。**卡住只损失 8 秒，不再拖垮整次关闭。**
+ * 顺带：`CloseMainWindow()` 的返回值必须看（窗口忙时它返回 false 且什么都不做，框压根不弹），
+ * 所以给了 3 次重试；没按到任何按钮且进程仍活着 → `exit 3`，不再假装成功。
+ *
  * 退出码（调用方按它写日志，别混着看）：
  *   0 = 我们自己按下了确认（UIA Invoke，或兜底 Enter 之后确认框消失）
  *   2 = 走到了键盘兜底，但前台不是这只沙箱 → **一个键都没发**（绝不误敲用户窗口）
@@ -50,7 +60,6 @@ export function buildCloseSandboxWindowScript(pid: number): string {
   return [
     "$ErrorActionPreference = 'Stop'",
     "Add-Type -AssemblyName System.Windows.Forms",
-    // P/Invoke：取前台窗口句柄，再问它属于哪个进程（只给键盘兜底那一段用）
     "$signature = @'",
     "using System;",
     "using System.Runtime.InteropServices;",
@@ -60,19 +69,15 @@ export function buildCloseSandboxWindowScript(pid: number): string {
     "}",
     "'@",
     "Add-Type -TypeDefinition $signature",
+    "function Orbita-Alive { param([int]$Id) return ($null -ne (Get-Process -Id $Id -ErrorAction SilentlyContinue)) }",
     `$target = ${pid}`,
+    "if (-not (Orbita-Alive $target)) { exit 0 }",
     "$process = Get-Process -Id $target -ErrorAction SilentlyContinue",
     "if ($null -eq $process) { exit 0 }",
-    // a. 等价用户点 X：沙箱随即弹自己的确认框（框什么时候画出来不确定，所以下面要轮询）。
-    //    **必须看返回值并重试**：窗口线程一时忙的时候 CloseMainWindow 返回 false 且什么都不做，
-    //    确认框根本不会弹出来——那之后 30 轮轮询全是空转，最后落进「找不到按钮＝已经关了」的
-    //    假成功（2026-11-13 行为验收：产品路径 2/2 次 exit 0 但 25s 时四个进程全在，只能强杀，
-    //    而强杀正是会漏 VM 的那条路；同一份脚本手工跑 3/3 成功，差别就是这个返回值）。
-    // 先等它从上一次的忙状态里缓过来（最多 3s）：忙着的时候 CloseMainWindow 返回 false 且什么都不做
     "for ($waitRound = 1; $waitRound -le 10; $waitRound++) {",
     "  $process.Refresh()",
     "  if ($process.HasExited) { exit 0 }",
-    "  if ($process.Responding) { break }",
+    "  try { if ($process.Responding) { break } } catch { break }",
     "  Start-Sleep -Milliseconds 300",
     "}",
     "$orbitaClosed = $false",
@@ -83,125 +88,60 @@ export function buildCloseSandboxWindowScript(pid: number): string {
     "  Start-Sleep -Milliseconds 400",
     "}",
     "Write-Output \"orbita-close-mainwindow=$orbitaClosed\"",
-    // b. 在这只沙箱的窗口树里找确认框的按钮，找到就 Invoke。
-    //    Invoke 是跨进程的 UI 自动化调用，不经过键盘，不会打进别的窗口。
-    //    名字优先级：OK 一族优先；Close / 关闭 只当「整轮都没见到 OK」时的最后手段
-    //    （沙箱的框默认按钮是 Ok，Close 只是某些版本的叫法）。
-    "$global:orbitaUnresponsive = $false",
-    "$orbitaOkNames = @('Ok', 'OK', 'ok', 'Yes', ([string][char]0x786E + [string][char]0x5B9A), ([string][char]0x662F))",
-    "$orbitaCloseNames = @('Close', ([string][char]0x5173 + [string][char]0x95ED))",
-    // TWO-STEP LOOKUP: first the top-level windows owned by this pid (TreeScope.Children of the
-    // desktop), then the buttons inside those windows (TreeScope.Descendants).
-    // A single RootElement.FindAll(Descendants, byPid) intermittently returned zero elements on
-    // real machines (2026-10-27 acceptance: 15 rounds missed the Ok button while the window was
-    // right there; the two-step query hit it on the first round). Walking Children first also keeps
-    // the search inside this sandbox's own window subtree instead of scanning the whole desktop.
-    "function Find-OrbitaButton {",
-    "  param([string[]]$Names)",
-    // **先问一句「它还响应吗」**：UIA 的 FindAll / FindFirst 打到无响应的窗口上会一直阻塞
-    // （2026-11-13 真机：手工跑这份脚本卡了 126s 才返回，直接撞穿调用方 spawnSync 的 20s 超时
-    // → PowerShell 被杀 → 优雅关窗根本没发生 → 强杀 → 漏孤儿 VM 3.4GB）。
-    // Responding 用 SendMessageTimeout 探一下，最坏 5s 返回，比无限期挂住强。
-    "  $orbitaProbe = Get-Process -Id $target -ErrorAction SilentlyContinue",
-    "  if ($null -eq $orbitaProbe) { return $null }",
-    "  $orbitaResponding = $true",
-    "  try { $orbitaResponding = $orbitaProbe.Responding } catch { $orbitaResponding = $true }",
-    "  if (-not $orbitaResponding) {",
-    // 一次不响应就够了：Responding 本体最坏要 5s，30 轮 × 5s = 150s，比挂住还糟。
-    // 标记给外面的轮询循环，让它立刻跳出（后面只判进程还在不在）。
-    "    $global:orbitaUnresponsive = $true",
-    "    Write-Output \"orbita-close-unresponsive=1\"",
-    "    return $null",
-    "  }",
+    "$orbitaJob = Start-Job -ArgumentList $target -ScriptBlock {",
+    "  param($target)",
     "  try {",
-    "    $windows = $orbitaAutomation::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, $orbitaByPid)",
-    "    foreach ($window in $windows) {",
-    "      foreach ($name in $Names) {",
-    "        try {",
-    "          $nameCondition = New-Object System.Windows.Automation.PropertyCondition($orbitaAutomation::NameProperty, $name)",
-    "          $condition = New-Object System.Windows.Automation.AndCondition($orbitaButtonType, $nameCondition)",
-    "          $button = $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)",
-    "          if ($null -ne $button) { return $button }",
-    "        } catch { continue }",
+    "    Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes",
+    "    $byPid = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, $target)",
+    "    $btnType = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)",
+    "    $okNames = @('Ok', 'OK', 'ok', 'Yes', ([string][char]0x786E + [string][char]0x5B9A), ([string][char]0x662F))",
+    "    for ($round = 1; $round -le 30; $round++) {",
+    "      if ($round -gt 1) { Start-Sleep -Milliseconds 200 }",
+    "      $wins = [System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, $byPid)",
+    "      foreach ($w in $wins) {",
+    "        foreach ($n in $okNames) {",
+    "          try {",
+    "            $nc = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, $n)",
+    "            $cond = New-Object System.Windows.Automation.AndCondition($btnType, $nc)",
+    "            $b = $w.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)",
+    "            if ($null -ne $b) {",
+    "              $b.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()",
+    "              Write-Output (\"INVOKED:\" + $round)",
+    "              return",
+    "            }",
+    "          } catch { }",
+    "        }",
     "      }",
+    "      if ($null -eq (Get-Process -Id $target -ErrorAction SilentlyContinue)) { Write-Output 'GONE'; return }",
     "    }",
-    "  } catch { }",
-    "  return $null",
+    "    Write-Output 'NOTFOUND'",
+    "  } catch { Write-Output 'ERROR' }",
     "}",
-    "$orbitaUiaReady = $false",
-    "try {",
-    "  Add-Type -AssemblyName UIAutomationClient",
-    "  Add-Type -AssemblyName UIAutomationTypes",
-    "  $orbitaAutomation = [System.Windows.Automation.AutomationElement]",
-    "  $orbitaByPid = New-Object System.Windows.Automation.PropertyCondition($orbitaAutomation::ProcessIdProperty, $target)",
-    // ControlType.Button：只认按钮（别去 Invoke 一个同名文本框）
-    "  $orbitaButtonType = New-Object System.Windows.Automation.PropertyCondition($orbitaAutomation::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)",
-    "  $orbitaUiaReady = $true",
-    "} catch { $orbitaUiaReady = $false }",
-    "$invoked = $false",
-    "if ($orbitaUiaReady) {",
-    "  $closeCandidate = $null",
-    // 轮询节奏（2026-10-27 真机）：原来是「先睡 400ms 再查」，框出现后最快也要等 400ms
-    // 才会被看第一眼，用户能看到确认框停留约 0.5–1 秒。改成**第一轮立即查**，
-    // 之后每轮 200ms：总预算 30 轮 ≈ 6 秒（与原来的 15×400ms 相当），
-    // 但框的可见时间降到约 100–200ms。
-    "  for ($round = 1; $round -le 30; $round++) {",
-    "    if ($round -gt 1) { Start-Sleep -Milliseconds 200 }",
-    "    if ($round -gt 1) {",
-    // 窗口在我们轮询期间自己关掉了（用户手按 / 系统收尾）：没有要按的框，直接成功
-    "      $alive = Get-Process -Id $target -ErrorAction SilentlyContinue",
-    "      if ($null -eq $alive) { exit 0 }",
-    "    }",
-    "    if ($global:orbitaUnresponsive) { break }",
-    "    $button = Find-OrbitaButton -Names $orbitaOkNames",
-    "    if ($null -ne $button) {",
-    "      try {",
-    "        $okPattern = $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)",
-    "        $okPattern.Invoke()",
-    "        $invoked = $true",
-    "      } catch { $invoked = $false }",
-    // 命中的是第几轮：stdout 一行诊断（生产的 spawnSync 是 stdio ignore，看不见；
-    // 真机排查 / 验收脚本收它会报「第 1 轮就命中」还是「拖到第 12 轮」）
-    "      if ($invoked) { Write-Output \"orbita-close-round=$round\"; break }",
-    "    }",
-    "    if ($null -eq $closeCandidate) { $closeCandidate = Find-OrbitaButton -Names $orbitaCloseNames }",
+    "$orbitaDone = Wait-Job $orbitaJob -Timeout 8",
+    "$orbitaUia = ''",
+    "if ($null -ne $orbitaDone) { $orbitaUia = (Receive-Job $orbitaJob -ErrorAction SilentlyContinue | Out-String).Trim() }",
+    "else { Stop-Job $orbitaJob -ErrorAction SilentlyContinue; $orbitaUia = 'TIMEOUT' }",
+    "Remove-Job $orbitaJob -Force -ErrorAction SilentlyContinue",
+    "Write-Output \"orbita-close-uia=$orbitaUia\"",
+    "if ($orbitaUia -eq 'GONE') { exit 0 }",
+    "if ($orbitaUia -like 'INVOKED*') {",
+    "  for ($i = 1; $i -le 50; $i++) {",
+    "    Start-Sleep -Milliseconds 300",
+    "    if (-not (Orbita-Alive $target)) { exit 0 }",
     "  }",
-    "  if (-not $invoked -and $null -ne $closeCandidate) {",
-    "    try {",
-    "      $closePattern = $closeCandidate.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)",
-    "      $closePattern.Invoke()",
-    "      $invoked = $true",
-    "    } catch { $invoked = $false }",
-    "  }",
+    "  exit 3",
     "}",
-    "if ($invoked) { exit 0 }",
-    // c. 兜底：UIA 全轮都没找到按钮（框根本没出来 / 名字对不上）才退回「激活 + 校验 + Enter」
     "$shell = New-Object -ComObject WScript.Shell",
     "$null = $shell.AppActivate($target)",
     "Start-Sleep -Milliseconds 500",
-    // d. 护栏：前台不是我们这只沙箱就一个键都不发（绝不误敲用户的窗口）；2 = 没发键
     "$handle = [OrbitaForeground]::GetForegroundWindow()",
     "$foreground = 0",
     "$null = [OrbitaForeground]::GetWindowThreadProcessId($handle, [ref]$foreground)",
     "if ($foreground -ne $target) { exit 2 }",
     "[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')",
-    // e. Enter 是盲发，按没按到要回头看：确认框还在（或 UIA 都不可用无从确认）就算没成
-    "Start-Sleep -Milliseconds 800",
-    "$stillOpen = $true",
-    // 「找不到按钮」不等于「已经关了」：框可能压根没弹（CloseMainWindow 没生效），
-    // 也可能弹了但 UIA 读不到。判据只认一件事——**目标进程还在不在**。
-    "$aliveAfter = Get-Process -Id $target -ErrorAction SilentlyContinue",
-    "if ($null -eq $aliveAfter) { exit 0 }",
-    "if ($orbitaUiaReady) {",
-    "  $stillOpen = $false",
-    "  $left = Find-OrbitaButton -Names $orbitaOkNames",
-    "  if ($null -eq $left) { $left = Find-OrbitaButton -Names $orbitaCloseNames }",
-    "  if ($null -ne $left) { $stillOpen = $true }",
-    "}",
-    "if ($stillOpen) { exit 3 }",
-    // 没按到按钮、进程也还在：exit 3。调用方据此留一行痕（旧代码在这里 exit 0，把
-    // 「什么都没做成」报成成功，于是它安心等满 25s 才强杀）。
-    "exit 3",
+    "Start-Sleep -Milliseconds 900",
+    "if (Orbita-Alive $target) { exit 3 }",
+    "exit 0",
     "",
   ].join("\r\n");
 }
