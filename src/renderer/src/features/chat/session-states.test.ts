@@ -1,6 +1,6 @@
 import { test, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
+import { selectTranscript } from "../../../../shared/transcript-state.ts";
 import type { FileTurnRecord, RevertRecord } from "@shared/revert";
 import type { TranscriptItem } from "@shared/transcript";
 import type { AgentEvent, AgentStats, ContextRulesInventory, RetryStatus } from "@shared/agent-ipc";

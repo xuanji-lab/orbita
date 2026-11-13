@@ -13,7 +13,7 @@ import {
   applyTranscriptProgress,
   createTranscriptState,
   type TranscriptState,
-} from "@earendil-works/pi-coding-agent/client";
+} from "../../../../shared/transcript-state.ts";
 import type { SessionSnapshot, ThinkingLevel as PiThinkingLevel, TranscriptItem } from "@shared/transcript";
 import type { AgentEvent, AgentStats, ContextRulesInventory, RetryStatus } from "@shared/agent-ipc";
 import type { ChannelMessage } from "@shared/channel";

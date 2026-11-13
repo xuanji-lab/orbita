@@ -6,7 +6,7 @@ import {
   createTranscriptState,
   selectTranscript,
   type TranscriptState,
-} from "@earendil-works/pi-coding-agent/client";
+} from "../shared/transcript-state.ts";
 import type { SessionSnapshot } from "../shared/transcript.ts";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";

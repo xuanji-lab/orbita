@@ -16,7 +16,7 @@
  * 数组和原包一致。原 schema 的 minLength / minimum 等数值约束是运行时校验，
  * 不在类型面，故未保留。
  *
- * 只收编 orbita 实际 import 的符号及其类型闭包（消费者纪律）：导出的 9 个符号
+ * 只收编 orbita 实际 import 的符号及其类型闭包（消费者纪律）：导出的 10 个符号（JsonValue 供 ./transcript-state.ts 的归约器用）
  * 各有真实 import 点；构建用的中间类型（内容块联合、Usage、各 status 变体）
  * 留在模块内不导出，需要时再开放。原包的运行时值（CBOR codec、framing、
  * schema 常量、PROTOCOL_VERSION）与协议面类型（SessionMetadata、ServerSnapshot、
@@ -24,7 +24,7 @@
  */
 
 /** JSON 值：工具入参与 details 字段的形状（原包 JsonValue）。 */
-type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
 /**
  * 思考档词汇表（7 档，off…max），与 pi 同源。
