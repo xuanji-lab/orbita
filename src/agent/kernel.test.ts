@@ -13,7 +13,9 @@ import { buildSessionContext, convertToLlm, migrateSessionEntries, parseSessionE
 import type { ConversationId, Storage } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { KernelAgent } from "../shared/kernel.ts";
-import { KernelPool, SessionIndexDoc, withCacheRetention } from "./kernel.ts";
+import { kernelCompaction, kernelSettings, KernelPool, SessionIndexDoc, withCacheRetention } from "./kernel.ts";
+import { compactionKeepRecentTokens, compactionReserveTokens } from "./compaction-settings.ts";
+import { RETRY_BASE_DELAY_MS, RETRY_MAX_ATTEMPTS, RETRY_MAX_DELAY_MS } from "./retry-policy.ts";
 import { assistant, book, result, user } from "./legacy-book-fixture.ts";
 
 const dirs: string[] = [];
@@ -327,5 +329,28 @@ describe("withCacheRetention：缓存时长按根 / 子会话判（剧本第 8 �
     assert.deepEqual(seen, ["long", undefined, "none", undefined]);
     // 其余方法照常透传
     assert.equal(wrapped.getModel("faux", "tiny")?.id, "tiny");
+  });
+});
+
+describe("运行策略与旧内核对齐（剧本第 8 条）", () => {
+  it("压缩阈值按「剩余百分比 × 模型窗口」换算，与旧内核同一个公式；不开后台压缩", () => {
+    for (const window of [16_000, 200_000, 1_000_000]) {
+      assert.deepEqual(kernelCompaction({ ...AGENT, compaction: { enabled: true, reservePercent: 15 } }, window), {
+        enabled: true,
+        reserveTokens: compactionReserveTokens(15, window),
+        keepRecentTokens: compactionKeepRecentTokens(window),
+        backgroundTokens: 0,
+      });
+    }
+    assert.equal(kernelCompaction({ ...AGENT, compaction: { enabled: false, reservePercent: 20 } }, 100_000).enabled, false);
+  });
+
+  it("重试节奏同 retry-policy.ts", () => {
+    assert.deepEqual(kernelSettings().retry, {
+      enabled: true,
+      maxRetries: RETRY_MAX_ATTEMPTS,
+      baseDelayMs: RETRY_BASE_DELAY_MS,
+      maxAgentDelayMs: RETRY_MAX_DELAY_MS,
+    });
   });
 });
