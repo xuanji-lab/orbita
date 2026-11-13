@@ -51,16 +51,18 @@ ORBITA 是一个开源的桌面端 AI Agent（Electron，macOS / Windows）。ag
 - 内置 DeepSeek、智谱、Z.AI、Kimi、StepFun、OpenCode Go 等厂商目录，也能填任意 Anthropic / OpenAI 兼容端点
 - API key 经系统钥匙串加密保存，不明文落盘
 
-**迁移（设置 › 迁移）**：把其他 agent 的会话、skills 和 MCP 配置搬过来。
+**外部来源（设置 › 外部来源）**
 
-| 来源 | 会话 | Skills | MCP |
-|---|---|---|---|
-| Proma | 有（含子会话，再次导入会追加新消息） | 有 | 有 |
-| Claude Code | 有 | 有 | 有 |
-| Kimi Code | 有 | —（用共用目录） | 有 |
-| opencode | 有 | — | 有 |
-| Codex | 有 | — | 有 |
-| 共用 skills 目录 `~/.agents/skills` | — | 有 | — |
+- 别的 agent 工具的聊天记录**原地只读、不导入**：在对话里让智能体读（`read_task`），它直接读源头的最新内容，不复制进 Orbita。支持 Claude Code、Codex、Kimi Code、Kimi Work、OpenCode、Reasonix、ZCode、Proma 八个来源；每个来源一个开关，关掉就不读。
+- skills 与 MCP 配置仍可导入：
+
+| 来源 | Skills | MCP |
+|---|---|---|
+| Proma | 有 | 有 |
+| Claude Code | 有 | 有 |
+| Kimi Code | —（用共用目录） | 有 |
+| opencode | — | 有 |
+| 共用 skills 目录 `~/.agents/skills` | 有 | — |
 
 只读：勾选来源并点扫描之前什么都不读；页面会列出要读的全部路径；其他应用的文件一律不改。
 找不到的数据目录可以手动添加。导进来的 MCP server 默认停用。
