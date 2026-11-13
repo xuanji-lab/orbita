@@ -1,6 +1,15 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { absoluteReviewPath, disambiguatedDirs, unifiedDiffEntries } from "./review-panel.ts";
+import { zh } from "../../messages-zh.ts";
+import { REVIEW_DIFF_MAX_LINES } from "../../../../shared/review.ts";
+import {
+  absoluteReviewPath,
+  disambiguatedDirs,
+  reviewDiffNotice,
+  reviewEmptyText,
+  reviewEmptyTitle,
+  unifiedDiffEntries,
+} from "./review-panel.ts";
 
 describe("unifiedDiffEntries", () => {
   test("unified diff → DiffBody 条目：@@ 头不进正文、行号按新旧行、一删一增配对", () => {
@@ -118,5 +127,72 @@ describe("disambiguatedDirs（重名文件补最短区分父目录）", () => {
     assert.equal(dirs.get("/ws/smoke/shot.mjs"), "smoke");
     assert.equal(dirs.get("/ws/ui/shot.mjs"), "ui");
     assert.equal(dirs.get("/ws/fold.ts"), null);
+  });
+});
+
+describe("空态文案", () => {
+  test("no-changes：标题是「还没有改动」，说明句不再重复同一句", () => {
+    const list = { kind: "empty", reason: "no-changes", cwd: "/w" } as const;
+    const title = reviewEmptyTitle(list, zh);
+    const detail = reviewEmptyText(list, zh, "task");
+    assert.equal(title, zh.review.emptyNoChanges);
+    assert.notEqual(detail, title);
+    assert.equal(detail, zh.review.emptyNoChangesDetail("task"));
+  });
+
+  test("no-changes 的说明句跟着来源走（task 与 git 来源不同）", () => {
+    const list = { kind: "empty", reason: "no-changes", cwd: "/w" } as const;
+    assert.equal(reviewEmptyText(list, zh, "unstaged"), zh.review.emptyNoChangesDetail("unstaged"));
+    assert.notEqual(reviewEmptyText(list, zh, "unstaged"), reviewEmptyText(list, zh, "task"));
+  });
+
+  test("其它空态理由的标题与说明句不同（没有顺手重复的老毛病）", () => {
+    const notRepo = { kind: "empty", reason: "not-repo", cwd: "/w" } as const;
+    const noGit = { kind: "empty", reason: "no-git", cwd: "/w" } as const;
+    assert.notEqual(reviewEmptyTitle(notRepo, zh), reviewEmptyText(notRepo, zh, "unstaged"));
+    assert.notEqual(reviewEmptyTitle(noGit, zh), reviewEmptyText(noGit, zh, "unstaged"));
+  });
+});
+
+describe("reviewDiffNotice", () => {
+  test("拒绝 / 失败不再显示成「二进制」：先说原因，危险色", () => {
+    const refused = reviewDiffNotice(
+      { diff: null, binary: false, restored: false, error: { reason: "outside-workspace", message: "\"../x\" is not a path inside the workspace /w" } },
+      zh,
+    );
+    assert.deepEqual(refused, { kind: "notice", text: zh.review.diffError("outside-workspace"), tone: "danger" });
+    assert.notEqual(refused?.kind === "notice" ? refused.text : "", zh.review.binary);
+    const failed = reviewDiffNotice({ diff: null, binary: false, restored: false, error: { reason: "failed", message: "boom" } }, zh);
+    assert.equal(failed?.kind === "notice" ? failed.tone : undefined, "danger");
+  });
+
+  test("符号链接：说它指向哪、不读目标", () => {
+    const notice = reviewDiffNotice({ diff: null, binary: false, restored: false, symlink: "/outside/secret.txt" }, zh);
+    assert.equal(notice?.kind === "notice" ? notice.tone : undefined, "muted");
+    assert.ok((notice?.kind === "notice" ? notice.text : "").includes("/outside/secret.txt"));
+  });
+
+  test("已还原 / 二进制照旧；有正文 → null（交给 DiffBody）", () => {
+    const restored = reviewDiffNotice({ diff: null, binary: false, restored: true }, zh);
+    assert.equal(restored?.kind === "notice" ? restored.text : "", zh.review.restoredEmpty);
+    const binary = reviewDiffNotice({ diff: null, binary: true, restored: false }, zh);
+    assert.equal(binary?.kind === "notice" ? binary.text : "", zh.review.binary);
+    assert.equal(reviewDiffNotice({ diff: "@@\n+x", binary: false, restored: false }, zh), null);
+  });
+
+  test("改动太大：too-large 形态（正文区换说明 + 两个出口），排在链接 / 二进制之前", () => {
+    const bytes = reviewDiffNotice(
+      { diff: null, binary: false, restored: false, tooLarge: { exceeded: "bytes", message: "over the limit" } },
+      zh,
+    );
+    assert.deepEqual(bytes, { kind: "too-large", exceeded: "bytes" });
+    const lines = reviewDiffNotice(
+      { diff: null, binary: false, restored: false, tooLarge: { exceeded: "lines", message: "over the limit" } },
+      zh,
+    );
+    assert.deepEqual(lines, { kind: "too-large", exceeded: "lines" });
+    // 中文 / 英文文案都带上限数字，用户能对上「为什么拦」
+    assert.ok(zh.review.tooLarge("lines").includes(String(REVIEW_DIFF_MAX_LINES)));
+    assert.ok(zh.review.tooLarge("bytes").includes("1 MB"));
   });
 });

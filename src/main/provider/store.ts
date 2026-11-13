@@ -12,8 +12,10 @@ import { isNotFound } from "../fs-errors.ts";
 import { KNOWN_PROVIDERS, knownProviderOf } from "../../shared/known-providers.ts";
 import { refreshOauthCredential } from "./oauth-flows.ts";
 import {
+  isProviderEnabled,
   maskSecret,
   normalizeBaseUrl,
+  providerDisabledText,
   validateProvider,
   type OauthCredential,
   type Provider,
@@ -49,6 +51,25 @@ export class ProviderValidationError extends Error {
     this.name = "ProviderValidationError";
     this.issues = issues;
   }
+}
+
+/**
+ * 关着的服务商被拿来开轮 / 换模型时抛。**不替用户换模型**（渠道不归我们选）：
+ * 由 agent IPC 按界面语言转成一句能行动的话（providerDisabledText）交给界面。
+ */
+export class ProviderDisabledError extends Error {
+  readonly displayName: string;
+
+  constructor(displayName: string) {
+    super(providerDisabledText(displayName, "zh"));
+    this.name = "ProviderDisabledError";
+    this.displayName = displayName;
+  }
+}
+
+/** 开轮 / 换模型前的统一拦截：关着的服务商一律拒，开着的放行。 */
+export function assertProviderEnabled(provider: Pick<ProviderDto, "displayName" | "disabled">): void {
+  if (!isProviderEnabled(provider)) throw new ProviderDisabledError(provider.displayName);
 }
 
 /** providers.json 的落盘形状。version 供将来迁移判定用。 */
@@ -127,6 +148,8 @@ export class ProviderStore {
       },
       models: { declared: draft.models.declared },
       auth: { scheme: "none" },
+      // 停用开关只由 setDisabled 改写：编辑表单 / 登录重连 / 只改模型的写回都不该悄悄把关着的服务商打开
+      ...(existing?.disabled === true ? { disabled: true } : {}),
     };
 
     if (draft.auth.scheme === "api_key") {
@@ -180,6 +203,21 @@ export class ProviderStore {
   }
 
   /**
+   * 开 / 关一家服务商。**只翻 disabled**：配置、密钥、模型列表一字不动，再打开一切照旧。
+   * id 不存在返回 null；状态没变不写盘。关着时去掉字段而不是写 false（旧数据形状不变）。
+   */
+  async setDisabled(id: ProviderId, disabled: boolean): Promise<ProviderDto | null> {
+    const providers = await this.load();
+    const target = providers.find((p) => p.id === id);
+    if (target === undefined) return null;
+    if ((target.disabled === true) === disabled) return this.toDto(target);
+    const { disabled: _previous, ...rest } = target;
+    const next: Provider = disabled ? { ...rest, disabled: true } : rest;
+    await this.persist(providers.map((p) => (p.id === id ? next : p)));
+    return this.toDto(next);
+  }
+
+  /**
    * 按给定 id 顺序重排（拖拽排序的落盘）。sort 稳定，所以清单里漏掉的 id 保序垫底、
    * 多余的 id 忽略——renderer 传旧快照也不会丢数据。顺序没变就不写盘。
    */
@@ -198,6 +236,24 @@ export class ProviderStore {
     const provider = (await this.load()).find((p) => p.id === id);
     if (!provider || provider.auth.scheme !== "api_key") return null;
     return this.secrets.get(provider.auth.secretRef.account);
+  }
+
+  /**
+   * env 档的密钥：按 envKeys 顺序取第一个非空的环境变量，都没有就 null。
+   * 只给主进程里真要发请求的两处用（会话装配、测试连接），**不并进 resolveApiKey**——
+   * 后者还接着「显示明文密钥」那条 IPC（providerReveal），并进去就会把用户的环境变量
+   * 明文送进 renderer。envKeys 只来自已落盘的配置：upsert 不收 renderer 传来的变量名，
+   * renderer 没法指定主进程去读哪个环境变量。
+   * 与模型菜单的判定对齐：hasCredentials 只在 envKeys 非空时把 env 档算作已配置。
+   */
+  async resolveEnvKey(id: ProviderId): Promise<string | null> {
+    const provider = (await this.load()).find((p) => p.id === id);
+    if (!provider || provider.auth.scheme !== "env") return null;
+    for (const key of provider.auth.envKeys) {
+      const value = process.env[key];
+      if (value !== undefined && value !== "") return value;
+    }
+    return null;
   }
 
   /** 登录成功后落盘 OAuth 凭据（JSON 整体加密进密钥库）。 */

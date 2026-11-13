@@ -12,6 +12,7 @@ import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { formatTokens } from "../../utils/format-tokens.ts";
 import { messageSpeed } from "../../../../shared/message-speed.ts";
 import type { Messages } from "../../messages-en.ts";
+import { shownAmount } from "../../utils/money.ts";
 
 /** 用量环的一帧：`fill` 是 0–1 的弧长，null = 只画底环 */
 export interface ContextRing {
@@ -125,7 +126,7 @@ export function usageBreakdown(
     });
   }
   if (billing !== "plan" && stats.cost > 0) {
-    rows.push({ label: t.stats.cost, value: `$${stats.cost.toFixed(4)}` });
+    rows.push({ label: t.stats.cost, value: `${t.currency.symbol}${shownAmount(stats.cost, t.currency).toFixed(4)}` });
   }
   return rows;
 }

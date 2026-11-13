@@ -1,0 +1,1 @@
+{ "date": "11/05", "title": "UrbanGPT: Spatio-Temporal Large Language Models", "venue": "KDD 2024", "why": "同样把时空编码对齐进 LLM，但它只做交通，没碰犯罪数据。" }

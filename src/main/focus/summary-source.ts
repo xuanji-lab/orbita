@@ -11,9 +11,13 @@ import type { SessionMeta, SessionRecord } from "../../shared/session.ts";
 
 /** 一次小结最多读多少条会话：最近的在前，再早的截掉（提示词装不下，也不该装） */
 export const SUMMARY_MAX_SESSIONS = 12;
-/** 每条会话最多保留多少行流水：一条长会话不该吃掉整份提示词 */
+/** 每条会话最多保留多少行流水（留最近的）：一条长会话不该吃掉整份提示词 */
 export const SUMMARY_MAX_LINES = 60;
-/** 单行截断：用户话 200 / 助手话 300 / 工具入参 120 字 */
+/** 单行截断上限（字数）：用户话 / 助手话 / 工具入参 / 摘抄各自的档 */
+export const CLIP_USER = 200;
+export const CLIP_ASSISTANT = 300;
+export const CLIP_TOOL_INPUT = 120;
+export const CLIP_EXCERPT = 120;
 
 function clip(text: string, max: number): string {
   const single = text.replace(/\s+/g, " ").trim();
@@ -69,7 +73,7 @@ export function extractSessionLines(
   for (const record of records) {
     if (record.role === "user") {
       if (!inWindow(record.timestamp, startedAt, until)) continue;
-      const text = clip(textOf(record.content), 200);
+      const text = clip(textOf(record.content), CLIP_USER);
       if (text !== "") lines.push(`用户：${text}`);
       continue;
     }
@@ -77,10 +81,10 @@ export function extractSessionLines(
       if (!inWindow(record.timestamp, startedAt, until)) continue;
       for (const block of record.content) {
         if (block.type === "text") {
-          const text = clip(block.text, 300);
+          const text = clip(block.text, CLIP_ASSISTANT);
           if (text !== "") lines.push(`助手：${text}`);
         } else if (block.type === "toolCall") {
-          const input = clip(JSON.stringify(block.input), 120);
+          const input = clip(JSON.stringify(block.input), CLIP_TOOL_INPUT);
           lines.push(`调用工具 ${block.toolName}${input === "" ? "" : `：${input}`}`);
         }
       }
@@ -95,7 +99,8 @@ export function extractSessionLines(
       }
     }
   }
-  return lines.slice(0, SUMMARY_MAX_LINES);
+  // 留最近的行：长会话里最新的进展才是小结要总结的，最早的开场白不是
+  return lines.slice(-SUMMARY_MAX_LINES);
 }
 
 /** 素材里的一条会话 */
@@ -144,7 +149,7 @@ export function buildSummaryMaterial(
     // 摘抄不在会话记录里（独立存储），在这里拼回去——用户点名素材要含摘抄
     for (const excerpt of opts.excerpts ?? []) {
       if (excerpt.sessionId !== meta.id || !inWindow(excerpt.createdAt, opts.startedAt, opts.until)) continue;
-      lines.push(`摘抄：${clip(excerpt.text, 120)}`);
+      lines.push(`摘抄：${clip(excerpt.text, CLIP_EXCERPT)}`);
     }
     if (lines.length === 0) continue;
     sessions.push({
@@ -170,6 +175,7 @@ function clockOf(at: number): string {
 /**
  * 素材 → 给模型的正文。段落：时段与工作区头、各会话流水、工作区改动清单。
  * 改动行带 U / M 与行数（模型点名用），路径取仓库相对路径的尾两段更容易对上号。
+ * 超大未跟踪文件的行数未知（lineCountUnknown）——如实写「行数未知」，不拿 +0 冒充。
  */
 export function buildSummaryPrompt(material: SummaryMaterial, startedAt: number, until: number): string {
   const minutes = Math.max(1, Math.round((until - startedAt) / 60_000));
@@ -189,11 +195,15 @@ export function buildSummaryPrompt(material: SummaryMaterial, startedAt: number,
       ? ["== 工作区改动 ==", "这段时间工作区没有未提交的改动。", ""]
       : [
           "== 工作区改动（尚未提交；U = 新文件，M = 修改）==",
+          // 快照是「此刻的 worktree」，不含时间范围——专注开始前就有的改动也会列在这里
+          "（这是此刻工作区全部未提交改动，可能含专注开始前就有的。）",
           ...material.changeEntries.slice(0, 24).map((entry) => {
             const tail = entry.path.split("/").slice(-2).join("/");
             const stat = entry.binary
               ? "（二进制）"
-              : `（+${entry.added}${entry.removed > 0 ? ` \u2212${entry.removed}` : ""}）`;
+              : entry.lineCountUnknown === true
+                ? "（行数未知）"
+                : `（+${entry.added}${entry.removed > 0 ? ` \u2212${entry.removed}` : ""}）`;
             return `${entry.kind} ${tail}${stat}`;
           }),
           ...(material.changeEntries.length > 24

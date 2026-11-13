@@ -2,7 +2,10 @@
   /* families */
   --font-family-base: "Manrope", "Source Han Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
   --font-family-brand: "Literata", "Source Han Serif SC", Georgia, "Songti SC", serif;
-  --font-family-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  /* 拉丁等宽在前；CJK 回退紧跟其后、泛 monospace 殿后：Consolas / Menlo 没有汉字，
+     Windows 上汉字原先落到泛 monospace = 宋体（衬线，与黑体混排突兀）；
+     现在 macOS 走苹方（与系统自动回退同一款，显示不变）、Windows 走微软雅黑，Linux 走 Noto CJK */
+  --font-family-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", monospace;
   /* numerals, ids, durations, paths — same family as mono, separate job */
   --font-family-business: var(--font-family-mono);
 
@@ -51,12 +54,6 @@
   /* 成段阅读微微放开字距，中文不挤（照 ZCode 的 tracking-wide） */
   --tracking-reading: 0.025em;
   --tracking-model: 0.01em;
-
-  /* semantic aliases */
-  --text-slogan-family: var(--font-family-brand);
-  --text-wordmark-family: var(--font-family-brand);
-  --text-body-family: var(--font-family-base);
-  --text-code-family: var(--font-family-mono);
 }
 
 /* 纸面两档换字：小学作业是手写的纸面，正文用衬线（Literata + 思源宋体）；打字稿是打字机，
@@ -65,7 +62,8 @@
    以中文为主的消息整段换 --font-family-reading-cjk（中英同源的衬线）：等宽的数字、英文夹在
    比例宽的中文里，两套字节奏打架（wafo 2026-09-25：「读起来不舒服」）。 */
 :root[data-theme="copybook"] {
-  --font-family-base: "Literata", "Source Han Serif SC", Georgia, "Songti SC", serif;
+  /* "Orbita Serif CJK" 在前：中文半粗走真粗宋体，找不到时落回下一族 Source Han Serif SC（fonts.css） */
+  --font-family-base: "Literata", "Orbita Serif CJK", "Source Han Serif SC", Georgia, "Songti SC", serif;
 }
 
 :root[data-theme="typescript"] {
@@ -74,4 +72,10 @@
   --font-family-reading-cjk: "Literata", "Source Han Serif SC", Georgia, "Songti SC", serif;
   /* Special Elite 字面宽，九个字的 slogan 放 36px 会挤出窄槽 */
   --font-size-slogan: 30px;
+}
+
+/* 方向 N（2026-11-07）：slogan 左对齐、不再居中称王，降一档到 28px（它之下还有输入框与记录要读）。
+   纸面两档各有自己的字号（田字格 / Special Elite 30px），不跟。 */
+:root:not([data-theme="copybook"], [data-theme="typescript"]) {
+  --font-size-slogan: 28px;
 }

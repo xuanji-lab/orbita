@@ -10,7 +10,12 @@ import {
   type OauthDeviceCode,
   type OauthLoginInput,
 } from "../../shared/agent-ipc.ts";
-import type { ProviderDto, ProviderUpsertInput, ValidationIssue } from "../../shared/provider.ts";
+import type {
+  ProviderDto,
+  ProviderSetDisabledInput,
+  ProviderUpsertInput,
+  ValidationIssue,
+} from "../../shared/provider.ts";
 import type { QuotaQuery, QuotaResult } from "../../shared/quota.ts";
 
 export type UpsertResult =
@@ -26,6 +31,9 @@ export const providerApi = {
   upsert: (input: ProviderUpsertInput): Promise<UpsertResult> =>
     ipcRenderer.invoke(ipcChannels.providerUpsert, input),
   remove: (id: string): Promise<void> => ipcRenderer.invoke(ipcChannels.providerRemove, id),
+  /** 开 / 关一家服务商：配置与密钥不动，只是哪里都不用它。返回改完的 DTO，id 不存在为 null */
+  setDisabled: (input: ProviderSetDisabledInput): Promise<ProviderDto | null> =>
+    ipcRenderer.invoke(ipcChannels.providerSetDisabled, input),
   /** 拖拽排序落盘：载荷是全量 id 的新顺序 */
   reorder: (ids: string[]): Promise<void> => ipcRenderer.invoke(ipcChannels.providerReorder, ids),
   /** 从供应商获取模型（仅 OpenAI 兼容的 /models；内建 provider 的清单来自 pi 目录，不走网络） */

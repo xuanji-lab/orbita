@@ -9,7 +9,7 @@
  * 在此之前它是三份逐字相同的代码。
  */
 import { randomBytes } from "node:crypto";
-import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 /**
@@ -31,8 +31,12 @@ export async function writeJsonAtomic(filePath: string, value: unknown): Promise
   await writeTextAtomic(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-export async function writeTextAtomic(filePath: string, text: string): Promise<void> {
-  await writeAtomic(filePath, text);
+/**
+ * `mode`：覆盖已有文件时传它的权限位——rename 换掉的是整个 inode，不带它新文件会按 umask 落成 644，
+ * 原来 600 / 755 的权限就悄悄丢了。临时文件上先 chmod 再 rename，没有「新文件短暂是 644」的窗口。
+ */
+export async function writeTextAtomic(filePath: string, text: string, options?: { mode?: number }): Promise<void> {
+  await writeAtomic(filePath, text, options?.mode);
 }
 
 /** 二进制版（附图原图）：同一套临时文件 + rename——半张图比没有图更难排查 */
@@ -40,13 +44,14 @@ export async function writeBytesAtomic(filePath: string, bytes: Uint8Array): Pro
   await writeAtomic(filePath, bytes);
 }
 
-async function writeAtomic(filePath: string, data: string | Uint8Array): Promise<void> {
+async function writeAtomic(filePath: string, data: string | Uint8Array, mode?: number): Promise<void> {
   await mkdir(dirname(filePath), { recursive: true });
   for (let attempt = 0; ; attempt += 1) {
     // 随机后缀：同一目标被并发写时两个临时文件不会互相踩
     const tempPath = `${filePath}.${randomBytes(4).toString("hex")}.tmp`;
     try {
       await (typeof data === "string" ? writeFile(tempPath, data, "utf8") : writeFile(tempPath, data));
+      if (mode !== undefined) await chmod(tempPath, mode);
       await rename(tempPath, filePath);
       return;
     } catch (error) {

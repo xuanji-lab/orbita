@@ -1,7 +1,7 @@
 /**
  * 右栏 Sub-sessions 面板（子会话 PR4c；2026-10-12 起列表层是**收件箱**）：主槽
  * 正看着一条有子会话的根会话时，这里是它们的唯一面板位——列表层（每个子会话
- * 一行：三节竖条 + 名字 + 最新一句 + 相对时间；「在问你」的行展开回答框）与
+ * 一行：状态饼 + 名字 + 最新一句 + 相对时间；「在问你」的行展开回答框）与
  * 会话层（挑中的那条，只读查看 + 审批，不给输入框）。两层状态机在
  * `sub-sessions-state.ts`（纯函数，App 持有，本组件受控渲染）；排序 / 状态 /
  * 最新一句的推导在 `sub-sessions-rows.ts`。
@@ -19,10 +19,13 @@ import { childSessions, type SessionMeta } from "@shared/session";
 import type { ModelPair } from "@shared/settings";
 import { PERMISSION_MODES } from "@shared/permission";
 import { Icon, type IconName } from "../../shell/Icon";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
+import { StatusPie } from "../../shell/StatusPie";
 import { isSubmitKey } from "../../shell/composer-keys.ts";
 import { composerBoxHeight } from "../../shell/composer-height.ts";
 import { relativeTime } from "../../shell/relative-time.ts";
 import { PanelIconButton, PanelLine, PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
+import { PanelEmpty } from "../../shell/PanelEmpty";
 import { ToolbarPanelSlotContext } from "../../shell/Toolbar";
 import { Chip } from "../../shell/Chip";
 import { Menu, type MenuItem } from "../../shell/Menu";
@@ -161,16 +164,14 @@ export function SubSessionsPanel(props: {
         {child === undefined && (
           // 极少见：子会话在面板开着时被删了。ChatView 会走它自己的「这条会话不存在」
           // 降级，这里只补一行说明面板为什么显示得空落落的
-          <div style={{ padding: "var(--space-3)" }}>
-            <PanelLine>{t.subSessions.gone}</PanelLine>
-          </div>
+          <PanelEmpty icon={FEATURE_ICON.subsessions}>{t.subSessions.gone}</PanelEmpty>
         )}
       </div>
     );
   }
 
   // 列表层 = 收件箱（2026-10-12 用户裁决）：每个子会话一行——等你（question / 审批）
-  // 最前，其次 failed、done、running，同组新的在前（sub-sessions-rows.ts）。
+  // 最前，其次 running、failed、done（2026-11-06 起在跑的提前），同组新的在前（sub-sessions-rows.ts）。
   // 最新一句来自通道账本（useParentChannels，上面已拉）。
   const rows = sortSubSessionRows(
     children.map((meta) => {
@@ -187,7 +188,7 @@ export function SubSessionsPanel(props: {
     <RightPanelFrame
       header={
         <>
-          <PanelTitle icon="git-fork" title={t.rail.subSessions(children.length)} tip={t.subSessions.of(props.parentTitle)} />
+          <PanelTitle icon={FEATURE_ICON.subsessions} title={t.rail.subSessions(children.length)} tip={t.subSessions.of(props.parentTitle)} />
           {waitingCount > 0 && (
             <span className="inbox-waiting-count" style={{ color: "var(--color-warning)" }}>
               {t.subSessions.waitingCount(waitingCount)}
@@ -198,9 +199,7 @@ export function SubSessionsPanel(props: {
       contentKey="list"
     >
       {rows.length === 0 ? (
-        <div style={{ padding: "var(--space-3)" }}>
-          <PanelLine>{t.subSessions.none}</PanelLine>
-        </div>
+        <PanelEmpty icon={FEATURE_ICON.subsessions}>{t.subSessions.none}</PanelEmpty>
       ) : (
         <div className="inbox-rows">
           {rows.map((row) => (
@@ -222,7 +221,7 @@ export function SubSessionsPanel(props: {
 }
 
 /**
- * 收件箱的一行（2026-10-12）：行首三节竖条（与侧栏 / 铃铛清单同一根 `.status-bar`，
+ * 收件箱的一行（2026-10-12）：行首状态饼（与侧栏 / 铃铛清单同一个 `StatusPie`，
  * `subSessionBarFill` 定亮几节）+ 名字 + 最新一句 + 相对时间（行尾，钉在行的右内
  * 边距上）。**只有「在问你」的行展开回答框**（ChannelReplyBox）——其余行单行收着，
  * 点击进会话层看完整往来。行按钮与回答框是兄弟（button 不能嵌 button），整行 hover
@@ -244,11 +243,7 @@ function SubSessionRow(props: {
     <div className={`inbox-row${props.asking ? " asking" : ""}`}>
       <button type="button" className="inbox-row-main" onClick={props.onClick}>
         {bar !== undefined && (
-          <span className="status-bar inbox-row-bar" data-fill={bar} title={t.subSessions.rowStatus[status]}>
-            <i />
-            <i />
-            <i />
-          </span>
+          <StatusPie state={bar} title={t.subSessions.rowStatus[status]} className="inbox-row-pie" />
         )}
         <span className="inbox-row-item">
           <span className="inbox-row-l1">

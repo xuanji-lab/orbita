@@ -40,10 +40,25 @@ export const PROGRESS_NARRATION_GUIDELINE =
  * 回复语言（2026-10-12 用户裁决：正文跟随用户当前使用的语言）。单独成段、由 runtime
  * 拼在系统提示词**最末**：离对话最近的指令权重最高；放在进度说明段里时，前面整篇
  * 提示词与工作区 AGENTS.md 的中文会把模型往中文带（实测英文提问仍回中文）。
+ *
+ * 2026-11-05：判据从「最新一条消息的语言」改成「用户自己写的字」。用户手打半句中文、
+ * 正文在附件里时，消息整体被 Orbita 自动加的英文包装（点名 skill 的说明、附件清单说明）
+ * 压倒，模型判成英文、整轮英文回。包装块的列表要与实际组装处保持一致（测试锚定）：
+ * invocation.ts / prompt-attachments.ts / user-context.ts / memory-inject.ts / task-ref.ts / channel.ts / quote.ts。
  */
 export const REPLY_LANGUAGE_GUIDELINE =
-  "Reply language: write all user-visible text, progress notes and final answers alike, in the language of the user's latest message, " +
-  "even if these instructions, project files or earlier messages are in another language. Switch only if the user asks you to.";
+  "Reply language: write all user-visible text, progress notes and final answers alike, in the language the user themselves writes in, " +
+  "even if these instructions, project files or earlier messages are in another language. Switch only if the user asks you to.\n" +
+  "What counts as the user's own writing: the words they typed in their latest message, plus the prose of text they attached or pasted " +
+  "(a <pasted-text> block, or a text file listed in <attached-files> once you have read it). " +
+  "When the typed words are short or mixed-language and point at an attachment, follow the language of that attachment's prose.\n" +
+  "What does not count: blocks that Orbita adds around the message on its own — <mentioned_tools>, <attached-files> (the listing and its " +
+  "instruction line, not the files' contents), <user_context>, <orbita-memory>, <referenced_task>, and <channel> envelopes — and the " +
+  "excerpts inside <quoted_context> (they quote earlier turns, possibly the assistant's own). These are mostly English boilerplate; " +
+  "never let their language, or how much of the message they take up, decide the reply language.\n" +
+  "When the latest message has no words the user typed (a turn opened by a <channel> report from a sub-session, an automation " +
+  "wake-up, or anything else Orbita sends on its own), keep the language of the user's most recent message that they did type; " +
+  "a sub-session's report or your own task text being in another language does not change it.";
 
 /**
  * 改写主循环的系统提示词：替换 concise 行 + 追加进度说明段。

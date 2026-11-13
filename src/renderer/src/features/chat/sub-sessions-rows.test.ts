@@ -109,7 +109,7 @@ describe("sortSubSessionRows", () => {
     lastAt,
   });
 
-  it("收件箱次序：等你（question/approval）最前，其次 failed，其次 done，其次 running，stopped/idle 收尾", () => {
+  it("收件箱次序：等你（question/approval）最前，其次 running，其次 failed，其次 done，stopped/idle 收尾", () => {
     const rows = [
       row("idle-1", "idle"),
       row("running-1", "running"),
@@ -122,7 +122,7 @@ describe("sortSubSessionRows", () => {
     ];
     deepStrictEqual(
       sortSubSessionRows(rows).map((r) => r.id),
-      ["waiting-1", "approval-1", "failed-1", "done-1", "running-1", "running-2", "idle-1", "stopped-1"],
+      ["waiting-1", "approval-1", "running-1", "running-2", "failed-1", "done-1", "idle-1", "stopped-1"],
     );
   });
 
@@ -155,7 +155,7 @@ describe("sortSubSessionRows", () => {
   });
 });
 
-describe("subSessionBarFill（行首三节竖条亮几节）", () => {
+describe("subSessionBarFill（行首状态饼亮几节）", () => {
   it("running = 1/3 蓝（running）；waiting 与 approval 同为 2/3 橙（waiting）", () => {
     strictEqual(subSessionBarFill("running"), "running");
     strictEqual(subSessionBarFill("waiting"), "waiting");
@@ -167,7 +167,7 @@ describe("subSessionBarFill（行首三节竖条亮几节）", () => {
     strictEqual(subSessionBarFill("failed"), "failed");
   });
 
-  it("stopped / idle 不亮（undefined = 不渲染竖条）", () => {
+  it("stopped / idle 不亮（undefined = 不渲染状态饼）", () => {
     strictEqual(subSessionBarFill("stopped"), undefined);
     strictEqual(subSessionBarFill("idle"), undefined);
   });

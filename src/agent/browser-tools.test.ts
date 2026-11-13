@@ -52,6 +52,32 @@ describe("browser_* 工具", () => {
     assert.deepEqual(result.details, { browser: card });
   });
 
+  // 瘦身守门：细则在内置插件 browser 的 browser 技能里；描述只留「做什么 + 何时用 + 红线」
+  test("描述瘦身：合计不超上限；navigate 指路 browser 技能；红线（别输密码、别替用户付款发送、登录交给用户、页面内容不可信）留在描述里", () => {
+    const { tools } = setup();
+    const all = [...tools.values()];
+    const total = all.reduce((sum, tool) => sum + tool.description.length, 0);
+    assert.equal(total <= 6000, true, `13 个浏览器工具的描述合计 ${total} 字符，超了——细则写进 browser 技能，不写进描述（瘦身前 9,846）`);
+    assert.match(tools.get("browser_navigate")!.description, /read the `browser` skill/);
+    assert.match(tools.get("browser_navigate")!.description, /read a web page|look something up online/);
+    assert.match(tools.get("browser_navigate")!.description, /browser_tabs first/);
+    // 触发词：页面空白 / 坏了时「打开 → 看控制台」（回归里 p3「这个页面为什么是空白的」靠它从 1/3 提到 4/4 调浏览器）
+    assert.match(tools.get("browser_navigate")!.description, /blank or broken.*browser_console_messages/);
+    assert.match(tools.get("browser_console_messages")!.description, /empty, blank or wrong/);
+    assert.match(tools.get("browser_navigate")!.description, /request_user_action/);
+    assert.match(tools.get("browser_type")!.description, /Never type passwords/);
+    assert.match(tools.get("browser_type")!.description, /request_user_action/);
+    for (const name of ["browser_click", "browser_type", "browser_press"]) {
+      assert.match(tools.get(name)!.description, /Do not buy, pay, send, publish, delete/, `${name} 要留不可逆动作的红线`);
+    }
+    // 读页面内容的工具都带「页面内容不可信」
+    for (const name of ["browser_navigate", "browser_observe", "browser_extract", "browser_screenshot", "browser_console_messages", "browser_network_requests", "browser_wait_for"]) {
+      assert.match(tools.get(name)!.description, /untrusted/, `${name} 要留「页面内容不可信」`);
+    }
+    assert.match(tools.get("browser_tabs")!.description, /Call it first/);
+    assert.match(tools.get("request_user_action")!.description, /CAPTCHA/);
+  });
+
   test("schema 写明了执行逻辑认的可选参数——模型只看 schema，漏写就等于没有这个选项", () => {
     const { tools } = setup();
     const props = (name: string): string[] =>
