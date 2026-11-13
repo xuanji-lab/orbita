@@ -139,7 +139,7 @@ test(
       const infoPath = path.join(outDir, "bridge.json");
       assert.ok(await waitForFile(infoPath), `桥应在超时前写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      assert.equal(info.version, "0.12.0");
+      assert.equal(info.version, "0.13.0");
       assert.ok(Number.isInteger(info.pid) && info.pid > 0, "bridge.json 应带 pid");
       // 0.8.0 起通告 TCP 通道（宿主优先走它）：端口由系统分配、令牌 32 位十六进制
       assert.ok(Number.isInteger(info.port) && info.port > 0, "bridge.json 应带 TCP 端口");
@@ -881,6 +881,28 @@ test("win-list / win-shot 进命令清单，黑帧自检与最小化恢复不是
   // 拍不到时给模型一句能照着换路的人话，且不许把黑图当成功回
   assert.match(shot, /computer_screenshot/);
   assert.match(shot, /这个窗口拍不到/);
+});
+
+// ── 关机请求（shutdown 命令 + shutdown.request，0.13.0）──────────────────────────
+//
+// **这条只做源码级断言，绝不真执行**：一下 shutdown 关的就是跑测试的这台机器。
+// 它要守住的语义有三件：
+//   ① 命令流里认 `shutdown`（宿主 stop 的主路径）；
+//   ② 桥启动时读 out\shutdown.request（「刚起就关」时命令通道还没通，只有文件带得进来）；
+//   ③ 读完删文件 + 只认 10 分钟内的热请求——out 目录跨沙箱复用，旧文件不能关掉新沙箱。
+test("关机请求：命令分派 + 启动时读 shutdown.request + 读完删除且有 10 分钟新鲜度闸（源码级，不执行）", () => {
+  const src = fs.readFileSync(path.join(scriptDir, "Program.cs"), "utf8");
+  assert.match(src, /command == "shutdown"/, "Execute 里必须分派 shutdown");
+  assert.match(src, /ConsumeShutdownRequest\(\)\) return 0;/, "启动时（进命令循环之前）必须先兑现关机请求");
+  assert.match(src, /ShutdownRequestFile = "shutdown\.request"/, "文件名要与宿主 COMPUTER_USE_SHUTDOWN_REQUEST_FILE 一致");
+  assert.match(src, /File\.Delete\(path\)/, "读完要删：out 目录跨沙箱复用，留着会把下一次也关掉");
+  assert.match(src, /FromMinutes\(10\)/, "只认 10 分钟内的请求（旧文件不关新沙箱）");
+  assert.match(src, /shutdown\.exe", "\/s \/t 0 \/f"/, "/s /t 0 /f：不等，VM 停掉后窗口自然消失");
+  // 启动时的兑现必须在写 bridge.json 之前（否则宿主会看见一个马上要死的桥）
+  assert.ok(
+    src.indexOf("ConsumeShutdownRequest()) return 0;") < src.indexOf("WriteBridgeJson();"),
+    "兑现在通告之前：宿主不需要看见一个立刻要关的沙箱",
+  );
 });
 
 // ── UIA 车道（uia-list / uia-act，0.10.0）────────────────────────────────────────

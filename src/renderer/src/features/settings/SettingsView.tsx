@@ -1802,6 +1802,12 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
       用户中途「关闭」取消启动时主进程回「启动已取消」——如实显示，它解释了为什么
       沙箱回到了未启动；下一次动作即清掉。 */
   const errorLine = actionError ?? (status.state === "error" ? status.message : null);
+  /**
+   * 关闭中的常驻说明（2026-11-13）：收尾不是瞬时的（guest 自己关机 + VM 退，真机 19 秒起步；
+   * 刚起就关还要等沙箱登入），以前这段时间什么字也没有，用户以为是卡住了、反复点。
+   * 它不是错误，所以走 note 的普通样式，而不是 set-row-error。
+   */
+  const stoppingNote = status.state === "stopping" ? t.computerUse.stoppingNote : null;
 
   const run = (action: "start" | "stop") => {
     setPending(action);
@@ -1826,6 +1832,10 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
             errorLine !== null ? (
               <span role="alert" className="set-row-error">
                 {errorLine}
+              </span>
+            ) : stoppingNote !== null ? (
+              <span role="status" className="set-row-note">
+                {stoppingNote}
               </span>
             ) : undefined
           }

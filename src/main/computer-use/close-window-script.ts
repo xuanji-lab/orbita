@@ -50,8 +50,15 @@
  */
 
 /**
- * 关窗脚本：关窗 → 每 400ms 找一次确认框的 OK 按钮（最多 15 轮）→ Invoke →
+ * 关窗脚本：关窗 → 每 200ms 找一次确认框的 OK 按钮（最多 30 轮）→ Invoke →
  * （全轮落空才）兜底「激活 + 前台 PID 校验 + Enter」。
+ *
+ * ⚠ **2026-11-13 起它不是关沙箱的首选路径**（首选是让 guest 自己关机，见 sandbox.ts 的
+ * stopOrphans）。留着它是因为「桥没起来 / 老桥不认 shutdown」时没有别的优雅路可走。
+ * 真机三次诊断（就绪 / 放 30 秒 / 刚起就关）实测的耗时结构：
+ *   PowerShell 启动 2.9–7.0s → Add-Type 9.4–18.8s → CloseMainWindow 4ms → UIA INVOKED:1 → 等进程退 1–2s；
+ *   脚本总计 19–33s。**大头全是固定开销**，所以这段的结论不是「再调大超时」，
+ *   而是「别把它放在主路径上」，以及把 Add-Type 推到只有键盘兜底才需要的地方。
  */
 export function buildCloseSandboxWindowScript(pid: number): string {
   if (!Number.isInteger(pid) || pid <= 0) {
@@ -59,16 +66,9 @@ export function buildCloseSandboxWindowScript(pid: number): string {
   }
   return [
     "$ErrorActionPreference = 'Stop'",
-    "Add-Type -AssemblyName System.Windows.Forms",
-    "$signature = @'",
-    "using System;",
-    "using System.Runtime.InteropServices;",
-    "public static class OrbitaForeground {",
-    "  [DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow();",
-    "  [DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);",
-    "}",
-    "'@",
-    "Add-Type -TypeDefinition $signature",
+    // ⚠ 这里**不加载 WinForms、也不编 C# 类型**：2026-11-13 真机诊断，`Add-Type -AssemblyName
+    // System.Windows.Forms` 单这一步就 9.4–18.8 秒（三次诊断：9.35 / 16.4 / 18.75 秒），
+    // 而真正关窗的两步合起来只要 ~8 毫秒。它们只服务键盘兜底，所以推迟到那一支再加载。
     "function Orbita-Alive { param([int]$Id) return ($null -ne (Get-Process -Id $Id -ErrorAction SilentlyContinue)) }",
     `$target = ${pid}`,
     "if (-not (Orbita-Alive $target)) { exit 0 }",
@@ -133,6 +133,18 @@ export function buildCloseSandboxWindowScript(pid: number): string {
     "  }",
     "  exit 3",
     "}",
+    // 键盘兜底才需要 WinForms（SendKeys）与那个 P/Invoke 类型：到这一步才付 9–19 秒的加载成本，
+    // 主路径（CloseMainWindow + UIA Invoke）一秒都不等它。
+    "Add-Type -AssemblyName System.Windows.Forms",
+    "$signature = @'",
+    "using System;",
+    "using System.Runtime.InteropServices;",
+    "public static class OrbitaForeground {",
+    "  [DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow();",
+    "  [DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);",
+    "}",
+    "'@",
+    "Add-Type -TypeDefinition $signature",
     "$shell = New-Object -ComObject WScript.Shell",
     "$null = $shell.AppActivate($target)",
     "Start-Sleep -Milliseconds 500",

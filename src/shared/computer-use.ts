@@ -83,6 +83,14 @@ export const COMPUTER_USE_GUEST_OUT_DIR = "C:\\orbita-out";
 export const BRIDGE_INFO_FILE = "bridge.json";
 /** 命令目录名（out 目录下；宿主写 req、桥写 resp 的地方） */
 export const COMPUTER_USE_CMD_DIR = "cmd";
+/**
+ * 「让 guest 自己关机」的请求文件（out 目录下，桥 0.13.0 认它）。
+ *
+ * 宿主 stop 时先原子写这个文件、再补发 `shutdown` 命令：**「刚起就关」那一刻命令通道
+ * 还没通**（桥还没登入），文件是唯一能把意图带进沙箱的方式——桥登入后第一件事就是读它
+ * 并执行 `shutdown /s /t 0 /f`。桥读完会删掉它；宿主每次 start 也先清一遍（跨局复用 out）。
+ */
+export const COMPUTER_USE_SHUTDOWN_REQUEST_FILE = "shutdown.request";
 
 // ── guest 桥的 TCP 命令通道（桥 0.8.0 起；文件协议降级为启动握手与回退通道）────
 //
@@ -197,6 +205,13 @@ export const computerUseGuestCommands = {
    * 用途只有一个：跑只读映射进来的打包版（`C:\\Users\\WDAGUtilityAccount\\Desktop\\orbita-app\\orbita.exe`）。
    */
   launch: "launch",
+  /**
+   * 让 guest 自己关机（桥 0.13.0）：`{}` → `{ok}`。**关沙箱的首选路径**——宿主在 stop 时
+   * 先落 `out/shutdown.request`（刚起就关时命令通道还没通），再补发这一条；VM 停掉之后
+   * 沙箱窗口与 VM 内存一起消失，不需要点窗口上的 X、更不需要按确认框。
+   * 老桥（< 0.13.0）不认它，回 `{ok:false, error:"未知命令…"}`，宿主据此退回关窗脚本。
+   */
+  shutdown: "shutdown",
   /**
    * 按 pid 杀进程树（`{pid}`）→ `{ok}`。**绝不按镜像名杀**——沙箱里可能同时跑着
    * 用户自己开的同程序进程。pid 已经不存在时也回 ok（幂等，冒烟脚本在 finally 里无脑调）。

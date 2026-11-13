@@ -108,8 +108,12 @@ internal static class Program
     //   涂黑；回执多 maskedRegions / maskListed / maskStale / maskCacheAgeMs / userTyping
     //   五个字段（老宿主不读也不会坏，只多几个键）。uia-list 的每一项多 isPassword、回执多
     //   passwordFields。命令语义与坐标没有任何变化。
+    // 0.13.0 多了**关机请求**（shutdown 命令 + out\shutdown.request 文件）：宿主关沙箱时不再
+    //   去点窗口上的确认框，而是让 guest 自己 shutdown——VM 停了窗口自然消失。为什么：
+    //   真机实测关窗脚本 33 秒里有 18.7 秒花在 Add-Type 加载 WinForms（还没算 PowerShell
+    //   自己 7–29 秒的启动），而 UIA 还会对确认框无限期阻塞；两者叠加必然撞穿任何超时。
     // 宿主不逐字比版本，但 bridge.json 里的版本是排查现场的第一行证据：抬了能力就抬它。
-    private const string Version = "0.12.0";
+    private const string Version = "0.13.0";
     private const string CmdDirName = "cmd";          // out 下的命令目录
     internal const string ReqSuffix = ".req.json";    // 宿主写：命令请求
     internal const string RespSuffix = ".resp.json";  // 桥写：执行结果
@@ -265,6 +269,11 @@ internal static class Program
             Log("创建命令目录失败：" + ex.Message);
             return 1;
         }
+
+        // 关机请求（0.13.0）：宿主在「停止」时先落这个文件，再补一条 shutdown 命令。
+        // **刚起就关**那一刻命令通道还没通（宿主发不出去），只有这个文件能把意图带进来——
+        // 桥登入后第一件事就是把它兑现，VM 自己停，不用等宿主点任何按钮。
+        if (ConsumeShutdownRequest()) return 0;
 
         Log("启动：版本 " + Version + "，命令目录 " + _cmdDir + "，轮询 " + PollIntervalMs + "ms"
             + "，对齐枚举周期：每 " + AlignEveryPolls + " 轮，耗时日志阈值 " + HopLogThresholdMs + "ms");
@@ -942,6 +951,8 @@ internal static class Program
         // 打包产物冒烟（0.5.0）：起 / 停映射进来的 exe，以及只回数字的截图统计
         if (command == "launch") return ExecuteLaunch(raw);
         if (command == "kill") return ExecuteKill(raw);
+        // 关沙箱的首选路径（0.13.0）：guest 自己关机 → VM 停 → 窗口消失。不碰 UI、不需要确认框
+        if (command == "shutdown") return ExecuteShutdown();
         if (command == "screenshot-stats") return ExecuteScreenshotStats(raw);
         // CDP 浏览器通道（PR3）：一条语义命令 = 一次文件往返，内部可以有多条 CDP 消息。
         // 实现在 Cdp.cs；0.6.0 起一个会话一个实例；**0.7.0 起交给该会话自己的 worker 子进程**
@@ -1091,6 +1102,69 @@ internal static class Program
             Log("启动失败：" + ex.Message);
             return "{\"ok\":false,\"error\":" + JsonQuote("启动 " + path + " 失败：" + ex.Message
                 + "——若是缺 VC++ 运行库或 side-by-side 配置错，沙箱里跑不了这份产物，先看宿主能不能双击启动") + "}";
+        }
+    }
+
+    /** 关机请求文件（out 下）：宿主写，桥登入时读一次。老宿主不会写它，缺省就当不存在。 */
+    internal const string ShutdownRequestFile = "shutdown.request";
+
+    /**
+     * 兑现关机请求（只可能发生在启动阶段）：有文件就删掉再关机。
+     * 返回值 = 是否真的要关机了。**必须先删文件**：out 目录跨沙箱复用，留着它会把
+     * 下一次起来的沙箱也立刻关掉。
+     */
+    private static bool ConsumeShutdownRequest()
+    {
+        string path = Path.Combine(_outDir, ShutdownRequestFile);
+        try
+        {
+            if (!File.Exists(path)) return false;
+            // 只认 10 分钟内的请求：out 目录跨沙箱复用，一个很旧的请求不该把新沙箱关掉。
+            // （宿主每次 start 也会先删它，这是第二道闸。）
+            if (DateTime.UtcNow - File.GetLastWriteTimeUtc(path) > TimeSpan.FromMinutes(10)) return false;
+        }
+        catch { return false; }
+        try { File.Delete(path); } catch { }
+        Log("收到关机请求（" + ShutdownRequestFile + "）：guest 开机即关机");
+        return ExecuteShutdownProcess();
+    }
+
+    /**
+     * shutdown：**让 guest 自己关机**（0.13.0）。宿主关沙箱时不再走「点窗口 X + 按确认框」
+     * 那条 30 秒起步、还会被 UIA 无限阻塞的路。VM 停掉之后沙箱窗口自己消失，
+     * 也顺带把 VM 内存（vmmemWindowsSandbox ~3.5GB）一起释放——强杀 RemoteSession 不会。
+     *
+     * /t 0：不等。回执在这之前就落盘了（真机实测 host 收到回执 29ms，VM 全退 ~19s）。
+     */
+    private static string ExecuteShutdown()
+    {
+        try { File.Delete(Path.Combine(_outDir, ShutdownRequestFile)); } catch { }
+        bool ok = ExecuteShutdownProcess();
+        return ok
+            ? "{\"ok\":true}"
+            : "{\"ok\":false,\"error\":\"guest 里的 shutdown.exe 没起来\"}";
+    }
+
+    private static bool ExecuteShutdownProcess()
+    {
+        try
+        {
+            ProcessStartInfo info = new ProcessStartInfo("shutdown.exe", "/s /t 0 /f")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.System),
+            };
+            Process started = Process.Start(info);
+            if (started == null) return false;
+            started.Dispose();
+            Log("guest 关机：shutdown /s /t 0 /f");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log("guest 关机失败：" + ex.Message);
+            return false;
         }
     }
 

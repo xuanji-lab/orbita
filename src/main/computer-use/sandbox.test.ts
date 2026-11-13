@@ -1693,7 +1693,9 @@ describe("graceful close：先关窗，关不掉才强杀", () => {
       stopObserveIntervalMs: 10,
       stopTotalTimeoutMs: 400,
       listSandboxProcesses: () => alive, // 装死：窗口不理会关窗确认，taskkill 也打不动
-      closeSandboxWindow: (pid) => closed.push(pid),
+      closeSandboxWindow: (pid) => {
+        closed.push(pid);
+      },
       killTreeByPid: (pid) => killed.push(pid),
     });
     try {
@@ -1710,6 +1712,188 @@ describe("graceful close：先关窗，关不掉才强杀", () => {
       assert.deepEqual(killed, [4300, 4300], "优雅关闭没生效 → 兜底强杀 + 升级再杀一次");
       assert.ok(harness.logs.some((line) => /退回强杀/.test(line)), harness.logs.join(" | "));
       assert.ok(harness.logs.some((line) => /可能未退出/.test(line)), "最终仍要留痕，不静默");
+    } finally {
+      await harness.close();
+    }
+  });
+});
+
+// ── guest 关机：关沙箱的首选路径（2026-11-13）─────────────────────────────────
+//
+// 为什么加了这一级：真机诊断三次，关窗脚本 19–33 秒里 PowerShell 启动 2.9–7 秒、
+// `Add-Type System.Windows.Forms` 9.4–18.8 秒，而真正的关窗动作只要 8 毫秒；机器忙时
+// PowerShell 启动还要 20–29 秒。于是 45 秒预算必然穿 → 脚本被杀 → 强杀 → 漏 3.4GB 孤儿 VM。
+// guest 自己 shutdown 实测：命令↔回执 29ms、整条链 19.3 秒清空、不弹确认框。
+// 这一组盯三件事：**首选**、**刚起就关走另一套预算**、**失败才轮到关窗**。
+
+describe("guest 关机：首选路径", () => {
+  const startNewArch = async (harness: Harness, onSpawned: () => void): Promise<void> => {
+    const startPromise = harness.controller.start();
+    await waitFor(() => harness.spawned[0] ?? null);
+    onSpawned();
+    requireProc(harness).emitExit(0);
+    harness.announceBridge();
+    assert.deepEqual(await startPromise, { ok: true });
+  };
+
+  test("① 桥在跑：先让 guest 自己关机，进程清零后不关窗、不强杀", async () => {
+    const requested: string[] = [];
+    const closed: number[] = [];
+    const killed: number[] = [];
+    let alive: SandboxProcessInfo[] = [];
+    const harness = await makeHarness({
+      stopObserveIntervalMs: 10,
+      stopSettleMs: 30,
+      listSandboxProcesses: () => alive,
+      requestGuestShutdown: async (outDir) => {
+        requested.push(outDir);
+        // 真机语义：shutdown 之后整条链自己退（实测 19.3 秒；这里立刻模拟）
+        alive = [];
+      },
+      closeSandboxWindow: (pid) => {
+        closed.push(pid);
+      },
+      killTreeByPid: (pid) => killed.push(pid),
+    });
+    try {
+      await startNewArch(harness, () => {
+        alive = [
+          { image: "vmwp.exe", pid: 1000 },
+          { image: "WindowsSandboxServer.exe", pid: 4200 },
+          { image: "WindowsSandboxRemoteSession.exe", pid: 4300 },
+        ];
+      });
+
+      await harness.controller.stop();
+      await waitFor(() => (harness.controller.status().state === "off" ? true : null));
+      assert.equal(requested.length, 1, "stop 要先请求 guest 关机");
+      assert.ok(requested[0]?.endsWith("out") === true, `请求要带 out 目录（关机请求文件住在那）：${String(requested[0])}`);
+      assert.deepEqual(closed, [], "guest 关机生效后不许再关窗（那要付 PowerShell + Add-Type 的 20~30 秒）");
+      assert.deepEqual(killed, [], "更不许强杀——强杀会把 VM 留给宿主");
+      assert.ok(harness.logs.some((line) => /让 guest 自己关机/.test(line)), harness.logs.join(" | "));
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("② guest 关机没生效 → 退到关窗，关窗也没生效 → 才强杀（顺序不许反）", async () => {
+    const order: string[] = [];
+    const closed: number[] = [];
+    const killed: number[] = [];
+    let alive: SandboxProcessInfo[] = [];
+    const harness = await makeHarness({
+      stopObserveIntervalMs: 10,
+      stopSettleMs: 30,
+      guestShutdownMs: 40,
+      gracefulCloseMs: 40,
+      killFallbackMs: 40,
+      killEscalationMs: 40,
+      stopTotalTimeoutMs: 2_000,
+      listSandboxProcesses: () => alive,
+      requestGuestShutdown: async () => {
+        order.push("guest");
+      },
+      closeSandboxWindow: (pid) => {
+        order.push("close");
+        closed.push(pid);
+      },
+      killTreeByPid: (pid) => {
+        order.push("kill");
+        killed.push(pid);
+      },
+    });
+    try {
+      await startNewArch(harness, () => {
+        alive = [
+          { image: "vmwp.exe", pid: 1000 },
+          { image: "WindowsSandboxRemoteSession.exe", pid: 4300 },
+        ];
+      });
+
+      await harness.controller.stop();
+      await waitFor(() => (harness.controller.status().state === "error" ? true : null), 5_000);
+      assert.equal(order[0], "guest", "第一级必须是 guest 关机");
+      assert.equal(order[1], "close", "第二级才是关窗脚本");
+      assert.ok(order.includes("kill"), "两级都不成才强杀");
+      assert.deepEqual(closed, [4300], "关窗只发给 RemoteSession（窗口进程）");
+      assert.ok(harness.logs.some((line) => /guest 关机 .* 没等到沙箱退出/.test(line)), harness.logs.join(" | "));
+      assert.ok(harness.logs.some((line) => /1–2 分钟内退干净/.test(line)), "最后的报错要诚实且可照做");
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("③ 刚起就关：用 boot 预算（命令通道还没通，等的是桥登入），不因短预算提前强杀", async () => {
+    const requested: string[] = [];
+    const killed: number[] = [];
+    const closed: number[] = [];
+    let alive: SandboxProcessInfo[] = [];
+    const harness = await makeHarness({
+      stopObserveIntervalMs: 10,
+      stopSettleMs: 30,
+      // 运行中那一档故意给得很短：如果代码错用了它，这一局就会掉进强杀
+      guestShutdownMs: 20,
+      guestBootShutdownMs: 600,
+      listSandboxProcesses: () => alive,
+      requestGuestShutdown: async (outDir) => {
+        requested.push(outDir);
+        // 桥登入需要时间：模拟 150ms 后 VM 自己退（比 guestShutdownMs 长、比 boot 短）
+        setTimeout(() => {
+          alive = [];
+        }, 150);
+      },
+      // 刚起就关时窗口可能还关得掉：这条分支两条路并行跑（谁先清空算谁的），
+      // 所以这里记下调用，不再要求「绝不关窗」。
+      closeSandboxWindow: (pid) => {
+        closed.push(pid);
+      },
+      killTreeByPid: (pid) => killed.push(pid),
+    });
+    try {
+      const startPromise = harness.controller.start();
+      await waitFor(() => harness.spawned[0] ?? null);
+      alive = [
+        { image: "vmwp.exe", pid: 1000 },
+        { image: "WindowsSandboxRemoteSession.exe", pid: 4300 },
+      ];
+
+      assert.deepEqual(await harness.controller.stop(), { ok: true });
+      // 新架构：启动器在 starting 阶段秒退。**必须在 stop 之后再发**——它走 onChildExit
+      // 也会触发收尾链，这一下正好验「每局只起一条链」（日志里不能出现两遍「让 guest 自己关机」）。
+      requireProc(harness).emitExit(0);
+      await waitFor(() => (harness.controller.status().state === "off" ? true : null), 3_000);
+      await Promise.race([startPromise, sleep(50)]);
+      assert.equal(requested.length, 1, "一次 stop 只许请求一次 guest 关机（启动器退出不该再起一条链）");
+      assert.equal(
+        harness.logs.filter((line) => /让 guest 自己关机/.test(line)).length,
+        1,
+        "收尾链只能有一条：stop() 与 onChildExit 都会走到这里",
+      );
+      assert.deepEqual(closed, [4300], "刚起就关时关窗脚本并行跑一份（窗口这时可能还关得掉）");
+      assert.deepEqual(killed, [], "boot 预算内自己退完了，不许强杀");
+      assert.ok(
+        harness.logs.some((line) => /shutdown\.request/.test(line)),
+        "刚起就关要说明走的是 shutdown.request（命令通道还没通）",
+      );
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("④ start() 先清掉上一局遗留的 shutdown.request（否则新沙箱一登入就被自己关掉）", async () => {
+    const harness = await makeHarness();
+    try {
+      // 上一局停在 starting 时点了停止：请求文件落下，但桥没来得及登入
+      const outDir = join(harness.dir, "out");
+      await mkdir(outDir, { recursive: true });
+      await writeFile(join(outDir, "shutdown.request"), "2026-11-13T00:00:00.000Z", "utf8");
+
+      const startPromise = harness.controller.start();
+      await waitFor(() => harness.spawned[0] ?? null);
+      requireProc(harness).emitExit(0);
+      harness.announceBridge();
+      assert.deepEqual(await startPromise, { ok: true });
+      assert.equal(existsSync(join(outDir, "shutdown.request")), false, "开新局必须先把上一局的关机请求清掉");
     } finally {
       await harness.close();
     }

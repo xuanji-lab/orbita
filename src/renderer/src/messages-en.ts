@@ -1180,6 +1180,9 @@ export const en = {
       stopping: "Stopping…",
       error: "Error",
     },
+    // Stopping is a wrap-up, not a failure: the guest shuts itself down and the VM goes away
+    // (19s+ in real testing; closing right after start also waits for the sandbox to log in).
+    stoppingNote: "Wrapping up: up to 1–2 minutes. The sandbox is destroyed, its window closes by itself — no need to press Stop again.",
     start: "Start",
     stop: "Stop",
     shotGroup: "Manual screenshot",

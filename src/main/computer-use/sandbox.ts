@@ -25,6 +25,7 @@ import {
   COMPUTER_USE_DEFAULT_ALLOW_NETWORK,
   COMPUTER_USE_GUEST_BRIDGE_DIR,
   COMPUTER_USE_GUEST_OUT_DIR,
+  COMPUTER_USE_SHUTDOWN_REQUEST_FILE,
   computerUseGuestCommands,
   type ComputerUseDelivery,
   mergeGuestAllowExe,
@@ -361,6 +362,10 @@ export interface SandboxDeps {
   stopSettleMs?: number;
   /** 收尾轮询节奏，默认 500ms；测试传小值（只在 observation 路径上生效） */
   stopObserveIntervalMs?: number;
+  /** guest 关机（桥已在跑）之后等多久，默认 40_000（真机实测 19.3 秒清空）；测试传小值 */
+  guestShutdownMs?: number;
+  /** guest 关机（沙箱还在启动、桥没登入）之后等多久，默认 60_000；测试传小值 */
+  guestBootShutdownMs?: number;
   /**
    * stopping 的总预算，默认 90_000。超了还没确认退出就转 error（消息里写清还剩什么、
    * 怎么手动清），**不假装 off**——那会让「未启动」和「VM 还在吃 3~6GB」同时成立。
@@ -379,12 +384,23 @@ export interface SandboxDeps {
    */
   listSandboxProcesses?: () => SandboxProcessInfo[];
   /**
+   * 让 guest 自己关机（首选路径，2026-11-13）。生产在 index.ts 实现两步：
+   *   ① 原子写 `out/shutdown.request`——**「刚起就关」那一刻命令通道还没通**，只有文件能
+   *      把意图带进沙箱：桥登入后第一件事就是读它并关机（guest-bridge 0.13.0）；
+   *   ② 再发一条 `shutdown` 命令（桥已经在跑时走这条路，文件通道 / TCP 都行）。
+   * 为什么不是「点窗口 X + 按确认框」：真机实测关窗脚本 33 秒里 18.7 秒花在 Add-Type 加载
+   * WinForms、PowerShell 自己还要 7–29 秒启动，UIA 对确认框还会无限期阻塞——任何超时都不够。
+   * 不接就只有关窗脚本那条老路。
+   */
+  requestGuestShutdown?: (outDir: string) => Promise<void>;
+  /**
    * 关掉沙箱窗口：关窗 + 替用户按下沙箱自己的确认框（用 UI Automation 直接 Invoke Ok；
    * SendKeys 的 Enter 真机实测按不掉它）。光发 CloseMainWindow 会停在确认框上，没人按
    * 就等于没关，最后退回强杀而泄漏 VM。生产在 index.ts 跑 close-window-script.ts 生成的
    * 脚本。不发就只有强杀链——强杀会杀掉窗口进程却把 VM 留给宿主（2026-10-23 实测，各 ~3.5GB）。
+   * **可以是异步的**（生产改成 spawn + 超时）：它内部可能要跑 30 秒以上，不许堵住主进程。
    */
-  closeSandboxWindow?: (pid: number) => void;
+  closeSandboxWindow?: (pid: number) => void | Promise<void>;
 }
 
 /**
@@ -395,6 +411,24 @@ export interface SandboxDeps {
 const STOP_FALLBACK_MS = 3_000;
 /** 升级杀之后再等多久仍不退出就收尾（并留下「进程可能未退出」的痕迹） */
 const STOP_ESCALATION_MS = 5_000;
+/**
+ * guest 关机之后等多久（桥已经在跑）：2026-11-13 真机实测 shutdown 发出去
+ * **19.3 秒**整条链（RemoteSession → Server → vmwp → vmmem）清空；给到 40 秒。
+ */
+const STOP_GUEST_SHUTDOWN_MS = 40_000;
+/**
+ * 「还在启动中」时等多久：guest 还没登入，桥读不到请求文件。真机实测从 spawn 到桥通告
+ * 30–60 秒（映射文件夹热身 + 机器忙时的进程创建开销），加关机本身 15–20 秒。
+ * 2026-11-13 验收第一轮给 60 秒不够：那台机器上 VM 在 60 秒时还没登入，白等一轮。
+ * 给到 90 秒；超过它还没清，说明沙箱压根没起来，交给关窗脚本 / 强杀链。
+ */
+const STOP_GUEST_BOOT_MS = 90_000;
+/**
+ * 等 guest 开机 / 关机时的观测节奏（2 秒，不是 500ms）：真机忙时一次 tasklist 就要 1–20 秒，
+ * 500ms 一轮等于在 VM 开机的同时持续往机器上加负载——2026-11-13 验收第一轮里，
+ * 两轮「刚起就关」的 VM 在 60 秒内都没能登入，观测本身就是嫌疑之一。
+ */
+const BOOT_OBSERVE_INTERVAL_MS = 2_000;
 /**
  * 优雅关窗（关窗 + 替用户按确认框的 Ok）之后等多久：
  * 2026-10-23 真机实测，确认框按下之后 RemoteSession → Server → vmwp → vmmemWindowsSandbox
@@ -421,11 +455,14 @@ const STOP_OBSERVE_INTERVAL_MS = 500;
 const STOP_QUIET_ROUNDS = 3;
 /**
  * stopping 的总预算：超过它还没确认退出就转 error，**不假装 off**。
- * 90 秒 = 观察窗口 10s + 优雅关窗 25s + 强杀 3s + 升级 5s + 真机 VM 收尾的抖动余量。
+ * 120 秒 = 观察窗口 10s + guest 关机（刚起就关：等登入 90s；运行中：15~20s 就退）
+ * + 关窗脚本 25s + 强杀 3s + 升级 5s + 真机 VM 收尾的抖动余量。
+ * 为什么不是 60 秒：真机实测「刚起就关」这一档，VM 登入本身就要 30–60 秒（机器忙时更久），
+ * 60 秒会把一次最终会干净的关闭判成失败，然后把用户推去做手动清 VM。
  * 转 error 时把「还剩哪些 PID / 怎么手动清」写进消息——UI 上「未启动」而 VM 还在吃
  * 3~6GB，比报一个错坑得多（攒几次会报「与该服务器建立的会话太多」，新沙箱都起不来）。
  */
-const STOP_TOTAL_TIMEOUT_MS = 90_000;
+const STOP_TOTAL_TIMEOUT_MS = 120_000;
 /** 退出确认的轮询节奏：exit 事件是主路径，这个是兜底信号（二者取先到） */
 const EXIT_POLL_INTERVAL_MS = 250;
 /**
@@ -452,6 +489,17 @@ export class SandboxController {
   private escalationTimer: NodeJS.Timeout | null = null;
   /** 退出确认的轮询（exit 事件的兜底信号） */
   private exitWatchTimer: NodeJS.Timeout | null = null;
+  /**
+   * 这次 stop 是在 starting 阶段点的吗（2026-11-13）。决定 guest 关机等多久：
+   * 刚起就关时桥还没登入，请求只能躺在 out/shutdown.request 里等它开机——真机 30–50 秒。
+   */
+  private stopRequestedWhileStarting = false;
+  /**
+   * 已经为哪一局起过收尾链。stop() 与 onChildExit 都会调 stopOrphans——2026-11-13 验收里
+   * 「刚起就关」同时跑了两条（日志里「让 guest 自己关机」出现两次，关机请求也写了两遍）。
+   * 一条就够：收尾链自己会等。
+   */
+  private stopChainGeneration = -1;
 
   constructor(deps: SandboxDeps) {
     this.deps = deps;
@@ -541,6 +589,9 @@ export class SandboxController {
       // 序号一并归零：guest 桥的快路径直探 cmd-000001.req.json，宿主接着上局的数字往下走
       // 会让它一直落空，只能等 4 秒一次的全量枚举（bridge-client.ts 的 resetGuestCommandSeq）
       await rm(join(outputDir, BRIDGE_INFO_FILE), { force: true });
+      // 上一局「停止」可能落过关机请求而那只沙箱根本没登入（请求还躺着）：不清掉的话，
+      // 这一局一登入就会被自己关掉。清它和清 bridge.json 是同一条纪律：开局先扫干净。
+      await rm(join(outputDir, COMPUTER_USE_SHUTDOWN_REQUEST_FILE), { force: true });
       await rm(join(outputDir, COMPUTER_USE_CMD_DIR), { recursive: true, force: true });
       resetGuestCommandSeq();
       const wsbPath = join(this.deps.computerUseDir, WSB_FILE_NAME);
@@ -627,14 +678,22 @@ export class SandboxController {
       return { ok: true };
     }
     const generation = this.generation;
+    // 「刚起就关」要走另一套预算：桥还没登入，命令通道是断的，只能靠 shutdown.request 文件
+    this.stopRequestedWhileStarting = this.state === "starting";
     this.transition("stopping");
     this.cleanup();
     const child = this.child;
-    if (child === null) {
+    // **「刚起就关」也走异步收尾链**（2026-11-13 验收咬到的根因）：
+    // 早期 starting 时启动器（WindowsSandbox.exe）还活着，child !== null，老路径会当场
+    // `child.kill()`——生产里那是 `taskkill /T /F` 打整棵启动器树，在 guest 登入之前就把
+    // 沙箱连根拔掉：VM 于是成了没人管的孤儿（vmwp + 3.4GB），三连验收每轮 90 秒都等不到
+    // 桥，原因就在这里。不杀它：启动器自己 0~3 秒就 exit 0，VM 继续开机；等到桥登入后
+    // 由 shutdown.request / shutdown 命令让它自己关。真起不来时下面还有强杀链兜。
+    if (child === null || (this.stopRequestedWhileStarting && this.canObserveSandboxProcesses())) {
       // 新架构（2026-10-23 Windows 更新后）：启动器在 starting 阶段就 exit 0 了，我们手上早就
       // 没有 child，可 VM 还在 WindowsSandboxServer / RemoteSession / vmwp 里跑。按「启动前
       // 基线 → 现在」的差集认我们自己那只，异步收尾（宣布 off 同样要有退出证据）。
-      void this.stopOrphans(generation);
+      this.startStopChain(generation);
       return { ok: true };
     }
     // 退出这件事从此刻起有两个信号源：exit 事件（快路径）与 exitCode 轮询（兜底），
@@ -903,6 +962,12 @@ export class SandboxController {
     this.clearTimers();
     const child = this.child;
     this.child = null;
+    // 已经确认关干净了：别再起一次关窗脚本（本机实测它要 20~45 秒，应用退出时白烧 CPU），
+    // 也别再落一个 shutdown.request（下次 start 还得清）
+    if (this.state === "off") {
+      this.bridge = null;
+      return;
+    }
     if (child !== null) {
       try {
         child.kill();
@@ -911,11 +976,19 @@ export class SandboxController {
       }
     } else {
       // 新架构：启动器早退了，沙箱活在 Server / RemoteSession / vmwp 里。应用正在退，
-      // 没人听推送也来不及轮询——把「关窗 + 按确认框 Ok」一次性发出去就完事：真机实测
-      // 9~12 秒内整条链（RemoteSession → Server → vmwp → vmmem）自行退出，VM 内存随之释放。
+      // 没人听推送也来不及轮询——先试着让 guest 自己关机（最快的干净路径），发不出去
+      // 就退回「关窗 + 按确认框 Ok」：真机实测 9~12 秒内整条链自行退出，VM 内存随之释放。
       // **这里不能强杀**：taskkill /F 打掉 RemoteSession 会把 vmwp + 3.5GB 的 VM 留给宿主，
       // 泄漏攒多了会报「与该服务器建立的会话太多」，连新沙箱都起不来。
-      if (!this.closeSandboxWindowGracefully()) this.killOrphans(this.newSandboxProcesses());
+      if (this.deps.requestGuestShutdown !== undefined && this.bridge !== null) {
+        // 桥确认过就让它自己关机；不 await（进程都要退了），失败也不回头强杀——
+        // 强杀会把 VM 漏给宿主。剩下的交给下次 start()：它开场就清掉遗留的 shutdown.request。
+        void this.deps.requestGuestShutdown(this.outDir()).catch(() => undefined);
+        return;
+      }
+      void this.closeSandboxWindowGracefully().then((sent) => {
+        if (!sent) this.killOrphans(this.newSandboxProcesses());
+      });
     }
     this.state = "off";
     this.bridge = null;
@@ -1025,7 +1098,7 @@ export class SandboxController {
    * 注意它不只是 WM_CLOSE：关窗会弹沙箱自己的确认框，确认框没人按就永远不关，
    * 所以 deps 实现里带着「激活 + 校验前台 PID + 发 Enter」（见 close-window-script.ts）。
    */
-  private closeSandboxWindowGracefully(): boolean {
+  private async closeSandboxWindowGracefully(): Promise<boolean> {
     const close = this.deps.closeSandboxWindow;
     if (close === undefined) return false;
     // 先按「本局新增」找；找不到再用**全量**兜底（2026-10-27 真机，root cause）：
@@ -1043,7 +1116,8 @@ export class SandboxController {
     }
     this.log(`关闭沙箱窗口（pid ${window.pid}，UIA 按下确认框的 Ok）：等它自己收 VM（强杀会把 VM 留给宿主）`);
     try {
-      close(window.pid);
+      // 生产实现是异步的（spawn + 超时）：它可能要跑 30 秒以上，不许堵住主进程的事件循环
+      await close(window.pid);
       return true;
     } catch {
       // 发不出去就退回强杀链：宁可退化成旧行为，也不能让「关闭」本身失效
@@ -1072,19 +1146,33 @@ export class SandboxController {
   }
 
   /**
-   * stop() 的新架构收尾链（child 已经为 null），三级：
-   *   a. **优雅关窗**：关 RemoteSession 的窗口并按下确认框的 Ok，等整条链自己退（VM 关要 10s±）；
-   *   b. 没等到 → 原有的强杀链（杀 → 等 → 升级再杀 → 再等）；
-   *   c. 仍不消失 → 留痕后 off。
+   * stop() 的新架构收尾链（child 已经为 null），四级：
+   *   a. **让 guest 自己关机**（首选，2026-11-13）：VM 停了窗口自然消失，不碰任何按钮；
+   *   b. 没等到 → **关窗脚本**（CloseMainWindow + UIA 按 Ok，兜住「桥没起来」的沙箱）；
+   *   c. 仍没等到 → 原有的强杀链（杀 → 等 → 升级再杀 → 再等）；
+   *   d. 总预算到点还在 → 状态转 error，并给出能照做的清理指引（不假装 off）。
+   *
+   * 为什么不再把关窗当首选（2026-11-13 真机诊断，见 p1-close-reliable.md）：
+   * 关窗脚本一共 33 秒里，PowerShell 自己启动 7 秒、`Add-Type System.Windows.Forms` 18.7 秒、
+   * UIA 1.1 秒、等进程退 1.8 秒——脚本本身没错，是**固定开销不可压缩**；机器忙时
+   * PowerShell 启动还要 20–29 秒，45 秒预算当场穿。而 guest 关机真机实测：
+   * 命令 ↔ 回执 29ms，整条链（RemoteSession → Server → vmwp → vmmem）19.3 秒清空。
    *
    * 为什么先优雅：2026-10-23 真机验收发现，直接 taskkill 能杀掉 Server / RemoteSession，
    * **但 VM 不退**——vmwp.exe + vmmemWindowsSandbox（3.4GB）留了两分钟以上，
-   * 而 vmwp 自己 taskkill 是拒绝访问。等于「关窗但泄漏 VM」。
+   * 而 vmwp 自己 taskkill 是拒绝访问（2026-11-13 复测仍然拒绝访问）。等于「关窗但泄漏 VM」。
    *
    * 与旧路径同一条纪律：**宣布 off 必须有退出证据**。2026-10-27 又咬一次：`pids` 首次为 0
    * 就宣布 off，而那一刻 VM 正在起——60 秒后 Server / RemoteSession / vmwp / vmmem 全在、
    * 窗口还开着。所以现在多一层「观察窗口」：空列表要连续几轮 + 看满窗口才算结论。
    */
+  /** 每局只起一条收尾链（stop() 与 onChildExit 都会走到这里） */
+  private startStopChain(generation: number): void {
+    if (this.stopChainGeneration === generation) return;
+    this.stopChainGeneration = generation;
+    void this.stopOrphans(generation);
+  }
+
   private async stopOrphans(generation: number): Promise<void> {
     const isCurrent = (): boolean => generation === this.generation && this.phase() === "stopping";
     const deadline = Date.now() + (this.deps.stopTotalTimeoutMs ?? STOP_TOTAL_TIMEOUT_MS);
@@ -1099,8 +1187,55 @@ export class SandboxController {
       return;
     }
 
-    // b. 优雅关窗（强杀会把 VM 留给宿主）
-    if (this.closeSandboxWindowGracefully()) {
+    // b. 让 guest 自己关机：VM 停了窗口自然消失，不需要确认框、不需要 UIA。
+    //    「刚起就关」时桥还没登入，命令发不进去——生产实现会先落 out/shutdown.request，
+    //    桥登入后第一件事就是读它，所以这里等的窗口要盖住整个开机时间。
+    let parallelClose: Promise<boolean> | null = null;
+    if (this.deps.requestGuestShutdown !== undefined) {
+      const wasStarting = this.stopRequestedWhileStarting;
+      this.log(
+        wasStarting
+          ? "让 guest 自己关机（沙箱还在启动：先落 shutdown.request，桥登入后自己关）"
+          : "让 guest 自己关机（shutdown /s /t 0 /f）：VM 自己停，不碰窗口和确认框",
+      );
+      // 「刚起就关」两条路一起跑：窗口这时可能还关得掉（2026-11-13 诊断：UIA 第 1 轮就按到 Ok，
+      // 脚本 19 秒、整条链 33 秒），桥登入后又能自己关机（实测 47 秒）。谁先清空算谁的——
+      // 这条分支本来就没有「用户体验上的顺序」，只有「哪条能用」。
+      if (wasStarting && this.deps.closeSandboxWindow !== undefined) {
+        this.log("同时让关窗脚本也跑一份：刚起就关时窗口可能还能直接关掉");
+        parallelClose = this.closeSandboxWindowGracefully();
+      }
+      try {
+        await this.deps.requestGuestShutdown(this.outDir());
+      } catch (cause: unknown) {
+        this.log(`guest 关机请求没发出去：${cause instanceof Error ? cause.message : String(cause)}`);
+      }
+      if (!isCurrent()) return;
+      const guestMs = Math.min(
+        wasStarting ? (this.deps.guestBootShutdownMs ?? STOP_GUEST_BOOT_MS) : (this.deps.guestShutdownMs ?? STOP_GUEST_SHUTDOWN_MS),
+        remaining(),
+      );
+      if (await this.waitNoNewSandboxProcesses(guestMs, generation, BOOT_OBSERVE_INTERVAL_MS)) {
+        if (isCurrent()) this.transition("off");
+        return;
+      }
+      if (!isCurrent()) return;
+      const left = this.newSandboxPids();
+      if (left.length === 0) {
+        this.transition("off");
+        return;
+      }
+      this.log(`guest 关机 ${guestMs}ms 没等到沙箱退出（pid ${left.join(", ")}），退回关窗脚本`);
+    }
+
+    // c. 关窗脚本（强杀会把 VM 留给宿主；桥没起来 / 老桥不认 shutdown 时只剩这条路）
+    // 剩余预算连「关窗之后等它收 VM」的窗口都不够就别跑了：脚本本身要 20–45 秒
+    // （PowerShell 启动 + Add-Type），跑起来必然被截断，只会把日志写成
+    // 「优雅关闭 1ms 没等到」这种假证据（2026-11-13 验收里真出现过）。
+    const closeUsable = remaining() > (this.deps.gracefulCloseMs ?? STOP_GRACEFUL_MS);
+    const closeSent =
+      parallelClose !== null ? await parallelClose : closeUsable ? await this.closeSandboxWindowGracefully() : false;
+    if (closeSent) {
       const gracefulMs = Math.min(this.deps.gracefulCloseMs ?? STOP_GRACEFUL_MS, remaining());
       if (await this.waitNoNewSandboxProcesses(gracefulMs, generation)) {
         if (isCurrent()) this.transition("off");
@@ -1116,7 +1251,7 @@ export class SandboxController {
       this.log(`优雅关闭 ${gracefulMs}ms 没等到沙箱退出（pid ${left.join(", ")}），退回强杀`);
     }
 
-    // c. 强杀 → 等 → 升级再杀 → 再等
+    // d. 强杀 → 等 → 升级再杀 → 再等
     this.killOrphans(this.newSandboxProcesses());
     const fallbackMs = Math.min(this.deps.killFallbackMs ?? STOP_FALLBACK_MS, remaining());
     if (await this.waitNoNewSandboxProcesses(fallbackMs, generation)) {
@@ -1155,9 +1290,10 @@ export class SandboxController {
     this.log(`沙箱进程可能未退出：${leftText}——状态转 error，宿主里可能留着孤儿 VM`);
     this.transition(
       "error",
-      `沙箱没有按预期关闭（还剩进程 ${leftText}）。宿主里可能留着孤儿 VM（每个约 3~6GB）：` +
-        "在任务管理器里结束 WindowsSandboxRemoteSession / vmwp.exe / vmmemWindowsSandbox，" +
-        "或重启电脑；确认干净后再点一次「停止」复位这个状态。",
+      `沙箱没有在 1–2 分钟内退干净（还剩进程 ${leftText}），宿主里可能留着孤儿 VM（每个约 3~6GB）。` +
+        "能手动结束的是 WindowsSandboxRemoteSession / WindowsSandboxServer（任务管理器 → 结束任务）；" +
+        "vmwp.exe / vmmemWindowsSandbox 结束不了（拒绝访问），只能等它自己退或重启电脑。" +
+        "确认干净后再点一次「停止」复位这个状态。",
     );
   }
 
@@ -1184,8 +1320,12 @@ export class SandboxController {
    * 等到「启动后新出现的沙箱进程」**全部**消失（true）或窗口到点（false）；换了一局就立刻放弃。
    * 比「等指定 PID 消失」严格：收尾过程中新接上来的进程（RemoteSession 会重起）也算未退完。
    */
-  private async waitNoNewSandboxProcesses(timeoutMs: number, generation: number): Promise<boolean> {
-    const intervalMs = this.deps.stopObserveIntervalMs ?? STOP_OBSERVE_INTERVAL_MS;
+  private async waitNoNewSandboxProcesses(
+    timeoutMs: number,
+    generation: number,
+    intervalOverrideMs?: number,
+  ): Promise<boolean> {
+    const intervalMs = intervalOverrideMs ?? this.deps.stopObserveIntervalMs ?? STOP_OBSERVE_INTERVAL_MS;
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       if (generation !== this.generation || this.phase() !== "stopping") return false;
@@ -1244,7 +1384,7 @@ export class SandboxController {
         // RemoteSession / vmwp / vmmem 里，还得按基线差集确认整条链退出（stopOrphans
         // 内部带观察窗口与 90 秒总预算，超时转 error 而不是假装 off）。
         // 2026-10-27：只把 child 退出当证据，导致「stop 10ms 就 off、60s 后 VM 全在」。
-        void this.stopOrphans(generation);
+        this.startStopChain(generation);
         return;
       }
       // stopping = 我们 kill 的正常收尾（这里就是「确认退出」的那一下）；

@@ -95,6 +95,25 @@ describe("buildCloseSandboxWindowScript", () => {
     assert.ok(script.indexOf("exit 2") < script.indexOf("SendWait"), "校验必须在发键之前");
   });
 
+  test("WinForms / P/Invoke 只在键盘兜底分支里加载（真机 9.4–18.8 秒的固定开销不放在主路径上）", () => {
+    const script = buildCloseSandboxWindowScript(4300);
+    // 2026-11-13 三次真机诊断：Add-Type System.Windows.Forms 一步 9.35 / 16.4 / 18.75 秒，
+    // 而 CloseMainWindow + UIA 合起来只要 8 毫秒。主路径上多等它一次就可能撞穿超时。
+    const uiaBranch = script.indexOf("if ($orbitaUia -like 'INVOKED*') {");
+    const winforms = script.indexOf("Add-Type -AssemblyName System.Windows.Forms");
+    const pInvoke = script.indexOf("Add-Type -TypeDefinition $signature");
+    assert.ok(winforms > uiaBranch, "WinForms 必须在 UIA 分支之后才加载");
+    assert.ok(pInvoke > uiaBranch, "P/Invoke 类型同样只在兜底里编");
+    // UIA 那一步的 Add-Type（UIAutomationClient）是主路径本身需要的，留在 Job 里；
+    // 不许出现在主路径的是 WinForms 与 C# 类型编译这两笔大开销。
+    assert.equal(script.slice(0, uiaBranch).includes("System.Windows.Forms"), false, "主路径不许加载 WinForms");
+    assert.equal(
+      script.slice(0, uiaBranch).includes("Add-Type -TypeDefinition"),
+      false,
+      "主路径不许编译 P/Invoke 类型",
+    );
+  });
+
   test("失败语义可分辨：按下 Ok 但进程不退 = 3，前台不匹配 = 2，兜底后还在 = 3", () => {
     const script = buildCloseSandboxWindowScript(4300);
     assert.equal(script.split("exit 2").length - 1, 1, "exit 2 只留给「前台不匹配，一个键都没发」");

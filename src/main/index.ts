@@ -45,7 +45,7 @@ import {
 import { MemoryTurnTracker } from "./memory/turn-tracker.ts";
 import { MemoryHistoryJob, parseHistoryStatus } from "./memory/history-job.ts";
 import { EpisodeStore, EPISODE_IDLE_CLOSE_MS } from "../memory/episodes.ts";
-import { writeJsonAtomic } from "./atomic-write.ts";
+import { writeJsonAtomic, writeTextAtomic } from "./atomic-write.ts";
 import { isNotFound } from "./fs-errors.ts";
 import { choreModelPayload } from "./memory/chore.ts";
 import { llamaServerCandidates } from "./memory/llama-bin.ts";
@@ -132,6 +132,12 @@ import { windowsSandboxExePath } from "./computer-use/capability.ts";
 import { broadcastComputerUseStatus, registerComputerUseIpc } from "./computer-use/ipc.ts";
 import { createEmergencyStop } from "./computer-use/emergency-stop.ts";
 import { buildCloseSandboxWindowScript } from "./computer-use/close-window-script.ts";
+import { sendGuestCommand } from "./computer-use/bridge-client.ts";
+import {
+  BRIDGE_INFO_FILE,
+  COMPUTER_USE_SHUTDOWN_REQUEST_FILE,
+  computerUseGuestCommands,
+} from "../shared/computer-use.ts";
 import { parseSandboxProcesses, type SandboxProcessInfo } from "./computer-use/process-list.ts";
 import { SandboxController } from "./computer-use/sandbox.ts";
 import { applyComputerUseRequest } from "./computer-use/agent-requests.ts";
@@ -601,32 +607,80 @@ void app.whenReady().then(async () => {
    * 「与该服务器建立的会话太多」，新沙箱都起不来。
    * 而走「关窗 → 替用户按 Ok」的路子，9~12 秒内整条链自行退出、VM 内存释放。
    *
-   * 脚本本体在 close-window-script.ts（纯 ASCII，带前台 PID 护栏）；这里只负责跑它。
-   * 20 秒超时：脚本内部最多轮询 6s 找确认框 + 激活 0.5s + 确认 0.8s，剩下是系统关 VM 的时间。
-   * 失败不抛：控制器看到 throw 会退回强杀链（宁可退化成旧行为，不能坐视 VM 泄漏）。
-   * 但退出码要留痕——别把「用户正在用别的应用、脚本守规矩没发键」和「确认框压根没按到」
-   * 混成一句「关窗失败」，真机排查时要能一眼分清是哪条路断的（见脚本头部的码表）。
+   * 2026-11-13 起它只是**第二级兜底**（首选是让 guest 自己关机）：真机诊断显示这个脚本
+   * 33 秒里 18.7 秒花在 `Add-Type System.Windows.Forms`、PowerShell 启动另要 5–29 秒，
+   * 45 秒预算在忙机器上必然穿。本条只在「桥没起来 / 老桥不认 shutdown」时跑。
+   *
+   * **异步 spawn 而不是 spawnSync**：脚本最长跑 45 秒，同步调用会把主进程（窗口、IPC）
+   * 一起冻住 45 秒。日志留痕照旧：退出码区分「守规矩没发键」与「确认框没按到」。
+   * 失败不抛：控制器看到异常会退回强杀链。
    */
-  const closeSandboxWindow = (pid: number): void => {
+  const closeSandboxWindow = (pid: number): Promise<void> =>
+    new Promise((resolve) => {
+      if (process.platform !== "win32") {
+        resolve();
+        return;
+      }
+      const startedAt = Date.now();
+      let settled = false;
+      const settle = (status: number | null, error: Error | undefined, signal: NodeJS.Signals | null): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (status === 0) {
+          resolve();
+          return;
+        }
+        const reason =
+          status === 2
+            ? "前台不是这只沙箱，守规矩没发键"
+            : status === 3
+              ? "确认框没按到 Ok"
+              : error !== undefined
+                ? `脚本没跑起来（${error.message}）`
+                : `脚本异常退出（signal ${String(signal)}）`;
+        console.warn(
+          `[computer-use] 关窗脚本退出码 ${String(status)}（${reason}，${Date.now() - startedAt}ms），交由强杀兜底（pid ${pid}）`,
+        );
+        resolve();
+      };
+      const child = spawn(
+        "powershell",
+        ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", buildCloseSandboxWindowScript(pid)],
+        { stdio: "ignore", windowsHide: true },
+      );
+      // 45 秒硬上限（同以前的 spawnSync timeout）：超时就杀掉它，文件已经落了就不管了
+      const timer = setTimeout(() => settle(3, undefined, null), 45_000);
+      child.on("error", (cause) => settle(null, cause, null));
+      child.on("exit", (code, signal) => settle(code, undefined, signal));
+    });
+
+  /**
+   * 让 guest 自己关机（关沙箱的首选路径，2026-11-13 真机验收）：
+   *   ① 原子写 `out/shutdown.request`——「刚起就关」时命令通道还没通，桥登入后第一件事
+   *      就是读这个文件并关机（guest-bridge 0.13.0 的 ConsumeShutdownRequest）；
+   *   ② 再发一条 `shutdown` 命令：桥已经在跑时走这条路（真机回执 29ms）。
+   * 第 2 步超时 5 秒是有意的：VM 一关，回执可能永远不来，不能在这里等 30 秒。
+   * 失败只记日志——调用方还会等进程消失，等不到才退到关窗 / 强杀。
+   */
+  const requestGuestShutdown = async (outDir: string): Promise<void> => {
     if (process.platform !== "win32") return;
-    const result = spawnSync(
-      "powershell",
-      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", buildCloseSandboxWindowScript(pid)],
-      // 45s 而不是 20s：**PowerShell 自身在负载下 exit 0 就要 10–28.5 秒**（2026-11-13 实测，
-      // 空闲时 1.1s）。20s 预算连进程启动都不够，脚本必然被杀 → 优雅关窗没发生 → 落强杀 → 漏 VM。
-      { stdio: "ignore", windowsHide: true, timeout: 45_000 },
-    );
-    if (result.status === 0) return;
-    const reason =
-      result.status === 2
-        ? "前台不是这只沙箱，守规矩没发键"
-        : result.status === 3
-          ? "确认框没按到 Ok"
-          : result.error !== undefined
-            ? `脚本没跑起来（${result.error.message}）`
-            : `脚本异常退出（signal ${String(result.signal)}）`;
-    console.warn(`[computer-use] 关窗脚本退出码 ${String(result.status)}（${reason}），交由强杀兜底（pid ${pid}）`);
+    try {
+      await writeTextAtomic(join(outDir, COMPUTER_USE_SHUTDOWN_REQUEST_FILE), new Date().toISOString());
+    } catch (cause: unknown) {
+      console.warn(`[computer-use] 写关机请求失败：${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+    // 桥还没通告（刚起就关）时不用发命令：文件已经在了，桥登入第一件事就是读它；
+    // 发也只会白等一轮 5 秒超时（文件通道 + TCP 探活）。bridge.json 在 = 桥真的活着，才值得发。
+    if (!existsSync(join(outDir, BRIDGE_INFO_FILE))) return;
+    try {
+      await sendGuestCommand(outDir, computerUseGuestCommands.shutdown, {}, 5_000);
+    } catch (cause: unknown) {
+      // 桥还没登入 / 已经开机关机了：都正常，主路径靠那个文件
+      console.warn(`[computer-use] shutdown 命令没送到 guest：${cause instanceof Error ? cause.message : String(cause)}`);
+    }
   };
+
 
   const computerUse = new SandboxController({
     computerUseDir: join(configDir, "computer-use"),
@@ -685,6 +739,8 @@ void app.whenReady().then(async () => {
     listSandboxProcesses,
     // 优雅关窗：强杀窗口会把 VM 留给宿主（真机实测 3.4GB 不释放），见 closeSandboxWindow 的注释
     closeSandboxWindow,
+    // 首选：让 guest 自己关机（VM 停了窗口自然消失，不碰确认框）
+    requestGuestShutdown,
     onStatus: (status) => {
       /*
        * 沙箱没了（用户停 / 启动失败 / 运行中崩了），手上那把「桌面归谁」的租约一并作废：
