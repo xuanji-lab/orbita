@@ -84,6 +84,8 @@ export type QuotaFailure =
   /** 平台**不给 API 查**：余额只在网页控制台里（tokenrhythm 的 /api/me 只认控制台会话） */
   | "console-only"
   | "network"
+  /** 厂商回了 200 但什么都不给（`{}`）：查不到用量，不是我们的解析坏了 */
+  | "empty"
   | "protocol";
 
 export type QuotaResult =

@@ -467,7 +467,14 @@ export function parseKimiUsage(body: unknown, fetchedAt: number): ParseOutcome {
       });
     }
   }
-  if (windows.length === 0) return { ok: false, reason: "protocol" };
+  if (windows.length === 0) {
+    /*
+     * 实测（2026-11-13，正式版数据 + 真 key）：Kimi 的 `/coding/v1/usages` 回 **200 + `{}`**。
+     * 空对象不是「格式变了」，而是「这个 key 此刻没有任何可读的用量」——
+     * 可能账号没有 Kimi Code 订阅，也可能套餐换了端点。照实说，别赖格式。
+     */
+    return { ok: false, reason: Object.keys(record).length === 0 ? "empty" : "protocol" };
+  }
   return parsed(windows, fetchedAt);
 }
 

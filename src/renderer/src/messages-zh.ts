@@ -2232,6 +2232,7 @@ export const zh: Messages = {
     teamUnsupported: "团队账号不支持。换成个人账号登录才能在这里看到额度。",
     noPlan: "这个账号没有订阅套餐。",
     consoleOnly: "这个网关的余额只能在网页控制台查看。",
+    emptyUsage: "厂商没有返回任何用量数据——可能这个账号没有订阅，或接口已经改了。",
     reasonAuth: "密钥无效",
     reasonNetwork: "网络错误",
     reasonProtocol: "返回格式变了",

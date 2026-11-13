@@ -817,3 +817,10 @@ describe("probeQuota —— 基元律动（/api/me 只认控制台会话）", ()
     assert.ok(!JSON.stringify(logged).includes("12.50"), "不打印值");
   });
 });
+
+describe("Kimi：200 + 空对象（2026-11-13 正式版真机）", () => {
+  test("`{}` → empty，不是 protocol（空响应不等于「格式变了」）", async () => {
+    stubFetch(() => okBody({}));
+    assert.deepEqual(await probeQuota(kimiInput()), { status: "error", reason: "empty", cached: null });
+  });
+});
