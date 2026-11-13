@@ -194,13 +194,16 @@ describe("自动化记录文件不可变（protectedFiles）", () => {
 
   test("已结束的归档文件同护：用主进程真实给的清单，write / edit / bash 与 .tmp / .bad- 兄弟全档拦", async () => {
     const files = automationProtectedFiles("/userData");
-    assert.equal(files.length, 2);
+    assert.equal(files.length, 3);
     for (const mode of ["plan", "manual", "skip"] as const) {
       const gate = createToolCallGate(() => mode, async () => ({ behavior: "allow" }), ["/userData/sessions"], "/repo", files);
       for (const target of [
         "/userData/automations-archive.json",
         "/userData/automations-archive.json.a1b2c3d4.tmp",
         "/userData/automations-archive.json.bad-1763000000000",
+        "/userData/automations-archive-old.jsonl",
+        "/userData/automations-archive-old.jsonl.a1b2c3d4.tmp",
+        "/userData/automations-archive-old.jsonl.bad-1763000000000",
       ]) {
         const write = await gate(event("write", { path: target, content: "[]" }));
         assert.equal(write.block, true, `${mode} write ${target}`);
@@ -211,6 +214,9 @@ describe("自动化记录文件不可变（protectedFiles）", () => {
         "rm /userData/automations-archive.json",
         "echo '{}' > /userData/automations-archive.json",
         "mv /tmp/x /userData/automations-archive.json",
+        "rm /userData/automations-archive-old.jsonl",
+        "echo '' > /userData/automations-archive-old.jsonl",
+        "sed -i '' 's/a/b/' /userData/automations-archive-old.jsonl",
       ]) {
         const result = await gate(event("bash", { command }));
         assert.equal(result.block, true, `${mode} ${command}`);
