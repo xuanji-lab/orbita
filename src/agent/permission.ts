@@ -16,9 +16,10 @@ import {
   type PermissionAnswer,
   type PermissionMode,
 } from "../shared/permission.ts";
-import { isAbsolute, relative, resolve } from "node:path";
-import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { realpathSync } from "node:fs";
 import type { ContextMessage } from "./image-byte-budget.ts";
+import { dataDirRefusalMessage, defaultGuardEnv, protectedCommandRefusal, type CommandGuardEnv } from "./protected-command.ts";
 
 /**
  * **本会话实际启用的 pi 内建工具集**。真源一份、两个消费者：
@@ -66,8 +67,15 @@ export const ENABLED_BUILTIN_TOOLS = ["bash", "edit", "find", "grep", "ls", "rea
  * `mcp__server__tool` 全部由调用方从注册表里拿来传入）——不再只枚举内建的那几个，
  * 否则 plan 模式下模型不知道 MCP 工具会被拒，照样一头撞墙（已知缺口 #4）。
  * MCP 工具没有「只读」豁免，分桶全由 decidePermission 算，不在提示词里另立规则。
+ *
+ * @param protectedFiles 受保护的单文件（绝对路径）：说明里点名它们的文件名，模型被告知的禁区名单
+ * 与闸门真正拦的同一份（以前只写死 automations.json，归档文件对模型是隐形的）。
  */
-export function describePermissionMode(mode: PermissionMode, extraToolNames: readonly string[] = []): string {
+export function describePermissionMode(
+  mode: PermissionMode,
+  extraToolNames: readonly string[] = [],
+  protectedFiles: readonly string[] = [],
+): string {
   const allow: string[] = [];
   const ask: string[] = [];
   const deny: string[] = [];
@@ -92,11 +100,14 @@ export function describePermissionMode(mode: PermissionMode, extraToolNames: rea
         "change anything on disk — describe the change instead, and say that this mode cannot apply it.",
     );
   }
+  const recordNames = [...new Set(protectedFiles.map((file) => basename(file)))];
   lines.push(
     "Immutable in every mode: task session files (transcripts and their metadata) can never be " +
-      "written by any tool, and neither can the automation records (automations.json) — manage " +
-      "automations only through the automation tools. Do not attempt to write these, including via " +
-      "shell commands — describe the change to the user instead; only the user can modify session data.",
+      `written by any tool, and neither can the automation records (${recordNames.length > 0 ? recordNames.join(", ") : "automations.json"}) — manage ` +
+      "automations only through the automation tools. Do not attempt to write, move, rename or delete these, or " +
+      "cd into the folder that holds them, or rename / delete / chmod that folder or any folder above it, including via " +
+      "shell commands — describe the change to the user instead; only the user can modify session data. " +
+      "Read automation records with the read tool or automation_list. Your session workbench stays yours to write.",
   );
   lines.push("</orbita-permission>");
   return lines.join("\n");
@@ -158,8 +169,31 @@ function raiseCommandTimeout(toolName: string, input: Record<string, unknown>): 
  * posix 保持原样——文件系统大小写敏感，不折。
  */
 function foldPath(value: string): string {
-  if (process.platform !== "win32") return value;
-  return value.replaceAll("\\", "/").replace(/\/{2,}/g, "/").toLowerCase();
+  // 小写一律折：macOS APFS 与 Windows NTFS 默认都不分大小写（2026-11-14 验收：大写变体能指到同一个文件）；
+  // Linux 上多折一点只会多拦一个大小写不同的同名文件，安全向
+  const slashed = process.platform === "win32" ? value.replaceAll("\\", "/").replace(/\/{2,}/g, "/") : value;
+  return slashed.toLowerCase();
+}
+
+/**
+ * 路径的真实位置：跟符号链接走（write / edit 的目标可能是指向受保护文件的链接）；
+ * 文件还不存在时，对「已存在的最深一级父目录」取真实路径再接上剩下的名字。
+ */
+function realpathLoose(path: string): string {
+  const start = resolve(path);
+  let current = start;
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      const real = realpathSync(current);
+      return tail.length === 0 ? real : join(real, ...tail.reverse());
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return start;
+      tail.push(basename(current));
+      current = parent;
+    }
+  }
 }
 
 /**
@@ -222,26 +256,32 @@ export function protectedPathRefusal(
   protectedPaths: readonly string[],
   cwd: string,
   protectedFiles: readonly string[] = [],
+  guard: CommandGuardEnv = defaultGuardEnv(),
 ): string | null {
   if (protectedPaths.length === 0 && protectedFiles.length === 0) return null;
 
   if (PATH_MUTATING_TOOLS.has(toolName)) {
     const target = input["path"];
     if (typeof target !== "string" || target === "") return null;
-    const resolved = foldPath(resolve(cwd, target));
+    // 字面路径与「跟着符号链接走之后的真实路径」两个都比：链接两步（ln -s 之后 write 链接）躲不过
+    const requested = resolve(cwd, target);
+    const candidates = [...new Set([foldPath(requested), foldPath(realpathLoose(requested))])];
     for (const file of protectedFiles) {
       // 单文件命中：文件本身，或它的 `.tmp` / `.bad-` 兄弟（原子写临时文件与坏文件
       // 隔离都以 `<file>.` 开头）——精确圈住 store 的落盘足迹，不外溢到同目录别的文件
-      const entry = foldPath(resolve(file));
-      if (resolved === entry || resolved.startsWith(`${entry}.`)) {
-        return fileRefusalMessage(file, "path");
+      const entries = [...new Set([foldPath(resolve(file)), foldPath(realpathLoose(file))])];
+      for (const resolved of candidates) {
+        if (entries.some((entry) => resolved === entry || resolved.startsWith(`${entry}.`))) {
+          return fileRefusalMessage(file, "path");
+        }
       }
     }
     for (const dir of protectedPaths) {
-      const base = foldPath(resolve(dir));
-      const rel = relative(base, resolved);
-      if (!rel.startsWith("..") && !isAbsolute(rel)) {
-        return refusalMessage(dir, "path");
+      for (const base of new Set([foldPath(resolve(dir)), foldPath(realpathLoose(dir))])) {
+        for (const resolved of candidates) {
+          const rel = relative(base, resolved);
+          if (!rel.startsWith("..") && !isAbsolute(rel)) return refusalMessage(dir, "path");
+        }
       }
     }
     return null;
@@ -250,7 +290,10 @@ export function protectedPathRefusal(
   if (COMMAND_TOOLS.has(toolName)) {
     const command = input["command"];
     if (typeof command !== "string" || command === "") return null;
-    const haystack = loosenShellQuoting(foldPath(expandTildeLiterals(command, homedir())));
+    // 先过命令串里不带完整路径的写法：文件名本身 / 变量 / 通配 / cd 进数据目录 / 对数据目录或其上级的破坏性命令
+    const loose = protectedCommandRefusal(command, protectedFiles, cwd, guard);
+    if (loose !== null) return loose.kind === "file" ? fileRefusalMessage(loose.file, "command") : dataDirRefusalMessage(loose);
+    const haystack = loosenShellQuoting(foldPath(expandTildeLiterals(command, guard.home)));
     for (const dir of protectedPaths) {
       const needle = loosenShellQuoting(foldPath(dir));
       if (commandMentions(haystack, needle)) return refusalMessage(dir, "command");
@@ -352,12 +395,13 @@ export function createToolCallGate(
   protectedPaths: readonly string[] = [],
   cwd: string = process.cwd(),
   protectedFiles: readonly string[] = [],
+  guard: CommandGuardEnv = defaultGuardEnv(),
 ) {
   return async (event: ToolCallLike): Promise<ToolCallGateResult> => {
     // **跑在每条早退之前**：放行 / 询问 / 拒绝三条路都不能绕过它，否则默认档（skip 直接
     // 放行）就漏掉了——而那正是模型填小超时的场景。
     raiseCommandTimeout(event.toolName, event.input);
-    const refusal = protectedPathRefusal(event.toolName, event.input, protectedPaths, cwd, protectedFiles);
+    const refusal = protectedPathRefusal(event.toolName, event.input, protectedPaths, cwd, protectedFiles, guard);
     if (refusal !== null) return { block: true, reason: refusal };
     const decision = decidePermission(getMode(), event.toolName);
     if (decision.behavior === "allow") return {};
