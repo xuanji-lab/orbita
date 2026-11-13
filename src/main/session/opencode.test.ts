@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { withReadOnlyDb } from "./sqlite-readonly.ts";
 import type { AssistantMessage, Message, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import {
   opencodeSessionBytes,
@@ -11,7 +12,6 @@ import {
   opencodeUserText,
   readOpencodeMessages,
   readOpencodeSessions,
-  withOpencodeDb,
   type OpencodeMessageRow,
 } from "./opencode.ts";
 
@@ -185,7 +185,7 @@ describe("读 opencode 的库", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  test("只列根会话；默认标题算没有；消息按时间、part 按 id；只读打开", () => {
+  test("只列根会话；默认标题算没有；消息按时间、part 按 id；只读打开", async () => {
     const dbFile = join(root, "opencode.db");
     const db = new DatabaseSync(dbFile);
     db.exec(`
@@ -202,7 +202,7 @@ describe("读 opencode 的库", () => {
       insert into part values ('prt_3', 'msg_2', 'ses_b', 0, 0, '{"type":"tool","state":{}}');
     `);
     db.close();
-    withOpencodeDb(dbFile, (readonly) => {
+    await withReadOnlyDb(dbFile, (readonly) => {
       assert.deepEqual(
         readOpencodeSessions(readonly).map((session) => [session.id, session.title, session.revert]),
         [

@@ -1,5 +1,5 @@
 /**
- * 导入 Proma 会话时还原「用户写了什么」—— 纯模块：不 import electron，`node --test` 直接测。
+ * 读 Proma 会话时还原「用户写了什么」—— 纯模块：不 import electron，`node --test` 直接测。
  *
  * ## 为什么要还原
  *
@@ -101,28 +101,34 @@ export function decodePromaMentions(text: string): string {
 }
 
 /**
+ * 一串用户消息的 content（按顺序）各自对应的原文。renderTexts = 界面日志的用户原文；
+ * null（没有界面日志）或条数对不上 → 全部走兜底。两个入口（pi 本子的 entry、Claude 时代
+ * 会话转换出的 Message）都落到这里，配对规则只写一遍。
+ */
+export function promaUserDisplays(contents: readonly unknown[], renderTexts: readonly string[] | null): string[] {
+  const aligned = renderTexts !== null && renderTexts.length === contents.length;
+  return contents.map((content, index) =>
+    decodePromaMentions(aligned ? (renderTexts[index] ?? "") : stripPromaEnvelope(textOf(content))),
+  );
+}
+
+/**
  * pi 文件里每条用户消息（按文件顺序，含压缩前的）对应的原文，按 entry id 索引。
- * renderTexts = 界面日志的用户原文；null（没有界面日志）或条数对不上 → 全部走兜底。
  */
 export function promaUserTextMap(
   entries: readonly PiBookEntry[],
   renderTexts: readonly string[] | null,
 ): Map<string, string> {
-  // 先落成 unknown 再判：pi 1.x 的 ToolResultMessage 是条件类型，直接对 entry.message 收窄会把 role 收成 "toolResult"
-  const users = entries.filter((entry) => {
+  const users: { id: string; content: unknown }[] = [];
+  for (const entry of entries) {
     const message: unknown = entry.type === "message" ? entry.message : undefined;
-    return isRecord(message) && message["role"] === "user";
-  });
-  const aligned = renderTexts !== null && renderTexts.length === users.length;
-  const map = new Map<string, string>();
-  users.forEach((entry, index) => {
-    if (entry.type !== "message" || !isRecord(entry.message)) return;
-    const original = aligned
-      ? (renderTexts[index] ?? "")
-      : stripPromaEnvelope(textOf((entry.message as Record<string, unknown>)["content"]));
-    map.set(entry.id, decodePromaMentions(original));
-  });
-  return map;
+    if (isRecord(message) && message["role"] === "user") users.push({ id: entry.id, content: message["content"] });
+  }
+  const displays = promaUserDisplays(
+    users.map((user) => user.content),
+    renderTexts,
+  );
+  return new Map(users.map((user, index) => [user.id, displays[index] ?? ""]));
 }
 
 /**

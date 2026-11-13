@@ -27,7 +27,7 @@ import type { ChannelMessage } from "../../shared/channel.ts";
 import type { ChannelMarkRecord, SessionMeta, SessionRecord } from "../../shared/session.ts";
 import type { Workspace } from "../../shared/workspace.ts";
 import type { TranscriptItem } from "../../shared/transcript.ts";
-import type { ExternalSessionReader, ExternalSessionSummary } from "./external-session.ts";
+import type { ExternalSessionReader, ExternalSessionSummary, ExternalSourceSection } from "./external-session.ts";
 
 type ReadTaskRequestEvent = Extract<AgentEvent, { type: "readTaskRequest" }>;
 
@@ -743,12 +743,19 @@ describe("applyReadTask（外部只读会话）", () => {
     ...(task === undefined ? null : { task }),
     ...(rounds === undefined ? null : { rounds }),
   });
+  /** 一组摘要按来源分段（与真 reader 同形） */
+  const sectionsOf = (list: readonly ExternalSessionSummary[]): ExternalSourceSection[] =>
+    [...new Set(list.map((item) => item.source))].map((source) => {
+      const summaries = list.filter((item) => item.source === source);
+      return { source, total: summaries.length, summaries, problems: [] };
+    });
   const reader = (list: ExternalSessionSummary[] = [summary]): ExternalSessionReader => ({
-    list: async () => list,
+    list: async (options) => sectionsOf(list.filter((item) => options?.source === undefined || item.source === options.source)),
     load: async (ref) => ({
       summary,
       meta: meta(ref, summary.title, { cwd: summary.cwd, createdAt: summary.createdAt, updatedAt: summary.updatedAt }),
       records: roundsFixture(2),
+      sourceFile: "/external/source.jsonl",
     }),
   });
 
@@ -763,7 +770,7 @@ describe("applyReadTask（外部只读会话）", () => {
     const result = await applyReadTask(localSessions, request(), workspacesStub(), noChannels, external);
     assert.equal(result.ok, true);
     assert.match(result.ok ? result.text : "", /Local sibling/);
-    assert.match(result.ok ? result.text : "", /External sessions \(read-only/);
+    assert.match(result.ok ? result.text : "", /External sessions from other tools \(read-only, not imported/);
     assert.match(result.ok ? result.text : "", /External planning \(ref: ext:kimi-work:0123456789abcdef\)/);
     assert.equal(loads, 0);
   });
@@ -801,7 +808,7 @@ describe("applyReadTask（外部只读会话）", () => {
     const external: ExternalSessionReader = {
       list: async () => {
         externalLists += 1;
-        return [{ ...summary, title: "Local sibling" }];
+        return sectionsOf([{ ...summary, title: "Local sibling" }]);
       },
       load: async () => {
         throw new Error("external load must not run");
@@ -825,5 +832,53 @@ describe("applyReadTask（外部只读会话）", () => {
     assert.equal(result.ok, true);
     assert.match(result.ok ? result.text : "", /Local sibling/);
     assert.match(result.ok ? result.text : "", /External sessions could not be listed: permission denied/);
+  });
+
+  test("目录按来源分段，写总数与来源自己的问题；`ext:<来源>` 只列这一个来源", async () => {
+    const code = { ...summary, ref: "ext:claude-code:1111111111111111", source: "claude-code" as const, title: "CC 会话" };
+    const external: ExternalSessionReader = {
+      list: async (options) =>
+        options?.source === "claude-code"
+          ? [{ source: "claude-code", total: 40, summaries: [code], problems: [] }]
+          : [
+              { source: "claude-code", total: 40, summaries: [code], problems: [] },
+              { source: "reasonix", total: 0, summaries: [], problems: ["sessions in Reasonix's newer store are not supported yet"] },
+            ],
+      load: async () => null,
+    };
+    const index = await applyReadTask(localSessions, request(), workspacesStub(), noChannels, external);
+    assert.ok(index.ok);
+    assert.match(index.text, /Claude Code — 40 sessions, newest 1:/);
+    assert.match(index.text, /CC 会话 \(ref: ext:claude-code:1111111111111111\)/);
+    assert.match(index.text, /Reasonix — 0 sessions:\n {2}\(not fully readable: sessions in Reasonix's newer store/);
+    assert.match(index.text, /"ext:<tool>"/);
+
+    const only = await applyReadTask(localSessions, request("ext:claude-code"), workspacesStub(), noChannels, external);
+    assert.ok(only.ok);
+    assert.equal(only.card, null);
+    assert.match(only.text, /up to 30 most recently updated/);
+    assert.doesNotMatch(only.text, /Reasonix/);
+    assert.doesNotMatch(only.text, /Local sibling/);
+  });
+
+  test("读外部会话出错（来源关闭、格式认不出、超预算）如实回给模型，不抛", async () => {
+    const external: ExternalSessionReader = {
+      list: async () => [],
+      load: async () => {
+        throw new Error("Codex is turned off in Settings › External sources, so ext:codex:0123456789abcdef is not read.");
+      },
+    };
+    const result = await applyReadTask(localSessions, request("ext:codex:0123456789abcdef"), workspacesStub(), noChannels, external);
+    assert.equal(result.ok, false);
+    assert.match(result.ok ? "" : result.error, /Codex is turned off/);
+    const missing = await applyReadTask(
+      localSessions,
+      request("ext:codex:0123456789abcdef"),
+      workspacesStub(),
+      noChannels,
+      { list: async () => [], load: async () => null },
+    );
+    assert.equal(missing.ok, false);
+    assert.match(missing.ok ? "" : missing.error, /was not found/);
   });
 });

@@ -36,7 +36,7 @@
  *   `<system-reminder>…</system-reminder>` 剥掉。本机 367 段用户文字里这类 116 段。
  *   附件里的图进 pi，其余类型（PDF 等）pi 没有对应块，丢弃。
  */
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import type { AssistantMessage, ImageContent, Message, TextContent, ToolCall, ToolResultMessage, Usage } from "@earendil-works/pi-ai";
 import { auditToolPairs, type ConvertedCompaction, type ConvertedEntry } from "./tool-pairing.ts";
 
@@ -82,19 +82,6 @@ export interface OpencodeMessageRow {
 
 /** opencode 新建会话时的默认标题：「New session - 2026-01-17T07:10:22.607Z」。 */
 const DEFAULT_TITLE = /^New session - \d{4}-\d{2}-\d{2}T/;
-
-/**
- * 只读打开 opencode 的库做一件事，做完就关。库不在、打不开（格式不认识、被锁）一律抛，
- * 由调用方决定怎么报。
- */
-export function withOpencodeDb<T>(dbPath: string, read: (db: DatabaseSync) => T): T {
-  const db = new DatabaseSync(dbPath, { readOnly: true });
-  try {
-    return read(db);
-  } finally {
-    db.close();
-  }
-}
 
 function text(value: unknown): string | null {
   return typeof value === "string" ? value : null;

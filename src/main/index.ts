@@ -19,9 +19,9 @@ import { readFile } from "node:fs/promises";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
 import { registerImportIpc } from "./session/import-ipc.ts";
-import { CustomRootsStore, dirsOf, mergeCustomRoots } from "./session/import-custom-roots.ts";
-import { baseDir, DATA_ROOT_SPECS, findDataRoots, hasDirectory } from "./session/import-locate.ts";
-import { createKimiExternalSessionReader, kimiWorkDataRoot } from "./session/external-session.ts";
+import { CustomRootsStore } from "./session/import-custom-roots.ts";
+import { createExternalSessionReader } from "./session/external-session.ts";
+import { locateExternalSources } from "./session/external-locate.ts";
 import { broadcastAgentEvent, registerAgentIpc, resolveProviderSecrets } from "./agent/ipc.ts";
 import type { AgentEvent } from "../shared/agent-ipc.ts";
 import { MemoryServiceHost, resolveMemoryRuntimePath } from "./memory/host.ts";
@@ -466,23 +466,15 @@ void app.whenReady().then(async () => {
   // 工作区根：正式版沿用默认的 ~/Orbita，开发版挪到 ~/Orbita-dev（同 userData 的理由）
   const workspaces = new WorkspaceStore(configDir, devDirs?.orbitaRoot);
   const customRoots = new CustomRootsStore(configDir);
-  // read_task 的外部只读来源。每次现找目录：Migration 里添加 / 移除自定义 Kimi Code
-  // 数据根后下一次调用就生效；Kimi Work 复用同一 wire 解析器，但不共享它的数据根。
-  const externalSessions = createKimiExternalSessionReader({
+  // read_task 的外部只读来源（别家工具留在本机的聊天记录）。每次现找目录：自定义目录增删后
+  // 下一次调用就生效。只读：源目录与 orbita 的会话库都不写（session/external-session.ts）。
+  const externalSessions = createExternalSessionReader({
     defaultCwd: workspaces.defaultPath(),
+    claudeDesktopDir: join(homedir(), "Library", "Application Support", "Claude", "claude-code-sessions"),
     sources: async () => {
       const context = { platform: process.platform, home: homedir(), env: process.env };
-      const spec = DATA_ROOT_SPECS["kimi-code"];
-      const kimiCodeRoots = await mergeCustomRoots(
-        await findDataRoots(spec, context),
-        dirsOf(await customRoots.read(), "kimi-code"),
-        spec,
-      );
-      const workRoot = kimiWorkDataRoot(baseDir("appData", context));
-      return [
-        { source: "kimi-code" as const, roots: kimiCodeRoots },
-        { source: "kimi-work" as const, roots: (await hasDirectory(join(workRoot, "sessions"))) ? [workRoot] : [] },
-      ];
+      const located = await locateExternalSources(context, await customRoots.read());
+      return located.map((item) => ({ source: item.source, roots: item.roots, enabled: true }));
     },
   });
   /*
