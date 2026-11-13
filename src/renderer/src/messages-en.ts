@@ -2443,8 +2443,18 @@ export const en = {
     moreInline: (count: number) => `+${count}`,
     /** 胶囊（输入框底栏里的一颗）：总数，有等你的再加一段 */
     capsule: (count: number, waiting: number) => (waiting > 0 ? `Background ${count} · ${waiting} waiting` : `Background ${count}`),
-    /** 胶囊在较窄底栏里的短形：只留标签 + 总数 */
-    capsuleShort: (count: number) => `Background ${count}`,
+    /** 胶囊在较窄底栏里的两档短形：有等你的项时「N 等你」任何一档都写出来（宁可省「后台」二字或总数），没有才只写总数 */
+    capsuleMid: (count: number, waiting: number) => (waiting > 0 ? `${count} · ${waiting} waiting` : `Background ${count}`),
+    capsuleShort: (count: number, waiting: number) => (waiting > 0 ? `${waiting} waiting` : `${count}`),
+    /** 表里没有的下划线工具 id 不露给用户：状态位自己的名字（background-strip.ts 的 bgToolLabel 选哪个） */
+    tools: {
+      report: "Reporting",
+      reply: "Replying to a sub-session",
+      delegate: "Delegating",
+      costs: "Checking prices",
+      automation: "Automation",
+      other: "Tool",
+    },
     lineTip: "Show the list — click a row to open it",
     automationDue: "Due — sends when this turn ends",
   },

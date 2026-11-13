@@ -398,3 +398,22 @@ export function automationLine(item: BgAutomationItem, now: number, t: Messages)
   if (item.due) return t.bgStrip.automationDue;
   return t.automation.next(formatWhen(item.nextRunAt, now, t.automation));
 }
+
+/**
+ * 没有计划时「当前一步」的动词：表里没有名字的工具（rollupTool 原样吐回下划线 id，如 report_to_parent）
+ * 不把 id 露给用户——给它状态位自己的名字，认不得的写类别名「工具」。
+ */
+export function bgToolLabel(id: string, t: Messages): string {
+  switch (id) {
+    case "report_to_parent":
+      return t.bgStrip.tools.report;
+    case "reply_subsession":
+      return t.bgStrip.tools.reply;
+    case "delegate":
+      return t.bgStrip.tools.delegate;
+    case "model_costs":
+      return t.bgStrip.tools.costs;
+    default:
+      return id.startsWith("automation_") ? t.bgStrip.tools.automation : t.bgStrip.tools.other;
+  }
+}

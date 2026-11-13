@@ -6315,15 +6315,13 @@ mark.intent-mark {
   font-weight: var(--weight-strong);
   color: var(--color-text-primary);
 }
+/* 步骤文字退到次级墨色：名字是主信息（primary + 加粗），步骤是它的注脚，不粘在一起 */
 .bg-item-text {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.bg-line-item[data-status="waiting"] .bg-item-text,
-.bg-line-item[data-status="approval"] .bg-item-text {
-  color: var(--color-text-primary);
+  color: var(--color-text-secondary);
 }
 .bg-more {
   flex: none;
@@ -6354,7 +6352,7 @@ mark.intent-mark {
   color: var(--color-text-tertiary);
 }
 
-/* 胶囊：饼 + 「后台 3 · 1 等你」。底栏变窄时分三档收：≥ 640 全文；410–639 只留「后台 3」；< 410 只留总数
+/* 胶囊：饼 + 「后台 3 · 1 等你」。底栏变窄时分三档收：≥ 640 全文；410–639 中档；< 410 最窄档。有等你的项时「N 等你」每一档都写出来
    （右栏开着、窗口窄、英文更长），免得把作用域 / 权限 / 模型几个芯片挤成省略号。胶囊自己不缩：
    让出宽度的是可缩的模型与档位芯片。 */
 .composer-bottom-bar > :has(> .chip-bg) {

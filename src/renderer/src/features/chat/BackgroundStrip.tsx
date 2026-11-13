@@ -14,6 +14,7 @@ import {
   bgInlineCap,
   bgSummary,
   bgSummaryParts,
+  bgToolLabel,
   foldBgItems,
   needsClock,
   stepText,
@@ -118,6 +119,8 @@ export const BackgroundStatus = memo(function BackgroundStatus(props: {
     panelMinWidth: 360,
     panelMaxWidth: 560,
     panelMaxHeight: LIST_MAX_HEIGHT,
+    // 浮层开合时把焦点交给面板 / 还给触发器：只有这里 opt-in，别的菜单行为不变
+    manageFocus: true,
   };
 
   if (props.variant === "capsule") {
@@ -145,8 +148,8 @@ export const BackgroundStatus = memo(function BackgroundStatus(props: {
                   <Icon name={FEATURE_ICON.automation} size={12} />
                 )}
                 <span className="bg-cap-long">{t.bgStrip.capsule(visible.length, waiting)}</span>
-                <span className="bg-cap-mid">{t.bgStrip.capsuleShort(visible.length)}</span>
-                <span className="bg-cap-short">{visible.length}</span>
+                <span className="bg-cap-mid">{t.bgStrip.capsuleMid(visible.length, waiting)}</span>
+                <span className="bg-cap-short">{t.bgStrip.capsuleShort(visible.length, waiting)}</span>
               </span>
           </Chip>
         )}
@@ -204,9 +207,11 @@ function SummaryParts(props: { parts: readonly BgSummaryPart[] }) {
   return (
     <span className="bg-strip-count">
       {props.parts.map((part, index) => (
-        <span key={part.tone} className="bg-count-part" data-tone={part.tone}>
+        <span key={part.tone}>
           {index > 0 && <span className="bg-count-dot"> · </span>}
-          {part.text}
+          <span className="bg-count-part" data-tone={part.tone}>
+            {part.text}
+          </span>
         </span>
       ))}
     </span>
@@ -281,6 +286,11 @@ function lineTextOf(t: Messages): HomeCardLineText {
     failed: t.homeCard.failed,
     done: t.homeCard.done,
     noText: t.homeCard.noText,
-    verb: (toolName, input) => toolWord(t.chat.rollupTool, rollupToolKey(toolName, input), input),
+    verb: (toolName, input) => {
+      const key = rollupToolKey(toolName, input);
+      const word = toolWord(t.chat.rollupTool, key, input);
+      // 表里没有的下划线 id（report_to_parent 等）不露给用户：走状态位自己的中文名 / 类别名
+      return key.includes("_") && word === key ? bgToolLabel(key, t) : word;
+    },
   };
 }

@@ -10,6 +10,7 @@ import {
   automationLine,
   backgroundItems,
   bgInlineCap,
+  bgToolLabel,
   bgSummary,
   foldBgItems,
   needsClock,
@@ -29,6 +30,7 @@ import type { HomeCardLineText } from "./home-cards.ts";
 /** 文案表用测试自己的桩：纯函数只做拼接，不依赖真实翻译 */
 const t = {
   bgStrip: {
+    tools: { report: "汇报", reply: "回复子会话", delegate: "派出子会话", costs: "查价格", automation: "自动化", other: "工具" },
     running: (n: number) => `${n} 项在跑`,
     waiting: (n: number) => `${n} 项等你`,
     failed: (n: number) => `${n} 项失败`,
@@ -494,5 +496,25 @@ describe("parentFactsFrom —— 母会话槽 → 事实（实时与重读两条
       items: [user("u2", 1500, envelope("m-fail")), assistant("a2", 1800), user("u3", 3000, "继续"), assistant("a3", 3100)],
     });
     assert.equal(run(later), true);
+  });
+});
+
+describe("没有计划时的当前一步不露下划线工具 id（走 BackgroundStrip 的 verb 映射的原料）", () => {
+  test("latestAction 用调用方给的 verb：report_to_parent 这类拿到的是中文名，不是原始 id", () => {
+    const records = [
+      { id: "u1", role: "user", content: [{ type: "text", text: "go" }], timestamp: 1000 },
+      { id: "a1", role: "assistant", content: [{ type: "toolCall", toolCallId: "r1", toolName: "report_to_parent", input: { kind: "done" } }], timestamp: 2000 },
+    ] as unknown as TranscriptItem[];
+    const mapped: HomeCardLineText = { ...lineText, verb: (name) => (name === "report_to_parent" ? "汇报" : name) };
+    assert.equal(stepText({ status: "running", records, messages: undefined, approval: null }, t, mapped), "汇报");
+  });
+});
+
+describe("bgToolLabel", () => {
+  test("已知的通道 / 自动化工具有自己的名字，认不得的写类别名，都不露下划线 id", () => {
+    assert.equal(bgToolLabel("report_to_parent", t), "汇报");
+    assert.equal(bgToolLabel("delegate", t), "派出子会话");
+    assert.equal(bgToolLabel("automation_create", t), "自动化");
+    assert.equal(bgToolLabel("some_new_tool", t), "工具");
   });
 });
