@@ -61,11 +61,13 @@ import {
 } from "./editor-collab.ts";
 import {
   createAutosaveScheduler,
+  createLatestSlot,
   cursorPosition,
   detectLineEnding,
   toDiskText,
   type AutosaveScheduler,
   type EditorPhase,
+  type LatestSlot,
   type LineEnding,
 } from "./editor-state.ts";
 
@@ -256,6 +258,7 @@ export function TexEditorPane(props: {
 
   /** 保存串行化：同一标签不会有两笔写交错（自动保存撞上编译前 flush 是常态） */
   const chainRef = useRef<Promise<FlushOutcome>>(Promise.resolve("clean"));
+  /** 自动保存调度器：挂载时建一次（见下面的 saveSlot），冲突判定里会 cancel 它 */
   const schedulerRef = useRef<AutosaveScheduler | null>(null);
 
   /**
@@ -339,7 +342,15 @@ export function TexEditorPane(props: {
     [saveOnce],
   );
 
-  // 调度器只建一次：save 走 runSave（它已经是最新的 ref 闭包）
+  // 调度器 / 把手都只建一次，但它们要调的 runSave 每轮渲染都换新（`onSaved` 读的
+  // `compileOnSave` 就在那份闭包里）。放进可换的槽，触发时取当前那份——直接把函数
+  // 传给调度器，等于把挂载那一刻的 props 固化：会话内开开关后打字只保存、不编译。
+  const saveSlotRef = useRef<LatestSlot<typeof runSave> | null>(null);
+  if (saveSlotRef.current === null) saveSlotRef.current = createLatestSlot(runSave);
+  const saveSlot = saveSlotRef.current;
+  saveSlot.set(runSave);
+
+  // 调度器只建一次（saveSlot 后面建）：save 触发时才从槽里取本轮的 runSave
   if (schedulerRef.current === null) {
     schedulerRef.current = createAutosaveScheduler({
       delayMs: AUTOSAVE_MS,
@@ -349,7 +360,7 @@ export function TexEditorPane(props: {
           heldPendingRef.current = true;
           return;
         }
-        void runSave(false);
+        saveSlot.get()(false);
       },
     });
   }
@@ -357,13 +368,20 @@ export function TexEditorPane(props: {
 
   /** 回合落定时的同步实现（每轮渲染更新，把手上的引用永远是最新那份闭包） */
   const syncFromDiskRef = useRef<(diskText: string) => void>(() => {});
-  const handleRef = useRef<TexEditorHandle>({
-    flush: () => runSave(false),
-    isDirty: () => isDirtyNow(),
-    conflicted: () => phaseRef.current === "conflict",
-    text: () => viewRef.current?.state.doc.toString() ?? null,
-    syncFromDisk: (diskText: string) => syncFromDiskRef.current(diskText),
-  });
+  // 把手也只建一次（FilesPanel 只在挂载时登记它）：里面同样只持槽，不持函数；
+  // text / syncFromDisk 是 #310 协作安全用的字段，与槽并存。
+  const handleRef = useRef<TexEditorHandle | null>(null);
+  if (handleRef.current === null) {
+    handleRef.current = {
+      flush: () => saveSlot.get()(false),
+      // isDirtyNow 的依赖只有 ref（snapshot 为空依赖），身份本来就稳定，不需再过槽
+      isDirty: () => isDirtyNow(),
+      conflicted: () => phaseRef.current === "conflict",
+      text: () => viewRef.current?.state.doc.toString() ?? null,
+      syncFromDisk: (diskText: string) => syncFromDiskRef.current(diskText),
+    };
+  }
+  const handle = handleRef.current;
 
   // 挂载：建编辑器；卸载：先把没落盘的内容写下去，再销毁
   useEffect(() => {
@@ -410,7 +428,7 @@ export function TexEditorPane(props: {
     });
     viewRef.current = view;
     setCursor(cursorPosition(view.state.doc, view.state.selection.main.head));
-    props.register(path, handleRef.current);
+    props.register(path, handle);
     // 挂载即干净：上一个实例若在冲突中卸载，残留的脏标记不能跟着新实例继续亮
     dirtyRef.current = false;
     props.onDirtyChange(path, false);
@@ -420,7 +438,8 @@ export function TexEditorPane(props: {
       // FilesPanel 在切换 / 关标签前会主动 flush（冲突就不切走），这里是兜底。
       const fixed = snapshot();
       if (fixed !== null && fixed.hash !== savedHashRef.current) {
-        void runSave(false, fixed);
+        // 卸载时的兜底保存同样要读槽：这份 runSave 背后的 onSaved 也得是当前的
+        void saveSlot.get()(false, fixed);
       } else {
         // 没有未落盘内容：把脏标记清掉，不留在外层变成一个永不灭的圆点
         dirtyRef.current = false;

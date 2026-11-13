@@ -10,6 +10,7 @@ import { contentHash } from "../../../../shared/files.ts";
 import {
   closeDecision,
   createAutosaveScheduler,
+  createLatestSlot,
   cursorPosition,
   detectLineEnding,
   isDirty,
@@ -91,6 +92,45 @@ describe("自动保存调度（停手 1.5 s）", () => {
     assert.equal(saves, 1, "flush 当场写，不等 1.5 s");
     timers.advance(5000);
     assert.equal(saves, 1, "原来的计时已经取消，不会再写第二次");
+  });
+});
+
+describe("最新保存槽（只建一次的调度器 / 把手要取当轮闭包）", () => {
+  test("get 读当前那份，set 之后就是新的那一份", () => {
+    const slot = createLatestSlot((tag: string) => tag);
+    assert.equal(slot.get()("a"), "a");
+    slot.set((tag: string) => `${tag}!`);
+    assert.equal(slot.get()("a"), "a!", "set 之后不能还是旧函数");
+  });
+
+  test("调度器持槽：schedule 之后换过保存函数，到点调的是新的那份", () => {
+    const timers = fakeTimers();
+    const calls: string[] = [];
+    const slot = createLatestSlot<() => void>(() => calls.push("挂载时那份"));
+    // 与 TexEditorPane 的接线同形：调度器只认槽，不存函数本身
+    const scheduler = createAutosaveScheduler({ delayMs: 1500, save: () => slot.get()(), timers });
+    // 渲染一次 → 换成本轮闭包（保存即编译的开关就藏在这份闭包里）
+    slot.set(() => calls.push("开关打开后的那份"));
+    scheduler.schedule();
+    timers.advance(1500);
+    assert.deepEqual(calls, ["开关打开后的那份"], "调度器拿到的是最新闭包，不是建它那一刻的");
+
+    // 再来一轮：关掉开关 → 又一次换槽，这次不带编译
+    slot.set(() => calls.push("开关关掉后的那份"));
+    scheduler.schedule();
+    timers.advance(1500);
+    assert.deepEqual(calls, ["开关打开后的那份", "开关关掉后的那份"]);
+  });
+
+  test("编译前 flush 走后一条路径也一样取当轮闭包", () => {
+    const timers = fakeTimers();
+    const calls: string[] = [];
+    const slot = createLatestSlot<() => void>(() => calls.push("旧"));
+    const scheduler = createAutosaveScheduler({ delayMs: 1500, save: () => slot.get()(), timers });
+    slot.set(() => calls.push("新"));
+    scheduler.schedule();
+    assert.equal(scheduler.flush(), true);
+    assert.deepEqual(calls, ["新"]);
   });
 });
 

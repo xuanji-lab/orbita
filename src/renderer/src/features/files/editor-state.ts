@@ -70,6 +70,38 @@ export function isExternalChange(diskHash: string, savedHash: string): boolean {
 /** 保存的调用方（组件里是同一个函数；测试里是一条记录） */
 export type SaveTrigger = () => void;
 
+/**
+ * 「只建一次、但每次触发都该用最新那份函数」的槽。
+ *
+ * 自动保存调度器和交给 FilesPanel 的把手都是**挂载时建一次**的；它们要调的保存函数
+ * 却每轮渲染都换新（`save → onSaved → handleEditorSaved` 读的 `compileOnSave` 就在
+ * 那份闭包里）。入口是 `get()` 而不是函数本身：真正触发时才读当前值。
+ */
+export interface LatestSlot<T> {
+  /** 换成本轮那份（每次渲染都调一次，幂等） */
+  set: (next: T) => void;
+  /** 读当前那份 */
+  get: () => T;
+}
+
+/**
+ * 建一个可换的槽。
+ *
+ * 反面教材（2026-11 PR #379 真机 P1）：「保存即编译」开着时在会话内打开开关再打字，
+ * 只保存不编译——调度器里存的是**建它那一刻**的保存闭包，读到的 `compileOnSave`
+ * 永远是挂载时的值；关掉开关也不会停。凡是只建一次的调度器 / 定时器 / 把手，要调的
+ * 可变闭包都从这里取，别在建立时把函数存成常量。
+ */
+export function createLatestSlot<T>(initial: T): LatestSlot<T> {
+  let current = initial;
+  return {
+    set: (next) => {
+      current = next;
+    },
+    get: () => current,
+  };
+}
+
 /** 定时器由调用方注入（浏览器 setTimeout / 测试里的手动时钟） */
 export interface TimerSource {
   set: (run: () => void, ms: number) => unknown;
