@@ -23,6 +23,13 @@ export const RETRY_MAX_ATTEMPTS = 8;
 export const RETRY_BASE_DELAY_MS = 1000;
 
 /**
+ * 单次退避的上限（毫秒）：pi 0.85 起给 agent 级重试加了 `retry.maxAgentDelayMs`（默认 60s），
+ * 不显式给的话第 7、8 次会从 64s / 128s 被夹成 60s，总窗口从 255s 缩到 183s。
+ * 设成最后一次的 128s，序列与总窗口与升级前一致。
+ */
+export const RETRY_MAX_DELAY_MS = 128_000;
+
+/**
  * 前 N 次重试不打扰界面：瞬时 502 / 网络抖动大多在前几次自愈，每次都弹
  * 「Retry 2/8 · in 3s」是把内部恢复当成了用户的事故。第 N+1 次起才发
  * `retry` 事件给 renderer；最终失败（重试耗尽）照常报错，不受此阈值影响。
