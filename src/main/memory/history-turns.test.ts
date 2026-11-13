@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import type { TranscriptItem } from "../../shared/transcript.ts";
 import { SessionStore } from "../session/store.ts";
 import type { SessionMeta, SessionRecord } from "../../shared/session.ts";
 import { buildClosingScanPrompt } from "../../shared/wrapup-scan.ts";

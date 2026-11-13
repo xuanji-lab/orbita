@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import type { TranscriptItem } from "@shared/transcript";
 import type { TranscriptRecord } from "@shared/session";
 import {
   shouldInterceptSelectAll,

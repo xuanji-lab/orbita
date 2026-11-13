@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import type { TranscriptItem } from "@shared/transcript";
 import { findQuoteSource, locateQuote, nthUserMessageId, quoteFromSelection } from "./quote-select.ts";
 import { composeQuotedMessage } from "../../../../shared/quote.ts";
 import { QUOTE_MAX_CHARS } from "../../../../shared/quote.ts";

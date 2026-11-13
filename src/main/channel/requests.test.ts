@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SessionPhase } from "@earendil-works/pi-protocol";
+import type { SessionPhase } from "../../shared/transcript.ts";
 import type { AgentEvent, ChannelEvent, SubmitAgentInput } from "../../shared/agent-ipc.ts";
 import { parseChannelPrompt, type ChannelDelivery } from "../../shared/channel.ts";
 import type { ProviderDto } from "../../shared/provider.ts";

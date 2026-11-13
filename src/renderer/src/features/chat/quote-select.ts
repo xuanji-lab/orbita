@@ -2,7 +2,7 @@
  * 划选 → 引用，与点 chip → 找回原文的纯逻辑。DOM 那一侧（选区、滚动、高亮）在
  * ChatView 的 QuoteSelectionLayer / jumpToQuote 里，这里只做能测的判断。
  */
-import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import type { TranscriptItem } from "@shared/transcript";
 import {
   clampQuote,
   normalizeSelectedText,

@@ -4,7 +4,7 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
+import type { ToolTranscriptItem, TranscriptItem } from "@shared/transcript";
 import {
   failedFoldKey,
   flattenRenderUnits,

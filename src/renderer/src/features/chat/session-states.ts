@@ -14,7 +14,7 @@ import {
   createTranscriptState,
   type TranscriptState,
 } from "@earendil-works/pi-coding-agent/client";
-import type { SessionSnapshot, ThinkingLevel as PiThinkingLevel, TranscriptItem } from "@earendil-works/pi-protocol";
+import type { SessionSnapshot, ThinkingLevel as PiThinkingLevel, TranscriptItem } from "@shared/transcript";
 import type { AgentEvent, AgentStats, ContextRulesInventory, RetryStatus } from "@shared/agent-ipc";
 import type { ChannelMessage } from "@shared/channel";
 import type { PromptImage } from "@shared/prompt-images";

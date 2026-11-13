@@ -26,7 +26,7 @@ import type { AgentEvent } from "../../shared/agent-ipc.ts";
 import type { ChannelMessage } from "../../shared/channel.ts";
 import type { ChannelMarkRecord, SessionMeta, SessionRecord } from "../../shared/session.ts";
 import type { Workspace } from "../../shared/workspace.ts";
-import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import type { TranscriptItem } from "../../shared/transcript.ts";
 import type { ExternalSessionReader, ExternalSessionSummary } from "./external-session.ts";
 
 type ReadTaskRequestEvent = Extract<AgentEvent, { type: "readTaskRequest" }>;

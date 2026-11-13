@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
+import type { ToolTranscriptItem, TranscriptItem } from "@shared/transcript";
 import { buildGoalLedger } from "../../../../shared/goal-ledger.ts";
 import { en } from "../../messages-en.ts";
 import { zh } from "../../messages-zh.ts";

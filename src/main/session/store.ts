@@ -12,7 +12,7 @@
 import { appendFile, copyFile, cp, lstat, mkdir, readFile, readdir, realpath, rename, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
-import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import type { TranscriptItem } from "../../shared/transcript.ts";
 import { writeBytesAtomic, writeJsonAtomic, writeTextAtomic } from "../atomic-write.ts";
 import {
   isOriginalRef,

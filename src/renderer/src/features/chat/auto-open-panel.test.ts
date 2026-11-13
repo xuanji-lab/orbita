@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import type { TranscriptItem } from "@shared/transcript";
 import { collectOpenHints, resetOpenedAfterTurn } from "./auto-open-panel.ts";
 import { readCommandCard, readOpenPanel } from "../../../../shared/builtin-command.ts";
 

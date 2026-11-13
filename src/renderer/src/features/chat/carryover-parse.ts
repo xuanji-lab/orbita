@@ -2,7 +2,7 @@
  * 收尾扫描在 renderer 这一侧的纯函数：取扫描回答、消息流里认出扫描回答、
  * 遗留事项的锚点。prompt 与严格解析在 shared/wrapup-scan.ts（与主进程共用）。
  */
-import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import type { TranscriptItem } from "@shared/transcript";
 import type { SubmitAgentInput } from "@shared/agent-ipc";
 import type { WrapupPlan } from "@shared/wrapup";
 import { atMostManual } from "../../../../shared/permission.ts";

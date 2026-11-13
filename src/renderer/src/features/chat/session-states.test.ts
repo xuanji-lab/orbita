@@ -2,7 +2,7 @@ import { test, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
 import type { FileTurnRecord, RevertRecord } from "@shared/revert";
-import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import type { TranscriptItem } from "@shared/transcript";
 import type { AgentEvent, AgentStats, ContextRulesInventory, RetryStatus } from "@shared/agent-ipc";
 import type { ChannelMessage } from "@shared/channel";
 import type { ChannelMarkRecord, CompactedRecord, IntentRecallRecord, SessionRecord } from "@shared/session";

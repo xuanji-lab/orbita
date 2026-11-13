@@ -9,7 +9,7 @@ import { app, BrowserWindow, nativeTheme, powerMonitor, powerSaveBlocker, shell,
 import { randomUUID } from "node:crypto";
 import { cpus, homedir, totalmem } from "node:os";
 import { join } from "node:path";
-import type { SessionPhase } from "@earendil-works/pi-protocol";
+import type { SessionPhase } from "../shared/transcript.ts";
 import { effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";

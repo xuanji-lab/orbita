@@ -8,7 +8,7 @@
  * （用户当场看到哪张不行、为什么），agent 进程在交给 pi 之前再拦一道
  * （renderer 不是唯一的信任边界——载荷穿过两跳 IPC）。两边各写一份迟早漂移。
  */
-import type { ImageContent } from "@earendil-works/pi-protocol";
+import type { ImageContent } from "./transcript.ts";
 
 export type PromptImage = ImageContent;
 

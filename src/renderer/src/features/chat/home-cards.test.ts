@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
+import type { ToolTranscriptItem, TranscriptItem } from "@shared/transcript";
 import type { Carryover, SessionMeta } from "@shared/session";
 import type { SessionRunState } from "../notify/completion-notice.ts";
 import {

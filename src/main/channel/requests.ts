@@ -13,7 +13,7 @@
  *     结掉挂着的浏览器交接 + 账本落 stop，状态翻 stopped）
  */
 import { randomUUID } from "node:crypto";
-import type { SessionPhase } from "@earendil-works/pi-protocol";
+import type { SessionPhase } from "../../shared/transcript.ts";
 import type {
   AgentEvent,
   ChannelEvent,

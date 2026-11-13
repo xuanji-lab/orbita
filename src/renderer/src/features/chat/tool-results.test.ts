@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
+import type { ToolTranscriptItem, TranscriptItem } from "@shared/transcript";
 import type { CompactedRecord, SessionRecord } from "@shared/session";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载（同 tool-results.ts 本身的纪律）
 import { composeChannelPrompt } from "../../../../shared/channel.ts";

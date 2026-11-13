@@ -1,5 +1,5 @@
 /**
- * transcript-adapter —— 把 pi 的 AgentSession 事件流翻成 pi-protocol 的 transcript 协议。
+ * transcript-adapter —— 把 pi 的 AgentSession 事件流翻成 src/shared/transcript.ts 的转录协议。
  *
  * 这是整条链路唯一有实质翻译工作的地方（docs/single-agent-guideline.md §三）。
  * 上游给的是 `AgentSessionEvent`（含整条 AssistantMessage 与流式增量），
@@ -19,7 +19,7 @@ import type {
   ToolTranscriptItem,
   TranscriptItem,
   TranscriptProgress,
-} from "@earendil-works/pi-protocol";
+} from "../shared/transcript.ts";
 
 /** 0.84.3 起协议只导出 Schema 常量不导出内容类型——从 TranscriptItem 反推，不为此引 typebox */
 type AssistantContent = AssistantTranscriptItem["content"][number];
