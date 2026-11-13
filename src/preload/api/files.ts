@@ -20,6 +20,8 @@ import type {
   FsEntryFact,
   PdfFile,
 } from "../../shared/files.ts";
+import type { XlsxPreview, XlsxReadRequest } from "../../shared/xlsx.ts";
+import type { PptxPreview, PptxReadRequest } from "../../shared/pptx.ts";
 
 export const filesApi = {
   /** 这条会话的根清单（工作台 / 工作区 / 附加目录），顺序固定、每次现算 */
@@ -37,7 +39,10 @@ export const filesApi = {
    * 不动盘；null = 用户选了「保留我的」，强制写。
    */
   write: (req: FileWriteRequest): Promise<FileWriteResult> => ipcRenderer.invoke(ipcChannels.fsWrite, req),
-  /** 建行索引（同 root/dir 白名单）：>16 MB 的文本走分段预览时先问这个文件有多少行 */
+  /** 读一份 .xlsx 的结构化预览（同白名单，且须是 .xlsx；只读，不含任何写入口） */
+  readXlsx: (req: XlsxReadRequest): Promise<XlsxPreview> => ipcRenderer.invoke(ipcChannels.fsReadXlsx, req),
+  /** 读一份 .pptx 的只读大纲（同白名单，且须是 .pptx；只读，不含任何写入口） */
+  readPptx: (req: PptxReadRequest): Promise<PptxPreview> => ipcRenderer.invoke(ipcChannels.fsReadPptx, req),  /** 建行索引（同 root/dir 白名单）：>16 MB 的文本走分段预览时先问这个文件有多少行 */
   lineIndex: (req: FileLineIndexRequest): Promise<FileLineIndex> =>
     ipcRenderer.invoke(ipcChannels.fsLineIndex, req),
   /** 取消一次还在扫的 lineIndex（换标签 / 卸载时调；已完成的请求什么都不会发生） */
