@@ -27,7 +27,9 @@ import {
   runWhen,
   runningCount,
   scheduleFromForm,
+  formatEnded,
   sortAutomations,
+  splitFinished,
   subtitleOf,
   visibleRuns,
 } from "./automation-view.ts";
@@ -90,6 +92,28 @@ describe("rowStateOf / sortAutomations / runningCount", () => {
     assert.deepEqual(list.map((a) => a.id), ["running", "soon", "late", "paused", "failed", "done2", "done"]);
   });
 
+  test("已结束的按结束时间新→旧排（不是创建时间）", () => {
+    const list = sortAutomations([
+      auto({ id: "oldEnd", status: "completed", nextRunAt: null, createdAt: 99, updatedAt: 10 }),
+      auto({ id: "newEnd", status: "completed", nextRunAt: null, createdAt: 1, updatedAt: 500 }),
+    ]);
+    assert.deepEqual(list.map((a) => a.id), ["newEnd", "oldEnd"]);
+  });
+
+  test("splitFinished：没结束的（active / paused / failed）与已结束的分开，一条不丢不重", () => {
+    const all = [
+      auto({ id: "a" }),
+      auto({ id: "p", status: "paused", nextRunAt: null }),
+      auto({ id: "f", status: "failed", nextRunAt: null }),
+      auto({ id: "c1", status: "completed", nextRunAt: null }),
+      auto({ id: "c2", status: "completed", nextRunAt: null }),
+    ];
+    const { open, finished } = splitFinished(all);
+    assert.deepEqual(open.map((a) => a.id), ["a", "p", "f"]);
+    assert.deepEqual(finished.map((a) => a.id), ["c1", "c2"]);
+    assert.deepEqual(splitFinished([]), { open: [], finished: [] });
+  });
+
   test("runningCount 数在跑的任务", () => {
     assert.equal(runningCount([auto({ id: "a", runs: [run({ id: "r", status: "running" })] }), auto({ id: "b" })]), 1);
   });
@@ -130,6 +154,12 @@ describe("groupAutomations", () => {
 });
 
 describe("时间与调度的人话", () => {
+  test("formatEnded（已结束的时间）：今天只写时刻、同年写月日、跨年带年份，都不带星期", () => {
+    assert.equal(formatEnded(local(2026, 10, 31, 9, 55), NOW, T), "today 09:55");
+    assert.equal(formatEnded(local(2026, 10, 13, 23, 50), NOW, Z), "10-13 23:50");
+    assert.equal(formatEnded(local(2025, 12, 30, 8), NOW, T), "2025-12-30 08:00");
+  });
+
   test("formatWhen：今天 / 明天 / 同年写月日星期 / 跨年带年份", () => {
     assert.equal(formatWhen(local(2026, 10, 31, 18), NOW, T), "today 18:00");
     assert.equal(formatWhen(local(2026, 11, 1, 9, 5), NOW, T), "tomorrow 09:05");
@@ -161,9 +191,14 @@ describe("时间与调度的人话", () => {
     assert.equal(subtitleOf(auto({ id: "a" }), NOW, T), "Every 15 minutes · next today 10:15");
     assert.equal(subtitleOf(auto({ id: "a", status: "paused", nextRunAt: null }), NOW, T), "Every 15 minutes · Paused");
     assert.equal(subtitleOf(auto({ id: "a", status: "failed", nextRunAt: null }), NOW, T), "Every 15 minutes · Failed");
+    // 已结束的先说怎么结束、什么时候结束，调度放最后（窄栏截断时丢的是调度）
     assert.equal(
-      subtitleOf(auto({ id: "a", status: "completed", endReason: "sessionDeleted", nextRunAt: null }), NOW, Z),
-      "每 15 分钟 · 已结束，它绑定的会话被删了",
+      subtitleOf(auto({ id: "a", status: "completed", endReason: "sessionDeleted", nextRunAt: null, updatedAt: NOW - 5 * MIN }), NOW, Z),
+      "已结束，它绑定的会话被删了 · 今天 09:55 · 每 15 分钟",
+    );
+    assert.equal(
+      subtitleOf(auto({ id: "a", status: "completed", endReason: "cancelled", nextRunAt: null, updatedAt: NOW - 5 * MIN }), NOW, T),
+      "Cancelled · today 09:55 · Every 15 minutes",
     );
     assert.match(
       subtitleOf(auto({ id: "a", pendingDelivery: { since: NOW, trigger: "schedule", merged: 0 } }), NOW, T),

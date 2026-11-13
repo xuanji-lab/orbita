@@ -428,6 +428,9 @@ export const zh: Messages = {
       mode: "权限",
       model: "模型",
       plugin: "插件",
+      createdBy: "创建者",
+      creatorUser: "你",
+      creatorAgent: "智能体，在对话里建的",
       newSession: "每次新开会话",
       modeSkip: "放行，不询问",
       modePlan: "计划，只读",
@@ -443,6 +446,12 @@ export const zh: Messages = {
       titleAll: "还没有自动化",
       body: "手动建一个，或者直接在对话里说「每周五帮我看……」「15 分钟后回来看下日志」。",
       templates: "从模板开始",
+      idleTitle: "没有进行中的自动化",
+      idleBody: "结束了的收在下面的「已结束」里。可以新建一个，或在详情里重新启动已结束的。",
+    },
+    finished: {
+      title: (count) => `已结束（${count}）`,
+      note: (keep) => `已结束的自动归档在这里，不占自动化名额，只留最近 ${keep} 条。重新启动会让它回到进行中。`,
     },
     templates: {
       paper: {

@@ -6,6 +6,7 @@ import {
   countLabel,
   describeSchedule,
   detailActions,
+  formatEnded,
   formatTokens,
   formatWhen,
   noteOf,
@@ -69,7 +70,12 @@ export function AutomationDetailView(props: {
       : d.newSession;
   const schedule = describeSchedule(automation.schedule, a, props.now);
   const count = countLabel(automation, a);
-  const subtitle = [schedule, where, count].filter((part) => part !== "").join(" · ");
+  // 已结束的：副标题先说怎么结束的、什么时候（归档记录里的结束原因与时间在这里查得到）
+  const endedBits =
+    state === "completed"
+      ? [automation.endReason === undefined ? a.state.completed : a.endReason[automation.endReason], formatEnded(automation.updatedAt, props.now, a)]
+      : [];
+  const subtitle = [...endedBits, schedule, where, count].filter((part) => part !== "").join(" · ");
   const when =
     (state === "active" || state === "running") && automation.schedule.kind !== "once"
       ? automation.nextRunAt === null
@@ -186,6 +192,8 @@ export function AutomationDetailView(props: {
               <dd>{automation.plugin.name}</dd>
             </>
           )}
+          <dt>{d.createdBy}</dt>
+          <dd>{automation.createdBy.kind === "agent" ? d.creatorAgent : d.creatorUser}</dd>
         </dl>
         <div className="auto-card-foot">
           <button type="button" className="auto-btn" onClick={props.onEdit}>

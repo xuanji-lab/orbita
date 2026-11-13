@@ -503,6 +503,10 @@ export const en = {
       mode: "Permission",
       model: "Model",
       plugin: "Plugin",
+      /** 「谁建的」：留痕的一部分，已结束的归档记录里也查得到 */
+      createdBy: "Created by",
+      creatorUser: "You",
+      creatorAgent: "The agent, in a conversation",
       newSession: "A fresh task each run",
       modeSkip: "Skip, nothing is asked",
       modePlan: "Plan, read-only",
@@ -518,6 +522,15 @@ export const en = {
       titleAll: "No automations yet",
       body: "Create one, or just say it in a conversation: “every Friday, check …”, “come back in 15 minutes and look at the log”.",
       templates: "Start from a template",
+      /** 只有已结束的：没有进行中的，但下面的「已结束」里有 */
+      idleTitle: "Nothing in progress",
+      idleBody: "Finished automations are kept below. Create a new one, or restart a finished one from its details.",
+    },
+    /** 默认折叠的「已结束」段：已结束的自动归档、不占 20 条名额 */
+    finished: {
+      title: (count: number) => `Finished (${count})`,
+      note: (keep: number) =>
+        `Finished automations are archived here and don't count toward the limit. The latest ${keep} are kept. Restarting one puts it back in progress.`,
     },
     templates: {
       paper: {
