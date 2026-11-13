@@ -3,9 +3,15 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import { Chip } from "../../shell/Chip";
 import { Icon, type IconName } from "../../shell/Icon";
+import { PanelEmpty } from "../../shell/PanelEmpty";
 import { Menu } from "../../shell/Menu";
 import type { MenuItem } from "../../shell/Menu";
 import { PanelButton } from "../../shell/RightPanel";
+import type { PluginDraftTarget } from "../plugins/plugin-draft.ts";
+import { MemoryLibraryView } from "../memory/MemoryLibraryView";
+import type { MemoryEntryView } from "@shared/memory";
+import { PluginsView } from "../plugins/PluginsView.tsx";
+import type { SettingsTab } from "./settings-tabs.ts";
 import type { ProviderDto } from "@shared/provider";
 import type {
   BrowserImportedSite,
@@ -22,7 +28,9 @@ import { COMPACTION_CHOICES } from "./compact-viz.ts";
 import { allShownTicked, importedFirst, setShown } from "./login-sites.ts";
 import { formatDay } from "./migration-groups.ts";
 import { MigrationView } from "./MigrationView";
+import { GuideSettings } from "./GuideSettings";
 import { SettingGroup, SettingRow } from "./SettingRow";
+import { Segmented, SelectButton, Switch } from "./SettingControls";
 import { UpdateCard } from "./UpdateCard";
 import { ProvidersView } from "./ProvidersView";
 import { ThemePicker } from "./ThemeCard";
@@ -41,13 +49,14 @@ import {
 import type { IntentHealth } from "@shared/intent-lab";
 import { intentChannelUnavailable } from "@shared/intent-lab";
 import { THINKING_LEVELS } from "@shared/thinking";
+import { panelUsageRows, type PanelUsageSnapshot } from "@shared/panel-usage";
 import { COMMIT_TRAILER, prAttributionLine } from "@shared/attribution";
 import { effectiveLanguage, LANGUAGES, themeLanguage, type Language, type ModelPair } from "@shared/settings";
 
 /** 语言芯片上写各自的自称（English / 中文）：找自己语言的人认的是自称，这两个词不翻译 */
 const LANGUAGE_NAMES: Record<Language, string> = { en: "English", zh: "中文" };
 import { defaultThinkingLevel, modelThinkingLevels } from "@shared/model-defaults";
-import { declaredThinkingLevels, modelPreferenceById } from "./providers-view-model.ts";
+import { declaredThinkingLevels, isPairOnClosedProvider, modelPreferenceById } from "./providers-view-model.ts";
 import { useT } from "../../locale.ts";
 import { playCompletionChime } from "../notify/chime.ts";
 
@@ -56,17 +65,6 @@ import { playCompletionChime } from "../notify/chime.ts";
  * 右边还是同一张 `.pane`，同一个宽度、同一套宽度变化。这样设置与聊天是同一个壳，
  * 不是叠在壳上的另一层。
  */
-export const SETTINGS_TABS = [
-  { id: "general", icon: "sliders" },
-  { id: "providers", icon: "cpu" },
-  { id: "migration", icon: "download" },
-  { id: "browser", icon: "globe" },
-  { id: "voice", icon: "mic" },
-  { id: "experimental", icon: "flask-conical" },
-] as const satisfies readonly { id: string; icon: IconName }[];
-
-export type SettingsTab = (typeof SETTINGS_TABS)[number]["id"];
-
 export function SettingsView(props: {
   tab: SettingsTab;
   settings: AppSettings;
@@ -81,11 +79,26 @@ export function SettingsView(props: {
   onImported: () => void;
   /** 既有工作区（Migration 的去向菜单列它们） */
   workspaces: readonly Workspace[];
+  /** 当前会话所在的工作区与「打开看板」：插件页（全屏版）的详情页用 */
   /** 切 tab（Migration 的「Set up providers」跳到 Providers） */
   onTab: (tab: SettingsTab) => void;
+  /** 插件页签（全屏版）要接到会话引擎与右栏上的三样 */
+  plugins: {
+    currentWorkspaceId: string | null;
+    onMakeWithAgent: () => void;
+    onOpenBoard: (pluginName: string) => void;
+    /** 「正在做」组里点一行 / 点「回到对话」：退出设置，右栏开该草稿 / 打开那条会话 */
+    onOpenDraft: (draft: PluginDraftTarget) => void;
+    onOpenSession: (sessionId: string, draftPath: string) => void;
+  };
+  /** 「新手引导」页签：全屏打开引导，从第几页开始（0 = 从头；点某章 = 那章的章首页）。不改「看过」的设置键 */
+  onOpenOnboarding: (startAt: number) => void;
+  /** 记忆库页签里「回到原文」：退出设置、打开出处会话并滚到那一轮 */
+  onJumpToMemorySource: (view: MemoryEntryView) => void;
+  /** 收起右栏；右栏没开就是 null。模型服务页的价格 · 能力图太窄时给「收起右栏」按钮用 */
+  onCollapseRail: (() => void) | null;
 }) {
   const t = useT();
-  const active = SETTINGS_TABS.find((tab) => tab.id === props.tab) ?? SETTINGS_TABS[0];
   /**
    * Migration 的状态（扫描结果、勾选、去向）**跨 tab 保留**：用户为了三步清单要跳去
    * Providers / General 再回来，每次回来都重扫就又回到「懵逼」（wafo 2026-09-28）。
@@ -103,6 +116,10 @@ export function SettingsView(props: {
         minHeight: 0,
         display: "grid",
         gridTemplateRows: "minmax(0,1fr)",
+        // 列必须显式写 minmax(0,1fr)：缺省是隐式的 auto 列，它的下限是页签内容的 min-content——
+        // 右栏一开、主槽变窄时这一列不肯缩，内容溢出 .pane-main 画到右栏底下（2026-11-07 用户：
+        // 模型服务页被右栏盖住；1000 宽窗口 + 右栏实测溢出 198px，补这一行后为 0）
+        gridTemplateColumns: "minmax(0,1fr)",
       }}
     >
 
@@ -137,6 +154,29 @@ export function SettingsView(props: {
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
           <VoiceSettings />
         </div>
+      ) : props.tab === "guide" ? (
+        <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
+          <GuideSettings seen={props.settings.onboardingSeen === true} onOpen={props.onOpenOnboarding} />
+        </div>
+      ) : props.tab === "plugins" ? (
+        // 插件页的全屏版：自己带滚动区；窄了（右栏同时开着）由它自己的容器查询收成单列
+        <PluginsView
+          workspaces={props.workspaces}
+          chrome="page"
+          page={props.settings.pluginsPage}
+          onPage={(pluginsPage) => props.onSettingsChange({ pluginsPage })}
+          {...props.plugins}
+        />
+      ) : props.tab === "memory" ? (
+        // 记忆库页签：页内自带范围导航与滚动区；宽 / 窄的排法看容器宽度（memory.css 的 @container mem）
+        <MemoryLibraryView
+          onJump={props.onJumpToMemorySource}
+          choreLabel={props.settings.choreModel?.modelId ?? null}
+          onOpenGeneral={() => {
+            setHighlightChore(true);
+            props.onTab("general");
+          }}
+        />
       ) : props.tab === "experimental" ? (
         // 实验功能独立成 Tab（2026-10 用户裁决）：总开关与功能清单都住这里，通用页不再出现
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
@@ -147,8 +187,9 @@ export function SettingsView(props: {
         <ProvidersView
           onChange={props.onProvidersChange}
           onSessionsChanged={props.onImported}
-          cardSize={props.settings.providerCardSize ?? "large"}
-          onCardSize={(providerCardSize) => props.onSettingsChange({ providerCardSize })}
+          page={props.settings.providersPage ?? {}}
+          onPage={(providersPage) => props.onSettingsChange({ providersPage })}
+          onCollapseRail={props.onCollapseRail}
         />
       ) : props.tab === "migration" ? null : (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
@@ -160,6 +201,7 @@ export function SettingsView(props: {
             onChange={props.onSettingsChange}
             highlightChore={highlightChore}
             onHighlightConsumed={() => setHighlightChore(false)}
+            onOpenProviders={() => props.onTab("providers")}
           />
         </div>
       )}
@@ -195,6 +237,18 @@ function inheritedRow(fallback: InheritedFallback): MenuItem {
   };
 }
 
+/** 设置里选的模型指向了被关的服务商：旁边一行提示（不静默改选，运行时按既有兜底退回） */
+function ClosedProviderNote(props: { title: string; body: string }) {
+  return (
+    <span className="set-row-note" role="status">
+      <Icon name="triangle-alert" size={12} strokeWidth={1.8} />
+      <span>
+        {props.title} · {props.body}
+      </span>
+    </span>
+  );
+}
+
 type InheritedFallback = { id: string; label: string; hint: string; inherited: boolean; onSelect: () => void; hintBelow?: boolean };
 
 function General(props: {
@@ -207,6 +261,8 @@ function General(props: {
   /** 迁移页三步清单第②步跳过来时：滚到家务活模型行、短暂高亮、焦点落到选择器 */
   highlightChore?: boolean;
   onHighlightConsumed?: () => void;
+  /** 模型菜单底部「已关闭的服务 · 去模型服务打开」的去向 */
+  onOpenProviders: () => void;
 }) {
   const t = useT();
   const choreRowRef = useRef<HTMLDivElement | null>(null);
@@ -236,10 +292,13 @@ function General(props: {
   const setCompaction = (next: CompactionSetting) => props.onChange({ compaction: next });
   // 同理：缺席 = 开启，UI 要把这一层兜回来，否则新用户看到的是 Off、实际在签名
   const gitAttribution = props.settings.gitAttribution ?? true;
+  const planFirst = props.settings.planFirst ?? false;
   // 同理：缺席 = 折叠（粘贴文本 chip 的出厂形态）
   const pastedCollapse = props.settings.collapsePastedText ?? true;
   // 完成提示音：缺席 = 响（这个提醒的价值在人不在跟前时也成立；只管声音，卡片与未读不受它影响）
   const completionSound = props.settings.completionSound ?? true;
+  // 过程显示：缺席 = 一轮一行（2026-10-30）
+  const processView = props.settings.processView ?? "turn";
 
   const catalog = useBuiltinCatalog();
   const usable = usableProviders(props.providers);
@@ -330,18 +389,13 @@ function General(props: {
         <SettingRow name={t.settings.language} info={t.settings.languageInfo}>
           {/* 单语主题下两个芯片都置灰、亮的是主题定的那门语言，旁边说清为什么——
               设置里存的值不动，切回双语主题就恢复 */}
-          <span className="set-chips" role="group" aria-label={t.settings.language}>
-            {LANGUAGES.map((language) => (
-              <Chip
-                key={language}
-                active={shownLanguage === language}
-                disabled={lockedLanguage !== null}
-                onClick={() => props.onChange({ language })}
-              >
-                {LANGUAGE_NAMES[language]}
-              </Chip>
-            ))}
-          </span>
+          <Segmented
+            label={t.settings.language}
+            value={shownLanguage}
+            options={LANGUAGES.map((language) => ({ value: language, label: LANGUAGE_NAMES[language] }))}
+            disabled={lockedLanguage !== null}
+            onChange={(language) => props.onChange({ language })}
+          />
           {lockedLanguage !== null && (
             <span className="set-row-hint">
               {lockedLanguage === "zh" ? t.settings.languageLockedZh : t.settings.languageLockedEn}
@@ -362,23 +416,17 @@ function General(props: {
             </>
           }
         >
-          <span className="set-chips" role="group" aria-label={t.settings.autoCompact}>
-            <Chip
-              active={compaction.enabled === false}
-              onClick={() => setCompaction({ ...compaction, enabled: false })}
-            >
-              {t.common.off}
-            </Chip>
-            {COMPACTION_CHOICES.map((value) => (
-              <Chip
-                key={value}
-                active={compaction.enabled !== false && compaction.reservePercent === value}
-                onClick={() => setCompaction({ enabled: true, reservePercent: value })}
-              >
-                {value}%
-              </Chip>
-            ))}
-          </span>
+          <Segmented<number | "off">
+            label={t.settings.autoCompact}
+            value={compaction.enabled === false ? "off" : compaction.reservePercent}
+            options={[
+              { value: "off", label: t.common.off },
+              ...COMPACTION_CHOICES.map((value) => ({ value, label: `${value}%` })),
+            ]}
+            onChange={(value) =>
+              setCompaction(value === "off" ? { ...compaction, enabled: false } : { enabled: true, reservePercent: value })
+            }
+          />
           {/* Off 时整条可视化不渲染（条件渲染，不是隐藏）——没有折叠点可画 */}
           {compaction.enabled !== false && <CompactViz percent={compaction.reservePercent} />}
         </SettingRow>
@@ -386,6 +434,11 @@ function General(props: {
           name={t.settings.choreModel}
           info={t.settings.choreModelInfo}
           rowRef={choreRowRef}
+          note={
+            isPairOnClosedProvider(usable, choreModel) ? (
+              <ClosedProviderNote title={t.providers.closedModelSet} body={t.providers.closedModelChore} />
+            ) : undefined
+          }
         >
           {/* 触发芯片不带图标：跟底栏的模型芯片同形，模型 id 本身就是内容 */}
           <ModelPickerMenu
@@ -397,25 +450,30 @@ function General(props: {
             onToggleStar={props.onToggleStarModel}
             onSelect={(providerId, modelId) => props.onChange({ choreModel: { providerId, modelId } })}
             leading={[choreFallback]}
+            onOpenProviders={props.onOpenProviders}
             trigger={({ open, toggle }) => (
-              <Chip
-                active={open}
+              <SelectButton
+                open={open}
                 title={
                   choreModel === undefined
                     ? t.settings.choreModelTip
                     : `${choreModel.providerId} · ${choreModel.modelId}`
                 }
                 onClick={toggle}
-                chevron
               >
                 {choreModel?.modelId ?? t.settings.sameAsSession}
-              </Chip>
+              </SelectButton>
             )}
           />
         </SettingRow>
         <SettingRow
           name={t.settings.subSessionModel}
           info={t.settings.subSessionModelInfo}
+          note={
+            isPairOnClosedProvider(usable, subSessionModel) ? (
+              <ClosedProviderNote title={t.providers.closedModelSet} body={t.providers.closedModelSub} />
+            ) : undefined
+          }
         >
           {/* 模型与思考档一行：思考档是模型的属性（档位集与默认档都随型号变），所以先有
               模型芯片、选了具体模型才长出思考档芯片。Same as parent 时思考档跟父走，
@@ -431,19 +489,19 @@ function General(props: {
               onSelect={(providerId, modelId) =>
                 props.onChange({ subSessionModel: { providerId, modelId }, subSessionThinking: null })}
               leading={[subSessionFallback]}
+              onOpenProviders={props.onOpenProviders}
               trigger={({ open, toggle }) => (
-                <Chip
-                  active={open}
+                <SelectButton
+                  open={open}
                   title={
                     subSessionModel === undefined
                       ? t.settings.subSessionModelTip
                       : `${subSessionModel.providerId} · ${subSessionModel.modelId}`
                   }
                   onClick={toggle}
-                  chevron
                 >
                   {subSessionModel?.modelId ?? t.settings.sameAsParent}
-                </Chip>
+                </SelectButton>
               )}
             />
             {subSessionThinkingModel !== null && (
@@ -451,18 +509,17 @@ function General(props: {
                 items={subSessionThinkingItems}
                 panelMinWidth={112}
                 trigger={({ open, toggle }) => (
-                  <Chip
-                    active={open}
+                  <SelectButton
+                    open={open}
                     title={t.settings.thinkingLevelFor(subSessionThinkingModel.modelId)}
                     onClick={toggle}
-                    chevron
                   >
                     {subSessionThinking === undefined
                       ? t.settings.defaultThinking(
                           t.thinkingLevel(subSessionThinkingModel.fallback, subSessionThinkingModel.modelId),
                         )
                       : t.thinkingLevel(subSessionThinking, subSessionThinkingModel.modelId)}
-                  </Chip>
+                  </SelectButton>
                 )}
               />
             )}
@@ -472,47 +529,51 @@ function General(props: {
           name={t.settings.attribution}
           info={t.settings.attributionInfo}
         >
-          {/* 设计系统里没有 Switch，开关就用两个 Chip——与 Auto-compact 的 Off 同一个形状 */}
-          <span className="set-chips" role="group" aria-label={t.settings.attributionAria}>
-            <Chip active={gitAttribution} onClick={() => props.onChange({ gitAttribution: true })}>
-              {t.common.on}
-            </Chip>
-            <Chip active={!gitAttribution} onClick={() => props.onChange({ gitAttribution: false })}>
-              {t.common.off}
-            </Chip>
-          </span>
+          <Switch
+            label={t.settings.attributionAria}
+            checked={gitAttribution}
+            onChange={(next) => props.onChange({ gitAttribution: next })}
+          />
           <AttributionPreview enabled={gitAttribution} language={shownLanguage} />
+        </SettingRow>
+        <SettingRow name={t.settings.planFirst} info={t.settings.planFirstInfo}>
+          <Switch
+            label={t.settings.planFirstAria}
+            checked={planFirst}
+            onChange={(next) => props.onChange({ planFirst: next })}
+          />
+        </SettingRow>
+        <SettingRow name={t.settings.processView} info={t.settings.processViewInfo}>
+          <Segmented
+            label={t.settings.processViewAria}
+            value={processView}
+            options={[
+              { value: "turn" as const, label: t.settings.processViewTurn },
+              { value: "steps" as const, label: t.settings.processViewSteps },
+            ]}
+            onChange={(next) => props.onChange({ processView: next })}
+          />
         </SettingRow>
         <SettingRow
           name={t.settings.pastedCollapse}
           info={t.settings.pastedCollapseInfo}
         >
-          {/* 设计系统里没有 Switch，开关就用两个 Chip——与署名开关同一个形状 */}
-          <span className="set-chips" role="group" aria-label={t.settings.pastedCollapseAria}>
-            <Chip active={pastedCollapse} onClick={() => props.onChange({ collapsePastedText: true })}>
-              {t.common.on}
-            </Chip>
-            <Chip active={!pastedCollapse} onClick={() => props.onChange({ collapsePastedText: false })}>
-              {t.common.off}
-            </Chip>
-          </span>
+          <Switch
+            label={t.settings.pastedCollapseAria}
+            checked={pastedCollapse}
+            onChange={(next) => props.onChange({ collapsePastedText: next })}
+          />
         </SettingRow>
         <SettingRow name={t.settings.completionSound} info={t.settings.completionSoundInfo}>
-          <span className="set-chips" role="group" aria-label={t.settings.completionSoundAria}>
-            <Chip
-              active={completionSound}
-              onClick={() => {
-                props.onChange({ completionSound: true });
-                // 打开时当场响一声：开关的意义就是这个声音，让人先听到它是什么
-                playCompletionChime();
-              }}
-            >
-              {t.common.on}
-            </Chip>
-            <Chip active={!completionSound} onClick={() => props.onChange({ completionSound: false })}>
-              {t.common.off}
-            </Chip>
-          </span>
+          <Switch
+            label={t.settings.completionSoundAria}
+            checked={completionSound}
+            onChange={(next) => {
+              props.onChange({ completionSound: next });
+              // 打开时当场响一声：开关的意义就是这个声音，让人先听到它是什么
+              if (next) playCompletionChime();
+            }}
+          />
         </SettingRow>
       </SettingGroup>
       <SettingGroup label={t.settings.data}>
@@ -564,7 +625,46 @@ function ExperimentalSettings(props: {
           />
         ))}
       </div>
+      <PanelUsageSection />
     </div>
+  );
+}
+
+/**
+ * 每个面板打开了几次（本机的统计，shared/panel-usage.ts；放在实验功能页底部，不随任何开关隐藏）：一行只读统计，
+ * 全部面板都列、0 次也列，多的在前——一周后看它决定删什么。只在本机数、不上传；
+ * 拉不到（IPC 出错）就不画这一节。
+ */
+function PanelUsageSection() {
+  const t = useT();
+  const [snapshot, setSnapshot] = useState<PanelUsageSnapshot | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    api.panelUsage
+      .get()
+      .then((next) => {
+        if (!cancelled) setSnapshot(next);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  if (snapshot === null) return null;
+  const since = new Date(snapshot.since);
+  return (
+    <section className="set-group panel-usage">
+      <span className="section-label">{t.settings.panelUsageTitle}</span>
+      <p className="panel-usage-line">
+        {panelUsageRows(snapshot).map((row, index) => (
+          <span key={row.key} data-zero={row.count === 0 || undefined}>
+            {index > 0 && " · "}
+            {t.settings.panelUsageName(row.key)} <span className="panel-usage-count">{row.count}</span>
+          </span>
+        ))}
+      </p>
+      <p className="set-row-desc">{t.settings.panelUsageSince(since.getMonth() + 1, since.getDate())}</p>
+    </section>
   );
 }
 
@@ -641,22 +741,15 @@ function IntentSettingsSection(props: {
             )}
         </span>
         <div className="set-row-ctl">
-          <span className="set-chips" role="group" aria-label={t.settings.intentChannel}>
-            <Chip
-              active={effective.channel === "proma"}
-              onClick={() => patchIntent({ channel: "proma" })}
-              title={t.settings.intentChannelProma}
-            >
-              {t.settings.intentChannelProma}
-            </Chip>
-            <Chip
-              active={effective.channel === "deepseek"}
-              onClick={() => patchIntent({ channel: "deepseek" })}
-              title={t.settings.intentChannelDeepseek}
-            >
-              {t.settings.intentChannelDeepseek}
-            </Chip>
-          </span>
+          <Segmented
+            label={t.settings.intentChannel}
+            value={effective.channel}
+            options={[
+              { value: "proma" as const, label: t.settings.intentChannelProma, title: t.settings.intentChannelProma },
+              { value: "deepseek" as const, label: t.settings.intentChannelDeepseek, title: t.settings.intentChannelDeepseek },
+            ]}
+            onChange={(channel) => patchIntent({ channel })}
+          />
         </div>
       </div>
       <div className="set-row">
@@ -664,14 +757,11 @@ function IntentSettingsSection(props: {
           <span className="set-row-name">{t.settings.intentNewSessionOn}</span>
         </span>
         <div className="set-row-ctl">
-          <span className="set-chips" role="group" aria-label={t.settings.intentNewSessionOn}>
-            <Chip active={effective.newSessionOn} onClick={() => patchIntent({ newSessionOn: true })}>
-              {t.common.on}
-            </Chip>
-            <Chip active={!effective.newSessionOn} onClick={() => patchIntent({ newSessionOn: false })}>
-              {t.common.off}
-            </Chip>
-          </span>
+          <Switch
+            label={t.settings.intentNewSessionOn}
+            checked={effective.newSessionOn}
+            onChange={(newSessionOn) => patchIntent({ newSessionOn })}
+          />
         </div>
       </div>
     </section>
@@ -703,15 +793,7 @@ function ExperimentalFeatureCard(props: {
           <Icon name={feature.icon} size={16} strokeWidth={1.8} />
         </span>
         <span className="exp-card-name">{name}</span>
-        {/* 开关用两个 Chip——设计系统里没有 Switch，与署名行同一个形状 */}
-        <span className="set-chips" role="group" aria-label={name}>
-          <Chip active={props.on} onClick={() => props.onSwitch(true)}>
-            {t.common.on}
-          </Chip>
-          <Chip active={!props.on} onClick={() => props.onSwitch(false)}>
-            {t.common.off}
-          </Chip>
-        </span>
+        <Switch label={name} checked={props.on} onChange={props.onSwitch} />
       </div>
       <p className="exp-card-sum">{feature.summary[language]}</p>
       {props.open ? (
@@ -846,13 +928,13 @@ function DictationEngineGroup() {
         {selection === null ? (
           <span className="set-row-hint">…</span>
         ) : (
-          <span className="set-chips" role="group" aria-label={t.voice.dictationEngine}>
-            {DICTATION_PROVIDERS.map((provider) => (
-              <Chip key={provider} active={selection.provider === provider} disabled={busy} onClick={() => select(provider)}>
-                {t.voice.providers[provider]}
-              </Chip>
-            ))}
-          </span>
+          <Segmented
+            label={t.voice.dictationEngine}
+            value={selection.provider}
+            options={DICTATION_PROVIDERS.map((provider) => ({ value: provider, label: t.voice.providers[provider] }))}
+            disabled={busy}
+            onChange={select}
+          />
         )}
       </SettingRow>
     </SettingGroup>
@@ -1290,9 +1372,9 @@ function LoginImportSection(props: { clearedCount: number }) {
               items={menuItems}
               searchable={sources.list.length > 8}
               trigger={({ open, toggle }) => (
-                <Chip active={open} onClick={toggle} chevron title={t.settings.loginImportSource}>
+                <SelectButton open={open} onClick={toggle} title={t.settings.loginImportSource}>
                   {current !== undefined ? `${current.browserName} · ${current.profileName}` : "…"}
-                </Chip>
+                </SelectButton>
               )}
             />
             <PanelButton
@@ -1439,10 +1521,10 @@ function LoginSitesPanel(props: {
           </label>
         ))}
         {shown.length === 0 && (
-          <span className="login-sites-empty">
-            {/* 读到零个网站（全是过期 / 解不开的）与搜索没命中是两回事 */}
+          // 读到零个网站（全是过期 / 解不开的）与搜索没命中是两回事
+          <PanelEmpty icon={props.sites.length === 0 ? "globe" : "search"} className="login-sites-empty">
             {props.sites.length === 0 ? t.settings.loginImportErrors.noCookies : t.settings.loginImportNoMatch}
-          </span>
+          </PanelEmpty>
         )}
       </div>
       <div className="login-sites-footer">

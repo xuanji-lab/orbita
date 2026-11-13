@@ -9,6 +9,9 @@ import {
   formatScore,
   paretoFrontier,
   placeLabels,
+  PRICE_CHART_SIDE_MIN_WIDTH,
+  PRICE_CHART_STACK_MIN_WIDTH,
+  priceChartLayout,
   popoverPlacement,
   scoreTicks,
   shouldShowPriceChart,
@@ -22,6 +25,25 @@ describe("显示门槛：所有服务商加起来 ≥ 2 个型号", () => {
     assert.equal(shouldShowPriceChart([providerWith("k3")]), false);
     assert.equal(shouldShowPriceChart([providerWith(), providerWith("k3")]), false);
     assert.equal(shouldShowPriceChart([providerWith("k3"), providerWith("glm-5.3")]), true);
+  });
+});
+
+describe("宽度档位：≥ 880 并排、600–880 列表在图下、< 600 不画图", () => {
+  test("阈值常量就是设计稿的 880 / 600", () => {
+    assert.equal(PRICE_CHART_SIDE_MIN_WIDTH, 880);
+    assert.equal(PRICE_CHART_STACK_MIN_WIDTH, 600);
+  });
+  test("边界：880 并排、879 堆叠、600 堆叠、599 隐藏", () => {
+    assert.equal(priceChartLayout(920), "side");
+    assert.equal(priceChartLayout(880), "side");
+    assert.equal(priceChartLayout(879), "stack");
+    assert.equal(priceChartLayout(680), "stack");
+    assert.equal(priceChartLayout(600), "stack");
+    assert.equal(priceChartLayout(599), "hidden");
+    assert.equal(priceChartLayout(470), "hidden");
+  });
+  test("0 / 未布局出来的宽度按隐藏（不会闪出一张被挤坏的图）", () => {
+    assert.equal(priceChartLayout(0), "hidden");
   });
 });
 
@@ -82,12 +104,15 @@ describe("分类循环与格式", () => {
   });
 
   test("成本与分数", () => {
-    assert.equal(formatCost(29.16), "$29");
-    assert.equal(formatCost(2.233), "$2.23");
-    assert.equal(formatCost(0.7585), "$0.76");
-    assert.equal(formatCost(0.03123), "$0.031");
+    assert.equal(formatCost(29.16, "$"), "$29");
+    assert.equal(formatCost(2.233, "$"), "$2.23");
+    assert.equal(formatCost(0.7585, "$"), "$0.76");
+    assert.equal(formatCost(0.03123, "$"), "$0.031");
+    // 显示币种由调用方给：图在入口处整体换算成人民币，这里只拼前缀
+    assert.equal(formatCost(6.718, "¥"), "¥6.72");
     assert.equal(formatScore(1480.74, "rating"), "1481");
-    assert.deepEqual([0.05, 0.1, 1, 20].map(formatCostTick), ["$0.05", "$0.1", "$1", "$20"]);
+    assert.deepEqual([0.05, 0.1, 1, 20].map((v) => formatCostTick(v, "$")), ["$0.05", "$0.1", "$1", "$20"]);
+    assert.deepEqual([0.5, 2, 50].map((v) => formatCostTick(v, "¥")), ["¥0.5", "¥2", "¥50"]);
     assert.equal(formatScore(0.0157, "net-improvement"), "+1.6%");
     assert.equal(formatScore(-0.0177, "net-improvement"), "−1.8%");
   });

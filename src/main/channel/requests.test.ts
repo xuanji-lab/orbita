@@ -112,6 +112,11 @@ function fakeDeps(overrides: {
   return { deps, submitCalls, steerCalls, abortCalls, handoffCancels, broadcastCalls };
 }
 
+/** 关着的服务商（服务商开关） */
+function off(id: string, modelIds: string[]): ProviderDto {
+  return { ...provider(id, modelIds), disabled: true };
+}
+
 describe("resolveSubSessionModel", () => {
   const parent = { providerId: "zai", modelId: "glm-5.3" };
 
@@ -194,6 +199,58 @@ describe("resolveSubSessionModel", () => {
   });
 });
 
+describe("resolveSubSessionModel · 关着的服务商", () => {
+  const parent = { providerId: "zai", modelId: "glm-5.3" };
+
+  test("点名：同名模型两家都声明、先添加的那家关着——只落到开着的那家", () => {
+    // pro 排在前面且关着；若不筛，「取第一个声明了它的」会落到 pro 上
+    const providers = [off("pro", ["glm-5.3", "gpt-6"]), provider("zai", ["glm-5.3"]), provider("kimi", ["glm-5.3"])];
+    assert.deepEqual(
+      resolveSubSessionModel({ requested: "glm-5.3", setting: undefined, parent: { providerId: "pro", modelId: "gpt-6" }, providers }),
+      { ok: true, providerId: "zai", modelId: "glm-5.3", source: "requested" },
+    );
+  });
+
+  test("点名：父的那家关着，哪怕它声明了这个型号也不走「优先同父」", () => {
+    const providers = [off("zai", ["glm-5.3-flash"]), provider("other", ["glm-5.3-flash"])];
+    assert.deepEqual(
+      resolveSubSessionModel({ requested: "glm-5.3-flash", setting: undefined, parent, providers }),
+      { ok: true, providerId: "other", modelId: "glm-5.3-flash", source: "requested" },
+    );
+  });
+
+  test("点名的型号只有关着的那家有——报错，且可用清单里不列关着的型号", () => {
+    const providers = [off("pro", ["claude-opus-5-5"]), provider("zai", ["glm-5.3"])];
+    const result = resolveSubSessionModel({ requested: "claude-opus-5-5", setting: undefined, parent, providers });
+    assert.equal(result.ok, false);
+    assert.match(!result.ok ? result.error : "", /Available models: glm-5\.3$/);
+  });
+
+  test("设置里的子会话默认模型指向关着的服务商——不用它，退回同父（和服务商被删同口径）", () => {
+    const providers = [provider("zai", ["glm-5.3"]), off("fast", ["turbo"])];
+    assert.deepEqual(
+      resolveSubSessionModel({ requested: undefined, setting: { providerId: "fast", modelId: "turbo" }, parent, providers }),
+      { ok: true, providerId: "zai", modelId: "glm-5.3", source: "parent" },
+    );
+  });
+
+  test("同父：父的服务商关着、又没点名 → 走「无可用模型」错误，清单只列开着的", () => {
+    const providers = [off("zai", ["glm-5.3"]), provider("kimi", ["kimi-k3"]), off("pro", ["gpt-6"])];
+    const result = resolveSubSessionModel({ requested: undefined, setting: undefined, parent, providers });
+    assert.equal(result.ok, false);
+    assert.match(!result.ok ? result.error : "", /has no usable model assigned/);
+    assert.match(!result.ok ? result.error : "", /Available models: kimi-k3$/);
+  });
+
+  test("全关了 = 没有可用模型；disabled: false 与缺省一样算开着", () => {
+    const none = resolveSubSessionModel({ requested: "glm-5.3", setting: undefined, parent, providers: [off("zai", ["glm-5.3"])] });
+    assert.equal(none.ok, false);
+    assert.match(!none.ok ? none.error : "", /\(none configured\)/);
+    const explicitOn = { ...provider("zai", ["glm-5.3"]), disabled: false };
+    assert.equal(resolveSubSessionModel({ requested: "glm-5.3", setting: undefined, parent, providers: [explicitOn] }).ok, true);
+  });
+});
+
 function delegateEvent(
   overrides: Partial<Extract<AgentEvent, { type: "delegateRequest" }>> = {},
 ): Extract<AgentEvent, { type: "delegateRequest" }> {
@@ -206,6 +263,31 @@ function delegateEvent(
     ...overrides,
   };
 }
+
+describe("applyDelegate · 服务商开关", () => {
+  test("点名一个两家都声明、其中一家关着的型号：子会话 meta 与开轮载荷都落在开着的那家，不落盘到关着的", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT, providerId: "pro", modelId: "gpt-6" }));
+    const { deps, submitCalls } = fakeDeps({
+      providers: [off("pro", ["gpt-6", "glm-5.3"]), provider("zai", ["glm-5.3"])],
+    });
+    const outcome = await applyDelegate(deps, delegateEvent({ modelId: "glm-5.3" }));
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    const child = await sessions.load(outcome.childId);
+    assert.equal(child?.meta.providerId, "zai");
+    assert.equal(child?.meta.modelId, "glm-5.3");
+    assert.equal(submitCalls[0]?.providerId, "zai");
+  });
+
+  test("父的服务商被关、没点名模型：派出被拒，不建子会话", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT, providerId: "pro", modelId: "gpt-6" }));
+    const { deps, submitCalls } = fakeDeps({ providers: [off("pro", ["gpt-6"]), provider("zai", ["glm-5.3"])] });
+    const outcome = await applyDelegate(deps, delegateEvent());
+    assert.equal(outcome.ok, false);
+    assert.match(!outcome.ok ? outcome.error : "", /Available models: glm-5\.3$/);
+    assert.equal(submitCalls.length, 0);
+  });
+});
 
 describe("applyDelegate", () => {
   test("成功：子 meta 字段正确、通道仅一条 task、text 是可解析的信封、card.workbench 对", async () => {
@@ -235,6 +317,8 @@ describe("applyDelegate", () => {
       kind: "task",
       peerId: PARENT,
     });
+    // 首条任务信封带父工作台：子会话要往那几写重要产出，父的行已不进系统提示词
+    assert.ok((submitCalls[0]?.text ?? "").includes(`Parent session workbench: ${sessions.workbenchPath(PARENT)}`));
 
     assert.equal(outcome.card.workbench, sessions.workbenchPath(outcome.childId));
   });
@@ -396,7 +480,7 @@ describe("applyChannelSend", () => {
     assert.equal(outcome.ok, false);
   });
 
-  test("子空闲（phase 不在 map 里）→ submitTurn，resume 用子的 piSessionFile", async () => {
+  test("子空闲（phase 不在 map 里）→ submitTurn，resume 用子的 piSessionFile；reply 信封也带父工作台", async () => {
     await sessions.ensureSession(baseMeta({ id: PARENT }));
     await sessions.ensureSession(baseMeta({ id: CHILD, parentId: PARENT, piSessionFile: "pi/child.jsonl" }));
     const { deps, submitCalls, steerCalls } = fakeDeps();
@@ -408,6 +492,7 @@ describe("applyChannelSend", () => {
     assert.equal(steerCalls.length, 0);
     assert.equal(submitCalls.length, 1);
     assert.deepEqual(submitCalls[0]?.resume, { piSessionFile: "pi/child.jsonl" });
+    assert.ok((submitCalls[0]?.text ?? "").includes(`Parent session workbench: ${sessions.workbenchPath(PARENT)}`));
   });
 
   test("子 phase 为 turn → steer 带 delivery，不开轮", async () => {
@@ -424,15 +509,23 @@ describe("applyChannelSend", () => {
     assert.equal(steerCalls.length, 1);
     assert.equal(steerCalls[0]?.sessionId, CHILD);
     assert.equal(steerCalls[0]?.delivery, "followUp");
+    // steer 注入的信封同样带父工作台：就算首条任务被压缩掉，路径也会随 reply 回来
+    assert.ok((steerCalls[0]?.text ?? "").includes(`Parent session workbench: ${sessions.workbenchPath(PARENT)}`));
   });
 
-  test("broadcast 收到 message 与 status", async () => {
+  test("broadcast 收到 message 与 status；message 事件携带子工作台路径", async () => {
     await sessions.ensureSession(baseMeta({ id: PARENT }));
     await sessions.ensureSession(baseMeta({ id: CHILD, parentId: PARENT }));
     const { deps, broadcastCalls } = fakeDeps();
     await applyChannelSend(deps, channelSendEvent());
     assert.equal(broadcastCalls.some((e) => e.type === "message"), true);
     assert.equal(broadcastCalls.some((e) => e.type === "status"), true);
+    const messageEvents = broadcastCalls.filter((e): e is Extract<ChannelEvent, { type: "message" }> => e.type === "message");
+    assert.ok(messageEvents.length > 0);
+    for (const event of messageEvents) {
+      assert.equal(event.childWorkbench, sessions.workbenchPath(CHILD));
+      assert.equal(event.childId, CHILD);
+    }
   });
 });
 

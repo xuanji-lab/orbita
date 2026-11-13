@@ -4,6 +4,7 @@
  */
 import type { CatalogPreference, ModelDefaults } from "@shared/model-defaults";
 import type { ModelCostDecl, ModelDecl, ProviderApi, ProviderDto } from "@shared/provider";
+import { isProviderEnabled } from "../../../../shared/provider.ts";
 // 值 import 必须走相对路径：node --test 解析不了 @shared 别名（type import 剥离后无此问题）
 import { THINKING_LEVELS, type ThinkingLevel } from "../../../../shared/thinking.ts";
 import {
@@ -217,15 +218,46 @@ export function openingModelScope(
 }
 
 /**
- * 「这个厂商能不能用」的唯一判定：凭据已就位 = api_key 且已存密钥，或密钥来自环境变量
- * （env 档没有 hasSecret 可查，scheme 本身就是「已配置」的声明）；none 恒为假。
+ * 「这个厂商能不能用」的唯一判定：凭据已就位 = api_key 且已存密钥，或 env 档声明了要读的
+ * 环境变量名（envKeys 非空；变量此刻有没有值 renderer 看不到，由主进程装配时取）；none 恒为假。
+ * env 档 envKeys 为空时算未配置：主进程装配无从取密钥，菜单放行就会「能选、一发就炸」
+ * （2026-11-08 Windows 验收实测）。
  * nav 状态点与模型菜单的 usableProviders 是两个真实消费者——此前各写各的判定，
  * env 档厂商在模型菜单里能选、nav 却挂空心环，同一个问题给出两个答案。
  */
 export function hasCredentials(auth: ProviderDto["auth"]): boolean {
   if (auth.scheme === "api_key") return auth.hasSecret;
   if (auth.scheme === "oauth") return auth.loggedIn;
-  return auth.scheme === "env";
+  return auth.scheme === "env" && auth.envKeys.length > 0;
+}
+
+/**
+ * 服务商开关的菜单口径：模型菜单只列**开着**的（isProviderEnabled，主进程解析器同一个判定），
+ * 关着的折成菜单底部一行灰字「已关闭的服务 · N 个模型」。
+ * 注意这里只管「列出来给人选」：查找某条会话 / 设置正在用的服务商（芯片名字、思考档、能否看图）
+ * 仍要在含关着的清单里找——正用着关着服务商的会话不被悄悄换模型。
+ */
+export function enabledProviders(providers: readonly ProviderDto[]): ProviderDto[] {
+  return providers.filter(isProviderEnabled);
+}
+
+/** 关着的服务商摘要（菜单底部灰字用）；一家也没关返回 null。 */
+export function closedProvidersSummary(
+  providers: readonly ProviderDto[],
+): { providers: number; models: number } | null {
+  const closed = providers.filter((provider) => !isProviderEnabled(provider));
+  if (closed.length === 0) return null;
+  return { providers: closed.length, models: closed.reduce((sum, provider) => sum + provider.models.declared.length, 0) };
+}
+
+/** 某个（服务商，型号）选择指向的服务商是不是被关了（设置里的模型选择旁据此提示「这家已关闭」）。 */
+export function isPairOnClosedProvider(
+  providers: readonly ProviderDto[],
+  pair: { providerId: string } | undefined,
+): boolean {
+  if (pair === undefined) return false;
+  const provider = providers.find((candidate) => candidate.id === pair.providerId);
+  return provider !== undefined && !isProviderEnabled(provider);
 }
 
 /**
@@ -294,7 +326,7 @@ export function urlSuffix(api: ProviderApi): string {
 
 /**
  * 卡片底行的预填地址：去掉协议头与尾斜杠，**保留路径**。同一主机上常挂着几条不同的接入
- * （火山方舟的 /api/v3 与 /api/plan、智谱的 /api/paas/v4 与 /api/anthropic），只写主机
+ * （智谱的 /api/paas/v4、/api/coding/paas/v4 与 /api/anthropic），只写主机
  * 的话几张卡底行一模一样，看不出区别。不是合法 URL 的原样返回。
  */
 export function cardAddress(url: string): string {

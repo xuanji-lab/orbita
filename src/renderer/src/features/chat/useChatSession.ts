@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
+import { planAwaitingIn, planTimeline } from "../context/plan-timeline.ts";
+import { PLAN_TOOL_NAME } from "../../../../shared/plan.ts";
+import { prefillLeft, reconcileLeft } from "./carryover-prefill.ts";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { api } from "../../api";
 import type { IntentRecallRecord } from "@shared/session";
@@ -37,7 +40,11 @@ import {
 import { LOADING, READY, failed, type LoadState } from "./load-state.ts";
 import { createProgressCoalescer } from "./progress-coalescer.ts";
 import { recordToolFrame } from "./tool-results.ts";
-import { shouldRefreshSessions } from "./session-list-refresh.ts";
+import {
+  applySessionMeta,
+  SessionListRefreshQueue,
+  sessionRefreshNeed,
+} from "./session-list-refresh.ts";
 import { appendWithdrawn } from "./withdraw-draft.ts";
 import { admitImages, promptImagesBytes, readAsPromptImage, rejectionText, type ComposerImage } from "../../shell/composer-images.ts";
 import { PROMPT_IMAGE_MIME_TYPES, PROMPT_IMAGE_MAX_COUNT, type PromptImage } from "../../../../shared/prompt-images.ts";
@@ -60,6 +67,7 @@ import {
   repositionBlocks,
   type ComposerPasteBlock,
 } from "../../shell/paste-blocks.ts";
+import { getOpenDocument, resolveQuotes } from "../doc-panel/open-document.ts";
 import { acceptQuote, composeQuotedMessage, parseQuotedMessage, QUOTE_MAX_TOTAL_CHARS, type TextQuote } from "../../../../shared/quote.ts";
 import { recordAssistantStart } from "./stats-format.ts";
 import { atMostManual, DEFAULT_PERMISSION_MODE, type PermissionAnswer, type PermissionMode } from "@shared/permission";
@@ -70,7 +78,8 @@ import type { AgentEvent, AgentStats, BuiltinProvider, RetryStatus, SubmitAgentI
 import { composeChannelPrompt, userRepliesNote, userRepliesSincePreviousReport } from "@shared/channel";
 import type { ProviderDto } from "@shared/provider";
 import { useBuiltinCatalog, usableProviders } from "../settings/model-menu";
-import { declaredThinkingLevels, modelPreferenceById } from "../settings/providers-view-model.ts";
+import { isProviderEnabled } from "../../../../shared/provider.ts";
+import { declaredThinkingLevels, enabledProviders, modelPreferenceById } from "../settings/providers-view-model.ts";
 import { reconcileThinkingLevel, resolveThinkingLevel } from "./thinking-choice.ts";
 import { modelRequiredText } from "./model-required.ts";
 import { collectScanAnswer, locateMessageRange, scanSubmitInput } from "./carryover-parse.ts";
@@ -86,6 +95,7 @@ import {
   type CompactedRecord,
   type SessionCompletion,
   type SessionMeta,
+  type SessionMoveResult,
 } from "@shared/session";
 import type { FileTurnView, RevertPlan, RevertRecord, UndoPlan, UndoRecord } from "@shared/revert";
 import { splitUserTextBlocks } from "@shared/prompt-attachments";
@@ -191,6 +201,13 @@ export interface ChatSession {
   turnErrorOf: (id: string) => TurnFailure | null;
   /** 按 id 查挂着的工具审批（槽里有真相）——竖条「在等你」要读到后台会话的审批 */
   approvalsOf: (id: string) => readonly PendingApproval[];
+  /** 按 id 查是否停在「计划等你确认」上——状态饼「在等你」的第二个来源（plan-timeline 的 planAwaitingIn） */
+  planAwaitingOf: (id: string) => boolean;
+  /**
+   * 按 id 取整个槽（没载过 = undefined）。首页会话卡要说「此刻在干什么」：后台在跑的会话
+   * 槽里有它这一轮的过程，不另存——与 phaseOf 同一套 ref 读法，引用稳定
+   */
+  entryOf: (id: string) => SessionEntry | undefined;
   error: string | null;
   /** 当前查看会话的输入框草稿——**按会话隔离**，切换 / 新开会话互不带走 */
   draft: string;
@@ -233,9 +250,23 @@ export interface ChatSession {
   approvals: PendingApproval[];
   /** 侧栏列的工作区（落盘、跨会话）。 */
   workspaces: Workspace[];
-  addWorkspace: () => void;
-  /** 命名新建：在 ~/Orbita/<name>/ 建文件夹并加进来。名字不合法由主进程拒（错误走列表那行） */
-  createWorkspace: (name: string) => void;
+  /**
+   * 加 / 命名新建一个工作区。默认把本槽的下一条新任务落进去；moveCurrent = 把**正看着的
+   * 这条会话**迁进去（对话里的工作区芯片用：聊着发现该去一个还没加进来的文件夹）。
+   * 名字不合法由主进程拒（错误走列表那行）
+   */
+  addWorkspace: (options?: { moveCurrent?: boolean }) => void;
+  createWorkspace: (name: string, options?: { moveCurrent?: boolean }) => void;
+  /**
+   * 正看着一条已有会话（活会话或盘上打开的）——对话里的工作区芯片据此切换语义：
+   * 首页是「新任务放在哪」，对话里是「把这条移到哪」。
+   */
+  inConversation: boolean;
+  /**
+   * 把正看着的这条会话迁到另一个工作区（null = 无工作区 / Home）：工作目录一起换，
+   * 子会话随行；在跑的被主进程跳过，原因写进错误条（不弹窗）。
+   */
+  moveCurrentTo: (workspaceId: string | null) => void;
   renameWorkspace: (id: string, name: string) => void;
   removeWorkspace: (id: string) => void;
   /**
@@ -310,13 +341,22 @@ export interface ChatSession {
    */
   startCarryoverTask: (item: Carryover) => void;
   /**
+   * 带着会话目标新开一单（右栏进度「目标」上的动作）：与 startCarryoverTask 同一条路（cwd / 归属跟随来源会话、
+   * 权限档压到不高于「询问」），只是种子由调用方按来源标题现拼。
+   */
+  startGoalTask: (sourceSessionId: string, makeSeed: (sourceTitle: string | null) => string | null) => void;
+  /**
    * 方案 B：以遗留事项为用户消息**续跑原会话**（同一个按钮的右键备选；
    * 来源会话无 pi 本子时面板不提供入口）。在跑就排队，闲着就无状态续跑。
    */
   continueCarryoverInSource: (item: Carryover) => void;
   /** 归档：从主列表移走，**不是删除** */
   archiveSession: (id: string, archived: boolean) => void;
-  moveSession: (id: string, workspaceId: string | null) => void;
+  /**
+   * 迁移到另一个工作区（可批量）：归属与工作目录一起换，子会话跟着走，在跑的跳过。
+   * 回执里 skipped 是没搬动的——调用方要把它告诉用户，不能悄悄吞掉。
+   */
+  moveSessions: (ids: readonly string[], workspaceId: string | null) => Promise<SessionMoveResult>;
   /**
    * 从某条 agent 回答另起一支（C-2）：新会话 = 该回答及之前的全部，原会话不动
    * （在跑的话照跑，槽里继续涨）。成功后切过去；两本账对不上时主进程以错误拒绝，
@@ -389,6 +429,11 @@ export interface ChatSession {
   newTask: () => void;
   /** 这个工作区里的新任务：cwd 与 workspaceId 一起按它填好 */
   newTaskIn: (workspace: Workspace) => void;
+  /**
+   * 新开一条任务（落在 workspace 里；null = 不属于任何工作区，落 Home）并把输入框预填成 text。
+   * 草稿写进**新任务槽自己的键**：newTaskIn 之后立刻 setDraft 写的是旧会话的键（闭包里的 draftKey 还是旧的）。
+   */
+  startTaskWithDraft: (workspace: Workspace | null, text: string) => void;
   answerApproval: (requestId: string, answer: PermissionAnswer) => void;
   /* ---------- 意图系统（实验功能 intent-system） ---------- */
   /** 终态召回卡（实时事件 + 盘上种子；同一 turn 只留最后一张） */
@@ -421,8 +466,8 @@ interface ViewHandle {
   alignMode(mode: PermissionMode): void;
   /** 正在看/正打开的那条被删了：本槽退回首页 */
   handleRemoved(id: string): void;
-  /** 正开着的那条换了归属工作区：meta 与作用域芯片跟着变 */
-  handleMoved(id: string, targetWorkspaceId: string | null): void;
+  /** 正开着的那条迁到了别的工作区：meta、作用域芯片与 cwd 跟着变 */
+  handleMoved(id: string, targetWorkspaceId: string | null, cwd: string): void;
   /** 工作区被移出：本槽的新任务不再落在这个工作区 */
   handleWorkspaceRemoved(id: string): void;
   /** 会话列表刷新后同步「正开着的那条」的 meta（改名 / 模型标题要能换掉顶栏） */
@@ -525,6 +570,8 @@ export interface SessionEngine {
   readonly phaseOf: (id: string) => SessionEntry["phase"];
   readonly turnErrorOf: (id: string) => TurnFailure | null;
   readonly approvalsOf: (id: string) => readonly PendingApproval[];
+  readonly planAwaitingOf: (id: string) => boolean;
+  readonly entryOf: (id: string) => SessionEntry | undefined;
   readonly answerApproval: (requestId: string, answer: PermissionAnswer) => void;
   /** 意图确认卡的回答（实验功能 intent-system） */
   readonly answerIntentConfirm: (requestId: string, decision: IntentConfirmDecision) => void;
@@ -539,7 +586,7 @@ export interface SessionEngine {
   readonly refreshCarryovers: () => void;
   readonly setCarryoverStatus: (id: string, status: Carryover["status"]) => void;
   readonly archiveSession: (id: string, archived: boolean) => void;
-  readonly moveSession: (id: string, workspaceId: string | null) => void;
+  readonly moveSessions: (ids: readonly string[], workspaceId: string | null) => Promise<SessionMoveResult>;
   readonly exportSession: (id: string) => void;
   readonly removeSession: (id: string) => void;
 }
@@ -767,21 +814,62 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
   );
 
   /**
+   * 一份完整的会话列表落地：列表、ref 镜像、加载态、各查看槽的「正开着的那条」。
+   * 整表重拉（主动操作 / 增量的 full）共用这一处——两处落地方式不一致时
+   * 同一条会话会在刷新前后跳位置或顶栏不更新。
+   */
+  const applySessionList = useCallback((list: SessionMeta[]) => {
+    setSessions(list);
+    sessionsRef.current = list;
+    setLoads((prev) => ({ ...prev, sessions: READY }));
+    // **正看着的会话的 meta 必须从这里拿真值**——活会话（首页直接开的那条）
+    // opened 一路是 null，不种上的话顶栏永远读 transcript 推导的旧标题，
+    // 改名与模型标题都换不掉它（真实事故：改名后侧栏变了顶栏不变）。
+    for (const view of views.current) view.syncOpened(list);
+  }, []);
+
+  /**
+   * 事件驱动的**增量**刷新（判定与合并在 session-list-refresh.ts）。列表里已有的
+   * 会话只读这一条 meta；只有列表里没见过的会话才整表重拉。突发请求合并成一批。
+   */
+  const [refreshQueue] = useState(
+    () =>
+      new SessionListRefreshQueue({
+        loadAll: () => api.session.list(),
+        loadMeta: (id) => api.session.meta(id),
+        onAll: applySessionList,
+        onMeta: (id, meta) => {
+          const next = applySessionMeta(sessionsRef.current, id, meta);
+          setSessions(next);
+          sessionsRef.current = next;
+          // 顶栏标题 / 模型读的就是这条 meta（与整表重拉同一处同步）
+          for (const view of views.current) view.syncOpened(next);
+        },
+        onError: (cause: unknown) => setLoads((prev) => ({ ...prev, sessions: failed(cause) })),
+      }),
+  );
+  useEffect(() => {
+    // StrictMode 在开发环境会把 effect 跑成 setup → cleanup → setup。useState 里那个
+    // 队列实例是同一个，cleanup 的 dispose 会把它永久停住——这里在每次 setup 时重新
+    // 启用；真实卸载仍由返回的 cleanup 清定时器。
+    refreshQueue.revive();
+    return () => refreshQueue.dispose();
+  }, [refreshQueue]);
+
+  /**
    * **读失败不清空。** 以前这里会 `.catch(() => setSessions([]))`，磁盘权限坏了就显示成
    * 「你的会话全没了」。现在失败只记到 `loads` 里，手里那份原样保留。
    * 刷新完通知各查看槽同步「正开着的那条」的 meta——那份真值只在这里读得到。
+   *
+   * 主动操作（改名 / 置顶 / 星标 / 归档 / 删除 / 导入 / 移动 / reloadSessions）
+   * 仍然直接走它整表重拉：那些动作一次改多条或改的不只是 meta，走增量反而容易漏。
    */
   const refreshSessions = useCallback(() => {
-    void api.session.list().then((list) => {
-      setSessions(list);
-      sessionsRef.current = list;
-      setLoads((prev) => ({ ...prev, sessions: READY }));
-      // **正看着的会话的 meta 必须从这里拿真值**——活会话（首页直接开的那条）
-      // opened 一路是 null，不种上的话顶栏永远读 transcript 推导的旧标题，
-      // 改名与模型标题都换不掉它（真实事故：改名后侧栏变了顶栏不变）。
-      for (const view of views.current) view.syncOpened(list);
-    }).catch((cause: unknown) => setLoads((prev) => ({ ...prev, sessions: failed(cause) })));
-  }, []);
+    void api.session
+      .list()
+      .then(applySessionList)
+      .catch((cause: unknown) => setLoads((prev) => ({ ...prev, sessions: failed(cause) })));
+  }, [applySessionList]);
 
   useEffect(refreshSessions, [refreshSessions]);
 
@@ -869,7 +957,13 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
         // buildTurn 已支持从 meta 装配从没在本窗口打开过的会话（新会话/新槽由
         // dequeue/enqueue 就地建），父会话不必先被用户点开过才能收到子的消息。
         const childTitle = sessionsRef.current.find((meta) => meta.id === head.childId)?.title ?? "";
-        const envelope = composeChannelPrompt(head.message, { id: head.childId, title: childTitle });
+        const envelope = composeChannelPrompt(head.message, {
+          id: head.childId,
+          title: childTitle,
+          // 子工作台随事件携带（主进程派生），每条回报都重新告知模型——就算 delegate
+          // 回执被压缩掉，路径也会随这条信封回来
+          workbench: head.childWorkbench,
+        });
         const turn = buildTurn(id);
         if (turn === null) return;
         // 用户在收件箱里代父回复过的话，父模型上下文里没有：投递前从账本取出，拼在信封后
@@ -909,6 +1003,8 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
       applyStates((prev) => batch.reduce((acc, event) => applyAgentEvent(acc, event), prev));
     }, 50);
     const off = api.agent.onEvent((event) => {
+        // 「以后再做」有新增（agent 写 update_plan 时当场记下的，主进程落盘后广播）：重拉清单
+        if (event.type === "carryoversChanged") refreshCarryovers();
         if (event.type === "failed") {
           // 回合级失败（重试耗尽）进槽、标注在对话里（applyAgentEvent 收）；
           // 操作级失败仍走全局红字（输入框上方）
@@ -920,10 +1016,15 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
         // 新一轮真的跑起来了（重试成功 / 用户重发 / 压缩开始）：上一次的失败已成
         // 过去，红字不再挂着——只有最后状态是失败时才该看到失败提示
         if (event.type === "phase" && event.phase !== "idle") setError(null);
-        // 会话列表何时重拉（一轮跑完 / 模型标题 / 换模型 / 列表里没有的会话开轮）：
-        // 规则与理由在 session-list-refresh.ts。refreshSessions 是异步的（IPC 回来才
-        // 回填），排在下面 model 的 alignModel 前面调用不改变先后
-        if (shouldRefreshSessions(event, sessionsRef.current)) refreshSessions();
+        // 会话列表何时刷新（一轮跑完 / 模型标题 / 换模型 / 列表里没有的会话开轮）：
+        // 规则与理由在 session-list-refresh.ts。列表里已有的只取这一条 meta，
+        // 只有没见过的会话才整表重拉；突发请求由队列合并（同 id 在途不重复拉）。
+        // 异步（IPC 回来才回填），排在下面 model 的 alignModel 前面调用不改变先后
+        const need = sessionRefreshNeed(event, sessionsRef.current);
+        if (need !== "none") {
+          if (need.kind === "full") refreshQueue.requestFull();
+          else refreshQueue.requestMeta(need.id);
+        }
         // 会话内模型切换成功（C-4，主进程已落 meta）：对齐**正看着那条**的槽——
         // 双槽下事件泵不知道哪个槽在看，路由交给已注册的查看槽。按 viewedId
         // （活会话 ?? 盘上打开的）路由：盘上打开的会话切模型后事件可能要几秒才回
@@ -980,7 +1081,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
       off();
       coalescer.dispose();
     };
-  }, [applyStates, deliverNext, refreshSessions]);
+  }, [applyStates, deliverNext, refreshQueue, refreshCarryovers]);
 
   /**
    * 子会话 PR4a：子→父投递。通道消息落账 + 广播是主进程的事（`applyChannelSend` /
@@ -999,6 +1100,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
           id: event.message.id,
           kind: "channel",
           childId: event.childId,
+          childWorkbench: event.childWorkbench,
           message: event.message,
         }),
       );
@@ -1128,15 +1230,23 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     [refreshSessions],
   );
 
-  const moveSession = useCallback(
-    (id: string, targetWorkspaceId: string | null) => {
-      void api.session.move(id, targetWorkspaceId).then(() => {
-        refreshSessions();
-        // 正开着的就是这条：底栏那个作用域芯片也要跟着变（各查看槽自己认领）
-        for (const view of views.current) view.handleMoved(id, targetWorkspaceId);
-      });
+  const moveSessions = useCallback(
+    async (ids: readonly string[], targetWorkspaceId: string | null): Promise<SessionMoveResult> => {
+      const result = await api.session.move(ids, targetWorkspaceId);
+      // 新 cwd 以主进程落盘的 meta 为准（目标目录由主进程按工作区 id 查，这里不再算一遍）
+      const list = await api.session.list();
+      setSessions(list);
+      sessionsRef.current = list;
+      for (const view of views.current) view.syncOpened(list);
+      // 正开着的就是其中一条：底栏作用域芯片与 cwd 也要跟着变（各查看槽自己认领）
+      for (const id of result.moved) {
+        const meta = list.find((item) => item.id === id);
+        if (meta === undefined) continue;
+        for (const view of views.current) view.handleMoved(id, meta.workspaceId, meta.cwd);
+      }
+      return result;
     },
-    [refreshSessions],
+    [],
   );
 
   const exportSession = useCallback((id: string) => {
@@ -1176,12 +1286,20 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     (id: string): TurnFailure | null => statesRef.current.get(id)?.turnError ?? null,
     [],
   );
-  // 按 id 查挂着的审批（2026-10-10 未读/竖条一刀）：竖条「在等你」要读到后台
+  // 按 id 查挂着的审批（2026-10-10 未读/状态饼一刀）：状态饼「在等你」要读到后台
   // 会话的审批，不只当前看着的那条；与 phaseOf / turnErrorOf 同一套 ref 读法
   const approvalsOf = useCallback(
     (id: string): readonly PendingApproval[] => statesRef.current.get(id)?.approvals ?? [],
     [],
   );
+  // 停在「计划等你确认」上（状态饼 / 铃铛 / 首页卡「等你」的第二个来源）：只在 idle 时判——在跑的
+  // 轮不可能停在确认上，也免得每次渲染对在跑会话扫转录
+  const planAwaitingOf = useCallback((id: string): boolean => {
+    const entry = statesRef.current.get(id);
+    if (entry === undefined || entry.phase !== "idle") return false;
+    return planAwaitingIn(selectTranscript(entry.transcript));
+  }, []);
+  const entryOf = useCallback((id: string): SessionEntry | undefined => statesRef.current.get(id), []);
 
   return {
     catalog,
@@ -1218,6 +1336,8 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     phaseOf,
     turnErrorOf,
     approvalsOf,
+    planAwaitingOf,
+    entryOf,
     answerApproval,
     renameSession,
     pinSession,
@@ -1228,7 +1348,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     refreshCarryovers,
     setCarryoverStatus,
     archiveSession,
-    moveSession,
+    moveSessions,
     exportSession,
     removeSession,
   };
@@ -1434,6 +1554,15 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     if (!engine.usable.some((p) => p.id === model.providerId)) setModel(null);
   }, [engine.usable, model]);
 
+  // 服务商开关：**还没起会话的新任务槽**不该带着关着的服务商起步（启动恢复的 lastUsed 可能指着它）。
+  // 清掉后由下面的默认播种落到第一个开着的。已经有会话的槽不碰——正用着关着服务商的会话
+  // 不自动换模型（渠道不替用户选），发消息时主进程拦下并提示
+  useEffect(() => {
+    if (model === null || opened !== null || sessionRef.current !== null) return;
+    const provider = engine.usable.find((p) => p.id === model.providerId);
+    if (provider !== undefined && !isProviderEnabled(provider)) setModel(null);
+  }, [engine.usable, model, opened]);
+
   // 清空的补种：正开着的会话 meta 从占位变成真实模型（设置 › 服务商的「分配
   // 模型」），列表刷新把新 meta 送来时种回模型栏——此前它被上面清成了「没有模型」。
   // 只补 null：用户手选的（非 null）永远不动，不替任何人改选择。
@@ -1494,11 +1623,16 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           setOpened(null);
         }
       },
-      handleMoved: (id, target) => {
+      handleMoved: (id, target, nextCwd) => {
         setOpened((current) =>
-          current?.id === id ? { ...current, workspaceId: target } : current,
+          current?.id === id ? { ...current, workspaceId: target, cwd: nextCwd } : current,
         );
-        if (id === sessionRef.current) setWorkspaceId(target);
+        // 正看着的那条（活会话或盘上打开的）：芯片与 cwd 槽跟上——打开会话时这两个槽
+        // 就是从它的 meta 恢复的，迁移后不跟上会显示旧目录
+        if (id === viewedIdRef.current) {
+          setWorkspaceId(target);
+          setCwd(nextCwd);
+        }
       },
       handleWorkspaceRemoved: (id) => {
         setWorkspaceId((current) => (current === id ? null : current));
@@ -1528,6 +1662,15 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   // 兜底键带槽名：主槽与抽屉槽的「首页」是两份草稿
   const draftKey = sessionId ?? opened?.id ?? `home:${key}`;
   const draft = drafts.get(draftKey)?.text ?? "";
+  /**
+   * 预填着的遗留事项（startCarryoverTask 只预填、不发）：首页发出第一句时带上它的 id，
+   * 主进程记进新会话的 meta.resumedCarryovers（收尾确认时那条自动标为做完）。
+   * 用户清空了输入框、打开了别的会话，链接就作废——发出去的已经不是那条遗留事项了。
+   */
+  const pendingCarryoverRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (draft.trim() === "" && sessionId === null && opened === null) pendingCarryoverRef.current = null;
+  }, [draft, sessionId, opened]);
   const setDraft = (value: string) => writeDraft(draftKey, value);
   const attachments = attachmentMap.get(draftKey) ?? NO_ATTACHMENTS;
   const files = fileMap.get(draftKey) ?? NO_FILES;
@@ -1943,7 +2086,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     // 引用展开进正文：模型、转录、pi 的本子看到的都是这一整段（解析回 chip 在显示时做）。
     // 句中粘贴胶囊就地组装成 <pasted-text> 块——位置保留（方案 C），展开的区间本就是
     // 正文。组装后的 text 从这里往下走：排队、投递都以它为准（回填快照另存草稿原文）
-    const raw = composeQuotedMessage(quotes, own);
+    const raw = composeQuotedMessage(resolveQuotes(quotes), own, getOpenDocument() ?? undefined);
     const text = assemblePasteDraft(raw, pasted);
     engine.setError(null);
     // 手动压缩指令在本地拦下，**不发给模型**——发出去模型会角色扮演一段
@@ -2058,7 +2201,13 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       writeFiles(draftKey, () => []);
       writeBlocks(draftKey, () => []);
       writeQuotes(draftKey, () => []);
-      await submitTurn(id, text, target, workspace, resume, images, { files });
+      // 首页发出的第一句、且预填着遗留事项：带上它的 id（只用一次）
+      const carryoverId = resume === null && meta === null ? pendingCarryoverRef.current : null;
+      pendingCarryoverRef.current = null;
+      await submitTurn(id, text, target, workspace, resume, images, {
+        files,
+        ...(carryoverId !== null ? { carryoverId } : {}),
+      });
     } catch (cause) {
       engine.setError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -2165,32 +2314,39 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   );
 
   /**
-   * 方案 A：以一条遗留事项为种子**新开一单**带上下文开工（面板「Continue with
-   * context」）。种子是可见的结构化 user 消息（形态决策见 carryover-resume.ts）；
-   * cwd / 归属跟随来源会话——遗留事项是那单任务的未竟之事，新开工跑在同一个
-   * 目录才能接着干；来源已删时退到本槽当前选择再退兑底。新会话记下它接的是哪条
-   * 遗留事项（meta.resumedCarryovers），收尾确认时那条自动标为做完（2026-10-24 用户：
-   * 遗留事项的后续之前「没有设计」）。
+   * 从来源会话新开一单带着种子开工——遗留事项（startCarryoverTask）与会话目标（startGoalTask）共用：
+   * cwd / 归属跟随来源，来源已删时退到本槽当前选择再退兜底；权限档压到不高于「询问」。
+   * extra 带上遗留事项 id 时主进程记进新会话的 meta.resumedCarryovers。
+   * prefill = true（遗留事项）：种子预填进输入框、不发，让用户先在底栏芯片换工作区再回车；
+   * false（会话目标）：照旧直接开工。
    */
-  const startCarryoverTask = useCallback(
-    (item: Carryover): void => {
+  const startFromSource = useCallback(
+    (
+      sourceSessionId: string,
+      makeSeed: (sourceTitle: string | null) => string | null,
+      extra: { carryoverId?: string },
+      prefill: boolean,
+    ): void => {
       if (model === null) {
         engine.setError(engine.modelMissingText());
         return;
       }
-      const source = engine.sessions.find((meta) => meta.id === item.sourceSessionId) ?? null;
+      const source = engine.sessions.find((meta) => meta.id === sourceSessionId) ?? null;
       // 空标题的会话不会有 carryover（收尾扫描要求 transcript 非空），防御性兑到
       // Untitled task（transcriptToMarkdown 同款措辞），不谎称「已删除」
       const sourceTitle =
         source === null ? null : source.title === "" ? "Untitled task" : source.title;
-      const seed = buildCarryoverSeed(item, sourceTitle);
+      const seed = makeSeed(sourceTitle);
+      if (seed === null) return;
       const target = source?.cwd ?? cwd ?? engine.defaultCwd;
       if (target === "") {
         engine.setError(engine.messagesRef.current.session.noWorkspaceFolder);
         return;
       }
       const workspace = source?.workspaceId ?? workspaceId ?? null;
-      // 回首页清槽，并把本槽落点切到来源目录：开工后的下一条新任务默认同目录
+      // 回首页清槽，并把本槽落点**默认**切到来源目录——只是默认：遗留事项的种子预填进输入框，
+      // 用户可以先在底栏芯片换工作区再回车（2026-10-31 用户：聊出来的待办常常该去别的
+      // 工作区，「一点就发」没给选的机会）
       reset();
       setCwd(source?.cwd ?? null);
       setWorkspaceId(source?.workspaceId ?? null);
@@ -2201,10 +2357,69 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       // 在原会话里续跑（continueCarryoverInSource）不降档：那是用户自己的会话、自己的档。
       const startMode = atMostManual(mode);
       setMode(startMode);
-      // 带上遗留事项 id：主进程记进新会话的 meta.resumedCarryovers，它收尾确认时这条自动标为做完
-      void submitTurn(crypto.randomUUID(), seed, target, workspace, null, undefined, { carryoverId: item.id, mode: startMode });
+      if (prefill) {
+        // 预填不发：种子进首页草稿，遗留事项 id 挂在 pendingCarryoverRef 上，回车发出时带上
+        // （主进程记进新会话的 meta.resumedCarryovers，它收尾确认时这条自动标为做完）
+        writeDraft(`home:${key}`, seed);
+        pendingCarryoverRef.current = extra.carryoverId ?? null;
+        return;
+      }
+      void submitTurn(crypto.randomUUID(), seed, target, workspace, null, undefined, { ...extra, mode: startMode });
     },
-    [engine, model, mode, cwd, workspaceId, reset, submitTurn],
+    [engine, model, mode, cwd, workspaceId, reset, submitTurn, writeDraft, key],
+  );
+
+  /**
+   * 方案 A：以一条遗留事项为种子**新开一单**带上下文开工（面板「Continue with
+   * context」）。种子是可见的结构化 user 消息（形态决策见 carryover-resume.ts）；
+   * cwd / 归属跟随来源会话——遗留事项是那单任务的未竟之事，新开工跑在同一个
+   * 目录才能接着干；来源已删时退到本槽当前选择再退兑底。新会话记下它接的是哪条
+   * 遗留事项（meta.resumedCarryovers），收尾确认时那条自动标为做完（2026-10-24 用户：
+   * 遗留事项的后续之前「没有设计」）。
+   */
+  const startCarryoverTask = useCallback(
+    (item: Carryover): void => {
+      // 带上遗留事项 id：主进程记进新会话的 meta.resumedCarryovers，它收尾确认时这条自动标为做完
+      startFromSource(item.sourceSessionId, (sourceTitle) => buildCarryoverSeed(item, sourceTitle), { carryoverId: item.id }, true);
+    },
+    [startFromSource],
+  );
+
+  const startGoalTask = useCallback(
+    (sourceSessionId: string, makeSeed: (sourceTitle: string | null) => string | null): void => {
+      startFromSource(sourceSessionId, makeSeed, {}, false);
+    },
+    [startFromSource],
+  );
+
+  /**
+   * 把一句话作为用户消息发进这条会话：在跑就排队（不打断正在跑的轮，与 send 同一条纪律），
+   * 闲着就按会话自己的账续跑（buildTurn：cwd / 本子 / 档位都是它当时的样子）。
+   * 续跑遗留事项（continueCarryoverInSource）与计划卡的「按这个做」共用。
+   */
+  const deliverText = useCallback(
+    (id: string, text: string, extra: { carryoverId?: string } = {}): void => {
+      // 没有槽（undefined）也是没在跑：直接发，不排队——排了没人投递，成死队列
+      const entry = engine.statesRef.current.get(id);
+      if (entry !== undefined && entry.phase !== "idle") {
+        engine.applyStates((prev) => enqueue(prev, id, { id: crypto.randomUUID(), kind: "text", text }));
+        return;
+      }
+      const turn = engine.buildTurn(id);
+      if (turn === null) return;
+      // 这里不再清 error：openSession 读盘失败的红字要留着（链会继续走到这，
+      // 消息照发、历史没种上，用户得知道有错）；常规清理 openSession 开头已做
+      if (sessionRef.current !== id) {
+        setSessionId(id);
+        sessionRef.current = id;
+      }
+      const revertTurn = engine.beginOptimisticTurn(id);
+      void api.agent.submit({ sessionId: id, text, ...turn, ...extra }).catch((cause: unknown) => {
+        engine.setError(cause instanceof Error ? cause.message : String(cause));
+        revertTurn();
+      });
+    },
+    [engine],
   );
 
   /**
@@ -2221,31 +2436,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       const meta = engine.sessions.find((entry) => entry.id === id) ?? null;
       if (meta === null || meta.piSessionFile === null) return;
       const text = buildCarryoverFollowUp(item);
-      void openSession(id).then(() => {
-        // 没有槽（undefined）也是没在跑：直接发，不排队——排了没人投递，成死队列
-        const entry = engine.statesRef.current.get(id);
-        if (entry !== undefined && entry.phase !== "idle") {
-          engine.applyStates((prev) =>
-            enqueue(prev, id, { id: crypto.randomUUID(), kind: "text", text }),
-          );
-          return;
-        }
-        const turn = engine.buildTurn(id);
-        if (turn === null) return;
-        // 这里不再清 error：openSession 读盘失败的红字要留着（链会继续走到这，
-        // 消息照发、历史没种上，用户得知道有错）；常规清理 openSession 开头已做
-        if (sessionRef.current !== id) {
-          setSessionId(id);
-          sessionRef.current = id;
-        }
-        const revertTurn = engine.beginOptimisticTurn(id);
-        void api.agent.submit({ sessionId: id, text, ...turn, carryoverId: item.id }).catch((cause: unknown) => {
-          engine.setError(cause instanceof Error ? cause.message : String(cause));
-          revertTurn();
-        });
-      });
+      void openSession(id).then(() => deliverText(id, text, { carryoverId: item.id }));
     },
-    [engine, openSession],
+    [engine, openSession, deliverText],
   );
 
   const branchFrom = useCallback(
@@ -2282,34 +2475,73 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     [reset],
   );
 
-  /** 加一个工作区，并把本槽的下一条任务直接落在它里面——加完就想用，别让人再点一次 */
-  const addWorkspace = useCallback(() => {
-    void api.workspace
-      .add()
-      .then((added) => {
-        if (added === null) return;
-        engine.refreshWorkspaces();
-        reset();
-        setCwd(added.path);
-        setWorkspaceId(added.id);
-      })
-      .catch(engine.workspaceFailed);
-  }, [engine, reset]);
+  /**
+   * 把正看着的这条会话迁走（对话里的工作区芯片）。会话 id 读 viewedIdRef（活会话优先，
+   * 否则盘上打开的那条）；首页没有「这条」，什么都不做。没迁动（在跑）就把原因放进错误条。
+   */
+  const moveCurrentTo = useCallback(
+    (target: string | null) => {
+      const id = viewedIdRef.current;
+      if (id === null) return;
+      void engine
+        .moveSessions([id], target)
+        .then((result) => {
+          if (result.skipped.length === 0) return;
+          const running = result.skipped.filter((item) => item.reason === "running").length;
+          engine.setError(engine.messagesRef.current.sidebar.moveSkipped(running, result.skipped.length - running));
+        })
+        .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
+    },
+    [engine],
+  );
+  const startTaskWithDraft = useCallback(
+    (workspace: Workspace | null, text: string) => {
+      reset();
+      setCwd(workspace === null ? null : workspace.path);
+      setWorkspaceId(workspace === null ? null : workspace.id);
+      writeDraft(`home:${key}`, text);
+    },
+    [reset, writeDraft, key],
+  );
 
-  /** 命名新建工作区：落点与 addWorkspace 同一套（加完就切过去），名字由主进程校验 */
-  const createWorkspace = useCallback(
-    (name: string) => {
+
+  /** 加好一个工作区之后：默认把本槽的下一条新任务落进去；moveCurrent 时把正看着的这条迁进去 */
+  const landIn = useCallback(
+    (workspace: Workspace, moveCurrent: boolean) => {
+      engine.refreshWorkspaces();
+      if (moveCurrent && viewedIdRef.current !== null) {
+        moveCurrentTo(workspace.id);
+        return;
+      }
+      reset();
+      setCwd(workspace.path);
+      setWorkspaceId(workspace.id);
+    },
+    [engine, reset, moveCurrentTo],
+  );
+
+  /** 加一个工作区，并把本槽的下一条任务直接落在它里面——加完就想用，别让人再点一次 */
+  const addWorkspace = useCallback(
+    (options?: { moveCurrent?: boolean }) => {
       void api.workspace
-        .create(name)
-        .then((created) => {
-          engine.refreshWorkspaces();
-          reset();
-          setCwd(created.path);
-          setWorkspaceId(created.id);
+        .add()
+        .then((added) => {
+          if (added !== null) landIn(added, options?.moveCurrent === true);
         })
         .catch(engine.workspaceFailed);
     },
-    [engine, reset],
+    [engine, landIn],
+  );
+
+  /** 命名新建工作区：落点与 addWorkspace 同一套（加完就切过去），名字由主进程校验 */
+  const createWorkspace = useCallback(
+    (name: string, options?: { moveCurrent?: boolean }) => {
+      void api.workspace
+        .create(name)
+        .then((created) => landIn(created, options?.moveCurrent === true))
+        .catch(engine.workspaceFailed);
+    },
+    [engine, landIn],
   );
 
   /**
@@ -2787,6 +3019,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           ? composeChannelPrompt(item.message, {
               id: item.childId,
               title: engine.sessions.find((meta) => meta.id === item.childId)?.title ?? "",
+              workbench: item.childWorkbench,
             })
           : item.text;
       const images = imagesField(item.kind === "text" ? item.images : undefined);
@@ -2840,7 +3073,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   // 如实显示「没有模型」，发送时引导先选（model-required.ts）
   useEffect(() => {
     if (model !== null || opened !== null) return;
-    const first = engine.usable[0];
+    // 关着的服务商不当默认（服务商开关）：新任务槽只在开着的里挑第一个
+    const first = enabledProviders(engine.usable)[0];
     const firstModel = first?.models.declared[0];
     if (first === undefined || firstModel === undefined) return;
     setModel({ providerId: first.id, modelId: firstModel.id });
@@ -2947,11 +3181,20 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       setScanFailed({ sessionId: closingScan.sessionId, messageId: scanMessageIdIn(items) });
       return;
     }
+    // 留下的事预填（carryover-prefill.ts）：这条任务里已经当场记下了以后再做、计划里写明了哪几步没做完——
+    // 收尾只确认，不再采信模型回看整段对话收割出来的那一组；没有计划也没有以后再做的老会话才沿用它
+    const planNow = planTimeline(items.filter((item) => item.role === "tool" && item.toolName === PLAN_TOOL_NAME));
+    const prefilled = prefillLeft({
+      modelLeft: draft.left,
+      unfinishedSteps:
+        planNow === null ? null : planNow.current.items.filter((step) => step.status !== "done").map((step) => step.text),
+      noticed: engine.carryovers.filter((item) => item.sourceSessionId === closingScan.sessionId && item.status === "open"),
+    });
     // 两组都空也弹卡：用户可能还想自己加一件（v1 时代这里直接标完成——那时卡上只有留下的事）
-    setScanResult({ sessionId: closingScan.sessionId, plan: closingScan.plan, draft });
+    setScanResult({ sessionId: closingScan.sessionId, plan: closingScan.plan, draft: { ...draft, left: prefilled } });
     // entry.phase 是渲染值，它的变化就是本 effect 的触发源——必须进依赖；
     // engine 整体每次渲染都是新引用，取稳定的 statesRef / setCompletionSession
-  }, [closingScan, viewedId, entry.phase, engine.statesRef, engine.setCompletionSession]);
+  }, [closingScan, viewedId, entry.phase, engine.statesRef, engine.setCompletionSession, engine.carryovers]);
 
   /**
    * 发出扫描消息（首次与重试共用）。**它是一条普通的用户消息**：走与
@@ -3094,16 +3337,21 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       );
       const left = draft.left.filter((entry) => entry.title.trim() !== "");
       const done = draft.done.filter((entry) => entry.title.trim() !== "");
-      void api.session
-        .wrapupConfirm(id, {
-          throughTurn: plan.lastTurn,
-          done: done.map((entry) => ({ title: entry.title, turns: entry.turns })),
-          carryovers: left.map((entry) => ({
-            title: entry.title,
-            detail: entry.detail,
-            sourceMessageRange: locateMessageRange(items, entry.detail),
-          })),
-        })
+      // 卡上留着的、本来就开着的以后再做不再新记；在卡上删掉的标丢掉（carryover-prefill.ts）
+      const { drafts, dismissIds } = reconcileLeft({
+        left,
+        noticed: engine.carryovers.filter((item) => item.sourceSessionId === id && item.status === "open"),
+        locate: (detail) => locateMessageRange(items, detail),
+      });
+      // 先丢掉卡上删了的，再确认：主进程据此数「还开着的」决定标 done 还是 done_with_todos
+      void Promise.all(dismissIds.map((carryoverId) => api.session.carryoverSetStatus(carryoverId, "dismissed")))
+        .then(() =>
+          api.session.wrapupConfirm(id, {
+            throughTurn: plan.lastTurn,
+            done: done.map((entry) => ({ title: entry.title, turns: entry.turns })),
+            carryovers: drafts,
+          }),
+        )
         .then(() => {
           engine.refreshSessions();
           engine.refreshCarryovers();
@@ -3163,6 +3411,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     phaseOf: engine.phaseOf,
     turnErrorOf: engine.turnErrorOf,
     approvalsOf: engine.approvalsOf,
+    planAwaitingOf: engine.planAwaitingOf,
+    entryOf: engine.entryOf,
     error: engine.error,
     draft,
     setDraft,
@@ -3197,6 +3447,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     setIntentEnabled,
     workspaces: engine.workspaces,
     addWorkspace,
+    inConversation: sessionId !== null || opened !== null,
+    moveCurrentTo,
     createWorkspace,
     renameWorkspace: engine.renameWorkspace,
     removeWorkspace: engine.removeWorkspace,
@@ -3223,7 +3475,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     setCompletionSession: engine.setCompletionSession,
     archiveDoneSessions: engine.archiveDoneSessions,
     archiveSession: engine.archiveSession,
-    moveSession: engine.moveSession,
+    moveSessions: engine.moveSessions,
     branchFrom,
     exportSession: engine.exportSession,
     removeSession: engine.removeSession,
@@ -3231,6 +3483,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     refreshCarryovers: engine.refreshCarryovers,
     setCarryoverStatus: engine.setCarryoverStatus,
     startCarryoverTask,
+    startGoalTask,
     continueCarryoverInSource,
     closingScan: closingScan !== null && closingScan.sessionId === viewedId,
     scanResult,
@@ -3262,6 +3515,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     moveQueuedTo,
     newTask,
     newTaskIn,
+    startTaskWithDraft,
     answerApproval: engine.answerApproval,
   };
 }

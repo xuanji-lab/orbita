@@ -67,19 +67,39 @@ const CHECKS = [
     skipNoTrailing: true,
   },
   {
-    name: "Skills·行：归属点阵钉在右血线",
-    row: ".skill-row",
-    leading: ".skill-row-main",
-    trailing: ".set-dots",
-    // .skill-row 的右内边距 var(--space-2)（右栏统一：行内缩在 .panel-list 里）；
-    // dim / missing 行没有点阵，跳过。悬停时点阵让位给「选用」键是血线规则的悬停
-    // 组合例外，这里量静止态
+    name: "文档面板·挑选列表行：改动时间钉在右血线",
+    row: ".dp-picker-row",
+    leading: ".orbita-icon",
+    trailing: ".dp-picker-age",
+    // .dp-picker-row 的左右内边距 var(--space-2)；面板里没有已有文档（挑选列表不出现）时跳过
+    rightPad: 8,
+    skipNoTrailing: true,
+  },
+  {
+    name: "能力面板·行：开关钉在右血线",
+    row: ".ability-row",
+    leading: ".ability-dot-slot",
+    trailing: ".ability-switch",
+    // .ability-row 的左右内边距 var(--space-2)（行内缩在 .ability-list 里）；选取态的行、
+    // 文件夹不在了的 skill 没有开关，跳过。悬停才出的「插入」压在开关左边、不占位
+    rightPad: 8,
+    skipNoTrailing: true,
+  },
+  {
+    name: "能力面板·组头：开关说明钉在右血线",
+    row: ".ability-group-head",
+    leading: ".ability-kind",
+    trailing: ".ability-group-note",
+    // .ability-group-head 的左右内边距 var(--space-2)；选取态组头没有这句，跳过
     rightPad: 8,
     skipNoTrailing: true,
   },
   {
     name: "MCP·卡头行：展开键钉在卡右血线",
-    row: ".mcp-card > span:first-of-type",
+    // 量卡本身：展开键与状态图标都在卡头那一行（querySelector 取到的第一颗就是它们）。
+    // 原先量的是卡头那个 span——它没有内边距，差值恒为 0，这条从来过不了（2026-10-30
+    // 能力面板把这张卡挪进详情后第一次真跑到）
+    row: ".mcp-card",
     leading: ".orbita-icon",
     trailing: ".mcp-expand",
     // .mcp-card 的横向内边距 var(--space-2)（右栏统一）；没有实例的卡不出展开键，跳过
@@ -89,10 +109,28 @@ const CHECKS = [
   {
     name: "Sub-sessions·收件箱行：相对时间钉在右血线",
     row: ".inbox-row-main",
-    leading: ".status-bar",
+    leading: ".status-pie",
     trailing: ".inbox-row-ago",
     // .inbox-row-main 的右内边距 var(--space-3)；stopped / idle 行没有竖条，跳过
     rightPad: 12,
+    skipNoTrailing: true,
+  },
+  {
+    name: "自动化·行：次数钉在右血线（悬停动作簇绝对定位盖在上面，静止不占位）",
+    row: ".auto-row",
+    leading: ".auto-ico",
+    trailing: ".auto-count",
+    // .auto-row 的横向内边距 var(--space-3)；没有运行记录的行次数为空串，元素仍在 DOM
+    rightPad: 12,
+    skipNoTrailing: true,
+  },
+  {
+    name: "左栏·会话行：「多久没动了」钉在右血线（悬停层的键叠在同一格里，静止不占位）",
+    row: ".task-row",
+    leading: ".option-row span",
+    trailing: ".task-row-age",
+    // 静止层 padding-inline-end var(--space-1) = 行首状态槽的左内边距（NavRow 的 padding-left）
+    rightPad: 4,
     skipNoTrailing: true,
   },
 ];
@@ -161,6 +199,81 @@ for (const r of results ?? []) {
     }
   }
 }
+// 列对齐（2026-10-30）：消息列与输入卡同一根外线，正文的字在外线往里一个血线
+const column = await evaluate(`(() => {
+  const transcript = document.querySelector(".chat-transcript > div");
+  const composer = document.querySelector(".composer-card");
+  if (transcript === null || composer === null) return null;
+  const box = transcript.getBoundingClientRect();
+  // 方向 N（2026-11-07）：消息列左侧有一条索引边栏（padding-left: --gutter），「外线」是它的内容盒边缘，
+  // 不是列的 border box——输入卡与正文都坐在内容盒里。纸面两档没有边栏，padding 为 0，口径不变
+  const style = getComputedStyle(transcript);
+  const t = { left: box.left + parseFloat(style.paddingLeft), right: box.right - parseFloat(style.paddingRight) };
+  const c = composer.getBoundingClientRect();
+  const para = document.querySelector(".assistant-prose .chat-md > *");
+  const hem = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--space-3")) + 1;
+  return {
+    left: Math.round(c.left - t.left),
+    right: Math.round(c.right - t.right),
+    prose: para === null ? null : Math.round(para.getBoundingClientRect().left - t.left - hem),
+  };
+})()`);
+if (column === null) {
+  console.log("- 列对齐：跳过（页面上没有打开的对话）");
+} else {
+  for (const [name, gap] of [["输入卡左缘 − 消息列左缘", column.left], ["输入卡右缘 − 消息列右缘", column.right], ["正文首字 − 内线", column.prose]]) {
+    if (gap === null) continue;
+    const ok = Math.abs(gap) <= 1;
+    if (!ok) failed++;
+    console.log(`${ok ? "✓" : "✖"} 列对齐：${name} = ${gap}px（期望 0±1）`);
+  }
+}
+
+// 右栏入口（2026-10-31，设计系统 readme「Rail entries are grouped」）：
+// 按钮在 32px 条里居中；角标右缘不越过条（越过会被条的 overflow 切平）；
+// 组间的线比按钮窄、居中，且离上一组末按钮与下一组首按钮一样远。
+const railGeometry = await evaluate(`(() => {
+  const aside = document.querySelector(".right-rail");
+  if (aside === null) return null;
+  const a = aside.getBoundingClientRect();
+  const mid = (a.left + a.right) / 2;
+  const buttons = [...aside.querySelectorAll("button")];
+  const widest = Math.max(...buttons.map((b) => b.getBoundingClientRect().width));
+  return {
+    buttons: buttons.length,
+    offCenter: Math.max(...buttons.map((b) => { const r = b.getBoundingClientRect(); return Math.abs((r.left + r.right) / 2 - mid); })),
+    badgeOver: [...aside.querySelectorAll(".rail-badge")].map((e) => Math.round(e.getBoundingClientRect().right - a.right)),
+    seps: [...aside.querySelectorAll(".rail-sep")].map((sep) => {
+      const r = sep.getBoundingClientRect();
+      const above = sep.previousElementSibling?.lastElementChild?.getBoundingClientRect();
+      const below = sep.nextElementSibling?.firstElementChild?.getBoundingClientRect();
+      return {
+        offCenter: Math.abs((r.left + r.right) / 2 - mid),
+        narrower: widest - r.width,
+        up: above === undefined ? null : r.top - above.bottom,
+        down: below === undefined ? null : below.top - r.bottom,
+      };
+    }),
+  };
+})()`);
+if (railGeometry === null) {
+  console.log("- 右栏入口：跳过（页面上没有右栏）");
+} else {
+  const checks = [
+    ["按钮居中在条里", railGeometry.offCenter <= 0.5, `最大偏差 ${railGeometry.offCenter}px`],
+    ["角标右缘不越过条", railGeometry.badgeOver.every((over) => over <= 0), railGeometry.badgeOver.length === 0 ? "页面上没有角标" : `越过 ${railGeometry.badgeOver.join(",")}px`],
+    ...railGeometry.seps.map((sep, index) => [
+      `第 ${index + 1} 条组间线：居中、比按钮窄、上下留白对称`,
+      sep.offCenter <= 0.5 && sep.narrower > 0 && sep.up !== null && sep.down !== null && Math.abs(sep.up - sep.down) <= 1,
+      `偏心 ${sep.offCenter}px，窄 ${sep.narrower}px，上 ${sep.up}px / 下 ${sep.down}px`,
+    ]),
+  ];
+  for (const [name, ok, detail] of checks) {
+    if (!ok) failed++;
+    console.log(`${ok ? "✓" : "✖"} 右栏入口：${name}（${detail}）`);
+  }
+}
+
 close();
 console.log(failed === 0 ? "血线守卫：全部通过" : `血线守卫：${failed} 处违规`);
 process.exit(failed === 0 ? 0 : 1);

@@ -6,7 +6,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { RequestBroker } from "./request-broker.ts";
 import { createChannelTools, describeChannelRole } from "./channel-tools.ts";
-import type { ChannelSendOutcome, DelegateOutcome } from "../shared/agent-ipc.ts";
+import type { ChannelSendOutcome, DelegateOutcome, ModelCostsOutcome } from "../shared/agent-ipc.ts";
 
 /** 收走请求事件，稍后人工回执——模拟主进程（同 task-tools.test.ts 的 FakeMain）。 */
 class FakeMain {
@@ -15,7 +15,7 @@ class FakeMain {
   wire(broker: RequestBroker): void {
     this.broker = broker;
   }
-  answer(requestId: string, result: DelegateOutcome | ChannelSendOutcome): void {
+  answer(requestId: string, result: DelegateOutcome | ChannelSendOutcome | ModelCostsOutcome): void {
     this.broker?.resolve(requestId, result);
   }
   requestIdAt(index: number): string {
@@ -42,17 +42,50 @@ function toolByName(tools: Tool[], name: string): Tool {
 }
 
 describe("createChannelTools：按 role 注册的工具名单", () => {
-  test('role "root"：delegate + reply_subsession，不含 report_to_parent', () => {
+  test('role "root"：delegate + reply_subsession + model_costs，不含 report_to_parent', () => {
     const { tools } = setup("root");
     assert.deepEqual(
       tools.map((tool) => tool.name).sort(),
-      ["delegate", "reply_subsession"],
+      ["delegate", "model_costs", "reply_subsession"],
     );
   });
 
-  test('role "child"：只有 report_to_parent——不能再派出，也没有自己的子可回信', () => {
+  test('role "child"：只有 report_to_parent——不能再派出，也没有自己的子可回信，更不需要派发前查价', () => {
     const { tools } = setup("child");
     assert.deepEqual(tools.map((tool) => tool.name), ["report_to_parent"]);
+  });
+});
+
+describe("model_costs", () => {
+  test("无参数：发 modelCostsRequest（带 sessionId）；回执 ok → 表文本原样进 content", async () => {
+    const { tools, fake } = setup("root");
+    const pending = toolByName(tools, "model_costs").execute("call-m1", {}, undefined, undefined, undefined as never);
+    assert.deepEqual({ ...(fake.sent[0] as Record<string, unknown>), requestId: undefined }, {
+      type: "modelCostsRequest",
+      sessionId: "session-1",
+      requestId: undefined,
+    });
+    fake.answer(fake.requestIdAt(0), { ok: true, text: "model | thinking | $/task\nflash | default | $0.03 n=3" });
+    const result = await pending;
+    assert.deepEqual(result.content, [{ type: "text", text: "model | thinking | $/task\nflash | default | $0.03 n=3" }]);
+  });
+
+  test("回执 ok:false → 抛，error 原样成为工具失败原因", async () => {
+    const { tools, fake } = setup("root");
+    const pending = toolByName(tools, "model_costs").execute("call-m2", {}, undefined, undefined, undefined as never);
+    fake.answer(fake.requestIdAt(0), { ok: false, error: "Failed to read the price chart: boom" });
+    await assert.rejects(pending, /Failed to read the price chart: boom/);
+  });
+
+  test("有 promptSnippet（列进 Available tools，模型才知道它存在）；delegate 的说明指到它，参数说明指向它给的 id", () => {
+    const { tools } = setup("root");
+    assert.ok((toolByName(tools, "model_costs") as { promptSnippet?: string }).promptSnippet);
+    const delegate = toolByName(tools, "delegate");
+    assert.match(delegate.description, /Before delegating, call model_costs/);
+    assert.match(delegate.description, /cheapest model and thinking tier that is good enough/);
+    assert.match(delegate.description, /AGENTS\.md/);
+    const props = (delegate.parameters as { properties: { model: { description: string } } }).properties;
+    assert.match(props.model.description, /as listed by model_costs/);
   });
 });
 
@@ -92,6 +125,9 @@ describe("delegate", () => {
     const text = (result.content[0] as { text: string }).text;
     assert.match(text, /child-1/);
     assert.match(text, /glm-5\.3/);
+    // 子工作台绝对路径进正文：父会话的提示词里已没有子会话行，这是它知道子
+    // 工作台的第一来源（重要产出也落父工作台的 subsessions/，但草稿仍在子那里）
+    assert.match(text, /\/workbenches\/child-1/);
     assert.match(text, /end this turn/);
     assert.match(text, /do not poll or wait/i);
     assert.deepEqual(result.details, {
@@ -327,5 +363,21 @@ describe("describeChannelRole", () => {
     const text = describeChannelRole("child");
     assert.match(text, /report_to_parent/);
     assert.doesNotMatch(text, /\bdelegate\b/);
+  });
+
+  test("root：讲清子会话重要产出的落点——自己工作台的 subsessions/，done 后先去核对", () => {
+    const text = describeChannelRole("root");
+    assert.match(text, /subsessions\//);
+    assert.match(text, /Session workbench/);
+    assert.match(text, /When you see done, check that directory/);
+  });
+
+  test("child：草稿留自己工作台；重要产出写父工作台的 subsessions/<短 id>-<英文名>/；done 报绝对路径；代码交付照旧进 cwd", () => {
+    const text = describeChannelRole("child");
+    assert.match(text, /your own Session workbench/);
+    assert.match(text, /parent session workbench in subsessions\//);
+    assert.match(text, /first\s+8 characters of your own session id/);
+    assert.match(text, /absolute paths/);
+    assert.match(text, /still belong in cwd/);
   });
 });

@@ -353,6 +353,12 @@ describe("greetingSteps —— 三步清单前两步的判定（每次回迁移�
     );
   });
 
+  test("服务商被关了：①②都按未完成处理（家务活解析时它会被拒）", () => {
+    const closed = { ...provider("zai", ["glm-5.3"]), disabled: true };
+    assert.deepEqual(greetingSteps([closed], { providerId: "zai", modelId: "glm-5.3" }), { provider: false, chore: false });
+    assert.deepEqual(greetingSteps([closed, provider("kimi", ["k3"])], { providerId: "zai", modelId: "glm-5.3" }), { provider: true, chore: false });
+  });
+
   test("服务商在但那个模型已不在声明里：②未完成", () => {
     assert.deepEqual(greetingSteps([provider("zai", ["glm-5.3"])], { providerId: "zai", modelId: "kimi-k3" }), { provider: true, chore: false });
   });

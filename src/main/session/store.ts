@@ -23,11 +23,13 @@ import {
 } from "../../shared/prompt-images.ts";
 import { isNotFound } from "../fs-errors.ts";
 import { headStringField, scanJsonlLines } from "../jsonl-scan.ts";
+import { CitedPdfIndex } from "./cited-pdfs.ts";
 import { EXTERNAL_FILE_COPY_MAX_BYTES, type PromptFileRef, type SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
 import type { PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import type { SessionWrapup } from "../../shared/wrapup.ts";
+import { parseAutomationHeader } from "../../shared/automation.ts";
 import { isClosingScanText } from "../../shared/wrapup-scan.ts";
 
 /** 收尾扫描的机器提问（用户消息形，但不是用户说的话） */
@@ -39,11 +41,13 @@ function isMachinePrompt(record: SessionRecord): boolean {
 import {
   childSessions,
   deriveSessionTitle,
+  userTextForTitle,
   isChannelMarkRecord,
   isCompactedRecord,
   parseSessionMeta,
   pushRecentQuery,
   recentQueriesFromRecords,
+  SESSION_INITIAL_RECORDS,
   SESSION_PAGE_RECORDS,
   sortSessions,
   UNASSIGNED_PROVIDER_ID,
@@ -83,6 +87,12 @@ export function isSessionId(id: string): boolean {
 }
 
 const META_SUFFIX = ".meta.json";
+
+/**
+ * `list()` 一批同时读几个 meta。16 是折中：libuv 的文件线程池默认 4，并发再大也
+ * 只能摊到 4 个线程上；批太大反而让 JSON.parse（同步、在主线程）与其它 IPC 抢时间。
+ */
+const META_READ_BATCH = 16;
 
 /**
  * 一次分支的全部预制件（C-2）。prepareBranch 只读不写；pi 那边把分支文件落了
@@ -195,6 +205,9 @@ export class SessionStore {
    */
   private readonly metaWrites = new Map<string, Promise<unknown>>();
 
+  /** 每条会话 cite_pdf 核验过的 PDF（增量缓存，见 cited-pdfs.ts）：文件面板的 cited 根的来源 */
+  private readonly citedPdfs: CitedPdfIndex;
+
   /**
    * 通道账本的持有者（子会话 2026-09-23）。**可选**——旧的调用点（测试、
    * 未接线的场景）不传它，remove() 就只删会话本身，不级联通道文件。
@@ -206,6 +219,7 @@ export class SessionStore {
     this.workbenchesDir = workbenchesDir ?? join(dirname(dir), "workbenches");
     this.channels = channels;
     this.snapshots = new SnapshotStore(dir);
+    this.citedPdfs = new CitedPdfIndex((id) => this.logPath(id));
   }
 
   private metaPath(id: string): string {
@@ -216,6 +230,14 @@ export class SessionStore {
   private logPath(id: string): string {
     if (!SESSION_ID.test(id)) throw new Error(`invalid session id "${id}"`);
     return join(this.dir, `${id}.jsonl`);
+  }
+
+  /**
+   * 本会话 cite_pdf 核验过的 PDF 的绝对路径（含已被回退折掉的轮次：核验这件事发生过，
+   * 回退不抹掉）。每次只 stat 一下日志，新增的部分才读；会话不存在返回空。
+   */
+  citedPdfPaths(id: string): Promise<string[]> {
+    return this.citedPdfs.paths(id);
   }
 
   /**
@@ -452,18 +474,19 @@ export class SessionStore {
       const changes: Partial<SessionMeta> = { updatedAt: item.timestamp };
       // 标题只认第一条用户消息，之后不再改——否则会话会在侧栏里改名。
       // 手动改过名的会话 title 不为空，因此这条守卫自动让位给它。
-      if (current.title === "" && item.role === "user") {
-        const text = item.content.find((block) => block.type === "text");
-        if (text !== undefined && text.type === "text") {
-          changes.title = deriveSessionTitle(text.text);
-        }
-      }
+      const userText =
+        item.role === "user"
+          ? userTextForTitle(item.content.flatMap((block) => (block.type === "text" ? [block.text] : [])))
+          : null;
+      if (current.title === "" && userText !== null) changes.title = deriveSessionTitle(userText);
       // 最近提问每条用户消息都记（首页会话卡的三槽吃它）；规则在 shared，两边一致。
       // 收尾扫描的机器提问不是用户的提问，不进最近提问（首页卡上会冒出一行「【Orbita 收尾扫描】」）
       if (item.role === "user") {
         const text = item.content.find((block) => block.type === "text");
-        if (text !== undefined && text.type === "text" && !isClosingScanText(text.text)) {
-          changes.recentQueries = pushRecentQuery(current.recentQueries, text.text);
+        // 收尾扫描的机器提问、自动化到点送进来的指令（首行是 `[定时任务「…」第 n 次 · …]` 抬头）
+        // 都不是用户的提问，不进最近提问
+        if (userText !== null && text !== undefined && text.type === "text" && !isClosingScanText(text.text) && parseAutomationHeader(text.text) === null) {
+          changes.recentQueries = pushRecentQuery(current.recentQueries, userText);
         }
       }
       return changes;
@@ -631,6 +654,20 @@ export class SessionStore {
     return this.update(id, { mode });
   }
 
+  /**
+   * 「转成普通会话」：把一条自动化新开的会话标成 promoted，从此进左侧栏。
+   * 只对带 automationId 的会话有意义——别的会话原样不动（返回 false）。
+   */
+  async setPromoted(id: string): Promise<boolean> {
+    let changed = false;
+    await this.update(id, (meta) => {
+      if (meta.automationId === undefined) return null;
+      changed = true;
+      return { promoted: true };
+    });
+    return changed;
+  }
+
   /** 改思考档（照 setMode）：重开与下一轮开机的装配都读它 */
   setThinkingLevel(id: string, thinkingLevel: ThinkingLevel): Promise<void> {
     return this.update(id, { thinkingLevel });
@@ -724,9 +761,12 @@ export class SessionStore {
     return this.update(id, { archived });
   }
 
-  /** 换归属工作区；null = 移出所有工作区，回到 TASKS */
-  move(id: string, workspaceId: string | null): Promise<void> {
-    return this.update(id, { workspaceId });
+  /**
+   * 换归属工作区与 cwd（两者同进同出；null = 回到 TASKS）。只写 meta——
+   * 在跑判断、pi 本子通知、子会话连带都在 session/move.ts 编排。
+   */
+  relocate(id: string, workspaceId: string | null, cwd: string): Promise<void> {
+    return this.update(id, { workspaceId, cwd });
   }
 
   /**
@@ -850,7 +890,14 @@ export class SessionStore {
     });
   }
 
-  /** 会话列表：置顶在前，其余最近的在前。**坏掉的 meta 直接跳过**，不让一条坏记录挡住整张列表。 */
+  /**
+   * 会话列表：置顶在前，其余最近的在前。**坏掉的 meta 直接跳过**，不让一条坏记录挡住整张列表。
+   *
+   * meta 按 `META_READ_BATCH` 个一批 `Promise.all` 读：串行时一个会话一次
+   * `readFile` 往返，1432 条实测约 126ms；有上限并发把往返叠起来。批内顺序不影响
+   * 结果——最后统一走 `sortSessions`（只认 pinned / updatedAt），与串行逐条读到
+   * 的那份逐条一致（store.test.ts 有一条 >16 条的对照用例）。
+   */
   async list(): Promise<SessionMeta[]> {
     let names: string[];
     try {
@@ -861,11 +908,16 @@ export class SessionStore {
       if (isNotFound(cause)) return [];
       throw cause;
     }
+    const ids = names
+      .filter((name) => name.endsWith(META_SUFFIX))
+      .map((name) => name.slice(0, -META_SUFFIX.length));
     const metas: SessionMeta[] = [];
-    for (const name of names) {
-      if (!name.endsWith(META_SUFFIX)) continue;
-      const meta = await this.readMeta(name.slice(0, -META_SUFFIX.length)).catch(() => null);
-      if (meta !== null) metas.push(meta);
+    for (let start = 0; start < ids.length; start += META_READ_BATCH) {
+      const batch = ids.slice(start, start + META_READ_BATCH);
+      const read = await Promise.all(batch.map((id) => this.readMeta(id).catch(() => null)));
+      for (const meta of read) {
+        if (meta !== null) metas.push(meta);
+      }
     }
     return sortSessions(metas);
   }
@@ -877,7 +929,8 @@ export class SessionStore {
   }
 
   /**
-   * 打开一条会话的**尾窗**（IPC 的 session:load 走这条）。
+   * 打开一条会话的**首屏尾窗**（IPC 的 session:load 走这条），默认只取
+   * `SESSION_INITIAL_RECORDS` 条；更早的由 `loadOlder` 按 `SESSION_PAGE_RECORDS` 一页页补。
    *
    * **主进程仍然全量读盘 + `foldReverts`**（实测 25MB / 2948 条的会话读盘解析折叠
    * 约 120ms，可接受）——瓶颈是 IPC 传输量与 renderer 的渲染量，那两处才是分页的对象。
@@ -889,7 +942,7 @@ export class SessionStore {
    *
    * 要**全量**的消费者照旧走 `load`：导出、回退、intent 归档、read_task。
    */
-  async loadWindow(id: string, limit: number = SESSION_PAGE_RECORDS): Promise<SessionWindowDetail | null> {
+  async loadWindow(id: string, limit: number = SESSION_INITIAL_RECORDS): Promise<SessionWindowDetail | null> {
     const meta = await this.readMeta(id);
     if (meta === null) return null;
     const effective = await this.readLog(id);
@@ -996,6 +1049,7 @@ export class SessionStore {
     // 把 meta 文件又写回去（`update` 内部读不到才跳过，它已经读到了）。
     await this.queueMeta(id, async () => undefined);
     this.metaWrites.delete(id);
+    this.citedPdfs.forget(id);
     await rm(this.logPath(id), { force: true });
     await rm(this.metaPath(id), { force: true });
     // 原图在 meta 之后删：删失败最多残留一个没人引用的目录，不会出现「会话还在、图没了」
@@ -1144,7 +1198,7 @@ export class SessionStore {
 /** IPC 进来的 limit 在这条线上夹住：它来自 renderer，不设上限就是给了一条自选的传输量 */
 const PAGE_RECORDS_MAX = 2000;
 
-/** 一页的条数：坏值 / 缺席退默认，再夹在 [1, PAGE_RECORDS_MAX] */
+/** 一页的条数：坏值 / 缺席退**翻页**默认值（不是首屏值），再夹在 [1, PAGE_RECORDS_MAX] */
 function pageRecords(limit: number): number {
   if (!Number.isFinite(limit)) return SESSION_PAGE_RECORDS;
   return Math.min(Math.max(1, Math.floor(limit)), PAGE_RECORDS_MAX);

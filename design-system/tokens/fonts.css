@@ -32,6 +32,35 @@
   font-display: swap;
   unicode-range: U+2E80-9FFF, U+3000-303F, U+FF00-FFEF;
 }
+/* 小学作业的中文半粗（2026-10-30）。思源宋体只入库了 Medium 一个字重（上面那一份，一个字重
+   就十几 MB，不再多拷），于是中文从 100 到 900 全落在它身上：450 的正文与 500 的名字是同一套
+   字形，600 以上靠浏览器假粗。实测（20px 同一串字的墨量）：Medium 56.2，假粗 63.6（+13%）——
+   Medium 本来就厚，宋体横细竖粗，假粗那一圈描边在 14px 上几乎看不出来；同一行的拉丁字
+   （Literata 可变字重）却是真半粗，英文粗了、中文没粗。macOS 自带宋体的 Bold 更不行（59.6，
+   字面小，墨量比假粗还少），Black 才和 Literata 的半粗站得齐。
+   所以给小学作业单起一个族：600 以下仍是同一份 Medium；600 以上先找本机装着的真粗宋体
+   （思源宋体 / Noto Serif CJK 的 Bold），再找 macOS 的宋体 Black。一个都没有（Windows 默认如此）
+   时这个字面加载失败，浏览器顺着字族栈落到下一族 "Source Han Serif SC"，回到今天的 Medium +
+   假粗——不会比现在差。只用 local()，不新增字体文件。 */
+@font-face {
+  font-family: "Orbita Serif CJK";
+  src: url("../assets/fonts/SourceHanSerifSC-Medium.otf") format("opentype");
+  font-weight: 100 599;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+2E80-9FFF, U+3000-303F, U+FF00-FFEF;
+}
+@font-face {
+  font-family: "Orbita Serif CJK";
+  src:
+    local("Source Han Serif SC Bold"), local("SourceHanSerifSC-Bold"),
+    local("Noto Serif CJK SC Bold"), local("NotoSerifCJKsc-Bold"),
+    local("Songti SC Black"), local("STSongti-SC-Black");
+  font-weight: 600 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+2E80-9FFF, U+3000-303F, U+FF00-FFEF;
+}
 @font-face {
   font-family: "Source Han Sans SC";
   src: url("../assets/fonts/SourceHanSansSC-Regular.otf") format("opentype");

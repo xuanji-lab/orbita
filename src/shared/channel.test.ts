@@ -393,6 +393,31 @@ describe("composeChannelPrompt / parseChannelPrompt", () => {
     strictEqual(prompt.split("\n")[0]?.includes('title="Untitled"'), true);
   });
 
+  it("带 workbench：父→子信封正文前一行 Parent session workbench，仍可 parse", () => {
+    const msg = message({ id: "m10", from: "parent", kind: "task", text: "任务正文" });
+    const prompt = composeChannelPrompt(msg, { id: "p1", title: "母任务", workbench: "/wb/parent-1" });
+    strictEqual(prompt.includes("Parent session workbench: /wb/parent-1\n任务正文"), true);
+    deepStrictEqual(parseChannelPrompt(prompt), {
+      from: "parent",
+      kind: "task",
+      peerId: "p1",
+      messageId: "m10",
+    });
+  });
+
+  it("带 workbench：子→父信封用 Sub-session 口径", () => {
+    const msg = message({ id: "m11", from: "child", kind: "done" });
+    const prompt = composeChannelPrompt(msg, { id: "c1", title: "子任务", workbench: "/wb/child-1" });
+    strictEqual(prompt.includes("Sub-session workbench: /wb/child-1"), true);
+    strictEqual(prompt.includes("Parent session workbench"), false);
+  });
+
+  it("不带 workbench：信封里没有 workbench 行（老调用点兼容）", () => {
+    const msg = message({ id: "m12", from: "parent", kind: "task" });
+    const prompt = composeChannelPrompt(msg, { id: "p1", title: "t" });
+    strictEqual(prompt.includes("workbench:"), false);
+  });
+
   it("英文说明按 from 分叉：parent 让子调 report_to_parent，child 让父调 reply_subsession 并带 id/标题", () => {
     const toChild = composeChannelPrompt(message({ from: "parent", kind: "task" }), {
       id: "p1",

@@ -12,6 +12,7 @@ import { open, readFile, stat } from "node:fs/promises";
 import {
   type FilePreview,
   type PdfFile,
+  PREVIEW_BINARY_SNIFF_BYTES,
   PREVIEW_IMAGE_LIMIT,
   PREVIEW_PDF_LIMIT,
   PREVIEW_TEXT_LIMIT,
@@ -30,15 +31,37 @@ const IMAGE_MIME: Readonly<Record<string, string>> = {
   avif: "image/avif",
 };
 
-/** 「有没有 NUL 字节」判定只看开头这一段——与文本截断上限是两个独立的尺度 */
-const BINARY_SNIFF_BYTES = 8 * 1024;
-
 export interface PreviewLimits {
   text: number;
   image: number;
 }
 
 const DEFAULT_LIMITS: PreviewLimits = { text: PREVIEW_TEXT_LIMIT, image: PREVIEW_IMAGE_LIMIT };
+
+/**
+ * 截断时退掉末尾被切一半的 UTF-8 序列，返回「最后一个完整字符之后」的字节长度。
+ *
+ * 按字节截断（`min(size, limit)`）会正好切在多字节字符中间，`TextDecoder` 只能把它
+ * 补成 `U+FFFD`——CJK 文件在边界上就多一个乱码方块（2026-10-25 实测：8 MB 中文
+ * 文件截到 2 MB，末字符即 `U+FFFD`）。UTF-8 的一个序列是「首字节说明长度 + 最多 3 个
+ * 续字节（0x80–0xBF）」，所以从末尾往回最多看 4 个字节就能判断最后那个序列是否完整：
+ * 不完整就从它的首字节处截掉（最多少 3 个字节）。数据本身非法（长度够但字节不合法）
+ * 不在这里修，交给 TextDecoder 的默认行为。
+ */
+function completeUtf8End(buf: Buffer): number {
+  let start = buf.length - 1;
+  let continuations = 0;
+  while (start >= 0 && continuations < 3 && ((buf[start] ?? 0) & 0xc0) === 0x80) {
+    start -= 1;
+    continuations += 1;
+  }
+  // 整段都是续字节：那不是「末尾被切」造成的，别动它
+  if (start < 0) return buf.length;
+  const lead = buf[start] ?? 0;
+  const need = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1;
+  if (need === 1) return buf.length; // 末尾是 ASCII，天然完整
+  return buf.length - start >= need ? buf.length : start;
+}
 
 /** 名字里「扩展名」那一段：取最后一个 `.` 之后的部分，小写；无扩展名 / 点文件回空串 */
 function extOf(path: string): string {
@@ -48,9 +71,35 @@ function extOf(path: string): string {
   return base.slice(dot + 1).toLowerCase();
 }
 
+/** 开头有没有 NUL 字节（只看前 PREVIEW_BINARY_SNIFF_BYTES 个） */
+function hasNul(head: Buffer): boolean {
+  const sniffLength = Math.min(head.length, PREVIEW_BINARY_SNIFF_BYTES);
+  for (let i = 0; i < sniffLength; i++) {
+    if (head[i] === 0) return true;
+  }
+  return false;
+}
+
+/** 读文件开头 `length` 字节（`length` 为 0 不开文件） */
+async function readHead(path: string, length: number): Promise<Buffer> {
+  if (length <= 0) return Buffer.alloc(0);
+  const buffer = Buffer.alloc(length);
+  const handle = await open(path, "r");
+  try {
+    const { bytesRead } = await handle.read(buffer, 0, length, 0);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
 /**
  * 读一个文件的预览。`limits` 只为测试注入小上限，生产路径用契约常量。
  * 调用方（ipc.ts）已经过白名单校验，这里拿到的 `path` 是 realpath 后的真实路径。
+ *
+ * 文本比 `limits.text` 大时**不读正文**：只嗅开头 8 KB 判二进制，回 `large-text`，面板
+ * 随后走按行取窗。以前这里先读前 16 MB 再让 renderer 丢掉（100 MB 日志白搬 16 MB 过 IPC），
+ * 只有「超长单行」那条退路用得上——它现在改由 `readTextHead` 按需读。
  */
 export async function readPreview(path: string, limits: PreviewLimits = DEFAULT_LIMITS): Promise<FilePreview> {
   const stats = await stat(path);
@@ -69,32 +118,27 @@ export async function readPreview(path: string, limits: PreviewLimits = DEFAULT_
     return { kind: "image", mime, base64: buffer.toString("base64"), size, modifiedAt };
   }
 
-  // 只读开头 min(size, limits.text) 字节——再大的日志 / 数据文件不整份读进内存
-  const readLength = Math.min(size, limits.text);
-  const buffer = Buffer.alloc(readLength);
-  let bytesRead = 0;
-  if (readLength > 0) {
-    const handle = await open(path, "r");
-    try {
-      ({ bytesRead } = await handle.read(buffer, 0, readLength, 0));
-    } finally {
-      await handle.close();
-    }
-  }
-  const head = buffer.subarray(0, bytesRead);
-  const sniffLength = Math.min(head.length, BINARY_SNIFF_BYTES);
-  let binary = false;
-  for (let i = 0; i < sniffLength; i++) {
-    if (head[i] === 0) {
-      binary = true;
-      break;
-    }
-  }
-  if (binary) {
+  const large = size > limits.text;
+  const head = await readHead(path, large ? Math.min(size, PREVIEW_BINARY_SNIFF_BYTES) : size);
+  if (hasNul(head)) {
     return { kind: "binary", size, modifiedAt };
   }
-  const text = new TextDecoder("utf-8").decode(head);
-  return { kind: "text", text, truncated: size > limits.text, size, modifiedAt };
+  if (large) return { kind: "large-text", size, modifiedAt };
+  return { kind: "text", text: new TextDecoder("utf-8").decode(head), size, modifiedAt };
+}
+
+/**
+ * 读文本开头至多 `limit` 字节并解码（边界落在多字节字符中间就退掉那半个）。
+ * 只给分段预览的「超长单行」退路用：一条行没法再窗口化，只能退回看前 16 MB。
+ */
+export async function readTextHead(path: string, limit: number = PREVIEW_TEXT_LIMIT): Promise<string> {
+  const stats = await stat(path);
+  if (!stats.isFile()) {
+    throw new Error(`Not a file: ${path}`);
+  }
+  const head = await readHead(path, Math.min(stats.size, limit));
+  const end = stats.size > limit ? completeUtf8End(head) : head.length;
+  return new TextDecoder("utf-8").decode(head.subarray(0, end));
 }
 
 /**

@@ -5,7 +5,9 @@
  * 字段等有真实消费者再加，不提前占位。
  */
 import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
+import { PRICE_CHART_CATEGORIES, type PriceChartCategory } from "./price-chart.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
+import { MEMORY_VECTOR_MODELS, type MemoryVectorSettings } from "./memory.ts";
 
 /**
  * 主题偏好。"system" 是真正的默认，不是「light 的别名」：
@@ -175,6 +177,9 @@ export interface UsagePetPref {
   hidden?: true;
 }
 
+/** 过程显示的两种形态，见 AppSettings.processView */
+export type ProcessView = "turn" | "steps";
+
 export interface AppSettings {
   theme: ThemePreference;
   /**
@@ -189,6 +194,11 @@ export interface AppSettings {
    * 拖动中不落盘，松手才写（避免写风暴）。
    */
   rightPanelWidth?: number;
+  /**
+   * 右栏显示「文档」「演示文稿」时的宽度（这两个是写东西的主工作面，默认占 pane 的大半，
+   * 与其它右栏页分开记）。缺席 = 按 pane 宽度的比例现算；校验口径同 rightPanelWidth。
+   */
+  docPanelWidth?: number;
   /**
    * 左侧栏的宽度。缺席 = 默认 288（设计系统的出厂尺寸）；**固定像素区间 240–400**，
    * 越界或非数直接丢掉——左栏与「chat 的 1/3–2/3」无关（2026-09-22 wafo 澄清：
@@ -217,12 +227,45 @@ export interface AppSettings {
    */
   completionSound?: boolean;
   /**
+   * 聊天里 agent 的思考与工具调用怎么显示（2026-10-30）。**缺席 = "turn"**：
+   * - "turn"：一轮一行——干活时一块定高的现场块（走表 + 当前这一步），落定收成一行结论，
+   *   展开成按旁白切开的几段（features/chat/turn-process.ts）；
+   * - "steps"：逐步铺开——每次思考 / 工具调用各一行，活跃轮全铺开、落定按旁白收成几条
+   *   Worked（肖志芬的原设计，groupTurns）。
+   * 其余值丢掉。
+   */
+  processView?: ProcessView;
+  /**
+   * 自动化：**有任务在跑时阻止系统睡眠**。缺席 = 关。开着时主进程只在
+   * 有自动化运行**正在执行**期间用 Electron 的 powerSaveBlocker（`prevent-app-suspension`）
+   * 拦住系统挂起，运行全部结束就放开；屏幕照样可以关。这是应用自己的 API，不是 caffeinate / pmset。
+   * 只认布尔，同 gitAttribution 的纪律。
+   */
+  automationKeepAwake?: boolean;
+  /**
+   * 新手引导看过了没有（2026-11-06）：**缺席 = 没看过**，窗口起来、设置读回后自动全屏弹一次；
+   * 看完或跳过都写 true，之后不再自动弹（设置 › 通用里能再看一遍，不改这个键）。
+   * 只认布尔，同 gitAttribution 的纪律。
+   */
+  onboardingSeen?: boolean;
+  /**
+   * 文档 / 演示文稿编辑面板的「纸面」：同一套结构与交互，只换样式变量（安静编辑台 / 印刷版式 /
+   * 专注写作）。缺席 = quiet（守 design-system 的默认）。只认三个已知值，手改的乱值丢掉。
+   */
+  docPaper?: DocPaper;
+  /**
    * 代用户提交时在 commit / PR 里留下 Orbita 标识。**缺席 = 开启**：默认署名，
    * 不想要的人关一次就够；默认关则绝大多数人不会知道有这件事。
    * 只认布尔——这个文件手改得到，`"yes"` 该被丢掉而不是当成真。
    * 改动下一轮对话即生效（主进程每轮现读，同 compaction）。
    */
   gitAttribution?: boolean;
+  /**
+   * 「先给我看计划」（2026-10-30）：agent 第一次写下一张新计划后先停下，等你点头再动手。
+   * **缺席 = 关**：默认不拦，只有 plan 档（计划就是它的产出）与 agent 带了具体问题（confirm）才停。
+   * 只认布尔，同 gitAttribution 的纪律。改动下一轮对话即生效（主进程每轮现读）。
+   */
+  planFirst?: boolean;
   /**
    * 家务活模型：给任务起名、收尾扫描、迁移的「跳过随手一句」检查这类小活的专用模型。
    * **缺席 = 各自退回会话当时的模型**（起名 / 扫描）或置灰不可用（随手一句检查，
@@ -262,6 +305,12 @@ export interface AppSettings {
    */
   intent?: IntentSettings;
   /**
+   * 向量召回（记忆系统的一部分）：
+   * 本地 llama-server + GGUF。缺席全默认（关）；只存用户动过的键，读侧并入
+   * DEFAULT_MEMORY_VECTOR_SETTINGS（同 intent 的纪律）。
+   */
+  vector?: Partial<MemoryVectorSettings>;
+  /**
    * 左下角星云的摆放（2026-10-12 用户：不加设置项，直接在左下角点）：点一格把星云钉在
    * 那天（按**日期**记，滑出 7 天窗口后自然回到今天），点星云把它收起、让出空间。
    * 缺席 = 跟着今天、显示着。设置页里不出现。
@@ -273,10 +322,28 @@ export interface AppSettings {
    */
   browserDownloadDir?: string;
   /**
-   * 设置 › 模型服务的厂商卡片尺寸。缺席 = large。加的服务商多了卡片墙会很长，
-   * small 只留 logo、名字与「已添加」角标；选了就记住，下次进来还是这一档。
+   * 设置 › 模型服务这一页的界面记忆：卡片尺寸、「仅显示已添加」、价格 · 能力图停在哪个分类，
+   * 放在一个对象里管（用户 2026-10-25）。缺席 = 全部默认。store 写入时按键合并一层（同 drawer），
+   * 页面上每个开关只发自己那个键。
    */
-  providerCardSize?: ProviderCardSize;
+  providersPage?: ProvidersPageSettings;
+  /**
+   * 设置 › 插件这一页的界面记忆：卡片尺寸、「仅显示已启用」（用户 2026-11-05：学模型服务页的大 / 小卡，
+   * 状态切页 / 重载后保持）。缺席 = 全部默认。store 写入时按键合并一层，同 providersPage。
+   */
+  pluginsPage?: PluginsPageSettings;
+  /**
+   * 全局周看板一屏显示几天（用户 2026-11-05：「如果是一格的话，就显示 5 天……右上角可以让他选择显示三天，
+   * 还是五天，还是七天」）。**缺席 = 5**（BOARD_DAYS_DEFAULT）；只认 3 / 5 / 7，其余丢掉。
+   */
+  boardDays?: BoardDays;
+  /**
+   * 左栏会话列表的「时间范围」筛选（用户 2026-11-07：「会话生命周期如果可以有一个用最近一天、
+   * 最近三天、最近五天、最近七天来筛选要显示的会话就好了」）：只列最后活动（updatedAt）落在
+   * 最近 N 天内的会话。**缺席 = 不限**（打开后行为与此前完全一致）；只认 1 / 3 / 5 / 7，其余丢掉。
+   * 选「不限」靠补丁里发 null 清除（见 SettingsPatch）。
+   */
+  sidebarAgeDays?: SidebarAgeDays;
   /**
    * 实验功能的逐项开关（2026-10-12 用户裁决：每个 feature 自己的 switch，不再设总开关）。
    * **缺省全部关闭**：缺席的键 = 这一项关着；开过的项写 true、关掉写 false
@@ -304,7 +371,41 @@ export interface AppSettings {
   experimentalFeatures?: Partial<Record<ExperimentalFeatureId, boolean>>;
 }
 
-export type ProviderCardSize = "large" | "small";
+/** 卡片墙的尺寸：模型服务页与插件页共用（同一套大 / 小卡） */
+export type CardSize = "large" | "small";
+
+/** 设置 › 模型服务这一页的界面记忆（AppSettings.providersPage）；每个键缺席都是默认值 */
+export interface ProvidersPageSettings {
+  /**
+   * 厂商卡片尺寸。缺席 = large。加的服务商多了卡片墙会很长，small 只留 logo、名字与角标。
+   * 2026-10-25 之前存在顶层 `providerCardSize`，读的时候迁过来（parseSettings）。
+   */
+  cardSize?: CardSize;
+  /** 卡片墙只显示已添加的服务商。缺席 = 全部显示 */
+  onlyAdded?: boolean;
+  /**
+   * 价格 · 能力图停在哪个分类。缺席 = Agent 综合。用户 2026-10-25：离开再回来又回到「Agent 综合」，
+   * 偏偏这一类很多型号没分数——切到哪类就记住哪类。
+   */
+  chartCategory?: PriceChartCategory;
+}
+
+/** 周看板一屏显示的天数档位与默认（缺席 = 5）。 */
+export const BOARD_DAYS_CHOICES = [3, 5, 7] as const;
+export type BoardDays = (typeof BOARD_DAYS_CHOICES)[number];
+export const BOARD_DAYS_DEFAULT: BoardDays = 5;
+
+/** 左栏时间范围筛选的可选天数（缺席 = 不限） */
+export const SIDEBAR_AGE_CHOICES = [1, 3, 5, 7] as const;
+export type SidebarAgeDays = (typeof SIDEBAR_AGE_CHOICES)[number];
+
+export function isSidebarAgeDays(value: unknown): value is SidebarAgeDays {
+  return (SIDEBAR_AGE_CHOICES as readonly unknown[]).includes(value);
+}
+
+export function isBoardDays(value: unknown): value is BoardDays {
+  return (BOARD_DAYS_CHOICES as readonly unknown[]).includes(value);
+}
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: "system",
@@ -315,9 +416,19 @@ export const DEFAULT_SETTINGS: AppSettings = {
  * 写入补丁：顶层按键覆盖，`drawer` 内部再按键合并（见 SettingsStore.write）。
  * 渲染层各处只发自己改的键——整块回写会带上闭包里的旧值，先后覆盖有竞态。
  */
+export const DOC_PAPERS = ["quiet", "print", "focus"] as const;
+export type DocPaper = (typeof DOC_PAPERS)[number];
+export const isDocPaper = (value: unknown): value is DocPaper =>
+  typeof value === "string" && (DOC_PAPERS as readonly string[]).includes(value);
+
 export type SettingsPatch = Partial<
-  Omit<AppSettings, "drawer" | "lastUsed" | "choreModel" | "subSessionModel" | "subSessionThinking">
+  Omit<
+    AppSettings,
+    "drawer" | "lastUsed" | "choreModel" | "subSessionModel" | "subSessionThinking" | "sidebarAgeDays"
+  >
 > & {
+  /** `null` = 清除，退回「不限」（同 choreModel：undefined 在补丁里是「没改」，选不回默认） */
+  sidebarAgeDays?: SidebarAgeDays | null;
   drawer?: Partial<DrawerSettings>;
   lastUsed?: Partial<LastUsedIntent>;
   /**
@@ -405,11 +516,47 @@ export function selectableThemes(paperThemes: boolean): readonly ThemePreference
   return THEME_PREFERENCES.filter((theme) => theme !== "copybook" && theme !== "typescript");
 }
 
+/** 设置 › 插件这一页的界面记忆（AppSettings.pluginsPage）；每个键缺席都是默认值 */
+export interface PluginsPageSettings {
+  /** 卡片尺寸。缺席 = large；只管设置页的全屏卡片墙，右栏单列版没有尺寸 */
+  cardSize?: CardSize;
+  /** 只显示已启用的插件。缺席 = 全部显示 */
+  onlyEnabled?: boolean;
+}
+
 /** 只在区间内才认；钳制交给渲染层，这里不「猜」用户想要的宽度 */
 function parseWidth(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return DRAWER_WIDTH.default;
   if (value < DRAWER_WIDTH.min || value > DRAWER_WIDTH.max) return DRAWER_WIDTH.default;
   return Math.round(value);
+}
+
+/** 插件页的界面记忆：认得的值留下，不认识的当没选过；全空返回 undefined，不落空对象 */
+function parsePluginsPage(raw: unknown): PluginsPageSettings | undefined {
+  const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+  const page: PluginsPageSettings = {
+    ...(record.cardSize === "large" || record.cardSize === "small" ? { cardSize: record.cardSize } : {}),
+    ...(typeof record.onlyEnabled === "boolean" ? { onlyEnabled: record.onlyEnabled } : {}),
+  };
+  return Object.keys(page).length === 0 ? undefined : page;
+}
+
+/**
+ * 模型服务页的界面记忆：认得的值留下，不认识的当没选过（缺席 = 默认）。卡片尺寸先看新位置，
+ * 没有再读旧的顶层 providerCardSize——选过「小」的用户升级后不用重选。全空返回 undefined，不落空对象。
+ */
+function parseProvidersPage(raw: unknown, legacyCardSize: unknown): ProvidersPageSettings | undefined {
+  const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+  const size = record.cardSize ?? legacyCardSize;
+  const page: ProvidersPageSettings = {
+    ...(size === "large" || size === "small" ? { cardSize: size } : {}),
+    ...(typeof record.onlyAdded === "boolean" ? { onlyAdded: record.onlyAdded } : {}),
+    // 不认识的分类（以后删了某个榜单）当没选过，回到默认
+    ...((PRICE_CHART_CATEGORIES as readonly unknown[]).includes(record.chartCategory)
+      ? { chartCategory: record.chartCategory as PriceChartCategory }
+      : {}),
+  };
+  return Object.keys(page).length === 0 ? undefined : page;
 }
 
 /**
@@ -426,11 +573,17 @@ export function parseSettings(raw: unknown): AppSettings {
     language?: unknown;
     drawer?: unknown;
     rightPanelWidth?: unknown;
+    docPanelWidth?: unknown;
     sidebarWidth?: unknown;
     compaction?: unknown;
     collapsePastedText?: unknown;
     completionSound?: unknown;
+    processView?: unknown;
+    automationKeepAwake?: unknown;
+    onboardingSeen?: unknown;
+    docPaper?: unknown;
     gitAttribution?: unknown;
+    planFirst?: unknown;
     choreModel?: unknown;
     /** 旧键（只管起名的时代）：choreModel 缺席时读它，选过的用户不用重选 */
     titleModel?: unknown;
@@ -440,16 +593,23 @@ export function parseSettings(raw: unknown): AppSettings {
     browserDownloadDir?: unknown;
     starredModels?: unknown;
     usagePet?: unknown;
+    providersPage?: unknown;
+    pluginsPage?: unknown;
+    boardDays?: unknown;
+    sidebarAgeDays?: unknown;
+    /** 旧键（2026-10-25 之前）：providersPage.cardSize 缺席时读它，任何一次写入都把它从盘上带走 */
     providerCardSize?: unknown;
     experimentalFeatures?: unknown;
     /** 意图系统（实验）的设置子对象 */
     intent?: unknown;
+    vector?: unknown;
     /** 旧总开关（逐项开关之前）：true 等价于 paper-themes 开 */
     experimental?: unknown;
   };
   const theme = parseTheme(record.theme);
   const width = record.rightPanelWidth;
   const sidebar = record.sidebarWidth;
+  const docWidth = record.docPanelWidth;
   const compaction = parseCompaction(record.compaction);
   // 旧键 titleModel 只在读这一层兼容：解析产物永远是 choreModel，任何一次写入
   // （parseSettings 白名单重建整个对象）都会把旧键从盘上带走
@@ -466,6 +626,9 @@ export function parseSettings(raw: unknown): AppSettings {
   // 实验功能逐项开关（含旧键迁移，见 parseExperimentalFeatures）
   const experimentalFeatures = parseExperimentalFeatures(record);
   const intent = parseIntentSettings(record.intent);
+  const vector = parseVectorSettings(record.vector);
+  const providersPage = parseProvidersPage(record.providersPage, record.providerCardSize);
+  const pluginsPage = parsePluginsPage(record.pluginsPage);
   return {
     theme,
     // 不认识的语言当作「没选过」丢掉，同 gitAttribution 的纪律
@@ -473,6 +636,9 @@ export function parseSettings(raw: unknown): AppSettings {
     // 右栏只做 ≥ 地板的硬校验：上界随 pane 宽度变，存储层判不了，渲染层每次夹
     ...(typeof width === "number" && Number.isFinite(width) && width >= RIGHT_PANEL_WIDTH_FLOOR
       ? { rightPanelWidth: Math.round(width) }
+      : {}),
+    ...(typeof docWidth === "number" && Number.isFinite(docWidth) && docWidth >= RIGHT_PANEL_WIDTH_FLOOR
+      ? { docPanelWidth: Math.round(docWidth) }
       : {}),
     // 左栏的区间是固定像素，存储层判得了：越界直接丢，不「猜」用户想要的宽度
     ...(typeof sidebar === "number" &&
@@ -490,22 +656,36 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(typeof record.gitAttribution === "boolean"
       ? { gitAttribution: record.gitAttribution }
       : {}),
+    // 同上：非布尔丢掉，缺席 = 关
+    ...(typeof record.planFirst === "boolean" ? { planFirst: record.planFirst } : {}),
     // 同 gitAttribution 的纪律：非布尔丢掉，缺席 = 折叠（现状）
     ...(typeof record.collapsePastedText === "boolean"
       ? { collapsePastedText: record.collapsePastedText }
+      : {}),
+    ...(record.processView === "turn" || record.processView === "steps"
+      ? { processView: record.processView }
       : {}),
     // 同上：非布尔丢掉，缺席 = 响
     ...(typeof record.completionSound === "boolean"
       ? { completionSound: record.completionSound }
       : {}),
+    // 同上：非布尔丢掉，缺席 = 关
+    ...(typeof record.automationKeepAwake === "boolean"
+      ? { automationKeepAwake: record.automationKeepAwake }
+      : {}),
+    // 同上：非布尔丢掉，缺席 = 没看过新手引导
+    ...(typeof record.onboardingSeen === "boolean" ? { onboardingSeen: record.onboardingSeen } : {}),
+    ...(isDocPaper(record.docPaper) ? { docPaper: record.docPaper } : {}),
     ...(choreModel === undefined ? {} : { choreModel }),
     ...(subSessionModel === undefined ? {} : { subSessionModel }),
     ...(subSessionThinking === undefined ? {} : { subSessionThinking }),
     ...(lastUsed === undefined ? {} : { lastUsed }),
-    // 不认识的尺寸当没选过（缺席 = large）
-    ...(record.providerCardSize === "large" || record.providerCardSize === "small"
-      ? { providerCardSize: record.providerCardSize }
-      : {}),
+    ...(providersPage === undefined ? {} : { providersPage }),
+    ...(pluginsPage === undefined ? {} : { pluginsPage }),
+    // 只认 3 / 5 / 7：别的数当作没选过（缺席 = 5）
+    ...(isBoardDays(record.boardDays) ? { boardDays: record.boardDays } : {}),
+    // 只认 1 / 3 / 5 / 7：别的值（含补丁里的 null）当作「不限」，不落键
+    ...(isSidebarAgeDays(record.sidebarAgeDays) ? { sidebarAgeDays: record.sidebarAgeDays } : {}),
     // 只认绝对路径（POSIX 以 / 开头，Windows 盘符或 UNC）：相对路径会随 cwd 漂，当作没设
     ...(typeof record.browserDownloadDir === "string" && isAbsolutePath(record.browserDownloadDir)
       ? { browserDownloadDir: record.browserDownloadDir }
@@ -514,6 +694,7 @@ export function parseSettings(raw: unknown): AppSettings {
     // 逐项开关下「全关」不落键（空表 undefined，同 starredModels 的纪律）
     ...(experimentalFeatures === undefined ? {} : { experimentalFeatures }),
     ...(intent === undefined ? {} : { intent }),
+    ...(vector === undefined ? {} : { vector }),
   };
 }
 
@@ -523,6 +704,23 @@ export function parseSettings(raw: unknown): AppSettings {
  * 旧键只在这一层兼容，解析产物永远是 experimentalFeatures，任何一次写入
  * （parseSettings 白名单重建整个对象）都会把旧键从盘上带走。
  */
+/** 向量召回设置：只认得上的键收（mode / model / idleUnloadMin / deferOnBattery），
+ * 不认识或类型不对当没动过（默认值兜底）。不校验模型文件在不在——那是运行态。 */
+function parseVectorSettings(raw: unknown): Partial<MemoryVectorSettings> | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const suspect = raw as Record<string, unknown>;
+  const out: Partial<MemoryVectorSettings> = {};
+  if (suspect.mode === "off" || suspect.mode === "local") out.mode = suspect.mode;
+  for (const model of MEMORY_VECTOR_MODELS) {
+    if (suspect.model === model.id) out.model = model.id;
+  }
+  if (typeof suspect.idleUnloadMin === "number" && Number.isFinite(suspect.idleUnloadMin)) {
+    out.idleUnloadMin = Math.max(1, Math.round(suspect.idleUnloadMin));
+  }
+  if (typeof suspect.deferOnBattery === "boolean") out.deferOnBattery = suspect.deferOnBattery;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function parseExperimentalFeatures(record: {
   experimentalFeatures?: unknown;
   experimental?: unknown;

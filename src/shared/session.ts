@@ -10,12 +10,13 @@
  */
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentStats } from "./agent-ipc.ts";
+import { parseAutomationRunLabel, type AutomationRunLabel } from "./automation.ts";
 import { CHANNEL_MESSAGE_KINDS, type ChannelMessageKind } from "./channel.ts";
 import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
 import { isThinkingLevel, parseThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 import { parseQuotedMessage, withoutQuotes } from "./quote.ts";
 import { parseSkillSegments } from "./skill.ts";
-import { stripInvocationBlock } from "./invocation.ts";
+import { INVOCATION_OPEN, stripInvocationBlock } from "./invocation.ts";
 import { splitUserTextBlocks } from "./prompt-attachments.ts";
 import type { FileTurnRecord, FileTurnView, RevertRecord, UndoRecord } from "./revert.ts";
 import type { IntentAskView, IntentSelectedView, IntentUsageCount, RecallStageCell } from "./intent-recall.ts";
@@ -300,8 +301,8 @@ export function recentQueriesFromRecords(records: readonly SessionRecord[]): str
   let queries: string[] = [];
   for (const record of records) {
     if (record.role !== "user") continue;
-    const text = record.content.find((block) => block.type === "text");
-    if (text !== undefined && text.type === "text") queries = pushRecentQuery(queries, text.text);
+    const text = userTextForTitle(record.content.flatMap((block) => (block.type === "text" ? [block.text] : [])));
+    if (text !== null) queries = pushRecentQuery(queries, text);
   }
   return queries;
 }
@@ -338,10 +339,25 @@ export interface Carryover {
   sourceSessionId: string;
   /** transcript 里的消息序号区间锚点；跳回原文定位用，算不出就 null */
   sourceMessageRange: [number, number] | null;
-  status: "open" | "done";
+  /**
+   * 来源（2026-10-30「以后再做」：future work 与遗留事项合并成一个概念）：
+   * - noticed：做的过程中当场记下（agent 在 update_plan 的 later 里写的）；
+   * - wrapup：收尾时确认的（计划里没做完的步、老会话的回看收割、用户自己加的）。
+   * 旧记录没有这个键 = wrapup。
+   */
+  origin: CarryoverOrigin;
+  /**
+   * 锚点：记下它的那次 update_plan 调用的 toolCallId（点了让对话滚到那一章）；
+   * 没有锚点（收尾时确认的、旧记录）= null。
+   */
+  anchor: string | null;
+  /** open：待办；done：做完了；dismissed：丢掉（可找回，回 open） */
+  status: "open" | "done" | "dismissed";
   createdAt: number;
   doneAt: number | null;
 }
+
+export type CarryoverOrigin = "noticed" | "wrapup";
 
 /** carryover 的 status 取值（独立出来给 store 与 IPC 复用）。 */
 export type CarryoverStatus = Carryover["status"];
@@ -356,6 +372,10 @@ export interface CarryoverDraft {
   title: string;
   detail: string;
   sourceMessageRange: [number, number] | null;
+  /** 缺席 = wrapup */
+  origin?: CarryoverOrigin;
+  /** 缺席 = null */
+  anchor?: string | null;
 }
 
 /**
@@ -392,10 +412,22 @@ export function parseCarryover(raw: unknown): Carryover | null {
     detail: value["detail"],
     sourceSessionId,
     sourceMessageRange: range as [number, number] | null,
-    status: value["status"] === "done" ? "done" : "open",
+    origin: value["origin"] === "noticed" ? "noticed" : "wrapup",
+    anchor: str(value["anchor"]),
+    status: value["status"] === "done" ? "done" : value["status"] === "dismissed" ? "dismissed" : "open",
     createdAt,
     doneAt,
   };
+}
+
+/**
+ * 批量迁移（`session:move`）的回执。moved 含连带迁过去的子会话；
+ * skipped 是没动的根会话及原因——running = 它或它的子会话正在跑（这一轮已拿到旧 cwd），
+ * missing = meta 已不在（列表是旧快照），failed = 写 pi 本子的通知失败（这一条整家没动）。
+ */
+export interface SessionMoveResult {
+  moved: string[];
+  skipped: { id: string; reason: "running" | "missing" | "failed" }[];
 }
 
 export interface SessionMeta {
@@ -410,8 +442,10 @@ export interface SessionMeta {
    */
   intentEnabled?: boolean;
   /**
-   * 这一单跑在哪儿。**创建时固定、不可改**——pi 的 session 在 `createAgentSession`
-   * 时锁定 cwd，所以换目录只能换会话。
+   * 这一单跑在哪儿。**与 workspaceId 同进同出**：迁移到别的工作区时连同 cwd 一起换成
+   * 目标工作区的目录（session/move.ts）。换得动的理由：每轮都重开 pi 本子并显式传 cwd
+   * （`SessionManager.open(file, dir, cwd)` 覆盖本子头里记的旧 cwd），pi 不在本子上锁目录。
+   * 在跑的会话不换——这一轮开机时已经拿到了旧 cwd。
    */
   cwd: string;
   /**
@@ -521,6 +555,25 @@ export interface SessionMeta {
    */
   parentId?: string;
   /**
+   * 这条会话是哪条自动化**新开**出来的（target = new_session）；
+   * **缺席 = 用户自己开的会话**。this_session 的任务是叫醒一条普通会话，不在这条会话上留任何标记。
+   *
+   * 自动化每次触发开一条新会话（在该自动化所属的工作区里），meta 上记它的 id：
+   * - 左栏与所有「根会话」列表都不列它（`rootSessions` 过滤；`promoted` 之后才列），
+   *   只从右栏自动化面板里那条任务下面进；
+   * - 它自己的 agent 不注册 automation_* 工具（自动化不能再建自动化，防递归）；
+   * - 自动化被删时它跑出的会话不删——这个 id 指向不存在的自动化是正常状态，
+   *   会话顶部的标注读下面的 `automationRun`，不依赖自动化还在。
+   */
+  automationId?: string;
+  /** 会话顶部「任务名 · 第 n 次 · 时间 · 定时/手动」的素材；与 automationId 同生（缺席 = 没有标注） */
+  automationRun?: AutomationRunLabel;
+  /**
+   * 用户点了「转成普通会话」：这条自动化开出的会话从此进左侧栏（`rootSessions` 认它）。
+   * 缺席即否；只对带 automationId 的会话有意义。
+   */
+  promoted?: boolean;
+  /**
    * 上一次跑完时的用量快照（A1-Q1，2026-09-03 裁决）。
    * **null = 没有账本**（本字段之前存的会话，或还没跑过一轮）。
    *
@@ -545,13 +598,27 @@ export interface SessionDetail {
 }
 
 /**
- * 源侧分页的一页有多少条记录（尾窗与 loadOlder 共用同一个数）。
+ * **首屏尾窗**的条数（`store.loadWindow` 的默认值：打开会话时一次给多少）。
  *
- * 500 条 ≈ 60 轮 × 平均 8 条/轮（一轮 = 一条 user + 回答与工具调用各若干条），
- * 贴 ZCode 的冷订阅尾窗 60 行 / 滚顶每次再取 200 行的思路。**只分 IPC 传输量与
- * renderer 渲染量**：主进程照样全量读盘 + 折叠，窗口是读时投影（见 store.loadWindow）。
+ * 120 条 ≈ 7–10 轮（一轮 = 一条 user + 回答与工具行若干，平均 12–17 条），
+ * 取同类产品尾窗量级的保守值：Proma 首屏 10 条消息、ZCode 冷订阅 60 行、
+ * dsh 50 条、codex 5 轮。首屏只要「一眼看到最近发生了什么」，更早的由
+ * `loadOlder` 按页补；窗口起点对齐到轮边界（`alignToTurnStart`），实际条数可能略多。
+ *
+ * 与下面的 `SESSION_PAGE_RECORDS` 分工：这个管**首屏**，那个管**再往前一页**。
+ * **只切 IPC 传输量与 renderer 渲染量**：主进程照样全量读盘 + 折叠，窗口是读时投影
+ * （见 store.loadWindow）。
  */
-export const SESSION_PAGE_RECORDS = 500;
+export const SESSION_INITIAL_RECORDS = 120;
+
+/**
+ * **翻页一页**的条数（`store.loadOlder` 的默认值，也是 renderer 触顶加载时传的值）。
+ *
+ * 200 条 ≈ 12–16 轮，取 ZCode 单页上限 200 行的量级。比首屏大，是因为翻页是
+ * 用户主动要更早的历史，宁可一次多给一点、少触发几次 IPC；与首屏窗口互不影响，
+ * 分页语义不变。**只切 IPC 传输量与 renderer 渲染量**：主进程照样全量读盘 + 折叠。
+ */
+export const SESSION_PAGE_RECORDS = 200;
 
 /** 一条会话的窗口信息：已加载窗口之外还有多少历史 */
 export interface SessionWindow {
@@ -585,6 +652,23 @@ export interface SessionOlderPage {
   records: SessionRecord[];
   /** 这一段之前还有记录 */
   hasMore: boolean;
+}
+
+/**
+ * 一条用户消息里该拿去算标题与「最近提问」的文本（入参是它的文本块，按顺序）。
+ *
+ * 回显按空行把消息拆成多块（splitEchoBlocks），首块通常就够——除了开头的 `/skill:` / `/mcp:`
+ * 指令块：它自己含空行，被拆成「开标签 + 说明」「清单 + 闭标签」几块，只看首块得到的是一行
+ * 裸的 `<mentioned_tools>`（2026-11-05 插件页「和智能体一起做一个」的首条消息必带 /skill:，
+ * 侧栏标题与首页卡的「最近提问」都写成了它，最近提问还一直留着）。这种情况把块接回去、
+ * 整体剥掉指令块，剩下的才是用户自己的话。没有指令块时仍取首块（附件块等照旧）。
+ * 没有文本块返回 null。
+ */
+export function userTextForTitle(textBlocks: readonly string[]): string | null {
+  const first = textBlocks[0];
+  if (first === undefined) return null;
+  if (!first.startsWith(INVOCATION_OPEN)) return first;
+  return stripInvocationBlock(textBlocks.join("\n\n"));
 }
 
 /**
@@ -726,6 +810,8 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
   const importedFrom = str(value["importedFrom"]);
   const importedModel = str(value["importedModel"]);
   const parentId = str(value["parentId"]);
+  const automationId = str(value["automationId"]);
+  const automationRun = parseAutomationRunLabel(value["automationRun"]);
 
   return {
     id,
@@ -767,6 +853,9 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     // 母会话 id：非字符串 / 空串一律当根会话——一条指向乌有的 parentId 会让会话
     // 从左栏消失又无处可达，比多列一条根会话糟得多
     ...(parentId === null ? null : { parentId }),
+    ...(automationId === null ? null : { automationId }),
+    ...(automationId === null || automationRun === null ? null : { automationRun }),
+    ...(automationId !== null && value["promoted"] === true ? { promoted: true } : null),
     // 意图召回的会话级开关（实验功能 intent-system）：缺席 = 跟随设置里的
     // 新会话默认。只认布尔，坏值丢掉
     ...(value["intentEnabled"] === true || value["intentEnabled"] === false
@@ -864,11 +953,15 @@ export function sortSessions(sessions: readonly SessionMeta[]): SessionMeta[] {
 }
 
 /**
- * 根会话：没有母会话的那些。**左栏、首页最近、辅助对话选择器只列根会话**——
- * 三处消费者各自调用同一个函数，不各写一遍 `parentId === undefined`。
+ * 根会话：没有母会话、也不是自动化跑出来（且没被「转成普通会话」）的那些。
+ * **左栏、首页最近、辅助对话选择器只列根会话**——三处消费者各自调用同一个函数，不各写一遍
+ * `parentId === undefined`。自动化新开的会话（`automationId`）只从右栏自动化面板进，
+ * 转成普通会话（`promoted`）之后才进这些列表。
  */
 export function rootSessions(sessions: readonly SessionMeta[]): SessionMeta[] {
-  return sessions.filter((meta) => meta.parentId === undefined);
+  return sessions.filter(
+    (meta) => meta.parentId === undefined && (meta.automationId === undefined || meta.promoted === true),
+  );
 }
 
 /**

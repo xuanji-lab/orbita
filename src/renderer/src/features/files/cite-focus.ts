@@ -31,6 +31,8 @@ export type CiteFocusOutcome =
   | { kind: "drop" }
   /** 在当前会话里点的外面文件：面板顶部报 citeOutside */
   | { kind: "outside" }
+  /** 这份 PDF 本会话引用过（有 cited 根），但文件已被删 / 挪走：面板顶部报 citeMissing，别说成「看不到」 */
+  | { kind: "missing" }
   /** 找到宿主根（返回根路径）：开标签并跳转到原文 */
   | { kind: "open"; root: string };
 
@@ -44,9 +46,11 @@ export function decideCiteFocus(input: {
   consumedToken: number | null;
   /** 主槽此刻的会话（与请求的 session 同一 null 形口径） */
   session: string | null;
+  /**
+   * 所有能当宿主的根：画进树的根 + 不进树的附件副本根 + 本会话引用过的 PDF（cited，
+   * 每个文件一根，根路径就是文件本身）
+   */
   roots: readonly FileRoot[];
-  /** 不进树的附件副本根（也是合法宿主），没有则 null */
-  attachmentsRoot: FileRoot | null;
   /** 根清单第一读是否在途（在途时判「不在根内」会误报） */
   rootsLoading: boolean;
 }): CiteFocusOutcome {
@@ -55,10 +59,12 @@ export function decideCiteFocus(input: {
   // 会话戳对不上 = 这条请求不是在现在这条会话里点的：作废（消费掉），换会话回来
   // 也不重放——标签页本来就不随会话恢复（FilesPanel 切会话清标签的既有设计）
   if (request.session !== session) return { kind: "drop" };
-  const candidates =
-    input.attachmentsRoot === null ? input.roots : [...input.roots, input.attachmentsRoot];
-  const owner = candidates.find((root) => root.exists && pathWithin(root.path, request.citation.path));
+  const owner = input.roots.find((root) => root.exists && pathWithin(root.path, request.citation.path));
   if (owner !== undefined) return { kind: "open", root: owner.path };
   if (input.rootsLoading) return { kind: "wait" };
-  return { kind: "outside" };
+  // 本会话引用过、但文件已不在盘上：与「在会话看不到的目录里」是两回事，分开说
+  const gone = input.roots.some(
+    (root) => root.kind === "cited" && !root.exists && pathWithin(root.path, request.citation.path),
+  );
+  return gone ? { kind: "missing" } : { kind: "outside" };
 }
