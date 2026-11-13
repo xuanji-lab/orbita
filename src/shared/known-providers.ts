@@ -729,14 +729,35 @@ export function isPlanBilling(provider: ProviderKindSource): boolean {
 export function knownQuotaSourceOf(provider: ProviderKindSource): KnownProvider | undefined {
   const entry = knownProviderOf(provider);
   if (entry.quota !== undefined && entry.quota !== "none") return entry;
+  /*
+   * 兜底：用户把一家网关配成**通用兼容条目**（`openai-compatible` / `anthropic-compatible` …）时，
+   * `knownProviderOf` 按 kind 认到的是兼容条目，声明在厂商条目上的额度能力落不到它身上。
+   * 这里按 baseUrl 再找一次同类目——**只对通用兼容条目生效**。
+   *
+   * ⚠ 不能对具体厂商条目也兜底：智谱按量与智谱 Coding Plan 同源（`open.bigmodel.cn`），
+   * 只按 origin 匹配会把**按量账号**认成套餐账号，于是额度块拿按量 key 去打控制台端点：
+   * 200 + 空 limits 会说成「团队账号不支持」，401 会说成「厂商拒绝了你的 API 密钥」。
+   * （2026-11-13 审阅复现。）
+   */
+  if (entry.id !== compatibleKindFor(provider.endpoint.api)) return undefined;
   const baseUrl = provider.endpoint?.baseUrl;
   if (typeof baseUrl !== "string" || baseUrl === "") return undefined;
-  let origin: string | null = null;
-  try { origin = new URL(baseUrl).origin; } catch { origin = null; }
-  if (origin === null) return undefined;
+  const normalize = (value: string): string => value.trim().replace(/\/+$/, "").toLowerCase();
+  const target = normalize(baseUrl);
+  if (target === "") return undefined;
   return KNOWN_PROVIDERS.find((item) => {
     if (item.quota === undefined || item.quota === "none") return false;
-    try { return new URL(item.baseUrl).origin === origin; } catch { return false; }
+    /*
+     * 候选地址包括条目自己的 baseUrl 与每条接入方式的地址：同一家网关可能有两种协议
+     * 两个地址（例：基元律动 OpenAI 走 …/v1、Anthropic 走裸域），用户按哪一种配进来
+     * 都应该认得到。匹配用「相等或前缀 + 斜杠」，避免把上级地址误吸进来。
+     */
+    const candidates = [item.baseUrl, ...(item.access ?? []).map((method) => method.baseUrl)];
+    return candidates.some((candidate) => {
+      const known = normalize(candidate);
+      if (known === "") return false;
+      return target === known || target.startsWith(`${known}/`);
+    });
   });
 }
 

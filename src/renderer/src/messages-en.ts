@@ -2427,7 +2427,7 @@ export const en = {
     unlimited: "Unlimited",
     authMissing: "Add an API key above to see the balance.",
     authRejected: "The provider rejected this API key (401). Update it above, then try again.",
-    teamUnsupported: "Team accounts aren't supported. Sign in with a personal account to see quota here.",
+    teamUnsupported: "Quota can't be read for this account — team accounts aren't supported, or this provider hasn't been wired up.",
     noPlan: "This account has no subscription.",
     consoleOnly: "Balance is only available in this gateway's web console.",
     emptyUsage: "The provider returned no usage data — the account may have no subscription, or the endpoint changed.",

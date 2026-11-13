@@ -109,16 +109,6 @@ export function failureText(reason: QuotaFailure, t: Messages): string {
   }
 }
 
-/**
- * 窗口的重置时刻：还剩多少（`resets in 2h 14m`）。
- * 没有 `resetsAt`、或已经过点了就不写——「0m 后重置」是句假话，厂商的窗口会自动续上。
- */
-export function resetLabel(window: QuotaWindow, now: number, t: Messages): string | null {
-  if (window.resetsAt === undefined) return null;
-  const remaining = window.resetsAt - now;
-  if (remaining <= 0) return null;
-  return t.quota.resetsIn(formatDuration(remaining));
-}
 
 /** `62% used` —— 数字后面永远带 used（decisions 6） */
 export function usedText(percent: number, t: Messages): string {
@@ -225,7 +215,7 @@ export function quotaMenuItems(
      * 不给「立即查询」的两种：鉴权（要去改钥匙）与控制台限定（要去网页看）。
      * 「没订阅」仍然给——用户订阅完回来点一下就有值了。
      */
-    if (failure !== "auth" && failure !== "console-only") {
+    if (failure !== "auth" && failure !== "console-only" && failure !== "no-plan") {
       items.push({
         id: "quota-check",
         label: busy ? t.quota.checking : t.quota.checkNow,

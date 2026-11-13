@@ -10,7 +10,7 @@
  *
  * 金额与百分比一律 mono + tabular-nums；不到 100% 只有墨色，100% 才 danger（条与数字同时）。
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import "./quota.css";
 import { api } from "../../api";
 import { useT } from "../../locale";
@@ -37,19 +37,26 @@ export function QuotaBlock(props: {
 }) {
   const t = useT();
   const [result, setResult] = useState<QuotaResult | null>(null);
+  /**
+   * 请求序号：切换实例时上一家的请求可能还在飞。没有这道守卫，A 的余额会画到 B 的卡上
+   * （读完才发现串号，比慢一点更坏）。只认最后一次发起的那个请求。
+   */
+  const requestSeq = useRef(0);
   // 首帧就当「查过了」在跑：挂载即拉，否则第一帧会闪一下「还没有查过」
   const [busy, setBusy] = useState(true);
 
   const load = useCallback(
     async (refresh: boolean) => {
+      const seq = ++requestSeq.current;
       setBusy(true);
       try {
-        setResult(
-          await api.provider.quota(
-            refresh ? { providerId: props.providerId, refresh: true } : { providerId: props.providerId },
-          ),
+        const next = await api.provider.quota(
+          refresh ? { providerId: props.providerId, refresh: true } : { providerId: props.providerId },
         );
+        if (requestSeq.current !== seq) return;
+        setResult(next);
       } catch {
+        if (requestSeq.current !== seq) return;
         // IPC reject（主进程没注册通道之类）：按网络类失败处理，保留上一次的值
         setResult((prev): QuotaResult => ({
           status: "error",
@@ -57,7 +64,7 @@ export function QuotaBlock(props: {
           cached: prev === null || prev.status === "none" ? null : prev.status === "ok" ? prev.snapshot : prev.cached,
         }));
       } finally {
-        setBusy(false);
+        if (requestSeq.current === seq) setBusy(false);
       }
     },
     [props.providerId],

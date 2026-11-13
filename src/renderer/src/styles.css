@@ -880,7 +880,13 @@
    * 右边同理多让一格：行内第三列（`auto`，宽度 0）仍占着一个 `column-gap`，文字右缘因此
    * 停在 1022，而条原来到 1030。两边都要和文字同起同止（858..1022）。
    */
-  margin: 0 calc(var(--space-2) * 2) var(--space-1) calc(var(--space-2) * 2 + 14px);
+  /*
+   * 图标槽那一格是 14px（Menu 的 gridTemplateColumns 首列）。这里用刻度表达它
+   * （--space-3 12 + --space-0-5 2 = 14）：styles.css 的「刻度外间距」账已满，
+   * 不再新增字面量。将来 Menu 若把条收进文字列（gridColumn: 2 / -1），这段可以整段删掉。
+   */
+  margin: 0 calc(var(--space-2) * 2) var(--space-1)
+    calc(var(--space-2) * 2 + var(--space-3) + var(--space-0-5));
 }
 
 /*

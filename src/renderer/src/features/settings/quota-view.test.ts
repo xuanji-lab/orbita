@@ -11,7 +11,6 @@ import {
   quotaExhaustedText,
   quotaMenuItems,
   quotaProblemText,
-  resetLabel,
   usedPercent,
   windowLabel,
   windowValueText,
@@ -79,11 +78,6 @@ describe("窗口的展示", () => {
     assert.equal(windowValueText(window(), now, zh), "62% 已用");
   });
 
-  test("重置行：有将来时间才写", () => {
-    assert.equal(resetLabel(window({ resetsAt: now + 41 * 60_000 }), now, en), "resets in 41m");
-    assert.equal(resetLabel(window(), now, en), null);
-    assert.equal(resetLabel(window({ resetsAt: now }), now, en), null);
-  });
 });
 
 describe("页脚的时间说法", () => {
@@ -145,9 +139,6 @@ describe("窗口名 —— 已知语义类别就本地化", () => {
     assert.equal(windowLabel(window({ kind: "mcp", label: "MCP monthly" }), zh), "MCP 每月");
     assert.equal(windowLabel(window({ kind: "mcp", label: "MCP monthly" }), en), "MCP monthly");
     assert.notEqual(windowLabel(window({ kind: "mcp" }), zh), windowLabel(window({ kind: "monthly" }), zh));
-  });
-
-  test("OpenCode Go 的滚动窗：不是 5 小时，也不是每月", () => {
   });
 
   test("custom / 没有 kind（旧快照、余额类）→ 厂商原文", () => {

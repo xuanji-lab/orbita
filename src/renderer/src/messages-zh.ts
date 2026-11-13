@@ -2229,7 +2229,7 @@ export const zh: Messages = {
     unlimited: "不限量",
     authMissing: "先在上面填 API 密钥才能查余额。",
     authRejected: "厂商拒绝了这个 API 密钥（401）。在上面更新密钥后再试。",
-    teamUnsupported: "团队账号不支持。换成个人账号登录才能在这里看到额度。",
+    teamUnsupported: "当前账号查不到额度——团队账号不支持，或这家还没有接入。",
     noPlan: "这个账号没有订阅套餐。",
     consoleOnly: "这个网关的余额只能在网页控制台查看。",
     emptyUsage: "厂商没有返回任何用量数据——可能这个账号没有订阅，或接口已经改了。",
