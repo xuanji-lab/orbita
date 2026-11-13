@@ -413,6 +413,8 @@ export const ipcChannels = {
    * ExternalSourcesResult）。只 stat，不读会话内容。开关本身走 settingsSet 的 externalSources
    */
   externalSourcesList: "external-sources:list",
+  /** 技能 / MCP 导入的来源与会读的路径：只 stat，不读内容（返回 ImportDetectResult） */
+  importDetect: "import:detect",
   /** 扫描别的工具里的技能与 MCP（dry-run，入参 ImportScanInput） */
   importScan: "import:scan",
   /** 导入勾选的技能与 MCP（入参 ImportRunInput）：主进程重新扫描，按用户的选择落盘（不接收计划，理由见 shared/import.ts） */

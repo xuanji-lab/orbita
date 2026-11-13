@@ -1,7 +1,8 @@
 /**
- * 从别的工具导入**配置**（技能、MCP servers）的契约 —— IPC 四层的第 1 层。设置 › 外部来源页
- * 的第 2–4 步用它：扫描（dry-run，只读勾选的来源）→ 执行（按用户的选择落盘），外加自定义
- * 数据目录的三个通道（添加 / 移除 / 目录选择框，见 ImportCustomRoot）。
+ * 从别的工具导入**配置**（技能、MCP servers）的契约 —— IPC 四层的第 1 层。设置 › 外部来源页的
+ * 「从别的工具导入技能与 MCP」一块用它：探测（只 stat，列出会读的路径）→ 勾选来源 → 扫描
+ * （dry-run，只读勾选的来源）→ 执行（按用户的选择落盘），外加自定义数据目录的三个通道
+ * （添加 / 移除 / 目录选择框，见 ImportCustomRoot）。
  *
  * **聊天记录不再导入**（2026-11 用户裁决：别家的聊天记录留在源头，read_task 只读读取，见
  * shared/external-sources.ts）。此前导入进来的会话、imports.jsonl、meta 里的 importedFrom 都是
@@ -79,6 +80,24 @@ export type ImportCustomRootInvalidReason =
  * 按码翻文案。
  */
 export const IMPORT_CUSTOM_ROOT_INVALID_CODE = "IMPORT_CUSTOM_ROOT_INVALID:";
+
+/**
+ * 技能 / MCP 导入第 1 步的一行（`import:detect` 的一项）。**只 stat，不读内容**——页面一打开就跑。
+ * `paths` 是勾上这个来源、点扫描之后会读的全部路径，页面原样列出：这张清单就是事前披露
+ * （`~/.claude.json` 这类文件里可能有密钥），没勾的来源一个字节都不读。
+ */
+export interface ImportConfigProbe {
+  id: ImportSourceId;
+  paths: string[];
+  /** 这个来源有没有可读的配置（技能目录或 MCP 配置任一在）；false 的不可勾 */
+  found: boolean;
+}
+
+/** `import:detect` 的返回。home 随行：页面把路径里的家目录缩成 ~。 */
+export interface ImportDetectResult {
+  home: string;
+  sources: ImportConfigProbe[];
+}
 
 /** 扫描请求：只扫勾选的来源。空数组 = 什么都不读，返回空报告。 */
 export interface ImportScanInput {

@@ -61,7 +61,9 @@ export interface ExternalSourceInfo {
   roots: ExternalSourceRoot[];
   /** 一个都没发现时，默认会去哪里找 */
   expected: string;
-  /** 发现的会话数（只 stat 数出来的；关着的来源照样数） */
+  /** 默认位置这个目录在不在（在、却没有会话数据 → 界面写「目录在，没有会话」而不是「没找到」） */
+  expectedExists: boolean;
+  /** 发现的会话数（关着的来源照样数；格式认不出的文件不算；库来源取库文件里的计数，不复制库） */
   sessions: number;
   enabled: boolean;
   /** 读不全的原因（库打不开、新版格式还不读……），原样给用户看 */
