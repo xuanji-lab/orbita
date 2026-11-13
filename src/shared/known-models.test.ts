@@ -12,6 +12,8 @@ describe("型号白名单 —— 按模型 id 记官方口径", () => {
     assert.deepEqual(knownModelParams("deepseek-v4-flash"), { defaultThinkingLevel: "high" });
     assert.equal(knownModelParams("deepseek-v4-flash-vision-exp").contextWindow, 1_000_000);
     assert.equal(knownModelParams("deepseek-v4-flash-vision-exp").maxTokens, 384_000);
+    // 退役 id 由 V4.1-Flash 承接、思考默认开：目录不再收录后 reasoning 只能靠白名单（pi 1.5.2 起）
+    assert.equal(knownModelParams("deepseek-v4-flash-vision-exp").reasoning, true);
   });
 
   it("只按模型 id 查：自建网关接进来的同一型号照样吃得到白名单", () => {
@@ -207,6 +209,14 @@ describe("Kimi K3.1 Pro 与 K2.8 Preview（2026-10-24 按开放平台 quickstart
     assert.deepEqual(k28.thinkingLevels, ["low", "high", "max"]);
     assert.equal(k28.defaultThinkingLevel, "max");
     assert.equal("maxTokens" in k28, false);
+  });
+
+  test("Kimi Code 的 k3 / k3-256k / kimi-for-coding 只收 adaptive（pi 1.3 起 kimi-coding 目录改走 OpenAI 协议，借不到了）", () => {
+    for (const id of ["k3", "k3-256k", "kimi-for-coding"]) {
+      assert.equal(knownModelParams(id).adaptiveThinking, true, id);
+    }
+    // 开放平台的 kimi-k3 走 OpenAI 协议端点，adaptive 对它没有意义，不声明
+    assert.equal(knownModelParams("kimi-k3").adaptiveThinking, undefined);
   });
 });
 

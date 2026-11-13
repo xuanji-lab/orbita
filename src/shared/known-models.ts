@@ -158,9 +158,17 @@ export const KNOWN_MODELS: Readonly<Record<string, ModelParams>> = {
    */
   "deepseek-flash": DEEPSEEK_FLASH,
   "deepseek-v4.1-flash": DEEPSEEK_FLASH,
+  /*
+   * reasoning（2026-11-14 补，pi 1.5.2 升级）：以前从 pi 0.84.3 内建快照里 opencode-go 的同名条目借，
+   * 1.5.2 快照与 pi.dev 两边都已删掉这个 id，借不到就落兜底 reasoning:false，菜单四档、会话只剩 off。
+   * 出处：api-docs.deepseek.com/quick_start/pricing 注 (1)「The legacy names deepseek-v4-flash and
+   * deepseek-v4-flash-vision-exp are still accepted … served by the DeepSeek-V4.1-Flash-1017 model」，
+   * 与 Thinking Mode 指南「Thinking mode is enabled by default」（2026-11-14 取）。
+   */
   "deepseek-v4-flash-vision-exp": {
     contextWindow: 1_000_000,
     maxTokens: 384_000,
+    reasoning: true,
     thinkingLevels: DEEPSEEK_THINKING_LEVELS,
     defaultThinkingLevel: "high",
   },
@@ -365,9 +373,18 @@ export const KNOWN_MODELS: Readonly<Record<string, ModelParams>> = {
    * 同一个 K3，两处默认档不同：Kimi Code 用 k3 这个 id，开放平台用 kimi-k3，正好按 id 分开记。
    * K3 的窗口走目录（kimi-coding 收录了 k3 = 1M、k3-256k = 256K）。注意 Kimi Code 的 Plus
    * 会员 k3 实际只给 256K（1M 要 Pro 及以上），这是账号层面的限制，型号口径仍记 1M。
+   *
+   * adaptive（2026-11-14 补，pi 1.5.2 升级）：Kimi 的 Anthropic 协议端点只认
+   * `output_config.effort`（low / high / max），请求体里没有 `thinking` / `budget_tokens` 字段
+   * （platform.kimi.ai/docs/api/messages.md 的 MessagesRequest）；Kimi Code 型号表也写明 K3 与
+   * K2.8 Preview「support low / high / max thinking effort levels」。以前 k3 / k3-256k /
+   * kimi-for-coding 的 forceAdaptiveThinking 从 pi 的 kimi-coding 目录借（0.84.3 目录是 Anthropic
+   * 协议）；pi 1.3 起该目录改走 OpenAI Chat，换协议不借 compat，不在这里声明的话 pi 改发
+   * budget_tokens、选的档被无视。只对 Anthropic 协议的接入生效（declaredAdaptive）。
+   * kimi-for-coding-highspeed（K2.7 Code HighSpeed）官方只写「Thinking: ON」、没有档位，不声明。
    */
-  k3: { thinkingLevels: KIMI_THINKING_LEVELS, defaultThinkingLevel: "high" },
-  "k3-256k": { thinkingLevels: KIMI_THINKING_LEVELS, defaultThinkingLevel: "high" },
+  k3: { thinkingLevels: KIMI_THINKING_LEVELS, defaultThinkingLevel: "high", adaptiveThinking: true },
+  "k3-256k": { thinkingLevels: KIMI_THINKING_LEVELS, defaultThinkingLevel: "high", adaptiveThinking: true },
   "kimi-k3": { thinkingLevels: KIMI_THINKING_LEVELS, defaultThinkingLevel: "max" },
   "k3.1-pro": KIMI_K31_PRO,
   "k3.1-pro-highspeed": KIMI_K31_PRO,
@@ -382,6 +399,7 @@ export const KNOWN_MODELS: Readonly<Record<string, ModelParams>> = {
     contextWindow: 1_048_576,
     thinkingLevels: KIMI_THINKING_LEVELS,
     defaultThinkingLevel: "max",
+    adaptiveThinking: true,
   },
 };
 

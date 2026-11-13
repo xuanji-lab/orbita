@@ -281,7 +281,8 @@ describe("官方美元单价 —— 复用 officialRates，日期后缀去掉再
     const catalog = runtime.getProviders().map(toBuiltinProvider);
     const glm = tokenrhythmOfficialRates(catalog, "glm-5.3");
     assert.ok(glm.input > 0 && glm.output > 0);
-    const deepseek = tokenrhythmOfficialRates(catalog, "deepseek-v4-flash-0731");
+    // pi 1.5.2 的快照删了退役的 deepseek-v4-flash（-0731 不再命中）；还在快照里的日期后缀型号是 v4-pro
+    const deepseek = tokenrhythmOfficialRates(catalog, "deepseek-v4-pro-0813");
     assert.ok(deepseek.input > 0 && deepseek.output > 0);
     // 快照里没有 deepseek-v4.1-flash 的非零价：去后缀后落到型号白名单的官方价（DeepSeek 峰时价）
     assert.deepEqual(tokenrhythmOfficialRates(catalog, "deepseek-v4.1-flash-1017"), {
