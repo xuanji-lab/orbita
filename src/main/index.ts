@@ -612,7 +612,9 @@ void app.whenReady().then(async () => {
     const result = spawnSync(
       "powershell",
       ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", buildCloseSandboxWindowScript(pid)],
-      { stdio: "ignore", windowsHide: true, timeout: 20_000 },
+      // 45s 而不是 20s：**PowerShell 自身在负载下 exit 0 就要 10–28.5 秒**（2026-11-13 实测，
+      // 空闲时 1.1s）。20s 预算连进程启动都不够，脚本必然被杀 → 优雅关窗没发生 → 落强杀 → 漏 VM。
+      { stdio: "ignore", windowsHide: true, timeout: 45_000 },
     );
     if (result.status === 0) return;
     const reason =

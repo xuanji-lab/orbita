@@ -74,12 +74,14 @@ export function buildCloseSandboxWindowScript(pid: number): string {
     "if (-not (Orbita-Alive $target)) { exit 0 }",
     "$process = Get-Process -Id $target -ErrorAction SilentlyContinue",
     "if ($null -eq $process) { exit 0 }",
-    // **不要在这里查 $process.Responding**：它内部是 SendMessageTimeout，窗口忙时单次最坏 5s，
-    // 10 轮就是 50s——2026-11-13 复测里正是它让脚本在打印第一行之前就撞穿 20s 预算
-    // （stdout 全空、调用方看到 ETIMEDOUT，于是又一次落强杀、漏 VM）。
-    // CloseMainWindow 自己带 3 次重试，不需要这层「等它缓过来」。
+    // **关之前先等它进入空闲**：2026-11-13 实测两种状态差别就是全部差别——
+    //   · 窗口就绪时：CloseMainWindow 返回 True，**进程自己就退了**（Job 里读到 GONE，8s 内清零）；
+    //   · 刚起还在渲染时：CloseMainWindow 返回 False、框弹不出来，之后所有 UI 调用都可能挂死。
+    // 用 WaitForInputIdle 而不是 $process.Responding：后者内部是 SendMessageTimeout，
+    // 忙时单次最坏 5s（10 轮 = 50s，直接把预算吃光）；前者等消息队列空闲，最多 3s 就返回。
     "$process.Refresh()",
     "if ($process.HasExited) { exit 0 }",
+    "try { $null = $process.WaitForInputIdle(3000) } catch { }",
     "$orbitaClosed = $false",
     "for ($try = 1; $try -le 3; $try++) {",
     "  $process.Refresh()",

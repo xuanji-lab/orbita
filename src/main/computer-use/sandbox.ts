@@ -511,7 +511,12 @@ export class SandboxController {
     // 新的一只永远起不来——它的 bridge.json 早被清掉、不会再写，于是白等满 180 秒才报超时
     // （2026-11-13 验收：用户从「出错」态点启动，白等 180s × 1 次）。提前说清楚，
     // 比让人对着「启动中…」等三分钟强。
-    const leftover = this.deps.listSandboxProcesses?.() ?? [];
+    // **只看真正占着 WSB 实例槽的那两个**（Server / RemoteSession），不看 vmwp / vmmem：
+    // 后两个是上一台强杀后还没收完的壳（实测 6 分钟才自清），它们不挡新沙箱起来——
+    // 一律拦会让「残留 VM 还没退完」这段时间里整个功能都用不了（2026-11-13 复测撞到）。
+    const leftover = (this.deps.listSandboxProcesses?.() ?? []).filter((process) =>
+      /WindowsSandboxServer|WindowsSandboxRemote/i.test(process.image),
+    );
     if (leftover.length > 0) {
       const names = [...new Set(leftover.map((process) => process.image))].join(" / ");
       return {
