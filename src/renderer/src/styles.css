@@ -6354,7 +6354,7 @@ mark.intent-mark {
   color: var(--color-text-tertiary);
 }
 
-/* 胶囊：饼 + 「后台 3 · 1 等你」。底栏变窄时分三档收：≥ 560 全文；410–559 只留「后台 3」；< 410 只留总数
+/* 胶囊：饼 + 「后台 3 · 1 等你」。底栏变窄时分三档收：≥ 640 全文；410–639 只留「后台 3」；< 410 只留总数
    （右栏开着、窗口窄、英文更长），免得把作用域 / 权限 / 模型几个芯片挤成省略号。胶囊自己不缩：
    让出宽度的是可缩的模型与档位芯片。 */
 .composer-bottom-bar > :has(> .chip-bg) {
@@ -6373,7 +6373,7 @@ mark.intent-mark {
   display: none;
   font-variant-numeric: tabular-nums;
 }
-@container (max-width: 559px) {
+@container (max-width: 639px) {
   .composer-bottom-bar .bg-cap-long {
     display: none;
   }
