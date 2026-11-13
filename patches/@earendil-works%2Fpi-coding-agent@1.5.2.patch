@@ -1,0 +1,84 @@
+diff --git a/dist/core/tools/read.js b/dist/core/tools/read.js
+index 675a0996f56d0bccd8bccfdb3508e1c505519842..860569975cd0be9a96f195194c768405f60cf579 100644
+--- a/dist/core/tools/read.js
++++ b/dist/core/tools/read.js
+@@ -49,6 +49,34 @@ async function* readLocalFileChunks(path, { signal }) {
+         await handle.close();
+     }
+ }
++// [orbita patch] PDF / Word 指路：二进制文档按 UTF-8 读出来是乱码，改给模型一句「用哪个工具读」。
++// PDF 认文件头魔数（只读前 1024 字节，有流就只取头一块，不整读大文件）；Word 按扩展名——
++// PK 是通用 zip 魔数，按魔数会误指路 xlsx 等其它 office 包。
++const ORBITA_PDF_POINTER = "[This is a PDF document. Its binary content cannot be shown as text. Use the read_pdf tool to extract its text layer.]";
++const ORBITA_DOCX_POINTER = "[This is a Word document (.docx). Its binary content cannot be shown as text. Use the read_docx tool to read it as structured markdown.]";
++const ORBITA_DOC_POINTER = "[This is a legacy Word document (.doc). It is not supported directly — save it as .docx first, then use the read_docx tool.]";
++async function orbitaReadHead(ops, absolutePath, signal) {
++    if (!ops.createReadStream)
++        return (await ops.readFile(absolutePath)).subarray(0, 1024);
++    const chunks = [];
++    let size = 0;
++    for await (const chunk of ops.createReadStream(absolutePath, { signal })) {
++        chunks.push(Buffer.from(chunk));
++        size += chunk.length;
++        if (size >= 1024)
++            break;
++    }
++    return Buffer.concat(chunks).subarray(0, 1024);
++}
++async function orbitaBinaryDocumentPointer(ops, absolutePath, signal) {
++    if ((await orbitaReadHead(ops, absolutePath, signal)).toString("latin1").includes("%PDF-"))
++        return ORBITA_PDF_POINTER;
++    if (/\.docx$/i.test(absolutePath))
++        return ORBITA_DOCX_POINTER;
++    if (/\.doc$/i.test(absolutePath))
++        return ORBITA_DOC_POINTER;
++    return undefined;
++}
+ /** The image block and its note, or the text for text files and images that could not be processed. */
+ function toReadOutput(content) {
+     const text = content.find((block) => block.type === "text")?.text ?? "";
+@@ -207,6 +235,7 @@ export function createReadToolDefinition(cwd, options) {
+                         const mimeType = ops.detectImageMimeType ? await ops.detectImageMimeType(absolutePath) : undefined;
+                         let content;
+                         let details;
++                        let orbitaPointer;
+                         const nonVisionImageNote = getNonVisionImageNote(ctx?.model);
+                         if (mimeType) {
+                             // Read image as binary.
+@@ -233,6 +262,11 @@ export function createReadToolDefinition(cwd, options) {
+                                 ];
+                             }
+                         }
++                        else if ((orbitaPointer = await orbitaBinaryDocumentPointer(ops, absolutePath, signal))) {
++                            if (aborted)
++                                return;
++                            content = [{ type: "text", text: orbitaPointer }];
++                        }
+                         else {
+                             // Read text content. Convert offset from 1-indexed input to 0-indexed line access.
+                             const startLine = offset ? Math.max(0, offset - 1) : 0;
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index bb8acdb1b034f89e8fcb86a5933fa513d49a8ef3..bbaac81fb4607ab3b3e34f4e962d2bd19d5b42bd 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -25,6 +25,7 @@ export { createSyntheticSourceInfo } from "./core/source-info.ts";
+ export { type EditDiffResult, generateDiffString, generateUnifiedPatch } from "./core/tools/edit-diff.ts";
+ export { type BashOperations, type BashSpawnContext, type BashSpawnHook, type BashToolDetails, type BashToolInput, type BashToolOptions, createBashToolDefinition, createEditToolDefinition, createFindToolDefinition, createGrepToolDefinition, createLocalBashOperations, createLocalPowerShellOperations, createLsToolDefinition, createPowerShellToolDefinition, createReadToolDefinition, createWriteToolDefinition, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, type EditOperations, type EditToolDetails, type EditToolInput, type EditToolOptions, type FindOperations, type FindToolDetails, type FindToolInput, type FindToolOptions, formatSize, type GrepOperations, type GrepToolDetails, type GrepToolInput, type GrepToolOptions, type LsOperations, type LsToolDetails, type LsToolInput, type LsToolOptions, type PowerShellOperations, type PowerShellSpawnContext, type PowerShellSpawnHook, type PowerShellToolDetails, type PowerShellToolInput, type PowerShellToolOptions, type ReadOperations, type ReadToolDetails, type ReadToolInput, type ReadToolOptions, type ToolsOptions, type TruncationOptions, type TruncationResult, truncateHead, truncateLine, truncateTail, type WriteOperations, type WriteToolInput, type WriteToolOptions, withFileMutationQueue, } from "./core/tools/index.ts";
+ export { formatReadLineRange } from "./core/tools/render-utils.ts";
++export { resolveToCwd } from "./core/tools/path-utils.ts";
+ export { hasTrustRequiringProjectResources, type ProjectTrustDecision, ProjectTrustStore, type ProjectTrustStoreEntry, type ProjectTrustUpdate, } from "./core/trust-manager.ts";
+ export { type ModelRoute, type ModelRouteReason, type ModelRouteRequest, VIRTUAL_MODEL_STATE_ENTRY, type VirtualModelDefinition, type VirtualModelStateData, } from "./core/virtual-models.ts";
+ export { type CodemodeExtensionOptions, createCodemodeExtension } from "./extensions/codemode/index.ts";
+diff --git a/dist/index.js b/dist/index.js
+index ab5cfccc3a90939e533b9118122189507a7af326..e59d22fe5a2b1fa79707c0ee7ca103d21b6cc792 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -29,6 +29,8 @@ export { generateDiffString, generateUnifiedPatch } from "./core/tools/edit-diff
+ // Tools
+ export { createBashToolDefinition, createEditToolDefinition, createFindToolDefinition, createGrepToolDefinition, createLocalBashOperations, createLocalPowerShellOperations, createLsToolDefinition, createPowerShellToolDefinition, createReadToolDefinition, createWriteToolDefinition, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead, truncateLine, truncateTail, withFileMutationQueue, } from "./core/tools/index.js";
+ export { formatReadLineRange } from "./core/tools/render-utils.js";
++// orbita：write/edit 工具内部即用此函数解析路径，外部需同一实现保证路径口径一致
++export { resolveToCwd } from "./core/tools/path-utils.js";
+ export { hasTrustRequiringProjectResources, ProjectTrustStore, } from "./core/trust-manager.js";
+ export { VIRTUAL_MODEL_STATE_ENTRY, } from "./core/virtual-models.js";
+ // Built-in extensions. The CLI loads them; SDK sessions add them to their extension factories.

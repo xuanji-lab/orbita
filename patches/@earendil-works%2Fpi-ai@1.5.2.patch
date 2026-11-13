@@ -1,21 +1,8 @@
-diff --git a/dist/api/anthropic-messages.js b/dist/api/anthropic-messages.js
-index d04d7a9..b61d252 100644
---- a/dist/api/anthropic-messages.js
-+++ b/dist/api/anthropic-messages.js
-@@ -37,7 +37,7 @@ function getCacheControl(model, cacheRetention, env) {
-     };
- }
- // Stealth mode: Mimic Claude Code's tool naming exactly
--const claudeCodeVersion = "2.1.75";
-+const claudeCodeVersion = "2.1.322";
- // Claude Code 2.x tool names (canonical casing)
- // Source: https://cchistory.mariozechner.at/data/prompts-2.1.11.md
- // To update: https://github.com/badlogic/cchistory
 diff --git a/dist/api/openai-completions.js b/dist/api/openai-completions.js
-index b1beb1a..ceaddc7 100644
+index c1b6038c2220633a8caf710288a8f6e6301f7a28..90857ad29dd4fce959e00dbd3f83c7e43522a23f 100644
 --- a/dist/api/openai-completions.js
 +++ b/dist/api/openai-completions.js
-@@ -1206,7 +1206,10 @@ function detectCompat(model) {
+@@ -1225,7 +1225,10 @@ function detectCompat(model) {
          baseUrl.includes("api.z.ai") ||
          baseUrl.includes("open.bigmodel.cn");
      const isTogether = provider === "together" || baseUrl.includes("api.together.ai") || baseUrl.includes("api.together.xyz");
@@ -28,10 +15,10 @@ index b1beb1a..ceaddc7 100644
      const isCloudflareWorkersAI = provider === "cloudflare-workers-ai" || baseUrl.includes("api.cloudflare.com");
      const isCloudflareAiGateway = provider === "cloudflare-ai-gateway" || baseUrl.includes("gateway.ai.cloudflare.com");
 diff --git a/dist/utils/retry.js b/dist/utils/retry.js
-index 65c7c9e..ebc8c26 100644
+index dae863cfd9f141d27f781754ef0ada914dd45c5f..f0f39a5c38e8b1c8d21c7b2ddf94c1cc22f97636 100644
 --- a/dist/utils/retry.js
 +++ b/dist/utils/retry.js
-@@ -154,6 +154,35 @@ export async function retryAssistantCall(produce, policy, signal, callbacks) {
+@@ -196,6 +196,35 @@ export async function retryAssistantCall(produce, policy, signal, callbacks) {
          await callbacks?.onRetryAttemptStart?.();
      }
  }
@@ -67,7 +54,7 @@ index 65c7c9e..ebc8c26 100644
  /**
   * Classifies whether a failed assistant message looks like a transient provider
   * or transport error, so callers can decide if the last assistant turn should be
-@@ -169,6 +198,8 @@ export function isRetryableAssistantError(message) {
+@@ -211,6 +240,8 @@ export function isRetryableAssistantError(message) {
      const errorMessage = message.errorMessage;
      if (NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN.test(errorMessage))
          return false;
