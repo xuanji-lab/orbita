@@ -102,9 +102,19 @@ describe("buildCloseSandboxWindowScript", () => {
     const retry = script.indexOf("$stillOpen");
     const code3 = script.indexOf("if ($stillOpen) { exit 3 }");
     assert.ok(send < retry && retry < code3, "Enter 之后要回查确认框还在不在，再决定 3");
-    // 2 只出现在前台校验处，3 只在兜底之后——两个码不能互相污染
+    // 2 只出现在前台校验处，3 只留给「没关成」——两个码不能互相污染
     assert.equal(script.split("exit 2").length - 1, 1, "exit 2 只留给「前台不匹配，不发键」");
-    assert.equal(script.split("exit 3").length - 1, 1, "exit 3 只在兜底也失败时出现");
+    // 3 有两处，语义相同（进程还在 = 没关成）：
+    //   ① 兜底 Enter 之后回查，确认框还在；
+    //   ② 没按到任何按钮、且目标进程仍在（旧代码在这里 exit 0，把「什么都没做成」报成成功，
+    //      于是调用方安心等满 25s 才强杀，而强杀会漏 VM——2026-11-13 验收抓到的假成功）。
+    assert.equal(script.split("exit 3").length - 1, 2, "exit 3 覆盖两种没关成：框还在 / 进程还在");
+    const alive = script.indexOf("$aliveAfter");
+    assert.ok(send < alive, "Enter 发出之后才判活（之前进程当然还在）");
+    assert.ok(
+      script.indexOf("if ($orbitaUiaReady) {", alive) > alive,
+      "先看进程还在不在（最硬的判据），再看确认框",
+    );
   });
 
   test("纯 ASCII：整段脚本不许出现非 ASCII 字符（PS 5.1 按 ANSI 读会炸）", () => {

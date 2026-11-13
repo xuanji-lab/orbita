@@ -63,8 +63,19 @@ export function buildCloseSandboxWindowScript(pid: number): string {
     `$target = ${pid}`,
     "$process = Get-Process -Id $target -ErrorAction SilentlyContinue",
     "if ($null -eq $process) { exit 0 }",
-    // a. 等价用户点 X：沙箱随即弹自己的确认框（框什么时候画出来不确定，所以下面要轮询）
-    "$null = $process.CloseMainWindow()",
+    // a. 等价用户点 X：沙箱随即弹自己的确认框（框什么时候画出来不确定，所以下面要轮询）。
+    //    **必须看返回值并重试**：窗口线程一时忙的时候 CloseMainWindow 返回 false 且什么都不做，
+    //    确认框根本不会弹出来——那之后 30 轮轮询全是空转，最后落进「找不到按钮＝已经关了」的
+    //    假成功（2026-11-13 行为验收：产品路径 2/2 次 exit 0 但 25s 时四个进程全在，只能强杀，
+    //    而强杀正是会漏 VM 的那条路；同一份脚本手工跑 3/3 成功，差别就是这个返回值）。
+    "$orbitaClosed = $false",
+    "for ($try = 1; $try -le 3; $try++) {",
+    "  $process.Refresh()",
+    "  if ($process.HasExited) { exit 0 }",
+    "  if ($process.CloseMainWindow()) { $orbitaClosed = $true; break }",
+    "  Start-Sleep -Milliseconds 400",
+    "}",
+    "Write-Output \"orbita-close-mainwindow=$orbitaClosed\"",
     // b. 在这只沙箱的窗口树里找确认框的按钮，找到就 Invoke。
     //    Invoke 是跨进程的 UI 自动化调用，不经过键盘，不会打进别的窗口。
     //    名字优先级：OK 一族优先；Close / 关闭 只当「整轮都没见到 OK」时的最后手段
@@ -153,6 +164,10 @@ export function buildCloseSandboxWindowScript(pid: number): string {
     // e. Enter 是盲发，按没按到要回头看：确认框还在（或 UIA 都不可用无从确认）就算没成
     "Start-Sleep -Milliseconds 800",
     "$stillOpen = $true",
+    // 「找不到按钮」不等于「已经关了」：框可能压根没弹（CloseMainWindow 没生效），
+    // 也可能弹了但 UIA 读不到。判据只认一件事——**目标进程还在不在**。
+    "$aliveAfter = Get-Process -Id $target -ErrorAction SilentlyContinue",
+    "if ($null -eq $aliveAfter) { exit 0 }",
     "if ($orbitaUiaReady) {",
     "  $stillOpen = $false",
     "  $left = Find-OrbitaButton -Names $orbitaOkNames",
@@ -160,7 +175,9 @@ export function buildCloseSandboxWindowScript(pid: number): string {
     "  if ($null -ne $left) { $stillOpen = $true }",
     "}",
     "if ($stillOpen) { exit 3 }",
-    "exit 0",
+    // 没按到按钮、进程也还在：exit 3。调用方据此留一行痕（旧代码在这里 exit 0，把
+    // 「什么都没做成」报成成功，于是它安心等满 25s 才强杀）。
+    "exit 3",
     "",
   ].join("\r\n");
 }
