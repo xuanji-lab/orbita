@@ -17,7 +17,8 @@
  *     的请求一律拒（防递归）；新开会话的任务默认落最保守的 plan 档。要放行（skip）：**agent 给的权限不能高于这条会话
  *     此刻的权限**——会话本身是「放行」才直接改；「手动 / 计划」档只在对话里留一行让用户点「允许」（用户没同意过无人值守
  *     写盘，纯靠对话里一句「可以」可能被网页 / 文件里伪造的文字骗）。
- * 条数护栏对两个入口一视同仁：全局 ≤ 20（所有状态都计），一条会话上活跃的 this_session 任务 ≤ 5。
+ * 条数护栏对两个入口一视同仁：没结束的（active / paused / failed）全局 ≤ 20——已结束的自动归档、不占名额；
+ * 一条会话上活跃的 this_session 任务 ≤ 5。把已归档的「重新启动」等于重新占一个名额，同样受这条限制。
  */
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
 import {
@@ -33,6 +34,7 @@ import {
   automationCardOf,
   automationWorkspaceId,
   describeScheduleEn,
+  isFinished,
   isAutomationMode,
   nextRunAfter,
   parseAutomationPlugin,
@@ -168,13 +170,13 @@ function activeOnSession(all: readonly Automation[], sessionId: string, exceptId
 }
 
 const SESSION_LIMIT_MESSAGE = `At most ${AUTOMATION_MAX_ACTIVE_PER_SESSION} active automations can be bound to one session.`;
-const TOTAL_LIMIT_MESSAGE = `At most ${AUTOMATION_MAX_UNFINISHED} automations can exist (finished ones count too); delete some in the Automations panel first.`;
+const TOTAL_LIMIT_MESSAGE = `At most ${AUTOMATION_MAX_UNFINISHED} automations can be in progress (active, paused or failed) at once; finished ones are archived and do not count. Cancel or delete one that is no longer needed first.`;
 
 /* ---------- 面板上的操作 ---------- */
 
-/** 全部自动化（renderer 按工作区过滤） */
+/** 全部自动化：没结束的 + 已归档的（renderer 按工作区过滤、按状态分开放） */
 export async function listAutomations(deps: AutomationRequestDeps): Promise<Automation[]> {
-  return deps.store.list();
+  return deps.store.listAll();
 }
 
 /** 用户在面板里手建：只能新开会话；直接 active */
@@ -418,6 +420,8 @@ export async function applyAutomationAct(deps: AutomationRequestDeps, rawId: unk
       if (existing.target.kind === "this_session" && activeOnSession(all, existing.target.sessionId, existing.id) >= AUTOMATION_MAX_ACTIVE_PER_SESSION) {
         return SESSION_LIMIT_MESSAGE;
       }
+      // 已结束的（在归档里）重新启动 = 重新占一个名额；paused / failed 本来就占着，不再查
+      if (isFinished(existing) && all.length >= AUTOMATION_MAX_UNFINISHED) return TOTAL_LIMIT_MESSAGE;
       const nextRunAt = firstRunAt(existing.schedule, now, existing.until);
       if (nextRunAt === null) return "The scheduled time has already passed. Edit the schedule first.";
       const next: Automation = {
@@ -487,11 +491,18 @@ export async function applyAutomationRequest(
   const now = deps.now();
 
   if (request.op === "list") {
-    const mine = (await deps.store.list()).filter((automation) => automationWorkspaceId(automation) === workspaceId);
+    const here = (await deps.store.listAll()).filter((automation) => automationWorkspaceId(automation) === workspaceId);
+    const archived = here.filter(isFinished);
+    const shown = request.includeFinished === true ? here : here.filter((automation) => !isFinished(automation));
+    const noun = request.includeFinished === true ? "automation(s)" : "unfinished automation(s)";
     return {
       ok: true,
-      text: mine.length === 0 ? "No automations in this workspace." : `${mine.length} automation(s) in this workspace.`,
-      automations: mine.map(automationCardOf),
+      text: shown.length === 0 ? `No ${noun} in this workspace.` : `${shown.length} ${noun} in this workspace.`,
+      automations: shown.map(automationCardOf),
+      // 默认不列已结束的：末尾一行说清另有多少条、怎么看，免得模型以为它们不存在而重复新建
+      ...(request.includeFinished !== true && archived.length > 0
+        ? { footer: `${archived.length} more finished automation(s) are archived and not listed; call automation_list with includeFinished: true to see them.` }
+        : {}),
     };
   }
 

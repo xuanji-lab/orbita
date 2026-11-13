@@ -442,7 +442,7 @@ describe("内置插件 automation", () => {
       `**${AUTOMATION_AGENT_DEFAULT_MAX_RUNS} runs**`,
       `(1–${AUTOMATION_AGENT_MAX_RUNS_CAP})`,
       `at most ${AUTOMATION_MAX_ACTIVE_PER_SESSION} active \`this_session\` tasks per conversation`,
-      `at most ${AUTOMATION_MAX_UNFINISHED} automations in total`,
+      `at most ${AUTOMATION_MAX_UNFINISHED} unfinished automations`,
       `**${["Zero", "One", "Two", "Three"][AUTOMATION_MAX_CONSECUTIVE_FAILURES]} consecutive failed runs**`,
       `title at most ${AUTOMATION_TITLE_MAX} characters`,
       `instruction at most ${AUTOMATION_PROMPT_MAX.toLocaleString("en-US")} characters`,

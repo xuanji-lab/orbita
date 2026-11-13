@@ -15,7 +15,7 @@ The tools and the Automations panel are built into Orbita; this file is the "how
 - **You** started something slow (a build, a training run, a server booting, a download) and would otherwise wait for it. **Do not `sleep` or poll in a bash call** — it blocks the whole turn and the foreground command has a timeout. Start the job in the background, create a `this_session` automation that checks on it, and **end your turn**.
 - "Remind me" works too: a reminder is just a one-shot automation whose instruction says what to tell the user.
 
-Before creating anything, call **`automation_list`** — if a task for the same thing already exists (any status), tell the user instead of making a duplicate.
+Before creating anything, call **`automation_list`** — if a task for the same thing already exists, tell the user instead of making a duplicate (it lists unfinished tasks; finished ones are archived — pass `includeFinished: true` to see them).
 
 ## `automation_create` parameters
 
@@ -67,7 +67,7 @@ All clock times are the user's **local time**. Examples:
 
 A task you create **always has an end**. `maxRuns` (1–100) stops it after that many runs; `until` (ISO 8601 with offset, in the future) stops it at that time; if both are given, whichever comes first. If you give neither, it stops after **12 runs**. A `once` task ends after its run. For a "check every 5 minutes" job, set `maxRuns` to what you actually need (or `until`), not the default; for an open-ended weekly routine, say so with `maxRuns` (e.g. 26) and tell the user it will stop then.
 
-Guard rails (the tool refuses beyond them): intervals of at least 5 minutes; at most 24 real runs per rolling 24 hours per automation (skipped ones do not count); at most 5 active `this_session` tasks per conversation; at most 20 automations in total, **finished ones included** (only the user can delete finished ones, in the Automations panel — if you hit the limit, tell them); title at most 40 characters; instruction at most 8,000 characters. **Three consecutive failed runs** stop the task in a "failed" state; the user can restart it from the panel. Do not try to work around a limit by creating many small tasks.
+Guard rails (the tool refuses beyond them): intervals of at least 5 minutes; at most 24 real runs per rolling 24 hours per automation (skipped ones do not count); at most 5 active `this_session` tasks per conversation; at most 20 unfinished automations (active, paused or failed) — finished ones are archived automatically and do not count; you never need to delete anything to make room, and if you hit the limit, tell the user; title at most 40 characters; instruction at most 8,000 characters. **Three consecutive failed runs** stop the task in a "failed" state; the user can restart it from the panel. Do not try to work around a limit by creating many small tasks.
 
 ## Writing the instruction
 
@@ -105,7 +105,7 @@ A `new_session` run is **read-only (Plan)** by default: it cannot write files or
 
 ## The other tools
 
-- **`automation_list`** — all automations of this workspace, every status (active, paused, failed, completed) with schedule, target, run count and next run. Ids come from here or from `automation_create`'s result.
+- **`automation_list`** — the unfinished automations of this workspace (active, paused, failed) with schedule, target, run count and next run; a last line says how many finished (`completed`) ones are archived, and `includeFinished: true` lists those too. Ids come from here or from `automation_create`'s result.
 - **`automation_cancel`** — `automationId`; the task will not run again (sessions it already started stay). Use it as soon as the job a `this_session` task was watching is done, or when the user says to stop. Cancelling an already finished task is harmless.
 - **`automation_update`** — only the permission (`mode`) of a `new_session` task. Nothing else can be changed: to change a schedule or instruction, cancel and create a new one (or let the user edit it in the panel).
 

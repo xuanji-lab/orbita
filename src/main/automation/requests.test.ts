@@ -169,16 +169,32 @@ describe("applyAutomationCreate（面板手建）", () => {
     assert.equal((await store.list()).length, 0, "校验不过什么都不落盘");
   });
 
-  test("标题里的连续空白折成一个空格；全局最多 20 条（所有状态都算）", async () => {
-    const { deps, store } = setup();
+  test("标题里的连续空白折成一个空格", async () => {
+    const { deps } = setup();
     const created = await applyAutomationCreate(deps, { ...validCreate, title: "  a   b \n c " });
     assert.equal(created.ok && created.automation?.title, "a b c");
-    for (let i = 0; i < AUTOMATION_MAX_UNFINISHED - 1; i += 1) {
-      await store.insert(makeAutomation({ id: `x${i}`, status: i % 2 === 0 ? "completed" : "active" }));
+  });
+
+  test("名额只算没结束的：20 条已结束照样能建；恰好 20 条没结束第 21 条被拒，提示说的是「进行中」", async () => {
+    const { deps, store } = setup();
+    for (let i = 0; i < AUTOMATION_MAX_UNFINISHED; i += 1) {
+      await store.insert(makeAutomation({ id: `done${i}`, status: "completed", endReason: i % 2 === 0 ? "finished" : "cancelled", nextRunAt: null }));
     }
+    assert.equal((await listAutomations(deps)).length, AUTOMATION_MAX_UNFINISHED, "已结束的还查得到");
+    assert.equal((await applyAutomationCreate(deps, validCreate)).ok, true, "20 条已结束不占名额");
+    for (let i = 1; i < AUTOMATION_MAX_UNFINISHED; i += 1) {
+      await store.insert(makeAutomation({ id: `x${i}`, status: i % 2 === 0 ? "paused" : "active", nextRunAt: i % 2 === 0 ? null : 5_000 }));
+    }
+    // 现在没结束的恰好 20 条（1 条刚建的 + 19 条）
+    assert.equal((await store.list()).length, AUTOMATION_MAX_UNFINISHED);
     const over = await applyAutomationCreate(deps, validCreate);
     assert.equal(over.ok, false);
-    assert.match(over.ok ? "" : over.error, /At most 20/);
+    assert.match(over.ok ? "" : over.error, /At most 20 automations can be in progress/);
+    assert.doesNotMatch(over.ok ? "" : over.error, /finished ones count/);
+    // failed 也占名额
+    await store.remove("x1");
+    await store.insert(makeAutomation({ id: "bad", status: "failed", nextRunAt: null }));
+    assert.equal((await applyAutomationCreate(deps, validCreate)).ok, false, "failed 占名额");
   });
 });
 
@@ -281,6 +297,22 @@ describe("applyAutomationAct（面板按钮 = 状态转移）", () => {
     assert.equal(completed.ok && completed.automation?.endReason, undefined);
     assert.equal(completed.ok && completed.automation?.status, "active");
     assert.equal((await applyAutomationAct(deps, "f", { type: "restart" })).ok, false, "在排期的不用重新启动");
+  });
+
+  test("把已归档的重新启动 = 重新占一个名额：没结束的已满 20 条就拒，有空位就回到进行中", async () => {
+    const { deps, store } = setup();
+    await store.insert(makeAutomation({ id: "old", status: "completed", endReason: "finished", nextRunAt: null }));
+    for (let i = 0; i < AUTOMATION_MAX_UNFINISHED; i += 1) await store.insert(makeAutomation({ id: `a${i}` }));
+    const refused = await applyAutomationAct(deps, "old", { type: "restart" });
+    assert.equal(refused.ok, false);
+    assert.match(refused.ok ? "" : refused.error, /in progress/);
+    assert.equal((await store.get("old"))?.status, "completed", "被拒时仍在归档里");
+    await store.remove("a0");
+    const ok = await applyAutomationAct(deps, "old", { type: "restart" });
+    assert.equal(ok.ok && ok.automation?.status, "active");
+    assert.equal((await store.list()).some((a) => a.id === "old"), true, "回到没结束的那份");
+    // paused / failed 已经占着名额，resume / restart 不再受总数限制
+    await store.insert(makeAutomation({ id: "fl", status: "failed", nextRunAt: null }));
   });
 
   test("restart 绑定的会话没了：拒并指路；一条会话上活跃的任务到 5 条后继续 / 重新启动被拒", async () => {
@@ -423,8 +455,14 @@ describe("applyAutomationRequest：create", () => {
     assert.equal((await applyAutomationRequest(deps, toolEvent("S2", createRequest({ title: "别的会话" })))).ok, true, "别的会话不受影响");
     // new_session 的任务不占「会话」名额
     assert.equal((await applyAutomationRequest(deps, toolEvent("S", createRequest({ title: "n", target: "new_session" })))).ok, true);
-    for (let i = (await store.list()).length; i < AUTOMATION_MAX_UNFINISHED; i += 1) await store.insert(makeAutomation({ id: `f${i}`, status: "completed" }));
-    assert.equal((await applyAutomationRequest(deps, toolEvent("S2", createRequest({ title: "满了" })))).ok, false);
+    // 已结束的不占名额：塞满 20 条已结束，S2 照样能建
+    for (let i = 0; i < AUTOMATION_MAX_UNFINISHED; i += 1) await store.insert(makeAutomation({ id: `d${i}`, status: "completed", endReason: "finished", nextRunAt: null }));
+    assert.equal((await applyAutomationRequest(deps, toolEvent("S2", createRequest({ title: "已结束的不占名额" })))).ok, true);
+    // 没结束的补到恰好 20 条：再建被拒，提示是「进行中」
+    for (let i = (await store.list()).length; i < AUTOMATION_MAX_UNFINISHED; i += 1) await store.insert(makeAutomation({ id: `f${i}`, status: "paused", nextRunAt: null }));
+    const full = await applyAutomationRequest(deps, toolEvent("S2", createRequest({ title: "满了" })));
+    assert.equal(full.ok, false);
+    assert.match(full.ok ? "" : full.error, /in progress/);
     for (const bad of [
       createRequest({ title: "" }),
       createRequest({ prompt: " " }),
@@ -448,7 +486,33 @@ describe("applyAutomationRequest：list / cancel（只管当前工作区）", ()
     const home = await applyAutomationRequest(deps, toolEvent("H", { op: "list" }));
     assert.deepEqual(home.ok && home.automations?.map((a) => a.id), ["home"]);
     const empty = await applyAutomationRequest(setup({ name: "empty", metas: [meta({ id: "S" })] }).deps, toolEvent("S", { op: "list" }));
-    assert.equal(empty.ok && empty.text, "No automations in this workspace.");
+    assert.equal(empty.ok && empty.text, "No unfinished automation(s) in this workspace.");
+  });
+
+  test("list 默认只给没结束的，末尾一行说另有 N 条已结束的归档（只数本工作区）；includeFinished 全列", async () => {
+    const { deps, store } = setup({ metas: [meta({ id: "S", workspaceId: "ws1" })] });
+    await store.insert(makeAutomation({ id: "live", target: { kind: "new_session", workspaceId: "ws1" } }));
+    await store.insert(makeAutomation({ id: "d1", status: "completed", endReason: "finished", nextRunAt: null, target: { kind: "new_session", workspaceId: "ws1" } }));
+    await store.insert(makeAutomation({ id: "d2", status: "completed", endReason: "cancelled", nextRunAt: null, target: { kind: "new_session", workspaceId: "ws1" } }));
+    await store.insert(makeAutomation({ id: "other", status: "completed", endReason: "finished", nextRunAt: null, target: { kind: "new_session", workspaceId: "ws2" } }));
+    const result = await applyAutomationRequest(deps, toolEvent("S", { op: "list" }));
+    assert.equal(result.ok && result.automations?.map((a) => a.id).join(), "live");
+    assert.match(result.ok ? (result.footer ?? "") : "", /^2 more finished automation\(s\) are archived .*includeFinished: true/);
+    const all = await applyAutomationRequest(deps, toolEvent("S", { op: "list", includeFinished: true }));
+    assert.deepEqual(all.ok && all.automations?.map((a) => a.id).sort(), ["d1", "d2", "live"]);
+    assert.equal(all.ok && all.footer, undefined, "全列时不再提示");
+    const none = await applyAutomationRequest(setup({ name: "n2", metas: [meta({ id: "S" })] }).deps, toolEvent("S", { op: "list" }));
+    assert.equal(none.ok && none.footer, undefined, "没有归档就没有那一行");
+  });
+
+  test("cancel 之后记录进归档：list 默认不见、includeFinished 与 store.get 查得到，结束原因与指令都在", async () => {
+    const { deps, store } = setup({ metas: [meta({ id: "S", workspaceId: "ws1" })] });
+    await store.insert(makeAutomation({ id: "m", prompt: "盯着构建", target: { kind: "new_session", workspaceId: "ws1" } }));
+    await applyAutomationRequest(deps, toolEvent("S", { op: "cancel", automationId: "m" }));
+    assert.deepEqual((await store.list()).map((a) => a.id), []);
+    const archived = (await listAutomations(deps)).find((a) => a.id === "m");
+    assert.equal(archived?.endReason, "cancelled");
+    assert.equal(archived?.prompt, "盯着构建");
   });
 
   test("cancel：翻成 completed(cancelled)、排期与等待都清掉；别的工作区的当作不存在；已完成的幂等", async () => {

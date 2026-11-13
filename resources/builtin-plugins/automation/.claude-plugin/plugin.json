@@ -7,7 +7,7 @@
   "license": "MIT",
   "orbita": {
     "workflow": [
-      { "title": "先 automation_list：已经有同样的就不重复建", "skill": "automation", "detail": "当前工作区所有状态的自动化都会列出来，含已完成的" },
+      { "title": "先 automation_list：已经有同样的就不重复建", "skill": "automation", "detail": "默认只列没结束的；已结束的自动归档、不占 20 条名额，要看加 includeFinished" },
       { "title": "选触发规则：一次性、每隔一段、每小时、每天、每月", "skill": "automation", "detail": "间隔不少于 5 分钟；时间按本机时间；一次性要带时区偏移的 ISO 时间" },
       { "title": "选去处：回到本会话，还是每次新开会话", "skill": "automation", "detail": "盯长任务选回到本会话；与本会话无关的例行公事选新开会话，指令要写成自包含" },
       { "title": "把指令写成「到点时自己能照做」，并写明何时收工", "skill": "automation", "detail": "盯任务的要写清查什么、怎么算做完、做完调用 automation_cancel", "output": "对话里的自动化卡" },
