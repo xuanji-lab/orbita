@@ -691,7 +691,10 @@ describe("LatexRunner —— 清理辅助文件", () => {
 
   test("正在编译时清理被拒（同一组 .aux 不能一边写一边删）", async () => {
     const dir = plainProject();
-    fakeCompiler(dir, HANG);
+    // 这里要的是「编译还在跑」这个状态本身，所以脚本体必须真挂住。
+    // 不能把 HANG（那是 texProject 的 argv 片段：-e + 表达式）当脚本体传进来——
+    // 写进 .mjs 的第一行 `-e` 是语法错误，node 立刻退出、锁随之释放，clean 会合理地放行。
+    fakeCompiler(dir, ["setTimeout(() => undefined, 60_000);"]);
     const runner = new LatexRunner(probe(), { idleTimeoutMs: 60_000, totalTimeoutMs: 60_000 });
     const compiling = runner.compile({ dir });
     await sleep(200);
