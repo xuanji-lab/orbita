@@ -16,7 +16,7 @@ import type { ExternalSourceId } from "../../shared/external-sources.ts";
 import { UNASSIGNED_PROVIDER_ID, type SessionRecord } from "../../shared/session.ts";
 import { isNotFound } from "../fs-errors.ts";
 import { isInside } from "../path-boundary.ts";
-import { claudeRowsToMessages, parseClaudeRows } from "./claude-legacy.ts";
+import { claudeRowsToMessages, parseClaudeRows, promaFlatRowsToMessages } from "./claude-legacy.ts";
 import { parseClaudeCodeSession, parseClaudeDesktopSession, type ClaudeDesktopSession } from "./claude-code.ts";
 import { parseCodexRollout } from "./codex.ts";
 import { kimiBlobRefs, parseKimiSessionState, parseKimiWire, readKimiWorkspaces } from "./kimi-code.ts";
@@ -128,6 +128,8 @@ export interface ExternalSessionFacts {
 
 export interface ExternalLoaded extends ExternalSessionFacts {
   records: SessionRecord[];
+  /** 源文件格式认得、只是里面没有一条用户 / 助手消息（空会话）；读它时如实说，不说「格式变了」 */
+  empty?: boolean;
 }
 
 export interface ExternalAdapterContext {
@@ -146,8 +148,8 @@ export interface ExternalAdapter {
   factsMany?(candidates: readonly ExternalCandidate[], context: ExternalAdapterContext): Promise<ExternalSessionFacts[]>;
   /** 可选：设置页的会话数（库来源不为它复制库）；不给就数 candidates 里认得出格式的 */
   count?(root: string, context: ExternalAdapterContext): Promise<number>;
-  /** 可选：只看文件开头一段，认不认得这个格式（设置页数会话时过滤掉认不出的文件） */
-  recognize?(head: string): boolean;
+  /** 可选：只看文件开头一段，认不认得这个格式（设置页数会话时过滤掉认不出的文件）；whole = 整份文件都在 head 里 */
+  recognize?(head: string, whole: boolean): boolean;
   load(candidate: ExternalCandidate, context: ExternalAdapterContext): Promise<ExternalLoaded>;
   /** 数据目录里认得出、但读不了的部分（如实列进目录，不静默漏掉） */
   notes?(root: string): Promise<string[]>;
@@ -243,9 +245,27 @@ async function readClaudeDesktopSessions(dir: string): Promise<ClaudeDesktopSess
   return out;
 }
 
+/**
+ * 一段 Claude Code 文件里有没有对话行（主对话的 user / assistant）。Claude Code 会留下只有
+ * queue-operation、system、last-prompt 之类记账行的文件（开了会话、什么都没发）：本机 27 个里 1 个。
+ */
+function hasClaudeConversationRow(text: string): boolean {
+  return text.split("\n").some((line) => {
+    try {
+      const row: unknown = JSON.parse(line);
+      if (typeof row !== "object" || row === null) return false;
+      const fields = row as Record<string, unknown>;
+      return (fields["type"] === "user" || fields["type"] === "assistant") && fields["isSidechain"] !== true;
+    } catch {
+      return false;
+    }
+  });
+}
+
 const claudeCode: ExternalAdapter = {
   entry: { path: ["projects"], type: "dir" },
-  recognize: typedJsonl,
+  // 整份文件都在开头那段里、又没有一行对话：空会话，不计数（大文件看不全，照常计）
+  recognize: (head, whole) => typedJsonl(head) && !(whole && !hasClaudeConversationRow(head)),
   async candidates(root, context) {
     const projectsDir = join(root, "projects");
     const files: { file: string; sourceId: string }[] = [];
@@ -298,6 +318,7 @@ const claudeCode: ExternalAdapter = {
         messages,
         userRowIndexes.map((row) => session.displays[row] ?? null),
       ),
+      empty: session.rows.length === 0,
     };
   },
 };
@@ -782,6 +803,11 @@ const proma: ExternalAdapter = {
     if (candidate.promaKind === "claude-legacy") {
       // 本体就是界面日志：用户行已是原文，这一步实际只解码 @file: 链接
       const { messages } = claudeRowsToMessages(parseClaudeRows(raw).rows, UNASSIGNED_PROVIDER_ID);
+      if (messages.length === 0) {
+        // 通篇是更早的扁平行（没有 type 字段）：另一台转换器
+        const flat = promaFlatRowsToMessages(raw, UNASSIGNED_PROVIDER_ID);
+        return { ...withKnown(candidate, NO_FACTS), records: messagesToRecords(flat.messages, flat.userDisplays) };
+      }
       const users = messages.flatMap((message) => (message.role === "user" ? [message.content] : []));
       return {
         ...withKnown(candidate, NO_FACTS),

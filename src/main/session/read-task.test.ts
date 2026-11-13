@@ -30,7 +30,7 @@ import type { TranscriptItem } from "../../shared/transcript.ts";
 import type { ExternalSessionReader, ExternalSessionSummary, ExternalSourceSection } from "./external-session.ts";
 
 /** applyReadTask 只用到 list / load */
-type TaskExternalReader = Pick<ExternalSessionReader, "list" | "load">;
+type TaskExternalReader = Pick<ExternalSessionReader, "list" | "load" | "whyEmpty">;
 
 type ReadTaskRequestEvent = Extract<AgentEvent, { type: "readTaskRequest" }>;
 
@@ -760,6 +760,7 @@ describe("applyReadTask（外部只读会话）", () => {
       records: roundsFixture(2),
       sourceFile: "/external/source.jsonl",
     }),
+    whyEmpty: async () => null,
   });
 
   test("目录保留本地索引并附外部最近会话；列目录不读全文", async () => {
@@ -818,6 +819,7 @@ describe("applyReadTask（外部只读会话）", () => {
       load: async () => {
         throw new Error("external load must not run");
       },
+      whyEmpty: async () => null,
     };
     const result = await applyReadTask(local, request("Local sibling"), workspacesStub(), noChannels, external);
     assert.equal(result.ok, true);
@@ -832,6 +834,7 @@ describe("applyReadTask（外部只读会话）", () => {
         throw new Error("permission denied");
       },
       load: async () => null,
+      whyEmpty: async () => null,
     };
     const result = await applyReadTask(localSessions, request(), workspacesStub(), noChannels, broken);
     assert.equal(result.ok, true);
@@ -850,6 +853,7 @@ describe("applyReadTask（外部只读会话）", () => {
               { source: "reasonix", total: 0, summaries: [], problems: ["sessions in Reasonix's newer store are not supported yet"] },
             ],
       load: async () => null,
+      whyEmpty: async () => null,
     };
     const index = await applyReadTask(localSessions, request(), workspacesStub(), noChannels, external);
     assert.ok(index.ok);
@@ -872,6 +876,7 @@ describe("applyReadTask（外部只读会话）", () => {
       load: async () => {
         throw new Error("Codex is turned off in Settings › External sources, so ext:codex:0123456789abcdef is not read.");
       },
+      whyEmpty: async () => null,
     };
     const result = await applyReadTask(localSessions, request("ext:codex:0123456789abcdef"), workspacesStub(), noChannels, external);
     assert.equal(result.ok, false);
@@ -881,9 +886,37 @@ describe("applyReadTask（外部只读会话）", () => {
       request("ext:codex:0123456789abcdef"),
       workspacesStub(),
       noChannels,
-      { list: async () => [], load: async () => null },
+      { list: async () => [], load: async () => null, whyEmpty: async () => null },
     );
     assert.equal(missing.ok, false);
     assert.match(missing.ok ? "" : missing.error, /was not found/);
+  });
+
+  test("`ext:<来源>` 一条都给不出时说清原因：没找到 / 目录在、没有会话 / 开关关着，原样转给模型", async () => {
+    const asked: string[] = [];
+    const external: TaskExternalReader = {
+      list: async (options) =>
+        options?.source === "codex" ? [{ source: "codex", total: 0, summaries: [], problems: [] }] : [],
+      load: async () => null,
+      whyEmpty: async (source) => {
+        asked.push(source);
+        return source === "codex"
+          ? "Codex's data folder /home/me/.codex exists, but it holds no Codex sessions."
+          : "Reasonix was not found on this computer (looked in /home/me/Library/Application Support/reasonix).";
+      },
+    };
+    const codex = await applyReadTask(localSessions, request("ext:codex"), workspacesStub(), noChannels, external);
+    assert.equal(codex.ok, false);
+    assert.match(codex.ok ? "" : codex.error, /exists, but it holds no Codex sessions/);
+    const reasonix = await applyReadTask(localSessions, request("ext:reasonix"), workspacesStub(), noChannels, external);
+    assert.match(reasonix.ok ? "" : reasonix.error, /not found on this computer \(looked in/);
+    assert.deepEqual(asked, ["codex", "reasonix"]);
+    // 目录模式里，有目录、0 个会话、没有问题的来源写成「目录在，没有会话」，不写「0 sessions:」
+    const index = await applyReadTask(localSessions, request(), workspacesStub(), noChannels, {
+      ...external,
+      list: async () => [{ source: "codex", total: 0, summaries: [], problems: [] }],
+    });
+    assert.ok(index.ok);
+    assert.match(index.text, /Codex — data folder found, but no sessions in it\./);
   });
 });

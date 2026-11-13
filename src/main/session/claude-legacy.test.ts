@@ -18,6 +18,7 @@ import type { Message } from "@earendil-works/pi-ai";
 import {
   claudeRowsToMessages,
   parseClaudeRows,
+  promaFlatRowsToMessages,
 } from "./claude-legacy.ts";
 import { messagesToRecords } from "./pi-book.ts";
 
@@ -387,4 +388,51 @@ describe("真实样本快照（night-run fixtures）", async () => {
       },
     );
   }
+});
+
+describe("promaFlatRowsToMessages（Proma 更早的扁平行）", () => {
+  test("用户原文、说明文字、工具调用与结果按 events 顺序重建；重复的 tool_start 只留完整那条；请求失败写成出错收尾的回答", () => {
+    const raw = [
+      JSON.stringify({ id: "1", role: "user", content: "建几个文件夹", createdAt: 1 }),
+      JSON.stringify({
+        id: "2",
+        role: "assistant",
+        content: "建好了",
+        createdAt: 2,
+        model: "claude-opus-4-6",
+        events: [
+          { type: "text_delta", text: "我" },
+          { type: "text_complete", text: "我来建。", isIntermediate: true },
+          { type: "tool_start", toolName: "Bash", toolUseId: "t1", input: {} },
+          { type: "tool_start", toolName: "Bash", toolUseId: "t1", input: { command: "mkdir a" } },
+          { type: "tool_result", toolName: "Bash", toolUseId: "t1", result: "", isError: false },
+          { type: "text_complete", text: "建好了" },
+          { type: "complete", usage: {} },
+        ],
+      }),
+      JSON.stringify({ id: "3", role: "user", content: "再来", createdAt: 3 }),
+      JSON.stringify({ id: "4", role: "status", content: "API Error: 400 thinking", createdAt: 4, errorCode: "unknown_error", errorTitle: "", errorOriginal: "API Error: 400 thinking" }),
+      JSON.stringify({ id: "5", role: "user", content: "老格式", createdAt: 5 }),
+      JSON.stringify({ id: "6", role: "assistant", content: "没有 events 的回答", createdAt: 6 }),
+      JSON.stringify({ type: "user", message: { role: "user", content: "typed 行不归这里" } }),
+    ].join("\n");
+    const { messages, userDisplays } = promaFlatRowsToMessages(raw, "p");
+    assert.deepEqual(userDisplays, ["建几个文件夹", "再来", "老格式"]);
+    const records = messagesToRecords(messages, userDisplays);
+    const shape = records.map((record) =>
+      record.role === "user" || record.role === "assistant"
+        ? `${record.role}:${record.content.map((block) => (block.type === "text" ? block.text : block.type === "toolCall" ? `call ${JSON.stringify(block.input)}` : block.type)).join("|")}`
+        : record.role,
+    );
+    assert.deepEqual(shape, [
+      "user:建几个文件夹",
+      'assistant:我来建。|call {"command":"mkdir a"}',
+      "tool",
+      "assistant:建好了",
+      "user:再来",
+      "assistant:[This answer ended in an error: API Error: 400 thinking]",
+      "user:老格式",
+      "assistant:没有 events 的回答",
+    ]);
+  });
 });

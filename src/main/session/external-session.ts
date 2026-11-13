@@ -71,6 +71,11 @@ export interface ExternalSessionReader {
   list(options?: ExternalListOptions): Promise<ExternalSourceSection[]>;
   /** 不存在返回 null；来源已关闭、读不了、超预算抛错（消息里写清来源、ref 与原因） */
   load(ref: string): Promise<ExternalSessionDetail | null>;
+  /**
+   * 一个来源为什么一条会话都给不出：没找到（写出找过哪里）、目录在但没有会话、开关关着。
+   * 有会话可列时返回 null。read_task 的 `ext:<来源>` 空着时用它说清原因。
+   */
+  whyEmpty(source: ExternalSourceId): Promise<string | null>;
   /** 设置页用：每个有数据目录的来源（开关关着的也算）数会话、列问题，只 stat，不读头部 */
   inventory(): Promise<{ source: ExternalSourceId; total: number; problems: string[] }[]>;
 }
@@ -80,6 +85,10 @@ export interface ExternalSourceRoots {
   roots: readonly string[];
   /** 设置 › 外部来源里的开关；关着的来源不列，读它的 ref 时说明已关闭 */
   enabled: boolean;
+  /** 一个数据目录都没发现时，默认会去哪里找（报「没找到」时写出找过哪里）；测试可省 */
+  expected?: string;
+  /** 默认位置的目录在不在（在、却没有会话数据 → 报「目录在，没有会话」） */
+  expectedExists?: boolean;
 }
 
 export interface ExternalSessionReaderDeps {
@@ -186,12 +195,13 @@ async function sourceCandidates(
 const RECOGNIZE_HEAD_BYTES = 4096;
 const RECOGNIZE_BATCH = 64;
 
-async function headOf(file: string): Promise<string> {
+/** 文件开头一段；whole = 文件比这一段还短、整份都在里面 */
+async function headOf(file: string): Promise<{ head: string; whole: boolean }> {
   const handle = await open(file, "r");
   try {
     const buffer = Buffer.alloc(RECOGNIZE_HEAD_BYTES);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    return buffer.subarray(0, bytesRead).toString("utf8");
+    return { head: buffer.subarray(0, bytesRead).toString("utf8"), whole: bytesRead < RECOGNIZE_HEAD_BYTES };
   } finally {
     await handle.close().catch(() => undefined);
   }
@@ -230,7 +240,12 @@ async function inventoryOf(
   let total = 0;
   for (let index = 0; index < candidates.length; index += RECOGNIZE_BATCH) {
     const batch = candidates.slice(index, index + RECOGNIZE_BATCH);
-    const recognized = await Promise.all(batch.map((candidate) => headOf(candidate.file).then(recognize, () => false)));
+    const recognized = await Promise.all(batch.map((candidate) =>
+        headOf(candidate.file).then(
+          ({ head, whole }) => recognize(head, whole),
+          () => false,
+        ),
+      ));
     total += recognized.filter(Boolean).length;
   }
   return { source: group.source, total, problems };
@@ -256,6 +271,24 @@ function lastModel(records: readonly SessionRecord[]): string | null {
     const record = records[index];
     if (record?.role === "assistant" && record.model.id !== "unknown") return record.model.id;
   }
+  return null;
+}
+
+/**
+ * 来源读不到的那一句（read_task 的 `ext:<来源>` 与读 ref 报错共用）：区分「没找到」「目录在、
+ * 没有会话」「开关关着」——同一句「没有数据」会让模型以为那个工具没装，或去别处瞎找。
+ * group 有数据目录、开着时返回 null（有没有会话要数过才知道，由调用方判断）。
+ */
+function unavailableReason(source: ExternalSourceId, group: ExternalSourceRoots | undefined): string | null {
+  const label = externalSessionSourceLabel(source);
+  if (group === undefined || group.roots.length === 0) {
+    const where = group?.expected;
+    if (where === undefined) return `${label} was not found on this computer.`;
+    return group?.expectedExists === true
+      ? `${label}'s data folder ${where} exists, but it holds no ${label} sessions.`
+      : `${label} was not found on this computer (looked in ${where}).`;
+  }
+  if (!group.enabled) return `${label} is turned off in Settings › External sources. Turn it on there to read its sessions.`;
   return null;
 }
 
@@ -287,6 +320,19 @@ export function createExternalSessionReader(deps: ExternalSessionReaderDeps): Ex
       return sections.sort((a, b) => EXTERNAL_SOURCE_IDS.indexOf(a.source) - EXTERNAL_SOURCE_IDS.indexOf(b.source));
     },
 
+    async whyEmpty(source) {
+      const group = (await deps.sources()).find((item) => item.source === source);
+      const reason = unavailableReason(source, group);
+      if (reason !== null || group === undefined) return reason;
+      const { candidates, problems } = await sourceCandidates(group, context);
+      if (candidates.length > 0) return null;
+      const label = externalSessionSourceLabel(source);
+      const folders = group.roots.join(", ");
+      return problems.length > 0
+        ? `${label} has no readable sessions: ${problems.join("; ")}.`
+        : `${label}'s data folder ${folders} exists, but it holds no ${label} sessions.`;
+    },
+
     async inventory() {
       const groups = (await deps.sources()).filter((group) => group.roots.length > 0);
       return Promise.all(groups.map((group) => inventoryOf(group, context)));
@@ -297,11 +343,9 @@ export function createExternalSessionReader(deps: ExternalSessionReaderDeps): Ex
       if (parsed === null) return null;
       const label = externalSessionSourceLabel(parsed.source);
       const group = (await deps.sources()).find((item) => item.source === parsed.source);
-      if (group === undefined || group.roots.length === 0) {
-        throw new Error(`${label} has no session data on this computer, so ${ref} cannot be read.`);
-      }
-      if (!group.enabled) {
-        throw new Error(`${label} is turned off in Settings › External sources, so ${ref} is not read. Turn it on there to read it.`);
+      const unavailable = unavailableReason(parsed.source, group);
+      if (unavailable !== null || group === undefined) {
+        throw new Error(`${unavailable ?? `${label} was not found on this computer.`} ${ref} cannot be read.`);
       }
       const { candidates } = await sourceCandidates(group, context);
       const candidate = candidates.find((item) => refOf(item.source, item.key) === ref.trim());
@@ -311,6 +355,11 @@ export function createExternalSessionReader(deps: ExternalSessionReaderDeps): Ex
         loaded = await EXTERNAL_ADAPTERS[parsed.source].load(candidate, { ...context, roots: group.roots });
       } catch (cause) {
         throw new Error(`Could not read ${label} session ${ref} (${candidate.file}): ${errorText(cause)}`);
+      }
+      if (loaded.records.length === 0 && loaded.empty === true) {
+        throw new Error(
+          `${label} session ${ref} (${candidate.file}) has no user or assistant messages — it is an empty session (${label} recorded only bookkeeping entries such as queue or system events), so there is nothing to read.`,
+        );
       }
       if (loaded.records.length === 0) {
         throw new Error(

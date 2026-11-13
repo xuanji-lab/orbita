@@ -647,7 +647,11 @@ function formatExternalIndex(sections: readonly ExternalSourceSection[], single:
     const label = externalSessionSourceLabel(section.source);
     const shown = section.summaries.length;
     lines.push(
-      section.total > shown ? `${label} — ${section.total} sessions, newest ${shown}:` : `${label} — ${section.total} sessions:`,
+      section.total === 0 && section.problems.length === 0
+        ? `${label} — data folder found, but no sessions in it.`
+        : section.total > shown
+          ? `${label} — ${section.total} sessions, newest ${shown}:`
+          : `${label} — ${section.total} sessions:`,
     );
     for (const summary of section.summaries) {
       lines.push(`- ${summary.title} (ref: ${summary.ref}) · updated ${iso(summary.updatedAt)} · Folder: ${summary.cwd}`);
@@ -692,7 +696,7 @@ export async function applyReadTask(
   workspaces: WorkspaceStoreReader,
   channels: ChannelStoreReader,
   /** 只要列目录与读一条（inventory 是设置页的事） */
-  external?: Pick<ExternalSessionReader, "list" | "load">,
+  external?: Pick<ExternalSessionReader, "list" | "load" | "whyEmpty">,
 ): Promise<ReadTaskOutcome> {
   const metas = await sessions.list();
   const named = new Map((await workspaces.list()).map((workspace) => [workspace.id, workspace.name]));
@@ -737,11 +741,10 @@ export async function applyReadTask(
     if (only === null) return readExternal(ref);
     if (external === undefined) return { ok: false, error: "External sessions are not available in this installation." };
     const sections = await external.list({ source: only });
-    if (sections.length === 0) {
-      return {
-        ok: false,
-        error: `No ${externalSessionSourceLabel(only)} sessions are available: it has no session data on this computer, or it is turned off in Settings › External sources.`,
-      };
+    if (sections.length === 0 || sections.every((section) => section.total === 0 && section.problems.length === 0)) {
+      // 说清是没找到、目录在没会话、还是开关关着——模型据此决定是告诉用户还是去别处找
+      const reason = await external.whyEmpty(only);
+      return { ok: false, error: reason ?? `No ${externalSessionSourceLabel(only)} sessions are available.` };
     }
     return { ok: true, card: null, text: formatExternalIndex(sections, true) };
   }

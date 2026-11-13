@@ -9,7 +9,7 @@
  * ## 源格式的真实形态（2026-09-22 全量 257 文件调研）
  *
  * - 行类型：`user` / `assistant` / `result`（turn 汇总，不进消息流）/ `system`（compact_boundary，
- *   无摘要文本）/ 旧扁平行（无 type 字段、带 events[]——PR-3 范围，跳过）。
+ *   无摘要文本）/ 旧扁平行（无 type 字段、带 events[]，这里跳过；通篇都是这种行的文件由文末的 promaFlatRowsToMessages 转）。
  * - **流式碎片**：同一 assistant 消息的每个 content_block 完成事件落一行（一行恰好一个块），
  *   行序即流序。去重规则 = 相邻行按 `message.id` 分组、组内按行序收块——不是 delta 拼接
  *   （实测 text 行之间是独立段落而非增量续写）。
@@ -121,7 +121,7 @@ export function parseClaudeRows(raw: string): ClaudeRowParse {
       stats.badLines += 1;
       continue;
     }
-    // 旧扁平格式（PR-3 范围）：没有 type 字段、按 events[] 组织
+    // 旧扁平格式：没有 type 字段、按 events[] 组织（promaFlatRowsToMessages 另转）
     if (obj["type"] === undefined) {
       stats.oldFlatRows += 1;
       continue;
@@ -444,4 +444,116 @@ function toToolResultContent(raw: unknown, stats: ClaudeMessageStats): ToolResul
     }
   }
   return content;
+}
+
+// ---------------------------------------------------------------------------
+// Proma 更早的扁平格式（没有 type 字段的行）
+// ---------------------------------------------------------------------------
+
+/**
+ * Proma 更早的界面日志：一行一条 `{ id, role, content, createdAt, model?, events? }`，没有 type 字段。
+ * 本机 26 个 Claude 时代的会话通篇都是这种行（parseClaudeRows 把它们全跳过，读出来一条消息都没有，
+ * 设置页却数着它们）。这里把它翻成消息：
+ *
+ * - user：content 就是用户写的原文。
+ * - assistant：按 events 的顺序重建——text_complete 是一段说明文字，tool_start 是一次工具调用，
+ *   tool_result 是它的结果（结果落下前把这一步的说明与调用收成一条 assistant）。没有 events 时
+ *   content 就是整条回答。error 事件 = 这条回答以出错收尾。
+ * - status 且带 errorCode：Proma 报给用户的请求失败（「API Error: 400 …」），作为一条空正文、
+ *   以出错收尾的回答（pi-book.markFailedAnswer 给它写明出错）。
+ *
+ * 只给 typed 行一条消息都转不出来的文件用（调用方判断）：两种行混在一个文件里时以 typed 行为准。
+ */
+export function promaFlatRowsToMessages(raw: string, providerId: string): { messages: Message[]; userDisplays: string[] } {
+  const messages: Message[] = [];
+  const userDisplays: string[] = [];
+  const assistant = (
+    content: AssistantMessage["content"],
+    stopReason: AssistantMessage["stopReason"],
+    model: string | null,
+    timestamp: number,
+    errorMessage: string | null = null,
+  ): AssistantMessage => ({
+    role: "assistant",
+    content,
+    api: "anthropic-messages",
+    provider: providerId,
+    model: model ?? "unknown",
+    usage: toUsage(null),
+    stopReason,
+    ...(errorMessage === null ? null : { errorMessage }),
+    timestamp,
+  });
+  for (const line of raw.split("\n")) {
+    if (line.trim() === "") continue;
+    let row: unknown;
+    try {
+      row = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isRecord(row) || row["type"] !== undefined) continue;
+    const role = row["role"];
+    const content = typeof row["content"] === "string" ? row["content"] : "";
+    const timestamp = typeof row["createdAt"] === "number" && Number.isFinite(row["createdAt"]) ? row["createdAt"] : 0;
+    if (role === "user") {
+      if (content.trim() === "") continue;
+      messages.push({ role: "user", content: [{ type: "text", text: content }], timestamp });
+      userDisplays.push(content);
+      continue;
+    }
+    if (role === "status") {
+      if (optionalString(row["errorCode"]) === null) continue;
+      const reason = optionalString(row["errorOriginal"]) ?? optionalString(row["errorTitle"]) ?? optionalString(content);
+      messages.push(assistant([], "error", null, timestamp, reason));
+      continue;
+    }
+    if (role !== "assistant") continue;
+    const model = optionalString(row["model"]);
+    const events = Array.isArray(row["events"]) ? row["events"].filter(isRecord) : [];
+    let step: AssistantMessage["content"] = [];
+    let wrote = false;
+    let failure: string | null = null;
+    for (const event of events) {
+      const type = event["type"];
+      if (type === "text_complete" && typeof event["text"] === "string" && event["text"].trim() !== "") {
+        step.push({ type: "text", text: event["text"] });
+      } else if (type === "tool_start") {
+        const id = optionalString(event["toolUseId"]);
+        const name = optionalString(event["toolName"]);
+        if (id === null || name === null) continue;
+        const input = isRecord(event["input"]) ? event["input"] : {};
+        // 同一次调用会发两次 tool_start：先是空 input（流式开始），再是完整的——留一条，取后来的
+        const seen = step.findIndex((block) => block.type === "toolCall" && block.id === id);
+        const call: ToolCall = { type: "toolCall", id, name, arguments: input as ToolCall["arguments"] };
+        if (seen === -1) step.push(call);
+        else if (Object.keys(input).length > 0) step[seen] = call;
+      } else if (type === "tool_result") {
+        const id = optionalString(event["toolUseId"]);
+        if (id === null) continue;
+        if (step.length > 0) {
+          messages.push(assistant(step, "toolUse", model, timestamp));
+          step = [];
+          wrote = true;
+        }
+        const result = event["result"];
+        messages.push({
+          role: "toolResult",
+          toolCallId: id,
+          toolName: optionalString(event["toolName"]) ?? "unknown",
+          content: typeof result === "string" && result !== "" ? [{ type: "text", text: result }] : [],
+          isError: event["isError"] === true,
+          timestamp,
+        });
+      } else if (type === "error") {
+        failure = optionalString(event["message"]) ?? "error";
+      }
+    }
+    // 没有 text_complete 的老行：content 就是整条回答
+    if (!wrote && step.length === 0 && content.trim() !== "") step.push({ type: "text", text: content });
+    if (step.length > 0 || failure !== null) {
+      messages.push(assistant(step, failure === null ? "stop" : "error", model, timestamp, failure));
+    }
+  }
+  return { messages, userDisplays };
 }

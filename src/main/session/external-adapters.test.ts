@@ -469,3 +469,49 @@ describe("设置页数会话与库来源的复制次数", () => {
     assert.equal(third[0]?.summaries[0]?.title, "新会话");
   });
 });
+
+describe("空会话与读不到的来源", () => {
+  test("Claude Code 只有记账行的文件：设置页不计数，读它时说是空会话（不说格式变了）", async () => {
+    const root = join(dir, ".claude");
+    const project = join(root, "projects", "-tmp");
+    await mkdir(project, { recursive: true });
+    const bookkeeping = [
+      JSON.stringify({ type: "queue-operation", operation: "enqueue", timestamp: "2026-09-20T10:00:00.000Z", sessionId: "e" }),
+      JSON.stringify({ type: "queue-operation", operation: "dequeue", timestamp: "2026-09-20T10:00:00.100Z", sessionId: "e" }),
+      JSON.stringify({ type: "system", subtype: "local_command", uuid: "s1", parentUuid: null, isSidechain: false, timestamp: "2026-09-20T10:00:01.000Z" }),
+    ].join("\n");
+    await writeFile(join(project, "empty.jsonl"), `${bookkeeping}\n`);
+    await writeFile(join(project, "real.jsonl"), `${claudeRow("user", "u1", null, "你好", "2026-09-20T10:00:01.000Z")}\n`);
+    const reader = readerFor([{ source: "claude-code", roots: [root] }]);
+    assert.deepEqual(await reader.inventory(), [{ source: "claude-code", total: 1, problems: [] }]);
+    const [section] = await reader.list();
+    const empty = section?.summaries.find((item) => item.title.startsWith("Claude Code session"));
+    assert.ok(empty !== undefined);
+    await assert.rejects(reader.load(empty.ref), /has no user or assistant messages — it is an empty session/);
+  });
+
+  test("whyEmpty：没找到写出找过哪里；目录在、没有会话；开关关着；有会话返回 null", async () => {
+    const codexRoot = join(dir, ".codex");
+    await mkdir(join(codexRoot, "sessions"), { recursive: true });
+    const claudeRoot = join(dir, ".claude");
+    await mkdir(join(claudeRoot, "projects", "-repo"), { recursive: true });
+    await writeFile(join(claudeRoot, "projects", "-repo", "s.jsonl"), `${claudeRow("user", "u1", null, "你好", "2026-09-20T10:00:01.000Z")}\n`);
+    const reader = createExternalSessionReader({
+      defaultCwd: join(dir, "default-cwd"),
+      claudeDesktopDir: join(dir, "claude-desktop"),
+      sources: async () => [
+        { source: "reasonix", roots: [], enabled: true, expected: "/home/me/reasonix", expectedExists: false },
+        { source: "zcode", roots: [], enabled: true, expected: "/home/me/.zcode", expectedExists: true },
+        { source: "codex", roots: [codexRoot], enabled: true },
+        { source: "proma", roots: [join(dir, ".proma")], enabled: false },
+        { source: "claude-code", roots: [claudeRoot], enabled: true },
+      ],
+    });
+    assert.equal(await reader.whyEmpty("reasonix"), "Reasonix was not found on this computer (looked in /home/me/reasonix).");
+    assert.equal(await reader.whyEmpty("zcode"), "ZCode's data folder /home/me/.zcode exists, but it holds no ZCode sessions.");
+    assert.equal(await reader.whyEmpty("codex"), `Codex's data folder ${codexRoot} exists, but it holds no Codex sessions.`);
+    assert.match((await reader.whyEmpty("proma")) ?? "", /turned off in Settings › External sources/);
+    assert.equal(await reader.whyEmpty("claude-code"), null);
+    await assert.rejects(reader.load("ext:reasonix:0123456789abcdef"), /Reasonix was not found on this computer \(looked in \/home\/me\/reasonix\)\. ext:reasonix:0123456789abcdef cannot be read\./);
+  });
+});

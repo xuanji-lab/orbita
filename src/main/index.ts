@@ -486,6 +486,8 @@ void app.whenReady().then(async () => {
         source: item.source,
         roots: item.roots,
         enabled: isExternalSourceEnabled(current.externalSources, item.source),
+        expected: item.expected,
+        expectedExists: item.expectedExists,
       }));
     },
   });
