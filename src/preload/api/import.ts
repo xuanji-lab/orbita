@@ -7,6 +7,7 @@ import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type {
   ImportCustomRoot,
   ImportCustomRootInput,
+  ImportDetectResult,
   ImportRunInput,
   ImportRunReport,
   ImportScanInput,
@@ -14,6 +15,8 @@ import type {
 } from "../../shared/import.ts";
 
 export const importApi = {
+  /** 第 1 步：各来源勾上之后会读的路径、有没有东西可读；只 stat，不读内容 */
+  detect: (): Promise<ImportDetectResult> => ipcRenderer.invoke(ipcChannels.importDetect),
   /** 扫描勾选来源里的技能与 MCP；读不了会以错误 reject（UI 错误态） */
   scan: (input: ImportScanInput): Promise<ImportScanReport> => ipcRenderer.invoke(ipcChannels.importScan, input),
   /** 导入勾选的技能与 MCP：主进程按同样的来源重扫，再按勾选落盘 */

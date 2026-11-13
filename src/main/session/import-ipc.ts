@@ -13,6 +13,7 @@ import {
   parseImportRunInput,
   parseImportScanInput,
   type ImportCustomRoot,
+  type ImportDetectResult,
   type ImportRunReport,
   type ImportScanReport,
 } from "../../shared/import.ts";
@@ -21,7 +22,7 @@ import type { McpStore } from "../mcp/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import { DATA_ROOT_SPECS, findDataRoots, type LocateContext } from "./import-locate.ts";
 import { CustomRootsStore, dirsOf, mergeCustomRoots, type CustomRootSource } from "./import-custom-roots.ts";
-import { runConfigImport, scanConfig, type ConfigImportDeps } from "./config-import.ts";
+import { probeConfig, runConfigImport, scanConfig, type ConfigImportDeps } from "./config-import.ts";
 
 export function registerImportIpc(
   workspaces: WorkspaceStore,
@@ -54,6 +55,20 @@ export function registerImportIpc(
     };
   }
 
+  // 第 1 步的来源与会读的路径：只 stat（页面一打开就跑，用户还什么都没勾）
+  ipcMain.handle(ipcChannels.importDetect, async (): Promise<ImportDetectResult> => {
+    const home = homedir();
+    const environment = await deps();
+    return {
+      home,
+      sources: await probeConfig(environment, {
+        proma: join(home, ".proma"),
+        claudeCode: { skillsDir: join(home, ".claude", "skills"), claudeJson: join(home, ".claude.json") },
+        kimiCode: join(home, ".kimi-code", "mcp.json"),
+        opencode: join(process.env["XDG_CONFIG_HOME"] || join(home, ".config"), "opencode", "opencode.json"),
+      }),
+    };
+  });
   ipcMain.handle(ipcChannels.importScan, async (_event, raw: unknown): Promise<ImportScanReport> => {
     const input = parseImportScanInput(raw);
     // 一个来源都没勾 = 一个字节都不读

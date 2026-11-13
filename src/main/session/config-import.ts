@@ -10,7 +10,7 @@
  */
 import { stat } from "node:fs/promises";
 import { basename, join } from "node:path";
-import type { ImportRunInput, ImportRunReport, ImportScanReport, ImportSourceId } from "../../shared/import.ts";
+import type { ImportConfigProbe, ImportRunInput, ImportRunReport, ImportScanReport, ImportSourceId } from "../../shared/import.ts";
 import type { McpServer } from "../../shared/mcp.ts";
 import {
   claudeCodeSkillDirs,
@@ -68,6 +68,53 @@ async function promaRootsWithIndex(roots: readonly string[]): Promise<string[]> 
     }
   }
   return out;
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 第 1 步的来源清单：每个来源勾上之后扫描会读的全部路径（页面原样列出，即事前披露），与「有没有
+ * 东西可读」。**只 stat，不读任何文件内容**——页面一打开就跑，用户还什么都没勾。paths 与
+ * scanConfig 的实际读取范围一一对应（Proma 的 agent-sessions.json 只 stat 用来认数据目录，不读）。
+ * 一个数据目录都没找到的来源列 fallback 里的默认位置，found 为 false。
+ */
+export async function probeConfig(
+  deps: Pick<ConfigImportDeps, "promaRoots" | "claudeCode" | "kimiCode" | "opencode" | "agentSkillsDir">,
+  fallback: { proma: string; claudeCode: { skillsDir: string; claudeJson: string }; kimiCode: string; opencode: string },
+): Promise<ImportConfigProbe[]> {
+  const promaRoots = await promaRootsWithIndex(deps.promaRoots);
+  const promaListed = promaRoots.length > 0 ? promaRoots : [deps.promaRoots[0] ?? fallback.proma];
+  const claude = deps.claudeCode.length > 0 ? deps.claudeCode : [fallback.claudeCode];
+  const kimi = deps.kimiCode.length > 0 ? deps.kimiCode.map((paths) => paths.mcpFile) : [fallback.kimiCode];
+  const opencode = deps.opencode.length > 0 ? deps.opencode.map((paths) => paths.configFile) : [fallback.opencode];
+  const anyExists = async (paths: readonly string[]): Promise<boolean> => (await Promise.all(paths.map(exists))).some(Boolean);
+  return [
+    {
+      id: "proma",
+      paths: promaListed.flatMap((root) => [
+        join(root, "agent-workspaces.json"),
+        join(root, "agent-workspaces", "*", "skills"),
+        join(root, "default-skills"),
+        join(root, "agent-workspaces", "*", "mcp.json"),
+      ]),
+      found: promaRoots.length > 0,
+    },
+    {
+      id: "claude-code",
+      paths: claude.flatMap((paths) => [paths.skillsDir, paths.claudeJson]),
+      found: await anyExists(claude.flatMap((paths) => [paths.skillsDir, paths.claudeJson])),
+    },
+    { id: "kimi-code", paths: kimi, found: await anyExists(kimi) },
+    { id: "opencode", paths: opencode, found: await anyExists(opencode) },
+    { id: "agent-skills", paths: [deps.agentSkillsDir], found: await exists(deps.agentSkillsDir) },
+  ];
 }
 
 /**
