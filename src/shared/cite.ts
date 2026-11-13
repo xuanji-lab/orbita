@@ -99,6 +99,11 @@ export const citeChannels = {
   search: "cite:search",
   /** 把选中的检索结果追加进项目的 .bib，回写到哪个文件与生成的 key */
   save: "cite:save",
+  /**
+   * 校核项目 .bib 里的条目：按 DOI / arXiv 号 / 标题查 Crossref / arXiv，
+   * 查不到或查到的不是同一篇时如实标出来（问题抽屉里与缺包并列一类）。
+   */
+  verify: "cite:verify",
 } as const;
 
 /** 授权上下文：与 `latex:project` 同一个形状，主进程按同一道白名单核 */
@@ -187,6 +192,57 @@ export interface CiteSaveRequest {
   context: CiteFileContext;
   candidate: CiteCandidate;
 }
+
+/**
+ * 一次引文核验的结局分类。**分得这么细是因为下一步不同**：
+ * - `verified`：Crossref / arXiv 里有这条记录且标题对得上，不必再打扰用户；
+ * - `mismatch`：标识（DOI / arXiv 号）查到了，但那是**另一篇**——最危险的一类，
+ *   常见于复制 DOI 时粘错；
+ * - `not-found`：两个接口都没有这条记录（编造的条目 / 预印本未注册 DOI）；
+ * - `skipped`：条目没有 DOI / arXiv 号 / 标题，无从查起（@misc 的手工条目）；
+ * - `error`：网络超时 / 离线 / 限流——**这不是「未核验的结论」**，界面要说清可以重试。
+ */
+export type CiteVerifyStatus = "verified" | "mismatch" | "not-found" | "skipped" | "error";
+
+/** 核验时用的标识：优先 DOI，其次 arXiv 号，最后拿标题去搜 */
+export interface CiteVerifyIdentifier {
+  kind: "doi" | "arxiv" | "title";
+  value: string;
+}
+
+/** 一条文献的核验结果。`found` 只在真查到记录时非 null（用于显示「查到的是哪篇」） */
+export interface CiteVerification {
+  key: string;
+  status: CiteVerifyStatus;
+  /** 用哪个标识查的；`skipped` 时 null */
+  identifier: CiteVerifyIdentifier | null;
+  found: { title: string | null; year: string | null; doi: string | null } | null;
+  /** `error` 的原因（timeout / offline / rate-limited / failed）；其余为 null */
+  reason: CiteSearchFailure | null;
+}
+
+/**
+ * 核验请求。**不传条目内容，只传上下文（与可选的一批 key）**：主进程自己重读项目的
+ * .bib，拿到的就是编译会用的那一份，renderer 也无法把任意字符串当查询打给公共接口。
+ * `keys` 缺席 = 核对全部（受 CITE_VERIFY_LIMIT 限制）。
+ */
+export interface CiteVerifyRequest extends CiteFileContext {
+  keys?: string[];
+}
+
+/**
+ * 一次最多核验几条：每条一次（甚至两次）公共接口请求，一次核几百条会被 Crossref / arXiv
+ * 限流，用户也等不起。超出的部分**不进结果**，界面拿 total 与 results.length 说清楚。
+ */
+export const CITE_VERIFY_LIMIT = 8;
+
+/**
+ * 核验的对外结局。`ok:false` 只出现在「整个通道不可用」（项目不存在、读库失败）；
+ * 单条查不到是 `ok:true` + 那条 status = not-found。
+ */
+export type CiteVerifyOutcome =
+  | { ok: true; results: CiteVerification[]; /** 这个项目一共有多少条可核验的条目（含本次没查的） */ total: number }
+  | { ok: false; reason: "outside-project" | "failed"; detail: string };
 
 /**
  * 写 .bib 的结局。成功时回**写到哪个文件**（相对项目目录，正斜杠）与生成的 key——

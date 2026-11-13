@@ -21,7 +21,7 @@
  *
  * 编辑器容器与标签沿用 Files 面板现有语言；文字与颜色走设计 token，深浅主题同一套。
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { api } from "../../api.ts";
@@ -31,9 +31,11 @@ import { ContextMenu } from "../../shell/ContextMenu";
 import type { MenuItem } from "../../shell/Menu";
 import { contentHash, type FileListRequest } from "@shared/files";
 import type { CiteEntry } from "@shared/cite";
-import type { LatexFileContext } from "@shared/latex";
+import type { LatexFileContext, LatexIssue, LatexProjectIndex } from "@shared/latex";
+import { setDiagnostics } from "@codemirror/lint";
 import { CiteSearchPanel } from "./CiteSearchPanel.tsx";
 import {
+  languageForFile,
   latexEditorExtensions,
   agentMarkEffect,
   clearSyncLineEffect,
@@ -42,7 +44,11 @@ import {
   syncLineEffect,
 } from "./latex-editor.ts";
 import { formatSize } from "./tree-view.ts";
-import { citeCompletion } from "./cite-completion.ts";
+import { latexCompletion } from "./latex-completion.ts";
+import { inlineDiagnostics } from "./latex-diagnostics.ts";
+import { parseOutline, outlineIndexAt, type OutlineEntry } from "./latex-outline.ts";
+import { TexOutline } from "./TexOutline.tsx";
+import { isTexFile } from "./editor-state.ts";
 import {
   clampCursorLine,
   locateBlock,
@@ -147,6 +153,19 @@ export function TexEditorPane(props: {
    * 晚到（IPC 在飞），重挂编辑器会丢光标与撤销历史。
    */
   cite?: readonly CiteEntry[];
+  /**
+   * 项目符号索引（`\\ref` 的 label、项目自定义命令 / 环境、`\\input` 路径候选）。
+   * null / 缺席 = 不在 LaTeX 项目里，补全只剩静态表那一层。
+   */
+  latexIndex?: LatexProjectIndex | null;
+  /**
+   * 这次编译的问题（行内波浪线）。映射规则在 latex-diagnostics.ts（有测试）：
+   * 只画本文件、只画 error / warning、一行一条。
+   *
+   * **位置只在本字段变化时重算**：用户继续编辑时 CodeMirror 自己会把区间随文字映射
+   * （行内小改不会错到下一行）；重新编译拿到新问题后才整批替换。
+   */
+  diagnostics?: { issues: readonly LatexIssue[]; projectDir: string } | null;
 }) {
   const t = useT();
   const path = props.request.dir;
@@ -160,6 +179,9 @@ export function TexEditorPane(props: {
    */
   const citeRef = useRef<readonly CiteEntry[]>(props.cite ?? NO_CITE);
   citeRef.current = props.cite ?? NO_CITE;
+  /** 同一条纪律：索引比编辑器晚到（IPC 在飞），补全来源每次现读这个 ref */
+  const indexRef = useRef<LatexProjectIndex | null>(props.latexIndex ?? null);
+  indexRef.current = props.latexIndex ?? null;
   /** 基线：最后一次从盘上读到 / 成功写下去的文本指纹（按磁盘格式） */
   const savedHashRef = useRef(contentHash(props.initialText));
   const eolRef = useRef<LineEnding>(detectLineEnding(props.initialText));
@@ -189,6 +211,15 @@ export function TexEditorPane(props: {
   const [staleIds, setStaleIds] = useState<ReadonlySet<string>>(new Set());
   /** 文档被外部整体换过几次：改动块的高亮要在这个新文档上重算 */
   const [docEpoch, setDocEpoch] = useState(0);
+  /** 大纲抽屉：只对 .tex 开（.bib / .sty 没有章节） */
+  const [outlineOpen, setOutlineOpen] = useState(false);
+  /**
+   * 大纲的输入文本：**只在抽屉打开时跟着文档更新**（每秒几十次的 setState 不该在
+   * 关着的时候发生）。打开时先取一次当前文档，之后在 updateListener 里同步。
+   */
+  const [outlineText, setOutlineText] = useState(props.initialText);
+  const outlineOpenRef = useRef(false);
+  outlineOpenRef.current = outlineOpen;
   /** 外部文本替换文档时不当作「用户编辑」（否则一挂载就排一次自动保存） */
   const replacingRef = useRef(false);
   const dirtyRef = useRef(false);
@@ -361,6 +392,9 @@ export function TexEditorPane(props: {
                 setPhaseBoth("saved");
               }
             }
+            if (update.docChanged && outlineOpenRef.current) {
+              setOutlineText(update.text());
+            }
             if (update.selectionSet || update.docChanged) {
               const state = viewRef.current?.state;
               if (state !== null && state !== undefined) {
@@ -368,8 +402,8 @@ export function TexEditorPane(props: {
                 setCursor(pos);
               }
             }
-          }),
-          citeCompletion(() => citeRef.current),
+          }, { folding: isTexFile(path), language: languageForFile(path) }),
+          latexCompletion({ cite: () => citeRef.current, index: () => indexRef.current }),
           EditorView.contentAttributes.of({ "aria-label": t.editor.aria, spellcheck: "false" }),
         ],
       }),
@@ -401,11 +435,30 @@ export function TexEditorPane(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path]);
 
+  // 编译问题 → 行内标记。只在这个字段变化时重算：用户继续编辑时由 CodeMirror 自己
+  // 映射区间；重编一次才整批换新（同一次编译的旧 underscoring 不该在新文本上漂着）。
+  const diagnostics = props.diagnostics ?? null;
+  const diagnosticIssues = diagnostics?.issues ?? null;
+  const diagnosticDir = diagnostics?.projectDir ?? null;
+  useEffect(() => {
+    const view = viewRef.current;
+    if (view === null || diagnosticDir === null) return;
+    const list = inlineDiagnostics(diagnosticIssues ?? [], view.state.doc.toString(), path, diagnosticDir).map(
+      (item) => ({
+        from: item.from,
+        to: item.to,
+        severity: item.severity,
+        message: item.message,
+        source: "latexmk",
+      }),
+    );
+    view.dispatch(setDiagnostics(view.state, list));
+  }, [diagnosticIssues, diagnosticDir, path]);
+
   // PDF → 源码的落点：选中这一行、滚到视口中间、铺一条短暂的底色。
   // 依赖只有 token：同一次定位在重渲染时不该再抢一次滚动条。
   const reveal = props.reveal ?? null;
-  useEffect(() => {
-    if (reveal === null) return;
+  useEffect(() => {    if (reveal === null) return;
     const view = viewRef.current;
     if (view === null) return;
     const line = view.state.doc.line(clampCursorLine(reveal.line, view.state.doc.lines));
@@ -423,6 +476,36 @@ export function TexEditorPane(props: {
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reveal?.token]);
+
+  // 大纲抽屉：文本变化才重算（几十条章节，开抽屉的时候重算很便宜）
+  const showOutline = isTexFile(path);
+  const outlineEntries = useMemo<readonly OutlineEntry[]>(
+    () => (outlineOpen ? parseOutline(outlineText) : []),
+    [outlineOpen, outlineText],
+  );
+  const outlineActive = outlineIndexAt(outlineEntries, cursor.line);
+
+  /** 跳到某一行（大纲点击 / PDF 反查共用）：整行选中、滚到中间、拿到焦点 */
+  const jumpToLine = (line: number): void => {
+    const view = viewRef.current;
+    if (view === null) return;
+    const target = view.state.doc.line(clampCursorLine(line, view.state.doc.lines));
+    view.dispatch({
+      selection: { anchor: target.from, head: target.to },
+      effects: EditorView.scrollIntoView(target.from, { y: "center" }),
+    });
+    view.focus();
+  };
+
+  const toggleOutline = (): void => {
+    if (outlineOpen) {
+      setOutlineOpen(false);
+      return;
+    }
+    const view = viewRef.current;
+    setOutlineText(view?.state.doc.toString() ?? props.initialText);
+    setOutlineOpen(true);
+  };
 
   // 脏状态下盯一眼盘上内容：用户停手不打字时，外部改动也要能看见
   useEffect(() => {
@@ -753,6 +836,13 @@ export function TexEditorPane(props: {
     if (root === null) return;
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== "Escape") return;
+      // 大纲抽屉开着：Esc 先收抽屉（用户自己打开的东西，不该一下子连标签也关掉）
+      if (outlineOpenRef.current) {
+        setOutlineOpen(false);
+        event.stopPropagation();
+        event.preventDefault();
+        return;
+      }
       const target = event.target instanceof Element ? event.target : null;
       if (event.defaultPrevented || target?.closest(".cm-panels") != null) event.stopPropagation();
     };
@@ -764,11 +854,15 @@ export function TexEditorPane(props: {
    * 右键：把光标位置换算成行号（不移动光标、不动选区）。菜单里的「在 PDF 中定位」
    * 用被右键的那一行；「引用到对话」优先用选区原文，没有选区就是这一行。
    * 没有可给的菜单项时完全不拦右键（不抢浏览器 / CodeMirror 自己的行为）。
+   *
+   * 两项只对 `.tex` 出现：「在 PDF 中定位」对 .bib 的一行没有意义（SyncTeX 里没有它），
+   * 「查找文献」在 .bib 里会往文献库插一行 `\cite{}`——那是给正文用的动作。
    */
+  const texFile = isTexFile(path);
   const contextMenuItems: MenuItem[] = menu === null
     ? []
     : [
-        ...(props.onForwardSync === undefined
+        ...(props.onForwardSync === undefined || !texFile
           ? []
           : [
               {
@@ -796,17 +890,21 @@ export function TexEditorPane(props: {
                 },
               },
             ]),
-        {
-          // 在线检索：面板自己联网、自己写 .bib，这里只把「开在哪里」交下去
-          id: "find-reference",
-          label: t.citeSearch.menu,
-          icon: "book-open" as const,
-          onSelect: () => {
-            const point = { x: menu.x, y: menu.y };
-            setMenu(null);
-            setCiteSearch(point);
-          },
-        },
+        ...(texFile
+          ? [
+              {
+                // 在线检索：面板自己联网、自己写 .bib，这里只把「开在哪里」交下去
+                id: "find-reference",
+                label: t.citeSearch.menu,
+                icon: "book-open" as const,
+                onSelect: () => {
+                  const point = { x: menu.x, y: menu.y };
+                  setMenu(null);
+                  setCiteSearch(point);
+                },
+              },
+            ]
+          : []),
       ];
 
   const openContextMenu = (event: React.MouseEvent<HTMLDivElement>): void => {
@@ -889,7 +987,17 @@ export function TexEditorPane(props: {
           </span>
         </div>
       )}
-      <div className="tex-editor-host" ref={hostRef} />
+      <div className="tex-editor-body">
+        <div className="tex-editor-host" ref={hostRef} />
+        {outlineOpen && showOutline && (
+          <TexOutline
+            entries={outlineEntries}
+            active={outlineActive}
+            onJump={(line) => jumpToLine(line)}
+            onClose={() => setOutlineOpen(false)}
+          />
+        )}
+      </div>
       {hunks.length > 0 && !readOnly && (
         <div className="tex-editor-hunks" role="status">
           <div className="tex-editor-hunks-head">
@@ -958,6 +1066,18 @@ export function TexEditorPane(props: {
         </div>
       )}
       <div className="tex-editor-status" data-phase={phase}>
+        {showOutline && (
+          <button
+            type="button"
+            className="quiet-control tex-editor-outline-toggle"
+            aria-expanded={outlineOpen}
+            title={t.editor.outlineTip}
+            onClick={toggleOutline}
+          >
+            <Icon name="list-tree" size={12} />
+            {t.editor.outline}
+          </button>
+        )}
         <span className="tex-editor-cursor">
           {t.editor.cursor(cursor.line, cursor.column)}
         </span>

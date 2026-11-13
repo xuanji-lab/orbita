@@ -15,9 +15,21 @@
  */
 import { contentHash } from "../../../../shared/files.ts";
 
-/** 只有 .tex 走编辑器；.bib 等仍走只读预览（PR4 的范围只说 .tex） */
-export function isEditableTexFile(path: string): boolean {
+/** 源码文件（折叠 / 大纲只对 .tex 有意义：.bib 与 .sty 没有章节与环境树） */
+export function isTexFile(path: string): boolean {
   return /\.tex$/i.test(path);
+}
+
+/**
+ * 能直接在编辑器里改的 LaTeX 家族文件。`.bib` / `.sty` / `.cls` 与 `.tex` 走**同一套**
+ * 自动保存 / 冲突 / 协作只读管线：它们是论文项目的一部分，agent 会写、用户也会手改，
+ * 只读预览会逼着人切到别的编辑器去改同一个项目。
+ *
+ * 上限与 `.tex` 相同（fs:read 的截断线 16 MiB / 写盘 4 MiB）：截断的文件不进编辑器，
+ * 写回会把后半截吃掉。
+ */
+export function isEditableLatexFile(path: string): boolean {
+  return /\.(?:tex|bib|sty|cls)$/i.test(path);
 }
 
 export type LineEnding = "\n" | "\r\n";

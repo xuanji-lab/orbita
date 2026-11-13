@@ -254,6 +254,10 @@ export const latexChannels = {
   synctexReverse: "latex:synctex-reverse",
   /** 缺的文件名 → 发行版包名与安装命令（反查要起 kpsewhich / tlmgr / mpm） */
   packages: "latex:packages",
+  /** 项目符号索引：\label / 自定义命令 / 环境 / 路径候选（补全与重复 label 提示读它） */
+  index: "latex:index",
+  /** chktex 行内检查（本机装了才可用；没装时 available:false） */
+  lint: "latex:lint",
 } as const;
 
 /**
@@ -379,6 +383,62 @@ export interface LatexReverseRequest extends LatexFileContext {
   page: number;
   x: number;
   y: number;
+}
+
+/**
+ * 项目索引里的一条 `\label`。**file 是相对项目目录、正斜杠**（界面直接显示，
+ * 与 LatexIssue.file 同一口径）；line 是 1 基行号（日志也是 1 基）。
+ */
+export interface LatexLabelRef {
+  name: string;
+  file: string;
+  line: number;
+}
+
+/**
+ * 项目符号索引 —— `\ref{}` 的候选、`\begin{}` / 命令补全里「本项目自己定义的」那一层、
+ * 以及 `\input{}` / `\includegraphics{}` 的路径候选。
+ *
+ * **为什么在主进程算**：它是「读项目里所有 .tex」这件事，renderer 没有授权也不该
+ * 为了补全自己去读盘；同时它与 `latex:project` 用同一个「项目目录」结论，magic root
+ * 改写目录时补全与编译看到的是同一批文件。
+ *
+ * 索引**不做语义分析**（不上 AST）：论文项目的符号就是那么几种，正则在注释剔除后足够；
+ * 上 AST 的成本要等 outline / 环境配对真需要时再付。
+ */
+export interface LatexProjectIndex {
+  /** 项目目录绝对路径（与 LatexProjectInfo.dir 同一个值） */
+  dir: string;
+  /** 所有 `\label{...}`，按文件、行排序 */
+  labels: LatexLabelRef[];
+  /** 同名定义了多次的 label（按名排序）：引用编号指错的第一现场 */
+  duplicateLabels: string[];
+  /** 项目内定义的命令名（不带反斜杠）：`\newcommand{\foo}` / `\def\foo` / `\DeclareMathOperator` */
+  commands: string[];
+  /** 项目内定义的环境名：`\newenvironment{x}` / `\newtheorem{x}` */
+  environments: string[];
+  /**
+   * 路径候选（相对项目目录、正斜杠）：`\input` 认 .tex，`\includegraphics` 认图片。
+   * 目录也在里面（以 `/` 结尾）——用户打到一半的 `fig/` 需要能接着往下补。
+   */
+  files: string[];
+  /** 扫描有没有看不全（深度 / 条数 / 体积超限）：补全可能少候选，界面不必提示成错误 */
+  truncated: boolean;
+}
+
+export type LatexIndexOutcome = { found: false } | { found: true; index: LatexProjectIndex };
+
+/**
+ * chktex 行内检查的结局。
+ *
+ * `available: false` = **本机没有 chktex**（或这个文件不是 .tex）：界面据此完全不显示
+ * 这条通道的痕迹——它是 TeX 发行版的可选组件，没装的人不该看到任何「缺少工具」。
+ * `available: true` 且 `issues` 为空 = 检查过、没有问题。
+ */
+export interface LatexLintOutcome {
+  available: boolean;
+  /** 只含被检查的那个文件的问题（file 相对项目目录，与编译日志同一口径） */
+  issues: LatexIssue[];
 }
 
 /**

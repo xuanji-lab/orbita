@@ -7,7 +7,7 @@ import { MarkdownBlock } from "../chat/MarkdownBlock";
 import { highlightBlock, highlighterReady, langFromPath } from "../chat/highlight";
 import { fileIcon, formatAge, formatSize } from "./tree-view";
 import { crumbSegmentsFromRoot, fileTabName } from "./panel-layout.ts";
-import { isEditableTexFile } from "./editor-state.ts";
+import { isEditableLatexFile } from "./editor-state.ts";
 import { TexEditorPane, type EditorCollabView, type TexEditorHandle } from "./TexEditorPane.tsx";
 import { largeTextNotice, textPreviewMode, textRenderKind, truncatedNotice } from "./preview-view";
 import { WindowedText } from "./WindowedText";
@@ -23,6 +23,7 @@ import {
 } from "@shared/files";
 import type { PromptImage } from "@shared/prompt-images";
 import type { CiteEntry } from "@shared/cite";
+import type { LatexIssue, LatexProjectIndex } from "@shared/latex";
 import type { TextQuote } from "@shared/quote";
 import { DocEditPane } from "../doc-panel/DocEditPane";
 import { watchDocMeta } from "./doc-meta-refresh.ts";
@@ -91,6 +92,10 @@ export function FilePreviewPane(props: {
     reveal?: { line: number; token: number } | null;
     /** 项目文献库：`\cite{` 的候选（不在 LaTeX 项目里时缺席） */
     cite?: readonly CiteEntry[];
+    /** 项目符号索引：`\\ref` / 自定义命令 / 路径补全的候选（不在项目里时缺席） */
+    latexIndex?: LatexProjectIndex | null;
+    /** 这次编译的问题（行内波浪线）；不在 LaTeX 项目里时缺席 */
+    diagnostics?: { issues: readonly LatexIssue[]; projectDir: string } | null;
   };
   /** 一打开就进「编辑」模式（刚新建的文档 / 演示文稿） */
   openInEdit?: boolean;
@@ -116,7 +121,7 @@ export function FilePreviewPane(props: {
    * .tex 走编辑器（PR4）：只读预览换成 CodeMirror；仍要等 fs:read 回一份完整的文本
    * （截断到 2 MB 的文件不编辑——写回会丢后半截）。二进制 / 图片不会走到这里。
    */
-  const editableTex = sentImage === undefined && isEditableTexFile(path);
+  const editableLatex = sentImage === undefined && isEditableLatexFile(path);
   const [pdfReload, setPdfReload] = useState(0);
   const name = sentImage?.name ?? fileTabName(path);
   // 面包屑从所在的根开始（绝对路径放不下时截掉的总是末尾的文件名）；完整路径进 tooltip
@@ -141,7 +146,7 @@ export function FilePreviewPane(props: {
   // EDITOR_WRITE_LIMIT 的 .tex 能打开却一定存不回去（fs:write 回 too-large），
   // 与其给个假的「已保存」按钮，不如退成只读预览
   const editorInitial =
-    editableTex &&
+    editableLatex &&
     state.status === "ready" &&
     state.data.kind === "text" &&
     state.data.size <= EDITOR_WRITE_LIMIT
@@ -377,6 +382,8 @@ export function FilePreviewPane(props: {
             {...(props.editor?.onQuote === undefined ? {} : { onQuote: props.editor.onQuote })}
             reveal={props.editor?.reveal ?? null}
             {...(props.editor?.cite === undefined ? {} : { cite: props.editor.cite })}
+            latexIndex={props.editor?.latexIndex ?? null}
+            diagnostics={props.editor?.diagnostics ?? null}
           />
         ) : sentImage === undefined ? (
           <PreviewBody

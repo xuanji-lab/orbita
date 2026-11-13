@@ -1,6 +1,6 @@
 /**
  * 引用补全的**纯逻辑**（`node --test` 覆盖）：光标处是不是 `\cite{…}`、已经输入了什么、
- * 候选怎么过滤与怎么显示。CodeMirror 的接线在 cite-completion.ts，那一层只负责把这里
+ * 候选怎么过滤与怎么显示。CodeMirror 的接线在 latex-completion.ts，那一层只负责把这里
  * 的结论换成 `Completion` 对象。
  *
  * 支持的命令是**显式名单**，不是 `\cite.*` 正则：`\citeindextrue`、`\defcitealias`
