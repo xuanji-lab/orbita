@@ -3245,11 +3245,11 @@ export const en = {
             body: "The **main** model is the one you pick in the message box and does the real work; **sub-sessions** use theirs for helpers it sends out; **chores** — naming tasks, wrap-up scans — go to a small fast model.",
             notes: ["Chore model: Settings › General.", "Sub-session model: left alone, it follows the main one."],
           },
-          import: {
-            name: "Import old chats",
-            title: "Bring your old conversations along",
-            body: "Used Proma, Claude Code or Kimi? Settings › **Import** finds their chat history; tick what you want and carry on where you left off.",
-            notes: ["It scans first and lists what it found.", "Import leaves the original files untouched."],
+          sources: {
+            name: "Chats in other tools",
+            title: "Read chats from other tools where they are",
+            body: "Used Claude Code, Codex, Kimi or Proma? Ask in a chat — “pick up my last Claude Code session” — and it reads that history in place and carries on here. Nothing is copied in; Settings › **External sources** lists what it found.",
+            notes: ["Each tool shows how many sessions it found; switch one off and it stops reading it.", "Read-only: the other tools' files are never changed."],
           },
         },
       },

@@ -369,6 +369,26 @@ export const SHOT_BOXES: Readonly<Record<string, Readonly<Record<string, Box>>>>
       "h": 0.07
     }
   },
+  "external-sources": {
+    "list": {
+      "x": 0.299,
+      "y": 0.1467,
+      "w": 0.5986,
+      "h": 0.5911
+    },
+    "toggle": {
+      "x": 0.8663,
+      "y": 0.1611,
+      "w": 0.0194,
+      "h": 0.0267
+    },
+    "readonly": {
+      "x": 0.4017,
+      "y": 0.0844,
+      "w": 0.0347,
+      "h": 0.02
+    }
+  },
   "files": {
     "panel": {
       "x": 0.5722,
@@ -469,26 +489,6 @@ export const SHOT_BOXES: Readonly<Record<string, Readonly<Record<string, Box>>>>
       "y": 0.1711,
       "w": 0.5563,
       "h": 0.1778
-    }
-  },
-  "migration": {
-    "scan": {
-      "x": 0.8837,
-      "y": 0.08,
-      "w": 0.0486,
-      "h": 0.0311
-    },
-    "readonly": {
-      "x": 0.2892,
-      "y": 0.0856,
-      "w": 0.0347,
-      "h": 0.02
-    },
-    "importBtn": {
-      "x": 0.8806,
-      "y": 0.9356,
-      "w": 0.0556,
-      "h": 0.0356
     }
   },
   "pdf-cite": {
