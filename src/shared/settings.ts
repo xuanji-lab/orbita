@@ -180,6 +180,9 @@ export interface UsagePetPref {
 /** 过程显示的两种形态，见 AppSettings.processView */
 export type ProcessView = "turn" | "steps";
 
+/** 后台任务条的两种密度，见 AppSettings.backgroundStrip */
+export type BackgroundStripStyle = "summary" | "rows";
+
 export interface AppSettings {
   theme: ThemePreference;
   /**
@@ -235,6 +238,13 @@ export interface AppSettings {
    * 其余值丢掉。
    */
   processView?: ProcessView;
+  /**
+   * 对话输入框上方「后台任务条」的密度（2026-11-13）。**缺席 = "summary"**：
+   * - "summary"：汇总条，一行——「后台 2 项在跑 · 1 项等你」加最多三项的饼 + 名字 + 当前那一步；
+   * - "rows"：分行条，每项一行（饼、名字、当前那一步、已跑多久），最多 4 行，多的折成「还有 N 项」。
+   * 结构与交互只有一套，两种只差密度；其余值丢掉。
+   */
+  backgroundStrip?: BackgroundStripStyle;
   /**
    * 自动化：**有任务在跑时阻止系统睡眠**。缺席 = 关。开着时主进程只在
    * 有自动化运行**正在执行**期间用 Electron 的 powerSaveBlocker（`prevent-app-suspension`）
@@ -579,6 +589,7 @@ export function parseSettings(raw: unknown): AppSettings {
     collapsePastedText?: unknown;
     completionSound?: unknown;
     processView?: unknown;
+    backgroundStrip?: unknown;
     automationKeepAwake?: unknown;
     onboardingSeen?: unknown;
     docPaper?: unknown;
@@ -664,6 +675,9 @@ export function parseSettings(raw: unknown): AppSettings {
       : {}),
     ...(record.processView === "turn" || record.processView === "steps"
       ? { processView: record.processView }
+      : {}),
+    ...(record.backgroundStrip === "summary" || record.backgroundStrip === "rows"
+      ? { backgroundStrip: record.backgroundStrip }
       : {}),
     // 同上：非布尔丢掉，缺席 = 响
     ...(typeof record.completionSound === "boolean"
