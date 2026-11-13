@@ -48,6 +48,8 @@ const { positionals, values: opt } = parseArgs({
     cdp: { type: "string", default: "39350" },
     dev: { type: "string", default: "5350" },
     from: { type: "string" },
+    // 逗号分隔的幕 id：drive 时跳过（例如 plugin：与第 7 章无关，要 25 分钟）；给了就不跑收尾（自动化第一次真跑）
+    skip: { type: "string" },
   },
 });
 const mode = positionals[0];
@@ -75,6 +77,8 @@ function seedFiles() {
   const pdf = join(workspaceDir, "papers", "UrbanGPT-2403.00813.pdf");
   // 下载失败（没网 / arXiv 不通）不拦整个灌数据：只有「读论文」那几章要 PDF，文档与演示章用不着
   if (!existsSync(pdf)) {
+    // papers/ 不在 PROJECT_FILES 里：不先建目录，curl -o 写不进去，PDF 永远「没下下来」
+    mkdirSync(dirname(pdf), { recursive: true });
     try {
       execFileSync("curl", ["-sfL", "-m", "120", "-o", pdf, "https://arxiv.org/pdf/2403.00813"]);
     } catch {
@@ -138,7 +142,9 @@ async function drive(screenplay = SCREENPLAY, { finish = true } = {}) {
   await cdp.evaluate("location.reload(), 1");
   await sleep(4000);
   const start = screenplay.findIndex((scene) => scene.id === (opt.from ?? screenplay[0].id));
+  const skipped = new Set((opt.skip ?? "").split(",").filter(Boolean));
   for (const scene of screenplay.slice(Math.max(0, start))) {
+    if (skipped.has(scene.id)) continue;
     step(`第 ${scene.id} 幕：${scene.prompt.slice(0, 30)}…`);
     await cdp.evaluate(`[...document.querySelectorAll(".right-rail button[aria-pressed=true]")].forEach((b) => b.click()), 1`);
     // 文档 / 演示文稿面板开着时左栏会收起；等面板收回、左栏回来再找「新建任务」
@@ -163,11 +169,18 @@ async function drive(screenplay = SCREENPLAY, { finish = true } = {}) {
       await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "End", code: "End", modifiers: 4 });
     }
     await cdp.send("Input.insertText", { text: scene.prompt });
-    await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
-    await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter" });
+    // 发送：Enter 偶发没发出去（输入框里留着字，这一幕就白等了）——发完校验输入框已清空，没清空就重发，最多三次
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await sleep(500);
+      await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
+      await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+      await sleep(1500);
+      if ((await cdp.evaluate(`document.querySelector("textarea.composer-input")?.value ?? ""`)) === "") break;
+      console.log(`  （第 ${attempt} 次 Enter 没发出去，重发）`);
+    }
     if (scene.wait !== false) await idle((scene.minutes ?? 12) * 60_000);
   }
-  if (!finish) {
+  if (!finish || skipped.size > 0) {
     cdp.close();
     console.log("✔ 剧本跑完。");
     return;
