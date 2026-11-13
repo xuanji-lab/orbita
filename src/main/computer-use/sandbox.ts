@@ -44,7 +44,7 @@ import {
   type SandboxStatus,
 } from "../../shared/computer-use.ts";
 import { writeTextAtomic } from "../atomic-write.ts";
-import { probe as probeCapability } from "./capability.ts";
+import { platformGuidance, probe as probeCapability } from "./capability.ts";
 import {
   fetchGuestScreenshot,
   fetchGuestShot,
@@ -484,9 +484,9 @@ export class SandboxController {
   async start(): Promise<ComputerUseStartResult> {
     // 平台不对时这是第一个该报的事：先报平台，再谈文件存在性——macOS/Linux 上报
     // 「先运行 bun run build:bridge」是误导（桥编不了，编了也没沙箱可跑）。
-    // 文案与 probe 指引的平台那条一致（主进程文案 i18n 留给后续 PR）。
+    // 文案与 probe 指引读同一份（platformGuidance）：macOS 上要告诉用户浏览器档照常能用。
     if ((this.deps.platform ?? process.platform) !== "win32") {
-      return { ok: false, error: "电脑使用沙箱目前只在 Windows 上可用。" };
+      return { ok: false, error: platformGuidance(this.deps.platform ?? process.platform) };
     }
     if (this.state === "starting") return { ok: false, error: "沙箱已经在启动中" };
     if (this.state === "running") return { ok: false, error: "沙箱已经在运行" };

@@ -1134,6 +1134,24 @@ export const en = {
     probeReady: "Sandbox available",
     probeNotReady: "Not ready — see the steps below",
     probeFailed: "Couldn't run the check",
+    /** 隔离档位（IsolationTier）：只回答「这台机器现在能到哪一档」，到不了更高的原因在 guidance */
+    isolationTier: "Isolation level",
+    isolationTierInfo:
+      "How far this machine can go. Browser: web automation in the built-in browser — every platform has it. Windows Sandbox: mouse, keyboard and the browser inside the sandbox — needs Windows Pro / Enterprise / Education with Windows Sandbox enabled and virtualisation on. The next level, a Linux microVM, is still on the roadmap.",
+    tierFallback: "Why it can't go higher is in the steps above",
+    tiers: {
+      l1: "L1 · Browser",
+      l2: "L2 · Windows Sandbox",
+    },
+    /** WSL2 只是能力信号：所有发行版共享同一个轻量虚拟机，不是一个隔离档 */
+    wsl2: "WSL2",
+    wsl2Info:
+      "A capability signal, not an isolation boundary: every WSL2 distro shares one lightweight VM, so it isn't walled off from your Windows the way the sandbox is. It doesn't count as a level and doesn't change the one above.",
+    wsl2States: {
+      available: "Available",
+      unavailable: "Not installed",
+      unknown: "Couldn't tell",
+    },
     sandboxGroup: "Sandbox",
     sandboxState: "State",
     /** 沙箱出网开关（.wsb 的 Networking）。info 是可悬停的完整解释，below 是常驻的生效时机—— */

@@ -5,8 +5,11 @@ import {
   featureStateFromExe,
   parseHypervisorPresent,
   parseRegEditionId,
+  platformGuidance,
   probe,
   windowsSandboxExePath,
+  windowsWslExePath,
+  WSL_PROBE_ARGS,
   type RunCommand,
 } from "./capability.ts";
 
@@ -16,6 +19,43 @@ HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion
     EditionID    REG_SZ    Professional
 
 `;
+
+const REG_HOME = "    EditionID    REG_SZ    Core\n";
+
+/**
+ * 拼一个假的 run：按命令名回输出，给 undefined 就抛（模拟命令不在 / 超时 / 非 0 退出）。
+ * 每条命令都记进 calls——测试靠它断言「哪些命令跑了、跑了几次、参数对不对」。
+ */
+function makeRun(
+  outputs: { reg?: string; hypervisor?: string; wsl?: string } = {},
+  calls: Array<{ command: string; args: string[] }> = [],
+): RunCommand {
+  return async (command, args) => {
+    calls.push({ command, args });
+    if (command === "reg") {
+      if (outputs.reg === undefined) throw new Error("reg 失败");
+      return { stdout: outputs.reg, stderr: "" };
+    }
+    if (command === "powershell") {
+      if (outputs.hypervisor === undefined) throw new Error("PowerShell 不在");
+      return { stdout: outputs.hypervisor, stderr: "" };
+    }
+    if (command === "wsl") {
+      if (outputs.wsl === undefined) throw new Error("wsl -l -v 没跑成");
+      return { stdout: outputs.wsl, stderr: "" };
+    }
+    throw new Error(`测试没预料到的命令：${command}`);
+  };
+}
+
+/** 两个系统件的存在性（默认 pro 机器：沙箱 exe 在、wsl.exe 也在） */
+function makeExeExists(found: { sandbox: boolean; wsl: boolean }): (path: string) => boolean {
+  return (path) => {
+    if (path.endsWith("WindowsSandbox.exe")) return found.sandbox;
+    if (path.endsWith("wsl.exe")) return found.wsl;
+    return false;
+  };
+}
 
 describe("能力探测解析", () => {
   test("parseRegEditionId：从 reg 输出里抠 EditionID；没有就 null", () => {
@@ -42,59 +82,9 @@ describe("能力探测解析", () => {
     assert.equal(featureStateFromExe(false), "disabled");
   });
 
-  test("windowsSandboxExePath：默认走 SystemRoot，可注入", () => {
+  test("两个系统件路径：默认走 SystemRoot，可注入（win32 分隔符，任何平台拼出来一致）", () => {
     assert.ok(windowsSandboxExePath("C:\\Windows").endsWith("System32\\WindowsSandbox.exe"));
-  });
-
-  test("probe：全过 → ready，无指引，两条命令各跑一次（不跑 DISM——非提权必 740）", async () => {
-    const calls: Array<{ command: string; args: string[] }> = [];
-    const run: RunCommand = async (command, args) => {
-      calls.push({ command, args });
-      return { stdout: command === "powershell" ? "True" : REG_PRO, stderr: "" };
-    };
-    const result = await probe({ platform: "win32", run, exeExists: () => true, systemRoot: "C:\\Windows" });
-    assert.equal(result.ready, true);
-    assert.equal(result.guidance, null);
-    assert.deepEqual(result.edition, "pro");
-    assert.deepEqual(result.featureState, "enabled");
-    assert.equal(result.sandboxExeFound, true);
-    assert.deepEqual(result.hypervisorState, "present");
-    assert.deepEqual(
-      calls.map((call) => call.command),
-      ["reg", "powershell"],
-    );
-    // 虚拟化查询用 Get-CimInstance（不用 wmic：24H2+ 已可选移除）
-    assert.ok(calls[1]?.args.join(" ").includes("Get-CimInstance Win32_ComputerSystem"), calls[1]?.args.join(" "));
-  });
-
-  test("probe：BIOS 关了虚拟化 → 不 ready，指引指回 BIOS（审查意见 B：别让 start 才失败）", async () => {
-    const result = await probe({
-      platform: "win32",
-      run: async (command) => ({ stdout: command === "powershell" ? "False" : REG_PRO, stderr: "" }),
-      exeExists: () => true,
-    });
-    // 其它三项全过——只有虚拟化把它拦下来，这正是这一项存在的理由
-    assert.equal(result.edition, "pro");
-    assert.equal(result.featureState, "enabled");
-    assert.equal(result.sandboxExeFound, true);
-    assert.equal(result.hypervisorState, "absent");
-    assert.equal(result.ready, false);
-    assert.ok(result.guidance?.includes("BIOS"), result.guidance ?? "");
-    assert.ok(result.guidance?.includes("虚拟化"), result.guidance ?? "");
-  });
-
-  test("probe：虚拟化查不成（PowerShell 不在 / 超时）→ unknown，**不阻塞**，其余三项说了算", async () => {
-    const result = await probe({
-      platform: "win32",
-      run: async (command) => {
-        if (command === "powershell") throw new Error("PowerShell 不在");
-        return { stdout: REG_PRO, stderr: "" };
-      },
-      exeExists: () => true,
-    });
-    assert.equal(result.hypervisorState, "unknown");
-    assert.equal(result.ready, true, "少一条信号不能把能用的机器判死");
-    assert.equal(result.guidance, null);
+    assert.equal(windowsWslExePath("C:\\Windows"), "C:\\Windows\\System32\\wsl.exe");
   });
 
   test("parseHypervisorPresent：True/False 认（大小写、空白），其余一律 unknown", () => {
@@ -107,32 +97,67 @@ describe("能力探测解析", () => {
     assert.equal(parseHypervisorPresent("1"), "unknown");
   });
 
-  test("probe：家庭版 → 不 ready，指引提到家庭版、且不给「去开功能」的误导", async () => {
+  test("platformGuidance：macOS 给浏览器档的出路（真话：browser_* 可用，sandbox_* 要等 L3）", () => {
+    const mac = platformGuidance("darwin");
+    assert.ok(mac.includes("macOS"), mac);
+    // 「不是没实现，是平台不提供」这层意思必须说出来，否则 macOS 用户会一直等
+    assert.ok(mac.includes("不是 Orbita 还没做"), mac);
+    assert.ok(mac.includes("browser_navigate"), mac);
+    assert.ok(mac.includes("L3"), mac);
+    // 不能把 sandbox_* 说成 macOS 能用：它每条命令都走 Windows 沙箱里的 guest 桥
+    assert.ok(!mac.includes("sandbox_* 可用"), mac);
+    // Linux 等其它平台：短一句，同样说明只在 Windows 上提供
+    const linux = platformGuidance("linux");
+    assert.ok(linux.includes("只在 Windows"), linux);
+  });
+});
+
+describe("能力探测 · 档位判定", () => {
+  test("pro: Pro + 沙箱已启用 + 虚拟化在 + WSL 能跑 → ready，L2", async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
     const result = await probe({
       platform: "win32",
-      run: async () => ({ stdout: "    EditionID    REG_SZ    Core\n", stderr: "" }),
-      exeExists: () => false,
+      run: makeRun({ reg: REG_PRO, hypervisor: "True", wsl: "  NAME  STATE  VERSION\n* Ubuntu Running 2\n" }, calls),
+      exeExists: makeExeExists({ sandbox: true, wsl: true }),
+      systemRoot: "C:\\Windows",
+    });
+    assert.equal(result.ready, true);
+    assert.equal(result.guidance, null);
+    assert.equal(result.edition, "pro");
+    assert.equal(result.featureState, "enabled");
+    assert.equal(result.sandboxExeFound, true);
+    assert.equal(result.hypervisorState, "present");
+    assert.equal(result.wsl2, "available");
+    assert.equal(result.isolationTier, "l2");
+    // 三条命令各跑一次（并行发，调用顺序仍是确定的：按创建顺序）
+    assert.deepEqual(
+      calls.map((call) => call.command),
+      ["reg", "powershell", "wsl"],
+    );
+    // 虚拟化查询用 Get-CimInstance（不用 wmic：24H2+ 已可选移除）
+    assert.ok(calls[1]?.args.join(" ").includes("Get-CimInstance Win32_ComputerSystem"), calls[1]?.args.join(" "));
+    // WSL 只探「跑不跑得动」，不解析输出（很多版本的 -l -v 是 UTF-16LE）
+    assert.deepEqual(calls[2]?.args, [...WSL_PROBE_ARGS]);
+  });
+
+  test("home: 家庭版 → 只到 L1，指引说清没有沙箱、且不给「去开功能」的误导", async () => {
+    const result = await probe({
+      platform: "win32",
+      run: makeRun({ reg: REG_HOME, hypervisor: "True", wsl: "x" }),
+      exeExists: makeExeExists({ sandbox: false, wsl: true }),
     });
     assert.equal(result.edition, "home");
     assert.equal(result.editionOk, false);
     assert.equal(result.ready, false);
-    assert.ok(result.guidance?.includes("家庭版"));
-    assert.ok(!result.guidance?.includes("optionalfeatures"));
+    assert.equal(result.isolationTier, "l1");
+    assert.ok(result.guidance?.includes("家庭版"), result.guidance ?? "");
+    // 家庭版开不了沙箱：别把用户送去「启用或关闭 Windows 功能」白折腾
+    assert.ok(!result.guidance?.includes("optionalfeatures"), result.guidance ?? "");
+    // 也不该贴 Hyper-V 冲突警告——那条只跟在「去启用」后面
+    assert.ok(!result.guidance?.includes("Hyper-V"), result.guidance ?? "");
   });
 
-  test("probe：exe 不在（功能未启用）→ disabled + 指引给 optionalfeatures 路径并明说不会代跑提权命令", async () => {
-    const result = await probe({
-      platform: "win32",
-      run: async () => ({ stdout: REG_PRO, stderr: "" }),
-      exeExists: () => false,
-    });
-    assert.equal(result.ready, false);
-    assert.equal(result.featureState, "disabled");
-    assert.ok(result.guidance?.includes("optionalfeatures.exe"));
-    assert.ok(result.guidance?.includes("不会替你执行"));
-  });
-
-  test("probe：非 Windows → 不跑任何命令，ready false", async () => {
+  test("darwin: macOS → L1 + 正确文案，一条命令都不跑", async () => {
     let ran = false;
     const result = await probe({
       platform: "darwin",
@@ -146,16 +171,112 @@ describe("能力探测解析", () => {
     assert.equal(result.ready, false);
     assert.equal(result.platformOk, false);
     assert.equal(result.hypervisorState, "unknown");
-    // 平台不对时指引只给平台那一条：reg 根本没跑，「读不到版本档位」只会稀释信号
-    assert.deepEqual(result.guidance?.split("\n"), ["电脑使用沙箱目前只在 Windows 上可用。"]);
+    assert.equal(result.wsl2, "unavailable");
+    // 浏览器档（browser_*）在 macOS 上可用，所以下限仍然是 L1，不是「什么都不能用」
+    assert.equal(result.isolationTier, "l1");
+    // 平台不对时指引只有一条（reg 根本没跑，「读不到版本档位」只会稀释信号）
+    const lines = (result.guidance ?? "").split("\n");
+    assert.equal(lines.length, 1, result.guidance ?? "");
+    assert.equal(lines[0], platformGuidance("darwin"));
+    assert.ok(result.guidance?.includes("browser_navigate"), result.guidance ?? "");
+  });
+
+  test("wsl: 探测失败不误判——wsl2 归 unknown，其余三项说了算，仍是 L2", async () => {
+    const result = await probe({
+      platform: "win32",
+      run: makeRun({ reg: REG_PRO, hypervisor: "True" }), // wsl 缺省 → 抛
+      exeExists: makeExeExists({ sandbox: true, wsl: true }),
+    });
+    assert.equal(result.wsl2, "unknown");
+    assert.equal(result.ready, true, "WSL2 不是隔离边界，它坏了不该把 L2 判死");
+    assert.equal(result.isolationTier, "l2");
+    assert.equal(result.guidance, null);
+  });
+
+  test("wsl: exe 不在 → unavailable，且不跑 wsl 命令（没装的机器不白等一条超时）", async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const result = await probe({
+      platform: "win32",
+      run: makeRun({ reg: REG_PRO, hypervisor: "True", wsl: "x" }, calls),
+      exeExists: makeExeExists({ sandbox: true, wsl: false }),
+    });
+    assert.equal(result.wsl2, "unavailable");
+    assert.deepEqual(
+      calls.map((call) => call.command),
+      ["reg", "powershell"],
+    );
+  });
+
+  test("edition 读不到 ≠ Home：unknown、不 ready、也不给「家庭版」的错话", async () => {
+    const result = await probe({
+      platform: "win32",
+      run: makeRun({ hypervisor: "True", wsl: "x" }), // reg 缺省 → 抛
+      exeExists: makeExeExists({ sandbox: true, wsl: true }),
+    });
+    assert.equal(result.edition, "unknown");
+    assert.equal(result.editionOk, false);
+    assert.equal(result.ready, false);
+    assert.equal(result.isolationTier, "l1");
+    assert.ok(result.guidance?.includes("读不到"), result.guidance ?? "");
+    assert.ok(!result.guidance?.includes("家庭版"), result.guidance ?? "");
+    // 版本读不到但 exe 在：不再劝用户去开功能（它已经开了）
+    assert.ok(!result.guidance?.includes("optionalfeatures"), result.guidance ?? "");
+  });
+
+  test("probe：BIOS 关了虚拟化 → 不 ready、L1，指引指回 BIOS（审查意见 B：别让 start 才失败）", async () => {
+    const result = await probe({
+      platform: "win32",
+      run: makeRun({ reg: REG_PRO, hypervisor: "False", wsl: "x" }),
+      exeExists: makeExeExists({ sandbox: true, wsl: true }),
+    });
+    // 其它三项全过——只有虚拟化把它拦下来，这正是这一项存在的理由
+    assert.equal(result.edition, "pro");
+    assert.equal(result.featureState, "enabled");
+    assert.equal(result.sandboxExeFound, true);
+    assert.equal(result.hypervisorState, "absent");
+    assert.equal(result.ready, false);
+    assert.equal(result.isolationTier, "l1");
+    assert.ok(result.guidance?.includes("BIOS"), result.guidance ?? "");
+    assert.ok(result.guidance?.includes("虚拟化"), result.guidance ?? "");
+  });
+
+  test("probe：虚拟化查不成（PowerShell 不在 / 超时）→ unknown，**不阻塞**，其余三项说了算", async () => {
+    const result = await probe({
+      platform: "win32",
+      run: makeRun({ reg: REG_PRO, wsl: "x" }), // hypervisor 缺省 → 抛
+      exeExists: makeExeExists({ sandbox: true, wsl: true }),
+    });
+    assert.equal(result.hypervisorState, "unknown");
+    assert.equal(result.ready, true, "少一条信号不能把能用的机器判死");
+    assert.equal(result.guidance, null);
+  });
+
+  test("probe：exe 不在（功能未启用）→ L1 + 指引给 optionalfeatures 路径、明说不代跑提权命令、并贴上 Hyper-V 冲突警告", async () => {
+    const result = await probe({
+      platform: "win32",
+      run: makeRun({ reg: REG_PRO, hypervisor: "True", wsl: "x" }),
+      exeExists: makeExeExists({ sandbox: false, wsl: true }),
+    });
+    assert.equal(result.ready, false);
+    assert.equal(result.featureState, "disabled");
+    assert.equal(result.isolationTier, "l1");
+    assert.ok(result.guidance?.includes("optionalfeatures.exe"));
+    assert.ok(result.guidance?.includes("不会替你执行"));
+    // 安装器那句提示的另一份：启用沙箱会打开 Hyper-V，第三方虚拟机会受影响
+    assert.ok(result.guidance?.includes("Hyper-V"), result.guidance ?? "");
+    assert.ok(result.guidance?.includes("VMware"), result.guidance ?? "");
+    assert.ok(result.guidance?.includes("VirtualBox"), result.guidance ?? "");
+    // 警告必须排在「去启用」那条之后（用户读到这里就准备动手了）
+    const lines = (result.guidance ?? "").split("\n");
+    const enableAt = lines.findIndex((line) => line.includes("optionalfeatures"));
+    const warnAt = lines.findIndex((line) => line.includes("Hyper-V"));
+    assert.ok(enableAt >= 0 && warnAt > enableAt, result.guidance ?? "");
   });
 
   test("probe：reg 失败 + exe 不在 → unknown/disabled + 指引，绝不抛", async () => {
     const result = await probe({
       platform: "win32",
-      run: async () => {
-        throw new Error("命令不存在");
-      },
+      run: makeRun({}), // 三条全失败
       exeExists: () => false,
     });
     assert.equal(result.ready, false);
@@ -163,6 +284,8 @@ describe("能力探测解析", () => {
     assert.equal(result.featureState, "disabled");
     assert.equal(result.sandboxExeFound, false);
     assert.equal(result.hypervisorState, "unknown");
+    assert.equal(result.wsl2, "unavailable");
+    assert.equal(result.isolationTier, "l1");
     assert.ok(result.guidance !== null && result.guidance.length > 0);
   });
 });

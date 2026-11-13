@@ -1048,6 +1048,25 @@ export const zh: Messages = {
     probeReady: "沙箱可用",
     probeNotReady: "还未就绪，按下方的步骤手动开启",
     probeFailed: "检测没跑成",
+    // 隔离档位（shared/computer-use.ts 的 IsolationTier）。到不了更高档的原因就是 probe 的
+    // guidance——同一张卡里逐条列在探针行下面，这里只给徽标与一句指路
+    isolationTier: "隔离档位",
+    isolationTierInfo:
+      "这台机器现在能到哪一档。L1 浏览器档：内置浏览器里的网页自动化，所有平台都有。L2 Windows 沙箱档：沙箱里的鼠标键盘与沙箱内浏览器，需要 Windows 专业版 / 企业版 / 教育版、启用 Windows 沙箱、并开着虚拟化。L3（Linux 微虚拟机）还在路线图上。",
+    tierFallback: "到不了更高档，原因见上方几条",
+    tiers: {
+      l1: "L1 浏览器档",
+      l2: "L2 Windows 沙箱档",
+    },
+    // WSL2 只是能力信号：所有发行版共享同一个轻量虚拟机，不是一个隔离档
+    wsl2: "WSL2",
+    wsl2Info:
+      "只是一个能力信号，不是隔离边界：WSL2 的所有发行版共享同一个轻量虚拟机，里面的东西与你的 Windows 并没有真正隔开，所以它不算一档隔离，也不影响上面的档位。",
+    wsl2States: {
+      available: "可用",
+      unavailable: "没装",
+      unknown: "查不到",
+    },
     sandboxGroup: "沙箱",
     sandboxState: "状态",
     // info 是可悬停的完整解释，below 是常驻的生效时机：运行中点了「关」而沙箱还在联网，

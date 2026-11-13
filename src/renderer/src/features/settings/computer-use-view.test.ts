@@ -32,6 +32,8 @@ function probeResult(overrides: Partial<ComputerUseProbeResult> = {}): ComputerU
     featureState: "enabled",
     sandboxExeFound: true,
     hypervisorState: "present",
+    isolationTier: "l2",
+    wsl2: "available",
     ready: true,
     guidance: null,
     ...overrides,
