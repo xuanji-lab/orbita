@@ -62,7 +62,8 @@ import {
   parseClaudeDesktopSession,
   type ClaudeDesktopSession,
 } from "./claude-code.ts";
-import { kimiBlobRefs, parseKimiSessionState, parseKimiWire } from "./kimi-code.ts";
+import { kimiBlobRefs, parseKimiSessionState, parseKimiWire, readKimiWorkspaces } from "./kimi-code.ts";
+import { branchEntries, entriesToRecords } from "./pi-book.ts";
 import { parseCodexRollout } from "./codex.ts";
 import { onlyWrittenMessage } from "./greeting-only.ts";
 import {
@@ -709,10 +710,6 @@ export function parsePromaWorkspaces(raw: string): PromaWorkspaceEntry[] {
 // pi entries → orbita SessionRecord[]
 // ---------------------------------------------------------------------------
 
-type UserContent = Extract<TranscriptItem, { role: "user" }>["content"][number];
-type AssistantContent = AssistantTranscriptItem["content"][number];
-type ToolContent = ToolTranscriptItem["content"][number];
-
 /** entry.message 的最小结构（pi 文件里它就是 pi-ai 的 Message，但按未知输入防御）。 */
 function asRecord(value: unknown): Record<string, unknown> | null {
   return isRecord(value) ? value : null;
@@ -725,220 +722,6 @@ function messageTimestamp(entry: SessionMessageEntry, message: Record<string, un
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-/** 未知形状（未来 pi 版本的新内容类型）原样丢弃，不猜——坏一条好过错一条。 */
-function toUserBlocks(content: unknown): UserContent[] {
-  const blocks: UserContent[] = [];
-  if (typeof content === "string") {
-    if (content !== "") blocks.push({ type: "text", text: content });
-    return blocks;
-  }
-  if (!Array.isArray(content)) return blocks;
-  for (const block of content) {
-    const record = asRecord(block);
-    if (record === null) continue;
-    if (record["type"] === "text" && typeof record["text"] === "string") {
-      blocks.push({ type: "text", text: record["text"] });
-    } else if (
-      record["type"] === "image" &&
-      typeof record["data"] === "string" &&
-      typeof record["mimeType"] === "string"
-    ) {
-      blocks.push({ type: "image", data: record["data"], mimeType: record["mimeType"] });
-    }
-  }
-  return blocks;
-}
-
-function toAssistantBlocks(content: unknown): AssistantContent[] {
-  const blocks: AssistantContent[] = [];
-  if (!Array.isArray(content)) return blocks;
-  for (const block of content) {
-    const record = asRecord(block);
-    if (record === null) continue;
-    if (record["type"] === "text" && typeof record["text"] === "string") {
-      blocks.push({ type: "text", text: record["text"] });
-    } else if (record["type"] === "thinking" && typeof record["thinking"] === "string") {
-      const redacted = record["redacted"];
-      blocks.push(
-        typeof redacted === "boolean"
-          ? { type: "thinking", thinking: record["thinking"], redacted }
-          : { type: "thinking", thinking: record["thinking"] },
-      );
-    } else if (
-      record["type"] === "toolCall" &&
-      typeof record["id"] === "string" &&
-      typeof record["name"] === "string"
-    ) {
-      blocks.push({
-        type: "toolCall",
-        toolCallId: record["id"],
-        toolName: record["name"],
-        // 入参本来就是模型产出的 JSON（pi-ai 上游声明 Record<string, any>），
-        // 与 transcript-adapter 的 toAssistantContent 同一个形合点
-        input: record["arguments"] as Extract<AssistantContent, { type: "toolCall" }>["input"],
-      });
-    }
-  }
-  return blocks;
-}
-
-function toToolBlocks(content: unknown): ToolContent[] {
-  const blocks: ToolContent[] = [];
-  if (!Array.isArray(content)) return blocks;
-  for (const block of content) {
-    const record = asRecord(block);
-    if (record === null) continue;
-    if (record["type"] === "text" && typeof record["text"] === "string") {
-      blocks.push({ type: "text", text: record["text"] });
-    } else if (
-      record["type"] === "image" &&
-      typeof record["data"] === "string" &&
-      typeof record["mimeType"] === "string"
-    ) {
-      blocks.push({ type: "image", data: record["data"], mimeType: record["mimeType"] });
-    }
-  }
-  return blocks;
-}
-
-/**
- * assistant 条目的完整构造（含终态判定），与 transcript-adapter 的 finalAssistantItem
- * 同一套规则：error/aborted 各自成态；协议只认 length/toolUse 两个 stopReason，
- * 其余落 "stop"。各写一份是因为输入形状不同（离线 entry vs 实时事件），
- * 规则保持一致由快照测试锚定。返回具体分支的字面量类型，不做 spread 拼接。
- */
-function assistantRecord(
-  entry: SessionMessageEntry,
-  message: Record<string, unknown>,
-  timestamp: number,
-): AssistantTranscriptItem {
-  const base = {
-    id: entry.id,
-    role: "assistant" as const,
-    content: toAssistantBlocks(message["content"]),
-    model: {
-      provider: optionalString(message["provider"]) ?? "unknown",
-      id: optionalString(message["model"]) ?? "unknown",
-    },
-    ...(asRecord(message["usage"]) === null ? null : { usage: message["usage"] as Usage }),
-    timestamp,
-  };
-  const stopReason = message["stopReason"];
-  if (stopReason === "error") return { ...base, status: "error" as const, stopReason: "error" as const };
-  if (stopReason === "aborted") return { ...base, status: "aborted" as const, stopReason: "aborted" as const };
-  // pi 的 StopReason 比协议宽（还有 pending / deferred）；只有 length / toolUse
-  // 协议认，其余落回 "stop"——它表示「就这么结束了」，是最不失真的兜底
-  if (stopReason === "length" || stopReason === "toolUse") {
-    return { ...base, status: "complete" as const, stopReason };
-  }
-  return { ...base, status: "complete" as const, stopReason: "stop" as const };
-}
-
-/** 从 assistant 消息的 content 里收 toolCallId → 入参（文件顺序保证先于对应 toolResult）。 */
-function collectToolInputs(content: unknown, into: Map<string, unknown>): void {
-  if (!Array.isArray(content)) return;
-  for (const block of content) {
-    const record = asRecord(block);
-    if (record === null || record["type"] !== "toolCall") continue;
-    const id = optionalString(record["id"]);
-    if (id !== null) into.set(id, record["arguments"]);
-  }
-}
-
-/**
- * 会话当前分支上的全部 entry，按时间顺序：从文件最后一条沿 parentId 走到根再反转——与 pi
- * 自己的 buildSessionPath 同一条规则（它没导出）。Proma 回退重答留下的旧枝不在路径上，
- * 与 Proma 界面显示的一致。
- *
- * **不用 buildContextEntries**：那是发给模型的上下文，压缩过的会话只留压缩点之后的条目。
- * transcript 是给人看的全量历史——orbita 原生会话压缩时 recorder 只是在原位追加一条界碑，
- * 之前的记录都还在。早先导入用了前者，本机 17 条压缩过的会话丢了约 141 条用户消息
- * （例：一条会话 pi 里 14 条用户消息，transcript 只剩 2 条）。
- *
- * 成环（只可能来自手改的文件）走到重复节点即停，不无限展开。
- */
-export function branchEntries(entries: readonly SessionEntry[]): SessionEntry[] {
-  const byId = new Map(entries.map((entry) => [entry.id, entry]));
-  const path: SessionEntry[] = [];
-  const seen = new Set<string>();
-  let current = entries[entries.length - 1];
-  while (current !== undefined && !seen.has(current.id)) {
-    seen.add(current.id);
-    path.push(current);
-    current = current.parentId === null ? undefined : byId.get(current.parentId);
-  }
-  return path.reverse();
-}
-
-/**
- * 当前分支的 entry 列表（branchEntries）→ orbita 的 SessionRecord[]。
- *
- * - message：user / assistant / toolResult 翻译成 TranscriptItem；**空 error 回答不进**
- *   （isEmptyErrorAssistantEntry——与落盘侧、分支对账侧同一个谓词，三处共享）。
- * - compaction → CompactedRecord 界碑，落在它在历史里的原位（tokensAfter pi 不给，缺省——展示时回退）。
- * - model_change / thinking_level_change / custom / label / session_info / branch_summary
- *   不进 transcript：transcript 是渲染投影，不是发给模型的上下文（那是 pi 副本的事，
- *   续聊时 runtime 从副本重建）。branch_summary 在本机 Proma 数据里不存在。
- *
- * toolResult 的 input 必填但 pi 的 toolResult 不带——从**全局前文**的 toolCall 块里
- * 按 toolCallId 找（同一个 id 在分支上出现两次时后者覆盖前者，文件顺序即时间顺序）；
- * 找不到（孤儿结果）落 {}，与「凭空编一个入参」相比空对象更诚实。
- */
-export function entriesToRecords(entries: readonly SessionEntry[]): SessionRecord[] {
-  const records: SessionRecord[] = [];
-  const toolInputs = new Map<string, unknown>();
-  for (const entry of entries) {
-    if (entry.type === "compaction") {
-      records.push({
-        role: "compacted",
-        id: entry.id,
-        summary: entry.summary,
-        tokensBefore: entry.tokensBefore,
-        timestamp: Date.parse(entry.timestamp) || 0,
-      });
-      continue;
-    }
-    if (entry.type !== "message") continue;
-    if (isEmptyErrorAssistantEntry(entry)) continue;
-    const message = asRecord(entry.message);
-    if (message === null) continue;
-    const role = message["role"];
-    const timestamp = messageTimestamp(entry, message);
-
-    if (role === "user") {
-      records.push({
-        id: entry.id,
-        role: "user",
-        content: toUserBlocks(message["content"]),
-        timestamp,
-      });
-      continue;
-    }
-    if (role === "assistant") {
-      collectToolInputs(message["content"], toolInputs);
-      records.push(assistantRecord(entry, message, timestamp));
-      continue;
-    }
-    if (role === "toolResult") {
-      const toolCallId = optionalString(message["toolCallId"]) ?? "";
-      records.push({
-        id: entry.id,
-        role: "tool",
-        toolCallId,
-        toolName: optionalString(message["toolName"]) ?? "unknown",
-        input: (toolInputs.get(toolCallId) ?? {}) as ToolTranscriptItem["input"],
-        content: toToolBlocks(message["content"]),
-        timestamp,
-        ...(message["isError"] === true
-          ? { status: "error" as const, isError: true }
-          : { status: "complete" as const, isError: false }),
-      });
-      continue;
-    }
-    // 未来 pi 版本的新 role：跳过（同未知块策略——坏一条好过错一条）
-  }
-  return records;
-}
 
 // ---------------------------------------------------------------------------
 // 工作区三规则 / 模型映射
@@ -2076,29 +1859,6 @@ export async function scanCodex(
 
 function kimiWireFile(sessionDir: string): string {
   return join(sessionDir, "agents", "main", "wire.jsonl");
-}
-
-/** Kimi Code 的工作区表：工作区 id → root，以及在源里删掉的工作区。读不了 = 都没有。 */
-export async function readKimiWorkspaces(file: string): Promise<{ roots: Map<string, string>; deleted: Set<string> }> {
-  const roots = new Map<string, string>();
-  const deleted = new Set<string>();
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await readFile(file, "utf8"));
-  } catch {
-    return { roots, deleted };
-  }
-  const record = asRecord(parsed);
-  const workspaces = asRecord(record?.["workspaces"]);
-  for (const [id, value] of Object.entries(workspaces ?? {})) {
-    const root = optionalString(asRecord(value)?.["root"]);
-    if (root !== null) roots.set(id, root);
-  }
-  const removed = record?.["deleted_workspace_ids"];
-  if (Array.isArray(removed)) {
-    for (const id of removed) if (typeof id === "string") deleted.add(id);
-  }
-  return { roots, deleted };
 }
 
 /**

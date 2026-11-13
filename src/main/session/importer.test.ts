@@ -22,9 +22,7 @@ import type { ImportPlanItem } from "../../shared/import.ts";
 import { SessionStore } from "./store.ts";
 import { SkillStore } from "../skill/store.ts";
 import {
-  branchEntries,
   compareSignatures,
-  entriesToRecords,
   messageSignature,
   probeClaudeCode,
   probeKimiCode,
@@ -693,99 +691,6 @@ describe("边界：导入与模型解耦", () => {
       [...metas.map((meta) => [meta.modelId, meta.importedModel])].sort(),
       [["glm-5.3", "glm-5.3"], ["unknown", undefined]],
     );
-  });
-});
-
-describe("边界：entries → records 的翻译规则", () => {
-  /** 直接对纯函数喂 entry 数组（不经文件）。 */
-  const entry = (value: unknown): SessionEntry => value as SessionEntry;
-
-  test("空 error 回答不进 transcript（与落盘/分支对账同一谓词）", () => {
-    const records = entriesToRecords([
-      entry({ type: "message", id: "a", parentId: null, timestamp: "t", message: { role: "assistant", content: [], stopReason: "error" } }),
-    ]);
-    assert.equal(records.length, 0);
-  });
-
-  test("带内容的 error 回答保留（status=error）", () => {
-    const records = entriesToRecords([
-      entry({ type: "message", id: "a", parentId: null, timestamp: "t", message: { role: "assistant", content: [{ type: "text", text: "挂了" }], stopReason: "error" } }),
-    ]);
-    assert.equal(records.length, 1);
-    assert.equal(records[0]?.role, "assistant");
-    if (records[0]?.role === "assistant") assert.equal(records[0].status, "error");
-  });
-
-  test("compaction entry → CompactedRecord 界碑", () => {
-    const records = entriesToRecords([
-      entry({ type: "compaction", id: "c1", parentId: null, timestamp: "2026-09-01T00:00:00.000Z", summary: "此前的一切", firstKeptEntryId: "e1", tokensBefore: 12345 }),
-    ]);
-    assert.equal(records.length, 1);
-    assert.equal(records[0]?.role, "compacted");
-    if (records[0]?.role === "compacted") {
-      assert.equal(records[0].summary, "此前的一切");
-      assert.equal(records[0].tokensBefore, 12345);
-    }
-  });
-
-  test("孤儿 toolResult（前文没有对应 toolCall）→ input 落 {}", () => {
-    const records = entriesToRecords([
-      entry({ type: "message", id: "t1", parentId: null, timestamp: "t", message: { role: "toolResult", toolCallId: "ghost", toolName: "read", content: [{ type: "text", text: "…" }], isError: false } }),
-    ]);
-    assert.equal(records.length, 1);
-    assert.equal(records[0]?.role, "tool");
-    if (records[0]?.role === "tool") assert.deepEqual(records[0].input, {});
-  });
-
-  test("未知 role / 未知块 / model_change / thinking_level_change 都不进 transcript", () => {
-    const records = entriesToRecords([
-      entry({ type: "model_change", id: "mc", parentId: null, timestamp: "t", provider: "x", modelId: "y" }),
-      entry({ type: "thinking_level_change", id: "tl", parentId: "mc", timestamp: "t", thinkingLevel: "high" }),
-      entry({ type: "custom", id: "cu", parentId: "tl", timestamp: "t", customType: "x" }),
-      entry({ type: "message", id: "u1", parentId: "cu", timestamp: "t", message: { role: "user", content: [{ type: "sticker", emoji: "x" }], timestamp: 1 } }),
-    ]);
-    // user 消息进来但未知块被丢 → 空内容块
-    assert.equal(records.length, 1);
-    assert.equal(records[0]?.role, "user");
-    if (records[0]?.role === "user") assert.equal(records[0].content.length, 0);
-  });
-
-  test("user 的字符串 content 也翻成 text 块；usage 缺席的 assistant 不带 usage 键", () => {
-    const records = entriesToRecords([
-      entry({ type: "message", id: "u", parentId: null, timestamp: "t", message: { role: "user", content: "纯字符串", timestamp: 1 } }),
-      entry({ type: "message", id: "a", parentId: "u", timestamp: "t", message: { role: "assistant", content: [{ type: "text", text: "答" }], stopReason: "stop" } }),
-    ]);
-    assert.equal(records.length, 2);
-    if (records[0]?.role === "user") assert.deepEqual(records[0].content, [{ type: "text", text: "纯字符串" }]);
-    if (records[1]?.role === "assistant") assert.equal("usage" in records[1], false);
-  });
-
-  test("压缩过的会话：transcript 是全量历史，界碑落在压缩的原位（不是发给模型的压缩上下文）", () => {
-    const entries: SessionEntry[] = [
-      entry({ type: "message", id: "m1", parentId: null, timestamp: "2026-09-01T00:00:01.000Z", message: { role: "user", content: [{ type: "text", text: "压缩前的旧问题" }], timestamp: 1 } }),
-      entry({ type: "compaction", id: "c", parentId: "m1", timestamp: "2026-09-01T00:00:02.000Z", summary: "折叠摘要", firstKeptEntryId: "m2", tokensBefore: 100 }),
-      entry({ type: "message", id: "m2", parentId: "c", timestamp: "2026-09-01T00:00:03.000Z", message: { role: "user", content: [{ type: "text", text: "压缩后的新问题" }], timestamp: 3 } }),
-    ];
-    // 对照：pi 发给模型的上下文里没有 m1
-    assert.deepEqual(buildContextEntries(entries).map((e) => e.id), ["c", "m2"]);
-    const records = entriesToRecords(branchEntries(entries));
-    assert.deepEqual(
-      records.map((record) => record.role),
-      ["user", "compacted", "user"],
-    );
-    const first = records[0];
-    assert.ok(first?.role === "user" && first.content[0]?.type === "text");
-    assert.equal(first.content[0].text, "压缩前的旧问题");
-  });
-
-  test("回退重答：旧枝不在当前分支上，与 Proma 界面一致；成环不死循环", () => {
-    const user = (id: string, parentId: string | null, text: string): SessionEntry =>
-      entry({ type: "message", id, parentId, timestamp: "2026-09-01T00:00:01.000Z", message: { role: "user", content: [{ type: "text", text }], timestamp: 1 } });
-    const rewound = [user("a", null, "一"), user("b", "a", "旧枝"), user("c", "a", "新枝")];
-    assert.deepEqual(branchEntries(rewound).map((e) => e.id), ["a", "c"]);
-    const looped = [user("x", "y", "x"), user("y", "x", "y")];
-    assert.deepEqual(branchEntries(looped).map((e) => e.id), ["x", "y"]);
-    assert.deepEqual(branchEntries([]), []);
   });
 });
 

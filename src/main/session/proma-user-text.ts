@@ -26,7 +26,7 @@
  * 时可读，检索也能按路径命中）。`<quoted_context>` / `<attached_files>` 是用户自己组的内容，
  * 原样当纯文本（同日裁决）。
  */
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { PiBookEntry } from "./pi-book.ts";
 import type { SessionRecord } from "../../shared/session.ts";
 import { parseClaudeRows } from "./claude-legacy.ts";
 
@@ -105,7 +105,7 @@ export function decodePromaMentions(text: string): string {
  * renderTexts = 界面日志的用户原文；null（没有界面日志）或条数对不上 → 全部走兜底。
  */
 export function promaUserTextMap(
-  entries: readonly SessionEntry[],
+  entries: readonly PiBookEntry[],
   renderTexts: readonly string[] | null,
 ): Map<string, string> {
   // 先落成 unknown 再判：pi 1.x 的 ToolResultMessage 是条件类型，直接对 entry.message 收窄会把 role 收成 "toolResult"

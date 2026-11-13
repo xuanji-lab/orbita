@@ -5,16 +5,14 @@
  *
  * - list：stat 全部会话以取最近项，只对入选的最近 10 条读 state 与 wire 头部；
  *   没有标题时从头部取首条用户原文，不为列目录转换全部历史。
- * - load：按稳定 ref 找到源文件后读全文，SessionManager.inMemory 只作 Message →
- *   SessionRecord 的投影，源目录与 orbita 的会话目录都不写。
+ * - load：按稳定 ref 找到源文件后读全文，在内存里投影成 SessionRecord（pi-book.ts 的
+ *   messagesToRecords），源目录与 orbita 的会话目录都不写。
  * - ref：ext:<来源>:<源 wire 绝对路径的 sha256 前 16 位>。不依赖用户去源应用复制
  *   session id，也不落一张会过期的「ref → 路径」映射表。
  */
 import { createHash } from "node:crypto";
 import { open, readFile, readdir, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
-import type { Message } from "@earendil-works/pi-ai";
 import {
   deriveSessionTitle,
   UNASSIGNED_MODEL_ID,
@@ -22,9 +20,8 @@ import {
   type SessionMeta,
   type SessionRecord,
 } from "../../shared/session.ts";
-import { branchEntries, entriesToRecords, readKimiWorkspaces } from "./importer.ts";
-import { kimiBlobRefs, parseKimiSessionState, parseKimiWire, type KimiSessionState } from "./kimi-code.ts";
-import { withUserTexts } from "./proma-user-text.ts";
+import { kimiBlobRefs, parseKimiSessionState, parseKimiWire, readKimiWorkspaces, type KimiSessionState } from "./kimi-code.ts";
+import { messagesToRecords } from "./pi-book.ts";
 import { isNotFound } from "../fs-errors.ts";
 
 export type ExternalSessionSource = "kimi-code" | "kimi-work";
@@ -227,26 +224,6 @@ async function summarize(candidate: SessionCandidate, defaultCwd: string): Promi
   };
 }
 
-/** Message[] → read_task 的记录，全在内存里；与导入器的用户原文口径一致。 */
-function recordsOf(messages: readonly Message[], userDisplays: readonly (string | null)[], cwd: string): SessionRecord[] {
-  const manager = SessionManager.inMemory(cwd);
-  const hidden = new Set<string>();
-  const texts = new Map<string, string>();
-  let userIndex = 0;
-  for (const message of messages) {
-    const id = manager.appendMessage(message);
-    if (message.role !== "user") continue;
-    const display = userDisplays[userIndex] ?? null;
-    userIndex += 1;
-    if (display === null) hidden.add(id);
-    else texts.set(id, display);
-  }
-  const records = entriesToRecords(branchEntries(manager.getEntries())).filter(
-    (record) => record.role !== "user" || !hidden.has(record.id),
-  );
-  return withUserTexts(records, texts);
-}
-
 export function createKimiExternalSessionReader(deps: KimiExternalSessionReaderDeps): ExternalSessionReader {
   const candidatesFor = async (source?: ExternalSessionSource): Promise<SessionCandidate[]> => {
     const configured = await deps.sources();
@@ -351,7 +328,7 @@ export function createKimiExternalSessionReader(deps: KimiExternalSessionReaderD
         importedFrom: candidate.sourceFile,
         ...(wire.model === null ? null : { importedModel: wire.model }),
       };
-      return { summary: { ...summary, createdAt: meta.createdAt, updatedAt: meta.updatedAt }, meta, records: recordsOf(wire.messages, wire.userDisplays, meta.cwd) };
+      return { summary: { ...summary, createdAt: meta.createdAt, updatedAt: meta.updatedAt }, meta, records: messagesToRecords(wire.messages, wire.userDisplays) };
     },
   };
 }
