@@ -8,6 +8,7 @@
  * 文案口径（设计系统 *Content fundamentals*）：常驻的只留名词与数字，整句进悬停；
  * 悬停句子之间用 `·` 连接。
  */
+import { isProviderEnabled } from "../../../../shared/provider.ts";
 import type {
   ImportPlanItem,
   ImportRunReport,
@@ -446,7 +447,8 @@ export function greetingSteps(
   providers: readonly ProviderDto[],
   choreModel: ModelPair | undefined,
 ): GreetingStepsState {
-  const usable = providers.filter((p) => hasCredentials(p.auth) && p.models.declared.length > 0);
+  // 关着的服务商不算（家务活解析时它会被拒，清单不该打勾）
+  const usable = providers.filter((p) => hasCredentials(p.auth) && isProviderEnabled(p) && p.models.declared.length > 0);
   return {
     provider: usable.length > 0,
     chore:

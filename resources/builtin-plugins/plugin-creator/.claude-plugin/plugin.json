@@ -1,0 +1,19 @@
+{
+  "name": "plugin-creator",
+  "displayName": "做插件",
+  "version": "0.2.0",
+  "description": "和智能体一起做一个 Orbita 插件：边聊边把详情一节节填出来——需求、技能、输入输出、工作流、看板卡片，聊定一节右栏长一节；卡片用样例一张张磨到你说可以，才写脚本、跑真数据；装之前只在对话里问你一句。",
+  "author": { "name": "Orbita" },
+  "orbita": {
+    "workflow": [
+      { "title": "听你说要什么，写下需求与验收清单", "skill": "plugin-creator", "detail": "需求写进清单 description；intent.md 记意图与验收清单（参照）", "output": "intent.md" },
+      { "title": "主动找现成的技能和插件", "skill": "find-existing", "detail": "你已有的、本机市场、skills.sh、GitHub；只在要放弃你已有的、许可证受限、候选互斥时才停下来问你" },
+      { "title": "边聊边填清单：技能、输入与输出、要你填的、外接", "skill": "plugin-creator", "detail": "io、userConfig、external，聊定一节写一节，右栏自己长出来", "output": ".claude-plugin/plugin.json" },
+      { "title": "列工作流，问清哪几步要你拍板", "skill": "plugin-creator", "detail": "在看板上点的写 wait board，在对话里说的写 wait chat，自动的不写" },
+      { "title": "定看板：哪几张卡、各几格；用样例磨定第一张", "skill": "board-style", "detail": "四档尺寸；外框是 Orbita 的，模板只做卡里；一张卡只说一件事，你说可以才做下一张", "output": "board/", "wait": "chat" },
+      { "title": "做完剩下的卡，写技能和脚本，试跑、批量", "skill": "plugin-creator", "detail": "脚本产出写进各卡的 data 文件；技能跑完调 show_plugin_board 把卡显示在对话里", "output": "data/" },
+      { "title": "装之前在对话里问你一句，同意才装", "skill": "plugin-creator", "detail": "低风险直接装并留一行「已装上」；带 MCP 的留一行「安装」等你点", "wait": "chat" },
+      { "title": "问你要不要定时跑", "skill": "plugin-creator", "detail": "要的话建一条指向这个插件的自动化（new_session，带插件名）" }
+    ]
+  }
+}

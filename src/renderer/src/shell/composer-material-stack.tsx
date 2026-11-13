@@ -243,6 +243,9 @@ function QuoteCard(props: {
   return (
     // 每条引用一张独立的半宽卡（2026-10-11 用户裁决）：外层只排两列、不画卡；左卡贴
     // 输入卡左缘、右卡贴右缘，卡与卡之间留缝；卡高统一单行（长引用省略），扁平无阴影
+    // 外面包一层容器：下面「窄卡回落」的 @container 查询要有一个容器祖先才会生效
+    // （此前没有，那几条规则从没触发过——窄栏里引用卡永远是两列、注脚被挤没）
+    <div className="material-quote-host">
     <section className="material-quote-card" aria-label={t.quote.add}>
       {visible.map((item, index) => (
         <QuoteRow key={item.id} item={item} index={index + 1} onJump={props.jumpToQuote(item.quote)} />
@@ -261,6 +264,7 @@ function QuoteCard(props: {
         )
       )}
     </section>
+    </div>
   );
 }
 
@@ -288,7 +292,11 @@ function QuoteRow(props: {
           {preview}
         </button>
       )}
-      <span className="material-quote-note row-trailing" title={props.item.quote.text}>
+      <span
+        className={`material-quote-note row-trailing${note.file === null ? "" : " has-file"}`}
+        title={props.item.quote.filePath === undefined ? props.item.quote.text : `${props.item.quote.filePath}\n${props.item.quote.text}`}
+      >
+        {note.file !== null && <span className="material-quote-note-file">{note.file + " · "}</span>}
         {note.lead !== null && <span>{note.lead}</span>}
         {note.who !== null && <span className="material-quote-note-who">{(note.lead !== null ? " · " : "") + note.who}</span>}
         <span>{(note.lead !== null || note.who !== null ? " · " : "") + note.size}</span>

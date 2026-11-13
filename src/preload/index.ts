@@ -4,14 +4,19 @@
  */
 import { contextBridge } from "electron";
 import { agentApi } from "./api/agent.ts";
+import { automationApi } from "./api/automation.ts";
+import { boardApi } from "./api/board.ts";
 import { browserApi } from "./api/browser.ts";
 import { channelApi } from "./api/channel.ts";
 import { docxApi } from "./api/docx.ts";
+import { docsApi } from "./api/docs.ts";
 import { excerptApi } from "./api/excerpt.ts";
 import { filesApi } from "./api/files.ts";
 import { focusApi } from "./api/focus.ts";
 import { importApi } from "./api/import.ts";
 import { intentApi } from "./api/intent.ts";
+import { notifyApi } from "./api/notify.ts";
+import { pluginApi } from "./api/plugin.ts";
 import { providerApi } from "./api/provider.ts";
 import { reviewApi } from "./api/review.ts";
 import { sessionApi } from "./api/session.ts";
@@ -21,12 +26,17 @@ import { usageApi } from "./api/usage.ts";
 import { updaterApi } from "./api/updater.ts";
 import { voiceApi } from "./api/voice.ts";
 import { mcpApi, skillApi } from "./api/skill.ts";
+import { memoryApi } from "./api/memory.ts";
+import { panelUsageApi } from "./api/panel-usage.ts";
+import { rightPanelMemoryApi } from "./api/right-panel-memory.ts";
 import { windowApi } from "./api/window.ts";
 import { workspaceApi } from "./api/workspace.ts";
 import { readInitialLanguage, readInitialTheme } from "./initial-theme.ts";
 
 const api = {
   agent: agentApi,
+  automation: automationApi,
+  board: boardApi,
   channel: channelApi,
   excerpt: excerptApi,
   provider: providerApi,
@@ -34,12 +44,16 @@ const api = {
   review: reviewApi,
   settings: settingsApi,
   skill: skillApi,
+  plugin: pluginApi,
+  memory: memoryApi,
   mcp: mcpApi,
   window: windowApi,
   workspace: workspaceApi,
   files: filesApi,
   docx: docxApi,
+  docs: docsApi,
   focus: focusApi,
+  notify: notifyApi,
   terminal: terminalApi,
   usage: usageApi,
   updater: updaterApi,
@@ -47,6 +61,8 @@ const api = {
   intent: intentApi,
   browser: browserApi,
   voice: voiceApi,
+  panelUsage: panelUsageApi,
+  rightPanelMemory: rightPanelMemoryApi,
   /**
    * 宿主平台。**不是 IPC 通道**，是个同步常量——渲染层需要它，因为
    * 「红黄绿三个键落在边界卡里」只在 macOS 成立，别的平台要给自己画圆角。

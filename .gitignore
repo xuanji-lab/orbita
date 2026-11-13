@@ -57,5 +57,9 @@ docs/plans/
 
 # 维护者本地的内部文档（2026-10 开源时移出仓库，本地保留）
 docs/
+# 内置插件 docs-slides 的 docs 技能目录（上面的 docs/ 会静默吞掉它）
+!resources/builtin-plugins/*/skills/docs/
 UPDATE_NOTES.md
 CLAUDE.md
+# 本地打包输出到别名目录（dist-1106 等）
+dist-*/
