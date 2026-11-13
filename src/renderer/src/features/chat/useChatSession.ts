@@ -33,6 +33,7 @@ import {
   type QueuedMessage,
   type SessionEntry,
   type SessionStates,
+  type TurnFailure,
   observedThinkingFor,
   sameModel,
 } from "./session-states.ts";
@@ -185,7 +186,7 @@ export interface ChatSession {
    * 回合级失败标注（重试耗尽）：渲染在转录末尾——这轮没送出去的那条用户消息下面。
    * 新一轮开跑自动清除。操作级失败（建会话 / 压缩 / 分支被拒）仍在 error 上。
    */
-  turnError: string | null;
+  turnError: TurnFailure | null;
   /**
    * 最近一次用量快照（token / 花费 / 上下文余量），每轮落定时由 runtime 推来。
    * null = 还没有：纯浏览的旧会话不起 runtime session，等说话唤醒后才有数字。
@@ -197,8 +198,8 @@ export interface ChatSession {
    */
   phaseOf: (id: string) => SessionEntry["phase"];
   /** 按 id 查回合失败标注（槽里有真相）——未读标记的 failed 快照用，与「当前看哪条」无关 */
-  turnErrorOf: (id: string) => string | null;
-  /** 按 id 查挂着的工具审批（槽里有真相）——状态饼「在等你」要读到后台会话的审批 */
+  turnErrorOf: (id: string) => TurnFailure | null;
+  /** 按 id 查挂着的工具审批（槽里有真相）——竖条「在等你」要读到后台会话的审批 */
   approvalsOf: (id: string) => readonly PendingApproval[];
   /** 按 id 查是否停在「计划等你确认」上——状态饼「在等你」的第二个来源（plan-timeline 的 planAwaitingIn） */
   planAwaitingOf: (id: string) => boolean;
@@ -567,7 +568,7 @@ export interface SessionEngine {
   readonly defaultCwd: string;
   readonly usable: ProviderDto[];
   readonly phaseOf: (id: string) => SessionEntry["phase"];
-  readonly turnErrorOf: (id: string) => string | null;
+  readonly turnErrorOf: (id: string) => TurnFailure | null;
   readonly approvalsOf: (id: string) => readonly PendingApproval[];
   readonly planAwaitingOf: (id: string) => boolean;
   readonly entryOf: (id: string) => SessionEntry | undefined;
@@ -1282,7 +1283,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     [],
   );
   const turnErrorOf = useCallback(
-    (id: string): string | null => statesRef.current.get(id)?.turnError ?? null,
+    (id: string): TurnFailure | null => statesRef.current.get(id)?.turnError ?? null,
     [],
   );
   // 按 id 查挂着的审批（2026-10-10 未读/状态饼一刀）：状态饼「在等你」要读到后台

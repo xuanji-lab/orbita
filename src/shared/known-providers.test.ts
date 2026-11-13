@@ -7,6 +7,7 @@ import {
   catalogPreferenceOf,
   isPlanBilling,
   knownProviderDefaultName,
+  knownQuotaSourceOf,
   knownProviderQuota,
   knownProviderOf,
   knownProviderGroup,
@@ -376,5 +377,30 @@ describe("knownProviderQuota —— 谁有可查的额度", () => {
   it("认不得的（自建网关）当 none", () => {
     assert.equal(knownProviderQuota(p("my-own-gateway")), "none");
     assert.equal(knownProviderQuota(p("gw", { api: "anthropic-messages" })), "none");
+  });
+});
+
+describe("knownQuotaSourceOf —— 通用兼容条目按地址兜底（只对它生效）", () => {
+  test("智谱按量（同源 open.bigmodel.cn）**不能**被认成套餐：兜底只对通用兼容条目生效", () => {
+    const zhipu = { id: "zhipu", endpoint: { api: "openai-completions" as const, baseUrl: "https://open.bigmodel.cn/api/paas/v4" } };
+    assert.equal(knownProviderQuota(zhipu), "none", "按量 key 不能去打套餐控制台接口");
+    assert.equal(knownQuotaSourceOf(zhipu), undefined);
+  });
+
+  test("通用 openai-compatible 指向基元律动：认回它自己的余额能力", () => {
+    const generic = { id: "openai-compatible", endpoint: { api: "openai-completions" as const, baseUrl: "https://tokenrhythm.studio/v1" } };
+    assert.equal(knownProviderQuota(generic), "balance");
+    assert.equal(knownQuotaSourceOf(generic)?.id, "tokenrhythm");
+  });
+
+  test("通用 anthropic-compatible 指向基元律动的裸域：也认得到（地址在 access 里）", () => {
+    const generic = { id: "anthropic-compatible", endpoint: { api: "anthropic-messages" as const, baseUrl: "https://tokenrhythm.studio" } };
+    assert.equal(knownProviderQuota(generic), "balance");
+    assert.equal(knownQuotaSourceOf(generic)?.id, "tokenrhythm");
+  });
+
+  test("具体厂商条目即使地址同源也不兜底（免得把按量认成套餐）", () => {
+    const kimi = { id: "kimi-api", endpoint: { api: "openai-completions" as const, baseUrl: "https://api.kimi.com/coding" } };
+    assert.equal(knownProviderQuota(kimi), "none");
   });
 });

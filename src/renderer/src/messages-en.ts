@@ -2403,6 +2403,17 @@ export const en = {
       mcp: "MCP monthly",
     },
     resetsIn: (duration: string) => `resets in ${duration}`,
+    /**
+     * 额度窗口用尽时的「账户状态」行（PR3 复核后改为**副行**）。
+     *
+     * 为什么带「账户额度：」前缀：缓存只说明「这个窗口满了」这个事实，
+     * **不说明这次失败是它造成的**（钥匙过期 + 恰好窗口满了时，主因是 401）。
+     * 所以要把它读成一条账户状态，不能放在原文前面冒充失败原因。
+     * `label` 已经过 `windowLabel` 本地化，`duration` 是 `2h 14m` 这类机器口径的时长。
+     */
+    exhausted: (label: string, duration: string) => `Account quota: ${label} exhausted · resets in ${duration}`,
+    /** 渲染时重置时刻已经过了（判定时还在未来）：没有可信的恢复时间，就不说 */
+    exhaustedNoReset: (label: string) => `Account quota: ${label} exhausted`,
     justNow: "just now",
     minutesAgo: (n: number) => `${n} min ago`,
     hoursAgo: (n: number) => `${n}h ago`,
@@ -2416,8 +2427,10 @@ export const en = {
     unlimited: "Unlimited",
     authMissing: "Add an API key above to see the balance.",
     authRejected: "The provider rejected this API key (401). Update it above, then try again.",
-    teamUnsupported: "Team accounts aren't supported. Sign in with a personal account to see quota here.",
+    teamUnsupported: "Quota can't be read for this account — team accounts aren't supported, or this provider hasn't been wired up.",
     noPlan: "This account has no subscription.",
+    consoleOnly: "Balance is only available in this gateway's web console.",
+    emptyUsage: "The provider returned no usage data — the account may have no subscription, or the endpoint changed.",
     reasonAuth: "key rejected",
     reasonNetwork: "network error",
     reasonProtocol: "unexpected response",
