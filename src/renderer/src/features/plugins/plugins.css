@@ -1,0 +1,1915 @@
+/*
+ * 插件页：已装页按工作区分组、详情页、安装确认对话框。
+ * 结构与信息照设计稿 v2 第 2 / 6 屏；值只用 token，状态（hover / 禁用 / 选中）全在类与 aria 属性上。
+ * 一张卡至多三档字号：标题 base 半粗、正文 base 或 sm、元信息 xs（设计系统 Type roles）。
+ * 层级先靠字重与颜色。
+ *
+ * 一个组件两种外壳（右栏单列版 data-chrome="rail" / 设置页全屏版 "page"），排法只看**容器宽度**：
+ * .pl-page 是容器（container-type: inline-size），窄于 640px 的全部规矩收在文件末尾那一个
+ * `@container pl` 里——别处不许再写宽度断点，别的 PR 往详情加的卡片放进 .pl-col 就自动单列。
+ * 容器与内容必须是两个元素（@container 查不到容器自己）：根 .pl-page 只当容器，样式落在它的后代上。
+ */
+
+.pl-page {
+  container: pl / inline-size;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* 右栏版：滚动由右栏面板壳（RightPanelFrame 的内容区）负责，页自己随内容长高 */
+.pl-page[data-chrome="rail"] {
+  height: auto;
+}
+
+.pl-page[data-chrome="rail"] .pl-body {
+  flex: none;
+  overflow: visible;
+}
+
+/* 头部与正文共用一条版心：与会话页同一个测量（--content-max-width） */
+.pl-head,
+.pl-body > * {
+  width: 100%;
+  max-width: var(--content-max-width);
+  margin-inline: auto;
+  box-sizing: border-box;
+}
+
+.pl-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6) var(--space-2);
+}
+
+.pl-head-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* 右栏版：两个入口按钮放在列表顶上（全屏版在页头右侧）；多了就换行，不挤成一行 */
+.pl-top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* 工作区选择条：钉在列表上方（右栏走 RightPanelFrame 的 subheader，全屏版夹在页头与正文之间），左右血线与正文一致 */
+.pl-wsbar {
+  min-width: 0;
+  width: 100%;
+  max-width: var(--content-max-width);
+  margin-inline: auto;
+  box-sizing: border-box;
+  padding: var(--space-1) var(--space-6) var(--space-1);
+}
+
+/* 右栏版的选择条在 .pl-page 容器之外（RightPanelFrame 的 subheader），容器查询够不着它：直接按窄档写 */
+.pl-wsbar[data-chrome="rail"] {
+  padding: var(--space-1) var(--space-4) var(--space-1);
+}
+
+.pl-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-6) var(--space-5);
+  display: grid;
+  gap: var(--space-3);
+  align-content: start;
+}
+
+/* ---------- 分段（发现 / 已装） ---------- */
+
+.pl-seg {
+  display: inline-flex;
+  gap: var(--space-0-5);
+  padding: var(--space-0-5);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  font-size: var(--font-size-sm);
+}
+
+.pl-seg > button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-0-5) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-weight: var(--weight-regular);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.pl-seg > button:hover {
+  color: var(--color-text-primary);
+}
+
+.pl-seg > button[aria-pressed="true"] {
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+  box-shadow: var(--shadow-border);
+}
+
+/* 计划中：显示、禁用、写明（设计系统 Content fundamentals）；玻璃上禁用用实色，不用 opacity */
+.pl-seg > button:disabled {
+  background: transparent;
+  color: var(--color-text-tertiary);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.pl-seg-count {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* ---------- 按钮（安静控件 + 发丝框；主操作叠 .btn-accent） ---------- */
+
+.pl-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  flex: none;
+  height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  box-shadow: inset 0 0 0 1px var(--color-border-default);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition: var(--transition-hover);
+  white-space: nowrap;
+}
+
+.pl-btn:hover {
+  background: var(--option-hover-bg);
+  color: var(--color-text-primary);
+}
+
+/* 开关态的按钮（仅显示已启用）：按下 = 选中行的那层洗色，与模型服务页「仅显示已添加」同源 */
+.pl-btn[aria-pressed="true"] {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+  box-shadow: none;
+}
+
+.pl-btn.btn-accent {
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  box-shadow: none;
+}
+
+.pl-btn.btn-accent:hover {
+  background: var(--color-accent-strong);
+}
+
+.pl-btn.danger {
+  color: var(--color-danger);
+}
+
+.pl-btn.danger:hover {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+/* 确认条里真正执行删除的那一个：实心红（--color-danger-solid 是为白字调过的深红，深浅主题都够对比度） */
+.pl-btn.solid-danger {
+  background: var(--color-danger-solid);
+  color: var(--color-danger-fg);
+  box-shadow: none;
+  font-weight: var(--weight-semibold);
+}
+
+.pl-btn.solid-danger:hover {
+  background: var(--color-danger-solid);
+  color: var(--color-danger-fg);
+  filter: brightness(1.1);
+}
+
+.pl-btn:disabled,
+.pl-btn.btn-accent:disabled {
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+}
+
+.pl-btn.btn-accent:disabled {
+  background: var(--color-bg-hover);
+  box-shadow: none;
+}
+
+.pl-link-btn {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.pl-link-btn:hover {
+  color: var(--color-text-primary);
+}
+
+/* ---------- 已装页：筛选条、提示、分组卡、行 ---------- */
+
+.pl-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.pl-search {
+  flex: 1;
+  max-width: 520px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--control-height-md);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-border);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+.pl-search:focus-within {
+  box-shadow: var(--shadow-border), var(--focus-ring);
+}
+
+.pl-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+}
+
+.pl-chips {
+  display: inline-flex;
+  gap: var(--space-1);
+  font-size: var(--font-size-sm);
+}
+
+.pl-chips > button {
+  padding: 3px var(--space-3);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--color-text-secondary);
+  box-shadow: inset 0 0 0 1px var(--color-border-subtle);
+  font: inherit;
+  cursor: pointer;
+}
+
+.pl-chips > button[aria-pressed="true"] {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+  box-shadow: none;
+}
+
+.pl-chips > button:disabled {
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+}
+
+/* 筛选条右端：仅显示已启用 + 大 / 小（大小那组是 card-wall.css 的 .pv-seg） */
+.pl-bar-end {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* ---------- 卡片墙（全屏版）：外壳是模型服务页那套 .pv-cards / .pv-vcard（card-wall.css），这里只补插件卡自己的 ---------- */
+
+.pl-wall {
+  display: grid;
+  gap: var(--space-3);
+}
+
+/* 全屏版同时渲染卡片墙与安静列表：宽档显示卡片墙、藏列表（窄档在文件末尾的容器查询里反过来） */
+.pl-page[data-chrome="page"] .pl-grp {
+  display: none;
+}
+
+/* 组头在卡片外，不吃卡片底里的左右内边距 */
+.pl-wall .pl-gh {
+  padding: 0 var(--space-1);
+}
+
+.pl-vcard[data-active="false"] .pv-vcard-name {
+  color: var(--color-text-secondary);
+}
+
+/* 一句话最多两行，全文在详情里（技能描述原文常常很长） */
+.pl-vcard-note {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.pl-vcard-note.mono {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+
+/* 底行让出右下角的开关 */
+.pl-vcard .pv-vcard-foot {
+  padding-right: calc(30px + var(--space-2));
+}
+
+/* 启用开关：悬停或键盘聚焦才浮出（模型服务卡的「+」同款），不占卡面；点它不进详情（组件里拦了冒泡） */
+.pl-card-switch {
+  position: absolute;
+  display: flex;
+  opacity: 0;
+  transition: opacity var(--duration-instant) var(--ease-standard);
+}
+
+.pv-cards.large .pl-card-switch {
+  right: var(--space-3);
+  bottom: var(--space-3);
+}
+
+/* 小卡一行放不下第四样东西：开关悬停时浮在勾上，勾让位 */
+.pv-cards.small .pl-card-switch {
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.pl-vcard:hover .pl-card-switch,
+.pl-vcard:focus-within .pl-card-switch {
+  opacity: 1;
+}
+
+.pv-cards.small .pl-vcard:hover .pv-added-badge,
+.pv-cards.small .pl-vcard:focus-within .pv-added-badge {
+  opacity: 0;
+}
+
+.pl-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-info) 9%, var(--color-bg-panel));
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+
+.pl-note .orbita-icon {
+  margin-top: var(--space-0-5);
+  flex: none;
+  color: var(--color-info);
+}
+
+.pl-note.warn {
+  background: color-mix(in srgb, var(--color-warning) 9%, var(--color-bg-panel));
+}
+
+.pl-note.warn .orbita-icon {
+  color: var(--color-warning);
+}
+
+.pl-note.danger {
+  background: var(--color-danger-soft);
+}
+
+.pl-note.danger .orbita-icon {
+  color: var(--color-danger);
+}
+
+/* 卡片底：玻璃卡的那一个 --glass-bg（暗档是比井更浅的卡色，浅档与面板白几乎同色），边是设计稿的 --shadow-border */
+.pl-grp {
+  background: var(--glass-bg);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-border);
+  padding: var(--space-1) 0;
+}
+
+.pl-gh {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--font-size-sm);
+}
+
+.pl-gh .orbita-icon {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+
+.pl-gh b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.pl-gh-count {
+  margin-left: auto;
+  flex: none;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* ---------- 「正在做」组（还没装的草稿）：列表最上面一组，行与已装的行同一套 ---------- */
+
+.pl-drafts {
+  display: grid;
+  gap: var(--space-3);
+}
+
+/* 全屏版：已装的列表树在宽档被藏起来（卡片墙顶替它），「正在做」没有墙版，宽窄都显示这一棵 */
+.pl-page[data-chrome="page"] .pl-grp.pl-dgrp,
+.pl-page[data-chrome="page"] .pl-grp.pl-archived {
+  display: block;
+}
+
+/* 组头在卡片外，不吃卡片底里的左右内边距（同 .pl-wall .pl-gh） */
+.pl-drafts > .pl-gh {
+  padding: 0 var(--space-1);
+}
+
+.pl-draft-main {
+  grid-template-columns: 22px minmax(0, 1fr);
+}
+
+.pl-draft-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.pl-draft-head b {
+  min-width: 0;
+  font-weight: var(--weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 清单有问题：图标 + 文字（不只靠颜色） */
+.pl-draft-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+  font-size: var(--font-size-xs);
+  color: var(--color-warning);
+}
+
+/* 「最后改动 · 在『会话标题』里做的」是这一行要告诉你的主要信息，窄了换行（最多两行）而不是截成「在『和…」 */
+.pl-name small.pl-draft-meta {
+  font-size: var(--font-size-xs);
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.pl-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-4) 0 0;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+/* 点这一块进详情；开关在它外面（<button> 不能嵌 <button>） */
+.pl-row-main {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto minmax(0, 84px) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0 var(--space-2) var(--space-4);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+  border-radius: var(--radius-md);
+  transition: var(--transition-hover);
+}
+
+.pl-row-main:hover {
+  background: var(--option-hover-bg);
+}
+
+.pl-row[data-active="false"] .pl-name b {
+  color: var(--color-text-secondary);
+}
+
+.pl-name {
+  display: grid;
+  min-width: 0;
+}
+
+.pl-name b {
+  font-weight: var(--weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pl-name small {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pl-name small.mono {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+
+.pl-kinds {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* 行尾血线：来源右缘钉在行右内边距（设计系统 Implementation rules） */
+.pl-from {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- 头像：有图标用图标，没有就用名字首字（设计稿同款降级） ---------- */
+
+.pl-av {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+}
+
+/* 类别色：技能绿、MCP 蓝、插件橙（设计系统 Category colours） */
+.pl-av[data-kind="skill"] {
+  color: var(--color-filetype-sheet);
+  background: color-mix(in srgb, var(--color-filetype-sheet) 14%, transparent);
+}
+
+.pl-av[data-kind="mcp"] {
+  color: var(--color-filetype-doc);
+  background: color-mix(in srgb, var(--color-filetype-doc) 14%, transparent);
+}
+
+.pl-av[data-kind="plugin"] {
+  color: var(--color-filetype-slides);
+  background: color-mix(in srgb, var(--color-filetype-slides) 14%, transparent);
+}
+
+.pl-av.big {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-xl);
+}
+
+/* ---------- 开关（设计稿 v2 的 switch；设计系统没有 Switch 配方，本地定义，状态走 aria） ---------- */
+
+.pl-switch {
+  position: relative;
+  flex: none;
+  width: 30px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  box-shadow: inset 0 0 0 1px var(--color-border-default);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.pl-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-border);
+  transition: transform 120ms var(--ease-out-quint);
+}
+
+.pl-switch[aria-checked="true"] {
+  background: var(--color-accent);
+  box-shadow: none;
+}
+
+.pl-switch[aria-checked="true"]::after {
+  transform: translateX(12px);
+}
+
+.pl-switch:disabled {
+  cursor: not-allowed;
+  background: var(--color-bg-hover);
+}
+
+/* ---------- 空态与加载 ---------- */
+
+.pl-empty {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-1);
+  padding: var(--space-6) var(--space-4);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+.pl-empty b {
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+
+/* ---------- 详情 ---------- */
+
+.pl-back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.pl-back:hover {
+  color: var(--color-text-primary);
+}
+
+.pl-detail {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.pl-hero {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.pl-hero-main {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.pl-title {
+  font-size: var(--font-size-xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-height-tight);
+  overflow-wrap: anywhere;
+}
+
+.pl-by {
+  margin-top: var(--space-0-5);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.pl-lead {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  max-width: 560px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  line-height: var(--line-height-ui);
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.pl-lead[data-open="true"] {
+  display: block;
+  -webkit-line-clamp: unset;
+}
+
+.pl-lead:hover {
+  color: var(--color-text-primary);
+}
+
+/* 标题区下面的操作行：宽窄都在这一处；按钮多了就换行 */
+.pl-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* 行内二次确认：就在按钮那一行原地换成这条（红底 + 实心红主按钮 + 取消），后果小字挂在下面 */
+.pl-ic {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.pl-ic-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-lg);
+  background: var(--color-danger-soft);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+
+.pl-ic-bar .orbita-icon {
+  flex: none;
+  color: var(--color-danger);
+}
+
+.pl-ic-ask {
+  flex: 1 1 8em;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pl-ic-hint {
+  margin: 0;
+  padding: 0 var(--space-3);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+
+.pl-cols {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.pl-col {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.pl-card {
+  display: grid;
+  /* 隐式 auto 列会按内容（看板的固定像素列）算宽，把卡撑出右栏；列宽只听外面 */
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--glass-bg);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-border);
+  min-width: 0;
+}
+
+.pl-card-h {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+
+.pl-card-h .hint {
+  margin-left: auto;
+  font-weight: var(--weight-regular);
+  color: var(--color-text-tertiary);
+}
+
+.pl-ab {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: var(--space-0-5) var(--space-3);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-sm);
+}
+
+.pl-ab:first-of-type {
+  border-top: 0;
+}
+
+.pl-ab-kind {
+  padding-top: var(--space-0-5);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.pl-ab-body {
+  min-width: 0;
+}
+
+.pl-ab-body b {
+  font-weight: var(--weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.pl-ab-body small {
+  display: block;
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+.pl-ab-body small.clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.pl-ab-body small.mono {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+
+.pl-ab-body code,
+.pl-code {
+  display: block;
+  margin-top: var(--space-0-5);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-code);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.pl-warn {
+  grid-column: 2;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-warning);
+}
+
+.pl-warn .orbita-icon {
+  margin-top: 1px;
+  flex: none;
+}
+
+.pl-muted {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+/* 装在哪：三选一，选中是模式选中色（accent 仅给选中与主操作） */
+.pl-scopes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.pl-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  box-shadow: inset 0 0 0 1px var(--color-border-default);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.pl-opt:hover {
+  background: var(--option-hover-bg);
+  color: var(--color-text-primary);
+}
+
+.pl-opt[aria-checked="true"] {
+  background: var(--color-mode-active-bg);
+  color: var(--color-mode-active-fg);
+  box-shadow: inset 0 0 0 1px var(--color-mode-active-fg);
+  font-weight: var(--weight-semibold);
+}
+
+.pl-ws-list {
+  display: grid;
+  gap: var(--space-0-5);
+}
+
+.pl-ws-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.pl-ws-item:hover {
+  background: var(--option-hover-bg);
+}
+
+.pl-ws-item input {
+  accent-color: var(--color-accent);
+}
+
+.pl-ws-item span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 配置表单 */
+.pl-form {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.pl-field {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.pl-field-label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.pl-field-label .req {
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-regular);
+  color: var(--color-text-tertiary);
+}
+
+.pl-field-hint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  line-height: var(--line-height-ui);
+}
+
+.pl-field-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.pl-field-row .text-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.pl-field-error {
+  font-size: var(--font-size-xs);
+  color: var(--color-danger);
+}
+
+.pl-secret {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.pl-secret .mask {
+  font-family: var(--font-family-mono);
+  letter-spacing: 1px;
+}
+
+.pl-checks {
+  display: grid;
+  gap: var(--space-0-5);
+}
+
+.pl-checks label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+}
+
+.pl-checks input {
+  accent-color: var(--color-accent);
+}
+
+/* 来源与版本 */
+.pl-kv {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: var(--space-1) var(--space-3);
+  align-items: baseline;
+  font-size: var(--font-size-sm);
+}
+
+.pl-kv dt {
+  color: var(--color-text-tertiary);
+}
+
+.pl-kv dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pl-kv dd.mono {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+
+.pl-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-1);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+}
+
+.pl-confirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+/* ---------- 安装对话框（复用 .pv-modal 的外壳：实心面板 + 发丝线 + 重投影） ---------- */
+
+/*
+ * 高度要钉在视口上：.pv-modal 的 max-height 用百分比，而它的父级是 place-items:center 的 grid、
+ * 行高随内容走——百分比成了循环依赖，被当成没写。型号弹窗内容短碰不上，确认单一长，页脚就被挤出窗口外。
+ */
+.pv-modal.pl-modal {
+  width: min(640px, calc(100% - 48px));
+  max-height: calc(100vh - var(--space-6) * 2);
+}
+
+.pl-modal-sub {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.pl-pick {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.pl-git {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.pl-section {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.pl-section-h {
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+
+.pl-box {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+}
+
+.pl-box .pl-ab {
+  border-top-color: var(--color-border-default);
+}
+
+.pl-cmd {
+  display: grid;
+  gap: var(--space-0-5);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--color-border-default);
+  font-size: var(--font-size-sm);
+}
+
+.pl-cmd:first-child {
+  border-top: 0;
+}
+
+.pl-cmd b {
+  font-weight: var(--weight-semibold);
+}
+
+.pl-radio {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.pl-radio button {
+  display: grid;
+  gap: var(--space-0-5);
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--color-border-default);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  text-align: left;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.pl-radio button:hover {
+  background: var(--option-hover-bg);
+}
+
+.pl-radio button[aria-checked="true"] {
+  background: var(--color-mode-active-bg);
+  color: var(--color-text-primary);
+  box-shadow: inset 0 0 0 1px var(--color-mode-active-fg);
+}
+
+.pl-radio button b {
+  font-weight: var(--weight-semibold);
+}
+
+.pl-radio button small {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.pl-modal-foot-note {
+  margin-right: auto;
+  font-size: var(--font-size-sm);
+  color: var(--color-danger);
+}
+
+/* ---------- 工作流（详情页）：竖向步骤列表，左侧一条贯穿的细线串起编号 ---------- */
+
+.pl-wf {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+}
+
+.pl-wf-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: var(--space-3);
+  padding-bottom: var(--space-3);
+}
+
+/* 串起编号的线：最后一步不画 */
+.pl-wf-step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  top: 24px;
+  bottom: 2px;
+  width: 1px;
+  background: var(--color-border-default);
+}
+
+.pl-wf-n {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  box-shadow: inset 0 0 0 1px var(--color-border-default);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+
+.pl-wf-body {
+  display: grid;
+  gap: var(--space-0-5);
+  min-width: 0;
+  font-size: var(--font-size-sm);
+}
+
+.pl-wf-body b {
+  font-weight: var(--weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.pl-wf-body small {
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+.pl-wf-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.pl-wf-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+button.pl-wf-chip {
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+button.pl-wf-chip:hover {
+  background: var(--option-hover-bg);
+  color: var(--color-text-primary);
+}
+
+.pl-wf-chip code {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+
+.pl-wf-chip.missing {
+  color: var(--color-warning);
+}
+
+.pl-wf-chip.missing em {
+  font-style: normal;
+  color: var(--color-text-tertiary);
+}
+
+.pl-wf-ro {
+  margin-left: var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* 只读查看的 SKILL.md：原文，等宽，自己滚 */
+.pl-skillmd {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-code);
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- 对话里「装上插件」那一行（agent 的 install_plugin 留的）：一行字 + 行尾血线上的小按钮，不是卡 ---------- */
+
+.pl-line {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 0 0 1px var(--color-border-default);
+  font-size: var(--font-size-sm);
+}
+
+.pl-line-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.pl-line-ic {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+
+.pl-line-ic.ok {
+  color: var(--color-success);
+}
+
+.pl-line-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pl-line-text b {
+  font-weight: var(--weight-semibold);
+}
+
+.pl-line-meta {
+  color: var(--color-text-secondary);
+}
+
+/* 已卸载的：整行退到次级灰，按钮仍在 */
+.pl-line[data-mode="uninstalled"] .pl-line-text {
+  color: var(--color-text-tertiary);
+}
+
+/* 行尾的小按钮（右缘钉在行右内边距：.row-trailing 推右） */
+.pl-line-acts {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* 会启动的完整命令：每台 MCP 一条，等宽、可换行，缩进到图标之后 */
+.pl-line-cmds {
+  display: grid;
+  gap: var(--space-0-5);
+  padding-left: calc(14px + var(--space-2));
+  min-width: 0;
+}
+
+.pl-line-cmds-h {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.pl-line-cmds code {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.pl-line-note {
+  padding-left: calc(14px + var(--space-2));
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.pl-line-detail {
+  margin: 0;
+  padding-left: calc(14px + var(--space-2));
+  font-size: var(--font-size-xs);
+}
+
+.pl-line-detail dd {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.pl-line-error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  padding-left: calc(14px + var(--space-2));
+  font-size: var(--font-size-xs);
+  color: var(--color-danger);
+}
+
+/* ---------- 详情长页（设计稿 v5 屏 1 / 屏 3）：各节 ---------- */
+
+/* 节标题行尾：靠右的小字 / 按钮（「3 处等你」「打开看板」） */
+.pl-card-trail {
+  margin-left: auto;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-regular);
+  color: var(--color-text-tertiary);
+}
+
+/* 「正在做」里还没写的节：虚线框 + 一句提示；刚变化的节外圈亮 2 秒（accent 只给这一处「刚变」的信号） */
+.pl-card.pl-ph {
+  background: transparent;
+  box-shadow: none;
+  outline: 1px dashed var(--color-border-strong);
+  outline-offset: -1px;
+}
+
+.pl-card.pl-ph .pl-card-h {
+  color: var(--color-text-tertiary);
+}
+
+.pl-card.pl-ph .pl-card-h .hint {
+  margin-left: auto;
+}
+
+.pl-ph-text {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  line-height: var(--line-height-ui);
+}
+
+.pl-card[data-fresh="true"] {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 55%, transparent);
+}
+
+.pl-card {
+  transition: box-shadow var(--duration-enter) var(--ease-out-quint);
+}
+
+/* 外接 / 输入输出里的小件 */
+.pl-ext {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.pl-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+
+.pl-io-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.pl-io {
+  display: block;
+  min-width: 0;
+}
+
+.pl-io code {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.pl-io small {
+  display: inline;
+  margin-left: var(--space-2);
+}
+
+/* 工作流里等用户的步骤：序号换成手形、实心；标题旁一枚「等你 · 在看板」小签 */
+.pl-wf-step[data-wait] .pl-wf-n {
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  box-shadow: none;
+}
+
+.pl-wf-wait {
+  margin-left: var(--space-2);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+}
+
+/*
+ * 看板样式一节：看板独占整行宽度（没有上限，随 u 等比变大——想看清就把右栏 / 窗口拉宽），每卡一行的说明列表在它下面。
+ * 以前宽时左右并排、看板封顶 600px：拉宽后只多出一列说明，看板里的信息并没有变清楚（2026-11-06 用户）。
+ * 列数由 BoardGrid 定死（一行 2 格），这里只管上下叠。
+ */
+.pd-board {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.pd-board-grid {
+  min-width: 0;
+}
+
+.pd-blist {
+  display: grid;
+  gap: var(--space-1);
+  align-content: start;
+  font-size: var(--font-size-sm);
+  min-width: 0;
+}
+
+.pd-bnote {
+  margin: 0 0 var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  line-height: var(--line-height-ui);
+}
+
+.pd-bl {
+  display: grid;
+  grid-template-columns: minmax(64px, auto) auto minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-1) 0;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.pd-bl span {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.pd-bl .pd-bl-note {
+  overflow-wrap: anywhere;
+}
+
+.pd-bl-sample {
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+}
+
+.pl-open-board {
+  font-size: var(--font-size-xs);
+  height: var(--control-height-xs);
+}
+
+/* 右栏看板视图：BoardGrid 占满宽度 */
+.pl-boardview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+  align-content: start;
+  min-width: 0;
+}
+
+/*
+ * ---------- 窄容器（< 640px）：右栏版恒在此档，设置页被右栏挤窄时也在 ----------
+ * 整页只有这一个宽度断点。窄档的原则：详情单列，列表退成右栏面板同款的安静列表
+ * （分组头 + 圆角行，无卡片底），行里的「里面有什么 / 来源」收起（悬停仍可读）。
+ * 内容左右血线对齐右栏其它面板：文字距面板边 16px，行的 hover 底铺到 8px。
+ */
+@container pl (max-width: 639px) {
+  .pl-wsbar {
+    padding: var(--space-1) var(--space-4) var(--space-1);
+  }
+
+  .pl-head {
+    flex-wrap: wrap;
+    padding: var(--space-3) var(--space-4) var(--space-2);
+  }
+
+  .pl-head-actions {
+    flex-wrap: wrap;
+  }
+
+  .pl-body {
+    padding: var(--space-2) var(--space-4) var(--space-4);
+  }
+
+  .pl-bar {
+    flex-wrap: wrap;
+  }
+
+  /* 退回列表：卡片墙收起、列表显示；列表没有大小之分，那一组也收起（仅显示已启用仍有效） */
+  /* .pl-size-seg 带上 .pl-bar 提高特异性：它的 display 来自 card-wall.css 的 .pv-seg，两份文件的进包顺序不定 */
+  .pl-wall,
+  .pl-bar .pl-size-seg {
+    display: none;
+  }
+
+  .pl-page[data-chrome="page"] .pl-grp {
+    display: block;
+  }
+
+  .pl-bar-end {
+    margin-left: 0;
+  }
+
+  .pl-search {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+
+  /* 列表：卡片底退掉，组头与行回到右栏面板的写法 */
+  .pl-grp {
+    width: auto;
+    margin-inline: calc(-1 * var(--space-2));
+    padding: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .pl-gh {
+    height: 28px;
+    padding: 0 var(--space-2);
+    margin-top: var(--space-2);
+  }
+
+  .pl-gh .orbita-icon {
+    display: none;
+  }
+
+  /* 数量紧跟组名（同 PanelGroupHead 的 detail），不推到行尾 */
+  .pl-gh-count {
+    margin-left: 0;
+    font-size: var(--font-size-sm);
+  }
+
+  /* 「正在做」的组头也退回右栏的写法（上面的宽档规则特异性更高，这里要同样高才压得过）；
+     它不在 .pl-grp 里，没有那一层 -space-2 的外边距，所以左右内边距直接归零才与其它组头对齐 */
+  .pl-drafts > .pl-gh {
+    padding: 0;
+  }
+
+  .pl-row {
+    padding: 0 var(--space-2) 0 0;
+    border-top: 0;
+    border-radius: var(--radius-md);
+  }
+
+  .pl-row:hover,
+  .pl-row:has(:focus-visible) {
+    background: var(--option-hover-bg);
+  }
+
+  .pl-row-main {
+    grid-template-columns: 22px minmax(0, 1fr) auto;
+    padding-left: var(--space-2);
+  }
+
+  .pl-row-main:hover {
+    background: transparent;
+  }
+
+  .pl-kinds,
+  .pl-from {
+    display: none;
+  }
+
+  /* 空态 / 无匹配：左缘对齐内容血线（body 的 16px 已经是版心，不再叠一层） */
+  .pl-empty {
+    padding: var(--space-4) 0;
+  }
+
+  /* 详情：两列叠成一列。两列容器与列都退成 display: contents，各节成了 .pl-detail 的直接子项，
+     按 order 重排：能做什么 → 输入与输出 → 工作流 → 看板样式 → 要你填的 → 装在哪 → 来源与版本（→ 问题 → 操作） */
+  .pl-cols,
+  .pl-col {
+    display: contents;
+  }
+
+  .pl-detail [data-sec="abilities"] {
+    order: 1;
+  }
+
+  .pl-detail [data-sec="io"] {
+    order: 2;
+  }
+
+  .pl-detail [data-sec="workflow"] {
+    order: 3;
+  }
+
+  .pl-detail [data-sec="board"] {
+    order: 4;
+  }
+
+  .pl-detail [data-sec="config"] {
+    order: 5;
+  }
+
+  .pl-detail [data-sec="scope"] {
+    order: 6;
+  }
+
+  .pl-detail [data-sec="source"] {
+    order: 7;
+  }
+
+  .pl-detail [data-sec="problems"] {
+    order: 8;
+  }
+
+}
+
+/* ---------- 「能力」面板：行尾种类小标、零散技能 / MCP 详情 ---------- */
+
+/* 行尾种类小标（插件 / 内置 / 技能 / MCP）：右缘钉在行右内边距，不抢名字的视线 */
+.pl-kind-tag {
+  justify-self: end;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* 选取态的行尾：种类小标 + ↵ 提示并排 */
+.pl-trail {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  justify-self: end;
+}
+
+.pl-legacy {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.pl-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+/* 说明正文是 SKILL.md 原文：等宽（比 .text-field 的特异性高，不然被它的字体盖掉） */
+.pl-form .text-field.pl-mono-area {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-code);
+}
+
+/* 零散技能的三格：标签退成安静的小灰字（设计稿 b），输入框才是主角 */
+.pl-legacy .pl-field-label {
+  font-weight: var(--weight-regular);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+button.pl-tag-more {
+  border: 0;
+  cursor: pointer;
+}
+
+button.pl-tag-more:hover {
+  background: var(--option-hover-bg);
+}
+
+/* 「状态」节：启用开关在节标题行右端 */
+.pl-mcp-enable {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: var(--weight-regular);
+}
+
+.pl-mcp-status {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.pl-mcp-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-base);
+}
+
+.pl-mcp-state[data-kind="failed"] {
+  color: var(--color-danger);
+}
+
+.pl-mcp-error {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.pl-mcp-error small {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.pl-mcp-error p {
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-code);
+  color: var(--color-danger);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.pl-mcp-runtime {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.pl-mcp-spin {
+  animation: mcp-spin 1s linear infinite;
+}
+
+.pl-cmd {
+  display: block;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-border);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-code);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* 插件「它能做什么」里的 MCP 状态：跟旁边的小字同档，不比命令行还大 */
+.pl-mcp-runtime .pl-mcp-state {
+  font-size: var(--font-size-sm);
+}
+
+/* ---------- 已归档分组：默认折叠，行尾「恢复」钉在行右内边距 ---------- */
+.pl-archived {
+  margin-top: var(--space-2);
+}
+
+.pl-archived-head {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pl-archived-main {
+  grid-template-columns: 22px minmax(0, 1fr);
+  cursor: default;
+}
+
+.pl-archived-main:hover {
+  background: transparent;
+}
+
+.pl-archived .pl-note {
+  margin: var(--space-2) var(--space-4);
+}
+
+/* 右栏窄版把组头的图标藏了（.pl-gh .orbita-icon）；折叠分组的展开箭头是它唯一的「可点」提示，要留着 */
+.pl-archived-head .orbita-icon {
+  display: inline-flex;
+}

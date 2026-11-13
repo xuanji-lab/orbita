@@ -7,6 +7,7 @@
 import { matchModelByName } from "../../../../shared/model-assign.ts";
 import type { ModelAssignEntry, ModelAssignGroups, RegisteredModel } from "@shared/model-assign";
 import type { ProviderDto } from "@shared/provider";
+import { isProviderEnabled } from "../../../../shared/provider.ts";
 import { hasCredentials } from "./providers-view-model.ts";
 
 /**
@@ -16,7 +17,7 @@ import { hasCredentials } from "./providers-view-model.ts";
  */
 export function registeredModelsOf(providers: readonly ProviderDto[]): RegisteredModel[] {
   return providers.flatMap((provider) =>
-    hasCredentials(provider.auth)
+    hasCredentials(provider.auth) && isProviderEnabled(provider)
       ? provider.models.declared.map((model) => ({ providerId: provider.id, modelId: model.id }))
       : [],
   );

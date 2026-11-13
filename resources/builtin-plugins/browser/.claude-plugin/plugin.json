@@ -1,0 +1,18 @@
+{
+  "name": "browser",
+  "displayName": "内置浏览器",
+  "version": "0.1.0",
+  "description": "让智能体用 Orbita 的内置浏览器读网页、查资料、预览本地页面：先看你有没有已经打开的标签页，再选「读正文 / 看结构 / 截图」，动态页面用等待而不是反复重读，页面空白时去看控制台与网络请求；登录、验证码交还给你，不替你输密码、不替你付款发送。浏览器工具与右侧浏览器面板是 Orbita 原生的，这里放的是「怎么用得好」。",
+  "author": { "name": "Orbita" },
+  "license": "MIT",
+  "orbita": {
+    "workflow": [
+      { "title": "先 browser_tabs：你可能已经把页面打开并登录好了", "skill": "browser", "detail": "你的标签页只读；要在页面上操作，就在智能体自己的标签页打开同一个地址（登录态共享）" },
+      { "title": "browser_navigate 打开页面，再按需要选读法", "skill": "browser", "detail": "读文字用 browser_extract（要链接地址用 markdown）、找按钮和输入框用 browser_observe、看版式和图表用截图" },
+      { "title": "内容是慢慢长出来的：browser_wait_for，不要反复重读", "skill": "browser", "detail": "等一个选择器或一段文字；等不到是正常结果，再决定是观察还是继续等" },
+      { "title": "页面空白或不对：看控制台，再看网络请求", "skill": "browser", "detail": "JS 报错与加载失败先于猜测；已经坏了的页面要重新打开一次再读" },
+      { "title": "需要登录或验证码：把标签页交还给你", "skill": "browser", "detail": "request_user_action 说清楚在哪个站点做什么；智能体不输入密码、验证码，也不替你付款、发送、发布、删除", "wait": "chat" },
+      { "title": "点击、输入、按键：每一步先说清点的是什么", "skill": "browser", "detail": "优先用 observe 给的 ref；没有 ref 的画布和图表才用截图坐标" }
+    ]
+  }
+}

@@ -6,6 +6,7 @@ import {
   isChannelMarkRecord,
   isCompactedRecord,
   parseAgentStats,
+  parseCarryover,
   parseSessionMeta,
   childSessions,
   pushRecentQuery,
@@ -16,6 +17,7 @@ import {
   sortSessions,
   transcriptToMarkdown,
   type SessionMeta,
+  userTextForTitle,
 } from "./session.ts";
 
 const valid = {
@@ -40,6 +42,40 @@ const valid = {
   createdAt: 1000,
   updatedAt: 2000,
 };
+
+describe("userTextForTitle", () => {
+  it("没有指令块：取首块（附件块、普通多段消息照旧）", () => {
+    strictEqual(userTextForTitle(["第一段", "第二段"]), "第一段");
+    strictEqual(userTextForTitle(["<pasted-text>x</pasted-text>", "真话"]), "<pasted-text>x</pasted-text>");
+  });
+
+  it("没有文本块：null", () => {
+    strictEqual(userTextForTitle([]), null);
+  });
+
+  it("开头是 /skill: 指令块：把被空行拆开的几块接回去，整体剥掉，剩下用户自己的话", () => {
+    const composed = composeInvocationPrompt("/skill:a 做事\n\n第二段", [{ target: "a", location: "/x/SKILL.md" }], []);
+    const blocks = composed.split("\n\n").filter((part) => part !== "");
+    // 指令块自己就拆成了多块——这正是只看首块出错的原因
+    strictEqual(blocks.length > 3, true);
+    strictEqual(blocks[0]?.startsWith("<mentioned_tools>"), true);
+    strictEqual(userTextForTitle(blocks)?.split("\n\n")[0], "/skill:a 做事");
+    strictEqual(deriveSessionTitle(userTextForTitle(blocks) ?? ""), "/skill:a 做事");
+  });
+
+  it("指令块缺闭标签：原样（宁可不剥也不吞内容）", () => {
+    strictEqual(userTextForTitle(["<mentioned_tools>", "后面"]), "<mentioned_tools>\n\n后面");
+  });
+});
+
+describe("recentQueriesFromRecords（分支继承）", () => {
+  it("首条消息带 /skill: 指令块时同样取用户自己的话", () => {
+    const composed = composeInvocationPrompt("/skill:a 做事", [{ target: "a", location: "/x/SKILL.md" }], []);
+    const content = composed.split("\n\n").map((text) => ({ type: "text" as const, text }));
+    const queries = recentQueriesFromRecords([{ id: "u", role: "user", content, timestamp: 1 }]);
+    deepStrictEqual(queries, ["/skill:a 做事"]);
+  });
+});
 
 describe("deriveSessionTitle", () => {
   it("取第一行", () => {
@@ -184,6 +220,27 @@ describe("parseSessionMeta", () => {
     // 坏值退回根：一条指向乌有的 parentId 会让会话从左栏消失又无处可达
     strictEqual(parseSessionMeta({ ...valid, parentId: 42 })?.parentId, undefined);
     strictEqual(parseSessionMeta({ ...valid, parentId: "" })?.parentId, undefined);
+  });
+
+  // 自动化之前存的会话没有这些字段：缺席即用户自己开的
+  it("automationId：缺席即用户自己开的；非字符串 / 空串按缺席读，不丢会话", () => {
+    strictEqual("automationId" in (parseSessionMeta(valid) ?? {}), false);
+    strictEqual(parseSessionMeta({ ...valid, automationId: "au1" })?.automationId, "au1");
+    strictEqual(parseSessionMeta({ ...valid, automationId: 7 })?.automationId, undefined);
+    strictEqual(parseSessionMeta({ ...valid, automationId: "" })?.automationId, undefined);
+  });
+
+  it("automationRun / promoted 只在有 automationId 时才留；坏的标注丢掉", () => {
+    const label = { title: "日报", number: 3, at: 5, trigger: "schedule" };
+    const parsed = parseSessionMeta({ ...valid, automationId: "au1", automationRun: label, promoted: true });
+    deepStrictEqual(parsed?.automationRun, label);
+    strictEqual(parsed?.promoted, true);
+    // 没有 automationId：这两个字段不该凭空出现
+    const orphan = parseSessionMeta({ ...valid, automationRun: label, promoted: true });
+    strictEqual(orphan?.automationRun, undefined);
+    strictEqual(orphan?.promoted, undefined);
+    strictEqual(parseSessionMeta({ ...valid, automationId: "au1", automationRun: { title: "x" } })?.automationRun, undefined);
+    strictEqual(parseSessionMeta({ ...valid, automationId: "au1", promoted: "yes" })?.promoted, undefined);
   });
 
   // auto-title（C-3）之前存的会话没有这个字段：它们是首句截断，允许模型再试
@@ -351,6 +408,12 @@ describe("rootSessions / childSessions", () => {
   it("rootSessions 只留没有母会话的——左栏/首页/picker 共用这一条规则", () => {
     const list = [at("a", 1), at("b", 2, "a"), at("c", 3), at("d", 4, "c")];
     deepStrictEqual(rootSessions(list).map((s) => s.id), ["a", "c"]);
+  });
+
+  it("rootSessions 也不列自动化新开的会话——它们只从右栏自动化面板进；转成普通会话（promoted）后才列", () => {
+    const fromAutomation: SessionMeta = { ...at("auto", 5), automationId: "au1" };
+    deepStrictEqual(rootSessions([at("a", 1), fromAutomation]).map((s) => s.id), ["a"]);
+    deepStrictEqual(rootSessions([at("a", 1), { ...fromAutomation, promoted: true }]).map((s) => s.id), ["a", "auto"]);
   });
 
   it("rootSessions 不改原数组；全是子会话时给空", () => {
@@ -678,5 +741,37 @@ describe("引用块不进标题与导出正文", () => {
     const md = transcriptToMarkdown([{ id: "u", role: "user", content: [{ type: "text", text: quoted }], timestamp: 1 }]);
     match(md, /> 被引用的话\n\n我的问题/);
     doesNotMatch(md, /quoted_context/);
+  });
+});
+
+describe("parseCarryover 的来源与状态", () => {
+  const base = {
+    id: "c1",
+    title: "日期解析不一致",
+    detail: "",
+    sourceSessionId: "s1",
+    sourceMessageRange: null,
+    status: "open",
+    createdAt: 1,
+    doneAt: null,
+  };
+
+  it("旧记录没有 origin / anchor：读成 wrapup / null", () => {
+    const parsed = parseCarryover(base);
+    strictEqual(parsed?.origin, "wrapup");
+    strictEqual(parsed?.anchor, null);
+  });
+
+  it("noticed 与锚点原样保留", () => {
+    const parsed = parseCarryover({ ...base, origin: "noticed", anchor: "call_9" });
+    strictEqual(parsed?.origin, "noticed");
+    strictEqual(parsed?.anchor, "call_9");
+  });
+
+  it("状态认 done / dismissed，其余回落 open", () => {
+    strictEqual(parseCarryover({ ...base, status: "dismissed" })?.status, "dismissed");
+    strictEqual(parseCarryover({ ...base, status: "done", doneAt: 5 })?.status, "done");
+    strictEqual(parseCarryover({ ...base, status: "weird" })?.status, "open");
+    strictEqual(parseCarryover({ ...base, origin: "other" })?.origin, "wrapup");
   });
 });

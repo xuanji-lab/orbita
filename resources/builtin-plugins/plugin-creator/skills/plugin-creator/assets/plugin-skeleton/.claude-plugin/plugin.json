@@ -1,0 +1,10 @@
+{
+  "name": "__NAME__",
+  "displayName": "__显示名__",
+  "version": "0.1.0",
+  "description": "__一句话：它做什么、给谁用、产出什么__",
+  "author": { "name": "__作者__" },
+  "orbita": {
+    "tuned": false
+  }
+}

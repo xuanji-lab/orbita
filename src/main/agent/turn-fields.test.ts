@@ -30,6 +30,8 @@ const environment = {
   gitAttribution: true,
   attributionLanguage: "en" as const,
   pdfCitations: false,
+  planFirst: false,
+  pluginTools: false,
 };
 
 describe("turnFields", () => {
@@ -52,6 +54,11 @@ describe("turnFields", () => {
     assert.equal("workspaceName" in fields, false);
   });
 
+  test("pluginTools 原样进命令：开 = true，关 = false", () => {
+    assert.equal(turnFields(input, provider, "/pi", "/a", [], { ...environment, pluginTools: true }).pluginTools, true);
+    assert.equal(turnFields(input, provider, "/pi", "/a", [], environment).pluginTools, false);
+  });
+
   // 续会话的唯一通路：renderer 的 resume → 命令的 piSessionFile → runtime 的 SessionManager.open。
   // 抽 turn-fields.ts 时漏过这一行（2026-10-11），每轮都新建 pi 本子：模型看不到前文，
   // created 事件又把 meta 改指到新本子上，回退随之对不上账
@@ -65,6 +72,11 @@ describe("turnFields", () => {
       environment,
     );
     assert.equal(fields.piSessionFile, "/pi/2026-10-09_book.jsonl");
+  });
+
+  test("「先给我看计划」偏好随命令发给 agent（runtime 据此决定第一张新计划后停不停）", () => {
+    assert.equal(turnFields(input, provider, "/pi", "/a", [], { ...environment, planFirst: true }).planFirst, true);
+    assert.equal(turnFields(input, provider, "/pi", "/a", [], environment).planFirst, false);
   });
 
   test("resume 为 null（新会话）：piSessionFile 键彻底不出现——runtime 据此新建、主进程据此等 created", () => {

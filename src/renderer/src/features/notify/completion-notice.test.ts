@@ -1,12 +1,17 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  aggregateRunStates,
+  runStateOf,
   noticeTierOf,
   orderNoticeEntries,
   planNotice,
   sessionRunState,
   settledSessions,
+  subtreeBusy,
+  treeNotices,
   type PhaseSlot,
+  type TreeNode,
   type RunSlot,
 } from "./completion-notice.ts";
 
@@ -64,7 +69,7 @@ describe("planNotice", () => {
   });
 });
 
-describe("sessionRunState（竖条与铃铛清单的单一真源）", () => {
+describe("sessionRunState（状态饼与铃铛清单的单一真源）", () => {
   const idle: RunSlot = run("idle");
 
   it("自己或子会话在跑 → running（1/3 蓝）", () => {
@@ -121,5 +126,126 @@ describe("铃铛清单分档与排序", () => {
       ["waiting", "fresh-unread", "stale-unread", "fresh-running", "old-running"],
     );
     strictEqual(rows[0]?.id, "old-running");
+  });
+});
+describe("aggregateRunStates（工作区折叠时组头的汇总）", () => {
+  it("只列亮着的档，顺序 等你 > 出错 > 在跑 > 跑完", () => {
+    deepStrictEqual(aggregateRunStates(["done", "running", null, "waiting", "running", "failed"]), [
+      { state: "waiting", count: 1 },
+      { state: "failed", count: 1 },
+      { state: "running", count: 2 },
+      { state: "done", count: 1 },
+    ]);
+  });
+  it("全都读完 = 空串（组头什么都不画）", () => {
+    deepStrictEqual(aggregateRunStates([null, null]), []);
+  });
+});
+
+describe("runStateOf（侧栏 / 首页卡 / 工作区文件共用）", () => {
+  const meta = (id: string, parentId?: string) => ({ id, parentId, title: id }) as unknown as import("@shared/session").SessionMeta;
+  it("子会话在等审批 = 母会话在等你", () => {
+    const source = {
+      sessions: [meta("p"), meta("c", "p")],
+      phaseOf: (id: string) => (id === "c" ? ("turn" as const) : ("idle" as const)),
+      approvalsOf: (id: string) => (id === "c" ? [{}] : []),
+    };
+    strictEqual(runStateOf(source, meta("p")), "waiting");
+  });
+});
+
+describe("sessionRunState 的「计划等确认」来源", () => {
+  it("停在计划确认上（没有审批、不在跑）= 等你，不是跑完的绿饼", () => {
+    strictEqual(
+      sessionRunState({ slot: { phase: "idle", approvals: 0, planAwaiting: true }, children: [], unread: { at: 1, failed: false } }),
+      "waiting",
+    );
+  });
+  it("子会话停在计划确认上，算母会话等你（入口在母）", () => {
+    strictEqual(
+      sessionRunState({ slot: { phase: "idle", approvals: 0 }, children: [{ phase: "idle", approvals: 0, planAwaiting: true }], unread: null }),
+      "waiting",
+    );
+  });
+  it("不带这个来源 = 旧行为", () => {
+    strictEqual(sessionRunState({ slot: { phase: "idle", approvals: 0 }, children: [], unread: { at: 1, failed: false } }), "done");
+  });
+});
+
+// 落实C 的形状：根 C 下 5 个子会话，其中一个还有孙会话
+const tree: TreeNode[] = [
+  { id: "C" },
+  { id: "B" },
+  { id: "c1", parentId: "C" },
+  { id: "c2", parentId: "C" },
+  { id: "g1", parentId: "c2" },
+];
+const noFailure = (): boolean => false;
+
+describe("subtreeBusy", () => {
+  it("子会话在跑 / 孙会话在跑 / 子会话队里有待投递：都算没停", () => {
+    strictEqual(subtreeBusy("C", tree, map({ C: slot("idle"), c1: slot("turn") })), true);
+    strictEqual(subtreeBusy("C", tree, map({ C: slot("idle"), c2: slot("idle"), g1: slot("compaction") })), true);
+    strictEqual(subtreeBusy("C", tree, map({ C: slot("idle"), c1: slot("idle", 1) })), true);
+  });
+
+  it("全停 / 没建过槽的后代当停着；别的根的子会话不算", () => {
+    strictEqual(subtreeBusy("C", tree, map({ C: slot("idle"), c1: slot("idle"), g1: slot("idle") })), false);
+    strictEqual(subtreeBusy("B", tree, map({ B: slot("idle"), c1: slot("turn") })), false);
+  });
+
+  it("parentId 成环不死循环", () => {
+    const loop: TreeNode[] = [{ id: "x", parentId: "y" }, { id: "y", parentId: "x" }];
+    strictEqual(subtreeBusy("x", loop, map({ x: slot("idle"), y: slot("idle") })), false);
+  });
+});
+
+describe("treeNotices", () => {
+  it("子树全停：落定当拍就提醒", () => {
+    const result = treeNotices({ settled: ["C"], held: new Set(), states: map({ C: slot("idle"), c1: slot("idle") }), sessions: tree, failed: noFailure });
+    deepStrictEqual(result.notify, ["C"]);
+    deepStrictEqual([...result.held], []);
+  });
+
+  it("子会话还在跑：压着，不提醒（2026-10-29 一直响的那一声）", () => {
+    const result = treeNotices({ settled: ["C"], held: new Set(), states: map({ C: slot("idle"), c1: slot("turn") }), sessions: tree, failed: noFailure });
+    deepStrictEqual(result.notify, []);
+    deepStrictEqual([...result.held], ["C"]);
+  });
+
+  it("压着的在子树停下那拍兑现一次，之后不再重报", () => {
+    const states = map({ C: slot("idle"), c1: slot("idle"), c2: slot("idle") });
+    const first = treeNotices({ settled: [], held: new Set(["C"]), states, sessions: tree, failed: noFailure });
+    deepStrictEqual(first.notify, ["C"]);
+    const second = treeNotices({ settled: [], held: first.held, states, sessions: tree, failed: noFailure });
+    deepStrictEqual(second.notify, []);
+  });
+
+  it("压着的又开跑了：放掉，等它下次落定重判", () => {
+    const result = treeNotices({ settled: [], held: new Set(["C"]), states: map({ C: slot("turn"), c1: slot("turn") }), sessions: tree, failed: noFailure });
+    deepStrictEqual(result.notify, []);
+    deepStrictEqual([...result.held], []);
+  });
+
+  it("压着的队里来了子会话交付（马上要投递）：不提醒、放掉", () => {
+    const result = treeNotices({ settled: [], held: new Set(["C"]), states: map({ C: slot("idle", 1), c1: slot("idle") }), sessions: tree, failed: noFailure });
+    deepStrictEqual(result.notify, []);
+    deepStrictEqual([...result.held], []);
+  });
+
+  it("回合失败不压：子会话还在跑也当场提醒", () => {
+    const result = treeNotices({ settled: ["C"], held: new Set(), states: map({ C: slot("idle"), c1: slot("turn") }), sessions: tree, failed: (id) => id === "C" });
+    deepStrictEqual(result.notify, ["C"]);
+  });
+
+  it("会话删了（槽没了）：从压着里去掉", () => {
+    const result = treeNotices({ settled: [], held: new Set(["gone"]), states: map({}), sessions: tree, failed: noFailure });
+    deepStrictEqual(result.notify, []);
+    deepStrictEqual([...result.held], []);
+  });
+
+  it("同拍：刚落定的在前，兑现的在后，不重复", () => {
+    const result = treeNotices({ settled: ["B", "C"], held: new Set(["C"]), states: map({ B: slot("idle"), C: slot("idle") }), sessions: tree, failed: noFailure });
+    deepStrictEqual(result.notify, ["B", "C"]);
   });
 });

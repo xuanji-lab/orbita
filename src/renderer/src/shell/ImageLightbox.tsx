@@ -83,7 +83,7 @@ export function ImageLightbox(props: {
         position: "fixed",
         inset: 0,
         // 与 IconButton 的 tooltip 同档：遮罩要盖住菜单（40）与面板
-        zIndex: 70,
+        zIndex: "var(--z-tooltip)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",

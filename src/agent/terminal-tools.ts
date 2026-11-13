@@ -88,22 +88,18 @@ export function createTerminalTools(
     name: "terminal_open",
     label: "terminal_open",
     description:
-      "Open a visible terminal tab in Orbita's terminal panel — the user sees it and can type in it at any " +
-      "time. Use it when a command should run where the user can watch it and take over (a dev server, a long " +
-      "build, something you may need to interrupt), not to run commands silently. It opens an interactive " +
-      "shell and runs nothing; call terminal_execute to run a command. Authorized directories for cwd:\n  - " +
+      "Open a visible terminal tab the user can watch and type in. Use it for a dev server, watcher, long build " +
+      "or slow test run the user wants to see or you may need to stop; when you only need a command's output, " +
+      "use the headless bash tool instead. Runs nothing — call terminal_execute next. Before the first " +
+      "terminal_* call in a conversation, read the `terminal` skill. Authorized directories for cwd:\n  - " +
       authorized,
-    promptSnippet:
-      "Open a visible terminal the user can watch and take over. Not for silently running commands — use the " +
-      "headless bash tool when you only need a command's output.",
+    promptSnippet: "Open a visible terminal the user can watch (bash is for silent runs).",
     parameters: {
       type: "object",
       properties: {
         cwd: {
           type: "string",
-          description:
-            "Absolute, or relative to the session's working directory. It must resolve inside the session's " +
-            "authorized directories (listed above); anything else fails. Omit to use the session's working directory.",
+          description: "Inside the authorized directories; default: the working directory.",
         },
       },
       required: [],
@@ -118,51 +114,31 @@ export function createTerminalTools(
     name: "terminal_execute",
     label: "terminal_execute",
     description:
-      "Write one complete command line into a visible terminal owned by this session and start it — the user " +
-      "sees it run and can interrupt it. Returns as soon as the line is written: the command's output is never " +
-      "included in this result (outputSharedWithAgent: false), so call terminal_read with the returned " +
-      "terminalId to see it. Pass terminalId to reuse a safe existing terminal; omit it to open a new one at " +
-      "an authorized cwd.",
-    promptSnippet:
-      "Run a user-attended command in a visible terminal; its output is never returned — read it with " +
-      "terminal_read.",
+      "Type one complete command line into a visible terminal owned by this session; the user sees it run and " +
+      "can interrupt it. Returns at once WITHOUT the output (outputSharedWithAgent: false) — read it with " +
+      "terminal_read. Call terminal_list first; never reuse an interactive, long-running or unverified-busy " +
+      "terminal (your line would be typed into whatever is running there). Omit terminalId to open a new one.",
+    promptSnippet: "Run a command in a visible terminal; read its output with terminal_read.",
     promptGuidelines: [
-      "Before every visible terminal command, call terminal_list and prefer a current-session terminal that is " +
-        "still running, whose cwd matches, and whose previous command you observed finish. Pass its terminalId " +
-        "instead of opening another tab.",
-      "Do not reuse an interactive, long-running, or unverified-busy terminal: your command would be typed into " +
-        "whatever is running there.",
-      "Omit terminalId only when no safe candidate exists, the cwd must differ, or the user needs a separately " +
-        "visible concurrent session.",
-      "The visible terminal is not for silently running commands: when you only need a command's output, use the " +
-        "headless bash tool. Use the visible terminal when the user should watch it, when it runs long, or when " +
-        "you may need to interrupt it.",
-      "terminal_execute returns as soon as the line is written — there is no exit-code callback. Confirm " +
-        "completion with terminal_read.",
-      "When you have finished checking your own work, leave the terminal open: the user often wants to look at " +
-        "it themselves.",
+      "Before every visible terminal command, call terminal_list; never reuse an interactive, long-running, or " +
+        "unverified-busy terminal. Before the first terminal_* call in a conversation, read the `terminal` skill.",
+      "Use the visible terminal only when the user should watch, it runs long, or you may need to interrupt it; " +
+        "for just a command's output use the headless bash tool. No exit-code event — confirm with terminal_read.",
     ],
     parameters: {
       type: "object",
       properties: {
         command: {
           type: "string",
-          description:
-            "The complete command to run in the shell. Do not prepend shell wrappers — it is typed as one line " +
-            "and submitted with Enter.",
+          description: "The complete command line (typed as one line; no shell wrapper).",
         },
         terminalId: {
           type: "string",
-          description:
-            "Preferred when a matching safe current-session terminal is available. Inspect candidates with " +
-            "terminal_list first; do not reuse an interactive, long-running, or unverified-busy terminal. Omit " +
-            "to open a new terminal.",
+          description: "A safe idle terminal from terminal_list; omit to open a new one.",
         },
         cwd: {
           type: "string",
-          description:
-            "Absolute, or relative to the session's working directory. Used only when opening a new terminal " +
-            "(no terminalId); it must resolve inside the session's authorized directories.",
+          description: "Only for a new terminal; inside the authorized directories.",
         },
       },
       required: ["command"],
@@ -189,34 +165,16 @@ export function createTerminalTools(
     name: "terminal_read",
     label: "terminal_read",
     description:
-      "Read the buffered output of a visible terminal owned by this session as plain text (terminal control " +
-      "sequences stripped). By default returns the last 12,000 characters; use offset and limit to page " +
-      "(limit at most 48,000). Nothing is ever pushed to you — you have to ask for it. You can still read a " +
-      "terminal after its shell exits, as long as the tab has not been closed.",
-    promptSnippet: "Read a visible terminal's output as plain text. Nothing is pushed to you — ask for it.",
-    promptGuidelines: [
-      "After starting a visible terminal command, call terminal_read whenever you need its result or need to " +
-        "confirm it finished. A shell prompt with nothing running after it means the previous command finished; " +
-        "there is no exit-code event.",
-      "Start with the default tail. The result tells you the total length and the offset to continue from.",
-    ],
+      "Read a visible terminal's buffered output as plain text (latest by default; the result gives the offset " +
+      "to page back). Nothing is pushed to you — you must ask. A command has finished when a shell prompt " +
+      "follows its output with nothing running. Readable after the shell exits, until the tab is closed.",
+    promptSnippet: "Read a visible terminal's output (nothing is pushed to you).",
     parameters: {
       type: "object",
       properties: {
-        terminalId: {
-          type: "string",
-          description: "Terminal id returned by terminal_open, terminal_execute, or terminal_list.",
-        },
-        offset: {
-          type: "number",
-          description:
-            "Character offset in the plain-text view to start from. Omit to read the latest output. Negative " +
-            "values are clamped to 0.",
-        },
-        limit: {
-          type: "number",
-          description: "Maximum characters to return, 1–48000. Defaults to 12000. Larger values are clamped.",
-        },
+        terminalId: { type: "string", description: "Terminal id." },
+        offset: { type: "number", description: "Character offset to start from; omit for the latest output." },
+        limit: { type: "number", description: "Max characters, 1–48000 (default 12000)." },
       },
       required: ["terminalId"],
     } as never,
@@ -242,11 +200,9 @@ export function createTerminalTools(
     name: "terminal_list",
     label: "terminal_list",
     description:
-      "List the visible terminals this session owns, with cwd, shell and running/exited state. It never " +
-      "includes output. Call it before every visible terminal command to find a safe terminal to reuse.",
-    promptSnippet:
-      "List the visible terminals this session owns (never their output) — call it before every visible " +
-      "terminal command.",
+      "List this session's visible terminals: id, cwd, shell, running/exited (the shell, not whether a command " +
+      "is busy). No output. Call it before every visible terminal command.",
+    promptSnippet: "List this session's visible terminals (no output).",
     parameters: { type: "object", properties: {}, required: [] } as never,
     async execute(_toolCallId, _params, signal) {
       return call({ action: "list" }, signal);
@@ -257,16 +213,13 @@ export function createTerminalTools(
     name: "terminal_interrupt",
     label: "terminal_interrupt",
     description:
-      "Send Ctrl+C to a running terminal owned by this session. The terminal stays open and visible; use " +
-      "terminal_read to see where it stopped.",
-    promptSnippet: "Send Ctrl+C to one of this session's running terminals.",
+      "Send Ctrl+C to a running terminal of this session to stop its command; the tab stays open. Prefer this " +
+      "over terminal_close; confirm with terminal_read.",
+    promptSnippet: "Send Ctrl+C to a running terminal.",
     parameters: {
       type: "object",
       properties: {
-        terminalId: {
-          type: "string",
-          description: "Terminal id returned by terminal_open, terminal_execute, or terminal_list.",
-        },
+        terminalId: { type: "string", description: "Terminal id." },
       },
       required: ["terminalId"],
     } as never,
@@ -282,16 +235,13 @@ export function createTerminalTools(
     name: "terminal_close",
     label: "terminal_close",
     description:
-      "Close and terminate a terminal owned by this session — its shell is killed, its output buffer is " +
-      "discarded, and the tab disappears from the user's panel. Only close a terminal you no longer need.",
-    promptSnippet: "Close one of this session's terminals once it is no longer needed.",
+      "Close and kill a terminal of this session: its output is discarded and the tab disappears from the " +
+      "user's panel. Only close one you no longer need; leave it open if the user may want to look at it.",
+    promptSnippet: "Close a terminal once it is no longer needed.",
     parameters: {
       type: "object",
       properties: {
-        terminalId: {
-          type: "string",
-          description: "Terminal id returned by terminal_open, terminal_execute, or terminal_list.",
-        },
+        terminalId: { type: "string", description: "Terminal id." },
       },
       required: ["terminalId"],
     } as never,

@@ -83,6 +83,7 @@ export default defineConfig({
            * 堆爆掉；与 xlsx-worker 同一个做法。
            */
           "pptx-worker": resolve(__dirname, "src/main/pptx/worker.ts"),
+          "memory-runtime": resolve(__dirname, "src/memory/runtime.ts"),
         },
         /**
          * @napi-rs/canvas（read_pdf 页图渲染）保持 external：它的入口是一串平台包

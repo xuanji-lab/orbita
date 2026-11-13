@@ -1,11 +1,14 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Icon, type IconName } from "../../shell/Icon";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { RowHoverAction } from "../../shell/RowHoverAction";
 import { ContextMenu } from "../../shell/ContextMenu";
 import type { MenuItem } from "../../shell/Menu";
+import { Menu } from "../../shell/Menu";
 import { PanelFilter, PanelGroupHead, PanelIconButton, PanelLine, PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
 import { IconButton } from "../../shell/IconButton";
 import { api } from "../../api";
+import { ipcErrorText } from "../../utils/ipc-error.ts";
 import type { ChatSession } from "../chat/useChatSession";
 import {
   countLoadedEntries,
@@ -45,7 +48,10 @@ import { decideCiteFocus, type CiteFocusRequest } from "./cite-focus.ts";
 import type { PdfJump } from "./PdfView";
 import { DirMarkName } from "../../shell/DirMarkName.tsx";
 import type { FileEntryKind, FileRoot, FileRootKind, FsEntryFact } from "@shared/files";
+import type { DocKind } from "@shared/doc";
 import { pathTail, pathWithin } from "../../../../shared/path.ts";
+import { isDocumentName } from "@shared/ofm/syntax";
+import { isDeckPath } from "@shared/slides";
 import { useT } from "../../locale.ts";
 
 /** 占位 Session 组（还没有会话）的折叠键：真实根的键是绝对路径，常量撞不上 */
@@ -97,6 +103,8 @@ export function FilesPanel(props: {
    * 同一个文件连点两次也重新激活。null = 没有请求
    */
   fileOpen?: { path: string; token: number } | null;
+  /** 当前激活的标签是不是一份文档（md / txt）：App 据此给面板「写东西」的宽度（与演示文稿面板同一套规则） */
+  onDocShown?: (shown: boolean) => void;
 }) {
   const t = useT();
   const session = props.session;
@@ -108,6 +116,8 @@ export function FilesPanel(props: {
   /** 打开的文件标签（按打开顺序排队）；激活的就是面板正显示的那个 */
   const [tabs, setTabs] = useState<readonly FileTab[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
+  /** 刚新建的文档 / 演示文稿：对应标签一打开就进「编辑」模式（用户点标签 / 切走再回来则回到常规预览） */
+  const [openInEdit, setOpenInEdit] = useState<ReadonlySet<string>>(new Set());
   /** 文件树显隐（状态，≠显示形态）：只能由「文件」标题开关打开、跨断点缩窄自动折叠 */
   const [treeOn, setTreeOn] = useState(false);
   /** 折叠的根分组（键 = 根的绝对路径，随会话 / 工作区切换重置） */
@@ -135,6 +145,12 @@ export function FilesPanel(props: {
   const focusWorkspaceId = props.focusWorkspaceId ?? null;
   const focusDone = props.focusDone === true;
   const tree = useFileTree(sessionId, workspaceId, session.workspaces, focusWorkspaceId);
+  // 可以当「宿主」的全部根：画进树的根 + 不进树的附件副本根 + 本会话引用过的 PDF（cited，每个文件一根）。
+  // 预览白名单、引用跳转、左栏双击打开都认这一份
+  const hostRoots = useMemo(
+    () => [...tree.roots, ...(tree.attachmentsRoot === null ? [] : [tree.attachmentsRoot]), ...tree.citedRoots],
+    [tree.roots, tree.attachmentsRoot, tree.citedRoots],
+  );
 
   // 专注 / 浏览态结束（或换到另一个工作区）、以及专注到点（run → done）：之前那个
   // 额外根失去 fs:read 白名单（roots.ts 只认会话根 + 当前 extraWorkspaceId），留着的
@@ -162,7 +178,7 @@ export function FilesPanel(props: {
     nextDone: focusDone,
     sessionWorkspaceId: session.workspaceId,
     workspaces: session.workspaces,
-    roots: tree.attachmentsRoot === null ? tree.roots : [...tree.roots, tree.attachmentsRoot],
+    roots: hostRoots,
   });
   useEffect(() => {
     // 判决用更新前的 ref（与渲染期同一份输入），然后记下这一拍
@@ -173,7 +189,7 @@ export function FilesPanel(props: {
       nextDone: focusDone,
       sessionWorkspaceId: session.workspaceId,
       workspaces: session.workspaces,
-      roots: tree.attachmentsRoot === null ? tree.roots : [...tree.roots, tree.attachmentsRoot],
+      roots: hostRoots,
     });
     previousFocusRef.current = focusWorkspaceId;
     previousFocusDoneRef.current = focusDone;
@@ -188,8 +204,7 @@ export function FilesPanel(props: {
     focusDone,
     session.workspaceId,
     session.workspaces,
-    tree.roots,
-    tree.attachmentsRoot,
+    hostRoots,
     tabs,
     activePath,
   ]);
@@ -200,6 +215,13 @@ export function FilesPanel(props: {
    * 挡的是同一个判决、同一个根，effect 在下一拍把状态也收掉。
    */
   const shownTab = activeTab !== null && activeTab.root === focusDrop.rootPath ? null : activeTab;
+  // 报给 App：显示的是文档就用宽面板；卸载（切走面板）时还原
+  const docShown = shownTab !== null && shownTab.name === undefined && (isDocumentName(shownTab.path) || isDeckPath(shownTab.path));
+  const onDocShown = props.onDocShown;
+  useEffect(() => {
+    onDocShown?.(docShown);
+    return () => onDocShown?.(false);
+  }, [docShown, onDocShown]);
 
   // Session · 附件：已发送过的文件引用与附图从已加载转录派生（sent-attachments.ts，
   // 不动盘、不建链接不建副本）；盘上事实（还在不在 / 类型）走已有的 fs:stat-kind 现问，
@@ -311,6 +333,28 @@ export function FilesPanel(props: {
     if (narrowRef.current) setTreeOn(false);
   };
 
+  /** 新建文档 / 演示文稿：在当前工作区根下建好，文件树重拉，开成标签并直接进编辑 */
+  const createDocument = (kind: DocKind): void => {
+    const root = tree.roots.find((candidate) => candidate.kind === "workspace" && candidate.exists);
+    if (root === undefined) {
+      setActionError(t.doc.newFailed(t.files.rootsFailed));
+      return;
+    }
+    setActionError(null);
+    void api.docs
+      .create({ sessionId, workspaceId, kind })
+      .then((created) => {
+        tree.refresh();
+        setTabs((prev) => openTab(prev, root.path, created.path));
+        setActivePath(created.path);
+        setOpenInEdit((prev) => new Set(prev).add(created.path));
+        if (narrowRef.current) setTreeOn(false);
+      })
+      .catch((cause: unknown) => {
+        setActionError(t.doc.newFailed(ipcErrorText(cause)));
+      });
+  };
+
   /** 单击附图行 = 打开 / 激活附图标签：身份用原图引用（同一张图复用同一个标签），
    * 显示名用合成名；root 传空串——附图预览走 session.attachment，不过 fs:read 白名单 */
   const openSentImage = (ref: string, name: string): void => {
@@ -332,8 +376,7 @@ export function FilesPanel(props: {
       request: citeFocus,
       consumedToken: consumedCiteRef.current,
       session: sessionId,
-      roots: tree.roots,
-      attachmentsRoot: tree.attachmentsRoot,
+      roots: hostRoots,
       rootsLoading: tree.rootsLoading,
     });
     if (outcome.kind === "idle" || outcome.kind === "wait") return;
@@ -344,12 +387,16 @@ export function FilesPanel(props: {
       setActionError(t.files.citeOutside(pathTail(path) || path));
       return;
     }
+    if (outcome.kind === "missing") {
+      setActionError(t.files.citeMissing(pathTail(path) || path));
+      return;
+    }
     setActionError(null);
     setTabs((prev) => openTab(prev, outcome.root, path));
     setActivePath(path);
     if (narrowRef.current) setTreeOn(false);
     setJump(citeFocus);
-  }, [citeFocus, sessionId, tree.roots, tree.attachmentsRoot, tree.rootsLoading, t]);
+  }, [citeFocus, sessionId, hostRoots, tree.rootsLoading, t]);
 
   // 左栏（专注 / 浏览态的文件树）双击打开：与 citeFocus 同一套——找到路径所在的根
   // （额外预览根让专注工作区总在清单里），开它的标签；根清单没回来先等
@@ -357,7 +404,7 @@ export function FilesPanel(props: {
   const consumedOpenRef = useRef<number | null>(null);
   useEffect(() => {
     if (focusFileOpen === null || consumedOpenRef.current === focusFileOpen.token) return;
-    const candidates = tree.attachmentsRoot === null ? tree.roots : [...tree.roots, tree.attachmentsRoot];
+    const candidates = hostRoots;
     const owner = candidates.find((root) => root.exists && pathWithin(root.path, focusFileOpen.path)) ?? null;
     if (owner === null) {
       if (tree.rootsLoading) return;
@@ -368,7 +415,7 @@ export function FilesPanel(props: {
     consumedOpenRef.current = focusFileOpen.token;
     setActionError(null);
     openFile(owner, focusFileOpen.path);
-  }, [focusFileOpen, tree.roots, tree.attachmentsRoot, tree.rootsLoading, t]);
+  }, [focusFileOpen, hostRoots, tree.rootsLoading, t]);
 
   // 切换或新开标签：把激活标签滚进标签栏可视区（纯函数 tabScrollTarget 裁决
   // 目标；已完整可见就不动）。关掉非激活标签时 activePath 不变、tabs.length 变，
@@ -541,7 +588,7 @@ export function FilesPanel(props: {
                 attachments={filteredAttachments}
                 facts={attachFacts}
                 // 附件副本在不进树的 attachments 根里：拼进来当白名单 root，副本才点得开
-                roots={tree.attachmentsRoot === null ? tree.roots : [...tree.roots, tree.attachmentsRoot]}
+                roots={hostRoots}
                 onSelectPreview={openFile}
                 onOpenImage={openSentImage}
                 onReveal={tree.reveal}
@@ -570,7 +617,7 @@ export function FilesPanel(props: {
               2026-10-19 走 PanelTitle 的开关形态，住工具栏右栏胶囊（样式见
               shell/toolbar.css 的 .cap-pt） */}
           <PanelTitle
-            icon="folder"
+            icon={FEATURE_ICON.files}
             title={t.files.title}
             tip={t.files.treeToggleTip}
             onClick={() => setTreeOn((value) => !value)}
@@ -666,6 +713,18 @@ export function FilesPanel(props: {
           >
             <Icon name={tree.refreshing ? "loader-circle" : "folder-sync"} size={16} strokeWidth={1.8} spin={tree.refreshing} />
           </PanelIconButton>
+          <Menu
+            items={[
+              { id: "doc", label: t.doc.newDoc, icon: FEATURE_ICON.doc, onSelect: () => createDocument("doc") },
+              { id: "deck", label: t.doc.newDeck, icon: FEATURE_ICON.slides, onSelect: () => createDocument("slides") },
+            ]}
+            align="end"
+            trigger={({ toggle }) => (
+              <PanelIconButton title={t.doc.newTitle} onClick={toggle}>
+                <Icon name="file-plus" size={16} strokeWidth={1.8} />
+              </PanelIconButton>
+            )}
+          />
           <PanelIconButton title={t.files.attach} onClick={attach}>
             <Icon name="plus" size={16} strokeWidth={2} />
           </PanelIconButton>
@@ -762,6 +821,13 @@ export function FilesPanel(props: {
               {...(shownTab.name !== undefined ? { sentImage: { name: shownTab.name } } : {})}
               // 跳转只跟着它那份 PDF：用户在树里换了文件，旧跳转不该落到新文件上
               jump={jump !== null && jump.citation.path === shownTab.path ? jump : null}
+              openInEdit={openInEdit.has(shownTab.path)}
+              onQuote={session.addQuote}
+              onCloseTab={() => closeOne(shownTab.path)}
+              onOpenTarget={(root, path) => {
+                setTabs((prev) => openTab(prev, root, path));
+                setActivePath(path);
+              }}
             />
           )}
         </div>

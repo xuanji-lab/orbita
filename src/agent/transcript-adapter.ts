@@ -175,6 +175,16 @@ export class TranscriptAdapter {
   /** 本条消息的生成起点（message_start 的钟）；落定即清——genMs 的起算点。 */
   private genStart: number | null = null;
   /**
+   * 本条消息每个 text / thinking 块已经以增量帧发出去的字数（contentIndex → 长度）。
+   * pi 的 openai-completions 先 push `*_start`（partial 是**同一个可变对象**）、紧接着
+   * 同步把第一段增量拼进块里再 push `*_delta`——等我们处理 start 帧时，partial 里已经
+   * 带着那段（网络一次读到多段时还不止一段）。整条重发时若照抄 partial，后面的增量帧
+   * 再拼一遍，流式中每个块开头就重复一截（「我先把我先把侧栏…」，2026-10-30 用假模型
+   * 复现），要到 message_end 才被终态纠正。所以整条重发时文字块只发到「已发出的增量」
+   * 为止，剩下的交给后面排着的增量帧。
+   */
+  private emitted = new Map<number, number>();
+  /**
    * 正在执行的工具：toolCallId → 我们铸的 item id 与入参。
    *
    * **为什么要存入参**：`tool_execution_end` 上游只给 `result`，**不再给 `args`**，
@@ -225,6 +235,7 @@ export class TranscriptAdapter {
       const id = this.deps.newId();
       this.activeAssistantId = id;
       this.genStart = this.deps.now();
+      this.emitted = new Map();
       return [{ type: "item_started", item: this.streamingAssistantItem(id, event.message) }];
     }
 
@@ -234,7 +245,8 @@ export class TranscriptAdapter {
       const delta = this.toDelta(id, event.assistantMessageEvent);
       // 非增量帧（text_start / text_end / start 等）：整条重发一次，让归约器与上游对齐。
       // 这些帧稀疏，代价可以接受；而漏掉它们会让「块刚出现」这类结构变化丢失。
-      return delta ?? [{ type: "item_updated", item: this.streamingAssistantItem(id, event.message) }];
+      // 文字块截到已发出的增量为止（见 emitted）
+      return delta ?? [{ type: "item_updated", item: this.streamingAssistantItem(id, event.message, true) }];
     }
 
     if (event.type === "message_end") {
@@ -380,6 +392,9 @@ export class TranscriptAdapter {
     if (kind === null) return null;
     const withDelta = event as { contentIndex?: number; delta?: string };
     if (typeof withDelta.contentIndex !== "number" || typeof withDelta.delta !== "string") return null;
+    if (kind !== "toolCall") {
+      this.emitted.set(withDelta.contentIndex, (this.emitted.get(withDelta.contentIndex) ?? 0) + withDelta.delta.length);
+    }
     return [
       {
         type: "assistant_delta",
@@ -437,11 +452,18 @@ export class TranscriptAdapter {
   }
 
   /** 流式中的 assistant 条目：只有 streaming 一个变体，item_started / item_updated 槽都收。 */
-  private streamingAssistantItem(id: string, message: AssistantMessage): StreamingAssistantItem {
+  private streamingAssistantItem(id: string, message: AssistantMessage, trim = false): StreamingAssistantItem {
+    const content = message.content.map(toAssistantContent).map((block, index) => {
+      if (!trim) return block;
+      const sent = this.emitted.get(index) ?? 0;
+      if (block.type === "text") return { ...block, text: block.text.slice(0, sent) };
+      if (block.type === "thinking") return { ...block, thinking: block.thinking.slice(0, sent) };
+      return block;
+    });
     return {
       id,
       role: "assistant" as const,
-      content: message.content.map(toAssistantContent),
+      content,
       model: toModelRef(message),
       usage: message.usage,
       timestamp: this.deps.now(),
