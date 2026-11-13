@@ -351,10 +351,40 @@ export interface AutomationEndRecord {
   at: number;
 }
 
-/** 冷文件的现状：热归档放不下而移出的记录数，与它们所在的文件名（面板与 agent 的 list 据此说「更早的 N 条保存在 <文件>」） */
+/** 记录文件被应用之外的力量动过（智能体的 bash、用户手改、改数据目录名……）时，主进程留下的一条事件 */
+export type AutomationGuardKind =
+  /** 主文件 / 热归档不见了：已按应用里的记录写回 */
+  | "missing"
+  /** 主文件 / 热归档的内容不是应用上次写的那份：被改的那份留成 `.tampered-<时间戳>`，已按应用里的记录写回 */
+  | "changed"
+  /** 冷文件不见了（更早的记录没了）：不重建空文件，只告诉用户 */
+  | "coldMissing"
+  /** 冷文件缩小或头尾对不上：不改它，只告诉用户 */
+  | "coldChanged"
+  /** 数据目录被改名 / 删除后重建：自动化记录已写回新目录（其余数据不在这次范围） */
+  | "dataDirReplaced";
+
+export interface AutomationGuardEvent {
+  /** 发现的时刻（epoch ms） */
+  at: number;
+  /** 哪个文件（文件名，不含目录；数据目录整体出事记 "(data folder)"） */
+  file: string;
+  kind: AutomationGuardKind;
+  /** 写回了多少条记录（missing / changed / dataDirReplaced） */
+  records?: number;
+  /** 被改的那份留在哪（文件名） */
+  backup?: string;
+}
+
+/**
+ * 冷文件的现状与告警：热归档放不下而移出的记录数、它们所在的文件名（面板与 agent 的 list 据此说
+ * 「更早的 N 条保存在 <文件>」）；`alerts` 是还没被用户点「知道了」的篡改事件（新→旧，最多 5 条），`alertsTotal` 是总数。
+ */
 export interface AutomationArchiveInfo {
   older: number;
   file: string;
+  alerts: AutomationGuardEvent[];
+  alertsTotal: number;
 }
 
 export interface Automation {
