@@ -804,7 +804,8 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
     });
     return () => {
       alive = false;
-    };  }, [sessionId, workspaceId]);
+    };
+  }, [sessionId, workspaceId]);
 
   // 附件列表吃同一条过滤词（按末段名字）；过滤中零命中时整节隐藏（与树的空目录
   // 同一条纪律：安静），不过滤时才出空态文案
@@ -1002,11 +1003,15 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
       if (narrowRef.current) setTreeOn(false);
       return;
     }
-    // 两道闸门：docx 先落盘（组件卸载就丢字），再由 switchTo 处理 .tex 的脏改动
+    // 两道闸门：docx 先落盘（组件卸载就丢字），再由 switchTo 处理 .tex 的脏改动。
+    // **先建/复用标签再切**：switchTo 只改 activePath，标签本身要在这里进 tabs，
+    // 否则行变选中而面板里没有标签（2026-11 集成分支的合并回归）。
     leaveActive(() => {
+      setTabs((prev) => openTab(prev, root.path, path));
       switchTo(path);
       if (narrowRef.current) setTreeOn(false);
-    });  };
+    });
+  };
 
   /** 新建文档 / 演示文稿：在当前工作区根下建好，文件树重拉，开成标签并直接进编辑 */
   const createDocument = (kind: DocKind): void => {
@@ -1041,7 +1046,8 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
       setTabs((prev) => openTab(prev, "", ref, name));
       switchTo(ref);
       if (narrowRef.current) setTreeOn(false);
-    });  };
+    });
+  };
 
   /**
    * 主进程给的路径是 Windows 原生反斜杠，树里拼的标签路径是正斜杠：同一个文件按字符串

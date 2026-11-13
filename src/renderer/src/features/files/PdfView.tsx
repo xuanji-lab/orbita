@@ -505,7 +505,8 @@ export function PdfView(props: {
             onBlur={commitPageDraft}
             onKeyDown={(event) => {
               if (event.key === "Enter") commitPageDraft();
-              else if (event.key === "Escape") setPageDraft(null);            }}
+              else if (event.key === "Escape") setPageDraft(null);
+            }}
           />
           <span className="pdf-page-total">/ {totalPages}</span>
           <button

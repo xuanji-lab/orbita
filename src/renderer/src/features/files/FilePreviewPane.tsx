@@ -140,7 +140,8 @@ export function FilePreviewPane(props: {
   // .pptx 走只读大纲（页序 / 标题 / 要点 / 表格 / 备注，不渲染）；旧版 .ppt 明说不支持
   const pptx = sentImage === undefined && isPptxFile(path);
   const legacyPpt = sentImage === undefined && isLegacyPptFile(path);
-  const [pptxReload, setPptxReload] = useState(0);  const name = sentImage?.name ?? fileTabName(path);
+  const [pptxReload, setPptxReload] = useState(0);
+  const name = sentImage?.name ?? fileTabName(path);
   // 面包屑从所在的根开始（绝对路径放不下时截掉的总是末尾的文件名）；完整路径进 tooltip
   const segments =
     sentImage === undefined ? crumbSegmentsFromRoot(root, props.rootLabel, path) : [name];
