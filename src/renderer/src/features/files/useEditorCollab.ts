@@ -131,13 +131,14 @@ export function useEditorCollab(input: {
     }
   }, [input.editors]);
 
-  /** 读一次盘上的文本；不可编辑的标签 / 读失败 / 读成二进制或截断都算没有 */
+  /** 读一次盘上的文本；不可编辑的标签 / 读失败 / 读成二进制或超大文本（large-text 不走 IPC 正文）都算没有 */
   const readDisk = useCallback(async (path: string): Promise<string | null> => {
     const request = requestForRef.current(path);
     if (request === null) return null;
     try {
       const preview = await api.files.read(request);
-      return preview.kind === "text" && !preview.truncated ? preview.text : null;
+      // main 现行契约：能整份读出来的文本才叫 "text"；超大走 "large-text"（正文一个字节都不过来）
+      return preview.kind === "text" ? preview.text : null;
     } catch {
       // 读不出来（被删 / 权限）不改任何状态：没有内容就没有可同步的东西
       return null;

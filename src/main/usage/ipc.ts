@@ -14,11 +14,10 @@ import { dateKeysBack, type UsageDayTotal, type UsageWeekEvent } from "../../sha
 import type { BuiltinProvider } from "../../shared/agent-ipc.ts";
 import type { PriceChartData } from "../../shared/price-chart.ts";
 import type { ModelCostDecl, Provider } from "../../shared/provider.ts";
-import type { SessionMeta } from "../../shared/session.ts";
 import { boardIndexOf, type BoardRow } from "./arena-board.ts";
 import { usageDays } from "./day-summary.ts";
 import { modelGroups } from "./model-groups.ts";
-import { buildPriceChart } from "./price-chart.ts";
+import { createPriceChartSource, type PriceChartSource, type PriceChartSourceDeps } from "./price-chart-source.ts";
 import type { TaskBackfillSource, TaskLedger } from "./task-ledger.ts";
 import arenaSnapshot from "./arena-snapshot.json" with { type: "json" };
 
@@ -106,42 +105,13 @@ export function startTaskLedger(ledger: TaskLedger, source: TaskBackfillSource):
 }
 
 /**
- * 「价格 · 能力图」（usage:price-chart）：只读任务账本 + 服务商声明 + pi 目录（目录要等 agent
- * 进程报上来，host.listBuiltins 自带 15s 兜底），不扫会话。首次请求若赶上回填在途，等它落定。
+ * 「价格 · 能力图」（usage:price-chart）：数据来自 price-chart-source.ts 的那份带 memo 的来源
+ * （agent 的 model_costs 工具读的是同一份，见 main/index.ts）。
  */
-export function registerPriceChartIpc(deps: {
-  ledger: TaskLedger;
-  providers: () => Promise<Provider[]>;
-  catalog: () => Promise<BuiltinProvider[]>;
-  /** 会话清单：认哪些是子会话（子会话交回结果算一件做完的事） */
-  sessions: () => Promise<SessionMeta[]>;
-}): void {
-  /**
-   * 上次算好的结果：账本版本、服务商声明（型号与费率）、目录条数都没变就原样返回。
-   * 设置页每挂载一次就请求一次（开发版的 StrictMode 还会挂两次），这一层让重复请求不再重算。
-   */
-  let memo: { key: string; data: PriceChartData } | null = null;
-  ipcMain.handle(ipcChannels.usagePriceChart, async (): Promise<PriceChartData> => {
-    const started = Date.now();
-    await deps.ledger.settled();
-    const [providers, catalog, sessions] = await Promise.all([deps.providers(), deps.catalog(), deps.sessions()]);
-    const childIds = new Set(sessions.filter((meta) => meta.parentId !== undefined).map((meta) => meta.id));
-    const key = [
-      deps.ledger.version(),
-      childIds.size,
-      catalog.length,
-      JSON.stringify(providers.map((p) => [p.id, p.kind, p.endpoint.api, p.models.declared])),
-    ].join("|");
-    if (memo?.key === key) {
-      console.error(`[price-chart] 账本未变，直接返回上次的结果（${Date.now() - started}ms）`);
-      return memo.data;
-    }
-    const data = await buildPriceChart(
-      { tasks: async () => deps.ledger.chartTasks(childIds), providers: async () => providers, catalog: async () => catalog },
-      arenaSnapshot,
-    );
-    memo = { key, data };
-    console.error(`[price-chart] 重算：${data.profile.taskCount} 个任务，用时 ${Date.now() - started}ms`);
-    return data;
-  });
+export function priceChartSourceOf(deps: Omit<PriceChartSourceDeps, "snapshot">): PriceChartSource {
+  return createPriceChartSource({ ...deps, snapshot: arenaSnapshot });
+}
+
+export function registerPriceChartIpc(source: PriceChartSource): void {
+  ipcMain.handle(ipcChannels.usagePriceChart, (): Promise<PriceChartData> => source());
 }

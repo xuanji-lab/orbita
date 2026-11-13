@@ -18,6 +18,12 @@ import bookmark from "../../../../design-system/assets/icons/lucide/bookmark.svg
 import bookOpen from "../../../../design-system/assets/icons/lucide/book-open.svg?raw";
 import bot from "../../../../design-system/assets/icons/lucide/bot.svg?raw";
 import brain from "../../../../design-system/assets/icons/lucide/brain.svg?raw";
+import alarmClock from "../../../../design-system/assets/icons/lucide/alarm-clock.svg?raw";
+import clipboardList from "../../../../design-system/assets/icons/lucide/clipboard-list.svg?raw";
+import hourglass from "../../../../design-system/assets/icons/lucide/hourglass.svg?raw";
+import notebookText from "../../../../design-system/assets/icons/lucide/notebook-text.svg?raw";
+import brainCircuit from "../../../../design-system/assets/icons/lucide/brain-circuit.svg?raw";
+import calendarClock from "../../../../design-system/assets/icons/lucide/calendar-clock.svg?raw";
 import check from "../../../../design-system/assets/icons/lucide/check.svg?raw";
 import circleCheck from "../../../../design-system/assets/icons/lucide/circle-check.svg?raw";
 import chevronDown from "../../../../design-system/assets/icons/lucide/chevron-down.svg?raw";
@@ -38,6 +44,7 @@ import eye from "../../../../design-system/assets/icons/lucide/eye.svg?raw";
 import eyeOff from "../../../../design-system/assets/icons/lucide/eye-off.svg?raw";
 import externalLink from "../../../../design-system/assets/icons/lucide/external-link.svg?raw";
 import file from "../../../../design-system/assets/icons/lucide/file.svg?raw";
+import { iconSize } from "./control-scale.ts";
 import fileArchive from "../../../../design-system/assets/icons/lucide/file-archive.svg?raw";
 import fileAudio2 from "../../../../design-system/assets/icons/lucide/file-audio-2.svg?raw";
 import fileCode2 from "../../../../design-system/assets/icons/lucide/file-code-2.svg?raw";
@@ -45,6 +52,22 @@ import fileJson2 from "../../../../design-system/assets/icons/lucide/file-json-2
 import fileSpreadsheet from "../../../../design-system/assets/icons/lucide/file-spreadsheet.svg?raw";
 import fileVideo2 from "../../../../design-system/assets/icons/lucide/file-video-2.svg?raw";
 import presentation from "../../../../design-system/assets/icons/lucide/presentation.svg?raw";
+import typeIcon from "../../../../design-system/assets/icons/lucide/type.svg?raw";
+import shapes from "../../../../design-system/assets/icons/lucide/shapes.svg?raw";
+import table from "../../../../design-system/assets/icons/lucide/table.svg?raw";
+import circle from "../../../../design-system/assets/icons/lucide/circle.svg?raw";
+import triangle from "../../../../design-system/assets/icons/lucide/triangle.svg?raw";
+import squareRoundCorner from "../../../../design-system/assets/icons/lucide/square-round-corner.svg?raw";
+import redo2 from "../../../../design-system/assets/icons/lucide/redo-2.svg?raw";
+import italic from "../../../../design-system/assets/icons/lucide/italic.svg?raw";
+import underline from "../../../../design-system/assets/icons/lucide/underline.svg?raw";
+import alignLeft from "../../../../design-system/assets/icons/lucide/align-left.svg?raw";
+import alignCenter from "../../../../design-system/assets/icons/lucide/align-center.svg?raw";
+import alignRight from "../../../../design-system/assets/icons/lucide/align-right.svg?raw";
+import monitorPlay from "../../../../design-system/assets/icons/lucide/monitor-play.svg?raw";
+import expand from "../../../../design-system/assets/icons/lucide/expand.svg?raw";
+import minimize2 from "../../../../design-system/assets/icons/lucide/minimize-2.svg?raw";
+import imagePlus from "../../../../design-system/assets/icons/lucide/image-plus.svg?raw";
 import scrollText from "../../../../design-system/assets/icons/lucide/scroll-text.svg?raw";
 import image from "../../../../design-system/assets/icons/lucide/image.svg?raw";
 import info from "../../../../design-system/assets/icons/lucide/info.svg?raw";
@@ -58,7 +81,11 @@ import gitBranch from "../../../../design-system/assets/icons/lucide/git-branch.
 import gitCommitHorizontal from "../../../../design-system/assets/icons/lucide/git-commit-horizontal.svg?raw";
 import gitFork from "../../../../design-system/assets/icons/lucide/git-fork.svg?raw";
 import gitPullRequest from "../../../../design-system/assets/icons/lucide/git-pull-request.svg?raw";
+import hand from "../../../../design-system/assets/icons/lucide/hand.svg?raw";
+import logIn from "../../../../design-system/assets/icons/lucide/log-in.svg?raw";
+import logOut from "../../../../design-system/assets/icons/lucide/log-out.svg?raw";
 import globe from "../../../../design-system/assets/icons/lucide/globe.svg?raw";
+import graduationCap from "../../../../design-system/assets/icons/lucide/graduation-cap.svg?raw";
 import hardDrive from "../../../../design-system/assets/icons/lucide/hard-drive.svg?raw";
 import history from "../../../../design-system/assets/icons/lucide/history.svg?raw";
 import fileDiff from "../../../../design-system/assets/icons/lucide/file-diff.svg?raw";
@@ -67,9 +94,13 @@ import gripVertical from "../../../../design-system/assets/icons/lucide/grip-ver
 import key from "../../../../design-system/assets/icons/lucide/key.svg?raw";
 import lightbulb from "../../../../design-system/assets/icons/lucide/lightbulb.svg?raw";
 import loaderCircle from "../../../../design-system/assets/icons/lucide/loader-circle.svg?raw";
+import layoutDashboard from "../../../../design-system/assets/icons/lucide/layout-dashboard.svg?raw";
 import layoutGrid from "../../../../design-system/assets/icons/lucide/layout-grid.svg?raw";
 import layers from "../../../../design-system/assets/icons/lucide/layers.svg?raw";
 import list from "../../../../design-system/assets/icons/lucide/list.svg?raw";
+import filePlus from "../../../../design-system/assets/icons/lucide/file-plus.svg?raw";
+import heading from "../../../../design-system/assets/icons/lucide/heading.svg?raw";
+import bold from "../../../../design-system/assets/icons/lucide/bold.svg?raw";
 import listFilter from "../../../../design-system/assets/icons/lucide/list-filter.svg?raw";
 import listTodo from "../../../../design-system/assets/icons/lucide/list-todo.svg?raw";
 import listTree from "../../../../design-system/assets/icons/lucide/list-tree.svg?raw";
@@ -78,6 +109,7 @@ import lock from "../../../../design-system/assets/icons/lucide/lock.svg?raw";
 import mic from "../../../../design-system/assets/icons/lucide/mic.svg?raw";
 import minus from "../../../../design-system/assets/icons/lucide/minus.svg?raw";
 import pencilLine from "../../../../design-system/assets/icons/lucide/pencil-line.svg?raw";
+import pause from "../../../../design-system/assets/icons/lucide/pause.svg?raw";
 import play from "../../../../design-system/assets/icons/lucide/play.svg?raw";
 import paperclip from "../../../../design-system/assets/icons/lucide/paperclip.svg?raw";
 import quote from "../../../../design-system/assets/icons/lucide/quote.svg?raw";
@@ -149,6 +181,12 @@ const ICONS = {
   "arrow-up-right": arrowUpRight,
   bot,
   brain,
+  "alarm-clock": alarmClock,
+  "clipboard-list": clipboardList,
+  hourglass,
+  "notebook-text": notebookText,
+  "brain-circuit": brainCircuit,
+  "calendar-clock": calendarClock,
   check,
   "circle-check": circleCheck,
   "chevron-down": chevronDown,
@@ -176,6 +214,9 @@ const ICONS = {
   "file-spreadsheet": fileSpreadsheet,
   "file-video-2": fileVideo2,
   presentation,
+  heading,
+  bold,
+  "file-plus": filePlus,
   "scroll-text": scrollText,
   "fold-vertical": foldVertical,
   "flask-conical": flaskConical,
@@ -188,6 +229,10 @@ const ICONS = {
   "git-fork": gitFork,
   "git-pull-request": gitPullRequest,
   globe,
+  "graduation-cap": graduationCap,
+  hand,
+  "log-in": logIn,
+  "log-out": logOut,
   "hard-drive": hardDrive,
   history,
   "file-diff": fileDiff,
@@ -199,6 +244,7 @@ const ICONS = {
   lightbulb,
   "loader-circle": loaderCircle,
   list,
+  "layout-dashboard": layoutDashboard,
   "layout-grid": layoutGrid,
   layers,
   "list-filter": listFilter,
@@ -221,6 +267,7 @@ const ICONS = {
   "panel-left": panelLeft,
   "panel-right": panelRight,
   "pencil-line": pencilLine,
+  pause,
   play,
   paperclip,
   pin,
@@ -257,6 +304,23 @@ const ICONS = {
   "zoom-in": zoomIn,
   "zoom-out": zoomOut,
   maximize,
+  // 演示文稿编辑器（2026-11-07）：工具条 / 形状菜单 / 文字样式
+  "type": typeIcon,
+  "shapes": shapes,
+  "table": table,
+  "circle": circle,
+  "triangle": triangle,
+  "square-round-corner": squareRoundCorner,
+  "redo-2": redo2,
+  "italic": italic,
+  "underline": underline,
+  "align-left": alignLeft,
+  "align-center": alignCenter,
+  "align-right": alignRight,
+  "monitor-play": monitorPlay,
+  "expand": expand,
+  "minimize-2": minimize2,
+  "image-plus": imagePlus,
 } as const;
 
 export type IconName = keyof typeof ICONS;
@@ -308,7 +372,8 @@ export function Icon(props: {
    */
   className?: string;
 }) {
-  const size = props.size ?? 16;
+  // 字形落在 12 / 14 / 16 的台阶上（control-scale.ts）：调用方写 13 也画 14
+  const size = iconSize(props.size ?? 16);
   const style = {
     width: size,
     height: size,

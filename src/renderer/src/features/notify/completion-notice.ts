@@ -5,13 +5,16 @@
  * 界面上什么都不发生——只能隔一会儿回去看一眼。这里判定「刚跑完」与「用户此刻
  * 有没有在看它」，App 据此响提示音、把未读写进 meta、在辅助对话图标旁弹卡片。
  *
- * 2026-10-10 二轮（用户改需求）：侧栏行首的三节竖条与右下角铃铛清单都从这里的
+ * 2026-10-10 二轮（用户改需求）：侧栏行首的状态饼与右下角铃铛清单都从这里的
  * sessionRunState 读状态——**单一真源**，两个入口只是同一份状态的两个视图，
  * 不各算一份（各算一份迟早漂移成「侧栏说在跑、铃铛说没事」）。
  *
  * 不碰 React、不碰 Audio，node --test 直接测。
  */
 import type { Messages } from "../../messages-en.ts";
+import type { SessionMeta } from "@shared/session";
+// 值导入走相对路径带 .ts：本文件被 node --test 直接加载
+import { childSessions } from "../../../../shared/session.ts";
 
 /** 判定只需要槽的这两个字段——不依赖整个 SessionEntry，测试不用造全量槽 */
 export interface PhaseSlot {
@@ -41,6 +44,86 @@ export function settledSessions(
   return settled;
 }
 
+/** 子树判定只需要会话的这两个字段——不依赖整个 SessionMeta */
+export interface TreeNode {
+  id: string;
+  parentId?: string;
+}
+
+/**
+ * 某条会话的**后代**（不含自己，按 parentId 递归、防环）里有没有还没停下的：
+ * phase 不是 idle（在跑 / 压缩 / 等审批 / 重试退避中），或队里还有待投递的——后者
+ * 马上又要开一轮。没建过槽的后代当停着（本窗口没见过它跑，没有「在跑」的证据）。
+ *
+ * 取全部后代而不是只取一层（sessionRunState 只取一层，那是侧栏竖条的口径）：
+ * 子会话自己闲着等孙会话交付时，这棵树同样没跑完。
+ */
+export function subtreeBusy(
+  id: string,
+  sessions: readonly TreeNode[],
+  states: ReadonlyMap<string, PhaseSlot>,
+): boolean {
+  const children = new Map<string, string[]>();
+  for (const meta of sessions) {
+    if (meta.parentId === undefined) continue;
+    const list = children.get(meta.parentId);
+    if (list === undefined) children.set(meta.parentId, [meta.id]);
+    else list.push(meta.id);
+  }
+  const seen = new Set<string>([id]);
+  const stack = [...(children.get(id) ?? [])];
+  while (stack.length > 0) {
+    const next = stack.pop() as string;
+    if (seen.has(next)) continue;
+    seen.add(next);
+    const slot = states.get(next);
+    if (slot !== undefined && (slot.phase !== "idle" || slot.queued.length > 0)) return true;
+    stack.push(...(children.get(next) ?? []));
+  }
+  return false;
+}
+
+/**
+ * 这一拍该提醒的根会话，与接着压着的那些。
+ *
+ * 场景（2026-10-29 用户实测）：母会话派了 5 个子会话，每个子会话交付都把母会话
+ * 叫醒跑一轮，每轮收尾都算「跑完」响一声——16:00–16:15 里响个不停，而任务其实
+ * 还没完。「子会话跑完不单独打扰人」的本意在这里漏了：子会话不响，但它叫醒的母会话响。
+ *
+ * 规则：根会话落定时子树还没停（subtreeBusy）就**压着**——不响、不标未读、不弹卡；
+ * 之后每一拍复查，自己与整棵子树都停下的那一拍提醒一次。典型结局：最后一个子会话
+ * 交付、母会话处理完那一轮（它会再落定一次）；子会话被停掉、没有交付叫醒母会话时，
+ * 压着的那条在子树停下那拍兑现。
+ *
+ * - **回合失败不压**（`failed`）：母会话挂了就接不住子会话的交付，等子树跑完再说就晚了。
+ * - 压着的又开跑了（不再 idle 或队不空）：从压着里去掉——它下次落定会重新判。
+ * - 槽没了（会话删了）：去掉。
+ * - 代价：子会话卡住不结束，这一声就一直等不来——侧栏蓝竖条照亮「在跑」，不至于不知道。
+ *
+ * 不改入参；返回新的压着集。notify 先列本拍刚落定的，再列兑现的。
+ */
+export function treeNotices(input: {
+  /** 本拍刚落定的根会话（settledSessions 过滤过根） */
+  settled: readonly string[];
+  /** 上一拍压着的根会话 */
+  held: ReadonlySet<string>;
+  states: ReadonlyMap<string, PhaseSlot>;
+  sessions: readonly TreeNode[];
+  /** 这条会话此刻挂着回合级失败 */
+  failed: (id: string) => boolean;
+}): { notify: string[]; held: Set<string> } {
+  const notify: string[] = [];
+  const held = new Set<string>();
+  const candidates = [...new Set([...input.settled, ...input.held])];
+  for (const id of candidates) {
+    const slot = input.states.get(id);
+    if (slot === undefined || slot.phase !== "idle" || slot.queued.length > 0) continue;
+    if (!input.failed(id) && subtreeBusy(id, input.sessions, input.states)) held.add(id);
+    else notify.push(id);
+  }
+  return { notify, held };
+}
+
 export interface NoticePlan {
   /** 响提示音 */
   sound: boolean;
@@ -63,7 +146,7 @@ export function planNotice(input: { watched: boolean; windowActive: boolean; sou
 }
 
 /**
- * 一条会话此刻的运行态（三节竖条 + 铃铛清单共用的推导，单一真源）：
+ * 一条会话此刻的运行态（状态饼 + 铃铛清单共用的推导，单一真源）：
  *
  * - `"running"`：在跑（1/3 蓝）——自己或任一直接子会话的 phase 不是 idle。
  *   子会话在跑算母会话在跑：侧栏只列根会话，母会话的行就是那个任务的唯一入口；
@@ -86,6 +169,12 @@ export interface RunSlot {
   phase: "idle" | "turn" | "compaction";
   /** 挂着的工具审批数（0 = 没有） */
   approvals: number;
+  /**
+   * 停在「计划等你确认」上（最后一次 update_plan 要求确认，且之后还没有用户消息；plan-timeline 的
+   * planAwaitingIn）。算「等你」的第二个来源——不加的话 plan 档写完计划停下，侧栏 / 铃铛 / 首页卡
+   * 会把它画成跑完的绿饼。缺席 = 否。
+   */
+  planAwaiting?: boolean;
 }
 
 export function sessionRunState(input: {
@@ -97,13 +186,32 @@ export function sessionRunState(input: {
   unread: { at: number; failed: boolean } | null;
 }): SessionRunState {
   const slots = [input.slot, ...input.children];
-  if (slots.some((slot) => slot !== undefined && slot.approvals > 0)) return "waiting";
+  if (slots.some((slot) => slot !== undefined && (slot.approvals > 0 || slot.planAwaiting === true))) return "waiting";
   if (slots.some((slot) => slot !== undefined && slot.phase !== "idle")) return "running";
   if (input.unread === null) return null;
   return input.unread.failed ? "failed" : "done";
 }
 
-/** 铃铛清单的档位：竖条亮着的根会话按「等你 > 未读 > 在跑」分档 */
+/** 工作区汇总的顺序：等你 > 出错 > 在跑 > 跑完（越需要你动手越靠前） */
+const AGG_ORDER = ["waiting", "failed", "running", "done"] as const;
+
+/**
+ * 工作区折叠时组头上的汇总（2026-10-30）：组里各会话的运行态按档计数，
+ * 只列亮着的档，顺序固定为等你 > 出错 > 在跑 > 跑完。折叠后看不到行，
+ * 这一串是「里面还有东西在干活 / 在等你」的唯一信号。
+ */
+export function aggregateRunStates(
+  states: readonly SessionRunState[],
+): { state: Exclude<SessionRunState, null>; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const state of states) if (state !== null) counts.set(state, (counts.get(state) ?? 0) + 1);
+  return AGG_ORDER.filter((state) => counts.has(state)).map((state) => ({
+    state,
+    count: counts.get(state) ?? 0,
+  }));
+}
+
+/** 铃铛清单的档位：状态饼亮着的根会话按「等你 > 未读 > 在跑」分档 */
 export type NoticeTier = "waiting" | "unread" | "running";
 
 /** 运行态 → 清单档位。null（不亮）不进清单。 */
@@ -129,7 +237,7 @@ export function orderNoticeEntries<T extends { tier: NoticeTier; at: number }>(
 }
 
 /**
- * 运行态的可读名字（竖条的 tooltip，也是铃铛清单行尾的句子）：侧栏行与铃铛
+ * 运行态的可读名字（状态饼的 tooltip，也是铃铛清单行尾的句子）：侧栏行与铃铛
  * 清单同一套词——同一个状态在两个入口该叫同一个名字，否则像两个东西。
  */
 export function runStateLabel(
@@ -140,4 +248,35 @@ export function runStateLabel(
   if (state === "waiting") return t.rowStatus.waiting;
   if (state === "failed") return t.rowStatus.unreadFailed;
   return t.rowStatus.unread;
+}
+
+/** 推一条根会话运行态所需的最少接口（ChatSession 满足它；测试可以手搓） */
+export interface RunStateSource {
+  readonly sessions: readonly SessionMeta[];
+  phaseOf(id: string): RunSlot["phase"];
+  approvalsOf(id: string): readonly unknown[];
+  /** 停在「计划等你确认」上（缺席 = 不认这个来源） */
+  planAwaitingOf?(id: string): boolean;
+}
+
+/**
+ * 一条根会话的运行态（侧栏状态饼、工作区汇总、首页会话卡、工作区文件共用）：查它
+ * 自己的槽——后台在跑的会话切走了也照样亮，与「当前看哪条」无关。子会话只取一层
+ * （childSessions 同口径），子会话在跑 / 在等审批都记到母会话上（入口在母）。
+ * 未读读 meta（落盘，重启后还在）。
+ */
+export function runStateOf(source: RunStateSource, meta: SessionMeta): SessionRunState {
+  return sessionRunState({
+    slot: {
+      phase: source.phaseOf(meta.id),
+      approvals: source.approvalsOf(meta.id).length,
+      planAwaiting: source.planAwaitingOf?.(meta.id) ?? false,
+    },
+    children: childSessions(source.sessions, meta.id).map((child) => ({
+      phase: source.phaseOf(child.id),
+      approvals: source.approvalsOf(child.id).length,
+      planAwaiting: source.planAwaitingOf?.(child.id) ?? false,
+    })),
+    unread: meta.unread ?? null,
+  });
 }

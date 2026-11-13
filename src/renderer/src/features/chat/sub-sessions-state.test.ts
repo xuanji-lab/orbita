@@ -4,6 +4,7 @@ import {
   SUB_SESSIONS_LIST,
   escapeFrom,
   openSubSession,
+  panelAfterSubSessionsGone,
   syncToMainSession,
   type SubSessionsView,
 } from "./sub-sessions-state.ts";
@@ -91,5 +92,27 @@ describe("escapeFrom", () => {
 
   it("列表层：交给调用方关面板（null）", () => {
     strictEqual(escapeFrom(SUB_SESSIONS_LIST), null);
+  });
+});
+
+describe("panelAfterSubSessionsGone（切会话时别把刚恢复的面板关掉）", () => {
+  it("没有子会话了：子会话面板关；别的面板原样留着", () => {
+    strictEqual(panelAfterSubSessionsGone("subsessions", false), null);
+    strictEqual(panelAfterSubSessionsGone("plugins", false), "plugins");
+    strictEqual(panelAfterSubSessionsGone(null, false), null);
+    strictEqual(panelAfterSubSessionsGone("subsessions", true), "subsessions");
+  });
+
+  it("切换那一拍：先「按会话恢复」成别的面板、再跑守卫 → 恢复出的面板保住（React 依次执行排队的更新）", () => {
+    // 模拟同一次提交里排队的两个 setRightPanel：恢复 → 守卫（函数式）
+    const queued: Array<(prev: string | null) => string | null> = [
+      () => "plugins",
+      (prev) => panelAfterSubSessionsGone(prev, false),
+    ];
+    const result = queued.reduce<string | null>((prev, update) => update(prev), "subsessions");
+    strictEqual(result, "plugins");
+    // 旧写法读闭包里切换前的值 "subsessions" 直接 setRightPanel(null)，就会得到 null——这就是 bug
+    const oldWay: Array<(prev: string | null) => string | null> = [() => "plugins", () => null];
+    strictEqual(oldWay.reduce<string | null>((prev, update) => update(prev), "subsessions"), null);
   });
 });

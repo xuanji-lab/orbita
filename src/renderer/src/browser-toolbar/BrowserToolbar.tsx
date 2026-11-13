@@ -5,6 +5,7 @@ import { api } from "../api.ts";
 import { LocaleContext, useT } from "../locale.ts";
 import { useTheme } from "../useTheme.ts";
 import { Icon } from "../shell/Icon";
+import { FEATURE_ICON } from "../shell/feature-icons.ts";
 import { IconButton } from "../shell/IconButton";
 
 const EMPTY_STATE: BrowserWindowState = {
@@ -220,7 +221,7 @@ function NavRow(props: { state: BrowserWindowState; onState: (state: BrowserWind
       </IconButton>
       <form className="browser-toolbar-form" onSubmit={submit}>
         <span className="browser-address-icon" aria-hidden="true">
-          <Icon name={page.loading ? "loader-circle" : "globe"} size={13} spin={page.loading} />
+          <Icon name={page.loading ? "loader-circle" : FEATURE_ICON.browser} size={13} spin={page.loading} />
         </span>
         <input
           ref={inputRef}

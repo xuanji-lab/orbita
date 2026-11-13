@@ -23,6 +23,8 @@ import type { ModelPair } from "@shared/settings";
 import { api } from "../../api";
 import { Chip } from "../../shell/Chip";
 import { Icon, type IconName } from "../../shell/Icon";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
+import { PanelEmpty } from "../../shell/PanelEmpty";
 import { Menu, type MenuItem } from "../../shell/Menu";
 import { useSettingTip } from "./InfoTip";
 import {
@@ -503,9 +505,13 @@ export function MigrationView(props: {
             {scan.kind === "ready" && grouped !== null && (
               <>
                 {grouped.groups.length === 0 && grouped.changed.length === 0 ? (
-                  <div className="mg-block mg-empty">
-                    <Icon name={grouped.total === 0 ? "circle-check" : "eye-off"} size={15} />
-                    {grouped.total === 0 ? t.migration.nothingToImport : t.migration.noSessionsMatch}
+                  <div className="mg-block">
+                    <PanelEmpty
+                      icon={grouped.total === 0 ? "circle-check" : "eye-off"}
+                      className={grouped.total === 0 ? "mg-empty done" : "mg-empty"}
+                    >
+                      {grouped.total === 0 ? t.migration.nothingToImport : t.migration.noSessionsMatch}
+                    </PanelEmpty>
                   </div>
                 ) : (
                   <>
@@ -524,7 +530,7 @@ export function MigrationView(props: {
                       <span>{t.migration.colFolder}</span>
                       <span>{t.migration.colSelected}</span>
                       <span>
-                        <Icon name="git-fork" size={11} strokeWidth={1.8} />
+                        <Icon name={FEATURE_ICON.subsessions} size={11} strokeWidth={1.8} />
                       </span>
                       <span>{t.migration.colGoesTo}</span>
                     </div>
@@ -1257,7 +1263,7 @@ function GroupBlock(props: {
         <PickedCount picked={picked} total={group.rows.length} />
         {subSessions > 0 ? (
           <Tipped className="mg-sub" tip={t.migration.subSessionsComeWithParents}>
-            <Icon name="git-fork" size={11} strokeWidth={1.8} />
+            <Icon name={FEATURE_ICON.subsessions} size={11} strokeWidth={1.8} />
             {subSessions}
           </Tipped>
         ) : (
@@ -1352,7 +1358,7 @@ function SessionLine(props: {
       <span className="mg-trail">
         {subSessions > 0 && (
           <Tipped className="mg-sub" tip={t.migration.subSessionsComeWithIt}>
-            <Icon name="git-fork" size={11} strokeWidth={1.8} />
+            <Icon name={FEATURE_ICON.subsessions} size={11} strokeWidth={1.8} />
             {subSessions}
           </Tipped>
         )}
@@ -1496,7 +1502,7 @@ const FACT_ICON: Record<SessionFactKind, IconName> = {
   hidden: "eye-off",
   greeting: "message-square-dashed",
   duplicate: "copy",
-  orphaned: "git-fork",
+  orphaned: FEATURE_ICON.subsessions,
   already: "circle-check",
   cannot: "circle-off",
 };
@@ -1595,7 +1601,7 @@ function SessionFacts(props: {
 // ---------------------------------------------------------------------------
 
 const FOOT_ICON: Record<FootFactKind, IconName> = {
-  sub: "git-fork",
+  sub: FEATURE_ICON.subsessions,
   workspaces: "folder-plus",
   bytes: "hard-drive",
   skills: "book-open",

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Icon, type IconName } from "./Icon";
+import { isMenuDismissKey } from "./escape-key.ts";
 import { placeMenu, type MenuBox, type MenuPlacementSide } from "./menu-position";
 import { useT } from "../locale.ts";
 
@@ -57,6 +58,12 @@ export interface MenuItem {
   fact?: boolean;
   /** 分组头：菜单里一节的小标题（如模型菜单的厂商名）。不可选、不抢焦点，样式同设置面的节标题 */
   header?: boolean;
+  /**
+   * 分隔线：两组之间的一条 1px 细线（右栏「更多」菜单按入口的类分组，组与组之间用它）。
+   * 不是一行——没有文字、不可选、不抢键盘焦点，只占一条线加上下留白；除 `id` 外的字段都被忽略。
+   * 搜索过滤时被丢掉（分隔只在完整清单里有意义）。
+   */
+  rule?: boolean;
   /** 破坏性动作：danger 色。**只给真的会丢东西的那一项** */
   danger?: boolean;
   /**
@@ -90,6 +97,7 @@ function filterMenuItems(items: MenuItem[], q: string): MenuItem[] {
     matched = [];
   };
   for (const item of items) {
+    if (item.rule === true) continue;
     if (item.header === true) {
       flush();
       header = item;
@@ -356,11 +364,21 @@ export function Menu(props: {
     };
     // 滚动与改窗口大小：追着重定位而不是关门。锚点跟着界面动了，菜单跟着锚点走；
     // 锚点整个出屏（placeMenu 判 visible=false）才关门——那时跟着走是挂在天上
+    // 焦点不在菜单里（触发键还留着焦点）时菜单自己的 onKeyDown 收不到 Esc，全局的「关面板」会把文档标签一起关掉：
+    // 开着的时候在文档捕获阶段认领 Esc（见 escape-key.ts）
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!isMenuDismissKey(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+    };
     document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
     window.addEventListener("resize", positionMenu);
     window.addEventListener("scroll", positionMenu, true);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("resize", positionMenu);
       window.removeEventListener("scroll", positionMenu, true);
     };
@@ -383,7 +401,7 @@ export function Menu(props: {
 
   // 键盘导航与渲染都走**过滤后**的清单——搜索时 cursor 与 Enter 只在可见项里打转
   const enabled = visible.filter(
-    (item) => item.disabled !== true && item.fact !== true && item.header !== true,
+    (item) => item.disabled !== true && item.fact !== true && item.header !== true && item.rule !== true,
   );
   /** 打开时光标落在**当前项**上。落在第一项会让人以为选中的是第一项。 */
   const cursorAtChecked = () => Math.max(0, enabled.findIndex((item) => item.checked === true));
@@ -544,7 +562,7 @@ export function Menu(props: {
                 : position.fixed
                   ? { height: position.cap }
                   : { maxHeight: position.cap }),
-              zIndex: 40,
+              zIndex: "var(--z-popover)",
               minWidth: props.panelMinWidth ?? 180,
               // 上限夹一道视口（面板是 fixed 的，100vw 就是可用宽）——
               // 窄窗下宁可窄、也不让右边半截出屏
@@ -665,18 +683,22 @@ export function Menu(props: {
                   {(props.emptyText ?? (() => t.menu.noModels))(query)}
                 </div>
               )}
-              {visible.map((item) => (
-                <MenuRow
-                  key={item.id}
-                  item={item}
-                  cursor={enabled[active]?.id === item.id}
-                  onHover={() => {
-                    const index = enabled.findIndex((candidate) => candidate.id === item.id);
-                    if (index >= 0) setActive(index);
-                  }}
-                  onSelect={() => choose(item)}
-                />
-              ))}
+              {visible.map((item) =>
+                item.rule === true ? (
+                  <div key={item.id} role="separator" className="menu-rule" />
+                ) : (
+                  <MenuRow
+                    key={item.id}
+                    item={item}
+                    cursor={enabled[active]?.id === item.id}
+                    onHover={() => {
+                      const index = enabled.findIndex((candidate) => candidate.id === item.id);
+                      if (index >= 0) setActive(index);
+                    }}
+                    onSelect={() => choose(item)}
+                  />
+                ),
+              )}
               </div>
             </div>
             {props.footer !== undefined && (
@@ -755,6 +777,15 @@ function MenuRow(props: {
         alignItems: "center",
         gap: "var(--space-2)",
         width: "100%",
+        /*
+         * 行不许被压扁（2026-10-30，压缩确认那句字叠在「仍要压缩」上）：清单是限高、内部滚的
+         * flex 列，行默认 flex-shrink: 1——内容超过封顶时，行会被压到各自的 minHeight。普通行的
+         * minHeight 就是内容高，看不出来；能换行的事实行内容两行（50）、minHeight 只有 24，被压成
+         * 24，第二行字就画到下一行上。更糟的是重新定位时量的是 scrollHeight——量到的已经是压扁后
+         * 的高度，面板就按压扁的高度封顶，永远不会长高、也不会出滚动条。不收缩，清单该多高就多高，
+         * 量得准，放不下时才滚。
+         */
+        flexShrink: 0,
         // 两行的行要高出一档（32 + 16 = 48）：副行不是浮着的小字，它是行的下半截
         minHeight:
           item.subLabel === undefined

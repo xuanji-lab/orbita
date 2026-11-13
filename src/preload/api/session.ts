@@ -4,6 +4,7 @@
  */
 import { ipcRenderer } from "electron";
 import { ipcChannels, type SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
+import type { ArtifactOpenResult } from "../../shared/browser.ts";
 import type { PromptImage } from "../../shared/prompt-images.ts";
 import type { RevertPlan, UndoPlan } from "../../shared/revert.ts";
 import type {
@@ -17,6 +18,7 @@ import type {
   CarryoverStatus,
   SessionCompletion,
   SessionMeta,
+  SessionMoveResult,
   SessionOlderPage,
   SessionWindowDetail,
 } from "../../shared/session.ts";
@@ -24,6 +26,12 @@ import type {
 export const sessionApi = {
   /** 会话列表，新的在前 */
   list: (): Promise<SessionMeta[]> => ipcRenderer.invoke(ipcChannels.sessionList),
+  /**
+   * 读单条会话的 meta（列表增量刷新：只替换这一条）。null = 不存在 / meta 坏了，
+   * 与 `list()` 跳过坏记录同口径
+   */
+  meta: (id: string): Promise<SessionMeta | null> =>
+    ipcRenderer.invoke(ipcChannels.sessionMeta, id),
   /** 读一条会话的元数据与 transcript；不存在返回 null */
   load: (id: string): Promise<SessionWindowDetail | null> =>
     ipcRenderer.invoke(ipcChannels.sessionLoad, id),
@@ -69,9 +77,9 @@ export const sessionApi = {
   /** 归档：从主列表移走，**不是删除** */
   archive: (id: string, archived: boolean): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionArchive, id, archived),
-  /** 换归属工作区；null = 回到 TASKS */
-  move: (id: string, workspaceId: string | null): Promise<void> =>
-    ipcRenderer.invoke(ipcChannels.sessionMove, id, workspaceId),
+  /** 迁移到另一个工作区（可批量；归属与 cwd 一起换，子会话跟着走，在跑的跳过）；null = 回到 TASKS */
+  move: (ids: readonly string[], workspaceId: string | null): Promise<SessionMoveResult> =>
+    ipcRenderer.invoke(ipcChannels.sessionMove, ids, workspaceId),
   /**
    * 从某条 agent 回答另起一支（C-2）：新会话 = 该回答及之前的全部，原会话不动。
    * 返回新会话 id；两本账对不上时以错误拒绝（宁可不分支，不切错位置）。
@@ -109,8 +117,11 @@ export const sessionApi = {
   /** 执行单轮撤销：只还原这一轮的文件，pi 本子追加一条告知模型 */
   undo: (id: string, turnId: string): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionUndo, id, turnId),
-  /** 轮尾产物在内置浏览器打开（仅会话文件账里的网页文件） */
-  openArtifactInBrowser: (id: string, path: string): Promise<void> =>
+  /**
+   * 轮尾产物在内置浏览器打开：文件账上有、realpath 后在本会话的目录里、是网页文件，才打开。
+   * 不放行时回原因码（卡片照着说），不抛错
+   */
+  openArtifactInBrowser: (id: string, path: string): Promise<ArtifactOpenResult> =>
     ipcRenderer.invoke(ipcChannels.sessionOpenArtifactInBrowser, id, path),
   /** 轮尾产物在系统文件管理器里定位（仅会话文件账里记过的文件） */
   revealArtifact: (id: string, path: string): Promise<void> =>
