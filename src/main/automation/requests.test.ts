@@ -7,7 +7,7 @@ import type { AgentEvent } from "../../shared/agent-ipc.ts";
 import {
   AUTOMATION_AGENT_DEFAULT_MAX_RUNS,
   AUTOMATION_MAX_ACTIVE_PER_SESSION,
-  AUTOMATION_MAX_TOTAL,
+  AUTOMATION_MAX_UNFINISHED,
   type Automation,
   type AutomationToolRequest,
 } from "../../shared/automation.ts";
@@ -173,7 +173,7 @@ describe("applyAutomationCreate（面板手建）", () => {
     const { deps, store } = setup();
     const created = await applyAutomationCreate(deps, { ...validCreate, title: "  a   b \n c " });
     assert.equal(created.ok && created.automation?.title, "a b c");
-    for (let i = 0; i < AUTOMATION_MAX_TOTAL - 1; i += 1) {
+    for (let i = 0; i < AUTOMATION_MAX_UNFINISHED - 1; i += 1) {
       await store.insert(makeAutomation({ id: `x${i}`, status: i % 2 === 0 ? "completed" : "active" }));
     }
     const over = await applyAutomationCreate(deps, validCreate);
@@ -423,7 +423,7 @@ describe("applyAutomationRequest：create", () => {
     assert.equal((await applyAutomationRequest(deps, toolEvent("S2", createRequest({ title: "别的会话" })))).ok, true, "别的会话不受影响");
     // new_session 的任务不占「会话」名额
     assert.equal((await applyAutomationRequest(deps, toolEvent("S", createRequest({ title: "n", target: "new_session" })))).ok, true);
-    for (let i = (await store.list()).length; i < AUTOMATION_MAX_TOTAL; i += 1) await store.insert(makeAutomation({ id: `f${i}`, status: "completed" }));
+    for (let i = (await store.list()).length; i < AUTOMATION_MAX_UNFINISHED; i += 1) await store.insert(makeAutomation({ id: `f${i}`, status: "completed" }));
     assert.equal((await applyAutomationRequest(deps, toolEvent("S2", createRequest({ title: "满了" })))).ok, false);
     for (const bad of [
       createRequest({ title: "" }),

@@ -39,8 +39,14 @@ export const AUTOMATION_AGENT_MAX_RUNS_CAP = 100;
 export const AUTOMATION_USER_MAX_RUNS_CAP = 10_000;
 /** 一条会话上同时「活跃」的任务数上限（this_session 绑定的那条会话算） */
 export const AUTOMATION_MAX_ACTIVE_PER_SESSION = 5;
-/** 全部自动化条数上限（所有状态都计入，同 ZCode 的 AUTOMATION_CREATE_LIMIT；已完成的要在面板里删掉腾位） */
-export const AUTOMATION_MAX_TOTAL = 20;
+/**
+ * 「没结束的」自动化条数上限：只数 active / paused / failed——它们才占着调度（同 ZCode 的 AUTOMATION_CREATE_LIMIT 的用意）。
+ * 已结束（completed）的自动归档、不计入（2026-11-14）：以前所有状态都算，腾名额的唯一办法是删记录，
+ * 既逼用户做杂事，也让智能体有了「去动自动化记录」的动机。
+ */
+export const AUTOMATION_MAX_UNFINISHED = 20;
+/** 归档里最多留多少条已结束的记录（超出的从最旧的丢）；主存储文件因此不随时间无限变长 */
+export const AUTOMATION_ARCHIVE_KEEP = 200;
 /** 连续失败这么多次进入失败态（可「重新启动」） */
 export const AUTOMATION_MAX_CONSECUTIVE_FAILURES = 3;
 /** 标题长度上限：会话标题「<标题> · <日期时间>」要在 deriveSessionTitle 的 60 字内放得下 */
@@ -253,6 +259,11 @@ export const AUTOMATION_STATUSES = ["active", "paused", "failed", "completed"] a
  * - `completed` 终点到了（跑满次数 / 过了结束日期 / 一次性跑完）或被取消 / 绑定的会话被删。
  */
 export type AutomationStatus = (typeof AUTOMATION_STATUSES)[number];
+
+/** 已结束 = completed：自动归档、不占名额、不再被调度（主进程 store 的分界线，面板的折叠区也按它分） */
+export function isFinished(automation: Pick<Automation, "status">): boolean {
+  return automation.status === "completed";
+}
 
 /** completed 的原因（面板上说清「为什么停了」） */
 export type AutomationEndReason = "finished" | "expired" | "cancelled" | "sessionDeleted";
@@ -511,7 +522,8 @@ export type AutomationToolRequest =
       /** 请求的权限档（只对 new_session 有意义）；skip 要主进程核对会话此刻的档，不是想给就给 */
       mode?: AutomationMode;
     }
-  | { op: "list" }
+  /** includeFinished：连已归档的已结束记录一起列；缺席 = 只列没结束的 */
+  | { op: "list"; includeFinished?: boolean }
   | { op: "cancel"; automationId: string }
   /** 只开放权限档这一项；别的字段 agent 不能改 */
   | { op: "update"; automationId: string; mode: AutomationMode };
@@ -635,7 +647,15 @@ export function parseAutomationCard(raw: unknown): AutomationCardView | null {
 }
 
 export type AutomationToolOutcome =
-  | { ok: true; text: string; automation?: AutomationCardView; automations?: AutomationCardView[]; modeRow?: AutomationModeRow }
+  | {
+      ok: true;
+      text: string;
+      automation?: AutomationCardView;
+      automations?: AutomationCardView[];
+      modeRow?: AutomationModeRow;
+      /** list 专用：排在卡片行**之后**的一行说明（另有 N 条已结束的归档、怎么看） */
+      footer?: string;
+    }
   | { ok: false; error: string };
 
 /* ---------- 磁盘解析（逐字段校验，坏的丢掉，不给坏值过路） ---------- */

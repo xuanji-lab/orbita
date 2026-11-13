@@ -26,7 +26,7 @@ import {
   AUTOMATION_MODE_DECLINED_KEPT,
   AUTOMATION_MODE_ROW_ACTIONS,
   AUTOMATION_MAX_ACTIVE_PER_SESSION,
-  AUTOMATION_MAX_TOTAL,
+  AUTOMATION_MAX_UNFINISHED,
   AUTOMATION_PROMPT_MAX,
   AUTOMATION_TITLE_MAX,
   AUTOMATION_USER_MAX_RUNS_CAP,
@@ -168,7 +168,7 @@ function activeOnSession(all: readonly Automation[], sessionId: string, exceptId
 }
 
 const SESSION_LIMIT_MESSAGE = `At most ${AUTOMATION_MAX_ACTIVE_PER_SESSION} active automations can be bound to one session.`;
-const TOTAL_LIMIT_MESSAGE = `At most ${AUTOMATION_MAX_TOTAL} automations can exist (finished ones count too); delete some in the Automations panel first.`;
+const TOTAL_LIMIT_MESSAGE = `At most ${AUTOMATION_MAX_UNFINISHED} automations can exist (finished ones count too); delete some in the Automations panel first.`;
 
 /* ---------- 面板上的操作 ---------- */
 
@@ -221,7 +221,7 @@ export async function applyAutomationCreate(deps: AutomationRequestDeps, raw: un
   }
   const nextRunAt = firstRunAt(schedule.schedule, now, until);
   if (nextRunAt === null) return fail("The end date comes before the first run.");
-  if ((await deps.store.list()).length >= AUTOMATION_MAX_TOTAL) return fail(TOTAL_LIMIT_MESSAGE);
+  if ((await deps.store.list()).length >= AUTOMATION_MAX_UNFINISHED) return fail(TOTAL_LIMIT_MESSAGE);
   const automation: Automation = {
     id: deps.newId(),
     title: title.value,
@@ -583,7 +583,7 @@ export async function applyAutomationRequest(
   const nextRunAt = firstRunAt(schedule.schedule, now, until);
   if (nextRunAt === null) return fail("The end time comes before the first run.");
   const all = await deps.store.list();
-  if (all.length >= AUTOMATION_MAX_TOTAL) return fail(TOTAL_LIMIT_MESSAGE);
+  if (all.length >= AUTOMATION_MAX_UNFINISHED) return fail(TOTAL_LIMIT_MESSAGE);
   if (targetKind === "this_session" && activeOnSession(all, meta.id) >= AUTOMATION_MAX_ACTIVE_PER_SESSION) {
     return fail(`${SESSION_LIMIT_MESSAGE} Cancel one with automation_cancel first.`);
   }
