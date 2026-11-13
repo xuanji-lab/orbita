@@ -93,7 +93,14 @@ import { createTaskTools } from "./task-tools.ts";
 import { createBrowserTools } from "./browser-tools.ts";
 import { createTerminalTools, TERMINAL_TOOL_NAMES } from "./terminal-tools.ts";
 import { createObservedBashTool, killObservedChildren } from "./bash-observe.ts";
-import { createBashHandleTools } from "./bash-sessions.ts";
+import {
+  createBashHandleTools,
+  listSessions,
+  sessionStatuses,
+  stopOwnedSessions,
+  stopSession,
+  withBashReminder,
+} from "./bash-sessions.ts";
 import {
   applyRecallEvent,
   composeAttachmentPrompt,
@@ -2118,7 +2125,13 @@ async function echoAndPrompt(
   // （直接返回；轮尾文件账由 startTurn 的 finally 兕）
   const gate = await runIntentGate(command, opened.intentAbort, turnId === "" ? randomUUID() : turnId);
   if (gate.injection === null) return;
-  const finalPrompt = composeIntentPrompt(gate.injection, promptText);
+  /**
+   * 后台 bash 会话的提醒（下一条用户消息）：上一轮交还的句柄可能还在跑，而模型
+   * 无状态——不告诉它，它就不会去 poll。**在这里拼**（而不是开轮命令里的字段）：
+   * 状态是「此刻」的事实，主进程早几百毫秒算的那份会旧；而每次用户说话正是模型
+   * 该知道后台还有活的时刻。没有 running 会话时逐字返回原 prompt。
+   */
+  const finalPrompt = withBashReminder(composeIntentPrompt(gate.injection, promptText), listSessions(command.sessionId));
   // 两本账对齐：失败轮留下的 user 尾巴补记进 pi 本子，必须在 prompt 之前
   flushBackfill(opened.session, command.backfill);
   // **回声对账记最终发给 pi 的那份**（有意图时是注入块 + 原话）：pi 随后 emit 的
@@ -2257,11 +2270,30 @@ async function handle(command: AgentCommand): Promise<void> {
     // bash），正在跑的会话被删也成立，无需先 abort。killCycle 标记 disposed，
     // 收尾跳过二次 dispose（退订与出表仍做），并等它完全收尾。
     await killCycle(running, command.sessionId);
+    // 签到之后交还给后台的 bash 会话已经不在 pi 手里（生产者是我们自己的会话表），
+    // dispose 的 abort 只盖得到「当前这一轮」还挂着的那个进程。这里按归属把它的
+    // 后台命令一并收掉——会话删了，「它名下的后台进程」没有任何人再会 poll / stop。
+    // 正在跑的轮已在上面被 abort 连坐杀过，stopSession 幂等，这里不会重复杀。
+    await stopOwnedSessions(command.sessionId);
     ledger.delete(command.sessionId);
     // 审批 resolve 函数不随会话一起结的话，会把已销毁会话的工具执行闭包整条钉在内存里；
     // 意图确认的等待同理（它也不听 abort）
     settlePendingPermissions(command.sessionId);
     settleIntentAsks(command.sessionId);
+    return;
+  }
+
+  if (command.type === "bashStatusRequest") {
+    // 界面的状态通路（renderer 每 2s 轮询一次）。stop 有值就是「用户按了停止钮」：
+    // 与模型的 bash_stop 走同一个 stopSession，**owner 校验照旧**——跨会话的 id
+    // 一律当不存在（主进程只转发当前会话自己发起的那一条）。
+    // waitMs 0：不等它真的退，返回值只是让 renderer 知道「已收到」，下一拍轮询说真话。
+    if (command.stop !== undefined) await stopSession(command.stop, 0, command.owner);
+    send({
+      type: "bashStatus",
+      requestId: command.requestId,
+      sessions: sessionStatuses(command.owner),
+    });
     return;
   }
 

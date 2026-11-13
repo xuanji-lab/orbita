@@ -15,6 +15,7 @@
  */
 import type { ChildProcess } from "node:child_process";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { BashSessionEndReason, BashSessionStatus } from "../shared/bash-session.ts";
 
 /** 每会话保留的字节上限。256 KB ≈ 一个长构建的一屏历史，够看趋势，不够撑爆内存。 */
 export const TAIL_MAX_BYTES = 256 * 1024;
@@ -34,8 +35,9 @@ export const POLL_MAX_WAIT_SECONDS = 600;
 /** poll 未指定等待时间的默认值（秒）：对齐签到间隔，模型不填也有一档合理等待 */
 export const POLL_DEFAULT_WAIT_SECONDS = 120;
 
-/** 会话结束的原因。只有这几种，界面上要能如实说「为什么没了」 */
-export type SessionEndReason = "lifetime" | "stop" | "abort" | "shutdown";
+/** 会话结束的原因。只有这几种，界面上要能如实说「为什么没了」。
+ *  取值与 `shared/bash-session.ts` 同一份（那是界面与 agent 共用的契约），这里只起名 */
+export type SessionEndReason = BashSessionEndReason;
 
 function countNewlines(chunk: Buffer): number {
   let count = 0;
@@ -489,7 +491,9 @@ export async function pollSession(id: string, waitMs: number, owner?: string): P
   return session.takeSnapshot();
 }
 
-/** 杀一个会话并等它真的结束（Windows taskkill /F /T 是同步的，通常几毫秒就退出） */
+/**
+ * 杀一个会话并等它真的结束（Windows taskkill /F /T 是同步的，通常几毫秒就退出）
+ */
 export async function stopSession(
   id: string,
   waitMs = 3000,
@@ -502,6 +506,75 @@ export async function stopSession(
     await session.waitForEnd(waitMs);
   }
   return session.takeSnapshot();
+}
+
+/**
+ * 按归属收尾：把这条 Orbita 会话名下的 bash 会话全部停掉（删会话时用）。
+ *
+ * **为什么不是 killAllSessions**：同一个 utility 进程里还跑着别的会话的命令，
+ * 删 A 不该带走 B 的构建。这里只碰 `owner === owner` 的行。
+ * 已经在停 / 已结束的会话是 no-op（`stopSession` 的 kill 幂等）——删除一条正在跑的
+ * 会话时，pi 的 dispose 已经 abort 过当前轮、连坐杀过一次，这里不会重复杀。
+ *
+ * 返回真正被停掉的条数（只给日志与测试断言用）。
+ */
+export async function stopOwnedSessions(owner: string, waitMs = 0): Promise<number> {
+  const owned = [...sessions.values()].filter(
+    (session) => session.owner === owner && session.endedAt === undefined && !session.killed,
+  );
+  for (const session of owned) await stopSession(session.id, waitMs, owner);
+  return owned.length;
+}
+
+/**
+ * 界面的状态通路（renderer 轮询的那份列表）。
+ *
+ * 与 `listSessions` 同源，只做两件转换：毫秒 → 秒（界面事实槽的单位）、
+ * 结束后不再往前滚的 elapsed 照 `summary()` 的口径（它已经算到 endedAt）。
+ * **不返回 tail**：状态行要的是「还在动吗」，输出由 poll 那条路走。
+ */
+export function sessionStatuses(owner: string): BashSessionStatus[] {
+  return listSessions(owner).map((summary) => {
+    const status: BashSessionStatus = {
+      id: summary.id,
+      status: summary.status,
+      exitCode: summary.exitCode,
+      elapsedSeconds: Math.round(summary.elapsedMs / 1000),
+      idleSeconds: Math.round(summary.idleMs / 1000),
+    };
+    if (summary.endReason !== undefined) status.endReason = summary.endReason;
+    return status;
+  });
+}
+
+/**
+ * 下一条用户消息里的提醒（回合结束后仍有后台命令在跑）。
+ *
+ * **一句、只报状态快照**：不替模型做决定（poll 还是 stop 由它读完自己判），
+ * 也不起定时器——提醒的时机是「用户又说话了」，那正是模型该知道后台还有活的时候。
+ * 没有 running 会话返回 null（调用方原样拼进 prompt，不多占一行）。
+ */
+export function bashSessionReminder(summaries: readonly SessionSummary[]): string | null {
+  const running = summaries.filter((summary) => summary.status === "running");
+  if (running.length === 0) return null;
+  const facts = running
+    .map((summary) => `${summary.id} (running ${formatDuration(summary.elapsedMs)}, no output for ${formatDuration(summary.idleMs)})`)
+    .join(", ");
+  const which = running.length === 1 ? `background bash session ${facts}` : `background bash sessions ${facts}`;
+  return (
+    `[orbita] notice: ${which} still running from an earlier turn. ` +
+    "Read progress with bash_poll, end it with bash_stop."
+  );
+}
+
+/**
+ * 把提醒拼到这一轮的用户消息末尾。**没有 running 会话时逐字返回原 prompt**——
+ * 大多数轮没有后台命令，那些轮的消息内容不该多一个字符（provider 的前缀缓存与
+ * 转录回放都按原话对账）。多个会话合并成**一句**：三行提醒会把用户的号令隔开。
+ */
+export function withBashReminder(prompt: string, summaries: readonly SessionSummary[]): string {
+  const reminder = bashSessionReminder(summaries);
+  return reminder === null ? prompt : `${prompt}\n\n${reminder}`;
 }
 
 /**

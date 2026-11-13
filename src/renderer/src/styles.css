@@ -1871,6 +1871,134 @@ html[data-pointer-drag] iframe {
   padding-left: calc(var(--tree-name-x) - var(--row-glyph-x));
 }
 
+/* ===== bash 活行（P2-lite）：展开体的命令专位 + 行尾停止钮 =====
+ * 命令从收起行挪到展开体顶部（用户拍了 A 版）：`$` 提示符不参与选中、命令只在
+ * 空格处换行（break-word 会把 --reporter=verbose 拆成 -- + reporter，读不得）、
+ * 行尾一枚 quiet-control 的 copy，hover / 键盘焦点才浮现，复制成功短暂变 check。
+ * 命令块与输出之间一条发丝线，同属一个虚线展开框（框本身在 ChatView 用
+ * EXPANDED_FRAME 内联，这里只管框里的排版与状态）。 */
+.bash-command {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
+
+.bash-prompt {
+  flex: 0 0 auto;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-code);
+  color: var(--color-text-tertiary);
+  /* 提示符是标点不是内容：划选复制命令时不该带上它 */
+  user-select: none;
+}
+
+.bash-command code {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-code);
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.bash-copy {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  opacity: 0;
+  transition: var(--transition-hover), opacity var(--duration-instant) var(--ease-standard);
+}
+
+.bash-copy:hover {
+  background: var(--option-hover-bg);
+  color: var(--color-text-primary);
+}
+
+.bash-command:hover .bash-copy,
+.bash-command:focus-within .bash-copy,
+.bash-copy.copied {
+  opacity: 1;
+}
+
+.bash-copy.copied {
+  color: var(--color-success);
+}
+
+.bash-command-sep {
+  height: 0;
+  border-top: 1px solid var(--color-border-default);
+}
+
+.bash-output {
+  max-height: 240px;
+  overflow: auto;
+  padding: var(--space-2) 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-code);
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+
+/* 行尾停止钮：常驻（不占位的话它就不是「随手能按」的），静止 secondary 墨色，
+   悬停转 danger —— 与回退/撤销的危险档同一配方（红字 + danger-soft 底），
+   **不是 accent**：accent 只给主操作。 */
+.bash-stop {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  /* 行右缘让出与折叠按钮同一个内边距（RaIL_X = --content-hem，CollapseRow 的 padding 同源）：
+     血线对齐。写变量不写 px：两边各写一个数就会在改血线时悄悄错开 */
+  margin-right: var(--content-hem);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.bash-stop:hover {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.bash-stop:disabled {
+  color: var(--color-text-tertiary);
+  cursor: default;
+}
+
+/* 第一下之后原地变「确认停止？」：文字比图标宽，宽度放开——两段式确认得看得见 */
+.bash-stop-confirm {
+  width: auto;
+  padding: 0 var(--space-2);
+  color: var(--color-danger);
+}
+
+.bash-stop-label {
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-ui);
+  white-space: nowrap;
+}
+
 /* ===== Sub-sessions 收件箱（2026-10-12：列表层改为收件箱） =====
  * 一个子会话一行：行首状态饼（.status-pie，与侧栏 / 铃铛清单同一个）+ 名字 +
  * 最新一句 + 相对时间（行尾，钉在行的右内边距上）。「在问你」的行展开回答框

@@ -5,6 +5,7 @@ import type { CompactedRecord, SessionRecord } from "@shared/session";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载（同 tool-results.ts 本身的纪律）
 import { composeChannelPrompt } from "../../../../shared/channel.ts";
 import { COMMAND_TIMEOUT_DEFAULT_SECONDS, COMMAND_TIMEOUT_FLOOR_SECONDS } from "../../../../shared/permission.ts";
+import type { BashSessionStatus } from "../../../../shared/bash-session.ts";
 import {
   answerText,
   branchAnchorEntries,
@@ -54,6 +55,13 @@ import {
   thinkingPreview,
   toolCallSummary,
   toolDurationText,
+  bashNeedsPolling,
+  bashSessionFacts,
+  bashStopStep,
+  detachedBashSessionId,
+  formatSessionClock,
+  showsCallSummary,
+  STOP_CONFIRM_MS,
   toolExpandable,
   toolGroupStatus,
   toolResultText,
@@ -2059,5 +2067,103 @@ describe("运行时钟文案（en / zh）", () => {
     assert.equal(zh.chat.expectedAbout("40 秒"), "预计约 40 秒");
     assert.equal(en.chat.slowerThanExpected, "slower than expected");
     assert.equal(zh.chat.slowerThanExpected, "比预计慢");
+  });
+});
+
+describe("bash 活行（P2-lite）", () => {
+  const toolItem = (text: string, timestamp = 1_000): ToolTranscriptItem =>
+    ({ role: "tool", toolCallId: "t1", toolName: "bash", status: "complete", timestamp, content: [{ type: "text", text }] }) as unknown as ToolTranscriptItem;
+
+  test("从工具结果尾部认出交还的会话 id", () => {
+    const output = "building…\n\n[orbita] kind=detached session=b7 idle=0s | The command is still running…\n";
+    assert.equal(detachedBashSessionId(toolItem(output)), "b7");
+  });
+
+  test("短命令 / 坏形状一律当作没有会活行", () => {
+    assert.equal(detachedBashSessionId(undefined), null);
+    assert.equal(detachedBashSessionId(toolItem("hello\n")), null);
+    assert.equal(detachedBashSessionId(toolItem("[orbita] kind=detached session=xx | …")), null);
+  });
+
+  test("只扫尾部：几十万字的输出也认得出末尾那行", () => {
+    const output = "x".repeat(500_000) + "\n[orbita] kind=detached session=b2 idle=0s | …\n";
+    assert.equal(detachedBashSessionId(toolItem(output)), "b2");
+  });
+
+  test("A 版：收起行不给 shell 的参数摘要，其余工具照旧", () => {
+    assert.equal(showsCallSummary("bash"), false);
+    assert.equal(showsCallSummary("powershell"), false);
+    assert.equal(showsCallSummary("read"), true);
+    assert.equal(showsCallSummary("edit"), true);
+  });
+
+  test("活行事实：跑着给两个时钟（已 12:34 · 无输出 2:10）", () => {
+    const facts = bashSessionFacts(
+      { id: "b1", status: "running", exitCode: null, elapsedSeconds: 754, idleSeconds: 130 },
+      { elapsed: 754, idle: 130 },
+      zh,
+    );
+    assert.equal(facts.text, "b1 · 已 12:34 · 无输出 2:10");
+    assert.equal(facts.tone, "live");
+  });
+
+  test("落定事实：自然结束给退出码与总时长（非零染红）", () => {
+    const ok = bashSessionFacts(
+      { id: "b1", status: "finished", exitCode: 0, elapsedSeconds: 1_082, idleSeconds: 5 },
+      { elapsed: 1_082, idle: 5 },
+      zh,
+    );
+    assert.equal(ok.text, "b1 · 退出 0 · 共 18:02");
+    assert.equal(ok.tone, "neutral");
+
+    const failed = bashSessionFacts(
+      { id: "b1", status: "finished", exitCode: 1, elapsedSeconds: 3, idleSeconds: 1 },
+      { elapsed: 3, idle: 1 },
+      zh,
+    );
+    assert.equal(failed.text, "b1 · 退出 1 · 共 0:03");
+    assert.equal(failed.tone, "danger");
+  });
+
+  test("落定事实：被停不染红，寿命上限杀才是红字「已终止 · 上限」", () => {
+    const stopped = bashSessionFacts(
+      { id: "b1", status: "killed", exitCode: null, elapsedSeconds: 401, idleSeconds: 4, endReason: "stop" },
+      { elapsed: 401, idle: 4 },
+      zh,
+    );
+    assert.equal(stopped.text, "b1 · 已停止 · 共 6:41");
+    assert.equal(stopped.tone, "neutral", "人做的决定不是失败");
+
+    const capped = bashSessionFacts(
+      { id: "b1", status: "killed", exitCode: null, elapsedSeconds: 14_400, idleSeconds: 3_600, endReason: "lifetime" },
+      { elapsed: 14_400, idle: 3_600 },
+      zh,
+    );
+    assert.equal(capped.text, "b1 · 已终止 · 上限");
+    assert.equal(capped.tone, "danger");
+  });
+
+  test("会话时钟：分:秒，满一小时多一段", () => {
+    assert.equal(formatSessionClock(0), "0:00");
+    assert.equal(formatSessionClock(754), "12:34");
+    assert.equal(formatSessionClock(3_600), "1:00:00");
+    assert.equal(formatSessionClock(14_400), "4:00:00");
+  });
+
+  test("轮询门：没快照 / 快照比结果帧旧 / 还在跑才继续", () => {
+    const running: BashSessionStatus = { id: "b1", status: "running", exitCode: null, elapsedSeconds: 5, idleSeconds: 3 };
+    const done: BashSessionStatus = { id: "b1", status: "finished", exitCode: 0, elapsedSeconds: 5, idleSeconds: 3 };
+    assert.equal(bashNeedsPolling(undefined, 1_000, undefined), true, "第一次要拉");
+    assert.equal(bashNeedsPolling(500, 1_000, done), true, "快照比结果帧旧，不可信");
+    assert.equal(bashNeedsPolling(2_000, 1_000, running), true);
+    assert.equal(bashNeedsPolling(2_000, 1_000, done), false);
+    assert.equal(bashNeedsPolling(2_000, 1_000, undefined), false, "已经查不到的会话不再轮询");
+  });
+
+  test("停止钮两段式：第一下 arm，窗口内第二下 stop，超窗口重新 arm", () => {
+    assert.equal(bashStopStep(null, 10_000), "arm");
+    assert.equal(bashStopStep(10_000, 10_500), "stop");
+    assert.equal(bashStopStep(10_000, 10_000 + STOP_CONFIRM_MS), "stop", "刚好到窗口边界仍算确认");
+    assert.equal(bashStopStep(10_000, 10_001 + STOP_CONFIRM_MS), "arm", "过了窗口就不认");
   });
 });

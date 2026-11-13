@@ -26,6 +26,7 @@ import {
   type BashOperations,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { detachedNoticeHeader } from "../shared/bash-session.ts";
 import {
   TailBuffer,
   killAllSessions,
@@ -210,10 +211,13 @@ function waitForChildProcess(child: ChildProcess): Promise<WaitOutcome> {
   });
 }
 
-/** 签到提示。sessionId 让模型知道下一步该用哪个句柄；逗号后的两句说明怎么继续 */
+/**
+ * 签到提示。sessionId 让模型知道下一步该用哪个句柄；逗号后的两句说明怎么继续。
+ * 竖线左边那一截由 shared/bash-session.ts 铸（renderer 解析同一份格式）。
+ */
 function detachNotice(sessionId: string): string {
   return (
-    `\n[orbita] kind=detached session=${sessionId} idle=0s | ` +
+    `\n${detachedNoticeHeader(sessionId)} | ` +
     "The command is still running; it was detached so you can keep going. " +
     "Read it with bash_poll (bash_stop to end it).\n"
   );

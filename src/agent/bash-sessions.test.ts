@@ -20,7 +20,10 @@ import {
   listSessions,
   pollSession,
   registerSession,
+  sessionStatuses,
+  stopOwnedSessions,
   stopSession,
+  withBashReminder,
 } from "./bash-sessions.ts";
 
 const fakeChild = { pid: 424242 } as unknown as ChildProcess;
@@ -255,5 +258,95 @@ describe("归属隔离 —— 同一个进程里的多条 Orbita 会话", () => 
       killTree: () => {}, owner: "sess-b", maxSessions: 1,
     });
     assert.equal(other.ok, true, "B 不该被 A 的预算影响");
+  });
+});
+
+describe("状态通路 —— 界面轮询的那份列表（P2-lite）", () => {
+  test("秒数换算与结束原因：寿命上限杀掉的会话带 endReason=lifetime 透出去", async () => {
+    const session = register({ owner: "sess-a", lifetimeMs: 80 });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const [status] = sessionStatuses("sess-a");
+    assert.equal(status?.id, session.id);
+    assert.equal(status?.status, "killed");
+    assert.equal(status?.endReason, "lifetime", "界面靠它说「已终止 · 上限」");
+    assert.ok((status?.elapsedSeconds ?? 0) >= 0);
+    assert.equal(Number.isInteger(status?.elapsedSeconds), true, "秒是整数，界面事实槽不显示小数");
+  });
+
+  test("运行中的会话：running + 两个秒数；别的会话看不见", () => {
+    const a = register({ owner: "sess-a" });
+    register({ owner: "sess-b" });
+    const statuses = sessionStatuses("sess-a");
+    assert.deepEqual(statuses.map((x) => x.id), [a.id]);
+    assert.equal(statuses[0]?.status, "running");
+    assert.equal(statuses[0]?.exitCode, null);
+    assert.equal(statuses[0]?.endReason, undefined);
+  });
+
+  test("正常结束的会话：finished + 退出码（不留 endReason）", () => {
+    const session = register({ owner: "sess-a" });
+    session.end(0);
+    const [status] = sessionStatuses("sess-a");
+    assert.equal(status?.status, "finished");
+    assert.equal(status?.exitCode, 0);
+    assert.equal(status?.endReason, undefined);
+  });
+});
+
+describe("删会话收尾 —— 按 owner 停掉整批", () => {
+  test("停掉 A 的全部后台命令，B 的一条不动", async () => {
+    const a1 = register({ owner: "sess-a" });
+    const a2 = register({ owner: "sess-a" });
+    const b1 = register({ owner: "sess-b" });
+    assert.equal(await stopOwnedSessions("sess-a"), 2);
+    assert.equal(a1.killed, true);
+    assert.equal(a2.killed, true);
+    assert.equal(b1.killed, false, "别的会话的命令不该陪葬");
+    assert.equal(listSessions("sess-b").length, 1);
+  });
+
+  test("已经结束 / 已经停掉的会话不重复杀（删除正在跑的会话时 abort 已连坐杀过一次）", async () => {
+    const running = register({ owner: "sess-a" });
+    await stopSession(running.id, 0, "sess-a");
+    const finished = register({ owner: "sess-a" });
+    finished.end(0);
+    assert.equal(await stopOwnedSessions("sess-a"), 0, "没有一条是「还在跑且没被杀」的");
+  });
+
+  test("没有后台命令的会话：无事可做，回 0", async () => {
+    assert.equal(await stopOwnedSessions("sess-none"), 0);
+  });
+});
+
+describe("下轮提醒 —— 有 / 没有 running 会话", () => {
+  test("没有 running 会话：prompt 逐字不变", () => {
+    const prompt = "把 dev server 起回来";
+    assert.equal(withBashReminder(prompt, []), prompt);
+    const finished = register({ owner: "sess-a" });
+    finished.end(0);
+    assert.equal(withBashReminder(prompt, listSessions("sess-a")), prompt);
+    // 被停掉的也不算「还在跑」
+    const killed = register({ owner: "sess-b" });
+    killed.kill("stop");
+    assert.equal(withBashReminder(prompt, listSessions("sess-b")), prompt);
+  });
+
+  test("有一个 running 会话：尾部追加一句提醒，带上 id 与两个时长", () => {
+    const session = register({ owner: "sess-a" });
+    const out = withBashReminder("继续", listSessions("sess-a"));
+    assert.match(out, /^继续\n\n\[orbita\] notice: /);
+    assert.ok(out.includes(`background bash session ${session.id} (running`), out);
+    assert.match(out, /bash_poll/);
+    assert.match(out, /bash_stop/);
+  });
+
+  test("多个 running 会话合并成一句（不分段，不刷屏）", () => {
+    const a = register({ owner: "sess-a" });
+    const b = register({ owner: "sess-a" });
+    const out = withBashReminder("继续", listSessions("sess-a"));
+    const body = out.slice(out.indexOf("[orbita]"));
+    assert.match(body, /background bash sessions/);
+    assert.ok(body.includes(a.id) && body.includes(b.id));
+    assert.equal(body.split("\n").length, 1, "一句提醒 = 一行");
   });
 });

@@ -33,6 +33,8 @@ import { matchScanMessage, type ScanMessage } from "./carryover-parse.ts";
 // 值导入必须走相对路径带 .ts 后缀（同上一行的纪律：本文件被 node --test 直接加载）
 import { skillForReadPath } from "../../../../shared/skill.ts";
 import { parseQualifiedToolName } from "../../../../shared/mcp.ts";
+import { parseDetachedSessionId } from "../../../../shared/bash-session.ts";
+import type { BashSessionStatus } from "../../../../shared/bash-session.ts";
 import { isThinkingLevel } from "../../../../shared/thinking.ts";
 import type { Messages } from "../../messages-en.ts";
 
@@ -1121,6 +1123,125 @@ function secondsValueOf(value: unknown): number | null {
 export function formatRunClock(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000));
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+// ── bash 活行（P2-lite）：交还会话的认领与事实槽 ──
+
+/**
+ * 后台会话时长的画法：`12:34`（分:秒），满一小时才多一段 `1:02:03`——
+ * 寿命上限是 4 小时，再长也不会出现第三段。与 `formatRunClock` 分开：那个是
+ * 「本次调用跑了多久」（永远在一轮之内），这个是「这条后台命令活了多久」。
+ */
+export function formatSessionClock(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  const minutes = Math.floor(seconds / 60);
+  const rest = String(seconds % 60).padStart(2, "0");
+  if (minutes < 60) return `${minutes}:${rest}`;
+  return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}:${rest}`;
+}
+
+/**
+ * 结果里认「这次调用已经交还成后台会话」。
+ *
+ * **只扫尾部 400 字符**：交还之后输出不再往工具结果里写（bash-observe 的
+ * `forwardToTool` 落了 false），提示行就在最后；而工具结果实测能到 479KB，整条
+ * 拼一遍只为找一个 id 不划算。认不出就返回 null——这一行退回普通 bash 行。
+ */
+export function detachedBashSessionId(result: ToolTranscriptItem | undefined): string | null {
+  if (result === undefined) return null;
+  let tail = "";
+  for (let index = result.content.length - 1; index >= 0 && tail.length < 400; index -= 1) {
+    const block = result.content[index];
+    if (block !== undefined && block.type === "text") tail = block.text.slice(-400) + tail;
+  }
+  return parseDetachedSessionId(tail);
+}
+
+/** 事实槽的三种语气：还在跑 / 已落定 / 上限杀（唯一需要警示色的一种） */
+export type BashFactsTone = "live" | "neutral" | "danger";
+
+export interface BashSessionFacts {
+  /** 一行事实：`b1 · 已 12:34 · 无输出 2:10`。三段之间统一用 ` · ` 连 */
+  text: string;
+  tone: BashFactsTone;
+}
+
+/**
+ * 活行的事实槽。**机器事实，不是状态词**：跑着的时候给两个时钟（活了多久、
+ * 距上次输出多久），落定之后换成结果词（退出码 / 已停止 / 已终止）。
+ *
+ * 为什么不用「运行中」这种词：跑几小时的行不能一直喘，而秒针本身就把「还在动」
+ * 说清楚了（设计稿「同一行的三种状态」）。
+ *
+ * seconds 由调用方给：跑着的行在两拍轮询之间要靠本地秒针外推，落定的行用快照值。
+ */
+export function bashSessionFacts(
+  status: BashSessionStatus,
+  seconds: { elapsed: number; idle: number },
+  t: Messages,
+): BashSessionFacts {
+  const elapsed = formatSessionClock(seconds.elapsed);
+  if (status.status === "running") {
+    return {
+      text: `${status.id} · ${t.chat.bashElapsed(elapsed)} · ${t.chat.bashIdle(formatSessionClock(seconds.idle))}`,
+      tone: "live",
+    };
+  }
+  if (status.status === "killed" && status.endReason === "lifetime") {
+    // 寿命上限是唯一的「不是你停的」：红字说清原因，别让它和被停长得一样
+    return { text: `${status.id} · ${t.chat.bashTerminated} · ${t.chat.bashCapLimit}`, tone: "danger" };
+  }
+  if (status.status === "killed") {
+    // 被停（用户按停止钮 / 模型 bash_stop / 停轮连坐）：人做的决定，不染红
+    return { text: `${status.id} · ${t.chat.bashStopped} · ${t.chat.bashTotal(elapsed)}`, tone: "neutral" };
+  }
+  const exit = status.exitCode;
+  if (exit === null) return { text: `${status.id} · ${t.chat.bashTotal(elapsed)}`, tone: "neutral" };
+  return {
+    text: `${status.id} · ${t.chat.bashExit(exit)} · ${t.chat.bashTotal(elapsed)}`,
+    tone: exit === 0 ? "neutral" : "danger",
+  };
+}
+
+/**
+ * 这一行还要不要继续轮询。
+ *
+ * 三个条件按顺序：还没拉到过任何一拍的快照 → 要；快照比这行的结果帧还老（若是
+ * 进程重启后重开的旧会话，上次那份快照说的是另一个同 id 的会话）→ 要；快照里
+ * 它还在 running → 要。其余（已 finished / killed，或快照里已经没这个 id）→ 停。
+ * 不在列表里就停是关键：否则一条早就查不到会话会让这个会话永远每 2s 拉一次。
+ */
+export function bashNeedsPolling(
+  polledAt: number | undefined,
+  resultAt: number,
+  status: BashSessionStatus | undefined,
+): boolean {
+  if (polledAt === undefined) return true;
+  if (polledAt < resultAt) return true;
+  return status?.status === "running";
+}
+
+/**
+ * 收起行上的参数摘要该不该显示。**shell 类一律不给**（A 版，用户已拍板）：
+ * 命令一长就会把行尾的机器事实与停止钮挤掉，而全文在展开体的命令专位。
+ * 其余工具（read / edit / grep…）的摘要不变——它们短，而且就是那一行的身份。
+ */
+export function showsCallSummary(toolName: string): boolean {
+  return toolName !== "bash" && toolName !== "powershell";
+}
+
+/** 停止钮的确认窗口：第一下之后这么久内再点才真停，超时自动收回 */
+export const STOP_CONFIRM_MS = 3_000;
+
+/**
+ * 停止钮的两段式状态机（纯函数，组件里只留一个时间戳与定时器）：
+ * 没上膛 → `arm`（第一下）；上膛且在窗口内 → `stop`（第二下真停）；
+ * 上膛但已超出窗口（定时器被节流 / 页面卡了一下）→ 重新 `arm`，
+ * 不把一个过了期的「确认」当成真确认。
+ */
+export function bashStopStep(armedAt: number | null, now: number): "arm" | "stop" {
+  if (armedAt === null) return "arm";
+  return now - armedAt <= STOP_CONFIRM_MS ? "stop" : "arm";
 }
 
 /**

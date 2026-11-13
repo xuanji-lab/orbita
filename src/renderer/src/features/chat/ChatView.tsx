@@ -119,6 +119,13 @@ import {
   liveTailLines,
   expectedSecondsOf,
   formatRunClock,
+  // bash 活行（P2-lite）：交还会话的认领、事实槽与秒针外推
+  bashSessionFacts,
+  detachedBashSessionId,
+  formatSessionClock,
+  bashStopStep,
+  showsCallSummary,
+  STOP_CONFIRM_MS,
   shellAutoExpand,
   stripTrailingBlankLines,
   tailPreviewLines,
@@ -158,6 +165,7 @@ import {
   type TurnViewEntry,
 } from "./tool-results";
 import { useToday } from "./today.ts";
+import { applyBashSessions, useBashLive } from "./bash-live.ts";
 import { formatMessageTime, fullTimestamp } from "./message-time.ts";
 import { highlighterReady, highlightLines, langFromPath, type TokenSpan } from "./highlight";
 import { Composer } from "../../shell/Composer";
@@ -3858,6 +3866,7 @@ function EntryView(props: {
       onOpenTask={props.onOpenTask}
       channel={props.channel}
       skills={props.skills}
+      sessionId={props.sessionId}
     />
   );
 }
@@ -4559,6 +4568,10 @@ function BranchRow(props: {
  * 折叠行共用骨架（设计系统 ToolCard / ThinkingCard）：满宽热区、hover 淡底、
  * 圆角裁边。行首（图标+label）是「状态」本体，副标是注脚（tertiary mono），
  * 状态词是机器事实（xs mono 等宽数字）。
+ *
+ * `trailing`：行尾的**真按钮**（目前只有 bash 活行的停止钮）。它必须是折叠按钮的
+ * 兄弟而不是子元素——button 不能嵌 button（SubSessionsPanel 同一条规矩），否则点击
+ * 要 stopPropagation、读屏器也只看到一个奇怪的嵌套控件。
  */
 /**
  * 「一轮一行」的过程块（设置 › 过程显示 = turn；推导在 turn-process.ts）。
@@ -4800,11 +4813,21 @@ function CollapseRow(props: {
   /** 28px 的元数据行（轮折叠头）：它是注脚，不该和工具行一样高 */
   dense?: boolean;
   onToggle: () => void;
+  trailing?: React.ReactNode;
   children: React.ReactNode;
 }) {
   const interactive = props.disabled !== true;
   return (
-    <div style={{ minWidth: 0, borderRadius: "var(--radius-sm)", overflow: "hidden" }}>
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "var(--space-1)",
+        minWidth: 0,
+        borderRadius: "var(--radius-sm)",
+        overflow: "hidden",
+      }}
+    >
       <button
         type="button"
         aria-expanded={interactive ? props.open : undefined}
@@ -4815,7 +4838,8 @@ function CollapseRow(props: {
           display: "flex",
           alignItems: "center",
           gap: "var(--space-2)",
-          width: "100%",
+          flex: "1 1 auto",
+          minWidth: 0,
           minHeight: props.dense === true ? "var(--control-height-sm)" : "var(--control-height-md)",
           // 高度就是台阶本身（28 / 32），不由「字 + 上下内边距」撑：原来 6 + 21 + 6 = 33
           padding: `0 ${RAIL_X}`,
@@ -4830,6 +4854,7 @@ function CollapseRow(props: {
       >
         {props.children}
       </button>
+      {props.trailing}
     </div>
   );
 }
@@ -5047,8 +5072,9 @@ function ToolLine(props: {
   channel: ChannelViewContext;
   /** read SKILL.md 徽标的识别索引（透传自 EntryView） */
   skills: SkillMeta[];
-  /** install_plugin 的那一行点「安装」要带会话（主进程按它重验工作区）；别的工具不传 */
-  sessionId?: string;
+  /** 会话 id：后台 bash 会话的 owner，活行的状态轮询拿它去查；
+   * install_plugin 那一行点「安装」也要带会话（主进程按它重验工作区） */
+  sessionId: string;
 }) {
   const t = useT();
   const [open, setOpen] = useFoldState(`tool:${props.toolCallId}`);
@@ -5061,14 +5087,21 @@ function ToolLine(props: {
   // 运行」（PR 168）：被中断的 bash 不计时、不自动展开，与真跑着的命令分流 ──
   const shell = props.toolName === "bash" || props.toolName === "powershell";
   const shellActive = shell && active;
-  // 秒针：只挂运行中的 shell（Responding 同款，一秒一跳）。睡眠中的命令没有任何
-  // 事件帧，计时只能靠自己跳；跑完即停，不留空转的 interval。
+  // ── bash 活行（P2-lite）：签到交还之后，这一行原地变成后台会话的观察窗 ──
+  // 会话 id 从工具结果尾部的 `[orbita] kind=detached session=b1` 认出来；认不出
+  // （短命令、旧记录的普通 bash）就没有活行，整块逻辑自然退化成今天的行。
+  const bashId = shell ? detachedBashSessionId(result) : null;
+  const bashLive = useBashLive(props.sessionId, bashId, result?.timestamp ?? 0);
+  const bashStatus = bashLive.status;
+  const bashRunning = bashId !== null && bashStatus?.status === "running";
+  // 秒针：只挂「跑着的东西」——运行中的 shell（Responding 同款，一秒一跳）与
+  // 后台活行（两拍轮询之间靠它外推）。睡眠中的命令没有任何事件帧，计时只能自己跳。
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (!shellActive) return;
+    if (!shellActive && !bashRunning) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [shellActive]);
+  }, [shellActive, bashRunning]);
   const runStart = shellActive ? toolStartAt(props.toolCallId) : null;
   const expectedSeconds = shell ? expectedSecondsOf(props.input) : null;
   const limitSeconds = shell ? timeoutSecondsOf(props.input) : null;
@@ -5179,8 +5212,15 @@ function ToolLine(props: {
     props.toolName === "write" ||
     props.toolName === "edit" ||
     props.toolName === "ls";
-  const baseCallLabel =
-    callSummary !== null && pathTool ? splitPathTail(callSummary).name : callSummary;
+  // 收起态不显示命令（A 版，用户已拍板）：长命令会把行尾的机器事实与停止钮挤掉，
+  // 命令全文在展开体顶部的命令专位。这里一并把摘要置空，省于后续每帧的比较。
+  const baseCallLabel = !showsCallSummary(props.toolName)
+    ? null
+    : callSummary !== null && pathTool
+      ? splitPathTail(callSummary).name
+      : callSummary;
+  // 命令全文（bash 的入参里就是它）：收起态不再显示，展开体顶部的命令专位用
+  const command = shell ? callSummary : null;
   // 跑着的 shell 有实时增量可展，其余工具跑完才有完整结果（见 toolExpandable）
   const expandable = toolExpandable(result, props.toolName);
   const live = expandable && active;
@@ -5217,11 +5257,36 @@ function ToolLine(props: {
   const fileLang = fileView !== null ? langFromPath(callSummary ?? "") : null;
   const writeLines =
     !open && props.toolName === "write" && fileView !== null ? writeLineCount(props.input) : null;
-  // 只有 shell 类值得看耗时（read/edit 毫秒级是噪音）；旧会话没见过 running 帧，量不到就没有
+
+  // ── bash 活行的事实槽（P2-lite，A 版）──
+  // 收起态**一个字都不给命令**（用户拍了 A 版）：长命令会把行尾的机器事实与停止钮
+  // 挤掉，而命令全文在展开体的命令专位。跑着的行给两个时钟，落定后换成结果词。
+  const bashTicked =
+    bashStatus !== undefined && bashStatus.status === "running"
+      ? Math.max(0, (now - bashLive.at) / 1000)
+      : 0;
+  const bashFacts =
+    bashStatus === undefined
+      ? null
+      : bashSessionFacts(
+          bashStatus,
+          { elapsed: bashStatus.elapsedSeconds + bashTicked, idle: bashStatus.idleSeconds + bashTicked },
+          t,
+        );
+  const bashFactsColor =
+    bashFacts === null
+      ? undefined
+      : bashFacts.tone === "danger"
+        ? "var(--color-danger)"
+        : bashFacts.tone === "live"
+          ? "var(--color-text-secondary)"
+          : "var(--color-text-tertiary)";
+  // 活行的图标：被停 / 被上限杀掉不再假装是终端（同「已中断」那一枚 circle-off）
+  const bashIcon: IconName | null = bashStatus?.status === "killed" ? "circle-off" : null;
+  // 只有 shell 类值得看耗时（read/edit 毫秒级是噪音）；旧会话没见过 running 帧，量不到就没有。
+  // 交还成后台会话的行不给这个数：它只是「交还时已经跑了多久」，真总量在事实槽的共 X 里
   const shellDuration =
-    (props.toolName === "bash" || props.toolName === "powershell") && !active
-      ? toolDurationText(props.toolCallId, t)
-      : null;
+    shell && !active && bashFacts === null ? toolDurationText(props.toolCallId, t) : null;
   // 运行中时钟：已跑多久（+上限，+预计）。起点没记到（旧会话重开）时退化为只报预计，
   // 连预计都没有就什么都不报——宁缺勿假。超出预计如实说「比预计慢」，不给负数倒计时。
   const runClock =
@@ -5239,6 +5304,10 @@ function ToolLine(props: {
   // 折叠行下的活尾：有流式输出时取末几行，让「它在动」不展开也看得见；
   // 展开时藏起（展开体本身就是完整活尾，别显两遍）
   const tailPreview = shellActive && !open ? tailPreviewLines(rawBody) : [];
+
+  // 事实槽占位时，摘要与耗时都是同一件事的第二遍（且会把行尾挤爆）——让位
+  const showSummary =
+    summary !== null && !active && stats === null && writeLines === null && builtin === null && bashFacts === null;
 
   // 外部能力芯片行（2026-09-27 两轮裁决）：skill 使用与 MCP 调用的身份收进一枚
   // 药丸芯片（图标 + 类型词 + 名字），与输入框附件 chip / 引用 chip 同族——「外部
@@ -5327,9 +5396,28 @@ function ToolLine(props: {
 
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
-      <CollapseRow open={open} disabled={!expandable} onToggle={toggleOpen}>
+      <CollapseRow
+        open={open}
+        disabled={!expandable}
+        onToggle={toggleOpen}
+        // 停止钮是真按钮，只能是折叠按钮的兄弟（button 不能嵌 button）。
+        // 常驻而不是悬停：这条行可能挂一小时，想停的时候人不该先学会悬停。
+        trailing={
+          bashRunning && bashId !== null && command !== null ? (
+            <BashStopButton sessionId={props.sessionId} bashId={bashId} />
+          ) : undefined
+        }
+      >
         <span className={active ? "orbita-breath" : undefined} style={HEAD_WRAP}>
-          <span style={{ color: failed ? "var(--color-danger)" : headIconColor(active) }}>
+          <span
+            style={{
+              color: failed
+                ? "var(--color-danger)"
+                : bashFacts?.tone === "danger"
+                  ? "var(--color-danger)"
+                  : headIconColor(active || bashRunning),
+            }}
+          >
             <Icon
               name={
                 failed
@@ -5338,18 +5426,18 @@ function ToolLine(props: {
                     ? "circle-off"
                     : skillUse !== null
                       ? "book-open"
-                      : toolIcon(props.toolName)
+                      : (bashIcon ?? toolIcon(props.toolName))
               }
               size={14}
               strokeWidth={1.8}
             />
           </span>
           {builtin !== null || docEdit !== null ? (
-            <span className="command-pill" style={headLabel(active)}>
+            <span className="command-pill" style={headLabel(active || bashRunning)}>
               {builtin?.label ?? docEdit}
             </span>
           ) : (
-            <span style={headLabel(active)}>{props.toolName}</span>
+            <span style={headLabel(active || bashRunning)}>{props.toolName}</span>
           )}
         </span>
         {callLabel !== null && (
@@ -5371,8 +5459,18 @@ function ToolLine(props: {
         {!open && stats === null && writeLines !== null && (
           <span style={SLOT.status}>{t.chat.lines(writeLines)}</span>
         )}
+        {/* bash 活行的事实槽：跑着是 `b1 · 已 12:34 · 无输出 2:10`，落定换成
+            结果词（退出 0 / 已停止 / 已终止 · 上限）。钉在行的右血线上 */}
+        {bashFacts !== null && (
+          <span
+            className="row-trailing"
+            style={{ ...SLOT.status, color: bashFactsColor, fontFamily: "var(--font-family-mono)" }}
+          >
+            {bashFacts.text}
+          </span>
+        )}
         {/* 有统计时「N lines」是同一量级的第二遍，让位 */}
-        {summary !== null && !active && stats === null && writeLines === null && builtin === null && (
+        {showSummary && (
           <span
             style={failed ? { ...SLOT.status, color: "var(--color-danger)" } : SLOT.status}
           >
@@ -5444,7 +5542,11 @@ function ToolLine(props: {
         <FileContentView text={fileView.text} startLine={fileView.startLine} lang={fileLang} />
       )}
       {open && expandable && diff === null && fileView === null && builtinRows !== null && <BuiltinDetailBody rows={builtinRows} />}
-      {open && expandable && diff === null && fileView === null && builtinRows === null && (
+      {open && expandable && diff === null && fileView === null && builtinRows === null && shell && command !== null && (
+        // bash 的展开体：命令专位（$ + 全文 + copy）在上，输出在下，同一个虚线框
+        <ShellToolBody command={command} text={imagelessBody} failed={failed} live={live} />
+      )}
+      {open && expandable && diff === null && fileView === null && builtinRows === null && (!shell || command === null) && (
         <PlainToolBody
           toolName={props.toolName}
           text={imagelessBody}
@@ -5489,6 +5591,140 @@ function BuiltinDetailBody(props: { rows: readonly DetailRow[] }) {
           </span>
         </Fragment>
       ))}
+    </div>
+  );
+}
+
+/**
+ * bash 活行的行尾停止钮（两段式确认）。
+ *
+ * **为什么两段**：点一下就会杀掉一个可能跑了半小时的进程树，里面没落盘的工作直接丢。
+ * 第一下原地把按钮换成「确认停止？」，3 秒内再点才发；超时自动收回——不弹窗、
+ * 不挡对话，误点也无害（设计稿把这条列为「没把握的地方」，这里选了两段确认）。
+ *
+ * 走 `agent:bash-stop`（四层契约）：主进程转给 agent 进程按 **owner** 停——只有
+ * 这条会话自己的命令停得掉，别的会话的同名 id 在这里当不存在。回执里就是停完的
+ * 整份状态列表，直接进共享快照，不必再等下一拍。
+ */
+function BashStopButton(props: { sessionId: string; bashId: string }) {
+  const t = useT();
+  // 上膛的时刻（null = 没上膛）。用时间戳而不是布尔，是为了让超时判定落在纯函数
+  // bashStopStep 里（可测）：定时器被节流、页面卡一下就丢确认，不能拿旧确认当真
+  const [armedAt, setArmedAt] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const confirming = armedAt !== null;
+  useEffect(() => {
+    if (armedAt === null) return;
+    const timer = window.setTimeout(() => setArmedAt(null), STOP_CONFIRM_MS);
+    return () => window.clearTimeout(timer);
+  }, [armedAt]);
+  return (
+    <button
+      type="button"
+      className={confirming ? "bash-stop bash-stop-confirm" : "bash-stop"}
+      title={confirming ? t.chat.confirmStopBash : t.chat.stopBash(props.bashId)}
+      aria-label={t.chat.stopBash(props.bashId)}
+      disabled={busy}
+      onClick={() => {
+        if (bashStopStep(armedAt, Date.now()) === "arm") {
+          setArmedAt(Date.now());
+          return;
+        }
+        setArmedAt(null);
+        setBusy(true);
+        void api.agent
+          .stopBashSession(props.sessionId, props.bashId)
+          .then((sessions) => applyBashSessions(props.sessionId, sessions))
+          // 停失败（进程刚退 / runtime 不在）：不抹黑也不装作停掉了，下一拍轮询说真话
+          .catch(() => undefined)
+          .finally(() => setBusy(false));
+      }}
+    >
+      {confirming ? (
+        <span className="bash-stop-label">{t.chat.confirmStopBash}</span>
+      ) : (
+        <Icon name="square" size={13} strokeWidth={2} />
+      )}
+    </button>
+  );
+}
+
+/**
+ * bash 的展开体（A 版）：**命令专位 + 发丝线 + 输出**，同一个圆角虚线框。
+ *
+ * 命令是这一行的身份，可它一长就会把行尾的机器事实与停止钮挤掉——所以收起态
+ * 一个字都不给（只留 `bash`），全文放到这里：`$` 提示符（不参与选中）、等宽、
+ * **只在空格处换行**（`break-word` 会把 `--reporter=verbose` 拆成 `--` + `reporter`，
+ * 命令行就读不得了）、可选中、行尾一枚 quiet-control 的 copy。
+ *
+ * 输出与今天的工具行一致（mono、贴底跟随、首尾截断都照旧），只是从属于同一个框；
+ * 交还提示行 `[orbita] kind=…` 是给模型与渲染层看的协议，不进人看的那一面
+ * （事实槽已经把它说成「已 12:34」）。
+ */
+function ShellToolBody(props: { command: string; text: string; failed: boolean; live: boolean }) {
+  const t = useT();
+  const follow = useFollowScroll(props.live);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1_200);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+  // 协议行进仓库之前就丢掉：它们属于机器，不是命令的输出
+  const text = stripTrailingBlankLines(
+    props.text
+      .split("\n")
+      .filter((line) => !line.startsWith("[orbita] kind="))
+      .join("\n"),
+  );
+  const clamped = clampToolBody(text);
+  const truncationNote =
+    clamped.omitted === null ? null : (
+      <div style={TRUNCATION_NOTE}>{t.chat.bodyTruncated(clamped.omitted.lines, clamped.omitted.chars)}</div>
+    );
+  const lineColor = props.failed ? "var(--color-danger)" : "var(--color-text-secondary)";
+  return (
+    <div style={{ ...EXPANDED_FRAME, minWidth: 0, overflow: "hidden" }}>
+      <div className="bash-command">
+        <span className="bash-prompt" aria-hidden="true">
+          $
+        </span>
+        <code>{props.command}</code>
+        <button
+          type="button"
+          className={copied ? "bash-copy copied" : "bash-copy"}
+          title={copied ? t.chat.copied : t.chat.copyCommand}
+          aria-label={copied ? t.chat.copied : t.chat.copyCommand}
+          onClick={() => {
+            void navigator.clipboard.writeText(props.command).then(
+              () => setCopied(true),
+              () => undefined,
+            );
+          }}
+        >
+          <Icon name={copied ? "check" : "copy"} size={13} strokeWidth={1.8} />
+        </button>
+      </div>
+      <div className="bash-command-sep" />
+      <div ref={follow.ref} onScroll={follow.onScroll} className="scroll bash-output">
+        {text === "" ? (
+          <div style={{ ...BODY_LINE, color: "var(--color-text-tertiary)" }}>
+            {props.live ? t.chat.waitingOutput : t.chat.noOutput}
+          </div>
+        ) : (
+          clamped.head.map((line, index) => (
+            <div key={index} style={{ ...BODY_LINE, color: lineColor }}>
+              {line === "" ? " " : line}
+            </div>
+          ))
+        )}
+        {truncationNote}
+        {clamped.tail.map((line, index) => (
+          <div key={`tail-${index}`} style={{ ...BODY_LINE, color: lineColor }}>
+            {line === "" ? " " : line}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -5698,6 +5934,8 @@ function ToolGroupLine(props: {
   channel: ChannelViewContext;
   /** 透传给成员 ToolLine（read SKILL.md 徽标用） */
   skills: SkillMeta[];
+  /** 成员的 bash 活行靠它查后台会话状态（成员行与组头同一个会话） */
+  sessionId: string;
 }) {
   const t = useT();
   const { group } = props;
@@ -5755,6 +5993,7 @@ function ToolGroupLine(props: {
               onOpenTask={props.onOpenTask}
               channel={props.channel}
               skills={props.skills}
+              sessionId={props.sessionId}
             />
           ))}
         </div>
