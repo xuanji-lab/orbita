@@ -1099,6 +1099,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                 piBase: adaptSystemPrompt(event.systemPrompt),
                 mode: currentMode(),
                 extraToolNames: extra,
+                protectedFiles: command.protectedFiles,
                 role,
                 workspace: command.workspaceId === null ? null : { name: command.workspaceName },
                 cwd: command.cwd,
