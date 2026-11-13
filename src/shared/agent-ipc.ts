@@ -408,6 +408,11 @@ export const ipcChannels = {
    * 裁决：不考虑专注时合盖，睡就把这一轮收掉）。
    */
   focusSuspend: "focus:suspend",
+  /**
+   * 外部来源（别家工具的聊天记录，只读）：发现的来源、数据目录、会话数与开关（返回
+   * ExternalSourcesResult）。只 stat，不读会话内容。开关本身走 settingsSet 的 externalSources
+   */
+  externalSourcesList: "external-sources:list",
   /** 探测迁移来源：只 stat 固定清单里的路径，不读内容（返回 ImportDetectResult） */
   importDetect: "import:detect",
   /** 扫描勾选的来源（dry-run，入参 ImportScanInput）：产出可导入计划与跳过明细 */

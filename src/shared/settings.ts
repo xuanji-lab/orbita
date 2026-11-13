@@ -8,6 +8,7 @@ import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
 import { PRICE_CHART_CATEGORIES, type PriceChartCategory } from "./price-chart.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 import { MEMORY_VECTOR_MODELS, type MemoryVectorSettings } from "./memory.ts";
+import { parseExternalSourceSwitches, type ExternalSourceSwitches } from "./external-sources.ts";
 
 /**
  * 主题偏好。"system" 是真正的默认，不是「light 的别名」：
@@ -299,6 +300,11 @@ export interface AppSettings {
   starredModels?: ModelPair[];
   /** 上次使用的权限档与模型；缺席 = 应用默认。 */
   lastUsed?: LastUsedIntent;
+  /**
+   * 设置 › 外部来源的逐个开关（read_task 读不读这个来源）。缺席 / 缺键 = 开（发现了就读），
+   * 解析与语义见 shared/external-sources.ts。
+   */
+  externalSources?: ExternalSourceSwitches;
   /**
    * 意图系统（实验功能 intent-system）的设置子对象。**只在实验开关打开时生效**；
    * 解析与缺省见 IntentSettings / effectiveIntentSettings。
@@ -592,6 +598,7 @@ export function parseSettings(raw: unknown): AppSettings {
     lastUsed?: unknown;
     browserDownloadDir?: unknown;
     starredModels?: unknown;
+    externalSources?: unknown;
     usagePet?: unknown;
     providersPage?: unknown;
     pluginsPage?: unknown;
@@ -622,6 +629,7 @@ export function parseSettings(raw: unknown): AppSettings {
       : undefined;
   const lastUsed = parseLastUsed(record.lastUsed);
   const starredModels = parseStarredModels(record.starredModels);
+  const externalSources = parseExternalSourceSwitches(record.externalSources);
   const usagePet = parseUsagePet(record.usagePet);
   // 实验功能逐项开关（含旧键迁移，见 parseExperimentalFeatures）
   const experimentalFeatures = parseExperimentalFeatures(record);
@@ -649,6 +657,7 @@ export function parseSettings(raw: unknown): AppSettings {
       : {}),
     drawer: parseDrawer(record.drawer),
     ...(starredModels === undefined ? {} : { starredModels }),
+    ...(externalSources === undefined ? {} : { externalSources }),
     ...(usagePet === undefined ? {} : { usagePet }),
     ...(compaction === undefined ? {} : { compaction }),
     // 非布尔一律当作「没动过」丢掉：缺席与 true 是同一个行为，落一个坏值进来
