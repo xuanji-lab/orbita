@@ -42,21 +42,26 @@ export function stepStates(input: { scanned: boolean; imported: boolean; hasSkil
 // ---------------------------------------------------------------------------
 
 export type SourceRowState =
-  /** 本机没发现：默认位置的目录都不在 */
+  /** 本机没发现：默认位置的目录都不在（手动加的目录也都不在了） */
   | { kind: "missing" }
-  /** 默认位置的目录在，但里面没有这个工具的会话数据（如只有状态库的 ~/.codex） */
+  /** 目录在，但一个会话都没有：默认位置只有别的东西（如只有状态库的 ~/.codex），或手动加的目录是空的 */
   | { kind: "empty-dir" }
   /** 发现了：会话数（关着的也照数） */
   | { kind: "found"; sessions: number };
 
+/**
+ * 一行的状态。自动发现与手动加的走同一套说法：有会话才算「发现了」（才给开关）；目录在、
+ * 0 个会话一律写「目录在，没有会话」，不写「0 个会话」配一个开关。
+ */
 export function sourceRowState(source: ExternalSourceInfo): SourceRowState {
-  if (source.roots.length > 0) return { kind: "found", sessions: source.sessions };
+  if (source.roots.length > 0 && source.sessions > 0) return { kind: "found", sessions: source.sessions };
+  if (source.roots.length > 0) return source.roots.some((root) => root.hasData) ? { kind: "empty-dir" } : { kind: "missing" };
   return source.expectedExists ? { kind: "empty-dir" } : { kind: "missing" };
 }
 
 /** 一个来源都没发现：页面出空态，告诉用户下一步能做什么。 */
 export function noneFound(sources: readonly ExternalSourceInfo[]): boolean {
-  return sources.every((source) => source.roots.length === 0);
+  return sources.every((source) => sourceRowState(source).kind !== "found");
 }
 
 /** 打开 / 关上一个来源后要存的整张开关表（其余来源保持页面上看到的状态）。 */

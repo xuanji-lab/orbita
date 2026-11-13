@@ -57,6 +57,12 @@ describe("外部来源页", () => {
     // 目录在、没有会话数据（如只有状态库的 ~/.codex）：不写成「没找到」
     assert.deepEqual(sourceRowState(source("codex", { roots: [], sessions: 0 })), { kind: "empty-dir" });
     assert.deepEqual(sourceRowState(source("proma", { enabled: false, sessions: 325 })), { kind: "found", sessions: 325 });
+    // 手动加的目录在、里面 0 个会话：与自动发现的同一种说法（不写「0 个会话」配开关）
+    const custom = [{ dir: "/backup/kimi", custom: true, hasData: true }];
+    assert.deepEqual(sourceRowState(source("kimi-code", { roots: custom, sessions: 0, expectedExists: false })), { kind: "empty-dir" });
+    // 手动加的目录已经不在了：没找到
+    const moved = [{ dir: "/backup/kimi", custom: true, hasData: false }];
+    assert.deepEqual(sourceRowState(source("kimi-code", { roots: moved, sessions: 0, expectedExists: false })), { kind: "missing" });
     assert.equal(noneFound([source("codex", { roots: [] }), source("zcode", { roots: [] })]), true);
     assert.equal(noneFound([source("codex", { roots: [] }), source("zcode")]), false);
   });

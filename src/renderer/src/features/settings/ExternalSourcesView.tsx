@@ -407,13 +407,14 @@ function SourceRow(props: {
           </span>
         ) : (
           <span className="mg-status row-trailing">
-            <Icon name="circle-off" size={12} strokeWidth={1.8} />
+            {/* 两种状态各一个图标（图标是第一信号）：目录在、空的 = 打开的空文件夹；没找到 = 禁用圈 */}
+            <Icon name={state.kind === "empty-dir" ? "folder-open" : "circle-off"} size={12} strokeWidth={1.8} />
             {state.kind === "empty-dir" ? t.externalSources.dirNoSessions : t.externalSources.notFound}
           </span>
         )}
       </div>
       <ul className="ext-paths" aria-label={t.externalSources.pathsFor(name)}>
-        {state.kind === "found" ? (
+        {source.roots.length > 0 ? (
           source.roots.map((root) => (
             <li key={root.dir} className="mg-path-line" data-warn={!root.hasData || undefined} title={root.dir}>
               <Icon name={root.hasData ? "folder" : "triangle-alert"} size={11} strokeWidth={1.8} />
