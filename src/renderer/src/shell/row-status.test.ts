@@ -6,7 +6,7 @@ import { en } from "../messages-en.ts";
 const none = { subRunning: false, pinned: false };
 
 describe("rowStatusIcon", () => {
-  it("子会话在跑画 git-fork，颜色与竖条的 running 同 token（--color-info）", () => {
+  it("子会话在跑画 git-fork，颜色与状态饼的 running 同 token（--color-info）", () => {
     deepStrictEqual(rowStatusIcon({ ...none, subRunning: true }, en), {
       icon: "git-fork",
       tone: "var(--color-info)",
@@ -22,7 +22,7 @@ describe("rowStatusIcon", () => {
     strictEqual(rowStatusIcon({ ...none, subRunning: true, pinned: true }, en)?.icon, "git-fork");
   });
 
-  it("什么都不是时槽留空——运行 / 未读 / 失败都归竖条，行首不再画图标", () => {
+  it("什么都不是时槽留空——运行 / 未读 / 失败都归状态饼，行首不再画图标", () => {
     strictEqual(rowStatusIcon(none, en), null);
   });
 });

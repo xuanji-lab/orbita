@@ -9,6 +9,9 @@
  *
  * **只告知不硬拦**：pi 的 read/write 只把相对路径 resolve 到 cwd，不做包含性校验；
  * 白名单硬拦是新功能，不是这份 prompt 的事。模型读到绝对路径自然会去用。
+ *
+ * related 的父子会话行刻意不进这里：派出 / 删除子会话会改变整份系统提示词并打断
+ * 前缀缓存。对方身份与工作台改由 delegate 回执、每条通道信封携带。
  */
 import type { TurnDirectories } from "../shared/agent-ipc.ts";
 
@@ -17,7 +20,6 @@ import type { TurnDirectories } from "../shared/agent-ipc.ts";
  *
  * attached 为空时省略那一段——留一行 "- (none)" 只会教模型模仿这个格式。
  * workbench 恒出现：哪怕没挂任何附加目录，会话也总有草稿要落。
- * related 为空 / 缺席时省略那一段（同 attached 的纪律）——绝大多数会话没有父子关系。
  */
 export function describeDirectories(cwd: string, directories: TurnDirectories | undefined): string {
   if (directories === undefined) return "";
@@ -34,17 +36,6 @@ export function describeDirectories(cwd: string, directories: TurnDirectories | 
       "It may not exist yet — create it with mkdir -p on first use. " +
       "Do not put user-facing deliverables here unless asked; those belong in the working directory.",
   );
-  if (directories.related !== undefined && directories.related.length > 0) {
-    lines.push(
-      ...directories.related.map((entry) =>
-        entry.relation === "parent"
-          ? `Parent session "${entry.label}" (id ${entry.sessionId}) workbench: ${entry.path}`
-          : `Sub-session "${entry.label}" (id ${entry.sessionId}) workbench: ${entry.path}`,
-      ),
-      "  These are other sessions' private workbenches: read them to hand off material. " +
-        "Do not modify files the other session is actively using unless the task calls for it.",
-    );
-  }
   if (directories.browserDownloads !== undefined) {
     lines.push(
       `Browser downloads: ${directories.browserDownloads}`,

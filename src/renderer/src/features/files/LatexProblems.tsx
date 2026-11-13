@@ -14,6 +14,7 @@
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
 import type { LatexIssue, LatexResolvedPackage } from "@shared/latex";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import {
   issueLocation,
   packageLabel,
@@ -124,7 +125,7 @@ export function LatexProblems(props: {
                       title={t.latex.installTip(command, resolution?.sudo === true)}
                       onClick={() => props.onInstall(command)}
                     >
-                      <Icon name="square-terminal" size={12} />
+                      <Icon name={FEATURE_ICON.terminal} size={12} />
                       {t.latex.installInTerminal}
                     </button>
                   )}

@@ -3,6 +3,7 @@
  * 事件是单向广播：主进程收到 agent 进程的消息就原样转给所有窗口，不在中间加工。
  */
 import { ipcMain } from "electron";
+import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { mainWindows } from "../window/main-windows.ts";
 import {
@@ -16,6 +17,7 @@ import {
   composeInvocationPrompt,
   findInvocationTokens,
   type InvokedMcp,
+  type InvokedPlugin,
   type InvokedSkill,
 } from "../../shared/invocation.ts";
 import { isSkillAvailable, matchSkillTarget } from "../../shared/skill.ts";
@@ -25,18 +27,22 @@ import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import { endpointHintsOf, knownProviderOf } from "../../shared/known-providers.ts";
 import type { CompactionSetting } from "../../shared/settings.ts";
+import { providerDisabledText } from "../../shared/provider.ts";
 import { COMPACTION_DEFAULT, effectiveLanguage, type Language } from "../../shared/settings.ts";
 import type { ChannelStore } from "../channel/store.ts";
-import type { ProviderStore } from "../provider/store.ts";
+import { assertProviderEnabled, ProviderDisabledError, type ProviderStore } from "../provider/store.ts";
 import { oauthRequestAuth } from "../provider/oauth-flows.ts";
 import type { SessionStore } from "../session/store.ts";
 import type { SettingsStore } from "../settings/store.ts";
 import type { McpStore } from "../mcp/store.ts";
 import { readMcpConfigFile } from "../mcp/store.ts";
+import type { PluginAssembly, PluginStore } from "../plugin/store.ts";
+import { invokedPluginOf } from "../plugin/invoked.ts";
 import type { SkillStore } from "../skill/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import { getIntentEdges, getIntentHealth } from "./intent-lab-client.ts";
 import { intentTurnEnv } from "./intent-env.ts";
+import { memoryBuildEligible } from "../memory/turn-tracker.ts";
 import { effectiveIntentSettings, type AppSettings } from "../../shared/settings.ts";
 import { INTENT_MODELS_BY_CHANNEL } from "../../shared/intent-lab.ts";
 import type { IntentTurnContext } from "../../shared/agent-ipc.ts";
@@ -63,9 +69,13 @@ import { AgentHost } from "./host.ts";
 export async function resolveProviderSecrets(
   providers: ProviderStore,
   providerId: string,
+  /** 测试连接要允许关着的服务商（用户想看它恢复了没有）；其余调用方（开轮、换模型、家务活、专注小结…）一律不给 */
+  options: { allowDisabled?: boolean } = {},
 ): Promise<ProviderSecrets> {
   const dto = (await providers.list()).find((p) => p.id === providerId);
   if (!dto) throw new Error(`unknown provider "${providerId}"`);
+  // 所有「按 id 装配服务商」的入口都经过这里：关着的在此一处拦下，不必每个调用方各判一遍
+  if (options.allowDisabled !== true) assertProviderEnabled(dto);
   const known = knownProviderOf(dto);
   // OAuth 凭据优先：快到点会自动续期并落盘（非 oauth provider 返回 null）。
   // 续期失败不能静默拿旧 token 硬发一轮——换成一句用户能行动的话
@@ -78,7 +88,8 @@ export async function resolveProviderSecrets(
   });
   // 凭据 → 请求鉴权：多数就是令牌本身；Copilot 的令牌里还写着这个账号该打的地址（proxy-ep）
   const oauth = credential === null ? null : await oauthRequestAuth(known.id, credential);
-  const apiKey = oauth?.apiKey ?? (await providers.resolveApiKey(providerId));
+  const apiKey =
+    oauth?.apiKey ?? (await providers.resolveApiKey(providerId)) ?? (await providers.resolveEnvKey(providerId));
   if (apiKey === null) {
     throw new Error(`provider "${providerId}" has no API key stored`);
   }
@@ -128,6 +139,8 @@ export function registerAgentIpc(
   skillDirs: (workspaceId: string | null) => string[],
   /** skill 中心存储：`/skill:` 展开在这里查名与读正文（真源在 store，别人不再认一遍） */
   skills: SkillStore,
+  /** 插件：开轮时把对该工作区启用的插件的技能目录与 MCP 叠进去；开关关着时一字不叠 */
+  plugins: PluginStore,
   /** MCP 配置。**主进程读文件**，agent 进程只收解析好的结果（同 skillDirs 的纪律） */
   mcp: McpStore,
   /** 应用设置。压缩偏好（A-1）从这里装配进每轮开轮命令 */
@@ -135,6 +148,9 @@ export function registerAgentIpc(
   /** 意图存档跟踪器（实验功能 intent-system；undefined = 旧测试夹具不传）。submit /
    *  interrupt 判定要存档时 begin，事件泵在 index.ts 里喂 onEvent */
   intentIngest?: { begin(sessionId: string, text: string, pasted: readonly string[]): void },
+  /** 记忆构建的轮次跟踪器（undefined = 测试夹具不传）。
+   * submit / interrupt 判过根会话 + 用户原话后 begin，轮落定时由它交给记忆服务 */
+  memoryTurns?: { begin(sessionId: string, text: string): void },
 ): { submitTurn(input: SubmitAgentInput): Promise<void> } {
   /**
    * 某条会话所属的工作区。找不到（工作区被删了）就当作没有工作区：白名单与工作区
@@ -157,7 +173,20 @@ export function registerAgentIpc(
    * 连对话都开不了（与 D-3 不矛盾：那条纪律是「不把失败伪装成空」且不披露，
    * 这里两者都做到）。
    */
-  const readMcpServers = async (workspaceId: string | null): Promise<Record<string, McpServer>> => {
+  /**
+   * 对这条会话生效的插件内容。装配本身读不动不拦开轮：记日志、这一轮没有插件（同「一台坏的 MCP 不该把会话堵死」）。
+   */
+  const readPluginAssembly = async (workspaceId: string | null): Promise<PluginAssembly> => {
+    const empty: PluginAssembly = { skillDirs: [], skills: [], mcpServers: {} };
+    try {
+      return await plugins.assemble(await scopeOf(workspaceId));
+    } catch (error: unknown) {
+      console.error("[main] 插件装配失败，这一轮不叠插件", error);
+      return empty;
+    }
+  };
+
+  const readMcpServers = async (workspaceId: string | null, pluginServers: Record<string, McpServer> = {}): Promise<Record<string, McpServer>> => {
     const configured = await mcp.read().catch((error: unknown) => {
       console.error("[main] mcp.json 读不了，这一轮没有 MCP 工具", error);
       return {};
@@ -173,7 +202,20 @@ export function registerAgentIpc(
             );
             return {};
           });
-    return resolveServersForWorkspace(mergeMcpConfigs(configured, local), scope);
+    // 插件的 MCP 垫在底下（变量已在装配时替换）：服务名带 plugin_ 前缀，万一用户自己起了同名的，用户的赢。
+    // 之后走同一道白名单与 ${workspaceFolder} 解析——插件里引用项目根的 server 在 Home 会话里同样被跳过
+    return resolveServersForWorkspace(mergeMcpConfigs(pluginServers, mergeMcpConfigs(configured, local)), scope);
+  };
+
+  /** 开轮要带的两样「能力」：skill 目录（用户的在前、插件的在后）与 MCP 配置。三条开轮路径共用。 */
+  const readCapabilities = async (
+    workspaceId: string | null,
+  ): Promise<{ skillsDirs: string[]; mcpServers: Record<string, McpServer> }> => {
+    const assembly = await readPluginAssembly(workspaceId);
+    return {
+      skillsDirs: [...skillDirs(workspaceId), ...assembly.skillDirs],
+      mcpServers: await readMcpServers(workspaceId, assembly.mcpServers),
+    };
   };
 
   /**
@@ -198,6 +240,9 @@ export function registerAgentIpc(
   const readPdfCitations = async (): Promise<boolean> =>
     (await settings.read()).experimentalFeatures?.["pdf-citations"] === true;
 
+  /** 「先给我看计划」偏好同样每轮现读：改了下一轮即生效；缺席 = 关 */
+  const readPlanFirst = async (): Promise<boolean> => (await settings.read()).planFirst === true;
+
   /** 署名语言同样每轮现读：换主题 / 改语言，下一轮的署名就跟上（规则在 shared 的 effectiveLanguage） */
   const readAttributionLanguage = async (): Promise<Language> => {
     const current = await settings.read();
@@ -216,6 +261,8 @@ export function registerAgentIpc(
     if (current.experimentalFeatures?.["intent-system"] !== true) return { ingest: false };
     const effective = effectiveIntentSettings(current.intent);
     const meta = await sessions.readMeta(sessionId);
+    // 自动化跑出的会话：无人值守，召回的确认卡会永远等一个不在场的人；提示词也不是用户亲口说的话
+    if (meta?.automationId !== undefined) return { ingest: false };
     const detail = meta === null ? null : await sessions.load(sessionId);
     return intentTurnEnv({
       experimentOn: true,
@@ -255,10 +302,46 @@ export function registerAgentIpc(
   });
 
   /**
+   * 记忆系统的构建门禁：这是根会话的用户原话时让
+   * 跟踪器记下这一轮（intent-env 的同一条口径：子会话 / 通道信封 / 收尾扫描不写
+   * 记忆）。
+   */
+  const beginMemoryTurn = async (sessionId: string, text: string): Promise<void> => {
+    if (memoryTurns === undefined) return;
+    const meta = await sessions.readMeta(sessionId).catch(() => null);
+    if (memoryBuildEligible(meta, text)) memoryTurns.begin(sessionId, text);
+  };
+
+  /**
+   * 自动化工具的注册开关：这条会话既不是子会话、也不是自动化自己跑出来的（防递归：自动化不能再建自动化）。新会话首轮 meta 还没建，视为根会话。
+   * 注册只是第一道，automationRequest 进主进程时 applyAutomationRequest 还会按会话身份再拒一次。
+   */
+  const readAutomationTools = async (sessionId: string): Promise<boolean> => {
+    const meta = await sessions.readMeta(sessionId).catch(() => null);
+    return meta?.automationId === undefined && meta?.parentId === undefined;
+  };
+
+
+  /**
+   * 开轮 / 压缩 / 换模型的装配入口：同 resolveProviderSecrets，但「这家已关闭」按界面语言写成
+   * 一句能行动的话（错误经 IPC 原样显示在输入框上方，与 provider 被删 / 无密钥的错误同一呈现）。
+   */
+  const resolveForTurn = async (providerId: string): Promise<ProviderSecrets> => {
+    try {
+      return await resolveProviderSecrets(providers, providerId);
+    } catch (error: unknown) {
+      if (!(error instanceof ProviderDisabledError)) throw error;
+      throw new Error(providerDisabledText(error.displayName, await readAttributionLanguage()));
+    }
+  };
+
+  /**
    * 家务活模型（设置里的 choreModel：起名、收尾扫描、迁移的随手一句检查）装配成
    * 带密钥的载荷。没指定、指的 provider 已删、或密钥取不到，一律返回 undefined
    * 让 runtime 退回会话模型——家务是易耗品，不该因为一个删掉的 provider 就停掉；
    * 但原因要落到 dev 终端，否则「我选了模型为什么没生效」无从查起。
+   * 记忆线（服务进程）的装配在 memory/chore.ts（同样的口径，避免与这里的闭包
+   * 成 import 环）。
    */
   const readChoreModel = async (): Promise<
     { provider: ProviderSecrets; modelId: string } | undefined
@@ -334,7 +417,7 @@ export function registerAgentIpc(
   }
 
   /**
-   * `/skill:<target>` / `/mcp:<server>` → 指令式调用块（任意位置、任意多条）：
+   * `/skill:<target>` / `/mcp:<server>` / `/plugin:<name>` → 指令式调用块（任意位置、任意多条）：
    * 在用户原文**前面**拼一段硬措辞指令，点名的 skill 写明 SKILL.md 绝对路径、
    * 要求模型先用 read 工具读了再干活（渐进式披露：索引常驻 system prompt，正文
    * 以 tool result 身份按需进上下文，不内联进 user message）；点名的 MCP server
@@ -342,6 +425,8 @@ export function registerAgentIpc(
    * 如实写明「不要假装加载」。**组装在主进程**：名字与启用状态的真源在 store；
    * transcript 落组装后的全文，重放历史所见即所得（pi 无状态，每轮把历史喂回去，
    * 存原文再改写会打断 provider 的前缀缓存）。
+   * `/plugin:<name>`：指令块写插件的工作流、入口技能路径（要求先 read）与看板句，不内联技能全文；
+   * 没装 / 没启用 / 入口读不出如实写明（判定在 plugin/invoked.ts）。
    * target 先按 slug 匹配（面板插入的形态、文件系统安全字符集），再按 frontmatter 名。
    * 通道信封（子会话的投递文本）不组装：首行是 `<channel …>` 头，前面拼块会破
    * parseChannelPrompt 的识别；那不是用户输入，父模型要用 skill 自会在任务说明里
@@ -356,16 +441,20 @@ export function registerAgentIpc(
     if (tokens.length === 0) return text;
     const skillTargets = [...new Set(tokens.filter((t) => t.kind === "skill").map((t) => t.target))];
     const mcpTargets = [...new Set(tokens.filter((t) => t.kind === "mcp").map((t) => t.target))];
+    const pluginTargets = [...new Set(tokens.filter((t) => t.kind === "plugin").map((t) => t.target))];
     // 可用性判定与右栏选取模式共用 isSkillAvailable（选取面认的，发送时必然认）
     const available =
       skillTargets.length > 0
         ? (await skills.list()).filter((meta) => isSkillAvailable(meta, workspaceId))
         : [];
+    // 插件技能规则与用户技能一致（按 slug、再按 name），排在用户技能之后：与开轮装配里「用户的赢」同序
+    const pluginAvailable = skillTargets.length > 0 ? (await readPluginAssembly(workspaceId)).skills : [];
     const invokedSkills: InvokedSkill[] = [];
     for (const target of skillTargets) {
       const meta = matchSkillTarget(available, target);
       if (meta === null) {
-        invokedSkills.push({ target, problem: "not-found" });
+        const fromPlugin = matchSkillTarget(pluginAvailable, target);
+        invokedSkills.push(fromPlugin === null ? { target, problem: "not-found" } : { target, location: fromPlugin.file });
         continue;
       }
       // 正文不进消息，read 只为探知可读（存储损坏的 skill 与查不到同样如实写明）
@@ -379,13 +468,28 @@ export function registerAgentIpc(
     const invokedMcps: InvokedMcp[] = [];
     if (mcpTargets.length > 0) {
       // 与这一轮实际装配的 MCP 同一份：全局 ∪ 工作区 .mcp.json——工作区里配的 server 也要认得出
-      const servers = await readMcpServers(workspaceId);
+      const servers = await readMcpServers(workspaceId, (await readPluginAssembly(workspaceId)).mcpServers);
       for (const target of mcpTargets) {
         const server = servers[target];
         invokedMcps.push({ target, available: server !== undefined && server.disabled !== true });
       }
     }
-    return composeInvocationPrompt(text, invokedSkills, invokedMcps);
+    const invokedPlugins: InvokedPlugin[] = [];
+    if (pluginTargets.length > 0) {
+      const views = await plugins.listViews().catch(() => []);
+      const assembly = await readPluginAssembly(workspaceId);
+      for (const target of pluginTargets) {
+        const view = views.find((each) => each.origin === "plugin" && each.id === `plugin:${target}`);
+        // 入口技能文件：只认这一轮装配里的（撞名被丢的不算），且确实读得到
+        const files = new Map(assembly.skills.filter((skill) => skill.plugin === target).map((skill) => [skill.slug, skill.file]));
+        const readable = new Map<string, string>();
+        for (const [slug, file] of files) {
+          if (await access(file).then(() => true, () => false)) readable.set(slug, file);
+        }
+        invokedPlugins.push(invokedPluginOf(target, view, workspaceId, (slug) => readable.get(slug) ?? null));
+      }
+    }
+    return composeInvocationPrompt(text, invokedSkills, invokedMcps, invokedPlugins);
   };
 
   /**
@@ -394,29 +498,34 @@ export function registerAgentIpc(
    * 拿的就是这个函数，不重新拼一遍 turnFields/readDirectories 那一整套装配）。
    */
   async function submitTurn(input: SubmitAgentInput): Promise<void> {
-    const provider = await resolveProviderSecrets(providers, input.providerId);
+    const provider = await resolveForTurn(input.providerId);
     const text = await prependInvocationDirectives(input.text, input.workspaceId);
     // 意图系统（实验）：开关开着才装配（intent / backfill）与存档（ingest）。
     // 返回空对象时命令与 main 一字不差
     const intentEnv = await readIntentEnv(input.sessionId, text);
     if (intentEnv.ingest) intentIngest?.begin(input.sessionId, text, input.pasted ?? []);
+    await beginMemoryTurn(input.sessionId, text);
+    const automationTools = await readAutomationTools(input.sessionId);
+    const capabilities = await readCapabilities(input.workspaceId);
     const piSessionFile = await host.submit({
       type: "submit",
       text,
+      sessionMemory: true,
+      ...(automationTools ? { automationTools: true } : {}),
       ...(await sentImages(input)),
       ...(await sentFileRefs(input)),
       ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}),
       ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}),
       ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}),
       ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, {
-        skillsDirs: skillDirs(input.workspaceId),
+        skillsDirs: capabilities.skillsDirs,
         directories: await readDirectories(input),
-        mcpServers: await readMcpServers(input.workspaceId),
+        mcpServers: capabilities.mcpServers,
         compaction: await readCompaction(),
         gitAttribution: await readGitAttribution(),
         attributionLanguage: await readAttributionLanguage(),
         workspaceName: await workspaceNameOf(input.workspaceId),
-        pdfCitations: await readPdfCitations(),
+        pdfCitations: await readPdfCitations(), planFirst: await readPlanFirst(), pluginTools: true,
       }),
     });
     await settleFirstTurn(input, piSessionFile);
@@ -447,18 +556,22 @@ export function registerAgentIpc(
   ipcMain.handle(ipcChannels.agentSubmit, (_e, input: SubmitAgentInput): Promise<void> => submitTurn(input));
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
   ipcMain.handle(ipcChannels.agentInterrupt, async (_e, input: SubmitAgentInput): Promise<void> => {
-    const provider = await resolveProviderSecrets(providers, input.providerId);
+    const provider = await resolveForTurn(input.providerId);
     // interrupt 是排队消息的「立即发送」分支（会话还忙碌时）：与 submit 同一份组装，
     // 否则 /skill: 在这条路径以字面文本喂给模型
     const text = await prependInvocationDirectives(input.text, input.workspaceId);
     const intentEnv = await readIntentEnv(input.sessionId, text);
     if (intentEnv.ingest) intentIngest?.begin(input.sessionId, text, input.pasted ?? []);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text, ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }) });
+    await beginMemoryTurn(input.sessionId, text);
+    const automationTools = await readAutomationTools(input.sessionId);
+    const capabilities = await readCapabilities(input.workspaceId);
+    const piSessionFile = await host.interrupt({ type: "interrupt", text, sessionMemory: true, ...(automationTools ? { automationTools: true } : {}), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), planFirst: await readPlanFirst(), pluginTools: true }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
-    const provider = await resolveProviderSecrets(providers, input.providerId);
-    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: skillDirs(input.workspaceId), directories: await readDirectories(input), mcpServers: await readMcpServers(input.workspaceId), compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations() }) });
+    const provider = await resolveForTurn(input.providerId);
+    const capabilities = await readCapabilities(input.workspaceId);
+    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), planFirst: await readPlanFirst(), pluginTools: true }) });
     if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
   });
 
@@ -494,7 +607,7 @@ export function registerAgentIpc(
     async (_e, sessionId: string, providerId: string, modelId: string) => {
       // provider 在这里装配（含 key）再传给 runtime——renderer 永远不碰密钥。
       // meta 不在此落：成功与否由 runtime 的 model / failed 事件定，recorder 统一落盘。
-      const provider = await resolveProviderSecrets(providers, providerId);
+      const provider = await resolveForTurn(providerId);
       await host.setModel(sessionId, provider, modelId);
     },
   );

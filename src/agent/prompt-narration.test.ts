@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { INVOCATION_OPEN, composeInvocationPrompt } from "../shared/invocation.ts";
+import { filesBlockOf } from "../shared/prompt-attachments.ts";
 import { PROGRESS_NARRATION_GUIDELINE, REPLY_LANGUAGE_GUIDELINE, adaptSystemPrompt } from "./prompt-narration.ts";
 
 /**
@@ -56,8 +58,36 @@ test("追加段措辞锚定（防手滑漂移）", () => {
 });
 
 test("回复语言跟随用户：段落要求按用户最近一条消息的语言写正文，且段落本身不带中文（不把模型往中文带）", () => {
-  assert.match(REPLY_LANGUAGE_GUIDELINE, /language of the user's latest message/);
+  assert.match(REPLY_LANGUAGE_GUIDELINE, /language the user themselves writes in/);
   assert.equal(/[\u4e00-\u9fff]/.test(PROGRESS_NARRATION_GUIDELINE + REPLY_LANGUAGE_GUIDELINE), false);
+});
+
+test("回复语言判据：按用户自己写的字（含附上的文本内容）；系统包装块逐个点名为不算", () => {
+  // 用户自己的字：手打 + 粘贴块 + 读过的附件文件内容
+  assert.match(REPLY_LANGUAGE_GUIDELINE, /words they typed/);
+  assert.match(REPLY_LANGUAGE_GUIDELINE, /<pasted-text>/);
+  assert.match(REPLY_LANGUAGE_GUIDELINE, /follow the language of that attachment's prose/);
+  // 每个由 Orbita 自动加的包装标签都要点名；开标签取自组装处的常量，改名时这里会红
+  const wrappers = [INVOCATION_OPEN, "<attached-files>", "<user_context>", "<orbita-memory>", "<referenced_task>", "<quoted_context>"];
+  for (const tag of wrappers) assert.ok(REPLY_LANGUAGE_GUIDELINE.includes(tag), `${tag} 未点名`);
+  assert.match(REPLY_LANGUAGE_GUIDELINE, /<channel> envelopes/);
+  assert.match(REPLY_LANGUAGE_GUIDELINE, /never let their language, or how much of the message they take up/);
+});
+
+test("没有用户手打字的一轮（子会话汇报、自动化叫醒）：沿用用户最近一条手打消息的语言", () => {
+  // 2026-11-06 用户报：主会话跟子会话沟通完，回复从中文变成英文——那一轮只有英文的 <channel> 包装，没有用户的字可依
+  assert.match(REPLY_LANGUAGE_GUIDELINE, /no words the user typed/);
+  assert.match(REPLY_LANGUAGE_GUIDELINE, /<channel> report from a sub-session/);
+  assert.match(REPLY_LANGUAGE_GUIDELINE, /keep the language of the user's most recent message that they did type/);
+});
+
+test("附件清单块与点名指令块自带一句「系统附加、不代表用户语言」", () => {
+  const files = filesBlockOf([{ path: "/tmp/a.md", kind: "file" }]);
+  assert.match(files, /added by Orbita/);
+  assert.match(files, /not the language the user writes in/);
+  const invoked = composeInvocationPrompt("hi", [{ target: "x", location: "/s/SKILL.md" }], []);
+  assert.match(invoked, /added by Orbita/);
+  assert.match(invoked, /not the language the user writes in/);
 });
 
 test("其余内容不动：替换与追加之外的基底逐字保留", () => {

@@ -284,7 +284,7 @@ export function CiteSearchPanel(props: {
         visibility: placed === null ? "hidden" : "visible",
         width: PANEL_WIDTH,
         maxHeight: placed?.maxHeight,
-        zIndex: 40,
+        zIndex: "var(--z-popover)",
       }}
     >
       <div className="cite-search-head">

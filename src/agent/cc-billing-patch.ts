@@ -20,9 +20,7 @@
  * （pi 只对 sk-ant-oat 令牌加它），API key / Bedrock / OpenRouter / 智谱 / 自建网关
  * 的请求没有这个块，原样通过。
  */
-
-/** 与 pi-cc-patch 1.0.3 同源：Anthropic 对最新 OAuth 型号的最小接受版本 */
-const CC_VERSION = "2.1.280";
+import { CLAUDE_CODE_VERSION } from "../shared/claude-code-version.ts";
 
 const BILLING_PREFIX = "x-anthropic-billing-header";
 
@@ -74,7 +72,7 @@ function rewriteSystem(system: readonly unknown[]): unknown[] {
   const blocks: unknown[] = [
     {
       type: "text",
-      text: `${BILLING_PREFIX}: cc_version=${CC_VERSION}.000; cc_entrypoint=cli;`,
+      text: `${BILLING_PREFIX}: cc_version=${CLAUDE_CODE_VERSION}.000; cc_entrypoint=cli;`,
     },
   ];
   for (const block of system) {

@@ -56,7 +56,21 @@ export class SettingsStore {
       patch.providersPage === undefined
         ? current.providersPage
         : { ...current.providersPage, ...patch.providersPage };
-    const next = parseSettings({ ...current, ...patch, drawer, lastUsed, experimentalFeatures, providersPage });
+    // 插件页的界面记忆同款：切卡片尺寸不该把「仅显示已启用」抹掉
+    const pluginsPage =
+      patch.pluginsPage === undefined ? current.pluginsPage : { ...current.pluginsPage, ...patch.pluginsPage };
+    // 向量设置也是 patch：只改 mode 不该把模型 / 卸载分钟 / 电池偏好冲回默认
+    const vector = patch.vector === undefined ? current.vector : { ...current.vector, ...patch.vector };
+    const next = parseSettings({
+      ...current,
+      ...patch,
+      drawer,
+      lastUsed,
+      experimentalFeatures,
+      providersPage,
+      pluginsPage,
+      vector,
+    });
     await writeJsonAtomic(this.filePath, next);
     this.cache = next;
     return next;

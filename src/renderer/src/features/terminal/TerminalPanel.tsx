@@ -12,7 +12,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api.ts";
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { IconButton } from "../../shell/IconButton";
+import { PanelEmpty } from "../../shell/PanelEmpty";
 import { PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
 import type { TerminalInfo } from "@shared/terminal";
 import { TerminalView } from "./TerminalView";
@@ -23,8 +25,8 @@ export function TerminalPanel(props: {
   /** 新终端落在哪个目录（当前会话的工作区根；null = 主进程回退 homedir） */
   cwd: string | null;
   /**
-   * agent 刚开的终端 id（App 从 terminal:agent-open 事件转来）：面板要点亮并**激活
-   * 这个 tab**——agent 在用户眼前干活，人一抬头就看见它，而不是要去 tab 条里翻。
+   * agent 最近开的终端 id（App 从 terminal:agent-open 事件转来）：面板不会因此自己
+   * 弹出（2026-10-30），但用户打开面板时**激活这个 tab**，不用去 tab 条里翻。
    * 一次性信号：消费完调 onActivated 清掉。
    */
   activateId: string | null;
@@ -172,7 +174,7 @@ export function TerminalPanel(props: {
     <RightPanelFrame
       header={
         <>
-          <PanelTitle icon="square-terminal" title={t.terminal.title} />
+          <PanelTitle icon={FEATURE_ICON.terminal} title={t.terminal.title} />
           {/* 终端标签住在标题行中段（右栏统一方案 B：没有第二条工具行） */}
           {allIds.length > 0 && (
             <div className="cap-tabs cap-grow no-drag" role="tablist" aria-label={t.terminal.title}>
@@ -226,10 +228,10 @@ export function TerminalPanel(props: {
           ))}
         </div>
       ) : (
-        // 空态：一行浅灰字（右栏统一），新建在标题行的 +
-        <p className="panel-empty" style={{ paddingTop: "var(--space-3)" }}>
+        // 空态（PanelEmpty）：一句现状 + 出口；标题行的 + 是同一个动作
+        <PanelEmpty icon={FEATURE_ICON.terminal} exit={{ label: t.terminal.startOne, onClick: openTerminal }}>
           {t.terminal.empty}
-        </p>
+        </PanelEmpty>
       )}
     </RightPanelFrame>
   );

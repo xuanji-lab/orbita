@@ -42,9 +42,18 @@ export async function scanJsonlLines(
   keep: (head: string) => boolean,
   onLine: (line: string) => void,
   yieldSlice: () => Promise<void> = timeSlicer(),
-): Promise<void> {
+  range?: ScanRange,
+): Promise<number> {
   const line = new LineState(keep, onLine);
-  const stream = createReadStream(path, { highWaterMark: 256 * 1024 });
+  const from = range?.start ?? 0;
+  const stream = createReadStream(path, {
+    highWaterMark: 256 * 1024,
+    start: from,
+    ...(range?.endExclusive === undefined ? {} : { end: range.endExclusive - 1 }),
+  });
+  // 已读过且以换行收尾的字节位置（绝对偏移）：增量扫描下一次从这里接着读
+  let consumed = from;
+  let chunkStart = from;
   for await (const chunk of stream as AsyncIterable<Buffer>) {
     let start = 0;
     while (start < chunk.length) {
@@ -52,11 +61,26 @@ export async function scanJsonlLines(
       line.append(chunk, start, nl === -1 ? chunk.length : nl);
       if (nl === -1) break;
       line.finish();
+      consumed = chunkStart + nl + 1;
       start = nl + 1;
     }
+    chunkStart += chunk.length;
     await yieldSlice();
   }
-  line.finish();
+  // 末尾没有换行的半截行：整份扫描照旧交出（与 split 一致）；增量扫描不交——它可能是
+  // 还没写完的一行，交出去解析失败、偏移又前进，这一条就永远丢了
+  if (range?.terminatedOnly !== true) line.finish();
+  return consumed;
+}
+
+/** 增量扫描的字节范围；整份扫描不传 */
+export interface ScanRange {
+  /** 起点字节（含），默认 0 */
+  start?: number;
+  /** 终点字节（不含），默认到文件尾 */
+  endExclusive?: number;
+  /** 只交以换行收尾的行；末尾半截行留给下一次 */
+  terminatedOnly?: boolean;
 }
 
 /** 正在切的那一行：攒字节、到行首窗口就做决定、换行时交出 */

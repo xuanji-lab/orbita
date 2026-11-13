@@ -192,15 +192,19 @@ export function latexEditorExtensions(onUpdate: (update: { docChanged: boolean; 
         color: "var(--color-text-secondary)",
       },
       ".cm-cursor": { borderLeftColor: "var(--color-text-primary)" },
+      // 高亮底一律走中性底：main 之后没有 --color-accent-soft（2026-11-07 方向 N 把
+      // 「选中」从 accent 淡底改成中性墨洗，accent 只留给主操作）。三档共用 bg-* 后
+      // 层级靠叠加深浅：匹配括号 / 选区 = active（墨洗），搜索命中 = muted（块底），
+      // 选中的那一条再用 active 压深一档
       ".cm-matchingBracket": {
-        backgroundColor: "var(--color-accent-soft)",
+        backgroundColor: "var(--color-bg-active)",
         outline: "1px solid var(--color-border-strong)",
       },
       ".cm-selectionBackground, .cm-content ::selection": {
-        backgroundColor: "var(--color-accent-soft)",
+        backgroundColor: "var(--color-bg-active)",
       },
       ".cm-searchMatch": {
-        backgroundColor: "var(--color-accent-soft)",
+        backgroundColor: "var(--color-bg-muted)",
         outline: "1px solid var(--color-border-strong)",
       },
       ".cm-searchMatch.cm-searchMatch-selected": {
@@ -212,9 +216,11 @@ export function latexEditorExtensions(onUpdate: (update: { docChanged: boolean; 
         backgroundColor: "var(--color-success-soft)",
         borderRadius: "2px",
       },
-      // PDF → 源码的落点：accent 的低一档底色，短暂停留（与 PDF 里的落点框同色系）
+      // PDF → 源码的落点：accent 的低一档底色，短暂停留（与 PDF 里的 .pdf-sync-mark
+      // 同色系）。main 之后已没有 --color-accent-soft（方向 N 把选中改成中性墨洗），
+      // 这里直接用 accent 掺透明——与 styles.css 的 .pdf-sync-mark 同一个配方
       ".cm-sync-line": {
-        backgroundColor: "var(--color-accent-soft)",
+        backgroundColor: "color-mix(in srgb, var(--color-accent) 18%, transparent)",
       },
       // `\cite{` 的候选弹层。它是**浮层**：按设计系统的规则用实底 panel + 发丝边 +
       // popover 阴影，不套玻璃梯——浮在任意内容上，半透明会让底下的字透上来

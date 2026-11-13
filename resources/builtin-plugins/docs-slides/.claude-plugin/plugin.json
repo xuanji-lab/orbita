@@ -1,0 +1,18 @@
+{
+  "name": "docs-slides",
+  "displayName": "文档与演示",
+  "version": "0.1.0",
+  "description": "让智能体把文档和演示文稿做好看：做演示文稿前先读版式清单、七条设计规矩和主题搭配，再按「大纲 → 选主题 → 一次写多页 → 按提示修 → 导出」做；改文档时知道面板认哪些 Obsidian 语法、图片放哪、导出各格式怎么转。工具与右栏面板是 Orbita 原生的，这里放的是「怎么做得好」。",
+  "author": { "name": "Orbita" },
+  "license": "MIT",
+  "orbita": {
+    "workflow": [
+      { "title": "先出大纲：一页一个意思，标出封面、章节页和结尾", "skill": "slides", "detail": "7 页以上在各组之间加章节页；每页标题 ≤16 字、要点 ≤6 条每条 ≤20 字" },
+      { "title": "slides_create 选主题，右栏打开空白稿", "skill": "slides", "detail": "按主题气质选 forest / ink / mono / academic / warm / night，用户之后能在面板里换" },
+      { "title": "slides_write 一次写多页，用版式而不是坐标", "skill": "slides", "detail": "图文页一律 image-left / image-right；用户附的图写 \"attached\"", "output": "<名字>.slides.json" },
+      { "title": "按返回的提示修页：写短、拆页，不缩字", "skill": "slides", "detail": "标题太长、要点太多、文字装不下都会出提示" },
+      { "title": "你在面板里手改后，先 slides_read 再动", "skill": "slides", "detail": "用户可能改过；用 slides_edit 小改，不整页重写", "wait": "chat" },
+      { "title": "导出 PDF / PPTX / HTML / PNG", "skill": "slides", "detail": "换电脑放映选 pptx-basic（通用字体）", "output": "<名字>.pdf / .pptx" }
+    ]
+  }
+}
