@@ -39,6 +39,7 @@ export const SHOT_IDS = [
   "deck-quote",
   "delegate",
   "subsessions",
+  "bg-status",
   "memory",
   "memory-library",
   "terminal",
@@ -371,6 +372,12 @@ export const GUIDE: readonly GuideChapter[] = [
     pages: [
       opener("subsessions"),
       step("dispatch", "delegate", { focus: box("delegate", "cards"), pins: [pin(1, box("delegate", "cards"), "tl")], say: true }),
+      // 清单打开的那一帧：输入框上沿的一行 + 它上面盖着的清单；放大镜取这两样的左半段（字小，原图上读不清）
+      step("status", "bg-status", {
+        focus: union(box("bg-status", "list", 0.004), box("bg-status", "strip", 0.004)),
+        pins: [pin(1, box("bg-status", "strip", 0.004), "tl"), pin(2, box("bg-status", "list", 0.004), "tr")],
+        loupe: loupe({ x: 0.298, y: 0.737, w: 0.41, h: 0.129 }, { x: 0.03, y: 0.07 }, 1.5),
+      }),
       step("inbox", "subsessions", { focus: box("subsessions", "panel", 0), pins: [pin(1, part(box("subsessions", "panel", 0), { y: 0.13, h: 0.2 }), "l")] }),
       step("waiting", "subsessions", {
         focus: part(box("subsessions", "panel", 0), { h: 0.1 }),

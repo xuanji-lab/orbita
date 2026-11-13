@@ -123,6 +123,9 @@ export const SCENES = [
     measure: { bubble: ".bubble-md", cards: { js: "[...document.querySelectorAll('.chat-transcript *')].filter((e) => e.children.length === 0 && e.textContent.trim() === '已委派').map((e) => e.closest('button')).slice(0, 3)" } } },
   { id: "subsessions", steps: [...openTask(SUBS), { click: ".right-rail button[aria-label*='子会话']" }, { wait: 1500 }],
     measure: { panel: PANEL, rail: ".right-rail button[aria-label*='子会话']", first: { js: "document.querySelector('.right-panel-slot .option-row, .right-panel-slot button')" }, capsule: { js: "[...document.querySelectorAll('.toolbar button, .toolbar span')].find((e) => /^\\d+$/.test(e.textContent.trim()))" } } },
+  // 后台状态位：这条任务（派了四个子会话，一个在问你）输入框上沿的一行，点开成清单。拍的是清单打开的那一帧
+  { id: "bg-status", both: true, steps: [...openTask(SUBS), TOP, { wait: 600 }, { click: ".bg-line-btn" }, { until: "!!document.querySelector('.menu-panel')", timeout: 5000 }, { wait: 500 }], after: [{ key: "Escape" }],
+    measure: { strip: ".bg-line-btn", list: ".menu-panel", row: ".menu-panel button" } },
   { id: "memory", steps: [...openTask(PDF), { click: "button.memrow-btn" }, { wait: 1200 }], after: [{ key: "Escape" }],
     measure: { row: "button.memrow-btn", list: { js: "[...document.querySelectorAll('.chat-transcript *')].find((e) => e.textContent.includes('在审查面板里看'))?.parentElement" } } },
   { id: "memory-library", steps: settingsTab("记忆库"), after: [CLOSE_SETTINGS],

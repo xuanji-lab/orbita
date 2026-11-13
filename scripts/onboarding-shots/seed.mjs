@@ -25,6 +25,10 @@
  *      一句话做一份演示文稿、新建一份带 Obsidian 语法的文档，真模型真跑，约 3–5 分钟。之后 capture.mjs --chapter docs。
  *        node scripts/onboarding-shots/seed.mjs docs --cdp 39350 --dev 5350
  *
+ *   5. 子会话章（实例在跑、带 CDP；可单独跑）：只跑 delegate 与 ask 两幕（真模型，约 6–10 分钟），
+ *      留下「三个子会话已完成 + 一个在问你 + 一个在跑（sleep 900，拍完图要停掉）」的现场，给后台状态位那一页拍图。之后 capture.mjs --shot bg-status
+ *        node scripts/onboarding-shots/seed.mjs subs --cdp 39350 --dev 5350
+ *
  * 收尾：node scripts/.../instance-data.py clean <实例名> --yes（或手动删 userData 与 ~/Orbita-dev-<实例名>）。
  * 截图里不能出现真实数据：终端提示符在 capture 里改成「目录名 %」，插件作者写成「城市感知课题组」。
  */
@@ -34,7 +38,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import { connectCdp, step } from "../cdp.mjs";
-import { PROJECT_FILES, SCREENPLAY, DOC_SCREENPLAY, WORKSPACE_NAME, GROUP_MEETING_DRAFT } from "./demo.mjs";
+import { PROJECT_FILES, SCREENPLAY, DOC_SCREENPLAY, BG_RUNNING, WORKSPACE_NAME, GROUP_MEETING_DRAFT } from "./demo.mjs";
 
 const { positionals, values: opt } = parseArgs({
   allowPositionals: true,
@@ -251,7 +255,10 @@ else if (mode === "drive") await drive();
 else if (mode === "fixup") fixup();
 // 文档与演示章：只跑 DOC_SCREENPLAY 两幕（约 3–5 分钟，真模型）；不依赖 drive 的那 9 幕，也不需要 fixup
 else if (mode === "docs") await drive(DOC_SCREENPLAY, { finish: false });
+// 子会话章（后台状态位那一页）：只跑 delegate、ask 与 bg-running 三幕——派三个子会话、再派一个留着问题的、再派一个还在跑的（约 6–10 分钟，真模型）；
+// 不依赖 drive 的其余幕。之后 capture.mjs --shot bg-status
+else if (mode === "subs") await drive([...SCREENPLAY.filter((scene) => ["delegate", "ask"].includes(scene.id)), BG_RUNNING], { finish: false });
 else {
-  console.error("用法见文件头：files | drive | fixup | docs");
+  console.error("用法见文件头：files | drive | fixup | docs | subs");
   process.exit(1);
 }

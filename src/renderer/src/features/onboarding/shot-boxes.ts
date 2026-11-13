@@ -53,6 +53,26 @@ export const SHOT_BOXES: Readonly<Record<string, Readonly<Record<string, Box>>>>
       "h": 0.1306
     }
   },
+  "bg-status": {
+    "strip": {
+      "x": 0.3031,
+      "y": 0.8356,
+      "w": 0.625,
+      "h": 0.02
+    },
+    "list": {
+      "x": 0.3031,
+      "y": 0.7467,
+      "w": 0.3663,
+      "h": 0.0822
+    },
+    "row": {
+      "x": 0.3066,
+      "y": 0.7522,
+      "w": 0.3593,
+      "h": 0.0356
+    }
+  },
   "board-week": {
     "days": {
       "x": 0.9197,

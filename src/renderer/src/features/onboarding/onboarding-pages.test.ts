@@ -25,7 +25,7 @@ describe("章与页：照章节稿第三版", () => {
   test("每章步骤页数照章节稿（第 13 章的虚线页先不做：3 页）；常见问题约 6 问", () => {
     const steps = Object.fromEntries(GUIDE.map((chapter) => [chapter.id, chapter.pages.filter((page) => page.kind !== "opener").length]));
     assert.deepEqual(steps, {
-      start: 4, task: 4, progress: 3, files: 3, quote: 4, docs: 5, subsessions: 4, memory: 3,
+      start: 4, task: 4, progress: 3, files: 3, quote: 4, docs: 5, subsessions: 5, memory: 3,
       terminal: 2, browser: 2, plugins: 4, automation: 3, board: 2, focus: 3, faq: 6,
     });
   });

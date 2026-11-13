@@ -3575,6 +3575,12 @@ export const en = {
             notes: ["Three sub-sessions, each on one paper."],
             say: "Send three sub-sessions to research STG-LLM, UniST and UrbanCLIP, then sum it up in one comparison table.",
           },
+          status: {
+            name: "Background status",
+            title: "Once it's sent out, watch progress by the input box",
+            body: "After the main session hands work off and its own turn ends, a **Background** line appears above the input box: how many are running, which step each one is on, whether any are waiting for you. Open it for the list, click a row to go into that sub-session. To take no height at all, switch to “Capsule” in Settings › Appearance.",
+            notes: ["The line above the input box: how many are running, how many wait on you, and where the first few are.", "The open list: those waiting for you come first, the time at the end is how long each has run; click a row to enter that sub-session."],
+          },
           inbox: {
             name: "The inbox",
             title: "The sub-sessions inbox",
