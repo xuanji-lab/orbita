@@ -1337,6 +1337,11 @@ export const zh: Messages = {
     processViewInfo: "一轮一行：干活时一块定高的现场，只走表和当前这一步；做完收成一行，可展开成几段 · 逐步铺开：每次思考与工具调用各占一行",
     processViewTurn: "一轮一行",
     processViewSteps: "逐步铺开",
+    backgroundStrip: "后台任务",
+    backgroundStripAria: "后台任务显示在哪",
+    backgroundStripInfo: "这条任务派出去的子会话、等下次运行的自动化 · 细条：输入框上沿一行小字，约占对话区 28 像素高 · 胶囊：输入框底栏里的一颗，不占对话区 · 两种点开都是同一份清单",
+    backgroundStripLine: "细条",
+    backgroundStripCapsule: "胶囊",
     completionSound: "完成提示音",
     completionSoundAria: "完成提示音",
     completionSoundInfo: "你在看别处时任务跑完，响一声客舱呼唤铃 · 关掉后侧栏高亮与提醒卡片照常出现",
@@ -2239,6 +2244,23 @@ export const zh: Messages = {
     latestDone: "完成",
     latestFailed: "失败",
     latestReply: (text) => `回复：${text}`,
+  },
+
+  bgStrip: {
+    aria: "后台任务",
+    label: "后台",
+    running: (count) => `${count} 项在跑`,
+    waiting: (count) => `${count} 项等你`,
+    failed: (count) => `${count} 项失败`,
+    done: (count) => `${count} 项完成`,
+    scheduled: (count) => `${count} 项待运行`,
+    moreInline: (count) => `+${count}`,
+    capsule: (count, waiting) => (waiting > 0 ? `后台 ${count} · ${waiting} 等你` : `后台 ${count}`),
+    capsuleMid: (count, waiting) => (waiting > 0 ? `${count} · ${waiting} 等你` : `后台 ${count}`),
+    capsuleShort: (count, waiting) => (waiting > 0 ? `${waiting} 等你` : `${count}`),
+    tools: { report: "汇报", reply: "回复子会话", delegate: "派出子会话", costs: "查价格", automation: "自动化", other: "工具" },
+    lineTip: "展开清单，点一行进入",
+    automationDue: "已到点，这一轮结束后送达",
   },
 
   queue: {
@@ -3307,6 +3329,12 @@ export const zh: Messages = {
             body: "让它「派子会话分头查」，它会开出几条子会话各干一块，自己等结果、汇总。",
             notes: ["三个子会话，各查一篇。"],
             say: "派三个子会话分头调研 STG-LLM、UniST、UrbanCLIP，回来汇总成一张对比表。",
+          },
+          status: {
+            name: "后台状态位",
+            title: "活派出去之后，输入框旁看进展",
+            body: "主会话把活派出去、自己这一轮结束后，输入框上沿会多一行**后台**：几件在跑、各自做到哪一步、有没有在等你。点开是清单，点一行进那条子会话。想一点高度都不占，在设置 › 外观里换成「胶囊」。",
+            notes: ["输入框上沿这一行：几件在跑、几件等你，再加前几项做到哪一步。", "点开的清单：等你的排最前，行尾是已跑多久；点一行进那条子会话。"],
           },
           inbox: {
             name: "收件箱",

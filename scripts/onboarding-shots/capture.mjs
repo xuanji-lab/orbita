@@ -5,6 +5,7 @@
  *   node scripts/onboarding-shots/capture.mjs --cdp 39350 --dev 5350                 # 全部
  *   node scripts/onboarding-shots/capture.mjs --cdp 39350 --dev 5350 --chapter automation,board
  *   node scripts/onboarding-shots/capture.mjs --cdp 39350 --dev 5350 --shot plan,context
+ *   node scripts/onboarding-shots/capture.mjs --cdp 39350 --dev 5350 --shot bg-status --no-reload   # both 场景：不重载（要留着在跑的子会话）
  *
  * 前提：一个灌好演示课题的隔离实例在跑（seed.mjs 的三步，见它的文件头），带 --remoteDebuggingPort。
  * 每个场景（scenes.mjs）：摆好 → 浅色拍一张、量框 → 切玄再拍一张 → 切回浅色 → 收尾动作。
@@ -35,6 +36,9 @@ const { values: opt } = parseArgs({
     chapter: { type: "string" },
     shot: { type: "string" },
     quality: { type: "string", default: "75" },
+    // 不重载页面换主题：只拍 both 场景（同一帧切 data-theme 拍玄）时用。重载会丢掉渲染层对「还在跑的子会话」的认识
+    // （后台状态位那一页要拍着一个还在跑的子会话，重载后它在渲染层里就成了空闲）
+    "no-reload": { type: "boolean", default: false },
     // 调选择器用：摆好这个场景（浅色），在页面里求值 --eval 并打印，不拍图
     probe: { type: "string" },
     eval: { type: "string" },
@@ -245,7 +249,7 @@ const boxesPath = join(OUT, "shot-boxes.ts");
 const boxes = existsSync(boxesPath) ? JSON.parse(/SHOT_BOXES[^=]*= ([\s\S]*);\s*$/.exec(readFileSync(boxesPath, "utf8"))?.[1] ?? "{}") : {};
 // 两遍：先全部浅色（顺手量框），再换玄全部重摆一遍。每个场景的步骤都可重跑（收尾会先重新打开、补一轮对话）
 for (const set of ["light", "dark"]) {
-  await theme(set === "light" ? "light" : "black");
+  if (!opt["no-reload"]) await theme(set === "light" ? "light" : "black");
   for (const scene of SCENES) {
     if (only && !only.has(scene.id)) continue;
     // both：现跑的场景（浅、玄各跑一遍，两次跑到的进度、行数都不同，浅色量的框对不上玄的图）——
@@ -277,7 +281,7 @@ for (const set of ["light", "dark"]) {
     }
   }
 }
-await theme("light");
+if (!opt["no-reload"]) await theme("light");
 // 拍完才一次性拷进 src（只覆盖这次拍了的；没拍成的保留旧图）
 cpSync(STAGE, join(OUT, "shots"), { recursive: true });
 rmSync(STAGE, { recursive: true, force: true });

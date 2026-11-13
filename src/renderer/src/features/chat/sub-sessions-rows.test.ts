@@ -7,6 +7,7 @@ import {
   sortSubSessionRows,
   subSessionBarFill,
   subSessionRowStatus,
+  subSessionStatusFrom,
   subSessionStatusOf,
   type SubSessionEngineSlots,
   type SubSessionRowStatus,
@@ -71,6 +72,35 @@ describe("subSessionRowStatus", () => {
       subSessionRowStatus({ channelStatus: "stopped", needsApproval: false, running: false }),
       "stopped",
     );
+  });
+});
+
+describe("subSessionStatusFrom（按 id 查询形态，与 subSessionStatusOf 同一份 glue）", () => {
+  const probe = (running: readonly string[], approvals: Record<string, number>) => ({
+    approvalCountOf: (id: string) => approvals[id] ?? 0,
+    phaseOf: (id: string) => (running.includes(id) ? "turn" : "idle"),
+  });
+
+  it("与 subSessionStatusOf 对同一组输入给出同一个状态", () => {
+    const engine: SubSessionEngineSlots = {
+      states: new Map([["c1", { approvals: [{}] }]]),
+      phaseOf: (id: string) => (id === "c1" || id === "c2" ? "turn" : "idle"),
+    };
+    for (const channel of [undefined, "running", "waiting", "done", "failed", "stopped"] as const) {
+      for (const id of ["c1", "c2", "c3"]) {
+        strictEqual(
+          subSessionStatusFrom(id, channel, probe(["c1", "c2"], { c1: 1 })),
+          subSessionStatusOf(id, channel, engine),
+          `${id} / ${channel}`,
+        );
+      }
+    }
+  });
+
+  it("审批数 > 0 才算待批；phase 非 idle 才算在跑", () => {
+    strictEqual(subSessionStatusFrom("c1", "running", probe([], { c1: 0 })), "idle");
+    strictEqual(subSessionStatusFrom("c1", "running", probe([], { c1: 2 })), "approval");
+    strictEqual(subSessionStatusFrom("c1", undefined, probe(["c1"], {})), "running");
   });
 });
 

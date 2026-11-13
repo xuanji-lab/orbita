@@ -1448,6 +1448,12 @@ export const en = {
       "One line per turn: while it works, a fixed-height block ticks with the current step; when it's done, one line you can open into parts · Every step: each thought and tool call on its own row",
     processViewTurn: "One line per turn",
     processViewSteps: "Every step",
+    backgroundStrip: "Background work",
+    backgroundStripAria: "Where background work shows",
+    backgroundStripInfo:
+      "Sub-sessions and automations that are working or waiting for this task · Line: one small line just above the input box (takes about 28px of the conversation) · Capsule: one chip in the input box's bottom bar (takes none) · Both open the same list",
+    backgroundStripLine: "Line",
+    backgroundStripCapsule: "Capsule",
     completionSound: "Completion sound",
     completionSoundAria: "Completion sound",
     completionSoundInfo:
@@ -2422,6 +2428,35 @@ export const en = {
     latestDone: "Done",
     latestFailed: "Failed",
     latestReply: (text: string) => `Replied: ${text}`,
+  },
+
+  /** 输入框上方的后台任务条（features/chat/BackgroundStrip.tsx）：这条会话的子会话与等下次运行的自动化 */
+  bgStrip: {
+    aria: "Background work",
+    label: "Background",
+    running: (count: number) => `${count} running`,
+    waiting: (count: number) => `${count} waiting on you`,
+    failed: (count: number) => `${count} failed`,
+    done: (count: number) => `${count} finished`,
+    scheduled: (count: number) => `${count} scheduled`,
+    /** 细条里放不下的项数（「+2」） */
+    moreInline: (count: number) => `+${count}`,
+    /** 胶囊（输入框底栏里的一颗）：总数，有等你的再加一段 */
+    capsule: (count: number, waiting: number) => (waiting > 0 ? `Background ${count} · ${waiting} waiting` : `Background ${count}`),
+    /** 胶囊在较窄底栏里的两档短形：有等你的项时「N 等你」任何一档都写出来（宁可省「后台」二字或总数），没有才只写总数 */
+    capsuleMid: (count: number, waiting: number) => (waiting > 0 ? `${count} · ${waiting} waiting` : `Background ${count}`),
+    capsuleShort: (count: number, waiting: number) => (waiting > 0 ? `${waiting} waiting` : `${count}`),
+    /** 表里没有的下划线工具 id 不露给用户：状态位自己的名字（background-strip.ts 的 bgToolLabel 选哪个） */
+    tools: {
+      report: "Reporting",
+      reply: "Replying to a sub-session",
+      delegate: "Delegating",
+      costs: "Checking prices",
+      automation: "Automation",
+      other: "Tool",
+    },
+    lineTip: "Show the list — click a row to open it",
+    automationDue: "Due — sends when this turn ends",
   },
 
   queue: {
@@ -3539,6 +3574,12 @@ export const en = {
             body: "Ask it to “split this up with sub-sessions” and it opens several, one per piece, waits for them and sums up.",
             notes: ["Three sub-sessions, each on one paper."],
             say: "Send three sub-sessions to research STG-LLM, UniST and UrbanCLIP, then sum it up in one comparison table.",
+          },
+          status: {
+            name: "Background status",
+            title: "Once it's sent out, watch progress by the input box",
+            body: "After the main session hands work off and its own turn ends, a **Background** line appears above the input box: how many are running, which step each one is on, whether any are waiting for you. Open it for the list, click a row to go into that sub-session. To take no height at all, switch to “Capsule” in Settings › Appearance.",
+            notes: ["The line above the input box: how many are running, how many wait on you, and where the first few are.", "The open list: those waiting for you come first, the time at the end is how long each has run; click a row to enter that sub-session."],
           },
           inbox: {
             name: "The inbox",

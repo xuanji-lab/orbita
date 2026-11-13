@@ -342,6 +342,25 @@ describe("parseSettings 的 completionSound", () => {
   });
 });
 
+describe("parseSettings 的 backgroundStrip", () => {
+  it("两个已知落点原样保留，缺席不落键（缺席 = 细条）", () => {
+    deepStrictEqual(parseSettings({ backgroundStrip: "line" }).backgroundStrip, "line");
+    deepStrictEqual(parseSettings({ backgroundStrip: "capsule" }).backgroundStrip, "capsule");
+    deepStrictEqual(parseSettings({}).backgroundStrip, undefined);
+  });
+
+  it("旧值 summary / rows（v1 的汇总条 / 分行条）回落到细条", () => {
+    deepStrictEqual(parseSettings({ backgroundStrip: "summary" }).backgroundStrip, "line");
+    deepStrictEqual(parseSettings({ backgroundStrip: "rows" }).backgroundStrip, "line");
+  });
+
+  it("手改的乱值丢掉，不当成真", () => {
+    deepStrictEqual(parseSettings({ backgroundStrip: "compact" }).backgroundStrip, undefined);
+    deepStrictEqual(parseSettings({ backgroundStrip: true }).backgroundStrip, undefined);
+    deepStrictEqual(parseSettings({ backgroundStrip: null }).backgroundStrip, undefined);
+  });
+});
+
 describe("parseSettings 的 choreModel", () => {
   it("缺席 = 各件家务退回会话模型，不落这个键", () => {
     deepStrictEqual(parseSettings({ theme: "graphite" }).choreModel, undefined);

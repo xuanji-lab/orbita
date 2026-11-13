@@ -178,9 +178,25 @@ export function subSessionStatusOf(
   channelStatus: ChannelStatus | undefined,
   engine: SubSessionEngineSlots,
 ): SubSessionRowStatus {
+  return subSessionStatusFrom(childId, channelStatus, {
+    approvalCountOf: (id) => engine.states.get(id)?.approvals.length ?? 0,
+    phaseOf: engine.phaseOf,
+  });
+}
+
+/**
+ * `subSessionStatusOf` 的按 id 查询形态：只有「按 id 查审批数 / phase」两个读法、没有整张槽表时
+ * 用它（后台任务条拿的是 ChatSession 的 `approvalsOf` / `phaseOf`，引用稳定的按 id 查询）。
+ * 与上面是**同一份 glue**——phase 参与推导只能从这一处进，不在第二个文件里再拼一遍。
+ */
+export function subSessionStatusFrom(
+  childId: string,
+  channelStatus: ChannelStatus | undefined,
+  probe: { approvalCountOf: (id: string) => number; phaseOf: (id: string) => string },
+): SubSessionRowStatus {
   return subSessionRowStatus({
     channelStatus,
-    needsApproval: (engine.states.get(childId)?.approvals.length ?? 0) > 0,
-    running: engine.phaseOf(childId) !== "idle",
+    needsApproval: probe.approvalCountOf(childId) > 0,
+    running: probe.phaseOf(childId) !== "idle",
   });
 }

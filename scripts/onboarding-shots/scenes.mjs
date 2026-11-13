@@ -14,6 +14,8 @@ import { DOC_SAY } from "./demo.mjs";
 /** 收起右栏面板与整页盖层（设置、看板）；「更多」亮着是子视图开着，点它只会弹菜单，跳过 */
 const RESET = { eval: "[...document.querySelectorAll('.right-rail button[aria-pressed=true]')].filter((b) => b.getAttribute('aria-label') !== '更多').forEach((b) => b.click()), 1" };
 const BOTTOM = { eval: "document.querySelector('.chat-transcript').scrollTop = 1e7, 1" };
+/** 滚到顶要带一个 wheel 事件：对话区的「跟随最新」只认用户意图（滚轮 / 触摸 / 按下），光改 scrollTop 会被它拉回底部（子会话在跑、转录较长时实测） */
+const TOP_WHEEL = { eval: "(() => { const s = document.querySelector('.chat-transcript'); s.dispatchEvent(new WheelEvent('wheel', { deltaY: -200, bubbles: true, cancelable: true })); s.scrollTop = 0; return 1; })()" };
 const TOP = { eval: "document.querySelector('.chat-transcript').scrollTop = 0, 1" };
 
 const CARRYOVERS_OPEN = "!!document.querySelector(\"aside button[aria-label='返回任务']\")";
@@ -119,10 +121,16 @@ export const SCENES = [
     measure: { cite: { js: "[...document.querySelectorAll('sup.chat-cite')][2]" }, panel: PANEL, mark: ".pdf-cite-mark" } },
   { id: "task-ref", steps: [...openTask(READ), { eval: "[...document.querySelectorAll('.bubble-md')].find((b) => b.textContent.includes('小标题'))?.scrollIntoView({ block: 'start' }), 1" }, { wait: 400 }],
     measure: { bubble: [".bubble-md", "小标题"], turn: ["button.collapse-row-btn", "read_task"], answer: [".assistant-prose", "已补到"] } },
-  { id: "delegate", steps: [...openTask(SUBS), TOP, { wait: 400 }],
+  // delegate / subsessions / bg-status 三张同属第 7 章：要在**同一时刻**拍（侧栏任务、子会话计数、名字才不互相矛盾），
+  // 而且那一刻有一个还在跑的子会话——重载页面会让渲染层丢掉它（成了空闲）。所以三张都 both（同一帧切 data-theme 拍玄），
+  // 拍的时候加 --no-reload：capture.mjs --shot delegate,subsessions,bg-status --no-reload
+  { id: "delegate", both: true, steps: [...openTask(SUBS), TOP_WHEEL, { wait: 700 }, { until: "document.querySelector('.chat-transcript').scrollTop < 5", timeout: 5000 }],
     measure: { bubble: ".bubble-md", cards: { js: "[...document.querySelectorAll('.chat-transcript *')].filter((e) => e.children.length === 0 && e.textContent.trim() === '已委派').map((e) => e.closest('button')).slice(0, 3)" } } },
-  { id: "subsessions", steps: [...openTask(SUBS), { click: ".right-rail button[aria-label*='子会话']" }, { wait: 1500 }],
+  { id: "subsessions", both: true, steps: [...openTask(SUBS), { click: ".right-rail button[aria-label*='子会话']" }, { wait: 1500 }],
     measure: { panel: PANEL, rail: ".right-rail button[aria-label*='子会话']", first: { js: "document.querySelector('.right-panel-slot .option-row, .right-panel-slot button')" }, capsule: { js: "[...document.querySelectorAll('.toolbar button, .toolbar span')].find((e) => /^\\d+$/.test(e.textContent.trim()))" } } },
+  // 后台状态位：这条任务（派了四个子会话，一个在问你）输入框上沿的一行，点开成清单。拍的是清单打开的那一帧
+  { id: "bg-status", both: true, steps: [...openTask(SUBS), BOTTOM, { wait: 600 }, { until: "/数一数/.test(document.querySelector('.bg-line-btn')?.innerText ?? '')", timeout: 90000 }, { click: ".bg-line-btn" }, { until: "!!document.querySelector('.menu-panel')", timeout: 5000 }, { wait: 500 }], after: [{ key: "Escape" }],
+    measure: { strip: ".bg-line-btn", list: ".menu-panel", row: ".menu-panel button" } },
   { id: "memory", steps: [...openTask(PDF), { click: "button.memrow-btn" }, { wait: 1200 }], after: [{ key: "Escape" }],
     measure: { row: "button.memrow-btn", list: { js: "[...document.querySelectorAll('.chat-transcript *')].find((e) => e.textContent.includes('在审查面板里看'))?.parentElement" } } },
   { id: "memory-library", steps: settingsTab("记忆库"), after: [CLOSE_SETTINGS],

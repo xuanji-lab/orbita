@@ -6234,6 +6234,159 @@ mark.intent-mark {
   display: grid;
   gap: var(--space-2);
 }
+
+/* ===== 后台任务状态位（2026-11-13，v2 2026-11-14；features/chat/BackgroundStrip.tsx） =====
+ * 用户看了 v1 的卡片说「空间利用率太低了，占用太多看聊天记录的空间」，所以它不是卡：
+ * - 细条 .bg-line：输入框上沿的一行小字，没有外框 / 底色 / 阴影（只有 hover 底），整行是一个触发器，
+ *   高 = 一行 sm 字（18px）+ 页脚网格的 8px 间距 = 对话区最多少 26px；
+ * - 胶囊 .chip-bg：输入框底栏里的一颗 Chip，对话区一个像素不少。
+ * 详情是浮层清单（Menu 的 .glass-float .menu-panel），盖在对话区上、不推版面。
+ * 字号只有 sm 一档；层级靠字重与墨色。 */
+.bg-line {
+  container: bgstrip / inline-size;
+  min-width: 0;
+}
+.bg-line-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  /* 一行字高，不加垂直内边距：状态位占的高度就是这 18px */
+  height: calc(var(--font-size-sm) * var(--line-height-ui));
+  /* 字落在血线（输入框文字的左缘）上，hover 底从列边缘起——「面在外线、字在内线」 */
+  padding: 0 var(--content-hem);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.bg-line-btn:hover,
+.bg-line-btn[data-open] {
+  background: var(--color-bg-hover);
+}
+.bg-line-label {
+  flex: none;
+  font-weight: var(--weight-strong);
+  color: var(--color-text-primary);
+}
+/* 计数是状态位要回答的三件事，不被项挤：项自己省略号收缩 */
+.bg-strip-count {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.bg-count-part[data-tone="waiting"] {
+  color: var(--color-warning);
+}
+.bg-count-part[data-tone="failed"] {
+  color: var(--color-danger);
+}
+.bg-line-item {
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  gap: var(--space-1-5);
+  min-width: 0;
+}
+/* 行首状态槽：饼（10）与闹钟图标（12）落在同一根 14 宽的中线上 */
+.bg-lead {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+}
+.bg-lead-icon {
+  color: var(--color-text-tertiary);
+}
+.bg-item-name {
+  flex: 0 1 auto;
+  min-width: 4em;
+  max-width: 10em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: var(--weight-strong);
+  color: var(--color-text-primary);
+}
+/* 步骤文字退到次级墨色：名字是主信息（primary + 加粗），步骤是它的注脚，不粘在一起 */
+.bg-item-text {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-text-secondary);
+}
+.bg-more {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.bg-line-chevron {
+  display: inline-flex;
+  color: var(--color-text-tertiary);
+}
+/* 窄：计数那句先收（只剩「后台」二字 + 各项），再窄连步骤文字也收，免得露出半个字 */
+@container bgstrip (max-width: 300px) {
+  .bg-strip-count {
+    display: none;
+  }
+}
+@container bgstrip (max-width: 260px) {
+  .bg-item-text {
+    display: none;
+  }
+}
+
+/* 浮层清单里行尾的「已跑多久 / 下次运行」：等宽数字，不抖；行尾血线由 Menu 行的右内边距给 */
+.bg-menu-time {
+  flex: none;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+
+/* 胶囊：饼 + 「后台 3 · 1 等你」。底栏变窄时分三档收：≥ 640 全文；410–639 中档；< 410 最窄档。有等你的项时「N 等你」每一档都写出来
+   （右栏开着、窗口窄、英文更长），免得把作用域 / 权限 / 模型几个芯片挤成省略号。胶囊自己不缩：
+   让出宽度的是可缩的模型与档位芯片。 */
+.composer-bottom-bar > :has(> .chip-bg) {
+  flex: none;
+}
+.composer-bottom-bar .chip-bg {
+  min-width: max-content;
+}
+.bg-cap {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+.bg-cap-mid,
+.bg-cap-short {
+  display: none;
+  font-variant-numeric: tabular-nums;
+}
+@container (max-width: 639px) {
+  .composer-bottom-bar .bg-cap-long {
+    display: none;
+  }
+  .composer-bottom-bar .bg-cap-mid {
+    display: inline;
+  }
+}
+@container (max-width: 409px) {
+  .composer-bottom-bar .bg-cap-mid {
+    display: none;
+  }
+  .composer-bottom-bar .bg-cap-short {
+    display: inline;
+  }
+}
 .user-turn {
   position: relative;
   display: flex;

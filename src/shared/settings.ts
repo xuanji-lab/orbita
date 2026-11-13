@@ -180,6 +180,9 @@ export interface UsagePetPref {
 /** 过程显示的两种形态，见 AppSettings.processView */
 export type ProcessView = "turn" | "steps";
 
+/** 后台任务状态位的两种落点，见 AppSettings.backgroundStrip */
+export type BackgroundStripStyle = "line" | "capsule";
+
 export interface AppSettings {
   theme: ThemePreference;
   /**
@@ -235,6 +238,15 @@ export interface AppSettings {
    * 其余值丢掉。
    */
   processView?: ProcessView;
+  /**
+   * 对话里「后台任务状态位」的落点（2026-11-14）。**缺席 = "line"**：
+   * - "line"：细条——贴在输入框上沿的一行小字（无外框 / 底色 / 阴影），计数 + 前几项的饼、名字、
+   *   当前一步，对话区可视高度最多少 28px；
+   * - "capsule"：胶囊——输入框底栏里的一颗（饼 + 计数），对话区一个像素不少。
+   * 两种点开都是同一个浮层清单。其余值丢掉；**旧值 "summary" / "rows"**（v1 的汇总条 / 分行条，
+   * 推版面太占地方已删）读到时回落到 "line"。
+   */
+  backgroundStrip?: BackgroundStripStyle;
   /**
    * 自动化：**有任务在跑时阻止系统睡眠**。缺席 = 关。开着时主进程只在
    * 有自动化运行**正在执行**期间用 Electron 的 powerSaveBlocker（`prevent-app-suspension`）
@@ -579,6 +591,7 @@ export function parseSettings(raw: unknown): AppSettings {
     collapsePastedText?: unknown;
     completionSound?: unknown;
     processView?: unknown;
+    backgroundStrip?: unknown;
     automationKeepAwake?: unknown;
     onboardingSeen?: unknown;
     docPaper?: unknown;
@@ -665,6 +678,11 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(record.processView === "turn" || record.processView === "steps"
       ? { processView: record.processView }
       : {}),
+    ...(record.backgroundStrip === "line" || record.backgroundStrip === "capsule"
+      ? { backgroundStrip: record.backgroundStrip }
+      : record.backgroundStrip === "summary" || record.backgroundStrip === "rows"
+        ? { backgroundStrip: "line" as const }
+        : {}),
     // 同上：非布尔丢掉，缺席 = 响
     ...(typeof record.completionSound === "boolean"
       ? { completionSound: record.completionSound }
