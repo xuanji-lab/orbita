@@ -45,8 +45,13 @@ export const AUTOMATION_MAX_ACTIVE_PER_SESSION = 5;
  * 既逼用户做杂事，也让智能体有了「去动自动化记录」的动机。
  */
 export const AUTOMATION_MAX_UNFINISHED = 20;
-/** 归档里最多留多少条已结束的记录（超出的从最旧的丢）；主存储文件因此不随时间无限变长 */
+/**
+ * 归档（热）里最多留多少条已结束的记录；主存储文件与面板因此不随时间变长。
+ * 超出的最旧记录**不丢**：在从热文件移除之前先追加进冷文件（只追加的 JSONL，启动与调度都不读它）。
+ */
 export const AUTOMATION_ARCHIVE_KEEP = 200;
+/** 一条记录最多留几次「上一次结束」（重新启动时把结束原因与时间记下来，不覆盖没了） */
+export const AUTOMATION_PREVIOUS_ENDS_KEPT = 5;
 /** 连续失败这么多次进入失败态（可「重新启动」） */
 export const AUTOMATION_MAX_CONSECUTIVE_FAILURES = 3;
 /** 标题长度上限：会话标题「<标题> · <日期时间>」要在 deriveSessionTitle 的 60 字内放得下 */
@@ -339,6 +344,19 @@ export function parseAutomationPlugin(raw: unknown): AutomationPlugin | null {
   return typeof name === "string" && isPluginName(name) ? { name } : null;
 }
 
+/** 一次结束的痕迹：重新启动会清掉 endReason，旧的结束原因与时间先记进 previousEnds */
+export interface AutomationEndRecord {
+  reason?: AutomationEndReason;
+  /** 结束时刻（epoch ms；取当时的 updatedAt） */
+  at: number;
+}
+
+/** 冷文件的现状：热归档放不下而移出的记录数，与它们所在的文件名（面板与 agent 的 list 据此说「更早的 N 条保存在 <文件>」） */
+export interface AutomationArchiveInfo {
+  older: number;
+  file: string;
+}
+
 export interface Automation {
   id: string;
   title: string;
@@ -368,6 +386,8 @@ export interface Automation {
   until?: number;
   /** 下一次到点的时间；非 active 恒为 null */
   nextRunAt: number | null;
+  /** 重新启动过的：每次重启时上一次的结束原因与时间，新→旧，最多 AUTOMATION_PREVIOUS_ENDS_KEPT 条 */
+  previousEnds?: AutomationEndRecord[];
   /** 最近 AUTOMATION_RUNS_KEPT 条，新→旧 */
   runs: AutomationRun[];
   /** 已经真正跑过（或送达过）的总次数（不含 skipped）；「第 n 次」与 maxRuns 都按它 */
@@ -766,6 +786,20 @@ export function parseAutomation(raw: unknown): Automation | null {
   const runs = Array.isArray(value["runs"])
     ? value["runs"].map(parseRun).filter((run): run is AutomationRun => run !== null).slice(0, AUTOMATION_RUNS_KEPT)
     : [];
+  const previousEnds = Array.isArray(value["previousEnds"])
+    ? value["previousEnds"]
+        .map((entry): AutomationEndRecord | null => {
+          if (typeof entry !== "object" || entry === null) return null;
+          const record = entry as Record<string, unknown>;
+          const at = num(record["at"]);
+          if (at === null) return null;
+          return (END_REASONS as readonly unknown[]).includes(record["reason"])
+            ? { reason: record["reason"] as AutomationEndReason, at }
+            : { at };
+        })
+        .filter((entry): entry is AutomationEndRecord => entry !== null)
+        .slice(0, AUTOMATION_PREVIOUS_ENDS_KEPT)
+    : [];
   const createdAt = num(value["createdAt"]) ?? 0;
   return {
     id,
@@ -786,6 +820,7 @@ export function parseAutomation(raw: unknown): Automation | null {
     ...(maxRuns !== null && maxRuns >= 1 ? { maxRuns: Math.floor(maxRuns) } : {}),
     ...(until !== null ? { until } : {}),
     nextRunAt: parsedStatus === "active" ? num(value["nextRunAt"]) : null,
+    ...(previousEnds.length === 0 ? {} : { previousEnds }),
     runs,
     runCount: Math.max(0, Math.floor(num(value["runCount"]) ?? 0)),
     consecutiveFailures: Math.max(0, Math.floor(num(value["consecutiveFailures"]) ?? 0)),
