@@ -321,6 +321,17 @@ export function entriesToRecords(entries: readonly PiBookEntry[]): SessionRecord
 }
 
 /**
+ * 别家工具里出错收尾的回答（stopReason error）补一句说明：空回答原本会被当作「重试残渣」整条丢掉
+ * （entriesToRecords 的 isEmptyErrorAssistantEntry），读的人就看不出那一轮失败过。Orbita 自己的
+ * 本子不走这里（那边的空 error 回答确实是 abort / 重试留下的，丢掉是对的）。
+ */
+function markFailedAnswer(message: Message): Message {
+  if (message.role !== "assistant" || message.stopReason !== "error") return message;
+  const reason = typeof message.errorMessage === "string" && message.errorMessage !== "" ? `: ${message.errorMessage}` : "";
+  return { ...message, content: [...message.content, { type: "text", text: `[This answer ended in an error${reason}]` }] };
+}
+
+/**
  * 转换类来源（Claude Code、Codex、Kimi……）解析出的 Message[] → read_task 的记录，全在内存里。
  * 等价于此前「SessionManager.inMemory + appendMessage 逐条灌入 → branchEntries → entriesToRecords」：
  * 一条直链，id 按顺序铸（`m<序号>` / `c<序号>`，同一份源两次读出同样的 id）。
@@ -362,7 +373,7 @@ export function messagesToRecords(
     compactBefore(index);
     const id = `m${index}`;
     const at = optionalNumber((message as { timestamp?: unknown }).timestamp) ?? Date.now();
-    append({ type: "message", id, timestamp: new Date(at).toISOString(), message });
+    append({ type: "message", id, timestamp: new Date(at).toISOString(), message: markFailedAnswer(message) });
     if (message.role !== "user") return;
     const display = userDisplays[userIndex] ?? null;
     userIndex += 1;

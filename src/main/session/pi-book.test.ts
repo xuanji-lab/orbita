@@ -136,6 +136,20 @@ describe("与 pi 的实现逐条对账（testdata 的三份真实本子，pi 1.5
     assert.throws(() => parsePiBook(JSON.stringify({ type: "session", version: 4 })), /newer than supported/);
   });
 
+  test("messagesToRecords：别家工具里出错收尾的回答留下来并写明出错（空回答也不丢）", () => {
+    const messages = [
+      { role: "user", content: "问", timestamp: 1 },
+      { role: "assistant", content: [], stopReason: "error", errorMessage: "AiSdkModelAdapterError", timestamp: 2 },
+      { role: "user", content: "再问", timestamp: 3 },
+      { role: "assistant", content: [{ type: "text", text: "说了一半" }], stopReason: "error", timestamp: 4 },
+    ] as unknown as Message[];
+    const records = messagesToRecords(messages, ["问", "再问"]);
+    const answers = records.flatMap((record) =>
+      record.role === "assistant" ? [record.content.map((block) => (block.type === "text" ? block.text : "")).join("|")] : [],
+    );
+    assert.deepEqual(answers, ["[This answer ended in an error: AiSdkModelAdapterError]", "说了一半|[This answer ended in an error]"]);
+  });
+
   test("messagesToRecords：源里的压缩落在原位成界碑", () => {
     const messages = [
       { role: "user", content: "旧问题", timestamp: 1 },
