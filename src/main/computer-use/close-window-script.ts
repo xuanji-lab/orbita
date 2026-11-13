@@ -74,12 +74,12 @@ export function buildCloseSandboxWindowScript(pid: number): string {
     "if (-not (Orbita-Alive $target)) { exit 0 }",
     "$process = Get-Process -Id $target -ErrorAction SilentlyContinue",
     "if ($null -eq $process) { exit 0 }",
-    "for ($waitRound = 1; $waitRound -le 10; $waitRound++) {",
-    "  $process.Refresh()",
-    "  if ($process.HasExited) { exit 0 }",
-    "  try { if ($process.Responding) { break } } catch { break }",
-    "  Start-Sleep -Milliseconds 300",
-    "}",
+    // **不要在这里查 $process.Responding**：它内部是 SendMessageTimeout，窗口忙时单次最坏 5s，
+    // 10 轮就是 50s——2026-11-13 复测里正是它让脚本在打印第一行之前就撞穿 20s 预算
+    // （stdout 全空、调用方看到 ETIMEDOUT，于是又一次落强杀、漏 VM）。
+    // CloseMainWindow 自己带 3 次重试，不需要这层「等它缓过来」。
+    "$process.Refresh()",
+    "if ($process.HasExited) { exit 0 }",
     "$orbitaClosed = $false",
     "for ($try = 1; $try -le 3; $try++) {",
     "  $process.Refresh()",
