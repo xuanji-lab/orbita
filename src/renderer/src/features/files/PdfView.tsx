@@ -12,9 +12,18 @@ import { PanelLine } from "../../shell/RightPanel";
 import { api } from "../../api";
 import { useT } from "../../locale.ts";
 import { formatSize } from "./tree-view";
-import { fitScale, locateCitation, mergeLineRects, PDF_PAGE_GAP, type PageRect } from "./pdf-view.ts";
+import {
+  clickToPdfPoint,
+  fitScale,
+  locateCitation,
+  mergeLineRects,
+  PDF_PAGE_GAP,
+  syncRectStyle,
+  type PageRect,
+} from "./pdf-view.ts";
 import type { FileListRequest } from "@shared/files";
 import type { PdfCitation } from "@shared/pdf-quote";
+import type { LatexSyncRect } from "@shared/latex";
 
 // pdf.js 的解析跑在 worker 里（大文档的解析不和 UI 抢主线程）。vite 把 worker 当静态
 // 资源发出，dev 是 http、打包后是 file://——两种都由 pdf.js 自己起 module worker
@@ -23,6 +32,15 @@ GlobalWorkerOptions.workerSrc = workerUrl;
 /** 一次跳转请求：引用 + 单调递增的 token（同一引用连点两次也要重新滚过去） */
 export interface PdfJump {
   citation: PdfCitation;
+  token: number;
+}
+
+/**
+ * SyncTeX 正向查找的落点（源码 → PDF）。矩形是 PDF 点、左上原点（shared/latex.ts
+ * 的 LatexSyncRect），这里只负责滚过去 + 闪一个框；token 让同一行连查两次也重放动画。
+ */
+export interface PdfSyncJump {
+  rect: LatexSyncRect;
   token: number;
 }
 
@@ -43,7 +61,18 @@ type DocState =
  * `jump` 变化（点了正文里的引用）：滚到那一页 → 等那页的文本层出来 → 定位原文、
  * 画高亮 → 把高亮滚到视口上部三分之一处。
  */
-export function PdfView(props: { request: FileListRequest; jump: PdfJump | null; reloadToken: number }) {
+export function PdfView(props: {
+  request: FileListRequest;
+  jump: PdfJump | null;
+  reloadToken: number;
+  /** SyncTeX 正向查找的落点；null = 没有 */
+  syncJump?: PdfSyncJump | null;
+  /**
+   * 页面被双击 / Ctrl+单击：把点击处换回 PDF 点交给外层反查源码。
+   * 缺席 = 这份 PDF 不属于 LaTeX 项目（不接反查，双击保持选中文字的本意）。
+   */
+  onLocate?: (point: { page: number; x: number; y: number }) => void;
+}) {
   const t = useT();
   const { request, jump } = props;
   const [state, setState] = useState<DocState>({ status: "loading" });
@@ -53,6 +82,7 @@ export function PdfView(props: { request: FileListRequest; jump: PdfJump | null;
   /** 跳转未完成（等页渲染）时的 token；完成滚动后清空，后续的重渲染不再抢滚动条 */
   const pendingJumpRef = useRef<number | null>(null);
   const [missing, setMissing] = useState<number | null>(null);
+  const syncJump = props.syncJump ?? null;
 
   // 读字节 + 解析。换文件 / 刷新整份重来；卸载或被新请求顶掉时销毁旧文档（释放 worker 里的内存）
   useEffect(() => {
@@ -137,6 +167,22 @@ export function PdfView(props: { request: FileListRequest; jump: PdfJump | null;
     node?.scrollIntoView({ block: "start" });
   }, [jump?.token, state.status]);
 
+  /**
+   * SyncTeX 落点：直接按页偏移 + 矩形算滚动位置，不等那一页渲染完。页面元素按
+   * fitScale 渲染，矩形乘同一个 scale 就是它在滚动内容里的位置（与 PdfPage 用的
+   * 缩放同源，避免「滚到页首然后停住」）。落点放视口上部三分之一。
+   */
+  useLayoutEffect(() => {
+    if (syncJump === null || state.status !== "ready" || width <= 0) return;
+    const scroller = scrollRef.current;
+    const page = scroller?.querySelector<HTMLElement>(`.pdf-page[data-page="${syncJump.rect.page}"]`);
+    const pageSize = state.sizes[syncJump.rect.page - 1];
+    if (scroller === null || page === undefined || page === null || pageSize === undefined) return;
+    const scale = fitScale(width, pageSize.width);
+    const top = page.offsetTop + syncJump.rect.top * scale;
+    scroller.scrollTop = Math.max(0, top - scroller.clientHeight / 3);
+  }, [syncJump?.token, state.status, width]);
+
   if (state.status === "loading") {
     return (
       <div className="file-preview-loading">
@@ -182,6 +228,8 @@ export function PdfView(props: { request: FileListRequest; jump: PdfJump | null;
             active={visible.has(number) && width > 0}
             highlight={target !== null && target.page === number ? target : null}
             highlightToken={target !== null && target.page === number ? (jump?.token ?? null) : null}
+            sync={syncJump !== null && syncJump.rect.page === number ? syncJump : null}
+            {...(props.onLocate === undefined ? {} : { onLocate: props.onLocate })}
             onHighlight={(rects) => {
               const token = pendingJumpRef.current;
               if (token === null || jump === null || token !== jump.token) return;
@@ -223,6 +271,10 @@ function PdfPage(props: {
   highlightToken: number | null;
   /** 高亮算完（null = 本页文本层里找不到这段） */
   onHighlight: (rects: PageRect[] | null) => void;
+  /** SyncTeX 落点（本页才有值）：画一个短暂的框 */
+  sync: PdfSyncJump | null;
+  /** 双击 / Ctrl+单击反查源码；缺席 = 这份 PDF 不接反查 */
+  onLocate?: (point: { page: number; x: number; y: number }) => void;
 }) {
   const { doc, number, scale, active, highlight } = props;
   const pageRef = useRef<HTMLDivElement | null>(null);
@@ -312,11 +364,31 @@ function PdfPage(props: {
     onHighlightRef.current(merged.length > 0 ? merged : null);
   }, [layer, highlight, props.highlightToken]);
 
+  /** 双击或 Ctrl/Cmd+单击：点击处（CSS px）→ PDF 点。普通单击不拦，文字照常选 */
+  const locate = (event: React.MouseEvent<HTMLDivElement>): void => {
+    if (props.onLocate === undefined) return;
+    const doubleClick = event.type === "dblclick";
+    if (!doubleClick && !(event.ctrlKey || event.metaKey)) return;
+    const box = pageRef.current?.getBoundingClientRect();
+    if (box === undefined) return;
+    const point = clickToPdfPoint(
+      { left: box.left, top: box.top, width: box.width, height: box.height },
+      scale,
+      event.clientX,
+      event.clientY,
+    );
+    if (point === null) return;
+    props.onLocate({ page: props.number, x: point.x, y: point.y });
+  };
+
   return (
     <div
       ref={pageRef}
       className="pdf-page"
       data-page={number}
+      data-synctex={props.onLocate === undefined ? undefined : "on"}
+      onClick={locate}
+      onDoubleClick={locate}
       style={{
         width: props.width,
         height: props.height,
@@ -336,6 +408,14 @@ function PdfPage(props: {
               style={{ left: rect.left, top: rect.top, width: rect.width, height: rect.height }}
             />
           ))}
+          {/* SyncTeX 落点：key 绑 token，同一行再查一次也重放淡出动画 */}
+          {props.sync !== null && (
+            <div
+              key={`sync:${props.sync.token}`}
+              className="pdf-sync-mark"
+              style={syncRectStyle(props.sync.rect, scale)}
+            />
+          )}
         </>
       )}
     </div>

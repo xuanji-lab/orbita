@@ -4,6 +4,13 @@
  * 三件事写在这里：CodeMirror 的挂载 / 销毁、自动保存与冲突处理、状态行。
  * 语言与外观在 latex-editor.ts，纯状态逻辑在 editor-state.ts（`node --test` 覆盖）。
  *
+ * **与 agent 同改一个文件的安全边界**（editor-collab.ts 定规则，这里只执行）：
+ * - agent 本轮写过这个文件时整块只读，顶部条写明原因；回合结束自动解除。
+ * - 回合结束时 `syncFromDisk`：盘上没变不动；编辑器干净就静默重载（光标留在原行）；
+ *   有未保存改动就挂冲突条——**用户没保存的字永远不被冲掉**。
+ * - 本轮的改动按块列出，可单块撤、可整轮撤；现在的文字里找不到那一块（用户自己改过）
+ *   就标「不可撤销」，不猜。
+ *
  * 保存规则（原型场景 1 第 3 步 + 场景 4）：
  * - 停手 **1.5 s** 自动保存；编译前由 FilesPanel 调 `flush()` 强制落盘。
  * - 脏状态按**磁盘格式**的内容指纹判（editor-state.ts 的注释说清了 CRLF 与 mtime 两个坑）。
@@ -20,9 +27,32 @@ import { EditorView } from "@codemirror/view";
 import { api } from "../../api.ts";
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
+import { ContextMenu } from "../../shell/ContextMenu";
+import type { MenuItem } from "../../shell/Menu";
 import { contentHash, type FileListRequest } from "@shared/files";
-import { latexEditorExtensions } from "./latex-editor.ts";
+import type { CiteEntry } from "@shared/cite";
+import type { LatexFileContext } from "@shared/latex";
+import { CiteSearchPanel } from "./CiteSearchPanel.tsx";
+import {
+  latexEditorExtensions,
+  agentMarkEffect,
+  clearSyncLineEffect,
+  readOnlyCompartment,
+  readOnlyExtensions,
+  syncLineEffect,
+} from "./latex-editor.ts";
 import { formatSize } from "./tree-view.ts";
+import { citeCompletion } from "./cite-completion.ts";
+import {
+  clampCursorLine,
+  locateBlock,
+  nonOverlappingChanges,
+  pruneStaleIds,
+  syncDecision,
+  type AgentWritePhase,
+  type ConflictKind,
+  type EditorHunk,
+} from "./editor-collab.ts";
 import {
   createAutosaveScheduler,
   cursorPosition,
@@ -32,6 +62,11 @@ import {
   type EditorPhase,
   type LineEnding,
 } from "./editor-state.ts";
+
+/** 没有改动块时的常量：每次新 `[]` 会让依赖它的效果每帧重跑 */
+const NO_HUNKS: readonly EditorHunk[] = [];
+/** 文献库还没到（或不在项目里）时的同一份空库：常量身份，补全来源每次现读 */
+const NO_CITE: readonly CiteEntry[] = [];
 
 /** 停手多久自动保存（设计稿的 1.5 s） */
 const AUTOSAVE_MS = 1500;
@@ -49,6 +84,30 @@ export interface TexEditorHandle {
   isDirty: () => boolean;
   /** 是否卡在「盘上被外部改过」的冲突上（关标签时不能替用户决定） */
   conflicted: () => boolean;
+  /** 当前文档文本（CodeMirror 内部 `\n` 口径）；视图不在时 null */
+  text: () => string | null;
+  /** 回合结束时从盘上同步一次（干净→静默重载，脏→冲突条）；盘上没变则什么都不做 */
+  syncFromDisk: (diskText: string) => void;
+}
+
+/** 编辑器看到的「agent 本轮对我做了什么」（由 useEditorCollab 算好递进来） */
+export interface EditorCollabView {
+  /**
+   * 这个编辑器本轮被谁占着：
+   * - "writing" / "done"：agent 的 write/edit 正在写 / 写过了
+   * - "possible"：本轮出现了 shell、终端执行或 MCP 工具——它们改哪个文件我们看不见，
+   *   所以把打开的项目文件都按「可能被写」算（宁可多锁一轮，不能丢字）
+   * - null：没被占，正常编辑 + 自动保存
+   */
+  hold: AgentWritePhase | "possible" | null;
+  /** 这一轮还在跑（用户编辑要按「本轮动过」记账，用事务而不是脏快照） */
+  turnActive: boolean;
+  /** 本轮的改动块（回合落定后才有，按块可撤） */
+  hunks: readonly EditorHunk[];
+  /** 撤销成功的块回报给外层（从清单里去掉） */
+  onUndone: (ids: readonly string[]) => void;
+  /** 回合落定的同步请求（token 变化触发一次） */
+  sync: { token: number; text: string } | null;
 }
 
 interface Snapshot {
@@ -68,6 +127,26 @@ export function TexEditorPane(props: {
   onSaved?: () => void;
   /** 保存失败 / 写盘被拒：面板上给一行可见的错误，不静默 */
   onError?: (path: string, message: string) => void;
+  /** agent 与本文件的互动（只读、重载、按块撤销）；缺席 = 没有论文工作台的接线 */
+  collab?: EditorCollabView;
+  /**
+   * 右键菜单「在 PDF 中定位」：把这一行交给外层做 SyncTeX 正向查找。
+   * 缺席 = 这个文件不属于 LaTeX 项目，菜单里不出这一项。
+   */
+  onForwardSync?: (line: number) => void;
+  /** 右键菜单「引用到对话」：选中文字（没有选区时是这一行）放进输入框 */
+  onQuote?: (text: string, line: number) => void;
+  /**
+   * 外部要求跳到某一行并高亮（PDF 双击 / Ctrl+单击的结果）。token 单调递增，
+   * 同一个 token 只跳一次；行号 1 基，越界贴到末行（syncFromDisk 同一条纪律）。
+   */
+  reveal?: { line: number; token: number } | null;
+  /**
+   * 项目文献库（`\cite{` 的候选）。缺席 / 空数组时补全不弹——不在 LaTeX 项目里的
+   * .tex 就是这种情形。往下传的是**最新一份**而不是挂载时的快照：库可能比编辑器
+   * 晚到（IPC 在飞），重挂编辑器会丢光标与撤销历史。
+   */
+  cite?: readonly CiteEntry[];
 }) {
   const t = useT();
   const path = props.request.dir;
@@ -75,15 +154,41 @@ export function TexEditorPane(props: {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const mountedRef = useRef(true);
+  /**
+   * 补全的来源读这个 ref：库比编辑器晚到、换项目后重扫，都不必重建编辑器——
+   * 重建会丢光标、撤销历史与滚动位置。
+   */
+  const citeRef = useRef<readonly CiteEntry[]>(props.cite ?? NO_CITE);
+  citeRef.current = props.cite ?? NO_CITE;
   /** 基线：最后一次从盘上读到 / 成功写下去的文本指纹（按磁盘格式） */
   const savedHashRef = useRef(contentHash(props.initialText));
   const eolRef = useRef<LineEnding>(detectLineEnding(props.initialText));
+  /**
+   * 冲突那一刻盘上的指纹。「保留我的」用它当 expectedHash——盘上在那之后又被改过就再
+   * 冲突，**不覆盖**（验收要求：保留用户文本，但不许把更新的一份盘上内容抹掉）。
+   */
+  const conflictHashRef = useRef<string | null>(null);
   const phaseRef = useRef<EditorPhase>("saved");
   const [phase, setPhase] = useState<EditorPhase>("saved");
   const [cursor, setCursor] = useState({ line: 1, column: 1 });
   const [conflictText, setConflictText] = useState<string | null>(null);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [savingNow, setSavingNow] = useState(false);
+  /**
+   * 冲突条说的是哪种冲突：盘上变了（disk）/ agent 本轮写过但盘上可能一字未变（agent）。
+   * 后者必须单独一条文案——说「文件在磁盘上被改过了」是假话。
+   */
+  const [conflictKind, setConflictKind] = useState<ConflictKind>("disk");
+  /** 右键菜单：打开位置 + 被右键的那一行（行号 1 基）与将要引用的文字 */
+  const [menu, setMenu] = useState<{ x: number; y: number; line: number; text: string } | null>(null);
+  /** 「查找文献…」面板打开在右键那个点上；null = 关着 */
+  const [citeSearch, setCiteSearch] = useState<{ x: number; y: number } | null>(null);
+  /** 改动块清单的展开态（默认展开：这是回合结束后最想知道的事） */
+  const [hunksOpen, setHunksOpen] = useState(true);
+  /** 现场找不到的块（用户自己改过 / 被删）：标成不可撤，不隐藏 */
+  const [staleIds, setStaleIds] = useState<ReadonlySet<string>>(new Set());
+  /** 文档被外部整体换过几次：改动块的高亮要在这个新文档上重算 */
+  const [docEpoch, setDocEpoch] = useState(0);
   /** 外部文本替换文档时不当作「用户编辑」（否则一挂载就排一次自动保存） */
   const replacingRef = useRef(false);
   const dirtyRef = useRef(false);
@@ -138,10 +243,12 @@ export function TexEditorPane(props: {
       setPhaseBoth("saving");
       if (mountedRef.current) setSavingNow(true);
       try {
+        // 「保留我的」不是无条件覆盖：拿冲突那一刻的盘上指纹做校验，盘上又变了就再冲突
+        const expected = force ? (conflictHashRef.current ?? savedHashRef.current) : savedHashRef.current;
         const result = await api.files.write({
           ...props.request,
           text: snap.text,
-          expectedHash: force ? null : savedHashRef.current,
+          expectedHash: expected,
         });
         if (result.kind === "too-large") {
           const message = t.editor.tooLarge(formatSize(result.size), formatSize(result.limit));
@@ -153,7 +260,9 @@ export function TexEditorPane(props: {
         if (result.kind === "conflict") {
           // 盘上已经不是编辑器手里那份：一个字都没写。停掉自动保存，等用户裁决
           schedulerRef.current?.cancel();
+          conflictHashRef.current = contentHash(result.text);
           if (mountedRef.current) {
+            setConflictKind("disk");
             setConflictText(result.text);
             setErrorText(null);
             setPhaseBoth("conflict");
@@ -164,6 +273,7 @@ export function TexEditorPane(props: {
           return "conflict";
         }
         savedHashRef.current = result.hash;
+        conflictHashRef.current = null;
         if (mountedRef.current) {
           setErrorText(null);
           setConflictText(null);
@@ -202,15 +312,26 @@ export function TexEditorPane(props: {
   if (schedulerRef.current === null) {
     schedulerRef.current = createAutosaveScheduler({
       delayMs: AUTOSAVE_MS,
-      save: () => void runSave(false),
+      save: () => {
+        // 回合进行中：**不写盘**，待存改动留在内存（P0 的根因就在这一步）
+        if (pausedRef.current) {
+          heldPendingRef.current = true;
+          return;
+        }
+        void runSave(false);
+      },
     });
   }
   const scheduler = schedulerRef.current;
 
+  /** 回合落定时的同步实现（每轮渲染更新，把手上的引用永远是最新那份闭包） */
+  const syncFromDiskRef = useRef<(diskText: string) => void>(() => {});
   const handleRef = useRef<TexEditorHandle>({
     flush: () => runSave(false),
     isDirty: () => isDirtyNow(),
     conflicted: () => phaseRef.current === "conflict",
+    text: () => viewRef.current?.state.doc.toString() ?? null,
+    syncFromDisk: (diskText: string) => syncFromDiskRef.current(diskText),
   });
 
   // 挂载：建编辑器；卸载：先把没落盘的内容写下去，再销毁
@@ -225,12 +346,15 @@ export function TexEditorPane(props: {
         extensions: [
           ...latexEditorExtensions((update) => {
             if (update.docChanged && !replacingRef.current) {
+              // 用户事务：落定时的判定靠它，而不是「那一刻脏不脏」（P0）
+              if (turnActiveRef.current) editedDuringTurnRef.current = true;
               const snap = snapshot();
               if (snap !== null && snap.hash !== savedHashRef.current) {
                 // 冲突没裁决之前不再自动写：否则 1.5 s 后就把外部改动覆盖了
                 if (phaseRef.current !== "conflict") {
                   setPhaseBoth("dirty");
-                  scheduler.schedule();
+                  if (pausedRef.current) heldPendingRef.current = true;
+                  else scheduler.schedule();
                 }
               } else if (phaseRef.current === "dirty" || phaseRef.current === "error") {
                 scheduler.cancel();
@@ -245,6 +369,7 @@ export function TexEditorPane(props: {
               }
             }
           }),
+          citeCompletion(() => citeRef.current),
           EditorView.contentAttributes.of({ "aria-label": t.editor.aria, spellcheck: "false" }),
         ],
       }),
@@ -276,6 +401,29 @@ export function TexEditorPane(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path]);
 
+  // PDF → 源码的落点：选中这一行、滚到视口中间、铺一条短暂的底色。
+  // 依赖只有 token：同一次定位在重渲染时不该再抢一次滚动条。
+  const reveal = props.reveal ?? null;
+  useEffect(() => {
+    if (reveal === null) return;
+    const view = viewRef.current;
+    if (view === null) return;
+    const line = view.state.doc.line(clampCursorLine(reveal.line, view.state.doc.lines));
+    view.dispatch({
+      selection: { anchor: line.from, head: line.to },
+      effects: [
+        EditorView.scrollIntoView(line.from, { y: "center" }),
+        syncLineEffect(line.from),
+      ],
+    });
+    view.focus();
+    const timer = window.setTimeout(() => {
+      viewRef.current?.dispatch({ effects: clearSyncLineEffect() });
+    }, 2000);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reveal?.token]);
+
   // 脏状态下盯一眼盘上内容：用户停手不打字时，外部改动也要能看见
   useEffect(() => {
     if (phase !== "dirty") return;
@@ -288,6 +436,8 @@ export function TexEditorPane(props: {
           if (preview.kind !== "text") return;
           if (contentHash(preview.text) === savedHashRef.current) return;
           scheduler.cancel();
+          conflictHashRef.current = contentHash(preview.text);
+          setConflictKind("disk");
           setConflictText(preview.text);
           setPhaseBoth("conflict");
         })
@@ -318,6 +468,7 @@ export function TexEditorPane(props: {
     const text = conflictText;
     const view = viewRef.current;
     if (text === null || view === null) return;
+    conflictHashRef.current = null;
     replacingRef.current = true;
     try {
       eolRef.current = detectLineEnding(text);
@@ -350,6 +501,249 @@ export function TexEditorPane(props: {
     void runSave(false);
   };
 
+  /**
+   * 回合结束时从盘上同步一次。三种结局都与「不丢用户字」对齐：
+   * - 盘上就是基线：什么都不做（同一个 token 重复到达也是空操作）
+   * - 编辑器干净：静默重载，光标留在原来那一行（越界贴到末行）
+   * - 有未保存改动：**不覆盖**，挂冲突条等用户选（重新加载 / 保留我的）
+   */
+  const syncFromDisk = (diskText: string): void => {
+    const view = viewRef.current;
+    if (view === null) return;
+    const incoming = contentHash(diskText);
+    const diskChanged = incoming !== savedHashRef.current;
+    // 取舍在 editor-collab.ts 的 syncDecision（有表驱动测试）
+    const snap = snapshot();
+    const decision = syncDecision({
+      diskChanged,
+      conflicted: phaseRef.current === "conflict",
+      dirty: snap !== null && snap.hash !== savedHashRef.current,
+      // 本轮用户动过（哪怕现在已经改回基线）：agent 也写过 → 不许静默重载（P0）
+      editedThisTurn: editedDuringTurnRef.current,
+      // agent 本轮 write/edit 碰过这个文件：哪怕盘上一字未变，也要让用户选（数据没丢 ≠ 没发生事）
+      agentTouched: agentTouchedRef.current,
+    });
+    if (decision === "nothing" || decision === "wait") return;
+    if (decision === "keep") {
+      heldPendingRef.current = false;
+      schedulerRef.current?.cancel();
+      conflictHashRef.current = incoming;
+      if (mountedRef.current) {
+        // 盘上没变（agent 写回的就是基线）时说「文件在磁盘上被改过了」是假话
+        setConflictKind(diskChanged ? "disk" : "agent");
+        setConflictText(diskText);
+        setErrorText(null);
+        setPhaseBoth("conflict");
+      }
+      return;
+    }
+    const doc = view.state.doc;
+    const head = view.state.selection.main.head;
+    const line = doc.lineAt(head).number;
+    const column = head - doc.lineAt(head).from;
+    const text = diskText.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    replacingRef.current = true;
+    try {
+      eolRef.current = detectLineEnding(diskText);
+      savedHashRef.current = incoming;
+      view.dispatch({
+        changes: { from: 0, to: doc.length, insert: text },
+        selection: { anchor: 0 },
+        scrollIntoView: false,
+      });
+      const target = view.state.doc.line(clampCursorLine(line, view.state.doc.lines));
+      view.dispatch({ selection: { anchor: target.from + Math.min(column, target.length) } });
+    } finally {
+      replacingRef.current = false;
+    }
+    scheduler.cancel();
+    if (mountedRef.current) {
+      setConflictText(null);
+      setErrorText(null);
+      setPhaseBoth("saved");
+      setCursor(cursorPosition(view.state.doc, view.state.selection.main.head));
+      setDocEpoch((epoch) => epoch + 1);
+    }
+    props.onSaved?.();
+  };
+  syncFromDiskRef.current = syncFromDisk;
+
+  /** 本轮占着这个编辑器的原因（agent 正在写 / 写过了 / 可能出现 shell·MCP 写） */
+  const hold = props.collab?.hold ?? null;
+  const readOnly = hold !== null;
+  /** 回合是否在跑：用户编辑按「本轮动过」记账（落在 ref 上给 CodeMirror 的监听读） */
+  const turnActive = props.collab?.turnActive ?? false;
+  const turnActiveRef = useRef(turnActive);
+  turnActiveRef.current = turnActive;
+  const editedDuringTurnRef = useRef(false);
+
+  /**
+   * 「查找文献」面板的文件上下文（与 `fs:*` / `latex:*` 同一个形状）：主进程据此
+   * 从「根 + 当前文件」找到项目目录并核白名单，renderer 手里给不出别的目录。
+   */
+  const citeContext: LatexFileContext = {
+    sessionId: props.request.sessionId,
+    workspaceId: props.request.workspaceId,
+    ...(props.request.extraWorkspaceId === undefined
+      ? {}
+      : { extraWorkspaceId: props.request.extraWorkspaceId }),
+    root: props.request.root,
+    path: props.request.dir,
+  };
+
+  /**
+   * 面板选中一条后：在光标处插入 `\cite{key}`。写 .bib 已经成功了，插入只是第二半；
+   * 编辑器这一轮被 agent 占着（只读）时插不进去，返回 false 让面板如实说一声。
+   */
+  const insertCitation = (key: string): boolean => {
+    const view = viewRef.current;
+    if (view === null || readOnly) return false;
+    const pos = view.state.selection.main.head;
+    const text = `\\cite{${key}}`;
+    view.dispatch({
+      changes: { from: pos, insert: text },
+      selection: { anchor: pos + text.length },
+      userEvent: "input.complete",
+    });
+    view.focus();
+    return true;
+  };
+  /**
+   * 自动保存的闸门。**整个回合都不写盘**（不只是 agent 已经写过之后）：P0 的时间线是
+   * 「用户先打字 → 1.5 s 自动保存落盘 → agent 用自己读到的旧内容覆盖」，暂停必须从
+   * 开轮就生效。回合中用户另开的文件同样暂停——最坏是一次拖动标签时由 flush 显式落盘。
+   */
+  const autosavePaused = readOnly || turnActive;
+  const pausedRef = useRef(false);
+  pausedRef.current = autosavePaused;
+  /** 被闸门拦下的待存改动：解除占位后补一次自动保存 */
+  const heldPendingRef = useRef(false);
+  /**
+   * 本轮 agent 的 write/edit 是否碰过这个文件。**必须记下来**：落定时 hold 已经解除，
+   * 而「盘上一字未变」正是因为 agent 写回的就是基线——那时也得让用户选。
+   */
+  const agentTouchedRef = useRef(false);
+  if (hold === "writing" || hold === "done") agentTouchedRef.current = true;
+
+  // 开轮就重置「本轮用户动过 / agent 碰过」：上一轮的不算这一轮
+  useEffect(() => {
+    if (!turnActive) return;
+    editedDuringTurnRef.current = false;
+    agentTouchedRef.current = false;
+  }, [turnActive]);
+
+  // 只读开关：回合边界翻转时重配（重建编辑器会丢光标与撤销历史）
+  useEffect(() => {
+    const view = viewRef.current;
+    if (view === null) return;
+    view.dispatch({ effects: readOnlyCompartment.reconfigure(readOnlyExtensions(readOnly)) });
+  }, [readOnly]);
+
+  // 回合落定的同步：只认自己这一份（同一个 token 只跑一次）
+  const sync = props.collab?.sync ?? null;
+  const consumedSyncRef = useRef<number | null>(null);
+  // 挂载那一刻的 sync 已经落在 initialText 里（挂上来读的就是当前盘上那份），
+  // 不重放：否则切走再切回来会把上一轮的旧内容当「最新」加载进来
+  if (consumedSyncRef.current === null) consumedSyncRef.current = sync?.token ?? 0;
+  useEffect(() => {
+    if (sync === null || consumedSyncRef.current === sync.token) return;
+    consumedSyncRef.current = sync.token;
+    syncFromDiskRef.current(sync.text);
+  }, [sync]);
+
+  // 闸门解除（回合落定）：被拦下的待存内容回到常规自动保存。盘上若已被 agent 改过，
+  // 这一笔会撞 expectedHash → 冲突条，正是我们要的「不覆盖、问用户」
+  useEffect(() => {
+    if (autosavePaused) return;
+    if (!heldPendingRef.current) return;
+    heldPendingRef.current = false;
+    if (phaseRef.current === "dirty") scheduler.schedule();
+  }, [autosavePaused, scheduler]);
+
+  const hunks = props.collab?.hunks ?? NO_HUNKS;
+
+  // 换了一轮 / 撤掉几块：只清掉**已经不在清单里**的现场判定——撤掉别的块不能让
+  // 不可撤的块重新变得可点（P3）
+  useEffect(() => {
+    setStaleIds((prev) => pruneStaleIds(prev, hunks));
+  }, [hunks]);
+
+  /** 在现在的文档里定位一块（行区间 + 字符区间）；找不到返回 null */
+  const locate = useCallback(
+    (hunk: EditorHunk): { from: number; to: number; startLine: number } | null => {
+      const view = viewRef.current;
+      if (view === null) return null;
+      const range = locateBlock(view.state.doc.toString().split("\n"), hunk.after, hunk.anchorLine);
+      if (range === null) return null;
+      return {
+        from: view.state.doc.line(range.start + 1).from,
+        to: view.state.doc.line(range.end).to,
+        startLine: range.start,
+      };
+    },
+    [],
+  );
+
+  /** 把改动块的高亮铺上去：只圈新增的行（上下文行不涂） */
+  useEffect(() => {
+    const view = viewRef.current;
+    if (view === null) return;
+    const ranges: { from: number; to: number }[] = [];
+    for (const hunk of hunks) {
+      const block = locate(hunk);
+      if (block === null) continue;
+      for (const span of hunk.addedSpans) {
+        const first = block.startLine + span.line + 1;
+        if (first > view.state.doc.lines) continue;
+        const last = Math.min(first + span.count - 1, view.state.doc.lines);
+        ranges.push({ from: view.state.doc.line(first).from, to: view.state.doc.line(last).to });
+      }
+    }
+    view.dispatch({ effects: agentMarkEffect(ranges) });
+  }, [hunks, docEpoch, locate]);
+
+  /** 撤一块：定位→换成改动前那一块。找不到说明用户自己改过，标成不可撤 */
+  const undoHunk = (hunk: EditorHunk): void => {
+    const view = viewRef.current;
+    const block = locate(hunk);
+    if (view === null || block === null) {
+      setStaleIds((prev) => new Set(prev).add(hunk.id));
+      return;
+    }
+    view.dispatch({
+      changes: { from: block.from, to: block.to, insert: hunk.before.join("\n") },
+      selection: { anchor: block.from },
+      scrollIntoView: true,
+    });
+    view.focus();
+    props.collab?.onUndone([hunk.id]);
+  };
+
+  /** 整轮撤：一次性 dispatch（一笔撤销历史），找不到的块留着并标记 */
+  const undoTurn = (): void => {
+    const view = viewRef.current;
+    if (view === null) return;
+    const plans: { id: string; from: number; to: number; insert: string }[] = [];
+    const missing: string[] = [];
+    for (const hunk of hunks) {
+      const block = locate(hunk);
+      if (block === null) {
+        missing.push(hunk.id);
+        continue;
+      }
+      plans.push({ id: hunk.id, from: block.from, to: block.to, insert: hunk.before.join("\n") });
+    }
+    // CodeMirror 不接受同一批里重叠的 changes（定位是按内容做的，用户编辑后两块可能撞上）
+    const { keep, dropped } = nonOverlappingChanges(plans);
+    if (keep.length > 0) {
+      view.dispatch({ changes: keep.map(({ from, to, insert }) => ({ from, to, insert })), scrollIntoView: true });
+      view.focus();
+      props.collab?.onUndone(keep.map((plan) => plan.id));
+    }
+    const stale = [...missing, ...dropped.map((plan) => plan.id)];
+    if (stale.length > 0) setStaleIds((prev) => new Set([...prev, ...stale]));
+  };
+
   // 搜索面板的 Esc 只关面板，不再让 App 把它当成「关标签」（2026-10-23 验收实测：
   // 一下 Esc 连搜索面板带标签一起关了）。用**原生**监听而不是 React 合成事件：
   // 合成事件在根容器上分发，拿到的 defaultPrevented 不可靠；原生监听在容器冒泡阶段
@@ -366,8 +760,101 @@ export function TexEditorPane(props: {
     return () => root.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  /**
+   * 右键：把光标位置换算成行号（不移动光标、不动选区）。菜单里的「在 PDF 中定位」
+   * 用被右键的那一行；「引用到对话」优先用选区原文，没有选区就是这一行。
+   * 没有可给的菜单项时完全不拦右键（不抢浏览器 / CodeMirror 自己的行为）。
+   */
+  const contextMenuItems: MenuItem[] = menu === null
+    ? []
+    : [
+        ...(props.onForwardSync === undefined
+          ? []
+          : [
+              {
+                id: "sync-forward",
+                label: t.editor.locateInPdf,
+                icon: "pin" as const,
+                onSelect: () => {
+                  const line = menu.line;
+                  setMenu(null);
+                  props.onForwardSync?.(line);
+                },
+              },
+            ]),
+        ...(props.onQuote === undefined
+          ? []
+          : [
+              {
+                id: "quote",
+                label: t.editor.quoteLine,
+                icon: "quote" as const,
+                onSelect: () => {
+                  const { text, line } = menu;
+                  setMenu(null);
+                  props.onQuote?.(text, line);
+                },
+              },
+            ]),
+        {
+          // 在线检索：面板自己联网、自己写 .bib，这里只把「开在哪里」交下去
+          id: "find-reference",
+          label: t.citeSearch.menu,
+          icon: "book-open" as const,
+          onSelect: () => {
+            const point = { x: menu.x, y: menu.y };
+            setMenu(null);
+            setCiteSearch(point);
+          },
+        },
+      ];
+
+  const openContextMenu = (event: React.MouseEvent<HTMLDivElement>): void => {
+    if (props.onForwardSync === undefined && props.onQuote === undefined) return;
+    const view = viewRef.current;
+    if (view === null) return;
+    event.preventDefault();
+    const pos = view.posAtCoords({ x: event.clientX, y: event.clientY }) ?? view.state.selection.main.head;
+    const target = view.state.doc.lineAt(pos);
+    const selection = view.state.selection.main;
+    // 只有点在选区**里面**才引选区：之前在别处留下的选区不该把这一行的右键引成另一段
+    const insideSelection = !selection.empty && pos >= selection.from && pos <= selection.to;
+    const text = insideSelection ? view.state.sliceDoc(selection.from, selection.to) : target.text;
+    setMenu({ x: event.clientX, y: event.clientY, line: target.number, text });
+  };
+
   return (
-    <div className="tex-editor" ref={rootRef}>
+    <div className="tex-editor" ref={rootRef} onContextMenu={openContextMenu}>
+      <ContextMenu
+        position={menu === null ? null : { x: menu.x, y: menu.y }}
+        items={contextMenuItems}
+        onClose={() => setMenu(null)}
+      />
+      {citeSearch !== null && (
+        <CiteSearchPanel
+          position={citeSearch}
+          context={citeContext}
+          onInsert={insertCitation}
+          onClose={() => setCiteSearch(null)}
+        />
+      )}
+      {readOnly && (
+        <div className="tex-editor-banner" data-tone="info" role="status">
+          <Icon
+            name="lock"
+            size={14}
+            className="tex-editor-banner-icon"
+            style={{ flex: "0 0 auto", marginTop: 1 }}
+          />
+          <span className="tex-editor-banner-text">
+            {hold === "writing"
+              ? t.editor.agentWriting
+              : hold === "done"
+                ? t.editor.agentWrote
+                : t.editor.agentMayWrite}
+          </span>
+        </div>
+      )}
       {(conflictText !== null || errorText !== null) && (
         <div className="tex-editor-banner" data-tone={conflictText !== null ? "warning" : "danger"} role="status">
           <Icon
@@ -377,14 +864,18 @@ export function TexEditorPane(props: {
             style={{ flex: "0 0 auto", marginTop: 1 }}
           />
           <span className="tex-editor-banner-text">
-            {conflictText !== null ? t.editor.conflictBanner : t.editor.errorBanner}
+            {conflictText !== null
+              ? conflictKind === "agent"
+                ? t.editor.agentOverwriteBanner
+                : t.editor.conflictBanner
+              : t.editor.errorBanner}
             {errorText !== null && <span className="tex-editor-banner-detail">{errorText}</span>}
           </span>
           <span className="row-trailing tex-editor-banner-acts">
             {conflictText !== null ? (
               <>
                 <button type="button" className="quiet-control" onClick={reloadFromDisk}>
-                  {t.editor.reload}
+                  {conflictKind === "agent" ? t.editor.useDisk : t.editor.reload}
                 </button>
                 <button type="button" className="quiet-control" onClick={keepMine}>
                   {t.editor.keepMine}
@@ -399,6 +890,73 @@ export function TexEditorPane(props: {
         </div>
       )}
       <div className="tex-editor-host" ref={hostRef} />
+      {hunks.length > 0 && !readOnly && (
+        <div className="tex-editor-hunks" role="status">
+          <div className="tex-editor-hunks-head">
+            <Icon name="git-commit-horizontal" size={13} className="tex-editor-hunks-icon" />
+            <span className="tex-editor-hunks-title">{t.editor.agentHunks(hunks.length)}</span>
+            <span className="row-trailing tex-editor-hunks-acts">
+              <button type="button" className="quiet-control" onClick={undoTurn}>
+                {t.editor.undoTurn}
+              </button>
+              <button
+                type="button"
+                className="quiet-control tex-editor-hunks-toggle"
+                aria-expanded={hunksOpen}
+                title={hunksOpen ? t.editor.hunksHide : t.editor.hunksShow}
+                onClick={() => setHunksOpen((open) => !open)}
+              >
+                <Icon name={hunksOpen ? "chevron-down" : "chevron-up"} size={12} strokeWidth={2} />
+              </button>
+            </span>
+          </div>
+          {hunksOpen && (
+            <ul className="tex-editor-hunk-list">
+              {hunks.map((hunk) => {
+                const stale = staleIds.has(hunk.id);
+                return (
+                  <li key={hunk.id} className="tex-editor-hunk" data-stale={stale}>
+                    <button
+                      type="button"
+                      className="tex-editor-hunk-goto"
+                      title={hunk.preview}
+                      onClick={() => {
+                        const block = locate(hunk);
+                        const view = viewRef.current;
+                        if (block === null || view === null) {
+                          setStaleIds((prev) => new Set(prev).add(hunk.id));
+                          return;
+                        }
+                        view.dispatch({ selection: { anchor: block.from, head: block.to } });
+                        view.focus();
+                      }}
+                    >
+                      <span className="tex-editor-hunk-delta">
+                        <span className="tex-editor-hunk-add">+{hunk.added}</span>
+                        <span className="tex-editor-hunk-del">−{hunk.removed}</span>
+                      </span>
+                      <span className="tex-editor-hunk-preview">{hunk.preview}</span>
+                    </button>
+                    <span className="row-trailing">
+                      {stale ? (
+                        <span className="tex-editor-hunk-stale">{t.editor.hunkEdited}</span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="quiet-control"
+                          onClick={() => undoHunk(hunk)}
+                        >
+                          {t.editor.undoHunk}
+                        </button>
+                      )}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      )}
       <div className="tex-editor-status" data-phase={phase}>
         <span className="tex-editor-cursor">
           {t.editor.cursor(cursor.line, cursor.column)}

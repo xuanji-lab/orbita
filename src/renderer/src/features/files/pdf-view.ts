@@ -83,3 +83,41 @@ export function mergeLineRects(rects: readonly PageRect[]): PageRect[] {
   }
   return out.sort((a, b) => a.top - b.top || a.left - b.left);
 }
+
+/**
+ * SyncTeX 落点 → 渲染坐标（CSS px）。契约里的矩形是 PDF 点（1/72 英寸、左上原点），
+ * 页面元素按 `fitScale` 缩放渲染，scale = 1 时 1 点正好是 1 CSS px（pdf.js 的
+ * viewport(width, height) 就是页面点尺寸），所以这里只乘缩放、不换单位。
+ * 返回的就是覆盖层的 inline style —— 不要把 scale 乘两遍（PdfPage 的
+ * `--total-scale-factor` 只喂给文本层，不作用于这个覆盖元素）。
+ */
+export function syncRectStyle(
+  rect: { left: number; top: number; width: number; height: number },
+  scale: number,
+): { left: number; top: number; width: number; height: number } {
+  return {
+    left: rect.left * scale,
+    top: rect.top * scale,
+    width: rect.width * scale,
+    height: rect.height * scale,
+  };
+}
+
+/**
+ * 页面上的一次点击（视口 client 坐标）→ PDF 点（左上原点）。
+ * `page` 是那一页的 getBoundingClientRect()，`scale` 是它的渲染缩放。
+ * 页面外 / 缩放为 0 时回 null：那种点击不该拿去反查（synctex 会用最近的记录
+ * 给一个看似正确的答案，比没反应更误导）。
+ */
+export function clickToPdfPoint(
+  page: { left: number; top: number; width: number; height: number },
+  scale: number,
+  clientX: number,
+  clientY: number,
+): { x: number; y: number } | null {
+  if (!(scale > 0) || !(page.width > 0) || !(page.height > 0)) return null;
+  const x = (clientX - page.left) / scale;
+  const y = (clientY - page.top) / scale;
+  if (x < 0 || y < 0 || x > page.width / scale || y > page.height / scale) return null;
+  return { x, y };
+}

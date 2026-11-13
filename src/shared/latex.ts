@@ -248,6 +248,12 @@ export const latexChannels = {
   cancel: "latex:cancel",
   /** 把引擎 / 主文件的选择写进项目 `.orbita/latex.json`，回刷新后的项目 */
   configure: "latex:configure",
+  /** 源码行 → PDF 位置（SyncTeX 正向查找；右键「在 PDF 中定位」） */
+  synctexForward: "latex:synctex-forward",
+  /** PDF 页面坐标 → 源码行（SyncTeX 反向查找；PDF 双击 / Ctrl+单击） */
+  synctexReverse: "latex:synctex-reverse",
+  /** 缺的文件名 → 发行版包名与安装命令（反查要起 kpsewhich / tlmgr / mpm） */
+  packages: "latex:packages",
 } as const;
 
 /**
@@ -299,3 +305,155 @@ export interface LatexConfigureRequest extends LatexFileContext {
 export type LatexConfigureOutcome =
   | { ok: true; project: LatexProjectInfo }
   | { ok: false; error: string };
+
+/**
+ * SyncTeX 双向定位（源码 ↔ PDF）。
+ *
+ * **坐标契约（唯一一份，主进程与 renderer 都按它走）**：`LatexSyncRect` 的
+ * left / top / width / height 是 **PDF 用户空间点（1/72 英寸）**，原点在页面
+ * **左上角**、y 向下。synctex 命令输出的数值本来就是这一套（实测：A4 上一行 10pt
+ * 正文的 y 是「页高 − 基线」，即“到页顶的距离”，单位与 pdf.js viewport(scale=1)
+ * 的宽高一致），所以主进程只搬数值、不翻转；renderer 乘渲染缩放即得 CSS px。
+ *
+ * 别把这里换成 CSS px：缩放随面板宽度与 DevicePixelRatio 变，契约层存像素值会在
+ * 换窗口宽度的下一帧指错行。
+ */
+export interface LatexSyncRect {
+  /** 1 基页码 */
+  page: number;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * 定位失败的原因。**每一种都要能翻成一句人话**——「没反应」在这里等于 bug：
+ * - `not-installed`：本机没有 synctex 命令（TeX 发行版缺组件）
+ * - `no-synctex`：PDF 旁边没有 .synctex.gz（这份 PDF 不是带 SyncTeX 编出来的）
+ * - `no-pdf`：项目里根本没有 PDF
+ * - `no-result`：synctex 跑了，但这一行 / 这一点在 PDF 里没有记录（改过源码没重编最常见）
+ * - `outside-project`：反查命中的是项目外的文件（系统 .cls / .sty），不是用户能打开的源码
+ * - `failed`：命令本身出错；`detail` 带 stderr 尾巴
+ */
+export type LatexSyncFailureReason =
+  | "not-installed"
+  | "no-synctex"
+  | "no-pdf"
+  | "no-result"
+  | "outside-project"
+  | "failed";
+
+export interface LatexSyncFailure {
+  ok: false;
+  reason: LatexSyncFailureReason;
+  /** 原始诊断（stderr / 命中的文件路径）；界面只在 `failed` 时把它附在提示后面 */
+  detail: string | null;
+}
+
+/** 正向查找结果：源码的一行落在 PDF 的哪一页、哪一块 */
+export type LatexForwardOutcome = { ok: true; rect: LatexSyncRect } | LatexSyncFailure;
+
+/** 反向查找结果：PDF 上的一点来自哪个源码文件的哪一行 */
+export type LatexReverseOutcome =
+  | {
+      ok: true;
+      /** 绝对路径（主进程已确认在项目目录内，renderer 可直接拿去开标签） */
+      file: string;
+      /** 相对项目目录的路径，正斜杠（提示文案与服务端日志用） */
+      relative: string;
+      /** 1 基行号 */
+      line: number;
+    }
+  | LatexSyncFailure;
+
+/** 正向查找请求：`path` 是源码文件，`line` 是 1 基行号 */
+export interface LatexForwardRequest extends LatexFileContext {
+  line: number;
+  /** 1 基列；缺省交给 synctex 自己挑（它当前对列不敏感，留口给以后的版本） */
+  column?: number;
+}
+
+/** 反向查找请求：`path` 是 PDF，坐标是 PDF 点（左上原点，与 LatexSyncRect 同源） */
+export interface LatexReverseRequest extends LatexFileContext {
+  page: number;
+  x: number;
+  y: number;
+}
+
+/**
+ * 缺宏包反查 —— 日志只说「`ctexart.cls' not found」，而 tlmgr / mpm 要的是**包名**，
+ * 两者并不相等（`ctexart.cls` → `ctex`；`tcolorbox.sty` → `tcolorbox`）。
+ *
+ * 反查在主进程做：它要起 kpsewhich / tlmgr / mpm 三个外部命令，renderer 没有那套授权。
+ * 名字来自编译日志（等于来自 .tex 文件内容），所以**只接受 `x.sty` / `x.cls` 形状的白名单**，
+ * 别的字符一律不去拼命令（见 main/latex/packages.ts）。
+ */
+export interface LatexPackageQuery extends LatexFileContext {
+  /** 日志里缺的文件名，如 "ctexart.cls"。多于 LATEX_MAX_PACKAGE_LOOKUPS 的部分不看 */
+  missing: string[];
+}
+
+/** 认出来的发行版；都没有时 null（那就只能报「未知包」） */
+export type LatexPackageDistro = "texlive" | "miktex" | null;
+
+/**
+ * 没给出包名的原因。**三种原因必须分开**——它们的下一步完全不同：
+ * - `invalid-name`：日志里的名字不是 `x.sty` / `x.cls` 形状，我们根本没拿去查；
+ * - `no-tools`：这台机器上没有 tlmgr / mpm，装不了也查不了；
+ * - `tool-error`：工具在，但命令起不来 / 超时 / 非零退出（这次没查成）；
+ * - `not-found`：命令正常跑完，发行版里没有包认领这个文件（真·未知包）；
+ * - `not-looked-up`：名字太多（超过 LATEX_MAX_PACKAGE_LOOKUPS）没有查，或通道失败。
+ * 反查成功时（packageName 非 null）为 null。
+ */
+export type LatexPackageReason = "invalid-name" | "no-tools" | "tool-error" | "not-found" | "not-looked-up";
+
+/**
+ * 一个缺文件的反查结果。**每一项都要能单独成句**：界面可能只拿到 packageName=null
+ * 的那一半（未知包），也可能命中「本机其实已经有这个文件」。
+ */
+export interface LatexResolvedPackage {
+  /** 日志里的文件名原样（`ctexart.cls`） */
+  missing: string;
+  /** 发行版包名（`ctex` / `texlive-lang-chinese` / MiKTeX 的 `ctex`）；未知时 null */
+  packageName: string | null;
+  /**
+   * 填进终端的安装命令（不含回车）。未知包 / 认不出发行版时 null——
+   * 界面据此**不显示**「在终端安装」，而不是猜一条装不上的命令。
+   */
+  command: string | null;
+  /** 命令要不要加 sudo（macOS 的 BasicTeX / MacTeX 装在 root 拥有的 /usr/local/texlive 下） */
+  sudo: boolean;
+  /** kpsewhich 已能定位到这个文件：日志可能是旧的，或引擎用的是另一个 TeX 树 */
+  installed: boolean;
+  distro: LatexPackageDistro;
+  /** packageName 为 null 时说明是哪一种失败；成功时为 null（见 LatexPackageReason） */
+  reason: LatexPackageReason | null;
+}
+
+/**
+ * 一次反查最多处理几个文件：真实文档一次编译缺一两个。上限留得比常见需求宽（并发只有三，
+ * 不会一次起一堆 Perl），超过的部分明确标成 `not-looked-up`，**不许界面一直转圈**。
+ */
+export const LATEX_MAX_PACKAGE_LOOKUPS = 20;
+
+/**
+ * 「引擎在等用户确认安装」的日志行 —— MiKTeX 的按需装包 / 造字（mktexpk 家族）
+ * 在「先问我」模式下会停下来等一个回答，编译看上去就是卡住了。
+ *
+ * 这几个形状是 MiKTeX 在控制台 / 日志里用过的说法（`miktex-makepk:`、
+ * 「… wants to be installed」、「Do you want to install …」）。**本机没有 MiKTeX，
+ * 这些字符串未经真机校对**：只认明确的「等待安装」说法，宁可漏认也不把普通资源告警
+ * 误报成「在等你确认」——漏认时用户看到的仍然是普通的缺包行。
+ *
+ * 放在 shared 里是因为两个消费者必须用同一份：parse-log 靠它把这类行留进 warnings，
+ * 问题抽屉靠它把这类行归到「等待确认」那一组（两处各写一份就会慢慢长歪）。
+ */
+export function miktexPendingOf(message: string): boolean {
+  return (
+    /\bmiktex-(?:makepk|makemf|maketfm)\b/i.test(message) ||
+    /\bwants to be installed\b/i.test(message) ||
+    /\bdo you want to install\b/i.test(message) ||
+    /\bwaiting for (?:the )?user(?:'s)? (?:input|confirmation|decision)\b/i.test(message)
+  );
+}

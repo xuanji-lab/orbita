@@ -8,6 +8,7 @@ import { automationApi } from "./api/automation.ts";
 import { boardApi } from "./api/board.ts";
 import { browserApi } from "./api/browser.ts";
 import { channelApi } from "./api/channel.ts";
+import { citeApi } from "./api/cite.ts";
 import { docsApi } from "./api/docs.ts";
 import { excerptApi } from "./api/excerpt.ts";
 import { filesApi } from "./api/files.ts";
@@ -55,6 +56,7 @@ const api = {
   notify: notifyApi,
   terminal: terminalApi,
   latex: latexApi,
+  cite: citeApi,
   usage: usageApi,
   updater: updaterApi,
   import: importApi,
