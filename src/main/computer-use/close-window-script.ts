@@ -68,6 +68,13 @@ export function buildCloseSandboxWindowScript(pid: number): string {
     //    确认框根本不会弹出来——那之后 30 轮轮询全是空转，最后落进「找不到按钮＝已经关了」的
     //    假成功（2026-11-13 行为验收：产品路径 2/2 次 exit 0 但 25s 时四个进程全在，只能强杀，
     //    而强杀正是会漏 VM 的那条路；同一份脚本手工跑 3/3 成功，差别就是这个返回值）。
+    // 先等它从上一次的忙状态里缓过来（最多 3s）：忙着的时候 CloseMainWindow 返回 false 且什么都不做
+    "for ($waitRound = 1; $waitRound -le 10; $waitRound++) {",
+    "  $process.Refresh()",
+    "  if ($process.HasExited) { exit 0 }",
+    "  if ($process.Responding) { break }",
+    "  Start-Sleep -Milliseconds 300",
+    "}",
     "$orbitaClosed = $false",
     "for ($try = 1; $try -le 3; $try++) {",
     "  $process.Refresh()",
@@ -80,6 +87,7 @@ export function buildCloseSandboxWindowScript(pid: number): string {
     //    Invoke 是跨进程的 UI 自动化调用，不经过键盘，不会打进别的窗口。
     //    名字优先级：OK 一族优先；Close / 关闭 只当「整轮都没见到 OK」时的最后手段
     //    （沙箱的框默认按钮是 Ok，Close 只是某些版本的叫法）。
+    "$global:orbitaUnresponsive = $false",
     "$orbitaOkNames = @('Ok', 'OK', 'ok', 'Yes', ([string][char]0x786E + [string][char]0x5B9A), ([string][char]0x662F))",
     "$orbitaCloseNames = @('Close', ([string][char]0x5173 + [string][char]0x95ED))",
     // TWO-STEP LOOKUP: first the top-level windows owned by this pid (TreeScope.Children of the
@@ -90,6 +98,21 @@ export function buildCloseSandboxWindowScript(pid: number): string {
     // the search inside this sandbox's own window subtree instead of scanning the whole desktop.
     "function Find-OrbitaButton {",
     "  param([string[]]$Names)",
+    // **先问一句「它还响应吗」**：UIA 的 FindAll / FindFirst 打到无响应的窗口上会一直阻塞
+    // （2026-11-13 真机：手工跑这份脚本卡了 126s 才返回，直接撞穿调用方 spawnSync 的 20s 超时
+    // → PowerShell 被杀 → 优雅关窗根本没发生 → 强杀 → 漏孤儿 VM 3.4GB）。
+    // Responding 用 SendMessageTimeout 探一下，最坏 5s 返回，比无限期挂住强。
+    "  $orbitaProbe = Get-Process -Id $target -ErrorAction SilentlyContinue",
+    "  if ($null -eq $orbitaProbe) { return $null }",
+    "  $orbitaResponding = $true",
+    "  try { $orbitaResponding = $orbitaProbe.Responding } catch { $orbitaResponding = $true }",
+    "  if (-not $orbitaResponding) {",
+    // 一次不响应就够了：Responding 本体最坏要 5s，30 轮 × 5s = 150s，比挂住还糟。
+    // 标记给外面的轮询循环，让它立刻跳出（后面只判进程还在不在）。
+    "    $global:orbitaUnresponsive = $true",
+    "    Write-Output \"orbita-close-unresponsive=1\"",
+    "    return $null",
+    "  }",
     "  try {",
     "    $windows = $orbitaAutomation::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, $orbitaByPid)",
     "    foreach ($window in $windows) {",
@@ -129,6 +152,7 @@ export function buildCloseSandboxWindowScript(pid: number): string {
     "      $alive = Get-Process -Id $target -ErrorAction SilentlyContinue",
     "      if ($null -eq $alive) { exit 0 }",
     "    }",
+    "    if ($global:orbitaUnresponsive) { break }",
     "    $button = Find-OrbitaButton -Names $orbitaOkNames",
     "    if ($null -ne $button) {",
     "      try {",
