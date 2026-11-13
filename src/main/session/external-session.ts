@@ -71,6 +71,8 @@ export interface ExternalSessionReader {
   list(options?: ExternalListOptions): Promise<ExternalSourceSection[]>;
   /** 不存在返回 null；来源已关闭、读不了、超预算抛错（消息里写清来源、ref 与原因） */
   load(ref: string): Promise<ExternalSessionDetail | null>;
+  /** 设置页用：每个有数据目录的来源（开关关着的也算）数会话、列问题，只 stat，不读头部 */
+  inventory(): Promise<{ source: ExternalSourceId; total: number; problems: string[] }[]>;
 }
 
 export interface ExternalSourceRoots {
@@ -229,6 +231,16 @@ export function createExternalSessionReader(deps: ExternalSessionReaderDeps): Ex
         }),
       );
       return sections.sort((a, b) => EXTERNAL_SOURCE_IDS.indexOf(a.source) - EXTERNAL_SOURCE_IDS.indexOf(b.source));
+    },
+
+    async inventory() {
+      const groups = (await deps.sources()).filter((group) => group.roots.length > 0);
+      return Promise.all(
+        groups.map(async (group) => {
+          const { candidates, problems } = await sourceCandidates(group, context);
+          return { source: group.source, total: candidates.length, problems };
+        }),
+      );
     },
 
     async load(ref) {

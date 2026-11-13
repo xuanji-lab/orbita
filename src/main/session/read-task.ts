@@ -687,7 +687,8 @@ export async function applyReadTask(
   event: Extract<AgentEvent, { type: "readTaskRequest" }>,
   workspaces: WorkspaceStoreReader,
   channels: ChannelStoreReader,
-  external?: ExternalSessionReader,
+  /** 只要列目录与读一条（inventory 是设置页的事） */
+  external?: Pick<ExternalSessionReader, "list" | "load">,
 ): Promise<ReadTaskOutcome> {
   const metas = await sessions.list();
   const named = new Map((await workspaces.list()).map((workspace) => [workspace.id, workspace.name]));

@@ -29,6 +29,9 @@ import type { Workspace } from "../../shared/workspace.ts";
 import type { TranscriptItem } from "../../shared/transcript.ts";
 import type { ExternalSessionReader, ExternalSessionSummary, ExternalSourceSection } from "./external-session.ts";
 
+/** applyReadTask 只用到 list / load */
+type TaskExternalReader = Pick<ExternalSessionReader, "list" | "load">;
+
 type ReadTaskRequestEvent = Extract<AgentEvent, { type: "readTaskRequest" }>;
 
 const S1 = "11111111-2222-3333-4444-555555555555";
@@ -749,7 +752,7 @@ describe("applyReadTask（外部只读会话）", () => {
       const summaries = list.filter((item) => item.source === source);
       return { source, total: summaries.length, summaries, problems: [] };
     });
-  const reader = (list: ExternalSessionSummary[] = [summary]): ExternalSessionReader => ({
+  const reader = (list: ExternalSessionSummary[] = [summary]): TaskExternalReader => ({
     list: async (options) => sectionsOf(list.filter((item) => options?.source === undefined || item.source === options.source)),
     load: async (ref) => ({
       summary,
@@ -805,7 +808,7 @@ describe("applyReadTask（外部只读会话）", () => {
       load: async (id: string) =>
         id === S2 ? { meta: meta(S2, "Local sibling"), transcript: roundsFixture(1) } : null,
     };
-    const external: ExternalSessionReader = {
+    const external: TaskExternalReader = {
       list: async () => {
         externalLists += 1;
         return sectionsOf([{ ...summary, title: "Local sibling" }]);
@@ -822,7 +825,7 @@ describe("applyReadTask（外部只读会话）", () => {
   });
 
   test("外部目录失败不挡本地目录", async () => {
-    const broken: ExternalSessionReader = {
+    const broken: TaskExternalReader = {
       list: async () => {
         throw new Error("permission denied");
       },
@@ -836,7 +839,7 @@ describe("applyReadTask（外部只读会话）", () => {
 
   test("目录按来源分段，写总数与来源自己的问题；`ext:<来源>` 只列这一个来源", async () => {
     const code = { ...summary, ref: "ext:claude-code:1111111111111111", source: "claude-code" as const, title: "CC 会话" };
-    const external: ExternalSessionReader = {
+    const external: TaskExternalReader = {
       list: async (options) =>
         options?.source === "claude-code"
           ? [{ source: "claude-code", total: 40, summaries: [code], problems: [] }]
@@ -862,7 +865,7 @@ describe("applyReadTask（外部只读会话）", () => {
   });
 
   test("读外部会话出错（来源关闭、格式认不出、超预算）如实回给模型，不抛", async () => {
-    const external: ExternalSessionReader = {
+    const external: TaskExternalReader = {
       list: async () => [],
       load: async () => {
         throw new Error("Codex is turned off in Settings › External sources, so ext:codex:0123456789abcdef is not read.");

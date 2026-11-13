@@ -23,6 +23,8 @@ import { CustomRootsStore } from "./session/import-custom-roots.ts";
 import { createExternalSessionReader } from "./session/external-session.ts";
 import { locateExternalSources } from "./session/external-locate.ts";
 import { setSnapshotRoot } from "./session/sqlite-readonly.ts";
+import { registerExternalSourcesIpc } from "./session/external-ipc.ts";
+import { isExternalSourceEnabled } from "../shared/external-sources.ts";
 import { broadcastAgentEvent, registerAgentIpc, resolveProviderSecrets } from "./agent/ipc.ts";
 import type { AgentEvent } from "../shared/agent-ipc.ts";
 import { MemoryServiceHost, resolveMemoryRuntimePath } from "./memory/host.ts";
@@ -479,8 +481,12 @@ void app.whenReady().then(async () => {
     claudeDesktopDir: join(homedir(), "Library", "Application Support", "Claude", "claude-code-sessions"),
     sources: async () => {
       const context = { platform: process.platform, home: homedir(), env: process.env };
-      const located = await locateExternalSources(context, await customRoots.read());
-      return located.map((item) => ({ source: item.source, roots: item.roots, enabled: true }));
+      const [located, current] = await Promise.all([locateExternalSources(context, await customRoots.read()), settings.read()]);
+      return located.map((item) => ({
+        source: item.source,
+        roots: item.roots,
+        enabled: isExternalSourceEnabled(current.externalSources, item.source),
+      }));
     },
   });
   /*
@@ -1182,6 +1188,7 @@ void app.whenReady().then(async () => {
     },
     workspaceRoot: async (id) => (await workspaces.list()).find((workspace) => workspace.id === id)?.path ?? null,
   });
+  registerExternalSourcesIpc(externalSessions, customRoots, settings);
   // 迁移（设置 › Migration）：扫描/执行都在主进程，agent 进程不参与；skills 落进上面这个中心存储
   registerImportIpc(
     sessions,

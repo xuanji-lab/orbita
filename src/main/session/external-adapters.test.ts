@@ -360,6 +360,8 @@ describe("开关、出错与列目录的成本", () => {
     assert.ok(summary !== undefined);
     const off = readerFor([{ source: "codex", roots: [root] }], { codex: false });
     assert.deepEqual(await off.list(), []);
+    // 设置页照样数得到它（关着也要让用户看见有多少条）
+    assert.deepEqual(await off.inventory(), [{ source: "codex", total: 1, problems: [] }]);
     await assert.rejects(off.load(summary.ref), /Codex is turned off in Settings › External sources/);
   });
 
