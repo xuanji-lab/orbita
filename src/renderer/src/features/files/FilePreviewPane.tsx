@@ -21,11 +21,13 @@ import {
   type FileListRequest,
   type FilePreview,
 } from "@shared/files";
+import { isDocxFile } from "@shared/docx";
 import type { PromptImage } from "@shared/prompt-images";
 import type { CiteEntry } from "@shared/cite";
 import type { LatexIssue, LatexProjectIndex } from "@shared/latex";
 import type { TextQuote } from "@shared/quote";
-import { DocEditPane } from "../doc-panel/DocEditPane";
+import { DocxView } from "../docx/DocxView";
+import { flushDocxForLeave } from "../docx/docx-flush.ts";import { DocEditPane } from "../doc-panel/DocEditPane";
 import { watchDocMeta } from "./doc-meta-refresh.ts";
 import { PdfView, type PdfJump, type PdfSyncJump } from "./PdfView";
 import { useExperimentalFeature } from "../../experimental.ts";
@@ -123,6 +125,9 @@ export function FilePreviewPane(props: {
    */
   const editableLatex = sentImage === undefined && isEditableLatexFile(path);
   const [pdfReload, setPdfReload] = useState(0);
+  // .docx 走应用内的分页编辑器（issue #273）：它不需要实验开关，也不再是「不支持的类型」
+  const docx = sentImage === undefined && isDocxFile(path);
+  const [docxReload, setDocxReload] = useState(0);
   const name = sentImage?.name ?? fileTabName(path);
   // 面包屑从所在的根开始（绝对路径放不下时截掉的总是末尾的文件名）；完整路径进 tooltip
   const segments =
@@ -295,10 +300,21 @@ export function FilePreviewPane(props: {
             {/* .tex 打开后是编辑器：头部刷新只换预览数据、碰不到编辑器里的文本，
                 会让人以为「刷新就能丢弃本地改动」。重载盘上版本在冲突条里（带抉择）。
                 读不全的文件（>2 MB 截断）没有编辑器，刷新照旧给。 */}
-            {editorInitial === null && (
+            {(docx || editorInitial === null) && (
               <PanelIconButton
                 title={t.files.refreshPreview}
                 onClick={() => {
+                  // 重读 docx = 卸载当前编辑器（引擎整份重新解析）：先把待存改动落盘，
+                  // 失败就不重读，提示由 docx 视图自己挂（评审 2c：这里原本直接换 key，
+                  // 屏幕上的字和未落盘的改动一起消失）
+                  if (docx) {
+                    void flushDocxForLeave(path).then((outcome) => {
+                      if (!outcome.ok) return;
+                      refresh();
+                      setDocxReload((n) => n + 1);
+                    });
+                    return;
+                  }
                   refresh();
                   if (pdf) setPdfReload((n) => n + 1);
                   else setTextReload((n) => n + 1);
@@ -332,7 +348,15 @@ export function FilePreviewPane(props: {
       <div
         className="file-preview-body"
         data-kind={
-          pdf ? "pdf" : editorInitial !== null ? "tex" : editing || asDocument ? "edit" : undefined
+          docx
+            ? "docx"
+            : pdf
+              ? "pdf"
+              : editorInitial !== null
+                ? "tex"
+                : editing || asDocument
+                  ? "edit"
+                  : undefined
         }
         ref={bodyRef}
       >
@@ -355,6 +379,11 @@ export function FilePreviewPane(props: {
             path={path}
             onClose={() => pickMode("rendered")}
             {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
+          />
+        ) : docx ? (
+          <DocxView
+            request={{ sessionId, workspaceId, ...extra, root, dir: path }}
+            reloadToken={docxReload}
           />
         ) : pdf ? (
           <PdfView

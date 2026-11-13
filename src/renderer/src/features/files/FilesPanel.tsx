@@ -24,6 +24,7 @@ import {
   orderEntriesByType,
 } from "./tree-view";
 import { useFileTree } from "./useFileTree";
+import { flushAllDocxForLeave, flushDocxForLeave } from "../docx/docx-flush.ts";
 import {
   attachmentName,
   collectSentAttachments,
@@ -267,9 +268,15 @@ export function FilesPanel(props: {
     if (drop.rootPath === null) return;
     const next = dropTabsAtRoot(tabs, activePath, drop.rootPath);
     if (next.tabs.length === tabs.length) return;
-    setTabs(next.tabs);
-    setActivePath(next.activePath);
-    if (next.activePath === null) setTreeOn(false);
+    // 掉标签 = 可能卸载正在编辑的 docx：先让它落盘再掉。**落盘失败就不掉**
+    // （评审 2d：这里原本不看 outcome.ok，等于替用户扔掉那份标签）；提示由
+    // docx 视图自己挂出来，标签留着让用户改完权限再重试。
+    void flushDocxForLeave(activePath).then((outcome) => {
+      if (!outcome.ok) return;
+      setTabs(next.tabs);
+      setActivePath(next.activePath);
+      if (next.activePath === null) setTreeOn(false);
+    });
   }, [
     focusWorkspaceId,
     focusDone,
@@ -770,16 +777,34 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
   // 同理清掉：错误属于旧会话里那次点击，带进新会话就是张冠李戴的常驻红字
   // （2026-10-18 修的 citeOutside 跨会话残留）
   useEffect(() => {
-    setTabs([]);
-    setActivePath(null);
-    setCollapsedGroups(new Set());
-    setTreeOn(false);
-    setActionError(null);
-    setJump(null);
-    setPdfSync(null);
-    setReveal(null);
-    setEditorNotice(null);
-  }, [sessionId, workspaceId]);
+    /*
+     * 换会话 / 换工作区 = 整片换掉旧面板，打开着的 docx 随之卸载。
+     * `openSession` / `newTask` / `newTaskIn` 已经在切换前闸过一次（失败就不切）；
+     * 这里再兜一道覆盖不经过它们的路径（删会话、工作区变动…）。
+     * **先 await 再清标签**（评审 2b：原来是 `void flush` 后立刻清，flush 还没跑完
+     * 组件就卸载了）；清不掉说明还有改动没落盘，那就把标签留着——提示在 docx 视图里，
+     * 用户改完权限还能回来接着存。
+     */
+    let alive = true;
+    const clear = (): void => {
+      setTabs([]);
+      setActivePath(null);
+      setCollapsedGroups(new Set());
+      setTreeOn(false);
+      setActionError(null);
+      setJump(null);
+      setPdfSync(null);
+      setReveal(null);
+      setEditorNotice(null);
+    };
+    void flushAllDocxForLeave().then((outcome) => {
+      if (!alive) return;
+      if (!outcome.ok) return;
+      clear();
+    });
+    return () => {
+      alive = false;
+    };  }, [sessionId, workspaceId]);
 
   // 附件列表吃同一条过滤词（按末段名字）；过滤中零命中时整节隐藏（与树的空目录
   // 同一条纪律：安静），不过滤时才出空态文案
@@ -849,14 +874,31 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
     };
   }, [props.paperLayout]);
 
-  /** 关闭一个标签；关掉最后一个 = 回纯树，treeOn 一并复位——之后从 solo 点开
-   * 文件不会突然顶着浮层 / 并排列（树的展开理由随最后一个文件消失） */
+  /**
+   * 离开当前标签之前，先让 docx 把待存改动落盘（.tex 编辑器同一道切换闸门纪律）。
+   * `outcome.ok === false` 就**原地不动**：提示由 docx 视图自己挂出来
+   * （保真闸门 / 冲突 / 保存失败各有文案），这里不另造第二套错误界面。
+   *
+   * 为什么要这一刀：引擎把字收在文档模型里，卸载组件里只能 clearTimeout；
+   * 切标签 / 关标签都会让还没落盘的字无声消失（2026-10-24 评审复现）。
+   */
+  const leaveActive = (next: () => void): void => {
+    void flushDocxForLeave(activePath).then((outcome) => {
+      if (outcome.ok) next();
+    });
+  };
+
   /** 真的把标签拿掉（保存已确认 / 本来不脏） */
   const applyClose = (path: string): void => {
     const next = closeTab(tabs, activePath, path);
-    setTabs(next.tabs);
-    setActivePath(next.activePath);
-    if (next.activePath === null) setTreeOn(false);
+    const apply = (): void => {
+      setTabs(next.tabs);
+      setActivePath(next.activePath);
+      if (next.activePath === null) setTreeOn(false);
+    };
+    // 只有关的是当前激活的 docx 才需要等它落盘；关后台标签不打断前台
+    if (path === activePath) leaveActive(apply);
+    else apply();
   };
 
   /**
@@ -954,10 +996,17 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
    * 双击 / Enter 同一动作（标签复用，幂等）。浮层里点了文件 = 挑选完成：浮层
    * 自动收起——窄侧事实来自 ResizeObserver 的缓存，不在这里量宽度做显示判定 */
   const openFile = (root: FileRoot, path: string): void => {
-    setTabs((prev) => openTab(prev, root.path, path));
-    switchTo(path);
-    if (narrowRef.current) setTreeOn(false);
-  };
+    if (path === activePath) {
+      // 再点已激活的文件 = 从浮层里挑完了：收起树（2026-10-11 的既有行为，
+      // 加切走闸门时一度被 `return` 吞掉——评审 R4）
+      if (narrowRef.current) setTreeOn(false);
+      return;
+    }
+    // 两道闸门：docx 先落盘（组件卸载就丢字），再由 switchTo 处理 .tex 的脏改动
+    leaveActive(() => {
+      switchTo(path);
+      if (narrowRef.current) setTreeOn(false);
+    });  };
 
   /** 新建文档 / 演示文稿：在当前工作区根下建好，文件树重拉，开成标签并直接进编辑 */
   const createDocument = (kind: DocKind): void => {
@@ -984,10 +1033,15 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
   /** 单击附图行 = 打开 / 激活附图标签：身份用原图引用（同一张图复用同一个标签），
    * 显示名用合成名；root 传空串——附图预览走 session.attachment，不过 fs:read 白名单 */
   const openSentImage = (ref: string, name: string): void => {
-    setTabs((prev) => openTab(prev, "", ref, name));
-    switchTo(ref);
-    if (narrowRef.current) setTreeOn(false);
-  };
+    if (ref === activePath) {
+      if (narrowRef.current) setTreeOn(false);
+      return;
+    }
+    leaveActive(() => {
+      setTabs((prev) => openTab(prev, "", ref, name));
+      switchTo(ref);
+      if (narrowRef.current) setTreeOn(false);
+    });  };
 
   /**
    * 主进程给的路径是 Windows 原生反斜杠，树里拼的标签路径是正斜杠：同一个文件按字符串
@@ -1445,12 +1499,13 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                       aria-selected={active}
                       className="cap-tab no-drag"
                       title={tab.path}
-                      onClick={() => switchTo(tab.path)}
+                      onClick={() => {
+                        if (!active) leaveActive(() => switchTo(tab.path));
+                      }}
                       onKeyDown={(event) => {
                         if (event.key !== "Enter") return;
                         event.preventDefault();
-                        switchTo(tab.path);
-                      }}
+                        if (!active) leaveActive(() => switchTo(tab.path));                      }}
                     >
                       <Icon
                         name={fileIcon(name, "file")}

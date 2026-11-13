@@ -99,6 +99,7 @@ import { installCloseToTray, loadTrayIcon, type AppTray } from "./window/tray.ts
 import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
 import { registerFilesIpc } from "./files/ipc.ts";
+import { registerDocxIpc } from "./docx/ipc.ts";
 import { applyDocRequest } from "./doc-panel/agent-requests.ts";
 import { printDocPdf } from "./doc-panel/print-doc-pdf.ts";
 import { registerDocIpc } from "./doc-panel/ipc.ts";
@@ -1230,6 +1231,8 @@ void app.whenReady().then(async () => {
   });
   // 文件面板（fs:roots / fs:list / fs:reveal）：根每次现算，不缓存
   registerFilesIpc(workspaces, sessions, (path, roots) => browserSandbox.openLocalFile(path, roots));
+  // docx 轻量编辑（docx:open / docx:save）：白名单同上，上一版备份放 userData 里
+  registerDocxIpc(workspaces, sessions, join(configDir, "docx-backups"));
   // 文档 / 演示文稿面板（doc:*）：白名单同文件面板，写入比较后交换 + 原子写
   registerDocIpc(workspaces, sessions);
   registerSlidesIpc(workspaces, sessions);

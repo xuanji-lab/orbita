@@ -9,6 +9,7 @@ import { boardApi } from "./api/board.ts";
 import { browserApi } from "./api/browser.ts";
 import { channelApi } from "./api/channel.ts";
 import { citeApi } from "./api/cite.ts";
+import { docxApi } from "./api/docx.ts";
 import { docsApi } from "./api/docs.ts";
 import { excerptApi } from "./api/excerpt.ts";
 import { filesApi } from "./api/files.ts";
@@ -51,6 +52,7 @@ const api = {
   window: windowApi,
   workspace: workspaceApi,
   files: filesApi,
+  docx: docxApi,
   docs: docsApi,
   focus: focusApi,
   notify: notifyApi,

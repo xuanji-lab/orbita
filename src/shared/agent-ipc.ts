@@ -310,6 +310,18 @@ export const ipcChannels = {
    * 同时 openFile + openDirectory，文件与文件夹只能分两个入口（文件仍走隐藏 input）。
    */
   fsPickFolders: "fs:pick-folders",
+  /**
+   * 打开 .docx 给应用内分页编辑器（契约在 `docx.ts`，白名单与 fs:read 同一道）。
+   * 超过 DOCX_MAX_BYTES 回 too-large，加密 / 非 zip / 缺正文回 invalid——
+   * 解析全在 renderer 的引擎里，主进程只负责判大小、判完整性与读字节。
+   */
+  docxOpen: "docx:open",
+  /**
+   * 把引擎序列化出的整份 docx 写回磁盘（同 root/dir 白名单）。expectedHash 与磁盘
+   * 现状不一致就回 conflict、一个字节都不写；写入走原子写 + 同路径串行，覆盖前把
+   * 上一版复制进应用数据目录的 docx-backups。
+   */
+  docxSave: "docx:save",
   /** 文档 / 演示文稿面板（契约在 `doc.ts`）：读一份 .md，回内容 + 摘要。白名单同文件面板，只认 .md */
   docRead: "doc:read",
   /** 写回（原子写）：带 expectedHash，盘上已被改过就不写、回盘上的现状（比较后交换） */
