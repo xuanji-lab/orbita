@@ -18,6 +18,7 @@ import { parseQuotedMessage, withoutQuotes } from "./quote.ts";
 import { parseSkillSegments } from "./skill.ts";
 import { INVOCATION_OPEN, stripInvocationBlock } from "./invocation.ts";
 import { splitUserTextBlocks } from "./prompt-attachments.ts";
+import { parseSessionDurable, type SessionDurable } from "./kernel.ts";
 import type { FileTurnRecord, FileTurnView, RevertRecord, UndoRecord } from "./revert.ts";
 import type { IntentAskView, IntentSelectedView, IntentUsageCount, RecallStageCell } from "./intent-recall.ts";
 import type { IntentConfirmAnswer } from "./intent-confirm.ts";
@@ -588,6 +589,11 @@ export interface SessionMeta {
    * 同一份 pi session 被别的客户端续过的话，这份快照会偏旧，直到它在这里再跑一轮。
    */
   stats: AgentStats | null;
+  /**
+   * 新内核（pi-durable）里的位置 / 迁移失败的原因（见 shared/kernel.ts 的 SessionDurable）。
+   * **缺席即新内核没碰过它**——开发开关 ORBITA_DURABLE_KERNEL 关着时恒缺席，旧内核不读它。
+   */
+  durable?: SessionDurable;
   createdAt: number;
   updatedAt: number;
 }
@@ -813,6 +819,7 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
   const parentId = str(value["parentId"]);
   const automationId = str(value["automationId"]);
   const automationRun = parseAutomationRunLabel(value["automationRun"]);
+  const durable = parseSessionDurable(value["durable"]);
 
   return {
     id,
@@ -862,6 +869,9 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     ...(value["intentEnabled"] === true || value["intentEnabled"] === false
       ? { intentEnabled: value["intentEnabled"] }
       : {}),
+    // 新内核的位置：缺席 / 坏值都不带这个键（缺席即否，同 importedFrom）——开关关着时读回的
+    // meta 与加这个字段之前逐键相同
+    ...(durable === null ? null : { durable }),
     createdAt,
     updatedAt: typeof value["updatedAt"] === "number" ? value["updatedAt"] : createdAt,
   };
