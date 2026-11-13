@@ -70,26 +70,25 @@
   box-decoration-break: clone;
 }
 
-/* 句中 chip（copybook 变体，2026-10-06）：修正液质感——底色要盖住竖格线。
-   chip 区间优先于修正液（mirrorSegments）：token 不再另垫修正液，chip 自己
-   的 pill 就是那块「涂改带」。无描边同 styles.css 的 .composer-chip（2026-10-11
-   用户裁决照 Proma：只换底不描边）；横向留白同款 -2px/+2px 偏移组，另保留
-   修正液那条 1px 柔影（涂改带搭在纸上的质感，只跟字形盒走，不到两侧铺开）。
-   中性胶囊也换淡墨底（正墨 10% 混修正液白）：纯白底和纸面同色看不见 */
-:root[data-theme="copybook"] .composer-chip {
-  --chip-fill: color-mix(in srgb, var(--color-text-primary) 10%, var(--color-paper-whiteout));
+/* 句中 chip（copybook 变体）：修正液质感——底色要盖住竖格线，所以淡底混的是修正液白
+   （--chip-ground，skill / MCP 胶囊与中性胶囊都吃它）。chip 区间优先于修正液（mirrorSegments）：
+   token 不再另垫修正液，chip 自己就是那块「涂改带」。中性胶囊（粘贴 token）换淡墨底（正墨 10%
+   混修正液白：纯白底和纸面同色看不见），另保留修正液那条 1px 柔影；skill / MCP 的胶囊同样
+   加这条柔影（涂改带搭在纸上的质感），描边与类别色照 styles.css */
+:root[data-theme="copybook"] .composer-field {
+  --chip-ground: var(--color-paper-whiteout);
+}
+
+:root[data-theme="copybook"] .composer-chip:not([data-kind]) {
   box-shadow:
     0 0 0 1px var(--chip-fill),
     0 1px 1.5px color-mix(in srgb, var(--color-text-primary) 10%, transparent);
 }
 
-/* 类别上色在稿纸上的变体：描边取消后只剩「同色系淡底混白」——像用彩笔在
-   涂改带上淡淡扫了一层 */
-:root[data-theme="copybook"] .composer-chip[data-kind="skill"] {
-  --chip-fill: color-mix(in srgb, var(--color-filetype-sheet) 15%, var(--color-paper-whiteout));
-}
-:root[data-theme="copybook"] .composer-chip[data-kind="mcp"] {
-  --chip-fill: color-mix(in srgb, var(--color-filetype-doc) 15%, var(--color-paper-whiteout));
+:root[data-theme="copybook"] .composer-chip-face {
+  box-shadow:
+    inset 0 0 0 1px var(--chip-stroke),
+    0 1px 1.5px color-mix(in srgb, var(--color-text-primary) 10%, transparent);
 }
 
 /* 粘贴展开段（copybook 变体，方案 C）：不涂修正液也不白底——它是正文不是涂改，
@@ -182,14 +181,14 @@
 /* 标点在格子里靠左下，手写进格子的规矩 */
 :root[data-theme="copybook"] .home-slogan-cell.punct {
   place-items: end start;
-  padding: 0 0 6px 8px;
+  padding: 0 0 var(--space-1-5) var(--space-2);
 }
 
 /* 打字稿：英文 slogan 打在一页打字纸上——左边一条整高的红页边线，底下一条蓝横线；
    字是 Special Elite（色带不匀的打字机字，只有常规体，所以不加粗） */
 :root[data-theme="typescript"] .home-hero {
   position: relative;
-  padding: 0 20px 8px 44px;
+  padding: 0 var(--space-5) var(--space-2) 44px;
   border-bottom: 1px solid var(--color-paper-rule);
 }
 
@@ -212,7 +211,7 @@
 
 /* 两档共用：slogan 下老师的红笔批语，手写（龙藏体子集），微微歪着 */
 :root:is([data-theme="copybook"], [data-theme="typescript"]) .home-mark {
-  margin: 10px 0 0;
+  margin: var(--space-2-5) 0 0;
   font-family: "Long Cang", "Bradley Hand", cursive;
   font-size: var(--font-size-slogan-mark);
   line-height: var(--line-height-brand-mark);

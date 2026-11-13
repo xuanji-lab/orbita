@@ -14,7 +14,6 @@ import openrouter from "../../../../../design-system/assets/vendor-logos/openrou
 import qwen from "../../../../../design-system/assets/vendor-logos/qwen.svg?raw";
 import stepfun from "../../../../../design-system/assets/vendor-logos/stepfun.svg?raw";
 import tokenrhythmMark from "../../../../../design-system/assets/vendor-logos/tokenrhythm.png";
-import volcengine from "../../../../../design-system/assets/vendor-logos/volcengine.svg?raw";
 import xiaomimimo from "../../../../../design-system/assets/vendor-logos/xiaomimimo.svg?raw";
 import zai from "../../../../../design-system/assets/vendor-logos/zai.svg?raw";
 import zhipu from "../../../../../design-system/assets/vendor-logos/zhipu.svg?raw";
@@ -25,7 +24,7 @@ import { iconMarkup } from "../../shell/icon-markup.ts";
  * 目录条目 → 厂商 logo（设置 › 模型服务的卡片与详情头）。SVG 来自 lobe-icons（MIT，见
  * vendor-logos/LICENSE）。彩色 logo 自带品牌色——那是厂商的标，不是我们的配色，
  * 不受「禁裸 hex」约束；单色 logo 用 currentColor，跟着主题的文字色走。
- * 同一厂商的几个条目（智谱按量 / 套餐 / 团队版，火山方舟三条…）共用一枚；「兼容」条目用协议方的标。
+ * 同一厂商的几个条目（智谱按量 / 套餐 / 团队版，通义千问按量 / Token Plan…）共用一枚；「兼容」条目用协议方的标。
  */
 /**
  * 型号家族图标（ModelAvatar 的第二级，按型号 id 前缀认，见 known-models 的 modelAvatarOf）。
@@ -72,9 +71,6 @@ const LOGOS: Record<string, string> = {
   "xiaomi-token-plan": xiaomimimo,
   qwen,
   "qwen-token-plan": qwen,
-  "doubao-api": volcengine,
-  doubao: volcengine,
-  "ark-coding-plan": volcengine,
   openrouter,
   "zhipu-coding-team": zhipu,
   // 浏览器登录订阅：ChatGPT 用 OpenAI 的标，xAI 的订阅产品是 Grok，用 Grok 的标

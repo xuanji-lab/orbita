@@ -1,0 +1,7 @@
+docs-slides（文档与演示）— Orbita 内置插件
+
+本插件的两条技能（slides、docs）是 Orbita 自己写的使用说明，随 Orbita 同一许可发布。
+设计上参考的开源项目（不含其代码或文本）：
+- Slidev（MIT）packages/client/layouts 的版式命名与槽位划分；
+- presenton（Apache-2.0）「每个版式带一句话描述、由模型挑选」的做法。
+这两处参考与版式实现的详细说明在 src/shared/slides-layouts.ts 的文件头注释里。

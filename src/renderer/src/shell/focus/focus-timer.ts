@@ -5,6 +5,7 @@
  * `use-focus.ts`（hook），界面在 `FocusControl.tsx`。状态不落盘：用户裁决
  * 「关掉应用重开 = 已结束」，内存里的计时器天然满足。
  */
+import type { FocusSummaryRequest } from "@shared/focus";
 
 /** 滚轮的时长档（分钟），原型的定档 */
 export const FOCUS_MINUTES: readonly number[] = [10, 15, 20, 25, 30, 45, 60, 90, 120];
@@ -51,6 +52,57 @@ export function remainMs(run: FocusRun, now: number): number {
 /** 收工小结该起跑了吗：剩 SUMMARY_LEAD_MS 以内（含到点后的补跑） */
 export function shouldStartSummary(run: FocusRun, now: number): boolean {
   return remainMs(run, now) <= SUMMARY_LEAD_MS;
+}
+
+/**
+ * 浮层请求的已消费判定：token 只递增，同一遭请求只开一次浮层。
+ *
+ * 原来的 effect 只看「请求非空 + 相位是 off」：请求消费过一次后，之后每一次
+ * 回到 off（手动开完一轮文专注、结束一轮、Esc 关掉浮层再开一轮）effect 重跑
+ * 都会把浮层再弹一次——同一遭请求被消费多次。消费标记就是 token 的高水位：
+ * 只有权号比已消费的高（新请求）才再开。
+ */
+export function pickerRequestFresh(token: number, consumed: number): boolean {
+  return token > consumed;
+}
+
+/**
+ * 一次「对表」该做的事。两个标志都是**跨过关键时刻**才算，平常的日子两个都 false
+ * ——调用方据此完全不 setState（`perf(focus)`：App 不每秒重渲染）。
+ */
+export interface FocusClockAction {
+  /** 进了 T-5 窗口、小结还没起跑 → 起跑（只一次；睡眠越过整段窗口时在醒来那一拍补跑） */
+  startSummary: boolean;
+  /** 越过 endsAt → 转 done（只一次；状态机换了相位就没有下一拍了） */
+  finish: boolean;
+}
+
+/**
+ * 专注时钟：给定这一刻的墙上时间，判断该不该起跑小结 / 该不该收工。
+ *
+ * 原来这两件事靠开始时排的一次性 `setTimeout`——定时器算的是「还要过多久」的
+ * 单调时间，电脑合盖睡眠多久，到点就晚多久（合盖一夜，回来才响）。改成每秒对
+ * 墙上时间以后，定时器只负责把人叫醒，判断一律看 `now`：睡眠期间没拍的，醒来
+ * 第一拍就补上。
+ *
+ * 到点时两个标志可同时为真（睡眠跨过了 T-5 与 endsAt）：与改成定时器之前的语义
+ * 一致——小结先起跑、卡片显示「正在整理」，同时转 done。
+ */
+export function focusClockAction(run: FocusRun, now: number, summaryIdle: boolean): FocusClockAction {
+  return {
+    startSummary: summaryIdle && shouldStartSummary(run, now),
+    finish: now >= run.endsAt,
+  };
+}
+
+/**
+ * 起跑那一刻的素材窗口（[startedAt, until]，限定所选工作区）。
+ *
+ * **只在起跑时算一次**：失败后点「重试」必须沿用它，不能拿重试时刻当 until——
+ * 否则用户看完原因再点，窗口已经比这次专注长了，重试读的是另一段素材。
+ */
+export function summaryWindowOf(run: FocusRun, now: number): FocusSummaryRequest {
+  return { startedAt: run.startedAt, until: now, workspaceId: run.workspaceId };
 }
 
 /** 已过进度（0..1）：胶囊浮层那条细进度线的宽度 */

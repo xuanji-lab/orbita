@@ -5,7 +5,13 @@
 import { ipcMain, shell } from "electron";
 import { ipcChannels, type OauthDeviceCode, type OauthLoginInput } from "../../shared/agent-ipc.ts";
 import { KNOWN_PROVIDERS, knownProviderOf, knownProviderQuota } from "../../shared/known-providers.ts";
-import type { OauthCredential, ProviderDto, ProviderUpsertInput, ValidationIssue } from "../../shared/provider.ts";
+import type {
+  OauthCredential,
+  ProviderDto,
+  ProviderSetDisabledInput,
+  ProviderUpsertInput,
+  ValidationIssue,
+} from "../../shared/provider.ts";
 import { quotaIsStale, type QuotaFailure, type QuotaQuery, type QuotaResult } from "../../shared/quota.ts";
 import { resolveProviderSecrets } from "../agent/ipc.ts";
 import type { AgentHostCore } from "../agent/host-core.ts";
@@ -45,7 +51,7 @@ async function resolveKey(
   if (providerId === undefined) return null;
   const oauth = await store.resolveOauthApiKey(providerId);
   if (oauth !== null) return oauth;
-  return store.resolveApiKey(providerId);
+  return (await store.resolveApiKey(providerId)) ?? (await store.resolveEnvKey(providerId));
 }
 
 export function registerProviderIpc(store: ProviderStore, host?: AgentHostCore, quotaDir?: string): void {
@@ -129,7 +135,8 @@ export function registerProviderIpc(store: ProviderStore, host?: AgentHostCore, 
         input.providerId !== undefined &&
         stored?.auth.scheme === "oauth"
       ) {
-        const provider = await resolveProviderSecrets(store, input.providerId);
+        // 关着的服务商也允许测试连接：用户要看它恢复了没有，再决定开不开
+        const provider = await resolveProviderSecrets(store, input.providerId, { allowDisabled: true });
         const modelId = input.modelId.trim() !== "" ? input.modelId.trim() : provider.models[0]?.id ?? "";
         if (modelId === "") {
           return { ok: false, message: "Add a model first to test the connection." };
@@ -235,6 +242,17 @@ export function registerProviderIpc(store: ProviderStore, host?: AgentHostCore, 
 
   ipcMain.handle(ipcChannels.providerReorder, (_event, ids: string[]): Promise<void> =>
     store.reorder(ids),
+  );
+
+  // 开 / 关一家服务商：入参来自 renderer，按不可信处理（形状不对直接拒，不猜）
+  ipcMain.handle(
+    ipcChannels.providerSetDisabled,
+    async (_event, input: ProviderSetDisabledInput): Promise<ProviderDto | null> => {
+      if (typeof input?.id !== "string" || typeof input.disabled !== "boolean") {
+        throw new Error("provider:set-disabled needs { id: string, disabled: boolean }");
+      }
+      return store.setDisabled(input.id, input.disabled);
+    },
   );
 
   /** 进行中的浏览器登录（按 provider id）：设置页的「取消」按 id 叫停 */

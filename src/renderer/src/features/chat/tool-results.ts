@@ -20,9 +20,16 @@ import type { DelegateCard, ReadTaskCard } from "@shared/agent-ipc";
 import type { ChannelMessageKind } from "@shared/channel";
 import type { CompactedRecord, IntentRecallRecord, SessionRecord, TranscriptRecord } from "@shared/session";
 import type { FileTurnRecord, FileTurnView, RevertRecord } from "@shared/revert";
+import type { PluginInstallRow } from "@shared/plugin";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载，@shared 别名只能解析类型（AGENTS.md 硬规则）
 import { parseChannelPrompt } from "../../../../shared/channel.ts";
-import { COMMAND_TIMEOUT_FLOOR_SECONDS } from "../../../../shared/permission.ts";
+import { parsePluginInstallRow } from "../../../../shared/plugin.ts";
+import { parseAutomationModeRow, type AutomationModeRow } from "../../../../shared/automation.ts";
+import { parsePluginBoardDetails, type PluginBoardResult } from "../../../../shared/plugin-board.ts";
+import { gatedCommandTimeout, PLUGIN_BOARD_TOOL } from "../../../../shared/permission.ts";
+import { builtinCommand, DOC_EDIT_KEY, DOC_WRITE_KEY, docEditPath, isBuiltinCommand, PINNED_CARD_COMMANDS } from "./builtin-commands.ts";
+// 收尾扫描回答卡（scanAnswerCards）只用它认消息形状；纯模块，node --test 可直接加载
+import { matchScanMessage, type ScanMessage } from "./carryover-parse.ts";
 // 值导入必须走相对路径带 .ts 后缀（同上一行的纪律：本文件被 node --test 直接加载）
 import { skillForReadPath } from "../../../../shared/skill.ts";
 import { parseQualifiedToolName } from "../../../../shared/mcp.ts";
@@ -32,10 +39,10 @@ import type { Messages } from "../../messages-en.ts";
 /** toolCallId → 那次调用的结果。同一个 id 出现多次时以最后一条为准（终态帧在增量帧之后）。 */
 export type ToolResultIndex = ReadonlyMap<string, ToolTranscriptItem>;
 
-export function indexToolResults(transcript: readonly TranscriptItem[]): ToolResultIndex {
+export function indexToolResults(records: readonly TranscriptRecord[]): ToolResultIndex {
   const index = new Map<string, ToolTranscriptItem>();
-  for (const item of transcript) {
-    if (item.role === "tool") index.set(item.toolCallId, item);
+  for (const record of records) {
+    if (record.role === "tool") index.set(record.toolCallId, record);
   }
   return index;
 }
@@ -186,6 +193,11 @@ const CHANNEL_TOOL_NAMES: ReadonlySet<string> = new Set([
   "delegate",
   "reply_subsession",
   "report_to_parent",
+  // 自动化：建出来的那张卡是给用户看的结果（在右栏查看 / 暂停），不是「工作过程」，不该被折叠吞掉
+  "automation_create",
+  // 自动化改权限：留下的那一行（已改成放行 [改回只读] / 让它到点能写文件？[允许] [保持只读]）要用户看见、可能要点，
+  // 折进「N 个工具调用」里用户就找不到了——而 agent 已经结束这一轮在等
+  "automation_update",
 ]);
 
 /**
@@ -194,26 +206,47 @@ const CHANNEL_TOOL_NAMES: ReadonlySet<string> = new Set([
  */
 const HANDOFF_TOOL_NAME = "request_user_action";
 
+/**
+ * install_plugin 同样独立成行、不进折叠：它留下的那一行（「已装上 X · [卸载]」或「装上 X　[安装] [看详情]」）
+ * 是要用户看见、可能要用户点的东西，折进「N 个工具调用」里用户就找不到了——而 agent 已经结束这一轮在等。
+ */
+const PLUGIN_INSTALL_TOOL_NAME = "install_plugin";
+
 // 故意不写成类型谓词（`entry is ToolCallUnit`）：只有「toolCall 且工具名在名单里」
 // 那一部分该被排除，谓词的假分支会让 TS 把整个 "toolCall" kind 都窄掉，
 // 下游 `entry.kind === "toolCall"` 判断就报「没有交集」。
 // 名字沿用 isChannelToolCall：通道工具与交接都是「独立成卡、不参与合并与折叠」的那一类。
 function isChannelToolCall(entry: RenderEntry): boolean {
-  return entry.kind === "toolCall" && (CHANNEL_TOOL_NAMES.has(entry.toolName) || entry.toolName === HANDOFF_TOOL_NAME);
+  return (
+    entry.kind === "toolCall" &&
+    (CHANNEL_TOOL_NAMES.has(entry.toolName) || entry.toolName === HANDOFF_TOOL_NAME || entry.toolName === PLUGIN_INSTALL_TOOL_NAME)
+  );
 }
 
 /**
  * 钉住工具（2026-09-27 裁决）：show_image 是**给用户的展示**，不是「工作过程」——
+ * show_plugin_board（插件的看板结果，2026-11-05）同理：用户默认只想要这块看板，读技能、写数据那些步骤照常收进折叠，
+ * 看板卡钉在折叠之后、结尾回复之前。
  * 大折叠把轮内工具吞进统计行时会把它递出的画廊一起吞走，等于模型递完照片当场
  * 收回。与通道工具同一套豁免口径（不进工具组 / 不锚折叠边界 / 折叠区间在它处
  * 切开 / 不计统计——它根本不进 members），但语义不同：通道是父子通信，这是
  * 面向用户的输出。常见节奏（show 完就给结尾回复）下，豁免让画廊正好钉在
  * 折叠行之后、回复之前——「正文前面见图」不需要上浮收集就自然成立。
  */
-const PINNED_TOOL_NAMES: ReadonlySet<string> = new Set(["show_image"]);
+const PINNED_TOOL_NAMES: ReadonlySet<string> = new Set(["show_image", PLUGIN_BOARD_TOOL, ...PINNED_CARD_COMMANDS]);
 
 function isPinnedToolCall(entry: RenderEntry): boolean {
   return entry.kind === "toolCall" && PINNED_TOOL_NAMES.has(entry.toolName);
+}
+
+/**
+ * 内置命令里要出完成卡的那几个（新建演示文稿 / 打开文档 / 导出 …）：不挂轮尾，**留在它被调用的位置**。
+ * 过程行是时间线——先「新建演示文稿」、后「写幻灯片」就该按这个顺序读；挂到轮尾会让它排到后面的写幻灯片折叠之下
+ * （验收 S1：新建画在写幻灯片那组下面）。做法同通道工具：在这里把块切开，卡原位放进视图，前后各自成折叠。
+ * show_image / 插件看板仍是挂轮尾（给用户看的成品，贴在回复之前）。
+ */
+function isInPlaceCardCall(entry: RenderEntry): boolean {
+  return entry.kind === "toolCall" && PINNED_CARD_COMMANDS.has(entry.toolName);
 }
 
 /** 这条 toolCall 是不是在 read 某条已知 skill 的 SKILL.md（分组排除用，同 ToolLine 的判定） */
@@ -270,6 +303,9 @@ export function groupToolUnits(
       !skillRead &&
       !CHANNEL_TOOL_NAMES.has(unit.toolName) &&
       unit.toolName !== HANDOFF_TOOL_NAME &&
+      unit.toolName !== PLUGIN_INSTALL_TOOL_NAME &&
+      // 内置命令（slides_* …）各自一行、各带摘要：并成「slides_write 3 calls」就看不到每次写了哪几页
+      !isBuiltinCommand(unit.toolName) &&
       !PINNED_TOOL_NAMES.has(unit.toolName);
     if (groupable && (head === undefined || head.toolName === unit.toolName)) {
       run.push(unit);
@@ -323,7 +359,32 @@ export interface TurnGroupUnit {
   startedAt: number | null;
 }
 
-export type TurnViewEntry = RenderEntry | TurnGroupUnit;
+/**
+ * 「一轮一行」过程显示（2026-10-30，设置 › 过程显示 = turn）的折叠单元。与 TurnGroupUnit
+ * 的区别：**说明性正文也收进来**——一轮里夹在工具之间的「我先读一下…」是章节标题，
+ * 不是回答；只有最后一个过程成员之后的正文（结尾回答）留在折叠外。于是一轮一个块，
+ * 不再被每句旁白切成几条 Worked。
+ *
+ * `live` = 活跃轮的那一块：渲染成定高的现场块（头行计数 + 当前章节 + 最近几步 +
+ * 当前这一步）；落定后同一个 key 翻成一行结论，可展开成章节时间线。
+ * `answering` = 活跃块之后已经有正文在流（可能是结尾回答，也可能是下一段旁白——
+ * 下一个工具一来它就收进块里当章节）。
+ */
+export interface TurnProcessUnit {
+  kind: "turnProcess";
+  /** `proc:${首成员 key}`：块从活跃翻成落定时 key 不变，展开状态保住 */
+  key: string;
+  steps: readonly ProcessStep[];
+  durationMs: number | null;
+  startedAt: number | null;
+  live: boolean;
+  answering: boolean;
+}
+
+/** 过程块的一步：思考 / 工具 / 工具组，或夹在中间的说明性正文（章节标题） */
+export type ProcessStep = TurnMemberEntry | Extract<RenderUnit, { kind: "text" }>;
+
+export type TurnViewEntry = RenderEntry | TurnGroupUnit | TurnProcessUnit;
 
 /** 折叠成员：思考、单行工具调用、工具组。正文永不进折叠（2026-10-18 裁决），不在联合里。 */
 export type TurnMemberEntry = Extract<
@@ -441,6 +502,39 @@ export function groupTurns(
 }
 
 /**
+ * 「一轮一行」的分组（groupTurns 的另一种显示，设置 › 过程显示 = turn）。切段规则与
+ * groupTurns 相同；区别在块内：说明性正文收进过程块当章节，活跃轮也收（成 live 块），
+ * 只有最后一个过程成员之后的正文留在外面。通道工具、钉住工具、轮尾文件卡的位置规矩
+ * 与 foldSegment 一致（同一段代码，只换块内折法）。
+ */
+export function groupTurnsByTurn(
+  entries: readonly RenderEntry[],
+  turnActive: boolean,
+  results?: ToolResultIndex,
+): TurnViewEntry[] {
+  const segments: RenderEntry[][] = [];
+  for (const entry of entries) {
+    if (
+      entry.kind === "user" ||
+      entry.kind === "compacted" ||
+      entry.kind === "channelMark" ||
+      entry.kind === "revertMark" ||
+      segments.length === 0
+    ) {
+      segments.push([entry]);
+    } else {
+      segments[segments.length - 1]?.push(entry);
+    }
+  }
+  const activeIndex = turnActive ? segments.length - 1 : -1;
+  const view: TurnViewEntry[] = [];
+  segments.forEach((segment, index) => {
+    view.push(...foldSegment(segment, results, index === activeIndex ? "live" : "turn"));
+  });
+  return view;
+}
+
+/**
  * 折叠一个已落定的段。通道工具调用（delegate / reply_subsession / report_to_parent）
  * 不算轮成员且必须原样留在流里、位置不变（子会话 PR4b）——按它们把段切成若干块，
  * 每块各自套用「找首尾轮成员、中间收进折叠」的规则，通道工具本身穿插在块之间，
@@ -453,16 +547,29 @@ export function groupTurns(
  * 标识，可追溯。若按原位切开，show 夹在轮中间会产生「两个折叠块夹一张画廊」
  * 的割裂形态（正是本裁决要消灭的）。
  */
-function foldSegment(segment: readonly RenderEntry[], results?: ToolResultIndex): TurnViewEntry[] {
+function foldSegment(
+  segment: readonly RenderEntry[],
+  results?: ToolResultIndex,
+  mode: "steps" | "turn" | "live" = "steps",
+): TurnViewEntry[] {
   const view: TurnViewEntry[] = [];
   let chunk: RenderEntry[] = [];
   const pinned: RenderEntry[] = [];
   const tailCards: RenderEntry[] = [];
-  const flushChunk = () => {
-    view.push(...foldChunk(chunk, results));
+  // 一段里的第几块：只有第一块带轮头时间（foldChunk 的同一条规矩，跨块也成立）
+  let chunkIndex = 0;
+  const flushChunk = (last: boolean) => {
+    if (mode === "steps") view.push(...foldChunk(chunk, results));
+    else view.push(...foldChunkByTurn(chunk, results, mode === "live" && last, chunkIndex === 0));
+    if (chunk.length > 0) chunkIndex += 1;
     chunk = [];
   };
   for (const entry of segment) {
+    if (isInPlaceCardCall(entry)) {
+      flushChunk(false);
+      view.push(entry);
+      continue;
+    }
     if (isPinnedToolCall(entry)) {
       pinned.push(entry);
       continue;
@@ -475,19 +582,24 @@ function foldSegment(segment: readonly RenderEntry[], results?: ToolResultIndex)
       continue;
     }
     if (isChannelToolCall(entry)) {
-      flushChunk();
+      flushChunk(false);
       view.push(entry);
       continue;
     }
     chunk.push(entry);
   }
-  flushChunk();
+  flushChunk(true);
+  // 先钉画廊 / 看板、后追加轮尾文件卡：顺序反过来时，「尾部连续的正文」被文件卡挡住、找不到结尾回复，
+  // 钉住项就掉到文件卡之后（2026-11-06 用户：看板回复完变灰 not found）。更要紧的是位置**不随轮尾卡
+  // 出现而变**：文件卡在轮结束后才补进来，钉住项若因此换位，React 会搬动它的 DOM 节点，而 iframe 被搬动
+  // 会重新加载——看板卡的地址是一次性的，重载拿到 404。
+  if (pinned.length > 0) {
+    // 插在结尾回复（视图尾部连续的正文）之前；没有正文就挂段尾
+    let insertAt = view.length;
+    while (insertAt > 0 && view[insertAt - 1]?.kind === "text") insertAt -= 1;
+    view.splice(insertAt, 0, ...pinned);
+  }
   if (tailCards.length > 0) view.push(...tailCards);
-  if (pinned.length === 0) return view;
-  // 插在结尾回复（视图尾部连续的正文）之前；没有正文就挂段尾
-  let insertAt = view.length;
-  while (insertAt > 0 && view[insertAt - 1]?.kind === "text") insertAt -= 1;
-  view.splice(insertAt, 0, ...pinned);
   return view;
 }
 
@@ -526,6 +638,50 @@ function foldChunk(chunk: readonly RenderEntry[], results?: ToolResultIndex): Tu
   }
   flush();
   return view;
+}
+
+/**
+ * 「一轮一行」的块内折法：从第一个过程成员到最后一个过程成员之间的一切（含说明性
+ * 正文）收进一个 TurnProcessUnit；第一个成员之前的正文与最后一个成员之后的正文留在
+ * 外面。块里夹着的其他单元（意图召回卡之类，不是过程也不是正文）挪到块后，不吞。
+ * 空白正文同 foldChunk：不当边界也不落视图。
+ */
+function foldChunkByTurn(
+  chunk: readonly RenderEntry[],
+  results: ToolResultIndex | undefined,
+  live: boolean,
+  firstChunk: boolean,
+): TurnViewEntry[] {
+  const kept = chunk.filter((entry) => !(entry.kind === "text" && entry.text.trim() === ""));
+  let first = -1;
+  let last = -1;
+  kept.forEach((entry, index) => {
+    if (!isTurnMember(entry)) return;
+    if (first === -1) first = index;
+    last = index;
+  });
+  if (first === -1) return [...kept];
+  const steps: ProcessStep[] = [];
+  const aside: RenderEntry[] = [];
+  for (const entry of kept.slice(first, last + 1)) {
+    if (isTurnMember(entry) || entry.kind === "text") steps.push(entry);
+    else aside.push(entry);
+  }
+  const after = kept.slice(last + 1);
+  return [
+    ...kept.slice(0, first),
+    {
+      kind: "turnProcess",
+      key: `proc:${steps[0]?.key ?? ""}`,
+      steps,
+      durationMs: segmentSpan(steps, results),
+      startedAt: firstChunk ? chunkStartAt(chunk) : null,
+      live,
+      answering: live && after.some((entry) => entry.kind === "text"),
+    },
+    ...aside,
+    ...after,
+  ];
 }
 
 /**
@@ -568,7 +724,7 @@ export function failedFoldKey(view: readonly TurnViewEntry[]): string | null {
   }
   for (let i = start; i < view.length; i += 1) {
     const entry = view[i];
-    if (entry !== undefined && entry.kind === "turnGroup") return entry.key;
+    if (entry !== undefined && (entry.kind === "turnGroup" || entry.kind === "turnProcess")) return entry.key;
   }
   return null;
 }
@@ -629,7 +785,27 @@ export function rollupToolKey(
     const path = (input as Record<string, unknown> | null)?.["path"];
     if (typeof path === "string" && skillForReadPath(path, skills) !== null) return "skill";
   }
+  // 落在文档文件上的 edit / write 单算一类（统计行写「改文档 / 写文档」，不和改代码的 edit 混成「编辑 3」）
+  if (docEditPath(toolName, input) !== null) return toolName === "edit" ? DOC_EDIT_KEY : DOC_WRITE_KEY;
   return parseQualifiedToolName(toolName) !== null ? "mcp" : toolName;
+}
+
+/**
+ * 过程行（章节摘要、跑着时的步骤、首页卡）里工具调用的一句话：read 的是已知技能的 SKILL.md 时写技能名
+ * （与动词「skill」配成「skill slides」），不写绝对路径；其余原样走 toolCallSummary。
+ * 判法与 rollupToolKey / skillForReadPath 同源（尾巴 <slug>/SKILL.md 命中已知技能），插件内置技能同样认。
+ */
+export function toolCallSummaryForRow(
+  toolName: string,
+  input: unknown,
+  skills: ReadonlyArray<{ slug: string; name: string }> = [],
+): string | null {
+  if (toolName === "read") {
+    const path = (input as Record<string, unknown> | null)?.["path"];
+    const skill = typeof path === "string" ? skillForReadPath(path, skills) : null;
+    if (skill !== null) return skill.name;
+  }
+  return toolCallSummary(toolName, input);
 }
 
 export function turnStats(
@@ -785,6 +961,47 @@ export function streamingThinkingKey(
   return block !== undefined && block.type === "thinking" ? `${last.id}:${index}` : null;
 }
 
+/** 流式中的 assistant 记录 id 集：这些消息的 text 块渲染时传 streaming（省公式排版与高亮）。 */
+export function streamingRecordIds(records: readonly TranscriptRecord[]): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const record of records) {
+    if (record.role === "assistant" && record.status === "streaming") ids.add(record.id);
+  }
+  return ids;
+}
+
+/** 收尾扫描回答卡：assistant 记录 id → 卡片与首个 text 单元的 key（只读展示卡替代整条 markdown） */
+export interface ScanAnswerCard {
+  scan: ScanMessage;
+  firstKey: string;
+}
+
+/**
+ * 把落定的 assistant 消息里**整条恰好是一个可解析 fenced json 块**的那些认成扫描回答卡。
+ * 判定按整条消息的全部 text 块拼接（与 collectScanAnswer 同口径：围栏可能被拆在多个
+ * text 块里）；命中后多个 text 单元只在第一个的位置渲染一次卡片，其余跳过。
+ * 纯函数：历史段 / 实时尾段各自在自己的记录上算，引用随记录稳定。
+ */
+export function scanAnswerCards(
+  records: readonly TranscriptRecord[],
+): ReadonlyMap<string, ScanAnswerCard> {
+  const cards = new Map<string, ScanAnswerCard>();
+  for (const record of records) {
+    if (record.role !== "assistant" || record.status === "streaming") continue;
+    let firstKey: string | null = null;
+    const parts: string[] = [];
+    record.content.forEach((block, index) => {
+      if (block.type !== "text") return;
+      if (firstKey === null) firstKey = `${record.id}:${index}`;
+      parts.push(block.text);
+    });
+    if (firstKey === null) continue;
+    const scan = matchScanMessage(parts.join(""));
+    if (scan !== null) cards.set(record.id, { scan, firstKey });
+  }
+  return cards;
+}
+
 /** 思考时长格式：不足 1 秒按 1 秒；满一分钟「1m 05s」（秒两位补零，与 formatToolDuration 同款）。 */
 export function formatThinkingDuration(ms: number, t: Messages): string {
   const seconds = Math.max(1, Math.round(ms / 1000));
@@ -879,21 +1096,22 @@ export function expectedSecondsOf(input: unknown): number | null {
 }
 
 /**
- * 本次调用的 timeout 上限（秒），运行行显示「/ 上限 10:00」。**套闸门同一条下限规则**
- * （COMMAND_TIMEOUT_FLOOR_SECONDS）：闸门抬超时改的是入参对象、不回写会话记录，
- * 这里读到的是模型原始值——模型填 60 实际跑在 600 上，显示也得说 600，否则界面撒谎。
- * 规则一字不差：不填 = null（不设上限，不显示）、比下限小 → 抬到下限、比下限大 → 尊重、
- * 非法 → null（不替 pi 做第二套校验）。
+ * 本次调用的 timeout 上限（秒），运行行显示「/ 上限 10:00」。**套闸门同一条规则**
+ * （shared 的 `gatedCommandTimeout`）：闸门改的是入参对象、不回写会话记录，这里读到的是
+ * 模型原始值——模型填 60 实际跑在 600 上、不填实际跑在 3600 上，显示也得这么说，否则界面撒谎。
+ * 闸门结果不是合法秒数（非法值原样留给 pi 报错）→ null，不显示上限。
  */
 export function timeoutSecondsOf(input: unknown): number | null {
-  const raw = secondsFieldOf(input, "timeout");
-  if (raw === null) return null;
-  return Math.max(raw, COMMAND_TIMEOUT_FLOOR_SECONDS);
+  if (typeof input !== "object" || input === null) return null;
+  return secondsValueOf(gatedCommandTimeout((input as Record<string, unknown>)["timeout"]));
 }
 
 function secondsFieldOf(input: unknown, key: string): number | null {
   if (typeof input !== "object" || input === null) return null;
-  const value = (input as Record<string, unknown>)[key];
+  return secondsValueOf((input as Record<string, unknown>)[key]);
+}
+
+function secondsValueOf(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
   if (value > EXPECTED_SECONDS_MAX) return null;
   return value;
@@ -1059,6 +1277,32 @@ export function delegateCard(result: ToolTranscriptItem | undefined): DelegateCa
   return { childId, title, modelId, workbench, thinkingLevel };
 }
 
+/**
+ * install_plugin 结果 `details.pluginInstall` 里「装上插件」那一行的数据（主进程写的，随会话落盘）。
+ * 没有结果 / 还在跑 / 失败 / 形状不对 / `already`（没有行）都为 null——调用方退回通用工具行。
+ */
+export function pluginInstallRowOf(result: ToolTranscriptItem | undefined): PluginInstallRow | null {
+  if (result === undefined || result.status === "running" || result.status === "error") return null;
+  return parsePluginInstallRow(result.details);
+}
+
+/**
+ * automation_create / automation_update 结果 `details.automationMode` 里「改权限」那一行的数据（主进程写的，随会话落盘）。
+ * 没有结果 / 还在跑 / 失败 / 形状不对 / 这次调用没留行（改成只读、本来就是放行）都为 null。
+ */
+export function automationModeRowOf(result: ToolTranscriptItem | undefined): AutomationModeRow | null {
+  if (result === undefined || result.status === "running" || result.status === "error") return null;
+  return parseAutomationModeRow(result.details);
+}
+
+/**
+ * show_plugin_board 结果 `details.pluginBoard` 的看板（主进程写的快照，随会话落盘）。
+ * 没有结果 / 还在跑 / 失败 / 形状不对都为 null——调用方退回通用工具行。
+ */
+export function pluginBoardOf(result: ToolTranscriptItem | undefined): PluginBoardResult | null {
+  if (result === undefined || result.status === "running" || result.status === "error") return null;
+  return parsePluginBoardDetails(result.details);
+}
 
 /** channelMarkLabel 的 tone：颜色是第二信号，与 ChannelMarkLine 的取色一一对应。 */
 export type ChannelMarkTone = "question" | "reply" | "neutral" | "done" | "failed";
@@ -1300,13 +1544,13 @@ export function branchAnchorIds(
  */
 export function branchAnchorEntries(
   anchorIds: ReadonlySet<string>,
-  entries: readonly (RenderEntry | TurnGroupUnit)[],
+  entries: readonly TurnViewEntry[],
 ): Map<number, string> {
   // 倒序扫：每个锚点消息**首次**命中就是它的最后一个 entry，后面不再覆盖
   const lastOf = new Map<string, number>();
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i];
-    if (entry === undefined || entry.kind === "turnGroup") continue;
+    if (entry === undefined || entry.kind === "turnGroup" || entry.kind === "turnProcess") continue;
     let messageId: string | null = null;
     if (entry.kind === "text" || entry.kind === "thinking" || entry.kind === "toolCall") {
       messageId = entry.messageId;
@@ -1337,6 +1581,17 @@ export function toolCallSummary(toolName: string, input: unknown): string | null
     return typeof value === "string" && value !== "" ? value : null;
   };
   switch (toolName) {
+    // 写计划：「2/5 · 当前那步」——整张清单在右栏「这条任务 › 进度」里
+    case "update_plan": {
+      const items = Array.isArray(record["items"]) ? (record["items"] as Record<string, unknown>[]) : [];
+      if (items.length === 0) return null;
+      const done = items.filter((item) => item?.["status"] === "done").length;
+      const now = items.find((item) => item?.["status"] === "in_progress")?.["text"];
+      return typeof now === "string" ? `${done}/${items.length} · ${now}` : `${done}/${items.length}`;
+    }
+    // 定目标：就是目标那句话
+    case "update_goal":
+      return str("goal");
     case "bash":
     case "powershell": // pi 0.84.3 的独立工具（bash 的 PowerShell 壳，schema 同构）
       return str("command");
@@ -1409,7 +1664,8 @@ export function toolCallSummary(toolName: string, input: unknown): string | null
     case "request_user_action":
       return str("reason");
     default:
-      return null;
+      // 内置命令（builtin-commands.ts）：摘要由注册表项给
+      return builtinCommand(toolName)?.summary(input) ?? null;
   }
 }
 

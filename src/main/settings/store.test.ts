@@ -50,12 +50,52 @@ describe("SettingsStore", () => {
     assert.deepEqual(await readdir(dir), ["settings.json"]);
   });
 
+  test("sidebarAgeDays：选了落盘、换实例读得到，补丁发 null 清除回「不限」，别的键不受影响", async () => {
+    await store.write({ theme: "graphite", sidebarAgeDays: 3 });
+    assert.equal((await new SettingsStore(dir).read()).sidebarAgeDays, 3);
+    const cleared = await store.write({ sidebarAgeDays: null });
+    assert.equal("sidebarAgeDays" in cleared, false);
+    assert.equal(cleared.theme, "graphite");
+    const onDisk = JSON.parse(await readFile(join(dir, "settings.json"), "utf8")) as Record<string, unknown>;
+    assert.equal("sidebarAgeDays" in onDisk, false);
+  });
+
   test("drawer 的部分更新按键合并，不整块覆盖", async () => {
     await store.write({ drawer: { width: 380, docked: ["a"] } });
     // 只发改一个键：其余两个保持——渲染层闭包里的旧值不许冲掉它（真机实测过的竞态）
     await store.write({ drawer: { docked: ["a", "b"] } });
     const read = await store.read();
     assert.deepEqual(read.drawer, { width: 380, docked: ["a", "b"] });
+  });
+
+  test("模型服务页的界面记忆按键合并：切卡片尺寸不抹掉「仅显示已添加」与图的分类", async () => {
+    await store.write({ providersPage: { onlyAdded: true } });
+    await store.write({ providersPage: { chartCategory: "webdev" } });
+    await store.write({ providersPage: { cardSize: "small" } });
+    assert.deepEqual((await store.read()).providersPage, { onlyAdded: true, chartCategory: "webdev", cardSize: "small" });
+  });
+
+  test("插件页的界面记忆按键合并：切卡片尺寸不抹掉「仅显示已启用」，重开 store 还在", async () => {
+    await store.write({ pluginsPage: { onlyEnabled: true } });
+    await store.write({ pluginsPage: { cardSize: "small" } });
+    assert.deepEqual((await store.read()).pluginsPage, { onlyEnabled: true, cardSize: "small" });
+    assert.deepEqual((await new SettingsStore(dir).read()).pluginsPage, { onlyEnabled: true, cardSize: "small" });
+    // 模型服务页的记忆互不相干
+    assert.equal((await store.read()).providersPage, undefined);
+  });
+
+  test("向量设置按键合并：只切模式不抹掉模型、卸载时间与电池偏好", async () => {
+    await store.write({
+      vector: { model: "qwen3-embedding-0.6b", idleUnloadMin: 9, deferOnBattery: false },
+    });
+    await store.write({ vector: { mode: "local" } });
+    assert.deepEqual((await store.read()).vector, {
+      mode: "local",
+      model: "qwen3-embedding-0.6b",
+      idleUnloadMin: 9,
+      deferOnBattery: false,
+    });
+    assert.deepEqual((await new SettingsStore(dir).read()).vector, (await store.read()).vector);
   });
 
   test("落盘的是格式化 JSON，用户手改得动", async () => {

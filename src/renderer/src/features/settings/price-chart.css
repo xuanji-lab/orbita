@@ -36,8 +36,8 @@
 .pc-switch {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  padding: 2px;
+  gap: var(--space-0-5);
+  padding: var(--space-0-5);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
 }
@@ -73,10 +73,32 @@
   gap: var(--space-5);
   align-items: start;
 }
-@media (max-width: 900px) {
-  .pc-wrap {
-    grid-template-columns: 1fr;
-  }
+/* 并排 / 堆叠由组件按 .pc-block 自身宽度定（priceChartLayout），不用视口媒体查询：
+   右栏开着时视口很宽、这一块却只剩 ~470px */
+.pc-wrap.stack {
+  grid-template-columns: 1fr;
+}
+
+/* 太窄不画图：一行说明 + 「收起右栏」按钮 */
+.pc-off {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+.pc-off .icon,
+.pc-off svg {
+  flex: none;
+}
+.pc-off-action {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
 }
 .pc-main {
   min-width: 0;
@@ -170,7 +192,7 @@
   translate: -50% -50%;
   display: grid;
   place-items: center;
-  padding: 2px;
+  padding: var(--space-0-5);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -199,12 +221,16 @@
 .pc-dot.estimated .model-avatar {
   opacity: 0.55;
 }
+/* 借分点：点线框——榜单没评这一档，纵轴借的是最高评测档的分（不进前沿，所以没有绿圈） */
+.pc-dot.borrowed {
+  border: 1.5px dotted var(--color-text-secondary);
+}
 .pc-label {
   position: absolute;
   top: 50%;
   left: calc(100% + 6px);
   translate: 0 -50%;
-  padding: 1px 6px;
+  padding: 1px var(--space-1-5);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
   background: var(--color-bg-panel);
@@ -243,8 +269,13 @@
   opacity: 0;
 }
 .pc-label-level {
-  margin-left: 4px;
+  margin-left: var(--space-1);
   font-family: var(--font-family-mono);
+  color: var(--color-text-tertiary);
+}
+/* 借分点的后缀：正文字体（中文用等宽字体会被拉开） */
+.pc-label-tag {
+  margin-left: var(--space-1-5);
   color: var(--color-text-tertiary);
 }
 
@@ -261,7 +292,7 @@
   top: 50%;
   left: calc(100% + 6px);
   translate: 0 -50%;
-  padding: 1px 6px;
+  padding: 1px var(--space-1-5);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
   background: var(--color-bg-panel);
@@ -299,7 +330,7 @@
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
   display: grid;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 .pc-pop.right {
   transform: translateX(16px);
@@ -319,8 +350,8 @@
 .pc-tip-name {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 2px;
+  gap: var(--space-1-5);
+  margin-bottom: var(--space-0-5);
   color: var(--color-text-primary);
   font-weight: var(--weight-semibold);
 }
@@ -342,7 +373,7 @@
   color: var(--color-text-tertiary);
 }
 .pc-tip-basis {
-  margin-left: 6px;
+  margin-left: var(--space-1-5);
   color: var(--color-text-tertiary);
 }
 .pc-mono {
@@ -374,6 +405,10 @@
   border: 1.5px dashed var(--color-text-tertiary);
   background: transparent;
 }
+.pc-sw.borrowed {
+  border: 1.5px dotted var(--color-text-secondary);
+  background: transparent;
+}
 .pc-ln {
   width: 16px;
   border-top: 1px dashed var(--color-border-strong);
@@ -392,7 +427,7 @@
 .pc-best-head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--color-border-subtle);
   font-size: var(--font-size-sm);
@@ -465,7 +500,7 @@
 .pc-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   height: 26px;
   padding: 0 9px;
   border: 1px solid var(--color-border-subtle);
@@ -497,18 +532,4 @@
 }
 .pc-source a:hover {
   color: var(--color-text-secondary);
-}
-
-/* 「用过、但榜单没评的档」：与其余两组同一种 chip，可点开写出榜单评过的档 */
-.pc-chip-button {
-  font-family: inherit;
-  cursor: pointer;
-}
-.pc-chip-button:hover {
-  border-color: var(--color-border-strong);
-  color: var(--color-text-primary);
-}
-.pc-chip-meta {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
 }

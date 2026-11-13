@@ -214,6 +214,39 @@ describe("pendingCreates —— 首轮开机与 created 事件的竞态（债务
   });
 });
 
+describe("ensure —— fork 同步抛错不缓存在 ready 里（Windows ENOTCONN）", () => {
+  test("第一次同步抛错交给调用方，第二次请求重新拉起并成功", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    let fail = true;
+    let forks = 0;
+    let child!: FakeChild;
+    const host = new AgentHostCore(
+      () => {
+        forks += 1;
+        if (fail) {
+          fail = false;
+          throw new Error("spawn ENOTCONN");
+        }
+        child = new FakeChild();
+        return child;
+      },
+      () => undefined,
+    );
+
+    // 第一次：forkRuntime 同步抛错 → 这次调用方拿到错误，而不是被挂起
+    await assert.rejects(firstSubmit(host, "s1"), /ENOTCONN/);
+    assert.equal(forks, 1);
+
+    // 第二次：同一个 host 还能拉起（ready 没被缓存的 rejected promise 占住），请求成功
+    const pending = firstSubmit(host, "s1");
+    child.emit({ type: "ready" });
+    await flush();
+    child.emit({ type: "created", sessionId: "s1", piSessionFile: "pi/abc.jsonl" });
+    assert.equal(await pending, "pi/abc.jsonl");
+    assert.equal(forks, 2);
+  });
+});
+
 describe("内建 provider 目录的到达时机（债务 B #2）", () => {
   test("目录未到就等，builtins 事件一到立刻返回；之后走缓存", async (t) => {
     t.mock.timers.enable({ apis: ["setTimeout"] });
@@ -442,6 +475,55 @@ describe("steer —— 父→子注入的发送侧（子会话）", () => {
   test("进程没起（或已死）就抛——调用方（deliverToChild）据此按投递失败处理", async () => {
     const ctx = await freshHost();
     assert.throws(() => ctx.host.steer("s1", "x", "steer"), /agent runtime is not running/);
+  });
+});
+
+describe("answerModelCosts —— 派发参考的回执", () => {
+  test("成功带 text，失败只带 error；进程没了就静默", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const ctx = await freshHost();
+    ctx.host.answerModelCosts("r0", { ok: false, error: "gone" });
+    assert.equal(ctx.forks(), 0);
+
+    const pending = firstSubmit(ctx.host, "s1");
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    ctx.child().emit({ type: "created", sessionId: "s1", piSessionFile: null });
+    await pending;
+
+    ctx.host.answerModelCosts("r1", { ok: true, text: "model | thinking" });
+    ctx.host.answerModelCosts("r2", { ok: false, error: "boom" });
+    assert.deepEqual(ctx.child().posted.at(-2), { type: "modelCostsResult", requestId: "r1", ok: true, text: "model | thinking" });
+    assert.deepEqual(ctx.child().posted.at(-1), { type: "modelCostsResult", requestId: "r2", ok: false, error: "boom" });
+  });
+});
+
+describe("answerAutomation —— 自动化工具请求的回执", () => {
+  test("成功回执逐字段带上卡、列表与「改权限」那一行（漏了行，工具结果里就没有那一行）；失败只带 error", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const ctx = await freshHost();
+    const pending = firstSubmit(ctx.host, "s1");
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    ctx.child().emit({ type: "created", sessionId: "s1", piSessionFile: null });
+    await pending;
+
+    const card = {
+      id: "au1",
+      title: "每日一篇",
+      schedule: { kind: "daily" as const, time: "08:00" },
+      target: "new_session" as const,
+      status: "active" as const,
+      nextRunAt: 1,
+      runCount: 0,
+    };
+    const modeRow = { state: "pending" as const, requestId: "r1", automationId: "au1", title: "每日一篇", sessionMode: "manual" as const };
+    ctx.host.answerAutomation("q1", { ok: true, text: "NOT changed", automation: card, modeRow });
+    ctx.host.answerAutomation("q2", { ok: true, text: "list", automations: [card] });
+    ctx.host.answerAutomation("q3", { ok: false, error: "No such automation" });
+    assert.deepEqual(ctx.child().posted.at(-3), { type: "automationResult", requestId: "q1", ok: true, text: "NOT changed", automation: card, modeRow });
+    assert.deepEqual(ctx.child().posted.at(-2), { type: "automationResult", requestId: "q2", ok: true, text: "list", automations: [card] });
+    assert.deepEqual(ctx.child().posted.at(-1), { type: "automationResult", requestId: "q3", ok: false, error: "No such automation" });
   });
 });
 

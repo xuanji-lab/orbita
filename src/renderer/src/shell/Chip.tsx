@@ -70,17 +70,19 @@ export function Chip(props: {
         minWidth: props.fixedWidth,
         gap: props.compact === true ? 0 : 5,
         maxWidth: 260,
-        // 带头像的芯片（模型芯片，头像 20px）收窄上下与左边距：芯片总高仍与同排的文字芯片齐平，
-        // 头像贴近左缘、不显得被框在一个更大的胶囊里
-        // 只有 leading、没有文字（用量环）：四边都 2px——与模型芯片同高，环与头像同尺寸对齐
+        // 高度钉在控件台阶上（--control-height-xs，24）：原先由 12px 字 + 上下 3px 撑出来，
+        // 实测 22.5–23px，一排芯片半像素级没站齐（2026-10-29 精装审计）。
+        // 带头像的芯片（模型芯片，头像 20px）收窄左边距、上下 2px：头像贴近左缘、不显得被框在
+        // 一个更大的胶囊里；只有 leading、没有文字（用量环）：四边都 2px，环与头像同尺寸对齐
+        height: "var(--control-height-xs)",
         padding:
           props.compact === true
-            ? "3px 6px"
+            ? "0 var(--space-1-5)"
             : props.leading !== undefined
               ? bare
-                ? "2px"
-                : "2px 8px 2px 2px"
-              : "3px 8px",
+                ? "var(--space-0-5)"
+                : "var(--space-0-5) var(--space-2) var(--space-0-5) var(--space-0-5)"
+              : "0 var(--space-2)",
         border: 0,
         borderRadius: "var(--radius-md)",
         fontFamily: "var(--font-family-base)",

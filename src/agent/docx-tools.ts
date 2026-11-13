@@ -40,10 +40,10 @@ import { imageMimeOf, shrinkIfNeeded } from "./image-tools.ts";
  */
 
 /** 单次最多输出多少字符的正文。上下文护栏：read_pdf 20 页密排文本同量级 */
-const DOCX_MAX_CHARS_PER_CALL = 30000;
+export const DOCX_MAX_CHARS_PER_CALL = 30000;
 
 /** images=true 时单次最多带几张内嵌图（show_image 的画廊上限同款） */
-const DOCX_IMAGE_MAX_COUNT = 6;
+export const DOCX_IMAGE_MAX_COUNT = 6;
 
 /** 内嵌图长边上限（转录不存原图——show_image 的 SHOW_IMAGE_MAX_EDGE 同款纪律） */
 const DOCX_IMAGE_MAX_EDGE = 2000;
@@ -52,7 +52,7 @@ const DOCX_IMAGE_MAX_EDGE = 2000;
 const DOCX_IMAGE_MAX_BYTES = 30 * 1024 * 1024;
 
 /** 头注大纲最多列几个 heading（read_pdf 图表索引 15 条同款护栏） */
-const DOCX_OUTLINE_MAX = 15;
+export const DOCX_OUTLINE_MAX = 15;
 
 // ─── HTML → markdown 薄转换 ────────────────────────────────────────────────
 // mammoth 的输出是单行拼接的规整 HTML（它自己生成的，属性无裸 >），标签
@@ -482,12 +482,10 @@ export function createDocxTools(cwd: string): ToolDefinition[] {
     name: "read_docx",
     label: "read_docx",
     description:
-      "Read a Word document (.docx) as structured markdown: headings, paragraphs, lists, tables, links, " +
-      "footnotes and comments (appended at the end). Word documents have no fixed pages, so content is " +
-      "addressed by block numbers — the header carries a section outline with the starting block number of " +
-      "each heading; jump with offset. Embedded images appear as [image N: alt] placeholders by default; " +
-      "pass images=true to receive the images of the current block range as actual image blocks (at most 6, " +
-      "vision models only). Use this instead of read for any .docx file — read cannot show its content.",
+      "Read a Word document (.docx) as structured markdown (headings, lists, tables, links, footnotes, comments), " +
+      "addressed by block number — the header carries a section outline with each heading's starting block; jump " +
+      "with offset. Use this instead of read for any .docx file — read cannot show its content. For images, long " +
+      "documents and comments, read the `reading` skill.",
     parameters: {
       type: "object",
       properties: {
@@ -497,17 +495,15 @@ export function createDocxTools(cwd: string): ToolDefinition[] {
         },
         offset: {
           type: "number",
-          description: "Block number to start from (1-indexed; the outline in the header gives each section's starting block). Default 1.",
+          description: "Block number to start from (1-indexed). Default 1.",
         },
         limit: {
           type: "number",
-          description: "Number of blocks to read. Default: as many as fit the character budget (about 30000 chars).",
+          description: "Number of blocks to read. Default: as many as fit about 30000 characters.",
         },
         images: {
           type: "boolean",
-          description:
-            "Receive the embedded images of the current block range as image blocks (at most 6 per call, " +
-            "vision models only). Default false — text placeholders [image N: alt] mark where images sit.",
+          description: "Return the embedded images of the current block range as images (vision models only, at most 6). Default false.",
         },
       },
       required: ["path"],

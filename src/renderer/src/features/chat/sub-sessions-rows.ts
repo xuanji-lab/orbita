@@ -54,25 +54,26 @@ export function subSessionRowStatus(input: {
 }
 
 /**
- * 排序优先级（2026-10-12 收件箱裁决）：数字越小越靠前——**等你（question / 审批）
- * 最前，其次 failed，其次 done，其次 running**；stopped / idle 收尾（终局或还没
- * 说话，都不需要用户动手）。注意与 subSessionRowStatus 的支配关系不是一回事：
+ * 排序优先级：数字越小越靠前——**等你（question / 审批）最前，其次 running，其次 failed，
+ * 其次 done**；stopped / idle 收尾（终局或还没说话，都不需要用户动手）。
+ * running 原在 done 之后（2026-10-12 收件箱裁决）；2026-11-06 用户改：子会话一多（十几二十个），
+ * 新派出、正在跑的被已完成的压到底部，每次都得往下翻——在跑的才是此刻在盯的，提到等你之后。注意与 subSessionRowStatus 的支配关系不是一回事：
  * 那一处说的是这一行自己标什么，这里说的是它排在哪里。failed 压过 done：失败
  * 常要人善后，完成只是知会。
  */
 const STATUS_PRIORITY: Record<SubSessionRowStatus, number> = {
   waiting: 0,
   approval: 0,
-  failed: 1,
-  done: 2,
-  running: 3,
+  running: 1,
+  failed: 2,
+  done: 3,
   stopped: 4,
   idle: 4,
 };
 
 /**
- * 列表层的行排序（收件箱）：**等你（question / 审批）最前，其次 failed，其次
- * done，其次 running**；同组之内**新的在前**（lastAt 倒序——通道里最后一条消息
+ * 列表层的行排序（收件箱）：**等你（question / 审批）最前，其次 running，其次
+ * failed，其次 done**；同组之内**新的在前**（lastAt 倒序——通道里最后一条消息
  * 的时间，没有账本的按会话创建时间）。收件箱是待办清单：越新的越可能是你现在
  * 要处理的，老的沉下去。
  */
@@ -85,7 +86,7 @@ export function sortSubSessionRows<T extends { status: SubSessionRowStatus; last
 }
 
 /**
- * 行首三节竖条亮几节（styles.css 的 `.status-bar`，与侧栏 / 铃铛清单同一根）：
+ * 行首状态饼的档位（shell/StatusPie.tsx 的 `.status-pie`，与侧栏 / 铃铛清单同一个）：
  * running = 1/3 蓝、waiting / approval = 2/3 橙、done = 3/3 绿、failed = 3/3 红；
  * stopped / idle 不亮——「没什么要你做的」是整个东西退场，不是留一根灰杠。
  * stopped 是用户的裁决不是故障，与 idle 同槽。

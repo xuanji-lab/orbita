@@ -1,4 +1,5 @@
 import { Icon } from "../../shell/Icon";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import type { ScanMessage } from "./carryover-parse.ts";
 import { useT } from "../../locale.ts";
 
@@ -41,7 +42,7 @@ export function CarryoverScanCard(props: { scan: ScanMessage }) {
           ))}
         </Group>
       )}
-      <Group icon="list-todo" heading={left.length > 0 ? t.carryover.itemsToCarry(left.length) : t.carryover.nothingToCarry}>
+      <Group icon={FEATURE_ICON.carryovers} heading={left.length > 0 ? t.carryover.itemsToCarry(left.length) : t.carryover.nothingToCarry}>
         {left.map((item, index) => (
           <Line key={index} title={item.title} note={item.detail} />
         ))}
@@ -50,7 +51,7 @@ export function CarryoverScanCard(props: { scan: ScanMessage }) {
   );
 }
 
-function Group(props: { icon: "circle-check" | "list-todo"; heading: string; children: React.ReactNode[] }) {
+function Group(props: { icon: "circle-check" | (typeof FEATURE_ICON)["carryovers"]; heading: string; children: React.ReactNode[] }) {
   return (
     <div style={{ display: "grid", gap: "var(--space-2)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
