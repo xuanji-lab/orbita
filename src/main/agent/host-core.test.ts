@@ -67,6 +67,7 @@ const TURN_FIELDS = {
   piSessionDir: "C:/pi-sessions",
   attachmentsDir: "C:/sessions/test.attachments",
   protectedPaths: ["C:/pi-sessions"],
+  protectedFiles: ["C:/UserData/automations.json"],
   skillsDirs: ["C:/skills"],
   workspaceId: null,
   mcpServers: {},
