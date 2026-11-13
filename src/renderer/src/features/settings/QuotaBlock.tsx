@@ -82,7 +82,9 @@ export function QuotaBlock(props: {
   const problemLine =
     failure === null ? null : (
       <div className="q-line" data-tone={failure === "auth" ? "danger" : undefined}>
-        <Icon name={failure === "unsupported" || failure === "no-plan" || failure === "console-only" ? "info" : "triangle-alert"} size={14} />
+        <Icon name={failure === "unsupported" || failure === "no-plan" || failure === "console-only" || failure === "empty"
+          ? "info"
+          : "triangle-alert"} size={14} />
         <span>{quotaProblemText(failure, t, props.hasKey)}</span>
         {failure === "auth" || failure === "unsupported" || failure === "no-plan" || failure === "console-only" ? null : (
           <button type="button" className="q-retry" disabled={busy} onClick={() => void load(true)}>
