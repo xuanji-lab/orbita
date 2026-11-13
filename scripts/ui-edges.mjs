@@ -67,6 +67,26 @@ const CHECKS = [
     skipNoTrailing: true,
   },
   {
+    name: "PPTX 工具行：用默认应用打开钉在右血线",
+    row: ".pptx-toolbar",
+    leading: ".pptx-toolbar-title",
+    trailing: ".pptx-toolbar-actions",
+    // .pptx-toolbar 的横向内边距 var(--space-3)；没有打开 pptx 时跳过
+    rightPad: 12,
+    skipNoTrailing: true,
+  },
+  {
+    name: "Skills·行：归属点阵钉在右血线",
+    row: ".skill-row",
+    leading: ".skill-row-main",
+    trailing: ".set-dots",
+    // .skill-row 的右内边距 var(--space-2)（右栏统一：行内缩在 .panel-list 里）；
+    // dim / missing 行没有点阵，跳过。悬停时点阵让位给「选用」键是血线规则的悬停
+    // 组合例外，这里量静止态
+    rightPad: 8,
+    skipNoTrailing: true,
+  },
+  {
     name: "文档面板·挑选列表行：改动时间钉在右血线",
     row: ".dp-picker-row",
     leading: ".orbita-icon",

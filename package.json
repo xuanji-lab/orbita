@@ -36,6 +36,7 @@
     "diff": "^9.0.0",
     "docx": "9.15.2",
     "electron-updater": "6.8.9",
+    "exceljs": "4.4.0",
     "jszip": "3.10.2",
     "katex": "0.16.47",
     "mammoth": "1.13.0",
@@ -87,7 +88,8 @@
     },
     "files": [
       "out/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/exceljs/**"
     ],
     "extraResources": [
       {
