@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
+import type { ToolTranscriptItem, TranscriptItem } from "@shared/transcript";
 import { BEFORE_PLAN, bucketAt, groupBySteps, OUTSIDE_PLAN, planAwaitingIn, planNoticeOf, planTimeline, planView, stepActiveSince } from "./plan-timeline.ts";
 import type { ProcessChapter } from "../chat/turn-process.ts";
 

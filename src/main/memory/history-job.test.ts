@@ -5,7 +5,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import type { TranscriptItem } from "../../shared/transcript.ts";
 import type { MemoryHistoryStatus, MemoryHistoryStepOutcome } from "../../shared/memory.ts";
 import type { SessionRecord } from "../../shared/session.ts";
 import {

@@ -19,7 +19,7 @@ import type {
   ToolTranscriptItem,
   TranscriptItem,
   TranscriptProgress,
-} from "@earendil-works/pi-protocol";
+} from "../shared/transcript.ts";
 
 /** 0.84.3 起协议只导出 Schema 常量不导出内容类型——从 TranscriptItem 反推，不为此引 typebox */
 type AssistantContent = AssistantTranscriptItem["content"][number];

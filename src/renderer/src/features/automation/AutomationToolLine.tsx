@@ -1,4 +1,4 @@
-import type { ToolTranscriptItem } from "@earendil-works/pi-protocol";
+import type { ToolTranscriptItem } from "@shared/transcript";
 import { useT } from "../../locale.ts";
 import { EXIT_CARD_KICKER, EXIT_CARD_STYLE, ExitCard } from "../chat/ExitCard";
 import { PanelButton } from "../../shell/RightPanel";

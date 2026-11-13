@@ -9,7 +9,7 @@
  * sessionId 从第一天就贯穿所有消息：一个 agent runtime 进程要托管 N 个 session，
  * 事后再补这个参数意味着每一处状态读写都要回头改。
  */
-import type { SessionPhase, ThinkingLevel as PiThinkingLevel, TranscriptProgress } from "@earendil-works/pi-protocol";
+import type { SessionPhase, ThinkingLevel as PiThinkingLevel, TranscriptProgress } from "./transcript.ts";
 import type { PermissionAnswer, PermissionMode } from "./permission.ts";
 import type { ThinkingLevel } from "./thinking.ts";
 import type { McpServer, McpStatus, McpStatusSnapshot } from "./mcp.ts";

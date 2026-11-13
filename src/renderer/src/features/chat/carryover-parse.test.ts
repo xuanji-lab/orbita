@@ -1,7 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { collectScanAnswer, locateMessageRange, matchScanMessage, scanSubmitInput } from "./carryover-parse.ts";
-import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import type { TranscriptItem } from "@shared/transcript";
 
 const msg = (id: string, role: "user" | "assistant", text: string): TranscriptItem =>
   // 两种角色的必填形状不同（assistant 要 model/status/stopReason），这里只关心

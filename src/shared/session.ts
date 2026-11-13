@@ -8,7 +8,7 @@
  *   sessions/<id>.meta.json   本文件的 SessionMeta，可变，原子写
  *   sessions/<id>.jsonl       只追加，一行一个 SessionRecord
  */
-import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import type { TranscriptItem } from "./transcript.ts";
 import type { AgentStats } from "./agent-ipc.ts";
 import { parseAutomationRunLabel, type AutomationRunLabel } from "./automation.ts";
 import { CHANNEL_MESSAGE_KINDS, type ChannelMessageKind } from "./channel.ts";

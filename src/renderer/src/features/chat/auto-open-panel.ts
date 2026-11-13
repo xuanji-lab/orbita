@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import type { TranscriptItem } from "@shared/transcript";
 import { readOpenPanel, type OpenPanelHint } from "../../../../shared/builtin-command.ts";
 import { requestOpenPanel } from "../../shell/open-panel.ts";
 

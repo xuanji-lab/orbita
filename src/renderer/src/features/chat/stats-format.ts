@@ -8,7 +8,7 @@
  * （第二个消费者出现才建那一层）。
  */
 import type { AgentStats } from "../../../../shared/agent-ipc.ts";
-import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import type { TranscriptItem } from "@shared/transcript";
 import { formatTokens } from "../../utils/format-tokens.ts";
 import { messageSpeed } from "../../../../shared/message-speed.ts";
 import type { Messages } from "../../messages-en.ts";

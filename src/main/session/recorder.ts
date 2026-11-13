@@ -27,7 +27,7 @@
  * 改档时不记（理由见 shared/session.ts），价格 · 能力图按「型号 × 档」算每任务成本要靠这一章。
  * 手动压缩时 runtime 会先推 off、压完再推回原档；压缩不产生 assistant 记录，盖到的总是回来那一档。
  */
-import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import type { TranscriptItem } from "../../shared/transcript.ts";
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
 import { parseChannelPrompt } from "../../shared/channel.ts";
 import { parsePlanNotes, PLAN_TOOL_NAME } from "../../shared/plan.ts";

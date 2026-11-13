@@ -14,7 +14,7 @@
  */
 
 /** 思考档词汇表与 pi 同源：pi 认几档我们认几档（7 档，off…max）。 */
-import type { ThinkingLevel as PiThinkingLevel } from "@earendil-works/pi-protocol";
+import type { ThinkingLevel as PiThinkingLevel } from "./transcript.ts";
 
 /** pi 全集（不收窄——曾被收窄到 5 档，后被目录数据推翻：glm-5.3 只有 low/high/max，claude 各型号的 off / xhigh 有无各不相同，档位本来就因模型而异，裁剪词汇表只会递增假选项） */
 export type ThinkingLevel = PiThinkingLevel;

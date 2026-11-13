@@ -16,7 +16,7 @@ import {
   virtualHistoryRows,
   type VirtualHistoryRow,
 } from "./virtual-history.ts";
-import type { ToolTranscriptItem } from "@earendil-works/pi-protocol";
+import type { ToolTranscriptItem } from "@shared/transcript";
 import type { ScanAnswerCard, ToolResultIndex, TurnViewEntry } from "./tool-results.ts";
 
 /** 测试用的最小条目工厂：只塞判定会读到的字段 */

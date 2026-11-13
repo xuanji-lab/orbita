@@ -7,7 +7,7 @@ import {
   selectTranscript,
   type TranscriptState,
 } from "@earendil-works/pi-coding-agent/client";
-import type { SessionSnapshot } from "@earendil-works/pi-protocol";
+import type { SessionSnapshot } from "../shared/transcript.ts";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 

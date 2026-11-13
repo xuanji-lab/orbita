@@ -15,7 +15,7 @@
  * 纯模块：不 import React，可被 `node --test` 直接加载。
  */
 import { diffWords } from "diff";
-import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
+import type { ToolTranscriptItem, TranscriptItem } from "@shared/transcript";
 import type { DelegateCard, ReadTaskCard } from "@shared/agent-ipc";
 import type { ChannelMessageKind } from "@shared/channel";
 import type { CompactedRecord, IntentRecallRecord, SessionRecord, TranscriptRecord } from "@shared/session";

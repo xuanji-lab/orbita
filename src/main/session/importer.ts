@@ -41,7 +41,7 @@ import type {
   AssistantTranscriptItem,
   ToolTranscriptItem,
   TranscriptItem,
-} from "@earendil-works/pi-protocol";
+} from "../../shared/transcript.ts";
 import { writeTextAtomic } from "../atomic-write.ts";
 import { isNotFound } from "../fs-errors.ts";
 // path 是不是在 root 下面：原来在本文件里，欠了审查面板 / 文件面板 / 内置浏览器都要同一条判据，搬到共用处

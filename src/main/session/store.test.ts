@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import type { TranscriptItem } from "../../shared/transcript.ts";
 import { branchRoles, SessionStore } from "./store.ts";
 import { ChannelStore } from "../channel/store.ts";
 import { UNASSIGNED_PROVIDER_ID, SESSION_INITIAL_RECORDS, SESSION_PAGE_RECORDS, sortSessions, type ChannelMarkRecord, type SessionMeta, type SessionRecord } from "../../shared/session.ts";

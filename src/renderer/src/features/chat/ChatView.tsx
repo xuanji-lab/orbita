@@ -2,7 +2,7 @@ import { createContext, Fragment, memo, useCallback, useContext, useEffect, useL
 import type { ReactNode } from "react";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { QuoteToolbar, type QuoteCandidate } from "../../shell/QuoteToolbar";
-import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
+import type { ToolTranscriptItem, TranscriptItem } from "@shared/transcript";
 import { ApprovalBar } from "./ApprovalBar";
 import { QueueStrip } from "./QueueStrip";
 import { compactionBoundaryStatus, mergeSideRecords } from "./session-states";
