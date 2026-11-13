@@ -1224,8 +1224,9 @@ void app.whenReady().then(async () => {
   // 提示音记账（notify:chime-log）：每真响一声记一行，事后对证「那一声是谁」
   registerNotifyIpc(new ChimeLog(join(configDir, "chime-log.jsonl")));
   // provider 域的 handler 要带 agentHost：OAuth 令牌的 Test 探测改走 agent 进程（真会话同源客户端）。
+  // 第三个参数是额度缓存的目录（<userData>/quota-cache.json）；缓存模块自己不在顶层读 app。
   // 放在 agentHost 建好之后注册；同为 ipcMain.handle，注册顺序不影响谁先谁后可用。
-  registerProviderIpc(providers, agentHost);
+  registerProviderIpc(providers, agentHost, configDir);
   // 侧栏用量格与价格 · 能力图：同一本任务账本，型号显示名 / 单价要服务商声明与 pi 目录
   registerUsageIpc({ ledger: taskLedger, providers: () => providers.load(), catalog: () => agentHost.listBuiltins() });
   // 设置页的图与 agent 的 model_costs 工具读同一份（同一个 memo）：priceChart 在上面
