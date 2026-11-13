@@ -4,7 +4,7 @@
  * 两条边界共用这一份定义：
  *   主进程 ↔ agent utility 进程（parentPort 信封）
  *   主进程 ↔ renderer（ipcMain / contextBridge）
- * 两边搬运的载荷都是 **pi-protocol 的类型**，我们只定义信封（guideline §三）。
+ * 两边搬运的载荷都是 **src/shared/transcript.ts 的转录类型**（收编自 pi-protocol 0.84.3），我们只定义信封（guideline §三）。
  *
  * sessionId 从第一天就贯穿所有消息：一个 agent runtime 进程要托管 N 个 session，
  * 事后再补这个参数意味着每一处状态读写都要回头改。

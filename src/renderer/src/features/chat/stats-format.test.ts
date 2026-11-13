@@ -119,7 +119,7 @@ describe("usageBreakdown —— 菜单里那几行", () => {
 
 // ── token 速度（usage-speed-X）：真值在回答的终态帧上，这里只有展示支援 ──
 
-/** assistant 帧的最小构造；字段按 pi-protocol 的形状，测试只关心记账用得到的那几个 */
+/** assistant 帧的最小构造；字段按转录协议的形状（shared/transcript.ts），测试只关心记账用得到的那几个 */
 const assistantFrame = (over: {
   id: string;
   status: "streaming" | "complete" | "error";

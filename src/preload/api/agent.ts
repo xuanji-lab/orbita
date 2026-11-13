@@ -1,6 +1,6 @@
 /**
  * agent 域的 contextBridge 面 —— 四层契约的第 3 层。
- * 只依赖 electron 与 src/shared。事件流是订阅式：renderer 拿到的是 pi-protocol 的 progress，
+ * 只依赖 electron 与 src/shared。事件流是订阅式：renderer 拿到的是转录 progress（shared/transcript.ts），
  * 用 pi 自带的 transcript 归约器消费，主进程不预处理。
  */
 import { ipcRenderer } from "electron";

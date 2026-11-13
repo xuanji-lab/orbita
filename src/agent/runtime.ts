@@ -11,7 +11,7 @@
  * 服务端按请求前缀命中，与客户端是否持有对象无关。
  *
  * 本文件只做三件事：起 pi 的 AgentSession、把它的事件经 TranscriptAdapter 翻成
- * pi-protocol 的 progress、经 parentPort 发回主进程。**不碰 UI，不碰持久化路径策略。**
+ * 转录 progress（shared/transcript.ts）、经 parentPort 发回主进程。**不碰 UI，不碰持久化路径策略。**
  */
 import { randomUUID } from "node:crypto";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
