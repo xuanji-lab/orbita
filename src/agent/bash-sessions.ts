@@ -2,41 +2,46 @@
  * bash 会话表 —— 交还给模型的长命令都挂在这里。
  *
  * **为什么要这张表**：签到点把一次阻塞的 bash 调用变成「进程还在跑、控制权已回到模型」
- * 的形态。工具调用已经返回，模型之后只能通过 `bash_poll` / `bash_stop` / `bash_list`
- * 跟它打交道，所以「进程 + 输出 + 退出码 + 寿命」必须有一个进程级的登记处，
- * 不能藏在某次 exec 的闭包里——那次调用的栈已经退了。
+ * 的形态。工具调用已经返回，模型之后只能通过 `bash_list` / `bash_stop` 跟它打交道，
+ * 所以「进程 + 输出 + 退出码 + 寿命」必须有一个进程级的登记处，不能藏在某次 exec
+ * 的闭包里——那次调用的栈已经退了。
  *
- * **缓冲先丢头**：输出是流式的，模型要的是「最近发生了什么」（tail + 自上次以来的行数），
- * 不是全量。每条命令都可能跑几小时，全留会把 utility 进程的内存吃穿，而丢尾会把
- * 最有用的最后几行丢掉。所以环形缓冲只保留**尾部** 256 KB / 2000 行，先到的先丢。
+ * **结果怎么回到对话**：会话结束（自然退出 / 被停 / 寿命到）时 `onEnd` 恰好被调一次，
+ * 把命令全文、退出码、尾部输出、结束原因与耗时交给 runtime；runtime 负责写进 pi 的
+ * 会话本子与 orbita 转录（见 runtime 的 deliverBashSessionEnd）。**没有轮询**：
+ * 模型不再决定「等多久、要不要再看」。
  *
- * **会话的三种死法**（都由这里收尾）：寿命上限、模型显式 `bash_stop`、用户按停止
- * （原 turn 的 AbortSignal）。**没有一条是「到点就杀」**——到点只是签到，交还控制权。
+ * **缓冲先丢头**：输出是流式的，模型要的是「最后发生了什么」，不是全量。每条命令
+ * 都可能跑几小时，全留会把 utility 进程的内存吃穿，而丢尾会把最有用的最后几行丢掉。
+ * 所以环形缓冲只保留**尾部** 256 KB / 2000 行，先到的先丢。
+ *
+ * **会话的四种死法**（都由这里收尾）：寿命上限、模型显式 `bash_stop`、用户按停止
+ * （原 turn 的 AbortSignal）、应用退出。**没有一条是「到点就杀」**——到点只是签到，
+ * 交还控制权；结束之后结果自动写回。
  */
 import type { ChildProcess } from "node:child_process";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { BashSessionEndReason, BashSessionStatus } from "../shared/bash-session.ts";
+import {
+  formatBashDuration,
+  type BashSessionEndReason,
+} from "../shared/bash-session.ts";
 
 /** 每会话保留的字节上限。256 KB ≈ 一个长构建的一屏历史，够看趋势，不够撑爆内存。 */
 export const TAIL_MAX_BYTES = 256 * 1024;
 /** 每会话保留的行数上限。与字节上限先到先算——两种爆炸形态（超长单行 / 海量短行）都要挡 */
 export const TAIL_MAX_LINES = 2000;
-/** poll 回给模型的 tail 行数：只给最后 40 行，模型的判断依据是「走势」，不是全文 */
-export const TAIL_LINES = 40;
-/** 会话寿命上限：4 小时。这是兜底，不是使用方式——正常情况下模型会 poll / stop */
+/** 写回对话的结果取尾部多少行：结果进模型上下文，全给 2000 行太贵，200 行够看结局 */
+export const RESULT_TAIL_LINES = 200;
+/** `bash_stop` / `bash_list` 给模型的 tail 行数：看走势，不看全文 */
+export const TOOL_TAIL_LINES = 40;
+/** 会话寿命上限：4 小时。这是兜底，不是使用方式——正常情况下命令会自己结束或被停 */
 export const SESSION_LIFETIME_MS = 4 * 60 * 60 * 1000;
-/** 同时存活的会话上限。每个都是一个真实的子进程树，不设上限就是资源耗尽 */
-export const MAX_SESSIONS = 8;
-/** 命令结束后会话还留多久可查：10 分钟。模型可能隔几轮才回来 poll 最后一个结果 */
+/** 命令结束后会话还留多久可查：10 分钟。模型可能隔几轮才回来 bash_list 看一眼 */
 export const SESSION_RETENTION_MS = 10 * 60 * 1000;
-/** poll 的等待时间夹取范围（秒）：太短等于空转，太长模型又变成干等 */
-export const POLL_MIN_WAIT_SECONDS = 1;
-export const POLL_MAX_WAIT_SECONDS = 600;
-/** poll 未指定等待时间的默认值（秒）：对齐签到间隔，模型不填也有一档合理等待 */
-export const POLL_DEFAULT_WAIT_SECONDS = 120;
+/** 杀掉之后等子进程真正退出的时限。超时仍没收到退出事件，也照样结一次结果（不吞记录） */
+const KILL_SETTLE_MS = 3_000;
 
-/** 会话结束的原因。只有这几种，界面上要能如实说「为什么没了」。
- *  取值与 `shared/bash-session.ts` 同一份（那是界面与 agent 共用的契约），这里只起名 */
+/** 会话结束的原因。取值与 `shared/bash-session.ts` 同一份（那是界面与 agent 共用的契约） */
 export type SessionEndReason = BashSessionEndReason;
 
 function countNewlines(chunk: Buffer): number {
@@ -52,7 +57,7 @@ function countNewlines(chunk: Buffer): number {
  *
  * 丢弃单位是「字节 + 行」：先按字节截到 256 KB，再按行截到 2000 行。行截断必须落在
  * 换行之后，否则 tail 的第一行会是半句；字节截断允许落在行中间（256 KB 已经远超
- * 40 行，第一行半句不影响 tail 的可读性）。
+ * 结果行数，第一行半句不影响可读性）。
  */
 export class TailBuffer {
   private chunks: Buffer[] = [];
@@ -67,7 +72,7 @@ export class TailBuffer {
     this.trim();
   }
 
-  /** 累计写入的字节数（含已被丢弃的）——只给测试与诊断用，不参与「新增多少行」 */
+  /** 累计写入的字节数（含已被丢弃的）——只给测试与诊断用 */
   get bytes(): number {
     return this.byteCount;
   }
@@ -76,7 +81,7 @@ export class TailBuffer {
     return this.lineCount;
   }
 
-  /** 当前缓冲的全文。只在 poll / 测试里调用，长度已被上限封住 */
+  /** 当前缓冲的全文。长度已被上限封住 */
   text(): string {
     if (this.chunks.length === 0) return "";
     return Buffer.concat(this.chunks, this.byteCount).toString("utf8");
@@ -118,24 +123,29 @@ export class TailBuffer {
   }
 }
 
-/** poll / stop 返回给工具层的快照。`newLines` 是「自上次 poll 以来」的增量 */
-export interface SessionSnapshot {
+/** 会话结束时交给 runtime 的一份事实（写回对话与自动起一轮都用它） */
+export interface BashSessionEnd {
   id: string;
-  status: "running" | "finished" | "killed" | "too-old";
+  /** 命令全文：会话记录里必须有，否则 bash_list 与结果文案都说不清「这条是什么」 */
+  command: string;
+  /** 发起它的那次工具调用（渲染层按它把结果挂回 detach 那一行）。缺席 = 没接上，不猜 */
+  toolCallId?: string;
+  status: "finished" | "killed";
   exitCode: number | null;
-  startedAt: number;
-  lastDataAt: number;
-  endedAt?: number;
   elapsedMs: number;
-  idleMs: number;
-  newLines: number;
-  tail: string;
+  /** 尾部输出（最多 RESULT_TAIL_LINES 行） */
+  output: string;
   endReason?: SessionEndReason;
+  /** 被停 / 寿命 / 停轮 / 退出应用 → true（pi 的 BashResult.cancelled 语义） */
+  cancelled: boolean;
 }
 
-/** `bash_list` 用的摘要：不消费「自上次 poll 以来」的行号 */
+/** `bash_list` 用的摘要 */
 export interface SessionSummary {
   id: string;
+  command: string;
+  /** 发起它的那次工具调用（未绑上时缺席） */
+  toolCallId?: string;
   status: "running" | "finished" | "killed";
   exitCode: number | null;
   elapsedMs: number;
@@ -148,6 +158,7 @@ interface SessionInit {
   id: string;
   /** 归属（Orbita 会话 id）。同一个 utility 进程跑着多条会话，不能互相看见/停掉对方的命令 */
   owner?: string;
+  command: string;
   child: ChildProcess;
   buffer: TailBuffer;
   startedAt: number;
@@ -156,6 +167,10 @@ interface SessionInit {
   killTree: () => void;
   lifetimeMs: number;
   retentionMs: number;
+  /** 结束回调（恰好一次）。runtime 用它写回对话；抛错只记日志，不吞结束事实 */
+  onEnd?: (result: BashSessionEnd) => void;
+  /** 杀掉之后等退出事件的时限（测试压到毫秒级） */
+  killSettleMs: number;
 }
 
 /**
@@ -167,6 +182,7 @@ interface SessionInit {
 export class BashSession {
   readonly id: string;
   readonly owner: string | undefined;
+  readonly command: string;
   readonly child: ChildProcess;
   readonly buffer: TailBuffer;
   readonly startedAt: number;
@@ -179,11 +195,11 @@ export class BashSession {
   private readonly signal: AbortSignal | undefined;
   private readonly killTree: () => void;
   private readonly retentionMs: number;
-  private totalLinesValue: number;
-  private polledLinesValue: number;
-  /** poll 在等「新输出 / 结束」；两个集合分开，否则有输出会把「等结束」也唤醒 */
-  private readonly changeWaiters = new Set<() => void>();
-  private readonly endWaiters = new Set<() => void>();
+  private readonly onEnd: ((result: BashSessionEnd) => void) | undefined;
+  private readonly killSettleMs: number;
+  private toolCallIdValue: string | undefined;
+  private endNotified = false;
+  private endWaiters = new Set<() => void>();
   private lifetimeTimer: NodeJS.Timeout | undefined;
   private retentionTimer: NodeJS.Timeout | undefined;
   private readonly onAbort: () => void;
@@ -191,6 +207,7 @@ export class BashSession {
   constructor(init: SessionInit) {
     this.id = init.id;
     this.owner = init.owner;
+    this.command = init.command;
     this.child = init.child;
     this.buffer = init.buffer;
     this.startedAt = init.startedAt;
@@ -198,14 +215,13 @@ export class BashSession {
     this.signal = init.signal;
     this.killTree = init.killTree;
     this.retentionMs = init.retentionMs;
-    this.totalLinesValue = init.buffer.lines;
-    // 签到前模型已经看过这段输出（它在工具结果里），第一次 poll 只该报之后的增量
-    this.polledLinesValue = init.buffer.lines;
+    this.onEnd = init.onEnd;
+    this.killSettleMs = init.killSettleMs;
     this.onAbort = () => this.kill("abort");
     if (init.signal !== undefined && !init.signal.aborted) {
       init.signal.addEventListener("abort", this.onAbort, { once: true });
     }
-    // 寿命上限是最后一道兜底：模型跑偏、会话被弃、没人 poll 时，进程树不能永远留着。
+    // 寿命上限是最后一道兜底：模型跑偏、会话被弃时，进程树不能永远留着。
     // 从 spawn 算起（不是从签到算起）：「命令最长寿命」说的是这条命令跑了多久。
     // unref：这只是兜底定时器，不该单独把 utility 进程续命
     if (init.lifetimeMs > 0 && Number.isFinite(init.lifetimeMs)) {
@@ -238,21 +254,19 @@ export class BashSession {
     return this.endReasonValue;
   }
 
-  get totalLines(): number {
-    return this.totalLinesValue;
+  get toolCallId(): string | undefined {
+    return this.toolCallIdValue;
   }
 
-  /** 上次 poll 之后还没有被取走的行数。0 表示模型已经看过了当前全部输出 */
-  get unreadLines(): number {
-    return this.totalLinesValue - this.polledLinesValue;
+  /** 工具调用交还之后执行层把 toolCallId 绑上来：结果才能挂回同一行 */
+  bindToolCall(toolCallId: string): void {
+    this.toolCallIdValue = toolCallId;
   }
 
-  /** 命令又吐了一块：进缓冲、刷新 idle、叫醒 poll 的等待者 */
+  /** 命令又吐了一块：进缓冲、刷新 idle */
   append(chunk: Buffer): void {
     this.buffer.append(chunk);
-    this.totalLinesValue += countNewlines(chunk);
     this.lastDataAtValue = Date.now();
-    this.notifyChange();
   }
 
   /** 杀进程树（幂等）。结束事件仍由执行层观察到子进程退出后调 `end()` */
@@ -261,19 +275,20 @@ export class BashSession {
     this.killedValue = true;
     this.endReasonValue = reason;
     if (reason === "lifetime") {
-      // 这条会进缓冲：模型下次 poll 的 tail 里看得见「为什么没了」，而不是只有一句
-      // 冷冰冰的 exitCode。stop / abort 不需要——调用方当场就拿到结果
+      // 这条会进结果输出：模型看得到「为什么没了」，而不是只有一个退出码
       const notice =
-        "\n[orbita] kind=cap reason=lifetime | " +
-        "The command reached the session lifetime limit and was stopped. " +
+        "\n[orbita] The command reached the 4-hour session lifetime limit and was stopped. " +
         "Its remaining work is lost; run it again in smaller steps if you still need the result.\n";
       this.append(Buffer.from(notice, "utf8"));
     }
     this.killTree();
-    this.notifyChange();
+    // 进程没在时限内退出也要落一次结果：杀树之后「命令已经结束」是事实，
+    // 不能因为没等到 exit 事件就把这条记录吞掉（onEnd 幂等，晚到的 exit 不会再调）
+    const settle = setTimeout(() => this.end(null), this.killSettleMs);
+    settle.unref();
   }
 
-  /** 子进程真的退出了：记录退出码、解除监听、安排 10 分钟后的 GC */
+  /** 子进程真的退出了：记录退出码、解除监听、安排 10 分钟后的 GC、交出结果 */
   end(exitCode: number | null): void {
     if (this.endedAtValue !== undefined) return;
     this.endedAtValue = Date.now();
@@ -288,24 +303,9 @@ export class BashSession {
       // 完成后还要留 10 分钟可查，但别为这条保留把整个进程续命
       this.retentionTimer.unref();
     }
-    this.notifyChange();
     for (const waiter of [...this.endWaiters]) waiter();
     this.endWaiters.clear();
-  }
-
-  /** 等「有新输出 / 状态变了 / 结束」——poll 的提前返回靠它 */
-  waitForChange(waitMs: number): Promise<void> {
-    if (waitMs <= 0) return Promise.resolve();
-    return new Promise<void>((resolve) => {
-      let timer: NodeJS.Timeout | undefined;
-      const done = () => {
-        if (timer !== undefined) clearTimeout(timer);
-        this.changeWaiters.delete(done);
-        resolve();
-      };
-      this.changeWaiters.add(done);
-      timer = setTimeout(done, waitMs);
-    });
+    this.notifyEnd();
   }
 
   /** 等真正的结束（stop 要返回最终退出码，而不是「刚发完 taskkill」） */
@@ -324,34 +324,11 @@ export class BashSession {
     });
   }
 
-  /** 消费「自上次 poll 以来的行数」并出快照 */
-  takeSnapshot(): SessionSnapshot {
-    const now = Date.now();
-    const newLines = this.totalLinesValue - this.polledLinesValue;
-    this.polledLinesValue = this.totalLinesValue;
-    // 已结束的会话报「跑了多久」，不是「从开始到现在」——后者在 10 分钟保留期里
-    // 会一直长下去，模型看到一条早已结束的命令 elapsed 还在涨会以为它还在跑
-    const elapsedUntil = this.endedAtValue ?? now;
-    const snapshot: SessionSnapshot = {
-      id: this.id,
-      status: this.status(),
-      exitCode: this.exitCodeValue,
-      startedAt: this.startedAt,
-      lastDataAt: this.lastDataAtValue,
-      elapsedMs: Math.max(0, elapsedUntil - this.startedAt),
-      idleMs: Math.max(0, elapsedUntil - this.lastDataAtValue),
-      newLines,
-      tail: this.buffer.tail(TAIL_LINES),
-    };
-    if (this.endedAtValue !== undefined) snapshot.endedAt = this.endedAtValue;
-    if (this.endReasonValue !== undefined) snapshot.endReason = this.endReasonValue;
-    return snapshot;
-  }
-
   summary(): SessionSummary {
     const elapsedUntil = this.endedAtValue ?? Date.now();
     const summary: SessionSummary = {
       id: this.id,
+      command: this.command,
       status: this.status(),
       exitCode: this.exitCodeValue,
       elapsedMs: Math.max(0, elapsedUntil - this.startedAt),
@@ -359,7 +336,13 @@ export class BashSession {
     };
     if (this.endedAtValue !== undefined) summary.endedAt = this.endedAtValue;
     if (this.endReasonValue !== undefined) summary.endReason = this.endReasonValue;
+    if (this.toolCallIdValue !== undefined) summary.toolCallId = this.toolCallIdValue;
     return summary;
+  }
+
+  /** 尾部输出（结果写回对话用） */
+  tail(maxLines: number = RESULT_TAIL_LINES): string {
+    return this.buffer.tail(maxLines);
   }
 
   /** 退出清理：把还会触发的定时器收掉，免得在进程收尾时再杀一次已清的会话 */
@@ -386,15 +369,36 @@ export class BashSession {
     return "running";
   }
 
-  private notifyChange(): void {
-    for (const waiter of [...this.changeWaiters]) waiter();
-    this.changeWaiters.clear();
-  }
-
   private clearLifetimeTimer(): void {
     if (this.lifetimeTimer !== undefined) {
       clearTimeout(this.lifetimeTimer);
       this.lifetimeTimer = undefined;
+    }
+  }
+
+  /**
+   * 把结束事实交给 runtime（恰好一次）。
+   * 回调抛错只记日志：结束是事实，写回对话失败不该把它抹掉。
+   */
+  private notifyEnd(): void {
+    if (this.endNotified || this.onEnd === undefined) return;
+    this.endNotified = true;
+    const endedAt = this.endedAtValue ?? Date.now();
+    const result: BashSessionEnd = {
+      id: this.id,
+      command: this.command,
+      status: this.status() === "killed" ? "killed" : "finished",
+      exitCode: this.exitCodeValue,
+      elapsedMs: Math.max(0, endedAt - this.startedAt),
+      output: this.tail(),
+      cancelled: this.killedValue,
+    };
+    if (this.toolCallIdValue !== undefined) result.toolCallId = this.toolCallIdValue;
+    if (this.endReasonValue !== undefined) result.endReason = this.endReasonValue;
+    try {
+      this.onEnd(result);
+    } catch (cause) {
+      console.error(`[bash-sessions] 结束回调抛错（${this.id}）`, cause);
     }
   }
 }
@@ -404,108 +408,74 @@ let nextSessionNumber = 0;
 
 export interface RegisterSessionInput {
   child: ChildProcess;
-  /** 从 spawn 起就在写的缓冲：签到前的输出也在里面，第一次 poll 的 tail 才完整 */
+  /** 命令全文。会话记录与写回文案都要它 */
+  command: string;
+  /** 从 spawn 起就在写的缓冲：签到前的输出也在里面，结果里的 tail 才完整 */
   buffer: TailBuffer;
   startedAt: number;
   lastDataAt: number;
   signal?: AbortSignal;
-  /** 归属（Orbita 会话 id）：list / poll / stop 只认自己这条会话的 */
+  /** 归属（Orbita 会话 id）：list / stop 只认自己这条会话的 */
   owner?: string;
   /** 杀进程树。执行层注入，会话层不直接依赖平台细节 */
   killTree: () => void;
+  /** 结束回调（恰好一次） */
+  onEnd?: (result: BashSessionEnd) => void;
   lifetimeMs?: number;
-  maxSessions?: number;
   retentionMs?: number;
+  /** 杀掉之后等退出事件的时限，默认 3 秒；测试压到毫秒级 */
+  killSettleMs?: number;
 }
 
-export type RegisterSessionResult =
-  | { ok: true; session: BashSession }
-  | { ok: false; message: string };
-
-/** 签到成功，登记成 b1 / b2 / …。并发满了就拒绝——由调用方杀掉命令并如实报错 */
-export function registerSession(input: RegisterSessionInput): RegisterSessionResult {
-  const maxSessions = input.maxSessions ?? MAX_SESSIONS;
-  // 按归属计数：别的会话占满预算不该让这一条被拒（A 的 8 个命令不该堵住 B）
-  const running = [...sessions.values()].filter(
-    (session) => session.endedAt === undefined && session.owner === input.owner,
-  ).length;
-  if (running >= maxSessions) {
-    // 不静默：调用方会把这句话当工具错误给模型看，它才知道是「表满了」而不是「命令挂了」
-    return {
-      ok: false,
-      message:
-        `Too many detached bash sessions are already running (max ${maxSessions}). ` +
-        "This command was stopped at its check-in point. Wait for one to finish, " +
-        "or end one with bash_stop, then run this command again.",
-    };
-  }
+/** 签到成功，登记成 b1 / b2 / …。**不限并发**：上限是资源事实，不该由一张表替用户拒绝 */
+export function registerSession(input: RegisterSessionInput): BashSession {
   nextSessionNumber += 1;
   const session = new BashSession({
     id: `b${nextSessionNumber}`,
-    owner: input.owner,
+    command: input.command,
+    ...(input.owner === undefined ? {} : { owner: input.owner }),
     child: input.child,
     buffer: input.buffer,
     startedAt: input.startedAt,
     lastDataAt: input.lastDataAt,
     ...(input.signal === undefined ? {} : { signal: input.signal }),
     killTree: input.killTree,
+    ...(input.onEnd === undefined ? {} : { onEnd: input.onEnd }),
     lifetimeMs: input.lifetimeMs ?? SESSION_LIFETIME_MS,
     retentionMs: input.retentionMs ?? SESSION_RETENTION_MS,
+    killSettleMs: input.killSettleMs ?? KILL_SETTLE_MS,
   });
   sessions.set(session.id, session);
-  return { ok: true, session };
-}
-
-function goneSnapshot(id: string): SessionSnapshot {
-  return {
-    id,
-    status: "too-old",
-    exitCode: null,
-    startedAt: 0,
-    lastDataAt: 0,
-    elapsedMs: 0,
-    idleMs: 0,
-    newLines: 0,
-    tail: "",
-  };
+  return session;
 }
 
 /**
- * 等新输出 / 等结束 / 等满 `waitMs`，先到先返回。
- *
- * **不存在的 id 不抛错**：这是模型会犯的错（记错 id、会话早已 GC），返回一句可读的
- * `too-old` 比一条栈更适合它自救。
+ * 把「一次工具调用」与「一个后台会话」绑起来（执行层在 detach 工具返回后调）。
+ * 回执到达时会话可能已经结束了（极短的命令），所以绑定成功后立即回填——
+ * 结果只需要 toolCallId，不需要等到结束。
  */
-export async function pollSession(id: string, waitMs: number, owner?: string): Promise<SessionSnapshot> {
-  const session = ownedSession(id, owner);
-  if (session === undefined) return goneSnapshot(id);
-  const deadline = Date.now() + Math.max(0, waitMs);
-  for (;;) {
-    if (session.endedAt !== undefined) break;
-    // 上次 poll 之后已经有新输出：不必再等，模型要的就是「变了就告诉我」
-    if (session.unreadLines > 0) break;
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) break;
-    await session.waitForChange(remaining);
-  }
-  return session.takeSnapshot();
+export function bindBashSessionToolCall(sessionId: string, toolCallId: string): void {
+  sessions.get(sessionId)?.bindToolCall(toolCallId);
 }
 
 /**
- * 杀一个会话并等它真的结束（Windows taskkill /F /T 是同步的，通常几毫秒就退出）
+ * 杀一个会话并等它真的结束（Windows taskkill /F /T 是同步的，通常几毫秒就退出）。
+ * 返回结束后的摘要；不存在的 id 返回 null（调用方给一句可读说明，不抛错）。
  */
 export async function stopSession(
   id: string,
-  waitMs = 3000,
+  waitMs = KILL_SETTLE_MS,
   owner?: string,
-): Promise<SessionSnapshot | null> {
+): Promise<SessionSummary | null> {
   const session = ownedSession(id, owner);
   if (session === undefined) return null;
   if (session.endedAt === undefined) {
     session.kill("stop");
     await session.waitForEnd(waitMs);
+    // 时限内没等到 exit 事件也照样结一次：结果要写回对话（end 幂等）
+    if (session.endedAt === undefined) session.end(null);
   }
-  return session.takeSnapshot();
+  return session.summary();
 }
 
 /**
@@ -513,8 +483,6 @@ export async function stopSession(
  *
  * **为什么不是 killAllSessions**：同一个 utility 进程里还跑着别的会话的命令，
  * 删 A 不该带走 B 的构建。这里只碰 `owner === owner` 的行。
- * 已经在停 / 已结束的会话是 no-op（`stopSession` 的 kill 幂等）——删除一条正在跑的
- * 会话时，pi 的 dispose 已经 abort 过当前轮、连坐杀过一次，这里不会重复杀。
  *
  * 返回真正被停掉的条数（只给日志与测试断言用）。
  */
@@ -527,43 +495,22 @@ export async function stopOwnedSessions(owner: string, waitMs = 0): Promise<numb
 }
 
 /**
- * 界面的状态通路（renderer 轮询的那份列表）。
- *
- * 与 `listSessions` 同源，只做两件转换：毫秒 → 秒（界面事实槽的单位）、
- * 结束后不再往前滚的 elapsed 照 `summary()` 的口径（它已经算到 endedAt）。
- * **不返回 tail**：状态行要的是「还在动吗」，输出由 poll 那条路走。
- */
-export function sessionStatuses(owner: string): BashSessionStatus[] {
-  return listSessions(owner).map((summary) => {
-    const status: BashSessionStatus = {
-      id: summary.id,
-      status: summary.status,
-      exitCode: summary.exitCode,
-      elapsedSeconds: Math.round(summary.elapsedMs / 1000),
-      idleSeconds: Math.round(summary.idleMs / 1000),
-    };
-    if (summary.endReason !== undefined) status.endReason = summary.endReason;
-    return status;
-  });
-}
-
-/**
  * 下一条用户消息里的提醒（回合结束后仍有后台命令在跑）。
  *
- * **一句、只报状态快照**：不替模型做决定（poll 还是 stop 由它读完自己判），
- * 也不起定时器——提醒的时机是「用户又说话了」，那正是模型该知道后台还有活的时候。
+ * **一句、只报状态快照**：不替模型做决定，也不起定时器——提醒的时机是「用户又说话了」，
+ * 那正是模型该知道后台还有活的时候。结果会自动写回，所以这里只让它别把这条当成丢了。
  * 没有 running 会话返回 null（调用方原样拼进 prompt，不多占一行）。
  */
 export function bashSessionReminder(summaries: readonly SessionSummary[]): string | null {
   const running = summaries.filter((summary) => summary.status === "running");
   if (running.length === 0) return null;
   const facts = running
-    .map((summary) => `${summary.id} (running ${formatDuration(summary.elapsedMs)}, no output for ${formatDuration(summary.idleMs)})`)
+    .map((summary) => `${summary.id} (running ${formatBashDuration(summary.elapsedMs)}, no output for ${formatBashDuration(summary.idleMs)})`)
     .join(", ");
   const which = running.length === 1 ? `background bash session ${facts}` : `background bash sessions ${facts}`;
   return (
     `[orbita] notice: ${which} still running from an earlier turn. ` +
-    "Read progress with bash_poll, end it with bash_stop."
+    "Its result will be written back when it finishes; check bash_list, end it with bash_stop."
   );
 }
 
@@ -588,7 +535,7 @@ function ownedSession(id: string, owner: string | undefined): BashSession | unde
   return session.owner === owner ? session : undefined;
 }
 
-/** `bash_list` 的数据源。不消费行号、不返回 tail（列表只回答「有哪些、还活着吗」） */
+/** `bash_list` 的数据源。不返回 tail（列表只回答「有哪些、还活着吗」） */
 export function listSessions(owner?: string): SessionSummary[] {
   return [...sessions.values()]
     .filter((session) => owner === undefined || session.owner === owner)
@@ -605,20 +552,11 @@ export function killAllSessions(): void {
 }
 
 /* ------------------------------------------------------------------ *
- * 三个句柄工具（注册进 runtime 的 customTools）
+ * 两个句柄工具（注册进 runtime 的 customTools）
  *
+ * **判断权在模型这一侧只剩「要不要收手」**——看不看进展不再需要工具（结果自己回来）。
  * 描述就是给模型的说明书：说清「什么时候该用」，而不只是「参数是什么」。
  * ------------------------------------------------------------------ */
-
-function formatDuration(ms: number): string {
-  const totalSeconds = Math.max(0, Math.round(ms / 1000));
-  if (totalSeconds < 60) return `${totalSeconds}s`;
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (minutes < 60) return `${minutes}m${String(seconds).padStart(2, "0")}s`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h${String(minutes % 60).padStart(2, "0")}m`;
-}
 
 function reasonText(reason: SessionEndReason): string {
   switch (reason) {
@@ -633,25 +571,17 @@ function reasonText(reason: SessionEndReason): string {
   }
 }
 
-function formatPoll(snapshot: SessionSnapshot): string {
-  if (snapshot.status === "too-old") {
-    return (
-      "status: too-old\n" +
-      `That session (${snapshot.id || "unknown"}) is gone (finished more than 10 minutes ago). ` +
-      "Run bash_list to see the sessions that are still available."
-    );
-  }
+/** 会话的一屏事实：id / 状态 / 退出码 / 耗时 / 结束原因 / 尾部输出 */
+function formatSession(summary: SessionSummary, tail: string): string {
   const lines = [
-    `status: ${snapshot.status}`,
-    `session: ${snapshot.id}`,
-    `exitCode: ${snapshot.exitCode === null ? "none" : snapshot.exitCode}`,
-    `elapsed: ${formatDuration(snapshot.elapsedMs)}`,
-    `idleSeconds: ${Math.round(snapshot.idleMs / 1000)}`,
-    `+${snapshot.newLines} lines since last poll`,
+    `session: ${summary.id}`,
+    `status: ${summary.status}`,
+    `exitCode: ${summary.exitCode === null ? "none" : summary.exitCode}`,
+    `elapsed: ${formatBashDuration(summary.elapsedMs)}`,
   ];
-  if (snapshot.endReason !== undefined) lines.push(`endReason: ${reasonText(snapshot.endReason)}`);
-  lines.push(`tail (last ${TAIL_LINES} lines):`);
-  lines.push(snapshot.tail.length > 0 ? snapshot.tail : "(no output yet)");
+  if (summary.endReason !== undefined) lines.push(`endReason: ${reasonText(summary.endReason)}`);
+  lines.push(`tail (last ${TOOL_TAIL_LINES} lines):`);
+  lines.push(tail.length > 0 ? tail : "(no output yet)");
   return lines.join("\n");
 }
 
@@ -661,56 +591,20 @@ function readSessionId(params: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-export function createBashHandleTools(owner?: string): ToolDefinition[] {
-  const poll: ToolDefinition = {
-    name: "bash_poll",
-    label: "bash_poll",
-    description:
-      "Read a long bash command that was detached at its check-in point (bash returns a sessionId like b1). " +
-      "Returns status, exitCode, elapsed, idleSeconds (time since the last output), how many lines are new since " +
-      "your previous poll, and the last 40 lines. It returns early as soon as new output arrives or the command " +
-      "exits; otherwise it waits up to waitSeconds. Use a large waitSeconds (e.g. 300) instead of polling in a loop.",
-    parameters: {
-      type: "object",
-      properties: {
-        sessionId: {
-          type: "string",
-          description: "Session id from the bash result that was detached (e.g. \"b1\").",
-        },
-        waitSeconds: {
-          type: "number",
-          description:
-            "How long to wait for new output, in seconds (default 120, clamped to 1-600). " +
-            "Returns earlier when there is new output or the command exits.",
-        },
-      },
-      required: ["sessionId"],
-    } as never,
-    async execute(_toolCallId, params) {
-      const id = readSessionId(params);
-      if (id.length === 0) {
-        return {
-          content: [{ type: "text", text: "bash_poll needs a sessionId, for example \"b1\". Run bash_list to see them." }],
-          details: undefined,
-        };
-      }
-      const rawWait = typeof params === "object" && params !== null
-        ? (params as Record<string, unknown>)["waitSeconds"]
-        : undefined;
-      const requested = typeof rawWait === "number" && Number.isFinite(rawWait) ? rawWait : POLL_DEFAULT_WAIT_SECONDS;
-      const waitSeconds = Math.min(POLL_MAX_WAIT_SECONDS, Math.max(POLL_MIN_WAIT_SECONDS, requested));
-      const snapshot = await pollSession(id, waitSeconds * 1000, owner);
-      return { content: [{ type: "text", text: formatPoll(snapshot) }], details: undefined };
-    },
-  };
+/** 列表行里的命令摘要：一行、截到 80 字（长命令撑爆列表） */
+function commandSummary(command: string): string {
+  const oneLine = command.replace(/\s+/g, " ").trim();
+  return oneLine.length > 80 ? `${oneLine.slice(0, 80)}…` : oneLine;
+}
 
+export function createBashHandleTools(owner?: string): ToolDefinition[] {
   const stop: ToolDefinition = {
     name: "bash_stop",
     label: "bash_stop",
     description:
       "Stop a detached bash command and kill its whole process tree. Use it when you have seen enough, or when " +
-      "the command is clearly stuck and its work is not worth waiting for. Returns the final status and the last " +
-      "40 lines. Prefer this over leaving a session to die of old age.",
+      "the command is clearly stuck and its work is not worth waiting for. The final result is also written back " +
+      "to the conversation automatically. Returns the final status and the last 40 lines.",
     parameters: {
       type: "object",
       properties: {
@@ -726,8 +620,8 @@ export function createBashHandleTools(owner?: string): ToolDefinition[] {
           details: undefined,
         };
       }
-      const snapshot = await stopSession(id, 3000, owner);
-      if (snapshot === null) {
+      const summary = await stopSession(id, KILL_SETTLE_MS, owner);
+      if (summary === null) {
         return {
           content: [
             {
@@ -738,7 +632,11 @@ export function createBashHandleTools(owner?: string): ToolDefinition[] {
           details: undefined,
         };
       }
-      return { content: [{ type: "text", text: formatPoll(snapshot) }], details: undefined };
+      const session = ownedSession(id, owner);
+      return {
+        content: [{ type: "text", text: formatSession(summary, session?.tail(TOOL_TAIL_LINES) ?? "") }],
+        details: undefined,
+      };
     },
   };
 
@@ -746,9 +644,9 @@ export function createBashHandleTools(owner?: string): ToolDefinition[] {
     name: "bash_list",
     label: "bash_list",
     description:
-      "List the detached bash sessions: id, whether it is still running, how long it has been running, and how " +
-      "long since its last output. Use it when you lost track of a sessionId, or to decide which session to poll " +
-      "or stop.",
+      "List the detached bash sessions: id, the command, whether it is still running, how long it has been running, " +
+      "and how long since its last output. Results are written back to the conversation automatically when a session " +
+      "finishes; use this only to see what is still running, or to decide which session to stop.",
     parameters: {
       type: "object",
       properties: {},
@@ -771,11 +669,11 @@ export function createBashHandleTools(owner?: string): ToolDefinition[] {
       const lines = summaries.map((summary) => {
         const exit = summary.exitCode === null ? "" : ` exit=${summary.exitCode}`;
         const reason = summary.endReason === undefined ? "" : ` (${reasonText(summary.endReason)})`;
-        return `${summary.id} ${summary.status} elapsed=${formatDuration(summary.elapsedMs)} idle=${formatDuration(summary.idleMs)}${exit}${reason}`;
+        return `${summary.id} ${summary.status} elapsed=${formatBashDuration(summary.elapsedMs)} idle=${formatBashDuration(summary.idleMs)}${exit}${reason} :: ${commandSummary(summary.command)}`;
       });
       return { content: [{ type: "text", text: lines.join("\n") }], details: undefined };
     },
   };
 
-  return [poll, stop, list];
+  return [stop, list];
 }

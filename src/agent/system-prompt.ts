@@ -34,8 +34,9 @@ const TOOL_GUIDELINES =
   `these are slow on Windows and a short timeout kills a normal slow command halfway; values under ${COMMAND_TIMEOUT_FLOOR_SECONDS} seconds are raised to ${COMMAND_TIMEOUT_FLOOR_SECONDS}. ` +
   `A command without a timeout is stopped after ${COMMAND_TIMEOUT_DEFAULT_SECONDS} seconds; pass a larger timeout only when a command really needs to run longer than that. ` +
   "Commands that keep running and need to be watched or interrupted (dev servers, watch mode, tail -f, CDP probe scripts, anything still running after launch) belong in the terminal_* tools, not bash. " +
-  "If a long command really has to run in bash it is detached at its 5-minute check-in and returns a sessionId: " +
-  "keep going, then follow it with bash_poll using a large waitSeconds (do not poll in a tight loop) and call bash_stop when you have seen enough.";
+  "If a command is still running at its 5-minute check-in it is detached automatically and the result gives a sessionId: " +
+  "keep going — its result is written back to the conversation when the command finishes, so do not poll. " +
+  "Use bash_list to see what is still running, and bash_stop to end one you no longer need.";
 
 const EXPECTED_SECONDS_GUIDELINE =
   "When calling bash/powershell with a command you expect to run longer than 10 seconds (tests, builds, installs, sleep, " +

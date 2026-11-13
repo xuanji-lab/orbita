@@ -2120,7 +2120,6 @@ export const en = {
     copyMessage: "Copy message",
     // bash 活行（P2-lite）：事实槽与停止钮
     bashElapsed: (clock: string) => clock,
-    bashIdle: (clock: string) => `no output ${clock}`,
     bashTotal: (clock: string) => `${clock} total`,
     bashExit: (code: number) => `exit ${code}`,
     bashStopped: "stopped",
@@ -2128,7 +2127,6 @@ export const en = {
     bashCapLimit: "session limit",
     copyCommand: "Copy command",
     stopBash: (id: string) => `Stop ${id}`,
-    confirmStopBash: "Stop for sure?",
     copyAnswer: "Copy answer",
     transcriptCopied: (count: number) => `Copied whole conversation · ${count} chars`,
     transcriptCopyFailed: "Copy failed — select the text manually",
@@ -2230,6 +2228,7 @@ export const en = {
       },
     },
     waitingOutput: "(waiting for output…)",
+    bashResultBelow: "(result below)",
     noOutput: "(no output)",
     branchFromHere: "Branch from here",
     revertHere: "Revert to here — removes this message and everything after, restores the files it changed, and puts the text back in the composer",

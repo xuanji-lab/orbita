@@ -119,13 +119,13 @@ import {
   liveTailLines,
   expectedSecondsOf,
   formatRunClock,
-  // bash 活行（P2-lite）：交还会话的认领、事实槽与秒针外推
-  bashSessionFacts,
-  detachedBashSessionId,
+  // bash 活行：交还会话的认领、事实槽与秒针外推
+  bashLiveFacts,
+  bashResultFacts,
+  bashResultOf,
+  detachedBashNotice,
   formatSessionClock,
-  bashStopStep,
   showsCallSummary,
-  STOP_CONFIRM_MS,
   shellAutoExpand,
   stripTrailingBlankLines,
   tailPreviewLines,
@@ -165,7 +165,6 @@ import {
   type TurnViewEntry,
 } from "./tool-results";
 import { useToday } from "./today.ts";
-import { applyBashSessions, useBashLive } from "./bash-live.ts";
 import { formatMessageTime, fullTimestamp } from "./message-time.ts";
 import { highlighterReady, highlightLines, langFromPath, type TokenSpan } from "./highlight";
 import { Composer } from "../../shell/Composer";
@@ -5087,15 +5086,18 @@ function ToolLine(props: {
   // 运行」（PR 168）：被中断的 bash 不计时、不自动展开，与真跑着的命令分流 ──
   const shell = props.toolName === "bash" || props.toolName === "powershell";
   const shellActive = shell && active;
-  // ── bash 活行（P2-lite）：签到交还之后，这一行原地变成后台会话的观察窗 ──
-  // 会话 id 从工具结果尾部的 `[orbita] kind=detached session=b1` 认出来；认不出
-  // （短命令、旧记录的普通 bash）就没有活行，整块逻辑自然退化成今天的行。
-  const bashId = shell ? detachedBashSessionId(result) : null;
-  const bashLive = useBashLive(props.sessionId, bashId, result?.timestamp ?? 0);
-  const bashStatus = bashLive.status;
-  const bashRunning = bashId !== null && bashStatus?.status === "running";
+  // ── bash 活行：签到交还之后，这一行原地变成后台会话的观察窗 ──
+  // 交还事实从工具结果尾部的 `[orbita] kind=detached session=b1 elapsed=302s` 认出来；
+  // 结束事实来自 runtime 写回的那条终态记录（同 toolCallId，details 带 orbitaBash）。
+  // 认不出（短命令、旧记录的普通 bash）就没有活行，整块逻辑自然退化成今天的行。
+  const bashNotice = shell ? detachedBashNotice(result) : null;
+  const bashResult = shell ? bashResultOf(result) : null;
+  const bashId = bashNotice?.sessionId ?? bashResult?.sessionId ?? null;
+  // 交还了、还没有落定记录：这条命令还在后台跑（或者结果正在回来的路上）
+  const bashRunning = bashNotice !== null && bashResult === null;
   // 秒针：只挂「跑着的东西」——运行中的 shell（Responding 同款，一秒一跳）与
-  // 后台活行（两拍轮询之间靠它外推）。睡眠中的命令没有任何事件帧，计时只能自己跳。
+  // 后台活行（**本地外推**：从 detach 时已跑的秒数 + 之后本地走过的秒数，
+  // 不发任何 IPC）。睡眠中的命令没有任何事件帧，计时只能自己跳。
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!shellActive && !bashRunning) return;
@@ -5258,21 +5260,15 @@ function ToolLine(props: {
   const writeLines =
     !open && props.toolName === "write" && fileView !== null ? writeLineCount(props.input) : null;
 
-  // ── bash 活行的事实槽（P2-lite，A 版）──
+  // ── bash 活行的事实槽（A 版）──
   // 收起态**一个字都不给命令**（用户拍了 A 版）：长命令会把行尾的机器事实与停止钮
-  // 挤掉，而命令全文在展开体的命令专位。跑着的行给两个时钟，落定后换成结果词。
-  const bashTicked =
-    bashStatus !== undefined && bashStatus.status === "running"
-      ? Math.max(0, (now - bashLive.at) / 1000)
-      : 0;
+  // 挤掉，而命令全文在展开体的命令专位。跑着的行只给一个本地秒针，落定后换成结果词。
   const bashFacts =
-    bashStatus === undefined
-      ? null
-      : bashSessionFacts(
-          bashStatus,
-          { elapsed: bashStatus.elapsedSeconds + bashTicked, idle: bashStatus.idleSeconds + bashTicked },
-          t,
-        );
+    bashResult !== null
+      ? bashResultFacts(bashResult, t)
+      : bashNotice !== null
+        ? bashLiveFacts(bashNotice, bashNotice.elapsedSeconds + Math.max(0, (now - (result?.timestamp ?? now)) / 1000), t)
+        : null;
   const bashFactsColor =
     bashFacts === null
       ? undefined
@@ -5282,7 +5278,7 @@ function ToolLine(props: {
           ? "var(--color-text-secondary)"
           : "var(--color-text-tertiary)";
   // 活行的图标：被停 / 被上限杀掉不再假装是终端（同「已中断」那一枚 circle-off）
-  const bashIcon: IconName | null = bashStatus?.status === "killed" ? "circle-off" : null;
+  const bashIcon: IconName | null = bashResult?.status === "killed" ? "circle-off" : null;
   // 只有 shell 类值得看耗时（read/edit 毫秒级是噪音）；旧会话没见过 running 帧，量不到就没有。
   // 交还成后台会话的行不给这个数：它只是「交还时已经跑了多久」，真总量在事实槽的共 X 里
   const shellDuration =
@@ -5403,9 +5399,7 @@ function ToolLine(props: {
         // 停止钮是真按钮，只能是折叠按钮的兄弟（button 不能嵌 button）。
         // 常驻而不是悬停：这条行可能挂一小时，想停的时候人不该先学会悬停。
         trailing={
-          bashRunning && bashId !== null && command !== null ? (
-            <BashStopButton sessionId={props.sessionId} bashId={bashId} />
-          ) : undefined
+          bashRunning && bashId !== null ? <BashStopButton sessionId={props.sessionId} bashId={bashId} /> : undefined
         }
       >
         <span className={active ? "orbita-breath" : undefined} style={HEAD_WRAP}>
@@ -5544,7 +5538,13 @@ function ToolLine(props: {
       {open && expandable && diff === null && fileView === null && builtinRows !== null && <BuiltinDetailBody rows={builtinRows} />}
       {open && expandable && diff === null && fileView === null && builtinRows === null && shell && command !== null && (
         // bash 的展开体：命令专位（$ + 全文 + copy）在上，输出在下，同一个虚线框
-        <ShellToolBody command={command} text={imagelessBody} failed={failed} live={live} />
+        <ShellToolBody
+          command={command}
+          text={imagelessBody}
+          failed={failed}
+          live={live}
+          pendingResult={bashRunning}
+        />
       )}
       {open && expandable && diff === null && fileView === null && builtinRows === null && (!shell || command === null) && (
         <PlainToolBody
@@ -5596,55 +5596,33 @@ function BuiltinDetailBody(props: { rows: readonly DetailRow[] }) {
 }
 
 /**
- * bash 活行的行尾停止钮（两段式确认）。
+ * bash 活行的行尾停止钮（**点一下直接停**，没有两段式确认）。
  *
- * **为什么两段**：点一下就会杀掉一个可能跑了半小时的进程树，里面没落盘的工作直接丢。
- * 第一下原地把按钮换成「确认停止？」，3 秒内再点才发；超时自动收回——不弹窗、
- * 不挡对话，误点也无害（设计稿把这条列为「没把握的地方」，这里选了两段确认）。
+ * 用户 2026-11-13 裁决：命令本来就跑在非交互环境里，误停的代价远小于「点两下才停」
+ * 在长构建上耽误的时间。hover 变红与 disabled 态保留——那是「这是个会杀进程的按钮」
+ * 的信号，不是确认流程。
  *
  * 走 `agent:bash-stop`（四层契约）：主进程转给 agent 进程按 **owner** 停——只有
- * 这条会话自己的命令停得掉，别的会话的同名 id 在这里当不存在。回执里就是停完的
- * 整份状态列表，直接进共享快照，不必再等下一拍。
+ * 这条会话自己的命令停得掉，别的会话的同名 id 在这里当不存在。**没有回执**：
+ * 停完的落定态来自 runtime 写回对话的那条终态记录。
  */
 function BashStopButton(props: { sessionId: string; bashId: string }) {
   const t = useT();
-  // 上膛的时刻（null = 没上膛）。用时间戳而不是布尔，是为了让超时判定落在纯函数
-  // bashStopStep 里（可测）：定时器被节流、页面卡一下就丢确认，不能拿旧确认当真
-  const [armedAt, setArmedAt] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
-  const confirming = armedAt !== null;
-  useEffect(() => {
-    if (armedAt === null) return;
-    const timer = window.setTimeout(() => setArmedAt(null), STOP_CONFIRM_MS);
-    return () => window.clearTimeout(timer);
-  }, [armedAt]);
   return (
     <button
       type="button"
-      className={confirming ? "bash-stop bash-stop-confirm" : "bash-stop"}
-      title={confirming ? t.chat.confirmStopBash : t.chat.stopBash(props.bashId)}
+      className="bash-stop"
+      title={t.chat.stopBash(props.bashId)}
       aria-label={t.chat.stopBash(props.bashId)}
       disabled={busy}
       onClick={() => {
-        if (bashStopStep(armedAt, Date.now()) === "arm") {
-          setArmedAt(Date.now());
-          return;
-        }
-        setArmedAt(null);
         setBusy(true);
-        void api.agent
-          .stopBashSession(props.sessionId, props.bashId)
-          .then((sessions) => applyBashSessions(props.sessionId, sessions))
-          // 停失败（进程刚退 / runtime 不在）：不抹黑也不装作停掉了，下一拍轮询说真话
-          .catch(() => undefined)
-          .finally(() => setBusy(false));
+        // 停失败（进程刚退 / runtime 不在）：不抹黑也不装作停掉了，结果记录到了自然落定
+        void api.agent.stopBashSession(props.sessionId, props.bashId).catch(() => undefined).finally(() => setBusy(false));
       }}
     >
-      {confirming ? (
-        <span className="bash-stop-label">{t.chat.confirmStopBash}</span>
-      ) : (
-        <Icon name="square" size={13} strokeWidth={2} />
-      )}
+      <Icon name="square" size={13} strokeWidth={2} />
     </button>
   );
 }
@@ -5661,7 +5639,14 @@ function BashStopButton(props: { sessionId: string; bashId: string }) {
  * 交还提示行 `[orbita] kind=…` 是给模型与渲染层看的协议，不进人看的那一面
  * （事实槽已经把它说成「已 12:34」）。
  */
-function ShellToolBody(props: { command: string; text: string; failed: boolean; live: boolean }) {
+function ShellToolBody(props: {
+  command: string;
+  text: string;
+  failed: boolean;
+  live: boolean;
+  /** 已交还、结果还没回来：没有输出时说「结果见下方」，不撒谎说「没有输出」 */
+  pendingResult: boolean;
+}) {
   const t = useT();
   const follow = useFollowScroll(props.live);
   const [copied, setCopied] = useState(false);
@@ -5670,11 +5655,12 @@ function ShellToolBody(props: { command: string; text: string; failed: boolean; 
     const timer = window.setTimeout(() => setCopied(false), 1_200);
     return () => window.clearTimeout(timer);
   }, [copied]);
-  // 协议行进仓库之前就丢掉：它们属于机器，不是命令的输出
+  // 协议行进仓库之前就丢掉：它们属于机器，不是命令的输出（交还行与落定行都以
+  // `[orbita] ` 开头，那是我们保留的前缀；模型在 pi 本子里仍读得到落定行）
   const text = stripTrailingBlankLines(
     props.text
       .split("\n")
-      .filter((line) => !line.startsWith("[orbita] kind="))
+      .filter((line) => !line.startsWith("[orbita] "))
       .join("\n"),
   );
   const clamped = clampToolBody(text);
@@ -5709,7 +5695,11 @@ function ShellToolBody(props: { command: string; text: string; failed: boolean; 
       <div ref={follow.ref} onScroll={follow.onScroll} className="scroll bash-output">
         {text === "" ? (
           <div style={{ ...BODY_LINE, color: "var(--color-text-tertiary)" }}>
-            {props.live ? t.chat.waitingOutput : t.chat.noOutput}
+            {props.live
+              ? t.chat.waitingOutput
+              : props.pendingResult
+                ? t.chat.bashResultBelow
+                : t.chat.noOutput}
           </div>
         ) : (
           clamped.head.map((line, index) => (

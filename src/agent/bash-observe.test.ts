@@ -1,5 +1,5 @@
 /**
- * bash 执行层的测试：差分等价、签到不杀、poll / stop / list、寿命与并发上限、abort、缓冲。
+ * bash 执行层的测试：差分等价、签到不杀、结束写回（onEnd）、stop / list、寿命、abort、缓冲。
  *
  * 第一条是**差分测试**：换掉内建执行后端后，短命令的退出码与输出必须与 pi 逐字节一致，
  * 否则模型与 UI 看到的东西会悄悄变化。其余各条对应句柄内核的契约；所有时长都靠
@@ -26,12 +26,12 @@ import {
 import {
   createBashHandleTools,
   listSessions,
-  pollSession,
+  RESULT_TAIL_LINES,
   stopSession,
-  type SessionSnapshot,
+  type BashSessionEnd,
 } from "./bash-sessions.ts";
 
-const rmTemp = (dir: string) => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+const rmTemp = (dir: string) => rm(dir, { recursive: true, force: true, maxRetries: 12, retryDelay: 200 });
 
 /**
  * 临时目录收尾：先杀会话里的子进程再删目录。Windows 上子进程没退干净时目录是锁着的
@@ -42,18 +42,35 @@ async function cleanupTemp(dir: string): Promise<void> {
   await rmTemp(dir);
 }
 
-/** poll 到满足条件为止。模型自己也是这么用的：有新输出就先看一眼，再继续等 */
-async function pollUntil(
-  id: string,
-  done: (snapshot: SessionSnapshot) => boolean,
-  deadlineMs = 5_000,
-): Promise<SessionSnapshot> {
-  const deadline = Date.now() + deadlineMs;
-  let snapshot = await pollSession(id, 300);
-  while (!done(snapshot) && Date.now() < deadline) {
-    snapshot = await pollSession(id, 200);
-  }
-  return snapshot;
+/**
+ * 收结束回调。**结果写回是这套机制的核心**：每条会话的 onEnd 恰好一次，
+ * 这里把「等到那一次」做成一个 promise，并留下全部到达记录供「只调一次」断言。
+ */
+interface EndCollector {
+  results: BashSessionEnd[];
+  wait(deadlineMs?: number): Promise<BashSessionEnd>;
+  onEnd(result: BashSessionEnd): void;
+}
+
+function captureEnd(): EndCollector {
+  const results: BashSessionEnd[] = [];
+  let resolve: ((result: BashSessionEnd) => void) | undefined;
+  const wait = (deadlineMs = 8_000): Promise<BashSessionEnd> =>
+    new Promise<BashSessionEnd>((fulfil, reject) => {
+      if (results.length > 0) {
+        fulfil(results[0] as BashSessionEnd);
+        return;
+      }
+      resolve = fulfil;
+      const timer = setTimeout(() => reject(new Error("bash session end callback never fired")), deadlineMs);
+      timer.unref();
+    });
+  const waiter = (result: BashSessionEnd): void => {
+    results.push(result);
+    resolve?.(result);
+    resolve = undefined;
+  };
+  return { wait, results, onEnd: waiter };
 }
 
 interface RunResult {
@@ -256,8 +273,9 @@ describe("签到：交还控制权，不杀进程", () => {
         cwd: dir,
       });
       assert.equal(exitCode, null, "签到应让本次调用以 exitCode null 返回");
-      assert.match(output, /\[orbita\] kind=detached session=b\d+ idle=0s \| /);
+      assert.match(output, /\[orbita\] kind=detached session=b\d+ elapsed=\d+s \| /);
       assert.match(output, /The command is still running; it was detached so you can keep going\./);
+      assert.match(output, /written back to the conversation automatically/);
       const id = sessionIdOf(output);
       const pid = await waitForPid(pidFile);
       assert.ok(isAlive(pid), `签到不得杀进程：pid ${pid} 应还活着`);
@@ -271,71 +289,88 @@ describe("签到：交还控制权，不杀进程", () => {
     }
   });
 
-  test("签到后会话继续收输出，poll 有新输出就提前返回", async () => {
+  test("签到后会话继续收输出；结束时结果带尾部输出（不需要 poll）", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orbita-bash-detach-"));
     const pidFile = join(dir, "pid.txt");
     try {
-      const { output } = await run(observedOps({ checkInMs: 500 }), tickingWithOwnPid(pidFile), { cwd: dir });
+      const end = captureEnd();
+      const { output } = await run(observedOps({ checkInMs: 500, onSessionEnd: end.onEnd }), tickingWithOwnPid(pidFile), {
+        cwd: dir,
+      });
       const id = sessionIdOf(output);
-      const startedAt = Date.now();
-      const snapshot = await pollSession(id, 5_000);
-      const elapsed = Date.now() - startedAt;
-      assert.ok(snapshot.newLines > 0, `应看到签到之后的新行（newLines=${snapshot.newLines}）`);
-      assert.match(snapshot.tail, /tick \d+/);
-      assert.ok(elapsed < 2_500, `有新输出应提前返回（实测 ${elapsed}ms）`);
-      assert.equal(snapshot.status, "running");
+      // 签到之后它还在吐字：先等子进程真的起来（负载高时 node 启动可能慢过签到点），
+      // 再等至少一个 tick，然后停——结果里的尾部输出要包含签到后的那些行
+      await waitForPid(pidFile, 20_000);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      const summary = await stopSession(id);
+      assert.equal(summary?.status, "killed");
+      const result = await end.wait();
+      assert.equal(result.id, id);
+      assert.equal(result.status, "killed");
+      assert.equal(result.cancelled, true);
+      assert.ok(result.elapsedMs >= 500, `elapsed 应含签到前那段（实测 ${result.elapsedMs}ms）`);
+      assert.match(result.output, /tick \d+/);
     } finally {
       await cleanupTemp(dir);
     }
   });
 
-  test("静默命令：poll 等满，idleSeconds 随时间增长", async () => {
+  test("静默命令：签到后不吐字，结果里也没有编造的输出", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orbita-bash-detach-"));
     const pidFile = join(dir, "pid.txt");
     try {
-      const { output } = await run(observedOps({ checkInMs: 300 }), longRunningWithOwnPid(pidFile), { cwd: dir });
+      const end = captureEnd();
+      const { output } = await run(
+        observedOps({ checkInMs: 300, onSessionEnd: end.onEnd }),
+        longRunningWithOwnPid(pidFile),
+        { cwd: dir },
+      );
       const id = sessionIdOf(output);
-      const startedAt = Date.now();
-      const snapshot = await pollSession(id, 400);
-      const elapsed = Date.now() - startedAt;
-      assert.ok(elapsed >= 330, `没有新输出应等满 400ms（实测 ${elapsed}ms）`);
-      assert.equal(snapshot.status, "running");
-      assert.equal(snapshot.newLines, 0);
-      assert.ok(snapshot.idleMs >= 600, `idle 应包含签到前的时间（实测 ${snapshot.idleMs}ms）`);
+      // 用户按停止（与运行时的 bashStop 同一条路）
+      const summary = await stopSession(id);
+      assert.equal(summary?.status, "killed");
+      assert.equal(summary?.endReason, "stop");
+      const result = await end.wait();
+      assert.equal(result.status, "killed");
+      assert.equal(result.endReason, "stop");
+      assert.equal(result.output, "");
     } finally {
       await cleanupTemp(dir);
     }
   });
 
-  test("命令在签到后自然结束 → poll 返回 finished + 退出码", async () => {
+  test("命令在签到后自然结束 → 结果 finished + 退出码 + 输出", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orbita-bash-detach-"));
     try {
-      const command = 'node -e "console.log(\'tick 1\');setTimeout(()=>{console.log(\'done\')},600)"';
-      const { output } = await run(observedOps({ checkInMs: 200 }), command, { cwd: dir });
-      const id = sessionIdOf(output);
-      const snapshot = await pollUntil(id, (current) => current.status !== "running");
-      assert.equal(snapshot.status, "finished");
-      assert.equal(snapshot.exitCode, 0);
-      assert.match(snapshot.tail, /done/);
+      const end = captureEnd();
+      const command = "node -e \"console.log('tick 1');setTimeout(()=>{console.log('done')},600)\"";
+      const { output } = await run(observedOps({ checkInMs: 200, onSessionEnd: end.onEnd }), command, { cwd: dir });
+      sessionIdOf(output);
+      const result = await end.wait();
+      assert.equal(result.status, "finished");
+      assert.equal(result.exitCode, 0);
+      assert.match(result.output, /tick 1/);
+      assert.match(result.output, /done/);
+      // 结束回调只该来一次
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      assert.equal(end.results.length, 1);
     } finally {
       await cleanupTemp(dir);
     }
   });
 
-  test("缓冲截断：输出超过 2000 行后 poll 的 tail 只给最后 40 行", async () => {
+  test("缓冲截断：输出超过 2000 行时结果只留尾部 RESULT_TAIL_LINES 行", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orbita-bash-detach-"));
     try {
+      const end = captureEnd();
       const command =
-        'node -e "for(let i=1;i<=3000;i++)console.log(\'line \'+i);setTimeout(()=>{},60000)"';
-      const { output } = await run(observedOps({ checkInMs: 900 }), command, { cwd: dir });
-      const id = sessionIdOf(output);
-      // 全量测试并行跑时 node 的启动可能慢过签到点：签到后输出仍会继续进同一个缓冲，
-      // 所以用「tail 里出现最后一行」作为判据，而不是赌 900ms 足够
-      const snapshot = await pollUntil(id, (current) => current.tail.includes("line 3000"), 10_000);
-      const lines = snapshot.tail.split("\n");
-      assert.equal(lines.length, 40);
-      assert.equal(lines[0], "line 2961");
-      assert.equal(lines[39], "line 3000");
+        "node -e \"for(let i=1;i<=3000;i++)console.log('line '+i);setTimeout(()=>{},3000)\"";
+      const { output } = await run(observedOps({ checkInMs: 300, onSessionEnd: end.onEnd }), command, { cwd: dir });
+      sessionIdOf(output);
+      const result = await end.wait(15_000);
+      const lines = result.output.split("\n");
+      assert.equal(lines.length, RESULT_TAIL_LINES);
+      assert.equal(lines[lines.length - 1], "line 3000");
     } finally {
       await cleanupTemp(dir);
     }
@@ -347,43 +382,41 @@ describe("会话生命周期", () => {
     const dir = await mkdtemp(join(tmpdir(), "orbita-bash-life-"));
     const pidFile = join(dir, "pid.txt");
     try {
+      const end = captureEnd();
       const { output } = await run(
-        observedOps({ checkInMs: 150, lifetimeMs: 600 }),
+        observedOps({ checkInMs: 150, lifetimeMs: 600, onSessionEnd: end.onEnd }),
         tickingWithOwnPid(pidFile),
         { cwd: dir },
       );
       const id = sessionIdOf(output);
-      const pid = await waitForPid(pidFile);
-      const snapshot = await pollUntil(id, (current) => current.status === "killed");
-      assert.equal(snapshot.status, "killed");
-      assert.equal(snapshot.endReason, "lifetime");
-      assert.match(snapshot.tail, /kind=cap reason=lifetime/);
-      assert.match(snapshot.tail, /lifetime limit/);
+      // 全量并行跑时 node 启动可能慢过 5 秒（既有噪声）；这里只放宽「等子进程起来」
+      const pid = await waitForPid(pidFile, 20_000);
+      const result = await end.wait();
+      assert.equal(result.id, id);
+      assert.equal(result.status, "killed");
+      assert.equal(result.endReason, "lifetime");
+      assert.equal(result.cancelled, true);
+      assert.match(result.output, /lifetime limit/);
       assert.ok(await waitForDeath(pid), `寿命上限后 pid ${pid} 仍然活着`);
     } finally {
       await cleanupTemp(dir);
     }
   });
 
-  test("并发上限：第二个会话明确失败，命令被杀", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "orbita-bash-cap-"));
-    const firstPid = join(dir, "first.txt");
-    const secondPid = join(dir, "second.txt");
+  test("不限并发：同时开 12 个会话全部成功，没有「Too many」", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bash-many-"));
     try {
-      const options: BashYieldOptions = { checkInMs: 150, maxSessions: 1 };
-      const first = await run(observedOps(options), longRunningWithOwnPid(firstPid), { cwd: dir });
-      assert.match(first.output, /kind=detached/);
-
-      const message = await captureError(() =>
-        observedOps(options).exec(longRunningWithOwnPid(secondPid), dir, { onData: () => {} }),
-      );
-      assert.match(message, /Too many detached bash sessions/);
-      assert.match(message, /max 1/);
-      assert.equal(listSessions().filter((session) => session.status === "running").length, 1);
-
-      const second = await waitForPid(secondPid);
-      assert.ok(await waitForDeath(second), `被并发上限拒绝的命令应被杀掉（pid ${second}）`);
+      const outputs: string[] = [];
+      for (let index = 0; index < 12; index += 1) {
+        const { output } = await run(observedOps({ checkInMs: 150 }), "sleep 60", { cwd: dir });
+        outputs.push(output);
+      }
+      const ids = outputs.map((output) => sessionIdOf(output));
+      assert.equal(new Set(ids).size, 12);
+      assert.equal(listSessions().filter((session) => session.status === "running").length, 12);
+      assert.doesNotMatch(outputs.join("\n"), /Too many detached bash sessions/);
     } finally {
+      // 整批收掉（12 个 sleep 进程）
       await cleanupTemp(dir);
     }
   });
@@ -393,16 +426,18 @@ describe("会话生命周期", () => {
     const pidFile = join(dir, "pid.txt");
     try {
       const controller = new AbortController();
-      const { output } = await run(observedOps({ checkInMs: 150 }), tickingWithOwnPid(pidFile), {
-        cwd: dir,
-        signal: controller.signal,
-      });
-      const id = sessionIdOf(output);
+      const end = captureEnd();
+      const { output } = await run(
+        observedOps({ checkInMs: 150, onSessionEnd: end.onEnd }),
+        tickingWithOwnPid(pidFile),
+        { cwd: dir, signal: controller.signal },
+      );
+      sessionIdOf(output);
       const pid = await waitForPid(pidFile);
       controller.abort();
-      const snapshot = await pollSession(id, 3_000);
-      assert.equal(snapshot.status, "killed");
-      assert.equal(snapshot.endReason, "abort");
+      const result = await end.wait();
+      assert.equal(result.status, "killed");
+      assert.equal(result.endReason, "abort");
       assert.ok(await waitForDeath(pid), `abort 后 pid ${pid} 仍然活着`);
     } finally {
       await cleanupTemp(dir);
@@ -416,83 +451,69 @@ describe("会话生命周期", () => {
       const { output } = await run(observedOps({ checkInMs: 150 }), longRunningWithOwnPid(pidFile), {
         cwd: dir,
       });
-      const id = sessionIdOf(output);
+      sessionIdOf(output);
       const pid = await waitForPid(pidFile);
       assert.ok(isAlive(pid), `测试前提不成立：子进程 ${pid} 应该还活着`);
       killObservedChildren();
       assert.ok(await waitForDeath(pid), `退出清理后 pid ${pid} 仍活着`);
       // 退出清理会把整张表清空（进程就要没了，保留 10 分钟没有意义）
       assert.equal(listSessions().length, 0);
-      assert.equal((await pollSession(id, 10)).status, "too-old");
     } finally {
       await cleanupTemp(dir);
     }
   });
 });
 
-describe("三个句柄工具", () => {
+describe("两个句柄工具（poll 已删）", () => {
   function toolByName(name: string): ToolDefinition {
     const tool = createBashHandleTools().find((candidate) => candidate.name === name);
     assert.ok(tool, `缺少工具 ${name}`);
     return tool;
   }
 
-  test("bash_list 空态可读；有会话时列出 id / 状态 / 时长", async () => {
+  test("只剩 stop / list：判断权收回，没有 bash_poll", () => {
+    assert.deepEqual(
+      createBashHandleTools().map((tool) => tool.name),
+      ["bash_stop", "bash_list"],
+    );
+  });
+
+  test("bash_list 空态可读；有会话时列出 id / 状态 / 时长 / 命令", async () => {
     const empty = await runTool(toolByName("bash_list"), {});
     assert.match(empty, /No bash sessions/);
 
     const dir = await mkdtemp(join(tmpdir(), "orbita-bash-tools-"));
     try {
-      const { output } = await run(observedOps({ checkInMs: 150 }), 'node -e "setTimeout(()=>{},60000)"', {
-        cwd: dir,
-      });
+      const { output } = await run(observedOps({ checkInMs: 150 }), "sleep 60", { cwd: dir });
       const id = sessionIdOf(output);
       const text = await runTool(toolByName("bash_list"), {});
       assert.match(text, new RegExp(`${id} running elapsed=`));
       assert.match(text, /idle=/);
+      assert.match(text, /:: sleep 60/);
     } finally {
       await cleanupTemp(dir);
     }
   });
 
-  test("bash_poll：未知 id → too-old 的整句说明", async () => {
-    const text = await runTool(toolByName("bash_poll"), { sessionId: "b9999", waitSeconds: 1 });
-    assert.match(text, /status: too-old/);
-    assert.match(text, /finished more than 10 minutes ago/);
-  });
-
-  test("bash_poll：返回 status / exitCode / idleSeconds / +N lines / tail", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "orbita-bash-tools-"));
-    try {
-      const { output } = await run(observedOps({ checkInMs: 150 }), tickingWithOwnPid(join(dir, "pid.txt")), {
-        cwd: dir,
-      });
-      const id = sessionIdOf(output);
-      const text = await runTool(toolByName("bash_poll"), { sessionId: id, waitSeconds: 2 });
-      assert.match(text, /status: running/);
-      assert.match(text, /session: b\d+/);
-      assert.match(text, /exitCode: none/);
-      assert.match(text, /idleSeconds: \d+/);
-      assert.match(text, /\+\d+ lines since last poll/);
-      assert.match(text, /tail \(last 40 lines\):/);
-    } finally {
-      await cleanupTemp(dir);
-    }
-  });
-
-  test("bash_stop：未知 id → 可读说明；已知 id → killed + endReason", async () => {
+  test("bash_stop：未知 id → 可读说明；已知 id → killed + endReason，结果照样写回", async () => {
     const missing = await runTool(toolByName("bash_stop"), { sessionId: "b9999" });
     assert.match(missing, /no session b9999/);
 
     const dir = await mkdtemp(join(tmpdir(), "orbita-bash-tools-"));
     try {
-      const { output } = await run(observedOps({ checkInMs: 150 }), longRunningWithOwnPid(join(dir, "pid.txt")), {
-        cwd: dir,
-      });
+      const end = captureEnd();
+      const { output } = await run(
+        observedOps({ checkInMs: 150, onSessionEnd: end.onEnd }),
+        longRunningWithOwnPid(join(dir, "pid.txt")),
+        { cwd: dir },
+      );
       const id = sessionIdOf(output);
       const text = await runTool(toolByName("bash_stop"), { sessionId: id });
       assert.match(text, /status: killed/);
       assert.match(text, /endReason: stopped by bash_stop/);
+      const result = await end.wait();
+      assert.equal(result.status, "killed");
+      assert.equal(result.endReason, "stop");
     } finally {
       await cleanupTemp(dir);
     }
@@ -514,6 +535,31 @@ describe("接线：自定义 bash 定义与设置", () => {
       assert.equal(tool.name, "bash");
       const text = await runTool(tool, { command: "echo $ORBITA_BASH_PREFIX_PROBE" });
       assert.match(text, /prefix-ok/);
+    } finally {
+      await cleanupTemp(dir);
+    }
+  });
+
+  test("工具包装把 toolCallId 绑到交还的会话上（结果才能挂回同一行）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bash-bind-"));
+    try {
+      const tool = createObservedBashTool(
+        dir,
+        { getShellPath: () => undefined, getShellCommandPrefix: () => undefined },
+        { checkInMs: 150 },
+      );
+      const result = await tool.execute(
+        "call-bind-1",
+        { command: "sleep 60" },
+        undefined,
+        undefined,
+        undefined as never,
+      );
+      const id = sessionIdOf(toolText(result as { content: Array<{ type: string; text?: string }> }));
+      const session = listSessions().find((candidate) => candidate.id === id);
+      assert.equal(session?.command, "sleep 60");
+      assert.equal(session?.status, "running");
+      assert.equal(session?.toolCallId, "call-bind-1");
     } finally {
       await cleanupTemp(dir);
     }

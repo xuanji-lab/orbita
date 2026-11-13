@@ -556,15 +556,12 @@ export function registerAgentIpc(
   ipcMain.handle(ipcChannels.agentSubmit, (_e, input: SubmitAgentInput): Promise<void> => submitTurn(input));
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
   /**
-   * bash 活行的状态轮询（P2-lite）：renderer 只在会话里真有「运行中活行」时才叫它，
-   * 每 2s 一拍。**owner 就是会话 id**（agent 侧按它隔离，跨会话的 id 一律当不存在）。
+   * 停止钮：直接交给 agent 进程按 owner 停（与模型的 bash_stop 同一个 stopSession）。
+   * **没有状态回执**——停完的落定态是 runtime 写回对话的那条终态 tool 记录。
    */
-  ipcMain.handle(ipcChannels.agentBashSessions, (_e, sessionId: string) => host.bashSessions(sessionId));
-  /** 停止钮（两段式确认之后）：回做完之后的状态列表，下一拍轮询照旧 */
-  ipcMain.handle(
-    ipcChannels.agentBashStop,
-    (_e, sessionId: string, bashSessionId: string) => host.stopBashSession(sessionId, bashSessionId),
-  );
+  ipcMain.handle(ipcChannels.agentBashStop, (_e, sessionId: string, bashId: string) => {
+    host.stopBashSession(sessionId, bashId);
+  });
   ipcMain.handle(ipcChannels.agentInterrupt, async (_e, input: SubmitAgentInput): Promise<void> => {
     const provider = await resolveForTurn(input.providerId);
     // interrupt 是排队消息的「立即发送」分支（会话还忙碌时）：与 submit 同一份组装，

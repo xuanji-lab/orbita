@@ -13,7 +13,6 @@ import {
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
-import type { BashSessionStatus } from "../../shared/bash-session.ts";
 
 export const agentApi = {
   /**
@@ -43,14 +42,11 @@ export const agentApi = {
   answerPermission: (requestId: string, answer: PermissionAnswer): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentAnswerPermission, requestId, answer),
   /**
-   * bash 活行的状态（P2-lite）：这条会话名下的后台 bash 会话清单。
-   * **只在真有运行中活行时轮询**（调用方管节流），agent 进程没起就回空数组。
+   * 停掉一个后台 bash 会话（行尾停止钮，点一下直接发）。
+   * **没有回执**：停完的落定态是 runtime 写回对话的那条终态记录。
    */
-  bashSessions: (sessionId: string): Promise<readonly BashSessionStatus[]> =>
-    ipcRenderer.invoke(ipcChannels.agentBashSessions, sessionId),
-  /** 停掉一个后台 bash 会话（行尾停止钮，过了两段式确认）。回做完之后的状态，含它自己 */
-  stopBashSession: (sessionId: string, bashSessionId: string): Promise<readonly BashSessionStatus[]> =>
-    ipcRenderer.invoke(ipcChannels.agentBashStop, sessionId, bashSessionId),
+  stopBashSession: (sessionId: string, bashId: string): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.agentBashStop, sessionId, bashId),
   /** 意图确认卡的回答（实验功能 intent-system）：对不上号的陈旧应答丢弃不串台 */
   answerIntentConfirm: (requestId: string, decision: IntentConfirmDecision): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentAnswerIntentConfirm, requestId, decision),

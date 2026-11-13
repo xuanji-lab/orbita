@@ -1985,19 +1985,6 @@ html[data-pointer-drag] iframe {
   cursor: default;
 }
 
-/* 第一下之后原地变「确认停止？」：文字比图标宽，宽度放开——两段式确认得看得见 */
-.bash-stop-confirm {
-  width: auto;
-  padding: 0 var(--space-2);
-  color: var(--color-danger);
-}
-
-.bash-stop-label {
-  font-family: var(--font-family-base);
-  font-size: var(--font-size-xs);
-  line-height: var(--line-height-ui);
-  white-space: nowrap;
-}
 
 /* ===== Sub-sessions 收件箱（2026-10-12：列表层改为收件箱） =====
  * 一个子会话一行：行首状态饼（.status-pie，与侧栏 / 铃铛清单同一个）+ 名字 +

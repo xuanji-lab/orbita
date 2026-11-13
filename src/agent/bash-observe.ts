@@ -6,8 +6,8 @@
  * 长命令最长跑过 3.7 小时，这段时间模型既不能看进展，也不能停。
  *
  * 这里改的只有「到点怎么办」：到达签到点（默认 5 分钟）命令仍在跑时**不杀**，把它登记成
- * 会话（`b1` / `b2`）、把已有输出留在环形缓冲里、工具调用立刻返回。模型随后用
- * `bash_poll` 看进展、自己决定下一次隔多久再看、看明白了用 `bash_stop` 停。
+ * 会话（`b1` / `b2`）、把已有输出留在环形缓冲里、工具调用立刻返回。**之后没有轮询**：
+ * 命令结束（自然退出 / `bash_stop` / 寿命到）时结果由 runtime 自动写回对话。
  * **没有任何路径因为「到点」而杀进程**——唯一的杀是寿命上限、显式 stop、用户 abort。
  *
  * **短命令必须与今天逐字节一致**：签到前退出的命令走的是和 pi 一样的返回/错误路径，
@@ -26,13 +26,14 @@ import {
   type BashOperations,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { detachedNoticeHeader } from "../shared/bash-session.ts";
+import { detachedNoticeHeader, parseDetachedSessionId } from "../shared/bash-session.ts";
 import {
   TailBuffer,
+  bindBashSessionToolCall,
   killAllSessions,
   registerSession,
   type BashSession,
-  type RegisterSessionResult,
+  type BashSessionEnd,
 } from "./bash-sessions.ts";
 
 /**
@@ -215,11 +216,12 @@ function waitForChildProcess(child: ChildProcess): Promise<WaitOutcome> {
  * 签到提示。sessionId 让模型知道下一步该用哪个句柄；逗号后的两句说明怎么继续。
  * 竖线左边那一截由 shared/bash-session.ts 铸（renderer 解析同一份格式）。
  */
-function detachNotice(sessionId: string): string {
+function detachNotice(sessionId: string, elapsedSeconds: number): string {
   return (
-    `\n${detachedNoticeHeader(sessionId)} | ` +
+    `\n${detachedNoticeHeader(sessionId, elapsedSeconds)} | ` +
     "The command is still running; it was detached so you can keep going. " +
-    "Read it with bash_poll (bash_stop to end it).\n"
+    "Its result is written back to the conversation automatically when it finishes — do not poll. " +
+    "Use bash_list to see running sessions and bash_stop to end one.\n"
   );
 }
 
@@ -234,10 +236,13 @@ export interface BashYieldOptions {
   checkInMs?: number;
   /** 会话寿命上限毫秒数，默认 `SESSION_LIFETIME_MS`(4 小时) */
   lifetimeMs?: number;
-  /** 同时存活的会话上限，默认 `MAX_SESSIONS`(8) */
-  maxSessions?: number;
   /** 命令结束后会话保留多久可查，默认 10 分钟 */
   retentionMs?: number;
+  /**
+   * 会话结束回调（恰好一次）：runtime 用它把结果写回对话、必要时自动起一轮。
+   * 从工具调用 detach 之后才可能触发，可能远晚于这一轮结束。
+   */
+  onSessionEnd?: (result: BashSessionEnd) => void;
 }
 
 /**
@@ -292,7 +297,7 @@ export function createObservedBashOperations(
         child.pid === undefined ? undefined : { pid: child.pid, spawnedAt: Date.now() };
       if (record !== undefined) observedChildren.set(record.pid, record);
 
-      // 从 spawn 起就写缓冲：签到前的输出也要进会话，第一次 poll 的 tail 才是完整的一段
+      // 从 spawn 起就写缓冲：签到前的输出也要进会话，结束时写回的结果 tail 才是完整的一段
       const buffer = new TailBuffer();
       let session: BashSession | undefined;
       /** 签到之后不再往 pi 的输出管道写：工具调用已经返回，再写也没人收 */
@@ -302,8 +307,6 @@ export function createObservedBashOperations(
       /** wait 已经观察到结束（含微任务），签到定时器据此不抢在自然结束前 detach */
       let outcomeSeen = false;
       let timedOut = false;
-      /** 并发上限拒绝时的文案。杀完命令后当工具错误抛出，模型才知道是「表满了」 */
-      let capError: string | undefined;
       let detachResolve: (() => void) | undefined;
       const detached = new Promise<void>((resolve) => {
         detachResolve = resolve;
@@ -361,35 +364,30 @@ export function createObservedBashOperations(
         checkInHandle = setTimeout(() => {
           checkInHandle = undefined;
           // 已经结束 / 已经 abort / 已经超时 / 子进程已退出：都走普通收尾，不制造空会话
-          if (finished || outcomeSeen || timedOut || capError !== undefined) return;
+          if (finished || outcomeSeen || timedOut) return;
           if (signal?.aborted === true) return;
           if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
 
-          const registered: RegisterSessionResult = registerSession({
+          session = registerSession({
             ...(options.owner === undefined ? {} : { owner: options.owner }),
+            command,
             child,
             buffer,
             startedAt,
             lastDataAt,
             ...(signal === undefined ? {} : { signal }),
             killTree,
+            ...(options.onSessionEnd === undefined ? {} : { onEnd: options.onSessionEnd }),
             ...(options.lifetimeMs === undefined ? {} : { lifetimeMs: options.lifetimeMs }),
-            ...(options.maxSessions === undefined ? {} : { maxSessions: options.maxSessions }),
             ...(options.retentionMs === undefined ? {} : { retentionMs: options.retentionMs }),
           });
-          if (!registered.ok) {
-            capError = registered.message;
-            killTree();
-            return;
-          }
-          session = registered.session;
           // 契约：到期时停掉本次调用的所有定时器。超时不再杀它，寿命交给会话表
           clearDeadline();
           clearCheckIn();
-          onData(Buffer.from(detachNotice(session.id), "utf8"));
+          onData(Buffer.from(detachNotice(session.id, (Date.now() - startedAt) / 1000), "utf8"));
           forwardToTool = false;
           detachResolve?.();
-          // 后台接力：命令自己结束后把退出码记到会话上，之后 poll 才能报 finished
+          // 后台接力：命令自己结束后把退出码记到会话上，并触发写回对话
           void waitPromise
             .then((outcome) => session?.end(outcome.exitCode))
             .catch(() => session?.end(null));
@@ -414,7 +412,6 @@ export function createObservedBashOperations(
         finished = true;
         // 顺序与 pi 一致：先看 abort，再看 timeout（两者可能同时成立，文案以 abort 为准）
         if (signal?.aborted) throw new Error("aborted");
-        if (capError !== undefined) throw new Error(capError);
         if (timedOut) throw new Error(`timeout:${timeout}`);
         return { exitCode: raced.outcome.exitCode };
       } finally {
@@ -456,9 +453,42 @@ export function createObservedBashTool(
     shellPath: settings.getShellPath(),
   });
   /*
+   * 包一层 execute 只为拿 toolCallId：执行层的 `BashOperations.exec` 拿不到它，
+   * 而结束时要写回的那条记录必须挂回**同一次工具调用**那一行（渲染层按 toolCallId 归位）。
+   * 工具返回之后再从结果尾部认会话 id（认得出来才是一次签到）。
+   */
+  const execute = definition.execute.bind(definition);
+  const wrapped = {
+    ...definition,
+    execute: async (...args: Parameters<typeof execute>) => {
+      const result = await execute(...args);
+      const text = toolResultText(result);
+      // 只扫尾部 400 字符：交还提示行就在最后，而结果实测能到 479KB
+      const sessionId = parseDetachedSessionId(text.length > 400 ? text.slice(-400) : text);
+      if (sessionId !== null) bindBashSessionToolCall(sessionId, args[0]);
+      return result;
+    },
+  };
+  /*
    * 一次边界处的类型擦除：pi 的工厂把返回类型钉死在 bash 的 schema 上，而 customTools
    * 收的是 `ToolDefinition`（registry 只按 name 收录，参数类型不重要）。两者结构一致，
    * 只因 renderCall 的入参逆变使 TS 拒绝直接赋值——不是运行时差异，不给它加包装层。
    */
-  return definition as unknown as ToolDefinition;
+  return wrapped as unknown as ToolDefinition;
+}
+
+/** 工具结果里的文本块拼接（只为找尾部那行 `[orbita] kind=detached`） */
+function toolResultText(result: unknown): string {
+  if (typeof result !== "object" || result === null) return "";
+  const content = (result as { content?: unknown }).content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((block): block is { type: "text"; text: string } =>
+      typeof block === "object" &&
+      block !== null &&
+      (block as { type?: unknown }).type === "text" &&
+      typeof (block as { text?: unknown }).text === "string",
+    )
+    .map((block) => block.text)
+    .join("\n");
 }

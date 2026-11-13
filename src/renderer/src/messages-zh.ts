@@ -1950,7 +1950,6 @@ export const zh: Messages = {
     copyMessage: "复制消息",
     // bash 活行（P2-lite）：事实槽与停止钮
     bashElapsed: (clock) => `已 ${clock}`,
-    bashIdle: (clock) => `无输出 ${clock}`,
     bashTotal: (clock) => `共 ${clock}`,
     bashExit: (code) => `退出 ${code}`,
     bashStopped: "已停止",
@@ -1958,7 +1957,6 @@ export const zh: Messages = {
     bashCapLimit: "上限",
     copyCommand: "复制命令",
     stopBash: (id) => `停止 ${id}`,
-    confirmStopBash: "确认停止？",
     copyAnswer: "复制回答",
     transcriptCopied: (count) => `已复制整段对话 · ${count} 字`,
     transcriptCopyFailed: "复制失败——请手动选中复制",
@@ -2054,6 +2052,7 @@ export const zh: Messages = {
       },
     },
     waitingOutput: "（等待输出…）",
+    bashResultBelow: "（结果见下方）",
     noOutput: "（没有输出）",
     branchFromHere: "从这里分支",
     revertHere: "回到这里——撤回这条消息及之后全部，还原被改的文件，原文放回输入框",

@@ -804,8 +804,8 @@ describe("目录刷新范围 —— 只送已添加服务商的目录（审核 F
   });
 });
 
-describe("bashSessions —— 活行状态的一问一答（P2-lite）", () => {
-  /** 起一条活着的 agent（submit 后收下 created），之后才能发状态查询 */
+describe("bashStop —— 停止钮的一跳（没有状态轮询）", () => {
+  /** 起一条活着的 agent（submit 后收下 created），之后才能发命令 */
   async function liveHost(t: TestContext) {
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const ctx = await freshHost();
@@ -817,76 +817,30 @@ describe("bashSessions —— 活行状态的一问一答（P2-lite）", () => {
     return ctx;
   }
 
-  test("进程没起：回空数组，不为「有没有后台命令」fork 一个进程", async () => {
+  test("进程没起：静默 no-op，不为「停一条命令」fork 一个进程", async () => {
     const ctx = await freshHost();
-    assert.deepEqual(await ctx.host.bashSessions("s1"), []);
+    ctx.host.stopBashSession("s1", "b1");
+    await flush();
     assert.equal(ctx.forks(), 0);
   });
 
-  test("查询带 owner，回执按 requestId 对回去", async (t) => {
+  test("命令带 sessionId 与 bashId：agent 侧按 owner 校验", async (t) => {
     const ctx = await liveHost(t);
-    const pending = ctx.host.bashSessions("s1");
+    ctx.host.stopBashSession("s1", "b1");
+    await flush();
     const sent = ctx.child().posted.at(-1);
-    assert.equal(sent?.type, "bashStatusRequest");
-    const request = sent as Extract<AgentCommand, { type: "bashStatusRequest" }>;
-    assert.equal(request.owner, "s1");
-    assert.equal(request.stop, undefined);
-
-    ctx.child().emit({
-      type: "bashStatus",
-      requestId: request.requestId,
-      sessions: [{ id: "b1", status: "running", exitCode: null, elapsedSeconds: 12, idleSeconds: 3 }],
-    });
-    const sessions = await pending;
-    assert.equal(sessions[0]?.id, "b1");
-    assert.equal(sessions[0]?.status, "running");
+    assert.equal(sent?.type, "bashStop");
+    const request = sent as Extract<AgentCommand, { type: "bashStop" }>;
+    assert.equal(request.sessionId, "s1");
+    assert.equal(request.bashId, "b1");
   });
 
-  test("停止钮：同一条命令带 stop，回执是停完之后的整张列表", async (t) => {
+  test("不发任何状态查询：轮询那一半已经删干净", async (t) => {
     const ctx = await liveHost(t);
-    const pending = ctx.host.stopBashSession("s1", "b1");
-    const request = ctx.child().posted.at(-1) as Extract<AgentCommand, { type: "bashStatusRequest" }>;
-    assert.equal(request.stop, "b1");
-    assert.equal(request.owner, "s1");
-    ctx.child().emit({
-      type: "bashStatus",
-      requestId: request.requestId,
-      sessions: [{ id: "b1", status: "killed", exitCode: null, elapsedSeconds: 40, idleSeconds: 2, endReason: "stop" }],
-    });
-    const [stopped] = await pending;
-    assert.equal(stopped?.status, "killed");
-    assert.equal(stopped?.endReason, "stop");
-  });
-
-  test("进程退出：在飞的查询全部拒绝，界面不会挂在「等一拍」", async (t) => {
-    const ctx = await liveHost(t);
-    const pending = ctx.host.bashSessions("s1");
-    ctx.child().exitWith(1);
-    await assert.rejects(pending, /exited with code 1/);
-  });
-
-  test("并发的两拍互不串台：各按 requestId 结自己那一份", async (t) => {
-    const ctx = await liveHost(t);
-    const first = ctx.host.bashSessions("s1");
-    const second = ctx.host.bashSessions("s1");
-    const requests = ctx
-      .child()
-      .posted.filter(
-        (command): command is Extract<AgentCommand, { type: "bashStatusRequest" }> =>
-          command.type === "bashStatusRequest",
-      );
-    const [a, b] = requests.slice(-2) as [
-      Extract<AgentCommand, { type: "bashStatusRequest" }>,
-      Extract<AgentCommand, { type: "bashStatusRequest" }>,
-    ];
-    // 先回第二拍、再回第一拍：两拍各自拿到自己那份，不因到达顺序串台
-    ctx.child().emit({
-      type: "bashStatus",
-      requestId: b.requestId,
-      sessions: [{ id: "b2", status: "finished", exitCode: 0, elapsedSeconds: 5, idleSeconds: 0 }],
-    });
-    assert.equal((await second)[0]?.id, "b2");
-    ctx.child().emit({ type: "bashStatus", requestId: a.requestId, sessions: [] });
-    assert.deepEqual(await first, []);
+    ctx.host.stopBashSession("s1", "b1");
+    await flush();
+    const posted = ctx.child().posted;
+    assert.equal(posted.filter((command) => command.type === "bashStop").length, 1);
+    assert.equal(posted.some((command) => String(command.type).startsWith("bashStatus")), false);
   });
 });
