@@ -101,6 +101,9 @@ import { WorkspaceStore } from "./workspace/store.ts";
 import { registerFilesIpc } from "./files/ipc.ts";
 import { applyDocRequest } from "./doc-panel/agent-requests.ts";
 import { printDocPdf } from "./doc-panel/print-doc-pdf.ts";
+import { findZoteroDataDir } from "./zotero/data-dir.ts";
+import { ZoteroService } from "./zotero/service.ts";
+import { setSnapshotRoot } from "./session/sqlite-readonly.ts";
 import { registerDocIpc } from "./doc-panel/ipc.ts";
 import { applySlidesRequest } from "./slides/agent-requests.ts";
 import { exportDeck } from "./slides/export.ts";
@@ -145,6 +148,28 @@ registerPanelScheme();
 // Windows 的系统通知按 AUMID 归到应用（否则打包版可能根本不弹，或弹成 Electron 的
 // 默认名）。与 electron-builder 的 appId 同值；要在任何通知发出前设（模块顶层即可）。
 app.setAppUserModelId("com.orbita.desktop");
+
+/**
+ * Zotero 只读服务（agent 的 zotero_* 工具在主进程的落点）：直接只读 Zotero 的数据目录，不依赖 Zotero 进程。
+ * 第一次被调用时才建；建了也不碰磁盘——每次工具调用才现找数据目录、现读库（启动与空闲时不扫描）。
+ * 开发版可用 ORBITA_ZOTERO_DATA_DIR 指定数据目录做验收；打包版不认它（data-dir.ts 的 dataDirOverride）。
+ */
+let zoteroService: ZoteroService | null = null;
+function zotero(): ZoteroService {
+  if (zoteroService === null) {
+    zoteroService = new ZoteroService({
+      locate: () =>
+        findZoteroDataDir({
+          home: homedir(),
+          platform: process.platform,
+          appData: process.env["APPDATA"],
+          packaged: app.isPackaged,
+          override: process.env["ORBITA_ZOTERO_DATA_DIR"],
+        }),
+    });
+  }
+  return zoteroService;
+}
 
 // 开发版与正式版各用各的数据（理由见 data-dirs.ts）。**必须在任何人读 userData 之前**：
 // 放在模块顶层、whenReady 之前——Chromium 的 Local Storage / 缓存也在 ready 时按它定位
@@ -417,6 +442,11 @@ void app.whenReady().then(async () => {
    * additionalArguments，渲染层首帧同步读出，见 preload/initial-theme.ts）。
    */
   const settings = new SettingsStore(configDir);
+  // 只读 SQLite 库（Zotero 的 zotero.sqlite）的临时副本放 Orbita 自己的数据目录下（不在源目录旁、不在任何工作区里）；
+  // 读完即删，启动时清掉上次异常退出的残留——清的是这个目录，不碰 Zotero 的数据目录（session/sqlite-readonly.ts）
+  void setSnapshotRoot(join(configDir, "external-db-snapshots")).catch((error: unknown) =>
+    console.error("[main] 清理只读库临时副本失败", error),
+  );
   // 设置写入的观察：「阻止睡眠」设置变了按当前在跑数重对一次（keepAwake 在后面定义；
   // 设置写入只发生在窗口起来之后，那时已就绪）。记忆服务与自动化 2026-11-06 转正，
   // 不再随设置开关拉起 / 停
@@ -686,6 +716,20 @@ void app.whenReady().then(async () => {
         .then((outcome) => agentHost.answerDoc(event.requestId, outcome))
         .catch((cause: unknown) =>
           agentHost.answerDoc(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
+    // Zotero 只读：agent 的查文献 / 读条目 / 读全文——只读 Zotero 的数据目录（./zotero/service.ts），
+    // Zotero 关着也能用。同样任何路径都回执
+    if (event.type === "zoteroRequest") {
+      void zotero()
+        .handle(event.request)
+        .then((outcome) => agentHost.answerZotero(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerZotero(event.requestId, {
             ok: false,
             error: cause instanceof Error ? cause.message : String(cause),
           }),
