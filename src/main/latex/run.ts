@@ -34,17 +34,21 @@
  * bibtex 子进程；只杀 latexmk 会留下孤立的引擎进程继续占 CPU 与 .aux。
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { totalmem } from "node:os";
-import { basename, extname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import {
+  LATEX_CLEAN_TIMEOUT_MS,
   LATEX_IDLE_TIMEOUT_MS,
   LATEX_LOG_TAIL_LIMIT,
   LATEX_TOTAL_TIMEOUT_MS,
   latexMaxConcurrent,
+  type LatexCleanOutcome,
+  type LatexCleanResult,
   type LatexCompileRequest,
   type LatexEngine,
   type LatexIssue,
+  type LatexProbeRequest,
   type LatexProbeResult,
   type LatexResult,
   type LatexRunOutcome,
@@ -98,6 +102,11 @@ export interface LatexRunnerOptions {
    * tick 都只能看到「刚有增长」，于是结果不再取决于宿主负载 / 子进程调度。
    */
   now?: () => number;
+  /**
+   * 设置里显式指定的 latexmk 路径（每轮现读）。缺席 = 只靠 PATH 与常见安装根。
+   * 生产传 `() => settings.read().then((s) => s.latexmkPath)`。
+   */
+  explicitPath?: () => Promise<string | undefined>;
 }
 
 export class LatexRunner {
@@ -110,6 +119,11 @@ export class LatexRunner {
   private readonly totalMemoryBytes: number;
   /** 看门狗时钟（注入点）。spawn 时刻与每次 tick 都用它算静默 / 总时长 */
   private readonly now: () => number;
+  /**
+   * 设置里显式指定的 latexmk 路径（每轮现读）。缺席 = 只靠 PATH 与常见安装根。
+   * 用函数而不是构造时的字符串：用户在引导卡里刚选完，不该等一次重启才生效。
+   */
+  private readonly explicitPath: (() => Promise<string | undefined>) | null;
   /** 正在编的项目（规范化后的目录）：同项目互斥的唯一真源 */
   private readonly active = new Set<string>();
   /** 正在跑的 latexmk 进程（key = 项目）。取消与退出清理都认它 */
@@ -126,6 +140,7 @@ export class LatexRunner {
     this.totalMemoryBytes = options.totalMemoryBytes ?? totalmem();
     this.maxConcurrent = latexMaxConcurrent(this.totalMemoryBytes);
     this.now = options.now ?? Date.now;
+    this.explicitPath = options.explicitPath ?? null;
   }
 
   /**
@@ -195,8 +210,112 @@ export class LatexRunner {
   }
 
   /** 本机 latexmk / 引擎探测（缓存由 createLatexProbe 管，界面点开 chip 时现问） */
-  probeEnvironment(): Promise<LatexProbeResult> {
-    return this.probe.probe();
+  async probeEnvironment(request: LatexProbeRequest = {}): Promise<LatexProbeResult> {
+    // refresh = 用户说「装好了，再看一眼」：不作废缓存就会拿到启动时（或上一次）的结论
+    if (request.refresh === true) this.probe.refresh();
+    return this.probe.probe(await this.explicitPathOf());
+  }
+
+  /**
+   * 现验一个候选路径是不是能跑的 latexmk（「指定位置」用）。
+   * **只认它自己**：`probe(explicit)` 在验不活时会退回 PATH，那时可能回 ok——那说明
+   * 「机器上有 latexmk」，但用户刚选的那个文件并不是，不能把它写进设置。
+   */
+  async verifyLatexmkPath(path: string): Promise<boolean> {
+    const result = await this.probe.probe(path);
+    return result.ok && result.source === "setting";
+  }
+
+  private async explicitPathOf(): Promise<string | undefined> {
+    if (this.explicitPath === null) return undefined;
+    try {
+      return await this.explicitPath();
+    } catch (cause) {
+      // 读设置失败不该让编译变成 not-installed：记一句，走 PATH 与常见根
+      console.warn("[latex] 读不到设置里的 latexmk 路径，改从 PATH 与常见安装位置找", cause);
+      return undefined;
+    }
+  }
+
+  /**
+   * 清理辅助文件：`latexmk -c`（删 .aux / .log / .fdb_latexmk 等，**保留 PDF**）。
+   *
+   * 三件事固定下来：
+   *
+   * 1. **与编译抢同一把锁**：清理动的是正在被 latexmk 读写的那组 .aux；在编时
+   *    按 same-project 拒绕（理由与 compile 同一条，不是一次清理失败）。
+   * 2. **报告差集而不是 latexmk 的自述**：`-c` 只回一句 Cleaned，不报删了哪几份。
+   *    清理前后列一遍产物目录，removed / kept 都是磁盘事实，toast 才有资格说
+   *    「删了 6 个文件，PDF 还在」。目录不存在时直接回空（没编过就没东西可清）。
+   * 3. **固定用 latexmk，不用 recipe 的可执行文件**：`-c` 是 latexmk 的功能，
+   *    自定义 recipe 指向的工具（tectonic / 自写脚本）未必认这个参数。
+   *
+   * 超时只留总时长一道（60 秒）：清理是读 .fdb_latexmk + 删文件，没有「日志在长」
+   * 这种进度信号可看，走日志静默判定只会把「很快就完了」拖成 5 分钟。
+   */
+  async clean(dirInput: string): Promise<LatexCleanOutcome> {
+    const started = Date.now();
+    const input = (dirInput ?? "").trim();
+    if (input === "") {
+      return { ok: false, error: "dir is required — pass the directory that holds the .tex file." };
+    }
+    const dir = resolve(input);
+    const key = projectKey(dir);
+    if (this.active.has(key)) {
+      return {
+        ok: false,
+        reason: "same-project",
+        error: `A LaTeX build is running in ${dir}. Wait for it to finish, then clean again.`,
+      };
+    }
+    if (this.running >= this.maxConcurrent) {
+      return {
+        ok: false,
+        reason: "busy",
+        error: "LaTeX is busy with another project on this machine. Wait for it to finish, then clean again.",
+      };
+    }
+    const probe = await this.probeEnvironment();
+    if (!probe.ok || probe.latexmk === null) return { ok: false, error: probe.message };
+    const plan = resolveLatexPlan(dir, {});
+    if (plan.status !== "ok") return { ok: false, error: plan.detail };
+
+    const target = cleanDirOf(plan);
+    const before = listFiles(target);
+    if (before === null) {
+      // 产物目录还没有：没编过，没什么可清。不 spawn 一个必然空转的 latexmk。
+      return { ok: true, result: { dir: target, removed: [], kept: [], durationMs: Date.now() - started } };
+    }
+
+    this.active.add(key);
+    this.running += 1;
+    try {
+      const outcome = await this.spawnLatexmk(
+        probe.latexmk,
+        cleanArgv(target, plan.mainName),
+        plan.dir,
+        key,
+        [],
+        // 两道闸都设成 60 秒：没有日志可看时 idle 只会被 total 兑掉（见 spawnLatexmk 的说明）
+        { idle: LATEX_CLEAN_TIMEOUT_MS, total: LATEX_CLEAN_TIMEOUT_MS },
+      );
+      if (this.cancelled.has(key)) return { ok: false, error: "Clean was cancelled." };
+      if (outcome.spawnError !== null) {
+        return { ok: false, error: `latexmk could not be started: ${outcome.spawnError}` };
+      }
+      if (outcome.timeout !== null) {
+        return { ok: false, error: `latexmk -c did not finish within ${seconds(LATEX_CLEAN_TIMEOUT_MS)}, so it was stopped.` };
+      }
+      if (outcome.code !== 0) {
+        return { ok: false, error: `latexmk -c exited with code ${String(outcome.code)}.${stderrTail(outcome.stderr)}` };
+      }
+      const after = listFiles(target) ?? [];
+      return { ok: true, result: cleanResult(target, before, after, Date.now() - started) };
+    } finally {
+      this.active.delete(key);
+      this.cancelled.delete(key);
+      this.running -= 1;
+    }
   }
 
   private async build(
@@ -207,7 +326,7 @@ export class LatexRunner {
   ): Promise<LatexResult> {
     const requestedEngine = request.engine;
 
-    const probe = await this.probe.probe();
+    const probe = await this.probeEnvironment();
     if (!probe.ok || probe.latexmk === null) {
       return {
         status: "not-installed",
@@ -361,6 +480,8 @@ export class LatexRunner {
     cwd: string,
     key: string,
     logPaths: readonly string[],
+    /** 超时闸。默认实例级（300 秒静默 / 10 分钟总长）；清理用同一个 spawn 管线但不看日志 */
+    timeouts: { idle: number; total: number } = { idle: this.idleTimeoutMs, total: this.totalTimeoutMs },
   ): Promise<ProcessOutcome> {
     return new Promise((resolvePromise) => {
       let settled = false;
@@ -435,9 +556,9 @@ export class LatexRunner {
         // 一份日志都不存在时按进程存活处理：沉默的起点还没有依据
         if (active || seen.size === 0) lastActivityAt = now;
         const elapsedMs = now - spawnedAt;
-        if (elapsedMs >= this.totalTimeoutMs) {
+        if (elapsedMs >= timeouts.total) {
           stall("total", now - lastActivityAt);
-        } else if (now - lastActivityAt >= this.idleTimeoutMs) {
+        } else if (now - lastActivityAt >= timeouts.idle) {
           stall("idle", now - lastActivityAt);
         }
       }, this.pollIntervalMs);
@@ -467,6 +588,48 @@ export class LatexRunner {
 function projectKey(dir: string): string {
   // Windows 文件系统大小写不敏感：同一项目的两次请求不该绕过互斥
   return process.platform === "win32" ? dir.toLowerCase() : dir;
+}
+
+/**
+ * 清理要落的目录。默认产物目录；**自定义 recipe 没写 -outdir 时 aux 在主文件旁边**
+ * （与 outputDirs 的候选同源）——到 build/ 去清一个空目录等于什么都没做。
+ */
+function cleanDirOf(plan: LatexPlan): string {
+  const hasOutdir = plan.argv.some((arg) => arg === "-outdir" || arg.startsWith("-outdir="));
+  return hasOutdir || plan.config.recipe === undefined ? plan.outDir : dirname(plan.mainPath);
+}
+
+/** `latexmk -c` 的 argv。`-outdir` 必须与编译时一致，否则它找不到那组 aux */
+export function cleanArgv(targetDir: string, mainName: string): string[] {
+  return ["-c", "-interaction=nonstopmode", `-outdir=${targetDir}`, mainName];
+}
+
+/** 目录里的文件名（排序）；目录不存在 / 读不了回 null（= 没编过） */
+function listFiles(dir: string): string[] | null {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => entry.name)
+      .sort();
+  } catch {
+    return null;
+  }
+}
+
+/** 前后快照 → removed / kept。removed 为空也是合法结局（本来就没辅助文件） */
+export function cleanResult(
+  dir: string,
+  before: readonly string[],
+  after: readonly string[],
+  durationMs: number,
+): LatexCleanResult {
+  const kept = new Set(after);
+  return {
+    dir,
+    removed: before.filter((name) => !kept.has(name)),
+    kept: [...after],
+    durationMs,
+  };
 }
 
 /**

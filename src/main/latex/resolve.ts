@@ -43,6 +43,11 @@ export interface LatexProjectConfig {
   /** 追加在默认参数之后的额外 argv */
   args?: string[];
   /**
+   * 保存即编译（项目级开关）。只认布尔；缺省 = 关。
+   * 它不参与编译 argv，只决定编辑器自动保存落定后要不要自动触发一次编译。
+   */
+  compileOnSave?: boolean;
+  /**
    * 自定义命令。**`recipe[0]` 是可执行文件，其余是它的参数**（不是「一整条 argv
    * 传给 latexmk」）——所以 `["latexmk", "-xelatex", …]` 与 `["-xelatex", …]`
    * 两种写法不会混淆。占位符只在参数里展开（可执行文件不展开）。
@@ -181,6 +186,8 @@ export function parseProjectConfig(raw: unknown): LatexProjectConfig {
   if (args !== undefined) config.args = args;
   const recipe = stringList(record["recipe"]);
   if (recipe !== undefined) config.recipe = recipe;
+  // 非布尔（"true" / 1）当作没写：开关状态显示与实际行为不能分家（同 settings 的纪律）
+  if (typeof record["compileOnSave"] === "boolean") config.compileOnSave = record["compileOnSave"];
   return config;
 }
 

@@ -54,32 +54,39 @@ export interface LatexPathApi {
 
 /** 探测结果缓存 + 显式作废 */
 export interface LatexProbe {
-  /** explicit = 设置里指定的路径；同一进程里 PATH/常见根的结果缓存复用 */
+  /** explicit = 设置里指定的路径；PATH/常见根的结果按进程缓存复用（按 explicit 分键） */
   probe(explicit?: string): Promise<LatexProbeResult>;
   refresh(): void;
 }
 
 export function createLatexProbe(deps: LatexProbeDeps = realDeps()): LatexProbe {
-  let cached: LatexProbeResult | null = null;
+  /** key = 显式路径（"" = 没配），一次显式验证与「没配」的结论不能互相覆盖 */
+  const cache = new Map<string, LatexProbeResult>();
   return {
     async probe(explicit?: string): Promise<LatexProbeResult> {
-      // 显式路径每次都现验：用户刚在设置里改完，不该等一次重启才生效
-      if (explicit === undefined && cached !== null) return cached;
+      const key = explicit?.trim() ?? "";
+      // 没配显式路径时缓存是常态；配了也缓存同一份结果：`--version` 要起一次 Perl
+      // （0.2–0.8 秒），每轮轮询都现验会让编译条发顿。用户改设置 / 点「重新检测」
+      // 走 refresh；“设置里那条路径坏了就回退到 PATH”也在 probeOnce 里，不是每次重试。
+      const cached = cache.get(key);
+      if (cached !== undefined) return cached;
       const result = await probeOnce(deps, explicit);
-      if (explicit === undefined) cached = result;
+      cache.set(key, result);
       return result;
     },
     refresh(): void {
-      cached = null;
+      cache.clear();
     },
   };
 }
 
 async function probeOnce(deps: LatexProbeDeps, explicit: string | undefined): Promise<LatexProbeResult> {
+  // 找过的目录按同一个顺序记下来：未装时引导卡要说「找过这些地方」，不能只给一句没找到
+  const dirs = [...pathDirs(deps), ...commonRoots(deps)];
   if (explicit !== undefined && explicit.trim() !== "") {
     const candidate = explicit.trim();
     const version = deps.exists(candidate) ? await deps.version(candidate) : null;
-    if (version !== null) return found(deps, candidate, version, "setting");
+    if (version !== null) return found(deps, candidate, version, "setting", [deps.path.dirname(candidate), ...dirs]);
     console.warn(`[latex] 设置里的 latexmk 路径不可用：${candidate}，改从 PATH 与常见安装位置找`);
   }
 
@@ -87,14 +94,14 @@ async function probeOnce(deps: LatexProbeDeps, explicit: string | undefined): Pr
     const candidate = firstExisting(deps, dir, executableNames(deps.platform, "latexmk"));
     if (candidate === null) continue;
     const version = await deps.version(candidate);
-    if (version !== null) return found(deps, candidate, version, "path");
+    if (version !== null) return found(deps, candidate, version, "path", dirs);
   }
 
   for (const dir of commonRoots(deps)) {
     const candidate = firstExisting(deps, dir, executableNames(deps.platform, "latexmk"));
     if (candidate === null) continue;
     const version = await deps.version(candidate);
-    if (version !== null) return found(deps, candidate, version, "common");
+    if (version !== null) return found(deps, candidate, version, "common", dirs);
   }
 
   return {
@@ -103,13 +110,20 @@ async function probeOnce(deps: LatexProbeDeps, explicit: string | undefined): Pr
     version: null,
     engines: [],
     source: null,
+    searched: dirs,
     message:
       "latexmk was not found. Install TeX Live (Windows: https://tug.org/texlive/, macOS: MacTeX) " +
       "or MiKTeX, then retry.",
   };
 }
 
-function found(deps: LatexProbeDeps, latexmk: string, output: string, source: LatexProbeResult["source"]): LatexProbeResult {
+function found(
+  deps: LatexProbeDeps,
+  latexmk: string,
+  output: string,
+  source: LatexProbeResult["source"],
+  searched: string[],
+): LatexProbeResult {
   return {
     ok: true,
     latexmk,
@@ -119,6 +133,7 @@ function found(deps: LatexProbeDeps, latexmk: string, output: string, source: La
     // "Rule 'xelatex' not found"，那条错比探测时的猜测更准确。
     engines: detectEngines(deps, latexmk),
     source,
+    searched,
     message: "",
   };
 }

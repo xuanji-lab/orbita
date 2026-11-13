@@ -1260,8 +1260,11 @@ void app.whenReady().then(async () => {
   registerTerminalIpc(terminals);
   // LaTeX 编译：latexmk 进程、.log 解析、并发记账都在主进程（agent 工具与文件面板
   // 的编译条共用同一个 runner——两边看到的是同一次编译）
-  const latex = new LatexRunner();
-  registerLatexIpc(latex, workspaces, sessions);
+  const latex = new LatexRunner(undefined, {
+    // 「指定位置」选的 latexmk 落在设置里（机器级）；每轮现读，改完不用重启
+    explicitPath: async () => (await settings.read()).latexmkPath,
+  });
+  registerLatexIpc(latex, workspaces, sessions, settings);
   // 引用补全：读项目里的 .bib（只读盘、与编译同一道白名单与同一个项目目录）
   registerCiteIpc(workspaces, sessions);
   const agentIpc = registerAgentIpc(

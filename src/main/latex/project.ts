@@ -138,6 +138,8 @@ export function describeLatexProject(projectDir: string): LatexProjectInfo {
     pdf,
     sourceModifiedAt,
     detail,
+    // 明确写 false 的也是关（与缺席同一个行为），界面只需要一个是非值
+    compileOnSave: config.compileOnSave === true,
   };
 }
 
@@ -223,7 +225,7 @@ function newestSource(mainPath: string | null, projectDir: string): number | nul
  */
 export async function writeLatexProjectConfig(
   projectDir: string,
-  patch: { main?: string; engine?: LatexEngine },
+  patch: { main?: string; engine?: LatexEngine; compileOnSave?: boolean },
 ): Promise<void> {
   const dir = resolve(projectDir);
   if (patch.main !== undefined) {
@@ -239,6 +241,7 @@ export async function writeLatexProjectConfig(
     ...raw,
     ...(patch.main === undefined ? {} : { main: patch.main }),
     ...(patch.engine === undefined ? {} : { engine: patch.engine }),
+    ...(patch.compileOnSave === undefined ? {} : { compileOnSave: patch.compileOnSave }),
   };
   await writeJsonAtomic(join(dir, LATEX_CONFIG_PATH), merged);
 }

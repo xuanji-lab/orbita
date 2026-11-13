@@ -97,6 +97,20 @@ const ALLOWED_LATIN = new Set([
   "LaTeX",
   "latexmk",
   "tlmgr",
+  // TeX 发行版与它们的安装位置（引导卡要指名的路径片段与环境变量）
+  "TeX",
+  "Live",
+  "MiKTeX",
+  "MacTeX",
+  "texlive",
+  "texbin",
+  "bin",
+  "windows",
+  "Library",
+  "Program",
+  "Files",
+  "PATH",
+  "LOCALAPPDATA",
   "tex",
   // 文献库的文件类型（「一份 .bib」「refs 里的 .bib」——同 tex 一类，是用户照抄的字面量）
   "bib",
@@ -144,6 +158,9 @@ const ALLOWED_LATIN = new Set([
   "UniST",
   "UrbanCLIP",
   "arXiv",
+  // TeX 辅助文件的扩展名（清理辅助文件那条文案里要指名删的是什么）
+  "aux",
+  "log",
   // 文件名
   "mcp.json",
   "SKILL.md",
