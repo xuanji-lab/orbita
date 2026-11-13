@@ -371,20 +371,20 @@ export const SHOT_BOXES: Readonly<Record<string, Readonly<Record<string, Box>>>>
   },
   "external-sources": {
     "list": {
-      "x": 0.299,
-      "y": 0.1467,
-      "w": 0.5986,
+      "x": 0.2726,
+      "y": 0.1711,
+      "w": 0.625,
       "h": 0.5911
     },
     "toggle": {
       "x": 0.8663,
-      "y": 0.1611,
+      "y": 0.1856,
       "w": 0.0194,
       "h": 0.0267
     },
     "readonly": {
-      "x": 0.4017,
-      "y": 0.0844,
+      "x": 0.3892,
+      "y": 0.0833,
       "w": 0.0347,
       "h": 0.02
     }
@@ -419,16 +419,16 @@ export const SHOT_BOXES: Readonly<Record<string, Readonly<Record<string, Box>>>>
   },
   "general": {
     "chore": {
-      "x": 0.3351,
-      "y": 0.497,
-      "w": 0.5,
-      "h": 0.0933
+      "x": 0.4128,
+      "y": 0.4306,
+      "w": 0.4444,
+      "h": 0.0833
     },
     "sub": {
-      "x": 0.3351,
-      "y": 0.5903,
-      "w": 0.5,
-      "h": 0.0933
+      "x": 0.4128,
+      "y": 0.5139,
+      "w": 0.4444,
+      "h": 0.0833
     }
   },
   "home": {
