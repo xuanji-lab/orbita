@@ -27,6 +27,7 @@ import { CitedPdfIndex } from "./cited-pdfs.ts";
 import { EXTERNAL_FILE_COPY_MAX_BYTES, type PromptFileRef, type SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
 import type { PermissionMode } from "../../shared/permission.ts";
+import type { SessionDurable } from "../../shared/kernel.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import type { SessionWrapup } from "../../shared/wrapup.ts";
 import { parseAutomationHeader } from "../../shared/automation.ts";
@@ -652,6 +653,11 @@ export class SessionStore {
 
   setMode(id: string, mode: PermissionMode): Promise<void> {
     return this.update(id, { mode });
+  }
+
+  /** 记下新内核里的位置 / 迁移失败的原因（开发开关 ORBITA_DURABLE_KERNEL 开着时才有人调） */
+  setDurable(id: string, durable: SessionDurable): Promise<void> {
+    return this.update(id, { durable });
   }
 
   /**

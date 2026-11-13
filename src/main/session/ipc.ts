@@ -28,7 +28,7 @@ import type { CarryoverStore } from "./carryover-store.ts";
 import { executeRevert, executeUndo, fileTurnsIn, planRevert, planUndo, revertFromTurn } from "./revert.ts";
 import type { RevertFileOutcome } from "../../shared/revert.ts";
 import type { ArtifactOpenResult } from "../../shared/browser.ts";
-import type { SessionRecord } from "../../shared/session.ts";
+import type { SessionMeta, SessionRecord } from "../../shared/session.ts";
 import type { ProviderStore } from "../provider/store.ts";
 import type { SessionStore } from "./store.ts";
 
@@ -53,6 +53,12 @@ export function registerSessionIpc(
    * 的轮号就是它
    */
   onReverted?: (sessionId: string, reverted: { turnIds: readonly string[]; fromTurn: number }) => Promise<void>,
+  /**
+   * 会话被打开之后（首屏已回给窗口）的钩子：开发开关 ORBITA_DURABLE_KERNEL 开着时由 index.ts 注入，
+   * 让新内核接手这条会话（main/agent/kernel-host.ts 的 openInKernel）。**缺席 = 开关关着**，
+   * 下面的 handler 与加这个参数之前是同一个函数。不等它：迁移慢不该拖住首屏。
+   */
+  onSessionOpened?: (meta: SessionMeta) => void,
 ): void {
   ipcMain.handle(ipcChannels.sessionList, () => store.list());
   // 单条 meta（列表增量刷新）：只读这一条的 `.meta.json`，不读 transcript。
@@ -60,7 +66,16 @@ export function registerSessionIpc(
   ipcMain.handle(ipcChannels.sessionMeta, (_event, id: string) => store.readMeta(id));
   // 打开会话：**只回首屏尾窗**（主进程仍全量读 + 折叠，见 store.loadWindow 的注释）——
   // 25MB / 2948 条的会话一次过 IPC 是瓶颈所在，renderer 也无力一次渲染完
-  ipcMain.handle(ipcChannels.sessionLoad, (_event, id: string) => store.loadWindow(id));
+  ipcMain.handle(
+    ipcChannels.sessionLoad,
+    onSessionOpened === undefined
+      ? (_event, id: string) => store.loadWindow(id)
+      : async (_event, id: string) => {
+          const detail = await store.loadWindow(id);
+          if (detail !== null) onSessionOpened(detail.meta);
+          return detail;
+        },
+  );
   // 更早的一页：滚动触顶时 renderer 拿窗口第一条记录的 id 来拉（before 就是它）
   ipcMain.handle(
     ipcChannels.sessionLoadOlder,
