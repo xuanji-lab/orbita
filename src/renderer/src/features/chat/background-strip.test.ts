@@ -10,6 +10,7 @@ import {
   BG_ROWS_MAX,
   automationLine,
   backgroundItems,
+  bgInlineCap,
   bgSummary,
   foldBgItems,
   needsClock,
@@ -237,6 +238,21 @@ describe("条头事实与折叠", () => {
     assert.equal(foldBgItems(six.slice(0, 4), "rows").hidden.length, 0);
   });
 
+  test("汇总条一行并排几项跟着条的宽度走：宽的 3 项，常见的 693 宽 2 项，再窄 1 项；分行条不受宽度影响", () => {
+    assert.equal(bgInlineCap(900), 3);
+    assert.equal(bgInlineCap(693), 2);
+    assert.equal(bgInlineCap(640), 2);
+    assert.equal(bgInlineCap(560), 1);
+    assert.equal(bgInlineCap(429), 1);
+    assert.equal(bgInlineCap(189), 1);
+    assert.equal(bgInlineCap(0), 1);
+    assert.equal(bgInlineCap(Infinity), BG_INLINE_MAX);
+    const six = ["a", "b", "c", "d", "e", "f"].map((id) => sub(id, "running"));
+    assert.equal(foldBgItems(six, "summary", bgInlineCap(189)).shown.length, 1);
+    assert.equal(foldBgItems(six, "summary", bgInlineCap(189)).hidden.length, 5);
+    assert.equal(foldBgItems(six, "rows", bgInlineCap(189)).shown.length, BG_ROWS_MAX);
+  });
+
   test("「+N」去哪：隐藏项里有子会话 → 子会话面板；只剩自动化 → 自动化面板；没有隐藏项 = 不去", () => {
     const auto: BgAutomationItem = { kind: "automation", key: "automation:x", automationId: "x", title: "x", nextRunAt: T0, due: false };
     assert.equal(overflowTarget([]), null);
@@ -281,13 +297,37 @@ describe("stepText —— 每项当前在做的那一步", () => {
     assert.equal(stepText({ ...base, status: "running", records }, t, lineText), "写测试");
   });
 
-  test("在跑但没有计划：退到最近的动作（章节 > 正在跑的工具 > 在想），不是空白也不是占位符", () => {
+  test("在跑但没有计划：退到最近的动作（最后一次工具调用的动词 + 对象，没动过工具是「在想」），不是空白也不是占位符", () => {
     const withTool = [
       user("u1", 1000),
       assistant("a1", 2000, [{ type: "toolCall", toolCallId: "b1", toolName: "bash", input: { command: "sleep 30" } }]),
     ];
     assert.equal(stepText({ ...base, status: "running", records: withTool }, t, lineText), "bash sleep 30");
     assert.equal(stepText({ ...base, status: "running", records: [user("u1", 1000)] }, t, lineText), "在想");
+  });
+
+  test("最近的动作不取章节标题：思考原话（常是英文自言自语）不进状态条，只有思考没动工具说「在想」", () => {
+    const thinkingOnly = [
+      user("u1", 1000),
+      assistant("a1", 2000, [{ type: "thinking", thinking: "I should not call bash since the system forbids it" }]),
+    ];
+    assert.equal(stepText({ ...base, status: "running", records: thinkingOnly }, t, lineText), "在想");
+    const saidThenRan = [
+      user("u1", 1000),
+      assistant("a1", 2000, [{ type: "text", text: "先看看目录。" }, { type: "toolCall", toolCallId: "l1", toolName: "ls", input: { path: "src" } }]),
+      assistant("a2", 3000, [{ type: "text", text: "再读一个文件，看看里面写了什么。" }]),
+    ];
+    assert.equal(stepText({ ...base, status: "running", records: saidThenRan }, t, lineText), "ls src");
+  });
+
+  test("最近的动作只看这一轮，记账工具（update_plan）不算动作", () => {
+    const records = [
+      user("u1", 1000),
+      assistant("a1", 2000, [{ type: "toolCall", toolCallId: "b0", toolName: "bash", input: { command: "上一轮的命令" } }]),
+      user("u2", 3000),
+      assistant("a2", 4000, [{ type: "toolCall", toolCallId: "p9", toolName: "update_plan", input: { items: [] } }]),
+    ];
+    assert.equal(stepText({ ...base, status: "running", records }, t, lineText), "在想");
   });
 
   test("在跑、计划里没有在做的步（全待做 / 全做完）：也退到最近的动作", () => {

@@ -6300,7 +6300,7 @@ mark.intent-mark {
 .bg-item {
   display: flex;
   align-items: center;
-  flex: 1 1 0;
+  flex: 0 1 auto;
   gap: var(--space-2);
   min-width: 0;
   height: var(--control-height-xs);
@@ -6317,6 +6317,10 @@ mark.intent-mark {
 .bg-strip[data-density="rows"] .bg-item {
   flex: none;
   width: 100%;
+}
+/* 分行条里步骤占满名字与时钟之间，「已跑多久 / 打开」才会被推到行右缘 */
+.bg-strip[data-density="rows"] .bg-item-text {
+  flex: 1 1 0;
 }
 .bg-item:hover {
   background: var(--color-bg-hover);
@@ -6337,7 +6341,7 @@ mark.intent-mark {
 }
 .bg-item-name {
   flex: 0 1 auto;
-  min-width: 0;
+  min-width: 4em;
   max-width: 12em;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6347,9 +6351,10 @@ mark.intent-mark {
 }
 .bg-strip[data-density="rows"] .bg-item-name {
   flex: 0 1 12em;
+  min-width: 3em;
 }
 .bg-item-text {
-  flex: 1 1 0;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6388,16 +6393,26 @@ mark.intent-mark {
   background: var(--color-bg-hover);
   color: var(--color-text-primary);
 }
-/* 窄：先收步骤与时钟，只留「饼 + 名字」；再窄连计数也收，留「后台」二字 + 各项 */
-@container bgstrip (max-width: 560px) {
-  .bg-strip[data-density="summary"] .bg-item-text,
-  .bg-strip .bg-item-clock,
+/* 窄：分行条先收「打开」再收时钟；汇总条的步骤文字不用容器线收——它与名字同行，名字有
+   最小宽度、步骤自己省略号收缩，宽的时候多说、窄的时候自然只剩名字 */
+@container bgstrip (max-width: 480px) {
   .bg-strip .bg-item-open {
+    display: none;
+  }
+}
+@container bgstrip (max-width: 360px) {
+  .bg-strip .bg-item-clock {
     display: none;
   }
 }
 @container bgstrip (max-width: 400px) {
   .bg-strip[data-density="summary"] .bg-strip-count {
+    display: none;
+  }
+}
+/* 再窄（右栏 + 侧栏都开着的最窄会话列）：名字旁连一截步骤也放不下，收起，免得露出半个字 */
+@container bgstrip (max-width: 260px) {
+  .bg-strip[data-density="summary"] .bg-item-text {
     display: none;
   }
 }

@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
 import type { ChannelMessage } from "@shared/channel";
 import type { BackgroundStripStyle } from "@shared/settings";
@@ -10,6 +10,7 @@ import type { Messages } from "../../messages-en.ts";
 import type { PendingApproval, SessionEntry } from "./session-states.ts";
 import {
   automationLine,
+  bgInlineCap,
   bgSummary,
   bgSummaryParts,
   foldBgItems,
@@ -68,12 +69,25 @@ export const BackgroundStrip = memo(function BackgroundStrip(props: {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [clock]);
+  // 条自己的宽度（汇总条据此决定并排几项）：回调 ref 在条出现 / 消失时接上 / 断开观察
+  const [width, setWidth] = useState(Infinity);
+  const observer = useRef<ResizeObserver | null>(null);
+  const measure = useCallback((el: HTMLElement | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
+    if (el === null) return;
+    // 宽度只在跨过换档线时才进状态：拖窗口的每一帧不让条重画
+    const apply = (next: number): void => setWidth((prev) => (bgInlineCap(prev) === bgInlineCap(next) ? prev : next));
+    apply(el.getBoundingClientRect().width);
+    observer.current = new ResizeObserver(() => apply(el.getBoundingClientRect().width));
+    observer.current.observe(el);
+  }, []);
   const lineText = useMemo(() => lineTextOf(t), [t]);
   const steps = useRef(new Map<string, StepCache>());
 
   const visible = visibleBgItems(props.items, now);
   if (visible.length === 0) return null;
-  const { shown, hidden } = foldBgItems(visible, props.density);
+  const { shown, hidden } = foldBgItems(visible, props.density, bgInlineCap(width));
   const overflow = overflowTarget(hidden);
   // 事件对象不能直接当参数往外传（onOpenAutomationPanel 的实现吃一个可选的自动化 id）
   const openOverflow = (): void => {
@@ -101,7 +115,7 @@ export const BackgroundStrip = memo(function BackgroundStrip(props: {
 
   if (props.density === "rows") {
     return (
-      <section className="bg-strip glass-card" data-density="rows" aria-label={`${t.bgStrip.aria}: ${bgSummary(visible, t)}`}>
+      <section ref={measure} className="bg-strip glass-card" data-density="rows" aria-label={`${t.bgStrip.aria}: ${bgSummary(visible, t)}`}>
         <div className="bg-strip-head">
           <span className="bg-strip-label">{t.bgStrip.label}</span>
           {summary}
@@ -116,7 +130,7 @@ export const BackgroundStrip = memo(function BackgroundStrip(props: {
     );
   }
   return (
-    <section className="bg-strip glass-card" data-density="summary" aria-label={`${t.bgStrip.aria}: ${bgSummary(visible, t)}`}>
+    <section ref={measure} className="bg-strip glass-card" data-density="summary" aria-label={`${t.bgStrip.aria}: ${bgSummary(visible, t)}`}>
       <div className="bg-strip-head">
         <span className="bg-strip-label">{t.bgStrip.label}</span>
         {summary}

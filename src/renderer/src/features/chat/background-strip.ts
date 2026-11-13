@@ -20,8 +20,10 @@ import type { Automation } from "../../../../shared/automation.ts";
 import type { BackgroundStripStyle } from "../../../../shared/settings.ts";
 import type { Messages } from "../../messages-en.ts";
 import { formatWhen } from "../automation/automation-view.ts";
+import { isBookkeepingTool } from "../../../../shared/goal.ts";
 import { planTimeline } from "../context/plan-timeline.ts";
 import { homeCardLine, type HomeCardLineText } from "./home-cards.ts";
+import { flattenRenderUnits, toolCallSummary } from "./tool-results.ts";
 import {
   latestChannelLine,
   sortSubSessionRows,
@@ -171,12 +173,24 @@ export function sameBgItems(a: readonly BgItem[], b: readonly BgItem[]): boolean
   });
 }
 
-/** 按密度折叠：汇总条最多并排 3 项，分行条最多 4 行；超出的只给个数 */
+/**
+ * 汇总条一行并排几项：按条自己的宽度（右栏开着、窗口窄时条比窗口窄得多）。条头那句事实
+ * 占去约 260（再窄时计数收起，只剩「后台」二字，约 60），每项至少要 190 才读得出「名字 + 一截步骤」，
+ * 所以并排数 = 剩下的宽度 ÷ 190，夹在 1 到 3 之间，其余折进「+N」。名字必须读得出：
+ * 宁可少放几项，也不把每项都压成一个饼。量宽度的是组件，这里只管换算。
+ */
+export function bgInlineCap(widthPx: number): number {
+  const head = widthPx < 400 ? 60 : 260;
+  return Math.min(BG_INLINE_MAX, Math.max(1, Math.floor((widthPx - head) / 190)));
+}
+
+/** 按密度折叠：汇总条并排 `inlineCap` 项（默认 3）、分行条 4 行，超出的只给个数 */
 export function foldBgItems(
   items: readonly BgItem[],
   style: BackgroundStripStyle,
+  inlineCap: number = BG_INLINE_MAX,
 ): { shown: BgItem[]; hidden: BgItem[] } {
-  const cap = style === "rows" ? BG_ROWS_MAX : BG_INLINE_MAX;
+  const cap = style === "rows" ? BG_ROWS_MAX : inlineCap;
   return { shown: items.slice(0, cap), hidden: items.slice(cap) };
 }
 
@@ -245,7 +259,8 @@ export interface BgStepInput {
 /**
  * 一项当前在做的那一步（一行字）：
  *   - 在跑：**计划里 in_progress 那一步的文字**；没有计划（或没有在做的步）就取最近的动作——
- *     当前章节 > 正在跑的工具 > 在想（与首页记录行同一句，home-cards.ts 的 homeCardLine）；
+ *     这一轮里最后一次干活的工具调用（动词 + 对象，如「bash sleep 45」），还没动过工具是「在想」。
+ *     不取章节标题：章节来自模型的思考原话，常是英文自言自语，放进一条常驻的状态条里是噪音；
  *     槽没载过（重开应用后还没打开过它）退到通道里它最近说的一句，不留空也不写占位词；
  *   - 等审批：要批的是什么（动词 + 对象，同首页记录行）；
  *   - 在问你：它问的那句；完成 / 失败：通道里的结语（latestChannelLine 的同一套话）。
@@ -261,13 +276,30 @@ export function stepText(input: BgStepInput, t: Messages, lineText: HomeCardLine
   if (input.status === "running" && input.records !== null) {
     const planStep = planTimeline(input.records)?.current.items.find((item) => item.status === "in_progress")?.text ?? null;
     if (planStep !== null) return planStep;
-    const line = homeCardLine(
-      { state: "running", records: input.records, approval: null, turnError: null, lastAsk: null },
-      lineText,
-    );
-    if (line !== null) return line;
+    return latestActionLine(input.records, lineText);
   }
   return latestChannelLine(input.messages, input.status, t);
+}
+
+/**
+ * 这一轮（最后一条用户消息起）里最后一次干活的工具调用：动词 + 对象。记账工具（update_plan /
+ * update_goal）不算动作；这一轮还没动过工具 = 「在想」。
+ */
+function latestActionLine(records: readonly TranscriptRecord[], lineText: HomeCardLineText): string {
+  let start = 0;
+  for (let i = records.length - 1; i >= 0; i--) {
+    if (records[i]?.role === "user") {
+      start = i;
+      break;
+    }
+  }
+  const call = flattenRenderUnits(records.slice(start))
+    .filter((unit) => unit.kind === "toolCall" && !isBookkeepingTool(unit.toolName))
+    .at(-1);
+  if (call === undefined || call.kind !== "toolCall") return lineText.thinking;
+  const summary = toolCallSummary(call.toolName, call.input);
+  const verb = lineText.verb(call.toolName, call.input);
+  return summary === null ? verb : `${verb} ${summary}`;
 }
 
 /** 自动化项那一句：「下次运行 今天 18:00」；已到点在等这一轮结束时说清楚 */
