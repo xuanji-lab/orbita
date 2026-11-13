@@ -25,6 +25,7 @@ import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPreviewOutcome } from "../../shared/plugin.ts";
 import type { PluginBoardOutcome } from "../../shared/plugin-board.ts";
 import type { MemoryAgentOutcome, MemoryRecallOutcome } from "../../shared/memory.ts";
+import type { BashSessionStatus } from "../../shared/bash-session.ts";
 
 /** host 对「子进程」的全部要求——Electron 的 UtilityProcess 结构上满足，测试用脚本假货顶上。 */
 export interface AgentChild {
@@ -96,6 +97,16 @@ export class AgentHostCore {
   /** 在等的 choreComplete 回执（收尾清单按反馈改写），按 requestId；进程退出全部 reject */
   private readonly pendingChores = new Map<string, { resolve: (text: string) => void; reject: (error: Error) => void }>();
   private choreSeq = 0;
+  /**
+   * 在等的 bash 会话状态回执（P2-lite 的活行轮询），按 requestId。
+   * 轮询是串行发起的（renderer 每 2s 一拍），但切会话 / 多条会话共存时会有多个在飞，
+   * 所以是 Map 而不是单槽。
+   */
+  private readonly pendingBashStatus = new Map<
+    string,
+    { resolve: (sessions: readonly BashSessionStatus[]) => void; reject: (error: Error) => void }
+  >();
+  private bashStatusSeq = 0;
 
   /**
    * catalogScope 缺席 = 不送目录刷新范围，agent 进程就一份目录也不联网（测试与裸跑）。
@@ -174,6 +185,13 @@ export class AgentHostCore {
           else pending?.resolve(message.text);
           return;
         }
+        if (message.type === "bashStatus") {
+          // 活行轮询的回执：只结发起的那一拍，不广播（renderer 拿的是本次 invoke 的返回值）
+          const pending = this.pendingBashStatus.get(message.requestId);
+          this.pendingBashStatus.delete(message.requestId);
+          pending?.resolve(message.sessions);
+          return;
+        }
         if (message.type === "providerProbed") {
           // 同 greetingsClassified：只结发起方，不广播
           const pending = this.pendingProbes.get(message.requestId);
@@ -233,6 +251,8 @@ export class AgentHostCore {
         this.pendingFocusSummaries.clear();
         for (const pending of this.pendingChores.values()) pending.reject(new Error(message));
         this.pendingChores.clear();
+        for (const pending of this.pendingBashStatus.values()) pending.reject(new Error(message));
+        this.pendingBashStatus.clear();
         reject(new Error(message));
         this.onEvent({ type: "failed", sessionId: null, message });
       });
@@ -738,6 +758,53 @@ export class AgentHostCore {
    */
   disposeSession(sessionId: string): void {
     this.child?.postMessage({ type: "dispose", sessionId } satisfies AgentCommand);
+  }
+
+  /**
+   * bash 活行的状态（renderer 每 2s 的那一拍）。
+   * **不 ensure**：会话表在 agent 进程的内存里，进程没起就一条后台命令都没有——
+   * 为了问「有没有」而拉起一个进程是本末倒置（answerPermission / disposeSession 同款理由）。
+   */
+  bashSessions(sessionId: string): Promise<readonly BashSessionStatus[]> {
+    return this.requestBashStatus(sessionId);
+  }
+
+  /**
+   * 停止钮（两段式确认之后）：按 owner 停掉一个后台 bash 会话。
+   * 回**做完之后**的整张列表——调用方就此拿到「已停止」，不必自己去拼一个乐观状态。
+   */
+  stopBashSession(sessionId: string, bashSessionId: string): Promise<readonly BashSessionStatus[]> {
+    return this.requestBashStatus(sessionId, bashSessionId);
+  }
+
+  private requestBashStatus(owner: string, stop?: string): Promise<readonly BashSessionStatus[]> {
+    if (!this.child) return Promise.resolve([]);
+    this.bashStatusSeq += 1;
+    const requestId = `bash-status-${this.bashStatusSeq}`;
+    return new Promise<readonly BashSessionStatus[]>((resolve, reject) => {
+      // 2s 一拍的轮询：回执超过 10s 就当这一拍失效（下一拍还会重试），不让界面干等
+      const timer = setTimeout(() => {
+        if (!this.pendingBashStatus.delete(requestId)) return;
+        reject(new Error("agent runtime did not report bash session status in time"));
+      }, 10_000);
+      this.pendingBashStatus.set(requestId, {
+        resolve: (sessions) => {
+          clearTimeout(timer);
+          resolve(sessions);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+      try {
+        this.post({ type: "bashStatusRequest", requestId, owner, ...(stop === undefined ? {} : { stop }) });
+      } catch (error) {
+        this.pendingBashStatus.delete(requestId);
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
   }
 
   dispose(): void {

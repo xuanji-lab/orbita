@@ -36,6 +36,7 @@ import type { IntentAskView, IntentRecallStreamEvent } from "./intent-recall.ts"
 import type { IntentConfirmDecision } from "./intent-confirm.ts";
 import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPreviewOutcome, PluginAgentScope } from "./plugin.ts";
 import type { PluginBoardOutcome } from "./plugin-board.ts";
+import type { BashSessionStatus } from "./bash-session.ts";
 import type { IntentRecallRecord } from "./session.ts";
 import type {
   MemoryBackfillProgress,
@@ -68,6 +69,14 @@ export const ipcChannels = {
   agentAnswerPermission: "agent:answer-permission",
   /** 意图确认卡的应答（实验功能 intent-system）：载荷 requestId + IntentConfirmDecision，回 void */
   agentAnswerIntentConfirm: "agent:answer-intent-confirm",
+  /**
+   * bash 活行的两条状态通路（P2-lite）：
+   * - `agent:bash-sessions` —— renderer 轮询某条会话名下的后台 bash 会话状态（回 BashSessionStatus[]）。
+   *   只在会话里真有「运行中活行」时才被调用，没有活行就完全不轮询。
+   * - `agent:bash-stop` —— 停止钮（两段式确认后）停掉一个会话，回 void；状态由下一次轮询说真话。
+   */
+  agentBashSessions: "agent:bash-sessions",
+  agentBashStop: "agent:bash-stop",
   /**
    * 意图系统（实验）的三条主进程 HTTP 通道：
    * - intent:health —— 探活 intent-lab（GET /health），回 IntentHealth | null
@@ -1267,7 +1276,15 @@ export type AgentCommand =
   | { type: "permissionAnswer"; requestId: string; answer: PermissionAnswer }
   /** 意图确认卡的回答（实验功能 intent-system），按 requestId 对回去；停止 / 抢跑时 runtime 侧按取消结掉 */
   | { type: "intentConfirmResult"; requestId: string; decision: IntentConfirmDecision }
-  | { type: "dispose"; sessionId: string };
+  | { type: "dispose"; sessionId: string }
+  /**
+   * bash 活行的状态查询（P2-lite）。**一问一答**（`bashStatus` 事件按 requestId 回）：
+   * 它是 renderer 轮询的那份「会话 id / 状态 / 已跑多少 / 无输出多久 / 退出码 / 结束原因」。
+   *
+   * `stop` 有值 = 用户按了停止钮：先按 `owner` 停掉它，再把停完的整张列表回过去——
+   * 一条命令两件事，是因为它们总是同一拍：按完立刻要看到「已停止」。
+   */
+  | { type: "bashStatusRequest"; requestId: string; owner: string; stop?: string };
 
 /**
  * B-1：read_task 读到的「这是一条什么 task」。**只给 UI、不入模型上下文**——
@@ -1667,6 +1684,11 @@ export type AgentEvent =
       supported: readonly PiThinkingLevel[];
     }
   | { type: "phase"; sessionId: string; phase: SessionPhase }
+  /**
+   * bash 会话状态（P2-lite）：`bashStatusRequest` 的回执，按 requestId 对回去。
+   * **不广播**（带 requestId 的是问答对）：主进程拿它作轮询的返回值，renderer 不直接收。
+   */
+  | { type: "bashStatus"; requestId: string; sessions: BashSessionStatus[] }
   /**
    * 一份会话用量快照（token 分项 / 花费 / 上下文余量）。推送粒度与 pi 的数据粒度对齐
    * ——usage 跟着每次 LLM 响应落地，所以每条 assistant 消息完成（message_end）推一次；
