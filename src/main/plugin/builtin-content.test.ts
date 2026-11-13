@@ -48,6 +48,14 @@ import {
   PDF_SPARSE_PAGE_CHARS,
 } from "../../agent/pdf-tools.ts";
 import { DOCX_IMAGE_MAX_COUNT, DOCX_MAX_CHARS_PER_CALL, DOCX_OUTLINE_MAX } from "../../agent/docx-tools.ts";
+import { createZoteroTools } from "../../agent/zotero-tools.ts";
+import {
+  ZOTERO_ANNOTATION_DEFAULT_LIMIT,
+  ZOTERO_FULLTEXT_DEFAULT_CHARS,
+  ZOTERO_FULLTEXT_MAX_CHARS,
+  ZOTERO_SEARCH_DEFAULT_LIMIT,
+  ZOTERO_SEARCH_MAX_LIMIT,
+} from "../../shared/zotero.ts";
 import type { SecretsPort } from "../provider/store.ts";
 import { scanPlugin } from "./manifest.ts";
 import { PluginStore } from "./store.ts";
@@ -62,6 +70,7 @@ const TERMINAL = join(BUILTIN, "terminal");
 const AUTOMATION = join(BUILTIN, "automation");
 const READING = join(BUILTIN, "reading");
 const BROWSER = join(BUILTIN, "browser");
+const ZOTERO = join(BUILTIN, "zotero");
 
 class NoSecrets implements SecretsPort {
   async set(): Promise<void> {}
@@ -558,6 +567,7 @@ describe("内置插件与用户自己的同名技能（用真实资源跑 Plugin
         "skill-kit/find-skills",
         "skill-kit/skill-creator",
         "terminal/terminal",
+        "zotero/zotero",
       ]);
       assert.deepEqual((await store.listViews()).flatMap((view) => view.conflicts), []);
     } finally {
@@ -593,6 +603,43 @@ describe("内置插件与用户自己的同名技能（用真实资源跑 Plugin
       assert.equal(view?.conflicts.length, 1);
     } finally {
       await cleanup();
+    }
+  });
+});
+
+describe("内置插件 zotero", () => {
+  test("一条技能 zotero；workflow 点名对得上；description 写明何时读（BEFORE the first zotero_* call）、中文触发词、不能写 Zotero", async () => {
+    const scanned = await scanPlugin(ZOTERO, "zotero");
+    assert.deepEqual(scanned.skills.map((skill) => skill.slug), ["zotero"]);
+    assert.equal(scanned.displayName, "Zotero 文献库");
+    assert.equal(scanned.workflow.length >= 4, true);
+    for (const step of scanned.workflow) assert.notEqual(step.skillSlug, null, `workflow 步骤「${step.title}」点名的技能 ${step.skill} 对不上`);
+    const description = scanned.skills[0]?.description ?? "";
+    assert.match(description, /BEFORE the first zotero_\* call/);
+    assert.match(description, /文献|批注/);
+    assert.match(description, /cannot write/);
+  });
+
+  // 数字与工具 / 参数名的真源在代码里；技能是给模型读的那一份，不许分叉
+  test("技能与代码同源：三个工具名、每个参数名、条数与字符数上限都在 SKILL.md 里", async () => {
+    const text = await readFile(join(ZOTERO, "skills", "zotero", "SKILL.md"), "utf8");
+    const fmt = (n: number): string => n.toLocaleString("en-US");
+    for (const tool of createZoteroTools(new RequestBroker(() => {}), "s")) {
+      assert.equal(text.includes(`## ${tool.name}`), true, `zotero 技能没讲工具 ${tool.name}`);
+      for (const property of Object.keys((tool.parameters as { properties: Record<string, unknown> }).properties)) {
+        assert.equal(text.includes(`\`${property}\``), true, `zotero 技能没讲 ${tool.name} 的参数 ${property}`);
+      }
+    }
+    for (const needle of [
+      `Default ${ZOTERO_SEARCH_DEFAULT_LIMIT} results per call, at most ${ZOTERO_SEARCH_MAX_LIMIT}`,
+      `${ZOTERO_ANNOTATION_DEFAULT_LIMIT} per call`,
+      `default ${fmt(ZOTERO_FULLTEXT_DEFAULT_CHARS)} characters, at most ${fmt(ZOTERO_FULLTEXT_MAX_CHARS)}`,
+      "数据目录位置",
+      "Zotero does not need to be running",
+      "Never copy",
+      "`cite_pdf` on the same path",
+    ]) {
+      assert.equal(text.includes(needle), true, `zotero 技能缺「${needle}」`);
     }
   });
 });
