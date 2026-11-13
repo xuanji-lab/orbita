@@ -20,6 +20,8 @@ import {
 
 export function registerAutomationIpc(deps: AutomationRequestDeps): void {
   ipcMain.handle(ipcChannels.automationList, () => listAutomations(deps));
+  // 冷归档的现状：面板「已结束」段末尾说「更早的 N 条保存在 <文件>」。不读冷文件，数在热归档文件里
+  ipcMain.handle(ipcChannels.automationArchiveInfo, () => deps.store.archiveInfo());
   ipcMain.handle(ipcChannels.automationCreate, (_e, input: unknown) => applyAutomationCreate(deps, input));
   ipcMain.handle(ipcChannels.automationUpdate, (_e, id: unknown, patch: unknown) => applyAutomationUpdate(deps, id, patch));
   ipcMain.handle(ipcChannels.automationAct, (_e, id: unknown, action: unknown) => applyAutomationAct(deps, id, action));

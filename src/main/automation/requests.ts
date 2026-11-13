@@ -27,6 +27,7 @@ import {
   AUTOMATION_MODE_DECLINED_KEPT,
   AUTOMATION_MODE_ROW_ACTIONS,
   AUTOMATION_MAX_ACTIVE_PER_SESSION,
+  AUTOMATION_PREVIOUS_ENDS_KEPT,
   AUTOMATION_MAX_UNFINISHED,
   AUTOMATION_PROMPT_MAX,
   AUTOMATION_TITLE_MAX,
@@ -171,6 +172,18 @@ function activeOnSession(all: readonly Automation[], sessionId: string, exceptId
 
 const SESSION_LIMIT_MESSAGE = `At most ${AUTOMATION_MAX_ACTIVE_PER_SESSION} active automations can be bound to one session.`;
 const TOTAL_LIMIT_MESSAGE = `At most ${AUTOMATION_MAX_UNFINISHED} automations can be in progress (active, paused or failed) at once; finished ones are archived and do not count. Cancel or delete one that is no longer needed first.`;
+
+/** automation_list 末尾那一行：没有要说的返回 null */
+function footerOf(includeFinished: boolean, archived: number, older: number, file: string): string | null {
+  const parts: string[] = [];
+  if (!includeFinished && archived > 0) {
+    parts.push(`${archived} more finished automation(s) are archived and not listed; call automation_list with includeFinished: true to see them.`);
+  }
+  if (older > 0) {
+    parts.push(`${older} older finished automation(s) are not listed either; they are kept in the file ${file} in Orbita's data folder (read-only).`);
+  }
+  return parts.length === 0 ? null : parts.join(" ");
+}
 
 /* ---------- 面板上的操作 ---------- */
 
@@ -432,6 +445,13 @@ export async function applyAutomationAct(deps: AutomationRequestDeps, rawId: unk
         updatedAt: now,
         ...(restart ? { runCount: 0 } : {}),
       };
+      // 从已结束重新启动：上一次的结束原因与结束时间先记进 previousEnds，不让 delete endReason 把痕迹覆盖没了
+      if (restart && isFinished(existing)) {
+        next.previousEnds = [{ ...(existing.endReason === undefined ? {} : { reason: existing.endReason }), at: existing.updatedAt }, ...(existing.previousEnds ?? [])].slice(
+          0,
+          AUTOMATION_PREVIOUS_ENDS_KEPT,
+        );
+      }
       delete next.endReason;
       delete next.failureReason;
       return next;
@@ -493,16 +513,18 @@ export async function applyAutomationRequest(
   if (request.op === "list") {
     const here = (await deps.store.listAll()).filter((automation) => automationWorkspaceId(automation) === workspaceId);
     const archived = here.filter(isFinished);
+    // 更早的（热归档放不下、已移进冷文件的）：全工作区合计，list 不读冷文件，只告诉模型有多少、在哪
+    const { older, file } = await deps.store.archiveInfo();
+    const footer = footerOf(request.includeFinished === true, archived.length, older, file);
     const shown = request.includeFinished === true ? here : here.filter((automation) => !isFinished(automation));
     const noun = request.includeFinished === true ? "automation(s)" : "unfinished automation(s)";
     return {
       ok: true,
       text: shown.length === 0 ? `No ${noun} in this workspace.` : `${shown.length} ${noun} in this workspace.`,
       automations: shown.map(automationCardOf),
-      // 默认不列已结束的：末尾一行说清另有多少条、怎么看，免得模型以为它们不存在而重复新建
-      ...(request.includeFinished !== true && archived.length > 0
-        ? { footer: `${archived.length} more finished automation(s) are archived and not listed; call automation_list with includeFinished: true to see them.` }
-        : {}),
+      // 默认不列已结束的：末尾一行说清另有多少条、怎么看，免得模型以为它们不存在而重复新建；
+      // 更早的仍保存在冷文件里（不进 list）：同一行里带一句，不无痕丢
+      ...(footer === null ? {} : { footer }),
     };
   }
 

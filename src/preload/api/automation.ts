@@ -7,6 +7,7 @@ import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type {
   Automation,
   AutomationAction,
+  AutomationArchiveInfo,
   AutomationCreateInput,
   AutomationEvent,
   AutomationModeRowRequest,
@@ -18,6 +19,8 @@ import type {
 export const automationApi = {
   /** 全部自动化（所有工作区）；实验开关关着回空 */
   list: (): Promise<Automation[]> => ipcRenderer.invoke(ipcChannels.automationList),
+  /** 冷归档的现状（更早的已结束记录移进了哪个文件、有多少条） */
+  archiveInfo: (): Promise<AutomationArchiveInfo> => ipcRenderer.invoke(ipcChannels.automationArchiveInfo),
   /** 面板里手建（只能新开会话），直接生效 */
   create: (input: AutomationCreateInput): Promise<AutomationOutcome> => ipcRenderer.invoke(ipcChannels.automationCreate, input),
   update: (id: string, patch: AutomationPatch): Promise<AutomationOutcome> =>

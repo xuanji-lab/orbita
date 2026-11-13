@@ -7,7 +7,9 @@ import type { AgentEvent } from "../../shared/agent-ipc.ts";
 import {
   AUTOMATION_AGENT_DEFAULT_MAX_RUNS,
   AUTOMATION_MAX_ACTIVE_PER_SESSION,
+  AUTOMATION_ARCHIVE_KEEP,
   AUTOMATION_MAX_UNFINISHED,
+  AUTOMATION_PREVIOUS_ENDS_KEPT,
   type Automation,
   type AutomationToolRequest,
 } from "../../shared/automation.ts";
@@ -315,6 +317,29 @@ describe("applyAutomationAct（面板按钮 = 状态转移）", () => {
     await store.insert(makeAutomation({ id: "fl", status: "failed", nextRunAt: null }));
   });
 
+  test("从已结束重新启动：上一次的结束原因与时间记进 previousEnds（新→旧、封顶），endReason 照旧清掉；failed 的重启不写", async () => {
+    const { deps, store } = setup();
+    await store.insert(makeAutomation({ id: "c", status: "completed", endReason: "cancelled", nextRunAt: null, updatedAt: 1234, previousEnds: [{ reason: "finished", at: 77 }] }));
+    const first = await applyAutomationAct(deps, "c", { type: "restart" });
+    const restarted = first.ok ? first.automation : null;
+    assert.equal(restarted?.endReason, undefined);
+    assert.deepEqual(restarted?.previousEnds, [{ reason: "cancelled", at: 1234 }, { reason: "finished", at: 77 }]);
+    // 再结束、再重启：继续往前叠，封顶 AUTOMATION_PREVIOUS_ENDS_KEPT
+    let current: Automation | null | undefined = restarted;
+    for (let i = 0; i < AUTOMATION_PREVIOUS_ENDS_KEPT + 2; i += 1) {
+      await store.update("c", (existing) => ({ ...existing, status: "completed", endReason: "expired", nextRunAt: null, updatedAt: 5_000 + i }));
+      const next = await applyAutomationAct(deps, "c", { type: "restart" });
+      current = next.ok ? next.automation : null;
+    }
+    assert.equal(current?.previousEnds?.length, AUTOMATION_PREVIOUS_ENDS_KEPT);
+    assert.equal(current?.previousEnds?.[0]?.reason, "expired");
+    assert.equal((await store.get("c"))?.previousEnds?.length, AUTOMATION_PREVIOUS_ENDS_KEPT, "落盘后也在（换实例读回来不丢）");
+    assert.equal(((await new AutomationStore(join(dir, "main")).get("c"))?.previousEnds ?? []).length, AUTOMATION_PREVIOUS_ENDS_KEPT);
+    await store.insert(makeAutomation({ id: "f", status: "failed", nextRunAt: null }));
+    const failed = await applyAutomationAct(deps, "f", { type: "restart" });
+    assert.equal(failed.ok && failed.automation?.previousEnds, undefined, "failed 不是「结束」，不写");
+  });
+
   test("restart 绑定的会话没了：拒并指路；一条会话上活跃的任务到 5 条后继续 / 重新启动被拒", async () => {
     const { deps, store } = setup({ metas: [meta({ id: "S" })] });
     const onSession = (id: string, patch: Partial<Automation> = {}): Automation =>
@@ -503,6 +528,20 @@ describe("applyAutomationRequest：list / cancel（只管当前工作区）", ()
     assert.equal(all.ok && all.footer, undefined, "全列时不再提示");
     const none = await applyAutomationRequest(setup({ name: "n2", metas: [meta({ id: "S" })] }).deps, toolEvent("S", { op: "list" }));
     assert.equal(none.ok && none.footer, undefined, "没有归档就没有那一行");
+  });
+
+  test("热归档放不下、已移进冷文件的：footer 再说一句「N 条更早的保存在 <文件>」（includeFinished 时也说）", async () => {
+    const { deps, store } = setup({ metas: [meta({ id: "S", workspaceId: "ws1" })] });
+    for (let i = 0; i < AUTOMATION_ARCHIVE_KEEP + 3; i += 1) {
+      await store.insert(makeAutomation({ id: `d${i}`, status: "completed", endReason: "finished", nextRunAt: null, updatedAt: i + 1, target: { kind: "new_session", workspaceId: "ws1" } }));
+    }
+    const plain = await applyAutomationRequest(deps, toolEvent("S", { op: "list" }));
+    assert.match(plain.ok ? (plain.footer ?? "") : "", /200 more finished automation\(s\) are archived .*includeFinished: true/);
+    assert.match(plain.ok ? (plain.footer ?? "") : "", /3 older finished automation\(s\) are not listed either; they are kept in the file automations-archive-old\.jsonl/);
+    const all = await applyAutomationRequest(deps, toolEvent("S", { op: "list", includeFinished: true }));
+    assert.equal(all.ok && all.automations?.length, AUTOMATION_ARCHIVE_KEEP);
+    assert.doesNotMatch(all.ok ? (all.footer ?? "") : "", /includeFinished/);
+    assert.match(all.ok ? (all.footer ?? "") : "", /3 older finished/);
   });
 
   test("cancel 之后记录进归档：list 默认不见、includeFinished 与 store.get 查得到，结束原因与指令都在", async () => {
