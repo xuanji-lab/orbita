@@ -391,6 +391,27 @@ export function opencodeToMessages(
         entries.push({ kind: "result", message: result });
       }
     });
+    // 请求失败、一个字都没回的回答：消息级 error，最后一步是空的（只有 step-start，或干脆没有 part）。
+    // 上面按步出条时空步整条跳过，这一轮就只剩用户那句、看不出失败过——补一条空正文的 error 回答，
+    // 由 pi-book.markFailedAnswer 补上「这条回答以出错收尾」。用户打断（MessageAbortedError）不补。
+    const lastStep = steps[steps.length - 1];
+    if (error !== null && error["name"] !== "MessageAbortedError" && (lastStep === undefined || lastStep.content.length === 0)) {
+      const errorMessage = optionalString(isRecord(error["data"]) ? error["data"]["message"] : null) ?? optionalString(error["name"]);
+      entries.push({
+        kind: "assistant",
+        message: {
+          role: "assistant",
+          content: [],
+          api: anthropic ? "anthropic-messages" : "openai-completions",
+          provider: providerId,
+          model: modelId ?? "unknown",
+          usage: toUsage(lastStep?.finish?.["tokens"]),
+          stopReason: "error",
+          ...(errorMessage === null ? null : { errorMessage }),
+          timestamp: time,
+        },
+      });
+    }
   }
 
   const audited = auditToolPairs(entries, "opencode");

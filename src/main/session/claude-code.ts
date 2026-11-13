@@ -18,7 +18,9 @@
  * - **排队消息**：agent 忙时用户打的字不写成用户行，写成 attachment（queued_command，
  *   commandMode = prompt，本机 29 条），在下一次工具结果时送给模型。它们是用户写的话，要收；
  *   commandMode = task-notification 的同样是通知。
- * - **isApiErrorMessage**：Claude Code 合成的「API Error: …」回复（model `<synthetic>`），不是模型说的。
+ * - **isApiErrorMessage**：Claude Code 合成的「API Error: …」「You've hit your session limit…」回复
+ *   （model `<synthetic>`），不是模型说的，但它是那一轮的结局——按出错收尾的回答收（hasError），
+ *   读的人看得出这一轮失败了。后面又有一行从同一个父节点重来（自动重试成功）时，这条作废。
  * - **parentUuid 树不是单链**：并行工具调用时，一条 assistant 行有两个孩子（下一个 tool_use 块与
  *   上一个的 tool_result，本机 102 处），所以不能「从最后一行沿 parentUuid 走回根」——会丢工具结果。
  *   这里按文件顺序收，只在「用户写的行的 parentUuid 跳回更早的行」时截断（回退重写 / 出错后重发，
@@ -171,6 +173,13 @@ function carriesUserContent(blocks: readonly unknown[]): boolean {
   );
 }
 
+function hasTextBlock(content: unknown): boolean {
+  return (
+    Array.isArray(content) &&
+    content.some((block) => isRecord(block) && block["type"] === "text" && typeof block["text"] === "string" && block["text"].trim() !== "")
+  );
+}
+
 export function parseClaudeCodeSession(raw: string): ClaudeCodeSession {
   const stats: ClaudeCodeRowStats = { badLines: 0, rewinds: 0, queued: 0, apiErrors: 0 };
   let customTitle: string | null = null;
@@ -182,6 +191,8 @@ export function parseClaudeCodeSession(raw: string): ClaudeCodeSession {
   let pending: Kept[] = [];
   /** 消息树的行（所有带 uuid 的非 sidechain 行）：uuid → 行号，以及最后一行的 uuid */
   const chain = { lineByUuid: new Map<string, number>(), lastUuid: null as string | null };
+  /** 合成的错误回复：父节点 uuid → 它那一行。之后有行从同一个父节点重来，就撤掉它 */
+  const errorByParent = new Map<string, number>();
 
   const flush = (): void => {
     kept.push(...pending);
@@ -247,14 +258,39 @@ export function parseClaudeCodeSession(raw: string): ClaudeCodeSession {
       remember();
       continue;
     }
-    if (obj["isApiErrorMessage"] === true) {
-      stats.apiErrors += 1;
-      remember();
-      continue;
+    const parentUuid = optionalString(obj["parentUuid"]);
+    if (parentUuid !== null) {
+      const superseded = errorByParent.get(parentUuid);
+      if (superseded !== undefined) {
+        kept = kept.filter((item) => item.line !== superseded);
+        errorByParent.delete(parentUuid);
+      }
     }
     cwd ??= optionalString(obj["cwd"]);
     const message = isRecord(obj["message"]) ? obj["message"] : null;
     const timestamp = rowTimestamp(obj);
+    if (obj["isApiErrorMessage"] === true) {
+      stats.apiErrors += 1;
+      flush();
+      kept.push({
+        line,
+        row: {
+          type: "assistant",
+          groupId: `#line-${line}`,
+          // 正文就是错误说明；万一是空的也要留一句，空 assistant 会被整条丢掉（claudeRowsToMessages）
+          blocks: hasTextBlock(message?.["content"]) ? message?.["content"] : [{ type: "text", text: "API Error" }],
+          stopReason: undefined,
+          usage: undefined,
+          hasError: true,
+          model: null,
+          timestamp,
+        },
+        display: null,
+      });
+      if (parentUuid !== null) errorByParent.set(parentUuid, line);
+      remember();
+      continue;
+    }
 
     if (type === "user") {
       const blocks = toBlocks(message?.["content"]);

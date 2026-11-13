@@ -292,7 +292,10 @@ export function parseKimiWire(raw: string, providerId: string, blobs: ReadonlyMa
     if (open === null) return;
     const step = open;
     open = null;
-    if (step.content.length > 0) {
+    const stopReason = toStopReason(finishReason, step.calls.length > 0);
+    // 以出错收尾、一个字都没回的一步也要留：不留的话这一轮只剩用户那句，看不出失败过
+    //（pi-book.markFailedAnswer 给它补上说明）
+    if (step.content.length > 0 || stopReason === "error") {
       entries.push({
         kind: "assistant",
         message: {
@@ -302,7 +305,7 @@ export function parseKimiWire(raw: string, providerId: string, blobs: ReadonlyMa
           provider: providerId,
           model: model ?? "unknown",
           usage: toUsage(usage),
-          stopReason: toStopReason(finishReason, step.calls.length > 0),
+          stopReason,
           timestamp: step.time,
         },
       });

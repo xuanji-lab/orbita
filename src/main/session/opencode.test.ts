@@ -148,6 +148,26 @@ describe("opencodeToMessages", () => {
     assert.equal(parsed.stats.patchedToolCalls, 1);
   });
 
+  test("请求失败、没有正文的回答（消息级 error，只有 step-start）留一条空的 error 回答；用户打断的不留", () => {
+    const parsed = opencodeToMessages(
+      [
+        user("msg_1", [{ type: "text", text: "hi" }]),
+        assistant("msg_2", [{ type: "step-start" }], { error: { name: "AiSdkModelAdapterError", data: { message: "Model request failed." } } }),
+        user("msg_3", [{ type: "text", text: "hi" }]),
+        assistant("msg_4", [], { error: { name: "APIError" } }),
+        user("msg_5", [{ type: "text", text: "算了" }]),
+        assistant("msg_6", [{ type: "step-start" }], { error: { name: "MessageAbortedError", data: { message: "Aborted" } } }),
+        user("msg_7", [{ type: "text", text: "再来" }]),
+        assistant("msg_8", [{ type: "step-start" }, { type: "text", text: "好" }, finish("stop")]),
+      ],
+      "p",
+      null,
+    );
+    assert.deepEqual(describeMessages(parsed.messages), ["user:hi", "assistant:", "user:hi", "assistant:", "user:算了", "user:再来", "assistant:好"]);
+    const failed = parsed.messages.filter((item): item is AssistantMessage => item.role === "assistant" && item.stopReason === "error");
+    assert.deepEqual(failed.map((item) => item.errorMessage), ["Model request failed.", "APIError"]);
+  });
+
   test("历史全留；摘要记成一处压缩（位置、全文、压缩前 token），压缩请求不导；撤回点之后的消息不导，带 partID 的从那个 part 截掉", () => {
     const rows = [
       user("msg_1", [{ type: "text", text: "一" }]),
