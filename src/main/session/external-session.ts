@@ -16,7 +16,7 @@
  * 按它排除导入会话；外部会话从来没进会话库，借这个字段会让两种语义在同一个词上撞车。
  */
 import { createHash } from "node:crypto";
-import { stat } from "node:fs/promises";
+import { open, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { EXTERNAL_SOURCE_IDS, isExternalSourceId, type ExternalSourceId } from "../../shared/external-sources.ts";
 import {
@@ -182,6 +182,60 @@ async function sourceCandidates(
   return { candidates, problems };
 }
 
+/** 设置页数会话时读每个文件的开头多少字节（认格式用） */
+const RECOGNIZE_HEAD_BYTES = 4096;
+const RECOGNIZE_BATCH = 64;
+
+async function headOf(file: string): Promise<string> {
+  const handle = await open(file, "r");
+  try {
+    const buffer = Buffer.alloc(RECOGNIZE_HEAD_BYTES);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
+/**
+ * 设置页的一行：会话数与读不全的原因。库来源用 adapter.count（不复制库）；文件来源数 candidates，
+ * 只算开头认得出格式的（一个格式认不出的文件不该算成「1 个会话」）。
+ */
+async function inventoryOf(
+  group: ExternalSourceRoots,
+  context: Omit<ExternalAdapterContext, "roots">,
+): Promise<{ source: ExternalSourceId; total: number; problems: string[] }> {
+  const adapter = EXTERNAL_ADAPTERS[group.source];
+  const fullContext: ExternalAdapterContext = { ...context, roots: group.roots };
+  const { count, recognize } = adapter;
+  if (count !== undefined) {
+    const problems: string[] = [];
+    let total = 0;
+    for (const root of group.roots) {
+      if (!(await entryExists(root, group.source))) {
+        problems.push(`no session data at ${root} (the folder was moved or deleted)`);
+        continue;
+      }
+      try {
+        total += await count(root, fullContext);
+      } catch (cause) {
+        problems.push(`could not list ${root}: ${errorText(cause)}`);
+      }
+    }
+    return { source: group.source, total, problems };
+  }
+  const { candidates, problems } = await sourceCandidates(group, context);
+  if (recognize === undefined) return { source: group.source, total: candidates.length, problems };
+  // 分批开文件：一次全开，上千个会话文件会撞上进程的文件句柄上限（EMFILE），被当成认不出
+  let total = 0;
+  for (let index = 0; index < candidates.length; index += RECOGNIZE_BATCH) {
+    const batch = candidates.slice(index, index + RECOGNIZE_BATCH);
+    const recognized = await Promise.all(batch.map((candidate) => headOf(candidate.file).then(recognize, () => false)));
+    total += recognized.filter(Boolean).length;
+  }
+  return { source: group.source, total, problems };
+}
+
 function summaryOf(candidate: ExternalCandidate, facts: ExternalSessionFacts, defaultCwd: string): ExternalSessionSummary {
   return {
     ref: refOf(candidate.source, candidate.key),
@@ -235,12 +289,7 @@ export function createExternalSessionReader(deps: ExternalSessionReaderDeps): Ex
 
     async inventory() {
       const groups = (await deps.sources()).filter((group) => group.roots.length > 0);
-      return Promise.all(
-        groups.map(async (group) => {
-          const { candidates, problems } = await sourceCandidates(group, context);
-          return { source: group.source, total: candidates.length, problems };
-        }),
-      );
+      return Promise.all(groups.map((group) => inventoryOf(group, context)));
     },
 
     async load(ref) {

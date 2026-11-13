@@ -25,7 +25,7 @@ import { branchEntries, entriesToRecords, messagesToRecords, parsePiBook } from 
 import { parsePromaSessions, parsePromaWorkspaces } from "./proma-index.ts";
 import { promaUserDisplays, promaUserTextMap, promaUserTexts, withUserTexts } from "./proma-user-text.ts";
 import { isReasonixConversationFile, parseReasonixRows, readReasonixMeta, reasonixToMessages } from "./reasonix.ts";
-import { withReadOnlyDb } from "./sqlite-readonly.ts";
+import { dbSignature, withCheckpointedDb, withReadOnlyDb } from "./sqlite-readonly.ts";
 import { readZcodeMessages, readZcodeSessions, zcodeSessionBytes } from "./zcode.ts";
 
 // ---------------------------------------------------------------------------
@@ -142,8 +142,12 @@ export interface ExternalAdapter {
   entry: { path: readonly string[]; type: "file" | "dir" };
   candidates(root: string, context: ExternalAdapterContext): Promise<ExternalCandidate[]>;
   facts(candidate: ExternalCandidate, context: ExternalAdapterContext): Promise<ExternalSessionFacts>;
-  /** 可选：一次取一批（库来源只打开一次库——-wal 有内容时每打开一次就要复制一次库） */
+  /** 可选：一次取一批（库来源从同一份清单缓存里取，不为每条再开一次库） */
   factsMany?(candidates: readonly ExternalCandidate[], context: ExternalAdapterContext): Promise<ExternalSessionFacts[]>;
+  /** 可选：设置页的会话数（库来源不为它复制库）；不给就数 candidates 里认得出格式的 */
+  count?(root: string, context: ExternalAdapterContext): Promise<number>;
+  /** 可选：只看文件开头一段，认不认得这个格式（设置页数会话时过滤掉认不出的文件） */
+  recognize?(head: string): boolean;
   load(candidate: ExternalCandidate, context: ExternalAdapterContext): Promise<ExternalLoaded>;
   /** 数据目录里认得出、但读不了的部分（如实列进目录，不静默漏掉） */
   notes?(root: string): Promise<string[]>;
@@ -193,6 +197,27 @@ function minPositive(values: readonly (number | null | undefined)[]): number | n
   return valid.length === 0 ? null : Math.min(...valid);
 }
 
+/**
+ * 认文件格式：看开头第一行非空内容。整行都在 head 里时按 JSON 对象解析、交给 check 判；第一行比
+ * head 还长（开头就是一条贴了大段内容 / 图片的消息）时解析不了，只要它像个 JSON 对象就算认得——
+ * 宁可多数一条，不把真会话数漏掉。
+ */
+function recognizeFirstLine(head: string, check: (row: Record<string, unknown>) => boolean): boolean {
+  const start = head.search(/\S/);
+  if (start === -1) return false;
+  const end = head.indexOf("\n", start);
+  if (end === -1) return head[start] === "{";
+  try {
+    const parsed: unknown = JSON.parse(head.slice(start, end));
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) && check(parsed as Record<string, unknown>);
+  } catch {
+    return false;
+  }
+}
+
+/** 各家 JSONL 每行都是带 type 字段的对象（Claude Code、Kimi wire） */
+const typedJsonl = (head: string): boolean => recognizeFirstLine(head, (row) => typeof row["type"] === "string");
+
 // ---------------------------------------------------------------------------
 // Claude Code：<root>/projects/<编码后的 cwd>/<会话 id>.jsonl
 // ---------------------------------------------------------------------------
@@ -220,6 +245,7 @@ async function readClaudeDesktopSessions(dir: string): Promise<ClaudeDesktopSess
 
 const claudeCode: ExternalAdapter = {
   entry: { path: ["projects"], type: "dir" },
+  recognize: typedJsonl,
   async candidates(root, context) {
     const projectsDir = join(root, "projects");
     const files: { file: string; sourceId: string }[] = [];
@@ -282,6 +308,8 @@ const claudeCode: ExternalAdapter = {
 
 const codex: ExternalAdapter = {
   entry: { path: ["sessions"], type: "dir" },
+  // rollout 每行是 { timestamp, type, payload }
+  recognize: (head) => recognizeFirstLine(head, (row) => typeof row["type"] === "string" && "payload" in row),
   async candidates(root) {
     const sessionsDir = join(root, "sessions");
     const files: { file: string; sourceId: string }[] = [];
@@ -381,6 +409,7 @@ async function kimiFacts(candidate: ExternalCandidate): Promise<ExternalSessionF
 function kimiAdapter(source: "kimi-code" | "kimi-work"): ExternalAdapter {
   return {
     entry: { path: ["sessions"], type: "dir" },
+    recognize: typedJsonl,
     async candidates(root) {
       const sessionsDir = join(root, "sessions");
       const workspaces = await readKimiWorkspaces(join(root, "workspaces.json"));
@@ -485,6 +514,17 @@ interface DbSessionRow {
   updatedAt: number;
 }
 
+/** 一个库的会话清单：按库与 -wal 的「大小 + mtime」缓存，键不变就不再复制库（见 sqlite-readonly.ts） */
+interface DbListing {
+  signature: string;
+  rows: (DbSessionRow & { revert?: string | null })[];
+  /** 最近更新的未命名会话的第一句用户话（目录的标题兜底；与清单同一次打开库时算好） */
+  firstPrompts: Map<string, string | null>;
+}
+
+/** 预先算第一句用户话的未命名会话条数：够 `ext:<来源>` 那一页（SOURCE_INDEX_LIMIT）用 */
+const FIRST_PROMPT_PREFETCH = 30;
+
 function dbAdapter(options: {
   source: "opencode" | "zcode";
   dbPath: readonly string[];
@@ -493,6 +533,42 @@ function dbAdapter(options: {
   bytes: typeof opencodeSessionBytes;
 }): ExternalAdapter {
   const sessionIdOf = (candidate: ExternalCandidate): string => candidate.key.slice(candidate.key.lastIndexOf("#") + 1);
+  /** 库路径 → 清单（存 Promise：同时到达的两次列目录共用一次读库） */
+  const listings = new Map<string, Promise<DbListing>>();
+
+  const firstPromptOf = (db: DatabaseSync, id: string): string | null => {
+    try {
+      if (options.bytes(db, id) > EXTERNAL_SOURCE_MAX_BYTES) return null;
+      return opencodeToMessages(options.messages(db, id), UNASSIGNED_PROVIDER_ID, null).firstPrompt;
+    } catch {
+      return null;
+    }
+  };
+
+  /** 清单：键没变用缓存；变了打开一次库（-wal 有内容时就是一次复制），连同标题兜底一起读完 */
+  const listing = async (dbFile: string): Promise<DbListing> => {
+    const signature = await dbSignature(dbFile);
+    if (signature === null) throw new Error(`database not found: ${dbFile}`);
+    const cached = listings.get(dbFile);
+    if (cached !== undefined) {
+      const done = await cached.catch(() => null);
+      if (done !== null && done.signature === signature) return done;
+    }
+    const pending = withReadOnlyDb(dbFile, (db): DbListing => {
+      const rows = options.sessions(db);
+      const untitled = rows
+        .filter((row) => row.title === null)
+        .sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt))
+        .slice(0, FIRST_PROMPT_PREFETCH);
+      return { signature, rows, firstPrompts: new Map(untitled.map((row) => [row.id, firstPromptOf(db, row.id)])) };
+    });
+    listings.set(dbFile, pending);
+    pending.catch(() => {
+      if (listings.get(dbFile) === pending) listings.delete(dbFile);
+    });
+    return pending;
+  };
+
   /** 读一条会话的消息：先看体量，超预算不读 */
   const readSession = (candidate: ExternalCandidate) =>
     withReadOnlyDb(candidate.file, (db) => {
@@ -504,6 +580,13 @@ function dbAdapter(options: {
       // ZCode 的撤回在取数层按它自己的可见规则取分支（zcode.ts），转换时 revert 传 null
       return opencodeToMessages(options.messages(db, id), UNASSIGNED_PROVIDER_ID, session.revert ?? null);
     });
+
+  const titleFrom = async (candidate: ExternalCandidate): Promise<string | null> => {
+    if (candidate.known.title !== null && candidate.known.title !== undefined) return null;
+    // 没有标题（OpenCode 的默认标题不算）：取第一句用户写的话；清单里没预先算到的（很旧的）不另开库
+    return (await listing(candidate.file)).firstPrompts.get(sessionIdOf(candidate)) ?? null;
+  };
+
   return {
     entry: { path: options.dbPath, type: "file" },
     async candidates(root) {
@@ -514,7 +597,7 @@ function dbAdapter(options: {
         if (isNotFound(cause)) return [];
         throw cause;
       }
-      const rows = await withReadOnlyDb(dbFile, options.sessions);
+      const { rows } = await listing(dbFile);
       return rows.map((row) => ({
         source: options.source,
         root,
@@ -530,30 +613,22 @@ function dbAdapter(options: {
         },
       }));
     },
+    async count(root) {
+      const dbFile = join(root, ...options.dbPath);
+      // 设置页的会话数：清单缓存还对得上就用它；否则只读库文件本身（不看 -wal、不复制），够用
+      const signature = await dbSignature(dbFile);
+      const cached = listings.get(dbFile);
+      if (cached !== undefined) {
+        const done = await cached.catch(() => null);
+        if (done !== null && done.signature === signature) return done.rows.length;
+      }
+      return withCheckpointedDb(dbFile, (db) => options.sessions(db).length);
+    },
     async facts(candidate) {
-      if (candidate.known.title !== null && candidate.known.title !== undefined) return withKnown(candidate, NO_FACTS);
-      // 没有标题（OpenCode 的默认标题不算）：取第一句用户写的话
-      const parsed = await readSession(candidate);
-      return withKnown(candidate, { title: parsed?.firstPrompt ?? null });
+      return withKnown(candidate, { title: await titleFrom(candidate) });
     },
     async factsMany(candidates) {
-      const untitled = candidates.filter((candidate) => candidate.known.title === null || candidate.known.title === undefined);
-      if (untitled.length === 0) return candidates.map((candidate) => withKnown(candidate, NO_FACTS));
-      // 同一个库只打开一次：取各条未命名会话的第一句用户话；单条超预算或读坏不挡其余
-      const firstPrompts = await withReadOnlyDb(candidates[0]!.file, (db) =>
-        new Map(
-          untitled.map((candidate) => {
-            const id = sessionIdOf(candidate);
-            try {
-              if (options.bytes(db, id) > EXTERNAL_SOURCE_MAX_BYTES) return [candidate.key, null] as const;
-              return [candidate.key, opencodeToMessages(options.messages(db, id), UNASSIGNED_PROVIDER_ID, null).firstPrompt] as const;
-            } catch {
-              return [candidate.key, null] as const;
-            }
-          }),
-        ),
-      );
-      return candidates.map((candidate) => withKnown(candidate, { title: firstPrompts.get(candidate.key) ?? null }));
+      return Promise.all(candidates.map(async (candidate) => withKnown(candidate, { title: await titleFrom(candidate) })));
     },
     async load(candidate) {
       const parsed = await readSession(candidate);
@@ -575,6 +650,8 @@ const REASONIX_V5_DIR = "desktop-sessions-v5";
 
 const reasonix: ExternalAdapter = {
   entry: { path: ["projects"], type: "dir" },
+  // OpenAI 扁平行（role）或分支记账行（kind）
+  recognize: (head) => recognizeFirstLine(head, (row) => typeof row["role"] === "string" || typeof row["kind"] === "string"),
   async candidates(root) {
     const projectsRoot = join(root, "projects");
     const files: { file: string; sourceId: string }[] = [];
@@ -649,6 +726,8 @@ function promaCwd(cwd: string | null, roots: readonly string[]): string | null {
 
 const proma: ExternalAdapter = {
   entry: { path: ["agent-sessions.json"], type: "file" },
+  // 不设 recognize：会话数以 Proma 自己的索引为准。Claude 时代的界面日志开头常是更早的扁平行
+  // （只有 role），带 type 的行可能在几 MB 之后才出现，看开头认不出；为认格式整份读又太贵。
   async candidates(root, context) {
     const index = parsePromaSessions(await readFile(join(root, "agent-sessions.json"), "utf8"));
     let workspaces: ReturnType<typeof parsePromaWorkspaces> = [];

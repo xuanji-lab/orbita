@@ -4,13 +4,14 @@
  */
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { appendFile, mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { ExternalSourceId } from "../../shared/external-sources.ts";
 import type { SessionRecord } from "../../shared/session.ts";
 import { createExternalSessionReader, type ExternalSessionReader, type ExternalSourceRoots } from "./external-session.ts";
+import { setSnapshotRoot } from "./sqlite-readonly.ts";
 
 let dir = "";
 
@@ -403,5 +404,68 @@ describe("开关、出错与列目录的成本", () => {
     assert.ok(elapsed < 2000, `列目录用了 ${Math.round(elapsed)}ms`);
     const detail = await readerFor([{ source: "claude-code", roots: [root] }]).load(section?.summaries[0]?.ref ?? "");
     assert.equal(detail?.sourceFile, newest);
+  });
+});
+
+describe("设置页数会话与库来源的复制次数", () => {
+  test("会话数只算认得出格式的文件；库来源数会话不复制库", async () => {
+    const codexRoot = join(dir, ".codex");
+    const day = join(codexRoot, "sessions", "2026", "09", "12");
+    await mkdir(day, { recursive: true });
+    await writeFile(join(day, "rollout-ok.jsonl"), `${codexLine("session_meta", { id: "a" })}\n`);
+    await writeFile(join(day, "rollout-garbage.jsonl"), "not json at all\n");
+    await writeFile(join(day, "rollout-other.jsonl"), '{"some":"future format"}\n');
+    const opencodeRoot = join(dir, "opencode");
+    await mkdir(opencodeRoot, { recursive: true });
+    writeOpencodeLikeDb(join(opencodeRoot, "opencode.db"), false);
+    // 副本目录设成只读：数会话时要是去复制库，就会当场失败
+    const snapshots = join(dir, "snapshots-readonly");
+    await mkdir(snapshots, { recursive: true });
+    await setSnapshotRoot(snapshots);
+    await chmod(snapshots, 0o555);
+    try {
+      // Claude Code：开头一条贴了大段内容的消息比读的头部还长，解析不了也照数（不漏真会话）
+      const claudeRoot = join(dir, ".claude");
+      await mkdir(join(claudeRoot, "projects", "-repo"), { recursive: true });
+      await writeFile(join(claudeRoot, "projects", "-repo", "big.jsonl"), `${claudeRow("user", "u1", null, "长".repeat(6000), "2026-09-20T10:00:01.000Z")}\n`);
+      await writeFile(join(claudeRoot, "projects", "-repo", "junk.jsonl"), "garbage\n");
+      const reader = readerFor([
+        { source: "claude-code", roots: [claudeRoot] },
+        { source: "codex", roots: [codexRoot] },
+        { source: "opencode", roots: [opencodeRoot] },
+      ]);
+      assert.deepEqual(await reader.inventory(), [
+        { source: "claude-code", total: 1, problems: [] },
+        { source: "codex", total: 1, problems: [] },
+        { source: "opencode", total: 1, problems: [] },
+      ]);
+    } finally {
+      await chmod(snapshots, 0o755);
+    }
+  });
+
+  test("库来源的清单按库的大小 + mtime 缓存：再列一遍、取标题都不再打开库；库一变就重读", async () => {
+    const root = join(dir, "opencode");
+    await mkdir(root, { recursive: true });
+    const dbFile = join(root, "opencode.db");
+    writeOpencodeLikeDb(dbFile, false);
+    const reader = readerFor([{ source: "opencode", roots: [root] }]);
+    const first = await reader.list();
+    assert.equal(first[0]?.summaries[0]?.title, "库里的第一问");
+    // 库文件变得打不开：只要还走缓存（只 stat），目录照样列得出、标题照样有
+    await chmod(dbFile, 0o000);
+    try {
+      const second = await reader.list();
+      assert.equal(second[0]?.summaries[0]?.title, "库里的第一问");
+    } finally {
+      await chmod(dbFile, 0o644);
+    }
+    // 库变了（mtime / 大小）：重读，看得到新会话
+    const db = new DatabaseSync(dbFile);
+    db.exec("insert into session values ('ses_new', 'p', null, '/repo/db', '新会话', 3000, 4000, null)");
+    db.close();
+    const third = await reader.list();
+    assert.equal(third[0]?.total, 2);
+    assert.equal(third[0]?.summaries[0]?.title, "新会话");
   });
 });

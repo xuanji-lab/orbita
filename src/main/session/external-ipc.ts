@@ -49,6 +49,7 @@ export function registerExternalSourcesIpc(reader: ExternalSessionReader, custom
           id: item.source,
           roots,
           expected: item.expected,
+          expectedExists: item.expectedExists,
           sessions: count?.total ?? 0,
           enabled: isExternalSourceEnabled(current.externalSources, item.source),
           // 「这里没有会话数据」已经标在那一行数据目录上（hasData），不再重复列一遍英文原因

@@ -19,6 +19,8 @@ export interface LocatedExternalSource {
   roots: string[];
   /** 一个都没发现时，默认会去哪里找（设置页写「没找到：<这里>」） */
   expected: string;
+  /** 默认位置的目录在不在（在、却没有会话数据 → 设置页写「目录在，没有会话」） */
+  expectedExists: boolean;
 }
 
 export async function locateExternalSources(
@@ -29,7 +31,12 @@ export async function locateExternalSources(
     EXTERNAL_SOURCE_IDS.map(async (source): Promise<LocatedExternalSource> => {
       if (source === "kimi-work") {
         const root = kimiWorkDataRoot(baseDir("appData", context));
-        return { source, roots: (await hasDirectory(join(root, "sessions"))) ? [root] : [], expected: root };
+        return {
+          source,
+          roots: (await hasDirectory(join(root, "sessions"))) ? [root] : [],
+          expected: root,
+          expectedExists: await hasDirectory(root),
+        };
       }
       const spec = DATA_ROOT_SPECS[source];
       const roots: string[] = [];
@@ -38,7 +45,8 @@ export async function locateExternalSources(
         if (!roots.includes(resolved)) roots.push(resolved);
       }
       const fromEnv = spec.env === undefined ? undefined : context.env[spec.env];
-      return { source, roots, expected: fromEnv || join(baseDir(spec.base, context), spec.canonical) };
+      const expected = fromEnv || join(baseDir(spec.base, context), spec.canonical);
+      return { source, roots, expected, expectedExists: await hasDirectory(expected) };
     }),
   );
 }
