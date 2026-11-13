@@ -76,6 +76,8 @@ export interface ComputerUseGuest {
     hwnd?: number;
     title?: string;
     maxItems?: number;
+    /** 只回这一代之后的变化（带上一次回执里的 generation）；缺省 = 全量 */
+    since?: number;
   }): Promise<ComputerUseUiaListResult>;
   /**
    * 对控件执行 UIA 模式（桥 0.10.0 的 uia-act）。不抢前台，所以不占桌面租约。
@@ -84,7 +86,8 @@ export interface ComputerUseGuest {
   uiaAct(options: {
     hwnd?: number;
     title?: string;
-    ref?: number;
+    /** 带代次的 ref token（"g12:r3"），来自该窗口最近一次 list */
+    ref?: string;
     name?: string;
     perform: ComputerUseUiaAction;
     value?: string;
@@ -200,7 +203,9 @@ export async function applyComputerUseRequest(
       // ── UIA 车道（桥 0.10.0）：按控件动作，不按坐标、不抢前台 ─────────────
       case "uia-list": {
         const size = request.maxItems === undefined ? {} : { maxItems: request.maxItems };
-        const reply = await controller.uiaList({ ...targetOf(request.window), ...size });
+        // since 只有模型明确给了才下发：不传 = 全量（与改之前逐字同行为）
+        const since = request.since === undefined ? {} : { since: request.since };
+        const reply = await controller.uiaList({ ...targetOf(request.window), ...size, ...since });
         if (!reply.ok) return { ok: false, error: reply.error };
         return { ok: true, text: uiaListText(reply) };
       }
@@ -350,12 +355,20 @@ function targetOf(window: string | number | undefined): { hwnd?: number; title?:
  * 一行一个控件（标题行先给窗口与命中数）：模型要拿 ref 或 name 去 uia-act，所以这两个字段
  * 必须在前；patterns / 可用性 / offscreen 决定它该用哪个动作、要不要先滚动。
  * **不输出 JSON**：模型已经能把一行行的「ref · 类型 · 名字」对上去，多一层括号只是多烧 token。
+ *
+ * 0.14.0 起有两种形态：全量（与改之前同样的逐条清单）与 diff（只列变化 + 消失的 + unchanged
+ * 计数）。diff 的体积优势就来自「不变的控件根本不出现」——所以两种形态的差异必须在正文里说清，
+ * 尤其是 **ref 只属于它那一代**：没变的控件不在 diff 里，要动它就用 name 或重新全量列一次。
  */
 function uiaListText(reply: {
   hwnd: number;
   window: { title: string; className: string };
+  generation: number;
+  mode: "full" | "diff";
+  since?: number;
   items: readonly {
-    ref: number;
+    ref: string;
+    stableId: string;
     name: string;
     controlType: string;
     automationId: string;
@@ -368,45 +381,119 @@ function uiaListText(reply: {
     enabled: boolean;
     offscreen: boolean;
     isPassword: boolean;
+    change?: "added" | "changed";
+    changed?: readonly string[];
   }[];
+  removed: readonly { stableId: string; name: string; controlType: string }[];
+  unchanged: number;
   truncated: boolean;
   passwordFields: number;
+  note?: string;
 }): string {
   const title = reply.window.title === "" ? "(no title)" : reply.window.title;
-  const lines = reply.items.map((item) => {
-    const name = item.name === "" ? `(automationId ${item.automationId})` : `"${item.name}"`;
-    const patterns = item.patterns.length === 0 ? "no pattern (pixels only)" : item.patterns.join("/");
-    const flags: string[] = [];
-    if (item.isPassword) flags.push("password");
-    if (!item.enabled) flags.push("disabled");
-    if (item.offscreen) flags.push("offscreen");
-    const id = item.automationId === "" ? "" : ` id=${item.automationId}`;
-    const state = flags.length === 0 ? "" : `, ${flags.join(", ")}`;
-    return (
-      `${item.ref} · ${item.controlType} ${name} · supports ${patterns}${state} · ` +
-      `at ${item.x},${item.y} ${item.w}×${item.h}${id}`
-    );
-  });
-  const header =
-    `UI Automation controls in window "${title}" (hwnd ${reply.hwnd}): ${reply.items.length} listed` +
-    (reply.truncated ? " (there are more — raise maxItems to see them)" : "") +
-    (
-      reply.passwordFields > 0
-        ? `. ${reply.passwordFields} password field(s) are in this window: never put a secret in them and do not ` +
-          "try to read them. Their positions are remembered, so screenshots of this window will black them out"
-        : ""
-    ) +
-    ". Lines are: ref · control type \"name\" · supported patterns · position/size · automationId.";
-  const body = lines.length === 0 ? "No actionable controls were found in this window." : lines.join("\n");
+  const head = `UI Automation controls in window "${title}" (hwnd ${reply.hwnd}, generation ${reply.generation})`;
+  const truncatedNote = reply.truncated ? " (there are more — raise maxItems to see them)" : "";
+  const passwordNote =
+    reply.passwordFields > 0
+      ? `. ${reply.passwordFields} password field(s) are in this window: never put a secret in them and do not ` +
+        "try to read them. Their positions are remembered, so screenshots of this window will black them out"
+      : "";
+  const noteLine = reply.note === undefined ? "" : `\nNote: ${reply.note}`;
+  const body =
+    reply.mode === "diff" ? uiaDiffBody(reply) : reply.items.map(uiaItemLine).join("\n");
+  const bodyText =
+    body === ""
+      ? reply.mode === "diff"
+        ? "Nothing changed since that list."
+        : "No actionable controls were found in this window."
+      : body;
+  const listLine =
+    reply.mode === "diff"
+      ? `${head}: ${reply.items.length} changed, ${reply.removed.length} gone, ${reply.unchanged} unchanged ` +
+        `since generation ${reply.since ?? "?"}${truncatedNote}. Only the changes are listed.`
+      : `${head}: ${reply.items.length} listed${truncatedNote}. Lines are: ref · control type "name" · ` +
+        "supported patterns · position/size · automationId.";
   const tail =
     "Act on one with computer_uia (action invoke / setValue / selection, and ref or name). " +
     "These actions go straight into the control: the window does not need the foreground, so the sandbox " +
     "desktop is not taken over and another session can keep using it. There is no \"focus\" action: to move " +
     "the keyboard focus, click the target with computer_click (pixels), or just use invoke (it usually " +
-    "focuses too) / setValue (it does not need focus). Re-list after the window changes — " +
-    "refs belong to the latest list. Controls that support no pattern above can only be driven through " +
-    "computer_click / computer_type (pixels).";
-  return `${header}\n${body}\n\n${tail}`;
+    "focuses too) / setValue (it does not need focus). " +
+    `Refs belong to the list they came from (this one is generation ${reply.generation}); a ref from an older ` +
+    "list is rejected, so re-list after the window changes. " +
+    (reply.mode === "diff"
+      ? "A control that did not change is not listed here: act on it by name, or list again without since to " +
+        "get its current ref. "
+      : `Next time, pass since=${reply.generation} to get only what changed. `) +
+    "Controls that support no pattern above can only be driven through computer_click / computer_type (pixels).";
+  return `${listLine}${noteLine}\n${bodyText}\n\n${tail}${passwordNote}`;
+}
+
+/** 一条控件的正文行（全量与 diff 共用；diff 只在前面加 change 标签） */
+function uiaItemLine(item: {
+  ref: string;
+  name: string;
+  controlType: string;
+  automationId: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  patterns: readonly string[];
+  enabled: boolean;
+  offscreen: boolean;
+  isPassword: boolean;
+  change?: "added" | "changed";
+  changed?: readonly string[];
+}): string {
+  const name = item.name === "" ? `(automationId ${item.automationId})` : `"${item.name}"`;
+  const patterns = item.patterns.length === 0 ? "no pattern (pixels only)" : item.patterns.join("/");
+  const flags: string[] = [];
+  if (item.isPassword) flags.push("password");
+  if (!item.enabled) flags.push("disabled");
+  if (item.offscreen) flags.push("offscreen");
+  const id = item.automationId === "" ? "" : ` id=${item.automationId}`;
+  const state = flags.length === 0 ? "" : `, ${flags.join(", ")}`;
+  const change =
+    item.change === "added"
+      ? "new · "
+      : item.change === "changed"
+        ? `changed (${(item.changed ?? []).join("/")}) · `
+        : "";
+  return (
+    `${change}${item.ref} · ${item.controlType} ${name} · supports ${patterns}${state} · ` +
+    `at ${item.x},${item.y} ${item.w}×${item.h}${id}`
+  );
+}
+
+/** diff 的正文：变化过的控件 + 消失的控件（消失的没有 ref，只有名字与稳定 id） */
+function uiaDiffBody(reply: {
+  items: readonly {
+    ref: string;
+    stableId: string;
+    name: string;
+    controlType: string;
+    automationId: string;
+    className: string;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    patterns: readonly string[];
+    enabled: boolean;
+    offscreen: boolean;
+    isPassword: boolean;
+    change?: "added" | "changed";
+    changed?: readonly string[];
+  }[];
+  removed: readonly { stableId: string; name: string; controlType: string }[];
+}): string {
+  const lines = reply.items.map(uiaItemLine);
+  for (const gone of reply.removed) {
+    const name = gone.name === "" ? "(unnamed)" : `"${gone.name}"`;
+    lines.push(`gone · ${gone.controlType} ${name} — no longer in this window (it has no ref any more)`);
+  }
+  return lines.join("\n");
 }
 
 /**

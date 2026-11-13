@@ -1106,10 +1106,13 @@ describe("UIA 车道（uia-list / uia-act）", () => {
       resp: {
         ok: true,
         hwnd: 4321,
+        generation: 6,
+        mode: "full",
         window: { title: "记事本", className: "Notepad" },
         items: [
           {
-            ref: 1,
+            ref: "g6:r1",
+            stableId: "rt:2a.10.1",
             name: "文本编辑器",
             controlType: "document",
             automationId: "15",
@@ -1122,19 +1125,25 @@ describe("UIA 车道（uia-list / uia-act）", () => {
             enabled: true,
             offscreen: false,
           },
-          { ref: 0, name: "坏记录" },
+          { ref: 0, name: "坏记录（上代格式的纯序号）" },
+          { ref: "r7", name: "坏记录（没有代次）" },
           { name: "没有 ref" },
         ],
+        removed: [],
+        unchanged: 0,
         truncated: true,
       },
     }));
     try {
       const reply = await fetchGuestUiaList(dir, { hwnd: 4321, maxItems: 60 });
       assert.equal(reply.hwnd, 4321);
+      assert.equal(reply.generation, 6);
+      assert.equal(reply.mode, "full");
       assert.deepEqual(reply.window, { title: "记事本", className: "Notepad" });
-      assert.equal(reply.items.length, 1, "ref 缺失 / 非法的半条记录必须跳过");
+      assert.equal(reply.items.length, 1, "ref 缺失 / 不是带代次 token 的半条记录必须跳过");
       assert.deepEqual(reply.items[0], {
-        ref: 1,
+        ref: "g6:r1",
+        stableId: "rt:2a.10.1",
         name: "文本编辑器",
         controlType: "document",
         automationId: "15",
@@ -1150,6 +1159,8 @@ describe("UIA 车道（uia-list / uia-act）", () => {
       });
       assert.equal(reply.truncated, true);
       assert.equal(reply.passwordFields, 0, "老桥（< 0.12.0）不报 passwordFields → 0");
+      assert.deepEqual(reply.removed, []);
+      assert.equal(reply.unchanged, 0);
       assert.equal(bridge.requests[0]?.command, "uia-list");
       assert.equal(bridge.requests[0]?.hwnd, 4321);
       assert.equal(bridge.requests[0]?.maxItems, 60);
@@ -1161,7 +1172,7 @@ describe("UIA 车道（uia-list / uia-act）", () => {
     }
   });
 
-  test("uia-list 缺 items / 缺 hwnd：报缺字段，不把半张表交给上层", async () => {
+  test("uia-list 缺 items / 缺 hwnd / 缺 generation：报缺字段，不把半张表交给上层", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
     const bridge = startFakeBridge(dir, () => ({ resp: { ok: true, hwnd: 1 } }));
     try {
@@ -1177,6 +1188,88 @@ describe("UIA 车道（uia-list / uia-act）", () => {
     } finally {
       bridge2.stop();
       await rm(dir2, { recursive: true, force: true });
+    }
+    // 0.14.0 之前的桥：没有 generation → ref 也就没有代次，整张表都不能用
+    const dir3 = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const bridge3 = startFakeBridge(dir3, () => ({ resp: { ok: true, hwnd: 1, items: [] } }));
+    try {
+      await assert.rejects(fetchGuestUiaList(dir3, { hwnd: 1 }), /缺 generation/);
+    } finally {
+      bridge3.stop();
+      await rm(dir3, { recursive: true, force: true });
+    }
+  });
+
+  test("uia-list 带 since 的 diff 回执：change / changed / removed / unchanged / note 都解析", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const bridge = startFakeBridge(dir, () => ({
+      resp: {
+        ok: true,
+        hwnd: 9,
+        generation: 8,
+        mode: "diff",
+        since: 7,
+        window: { title: "cmd", className: "ConsoleWindowClass" },
+        items: [
+          {
+            ref: "g8:r2",
+            stableId: "rt:9.2",
+            name: "OK",
+            controlType: "button",
+            automationId: "",
+            className: "Button",
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 10,
+            patterns: ["invoke"],
+            enabled: false,
+            offscreen: false,
+            isPassword: false,
+            change: "changed",
+            changed: ["enabled"],
+          },
+          {
+            ref: "g8:r3",
+            stableId: "rt:9.3",
+            name: "Cancel",
+            controlType: "button",
+            automationId: "",
+            className: "Button",
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 10,
+            patterns: ["invoke"],
+            enabled: true,
+            offscreen: false,
+            isPassword: false,
+            change: "added",
+          },
+        ],
+        removed: [{ stableId: "rt:9.1", name: "Help", controlType: "button" }],
+        unchanged: 4,
+        truncated: false,
+        passwordFields: 0,
+        note: "记不住那么早的清单了（每个窗口只保留最近 5 代）——这是全量。",
+      },
+    }));
+    try {
+      const reply = await fetchGuestUiaList(dir, { hwnd: 9, since: 7 });
+      assert.equal(bridge.requests[0]?.since, 7, "since 原样下发");
+      assert.equal(reply.generation, 8);
+      assert.equal(reply.mode, "diff");
+      assert.equal(reply.since, 7);
+      assert.equal(reply.unchanged, 4);
+      assert.deepEqual(reply.items[0]?.change, "changed");
+      assert.deepEqual(reply.items[0]?.changed, ["enabled"]);
+      assert.deepEqual(reply.items[1]?.change, "added");
+      assert.equal(reply.items[1]?.changed, undefined);
+      assert.deepEqual(reply.removed, [{ stableId: "rt:9.1", name: "Help", controlType: "button" }]);
+      assert.match(reply.note ?? "", /记不住那么早的清单了/);
+    } finally {
+      bridge.stop();
+      await rm(dir, { recursive: true, force: true });
     }
   });
 
@@ -1381,10 +1474,13 @@ describe("bridge-client：遮罩字段的解析（桥 0.12.0）", () => {
       resp: {
         ok: true,
         hwnd: 5,
+        generation: 3,
+        mode: "full",
         window: { title: "登录", className: "Chrome_WidgetWin_1" },
         items: [
           {
-            ref: 1,
+            ref: "g3:r1",
+            stableId: "h:0a1b2c3d",
             name: "",
             controlType: "edit",
             automationId: "password",
@@ -1399,7 +1495,8 @@ describe("bridge-client：遮罩字段的解析（桥 0.12.0）", () => {
             isPassword: true,
           },
           {
-            ref: 2,
+            ref: "g3:r2",
+            stableId: "rt:5.2",
             name: "登录",
             controlType: "button",
             automationId: "",

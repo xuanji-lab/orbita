@@ -805,6 +805,7 @@ export class SandboxController {
     hwnd?: number;
     title?: string;
     maxItems?: number;
+    since?: number;
   }): Promise<ComputerUseUiaListResult> {
     const gate = this.notRunning("UIA 控件列表");
     if (gate !== null) return gate;
@@ -812,6 +813,8 @@ export class SandboxController {
     if (options.hwnd !== undefined) fields["hwnd"] = options.hwnd;
     if (options.title !== undefined && options.title.trim() !== "") fields["title"] = options.title.trim();
     if (options.maxItems !== undefined) fields["maxItems"] = options.maxItems;
+    // since 只回变化（桥 0.14.0）。传的是上一代回执里的 generation，宿主不解释它的语义
+    if (options.since !== undefined) fields["since"] = options.since;
     try {
       const reply = await fetchGuestUiaList(this.outDir(), fields);
       return { ok: true, ...reply };
@@ -829,7 +832,8 @@ export class SandboxController {
   async uiaAct(options: {
     hwnd?: number;
     title?: string;
-    ref?: number;
+    /** 带代次的 ref token（"g12:r3"）；桥要拿它跟该窗口最近一次 list 的代次比 */
+    ref?: string;
     name?: string;
     perform: ComputerUseUiaAction;
     value?: string;

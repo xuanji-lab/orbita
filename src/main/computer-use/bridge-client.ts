@@ -38,6 +38,7 @@ import {
   type ComputerUseUiaAction,
   type ComputerUseUiaItem,
   type ComputerUseUiaListReply,
+  type ComputerUseUiaRemovedItem,
   type ComputerUseWindowInfo,
   type GuestTcpChannel,
 } from "../../shared/computer-use.ts";
@@ -188,12 +189,16 @@ function numberOr(value: unknown, fallback: number): number {
 }
 
 /**
- * uia-list：列出一个窗口里可动作的控件（桥 0.10.0）。只读、不抢焦点。
+ * uia-list：列出一个窗口里可动作的控件（桥 0.10.0；0.14.0 起 ref 带代次、可回 diff）。
  *
  * 每一项都按契约验一遍（缺字段的那一条跳过）：模型靠 ref / name 指控件，
  * 半条记录比没有更危险——它会拿着一个不存在的 ref 去 uia-act。
  * 失败时桥的人话原话抛出（「这个控件不支持…」「目标窗口没有响应（UIA 调用超时…）」），
  * 宿主不改写：那是模型唯一的下一步指示。
+ *
+ * **ref 的形状是硬契约**（0.14.0 起是 `g12:r3`）：读不出代次就没法校验「这个 ref 属于哪一代」，
+ * 而校验失败正是「静默点到别的控件上」唯一的闸门。所以这里不猜、不兜底一个假 ref——
+ * 直接报一句能定位的话（桥版本对不上 / 响应被截断）。
  */
 export async function fetchGuestUiaList(
   outDir: string,
@@ -217,20 +222,28 @@ export async function fetchGuestUiaList(
   if (!Array.isArray(list)) {
     throw new Error("guest 桥的 UIA 控件列表响应缺 items 数组");
   }
+  // generation 在这里而不是在最前面判：缺 items / hwnd 是「响应形状不对」，先说更具体的那一条
+  const generation = resp.generation;
+  if (typeof generation !== "number" || !Number.isInteger(generation) || generation <= 0) {
+    throw new Error("guest 桥的 UIA 控件列表响应缺 generation（桥低于 0.14.0？ref 没有代次就没法判断旧 ref）");
+  }
   const items: ComputerUseUiaItem[] = [];
   for (const entry of list) {
     if (typeof entry !== "object" || entry === null) continue;
     const row = entry as Record<string, unknown>;
     const ref = row.ref;
-    if (typeof ref !== "number" || !Number.isInteger(ref) || ref <= 0) continue;
+    // 半条记录跳过（与 ref 越界同一条纪律）：模型拿着一个读不出代次的 ref 去 act 只会更糟。
+    // 整张表都是旧格式的情形由上面的 generation 闸门拦（那是版本不对，不是个别脏数据）。
+    if (typeof ref !== "string" || !UIA_REF_TOKEN.test(ref)) continue;
     const patterns: string[] = [];
     if (Array.isArray(row.patterns)) {
       for (const pattern of row.patterns) {
         if (typeof pattern === "string" && pattern !== "") patterns.push(pattern);
       }
     }
-    items.push({
+    const item: ComputerUseUiaItem = {
       ref,
+      stableId: stringOr(row.stableId, ""),
       name: stringOr(row.name, ""),
       controlType: stringOr(row.controlType, ""),
       automationId: stringOr(row.automationId, ""),
@@ -245,16 +258,55 @@ export async function fetchGuestUiaList(
       // 老桥（< 0.12.0）不报这个字段：当 false——遮罩在那种桥上根本不会发生，
       // 把它当 true 只会让模型对一个其实没遮的窗口说「密码框已遮」。
       isPassword: row.isPassword === true,
-    });
+    };
+    if (row.change === "added" || row.change === "changed") {
+      item.change = row.change;
+      const changedRaw = row.changed;
+      if (Array.isArray(changedRaw)) {
+        const changed: string[] = [];
+        for (const field of changedRaw) {
+          if (typeof field === "string" && field !== "") changed.push(field);
+        }
+        if (changed.length > 0) item.changed = changed;
+      }
+    }
+    items.push(item);
   }
-  return {
+  const removed: ComputerUseUiaRemovedItem[] = [];
+  if (Array.isArray(resp.removed)) {
+    for (const entry of resp.removed) {
+      if (typeof entry !== "object" || entry === null) continue;
+      const row = entry as Record<string, unknown>;
+      const stableId = typeof row.stableId === "string" ? row.stableId : "";
+      if (stableId === "") continue;
+      removed.push({
+        stableId,
+        name: stringOr(row.name, ""),
+        controlType: stringOr(row.controlType, ""),
+      });
+    }
+  }
+  const reply: ComputerUseUiaListReply = {
     hwnd,
     window,
+    generation,
+    mode: resp.mode === "diff" ? "diff" : "full",
     items,
+    removed,
+    unchanged: Math.max(0, Math.round(numberOr(resp.unchanged, 0))),
     truncated: resp.truncated === true,
     passwordFields: Math.max(0, Math.round(numberOr(resp.passwordFields, 0))),
   };
+  if (reply.mode === "diff") {
+    const since = resp.since;
+    if (typeof since === "number" && Number.isInteger(since) && since > 0) reply.since = since;
+  }
+  if (typeof resp.note === "string" && resp.note !== "") reply.note = resp.note;
+  return reply;
 }
+
+/** ref token 的形状（桥 0.14.0）：`g<代次>:r<序号>`，两半都是正整数 */
+const UIA_REF_TOKEN = /^g[1-9][0-9]*:r[1-9][0-9]*$/;
 
 /** uia-act 的三个动作（与契约 ComputerUseUiaAction 同一份；桥里有一份必须逐字一致的名字）。
  *  focus 已删除（桥 0.11.0）：它动的是桌面级键盘焦点，不再是一个合法动作。 */

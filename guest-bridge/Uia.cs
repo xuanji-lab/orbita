@@ -47,6 +47,16 @@
 // 它会被 IsListable 滤掉——而它正是截图遮罩唯一必须命中的东西。每一项的 isPassword 字段也
 // 因此有了：模型要知道「这条是密码框，别往里写秘密」。
 //
+// 0.14.0 起 ref 带**代次**、uia-list 能只回**变化**（这一刀解决两个真实痛点）：
+//   ① 每次都回全量：长任务里模型每轮读一遍几乎相同的清单，白烧上下文。现在每一项的 ref 写成
+//      "g<代次>:r<序号>"，并且 uia-list 可以带 since 只回变化（新增 / 消失 / 改了 / unchanged 计数）。
+//   ② ref 是位置式的：窗口一变（页面跳转、弹框、列表滚动），旧 ref 指向的就是**另一个控件**，
+//      而模型看不出来。现在 uia-act 要求 ref 的代次 == 该窗口**最近一次** list 的代次，旧代次
+//      明确拒绝并让它重新 list——宁可多一次往返，也不能静默点到别的东西上。
+//   控件身份用 UIA 的 RuntimeId（IUIAutomationElement::GetRuntimeId）当稳定 id，取不到时退回
+//   「ControlType + ClassName + Name + AutomationId」的哈希（本代内重名再补 #2 / #3）。diff 只按它比。
+//   每个窗口只留最近 5 代（UiaHistoryStore.Retain），更早的 since 回全量并说明记不住了。
+//
 // 注意：csc.exe v4.0.30319 是 C# 5 编译器，禁止字符串插值 / ?. / out var / using 声明。
 // COM 的 vtable 槽位号全部来自 Windows SDK 的 UIAutomationClient.h（槽 0 基，IUnknown 占 0..2），
 // 每个常量旁边都写了它对应第几个方法，改的时候对着头文件数一遍。
@@ -62,7 +72,18 @@ using System.Threading;
 /** uia-list 的一项（字段名与宿主契约 ComputerUseUiaItem 一一对应，改一个字母就是两端脱钩） */
 internal sealed class UiaItemInfo
 {
+    /** 这一条在**自己那一代**清单里的序号（1 基）。只对这一代有效 */
     public int Ref;
+    /** 这一条属于第几代清单（同一窗口每 list 一次 +1）。uia-act 校验它 */
+    public int Generation;
+    /** ref 的对外写法 "g12:r3"：模型照抄，不要自己拼 */
+    public string RefToken = "";
+    /** 稳定 id（RuntimeId 优先，退化为属性哈希）。同一棵树里两次 list 必须一致；diff 只按它比 */
+    public string StableId = "";
+    /** diff 专用（全量回执里是 null）：added = 新出现的，changed = 还在但变了 */
+    public string Change;
+    /** Change == "changed" 时变了哪些字段（name / patterns / enabled / offscreen / rect / ...） */
+    public List<string> ChangedFields;
     public string Name = "";
     public string ControlType = "";
     public string AutomationId = "";
@@ -76,6 +97,145 @@ internal sealed class UiaItemInfo
     public bool Offscreen;
     /** 密码框（UIA_IsPasswordPropertyId = 30019）。宿主据此把这一行标成 password，截图遮罩也靠它 */
     public bool IsPassword;
+}
+
+/**
+ * 一代清单的快照。**只留元数据**：元素指针（Pointers）只在它是最新一代时有效——
+ * 新一代 list 一发生，上一代的指针立刻 Release 并清空。理由：ref 只对最新一代有效，
+ * 旧指针没有任何用处，留着就是泄漏（而且跨代释放要等 5 代以后，等于多占 5 倍 COM 引用）。
+ */
+internal sealed class UiaSnapshot
+{
+    public int Generation;
+    public List<UiaItemInfo> Items = new List<UiaItemInfo>();
+    public List<IntPtr> Pointers = new List<IntPtr>();
+    /** 稳定 id → 项（diff 的查表） */
+    public Dictionary<string, UiaItemInfo> ById = new Dictionary<string, UiaItemInfo>();
+    public bool Truncated;
+    public int PasswordFields;
+    public string Title = "";
+    public string ClassName = "";
+}
+
+/** 一个窗口的清单历史（保留最近 Retain 代，最旧的丢弃） */
+internal sealed class UiaHistory
+{
+    public int Latest;
+    public List<UiaSnapshot> Snapshots = new List<UiaSnapshot>();
+}
+
+/**
+ * 按窗口保存的清单历史。**只在 STA 线程上读写**（Run 里那条线程），除了一处例外：
+ * 看门狗超时后 `Run` 会把整个 store 换掉（不是清空它）——放弃那条线程时它可能还在往
+ * **旧对象**里写，写到新对象里就会跨线程 Release 它没持有的指针（可能卡在单元锁上，
+ * 那正是看门狗要避开的东西）。换对象之后旧线程写到的是一个没人读的孤儿。
+ */
+internal sealed class UiaHistoryStore
+{
+    /** 每个窗口保留几代（够回答「刚才那一次变了什么」，又不把内存当无限） */
+    internal const int Retain = 5;
+    private readonly Dictionary<long, UiaHistory> _histories = new Dictionary<long, UiaHistory>();
+
+    internal UiaHistory Ensure(long hwnd)
+    {
+        UiaHistory history;
+        if (!_histories.TryGetValue(hwnd, out history))
+        {
+            history = new UiaHistory();
+            _histories[hwnd] = history;
+        }
+        return history;
+    }
+
+    /** 最近一代快照；从没 list 过（或历史被重置）回 null */
+    internal UiaSnapshot Latest(long hwnd)
+    {
+        UiaHistory history;
+        if (!_histories.TryGetValue(hwnd, out history)) return null;
+        if (history.Snapshots.Count == 0) return null;
+        return history.Snapshots[history.Snapshots.Count - 1];
+    }
+
+    /** 按代次找快照；已被淘汰（更早的代次）回 null——调用方据此回全量 + 说明 */
+    internal UiaSnapshot ByGeneration(long hwnd, int generation)
+    {
+        UiaHistory history;
+        if (!_histories.TryGetValue(hwnd, out history)) return null;
+        for (int i = 0; i < history.Snapshots.Count; i++)
+        {
+            if (history.Snapshots[i].Generation == generation) return history.Snapshots[i];
+        }
+        return null;
+    }
+
+    /** 最近一次 list 的代次；0 = 这个窗口还没有清单 */
+    internal int LatestGeneration(long hwnd)
+    {
+        UiaHistory history;
+        if (!_histories.TryGetValue(hwnd, out history)) return 0;
+        return history.Latest;
+    }
+
+    /**
+     * 收下一次 list 的快照：先把上一代的元素指针释放掉（ref 只对最新一代有效），
+     * 再把超过 Retain 的最旧快照丢掉。release 由调用方给（COM 的 Release 在 Uia 里）。
+     */
+    internal void Push(long hwnd, UiaSnapshot snapshot, Action<IntPtr> release)
+    {
+        UiaHistory history = Ensure(hwnd);
+        if (history.Snapshots.Count > 0)
+        {
+            UiaSnapshot previous = history.Snapshots[history.Snapshots.Count - 1];
+            for (int i = 0; i < previous.Pointers.Count; i++) release(previous.Pointers[i]);
+            previous.Pointers = new List<IntPtr>();
+        }
+        history.Latest = snapshot.Generation;
+        history.Snapshots.Add(snapshot);
+        while (history.Snapshots.Count > Retain) history.Snapshots.RemoveAt(0);
+    }
+}
+
+/**
+ * 每个窗口已发出的最大代次。**故意独立于 UiaHistoryStore**：看门狗超时会换掉 store
+ * （历史全丢），但代次号绝不能回退——回到 1 之后，模型手里上一轮的 "g1:r2" 会静默匹配上
+ * 一张全新的清单，正是这一刀要消灭的那个错。所以代次只增不减，历史丢了就让它「查不到」。
+ */
+internal sealed class UiaGenerations
+{
+    private readonly Dictionary<long, int> _issued = new Dictionary<long, int>();
+
+    internal int Next(long hwnd)
+    {
+        int value;
+        if (!_issued.TryGetValue(hwnd, out value)) value = 0;
+        value++;
+        _issued[hwnd] = value;
+        return value;
+    }
+}
+
+/** 一次 diff 的结果（纯数据，selftest 直接验） */
+internal sealed class UiaDiffResult
+{
+    /** 新增 + 变化的项（每项的 Change / ChangedFields 已填好；ref 是**新一代**的写法） */
+    public List<UiaItemInfo> Items = new List<UiaItemInfo>();
+    /** 上一代有、这一代没有的项（只带 stableId / name / controlType，不带 ref） */
+    public List<UiaItemInfo> Removed = new List<UiaItemInfo>();
+    /** 完全没变的条数 */
+    public int Unchanged;
+}
+
+/** 这一次 list 回全量还是 diff（PlanList 的结论） */
+internal sealed class UiaDiffPlan
+{
+    /** "full" / "diff" */
+    public string Mode = "full";
+    /** diff 的基准快照（Mode == "diff" 时非 null） */
+    public UiaSnapshot Base;
+    /** 回给模型的 since（0 = 没带） */
+    public int Since;
+    /** 为什么回全量（人话；null = 不需要解释） */
+    public string Note;
 }
 
 internal static class Uia
@@ -241,6 +401,230 @@ internal static class Uia
         return true;
     }
 
+    /**
+     * ref 的对外写法：`g<代次>:r<序号>`。
+     *
+     * 为什么把代次拼进**同一个 token**、而不是加一个并列的 generation 字段：模型要把两者配对
+     * 传回来，配对就一定会错（传了新 ref 配旧代次）；一个格子照抄则错不了。代价是它不再是数字，
+     * 而是一段不透明文本——这正是想要的：位置 + 代次本来就不该被模型拆开理解。
+     */
+    internal static string RefToken(int generation, int refNo)
+    {
+        return "g" + generation.ToString(CultureInfo.InvariantCulture)
+            + ":r" + refNo.ToString(CultureInfo.InvariantCulture);
+    }
+
+    /** 模型给了一个上代格式的裸数字时的话（0.10–0.13 的 ref 是纯序号） */
+    internal static string RefFormatMessage()
+    {
+        return "ref 现在长这样 \"g12:r3\"（g 后面是这个窗口最近一次 uia-list 的代次，r 后面是那一代里的序号），"
+            + "照抄 uia-list 回执里的那个值就行，不要自己拼、也不要再用纯数字——先重新 list 一次。";
+    }
+
+    /**
+     * 解 ref token（纯函数，selftest 直接验）。回 null = 通过；否则回一句给模型的人话。
+     * 大小写不敏感（模型可能把它写成 G12:R3），但回给调用方的永远是代次 + 序号两个数字。
+     */
+    internal static string ParseRefToken(string raw, out int generation, out int refNo)
+    {
+        generation = 0;
+        refNo = 0;
+        if (raw == null || raw.Trim().Length == 0) return RefFormatMessage();
+        string value = raw.Trim();
+        int colon = value.IndexOf(':');
+        if (colon < 2 || colon >= value.Length - 2) return RefFormatMessage();
+        string genPart = value.Substring(0, colon).Trim();
+        string refPart = value.Substring(colon + 1).Trim();
+        if (genPart.Length < 2 || (genPart[0] != 'g' && genPart[0] != 'G')) return RefFormatMessage();
+        if (refPart.Length < 2 || (refPart[0] != 'r' && refPart[0] != 'R')) return RefFormatMessage();
+        if (!int.TryParse(genPart.Substring(1), NumberStyles.Integer, CultureInfo.InvariantCulture, out generation)
+            || generation <= 0) return RefFormatMessage();
+        if (!int.TryParse(refPart.Substring(1), NumberStyles.Integer, CultureInfo.InvariantCulture, out refNo)
+            || refNo <= 0) return RefFormatMessage();
+        return null;
+    }
+
+    /**
+     * 把一个 ref token 对到**最近一代**快照上（纯逻辑：只看历史，不碰 COM，selftest 直接验）。
+     * 回 null = 可用（snapshot / index 已填）；否则回一句给模型的人话，**必须带「重新 list」**。
+     */
+    internal static string ResolveRefToken(UiaHistoryStore store, long hwnd, string raw,
+        out UiaSnapshot snapshot, out int index)
+    {
+        snapshot = null;
+        index = -1;
+        int generation;
+        int refNo;
+        string bad = ParseRefToken(raw, out generation, out refNo);
+        if (bad != null) return bad;
+        UiaSnapshot latest = store.Latest(hwnd);
+        if (latest == null)
+            return "ref " + raw.Trim() + " 已经失效（这个窗口没有可用的控件清单）——先重新 list 一次，再用新的 ref。";
+        if (generation != latest.Generation)
+            return "ref " + raw.Trim() + " 属于第 " + generation + " 次清单，现在是第 " + latest.Generation
+                + " 次——窗口内容已经变过，同一个序号现在可能指向另一个控件。先重新 list 再动作。";
+        if (!TryResolveRef(refNo, latest.Items.Count, out index))
+            return "ref " + raw.Trim() + " 超出范围（第 " + generation + " 次清单只有 "
+                + latest.Items.Count + " 个控件）——重新 list 看新的序号。";
+        snapshot = latest;
+        return null;
+    }
+
+    /**
+     * 稳定 id 的主路径：UIA 的 RuntimeId（IUIAutomationElement::GetRuntimeId）。
+     * 它是一个 int 数组（首元素常是 UIA_AppendRuntimeId = 42，后面是提供者自己编的），
+     * 同一个元素在整块桌面上唯一、且在元素的整个生命周期里不变——正是「两次 list 同一个控件
+     * 必须得到同一个 id」要的东西。写成十六进制串（负数不会变成带减号的怪值）。
+     */
+    internal static string StableIdFromRuntimeId(int[] ids)
+    {
+        if (ids == null || ids.Length == 0) return null;
+        StringBuilder sb = new StringBuilder("rt:");
+        for (int i = 0; i < ids.Length; i++)
+        {
+            if (i > 0) sb.Append('.');
+            sb.Append(ids[i].ToString("x", CultureInfo.InvariantCulture));
+        }
+        return sb.ToString();
+    }
+
+    /**
+     * 取不到 RuntimeId 时的退化：ControlType + ClassName + Name + AutomationId 的 FNV-1a 32 位哈希。
+     * 这四个属性是 UIA 里跨两次枚举最稳定的四个；退化 id 前缀是 `h:`，一眼能看出不是 RuntimeId。
+     * **代价写在明处**：Name 一变，退化 id 就变——那次变化会呈现成「消失 + 新增」而不是
+     * 「name 变了」。这比「认错控件」好，而且退化本身只发生在没有 RuntimeId 的提供者上。
+     */
+    internal static string FallbackStableId(string controlType, string className, string name, string automationId)
+    {
+        string seed = (controlType ?? "") + "\u0001" + (className ?? "") + "\u0001"
+            + (name ?? "") + "\u0001" + (automationId ?? "");
+        uint hash = 2166136261;
+        for (int i = 0; i < seed.Length; i++)
+        {
+            hash = hash ^ seed[i];
+            hash = hash * 16777619;
+        }
+        return "h:" + hash.ToString("x8", CultureInfo.InvariantCulture);
+    }
+
+    /** 同一代里出现两个一模一样的稳定 id 时补序号（#2 / #3）；第 1 个不加后缀 */
+    internal static string DisambiguateStableId(string stableId, int seenCount)
+    {
+        if (seenCount <= 1) return stableId;
+        return stableId + "#" + seenCount.ToString(CultureInfo.InvariantCulture);
+    }
+
+    /**
+     * 一个元素的稳定 id：RuntimeId 优先，退化为属性哈希，再按本代内出现次数消歧。
+     * **生产路径（CollectItem）与 selftest 用的是这同一个函数**——「同一棵树两次 list
+     * 必须得到同一串 id」这条核心正确性才答应得住。
+     */
+    internal static string StableIdFor(int[] runtimeId, string controlType, string className, string name,
+        string automationId, Dictionary<string, int> seen)
+    {
+        string id = StableIdFromRuntimeId(runtimeId);
+        if (id == null) id = FallbackStableId(controlType, className, name, automationId);
+        int count;
+        if (!seen.TryGetValue(id, out count)) count = 0;
+        count++;
+        seen[id] = count;
+        return DisambiguateStableId(id, count);
+    }
+
+    /** 两个同名列表是不是同一组模式（顺序无关：UIA 的模式集合本身就是无序的） */
+    private static bool SamePatterns(List<string> before, List<string> after)
+    {
+        if (before == null) before = new List<string>();
+        if (after == null) after = new List<string>();
+        if (before.Count != after.Count) return false;
+        for (int i = 0; i < before.Count; i++)
+        {
+            if (!after.Contains(before[i])) return false;
+        }
+        return true;
+    }
+
+    /**
+     * 同一个控件（同一个稳定 id）在两代之间变了哪些字段。空列表 = 没变。
+     * 名字 / 模式 / 可用性 / 可见区 / 矩形 / 类型 / automationId 都算——模型看不到 UI，
+     * 位置变了往往是它最需要知道的那一条（按钮被一个新弹框挤走了）。
+     */
+    internal static List<string> CompareItems(UiaItemInfo before, UiaItemInfo after)
+    {
+        List<string> fields = new List<string>();
+        if (before.Name != after.Name) fields.Add("name");
+        if (before.ControlType != after.ControlType) fields.Add("controlType");
+        if (before.AutomationId != after.AutomationId) fields.Add("automationId");
+        if (!SamePatterns(before.Patterns, after.Patterns)) fields.Add("patterns");
+        if (before.Enabled != after.Enabled) fields.Add("enabled");
+        if (before.Offscreen != after.Offscreen) fields.Add("offscreen");
+        if (before.X != after.X || before.Y != after.Y || before.W != after.W || before.H != after.H)
+            fields.Add("rect");
+        return fields;
+    }
+
+    /**
+     * 两代快照的 diff（纯逻辑，selftest 直接验）。
+     * **按稳定 id 比，不按序号比**：序号一变（中间少了一个控件）整串都会错位，
+     * 那就成了「所有控件都变了」，模型会被噪音掩住真正的那一条。
+     */
+    internal static UiaDiffResult DiffSnapshots(UiaSnapshot before, UiaSnapshot after)
+    {
+        UiaDiffResult diff = new UiaDiffResult();
+        for (int i = 0; i < after.Items.Count; i++)
+        {
+            UiaItemInfo now = after.Items[i];
+            UiaItemInfo old;
+            if (!before.ById.TryGetValue(now.StableId, out old))
+            {
+                now.Change = "added";
+                diff.Items.Add(now);
+                continue;
+            }
+            List<string> changed = CompareItems(old, now);
+            if (changed.Count == 0)
+            {
+                diff.Unchanged++;
+                continue;
+            }
+            now.Change = "changed";
+            now.ChangedFields = changed;
+            diff.Items.Add(now);
+        }
+        for (int i = 0; i < before.Items.Count; i++)
+        {
+            UiaItemInfo old = before.Items[i];
+            if (!after.ById.ContainsKey(old.StableId)) diff.Removed.Add(old);
+        }
+        return diff;
+    }
+
+    /**
+     * 这一次 list 回全量还是 diff（纯逻辑：只看历史与请求）。
+     * 三种情况：没带 since → 全量；since 那一代还在 → diff；不在（太旧 / 不是这个窗口的） → 全量 + 说明。
+     */
+    internal static UiaDiffPlan PlanList(UiaHistoryStore store, long hwnd, bool hasSince, int sinceGen)
+    {
+        UiaDiffPlan plan = new UiaDiffPlan();
+        if (!hasSince) return plan;
+        UiaSnapshot baseSnap = store.ByGeneration(hwnd, sinceGen);
+        if (baseSnap != null)
+        {
+            plan.Mode = "diff";
+            plan.Base = baseSnap;
+            plan.Since = sinceGen;
+            return plan;
+        }
+        int newest = store.LatestGeneration(hwnd);
+        if (sinceGen > newest)
+            plan.Note = "since=" + sinceGen + " 不是这个窗口的清单代次（最近一次是第 " + newest
+                + " 次）——since 只接这个窗口之前 list 过的 generation，这次给的是全量。";
+        else
+            plan.Note = "记不住那么早的清单了（每个窗口只保留最近 " + UiaHistoryStore.Retain
+                + " 代）——这是全量。";
+        return plan;
+    }
+
     /** 动作 → 真正要调的 UIA 模式名；未知动作（含已删除的 focus）回 null */
     internal static string PatternNameForAction(string action)
     {
@@ -298,11 +682,13 @@ internal static class Uia
             return "action 必须是 invoke / setValue / selection 之一（大小写不敏感）";
         if (action == "setValue")
         {
-            if (!hasRef && !hasName) return "setValue 需要 ref 或 name 指定目标控件（先 uia-list 看有哪些）";
+            if (!hasRef && !hasName)
+                return "setValue 需要 ref（上一次 uia-list 回执里的 \"g12:r3\"）或 name 指定目标控件（先 uia-list 看有哪些）";
             if (!hasValue) return "setValue 需要 value（要写进控件的新文本；可以直接清空：value 传空字符串）";
             return null;
         }
-        if (!hasRef && !hasName) return "uia-act 需要 ref（上一次 uia-list 的序号）或 name（控件名字的一部分）";
+        if (!hasRef && !hasName)
+            return "uia-act 需要 ref（上一次 uia-list 回执里的 \"g12:r3\" 那种写法，照抄就行）或 name（控件名字的一部分）";
         return null;
     }
 
@@ -398,8 +784,18 @@ internal static class Uia
     /** uia-list 一项的 JSON（纯函数：名字里的引号 / 反斜杠 / 中文都要正确转义） */
     internal static string ItemJson(UiaItemInfo item)
     {
+        return ItemJson(item, null, null);
+    }
+
+    /**
+     * 一项的 JSON。change != null 时多一对 diff 字段：`"change":"added"|"changed"`，
+     * 以及 changed 时变了哪些字段。ref 永远是**所在那一代**的 token（"g12:r3"）。
+     */
+    internal static string ItemJson(UiaItemInfo item, string change, List<string> changedFields)
+    {
         StringBuilder json = new StringBuilder();
-        json.Append("{\"ref\":").Append(item.Ref)
+        json.Append("{\"ref\":").Append(Program.JsonQuote(item.RefToken))
+            .Append(",\"stableId\":").Append(Program.JsonQuote(item.StableId))
             .Append(",\"name\":").Append(Program.JsonQuote(item.Name))
             .Append(",\"controlType\":").Append(Program.JsonQuote(item.ControlType))
             .Append(",\"automationId\":").Append(Program.JsonQuote(item.AutomationId))
@@ -416,9 +812,31 @@ internal static class Uia
         }
         json.Append("],\"enabled\":").Append(item.Enabled ? "true" : "false")
             .Append(",\"offscreen\":").Append(item.Offscreen ? "true" : "false")
-            .Append(",\"isPassword\":").Append(item.IsPassword ? "true" : "false")
-            .Append("}");
+            .Append(",\"isPassword\":").Append(item.IsPassword ? "true" : "false");
+        if (change != null)
+        {
+            json.Append(",\"change\":").Append(Program.JsonQuote(change));
+            if (changedFields != null && changedFields.Count > 0)
+            {
+                json.Append(",\"changed\":[");
+                for (int i = 0; i < changedFields.Count; i++)
+                {
+                    if (i > 0) json.Append(",");
+                    json.Append(Program.JsonQuote(changedFields[i]));
+                }
+                json.Append("]");
+            }
+        }
+        json.Append("}");
         return json.ToString();
+    }
+
+    /** diff 里「消失的控件」的 JSON：只给 stableId / name / controlType，**不给 ref**（它已经没有那一代里的位置了） */
+    internal static string RemovedJson(UiaItemInfo item)
+    {
+        return "{\"stableId\":" + Program.JsonQuote(item.StableId)
+            + ",\"name\":" + Program.JsonQuote(item.Name)
+            + ",\"controlType\":" + Program.JsonQuote(item.ControlType) + "}";
     }
 
     // ---- COM：手写 interop（.NET 的 System.Windows.Automation 不暴露 AutoSetFocus）----
@@ -476,6 +894,13 @@ internal static class Uia
     private const int SlotCurrentIsPassword = 3 + 33 - 1;
     /** IUIAutomationElement 第 41 个方法 get_CurrentBoundingRectangle */
     private const int SlotCurrentBoundingRectangle = 3 + 41 - 1;
+    /**
+     * IUIAutomationElement 第 2 个方法 GetRuntimeId(SAFEARRAY(int)**)：稳定 id 的主路径。
+     * 对头文件数：《UIAutomationClient.h》里 IUIAutomationElement 的方法次序是
+     * SetFocus(1) / **GetRuntimeId(2)** / FindFirst(3) / FindAll(4——已验证) / …，
+     * 与下面已实测的 FindAll = 4 一肋对得上，所以槽 = 3 + 2 - 1 = 4。
+     */
+    private const int SlotGetRuntimeId = 3 + 2 - 1;
     /** IUIAutomationElementArray 第 1 个方法 get_Length */
     private const int SlotArrayLength = 3 + 1 - 1;
     /** IUIAutomationElementArray 第 2 个方法 GetElement(index, IUIAutomationElement**) */
@@ -488,6 +913,24 @@ internal static class Uia
     private const int SlotValueIsReadOnly = 3 + 3 - 1;
     /** IUIAutomationSelectionItemPattern 第 1 个方法 Select() */
     private const int SlotSelect = 3 + 1 - 1;
+
+    [DllImport("oleaut32.dll")]
+    private static extern int SafeArrayGetDim(IntPtr psa);
+
+    [DllImport("oleaut32.dll")]
+    private static extern int SafeArrayGetLBound(IntPtr psa, uint nDim, out int lower);
+
+    [DllImport("oleaut32.dll")]
+    private static extern int SafeArrayGetUBound(IntPtr psa, uint nDim, out int upper);
+
+    [DllImport("oleaut32.dll")]
+    private static extern int SafeArrayAccessData(IntPtr psa, out IntPtr data);
+
+    [DllImport("oleaut32.dll")]
+    private static extern int SafeArrayUnaccessData(IntPtr psa);
+
+    [DllImport("oleaut32.dll")]
+    private static extern int SafeArrayDestroy(IntPtr psa);
 
     [DllImport("ole32.dll")]
     private static extern int CoInitializeEx(IntPtr pvReserved, uint coInit);
@@ -545,6 +988,8 @@ internal static class Uia
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate int GetCurrentPatternFn(IntPtr self, int patternId, out IntPtr pattern);
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate int GetSafeArrayFn(IntPtr self, out IntPtr array);
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate int ArrayLengthFn(IntPtr self, out int length);
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate int ArrayGetFn(IntPtr self, int index, out IntPtr element);
@@ -590,7 +1035,14 @@ internal static class Uia
     private static Thread _worker;
     private static Job _pending;
     private static long _generation;
-    private static Dictionary<long, List<IntPtr>> _refs = new Dictionary<long, List<IntPtr>>();
+    /**
+     * 清单历史（按 hwnd）。**只在 STA 线程上读写**；看门狗超时时整个换掉（不是清空）：
+     * 被放弃的那条线程可能还在往它自己捕到的旧对象里写（见 BuildListJson 开头的 store 局部变量），
+     * 换对象之后它写到的是一个没人读的孤儿，不会跨线程 Release 新对象里的指针。
+     */
+    private static UiaHistoryStore _store = new UiaHistoryStore();
+    /** 代次号只增不减：历史丢了就让它查不到，绝不让旧 "g1:r2" 静默匹配上一张新清单 */
+    private static readonly UiaGenerations Generations = new UiaGenerations();
 
     /**
      * 跑一个 UIA 任务。timeoutMs 到点回 null 且 timedOut = true。
@@ -608,10 +1060,10 @@ internal static class Uia
             // 一并作废（下一次 uia-act 会回「ref 已失效」）。
             if (_worker != null && !_worker.IsAlive)
             {
-                Program.Log("UIA：STA 线程已经退出，重启一条（旧 ref 映射作废）");
+                Program.Log("UIA：STA 线程已经退出，重启一条（旧控件清单作废）");
                 _generation++;
                 _worker = null;
-                _refs = new Dictionary<long, List<IntPtr>>();
+                _store = new UiaHistoryStore();
             }
             if (_worker == null)
             {
@@ -633,11 +1085,11 @@ internal static class Uia
             }
             if (!job.Done)
             {
-                Program.Log("UIA：调用超时（" + timeoutMs + "ms），放弃当前 STA 线程；ref 映射作废");
+                Program.Log("UIA：调用超时（" + timeoutMs + "ms），放弃当前 STA 线程；控件清单作废");
                 _generation++;
                 _worker = null;
                 _pending = null;
-                _refs = new Dictionary<long, List<IntPtr>>();
+                _store = new UiaHistoryStore();
                 timedOut = true;
                 return null;
             }
@@ -813,6 +1265,45 @@ internal static class Uia
         return rect;
     }
 
+    /**
+     * 读一个元素的 RuntimeId（稳定 id 的主路径）。失败 / 形状不对一律回 null（调用方退化到属性哈希）——
+     * 稳定 id 读不到是一个**可以接受的降级**，而为一个非关键字段抛异常会毁掉整次 list。
+     * SAFEARRAY 由我们负责 Destroy（头文件里的 [out, retval] 语义），里面是 VT_I4 的紧凑数组。
+     */
+    private static int[] ReadRuntimeId(IntPtr element)
+    {
+        IntPtr array;
+        int hr = Slot<GetSafeArrayFn>(element, SlotGetRuntimeId)(element, out array);
+        if (hr < 0 || array == IntPtr.Zero) return null;
+        try
+        {
+            if (SafeArrayGetDim(array) != 1) return null;
+            int lower;
+            int upper;
+            if (SafeArrayGetLBound(array, 1, out lower) < 0) return null;
+            if (SafeArrayGetUBound(array, 1, out upper) < 0) return null;
+            int count = upper - lower + 1;
+            // RuntimeId 正常情况下就几个 int；异常长度不当数据用（防止脏 SAFEARRAY 拉爆内存）
+            if (count <= 0 || count > 16) return null;
+            IntPtr data;
+            if (SafeArrayAccessData(array, out data) < 0) return null;
+            try
+            {
+                int[] ids = new int[count];
+                for (int i = 0; i < count; i++) ids[i] = Marshal.ReadInt32(data, i * 4);
+                return ids;
+            }
+            finally
+            {
+                SafeArrayUnaccessData(array);
+            }
+        }
+        finally
+        {
+            SafeArrayDestroy(array);
+        }
+    }
+
     /** 探测本车道能执行的三个模式（拿得到就 Release，只留名字） */
     private static List<string> ProbePatterns(IntPtr element)
     {
@@ -918,12 +1409,16 @@ internal static class Uia
     // ---- uia-list ------------------------------------------------------------
 
     /**
-     * uia-list {hwnd?, title?, maxItems?}
-     *   → `{ok:true,hwnd,window:{title,className},items:[...],truncated}`
+     * uia-list {hwnd?, title?, maxItems?, since?, timeoutMs?}
+     *   → `{ok:true,hwnd,generation,mode,window:{...},items:[...],removed:[...],
+     *      unchanged,truncated,passwordFields,note?}`
      *
      * 只读：从 hwnd 取 UIA 根元素 → 在 ControlView 里 FindAll(Descendants) → 过滤 →
-     * 读名字/类型/id/矩形/可用性 → 探测三个模式。全程不 SetFocus、不调任何写模式，
+     * 读名字/类型/id/矩形/可用性/稳定 id → 探测三个模式。全程不 SetFocus、不调任何写模式，
      * 也不把窗口带到前台（AutoSetFocus 只影响模式调用，读属性不受它影响）。
+     *
+     * **since（0.14.0）**：不带 = 全量（与改之前逐字同行为）；带了而且是这个窗口还留着的
+     * 某一代 = 只回变化（新增 / 消失 / 改了 + unchanged 计数）；太旧（已被淘汰）= 全量 + 一句说明。
      */
     internal static string ExecuteList(string raw)
     {
@@ -938,11 +1433,22 @@ internal static class Uia
         string badTimeout = NormalizeTimeout(Program.ExtractNumber(raw, "timeoutMs"), out timeoutMs);
         if (badTimeout != null) return Fail(badTimeout);
 
+        // since：只回变化。给它的是回执里的 generation（那个窗口第几次清单），不是控件编号
+        bool hasSince = false;
+        int sinceGen = 0;
+        string sinceRaw = Program.ExtractNumber(raw, "since");
+        if (sinceRaw != null)
+        {
+            if (!int.TryParse(sinceRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out sinceGen) || sinceGen <= 0)
+                return Fail("since 必须是正整数（上一次 uia-list 回执里的 generation）");
+            hasSince = true;
+        }
+
         bool timedOut;
         string json;
         try
         {
-            json = Run(delegate { return BuildListJson(hwnd, maxItems); }, timeoutMs, out timedOut);
+            json = Run(delegate { return BuildListJson(hwnd, maxItems, hasSince, sinceGen); }, timeoutMs, out timedOut);
         }
         catch (Exception ex)
         {
@@ -953,10 +1459,19 @@ internal static class Uia
         return json;
     }
 
-    private static string BuildListJson(IntPtr hwnd, int maxItems)
+    private static string BuildListJson(IntPtr hwnd, int maxItems, bool hasSince, int sinceGen)
     {
+        // **先捕获这一次调用用的历史对象**：看门狗超时会把静态字段整个换掉（_store = new ...），
+        // 而被放弃的那条线程还可能继续跑到这里——它必须往自己这一个（已经没人读的）对象里写。
+        // 写到新对象里就是跨线程 Release 别人的指针，正是看门狗要避开的那个坑。
+        UiaHistoryStore store = _store;
+        long key = hwnd.ToInt64();
+        int generation = Generations.Next(key);
+
         IntPtr automation = EnsureAutomation();
         IntPtr window = ElementFromHandle(automation, hwnd);
+        UiaSnapshot snapshot = new UiaSnapshot();
+        snapshot.Generation = generation;
         try
         {
             string windowTitle = ReadString(window, SlotCurrentName);
@@ -975,7 +1490,8 @@ internal static class Uia
             // 密码框矩形单独收：**不管它列不列得进清单**（理由见 CollectItem 里的注释）。
             // 它们就是截图遮罩的数据源（Mask.cs 的 PasswordRects）。
             List<MaskRect> passwordRects = new List<MaskRect>();
-            StringBuilder items = new StringBuilder();
+            // 稳定 id 的消歧表（同一代里两个一模一样的控件 → 补 #2 / #3）
+            Dictionary<string, int> seenIds = new Dictionary<string, int>();
             bool truncated = false;
             try
             {
@@ -990,16 +1506,22 @@ internal static class Uia
                     bool keep = false;
                     try
                     {
-                        keep = CollectItem(element, retained.Count, ref items, passwordRects);
-                        if (keep)
+                        UiaItemInfo info = CollectItem(element, passwordRects, seenIds);
+                        if (info != null)
                         {
+                            info.Ref = RefOf(snapshot.Items.Count);
+                            info.Generation = generation;
+                            info.RefToken = RefToken(generation, info.Ref);
+                            snapshot.Items.Add(info);
+                            snapshot.ById[info.StableId] = info;
                             retained.Add(element);
-                            if (retained.Count >= maxItems)
+                            keep = true;
+                            if (snapshot.Items.Count >= maxItems)
                             {
                                 truncated = i + 1 < total;
                                 break;
                             }
-                            // 已经拼进 JSON 的元素指针要留着给 uia-act 用；不 Release
+                            // 指针要留给 uia-act 用（ref 解析）；不 Release
                             continue;
                         }
                     }
@@ -1014,24 +1536,62 @@ internal static class Uia
                 Release(array);
             }
 
-            ReplaceRefs(hwnd, retained);
+            snapshot.Title = windowTitle;
+            snapshot.ClassName = windowClass;
+            snapshot.Truncated = truncated;
+            snapshot.PasswordFields = passwordRects.Count;
+            snapshot.Pointers = retained;
 
             // 清单跑完了：把这次看到的密码框位置记下（截图命令靠它遮罩）。
             // 空列表也记 —— 「看过，这个窗口没有密码框」与「从没看过」是两件事：
             // 前者截图不用吓唬模型，后者必须告诉它「这张图没遮，因为你还没 list 过」。
             int passwordFields = passwordRects.Count;
-            PasswordRects.Record(hwnd.ToInt64(), passwordRects, InputHook.NowTick());
+            PasswordRects.Record(key, passwordRects, InputHook.NowTick());
+
+            // diff 要拿「这一代之前」的历史说话：先定基准、先算差异，再把新快照收进去
+            UiaDiffPlan plan = PlanList(store, key, hasSince, sinceGen);
+            UiaDiffResult diff = plan.Mode == "diff" ? DiffSnapshots(plan.Base, snapshot) : null;
+            store.Push(key, snapshot, Release);
+
+            List<UiaItemInfo> shown = diff == null ? snapshot.Items : diff.Items;
+            List<UiaItemInfo> removed = diff == null ? new List<UiaItemInfo>() : diff.Removed;
 
             StringBuilder json = new StringBuilder();
-            json.Append("{\"ok\":true,\"hwnd\":").Append(hwnd.ToInt64())
-                .Append(",\"window\":{\"title\":").Append(Program.JsonQuote(windowTitle))
+            json.Append("{\"ok\":true,\"hwnd\":").Append(key)
+                .Append(",\"generation\":").Append(generation)
+                .Append(",\"mode\":").Append(Program.JsonQuote(plan.Mode));
+            if (plan.Mode == "diff") json.Append(",\"since\":").Append(plan.Since);
+            json.Append(",\"window\":{\"title\":").Append(Program.JsonQuote(windowTitle))
                 .Append(",\"className\":").Append(Program.JsonQuote(windowClass))
-                .Append("},\"items\":[").Append(items.ToString())
-                .Append("],\"truncated\":").Append(truncated ? "true" : "false")
-                .Append(",\"passwordFields\":").Append(passwordFields).Append("}");
-            Program.Log("uia-list hwnd " + hwnd.ToInt64() + "「" + windowTitle + "」：" + retained.Count
-                + " 个可动作控件" + (truncated ? "（还有更多，已截断）" : "")
-                + "，密码框 " + passwordFields + " 个（已记下位置，截图会遮）");
+                .Append("},\"items\":[");
+            for (int i = 0; i < shown.Count; i++)
+            {
+                if (i > 0) json.Append(",");
+                json.Append(ItemJson(shown[i], shown[i].Change, shown[i].ChangedFields));
+            }
+            json.Append("],\"removed\":[");
+            for (int i = 0; i < removed.Count; i++)
+            {
+                if (i > 0) json.Append(",");
+                json.Append(RemovedJson(removed[i]));
+            }
+            json.Append("],\"unchanged\":").Append(diff == null ? 0 : diff.Unchanged)
+                .Append(",\"truncated\":").Append(truncated ? "true" : "false")
+                .Append(",\"passwordFields\":").Append(passwordFields);
+
+            string note = plan.Note;
+            if (diff != null && truncated)
+                note = JoinNotes(note, "这次清单被 maxItems 截断了，diff 只覆盖列出来的部分。");
+            else if (diff != null && plan.Base.Truncated)
+                note = JoinNotes(note, "上一次清单被 maxItems 截断了，diff 只覆盖列出来的部分。");
+            if (note != null) json.Append(",\"note\":").Append(Program.JsonQuote(note));
+            json.Append("}");
+
+            Program.Log("uia-list hwnd " + key + "「" + windowTitle + "」第 " + generation + " 代："
+                + snapshot.Items.Count + " 个可动作控件" + (truncated ? "（还有更多，已截断）" : "")
+                + "，密码框 " + passwordFields + " 个（已记下位置，截图会遮），mode=" + plan.Mode
+                + (diff == null ? "" : "，变化 " + diff.Items.Count + " / 消失 " + diff.Removed.Count
+                    + " / 没变 " + diff.Unchanged));
             return json.ToString();
         }
         finally
@@ -1040,17 +1600,25 @@ internal static class Uia
         }
     }
 
+    /** 两段人话拼一条（note 只可能在 diff 路径上出现，最多两段） */
+    private static string JoinNotes(string first, string second)
+    {
+        if (first == null || first.Length == 0) return second;
+        if (second == null || second.Length == 0) return first;
+        return first + " " + second;
+    }
+
     /**
-     * 一个候选元素要不要留下；留下就把它拼进 items（ref = retainedCount + 1）。
-     * 返回 false 时调用方负责 Release（不能在这里放：`keep` 为 true 的指针要留给 ref 映射）。
+     * 一个候选元素要不要留下；留下就返回这一条的元数据（ref / 代次 / token 由调用方填）。
+     * 返回 null 时调用方负责 Release（留下的指针要留给 ref 解析）。
      *
      * **密码框在读过滤之前判**：Chromium 里的 <input type=password> 常常既没有 name 也没有
      * automationId，它会被 IsListable 过滤掉——按「列进清单的控件」收集就会漏掉真正的密码框，
      * 而这正是遮罩唯一必须命中的东西。所以 IsPassword 与它的矩形在过滤之前就取，
      * 与「这一条要不要列给模型」完全解耦。
      */
-    private static bool CollectItem(IntPtr element, int retainedCount, ref StringBuilder items,
-        List<MaskRect> passwordRects)
+    private static UiaItemInfo CollectItem(IntPtr element, List<MaskRect> passwordRects,
+        Dictionary<string, int> seenIds)
     {
         bool isControl = ReadBool(element, SlotCurrentIsControlElement);
         int controlTypeId = ReadInt(element, SlotCurrentControlType);
@@ -1064,10 +1632,9 @@ internal static class Uia
                 passwordRects.Add(new MaskRect(secret.Left, secret.Top,
                     secret.Right - secret.Left, secret.Bottom - secret.Top));
         }
-        if (!IsListable(isControl, controlTypeId, name, automationId)) return false;
+        if (!IsListable(isControl, controlTypeId, name, automationId)) return null;
 
         UiaItemInfo info = new UiaItemInfo();
-        info.Ref = RefOf(retainedCount);
         info.Name = name;
         info.ControlType = ControlTypeName(controlTypeId);
         info.AutomationId = automationId;
@@ -1081,21 +1648,10 @@ internal static class Uia
         info.Offscreen = ReadBool(element, SlotCurrentIsOffscreen);
         info.IsPassword = isPassword;
         info.Patterns = ProbePatterns(element);
-
-        if (retainedCount > 0) items.Append(",");
-        items.Append(ItemJson(info));
-        return true;
-    }
-
-    /** 用新一次 uia-list 的结果替换 ref 映射（旧指针在**本线程**上 Release，是安全的） */
-    private static void ReplaceRefs(IntPtr hwnd, List<IntPtr> retained)
-    {
-        List<IntPtr> old;
-        if (_refs.TryGetValue(hwnd.ToInt64(), out old))
-        {
-            for (int i = 0; i < old.Count; i++) Release(old[i]);
-        }
-        _refs[hwnd.ToInt64()] = retained;
+        // 稳定 id：RuntimeId 优先（同一个元素跨两次枚举不变），取不到退化为属性哈希
+        info.StableId = StableIdFor(ReadRuntimeId(element), info.ControlType, info.ClassName,
+            info.Name, info.AutomationId, seenIds);
+        return info;
     }
 
     // ---- uia-act -------------------------------------------------------------
@@ -1104,24 +1660,36 @@ internal static class Uia
      * uia-act {hwnd?, title?, ref?, name?, action, value?, timeoutMs?}
      *   → `{ok:true,hwnd,action,usedPattern,name,controlType,autoSetFocus,elapsedMs}`
      *
-     * 目标：ref（同一次 uia-list 的元素指针）优先，否则按 name 现枚举一遍（精确匹配优先，
-     * 其次包含匹配）。动作按契约的三条走；模式取不到就回人话，不静默失败。
+     * 目标：ref（"g12:r3"，必须属于该窗口**最近一次** list 的那一代）优先，否则按 name 现枚举
+     * 一遍（精确匹配优先，其次包含匹配）。动作按契约的三条走；模式取不到就回人话，不静默失败。
      * focus 不在这三条里：ValidateAct 会回一句点名替代路径的话（见 FocusRemovedMessage）。
+     *
+     * **ref 的代次校验是这一刀的核心**：旧 ref 在窗口变过之后指向的是另一个控件，而模型看不出来。
+     * 代次对不上就**明确拒绝**（文案带「先重新 list」），绝不允许它静默地点到别的东西上。
      */
     internal static string ExecuteAct(string raw)
     {
         string action = NormalizeAction(Program.ExtractJsonString(raw, "action"));
         string value = Program.ExtractJsonString(raw, "value");
-        string refRaw = Program.ExtractNumber(raw, "ref");
         string name = Program.ExtractJsonString(raw, "name");
         if (name != null) name = name.Trim();
 
-        int refNo = 0;
+        // ref 是字符串 token（"g12:r3"）：代次与序号在同一个格子里，模型没法配错对
+        string refRaw = Program.ExtractJsonString(raw, "ref");
         bool hasRef = false;
-        if (refRaw != null)
+        if (refRaw == null || refRaw.Trim().Length == 0)
         {
-            if (!int.TryParse(refRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out refNo) || refNo <= 0)
-                return Fail("ref 必须是正整数（上一次 uia-list 回执里的那个序号）");
+            // 上代格式的裸数字（0.10–0.13 是纯序号）：单独一句话教它照抄新的 ref，
+            // 不要混进「参数缺失」里——它是**知道有 ref 这回事**的模型，只是格式旧了。
+            string numeric = Program.ExtractNumber(raw, "ref");
+            if (numeric != null) return Fail(RefFormatMessage());
+        }
+        else
+        {
+            int genCheck;
+            int refCheck;
+            string badRef = ParseRefToken(refRaw, out genCheck, out refCheck);
+            if (badRef != null) return Fail(badRef);
             hasRef = true;
         }
         bool hasName = name != null && name.Length > 0;
@@ -1149,7 +1717,7 @@ internal static class Uia
         {
             json = Run(delegate
             {
-                return BuildActJson(hwnd, action, hasRef, refNo, hasName, name, value, admitJson);
+                return BuildActJson(hwnd, action, hasRef, refRaw, hasName, name, value, admitJson);
             }, timeoutMs, out timedOut);
         }
         catch (Exception ex)
@@ -1161,7 +1729,7 @@ internal static class Uia
         return json;
     }
 
-    private static string BuildActJson(IntPtr hwnd, string action, bool hasRef, int refNo, bool hasName,
+    private static string BuildActJson(IntPtr hwnd, string action, bool hasRef, string refToken, bool hasName,
         string name, string value, string admitJson)
     {
         Stopwatch clock = Stopwatch.StartNew();
@@ -1173,15 +1741,15 @@ internal static class Uia
         {
             if (hasRef)
             {
-                List<IntPtr> list;
-                if (!_refs.TryGetValue(hwnd.ToInt64(), out list) || list.Count == 0)
-                    throw new InvalidOperationException("ref " + refNo + " 已经失效（这个窗口没有可用的 uia-list 快照）——"
-                        + "重新 uia-list 一次再用新的 ref。");
+                // 代次校验 + 取元素指针。UiaSnapshot / 历史只在 STA 线程上读写，这里就在 STA 线程上。
+                UiaHistoryStore store = _store;
+                UiaSnapshot snapshot;
                 int index;
-                if (!TryResolveRef(refNo, list.Count, out index))
-                    throw new InvalidOperationException("ref " + refNo + " 超出范围（这个窗口上一次 uia-list 只回了 "
-                        + list.Count + " 个控件）——重新 uia-list 看新的序号。");
-                target = list[index];
+                string badRef = ResolveRefToken(store, hwnd.ToInt64(), refToken, out snapshot, out index);
+                if (badRef != null) throw new InvalidOperationException(badRef);
+                if (index < 0 || index >= snapshot.Pointers.Count)
+                    throw new InvalidOperationException("ref " + refToken + " 指向的控件已经不在了——重新 list 再动作。");
+                target = snapshot.Pointers[index];
             }
             else
             {
@@ -1491,6 +2059,9 @@ internal static class Uia
         // ⑩ 回执 JSON：名字里的引号 / 反斜杠 / 中文都要转义正确
         UiaItemInfo sample = new UiaItemInfo();
         sample.Ref = 2;
+        sample.Generation = 3;
+        sample.RefToken = RefToken(3, 2);
+        sample.StableId = "rt:2a.4d2";
         sample.Name = "保存\"并关闭\\";
         sample.ControlType = "button";
         sample.AutomationId = "save";
@@ -1503,10 +2074,13 @@ internal static class Uia
         sample.Enabled = true;
         sample.Offscreen = false;
         string itemJson = ItemJson(sample);
-        CheckTrue(failures, ref cases, "项 JSON 带 ref / 坐标",
-            itemJson.IndexOf("\"ref\":2", StringComparison.Ordinal) >= 0
+        CheckTrue(failures, ref cases, "项 JSON 带 ref（代次 token）/ 稳定 id / 坐标",
+            itemJson.IndexOf("\"ref\":\"g3:r2\"", StringComparison.Ordinal) >= 0
+            && itemJson.IndexOf("\"stableId\":\"rt:2a.4d2\"", StringComparison.Ordinal) >= 0
             && itemJson.IndexOf("\"x\":10", StringComparison.Ordinal) >= 0
             && itemJson.IndexOf("\"h\":40", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "全量回执的项不带 diff 字段",
+            itemJson.IndexOf("\"change\"", StringComparison.Ordinal) < 0);
         CheckTrue(failures, ref cases, "项 JSON 的模式数组",
             itemJson.IndexOf("\"patterns\":[\"invoke\"]", StringComparison.Ordinal) >= 0);
         CheckTrue(failures, ref cases, "项 JSON 转义引号与反斜杠",
@@ -1545,8 +2119,230 @@ internal static class Uia
         CheckTrue(failures, ref cases, "非密码框写 false（不是省略）",
             ItemJson(new UiaItemInfo()).IndexOf("\"isPassword\":false", StringComparison.Ordinal) >= 0);
 
+        // ⑫ ref 带代次：一个格子照抄，拆开就会配错对
+        CheckString(failures, ref cases, "ref token 的写法", "g12:r3", RefToken(12, 3));
+        int genNo;
+        int refNo;
+        CheckTrue(failures, ref cases, "ref token 解析 g12:r3",
+            ParseRefToken("g12:r3", out genNo, out refNo) == null && genNo == 12 && refNo == 3);
+        CheckTrue(failures, ref cases, "ref token 解析：大小写与空白都容忍",
+            ParseRefToken(" G7:R2 ", out genNo, out refNo) == null && genNo == 7 && refNo == 2);
+        CheckTrue(failures, ref cases, "裸数字不再被当成 ref（教它照抄 token）",
+            ParseRefToken("3", out genNo, out refNo) != null
+            && RefFormatMessage().IndexOf("g12:r3", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "代次 0 拒绝", ParseRefToken("g0:r1", out genNo, out refNo) != null);
+        CheckTrue(failures, ref cases, "序号 0 拒绝", ParseRefToken("g1:r0", out genNo, out refNo) != null);
+        CheckTrue(failures, ref cases, "两半颠倒拒绝", ParseRefToken("r3:g12", out genNo, out refNo) != null);
+        CheckTrue(failures, ref cases, "缺一半拒绝", ParseRefToken("g12", out genNo, out refNo) != null);
+        CheckTrue(failures, ref cases, "非数字拒绝", ParseRefToken("gx:ry", out genNo, out refNo) != null);
+        CheckTrue(failures, ref cases, "空 ref 拒绝", ParseRefToken("   ", out genNo, out refNo) != null);
+
+        // ⑬ 稳定 id：RuntimeId 优先，退化到属性哈希；同一棵树两次 list 必须一致（本 PR 的核心正确性）
+        int[] runtimeA = new int[] { 42, 1234, 99 };
+        CheckString(failures, ref cases, "RuntimeId → rt: 十六进制", "rt:2a.4d2.63", StableIdFromRuntimeId(runtimeA));
+        CheckTrue(failures, ref cases, "RuntimeId 空数组 → null（调用方退化）", StableIdFromRuntimeId(new int[0]) == null);
+        CheckTrue(failures, ref cases, "RuntimeId null → null", StableIdFromRuntimeId(null) == null);
+        CheckTrue(failures, ref cases, "同一组 RuntimeId 值（新数组实例）→ 同一个 id",
+            StableIdFromRuntimeId(new int[] { 42, 1234, 99 }) == StableIdFromRuntimeId(runtimeA));
+        CheckTrue(failures, ref cases, "不同 RuntimeId → 不同 id",
+            StableIdFromRuntimeId(runtimeA) != StableIdFromRuntimeId(new int[] { 42, 1234, 100 }));
+        string fallbackA = FallbackStableId("button", "Button", "保存", "save");
+        string fallbackB = FallbackStableId("button", "Button", "保存", "save");
+        CheckTrue(failures, ref cases, "退化 id 稳定（同属性 → 同 id）并带 h: 前缀",
+            fallbackA == fallbackB && fallbackA.StartsWith("h:", StringComparison.Ordinal));
+        CheckTrue(failures, ref cases, "退化 id 固定 8 位十六进制", fallbackA.Length == 10);
+        CheckTrue(failures, ref cases, "退化 id 随名字变",
+            fallbackA != FallbackStableId("button", "Button", "保存并关闭", "save"));
+        CheckTrue(failures, ref cases, "退化 id 随控件类型变",
+            fallbackA != FallbackStableId("edit", "Button", "保存", "save"));
+        CheckTrue(failures, ref cases, "退化 id 随 automationId 变",
+            fallbackA != FallbackStableId("button", "Button", "保存", "save2"));
+        CheckTrue(failures, ref cases, "退化 id 随类名变",
+            fallbackA != FallbackStableId("button", "Button2", "保存", "save"));
+        CheckString(failures, ref cases, "同代第一个不加后缀", "h:abc", DisambiguateStableId("h:abc", 1));
+        CheckString(failures, ref cases, "同代第二个补 #2", "h:abc#2", DisambiguateStableId("h:abc", 2));
+        // **同一棵树枚举两次**：同一批元素（同顺序、同属性）走两次 StableIdFor，得到同一串 id
+        Dictionary<string, int> seenFirst = new Dictionary<string, int>();
+        Dictionary<string, int> seenSecond = new Dictionary<string, int>();
+        List<string> idsFirst = new List<string>();
+        List<string> idsSecond = new List<string>();
+        for (int i = 0; i < 4; i++)
+        {
+            idsFirst.Add(StableIdFor(new int[] { 42, 700 + i }, "button", "Button", "按钮" + i, "", seenFirst));
+            idsSecond.Add(StableIdFor(new int[] { 42, 700 + i }, "button", "Button", "按钮" + i, "", seenSecond));
+        }
+        CheckTrue(failures, ref cases, "同一棵树两次 list：稳定 id 逐条一致（RuntimeId 路径）",
+            string.Join("|", idsFirst.ToArray()) == string.Join("|", idsSecond.ToArray()));
+        CheckTrue(failures, ref cases, "同一棵树两次 list：稳定 id 互不相同（没串号）",
+            idsFirst[0] != idsFirst[1] && idsFirst[1] != idsFirst[2] && idsFirst[2] != idsFirst[3]);
+        // 没有 RuntimeId 的提供者（退化路径）也一样稳定
+        Dictionary<string, int> seenFallback1 = new Dictionary<string, int>();
+        Dictionary<string, int> seenFallback2 = new Dictionary<string, int>();
+        List<string> fallbackIds1 = new List<string>();
+        List<string> fallbackIds2 = new List<string>();
+        for (int i = 0; i < 3; i++)
+        {
+            fallbackIds1.Add(StableIdFor(null, "button", "Button", "同名" + i, "", seenFallback1));
+            fallbackIds2.Add(StableIdFor(null, "button", "Button", "同名" + i, "", seenFallback2));
+        }
+        CheckTrue(failures, ref cases, "同一棵树两次 list：退化 id 也一致",
+            string.Join("|", fallbackIds1.ToArray()) == string.Join("|", fallbackIds2.ToArray()));
+        // 两个一模一样的控件（同属性）不能共用一个 id，否则 diff 会把它们当成同一个
+        Dictionary<string, int> seenTwin = new Dictionary<string, int>();
+        string twin1 = StableIdFor(null, "button", "Button", "确定", "", seenTwin);
+        string twin2 = StableIdFor(null, "button", "Button", "确定", "", seenTwin);
+        CheckTrue(failures, ref cases, "同代里两个一模一样的控件 → 补 #2 消歧", twin1 != twin2 && twin2.EndsWith("#2", StringComparison.Ordinal));
+
+        // ⑭ 历史与代次：每 list 一次 +1；只留最近 5 代；过期 ref 被明确拒绝
+        UiaGenerations generations = new UiaGenerations();
+        long hwndKey = 900001;
+        CheckTrue(failures, ref cases, "代次从 1 起", generations.Next(hwndKey) == 1);
+        CheckTrue(failures, ref cases, "代次逐个递增", generations.Next(hwndKey) == 2 && generations.Next(hwndKey) == 3);
+
+        UiaHistoryStore store = new UiaHistoryStore();
+        List<IntPtr> releasedPointers = new List<IntPtr>();
+        Action<IntPtr> release = delegate(IntPtr pointer) { releasedPointers.Add(pointer); };
+        UiaSnapshot snapA = TestSnapshot(1, new string[] { "rt:1", "rt:2" }, new string[] { "确定", "取消" });
+        snapA.Pointers.Add(new IntPtr(11));
+        snapA.Pointers.Add(new IntPtr(12));
+        store.Push(hwndKey, snapA, release);
+        CheckTrue(failures, ref cases, "最新一代就是刚收的那一代", store.Latest(hwndKey) == snapA);
+        CheckTrue(failures, ref cases, "按代次能找回",
+            store.ByGeneration(hwndKey, 1) == snapA && store.ByGeneration(hwndKey, 2) == null);
+
+        // 过期 ref：第 2 代已经发出去了，手上还拿着第 1 代的 token
+        UiaSnapshot snapB = TestSnapshot(2, new string[] { "rt:1", "rt:3" }, new string[] { "确定", "复制" });
+        store.Push(hwndKey, snapB, release);
+        CheckTrue(failures, ref cases, "新一代收下时上一代的元素指针被释放（不泄漏 COM 引用）",
+            releasedPointers.Count == 2 && releasedPointers[0] == new IntPtr(11) && releasedPointers[1] == new IntPtr(12));
+        CheckTrue(failures, ref cases, "上一代的指针已经清空（ref 只对最新一代有效）",
+            snapA.Pointers.Count == 0 && snapB.Pointers.Count == 0);
+        UiaSnapshot resolved;
+        int resolvedIndex;
+        string staleError = ResolveRefToken(store, hwndKey, "g1:r1", out resolved, out resolvedIndex);
+        CheckTrue(failures, ref cases, "过期 ref 被拒（不是静默放行）", staleError != null && resolved == null);
+        CheckTrue(failures, ref cases, "过期 ref 的文案说清「属于第 1 次 / 现在是第 2 次」",
+            staleError != null && staleError.IndexOf("第 1 次", StringComparison.Ordinal) >= 0
+            && staleError.IndexOf("第 2 次", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "过期 ref 的文案让模型重新 list（真机验收要搜这句）",
+            staleError != null && staleError.IndexOf("重新 list", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "当前代的 ref 能解析到快照与下标",
+            ResolveRefToken(store, hwndKey, "g2:r2", out resolved, out resolvedIndex) == null
+            && resolved == snapB && resolvedIndex == 1);
+        CheckTrue(failures, ref cases, "当前代越界的序号被拒（文案带重新 list）",
+            ResolveRefToken(store, hwndKey, "g2:r9", out resolved, out resolvedIndex) != null
+            && ResolveRefToken(store, hwndKey, "g2:r9", out resolved, out resolvedIndex).IndexOf("重新 list", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "从没 list 过的窗口：任何 ref 都被拒（文案带重新 list）",
+            ResolveRefToken(store, 900002, "g1:r1", out resolved, out resolvedIndex) != null
+            && ResolveRefToken(store, 900002, "g1:r1", out resolved, out resolvedIndex).IndexOf("重新 list", StringComparison.Ordinal) >= 0);
+
+        // 只留最近 5 代：第 6 代收进来之后第 1 代就被淘汰
+        long hwndTrim = 900003;
+        for (int i = 1; i <= UiaHistoryStore.Retain + 1; i++)
+        {
+            UiaSnapshot snap = TestSnapshot(i, new string[] { "rt:" + i }, new string[] { "控件" + i });
+            store.Push(hwndTrim, snap, release);
+        }
+        CheckTrue(failures, ref cases, "只保留最近 5 代（最旧的丢掉）",
+            store.ByGeneration(hwndTrim, 1) == null && store.ByGeneration(hwndTrim, 2) != null);
+        CheckTrue(failures, ref cases, "保留的最新一代没被丢掉",
+            store.Latest(hwndTrim) != null && store.Latest(hwndTrim).Generation == UiaHistoryStore.Retain + 1);
+
+        // ⑮ diff：按稳定 id 比，不按序号比
+        UiaSnapshot beforeDiff = TestSnapshot(4, new string[] { "rt:a", "rt:b", "rt:c" }, new string[] { "确定", "取消", "帮助" });
+        UiaSnapshot afterDiff = TestSnapshot(5, new string[] { "rt:a", "rt:c", "rt:d" }, new string[] { "确定", "帮助", "保存" });
+        afterDiff.ById["rt:c"].Enabled = false;
+        UiaDiffResult diffBoth = DiffSnapshots(beforeDiff, afterDiff);
+        CheckTrue(failures, ref cases, "diff：没变的控件不出现，只计数",
+            diffBoth.Unchanged == 1 && diffBoth.Items.Count == 2);
+        CheckTrue(failures, ref cases, "diff：新出现的控件标 added",
+            diffBoth.Items.Count == 2 && diffBoth.Items[0].StableId == "rt:c" && diffBoth.Items[0].Change == "changed"
+            && diffBoth.Items[1].StableId == "rt:d" && diffBoth.Items[1].Change == "added");
+        CheckTrue(failures, ref cases, "diff：变了哪些字段说得出来（enabled）",
+            diffBoth.Items[0].ChangedFields != null && diffBoth.Items[0].ChangedFields.Contains("enabled"));
+        CheckTrue(failures, ref cases, "diff：消失的控件单独报出来（只 1 条）",
+            diffBoth.Removed.Count == 1 && diffBoth.Removed[0].StableId == "rt:b"
+            && diffBoth.Removed[0].Name == "取消");
+        CheckTrue(failures, ref cases, "diff：消失的项不带 ref（它已经没有那一代里的位置）",
+            RemovedJson(diffBoth.Removed[0]).IndexOf("\"ref\"", StringComparison.Ordinal) < 0
+            && RemovedJson(diffBoth.Removed[0]).IndexOf("rt:b", StringComparison.Ordinal) >= 0);
+        // 下面的「没变」用例要拿一个干净的一代当基准：上面刚刚把 rt:c 改成 disabled 了
+        afterDiff.ById["rt:c"].Enabled = true;
+        UiaDiffResult diffSame = DiffSnapshots(afterDiff, TestSnapshot(6, new string[] { "rt:a", "rt:c", "rt:d" },
+            new string[] { "确定", "帮助", "保存" }));
+        CheckTrue(failures, ref cases, "diff：完全没变 → 0 条变化 + unchanged 计数为全部",
+            diffSame.Items.Count == 0 && diffSame.Removed.Count == 0 && diffSame.Unchanged == 3);
+        UiaSnapshot renamed = TestSnapshot(6, new string[] { "rt:a", "rt:c", "rt:d" }, new string[] { "确认", "帮助", "保存" });
+        UiaDiffResult diffRenamed = DiffSnapshots(afterDiff, renamed);
+        CheckTrue(failures, ref cases, "diff：名字变了算同一条的 name 变化（不是消失 + 新增）",
+            diffRenamed.Items.Count == 1 && diffRenamed.Items[0].Change == "changed"
+            && diffRenamed.Items[0].ChangedFields.Contains("name") && diffRenamed.Removed.Count == 0);
+        UiaSnapshot moved = TestSnapshot(6, new string[] { "rt:a", "rt:c", "rt:d" }, new string[] { "确定", "帮助", "保存" });
+        moved.ById["rt:a"].X = 123;
+        CheckTrue(failures, ref cases, "diff：位置变了算变化（rect）",
+            DiffSnapshots(afterDiff, moved).Items.Count == 1
+            && DiffSnapshots(afterDiff, moved).Items[0].ChangedFields.Contains("rect"));
+
+        // ⑯ since 的三种处境：没带 → 全量；带且还在 → diff；太旧 / 不是这个窗口的 → 全量 + 说明
+        UiaSnapshot probe = TestSnapshot(2, new string[] { "rt:x" }, new string[] { "X" });
+        UiaHistoryStore planStore = new UiaHistoryStore();
+        planStore.Push(900010, probe, release);
+        UiaDiffPlan noSince = PlanList(planStore, 900010, false, 0);
+        CheckTrue(failures, ref cases, "since 缺省 → 全量（与改之前同一行为）",
+            noSince.Mode == "full" && noSince.Base == null && noSince.Note == null);
+        UiaDiffPlan sameSince = PlanList(planStore, 900010, true, 2);
+        CheckTrue(failures, ref cases, "since 命中还留着的那一代 → diff",
+            sameSince.Mode == "diff" && sameSince.Base == probe && sameSince.Since == 2);
+        UiaDiffPlan futureSince = PlanList(planStore, 900010, true, 99);
+        CheckTrue(failures, ref cases, "since 不是这个窗口的代次 → 全量 + 说明这次是全量",
+            futureSince.Mode == "full" && futureSince.Note != null
+            && futureSince.Note.IndexOf("全量", StringComparison.Ordinal) >= 0);
+        UiaHistoryStore oldStore = new UiaHistoryStore();
+        for (int i = 1; i <= UiaHistoryStore.Retain + 2; i++)
+            oldStore.Push(900011, TestSnapshot(i, new string[] { "rt:y" }, new string[] { "Y" }), release);
+        UiaDiffPlan tooOld = PlanList(oldStore, 900011, true, 1);
+        CheckTrue(failures, ref cases, "since 太旧（已被淘汰）→ 全量 + 「记不住那么早」",
+            tooOld.Mode == "full" && tooOld.Note != null
+            && tooOld.Note.IndexOf("记不住那么早的清单了", StringComparison.Ordinal) >= 0
+            && tooOld.Note.IndexOf("全量", StringComparison.Ordinal) >= 0);
+
+        // ⑰ diff 项与全量项的 JSON 形状：change / changed 只在 diff 项上
+        UiaItemInfo changedItem = TestSnapshot(7, new string[] { "rt:z" }, new string[] { "设置" }).Items[0];
+        string plainJson = ItemJson(changedItem);
+        string diffJson = ItemJson(changedItem, "changed", new List<string>() { "enabled", "rect" });
+        CheckTrue(failures, ref cases, "diff 项带 change 与 changed 列表",
+            diffJson.IndexOf("\"change\":\"changed\"", StringComparison.Ordinal) >= 0
+            && diffJson.IndexOf("\"changed\":[\"enabled\",\"rect\"]", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "added 项没有 changed 列表",
+            ItemJson(changedItem, "added", null).IndexOf("\"changed\"", StringComparison.Ordinal) < 0);
+        CheckTrue(failures, ref cases, "diff 项的 ref 仍是本代 token",
+            diffJson.IndexOf("\"ref\":\"g7:r1\"", StringComparison.Ordinal) >= 0
+            && plainJson.IndexOf("\"change\"", StringComparison.Ordinal) < 0);
+
         Console.WriteLine(Program.BuildSelfTestJson(failures, cases));
         return failures.Count == 0 ? 0 : 1;
+    }
+
+    /** selftest 用：造一代快照（ids / names 平行；不碰 COM，所以能在宿主上跑） */
+    private static UiaSnapshot TestSnapshot(int generation, string[] stableIds, string[] names)
+    {
+        UiaSnapshot snapshot = new UiaSnapshot();
+        snapshot.Generation = generation;
+        for (int i = 0; i < stableIds.Length; i++)
+        {
+            UiaItemInfo item = new UiaItemInfo();
+            item.Ref = RefOf(i);
+            item.Generation = generation;
+            item.RefToken = RefToken(generation, item.Ref);
+            item.StableId = stableIds[i];
+            item.Name = names[i];
+            item.ControlType = "button";
+            item.Enabled = true;
+            item.Patterns.Add("invoke");
+            snapshot.Items.Add(item);
+            snapshot.ById[item.StableId] = item;
+        }
+        return snapshot;
     }
 
     private static void CheckTrue(List<string> failures, ref int cases, string name, bool condition)

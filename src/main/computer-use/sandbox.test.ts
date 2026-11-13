@@ -1147,7 +1147,7 @@ describe("UIA 车道", () => {
       const list = await harness.controller.uiaList({ hwnd: 1 });
       assert.equal(list.ok, false);
       assert.ok(list.ok === false && /没有在运行/.test(list.error));
-      const act = await harness.controller.uiaAct({ hwnd: 1, ref: 1, perform: "invoke" });
+      const act = await harness.controller.uiaAct({ hwnd: 1, ref: "g1:r1", perform: "invoke" });
       assert.equal(act.ok, false);
       assert.ok(act.ok === false && /没有在运行/.test(act.error));
     } finally {
@@ -1167,10 +1167,13 @@ describe("UIA 车道", () => {
                 resp: {
                   ok: true,
                   hwnd: 4321,
+                  generation: 2,
+                  mode: "full",
                   window: { title: "记事本", className: "Notepad" },
                   items: [
                     {
-                      ref: 1,
+                      ref: "g2:r1",
+                      stableId: "rt:2a.10.1",
                       name: "文本编辑器",
                       controlType: "document",
                       automationId: "15",
@@ -1184,6 +1187,8 @@ describe("UIA 车道", () => {
                       offscreen: false,
                     },
                   ],
+                  removed: [],
+                  unchanged: 0,
                   truncated: false,
                 },
               },
@@ -1194,6 +1199,7 @@ describe("UIA 车道", () => {
       assert.equal(byHwnd.ok, true);
       if (byHwnd.ok) {
         assert.equal(byHwnd.hwnd, 4321);
+        assert.equal(byHwnd.generation, 2, "代次要带回来：下一次带 since 就传它");
         assert.equal(byHwnd.items[0]?.controlType, "document");
         assert.deepEqual(byHwnd.items[0]?.patterns, ["value"]);
         assert.equal(byHwnd.truncated, false);
@@ -1202,12 +1208,14 @@ describe("UIA 车道", () => {
       assert.equal(requests[0]?.hwnd, 4321);
       assert.equal(requests[0]?.maxItems, 60);
       assert.equal(requests[0]?.title, undefined, "没给 title 就不该编一个空串出来");
+      assert.equal(requests[0]?.since, undefined, "没给 since 就不该下发它（缺省 = 全量）");
 
-      await harness.controller.uiaList({ title: " 记事 " });
+      await harness.controller.uiaList({ title: " 记事 ", since: 2 });
       const byTitle = harness.requests.filter((r) => r.command === "uia-list")[1];
       assert.equal(byTitle?.title, "记事", "标题两端空白要去掉，否则永远匹配不上");
       assert.equal(byTitle?.hwnd, undefined);
       assert.equal(byTitle?.maxItems, undefined, "没给 maxItems 就吃桥的缺省值");
+      assert.equal(byTitle?.since, 2, "since 原样搬到桥的字段上");
     } finally {
       await harness.close();
     }
@@ -1273,7 +1281,7 @@ describe("UIA 车道", () => {
         respond: (req) => (req.command === "ping" ? { resp: { ok: true } } : { resp: { ok: false, error: human } }),
       });
       await startPromise;
-      assert.deepEqual(await harness.controller.uiaAct({ hwnd: 1, ref: 3, perform: "invoke" }), {
+      assert.deepEqual(await harness.controller.uiaAct({ hwnd: 1, ref: "g1:r3", perform: "invoke" }), {
         ok: false,
         error: human,
       });

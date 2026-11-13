@@ -272,10 +272,10 @@ describe("computer_uia 工具（UIA 车道）", () => {
     await pending;
   });
 
-  test("act：perform 与 ref / name / value 各就各位", async () => {
+  test("act：perform 与 ref（带代次的 token）/ name / value 各就各位", async () => {
     const { sent, run, answer } = setup();
-    const byRef = run("computer_uia", { action: "invoke", hwnd: 4321, ref: 2 });
-    assert.deepEqual(sent[0]?.["request"], { action: "uia-act", window: 4321, ref: 2, perform: "invoke" });
+    const byRef = run("computer_uia", { action: "invoke", hwnd: 4321, ref: "g12:r2" });
+    assert.deepEqual(sent[0]?.["request"], { action: "uia-act", window: 4321, ref: "g12:r2", perform: "invoke" });
     answer(0, { ok: true, text: "Invoked" });
     await byRef;
 
@@ -291,8 +291,14 @@ describe("computer_uia 工具（UIA 车道）", () => {
     await byName;
 
     // 空字符串是合法 value（清空输入框），不能被当成「没给」
-    const clear = run("computer_uia", { action: "setValue", hwnd: 7, ref: 1, value: "" });
-    assert.deepEqual(sent[2]?.["request"], { action: "uia-act", window: 7, ref: 1, perform: "setValue", value: "" });
+    const clear = run("computer_uia", { action: "setValue", hwnd: 7, ref: "g1:r1", value: "" });
+    assert.deepEqual(sent[2]?.["request"], {
+      action: "uia-act",
+      window: 7,
+      ref: "g1:r1",
+      perform: "setValue",
+      value: "",
+    });
     answer(2, { ok: true, text: "Cleared" });
     await clear;
   });
@@ -301,22 +307,25 @@ describe("computer_uia 工具（UIA 车道）", () => {
     const { run } = setup();
     await assert.rejects(run("computer_uia", { action: "list" }), /Pass window .* or hwnd/);
     await assert.rejects(run("computer_uia", { action: "invoke", hwnd: 1 }), /Pass ref .* or name/);
-    await assert.rejects(run("computer_uia", { action: "setValue", hwnd: 1, ref: 1 }), /setValue needs value/);
-    await assert.rejects(run("computer_uia", { action: "click", hwnd: 1, ref: 1 }), /action must be one of/);
-    await assert.rejects(run("computer_uia", { action: "invoke", hwnd: 1, ref: 0 }), /ref must be a positive integer/);
+    await assert.rejects(run("computer_uia", { action: "setValue", hwnd: 1, ref: "g1:r1" }), /setValue needs value/);
+    await assert.rejects(run("computer_uia", { action: "click", hwnd: 1, ref: "g1:r1" }), /action must be one of/);
+    // ref 现在是**不透明 token**：裸数字 / 缺代次的写法当场就拒（不用跑一趟沙箱才知道）
+    await assert.rejects(run("computer_uia", { action: "invoke", hwnd: 1, ref: 0 }), /not a ref any more/);
+    await assert.rejects(run("computer_uia", { action: "invoke", hwnd: 1, ref: "r3" }), /not a ref any more/);
+    await assert.rejects(run("computer_uia", { action: "invoke", hwnd: 1, ref: "g0:r1" }), /not a ref any more/);
   });
 
   test("已删除的 focus：schema 里没有它，发了就回一句带替代路径的人话", async () => {
     const { run, sent } = setup();
     // 模型可能凭旧记忆发 focus：拒得比普通未知动作更具体（它是「删了」而不是「拼错了」）
-    await assert.rejects(run("computer_uia", { action: "focus", hwnd: 1, ref: 1 }), /computer_click/);
-    await assert.rejects(run("computer_uia", { action: "focus", hwnd: 1, ref: 1 }), /已删除/);
+    await assert.rejects(run("computer_uia", { action: "focus", hwnd: 1, ref: "g1:r1" }), /computer_click/);
+    await assert.rejects(run("computer_uia", { action: "focus", hwnd: 1, ref: "g1:r1" }), /已删除/);
     assert.deepEqual(sent, [], "被拒的 focus 一个字节都不该往下发");
   });
 
   test("主进程的错误原话带出（含「改用 computer_click / computer_type 的像素路径」）", async () => {
     const { run, answer } = setup();
-    const pending = run("computer_uia", { action: "invoke", hwnd: 1, ref: 3 });
+    const pending = run("computer_uia", { action: "invoke", hwnd: 1, ref: "g1:r3" });
     answer(0, {
       ok: false,
       error: "这个控件不支持 invoke（edit，它支持：value）。改用 computer_click / computer_type 的像素路径",
@@ -472,13 +481,13 @@ describe("computer_* 的审计归属（inputOrigin / maskedRegions / userTypingA
 
   test("uia-act：写动作也有归属，入参里带 perform / ref / window", async () => {
     const { run, answer, sent } = setup();
-    const pending = run("computer_uia", { action: "invoke", ref: 3, hwnd: 4321 });
+    const pending = run("computer_uia", { action: "invoke", ref: "g12:r3", hwnd: 4321 });
     answer(sent.length - 1, { ok: true, text: "Invoked" });
     const audit = (
       (await pending).details as { computerUse: { action: string; inputOrigin?: string; args: Record<string, unknown> } }
     ).computerUse;
     assert.equal(audit.action, "uia-act");
     assert.equal(audit.inputOrigin, "agent");
-    assert.deepEqual(audit.args, { action: "invoke", ref: 3, window: 4321 });
+    assert.deepEqual(audit.args, { action: "invoke", ref: "g12:r3", window: 4321 });
   });
 });

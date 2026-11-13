@@ -101,9 +101,9 @@ describe("isUiaRequest（UIA 车道不占桌面租约的判据）", () => {
   test("uia-list / uia-act：true（不抢前台，所以不排队）", () => {
     assert.equal(isUiaRequest({ action: "uia-list", window: 4321 }), true);
     assert.equal(isUiaRequest({ action: "uia-list", window: "Edge" }), true);
-    assert.equal(isUiaRequest({ action: "uia-act", perform: "invoke", ref: 3 }), true);
+    assert.equal(isUiaRequest({ action: "uia-act", perform: "invoke", ref: "g1:r3" }), true);
     assert.equal(isUiaRequest({ action: "uia-act", perform: "setValue", name: "Search", value: "orbita" }), true);
-    assert.equal(isUiaRequest({ action: "uia-act", perform: "selection", ref: 3 }), true);
+    assert.equal(isUiaRequest({ action: "uia-act", perform: "selection", ref: "g1:r3" }), true);
   });
 
   test("像素输入 / 整桌面截图 / 窗口截图 / 浏览器：都不是 UIA 车道", () => {
@@ -132,9 +132,9 @@ describe("已删除的 focus 动作（桥 0.11.0）", () => {
 
   test("其余动作都不是它（包括仍然合法的三条 UIA 动作）", () => {
     assert.equal(isUiaFocusRequest({ action: "uia-list", window: 4321 }), false);
-    assert.equal(isUiaFocusRequest({ action: "uia-act", perform: "invoke", ref: 2 }), false);
+    assert.equal(isUiaFocusRequest({ action: "uia-act", perform: "invoke", ref: "g1:r2" }), false);
     assert.equal(isUiaFocusRequest({ action: "uia-act", perform: "setValue", name: "Search", value: "x" }), false);
-    assert.equal(isUiaFocusRequest({ action: "uia-act", perform: "selection", ref: 2 }), false);
+    assert.equal(isUiaFocusRequest({ action: "uia-act", perform: "selection", ref: "g1:r2" }), false);
     assert.equal(isUiaFocusRequest({ action: "click", x: 1, y: 2 }), false);
     assert.equal(isUiaFocusRequest({ action: "type", text: "x" }), false);
   });

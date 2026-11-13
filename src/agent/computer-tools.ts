@@ -425,8 +425,17 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       "input's text, or select a list/tab item. **This does not need the window in the foreground and does not " +
       "take the sandbox desktop away from another session** (the bridge turns AutoSetFocus off), so it is " +
       "the right way to drive a background window. Start with action \"list\" (read-only) to get refs and names, then " +
-      "act on one by ref (or name). A ref belongs to the latest list of that window; re-list after the window changes " +
-      "(page navigation, a new dialog). Listing also records where that window's **native** password fields are, " +
+      "act on one by ref (or name). " +
+      "**List once, then watch for changes instead of re-reading everything**: every list answers with a " +
+      "`generation` (this window's 1st, 2nd, 3rd list…), and each ref is an opaque token like \"g12:r3\" (that " +
+      "generation + the position in it). Pass since=<generation> on a later list of the same window to get ONLY " +
+      "what changed — new controls, gone controls, and controls whose name / patterns / enabled / offscreen / " +
+      "position changed, plus how many stayed the same. Diff listings are far smaller, so in a long task keep " +
+      "listing with since instead of pulling the full list each round. A control that did not change is not in a " +
+      "diff listing: act on it by name, or list without since to get its current ref. " +
+      "**Refs expire with every list**: a ref from an older list is rejected with the reason (the control may " +
+      "now be a different one), so after an expiry just list again and copy the new token. Listing also records " +
+      "where that window's **native** password fields are, " +
       "so later screenshots can black them out. Browser page content is not exposed to UI Automation, so this covers " +
       "Win32 controls only — web pages draw their own password dots, and those never reach the image. " +
       "Actions: invoke (buttons, links, menu items, tabs), setValue (text boxes and " +
@@ -460,8 +469,10 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
           description: "Target window handle (wins over window). Comes from a previous screenshot/result.",
         },
         ref: {
-          type: "number",
-          description: "Control ref from the latest list of that window. Wins over name.",
+          type: "string",
+          description:
+            "Control ref token from the latest list of that window, e.g. \"g12:r3\" — copy it whole. Wins over " +
+            "name. A token from an older list is rejected: list again and copy the new one.",
         },
         name: {
           type: "string",
@@ -474,6 +485,12 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
         maxItems: {
           type: "number",
           description: "How many controls list returns (default 60).",
+        },
+        since: {
+          type: "number",
+          description:
+            "Only with action \"list\": the generation of your last list of this window. Returns just the " +
+            "changes since then (added / gone / edited controls + an unchanged count). Omit for a full list.",
         },
       },
       required: ["action"],
@@ -495,8 +512,18 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
         // 描述里写的是 default 60，所以这里**总是**显式下发：不写的话桥的缺省是 200，
         // 模型看到一句「default 60」却收到 200 行，工具描述就成了假话。
         const maxItems = numberOf(args["maxItems"]) ?? 60;
+        // since：只有模型给了才下发（不给 = 全量，与改之前逐字同行为）
+        const sinceRaw = numberOf(args["since"]);
+        if (sinceRaw !== undefined && (!Number.isInteger(sinceRaw) || sinceRaw <= 0)) {
+          throw new Error("since must be a positive integer: the generation from your last list of that window.");
+        }
         const result = await call(
-          { action: "uia-list", window: target, maxItems: Math.round(maxItems) },
+          {
+            action: "uia-list",
+            window: target,
+            maxItems: Math.round(maxItems),
+            ...(sinceRaw === undefined ? {} : { since: Math.round(sinceRaw) }),
+          },
           signal,
         );
         return { content: [{ type: "text" as const, text: result.text }], details: undefined };
@@ -511,15 +538,29 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
             "target with computer_click.",
         );
       }
-      const ref = numberOf(args["ref"]);
+      const refRaw = args["ref"];
+      // ref 是**不透明 token**（"g12:r3"）：工具层只检查形状，代次校验在桥里（它才知道最近一次 list 是哪一代）。
+      // 外面套一层格式检查是为了给模型一句立刻能改的话，而不是让它带着一个明显的错值跑一趟沙箱。
+      const ref =
+        typeof refRaw === "string" && refRaw.trim() !== ""
+          ? refRaw.trim()
+          : typeof refRaw === "number"
+            ? String(refRaw)
+            : undefined;
       const name = typeof args["name"] === "string" ? args["name"].trim() : "";
       if (ref === undefined && name === "") {
         throw new Error(
-          "Pass ref (from the latest list of that window) or name (part of the control's accessible name).",
+          "Pass ref (the token from the latest list of that window, like \"g12:r3\") or name (part of the " +
+            "control's accessible name).",
         );
       }
-      if (ref !== undefined && (!Number.isInteger(ref) || ref <= 0)) {
-        throw new Error("ref must be a positive integer from the latest list of that window.");
+      // 与 bridge-client 的 UIA_REF_TOKEN 同一个形状（两半都是正整数；0 不是合法的代次 / 序号）
+      if (ref !== undefined && !/^g[1-9][0-9]*:r[1-9][0-9]*$/.test(ref)) {
+        throw new Error(
+          "ref is a token copied from the latest list, like \"g12:r3\" (g = which list of that window, r = " +
+            "position in it). A bare number is not a ref any more: run action list on that window and copy the " +
+            "token.",
+        );
       }
       const value = args["value"];
       if (rawAction === "setValue" && typeof value !== "string") {
@@ -529,7 +570,7 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
         {
           action: "uia-act",
           window: target,
-          ...(ref === undefined ? {} : { ref: Math.round(ref) }),
+          ...(ref === undefined ? {} : { ref }),
           ...(name === "" ? {} : { name }),
           perform: rawAction,
           ...(typeof value === "string" ? { value } : {}),
@@ -543,7 +584,7 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
           computerUse: audit(
             {
               action: rawAction,
-              ...(ref === undefined ? {} : { ref: Math.round(ref) }),
+              ...(ref === undefined ? {} : { ref }),
               ...(name === "" ? {} : { name }),
               ...(typeof value === "string" ? { value } : {}),
               window: target,

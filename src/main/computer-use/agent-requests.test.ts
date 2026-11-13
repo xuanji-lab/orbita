@@ -30,12 +30,13 @@ interface UiaListFields {
   hwnd?: number;
   title?: string;
   maxItems?: number;
+  since?: number;
 }
 
 interface UiaActFields {
   hwnd?: number;
   title?: string;
-  ref?: number;
+  ref?: string;
   name?: string;
   perform: string;
   value?: string;
@@ -129,9 +130,12 @@ function fakeGuest(options: {
           ok: true,
           hwnd: 4321,
           window: { title: "Untitled - Notepad", className: "Notepad" },
+          generation: 4,
+          mode: "full",
           items: [
             {
-              ref: 1,
+              ref: "g4:r1",
+              stableId: "rt:2a.10.1",
               name: "Text editor",
               controlType: "document",
               automationId: "15",
@@ -146,7 +150,8 @@ function fakeGuest(options: {
               isPassword: false,
             },
             {
-              ref: 2,
+              ref: "g4:r2",
+              stableId: "rt:2a.10.2",
               name: "Close",
               controlType: "button",
               automationId: "Close",
@@ -161,6 +166,8 @@ function fakeGuest(options: {
               isPassword: false,
             },
           ],
+          removed: [],
+          unchanged: 0,
           truncated: false,
           passwordFields: 0,
         }
@@ -386,7 +393,7 @@ describe("applyComputerUseRequest：用户优先的让路回执（桥 0.11.0）"
     const shot = await run(guest, { action: "screenshot", window: 4321 });
     assert.equal(shot.ok, true);
     if (shot.ok) assert.doesNotMatch(shot.text, /held back/);
-    const uia = await run(guest, { action: "uia-act", window: 4321, ref: 2, perform: "invoke" });
+    const uia = await run(guest, { action: "uia-act", window: 4321, ref: "g4:r2", perform: "invoke" });
     assert.equal(uia.ok, true);
     if (uia.ok) assert.doesNotMatch(uia.text, /held back/);
   });
@@ -484,15 +491,106 @@ describe("applyComputerUseRequest：UIA 车道（uia-list / uia-act，桥 0.10.0
     if (!outcome.ok) return;
     assert.deepEqual(calls.uiaLists, [{ hwnd: 4321, maxItems: 60 }]);
     assert.deepEqual(calls.uiaActs, []);
-    assert.match(outcome.text, /window "Untitled - Notepad" \(hwnd 4321\): 2 listed/);
-    // 每一行都要让模型能直接拿去 act：ref、控件类型、名字、支持的模式
-    assert.match(outcome.text, /1 · document "Text editor" · supports value/);
-    assert.match(outcome.text, /2 · button "Close" · supports invoke/);
+    assert.match(outcome.text, /window "Untitled - Notepad" \(hwnd 4321, generation 4\): 2 listed/);
+    // 每一行都要让模型能直接拿去 act：ref（带代次的 token）、控件类型、名字、支持的模式
+    assert.match(outcome.text, /g4:r1 · document "Text editor" · supports value/);
+    assert.match(outcome.text, /g4:r2 · button "Close" · supports invoke/);
     assert.match(outcome.text, /at 730,0 45×30 id=Close/);
     assert.match(outcome.text, /does not need the foreground/);
     assert.match(outcome.text, /There is no "focus" action/, "动作集变了，回执就得跟着说清");
     assert.match(outcome.text, /click the target with computer_click/, "不提供 focus 就要给替代路径");
-    assert.match(outcome.text, /refs belong to the latest list/);
+    // 感知层（桥 0.14.0）：尾巴必须教模型「下次带 since」与「ref 只属于它那一代」
+    assert.match(outcome.text, /pass since=4 to get only what changed/);
+    assert.match(outcome.text, /a ref from an older list is rejected/);
+  });
+
+  test("uia-list 带 since：只列变化 + 消失的控件 + unchanged 计数，并说清「没变的没列」", async () => {
+    const { guest, calls } = fakeGuest({
+      uiaList: {
+        ok: true,
+        hwnd: 4321,
+        window: { title: "Untitled - Notepad", className: "Notepad" },
+        generation: 5,
+        mode: "diff",
+        since: 4,
+        items: [
+          {
+            ref: "g5:r2",
+            stableId: "rt:2a.10.2",
+            name: "Close",
+            controlType: "button",
+            automationId: "Close",
+            className: "Button",
+            x: 730,
+            y: 0,
+            w: 45,
+            h: 30,
+            patterns: ["invoke"],
+            enabled: false,
+            offscreen: false,
+            isPassword: false,
+            change: "changed",
+            changed: ["enabled"],
+          },
+          {
+            ref: "g5:r3",
+            stableId: "rt:2a.10.9",
+            name: "Save",
+            controlType: "button",
+            automationId: "Save",
+            className: "Button",
+            x: 680,
+            y: 0,
+            w: 45,
+            h: 30,
+            patterns: ["invoke"],
+            enabled: true,
+            offscreen: false,
+            isPassword: false,
+            change: "added",
+          },
+        ],
+        removed: [{ stableId: "rt:2a.10.7", name: "Help", controlType: "menu-item" }],
+        unchanged: 7,
+        truncated: false,
+        passwordFields: 0,
+      },
+    });
+    const outcome = await run(guest, { action: "uia-list", window: 4321, since: 4 });
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.deepEqual(calls.uiaLists, [{ hwnd: 4321, since: 4 }], "since 原样下发（不给就不写这个键）");
+    assert.match(outcome.text, /changes|2 changed, 1 gone, 7 unchanged since generation 4/);
+    assert.match(outcome.text, /changed \(enabled\) · g5:r2 · button "Close"/);
+    assert.match(outcome.text, /new · g5:r3 · button "Save"/);
+    assert.match(outcome.text, /gone · menu-item "Help" — no longer in this window/);
+    // 关键的使用性说明：diff 里没有的控件怎么动
+    assert.match(outcome.text, /did not change is not listed here: act on it by name/);
+  });
+
+  test("uia-list：since 那一代已被淘汰 → 桥回全量 + note，正文把那句说明带出来", async () => {
+    const { guest } = fakeGuest({
+      uiaList: {
+        ok: true,
+        hwnd: 5,
+        window: { title: "记事本", className: "Notepad" },
+        generation: 9,
+        mode: "full",
+        items: [],
+        removed: [],
+        unchanged: 0,
+        truncated: false,
+        passwordFields: 0,
+        note: "记不住那么早的清单了（每个窗口只保留最近 5 代）——这是全量。",
+      },
+    });
+    const outcome = await run(guest, { action: "uia-list", window: 5, since: 1 });
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.match(outcome.text, /generation 9/);
+    assert.match(outcome.text, /Note: 记不住那么早的清单了/);
+    assert.match(outcome.text, /这是全量/);
+    assert.match(outcome.text, /No actionable controls were found/);
   });
 
   test("uia-list：标题片段原样下发；截断时告诉模型调大 maxItems；空列表给一句人话", async () => {
@@ -501,7 +599,11 @@ describe("applyComputerUseRequest：UIA 车道（uia-list / uia-act，桥 0.10.0
         ok: true,
         hwnd: 7,
         window: { title: "记事本", className: "Notepad" },
+        generation: 1,
+        mode: "full",
         items: [],
+        removed: [],
+        unchanged: 0,
         truncated: true,
         passwordFields: 0,
       },
@@ -526,12 +628,12 @@ describe("applyComputerUseRequest：UIA 车道（uia-list / uia-act，桥 0.10.0
     const outcome = await run(guest, {
       action: "uia-act",
       window: 4321,
-      ref: 2,
+      ref: "g4:r2",
       perform: "invoke",
       timeoutMs: 1500,
     });
     assert.equal(outcome.ok, true);
-    assert.deepEqual(calls.uiaActs, [{ hwnd: 4321, ref: 2, perform: "invoke", timeoutMs: 1500 }]);
+    assert.deepEqual(calls.uiaActs, [{ hwnd: 4321, ref: "g4:r2", perform: "invoke", timeoutMs: 1500 }]);
     if (outcome.ok) {
       assert.match(outcome.text, /Invoked "Close" \(button\) in window hwnd 4321/);
       assert.match(outcome.text, /pattern invoke, 7ms/);
@@ -551,14 +653,14 @@ describe("applyComputerUseRequest：UIA 车道（uia-list / uia-act，桥 0.10.0
     const set = await run(fakeGuest({}).guest, {
       action: "uia-act",
       window: 1,
-      ref: 1,
+      ref: "g1:r1",
       perform: "setValue",
       value: "hello",
     });
     assert.equal(set.ok, true);
     if (set.ok) assert.match(set.text, /^Set the text of "Close"/);
 
-    const selected = await run(fakeGuest({}).guest, { action: "uia-act", window: 1, ref: 1, perform: "selection" });
+    const selected = await run(fakeGuest({}).guest, { action: "uia-act", window: 1, ref: "g1:r1", perform: "selection" });
     assert.equal(selected.ok, true);
     if (selected.ok) assert.match(selected.text, /^Selected "Close"/);
   });
@@ -588,7 +690,7 @@ describe("applyComputerUseRequest：UIA 车道（uia-list / uia-act，桥 0.10.0
   test("uia-act 失败：不支持模式的文案（点名支持什么 + 像素退路）原话带出", async () => {
     const human = "这个控件不支持 invoke（edit，它支持：value）。改用 computer_click / computer_type 的像素路径";
     const { guest } = fakeGuest({ uiaAct: { ok: false, error: human } });
-    assert.deepEqual(await run(guest, { action: "uia-act", window: 1, ref: 3, perform: "invoke" }), {
+    assert.deepEqual(await run(guest, { action: "uia-act", window: 1, ref: "g1:r3", perform: "invoke" }), {
       ok: false,
       error: human,
     });
@@ -709,9 +811,12 @@ describe("applyComputerUseRequest：密码框遮罩（桥 0.12.0）", () => {
         ok: true,
         hwnd: 4321,
         window: { title: "登录 - Edge", className: "Chrome_WidgetWin_1" },
+        generation: 2,
+        mode: "full",
         items: [
           {
-            ref: 1,
+            ref: "g2:r1",
+            stableId: "h:0a1b2c3d",
             name: "",
             controlType: "edit",
             automationId: "password",
@@ -726,6 +831,8 @@ describe("applyComputerUseRequest：密码框遮罩（桥 0.12.0）", () => {
             isPassword: true,
           },
         ],
+        removed: [],
+        unchanged: 0,
         truncated: false,
         passwordFields: 1,
       },
@@ -733,7 +840,7 @@ describe("applyComputerUseRequest：密码框遮罩（桥 0.12.0）", () => {
     const outcome = await run(guest, { action: "uia-list", window: 4321 });
     assert.equal(outcome.ok, true);
     if (!outcome.ok) return;
-    assert.match(outcome.text, /1 · edit \(automationId password\) · supports value, password/);
+    assert.match(outcome.text, /g2:r1 · edit \(automationId password\) · supports value, password/);
     assert.match(outcome.text, /1 password field\(s\) are in this window/);
     assert.match(outcome.text, /screenshots of this window will black them out/);
   });

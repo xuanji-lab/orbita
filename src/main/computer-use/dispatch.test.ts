@@ -53,7 +53,7 @@ const SCREENSHOT: ComputerUseToolRequest = { action: "screenshot", maxWidth: 128
 const WINDOW_SHOT: ComputerUseToolRequest = { action: "screenshot", maxWidth: 1280, window: 4321 };
 const NAVIGATE: ComputerUseToolRequest = { action: "sandbox-navigate", url: "https://example.com" };
 const UIA_LIST: ComputerUseToolRequest = { action: "uia-list", window: 4321 };
-const UIA_ACT: ComputerUseToolRequest = { action: "uia-act", window: 4321, ref: 2, perform: "invoke" };
+const UIA_ACT: ComputerUseToolRequest = { action: "uia-act", window: 4321, ref: "g1:r2", perform: "invoke" };
 /** 已删除的 focus 动作：旧 agent / 旧会话记录里还可能夹着它（宽化对象模拟，不走正常类型） */
 const LEGACY_UIA_FOCUS = { action: "uia-act", window: 4321, ref: 2, perform: "focus" } as unknown as ComputerUseToolRequest;
 

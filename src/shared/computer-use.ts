@@ -990,8 +990,21 @@ export type ComputerUseUiaAction = "invoke" | "setValue" | "selection";
  * 坐标是**屏幕物理像素**（窗口被移动到哪都行，模型不需要它；它给的是可读定位信息）。
  */
 export interface ComputerUseUiaItem {
-  /** 稳定序号（同一窗口内按遍历顺序从 1 起）。uia-act 用它或 name 指定目标 */
-  ref: number;
+  /**
+   * **带代次的引用**，形如 `g12:r3`（桥 0.14.0）= 该窗口第 12 次清单里的第 3 个控件。
+   *
+   * 为什么不再是纯序号：序号只说「这次的第几个」。窗口一变（页面跳转、弹了个对话框、
+   * 列表滚了），同一个序号就指向**另一个控件**，而模型看不出来——它会静默点到别的东西上。
+   * 代次把「哪一次的清单」焊进这个值里，`uia-act` 拿它跟该窗口**最近一次** list 比，
+   * 对不上就明确拒绝。所以：照抄，不要自己拼。
+   */
+  ref: string;
+  /**
+   * 稳定 id（桥 0.14.0）：UIA RuntimeId 优先，取不到时是属性哈希（`h:` 前缀）。
+   * 同一个控件在同一棵树里两次 list 必须一样——`since` 的 diff 就是按它比对的。
+   * 模型一般用不到它；它出现在 `removed`（消失的控件只有这个身份）里。
+   */
+  stableId: string;
   /** 控件的可读名字（UIA Name；空串只在有 automationId 时出现） */
   name: string;
   /** 控件类型的小写名（button / edit / list-item / tab-item / menu-item…） */
@@ -1018,6 +1031,24 @@ export interface ComputerUseUiaItem {
    *   ② 截图遮罩的数据源就是这个字段的矩形（guest 桥 Mask.cs）。
    */
   isPassword: boolean;
+  /**
+   * 只在 `since` 的 diff 回执里有（桥 0.14.0）：`added` = 这一代新出现的控件，
+   * `changed` = 还在、但某些字段变了。全量回执里没有这个字段。
+   */
+  change?: "added" | "changed";
+  /** `change: "changed"` 时，具体变了哪些字段（name / patterns / enabled / offscreen / rect / …） */
+  changed?: string[];
+}
+
+/**
+ * diff 回执里「消失的控件」（桥 0.14.0）：上一代有、这一代没有。
+ * **不带 ref**——它已经没有当前清单里的位置了；模型认得它靠 `stableId` 与名字。
+ * 这是重要信号：模型上一轮 invoke 过的东西不见了（弹框关掉、列表项被删）。
+ */
+export interface ComputerUseUiaRemovedItem {
+  stableId: string;
+  name: string;
+  controlType: string;
 }
 
 /** uia-list 回执里的窗口信息（从 UIA 根元素读，读不到时用 Win32 标题兜底） */
@@ -1033,7 +1064,24 @@ export interface ComputerUseUiaWindowInfo {
 export interface ComputerUseUiaListReply {
   hwnd: number;
   window: ComputerUseUiaWindowInfo;
+  /**
+   * 这一次清单是该窗口的第几代（桥 0.14.0）。**下一次带 `since` 就传它**；
+   * 每条 item 的 ref token 里的 g 也是这个数。
+   */
+  generation: number;
+  /** `full` = 全量；`diff` = 只回了 since 之后的变化 */
+  mode: "full" | "diff";
+  /** mode === "diff" 时回显用的基准代次（请求里的 since） */
+  since?: number;
+  /**
+   * 全量时是全部可动作控件；diff 时只有 `change` 非空的那几条（新增 + 改了）。
+   * 没变的控件不在里面——它们贡献 `unchanged` 计数。
+   */
   items: ComputerUseUiaItem[];
+  /** diff 时：上一代有、这一代没有的控件（带 stableId 与名字；不带 ref） */
+  removed: ComputerUseUiaRemovedItem[];
+  /** diff 时有多少控件完全没变（全量时是 0） */
+  unchanged: number;
   /** 命中的控件超过 maxItems，后面的没回（模型可以调大 maxItems，或者按 name 直接动作） */
   truncated: boolean;
   /**
@@ -1041,6 +1089,11 @@ export interface ComputerUseUiaListReply {
    * 0 也可能是「这个窗口没有密码框」或「老桥不报这个字段」——两者对模型都没有区别。
    */
   passwordFields: number;
+  /**
+   * 桥给模型的一句解释（桥 0.14.0）。目前只有一种：带了 since 但那一代已经被淘汰 / 不是
+   * 这个窗口的代次 → 回全量，并说明「记不住那么早的清单了，这是全量」。
+   */
+  note?: string;
 }
 
 /** uia-act 的回执载荷（成功那一支） */
@@ -1161,8 +1214,11 @@ export type ComputerUseToolRequest =
   // 字段名与 guest 命令一致（window = hwnd 数字或标题片段，ref 来自上一次 uia-list）。
   // **不占桌面租约**（isUiaRequest）：这是整个车道的意义，别在接线层又把它塞进队列。
   // 动作集里没有 focus（桥 0.11.0 删掉）：它动的是桌面级焦点，见 computerUseUiaErrors。
-  /** 列出窗口里的可动作控件。只读、不抢焦点 */
-  | { action: "uia-list"; window?: string | number; maxItems?: number }
+  /**
+   * 列出窗口里的可动作控件。只读、不抢焦点。
+   * `since` 缺省 = 全量（与改之前逐字同行为）；给了上一代的 generation 就只回变化。
+   */
+  | { action: "uia-list"; window?: string | number; maxItems?: number; since?: number }
   /**
    * 对一个控件执行 UIA 模式。ref 与 name 至少给一个（ref 优先，且必须是同一窗口里
    * uia-list 回执的那个序号）；perform 是动作，不是像素坐标。
@@ -1171,7 +1227,8 @@ export type ComputerUseToolRequest =
   | {
       action: "uia-act";
       window?: string | number;
-      ref?: number;
+      /** 带代次的 ref token（"g12:r3"），必须是该窗口最近一次 list 的那一代；旧代次会被拒 */
+      ref?: string;
       name?: string;
       perform: ComputerUseUiaAction;
       /** setValue 的新值（可以直接清空：value: ""）；其余动作忽略 */

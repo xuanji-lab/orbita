@@ -113,7 +113,11 @@ internal static class Program
     //   真机实测关窗脚本 33 秒里有 18.7 秒花在 Add-Type 加载 WinForms（还没算 PowerShell
     //   自己 7–29 秒的启动），而 UIA 还会对确认框无限期阻塞；两者叠加必然撞穿任何超时。
     // 宿主不逐字比版本，但 bridge.json 里的版本是排查现场的第一行证据：抬了能力就抬它。
-    private const string Version = "0.13.0";
+    // 0.14.0（感知层）：uia-list 的 ref 从纯序号变成**带代次的 token**（"g12:r3"），每一项多一个
+    //   stableId（RuntimeId 优先）；uia-act 的 ref 路径校验代次，旧代次**明确拒绝**并让它重新 list。
+    //   uia-list 多一个可选 since：只回变化（新增 / 消失 / 改了 / unchanged），每个窗口只留最近 5 代。
+    //   命令名、name 匹配路径、passwordFields / isPassword / admission 与像素工具一个字都没改。
+    private const string Version = "0.14.0";
     private const string CmdDirName = "cmd";          // out 下的命令目录
     internal const string ReqSuffix = ".req.json";    // 宿主写：命令请求
     internal const string RespSuffix = ".resp.json";  // 桥写：执行结果

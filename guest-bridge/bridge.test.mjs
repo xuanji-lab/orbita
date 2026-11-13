@@ -139,7 +139,7 @@ test(
       const infoPath = path.join(outDir, "bridge.json");
       assert.ok(await waitForFile(infoPath), `桥应在超时前写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      assert.equal(info.version, "0.13.0");
+      assert.equal(info.version, "0.14.0");
       assert.ok(Number.isInteger(info.pid) && info.pid > 0, "bridge.json 应带 pid");
       // 0.8.0 起通告 TCP 通道（宿主优先走它）：端口由系统分配、令牌 32 位十六进制
       assert.ok(Number.isInteger(info.port) && info.port > 0, "bridge.json 应带 TCP 端口");
@@ -925,7 +925,9 @@ stdout: ${r.stdout}
 stderr: ${r.stderr}`);
     const parsed = JSON.parse(r.stdout.trim());
     assert.equal(parsed.ok, true, JSON.stringify(parsed));
-    assert.ok(parsed.cases >= 60, `用例数应 >= 60，实际 ${parsed.cases}`);
+    // 0.14.0 把 ref token / 稳定 id / 历史与代次 / diff / since 五组纯逻辑加进来，
+    // 用例数从 ~100 抬到 140：门槛钉在 130，删掉任何一组都会红
+    assert.ok(parsed.cases >= 130, `用例数应 >= 130，实际 ${parsed.cases}`);
     assert.equal(parsed.failures, undefined, "ok 时不该有 failures");
   },
 );
@@ -995,7 +997,7 @@ test("遮罩接在两条截图路径上，且出图/缩放之前（源码级，�
 
   const uia = fs.readFileSync(path.join(scriptDir, "Uia.cs"), "utf8");
   assert.match(uia, /SlotCurrentIsPassword/, "isPassword 走 vtable 槽（与 ReadBool 同一套）");
-  assert.match(uia, /PasswordRects\.Record\(hwnd\.ToInt64\(\)/, "uia-list 结束时要记账给截图用");
+  assert.match(uia, /PasswordRects\.Record\(key,/, "uia-list 结束时要记账给截图用");
   // 密码框必须在 IsListable **之前**判：Chromium 的密码框常常没有 name/automationId
   assert.ok(
     uia.indexOf("bool isPassword = ReadIsPassword(element)") < uia.indexOf("if (!IsListable(isControl"),
@@ -1024,6 +1026,36 @@ stderr: ${r.stderr}`);
     assert.equal(parsed.autoSetFocus, true, "Win8+ 的 CUIAutomation8 必须能把 AutoSetFocus 关掉");
   },
 );
+
+// ── 感知层（0.14.0）：带代次的 ref + diff ─────────────────────────────────────
+//
+// 两个真实痛点：每次都回全量（长任务里模型每轮读一遍同样的清单）、ref 是位置式的
+// （窗口一变，旧 ref 指向另一个控件，而模型看不出来）。这一层的关键正确性有三条，
+// 都是能在宿主上钉住的：
+//   ① 稳定 id 跨两次枚举一致（RuntimeId 优先，退化到属性哈希）——diff 只按它比；
+//   ② 代次每 list 一次 +1，旧代次的 ref 明确拒绝（文案含「重新 list」）；
+//   ③ since 的三种处境：全量 / diff / 太旧回全量并说明。
+// 真机上要另验的是「同一个窗口两次 list 的 stableId 真的对得上」（RuntimeId 真值）
+// 与「过期 ref 真机被拒」——那要沙箱，纯函数替不了。
+test("感知层源码级纪律：ref token、稳定 id、历史保留上限、diff 的按 id 比对", () => {
+  const uia = fs.readFileSync(path.join(scriptDir, "Uia.cs"), "utf8");
+  // ref 的对外写法拼在一个地方（模型照抄的就是它）
+  assert.match(uia, /return "g" \+ generation\.ToString/, "ref token 只该有一个拼法");
+  assert.match(uia, /internal const int Retain = 5/, "每个窗口只留最近 5 代（别把内存当无限）");
+  // 稳定 id：RuntimeId 优先，取不到才退化——顺序反了 diff 就会莫名抖
+  assert.ok(
+    uia.indexOf("StableIdFromRuntimeId(runtimeId)") < uia.indexOf("FallbackStableId(controlType, className, name, automationId)"),
+    "稳定 id 必须先试 RuntimeId，再退化到属性哈希",
+  );
+  assert.match(uia, /SlotGetRuntimeId = 3 \+ 2 - 1/, "GetRuntimeId 的 vtable 槽（对头文件数过）");
+  assert.match(uia, /SafeArrayDestroy\(array\)/, "GetRuntimeId 的 SAFEARRAY 要销毁（否则每条元素泄漏一块）");
+  // 代次只增不减：看门狗换掉历史时 _store 被替换，但 Generations 不重建
+  assert.match(uia, /private static readonly UiaGenerations Generations/, "代次计数器要在历史被丢弃时仍然保留");
+  // diff 按稳定 id 比，不按序号比
+  assert.match(uia, /before\.ById\.TryGetValue\(now\.StableId, out old\)/, "diff 要按稳定 id 比对");
+  // 过期 ref 的拒绝文案（真机验收会搜这句）
+  assert.match(uia, /先重新 list 再动作/, "旧代次必须让模型「重新 list」而不是自己猜");
+});
 
 test("UIA 车道的三条硬纪律写进源码：AutoSetFocus 关+读回、STA 看门狗、不支持模式退回像素", () => {
   const src = fs.readFileSync(path.join(scriptDir, "Uia.cs"), "utf8");
