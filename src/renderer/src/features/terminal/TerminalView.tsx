@@ -32,13 +32,24 @@ export function TerminalView(props: {
    * 换成真 tab。视图已卸载（tab 在创建途中被关）就不报——不会把关掉的 tab 复活。
    */
   onCreated: (info: TerminalInfo) => void;
+  /** 一次性粘贴（「在终端安装」）：PTY 就绪后贴进 xterm，不回车 */
+  paste?: { text: string; token: number } | null;
+  onPasted?: () => void;
 }) {
   const t = useT();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  /** 已经画完 snapshot、可以接收粘贴了（create + 重放都完成） */
+  const readyRef = useRef(false);
+  const termRef = useRef<Terminal | null>(null);
+  const pastedTokenRef = useRef(0);
+  const pasteRef = useRef(props.paste ?? null);
+  pasteRef.current = props.paste ?? null;
   // 回调走 ref：视图 effect 只认 terminalId，父组件换回调不该重建 xterm
   const onCreatedRef = useRef(props.onCreated);
   onCreatedRef.current = props.onCreated;
+  const onPastedRef = useRef(props.onPasted);
+  onPastedRef.current = props.onPasted;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -63,6 +74,19 @@ export function TerminalView(props: {
     terminal.loadAddon(fit);
     terminal.open(host);
     fitRef.current = fit;
+    termRef.current = terminal;
+    readyRef.current = false;
+    pastedTokenRef.current = 0;
+
+    /** 有待贴的命令且还没贴过：贴进去、聚焦，但**不回车** */
+    const flushPaste = (): void => {
+      const pending = pasteRef.current;
+      if (pending === null || pastedTokenRef.current === pending.token) return;
+      pastedTokenRef.current = pending.token;
+      terminal.focus();
+      terminal.paste(pending.text);
+      onPastedRef.current?.();
+    };
 
     const fitNow = (): void => {
       try {
@@ -144,6 +168,14 @@ export function TerminalView(props: {
         if (disposed) return;
         onCreatedRef.current(info);
         fitNow();
+        /*
+         * PTY 已经活了：**先把待贴的命令送进去，不等 snapshot 的渲染回调**。
+         * 窗口被遮住 / 在后台时，xterm 的写队列会评得很慢（验收实测：隐藏窗口里
+         * `terminal.write(..., cb)` 的 cb 一直不来，粘贴永远等不到）；而输入不靠
+         * 渲染，ConPTY 会先把字节收下。这里只等 create 回来（真正的「ready」）。
+         */
+        readyRef.current = true;
+        flushPaste();
         const snapshot = await api.terminal.snapshot(props.terminalId);
         terminal.write(snapshot.output, () => {
           if (disposed) return;
@@ -173,9 +205,26 @@ export function TerminalView(props: {
       cancelAnimationFrame(raf);
       terminal.dispose();
       fitRef.current = null;
+      termRef.current = null;
+      readyRef.current = false;
     };
     // terminalId 是这个视图的身份；cwd / exited 变化不重建视图（cwd 只在首次 create 生效）
   }, [props.terminalId]);
+
+  /**
+   * 后到的粘贴请求（面板已就绪时才点「在终端安装」）：与 create 完成时那一次同一套
+   * 去重——token 已贴过就跳过。依赖只认 token，文本变了但 token 没变不会误触。
+   */
+  useEffect(() => {
+    const pending = props.paste;
+    if (pending == null || !readyRef.current || pastedTokenRef.current === pending.token) return;
+    pastedTokenRef.current = pending.token;
+    const terminal = termRef.current;
+    if (terminal === null) return;
+    terminal.focus();
+    terminal.paste(pending.text);
+    onPastedRef.current?.();
+  }, [props.paste?.token]);
 
   return (
     <div

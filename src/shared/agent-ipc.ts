@@ -23,6 +23,7 @@ import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
 import type { SlidesAgentRequest, SlidesOutcome } from "./slides-export.ts";
 import type { DocAgentRequest, DocOutcome } from "./doc.ts";
 import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
+import type { LatexCompileRequest, LatexRunOutcome } from "./latex.ts";
 import type {
   ChannelDelivery,
   ChannelKey,
@@ -265,6 +266,12 @@ export const ipcChannels = {
    * 与 fs:read 分开：fs:read 对二进制只回 kind，不读内容；PDF 要整份字节
    */
   fsReadPdf: "fs:read-pdf",
+  /**
+   * 编辑器写回一个文本文件（同 root/dir 白名单，回 `FileWriteResult`，files.ts）。
+   * 请求带 `expectedHash`：写前重读比对，盘上被外部改过就回 conflict、不动盘——
+   * renderer 不能用一个迟到的编辑器覆盖 agent / 用户刚写下的内容。
+   */
+  fsWrite: "fs:write",
   /**
    * 建一个文件的行索引（同 root/dir 白名单，回 `FileLineIndex`，files.ts）：大于
    * PREVIEW_TEXT_LIMIT 的文本走「按行分段预览」时，renderer 先问这份文件有多少行。
@@ -1192,6 +1199,8 @@ export type AgentCommand =
   | ({ type: "docResult"; requestId: string } & DocOutcome)
   /** 终端：主进程对 terminalRequest 的回执（browserResult 同款） */
   | ({ type: "terminalResult"; requestId: string } & TerminalToolOutcome)
+  /** LaTeX：主进程对 latexRequest 的回执（terminalResult 同款） */
+  | ({ type: "latexResult"; requestId: string } & LatexRunOutcome)
   /** 子会话：主进程对 delegateRequest 的回执（requestId 问答，readTaskResult 同款） */
   | ({ type: "delegateResult"; requestId: string } & DelegateOutcome)
   /** 派发参考：主进程对 modelCostsRequest 的回执（readTaskResult 同款 ok 双分支） */
@@ -1496,6 +1505,13 @@ export type AgentEvent =
    * 回 terminalResult。
    */
   | { type: "terminalRequest"; requestId: string; sessionId: string; request: TerminalToolRequest }
+  /**
+   * LaTeX：agent 的 compile_latex 请求（形状见 shared/latex.ts 的 LatexCompileRequest）。
+   * **编译在主进程**（latex/run.ts，terminalRequest 同一条边界）：latexmk 是外部进程、
+   * 产物落在项目目录、并发状态按项目记账——这些都只该有一份，在 agent 进程里再做一遍
+   * 就是第二个真源。回 latexResult
+   */
+  | { type: "latexRequest"; requestId: string; sessionId: string; request: LatexCompileRequest }
   /**
    * 文档导出：agent 的 `doc_export` 请求（形状见 shared/doc.ts 的 DocAgentRequest）。
    * 导出在主进程（PDF 要隐藏窗口，agent 进程不碰 electron）；路径白名单按会话的根现算。回 docResult。

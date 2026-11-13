@@ -7,12 +7,20 @@ import { MarkdownBlock } from "../chat/MarkdownBlock";
 import { highlightBlock, highlighterReady, langFromPath } from "../chat/highlight";
 import { fileIcon, formatAge, formatSize } from "./tree-view";
 import { crumbSegmentsFromRoot, fileTabName } from "./panel-layout.ts";
+import { isEditableTexFile } from "./editor-state.ts";
+import { TexEditorPane, type TexEditorHandle } from "./TexEditorPane.tsx";
 import { largeTextNotice, textPreviewMode, textRenderKind } from "./preview-view";
 import { WindowedText } from "./WindowedText";
 import { RangeTextPreview } from "./RangeTextPreview";
 import { EmptyPreview, PreviewNotice } from "./PreviewChrome";
 import { DOC_MAX_BYTES } from "@shared/doc";
-import { isPdfFile, isWebPageFile, type FilePreview } from "@shared/files";
+import {
+  EDITOR_WRITE_LIMIT,
+  isPdfFile,
+  isWebPageFile,
+  type FileListRequest,
+  type FilePreview,
+} from "@shared/files";
 import type { PromptImage } from "@shared/prompt-images";
 import { PdfView, type PdfJump } from "./PdfView";
 import { DocEditPane } from "../doc-panel/DocEditPane";
@@ -52,6 +60,23 @@ export function FilePreviewPane(props: {
   rootLabel: string;
   /** PDF 引用跳转（点了正文里的引用编号）：滚到原文处并高亮。非 PDF / 没有跳转时 null */
   jump?: PdfJump | null;
+  /**
+   * 强制走 PDF 预览（论文工作台）：项目里刚编出来的 PDF 是编译条的直接产物，
+   * 不受「PDF 引用」实验开关管。开关管理的只是引用编号，不是「能不能看 PDF」。
+   */
+  pdfPreview?: boolean;
+  /** 外部要求重载 PDF（编译成功后自增）：按 mtime 重读，失败时不增、保留旧 PDF */
+  pdfReloadToken?: number;
+  /**
+   * 论文工作台：把编辑器的把手 / 脏状态交给 FilesPanel（编译前保存、标签圆点都靠它）。
+   * 缺席时编辑器照常能改能自动保存，只是外层拿不到把手。
+   */
+  editor?: {
+    register: (path: string, handle: TexEditorHandle | null) => void;
+    onDirtyChange: (path: string, dirty: boolean) => void;
+    onSaved?: () => void;
+    onError: (path: string, message: string) => void;
+  };
   /** 一打开就进「编辑」模式（刚新建的文档 / 演示文稿） */
   openInEdit?: boolean;
   /** 编辑模式里划选后「引用」进输入框；缺席 = 工具栏只剩复制 */
@@ -67,9 +92,16 @@ export function FilePreviewPane(props: {
   const extra = extraWorkspaceId === null ? {} : { extraWorkspaceId };
   const sentImage = props.sentImage;
   // PDF 预览挂在自己的实验开关后面（实验功能「PDF 引用」）：关着时 PDF 照旧读不出
-  // 内容（fs:read 只回二进制占位）。附图走 session.attachment，不会是 PDF
+  // 内容（fs:read 只回二进制占位）。附图走 session.attachment，不会是 PDF。
+  // 论文工作台直接编出来的 PDF 有 pdfPreview 豁免（见 props 注释）
   const pdfCitations = useExperimentalFeature("pdf-citations");
-  const pdf = sentImage === undefined && pdfCitations && isPdfFile(path);
+  const pdf =
+    sentImage === undefined && (pdfCitations || props.pdfPreview === true) && isPdfFile(path);
+  /**
+   * .tex 走编辑器（PR4）：只读预览换成 CodeMirror；仍要等 fs:read 回一份完整的文本
+   * （截断到 2 MB 的文件不编辑——写回会丢后半截）。二进制 / 图片不会走到这里。
+   */
+  const editableTex = sentImage === undefined && isEditableTexFile(path);
   const [pdfReload, setPdfReload] = useState(0);
   const name = sentImage?.name ?? fileTabName(path);
   // 面包屑从所在的根开始（绝对路径放不下时截掉的总是末尾的文件名）；完整路径进 tooltip
@@ -89,6 +121,22 @@ export function FilePreviewPane(props: {
     sentImage !== undefined
       ? imageState.status === "loading"
       : state.status === "loading" || refreshing;
+  // 可以进编辑器的只有「完整读回来的文本」：main 之后「text」就是整份内容（超大的走
+  // large-text / 分段预览，进不到这里），所以这里只需再挡一道写盘上限——盘上超过
+  // EDITOR_WRITE_LIMIT 的 .tex 能打开却一定存不回去（fs:write 回 too-large），
+  // 与其给个假的「已保存」按钮，不如退成只读预览
+  const editorInitial =
+    editableTex &&
+    state.status === "ready" &&
+    state.data.kind === "text" &&
+    state.data.size <= EDITOR_WRITE_LIMIT
+      ? state.data.text
+      : null;
+  const editorRequest = useMemo<FileListRequest>(
+    () => ({ sessionId, workspaceId, ...extra, root, dir: path }),
+    // extra 由 extraWorkspaceId 派生；这里列的是它的来源
+    [sessionId, workspaceId, extraWorkspaceId, root, path],
+  );
 
   const [mode, setMode] = useState<"rendered" | "source" | "edit">(props.openInEdit === true ? "edit" : "rendered");
   // 切文件（标签重挂载或换 path）：Source / 编辑模式不带过去，新文件一律先看 Rendered（刚新建的直接进编辑）
@@ -224,16 +272,21 @@ export function FilePreviewPane(props: {
             <PanelIconButton title={copied ? t.chat.copied : t.files.copyPath} onClick={copyPath}>
               <Icon name={copied ? "check" : "copy"} size={16} strokeWidth={1.8} />
             </PanelIconButton>
-            <PanelIconButton
-              title={t.files.refreshPreview}
-              onClick={() => {
-                refresh();
-                if (pdf) setPdfReload((n) => n + 1);
-                else setTextReload((n) => n + 1);
-              }}
-            >
-              <Icon name="refresh-cw" size={16} strokeWidth={1.8} spin={loading} />
-            </PanelIconButton>
+            {/* .tex 打开后是编辑器：头部刷新只换预览数据、碰不到编辑器里的文本，
+                会让人以为「刷新就能丢弃本地改动」。重载盘上版本在冲突条里（带抉择）。
+                读不全的文件（>2 MB 截断）没有编辑器，刷新照旧给。 */}
+            {editorInitial === null && (
+              <PanelIconButton
+                title={t.files.refreshPreview}
+                onClick={() => {
+                  refresh();
+                  if (pdf) setPdfReload((n) => n + 1);
+                  else setTextReload((n) => n + 1);
+                }}
+              >
+                <Icon name="refresh-cw" size={16} strokeWidth={1.8} spin={loading} />
+              </PanelIconButton>
+            )}
           </div>
         )}
       </header>
@@ -258,7 +311,9 @@ export function FilePreviewPane(props: {
       )}
       <div
         className="file-preview-body"
-        data-kind={pdf ? "pdf" : editing || asDocument ? "edit" : undefined}
+        data-kind={
+          pdf ? "pdf" : editorInitial !== null ? "tex" : editing || asDocument ? "edit" : undefined
+        }
         ref={bodyRef}
       >
         {asDocument ? (
@@ -285,7 +340,21 @@ export function FilePreviewPane(props: {
           <PdfView
             request={{ sessionId, workspaceId, ...extra, root, dir: path }}
             jump={props.jump ?? null}
-            reloadToken={pdfReload}
+            reloadToken={pdfReload + (props.pdfReloadToken ?? 0)}
+          />
+        ) : editorInitial !== null ? (
+          <TexEditorPane
+            request={editorRequest}
+            initialText={editorInitial}
+            register={props.editor?.register ?? noopRegister}
+            onDirtyChange={props.editor?.onDirtyChange ?? noopDirty}
+            // 保存后顺手重读预览数据：头部的大小・mtime 与磁盘同步；外层借这次回调
+            // 让编译条立刻看到「源码比 PDF 新」
+            onSaved={() => {
+              refresh();
+              props.editor?.onSaved?.();
+            }}
+            onError={props.editor?.onError ?? noopError}
           />
         ) : sentImage === undefined ? (
           <PreviewBody
@@ -329,6 +398,11 @@ export function FilePreviewPane(props: {
     </div>
   );
 }
+
+/** 外部没接编辑器回调时的空实现（组件照常可编辑可保存，只是外层拿不到把手） */
+const noopRegister = (): void => undefined;
+const noopDirty = (): void => undefined;
+const noopError = (): void => undefined;
 
 type LoadState =
   | { status: "loading" }

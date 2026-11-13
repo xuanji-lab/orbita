@@ -29,6 +29,12 @@ export function RightPanelSlot(props: {
    */
   resolveLayout?: (pane: number, wanted: number | null, windowWidth: number) => { overlay: boolean; width: number; tight?: boolean; squeezed?: boolean };
   narrow: boolean;
+  /**
+   * 铺满主区（布局 B「稿件为主」）：稿件工作台取代对话卡的位置、对话收到右侧一栏，
+   * 这时右栏位不再是「固定宽的侧栏」，宽度由 `.pane[data-layout="paper"]` 的
+   * flex 分配，拖宽热区也不该存在（左缘已是卡片外沿）。宽度仍算、仍报，只是不生效。
+   */
+  fill?: boolean;
   /** 实际是不是覆盖层（窄窗，或 resolveLayout 判定放不下）：工具栏的右栏胶囊要跟 */
   onOverlay?: (overlay: boolean) => void;
   /** 自带版式的面板：并排但被挤得比它自己的下限还窄（调用方可据此腾地方，比如收起左侧栏） */
@@ -45,6 +51,7 @@ export function RightPanelSlot(props: {
 }) {
   const t = useT();
   const { narrow, open } = props;
+  const fill = props.fill === true;
   const asideRef = useRef<HTMLElement | null>(null);
   /** 拖宽中禁掉 width 过渡——实时跟手（同 .drawer.dragging 的纪律） */
   const [resizing, setResizing] = useState(false);
@@ -125,7 +132,7 @@ export function RightPanelSlot(props: {
   return (
     <aside
       ref={asideRef}
-      className={`right-panel-slot${open ? " open" : ""}${resizing ? " dragging" : ""}`}
+      className={`right-panel-slot${open ? " open" : ""}${fill ? " fill" : ""}${resizing ? " dragging" : ""}`}
       style={
         {
           "--right-panel-w": `${width}px`,
@@ -151,8 +158,8 @@ export function RightPanelSlot(props: {
         } as React.CSSProperties
       }
     >
-      {/* 拖宽热区：左缘 6px 骑在竖线上；双击回 320 */}
-      {!overlay && (
+      {/* 拖宽热区：左缘 6px 骑在竖线上；双击回 320。布局 B 里没有竖线也没有固定宽 */}
+      {!overlay && !fill && (
         <span
           onPointerDown={startResize}
           onDoubleClick={() =>
@@ -223,23 +230,52 @@ export function RightPanelFrame(props: {
   /** 页头与滚动内容之间的一条（不随内容滚动）：能力面板的工作区选择条 */
   subheader?: React.ReactNode;
   footer?: React.ReactNode;
+  /**
+   * 页头**画在卡里**（稿件工作台的布局 B）：那时工作台占的是对话卡的主位，不在右栏
+   * 胶囊的位置上（那一格被「对话」胶囊占了，见 shell/Toolbar）。默认 false = 页头
+   * portal 到工具栏的右栏胶囊（方案 B v2 的常态）。
+   */
+  inline?: boolean;
   children: React.ReactNode;
 }) {
   const slot = useContext(ToolbarPanelSlotContext);
+  const inline = props.inline === true;
   const edge = useScrolledEdge(props.contentKey);
   return (
     <div
       style={{
         height: "100%",
         display: "grid",
-        gridTemplateRows: props.subheader === undefined ? "minmax(0,1fr) auto" : "auto minmax(0,1fr) auto",
+        // 行序：页头（布局 B 画在卡里）→ subheader（钉住的条）→ 内容 → footer
+        gridTemplateRows: inline
+          ? props.subheader === undefined
+            ? "auto minmax(0,1fr) auto"
+            : "auto auto minmax(0,1fr) auto"
+          : props.subheader === undefined
+            ? "minmax(0,1fr) auto"
+            : "auto minmax(0,1fr) auto",
         // 有 subheader 时列也钉成 minmax(0,1fr)：auto 列会按子项的内容宽撑开（横向滚动的选择条尤其）
         ...(props.subheader === undefined ? {} : { gridTemplateColumns: "minmax(0,1fr)" }),
       }}
     >
+      {/* 所有子元素都带 key：布局 A / B 切换时多出 / 少掉一行页头，不带 key 的话
+          按位置对账会把内容层（编辑器、PDF）整棵重挂，未保存的输入与滚动位置
+          一起丢掉——页头是页头，内容层必须留在原地 */}
+      {inline ? (
+        <div className="panel-inline-head" key="__head" aria-label={props.contentKey}>
+          {props.header}
+          <span className="cap-grow" aria-hidden="true" />
+          {props.headerExtra}
+        </div>
+      ) : null}
       {/* 钉在滚动区上方、占自己的一行；内容滚起来时在它下面画一根发丝线（useScrolledEdge） */}
-      {props.subheader !== undefined && <div style={edge.edgeStyle}>{props.subheader}</div>}
-      {slot !== null &&
+      {props.subheader !== undefined && (
+        <div key="__sub" style={edge.edgeStyle}>
+          {props.subheader}
+        </div>
+      )}
+      {!inline &&
+        slot !== null &&
         createPortal(
           <div className="cap-panel-content" key={props.contentKey}>
             {props.header}
@@ -247,6 +283,7 @@ export function RightPanelFrame(props: {
             {props.headerExtra}
           </div>,
           slot,
+          "cap-head",
         )}
 
       <div
@@ -260,6 +297,7 @@ export function RightPanelFrame(props: {
 
       {props.footer !== undefined && (
         <footer
+          key="footer"
           style={{
             borderTop: "1px solid var(--color-border-subtle)",
             padding: "var(--space-3) var(--space-4)",

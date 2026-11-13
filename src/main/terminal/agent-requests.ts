@@ -16,6 +16,7 @@ import type { SessionStore } from "../session/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import type { TerminalService } from "./service.ts";
 import { ownedTerminal, resolveAgentTerminalCwd } from "./agent-policy.ts";
+import { sessionAuthorizedRoots } from "../agent/session-roots.ts";
 
 /** agent 写入的「回车」：ConPTY 与 posix PTY 都认 CR 为提交一行 */
 const CARRIAGE_RETURN = "\r";
@@ -43,30 +44,12 @@ export async function applyTerminalRequest(
   workspaces: WorkspaceStore,
   event: { sessionId: string; request: TerminalToolRequest },
 ): Promise<TerminalToolOutcome> {
-  const roots = await sessionTerminalRoots(sessions, workspaces, event.sessionId);
+  const roots = await sessionAuthorizedRoots(sessions, workspaces, event.sessionId);
   try {
     return await dispatch(service, event.sessionId, roots, event.request);
   } catch (cause) {
     return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
   }
-}
-
-/**
- * 会话授权目录 = 工作区根（meta.cwd）+ 工作区挂的附加目录。**与开轮目录清单同源**
- * （main/agent/turn-directories.ts 的 attached 走同一个 workspaces.attachedDirsOf）：
- * 模型在 prompt 里读到「你可以去这些目录」，终端的 cwd 授权就必须认同一份名单，
- * 不然提示词说的是假话。
- *
- * 工作台**不在**名单里：那是会话私有草稿区，不是「开终端干活」的地方。
- */
-async function sessionTerminalRoots(
-  sessions: SessionStore,
-  workspaces: WorkspaceStore,
-  sessionId: string,
-): Promise<string[]> {
-  const meta = await sessions.readMeta(sessionId);
-  const attached = await workspaces.attachedDirsOf(meta?.workspaceId ?? null);
-  return [...(meta?.cwd !== undefined ? [meta.cwd] : []), ...attached];
 }
 
 async function dispatch(

@@ -15,6 +15,8 @@ import type {
   FilePreview,
   FileRoot,
   FileRootsRequest,
+  FileWriteRequest,
+  FileWriteResult,
   FsEntryFact,
   PdfFile,
 } from "../../shared/files.ts";
@@ -30,6 +32,11 @@ export const filesApi = {
   read: (req: FileListRequest): Promise<FilePreview> => ipcRenderer.invoke(ipcChannels.fsRead, req),
   /** 读 PDF 整份字节给预览面板渲染（同白名单，且须是 .pdf；实验功能「PDF 引用」） */
   readPdf: (req: FileListRequest): Promise<PdfFile> => ipcRenderer.invoke(ipcChannels.fsReadPdf, req),
+  /**
+   * 编辑器写回一个文本文件（同白名单）。`expectedHash` 对不上盘上内容时回 conflict、
+   * 不动盘；null = 用户选了「保留我的」，强制写。
+   */
+  write: (req: FileWriteRequest): Promise<FileWriteResult> => ipcRenderer.invoke(ipcChannels.fsWrite, req),
   /** 建行索引（同 root/dir 白名单）：>16 MB 的文本走分段预览时先问这个文件有多少行 */
   lineIndex: (req: FileLineIndexRequest): Promise<FileLineIndex> =>
     ipcRenderer.invoke(ipcChannels.fsLineIndex, req),

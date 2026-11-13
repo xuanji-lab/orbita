@@ -16,6 +16,8 @@ import {
   type FilePreview,
   type PdfFile,
   type FileRootsRequest,
+  type FileWriteRequest,
+  type FileWriteResult,
   type FsEntryFact,
 } from "../../shared/files.ts";
 import type { SessionStore } from "../session/store.ts";
@@ -24,6 +26,7 @@ import { resolveFileRoots } from "./roots.ts";
 import { listDirectory, whitelistedPath } from "./list.ts";
 import { buildLineIndex, readLines } from "./lines.ts";
 import { readPdfFile, readPreview } from "./read.ts";
+import { writeEditedFile } from "./write.ts";
 
 /**
  * @param openInBrowser 在内置浏览器「你的」tab 打开一个本地网页（BrowserSandbox.openLocalFile）。
@@ -123,6 +126,16 @@ export function registerFilesIpc(
     const path = await whitelistedPath(roots, req);
     if (!isPdfFile(path)) throw new Error(`Not a PDF file: ${path}`);
     return readPdfFile(path);
+  });
+
+  /**
+   * 编辑器写回（同白名单，契约见 files.ts 的 FileWriteRequest）。写前重读比对指纹：
+   * 编辑期间被外部改过就回 conflict、不动盘。「保留我的」用 expectedHash=null 强制写。
+   */
+  ipcMain.handle(ipcChannels.fsWrite, async (_event, req: FileWriteRequest): Promise<FileWriteResult> => {
+    const roots = await resolveFileRoots(workspaces, sessions, req);
+    const path = await whitelistedPath(roots, req);
+    return writeEditedFile(path, req.text, req.expectedHash);
   });
 
   /**

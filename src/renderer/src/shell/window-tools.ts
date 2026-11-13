@@ -13,6 +13,8 @@
  * 它始终住在工具栏左胶囊的第一个格，开合不换容器（旧版「两条链对账」随之删除）。
  */
 
+import { PAPER_CHAT_WIDTH } from "../features/files/paper-layout.ts";
+
 export type ToolbarPlatform = "darwin" | "other";
 
 /** 主进程 `trafficLightPosition`（红绿灯不动；测试与这里对账） */
@@ -91,6 +93,30 @@ export function rightEdge(input: {
   const paneRight = input.windowWidth - LAYER_PAD - RAIL_W - LAYER_PAD;
   if (input.panelOpen) return paneRight - input.panelWidth;
   return input.windowWidth - LAYER_PAD - RAIL_W;
+}
+
+/**
+ * 布局 B（稿件为主）的横向分区：稿件工作台占左、对话栏占右。
+ *
+ * 布局 B 里 `.pane` 是 row-reverse（CSS 里把对话卡摆到右边），这里算的是**视觉**位置，
+ * 给工具栏的三颗胶囊用：会话胶囊居中于工作台，右侧 340 一栏顶上是「对话」胶囊。
+ * 侧栏在 B 里自动收起，但用户手动展开放宽也照常算——工作台从侧栏右缘起。
+ */
+export function paperColumns(input: {
+  windowWidth: number;
+  sidebarCollapsed: boolean;
+  sidebarWidth: number;
+}): { workbench: { left: number; right: number }; chat: { left: number; right: number } } {
+  // 对话栏贴 pane 右缘（不按面板宽算：B 里没有「右栏」这回事）
+  const column = conversationColumn({
+    windowWidth: input.windowWidth,
+    sidebarCollapsed: input.sidebarCollapsed,
+    sidebarWidth: input.sidebarWidth,
+    panelOpen: false,
+    panelWidth: 0,
+  });
+  const chatLeft = Math.max(column.left, column.right - PAPER_CHAT_WIDTH);
+  return { workbench: { left: column.left, right: chatLeft }, chat: { left: chatLeft, right: column.right } };
 }
 
 /**
