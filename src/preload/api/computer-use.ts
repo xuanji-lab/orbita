@@ -7,6 +7,7 @@
 import { ipcRenderer } from "electron";
 import {
   computerUseChannels,
+  type ComputerUseLeaseStatus,
   type ComputerUseProbeResult,
   type ComputerUseScreenshotResult,
   type ComputerUseStartResult,
@@ -39,6 +40,12 @@ export const computerUseApi = {
   /** 急停热键的注册状态（设置页每次挂载问一次；失败时如实说「被占用」） */
   emergencyStopState: (): Promise<EmergencyStopStatus> =>
     ipcRenderer.invoke(computerUseChannels.computerUseEmergencyStopState),
+  /**
+   * 桌面现在归谁（设置页「沙箱归属」一行）。无主返回 null（空闲）；有主时带会话标题与
+   * 已持有毫秒数。数据源是主进程的桌面租约，不另写一套状态。
+   */
+  leaseStatus: (): Promise<ComputerUseLeaseStatus> =>
+    ipcRenderer.invoke(computerUseChannels.computerUseLeaseStatus),
   onStatus: (listener: (status: SandboxStatus) => void): (() => void) => {
     const handler = (_event: unknown, status: SandboxStatus): void => listener(status);
     ipcRenderer.on(computerUseChannels.computerUseStatus, handler);

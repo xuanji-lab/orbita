@@ -22,6 +22,7 @@
  */
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { RequestBroker } from "./request-broker.ts";
+import { takeRememberedClass } from "./computer-remember.ts";
 import { networkFailureError, sandboxNetworkNote } from "./computer-network.ts";
 import {
   COMPUTER_USE_BROWSER_IDLE_MS,
@@ -158,10 +159,19 @@ export function createSandboxBrowserTools(
    * 只读工具（observe / extract / screenshot / wait / tabs list）与导航不记——它们不替任何人
    * 做事，多记一行只会把真动作淡出日志。字段与像素车道共用 shared 的 computerUseAudit。
    */
-  const writeOnly = (result: SandboxSuccess, action: ComputerUseToolRequest["action"], args: Record<string, unknown>) => ({
-    content: [{ type: "text" as const, text: result.text }],
-    details: { computerUse: computerUseAudit(action, args) },
-  });
+  const writeOnly = (result: SandboxSuccess, action: ComputerUseToolRequest["action"], args: Record<string, unknown>) => {
+    // 同上（computer-tools 的同款注记）：只有「勾选并批准」的那一次带上 rememberedClass
+    const remembered = takeRememberedClass(sessionId);
+    return {
+      content: [{ type: "text" as const, text: result.text }],
+      details: {
+        computerUse: {
+          ...computerUseAudit(action, args),
+          ...(remembered === null ? {} : { rememberedClass: remembered }),
+        },
+      },
+    };
+  };
 
   const navigate: ToolDefinition = {
     name: "sandbox_navigate",

@@ -869,7 +869,11 @@ void app.whenReady().then(async () => {
         .map(([id]) => id);
       for (const sessionId of runningSessions) {
         void sessions.setComputerUseGrant(sessionId, null).catch(() => undefined);
+        // 急停同时清掉「这类动作不再问」：用户拉急停的意思是「停下」，留着记忆会让
+        // 重新授权后手动档的同类动作再次静默放行——那是撤销的反面。
+        void sessions.setComputerUseRemembered(sessionId, []).catch(() => undefined);
         agentHost.setComputerUseGrant(sessionId, false);
+        agentHost.setComputerUseRemembered(sessionId, []);
         agentHost.abortIfRunning(sessionId);
         // 与 IPC 撤销路径同一份事件：renderer 的授权标识立即复位
         broadcastAgentEvent({ type: "computerUseGrant", sessionId, granted: false, at: null });
@@ -880,7 +884,8 @@ void app.whenReady().then(async () => {
   // 与急停控制器一起注册（IPC 只能注册一次）：hooks 是 PR3 的停沙箱收尾——用户停沙箱时先把
   // 里面的浏览器逐个会话停掉（best effort、不等待：不能用一串浏览器命令拖住停沙箱按钮；
   // 桥已经死了就算了，VM 销毁会带走整个进程树）。
-  registerComputerUseIpc(computerUse, { beforeStop: () => { void cdp.stopAll(); } }, emergencyStop);
+  // 租约也交给它：设置页「沙箱归属」一行读的是 dispatch 拿锁用的同一份桌面租约。
+  registerComputerUseIpc(computerUse, { beforeStop: () => { void cdp.stopAll(); } }, emergencyStop, computerUseLease);
 
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
@@ -1012,6 +1017,12 @@ void app.whenReady().then(async () => {
     // 更新会话头的授权标识。写盘失败不该卡住事件转发（授权在当前轮已由账本兑现）。
     if (event.type === "computerUseGrant") {
       void sessions.setComputerUseGrant(event.sessionId, event.at).catch(() => undefined);
+    }
+    // 本会话「这类动作不再问」的变更（manual 档的勾选项）：闸门是唯一知道用户勾了什么
+    // 的那一层，主进程只负责落 meta（原子写）。**不 return**：事件还要广播——撤销 / 急停
+    // 清空时其它视图也跟着复位。空数组 = 清空（meta 键一并拿掉）。
+    if (event.type === "computerUseRemembered") {
+      void sessions.setComputerUseRemembered(event.sessionId, event.remembered).catch(() => undefined);
     }
     // 自动化的运行收尾 / this_session 的等待送达都靠这些事件（phase idle、最终回答、stats、failed）。
     // 只旁听，不 return：事件照常往下 record + broadcast

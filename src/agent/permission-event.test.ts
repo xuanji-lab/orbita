@@ -54,6 +54,18 @@ describe("permissionEvent —— 审批事件的拼装", () => {
     assert.equal(event.risk?.rule, "command");
   });
 
+  test("rememberable 原样带到 renderer（丢了卡上就不会出现「这类不再问」）", () => {
+    const event = permissionEvent({
+      sessionId: "S",
+      requestId: "S:c4",
+      toolName: "computer_click",
+      input: { x: 1, y: 2 },
+      rememberable: true,
+    });
+    assert.equal(event.rememberable, true);
+    assert.equal(event.scope, undefined);
+  });
+
   test("两个可选字段都缺席时不留空键（renderer 按「缺席 = 普通审批」判）", () => {
     const event = permissionEvent({
       sessionId: "S",

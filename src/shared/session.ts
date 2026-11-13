@@ -12,7 +12,7 @@ import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentStats } from "./agent-ipc.ts";
 import { parseAutomationRunLabel, type AutomationRunLabel } from "./automation.ts";
 import { CHANNEL_MESSAGE_KINDS, type ChannelMessageKind } from "./channel.ts";
-import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
+import { PERMISSION_MODES, parseComputerUseRemembered, type ComputerUseRememberedEntry, type PermissionMode } from "./permission.ts";
 import { isThinkingLevel, parseThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 import { parseQuotedMessage, withoutQuotes } from "./quote.ts";
 import { parseSkillSegments } from "./skill.ts";
@@ -478,6 +478,17 @@ export interface SessionMeta {
    */
   computerUseGrantedAt?: number | null;
   /**
+   * 审批卡上「本会话内，这类动作不再问」记住的类（manual 档；2026-11-13）。
+   *
+   * **只落会话，不落全局设置**：用户勾的是「这条任务里别再问」，换一条会话就该重新问。
+   * 只有沙箱内的那一档能被记住（`ComputerUseRememberedClass`），逸出件永远逐次问。
+   * 一条记录带 `toolName` 与 `at`，批准那一刻就有据可查（审计要求）。
+   *
+   * 写者：agent 闸门（`computerUseRemembered` 事件）；撤销 / 急停 / 任意一次拒绝都会清空
+   * （闸门与主进程两条路径都清）。坏值逐条丢（`parseComputerUseRemembered`）。
+   */
+  computerUseRemembered?: ComputerUseRememberedEntry[];
+  /**
    * 最后一次用的思考档，同 mode 的理由：重开不静默换档。**缺省退 "medium"**——
    * 这个字段落地之前存的会话，实际跑的就是 pi 的默认 medium，退 "off" 才是改写历史。
    */
@@ -825,6 +836,8 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
   const parentId = str(value["parentId"]);
   const automationId = str(value["automationId"]);
   const automationRun = parseAutomationRunLabel(value["automationRun"]);
+  // 记住的类：坏条目逐条丢；空数组不落键（缺席即空），与其它可选字段同一口径
+  const computerUseRemembered = parseComputerUseRemembered(value["computerUseRemembered"]);
 
   return {
     id,
@@ -860,6 +873,8 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     mode: isPermissionMode(value["mode"]) ? value["mode"] : "plan",
     // 电脑使用授权：坏值当作从未授权（宁可多问一次，不可静默放行）
     computerUseGrantedAt: num(value["computerUseGrantedAt"]),
+    // 「本会话内这类不再问」：解析过的合法条目；空数组不落键（缺席即空）
+    ...(computerUseRemembered.length > 0 ? { computerUseRemembered } : {}),
     // 思考档坏值退 medium（老会话实际跑的那一档），理由见字段注释
     thinkingLevel: parseThinkingLevel(value["thinkingLevel"]),
     // 导入标记：非导入会话缺席（空串/null 都当没有，str 的规则）

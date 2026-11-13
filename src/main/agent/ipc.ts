@@ -22,7 +22,7 @@ import {
 } from "../../shared/invocation.ts";
 import { isSkillAvailable, matchSkillTarget } from "../../shared/skill.ts";
 import { withoutQuotes } from "../../shared/quote.ts";
-import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
+import type { ComputerUseRememberedEntry, PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import { endpointHintsOf, knownProviderOf } from "../../shared/known-providers.ts";
@@ -256,6 +256,15 @@ export function registerAgentIpc(
    */
   const readComputerUseGrant = async (sessionId: string): Promise<number | null> =>
     (await sessions.readMeta(sessionId))?.computerUseGrantedAt ?? null;
+  /**
+   * 本会话记住了哪些「这类动作不再问」（manual 档）。与授权同一套播种规则：
+   * 每轮从 meta 装配，agent 只在首次见到这条会话时拿它当种子；轮中的记住 / 清除
+   * 以 agent 内存账本为准（meta 写盘是它发事件回来时的事）。
+   */
+  const readComputerUseRemembered = async (
+    sessionId: string,
+  ): Promise<ComputerUseRememberedEntry[]> =>
+    (await sessions.readMeta(sessionId))?.computerUseRemembered ?? [];
   /** 「先给我看计划」偏好同样每轮现读：改了下一轮即生效；缺席 = 关 */
   const readPlanFirst = async (): Promise<boolean> => (await settings.read()).planFirst === true;
 
@@ -544,6 +553,7 @@ export function registerAgentIpc(
         pdfCitations: await readPdfCitations(), planFirst: await readPlanFirst(), pluginTools: true,
         computerUse: await readComputerUse(),
         computerUseGrantedAt: await readComputerUseGrant(input.sessionId),
+        computerUseRemembered: await readComputerUseRemembered(input.sessionId),
       }),
     });
     await settleFirstTurn(input, piSessionFile);
@@ -583,13 +593,13 @@ export function registerAgentIpc(
     await beginMemoryTurn(input.sessionId, text);
     const automationTools = await readAutomationTools(input.sessionId);
     const capabilities = await readCapabilities(input.workspaceId);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text, sessionMemory: true, ...(automationTools ? { automationTools: true } : {}), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), computerUse: await readComputerUse(), computerUseGrantedAt: await readComputerUseGrant(input.sessionId), planFirst: await readPlanFirst(), pluginTools: true }) });
+    const piSessionFile = await host.interrupt({ type: "interrupt", text, sessionMemory: true, ...(automationTools ? { automationTools: true } : {}), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), computerUse: await readComputerUse(), computerUseGrantedAt: await readComputerUseGrant(input.sessionId), computerUseRemembered: await readComputerUseRemembered(input.sessionId), planFirst: await readPlanFirst(), pluginTools: true }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
     const provider = await resolveForTurn(input.providerId);
     const capabilities = await readCapabilities(input.workspaceId);
-    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), computerUse: await readComputerUse(), computerUseGrantedAt: await readComputerUseGrant(input.sessionId), planFirst: await readPlanFirst(), pluginTools: true }) });
+    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), computerUse: await readComputerUse(), computerUseGrantedAt: await readComputerUseGrant(input.sessionId), computerUseRemembered: await readComputerUseRemembered(input.sessionId), planFirst: await readPlanFirst(), pluginTools: true }) });
     if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
   });
 
@@ -643,6 +653,12 @@ export function registerAgentIpc(
       const at = granted ? Date.now() : null;
       await sessions.setComputerUseGrant(sessionId, at);
       host.setComputerUseGrant(sessionId, granted);
+      // 撤销同时清掉「这类动作不再问」：撤销说的是「停下、别再自作主张」，留着记忆会让
+      // 下一轮手动档的同类动作静默放行。授予不复原它——记忆是用户逐次勾出来的，不是授权的副产品。
+      if (!granted) {
+        await sessions.setComputerUseRemembered(sessionId, []);
+        host.setComputerUseRemembered(sessionId, []);
+      }
       broadcastAgentEvent({ type: "computerUseGrant", sessionId, granted, at });
     },
   );

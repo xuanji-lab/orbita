@@ -1099,6 +1099,16 @@ export const zh: Messages = {
     stoppingNote: "正在收尾：最多 1–2 分钟。用完的沙箱会整个销毁，窗口自己消失，不用再点第二次。",
     start: "启动",
     stop: "关闭",
+    /* 关闭前的一次确认（不提供「不再提示」）：误点就关掉正在跑的会话，回到未启动后沙箱里的一切都没了 */
+    stopConfirm: "关闭会丢掉沙箱里的全部内容（下载的文件、登录态、正在跑的任务）。确定关闭？",
+    stopConfirmAction: "仍然关闭",
+    /* 沙箱归属：同一时间只有一块桌面，多会话时用户要知道谁在用它 */
+    leaseRow: "桌面占用",
+    leaseRowInfo:
+      "沙箱桌面是应用级共享的：同一时间只有一个会话能操作它（像素点击、输入、按键、滚动）。新一轮动作会等前面的会话做完再接上，所以这里显示的是此刻真正持有桌面的那条会话。",
+    leaseIdle: "空闲",
+    leaseBusy: (title, minutes, seconds) => `正在被「${title}」使用（已 ${minutes} 分 ${seconds} 秒）`,
+    leaseUntitled: "未命名会话",
     shotGroup: "手动截图",
     shotRow: "沙箱桌面",
     shotRowInfo: "现在就拍一张沙箱桌面的截图——只在你点击时拍，绝不自动拍。",
@@ -2395,6 +2405,9 @@ export const zh: Messages = {
     riskHint: "命中规则的输入与按键会在执行前停下来问你；可以取消，也可以放行。",
     allowRisk: "仍要执行",
     cancelRisk: "取消",
+    /* manual 档的沙箱内写件才有这一项：勾选并允许后，本会话内同一类动作不再弹卡。
+       逸出件（上传 / 下载）与破坏性动作不摆它——它们永远逐次问。 */
+    rememberClass: "本会话内，这类动作不再问",
   },
 
   carryover: {

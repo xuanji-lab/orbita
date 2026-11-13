@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { writeBytesAtomic, writeJsonAtomic, writeTextAtomic } from "../atomic-write.ts";
+import type { ComputerUseRememberedEntry } from "../../shared/permission.ts";
 import {
   isOriginalRef,
   mimeOfExtension,
@@ -661,6 +662,18 @@ export class SessionStore {
    */
   setComputerUseGrant(id: string, at: number | null): Promise<void> {
     return this.update(id, { computerUseGrantedAt: at });
+  }
+
+  /**
+   * 记住 / 忘掉本会话的「这类动作不再问」（manual 档；见 SessionMeta 字段注释）。
+   * **空数组 = 清空**（拒绝 / 撤销 / 急停），且写成 `undefined` 把键连同值一并拿掉——
+   * meta 里不留一个空数组的假记录。走同一条 update 链（原子写 + 串行）。
+   */
+  setComputerUseRemembered(
+    id: string,
+    remembered: readonly ComputerUseRememberedEntry[],
+  ): Promise<void> {
+    return this.update(id, { computerUseRemembered: remembered.length === 0 ? undefined : [...remembered] });
   }
 
   /**

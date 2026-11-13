@@ -23,7 +23,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { AgentCommand, AgentEvent, ProviderSecrets } from "../shared/agent-ipc.ts";
 import type { MemoryRecallOutcome } from "../shared/memory.ts";
-import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
+import type { ComputerUseRememberedEntry, PermissionAnswer, PermissionMode } from "../shared/permission.ts";
+import { noteRememberedClass } from "./computer-remember.ts";
 import { permissionEvent, type PermissionEvent } from "./permission-event.ts";
 import {
   registerAndResolveModel,
@@ -703,6 +704,12 @@ interface LedgerNote {
    * 当场生效，不能被一次迟到的 meta 读覆盖。
    */
   computerUseGrant?: "granted" | "denied" | "revoked";
+  /**
+   * 本会话在 manual 档下记住的「这类动作不再问」（会话级，落 SessionMeta）。
+   * **undefined = 还没从盘上播过种**（与授权同一个播种窗口）；空数组 = 明确忘光了。
+   * 只记「沙箱内写件」这一类（逸出件永远逐次问，见 shared/permission.ts）。
+   */
+  computerUseRemembered?: ComputerUseRememberedEntry[];
   /** 标题调用（C-3）的鉴权面——最近一次装配进来的 provider key 与自定义头 */
   apiKey: string;
   headers?: Record<string, string>;
@@ -863,7 +870,19 @@ function askPermission(sessionId: string) {
       pendingPermissions.set(requestId, resolve);
       // 拼事件走 permissionEvent：scope / risk 从这里到 renderer 一路都不能丢
       // （丢了 session 卡会退化成逐次卡，而它实际放行整条会话）
-      send(permissionEvent({ sessionId, requestId, toolName: request.toolName, input: request.input, scope: request.scope, risk: request.risk }));
+      // 可选字段一个都不能漏（2026-11-13 真机验收：rememberable 半路丢了，卡上就没有勾选项）——
+      // 由 permissionEvent 统一挑字段，这里只把闸门给的那一份原样递过去。
+      send(
+        permissionEvent({
+          sessionId,
+          requestId,
+          toolName: request.toolName,
+          input: request.input,
+          scope: request.scope,
+          risk: request.risk,
+          rememberable: request.rememberable,
+        }),
+      );
     });
 }
 
@@ -969,6 +988,10 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   if (note.computerUseGrant === undefined && command.computerUseGrantedAt != null) {
     note.computerUseGrant = "granted";
   }
+  // 「这类动作不再问」同样只在首次见到这条会话时播种（轮中的记住 / 清除以账本为准）。
+  if (note.computerUseRemembered === undefined && command.computerUseRemembered !== undefined) {
+    note.computerUseRemembered = [...command.computerUseRemembered];
+  }
   note.apiKey = provider.apiKey;
   if (provider.headers === undefined) delete note.headers;
   else note.headers = provider.headers;
@@ -1025,6 +1048,15 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
       at: granted ? Date.now() : null,
     });
   };
+  /**
+   * 记 / 忘「这类动作不再问」。**先改内存账本、再报主进程**：当前轮的下一次调用要
+   * 立刻按新值判；落盘失败不改变「这一轮已经记住了」的事实（与授权同一条顺序）。
+   * 事件带变更后的全量清单，主进程原样写进 meta——审计要看得出「记住了什么」。
+   */
+  const setComputerUseRemembered = (next: ComputerUseRememberedEntry[]): void => {
+    ledgerNote(command.sessionId).computerUseRemembered = next;
+    send({ type: "computerUseRemembered", sessionId: command.sessionId, remembered: next });
+  };
   const gate = createToolCallGate(
     currentMode,
     askPermission(command.sessionId),
@@ -1043,6 +1075,25 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
         settleIntentAsks(command.sessionId);
         // 中断原因进日志：用户看到的是「轮突然停了」，得有一条能对上的记录
         console.warn(`[computer-use] 预算硬限中断 ${command.sessionId}: ${reason}`);
+      },
+      // 「本会话内，这类动作不再问」（manual 档的勾选项）。三个回调都直接读写账本：
+      // gate 每轮重建，记忆必须跨轮——它属于会话，不属于这一轮。
+      rememberedClasses: () =>
+        (ledgerNote(command.sessionId).computerUseRemembered ?? []).map((entry) => entry.class),
+      remember: (cls, toolName) => {
+        // 让紧接着这一次执行的工具结果带上 rememberedClass（审计落点，见 computer-remember.ts）
+        noteRememberedClass(command.sessionId, cls);
+        const current = ledgerNote(command.sessionId).computerUseRemembered ?? [];
+        // 同一类只留最新一条（重复批准不会堆记录）；顺带把时间写进去，事后可查。
+        const next: ComputerUseRememberedEntry[] = [
+          ...current.filter((entry) => entry.class !== cls),
+          { class: cls, toolName, at: Date.now() },
+        ];
+        setComputerUseRemembered(next);
+      },
+      forgetRemembered: () => {
+        if ((ledgerNote(command.sessionId).computerUseRemembered ?? []).length === 0) return;
+        setComputerUseRemembered([]);
       },
     },
   );
@@ -2316,6 +2367,12 @@ async function handle(command: AgentCommand): Promise<void> {
     // 会话头的撤销 / 重新授权、急停：主进程已经落了 meta，这里只对齐账本。
     // **不 send 回主进程**（那会让主进程自己写自己），广播由主进程的 IPC handler 负责。
     ledgerNote(command.sessionId).computerUseGrant = command.granted ? "granted" : "revoked";
+    return;
+  }
+  if (command.type === "setComputerUseRemembered") {
+    // 主进程在 meta 上改完「这类动作不再问」之后对齐账本（目前只有清空这一个方向）。
+    // 不 send：理由同 setComputerUseGrant。
+    ledgerNote(command.sessionId).computerUseRemembered = [...command.remembered];
     return;
   }
   if (command.type === "setModel") {

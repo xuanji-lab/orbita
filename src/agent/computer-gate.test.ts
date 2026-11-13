@@ -27,12 +27,20 @@ function computerGate(options: {
   state?: "none" | "granted" | "denied" | "revoked";
   answers?: PermissionAnswer[];
   now?: () => number;
+  /** 会话里已经记住的类（「本会话内，这类动作不再问」） */
+  remembered?: ("confined")[];
 }) {
   const asked: ToolCallLike[] = [];
   const grants: boolean[] = [];
   const aborts: string[] = [];
   const answers = [...(options.answers ?? [])];
   let state = options.state ?? "none";
+  /** 会话账本里的记忆（闸门通过 hooks 读；remember / forget 当场改它） */
+  const rememberedClass = new Set<string>(options.remembered ?? []);
+  /** 每次「记住」的完整记录（类 + 触发的那件工具），用来断言审计载荷 */
+  const remembered: { cls: string; toolName: string }[] = [];
+  /** 被清空的次数——拒绝 / 撤销 / 急停都要留下一次 */
+  const forgets: number[] = [];
   const gate = createToolCallGate(
     () => options.mode ?? "skip",
     async (request) => {
@@ -52,6 +60,16 @@ function computerGate(options: {
       },
       abort: (message) => aborts.push(message),
       now: options.now ?? (() => 1_000),
+      rememberedClasses: () => [...rememberedClass] as ("confined")[],
+      remember: (cls, toolName) => {
+        rememberedClass.add(cls);
+        remembered.push({ cls, toolName });
+      },
+      forgetRemembered: () => {
+        if (rememberedClass.size === 0) return;
+        rememberedClass.clear();
+        forgets.push(forgets.length + 1);
+      },
     },
   );
   return {
@@ -59,6 +77,9 @@ function computerGate(options: {
     asked,
     grants,
     aborts,
+    remembered,
+    forgets,
+    rememberedClass,
     setState: (next: "none" | "granted" | "denied" | "revoked") => {
       state = next;
     },
@@ -407,5 +428,103 @@ describe("电脑使用：网页车道与 UIA 车道的写工具同样过闸", ()
       assert.equal(soft.block, true, tool);
       assert.match(soft.reason ?? "", /budget/i, tool);
     }
+  });
+});
+
+describe("电脑使用：manual 档「本会话内，这类动作不再问」", () => {
+  test("不勾就一直逐次问（manual 的默认语义不变）", async () => {
+    const { gate, asked } = computerGate({ mode: "manual" });
+    await gate(event("computer_click", { x: 1, y: 1 }));
+    await gate(event("sandbox_type", { selector: "#q", text: "hi" }));
+    assert.equal(asked.length, 2, "没勾任何一次记忆节点，第二件照样问");
+    assert.equal(asked[0]?.rememberable, true, "沙箱内写件 + 无风险 → 卡上可以摆勾选项");
+  });
+
+  test("勾选并批准后，本会话内同一类动作不再弹卡（跨不同工具算同类）", async () => {
+    const { gate, asked, remembered, rememberedClass } = computerGate({
+      mode: "manual",
+      answers: [{ behavior: "allow", remember: true }],
+    });
+    await gate(event("computer_click", { x: 1, y: 1 }));
+    assert.deepEqual(remembered, [{ cls: "confined", toolName: "computer_click" }]);
+    assert.deepEqual([...rememberedClass], ["confined"]);
+
+    // 另一件沙箱内写件：同一个类，直接放行、不再问
+    assert.deepEqual(await gate(event("sandbox_type", { selector: "#q", text: "hi" })), {});
+    assert.deepEqual(await gate(event("computer_key", { key: "a" })), {});
+    assert.equal(asked.length, 1, "只有记住那一次弹过卡");
+  });
+
+  test("逸出件不共享这一类：记住了沙箱内，upload / download 仍逐次问", async () => {
+    const { gate, asked } = computerGate({
+      mode: "manual",
+      answers: [{ behavior: "allow", remember: true }],
+    });
+    await gate(event("computer_click", { x: 1, y: 1 }));
+    await gate(event("sandbox_upload", { path: "C:\Users\me\a.txt", selector: "input[type=file]" }));
+    await gate(event("sandbox_download", { selector: "a.download" }));
+    assert.equal(asked.length, 3, "逸出件永远逐次问");
+    assert.equal(asked[1]?.rememberable, undefined, "逸出件的卡上不摆勾选项");
+    assert.equal(asked[2]?.rememberable, undefined);
+  });
+
+  test("逸出件卡上勾不出记忆：答案带 remember 也不会被采纳", async () => {
+    const { gate, remembered } = computerGate({
+      mode: "manual",
+      answers: [{ behavior: "allow", remember: true }],
+    });
+    await gate(event("sandbox_upload", { path: "a.txt" }));
+    assert.deepEqual(remembered, [], "逸出件没有可记住的类");
+  });
+
+  test("破坏性动作（D1/D2/D3）不受记忆影响：仍然每次都问", async () => {
+    const { gate, asked } = computerGate({ mode: "manual", remembered: ["confined"] });
+    await gate(event("computer_key", { key: "alt+f4" }));
+    await gate(event("computer_key", { key: "alt+f4" }));
+    assert.equal(asked.length, 2, "风险卡每次都要点头");
+    assert.equal(asked[0]?.risk?.rule, "key");
+    assert.equal(asked[0]?.rememberable, undefined, "风险卡不摆勾选项——勾了也绕不过确认");
+  });
+
+  test("用户拒绝任意一次 → 清掉已记住的类，下一件同类重新问", async () => {
+    // 已记住沙箱内那一类；逸出件本来就有卡，用户在这张卡上拒绝
+    const { gate, asked, forgets } = computerGate({
+      mode: "manual",
+      remembered: ["confined"],
+      answers: [{ behavior: "deny" }],
+    });
+    assert.equal((await gate(event("sandbox_upload", { path: "a.txt" }))).block, true);
+    assert.equal(forgets.length, 1, "拒绝一次即清空记忆");
+    // 清掉之后，沙箱内同类动作必须重新弹卡
+    assert.deepEqual(await gate(event("computer_click", { x: 1, y: 1 })), {});
+    assert.equal(asked.length, 2);
+    assert.equal(asked[1]?.toolName, "computer_click");
+  });
+
+  test("撤销 / 急停：写工具直接拒，并把记忆清掉（重新授权后重新问）", async () => {
+    const { gate, asked, forgets, setState } = computerGate({
+      mode: "manual",
+      remembered: ["confined"],
+    });
+    setState("revoked");
+    const blocked = await gate(event("computer_click", { x: 1, y: 1 }));
+    assert.equal(blocked.block, true);
+    assert.equal(forgets.length, 1);
+    setState("none");
+    await gate(event("computer_click", { x: 2, y: 2 }));
+    assert.equal(asked.length, 1, "记忆没了，重新问");
+  });
+
+  test("会话卡（skip 档）不摆勾选项：它本来就是一次会话授权", async () => {
+    const { gate, asked } = computerGate({ mode: "skip", answers: [{ behavior: "allow", remember: true }] });
+    await gate(event("computer_click", { x: 1, y: 1 }));
+    assert.equal(asked[0]?.scope, "session");
+    assert.equal(asked[0]?.rememberable, undefined);
+  });
+
+  test("plan 档不摆勾选项（写件在这里直接拒）", async () => {
+    const { gate, asked } = computerGate({ mode: "plan" });
+    assert.equal((await gate(event("computer_click", { x: 1, y: 1 }))).block, true);
+    assert.deepEqual(asked, []);
   });
 });

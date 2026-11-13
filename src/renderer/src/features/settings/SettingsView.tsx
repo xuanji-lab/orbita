@@ -22,7 +22,7 @@ import type {
 } from "@shared/browser";
 import type { Workspace } from "@shared/workspace";
 import type { DoubaoVoiceConfig, StepfunVoiceConfig, VoiceFailure, DictationProvider, DictationSelection } from "@shared/voice";
-import type { ComputerUseProbeResult, EmergencyStopStatus, SandboxStatus, WslState } from "@shared/computer-use";
+import type { ComputerUseLeaseStatus, ComputerUseProbeResult, EmergencyStopStatus, SandboxStatus, WslState } from "@shared/computer-use";
 import { COMPUTER_USE_BROWSER_CHOICES, type ComputerUseBrowser } from "@shared/computer-use";
 import { DICTATION_PROVIDERS } from "@shared/voice";
 import { CompactViz } from "./CompactViz";
@@ -1782,6 +1782,10 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
   const [actionError, setActionError] = useState<string | null>(null);
   /** 最近一次探测结果。提升到这里：「启动」要不要置灰看它（平台不对时主进程也会拒） */
   const [probeResult, setProbeResult] = useState<ComputerUseProbeResult | null>(null);
+  /** 桌面现在归谁（租约）；null = 空闲。每秒拉一次——「已 X 分 Y 秒」要跟着走 */
+  const [lease, setLease] = useState<ComputerUseLeaseStatus>(null);
+  /** 关闭沙箱的二次确认：误点就丢掉沙箱里的一切，所以只在第二段才真的调 stop() */
+  const [confirmStop, setConfirmStop] = useState(false);
 
   // onStatus 返回退订函数，正好作 effect 的清理；
   // 挂载时再拉一次当前值——沙盒是应用级的，离开设置页再回来时组件重挂载，
@@ -1791,6 +1795,34 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
     void api.computerUse.status().then(setStatus);
     return unsubscribe;
   }, []);
+
+  /**
+   * 沙箱归属：每秒问一次主进程（数据源是桌面租约本身，不另写一套状态）。
+   * 只有一秒一跳才让「已 X 分 Y 秒」是活的；页面切走时组件卸载，定时器随 effect 清掉。
+   * 失败静默（与状态推送同一条纪律：设置页不该因为一次读数失败弹红字）。
+   */
+  useEffect(() => {
+    let alive = true;
+    const pull = (): void => {
+      void api.computerUse
+        .leaseStatus()
+        .then((next) => {
+          if (alive) setLease(next);
+        })
+        .catch(() => undefined);
+    };
+    pull();
+    const timer = setInterval(pull, 1_000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, []);
+
+  // 状态一旦离开可关闭的那几档，第二段确认就没有意义了——收起它，免得下次停在「仍然关闭」上
+  useEffect(() => {
+    if (sandboxControl(status.state, pending).canStop !== true) setConfirmStop(false);
+  }, [status.state, pending]);
 
   const control = sandboxControl(status.state, pending);
   const visual = statusVisual(status.state, t);
@@ -1812,6 +1844,7 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
   const run = (action: "start" | "stop") => {
     setPending(action);
     setActionError(null);
+    setConfirmStop(false);
     const call = action === "start" ? api.computerUse.start() : api.computerUse.stop();
     void call
       .then((result) => {
@@ -1846,12 +1879,46 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
               <Icon name={visual.icon} size={14} spin={visual.spin} style={{ color: visual.tone }} />
               {visual.label}
             </span>
-            <PanelButton onClick={() => run("start")} disabled={!control.canStart || probeBlocksStart(probeResult)}>
-              <Icon name="play" size={13} /> {t.computerUse.start}
-            </PanelButton>
-            <PanelButton onClick={() => run("stop")} disabled={!control.canStop}>
-              <Icon name="square" size={13} /> {t.computerUse.stop}
-            </PanelButton>
+            {confirmStop ? (
+              /* 第二段：说清代价，再给一次「仍然关闭」。取消是第一序选项（不染 accent），
+                 破坏性动作才用 danger——与「清除浏览器数据」同一套行内确认。 */
+              <>
+                <span className="set-row-hint">{t.computerUse.stopConfirm}</span>
+                <PanelButton danger onClick={() => run("stop")}>
+                  <Icon name="square" size={13} /> {t.computerUse.stopConfirmAction}
+                </PanelButton>
+                <PanelButton onClick={() => setConfirmStop(false)}>{t.common.cancel}</PanelButton>
+              </>
+            ) : (
+              <>
+                <PanelButton onClick={() => run("start")} disabled={!control.canStart || probeBlocksStart(probeResult)}>
+                  <Icon name="play" size={13} /> {t.computerUse.start}
+                </PanelButton>
+                <PanelButton onClick={() => setConfirmStop(true)} disabled={!control.canStop}>
+                  <Icon name="square" size={13} /> {t.computerUse.stop}
+                </PanelButton>
+              </>
+            )}
+          </span>
+        </SettingRow>
+        {/* 沙箱归属：多会话时用户要知道现在是谁占着那块桌面（租约状态，每秒刷新）。
+            没人持有时说「空闲」；有主时说标题与已持有的时长——用户据此判断要不要等。 */}
+        <SettingRow name={t.computerUse.leaseRow} info={t.computerUse.leaseRowInfo}>
+          <span className="cu-state">
+            <Icon
+              name={lease === null ? "circle" : "monitor"}
+              size={14}
+              style={{ color: lease === null ? "var(--color-text-tertiary)" : "var(--color-accent)" }}
+            />
+            <span role="status">
+              {lease === null
+                ? t.computerUse.leaseIdle
+                : t.computerUse.leaseBusy(
+                    lease.title === "" ? t.computerUse.leaseUntitled : lease.title,
+                    Math.floor(lease.heldMs / 60_000),
+                    Math.floor(lease.heldMs / 1_000) % 60,
+                  )}
+            </span>
           </span>
         </SettingRow>
         {/* 生效时机常驻在行底：运行中点了「关」而沙箱还在联网，用户会以为坏了——

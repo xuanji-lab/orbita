@@ -18,6 +18,7 @@
  */
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { RequestBroker } from "./request-broker.ts";
+import { takeRememberedClass } from "./computer-remember.ts";
 import {
   COMPUTER_USE_DISPATCHED_HINT,
   COMPUTER_USE_SHOT_MAX_WIDTH,
@@ -104,8 +105,15 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
    * 不是换算后下发到 guest 的那份——回看的人要的是「它以为自己点了哪里、打了什么」。
    * 字段与顺序由 shared 的 computerUseAudit 一处定（sandbox_* 写件用的也是它）。
    */
-  const audit = (args: Record<string, unknown>, action: ComputerUseAudit["action"]): ComputerUseAudit =>
-    computerUseAudit(action, args);
+  const audit = (args: Record<string, unknown>, action: ComputerUseAudit["action"]): ComputerUseAudit => {
+    // 「这一类不再问」的审计注记：只有用户勾选并批准的那一次调用会被取到（一次性），
+    // 其余调用没有这个字段（不编造）。持久清单在 SessionMeta 里，这里进的是会话 JSONL。
+    const remembered = takeRememberedClass(sessionId);
+    return {
+      ...computerUseAudit(action, args),
+      ...(remembered === null ? {} : { rememberedClass: remembered }),
+    };
+  };
 
   /**
    * 截图的审计：在 audit 之上多两档归属信号（桥 0.12.0）——

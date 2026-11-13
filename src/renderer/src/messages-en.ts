@@ -1185,6 +1185,15 @@ export const en = {
     stoppingNote: "Wrapping up: up to 1–2 minutes. The sandbox is destroyed, its window closes by itself — no need to press Stop again.",
     start: "Start",
     stop: "Stop",
+    stopConfirm: "Stopping discards everything in the sandbox (downloaded files, sign-ins, running tasks). Stop it?",
+    stopConfirmAction: "Stop anyway",
+    leaseRow: "Desktop in use",
+    leaseRowInfo:
+      "The sandbox desktop is shared app-wide: only one session can drive it at a time (pixel clicks, typing, keys, scrolling). New actions wait for the session ahead of them, so this shows the session that actually holds the desktop right now.",
+    leaseIdle: "Idle",
+    leaseBusy: (title: string, minutes: number, seconds: number) =>
+      `In use by “${title}” (${minutes} min ${seconds} s)`,
+    leaseUntitled: "Untitled task",
     shotGroup: "Manual screenshot",
     shotRow: "Sandbox desktop",
     shotRowInfo: "Grabs a still of the sandbox desktop right now — only when you click, never on its own.",
@@ -2582,6 +2591,7 @@ export const en = {
     riskHint: "Inputs that match a guard rule stop before they run; you can cancel or allow.",
     allowRisk: "Run it anyway",
     cancelRisk: "Cancel",
+    rememberClass: "In this task, do not ask again for this kind of action",
   },
 
   carryover: {

@@ -47,6 +47,8 @@
  *   agent 进程 → computerUseRequest / computerUseResult（工具定义 → requestId 问答，薄包装）
  */
 
+import type { ComputerUseRememberedClass } from "./permission.ts";
+
 export const computerUseChannels = {
   /** 能力探测（全部只读）：Windows 版本、沙箱功能状态、可执行文件在不在。不就绪时结果里给手动开启指引 */
   computerUseProbe: "computer-use:probe",
@@ -69,9 +71,31 @@ export const computerUseChannels = {
    * 以为自己有保护。设置页每次挂载问一次。
    */
   computerUseEmergencyStopState: "computer-use:emergency-stop-state",
+  /**
+   * 设置页问「现在沙箱桌面被谁占着」。有主时给会话 id、标题与已持有毫秒数；
+   * 没人持有给 null。**观测只读**：它的真源是主进程那份桌面租约（lease.owner），
+   * 不另写一套状态——否则设置页与闸门会各说各的。
+   */
+  computerUseLeaseStatus: "computer-use:lease-status",
 } as const;
 
 export type ComputerUseChannel = (typeof computerUseChannels)[keyof typeof computerUseChannels];
+
+/**
+ * 桌面租约的观测回执（设置页「沙箱归属」一行）。
+ *
+ * `null` = 现在没人持有桌面（空闲）；否则是持有它的那条会话与**已经持有多久**。
+ * 毫秒数由主进程在回答那一刻现算（`now - since`），不是租约里存的字段——租约的
+ * `lastActive` 是 idle 线的起点，语义不同，不能拿来报「持有了多久」。
+ *
+ * `title` 读会话 meta；读不出（会话刚建 / 已删）时是空串，界面自己兜一句「未命名会话」。
+ */
+export type ComputerUseLeaseStatus = {
+  sessionId: string;
+  title: string;
+  /** 从 acquire 成功那一刻算起的毫秒数 */
+  heldMs: number;
+} | null;
 
 // ── 协议常量（宿主与 guest 桥共用的数字/路径，改动即破坏两端）──────────────
 
@@ -1312,6 +1336,12 @@ export interface ComputerUseAudit {
   userTypingAtCapture?: boolean;
   /** 截图专用：图里被涂黑的密码框数（0 = 没有密码框 / 清单过期没遮） */
   maskedRegions?: number;
+  /**
+   * 这一次调用正是用户勾选「本会话内，这类动作不再问」并批准的那一次（manual 档）。
+   * 只写在被批准的那一条结果上——它就是「记住了什么」的审计落点（SessionMeta 里另存
+   * 一份持久的类清单，供下一轮播种）。逸出件与破坏性确认永远不会带这个字段。
+   */
+  rememberedClass?: ComputerUseRememberedClass;
 }
 
 /**

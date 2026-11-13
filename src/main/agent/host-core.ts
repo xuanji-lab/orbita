@@ -21,7 +21,7 @@ import type { DocOutcome } from "../../shared/doc.ts";
 import type { TerminalToolOutcome } from "../../shared/terminal.ts";
 import type { ComputerUseToolOutcome } from "../../shared/computer-use.ts";
 import type { SlidesOutcome } from "../../shared/slides-export.ts";
-import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
+import type { PermissionAnswer, ComputerUseRememberedEntry, PermissionMode } from "../../shared/permission.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPreviewOutcome } from "../../shared/plugin.ts";
 import type { PluginBoardOutcome } from "../../shared/plugin-board.ts";
@@ -541,6 +541,14 @@ export class AgentHostCore {
    */
   setComputerUseGrant(sessionId: string, granted: boolean): void {
     this.child?.postMessage({ type: "setComputerUseGrant", sessionId, granted } satisfies AgentCommand);
+  }
+
+  /**
+   * 对齐 agent 账本里的「这类动作不再问」（急停 / 撤销时清空）。同 setComputerUseGrant：
+   * **不 ensure**——进程没起时下一轮开机从 meta 播种，那时盘上已经是空的了。
+   */
+  setComputerUseRemembered(sessionId: string, remembered: ComputerUseRememberedEntry[]): void {
+    this.child?.postMessage({ type: "setComputerUseRemembered", sessionId, remembered } satisfies AgentCommand);
   }
 
   /** 用户的审批回答。**不需要 ensure**：进程没了的话请求也早没了。 */

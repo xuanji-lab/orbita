@@ -8,6 +8,7 @@ import { ipcMain } from "electron";
 import { mainWindows } from "../window/main-windows.ts";
 import {
   computerUseChannels,
+  type ComputerUseLeaseStatus,
   type ComputerUseProbeResult,
   type ComputerUseScreenshotResult,
   type ComputerUseStartResult,
@@ -17,6 +18,7 @@ import {
 } from "../../shared/computer-use.ts";
 import type { SandboxController } from "./sandbox.ts";
 import type { EmergencyStopController } from "./emergency-stop.ts";
+import { desktopLeaseStatus, type ComputerUseLease } from "./lease.ts";
 
 /**
  * 停沙箱前的收尾钩子（可选）。PR3 用它把沙箱里的 Edge 先停掉：`cdp-stop` 只杀我们自己
@@ -35,6 +37,11 @@ export function registerComputerUseIpc(
    * 失败时如实显示「被占用」，不假装保护存在。
    */
   emergencyStop?: EmergencyStopController,
+  /**
+   * 桌面租约（optional：没有它时「归属」回空闲）。设置页的「正在被谁使用」读它，
+   * 不另写一套状态——真源是 dispatch 拿锁用的同一份租约。
+   */
+  lease?: ComputerUseLease,
 ): void {
   ipcMain.handle(computerUseChannels.computerUseProbe, (): Promise<ComputerUseProbeResult> => controller.probe());
   ipcMain.handle(computerUseChannels.computerUseStatusGet, (): SandboxStatus => controller.status());
@@ -59,6 +66,14 @@ export function registerComputerUseIpc(
         registered: false,
         error: "急停没有接线（主进程未注册热键）",
       },
+  );
+  /**
+   * 桌面现在归谁（设置页「沙箱归属」）。每次现算：租约会因 idle / 硬上限 / 沙箱关闭
+   * 在这里说话之前就已经无主，缓存一份就会让设置页继续显示一个已经结束的持有者。
+   */
+  ipcMain.handle(
+    computerUseChannels.computerUseLeaseStatus,
+    (): ComputerUseLeaseStatus => (lease === undefined ? null : desktopLeaseStatus(lease)),
   );
 }
 

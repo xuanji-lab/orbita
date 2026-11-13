@@ -44,11 +44,13 @@
 import {
   COMPUTER_USE_BROWSER_KEY_PREFIX,
   COMPUTER_USE_BROWSER_LEASE,
+  COMPUTER_USE_DESKTOP_KEY,
   COMPUTER_USE_LEASE,
   computerUseLeaseErrors,
   type ComputerUseLeaseAuditRecord,
   type ComputerUseLeaseKeyStats,
   type ComputerUseLeaseResult,
+  type ComputerUseLeaseStatus,
 } from "../../shared/computer-use.ts";
 
 /** 租约看到的时钟。测试注入一个推进用的假表；生产直接用 Date.now */
@@ -564,4 +566,22 @@ export async function runWithLease<T>(options: LeaseRunOptions<T>): Promise<T> {
   } finally {
     options.lease.renew(options.key, options.sessionId);
   }
+}
+
+/**
+ * 「桌面现在归谁」——设置页那一行的唯一数据源。
+ *
+ * 读的就是租约自己的持有者（`owner`），**不另写一套状态**：设置页与闸门看到的是同一份
+ * 事实。`heldMs` 现场按 `now - since` 算，而不是读 `lastActive`（那是 idle 线的起点，
+ * 每续期一次就变，报出来会是一个「刚被用过 0 秒」的假数）。
+ *
+ * 租约是**过期即无主**：idle 60s / 硬上限 15min 到点后 `owner` 返回 null，这里自然回到空闲。
+ */
+export function desktopLeaseStatus(
+  lease: ComputerUseLease,
+  now: number = Date.now(),
+): ComputerUseLeaseStatus {
+  const owner = lease.owner(COMPUTER_USE_DESKTOP_KEY);
+  if (owner === null) return null;
+  return { sessionId: owner.sessionId, title: owner.title, heldMs: Math.max(0, now - owner.since) };
 }

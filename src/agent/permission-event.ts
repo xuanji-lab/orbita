@@ -25,7 +25,7 @@ export type PermissionEvent = Extract<AgentEvent, { type: "permission" }>;
 export function permissionEvent(
   fields: { requestId: string } & Omit<PermissionEvent, "type" | "requestId">,
 ): PermissionEvent {
-  const { sessionId, requestId, toolName, input, scope, risk } = fields;
+  const { sessionId, requestId, toolName, input, scope, risk, rememberable } = fields;
   return {
     type: "permission",
     sessionId,
@@ -34,5 +34,6 @@ export function permissionEvent(
     input,
     ...(scope === undefined ? {} : { scope }),
     ...(risk === undefined ? {} : { risk }),
+    ...(rememberable === undefined ? {} : { rememberable }),
   };
 }

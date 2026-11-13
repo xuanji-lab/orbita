@@ -334,6 +334,55 @@ export function computerUseWriteTier(toolName: string): "confined" | "escaping" 
   return null;
 }
 
+/**
+ * 能在本会话内「记住不再问」的类（manual 档的审批卡勾选项）。
+ *
+ * **只有沙箱内那一档**：九件沙箱内写件（像素 / 网页 / UIA）的副作用都在一次性 VM 里，
+ * 用户勾一次「这类别再问」是同一个决定。逸出件（sandbox_upload / sandbox_download）
+ * 各自跨过沙箱边界，**永远逐次问**——它们没有可被记住的类名，`computerUseRememberableClass`
+ * 对它们返回 null（不是返回一个永远不会命中的类）。
+ *
+ * 这个类名是**数组**而不是单个字面量：以后若真有第二类可记住的动作，协议已经是列表形状，
+ * 会话里记住的是一组类。
+ */
+export const COMPUTER_USE_REMEMBERABLE_CLASSES = ["confined"] as const;
+export type ComputerUseRememberedClass = (typeof COMPUTER_USE_REMEMBERABLE_CLASSES)[number];
+
+/**
+ * 「这一件工具属于哪个可记住的类」；不属于任何一类返回 null。
+ * 读件、逸出件、非 computer use 工具一律 null——**闸门据此决定卡上要不要摆勾选项**。
+ */
+export function computerUseRememberableClass(toolName: string): ComputerUseRememberedClass | null {
+  return computerUseWriteTier(toolName) === "confined" ? "confined" : null;
+}
+
+/**
+ * 会话级「记住了」的一条记录：批准那一刻写进 SessionMeta（原子写），用户事后能查。
+ * `toolName` 是触发这次记住的那一件工具；`at` 是批准的时刻。
+ */
+export interface ComputerUseRememberedEntry {
+  class: ComputerUseRememberedClass;
+  toolName: string;
+  at: number;
+}
+
+/** 从任意值里认出合法的记录（meta 解析用：坏条目逐条丢，不坏整条会话）。会话里同一类只留最新一条。 */
+export function parseComputerUseRemembered(raw: unknown): ComputerUseRememberedEntry[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ComputerUseRememberedEntry[] = [];
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) continue;
+    const value = item as Record<string, unknown>;
+    const cls = value["class"];
+    const toolName = value["toolName"];
+    const at = value["at"];
+    if (typeof cls !== "string" || !(COMPUTER_USE_REMEMBERABLE_CLASSES as readonly string[]).includes(cls)) continue;
+    if (typeof toolName !== "string" || typeof at !== "number" || !Number.isFinite(at)) continue;
+    out.push({ class: cls as ComputerUseRememberedClass, toolName, at });
+  }
+  return out;
+}
+
 /** 工具组全体（读取 + 写入）：预算按这个口径计——截图也吃上下文，必须计入 */
 export function isComputerUseTool(toolName: string): boolean {
   return isComputerUseReadTool(toolName) || isComputerUseWriteTool(toolName);
@@ -435,7 +484,14 @@ export function decidePermission(mode: PermissionMode, toolName: string): Permis
   return { behavior: "ask" };
 }
 
-/** 用户对一次询问的回答。改写入参是刻意保留的能力（把 rm -rf 改成别的路径再放行）。 */
+/**
+ * 用户对一次询问的回答。改写入参是刻意保留的能力（把 rm -rf 改成别的路径再放行）。
+ *
+ * `remember: true` 只出现在 manual 档的普通审批卡上，且只对可记住的电脑使用写件有效
+ * （见 `COMPUTER_USE_REMEMBERABLE_CLASSES`）：用户**主动勾选并批准**之后，本会话内
+ * 同一类动作不再弹卡。它不改变 manual 档的默认语义——不勾就还是逐次问；逸出件与
+ * 破坏性动作的卡上根本不摆这个勾选项（闸门也不会采纳）。
+ */
 export type PermissionAnswer =
-  | { behavior: "allow"; input?: unknown }
+  | { behavior: "allow"; input?: unknown; remember?: true }
   | { behavior: "deny"; message?: string };

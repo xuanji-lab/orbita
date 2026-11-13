@@ -10,7 +10,7 @@
  * 事后再补这个参数意味着每一处状态读写都要回头改。
  */
 import type { SessionPhase, ThinkingLevel as PiThinkingLevel, TranscriptProgress } from "@earendil-works/pi-protocol";
-import type { PermissionAnswer, PermissionMode } from "./permission.ts";
+import type { ComputerUseRememberedEntry, PermissionAnswer, PermissionMode } from "./permission.ts";
 import type { ThinkingLevel } from "./thinking.ts";
 import type { McpServer, McpStatus, McpStatusSnapshot } from "./mcp.ts";
 import type { ModelDecl } from "./provider.ts";
@@ -976,6 +976,12 @@ export type AgentCommand =
        */
       computerUseGrantedAt?: number | null;
       /**
+       * 本会话在 manual 档下记住的「这类动作不再问」（SessionMeta.computerUseRemembered）。
+       * 与授权同一套：**主进程每轮从 meta 装配**，agent 只在首次见到这条会话时播种；
+       * 轮中的记住 / 清除以 agent 内存账本为准。缺席 = 一类都没记住。
+       */
+      computerUseRemembered?: ComputerUseRememberedEntry[];
+      /**
        * 记忆系统的轮前召回开关。用户开轮时主进程恒带 true（记忆系统 2026-11-06 转正）——召回对根会话与子会话都生效
        * （子会话读不写，写入门禁在主进程的轮后路径）。缺席 = runtime 不问记忆。
        */
@@ -1115,6 +1121,8 @@ export type AgentCommand =
        * meta 读覆盖）。
        */
       computerUseGrantedAt?: number | null;
+      /** 本会话记住的「这类不再问」，语义同 submit */
+      computerUseRemembered?: ComputerUseRememberedEntry[];
     }
   | {
       /**
@@ -1185,6 +1193,8 @@ export type AgentCommand =
        * meta 读覆盖）。
        */
       computerUseGrantedAt?: number | null;
+      /** 本会话记住的「这类不再问」，语义同 submit */
+      computerUseRemembered?: ComputerUseRememberedEntry[];
       /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
       planFirst?: boolean;
       /** 插件工具的注册开关，语义同 submit */
@@ -1312,6 +1322,12 @@ export type AgentCommand =
    * 之后对齐 agent 账本）。**当前轮立即生效**：闸门每次调用现场读账本。
    */
   | { type: "setComputerUseGrant"; sessionId: string; granted: boolean }
+  /**
+   * 对齐本会话「这类不再问」的清单（主进程在 meta 上改完之后推给 agent）。
+   * **只有清空一个方向需要它**：记住是闸门自己的决定（先改账本、再发事件回主进程）；
+   * 撤销 / 急停时主进程直接落 meta，同时把这句推过来，避免会话空着时账本留着旧记忆。
+   */
+  | { type: "setComputerUseRemembered"; sessionId: string; remembered: ComputerUseRememberedEntry[] }
   /**
    * 会话内换模型（C-4）。provider 是主进程装配好的完整载荷（create 同款）。
    * **对正在跑的轮无效**：pi 在轮启动时快照模型，当前轮用旧模型跑完，
@@ -1794,6 +1810,12 @@ export type AgentEvent =
        * 盲点「允许」。命中不是拒绝：用户点头后照常执行。
        */
       risk?: ComputerUseRisk;
+      /**
+       * 这张卡上要不要摆「本会话内，这类动作不再问」的勾选项（manual 档的沙箱内写件）。
+       * **由闸门决定，不由 renderer 猜**：逸出件、破坏性确认（risk 非空）、已记住的类
+       * 都不摆——勾了也不会被采纳，摆出来就是骗人。
+       */
+      rememberable?: true;
     }
   /**
    * 回合级失败的标记（如重试耗尽）：true = 这一轮没跑成，renderer 把文案标注进
@@ -1806,6 +1828,16 @@ export type AgentEvent =
    * `at` = 允许的时刻，null = 撤销。renderer 用它更新会话头的授权标识。
    */
   | { type: "computerUseGrant"; sessionId: string; granted: boolean; at: number | null }
+  /**
+   * 「本会话内，这类动作不再问」的变更（闸门是唯一知道用户勾了什么的那一层）。
+   * 主进程据此落 meta（下一轮开机的种子）；`remembered` 是变更后的全量清单，
+   * **空数组 = 清空**（用户拒绝 / 撤销 / 急停）。事件也要广播，其它视图无需再读盘。
+   */
+  | {
+      type: "computerUseRemembered";
+      sessionId: string;
+      remembered: ComputerUseRememberedEntry[];
+    }
   /**
    * 急停（`Control+Alt+Shift+Escape`）：主进程广播，不是 agent 进程发的（`skillsChanged`
    * 同款：主进程借同一条广播通道）。收到它就复位授权标识、给一条「已急停」提示。

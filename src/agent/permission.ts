@@ -13,10 +13,12 @@
 import {
   decidePermission,
   COMMAND_TIMEOUT_FLOOR_SECONDS,
+  computerUseRememberableClass,
   isComputerUseEscapingTool,
   isComputerUseTool,
   isComputerUseWriteTool,
   gatedCommandTimeout,
+  type ComputerUseRememberedClass,
   type PermissionAnswer,
   type PermissionMode,
 } from "../shared/permission.ts";
@@ -145,6 +147,12 @@ export interface ToolCallLike {
   scope?: "call" | "session";
   /** D1/D2/D3 命中的确认信息；卡面必须说清将要发生什么（shared/computer-guard.ts 产） */
   risk?: ComputerUseRisk;
+  /**
+   * 这张卡上要不要摆「本会话内，这类动作不再问」的勾选项。**闸门决定**：
+   * 只有 manual 档的沙箱内写件、且这一次没有破坏性风险、还没记住这一类时才为 true。
+   * 逸出件与破坏性确认永远不摆（勾了也不采纳，摆出来就是骗人）。
+   */
+  rememberable?: true;
 }
 
 /**
@@ -177,6 +185,21 @@ export interface ComputerUseGateHooks {
   abort: (message: string) => void;
   /** 时钟。缺省 Date.now；测试注入固定值，让 20 分钟边界可测（不 sleep 20 分钟） */
   now?: () => number;
+  /**
+   * 本会话已经记住的「这类不再问」的类（manual 档）。**可选**：不注入 = 没有任何
+   * 记忆，闸门行为与加这个功能之前一字不差（旧测试与未接线场景）。
+   */
+  rememberedClasses?: () => readonly ComputerUseRememberedClass[];
+  /**
+   * 用户勾选「本会话内，这类动作不再问」并批准了：把这一笔记进会话账本
+   * （runtime 写账 + 发 `computerUseRemembered` 事件让主进程落 meta）。
+   */
+  remember?: (cls: ComputerUseRememberedClass, toolName: string) => void;
+  /**
+   * 清掉本会话全部记忆：用户拒绝任意一次审批、撤销授权、急停或沙箱被关时调。
+   * 没注入 / 本来就没记住时是 no-op。
+   */
+  forgetRemembered?: () => void;
 }
 
 /** pi 的 tool_call 处理结果 */
@@ -432,6 +455,14 @@ export function createToolCallGate(
     /** 拒绝口径：撤销过的一律直接拒（不再弹卡），没授权过的按「用户没同意」 */
     const state = computer?.grantState() ?? "granted";
     /**
+     * 这一件工具能不能被「本会话内这类不再问」记住：只有沙箱内写件有类名，
+     * 逸出件与读件都是 null（见 shared/permission.ts 的 computerUseRememberableClass）。
+     * **逸出件永远逐次问**，它走不到下面任何一条「已记住」的捷径。
+     */
+    const rememberClass = computerUseRememberableClass(event.toolName);
+    const rememberedClasses = computer?.rememberedClasses?.() ?? [];
+    const alreadyRemembered = rememberClass !== null && rememberedClasses.includes(rememberClass);
+    /**
      * 这件工具能不能把宿主的东西带进 / 带出沙箱（shared/permission.ts 的分档）。
      * **逸出档不吃会话授权**：它每次都要当事人点头——「本次会话允许操作沙箱」不等于
      * 「允许把宿主机文件交出去」。manual 档它本来就逐次问（decidePermission 的 ask），
@@ -444,6 +475,9 @@ export function createToolCallGate(
     // 再给用户弹一张卡去点「允许」，撤销就只是换了个人点而已（急停的意义是停下，
     // 不是再问一次）。重新授权走会话头的授权入口（IPC），下一次调用就按 granted 走。
     if (computer !== undefined && isComputerUseWriteTool(event.toolName) && (state === "revoked" || state === "denied")) {
+      // 撤销 / 急停 / 拒绝过会话卡：记忆一并作废——撤销说的是「停下、别再自作主张」，
+      // 留着记忆会让重新授权后的同类动作静默放行。
+      computer.forgetRemembered?.();
       return {
         block: true,
         reason: state === "denied" ? COMPUTER_USE_DENIED_MESSAGE : COMPUTER_USE_REVOKED_MESSAGE,
@@ -466,6 +500,7 @@ export function createToolCallGate(
       const answer = await ask({ ...event, scope: "session", ...(risk === null ? {} : { risk }) });
       if (answer.behavior === "deny") {
         computer.deny();
+        computer.forgetRemembered?.();
         return { block: true, reason: COMPUTER_USE_DENIED_MESSAGE };
       }
       // session 卡上已经把这些风险写在正文里了（risk 随卡下发），允许即确认这一次
@@ -474,10 +509,30 @@ export function createToolCallGate(
     }
 
     if (decision.behavior === "ask") {
+      /**
+       * 已经记住的类不再问——**但破坏性动作除外**（risk 非空照旧弹确认卡）。
+       * 记忆只作用于「问不问」这一层，不绕过 D1/D2/D3，也不绕过预算。
+       */
+      if (alreadyRemembered && risk === null) return budgetRefusal() ?? allow();
+      // 勾选项只在真正能兑现的时候摆：manual 档的沙箱内写件、这一次没有破坏性风险、
+      // 这一类还没记住（已经记住就根本不该弹这张卡）。
+      const rememberable: true | null =
+        rememberClass !== null && risk === null && !alreadyRemembered && computer?.remember !== undefined
+          ? true
+          : null;
       // manual 档的逐次问：破坏性风险附在同一张卡上，不连弹两次
-      const answer = await ask({ ...event, ...(risk === null ? {} : { risk }) });
+      const answer = await ask({
+        ...event,
+        ...(risk === null ? {} : { risk }),
+        ...(rememberable === null ? {} : { rememberable }),
+      });
       if (answer.behavior === "deny") {
+        // 用户拒绝任意一次即清掉全部记忆：拒绝是比「这类别再问」更强的信号。
+        computer?.forgetRemembered?.();
         return { block: true, reason: answer.message ?? "Denied by the user." };
+      }
+      if (answer.remember === true && rememberable !== null && rememberClass !== null) {
+        computer?.remember?.(rememberClass, event.toolName);
       }
       if (answer.input !== undefined && typeof answer.input === "object" && answer.input !== null) {
         // pi 的约定：原地修改，后续 handler 与真正的执行都看到改后的值
@@ -495,6 +550,7 @@ export function createToolCallGate(
     if (escaping) {
       const answer = await ask({ ...event, scope: "call", ...(risk === null ? {} : { risk }) });
       if (answer.behavior === "deny") {
+        computer?.forgetRemembered?.();
         return { block: true, reason: answer.message ?? "Denied by the user." };
       }
       if (answer.input !== undefined && typeof answer.input === "object" && answer.input !== null) {
@@ -508,6 +564,7 @@ export function createToolCallGate(
     if (risk !== null) {
       const answer = await ask({ ...event, scope: "call", risk });
       if (answer.behavior === "deny") {
+        computer?.forgetRemembered?.();
         return { block: true, reason: answer.message ?? "Denied by the user." };
       }
       // 确认卡也能改入参（比如把 format d: 改成别的东西再放行）：与 manual 支同一套

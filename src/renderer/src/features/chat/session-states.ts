@@ -47,6 +47,11 @@ export interface PendingApproval {
   scope?: "call" | "session";
   /** D1/D2/D3 命中的确认信息：卡面必须说清「将要按 alt+f4」之类，不能只给一个允许按钮 */
   risk?: ComputerUseRisk;
+  /**
+   * 卡上摆不摆「本会话内，这类动作不再问」（manual 档的沙箱内写件才为 true）。
+   * **闸门决定**：逸出件、破坏性确认、已经记住的类都不摆。
+   */
+  rememberable?: true;
 }
 
 /**
@@ -357,6 +362,7 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
           input: event.input,
           ...(event.scope === undefined ? {} : { scope: event.scope }),
           ...(event.risk === undefined ? {} : { risk: event.risk }),
+          ...(event.rememberable === undefined ? {} : { rememberable: event.rememberable }),
         },
       ],
     }));

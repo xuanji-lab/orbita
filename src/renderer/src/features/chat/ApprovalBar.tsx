@@ -22,11 +22,17 @@ export function ApprovalBar(props: {
   const t = useT();
   const [edited, setEdited] = useState(() => stringify(props.approval.input));
   const [editing, setEditing] = useState(false);
+  /**
+   * 「本会话内，这类动作不再问」的勾选（manual 档的沙箱内写件）。**默认不勾**——
+   * manual 的语义就是每次问，记住是用户主动多走一步，不是默认替他把这个决定做掉。
+   */
+  const [remember, setRemember] = useState(false);
   const allowRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     setEdited(stringify(props.approval.input));
     setEditing(false);
+    setRemember(false);
     allowRef.current?.focus();
   }, [props.approval.requestId, props.approval.input]);
 
@@ -52,12 +58,14 @@ export function ApprovalBar(props: {
           : t.approval.riskRepeat(Number(risk.detail));
 
   const allow = () => {
-    if (!editing) return answer({ behavior: "allow" });
+    // remember 只在这张卡真的摆了勾选项时才会被带上（闸门也会再判一次能不能采纳）
+    const rememberFlag = props.approval.rememberable === true && remember ? { remember: true as const } : {};
+    if (!editing) return answer({ behavior: "allow", ...rememberFlag });
     try {
-      answer({ behavior: "allow", input: JSON.parse(edited) as unknown });
+      answer({ behavior: "allow", input: JSON.parse(edited) as unknown, ...rememberFlag });
     } catch {
       // 改坏了就按原样放行，总比卡住强；解析失败时用户还能自己改回来
-      answer({ behavior: "allow" });
+      answer({ behavior: "allow", ...rememberFlag });
     }
   };
 
@@ -129,6 +137,30 @@ export function ApprovalBar(props: {
         />
       ) : (
         <pre style={{ ...codeStyle, margin: 0, overflowX: "auto" }}>{edited}</pre>
+      )}
+
+      {/* 记住这一类：只在闸门说「能兑现」时出现（manual 档的沙箱内写件、无破坏性风险）。
+          逸出件与破坏性确认不摆——勾了也不会被采纳，摆出来就是骗人。 */}
+      {props.approval.rememberable === true && (
+        <label
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "var(--space-2)",
+            fontSize: "var(--font-size-sm)",
+            color: "var(--color-text-secondary)",
+            cursor: "pointer",
+            userSelect: "none",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={remember}
+            onChange={(event) => setRemember(event.target.checked)}
+            style={{ accentColor: "var(--color-accent)", width: 14, height: 14, margin: 0 }}
+          />
+          {t.approval.rememberClass}
+        </label>
       )}
 
       <div style={{ display: "flex", gap: "var(--space-2)" }}>

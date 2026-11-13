@@ -148,6 +148,19 @@ describe("parseSessionMeta", () => {
     strictEqual(parseSessionMeta({ ...valid, computerUseGrantedAt: "yesterday" })?.computerUseGrantedAt, null);
   });
 
+  it("「这类动作不再问」：合法条目透传，坏条目逐条丢，空了就不落键", () => {
+    const entry = { class: "confined", toolName: "computer_click", at: 1_700_000_000_000 };
+    deepStrictEqual(parseSessionMeta({ ...valid, computerUseRemembered: [entry] })?.computerUseRemembered, [entry]);
+    const bad = parseSessionMeta({
+      ...valid,
+      computerUseRemembered: [entry, { class: "escaping", toolName: "sandbox_upload", at: 1 }, { class: "confined" }, 7],
+    });
+    deepStrictEqual(bad?.computerUseRemembered, [entry], "逸出件永远不能被记住，坏条目逐条丢");
+    const empty = parseSessionMeta({ ...valid, computerUseRemembered: [] });
+    strictEqual(empty !== null && "computerUseRemembered" in empty, false, "空数组不落键");
+    strictEqual(parseSessionMeta({ ...valid, computerUseRemembered: "x" })?.computerUseRemembered, undefined);
+  });
+
   it("收尾记录与在做的遗留事项：好的留下，坏条目逐条丢，空了就缺席", () => {
     const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
     const item = { title: "修登录", turns: [1, 2], providerId: "p", modelId: "m", level: "high", tokens: zero, recordedCost: 0.1, unpricedTokens: zero };

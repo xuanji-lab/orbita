@@ -7,7 +7,7 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { createComputerUseLease, runWithLease, type LeaseClock, type LeaseEvent } from "./lease.ts";
+import { createComputerUseLease, desktopLeaseStatus, runWithLease, type LeaseClock, type LeaseEvent } from "./lease.ts";
 import {
   COMPUTER_USE_DESKTOP_KEY,
   COMPUTER_USE_LEASE,
@@ -559,5 +559,46 @@ describe("租约：接线层 runWithLease", () => {
     assert.equal(calls, 0);
     assert.equal(outcome.ok, false);
     if (!outcome.ok) assert.match(outcome.error, /整理发票/);
+  });
+});
+
+describe("桌面归属（设置页「正在被谁使用」）", () => {
+  test("没人持有 → null（空闲）", () => {
+    const { lease, clock } = setup();
+    assert.equal(desktopLeaseStatus(lease, clock.now()), null, "一把没用过的锁没有持有者可报");
+  });
+
+  test("有人持有时：返回会话 id、标题与从 acquire 算起的毫秒数", async () => {
+    const { lease, clock } = setup();
+    assert.deepEqual(await lease.acquire(DESKTOP, "A", "任务甲"), { ok: true });
+    clock.advance(35_000);
+    assert.deepEqual(desktopLeaseStatus(lease, clock.now()), {
+      sessionId: "A",
+      title: "任务甲",
+      heldMs: 35_000,
+    });
+  });
+
+  test("续期不算「重新持有」：heldMs 仍从最初 acquire 起算（不是 lastActive）", async () => {
+    const { lease, clock } = setup();
+    await lease.acquire(DESKTOP, "A", "任务甲");
+    clock.advance(40_000);
+    lease.renew(DESKTOP, "A");
+    clock.advance(10_000);
+    assert.equal(desktopLeaseStatus(lease, clock.now())?.heldMs, 50_000);
+  });
+
+  test("租约过期（idle 60s 到点）→ 回到 null，而不是报一个已经结束的持有者", async () => {
+    const { lease, clock } = setup();
+    await lease.acquire(DESKTOP, "A", "任务甲");
+    clock.advance(COMPUTER_USE_LEASE.idleMs);
+    assert.equal(lease.owner(DESKTOP), null);
+    assert.equal(desktopLeaseStatus(lease, clock.now()), null);
+  });
+
+  test("浏览器键的持有者不算桌面归属（桌面只看 desktop:exclusive）", async () => {
+    const { lease, clock } = setup();
+    await lease.acquire(browserKey("B"), "B", "任务乙");
+    assert.equal(desktopLeaseStatus(lease, clock.now()), null);
   });
 });
