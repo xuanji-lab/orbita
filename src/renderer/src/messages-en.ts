@@ -1185,7 +1185,7 @@ export const en = {
     stoppingNote: "Wrapping up: up to 1–2 minutes. The sandbox is destroyed, its window closes by itself — no need to press Stop again.",
     start: "Start",
     stop: "Stop",
-    stopConfirm: "Stopping discards everything in the sandbox (downloaded files, sign-ins, running tasks). Stop it?",
+    stopConfirm: "Close the sandbox?",
     stopConfirmAction: "Stop anyway",
     leaseRow: "Desktop in use",
     leaseRowInfo:
