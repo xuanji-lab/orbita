@@ -110,15 +110,19 @@ export function latexEditorExtensions(onUpdate: (update: { docChanged: boolean; 
         color: "var(--color-text-secondary)",
       },
       ".cm-cursor": { borderLeftColor: "var(--color-text-primary)" },
+      // 高亮底一律走中性底：main 之后没有 --color-accent-soft（2026-11-07 方向 N 把
+      // 「选中」从 accent 淡底改成中性墨洗，accent 只留给主操作）。三档共用 bg-* 后
+      // 层级靠叠加深浅：匹配括号 / 选区 = active（墨洗），搜索命中 = muted（块底），
+      // 选中的那一条再用 active 压深一档
       ".cm-matchingBracket": {
-        backgroundColor: "var(--color-accent-soft)",
+        backgroundColor: "var(--color-bg-active)",
         outline: "1px solid var(--color-border-strong)",
       },
       ".cm-selectionBackground, .cm-content ::selection": {
-        backgroundColor: "var(--color-accent-soft)",
+        backgroundColor: "var(--color-bg-active)",
       },
       ".cm-searchMatch": {
-        backgroundColor: "var(--color-accent-soft)",
+        backgroundColor: "var(--color-bg-muted)",
         outline: "1px solid var(--color-border-strong)",
       },
       ".cm-searchMatch.cm-searchMatch-selected": {

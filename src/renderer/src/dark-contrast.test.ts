@@ -33,8 +33,12 @@ const TOKENS = join(
 function themeBlock(theme: string): Map<string, string> {
   const css = readFileSync(join(TOKENS, "colors.css"), "utf8");
   // 选择器是成对的（:root[data-theme] 与 [data-theme-preview] 共用一个块），
-  // [^{]* 跨过逗号与第二个选择器再开块
-  const match = css.match(new RegExp(`:root\\[data-theme="${theme}"\\][^{]*\\{([\\s\\S]*?)\\}`));
+  // [^{]* 跨过逗号与第二个选择器再开块。浅色档没有 data-theme，是 `:root,\n[data-theme-preview="light"]`
+  const match = css.match(
+    theme === "light"
+      ? /:root,\s*\[data-theme-preview="light"\][^{]*\{([\s\S]*?)\n\}/
+      : new RegExp(`:root\\[data-theme="${theme}"\\][^{]*\\{([\\s\\S]*?)\\}`),
+  );
   assert.ok(match !== null, `colors.css 里找不到 ${theme} 的 token 块`);
   const body = match[1] ?? "";
   const vars = new Map<string, string>();
@@ -109,6 +113,41 @@ describe("暗色两档的对比度底线（井 = --color-bg-panel）", () => {
           pick("--color-text-secondary") > pick("--color-text-tertiary"),
         `${theme} 的文字档位次序被调平了`,
       );
+    });
+  }
+});
+
+/**
+ * 三级墨在它会落的每一种地上都过 4.5（2026-11-07 方向 N，三档含浅色）。
+ *
+ * 起因：旧三级墨在浅色白井上只有 3.20、在壳上 2.95，玄在卡面上 3.83，而它承载的恰恰是「等你」
+ * 「改了几个文件」「时间」「说明」这类关键信息；上面那组测试只查了暗档的井与壳，浅色与卡面 /
+ * muted 这两种地漏了。「地」= 井、壳、muted（成块的中性底：用户消息、行内代码、控件静止底）、
+ * 聊天卡面（--color-chat-card-bg）。
+ */
+describe("三级墨在井 / 壳 / muted / 卡面上都 ≥ 4.5（浅 / 黛 / 玄）", () => {
+  const GROUNDS = ["--color-bg-panel", "--color-bg-app", "--color-bg-muted", "--color-chat-card-bg"] as const;
+  for (const theme of ["light", "graphite", "black"] as const) {
+    it(`${theme}：--color-text-tertiary 在四种地上都 ≥ 4.5`, () => {
+      const vars = themeBlock(theme);
+      const ink = vars.get("--color-text-tertiary");
+      assert.ok(ink !== undefined && /^#[0-9a-f]{6}$/i.test(ink), `${theme} 的三级墨必须是实色 hex`);
+      for (const ground of GROUNDS) {
+        const bg = vars.get(ground);
+        assert.ok(bg !== undefined && /^#[0-9a-f]{6}$/i.test(bg), `${theme} 的 ${ground} 必须是实色 hex`);
+        const ratio = contrast(ink, bg);
+        assert.ok(ratio >= 4.5, `${theme}：三级墨 ${ink} 压 ${ground} ${bg} 只有 ${ratio.toFixed(2)}:1，低于 4.5`);
+      }
+    });
+    it(`${theme}：secondary 在壳上 ≥ 7、primary 在井上 ≥ 10（浅色补上暗档已有的两条）`, () => {
+      const vars = themeBlock(theme);
+      const secondary = vars.get("--color-text-secondary");
+      const primary = vars.get("--color-text-primary");
+      const shell = vars.get("--color-bg-app");
+      const well = vars.get("--color-bg-panel");
+      assert.ok(secondary !== undefined && primary !== undefined && shell !== undefined && well !== undefined);
+      assert.ok(contrast(secondary, shell) >= 7, `${theme}：壳上的 secondary ${secondary} 低于 7`);
+      assert.ok(contrast(primary, well) >= 10, `${theme}：井上的 primary ${primary} 低于 10`);
     });
   }
 });

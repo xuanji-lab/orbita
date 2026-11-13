@@ -6,10 +6,13 @@
  */
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createReadToolDefinition } from "@earendil-works/pi-coding-agent";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { promisify } from "node:util";
+import { createReadToolDefinition, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
   createPdfTools,
   PDF_IMAGE_HD_WIDTH,
@@ -89,6 +92,35 @@ function buildPdf(pageTexts: readonly string[], encrypted = false): Buffer {
   return Buffer.from(chunks.join("\n"), "latin1");
 }
 
+/**
+ * 带一张 1×1 图像 XObject 的单页 PDF。**纯文字页渲染不会碰画布工厂**——pdf.js 只有画图像 / 软蒙版 /
+ * 透明组时才走 canvasFactory.create；要复现 utility 进程里的 createElement 报错，页里必须有图
+ * （真实论文页几乎都有 logo / 插图）。
+ */
+function buildImagePdf(): Buffer {
+  const content = "q 100 0 0 100 72 600 cm /Im0 Do Q\nBT /F1 12 Tf 1 0 0 1 72 560 Tm (image page) Tj ET";
+  const objects: string[] = [];
+  objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
+  objects[2] = "<< /Type /Pages /Kids [ 4 0 R ] /Count 1 >>";
+  objects[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
+  objects[4] =
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> /XObject << /Im0 5 0 R >> >> /Contents 6 0 R >>";
+  objects[5] =
+    "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 3 >>\nstream\n\u00ff\u0000\u0000\nendstream";
+  objects[6] = `<< /Length ${content.length} >>\nstream\n${content}\nendstream`;
+  const chunks = ["%PDF-1.4"];
+  const offsets: number[] = [];
+  for (let num = 1; num < objects.length; num++) {
+    offsets[num] = Buffer.byteLength(chunks.join("\n"), "latin1");
+    chunks.push(`${num} 0 obj\n${objects[num]}\nendobj`);
+  }
+  const xrefStart = Buffer.byteLength(chunks.join("\n"), "latin1");
+  let xref = `xref\n0 ${objects.length}\n0000000000 65535 f \n`;
+  for (let num = 1; num < objects.length; num++) xref += `${String(offsets[num]).padStart(10, "0")} 00000 n \n`;
+  chunks.push(xref, `trailer\n<< /Size ${objects.length} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`);
+  return Buffer.from(chunks.join("\n"), "latin1");
+}
+
 let dir: string;
 let tool: ReturnType<typeof createPdfTools>[number];
 
@@ -103,6 +135,7 @@ before(async () => {
       PAGE_BODY, PAGE_BODY, PAGE_BODY, PAGE_BODY, PAGE_BODY]),
   );
   await writeFile(join(dir, "scanned.pdf"), buildPdf(["", ""]));
+  await writeFile(join(dir, "with-image.pdf"), buildImagePdf());
   await writeFile(join(dir, "plain.txt"), "just text, not a pdf");
   // header 前有垃圾（邮件系统前置字节的真实形态）——规范允许 header 落在前 1024 字节内
   await writeFile(join(dir, "junk-prefix.pdf"), Buffer.concat([Buffer.from("JUNKJUNK"), buildPdf([PAGE_BODY, PAGE_BODY])]));
@@ -125,6 +158,51 @@ before(async () => {
 
 after(async () => {
   await rm(dir, { recursive: true, force: true });
+});
+
+/**
+ * agent 跑在 Electron utilityProcess 里：process.type === "utility"。pdf.js 的 isNodeJS 判定
+ * 排除了「electron 且 type 非 browser」，于是把它当浏览器、默认画布工厂走 DOMCanvasFactory →
+ * document.createElement → 页图渲染报「Cannot read properties of undefined (reading 'createElement')」。
+ * isNodeJS 是 pdf.js 模块加载时求值的常量，同进程里事后改不了——所以必须起**子进程**，
+ * 在 import 之前伪造 process.type / versions.electron，再跑 image_pages。
+ */
+describe("read_pdf 在 Electron utility 进程里渲染页图", () => {
+  const execFileAsync = promisify(execFile);
+
+  /** 子进程里跑一次带图页的 image_pages；fakeUtility 时在 import 之前伪造 utility 进程的两个标志 */
+  const renderInChild = async (fakeUtility: boolean): Promise<{ types?: string[]; error?: string }> => {
+    const toolsUrl = pathToFileURL(fileURLToPath(new URL("./pdf-tools.ts", import.meta.url))).href;
+    const script = `
+      if (${fakeUtility}) {
+        process.type = "utility";
+        Object.defineProperty(process.versions, "electron", { value: "1.0.0" });
+      }
+      const { createPdfTools } = await import(${JSON.stringify(toolsUrl)});
+      const [readPdf] = createPdfTools(${JSON.stringify(dir)});
+      try {
+        const result = await readPdf.execute("x", { path: "with-image.pdf", image_pages: "1", limit: 1 }, undefined, undefined, { model: { input: ["text", "image"] } });
+        console.log(JSON.stringify({ types: result.content.map((block) => block.type) }));
+      } catch (error) {
+        console.log(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+      }
+    `;
+    const { stdout } = await execFileAsync(process.execPath, ["--input-type=module", "-e", script], { timeout: 60_000 });
+    const line = stdout.trim().split("\n").filter((entry) => entry.startsWith("{")).pop() ?? "";
+    return JSON.parse(line) as { types?: string[]; error?: string };
+  };
+
+  test("伪造 process.type=utility + versions.electron：带图页的 image_pages 仍返回页图，不报 createElement", async () => {
+    const outcome = await renderInChild(true);
+    assert.equal(outcome.error, undefined, `渲染页图报错：${outcome.error}`);
+    assert.deepEqual(outcome.types, ["text", "image"]);
+  });
+
+  test("对照：普通 Node 进程里同一份带图 PDF 照常渲染（修复不改变非 utility 进程的行为）", async () => {
+    const outcome = await renderInChild(false);
+    assert.equal(outcome.error, undefined, `渲染页图报错：${outcome.error}`);
+    assert.deepEqual(outcome.types, ["text", "image"]);
+  });
 });
 
 const run = async (path: string, args: Record<string, unknown> = {}): Promise<string> => {
@@ -425,6 +503,9 @@ describe("cite_pdf", () => {
     assert.equal(c?.text, "lazy dog near the river bank every morning. The valley keeps its slow pace");
     assert.ok(text.includes(`[^${c?.id}] page 2`), text);
     assert.ok(text.startsWith("Verified 1 quote."), text);
+    // 结果文本明说只写行内标记、不补脚注定义 / 来源列表（模型模仿 miyo 的 Sources 会让标记点不开 PDF）
+    assert.ok(text.includes("inline only — do not add footnote definitions"), text);
+    assert.ok(text.includes(`[^${c?.id}]: …`), text);
   });
 
   test("编造的引文不发编号，回最近处；其余照常核验", async () => {
@@ -439,11 +520,51 @@ describe("cite_pdf", () => {
     assert.ok(text.includes("appears 3 times"), text);
   });
 
+  test("一条都没核验通过时不带标记用法提示", async () => {
+    const { text, citations } = await cite("three-pages.pdf", [
+      { text: "The quick brown fox jumps over the sleeping cat in the barn at noon" },
+    ]);
+    assert.equal(citations.length, 0);
+    assert.ok(!text.includes("inline only"), text);
+  });
+
   test("扫描件（无文本层）直说不能引", async () => {
     await assert.rejects(cite(join(dir, "scanned.pdf"), [{ text: "anything at all here" }]), /no text layer/);
   });
 
   test("没给 quotes 报错指路", async () => {
     await assert.rejects(cite(join(dir, "three-pages.pdf"), []), /requires "quotes"/);
+  });
+});
+
+/**
+ * 描述瘦身的守门（细则在内置插件 reading 的技能里）：触发词与指路必须在，总量不许回涨。
+ * 触发词是「模型愿不愿意主动调」的命根：read_pdf 要说「用它代替 read」，cite_pdf 要说「讲解依赖原文时用、给可点引用」。
+ */
+describe("PDF 工具的描述", () => {
+  const tools = createPdfTools(tmpdir(), { pdfCitations: true });
+  const byName = (name: string): ToolDefinition => tools.find((t) => t.name === name)!;
+
+  test("read_pdf：保留「代替 read」「图表索引 → image_pages」的触发词，并指路 reading 技能", () => {
+    const description = byName("read_pdf").description;
+    assert.match(description, /Use this instead of read for any \.pdf file/);
+    assert.match(description, /image_pages/);
+    assert.match(description, /`reading` skill/);
+  });
+
+  test("cite_pdf：保留「何时用 / 可点标记 / 不凭记忆引」，并指路 reading 技能", () => {
+    const description = byName("cite_pdf").description;
+    assert.match(description, /explain a PDF/);
+    assert.match(description, /original text/);
+    assert.match(description, /\[\^c4k2\]/);
+    assert.match(description, /never cite from memory/);
+    assert.match(description, /`reading` skill/);
+  });
+
+  test("两个工具描述合计 ≤1,200 字符，描述 + 参数 schema ≤3,000（瘦身前 1,396 / 3,518）", () => {
+    const description = tools.reduce((sum, tool) => sum + tool.description.length, 0);
+    const withSchema = tools.reduce((sum, tool) => sum + tool.description.length + JSON.stringify(tool.parameters).length, 0);
+    assert.equal(description <= 1200, true, `PDF 工具描述合计 ${description} 字符，超了——细则写进 reading 技能`);
+    assert.equal(withSchema <= 3000, true, `PDF 工具描述 + schema 合计 ${withSchema} 字符，超了`);
   });
 });

@@ -1,6 +1,12 @@
 :root {
+  /* 4px 刻度，加三个半档给紧凑控件：2 / 6 / 10 是芯片、行内间隙与图标旁白的实际用量
+     （迁移前裸写 81 / 95 / 38 处）。奇数像素不在刻度上：1px 留给发丝补偿，
+     其余算「没站齐」——design-tokens.test 按文件数着，只许减不许加。 */
+  --space-0-5: 2px;
   --space-1: 4px;
+  --space-1-5: 6px;
   --space-2: 8px;
+  --space-2-5: 10px;
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 20px;
@@ -16,9 +22,8 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 2px); /* every glass surface, all three layers */
   --radius-pill: 999px;
-  /* solid composer + user bubble use a literal 14px, not a scale step.
-     the glass composer is a glass card first, so it takes --radius-xl. */
-  --radius-composer: 14px;
+  /* the user bubble is the one literal off the scale. the composer is a glass
+     card first, so it takes --radius-xl like every other glass card (2026-08-25). */
   --radius-bubble: 14px;
 
   --control-height-xs: 24px;
@@ -40,16 +45,36 @@
   --titlebar-capsule-top: 9px; /* 胶囊上沿 = 25 − 32/2 */
   --titlebar-control: 28px;  /* 胶囊内的圆格（quiet-control） */
   --titlebar-field: 24px;    /* 胶囊内嵌的筛选框 / 选择 / 页签 */
-  --titlebar-icon: 16px;     /* 胶囊内的 lucide 图标 */
-  --toolbar-inset: 12px;     /* 左胶囊左缘（darwin 在渲染层覆写为红绿灯右侧 80px） */
+
+  /* z 轴：只有四个全局层，组件内部的叠放（1–9）就地写整数，不进 token。
+     10 及以上一律取这里的层——一个浮层该压过谁，先看它属于哪一层，不再自造数字。 */
+  --z-overlay: 20;   /* 窗格内的浮层：窄窗右栏覆盖层、文件树浮层 */
+  --z-float: 30;     /* 浮层之上的窗格级件：主槽浮卡宿主、右栏拖宽热区、面板内下拉 */
+  --z-popover: 40;   /* portal 出去的菜单 / 右键菜单 / 弹窗 / 引用工具条 */
+  --z-tooltip: 70;   /* 悬停提示与图片灯箱：永远在最上 */
 
   /* layout */
-  --sidebar-rail-width: 48px;
-  --content-max-width: 1000px;
-  --app-card-max-width: 1080px;
+  /* 正文列宽 900（≈ 62 个汉字 / 行，2026-11-07 用户在真实例里试定：680 太窄、1000 偏宽、840 再放一点）。
+     原值 1000 在 1440 窗口里是 71 字 / 行。2026-10-10 用户定过「agent 回复贴满整列」，仍然成立——
+     贴满的是**列**，列本身多宽由本值决定。 */
+  --content-max-width: 900px;
+  /* 血线（glyph hem）：内容列里一切字的左起点 = 列左缘 + 这么宽。它正是玻璃卡的
+     「12px 内边距 + 1px 发丝」——卡片里的字本来就落在这里，正文、过程行、输入框的字
+     向它看齐，读与写在同一根竖线上（2026-10-29 精装第一笔）。 */
+  --content-hem: calc(var(--space-3) + 1px);
   /* 用户气泡左侧留白：气泡从右往左伸，最宽到「内容列 - 这么宽」。按列宽比例走，
      窄窗口不至于只剩一条缝、宽窗口不至于空一大片。agent 回复不留右白，始终贴满整列
      （侧栏挤窄时它本来就贴边，一直贴边才统一——2026-10-10 用户裁决） */
   --message-gutter: clamp(32px, 12%, 120px); /* @kind spacing */
   --bubble-max-width: calc(100% - var(--message-gutter)); /* @kind spacing */
+  /* 索引边栏（方向 N，2026-11-07）：内容列左侧一条放「索引」的窄栏——对话里是时间、首页是状态组名、
+     设置里是节名。子午线在它右缘内 20px。88 = 放得下「进行中」+ 状态饼的最小宽（72 时字撞饼）。
+     内容列窄于 760px（右栏打开、窄窗）时收成 32：只留子午线，索引改落在内容上方或藏起 */
+  --gutter: 88px; /* @kind spacing */
+}
+
+/* 方向 N（2026-11-07）：面圆角只有一档 8，控件 6，圆。--radius-xl（原 10）收回到基准 8——
+   10 与 8 两档面圆角在同屏并存，肉眼分不出谁是谁，只让对齐变得不确定。纸面两档保持 10。 */
+:root:not([data-theme="copybook"], [data-theme="typescript"]) {
+  --radius-xl: var(--radius);
 }

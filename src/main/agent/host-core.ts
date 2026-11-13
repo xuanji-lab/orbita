@@ -10,15 +10,22 @@ import type {
   BuiltinProvider,
   ChannelSendOutcome,
   DelegateOutcome,
+  ModelCostsOutcome,
   ReadTaskOutcome,
 } from "../../shared/agent-ipc.ts";
 import type { ChannelDelivery } from "../../shared/channel.ts";
 import type { McpStatus } from "../../shared/mcp.ts";
+import type { AutomationToolOutcome } from "../../shared/automation.ts";
 import type { BrowserToolOutcome } from "../../shared/browser.ts";
+import type { DocOutcome } from "../../shared/doc.ts";
 import type { TerminalToolOutcome } from "../../shared/terminal.ts";
 import type { LatexRunOutcome } from "../../shared/latex.ts";
+import type { SlidesOutcome } from "../../shared/slides-export.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
+import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPreviewOutcome } from "../../shared/plugin.ts";
+import type { PluginBoardOutcome } from "../../shared/plugin-board.ts";
+import type { MemoryAgentOutcome, MemoryRecallOutcome } from "../../shared/memory.ts";
 
 /** host 对「子进程」的全部要求——Electron 的 UtilityProcess 结构上满足，测试用脚本假货顶上。 */
 export interface AgentChild {
@@ -103,10 +110,19 @@ export class AgentHostCore {
   /** 懒启动：第一次真正要用 agent 时才付进程启动的钱。 */
   private ensure(): Promise<void> {
     if (this.ready) return this.ready;
+    let child: AgentChild;
+    try {
+      child = this.forkRuntime();
+    } catch (error) {
+      // Windows 上 utilityProcess.fork 会同步抛 ENOTCONN（terminal/service.ts 同款老毛病）。
+      // 这里的关键是不把 rejected promise 存进 ready——存了它就永远返回同一个拒绝，
+      // agent 再也起不来，用户只能重启 Orbita。把错误交给这一次的调用方，ready 保持空，
+      // 下一次请求自然重新拉起。不做冷却重试：那要把 fork 与事件接线抽成两步改 ensure 的
+      // 结构，而「失败一次、下一次请求重试」已够用（ENOTCONN 偶发，代价只是一轮报错）。
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+    this.child = child;
     this.ready = new Promise<void>((resolve, reject) => {
-      const child = this.forkRuntime();
-      this.child = child;
-
       child.on("message", (message: AgentEvent) => {
         if (message.type === "ready") {
           resolve();
@@ -264,7 +280,7 @@ export class AgentHostCore {
    * 那时 runtime 还没起——裁本子不需要会话活着，只需要进程在。
    */
   async editPiBook(
-    command: Extract<AgentCommand, { type: "revertPiBook" | "undoPiBook" }>,
+    command: Extract<AgentCommand, { type: "revertPiBook" | "undoPiBook" | "movePiBook" }>,
   ): Promise<void> {
     await this.ensure();
     return new Promise<void>((resolve, reject) => {
@@ -564,6 +580,48 @@ export class AgentHostCore {
     } satisfies AgentCommand);
   }
 
+  /** 插件：install_plugin 的回执（立即回，不等用户）。同上：不 ensure、发完即回。 */
+  answerPluginInstall(requestId: string, outcome: PluginAgentInstallOutcome): void {
+    this.child?.postMessage({ type: "pluginInstallResult", requestId, ...outcome } satisfies AgentCommand);
+  }
+
+  /** 插件：preview_plugin 的回执。同上。 */
+  answerPluginPreview(requestId: string, outcome: PluginAgentPreviewOutcome): void {
+    this.child?.postMessage({ type: "pluginPreviewResult", requestId, ...outcome } satisfies AgentCommand);
+  }
+
+  /** 插件：list_plugins 的回执。同上。 */
+  answerPluginList(requestId: string, outcome: PluginAgentListOutcome): void {
+    this.child?.postMessage({ type: "pluginListResult", requestId, ...outcome } satisfies AgentCommand);
+  }
+
+  /** 插件：show_plugin_board 的回执（卡快照）。同上。 */
+  answerPluginBoard(requestId: string, outcome: PluginBoardOutcome): void {
+    this.child?.postMessage({ type: "pluginBoardResult", requestId, ...outcome } satisfies AgentCommand);
+  }
+
+  /**
+   * 记忆召回：memoryRecallRequest 的回执。同
+   * answerReadTask 的理由：不 ensure、发完即回——调用方（主进程的转发层）自己
+   * 兑超时，agent 侧另有一层硬超时兑底。
+   */
+  answerMemoryRecall(requestId: string, outcome: MemoryRecallOutcome): void {
+    this.child?.postMessage({
+      type: "memoryRecallResult",
+      requestId,
+      ...(outcome.ok ? { ok: true as const, hits: outcome.hits } : { ok: false as const, error: outcome.error }),
+    } satisfies AgentCommand);
+  }
+
+  /** 记忆工具：memoryToolRequest 的回执。同 answerMemoryRecall：不 ensure、发完即回。 */
+  answerMemoryTool(requestId: string, outcome: MemoryAgentOutcome): void {
+    this.child?.postMessage({
+      type: "memoryToolResult",
+      requestId,
+      ...(outcome.ok ? { ok: true as const, entries: outcome.entries } : { ok: false as const, error: outcome.error }),
+    } satisfies AgentCommand);
+  }
+
   /**
    * 子会话：父→子注入（Q2' 裁决）。**走 `post`，不 `ensure`**——调用方（requests.ts
    * 的 deliverToChild）只在目标 phase 不是 idle 时才发这条，进程没起说明状态已经
@@ -589,6 +647,16 @@ export class AgentHostCore {
     } satisfies AgentCommand);
   }
 
+  /** 演示文稿导出：slidesRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。 */
+  answerSlides(requestId: string, outcome: SlidesOutcome): void {
+    this.child?.postMessage({ type: "slidesResult", requestId, ...outcome } satisfies AgentCommand);
+  }
+
+  /** 文档导出：docRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。 */
+  answerDoc(requestId: string, outcome: DocOutcome): void {
+    this.child?.postMessage({ type: "docResult", requestId, ...outcome } satisfies AgentCommand);
+  }
+
   /** 终端：terminalRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。 */
   answerTerminal(requestId: string, outcome: TerminalToolOutcome): void {
     this.child?.postMessage({
@@ -609,6 +677,24 @@ export class AgentHostCore {
     } satisfies AgentCommand);
   }
 
+  /** 自动化：automationRequest 的回执（delegate 同款）：不 ensure、发完即回。 */
+  answerAutomation(requestId: string, outcome: AutomationToolOutcome): void {
+    this.child?.postMessage({
+      type: "automationResult",
+      requestId,
+      ...(outcome.ok
+        ? {
+            ok: true as const,
+            text: outcome.text,
+            ...(outcome.automation === undefined ? {} : { automation: outcome.automation }),
+            ...(outcome.automations === undefined ? {} : { automations: outcome.automations }),
+            // 「改权限」那一行的数据：漏了它，工具结果里就没有那一行（2026-11-06 验收时抓到：按字段拷贝丢了新字段）
+            ...(outcome.modeRow === undefined ? {} : { modeRow: outcome.modeRow }),
+          }
+        : { ok: false as const, error: outcome.error }),
+    } satisfies AgentCommand);
+  }
+
   /** 子会话：delegateRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。 */
   answerDelegate(requestId: string, outcome: DelegateOutcome): void {
     this.child?.postMessage({
@@ -617,6 +703,15 @@ export class AgentHostCore {
       ...(outcome.ok
         ? { ok: true as const, childId: outcome.childId, title: outcome.title, card: outcome.card }
         : { ok: false as const, error: outcome.error }),
+    } satisfies AgentCommand);
+  }
+
+  /** 派发参考：modelCostsRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。 */
+  answerModelCosts(requestId: string, outcome: ModelCostsOutcome): void {
+    this.child?.postMessage({
+      type: "modelCostsResult",
+      requestId,
+      ...(outcome.ok ? { ok: true as const, text: outcome.text } : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);
   }
 

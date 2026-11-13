@@ -8,6 +8,7 @@
  */
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import type { LatexIssue } from "@shared/latex";
 import {
   installCommand,
@@ -98,7 +99,7 @@ export function LatexProblems(props: {
                     title={t.latex.installTip(installCommand(packageName))}
                     onClick={() => props.onInstall(installCommand(packageName))}
                   >
-                    <Icon name="square-terminal" size={12} />
+                    <Icon name={FEATURE_ICON.terminal} size={12} />
                     {t.latex.installInTerminal}
                   </button>
                 )}

@@ -22,6 +22,7 @@ import {
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import type { AgentCommand, AgentEvent, ProviderSecrets } from "../shared/agent-ipc.ts";
+import type { MemoryRecallOutcome } from "../shared/memory.ts";
 import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
 import {
   registerAndResolveModel,
@@ -30,29 +31,31 @@ import {
 } from "./model-registration.ts";
 import { CATALOG_REFRESH_EVERY_MS, CatalogRefresher, createModelRuntime, refreshCatalogs } from "./model-catalog.ts";
 import { fetchTokenrhythmCatalog, tokenrhythmCachePath } from "./tokenrhythm-catalog.ts";
-import {
-  createToolCallGate,
-  describePermissionMode,
-  ENABLED_BUILTIN_TOOLS,
-  type PiExtensionApi,
-} from "./permission.ts";
-import { COMMAND_TIMEOUT_FLOOR_SECONDS } from "../shared/permission.ts";
+import { createToolCallGate, ENABLED_BUILTIN_TOOLS, type PiExtensionApi } from "./permission.ts";
 import { createShellPathResolver } from "./shell-path.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 import { forModel, preparePromptImages } from "./prompt-images.ts";
 import { attachmentBlocks, composePromptText, splitEchoBlocks } from "../shared/prompt-attachments.ts";
-import { QUOTE_GUIDELINE } from "../shared/quote.ts";
+import { buildRulesInventory } from "../shared/context-inventory.ts";
 import { abortCycle, killCycle, startCycle, type CycleSlot } from "./turn-cycle.ts";
-import { REPLY_LANGUAGE_GUIDELINE, adaptSystemPrompt } from "./prompt-narration.ts";
+import { adaptSystemPrompt } from "./prompt-narration.ts";
 import { ccBillingPatch } from "./cc-billing-patch.ts";
+import {
+  attachMemoryBlocks,
+  buildMemoryBlock,
+  MEMORY_ATTACH_ENTRY,
+  memoryAttachments,
+  type TurnMemoryAttach,
+} from "./memory-inject.ts";
 import { applyBillingStreamPatch } from "./cc-billing-stream.ts";
+import { applyCacheRetentionPatch } from "./cache-retention.ts";
 import { createTurnFailureTracker } from "./turn-failure.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
 import { GREETING_SYSTEM_PROMPT, greetingPrompt, parseGreetingReply } from "./greeting-check.ts";
 import { FOCUS_SUMMARY_SYSTEM_PROMPT, parseSummaryReply } from "./focus-summary.ts";
 import { planBranchCut } from "./branch-cut.ts";
 import { withOpencodeSession } from "./opencode-session.ts";
-import { revertPiBook, undoPiBook } from "./pi-book-edit.ts";
+import { movePiBook, revertPiBook, undoPiBook } from "./pi-book-edit.ts";
 import { TurnFileTracker } from "./file-tracker.ts";
 import {
   foldWebArtifacts,
@@ -63,20 +66,28 @@ import {
   type WebScanResult,
 } from "./web-artifacts.ts";
 import { injectUserContext } from "./user-context.ts";
-import { gitAttributionGuideline } from "./git-attribution.ts";
+import { joinSystemPrompt, orbitaSystemSegments, type PromptSegment } from "./system-prompt.ts";
+import { diffFingerprints, promptFingerprints, stabilityLogLine } from "./prompt-stability.ts";
 import {
   RETRY_BASE_DELAY_MS,
   RETRY_MAX_ATTEMPTS,
   retryVisibleToUi,
 } from "./retry-policy.ts";
-import { createChannelTools, describeChannelRole } from "./channel-tools.ts";
-import { describeDirectories } from "./directories-prompt.ts";
+import { AUTOMATION_TOOL_NAMES, createAutomationTools } from "./automation-tools.ts";
+import { createChannelTools } from "./channel-tools.ts";
 import { McpHub } from "./mcp.ts";
 import { createImageTools } from "./image-tools.ts";
+import { attachGoalLedger, type LedgerAttachCache } from "./goal-compaction.ts";
+import { createGoalTools } from "./goal-tools.ts";
+import { createPlanGate, createPlanTools, type PlanToolOptions } from "./plan-tools.ts";
 import { createDocxTools } from "./docx-tools.ts";
+import { createDocTools } from "./doc-tools.ts";
 import { createPdfTools } from "./pdf-tools.ts";
+import { createSlidesTools } from "./slides-tools.ts";
+import { createPluginTools, PLUGIN_TOOL_NAMES } from "./plugin-tools.ts";
 import { RequestBroker } from "./request-broker.ts";
-import { createStoreTools, storeToolsGuideline } from "./store-tools.ts";
+import { createStoreTools } from "./store-tools.ts";
+import { createMemoryTools, MEMORY_TOOL_NAMES } from "./memory-tools.ts";
 import { createTaskTools } from "./task-tools.ts";
 import { createBrowserTools } from "./browser-tools.ts";
 import { createTerminalTools, TERMINAL_TOOL_NAMES } from "./terminal-tools.ts";
@@ -87,7 +98,6 @@ import {
   composeIntentPrompt,
   initialRecallCard,
   INTENT_GATE_OFF,
-  INTENT_CONTEXT_GUIDELINE,
   stagesOfCard,
   type IntentContextFile,
   type IntentRecallTiming,
@@ -383,11 +393,15 @@ const FOCUS_SUMMARY_TIMEOUT_MS = 180_000;
  * 专注模式的收工小结（focus-summary.ts）：一次独立的 `completeSimple`，模型与密钥面
  * 由主进程装好（家务活模型，缺席时主进程已回退到上次使用的模型）。结果经
  * `focusSummarized` 回执；模型解不出、调用出错、回复读不懂都回 null 并带原因——
- * 界面上等着这张卡，失败要说出来。
+ * 界面上等着这张卡，失败要说出来。每条失败路径都在这里落一条 warn（requestId /
+ * 模型 / 原因），否则卡上只有一句笼统的话，事后无法归因。
  */
 async function summarizeFocus(command: Extract<AgentCommand, { type: "summarizeFocus" }>): Promise<void> {
-  const fail = (error: string): void => {
-    send({ type: "focusSummarized", requestId: command.requestId, bullets: null, error });
+  const fail = (reason: string): void => {
+    console.warn(
+      `[focus-summary] ${command.requestId} 失败（${command.provider.id}/${command.modelId}）：${reason}`,
+    );
+    send({ type: "focusSummarized", requestId: command.requestId, bullets: null, error: reason });
   };
   try {
     const runtime = await createModelRuntime();
@@ -421,6 +435,7 @@ async function summarizeFocus(command: Extract<AgentCommand, { type: "summarizeF
     }
     const bullets = parseSummaryReply(output);
     if (bullets === null) {
+      // 原文单独打一条（fail 那条只说“读不懂”，不给原文）；成功路径一条不落
       console.warn(`[focus-summary] ${model.id} 的回复读不懂，原文前 200 字：${JSON.stringify(output.slice(0, 200))}`);
       fail(`${model.id}'s reply couldn't be read`);
       return;
@@ -678,6 +693,11 @@ interface LedgerNote {
   /** 标题调用（C-3）的鉴权面——最近一次装配进来的 provider key 与自定义头 */
   apiKey: string;
   headers?: Record<string, string>;
+  /**
+   * 提示词稳定性指纹的上一轮基线（prompt-stability.ts）。null = 还没立过基线
+   * （首轮 / 进程重启后只立基线不报变化）。
+   */
+  promptPrints: Record<string, string> | null;
 }
 
 /**
@@ -690,7 +710,7 @@ const ledger = new Map<string, LedgerNote>();
 function ledgerNote(sessionId: string): LedgerNote {
   let note = ledger.get(sessionId);
   if (note === undefined) {
-    note = { mode: "plan", echoed: new Set(), titleInFlight: false, apiKey: "" };
+    note = { mode: "plan", echoed: new Set(), titleInFlight: false, apiKey: "", promptPrints: null };
     ledger.set(sessionId, note);
   }
   return note;
@@ -724,6 +744,8 @@ interface TurnParts {
   webWatch: WebArtifactWatch;
   /** 本轮的图片字节预算状态（OpenedTurn.budget 的透传） */
   budget: TurnImageBudget;
+  /** 本轮的记忆附件状态（OpenedTurn.memory 的透传） */
+  memory: TurnMemoryAttach;
   /** 意图召回的中止器（OpenedTurn.intentAbort 的透传）：停止 / 抢跑时拆 HTTP 流 */
   intentAbort: AbortController;
 }
@@ -765,30 +787,50 @@ const intentConfirmWaiter = new IntentConfirmWaiter(send);
 const settleIntentAsks = (sessionId: string): void => intentConfirmWaiter.settle(sessionId);
 
 /**
- * 每轮重讲的工具使用指引。bash 的 schema 暴露了可选 `timeout`（秒），模型会自作主张
- * 给慢命令带上 60 秒这种小值（2026-10-01 统计：60s ×128、30s ×27、10s ×12），
- * 把依赖安装 / 构建 / 测试这类正常慢命令拦腰砍掉——短命令不受影响，只要求慢命令
- * 别自己设短超时。
- *
- * 数字与 permission 层的兜底同源（`COMMAND_TIMEOUT_FLOOR_SECONDS`）：低于下限的会被抬
- * 上来，所以这段话只需讲清楚「别填小值」，不必再替模型算该填多少。
+ * 本轮计入权限说明与稳定性指纹的非内建工具名单（before_agent_start 的装配与
+ * notePromptStability 共用这一份真源）：MCP 工具 + 内置自定义工具 + 终端组 +
+ * 本会话实际注册的通道工具。
  */
-const TOOL_GUIDELINES =
-  "For commands that may take a while (installing dependencies, builds, tests), do not pass a timeout to bash/powershell: " +
-  `these are slow on Windows and a short timeout kills a normal slow command halfway; values under ${COMMAND_TIMEOUT_FLOOR_SECONDS} seconds are ignored anyway.`;
+function extraToolNames(
+  role: "root" | "child",
+  workspaceId: string | null,
+  memoryTools: boolean,
+  automationTools: boolean,
+  pluginTools: boolean,
+): string[] {
+  return [
+    ...mcpHub.toolsFor(workspaceId ?? "").map((tool) => tool.name),
+    "create_skill",
+    "add_mcp_server",
+    "read_task",
+    ...TERMINAL_TOOL_NAMES,
+    // LaTeX 编译：同样逐档判——plan 档下编译（会写 build/）被拒，manual 档下要问
+    ...LATEX_TOOL_NAMES,
+    ...(role === "root" ? ["delegate", "reply_subsession", "model_costs"] : ["report_to_parent"]),
+    ...(memoryTools ? MEMORY_TOOL_NAMES : []),
+    ...(automationTools ? AUTOMATION_TOOL_NAMES : []),
+    ...(pluginTools ? PLUGIN_TOOL_NAMES : []),
+  ];
+}
 
 /**
- * 运行中 shell 的可见性（2026-10 用户反馈）：长 bash 在界面上一行不动，像卡死。
- * 模型可以用 `expected_seconds` 告诉 UI「这条预计要跑多久」——**只影响界面**
- * （运行行显示「预计约 X」，预计超 10 秒的调用开始就展开看实时输出），不影响
- * 执行、不做硬性结束、也不进 shell。机制：pi 的 TypeBox 校验对未知字段放行
- * （0.84.3 实测），字段随入参原样流到渲染层，bash 的 execute 只解构
- * command/timeout、无视它——因此不需要 patch pi，也不需要在闸门里剔除。
+ * 提示词稳定性记账（prompt-stability.ts）：同一会话里指纹变了就往 stderr 打一行
+ * 归因日志（哪一段 / 工具名单变了）。前缀缓存对系统提示词逐字节敏感，真实数据里
+ * 又有大量无法归因的断点——这行日志就是查“谁动了提示词”的入口。
  */
-const EXPECTED_SECONDS_GUIDELINE =
-  "When calling bash/powershell with a command you expect to run longer than 10 seconds (tests, builds, installs, sleep, " +
-  "scanning large directories), you may add expected_seconds (a number of seconds, your estimate) to the arguments. " +
-  "It only drives the UI (progress hint and auto-expand) and does not affect execution or timeouts.";
+function notePromptStability(
+  sessionId: string,
+  segments: readonly PromptSegment[],
+  toolNames: readonly string[],
+): void {
+  const note = ledgerNote(sessionId);
+  const prints = promptFingerprints(segments, toolNames);
+  if (note.promptPrints !== null) {
+    const changed = diffFingerprints(note.promptPrints, prints);
+    if (changed.length > 0) console.error(`[prompt-stability] ${stabilityLogLine(sessionId, changed)}`);
+  }
+  note.promptPrints = prints;
+}
 
 /**
  * 向 UI 请示。**没有超时**：用户可能去泡杯咖啡再回来点。
@@ -865,6 +907,8 @@ interface OpenedTurn {
   webWatch: WebArtifactWatch;
   /** 本轮的图片字节预算状态（水位 + 附件引用），见 image-byte-budget.ts */
   budget: TurnImageBudget;
+  /** 本轮的记忆附件：本子读回的各轮块 + 本轮待认领的块，见 memory-inject.ts */
+  memory: TurnMemoryAttach;
   /** 意图召回的中止器：停止 / 抢跑 / 删会话时拆掉 /recall 的 HTTP 流（无意图时闲置） */
   intentAbort: AbortController;
 }
@@ -926,15 +970,22 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   }
 
   /**
-   * 子会话身份（2026-09-23）：related 里有 `relation === "parent"` 的一项 → 本会话
-   * 是被派出的子会话。决定注册哪些通道工具（createChannelTools）、讲哪段通道
-   * 提示词（describeChannelRole）——两处判定必须同源，不能分别猜。
+   * 子会话身份（2026-09-23）：决定注册哪些通道工具（createChannelTools）、讲哪段通道
+   * 提示词（describeChannelRole）——两处判定必须同源，不能分别猜（isChildSession）。
    */
-  const role: "root" | "child" = command.directories?.related?.some(
-    (entry) => entry.relation === "parent",
-  )
-    ? "child"
-    : "root";
+  const role: "root" | "child" = isChildSession(command) ? "child" : "root";
+  /**
+   * 记忆工具（memory_search / revise / retire）只给根会话、且记忆开着时注册——子会话读不写。
+   * 注册与提示词段（MEMORY_TOOLS_GUIDELINE）、召回块里的纠错提示同用这一个判定。
+   */
+  const memoryTools = "sessionMemory" in command && command.sessionMemory === true && role === "root";
+  /**
+   * 自动化工具：主进程只在这条会话不是自动化跑出来的时候带
+   * automationTools；这里再叠一道「只给根会话」。与记忆工具同一个装配方式，提示词名单里也同步。
+   */
+  const automationTools = "automationTools" in command && command.automationTools === true && role === "root";
+  // 插件工具：命令带 pluginTools 才注册 install_plugin / preview_plugin / list_plugins（子会话不装插件，只有根会话注册）
+  const pluginTools = command.pluginTools === true && role === "root";
 
   // 审批走 pi 官方的 `tool_call` 扩展钩子：block 即拒绝，原地改 input 即改写入参。
   // 内建工具默认全开，不需要我们自己装配。
@@ -947,6 +998,17 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     command.protectedPaths,
     command.cwd,
   );
+  // 计划（update_plan）的「停下来对齐」：闸门里 update_plan 判定要停，本轮其余工具调用就被拦下，
+  // 让 agent 回头用正文说话（plan-tools.ts 头注释）；下一轮开轮时复位
+  const planOptions: PlanToolOptions = {
+    getMode: currentMode,
+    planFirst: command.planFirst === true,
+    branch: () => sessionManager.getBranch(),
+    state: { stopping: false },
+  };
+  const planGate = createPlanGate(planOptions);
+  // 压缩后挂在摘要末尾的目标与改动账（goal-compaction.ts）：按压缩条目 id 缓存，一轮之内只算一次
+  const goalLedgerCache: LedgerAttachCache = new Map();
   // 文件快照跟踪：闸门**放行之后**才记 before（拒掉的调用不会执行，记了是假账；
   // ask 档等用户点了允许，读到的才是「这一批动手前」的内容）。prepare 阶段
   // pi 顺序跑钩子，同批并行调用的 before 互不踩。
@@ -966,6 +1028,16 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    * （用户旅行）下一轮自然换标，代价是那一轮历史前缀重算一次、缓存失效一回。
    */
   const userTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  /**
+   * 规则注入清单的原料（上下文面板「规则与说明」组）：services 建好后读一次，
+   * before_agent_start（首个 LLM 调用前）组装成 contextInventory 事件。空串段
+   * （如关掉的 Git 标识）不透传，segments 只报实际注入的。
+   */
+  let rulesSources: {
+    agentsFiles: { path: string; content: string }[];
+    skills: { name: string; description: string }[];
+    agentDir: string;
+  } | null = null;
   const services = await createAgentSessionServices({
     cwd: command.cwd,
     modelRuntime,
@@ -1004,6 +1076,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
           hidden: true,
           factory: (pi: PiExtensionApi) => {
             pi.on("tool_call", async (event) => {
+              const held = planGate(event);
+              if (held !== null) return held;
               const result = await gate(event);
               if (!result.block) await tracker.noteAllowed(event.toolCallId, event.toolName, event.input);
               return result;
@@ -1014,50 +1088,54 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
             // 基底先过 adaptSystemPrompt（2026-10-12）：替换 pi 写死的 concise 行
             // （92% 工具轮零正文的问题）+ 追加进度说明段；每轮都从 pi 的原版基底
             // 开始跑，幂等由该函数自己兑底。
-            pi.on("before_agent_start", (event) => ({
-              // 空串的段要滤掉（Git 标识关了就是空串），否则提示词末尾多一个空行
-              systemPrompt: [
-                adaptSystemPrompt(event.systemPrompt),
-                describePermissionMode(currentMode(), [
-                  ...mcpHub.toolsFor(command.workspaceId ?? "").map((tool) => tool.name),
-                  "create_skill",
-                  "add_mcp_server",
-                  "read_task",
-                  // 终端工具组（PR2）：不列的话模型不知道 manual 档下每次开终端 / 写命令
-                  // 都会停下来等它批准，plan 档下更是直接被拒
-                  ...TERMINAL_TOOL_NAMES,
-                  // LaTeX 编译：同样逐档判——plan 档下编译（会写 build/）被拒，manual 档下要问
-                  ...LATEX_TOOL_NAMES,
-                  // 本会话实际注册的通道工具名（同 customTools 的 role 判定，见下）
-                  ...(role === "root" ? ["delegate", "reply_subsession"] : ["report_to_parent"]),
-                ]),
-                // 开轮目录清单（cwd / 附加目录 / 会话工作台 / 父子互见）。同样逐轮重讲：
-                // 工作区挂新目录、换工作区，下一轮就生效。缺席（旧夹具）= 空串，被 filter 滤掉
-                describeDirectories(command.cwd, command.directories),
-                // 通道工具的使用说明（子会话 2026-09-23）：root/child 各讲各的一段
-                describeChannelRole(role),
-                // 会话的工作区归属随轮讲（旧静态文案不说归属，模型只能瞎猜 scope）：
-                // workspaceId 为 null = 不属于任何工作区；名字翻不出（旧夹具 / 工作区已删）= 说未知
-                storeToolsGuideline(
-                  command.workspaceId === null ? null : { name: command.workspaceName },
-                  command.cwd,
-                ),
-                TOOL_GUIDELINES,
-                EXPECTED_SECONDS_GUIDELINE,
+            pi.on("before_agent_start", (event) => {
+              planOptions.state.stopping = false;
+              // 段装配抽成了纯函数（./system-prompt.ts）：「派出 / 删除子会话前后整份
+              // 提示词逐字节相同」这类断言可以直接对着它测，指纹记账也吃同一份段名单。
+              // 开轮目录清单同样逐轮重讲：工作区挂新目录、换工作区，下一轮就生效。
+              // 父子会话行不进系统提示词（本 PR）：对方工作台由 delegate 回执与通道信封告知。
+              const extra = extraToolNames(role, command.workspaceId, memoryTools, automationTools, pluginTools);
+              const segments = orbitaSystemSegments({
+                piBase: adaptSystemPrompt(event.systemPrompt),
+                mode: currentMode(),
+                extraToolNames: extra,
+                role,
+                workspace: command.workspaceId === null ? null : { name: command.workspaceName },
+                cwd: command.cwd,
+                directories: command.directories,
+                gitAttribution: command.gitAttribution ?? true,
+                attributionLanguage: command.attributionLanguage,
                 // 意图系统的上下文附件说明（实验功能）：只在开轮带着意图载荷时讲——
                 // 讲了它、这轮却没有上下文文件，模型会去找一个不存在的东西
-                ...("intent" in command && command.intent !== undefined ? [INTENT_CONTEXT_GUIDELINE] : []),
-                // 编号引用的读法：用户消息开头的 <quoted_context index=…> 是什么、回复怎么对号。
-                // 不讲的话模型只能靠标签名猜（Proma 就是这样，2026-09-25 查证）
-                QUOTE_GUIDELINE,
-                // 缺席 = 开启，与设置契约同一口径；同样逐轮重讲，改设置下一轮即生效
-                gitAttributionGuideline(command.gitAttribution ?? true, command.attributionLanguage ?? "en"),
-                // 回复语言放最末一段（离对话最近、权重最高），见 prompt-narration.ts
-                REPLY_LANGUAGE_GUIDELINE,
-              ]
-                .filter((part) => part !== "")
-                .join("\n\n"),
-            }));
+                intentGuideline: "intent" in command && command.intent !== undefined,
+                memoryToolsGuideline: memoryTools,
+                longTaskAutomationGuideline: automationTools,
+              });
+              notePromptStability(command.sessionId, segments, [...ENABLED_BUILTIN_TOOLS, ...extra]);
+              // 上下文面板的「规则与说明」组：每轮推一次最新清单。pi 基底单独计（它的估算
+              // 含规则文件与技能索引），不进 segments，免得加重。推送失败不影响对话
+              if (rulesSources !== null) {
+                try {
+                  send({
+                    type: "contextInventory",
+                    sessionId: command.sessionId,
+                    inventory: buildRulesInventory({
+                      agentsFiles: rulesSources.agentsFiles,
+                      skills: rulesSources.skills,
+                      basePrompt: event.systemPrompt,
+                      segments: segments
+                        .filter((segment) => segment.name !== "pi-base")
+                        .map((segment) => ({ id: segment.name, text: segment.text })),
+                      agentDir: rulesSources.agentDir,
+                    }),
+                  });
+                } catch (cause) {
+                  console.error("[context-inventory] 注入清单推送失败", cause);
+                }
+              }
+              // 空串的段要滤掉（Git 标识关了就是空串），否则提示词末尾多一个空行
+              return { systemPrompt: joinSystemPrompt(segments) };
+            });
           },
         },
         {
@@ -1108,6 +1186,49 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
           },
         },
         {
+          // 压缩后目标与改动账原样保留（goal-compaction.ts）：摘要由模型改写，账不能。
+          // wire-only 挂在压缩摘要消息末尾；不放系统提示词（会打断缓存），理由见该文件头注释
+          name: "orbita-goal-ledger",
+          hidden: true,
+          factory: (pi: PiExtensionApi) => {
+            pi.on("context", (event) => {
+              try {
+                const messages = attachGoalLedger(
+                  event.messages,
+                  () => sessionManager.getBranch(),
+                  goalLedgerCache,
+                  (text) => console.error(`[goal-ledger] 压缩摘要后挂账：${text === null ? "账是空的，不挂" : `${text.length} 字`}`),
+                );
+                return messages === null ? undefined : { messages };
+              } catch (cause) {
+                // fail-open：账是附带的，挂载出错本轮按原样发送
+                console.error("[goal-ledger] 挂载失败，本轮请求按原样发送", cause);
+                return undefined;
+              }
+            });
+          },
+        },
+        {
+          // 记忆附件（memory-inject.ts）：召回块不进用户原话，作为独立 text 块在发往模型前
+          // 挂回它所属的那条用户消息（wire-only）；首次认领时落一条 custom entry 定格，
+          // 之后每轮逐字节重放——前缀缓存不断。无附件的会话这里是空操作
+          name: "orbita-memory-attach",
+          hidden: true,
+          factory: (pi: PiExtensionApi) => {
+            pi.on("context", (event) => {
+              try {
+                const out = attachMemoryBlocks(event.messages, memory);
+                if (out.record !== null) pi.appendEntry(MEMORY_ATTACH_ENTRY, out.record);
+                return out.messages === null ? undefined : { messages: out.messages };
+              } catch (cause) {
+                // fail-open：记忆是易耗品，挂载出错本轮按原样发送
+                console.error("[memory] 记忆附件挂载失败，本轮请求按原样发送", cause);
+                return undefined;
+              }
+            });
+          },
+        },
+        {
           // 用户情境（user-context.ts）：发往模型的每条用户消息前面附一段发送时间 / 时区，
           // wire-only（pi 本子与 orbita 转录不落）。与 image-budget 同一个 `context` 事件，
           // 两者改的东西不相交（它动图片块、我们前插文本块），注册先后无所谓
@@ -1137,6 +1258,23 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   services.settingsManager.applyOverrides({
     retry: { maxRetries: RETRY_MAX_ATTEMPTS, baseDelayMs: RETRY_BASE_DELAY_MS },
   });
+  // 规则清单原料：resourceLoader 在 services 创建时已 reload，这里读一次快照。
+  // 读失败只记日志——清单推不出去面板退「未知」，不该拦对话
+  try {
+    rulesSources = {
+      agentsFiles: services.resourceLoader.getAgentsFiles().agentsFiles.map((file) => ({
+        path: file.path,
+        content: file.content,
+      })),
+      skills: services.resourceLoader.getSkills().skills.map((skill) => ({
+        name: skill.name,
+        description: skill.description,
+      })),
+      agentDir: services.agentDir,
+    };
+  } catch (cause) {
+    console.error("[context-inventory] 规则清单原料读取失败", cause);
+  }
   /**
    * bash 路径钉一次（A2）。pi 每轮建会话时都会读 `shellPath`；空着它就在每次 exec 里
    * 重跑一套查找（Git 不在默认安装位置的机器上那一步是 50~85ms 的同步 `where`）。
@@ -1226,6 +1364,10 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     pendingRefs: new Map(),
     protectedFloor: Number.MAX_SAFE_INTEGER,
   };
+  // 记忆附件：各轮召回块从本子（当前叶子路径）读回，
+  // 本轮的块在 echoAndPrompt 召回后放进 pending，首个 LLM 调用时认领落本。
+  // 定义在 extensionFactories 之后是安全的（同 budget 的说明）
+  const memory: TurnMemoryAttach = { attached: memoryAttachments(sessionManager.getBranch()), pending: null };
   // 意图召回的中止器：开轮即建，停止 / 抢跑时由 startTurn 的 abort 回调触发
   const intentAbort = new AbortController();
   /**
@@ -1251,9 +1393,33 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     ...createDocxTools(command.cwd),
     // show_image 同样直读展示（./image-tools.ts）：模型「把图给用户看」的显式动作
     ...createImageTools(command.cwd),
+    // update_plan（./plan-tools.ts）：agent 写下计划、做一步勾一步；计划就在转录里，不另存
+    ...createPlanTools(planOptions),
+    // update_goal（./goal-tools.ts）：agent 替用户记下会话级目标；目标就在转录里，不另存
+    ...createGoalTools({ branch: () => sessionManager.getBranch() }),
     ...createStoreTools(requestBroker, command.sessionId),
+    ...(pluginTools ? createPluginTools(requestBroker, command.sessionId, currentMode) : []),
     ...createTaskTools(requestBroker, command.sessionId),
     ...createBrowserTools(requestBroker, command.sessionId),
+    // 演示文稿（./slides-tools.ts）：slides_create / read / write / edit / insert_image / export。
+    // 文件读写在本进程直做（路径限工作区 + 附加目录），只有导出过 broker 找主进程
+    ...createSlidesTools(requestBroker, command.sessionId, {
+      cwd: command.cwd,
+      writeRoots: [command.cwd, ...(command.directories?.attached ?? [])],
+      workspaceId: command.workspaceId,
+      imageReadRoots: imageReadRoots(command),
+      // 用户附的图：预算账里记着 hash → 附件副本路径（本轮的在 pendingRefs，旧轮的在 refs）；最近的在前
+      attachedImages: () => [...new Set([...budget.refs.values(), ...budget.pendingRefs.values()])].reverse(),
+    }),
+    // 文档（./doc-tools.ts）：doc_open / doc_insert_image / doc_export。文件读写在本进程直做（路径限工作区 + 附加目录），
+    // 只有导出过 broker 找主进程（PDF 要隐藏窗口）
+    ...createDocTools(requestBroker, command.sessionId, {
+      cwd: command.cwd,
+      writeRoots: [command.cwd, ...(command.directories?.attached ?? [])],
+      workspaceId: command.workspaceId,
+      imageReadRoots: imageReadRoots(command),
+      mode: currentMode,
+    }),
     // agent 的终端工具组（PR2）：开可见终端、写命令、读输出。
     // 本分支只有用户发起这一种来源（没有定时任务 / 委派 / 外部桥），所以这里不按来源
     // 拦；将来自动化入口出现时，在这里按来源决定要不要注册——Proma 的判据是
@@ -1267,6 +1433,14 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     // （main/latex/），这里只翻译参数；目录授权在主进程按会话名单硬校验
     ...createLatexTools(requestBroker, command.sessionId, { cwd: command.cwd }),
     ...createChannelTools(requestBroker, command.sessionId, role),
+    ...(memoryTools
+      ? createMemoryTools(requestBroker, command.sessionId, {
+          scope: { workspaceId: command.workspaceId, cwd: command.cwd },
+          // 轮号在 echoAndPrompt 算好写进 memory.turn；没开轮（压缩）时不会调到工具
+          turn: () => memory.turn ?? 1,
+        })
+      : []),
+    ...(automationTools ? createAutomationTools(requestBroker, command.sessionId, currentMode) : []),
   ];
   const { session } = await createAgentSessionFromServices({
     services,
@@ -1282,6 +1456,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   // 订阅车道改写的落点补全（cc-billing-stream.ts）：压缩 / 分支摘要绕过主循环的
   // before_provider_request，包一层 streamFunction 把改写给到每一条出站请求
   applyBillingStreamPatch(session);
+  // Claude 官方直连的主会话用 1 小时提示缓存，子会话与网关保持 pi 默认（cache-retention.ts）
+  applyCacheRetentionPatch(session, role);
   // 开轮即推一次真值：模型可能把我们传的档 clamp 到就近支持档（静默），
   // 芯片必须显示 clamp 后的事实而不是用户点的意图。每轮都推也兼容
   // 「换模型后支持集变了」——芯片每次开轮自我纠真。
@@ -1469,7 +1645,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     piSessionFile: sessionManager.getSessionFile() ?? null,
   });
 
-  return { session, adapter, unsubscribe, turn, tracker, webWatch, budget, intentAbort };
+  return { session, adapter, unsubscribe, turn, tracker, webWatch, budget, memory, intentAbort };
 }
 
 function openOrCreate(command: OpenInput): SessionManager {
@@ -1517,6 +1693,7 @@ function startTurn(command: OpenInput, run: (opened: OpenedTurn) => Promise<unkn
         tracker: opened.tracker,
         webWatch: opened.webWatch,
         budget: opened.budget,
+        memory: opened.memory,
         intentAbort: opened.intentAbort,
       };
     },
@@ -1529,6 +1706,7 @@ function startTurn(command: OpenInput, run: (opened: OpenedTurn) => Promise<unkn
         tracker: parts.tracker,
         webWatch: parts.webWatch,
         budget: parts.budget,
+        memory: parts.memory,
         intentAbort: parts.intentAbort,
       }),
     // settled 一定晚于 dispose 与出表（turn-cycle 的收尾序）——renderer 收到
@@ -1579,6 +1757,19 @@ function undoPiBookCommand(command: Extract<AgentCommand, { type: "undoPiBook" }
   const manager = SessionManager.open(command.sourcePiSessionFile, undefined, command.cwd);
   undoPiBook(manager, command.notice);
   send({ type: "piBookEdited", sessionId: command.sessionId, edit: "undo" });
+}
+
+/**
+ * 会话迁移的 pi 侧一刀：追加「工作目录换了」的通知（进上下文）。同样要求会话不在跑——
+ * 主进程按 phase 先筛过一道，这里是信任边界的再校验。command.cwd 是新目录。
+ */
+function movePiBookCommand(command: Extract<AgentCommand, { type: "movePiBook" }>): void {
+  if (running.has(command.sessionId)) {
+    throw new Error("the session is still running — stop it before moving");
+  }
+  const manager = SessionManager.open(command.sourcePiSessionFile, undefined, command.cwd);
+  movePiBook(manager, command.notice);
+  send({ type: "piBookEdited", sessionId: command.sessionId, edit: "move" });
 }
 
 /**
@@ -1795,6 +1986,61 @@ function flushBackfill(session: AgentSession, texts: readonly string[] | undefin
   }
 }
 
+/**
+ * 拷图进文档 / 演示文稿时，工作区与附加目录之外额外放行的读根：会话工作台、本会话的附件副本目录、
+ * 浏览器下载目录——系统提示词里都明说「可以去读」。其余位置（含 `../` 与工作区外绝对路径）一律不放。
+ */
+function imageReadRoots(command: {
+  attachmentsDir: string;
+  directories?: { workbench: string; browserDownloads?: string };
+}): string[] {
+  const roots = [command.attachmentsDir];
+  if (command.directories !== undefined) {
+    roots.push(command.directories.workbench);
+    if (command.directories.browserDownloads !== undefined) roots.push(command.directories.browserDownloads);
+  }
+  return roots.filter((root) => root !== "");
+}
+
+/**
+ * 子会话身份：开轮目录清单的 related 里有 `relation === "parent"` 的一项 → 本会话是被
+ * 派出的子会话。通道工具、记忆工具的注册与召回块的纠错提示都认它一处。
+ */
+function isChildSession(command: { directories?: { related?: readonly { relation: string }[] } }): boolean {
+  return command.directories?.related?.some((entry) => entry.relation === "parent") === true;
+}
+
+/**
+ * 轮前记忆召回的硬超时：主进程读盘 + 词法打分是毫秒级，6 秒已是「出事了」
+ * （主进程侧另有 4 秒的转发超时先兑，这里只兑主进程失联）。
+ */
+const MEMORY_RECALL_TIMEOUT_MS = 6_000;
+
+/**
+ * 轮前召回：拿用户原话问主进程要相关记忆（主进程再
+ * 转发给记忆服务进程），组装注入块。**任何失败都返回 null**（超时 / ok:false /
+ * 异常 / 空命中）——轮前是同步等的，记忆的任何问题都不该拦住开轮（#228 的纪律）。
+ */
+async function recallMemories(
+  sessionId: string,
+  query: string,
+  turn: number,
+  scope: { workspaceId: string | null; cwd: string },
+  canRevise: boolean,
+): Promise<string | null> {
+  try {
+    const outcome = await requestBroker.request<MemoryRecallOutcome>(
+      { type: "memoryRecallRequest", sessionId, query, turn, scope },
+      MEMORY_RECALL_TIMEOUT_MS,
+    );
+    if (!outcome.ok || outcome.hits.length === 0) return null;
+    return buildMemoryBlock(outcome.hits, { canRevise });
+  } catch (cause) {
+    console.warn("[memory] 轮前召回失败（不注入，照常开轮）", cause);
+    return null;
+  }
+}
+
 async function echoAndPrompt(
   opened: OpenedTurn,
   note: LedgerNote,
@@ -1810,6 +2056,25 @@ async function echoAndPrompt(
   }
   const pasted = command.pasted ?? [];
   const files = command.files ?? [];
+  // 本轮轮号（按用户消息计，1 起）：注入账本与条目分组的键——prompt 之前的
+  // 历史里数用户消息 +1（#228 的口径，与 renderer 划选引用一致）
+  const turn = opened.session.messages.filter((message) => message.role === "user").length + 1;
+  opened.memory.turn = turn;
+  // 轮前记忆召回：召回块**不拼进用户原话**，放进本轮的
+  // pending，首个 LLM 调用时由 orbita-memory-attach 扩展作为独立块挂到这条消息上
+  // （见 memory-inject.ts）。超时 / 报错 / 空命中都不挂——记忆的失败不拦开轮。
+  // 子会话也召回（读不写，写入门禁在主进程的轮后路径）
+  opened.memory.pending =
+    command.sessionMemory === true
+      ? await recallMemories(
+          command.sessionId,
+          command.text,
+          turn,
+          { workspaceId: command.workspaceId, cwd: command.cwd },
+          // 块里讲「用 memory_revise 改」只对注册了工具的根会话；子会话的块不讲
+          !isChildSession(command),
+        )
+      : null;
   const promptText = composePromptText(command.text, pasted, files);
   // 本回显 user item 的 id（意图召回的 turnId 与 /ingest 的去重键都用它）；
   // 纯图片等极端情况下没有文字 item，退回临时 id（recall 卡片照常，只是与转录对不上）
@@ -1876,6 +2141,10 @@ async function handle(command: AgentCommand): Promise<void> {
   }
   if (command.type === "undoPiBook") {
     undoPiBookCommand(command);
+    return;
+  }
+  if (command.type === "movePiBook") {
+    movePiBookCommand(command);
     return;
   }
 
@@ -2035,6 +2304,27 @@ async function handle(command: AgentCommand): Promise<void> {
     );
     return;
   }
+  if (command.type === "modelCostsResult") {
+    // 派发参考的回执：形状即契约（ok 双分支），原样结掉在途 promise
+    requestBroker.resolve(command.requestId, command);
+    return;
+  }
+  if (command.type === "pluginInstallResult" || command.type === "pluginListResult" || command.type === "pluginPreviewResult" || command.type === "pluginBoardResult") {
+    // 插件工具的回执：形状即契约（ok 双分支），原样结掉在途 promise（主进程任何路径都回执）
+    requestBroker.resolve(command.requestId, command);
+    return;
+  }
+  if (command.type === "memoryRecallResult") {
+    // 记忆召回的回执：形状即契约（ok 双分支），原样结掉在途 promise。
+    // 轮前调用方对超时 / ok:false / 空 hits 统一按「不注入」处理
+    requestBroker.resolve(command.requestId, command);
+    return;
+  }
+  if (command.type === "memoryToolResult") {
+    // 记忆工具的回执：形状即契约（ok 双分支），原样结掉在途 promise
+    requestBroker.resolve(command.requestId, command);
+    return;
+  }
   if (command.type === "browserResult") {
     requestBroker.resolve(
       command.requestId,
@@ -2047,6 +2337,11 @@ async function handle(command: AgentCommand): Promise<void> {
           }
         : { ok: false, error: command.error ?? "Browser request failed" },
     );
+    return;
+  }
+  if (command.type === "slidesResult" || command.type === "docResult") {
+    // 演示文稿 / 文档导出的回执：形状即契约（ok 双分支），原样结掉在途 promise
+    requestBroker.resolve(command.requestId, command);
     return;
   }
   if (command.type === "terminalResult") {
@@ -2068,6 +2363,11 @@ async function handle(command: AgentCommand): Promise<void> {
         ? { ok: true, childId: command.childId, title: command.title, card: command.card }
         : { ok: false, error: command.error ?? "Delegate failed" },
     );
+    return;
+  }
+  if (command.type === "automationResult") {
+    // 自动化工具的回执：形状即契约（ok 双分支），原样结掉在途 promise
+    requestBroker.resolve(command.requestId, command);
     return;
   }
   if (command.type === "channelSendResult") {

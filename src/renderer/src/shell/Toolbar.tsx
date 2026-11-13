@@ -2,7 +2,6 @@ import { createContext, useEffect, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { api } from "../api";
 import { useT } from "../locale.ts";
-import { RIGHT_PANEL_WIDTH_DEFAULT } from "@shared/settings";
 import appIcon from "../../../../design-system/assets/app-icon.svg?raw";
 import "./toolbar.css";
 import {
@@ -15,7 +14,6 @@ import {
   LAYER_PAD,
   RAIL_W,
   SESSION_GAP,
-  WIN_CTL_W,
   conversationColumn,
   leftCapsuleX,
   paperColumns,
@@ -98,7 +96,7 @@ export function Toolbar(props: {
   // 右栏胶囊：左缘 = 分隔线 + 内缩（与右栏内容左缘对齐），宽 = 右栏宽 − 两侧内缩；
   // 窄窗覆盖层锚右、默认宽（右缘同样让 8）
   const panelW =
-    (props.narrow ? RIGHT_PANEL_WIDTH_DEFAULT : props.panelWidth) - 2 * PANEL_CAPSULE_INSET;
+    props.panelWidth - 2 * PANEL_CAPSULE_INSET;
   /** 布局 B 的工作台 / 对话栏分区；null = 布局 A 的常态 */
   const paperCols = props.paper
     ? paperColumns({
@@ -131,7 +129,6 @@ export function Toolbar(props: {
     paperCols === null
       ? rightEdge({
           windowWidth: props.windowWidth,
-          platform: props.platform,
           panelOpen: props.panelOpen && !props.narrow,
           panelWidth: props.panelWidth,
         })

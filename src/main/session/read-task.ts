@@ -42,6 +42,11 @@ import {
   type SessionRecord,
 } from "../../shared/session.ts";
 import type { Workspace } from "../../shared/workspace.ts";
+import {
+  externalSessionSourceLabel,
+  type ExternalSessionReader,
+  type ExternalSessionSummary,
+} from "./external-session.ts";
 
 /** 简报默认带全文的最近轮数（裁决：10，不设参数——多了用 rounds 精准取） */
 const BRIEFING_RECENT_ROUNDS = 10;
@@ -623,15 +628,44 @@ export interface WorkspaceStoreReader {
   list(): Promise<Workspace[]>;
 }
 
+/** 外部目录独立成段：不伪装成 orbita 的本地 task，也不改变原有兄弟会话排序。 */
+function formatExternalIndex(summaries: readonly ExternalSessionSummary[]): string {
+  if (summaries.length === 0) return "";
+  const lines = ["External sessions (read-only, most recently updated first):"];
+  for (const summary of summaries) {
+    lines.push(
+      `- ${summary.title} (ref: ${summary.ref}) · ${externalSessionSourceLabel(summary.source)} · updated ${iso(summary.updatedAt)} · Folder: ${summary.cwd}`,
+    );
+  }
+  lines.push("Call read_task with an exact external ref to read the latest content without importing it.");
+  return lines.join("\n");
+}
+
+function withExternalIndex(text: string, summaries: readonly ExternalSessionSummary[]): string {
+  const external = formatExternalIndex(summaries);
+  return external === "" ? text : `${text}\n\n${external}`;
+}
+
+/** 标题与前缀只在最近外部目录里匹配；精确 ext ref 不走这里，直接定位源文件。 */
+function externalMatches(ref: string, summaries: readonly ExternalSessionSummary[]): ExternalSessionSummary[] {
+  const query = ref.trim().toLowerCase();
+  const exact = summaries.filter((summary) => summary.title.trim().toLowerCase() === query);
+  if (exact.length > 0) return exact;
+  return summaries.filter(
+    (summary) => summary.title.trim().toLowerCase().startsWith(query) || summary.ref.toLowerCase().startsWith(query),
+  );
+}
+
 /**
- * readTaskRequest 的落点：列表解析引用（meta 都是小文件，与侧栏同一条读取路径）
- * → 读目标整账 → 组简报或轮切片。回执经 host 的 answerReadTask 回 agent 进程。
+ * readTaskRequest 的落点：先解本地会话；没命中再查外部最近目录，精确 ext ref 则直接读源。
+ * 外部 reader 是可选依赖：旧测试与不带外部来源的装配保持原行为。
  */
 export async function applyReadTask(
   sessions: SessionStoreReader,
   event: Extract<AgentEvent, { type: "readTaskRequest" }>,
   workspaces: WorkspaceStoreReader,
   channels: ChannelStoreReader,
+  external?: ExternalSessionReader,
 ): Promise<ReadTaskOutcome> {
   const metas = await sessions.list();
   const named = new Map((await workspaces.list()).map((workspace) => [workspace.id, workspace.name]));
@@ -640,8 +674,41 @@ export async function applyReadTask(
     workspaceId === null ? null : (named.get(workspaceId) ?? null);
   const here = nameOf(workspaceOf(metas, event.sessionId));
   const ref = event.task?.trim() ?? "";
-  // 目录模式：模型不拿引用就问，答「这个工作区里还有哪些 task」
-  if (ref === "") return buildTaskIndex(metas, event.sessionId, here);
+
+  const readExternal = async (externalRef: string): Promise<ReadTaskOutcome> => {
+    if (external === undefined) return { ok: false, error: "External sessions are not available in this installation." };
+    const detail = await external.load(externalRef);
+    if (detail === null) return { ok: false, error: `The external session "${externalRef}" no longer exists on disk.` };
+    const outcome =
+      event.rounds === undefined
+        ? buildTaskBriefing(detail.meta, detail.records, null)
+        : buildRoundsExcerpt(detail.meta, detail.records, event.rounds, null);
+    if (!outcome.ok) return outcome;
+    return {
+      ok: true,
+      // ext id 不是 SessionStore 的会话：不挂跳转卡，避免 renderer 拿它打开一条不存在的本地会话。
+      card: null,
+      text: `External ${externalSessionSourceLabel(detail.summary.source)} session · read-only, not imported.\n\n${outcome.text}`,
+    };
+  };
+
+  // 精确 ext ref 是外部会话的强类型坐标，不与本地标题 / id 混着猜。
+  if (ref.startsWith("ext:")) return readExternal(ref);
+
+  // 目录模式：本地兄弟索引不变，外部最近会话另列一段。
+  if (ref === "") {
+    const local = buildTaskIndex(metas, event.sessionId, here);
+    if (!local.ok || external === undefined) return local;
+    try {
+      return { ...local, text: withExternalIndex(local.text, await external.list()) };
+    } catch (cause) {
+      return {
+        ...local,
+        text: `${local.text}\n\nExternal sessions could not be listed: ${cause instanceof Error ? cause.message : String(cause)}`,
+      };
+    }
+  }
+
   const match = resolveTaskReference(ref, metas, event.sessionId);
   if (match.kind === "self") {
     return {
@@ -652,6 +719,32 @@ export async function applyReadTask(
   // 没命中 / 撞歧义都把兄弟索引附在后面：一次就能改道，不用再拿前缀试探
   const index = formatTaskIndex(metas, event.sessionId, here);
   if (match.kind === "notFound") {
+    if (external !== undefined) {
+      try {
+        const summaries = await external.list();
+        const matches = externalMatches(ref, summaries);
+        if (matches.length === 1) return readExternal(matches[0]!.ref);
+        if (matches.length > 1) {
+          const list = matches
+            .slice(0, 5)
+            .map((summary) => `- ${summary.title} (ref: ${summary.ref}) · ${externalSessionSourceLabel(summary.source)}`)
+            .join("\n");
+          return {
+            ok: false,
+            error: `"${ref}" matches several external sessions:\n${list}\nRetry with one exact external ref.\n\n${withExternalIndex(index, summaries)}`,
+          };
+        }
+        return {
+          ok: false,
+          error: `No task matches "${ref}". Quote the task title, local id or external ref exactly.\n\n${withExternalIndex(index, summaries)}`,
+        };
+      } catch (cause) {
+        return {
+          ok: false,
+          error: `No local task matches "${ref}", and external sessions could not be read: ${cause instanceof Error ? cause.message : String(cause)}\n\n${index}`,
+        };
+      }
+    }
     return {
       ok: false,
       error: `No task matches "${ref}". Quote the task title (or its id) exactly.\n\n${index}`,

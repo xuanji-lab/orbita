@@ -3,7 +3,7 @@
  */
 import { ipcRenderer } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
-import type { SkillContent, SkillMeta, SkillPatch, SkillScope } from "../../shared/skill.ts";
+import type { SkillArchiveEntry, SkillContent, SkillMeta, SkillPatch, SkillRestoreResult, SkillScope } from "../../shared/skill.ts";
 import type { McpListResult, McpServer } from "../../shared/mcp.ts";
 
 export const skillApi = {
@@ -29,6 +29,14 @@ export const skillApi = {
   /** 在文件管理器里揭示；传 null 打开 skills 根目录（新建走这里） */
   reveal: (slug: string | null): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.skillReveal, slug),
+  /** 归档：文件夹挪到 skills-archive、链接全删，可恢复 */
+  archive: (slug: string): Promise<void> => ipcRenderer.invoke(ipcChannels.skillArchive, slug),
+  /** 已归档的技能（新的在前） */
+  archived: (): Promise<SkillArchiveEntry[]> => ipcRenderer.invoke(ipcChannels.skillArchived),
+  /** 恢复一条归档；原 slug 被占用以数据返回 */
+  restore: (id: string): Promise<SkillRestoreResult> => ipcRenderer.invoke(ipcChannels.skillRestore, id),
+  /** 移除：移到系统废纸篓（可找回），链接全删 */
+  trash: (slug: string): Promise<void> => ipcRenderer.invoke(ipcChannels.skillTrash, slug),
 } as const;
 
 /** MCP 的 contextBridge 面。和 skills 放同一个文件：两者是同一个「能力」面的两半。 */
