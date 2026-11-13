@@ -451,7 +451,8 @@ export const zh: Messages = {
     },
     finished: {
       title: (count) => `已结束（${count}）`,
-      note: (keep) => `已结束的自动归档在这里，不占自动化名额，只留最近 ${keep} 条。重新启动会让它回到进行中。`,
+      note: (keep) => `已结束的自动归档在这里，不占自动化名额。这里列最近 ${keep} 条，更早的仍保存在文件里。重新启动会让它回到进行中。`,
+      older: (count, file) => `更早的 ${count} 条保存在数据目录的 ${file} 里。`,
     },
     templates: {
       paper: {

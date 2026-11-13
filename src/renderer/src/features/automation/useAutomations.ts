@@ -3,6 +3,7 @@ import { api } from "../../api";
 import type {
   Automation,
   AutomationAction,
+  AutomationArchiveInfo,
   AutomationCreateInput,
   AutomationOutcome,
   AutomationPatch,
@@ -17,6 +18,8 @@ export type AutomationsLoad = { kind: "loading" } | { kind: "ready" } | { kind: 
 
 export interface AutomationsState {
   automations: readonly Automation[];
+  /** 冷归档的现状（更早的已结束记录移进了哪个文件、有多少条）；没读到 / 读失败是 null，面板就不说这句 */
+  archive: AutomationArchiveInfo | null;
   load: AutomationsLoad;
   reload: () => void;
   create: (input: AutomationCreateInput) => Promise<AutomationOutcome>;
@@ -32,6 +35,7 @@ function messageOf(cause: unknown): string {
 
 export function useAutomations(): AutomationsState {
   const [automations, setAutomations] = useState<readonly Automation[]>(NONE);
+  const [archive, setArchive] = useState<AutomationArchiveInfo | null>(null);
   const [load, setLoad] = useState<AutomationsLoad>({ kind: "loading" });
   const [nonce, setNonce] = useState(0);
   const reload = useCallback(() => setNonce((value) => value + 1), []);
@@ -51,6 +55,13 @@ export function useAutomations(): AutomationsState {
       .catch((cause: unknown) => {
         if (live.current) setLoad({ kind: "failed", message: messageOf(cause) });
       });
+    // 冷归档的现状跟列表一起重拉；读不到只是少一句话，不算加载失败
+    api.automation
+      .archiveInfo()
+      .then((info) => {
+        if (live.current) setArchive(info);
+      })
+      .catch(() => undefined);
     return () => {
       live.current = false;
     };
@@ -68,5 +79,5 @@ export function useAutomations(): AutomationsState {
   const update = useCallback((id: string, patch: AutomationPatch) => guard(() => api.automation.update(id, patch)), [guard]);
   const act = useCallback((id: string, action: AutomationAction) => guard(() => api.automation.act(id, action)), [guard]);
 
-  return { automations, load, reload, create, update, act };
+  return { automations, archive, load, reload, create, update, act };
 }

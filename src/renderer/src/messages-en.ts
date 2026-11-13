@@ -530,7 +530,9 @@ export const en = {
     finished: {
       title: (count: number) => `Finished (${count})`,
       note: (keep: number) =>
-        `Finished automations are archived here and don't count toward the limit. The latest ${keep} are kept. Restarting one puts it back in progress.`,
+        `Finished automations are archived here and don't count toward the limit. The latest ${keep} are listed here; older ones stay saved in a file. Restarting one puts it back in progress.`,
+      /** 热归档放不下的更早记录：移进了冷文件，不进列表，但仍保存在数据目录里 */
+      older: (count: number, file: string) => `${count} older ${count === 1 ? "one is" : "ones are"} saved in ${file} in the data folder.`,
     },
     templates: {
       paper: {

@@ -366,6 +366,9 @@ export function AutomationPanel(props: {
             <>
               <p className="auto-finished-note">{a.finished.note(AUTOMATION_ARCHIVE_KEEP)}</p>
               {finishedGroups.map((group) => renderGroup(group, { finished: true, head: scope === "all" || finishedGroups.length > 1 }))}
+              {state.archive !== null && state.archive.older > 0 && (
+                <p className="auto-finished-note">{a.finished.older(state.archive.older, state.archive.file)}</p>
+              )}
             </>
           )}
         </div>
