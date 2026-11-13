@@ -13,8 +13,11 @@ import { RangeTextPreview } from "./RangeTextPreview";
 import { EmptyPreview, PreviewNotice } from "./PreviewChrome";
 import { DOC_MAX_BYTES } from "@shared/doc";
 import { isPdfFile, isWebPageFile, type FilePreview } from "@shared/files";
+import { isDocxFile } from "@shared/docx";
 import type { PromptImage } from "@shared/prompt-images";
 import { PdfView, type PdfJump } from "./PdfView";
+import { DocxView } from "../docx/DocxView";
+import { flushDocxForLeave } from "../docx/docx-flush.ts";
 import { DocEditPane } from "../doc-panel/DocEditPane";
 import { watchDocMeta } from "./doc-meta-refresh.ts";
 import type { TextQuote } from "@shared/quote";
@@ -71,6 +74,9 @@ export function FilePreviewPane(props: {
   const pdfCitations = useExperimentalFeature("pdf-citations");
   const pdf = sentImage === undefined && pdfCitations && isPdfFile(path);
   const [pdfReload, setPdfReload] = useState(0);
+  // .docx 走应用内的分页编辑器（issue #273）：它不需要实验开关，也不再是「不支持的类型」
+  const docx = sentImage === undefined && isDocxFile(path);
+  const [docxReload, setDocxReload] = useState(0);
   const name = sentImage?.name ?? fileTabName(path);
   // 面包屑从所在的根开始（绝对路径放不下时截掉的总是末尾的文件名）；完整路径进 tooltip
   const segments =
@@ -227,6 +233,17 @@ export function FilePreviewPane(props: {
             <PanelIconButton
               title={t.files.refreshPreview}
               onClick={() => {
+                // 重读 docx = 卸载当前编辑器（引擎整份重新解析）：先把待存改动落盘，
+                // 失败就不重读，提示由 docx 视图自己挂（评审 2c：这里原本直接换 key，
+                // 屏幕上的字和未落盘的改动一起消失）
+                if (docx) {
+                  void flushDocxForLeave(path).then((outcome) => {
+                    if (!outcome.ok) return;
+                    refresh();
+                    setDocxReload((n) => n + 1);
+                  });
+                  return;
+                }
                 refresh();
                 if (pdf) setPdfReload((n) => n + 1);
                 else setTextReload((n) => n + 1);
@@ -258,7 +275,7 @@ export function FilePreviewPane(props: {
       )}
       <div
         className="file-preview-body"
-        data-kind={pdf ? "pdf" : editing || asDocument ? "edit" : undefined}
+        data-kind={docx ? "docx" : pdf ? "pdf" : editing || asDocument ? "edit" : undefined}
         ref={bodyRef}
       >
         {asDocument ? (
@@ -280,6 +297,11 @@ export function FilePreviewPane(props: {
             path={path}
             onClose={() => pickMode("rendered")}
             {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
+          />
+        ) : docx ? (
+          <DocxView
+            request={{ sessionId, workspaceId, ...extra, root, dir: path }}
+            reloadToken={docxReload}
           />
         ) : pdf ? (
           <PdfView

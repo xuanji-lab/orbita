@@ -4,6 +4,7 @@ import { planAwaitingIn, planTimeline } from "../context/plan-timeline.ts";
 import { PLAN_TOOL_NAME } from "../../../../shared/plan.ts";
 import { prefillLeft, reconcileLeft } from "./carryover-prefill.ts";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import { flushAllDocx, flushAllDocxForLeave } from "../docx/docx-flush.ts";
 import { api } from "../../api";
 import type { IntentRecallRecord } from "@shared/session";
 import type { RecallCardState } from "@shared/intent-recall";
@@ -2242,7 +2243,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    * 「打开后接着发消息」的编排（遗留事项续跑原会话）要等它，否则 submit 先行
    * 会把槽建出来，openSession 的种子看到槽已存在就不种历史了。
    */
-  const openSession = useCallback(
+  const openSessionNow = useCallback(
     (id: string): Promise<void> => {
       if (id === sessionRef.current) return Promise.resolve();
       engine.setError(null);
@@ -2313,6 +2314,19 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   );
 
   /**
+   * 切会话 = 把两栏整片换掉，打开着的 docx 会随之卸载。先让它们把待存改动落盘；
+   * 任何一份失败（要确认整份重排 / 磁盘被外部改过 / 写盘失败）就**不切走**——
+   * 提示由 docx 视图自己挂出来（2026-10-24 评审：切会话会丢字）。
+   */
+  const openSession = useCallback(
+    (id: string): Promise<void> => {
+      if (id === sessionRef.current) return Promise.resolve();
+      return flushAllDocx().then((outcome) => (outcome.ok ? openSessionNow(id) : undefined));
+    },
+    [openSessionNow],
+  );
+
+  /**
    * 从来源会话新开一单带着种子开工——遗留事项（startCarryoverTask）与会话目标（startGoalTask）共用：
    * cwd / 归属跟随来源，来源已删时退到本槽当前选择再退兜底；权限档压到不高于「询问」。
    * extra 带上遗留事项 id 时主进程记进新会话的 meta.resumedCarryovers。
@@ -2378,15 +2392,23 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    */
   const startCarryoverTask = useCallback(
     (item: Carryover): void => {
-      // 带上遗留事项 id：主进程记进新会话的 meta.resumedCarryovers，它收尾确认时这条自动标为做完
-      startFromSource(item.sourceSessionId, (sourceTitle) => buildCarryoverSeed(item, sourceTitle), { carryoverId: item.id }, true);
+      // 同 newTask：这条会 reset 掉右栏面板（打开着的 docx 随之卸载），先把待存改动落盘
+      void flushAllDocxForLeave().then((outcome) => {
+        if (!outcome.ok) return;
+        // 带上遗留事项 id：主进程记进新会话的 meta.resumedCarryovers，它收尾确认时这条自动标为做完
+        startFromSource(item.sourceSessionId, (sourceTitle) => buildCarryoverSeed(item, sourceTitle), { carryoverId: item.id }, true);
+      });
     },
     [startFromSource],
   );
 
   const startGoalTask = useCallback(
     (sourceSessionId: string, makeSeed: (sourceTitle: string | null) => string | null): void => {
-      startFromSource(sourceSessionId, makeSeed, {}, false);
+      // 同上：reset 掉右栏面板前先让 docx 落盘
+      void flushAllDocxForLeave().then((outcome) => {
+        if (!outcome.ok) return;
+        startFromSource(sourceSessionId, makeSeed, {}, false);
+      });
     },
     [startFromSource],
   );
@@ -2457,19 +2479,30 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   );
 
 
-  /** 不属于任何工作区的新任务：清掉归属与 cwd，落在兜底 */
+  /**
+   * 不属于任何工作区的新任务：清掉归属与 cwd，落在兜底。
+   * **清槽 = 右栏文件面板整片换掉**，打开着的 docx 随之卸载：先让它的待存改动
+   * 落盘，失败就不清槽（提示在 docx 视图里）。评审 2b：这条不走 openSession，
+   * 原来直接 reset() 就把字丢了。
+   */
   const newTask = useCallback(() => {
-    reset();
-    setCwd(null);
-    setWorkspaceId(null);
+    void flushAllDocxForLeave().then((outcome) => {
+      if (!outcome.ok) return;
+      reset();
+      setCwd(null);
+      setWorkspaceId(null);
+    });
   }, [reset]);
 
-  /** 这个工作区里的新任务：路径与归属一起填好，用户不用再点一次 */
+  /** 这个工作区里的新任务：路径与归属一起填好，用户不用再点一次。闸门同 newTask */
   const newTaskIn = useCallback(
     (workspace: Workspace) => {
-      reset();
-      setCwd(workspace.path);
-      setWorkspaceId(workspace.id);
+      void flushAllDocxForLeave().then((outcome) => {
+        if (!outcome.ok) return;
+        reset();
+        setCwd(workspace.path);
+        setWorkspaceId(workspace.id);
+      });
     },
     [reset],
   );
@@ -2495,10 +2528,14 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   );
   const startTaskWithDraft = useCallback(
     (workspace: Workspace | null, text: string) => {
-      reset();
-      setCwd(workspace === null ? null : workspace.path);
-      setWorkspaceId(workspace === null ? null : workspace.id);
-      writeDraft(`home:${key}`, text);
+      // 同 newTask：reset 掉右栏面板前先让打开着的 docx 落盘（失败就不走，提示在 docx 视图里）
+      void flushAllDocxForLeave().then((outcome) => {
+        if (!outcome.ok) return;
+        reset();
+        setCwd(workspace === null ? null : workspace.path);
+        setWorkspaceId(workspace === null ? null : workspace.id);
+        writeDraft(`home:${key}`, text);
+      });
     },
     [reset, writeDraft, key],
   );

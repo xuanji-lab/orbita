@@ -52,6 +52,7 @@ import fileJson2 from "../../../../design-system/assets/icons/lucide/file-json-2
 import fileSpreadsheet from "../../../../design-system/assets/icons/lucide/file-spreadsheet.svg?raw";
 import fileVideo2 from "../../../../design-system/assets/icons/lucide/file-video-2.svg?raw";
 import presentation from "../../../../design-system/assets/icons/lucide/presentation.svg?raw";
+import save from "../../../../design-system/assets/icons/lucide/save.svg?raw";
 import typeIcon from "../../../../design-system/assets/icons/lucide/type.svg?raw";
 import shapes from "../../../../design-system/assets/icons/lucide/shapes.svg?raw";
 import table from "../../../../design-system/assets/icons/lucide/table.svg?raw";
@@ -277,6 +278,7 @@ const ICONS = {
   plus,
   "refresh-cw": refreshCw,
   "rotate-ccw": rotateCcw,
+  save,
   settings,
   "shield-check": shieldCheck,
   waypoints,
