@@ -6354,18 +6354,35 @@ mark.intent-mark {
   color: var(--color-text-tertiary);
 }
 
-/* 胶囊：饼 + 「后台 3 · 1 等你」；底栏窄（≤ 410，与别的芯片同一条线）时只留饼 + 总数 */
+/* 胶囊：饼 + 「后台 3 · 1 等你」。底栏变窄时分三档收：≥ 560 全文；410–559 只留「后台 3」；< 410 只留总数
+   （右栏开着、窗口窄、英文更长），免得把作用域 / 权限 / 模型几个芯片挤成省略号。胶囊自己不缩：
+   让出宽度的是可缩的模型与档位芯片。 */
+.composer-bottom-bar > :has(> .chip-bg) {
+  flex: none;
+}
+.composer-bottom-bar .chip-bg {
+  min-width: max-content;
+}
 .bg-cap {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1-5);
 }
+.bg-cap-mid,
 .bg-cap-short {
   display: none;
   font-variant-numeric: tabular-nums;
 }
-@container (max-width: 410px) {
+@container (max-width: 559px) {
   .composer-bottom-bar .bg-cap-long {
+    display: none;
+  }
+  .composer-bottom-bar .bg-cap-mid {
+    display: inline;
+  }
+}
+@container (max-width: 409px) {
+  .composer-bottom-bar .bg-cap-mid {
     display: none;
   }
   .composer-bottom-bar .bg-cap-short {

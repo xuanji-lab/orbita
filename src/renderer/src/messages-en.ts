@@ -2443,6 +2443,8 @@ export const en = {
     moreInline: (count: number) => `+${count}`,
     /** 胶囊（输入框底栏里的一颗）：总数，有等你的再加一段 */
     capsule: (count: number, waiting: number) => (waiting > 0 ? `Background ${count} · ${waiting} waiting` : `Background ${count}`),
+    /** 胶囊在较窄底栏里的短形：只留标签 + 总数 */
+    capsuleShort: (count: number) => `Background ${count}`,
     lineTip: "Show the list — click a row to open it",
     automationDue: "Due — sends when this turn ends",
   },

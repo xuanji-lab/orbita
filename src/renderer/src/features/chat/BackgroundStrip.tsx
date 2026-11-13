@@ -145,6 +145,7 @@ export const BackgroundStatus = memo(function BackgroundStatus(props: {
                   <Icon name={FEATURE_ICON.automation} size={12} />
                 )}
                 <span className="bg-cap-long">{t.bgStrip.capsule(visible.length, waiting)}</span>
+                <span className="bg-cap-mid">{t.bgStrip.capsuleShort(visible.length)}</span>
                 <span className="bg-cap-short">{visible.length}</span>
               </span>
           </Chip>

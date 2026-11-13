@@ -2256,6 +2256,7 @@ export const zh: Messages = {
     scheduled: (count) => `${count} 项待运行`,
     moreInline: (count) => `+${count}`,
     capsule: (count, waiting) => (waiting > 0 ? `后台 ${count} · ${waiting} 等你` : `后台 ${count}`),
+    capsuleShort: (count) => `后台 ${count}`,
     lineTip: "展开清单，点一行进入",
     automationDue: "已到点，这一轮结束后送达",
   },
