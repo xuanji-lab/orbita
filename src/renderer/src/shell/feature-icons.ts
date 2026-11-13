@@ -46,6 +46,8 @@ export const FEATURE_ICON = {
   archived: "archive",
   /** 新手引导：设置页签 */
   guide: "graduation-cap",
+  /** Zotero 文献库：对话里查文献 / 读条目 / 读全文的过程行 */
+  zotero: "library-big",
   /** 设置 */
   settings: "settings",
   /** 通知（右栏铃铛与通知卡空态） */

@@ -2,6 +2,8 @@ import type { IconName } from "../../shell/Icon.tsx";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { readCommandCard } from "../../../../shared/builtin-command.ts";
 import { CANVAS_SIZE } from "../../../../shared/slides.ts";
+import type { Language } from "../../../../shared/settings.ts";
+import { readZoteroDetails } from "../../../../shared/zotero.ts";
 
 /**
  * 内置命令注册表 —— 聊天过程行怎么显示「原生内置命令」的**唯一真源**。
@@ -20,6 +22,11 @@ import { CANVAS_SIZE } from "../../../../shared/slides.ts";
  */
 export interface BuiltinCommand {
   label: string;
+  /**
+   * 英文界面的名字。缺席 = 英文界面也显示中文名（文档 / 演示文稿这批命令的现状）；
+   * Zotero 三条起新命令一律中英都给。
+   */
+  labelEn?: string;
   icon: IconName;
   summary(input: unknown): string | null;
   /** 完成后钉一张卡（折叠之外、结尾回复之前）；缺席 = 只有过程行 */
@@ -28,7 +35,12 @@ export interface BuiltinCommand {
    * 展开体：给人看的「参数 + 结果」几行。缺席（或返回 null）= 展开体走通用的原样结果文本——
    * 那是写给模型的话（「Created … 0 slides … Next: fill it with …」），用户看了只会困惑。
    */
-  detail?: (input: unknown, details: unknown) => DetailRow[] | null;
+  detail?: (input: unknown, details: unknown, locale?: Language) => DetailRow[] | null;
+}
+
+/** 过程行行首显示的名字：英文界面有英文名就用英文名 */
+export function builtinLabel(command: BuiltinCommand, locale: Language): string {
+  return locale === "en" ? (command.labelEn ?? command.label) : command.label;
 }
 
 export interface DetailRow {
@@ -36,6 +48,11 @@ export interface DetailRow {
   value: string;
   /** 路径这类机器事实用等宽字体 */
   mono?: boolean;
+  /**
+   * 条目行（查文献返回的一条文献）：渲染层把它排成占满一行的「标题 · 作者 年份 ……… key」，
+   * label 仍是 key（React 键与测试用），value 是给不认识 item 的地方的纯文字退路
+   */
+  item?: { title: string; meta: string | null; key: string };
 }
 
 function record(input: unknown): Record<string, unknown> | null {
@@ -178,6 +195,101 @@ const DOC_FORMAT_NAME: Readonly<Record<string, string>> = {
   "md-plain": "Markdown · 通用格式",
 };
 
+
+const fmtCount = (n: number): string => n.toLocaleString("en-US");
+
+/** 查文献的摘要：查询词 · 分类 · 条目类型 · 标签（语言中性：都是用户 / 模型给的原词） */
+function zoteroSearchSummary(input: unknown): string | null {
+  return join([str(input, "query"), str(input, "collection"), str(input, "item_type"), str(input, "tag")]);
+}
+
+/** 展开体：返回了哪些条目（key · 标题 · 作者 · 年份），总数与本页范围 */
+function zoteroSearchDetail(input: unknown, details: unknown, locale?: Language): DetailRow[] | null {
+  const parsed = readZoteroDetails(details);
+  if (parsed === null || parsed.op !== "search") return null;
+  const zh = locale !== "en";
+  const query = str(input, "query");
+  const first = parsed.offset + 1;
+  const last = parsed.offset + parsed.items.length;
+  const rows: DetailRow[] = [
+    ...(query === null ? [] : [{ label: zh ? "查询" : "Query", value: query }]),
+    ...(parsed.collection === null ? [] : [{ label: zh ? "分类" : "Collection", value: parsed.collection }]),
+    {
+      label: zh ? "结果" : "Results",
+      value:
+        parsed.items.length === 0
+          ? zh
+            ? `没有符合的条目（共 ${fmtCount(parsed.total)} 条）`
+            : `No items (${fmtCount(parsed.total)} total)`
+          : zh
+            ? `共 ${fmtCount(parsed.total)} 条，显示第 ${first}–${last} 条`
+            : `${fmtCount(parsed.total)} total, showing ${first}–${last}`,
+    },
+  ];
+  for (const item of parsed.items) {
+    const meta = [item.creators === "" ? null : item.creators, item.year].filter((part): part is string => part !== null).join(" · ");
+    rows.push({
+      label: item.key,
+      value: [item.title, meta === "" ? null : meta].filter((part) => part !== null).join(" · "),
+      item: { title: item.title, meta: meta === "" ? null : meta, key: item.key },
+    });
+  }
+  return rows;
+}
+
+function zoteroItemDetail(_input: unknown, details: unknown, locale?: Language): DetailRow[] | null {
+  const parsed = readZoteroDetails(details);
+  if (parsed === null || parsed.op !== "item") return null;
+  const zh = locale !== "en";
+  const rows: DetailRow[] = [{ label: zh ? "条目" : "Item", value: `${parsed.title} · ${parsed.key}` }];
+  parsed.attachments.forEach((attachment, index) => {
+    const label = zh ? (index === 0 ? "附件" : `附件 ${index + 1}`) : index === 0 ? "Attachment" : `Attachment ${index + 1}`;
+    const missing = zh ? "（不在本机）" : " (not on this machine)";
+    rows.push({ label, value: `${attachment.path ?? attachment.name}${attachment.onDisk || attachment.path === null ? "" : missing}`, mono: attachment.path !== null });
+  });
+  if (parsed.attachments.length === 0) rows.push({ label: zh ? "附件" : "Attachment", value: zh ? "没有" : "None" });
+  const first = parsed.annotationOffset + 1;
+  const last = parsed.annotationOffset + parsed.annotationShown;
+  rows.push({
+    label: zh ? "批注" : "Annotations",
+    value:
+      parsed.annotationTotal === 0
+        ? zh
+          ? "没有"
+          : "None"
+        : parsed.annotationShown === 0
+          ? zh
+            ? `共 ${parsed.annotationTotal} 条（本页没有）`
+            : `${parsed.annotationTotal} total (none on this page)`
+          : zh
+            ? `第 ${first}–${last} 条，共 ${parsed.annotationTotal} 条`
+            : `${first}–${last} of ${parsed.annotationTotal}`,
+  });
+  return rows;
+}
+
+function zoteroFulltextDetail(_input: unknown, details: unknown, locale?: Language): DetailRow[] | null {
+  const parsed = readZoteroDetails(details);
+  if (parsed === null || parsed.op !== "fulltext") return null;
+  const zh = locale !== "en";
+  const range = parsed.range;
+  return [
+    { label: zh ? "条目" : "Item", value: parsed.title },
+    {
+      label: zh ? "范围" : "Range",
+      value:
+        range === null
+          ? zh
+            ? "Zotero 里没有这条的全文索引"
+            : "Zotero has no full-text index for this item"
+          : zh
+            ? `第 ${fmtCount(range.start)}–${fmtCount(range.end)} 字，共 ${fmtCount(range.total)} 字`
+            : `Characters ${fmtCount(range.start)}–${fmtCount(range.end)} of ${fmtCount(range.total)}`,
+    },
+    ...(parsed.path === null ? [] : [{ label: "PDF", value: parsed.path, mono: true }]),
+  ];
+}
+
 export const BUILTIN_COMMANDS: Readonly<Record<string, BuiltinCommand>> = {
   doc_open: {
     label: "打开文档",
@@ -283,6 +395,31 @@ export const BUILTIN_COMMANDS: Readonly<Record<string, BuiltinCommand>> = {
     pinCard: true,
     detail: (input, details) => exportDetail(input, details, FORMAT_NAME),
   },
+  zotero_search: {
+    label: "查文献",
+    labelEn: "Search library",
+    icon: FEATURE_ICON.zotero,
+    summary: zoteroSearchSummary,
+    detail: zoteroSearchDetail,
+  },
+  zotero_item: {
+    label: "读文献条目",
+    labelEn: "Read library item",
+    icon: FEATURE_ICON.zotero,
+    summary: (input) => str(input, "key"),
+    detail: zoteroItemDetail,
+  },
+  zotero_fulltext: {
+    label: "读文献全文",
+    labelEn: "Read full text",
+    icon: FEATURE_ICON.zotero,
+    // 摘要 = key · 起始字符（续读时才有）
+    summary: (input) => {
+      const start = num(input, "start");
+      return join([str(input, "key"), start === null || start === 0 ? null : `@${fmtCount(start)}`]);
+    },
+    detail: zoteroFulltextDetail,
+  },
 };
 
 /**
@@ -357,7 +494,11 @@ export function docEditSummary(path: string, section: string | null): string {
 export function toolWord(rollupTool: (key: string) => string, key: string, input?: unknown): string {
   if (key === DOC_EDIT_KEY) return "改文档";
   if (key === DOC_WRITE_KEY) return "写文档";
-  return docEditLabel(key, input) ?? builtinCommand(key)?.label ?? rollupTool(key);
+  const builtin = builtinCommand(key);
+  // 有英文名的内置命令交给按语言给词的 rollupTool（中文表给中文名、英文表给英文名）；
+  // 没有英文名的（文档 / 演示文稿那批）照旧直接用中文名
+  if (builtin !== null && builtin.labelEn === undefined) return docEditLabel(key, input) ?? builtin.label;
+  return docEditLabel(key, input) ?? rollupTool(key);
 }
 
 export function builtinCommand(toolName: string): BuiltinCommand | null {

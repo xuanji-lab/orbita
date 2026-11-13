@@ -63,7 +63,7 @@ import { clampToolBody } from "./tool-body-clamp.ts";
 import { noticeIconBoxStyle, noticeParagraphStyle, noticeTextStyle } from "./notice.ts";
 import { PluginInstallLine } from "../plugins/PluginInstallLine.tsx";
 import { PluginBoardResultView } from "../board/PluginBoardResult.tsx";
-import { builtinCommand, type DetailRow, docEditLabel, docEditPath, docEditSection, docEditSummary, toolWord } from "./builtin-commands.ts";
+import { builtinCommand, builtinLabel, type DetailRow, docEditLabel, docEditPath, docEditSection, docEditSummary, toolWord } from "./builtin-commands.ts";
 import { getOpenDocumentText } from "../doc-panel/open-document.ts";
 import { CommandCard } from "./CommandCard.tsx";
 import { ExitCard } from "./ExitCard";
@@ -248,7 +248,7 @@ import type { FileTurnView, RevertRecord, UndoRecord } from "@shared/revert";
 import type { RetryStatus } from "@shared/agent-ipc";
 import type { ChatSession } from "./useChatSession";
 import type { ModelPair, ThemePreference } from "@shared/settings";
-import { useT } from "../../locale.ts";
+import { LocaleContext, useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 import { scopeChipAction } from "./scope-chip.ts";
 
@@ -5051,6 +5051,8 @@ function ToolLine(props: {
   sessionId?: string;
 }) {
   const t = useT();
+  // 内置命令的行首名字与展开体按界面语言取（Zotero 三条起中英都给）
+  const locale = useContext(LocaleContext);
   const [open, setOpen] = useFoldState(`tool:${props.toolCallId}`);
   const { result } = props;
   const failed = result?.status === "error";
@@ -5197,7 +5199,7 @@ function ToolLine(props: {
   // 跑着的 shell 的活尾预览（shellActive）。活跃轮的组行默认铺开，一轮几十个工具时
   // 这条 join 会随每一帧流式更新重跑几十遍，全是白付的分配；落定的成员行更不必说。
   // 内置命令成功后展开：给人看的几行（失败 / 没有 detail 的命令走原样结果文本）
-  const builtinRows = builtin !== null && finished && !failed && result !== undefined ? (builtin.detail?.(props.input, result.details) ?? null) : null;
+  const builtinRows = builtin !== null && finished && !failed && result !== undefined ? (builtin.detail?.(props.input, result.details, locale) ?? null) : null;
   const needBody = open || shellActive;
   const rawBody = needBody && result !== undefined ? toolResultText(result, t) : "";
   // 跑着时只渲染尾部：partial 是累积快照、每帧整条重渲染，万行输出会拖垮 DOM
@@ -5346,7 +5348,7 @@ function ToolLine(props: {
           </span>
           {builtin !== null || docEdit !== null ? (
             <span className="command-pill" style={headLabel(active)}>
-              {builtin?.label ?? docEdit}
+              {builtin !== null ? builtinLabel(builtin, locale) : docEdit}
             </span>
           ) : (
             <span style={headLabel(active)}>{props.toolName}</span>
@@ -5475,7 +5477,23 @@ function BuiltinDetailBody(props: { rows: readonly DetailRow[] }) {
         lineHeight: "var(--line-height-code)",
       }}
     >
-      {props.rows.map((row) => (
+      {props.rows.map((row) =>
+        row.item !== undefined ? (
+          // 条目行（查文献的结果）：占满两栏——标题在前（一行、超长省略，悬停看全），作者 · 年份次级色，
+          // 条目 key 是机器事实：等宽、三级色、.row-trailing 钉在行尾（想复制的人有处可取，不占最显眼的位置）
+          <div key={row.label} style={{ gridColumn: "1 / -1", display: "flex", alignItems: "baseline", gap: "var(--space-2)", minWidth: 0 }}>
+            <span
+              title={row.item.title}
+              style={{ color: "var(--color-text-primary)", minWidth: 0, flex: "0 1 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+            >
+              {row.item.title}
+            </span>
+            {row.item.meta !== null && <span style={{ color: "var(--color-text-secondary)", flex: "0 0 auto", whiteSpace: "nowrap" }}>{row.item.meta}</span>}
+            <span className="row-trailing" style={{ color: "var(--color-text-tertiary)", fontFamily: "var(--font-family-mono)" }}>
+              {row.item.key}
+            </span>
+          </div>
+        ) : (
         <Fragment key={row.label}>
           <span style={{ color: "var(--color-text-tertiary)" }}>{row.label}</span>
           <span
@@ -5488,7 +5506,8 @@ function BuiltinDetailBody(props: { rows: readonly DetailRow[] }) {
             {row.value}
           </span>
         </Fragment>
-      ))}
+        ),
+      )}
     </div>
   );
 }
