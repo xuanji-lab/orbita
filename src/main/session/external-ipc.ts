@@ -38,19 +38,21 @@ export function registerExternalSourcesIpc(reader: ExternalSessionReader, custom
     const sources = await Promise.all(
       located.map(async (item) => {
         const count = counts.find((entry) => entry.source === item.source);
+        const roots = await Promise.all(
+          item.roots.map(async (dir) => ({
+            dir,
+            custom: customDirs.has(`${item.source}\n${join(dir)}`),
+            hasData: await hasSessionData(dir, EXTERNAL_ADAPTERS[item.source].entry),
+          })),
+        );
         return {
           id: item.source,
-          roots: await Promise.all(
-            item.roots.map(async (dir) => ({
-              dir,
-              custom: customDirs.has(`${item.source}\n${join(dir)}`),
-              hasData: await hasSessionData(dir, EXTERNAL_ADAPTERS[item.source].entry),
-            })),
-          ),
+          roots,
           expected: item.expected,
           sessions: count?.total ?? 0,
           enabled: isExternalSourceEnabled(current.externalSources, item.source),
-          problems: count?.problems ?? [],
+          // 「这里没有会话数据」已经标在那一行数据目录上（hasData），不再重复列一遍英文原因
+          problems: (count?.problems ?? []).filter((problem) => !roots.some((root) => !root.hasData && problem.includes(root.dir))),
         };
       }),
     );

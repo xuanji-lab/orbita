@@ -1149,7 +1149,14 @@
 }
 
 .ext-paths .mg-path-line[data-warn] {
+  align-items: flex-start;
   color: var(--color-warning);
+}
+
+/* 警示行要读得完（目录不在、读不全的原因）：允许折行，不截断 */
+.ext-paths .mg-path-line[data-warn] > span {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* 路径行里的说明字（「找过」「手动添加」）：用界面字体，路径本身仍是 mono */
