@@ -19,6 +19,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
   RETRY_BASE_DELAY_MS,
   RETRY_MAX_ATTEMPTS,
+  RETRY_MAX_DELAY_MS,
   RETRY_VISIBILITY_THRESHOLD,
   retryVisibleToUi,
 } from "./retry-policy.ts";
@@ -56,7 +57,7 @@ test("指数退避序列 1s、2s、4s…128s，8 次耗尽后不再发请求", a
   };
   const pending = retryAssistantCall(
     produce,
-    { enabled: true, maxRetries: RETRY_MAX_ATTEMPTS, baseDelayMs: RETRY_BASE_DELAY_MS },
+    { enabled: true, maxRetries: RETRY_MAX_ATTEMPTS, baseDelayMs: RETRY_BASE_DELAY_MS, maxAgentDelayMs: RETRY_MAX_DELAY_MS },
     undefined,
     {
       onRetryScheduled: (_attempt, _maxAttempts, delayMs) => {

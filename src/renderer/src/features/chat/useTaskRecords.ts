@@ -12,7 +12,7 @@
  * 组件不管 IPC、不管缓存——它只出 `useTaskRecords(sessionId, entry, whole)`。
  */
 import { useEffect, useMemo, useSyncExternalStore } from "react";
-import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
+import { selectTranscript } from "../../../../shared/transcript-state.ts";
 import { SESSION_PAGE_RECORDS, type SessionRecord, type TranscriptRecord } from "@shared/session";
 import { api } from "../../api.ts";
 import { ipcErrorText } from "../../utils/ipc-error.ts";

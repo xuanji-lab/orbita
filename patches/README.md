@@ -1,12 +1,16 @@
 # pi patch 清单
 
-适用精确锁版本 `@earendil-works/*` **0.84.3**。pi 升级后 patch 打不上时 `bun install`
-会当场报错——按下面的意图在新版本上重打；重打前先确认新版是否已原生支持该行为，
-支持了就直接删 patch。
+适用精确锁版本 `@earendil-works/*` **1.5.2**（2026-11-14 从 0.84.3 重打）。pi 升级后 patch 打不上时
+`bun install` 会当场报错——按下面的意图在新版本上重打；重打前先确认新版是否已原生支持该行为，
+支持了就直接删 patch。重打方法：`bun patch <包>` → 改 `node_modules` 里的文件 → `bun patch --commit <目录>`；
+commit 后 bun 可能把 `package.json` 的缩进写乱，用 JSON 重新序列化（2 空格）还原。
+
+已删除的 patch：pi-ai `dist/api/anthropic-messages.js` 的 `claudeCodeVersion` 2.1.75 → 2.1.322——
+1.5.2 上游自带 `const claudeCodeVersion = "2.1.322"`，守卫 `src/shared/claude-code-version.test.ts` 照旧把关三处口径一致。
 
 ## @earendil-works/pi-ai — api.kimi.com 认作 Moonshot 端点
 
-`dist/api/openai-completions.js`（`detectCompat` 的 `isMoonshot`）：
+`dist/api/openai-completions.js`（`detectCompat` 的 `isMoonshot`；1.5.2 上游仍只认 `api.moonshot.`）：
 
 ```diff
 - const isMoonshot = provider === "moonshotai" || provider === "moonshotai-cn" || baseUrl.includes("api.moonshot.");
@@ -27,7 +31,7 @@
 
 ## @earendil-works/pi-ai — 错误带明确的 4xx 不重试
 
-`dist/utils/retry.js`（`isRetryableAssistantError`）：在额度名单之后、可重试正则之前插一道
+`dist/utils/retry.js`（`isRetryableAssistantError`；1.5.2 上游仍只按正则判、`server.?error` 仍在可重试名单）：在额度名单之后、可重试正则之前插一道
 `hasNonRetryableClientStatus`——错误文本里能确定的 HTTP 状态码（`API error (403):`、开头的
 `403 Forbidden`、`HTTP 403` / `status 403`）全是 4xx 且不是 408 / 429 时判为不可重试。
 认不出状态码、混有非 4xx 状态码、或文本说的是限流 / 过载时不改原判。
@@ -44,7 +48,8 @@ patch 在 pi-ai 而不在 Orbita 侧：AgentSession 的 `_isRetryableError` 是�
 
 ## @earendil-works/pi-coding-agent — 公开入口导出 `resolveToCwd`
 
-`dist/index.js` / `dist/index.d.ts`：追加一行 `export { resolveToCwd } from "./core/tools/path-utils.js"`。
+`dist/index.js` / `dist/index.d.ts`：追加一行 `export { resolveToCwd } from "./core/tools/path-utils.js"`
+（1.5.2 仍只在 `core/tools/path-utils` 里、公开入口未导出，`exports` 只开放 `.` 与 `./rpc-entry`）。
 
 **为什么（2026-10-01）**：会话回退的文件账（`src/agent/file-tracker.ts` 的 `resolveToolPath`）必须与
 pi 的 write / edit 工具算出**同一个**绝对路径，而工具内部用的就是 `resolveToCwd`。它不在包的公开入口，
@@ -53,3 +58,16 @@ MSYS 路径折算（`/c/Users/x` → `C:\Users\x`）、`~\` 展开与 `file://` 
 
 **行为守卫**：`src/agent/file-tracker.test.ts`（断言 `resolveToolPath === resolveToCwd`，并逐形态比对）。
 pi 升级后若原生导出了它，删掉这两行 patch。
+
+## @earendil-works/pi-coding-agent — read 对 PDF / Word 指路
+
+`dist/core/tools/read.js`：非图片文件进文本分支前先过 `orbitaBinaryDocumentPointer`——文件头前 1024 字节含
+`%PDF-` 返回「Use the read_pdf tool」指路；扩展名 `.docx` 返回「Use the read_docx tool」；`.doc` 返回「先转存 .docx」。
+
+**为什么（2026-09-28）**：PDF 的压缩流、docx 的 zip 容器按 UTF-8 读出来是乱码，模型拿 `read` 去撞就只看到乱码。
+Word 按扩展名不按 zip 魔数：PK 是通用 zip 魔数，会误指路 xlsx 等其它 office 包。
+1.5.2 的文本分支改成流式只读要显示的行（`createReadStream`），所以文件头只从流里取第一块，不整读大文件；
+没有流的自定义 operations 退回 `readFile` 取前 1024 字节（与 0.84.3 的 patch 同判据）。
+
+**行为守卫**：`src/agent/pdf-tools.test.ts`、`src/agent/docx-tools.test.ts` 里标「patch 守护」的三条。
+

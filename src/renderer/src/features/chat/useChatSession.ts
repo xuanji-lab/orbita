@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
+import { selectTranscript } from "../../../../shared/transcript-state.ts";
 import { planAwaitingIn, planTimeline } from "../context/plan-timeline.ts";
 import { PLAN_TOOL_NAME } from "../../../../shared/plan.ts";
 import { prefillLeft, reconcileLeft } from "./carryover-prefill.ts";

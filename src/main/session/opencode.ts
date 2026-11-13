@@ -341,7 +341,9 @@ export function opencodeToMessages(
         const name = optionalString(part["tool"]);
         if (callId === null || name === null) continue;
         const state = isRecord(part["state"]) ? part["state"] : {};
-        const call: ToolCall = { type: "toolCall", id: callId, name, arguments: isRecord(state["input"]) ? state["input"] : {} };
+        // 源自 JSON.parse 的值本来就是 JSON；pi 1.x 把 ToolCall.arguments 收窄成 JsonObject，只在类型面对齐
+        const input = isRecord(state["input"]) ? state["input"] : {};
+        const call: ToolCall = { type: "toolCall", id: callId, name, arguments: input as ToolCall["arguments"] };
         const step = ensure();
         step.content.push(call);
         step.tools.push(part);

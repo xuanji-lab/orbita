@@ -57,7 +57,10 @@ export function movePiBook(manager: SessionManager, notice: string): void {
  * 自检共用的断言（buildSessionContext 是 pi 自己的解析，比数 entry 可信）。
  */
 export function piBookContextRoles(manager: SessionManager): ("user" | "assistant")[] {
+  // pi 1.x 把系统提示词的分段差量记成 role:"system" 的消息条目并投影进上下文——
+  // 它不是对话的一方，与 branch-cut 的对账口径一致，不计入
   return manager
     .buildSessionContext()
-    .messages.map((message) => (message.role === "assistant" ? "assistant" : "user"));
+    .messages.filter((message) => message.role !== "system")
+    .map((message) => (message.role === "assistant" ? "assistant" : "user"));
 }

@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels, type Model } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/api/anthropic-messages";
+import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
 import { KNOWN_MODELS } from "../shared/known-models.ts";
 import {
   KNOWN_PROVIDERS,
@@ -27,6 +28,9 @@ import {
 import { modelThinkingLevels, resolveModelDefaults } from "../shared/model-defaults.ts";
 import { THINKING_LEVELS, type ThinkingLevel } from "../shared/thinking.ts";
 import { registerAndResolveModel, toBuiltinProvider } from "./model-registration.ts";
+
+/** 会话里解析出的模型（registerAndResolveModel 的非空返回） */
+type PiModelLike = NonNullable<ReturnType<typeof registerAndResolveModel>>;
 
 /** 真 pi 运行时，但不读用户的 ~/.pi/agent（凭据文件放临时目录，models.json 跳过，不联网） */
 async function freshRuntime(): Promise<ModelRuntime> {
@@ -171,10 +175,13 @@ describe("白名单一致性 —— 菜单里能选的，就是会话里真能�
     assert.deepEqual(sides.runtime?.levels, ["max"]);
   });
 
-  test("OpenCode Go 的 deepseek-v4.1-flash：目录还没收录，白名单补上——max 在会话里也能选", async () => {
+  test("OpenCode Go 的 deepseek-v4.1-flash：目录收录后目录说了算（这家网关关不掉思考），两边都没有 off", async () => {
+    // pi 1.5.2 的 opencode-go 目录收录了它（档位表 off: null）；0.84.3 时没收，靠白名单的四档
+    const catalogEntry = (await freshRuntime()).getModel("opencode-go", "deepseek-v4.1-flash");
+    assert.ok(catalogEntry !== undefined, "前提：本家目录收录了这个型号");
     const sides = await bothSides(entry("opencode-go"), "deepseek-v4.1-flash");
-    assert.deepEqual(sides.ui.levels, ["off", "low", "high", "max"]);
-    assert.deepEqual(ordered(sides.runtime?.levels ?? []), ["off", "low", "high", "max"]);
+    assert.deepEqual(sides.ui.levels, ["low", "high", "max"]);
+    assert.deepEqual(ordered(sides.runtime?.levels ?? []), ["low", "high", "max"]);
   });
 
   test("OpenCode Go 是多协议网关：minimax-m3 照目录走 Anthropic 协议，声明里混了白名单型号（走补注册）也不变", async () => {
@@ -232,7 +239,14 @@ describe("白名单一致性 —— 菜单里能选的，就是会话里真能�
       assert.ok(family !== undefined, label);
       const home = (await freshRuntime()).getModels("opencode-go");
       const seen = new Set<string>();
+      // 这一组没声明的协议（zen/go 旧写法没有 Google 路由）：地址退回条目的，请求打不通——
+      // 既有限制（main 上联网刷新后的 gemini-*-contributor 同样如此），不在这条里断言，单独列出
+      const unsupported: string[] = [];
       for (const own of home) {
+        if (family.find((method) => method.api === own.api) === undefined) {
+          unsupported.push(`${own.id}[${own.api}]`);
+          continue;
+        }
         const model = registerAndResolveModel(
           await freshRuntime(),
           { id: known.id, apiKey: "sk-test", ...endpoint, models: [{ id: own.id }], ...endpointHintsOf(known, endpoint) },
@@ -242,8 +256,10 @@ describe("白名单一致性 —— 菜单里能选的，就是会话里真能�
         assert.equal(model?.baseUrl, family.find((method) => method.api === own.api)?.baseUrl, `${label} ${own.id} 地址`);
         seen.add(own.api);
       }
-      // 前提：三种协议真的都核对到了
-      assert.deepEqual([...seen].sort(), ["anthropic-messages", "openai-completions", "openai-responses"]);
+      // 前提：三种主协议真的都核对到了（pi 1.5.2 的目录多了 Google 协议的 gemini-4-argon：声明了
+      // Google 地址的组也核对它）
+      for (const api of ["anthropic-messages", "openai-completions", "openai-responses"]) assert.ok(seen.has(api), `${label} 没核对到 ${api}`);
+      assert.ok(unsupported.every((item) => item.endsWith("[google-generative-ai]")), `${label} 意外的未声明协议 ${unsupported.join(",")}`);
       const prefix = stored.replace(/\/(?:openai\/)?v1$/, "");
       for (const method of family) assert.ok(method.baseUrl.startsWith(prefix), `${label} 混进了别组地址 ${method.baseUrl}`);
     });
@@ -267,10 +283,10 @@ describe("白名单一致性 —— 菜单里能选的，就是会话里真能�
   test("与 pi 内建同名的条目选了另一种协议（DeepSeek 的 Anthropic 端点）：协议听条目的，不留内建的 openai-completions", async () => {
     const sides = await bothSides(
       { ...entry("deepseek"), api: "anthropic-messages", baseUrl: "https://api.deepseek.com/anthropic" },
-      "deepseek-v4-flash",
+      "deepseek-flash",
     );
-    // 前提：内建条目真的是另一种协议
-    assert.equal((await freshRuntime()).getModel("deepseek", "deepseek-v4-flash")?.api, "openai-completions");
+    // 前提：内建条目真的是另一种协议（pi 1.5.2 的 deepseek 目录把 deepseek-v4-flash 换成了官方新 id deepseek-flash）
+    assert.equal((await freshRuntime()).getModel("deepseek", "deepseek-flash")?.api, "openai-completions");
     assert.equal(sides.runtime?.api, "anthropic-messages");
     assert.equal(sides.runtime?.baseUrl, "https://api.deepseek.com/anthropic");
   });
@@ -292,7 +308,7 @@ async function outgoingPayload(model: Model<"anthropic-messages">, reasoning: "l
   let captured: Record<string, unknown> | undefined;
   const events = streamSimple(
     model,
-    { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+    normalizeContext({ messages: [{ role: "user", content: "hi", timestamp: 0 }] }),
     {
       apiKey: "sk-test",
       reasoning,
@@ -309,13 +325,18 @@ async function outgoingPayload(model: Model<"anthropic-messages">, reasoning: "l
   return captured;
 }
 
-describe("Kimi K3.1 Pro 在 Kimi 套餐上（目录还没收录，全靠白名单）", () => {
-  test("会话里拿到 1M / 131072，选的档以 adaptive + effort 原样送到——不是被无视的 budget_tokens", async () => {
+describe("Kimi Code 套餐（Anthropic 协议条目）：思考档以 adaptive + effort 原样送到", () => {
+  /**
+   * pi 1.3 起 kimi-coding 目录改走 OpenAI Chat（/coding/v1），我们的条目仍是 Anthropic 协议——跨协议
+   * 不借 compat，所以 adaptive 全靠白名单声明（k3.1-pro* 从来如此；k3 / k3-256k / kimi-for-coding
+   * 在 0.84.3 时从目录借，升 1.5.2 后改由白名单声明）。不声明的话 pi 发 budget_tokens，选的档被无视。
+   */
+  async function kimiCoding(modelId: string): Promise<PiModelLike> {
     const known = KNOWN_PROVIDERS.find((provider) => provider.id === "kimi-coding");
     assert.ok(known !== undefined && known.api === "anthropic-messages");
     const runtime = await freshRuntime();
-    // 前提：目录真的没收录（收录了的话这条测的就是目录，不是白名单）
-    assert.equal(runtime.getModel("kimi-coding", "k3.1-pro"), undefined);
+    // 前提：目录里这个 id 是 OpenAI 协议的条目（同协议的话 compat 就是从目录借来的，测的不是白名单）
+    assert.equal(runtime.getModel("kimi-coding", modelId)?.api, "openai-completions", `${modelId} 目录协议`);
     const model = registerAndResolveModel(
       runtime,
       {
@@ -323,22 +344,39 @@ describe("Kimi K3.1 Pro 在 Kimi 套餐上（目录还没收录，全靠白名�
         apiKey: "sk-test",
         baseUrl: known.baseUrl,
         api: known.api,
-        models: [{ id: "k3.1-pro" }],
+        models: [{ id: modelId }],
         ...catalogPreferenceOf(known),
       },
-      "k3.1-pro",
+      modelId,
     );
-    assert.ok(model !== undefined);
+    assert.ok(model !== undefined, modelId);
+    return model;
+  }
+
+  test("K3.1 Pro：会话里拿到 1M / 131072，三档 adaptive + effort", async () => {
+    const model = await kimiCoding("k3.1-pro");
     assert.equal(model.contextWindow, 1_048_576);
     assert.equal(model.maxTokens, 131_072);
     assert.deepEqual(getSupportedThinkingLevels(model), ["low", "high", "max"]);
+    await assertAdaptive(model, "k3.1-pro");
+  });
+
+  test("k3 / k3-256k / kimi-for-coding：同样 adaptive + effort（升级前从目录借，现在由白名单声明）", async () => {
+    for (const modelId of ["k3", "k3-256k", "kimi-for-coding"]) {
+      const model = await kimiCoding(modelId);
+      assert.deepEqual(getSupportedThinkingLevels(model), ["low", "high", "max"], modelId);
+      await assertAdaptive(model, modelId);
+    }
+  });
+
+  async function assertAdaptive(model: PiModelLike, label: string): Promise<void> {
     const anthropicModel = { ...model, api: "anthropic-messages" } as Model<"anthropic-messages">;
     for (const level of ["low", "high", "max"] as const) {
       const payload = await outgoingPayload(anthropicModel, level);
-      assert.deepEqual(payload["output_config"], { effort: level }, `${level} 档的 effort`);
-      assert.equal((payload["thinking"] as { type?: string } | undefined)?.type, "adaptive", `${level} 档的 thinking`);
+      assert.deepEqual(payload["output_config"], { effort: level }, `${label} ${level} 档的 effort`);
+      assert.equal((payload["thinking"] as { type?: string } | undefined)?.type, "adaptive", `${label} ${level} 档的 thinking`);
     }
-  });
+  }
 });
 
 /**

@@ -70,6 +70,7 @@ import { joinSystemPrompt, orbitaSystemSegments, type PromptSegment } from "./sy
 import { diffFingerprints, promptFingerprints, stabilityLogLine } from "./prompt-stability.ts";
 import {
   RETRY_BASE_DELAY_MS,
+  RETRY_MAX_DELAY_MS,
   RETRY_MAX_ATTEMPTS,
   retryVisibleToUi,
 } from "./retry-policy.ts";
@@ -1253,7 +1254,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    * applyOverrides 只改内存、不落盘，不会写回用户的全局设置文件。
    */
   services.settingsManager.applyOverrides({
-    retry: { maxRetries: RETRY_MAX_ATTEMPTS, baseDelayMs: RETRY_BASE_DELAY_MS },
+    retry: { maxRetries: RETRY_MAX_ATTEMPTS, baseDelayMs: RETRY_BASE_DELAY_MS, maxAgentDelayMs: RETRY_MAX_DELAY_MS },
   });
   // 规则清单原料：resourceLoader 在 services 创建时已 reload，这里读一次快照。
   // 读失败只记日志——清单推不出去面板退「未知」，不该拦对话

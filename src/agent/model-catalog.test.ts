@@ -117,8 +117,10 @@ describe("refreshCatalogs", () => {
     const fresh = await templateModel("opencode-go", "brand-new-model");
     const seen: { url: string; headers: IncomingHttpHeaders }[] = [];
     const server = createServer((req, res) => {
-      seen.push({ url: req.url ?? "", headers: req.headers });
-      if (req.url === "/api/models/providers/opencode-go") {
+      // 比路径不比整串：pi 1.x 起请求带 `?types=chat,image,classifier`（目录统一了对话 / 图片 / 分类模型）
+      const path = new URL(req.url ?? "", "http://catalog.invalid").pathname;
+      seen.push({ url: path, headers: req.headers });
+      if (path === "/api/models/providers/opencode-go") {
         res.writeHead(200, {
           "content-type": "application/json",
           // 比内建快照新，pi 才会采用（remoteModels 按 lastModified 比）

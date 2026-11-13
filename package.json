@@ -24,8 +24,8 @@
     "@codemirror/language": "6.13.1",
     "@codemirror/state": "6.7.6",
     "@codemirror/view": "6.43.15",
-    "@earendil-works/pi-ai": "0.84.3",
-    "@earendil-works/pi-coding-agent": "0.84.3",
+    "@earendil-works/pi-ai": "1.5.2",
+    "@earendil-works/pi-coding-agent": "1.5.2",
     "@modelcontextprotocol/sdk": "1.31.0",
     "@napi-rs/canvas": "1.0.9",
     "@tanstack/react-virtual": "3.13.23",
@@ -73,8 +73,8 @@
     "vite": "^7.3.6"
   },
   "patchedDependencies": {
-    "@earendil-works/pi-ai@0.84.3": "patches/@earendil-works%2Fpi-ai@0.84.3.patch",
-    "@earendil-works/pi-coding-agent@0.84.3": "patches/@earendil-works%2Fpi-coding-agent@0.84.3.patch"
+    "@earendil-works/pi-ai@1.5.2": "patches/@earendil-works%2Fpi-ai@1.5.2.patch",
+    "@earendil-works/pi-coding-agent@1.5.2": "patches/@earendil-works%2Fpi-coding-agent@1.5.2.patch"
   },
   "build": {
     "appId": "com.orbita.desktop",
