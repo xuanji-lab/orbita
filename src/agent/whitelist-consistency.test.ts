@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels, type Model } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/api/anthropic-messages";
+import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
 import { KNOWN_MODELS } from "../shared/known-models.ts";
 import {
   KNOWN_PROVIDERS,
@@ -292,7 +293,7 @@ async function outgoingPayload(model: Model<"anthropic-messages">, reasoning: "l
   let captured: Record<string, unknown> | undefined;
   const events = streamSimple(
     model,
-    { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+    normalizeContext({ messages: [{ role: "user", content: "hi", timestamp: 0 }] }),
     {
       apiKey: "sk-test",
       reasoning,

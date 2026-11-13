@@ -1,14 +1,14 @@
 /**
  * Claude 提示缓存时长（cache-retention.ts）：判定表、包装层、以及到真实请求体的端到端。
- * 端到端走 pi 0.84.3 的 anthropic-messages streamSimple，用假 fetch 截下真正要发出的
+ * 端到端走 pi 1.5.2 的 anthropic-messages streamSimple，用假 fetch 截下真正要发出的
  * HTTP body（不联网），断言 tools / system / 最后一条消息上的 cache_control。
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
-import { Type } from "@earendil-works/pi-ai";
 import type { Context, FetchFunction, Model } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/api/anthropic-messages";
+import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
 import {
   applyCacheRetentionPatch,
   chooseCacheRetention,
@@ -149,7 +149,7 @@ const context: Context = {
     },
     { role: "user", content: [{ type: "text", text: "second" }], timestamp: 0 },
   ],
-  tools: [{ name: "read", description: "read a file", parameters: Type.Object({ path: Type.String() }) }],
+  tools: [{ name: "read", description: "read a file", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } }],
 };
 
 interface WireBlock {
@@ -182,12 +182,11 @@ async function wireBody(
 ): Promise<WireBody> {
   const captured: { url?: string; body?: WireBody } = {};
   const fetch = capturingFetch(captured);
-  // pi-agent-core 自带一份嵌套的 pi-ai（0.84.4），事件流类型与顶层 0.84.3 名义上不同；
-  // 运行时 pi-coding-agent 走的是顶层 0.84.3（本测试同一份），这里只桥接类型
+  // 只桥接类型：SessionStreamFn 的事件流类型来自 pi-agent-core 的声明
   const inner: SessionStreamFn = (m, ctx, options) =>
     streamSimple(m as Model<"anthropic-messages">, ctx, { ...options, fetch }) as unknown as ReturnType<SessionStreamFn>;
   const wrapped = wrapStreamWithCacheRetention(wrapStreamWithBilling(inner), role);
-  const events = await wrapped(model, context, {
+  const events = await wrapped(model, normalizeContext(context), {
     apiKey,
     ...(extra.mainLoop ? { onPayload: (payload: unknown) => ccBillingPatch(payload) } : {}),
     ...(extra.cacheRetention !== undefined ? { cacheRetention: extra.cacheRetention } : {}),

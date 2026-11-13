@@ -1,6 +1,6 @@
 /**
  * pi patch 的行为守卫（patches/README.md）：api.kimi.com 认作 Moonshot 端点。
- * 未 patch 的 pi 0.84.3 只认 `api.moonshot.*`，Kimi 官方 coding 端点（新域名）会被
+ * 未 patch 的 pi（0.84.3 起，1.5.2 仍是）只认 `api.moonshot.*`，Kimi 官方 coding 端点（新域名）会被
  * 当标准 OpenAI 端点——推理模型的系统提示词以 `developer` 角色发出，Moonshot
  * 服务端当场 400「role 'developer' is not allowed」。
  */
@@ -8,6 +8,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { stream } from "@earendil-works/pi-ai/api/openai-completions";
 import type { Context, FetchFunction, Model } from "@earendil-works/pi-ai";
+import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
 
 /** 与用户真实配置同形：自定义网关 id + openai-completions。reasoning 是触发 developer 角色的前提 */
 function model(baseUrl: string): Model<"openai-completions"> {
@@ -69,7 +70,7 @@ function sseFetch(captured: { body?: { messages?: Array<{ role: string }> } }): 
 /** 走完整条 stream（确保请求真的发出），返回请求里第一条消息的角色 */
 async function firstInstructionRole(baseUrl: string): Promise<string> {
   const captured: { body?: { messages?: Array<{ role: string }> } } = {};
-  const events = stream(model(baseUrl), context, { apiKey: "test-key", fetch: sseFetch(captured) });
+  const events = stream(model(baseUrl), normalizeContext(context), { apiKey: "test-key", fetch: sseFetch(captured) });
   let eventCount = 0;
   for await (const _event of events) eventCount += 1;
   assert.ok(eventCount > 0, "stream 没产出任何事件——假 SSE 可能没被解析");

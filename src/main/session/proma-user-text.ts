@@ -108,9 +108,11 @@ export function promaUserTextMap(
   entries: readonly SessionEntry[],
   renderTexts: readonly string[] | null,
 ): Map<string, string> {
-  const users = entries.filter(
-    (entry) => entry.type === "message" && isRecord(entry.message) && entry.message["role"] === "user",
-  );
+  // 先落成 unknown 再判：pi 1.x 的 ToolResultMessage 是条件类型，直接对 entry.message 收窄会把 role 收成 "toolResult"
+  const users = entries.filter((entry) => {
+    const message: unknown = entry.type === "message" ? entry.message : undefined;
+    return isRecord(message) && message["role"] === "user";
+  });
   const aligned = renderTexts !== null && renderTexts.length === users.length;
   const map = new Map<string, string>();
   users.forEach((entry, index) => {

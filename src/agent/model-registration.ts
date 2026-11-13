@@ -153,7 +153,7 @@ export function toFallbackModels(
    * withKnownParams）；缺席时（老调用方、单测）按 `prefer.api` 当条目协议、型号不各走各的协议。
    */
   endpoint?: ProviderEndpoint,
-): NonNullable<PiProviderRegistration["models"]> {
+): RegisteredModel[] {
   const sameEndpoint = prefer.catalogId !== undefined && endpoint !== undefined && modelsPickProtocol(endpoint);
   const entryApi = endpoint?.api ?? prefer.api;
   return declared.map((decl) => {
@@ -185,8 +185,12 @@ export function toFallbackModels(
   });
 }
 
-/** 补注册时一条模型的形状（registerProvider 的 models 元素） */
-type RegisteredModel = NonNullable<PiProviderRegistration["models"]>[number];
+/**
+ * 补注册时一条模型的形状（registerProvider 的 models 元素）。pi 1.0 起 models 元素是
+ * chat / image / classifier 三种配置的联合（0.99.0「Unified image models into the regular
+ * Provider/Models surface」）；Orbita 只注册对话模型，取 chat 那支（`type` 缺省或 "chat"）。
+ */
+type RegisteredModel = Exclude<NonNullable<PiProviderRegistration["models"]>[number], { type: "image" | "classifier" }>;
 
 /**
  * 本家目录认识的型号：目录条目带回**参数**，白名单逐字段盖上。
@@ -483,7 +487,7 @@ export function toFallbackRegistration(
   current: readonly PiModel[],
   catalog: readonly BuiltinProvider[] = [],
   catalogModels: readonly PiModel[] = [],
-): PiProviderRegistration {
+): PiProviderRegistration & { models: RegisteredModel[] } {
   return {
     ...toAuthConfig(provider),
     models: toFallbackModels(current, provider.models, catalog, preferenceOf(provider), catalogModels, {

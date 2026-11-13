@@ -327,7 +327,8 @@ export function reasonixToMessages(
           const id = optionalString(fn["id"]) ?? optionalString(call["id"]);
           const name = optionalString(fn["name"]);
           if (id === null || name === null) continue;
-          calls.push({ type: "toolCall", id, name, arguments: safeArguments(fn["arguments"]) });
+          // 源自 JSON.parse 的值本来就是 JSON；pi 1.x 把 ToolCall.arguments 收窄成 JsonObject，只在类型面对齐
+          calls.push({ type: "toolCall", id, name, arguments: safeArguments(fn["arguments"]) as ToolCall["arguments"] });
         }
       }
       content.push(...calls);

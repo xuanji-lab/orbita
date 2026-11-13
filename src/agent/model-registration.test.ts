@@ -4,6 +4,7 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { clampThinkingLevel, getSupportedThinkingLevels, type Model, type ThinkingLevel } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/api/anthropic-messages";
 import { streamSimple as streamOpenAI } from "@earendil-works/pi-ai/api/openai-completions";
+import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
 import { FALLBACK_MODEL } from "../shared/model-defaults.ts";
 import { KNOWN_PROVIDERS, endpointHintsOf } from "../shared/known-providers.ts";
 import type { ModelDecl } from "../shared/provider.ts";
@@ -239,7 +240,7 @@ describe("白名单档位 → pi 的 thinkingLevelMap（openai-completions；移
     let captured: Record<string, unknown> | undefined;
     const events = streamOpenAI(
       model as Model<"openai-completions">,
-      { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+      normalizeContext({ messages: [{ role: "user", content: "hi", timestamp: 0 }] }),
       {
         apiKey: "sk-test",
         ...(level === "off" ? {} : { reasoning: level }),
@@ -390,12 +391,12 @@ describe("registerAndResolveModel —— create 与会话内换模型（C-4）�
       kinds,
       registerProvider(_id: string, registration: PiProviderRegistration): void {
         kinds.push(registration.models === undefined ? "auth" : "fallback");
-        registeredModels = registration.models?.map((model) => ({
-          ...model,
-          provider: "prov" as const,
-          api: registration.api ?? "openai-completions",
-          baseUrl: registration.baseUrl ?? "",
-        }));
+        // models 元素是 chat / image / classifier 的联合（pi 1.0 起）；我们只注册对话模型
+        registeredModels = registration.models?.flatMap((model) =>
+          model.type === "image" || model.type === "classifier"
+            ? []
+            : [{ ...model, provider: "prov" as const, api: registration.api ?? "openai-completions", baseUrl: registration.baseUrl ?? "" }],
+        );
       },
       getModel(providerId: string, modelId: string): PiModel | undefined {
         if (providerId !== "prov") return undefined;
@@ -733,7 +734,7 @@ describe("自适应思考 —— 新 Claude 只收 adaptive + effort，网关注
     let captured: Record<string, unknown> | undefined;
     const events = streamSimple(
       model as Model<"anthropic-messages">,
-      { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+      normalizeContext({ messages: [{ role: "user", content: "hi", timestamp: 0 }] }),
       {
         apiKey: "sk-test",
         reasoning,
@@ -897,7 +898,7 @@ describe("DeepSeek 思考回传 —— 聚合网关换写法时从同家目录�
     const wire = { ...model, provider: "my-gw", api: "openai-completions", baseUrl: "https://gw.example/v1" };
     const events = streamOpenAI(
       wire as Model<"openai-completions">,
-      {
+      normalizeContext({
         messages: [
           { role: "user", content: "跑一下", timestamp: 0 },
           {
@@ -919,7 +920,7 @@ describe("DeepSeek 思考回传 —— 聚合网关换写法时从同家目录�
             timestamp: 2,
           },
         ],
-      },
+      }),
       {
         apiKey: "sk-test",
         reasoning: "high",

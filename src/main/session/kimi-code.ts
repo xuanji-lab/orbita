@@ -366,7 +366,8 @@ export function parseKimiWire(raw: string, providerId: string, blobs: ReadonlyMa
         const name = optionalString(event["name"]);
         if (id === null || name === null) continue;
         const args = isRecord(event["args"]) ? event["args"] : {};
-        const call: ToolCall = { type: "toolCall", id, name, arguments: args };
+        // 源自 JSON.parse 的值本来就是 JSON；pi 1.x 把 ToolCall.arguments 收窄成 JsonObject，只在类型面对齐
+        const call: ToolCall = { type: "toolCall", id, name, arguments: args as ToolCall["arguments"] };
         open.content.push(call);
         open.calls.push({ id, name });
       } else if (eventType === "tool.result") {
