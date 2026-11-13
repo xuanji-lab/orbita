@@ -2,9 +2,9 @@
  * 遗留事项带上下文续跑（面板的「继续」入口）——纯函数：种子消息组装与
  * 原会话续跑的可用性判断。
  *
- * ## 种子消息形态（本 PR 的核心决策）
+ * ## 种子消息形态
  *
- * **发一条可见的结构化 user 消息直接开工**，不走 visibility: internal：
+ * **一条可见的结构化 user 消息**，不走 visibility: internal：
  *
  * - internal 是「系统注入的内部 prompt」（收尾扫描的指令语义），把用户的任务
  *   开工伪装成系统指令是语义错位；更实际的是 internal 不渲染——用户会看到
@@ -12,7 +12,9 @@
  * - 标题链路自动成立：首行截断即标题（derived），auto-title 稍后还会生成概括
  *   （derived 允许再试）；recentQueries 记录它也成立——它确实是这单任务的
  *   起点提问。
- * - 「播种 + 等用户触发」被否：多一步操作，违背「一键开工」的承诺。
+ * - 2026-10-31 起改为「预填进首页输入框，回车才发」（原先一点就发、并否决过
+ *   「播种 + 等用户触发」）：聊出来的待办常常该去别的工作区，一点就发等于替用户
+ *   选了来源工作区。多按一次回车换来在底栏芯片上选去哪（用户认可的取舍）。
  *
  * ## 上下文为什么是 title + detail，不带 transcript 片段
  *
@@ -45,6 +47,11 @@ export function buildCarryoverSeed(item: Carryover, sourceTitle: string | null):
  * 标题——只点名这件事并要求接着做完。
  */
 export function buildCarryoverFollowUp(item: Carryover): string {
+  if (item.origin === "noticed") {
+    // 「以后再做」里当场记下的：它的 detail 是当时写的一句「为什么这次不做」，不是上下文摘录
+    const why = item.detail === "" ? "" : `\n\n当时记下它时说：${item.detail}`;
+    return `现在把之前记下「以后再做」的这件事也做了：\n\n${item.title}${why}\n\n请把它加进计划里，说明加这一步的原因，然后接着做完。`;
+  }
   const detail = item.detail === "" ? "" : `\n\n当时的上下文摘录：${item.detail}`;
   return `继续处理这件收尾时留下的遗留事项：\n\n${item.title}${detail}\n\n请接着把它做完。`;
 }

@@ -1,0 +1,75 @@
+/**
+ * 右栏显示文档 / 演示文稿时的宽度规则（纯函数，单测钉）。
+ *
+ * 写东西的面板在 320px 里太局促，所以默认占 pane（chat 主区 + 右栏）的 0.58；但聊天列有
+ * 它自己的底线——再窄输入框按钮互相压住、引用芯片没有正文、「1 个文件已更改」一字一行
+ * （2026-11-07 独立验收：1200 窗口聊天列 293–370px）。所以：
+ *   宽 = clamp(下限 420, 想要的, min(pane × 2/3, pane − 聊天列首选 480))
+ * 聊天列 480 是首选；面板已经缩到下限 420 还放不下时，聊天列可以再让到硬底线 410（1200 窗口实测：
+ * 输入框按钮不重叠、引用芯片有正文）；还不够就把面板挤窄到 300 为止（聊天输入框完整可用）；
+ * 面板 300 之后聊天列还可以再让到 330（输入框仍完整可用）；连「面板 300 + 聊天 330」都放不下（pane < 630，
+ * 窗口约 < 710，低于应用最小窗口宽，实际出不来）才转右侧覆盖层——覆盖层会盖住输入框右半、发送键在那边。
+ * 覆盖层会盖住聊天列右侧——所以打开面板时 App 先自动收起左侧栏（见 App 的 docSidebar 逻辑），收完还放不下才到这一步。
+ * 其它右栏页不走这里（它们的规则在 clampRightPanelWidth）。
+ */
+export const DOC_PANEL_FRACTION = 0.58;
+export const DOC_CHAT_MIN = 480;
+export const DOC_CHAT_HARD_MIN = 410;
+export const DOC_PANEL_FLOOR = 420;
+/** 窗口再窄时面板可以被挤到的最窄宽（聊天列守硬底线 410 不动）；再窄才转覆盖层 */
+export const DOC_PANEL_SQUEEZE = 300;
+/** 聊天列的绝对底线：再窄输入框放不下（发送键会被挤没）。面板已挤到 300 时聊天列可以让到这里 */
+export const DOC_CHAT_ABS_MIN = 330;
+export const DOC_OVERLAY_MAX = 640;
+/** 覆盖层态下聊天输入框要露出来的最小宽（输入框按钮不重叠的实测下限）+ 右栏图标条与边距 */
+export const DOC_INPUT_MIN = 410;
+export const DOC_OVERLAY_MARGIN = 56;
+export const DOC_OVERLAY_FLOOR = 300;
+
+/** 覆盖层宽 = min(640, 窗口 − 输入框最小可用宽 − 边距)：输入框必须露出来可用（2026-11-07 验收：640 宽的覆盖层把输入框整个盖住） */
+export function docOverlayWidth(windowWidth: number): number {
+  return Math.max(DOC_OVERLAY_FLOOR, Math.min(DOC_OVERLAY_MAX, Math.round(windowWidth - DOC_INPUT_MIN - DOC_OVERLAY_MARGIN)));
+}
+
+/** 想要的宽度比实际给的宽超过这么多，才算「被聊天列底线压住了」（避免 5px 的舍入差触发收侧栏） */
+export const DOC_SQUEEZE_TOLERANCE = 24;
+
+export interface DocPanelLayout {
+  overlay: boolean;
+  width: number;
+  /** 并排但被挤得比下限 420 还窄 */
+  tight?: boolean;
+  /**
+   * 并排、没低于下限，但想要的宽（0.58 × pane 或用户拖过的）被聊天列底线压低了：
+   * 同一个窗口里，侧栏展开时面板 420、侧栏收起时 650——宽度取决于「侧栏此刻展没展开」，
+   * 而侧栏状态又取决于用户之前怎么开关过，于是同一窗口里看到的宽度忽大忽小。
+   * App 看到它就在打开文档面板时先收侧栏（与 tight / 覆盖层同一条自动收起纪律，关面板时还原），
+   * 同一个窗口里打开文档永远是同一个宽度。
+   */
+  squeezed?: boolean;
+}
+
+/**
+ * @param pane 量到的 pane 宽（0 = 还没量到：先按想要的宽并排）
+ * @param wanted 用户拖过的宽度；null = 没拖过，按比例
+ * @param windowWidth 窗口宽，覆盖层宽度用
+ */
+export function docPanelLayout(pane: number, wanted: number | null, windowWidth: number): DocPanelLayout {
+  const overlayWidth = docOverlayWidth(windowWidth);
+  if (!Number.isFinite(pane) || pane <= 0) {
+    return { overlay: false, width: Math.round(wanted ?? DOC_PANEL_FLOOR) };
+  }
+  // 聊天列守住硬底线后，面板最宽能有多少
+  const room = pane - DOC_CHAT_HARD_MIN;
+  if (room < DOC_PANEL_SQUEEZE) {
+    // 面板挤到 300 了，聊天列还能让到 330：仍然并排——覆盖层会盖住输入框右半的发送键，宁可聊天列窄一点
+    if (pane - DOC_PANEL_SQUEEZE >= DOC_CHAT_ABS_MIN) return { overlay: false, width: DOC_PANEL_SQUEEZE, tight: true };
+    return { overlay: true, width: overlayWidth };
+  }
+  // 放不下 420 的下限：面板被挤窄（工具栏会折行，但聊天输入框完整可用）——比覆盖层盖住输入框强
+  if (room < DOC_PANEL_FLOOR) return { overlay: false, width: Math.round(room), tight: true };
+  const ceiling = Math.max(DOC_PANEL_FLOOR, Math.min(Math.round((pane * 2) / 3), pane - DOC_CHAT_MIN));
+  const want = Math.round(wanted ?? pane * DOC_PANEL_FRACTION);
+  const width = Math.max(DOC_PANEL_FLOOR, Math.min(ceiling, want));
+  return { overlay: false, width, ...(want - width > DOC_SQUEEZE_TOLERANCE ? { squeezed: true } : {}) };
+}

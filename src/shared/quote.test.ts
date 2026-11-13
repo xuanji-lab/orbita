@@ -9,6 +9,7 @@ import {
   composeQuotedMessage,
   countChars,
   normalizeSelectedText,
+  parseOpenDocument,
   parseQuotedMessage,
   withoutQuotes,
   type TextQuote,
@@ -138,5 +139,83 @@ describe("acceptQuote —— 引用准入", () => {
       text: "x".repeat(90),
     }));
     assert.equal(acceptQuote(many, { messageId: "m-new", text: "短" }).accepted, true);
+  });
+});
+
+describe("文件引用 —— 文档面板里的划选（带行号 / 页号）", () => {
+  const fileQuote: TextQuote = {
+    text: "主要风险是验收只靠我一个人",
+    messageId: "",
+    role: "user",
+    filePath: "/ws/Q4 计划.md",
+    lines: { from: 12, to: 13 },
+  };
+
+  it("往返：路径、行号范围、页号都带回来；文本与用户的话不变", () => {
+    const slide: TextQuote = { ...fileQuote, filePath: "/ws/a.md", lines: { from: 20, to: 28 }, slide: 3, text: "# 第三页" };
+    const message = composeQuotedMessage([fileQuote, slide], "改得更口语");
+    assert.deepEqual(parseQuotedMessage(message), { quotes: [fileQuote, slide], text: "改得更口语" });
+  });
+
+  it("编号按位置：文件引用与消息引用混排时编号连续（模型按编号逐条回复）", () => {
+    const message = composeQuotedMessage([reply, fileQuote], "逐条改");
+    assert.match(message, /<quoted_context index="1" /);
+    assert.match(message, /<quoted_file index="2" path="\/ws\/Q4 计划.md" lines="12-13">/);
+  });
+
+  it("路径里的引号 / 尖括号被转义，不会提前截断属性", () => {
+    const tricky: TextQuote = { ...fileQuote, filePath: '/ws/a"b>c.md' };
+    const back = parseQuotedMessage(composeQuotedMessage([tricky], "x")).quotes[0];
+    assert.equal(back?.filePath, '/ws/a"b>c.md');
+  });
+
+  it("旧写法（没有 lines）照读：Proma 迁移来的 quoted_file", () => {
+    const old = '<quoted_file path="/x/y.ts">\nconst a = 1\n</quoted_file>\n\n看看';
+    const parsed = parseQuotedMessage(old);
+    assert.deepEqual(parsed.quotes, [{ text: "const a = 1", messageId: "", role: "user", filePath: "/x/y.ts" }]);
+    assert.equal(parsed.text, "看看");
+  });
+
+  it("行号格式不对（0、倒序、乱码）当没有，不抛", () => {
+    for (const bad of ["0-3", "5-2", "x", ""]) {
+      const parsed = parseQuotedMessage(`<quoted_file path="/a.md" lines="${bad}">\n字\n</quoted_file>\n\n话`);
+      assert.equal(parsed.quotes[0]?.lines, undefined, bad);
+    }
+  });
+
+  it("同一个文件同一段话在不同行是两条引用，同一行才判重", () => {
+    const here = { messageId: "", text: "重复", filePath: "/a.md", lines: { from: 1, to: 1 } };
+    assert.equal(acceptQuote([here], { ...here, lines: { from: 9, to: 9 } }).accepted, true);
+    assert.deepEqual(acceptQuote([here], { ...here }), { accepted: false, reason: "duplicate" });
+  });
+
+  it("系统提示词讲到了文件引用的每个属性", () => {
+    for (const attr of ["path", "lines", "slide"]) assert.match(QUOTE_GUIDELINE, new RegExp(`${attr}=`));
+  });
+});
+
+describe("open_document —— 右栏开着哪份文件", () => {
+  const open = { path: "/ws/未命名文档.md", kind: "doc" as const };
+
+  it("拼在正文最前面一行；解析时剥掉，显示 / 标题里看不到它", () => {
+    const message = composeQuotedMessage([], "在第二段后面加总结", open);
+    assert.equal(message, '<open_document path="/ws/未命名文档.md" kind="doc"/>\n\n在第二段后面加总结');
+    assert.deepEqual(parseQuotedMessage(message), { quotes: [], text: "在第二段后面加总结" });
+    assert.equal(withoutQuotes(message), "在第二段后面加总结");
+    assert.deepEqual(parseOpenDocument(message), open);
+  });
+
+  it("与引用并存：引用编号不受它影响", () => {
+    const message = composeQuotedMessage([reply], "改", { path: "/a.md", kind: "slides" });
+    const parsed = parseQuotedMessage(message);
+    assert.equal(parsed.quotes.length, 1);
+    assert.equal(parsed.text, "改");
+    assert.match(message, /<quoted_context index="1" /);
+    assert.equal(parseOpenDocument(message)?.kind, "slides");
+  });
+
+  it("没有开着的文档：与以前逐字相同", () => {
+    assert.equal(composeQuotedMessage([reply], "q"), composeQuotedMessage([reply], "q", undefined));
+    assert.equal(parseOpenDocument("普通一句"), null);
   });
 });

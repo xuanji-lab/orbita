@@ -2,6 +2,7 @@
  * 会话的 IPC —— 四层契约的第 2 层。
  * 落盘那一半在 `recorder.ts`：它是纯模块，抽出去是为了能被 `node --test` 直接测。
  */
+import { isProviderEnabled } from "../../shared/provider.ts";
 import { BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { writeFile } from "node:fs/promises";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
@@ -10,6 +11,7 @@ import {
   transcriptToMarkdown,
   type CarryoverStatus,
   type SessionCompletion,
+  type SessionMoveResult,
   type SessionOlderPage,
 } from "../../shared/session.ts";
 import {
@@ -23,9 +25,9 @@ import {
 } from "../../shared/model-assign.ts";
 import type { AgentHost } from "../agent/host.ts";
 import type { CarryoverStore } from "./carryover-store.ts";
-import { executeRevert, executeUndo, fileTurnsIn, planRevert, planUndo } from "./revert.ts";
+import { executeRevert, executeUndo, fileTurnsIn, planRevert, planUndo, revertFromTurn } from "./revert.ts";
 import type { RevertFileOutcome } from "../../shared/revert.ts";
-import { isWebPageFile } from "../../shared/files.ts";
+import type { ArtifactOpenResult } from "../../shared/browser.ts";
 import type { SessionRecord } from "../../shared/session.ts";
 import type { ProviderStore } from "../provider/store.ts";
 import type { SessionStore } from "./store.ts";
@@ -37,13 +39,26 @@ export function registerSessionIpc(
   carryovers: CarryoverStore,
   /** 给导入的会话分配模型：执行前校验目标 provider / 模型仍存在（model-assign.ts） */
   providers: ProviderStore,
-  /** 轮尾产物在内置浏览器「你的」tab 打开（BrowserSandbox.openLocalFile） */
-  openArtifactInBrowser: (path: string) => Promise<void>,
-  /** 会话回退成功后的意图系统作度钩子（实验功能 intent-system；undefined = 不启用） */
-  onReverted?: (sessionId: string, turnIds: readonly string[]) => Promise<void>,
+  /**
+   * 轮尾产物在内置浏览器「你的」tab 打开（BrowserSandbox.openSessionArtifact：本会话目录那道入口闸，
+   * realpath 后判）。不放行时回原因码，不抛错
+   */
+  openArtifactInBrowser: (sessionId: string, path: string) => Promise<ArtifactOpenResult>,
+  /** 迁移会话（session/move.ts 的 moveSessions，index.ts 绑好工作区表与 phase 表） */
+  moveSessions: (ids: readonly string[], workspaceId: string | null) => Promise<SessionMoveResult>,
+  /**
+   * 会话回退成功后的钩子（index.ts 注入：意图系统作废 + 记忆系统停用 / 截段；undefined = 不启用）。
+   * turnIds = 被撤回轮次的 user 记录 id；fromTurn = 回退点那条用户消息的轮号（按用户消息计、
+   * 1 起，与记忆 turn-tracker 的 turnNumberOf 同口径）——它及之后的轮被撤回，下一条消息
+   * 的轮号就是它
+   */
+  onReverted?: (sessionId: string, reverted: { turnIds: readonly string[]; fromTurn: number }) => Promise<void>,
 ): void {
   ipcMain.handle(ipcChannels.sessionList, () => store.list());
-  // 打开会话：**只回尾窗**（主进程仍全量读 + 折叠，见 store.loadWindow 的注释）——
+  // 单条 meta（列表增量刷新）：只读这一条的 `.meta.json`，不读 transcript。
+  // 坏 meta / 不存在回 null——与 list() 跳过坏记录一个口径，renderer 据此从列表移除
+  ipcMain.handle(ipcChannels.sessionMeta, (_event, id: string) => store.readMeta(id));
+  // 打开会话：**只回首屏尾窗**（主进程仍全量读 + 折叠，见 store.loadWindow 的注释）——
   // 25MB / 2948 条的会话一次过 IPC 是瓶颈所在，renderer 也无力一次渲染完
   ipcMain.handle(ipcChannels.sessionLoad, (_event, id: string) => store.loadWindow(id));
   // 更早的一页：滚动触顶时 renderer 拿窗口第一条记录的 id 来拉（before 就是它）
@@ -66,7 +81,9 @@ export function registerSessionIpc(
       const dead = findDeadTarget(
         entries,
         (await providers.list()).flatMap((provider) =>
-          provider.models.declared.map((model) => ({ providerId: provider.id, modelId: model.id })),
+          isProviderEnabled(provider)
+            ? provider.models.declared.map((model) => ({ providerId: provider.id, modelId: model.id }))
+            : [],
         ),
       );
       if (dead !== null) throw new Error(MODEL_ASSIGN_TARGET_GONE_CODE + dead.model);
@@ -134,7 +151,13 @@ export function registerSessionIpc(
   );
   ipcMain.handle(
     ipcChannels.sessionMove,
-    (_event, id: string, workspaceId: string | null) => store.move(id, workspaceId),
+    (_event, ids: unknown, workspaceId: unknown): Promise<SessionMoveResult> => {
+      // 入口就洗：ids 只收字符串，workspaceId 只收字符串或 null
+      if (!Array.isArray(ids)) throw new Error("session:move 需要 ids 数组");
+      const clean = ids.filter((id): id is string => typeof id === "string" && id !== "");
+      const target = typeof workspaceId === "string" && workspaceId !== "" ? workspaceId : null;
+      return moveSessions(clean, target);
+    },
   );
 
   /**
@@ -169,7 +192,9 @@ export function registerSessionIpc(
     async (_event, id: string, targetMessageId: string): Promise<RevertFileOutcome[]> => {
       // 被回退轮次的 user 记录 id（intent-lab /invalidate 要作度的 turnId 就是它们）。
       // 回退前先取——executeRevert 落 RevertRecord 后 readLog 就是折叠后的新世界
+      // 同一次读顺带取回退点的轮号（记忆系统截段 / 停用按轮号对账）
       let invalidatedTurnIds: string[] = [];
+      let fromTurn = 0;
       try {
         const detail = await store.load(id);
         if (detail !== null) {
@@ -181,16 +206,17 @@ export function registerSessionIpc(
               .slice(index)
               .filter((record): record is Extract<SessionRecord, { role: "user" }> => record.role === "user")
               .map((record) => record.id);
+            fromTurn = revertFromTurn(detail.transcript, index);
           }
         }
       } catch {
         invalidatedTurnIds = [];
       }
       const outcomes = await executeRevert({ store, host: agentHost }, id, targetMessageId);
-      // 意图系统（实验）：被回退轮次的 QA 送 intent-lab 作度（fire-and-forget，
-      // 绝不动回退本身；开关关 / 连不上都只记日志）。回调由 index.ts 注入
+      // 意图系统 / 记忆系统（实验）：fire-and-forget，绝不动回退本身；开关关 / 连不上
+      // 都只记日志。回调由 index.ts 注入
       if (onReverted !== undefined && invalidatedTurnIds.length > 0) {
-        void onReverted(id, invalidatedTurnIds);
+        void onReverted(id, { turnIds: invalidatedTurnIds, fromTurn });
       }
       return outcomes;
     },
@@ -209,22 +235,29 @@ export function registerSessionIpc(
    * （同 fs:open 的纪律，但根不是目录树而是会话自己的账本）。内置浏览器再叠加
    * isWebPageFile。
    */
-  const knownArtifact = async (id: string, path: string): Promise<void> => {
+  const isKnownArtifact = async (id: string, path: string): Promise<boolean> => {
     const turns = fileTurnsIn(await store.readRawLog(id));
-    const known = turns.some(
+    return turns.some(
       (turn) =>
         turn.changes.some((change) => change.path === path) ||
         (turn.webArtifacts?.includes(path) ?? false),
     );
-    if (!known) throw new Error(`That file is not in this task's change record: ${path}`);
   };
-  ipcMain.handle(ipcChannels.sessionOpenArtifactInBrowser, async (_event, id: string, path: string) => {
-    await knownArtifact(id, path);
-    if (!isWebPageFile(path)) {
-      throw new Error(`Only web pages (html/svg) open in the built-in browser: ${path}`);
-    }
-    await openArtifactInBrowser(path);
-  });
+  const knownArtifact = async (id: string, path: string): Promise<void> => {
+    if (!(await isKnownArtifact(id, path))) throw new Error(`That file is not in this task's change record: ${path}`);
+  };
+  /**
+   * 账上有这个路径只是第一道；第二道在 openArtifactInBrowser 里（realpath 后必须在本会话的目录里、
+   * 是网页文件）——以前只有第一道，账上的路径被换成指向外面的链接，打开的就是外面的文件。
+   * 两道都回原因码，卡片照着说（以前抛错只进 console）。
+   */
+  ipcMain.handle(
+    ipcChannels.sessionOpenArtifactInBrowser,
+    async (_event, id: string, path: string): Promise<ArtifactOpenResult> => {
+      if (!(await isKnownArtifact(id, path))) return { ok: false, reason: "not-in-record" };
+      return openArtifactInBrowser(id, path);
+    },
+  );
   // 第二个出口是「打开文件所在位置」而不是「默认浏览器」（用户 2026-10-01 裁决）：
   // 默认浏览器与内置浏览器是同一件事的两个版本，定位文件才是另一种需要（拷走、拖进别的应用）
   ipcMain.handle(ipcChannels.sessionRevealArtifact, async (_event, id: string, path: string) => {

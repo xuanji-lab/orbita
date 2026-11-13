@@ -1,6 +1,13 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { validateProvider, normalizeBaseUrl, maskSecret, type Provider } from "./provider.ts";
+import {
+  validateProvider,
+  normalizeBaseUrl,
+  maskSecret,
+  isProviderEnabled,
+  providerDisabledText,
+  type Provider,
+} from "./provider.ts";
 
 /** 合法样例，各用例在其上做单点破坏 */
 function validInput(): unknown {
@@ -188,5 +195,28 @@ describe("maskSecret", () => {
     assert.equal(maskSecret("sk-proj-abcdefgh1234"), "sk-…1234");
     assert.equal(maskSecret("12345678"), "…");
     assert.equal(maskSecret(""), "…");
+  });
+});
+
+describe("provider 停用开关", () => {
+  test("缺省 = 开着（旧 providers.json 没有 disabled 字段）；只有 true 才算关", () => {
+    assert.equal(isProviderEnabled({}), true);
+    assert.equal(isProviderEnabled({ disabled: false }), true);
+    assert.equal(isProviderEnabled({ disabled: true }), false);
+  });
+
+  test("validateProvider：disabled 缺省与布尔都合法，非布尔拒绝", () => {
+    const base = validInput() as object;
+    assert.deepEqual(validateProvider(base), []);
+    assert.deepEqual(validateProvider({ ...base, disabled: true }), []);
+    assert.deepEqual(validateProvider({ ...base, disabled: false }), []);
+    for (const bad of ["true", 1, null]) {
+      assert.deepEqual(fieldsOf({ ...base, disabled: bad }), ["disabled"], `应拒绝 ${String(bad)}`);
+    }
+  });
+
+  test("拦截文案带服务商名，并按语言取", () => {
+    assert.equal(providerDisabledText("Pro 网关", "zh"), "Pro 网关 已在模型服务里关闭，换一个模型或去打开它");
+    assert.match(providerDisabledText("Pro Gateway", "en"), /^Pro Gateway is turned off/);
   });
 });

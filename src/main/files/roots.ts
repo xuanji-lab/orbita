@@ -81,7 +81,40 @@ export async function resolveFileRoots(
     const path = sessions.attachmentsPath(req.sessionId);
     roots.push({ kind: "attachments", label: fileRootLabel("attachments", path, "", ""), path, exists: await pathExists(path) });
   }
+  // cited 根：本会话 cite_pdf 核验过的 PDF，一个文件一个根、根路径就是文件本身（isInside 对
+  // 「文件 vs 文件」只在两者 realpath 后是同一个文件时成立，同目录的别的 PDF、指向别处的软链接都进不去）。
+  // 同样不进树，只为白名单——PDF 在会话看得到的目录之外也能原地打开引用。
+  // 来源是本会话自己的 JSONL（主进程现读，增量缓存），按 sessionId 现算，别的会话借不到
+  if (req.sessionId !== null) {
+    const cited = await sessions.citedPdfPaths(req.sessionId);
+    roots.push(
+      ...(await Promise.all(
+        cited.map(
+          async (path): Promise<FileRoot> => ({
+            kind: "cited",
+            label: fileRootLabel("cited", path, "", ""),
+            path,
+            exists: await citedFileExists(path),
+          }),
+        ),
+      )),
+    );
+  }
   return roots;
+}
+
+/**
+ * cited 根的存在性：ENOENT = 已被删 / 挪走（面板据此给「原文件找不到了」而不是「看不到」）。
+ * 其它错误（权限、坏链接环）不抛——一份读不了的 PDF 不该拖垮整张根清单，当它存在、
+ * 真去读时再报真实的错
+ */
+async function citedFileExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch (cause) {
+    return !isNotFound(cause);
+  }
 }
 
 /** 存不存在用 stat 现查。ENOENT = false；权限等其它错误照抛——读不了 ≠ 没有（workbenchStat 同一条规矩） */

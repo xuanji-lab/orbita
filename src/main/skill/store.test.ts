@@ -373,7 +373,173 @@ describe("parseSkillMd / rebuildSkillMd", () => {
     assert.equal(parseSkillMd(crlf).description, "回车换行");
   });
 
+  test("块标量：description: > 折成一行，| 保留换行，- 与 + 修饰符照认", () => {
+    const folded = "---\nname: a\ndescription: >\n  第一行\n  第二行\n\n  第三段\n---\n正文\n";
+    assert.equal(parseSkillMd(folded).description, "第一行 第二行 第三段");
+    const literal = "---\nname: a\ndescription: |-\n  一\n  二\n---\n正文\n";
+    assert.equal(parseSkillMd(literal).description, "一\n二");
+  });
+
+  test("缩进的 description 不是顶格键：嵌套结构里的同名字段不会被读成它", () => {
+    const nested = "---\nname: a\nmetadata:\n  description: 嵌套的\n---\n正文\n";
+    assert.equal(parseSkillMd(nested).description, null);
+  });
+
+  test("改块标量的 description：续行一并换掉，frontmatter 不被写坏", () => {
+    const raw = "---\nname: a\ndescription: >\n  旧的第一行\n  旧的第二行\nother: keep\n---\n正文\n";
+    const rebuilt = rebuildSkillMd(raw, { description: "新的" });
+    assert.equal(rebuilt, "---\nname: a\ndescription: 新的\nother: keep\n---\n正文\n");
+    assert.equal(parseSkillMd(rebuilt).description, "新的");
+  });
+
   test("整篇没有 frontmatter 时全当正文", () => {
     assert.deepEqual(parseSkillMd("就是一段话"), { name: null, description: null, body: "就是一段话" });
+  });
+});
+
+describe("SkillStore 归档 / 恢复 / 移除", () => {
+  const AT = new Date(2026, 10, 7, 1, 2, 3).getTime();
+  const fixed = (): SkillStore => new SkillStore(dir, () => AT);
+
+  test("归档：文件夹挪进 skills-archive/<slug>-<时间戳>，旁边写记录（原 slug / 原范围），所有链接被删", async () => {
+    store = fixed();
+    await put("alpha", SKILL("显示名", "一条"));
+    await store.link("alpha", { kind: "workspace", workspaceId: "ws-1" });
+    await store.link("alpha", { kind: "workspace", workspaceId: "ws-2" });
+    const id = await store.archive("alpha");
+    assert.equal(id, "alpha-20261107-010203");
+    assert.equal(await readFile(join(dir, "skills-archive", id, "SKILL.md"), "utf8").then((t) => t.includes("显示名")), true);
+    const record = JSON.parse(await readFile(join(dir, "skills-archive", `${id}.json`), "utf8"));
+    assert.deepEqual(record, { id, slug: "alpha", name: "显示名", archivedAt: AT, global: false, workspaces: ["ws-1", "ws-2"] });
+    assert.deepEqual(await readdir(join(dir, "skills")), []);
+    assert.deepEqual(await readdir(join(dir, "skill-links", "ws-1")), []);
+    // 列表里它彻底没了（不是断链）
+    assert.deepEqual(await store.list(), []);
+  });
+
+  test("同一秒归档同名两次：文件夹名不撞", async () => {
+    store = fixed();
+    await put("alpha", SKILL("a", "d"));
+    const first = await store.archive("alpha");
+    await put("alpha", SKILL("a", "d"));
+    const second = await store.archive("alpha");
+    assert.notEqual(first, second);
+    assert.equal((await store.listArchived()).length, 2);
+  });
+
+  test("恢复：挪回原 slug，按记录的范围重建链接，归档记录消失", async () => {
+    store = fixed();
+    await put("alpha", SKILL("a", "d"));
+    await store.link("alpha", { kind: "global" });
+    const id = await store.archive("alpha");
+    assert.deepEqual(await store.restore(id), { ok: true });
+    const m = meta(await store.list(), "alpha");
+    assert.deepEqual([m.global, m.workspaces, m.missing], [true, [], false]);
+    assert.deepEqual(await store.listArchived(), []);
+    await assert.rejects(readFile(join(dir, "skills-archive", `${id}.json`)));
+  });
+
+  test("恢复：工作区范围按记录重建；已不存在的工作区不重建（不凭空长链接目录）", async () => {
+    store = fixed();
+    await put("alpha", SKILL("a", "d"));
+    await store.link("alpha", { kind: "workspace", workspaceId: "ws-1" });
+    await store.link("alpha", { kind: "workspace", workspaceId: "gone" });
+    const id = await store.archive("alpha");
+    assert.deepEqual(await store.restore(id, ["ws-1"]), { ok: true });
+    assert.deepEqual(meta(await store.list(), "alpha").workspaces, ["ws-1"]);
+    await assert.rejects(readdir(join(dir, "skill-links", "gone", "alpha")));
+  });
+
+  test("恢复重名：停下并说明，不覆盖现有那条，归档原样留着", async () => {
+    store = fixed();
+    await put("alpha", SKILL("旧的", "d"));
+    const id = await store.archive("alpha");
+    await put("alpha", SKILL("新的同名", "d"));
+    assert.deepEqual(await store.restore(id), { ok: false, reason: "slug-exists" });
+    assert.equal(meta(await store.list(), "alpha").name, "新的同名");
+    assert.equal((await store.listArchived()).length, 1);
+  });
+
+  test("恢复一个不存在的归档：not-found；越界 / 带分隔符的 id 直接拒绝", async () => {
+    assert.deepEqual(await store.restore("nope-1"), { ok: false, reason: "not-found" });
+    for (const bad of ["../x", "a/b", "a\\b", "..", ".hidden", "", "a..b"]) {
+      await assert.rejects(store.restore(bad), /Invalid archive id/, bad);
+    }
+  });
+
+  test("归档记录里被改坏的 slug（路径穿越）不会被当真：读不出来就跳过", async () => {
+    await mkdir(join(dir, "skills-archive", "evil-1"), { recursive: true });
+    await writeFile(join(dir, "skills-archive", "evil-1", "SKILL.md"), SKILL("e", "d"), "utf8");
+    await writeFile(join(dir, "skills-archive", "evil-1.json"), JSON.stringify({ slug: "../../x", archivedAt: 1 }), "utf8");
+    assert.deepEqual(await store.listArchived(), []);
+    assert.deepEqual(await store.restore("evil-1"), { ok: false, reason: "not-found" });
+  });
+
+  test("已归档列表：新的在前，坏 json 跳过，没有归档目录时为空", async () => {
+    assert.deepEqual(await store.listArchived(), []);
+    let t = AT;
+    store = new SkillStore(dir, () => t);
+    await put("a", SKILL("a", "d"));
+    await store.archive("a");
+    t += 5000;
+    await put("b", SKILL("b", "d"));
+    await store.archive("b");
+    await writeFile(join(dir, "skills-archive", "broken-1.json"), "{not json", "utf8");
+    assert.deepEqual((await store.listArchived()).map((e) => e.slug), ["b", "a"]);
+  });
+
+  test("归档 / 移除：slug 不合法、不存在、断链都拒绝（断链只能清理）", async () => {
+    await assert.rejects(store.archive("../evil"), /Invalid skill slug/);
+    await assert.rejects(store.trash("a/b", async () => undefined), /Invalid skill slug/);
+    await assert.rejects(store.archive("ghost"), /not found/i);
+    await putBrokenLink("global", "ghost");
+    await assert.rejects(store.archive("ghost"), /not found/i);
+    await assert.rejects(store.trash("ghost", async () => undefined), /not found/i);
+    // 断链引用还在，没被误伤
+    assert.equal(meta(await store.list(), "ghost").missing, true);
+  });
+
+
+  test("移除：文件夹交给 trashItem（拿到的是中心存储里的那条真路径），链接全删", async () => {
+    await put("alpha", SKILL("a", "d"));
+    await store.link("alpha", { kind: "global" });
+    const trashed: string[] = [];
+    await store.trash("alpha", async (path) => {
+      trashed.push(path);
+      await rm(path, { recursive: true });
+    });
+    assert.deepEqual(trashed, [join(dir, "skills", "alpha")]);
+    assert.deepEqual(await store.list(), []);
+  });
+
+  test("移除：trashItem 失败就整个失败，文件夹与链接都还在", async () => {
+    await put("alpha", SKILL("a", "d"));
+    await store.link("alpha", { kind: "global" });
+    await assert.rejects(store.trash("alpha", async () => { throw new Error("no trash"); }), /no trash/);
+    const m = meta(await store.list(), "alpha");
+    assert.deepEqual([m.global, m.missing], [true, false]);
+  });
+
+  test("导入的技能（入口是指向用户目录的 symlink）：移除只摘入口，用户原目录不动、不进废纸篓", async () => {
+    const real = join(dir, "users-own", "linked");
+    await mkdir(real, { recursive: true });
+    await writeFile(join(real, "SKILL.md"), SKILL("l", "d"), "utf8");
+    await store.importFrom(real, { kind: "global" });
+    let called = false;
+    await store.trash("linked", async () => { called = true; });
+    assert.equal(called, false);
+    assert.equal(await readFile(join(real, "SKILL.md"), "utf8").then((t) => t.includes("name: l")), true);
+    assert.deepEqual(await store.list(), []);
+  });
+
+  test("导入的技能归档：挪走的是入口链接，用户原目录不动；恢复后入口回来", async () => {
+    const real = join(dir, "users-own", "linked");
+    await mkdir(real, { recursive: true });
+    await writeFile(join(real, "SKILL.md"), SKILL("l", "d"), "utf8");
+    await store.importFrom(real, { kind: "global" });
+    const id = await store.archive("linked");
+    assert.equal(await readFile(join(real, "SKILL.md"), "utf8").then((t) => t.includes("name: l")), true);
+    assert.deepEqual(await store.restore(id), { ok: true });
+    assert.equal(meta(await store.list(), "linked").linkedPath, real);
   });
 });

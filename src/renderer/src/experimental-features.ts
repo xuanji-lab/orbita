@@ -20,6 +20,7 @@
  */
 import type { ExperimentalFeatureId } from "@shared/settings";
 import type { IconName } from "./shell/Icon.tsx";
+import { FEATURE_ICON } from "./shell/feature-icons.ts";
 
 /** 中英两份文案（界面语言二选一） */
 export interface LocalizedText {
@@ -142,7 +143,7 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
   },
   {
     id: "intent-system",
-    icon: "waypoints",
+    icon: FEATURE_ICON.intent,
     name: { zh: "意图系统", en: "Intent system" },
     summary: {
       zh: "发消息前先召回相关旧对话：门卫拦截寒暄，过岗打分入选进上下文，拿不准的先问你。右栏「意图」看每一问的入选图谱；召回走本机 intent-lab 服务（自己 bun run serve 起）。",

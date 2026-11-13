@@ -43,10 +43,31 @@ import themeGithubDark from "shiki/themes/github-dark.mjs";
  * #d2a8ff：声明与调用一视同仁，且比旧紫亮一档。TextMate 最长 scope 胜出，
  * 这条会压过同名的宽规则。浅色主题不动。
  */
+/**
+ * 语法色的对比度修补（2026-11-07 方向 N「墨在每一种地上 ≥ 4.5」）：shiki 的 github 主题色是字面量，
+ * 落在浅色代码底（#eef1f4）上关键字 #d73a49 只有 4.03:1、标签 #22863a 4.08、注释 #6a737d 4.25；
+ * 暗档代码底上注释 #6a737d 只有 3.05（几乎看不见）。逐条换成 GitHub 新版调色板里同色相、更深 / 更亮的值：
+ * 关键字 #cf222e（4.72）、标签 #116329（6.5）、浅色注释 #59636e（5.4）、暗色注释 #9198a1（≥4.9）。
+ * 只换前景色字面量，规则与 scope 不动；按「前景色等于这几个旧值」匹配，不依赖 scope 名。
+ */
+type ThemeData = typeof themeGithubLight;
+function recolored(theme: ThemeData, map: Readonly<Record<string, string>>): ThemeData {
+  return {
+    ...theme,
+    tokenColors: theme.tokenColors?.map((rule) => {
+      const fg = rule.settings?.foreground?.toLowerCase();
+      const next = fg === undefined ? undefined : map[fg];
+      return next === undefined ? rule : { ...rule, settings: { ...rule.settings, foreground: next } };
+    }),
+  };
+}
+const GITHUB_LIGHT = recolored(themeGithubLight, { "#d73a49": "#cf222e", "#22863a": "#116329", "#6a737d": "#59636e" });
+
+const GITHUB_DARK_BASE = recolored(themeGithubDark, { "#6a737d": "#9198a1" });
 const GITHUB_DARK = {
-  ...themeGithubDark,
+  ...GITHUB_DARK_BASE,
   tokenColors: [
-    ...(themeGithubDark.tokenColors ?? []),
+    ...(GITHUB_DARK_BASE.tokenColors ?? []),
     {
       scope: [
         "entity.name.function",
@@ -65,7 +86,7 @@ type Highlighter = Awaited<ReturnType<typeof createHighlighterCore>>;
 
 /** import 即预热；resolve 后 `highlightBlock` 才会真正产出 HTML */
 export const highlighterReady: Promise<Highlighter> = createHighlighterCore({
-  themes: [themeGithubLight, GITHUB_DARK],
+  themes: [GITHUB_LIGHT, GITHUB_DARK],
   langs: [
     langBash,
     langCss,

@@ -1,0 +1,440 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import { applyEdit, applyTheme, applyWrite, createDeck, lintSlide, newDrawnElement, newTableElement, patchElement, themeNewElement, updateElements, unbindChanged } from "./slides-ops.ts";
+import { CANVAS_SIZE, ElementError, normalizeElement, normalizeTheme, parseDeck, serializeDeck, type Deck, type ShapeElement, type SlideElement, type TextElement } from "./slides.ts";
+import { FOOTER_GAP, FOOTER_MIN_GAP, footerElement } from "./slides-footer.ts";
+import { buildLayout, LAYOUT_NAMES, settleY, type LayoutImage } from "./slides-layouts.ts";
+import { countLines, estimateTextHeight, visualLength } from "./slides-measure.ts";
+import { THEME_IDS, presetTheme, resolveTheme } from "./slides-theme.ts";
+
+const image: LayoutImage = { src: "d.assets/a.png", width: 1200, height: 1600 };
+
+function sample(layout: (typeof LAYOUT_NAMES)[number]): Record<string, unknown> {
+  switch (layout) {
+    case "cover":
+      return { eyebrow: "CITY STUDY", title: "新加坡：花园里的城市", subtitle: "一座小岛如何把绿色织进高密度生活", meta: "研究组 · 2026" };
+    case "section":
+      return { number: "02", title: "城市治理", subtitle: "规划与长期主义" };
+    case "bullets":
+      return { eyebrow: "01 · 概况", title: "一座城市国家", bullets: ["面积约 735 平方公里", "四种官方语言并行", "全球重要的港口"] };
+    case "two-column":
+      return { title: "优势与挑战", columns: [{ heading: "优势", bullets: ["规划连续", "公共住房"] }, { heading: "挑战", bullets: ["土地有限", "老龄化"] }] };
+    case "image-left":
+    case "image-right":
+      return { title: "花园城市", bullets: ["滨海湾花园", "立体绿化"], image: "x" };
+    case "image-full":
+      return { title: "滨海湾的黄昏", caption: "超级树在日落后点亮", image: "x" };
+    case "table":
+      return { title: "官方语言", rows: [["语言", "占比"], ["英语", "48%"], ["华语", "30%"]], note: "来源：统计局" };
+    case "quote":
+      return { quote: "我们没有资源，所以必须把每一寸土地都用到极致。", source: "某人" };
+    case "stat":
+      return { title: "数字", stats: [{ value: "735", label: "平方公里" }, { value: "47%", label: "绿化率" }] };
+    case "closing":
+      return { title: "谢谢观看", subtitle: "欢迎提问", contact: ["a@b.org"] };
+  }
+}
+
+function themed(id: string, aspect: "16:9" | "4:3" = "16:9"): Deck {
+  return { ...createDeck({ title: "测试稿", aspect, theme: presetTheme(id) }), slides: [] };
+}
+
+describe("主题 token", () => {
+  it("$token 解析成具体值落盘并记绑定；写错的 token 报 ElementError", () => {
+    const deck = themed("forest");
+    const element = normalizeElement({ kind: "text", html: "x", color: "$accent", fontSize: "$title", fontFamily: "$heading" }, { canvas: CANVAS_SIZE["16:9"], theme: deck.theme }) as TextElement;
+    const theme = resolveTheme(deck.theme);
+    assert.equal(element.color, theme.palette.accent);
+    assert.equal(element.fontSize, theme.scale.title);
+    assert.equal(element.fontFamily, theme.fonts.heading);
+    assert.deepEqual(element.bind, { color: "accent", fontSize: "title", fontFamily: "heading" });
+    assert.throws(() => normalizeElement({ kind: "text", html: "x", color: "$nope" }, { canvas: CANVAS_SIZE["16:9"], theme: deck.theme }), ElementError);
+    assert.throws(() => normalizeElement({ kind: "text", html: "x", fontSize: "$accent" }, { canvas: CANVAS_SIZE["16:9"], theme: deck.theme }), ElementError);
+  });
+
+  it("换主题：绑定项整份跟着变，手改过的值保持不变（Q2）", () => {
+    let deck = themed("forest");
+    deck = applyWrite(deck, [{ layout: "bullets", slots: sample("bullets") }]).deck;
+    const slide = deck.slides[0]!;
+    const title = slide.elements.find((e): e is TextElement => e.kind === "text" && e.fontFamily !== undefined)!;
+    // 用户把标题手改成红色（patch 具体色 = 拆掉 color 绑定）
+    deck = applyEdit(deck, [{ op: "patch", slide: 1, id: title.id, patch: { color: "#ff0000" } }]).deck;
+    const next = applyTheme(deck, presetTheme("ink"));
+    const after = next.slides[0]!;
+    const inkTheme = resolveTheme(presetTheme("ink"));
+    const afterTitle = after.elements.find((e) => e.id === title.id) as TextElement;
+    assert.equal(afterTitle.color, "#ff0000", "手改的颜色保持");
+    assert.equal(afterTitle.bind?.color, undefined);
+    assert.equal(afterTitle.fontSize, inkTheme.scale.title, "没手改的字号跟主题走");
+    assert.equal(afterTitle.fontFamily, inkTheme.fonts.heading);
+    assert.equal(after.background, inkTheme.palette.bg, "页背景跟着变");
+    const body = after.elements.find((e): e is TextElement => e.kind === "text" && e.html.includes("<li>"))!;
+    assert.equal(body.color, inkTheme.palette.ink);
+    assert.equal(next.theme?.id, "ink");
+  });
+
+  it("编辑器改字号 / 颜色（updateElements）也拆绑定；只动位置不拆", () => {
+    let deck = applyWrite(themed("mono"), [{ layout: "bullets", slots: sample("bullets") }]).deck;
+    const body = deck.slides[0]!.elements.find((e): e is TextElement => e.kind === "text" && e.html.includes("<li>"))!;
+    deck = updateElements(deck, deck.slides[0]!.id, (e) => ({ ...e, x: e.x + 10 }), new Set([body.id]));
+    assert.ok((deck.slides[0]!.elements.find((e) => e.id === body.id) as TextElement).bind?.fontSize !== undefined);
+    deck = updateElements(deck, deck.slides[0]!.id, (e) => ({ ...(e as TextElement), fontSize: 40 }), new Set([body.id]));
+    const edited = deck.slides[0]!.elements.find((e) => e.id === body.id) as TextElement;
+    assert.equal(edited.bind?.fontSize, undefined);
+    assert.equal(edited.bind?.color, "ink");
+    assert.equal(applyTheme(deck, presetTheme("night")).slides[0]!.elements.find((e) => e.id === body.id)!.id, body.id);
+    assert.equal((applyTheme(deck, presetTheme("night")).slides[0]!.elements.find((e) => e.id === body.id) as TextElement).fontSize, 40);
+    assert.equal(unbindChanged(body, body), body);
+  });
+
+  it("patch 里写 $token 重新绑定；文件往返（serialize → parse）保留绑定与具体值", () => {
+    let deck = applyWrite(themed("warm"), [{ layout: "bullets", slots: sample("bullets") }]).deck;
+    const body = deck.slides[0]!.elements.find((e): e is TextElement => e.kind === "text" && e.html.includes("<li>"))!;
+    deck = applyEdit(deck, [{ op: "patch", slide: 1, id: body.id, patch: { color: "#123456" } }]).deck;
+    deck = applyEdit(deck, [{ op: "patch", slide: 1, id: body.id, patch: { color: "$accent" } }]).deck;
+    const reloaded = parseDeck(serializeDeck(deck)).deck;
+    const again = reloaded.slides[0]!.elements.find((e) => e.id === body.id) as TextElement;
+    assert.equal(again.bind?.color, "accent");
+    assert.equal(again.color, resolveTheme(deck.theme).palette.accent);
+    assert.deepEqual(reloaded, deck);
+  });
+
+  it("主题规整：字符串 id、局部覆盖、老三字段写法", () => {
+    assert.equal(normalizeTheme("Night")?.id, "night");
+    assert.equal(normalizeTheme("nope"), undefined);
+    const custom = normalizeTheme({ id: "mono", palette: { accent: "#0a7c3a" } });
+    assert.equal(custom?.palette?.accent, "#0a7c3a");
+    assert.equal(custom?.palette?.bg, "#ffffff");
+    assert.equal(custom?.background, "#ffffff", "旧字段由色板派生");
+    assert.deepEqual(normalizeTheme({ color: "#111111", background: "#fafafa" }), { color: "#111111", background: "#fafafa" });
+  });
+});
+
+describe("用户新建的元素也跟主题", () => {
+  it("带色板的文稿里新建文字 / 形状 / 表格 / 线绑定主题，换主题后颜色跟着变；老文稿保持原样", () => {
+    const deck = themed("night");
+    const box = { x: 10, y: 10, w: 100, h: 60 };
+    const text = themeNewElement(deck, newDrawnElement("text", box, "#000000", true)) as TextElement;
+    assert.equal(text.bind?.color, "ink");
+    assert.equal(text.color, resolveTheme(deck.theme).palette.ink);
+    const table = newTableElement(deck);
+    assert.equal(table.kind === "table" && table.bind?.headerFill, "accent");
+    const withText = { ...deck, slides: [{ id: "s", elements: [text] }] };
+    const after = applyTheme(withText, presetTheme("ink")).slides[0]!.elements[0] as TextElement;
+    assert.equal(after.color, resolveTheme(presetTheme("ink")).palette.ink);
+    const legacy = createDeck({ title: "老稿" });
+    const plain = newDrawnElement("text", box, "#111111", true);
+    assert.equal(themeNewElement(legacy, plain), plain);
+  });
+});
+
+describe("版式", () => {
+  for (const id of THEME_IDS) {
+    for (const aspect of ["16:9", "4:3"] as const) {
+      it(`${id} · ${aspect}：全部版式都能落成合法元素，字号不小于 body，文字元素不出画布`, () => {
+        const theme = resolveTheme(presetTheme(id));
+        const canvas = CANVAS_SIZE[aspect];
+        let deck = themed(id, aspect);
+        for (const layout of LAYOUT_NAMES) {
+          const images = { image };
+          const out = applyWrite(deck, [{ layout, slots: sample(layout), images }]);
+          deck = out.deck;
+          const page = deck.slides.length;
+          assert.deepEqual(out.warnings, [], `${layout}: ${out.warnings.join(" | ")}`);
+          assert.deepEqual(lintSlide(deck, page), [], `${layout} lint`);
+          const slide = deck.slides[page - 1]!;
+          assert.equal(slide.layout, layout);
+          for (const el of slide.elements) {
+            if (el.kind === "text") {
+              const isCaption = el.bind?.fontSize === "caption";
+              assert.ok(isCaption || el.fontSize >= theme.scale.body, `${layout}: 文字 ${el.fontSize} < body ${theme.scale.body}`);
+              assert.ok(el.x >= 0 && el.x + el.w <= canvas.w + 1 && el.y >= 0 && el.y + el.h <= canvas.h + 1, `${layout}: 文字元素出画布 ${el.x},${el.y},${el.w},${el.h}`);
+            }
+          }
+        }
+      });
+    }
+  }
+
+  it("工具描述里的上限会出 warning：标题太长、条目太多、条目太长", () => {
+    const out = applyWrite(themed("ink"), [
+      { layout: "bullets", slots: { title: "这是一个非常非常非常长的标题，远远超过十六个字", bullets: ["一", "二", "三", "四", "五", "六", "七", "八"] } },
+      { layout: "bullets", slots: { title: "短标题", bullets: ["这一条要点写得特别特别特别特别特别特别长，超过二十个字"] } },
+    ]);
+    const text = out.warnings.join("\n");
+    assert.match(text, /title is \d+ characters long/);
+    assert.match(text, /8 bullets/);
+    assert.match(text, /bullet 1 is \d+ characters/);
+  });
+
+  it("标题装不下沿字号阶梯退（绑定到更小的 token），正文装不下不缩字、给拆页警告", () => {
+    const longTitle = "关于城市绿化与高密度居住之间长期关系的一些想法与总结，以及对未来二十年的几点判断";
+    const built = buildLayout({ layout: "cover", slots: { title: longTitle }, aspect: "16:9", theme: presetTheme("ink") }, "slide 1");
+    const title = built.elements.find((e) => e["fontFamily"] === "$heading")!;
+    assert.ok(["$title", "$h2"].includes(title["fontSize"] as string), `封面标题退档：${String(title["fontSize"])}`);
+    const many = Array.from({ length: 6 }, (_, i) => `第 ${i + 1} 条要点写得比较长，需要折成两行才放得下它`);
+    const body = buildLayout({ layout: "two-column", slots: { title: "对比", columns: [{ heading: "甲", bullets: many }, { heading: "乙", bullets: many }] }, aspect: "4:3", theme: presetTheme("ink") }, "slide 2");
+    assert.match(body.warnings.join("\n"), /never shrunk below the theme's body size/);
+    for (const el of body.elements) if (el["kind"] === "text" && el["html"] !== undefined) assert.notEqual(el["fontSize"], "$caption-tiny");
+  });
+
+  it("缺必填槽位 / 版式与 elements 并给 / 未知版式 → 报错；未知槽位 → 警告", () => {
+    assert.throws(() => applyWrite(themed("ink"), [{ layout: "bullets", slots: { bullets: ["a"] } }]), /missing required slot "title"/);
+    assert.throws(() => applyWrite(themed("ink"), [{ layout: "bullets", slots: sample("bullets"), elements: [] }]), /either layout/);
+    assert.throws(() => applyWrite(themed("ink"), [{ layout: "poster", slots: {} }]), /unknown layout/);
+    assert.throws(() => applyWrite(themed("ink"), [{ layout: "table", slots: { title: "x" } }]), /needs slots.rows/);
+    const warned = applyWrite(themed("ink"), [{ layout: "bullets", slots: { ...sample("bullets"), colour: "red" } }]);
+    assert.match(warned.warnings.join("\n"), /ignored unknown slot\(s\) colour/);
+  });
+
+  it("没有主题的老文稿第一次写版式页时补默认主题；缺图时画占位并警告", () => {
+    const legacy = { ...createDeck({ title: "老稿" }), slides: [] };
+    assert.equal(legacy.theme, undefined);
+    const out = applyWrite(legacy, [{ layout: "image-right", slots: { title: "图文", bullets: ["a"], image: "x" } }]);
+    assert.equal(out.deck.theme?.id, "ink");
+    assert.match(out.warnings.join("\n"), /no picture was given/);
+  });
+
+  it("只改备注不丢版式名；整页换成手写元素则版式名作废", () => {
+    let deck = applyWrite(themed("ink"), [{ layout: "bullets", slots: sample("bullets") }]).deck;
+    deck = applyWrite(deck, [{ at: 1, notes: "讲稿" }]).deck;
+    assert.equal(deck.slides[0]!.layout, "bullets");
+    assert.equal(deck.slides[0]!.bind?.background, "bg");
+    deck = applyWrite(deck, [{ at: 1, elements: [{ kind: "text", html: "手写" }] }]).deck;
+    assert.equal(deck.slides[0]!.layout, undefined);
+  });
+});
+
+describe("stat 版式", () => {
+  it("几个大数字用同一个字号（取装得下的最小档），4:3 窄列里「600万」不被裁", () => {
+    const built = buildLayout({ layout: "stat", slots: { title: "数字", stats: [{ value: "735", label: "a" }, { value: "47%", label: "b" }, { value: "600万", label: "c" }] }, aspect: "4:3", theme: presetTheme("forest") }, "slide 1");
+    const sizes = built.elements.filter((e) => e["fontFamily"] === "$heading" && e["fontSize"] !== "$title" ? true : e["fontFamily"] === "$heading").map((e) => e["fontSize"]);
+    // 第一个 heading 字体的是页标题（$title），其后三个数字同字号
+    const valueSizes = sizes.slice(1);
+    assert.equal(valueSizes.length, 3);
+    assert.equal(new Set(valueSizes).size, 1, `大数字字号不一致：${valueSizes.join(",")}`);
+  });
+});
+
+describe("体检：自由元素不许比 body 小、不许压页脚", () => {
+  it("带主题的文稿里手加的 16px 来源行、压在页脚上的字都会被指出；脚注 caption 档与版式生成的不报", () => {
+    let deck = applyWrite(themed("academic"), [{ layout: "stat", slots: sample("stat") }]).deck;
+    assert.deepEqual(lintSlide(deck, 1), []);
+    deck = applyEdit(deck, [
+      { op: "add", slide: 1, element: { kind: "text", html: "数据来源：IMF", x: 340, y: 640, w: 600, h: 40, fontSize: 16 } },
+      { op: "add", slide: 1, element: { kind: "text", html: "脚注", x: 96, y: 580, w: 600, h: 30, fontSize: "$caption" } },
+    ]).deck;
+    const issues = lintSlide(deck, 1);
+    assert.equal(issues.filter((i) => /smaller than the theme's body size/.test(i)).length, 1);
+    assert.equal(issues.filter((i) => /overlaps the page footer/.test(i)).length, 1);
+  });
+});
+
+describe("页脚", () => {
+  it("带色板的文稿每页画「标题 · 页码」，封面 / 结尾 / 满版图不画，左图版式放右下；老文稿不画", () => {
+    let deck = themed("academic");
+    deck = applyWrite(deck, ["cover", "bullets", "image-left", "image-full", "closing"].map((layout) => ({ layout, slots: sample(layout as (typeof LAYOUT_NAMES)[number]), images: { image } }))).deck;
+    const feet = deck.slides.map((slide, i) => footerElement(deck, slide, i));
+    assert.equal(feet[0], null);
+    assert.match(feet[1]!.html, /测试稿\s+·\s+2/);
+    assert.equal(feet[2]!.align, "right");
+    assert.equal(feet[3], null);
+    assert.equal(feet[4], null);
+    const legacy = { ...createDeck({ title: "老稿" }), slides: [{ id: "s", elements: [] }] };
+    assert.equal(footerElement(legacy, legacy.slides[0]!, 0), null);
+    assert.equal(footerElement({ ...deck, theme: { ...deck.theme!, footer: false } }, deck.slides[1]!, 1), null);
+  });
+});
+
+describe("文字估算（keep-all 标题折行）", () => {
+  it("标题档（≥36px）只在标点处断行：长从句整段挪到下一行再硬断", () => {
+    const quote = "我们没有资源，所以必须把每一寸土地都用到极致。";
+    assert.equal(countLines(quote, 76, 1032), 3);
+    assert.equal(countLines(quote, 28, 1032), 1, "正文档任意处可断");
+    assert.ok(visualLength("Singapore") < 6);
+  });
+});
+
+describe("元素类型守卫", () => {
+  it("patchElement 不能改 kind / id", () => {
+    const deck = applyWrite(themed("ink"), [{ layout: "bullets", slots: sample("bullets") }]).deck;
+    const el: SlideElement = deck.slides[0]!.elements[0]!;
+    assert.throws(() => patchElement(deck, el, { kind: "image" }), /不能改/);
+  });
+});
+
+describe("换画幅（16:9 ↔ 4:3）", () => {
+  const buildAll = (id: string): Deck => {
+    let deck = themed(id);
+    for (const layout of LAYOUT_NAMES) deck = applyWrite(deck, [{ layout, slots: layout === "stat" ? { title: "数字", stats: [{ value: "735", label: "平方公里" }, { value: "47%", label: "绿化率" }, { value: "600万", label: "人口" }] } : sample(layout), images: { image } }]).deck;
+    return deck;
+  };
+
+  for (const id of THEME_IDS) {
+    it(`${id}：16:9 → 4:3 后没有元素伸出画布（原本就出血的装饰按比例仍出血），体检无「伸出画布」「文字溢出」`, () => {
+      const before = buildAll(id);
+      const after = applyEdit(before, [{ op: "set_deck", aspect: "4:3" }]).deck;
+      assert.equal(after.aspect, "4:3");
+      const canvas = CANVAS_SIZE["4:3"];
+      after.slides.forEach((slide, si) => {
+        slide.elements.forEach((el, ei) => {
+          const old = before.slides[si]!.elements[ei]!;
+          const bled = old.x + old.w > CANVAS_SIZE["16:9"].w + 1;
+          if (!bled) assert.ok(el.x + el.w <= canvas.w + 0.5, `第 ${si + 1} 页 ${el.kind} 右缘 ${el.x + el.w} 伸出 ${canvas.w}`);
+          assert.equal(el.y, old.y, "垂直方向不动");
+        });
+        assert.deepEqual(lintSlide(after, si + 1), [], `第 ${si + 1} 页（${slide.layout}）体检`);
+      });
+    });
+  }
+
+  it("文字框变窄折行时：大数字先缩字号装进原框高，说明文字撑高并把下面的元素下推——不再出现 + 掉到第二行压住说明（真实例复测）", () => {
+    let deck = themed("warm");
+    deck = applyWrite(deck, [{ layout: "stat", slots: { title: "亚洲金融与航运枢纽", stats: [{ value: "第2", label: "全球最繁忙港口之一", detail: "按集装箱吞吐量" }, { value: "约 8万", label: "美元人均 GDP", detail: "居全球前列" }, { value: "7000+", label: "跨国公司区域总部", detail: "含亚太总部" }] } }]).deck;
+    const after = applyEdit(deck, [{ op: "set_deck", aspect: "4:3" }]).deck;
+    const texts = after.slides[0]!.elements.filter((e): e is TextElement => e.kind === "text");
+    for (const t of texts) {
+      const plain = t.html.replace(/<[^>]+>/g, "");
+      const need = estimateTextHeight(plain, t.fontSize, t.w, { lineHeight: t.lineHeight ?? 1.25, letterSpacing: t.letterSpacing ?? 0 });
+      assert.ok(need <= t.h * 1.05 + 3, `「${plain}」需要 ${Math.round(need)}px，框高只有 ${Math.round(t.h)}`);
+    }
+    // 同一水平范围内的文字框上下不重叠
+    for (const a of texts) for (const b of texts) {
+      if (a === b || !(a.x < b.x + b.w && a.x + a.w > b.x)) continue;
+      assert.ok(a.y + a.h <= b.y + 1 || b.y + b.h <= a.y + 1, `文字框重叠：${a.html} / ${b.html}`);
+    }
+    const big = texts.find((t) => t.html.includes("7000"))!;
+    const before = deck.slides[0]!.elements.find((e): e is TextElement => e.kind === "text" && e.html.includes("7000"))!;
+    assert.ok(big.fontSize <= before.fontSize && big.fontSize >= before.fontSize * 0.8, `大数字字号 ${big.fontSize}（原 ${before.fontSize}）`);
+    assert.equal(big.bind?.fontSize, undefined, "字号被改了就拆掉主题绑定");
+  });
+
+  it("6 个主题 × 全部版式切 4:3 后，同一水平范围内的文字框上下不重叠、都装得下", () => {
+    for (const id of THEME_IDS) {
+      const after = applyEdit(buildAll(id), [{ op: "set_deck", aspect: "4:3" }]).deck;
+      after.slides.forEach((slide, si) => {
+        const texts = slide.elements.filter((e): e is TextElement => e.kind === "text");
+        for (const t of texts) {
+          const need = estimateTextHeight(t.html.replace(/<[^>]+>/g, ""), t.fontSize, t.w, { lineHeight: t.lineHeight ?? 1.25, letterSpacing: t.letterSpacing ?? 0 });
+          assert.ok(need <= t.h * 1.05 + 3, `${id} 第 ${si + 1} 页（${slide.layout}）「${t.html.replace(/<[^>]+>/g, "").slice(0, 12)}」装不下`);
+        }
+        for (const a of texts) for (const b of texts) {
+          if (a === b || !(a.x < b.x + b.w && a.x + a.w > b.x)) continue;
+          assert.ok(a.y + a.h <= b.y + 1 || b.y + b.h <= a.y + 1, `${id} 第 ${si + 1} 页（${slide.layout}）文字框重叠`);
+        }
+      });
+    }
+  });
+
+  it("来回切换不累积误差：16:9 → 4:3 → 16:9 后位置宽度回到原值，线的端点也是", () => {
+    let deck = applyWrite(themed("night"), [
+      { at: 1, elements: [{ kind: "text", html: "你好", x: 101, y: 50, w: 777, h: 90, fontSize: 30 }, { kind: "line", x: 100, y: 400, w: 400, h: 120, points: [[0, 120], [400, 0]], endArrow: "arrow", stroke: "#c2410c", strokeWidth: 6 }] },
+    ]).deck;
+    const original = deck.slides[0]!.elements.map((e) => ({ x: e.x, w: e.w }));
+    for (let i = 0; i < 3; i += 1) {
+      deck = applyEdit(deck, [{ op: "set_deck", aspect: "4:3" }]).deck;
+      deck = applyEdit(deck, [{ op: "set_deck", aspect: "16:9" }]).deck;
+    }
+    deck.slides[0]!.elements.forEach((e, i) => {
+      assert.ok(Math.abs(e.x - original[i]!.x) < 0.02 && Math.abs(e.w - original[i]!.w) < 0.02, `${e.kind} ${e.x}/${e.w} ≠ ${original[i]!.x}/${original[i]!.w}`);
+    });
+    const line = deck.slides[0]!.elements[1]!;
+    assert.ok(line.kind === "line" && Math.abs(line.points[1][0] - 400) < 0.02);
+  });
+
+  it("文字框变窄折行变多时，h 撑到装得下（不超出画布底边）；同画幅不动", () => {
+    const deck = applyWrite(themed("ink"), [{ at: 1, elements: [{ kind: "text", html: "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五", x: 100, y: 100, w: 1000, h: 50, fontSize: 28 }] }]).deck;
+    const narrow = applyEdit(deck, [{ op: "set_deck", aspect: "4:3" }]).deck.slides[0]!.elements[0]!;
+    assert.ok(narrow.h > 50 && narrow.y + narrow.h <= CANVAS_SIZE["4:3"].h);
+    assert.deepEqual(applyEdit(deck, [{ op: "set_deck", aspect: "16:9" }]).deck, deck, "同画幅是空操作");
+  });
+});
+
+describe("页面质量：留白、装饰落位、页脚安全距离", () => {
+  it("settleY：块比区域小得多时居中（封顶 140px）、越接近填满越靠上、装满顶对齐", () => {
+    assert.equal(settleY(200, 400, 400), 200, "装满：顶对齐");
+    assert.equal(settleY(200, 400, 360), 200, "接近装满：几乎不动");
+    const centered = settleY(200, 400, 120);
+    assert.ok(centered > 200 && centered <= 200 + 140);
+    assert.equal(settleY(200, 800, 100), 340, "留白很大时封顶 140px");
+    // 单调：块越大起点越靠上
+    let last = Infinity;
+    for (let need = 60; need <= 400; need += 20) {
+      const y = settleY(200, 400, need);
+      assert.ok(y <= last, `need=${need} y=${y} > ${last}`);
+      last = y;
+    }
+  });
+
+  for (const id of THEME_IDS) {
+    for (const aspect of ["16:9", "4:3"] as const) {
+      for (const n of [3, 4, 5]) {
+        it(`${id} · ${aspect}：${n} 条要点的页，下半页不再空着（内容块下沿到页脚行 ≤ 页高 21%），也不与标题脱开（≤170px）`, () => {
+          const canvas = CANVAS_SIZE[aspect];
+          const bullets = ["面积约 735 平方公里", "四种官方语言并行", "全球重要的港口", "公共住房覆盖八成", "绿化率接近一半"].slice(0, n);
+          const deck = applyWrite(themed(id, aspect), [{ layout: "bullets", slots: { eyebrow: "01 · 概况", title: "一座城市国家", bullets } }]).deck;
+          const slide = deck.slides[0]!;
+          const list = slide.elements.find((e): e is TextElement => e.kind === "text" && e.html.includes("<li>"))!;
+          const title = slide.elements.find((e): e is TextElement => e.kind === "text" && e.bind?.fontFamily === "heading")!;
+          const footer = footerElement(deck, slide, 0)!;
+          const bottomGap = footer.y - (list.y + list.h);
+          const topGap = list.y - (title.y + title.h);
+          assert.ok(bottomGap <= canvas.h * 0.21, `${id} ${aspect} ${n} 条：下方空 ${Math.round(bottomGap)}px（${Math.round((bottomGap / canvas.h) * 100)}%）`);
+          assert.ok(topGap <= 170, `${id} ${aspect} ${n} 条：与标题隔了 ${Math.round(topGap)}px`);
+        });
+      }
+
+      it(`${id} · ${aspect}：装饰图形不出画布、不贴边、不骑在大色块的分界线上`, () => {
+        const canvas = CANVAS_SIZE[aspect];
+        const mx = canvas.w >= 1200 ? 96 : 72;
+        let deck = themed(id, aspect);
+        for (const layout of LAYOUT_NAMES) deck = applyWrite(deck, [{ layout, slots: sample(layout), images: { image } }]).deck;
+        deck.slides.forEach((slide, si) => {
+          const shapes = slide.elements.filter((e): e is ShapeElement => e.kind === "shape" && e.text === undefined);
+          const big = shapes.filter((e) => e.w >= canvas.w * 0.15 && e.shape === "rect");
+          for (const el of shapes) {
+            if (el.w > canvas.w * 0.2 || el.h > canvas.w * 0.2) continue; // 大块是有意出血的构图
+            const where = `第 ${si + 1} 页（${slide.layout}）${el.shape} ${Math.round(el.x)},${Math.round(el.y)} ${Math.round(el.w)}×${Math.round(el.h)}`;
+            assert.ok(el.x >= 0 && el.y >= 0 && el.x + el.w <= canvas.w - 1 && el.y + el.h <= canvas.h - 1, `${where} 出画布或贴边`);
+            if (el.shape !== "rect") continue;
+            for (const other of big) {
+              if (other === el) continue;
+              const overlap = el.x < other.x + other.w && el.x + el.w > other.x && el.y < other.y + other.h && el.y + el.h > other.y;
+              if (!overlap) continue;
+              const inside = el.x >= other.x - 0.5 && el.y >= other.y - 0.5 && el.x + el.w <= other.x + other.w + 0.5 && el.y + el.h <= other.y + other.h + 0.5;
+              assert.ok(inside, `${where} 骑在大色块 ${Math.round(other.x)},${Math.round(other.y)} ${Math.round(other.w)}×${Math.round(other.h)} 的边界上`);
+            }
+          }
+        });
+        assert.ok(mx > 0);
+      });
+    }
+  }
+
+  it("版式页的正文下沿留出页脚安全距离（FOOTER_GAP）：文字 / 表格底边到页脚行 ≥ FOOTER_GAP − 容差", () => {
+    for (const aspect of ["16:9", "4:3"] as const) {
+      let deck = themed("night", aspect);
+      for (const layout of ["bullets", "two-column", "table", "stat", "image-left"] as const) deck = applyWrite(deck, [{ layout, slots: sample(layout), images: { image } }]).deck;
+      deck.slides.forEach((slide, si) => {
+        const footer = footerElement(deck, slide, si);
+        assert.ok(footer !== null);
+        for (const el of slide.elements) {
+          if (el.kind !== "text" && el.kind !== "table") continue;
+          assert.ok(el.y + el.h <= footer.y - FOOTER_GAP + 14, `${slide.layout}: ${el.kind} 底边 ${el.y + el.h} 离页脚 ${footer.y} 不足 ${FOOTER_GAP}`);
+        }
+      });
+    }
+  });
+
+  it("体检：手写的表格 / 文字贴着页脚会提示（离页脚行不足安全距离），留够距离不提示", () => {
+    let deck = applyWrite(themed("night"), [{ layout: "bullets", slots: sample("bullets") }]).deck;
+    const footer = footerElement(deck, deck.slides[0]!, 0)!;
+    const table = (bottom: number) => ({ kind: "table", rows: [["a", "b"], ["c", "d"]], x: 96, y: bottom - 160, w: 600, h: 160 });
+    deck = applyWrite(deck, [{ at: "append", elements: [table(footer.y - 6)] }]).deck;
+    assert.match(lintSlide(deck, 2).join("\n"), /table .* too close to the page footer/);
+    deck = applyWrite(deck, [{ at: "append", elements: [table(footer.y - FOOTER_MIN_GAP - 4)] }]).deck;
+    assert.deepEqual(lintSlide(deck, 3).filter((m) => m.includes("footer")), []);
+    deck = applyWrite(deck, [{ at: "append", elements: [table(footer.y + 20)] }]).deck;
+    assert.match(lintSlide(deck, 4).join("\n"), /table .* overlaps the page footer/);
+  });
+});

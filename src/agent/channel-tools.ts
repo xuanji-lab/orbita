@@ -1,7 +1,7 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { RequestBroker } from "./request-broker.ts";
 import type { ChannelDelivery } from "../shared/channel.ts";
-import type { ChannelSendOutcome, DelegateCard, DelegateOutcome } from "../shared/agent-ipc.ts";
+import type { ChannelSendOutcome, DelegateCard, DelegateOutcome, ModelCostsOutcome } from "../shared/agent-ipc.ts";
 import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from "../shared/thinking.ts";
 
 /**
@@ -12,7 +12,7 @@ import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from "../shared/
  * 全放行（协调而非动作）。
  *
  * `role` 决定注册哪些工具：
- * - "root"（普通会话，也是父）：delegate + reply_subsession。
+ * - "root"（普通会话，也是父）：delegate + reply_subsession + model_costs（派发前查价）。
  * - "child"：只有 report_to_parent——子会话不能再派出（主进程也会拒），
  *   子会话没有自己的子可回信。
  */
@@ -22,7 +22,7 @@ export function createChannelTools(
   role: "root" | "child",
 ): ToolDefinition[] {
   if (role === "child") return [reportToParentTool(broker, sessionId)];
-  return [delegateTool(broker, sessionId), replySubsessionTool(broker, sessionId)];
+  return [delegateTool(broker, sessionId), replySubsessionTool(broker, sessionId), modelCostsTool(broker, sessionId)];
 }
 
 /** 必填字符串：trim 非空，否则抛带字段名的说明——不合法的参数不发请求。 */
@@ -63,7 +63,13 @@ function delegateTool(broker: RequestBroker, sessionId: string): ToolDefinition 
       'progress / done / failed reports arrive as <channel from="child" …> blocks in a later turn. If ' +
       "it asks something the user has not actually answered, do not guess on the user's behalf — end " +
       "this turn and ask the user first, then answer with reply_subsession once you know. Do not " +
-      "delegate for small things.",
+      "delegate for small things. " +
+      "Before delegating, call model_costs and choose the cheapest model and thinking tier that is good " +
+      "enough for the job, then pass it as model / thinkingLevel: routine implementation to a spec, " +
+      "running tests, research and data gathering rarely need a top-tier model; keep a mid tier at " +
+      "medium thinking for design trade-offs; reserve the most expensive model with max thinking for " +
+      "when the user names it or a cheaper tier has already failed. Project rules (AGENTS.md) that name " +
+      "a model for a kind of work take precedence.",
     parameters: {
       type: "object",
       properties: {
@@ -80,7 +86,8 @@ function delegateTool(broker: RequestBroker, sessionId: string): ToolDefinition 
         model: {
           type: "string",
           description:
-            "Optional model id override. Defaults to the sub-session model setting, then this session's model.",
+            "Optional model id override, as listed by model_costs. Defaults to the sub-session model setting, " +
+            "then this session's model.",
         },
         thinkingLevel: {
           type: "string",
@@ -115,13 +122,42 @@ function delegateTool(broker: RequestBroker, sessionId: string): ToolDefinition 
       const card = result.card;
       const text =
         `Sub-session "${result.title}" (id ${result.childId}) started, running on ${card.modelId} ` +
-        `(thinking: ${card.thinkingLevel}). It is now working; its messages will arrive as <channel> ` +
+        `(thinking: ${card.thinkingLevel}). Its private scratch workbench is ${card.workbench}. It is now working; its messages will arrive as <channel> ` +
         "blocks in a later turn. Unless you have unrelated work to do right now, end this turn — do " +
         "not poll or wait for it.";
       return {
         content: [{ type: "text", text }],
         details: { delegate: card satisfies DelegateCard },
       };
+    },
+  };
+}
+
+/**
+ * model_costs：派发前的价格 · 能力参考（用户 2026-10-30：「我们的帕累托数据，我希望能作为主会话派发
+ * 子会话前的参考数据」）。数据在主进程（任务账本、服务商声明），与设置页「价格 · 能力图」同一份——
+ * 表由主进程压好（main/usage/model-costs.ts），这里只发请求、原样回文本。
+ *
+ * 不把表放进系统提示词：账本每天都在变，放进去每轮都会打断提示缓存；工具结果是按需取的，
+ * 只在派发前花一次上下文。只根会话注册（子会话不能再派，不需要它）。
+ */
+function modelCostsTool(broker: RequestBroker, sessionId: string): ToolDefinition {
+  return {
+    name: "model_costs",
+    label: "model_costs",
+    description:
+      "Look up what each model the user has added costs per task and how it scores on the Arena " +
+      "leaderboard (per category, with the Pareto frontier marked). Read-only, no arguments. Call it " +
+      "before delegate to pick the cheapest model and thinking tier that is good enough for the job. " +
+      "Costs are the user's own measured median per finished task (or an estimate when there are fewer " +
+      "than 3 samples). Each row gives the exact model and thinking values to pass to delegate.",
+    promptSnippet:
+      "Per-task cost and Arena scores of the user's added models (Pareto frontier marked): check before choosing a model for delegate",
+    parameters: { type: "object", properties: {}, required: [] } as never,
+    async execute() {
+      const result = await broker.request<ModelCostsOutcome>({ type: "modelCostsRequest", sessionId });
+      if (!result.ok) throw new Error(result.error);
+      return { content: [{ type: "text", text: result.text }], details: {} };
     },
   };
 }
@@ -194,7 +230,8 @@ function reportToParentTool(broker: RequestBroker, sessionId: string): ToolDefin
       "from you — a normal reply is never delivered to it. kind \"question\": you are blocked and need a " +
       "decision; proceed on your best guess while you wait, or end this turn if you truly cannot " +
       'continue. "progress": occasional update, use sparingly. "done": you finished — say what you ' +
-      'concluded, what you changed, and where the output is, then end this turn. "failed": you cannot ' +
+      'concluded, what you changed, and where the output is, then end this turn. Include absolute paths ' +
+      'to important output (especially for done). "failed": you cannot ' +
       "complete the task — say why, then end this turn.",
     parameters: {
       type: "object",
@@ -240,8 +277,9 @@ function reportToParentTool(broker: RequestBroker, sessionId: string): ToolDefin
  * 工具参数 schema 已经讲了字段；这里讲角色语境——root 是能派出子会话的普通会话，
  * child 是被派出的那一个，两者看到的通道是不对称的（root 用 delegate /
  * reply_subsession，child 只有 report_to_parent），所以说明也分两段。
- * 与 related（describeDirectories）的关系：related 只列出「对面工作台在哪」，
- * 这里讲「怎么用工具跟对面说话」——不重复，各管各的。
+ * 与 related（describeDirectories）的关系：related 只用于 runtime 判断角色；对方工作台由
+ * delegate 回执与通道信封携带。这里讲「怎么用工具跟对面说话、重要产出放哪」，两段都不随
+ * 会话中的父子清单变化，因此可以安全留在系统提示词里。
  */
 const ROOT_CHANNEL_GUIDELINES = `<orbita-sub-sessions>
 You can hand off self-contained, parallelizable, well-bounded work to a sub-session with delegate. It
@@ -252,9 +290,10 @@ the goal, constraints, done criteria, and where the output should go. After dele
 unless you have unrelated work to do — do not poll or wait for it. Its messages (question / progress /
 done / failed) arrive as <channel from="child" …> blocks in a later turn. If it asks something the
 user's own words do not answer, do not decide on the user's behalf — end this turn and ask the user
-first; only once you have their answer, reply with reply_subsession. Progress needs no reply. When you
-see done, check its workbench / cwd for the actual output before reporting to the user. Do not delegate
-for small things.
+first; only once you have their answer, reply with reply_subsession. Progress needs no reply. Important
+sub-session output belongs in subsessions/ under your own Session workbench, in the sub-session's own
+subdirectory. When you see done, check that directory for the actual output (and cwd for requested code
+or repository changes) before reporting to the user. Do not delegate for small things.
 </orbita-sub-sessions>`;
 
 const CHILD_CHANNEL_GUIDELINES = `<orbita-sub-sessions>
@@ -268,6 +307,12 @@ truly cannot continue without one). You may send occasional progress updates —
 useful. When you finish, you MUST send one done report with your conclusion, what you changed, and where
 the output is. If you cannot complete the task, send failed with the reason. The parent's replies arrive
 as <channel from="parent" kind="reply"> blocks, possibly mid-task — adjust accordingly.
+Keep plans, drafts, intermediate results and reproduction scripts in your own Session workbench. Write
+important output for the parent (reports, handoffs, evaluation results, screenshot evidence and similar)
+under the parent session workbench in subsessions/<your-short-id>-<short-english-name>/; use the first
+8 characters of your own session id (the last component of your Session workbench path) so concurrent
+sub-sessions do not collide. In report_to_parent, especially done, give the absolute paths of those
+files. Requested code and repository deliverables still belong in cwd and are unaffected by this rule.
 </orbita-sub-sessions>`;
 
 /** 按角色选一段通道使用说明；root/child 各自固定，不随 related 内容变化。 */

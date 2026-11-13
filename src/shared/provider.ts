@@ -114,6 +114,34 @@ export interface Provider {
   endpoint: ProviderEndpoint;
   auth: ProviderAuth;
   models: { declared: ModelDecl[] };
+  /**
+   * 停用开关：true = 这家服务商「关着」——配置、密钥、模型列表原样保留，只是哪里都不用它
+   * （模型菜单不列、子会话 / 自动化 / 家务活解析时跳过、正用着它的会话发消息被拦下）。
+   * 缺省 = 开着（旧 providers.json 没有这个字段，不需要迁移）。读它一律走 `isProviderEnabled`，
+   * 不各处自己判 `=== true`。只由 `provider:set-disabled` 改写；`provider:upsert` 编辑其它字段时沿用盘上的值。
+   */
+  disabled?: boolean;
+}
+
+/** 这家服务商开着吗（缺省 = 开着）。主进程的解析器与 renderer 的菜单过滤共用这一个判定。 */
+export function isProviderEnabled(provider: { disabled?: boolean }): boolean {
+  return provider.disabled !== true;
+}
+
+/** `provider:set-disabled` 的入参：按 id 开 / 关一家服务商。 */
+export interface ProviderSetDisabledInput {
+  id: ProviderId;
+  disabled: boolean;
+}
+
+/**
+ * 「这家已关闭」的拦截文案（发消息被拦下时主进程抛、界面原样显示）。
+ * 跟界面语言走：主进程按设置里的语言取一句，renderer 不再翻译错误码。
+ */
+export function providerDisabledText(name: string, language: "zh" | "en"): string {
+  return language === "zh"
+    ? `${name} 已在模型服务里关闭，换一个模型或去打开它`
+    : `${name} is turned off in Model services. Pick another model or turn it back on.`;
 }
 
 /** 过 IPC 给 renderer 的形状：与 Provider 同构，但密钥只有掩码预览；OAuth 只有账号与在登状态。 */
@@ -166,6 +194,9 @@ export function validateProvider(input: unknown): ValidationIssue[] {
   }
   if (p["kind"] !== undefined && typeof p["kind"] !== "string") {
     push("kind", "kind must be a string");
+  }
+  if (p["disabled"] !== undefined && typeof p["disabled"] !== "boolean") {
+    push("disabled", "disabled must be a boolean");
   }
   if (typeof p["displayName"] !== "string" || p["displayName"].trim() === "") {
     push("displayName", "display name is required");

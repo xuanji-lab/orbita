@@ -9,6 +9,52 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseStatusChangedLine } from "../../shared/review.ts";
 import { gitWorkdirChanges, realGitRunner, type GitRunner } from "./git-source.ts";
+import { GIT_BINARY_SNIFF_BYTES, UNTRACKED_LINE_COUNT_MAX_BYTES, type UntrackedProbe } from "./untracked-lines.ts";
+
+interface FakeFile {
+  bytes: Buffer;
+  /** 改这个值 / 换 bytes 就能模拟「文件变了」——真实磁盘上缓存键就是 size + mtime */
+  mtimeMs: number;
+  /** 声明的 size（不填 = bytes.length）：模拟几百 MB 而不真分配；读到 bytes 末尾就是 EOF */
+  size?: number;
+}
+
+/** 假读盘面（键是绝对路径）：io 记打开次数与读到的字节数，断言「没有重新读盘」「只读了开头」 */
+function fakeProbe(files: Map<string, FakeFile>, io?: { opens: number; bytes: number }): UntrackedProbe {
+  return {
+    async lstat(path) {
+      const file = files.get(path);
+      return file === undefined ? null : { kind: "file", size: file.size ?? file.bytes.length, mtimeMs: file.mtimeMs };
+    },
+    async readlink() {
+      return null;
+    },
+    async open(path) {
+      const file = files.get(path);
+      if (file === undefined) return null;
+      if (io !== undefined) io.opens += 1;
+      return {
+        async read(buffer, length, position) {
+          const got = file.bytes.copy(buffer, 0, position, Math.min(position + length, file.bytes.length));
+          if (io !== undefined) io.bytes += got;
+          return got;
+        },
+        async close() {},
+      };
+    },
+  };
+}
+
+/** 只有一个未跟踪文件列表时的假 git（U/M 之外的输出全空） */
+function untrackedRunner(statusLines: readonly string[]): GitRunner {
+  return fakeGit({
+    "rev-parse --show-toplevel": { stdout: "/w\n" },
+    "-c status.relativePaths=true status --porcelain=v2 --untracked-files=all --no-renames": { stdout: statusLines.join("\n") },
+    "diff --no-renames --relative --numstat": { stdout: "" },
+    "diff --cached --no-renames --relative --numstat": { stdout: "" },
+    "rev-parse --abbrev-ref HEAD": { stdout: "main\n" },
+  });
+}
 
 function fakeGit(scripts: Record<string, { code?: number; stdout: string }>): GitRunner {
   return async (args) => {
@@ -76,9 +122,10 @@ describe("gitWorkdirChanges", () => {
       "diff --cached --no-renames --relative --numstat": { stdout: "5\t0\tstaged.ts\n1\t1\tboth.ts\n" },
       "rev-parse --abbrev-ref HEAD": { stdout: "feat/focus-mode\n" },
     });
-    const readUntracked = async (path: string): Promise<Buffer | null> =>
-      path.endsWith("new.txt") ? Buffer.from("one\ntwo\n", "utf8") : null;
-    const changes = await gitWorkdirChanges(runner, "/w", readUntracked);
+    const files = new Map<string, FakeFile>([
+      ["/w/new.txt", { bytes: Buffer.from("one\ntwo\n", "utf8"), mtimeMs: 1000 }],
+    ]);
+    const changes = await gitWorkdirChanges(runner, "/w", fakeProbe(files));
     assert.equal(changes.kind, "ok");
     if (changes.kind !== "ok") return;
     assert.equal(changes.branch, "feat/focus-mode");
@@ -103,7 +150,7 @@ describe("gitWorkdirChanges", () => {
       "diff --cached --no-renames --relative --numstat": { stdout: "" },
       "rev-parse --abbrev-ref HEAD": { code: 128, stdout: "" },
     });
-    const changes = await gitWorkdirChanges(runner, "/w", async () => null);
+    const changes = await gitWorkdirChanges(runner, "/w", fakeProbe(new Map()));
     assert.equal(changes.kind, "ok");
     if (changes.kind !== "ok") return;
     assert.equal(changes.branch, null);
@@ -129,9 +176,10 @@ describe("gitWorkdirChanges", () => {
       "diff --cached --no-renames --relative --numstat": { stdout: "" },
       "rev-parse --abbrev-ref HEAD": { stdout: "main\n" },
     });
-    const readUntracked = async (path: string): Promise<Buffer | null> =>
-      path.endsWith("inside-new.txt") ? Buffer.from("n1\nn2\n", "utf8") : null;
-    const changes = await gitWorkdirChanges(runner, "/repo/sub", readUntracked);
+    const files = new Map<string, FakeFile>([
+      ["/repo/sub/inside-new.txt", { bytes: Buffer.from("n1\nn2\n", "utf8"), mtimeMs: 1000 }],
+    ]);
+    const changes = await gitWorkdirChanges(runner, "/repo/sub", fakeProbe(files));
     assert.equal(changes.kind, "ok");
     if (changes.kind !== "ok") return;
     assert.deepEqual(
@@ -141,6 +189,219 @@ describe("gitWorkdirChanges", () => {
         ["inside-new.txt", "U", 2, 0],
       ],
     );
+  });
+
+  // ————————————————————————————————
+  // 未跟踪文件的行数缓存与单文件上限（专注左栏 30 秒一轮，读盘量在这条路径上最贵）
+  // ————————————————————————————————
+
+  test("未跟踪文件行数按 (路径, size, mtime) 缓存：文件没变就不再读盘", async () => {
+    const files = new Map<string, FakeFile>([
+      ["/w-cache-a/hit.txt", { bytes: Buffer.from("one\ntwo\nthree\n", "utf8"), mtimeMs: 1000 }],
+    ]);
+    const counter = { opens: 0, bytes: 0 };
+    const probe = fakeProbe(files, counter);
+    const runner = untrackedRunner(["? hit.txt"]);
+
+    const first = await gitWorkdirChanges(runner, "/w-cache-a", probe);
+    assert.equal(first.kind, "ok");
+    if (first.kind !== "ok") return;
+    assert.deepEqual(first.entries, [{ path: "hit.txt", kind: "U", added: 3, removed: 0, binary: false }]);
+    assert.equal(counter.opens, 1);
+
+    const second = await gitWorkdirChanges(runner, "/w-cache-a", probe);
+    assert.equal(second.kind, "ok");
+    if (second.kind !== "ok") return;
+    assert.deepEqual(second.entries, first.entries);
+    // 第二次只 stat、不读盘——轮询不该把没变的文件再读一遍
+    assert.equal(counter.opens, 1);
+  });
+
+  test("文件变了（size 或 mtime 变）→ 缓存失效、重新计数", async () => {
+    const files = new Map<string, FakeFile>([
+      ["/w-cache-b/f.txt", { bytes: Buffer.from("a\n", "utf8"), mtimeMs: 1000 }],
+    ]);
+    const counter = { opens: 0, bytes: 0 };
+    const probe = fakeProbe(files, counter);
+    const runner = untrackedRunner(["? f.txt"]);
+
+    const first = await gitWorkdirChanges(runner, "/w-cache-b", probe);
+    assert.equal(first.kind, "ok");
+    if (first.kind !== "ok") return;
+    assert.equal(first.entries[0]?.added, 1);
+
+    // 只改 mtime（内容一样）：键变了就重读，不猜「内容没变」
+    files.set("/w-cache-b/f.txt", { bytes: Buffer.from("a\nb\nc\n", "utf8"), mtimeMs: 2000 });
+    const second = await gitWorkdirChanges(runner, "/w-cache-b", probe);
+    assert.equal(second.kind, "ok");
+    if (second.kind !== "ok") return;
+    assert.equal(second.entries[0]?.added, 3);
+    assert.equal(counter.opens, 2);
+
+    // 只改 size（mtime 退回旧值）：也必须失效
+    files.set("/w-cache-b/f.txt", { bytes: Buffer.from("a\nb\n", "utf8"), mtimeMs: 2000 });
+    const third = await gitWorkdirChanges(runner, "/w-cache-b", probe);
+    assert.equal(third.kind, "ok");
+    if (third.kind !== "ok") return;
+    assert.equal(third.entries[0]?.added, 2);
+    assert.equal(counter.opens, 3);
+  });
+
+  test("超过计数上限：只读开头 8000 字节，非二进制 → 行数未知（不显示 +0）", async () => {
+    // 声明 size 刚过上限；内容只备开头一段（够判二进制），计数器不该往后读
+    const head = Buffer.from("x\n".repeat(10_000), "utf8");
+    const files = new Map<string, FakeFile>([
+      ["/w-oversize/big.txt", { bytes: head, size: UNTRACKED_LINE_COUNT_MAX_BYTES + 1, mtimeMs: 1000 }],
+    ]);
+    const counter = { opens: 0, bytes: 0 };
+    const changes = await gitWorkdirChanges(untrackedRunner(["? big.txt"]), "/w-oversize", fakeProbe(files, counter));
+    assert.equal(changes.kind, "ok");
+    if (changes.kind !== "ok") return;
+    assert.deepEqual(changes.entries, [
+      { path: "big.txt", kind: "U", added: 0, removed: 0, binary: false, lineCountUnknown: true },
+    ]);
+    // 只读了判二进制的那 8000 字节，不读全文
+    assert.deepEqual([counter.opens, counter.bytes], [1, GIT_BINARY_SNIFF_BYTES]);
+  });
+
+  test("1 MB 到上限之间的文本照数（以前 1 MB 以上一律「行数未知」）", async () => {
+    const text = Buffer.from("x\n".repeat(600_000) + "y\n", "utf8"); // 1.2 MB，600001 行
+    assert.ok(text.length > 1024 * 1024);
+    const files = new Map<string, FakeFile>([["/w-mid/mid.txt", { bytes: text, mtimeMs: 1000 }]]);
+    const changes = await gitWorkdirChanges(untrackedRunner(["? mid.txt"]), "/w-mid", fakeProbe(files));
+    assert.equal(changes.kind, "ok");
+    if (changes.kind !== "ok") return;
+    assert.deepEqual(changes.entries, [{ path: "mid.txt", kind: "U", added: 600_001, removed: 0, binary: false }]);
+  });
+
+  test("超过上限且开头含 NUL → 二进制，行数 0（与审查面板同口径）", async () => {
+    const blob = Buffer.concat([Buffer.from([0x41, 0x00, 0x42]), Buffer.alloc(16 * 1024, 0x41)]);
+    const files = new Map<string, FakeFile>([
+      ["/w-binary-big/blob.bin", { bytes: blob, size: UNTRACKED_LINE_COUNT_MAX_BYTES + 1, mtimeMs: 1000 }],
+    ]);
+    const changes = await gitWorkdirChanges(untrackedRunner(["? blob.bin"]), "/w-binary-big", fakeProbe(files));
+    assert.equal(changes.kind, "ok");
+    if (changes.kind !== "ok") return;
+    assert.deepEqual(changes.entries, [{ path: "blob.bin", kind: "U", added: 0, removed: 0, binary: true }]);
+  });
+
+  test("小文件含 NUL → 二进制，行数 0", async () => {
+    const files = new Map<string, FakeFile>([
+      ["/w-binary-small/small.bin", { bytes: Buffer.from([0x61, 0x00, 0x62]), mtimeMs: 1000 }],
+    ]);
+    const changes = await gitWorkdirChanges(untrackedRunner(["? small.bin"]), "/w-binary-small", fakeProbe(files));
+    assert.equal(changes.kind, "ok");
+    if (changes.kind !== "ok") return;
+    assert.deepEqual(changes.entries, [{ path: "small.bin", kind: "U", added: 0, removed: 0, binary: true }]);
+  });
+
+  // ————————————————————————————————
+  // 缓存跟着上一轮走 + 每轮数行的预算
+  // ————————————————————————————————
+
+  /** n 个小未跟踪文件（各两行）：返回假盘与 status 行 */
+  function manyFiles(cwd: string, total: number): { files: Map<string, FakeFile>; lines: string[] } {
+    const files = new Map<string, FakeFile>();
+    const lines: string[] = [];
+    for (let i = 0; i < total; i++) {
+      files.set(`${cwd}/data/f-${i}.txt`, { bytes: Buffer.from(`l${i}\nsecond\n`, "utf8"), mtimeMs: 1000 });
+      lines.push(`? data/f-${i}.txt`);
+    }
+    return { files, lines };
+  }
+
+  test("2001 个未跟踪文件：第二轮一次都不读盘（原来 LRU 容量 2000，每轮全部落空）", async () => {
+    const { files, lines } = manyFiles("/w-cliff", 2001);
+    const counter = { opens: 0, bytes: 0 };
+    const probe = fakeProbe(files, counter);
+    const first = await gitWorkdirChanges(untrackedRunner(lines), "/w-cliff", probe);
+    assert.equal(first.kind, "ok");
+    if (first.kind !== "ok") return;
+    assert.equal(first.entries.length, 2001);
+    assert.ok(first.entries.every((entry) => entry.added === 2));
+    assert.equal(counter.opens, 2001);
+
+    const second = await gitWorkdirChanges(untrackedRunner(lines), "/w-cliff", probe);
+    assert.equal(second.kind, "ok");
+    if (second.kind !== "ok") return;
+    assert.deepEqual(second.entries, first.entries);
+    assert.equal(counter.opens, 2001, "第二轮应全部命中缓存");
+  });
+
+  test("缓存只留上一轮问到的：这一轮没出现的文件被忘掉（不无界增长）", async () => {
+    const files = new Map<string, FakeFile>([
+      ["/w-forget/a.txt", { bytes: Buffer.from("a\n", "utf8"), mtimeMs: 1000 }],
+      ["/w-forget/b.txt", { bytes: Buffer.from("b\n", "utf8"), mtimeMs: 1000 }],
+    ]);
+    const counter = { opens: 0, bytes: 0 };
+    const probe = fakeProbe(files, counter);
+    await gitWorkdirChanges(untrackedRunner(["? a.txt", "? b.txt"]), "/w-forget", probe);
+    assert.equal(counter.opens, 2);
+    // a.txt 被删了（或被加进 .gitignore）：这一轮只有 b
+    await gitWorkdirChanges(untrackedRunner(["? b.txt"]), "/w-forget", probe);
+    assert.equal(counter.opens, 2, "b 没变，命中");
+    // a.txt 又出现：缓存里已经没有它，重新数
+    await gitWorkdirChanges(untrackedRunner(["? a.txt", "? b.txt"]), "/w-forget", probe);
+    assert.equal(counter.opens, 3);
+  });
+
+  test("每轮最多数 5000 个：超出的这一轮报「行数未知」、不进缓存，下一轮接着数", async () => {
+    const { files, lines } = manyFiles("/w-cap-files", 6000);
+    const counter = { opens: 0, bytes: 0 };
+    const probe = fakeProbe(files, counter);
+    const unknownOf = (changes: Awaited<ReturnType<typeof gitWorkdirChanges>>) =>
+      changes.kind === "ok" ? changes.entries.filter((entry) => entry.lineCountUnknown === true).length : -1;
+
+    const first = await gitWorkdirChanges(untrackedRunner(lines), "/w-cap-files", probe);
+    // 列表照样是全的（6000 个 U），只是后 1000 个这一轮没数
+    assert.equal(first.kind === "ok" ? first.entries.length : -1, 6000);
+    assert.deepEqual([counter.opens, unknownOf(first)], [5000, 1000]);
+
+    const second = await gitWorkdirChanges(untrackedRunner(lines), "/w-cap-files", probe);
+    assert.deepEqual([counter.opens, unknownOf(second)], [6000, 0]);
+
+    const third = await gitWorkdirChanges(untrackedRunner(lines), "/w-cap-files", probe);
+    assert.deepEqual([counter.opens, unknownOf(third)], [6000, 0]);
+  });
+
+  test("每轮最多读 256 MB：第五个 60 MB 的文件留到下一轮", async () => {
+    const files = new Map<string, FakeFile>();
+    const lines: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      // 声明 60 MB（在计数上限之内）；内容只备一小段，读到 EOF 就停
+      files.set(`/w-cap-bytes/big-${i}.log`, { bytes: Buffer.from("x\n", "utf8"), size: 60 * 1024 * 1024, mtimeMs: 1000 });
+      lines.push(`? big-${i}.log`);
+    }
+    const counter = { opens: 0, bytes: 0 };
+    const probe = fakeProbe(files, counter);
+    const first = await gitWorkdirChanges(untrackedRunner(lines), "/w-cap-bytes", probe);
+    assert.equal(first.kind, "ok");
+    if (first.kind !== "ok") return;
+    assert.equal(counter.opens, 4);
+    assert.deepEqual(
+      first.entries.map((entry) => entry.lineCountUnknown === true),
+      [false, false, false, false, true],
+    );
+    const second = await gitWorkdirChanges(untrackedRunner(lines), "/w-cap-bytes", probe);
+    assert.equal(second.kind, "ok");
+    if (second.kind !== "ok") return;
+    assert.equal(counter.opens, 5, "前四个命中缓存，预算留给第五个");
+    assert.ok(second.entries.every((entry) => entry.lineCountUnknown !== true));
+  });
+
+  test("只记最近 8 个工作区的上一轮：第 9 个挤掉最早的那个", async () => {
+    const counter = { opens: 0, bytes: 0 };
+    const files = new Map<string, FakeFile>();
+    for (let i = 0; i < 9; i++) files.set(`/w-ws-${i}/f.txt`, { bytes: Buffer.from("f\n", "utf8"), mtimeMs: 1000 });
+    const probe = fakeProbe(files, counter);
+    for (let i = 0; i < 9; i++) await gitWorkdirChanges(untrackedRunner(["? f.txt"]), `/w-ws-${i}`, probe);
+    assert.equal(counter.opens, 9);
+    // 最近的第 9 个还在
+    await gitWorkdirChanges(untrackedRunner(["? f.txt"]), "/w-ws-8", probe);
+    assert.equal(counter.opens, 9);
+    // 最早的第 1 个已被挤掉：重新数
+    await gitWorkdirChanges(untrackedRunner(["? f.txt"]), "/w-ws-0", probe);
+    assert.equal(counter.opens, 10);
   });
 });
 

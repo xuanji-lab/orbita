@@ -24,6 +24,39 @@ async function scan(text: string, keep: (head: string) => boolean): Promise<stri
   return out;
 }
 
+describe("scanJsonlLines 增量范围", () => {
+  test("从偏移读到文件尾，返回已读到的最后一个换行之后的位置", async () => {
+    const file = join(dir, "r.jsonl");
+    await writeFile(file, "aaa\nbbb\nccc\n", "utf8");
+    const out: string[] = [];
+    const consumed = await scanJsonlLines(file, () => true, (line) => out.push(line), undefined, { start: 4 });
+    assert.deepEqual(out, ["bbb", "ccc"]);
+    assert.equal(consumed, 12);
+  });
+
+  test("terminatedOnly：末尾没写完的半行不交出，偏移停在它之前；补完后从那里接着读", async () => {
+    const file = join(dir, "r.jsonl");
+    await writeFile(file, "aaa\nbb", "utf8");
+    const out: string[] = [];
+    const first = await scanJsonlLines(file, () => true, (line) => out.push(line), undefined, { terminatedOnly: true });
+    assert.deepEqual(out, ["aaa"]);
+    assert.equal(first, 4);
+    await writeFile(file, "aaa\nbbb\n", "utf8");
+    const second = await scanJsonlLines(file, () => true, (line) => out.push(line), undefined, { start: first, terminatedOnly: true });
+    assert.deepEqual(out, ["aaa", "bbb"]);
+    assert.equal(second, 8);
+  });
+
+  test("endExclusive 截在写入过程中也不会交出越界的字节", async () => {
+    const file = join(dir, "r.jsonl");
+    await writeFile(file, "aaa\nbbb\nccc\n", "utf8");
+    const out: string[] = [];
+    const consumed = await scanJsonlLines(file, () => true, (line) => out.push(line), undefined, { endExclusive: 8, terminatedOnly: true });
+    assert.deepEqual(out, ["aaa", "bbb"]);
+    assert.equal(consumed, 8);
+  });
+});
+
 describe("scanJsonlLines", () => {
   test("全留时与 split('\\n') 去空行逐行一致：跨块的长行、无尾换行、多字节字符", async () => {
     // 600KB 的行跨过 256KB 的读块边界；中文让多字节字符落在块边界上的概率不为零

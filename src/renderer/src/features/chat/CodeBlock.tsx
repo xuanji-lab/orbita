@@ -18,6 +18,8 @@ import { useEffect, useMemo, useState, isValidElement } from "react";
 import type { ReactNode } from "react";
 import { highlighterReady } from "./highlight";
 import { fenceHighlight } from "./stream-render.ts";
+import { MermaidBlock } from "./MermaidBlock.tsx";
+import { isMermaidLang } from "./mermaid-render.ts";
 
 /** react-markdown 的 pre 元素 */
 export function MdPre(props: {
@@ -33,6 +35,8 @@ export function MdPre(props: {
   const lang = /^language-(\S+)$/.exec(className)?.[1];
   const text = nodeText(child.props.children);
   if (lang === undefined) return <PlainFence text={text} />;
+  // mermaid 围栏画成图（失败 / 未闭合时 MermaidBlock 自己退回代码块）
+  if (isMermaidLang(lang)) return <MermaidBlock source={text} />;
   return <FenceBlock lang={lang} text={text} highlight={props.highlight ?? true} />;
 }
 

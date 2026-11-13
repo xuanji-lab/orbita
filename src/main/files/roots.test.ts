@@ -1,9 +1,9 @@
 /** resolveFileRoots 的账：顺序 session → workspace → attached（→ 不进树的 attachments），label 与 exists 的来源。 */
 import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { whitelistedPath } from "./list.ts";
 import { resolveFileRoots } from "./roots.ts";
 import { SessionStore } from "../session/store.ts";
@@ -207,5 +207,139 @@ describe("resolveFileRoots：专注 / 浏览态的额外预览根（extraWorkspa
     // 白名单认的是「这次请求的根清单」，不是任何工作区的路径
     const plainRoots = await resolveFileRoots(workspaces, sessions, { sessionId: null, workspaceId: null });
     await assert.rejects(whitelistedPath(plainRoots, { sessionId: null, workspaceId: null, root: focus.path, dir: file }));
+  });
+});
+
+/** 写一条 cite_pdf 工具结果进某会话的 JSONL（与 session store 写出的形状一致） */
+async function citeInLog(sessionId: string, ...paths: string[]): Promise<void> {
+  const line = JSON.stringify({
+    id: `tool-${paths.length}`,
+    role: "tool",
+    toolCallId: "call_1",
+    toolName: "cite_pdf",
+    input: {},
+    content: [{ type: "text", text: "Verified" }],
+    timestamp: 1,
+    details: {
+      pdfCitations: paths.map((path, i) => ({ id: `c00${i}`, path, page: 1, start: 0, end: 5, text: "原文原文" })),
+    },
+    status: "complete",
+    isError: false,
+  });
+  const log = sessions.recordPath(sessionId);
+  await mkdir(dirname(log), { recursive: true });
+  await writeFile(log, `${line}\n`, { flag: "a" });
+}
+
+describe("cited 根：被 cite_pdf 核验过的 PDF 原地打开（根是文件本身）", () => {
+  const S2 = "99999999-2222-3333-4444-555555555555";
+  let outside = "";
+  let cited = "";
+  let sibling = "";
+
+  beforeEach(async () => {
+    await workspaces.ensureHome();
+    outside = join(dir, "other-repo", "references");
+    await mkdir(outside, { recursive: true });
+    cited = join(outside, "cited.pdf");
+    sibling = join(outside, "sibling.pdf");
+    await writeFile(cited, "%PDF-1.4 cited");
+    await writeFile(sibling, "%PDF-1.4 sibling");
+  });
+
+  const rootsOf = (sessionId: string | null) =>
+    resolveFileRoots(workspaces, sessions, { sessionId, workspaceId: null });
+  const ask = (roots: Awaited<ReturnType<typeof rootsOf>>, root: string, path: string) =>
+    whitelistedPath(roots, { sessionId: S1, workspaceId: null, root, dir: path });
+
+  test("引用过的 PDF 出一个 cited 根（排在 attachments 之后，路径就是文件），原地可读", async () => {
+    await citeInLog(S1, cited);
+    const roots = await rootsOf(S1);
+    assert.deepEqual(
+      roots.map((root) => root.kind),
+      ["session", "workspace", "attachments", "cited"],
+    );
+    const root = roots.find((entry) => entry.kind === "cited");
+    assert.equal(root?.path, cited);
+    assert.equal(root?.label, "cited.pdf");
+    assert.equal(root?.exists, true);
+    assert.equal(await ask(roots, cited, cited), await realpath(cited));
+  });
+
+  test("同目录里没被引用过的 PDF：拒（授权精确到文件，不是目录）", async () => {
+    await citeInLog(S1, cited);
+    const roots = await rootsOf(S1);
+    await assert.rejects(ask(roots, cited, sibling)); // 拿 cited 当根读兄弟文件
+    await assert.rejects(ask(roots, sibling, sibling)); // 直接报兄弟文件当根：不在清单里
+    await assert.rejects(ask(roots, outside, sibling)); // 报它所在的目录当根：同样不在清单里
+  });
+
+  test("模型编出来、从没过 cite_pdf 的路径：拒", async () => {
+    const roots = await rootsOf(S1);
+    assert.equal(roots.filter((root) => root.kind === "cited").length, 0);
+    await assert.rejects(ask(roots, cited, cited));
+  });
+
+  test("别的会话借不到：S2 的根清单没有 S1 引用过的文件，拿来当根被拒", async () => {
+    await citeInLog(S1, cited);
+    await sessions.ensureSession(meta({ id: S2 }));
+    const roots2 = await rootsOf(S2);
+    assert.equal(roots2.filter((root) => root.kind === "cited").length, 0);
+    await assert.rejects(whitelistedPath(roots2, { sessionId: S2, workspaceId: null, root: cited, dir: cited }));
+    // sessionId 为 null（新任务还没会话）同理
+    const roots0 = await rootsOf(null);
+    await assert.rejects(whitelistedPath(roots0, { sessionId: null, workspaceId: null, root: cited, dir: cited }));
+  });
+
+  test("`..` 绕不出去：路径里夹 `..` 解析后不是那份文件就拒，解析回那份文件才放行", async () => {
+    await citeInLog(S1, cited);
+    const roots = await rootsOf(S1);
+    await mkdir(join(outside, "sub"));
+    // 不用 join（它会先把 `..` 折掉）：拼字符串让 `..` 原样交给主进程
+    await assert.rejects(ask(roots, cited, `${outside}/sub/../sibling.pdf`));
+    await assert.rejects(ask(roots, cited, `${outside}/sub/../../other-repo/references/sibling.pdf`));
+    await assert.rejects(ask(roots, `${outside}/sub/../cited.pdf`, cited)); // 根必须与清单里的路径逐字相同
+    assert.equal(await ask(roots, cited, `${outside}/sub/../cited.pdf`), await realpath(cited));
+  });
+
+  test("软链接：同目录里指向别处的链接拒；指回被引用文件本身的链接 realpath 后就是同一份，放行", async () => {
+    await citeInLog(S1, cited);
+    const secret = join(dir, "secret.pdf");
+    await writeFile(secret, "%PDF-1.4 secret");
+    const toSecret = join(outside, "innocent.pdf");
+    const toCited = join(outside, "alias.pdf");
+    try {
+      await symlink(secret, toSecret);
+      await symlink(cited, toCited);
+    } catch {
+      return; // 没有创建软链接的权限（Windows 非管理员）：这条不验，交给别的平台
+    }
+    const roots = await rootsOf(S1);
+    await assert.rejects(ask(roots, cited, toSecret));
+    assert.equal(await ask(roots, cited, toCited), await realpath(cited));
+  });
+
+  test("被引用的 PDF 之后被换成指向别处的软链接：whitelistedPath 回的是 realpath，调用方据此再判 .pdf（ipc 的 isPdfFile）", async () => {
+    await citeInLog(S1, cited);
+    const secret = join(dir, "secret.txt");
+    await writeFile(secret, "top secret");
+    try {
+      await rm(cited);
+      await symlink(secret, cited);
+    } catch {
+      return;
+    }
+    const roots = await rootsOf(S1);
+    const real = await ask(roots, cited, cited);
+    assert.equal(real, await realpath(secret));
+    assert.equal(/\.pdf$/i.test(real), false); // fs:read-pdf 在这一步拒掉
+  });
+
+  test("引用过但文件已被删：cited 根 exists=false（面板给「原文件找不到了」），读取被拒", async () => {
+    await citeInLog(S1, cited);
+    await rm(cited);
+    const roots = await rootsOf(S1);
+    assert.equal(roots.find((root) => root.kind === "cited")?.exists, false);
+    await assert.rejects(ask(roots, cited, cited), /不存在/);
   });
 });

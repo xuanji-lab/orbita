@@ -212,6 +212,22 @@ describe("buildSummaryMaterial + buildSummaryPrompt", () => {
     assert.match(prompt, /M shell\/Sidebar\.tsx（\+42 −7）/);
   });
 
+  test("正文：超大未跟踪文件写「行数未知」，不写 +0", () => {
+    const material = buildSummaryMaterial([], {
+      workspaceNames: new Map(),
+      workspaceName: "orbita",
+      branch: null,
+      changeEntries: [
+        { path: "data/dump.binlog", kind: "U", added: 0, removed: 0, binary: false, lineCountUnknown: true },
+      ],
+      startedAt: T0,
+      until: T1,
+    });
+    const prompt = buildSummaryPrompt(material, T0, T1);
+    assert.match(prompt, /U data\/dump\.binlog（行数未知）/);
+    assert.doesNotMatch(prompt, /dump\.binlog（\+0）/);
+  });
+
   test("无改动时的诚实句", () => {
     const material = buildSummaryMaterial([], {
       workspaceNames: new Map(),

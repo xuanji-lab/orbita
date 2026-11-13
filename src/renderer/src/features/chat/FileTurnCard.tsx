@@ -283,14 +283,25 @@ const SLOT_MARK: React.CSSProperties = {
  *
  * scripted = 旁路产物（脚本生成）：行内标「脚本生成 · 仅可打开」——它不在文件
  * 账里、不参与撤销，这是卡片上如实交代的两件事。
+ *
+ * 「在 orbita 打开」不放行时（不在本会话的目录里、文件已不在、链接指向别的类型……），行下一行说清楚
+ * 原因；以前失败只进 console，用户点了没反应。「打开文件位置」不受影响。
  */
 function ArtifactRow(props: { path: string; cwd: string | null; sessionId: string; scripted?: boolean }) {
   const t = useT();
   const parts = pathParts(props.path, props.cwd);
+  const [refusal, setRefusal] = useState<string | null>(null);
   const openInBrowser = () => {
-    void api.session.openArtifactInBrowser(props.sessionId, props.path).catch((cause: unknown) => {
-      console.error("[file-card] 内置浏览器打开失败", cause);
-    });
+    setRefusal(null);
+    void api.session.openArtifactInBrowser(props.sessionId, props.path).then(
+      (result) => {
+        if (!result.ok) setRefusal(t.chat.openInOrbitaRefused(result.reason));
+      },
+      (cause: unknown) => {
+        console.error("[file-card] 内置浏览器打开失败", cause);
+        setRefusal(t.chat.openInOrbitaFailed);
+      },
+    );
   };
   const reveal = () => {
     void api.session.revealArtifact(props.sessionId, props.path).catch((cause: unknown) => {
@@ -312,26 +323,49 @@ function ArtifactRow(props: { path: string; cwd: string | null; sessionId: strin
     whiteSpace: "nowrap",
   };
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0 }}>
-      <span style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}>
-        <Icon name="globe" size={12} strokeWidth={1.8} />
-      </span>
-      <span style={{ minWidth: 0, display: "flex", gap: "var(--space-1)", flex: "1 1 auto" }}>
-        <span style={{ fontWeight: 600, color: "var(--color-text-primary)", whiteSpace: "nowrap" }}>
-          {parts.name}
+    <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0 }}>
+        <span style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}>
+          <Icon name="globe" size={12} strokeWidth={1.8} />
         </span>
-        <span style={{ ...SLOT_DIR, flex: "0 0 auto" }}>{t.chat.fileCardWebPage}</span>
-        {props.scripted === true && <span style={SLOT_MARK}>{t.chat.fileCardScripted}</span>}
-        {parts.dir !== "" && <span style={SLOT_DIR}>{parts.dir}</span>}
-      </span>
-      <button type="button" style={button} onClick={openInBrowser} title={t.chat.openInOrbita}>
-        <Icon name="arrow-up-right" size={11} strokeWidth={1.8} />
-        {t.chat.openInOrbita}
-      </button>
-      <button type="button" style={button} onClick={reveal} title={t.chat.revealArtifact}>
-        <Icon name="folder-open" size={11} strokeWidth={1.8} />
-        {t.chat.revealArtifact}
-      </button>
+        <span style={{ minWidth: 0, display: "flex", gap: "var(--space-1)", flex: "1 1 auto" }}>
+          <span style={{ fontWeight: 600, color: "var(--color-text-primary)", whiteSpace: "nowrap" }}>
+            {parts.name}
+          </span>
+          <span style={{ ...SLOT_DIR, flex: "0 0 auto" }}>{t.chat.fileCardWebPage}</span>
+          {props.scripted === true && <span style={SLOT_MARK}>{t.chat.fileCardScripted}</span>}
+          {parts.dir !== "" && <span style={SLOT_DIR}>{parts.dir}</span>}
+        </span>
+        <button type="button" style={button} onClick={openInBrowser} title={t.chat.openInOrbita}>
+          <Icon name="arrow-up-right" size={11} strokeWidth={1.8} />
+          {t.chat.openInOrbita}
+        </button>
+        <button type="button" style={button} onClick={reveal} title={t.chat.revealArtifact}>
+          <Icon name="folder-open" size={11} strokeWidth={1.8} />
+          {t.chat.revealArtifact}
+        </button>
+      </div>
+      {refusal !== null && (
+        // 拒绝原因：图标 + 文字（颜色只是第二信号），与文件名左缘对齐（左图标 12px + 间距）
+        <div
+          role="status"
+          style={{
+            display: "flex",
+            gap: "var(--space-1)",
+            alignItems: "flex-start",
+            paddingLeft: "calc(12px + var(--space-2))",
+            fontSize: "var(--font-size-sm)",
+            color: "var(--color-danger)",
+            overflowWrap: "anywhere",
+          }}
+        >
+          {/* 图标钉在第一行的行高里居中：原因折成两行时不悬在两行中间 */}
+          <span style={{ display: "inline-flex", alignItems: "center", height: "1lh", flex: "0 0 auto" }}>
+            <Icon name="triangle-alert" size={11} strokeWidth={2} />
+          </span>
+          <span>{refusal}</span>
+        </div>
+      )}
     </div>
   );
 }

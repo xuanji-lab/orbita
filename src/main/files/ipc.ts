@@ -8,6 +8,10 @@ import { ipcChannels } from "../../shared/agent-ipc.ts";
 import {
   isPdfFile,
   isWebPageFile,
+  type FileLineIndex,
+  type FileLineIndexRequest,
+  type FileLines,
+  type FileLinesRequest,
   type FileListRequest,
   type FilePreview,
   type PdfFile,
@@ -18,16 +22,22 @@ import type { SessionStore } from "../session/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import { resolveFileRoots } from "./roots.ts";
 import { listDirectory, whitelistedPath } from "./list.ts";
+import { buildLineIndex, readLines } from "./lines.ts";
 import { readPdfFile, readPreview } from "./read.ts";
 
 /**
  * @param openInBrowser 在内置浏览器「你的」tab 打开一个本地网页（BrowserSandbox.openLocalFile）。
- * 传函数不传沙盒：文件面板只需要这一个动作
+ * 传函数不传沙盒：文件面板只需要这一个动作。roots 是页面打开之后能读的本地范围（页面闸）
  */
+/** 在途的行索引请求：`<窗口 id>:<requestId>` → 它的取消控制器 */
+const pendingIndexes = new Map<string, AbortController>();
+
+const pendingKey = (senderId: number, requestId: string): string => `${senderId}:${requestId}`;
+
 export function registerFilesIpc(
   workspaces: WorkspaceStore,
   sessions: SessionStore,
-  openInBrowser: (path: string) => Promise<void>,
+  openInBrowser: (path: string, roots: readonly string[]) => Promise<void>,
 ): void {
   ipcMain.handle(ipcChannels.fsRoots, (_event, req: FileRootsRequest) =>
     resolveFileRoots(workspaces, sessions, req),
@@ -67,6 +77,44 @@ export function registerFilesIpc(
   });
 
   /**
+   * 行索引（分段预览的第一步）：先过与 fs:list 同一道的 root/dir 白名单，再扫文件建
+   * 检查点。令牌 `indexId` 只回给这份文件——`fs:read-lines` 只认令牌、不收路径，
+   * 所以白名单只在这里过一遍就够，不存在绕过它的第二条路。
+   *
+   * 取消：`requestId` 在**任何 await 之前**登记（`fs:line-index-cancel` 与本请求从同一个窗口
+   * 按序到达，若等白名单解析完再登记，取消会比登记先到而被丢掉）。键带上发起窗口的 id——
+   * 一个窗口取消不了另一个窗口的请求。
+   */
+  ipcMain.handle(
+    ipcChannels.fsLineIndex,
+    async (event, req: FileLineIndexRequest): Promise<FileLineIndex> => {
+      const key = pendingKey(event.sender.id, req.requestId);
+      const controller = new AbortController();
+      pendingIndexes.set(key, controller);
+      try {
+        const roots = await resolveFileRoots(workspaces, sessions, req);
+        const path = await whitelistedPath(roots, req);
+        return await buildLineIndex(path, controller.signal);
+      } finally {
+        // 同一个 requestId 被重用（renderer 的 bug）时不删别人的登记
+        if (pendingIndexes.get(key) === controller) pendingIndexes.delete(key);
+      }
+    },
+  );
+
+  /** 取消一次还在扫的行索引：没有对应请求（已完成 / 从没发过）就什么都不做 */
+  ipcMain.on(ipcChannels.fsLineIndexCancel, (event, requestId: unknown) => {
+    if (typeof requestId !== "string") return;
+    pendingIndexes.get(pendingKey(event.sender.id, requestId))?.abort();
+  });
+
+  /** 按行读一段（令牌来自 fs:line-index，不信任 renderer 传的任何路径） */
+  ipcMain.handle(
+    ipcChannels.fsReadLines,
+    (_event, req: FileLinesRequest): Promise<FileLines> => readLines(req),
+  );
+
+  /**
    * 读 PDF 字节给预览面板（同白名单，外加只认 .pdf——判定用 realpath 之后的路径，
    * 改名成 foo.pdf 的软链接指向别的文件同样被拒；这条通道不能变成「整份读任意文件」）
    */
@@ -94,12 +142,20 @@ export function registerFilesIpc(
    * 网页文件的默认打开方式：内置浏览器（2026-09-29 裁决「全都默认用内置」）。同一道白名单，
    * 外加只认网页文件——这条通道不能变成「让浏览器加载任意本地文件」。判定用 realpath 之后的
    * 路径：指向别的类型的 foo.html 软链接同样被拒。
+   *
+   * 入口闸只管第一个地址；页面打开之后它自己还能 fetch / iframe / 跳转到任意 file://（#365）。
+   * 所以把这条会话的白名单根一并交给浏览器：页面之后对 file:// 的请求只在这些根里放行——
+   * 与文件面板本身能读的范围一样，不多不少。
    */
   ipcMain.handle(ipcChannels.fsOpenInBrowser, async (_event, req: FileListRequest): Promise<void> => {
     const roots = await resolveFileRoots(workspaces, sessions, req);
     const path = await whitelistedPath(roots, req);
     if (!isWebPageFile(path)) throw new Error(`Only web pages open in the built-in browser; ${path} is not one.`);
-    await openInBrowser(path);
+    // cited 根是「某一份引用过的 PDF」本身，不该顺带成为网页能读的范围
+    await openInBrowser(
+      path,
+      roots.filter((root) => root.exists && root.kind !== "cited").map((root) => root.path),
+    );
   });
 
   /**

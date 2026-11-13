@@ -1,6 +1,23 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
-import { fileRootLabel, isWebArtifactFile, isWebPageFile, PREVIEW_TEXT_LIMIT, sortFileEntries, type FileEntry } from "./files.ts";
+import {
+  fileRootLabel,
+  isWebArtifactFile,
+  isWebPageFile,
+  PREVIEW_BINARY_SNIFF_BYTES,
+  PREVIEW_HIGHLIGHT_LIMIT,
+  PREVIEW_IMAGE_LIMIT,
+  PREVIEW_LINES_PER_READ,
+  PREVIEW_MARKDOWN_LIMIT,
+  PREVIEW_MAX_INDEX_BYTES,
+  PREVIEW_MAX_LINE_BYTES,
+  PREVIEW_PDF_LIMIT,
+  PREVIEW_ROW_CHARS,
+  PREVIEW_TEXT_LIMIT,
+  PREVIEW_WINDOW_LIMIT,
+  sortFileEntries,
+  type FileEntry,
+} from "./files.ts";
 
 const entry = (name: string, kind: FileEntry["kind"]): FileEntry => ({ name, kind, modifiedAt: 0 });
 
@@ -59,5 +76,28 @@ describe("isWebArtifactFile（轮尾网页产物：卡片行与轮内扫描同�
 describe("PREVIEW_TEXT_LIMIT", () => {
   it("16 MB：窗口化之后它只保护整份文本进 JS 堆 / 一次 IPC，不再是渲染上限", () => {
     strictEqual(PREVIEW_TEXT_LIMIT, 16 * 1024 * 1024);
+  });
+});
+
+describe("文件预览的尺寸门槛表", () => {
+  it("从小到大的台阶是单调的：渲染路径的门槛 < 整份进 renderer 的上限 < 扫一遍的上限", () => {
+    // markdown 渲染 ≤ 代码高亮 ≤ 窗口化 < 16 MB（整份读）< 1 GiB（主进程愿意扫）
+    strictEqual(PREVIEW_MARKDOWN_LIMIT <= PREVIEW_HIGHLIGHT_LIMIT, true);
+    strictEqual(PREVIEW_HIGHLIGHT_LIMIT <= PREVIEW_WINDOW_LIMIT, true);
+    strictEqual(PREVIEW_WINDOW_LIMIT < PREVIEW_TEXT_LIMIT, true);
+    strictEqual(PREVIEW_TEXT_LIMIT < PREVIEW_MAX_INDEX_BYTES, true);
+    strictEqual(PREVIEW_MAX_INDEX_BYTES, 1024 * 1024 * 1024);
+  });
+
+  it("分段预览的单行 / 一窗的数没被改动；一条显示行（字符）不会比单行字节上限还长", () => {
+    strictEqual(PREVIEW_MAX_LINE_BYTES, 64 * 1024);
+    strictEqual(PREVIEW_LINES_PER_READ, 600);
+    strictEqual(PREVIEW_ROW_CHARS <= PREVIEW_MAX_LINE_BYTES, true);
+  });
+
+  it("其余几个数没被改动", () => {
+    strictEqual(PREVIEW_BINARY_SNIFF_BYTES, 8 * 1024);
+    strictEqual(PREVIEW_IMAGE_LIMIT, 20 * 1024 * 1024);
+    strictEqual(PREVIEW_PDF_LIMIT, 100 * 1024 * 1024);
   });
 });

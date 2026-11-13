@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { ExcerptItem } from "@shared/excerpt";
 import { api } from "../../api";
 import { Icon } from "../../shell/Icon";
+import { PanelEmpty } from "../../shell/PanelEmpty";
 import { useT } from "../../locale.ts";
 import { formatDay } from "../settings/migration-groups.ts";
 import { filterExcerpts, type ExcerptMode } from "./excerpt-filter.ts";
@@ -139,17 +140,21 @@ export function ExcerptsTab(props: {
       </div>
 
       {failed ? (
-        <p className="panel-empty excerpts-empty" role="alert">
+        <PanelEmpty tone="danger" className="excerpts-empty">
           {t.review.excerptsFailed}
-        </p>
+        </PanelEmpty>
       ) : items === null ? (
-        <p className="panel-empty excerpts-empty">{t.common.loading}</p>
+        <PanelEmpty busy className="excerpts-empty">
+          {t.common.loading}
+        </PanelEmpty>
       ) : shown.length === 0 ? (
-        <div className="panel-empty excerpts-empty">
-          <Icon name="quote" size={16} strokeWidth={1.6} />
-          <span>{emptyText}</span>
-          {items.length === 0 && <span className="excerpts-hint">{t.review.excerptsEmptyHint}</span>}
-        </div>
+        <PanelEmpty
+          icon={query.trim() !== "" ? "search" : "quote"}
+          className="excerpts-empty"
+          hint={items.length === 0 ? t.review.excerptsEmptyHint : undefined}
+        >
+          {emptyText}
+        </PanelEmpty>
       ) : (
         <ul className="excerpts-list">
           {shown.map((item) => {

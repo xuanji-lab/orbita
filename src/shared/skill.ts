@@ -178,3 +178,25 @@ export function skillForReadPath(
   if (dir === undefined) return null;
   return skills.find((skill) => skill.slug.toLowerCase() === dir) ?? null;
 }
+
+// ---------- 归档 / 移除（能力面板里你自己的技能） ----------
+
+/**
+ * 归档目录里的一条：`<userData>/skills-archive/<id>/` 是技能文件夹，旁边的 `<id>.json` 记下面这些
+ * （做法同插件卸载 = 归档）。`id` 是归档文件夹名（`<slug>-<时间戳>`），**只当不透明的句柄**用——
+ * slug 在记录里，不从文件夹名拆。
+ */
+export interface SkillArchiveEntry {
+  id: string;
+  /** 原 slug：恢复时挪回这个名字 */
+  slug: string;
+  /** 归档时 SKILL.md 里的显示名（列表里认它用；读不出来就是 slug） */
+  name: string;
+  archivedAt: number;
+  /** 归档前的归属：恢复时按它重建链接 */
+  global: boolean;
+  workspaces: string[];
+}
+
+/** 恢复的结局以数据返回：原 slug 已被占用时停下提示，不覆盖、不改名。 */
+export type SkillRestoreResult = { ok: true } | { ok: false; reason: "slug-exists" | "not-found" };

@@ -274,6 +274,34 @@ describe("官方单价", () => {
       assert.deepEqual(officialRates(planOnly, "deepseek-v4.1-flash", {}, undefined), flashPeak);
     });
   });
+
+  describe("Claude 家族借价排在白名单之后", () => {
+    // 2026-11-12 用户：fable-5-2 官方 $8 / $40，图上却是借来的 fable-5 的 $10 / $50
+    const anthropic: BuiltinProvider[] = [
+      { id: "anthropic", name: "Anthropic", baseUrl: "", api: "anthropic-messages", models: [model("claude-fable-5", [10, 50, 1, 12.5])] },
+    ];
+    const prefer = { catalogId: "anthropic", api: "anthropic-messages" as const };
+
+    test("目录没收录 fable-5-2：取白名单的官方价，不借 fable-5 的", () => {
+      assert.deepEqual(officialRates(anthropic, "claude-fable-5-2", prefer, undefined), {
+        input: 8,
+        output: 40,
+        cacheRead: 0.2,
+        cacheWrite: 10,
+      });
+    });
+
+    test("白名单也没价的 claude 新型号：照旧借同家族的价（总比缺价强）", () => {
+      assert.equal(officialRates(anthropic, "claude-fable-5-9", prefer, undefined)?.input, 10);
+    });
+
+    test("目录收录了同 id：目录价优先于白名单（联网刷新跟得上调价）", () => {
+      const listed: BuiltinProvider[] = [
+        { ...anthropic[0]!, models: [...anthropic[0]!.models, model("claude-fable-5-2", [7, 35, 0.175, 8.75])] },
+      ];
+      assert.equal(officialRates(listed, "claude-fable-5-2", prefer, undefined)?.input, 7);
+    });
+  });
 });
 
 describe("chartTasks：子会话整条一件，算给 token 最多的型号 × 档", () => {

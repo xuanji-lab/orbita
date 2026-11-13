@@ -1,0 +1,17 @@
+{
+  "name": "terminal",
+  "displayName": "终端",
+  "version": "0.1.0",
+  "description": "让智能体把命令跑在你看得见的终端里：起 dev server、跑慢测试、长构建时，命令在右栏终端面板里实时滚动，你随时能接手键盘或让它停。智能体知道什么时候该用可见终端、什么时候用后台 bash，怎么复用终端、怎么判断命令跑完了、怎么分页读输出、怎么停。终端工具与面板是 Orbita 原生的，这里放的是「怎么用好」。",
+  "author": { "name": "Orbita" },
+  "license": "MIT",
+  "orbita": {
+    "workflow": [
+      { "title": "先选通道：只要结果用 bash，要你看着 / 跑得久 / 可能要停才用可见终端", "skill": "terminal", "detail": "可见终端的输出不会自动回给智能体，只想拿结果时别用它" },
+      { "title": "terminal_list 看现有终端，能复用的安全终端才复用", "skill": "terminal", "detail": "交互式、长驻或没确认跑完的终端一律不复用，另开一个" },
+      { "title": "terminal_execute 写入一整行命令，终端面板自动亮起", "skill": "terminal", "detail": "execute 写完就返回、不带输出", "output": "右栏终端面板里的实时输出" },
+      { "title": "terminal_read 读尾部输出，看到提示符回来才算跑完", "skill": "terminal", "detail": "默认读最后 12000 字符，更早的内容按返回的 offset 翻页" },
+      { "title": "要停：先 terminal_interrupt（Ctrl+C），不行再 terminal_close", "skill": "terminal", "detail": "停完读一眼确认停住了；干完活的终端默认留着给你看" }
+    ]
+  }
+}

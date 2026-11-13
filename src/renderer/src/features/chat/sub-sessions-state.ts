@@ -39,3 +39,16 @@ export function syncToMainSession(
 export function escapeFrom(view: SubSessionsView): SubSessionsView | null {
   return view.kind === "session" ? SUB_SESSIONS_LIST : null;
 }
+
+/**
+ * 主槽没有子会话了 → 子会话面板若开着就关；**别的面板原样保留**。
+ *
+ * 必须以 setState 的函数式更新用（`setRightPanel((prev) => panelAfterSubSessionsGone(prev, has))`）：
+ * 切主槽会话的那一拍，「按会话恢复面板」先 setRightPanel(恢复出的面板)，这条守卫随后在同一次提交里跑。
+ * 若守卫读的是闭包里的 rightPanel（切换前的旧值 "subsessions"），就会把刚恢复出的面板覆盖成关着
+ * （2026-11-07 发现：从开着子会话面板的会话切到一条没有子会话、记着别的面板的会话，右栏被误关）。
+ * 函数式更新拿到的是排在它前面的恢复结果，只在那个结果确实是子会话面板时才关。
+ */
+export function panelAfterSubSessionsGone<P extends string>(prev: P | null, hasSubSessions: boolean): P | null {
+  return prev === "subsessions" && !hasSubSessions ? null : prev;
+}

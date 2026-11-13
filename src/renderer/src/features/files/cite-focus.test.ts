@@ -16,6 +16,8 @@ const root = (path: string, exists = true): FileRoot => ({
   exists,
 });
 
+const citedRoot = (path: string, exists = true): FileRoot => ({ kind: "cited", label: path, path, exists });
+
 const request = (session: string | null, path: string, token = 1): CiteFocusRequest => ({
   session,
   token,
@@ -29,7 +31,6 @@ describe("decideCiteFocus：跨会话隔离（修复主路径）", () => {
       consumedToken: null,
       session: "session-b",
       roots: [root("/Users/x/ws")],
-      attachmentsRoot: null,
       rootsLoading: false,
     });
     deepStrictEqual(outcome, { kind: "drop" });
@@ -41,7 +42,6 @@ describe("decideCiteFocus：跨会话隔离（修复主路径）", () => {
       consumedToken: null,
       session: "session-b",
       roots: [root("/Users/x/ws")],
-      attachmentsRoot: null,
       rootsLoading: false,
     });
     deepStrictEqual(outcome, { kind: "drop" });
@@ -53,7 +53,6 @@ describe("decideCiteFocus：跨会话隔离（修复主路径）", () => {
       consumedToken: null,
       session: "session-b",
       roots: [root("/Users/x/ws")],
-      attachmentsRoot: null,
       rootsLoading: false,
     } as const;
     deepStrictEqual(decideCiteFocus({ request: req, ...base }), { kind: "drop" });
@@ -72,7 +71,6 @@ describe("decideCiteFocus：当前会话里的正常路径", () => {
       consumedToken: null,
       session: "session-a",
       roots: [root("/tmp/workbench"), root("/Users/x/ws")],
-      attachmentsRoot: null,
       rootsLoading: false,
     });
     deepStrictEqual(outcome, { kind: "open", root: "/Users/x/ws" });
@@ -83,8 +81,7 @@ describe("decideCiteFocus：当前会话里的正常路径", () => {
       request: request("session-a", "/attachments/Lan-2020.pdf"),
       consumedToken: null,
       session: "session-a",
-      roots: [root("/Users/x/ws")],
-      attachmentsRoot: root("/attachments"),
+      roots: [root("/Users/x/ws"), { ...root("/attachments"), kind: "attachments" }],
       rootsLoading: false,
     });
     deepStrictEqual(outcome, { kind: "open", root: "/attachments" });
@@ -96,7 +93,6 @@ describe("decideCiteFocus：当前会话里的正常路径", () => {
       consumedToken: null,
       session: "session-b",
       roots: [root("/Users/x/ws")],
-      attachmentsRoot: null,
       rootsLoading: false,
     });
     deepStrictEqual(outcome, { kind: "outside" });
@@ -108,7 +104,6 @@ describe("decideCiteFocus：当前会话里的正常路径", () => {
       consumedToken: null,
       session: "session-b",
       roots: [root("/ws")],
-      attachmentsRoot: null,
       rootsLoading: false,
     });
     deepStrictEqual(outcome, { kind: "outside" });
@@ -120,7 +115,6 @@ describe("decideCiteFocus：当前会话里的正常路径", () => {
       consumedToken: null,
       session: "session-b",
       roots: [root("/gone", false), root("/Users/x/ws")],
-      attachmentsRoot: null,
       rootsLoading: false,
     });
     deepStrictEqual(outcome, { kind: "outside" });
@@ -132,7 +126,6 @@ describe("decideCiteFocus：当前会话里的正常路径", () => {
       consumedToken: null,
       session: "session-b",
       roots: [],
-      attachmentsRoot: null,
       rootsLoading: true,
     });
     deepStrictEqual(outcome, { kind: "wait" });
@@ -143,7 +136,6 @@ describe("decideCiteFocus：当前会话里的正常路径", () => {
         consumedToken: null,
         session: "session-b",
         roots: [root("/Users/x/ws")],
-        attachmentsRoot: null,
         rootsLoading: false,
       }),
       { kind: "outside" },
@@ -159,7 +151,6 @@ describe("decideCiteFocus：与右栏按会话记忆的配合", () => {
         consumedToken: null,
         session: "session-b",
         roots: [root("/Users/x/ws")],
-        attachmentsRoot: null,
         rootsLoading: false,
       }),
       { kind: "drop" },
@@ -173,7 +164,6 @@ describe("decideCiteFocus：与右栏按会话记忆的配合", () => {
         consumedToken: null,
         session: "session-a",
         roots: [root("/Users/x/ws")],
-        attachmentsRoot: null,
         rootsLoading: false,
       }),
       { kind: "idle" },
@@ -189,7 +179,6 @@ describe("decideCiteFocus：一次性请求的基本守卫", () => {
         consumedToken: null,
         session: "session-a",
         roots: [root("/Users/x/ws")],
-        attachmentsRoot: null,
         rootsLoading: false,
       }),
       { kind: "idle" },
@@ -204,10 +193,52 @@ describe("decideCiteFocus：一次性请求的基本守卫", () => {
         consumedToken: 7,
         session: "session-a",
         roots: [root("/Users/x/ws")],
-        attachmentsRoot: null,
         rootsLoading: false,
       }),
       { kind: "idle" },
     );
+  });
+});
+
+describe("decideCiteFocus：引用过的 PDF（cited 根，每个文件一根）", () => {
+  const base = { consumedToken: null, session: "session-b", rootsLoading: false } as const;
+
+  it("PDF 在会话看不到的目录里，但本会话引用过：以那份文件为宿主原地打开", () => {
+    const pdf = "/Users/x/Documents/repo/papers/Bonnaire.pdf";
+    const outcome = decideCiteFocus({
+      ...base,
+      request: request("session-b", pdf),
+      roots: [root("/Users/x/Orbita/Home"), citedRoot(pdf)],
+    });
+    deepStrictEqual(outcome, { kind: "open", root: pdf });
+  });
+
+  it("同目录里另一份没被引用过的 PDF 不借光：照常 citeOutside", () => {
+    const outcome = decideCiteFocus({
+      ...base,
+      request: request("session-b", "/Users/x/Documents/repo/papers/Other.pdf"),
+      roots: [root("/Users/x/Orbita/Home"), citedRoot("/Users/x/Documents/repo/papers/Bonnaire.pdf")],
+    });
+    deepStrictEqual(outcome, { kind: "outside" });
+  });
+
+  it("引用过但文件已被删 / 挪走：missing（单独的提示，不说成「看不到」）", () => {
+    const pdf = "/Users/x/Documents/repo/papers/Bonnaire.pdf";
+    const outcome = decideCiteFocus({
+      ...base,
+      request: request("session-b", pdf),
+      roots: [root("/Users/x/Orbita/Home"), citedRoot(pdf, false)],
+    });
+    deepStrictEqual(outcome, { kind: "missing" });
+  });
+
+  it("别的会话的请求仍然作废，不因 cited 根而打开", () => {
+    const pdf = "/Users/x/Documents/repo/papers/Bonnaire.pdf";
+    const outcome = decideCiteFocus({
+      ...base,
+      request: request("session-a", pdf),
+      roots: [root("/Users/x/Orbita/Home"), citedRoot(pdf)],
+    });
+    deepStrictEqual(outcome, { kind: "drop" });
   });
 });

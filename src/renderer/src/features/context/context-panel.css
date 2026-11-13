@@ -1,0 +1,663 @@
+/* 右栏「上下文」面板（ContextPanel.tsx）。
+ * 列表沿用右栏通用配方（.panel-list / .panel-group-head / .row-trailing），这里只补
+ * 顶部用量块与条目行。来源条是中性墨色分段：颜色是第二信号，七类来源不另立七色。 */
+
+.ctx-body {
+  padding-top: var(--space-2);
+}
+
+/* —— 顶部用量：一行字 + 一条分段条 + 「其余」一行 —— */
+.ctx-usage {
+  display: grid;
+  gap: var(--space-1-5);
+  padding: var(--space-1) var(--space-4) var(--space-2);
+}
+.ctx-usage-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.ctx-usage-label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+.ctx-usage-value {
+  margin-left: auto;
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.ctx-bar {
+  display: flex;
+  gap: var(--space-0-5);
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+}
+.ctx-seg {
+  flex: 0 0 auto;
+  height: 100%;
+  background: var(--color-text-tertiary);
+  transition: opacity var(--duration-hover) var(--ease-standard),
+    background-color var(--duration-hover) var(--ease-standard);
+}
+/* 「其余」（对话正文等）比各来源再浅一档：它不是某一类来源 */
+.ctx-seg[data-rest="true"] {
+  background: var(--color-border-strong);
+}
+/* 悬停某组：那一段提到正文墨色，其余段退后 */
+.ctx-seg[data-lit="true"] {
+  background: var(--color-text-primary);
+}
+.ctx-seg[data-lit="false"] {
+  opacity: 0.45;
+}
+.ctx-rest {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* —— 组头行尾的量：钉在行右血线（.row-trailing），与条目行的量同一列 —— */
+.ctx-tokens {
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-regular);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.panel-group-toggle[data-gone="true"] {
+  opacity: 0.55;
+}
+
+/* —— 条目行：图标 + 主名 + 浅灰副标 + 行尾量，单行省略 —— */
+.ctx-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  height: var(--list-item-compact);
+  padding: 0 var(--space-2) 0 calc(var(--space-2) + 18px);
+  border-radius: var(--radius-md);
+}
+.ctx-row:hover {
+  background: var(--color-bg-hover);
+}
+.ctx-row[data-gone="true"] {
+  opacity: 0.5;
+}
+.ctx-row-icon {
+  flex: 0 0 auto;
+  color: var(--color-text-tertiary);
+}
+.ctx-row-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-base);
+  color: var(--color-text-primary);
+}
+.ctx-row-detail {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+/* 文件组里的目录小标：与条目主名左缘对齐 */
+.ctx-dir {
+  padding: var(--space-1-5) var(--space-2) var(--space-0-5) calc(var(--space-2) + 18px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* 用量块下面的状态行（在读 / 读到上限 / 读失败）：同一个空态件，上下收紧成一行的高度 */
+.panel-empty.ctx-status {
+  padding-block: var(--space-1-5);
+}
+
+/* 上下文页签顶部的视野切换（本轮 / 整个任务）：原来在胶囊里，胶囊让给了「进度 / 上下文」 */
+.ctx-scope {
+  padding: var(--space-2) var(--space-4) 0;
+  justify-content: flex-start;
+}
+
+/* ===== 进度页签（TaskProgress.tsx） =====
+ * 字在内线上（右栏行的左内边距 --space-4，与上下文页签同一根线）；行首 14px 状态槽与侧栏同款。
+ * 一屏三种字：头一行 base/600、正文 base、元信息 sm/tertiary。 */
+.tp-body {
+  display: grid;
+  align-content: start;
+  gap: var(--space-1);
+  padding: var(--space-2) 0 var(--space-4);
+}
+.tp-slot {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+.tp-now {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-height-md);
+  padding: 0 var(--space-4);
+}
+.tp-now b {
+  font-weight: var(--weight-semibold);
+}
+.tp-sub {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+.tp-clock {
+  margin-left: auto;
+  flex: none;
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.tp-sec {
+  display: grid;
+  gap: var(--space-0-5);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border-subtle);
+  margin: var(--space-1) var(--space-4) 0;
+}
+.tp-gh {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+.tp-n {
+  font-weight: var(--weight-regular);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.tp-hint {
+  margin: 0;
+  padding: var(--space-1) var(--space-4);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+.tp-sec .tp-hint {
+  padding: var(--space-1) 0;
+}
+.tp-hint[data-tone="danger"] {
+  color: var(--color-danger);
+}
+
+/* 计划：空圈 / 在做（蓝饼）/ 勾；做完的退到三级色 */
+.tp-plan {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-0-5);
+}
+.tp-plan li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  line-height: var(--line-height-ui);
+}
+.tp-plan .tp-slot {
+  height: calc(var(--font-size-base) * 1.5);
+}
+.tp-plan li[data-status="done"] {
+  color: var(--color-text-tertiary);
+}
+.tp-plan li[data-status="done"] .tp-slot {
+  color: var(--color-success);
+}
+.tp-plan li[data-status="in_progress"] .tp-text {
+  font-weight: var(--weight-semibold);
+}
+/* 等你 / 等外部：沙漏（黄）+ 文字旁一枚黄签写等什么。不占「正在做」，不加粗、不退成三级色（还没做完） */
+.tp-plan li[data-status="waiting"] .tp-slot {
+  color: var(--color-warning);
+}
+.tp-wait {
+  display: inline-block;
+  margin-left: var(--space-1-5);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-height-ui);
+  color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 14%, transparent);
+}
+.tp-ring {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--color-text-tertiary);
+}
+.tp-text {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+/* 计划是主干：步 = 状态槽 + 一列（文字行 / 出处 / 章节）。文字行尾巴：在做的写计时，其余写「用了几步」 */
+.tp-step {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: var(--space-0-5);
+}
+.tp-step-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+button.tp-step-head {
+  cursor: pointer;
+}
+button.tp-step-head:hover .tp-text {
+  color: var(--color-text-primary);
+}
+.tp-tail {
+  flex: none;
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.tp-tail-bad {
+  color: var(--color-danger);
+}
+.tp-step-head .tp-clock {
+  margin-left: 0;
+}
+/* 改过的步下面一行出处：「新加 / 改过 / 拆出」半粗 + 理由 */
+.tp-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-0-5) var(--space-2);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+.tp-note b {
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+/* 去掉的步：划线灰行，只在被去掉的那一轮里露面 */
+.tp-plan li[data-status="removed"] {
+  color: var(--color-text-tertiary);
+}
+.tp-plan li[data-status="removed"] .tp-text {
+  text-decoration: line-through;
+}
+.tp-plan li[data-status="pseudo"] {
+  color: var(--color-text-tertiary);
+}
+/* 头上的「改过 N 次」：点开是改动记录 */
+.tp-edits {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-weight: var(--weight-regular);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+.tp-edits:hover,
+.tp-edits[aria-expanded="true"] {
+  color: var(--color-text-secondary);
+}
+.tp-editlog {
+  list-style: none;
+  margin: 0 0 var(--space-1);
+  padding: 0;
+  display: grid;
+  gap: var(--space-0-5);
+}
+.tp-editlog li {
+  display: grid;
+  gap: 0;
+}
+.tp-editlog-main {
+  display: grid;
+  gap: 0;
+  width: 100%;
+  padding: var(--space-1) var(--space-1-5);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.tp-editlog-main:hover {
+  background: var(--color-bg-hover);
+}
+.tp-editlog-what {
+  line-height: var(--line-height-ui);
+  color: var(--color-text-primary);
+  word-break: break-word;
+  /* 兜底：已按不同处缩过，仍超长（极端长的单个词）时最多四行 */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+}
+/* 来源（谁提的）：和「为什么」同一档小字，可点的那条悬停变深 */
+.tp-editlog-src {
+  display: block;
+  width: 100%;
+  padding: 0 var(--space-1-5) var(--space-1);
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  text-align: left;
+  color: var(--color-text-tertiary);
+  word-break: break-word;
+}
+button.tp-editlog-src {
+  cursor: pointer;
+}
+button.tp-editlog-src:hover {
+  color: var(--color-text-secondary);
+}
+/* 目标行上的去处：不是确认按钮，是安静的文字动作；悬停才变深 */
+.tp-goal-carry {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  justify-self: start;
+  padding: var(--space-0-5) 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+.tp-goal-carry:hover {
+  color: var(--color-text-secondary);
+}
+/* 目标：进度面板最上面一块；计划（todo）挂在它下面 */
+.tp-goal {
+  display: grid;
+  gap: var(--space-0-5);
+  margin: 0 var(--space-4);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.tp-goal-text {
+  margin: 0;
+  line-height: var(--line-height-ui);
+  color: var(--color-text-primary);
+  word-break: break-word;
+}
+/* 「做过的」收成页底一行：点开才是按轮列表 */
+.tp-histline {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: var(--space-1) var(--space-4) 0;
+  padding: var(--space-2) 0 0;
+  border: 0;
+  border-top: 1px solid var(--color-border-subtle);
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  text-align: left;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.tp-histline-label {
+  font-weight: var(--weight-semibold);
+}
+.tp-histline .tp-n {
+  flex: 1;
+  min-width: 0;
+}
+.tp-histline svg {
+  flex: none;
+  align-self: center;
+}
+
+/* 做过的：一轮一块；头是时刻 + 用户那句话，下一行计数；展开是章节时间线 */
+.tp-turn {
+  display: grid;
+  gap: var(--space-0-5);
+  padding: var(--space-1) 0;
+}
+.tp-turn-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tp-time {
+  flex: none;
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.tp-ask {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--color-text-secondary);
+}
+.tp-turn[data-open] .tp-ask {
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+}
+.tp-meta {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+.tp-turn > .tp-meta {
+  padding-left: calc(5ch + var(--space-2));
+}
+.tp-chapters {
+  list-style: none;
+  margin: var(--space-1) 0 0 var(--space-1);
+  padding: 0 0 0 var(--space-3);
+  border-left: 1px solid var(--color-border-subtle);
+  display: grid;
+  gap: var(--space-0-5);
+}
+.tp-chapters li {
+  position: relative;
+}
+.tp-chapters li::before {
+  content: "";
+  position: absolute;
+  left: calc(-1 * var(--space-3) - 4.5px);
+  top: 10px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  box-sizing: border-box;
+  background: var(--color-bg-panel);
+  border: 1.5px solid var(--color-text-tertiary);
+}
+.tp-chapters li[data-failed]::before {
+  border-color: var(--color-danger);
+  background: var(--color-danger);
+}
+.tp-chapters li[data-live]::before {
+  border-color: var(--color-info);
+  background: var(--color-info);
+}
+.tp-chapters button,
+.tp-chapters .tp-ch-row {
+  display: grid;
+  gap: 0;
+  width: 100%;
+  padding: var(--space-1) var(--space-1-5);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.tp-chapters button:hover {
+  background: var(--color-bg-hover);
+}
+/* 对话里还没加载到的轮：章节只列不点 */
+.tp-chapters .tp-ch-row {
+  cursor: default;
+}
+/* 章节名最多两行：真模型的旁白常有三四行、一段英文思考能到七行，「做过的」要能一眼扫完；全文在悬停里 */
+.tp-ch {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  line-height: var(--line-height-ui);
+  color: var(--color-text-primary);
+}
+.tp-ch.think {
+  color: var(--color-text-secondary);
+}
+
+/* 以后再做：书签 + 标题（一行出处）；悬停 / 键盘聚焦到这一行浮出三个动作（.reveal，同 .skill-row） */
+.tp-later {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  line-height: var(--line-height-ui);
+}
+.tp-later .tp-slot {
+  height: calc(var(--font-size-base) * 1.5);
+  color: var(--color-text-tertiary);
+}
+.tp-later-body {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+}
+button.tp-later-body {
+  cursor: pointer;
+}
+button.tp-later-body:hover .tp-text {
+  color: var(--color-text-primary);
+}
+.tp-later[data-dismissed] .tp-text {
+  color: var(--color-text-tertiary);
+  text-decoration: line-through;
+}
+.tp-later-acts {
+  position: absolute;
+  top: var(--space-0-5);
+  right: 0;
+  display: inline-flex;
+  gap: var(--space-0-5);
+  padding-left: var(--space-2);
+  background: var(--color-bg-panel);
+}
+.tp-later:hover .reveal,
+.tp-later:has(:focus-visible) .reveal {
+  opacity: 1;
+}
+.tp-dismissed {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+.tp-dismissed:hover {
+  color: var(--color-text-secondary);
+}
+
+/* 页底一行上下文用量：点进「上下文」页签 */
+.tp-ctx {
+  display: grid;
+  gap: var(--space-1-5);
+  margin: var(--space-3) var(--space-4) 0;
+  padding: var(--space-2) var(--space-2-5);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.tp-ctx:hover {
+  background: var(--color-bg-hover);
+}
+.tp-ctx-line {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.tp-ctx-bar {
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+}
+.tp-ctx-bar i {
+  display: block;
+  height: 100%;
+  background: var(--color-text-tertiary);
+}

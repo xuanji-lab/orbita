@@ -1,0 +1,17 @@
+{
+  "name": "reading",
+  "displayName": "读 PDF 与 Word",
+  "version": "0.1.0",
+  "description": "让智能体把 PDF 和 Word 文档读对、读全、引得准：论文先读文字再按图表索引看图、扫描件自动转图、双栏图表用像素坐标裁出特写；Word 按块号和章节大纲跳读、批注与内嵌图也能看；讲解 PDF 时把依赖原文的句子过 cite_pdf 核验，得到点一下就跳到原文高亮的引用。读取工具是 Orbita 原生的，这里放的是「怎么读得好、怎么引得准」。",
+  "author": { "name": "Orbita" },
+  "license": "MIT",
+  "orbita": {
+    "workflow": [
+      { "title": "读 PDF 用 read_pdf、读 Word 用 read_docx，不用 read", "skill": "reading", "detail": "read 读这两种文件只会出乱码；先读文字，头注里有页数、图表索引和续读提示" },
+      { "title": "问到某张图 / 某个表：按图表索引的页码用 image_pages 看图", "skill": "reading", "detail": "先整页，再用像素坐标 crop 裁出特写；offset+limit=1 避免把整段文字再读一遍" },
+      { "title": "扫描件与不带视觉的模型：自动转图 / 如实降级", "skill": "reading", "detail": "没有文字层的 PDF 在视觉模型下自动转页图；不带视觉的模型报错，不静默给空文本" },
+      { "title": "Word 文档：按块号和章节大纲跳读，批注在文末", "skill": "reading", "detail": "头注的 Sections 给每个标题的起始块号；images=true 才取内嵌图" },
+      { "title": "讲解 PDF 时，依赖原文的句子过 cite_pdf 核验", "skill": "reading", "detail": "复制原文、不改写；核验通过才得到 [^编号]，用户点它跳到原文高亮", "output": "[^编号] 引用标记" }
+    ]
+  }
+}

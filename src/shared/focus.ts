@@ -21,6 +21,13 @@ export interface FocusChangeEntry {
   added: number;
   removed: number;
   binary: boolean;
+  /**
+   * 行数未知：这个未跟踪文件没有数行（added / removed 落 0，但**不是**没改动）。两种原因：
+   * 文件超过单文件计数上限（只读了开头判二进制），或这一轮的读盘预算已用完（下一轮接着数）。
+   * UI 显示「行数未知」，不拿 +0 冒充；与审查面板 ReviewEntry.lineCountUnknown 是同一个计数器的结论。
+   * 其他来源（numstat）不带这个字段。
+   */
+  lineCountUnknown?: boolean;
 }
 
 /** `focus:changes` 的回执。空态与错误分开说（同 review:list 的口径：没有改动 ≠ 出不了结果） */

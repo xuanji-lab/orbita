@@ -1,5 +1,6 @@
 import { createPortal } from "react-dom";
 import { Icon } from "../../shell/Icon";
+import { StatusPie } from "../../shell/StatusPie";
 import { useT } from "../../locale.ts";
 
 /**
@@ -32,16 +33,12 @@ export function CompletionCard(props: {
   const kicker = props.failed ? t.notice.failed : t.notice.finished;
   const title = props.title === "" ? t.common.newTask : props.title;
   return createPortal(
-    // 紧凑两行（2026-10-12 用户选的 B）：竖条 + 会话名 + ×；下一行「打开 · 辅助对话」。
-    // 「任务完成 / 出错」不再占一行：竖条颜色（绿 / 红，与侧栏同款）给第一信号，
+    // 紧凑两行（2026-10-12 用户选的 B）：状态饼 + 会话名 + ×；下一行「打开 · 辅助对话」。
+    // 「任务完成 / 出错」不再占一行：饼的颜色（绿 / 红，与侧栏同款）给第一信号，
     // 文字进 aria-label 与悬停 title；× 就是原来的「稍后」（收起、保持未读）
     <div className="pane-pop completion-card" role="status" aria-live="polite" aria-label={`${kicker}：${title}`}>
       <div className="completion-card-row">
-        <span className="status-bar" data-fill={props.failed ? "failed" : "done"} title={kicker} aria-hidden="true">
-          <i />
-          <i />
-          <i />
-        </span>
+        <StatusPie state={props.failed ? "failed" : "done"} title={kicker} />
         <span className="completion-card-title" title={props.title}>
           {title}
         </span>

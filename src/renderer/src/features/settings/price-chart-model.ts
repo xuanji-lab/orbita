@@ -17,6 +17,25 @@ export function shouldShowPriceChart(providers: readonly Pick<ProviderDto, "mode
   return addedModelCount(providers) >= 2;
 }
 
+/**
+ * 这一块（.pc-block）自身的宽度档位（2026-11-05 用户：「给帕累托这一块设置一个阈值，低于就隐藏掉」）。
+ * 右栏开着时设置页内容区只剩 ~470px：散点挤成一团、横轴刻度重叠、右侧列表被截断。
+ * 量块自己的宽度而不是视口宽度——右栏开合、侧栏开合都会改它，视口宽度反映不出来。
+ * - ≥ 880：图与「帕累托最优」列表并排（236px 列 + 间距后，图仍有 ~600px）
+ * - 600–880：列表挪到图下方
+ * - < 600：不画图，只留一行说明和「收起右栏」
+ */
+export const PRICE_CHART_SIDE_MIN_WIDTH = 880;
+export const PRICE_CHART_STACK_MIN_WIDTH = 600;
+
+export type PriceChartLayout = "side" | "stack" | "hidden";
+
+export function priceChartLayout(width: number): PriceChartLayout {
+  if (width >= PRICE_CHART_SIDE_MIN_WIDTH) return "side";
+  if (width >= PRICE_CHART_STACK_MIN_WIDTH) return "stack";
+  return "hidden";
+}
+
 /** 左右按钮循环切分类 */
 export function cycleCategory(current: PriceChartCategory, step: 1 | -1): PriceChartCategory {
   const index = PRICE_CHART_CATEGORIES.indexOf(current);
@@ -24,22 +43,8 @@ export function cycleCategory(current: PriceChartCategory, step: 1 | -1): PriceC
   return PRICE_CHART_CATEGORIES[next] ?? current;
 }
 
-/**
- * 帕累托前沿：按花费从低到高扫，只留「比所有更便宜的点分数都高」的点——同等花费分数最高、
- * 再往上找更高分就要花更多钱。花费相同的按分数从高到低先扫，只有最高的那个能进前沿。
- */
-export function paretoFrontier<T extends Pick<PriceChartPoint, "cost" | "score">>(points: readonly T[]): T[] {
-  const sorted = [...points].sort((a, b) => a.cost - b.cost || b.score - a.score);
-  const out: T[] = [];
-  let best = Number.NEGATIVE_INFINITY;
-  for (const point of sorted) {
-    if (point.score > best) {
-      out.push(point);
-      best = point.score;
-    }
-  }
-  return out;
-}
+// 帕累托前沿与点的身份挪到 shared（主进程的 model_costs 工具也要用），这里转出，调用方不动
+export { paretoFrontier, pointKey } from "../../../../shared/price-chart.ts";
 
 export interface AxisRange {
   min: number;
@@ -122,11 +127,6 @@ export function formatScore(score: number, unit: PriceChartScoreUnit): string {
   const pct = score * 100;
   const sign = pct > 0 ? "+" : pct < 0 ? "−" : "";
   return `${sign}${Math.abs(pct).toFixed(1)}%`;
-}
-
-/** 点的身份（型号 × 档：同一型号挂几家服务商都是一个点） */
-export function pointKey(point: Pick<PriceChartPoint, "modelId" | "thinkingLevel">): string {
-  return `${point.modelId}\u0000${point.thinkingLevel ?? "none"}`;
 }
 
 /**

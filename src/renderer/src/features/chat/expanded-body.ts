@@ -14,11 +14,12 @@ import type { CSSProperties } from "react";
  */
 
 /**
- * 展开体的横向缩进：与折叠行行首 icon 的**左缘相切**（x = 10px，按钮内边距）。
+ * 展开体的横向缩进：与折叠行行首 icon 的**左缘相切**（= 折叠行按钮的左内边距）。
  * 展开体明确属于它上面那一行，不与别的行抢左缘；框右缘落在行右内边距
  * （无 marginRight），与折叠行的尾部元素同一条血线。
+ * 取值就是血线 --content-hem（2026-10-29：原 10px，比正文与卡内文字差 3px）。
  */
-export const RAIL_X = 10;
+export const RAIL_X = "var(--content-hem)";
 
 /**
  * 框色走 `--expanded-frame-border`（styles.css 按主题定义，2026-10-12 第二次返工）：

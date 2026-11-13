@@ -16,4 +16,15 @@ export const focusApi = {
   /** 收工小结：归拢 [startedAt, until] 的素材交给家务活模型，回 3–5 条要点 */
   summarize: (req: FocusSummaryRequest): Promise<FocusSummaryResult> =>
     ipcRenderer.invoke(ipcChannels.focusSummarize, req),
+  /**
+   * 系统即将睡眠（powerMonitor 的 suspend，无载荷）。返回退订函数，与其它域的
+   * onEvent 同款。renderer 收到后按「睡眠即结束专注」处理当前一轮。
+   */
+  onSuspend: (listener: () => void): (() => void) => {
+    const handler = (): void => listener();
+    ipcRenderer.on(ipcChannels.focusSuspend, handler);
+    return () => {
+      ipcRenderer.removeListener(ipcChannels.focusSuspend, handler);
+    };
+  },
 } as const;

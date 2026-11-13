@@ -1,5 +1,6 @@
 import { createPortal } from "react-dom";
 import { useHoverTooltip } from "./useHoverTooltip.ts";
+import { controlBox } from "./control-scale.ts";
 
 /** 悬停到 tooltip 出现的延迟（150–250ms 的中值）：太快手抖就闪，太慢感知等于没有 */
 const TOOLTIP_DELAY_MS = 200;
@@ -50,7 +51,8 @@ export function IconButton(props: {
   /** 调用方追加的 class（如任务行星标/更多键的 hover 浮现钩子），与内建的安静控件配方叠加 */
   className?: string;
 }) {
-  const box = props.size ?? 32;
+  // 外框落在 24 / 28 / 32 的台阶上（control-scale.ts）；CSS 值字符串（顶部栏 token）原样
+  const box = typeof props.size === "number" ? controlBox(props.size) : (props.size ?? 32);
   const disabled = props.disabled === true;
   const active = props.active === true;
   const text = (props.title ?? props.label).trim();
@@ -114,7 +116,7 @@ export function IconButton(props: {
               lineHeight: "var(--line-height-ui)",
               pointerEvents: "none",
               // 浮层顶格：高于 Menu 的 portal（40）与 SkillsPanel 的命令条（30）
-              zIndex: 70,
+              zIndex: "var(--z-tooltip)",
               // 未落位前不显形，落位后从透明过渡进来；出场上不拖沓
               opacity: tooltip.placement === null ? 0 : 1,
               transition: "opacity var(--duration-fast) var(--ease-standard)",

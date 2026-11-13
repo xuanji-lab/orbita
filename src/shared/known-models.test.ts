@@ -1,6 +1,6 @@
 import { test, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { KNOWN_MODELS, knownModelParams, modelAvatarOf } from "./known-models.ts";
+import { KNOWN_MODELS, knownDisplayName, knownModelParams, modelAvatarOf } from "./known-models.ts";
 import { defaultThinkingLevel } from "./model-defaults.ts";
 
 describe("型号白名单 —— 按模型 id 记官方口径", () => {
@@ -37,6 +37,13 @@ describe("claude 的思考档按型号（白名单纠目录的「缺键默认支
     assert.equal(knownModelParams("claude-fable-5").thinkingLevels?.includes("off"), false);
     assert.equal(knownModelParams("claude-fable-5-1").thinkingLevels?.includes("off"), false);
     assert.equal(knownModelParams("claude-opus-5-5").thinkingLevels?.includes("off"), false);
+  });
+
+  test("claude-fable-5-2：五档 low→max、默认 high、显示名不是小写 id（官方型号页 2026-11-12）", () => {
+    const params = knownModelParams("claude-fable-5-2");
+    assert.deepEqual(params.thinkingLevels, ["low", "medium", "high", "xhigh", "max"]);
+    assert.equal(params.defaultThinkingLevel, "high");
+    assert.equal(knownDisplayName("claude-fable-5-2"), "Claude Fable 5.2");
   });
 
   test("opus-5-5 是唯一默认 medium 的 claude（官方 effort 文档）", () => {

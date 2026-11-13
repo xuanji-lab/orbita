@@ -14,6 +14,7 @@
  */
 import { useEffect, useState } from "react";
 import { Icon, type IconName } from "../../shell/Icon.tsx";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { useT } from "../../locale.ts";
 import {
   INTENT_FEEDBACK_FAILED,
@@ -341,7 +342,7 @@ export function IntentRecallFinalCard(props: { record: IntentRecallRecord; onOpe
         </button>
         {record.status === "done" && props.onOpenIntentPanel !== undefined && (
           <button type="button" className="intent-graph-link" onClick={props.onOpenIntentPanel}>
-            <Icon name="waypoints" size={12} />
+            <Icon name={FEATURE_ICON.intent} size={12} />
             {t.chat.recall.openGraph}
           </button>
         )}

@@ -57,6 +57,9 @@ export type McpStatus =
   | { kind: "ready"; tools: string[] }
   | { kind: "failed"; message: string };
 
+/** 插件自带 MCP 的服务名前缀：`plugin_<插件>_<服务>`（主进程拼名字与按名字筛运行时快照共用这一份）。 */
+export const PLUGIN_SERVER_PREFIX = "plugin_";
+
 /** 管理面列出来的一条。 */
 export interface McpServerInfo {
   name: string;
@@ -100,6 +103,12 @@ export interface McpSource {
 export interface McpListResult {
   servers: McpServerInfo[];
   warnings: string[];
+  /**
+   * 插件自带的 MCP 此刻的连接状态（名字是 `plugin_<插件>_<服务>`）。它们不在 mcp.json / `.mcp.json` 里，
+   * 所以不进 `servers` 行（那是「你配了什么」）；只把运行时快照里的这几条原样带出来，
+   * 给插件详情显示状态与工具用（插件的服务不单独启停）。
+   */
+  pluginServers: McpStatusSnapshot;
 }
 
 /**
@@ -113,6 +122,11 @@ export type McpStatusSnapshot = {
   status: McpStatus;
   instances: { scope: string; label: string; status: McpStatus }[];
 }[];
+
+/** 运行时快照里插件自带的那几行（名字以 plugin_ 开头）；没有快照（还没建过会话）给空数组。 */
+export function pluginServerRows(snapshot: McpStatusSnapshot | null): McpStatusSnapshot {
+  return (snapshot ?? []).filter((row) => row.name.startsWith(PLUGIN_SERVER_PREFIX));
+}
 
 export function isHttpServer(server: McpServer): server is McpHttpServer {
   return server.transport === "http";

@@ -136,23 +136,40 @@ describe("terminal_* 工具", () => {
     assert.deepEqual(required("terminal_close"), ["terminalId"]);
   });
 
-  test("模型指令：execute 讲清「输出不在结果里」，每个工具都有一句 promptSnippet", () => {
+  test("模型指令：红线留在描述里（先 list、不往忙的终端敲、输出不在结果里、只要输出用 bash），每个工具都有一句 promptSnippet", () => {
     const { tools } = setup();
     const execute = tools.get("terminal_execute")!;
     assert.match(execute.description, /outputSharedWithAgent: false/);
     assert.match(execute.description, /terminal_read/);
-    // 复用纪律写在 promptGuidelines（pi 0.84.3 的原生字段），不在代码里硬编码
+    assert.match(execute.description, /Call terminal_list first/);
+    assert.match(execute.description, /never reuse an interactive, long-running or unverified-busy terminal/);
+    assert.match(tools.get("terminal_open")!.description, /use the headless bash tool instead/);
+    // 复用纪律的红线也留在 promptGuidelines（pi 0.84.3 的原生字段）；细则在 terminal 技能里
     const guidelines = execute.promptGuidelines ?? [];
-    assert.ok(guidelines.length >= 4, "execute 的复用纪律至少四条");
-    assert.ok(guidelines.some((line) => /call terminal_list/.test(line)));
-    assert.ok(guidelines.some((line) => /Do not reuse an interactive/.test(line)));
-    assert.ok(guidelines.some((line) => /headless bash tool/.test(line)));
-    assert.ok(guidelines.some((line) => /leave the terminal open/.test(line)));
+    assert.ok(guidelines.some((line) => /call terminal_list/.test(line) && /never reuse an interactive/.test(line)));
+    assert.ok(guidelines.some((line) => /exit-code event/.test(line)));
+    assert.ok(guidelines.some((line) => /headless bash tool/.test(line) && /terminal_read/.test(line)));
     for (const name of TERMINAL_TOOL_NAMES) {
       const snippet = tools.get(name)!.promptSnippet;
       assert.equal(typeof snippet, "string", name);
       assert.ok((snippet ?? "").length > 0 && (snippet ?? "").length < 200, name);
     }
+  });
+
+  // 瘦身守门：描述 + promptSnippet + promptGuidelines + 参数 schema 合计 ≤ 3,700 字符（此前 5,562）；
+  // 谁把细则塞回描述，这里先红——细则写进内置插件 terminal 的技能
+  test("瘦身守门：每轮发给模型的终端文字合计 ≤ 3,700；open / execute 指路 terminal 技能；close 说清「留着给用户看」", () => {
+    const { tools } = setup();
+    for (const name of ["terminal_open"]) assert.match(tools.get(name)!.description, /read the `terminal` skill/);
+    assert.ok((tools.get("terminal_execute")!.promptGuidelines ?? []).some((line) => /read the `terminal` skill/.test(line)));
+    assert.match(tools.get("terminal_close")!.description, /leave it open if the user may want to look at it/);
+    assert.match(tools.get("terminal_interrupt")!.description, /Prefer this over terminal_close/);
+    let total = 0;
+    for (const tool of tools.values()) {
+      total += tool.description.length + JSON.stringify(tool.parameters).length + (tool.promptSnippet ?? "").length;
+      total += (tool.promptGuidelines ?? []).join("").length;
+    }
+    assert.equal(total <= 3700, true, `终端工具每轮文字合计 ${total} 字符，超了——细则写进 terminal 技能，不写进描述`);
   });
 
   test("工具描述里带上授权目录——模型不必先撞一次墙才知道 cwd 能填什么", () => {

@@ -44,6 +44,15 @@ export function undoPiBook(manager: SessionManager, notice: string): void {
 }
 
 /**
+ * pi 侧迁移通知：会话换了工作目录，在当前叶子追加一条进上下文的 custom_message——
+ * 历史里的相对路径是相对旧目录说的，模型得知道。与 undo 同一个机制，customType 分开
+ * 便于排障时从本子里认出是哪一种。
+ */
+export function movePiBook(manager: SessionManager, notice: string): void {
+  manager.appendCustomMessageEntry("orbita-move", notice, false);
+}
+
+/**
  * 回退后 pi 本子给下一轮的上下文里，被撤的消息必须已经不在——测试与主进程
  * 自检共用的断言（buildSessionContext 是 pi 自己的解析，比数 entry 可信）。
  */

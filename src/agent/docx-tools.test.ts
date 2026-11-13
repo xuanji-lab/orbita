@@ -482,3 +482,13 @@ describe("read_docx", () => {
     assert.ok(text.includes("save it as .docx"), text.slice(0, 140));
   });
 });
+
+describe("read_docx 的描述", () => {
+  test("保留「代替 read」「块号 + 大纲」的触发词并指路 reading 技能；描述 ≤450 字符（瘦身前 588）", () => {
+    const description = createDocxTools(tmpdir())[0]!.description;
+    assert.match(description, /Use this instead of read for any \.docx file/);
+    assert.match(description, /block number/);
+    assert.match(description, /`reading` skill/);
+    assert.equal(description.length <= 450, true, `read_docx 描述 ${description.length} 字符，超了——细则写进 reading 技能`);
+  });
+});

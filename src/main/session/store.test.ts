@@ -7,7 +7,7 @@ import { join } from "node:path";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { branchRoles, SessionStore } from "./store.ts";
 import { ChannelStore } from "../channel/store.ts";
-import { UNASSIGNED_PROVIDER_ID, SESSION_PAGE_RECORDS, type ChannelMarkRecord, type SessionMeta, type SessionRecord } from "../../shared/session.ts";
+import { UNASSIGNED_PROVIDER_ID, SESSION_INITIAL_RECORDS, SESSION_PAGE_RECORDS, sortSessions, type ChannelMarkRecord, type SessionMeta, type SessionRecord } from "../../shared/session.ts";
 import type { ChannelMessage } from "../../shared/channel.ts";
 
 const ID = "a7f3c1d2-4b8e-4f21-9c3a-0d1e2f3a4b5c";
@@ -103,6 +103,35 @@ describe("SessionStore", () => {
     assert.deepEqual((await store.load(ID))?.transcript, []);
   });
 
+  // list() 按 16 条一批并发读 meta：批边界前后顺序、坏 meta 跳过都必须与逐条读一致
+  test("list() 分批并发：>16 条仍按 sortSessions 排，坏 meta 照旧跳过", async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 40; i += 1) {
+      const id = `c0ffee00-0000-4000-8000-${i.toString(16).padStart(12, "0")}`;
+      ids.push(id);
+      await store.ensureSession(
+        meta({
+          id,
+          title: `任务 ${i}`,
+          updatedAt: 1000 + ((i * 17) % 40),
+          pinned: i === 7,
+        }),
+      );
+    }
+    // 坏 meta：解析失败的那条不进列表，也不挡住其它条
+    await writeFile(join(dir, "sessions", `c0ffee00-0000-4000-8000-${"f".repeat(12)}.meta.json`), "{ 坏掉", "utf8");
+
+    const serial = sortSessions(
+      (await Promise.all(ids.map((id) => store.readMeta(id)))).filter(
+        (entry): entry is SessionMeta => entry !== null,
+      ),
+    );
+    const listed = await store.list();
+    assert.deepEqual(listed, serial);
+    assert.equal(listed.length, ids.length);
+    assert.equal(listed[0]?.pinned, true);
+  });
+
   test("记一条就追加一行，并把 updatedAt 推到那条的时间", async () => {
     await store.ensureSession(meta());
     await store.record(ID, userItem("重做外壳"));
@@ -117,6 +146,37 @@ describe("SessionStore", () => {
     await store.record(ID, userItem("第一句"));
     await store.record(ID, userItem("第二句", 4000));
     assert.equal((await store.load(ID))?.meta.title, "第一句");
+  });
+
+  // 2026-11-05 插件页「和智能体一起做一个」的首条消息必带 /skill:：回显按空行把消息拆成多块，
+  // 指令块自己含空行，被拆在前三块里——只看首块，标题与最近提问就是一行裸的 <mentioned_tools>
+  test("首条消息以 /skill: 开头（回显把指令块拆成多块）：标题与最近提问取用户自己的话，不是 <mentioned_tools>", async () => {
+    await store.ensureSession(meta());
+    const prompt = "/skill:plugin-creator 我想和你一起做一个插件：每天取 arXiv";
+    await store.record(ID, {
+      id: "u1",
+      role: "user",
+      content: [
+        { type: "text", text: "<mentioned_tools>\nThe user explicitly invoked the items below in their message." },
+        { type: "text", text: 'Skills:\n- "plugin-creator" — read "/x/SKILL.md" with the read tool BEFORE any other output.\n</mentioned_tools>' },
+        { type: "text", text: prompt },
+      ],
+      timestamp: 2000,
+    });
+    const detail = await store.load(ID);
+    assert.equal(detail?.meta.title, prompt);
+    assert.deepEqual(detail?.meta.recentQueries, [prompt]);
+  });
+
+  test("指令块没写完整（缺闭标签）：宁可不剥，行为与以前一致", async () => {
+    await store.ensureSession(meta());
+    await store.record(ID, {
+      id: "u1",
+      role: "user",
+      content: [{ type: "text", text: "<mentioned_tools>\n手打的残缺标签" }, { type: "text", text: "后面的话" }],
+      timestamp: 2000,
+    });
+    assert.equal((await store.load(ID))?.meta.title, "<mentioned_tools>");
   });
 
   test("assistant 消息不当标题用", async () => {
@@ -1053,6 +1113,36 @@ describe("SessionStore · 文件引用落盘", () => {
   });
 });
 
+describe("SessionStore.record · 最近提问不收自动化送进来的指令", () => {
+  test("抬头开头的 user 消息（自动化叫醒这条会话）不进 recentQueries；用户自己说的照常进", async () => {
+    await store.ensureSession(meta());
+    await store.record(ID, userItem("帮我看看日志", 2000));
+    await store.record(ID, { ...userItem("[定时任务「报时」第 1/2 次 · 10-31 02:17]\n\n看日志", 3000), id: "u2" });
+    await store.record(ID, { ...userItem("好，继续", 4000), id: "u3" });
+    const saved = await store.readMeta(ID);
+    assert.deepEqual(saved?.recentQueries, ["好，继续", "帮我看看日志"]);
+  });
+});
+
+describe("SessionStore.setPromoted（自动化新开的会话转成普通会话）", () => {
+  test("带 automationId 的会话标成 promoted 并落盘；重复点幂等", async () => {
+    await store.ensureSession(meta({ automationId: "au1", automationRun: { title: "日报", number: 2, at: 5, trigger: "schedule" } }));
+    assert.equal(await store.setPromoted(ID), true);
+    assert.equal(await store.setPromoted(ID), true);
+    const saved = await store.readMeta(ID);
+    assert.equal(saved?.promoted, true);
+    assert.equal(saved?.automationId, "au1", "来源标注保留，顶部那条仍认得出它是哪次运行");
+    assert.deepEqual(saved?.automationRun, { title: "日报", number: 2, at: 5, trigger: "schedule" });
+  });
+
+  test("不是自动化开的会话：不动、返回 false；不存在的会话也是 false", async () => {
+    await store.ensureSession(meta());
+    assert.equal(await store.setPromoted(ID), false);
+    assert.equal((await store.readMeta(ID))?.promoted, undefined);
+    assert.equal(await store.setPromoted(OTHER), false);
+  });
+});
+
 describe("SessionStore.assignModel（给导入的会话分配模型）", () => {
   test("占位会话写入目标，importedModel 原样保留", async () => {
     await store.ensureSession(
@@ -1127,16 +1217,32 @@ const seedLog = async (id: string, records: readonly SessionRecord[]): Promise<v
 };
 
 describe("SessionStore · 窗口分页", () => {
-  test("长会话只回尾窗：一页条数、起点对齐 user、hasMore 为真", async () => {
-    // 240 轮 × 5 条 = 1200 条；切点 1200-500 = 700 恰好落在轮首（u140）
+  test("长会话只回首屏尾窗：条数、起点对齐 user、hasMore 为真", async () => {
+    // 240 轮 × 5 条 = 1200 条；切点 1200-120 = 1080 恰好落在轮首（u216）
     const records = Array.from({ length: 240 }, (_, n) => turnBlock(n, 3)).flat();
     await seedLog(ID, records);
     const detail = await store.loadWindow(ID);
     assert.equal(detail?.window.total, 1200);
     assert.equal(detail?.window.hasMore, true);
-    assert.equal(detail?.transcript.length, SESSION_PAGE_RECORDS);
-    assert.equal(detail?.transcript[0]?.id, "u140");
+    // 首屏用初始常量，不是翻页常量：切点正好落在轮首时一窗就是 SESSION_INITIAL_RECORDS 条
+    const count = detail?.transcript.length ?? 0;
+    assert.ok(count >= SESSION_INITIAL_RECORDS, `首屏尾窗小了：${count}`);
+    assert.ok(count < SESSION_INITIAL_RECORDS + 5, `跨轮边界最多多一轮：${count}`);
+    assert.equal(detail?.transcript[0]?.id, "u216");
     assert.equal(detail?.transcript.at(-1)?.id, "t239-2");
+  });
+
+  test("首屏窗口量级：默认尾窗不因以后调参又回到 500", async () => {
+    // 1000 轮 × 5 条 = 5000 条，远超首屏窗口；旧实现会一次回 500 条
+    const records = Array.from({ length: 1000 }, (_, n) => turnBlock(n, 3)).flat();
+    await seedLog(ID, records);
+    const detail = await store.loadWindow(ID);
+    const count = detail?.transcript.length ?? 0;
+    assert.equal(detail?.window.total, 5000);
+    assert.ok(count >= SESSION_INITIAL_RECORDS, `首屏尾窗小了：${count}`);
+    assert.ok(count < SESSION_INITIAL_RECORDS + 5, `跨轮边界最多多一轮：${count}`);
+    // 量级守卫：首屏若被改回 500（或更大），这条先挂
+    assert.ok(count < 500, `首屏窗口又回到 500 量级：${count}`);
   });
 
   test("切点落在工具行中间：窗口起点向前对齐到下一条 user（不留无主的半轮）", async () => {
@@ -1171,7 +1277,11 @@ describe("SessionStore · 窗口分页", () => {
     }
     await seedLog(ID, records);
     const detail = await store.loadWindow(ID);
-    // 宁可比一页稍大，也不给一段没有 user 的历史
+    // 宁可比一页稍大，也不给一段没有 user 的历史：
+    // 尾窗切点落在这唯一一轮中间，往前对齐到 u0，整轮 600 条都进窗
+    const count = detail?.transcript.length ?? 0;
+    assert.ok(count >= SESSION_INITIAL_RECORDS, `首屏尾窗小了：${count}`);
+    assert.ok(count < SESSION_INITIAL_RECORDS + 600, `最多补满当前一轮：${count}`);
     assert.equal(detail?.transcript.length, 600);
     assert.equal(detail?.transcript[0]?.role, "user");
     assert.equal(detail?.window.hasMore, false);
@@ -1206,11 +1316,11 @@ describe("SessionStore · 窗口分页", () => {
       tokensBefore: 90_000,
       timestamp,
     });
-    // 界碑与 user 一样是轮首；前 140 轮里插两块，尾窗里再插一块
+    // 界碑与 user 一样是轮首；前 100 轮里插两块（落在首屏窗外），尾段第 220 轮再插一块
     const records = Array.from({ length: 240 }, (_, n) => [
       ...(n === 30 ? [boundary("c30", 1029)] : []),
       ...(n === 90 ? [boundary("c90", 1089)] : []),
-      ...(n === 200 ? [boundary("c200", 1199)] : []),
+      ...(n === 220 ? [boundary("c220", 1199)] : []),
       ...turnBlock(n, 3),
     ]).flat();
     await seedLog(ID, records);
@@ -1253,22 +1363,34 @@ describe("SessionStore · 窗口分页", () => {
     const records = Array.from({ length: 240 }, (_, n) => turnBlock(n, 3)).flat();
     await seedLog(ID, records);
     const detail = await store.loadWindow(ID);
-    assert.equal(detail?.transcript[0]?.id, "u140");
+    assert.equal(detail?.transcript[0]?.id, "u216");
 
-    const page1 = await store.loadOlder(ID, "u140", SESSION_PAGE_RECORDS);
-    // 700 - 500 = 200 = u40（对齐后仍是轮首）
-    assert.equal(page1.records[0]?.id, "u40");
+    // 单页按**翻页常量**取：1080 - 200 = 880 = u176（对齐后仍是轮首）
+    const page1 = await store.loadOlder(ID, "u216", SESSION_PAGE_RECORDS);
+    assert.equal(page1.records[0]?.id, "u176");
     assert.equal(page1.records.length, SESSION_PAGE_RECORDS);
-    assert.equal(page1.records.at(-1)?.id, "t139-2");
+    assert.equal(page1.records.at(-1)?.id, "t215-2");
     assert.equal(page1.hasMore, true);
 
-    const page2 = await store.loadOlder(ID, "u40", SESSION_PAGE_RECORDS);
-    assert.equal(page2.records[0]?.id, "u0");
-    assert.equal(page2.records.length, 200);
-    assert.equal(page2.hasMore, false);
+    const page2 = await store.loadOlder(ID, "u176", SESSION_PAGE_RECORDS);
+    assert.equal(page2.records[0]?.id, "u136");
+    assert.equal(page2.records.length, SESSION_PAGE_RECORDS);
+    assert.equal(page2.hasMore, true);
 
-    // 拼回去正好是全量、且顺序不乱
-    const rebuilt = [...page2.records, ...page1.records, ...(detail?.transcript ?? [])];
+    // 一直翻到头：除末页外每页都是翻页常量；拼回去正好是全量、且顺序不乱
+    const oldestFirst = [detail?.transcript ?? [], page1.records, page2.records];
+    let before = page2.records[0]?.id ?? "";
+    let hasMore: boolean = page2.hasMore;
+    while (hasMore) {
+      const page = await store.loadOlder(ID, before, SESSION_PAGE_RECORDS);
+      if (page.records.length === 0) assert.fail("hasMore 为真却回了空页");
+      if (page.hasMore) assert.equal(page.records.length, SESSION_PAGE_RECORDS);
+      oldestFirst.push(page.records);
+      before = page.records[0]?.id ?? "";
+      hasMore = page.hasMore;
+    }
+    assert.equal(oldestFirst.at(-1)?.length, 80); // u0..t15-2（末页是剩余条数）
+    const rebuilt = oldestFirst.reverse().flat();
     assert.deepEqual(rebuilt.map((record) => record.id), records.map((record) => record.id));
   });
 

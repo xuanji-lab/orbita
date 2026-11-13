@@ -1,0 +1,396 @@
+/**
+ * 看板卡的路径与读写（纯函数 + 文件读写，不碰 Electron；清单 `orbita.board` 的解析在 board.ts）：
+ * 模板与数据路径的校验与变量替换、数据文件读取、动作日志的追加与限速。
+ *
+ * **模板是不可信输入**（agent 生成或第三方插件带来），所以：
+ * - 模板路径走与其它组件路径同一条规则（`resolveComponentPath`：含 `..`、绝对路径、符号链接逃逸一律拒）；
+ * - 数据路径要过变量替换，替换结果还必须落在「插件根 / 插件数据目录 / 工作区根 / 引用到的 directory 或
+ *   file 型配置值」之内（realpath 再比一次，符号链接指到外面的也拒）——否则一个 `data: "~/.ssh/x"`
+ *   就能让宿主把任意 JSON 文件发进模板；
+ * - 数据文件超 2 MB 不读（JSON 没法安全截断）；
+ * - 动作日志有整份上限与限速，模板失控也写不满磁盘。
+ *
+ * 清单里还有两个可选的辅助文件：`spec`（模板说明，markdown，宿主渲染）与 `sample`（样例数据，
+ * 数据文件不存在 / 为空时用它渲染）。路径规则同模板，读不出来只是少一块、不拦卡。
+ */
+import { mkdir, open, readFile, realpath, stat } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isNotFound, errorCode } from "../fs-errors.ts";
+import { isPluginName, type PluginConfigField, type PluginConfigValue } from "../../shared/plugin.ts";
+import type { PluginBoardInfo } from "../../shared/plugin-board.ts";
+import {
+  PANEL_ACTIONS_FILE_MAX_BYTES,
+  PANEL_DATA_MAX_BYTES,
+  PANEL_SPEC_MAX_BYTES,
+  PANEL_TEMPLATE_MAX_BYTES,
+  type PluginPanelData,
+  type PluginPanelDataProblem,
+  type PluginPanelProblem,
+} from "../../shared/plugin-panel.ts";
+import { manifestDisplayName, resolveComponentPath } from "./manifest.ts";
+import { DATA_NAMES, PROJECT_NAMES, ROOT_NAMES } from "./vars.ts";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// ---------- 看板的来源（已装插件与草稿共用） ----------
+
+/**
+ * 渲染一块看板要的一切输入：已装插件与草稿预览都归到这一个形状（右栏看板与会话里的快照各用一份载入逻辑，
+ * 输入的形状只在这里写一次）。草稿没有配置值（`values` 为空）、没有启用范围。
+ */
+export interface BoardSource {
+  root: string;
+  dataDir: string;
+  fields: readonly PluginConfigField[];
+  values: Readonly<Record<string, PluginConfigValue>>;
+  /** 会话所在工作区根；Home 会话为 null */
+  workspaceRoot: string | null;
+  board: PluginBoardInfo | null;
+}
+
+/**
+ * 草稿文件夹的身份：名字取清单里的、不合规退回文件夹名、再不行就用文件夹名原样（只用来显示）；
+ * 数据目录按这个合规的名字算（装上之后它就是那个目录），两个都不合规退回草稿自己的 `data/`。
+ * 右栏草稿预览与 show_plugin_board 的草稿都用它，两处的数据目录因此永远是同一个。
+ */
+export function draftIdentity(
+  manifest: Record<string, unknown>,
+  draftRoot: string,
+  dataDirOf: (name: string) => string,
+): { name: string; displayName: string; dataDir: string } {
+  const folder = basename(draftRoot);
+  const valid = [manifest["name"], folder].find((candidate): candidate is string => typeof candidate === "string" && isPluginName(candidate));
+  const name = valid ?? folder;
+  return {
+    name,
+    displayName: manifestDisplayName(manifest, name),
+    dataDir: valid === undefined ? join(draftRoot, "data") : dataDirOf(valid),
+  };
+}
+
+// ---------- 路径 ----------
+
+export interface PanelPathContext {
+  /** 插件根（`${CLAUDE_PLUGIN_ROOT}`） */
+  root: string;
+  /** 插件数据目录（`${CLAUDE_PLUGIN_DATA}`，动作日志也在这里） */
+  dataDir: string;
+  fields: readonly PluginConfigField[];
+  /** 已存的非敏感配置值（敏感项根本不允许进数据路径，所以这里不需要密钥库的值） */
+  values: Readonly<Record<string, PluginConfigValue>>;
+  /** 会话所在工作区根；Home 会话为 null */
+  workspaceRoot: string | null;
+}
+
+export type ResolvedDataPath = { ok: true; path: string } | { ok: false; problem: PluginPanelProblem };
+
+const VARIABLE = /\$\{([^}]*)\}/g;
+
+function isInside(base: string, target: string): boolean {
+  const rel = relative(base, target);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+/** 路径可能还不存在（数据文件第一轮之前没有）：对最近的存在的祖先取 realpath，再把没存在的尾巴接回去。 */
+async function realpathLoose(path: string): Promise<string> {
+  const tail: string[] = [];
+  let current = path;
+  for (;;) {
+    try {
+      return join(await realpath(current), ...tail.reverse());
+    } catch (error) {
+      if (!isNotFound(error) && errorCode(error) !== "ENOTDIR") throw error;
+      const parent = dirname(current);
+      if (parent === current) return path;
+      tail.push(basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
+ * `data` 路径：先替换变量，再要求落在允许的目录之内。
+ * 认的变量：`${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_DATA}`（`ZCODE_` 前缀同义）、`${user_config.KEY}`、
+ * `${workspaceFolder}`（`CLAUDE_PROJECT_DIR` 同义）。认不得的变量原样报 `data-variable`，不猜值；
+ * 敏感配置项拒绝（路径会出现在详情页与日志里）；必填配置没填报 `data-config-missing`。
+ * 相对路径按插件根解析。
+ */
+export async function resolveDataPath(raw: string, context: PanelPathContext): Promise<ResolvedDataPath> {
+  const allowed: string[] = [context.root, context.dataDir];
+  if (context.workspaceRoot !== null) allowed.push(context.workspaceRoot);
+  let problem: PluginPanelProblem | null = null;
+  const fail = (found: PluginPanelProblem): string => {
+    problem ??= found;
+    return "";
+  };
+  const substituted = raw.replace(VARIABLE, (_whole, rawName: string) => {
+    const name = rawName.trim();
+    if (ROOT_NAMES.has(name)) return context.root;
+    if (DATA_NAMES.has(name)) return context.dataDir;
+    if (name === "workspaceFolder" || PROJECT_NAMES.has(name)) {
+      return context.workspaceRoot ?? fail({ kind: "data-needs-workspace", detail: name });
+    }
+    if (name.startsWith("user_config.")) {
+      const key = name.slice("user_config.".length);
+      const field = context.fields.find((each) => each.key === key);
+      if (field === undefined) return fail({ kind: "data-variable", detail: name });
+      if (field.sensitive) return fail({ kind: "data-sensitive", detail: key });
+      const actual = context.values[key] ?? field.default;
+      if (actual === null || actual === undefined || actual === "") return fail({ kind: "data-config-missing", detail: key });
+      const text = Array.isArray(actual) ? actual.join(",") : String(actual);
+      // 用户亲手选的目录 / 文件：它所在的位置也算允许（数据不一定非得放在插件或工作区里）
+      if ((field.type === "directory" || field.type === "file") && typeof actual === "string" && isAbsolute(actual)) allowed.push(actual);
+      return text;
+    }
+    return fail({ kind: "data-variable", detail: name });
+  });
+  if (problem !== null) return { ok: false, problem };
+  if (substituted.trim() === "" || substituted.includes("\u0000")) return { ok: false, problem: { kind: "data-escape", detail: substituted } };
+
+  const path = resolve(context.root, substituted);
+  const outside: PluginPanelProblem = { kind: "data-escape", detail: path };
+  // 词法一关：`..` 走出去的在这里就拒
+  if (!allowed.some((base) => isInside(resolve(base), path))) return { ok: false, problem: outside };
+  // 符号链接一关：路径（或它的祖先）是指到别处的链接，真实位置也得在允许的目录里
+  try {
+    const real = await realpathLoose(path);
+    for (const base of allowed) {
+      const realBase = await realpathLoose(resolve(base));
+      if (isInside(realBase, real)) return { ok: true, path };
+    }
+  } catch {
+    return { ok: false, problem: outside };
+  }
+  return { ok: false, problem: outside };
+}
+
+// ---------- 模板 ----------
+
+export type PanelFileResult =
+  | { ok: true; abs: string; /** mtime:size */ stamp: string }
+  | { ok: false; problem: PluginPanelProblem };
+
+/** 三种看板文件各自的问题分类与大小上限。 */
+const FILE_KINDS = {
+  template: {
+    escape: "template-escape",
+    missing: "template-missing",
+    unreadable: "template-unreadable",
+    tooLarge: "template-too-large",
+    label: "board.template",
+    maxBytes: PANEL_TEMPLATE_MAX_BYTES,
+  },
+  spec: {
+    escape: "spec-escape",
+    missing: "spec-missing",
+    unreadable: "spec-unreadable",
+    tooLarge: "spec-too-large",
+    label: "board.spec",
+    maxBytes: PANEL_SPEC_MAX_BYTES,
+  },
+  sample: {
+    escape: "sample-escape",
+    missing: "sample-missing",
+    unreadable: "sample-unreadable",
+    tooLarge: "sample-too-large",
+    label: "board.sample",
+    maxBytes: PANEL_DATA_MAX_BYTES,
+  },
+} as const;
+
+export type PanelFileField = keyof typeof FILE_KINDS;
+
+function fileProblem(kind: PluginPanelProblem["kind"], detail: string): PluginPanelProblem {
+  return { kind, detail } as PluginPanelProblem;
+}
+
+/**
+ * 看板文件（模板 / 说明 / 样例）的路径解析 + 是文件 + 没超限，返回一个轻量的 stamp（不读内容）。
+ * 路径规则同其它组件路径（`resolveComponentPath`）：含 `..`、绝对路径、符号链接逃逸一律拒。
+ * 读不了的情况（权限、不是目录……）也以问题返回，不抛——这三个文件里任何一个坏了都不该让轮询报错。
+ */
+export async function locatePanelFile(root: string, raw: string, field: PanelFileField): Promise<PanelFileResult> {
+  const kinds = FILE_KINDS[field];
+  try {
+    const realRoot = await realpath(root);
+    const resolved = await resolveComponentPath(root, realRoot, kinds.label, raw);
+    if (!resolved.ok) return { ok: false, problem: fileProblem(resolved.problem.kind === "path-escape" ? kinds.escape : kinds.missing, raw) };
+    const info = await stat(resolved.abs);
+    if (!info.isFile()) return { ok: false, problem: fileProblem(kinds.unreadable, `${raw}: not a file`) };
+    if (info.size > kinds.maxBytes) return { ok: false, problem: fileProblem(kinds.tooLarge, String(info.size)) };
+    return { ok: true, abs: resolved.abs, stamp: `${info.mtimeMs}:${info.size}` };
+  } catch (error) {
+    return { ok: false, problem: fileProblem(kinds.unreadable, `${raw}: ${errorText(error)}`) };
+  }
+}
+
+/** 模板说明：读成文本（去 BOM）。定位已经判过大小，这里只读。 */
+export async function readPanelSpec(abs: string): Promise<{ ok: true; text: string } | { ok: false; problem: PluginPanelProblem }> {
+  try {
+    const raw = await readFile(abs, "utf8");
+    return { ok: true, text: raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw };
+  } catch (error) {
+    return { ok: false, problem: fileProblem("spec-unreadable", errorText(error)) };
+  }
+}
+
+/** 数据文件读不出来的原因换成样例的问题分类（sample-*）。 */
+export function sampleProblemOf(problem: PluginPanelDataProblem): PluginPanelProblem {
+  if (problem.kind === "too-large") return fileProblem("sample-too-large", String(problem.bytes));
+  if (problem.kind === "invalid-json") return fileProblem("sample-invalid", problem.message);
+  return fileProblem("sample-unreadable", problem.message);
+}
+
+/** 样例数据：读法与数据文件一样（≤ 2 MB、合法 JSON、空算没有）；读不出来的原因换成 sample-* 分类。 */
+export async function readPanelSample(abs: string): Promise<{ ok: true; data: PluginPanelData } | { ok: false; problem: PluginPanelProblem }> {
+  const data = await readPanelData(abs);
+  return data.kind === "problem" ? { ok: false, problem: sampleProblemOf(data.problem) } : { ok: true, data };
+}
+
+export async function readPanelTemplate(abs: string): Promise<{ ok: true; html: string } | { ok: false; problem: PluginPanelProblem }> {
+  try {
+    const raw = await readFile(abs, "utf8");
+    return { ok: true, html: raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw };
+  } catch (error) {
+    return { ok: false, problem: { kind: "template-unreadable", detail: errorText(error) } };
+  }
+}
+
+// ---------- 数据 ----------
+
+export interface DataStat {
+  /** 路径上有一个文件 */
+  exists: boolean;
+  updatedAt: number | null;
+  bytes: number | null;
+  /** 轻量签名（不读内容）：不存在 `missing`，文件 `mtime:size`；不是文件 / 读不了也各有一个值，保证「变了就不同」 */
+  signature: string;
+}
+
+export async function statDataFile(path: string): Promise<DataStat> {
+  try {
+    const info = await stat(path);
+    if (!info.isFile()) return { exists: false, updatedAt: null, bytes: null, signature: "not-a-file" };
+    return { exists: true, updatedAt: Math.floor(info.mtimeMs), bytes: info.size, signature: `${info.mtimeMs}:${info.size}` };
+  } catch (error) {
+    const missing = isNotFound(error) || errorCode(error) === "ENOTDIR";
+    return { exists: false, updatedAt: null, bytes: null, signature: missing ? "missing" : `error:${errorCode(error) ?? "unknown"}` };
+  }
+}
+
+/**
+ * 读数据文件。不存在 / 空白 / 顶层是 null、`{}`、`[]` 都算「空」（卡显示空态）；超过 2 MB 不读直接报
+ * too-large；JSON 写坏报 invalid-json（agent 非原子地写到一半时会碰到，调用方留着上一份好数据）。
+ */
+export async function readPanelData(path: string): Promise<PluginPanelData> {
+  let info;
+  try {
+    info = await stat(path);
+  } catch (error) {
+    if (isNotFound(error) || errorCode(error) === "ENOTDIR") return { kind: "empty" };
+    return { kind: "problem", problem: { kind: "unreadable", message: errorText(error) } };
+  }
+  if (!info.isFile()) return { kind: "problem", problem: { kind: "unreadable", message: "not a file" } };
+  if (info.size > PANEL_DATA_MAX_BYTES) return { kind: "problem", problem: { kind: "too-large", bytes: info.size } };
+  let text: string;
+  try {
+    text = await readFile(path, "utf8");
+  } catch (error) {
+    if (isNotFound(error)) return { kind: "empty" };
+    return { kind: "problem", problem: { kind: "unreadable", message: errorText(error) } };
+  }
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  if (text.trim() === "") return { kind: "empty" };
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch (error) {
+    return { kind: "problem", problem: { kind: "invalid-json", message: errorText(error).slice(0, 200) } };
+  }
+  if (isEmptyJson(value)) return { kind: "empty" };
+  return { kind: "ready", value, updatedAt: Math.floor(info.mtimeMs) };
+}
+
+function isEmptyJson(value: unknown): boolean {
+  if (value === null) return true;
+  if (Array.isArray(value)) return value.length === 0;
+  return isRecord(value) && Object.keys(value).length === 0;
+}
+
+// ---------- repeat ----------
+
+/**
+ * `repeat` 展开：数据（或样例）里顶层数组属性的每一项各一张卡。
+ * - `items`：有项，一项一张；
+ * - `none`：没有数据 / 数据有问题 / 数组是空的——调用方画一张占位卡（数据原样传，模板自己画空态）；
+ * - `not-array`：数据有值但这个属性不是数组（清单与数据对不上），这块声明不出卡并报问题。
+ */
+export type RepeatExpansion = { kind: "items"; items: unknown[] } | { kind: "none" } | { kind: "not-array" };
+
+export function expandRepeat(data: PluginPanelData, key: string): RepeatExpansion {
+  if (data.kind !== "ready") return { kind: "none" };
+  if (!isRecord(data.value) || !Object.hasOwn(data.value, key)) return { kind: "not-array" };
+  const list = data.value[key];
+  if (!Array.isArray(list)) return { kind: "not-array" };
+  return list.length === 0 ? { kind: "none" } : { kind: "items", items: list };
+}
+
+// ---------- 动作日志 ----------
+
+/** 滑动窗口限速：`key` 在最近 `windowMs` 内最多 `max` 次。时钟可注入。 */
+export class ActionLimiter {
+  private readonly hits = new Map<string, number[]>();
+  private readonly max: number;
+  private readonly windowMs: number;
+  private readonly now: () => number;
+
+  constructor(max: number, windowMs: number, now: () => number = Date.now) {
+    this.max = max;
+    this.windowMs = windowMs;
+    this.now = now;
+  }
+
+  /** 允许就记一次并返回 true；超限返回 false 且不记。 */
+  allow(key: string): boolean {
+    const at = this.now();
+    const recent = (this.hits.get(key) ?? []).filter((time) => at - time < this.windowMs);
+    if (recent.length >= this.max) {
+      this.hits.set(key, recent);
+      return false;
+    }
+    recent.push(at);
+    this.hits.set(key, recent);
+    return true;
+  }
+}
+
+/**
+ * 追加一行到动作日志。**一次 write 一整行**（`a+` 模式下由 O_APPEND 定位到文件尾，并发追加不会互相穿插），
+ * 上一行若因崩溃缺了结尾换行，先补一个，保证每行都是完整的 JSON。整份超过上限拒绝（`file-full`）。
+ * 调用方负责串行化（同一文件的追加排队），这里不持锁。
+ */
+export async function appendActionLine(file: string, line: string, maxBytes: number = PANEL_ACTIONS_FILE_MAX_BYTES): Promise<"ok" | "file-full"> {
+  await mkdir(dirname(file), { recursive: true });
+  const handle = await open(file, "a+");
+  try {
+    const { size } = await handle.stat();
+    let bytes = Buffer.from(`${line}\n`, "utf8");
+    if (size > 0) {
+      const last = Buffer.alloc(1);
+      await handle.read(last, 0, 1, size - 1);
+      if (last[0] !== 0x0a) bytes = Buffer.concat([Buffer.from("\n"), bytes]);
+    }
+    if (size + bytes.length > maxBytes) return "file-full";
+    const { bytesWritten } = await handle.write(bytes, 0, bytes.length);
+    if (bytesWritten !== bytes.length) throw new Error(`short write: ${bytesWritten}/${bytes.length}`);
+    return "ok";
+  } finally {
+    await handle.close();
+  }
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

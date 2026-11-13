@@ -3,16 +3,17 @@ import "./focus.css";
 import { api } from "../../api";
 import { Icon } from "../Icon";
 import { IconButton } from "../IconButton";
+import { StatusPie } from "../StatusPie";
 import { useT } from "../../locale";
 import { relativeTime } from "../relative-time";
 import { useFileTree } from "../../features/files/useFileTree";
 import { fileIcon, fileIconTone } from "../../features/files/tree-view";
-import { childSessions, rootSessions, type SessionMeta } from "@shared/session";
+import { rootSessions, type SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 import type { FileEntry } from "@shared/files";
 import type { FocusChangeEntry, FocusChangeKind, FocusChanges } from "@shared/focus";
 import type { ChatSession } from "../../features/chat/useChatSession";
-import { runStateLabel, sessionRunState } from "../../features/notify/completion-notice";
+import { runStateLabel, runStateOf } from "../../features/notify/completion-notice";
 import {
   ancestorsOf,
   changeIndexOf,
@@ -21,6 +22,11 @@ import {
   formatChangeLines,
   isHiddenEntry,
   joinRel,
+  POLL_GATE_IDLE,
+  pollGateAccept,
+  pollGateBegin,
+  pollGateSettle,
+  shouldPollChanges,
 } from "./focus-files.ts";
 
 /**
@@ -58,20 +64,44 @@ export function WorkspaceFiles(props: {
   const [selectedRel, setSelectedRel] = useState<string | null>(null);
 
   // —─ U / M：拉取 + 30 秒一拉（快照视图：agent 写盘由 useFileTree 的自动刷新盖住，
-  //    U/M 的半分锦延迟可见不是问题） ──
+  //    U/M 的半分钟延迟可见不是问题）。**窗口藏起来时跳过这一拍**：后台没人看，
+  //    每次 git 读 + IPC 都是纯烧电；回到前台由 visibilitychange 立刻补一拍。
+  //    在途去重与代次：慢 git 不叠跑（同一工作区在途时新拍放弃）；万一同一实例里
+  //    换了工作区 prop，新工作区顶替旧在途，旧结果落定对不上号就作废——不串台。 ──
   const [changesGen, setChangesGen] = useState(0);
+  const pollGateRef = useRef(POLL_GATE_IDLE);
   const loadChanges = useCallback(async (): Promise<void> => {
+    const ticket = pollGateBegin(pollGateRef.current, workspace.id);
+    if (ticket === null) return;
+    pollGateRef.current = ticket.gate;
     try {
-      setChanges(await api.focus.changes(workspace.id));
-      setChangesGen((current) => current + 1);
+      const result = await api.focus.changes(workspace.id);
+      if (pollGateAccept(pollGateRef.current, ticket.mine)) {
+        setChanges(result);
+        setChangesGen((current) => current + 1);
+      }
     } catch (cause) {
-      setChanges({ kind: "error", message: cause instanceof Error ? cause.message : String(cause) });
+      if (pollGateAccept(pollGateRef.current, ticket.mine)) {
+        setChanges({ kind: "error", message: cause instanceof Error ? cause.message : String(cause) });
+      }
+    } finally {
+      pollGateRef.current = pollGateSettle(pollGateRef.current);
     }
   }, [workspace.id]);
   useEffect(() => {
     void loadChanges();
-    const timer = window.setInterval(() => void loadChanges(), 30_000);
-    return () => window.clearInterval(timer);
+    const timer = window.setInterval(() => {
+      if (!shouldPollChanges(document.visibilityState)) return;
+      void loadChanges();
+    }, 30_000);
+    const onVisible = (): void => {
+      if (shouldPollChanges(document.visibilityState)) void loadChanges();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [loadChanges]);
 
   // 只取工作区根这一个根（fs:roots 还会带附加目录；专注看的是工作区本身）
@@ -343,12 +373,7 @@ function FileDirRow(props: {
       aria-expanded={props.open}
     >
       <span className="focus-frow-tw">
-        <Icon
-          name={props.open ? "chevron-down" : "chevron-right"}
-          size={11}
-          strokeWidth={2.2}
-          style={{ transform: props.open ? "rotate(0deg)" : "rotate(0deg)", transition: "transform var(--duration-fast) var(--ease-out-quint)" }}
-        />
+        <Icon name={props.open ? "chevron-down" : "chevron-right"} size={11} strokeWidth={2.2} />
       </span>
       <span className="focus-frow-icon">
         <Icon name={props.open ? "folder-open" : "folder"} size={14} strokeWidth={1.8} />
@@ -381,7 +406,7 @@ function FileRow(props: {
 }) {
   const t = useT();
   const change = props.change;
-  const lines = change !== null ? formatChangeLines(change) : "";
+  const lines = change !== null ? formatChangeLines(change, t.focus.linesUnknown) : "";
   return (
     <div className="file-hover-host">
     <button
@@ -421,19 +446,11 @@ function FileRow(props: {
   );
 }
 
-/** 会话节里的一行：三节竖条（与主列表同一份推导）+ 标题 + 相对时间 */
+/** 会话节里的一行：状态饼（与主列表同一份推导）+ 标题 + 相对时间 */
 function WsSessionRow(props: { meta: SessionMeta; session: ChatSession; active: boolean }) {
   const t = useT();
   const { meta, session } = props;
-  const children = childSessions(session.sessions, meta.id);
-  const bar = sessionRunState({
-    slot: { phase: session.phaseOf(meta.id), approvals: session.approvalsOf(meta.id).length },
-    children: children.map((child) => ({
-      phase: session.phaseOf(child.id),
-      approvals: session.approvalsOf(child.id).length,
-    })),
-    unread: meta.unread ?? null,
-  });
+  const bar = runStateOf(session, meta);
   return (
     <button
       type="button"
@@ -442,13 +459,10 @@ function WsSessionRow(props: { meta: SessionMeta; session: ChatSession; active: 
       onClick={() => session.openSession(meta.id)}
       style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", width: "100%", minHeight: "var(--control-height-md)", margin: "2px 0", padding: "var(--space-1) var(--space-2) var(--space-1) var(--space-1)", borderRadius: "var(--radius-sm)", fontFamily: "var(--font-family-base)", fontSize: "var(--font-size-base)", textAlign: "left" }}
     >
-      {bar !== null && (
-        <span className="status-bar option-row-bar" data-fill={bar} title={runStateLabel(bar, t)}>
-          <i />
-          <i />
-          <i />
-        </span>
-      )}
+      {/* 行首 14px 状态槽（同侧栏会话行）：不亮也占位，标题才对得齐 */}
+      <span style={{ display: "grid", placeItems: "center", flex: "none", width: 14, height: 14 }}>
+        {bar !== null && <StatusPie state={bar} title={runStateLabel(bar, t)} />}
+      </span>
       <span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {meta.title === "" ? t.common.newTask : meta.title}
       </span>

@@ -1,0 +1,167 @@
+<!doctype html>
+<!--
+  Orbita 插件看板·单卡模板骨架（自包含：内联 style / script，没有任何外部引用）。
+
+  卡的分工：外框（圆角、裁切、边框）、卡外标题行（时间 · 插件名）、格子尺寸都是宿主画的；
+  模板只管卡里面——背景、颜色、字号、排版是你的。所以根元素不要 border-radius / 边框 / 阴影，
+  宽高撑满整张卡。
+
+  宿主 ⇄ 模板的约定（改渲染部分，别改下面这套收发）：
+    宿主 → 模板  window.postMessage({ type: "orbita:data", data, state: "ready" | "empty", updatedAt,
+                 card: { id, size, index }, unit: { width, height }, theme: { name, scheme, vars } })
+                 · data 是这张卡的数据文件内容；文件不存在 / 空 → data = null, state = "empty"（宿主用 sample 渲染并标「样例」）
+                 · card.id 是清单里这张卡的 id；repeat 卡里 index 是数据数组里的第几项（data 是其中一项）
+                 · unit 是**一格**的像素宽高（格子宽高比 10:9；整张卡 = 格数 × unit + 格间距），字号按它等比取（见 applyUnit）
+                 · theme.vars 是 Orbita 当前主题的变量表，设到 :root 才跟主题走
+    模板 → 宿主  parent.postMessage({ type: "orbita:ready", emptyState: true }, "*")   加载完告诉宿主；emptyState:true = 空态我自己画
+                 parent.postMessage({ type: "orbita:action", action: "mark-useful", payload: { id } }, "*")
+                 · 宿主把它追加进插件数据目录的 actions.jsonl（自动记上是哪张卡），不做别的
+  沙盒限制：不能联网、不能跳转链接、不能读文件、图片字体只能 data:。显示链接请当文字，或发一个 action。
+  没有宿主（直接用浏览器打开，或在 preview.html 里）时，用 window.__SAMPLE__ 渲染，方便预览。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>卡片</title>
+<style>
+  /* 主题变量的兜底值（浅色）；宿主会用 theme.vars 覆盖。变量名单见约定，别发明新名字。 */
+  :root {
+    --color-text-primary: #202124; --color-text-secondary: #5f6368; --color-text-tertiary: #8b8f94;
+    --color-bg-panel: #ffffff; --color-bg-muted: #eef0f2; --color-chat-card-bg: #fafafa;
+    --color-border-subtle: #e5e5df; --color-border-default: #dfdfd7; --color-border-strong: #d7d7cf;
+    --color-accent: #1d4ed8; --color-accent-soft: #e7eefd; --color-accent-fg: #ffffff;
+    --color-success: #1a7f37; --color-warning: #b7791f; --color-danger: #b42318; --color-info: #2563eb;
+    --font-family-base: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --font-family-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --radius-sm: 6px; --radius-md: 6px; --radius-lg: 8px; --radius-xl: 10px;
+    --line-height-ui: 1.5; --line-height-tight: 1.25;
+    font-size: 13px; /* 无宿主时的默认字号；applyUnit 会按卡的像素尺寸改写它 */
+  }
+  * { box-sizing: border-box; }
+  /* html 透明（玄主题下不刷白底）；卡的背景画在 body 上——这是你发挥的地方。
+     注意：外框（圆角、边框、阴影）是宿主的，别加在根元素上 */
+  html { background: transparent; }
+  html, body { height: 100%; width: 100%; margin: 0; }
+  body {
+    color: var(--color-text-primary);
+    font-family: var(--font-family-base);
+    line-height: var(--line-height-ui);
+    background: var(--color-chat-card-bg);
+    overflow: hidden; /* 宿主给的就这么大；放不下是内容的问题，减内容，不是滚动 */
+    display: flex;
+  }
+  /* 尺寸字号全用 rem：根 font-size 由 applyUnit 按卡的实际像素等比设定，四档之间跟着缩 */
+  main { flex: 1; min-width: 0; padding: 0.9rem 1rem; display: grid; gap: 0.4rem; align-content: start; }
+
+  /* ↓↓ 示例渲染（一张卡一件事：这里是「今日一篇」）。换内容就重写这一段（骨架要变，不是只换色）。 */
+  .venue { color: var(--color-text-tertiary); font-size: 0.75rem; letter-spacing: 0.02em; }
+  h1 { margin: 0; font-size: 1rem; line-height: var(--line-height-tight); font-weight: 600; }
+  .summary { margin: 0; color: var(--color-text-secondary); font-size: 0.8rem; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .tags { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+  .tag { padding: 0 0.4rem; border-radius: var(--radius-sm); background: var(--color-bg-muted); color: var(--color-text-secondary); font-size: 0.7rem; }
+  .acts { display: flex; gap: 0.35rem; margin-top: auto; align-self: end; }
+  button.act { font: inherit; font-size: 0.75rem; padding: 0.2rem 0.6rem; border: 0; border-radius: var(--radius-md); background: var(--color-bg-muted); color: var(--color-text-secondary); cursor: pointer; }
+  button.act:hover { color: var(--color-text-primary); }
+  button.act[aria-pressed="true"] { background: var(--color-accent-soft); color: var(--color-accent); }
+  /* ↑↑ */
+
+  .empty { flex: 1; display: grid; gap: 0.4rem; place-content: center; text-align: center; color: var(--color-text-tertiary); }
+  .empty b { color: var(--color-text-secondary); font-weight: 600; font-size: 0.9rem; }
+  .empty span { font-size: 0.75rem; }
+</style>
+</head>
+<body>
+<main id="app"></main>
+<script>
+(function () {
+  "use strict";
+  var app = document.getElementById("app");
+  var hosted = window.parent !== window;
+  var pressed = {}; // 本次页面里按过的反馈（只是界面状态；真正的记录在宿主的 actions.jsonl）
+
+  /* 小工具：只用 textContent，数据里有什么都不会被当成 HTML 执行。 */
+  function el(tag, attrs, children) {
+    var node = document.createElement(tag);
+    Object.keys(attrs || {}).forEach(function (key) {
+      if (key === "class") node.className = attrs[key];
+      else if (key === "text") node.textContent = attrs[key];
+      else node.setAttribute(key, attrs[key]);
+    });
+    (children || []).forEach(function (child) { if (child) node.appendChild(child); });
+    return node;
+  }
+
+  function applyTheme(theme) {
+    if (!theme) return;
+    var vars = theme.vars || {};
+    Object.keys(vars).forEach(function (name) { document.documentElement.style.setProperty(name, vars[name]); });
+    if (theme.scheme) document.documentElement.setAttribute("data-scheme", theme.scheme);
+  }
+
+  /* 字号按卡的实际像素等比：以「1x1 等效边长」为基准（宽与高×10/9 取小），每 16px 出 1rem。
+     2x2 的卡会自动用约两倍的字号；夹在 9–40px 防极端。 */
+  function applyUnit(unit) {
+    if (!unit || !unit.width || !unit.height) return;
+    var base = Math.min(unit.width, (unit.height * 10) / 9) / 16;
+    document.documentElement.style.fontSize = Math.max(9, Math.min(40, base)) + "px";
+  }
+
+  function act(action, payload) {
+    if (hosted) parent.postMessage({ type: "orbita:action", action: action, payload: payload }, "*");
+  }
+
+  function renderEmpty() {
+    app.replaceChildren(el("div", { class: "empty" }, [
+      el("b", { text: "还没有产出" }),
+      el("span", { text: "让智能体跑一次这个插件，结果会出现在这里。" })
+    ]));
+  }
+
+  function renderCard(item) {
+    var id = String(item.id == null ? item.title : item.id);
+    var tags = (item.tags || []).map(function (tag) { return el("span", { class: "tag", text: String(tag) }); });
+    function feedback(label, action) {
+      var button = el("button", { class: "act", type: "button", "aria-pressed": pressed[id] === action ? "true" : "false", text: label });
+      button.addEventListener("click", function () {
+        pressed[id] = action;
+        act(action, { id: id });
+        render(current.data, current.state);
+      });
+      return button;
+    }
+    return [
+      el("div", { class: "venue", text: String(item.venue || "") }),
+      el("h1", { text: String(item.title || "（无标题）") }),
+      item.summary ? el("p", { class: "summary", text: String(item.summary) }) : null,
+      tags.length ? el("div", { class: "tags" }, tags) : null,
+      el("div", { class: "acts" }, [feedback("有用", "mark-useful"), feedback("不相关", "mark-irrelevant")])
+    ];
+  }
+
+  var current = { data: null, state: "empty", card: null };
+  function render(data, state) {
+    current = { data: data, state: state, card: current.card };
+    if (state === "empty" || data === null) return renderEmpty();
+    app.replaceChildren.apply(app, renderCard(typeof data === "object" && data !== null && !Array.isArray(data) ? data : {}));
+  }
+
+  window.addEventListener("message", function (event) {
+    if (event.source !== parent) return; // 只信宿主
+    var message = event.data;
+    if (!message || message.type !== "orbita:data") return;
+    current.card = message.card || null; // { id, size, index }：repeat 卡里用它知道自己是数据数组里的第几项
+    applyTheme(message.theme);
+    applyUnit(message.unit); // 卡的尺寸可能变了（换了档位 / 窗口缩放）：字号跟着重算
+    render(message.data, message.state);
+  });
+
+  /* 告诉宿主：加载好了，空态我自己画（emptyState:true），宿主就不再盖一行「还没有产出」。 */
+  if (hosted) parent.postMessage({ type: "orbita:ready", emptyState: true }, "*");
+  else if (window.__SAMPLE__) { applyUnit({ width: 220, height: 198 }); render(window.__SAMPLE__, "ready"); } // 直接打开文件预览：按 1x1 近似尺寸
+  else renderEmpty();
+})();
+</script>
+</body>
+</html>

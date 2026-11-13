@@ -1,0 +1,52 @@
+skill-kit（技能工具箱）— Orbita 内置插件
+
+本插件里的两条技能是对开源技能的改编。改编处按各自许可证的要求保留了署名与许可文件；
+改动不代表原作者背书。
+
+1. skills/find-skills（找技能）
+   - 来源：vercel-labs/skills 的 find-skills — https://github.com/vercel-labs/skills
+   - 版权：Copyright (c) 2026 Vercel, Inc.
+   - 许可：MIT License（全文附在本文件末尾）
+   - 我们改了什么：
+     · frontmatter 的 description 改为 Orbita 里的触发场景（用户问“有没有能做 X 的技能”；做插件的流程不在此列），并加了 version: 1.0.2-orbita；
+     · 新增开头「在 Orbita 里怎么用」一段：查找顺序（用户已有 → 本机市场快照 → skills.sh → GitHub）、
+       禁用 `npx skills add -g`（Orbita 不读 ~/.agents/skills/）、取回后按形态安装
+       （单文件技能走 create_skill 工具；多文件技能做成插件，经用户同意用 install_plugin）；
+     · 正文里原本直接给出 `npx skills add ... -g -y` 的示例与安装步骤，改成同一套 Orbita 安装路径；
+     · 其余（技能 CLI 的介绍、搜索技巧、分类表）保持上游原文。
+
+2. skills/skill-creator（写技能 / 改技能 / 评测技能）
+   - 来源：anthropics/skills 的 skill-creator — https://github.com/anthropics/skills
+   - 许可：Apache License 2.0（全文见 skills/skill-creator/LICENSE.txt，原样保留）
+   - 我们改了什么（Apache-2.0 §4(b) 要求写明）：
+     · skills/skill-creator/SKILL.md：frontmatter 的 description 末尾加了一句“做整个 Orbita 插件用 plugin-creator”，
+       加了 version: 1.1.2-orbita；
+     · 新增开头「在 Orbita 里怎么用」一段：子 agent 对应 Orbita 的 delegate 工具、没有 `claude -p` 时描述优化的替代做法、
+       写入 Orbita 的方式（单文件技能走 create_skill 工具；带脚本的做成插件，经用户同意用 install_plugin）、
+       用内置浏览器看评测结果、沟通语言；
+     · 正文（Orbita 说明段之后）与上游 main 一致；scripts/、references/、agents/、eval-viewer/、assets/ 的文件与上游一致、未改动；
+     · 删掉了三个 SKILL.md 不引用的旧版遗留文件（上游现版已无）：scripts/init_skill.py、references/workflows.md、references/output-patterns.md。
+
+MIT License（vercel-labs/skills）全文：
+
+MIT License
+
+Copyright (c) 2026 Vercel, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

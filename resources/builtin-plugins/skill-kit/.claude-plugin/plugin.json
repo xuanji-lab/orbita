@@ -1,0 +1,16 @@
+{
+  "name": "skill-kit",
+  "displayName": "技能工具箱",
+  "version": "0.1.0",
+  "description": "找技能、写技能：你问“有没有能做 X 的技能”，它去 skills.sh、GitHub 和本机市场里找现成的，摆 2–3 个候选给你挑，你点头了才装；找不到合适的，就和你一起写一条新技能，或把现成的改成适合你的，并用真实说法试几轮。",
+  "author": { "name": "Orbita" },
+  "license": "MIT AND Apache-2.0",
+  "orbita": {
+    "workflow": [
+      { "title": "听你要做什么，去找现成的技能", "skill": "find-skills", "detail": "先看你已有的，再找本机市场、skills.sh、GitHub；不会用 npx skills add -g（装了 Orbita 也读不到）" },
+      { "title": "把 2–3 个候选摆给你，你挑了才装", "skill": "find-skills", "detail": "写清每个能做什么、要改哪里、许可证和来源", "wait": "chat" },
+      { "title": "没有合适的：写一条新技能，或把现成的改成适合你的", "skill": "skill-creator", "detail": "先弄清你想让它做什么，再写草稿、用你真会说的话造几条测试" },
+      { "title": "试几轮、改到你满意，再装上", "skill": "skill-creator", "detail": "单个文件的技能直接写入；带脚本的做成插件，装之前只在对话里问你一句", "wait": "chat" }
+    ]
+  }
+}

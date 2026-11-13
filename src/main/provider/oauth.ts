@@ -18,6 +18,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { Server } from "node:http";
 import { createServer } from "node:http";
+import { CLAUDE_CODE_VERSION } from "../../shared/claude-code-version.ts";
 import type { OauthCredential } from "../../shared/provider.ts";
 
 /** Claude Code CLI 的公开 client id（Anthropic 不开放注册第三方 client，所有桌面工具共用它） */
@@ -37,14 +38,13 @@ export function isClaudeOauthToken(key: string): boolean {
 
 /**
  * 与 agent 侧真会话同一套 Claude Code 身份：pi-ai 的 OAuth 分支（anthropic-messages.ts）
- * 用官方 SDK 客户端发的 defaultHeaders 就是这一组。版本号锁 pi-ai 0.84.3 内的
- * claudeCodeVersion —— 同一应用不能一种请求报 2.1.75、另一种报别的，那本身就是
- * 不一致信号；pi 升版本时这里跟着改。
+ * 用官方 SDK 客户端发的 defaultHeaders 就是这一组。版本号与 agent 侧同取
+ * CLAUDE_CODE_VERSION（shared/claude-code-version.ts）——同一应用两种请求报两个版本
+ * 本身就是不一致信号。
  *
  * 少了 user-agent / x-app 的实测后果：订阅凭据被分类为非 Claude Code 流量，
  * /v1/messages 直接回 429 rate_limit_error（2026-10 macOS 真机，Test 探测路径）。
  */
-const CLAUDE_CLI_VERSION = "2.1.75";
 
 /**
  * 测试连接 / 发现模型要带的请求头：与 agent 侧 pi 发给 /v1/messages 的身份集合
@@ -58,7 +58,7 @@ export function anthropicOauthHeaders(accessToken: string): Record<string, strin
     "anthropic-version": "2023-06-01",
     "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14",
     "anthropic-dangerous-direct-browser-access": "true",
-    "user-agent": `claude-cli/${CLAUDE_CLI_VERSION}`,
+    "user-agent": `claude-cli/${CLAUDE_CODE_VERSION}`,
     "x-app": "cli",
   };
 }

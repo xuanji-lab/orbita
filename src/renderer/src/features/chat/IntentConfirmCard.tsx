@@ -9,7 +9,7 @@
  *   就是这句预测。**改字 = 表态**：改过的说法同「对」（shared/intent-confirm.ts），
  *   提交时 statement 与 edited 都填用户的字。
  * - 往下按「判断要用的顺序」：为什么连上（边的 connection，灰盒）→ 为什么拿不准
- *   （warning 色竖条）→ 当时那段对话（Q/A 经 MarkdownBlock 渲染，用来连上的摘句
+ *   （warning 色状态饼）→ 当时那段对话（Q/A 经 MarkdownBlock 渲染，用来连上的摘句
  *   高亮成 mark；能滚动；「在辅助对话打开」用的就是 App 的 openInSideChat，来源
  *   会话不在本机时禁用并就地说明）。
  * - 键盘：Y / N 表态并自动翻下一条（再按同一个撤掉就不翻），← → 翻页，E 改字；
@@ -494,7 +494,7 @@ export function IntentConfirmCard(props: {
           </div>
         )}
 
-        {/* 为什么拿不准：warning 色竖条 */}
+        {/* 为什么拿不准：warning 色状态饼 */}
         <div className="intent-why">
           <span className="intent-kick">{t.chat.recall.confirm.whyUncertainLabel}</span>
           <br />

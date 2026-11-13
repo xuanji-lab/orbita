@@ -1,0 +1,42 @@
+/*
+ * 工作区选择条（WorkspaceFilterBar）：一排 Chip，放不下时横向滚动、滚动条藏起，
+ * 被裁的一侧用淡出提示（做法同工具栏溢出文字的 mask，toolbar.css）。
+ */
+.ws-filter-bar {
+  /* 横滚 / 淡出 / 藏滚动条是 .h-scroll 的（h-scroll.css） */
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  padding: var(--space-0-5) 0;
+}
+
+/* Chip 在横向滚动条里不许被 flex 压扁：宁可滚也不截成一个字 */
+.ws-filter-bar > .chip {
+  flex: none;
+}
+
+.ws-chip-in {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.ws-chip-name {
+  min-width: 0;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 条数：xs 档、次级灰；选中的那档跟着字色走（不另起一个色） */
+.ws-chip-count {
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+
+.chip[data-active="true"] .ws-chip-count {
+  color: inherit;
+}

@@ -16,6 +16,7 @@ import {
   isMcpServerName,
   mcpRowDisabledFact,
   mergeServerSources,
+  pluginServerRows,
   WORKSPACE_MCP_FILENAME,
   type McpListResult,
   type McpServer,
@@ -112,7 +113,8 @@ export function registerMcpIpc(
           status: instance.status,
         })),
     }));
-    return { servers, warnings };
+    // 插件自带的服务不在任何配置文件里：只从运行时快照里捡出来，插件详情要显示它们的状态与工具
+    return { servers, warnings, pluginServers: pluginServerRows(snapshot) };
   });
 
   /** 加减 server 走编辑文件：命令 / 参数 / 环境变量做成表单不如直接给文件。 */

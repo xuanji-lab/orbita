@@ -25,6 +25,15 @@ describe("registeredModelsOf", () => {
   });
 });
 
+describe("registeredModelsOf · 服务商开关", () => {
+  it("关着的服务商不进匹配候选（分配给它的会话发不出消息）", () => {
+    assert.deepEqual(
+      registeredModelsOf([{ ...provider("zai", ["glm-5.3"]), disabled: true }, provider("kimi", ["k3"])]),
+      [{ providerId: "kimi", modelId: "k3" }],
+    );
+  });
+});
+
 describe("assignPreview", () => {
   const providers = [provider("zai", ["glm-5.3"]), provider("gateway", ["GLM_5_3"]), provider("kimi", ["Kimi K3"])];
 

@@ -5,8 +5,10 @@ import {
   findInvocationTokens,
   INVOCATION_CLOSE,
   INVOCATION_OPEN,
+  entrySkillSlug,
   stripInvocationBlock,
   type InvokedMcp,
+  type InvokedPlugin,
   type InvokedSkill,
 } from "./invocation.ts";
 
@@ -151,5 +153,95 @@ describe("stripInvocationBlock", () => {
   it("剥完只剩空白也给空白（标题层按空标题处理）", () => {
     const out = composeInvocationPrompt(" /skill:review ", [{ target: "review", location: "/r/SKILL.md" }], []);
     assert.equal(stripInvocationBlock(out), " /skill:review ");
+  });
+});
+
+describe("/plugin: token", () => {
+  it("边界与 /skill: 同一规则（行首或空白后、target 到下一个空白、空 target 不算）", () => {
+    assert.deepEqual(findInvocationTokens("/plugin:lit-tracker 跑一下"), [
+      { kind: "plugin", start: 0, end: 19, target: "lit-tracker" },
+    ]);
+    assert.deepEqual(findInvocationTokens("再用 /plugin:a 和 /skill:b"), [
+      { kind: "plugin", start: 3, end: 12, target: "a" },
+      { kind: "skill", start: 15, end: 23, target: "b" },
+    ]);
+    assert.deepEqual(findInvocationTokens("先跑\u3000/plugin:a"), [{ kind: "plugin", start: 3, end: 12, target: "a" }]);
+    assert.deepEqual(findInvocationTokens("看下C:/plugin:x"), []);
+    assert.deepEqual(findInvocationTokens("a/plugin:x"), []);
+    assert.deepEqual(findInvocationTokens("/plugin: 后面是空"), []);
+    assert.deepEqual(findInvocationTokens("/plugins:x"), []);
+  });
+});
+
+describe("composeInvocationPrompt · 插件", () => {
+  const enabled: InvokedPlugin = {
+    target: "lit-tracker",
+    state: "enabled",
+    displayName: "文献追踪",
+    workflow: [
+      { title: "爬论文、去重", skill: "lit-intake" },
+      { title: "写周报", skill: "lit-digest" },
+      { title: "刊登到看板", skill: "show_plugin_board" },
+      { title: "人工过目", skill: null },
+    ],
+    entry: { skill: "lit-intake", location: "/p/lit-tracker/skills/lit-intake/SKILL.md" },
+    hasBoard: true,
+  };
+  const original = "用 /plugin:lit-tracker 跑一下";
+
+  it("指令块写明插件名、工作流各步、入口技能路径与看板句，不内联技能全文", () => {
+    const out = composeInvocationPrompt(original, [], [], [enabled]);
+    assert.ok(out.startsWith(INVOCATION_OPEN));
+    assert.match(out, /Plugins:/);
+    assert.match(out, /"lit-tracker" \(display name "文献追踪"\) — enabled in this workspace/);
+    assert.match(out, /1\. 爬论文、去重 → lit-intake/);
+    assert.match(out, /3\. 刊登到看板 → show_plugin_board/);
+    assert.match(out, /4\. 人工过目\n/);
+    assert.match(out, /read "\/p\/lit-tracker\/skills\/lit-intake\/SKILL\.md" with the read tool BEFORE any other/);
+    assert.match(out, /call show_plugin_board with plugin "lit-tracker"/);
+    assert.ok(out.endsWith(`\n\n${original}`));
+    assert.equal(stripInvocationBlock(out), original);
+  });
+  it("没有看板就没有 show_plugin_board 那句；没有工作流就没有 Workflow 段", () => {
+    const out = composeInvocationPrompt(original, [], [], [{ ...enabled, workflow: [], hasBoard: false }]);
+    assert.doesNotMatch(out, /show_plugin_board/);
+    assert.doesNotMatch(out, /Workflow:/);
+    assert.match(out, /Entry skill "lit-intake"/);
+  });
+  it("入口技能读不出：如实写明，不给路径", () => {
+    const out = composeInvocationPrompt(original, [], [], [{ ...enabled, entry: null }]);
+    assert.match(out, /entry skill could not be found or read/);
+    assert.doesNotMatch(out, /with the read tool/);
+  });
+  it("没装：如实写明不要假装；没启用：叫用户先在这个工作区启用，不给路径", () => {
+    const missing = composeInvocationPrompt(original, [], [], [{ target: "ghost", state: "not-installed" }]);
+    assert.match(missing, /"ghost" — is not installed/);
+    assert.match(missing, /Do not pretend/);
+    const off = composeInvocationPrompt(original, [], [], [{ target: "lit-tracker", state: "disabled", displayName: "文献追踪" }]);
+    assert.match(off, /NOT enabled in this workspace/);
+    assert.match(off, /enable it in the Plugins panel/);
+    assert.doesNotMatch(off, /SKILL\.md/);
+  });
+  it("与 skill、mcp 同块共存，各一段", () => {
+    const out = composeInvocationPrompt(original, [{ target: "a", location: "/a/SKILL.md" }], [{ target: "m", available: true }], [enabled]);
+    assert.match(out, /Skills:[\s\S]*MCP servers:[\s\S]*Plugins:/);
+  });
+  it("三者都为空时原文原样返回", () => {
+    assert.equal(composeInvocationPrompt("普通消息", [], [], []), "普通消息");
+    assert.equal(composeInvocationPrompt("普通消息", [], []), "普通消息");
+  });
+});
+
+describe("entrySkillSlug", () => {
+  it("工作流第一个对上技能的步骤点名的那条", () => {
+    assert.equal(
+      entrySkillSlug([{ skillSlug: null }, { skillSlug: "b" }, { skillSlug: "a" }], [{ slug: "a" }, { slug: "b" }]),
+      "b",
+    );
+  });
+  it("没有工作流（或没有一步对上）取第一条技能；一条也没有为 null", () => {
+    assert.equal(entrySkillSlug([], [{ slug: "a" }, { slug: "b" }]), "a");
+    assert.equal(entrySkillSlug([{ skillSlug: null }], [{ slug: "z" }]), "z");
+    assert.equal(entrySkillSlug([], []), null);
   });
 });

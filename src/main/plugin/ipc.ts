@@ -1,0 +1,231 @@
+/**
+ * 插件的 IPC —— 四层契约的第 2 层。
+ *
+ * 已装页的一张表 = 真插件（PluginStore）+ 旧技能（SkillStore 的链接表）+ 旧 MCP（全局 mcp.json），
+ * 各自是自己那份状态的**唯一真源**，这里只投影（legacy.ts）与按视图 id 前缀分派写入：
+ * 在插件页里拨开关与在旧面板里拨，落到同一份状态。renderer 传来的一切入参都当不可信：
+ * 形状、枚举、id 前缀逐项校验（路径、范围名单、配置值）。
+ */
+import { BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { ipcChannels } from "../../shared/agent-ipc.ts";
+import {
+  parsePluginViewId,
+  type PluginConfigValue,
+  type PluginArchiveEntry,
+  type PluginDraftEntry,
+  type PluginDraftSnapshot,
+  type PluginInstallRequest,
+  type PluginInstallResult,
+  type PluginListResult,
+  type PluginPreviewRequest,
+  type PluginPreviewResult,
+  type PluginRowInstallRequest,
+  type PluginRowInstallResult,
+  type PluginScope,
+  type PluginSkillFile,
+  type PluginSource,
+} from "../../shared/plugin.ts";
+import type {
+  PluginBoardCardRef,
+  PluginBoardSnapshot,
+  PluginDraftLoadRequest,
+  PluginPanelActionResult,
+} from "../../shared/plugin-panel.ts";
+import type { SkillMeta } from "../../shared/skill.ts";
+import type { McpServer } from "../../shared/mcp.ts";
+import type { McpStore } from "../mcp/store.ts";
+import type { SkillStore } from "../skill/store.ts";
+import type { WorkspaceStore } from "../workspace/store.ts";
+import { applyMcpScope, applySkillScope, mcpViews, skillViews } from "./legacy.ts";
+import type { PluginPanels } from "./panel-service.ts";
+import { parseScope } from "./records.ts";
+import type { PluginAgentRequests } from "./agent-requests.ts";
+import type { PluginStore } from "./store.ts";
+
+export function registerPluginIpc(deps: {
+  plugins: PluginStore;
+  /** 插件看板（载入 / 草稿 / 动作）；契约在 shared/plugin-panel.ts */
+  panels: PluginPanels;
+  skills: SkillStore;
+  mcp: McpStore;
+  workspaces: WorkspaceStore;
+  /** 让 agent 进程把现有 MCP 连接拆掉重来（host 注入；「重新载入」与改旧 MCP 用） */
+  reloadMcp: () => Promise<void>;
+  /** 对话里「装上插件」那一行的「安装」落在它身上 */
+  agentRequests: PluginAgentRequests;
+  /** 「正在做」列表：所有工作区里有清单、还没安装的插件文件夹（drafts.ts 的 scanDrafts，host 注入端口） */
+  listDrafts: () => Promise<PluginDraftEntry[]>;
+}): void {
+  const { plugins, panels, skills, mcp, workspaces } = deps;
+
+  ipcMain.handle(ipcChannels.pluginList, async (): Promise<PluginListResult> => {
+    let servers: Record<string, McpServer> = {};
+    let mcpError: string | null = null;
+    try {
+      servers = await mcp.read();
+    } catch (error) {
+      // mcp.json 读不出来：其余照常列，错误原文贴在页上（不说成「你没有 MCP」）
+      mcpError = error instanceof Error ? error.message : String(error);
+    }
+    const [real, userSkills, workspaceList] = await Promise.all([plugins.listViews(), skills.list(), workspaces.list()]);
+    return {
+      plugins: [...real, ...skillViews(userSkills, skills.storeRoot()), ...mcpViews(servers, workspaceList)],
+      mcpError,
+    };
+  });
+
+  ipcMain.handle(ipcChannels.pluginSkills, (): Promise<SkillMeta[]> => plugins.skillMetas());
+
+  ipcMain.handle(ipcChannels.pluginPickFolder, async (event): Promise<string | null> => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const options = { properties: ["openDirectory" as const] };
+    const result = await (window ? dialog.showOpenDialog(window, options) : dialog.showOpenDialog(options));
+    return result.canceled ? null : (result.filePaths[0] ?? null);
+  });
+
+  ipcMain.handle(ipcChannels.pluginPreview, (_event, raw: unknown): Promise<PluginPreviewResult> => plugins.preview(requirePreviewRequest(raw)));
+
+  ipcMain.handle(ipcChannels.pluginDiscard, (_event, previewId: unknown): Promise<void> => plugins.discard(requireString(previewId, "previewId")));
+
+  ipcMain.handle(ipcChannels.pluginInstall, (_event, raw: unknown): Promise<PluginInstallResult> => {
+    const request = requireRecord(raw, "install request");
+    const preview = requirePreviewRequest(request["preview"]);
+    const previewId = request["previewId"] === null ? null : requireString(request["previewId"], "previewId");
+    const scope = parseScope(request["scope"]);
+    if (scope === null) throw new Error("Invalid scope");
+    const checked: PluginInstallRequest = { preview, previewId, scope };
+    return plugins.install(checked);
+  });
+
+  ipcMain.handle(ipcChannels.pluginSetScope, async (_event, rawId: unknown, rawScope: unknown): Promise<void> => {
+    const parsed = parsePluginViewId(requireString(rawId, "id"));
+    if (parsed === null) throw new Error(`Invalid plugin id: ${String(rawId)}`);
+    const scope: PluginScope | null = parseScope(rawScope);
+    if (scope === null) throw new Error("Invalid scope");
+    if (parsed.origin === "plugin") return plugins.setScope(parsed.key, scope);
+    if (parsed.origin === "user-skill") {
+      const meta = (await skills.list()).find((each) => each.slug === parsed.key);
+      if (meta === undefined) throw new Error(`Skill not found: ${parsed.key}`);
+      return applySkillScope(skills, meta, scope);
+    }
+    await applyMcpScope(mcp, parsed.key, scope);
+    await deps.reloadMcp().catch((error: unknown) => {
+      console.error("[plugin] mcp.json 改了但重连失败（下次开轮会用新配置）", error);
+    });
+  });
+
+  ipcMain.handle(
+    ipcChannels.pluginSetConfig,
+    (_event, name: unknown, key: unknown, value: unknown): Promise<void> =>
+      plugins.setConfig(requireString(name, "name"), requireString(key, "key"), value === null ? null : requireConfigValue(value)),
+  );
+
+  ipcMain.handle(ipcChannels.pluginUninstall, (_event, name: unknown): Promise<void> => plugins.uninstall(requireString(name, "name")));
+
+  ipcMain.handle(ipcChannels.pluginArchived, (): Promise<PluginArchiveEntry[]> => plugins.listArchived());
+
+  ipcMain.handle(ipcChannels.pluginReveal, async (_event, name: unknown): Promise<void> => {
+    const record = (await plugins.records()).find((each) => each.name === requireString(name, "name"));
+    if (record === undefined) throw new Error(`No such plugin: ${String(name)}`);
+    const failure = await shell.openPath(plugins.rootOf(record));
+    if (failure !== "") throw new Error(failure);
+  });
+
+  ipcMain.handle(ipcChannels.pluginReload, async (): Promise<void> => {
+    await deps.reloadMcp();
+  });
+
+  ipcMain.handle(
+    ipcChannels.pluginSkillFile,
+    (_event, name: unknown, slug: unknown): Promise<PluginSkillFile> => plugins.skillFile(requireString(name, "name"), requireString(slug, "slug")),
+  );
+
+  // 对话里 install_plugin 留下的那一行的「安装」：入参全当不可信，主进程重验会话、路径与指纹后才装；
+  // 结局以数据返回（reason 是稳定代码，句子由界面出），不抛
+  ipcMain.handle(ipcChannels.pluginInstallFromRow, (_event, raw: unknown): Promise<PluginRowInstallResult> => {
+    const request = requireRecord(raw, "install-from-row request");
+    const scope = request["scope"];
+    if (scope !== "workspace" && scope !== "global") throw new Error("Invalid scope");
+    const checked: PluginRowInstallRequest = {
+      sessionId: requireString(request["sessionId"], "sessionId"),
+      path: requireString(request["path"], "path"),
+      scope,
+      fingerprint: requireString(request["fingerprint"], "fingerprint"),
+    };
+    return deps.agentRequests.installFromRow(checked);
+  });
+
+  // 看板：入参一律当不可信（renderer 被攻破时也不该能凭空读写别的插件 / 路径——这里只认插件名与工作区 id，
+  // 路径从不由 renderer 给）
+  const stampOf = (request: Record<string, unknown>): string | null =>
+    request["stamp"] === null || request["stamp"] === undefined ? null : requireString(request["stamp"], "stamp");
+
+  ipcMain.handle(ipcChannels.pluginBoardLoad, (_event, raw: unknown): Promise<PluginBoardSnapshot> => {
+    const request = requireRecord(raw, "board load request");
+    return panels.load({
+      name: requireString(request["name"], "name"),
+      workspaceId: optionalId(request["workspaceId"], "workspaceId"),
+      stamp: stampOf(request),
+    });
+  });
+
+  // 草稿预览：path 来自 renderer（它收到 agent 的 pluginDraft 事件后原样带来），当不可信——
+  // 这里只做形状校验，路径在不在该工作区根之内由 PluginPanels 判（词法 + realpath）
+  const draftRequest = (raw: unknown): PluginDraftLoadRequest => {
+    const request = requireRecord(raw, "draft load request");
+    const path = requireString(request["path"], "path");
+    if (path.length > 4096) throw new Error("Invalid path");
+    return { path, workspaceId: optionalId(request["workspaceId"], "workspaceId"), stamp: stampOf(request) };
+  };
+  ipcMain.handle(ipcChannels.pluginDraftLoad, (_event, raw: unknown): Promise<PluginDraftSnapshot> => panels.loadDraftView(draftRequest(raw)));
+  // 「正在做」列表：无入参，路径都是主进程自己扫出来的（realpath 后在工作区根内），renderer 给不了东西
+  ipcMain.handle(ipcChannels.pluginDrafts, (): Promise<PluginDraftEntry[]> => deps.listDrafts());
+  ipcMain.handle(ipcChannels.pluginDraftBoardLoad, (_event, raw: unknown): Promise<PluginBoardSnapshot> => panels.loadDraftBoard(draftRequest(raw)));
+
+  ipcMain.handle(ipcChannels.pluginPanelAction, (_event, raw: unknown): Promise<PluginPanelActionResult> => {
+    const request = requireRecord(raw, "panel action request");
+    // action 不是字符串也不抛：交给 checkPanelAction 回 invalid，调用方一律拿到数据而不是异常
+    const rawCard = request["card"];
+    let card: PluginBoardCardRef | undefined;
+    if (rawCard !== undefined && rawCard !== null) {
+      const ref = requireRecord(rawCard, "card");
+      if (typeof ref["index"] !== "number") throw new Error("Invalid card");
+      card = { id: requireString(ref["id"], "card.id"), index: ref["index"] };
+    }
+    return panels.action({ name: requireString(request["name"], "name"), action: request["action"] as string, payload: request["payload"], ...(card === undefined ? {} : { card }) });
+  });
+}
+
+function optionalId(value: unknown, what: string): string | null {
+  if (value === null || value === undefined) return null;
+  return requireString(value, what);
+}
+
+function requireRecord(value: unknown, what: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`Invalid ${what}`);
+  return value as Record<string, unknown>;
+}
+
+function requireString(value: unknown, what: string): string {
+  if (typeof value !== "string" || value === "") throw new Error(`Invalid ${what}`);
+  return value;
+}
+
+function requireConfigValue(value: unknown): PluginConfigValue {
+  if (typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (Array.isArray(value) && value.every((item): item is string => typeof item === "string")) return value;
+  throw new Error("Invalid config value");
+}
+
+function requirePreviewRequest(raw: unknown): PluginPreviewRequest {
+  const request = requireRecord(raw, "preview request");
+  const source = requireRecord(request["source"], "source");
+  const mode = request["mode"];
+  if (mode !== "copy" && mode !== "link") throw new Error("Invalid install mode");
+  let checked: PluginSource;
+  if (source["kind"] === "folder") checked = { kind: "folder", path: requireString(source["path"], "path") };
+  else if (source["kind"] === "git") checked = { kind: "git", url: requireString(source["url"], "url") };
+  else throw new Error("Invalid source");
+  return { source: checked, mode };
+}

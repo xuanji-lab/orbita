@@ -12,6 +12,7 @@ import {
   focusProgress,
   formatFocusClock,
   formatStartClock,
+  pickerRequestFresh,
   remainMs,
   resolvePickerWorkspace,
   wheelIndex,
@@ -34,7 +35,6 @@ import type { FocusStatus } from "./use-focus.ts";
  */
 export function FocusControl(props: {
   status: FocusStatus;
-  now: number;
   workspaces: readonly Workspace[];
   /** 默认选中的工作区（当前会话所在的那个）；null = 落第一个 */
   defaultWorkspaceId: string | null;
@@ -78,14 +78,34 @@ export function FocusControl(props: {
   const wheelRef = useRef<HTMLDivElement | null>(null);
   const [spot, setSpot] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
 
+  /**
+   * 秒针住在组件本地 state，只在 run 相位的 effect 里跳：倒计时 / 进度线每秒
+   * 只重画这一小块。原来 now 由 App 的 useFocus 每秒 setNow 透传下来，整棵
+   * App 每秒 commit 一次（`perf(focus)` 的根因）。status 换了（开始 / 延长）
+   * 重排一拍；离开 run（ending / done / off）时 interval 停掉、tickNow 冻住
+   * ——ending 的剩余量停在停表那一拍，与原来一致。
+   */
+  const [tickNow, setTickNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (props.status.kind !== "run") return;
+    setTickNow(Date.now());
+    const timer = window.setInterval(() => setTickNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [props.status]);
+
   const run = props.status.kind === "off" ? null : props.status.run;
   const wsName = (id: string | null): string =>
     (id !== null ? props.workspaces.find((w) => w.id === id)?.name : undefined) ?? t.focus.deletedWorkspace;
 
-  // 外部请求开浮层（token 变了才动，避免渲染期 setState 环）
+  // 外部请求开浮层（token 变了才动，避免渲染期 setState 环）；**消费高水位**：
+  // 同一遭请求只开一次——之后每一次回到 off（结束一轮、Esc 关掉再开一轮）
+  // 都不重弹（pickerRequestFresh，纯函数带测试）
+  const pickerConsumedRef = useRef(0);
   useEffect(() => {
     if (props.pickerRequest === null) return;
     if (props.status.kind !== "off") return;
+    if (!pickerRequestFresh(props.pickerRequest.token, pickerConsumedRef.current)) return;
+    pickerConsumedRef.current = props.pickerRequest.token;
     setWorkspaceId(props.pickerRequest.workspaceId);
     if (props.pickerRequest.minutes !== undefined) setMinutes(props.pickerRequest.minutes);
     setPop("picker");
@@ -170,7 +190,7 @@ export function FocusControl(props: {
     setPop(null);
   };
 
-  const remain = run === null ? 0 : remainMs(run, props.now);
+  const remain = run === null ? 0 : remainMs(run, tickNow);
   const done = props.status.kind === "done";
   // ending = 提前结束后的等待相位（B 半）：表停住等小结决定。延长在此相位本就是
   // no-op（use-focus 只认 run），浮层里也就不再摆延长键；出口只剩「结束专注」。「要」
@@ -294,7 +314,7 @@ export function FocusControl(props: {
           <span>{t.focus.startedAt(formatStartClock(run.startedAt))}</span>
         </div>
         <div className="focus-cm-track">
-          <i style={{ width: `${(focusProgress(run, props.now) * 100).toFixed(1)}%` }} />
+          <i style={{ width: `${(focusProgress(run, tickNow) * 100).toFixed(1)}%` }} />
         </div>
         {/* 时间到 / 已提前结束就没有延长一说，两个键收起；出口只剩「结束专注」 */}
         {done || ending ? null : (

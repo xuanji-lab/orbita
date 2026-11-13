@@ -1,19 +1,27 @@
-import type { Carryover, SessionMeta } from "@shared/session";
+import type { SessionMeta, TranscriptRecord } from "@shared/session";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载，@shared 别名
 // 只在构建期由 electron-vite 解析（同 stats-format.ts:13 的先例）
 import { rootSessions } from "../../../../shared/session.ts";
+import { withoutQuotes } from "../../../../shared/quote.ts";
+import type { SessionRunState } from "../notify/completion-notice.ts";
+import { planTimeline } from "../context/plan-timeline.ts";
+import { toolIndexOf } from "../context/task-progress.ts";
+import { flattenRenderUnits, groupToolUnits, groupTurnsByTurn, toolCallSummary, type TurnProcessUnit } from "./tool-results.ts";
+import { firstLine, processLive } from "./turn-process.ts";
 
 /**
  * 首页会话卡的选卡与行位规则（纯函数，ChatView 首页唯一消费者）。
  *
- * 规则（2026-09-22 拍板）：
- * - **候选与现状同一排除**：已归档、从未发过消息（无标题）的会话不进卡，
- *   即使它身上挂着 open 遗留事项——归档是用户明确说「别翻出来」。
- * - **有 open carryover 的会话优先占卡**，多条之间按列表序（前置条件见下），
- *   即 updatedAt 新→旧；剩余槽位按现状「最近活跃」规则补齐，总数仍是 3。
- * - **行位替换**：待办卡的行位从 recentQueries 换成遗留事项标题，一卡最多
- *   4 行；超过截断，**不做「等 N 项」**（用户明示「到时候再说」）。
- *   没有遗留的会话保持现状，行位吃 recentQueries（最多 3 条）。
+ * 规则：
+ * - **候选与现状同一排除**：已归档、从未发过消息（无标题）的会话不进卡——归档是用户明确说「别翻出来」。
+ * - **遗留事项不再让位**（2026-10-30 推翻 2026-09-22 的「有 open carryover 的会话优先占卡、行位换成遗留标题」）：
+ *   用户说遗留没人用、太多、占首页卡，界面要「信息呈现得更高效，而不是更多」。遗留 / 以后再做只在
+ *   那条任务的进度面板与侧栏的跨任务索引里，首页卡只讲「此刻在干什么」与最近提问。
+ *
+ * - **要你注意的先占卡**（2026-10-30，原型 `function home()`「只放需要你注意的三条：等你 >
+ *   出错 > 在跑 > 最近」）：给了 `stateOf` 时，等你 / 出错 / 在跑的会话先按这个顺序占卡，
+ *   其余照上面两轮补齐。卡上说的是「此刻在干什么」（homeCardLine），在跑的会话没上卡，
+ *   这一句就说不出来。
  *
  * 前置条件：`sessions` 已按 `sortSessions` 排序（ChatView 吃的
  * `session.sessions` 由主进程 `list()` 排好）。函数不再排一次——排法必须
@@ -26,18 +34,95 @@ import { rootSessions } from "../../../../shared/session.ts";
  * electron-vite 解析），其余仍是 type import。
  */
 
-/** 待办卡的行位上限（用户拍板：超过直接截断，不显示「等 N 项」） */
-export const HOME_CARD_CARRYOVER_ROWS = 4;
-
 /** 普通卡的行位上限（现状三槽，recentQueries 本身就最多 3 条） */
 export const HOME_CARD_QUERY_ROWS = 3;
 
 /** 首页卡总数（现状恒三） */
 const HOME_CARD_COUNT = 3;
 
-/** 卡内一行的数据：kind 决定渲染（遗留行带图标，提问行纯文本） */
+/** 要你注意的先占卡，按这个顺序（与铃铛清单、折叠组头的汇总同序，跑完没看算「最近」） */
+const ATTENTION_ORDER: readonly Exclude<SessionRunState, null>[] = ["waiting", "failed", "running"];
+
+/**
+ * 首页「记录」的三组上限（2026-11-07 方向 N：首页从三张等重的卡改成按状态分组的记录行）。
+ * 等你 / 进行中各留 4 行：多于此说明同时在跑的活已经超出一眼能读的量，再多只是堆；最近 5 行。
+ * 合计最多 13 行，一屏放得下（行高 32）。
+ */
+const HOME_LOG_LIMITS = { waiting: 4, running: 4, recent: 5 } as const;
+
+/** 首页记录的三个组：等你（含出错——它也在等你处置）> 进行中 > 最近（含跑完没看的） */
+export type HomeLogGroupId = keyof typeof HOME_LOG_LIMITS;
+
+/** 记录里的一行：只给会话 id 与标题，其余（状态 / 那一句 / 时间）由调用方按槽里的实况现算 */
+export interface HomeLogRow {
+  sessionId: string;
+  title: string;
+}
+
+export interface HomeLogGroup {
+  group: HomeLogGroupId;
+  rows: HomeLogRow[];
+}
+
+/**
+ * 首页记录的选行与分组（取代 selectHomeCards 在非纸面主题下的位置；纸面两档仍是三张卡，
+ * 它们的版式是田字格 / 打字稿的整套，不套 N）。
+ *
+ * 候选与卡同一排除（子会话、归档、无标题）。顺序沿用列表序（sortSessions：置顶优先 + 最近活跃）。
+ * 分组按运行态：waiting / failed → 「等你」，running → 「进行中」，其余（没在跑、跑完没看）→ 「最近」。
+ * 没有行的组不返回——空组只会在边栏里留一个无所指的组名。
+ */
+export function selectHomeLog(
+  sessions: readonly SessionMeta[],
+  stateOf: (meta: SessionMeta) => SessionRunState,
+): HomeLogGroup[] {
+  const eligible = rootSessions(sessions).filter((m) => !m.archived && m.title !== "");
+  const buckets: Record<HomeLogGroupId, HomeLogRow[]> = { waiting: [], running: [], recent: [] };
+  for (const meta of eligible) {
+    const state = stateOf(meta);
+    const group: HomeLogGroupId =
+      state === "waiting" || state === "failed" ? "waiting" : state === "running" ? "running" : "recent";
+    if (buckets[group].length >= HOME_LOG_LIMITS[group]) continue;
+    buckets[group].push({ sessionId: meta.id, title: meta.title });
+  }
+  return (["waiting", "running", "recent"] as const)
+    .filter((group) => buckets[group].length > 0)
+    .map((group) => ({ group, rows: buckets[group] }));
+}
+
+/**
+ * 一条提问里「用户看得见」的文字（2026-11-07 返工：首页记录行把「此刻在干什么」放在行中段最醒目的位置，
+ * 老会话的 recentQueries[0] 直接露出了系统提示原文，如 `<!-- 你正在通过 Proma 飞书桥…`）。
+ * 剥掉系统加的包装：成对标签块（<user_context>、<orbita-memory>、<referenced_task>…）、
+ * 自闭合标签、HTML 注释（没闭合的注释吞到结尾——它之后全是系统文字）、引用块（<quoted_context>）。
+ * 剥完压缩空白；空串由调用方换成「（没有文字）」，不把空行留成一个没有解释的空格。
+ */
+const WRAPPER_TAGS = [
+  "user_context",
+  "orbita-memory",
+  "referenced_task",
+  "attached-files",
+  "mentioned_tools",
+  "system-reminder",
+  "orbita-quotes",
+  "orbita-git-attribution",
+  "channel",
+] as const;
+const WRAPPER_BLOCK = new RegExp(`<(${WRAPPER_TAGS.join("|")})\\b[^>]*>[\\s\\S]*?</\\1>`, "g");
+const WRAPPER_SELF_CLOSING = new RegExp(`<(?:${WRAPPER_TAGS.join("|")})\\b[^>]*/>`, "g");
+
+export function visibleAsk(text: string): string {
+  return withoutQuotes(text)
+    .replace(WRAPPER_BLOCK, "")
+    .replace(WRAPPER_SELF_CLOSING, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<!--[\s\S]*$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** 卡内一行的数据：最近提问，纯文本 */
 export interface HomeCardRow {
-  kind: "carryover" | "query";
   text: string;
 }
 
@@ -45,68 +130,146 @@ export interface HomeCardRow {
 export interface HomeCard {
   sessionId: string;
   title: string;
-  /** 有 open carryover：行位显示遗留标题（恒 4 槽），否则显示 recentQueries（恒 3 槽） */
-  todo: boolean;
+  /** 行位吃 recentQueries（最多 3 条） */
   rows: HomeCardRow[];
 }
 
 /**
- * 按上述规则选出首页的 3 张卡。carryovers 是全量记录（engine 缓存），
- * 这里按 `sourceSessionId` 现算分组——会话卡不另建缓存，meta 不冗余计数。
+ * 按上述规则选出首页的 3 张卡。
  */
 export function selectHomeCards(
   sessions: readonly SessionMeta[],
-  carryovers: readonly Carryover[],
+  /** 会话运行态（runStateOf）；不给 = 不按运行态排（旧口径） */
+  stateOf?: (meta: SessionMeta) => SessionRunState,
 ): HomeCard[] {
-  // open 项按来源会话分组；组内保持 carryovers 存储序（创建序，与侧栏面板同序）
-  const openBySession = new Map<string, Carryover[]>();
-  for (const item of carryovers) {
-    if (item.status !== "open") continue;
-    const list = openBySession.get(item.sourceSessionId);
-    if (list === undefined) openBySession.set(item.sourceSessionId, [item]);
-    else list.push(item);
-  }
-
   // 候选与现状同一排除：子会话（子会话 PR4c 2.3）、归档、无标题。列表已按
   // sortSessions 排序，相对顺序即「置顶优先 + 最近活跃」，两个轮次直接按序扫
   const eligible = rootSessions(sessions).filter((m) => !m.archived && m.title !== "");
 
   const cards: HomeCard[] = [];
-  // 第一轮：有 open 遗留的会话优先占卡
-  for (const meta of eligible) {
-    if (cards.length >= HOME_CARD_COUNT) break;
-    const open = openBySession.get(meta.id);
-    if (open === undefined) continue;
-    cards.push(cardFor(meta, open));
+  const picked = new Set<string>();
+  const take = (meta: SessionMeta): void => {
+    cards.push(cardFor(meta));
+    picked.add(meta.id);
+  };
+  // 第零轮：要你注意的（等你 > 出错 > 在跑），同档内保持列表序
+  if (stateOf !== undefined) {
+    for (const want of ATTENTION_ORDER) {
+      for (const meta of eligible) {
+        if (cards.length >= HOME_CARD_COUNT) break;
+        if (!picked.has(meta.id) && stateOf(meta) === want) take(meta);
+      }
+    }
   }
-  // 第二轮：剩余槽位按现状「最近活跃」补齐
-  const picked = new Set(cards.map((card) => card.sessionId));
+  // 第一轮：剩余槽位按「最近活跃」补齐
   for (const meta of eligible) {
     if (cards.length >= HOME_CARD_COUNT) break;
     if (picked.has(meta.id)) continue;
-    cards.push(cardFor(meta, undefined));
+    take(meta);
   }
   return cards;
 }
 
-/** 一张卡的行位数据：待办卡吃遗留标题（截断到 4），普通卡吃 recentQueries（截断到 3） */
-function cardFor(meta: SessionMeta, open: readonly Carryover[] | undefined): HomeCard {
-  if (open === undefined) {
-    return {
-      sessionId: meta.id,
-      title: meta.title,
-      todo: false,
-      rows: meta.recentQueries
-        .slice(0, HOME_CARD_QUERY_ROWS)
-        .map((text): HomeCardRow => ({ kind: "query", text })),
-    };
-  }
+/** 一张卡的行位数据：recentQueries 截断到 3 */
+function cardFor(meta: SessionMeta): HomeCard {
   return {
     sessionId: meta.id,
     title: meta.title,
-    todo: true,
-    rows: open
-      .slice(0, HOME_CARD_CARRYOVER_ROWS)
-      .map((item): HomeCardRow => ({ kind: "carryover", text: item.title })),
+    rows: meta.recentQueries.slice(0, HOME_CARD_QUERY_ROWS).map((text): HomeCardRow => ({ text })),
   };
+}
+
+/** 卡上那一句要用到的文案（ChatView 从 t.homeCard / t.chat 拼好传进来；纯函数不碰语言表） */
+export interface HomeCardLineText {
+  thinking: string;
+  /** 计划里在做的那一步 + 此刻的一句 */
+  doing: (step: string, now: string) => string;
+  /** 挂着的审批：要做什么（动词 + 对象） */
+  approve: (what: string) => string;
+  childWaiting: string;
+  failed: string;
+  done: string;
+  /** 最近一次提问剥完系统包装后什么都没剩（整条是系统文字） */
+  noText: string;
+  /** 工具调用的动词（与过程行的计数词同一套：t.chat.rollupTool(rollupToolKey(...))） */
+  verb: (toolName: string, input: unknown) => string;
+  /** 工具调用的一句话（缺省 toolCallSummary）；读技能时写技能名而不是路径 */
+  summary?: (toolName: string, input: unknown) => string | null;
+}
+
+export interface HomeCardLineInput {
+  state: SessionRunState;
+  /** 这条会话槽里的记录（selectTranscript 的结果）；槽没载过 = null */
+  records: readonly TranscriptRecord[] | null;
+  /** 挂着的第一个工具审批；没有 = null */
+  approval: { toolName: string; input: unknown } | null;
+  turnError: string | null;
+  /** 最近一次提问（meta.recentQueries[0]） */
+  lastAsk: string | null;
+}
+
+/**
+ * 首页卡上「此刻在干什么」的那一句（2026-10-30，原型 `function home()`）。全从槽里现算，不另存：
+ *
+ * - 在跑：这一轮的当前章节（agent 刚说的话，没说话取最近一段思考）；没有章节就是正在跑的那个
+ *   工具（动词 + 对象），都没有是「在想」。有计划且有一步在做时，前面带上那一步：
+ *   「跑一遍检查：路径不对，换成 src」——计划说做到哪了，章节说此刻在干嘛。
+ * - 等你：挂着的那个审批要做什么；自己没有审批（是子会话在等）就说子会话在等你批准。
+ * - 出错：这一轮的错误原文第一行；槽没载过（重启后只剩未读标记）说「出错停下了」。
+ * - 跑完没看：最后一段正文的第一行（结果）；槽没载过说「跑完了」。
+ * - 没在跑：最近一次提问（只取用户看得见的文字，剥掉系统包装，见 visibleAsk）——这条任务最后在说什么。要写「agent 最后一句话」得读它的整份
+ *   记录（主进程全量读 + 折叠，百 MB 级会话也有）或在 meta 里另存一份，两样都不做。
+ *
+ * 返回 null = 什么都说不出来（老会话没有 recentQueries），卡上那一行留空。
+ */
+export function homeCardLine(input: HomeCardLineInput, text: HomeCardLineText): string | null {
+  const records = input.records;
+  if (input.state === "waiting") {
+    if (input.approval === null) return text.childWaiting;
+    const summary = toolCallSummary(input.approval.toolName, input.approval.input);
+    const verb = text.verb(input.approval.toolName, input.approval.input);
+    return text.approve(summary === null ? verb : `${verb} ${summary}`);
+  }
+  if (input.state === "failed") {
+    return (input.turnError === null ? null : firstLine(input.turnError)) ?? text.failed;
+  }
+  if (input.state === "running") {
+    if (records === null) return text.thinking;
+    const now = runningLine(lastTurn(records), text);
+    const step = planTimeline(records)?.current.items.find((item) => item.status === "in_progress")?.text ?? null;
+    return step === null || step === now ? now : text.doing(step, now);
+  }
+  if (input.state === "done") {
+    if (records === null) return text.done;
+    const answer = flattenRenderUnits(lastTurn(records)).filter((unit) => unit.kind === "text").at(-1);
+    return (answer?.kind === "text" ? firstLine(answer.text) : null) ?? text.done;
+  }
+  if (input.lastAsk === null || input.lastAsk.trim() === "") return null;
+  const ask = visibleAsk(input.lastAsk);
+  return ask === "" ? text.noText : ask;
+}
+
+/** 在跑那一轮的一句：当前章节 > 正在跑的工具 > 在想 */
+function runningLine(turn: readonly TranscriptRecord[], text: HomeCardLineText): string {
+  const results = toolIndexOf(turn);
+  const view = groupTurnsByTurn(groupToolUnits(flattenRenderUnits(turn)), true, results);
+  const unit = view.filter((entry): entry is TurnProcessUnit => entry.kind === "turnProcess").at(-1);
+  if (unit === undefined) return text.thinking;
+  const live = processLive(unit, results, () => null);
+  if (live.chapter !== null) return live.chapter.title;
+  if (live.now.kind === "tool") {
+    const { toolName, input } = live.now.call;
+    const summary = text.summary === undefined ? toolCallSummary(toolName, input) : text.summary(toolName, input);
+    const verb = text.verb(toolName, input);
+    return summary === null ? verb : `${verb} ${summary}`;
+  }
+  return text.thinking;
+}
+
+/** 最后一轮：最后一条用户消息起（含）；槽里还没有用户消息（只收到了事件）就是全部 */
+function lastTurn(records: readonly TranscriptRecord[]): readonly TranscriptRecord[] {
+  for (let i = records.length - 1; i >= 0; i--) {
+    if (records[i]?.role === "user") return records.slice(i);
+  }
+  return records;
 }

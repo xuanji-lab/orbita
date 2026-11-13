@@ -1,5 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { CLAUDE_CODE_VERSION } from "../shared/claude-code-version.ts";
 import { ccBillingPatch, isAnthropicOauthPayload, sanitizeSystemPrompt } from "./cc-billing-patch.ts";
 
 /** pi 0.84.3 给 OAuth 请求加的身份块（anthropic-messages.ts 的 OAuth 分支原文） */
@@ -48,7 +49,7 @@ describe("ccBillingPatch —— OAuth 请求的四件事", () => {
     const payload = oauthPayload();
     const patched = ccBillingPatch(payload) as { system: { type: string; text: string }[]; metadata: { user_id: string } };
     assert.ok(patched !== undefined);
-    assert.match(patched.system[0]!.text, /^x-anthropic-billing-header: cc_version=2\.1\.280\.000; cc_entrypoint=cli;$/);
+    assert.equal(patched.system[0]!.text, `x-anthropic-billing-header: cc_version=${CLAUDE_CODE_VERSION}.000; cc_entrypoint=cli;`);
     assert.ok(!patched.system.some((b) => b.text.includes("official CLI")));
     assert.ok(!patched.system.some((b) => b.text.includes("inside pi")));
     assert.ok(JSON.stringify(patched.metadata).includes("device_id"));

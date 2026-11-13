@@ -1,5 +1,6 @@
 import type { ImportMcpItem } from "@shared/import";
 import { Icon } from "../../shell/Icon";
+import { PanelEmpty } from "../../shell/PanelEmpty";
 import { isSelectableMcp, mcpOriginLabel, mcpStatusLabel } from "./migration-mcp.ts";
 import type { StepState } from "./migration-page.ts";
 import { Step, TipBadge, Tipped } from "./MigrationStep.tsx";
@@ -49,9 +50,10 @@ export function McpSection(props: {
           {t.migration.mcpCaption}
         </p>
       ) : items.length === 0 ? (
-        <div className="mg-block mg-empty">
-          <Icon name="circle-check" size={15} />
-          {t.migration.noMcpInSources}
+        <div className="mg-block">
+          <PanelEmpty icon="circle-check" className="mg-empty done">
+            {t.migration.noMcpInSources}
+          </PanelEmpty>
         </div>
       ) : (
         <div className="mg-block">

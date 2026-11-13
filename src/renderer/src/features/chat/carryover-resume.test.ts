@@ -17,6 +17,8 @@ const item = (patch: Partial<Carryover> = {}): Carryover => ({
   detail: "retry 耗尽后 session-guard 那一条没跑过",
   sourceSessionId: "s1",
   sourceMessageRange: null,
+  origin: "wrapup",
+  anchor: null,
   status: "open",
   createdAt: 0,
   doneAt: null,
@@ -112,5 +114,18 @@ describe("canResumeInSource（方案 B 可用性）", () => {
   test("来源已删 → 不可", () => {
     assert.equal(canResumeInSource(item(), [meta("other", "/x.jsonl")]), false);
     assert.equal(canResumeInSource(item(), []), false);
+  });
+});
+
+describe("buildCarryoverFollowUp：当场记下的「以后再做」", () => {
+  test("noticed：不说「收尾时留下的」，detail 是当时记下它时的理由，并要求写进计划", () => {
+    const text = buildCarryoverFollowUp(item({ origin: "noticed", title: "日期解析不一致", detail: "这次不动" }));
+    assert.ok(text.includes("日期解析不一致"));
+    assert.ok(text.includes("当时记下它时说：这次不动"));
+    assert.ok(!text.includes("收尾时留下"));
+    assert.ok(text.includes("加进计划"));
+  });
+  test("wrapup：口径不变", () => {
+    assert.ok(buildCarryoverFollowUp(item()).startsWith("继续处理这件收尾时留下的遗留事项"));
   });
 });

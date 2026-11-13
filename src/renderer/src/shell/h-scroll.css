@@ -1,0 +1,32 @@
+/*
+ * 横向滚动条的共用外观（h-scroll.ts 的 useHScroll 配套）：放不下横滚、滚动条藏起，
+ * 被裁的一侧用淡出提示（做法同工具栏溢出文字的 mask，toolbar.css）。
+ * 挂 class="h-scroll"，再按 hook 返回的 fade 设 data-fade-start / data-fade-end。
+ */
+.h-scroll {
+  /* 自己当 offsetParent：「滚进视野」按 offsetLeft 算，要的是相对这一条的位置 */
+  position: relative;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.h-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.h-scroll[data-fade-end] {
+  -webkit-mask-image: linear-gradient(90deg, var(--color-text-primary) calc(100% - var(--space-6)), transparent);
+  mask-image: linear-gradient(90deg, var(--color-text-primary) calc(100% - var(--space-6)), transparent);
+}
+
+.h-scroll[data-fade-start] {
+  -webkit-mask-image: linear-gradient(90deg, transparent, var(--color-text-primary) var(--space-6));
+  mask-image: linear-gradient(90deg, transparent, var(--color-text-primary) var(--space-6));
+}
+
+.h-scroll[data-fade-start][data-fade-end] {
+  -webkit-mask-image: linear-gradient(90deg, transparent, var(--color-text-primary) var(--space-6), var(--color-text-primary) calc(100% - var(--space-6)), transparent);
+  mask-image: linear-gradient(90deg, transparent, var(--color-text-primary) var(--space-6), var(--color-text-primary) calc(100% - var(--space-6)), transparent);
+}

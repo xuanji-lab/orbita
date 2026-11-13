@@ -25,6 +25,11 @@ export interface FileTreeState {
    * 点开副本时拿它当白名单 root；还没有会话 / 根清单没回来时为 null
    */
   attachmentsRoot: FileRoot | null;
+  /**
+   * 本会话 cite_pdf 核验过的 PDF（不进树的 cited 根，shared/files.ts）：每个文件一个根。
+   * PDF 引用跳转拿它当宿主——PDF 在会话看得到的目录之外也能原地打开
+   */
+  citedRoots: readonly FileRoot[];
   /** 第一读（手里还没有任何根）期间为 true */
   rootsLoading: boolean;
   /** roots 读失败的原因；失败时保留上一份根（D-3 同款：读失败 ≠ 空） */
@@ -65,6 +70,7 @@ export function useFileTree(
 ): FileTreeState {
   const [roots, setRoots] = useState<readonly FileRoot[]>([]);
   const [attachmentsRoot, setAttachmentsRoot] = useState<FileRoot | null>(null);
+  const [citedRoots, setCitedRoots] = useState<readonly FileRoot[]>([]);
   const [rootsLoading, setRootsLoading] = useState(true);
   const [rootsError, setRootsError] = useState<string | null>(null);
   const [dirs, setDirs] = useState<ReadonlyMap<string, readonly FileEntry[]>>(new Map());
@@ -122,11 +128,12 @@ export function useFileTree(
     setRootsError(null);
     try {
       // sessionId null（新任务没发首条消息）时主进程不出 session 根，面板不用再过滤
-      const { visible, attachments } = splitRoots(
+      const { visible, attachments, cited } = splitRoots(
         await api.files.roots({ sessionId, workspaceId, ...(extraWorkspaceId === null ? {} : { extraWorkspaceId }) }),
       );
       setRoots(visible);
       setAttachmentsRoot(attachments);
+      setCitedRoots(cited);
       // 每个在盘上的根默认展开第一层：直接拉根目录，缓存 / 在途去重
       for (const root of visible) {
         if (root.exists) void loadDir(root.path, root.path);
@@ -192,7 +199,7 @@ export function useFileTree(
     /** 一轮刷新；代次变了（会话 / 工作区换了）整轮作废 */
     const once = async (): Promise<void> => {
       try {
-        const { visible, attachments } = splitRoots(
+        const { visible, attachments, cited } = splitRoots(
           await api.files.roots({ sessionId, workspaceId, ...(extraWorkspaceId === null ? {} : { extraWorkspaceId }) }),
         );
         if (generationRef.current !== generation) return;
@@ -222,6 +229,7 @@ export function useFileTree(
         expandedRef.current = next.expanded;
         setRoots(visible);
         setAttachmentsRoot(attachments);
+        setCitedRoots(cited);
         setRootsError(null);
         setDirs(next.dirs);
         setExpanded(next.expanded);
@@ -266,6 +274,7 @@ export function useFileTree(
   return {
     roots,
     attachmentsRoot,
+    citedRoots,
     rootsLoading,
     rootsError,
     dirs,
@@ -278,10 +287,15 @@ export function useFileTree(
   };
 }
 
-/** fs:roots 的回执拆成「进树的根」与「只进白名单的附件根」 */
-function splitRoots(all: readonly FileRoot[]): { visible: FileRoot[]; attachments: FileRoot | null } {
+/** fs:roots 的回执拆成「进树的根」与「只进白名单的附件根 / 引用过的 PDF 根」 */
+function splitRoots(all: readonly FileRoot[]): {
+  visible: FileRoot[];
+  attachments: FileRoot | null;
+  cited: FileRoot[];
+} {
   return {
-    visible: all.filter((root) => root.kind !== "attachments"),
+    visible: all.filter((root) => root.kind !== "attachments" && root.kind !== "cited"),
     attachments: all.find((root) => root.kind === "attachments") ?? null,
+    cited: all.filter((root) => root.kind === "cited"),
   };
 }

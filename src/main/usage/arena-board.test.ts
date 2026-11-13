@@ -84,10 +84,11 @@ describe("boardEntriesFor：同 id × 同档只留一条", () => {
     assert.deepEqual(boardEntriesFor(rows, "glm-5.3-flash", "2026-10-23").map((e) => e.thinking), [null]);
   });
 
-  test("真实快照：deepseek-v4-pro 在六类里都只剩标了档的条目", () => {
+  test("真实快照：deepseek-v4-pro 在上榜的各类里都只剩标了档的条目", () => {
+    // 2026-11-12 的 revision 里 Arena 把它从 Agent 榜撤了，其余五类仍在（各有带档 / 不带档两行）
     for (const [category, board] of Object.entries(snapshot.categories)) {
       const entries = boardEntriesFor(board.rows as BoardRow[], "deepseek-v4-pro", board.publishDate);
-      assert.ok(entries.length > 0, category);
+      assert.equal(entries.length > 0, category !== "agent", category);
       assert.ok(entries.every((e) => e.thinking !== null), category);
     }
   });
@@ -120,12 +121,33 @@ describe("随应用分发的快照", () => {
     assert.equal(snapshot.categories.agent.unit, "net-improvement");
   });
 
-  test("真实快照里 Kimi K3.1 Pro 只在 WebDev 上（其余五类应列为未上榜）", () => {
+  test("真实快照里 Kimi K3.1 Pro 除数学外都上榜了，档是 max", () => {
     for (const [category, board] of Object.entries(snapshot.categories)) {
       const rows = board.rows as BoardRow[];
-      const hit = boardEntriesFor(rows, "kimi-k3.1-pro", board.publishDate).length > 0;
-      assert.equal(hit, category === "webdev", category);
+      const entries = boardEntriesFor(rows, "kimi-k3.1-pro", board.publishDate);
+      assert.equal(entries.length > 0, category !== "math", category);
+      assert.ok(entries.every((e) => e.thinking === "max"), category);
     }
+  });
+
+  test("真实快照：Claude Fable 5.2 在 Agent（Max）与 WebDev（xHigh）上对得到 claude-fable-5-2", () => {
+    const agent = snapshot.categories.agent;
+    const webdev = snapshot.categories.webdev;
+    assert.deepEqual(
+      boardEntriesFor(agent.rows as BoardRow[], "claude-fable-5-2", agent.publishDate).map((e) => e.thinking),
+      ["max"],
+    );
+    assert.deepEqual(
+      boardEntriesFor(webdev.rows as BoardRow[], "claude-fable-5-2", webdev.publishDate).map((e) => e.thinking),
+      ["xhigh"],
+    );
+  });
+
+  test("真实快照：MiniMax-M3.1-Flash 在 Agent 榜上对得到 minimax-m3.1-flash（榜单没标档）", () => {
+    const board = snapshot.categories.agent;
+    const entries = boardEntriesFor(board.rows as BoardRow[], "minimax-m3.1-flash", board.publishDate);
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0]?.thinking, null);
   });
 });
 

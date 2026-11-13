@@ -5,7 +5,7 @@
 import { editDiffEntries, parseDiffLines, type EditDiffRow } from "../chat/tool-results.ts";
 import { pathParts } from "../chat/path-parts.ts";
 import type { Messages } from "../../messages-en.ts";
-import type { ReviewList, ReviewSource } from "@shared/review";
+import type { ReviewDiff, ReviewList, ReviewSource } from "@shared/review";
 
 /**
  * unified diff（git 原样 / 主进程 diff 包产物）→ DiffBody 的条目：
@@ -53,6 +53,24 @@ export function reviewEmptyText(
     case "no-upstream":
       return t.review.emptyNoUpstream;
   }
+}
+
+/**
+ * 展开一个文件后，正文区不是 diff 时说什么。null = 有 diff 正文，交给 DiffBody。
+ * 顺序有讲究：拒绝 / 失败先说（以前它们和「二进制」共用 diff:null，被显示成二进制）；
+ * 「改动太大」其次（主进程没读盘没生成，面板换成说明 + 两个出口）；链接再次（面板不读
+ * 链接目标）；最后才是已还原 / 二进制。
+ */
+export type ReviewDiffNotice =
+  | { kind: "notice"; text: string; tone: "muted" | "danger" }
+  | { kind: "too-large"; exceeded: "bytes" | "lines" };
+
+export function reviewDiffNotice(diff: ReviewDiff, t: Messages): ReviewDiffNotice | null {
+  if (diff.error !== undefined) return { kind: "notice", text: t.review.diffError(diff.error.reason), tone: "danger" };
+  if (diff.tooLarge !== undefined) return { kind: "too-large", exceeded: diff.tooLarge.exceeded };
+  if (diff.symlink !== undefined) return { kind: "notice", text: t.review.symlinkTarget(diff.symlink), tone: "muted" };
+  if (diff.diff !== null) return null;
+  return { kind: "notice", text: diff.restored ? t.review.restoredEmpty : t.review.binary, tone: "muted" };
 }
 
 /** 空态 / 错误的标题（短句）；说明句见 reviewEmptyText。 */

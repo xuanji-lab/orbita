@@ -1,0 +1,106 @@
+<!doctype html>
+<!--
+  看板卡片对比 / 预览页（只在做的过程中用，定稿就删）。把它拷成 board/preview.html，旁边放：
+    sample-data.js   window.__SAMPLE__ = { …这张卡的样例数据… };
+    drafts.js        window.__DRAFTS__ = [{ "name": "审读单", "file": "today.html" }, { "name": "索引卡", "file": "drafts/b-index.html" }];
+  打开 preview.html?scheme=light 或 ?scheme=dark：每个方向两档尺寸（1x1 与 2x2），连宿主画的外框、
+  标题行（时间 · 插件名）一起模拟，并按宿主的约定下发 orbita:data（带 card / unit / theme）。
+  注意：外框与标题行只是这里模拟宿主用的；你的卡模板里不要画它们。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>看板卡片预览</title>
+<style>
+  body { margin: 0; padding: 16px 20px 28px; font: 13px/1.4 system-ui, -apple-system, "PingFang SC", sans-serif; background: #d9dadc; color: #202124; }
+  body[data-scheme="dark"] { background: #0b0b0b; color: #e5e5e5; }
+  .row { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
+  .col { display: grid; gap: 10px; flex: none; }
+  .col b { font-size: 14px; }
+  /* 模拟宿主：格子宽高比 10:9、外框圆角与裁切、卡外标题行（时间 · 插件名） */
+  .cell { display: grid; gap: 4px; }
+  .cell .cap { font-size: 11px; opacity: .55; }
+  .frame { border-radius: 10px; overflow: hidden; border: 1px solid rgba(128,128,128,.35); display: block; }
+  iframe { display: block; border: 0; }
+  .s11 .frame { width: 220px; height: 198px; }
+  .s22 .frame { width: 456px; height: 419px; }
+</style>
+<script src="sample-data.js"></script>
+<script src="drafts.js"></script>
+</head>
+<body>
+<div class="row" id="row"></div>
+<script>
+(function () {
+  var scheme = new URLSearchParams(location.search).get("scheme") === "dark" ? "dark" : "light";
+  document.body.setAttribute("data-scheme", scheme);
+  /* 取自 Orbita 设计系统的浅色（light）与玄（black）主题 */
+  var THEMES = {
+    light: { name: "light", scheme: "light", vars: {
+      "--color-text-primary": "#202124", "--color-text-secondary": "#5f6368", "--color-text-tertiary": "#8b8f94",
+      "--color-bg-panel": "#ffffff", "--color-bg-muted": "#eef0f2", "--color-chat-card-bg": "#fafafa",
+      "--color-border-subtle": "#e5e5df", "--color-border-default": "#dfdfd7", "--color-border-strong": "#d7d7cf",
+      "--color-accent": "#1d4ed8", "--color-accent-soft": "#e7eefd", "--color-accent-fg": "#ffffff",
+      "--color-success": "#1a7f37", "--color-warning": "#b7791f", "--color-danger": "#b42318", "--color-info": "#2563eb" } },
+    dark: { name: "black", scheme: "dark", vars: {
+      "--color-text-primary": "#e5e5e5", "--color-text-secondary": "#b8b8b8", "--color-text-tertiary": "#808080",
+      "--color-bg-panel": "#161616", "--color-bg-muted": "#202020", "--color-chat-card-bg": "#2c2c2e",
+      "--color-border-subtle": "rgba(255,255,255,0.08)", "--color-border-default": "rgba(255,255,255,0.1)", "--color-border-strong": "rgba(255,255,255,0.16)",
+      "--color-accent": "#d6c245", "--color-accent-soft": "rgba(214,194,69,0.08)", "--color-accent-fg": "#1b1a15",
+      "--color-success": "#56d364", "--color-warning": "#d4a72c", "--color-danger": "#ff7b72", "--color-info": "#52a8ff" } }
+  };
+  var COMMON = {
+    "--font-family-base": 'system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
+    "--font-family-mono": 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+    "--radius-sm": "6px", "--radius-md": "6px", "--radius-lg": "8px", "--radius-xl": "10px",
+    "--line-height-ui": "1.5", "--line-height-tight": "1.25"
+  };
+  var theme = JSON.parse(JSON.stringify(THEMES[scheme]));
+  Object.keys(COMMON).forEach(function (key) { theme.vars[key] = COMMON[key]; });
+
+  var SIZES = [
+    { size: "1x1", width: 220, height: 198 },
+    { size: "2x2", width: 456, height: 419 }
+  ];
+  var row = document.getElementById("row");
+  (window.__DRAFTS__ || []).forEach(function (draft) {
+    var col = document.createElement("div");
+    col.className = "col";
+    var title = document.createElement("b");
+    title.textContent = draft.name + " · " + scheme;
+    col.appendChild(title);
+    SIZES.forEach(function (unit) {
+      var cell = document.createElement("div");
+      cell.className = "cell s" + unit.size.replace("x", "");
+      var cap = document.createElement("div");
+      cap.className = "cap";
+      cap.textContent = unit.size + " · " + unit.width + "×" + unit.height;
+      var frame = document.createElement("div");
+      frame.className = "frame";
+      var iframe = document.createElement("iframe");
+      iframe.setAttribute("sandbox", "allow-scripts"); /* 与宿主一致：没有 allow-same-origin */
+      iframe.width = String(unit.width);
+      iframe.height = String(unit.height);
+      iframe.src = draft.file;
+      iframe.addEventListener("load", function () {
+        iframe.contentWindow.postMessage({
+          type: "orbita:data",
+          data: window.__SAMPLE__ || null,
+          state: window.__SAMPLE__ ? "ready" : "empty",
+          updatedAt: Date.now(),
+          card: { id: "preview", size: unit.size, index: 0 },
+          unit: { width: unit.width, height: unit.height },
+          theme: theme
+        }, "*");
+      });
+      frame.appendChild(iframe);
+      cell.appendChild(cap);
+      cell.appendChild(frame);
+      col.appendChild(cell);
+    });
+    row.appendChild(col);
+  });
+})();
+</script>
+</body>
+</html>

@@ -105,7 +105,9 @@ export function registerWrapupIpc(deps: {
       const drafts: CarryoverDraft[] = input.carryovers.filter((draft) => draft.title.trim() !== "");
       // 遗留事项先落：会话标了完成而清单丢了，比反过来更糟（再点完成还能重扫）
       await deps.carryovers.append(id, drafts);
-      const result = await deps.sessions.confirmWrapup(id, wrapup, drafts.length > 0 ? "done_with_todos" : "done");
+      // 「还有事」= 这次新记的，或这条任务里早已记下、确认时仍开着的以后再做（确认卡预填的就是它们，不再新记）
+      const stillOpen = (await deps.carryovers.list()).some((item) => item.sourceSessionId === id && item.status === "open");
+      const result = await deps.sessions.confirmWrapup(id, wrapup, drafts.length > 0 || stillOpen ? "done_with_todos" : "done");
       if (result === null) throw new Error(`session ${id} not found`);
       for (const carryoverId of result.resumed) await deps.carryovers.setStatus(carryoverId, "done");
       deps.onConfirmed?.(id, wrapup);

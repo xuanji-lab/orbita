@@ -11,6 +11,14 @@
  * 解析结果只随 text 变，MarkdownBlock 的 memo 仍然成立。
  *
  * 代码、行内代码、公式、已有链接里的不动：`[^c4k2]` 出现在代码里多半是在讲语法本身。
+ *
+ * **模型自己补了脚注定义的情形**（2026-11-08，会话 96d38d）：模型模仿 miyo 检索的
+ * 「Sources section」，在末尾给每个标记补一行 `[^c7b2]: 文件名, p. 1`。remark-gfm 对
+ * 有定义的标签改出 footnoteReference + footnoteDefinition，上面的文本切分永远看不到它，
+ * 点击变成「跳到页面底部的脚注」而不是打开 PDF。这里把标签形如引用编号的
+ * footnoteReference 还原成同一种引用链接（序号与文本路径共用同一张出场表），并删掉
+ * 对应的 footnoteDefinition（否则页脚多出一份重复的来源列表）。`[^1]`、`[^note]` 这类
+ * 人写的脚注不动。
  */
 import { CITATION_MARKER, citationsOfDetails, type PdfCitation } from "../../../../shared/pdf-quote.ts";
 
@@ -21,8 +29,14 @@ interface MdNode {
   type: string;
   value?: string;
   url?: string;
+  /** footnoteReference / footnoteDefinition 的标签（保留原大小写）与规范化标识 */
+  label?: string;
+  identifier?: string;
   children?: MdNode[];
 }
+
+/** 引用编号的标签形态：与 CITATION_MARKER 同一规则（c + 3 位小写字母 / 数字），整串匹配 */
+const CITATION_ID = /^c[a-z0-9]{3}$/;
 
 const SKIP = new Set(["link", "linkReference", "inlineCode", "code", "inlineMath", "math", "html"]);
 
@@ -37,6 +51,15 @@ function walk(node: MdNode, order: Map<string, number>): void {
   for (let i = 0; i < children.length; i += 1) {
     const child = children[i]!;
     if (SKIP.has(child.type)) continue;
+    if (child.type === "footnoteDefinition" && isCitationFootnote(child)) {
+      children.splice(i, 1);
+      i -= 1;
+      continue;
+    }
+    if (child.type === "footnoteReference" && isCitationFootnote(child)) {
+      children[i] = citationLink(child.label ?? child.identifier ?? "", order);
+      continue;
+    }
     if (child.type === "text" && typeof child.value === "string") {
       const parts = splitMarkers(child.value, order);
       if (parts !== null) {
@@ -49,20 +72,29 @@ function walk(node: MdNode, order: Map<string, number>): void {
   }
 }
 
+/** 脚注节点的标签是不是引用编号；用 label（原样）而非小写化的 identifier，`[^C7B2]` 不认 */
+function isCitationFootnote(node: MdNode): boolean {
+  return CITATION_ID.test(node.label ?? node.identifier ?? "");
+}
+
+/** 一个引用编号 → 链接节点；序号按本条消息内首次出场排，重复编号沿用 */
+function citationLink(id: string, order: Map<string, number>): MdNode {
+  let label = order.get(id);
+  if (label === undefined) {
+    label = order.size + 1;
+    order.set(id, label);
+  }
+  return { type: "link", url: `${CITE_HREF_PREFIX}${id}`, children: [{ type: "text", value: String(label) }] };
+}
+
 /** 一段文本切成 text / link 交替；没有标记回 null（不动原节点） */
 function splitMarkers(value: string, order: Map<string, number>): MdNode[] | null {
   const pattern = new RegExp(CITATION_MARKER.source, "g");
   const out: MdNode[] = [];
   let last = 0;
   for (let hit = pattern.exec(value); hit !== null; hit = pattern.exec(value)) {
-    const id = hit[1] ?? "";
     if (hit.index > last) out.push({ type: "text", value: value.slice(last, hit.index) });
-    let label = order.get(id);
-    if (label === undefined) {
-      label = order.size + 1;
-      order.set(id, label);
-    }
-    out.push({ type: "link", url: `${CITE_HREF_PREFIX}${id}`, children: [{ type: "text", value: String(label) }] });
+    out.push(citationLink(hit[1] ?? "", order));
     last = hit.index + hit[0].length;
   }
   if (out.length === 0) return null;
@@ -81,7 +113,7 @@ export function remarkCitationMarkers(): (tree: MdNode) => void {
 export function citationIdOfHref(href: string | undefined): string | null {
   if (href === undefined || !href.startsWith(CITE_HREF_PREFIX)) return null;
   const id = href.slice(CITE_HREF_PREFIX.length);
-  return /^c[a-z0-9]{3}$/.test(id) ? id : null;
+  return CITATION_ID.test(id) ? id : null;
 }
 
 /** 悬停提示：`p.3 · “原文…”`（设计系统：title 承载后半句，中点连接） */

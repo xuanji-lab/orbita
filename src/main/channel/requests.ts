@@ -32,7 +32,7 @@ import {
   type ChannelMessage,
 } from "../../shared/channel.ts";
 import { defaultThinkingLevel } from "../../shared/model-defaults.ts";
-import type { ProviderDto } from "../../shared/provider.ts";
+import { isProviderEnabled, type ProviderDto } from "../../shared/provider.ts";
 import { deriveSessionTitle, type SessionMeta } from "../../shared/session.ts";
 import type { AppSettings, ModelPair } from "../../shared/settings.ts";
 import { isThinkingLevel, type ThinkingLevel } from "../../shared/thinking.ts";
@@ -87,6 +87,7 @@ export type SubSessionModelResult =
  * requested 有值时：先看父的 provider 是否声明了这个模型 id（多半如此——模型
  * 通常只是换一个同 provider 下的型号），否则取第一个声明了它的 provider；
  * 两条都没有 → error，附全部可用模型 id（去重）方便模型改道重试。
+ * **只在开着的服务商里找**（服务商开关）：关着的既不会被点名选中，也不出现在可用清单里。
  */
 export function resolveSubSessionModel(input: {
   requested: string | undefined;
@@ -94,50 +95,50 @@ export function resolveSubSessionModel(input: {
   parent: { providerId: string; modelId: string };
   providers: readonly ProviderDto[];
 }): SubSessionModelResult {
+  // 关着的服务商哪里都不用（服务商开关）：先筛掉，下面所有查找只在开着的里找——
+  // 同名模型两家都声明、一关一开时自然只落到开着的那家；列「可用模型」也只列开着的
+  const active = input.providers.filter(isProviderEnabled);
+  const availableModels = (): string =>
+    [...new Set(active.flatMap((provider) => provider.models.declared.map((model) => model.id)))].join(", ");
   if (input.requested !== undefined) {
     const requestedId = input.requested;
-    const parentProvider = input.providers.find((provider) => provider.id === input.parent.providerId);
+    const parentProvider = active.find((provider) => provider.id === input.parent.providerId);
     if (parentProvider?.models.declared.some((model) => model.id === requestedId) === true) {
       return { ok: true, providerId: parentProvider.id, modelId: requestedId, source: "requested" };
     }
-    const owner = input.providers.find((provider) =>
-      provider.models.declared.some((model) => model.id === requestedId),
-    );
+    const owner = active.find((provider) => provider.models.declared.some((model) => model.id === requestedId));
     if (owner !== undefined) return { ok: true, providerId: owner.id, modelId: requestedId, source: "requested" };
-    const available = [
-      ...new Set(input.providers.flatMap((provider) => provider.models.declared.map((model) => model.id))),
-    ];
+    const available = availableModels();
     return {
       ok: false,
       error: `Model "${requestedId}" is not configured. Available models: ${
-        available.length > 0 ? available.join(", ") : "(none configured)"
+        available !== "" ? available : "(none configured)"
       }`,
     };
   }
   if (input.setting !== undefined) {
-    const provider = input.providers.find((candidate) => candidate.id === input.setting?.providerId);
+    const provider = active.find((candidate) => candidate.id === input.setting?.providerId);
     if (provider !== undefined) {
       return { ok: true, providerId: provider.id, modelId: input.setting.modelId, source: "setting" };
     }
-    // 易耗品处理，同 readChoreModel（agent/ipc.ts）：设置指的 provider 被删了不该
+    // 易耗品处理，同 readChoreModel（agent/ipc.ts）：设置指的 provider 被删了、或被关了，不该
     // 拦住派出，退回同父；但原因要落到 dev 终端，否则「为什么没用我设的模型」无从查起。
+    const closed = input.providers.some((candidate) => candidate.id === input.setting?.providerId);
     console.error(
-      `[main] 子会话默认模型 ${input.setting.providerId}/${input.setting.modelId} 的 provider 已删，退回同父`,
+      `[main] 子会话默认模型 ${input.setting.providerId}/${input.setting.modelId} 的 provider 已${closed ? "关闭" : "删"}，退回同父`,
     );
   }
-  // 同父的前提是父的 provider 还在注册表里。两种情况拿不到：导入的会话 meta 落的是
-  // 占位 provider（orbita:unassigned，导入与模型解耦），或父的 provider 已被删。
+  // 同父的前提是父的 provider 还在注册表里、且开着。三种情况拿不到：导入的会话 meta 落的是
+  // 占位 provider（orbita:unassigned，导入与模型解耦），或父的 provider 已被删，或被关了。
   // 不猜第一个可用模型——渠道选择不归我们替用户做（同导入不映射模型的裁决），
-  // 把可用模型列出来让 delegate 带上 modelId 重试。
-  const parentProvider = input.providers.find((provider) => provider.id === input.parent.providerId);
+  // 把可用模型（只列开着的）列出来让 delegate 带上 modelId 重试。
+  const parentProvider = active.find((provider) => provider.id === input.parent.providerId);
   if (parentProvider === undefined) {
-    const available = [
-      ...new Set(input.providers.flatMap((provider) => provider.models.declared.map((model) => model.id))),
-    ];
+    const available = availableModels();
     return {
       ok: false,
       error: `The parent session has no usable model assigned, so the sub-session cannot inherit one. Retry with an explicit modelId. Available models: ${
-        available.length > 0 ? available.join(", ") : "(none configured)"
+        available !== "" ? available : "(none configured)"
       }`,
     };
   }
@@ -239,7 +240,14 @@ export async function applyDelegate(
       modelId: resolved.modelId,
       mode: parent.mode,
       thinkingLevel,
-      text: composeChannelPrompt(taskMessage, { id: parent.id, title: parent.title }),
+      // 首条任务信封带上父会话工作台：子会话的重要产出要写到那里（角色指引说了落点
+      // 规矩，路径在这里给）。父的行已不进系统提示词，这个信封是子知道父工作台的
+      // 第一来源；后续每条 reply 信封也会重新带（压缩后仍能找回）。
+      text: composeChannelPrompt(taskMessage, {
+        id: parent.id,
+        title: parent.title,
+        workbench: deps.sessions.workbenchPath(parent.id),
+      }),
     });
   } catch (cause) {
     // 失败回滚：占位、子 meta、通道文件（remove 级联）都不该留下
@@ -250,7 +258,13 @@ export async function applyDelegate(
 
   // 不写父侧标记：父流里 delegate 工具的结果卡就是它的投影（下一刀的 renderer PR 画）。
   // 子侧的 task 标记由 recorder 在子首轮的 user item_started 出现时落（Commit C）。
-  deps.broadcast({ type: "message", parentId: parent.id, childId, message: taskMessage });
+  deps.broadcast({
+    type: "message",
+    parentId: parent.id,
+    childId,
+    message: taskMessage,
+    childWorkbench: deps.sessions.workbenchPath(childId),
+  });
   deps.broadcast({ type: "status", parentId: parent.id, childId, status: channelStatus([taskMessage]) });
 
   return {
@@ -446,7 +460,13 @@ export async function applyStop(deps: ChannelDeps, input: ChannelStopInput): Pro
 // ── 内部：投递给子 + 落账后的通用广播 ──
 
 async function broadcastAfterAppend(deps: ChannelDeps, key: ChannelKey, message: ChannelMessage): Promise<void> {
-  deps.broadcast({ type: "message", parentId: key.parentId, childId: key.childId, message });
+  deps.broadcast({
+    type: "message",
+    parentId: key.parentId,
+    childId: key.childId,
+    message,
+    childWorkbench: deps.sessions.workbenchPath(key.childId),
+  });
   deps.broadcast({
     type: "status",
     parentId: key.parentId,
@@ -468,7 +488,12 @@ async function deliverToChild(
   parent: SessionMeta,
   message: ChannelMessage,
 ): Promise<void> {
-  const text = composeChannelPrompt(message, { id: parent.id, title: parent.title });
+  // 每条父→子信封都重新带父工作台：就算首条任务被压缩掉，路径也会随 reply 回来
+  const text = composeChannelPrompt(message, {
+    id: parent.id,
+    title: parent.title,
+    workbench: deps.sessions.workbenchPath(parent.id),
+  });
   const phase = deps.phases.get(child.id);
   if (phase !== undefined && phase !== "idle") {
     deps.steer(child.id, text, message.delivery);

@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { Icon } from "./Icon";
+import { DrawerCap } from "./DrawerCap";
+import { PanelEmpty } from "./PanelEmpty";
 import { relativeTime } from "./relative-time.ts";
 import { PanelFilter, PanelHelp, PanelIconButton, PanelTitle, RightPanelFrame } from "./RightPanel";
 import { ChatView } from "../features/chat/ChatView";
@@ -8,10 +10,14 @@ import { rootSessions, type SessionMeta } from "@shared/session";
 import type { ModelPair } from "@shared/settings";
 import {
   NEW_TASK_TAB,
+  adoptNewTab,
   closeTab,
   dockTab,
   neighborTab,
+  otherTabs,
   replaceNewTab,
+  tabLabel,
+  tabShortId,
   type DockedTab,
 } from "./drawer-state";
 import { useT } from "../locale.ts";
@@ -22,7 +28,7 @@ export type { DockedTab };
  * 辅助对话 —— 右侧面板壳的三种内容之一（right-drawer-X，2026-09-13 并入统一壳）。
  *
  * 宽度、竖线分界与开合动画都在壳（RightPanelSlot）上；这里只出内容：
- * 标签条多开、单关 + 会话视图。
+ * 标签多开、单关 + 会话视图；标签与会话名都在顶部右栏胶囊里（DrawerCap），面板内只有对话。
  *
  * 内容 = 辅助对话，即**一个普通 task 的并排视图**（Q2 裁决）：渲染的就是主会话
  * 同一个 ChatView，不存在第二套 UI。空态直接是 task 选择器（2026-09-21 方案 A）：
@@ -54,6 +60,7 @@ export function Drawer(props: {
   const t = useT();
   const [activeTab, setActiveTab] = useState<DockedTab | null>(props.focus?.tab ?? props.docked[0] ?? null);
   const [picking, setPicking] = useState(false);
+  const [lastLeft, setLastLeft] = useState<DockedTab | null>(null);
 
   useEffect(() => {
     if (props.focus === null) return;
@@ -64,14 +71,27 @@ export function Drawer(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.focus?.token]);
 
-  // 新任务发出第一句话、拿到真 id：把 "new" 占位换成它，激活跟随
+  // 新任务发出第一句话、拿到真 id：它成为一个真标签，激活跟随。
+  // 判据是「正激活着新任务页」，不是「docked 里有 new 占位」——占位从来不落盘，App 存进
+  // docked 的列表里压根没有它（onDockedChange 把它滤掉了），按占位判的话这一步永远不触发，
+  // 新任务发完首句会一直挂着「新任务」没有 id、完成键与改名（顶部胶囊拿不到会话信息）。
   useEffect(() => {
     const id = props.view.sessionId;
-    if (id === null || !props.docked.includes(NEW_TASK_TAB)) return;
-    props.onDockedChange(replaceNewTab(props.docked, id));
+    if (id === null || activeTab !== NEW_TASK_TAB) return;
+    props.onDockedChange(adoptNewTab(props.docked, id));
     setActiveTab(id);
     // 只在「从无到有拿到 id」这一刻需要跑
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.view.sessionId]);
+
+  // 标签晚于面板到位（设置异步载入）时，activeTab 初值是 null、docked 随后才有内容：
+  // 过去标签条一直在，用户点一下就进去了；现在标签住胶囊、选择器态胶囊里没有它们，
+  // 不补这一步就会困在选择器里。空态（真的没有标签）不受影响——docked 为空这条不触发
+  useEffect(() => {
+    if (activeTab === null && props.docked.length > 0) setActiveTab(props.docked[0] ?? null);
+    // 只在标签「从无到有」时需要
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.docked.length]);
 
   /** 把某条 task 开进抽屉（切换 / 恢复共用）。已在本槽就不再重开。 */
   const openInDrawer = (id: string): void => {
@@ -80,8 +100,16 @@ export function Drawer(props: {
   };
 
   const activate = (tab: DockedTab): void => {
+    // 记下刚被换下去的那条：它掉进胶囊右段，要把它滚进视野（DrawerCap.revealTab）
+    if (activeTab !== null && activeTab !== tab) setLastLeft(activeTab);
     setActiveTab(tab);
-    if (tab !== NEW_TASK_TAB) openInDrawer(tab);
+    if (tab === NEW_TASK_TAB) {
+      // 新任务页 = 抽屉槽回首页（槽里原来开着的会话在它自己的槽里照跑，不受影响）。
+      // 不重置的话槽还停在上一条会话，标题写「新任务」、下面却是旧对话，首句还会接在旧会话后面
+      props.view.newTask();
+    } else {
+      openInDrawer(tab);
+    }
   };
 
   const dock = (tab: DockedTab): void => {
@@ -111,73 +139,75 @@ export function Drawer(props: {
   }, [activeTab]);
 
   // 新任务标签在抽屉视图里就是首页（干净的新 task）；切走再切回来也还是干净的
-  const hasTabs = props.docked.length > 0;
   // 没有标签 = 空态，直接出选择器；picking 只服务于「已有标签时点 + 再开一个」
   const showPicker = picking || activeTab === null;
 
+  // 页头住顶部右栏胶囊（DrawerCap）：左段是激活的会话，右段是其它标签 + 「+」。
+  // 激活的是落盘会话时，完成键 / 收尾仪式作用在抽屉槽正开着的那条——标签刚切换、槽还没
+  // 换过来的那一帧不摆完成键，免得把「完成」点到上一条会话头上
+  const realTab = activeTab !== null && activeTab !== NEW_TASK_TAB ? activeTab : null;
+  const activeMeta = realTab === null ? null : findMeta(props.engine, realTab);
+  const viewOpenId = props.view.sessionId ?? props.view.opened?.id ?? null;
+  const cap =
+    activeTab === null || showPicker ? null : (
+      <DrawerCap
+        active={{
+          title: tabLabel(activeTab, activeMeta?.title ?? null, t.common.newTask),
+          shortId: tabShortId(activeTab),
+          onRename: realTab === null ? undefined : (title) => props.view.renameSession(realTab, title),
+          completion:
+            realTab !== null && viewOpenId === realTab
+              ? {
+                  state: activeMeta?.completion ?? "open",
+                  closing: props.view.closingScan,
+                  busy: props.view.phase !== "idle",
+                  scanless: activeMeta?.piSessionFile == null,
+                  onMark: props.view.startClosingRitual,
+                  onSet: (next) => props.view.setCompletionSession(realTab, next),
+                }
+              : null,
+        }}
+        others={otherTabs(props.docked, activeTab).map((tab) => ({
+          tab,
+          label: tabLabel(tab, tab === NEW_TASK_TAB ? null : (findMeta(props.engine, tab)?.title ?? null), t.common.newTask),
+        }))}
+        revealTab={lastLeft !== null && props.docked.includes(lastLeft) ? lastLeft : null}
+        onActivate={activate}
+        onClose={close}
+        onCloseActive={() => close(activeTab)}
+        onAdd={() => setPicking(true)}
+      />
+    );
+
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", minWidth: 0 }}>
-      {hasTabs && (
-          <div className="drawer-tabs">
-            <div className="drawer-tablist">
-              {props.docked.map((tab) => {
-                const meta = tab === NEW_TASK_TAB ? null : findMeta(props.engine, tab);
-                const title =
-                  tab === NEW_TASK_TAB
-                    ? t.common.newTask
-                    : (meta?.title ?? tab.slice(0, 6) + "…");
-                return (
-                  <button
-                    key={tab}
-                    className={`drawer-tab${activeTab === tab ? " on" : ""}`}
-                    onClick={() => activate(tab)}
-                  >
-                    <Icon name="message-square" size={13} />
-                    <span className="drawer-tab-name">{title}</span>
-                    <span
-                      className="drawer-tab-close"
-                      title={t.drawer.closeTab}
-                      onClick={(click) => {
-                        click.stopPropagation();
-                        close(tab);
-                      }}
-                    >
-                      <Icon name="x" size={11} />
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-            <button className="drawer-tab-add" title={t.drawer.newTab} onClick={() => setPicking(true)}>
-              <Icon name="plus" size={14} />
-            </button>
-          </div>
+      {cap}
+      <div className="drawer-body">
+        {showPicker ? (
+          <Picker
+            sessions={props.engine.sessions}
+            excludeId={props.mainSessionId}
+            onPick={(id) => dock(id)}
+            onNew={() => dock(NEW_TASK_TAB)}
+            // 空态时没有「回」的地方（身后无标签），返回键就不渲染
+            onBack={activeTab === null ? null : () => setPicking(false)}
+          />
+        ) : (
+          // 辅助对话 = 主会话同一个 ChatView：标题头、消息列、输入卡全部同构（Q5/v9）。
+          // 还没发过首条消息的新任务用极简首页——欢迎界面是主会话的仪式（wafo 2026-09-12）
+          <ChatView
+            session={props.view}
+            providersError={props.providersError}
+            starredModels={props.starredModels}
+            onToggleStarModel={props.onToggleStarModel}
+            onOpenProviders={props.onOpenProviders}
+            homeBare={activeTab === NEW_TASK_TAB && props.view.sessionId === null}
+            // 会话信息住顶部胶囊（DrawerCap），卡内不再有标题行；对话从面板顶上开始
+            bareHeader
+            scrollToEnd
+          />
         )}
-
-        <div className="drawer-body">
-          {showPicker ? (
-            <Picker
-              sessions={props.engine.sessions}
-              excludeId={props.mainSessionId}
-              onPick={(id) => dock(id)}
-              onNew={() => dock(NEW_TASK_TAB)}
-              // 空态时没有「回」的地方（身后无标签），返回键就不渲染
-              onBack={activeTab === null ? null : () => setPicking(false)}
-            />
-          ) : (
-            // 辅助对话 = 主会话同一个 ChatView：标题头、消息列、输入卡全部同构（Q5/v9）。
-            // 还没发过首条消息的新任务用极简首页——欢迎界面是主会话的仪式（wafo 2026-09-12）
-            <ChatView
-              session={props.view}
-              providersError={props.providersError}
-              starredModels={props.starredModels}
-              onToggleStarModel={props.onToggleStarModel}
-              onOpenProviders={props.onOpenProviders}
-              homeBare={activeTab === NEW_TASK_TAB && props.view.sessionId === null}
-              scrollToEnd
-            />
-          )}
-        </div>
+      </div>
     </div>
   );
 }
@@ -245,9 +275,9 @@ function Picker(props: {
             <span className="drawer-pickrow-meta row-trailing">{relativeTime(meta.updatedAt, t)}</span>
           </button>
         ))}
-        {candidates.length === 0 && <p className="panel-empty">{t.drawer.noOther}</p>}
+        {candidates.length === 0 && <PanelEmpty icon="message-square">{t.drawer.noOther}</PanelEmpty>}
         {candidates.length > 0 && shown.length === 0 && (
-          <p className="panel-empty">{t.skills.noMatch(query.trim())}</p>
+          <PanelEmpty icon="search">{t.drawer.noMatch(query.trim())}</PanelEmpty>
         )}
       </div>
     </RightPanelFrame>

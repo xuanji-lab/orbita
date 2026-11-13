@@ -238,7 +238,8 @@ async function navigate(
  */
 /**
  * 打开本会话目录里的本地网页（agent 写的 HTML 预览）。白名单与判定在 local-file.ts；
- * 这里只加载并报结果。file:// 页面照样在隔离 partition 里、照样无 preload。
+ * 这里只加载并报结果。file:// 页面照样在隔离 partition 里、照样无 preload；页面打开之后能读的
+ * 本地范围就是这几个会话目录（记到 tab.localRoots，页面闸按它判）。
  */
 async function openLocalPage(
   tab: BrowserTab,
@@ -248,6 +249,8 @@ async function openLocalPage(
 ): Promise<BrowserToolOutcome> {
   const resolved = await resolveLocalPage(input, roots);
   if (!resolved.ok) return { ok: false, error: resolved.error };
+  // 先记放行根再加载：页面闸对主框架本身也生效
+  tab.localRoots = roots;
   const url = pathToFileURL(resolved.path).href;
   const outcome = await loadWithin(contents, url, NAVIGATE_TIMEOUT_MS);
   if (outcome.kind === "failed") return { ok: false, error: `Could not open ${resolved.path}: ${outcome.reason}` };

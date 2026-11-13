@@ -1,5 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { CLAUDE_CODE_VERSION } from "../../shared/claude-code-version.ts";
 import {
   anthropicOauthHeaders,
   buildAuthorizeUrl,
@@ -149,7 +150,7 @@ describe("oauth 请求头的口径（探测与 agent 侧 pi 的真会话身份�
     assert.match(headers["anthropic-beta"] ?? "", /oauth-2025-04-20/);
     assert.match(headers["anthropic-beta"] ?? "", /claude-code-20250219/);
     assert.equal(headers["x-app"], "cli");
-    assert.match(headers["user-agent"] ?? "", /^claude-cli\//);
+    assert.equal(headers["user-agent"], `claude-cli/${CLAUDE_CODE_VERSION}`);
     assert.equal(headers["anthropic-dangerous-direct-browser-access"], "true");
     assert.equal("x-api-key" in headers, false);
   });

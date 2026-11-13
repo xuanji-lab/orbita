@@ -15,11 +15,16 @@ import { Component, memo, useMemo, useContext } from "react";
 import type { Components } from "react-markdown";
 import type { PluggableList } from "unified";
 import { MdPre } from "./CodeBlock";
+import { MermaidPendingContext } from "./MermaidBlock.tsx";
+import { endsInsideFence } from "./mermaid-render.ts";
 import { remarkDemoteBoundaryMath } from "./math-guard";
 import { rehypePluginsFor, streamRenderPolicy } from "./stream-render.ts";
 import { splitMarkdownBlocks } from "./markdown-blocks.ts";
 import { CITATION_MARKER } from "../../../../shared/pdf-quote.ts";
 import { Icon } from "../../shell/Icon";
+import { chipIconName, type ChipKind } from "../../shell/composer-chips.ts";
+import { pluginChipName } from "../plugins/plugin-names.ts";
+import { usePluginNames } from "../plugins/usePluginNames.ts";
 import { dominantScript } from "./dominant-script";
 import { useT } from "../../locale.ts";
 import { useExperimentalFeature } from "../../experimental.ts";
@@ -74,17 +79,21 @@ const MarkdownChunk = memo(function MarkdownChunk(props: {
   /** bubble 变体摊平的标题元素（全量变体传 undefined） */
   disallowedElements?: string[];
   unwrapDisallowed?: boolean;
+  /** 流式尾块且围栏还没闭合：块里的 mermaid 先不画（MermaidBlock） */
+  fenceOpen: boolean;
 }) {
   return (
-    <ReactMarkdown
-      remarkPlugins={props.remarkPlugins}
-      rehypePlugins={props.rehypePlugins}
-      components={props.components}
-      disallowedElements={props.disallowedElements}
-      unwrapDisallowed={props.unwrapDisallowed}
-    >
-      {props.text}
-    </ReactMarkdown>
+    <MermaidPendingContext.Provider value={props.fenceOpen}>
+      <ReactMarkdown
+        remarkPlugins={props.remarkPlugins}
+        rehypePlugins={props.rehypePlugins}
+        components={props.components}
+        disallowedElements={props.disallowedElements}
+        unwrapDisallowed={props.unwrapDisallowed}
+      >
+        {props.text}
+      </ReactMarkdown>
+    </MermaidPendingContext.Provider>
   );
 });
 
@@ -177,6 +186,7 @@ export const MarkdownBlock = memo(function MarkdownBlock({
               components={cheap ? plainComponents : highlightComponents}
               disallowedElements={bubble ? BUBBLE_BANNED : undefined}
               unwrapDisallowed={bubble}
+              fenceOpen={cheap && endsInsideFence(block)}
             />
           );
         })}
@@ -307,11 +317,16 @@ type AnchorProps = ComponentPropsWithoutRef<"a"> & { node?: unknown };
 /**
  * 气泡里的句中 chip：chip-runs.ts 的 rehype 变换把 token 塞进
  * `<span class="bubble-chip bubble-chip-<kind>">token</span>`（skill / mcp 同构），
- * react-markdown 把它交到这里换成图标 + 名字的胶囊。图标随 kind：skill 是
- * book-open，mcp 是 plug（与右栏 Skills / MCP 面板同一套词汇）。其余 span（sanitize 白名单
+ * react-markdown 把它交到这里换成图标 + 名字的胶囊。图标随 kind（chipIconName）：技能书、
+ * MCP 插头、插件积木；插件 chip 写显示名（中文），其余写 token 里的名字。其余 span（sanitize 白名单
  * 幸存的）原样放行。chip 元素里只有一个文本子节点（chip-runs.ts 放进去的），
  * String(children) 拿到的就是 token 原文。
  */
+/** 插件 chip 的名字：显示名（订阅在这个小组件里，KaTeX 一类的几百个 span 不订阅） */
+function PluginChipName(props: { target: string }) {
+  return <>{pluginChipName(usePluginNames(), props.target)}</>;
+}
+
 function ChipSpan(props: ComponentPropsWithoutRef<"span"> & { node?: unknown }) {
   const { className, children, node: _node, ...rest } = props;
   const classes = Array.isArray(className) ? className : typeof className === "string" ? className.split(/\s+/).filter(Boolean) : [];
@@ -325,11 +340,12 @@ function ChipSpan(props: ComponentPropsWithoutRef<"span"> & { node?: unknown }) 
     );
   }
   const token = String(children);
-  const mcp = token.startsWith("/mcp:");
+  const kind: ChipKind = token.startsWith("/mcp:") ? "mcp" : token.startsWith("/plugin:") ? "plugin" : "skill";
+  const target = token.replace(/^\/(?:skill|mcp|plugin):/, "");
   return (
     <span className={classes.join(" ")} title={token}>
-      <Icon name={mcp ? "plug" : "book-open"} size={12} strokeWidth={1.8} className="bubble-chip-icon" />
-      <span className="bubble-chip-target">{token.replace(/^\/(?:skill|mcp):/, "")}</span>
+      <Icon name={chipIconName(kind)} size={12} strokeWidth={1.8} className="bubble-chip-icon" />
+      <span className="bubble-chip-target">{kind === "plugin" ? <PluginChipName target={target} /> : target}</span>
     </span>
   );
 }

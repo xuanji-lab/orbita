@@ -234,6 +234,51 @@ describe("design-tokens —— var(--x) 引用都要有声明", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 反向检查：设计系统声明的 token 都得有人用
+// ---------------------------------------------------------------------------
+
+/**
+ * `design-system/tokens/*.css` 里声明了、却没有任何地方引用的 token 是**假陈述**：
+ * 它告诉读的人「这里有这么一个语义」，而渲染层从没按它画过（2026-10-29 清出 26 个——
+ * `--surface-*` / `--text-*` / `--action-*` 一整组别名、只剩名字的 `--toolbar-inset`、
+ * 没人用的 `--shadow-drawer` 等）。消费者纪律（AGENTS.md）落到 token 上就是这一条。
+ *
+ * 引用算：任何 `var(--x)`（tokens 自己、渲染层 css、ts/tsx），以及 ts/tsx 里以字符串出现的
+ * `"--x"`（`getPropertyValue` / `setProperty` / style 对象键）。
+ *
+ * 豁免（加条目必须写清理由）：
+ */
+const UNUSED_TOKEN_EXEMPTIONS = new Map<string, string>([
+  ["list-item-default", "行高刻度 32 / 36 / 48 的中间一档，刻度完整比按现用量裁剪更好读"],
+  ["glass-alpha", "玻璃阶梯的那个 alpha 数本身；--glass-bg 用字面量写出同一个值，readme *Transparency* 引它"],
+  ["color-text-on-dark", "readme *Caveats* 指定的契约：永远压在深色地上的字（遮罩 / toast）用它"],
+  ["color-info-fg", "实底状态面自带前景色的契约（与 danger-fg / accent-fg 成组），readme *Colour* 引它"],
+]);
+
+const TS_STRING_TOKEN_RE = /["'`]--([a-zA-Z0-9-]+)["'`]/g;
+
+describe("design-tokens —— 设计系统声明的 token 都有引用", () => {
+  test("tokens/*.css 里没有声明了却没人用的 token", () => {
+    const referenced = new Set<string>(allRefs.map((u) => u.name));
+    for (const file of rendererTsFiles) {
+      for (const m of readClean(file, true).matchAll(TS_STRING_TOKEN_RE)) referenced.add(group1(m));
+    }
+    const unused: string[] = [];
+    for (const file of tokenCssFiles) {
+      const lines = readClean(file, false).split("\n");
+      lines.forEach((line, i) => {
+        for (const m of line.matchAll(DECL_CSS_RE)) {
+          const name = group1(m);
+          if (referenced.has(name) || UNUSED_TOKEN_EXEMPTIONS.has(name)) continue;
+          unused.push(`  --${name}  ${relPath(file)}:${i + 1}`);
+        }
+      });
+    }
+    assert.deepEqual(unused, [], `以下 token 声明了但没有任何引用（删掉，或在豁免表写清理由）：\n${unused.join("\n")}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 字号检查：渲染层只按角色取档，不写像素
 // ---------------------------------------------------------------------------
 
@@ -366,5 +411,118 @@ describe("型号头像：每个文件都在 model-avatars/NOTICE 里登记", () 
     assert.ok(files.length > 0, "没找到头像文件");
     const missing = files.filter((name) => !listed.has(name));
     assert.deepEqual(missing, [], `这些头像没有在 NOTICE 里登记：${missing.join(", ")}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 放线：间距走刻度、z 轴走层
+// ---------------------------------------------------------------------------
+
+/**
+ * 间距（padding / margin / gap 一族）只取 `--space-*`：4px 刻度 + 2 / 6 / 10 三个半档
+ * （`tokens/spacing.css`）。2026-10-29 机械迁移了 374 处等值裸 px，像素一处没变。
+ *
+ * - **刻度上的值不许裸写**：`8px` 就写 `var(--space-2)`，直接报错。
+ * - **刻度外的值（3 / 5 / 7 / 9 / 11px…）按文件数着、只许减不许加**：它们是「没站齐」的
+ *   来源，但改一个就动一处像素，要逐处对着截图收——不能在迁移里顺手改。修掉几处就把
+ *   下表对应的数改小（改小也会让本测试失败，提醒你把账记上）；新文件不许出现。
+ * - `0` / `1px` 不算：1px 是发丝补偿（让出边框那一像素）。
+ * - 只查 css；ts/tsx 里 inline style 的间距暂不在这条检查里。
+ */
+const SPACE_DECL_RE =
+  /(?<![-\w])((?:padding|margin|scroll-padding|scroll-margin)(?:-(?:top|right|bottom|left|inline|block)(?:-(?:start|end))?)?|gap|row-gap|column-gap)\s*:\s*([^;{}\n]*)/g;
+const SPACE_PX_RE = /(?<![\w.-])-?(\d+(?:\.\d+)?)px\b/g;
+const ON_SCALE_PX = new Set(["2", "4", "6", "8", "10", "12", "16", "20", "24", "32"]);
+const OFF_SCALE_SPACING_BUDGET = new Map<string, number>([
+  ["src/renderer/src/browser-toolbar/browser-toolbar.css", 1],
+  ["src/renderer/src/features/context/context-panel.css", 2], // #375 合入时带来，未收
+  ["src/renderer/src/features/memory/memory.css", 1], // #374 合入时带来，未收
+  ["src/renderer/src/features/plugins/plugins.css", 6], // 插件页与面板（#416–#418），体验合并包里记账，合 main 时随这几个 PR 收
+  ["src/renderer/src/features/settings/card-wall.css", 2], // 从 providers-view.css 搬出的卡片墙（#416），原值照搬
+  ["src/renderer/src/features/review/excerpts-tab.css", 3],
+  ["src/renderer/src/features/settings/info-tip.css", 1],
+  ["src/renderer/src/features/settings/migration-view.css", 10],
+  ["src/renderer/src/features/settings/price-chart.css", 7],
+  ["src/renderer/src/features/settings/providers-view.css", 6],
+  ["src/renderer/src/features/settings/settings-view.css", 5],
+  ["src/renderer/src/features/settings/update-view.css", 1],
+  ["src/renderer/src/paper-themes.css", 2],
+  ["src/renderer/src/shell/focus/focus.css", 8],
+  ["src/renderer/src/shell/toolbar.css", 2],
+  ["src/renderer/src/shell/usage.css", 7],
+  ["src/renderer/src/styles.css", 32], // 能力面板删掉旧的 skill 行 tooltip（9px 11px / 3px）；MCP 卡片视图随能力面板删除（−4）；辅助对话旧标签行 .drawer-tab* 随页头上移胶囊删除（−2）
+]);
+
+describe("design-tokens —— 间距走刻度", () => {
+  const onScale: string[] = [];
+  const offScale = new Map<string, number>();
+  for (const file of rendererCssFiles) {
+    const rel = relPath(file);
+    const lines = readClean(file, false).split("\n");
+    lines.forEach((line, i) => {
+      for (const decl of line.matchAll(SPACE_DECL_RE)) {
+        for (const px of (decl[2] ?? "").matchAll(SPACE_PX_RE)) {
+          const n = group1(px);
+          if (n === "0" || n === "1") continue;
+          if (ON_SCALE_PX.has(n)) onScale.push(`  ${rel}:${i + 1}: ${decl[0].trim()}`);
+          else offScale.set(rel, (offScale.get(rel) ?? 0) + 1);
+        }
+      }
+    });
+  }
+
+  test("刻度上的间距不裸写 px（用 var(--space-*)）", () => {
+    assert.deepEqual(onScale, [], `以下间距写了刻度上的裸 px：\n${onScale.join("\n")}`);
+  });
+
+  test("刻度外的间距只减不增（按文件记账）", () => {
+    const drift: string[] = [];
+    for (const rel of new Set([...offScale.keys(), ...OFF_SCALE_SPACING_BUDGET.keys()])) {
+      const now = offScale.get(rel) ?? 0;
+      const budget = OFF_SCALE_SPACING_BUDGET.get(rel) ?? 0;
+      if (now > budget) drift.push(`  ${rel}: ${now} 处，账上只有 ${budget}——新写的间距请取刻度`);
+      if (now < budget) drift.push(`  ${rel}: 已降到 ${now} 处（账上 ${budget}），把 OFF_SCALE_SPACING_BUDGET 改小`);
+    }
+    assert.deepEqual(drift, [], `刻度外间距的账对不上：\n${drift.join("\n")}`);
+  });
+});
+
+/**
+ * z 轴只有四个全局层（`tokens/spacing.css` 的 `--z-*`）：10 及以上的 z-index 必须取层 token，
+ * 组件内部的叠放（1–9）就地写整数。css 与 tsx 的 `zIndex` 都查。
+ */
+const CSS_Z_RE = /(?<![-\w])z-index\s*:\s*(-?\d+)/g;
+const TS_Z_RE = /\bzIndex\s*:\s*(-?\d+)/g;
+
+describe("design-tokens —— z 轴走层", () => {
+  test("10 及以上的 z-index 取 --z-* 层，不写整数", () => {
+    const hits: string[] = [];
+    const scan = (files: string[], re: RegExp, isTs: boolean) => {
+      for (const file of files) {
+        const lines = readClean(file, isTs).split("\n");
+        lines.forEach((line, i) => {
+          for (const m of line.matchAll(re)) {
+            if (Math.abs(Number(group1(m))) >= 10) hits.push(`  ${relPath(file)}:${i + 1}: ${m[0]}`);
+          }
+        });
+      }
+    };
+    scan(rendererCssFiles, CSS_Z_RE, false);
+    scan(rendererTsFiles, TS_Z_RE, true);
+    assert.deepEqual(hits, [], `以下 z-index 自造了层级数字：\n${hits.join("\n")}`);
+  });
+});
+
+describe("design-tokens —— 等宽字体栈带中文回退", () => {
+  const css = readFileSync(join(TOKENS_DIR, "typography.css"), "utf8");
+  const stack = /--font-family-mono:\s*([^;]+);/.exec(css)?.[1] ?? "";
+  const families = stack.split(",").map((each) => each.trim().replace(/^"|"$/g, ""));
+
+  test("拉丁等宽在前、CJK 回退在后、泛 monospace 殿后（Windows 汉字不再落到宋体）", () => {
+    for (const latin of ["ui-monospace", "Menlo", "Consolas"]) assert.ok(families.includes(latin), `缺 ${latin}`);
+    for (const cjk of ["PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei"]) assert.ok(families.includes(cjk), `缺 ${cjk}`);
+    const firstCjk = Math.min(...["PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei"].map((each) => families.indexOf(each)));
+    assert.ok(families.indexOf("Consolas") < firstCjk && families.indexOf("Menlo") < firstCjk, "CJK 回退必须在拉丁等宽之后");
+    assert.equal(families.at(-1), "monospace");
   });
 });

@@ -7,7 +7,16 @@ import type { AgentCommand } from "../../shared/agent-ipc.ts";
 import type { SessionMeta, SessionRecord } from "../../shared/session.ts";
 import { createHash } from "node:crypto";
 import { SessionStore } from "./store.ts";
-import { executeRevert, executeUndo, planRevert, planUndo, undoNotice, type PiBookEditor } from "./revert.ts";
+import {
+  executeRevert,
+  executeUndo,
+  planRevert,
+  planUndo,
+  revertFromTurn,
+  undoNotice,
+  type PiBookEditor,
+} from "./revert.ts";
+import { turnNumberOf } from "../memory/turn-tracker.ts";
 import type { FileChangePayload, FileTurnRecord } from "../../shared/revert.ts";
 
 const ID = "c1d2e3f4-5a60-4711-8b23-4d5e6f708192";
@@ -496,5 +505,41 @@ describe("轮尾账 · 旁路网页产物（webArtifacts）", () => {
     // 回退执行后旁路文件原样在盘上
     await executeRevert({ store, host: fakeHost([]) }, ID, "u1");
     assert.equal(await readFile(html, "utf8"), "<html></html>");
+  });
+});
+
+describe("revertFromTurn：回退点的轮号与记忆轮后跟踪同口径", () => {
+  test("回退到第 2 条用户消息：fromTurn = 2；折叠后重说的那条消息轮号也是 2", async () => {
+    await store.record(ID, userItem("u1", "第一句", 1000));
+    await store.record(ID, assistantItem("a1", 1100));
+    await store.record(ID, userItem("u2", "第二句", 2000));
+    await store.record(ID, assistantItem("a2", 2100));
+    await store.record(ID, userItem("u3", "第三句", 3000));
+    await store.record(ID, assistantItem("a3", 3100));
+    const before = (await store.load(ID))!.transcript;
+    const index = before.findIndex((record) => record.id === "u2");
+    assert.equal(revertFromTurn(before, index), 2);
+    assert.equal(turnNumberOf(before, "u2"), 2); // 回退前它就是第 2 轮
+    await executeRevert({ store, host: fakeHost([]) }, ID, "u2");
+    await store.record(ID, userItem("u2b", "重说的第二句", 4000));
+    const after = (await store.load(ID))!.transcript;
+    assert.equal(turnNumberOf(after, "u2b"), 2);
+    assert.equal(revertFromTurn(before, 0), 1);
+  });
+
+  test("单轮撤销只撤文件、不撤对话：用户记录与轮号不变", async () => {
+    await store.record(ID, userItem("u1", "第一句", 1000));
+    await store.record(ID, assistantItem("a1", 1100));
+    await turnRecord("t1", [{ path: join(lab, "x.ts"), before: "old\n", after: "new\n", added: 1, removed: 1 }]);
+    await writeFile(join(lab, "x.ts"), "new\n", "utf8");
+    await store.record(ID, userItem("u2", "第二句", 2000));
+    await store.record(ID, assistantItem("a2", 2100));
+    await executeUndo({ store, host: fakeHost([]) }, ID, "t1");
+    const after = (await store.load(ID))!.transcript;
+    assert.deepEqual(
+      after.filter((record) => record.role === "user").map((record) => record.id),
+      ["u1", "u2"],
+    );
+    assert.equal(turnNumberOf(after, "u2"), 2);
   });
 });
