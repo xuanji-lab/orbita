@@ -4,9 +4,9 @@
  * 用户手动指定、validate 过的来源数据目录清单（背景与词汇见 shared/import.ts 的
  * ImportCustomRoot）。落盘在 userData 下的 `import-custom-roots.json`，原子写
  * （AGENTS.md「本地优先」）。为什么不并进 settings.json：settings 是「应用怎么表现」的
- * 键值（主题 / 模型 / 抽屉），这份是用户攒下的一份数据清单，生命周期跟着迁移域走；
+ * 键值（主题 / 模型 / 抽屉），这份是用户攒下的一份数据清单，生命周期跟着外部来源走；
  * settings 的 patch 深合并语义也不适合数组——整块覆盖会吃掉别的键的并发写。
- * 容错同 settings：读不了 / 坏 JSON 退回空清单——清单丢了再添一次就是，不值得让迁移页起不来。
+ * 容错同 settings：读不了 / 坏 JSON 退回空清单——清单丢了再添一次就是，不值得让外部来源页起不来。
  */
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";

@@ -244,7 +244,7 @@ function General(props: {
   starredModels: readonly ModelPair[];
   onToggleStarModel: (pair: ModelPair) => void;
   onChange: (patch: SettingsPatch) => void;
-  /** 迁移页三步清单第②步跳过来时：滚到家务活模型行、短暂高亮、焦点落到选择器 */
+  /** 别处（记忆库）跳过来选家务活模型时：滚到家务活模型行、短暂高亮、焦点落到选择器 */
   highlightChore?: boolean;
   onHighlightConsumed?: () => void;
   /** 模型菜单底部「已关闭的服务 · 去模型服务打开」的去向 */

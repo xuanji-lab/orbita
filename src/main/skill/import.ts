@@ -1,5 +1,5 @@
 /**
- * 迁移页的 Skills 一段：列出其他 agent 的 skills 目录，按勾选复制或链接进 orbita 的中心存储。
+ * 设置 › 外部来源「从别的工具导入技能与 MCP」的技能一段：列出其他 agent 的 skills 目录，按勾选复制或链接进 orbita 的中心存储。
  * 纯 node 模块（不 import electron），`node --test` 直接测。
  *
  * **源目录只读。** 复制读、链接只建一条指向它的 symlink，都不改源。
