@@ -22,6 +22,7 @@ import { registerImportIpc } from "./session/import-ipc.ts";
 import { CustomRootsStore } from "./session/import-custom-roots.ts";
 import { createExternalSessionReader } from "./session/external-session.ts";
 import { locateExternalSources } from "./session/external-locate.ts";
+import { setSnapshotRoot } from "./session/sqlite-readonly.ts";
 import { broadcastAgentEvent, registerAgentIpc, resolveProviderSecrets } from "./agent/ipc.ts";
 import type { AgentEvent } from "../shared/agent-ipc.ts";
 import { MemoryServiceHost, resolveMemoryRuntimePath } from "./memory/host.ts";
@@ -468,6 +469,11 @@ void app.whenReady().then(async () => {
   const customRoots = new CustomRootsStore(configDir);
   // read_task 的外部只读来源（别家工具留在本机的聊天记录）。每次现找目录：自定义目录增删后
   // 下一次调用就生效。只读：源目录与 orbita 的会话库都不写（session/external-session.ts）。
+  // 别家 SQLite 库的临时副本放 Orbita 自己的数据目录下（不在源目录旁、不在任何工作区里）；
+  // 读完即删，启动时清掉上次异常退出的残留（session/sqlite-readonly.ts）
+  void setSnapshotRoot(join(configDir, "external-db-snapshots")).catch((error: unknown) =>
+    console.error("[main] 清理外部库临时副本失败", error),
+  );
   const externalSessions = createExternalSessionReader({
     defaultCwd: workspaces.defaultPath(),
     claudeDesktopDir: join(homedir(), "Library", "Application Support", "Claude", "claude-code-sessions"),

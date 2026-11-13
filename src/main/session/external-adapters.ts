@@ -142,6 +142,8 @@ export interface ExternalAdapter {
   entry: { path: readonly string[]; type: "file" | "dir" };
   candidates(root: string, context: ExternalAdapterContext): Promise<ExternalCandidate[]>;
   facts(candidate: ExternalCandidate, context: ExternalAdapterContext): Promise<ExternalSessionFacts>;
+  /** 可选：一次取一批（库来源只打开一次库——-wal 有内容时每打开一次就要复制一次库） */
+  factsMany?(candidates: readonly ExternalCandidate[], context: ExternalAdapterContext): Promise<ExternalSessionFacts[]>;
   load(candidate: ExternalCandidate, context: ExternalAdapterContext): Promise<ExternalLoaded>;
   /** 数据目录里认得出、但读不了的部分（如实列进目录，不静默漏掉） */
   notes?(root: string): Promise<string[]>;
@@ -533,6 +535,25 @@ function dbAdapter(options: {
       // 没有标题（OpenCode 的默认标题不算）：取第一句用户写的话
       const parsed = await readSession(candidate);
       return withKnown(candidate, { title: parsed?.firstPrompt ?? null });
+    },
+    async factsMany(candidates) {
+      const untitled = candidates.filter((candidate) => candidate.known.title === null || candidate.known.title === undefined);
+      if (untitled.length === 0) return candidates.map((candidate) => withKnown(candidate, NO_FACTS));
+      // 同一个库只打开一次：取各条未命名会话的第一句用户话；单条超预算或读坏不挡其余
+      const firstPrompts = await withReadOnlyDb(candidates[0]!.file, (db) =>
+        new Map(
+          untitled.map((candidate) => {
+            const id = sessionIdOf(candidate);
+            try {
+              if (options.bytes(db, id) > EXTERNAL_SOURCE_MAX_BYTES) return [candidate.key, null] as const;
+              return [candidate.key, opencodeToMessages(options.messages(db, id), UNASSIGNED_PROVIDER_ID, null).firstPrompt] as const;
+            } catch {
+              return [candidate.key, null] as const;
+            }
+          }),
+        ),
+      );
+      return candidates.map((candidate) => withKnown(candidate, { title: firstPrompts.get(candidate.key) ?? null }));
     },
     async load(candidate) {
       const parsed = await readSession(candidate);

@@ -218,18 +218,13 @@ export function createExternalSessionReader(deps: ExternalSessionReaderDeps): Ex
           const recent = candidates.sort((a, b) => b.mtime - a.mtime).slice(0, limit);
           const adapter = EXTERNAL_ADAPTERS[group.source];
           const fullContext = { ...context, roots: group.roots };
-          const summaries = await Promise.all(
-            recent.map(async (candidate) => {
-              let facts: ExternalSessionFacts;
-              try {
-                facts = await adapter.facts(candidate, fullContext);
-              } catch {
-                // 头部读不了不挡目录：标题退回「来源 + id」，读全文时再如实报错
-                facts = { title: null, cwd: null, createdAt: null, updatedAt: null };
-              }
-              return summaryOf(candidate, facts, deps.defaultCwd);
-            }),
-          );
+          const unknown: ExternalSessionFacts = { title: null, cwd: null, createdAt: null, updatedAt: null };
+          // 头部读不了不挡目录：标题退回「来源 + id」，读全文时再如实报错
+          const facts: ExternalSessionFacts[] =
+            adapter.factsMany !== undefined && recent.length > 0
+              ? await adapter.factsMany(recent, fullContext).catch(() => recent.map(() => unknown))
+              : await Promise.all(recent.map((candidate) => adapter.facts(candidate, fullContext).catch(() => unknown)));
+          const summaries = recent.map((candidate, index) => summaryOf(candidate, facts[index] ?? unknown, deps.defaultCwd));
           return { source: group.source, total: candidates.length, summaries, problems };
         }),
       );
