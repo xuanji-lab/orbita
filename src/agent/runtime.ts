@@ -2333,8 +2333,8 @@ async function handle(command: AgentCommand): Promise<void> {
     );
     return;
   }
-  if (command.type === "slidesResult" || command.type === "docResult") {
-    // 演示文稿 / 文档导出的回执：形状即契约（ok 双分支），原样结掉在途 promise
+  if (command.type === "slidesResult" || command.type === "docResult" || command.type === "zoteroResult") {
+    // 演示文稿 / 文档导出 / Zotero 只读的回执：形状即契约（ok 双分支），原样结掉在途 promise
     requestBroker.resolve(command.requestId, command);
     return;
   }
