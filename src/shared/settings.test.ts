@@ -1,6 +1,7 @@
 import { deepStrictEqual, ok } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  BOARD_DAYS_DEFAULT,
   effectiveLanguage,
   selectableThemes,
   themeLanguage,
@@ -273,6 +274,38 @@ describe("parseSettings 的 gitAttribution", () => {
     deepStrictEqual(parseSettings({ gitAttribution: "yes" }).gitAttribution, undefined);
     deepStrictEqual(parseSettings({ gitAttribution: 1 }).gitAttribution, undefined);
     deepStrictEqual(parseSettings({ gitAttribution: null }).gitAttribution, undefined);
+  });
+});
+
+describe("parseSettings 的 planFirst（先给我看计划）", () => {
+  it("缺席 = 关，不落键", () => {
+    deepStrictEqual(parseSettings({ theme: "graphite" }).planFirst, undefined);
+  });
+
+  it("布尔原样保留，非布尔丢掉", () => {
+    deepStrictEqual(parseSettings({ planFirst: true }).planFirst, true);
+    deepStrictEqual(parseSettings({ planFirst: false }).planFirst, false);
+    deepStrictEqual(parseSettings({ planFirst: "yes" }).planFirst, undefined);
+    deepStrictEqual(parseSettings({ planFirst: 1 }).planFirst, undefined);
+  });
+});
+
+describe("parseSettings 的 onboardingSeen", () => {
+  it("只认布尔：缺席 = 没看过，非布尔当没写", () => {
+    deepStrictEqual(parseSettings({ onboardingSeen: true }).onboardingSeen, true);
+    deepStrictEqual(parseSettings({ onboardingSeen: false }).onboardingSeen, false);
+    deepStrictEqual(parseSettings({}).onboardingSeen, undefined);
+    deepStrictEqual(parseSettings({ onboardingSeen: "yes" }).onboardingSeen, undefined);
+  });
+});
+
+describe("parseSettings 的 automationKeepAwake", () => {
+  it("只认布尔：缺席 / 非布尔都不落键", () => {
+    deepStrictEqual(parseSettings({ automationKeepAwake: true }).automationKeepAwake, true);
+    deepStrictEqual(parseSettings({ automationKeepAwake: false }).automationKeepAwake, false);
+    deepStrictEqual(parseSettings({}).automationKeepAwake, undefined);
+    deepStrictEqual(parseSettings({ automationKeepAwake: "on" }).automationKeepAwake, undefined);
+    deepStrictEqual(parseSettings({ automationKeepAwake: 1 }).automationKeepAwake, undefined);
   });
 });
 
@@ -557,6 +590,46 @@ describe("parseSettings 的 providersPage（模型服务页的界面记忆）", 
   });
 });
 
+describe("parseSettings 的 pluginsPage（插件页的界面记忆）", () => {
+  it("卡片尺寸与仅显示已启用：认得的留下，不认识的当没选过，全空不落键", () => {
+    deepStrictEqual(parseSettings({ pluginsPage: { cardSize: "small", onlyEnabled: true } }).pluginsPage, {
+      cardSize: "small",
+      onlyEnabled: true,
+    });
+    deepStrictEqual(parseSettings({ pluginsPage: { cardSize: "huge", onlyEnabled: "yes" } }).pluginsPage, undefined);
+    // 只有一个键也留着：另一个键缺席 = 默认
+    deepStrictEqual(parseSettings({ pluginsPage: { onlyEnabled: false } }).pluginsPage, { onlyEnabled: false });
+    deepStrictEqual("pluginsPage" in parseSettings({}), false);
+    deepStrictEqual("pluginsPage" in parseSettings({ pluginsPage: {} }), false);
+  });
+});
+
+describe("parseSettings 的 boardDays（周看板一屏几天）", () => {
+  it("只认 3 / 5 / 7；缺席或坏值不落键（读侧缺席 = 5）", () => {
+    for (const days of [3, 5, 7]) deepStrictEqual(parseSettings({ boardDays: days }).boardDays, days);
+    for (const bad of [4, 0, "5", null, 5.5, [5]]) deepStrictEqual("boardDays" in parseSettings({ boardDays: bad }), false);
+    deepStrictEqual("boardDays" in parseSettings({}), false);
+    deepStrictEqual(BOARD_DAYS_DEFAULT, 5);
+  });
+});
+
+describe("parseSettings 的 sidebarAgeDays（左栏时间范围）", () => {
+  it("只认 1 / 3 / 5 / 7；缺席、旧数据、坏值与 null 都不落键（读侧缺席 = 不限）", () => {
+    for (const days of [1, 3, 5, 7]) deepStrictEqual(parseSettings({ sidebarAgeDays: days }).sidebarAgeDays, days);
+    for (const bad of [0, 2, 14, "3", null, 3.5, [3], "all"]) {
+      deepStrictEqual("sidebarAgeDays" in parseSettings({ sidebarAgeDays: bad }), false);
+    }
+    // 旧数据（没有这个键）原样解析，与加字段之前的产物逐字相同
+    deepStrictEqual(parseSettings({ theme: "graphite", drawer: {} }), { theme: "graphite", drawer: DEFAULT_SETTINGS.drawer });
+  });
+
+  it("补丁里发 null = 清除：{...current, ...patch} 经 parseSettings 退回不限", () => {
+    const current = parseSettings({ sidebarAgeDays: 3 });
+    deepStrictEqual(current.sidebarAgeDays, 3);
+    deepStrictEqual("sidebarAgeDays" in parseSettings({ ...current, sidebarAgeDays: null }), false);
+  });
+});
+
 describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
   it("缺席 = 键不在：全部默认关，不为此落一个空对象", () => {
     deepStrictEqual("experimentalFeatures" in parseSettings({}), false);
@@ -671,5 +744,22 @@ describe("parseSettings 的 intent（实验功能 intent-system）", () => {
     const effective = effectiveIntentSettings(undefined);
     deepStrictEqual(effective, { baseUrl: "http://127.0.0.1:8723", newSessionOn: true, channel: "proma" });
     deepStrictEqual(effectiveIntentSettings({ baseUrl: "http://localhost:9000//" }).baseUrl, "http://localhost:9000");
+  });
+});
+
+describe("parseSettings 的 docPanelWidth", () => {
+  it("≥ 地板的数收下，过小 / 非数丢掉", () => {
+    deepStrictEqual(parseSettings({ docPanelWidth: 640.4 }).docPanelWidth, 640);
+    deepStrictEqual(parseSettings({ docPanelWidth: 50 }).docPanelWidth, undefined);
+    deepStrictEqual(parseSettings({ docPanelWidth: "wide" }).docPanelWidth, undefined);
+  });
+});
+
+describe("parseSettings 的 docPaper", () => {
+  it("只认三个纸面；乱值丢掉（缺席 = quiet）", () => {
+    for (const paper of ["quiet", "print", "focus"]) deepStrictEqual(parseSettings({ docPaper: paper }).docPaper, paper);
+    deepStrictEqual(parseSettings({ docPaper: "neon" }).docPaper, undefined);
+    deepStrictEqual(parseSettings({ docPaper: 3 }).docPaper, undefined);
+    deepStrictEqual(parseSettings({}).docPaper, undefined);
   });
 });

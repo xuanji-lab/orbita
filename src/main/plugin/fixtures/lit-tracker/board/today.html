@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><style>
+html,body{margin:0;height:100%}
+body{font:1rem/1.45 var(--font-family-base,system-ui);background:#f6efe4;color:#2b2118;display:flex;flex-direction:column;justify-content:space-between;padding:.8rem 1rem;box-sizing:border-box;border-left:.4rem solid #c8553d;overflow:hidden}
+.lab{font-size:.72rem;letter-spacing:.08em;color:#8a6b52;padding-right:3.4rem}
+h1{margin:.25rem 0 0;font:600 1.12rem/1.3 Georgia,"Songti SC",serif}
+p{margin:.35rem 0 0;color:#5b4636;font-size:.8rem}
+.acts{display:flex;gap:.5rem}
+button{font:inherit;font-size:.8rem;border:1px solid #c8553d;background:transparent;color:#c8553d;border-radius:99px;padding:.15rem .8rem;cursor:pointer}
+.empty{color:#8a6b52}
+</style></head><body>
+<div id="root"><div class="empty">还没有产出</div></div>
+<script>
+function paint(m){
+  document.documentElement.style.fontSize=Math.max(9,m.unit.width/13)+"px";
+  var d=m.data, r=document.getElementById("root");
+  if(!d){r.innerHTML='<div class="empty">还没有产出</div>';return}
+  r.innerHTML='<div class="lab"></div><h1></h1><p></p><div class="acts"></div>';
+  r.querySelector(".lab").textContent="今日一篇 · "+d.date+" · "+d.venue;
+  r.querySelector("h1").textContent=d.title; r.querySelector("p").textContent=d.why;
+  var a=r.querySelector(".acts");a.style.marginTop=".6rem";
+  [["相关","useful"],["不相关","irrelevant"]].forEach(function(x){var b=document.createElement("button");b.textContent=x[0];b.onclick=function(){parent.postMessage({type:"orbita:action",action:"feedback",payload:{verdict:x[1],title:d.title}},"*")};a.appendChild(b)});
+}
+addEventListener("message",function(e){if(e.data&&e.data.type==="orbita:data")paint(e.data)});
+parent.postMessage({type:"orbita:ready"},"*");
+</script></body></html>

@@ -1,0 +1,303 @@
+/*
+ * 看板的宿主那一圈：网格、每张卡的外框（圆角 / overflow hidden / 「样例」标 / 问题条）、卡外标题行、「已记下」。
+ * **卡里面是插件自己的**（iframe 里的模板），不受设计系统约束；这里只放宿主的部分，全部走 token。
+ * 几何（一格的宽高、列数、卡的框高）由 BoardGrid 按 board-layout.ts 算好内联给，这里只管外观。
+ */
+
+.bd-host {
+  position: relative;
+  min-width: 0;
+}
+
+/*
+ * 容器模式的宽度只听外面、不被里面撑开：格宽是像素（BoardGrid 量到 host 宽后算出来的），
+ * 如果 host 的内在宽度按里面的固定像素列算，拉宽后再缩窄，祖先（flex / 隐式 auto 列的 grid）会被这一块撑住，
+ * ResizeObserver 又量到被撑住的宽——互相卡死，出横向滚动条，关掉面板再开才恢复。
+ * contain: inline-size 让它的内在宽度为 0，宽度只由外面给。（列模式的宽由周看板的列给，不用。）
+ */
+.bd-host[data-mode="container"] {
+  contain: inline-size;
+}
+
+.bd {
+  display: grid;
+  grid-auto-flow: row dense;
+  justify-content: start;
+}
+
+.bd-cell {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 卡上方宿主画的一行（周看板的「时间 · 插件名」）：占一行高，字小而安静 */
+.bd-caption {
+  flex: none;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-1);
+  overflow: hidden;
+  white-space: nowrap;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+.bd-caption-main {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bd-caption .bd-badge {
+  flex: none;
+  box-shadow: none;
+  background: var(--color-bg-muted);
+}
+
+/* 外框：圆角是 Orbita 的；overflow hidden 让模板画不出框外。底色透明——卡里的背景是插件自己的 */
+.bd-frame {
+  position: relative;
+  flex: none;
+  width: 100%;
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  box-shadow: var(--shadow-border);
+  background: var(--color-bg-muted);
+}
+
+.bd-iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+}
+
+/* 这张卡出不来（模板 / 数据路径有问题）或还在等地址：框里写原因 */
+.bd-broken {
+  height: 100%;
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  overflow: auto;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-ui);
+  overflow-wrap: anywhere;
+}
+
+.bd-broken b {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.bd-broken svg {
+  color: var(--color-warning);
+}
+
+/* 宿主盖的「还没有产出」：模板没声明自己画了空态时 */
+.bd-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  text-align: center;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+.bd-empty b {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+}
+
+/* 卡右上角的小标：「样例」「数据读不出来」。宿主画在框上，不挡点击 */
+.bd-badges {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: flex;
+  gap: var(--space-1);
+  pointer-events: none;
+}
+
+.bd-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 20px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--color-bg-panel) 88%, transparent);
+  box-shadow: var(--shadow-border);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-medium);
+  pointer-events: auto;
+}
+
+.bd-badge .orbita-icon {
+  color: var(--color-info);
+}
+
+.bd-badge.warn .orbita-icon {
+  color: var(--color-warning);
+}
+
+/* ---------- 提示条 / 说明 / 「已记下」 ---------- */
+
+.pp-note {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  margin: var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+}
+
+.pp-note svg {
+  flex: none;
+  margin-top: var(--space-0-5);
+  color: var(--color-warning);
+}
+
+.pp-note-body {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pp-note-body b {
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+}
+
+.pp-note-hint {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+/* 数据读不出来的条：贴在模板上面，不挤掉模板 */
+/* 「已记下」：看板右下角一枚很轻的胶囊，不抢卡的画面，不挡点击；看板比视口高时跟着滚动区的底边 */
+.pp-toast-slot {
+  position: sticky;
+  bottom: var(--space-3);
+  height: 0;
+  display: flex;
+  justify-content: flex-end;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.pp-toast {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-height-xs);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-default);
+  box-shadow: var(--shadow-popover);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-medium);
+  animation: right-panel-fade 120ms var(--ease-out-quint);
+}
+
+.pp-toast[data-tone="ok"] svg {
+  color: var(--color-success);
+}
+
+.pp-toast[data-tone="warn"] {
+  color: var(--color-text-primary);
+}
+
+.pp-toast[data-tone="warn"] svg {
+  color: var(--color-warning);
+}
+
+/* 看板说明：宿主渲染的 markdown，卡片样式同详情页的卡；展开后最高 320px，自己滚 */
+.pp-spec {
+  display: flex;
+  flex-direction: column;
+  margin-top: var(--space-2);
+  border-radius: var(--radius-lg);
+  background: var(--glass-bg);
+  box-shadow: var(--shadow-border);
+  overflow: hidden;
+}
+
+.pp-spec-h {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 34px;
+  padding: 0 var(--space-3);
+  border: 0;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.pp-spec-h:hover {
+  color: var(--color-text-secondary);
+}
+
+.pp-spec-h b {
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+
+.pp-spec-badge {
+  margin-left: auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.pp-spec-body {
+  min-height: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 0 var(--space-4) var(--space-3);
+  font-size: var(--font-size-sm);
+}
+
+/* 聊天 markdown 的字号是正文档；放进窄面板降到 sm，标题不再分三档（说明是几行字段表，不是文章） */
+.pp-spec-body .chat-md {
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+}
+
+.pp-spec-body .chat-md h1,
+.pp-spec-body .chat-md h2,
+.pp-spec-body .chat-md h3,
+.pp-spec-body .chat-md h4,
+.pp-spec-body .chat-md h5,
+.pp-spec-body .chat-md h6 {
+  margin: var(--space-3) 0 var(--space-1);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}

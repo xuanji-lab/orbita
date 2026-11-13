@@ -4,10 +4,11 @@
  */
 import { BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
-import type { SkillContent, SkillMeta, SkillPatch, SkillScope } from "../../shared/skill.ts";
+import type { SkillArchiveEntry, SkillContent, SkillMeta, SkillPatch, SkillRestoreResult, SkillScope } from "../../shared/skill.ts";
+import type { WorkspaceStore } from "../workspace/store.ts";
 import type { SkillStore } from "./store.ts";
 
-export function registerSkillIpc(store: SkillStore): void {
+export function registerSkillIpc(store: SkillStore, workspaces: WorkspaceStore): void {
   ipcMain.handle(ipcChannels.skillList, (): Promise<SkillMeta[]> => store.list());
   ipcMain.handle(ipcChannels.skillLink, (_event, slug: string, scope: SkillScope): Promise<void> =>
     store.link(slug, scope),
@@ -39,6 +40,20 @@ export function registerSkillIpc(store: SkillStore): void {
   ipcMain.handle(ipcChannels.skillWrite, (_event, slug: string, patch: SkillPatch): Promise<void> =>
     store.write(slug, patch),
   );
+
+  /**
+   * 归档 / 恢复 / 移除：renderer 只给 slug 或归档 id，路径一律主进程自己拼并校验（见 SkillStore.entryOf）。
+   * 移除走系统废纸篓（`shell.trashItem`），可以从废纸篓找回。
+   */
+  ipcMain.handle(ipcChannels.skillArchive, async (_event, slug: string): Promise<void> => {
+    await store.archive(slug);
+  });
+  ipcMain.handle(ipcChannels.skillArchived, (): Promise<SkillArchiveEntry[]> => store.listArchived());
+  ipcMain.handle(ipcChannels.skillRestore, async (_event, id: string): Promise<SkillRestoreResult> => {
+    const known = (await workspaces.list()).map((workspace) => workspace.id);
+    return store.restore(id, known);
+  });
+  ipcMain.handle(ipcChannels.skillTrash, (_event, slug: string): Promise<void> => store.trash(slug, (path) => shell.trashItem(path)));
 
   /**
    * 在系统文件管理器里揭示这条 skill 的目录。

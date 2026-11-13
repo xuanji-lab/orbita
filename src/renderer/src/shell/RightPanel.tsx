@@ -3,9 +3,12 @@ import { createPortal } from "react-dom";
 import { Icon, type IconName } from "../shell/Icon";
 import { IconButton } from "./IconButton";
 import { clampRightPanelWidth, RIGHT_PANEL_WIDTH_DEFAULT } from "@shared/settings";
+import { startPointerDrag } from "./pointer-drag.ts";
 import { usePaneTotalWidth } from "./side-width.ts";
 import { useT } from "../locale.ts";
 import { ToolbarPanelSlotContext } from "./Toolbar";
+import { useScrolledEdge } from "./WorkspaceFilterBar.tsx";
+import { docOverlayWidth } from "../features/doc-panel/doc-panel-width.ts";
 
 /**
  * 右侧面板壳（2026-09-13 裁决）：Skills / MCP / 辅助对话三个菜单共用这**一个**
@@ -18,7 +21,13 @@ import { ToolbarPanelSlotContext } from "./Toolbar";
  */
 export function RightPanelSlot(props: {
   open: boolean;
-  width: number;
+  /** null = 还没有记过 */
+  width: number | null;
+  /**
+   * 自带版式规则的面板（文档 / 演示文稿）：给了它，宽度与是否转覆盖层都由它按量到的 pane 宽决定
+   * （聊天列留底线、放不下转覆盖层），不再走 1/3–2/3 夹取与 <960 的窗口判定。
+   */
+  resolveLayout?: (pane: number, wanted: number | null, windowWidth: number) => { overlay: boolean; width: number; tight?: boolean; squeezed?: boolean };
   narrow: boolean;
   /**
    * 铺满主区（布局 B「稿件为主」）：稿件工作台取代对话卡的位置、对话收到右侧一栏，
@@ -26,6 +35,10 @@ export function RightPanelSlot(props: {
    * flex 分配，拖宽热区也不该存在（左缘已是卡片外沿）。宽度仍算、仍报，只是不生效。
    */
   fill?: boolean;
+  /** 实际是不是覆盖层（窄窗，或 resolveLayout 判定放不下）：工具栏的右栏胶囊要跟 */
+  onOverlay?: (overlay: boolean) => void;
+  /** 自带版式的面板：并排但被挤得比它自己的下限还窄（调用方可据此腾地方，比如收起左侧栏） */
+  onTight?: (tight: boolean) => void;
   onWidthChange: (width: number) => void;
   onWidthCommit: (width: number) => void;
   /**
@@ -47,9 +60,44 @@ export function RightPanelSlot(props: {
    * 盘上那个宽度可能是在更宽的窗口（或另一台显示器）上存的。只夹渲染值、
    * 不回写 settings；窄窗转覆盖层时宽度写死 320，那时不量也不夹。
    */
-  const paneTotal = usePaneTotalWidth(asideRef, !narrow);
-  const width = paneTotal > 0 ? clampRightPanelWidth(props.width, paneTotal) : props.width;
-  const renderedWidth = narrow ? RIGHT_PANEL_WIDTH_DEFAULT : width;
+  const resolveLayout = props.resolveLayout;
+  const paneTotal = usePaneTotalWidth(asideRef, !narrow && resolveLayout === undefined);
+  // 自带版式的面板按「父级 = pane」的宽度算：覆盖层时右栏脱离文档流，父级宽仍是 pane，
+  // 所以量它不会因为转覆盖层而变（不会来回跳）
+  const paneWidth = useParentWidth(asideRef, resolveLayout !== undefined);
+  const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
+  // 切到文档 / 演示文稿版式（resolveLayout 出现）时重读一次窗口宽：它只在 resize 事件里更新，不重读就是旧值
+  const hasOwnLayout = resolveLayout !== undefined;
+  useEffect(() => {
+    setWindowWidth(window.innerWidth);
+  }, [hasOwnLayout]);
+  useEffect(() => {
+    const onResize = (): void => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const own = resolveLayout?.(paneWidth, props.width, windowWidth);
+  // 自带版式的面板自己判定并排还是覆盖层，不看 <960 的窗口断点（窄窗里它照样能并排：聊天列守底线、面板挤窄）
+  const overlay = own === undefined ? narrow : own.overlay;
+  const width =
+    own !== undefined
+      ? own.width
+      : narrow
+        ? RIGHT_PANEL_WIDTH_DEFAULT
+        : paneTotal > 0
+          ? clampRightPanelWidth(props.width ?? RIGHT_PANEL_WIDTH_DEFAULT, paneTotal)
+          : (props.width ?? RIGHT_PANEL_WIDTH_DEFAULT);
+  const renderedWidth = width;
+  // squeezed（想要的宽被聊天列底线压低）与 tight 一样要让 App 先收侧栏，所以一起报
+  const tight = own !== undefined && !own.overlay && (own.tight === true || own.squeezed === true);
+  const onTight = props.onTight;
+  useEffect(() => {
+    onTight?.(tight);
+  }, [tight, onTight]);
+  const onOverlay = props.onOverlay;
+  useEffect(() => {
+    onOverlay?.(overlay);
+  }, [overlay, onOverlay]);
   const onRenderedWidth = props.onRenderedWidth;
   useEffect(() => {
     onRenderedWidth?.(renderedWidth);
@@ -62,32 +110,23 @@ export function RightPanelSlot(props: {
    * P 在拖动中恒定：pane 让出多少面板就长多少，所以不必每帧重测。
    * 拖动中不做动画；松手不 snap；双击热区回 320（同样夹一次）。
    */
-  const startResize = (event: React.PointerEvent): void => {
-    if (event.button !== 0) return;
+  const startResize = (event: React.PointerEvent<HTMLElement>): void => {
     const panel = asideRef.current;
     if (panel === null) return;
-    event.preventDefault();
-    setResizing(true);
-    const startX = event.clientX;
     const startWidth = panel.getBoundingClientRect().width;
-    const clamp = (value: number): number => clampRightPanelWidth(value, paneTotal);
-    // 拖动期间全文选择与光标都固定成拖拽语义，松手还原
-    const previousSelect = document.body.style.userSelect;
-    const previousCursor = document.body.style.cursor;
-    document.body.style.userSelect = "none";
-    document.body.style.cursor = "col-resize";
-    const move = (ev: PointerEvent): void => {
-      props.onWidthChange(clamp(startWidth - (ev.clientX - startX)));
-    };
-    const up = (ev: PointerEvent): void => {
-      window.removeEventListener("pointermove", move);
-      document.body.style.userSelect = previousSelect;
-      document.body.style.cursor = previousCursor;
-      setResizing(false);
-      props.onWidthCommit(clamp(startWidth - (ev.clientX - startX)));
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up, { once: true });
+    const clamp = (value: number): number =>
+      resolveLayout !== undefined
+        ? resolveLayout(paneWidth, value, windowWidth).width
+        : clampRightPanelWidth(value, paneTotal);
+    const started = startPointerDrag(event, {
+      cursor: "col-resize",
+      onMove: (delta) => props.onWidthChange(clamp(startWidth - delta.x)),
+      onEnd: (delta) => {
+        setResizing(false);
+        props.onWidthCommit(clamp(startWidth - delta.x));
+      },
+    });
+    if (started) setResizing(true);
   };
 
   return (
@@ -96,13 +135,13 @@ export function RightPanelSlot(props: {
       className={`right-panel-slot${open ? " open" : ""}${fill ? " fill" : ""}${resizing ? " dragging" : ""}`}
       style={
         {
-          "--right-panel-w": `${narrow ? RIGHT_PANEL_WIDTH_DEFAULT : width}px`,
+          "--right-panel-w": `${width}px`,
           // 窄窗覆盖层的定位基准是 .layer（pane 无 position）——右侧让过 rail 一条；
           // 那时壳需要自己的面：设计系统「Floating layers」的实色底 + 发丝边 + popover
           // 阴影。不用玻璃：没有 blur，半透明的它压在聊天正文上，底下的字会直接漏上来。
           // top 从工具栏下面算（--chrome-height）：.layer 从窗口顶边开始，工具栏是绝对
           // 定位的，直接 12px 会盖住窗口三键与会话胶囊（2026-10-22 验收实测）
-          ...(narrow && open
+          ...(overlay && open
             ? {
                 position: "absolute",
                 top: "calc(var(--chrome-height) + var(--space-3))",
@@ -112,7 +151,7 @@ export function RightPanelSlot(props: {
                 border: "1px solid var(--glass-border)",
                 borderRadius: "var(--radius-xl)",
                 boxShadow: "var(--shadow-popover)",
-                zIndex: 20,
+                zIndex: "var(--z-overlay)",
                 animation: "right-panel-in var(--duration-enter) var(--ease-out-quint)",
               }
             : {}),
@@ -120,11 +159,15 @@ export function RightPanelSlot(props: {
       }
     >
       {/* 拖宽热区：左缘 6px 骑在竖线上；双击回 320。布局 B 里没有竖线也没有固定宽 */}
-      {!narrow && !fill && (
+      {!overlay && !fill && (
         <span
           onPointerDown={startResize}
           onDoubleClick={() =>
-            props.onWidthCommit(clampRightPanelWidth(RIGHT_PANEL_WIDTH_DEFAULT, paneTotal))
+            props.onWidthCommit(
+              resolveLayout !== undefined
+                ? resolveLayout(paneWidth, null, windowWidth).width
+                : clampRightPanelWidth(RIGHT_PANEL_WIDTH_DEFAULT, paneTotal),
+            )
           }
           title={t.common.dragResize}
           style={{
@@ -136,13 +179,34 @@ export function RightPanelSlot(props: {
             cursor: "col-resize",
             // 要在面板内容的浮层之上（文件树 overlay 是 z-20）：浮层盖住热区就把
             // 拖宽没收了（2026-10-10 实机验收抓到）；全局浮层（contextmenu 70）仍更高
-            zIndex: 30,
+            zIndex: "var(--z-float)",
           }}
         />
       )}
       <div className="right-panel-slot-inner">{props.children}</div>
     </aside>
   );
+}
+
+/** 量父级元素的宽（RightPanelSlot 的父级 = pane）。`active` 为假不量，返回 0 */
+function useParentWidth(ref: React.RefObject<HTMLElement | null>, active: boolean): number {
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const parent = ref.current?.parentElement ?? null;
+    if (!active || parent === null) {
+      setWidth(0);
+      return undefined;
+    }
+    const measure = (): void => {
+      const next = Math.round(parent.getBoundingClientRect().width);
+      setWidth((current) => (current === next ? current : next));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(parent);
+    return () => observer.disconnect();
+  }, [ref, active]);
+  return width;
 }
 
 /**
@@ -163,6 +227,8 @@ export function RightPanelFrame(props: {
   contentKey: string;
   /** 页头最右的动作槽（说明 ?、添加、刷新等） */
   headerExtra?: React.ReactNode;
+  /** 页头与滚动内容之间的一条（不随内容滚动）：能力面板的工作区选择条 */
+  subheader?: React.ReactNode;
   footer?: React.ReactNode;
   /**
    * 页头**画在卡里**（稿件工作台的布局 B）：那时工作台占的是对话卡的主位，不在右栏
@@ -174,12 +240,22 @@ export function RightPanelFrame(props: {
 }) {
   const slot = useContext(ToolbarPanelSlotContext);
   const inline = props.inline === true;
+  const edge = useScrolledEdge(props.contentKey);
   return (
     <div
       style={{
         height: "100%",
         display: "grid",
-        gridTemplateRows: inline ? "auto minmax(0,1fr) auto" : "minmax(0,1fr) auto",
+        // 行序：页头（布局 B 画在卡里）→ subheader（钉住的条）→ 内容 → footer
+        gridTemplateRows: inline
+          ? props.subheader === undefined
+            ? "auto minmax(0,1fr) auto"
+            : "auto auto minmax(0,1fr) auto"
+          : props.subheader === undefined
+            ? "minmax(0,1fr) auto"
+            : "auto minmax(0,1fr) auto",
+        // 有 subheader 时列也钉成 minmax(0,1fr)：auto 列会按子项的内容宽撑开（横向滚动的选择条尤其）
+        ...(props.subheader === undefined ? {} : { gridTemplateColumns: "minmax(0,1fr)" }),
       }}
     >
       {/* 所有子元素都带 key：布局 A / B 切换时多出 / 少掉一行页头，不带 key 的话
@@ -192,22 +268,29 @@ export function RightPanelFrame(props: {
           {props.headerExtra}
         </div>
       ) : null}
-      {!inline && slot !== null
-        ? createPortal(
-            <div className="cap-panel-content" key={props.contentKey}>
-              {props.header}
-              <span className="cap-grow" aria-hidden="true" />
-              {props.headerExtra}
-            </div>,
-            slot,
-            "cap-head",
-          )
-        : null}
+      {/* 钉在滚动区上方、占自己的一行；内容滚起来时在它下面画一根发丝线（useScrolledEdge） */}
+      {props.subheader !== undefined && (
+        <div key="__sub" style={edge.edgeStyle}>
+          {props.subheader}
+        </div>
+      )}
+      {!inline &&
+        slot !== null &&
+        createPortal(
+          <div className="cap-panel-content" key={props.contentKey}>
+            {props.header}
+            <span className="cap-grow" aria-hidden="true" />
+            {props.headerExtra}
+          </div>,
+          slot,
+          "cap-head",
+        )}
 
       <div
         key={props.contentKey}
         className="scroll"
         style={{ minHeight: 0, animation: "right-panel-fade 120ms var(--ease-out-quint)" }}
+        onScroll={props.subheader === undefined ? undefined : edge.onScroll}
       >
         {props.children}
       </div>

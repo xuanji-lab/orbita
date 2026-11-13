@@ -11,6 +11,11 @@ import {
   formatChangeLines,
   isHiddenEntry,
   joinRel,
+  POLL_GATE_IDLE,
+  pollGateAccept,
+  pollGateBegin,
+  pollGateSettle,
+  shouldPollChanges,
 } from "./focus-files.ts";
 import type { FocusChangeEntry } from "@shared/focus";
 
@@ -64,11 +69,23 @@ test("changeSummary：总数与新文件数", () => {
 });
 
 test("formatChangeLines：两侧 / 单侧 / 零 / 二进制", () => {
-  assert.equal(formatChangeLines(entry("a", "M", 42, 7)), "+42 \u22127");
-  assert.equal(formatChangeLines(entry("a", "U", 86, 0)), "+86");
-  assert.equal(formatChangeLines(entry("a", "M", 0, 5)), "\u22125");
-  assert.equal(formatChangeLines(entry("a", "M", 0, 0)), "");
-  assert.equal(formatChangeLines(entry("a", "M", 10, 2, true)), "");
+  assert.equal(formatChangeLines(entry("a", "M", 42, 7), ""), "+42 \u22127");
+  assert.equal(formatChangeLines(entry("a", "U", 86, 0), ""), "+86");
+  assert.equal(formatChangeLines(entry("a", "M", 0, 5), ""), "\u22125");
+  assert.equal(formatChangeLines(entry("a", "M", 0, 0), ""), "");
+  assert.equal(formatChangeLines(entry("a", "M", 10, 2, true), ""), "");
+});
+
+test("formatChangeLines：超大未跟踪文件的文案由调用方按界面语言给（不写死中文），不拿 +0 冒充", () => {
+  // 超过单文件上限只判了二进制、没数行 → 用调用方传进来的那句（t.focus.linesUnknown）
+  const big = { ...entry("big.dat", "U", 0, 0), lineCountUnknown: true };
+  assert.equal(formatChangeLines(big, "行数未知"), "行数未知");
+  assert.equal(formatChangeLines(big, "line count unavailable"), "line count unavailable");
+  // 二进制仍是空串：binary 优先，不额外说「行数未知」
+  assert.equal(
+    formatChangeLines({ ...entry("big.bin", "U", 0, 0, true), lineCountUnknown: true }, "行数未知"),
+    "",
+  );
 });
 
 test("joinRel 与 changeIndexOf", () => {
@@ -77,4 +94,42 @@ test("joinRel 与 changeIndexOf", () => {
   const index = changeIndexOf([entry("src/a.ts", "M", 3, 1)]);
   assert.equal(index.get("src/a.ts")?.added, 3);
   assert.equal(index.get("nope"), undefined);
+});
+
+test("shouldPollChanges：只在看得见时拉 U / M", () => {
+  assert.equal(shouldPollChanges("visible"), true);
+  // 窗口藏着（最小化 / 在别的应用前）：这一拍跳过
+  assert.equal(shouldPollChanges("hidden"), false);
+  // 「先渲染再画」的中间态不算藏起来——宁可多拉一拍，屏幕上的人在看
+  assert.equal(shouldPollChanges("prerender"), true);
+});
+
+test("pollGate：同一工作区在途时新拍放弃（慢 git 不叠跑）", () => {
+  const first = pollGateBegin(POLL_GATE_IDLE, "ws-a");
+  assert.notEqual(first, null);
+  // 同工作区又来一拍（30 秒钟到的钟点 / 回前台补拍）：放弃
+  assert.equal(pollGateBegin(first!.gate, "ws-a"), null);
+  // 落定对得上号：收，清在途
+  assert.equal(pollGateAccept(first!.gate, first!.mine), true);
+  const settled = pollGateSettle(first!.gate);
+  assert.equal(settled.inflight, false);
+  // 清了之后下一拍又能发（代次继续 +1，不是永远卡住）
+  const second = pollGateBegin(settled, "ws-a");
+  assert.notEqual(second, null);
+  assert.equal(second!.mine, first!.mine + 1);
+});
+
+test("pollGate：换工作区顶替在途，旧结果落定作废", () => {
+  const a = pollGateBegin(POLL_GATE_IDLE, "ws-a");
+  assert.notEqual(a, null);
+  // ws-a 还在途就切到 ws-b：不等待，直接顶替（代次 +1）
+  const b = pollGateBegin(a!.gate, "ws-b");
+  assert.notEqual(b, null);
+  assert.equal(b!.gate.workspaceId, "ws-b");
+  // 旧的那遭后到：对不上号，作废——不拿 ws-a 的清单盖 ws-b
+  assert.equal(pollGateAccept(b!.gate, a!.mine), false);
+  // 新的那遭照收
+  assert.equal(pollGateAccept(b!.gate, b!.mine), true);
+  // settle 只清在途不动代次：先 settle 后落定的那遭照样对得上号
+  assert.equal(pollGateAccept(pollGateSettle(b!.gate), b!.mine), true);
 });

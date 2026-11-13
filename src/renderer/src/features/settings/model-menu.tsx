@@ -9,7 +9,7 @@
  * 2. **形状**：左栏过滤、两行行、定高六行、宽度按全部模型里最长那一行定。三处各拼一遍
  *    就是这一刀返工五次的起因（2026-10-01）——所以外壳只有一个，谁也不许再拼。
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import type { BuiltinProvider } from "@shared/agent-ipc";
 import { modelDisplayName, resolveModelDefaults } from "@shared/model-defaults";
@@ -22,6 +22,8 @@ import { Menu, menuFooterRowStyle, type MenuItem } from "../../shell/Menu";
 import type { MenuPlacementSide } from "../../shell/menu-position";
 import { useHoverTooltip } from "../../shell/useHoverTooltip.ts";
 import {
+  closedProvidersSummary,
+  enabledProviders,
   hasCredentials,
   modelAcceptsImage,
   modelContextText,
@@ -185,6 +187,11 @@ export function modelCardFooter(options: { t: Messages; onConfigure: () => void 
  */
 export function ModelPickerMenu(props: {
   t: Messages;
+  /**
+   * 配置好的全部服务商（含关着的）。**关着的不列**（服务商开关）：菜单内部筛，底部补一行灰字
+   * 「已关闭的服务 · N 个模型 · 去模型服务打开」——别家不是消失了，是你关了。调用方照旧把
+   * `usable` 整份传进来，不必各自过滤，也就不会有哪个菜单漏筛。
+   */
   providers: readonly ProviderDto[];
   catalog: readonly BuiltinProvider[];
   selected: { providerId: string; modelId: string } | null;
@@ -199,10 +206,15 @@ export function ModelPickerMenu(props: {
   trigger: (state: { open: boolean; toggle: () => void }) => React.ReactNode;
   /** 底部固定行。只有输入卡给（「配置模型」）；设置面本身就在设置里，不用再来一个入口 */
   footer?: (close: () => void) => React.ReactNode;
+  /** 灰字行右侧「去模型服务打开」的去向（有关着的服务商时才用）；不给就只显示灰字、没有按钮 */
+  onOpenProviders?: () => void;
   /** 原样转发给 Menu：输入卡给 `above`（芯片菜单朝上开），设置面与子会话面板用默认下方 */
   placement?: MenuPlacementSide;
 }): React.ReactNode {
-  const [scope, setScope] = useState<ModelScope>(() => openingModelScope(props.providers, props.selected));
+  // 关着的服务商不列：下面所有「列出来给人选」的地方都吃这份；灰字行吃关着的摘要
+  const providers = useMemo(() => enabledProviders(props.providers), [props.providers]);
+  const closed = useMemo(() => closedProvidersSummary(props.providers), [props.providers]);
+  const [scope, setScope] = useState<ModelScope>(() => openingModelScope(providers, props.selected));
   const [open, setOpen] = useState(false);
   /*
    * 每次打开都落在当前型号所属的那家（openingModelScope）。**关着的时候就对齐**，不等打开那一刻：
@@ -214,14 +226,14 @@ export function ModelPickerMenu(props: {
   const selectedProviderId = props.selected?.providerId ?? null;
   useEffect(() => {
     if (open) return;
-    const next = openingModelScope(props.providers, selectedProviderId === null ? null : { providerId: selectedProviderId });
+    const next = openingModelScope(providers, selectedProviderId === null ? null : { providerId: selectedProviderId });
     // 调用方多半每次渲染都给一份新的 providers 数组：等值就留旧对象，不白白多渲染一次
     setScope((prev) => (sameScope(prev, next) ? prev : next));
-  }, [open, selectedProviderId, props.providers]);
+  }, [open, selectedProviderId, providers]);
   const pick = (range: ModelScope) =>
     modelCardItems({
       t: props.t,
-      providers: props.providers,
+      providers,
       catalog: props.catalog,
       selected: props.selected,
       scope: range,
@@ -237,14 +249,14 @@ export function ModelPickerMenu(props: {
    * 一个可用的模型都没有时不摆卡片架子：没东西可筛却给一列空左栏 + 六行定高，
    * 看起来像坏了。退回普通菜单（设置面那两个 picker 在没配服务商时就是这个状态）。
    */
-  const isCard = props.providers.length > 0;
+  const isCard = providers.length > 0;
 
   // 选着的那家被删了 / 没 key 了：过滤要跟着回「全部」，否则清单停在空集上
   useEffect(() => {
-    if (scope.kind === "provider" && !props.providers.some((p) => p.id === scope.id)) {
+    if (scope.kind === "provider" && !providers.some((p) => p.id === scope.id)) {
       setScope(MODEL_SCOPE_ALL);
     }
-  }, [scope, props.providers]);
+  }, [scope, providers]);
 
   return (
     <Menu
@@ -252,7 +264,7 @@ export function ModelPickerMenu(props: {
       searchable
       onOpenChange={setOpen}
       rail={
-        isCard ? modelPickerRail({ t: props.t, providers: props.providers, scope, onScope: setScope }) : undefined
+        isCard ? modelPickerRail({ t: props.t, providers, scope, onScope: setScope }) : undefined
       }
       // 搜索是一切的旁路：左栏正亮着某家时去搜，必须复位到「全部」，
       // 否则会出现「左栏亮着智谱、列表里全是 deepseek」这种自相矛盾的画面
@@ -271,8 +283,47 @@ export function ModelPickerMenu(props: {
       listRows={isCard ? 6 : undefined}
       placement={props.placement}
       trigger={props.trigger}
-      footer={props.footer}
+      footer={
+        closed === null && props.footer === undefined
+          ? undefined
+          : (close) => (
+              <>
+                {closed !== null && (
+                  <ClosedServicesNote
+                    t={props.t}
+                    models={closed.models}
+                    {...(props.onOpenProviders === undefined
+                      ? {}
+                      : {
+                          onOpen: () => {
+                            close();
+                            props.onOpenProviders?.();
+                          },
+                        })}
+                  />
+                )}
+                {props.footer?.(close)}
+              </>
+            )
+      }
     />
+  );
+}
+
+/**
+ * 菜单底部一行灰字：关着的服务商不进菜单，这行说「它们还在，是你关了」，并给回去打开的出口。
+ * 灰字是说明、不是选项：整行不可点，只有右端的文字按钮可点（有去向才画）。
+ */
+function ClosedServicesNote(props: { t: Messages; models: number; onOpen?: () => void }): React.ReactNode {
+  return (
+    <div className="model-closed-note">
+      <span className="model-closed-note-text">{props.t.modelMenu.closedServices(props.models)}</span>
+      {props.onOpen !== undefined && (
+        <button type="button" className="model-closed-note-link" onClick={props.onOpen}>
+          {props.t.modelMenu.openClosedServices}
+        </button>
+      )}
+    </div>
   );
 }
 

@@ -30,6 +30,7 @@
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
 import { parseChannelPrompt } from "../../shared/channel.ts";
+import { parsePlanNotes, PLAN_TOOL_NAME } from "../../shared/plan.ts";
 import { stampedThinkingLevel, type ChannelMarkRecord, type SessionRecord } from "../../shared/session.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import { usageCountsOfIntent } from "../../shared/intent-recall.ts";
@@ -45,6 +46,12 @@ export function createSessionRecorder(
    * 另记一份按天的账。失败不拦对话——账本是可以从会话 JSONL 重建的派生数据。
    */
   tasks?: TaskLedger,
+  /**
+   * 「以后再做」：一次 update_plan 跑完（complete）时，它的 later 里新记下的事交给这里写进遗留清单
+   * （CarryoverStore 是唯一写入者，在主进程；agent 跑着时那条会话不一定在窗口里打开着，所以不放 renderer 写）。
+   * 失败不拦对话——清单是附带的账。
+   */
+  onPlanLater?: (sessionId: string, drafts: { title: string; detail: string; anchor: string }[]) => void,
 ): (event: AgentEvent) => void {
   // 写失败不该让对话中断——记一条到 stderr，界面照常
   const persist = (sessionId: string, item: SessionRecord): void => {
@@ -129,6 +136,15 @@ export function createSessionRecorder(
       if (mark !== null) {
         persist(event.sessionId, mark);
         return;
+      }
+    }
+    if (onPlanLater !== undefined && item.role === "tool" && item.toolName === PLAN_TOOL_NAME && item.status === "complete") {
+      const later = parsePlanNotes(item.input).later;
+      if (later.length > 0) {
+        onPlanLater(
+          event.sessionId,
+          later.map((entry) => ({ title: entry.text, detail: entry.why ?? "", anchor: item.toolCallId })),
+        );
       }
     }
     const level = item.role === "assistant" ? turnLevels.get(event.sessionId) : undefined;

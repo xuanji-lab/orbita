@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../../shell/Icon";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { Menu, type MenuItem } from "../../shell/Menu";
 import { ContextMenu } from "../../shell/ContextMenu";
 import { RowHoverAction } from "../../shell/RowHoverAction";
-import { PanelIconButton, PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
+import { PanelButton, PanelIconButton, RightPanelFrame } from "../../shell/RightPanel";
+import { PanelEmpty } from "../../shell/PanelEmpty";
 import { DiffBody } from "../../shell/DiffView";
 import { useT } from "../../locale.ts";
 import { api } from "../../api";
@@ -13,6 +15,7 @@ import { pathWithin } from "../../../../shared/path.ts";
 import {
   absoluteReviewPath,
   disambiguatedDirs,
+  reviewDiffNotice,
   reviewEmptyText,
   reviewEmptyTitle,
   unifiedDiffEntries,
@@ -20,6 +23,9 @@ import {
 import { pathParts } from "../chat/path-parts.ts";
 import { Stats } from "../chat/FileTurnCard";
 import { ExcerptsTab, type ExcerptJump } from "./ExcerptsTab";
+import { reviewSubOf, type ReviewSub } from "../../shell/right-panel-memory.ts";
+import { useReportSub } from "../../shell/use-report-sub.ts";
+import { MemoryTab } from "../memory/MemoryTab";
 
 /**
  * 悬停动作键的几何（与文件面板树行同一套 --list-item-compact 行配方：22px 方块、
@@ -59,10 +65,24 @@ export function ReviewPanel(props: {
   excerptRevision: number;
   /** 摘抄页签点一条「回到原文」 */
   onJumpExcerpt: (jump: ExcerptJump) => void;
+  /** 「改动太大」的出口之一：在文件面板里打开这个文件（App 层接 openFocusFile） */
+  onOpenInFiles: (absPath: string) => void;
+  /** 对话里记忆行的「在审查面板里看」：token 递增的一次性请求，切到记忆页签 */
+  memoryFocus: number | null;
+  /**
+   * 第二层（按会话记忆，right-panel-memory.ts）：页签、来源。展开的文件不记。只在挂载时读一次当初值
+   * （App 按会话换 key 重挂）；之后经 onSubChange 报给 App。
+   */
+  sub?: ReviewSub;
+  onSubChange?: (sub: ReviewSub | undefined) => void;
 }) {
   const t = useT();
-  const [tab, setTab] = useState<"changes" | "excerpts">("changes");
-  const [source, setSource] = useState<ReviewSource>("task");
+  const [tab, setTab] = useState<"changes" | "excerpts" | "memory">(() => props.sub?.tab ?? "changes");
+  useEffect(() => {
+    if (props.memoryFocus !== null) setTab("memory");
+  }, [props.memoryFocus]);
+  const [source, setSource] = useState<ReviewSource>(() => props.sub?.source ?? "task");
+  useReportSub(reviewSubOf(tab, source), props.onSubChange);
   const [list, setList] = useState<ReviewList | null>(null);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -87,14 +107,16 @@ export function ReviewPanel(props: {
   }, []);
 
   /**
-   * 「在访达中显示」的宿主根（git 来源）：git 条目是仓库相对路径，拼成绝对路径后
+   * 「在访达中显示」的宿主根：git 条目是仓库相对路径，拼成绝对路径后
    * 必须落在会话允许的某条根之内才能走 fs:reveal（白名单在主进程，同文件面板的
-   * 纪律）。task 来源不走这里——它的白名单就是本任务文件账（session:reveal-artifact）。
-   * 根没回来 / 都不收留：按钮不出现（同附件行「不在根内的只展示不可点」）。
+   * 纪律）。task 来源的悬停键不走这里（白名单 = session:reveal-artifact），但
+   * 「改动太大」的「用默认应用打开」出口同样要找宿主根（fs:open 共用这道白名单），
+   * 所以不分公司来源都拉一次。
+   * 根没回来 / 都不收留：相关按钮不出现（同附件行「不在根内的只展示不可点」）。
    */
   const [revealRoots, setRevealRoots] = useState<readonly FileRoot[] | null>(null);
   useEffect(() => {
-    if (source === "task" || props.sessionId === null) {
+    if (props.sessionId === null) {
       setRevealRoots(null);
       return;
     }
@@ -102,7 +124,7 @@ export function ReviewPanel(props: {
     void api.files
       .roots({ sessionId: props.sessionId, workspaceId: props.workspaceId })
       .then((all) => {
-        if (alive) setRevealRoots(all.filter((root) => root.kind !== "attachments" && root.exists));
+        if (alive) setRevealRoots(all.filter((root) => root.kind !== "attachments" && root.kind !== "cited" && root.exists));
       })
       .catch(() => {
         if (alive) setRevealRoots(null);
@@ -110,26 +132,34 @@ export function ReviewPanel(props: {
     return () => {
       alive = false;
     };
-  }, [source, props.sessionId, props.workspaceId]);
+  }, [props.sessionId, props.workspaceId]);
 
+  /** 列表请求的代次：切来源 / 换会话后旧请求晚到，不能盖掉新来源的结果（k3.1 R10 / fable O3） */
+  const listGenRef = useRef(0);
   const refresh = useCallback(
     (wanted: ReviewSource) => {
       if (props.sessionId === null) return;
+      const gen = listGenRef.current + 1;
+      listGenRef.current = gen;
       setLoading(true);
       void api.review
         .list(props.sessionId, wanted)
         .then((result) => {
+          if (listGenRef.current !== gen) return;
           setList(result);
           setDiffs(new Map());
         })
-        .catch((cause: unknown) =>
+        .catch((cause: unknown) => {
+          if (listGenRef.current !== gen) return;
           setList({
             kind: "error",
             message: cause instanceof Error ? cause.message : String(cause),
             cwd: "",
-          }),
-        )
-        .finally(() => setLoading(false));
+          });
+        })
+        .finally(() => {
+          if (listGenRef.current === gen) setLoading(false);
+        });
     },
     [props.sessionId],
   );
@@ -214,6 +244,26 @@ export function ReviewPanel(props: {
     [source, props.sessionId, props.workspaceId, gitRevealTarget, flashHint],
   );
 
+  /**
+   * 「改动太大」的出口之一：用系统默认应用打开。与 git 来源的 reveal 同一道白名单
+   * （fs:open / fs:reveal 共用）：找不到收留它的根就不出这个按钮（task 来源的路径
+   * 本就是绝对路径，同一套找去）。
+   */
+  const openEntryDefault = useCallback(
+    (path: string): void => {
+      if (props.sessionId === null) return;
+      const target = gitRevealTarget(path);
+      if (target === null) return;
+      void api.files
+        .open({ sessionId: props.sessionId, workspaceId: props.workspaceId, root: target.root, dir: target.dir })
+        .catch((cause: unknown) => {
+          console.error("[review] 用默认应用打开失败", cause);
+          flashHint(path, cause instanceof Error ? cause.message : String(cause), "bad");
+        });
+    },
+    [props.sessionId, props.workspaceId, gitRevealTarget, flashHint],
+  );
+
   const toggle = useCallback((entry: ReviewEntry) => {
     if (entry.binary || entry.restored === true || entry.noBaseline === true) return;
     setExpanded((current) => (current === entry.path ? null : entry.path));
@@ -233,8 +283,14 @@ export function ReviewPanel(props: {
       .then((result) => {
         if (!cancelled) setDiffs((current) => new Map(current).set(path, result));
       })
-      .catch(() => {
-        if (!cancelled) setDiffs((current) => new Map(current).set(path, { diff: null, binary: false, restored: false }));
+      .catch((cause: unknown) => {
+        // 失败如实说：以前写成 { diff: null, binary: false }，正文区显示「二进制」
+        const message = cause instanceof Error ? cause.message : String(cause);
+        if (!cancelled) {
+          setDiffs((current) =>
+            new Map(current).set(path, { diff: null, binary: false, restored: false, error: { reason: "failed", message } }),
+          );
+        }
       })
       .finally(() => {
         if (!cancelled) setDiffLoading(null);
@@ -263,19 +319,24 @@ export function ReviewPanel(props: {
   return (
     <RightPanelFrame
       header={
-        <div className="cap-review-head">
-          <PanelTitle icon="file-diff" title={t.review.title} className="cap-slot-left" />
+        <div className="cap-review-head tabs-as-title">
+          {/* 页签就是标题（2026-10-30）：「改动 / 摘抄 / 记忆」三个页签加标题在 320 宽的胶囊里
+              放不下——标题叠在页签底下、或把「记忆」挤出去。页签本身已经说了这是哪个面板 */}
           {/* 「改动 / 摘抄」页签组：两个 1fr 轨道等宽 → 构造性落在胶囊中心
               （2026-10-19 两轮复测：grow 对称偏左、绝对居中压下拉，都不对）。
               放不下时轨道压缩，页签组顺排 + 横滚渐隐退化 */}
           <div className="cap-tabs" role="tablist" aria-label={t.review.title}>
             <button type="button" role="tab" className="cap-tab no-drag" aria-selected={tab === "changes"} onClick={() => setTab("changes")}>
-              <Icon name="file-diff" size={12} strokeWidth={1.8} />
+              <Icon name={FEATURE_ICON.review} size={12} strokeWidth={1.8} />
               {t.review.tabChanges}
             </button>
             <button type="button" role="tab" className="cap-tab no-drag" aria-selected={tab === "excerpts"} onClick={() => setTab("excerpts")}>
               <Icon name="quote" size={12} strokeWidth={1.8} />
               {t.review.tabExcerpts}
+            </button>
+            <button type="button" role="tab" className="cap-tab no-drag" aria-selected={tab === "memory"} onClick={() => setTab("memory")}>
+              <Icon name={FEATURE_ICON.memory} size={12} strokeWidth={1.8} />
+              {t.review.tabMemory}
             </button>
           </div>
           <div className="cap-slot-right">
@@ -323,29 +384,36 @@ export function ReviewPanel(props: {
       />
       {tab === "excerpts" ? (
         <ExcerptsTab sessionId={props.sessionId} revision={props.excerptRevision} onJump={props.onJumpExcerpt} />
+      ) : tab === "memory" ? (
+        <MemoryTab sessionId={props.sessionId} />
       ) : props.sessionId === null ? (
-        <EmptyState title={t.review.noTask} />
+        <PanelEmpty icon={FEATURE_ICON.review}>{t.review.noTask}</PanelEmpty>
       ) : loading && list === null ? (
-        <EmptyState title={t.common.loading} />
+        <PanelEmpty busy>{t.common.loading}</PanelEmpty>
       ) : list === null || (list.kind === "ok" && entries.length === 0) ? (
-        <EmptyState title={t.review.emptyNoChanges} detail={t.review.emptyNoChangesDetail(source)} />
+        <PanelEmpty icon={FEATURE_ICON.review} hint={t.review.emptyNoChangesDetail(source)}>
+          {t.review.emptyNoChanges}
+        </PanelEmpty>
       ) : list.kind !== "ok" ? (
-        <EmptyState
-          title={reviewEmptyTitle(list, t)}
-          detail={reviewEmptyText(list, t, source)}
-          danger={list.kind === "error"}
-        />
+        <PanelEmpty
+          icon={list.kind === "error" ? undefined : "git-branch"}
+          tone={list.kind === "error" ? "danger" : undefined}
+          hint={reviewEmptyText(list, t, source)}
+        >
+          {reviewEmptyTitle(list, t)}
+        </PanelEmpty>
       ) : (
         // minmax(0,1fr)：grid 项默认 min-width:auto，长文件名会把行撑出面板、把右端统计挤出视野（实机）
         <div className="panel-list" style={{ paddingTop: "var(--space-2)" }}>
           {source === "branch" && list.upstream !== undefined && (
-            <p className="panel-empty" style={{ padding: "0 var(--space-2) var(--space-2)" }}>
-              {t.review.againstUpstream(list.upstream)}
-            </p>
+            <p className="review-note">{t.review.againstUpstream(list.upstream)}</p>
           )}
           {entries.map((entry) => {
             const open = expanded === entry.path;
             const diff = diffs.get(entry.path);
+            // 正文区不是 diff 时说什么（拒绝 / 失败 / 链接 / 已还原 / 二进制）；null = 交给 DiffBody
+            const notice = diff === undefined ? null : reviewDiffNotice(diff, t);
+            // 符号链接可以展开：正文区说它指向哪（面板不读目标）。二进制 / 已还原没什么可展开的
             const expandable = !entry.binary && entry.restored !== true && entry.noBaseline !== true;
             // 悬停键「在访达中显示」：task 来源必有（白名单 = 本任务文件账）；git 来源
             // 要落在 fs:roots 白名单的某条根内，否则不出现（同附件行「根外只展示」）
@@ -425,9 +493,29 @@ export function ReviewPanel(props: {
                       <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
                         {t.review.noBaseline}
                       </span>
+                    ) : entry.symlink !== undefined ? (
+                      // 链接不数行（面板不跟到目标读）：角标与文件面板的符号链接同一个箭头
+                      <span
+                        style={{
+                          flex: "0 0 auto",
+                          display: "inline-flex",
+                          gap: 4,
+                          alignItems: "center",
+                          fontSize: "var(--font-size-sm)",
+                          color: "var(--color-text-tertiary)",
+                        }}
+                      >
+                        <Icon name="arrow-up-right" size={11} strokeWidth={2} />
+                        {t.review.symlink}
+                      </span>
                     ) : entry.binary ? (
                       <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
                         {t.review.binary}
+                      </span>
+                    ) : entry.lineCountUnknown === true ? (
+                      /* 未跟踪文件超过行数上限：与左栏同口径，不拿 +0 冒充没改动 */
+                      <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
+                        {t.review.linesUnknown}
                       </span>
                     ) : (
                       <span style={{ flex: "0 0 auto", fontSize: "var(--font-size-sm)" }}>
@@ -454,12 +542,70 @@ export function ReviewPanel(props: {
                       <span style={{ fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
                         {t.common.loading}
                       </span>
-                    ) : diff.diff === null ? (
-                      <span style={{ fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)" }}>
-                        {diff.restored ? t.review.restoredEmpty : t.review.binary}
+                    ) : notice !== null && notice.kind === "too-large" ? (
+                      // 改动太大：主进程没读盘没生成，这里给说明 + 两个出口（不做首尾截断：会切断
+                      // hunk、丢行号）。英文原句放悬停，排查用
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "flex-start",
+                          gap: "var(--space-2)",
+                          padding: "0 var(--space-2)",
+                        }}
+                      >
+                        <span
+                          title={diff.tooLarge?.message}
+                          style={{
+                            display: "flex",
+                            gap: 4,
+                            alignItems: "flex-start",
+                            fontSize: "var(--font-size-sm)",
+                            color: "var(--color-text-tertiary)",
+                            overflowWrap: "anywhere",
+                          }}
+                        >
+                          <span style={{ display: "inline-flex", alignItems: "center", height: "1lh", flex: "0 0 auto" }}>
+                            <Icon name="file" size={11} strokeWidth={1.8} />
+                          </span>
+                          <span>{t.review.tooLarge(notice.exceeded)}</span>
+                        </span>
+                        <div style={{ display: "flex", gap: "var(--space-1)", flexWrap: "wrap" }}>
+                          {gitRevealTarget(entry.path) !== null && (
+                            <PanelButton onClick={() => openEntryDefault(entry.path)}>
+                              <Icon name="external-link" size={13} strokeWidth={1.8} />
+                              {t.files.openDefault}
+                            </PanelButton>
+                          )}
+                          <PanelButton onClick={() => props.onOpenInFiles(absolute)}>
+                            <Icon name="panel-right" size={13} strokeWidth={1.8} />
+                            {t.review.openInFilesPanel}
+                          </PanelButton>
+                        </div>
+                      </div>
+                    ) : notice !== null ? (
+                      // 拒绝 / 失败用图标 + 文字说（颜色只是第二信号）；英文原句放悬停，排查用
+                      <span
+                        title={diff.error?.message}
+                        style={{
+                          display: "flex",
+                          gap: 4,
+                          alignItems: "flex-start",
+                          fontSize: "var(--font-size-sm)",
+                          color: notice.tone === "danger" ? "var(--color-danger)" : "var(--color-text-tertiary)",
+                          overflowWrap: "anywhere",
+                        }}
+                      >
+                        {notice.tone === "danger" && (
+                          // 图标钉在第一行的行高里居中：原因折成两行时不悬在两行中间
+                          <span style={{ display: "inline-flex", alignItems: "center", height: "1lh", flex: "0 0 auto" }}>
+                            <Icon name="triangle-alert" size={11} strokeWidth={2} />
+                          </span>
+                        )}
+                        <span>{notice.text}</span>
                       </span>
                     ) : (
-                      <DiffBody entries={unifiedDiffEntries(diff.diff)} maxHeight={420} />
+                      <DiffBody entries={unifiedDiffEntries(diff.diff ?? "")} maxHeight={420} />
                     )}
                   </div>
                 )}
@@ -515,16 +661,3 @@ function RowName(props: { path: string; cwd: string | null; disambig: string | n
   );
 }
 
-/** 空态 / 提示：一行浅灰字（右栏统一：不居中、不放大图标、不加粗；出错时红字） */
-function EmptyState(props: { title: string; detail?: string; danger?: boolean }) {
-  return (
-    <p
-      className="panel-empty"
-      role={props.danger === true ? "alert" : undefined}
-      style={{ paddingTop: "var(--space-3)", color: props.danger === true ? "var(--color-danger)" : undefined }}
-    >
-      {props.title}
-      {props.detail !== undefined && ` ${props.detail}`}
-    </p>
-  );
-}

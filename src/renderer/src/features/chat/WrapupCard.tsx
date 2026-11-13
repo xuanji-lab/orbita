@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { Icon } from "../../shell/Icon";
 import { IconButton } from "../../shell/IconButton";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { useT } from "../../locale.ts";
 import { formatTokens } from "../../utils/format-tokens.ts";
 import { formatCost } from "../settings/price-chart-model.ts";
@@ -239,7 +240,7 @@ export function WrapupCard(props: {
       }}
     >
       <div className="wrapup-head">
-        <Icon name="list-todo" size={16} />
+        <Icon name={FEATURE_ICON.carryovers} size={16} />
         <strong>{t.carryover.wrapUp}</strong>
         {collapsed && (
           <button type="button" className="wrapup-undo row-trailing" onClick={() => setCollapsed(false)}>
@@ -304,7 +305,7 @@ export function WrapupCard(props: {
         <div className="wrapup-sep" />
         <div className="wrapup-group">
           <div className="wrapup-group-head">
-            <Icon name="list-todo" size={13} />
+            <Icon name={FEATURE_ICON.carryovers} size={13} />
             {t.carryover.leftGroup}
             <span className="wrapup-group-note">{t.carryover.leftGroupNote(draft.left.length)}</span>
           </div>

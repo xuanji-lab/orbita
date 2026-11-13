@@ -65,7 +65,7 @@
 .pv-headend {
   display: flex;
   flex: none;
-  gap: 2px;
+  gap: var(--space-0-5);
   margin-left: auto;
 }
 
@@ -74,7 +74,7 @@
   display: inline-flex;
   flex: none;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   height: 20px;
   padding: 0 7px;
   border-radius: var(--radius-pill);
@@ -98,7 +98,7 @@
   gap: var(--space-2);
 }
 .pv-inline.tight {
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 
 /* 连接区、模型列表、Fetch 清单：内容面上一块实底 + 发丝框，把「一组要一起存的东西」圈起来 */
@@ -133,7 +133,7 @@
 }
 .pv-fld-stack {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 0;
 }
 .pv-issue {
@@ -166,7 +166,7 @@
   min-width: 40px;
   max-width: 100%;
   height: 100%;
-  padding: 0 0 0 10px;
+  padding: 0 0 0 var(--space-2-5);
   border: 0;
   background: transparent;
   color: var(--color-text-primary);
@@ -183,7 +183,7 @@
 }
 .pv-url-suffix {
   flex: 1 0 auto;
-  padding-right: 10px;
+  padding-right: var(--space-2-5);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
@@ -235,7 +235,7 @@
   font-size: var(--font-size-sm);
 }
 .pv-oauth-code-value {
-  padding: 2px var(--space-2);
+  padding: var(--space-0-5) var(--space-2);
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-sm);
   background: var(--color-bg-muted);
@@ -302,7 +302,7 @@
 .pv-grow {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
 }
 .pv-mid {
@@ -328,8 +328,8 @@
   display: inline-flex;
   flex: none;
   align-items: center;
-  gap: 4px;
-  padding: 1px 6px;
+  gap: var(--space-1);
+  padding: 1px var(--space-1-5);
   border-radius: var(--radius-sm);
   background: var(--color-chat-muted-bg);
   font-family: var(--font-family-mono);
@@ -353,7 +353,7 @@
 /* 行操作：悬停 / 键盘进入这一行才浮现；二次确认删除与测试中常驻（.pinned） */
 .pv-acts {
   display: flex;
-  gap: 2px;
+  gap: var(--space-0-5);
   opacity: 0;
   transition: opacity var(--duration-instant) var(--ease-standard);
 }
@@ -366,7 +366,7 @@
 .pv-mreason {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
+  gap: var(--space-1-5);
   margin: 0 var(--space-3) var(--space-2) var(--space-4);
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--color-border-subtle);
@@ -380,7 +380,7 @@
   white-space: pre-wrap;
 }
 .pv-mreason .orbita-icon {
-  margin-top: 2px;
+  margin-top: var(--space-0-5);
   color: var(--color-danger);
 }
 /* 没有模型：两个按钮就是说明 */
@@ -429,14 +429,14 @@
 .pv-fetch-list {
   max-height: 168px;
   overflow: auto;
-  padding: 4px;
+  padding: var(--space-1);
 }
 .pv-frow {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   height: 30px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   border-radius: var(--radius-md);
   cursor: pointer;
 }
@@ -486,6 +486,9 @@
 
 .pv-wall {
   display: grid;
+  /* 单列 minmax(0, 1fr)：只定义行不定义列时是隐式 auto 列，最小宽 = 内容的固有宽，右栏打开、
+   * 设置内容区收窄后工具条把整列撑出 26px（经典滚动条下就是横向滚动条） */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-3);
   align-content: start;
 }
@@ -501,7 +504,7 @@
   align-items: center;
   gap: var(--space-2);
   height: var(--control-height-md);
-  padding: 0 10px;
+  padding: 0 var(--space-2-5);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   color: var(--color-text-tertiary);
@@ -530,105 +533,23 @@
   font-weight: var(--weight-semibold);
 }
 /* 大 / 小两档：一组分段按钮 */
-.pv-seg {
-  display: inline-flex;
-  flex: none;
-  padding: 2px;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
-}
-.pv-seg button {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: calc(var(--control-height-md) - 6px);
-  padding: 0 8px;
-  border: 0;
-  border-radius: calc(var(--radius-md) - 2px);
-  background: transparent;
-  color: var(--color-text-secondary);
-  font-family: var(--font-family-base);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-}
-.pv-seg button:hover {
-  color: var(--color-text-primary);
-}
-.pv-seg button[aria-pressed="true"] {
-  background: var(--color-bg-active);
-  color: var(--color-text-primary);
-  font-weight: var(--weight-semibold);
-}
+/* 分段（接入协议、卡片大小）用全应用同一个配方 .seg-control（styles.css）：外框 28、段 24 */
 
 .pv-wall-group {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-2);
   margin-top: var(--space-2);
 }
-.pv-wall-empty {
-  padding: var(--space-6) 0;
-  text-align: center;
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-sm);
+/* 空态（PanelEmpty）：设置页的字从列左缘起，不再居中——与分区标题、卡片同一根线 */
+.panel-empty.pv-wall-empty {
+  padding: var(--space-2) 0;
 }
 
-.pv-cards {
-  display: grid;
-  gap: var(--space-2);
-}
-.pv-cards.large {
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-}
-.pv-cards.small {
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-  gap: 6px;
-}
-
-/* 厂商卡：hover 抬阴影、描边加深，不换色不位移（设计系统 *Hover*） */
-.pv-vcard {
-  position: relative;
-  min-width: 0;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-lg);
-  background: var(--color-bg-panel);
-  color: var(--color-text-primary);
-  cursor: pointer;
-  transition:
-    var(--transition-hover),
-    box-shadow var(--duration-instant) var(--ease-standard);
-}
-.pv-vcard:hover {
-  border-color: var(--color-border-strong);
-  box-shadow: var(--shadow-composer);
-}
-.pv-vcard:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-}
 /* 自定义兼容、还没加过：虚线空白卡，读起来就是「填你自己的」 */
 .pv-vcard.blank {
   border-style: dashed;
   background: transparent;
-}
-.pv-cards.large .pv-vcard {
-  display: grid;
-  grid-template-rows: auto 1fr auto;
-  gap: var(--space-2);
-  min-height: 140px;
-  padding: var(--space-3);
-}
-.pv-cards.small .pv-vcard {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 42px;
-  padding: 6px 8px;
-}
-.pv-vcard-top {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-2);
 }
 .pv-logo-tile {
   flex: none;
@@ -649,66 +570,19 @@
   border-style: dashed;
   background: transparent;
 }
-.pv-vcard-text {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-.pv-vcard-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--font-size-base);
-  font-weight: var(--weight-semibold);
-}
-.pv-cards.small .pv-vcard-name {
-  flex: 1;
-}
-.pv-vcard-note {
-  font-size: var(--font-size-sm);
-  line-height: var(--line-height-ui);
-  color: var(--color-text-secondary);
-}
-.pv-vcard-foot {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding-right: 30px;
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-/* 已添加：图标是状态，颜色只是第二信号 */
-.pv-added-badge {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: 4px;
-  height: 20px;
-  padding: 0 7px;
-  border-radius: var(--radius-pill);
-  background: var(--color-bg-muted);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-xs);
-  white-space: nowrap;
-}
-.pv-added-badge .orbita-icon {
-  color: var(--color-success);
-}
 /* 卡片右上角的角标并排（已添加 + 未实测） */
 .pv-card-marks {
   display: inline-flex;
   flex: none;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
 }
 /* 未实测：与「已添加」同尺寸，虚线描边、不铺底——是一句提醒，不是一个状态 */
 .pv-untested-badge {
   display: inline-flex;
   flex: none;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   height: 20px;
   padding: 0 7px;
   border: 1px dashed var(--color-border-strong);
@@ -778,9 +652,9 @@
 .pv-back {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  margin: 0 0 var(--space-3) -6px;
-  padding: 4px 6px;
+  gap: var(--space-0-5);
+  margin: 0 0 var(--space-3) calc(-1 * var(--space-1-5));
+  padding: var(--space-1) var(--space-1-5);
   border: 0;
   border-radius: var(--radius-md);
   background: transparent;
@@ -801,7 +675,7 @@
   margin-bottom: var(--space-3);
 }
 .pv-kind .pv-logo {
-  padding: 8px;
+  padding: var(--space-2);
   box-sizing: content-box;
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-lg);
@@ -809,7 +683,7 @@
 }
 .pv-kind-text {
   display: grid;
-  gap: 2px;
+  gap: var(--space-0-5);
   min-width: 0;
 }
 .pv-kind-name {
@@ -836,7 +710,7 @@
 }
 .pv-untested-bar .orbita-icon {
   flex: none;
-  margin-top: 2px;
+  margin-top: var(--space-0-5);
   color: var(--color-info);
 }
 .pv-untested-bar a {
@@ -846,10 +720,29 @@
 .pv-untested-bar a:hover {
   text-decoration: underline;
 }
+/* 服务商关着时详情页顶部的说明：和「未实测」同一个条，图标用警示色（暂停），文字照旧 */
+.pv-closed-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-warning) 8%, transparent);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+}
+.pv-closed-bar .orbita-icon {
+  flex: none;
+  margin-top: var(--space-0-5);
+  color: var(--color-warning);
+}
 .pv-tabs {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: var(--space-1);
   margin-bottom: var(--space-3);
   padding-bottom: var(--space-2);
   border-bottom: 1px solid var(--color-border-subtle);
@@ -858,10 +751,10 @@
 .pv-tab {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   max-width: 260px;
   height: var(--control-height-md);
-  padding: 0 10px;
+  padding: 0 var(--space-2-5);
   border: 0;
   border-radius: var(--radius-md);
   background: transparent;
@@ -891,6 +784,10 @@
   font-weight: var(--weight-regular);
   color: var(--color-text-tertiary);
 }
+/* 关着的实例标签：名字退淡，右端写「已关闭」 */
+.pv-tab.closed .pv-tab-name {
+  opacity: 0.6;
+}
 .pv-tab.dragging {
   opacity: 0.4;
 }
@@ -904,10 +801,10 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   flex: none;
   height: var(--control-height-md);
-  padding: 0 12px;
+  padding: 0 var(--space-3);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   background: transparent;
@@ -980,7 +877,7 @@
   width: 100%;
   min-width: 0;
   height: var(--control-height-md);
-  padding: 0 10px;
+  padding: 0 var(--space-2-5);
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);
   background: var(--color-bg-panel);
@@ -1011,10 +908,10 @@
 .pv-locked {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   width: 100%;
   height: var(--control-height-md);
-  padding: 0 10px;
+  padding: 0 var(--space-2-5);
   border-radius: var(--radius-md);
   background: var(--color-bg-muted);
   color: var(--color-text-secondary);
@@ -1031,7 +928,7 @@
 .pv-line {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   margin: 0;
   font-size: var(--font-size-sm);
   line-height: var(--line-height-ui);
@@ -1046,7 +943,7 @@
 .pv-line.bad {
   display: flex;
   align-items: flex-start;
-  padding: 6px 8px;
+  padding: var(--space-1-5) var(--space-2);
   border-radius: var(--radius-md);
   background: var(--color-danger-soft);
   color: var(--color-danger);
@@ -1055,7 +952,7 @@
   white-space: pre-wrap;
 }
 .pv-line.bad .orbita-icon {
-  margin-top: 2px;
+  margin-top: var(--space-0-5);
 }
 
 /* ---------- 模型弹窗：实心面板 + 发丝线 + 重投影（dialogs 配方） ---------- */
@@ -1066,7 +963,7 @@
 .pv-modal-root {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: var(--z-popover);
   pointer-events: none;
 }
 .pv-modal-backdrop {
@@ -1112,16 +1009,16 @@
   align-items: start;
 }
 .pv-fld.pv-fld-top > .pv-lab {
-  padding-top: 4px;
+  padding-top: var(--space-1);
 }
 /* 思考档 · 继承：只读的事实，同 .pv-locked「输入框的形、只读的实」 */
 .pv-levels-inherited {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px var(--space-3);
+  gap: var(--space-1) var(--space-3);
   min-height: var(--control-height-md);
-  padding: 4px 10px;
+  padding: var(--space-1) var(--space-2-5);
   border-radius: var(--radius-md);
   background: var(--color-bg-muted);
   font-size: var(--font-size-sm);
@@ -1130,7 +1027,7 @@
 .pv-levels-source {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   margin-left: auto;
   color: var(--color-text-tertiary);
 }
@@ -1138,8 +1035,8 @@
 .pv-levels {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  padding: 6px;
+  gap: var(--space-1);
+  padding: var(--space-1-5);
   border-radius: var(--radius-lg);
   background: var(--color-bg-muted);
 }
@@ -1157,7 +1054,7 @@
 }
 .pv-fld.stacked {
   grid-template-columns: minmax(0, 1fr);
-  gap: 4px;
+  gap: var(--space-1);
 }
 .pv-modal-foot {
   display: flex;
@@ -1191,7 +1088,7 @@
   flex: 1;
   min-width: 0;
   height: 100%;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   border: 0;
   background: transparent;
   color: var(--color-text-primary);
@@ -1205,7 +1102,7 @@
   color: var(--color-text-tertiary);
 }
 .pv-unit-mark {
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
@@ -1227,7 +1124,7 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
-  padding: var(--space-2) var(--space-2) var(--space-2) calc(var(--space-2) + 24px);
+  padding: var(--space-2) var(--space-2) var(--space-2) calc(var(--space-2) + var(--space-6));
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
   background: var(--color-bg-muted);
@@ -1265,7 +1162,7 @@
   color: var(--color-text-primary);
 }
 .pv-assign-hint .pv-btn {
-  margin-top: 2px;
+  margin-top: var(--space-0-5);
   justify-content: flex-start;
   align-self: flex-start;
 }
@@ -1304,7 +1201,7 @@
 .pv-assign-target {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
   color: var(--color-text-primary);
 }
@@ -1343,7 +1240,7 @@
 .pv-assign-error {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   margin: var(--space-3) 0 0;
   font-size: var(--font-size-sm);
   color: var(--color-danger);
