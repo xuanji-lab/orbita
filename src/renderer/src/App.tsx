@@ -1467,7 +1467,7 @@ export function App() {
     <DocPaperContext.Provider value={docPaper}>
     <ExperimentalFeaturesContext.Provider value={experimentalFeatures}>
     <ProcessViewContext.Provider value={settings.processView ?? "turn"}>
-    <BackgroundStripStyleContext.Provider value={settings.backgroundStrip ?? "summary"}>
+    <BackgroundStripStyleContext.Provider value={settings.backgroundStrip ?? "line"}>
     <AutomationContext.Provider value={automationUi}>
     <AutomationRunSessionsContext.Provider value={runSessionIds}>
     <PastedTextCollapseContext.Provider value={settings.collapsePastedText ?? true}>

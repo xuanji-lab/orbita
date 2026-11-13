@@ -1,10 +1,11 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
 import type { ChannelMessage } from "@shared/channel";
-import type { BackgroundStripStyle } from "@shared/settings";
 import { Icon } from "../../shell/Icon";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { StatusPie } from "../../shell/StatusPie";
+import { Menu, type MenuItem } from "../../shell/Menu";
+import { Chip } from "../../shell/Chip";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 import type { PendingApproval, SessionEntry } from "./session-states.ts";
@@ -15,50 +16,48 @@ import {
   bgSummaryParts,
   foldBgItems,
   needsClock,
-  overflowTarget,
   stepText,
   visibleBgItems,
   type BgItem,
-  type BgSummaryPart,
   type BgSubItem,
+  type BgSummaryPart,
 } from "./background-strip.ts";
 import { subSessionBarFill } from "./sub-sessions-rows.ts";
 import { toolWord } from "./builtin-commands.ts";
 import { formatRunClock, rollupToolKey } from "./tool-results.ts";
 import type { HomeCardLineText } from "./home-cards.ts";
 
+/** 浮层清单最多露出几行，再多在清单内部滚（面板高 = 行数 × 行高 + 上下内边距） */
+const LIST_ROWS = 6;
+/** 清单一行高 = `--control-height-md`（32）；面板内边距上下各 `--space-1`（4） */
+const LIST_MAX_HEIGHT = LIST_ROWS * 32 + 8;
+
 /**
- * 输入框上方的后台任务条（2026-11-13）。位置与 QueueStrip / ApprovalBar 同一族：
- * 都在 Pane 的页脚网格里、输入框正上方；本条在三者里最靠上——它是常驻的「背景事实」，
- * 审批要你回答、排队是等发出的话，这两样离输入框更近。
+ * 后台任务状态位（2026-11-13 起；2026-11-14 用户：「空间利用率太低了，占用太多看聊天记录的空间」
+ * ——所以它**不是一张卡、不推版面**）。两种落点，数据与交互是同一套：
+ *   - line（细条，默认）：输入框上沿的一行小字，没有自己的外框 / 底色 / 阴影，左缘与输入框文字
+ *     对齐；「后台」+ 计数 + 按宽度并排的前几项（饼 + 名字 + 当前一步）+「+N」。整行是一个触发器；
+ *   - capsule（胶囊）：输入框底栏里的一颗（饼 + 「后台 3 · 1 等你」），不占对话区一个像素；
+ *     底栏收窄（≤ 410）时只留饼 + 总数。
+ * 点开都是同一个浮层清单（复用 `Menu`：`.glass-float` + `.menu-panel` 那一套，盖在对话区上，
+ * 不推版面）：每项一行——饼、名字、当前一步、行尾已跑多久（自动化是下次运行时间）；等你的排最前；
+ * 超过 6 项在清单内部滚。整行可点：子会话 → 右栏子会话面板的会话层，自动化 → 自动化面板里那一条。
+ * 键盘：触发器 Tab 可达，Enter / 空格打开，上下键在行间走，Enter 进那一条，Esc 关并把焦点还给触发器。
  *
- * 结构与交互只有一套，两种密度只差版式（设置 › 外观）：
- *   - summary（汇总条，默认）：一行。左边「后台 2 项在跑 · 1 项等你」，右边最多并排三项
- *     （饼 + 名字 + 当前那一步），多的折成「+N」；
- *   - rows（分行条）：条头同一句事实，每项一行（饼、名字、当前那一步、已跑多久、「打开」），
- *     最多 4 行，多的折成条头右端的「还有 N 项」。
- * 点一项 = 进它（子会话 → 右栏子会话面板的会话层，同派出卡点击的那条路；自动化 → 自动化面板
- * 里那一条）。每项是个 button：Tab 走得到，Enter 等同点击；没有「全部忽略」——项只随真实状态消失。
+ * 没有后台项时渲染 null。完成项停留片刻后退场，失败项留到母会话处理过为止（background-strip.ts）。
  *
- * 没有后台项时整条不渲染（不留空框和分隔线）。完成项停留 `BG_LINGER_MS` 后自己退场，
- * 不弹跳；持续动效只有在跑的饼的呼吸（设计系统：旋转与呼吸两种之一，失焦时暂停）。
- *
- * **性能**：本组件是 memo，props 全是稳定引用（`items` 由 useBackgroundItems 逐字段比较后才换，
- * 按 id 查询的函数引用稳定），流式输出每个 token 都不会让它重画；「当前在做哪一步」要扫转录，
- * 只在条自己的 1 秒时钟（且只在有在跑 / 停留中的项时才走）里重算，并按槽对象缓存。
+ * **性能**：memo 组件，props 全是稳定引用（`items` 由 useBackgroundItems 逐字段比较后才换），流式输出的
+ * 每个 token 不会让它重画；要扫转录的「当前一步」按槽对象缓存，且只在有在跑 / 停留中的项时才开 1 秒时钟。
  */
-export const BackgroundStrip = memo(function BackgroundStrip(props: {
+export const BackgroundStatus = memo(function BackgroundStatus(props: {
+  variant: "line" | "capsule";
   items: readonly BgItem[];
-  density: BackgroundStripStyle;
   /** 各子会话的通道全文（在问你 / 完成的结语、没载过槽时的最近一句） */
   channels: ReadonlyMap<string, readonly ChannelMessage[]>;
   entryOf: (id: string) => SessionEntry | undefined;
   approvalsOf: (id: string) => readonly PendingApproval[];
   onOpenSubSession: (childId: string) => void;
   onOpenAutomation: (automationId: string) => void;
-  /** 「+N」/「还有 N 项」：打开子会话列表 / 自动化面板 */
-  onOpenSubSessionsList: () => void;
-  onOpenAutomationPanel: () => void;
 }) {
   const t = useT();
   const clock = needsClock(props.items);
@@ -69,90 +68,137 @@ export const BackgroundStrip = memo(function BackgroundStrip(props: {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [clock]);
-  // 条自己的宽度（汇总条据此决定并排几项）：回调 ref 在条出现 / 消失时接上 / 断开观察
+  const lineText = useMemo(() => lineTextOf(t), [t]);
+  const steps = useRef(new Map<string, StepCache>());
+
+  // 细条自己的宽度（决定并排几项）：回调 ref 在它出现 / 消失时接上 / 断开观察；
+  // 宽度只在跨过换档线时才进状态，拖窗口的每一帧不让它重画
   const [width, setWidth] = useState(Infinity);
   const observer = useRef<ResizeObserver | null>(null);
   const measure = useCallback((el: HTMLElement | null) => {
     observer.current?.disconnect();
     observer.current = null;
     if (el === null) return;
-    // 宽度只在跨过换档线时才进状态：拖窗口的每一帧不让条重画
     const apply = (next: number): void => setWidth((prev) => (bgInlineCap(prev) === bgInlineCap(next) ? prev : next));
     apply(el.getBoundingClientRect().width);
     observer.current = new ResizeObserver(() => apply(el.getBoundingClientRect().width));
     observer.current.observe(el);
   }, []);
-  const lineText = useMemo(() => lineTextOf(t), [t]);
-  const steps = useRef(new Map<string, StepCache>());
 
   const visible = visibleBgItems(props.items, now);
   if (visible.length === 0) return null;
-  const { shown, hidden } = foldBgItems(visible, props.density, bgInlineCap(width));
-  const overflow = overflowTarget(hidden);
-  // 事件对象不能直接当参数往外传（onOpenAutomationPanel 的实现吃一个可选的自动化 id）
-  const openOverflow = (): void => {
-    if (overflow === "subsessions") props.onOpenSubSessionsList();
-    else props.onOpenAutomationPanel();
-  };
-  const summary = <SummaryParts parts={bgSummaryParts(visible, t)} />;
 
-  const textOf = (item: BgItem): string => {
-    if (item.kind === "automation") return automationLine(item, Date.now(), t);
-    return cachedStep(steps.current, item, props, t, lineText);
+  const stepOf = (item: BgSubItem): string => cachedStep(steps.current, item, props, t, lineText);
+  const menuItems: MenuItem[] = visible.map((item): MenuItem => {
+    if (item.kind === "automation") {
+      return {
+        id: item.key,
+        label: item.title,
+        glyph: <Icon name={FEATURE_ICON.automation} size={12} />,
+        badge: <span className="bg-menu-time">{automationLine(item, Date.now(), t)}</span>,
+        onSelect: () => props.onOpenAutomation(item.automationId),
+      };
+    }
+    return {
+      id: item.key,
+      label: item.title === "" ? t.subSessions.untitled : item.title,
+      glyph: <SubPie item={item} />,
+      hint: stepOf(item),
+      ...(item.status === "running"
+        ? { badge: <span className="bg-menu-time">{formatRunClock(now - item.startedAt)}</span> }
+        : null),
+      onSelect: () => props.onOpenSubSession(item.childId),
+    };
+  });
+  const summaryText = bgSummary(visible, t);
+  const menuProps = {
+    items: menuItems,
+    placement: "above" as const,
+    align: "start" as const,
+    panelMinWidth: 360,
+    panelMaxWidth: 560,
+    panelMaxHeight: LIST_MAX_HEIGHT,
   };
-  const views = shown.map((item) => (
-    <BgItemView
-      key={item.key}
-      item={item}
-      density={props.density}
-      text={textOf(item)}
-      now={now}
-      onOpen={() =>
-        item.kind === "sub" ? props.onOpenSubSession(item.childId) : props.onOpenAutomation(item.automationId)
-      }
-    />
-  ));
 
-  if (props.density === "rows") {
+  if (props.variant === "capsule") {
+    const lead = visible[0];
+    const waiting = visible.filter(
+      (item) => item.kind === "sub" && (item.status === "waiting" || item.status === "approval"),
+    ).length;
     return (
-      <section ref={measure} className="bg-strip glass-card" data-density="rows" aria-label={`${t.bgStrip.aria}: ${bgSummary(visible, t)}`}>
-        <div className="bg-strip-head">
-          <span className="bg-strip-label">{t.bgStrip.label}</span>
-          {summary}
-          {hidden.length > 0 && (
-            <button type="button" className="bg-more row-trailing" onClick={openOverflow}>
-              {t.bgStrip.moreRows(hidden.length)}
-            </button>
-          )}
-        </div>
-        <div className="bg-strip-items">{views}</div>
-      </section>
+      <Menu
+        {...menuProps}
+        // 胶囊在底栏靠右：清单右缘对齐胶囊右缘，不探到右栏上
+        align="end"
+        trigger={({ open, toggle }) => (
+          <Chip
+              active={open}
+              title={`${t.bgStrip.aria}: ${summaryText}`}
+              ariaLabel={`${t.bgStrip.aria}: ${summaryText}`}
+              onClick={toggle}
+              className="chip-bg"
+            >
+              <span className="bg-cap">
+                {lead !== undefined && lead.kind === "sub" ? (
+                  <SubPie item={lead} />
+                ) : (
+                  <Icon name={FEATURE_ICON.automation} size={12} />
+                )}
+                <span className="bg-cap-long">{t.bgStrip.capsule(visible.length, waiting)}</span>
+                <span className="bg-cap-short">{visible.length}</span>
+              </span>
+          </Chip>
+        )}
+      />
     );
   }
+
+  const { shown, hidden } = foldBgItems(visible, bgInlineCap(width));
   return (
-    <section ref={measure} className="bg-strip glass-card" data-density="summary" aria-label={`${t.bgStrip.aria}: ${bgSummary(visible, t)}`}>
-      <div className="bg-strip-head">
-        <span className="bg-strip-label">{t.bgStrip.label}</span>
-        {summary}
-      </div>
-      <div className="bg-strip-items">
-        {views}
-        {hidden.length > 0 && (
+    <div ref={measure} className="bg-line">
+      <Menu
+        {...menuProps}
+        fill
+        trigger={({ open, toggle }) => (
           <button
             type="button"
-            className="bg-more"
-            title={t.bgStrip.moreInlineTip(hidden.length)}
-            onClick={openOverflow}
+            className="bg-line-btn"
+            data-open={open || undefined}
+            aria-haspopup="menu"
+            aria-expanded={open}
+            aria-label={`${t.bgStrip.aria}: ${summaryText}`}
+            title={t.bgStrip.lineTip}
+            onClick={toggle}
           >
-            {t.bgStrip.moreInline(hidden.length)}
+            <span className="bg-line-label">{t.bgStrip.label}</span>
+            <SummaryParts parts={bgSummaryParts(visible, t)} />
+            {shown.map((item) => (
+              <span key={item.key} className="bg-line-item" data-status={item.kind === "sub" ? item.status : undefined}>
+                {item.kind === "sub" ? (
+                  <SubPie item={item} />
+                ) : (
+                  <span className="bg-lead bg-lead-icon">
+                    <Icon name={FEATURE_ICON.automation} size={12} />
+                  </span>
+                )}
+                <span className="bg-item-name">{item.title === "" ? t.subSessions.untitled : item.title}</span>
+                <span className="bg-item-text">
+                  {item.kind === "sub" ? stepOf(item) : automationLine(item, Date.now(), t)}
+                </span>
+              </span>
+            ))}
+            {hidden.length > 0 && <span className="bg-more">{t.bgStrip.moreInline(hidden.length)}</span>}
+            <span className="bg-line-chevron row-trailing">
+              <Icon name="chevron-up" size={12} strokeWidth={2} />
+            </span>
           </button>
         )}
-      </div>
-    </section>
+      />
+    </div>
   );
 });
 
-/** 条头的事实：各段之间一个居中点，「等你」那段染 warning（文字已经说了，颜色是第二信号） */
+/** 条头 / 胶囊里的事实：各段之间一个居中点，「等你」那段染 warning（文字已经说了，颜色是第二信号） */
 function SummaryParts(props: { parts: readonly BgSummaryPart[] }) {
   return (
     <span className="bg-strip-count">
@@ -166,40 +212,8 @@ function SummaryParts(props: { parts: readonly BgSummaryPart[] }) {
   );
 }
 
-/** 一项：饼（子会话）或闹钟（自动化）+ 名字 + 当前那一步；分行条再加已跑多久与「打开」 */
-function BgItemView(props: {
-  item: BgItem;
-  density: BackgroundStripStyle;
-  text: string;
-  now: number;
-  onOpen: () => void;
-}) {
-  const t = useT();
-  const { item } = props;
-  const name = item.title === "" ? t.subSessions.untitled : item.title;
-  const rows = props.density === "rows";
-  return (
-    <button
-      type="button"
-      className="bg-item"
-      data-kind={item.kind}
-      data-status={item.kind === "sub" ? item.status : undefined}
-      title={`${name} · ${props.text}`}
-      onClick={props.onOpen}
-    >
-      {item.kind === "sub" ? <SubLead item={item} /> : <AutomationLead />}
-      <span className="bg-item-name">{name}</span>
-      <span className="bg-item-text">{props.text}</span>
-      {rows && item.kind === "sub" && item.status === "running" && (
-        <span className="bg-item-clock">{formatRunClock(props.now - item.startedAt)}</span>
-      )}
-      {rows && <span className="bg-item-open">{t.bgStrip.open}</span>}
-    </button>
-  );
-}
-
-/** 行首状态槽（14 宽，饼与闹钟图标同一根中线）。在跑的饼呼吸，别的档静止 */
-function SubLead(props: { item: BgSubItem }) {
+/** 行首状态槽（14 宽）里的饼：在跑的饼呼吸，别的档静止 */
+function SubPie(props: { item: BgSubItem }) {
   const t = useT();
   const fill = subSessionBarFill(props.item.status) ?? "running";
   return (
@@ -209,14 +223,6 @@ function SubLead(props: { item: BgSubItem }) {
         title={t.subSessions.rowStatus[props.item.status]}
         className={props.item.status === "running" ? "orbita-breath" : undefined}
       />
-    </span>
-  );
-}
-
-function AutomationLead() {
-  return (
-    <span className="bg-lead bg-lead-icon">
-      <Icon name={FEATURE_ICON.automation} size={12} />
     </span>
   );
 }
@@ -264,7 +270,7 @@ function cachedStep(
   return text;
 }
 
-/** 首页记录行用的那套工具动词文案（ChatView 首页分支的同一份拼法）；条里只在「在跑却没有计划」时用到 */
+/** 首页记录行用的那套工具动词文案（ChatView 首页分支的同一份拼法）；只在「在跑却没有计划」时用到 */
 function lineTextOf(t: Messages): HomeCardLineText {
   return {
     thinking: t.homeCard.thinking,

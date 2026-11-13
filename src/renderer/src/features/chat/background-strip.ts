@@ -8,16 +8,19 @@
  *   - 自动化 = 目标是本会话（this_session）、还在排期、等下次运行的那几条。
  * 现在只有这两种项，不为别的后台来源预留类型（没有真实调用点的东西不进仓）。
  *
- * 退场的时序也是派生的：完成 / 失败的子会话用通道里最后一条消息的时间当「完成时刻」，
- * 在 `BG_LINGER_MS` 内还留在条里，过了就不算——重开应用、切走再切回来，结果一致，没有
- * 只存在组件里的「淡出计时器」。
+ * 退场的时序也是派生的，没有只存在组件里的「淡出计时器」，重开应用、切走再切回来结果一致：
+ *   - 完成的子会话用通道里最后一条消息的时间当「完成时刻」，在 `BG_LINGER_MS` 内还留着，过了就不算；
+ *   - **失败的不按秒数退场**，留到「母会话在这次失败之后完成了一轮」为止（`failureDigested`）。
+ *     这不是「用户看过没有」——子会话没有未读（完成提醒只认根会话，见 completion-notice.ts），也不
+ *     新造只活在内存里的已看；它只保证「母会话还没处理之前，这条失败不会凭空消失」。
  *
  * 纯模块：不 import React，可被 node --test 直接加载（值导入走相对路径带 .ts 后缀）。
  */
 import type { ChannelMessage, ChannelStatus } from "@shared/channel";
+import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import type { TranscriptRecord } from "@shared/session";
+import { parseChannelPrompt } from "../../../../shared/channel.ts";
 import type { Automation } from "../../../../shared/automation.ts";
-import type { BackgroundStripStyle } from "../../../../shared/settings.ts";
 import type { Messages } from "../../messages-en.ts";
 import { formatWhen } from "../automation/automation-view.ts";
 import { isBookkeepingTool } from "../../../../shared/goal.ts";
@@ -31,12 +34,10 @@ import {
   type SubSessionRowStatus,
 } from "./sub-sessions-rows.ts";
 
-/** 完成 / 失败的子会话在条里停留多久再退场（毫秒） */
+/** 完成的子会话在条里停留多久再退场（毫秒）；失败的不按时间退场，见 failureDigested */
 export const BG_LINGER_MS = 8000;
-/** 汇总条（A）一行里最多并排几项，多的折成「+N」 */
+/** 细条一行里最多并排几项，多的折成「+N」 */
 export const BG_INLINE_MAX = 3;
-/** 分行条（B）最多几行，多的折成「还有 N 项」 */
-export const BG_ROWS_MAX = 4;
 
 /** 一个后台子会话：状态是 sub-sessions-rows 的七档之一，条里只出现 running / waiting / approval / done / failed */
 export interface BgSubItem {
@@ -46,7 +47,7 @@ export interface BgSubItem {
   childId: string;
   title: string;
   status: SubSessionRowStatus;
-  /** 开始时间（子会话建立）：分行条的「已跑多久」从这里算 */
+  /** 开始时间（子会话建立）：浮层清单行尾的「已跑多久」从这里算 */
   startedAt: number;
   /** 通道里最后一条消息的时间（没有往来 = 建立时间）：排序与退场都用它 */
   lastAt: number;
@@ -85,15 +86,117 @@ export interface BackgroundItemsInput {
   /** 引擎的按 id 查询（ChatSession 上引用稳定的 approvalsOf / phaseOf） */
   probe: { approvalCountOf: (id: string) => number; phaseOf: (id: string) => string };
   automations: readonly Automation[];
+  /** 这条失败的子会话，母会话是否已经处理过（failureDigested）；由调用方从母会话的槽里取 */
+  failureDigested: (childId: string) => boolean;
   now: number;
+}
+
+/** 母会话在槽里的事实（failureDigested 的原料；全是盘上已有的东西，重启后读回来一样） */
+export interface ParentFacts {
+  /** 母会话此刻的 phase：非 idle = 有一轮还在跑 */
+  phase: string;
+  /**
+   * 通道消息**已经被喂进母会话的一轮**的痕迹（投递状态）：盘上是通道标记 `ChannelMarkRecord`
+   * （重读转录后在 `entry.marks`），实时槽里则是那条带信封首行的 user 消息（`parseChannelPrompt`
+   * 认得出 message id；落盘时被换成标记）。两处读到的是同一件事，合并成这一份。
+   */
+  deliveries: readonly { messageId: string; timestamp: number }[];
+  /** 轮边界的时刻（时间正序）：每条 user 消息与每个通道标记都开一轮 */
+  boundaries: readonly number[];
+  /** 母会话槽里全部助手消息的时间 */
+  assistantAts: readonly number[];
+  /** 槽只装尾窗：更早还有记录（window.hasMore）时，窗口里最早一条记录的时间；没有更早的 = null */
+  windowStartAt: number | null;
+}
+
+/**
+ * 母会话槽里的原料 → ParentFacts。投递痕迹两处读：重读过的转录里是通道标记（`marks`）；实时槽里
+ * 是带信封首行的 user 消息（`parseChannelPrompt` 认得出 message id，落盘时才被换成标记）。
+ */
+export function parentFactsFrom(input: {
+  phase: string;
+  marks: readonly { messageId: string; timestamp: number }[];
+  /** 槽只装尾窗：更早还有记录 */
+  hasMore: boolean;
+  /** 槽里生效的转录（selectTranscript 的结果，时间正序） */
+  items: readonly TranscriptItem[];
+}): ParentFacts {
+  const assistantAts: number[] = [];
+  const boundaries: number[] = input.marks.map((mark) => mark.timestamp);
+  const deliveries = input.marks.map((mark) => ({ messageId: mark.messageId, timestamp: mark.timestamp }));
+  for (const item of input.items) {
+    if (item.role === "assistant") assistantAts.push(item.timestamp);
+    if (item.role !== "user") continue;
+    boundaries.push(item.timestamp);
+    const text = item.content.find((block) => block.type === "text");
+    const parsed = text?.type === "text" ? parseChannelPrompt(text.text) : null;
+    if (parsed !== null) deliveries.push({ messageId: parsed.messageId, timestamp: item.timestamp });
+  }
+  boundaries.sort((x, y) => x - y);
+  return {
+    phase: input.phase,
+    deliveries,
+    boundaries,
+    assistantAts,
+    windowStartAt: input.hasMore ? (input.items[0]?.timestamp ?? null) : null,
+  };
+}
+
+/**
+ * 一条失败回报，母会话「在这次失败之后完成了一轮」没有？是才算处理过，失败项才退场。
+ *
+ * 优先用最精确的现成信号——**投递状态**：子→父的失败回报投进母会话那一刻，母会话转录里就有这条消息
+ * 的痕迹（`ParentFacts.deliveries`，轮边界，与 user 同级）。从投递那一刻起，母会话消化它的那一轮 =
+ * 到下一个轮边界为止（没有下一个边界就是到现在）。所以：
+ *   1. 母会话转录里没有这条消息的投递痕迹 = 还没投递（母在忙、消息在队里等）→ 没处理；
+ *   2. 已投递，这一轮里母会话产出了助手消息，且这一轮已经结束（母会话 idle，或之后已经开了新的一轮）→ 处理过，退场；
+ *   3. 已投递、这一轮还在跑 → 没处理（失败项还在，并排显示没问题）；
+ *      之后母会话再开别的新轮不会把已退场的失败项叫回来——退场看的是「消化它的那一轮」，不是此刻的 phase；
+ *   4. 已投递、这一轮没有产出助手消息（用户打断）→ 没处理，继续留着。
+ * 拿不到投递状态时退到「失败时刻之后的那一轮」，规则同 2–4：
+ *   - 账本里找不到这条失败回报（旧数据）时用失败时刻（通道最后一条消息）；
+ *   - 通道正文还没拉回来（messagesLoaded = false）时**不判**，按没处理算——宁可多留一拍，
+ *     也不让失败项在加载间隙闪没；
+ *   - 投递痕迹不在尾窗里但窗口起点晚于失败时刻（痕迹在窗口之前）：当作失败时刻已投递。
+ * **不用**「通道 lastAt 变了」：母会话不一定回信给子会话。
+ */
+export function failureDigested(input: {
+  /** 这条子通道里最后一条 failed 回报的 id / 时刻；账本里没有 = null */
+  failed: { id: string; at: number } | null;
+  /** 没有失败回报时的兜底时刻（通道最后一条消息的时间） */
+  fallbackAt: number;
+  messagesLoaded: boolean;
+  parent: ParentFacts | null;
+}): boolean {
+  if (!input.messagesLoaded || input.parent === null) return false;
+  const parent = input.parent;
+  let from: number;
+  if (input.failed === null) {
+    from = input.fallbackAt;
+  } else {
+    const delivery = parent.deliveries.find((candidate) => candidate.messageId === input.failed?.id);
+    if (delivery !== undefined) {
+      from = delivery.timestamp;
+    } else if (parent.windowStartAt !== null && parent.windowStartAt > input.failed.at) {
+      from = input.failed.at;
+    } else {
+      return false;
+    }
+  }
+  // 消化它的那一轮从哪开始：投递就是一个轮边界（等于 from）；兜底时是失败时刻之后的第一个轮边界
+  const start = parent.boundaries.find((at) => at >= from) ?? from;
+  const next = parent.boundaries.find((at) => at > start);
+  const hasOutput = parent.assistantAts.some((at) => at >= start && (next === undefined || at < next));
+  if (!hasOutput) return false;
+  return next !== undefined || parent.phase === "idle";
 }
 
 /**
  * 这一刻后台有什么：子会话（等你最前，其次在跑，其次失败，其次完成——sub-sessions-rows 的同一个排序）
  * 在前，等下次运行的自动化（下次到点早的在前）在后。没有 = 空数组，调用方据此整条不渲染。
  *
- * 子会话入选：running / waiting / approval 恒入选；done / failed 只在完成时刻后 `BG_LINGER_MS` 内；
- * stopped（用户自己停的）与 idle（建了没在跑）不进条——前者是用户的裁决，后者没有后台活动。
+ * 子会话入选：running / waiting / approval 恒入选；done 只在完成时刻后 `BG_LINGER_MS` 内；
+ * failed 留到母会话处理过为止（`input.failureDigested`）；stopped（用户自己停的）与 idle（建了没在跑）不进条——前者是用户的裁决，后者没有后台活动。
  */
 export function backgroundItems(input: BackgroundItemsInput): BgItem[] {
   const subs: BgSubItem[] = [];
@@ -102,7 +205,8 @@ export function backgroundItems(input: BackgroundItemsInput): BgItem[] {
     const status = subSessionStatusFrom(child.id, channel?.status, input.probe);
     const lastAt = channel?.lastAt ?? child.createdAt;
     if (!isBackgroundStatus(status)) continue;
-    if ((status === "done" || status === "failed") && input.now - lastAt >= BG_LINGER_MS) continue;
+    if (status === "done" && input.now - lastAt >= BG_LINGER_MS) continue;
+    if (status === "failed" && input.failureDigested(child.id)) continue;
     subs.push({
       kind: "sub",
       key: `sub:${child.id}`,
@@ -140,21 +244,16 @@ function isBackgroundStatus(status: SubSessionRowStatus): boolean {
 }
 
 /**
- * 条自己的时钟要不要走：有在跑的（步骤与「已跑多久」在变）或停留中的完成项（到点要退场）才走；
- * 只剩等你 / 等自动化时画面是静止的，不开定时器。
+ * 状态位自己的时钟要不要走：有在跑的（「已跑多久」在变）或停留中的完成项（到点要退场）才走；
+ * 只剩等你 / 失败 / 等自动化时画面是静止的，不开定时器。
  */
 export function needsClock(items: readonly BgItem[]): boolean {
-  return items.some(
-    (item) => item.kind === "sub" && (item.status === "running" || item.status === "done" || item.status === "failed"),
-  );
+  return items.some((item) => item.kind === "sub" && (item.status === "running" || item.status === "done"));
 }
 
-/** 时钟走到 now 时还该显示的项：停留期满的完成 / 失败项退场（条自己的 1 秒时钟用它，不等上游重算） */
+/** 时钟走到 now 时还该显示的项：停留期满的完成项退场（自己的 1 秒时钟用它，不等上游重算）；失败项不按时间退场 */
 export function visibleBgItems(items: readonly BgItem[], now: number): BgItem[] {
-  return items.filter(
-    (item) =>
-      item.kind !== "sub" || !(item.status === "done" || item.status === "failed") || now - item.lastAt < BG_LINGER_MS,
-  );
+  return items.filter((item) => item.kind !== "sub" || item.status !== "done" || now - item.lastAt < BG_LINGER_MS);
 }
 
 /** 两份项列表逐字段相同（上游每次渲染都新算一份，用它挡掉没变化的更新，条不随无关渲染重画） */
@@ -174,24 +273,22 @@ export function sameBgItems(a: readonly BgItem[], b: readonly BgItem[]): boolean
 }
 
 /**
- * 汇总条一行并排几项：按条自己的宽度（右栏开着、窗口窄时条比窗口窄得多）。条头那句事实
- * 占去约 260（再窄时计数收起，只剩「后台」二字，约 60），每项至少要 190 才读得出「名字 + 一截步骤」，
+ * 细条一行并排几项：按它自己的宽度（右栏开着、窗口窄时比窗口窄得多）。计数那句事实（最长五段）占去约 260
+ * （窄到 300 以下计数收起，只剩「后台」二字，约 40），每项至少要 190 才读得出「名字 + 一截步骤」，
  * 所以并排数 = 剩下的宽度 ÷ 190，夹在 1 到 3 之间，其余折进「+N」。名字必须读得出：
  * 宁可少放几项，也不把每项都压成一个饼。量宽度的是组件，这里只管换算。
  */
 export function bgInlineCap(widthPx: number): number {
-  const head = widthPx < 400 ? 60 : 260;
+  const head = widthPx < 300 ? 40 : 260;
   return Math.min(BG_INLINE_MAX, Math.max(1, Math.floor((widthPx - head) / 190)));
 }
 
-/** 按密度折叠：汇总条并排 `inlineCap` 项（默认 3）、分行条 4 行，超出的只给个数 */
+/** 折叠：细条并排 `inlineCap` 项，超出的只给个数 */
 export function foldBgItems(
   items: readonly BgItem[],
-  style: BackgroundStripStyle,
   inlineCap: number = BG_INLINE_MAX,
 ): { shown: BgItem[]; hidden: BgItem[] } {
-  const cap = style === "rows" ? BG_ROWS_MAX : inlineCap;
-  return { shown: items.slice(0, cap), hidden: items.slice(cap) };
+  return { shown: items.slice(0, inlineCap), hidden: items.slice(inlineCap) };
 }
 
 /** 条头事实里的一段（「2 项在跑」）：tone 只给渲染挑色，「等你」那段染 warning */
@@ -237,12 +334,6 @@ export function bgSummary(items: readonly BgItem[], t: Messages): string {
   return bgSummaryParts(items, t)
     .map((part) => part.text)
     .join(" · ");
-}
-
-/** 折叠后「+N」按钮点哪里去：隐藏项里有子会话 → 子会话面板列表；只剩自动化 → 自动化面板 */
-export function overflowTarget(hidden: readonly BgItem[]): "subsessions" | "automation" | null {
-  if (hidden.length === 0) return null;
-  return hidden.some((item) => item.kind === "sub") ? "subsessions" : "automation";
 }
 
 /** 子会话那一项「此刻」要的原料（纯数据，由条从槽与通道账本里取） */

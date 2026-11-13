@@ -7,18 +7,19 @@ import type { Messages } from "../../messages-en.ts";
 import {
   BG_INLINE_MAX,
   BG_LINGER_MS,
-  BG_ROWS_MAX,
   automationLine,
   backgroundItems,
   bgInlineCap,
   bgSummary,
   foldBgItems,
   needsClock,
-  overflowTarget,
+  failureDigested,
+  parentFactsFrom,
   sameBgItems,
   stepText,
   visibleBgItems,
   type BackgroundItemsInput,
+  type ParentFacts,
   type BgAutomationItem,
   type BgItem,
   type BgSubItem,
@@ -74,6 +75,8 @@ interface Fixture {
   automations?: Automation[];
   children?: string[];
   now?: number;
+  /** 母会话已处理过的失败子会话 */
+  digested?: string[];
 }
 
 function input(f: Fixture): BackgroundItemsInput {
@@ -84,6 +87,7 @@ function input(f: Fixture): BackgroundItemsInput {
     channelOf: (id) => f.channel?.[id],
     probe: { approvalCountOf: (id) => f.approvals?.[id] ?? 0, phaseOf: (id) => f.phase?.[id] ?? "idle" },
     automations: f.automations ?? [],
+    failureDigested: (id) => f.digested?.includes(id) === true,
     now: f.now ?? T0 + 60_000,
   };
 }
@@ -160,14 +164,25 @@ describe("backgroundItems —— 后台有什么", () => {
   });
 
   test("完成后停留 BG_LINGER_MS 再退场（以通道最后一条消息为完成时刻）：差 1 毫秒还在，到点就没", () => {
-    const channel = { fin: { status: "done" as const, lastAt: T0 }, boom: { status: "failed" as const, lastAt: T0 } };
-    assert.deepEqual(ids(backgroundItems(input({ channel, now: T0 + BG_LINGER_MS - 1 }))), ["boom", "fin"]);
+    const channel = { fin: { status: "done" as const, lastAt: T0 } };
+    assert.deepEqual(ids(backgroundItems(input({ channel, now: T0 + BG_LINGER_MS - 1 }))), ["fin"]);
     assert.deepEqual(ids(backgroundItems(input({ channel, now: T0 + BG_LINGER_MS }))), []);
     // 条自己的 1 秒时钟用 visibleBgItems 做同一判断，不等上游重算
     const early = backgroundItems(input({ channel, now: T0 }));
-    assert.equal(visibleBgItems(early, T0 + BG_LINGER_MS - 1).length, 2);
+    assert.equal(visibleBgItems(early, T0 + BG_LINGER_MS - 1).length, 1);
     assert.equal(visibleBgItems(early, T0 + BG_LINGER_MS).length, 0);
     assert.equal(needsClock(early), true);
+  });
+
+  test("失败项不按秒数退场：隔多久都在，直到母会话处理过；只剩失败项时画面静止，不开时钟", () => {
+    const channel = { boom: { status: "failed" as const, lastAt: T0 } };
+    for (const now of [T0 + BG_LINGER_MS, T0 + 100 * BG_LINGER_MS]) {
+      assert.deepEqual(ids(backgroundItems(input({ channel, now }))), ["boom"]);
+    }
+    const kept = backgroundItems(input({ channel, now: T0 + 100 * BG_LINGER_MS }));
+    assert.equal(visibleBgItems(kept, T0 + 1000 * BG_LINGER_MS).length, 1);
+    assert.equal(needsClock(kept), false);
+    assert.deepEqual(ids(backgroundItems(input({ channel, digested: ["boom"] }))), []);
   });
 
   test("停留期内又开始跑了（父会话回信重开）：按在跑算，不被当成已完成退场", () => {
@@ -226,19 +241,15 @@ describe("条头事实与折叠", () => {
     assert.equal(bgSummary([], t), "");
   });
 
-  test("超过上限折叠：汇总条并排 3 项、分行条 4 行，其余只给个数；刚好等于上限不折", () => {
+  test("超过上限折叠：细条并排 3 项，其余只给个数；刚好等于上限不折", () => {
     const six = ["a", "b", "c", "d", "e", "f"].map((id) => sub(id, "running"));
-    const inline = foldBgItems(six, "summary");
+    const inline = foldBgItems(six);
     assert.equal(inline.shown.length, BG_INLINE_MAX);
     assert.equal(inline.hidden.length, 3);
-    const rows = foldBgItems(six, "rows");
-    assert.equal(rows.shown.length, BG_ROWS_MAX);
-    assert.equal(rows.hidden.length, 2);
-    assert.equal(foldBgItems(six.slice(0, 3), "summary").hidden.length, 0);
-    assert.equal(foldBgItems(six.slice(0, 4), "rows").hidden.length, 0);
+    assert.equal(foldBgItems(six.slice(0, 3)).hidden.length, 0);
   });
 
-  test("汇总条一行并排几项跟着条的宽度走：宽的 3 项，常见的 693 宽 2 项，再窄 1 项；分行条不受宽度影响", () => {
+  test("细条一行并排几项跟着它自己的宽度走：宽的 3 项，常见的 693 宽 2 项，再窄 1 项", () => {
     assert.equal(bgInlineCap(900), 3);
     assert.equal(bgInlineCap(693), 2);
     assert.equal(bgInlineCap(640), 2);
@@ -248,16 +259,8 @@ describe("条头事实与折叠", () => {
     assert.equal(bgInlineCap(0), 1);
     assert.equal(bgInlineCap(Infinity), BG_INLINE_MAX);
     const six = ["a", "b", "c", "d", "e", "f"].map((id) => sub(id, "running"));
-    assert.equal(foldBgItems(six, "summary", bgInlineCap(189)).shown.length, 1);
-    assert.equal(foldBgItems(six, "summary", bgInlineCap(189)).hidden.length, 5);
-    assert.equal(foldBgItems(six, "rows", bgInlineCap(189)).shown.length, BG_ROWS_MAX);
-  });
-
-  test("「+N」去哪：隐藏项里有子会话 → 子会话面板；只剩自动化 → 自动化面板；没有隐藏项 = 不去", () => {
-    const auto: BgAutomationItem = { kind: "automation", key: "automation:x", automationId: "x", title: "x", nextRunAt: T0, due: false };
-    assert.equal(overflowTarget([]), null);
-    assert.equal(overflowTarget([auto]), "automation");
-    assert.equal(overflowTarget([auto, sub("a", "running")]), "subsessions");
+    assert.equal(foldBgItems(six, bgInlineCap(189)).shown.length, 1);
+    assert.equal(foldBgItems(six, bgInlineCap(189)).hidden.length, 5);
   });
 
   test("sameBgItems：逐字段相同才算没变（状态、完成时刻、自动化的下次时间任一变了都要重画）", () => {
@@ -361,5 +364,135 @@ describe("stepText —— 每项当前在做的那一步", () => {
       { id: "d", from: "child", author: "model", kind: "done", text: "好了", delivery: "followUp", createdAt: 4 },
     ];
     assert.equal(stepText({ ...base, status: "done", records: null, messages: finished }, t, lineText), "完成");
+  });
+});
+
+describe("failureDigested —— 失败回报，母会话处理过没有", () => {
+  const FAIL = { id: "m-fail", at: 1000 };
+  const D = { messageId: "m-fail", timestamp: 1500 };
+  /** 母会话：投递在 1500 开了一轮（边界）；assistantAts 是这条母会话里全部助手消息的时间 */
+  const parent = (over: Partial<ParentFacts> = {}): ParentFacts => ({
+    phase: "idle",
+    deliveries: [],
+    boundaries: [],
+    assistantAts: [],
+    windowStartAt: null,
+    ...over,
+  });
+  const digested = (facts: ParentFacts | null, extra: { failed?: typeof FAIL | null; loaded?: boolean } = {}): boolean =>
+    failureDigested({
+      failed: extra.failed === undefined ? FAIL : extra.failed,
+      fallbackAt: FAIL.at,
+      messagesLoaded: extra.loaded ?? true,
+      parent: facts,
+    });
+
+  test("失败后母会话未动：回报还没投递（母转录里没有这条的投递痕迹），失败项留着；母会话之前说的话不算处理", () => {
+    assert.equal(digested(parent({ assistantAts: [900], boundaries: [100] })), false);
+    assert.equal(digested(parent({ assistantAts: [900, 2000], boundaries: [100, 1900], deliveries: [] })), false);
+  });
+
+  test("母会话正在跑（消化这条失败的那一轮没结束）：失败项还在，哪怕那一轮已经在流式输出", () => {
+    assert.equal(digested(parent({ phase: "turn", deliveries: [D], boundaries: [1500], assistantAts: [1600] })), false);
+  });
+
+  test("母会话完成一轮（已投递、这一轮产出了助手消息、母会话 idle）：退场", () => {
+    assert.equal(digested(parent({ deliveries: [D], boundaries: [1500], assistantAts: [1800] })), true);
+  });
+
+  test("消化完之后母会话又开了别的新轮（正在跑）：失败项不会被叫回来——看的是消化它的那一轮，不是此刻的 phase", () => {
+    assert.equal(
+      digested(parent({ phase: "turn", deliveries: [D], boundaries: [1500, 3000], assistantAts: [1800, 3100] })),
+      true,
+    );
+  });
+
+  test("母会话被打断、没产出助手消息：失败项继续留着；别的消息的投递不算", () => {
+    assert.equal(digested(parent({ deliveries: [D], boundaries: [1500], assistantAts: [1400] })), false);
+    assert.equal(digested(parent({ deliveries: [D], boundaries: [1500], assistantAts: [] })), false);
+    // 投递之后用户马上又发了话，那一轮没有产出，更之后的轮产出不算消化它
+    assert.equal(digested(parent({ deliveries: [D], boundaries: [1500, 1600], assistantAts: [1900] })), false);
+    assert.equal(
+      digested(parent({ deliveries: [{ messageId: "m-other", timestamp: 1500 }], boundaries: [1500], assistantAts: [1800] })),
+      false,
+    );
+  });
+
+  test("重启后重算：全是盘上的事实（转录里的投递痕迹、轮边界与助手消息），同样的输入同样的结论", () => {
+    const facts = parent({ deliveries: [D], boundaries: [1500], assistantAts: [1800] });
+    assert.equal(digested(facts), digested({ ...facts, deliveries: [...facts.deliveries] }));
+    assert.equal(digested(parent({ deliveries: [D], boundaries: [1500], assistantAts: [1400] })), false);
+  });
+
+  test("兜底：账本里找不到这条失败回报时，按失败时刻之后的那一轮判", () => {
+    assert.equal(digested(parent({ boundaries: [1200], assistantAts: [1300] }), { failed: null }), true);
+    assert.equal(digested(parent({ boundaries: [], assistantAts: [1200] }), { failed: null }), true);
+    assert.equal(digested(parent({ assistantAts: [900] }), { failed: null }), false);
+    assert.equal(digested(parent({ phase: "turn", boundaries: [1200], assistantAts: [1300] }), { failed: null }), false);
+  });
+
+  test("通道正文还没拉回来 / 母会话槽读不到：不判，按没处理算（不在加载间隙闪没）", () => {
+    assert.equal(digested(parent({ deliveries: [D], boundaries: [1500], assistantAts: [1800] }), { loaded: false }), false);
+    assert.equal(digested(null), false);
+  });
+
+  test("投递痕迹在尾窗之前（窗口起点晚于失败时刻）：按失败时刻之后的轮判；窗口里没有更早记录时没痕迹就是没投递", () => {
+    assert.equal(digested(parent({ windowStartAt: 1300, boundaries: [1300], assistantAts: [1800] })), true);
+    assert.equal(digested(parent({ windowStartAt: null, boundaries: [1300], assistantAts: [1800] })), false);
+    assert.equal(digested(parent({ windowStartAt: 500, boundaries: [1300], assistantAts: [1800] })), false);
+  });
+});
+
+describe("parentFactsFrom —— 母会话槽 → 事实（实时与重读两条路径）", () => {
+  const user = (id: string, timestamp: number, text: string): TranscriptItem =>
+    ({ id, role: "user", content: [{ type: "text", text }], timestamp }) as TranscriptItem;
+  const assistant = (id: string, timestamp: number): TranscriptItem =>
+    ({ id, role: "assistant", content: [{ type: "text", text: "好" }], timestamp }) as TranscriptItem;
+  const envelope = (messageId: string): string =>
+    `<channel from="child" kind="failed" peer="c1" message="${messageId}" title="下载依赖">\n缺少凭证\n</channel>\nnotice`;
+  const run = (facts: ParentFacts): boolean =>
+    failureDigested({ failed: { id: "m-fail", at: 1000 }, fallbackAt: 1000, messagesLoaded: true, parent: facts });
+
+  test("实时槽：投递就是带信封首行的 user 消息，认得出 message id；之后的助手消息算处理过", () => {
+    const facts = parentFactsFrom({
+      phase: "idle",
+      marks: [],
+      hasMore: false,
+      items: [user("u1", 100, "派活"), assistant("a1", 200), user("u2", 1500, envelope("m-fail")), assistant("a2", 1800)],
+    });
+    assert.deepEqual(facts.deliveries, [{ messageId: "m-fail", timestamp: 1500 }]);
+    assert.deepEqual(facts.boundaries, [100, 1500]);
+    assert.deepEqual(facts.assistantAts, [200, 1800]);
+    assert.equal(run(facts), true);
+  });
+
+  test("重读后：投递是通道标记（entry.marks）；用户自己说的、正文里提到信封的 user 消息不算投递", () => {
+    const facts = parentFactsFrom({
+      phase: "idle",
+      marks: [{ messageId: "m-fail", timestamp: 1500 }],
+      hasMore: true,
+      items: [user("u1", 100, "我说 <channel from=\"child\" kind=\"failed\" peer=\"c\" message=\"m-x\" 只是提到"), assistant("a2", 1800)],
+    });
+    assert.deepEqual(facts.deliveries, [{ messageId: "m-fail", timestamp: 1500 }]);
+    assert.deepEqual(facts.boundaries, [100, 1500]);
+    assert.equal(facts.windowStartAt, 100);
+    assert.equal(run(facts), true);
+  });
+
+  test("还在投递中（信封在、之后没有助手消息）：失败项留着；消化完又开新轮：不叫回来", () => {
+    const pending = parentFactsFrom({
+      phase: "idle",
+      marks: [],
+      hasMore: false,
+      items: [assistant("a1", 200), user("u2", 1500, envelope("m-fail"))],
+    });
+    assert.equal(run(pending), false);
+    const later = parentFactsFrom({
+      phase: "turn",
+      marks: [],
+      hasMore: false,
+      items: [user("u2", 1500, envelope("m-fail")), assistant("a2", 1800), user("u3", 3000, "继续"), assistant("a3", 3100)],
+    });
+    assert.equal(run(later), true);
   });
 });

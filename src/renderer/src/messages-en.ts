@@ -1448,12 +1448,12 @@ export const en = {
       "One line per turn: while it works, a fixed-height block ticks with the current step; when it's done, one line you can open into parts · Every step: each thought and tool call on its own row",
     processViewTurn: "One line per turn",
     processViewSteps: "Every step",
-    backgroundStrip: "Background strip",
-    backgroundStripAria: "How the strip above the input box shows background work",
+    backgroundStrip: "Background work",
+    backgroundStripAria: "Where background work shows",
     backgroundStripInfo:
-      "Sub-sessions and automations that are working or waiting for this task · Summary: one line with up to three items · Rows: one row per item, with how long it has run",
-    backgroundStripSummary: "Summary",
-    backgroundStripRows: "Rows",
+      "Sub-sessions and automations that are working or waiting for this task · Line: one small line just above the input box (takes about 28px of the conversation) · Capsule: one chip in the input box's bottom bar (takes none) · Both open the same list",
+    backgroundStripLine: "Line",
+    backgroundStripCapsule: "Capsule",
     completionSound: "Completion sound",
     completionSoundAria: "Completion sound",
     completionSoundInfo:
@@ -2439,12 +2439,11 @@ export const en = {
     failed: (count: number) => `${count} failed`,
     done: (count: number) => `${count} finished`,
     scheduled: (count: number) => `${count} scheduled`,
-    /** 汇总条里放不下的项数（「+2」） */
+    /** 细条里放不下的项数（「+2」） */
     moreInline: (count: number) => `+${count}`,
-    moreInlineTip: (count: number) => `${count} more not shown — open the full list`,
-    /** 分行条超出 4 行的折叠行 */
-    moreRows: (count: number) => `${count} more`,
-    open: "Open",
+    /** 胶囊（输入框底栏里的一颗）：总数，有等你的再加一段 */
+    capsule: (count: number, waiting: number) => (waiting > 0 ? `Background ${count} · ${waiting} waiting` : `Background ${count}`),
+    lineTip: "Show the list — click a row to open it",
     automationDue: "Due — sends when this turn ends",
   },
 

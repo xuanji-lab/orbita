@@ -6235,49 +6235,51 @@ mark.intent-mark {
   gap: var(--space-2);
 }
 
-/* ===== 后台任务条（2026-11-13，features/chat/BackgroundStrip.tsx） =====
- * 输入框正上方，与排队条 / 审批条同一族位置；一张 .glass-card（面 + 发丝线，静止不浮——
- * 它是常驻的背景事实，不是要你回答的浮层，所以不加 .glass-float 的阴影）。
- * 两种密度结构一样，只差版式：data-density="summary"（一行）/ "rows"（每项一行）。
- * 字号只有 sm 一档：层级靠字重与墨色（名字 strong · 步骤 secondary · 计数 secondary）。
- * 容器查询按条自己的宽度，不按窗口：右栏开着、辅助对话占位时条的宽度才是真的宽度。 */
-.bg-strip {
+/* ===== 后台任务状态位（2026-11-13，v2 2026-11-14；features/chat/BackgroundStrip.tsx） =====
+ * 用户看了 v1 的卡片说「空间利用率太低了，占用太多看聊天记录的空间」，所以它不是卡：
+ * - 细条 .bg-line：输入框上沿的一行小字，没有外框 / 底色 / 阴影（只有 hover 底），整行是一个触发器，
+ *   高 = 一行 sm 字（18px）+ 页脚网格的 8px 间距 = 对话区最多少 26px；
+ * - 胶囊 .chip-bg：输入框底栏里的一颗 Chip，对话区一个像素不少。
+ * 详情是浮层清单（Menu 的 .glass-float .menu-panel），盖在对话区上、不推版面。
+ * 字号只有 sm 一档；层级靠字重与墨色。 */
+.bg-line {
   container: bgstrip / inline-size;
+  min-width: 0;
+}
+.bg-line-btn {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  width: 100%;
   min-width: 0;
-  padding: var(--space-1) var(--space-1);
+  /* 一行字高，不加垂直内边距：状态位占的高度就是这 18px */
+  height: calc(var(--font-size-sm) * var(--line-height-ui));
+  /* 字落在血线（输入框文字的左缘）上，hover 底从列边缘起——「面在外线、字在内线」 */
+  padding: 0 var(--content-hem);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
   font-size: var(--font-size-sm);
   line-height: var(--line-height-ui);
   color: var(--color-text-secondary);
-}
-.bg-strip[data-density="rows"] {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 0;
-}
-.bg-strip-head {
-  display: flex;
-  align-items: center;
-  flex: none;
-  gap: var(--space-2);
-  min-width: 0;
-  height: var(--control-height-xs);
-  padding: 0 var(--space-2);
+  text-align: left;
   white-space: nowrap;
+  cursor: pointer;
+  transition: var(--transition-hover);
 }
-.bg-strip[data-density="rows"] .bg-strip-head {
+.bg-line-btn:hover,
+.bg-line-btn[data-open] {
+  background: var(--color-bg-hover);
+}
+.bg-line-label {
   flex: none;
-}
-.bg-strip-label {
   font-weight: var(--weight-strong);
   color: var(--color-text-primary);
 }
+/* 计数是状态位要回答的三件事，不被项挤：项自己省略号收缩 */
 .bg-strip-count {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex: none;
   font-variant-numeric: tabular-nums;
 }
 .bg-count-part[data-tone="waiting"] {
@@ -6286,47 +6288,12 @@ mark.intent-mark {
 .bg-count-part[data-tone="failed"] {
   color: var(--color-danger);
 }
-.bg-strip-items {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  gap: var(--space-1);
-}
-.bg-strip[data-density="rows"] .bg-strip-items {
-  flex-direction: column;
-  flex: none;
-  gap: 0;
-}
-.bg-item {
+.bg-line-item {
   display: flex;
   align-items: center;
   flex: 0 1 auto;
-  gap: var(--space-2);
+  gap: var(--space-1-5);
   min-width: 0;
-  height: var(--control-height-xs);
-  padding: 0 var(--space-2);
-  border: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  font: inherit;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: var(--transition-hover);
-}
-.bg-strip[data-density="rows"] .bg-item {
-  flex: none;
-  width: 100%;
-}
-/* 分行条里步骤占满名字与时钟之间，「已跑多久 / 打开」才会被推到行右缘 */
-.bg-strip[data-density="rows"] .bg-item-text {
-  flex: 1 1 0;
-}
-.bg-item:hover {
-  background: var(--color-bg-hover);
-}
-.bg-item:hover .bg-item-text {
-  color: var(--color-text-primary);
 }
 /* 行首状态槽：饼（10）与闹钟图标（12）落在同一根 14 宽的中线上 */
 .bg-lead {
@@ -6342,78 +6309,67 @@ mark.intent-mark {
 .bg-item-name {
   flex: 0 1 auto;
   min-width: 4em;
-  max-width: 12em;
+  max-width: 10em;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
   font-weight: var(--weight-strong);
   color: var(--color-text-primary);
-}
-.bg-strip[data-density="rows"] .bg-item-name {
-  flex: 0 1 12em;
-  min-width: 3em;
 }
 .bg-item-text {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
-/* 在等你的项：步骤那句提到主墨色（饼已经是橙，字再压一档不要） */
-.bg-item[data-status="waiting"] .bg-item-text,
-.bg-item[data-status="approval"] .bg-item-text {
+.bg-line-item[data-status="waiting"] .bg-item-text,
+.bg-line-item[data-status="approval"] .bg-item-text {
   color: var(--color-text-primary);
 }
-.bg-item-clock {
-  flex: none;
-  font-family: var(--font-family-mono);
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-tertiary);
-}
-.bg-item-open {
-  flex: none;
-  color: var(--color-text-tertiary);
-}
-/* 「+N」/「还有 N 项」：一个文字键，没有框 */
 .bg-more {
   flex: none;
-  height: var(--control-height-xs);
-  padding: 0 var(--space-2);
-  border: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  font: inherit;
   font-variant-numeric: tabular-nums;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  transition: var(--transition-hover);
 }
-.bg-more:hover {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
+.bg-line-chevron {
+  display: inline-flex;
+  color: var(--color-text-tertiary);
 }
-/* 窄：分行条先收「打开」再收时钟；汇总条的步骤文字不用容器线收——它与名字同行，名字有
-   最小宽度、步骤自己省略号收缩，宽的时候多说、窄的时候自然只剩名字 */
-@container bgstrip (max-width: 480px) {
-  .bg-strip .bg-item-open {
+/* 窄：计数那句先收（只剩「后台」二字 + 各项），再窄连步骤文字也收，免得露出半个字 */
+@container bgstrip (max-width: 300px) {
+  .bg-strip-count {
     display: none;
   }
 }
-@container bgstrip (max-width: 360px) {
-  .bg-strip .bg-item-clock {
-    display: none;
-  }
-}
-@container bgstrip (max-width: 400px) {
-  .bg-strip[data-density="summary"] .bg-strip-count {
-    display: none;
-  }
-}
-/* 再窄（右栏 + 侧栏都开着的最窄会话列）：名字旁连一截步骤也放不下，收起，免得露出半个字 */
 @container bgstrip (max-width: 260px) {
-  .bg-strip[data-density="summary"] .bg-item-text {
+  .bg-item-text {
     display: none;
+  }
+}
+
+/* 浮层清单里行尾的「已跑多久 / 下次运行」：等宽数字，不抖；行尾血线由 Menu 行的右内边距给 */
+.bg-menu-time {
+  flex: none;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+
+/* 胶囊：饼 + 「后台 3 · 1 等你」；底栏窄（≤ 410，与别的芯片同一条线）时只留饼 + 总数 */
+.bg-cap {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+.bg-cap-short {
+  display: none;
+  font-variant-numeric: tabular-nums;
+}
+@container (max-width: 410px) {
+  .composer-bottom-bar .bg-cap-long {
+    display: none;
+  }
+  .composer-bottom-bar .bg-cap-short {
+    display: inline;
   }
 }
 .user-turn {

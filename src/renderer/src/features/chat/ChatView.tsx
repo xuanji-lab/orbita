@@ -5,7 +5,7 @@ import { QuoteToolbar, type QuoteCandidate } from "../../shell/QuoteToolbar";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
 import { QueueStrip } from "./QueueStrip";
-import { BackgroundStrip } from "./BackgroundStrip";
+import { BackgroundStatus } from "./BackgroundStrip";
 import { BackgroundStripStyleContext } from "./background-strip-context";
 import { useBackgroundItems } from "./useBackgroundItems";
 import { useAutomationUi } from "../automation/automation-context.ts";
@@ -1343,9 +1343,24 @@ function ChatViewBody(props: {
     parentId: ownSide === "parent" && props.onOpenSubSession !== undefined && hideComposer !== true && openId !== "" ? openId : null,
     sessions: session.sessions,
     summaries: channelSummaries,
+    channels: parentChannels,
     phaseOf: session.phaseOf,
     approvalsOf: session.approvalsOf,
+    entryOf: session.entryOf,
   });
+  /** 后台任务状态位：细条放页脚（输入框上沿），胶囊放输入框底栏；没有后台项时是 null，两处都不留空位 */
+  const bgStatus = (variant: "line" | "capsule") =>
+    bgItems.length > 0 && bgDensity === variant ? (
+      <BackgroundStatus
+        variant={variant}
+        items={bgItems}
+        channels={parentChannels}
+        entryOf={session.entryOf}
+        approvalsOf={session.approvalsOf}
+        onOpenSubSession={props.onOpenSubSession ?? noop}
+        onOpenAutomation={automationUi.openPanel}
+      />
+    ) : null;
 
   /**
    * 头部次要芯片「N sub-sessions · M waiting」（子会话 PR4c，2.2）：只在
@@ -1386,6 +1401,7 @@ function ChatViewBody(props: {
       bottomSlot={
         <ComposerBar
           session={session}
+          background={bgStatus("capsule")}
           // 用量环浮层里的「标记完成」：与头部完成入口同一道门（已落盘 + 未完成；会话生命周期已转正，
           // 不再看实验开关），同一条收尾仪式
           markDone={
@@ -1716,21 +1732,9 @@ function ChatViewBody(props: {
                 onOpenFile={props.onOpenReviewAt}
               />
             )}
-            {/* 后台任务条：三条同族条里最靠上（常驻的背景事实），审批与排队更靠近输入框；
-                没有后台项时 BackgroundStrip 渲染 null，页脚网格里不留空行 */}
-            {bgItems.length > 0 && (
-              <BackgroundStrip
-                items={bgItems}
-                density={bgDensity}
-                channels={parentChannels}
-                entryOf={session.entryOf}
-                approvalsOf={session.approvalsOf}
-                onOpenSubSession={props.onOpenSubSession ?? noop}
-                onOpenAutomation={automationUi.openPanel}
-                onOpenSubSessionsList={props.onOpenSubSessionsList ?? noop}
-                onOpenAutomationPanel={automationUi.openPanel}
-              />
-            )}
+            {/* 后台任务状态位·细条：贴在输入框上沿的一行小字（不是卡，没有外框 / 底色 / 阴影），
+                在审批条与排队条之上；点开的清单是浮层，不推版面。没有后台项时不渲染 */}
+            {bgStatus("line")}
             {session.approvals[0] && (
               <ApprovalBar approval={session.approvals[0]} onAnswer={session.answerApproval} />
             )}
@@ -3182,6 +3186,8 @@ function SubSessionsChip(props: { chip: { count: number; waiting: number }; onCl
  */
 function ComposerBar(props: {
   session: ChatSession;
+  /** 后台任务状态位·胶囊（设置选了「胶囊」且有后台项时才有）：放在用量环之前，由模型芯片让出宽度 */
+  background: React.ReactNode;
   /** 星标过的模型（设置里那份）：行的星与左栏第一格都看它 */
   starredModels: readonly ModelPair[];
   onToggleStarModel: (pair: ModelPair) => void;
@@ -3476,6 +3482,7 @@ function ComposerBar(props: {
           </Chip>
         )}
       />
+      {props.background}
       <UsageRing session={session} markDone={props.markDone} onOpenContext={props.onOpenContext} />
     </>
   );

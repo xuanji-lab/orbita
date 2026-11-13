@@ -180,8 +180,8 @@ export interface UsagePetPref {
 /** 过程显示的两种形态，见 AppSettings.processView */
 export type ProcessView = "turn" | "steps";
 
-/** 后台任务条的两种密度，见 AppSettings.backgroundStrip */
-export type BackgroundStripStyle = "summary" | "rows";
+/** 后台任务状态位的两种落点，见 AppSettings.backgroundStrip */
+export type BackgroundStripStyle = "line" | "capsule";
 
 export interface AppSettings {
   theme: ThemePreference;
@@ -239,10 +239,12 @@ export interface AppSettings {
    */
   processView?: ProcessView;
   /**
-   * 对话输入框上方「后台任务条」的密度（2026-11-13）。**缺席 = "summary"**：
-   * - "summary"：汇总条，一行——「后台 2 项在跑 · 1 项等你」加最多三项的饼 + 名字 + 当前那一步；
-   * - "rows"：分行条，每项一行（饼、名字、当前那一步、已跑多久），最多 4 行，多的折成「还有 N 项」。
-   * 结构与交互只有一套，两种只差密度；其余值丢掉。
+   * 对话里「后台任务状态位」的落点（2026-11-14）。**缺席 = "line"**：
+   * - "line"：细条——贴在输入框上沿的一行小字（无外框 / 底色 / 阴影），计数 + 前几项的饼、名字、
+   *   当前一步，对话区可视高度最多少 28px；
+   * - "capsule"：胶囊——输入框底栏里的一颗（饼 + 计数），对话区一个像素不少。
+   * 两种点开都是同一个浮层清单。其余值丢掉；**旧值 "summary" / "rows"**（v1 的汇总条 / 分行条，
+   * 推版面太占地方已删）读到时回落到 "line"。
    */
   backgroundStrip?: BackgroundStripStyle;
   /**
@@ -676,9 +678,11 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(record.processView === "turn" || record.processView === "steps"
       ? { processView: record.processView }
       : {}),
-    ...(record.backgroundStrip === "summary" || record.backgroundStrip === "rows"
+    ...(record.backgroundStrip === "line" || record.backgroundStrip === "capsule"
       ? { backgroundStrip: record.backgroundStrip }
-      : {}),
+      : record.backgroundStrip === "summary" || record.backgroundStrip === "rows"
+        ? { backgroundStrip: "line" as const }
+        : {}),
     // 同上：非布尔丢掉，缺席 = 响
     ...(typeof record.completionSound === "boolean"
       ? { completionSound: record.completionSound }

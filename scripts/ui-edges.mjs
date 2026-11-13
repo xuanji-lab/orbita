@@ -125,16 +125,6 @@ const CHECKS = [
     skipNoTrailing: true,
   },
   {
-    name: "后台任务条·分行：「打开」钉在行右血线（已跑多久在它左边，静止不占位）",
-    row: ".bg-strip[data-density='rows'] .bg-item",
-    leading: ".bg-lead",
-    trailing: ".bg-item-open",
-    // .bg-item 的横向内边距 var(--space-2)；条窄于 480 时「打开」收起（display: none），
-    // 面上没有分行条（汇总密度 / 没有后台项）时整条跳过
-    rightPad: 8,
-    skipNoTrailing: true,
-  },
-  {
     name: "左栏·会话行：「多久没动了」钉在右血线（悬停层的键叠在同一格里，静止不占位）",
     row: ".task-row",
     leading: ".option-row span",

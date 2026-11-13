@@ -299,7 +299,7 @@ function General(props: {
   const completionSound = props.settings.completionSound ?? true;
   // 过程显示：缺席 = 一轮一行（2026-10-30）
   const processView = props.settings.processView ?? "turn";
-  const backgroundStrip = props.settings.backgroundStrip ?? "summary";
+  const backgroundStrip = props.settings.backgroundStrip ?? "line";
 
   const catalog = useBuiltinCatalog();
   const usable = usableProviders(props.providers);
@@ -408,8 +408,8 @@ function General(props: {
             label={t.settings.backgroundStripAria}
             value={backgroundStrip}
             options={[
-              { value: "summary" as const, label: t.settings.backgroundStripSummary },
-              { value: "rows" as const, label: t.settings.backgroundStripRows },
+              { value: "line" as const, label: t.settings.backgroundStripLine },
+              { value: "capsule" as const, label: t.settings.backgroundStripCapsule },
             ]}
             onChange={(next) => props.onChange({ backgroundStrip: next })}
           />
