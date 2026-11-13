@@ -507,6 +507,22 @@ export class SandboxController {
     // 「末段名带空格会切坏 junction」的闸门（路径不再进命令串）
     const outputDir = join(this.deps.computerUseDir, "out");
 
+    // 起之前先看有没有上一只沙箱还在。**Windows 同时只允许一只**：旧的那只占着位置时，
+    // 新的一只永远起不来——它的 bridge.json 早被清掉、不会再写，于是白等满 180 秒才报超时
+    // （2026-11-13 验收：用户从「出错」态点启动，白等 180s × 1 次）。提前说清楚，
+    // 比让人对着「启动中…」等三分钟强。
+    const leftover = this.deps.listSandboxProcesses?.() ?? [];
+    if (leftover.length > 0) {
+      const names = [...new Set(leftover.map((process) => process.image))].join(" / ");
+      return {
+        ok: false,
+        error:
+          `已经有一只 Windows 沙箱在运行（Windows 同时只允许一只）：${names}。` +
+          "如果那是上一只没退干净的，等它自己退（通常 10–20 秒）；一直不退就在任务管理器里结束 " +
+          "WindowsSandboxRemoteSession / vmwp.exe / vmmemWindowsSandbox，然后再点一次启动。",
+      };
+    }
+
     const generation = ++this.generation;
     // 新一局开始：上一局可能还有没走完的收尾链（兜底 / 升级窗口 / 退出轮询），先全清
     this.clearTimers();

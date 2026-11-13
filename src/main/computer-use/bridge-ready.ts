@@ -103,7 +103,11 @@ export async function waitForBridgeInfo(outDir: string, options: WaitForBridgeOp
     }
     if (Date.now() >= deadline) {
       throw new Error(
-        `${Math.round(options.timeoutMs / 1000)} 秒内没等到 guest 桥就绪（bridge.json 未出现）——沙箱可能还在启动，或桥启动失败`,
+        `${Math.round(options.timeoutMs / 1000)} 秒内没等到 guest 桥就绪（bridge.json 未出现）——` +
+        "沙箱可能还在启动，或桥启动失败。**如果之前有一只沙箱没退干净，就会一直卡在这里**" +
+        "（Windows 同时只允许一只沙箱，旧的那只占着位置、新的一只永远起不来）：" +
+        "去任务管理器结束 WindowsSandboxRemoteSession / vmwp.exe / vmmemWindowsSandbox，" +
+        "或等它们自己退出（通常 10–20 秒），然后再点一次启动。",
       );
     }
     await sleep(intervalMs);
