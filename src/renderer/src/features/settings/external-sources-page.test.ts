@@ -20,6 +20,7 @@ const source = (id: ExternalSourceInfo["id"], over: Partial<ExternalSourceInfo> 
   id,
   roots: [{ dir: `/home/me/.${id}`, custom: false, hasData: true }],
   expected: `/home/me/.${id}`,
+  expectedExists: true,
   sessions: 3,
   enabled: true,
   problems: [],
@@ -35,24 +36,26 @@ const report = (over: Partial<ImportRunReport> = {}): ImportRunReport => ({
 });
 
 describe("外部来源页", () => {
-  test("步骤：列出来源即打勾；扫描前技能是当前步；扫出来没东西的段直接打勾；导入后全勾", () => {
-    assert.deepEqual(stepStates({ listed: false, scanned: false, imported: false, hasSkills: false, hasMcp: false }), {
+  test("导入一块的步骤：扫描前只有来源是当前步；扫出来没东西的段直接打勾；导入后全勾", () => {
+    assert.deepEqual(stepStates({ scanned: false, imported: false, hasSkills: false, hasMcp: false }), {
       sources: "current",
-      skills: "current",
+      skills: "pending",
       mcp: "pending",
       import: "pending",
     });
-    assert.deepEqual(stepStates({ listed: true, scanned: true, imported: false, hasSkills: true, hasMcp: false }), {
+    assert.deepEqual(stepStates({ scanned: true, imported: false, hasSkills: true, hasMcp: false }), {
       sources: "done",
       skills: "current",
       mcp: "done",
       import: "current",
     });
-    assert.equal(stepStates({ listed: true, scanned: true, imported: true, hasSkills: true, hasMcp: true }).import, "done");
+    assert.equal(stepStates({ scanned: true, imported: true, hasSkills: true, hasMcp: true }).import, "done");
   });
 
   test("来源行：没发现 / 发现（关着的照数会话）；一个都没发现出空态", () => {
-    assert.deepEqual(sourceRowState(source("codex", { roots: [], sessions: 0 })), { kind: "missing" });
+    assert.deepEqual(sourceRowState(source("codex", { roots: [], sessions: 0, expectedExists: false })), { kind: "missing" });
+    // 目录在、没有会话数据（如只有状态库的 ~/.codex）：不写成「没找到」
+    assert.deepEqual(sourceRowState(source("codex", { roots: [], sessions: 0 })), { kind: "empty-dir" });
     assert.deepEqual(sourceRowState(source("proma", { enabled: false, sessions: 325 })), { kind: "found", sessions: 325 });
     assert.equal(noneFound([source("codex", { roots: [] }), source("zcode", { roots: [] })]), true);
     assert.equal(noneFound([source("codex", { roots: [] }), source("zcode")]), false);
@@ -63,10 +66,13 @@ describe("外部来源页", () => {
     assert.deepEqual(switchesAfter(sources, "proma", false), { "claude-code": true, codex: false, proma: false });
   });
 
-  test("底栏只讲技能与 MCP（中英）", () => {
-    assert.equal(headline(2, 1, en), "Import 2 skills · 1 MCP server");
-    assert.equal(headline(0, 0, en), en.migration.nothingTicked);
-    assert.match(headline(2, 0, zh), /2 个技能/);
+  test("导入一步只讲技能与 MCP（中英）", () => {
+    assert.equal(headline({ scanned: true, importable: 5, skills: 2, mcp: 1 }, en), "Import 2 skills · 1 MCP server");
+    // 有可导的、一个没勾 →「什么都没勾」；一条可导的都没有 →「没有可导入的」；没扫 → 说下一步
+    assert.equal(headline({ scanned: true, importable: 5, skills: 0, mcp: 0 }, en), en.migration.nothingTicked);
+    assert.equal(headline({ scanned: true, importable: 0, skills: 0, mcp: 0 }, zh), zh.externalSources.nothingImportable);
+    assert.equal(headline({ scanned: false, importable: 0, skills: 0, mcp: 0 }, en), en.externalSources.importHint);
+    assert.match(headline({ scanned: true, importable: 2, skills: 2, mcp: 0 }, zh), /2 个技能/);
     assert.match(runningHeadline(1, 1, en), /Importing 1 skill/);
     assert.deepEqual(
       footFacts(2, "link", 1, en).map((fact) => fact.kind),

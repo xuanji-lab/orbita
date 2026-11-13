@@ -1,17 +1,24 @@
 import "./migration-view.css";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ExternalSourceInfo, ExternalSourcesResult } from "@shared/external-sources";
-import type { ImportRunReport, ImportScanReport, ImportSkillItem, ImportSkillMode, ImportSkillScope } from "@shared/import";
+import type {
+  ImportConfigProbe,
+  ImportDetectResult,
+  ImportRunReport,
+  ImportScanReport,
+  ImportSkillItem,
+  ImportSkillMode,
+  ImportSkillScope,
+  ImportSourceId,
+} from "@shared/import";
 import type { SettingsPatch } from "@shared/settings";
 import type { Workspace } from "@shared/workspace";
 import { api } from "../../api";
-import { Icon } from "../../shell/Icon";
-import { PanelEmpty } from "../../shell/PanelEmpty";
+import { Icon, type IconName } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
 import { CustomRootsSection } from "./CustomRootsSection.tsx";
-import { abbreviateHome } from "./display-format.ts";
+import { abbreviateHome, middleEllipsis } from "./display-format.ts";
 import {
-  CONFIG_SOURCES,
   doneFacts,
   doneHeadline,
   footFacts,
@@ -26,8 +33,8 @@ import {
 } from "./external-sources-page.ts";
 import { McpSection } from "./MigrationMcp.tsx";
 import { SkillsSection } from "./MigrationSkills.tsx";
-import { FootFact, Step, StepDot, TipBadge } from "./MigrationStep.tsx";
-import { defaultMcpSelection, selectedMcpNames } from "./migration-mcp.ts";
+import { FootFact, Step, TipBadge } from "./MigrationStep.tsx";
+import { defaultMcpSelection, isSelectableMcp, selectedMcpNames } from "./migration-mcp.ts";
 import {
   countSelectedSkills,
   DEFAULT_SKILL_SCOPE,
@@ -40,12 +47,14 @@ import {
 import { Switch } from "./SettingControls";
 
 /**
- * 设置 › 外部来源（原「迁移」页，2026-11 导入聊天记录退场后改成这样）。四步铺在同一页：
+ * 设置 › 外部来源（原「迁移」页，2026-11 聊天记录导入退场后改成这样）。两块，各管各的：
  *
- *   1 别的工具里的聊天记录  每个来源一行：名字、会话数、数据目录、开关。**只读**——read_task 在原位
- *                          读，不复制进 Orbita；关掉的来源 read_task 不列也不读。下面是手动加数据目录。
- *   2 Skills / 3 MCP       从别的工具导入配置（复制一次就对），扫描、勾选照旧。
- *   4 Import（底栏）        只导技能与 MCP。
+ * 1. 「别的工具里的聊天记录」：常驻的状态清单，不编号。八个支持的工具各一行（没发现的也列，写明
+ *    去哪里找过），每行名字、会话数、数据目录、开关。**只读**——read_task 在原位读，不复制进来；
+ *    开关只管智能体能不能读这个工具的聊天记录。下面是手动加数据目录。
+ * 2. 「从别的工具导入技能与 MCP」：配置复制一次就对，照 origin/main 迁移页的做法——
+ *    1 来源（勾选；先列出扫描会读的全部路径，没勾的一个字节都不读）→ 2 技能 → 3 MCP → 4 导入。
+ *    导入键在这一块里面，不粘在整页底栏（看聊天记录清单时视野里不该有「导入」）。
  */
 
 type ListState =
@@ -53,10 +62,15 @@ type ListState =
   | { kind: "ready"; result: ExternalSourcesResult }
   | { kind: "error"; message: string };
 
+type DetectState =
+  | { kind: "loading" }
+  | { kind: "ready"; result: ImportDetectResult }
+  | { kind: "error"; message: string };
+
 type ScanState =
   | { kind: "idle" }
   | { kind: "scanning" }
-  | { kind: "ready"; report: ImportScanReport }
+  | { kind: "ready"; report: ImportScanReport; sources: ImportSourceId[] }
   | { kind: "error"; message: string };
 
 type RunState =
@@ -83,6 +97,8 @@ export function ExternalSourcesView(props: {
 }) {
   const t = useT();
   const [list, setList] = useState<ListState>({ kind: "loading" });
+  const [detect, setDetect] = useState<DetectState>({ kind: "loading" });
+  const [ticked, setTicked] = useState<ReadonlySet<ImportSourceId>>(new Set());
   const [scan, setScan] = useState<ScanState>({ kind: "idle" });
   const [run, setRun] = useState<RunState>({ kind: "idle" });
   const [skillSelected, setSkillSelected] = useState<ReadonlySet<string>>(new Set());
@@ -94,7 +110,10 @@ export function ExternalSourcesView(props: {
 
   /** first = 首次打开（出 loading 态）；之后的刷新（开关、加 / 删目录）保留旧结果，避免整页闪 */
   const load = useCallback((first: boolean) => {
-    if (first) setList({ kind: "loading" });
+    if (first) {
+      setList({ kind: "loading" });
+      setDetect({ kind: "loading" });
+    }
     let cancelled = false;
     void api.externalSources
       .list()
@@ -104,32 +123,41 @@ export function ExternalSourcesView(props: {
       .catch((cause: unknown) => {
         if (!cancelled) setList({ kind: "error", message: errorText(cause) });
       });
+    // 技能 / MCP 的来源与会读的路径：只 stat（自定义目录变了也要重探）
+    void api.import
+      .detect()
+      .then((result) => {
+        if (!cancelled) setDetect({ kind: "ready", result });
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled) setDetect({ kind: "error", message: errorText(cause) });
+      });
     return () => {
       cancelled = true;
     };
   }, []);
   useEffect(() => load(true), [load]);
 
-  const home = list.kind === "ready" ? list.result.home : "";
+  const home = list.kind === "ready" ? list.result.home : detect.kind === "ready" ? detect.result.home : "";
   const busy = scan.kind === "scanning" || run.kind === "running";
-  // 任何改选择的动作都让「Imported …」退场：那是上一次的结果，不是眼前这份勾选的
+  // 任何改选择的动作都让「已导入 …」退场：那是上一次的结果，不是眼前这份勾选的
   const touch = useCallback(() => setRun((current) => (current.kind === "done" ? { kind: "idle" } : current)), []);
 
   const setSourceEnabled = (source: ExternalSourceInfo, enabled: boolean): void => {
     if (list.kind !== "ready") return;
     const sources = list.result.sources;
-    // 先在页面上翻过去（开关即时响应），再落设置、重新列一遍
+    // 先在页面上翻过去（开关即时响应），再落设置
     setList({ kind: "ready", result: { ...list.result, sources: sources.map((item) => (item.id === source.id ? { ...item, enabled } : item)) } });
     props.onSettingsChange({ externalSources: switchesAfter(sources, source.id, enabled) });
   };
 
-  const startScan = useCallback((keepRun: boolean) => {
+  const startScan = useCallback((sources: ImportSourceId[], keepRun: boolean) => {
     setScan({ kind: "scanning" });
     if (!keepRun) setRun({ kind: "idle" });
     void api.import
-      .scan({ sources: [...CONFIG_SOURCES] })
+      .scan({ sources })
       .then((report) => {
-        setScan({ kind: "ready", report });
+        setScan({ kind: "ready", report, sources });
         setSkillSelected(defaultSkillSelection(report.skills));
         setSkillScopes(new Map());
         setSkillExpanded(new Set());
@@ -141,12 +169,15 @@ export function ExternalSourcesView(props: {
 
   const skillCount = scan.kind === "ready" ? countSelectedSkills(scan.report.skills, skillSelected) : 0;
   const mcpCount = scan.kind === "ready" ? selectedMcpNames(scan.report.mcp, mcpSelected).length : 0;
+  const importable =
+    scan.kind === "ready"
+      ? scan.report.skills.reduce((sum, group) => sum + selectableSkills(group).length, 0) + scan.report.mcp.filter(isSelectableMcp).length
+      : 0;
   const steps = stepStates({
-    listed: list.kind === "ready",
     scanned: scan.kind === "ready",
     imported: run.kind === "done",
     hasSkills: scan.kind === "ready" && scan.report.skills.some((group) => selectableSkills(group).length > 0),
-    hasMcp: scan.kind === "ready" && scan.report.mcp.some((item) => item.status === "new"),
+    hasMcp: scan.kind === "ready" && scan.report.mcp.some(isSelectableMcp),
   });
 
   const setSkills = (skills: readonly ImportSkillItem[], on: boolean) => {
@@ -163,10 +194,11 @@ export function ExternalSourcesView(props: {
 
   const startRun = () => {
     if (scan.kind !== "ready" || skillCount + mcpCount === 0) return;
+    const sources = scan.sources;
     setRun({ kind: "running", skills: skillCount, mcp: mcpCount });
     void api.import
       .run({
-        sources: [...CONFIG_SOURCES],
+        sources,
         skills: selectedSkillDirs(scan.report.skills, skillSelected),
         skillMode,
         skillScopes: skillScopeChoices(skillScopes),
@@ -174,115 +206,118 @@ export function ExternalSourcesView(props: {
       })
       .then((result) => {
         setRun({ kind: "done", result });
-        // 导进来的不再列：重扫，保住「Imported …」那一行
-        startScan(true);
+        // 导进来的不再列：按同样的来源重扫，保住「已导入 …」那一行
+        startScan(sources, true);
       })
       .catch((cause: unknown) => setRun({ kind: "error", message: errorText(cause) }));
   };
 
-  const scanButton = (
-    <button type="button" className="quiet-control mg-btn" disabled={busy} onClick={() => startScan(false)}>
-      <Icon
-        name={scan.kind === "scanning" ? "loader-circle" : scan.kind === "ready" ? "refresh-cw" : "search"}
-        size={12}
-        spin={scan.kind === "scanning"}
-      />
-      {scan.kind === "scanning" ? t.migration.scanning : scan.kind === "ready" ? t.migration.rescan : t.externalSources.scanConfig}
-    </button>
-  );
+  const probes = detect.kind === "ready" ? detect.result.sources : [];
 
   return (
     <div className="mg">
       <div className="mg-scroll scroll">
         <div className="mg-col">
-          <SourcesStep
-            state={steps.sources}
-            list={list}
-            home={home}
-            busy={busy}
-            onToggle={setSourceEnabled}
-            onCustomRootsChanged={() => load(false)}
-          />
+          <ChatSources list={list} home={home} busy={busy} onToggle={setSourceEnabled} onCustomRootsChanged={() => load(false)} />
 
-          <SkillsSection
-            n={2}
-            state={steps.skills}
-            scan={scanButton}
-            groups={scan.kind === "ready" ? scan.report.skills : null}
-            home={home}
-            workspaces={props.workspaces}
-            selected={skillSelected}
-            mode={skillMode}
-            scopes={skillScopes}
-            expanded={skillExpanded}
-            showAll={skillShowAll}
-            disabled={busy}
-            onMode={(mode) => {
-              touch();
-              setSkillMode(mode);
-            }}
-            onSet={setSkills}
-            onScope={(dir, scope) => {
-              touch();
-              setSkillScopes((current) => {
-                const next = new Map(current);
-                if (sameSkillScope(scope, DEFAULT_SKILL_SCOPE)) next.delete(dir);
-                else next.set(dir, scope);
-                return next;
-              });
-            }}
-            onToggleExpand={(dir) => setSkillExpanded((current) => toggled(current, dir))}
-            onShowAll={(dir) => setSkillShowAll((current) => toggled(current, dir))}
-          />
-          {scan.kind === "error" && (
-            <p className="mg-caption mg-error">
-              <Icon name="triangle-alert" size={12} />
-              {t.migration.scanFailed} {scan.message}
+          <section className="ext-block" aria-label={t.externalSources.configTitle}>
+            <header className="ext-block-head">
+              <h2 className="ext-block-title">{t.externalSources.configTitle}</h2>
+            </header>
+            <p className="mg-caption mg-caption-lead">
+              <Icon name="eye" size={12} strokeWidth={1.8} />
+              {t.externalSources.configLead}
             </p>
-          )}
-
-          <McpSection
-            n={3}
-            state={steps.mcp}
-            items={scan.kind === "ready" ? scan.report.mcp : null}
-            home={home}
-            selected={mcpSelected}
-            disabled={busy}
-            onSet={(names, on) => {
-              touch();
-              setMcpSelected((current) => {
-                const next = new Set(current);
-                for (const name of names) {
-                  if (on) next.add(name);
-                  else next.delete(name);
-                }
-                return next;
-              });
-            }}
-          />
+            <div className="ext-steps">
+              <ConfigSourcesStep
+                state={steps.sources}
+                detect={detect}
+                probes={probes}
+                home={home}
+                ticked={ticked}
+                scanning={scan.kind === "scanning"}
+                scanned={scan.kind === "ready"}
+                busy={busy}
+                onToggle={(id) => {
+                  touch();
+                  setTicked((current) => toggled(current, id));
+                }}
+                onTickAll={() => setTicked(new Set(probes.filter((probe) => probe.found).map((probe) => probe.id)))}
+                onScan={() => startScan([...ticked], false)}
+                error={scan.kind === "error" ? scan.message : null}
+              />
+              <SkillsSection
+                n={2}
+                state={steps.skills}
+                groups={scan.kind === "ready" ? scan.report.skills : null}
+                home={home}
+                workspaces={props.workspaces}
+                selected={skillSelected}
+                mode={skillMode}
+                scopes={skillScopes}
+                expanded={skillExpanded}
+                showAll={skillShowAll}
+                disabled={busy}
+                onMode={(mode) => {
+                  touch();
+                  setSkillMode(mode);
+                }}
+                onSet={setSkills}
+                onScope={(dir, scope) => {
+                  touch();
+                  setSkillScopes((current) => {
+                    const next = new Map(current);
+                    if (sameSkillScope(scope, DEFAULT_SKILL_SCOPE)) next.delete(dir);
+                    else next.set(dir, scope);
+                    return next;
+                  });
+                }}
+                onToggleExpand={(dir) => setSkillExpanded((current) => toggled(current, dir))}
+                onShowAll={(dir) => setSkillShowAll((current) => toggled(current, dir))}
+              />
+              <McpSection
+                n={3}
+                state={steps.mcp}
+                items={scan.kind === "ready" ? scan.report.mcp : null}
+                home={home}
+                selected={mcpSelected}
+                disabled={busy}
+                onSet={(names, on) => {
+                  touch();
+                  setMcpSelected((current) => {
+                    const next = new Set(current);
+                    for (const name of names) {
+                      if (on) next.add(name);
+                      else next.delete(name);
+                    }
+                    return next;
+                  });
+                }}
+              />
+              <ImportStep
+                state={steps.import}
+                scanned={scan.kind === "ready"}
+                importable={importable}
+                run={run}
+                skills={skillCount}
+                mcp={mcpCount}
+                skillMode={skillMode}
+                disabled={busy || skillCount + mcpCount === 0}
+                onImport={startRun}
+              />
+            </div>
+          </section>
         </div>
       </div>
-
-      <ImportFooter
-        state={steps.import}
-        scanned={scan.kind === "ready"}
-        run={run}
-        skills={skillCount}
-        mcp={mcpCount}
-        skillMode={skillMode}
-        disabled={busy || skillCount + mcpCount === 0}
-        onImport={startRun}
-      />
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// 1 别的工具里的聊天记录
+// 上块：别的工具里的聊天记录（常驻清单，不编号）
 // ---------------------------------------------------------------------------
 
-function SourcesStep(props: {
-  state: StepState;
+function ChatSources(props: {
   list: ListState;
   home: string;
   busy: boolean;
@@ -292,18 +327,13 @@ function SourcesStep(props: {
   const t = useT();
   const { list } = props;
   return (
-    <Step
-      n={1}
-      title={t.externalSources.stepTitle}
-      state={props.state}
-      summary={
-        <span className="mg-step-sum">
-          <TipBadge icon="lock" tip={t.externalSources.readOnlyTip} focusable>
-            {t.migration.readOnly}
-          </TipBadge>
-        </span>
-      }
-    >
+    <section className="ext-block" aria-label={t.externalSources.stepTitle}>
+      <header className="ext-block-head">
+        <h2 className="ext-block-title">{t.externalSources.stepTitle}</h2>
+        <TipBadge icon="lock" tip={t.externalSources.readOnlyTip} focusable>
+          {t.migration.readOnly}
+        </TipBadge>
+      </header>
       {list.kind === "loading" && (
         <p className="mg-caption">
           <Icon name="loader-circle" size={12} spin /> {t.externalSources.loading}
@@ -319,21 +349,20 @@ function SourcesStep(props: {
         <>
           <p className="mg-caption mg-caption-lead">
             <Icon name="eye" size={12} strokeWidth={1.8} />
-            {t.externalSources.lead}
+            {t.externalSources.lead} {t.externalSources.chatSwitchNote}
           </p>
-          {noneFound(list.result.sources) ? (
-            <div className="mg-block">
-              <PanelEmpty icon="circle-off" className="mg-empty" hint={t.externalSources.noneFoundHint}>
-                {t.externalSources.noneFound}
-              </PanelEmpty>
-            </div>
-          ) : (
-            <div className="mg-block ext-list">
-              {list.result.sources.map((source) => (
-                <SourceRow key={source.id} source={source} home={props.home} disabled={props.busy} onToggle={props.onToggle} />
-              ))}
-            </div>
+          {noneFound(list.result.sources) && (
+            <p className="mg-caption">
+              <Icon name="circle-off" size={12} strokeWidth={1.8} />
+              {t.externalSources.noneFound} {t.externalSources.noneFoundHint}
+            </p>
           )}
+          {/* 没发现的也列：用户要知道支持哪些工具、各自去哪里找过 */}
+          <div className="mg-block ext-list">
+            {list.result.sources.map((source) => (
+              <SourceRow key={source.id} source={source} home={props.home} disabled={props.busy} onToggle={props.onToggle} />
+            ))}
+          </div>
           <CustomRootsSection
             roots={list.result.customRoots}
             home={props.home}
@@ -342,7 +371,7 @@ function SourcesStep(props: {
           />
         </>
       )}
-    </Step>
+    </section>
   );
 }
 
@@ -357,7 +386,7 @@ function SourceRow(props: {
   const state = sourceRowState(source);
   const name = t.externalSources.sources[source.id];
   return (
-    <div className="ext-src" data-missing={state.kind === "missing" || undefined} data-off={!source.enabled || undefined}>
+    <div className="ext-src" data-missing={state.kind !== "found" || undefined} data-off={!source.enabled || undefined}>
       <div className="ext-src-head">
         <span className="mg-line1">
           <span className="mg-name">{name}</span>
@@ -367,12 +396,7 @@ function SourceRow(props: {
             </span>
           )}
         </span>
-        {state.kind === "missing" ? (
-          <span className="mg-status row-trailing">
-            <Icon name="circle-off" size={12} strokeWidth={1.8} />
-            {t.externalSources.notFound}
-          </span>
-        ) : (
+        {state.kind === "found" ? (
           <span className="row-trailing">
             <Switch
               label={t.externalSources.switchLabel(name)}
@@ -381,32 +405,34 @@ function SourceRow(props: {
               onChange={(next) => props.onToggle(source, next)}
             />
           </span>
+        ) : (
+          <span className="mg-status row-trailing">
+            <Icon name="circle-off" size={12} strokeWidth={1.8} />
+            {state.kind === "empty-dir" ? t.externalSources.dirNoSessions : t.externalSources.notFound}
+          </span>
         )}
       </div>
       <ul className="ext-paths" aria-label={t.externalSources.pathsFor(name)}>
-        {state.kind === "missing" ? (
-          <li className="mg-path-line" title={source.expected}>
-            <Icon name="folder" size={11} strokeWidth={1.8} />
-            <span>
-              <span className="ext-note">{t.externalSources.lookedIn}</span> {abbreviateHome(source.expected, props.home)}
-            </span>
-          </li>
-        ) : (
+        {state.kind === "found" ? (
           source.roots.map((root) => (
             <li key={root.dir} className="mg-path-line" data-warn={!root.hasData || undefined} title={root.dir}>
               <Icon name={root.hasData ? "folder" : "triangle-alert"} size={11} strokeWidth={1.8} />
-              <span>
-                {abbreviateHome(root.dir, props.home)}
-                {root.custom && <span className="ext-note"> · {t.externalSources.addedByYou}</span>}
-                {!root.hasData && <span className="ext-note"> · {t.externalSources.noData}</span>}
-              </span>
+              <span className="ext-path">{middleEllipsis(abbreviateHome(root.dir, props.home))}</span>
+              {root.custom && <span className="ext-tag">{t.externalSources.addedByYou}</span>}
+              {!root.hasData && <span className="ext-note">{t.externalSources.noData}</span>}
             </li>
           ))
+        ) : (
+          <li className="mg-path-line" title={source.expected}>
+            <Icon name="folder" size={11} strokeWidth={1.8} />
+            {state.kind === "missing" && <span className="ext-note">{t.externalSources.lookedIn}</span>}
+            <span className="ext-path">{middleEllipsis(abbreviateHome(source.expected, props.home))}</span>
+          </li>
         )}
         {source.problems.map((problem) => (
           <li key={problem} className="mg-path-line" data-warn title={problem}>
             <Icon name="triangle-alert" size={11} strokeWidth={1.8} />
-            <span>{problem}</span>
+            <span className="ext-note">{problem}</span>
           </li>
         ))}
       </ul>
@@ -415,14 +441,135 @@ function SourceRow(props: {
 }
 
 // ---------------------------------------------------------------------------
-// 4 Import（底栏，只导技能与 MCP）
+// 下块第 1 步：来源（勾选；先列出扫描会读的全部路径）
+// ---------------------------------------------------------------------------
+
+/** 路径清单里每一行的图标：JSON 文件 / 其他文件 / 目录（含 `*` 通配的目录） */
+function pathIcon(path: string): IconName {
+  if (/\.json$/i.test(path)) return "file-json-2";
+  if (/\.[a-z0-9]+$/i.test(path) && !path.includes("*")) return "file";
+  return "folder";
+}
+
+function ConfigSourcesStep(props: {
+  state: StepState;
+  detect: DetectState;
+  probes: readonly ImportConfigProbe[];
+  home: string;
+  ticked: ReadonlySet<ImportSourceId>;
+  scanning: boolean;
+  scanned: boolean;
+  busy: boolean;
+  error: string | null;
+  onToggle: (id: ImportSourceId) => void;
+  onTickAll: () => void;
+  onScan: () => void;
+}) {
+  const t = useT();
+  const canTickMore = props.probes.some((probe) => probe.found && !props.ticked.has(probe.id));
+  return (
+    <Step
+      n={1}
+      title={t.externalSources.stepSources}
+      state={props.state}
+      tools={
+        <span className="mg-tools">
+          {canTickMore && (
+            <button type="button" className="mg-textbtn" disabled={props.busy} onClick={props.onTickAll}>
+              {t.externalSources.tickAllFound}
+            </button>
+          )}
+          <button
+            type="button"
+            className="quiet-control mg-btn"
+            disabled={props.busy || props.ticked.size === 0}
+            title={props.ticked.size === 0 ? t.externalSources.tickToScan : undefined}
+            onClick={props.onScan}
+          >
+            <Icon name={props.scanning ? "loader-circle" : props.scanned ? "refresh-cw" : "search"} size={12} spin={props.scanning} />
+            {props.scanning ? t.migration.scanning : props.scanned ? t.migration.rescan : t.externalSources.scan}
+          </button>
+        </span>
+      }
+    >
+      {props.detect.kind === "loading" && (
+        <p className="mg-caption">
+          <Icon name="loader-circle" size={12} spin /> {t.externalSources.loading}
+        </p>
+      )}
+      {props.detect.kind === "error" && (
+        <p className="mg-caption mg-error">
+          <Icon name="triangle-alert" size={12} />
+          {t.externalSources.loadFailed} {props.detect.message}
+        </p>
+      )}
+      {props.detect.kind === "ready" && (
+        <>
+          <p className="mg-caption mg-caption-lead">
+            <Icon name="eye" size={12} strokeWidth={1.8} />
+            {t.externalSources.pathsNote}
+          </p>
+          <div className="mg-block">
+            {props.probes.map((probe) => (
+              <div className="mg-src" key={probe.id} data-disabled={!probe.found || undefined}>
+                <label className="mg-src-head">
+                  <input
+                    type="checkbox"
+                    checked={props.ticked.has(probe.id)}
+                    disabled={props.busy || !probe.found}
+                    onChange={() => props.onToggle(probe.id)}
+                  />
+                  <span className="mg-line1">
+                    <span className="mg-name">{t.migration.sources[probe.id]}</span>
+                  </span>
+                  <span className="mg-trail">
+                    {probe.found ? (
+                      <span className="mg-status">
+                        <Icon name="circle-check" size={12} strokeWidth={1.8} />
+                        {t.externalSources.configFound}
+                      </span>
+                    ) : (
+                      <span className="mg-status">
+                        <Icon name="circle-off" size={12} strokeWidth={1.8} />
+                        {t.externalSources.configNotFound}
+                      </span>
+                    )}
+                  </span>
+                </label>
+                {/* 路径清单竖排、常驻：这就是事前披露，不收进悬停 */}
+                <ul className="mg-paths" aria-label={t.externalSources.pathsFor(t.migration.sources[probe.id])}>
+                  {probe.paths.map((path) => (
+                    <li key={path} className="mg-path-line" title={path}>
+                      <Icon name={pathIcon(path)} size={11} strokeWidth={1.8} />
+                      <span>{abbreviateHome(path, props.home)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      {props.error !== null && (
+        <p className="mg-caption mg-error">
+          <Icon name="triangle-alert" size={12} />
+          {t.migration.scanFailed} {props.error}
+        </p>
+      )}
+    </Step>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 下块第 4 步：导入（在块里面，不粘底）
 // ---------------------------------------------------------------------------
 
 const FOOT_ICON: Record<FootFactKind, "book-open" | "power"> = { skills: "book-open", mcp: "power" };
 
-function ImportFooter(props: {
+function ImportStep(props: {
   state: StepState;
   scanned: boolean;
+  importable: number;
   run: RunState;
   skills: number;
   mcp: number;
@@ -433,78 +580,65 @@ function ImportFooter(props: {
   const t = useT();
   const { run } = props;
   const facts = useMemo(() => footFacts(props.skills, props.skillMode, props.mcp, t), [props.skills, props.skillMode, props.mcp, t]);
-  const importButton = (label: string, busy: boolean) => (
+  const busy = run.kind === "running";
+  const button = (
     <button type="button" className="btn-accent mg-btn mg-btn-primary" disabled={props.disabled || busy} onClick={props.onImport}>
       <Icon name={busy ? "loader-circle" : "download"} size={13} spin={busy} />
-      {label}
+      {busy ? t.migration.importing : t.externalSources.importButton}
     </button>
   );
 
-  let copy: React.ReactNode;
-  let action: React.ReactNode = importButton(t.migration.import, false);
+  let main: React.ReactNode;
+  let sub: React.ReactNode = null;
   if (run.kind === "running") {
-    copy = <span className="mg-foot-main">{runningHeadline(run.skills, run.mcp, t)}</span>;
-    action = importButton(t.migration.importing, true);
+    main = <span className="ext-import-main">{runningHeadline(run.skills, run.mcp, t)}</span>;
   } else if (run.kind === "done") {
     const failed = doneFacts(run.result, t);
-    copy = (
-      <>
-        <span className="mg-foot-main" role="status">
-          <span className="mg-ok">
-            <Icon name="circle-check" size={15} />
-          </span>
-          {doneHeadline(run.result, t)}
+    main = (
+      <span className="ext-import-main" role="status">
+        <span className="mg-ok">
+          <Icon name="circle-check" size={14} />
         </span>
-        {failed.length > 0 && (
-          <span className="mg-foot-sub">
-            {failed.map((fact) => (
-              <FootFact key={fact.text} icon="triangle-alert" tone="danger" tip={fact.tip}>
-                {fact.text}
-              </FootFact>
-            ))}
-          </span>
-        )}
-      </>
+        {doneHeadline(run.result, t)}
+      </span>
     );
-    action = null;
+    if (failed.length > 0) {
+      sub = failed.map((fact) => (
+        <FootFact key={fact.text} icon="triangle-alert" tone="danger" tip={fact.tip}>
+          {fact.text}
+        </FootFact>
+      ));
+    }
   } else if (run.kind === "error") {
-    copy = (
-      <>
-        <span className="mg-foot-main mg-error">
-          <Icon name="triangle-alert" size={13} />
-          {t.migration.importFailed}
-        </span>
-        <span className="mg-foot-sub mg-foot-msg">{run.message}</span>
-      </>
+    main = (
+      <span className="ext-import-main mg-error">
+        <Icon name="triangle-alert" size={13} />
+        {t.migration.importFailed}
+      </span>
     );
-  } else if (!props.scanned) {
-    copy = <span className="mg-foot-main mg-dim">{t.externalSources.importHint}</span>;
+    sub = <span className="mg-foot-msg">{run.message}</span>;
   } else {
-    copy = (
-      <>
-        <span className={props.skills + props.mcp === 0 ? "mg-foot-main mg-dim" : "mg-foot-main"}>
-          {headline(props.skills, props.mcp, t)}
-        </span>
-        {facts.length > 0 && (
-          <span className="mg-foot-sub">
-            {facts.map((fact) => (
-              <FootFact key={fact.kind} icon={FOOT_ICON[fact.kind]} tip={fact.tip}>
-                {fact.text}
-              </FootFact>
-            ))}
-          </span>
-        )}
-      </>
+    const dim = !props.scanned || props.importable === 0 || props.skills + props.mcp === 0;
+    main = (
+      <span className={dim ? "ext-import-main mg-dim" : "ext-import-main"}>
+        {headline({ scanned: props.scanned, importable: props.importable, skills: props.skills, mcp: props.mcp }, t)}
+      </span>
     );
+    if (facts.length > 0) {
+      sub = facts.map((fact) => (
+        <FootFact key={fact.kind} icon={FOOT_ICON[fact.kind]} tip={fact.tip}>
+          {fact.text}
+        </FootFact>
+      ));
+    }
   }
 
   return (
-    <footer className="mg-foot">
-      <div className="mg-foot-inner">
-        <StepDot n={4} state={props.state} />
-        <span className="mg-foot-copy">{copy}</span>
-        {action}
+    <Step n={4} title={t.externalSources.stepImport} state={props.state} tools={run.kind === "done" ? null : button}>
+      <div className="ext-import">
+        {main}
+        {sub !== null && <span className="mg-foot-sub">{sub}</span>}
       </div>
-    </footer>
+    </Step>
   );
 }

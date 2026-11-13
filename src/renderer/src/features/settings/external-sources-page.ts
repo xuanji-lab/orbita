@@ -1,5 +1,5 @@
 /**
- * 设置 › 外部来源页的纯逻辑：步骤状态、来源行的状态、底栏（技能与 MCP 的导入）的句子。
+ * 设置 › 外部来源页的纯逻辑：来源行的状态、「从别的工具导入技能与 MCP」四步的状态与「导入」一步的句子。
  * 不碰 React、不碰 IPC，`node --test` 直接测（external-sources-page.test.ts）。
  *
  * 页面两件事分开讲：
@@ -8,12 +8,13 @@
  *   扫描、勾选、导入照旧。
  */
 import type { ExternalSourceInfo } from "@shared/external-sources";
-import type { ImportRunReport, ImportSkillMode, ImportSourceId } from "@shared/import";
+import type { ImportRunReport, ImportSkillMode } from "@shared/import";
 import type { Messages } from "../../messages-en.ts";
 
 /** 左侧编号圆点的三态：还没轮到 / 正在这一步 / 做完了（打勾） */
 export type StepState = "pending" | "current" | "done";
 
+/** 「从别的工具导入技能与 MCP」一块的四步（上面聊天记录那一块是常驻清单，不编号）。 */
 export interface StepStates {
   sources: StepState;
   skills: StepState;
@@ -22,39 +23,35 @@ export interface StepStates {
 }
 
 /**
- * 四步的状态。来源一列出来就打勾（只读，没什么要做的）；技能与 MCP 扫描前是当前步，扫出来
- * 没有可导条目的那段直接打勾；导入完成后全部打勾。底栏在至少一段有可导条目时是当前步。
+ * 扫描前只有「来源」是当前步；扫描后来源打勾，技能与 MCP 同时是当前步，扫出来没有可导条目的那段
+ * 直接打勾；导入完成后全部打勾。「导入」在扫描后、且至少一段有可导条目时是当前步。
  */
-export function stepStates(input: { listed: boolean; scanned: boolean; imported: boolean; hasSkills: boolean; hasMcp: boolean }): StepStates {
-  const sources: StepState = input.listed ? "done" : "current";
-  if (!input.scanned) return { sources, skills: "current", mcp: "pending", import: "pending" };
+export function stepStates(input: { scanned: boolean; imported: boolean; hasSkills: boolean; hasMcp: boolean }): StepStates {
+  if (!input.scanned) return { sources: "current", skills: "pending", mcp: "pending", import: "pending" };
   const pick = (has: boolean): StepState => (input.imported || !has ? "done" : "current");
   return {
-    sources,
+    sources: "done",
     skills: pick(input.hasSkills),
     mcp: pick(input.hasMcp),
     import: input.imported ? "done" : input.hasSkills || input.hasMcp ? "current" : "pending",
   };
 }
 
-/**
- * 技能与 MCP 从哪些来源扫：有 skills 目录或 MCP 配置的那几家，加多家共用的 ~/.agents/skills。
- * 没装的来源主进程照常扫空，不报错。
- */
-export const CONFIG_SOURCES: readonly ImportSourceId[] = ["proma", "claude-code", "kimi-code", "opencode", "agent-skills"];
-
 // ---------------------------------------------------------------------------
 // 来源行
 // ---------------------------------------------------------------------------
 
 export type SourceRowState =
-  /** 本机没发现 */
+  /** 本机没发现：默认位置的目录都不在 */
   | { kind: "missing" }
+  /** 默认位置的目录在，但里面没有这个工具的会话数据（如只有状态库的 ~/.codex） */
+  | { kind: "empty-dir" }
   /** 发现了：会话数（关着的也照数） */
   | { kind: "found"; sessions: number };
 
 export function sourceRowState(source: ExternalSourceInfo): SourceRowState {
-  return source.roots.length === 0 ? { kind: "missing" } : { kind: "found", sessions: source.sessions };
+  if (source.roots.length > 0) return { kind: "found", sessions: source.sessions };
+  return source.expectedExists ? { kind: "empty-dir" } : { kind: "missing" };
 }
 
 /** 一个来源都没发现：页面出空态，告诉用户下一步能做什么。 */
@@ -84,10 +81,15 @@ export function joined(parts: readonly (string | null)[], separator = " · "): s
   return parts.filter((part): part is string => part !== null).join(separator);
 }
 
-/** 底栏主句：「Import 5 skills · 1 MCP server」；什么都没勾「Nothing ticked」。 */
-export function headline(skills: number, mcp: number, t: Messages): string {
+/**
+ * 「导入」一步的主句：扫描前说下一步；扫出来一条可导的都没有写「没有可导入的」（全都已在 orbita
+ * 里、或这几个来源里本来就没有）；有可导的但一个没勾才是「什么都没勾」；否则「导入 5 个技能 · 1 个 MCP 服务」。
+ */
+export function headline(input: { scanned: boolean; importable: number; skills: number; mcp: number }, t: Messages): string {
   const m = t.migration;
-  const imports = joined([counted(skills, m.skills), counted(mcp, m.mcpServers)]);
+  if (!input.scanned) return t.externalSources.importHint;
+  if (input.importable === 0) return t.externalSources.nothingImportable;
+  const imports = joined([counted(input.skills, m.skills), counted(input.mcp, m.mcpServers)]);
   return imports === "" ? m.nothingTicked : m.importOnly(imports);
 }
 

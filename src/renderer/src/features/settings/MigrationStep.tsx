@@ -4,8 +4,8 @@ import type { StepState } from "./external-sources-page.ts";
 import { useT } from "../../locale.ts";
 
 /**
- * Migration 页四段与底栏共用的件：编号步骤、带悬停说明的徽标与事实、列头。
- * MigrationView / MigrationSkills / MigrationMcp 三处都用，所以单放一个文件。
+ * 外部来源页「从别的工具导入技能与 MCP」各步共用的件：编号步骤、带悬停说明的徽标与事实、列头。
+ * ExternalSourcesView / MigrationSkills / MigrationMcp 三处都用，所以单放一个文件。
  *
  * 说明的机制与 General / Providers 同一套（useSettingTip）：常驻的只有图标、数字和短语，
  * 整句在悬停里，读屏走 aria-describedby。
@@ -28,7 +28,7 @@ export function StepDot(props: { n: number; state: StepState }) {
 
 /**
  * 一步：圆点 + 标题行（标题、`summary` 紧跟标题、`tools` 靠右）+ 正文。步与步之间的
- * 竖线是 CSS 画的（`.mg-step::before`），最后一步不画——底栏的 Import 是单独的一行。
+ * 竖线是 CSS 画的（`.mg-step::before`），最后一步不画。
  */
 export function Step(props: {
   n: number;
@@ -96,7 +96,7 @@ export function Fact(props: { icon: IconName; tip: string; children: React.React
   );
 }
 
-/** 底栏副行的一项：比事实条再轻一档（不描边），同样整句进悬停。 */
+/** 「导入」一步副行的一项：比事实条再轻一档（不描边），同样整句进悬停。 */
 export function FootFact(props: { icon: IconName; tip: string; tone?: "danger"; children: React.ReactNode }) {
   const tip = useSettingTip<HTMLSpanElement>(props.tip);
   return (

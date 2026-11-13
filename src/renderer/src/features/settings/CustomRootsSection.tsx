@@ -5,13 +5,13 @@ import { api } from "../../api";
 import { Chip } from "../../shell/Chip";
 import { Icon } from "../../shell/Icon";
 import { Menu, type MenuItem } from "../../shell/Menu";
-import { abbreviateHome } from "./display-format.ts";
+import { abbreviateHome, middleEllipsis } from "./display-format.ts";
 import { useT } from "../../locale.ts";
 
 /**
  * 外部来源页的自定义数据目录：自动发现漏掉的散落目录（备份、改过名的旧目录），用户选来源、
  * 粘路径（或开目录选择框），经该来源的检查（聊天记录在不在）后加进来——read_task 与技能 / MCP
- * 的扫描都会读它。行尾可移除（目录本身永不被碰）。原住在迁移页里，导入入口退场后搬到这里。
+ * 的扫描都会读它。行尾可移除（目录本身永不被碰）。原住在「迁移」页里，聊天记录导入退场后搬到这里。
  */
 
 /** 自定义路径支持的来源（= 有定位规格的那批；agent-skills 是单一共用目录，不支持） */
@@ -104,7 +104,7 @@ export function CustomRootsSection(props: {
             <Icon name="folder" size={12} strokeWidth={1.8} />
             <span className="mg-custom-src">{t.migration.sources[root.source]}</span>
             <span className="mg-custom-path" title={root.dir}>
-              {abbreviateHome(root.dir, props.home)}
+              {middleEllipsis(abbreviateHome(root.dir, props.home))}
             </span>
             <button
               type="button"

@@ -33,8 +33,6 @@ export function SkillsSection(props: {
   /** 步骤编号（外部来源页上是第 2 步） */
   n: number;
   state: StepState;
-  /** 段头最前面的扫描键（扫描在这一步发起，技能与 MCP 一起扫） */
-  scan: React.ReactNode;
   /** null = 还没扫描 */
   groups: readonly ImportSkillGroup[] | null;
   home: string;
@@ -65,9 +63,8 @@ export function SkillsSection(props: {
         <InfoTip label={t.migration.aboutSkills}>{t.migration.aboutSkillsBody}</InfoTip>
       }
       tools={
-        <span className="mg-tools">
-          {selectable.length > 0 && (
-            <>
+        selectable.length > 0 && (
+          <span className="mg-tools">
             <span className="seg-control" role="group" aria-label={t.migration.skillModeAria}>
               {(["copy", "link"] as const).map((mode) => (
                 <ModeButton
@@ -83,11 +80,8 @@ export function SkillsSection(props: {
             <button type="button" className="mg-textbtn" disabled={props.disabled} onClick={() => props.onSet(selectable, !all)}>
               {all ? t.migration.clearAll : t.migration.selectAll}
             </button>
-            <span className="mg-sep" />
-            </>
-          )}
-          {props.scan}
-        </span>
+          </span>
+        )
       }
     >
       {props.groups === null ? (

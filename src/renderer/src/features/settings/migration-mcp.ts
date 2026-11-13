@@ -1,5 +1,5 @@
 /**
- * Migration 页 MCP 一段的纯逻辑：默认勾选与出处的写法。`node --test` 直接测。
+ * 外部来源页 MCP 一段的纯逻辑：默认勾选与出处的写法。`node --test` 直接测。
  */
 import type { ImportMcpItem, ImportMcpOrigin, ImportSourceId } from "@shared/import";
 import { abbreviateHome } from "./display-format.ts";

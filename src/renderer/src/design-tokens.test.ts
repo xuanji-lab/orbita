@@ -441,7 +441,7 @@ const OFF_SCALE_SPACING_BUDGET = new Map<string, number>([
   ["src/renderer/src/features/settings/card-wall.css", 2], // 从 providers-view.css 搬出的卡片墙（#416），原值照搬
   ["src/renderer/src/features/review/excerpts-tab.css", 3],
   ["src/renderer/src/features/settings/info-tip.css", 1],
-  ["src/renderer/src/features/settings/migration-view.css", 10],
+  ["src/renderer/src/features/settings/migration-view.css", 6],
   ["src/renderer/src/features/settings/price-chart.css", 7],
   ["src/renderer/src/features/settings/providers-view.css", 6],
   ["src/renderer/src/features/settings/settings-view.css", 5],

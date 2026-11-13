@@ -1,5 +1,5 @@
 /**
- * Migration 页 Skills 一段的纯逻辑：默认勾选、组的说明、作用域的名字与选项。与 migration-groups.ts
+ * 外部来源页技能一段的纯逻辑：默认勾选、组的说明、作用域的名字与选项。与 migration-groups.ts
  * 同样不碰 React，`node --test` 直接测。
  */
 import type {
