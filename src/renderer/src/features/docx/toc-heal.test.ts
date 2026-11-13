@@ -77,12 +77,16 @@ function filler(chars = 20): FakeNode {
   return paragraph({}, [text("正".repeat(chars))]);
 }
 
-/** 三页：p1 覆盖 0–10、p2 覆盖 11–30、p3 覆盖 31–60（片段区间与真实 layout 一样是闭区间） */
+/**
+ * 三页：p1 覆盖 0–10、p2 覆盖 10–30、p3 覆盖 30–61。区间是**半开**的 `[pmStart, pmEnd)`
+ * ——与真实 layout 同一语义（`pmEnd = startPos + nodeSize` 是排他上界），最后一页的
+ * `pmEnd` 恰好等于文档 `content.size`，所以下面所有 `docSize` 都取 61。
+ */
 const layout: TocHealLayout = {
   pages: [
     { number: 1, fragments: [{ pmStart: 0, pmEnd: 10 }] },
-    { number: 2, fragments: [{ pmStart: 11, pmEnd: 30 }] },
-    { number: 3, fragments: [{ pmStart: 31, pmEnd: 60 }] },
+    { number: 2, fragments: [{ pmStart: 10, pmEnd: 30 }] },
+    { number: 3, fragments: [{ pmStart: 30, pmEnd: 61 }] },
   ],
 };
 
@@ -131,6 +135,30 @@ describe("docx 目录页码自愈：清点事实", () => {
     const facts = collectTocFacts(d);
     deepStrictEqual(facts.staticEntries, []);
     deepStrictEqual(facts.headings, []);
+  });
+
+  test("尾部跟着硬分页 / 书签原子：仍是静态条目（Word 常把分页塞在最后一条目录里）", () => {
+    const d = doc([
+      paragraph({ styleId: "TOC1" }, [text("第一章 项目背景"), atom("tab", {}), text("9"), atom("pageBreakRun", {})]),
+      paragraph({ styleId: "TOC2" }, [text("1.1 现状"), atom("tab", {}), text("8"), atom("bookmarkBoundary", { type: "end" })]),
+    ]);
+    const facts = collectTocFacts(d);
+    deepStrictEqual(
+      facts.staticEntries.map((e) => [e.before, e.title]),
+      [
+        ["9", "第一章项目背景"],
+        ["8", "1.1现状"],
+      ],
+    );
+  });
+
+  test("尾部是 field 原子：不算静态条目（域形态的缓存不归这条路管）", () => {
+    const d = doc([
+      paragraph({ styleId: "TOC1" }, [text("第一章 2024"), atom("tab", {}), field("PAGEREF", `PAGEREF _Toc1 ${BS}h`, "9")]),
+    ]);
+    const facts = collectTocFacts(d);
+    deepStrictEqual(facts.staticEntries, []);
+    strictEqual(facts.fields.length, 1);
   });
 });
 
@@ -228,7 +256,9 @@ describe("docx 目录页码自愈：计划", () => {
 });
 
 describe("docx 目录页码自愈：版面是否跟上了这次改动", () => {
-  test("版面末尾正好是 content.size - 1：算跟上（真样张实测都是这一个值）", () => {
+  test("版面排完了：末尾片段的 pmEnd == content.size → 跟上", () => {
+    // 真实 layout 的最后一页最后一个片段按 `startPos + nodeSize` 记，恰好是 content.size
+    // （实测四份样张：688/688、695/695、471/471、159/159，差值恒为 0）
     strictEqual(layoutCoversDocument(layout, 61), true);
   });
 
@@ -243,6 +273,44 @@ describe("docx 目录页码自愈：版面是否跟上了这次改动", () => {
 
   test("空版面：没跟上", () => {
     strictEqual(layoutCoversDocument({ pages: [] }, 61), false);
+  });
+
+  test("片段没有 pmEnd（引擎状态异常 / 版面还在构建）：没跟上", () => {
+    const partial: TocHealLayout = {
+      pages: [{ number: 1, fragments: [{ pmStart: 0 }, { pmStart: 10, pmEnd: null }] }],
+    };
+    strictEqual(layoutCoversDocument(partial, 61), false);
+  });
+});
+
+describe("docx 目录页码自愈：位置与片段边界", () => {
+  /** 目录条目在前、正文标题在后；标题段落起点 20、书签在标题第一个位置 21 */
+  function docWithBookmarkAt21(display = "9") {
+    return doc([
+      paragraph({ styleId: "TOC1" }, [field("PAGEREF", `PAGEREF _Toc1 ${BS}h`, display)]),
+      filler(15),
+      paragraph({ styleId: "Heading1" }, [bookmark("_Toc1"), text("第一章 项目背景")]),
+    ]);
+  }
+
+  test("位置正好等于 pmEnd：归下一页（pmEnd 是排他上界）", () => {
+    const plan = planTocHeal(collectTocFacts(docWithBookmarkAt21()), {
+      pages: [
+        { number: 1, fragments: [{ pmStart: 0, pmEnd: 21 }] },
+        { number: 2, fragments: [{ pmStart: 21, pmEnd: 61 }] },
+      ],
+    });
+    deepStrictEqual(plan.ops, [{ kind: "field", pos: 1, displayText: "2" }]);
+  });
+
+  test("同一位置在前一个片段的 pmStart 上：归本页（对照）", () => {
+    const plan = planTocHeal(collectTocFacts(docWithBookmarkAt21()), {
+      pages: [
+        { number: 1, fragments: [{ pmStart: 0, pmEnd: 22 }] },
+        { number: 2, fragments: [{ pmStart: 22, pmEnd: 61 }] },
+      ],
+    });
+    deepStrictEqual(plan.ops, [{ kind: "field", pos: 1, displayText: "1" }]);
   });
 });
 

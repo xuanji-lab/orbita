@@ -189,7 +189,23 @@ function staticPageNumber(paragraph: TocHealNode, pos: number): TocStaticFact | 
   paragraph.forEach((child, offset) => {
     children.push({ node: child, pos: pos + 1 + offset });
   });
-  const tail = children.length === 0 ? null : children[children.length - 1] ?? null;
+  /*
+   * 尾部可能是没有文字的原子：Word 常把「目录结束后硬分页」塞进最后一条目录段落
+   * （书签收尾同理）。它们不改变「这条目录的文字以页码结尾」这个事实，所以要跳过再看；
+   * 但域原子（field）必须停下——尾部是域就是**域形态**的目录条目，它的缓存由
+   * PAGEREF 那条路径管，绝不能把标题里恰好以数字结尾的文字当成页码去改。
+   */
+  let index = children.length - 1;
+  while (index >= 0) {
+    const name = children[index]?.node.type.name;
+    if (name === "text") break;
+    if (name === "tab" || name === "pageBreakRun" || name === "bookmarkBoundary") {
+      index -= 1;
+      continue;
+    }
+    return null;
+  }
+  const tail = index >= 0 ? children[index] ?? null : null;
   if (tail === null || tail.node.type.name !== "text") return null;
   const text = typeof tail.node.text === "string" ? tail.node.text : "";
   const match = /(\d+)\s*$/.exec(text);
@@ -206,12 +222,22 @@ function staticPageNumber(paragraph: TocHealNode, pos: number): TocStaticFact | 
 }
 
 /**
- * 这份版面是否已经覆盖到文档末尾。`fragment.pmEnd` 的最大值恒是 `content.size - 1`
- * （最末尾那一段的内容末尾）——不等说明拿到的还是**改动前**那一版版面。
+ * 这份版面是否已经覆盖到文档末尾。
+ *
+ * `pmEnd` 是**排他上界**（`pmEnd = startPos + node.nodeSize`，见 folio 的
+ * `layout-bridge/convert/paragraphConversion`、`tableConversion`、`imageConversion`，以及
+ * `footnoteLayout` 里 `ref.pmPos >= pmStart && ref.pmPos < pmEnd` 这一处用法）。doc 的
+ * `content.size` 就是顶层子节点 nodeSize 之和，所以版面排完时**最后一个片段的 `pmEnd`
+ * 恰好等于 `content.size`**（运行时实测四份样张：688/688、695/695、471/471、159/159）。
+ * 只有 `Fragment` 四种（paragraph / table / image / textBox）会进 `pages[*].fragments`，
+ * 它们都按 `startPos + nodeSize` 记，因此不会越过 `content.size`。
+ *
+ * 不等（小了）说明拿到的还是**改动前**那一版版面；大了说明文档在排版之后变短了，同样是旧版面。
+ * 两个方向都必须拦住：拿旧版面算页码会把书签往错的位置上对——轻则算不出（位置超出旧版面的
+ * 覆盖范围），重则落到下一页、把错页码写进文件。
  *
  * 为什么要这道闸：保存紧跟输入时（实测：打字后 250 ms 按 Ctrl+S）`getLayout()` 会慢一拍，
- * 拿到的还是旧的四页版面，而文档已经有五页。拿旧版面算页码会把书签往错的位置上对：
- * 轻则算不出（位置超出旧版面的覆盖范围），重则落到下一页、把错页码写进文件。
+ * 拿到的还是旧的四页版面，而文档已经有五页。
  */
 export function layoutCoversDocument(layout: TocHealLayout, docSize: number): boolean {
   let end: number | null = null;
@@ -222,10 +248,16 @@ export function layoutCoversDocument(layout: TocHealLayout, docSize: number): bo
       if (end === null || value > end) end = value;
     }
   }
-  return end === docSize - 1;
+  return end === docSize;
 }
 
-/** 位置落在哪一页：覆盖该位置的最早一页；没有片段覆盖（块与块之间的缝）就是 null */
+/**
+ * 位置落在哪一页：覆盖该位置的最早一页；没有片段覆盖（块与块之间的缝）就是 null。
+ *
+ * 区间是**半开**的 `[pmStart, pmEnd)`：`pmEnd` 是排他上界，位置正好等于它时已经属于下一个
+ * 片段（上一页的最后一个位置与下一页的第一个位置相邻，两者不能都算给上一页——那会让
+ * 跨页的那个标题系统性地少算一页）。
+ */
 function pageOfPosition(layout: TocHealLayout, pos: number): number | null {
   let best: number | null = null;
   for (const page of layout.pages) {
@@ -233,7 +265,7 @@ function pageOfPosition(layout: TocHealLayout, pos: number): number | null {
       const start = fragment.pmStart;
       const end = fragment.pmEnd;
       if (typeof start !== "number" || typeof end !== "number") continue;
-      if (start <= pos && pos <= end && (best === null || page.number < best)) best = page.number;
+      if (start <= pos && pos < end && (best === null || page.number < best)) best = page.number;
     }
   }
   return best;
