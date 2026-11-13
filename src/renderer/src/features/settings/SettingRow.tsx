@@ -38,7 +38,7 @@ export function SettingRow(props: {
   info?: React.ReactNode;
   note?: React.ReactNode;
   below?: React.ReactNode;
-  /** 挂在整行上（迁移页三步清单跳过来时滚动 / 高亮 / 聚焦用） */
+  /** 挂在整行上（别处跳过来时滚动 / 高亮 / 聚焦用，如记忆库跳到家务活模型行） */
   rowRef?: React.Ref<HTMLDivElement>;
   children: React.ReactNode;
 }) {

@@ -26,8 +26,8 @@ import { DICTATION_PROVIDERS } from "@shared/voice";
 import { CompactViz } from "./CompactViz";
 import { COMPACTION_CHOICES } from "./compact-viz.ts";
 import { allShownTicked, importedFirst, setShown } from "./login-sites.ts";
-import { formatDay } from "./migration-groups.ts";
-import { MigrationView } from "./MigrationView";
+import { formatDay } from "./display-format.ts";
+import { ExternalSourcesView } from "./ExternalSourcesView";
 import { GuideSettings } from "./GuideSettings";
 import { SettingGroup, SettingRow } from "./SettingRow";
 import { Segmented, SelectButton, Switch } from "./SettingControls";
@@ -77,10 +77,10 @@ export function SettingsView(props: {
   onProvidersChange: () => void;
   /** 导入落地后主界面两张列表（会话/工作区）要重读 */
   onImported: () => void;
-  /** 既有工作区（Migration 的去向菜单列它们） */
+  /** 既有工作区（外部来源页技能导入的作用域菜单列它们） */
   workspaces: readonly Workspace[];
   /** 当前会话所在的工作区与「打开看板」：插件页（全屏版）的详情页用 */
-  /** 切 tab（Migration 的「Set up providers」跳到 Providers） */
+  /** 切 tab（记忆库的「去通用设置选家务活模型」等跳转） */
   onTab: (tab: SettingsTab) => void;
   /** 插件页签（全屏版）要接到会话引擎与右栏上的三样 */
   plugins: {
@@ -100,13 +100,11 @@ export function SettingsView(props: {
 }) {
   const t = useT();
   /**
-   * Migration 的状态（扫描结果、勾选、去向）**跨 tab 保留**：用户为了三步清单要跳去
-   * Providers / General 再回来，每次回来都重扫就又回到「懵逼」（wafo 2026-09-28）。
-   * 做法：第一次进迁移页后保持挂载、切走时 display:none（扫描计划已与模型无关，
-   * 保留是安全的）。设置面整个关掉时照旧卸载。
+   * 外部来源页的状态（技能 / MCP 的扫描结果与勾选）**跨 tab 保留**：第一次进来后保持挂载、
+   * 切走时 display:none。设置面整个关掉时照旧卸载。
    */
-  const [migrationVisited, setMigrationVisited] = useState(props.tab === "migration");
-  if (props.tab === "migration" && !migrationVisited) setMigrationVisited(true);
+  const [sourcesVisited, setSourcesVisited] = useState(props.tab === "external-sources");
+  if (props.tab === "external-sources" && !sourcesVisited) setSourcesVisited(true);
   /** 跳去 General 时高亮家务活模型行（一次性的信号，General 消费后清掉） */
   const [highlightChore, setHighlightChore] = useState(false);
   return (
@@ -123,27 +121,15 @@ export function SettingsView(props: {
       }}
     >
 
-      {migrationVisited ? (
-        // Migration 自带滚动区与底栏（Import 在底栏，不随内容滚走），占住第二行整格；
-        // 切走只是藏起来——扫描结果与勾选都还在（见上面 migrationVisited 的注释）。
-        // 显示时包装层必须是 display: contents：MigrationView 的根靠「自己就是第二行的
-        // grid 项」被拉伸到有限高度，内部滚动区才滚得动、底栏才贴底；包一层普通块级 div
-        // 它就按内容长高、被面板裁掉——整页滚不动、底栏消失（wafo 2026-09-28 验收发现）
+      {sourcesVisited ? (
+        // 页面自带滚动区与底栏（Import 在底栏，不随内容滚走），占住第二行整格。显示时包装层必须是
+        // display: contents：根靠「自己就是第二行的 grid 项」被拉伸到有限高度，内部滚动区才滚得动、
+        // 底栏才贴底（wafo 2026-09-28 验收发现）
         <div
-          hidden={props.tab !== "migration"}
-          style={{ display: props.tab === "migration" ? "contents" : "none" }}
+          hidden={props.tab !== "external-sources"}
+          style={{ display: props.tab === "external-sources" ? "contents" : "none" }}
         >
-          <MigrationView
-            workspaces={props.workspaces}
-            providers={props.providers}
-            choreModel={props.settings.choreModel}
-            onImported={props.onImported}
-            onOpenProviders={() => props.onTab("providers")}
-            onOpenGeneral={() => {
-              setHighlightChore(true);
-              props.onTab("general");
-            }}
-          />
+          <ExternalSourcesView workspaces={props.workspaces} onSettingsChange={props.onSettingsChange} />
         </div>
       ) : null}
       {props.tab === "browser" ? (
@@ -191,7 +177,7 @@ export function SettingsView(props: {
           onPage={(providersPage) => props.onSettingsChange({ providersPage })}
           onCollapseRail={props.onCollapseRail}
         />
-      ) : props.tab === "migration" ? null : (
+      ) : props.tab === "external-sources" ? null : (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
           <General
             settings={props.settings}
@@ -258,7 +244,7 @@ function General(props: {
   starredModels: readonly ModelPair[];
   onToggleStarModel: (pair: ModelPair) => void;
   onChange: (patch: SettingsPatch) => void;
-  /** 迁移页三步清单第②步跳过来时：滚到家务活模型行、短暂高亮、焦点落到选择器 */
+  /** 别处（记忆库）跳过来选家务活模型时：滚到家务活模型行、短暂高亮、焦点落到选择器 */
   highlightChore?: boolean;
   onHighlightConsumed?: () => void;
   /** 模型菜单底部「已关闭的服务 · 去模型服务打开」的去向 */
@@ -1493,7 +1479,7 @@ function LoginSitesPanel(props: {
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
-        {/* 全选 / 全不选：只作用于当前显示的网站（login-sites.ts）。沿用 Migration 页的文字按钮样式 mg-textbtn */}
+        {/* 全选 / 全不选：只作用于当前显示的网站（login-sites.ts）。沿用外部来源页的文字按钮样式 mg-textbtn */}
         {shown.length > 1 && (
           <button
             type="button"

@@ -17,11 +17,13 @@ export function createTaskTools(broker: RequestBroker, sessionId: string): ToolD
     name: "read_task",
     label: "read_task",
     description:
-      "Read another task's transcript (read-only), including recent external Kimi Code and Kimi Work sessions without importing them. " +
-      'Call with no arguments first to list tasks in the current workspace and recent external sessions — the user\'s "other" or ' +
+      "Read another task's transcript (read-only), including sessions from other agent tools on this computer " +
+      "(Claude Code, Codex, Kimi, OpenCode, Reasonix, ZCode, Proma) — read in place, never imported. " +
+      'Call with no arguments first to list tasks in the current workspace and recent external sessions per tool — the user\'s "other" or ' +
       '"previous" tasks almost always means these. ' +
-      'Then call again with "task" set to an exact local title or id, or an external ref (ext:kimi-code:… / ext:kimi-work:…): ' +
+      'Then call again with "task" set to an exact local title or id, or an external ref (ext:<tool>:<id>): ' +
       "you get the header, a table of contents (one line per round) and the most recent rounds in full. " +
+      '"ext:<tool>" alone (e.g. ext:codex) lists more sessions from that tool. ' +
       'To read specific older rounds, add "rounds" using the numbers from the contents, e.g. "3", "2-5" or "1,4". ' +
       "If the task is a sub-session (delegated with delegate), the overview gives only its status and its reports " +
       "to its parent, not the process — reading the process back would spend the context the sub-session exists " +
@@ -33,9 +35,9 @@ export function createTaskTools(broker: RequestBroker, sessionId: string): ToolD
     // 完全没有意识到可以调用」）。guidelines 讲清两件事：别的任务的原文只有它读得到；
     // 消息里的 <referenced_task> 是用户拖进来的指针（shared/task-ref.ts），该读就读
     promptSnippet:
-      "Read transcripts of tasks in this app and recent Kimi Code / Kimi Work sessions, read-only and without importing them",
+      "Read transcripts of tasks in this app and of sessions in other agent tools on this computer (Claude Code, Codex, Kimi, OpenCode, …), read-only and without importing them",
     promptGuidelines: [
-      "When the user refers to another task or an earlier conversation in this app or in Kimi Code / Kimi Work (\"the other task\", \"what we discussed before\", \"the sub-session\", a task title, id or external ref), read it with read_task before answering. " +
+      "When the user refers to another task or an earlier conversation in this app or in another agent tool (\"the other task\", \"what we discussed in Claude Code\", \"the sub-session\", a task title, id or external ref), read it with read_task before answering. " +
         "Memory notes, RAG / knowledge-base search and saved chat exports (for example a search with source \"chats\") are summaries or separate corpora: they do not show the actual task transcripts, so a hit there does not mean you have read the conversation.",
       'A user message may begin with <referenced_task id="…" title="…" /> lines: tasks the user dragged into the message. ' +
         "Call read_task with that exact id to read each one you need (the overview first, then specific rounds) instead of guessing what it contains.",
@@ -47,7 +49,7 @@ export function createTaskTools(broker: RequestBroker, sessionId: string): ToolD
           type: "string",
           description:
             "Which task to read: a local id, an exact title, a unique prefix, or an exact external ref. " +
-            "Omit to list local tasks in the current workspace and recent external sessions.",
+            'Omit to list local tasks in the current workspace and recent external sessions; "ext:<tool>" lists one tool.',
         },
         rounds: {
           type: "string",

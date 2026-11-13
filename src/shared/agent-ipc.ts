@@ -394,7 +394,7 @@ export const ipcChannels = {
   /**
    * 专注模式：剩 5 分钟起跑的收工小结（载荷 FocusSummaryRequest / FocusSummaryResult）。
    * 主进程归拢素材（时段内有活动的所有会话 + 所选工作区 U/M），家务活模型在 agent
-   * 进程里独立调用（不开会话、不落盘，同 classifyGreetings 的通道）。
+   * 进程里独立调用（不开会话、不落盘，同 summarizeFocus 的通道）。
    */
   focusSummarize: "focus:summarize",
   /**
@@ -408,17 +408,17 @@ export const ipcChannels = {
    * 裁决：不考虑专注时合盖，睡就把这一轮收掉）。
    */
   focusSuspend: "focus:suspend",
-  /** 探测迁移来源：只 stat 固定清单里的路径，不读内容（返回 ImportDetectResult） */
-  importDetect: "import:detect",
-  /** 扫描勾选的来源（dry-run，入参 ImportScanInput）：产出可导入计划与跳过明细 */
-  importScan: "import:scan",
-  /** 执行导入（入参 ImportRunInput）：主进程重新扫描，按用户的选择与去向落盘（不接收计划，理由见 shared/import.ts） */
-  importRun: "import:run",
   /**
-   * 迁移的可选检查（入参 ImportGreetingCheckInput）：用子会话模型判断哪些新会话只是随手发的一句
-   * hi / test（返回 ImportGreetingCheckResult）。只判断、不落盘
+   * 外部来源（别家工具的聊天记录，只读）：发现的来源、数据目录、会话数与开关（返回
+   * ExternalSourcesResult）。只 stat，不读会话内容。开关本身走 settingsSet 的 externalSources
    */
-  importCheckGreetings: "import:check-greetings",
+  externalSourcesList: "external-sources:list",
+  /** 技能 / MCP 导入的来源与会读的路径：只 stat，不读内容（返回 ImportDetectResult） */
+  importDetect: "import:detect",
+  /** 扫描别的工具里的技能与 MCP（dry-run，入参 ImportScanInput） */
+  importScan: "import:scan",
+  /** 导入勾选的技能与 MCP（入参 ImportRunInput）：主进程重新扫描，按用户的选择落盘（不接收计划，理由见 shared/import.ts） */
+  importRun: "import:run",
   /**
    * 自定义来源路径：添加（入参 ImportCustomRootInput）——目录经该来源 validate 过才落盘，
    * 失败抛稳定错误码 IMPORT_CUSTOM_ROOT_INVALID:*；成功返回更新后的清单（ImportCustomRoot[]）
@@ -962,21 +962,9 @@ export type AgentCommand =
     }
   | {
       /**
-       * 迁移的「只说了句 hi / test」检查：messages 是一批会话各自唯一的那条用户消息（主进程已截短），
-       * 结果经 `greetingsClassified` 事件按 requestId 回传。独立的小调用，不开会话、不落盘。
-       * 模型与密钥面由主进程解好再发（同 generateTitle 的 model）。
-       */
-      type: "classifyGreetings";
-      requestId: string;
-      provider: ProviderSecrets;
-      modelId: string;
-      messages: string[];
-    }
-  | {
-      /**
        * 专注模式的收工小结：prompt 是主进程归拢好的素材正文（时段内会话流水 + 工作区
        * U/M），结果经 `focusSummarized` 事件按 requestId 回传。独立小调用，不开会话、
-       * 不落盘；模型与密钥面由主进程解好再发（同 classifyGreetings）。
+       * 不落盘；模型与密钥面由主进程解好再发（同 generateTitle 的 model）。
        */
       type: "summarizeFocus";
       requestId: string;
@@ -1631,11 +1619,6 @@ export type AgentEvent =
    * 侧栏保留首句截断。
    */
   | { type: "title"; sessionId: string; title: string }
-  /**
-   * `classifyGreetings` 的回执：throwaway 是判为随手一句的消息下标（对应命令里的 messages）；
-   * 调用失败或回复读不懂时 throwaway 为 null、error 写原因。
-   */
-  | { type: "greetingsClassified"; requestId: string; throwaway: number[] | null; error?: string }
   | { type: "focusSummarized"; requestId: string; bullets: string[] | null; error?: string }
   /** `choreComplete` 的回执：text = 回复里全部 text 块拼接；null 时 error 说原因 */
   | { type: "choreCompleted"; requestId: string; text: string | null; error?: string }

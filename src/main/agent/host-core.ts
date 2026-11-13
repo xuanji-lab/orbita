@@ -75,12 +75,6 @@ export class AgentHostCore {
     string,
     { resolve: () => void; reject: (error: Error) => void }
   >();
-  /** 在等的 classifyGreetings 回执（迁移的「只随手发了一句」检查），按 requestId；进程退出全部 reject */
-  private readonly pendingGreetings = new Map<
-    string,
-    { resolve: (throwaway: number[]) => void; reject: (error: Error) => void }
-  >();
-  private greetingSeq = 0;
   /** 在等的 probeProvider 回执（Test 的 OAuth 路由），按 requestId；进程退出全部 reject */
   private readonly pendingProbes = new Map<
     string,
@@ -150,16 +144,8 @@ export class AgentHostCore {
           this.pendingPiEdits.delete(message.sessionId);
           return;
         }
-        if (message.type === "greetingsClassified") {
-          // 只回给发起的那次检查，不广播：窗口不认这个事件
-          const pending = this.pendingGreetings.get(message.requestId);
-          this.pendingGreetings.delete(message.requestId);
-          if (message.throwaway === null) pending?.reject(new Error(message.error ?? "the model's reply couldn't be read"));
-          else pending?.resolve(message.throwaway);
-          return;
-        }
         if (message.type === "focusSummarized") {
-          // 同 greetingsClassified：只结发起方，不广播
+          // 只结发起方，不广播：窗口不认这个事件
           const pending = this.pendingFocusSummaries.get(message.requestId);
           this.pendingFocusSummaries.delete(message.requestId);
           if (message.bullets === null) pending?.reject(new Error(message.error ?? "the model's reply couldn't be read"));
@@ -167,7 +153,7 @@ export class AgentHostCore {
           return;
         }
         if (message.type === "choreCompleted") {
-          // 同 greetingsClassified：只结发起方，不广播
+          // 同 focusSummarized：只结发起方，不广播
           const pending = this.pendingChores.get(message.requestId);
           this.pendingChores.delete(message.requestId);
           if (message.text === null) pending?.reject(new Error(message.error ?? "the model didn't answer"));
@@ -175,7 +161,7 @@ export class AgentHostCore {
           return;
         }
         if (message.type === "providerProbed") {
-          // 同 greetingsClassified：只结发起方，不广播
+          // 同 focusSummarized：只结发起方，不广播
           const pending = this.pendingProbes.get(message.requestId);
           this.pendingProbes.delete(message.requestId);
           pending?.resolve({ ok: message.ok, message: message.message });
@@ -225,8 +211,6 @@ export class AgentHostCore {
         this.settleMcpReload?.reject(new Error(message));
         this.settleMcpReload = null;
         this.mcpReloadInFlight = null;
-        for (const pending of this.pendingGreetings.values()) pending.reject(new Error(message));
-        this.pendingGreetings.clear();
         for (const pending of this.pendingProbes.values()) pending.reject(new Error(message));
         this.pendingProbes.clear();
         for (const pending of this.pendingFocusSummaries.values()) pending.reject(new Error(message));
@@ -386,42 +370,8 @@ export class AgentHostCore {
   }
 
   /**
-   * 迁移的「只随手发了一句」检查：一批消息交给 agent 进程判，等回执（判中的下标）。与标题不同，
-   * 这是用户点出来、等着看结果的动作——进程没起就拉起来，失败要让调用方知道。
-   * 一批几十条的一次小调用，2 分钟没回就当失败（网关挂住时不让页面一直转）。
-   */
-  async classifyGreetings(
-    provider: Extract<AgentCommand, { type: "classifyGreetings" }>["provider"],
-    modelId: string,
-    messages: string[],
-  ): Promise<number[]> {
-    await this.ensure();
-    this.greetingSeq += 1;
-    const requestId = `greetings-${this.greetingSeq}`;
-    return new Promise<number[]>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        if (!this.pendingGreetings.has(requestId)) return;
-        this.pendingGreetings.delete(requestId);
-        reject(new Error("the model didn't answer in time"));
-      }, 120_000);
-      // 结了就撤掉计时器：不然一个早已结掉的检查还拖着进程两分钟
-      this.pendingGreetings.set(requestId, {
-        resolve: (throwaway) => {
-          clearTimeout(timer);
-          resolve(throwaway);
-        },
-        reject: (error) => {
-          clearTimeout(timer);
-          reject(error);
-        },
-      });
-      this.post({ type: "classifyGreetings", requestId, provider, modelId, messages });
-    });
-  }
-
-  /**
    * 专注模式的收工小结：素材正文交给 agent 进程里的家务活模型，等回执（bullets）。
-   * 素材比问候检查大、生成 3–5 条要点可能到分钟量级，兑底放宽到 220 秒（agent 侧
+   * 素材比标题请求大、生成 3–5 条要点可能到分钟量级，兑底放宽到 220 秒（agent 侧
    * 180 秒先断）——到点时卡片先出「正在整理」，转圈等它。
    */
   async summarizeFocus(

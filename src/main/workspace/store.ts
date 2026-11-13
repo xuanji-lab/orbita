@@ -172,25 +172,6 @@ export class WorkspaceStore {
   }
 
   /**
-   * 导入落盘：扫描期铸好的 id 与名字，按它落（Proma pi 同构导入，importer.ts）。
-   * 同路径已存在（扫描与执行之间用户手动加了）→ 并入已有，返回已有的那条。
-   */
-  async addImported(workspace: { id: string; name: string; path: string }): Promise<Workspace> {
-    const workspaces = await this.list();
-    const existing = workspaces.find((w) => w.path === workspace.path);
-    if (existing !== undefined) return existing;
-    const next: Workspace = {
-      id: workspace.id,
-      name: normalizeWorkspaceName(workspace.name, workspace.path),
-      path: workspace.path,
-      createdAt: Date.now(),
-      attachedDirs: [],
-    };
-    await this.save([...workspaces, next]);
-    return next;
-  }
-
-  /**
    * 挂一个附加目录（文件面板的根清单与开轮目录清单共同的数据源）。
    * id null = Home——Home 也是一个工作区（2026-09-22 裁决「只是不可移除」），同样能挂。
    * 先 realpath + 确认是目录：挂的瞬间它就得是真的——挂一个不存在的路径只会让

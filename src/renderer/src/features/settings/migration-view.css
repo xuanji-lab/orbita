@@ -1,14 +1,15 @@
 /*
- * 设置 › Migration 专用样式（MigrationView.tsx 顶部 import；MigrationStep / Skills / Mcp 同用）。
+ * 设置 › 外部来源页样式（ExternalSourcesView.tsx 顶部 import；MigrationStep / Skills / Mcp 同用；
+ * 类名前缀 mg- 是「迁移」页时代留下的，命名债见 commit 记录）。
  * 有状态的样式（hover、disabled、展开、选中、步骤状态）都写在这里，inline 只留一次性布局。
  * 列表装在一块实底 + 发丝框里（.mg-block），与 Providers 的 .pv-block 同一个配方。
  */
 
-/* 页面骨架：滚动区 + 底栏（底栏是第二条 grid 轨道，不浮在内容上，所以不需要实色浮层底） */
+/* 页面骨架：一条滚动区（导入键在「从别的工具导入技能与 MCP」一块里面，不粘底） */
 .mg {
   min-height: 0;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .mg-scroll {
@@ -105,18 +106,6 @@
   color: var(--color-text-tertiary);
 }
 
-/* 标题后面的摘要（扫了哪些来源 + Read-only） */
-.mg-step-sum {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1-5);
-  min-width: 0;
-  overflow: hidden;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-  white-space: nowrap;
-}
-
 .mg-spacer {
   flex: 1;
 }
@@ -168,14 +157,6 @@
   color: var(--color-text-tertiary);
 }
 
-/* 列表下面一行图标事实：描边胶囊，数字 primary，整句在悬停里 */
-.mg-facts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  margin-top: var(--space-3);
-}
-
 .mg-fact {
   display: inline-flex;
   align-items: center;
@@ -200,10 +181,6 @@
   color: var(--color-text-primary);
 }
 
-.mg-fact .mg-link {
-  margin-left: var(--space-0-5);
-}
-
 /* 一行带图标的说明：占位、隐私声明、错误 */
 .mg-caption {
   display: flex;
@@ -219,7 +196,7 @@
   margin-top: 0;
 }
 
-/* 列表之前的那一行（Sources 的隐私声明）：secondary，与列表隔一档 */
+/* 列表之前的那一行（聊天记录的说明、扫描会读哪些路径）：secondary，与列表隔一档 */
 .mg-caption-lead {
   margin-bottom: var(--space-2);
   color: var(--color-text-secondary);
@@ -266,34 +243,6 @@
   cursor: not-allowed;
 }
 
-.mg-link {
-  padding: 0;
-  border: 0;
-  background: none;
-  font: inherit;
-  color: var(--color-text-primary);
-  text-decoration: underline;
-  text-decoration-color: var(--color-border-strong);
-  text-underline-offset: 2px;
-  cursor: pointer;
-}
-
-.mg-link:hover {
-  text-decoration-color: currentColor;
-}
-
-/* 悬停里竖排的路径（「N paths」） */
-.mg-tip-paths {
-  display: grid;
-  gap: 1px;
-  margin-bottom: var(--space-1-5);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  line-height: var(--line-height-ui);
-  color: var(--color-text-primary);
-  overflow-wrap: anywhere;
-}
-
 /* ===== 列表块 ===== */
 
 .mg-block {
@@ -308,16 +257,11 @@
   color: var(--color-success);
 }
 
-/* 列头与组行共用的列：左端 / 名字 / 计数 / 子会话 / 去向 */
-.mg-grid-sessions,
+/* 列头与组行共用的列（技能一段） */
 .mg-grid-skills {
   display: grid;
   align-items: center;
   column-gap: var(--space-2);
-}
-
-.mg-grid-sessions {
-  grid-template-columns: 40px minmax(0, 1fr) 72px 44px 176px;
 }
 
 .mg-grid-skills {
@@ -502,36 +446,13 @@
   white-space: nowrap;
 }
 
-.mg-found {
-  color: var(--color-text-secondary);
-  cursor: help;
-}
-
-.mg-found > .orbita-icon {
-  color: var(--color-success);
-}
-
-/* 去向列：芯片左对齐，与列头 Goes to 对齐 */
 .mg-dest {
   display: flex;
   min-width: 0;
   cursor: default;
 }
 
-/* 「有新消息」那一块的去向：不是菜单，是一句固定的事实 */
-.mg-fixed-dest {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 26px;
-  padding: 0 var(--space-2);
-  font-size: var(--font-size-base);
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-  cursor: help;
-}
-
-/* ===== 展开的单条（会话 / skill） ===== */
+/* ===== 展开的单条（skill） ===== */
 
 .mg-kids {
   border-top: 1px solid var(--color-border-subtle);
@@ -570,33 +491,6 @@
   color: var(--color-text-secondary);
 }
 
-/* 混合来源的块里，单条行写出来源名（正文字体；日期才是机器事实、走 mono） */
-.mg-kid-source {
-  flex: none;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-}
-
-.mg-day {
-  flex: none;
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-}
-
-.mg-model {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
-  white-space: nowrap;
-  cursor: help;
-}
-
 .mg-more {
   padding: var(--space-1) 0 var(--space-1-5) 34px;
   border-top: 1px solid var(--color-border-subtle);
@@ -629,47 +523,7 @@
   text-overflow: ellipsis;
 }
 
-.mg-skips {
-  display: grid;
-  gap: var(--space-0-5);
-  margin: var(--space-2) 0 0;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-muted);
-  list-style: none;
-  font-size: var(--font-size-sm);
-  line-height: var(--line-height-ui);
-}
-
-.mg-skips li {
-  display: flex;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
-.mg-skip-title {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  color: var(--color-text-secondary);
-}
-
-/* 「只随手发了一句」判中的那几条：行尾一个 Keep，单条放回列表 */
-.mg-skips li > .mg-textbtn {
-  margin-left: auto;
-  font-size: var(--font-size-sm);
-}
-
-.mg-skip-why {
-  flex: 0 0 auto;
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
-/* ===== 1 Sources ===== */
+/* ===== 导入技能与 MCP · 1 来源 ===== */
 
 .mg-src + .mg-src {
   border-top: 1px solid var(--color-border-subtle);
@@ -811,60 +665,8 @@
   font-size: var(--font-size-sm);
 }
 
-/* ===== 2 Sessions：扫描前 / 中的骨架 ===== */
 
-.mg-skel-list {
-  overflow: hidden;
-  border: 1px dashed var(--color-border-default);
-  border-radius: var(--radius-xl);
-}
-
-.mg-skel {
-  display: grid;
-  grid-template-columns: 14px 14px minmax(0, 1fr) 140px;
-  align-items: center;
-  gap: var(--space-3);
-  height: 42px;
-  padding: 0 var(--space-4);
-  color: var(--color-text-tertiary);
-}
-
-.mg-skel + .mg-skel {
-  border-top: 1px dashed var(--color-border-subtle);
-}
-
-.mg-skel-bar {
-  height: 6px;
-  border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--color-text-tertiary) 20%, transparent);
-}
-
-/* 三条长度不一，读作「几个文件夹」而不是一张表 */
-.mg-skel-bar[data-w="0"] {
-  width: 34%;
-}
-
-.mg-skel-bar[data-w="1"] {
-  width: 22%;
-}
-
-.mg-skel-bar[data-w="2"] {
-  width: 28%;
-}
-
-.mg-skel-box {
-  width: 13px;
-  height: 13px;
-  border: 1px solid color-mix(in srgb, var(--color-text-tertiary) 50%, transparent);
-  border-radius: 3px;
-}
-
-/* 扫描中：骨架呼吸（设计系统 Motion：进行中的状态只许旋转与呼吸两种） */
-.mg-skel-list[data-scanning] .mg-skel-bar {
-  animation: orbita-breath 1.6s ease-in-out infinite;
-}
-
-/* ===== 4 MCP ===== */
+/* ===== 导入技能与 MCP · 3 MCP ===== */
 
 .mg-mrow {
   display: grid;
@@ -922,11 +724,6 @@
   box-shadow: inset 0 0 0 1px var(--color-border-subtle);
 }
 
-/* 「N paths」：不描边，只在悬停时铺底（它主要是一个看路径的入口） */
-.mg-btn.mg-btn-ghost {
-  box-shadow: none;
-}
-
 .mg-btn-primary {
   height: var(--control-height-md);
   padding: 0 var(--space-4);
@@ -936,38 +733,7 @@
 /* Skills 段头的 Copy / Link：两个安静按钮并排，按下的那个用 mode-active 底 */
 /* 复制 / 链接的分段用全应用同一个配方 .seg-control（styles.css） */
 
-/* ===== 5 Import（底栏） ===== */
-
-.mg-foot {
-  padding: var(--space-3) var(--space-5);
-  border-top: 1px solid var(--color-border-subtle);
-}
-
-/* 与上面的步骤同一个测量与左列：圆点对齐圆点 */
-.mg-foot-inner {
-  width: min(100%, var(--content-max-width));
-  margin: 0 auto;
-  display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) auto;
-  align-items: center;
-  column-gap: var(--space-3);
-  min-height: 36px;
-}
-
-.mg-foot-copy {
-  display: grid;
-  gap: var(--space-0-5);
-  min-width: 0;
-}
-
-.mg-foot-main {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1-5);
-  min-width: 0;
-  font-size: var(--font-size-base);
-  font-weight: var(--weight-medium);
-}
+/* ===== 导入技能与 MCP · 4 导入（副行的事实、完成的勾） ===== */
 
 .mg-foot-sub {
   display: flex;
@@ -1002,113 +768,121 @@
   color: var(--color-success);
 }
 
-/* ---- 「只随手发了一句」检查：列表上方一个勾选框，副行写明用哪个模型、问几条 ---- */
-
-/* 「跳过随手一句」的三步清单：①配置服务商 → ②选家务活模型 → ③检查本身。
-   紧凑两列结构（步骤一列 + 检查一列），是会话步骤里的可选项，不做大卡片 */
-.mg-greet {
-  display: flex;
-  align-items: flex-start;
+/* ===== 外部来源 · 两块 =====
+ * 页面拆成两块、各管各的：「别的工具里的聊天记录」（常驻清单，不编号）与「从别的工具导入技能与 MCP」
+ * （自己编 1–4 步）。块与块之间隔一道发丝线 + 一档大间距，块标题比步骤标题高一档字号、字重不加粗。
+ */
+.ext-block {
+  display: grid;
   gap: var(--space-3);
-  margin-bottom: var(--space-3);
+  align-content: start;
 }
 
-.mg-prereq {
+.ext-block + .ext-block {
+  margin-top: var(--space-3);
+  padding-top: var(--space-8);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.ext-block-head {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.ext-block-title {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: var(--weight-medium);
+}
+
+/* 块里的编号步骤：步与步的间距与竖线同 .mg-col（竖线按 --space-5 算的下沿） */
+.ext-steps {
+  display: grid;
+  gap: var(--space-5);
+  margin-top: var(--space-2);
+}
+
+/* 第 4 步「导入」的正文：一行主句（base），下面一行事实（sm） */
+.ext-import {
+  display: grid;
   gap: var(--space-0-5);
+  min-width: 0;
+}
+
+.ext-import-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  font-size: var(--font-size-base);
+}
+
+/* ===== 外部来源 · 别的工具里的聊天记录 =====
+ * 一个来源一行：名字 + 会话数，开关钉在行尾血线（.row-trailing）；下面一列数据目录。
+ * 行与行之间只靠内边距分开——不给每行套框、不画行间线（界面去 AI 味：每行一条线是
+ * 「每块都加线」的变体）；整张清单共用一个 .mg-block（与技能 / MCP 两步同一个容器）。
+ */
+.ext-list {
+  padding: var(--space-1) 0;
+}
+
+.ext-src {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-4);
+}
+
+.ext-src-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: var(--control-height-sm);
+}
+
+.ext-src[data-missing] .mg-name {
+  color: var(--color-text-tertiary);
+}
+
+.ext-paths {
+  display: grid;
+  gap: 1px;
   margin: 0;
   padding: 0;
   list-style: none;
-  flex: none;
 }
 
-.mg-prereq-item {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1-5);
-  font-size: var(--font-size-sm);
-  line-height: var(--line-height-ui);
-  color: var(--color-text-secondary);
-}
-
-/* 完成的一步：勾用 success 色（颜色只是第二信号，状态本身在图标形状上） */
-.mg-prereq-item[data-done] {
-  color: var(--color-text-secondary);
-}
-
-.mg-prereq-item[data-done] > svg {
-  color: var(--color-success);
-}
-
-.mg-prereq-item[data-locked] {
-  color: var(--color-text-tertiary);
-}
-
-.mg-prereq-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 0;
-  border: 0;
-  background: none;
-  font: inherit;
-  color: var(--color-text-primary);
-  text-decoration: underline;
-  text-decoration-color: var(--color-border-strong);
-  text-underline-offset: 2px;
-  cursor: pointer;
-}
-
-.mg-prereq-link:hover {
-  text-decoration-color: currentColor;
-}
-
-.mg-prereq-label {
-  white-space: nowrap;
-}
-
-/* 第三步（检查本身）：与前两步隔一条发丝线，走原来的标题 + 副行形状 */
-.mg-greet-main {
-  display: flex;
+.ext-paths .mg-path-line[data-warn] {
   align-items: flex-start;
-  gap: var(--space-2);
-  padding-left: var(--space-3);
-  border-left: 1px solid var(--color-border-subtle);
-  cursor: pointer;
-  min-width: 0;
+  color: var(--color-warning);
 }
 
-.mg-greet-main[data-disabled] {
-  cursor: default;
+/* 警示行要读得完（目录不在、读不全的原因）：允许折行，不截断 */
+.ext-paths .mg-path-line[data-warn] > span {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
-.mg-greet-main > input {
-  margin-top: 3px;
+/* 路径行里的说明字（「找过」、读不全的原因）：用界面字体，路径本身仍是 mono */
+.ext-note {
+  font-family: var(--font-family-base);
 }
 
-.mg-greet-copy {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-0-5);
-  min-width: 0;
+/* 路径本身：已在 JS 里中间省略（middleEllipsis），这里只防极窄时溢出 */
+.ext-paths .mg-path-line > .ext-path {
+  flex: 0 1 auto;
 }
 
-.mg-greet-title {
-  font-size: var(--font-size-base);
-  color: var(--color-text-primary);
+/* 「手动添加」标签放在路径之外：不随路径一起被截掉 */
+.ext-tag {
+  flex: none;
+  font-family: var(--font-family-base);
+  color: var(--color-text-secondary);
 }
 
-.mg-greet-main[data-disabled] .mg-greet-title {
-  color: var(--color-text-tertiary);
+.ext-tag::before,
+.ext-paths .mg-path-line > .ext-path + .ext-note::before {
+  content: "· ";
 }
-
-.mg-greet-sub {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: var(--font-size-sm);
-  line-height: var(--line-height-ui);
-  color: var(--color-text-tertiary);
-}
-

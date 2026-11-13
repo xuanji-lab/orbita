@@ -8,7 +8,6 @@
  * 回忆请求（回空命中），下次要用时重拉。
  */
 import { completeSimple } from "@earendil-works/pi-ai/compat";
-import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createModelRuntime } from "../agent/model-catalog.ts";
 import { registerAndResolveModel, type PiModel } from "../agent/model-registration.ts";
 import { ccBillingPatch } from "../agent/cc-billing-patch.ts";
@@ -43,7 +42,13 @@ function post(message: MemoryServiceMessage): void {
 const CALL_TIMEOUT_MS = 120_000;
 
 let chore: MemoryChoreModel | null = null;
-let runtime: ModelRuntime | null = null;
+/**
+ * 记忆服务只用模型目录的三个方法（注册 provider、按 id 取模型、列 provider）——registerAndResolveModel
+ * 的入参就是这三个。窄成自有类型，记忆进程不再从 pi-coding-agent 借类型。
+ */
+type MemoryModelRuntime = Parameters<typeof registerAndResolveModel>[0];
+
+let runtime: MemoryModelRuntime | null = null;
 /** 解析缓存：同一 provider/model 只解析一次；换模型（设置改了）才重解析 */
 let resolved: { key: string; model: PiModel } | null = null;
 

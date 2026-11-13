@@ -4,9 +4,9 @@
  * 用户手动指定、validate 过的来源数据目录清单（背景与词汇见 shared/import.ts 的
  * ImportCustomRoot）。落盘在 userData 下的 `import-custom-roots.json`，原子写
  * （AGENTS.md「本地优先」）。为什么不并进 settings.json：settings 是「应用怎么表现」的
- * 键值（主题 / 模型 / 抽屉），这份是用户攒下的一份数据清单，生命周期跟着迁移域走；
+ * 键值（主题 / 模型 / 抽屉），这份是用户攒下的一份数据清单，生命周期跟着外部来源走；
  * settings 的 patch 深合并语义也不适合数组——整块覆盖会吃掉别的键的并发写。
- * 容错同 settings：读不了 / 坏 JSON 退回空清单——清单丢了再添一次就是，不值得让迁移页起不来。
+ * 容错同 settings：读不了 / 坏 JSON 退回空清单——清单丢了再添一次就是，不值得让外部来源页起不来。
  */
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -120,10 +120,9 @@ export class CustomRootsStore {
 }
 
 /**
- * 自动定位的结果与自定义路径合并，探测 / 扫描 / 执行三处共用（重扫一致，勾选才不对错位）。
+ * 自动定位的结果与自定义路径合并，技能 / MCP 的扫描与执行共用（重扫一致，勾选才不对错位）。
  * 顺序稳定：自动定位到的（env → canonical → 变体）在前，自定义路径按添加顺序垫后——
- * 排前的胜（importer.ts 的 dedupeAcrossRoots）：自动定位到的是产品自己写数据的家，
- * 同名会话两边都有时留那边一份。去重按 resolve 后的路径。
+ * 排前的胜：自动定位到的是产品自己写数据的家。去重按 resolve 后的路径。
  *
  * 自定义路径此刻仍要过 validate：数据可能已被删或挪走，过不了的这次不进清单——
  * 探测的 paths 是「扫描会读什么」的隐私声明，读不了的不该列。自动定位那半不再验：

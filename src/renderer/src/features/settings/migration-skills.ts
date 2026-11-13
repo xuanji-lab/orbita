@@ -1,5 +1,5 @@
 /**
- * Migration 页 Skills 一段的纯逻辑：默认勾选、组的说明、作用域的名字与选项。与 migration-groups.ts
+ * 外部来源页技能一段的纯逻辑：默认勾选、组的说明、作用域的名字与选项。与 migration-groups.ts
  * 同样不碰 React，`node --test` 直接测。
  */
 import type {
@@ -39,15 +39,6 @@ export function selectedSkillDirs(groups: readonly ImportSkillGroup[], selected:
 
 export function countSelectedSkills(groups: readonly ImportSkillGroup[], selected: ReadonlySet<string>): number {
   return selectedSkillDirs(groups, selected).length;
-}
-
-/** 各来源能导的 skill 数（来源行上的计数）。 */
-export function skillCountBySource(groups: readonly ImportSkillGroup[]): Partial<Record<ImportSourceId, number>> {
-  const counts: Partial<Record<ImportSourceId, number>> = {};
-  for (const group of groups) {
-    counts[group.source] = (counts[group.source] ?? 0) + selectableSkills(group).length;
-  }
-  return counts;
 }
 
 /** 组名：「Proma · 默认工作区」「Claude Code · synced」；来源只有一个目录时就是来源名。 */

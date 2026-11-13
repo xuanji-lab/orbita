@@ -1,20 +1,24 @@
 /**
- * 外部会话的只读入口。第一刀接 Kimi Code 与 Kimi Work：两者当前都是
- * sessions/<工作区>/<会话>/{state.json,agents/main/wire.jsonl}，正文解析共用
- * kimi-code.ts。这里只负责定位、列最近会话与按需读全文，不做来源开关与持久化。
+ * 外部会话的只读入口：别家 agent 工具（Claude Code、Codex、Kimi Code、Kimi Work、OpenCode、
+ * Reasonix、ZCode、Proma）留在本机磁盘上的聊天记录，read_task 按 ref 读源头的最新内容。
+ * **不导入、不复制**：Orbita 的会话库与源目录都不写；源头永远是真源（2026-11-13 用户裁决）。
  *
- * - list：stat 全部会话以取最近项，只对入选的最近 10 条读 state 与 wire 头部；
- *   没有标题时从头部取首条用户原文，不为列目录转换全部历史。
- * - load：按稳定 ref 找到源文件后读全文，SessionManager.inMemory 只作 Message →
- *   SessionRecord 的投影，源目录与 orbita 的会话目录都不写。
- * - ref：ext:<来源>:<源 wire 绝对路径的 sha256 前 16 位>。不依赖用户去源应用复制
- *   session id，也不落一张会过期的「ref → 路径」映射表。
+ * - list：每个来源各成一段，按「最近更新」各列最近几条（INDEX_PER_SOURCE；只看某个来源时
+ *   SOURCE_INDEX_LIMIT）。列目录只 stat，只对入选的读头部（external-adapters.ts）。一个来源
+ *   出错只记在它自己那一段，不连累别的来源。
+ * - load：按 ref 找到源会话、读全文、在内存里投影成 SessionRecord。读不了的如实抛错：
+ *   哪个来源、哪条、哪个文件、为什么。
+ * - ref：`ext:<来源>:<源会话坐标的 sha256 前 16 位>`。坐标 = 源文件绝对路径（库来源是
+ *   「库路径#会话 id」）。不依赖用户去源应用复制 id，也不落一张会过期的「ref → 路径」映射表；
+ *   Kimi 两家沿用此前的写法，旧 ref 照样能读。
+ *
+ * 源坐标不进 SessionMeta：SessionMeta.importedFrom 是「导入幂等键」（shared/session.ts），用量统计
+ * 按它排除导入会话；外部会话从来没进会话库，借这个字段会让两种语义在同一个词上撞车。
  */
 import { createHash } from "node:crypto";
-import { open, readFile, readdir, stat } from "node:fs/promises";
-import { join, resolve } from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
-import type { Message } from "@earendil-works/pi-ai";
+import { open, stat } from "node:fs/promises";
+import { join } from "node:path";
+import { EXTERNAL_SOURCE_IDS, isExternalSourceId, type ExternalSourceId } from "../../shared/external-sources.ts";
 import {
   deriveSessionTitle,
   UNASSIGNED_MODEL_ID,
@@ -22,315 +26,348 @@ import {
   type SessionMeta,
   type SessionRecord,
 } from "../../shared/session.ts";
-import { branchEntries, entriesToRecords, readKimiWorkspaces } from "./importer.ts";
-import { kimiBlobRefs, parseKimiSessionState, parseKimiWire, type KimiSessionState } from "./kimi-code.ts";
-import { withUserTexts } from "./proma-user-text.ts";
-import { isNotFound } from "../fs-errors.ts";
-
-export type ExternalSessionSource = "kimi-code" | "kimi-work";
+import {
+  EXTERNAL_ADAPTERS,
+  type ExternalAdapterContext,
+  type ExternalCandidate,
+  type ExternalSessionFacts,
+} from "./external-adapters.ts";
 
 export interface ExternalSessionSummary {
   ref: string;
-  source: ExternalSessionSource;
+  source: ExternalSourceId;
   title: string;
   cwd: string;
   createdAt: number;
   updatedAt: number;
 }
 
+/** 目录里一个来源的一段。 */
+export interface ExternalSourceSection {
+  source: ExternalSourceId;
+  /** 这个来源发现的会话总数（只 stat 数出来的） */
+  total: number;
+  /** 最近更新的几条，新的在前 */
+  summaries: ExternalSessionSummary[];
+  /** 这一段读不全的原因（数据目录不在、库打不开、认不出的新格式……），如实列出 */
+  problems: string[];
+}
+
 export interface ExternalSessionDetail {
   summary: ExternalSessionSummary;
   meta: SessionMeta;
   records: SessionRecord[];
+  /** 源坐标（文件路径或「库路径#会话 id」）：报告与排障用，不进 SessionMeta（见模块头） */
+  sourceFile: string;
 }
 
-/** read_task 依赖的最小只读接口；以后其他平台在同一个 seam 上加 adapter。 */
+export interface ExternalListOptions {
+  /** 只列这一个来源（read_task 的 `ext:<来源>`），条数放宽到 SOURCE_INDEX_LIMIT */
+  source?: ExternalSourceId;
+}
+
+/** read_task 依赖的最小只读接口。 */
 export interface ExternalSessionReader {
-  list(): Promise<ExternalSessionSummary[]>;
+  list(options?: ExternalListOptions): Promise<ExternalSourceSection[]>;
+  /** 不存在返回 null；来源已关闭、读不了、超预算抛错（消息里写清来源、ref 与原因） */
   load(ref: string): Promise<ExternalSessionDetail | null>;
+  /**
+   * 一个来源为什么一条会话都给不出：没找到（写出找过哪里）、目录在但没有会话、开关关着。
+   * 有会话可列时返回 null。read_task 的 `ext:<来源>` 空着时用它说清原因。
+   */
+  whyEmpty(source: ExternalSourceId): Promise<string | null>;
+  /** 设置页用：每个有数据目录的来源（开关关着的也算）数会话、列问题，只 stat，不读头部 */
+  inventory(): Promise<{ source: ExternalSourceId; total: number; problems: string[] }[]>;
 }
 
 export interface ExternalSourceRoots {
-  source: ExternalSessionSource;
+  source: ExternalSourceId;
   roots: readonly string[];
+  /** 设置 › 外部来源里的开关；关着的来源不列，读它的 ref 时说明已关闭 */
+  enabled: boolean;
+  /** 一个数据目录都没发现时，默认会去哪里找（报「没找到」时写出找过哪里）；测试可省 */
+  expected?: string;
+  /** 默认位置的目录在不在（在、却没有会话数据 → 报「目录在，没有会话」） */
+  expectedExists?: boolean;
 }
 
-export interface KimiExternalSessionReaderDeps {
-  /** 每次调用现取：自定义目录或应用数据目录变化后，不必重启主进程。 */
+export interface ExternalSessionReaderDeps {
+  /** 每次调用现取：自定义目录、开关或应用数据目录变化后，不必重启主进程。 */
   sources(): Promise<readonly ExternalSourceRoots[]>;
-  /** 源会话没记 cwd、所属工作区也找不到时的退路。 */
+  /** 源会话没记 cwd 时的退路。 */
   defaultCwd: string;
+  /** Claude 桌面应用的会话清单目录（续接取代的旧文件不列）。 */
+  claudeDesktopDir: string;
 }
 
-interface SessionCandidate {
-  source: ExternalSessionSource;
-  sourceId: string;
-  workspaceId: string;
-  root: string;
-  dir: string;
-  stateFile: string;
-  sourceFile: string;
-  mtime: number;
+/**
+ * 目录里每个来源列几条。read_task 不带参数的那次调用会把整个目录送进模型上下文：8 个来源
+ * 各 5 条约 40 行，够认出「刚才在别的工具里聊的那几条」；要更早的，用 `ext:<来源>` 列这一个来源
+ * 的最近 SOURCE_INDEX_LIMIT 条，或拿精确 ref 直读（ref 不受目录条数限制）。
+ */
+export const INDEX_PER_SOURCE = 5;
+export const SOURCE_INDEX_LIMIT = 30;
+
+const LABELS: Record<ExternalSourceId, string> = {
+  "claude-code": "Claude Code",
+  codex: "Codex",
+  "kimi-code": "Kimi Code",
+  "kimi-work": "Kimi Work",
+  opencode: "OpenCode",
+  reasonix: "Reasonix",
+  zcode: "ZCode",
+  proma: "Proma",
+};
+
+export function externalSessionSourceLabel(source: ExternalSourceId): string {
+  return LABELS[source];
 }
 
-const INDEX_LIMIT = 10;
-const TITLE_HEAD_BYTES = 256 * 1024;
+function refOf(source: ExternalSourceId, key: string): string {
+  return `ext:${source}:${createHash("sha256").update(key).digest("hex").slice(0, 16)}`;
+}
 
-export const EXTERNAL_WIRE_MAX_BYTES = 32 * 1024 * 1024;
-export const EXTERNAL_BLOB_MAX_BYTES = 8 * 1024 * 1024;
-export const EXTERNAL_BLOBS_MAX_BYTES = 24 * 1024 * 1024;
-export const EXTERNAL_TOTAL_MAX_BYTES = 48 * 1024 * 1024;
-const BOUNDED_READ_CHUNK_BYTES = 64 * 1024;
+/** `ext:<来源>:<16 位十六进制>`；认不出返回 null。 */
+export function parseExternalRef(ref: string): { source: ExternalSourceId; hash: string } | null {
+  const match = /^ext:([a-z-]+):([0-9a-f]{16})$/.exec(ref.trim());
+  if (match === null || !isExternalSourceId(match[1])) return null;
+  return { source: match[1], hash: match[2]! };
+}
 
-class ExternalSessionSizeError extends Error {
-  readonly code = "ERR_EXTERNAL_SESSION_SIZE";
+/** `ext:<来源>`（不带 id）：只列这一个来源；认不出返回 null。 */
+export function parseExternalSourceRef(ref: string): ExternalSourceId | null {
+  const match = /^ext:([a-z-]+):?$/.exec(ref.trim());
+  return match !== null && isExternalSourceId(match[1]) ? match[1] : null;
+}
 
-  constructor(resource: string, size: number, limit: number) {
-    super(`External session ${resource} exceeds its ${limit} byte limit (file is ${size} bytes).`);
-    this.name = "ExternalSessionSizeError";
+function errorText(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+/** 数据目录在不在（会话入口的文件 / 目录）。 */
+async function entryExists(root: string, source: ExternalSourceId): Promise<boolean> {
+  const { path, type } = EXTERNAL_ADAPTERS[source].entry;
+  try {
+    const info = await stat(join(root, ...path));
+    return type === "file" ? info.isFile() : info.isDirectory();
+  } catch {
+    return false;
   }
 }
 
-async function readBoundedFile(path: string, limit: number, resource: string): Promise<Buffer> {
-  const handle = await open(path, "r");
+/**
+ * 一个来源全部数据目录里的会话（只 stat）。目录不在、某个目录读不了都进 problems，
+ * 其余目录照列；同一个源坐标在两个目录里出现（自定义目录与自动发现重叠）只留一份。
+ */
+async function sourceCandidates(
+  group: ExternalSourceRoots,
+  context: Omit<ExternalAdapterContext, "roots">,
+): Promise<{ candidates: ExternalCandidate[]; problems: string[] }> {
+  const adapter = EXTERNAL_ADAPTERS[group.source];
+  const fullContext: ExternalAdapterContext = { ...context, roots: group.roots };
+  const problems: string[] = [];
+  const lists = await Promise.all(
+    group.roots.map(async (root) => {
+      if (!(await entryExists(root, group.source))) {
+        problems.push(`no session data at ${root} (the folder was moved or deleted)`);
+        return [];
+      }
+      try {
+        const [candidates, notes] = await Promise.all([adapter.candidates(root, fullContext), adapter.notes?.(root) ?? []]);
+        problems.push(...notes);
+        return candidates;
+      } catch (cause) {
+        problems.push(`could not list ${root}: ${errorText(cause)}`);
+        return [];
+      }
+    }),
+  );
+  const seen = new Set<string>();
+  const candidates = lists.flat().filter((candidate) => {
+    if (seen.has(candidate.key)) return false;
+    seen.add(candidate.key);
+    return true;
+  });
+  return { candidates, problems };
+}
+
+/** 设置页数会话时读每个文件的开头多少字节（认格式用） */
+const RECOGNIZE_HEAD_BYTES = 4096;
+const RECOGNIZE_BATCH = 64;
+
+/** 文件开头一段；whole = 文件比这一段还短、整份都在里面 */
+async function headOf(file: string): Promise<{ head: string; whole: boolean }> {
+  const handle = await open(file, "r");
   try {
-    const initial = await handle.stat();
-    if (initial.size > limit) throw new ExternalSessionSizeError(resource, initial.size, limit);
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let position = 0;
-    for (;;) {
-      const remaining = limit + 1 - total;
-      if (remaining <= 0) throw new ExternalSessionSizeError(resource, total + 1, limit);
-      const buffer = Buffer.alloc(Math.min(BOUNDED_READ_CHUNK_BYTES, remaining));
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
-      if (bytesRead === 0) break;
-      total += bytesRead;
-      position += bytesRead;
-      if (total > limit) throw new ExternalSessionSizeError(resource, total, limit);
-      chunks.push(buffer.subarray(0, bytesRead));
-    }
-    return Buffer.concat(chunks, total);
+    const buffer = Buffer.alloc(RECOGNIZE_HEAD_BYTES);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    return { head: buffer.subarray(0, bytesRead).toString("utf8"), whole: bytesRead < RECOGNIZE_HEAD_BYTES };
   } finally {
     await handle.close().catch(() => undefined);
   }
 }
 
-export function externalSessionSourceLabel(source: ExternalSessionSource): string {
-  return source === "kimi-code" ? "Kimi Code" : "Kimi Work";
-}
-
-/** Kimi Work 当前桌面运行时在其 appData 下的 kimi-code 数据根。 */
-export function kimiWorkDataRoot(appData: string): string {
-  return join(appData, "kimi-desktop", "daimon-share", "daimon", "runtime", "kimi-code", "home");
-}
-
-function refOf(source: ExternalSessionSource, sourceFile: string): string {
-  const hash = createHash("sha256").update(resolve(sourceFile)).digest("hex").slice(0, 16);
-  return `ext:${source}:${hash}`;
-}
-
-function parseRef(ref: string): { source: ExternalSessionSource; hash: string } | null {
-  const match = /^ext:(kimi-code|kimi-work):([0-9a-f]{16})$/.exec(ref);
-  if (match === null) return null;
-  return { source: match[1] as ExternalSessionSource, hash: match[2]! };
-}
-
-async function readState(file: string): Promise<KimiSessionState | null> {
-  try {
-    return parseKimiSessionState(await readFile(file, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-/** 没标题时只读头部找首条提问；读不到完整会话也不影响目录。 */
-async function firstPrompt(file: string): Promise<string | null> {
-  let handle;
-  try {
-    handle = await open(file, "r");
-    const info = await handle.stat();
-    const buffer = Buffer.alloc(Math.min(TITLE_HEAD_BYTES, info.size));
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    return parseKimiWire(buffer.subarray(0, bytesRead).toString("utf8"), UNASSIGNED_PROVIDER_ID, new Map()).firstPrompt;
-  } catch {
-    return null;
-  } finally {
-    await handle?.close().catch(() => undefined);
-  }
-}
-
-async function listCandidates(source: ExternalSessionSource, root: string): Promise<SessionCandidate[]> {
-  const sessionsDir = join(root, "sessions");
-  let workspaceDirs;
-  try {
-    workspaceDirs = await readdir(sessionsDir, { withFileTypes: true });
-  } catch (cause) {
-    if (isNotFound(cause)) return [];
-    throw cause;
-  }
-  const workspaces = await readKimiWorkspaces(join(root, "workspaces.json"));
-  const out: SessionCandidate[] = [];
-  for (const workspace of workspaceDirs) {
-    if (!workspace.isDirectory() || workspace.name.startsWith(".") || workspaces.deleted.has(workspace.name)) continue;
-    const workspaceDir = join(sessionsDir, workspace.name);
-    let sessions;
-    try {
-      sessions = await readdir(workspaceDir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const session of sessions) {
-      if (!session.isDirectory() || session.name.startsWith(".")) continue;
-      // Kimi Work 的 ctitle-* 是自动起标题的内部任务，不是源应用里给用户看的会话。
-      if (source === "kimi-work" && session.name.startsWith("ctitle-")) continue;
-      const dir = join(workspaceDir, session.name);
-      const sourceFile = join(dir, "agents", "main", "wire.jsonl");
+/**
+ * 设置页的一行：会话数与读不全的原因。库来源用 adapter.count（不复制库）；文件来源数 candidates，
+ * 只算开头认得出格式的（一个格式认不出的文件不该算成「1 个会话」）。
+ */
+async function inventoryOf(
+  group: ExternalSourceRoots,
+  context: Omit<ExternalAdapterContext, "roots">,
+): Promise<{ source: ExternalSourceId; total: number; problems: string[] }> {
+  const adapter = EXTERNAL_ADAPTERS[group.source];
+  const fullContext: ExternalAdapterContext = { ...context, roots: group.roots };
+  const { count, recognize } = adapter;
+  if (count !== undefined) {
+    const problems: string[] = [];
+    let total = 0;
+    for (const root of group.roots) {
+      if (!(await entryExists(root, group.source))) {
+        problems.push(`no session data at ${root} (the folder was moved or deleted)`);
+        continue;
+      }
       try {
-        const info = await stat(sourceFile);
-        if (!info.isFile()) continue;
-        out.push({
-          source,
-          sourceId: session.name,
-          workspaceId: workspace.name,
-          root,
-          dir,
-          stateFile: join(dir, "state.json"),
-          sourceFile,
-          mtime: info.mtimeMs,
-        });
-      } catch {
-        // 扫描与源应用写入并发时，单条消失不挡其余会话。
+        total += await count(root, fullContext);
+      } catch (cause) {
+        problems.push(`could not list ${root}: ${errorText(cause)}`);
       }
     }
+    return { source: group.source, total, problems };
   }
-  return out;
+  const { candidates, problems } = await sourceCandidates(group, context);
+  if (recognize === undefined) return { source: group.source, total: candidates.length, problems };
+  // 分批开文件：一次全开，上千个会话文件会撞上进程的文件句柄上限（EMFILE），被当成认不出
+  let total = 0;
+  for (let index = 0; index < candidates.length; index += RECOGNIZE_BATCH) {
+    const batch = candidates.slice(index, index + RECOGNIZE_BATCH);
+    const recognized = await Promise.all(batch.map((candidate) =>
+        headOf(candidate.file).then(
+          ({ head, whole }) => recognize(head, whole),
+          () => false,
+        ),
+      ));
+    total += recognized.filter(Boolean).length;
+  }
+  return { source: group.source, total, problems };
 }
 
-async function summarize(candidate: SessionCandidate, defaultCwd: string): Promise<ExternalSessionSummary> {
-  const state = await readState(candidate.stateFile);
-  const prompt = state?.title === null || state?.title === undefined ? await firstPrompt(candidate.sourceFile) : null;
-  // Kimi Work 在用户原文前塞 <meta …/> 给模型，有时还会把它写进自动 state 标题；两处都不是标题正文。
-  const rawTitle = state?.title ?? prompt ?? "";
-  const titleText = candidate.source === "kimi-work" ? rawTitle.replace(/^(?:\s*<meta\b[^>]*\/>\s*)+/, "") : rawTitle;
-  const title =
-    deriveSessionTitle(titleText) ||
-    `${externalSessionSourceLabel(candidate.source)} session ${candidate.sourceId.slice(0, 8)}`;
-  const workspaces = await readKimiWorkspaces(join(candidate.root, "workspaces.json"));
+function summaryOf(candidate: ExternalCandidate, facts: ExternalSessionFacts, defaultCwd: string): ExternalSessionSummary {
   return {
-    ref: refOf(candidate.source, candidate.sourceFile),
+    ref: refOf(candidate.source, candidate.key),
     source: candidate.source,
-    title,
-    cwd: state?.cwd ?? workspaces.roots.get(candidate.workspaceId) ?? defaultCwd,
-    createdAt: state?.createdAt ?? candidate.mtime,
-    updatedAt: state?.updatedAt ?? candidate.mtime,
+    title:
+      deriveSessionTitle(facts.title ?? "") ||
+      // 来源 id 常带固定前缀（session_、conv-、ses_、sess_），取前缀之后的 8 位才分得清
+      `${externalSessionSourceLabel(candidate.source)} session ${candidate.sourceId.replace(/^(?:session_|conv-|sess?_)/, "").slice(0, 8)}`,
+    cwd: facts.cwd ?? defaultCwd,
+    createdAt: facts.createdAt ?? candidate.mtime,
+    updatedAt: Math.max(facts.updatedAt ?? 0, candidate.mtime),
   };
 }
 
-/** Message[] → read_task 的记录，全在内存里；与导入器的用户原文口径一致。 */
-function recordsOf(messages: readonly Message[], userDisplays: readonly (string | null)[], cwd: string): SessionRecord[] {
-  const manager = SessionManager.inMemory(cwd);
-  const hidden = new Set<string>();
-  const texts = new Map<string, string>();
-  let userIndex = 0;
-  for (const message of messages) {
-    const id = manager.appendMessage(message);
-    if (message.role !== "user") continue;
-    const display = userDisplays[userIndex] ?? null;
-    userIndex += 1;
-    if (display === null) hidden.add(id);
-    else texts.set(id, display);
+/** 最后一条 assistant 记录的模型 id（各来源都把源模型名写在消息上）。 */
+function lastModel(records: readonly SessionRecord[]): string | null {
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index];
+    if (record?.role === "assistant" && record.model.id !== "unknown") return record.model.id;
   }
-  const records = entriesToRecords(branchEntries(manager.getEntries())).filter(
-    (record) => record.role !== "user" || !hidden.has(record.id),
-  );
-  return withUserTexts(records, texts);
+  return null;
 }
 
-export function createKimiExternalSessionReader(deps: KimiExternalSessionReaderDeps): ExternalSessionReader {
-  const candidatesFor = async (source?: ExternalSessionSource): Promise<SessionCandidate[]> => {
-    const configured = await deps.sources();
-    const groups = source === undefined ? configured : configured.filter((group) => group.source === source);
-    const lists = await Promise.all(
-      groups.flatMap((group) => group.roots.map((root) => listCandidates(group.source, root))),
-    );
-    return lists.flat();
-  };
+/**
+ * 来源读不到的那一句（read_task 的 `ext:<来源>` 与读 ref 报错共用）：区分「没找到」「目录在、
+ * 没有会话」「开关关着」——同一句「没有数据」会让模型以为那个工具没装，或去别处瞎找。
+ * group 有数据目录、开着时返回 null（有没有会话要数过才知道，由调用方判断）。
+ */
+function unavailableReason(source: ExternalSourceId, group: ExternalSourceRoots | undefined): string | null {
+  const label = externalSessionSourceLabel(source);
+  if (group === undefined || group.roots.length === 0) {
+    const where = group?.expected;
+    if (where === undefined) return `${label} was not found on this computer.`;
+    return group?.expectedExists === true
+      ? `${label}'s data folder ${where} exists, but it holds no ${label} sessions.`
+      : `${label} was not found on this computer (looked in ${where}).`;
+  }
+  if (!group.enabled) return `${label} is turned off in Settings › External sources. Turn it on there to read its sessions.`;
+  return null;
+}
+
+export function createExternalSessionReader(deps: ExternalSessionReaderDeps): ExternalSessionReader {
+  const context = { claudeDesktopDir: deps.claudeDesktopDir };
 
   return {
-    async list() {
-      const candidates = (await candidatesFor()).sort((a, b) => b.mtime - a.mtime).slice(0, INDEX_LIMIT);
-      const summaries = await Promise.all(
-        candidates.map(async (candidate) => {
-          try {
-            return await summarize(candidate, deps.defaultCwd);
-          } catch {
-            return null;
-          }
+    async list(options = {}) {
+      const groups = (await deps.sources()).filter(
+        (group) => group.enabled && group.roots.length > 0 && (options.source === undefined || group.source === options.source),
+      );
+      const limit = options.source === undefined ? INDEX_PER_SOURCE : SOURCE_INDEX_LIMIT;
+      const sections = await Promise.all(
+        groups.map(async (group): Promise<ExternalSourceSection> => {
+          const { candidates, problems } = await sourceCandidates(group, context);
+          const recent = candidates.sort((a, b) => b.mtime - a.mtime).slice(0, limit);
+          const adapter = EXTERNAL_ADAPTERS[group.source];
+          const fullContext = { ...context, roots: group.roots };
+          const unknown: ExternalSessionFacts = { title: null, cwd: null, createdAt: null, updatedAt: null };
+          // 头部读不了不挡目录：标题退回「来源 + id」，读全文时再如实报错
+          const facts: ExternalSessionFacts[] =
+            adapter.factsMany !== undefined && recent.length > 0
+              ? await adapter.factsMany(recent, fullContext).catch(() => recent.map(() => unknown))
+              : await Promise.all(recent.map((candidate) => adapter.facts(candidate, fullContext).catch(() => unknown)));
+          const summaries = recent.map((candidate, index) => summaryOf(candidate, facts[index] ?? unknown, deps.defaultCwd));
+          return { source: group.source, total: candidates.length, summaries, problems };
         }),
       );
-      return summaries.flatMap((summary) => (summary === null ? [] : [summary]));
+      return sections.sort((a, b) => EXTERNAL_SOURCE_IDS.indexOf(a.source) - EXTERNAL_SOURCE_IDS.indexOf(b.source));
+    },
+
+    async whyEmpty(source) {
+      const group = (await deps.sources()).find((item) => item.source === source);
+      const reason = unavailableReason(source, group);
+      if (reason !== null || group === undefined) return reason;
+      const { candidates, problems } = await sourceCandidates(group, context);
+      if (candidates.length > 0) return null;
+      const label = externalSessionSourceLabel(source);
+      const folders = group.roots.join(", ");
+      return problems.length > 0
+        ? `${label} has no readable sessions: ${problems.join("; ")}.`
+        : `${label}'s data folder ${folders} exists, but it holds no ${label} sessions.`;
+    },
+
+    async inventory() {
+      const groups = (await deps.sources()).filter((group) => group.roots.length > 0);
+      return Promise.all(groups.map((group) => inventoryOf(group, context)));
     },
 
     async load(ref) {
-      const parsedRef = parseRef(ref);
-      if (parsedRef === null) return null;
-      const candidates = await candidatesFor(parsedRef.source);
-      const candidate = candidates.find((item) => refOf(item.source, item.sourceFile).endsWith(parsedRef.hash));
+      const parsed = parseExternalRef(ref);
+      if (parsed === null) return null;
+      const label = externalSessionSourceLabel(parsed.source);
+      const group = (await deps.sources()).find((item) => item.source === parsed.source);
+      const unavailable = unavailableReason(parsed.source, group);
+      if (unavailable !== null || group === undefined) {
+        throw new Error(`${unavailable ?? `${label} was not found on this computer.`} ${ref} cannot be read.`);
+      }
+      const { candidates } = await sourceCandidates(group, context);
+      const candidate = candidates.find((item) => refOf(item.source, item.key) === ref.trim());
       if (candidate === undefined) return null;
-      const [wireBuffer, state] = await Promise.all([
-        readBoundedFile(candidate.sourceFile, EXTERNAL_WIRE_MAX_BYTES, "wire.jsonl"),
-        readState(candidate.stateFile),
-      ]);
-      const raw = wireBuffer.toString("utf8");
-      const blobs = new Map<string, string>();
-      const blobFiles: Array<{ sha: string; path: string }> = [];
-      let plannedBlobBytes = 0;
-      for (const sha of kimiBlobRefs(raw)) {
-        const blobPath = join(candidate.dir, "agents", "main", "blobs", sha);
-        let info;
-        try {
-          info = await stat(blobPath);
-        } catch {
-          // 与导入器一致：图片缺席时由解析器换成文字说明。
-          continue;
-        }
-        if (!info.isFile()) continue;
-        if (info.size > EXTERNAL_BLOB_MAX_BYTES) {
-          throw new ExternalSessionSizeError("an image blob", info.size, EXTERNAL_BLOB_MAX_BYTES);
-        }
-        plannedBlobBytes += info.size;
-        if (plannedBlobBytes > EXTERNAL_BLOBS_MAX_BYTES) {
-          throw new ExternalSessionSizeError("the referenced image blobs", plannedBlobBytes, EXTERNAL_BLOBS_MAX_BYTES);
-        }
-        if (wireBuffer.byteLength + plannedBlobBytes > EXTERNAL_TOTAL_MAX_BYTES) {
-          throw new ExternalSessionSizeError("the external session payload", wireBuffer.byteLength + plannedBlobBytes, EXTERNAL_TOTAL_MAX_BYTES);
-        }
-        blobFiles.push({ sha, path: blobPath });
+      let loaded;
+      try {
+        loaded = await EXTERNAL_ADAPTERS[parsed.source].load(candidate, { ...context, roots: group.roots });
+      } catch (cause) {
+        throw new Error(`Could not read ${label} session ${ref} (${candidate.file}): ${errorText(cause)}`);
       }
-      let actualBlobBytes = 0;
-      for (const blob of blobFiles) {
-        try {
-          const data = await readBoundedFile(blob.path, EXTERNAL_BLOB_MAX_BYTES, "an image blob");
-          actualBlobBytes += data.byteLength;
-          if (actualBlobBytes > EXTERNAL_BLOBS_MAX_BYTES) {
-            throw new ExternalSessionSizeError("the referenced image blobs", actualBlobBytes, EXTERNAL_BLOBS_MAX_BYTES);
-          }
-          if (wireBuffer.byteLength + actualBlobBytes > EXTERNAL_TOTAL_MAX_BYTES) {
-            throw new ExternalSessionSizeError(
-              "the external session payload",
-              wireBuffer.byteLength + actualBlobBytes,
-              EXTERNAL_TOTAL_MAX_BYTES,
-            );
-          }
-          blobs.set(blob.sha, data.toString("base64"));
-        } catch (error) {
-          if (error instanceof ExternalSessionSizeError) throw error;
-          // 与导入器一致：图片在检查后消失或不可读时由解析器换成文字说明。
-        }
+      if (loaded.records.length === 0 && loaded.empty === true) {
+        throw new Error(
+          `${label} session ${ref} (${candidate.file}) has no user or assistant messages — it is an empty session (${label} recorded only bookkeeping entries such as queue or system events), so there is nothing to read.`,
+        );
       }
-      const wire = parseKimiWire(raw, UNASSIGNED_PROVIDER_ID, blobs);
-      const summary = await summarize(candidate, deps.defaultCwd);
+      if (loaded.records.length === 0) {
+        throw new Error(
+          `Could not read ${label} session ${ref} (${candidate.file}): no messages in a format Orbita recognizes — ${label} may have changed its file format.`,
+        );
+      }
+      const summary = summaryOf(candidate, loaded, deps.defaultCwd);
+      const model = lastModel(loaded.records);
       const meta: SessionMeta = {
         id: summary.ref,
         title: summary.title,
@@ -338,7 +375,7 @@ export function createKimiExternalSessionReader(deps: KimiExternalSessionReaderD
         cwd: summary.cwd,
         workspaceId: null,
         providerId: UNASSIGNED_PROVIDER_ID,
-        modelId: wire.model ?? UNASSIGNED_MODEL_ID,
+        modelId: model ?? UNASSIGNED_MODEL_ID,
         mode: "plan",
         thinkingLevel: "medium",
         piSessionFile: null,
@@ -346,12 +383,10 @@ export function createKimiExternalSessionReader(deps: KimiExternalSessionReaderD
         archived: false,
         recentQueries: [],
         stats: null,
-        createdAt: state?.createdAt ?? wire.firstAt ?? summary.createdAt,
-        updatedAt: state?.updatedAt ?? wire.lastAt ?? summary.updatedAt,
-        importedFrom: candidate.sourceFile,
-        ...(wire.model === null ? null : { importedModel: wire.model }),
+        createdAt: summary.createdAt,
+        updatedAt: summary.updatedAt,
       };
-      return { summary: { ...summary, createdAt: meta.createdAt, updatedAt: meta.updatedAt }, meta, records: recordsOf(wire.messages, wire.userDisplays, meta.cwd) };
+      return { summary, meta, records: loaded.records, sourceFile: candidate.key };
     },
   };
 }

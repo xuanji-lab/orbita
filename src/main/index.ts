@@ -19,9 +19,12 @@ import { readFile } from "node:fs/promises";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
 import { applyReadTask } from "./session/read-task.ts";
 import { registerImportIpc } from "./session/import-ipc.ts";
-import { CustomRootsStore, dirsOf, mergeCustomRoots } from "./session/import-custom-roots.ts";
-import { baseDir, DATA_ROOT_SPECS, findDataRoots, hasDirectory } from "./session/import-locate.ts";
-import { createKimiExternalSessionReader, kimiWorkDataRoot } from "./session/external-session.ts";
+import { CustomRootsStore } from "./session/import-custom-roots.ts";
+import { createExternalSessionReader } from "./session/external-session.ts";
+import { locateExternalSources } from "./session/external-locate.ts";
+import { setSnapshotRoot } from "./session/sqlite-readonly.ts";
+import { registerExternalSourcesIpc } from "./session/external-ipc.ts";
+import { isExternalSourceEnabled } from "../shared/external-sources.ts";
 import { broadcastAgentEvent, registerAgentIpc, resolveProviderSecrets } from "./agent/ipc.ts";
 import type { AgentEvent } from "../shared/agent-ipc.ts";
 import { MemoryServiceHost, resolveMemoryRuntimePath } from "./memory/host.ts";
@@ -466,23 +469,26 @@ void app.whenReady().then(async () => {
   // 工作区根：正式版沿用默认的 ~/Orbita，开发版挪到 ~/Orbita-dev（同 userData 的理由）
   const workspaces = new WorkspaceStore(configDir, devDirs?.orbitaRoot);
   const customRoots = new CustomRootsStore(configDir);
-  // read_task 的外部只读来源。每次现找目录：Migration 里添加 / 移除自定义 Kimi Code
-  // 数据根后下一次调用就生效；Kimi Work 复用同一 wire 解析器，但不共享它的数据根。
-  const externalSessions = createKimiExternalSessionReader({
+  // read_task 的外部只读来源（别家工具留在本机的聊天记录）。每次现找目录：自定义目录增删后
+  // 下一次调用就生效。只读：源目录与 orbita 的会话库都不写（session/external-session.ts）。
+  // 别家 SQLite 库的临时副本放 Orbita 自己的数据目录下（不在源目录旁、不在任何工作区里）；
+  // 读完即删，启动时清掉上次异常退出的残留（session/sqlite-readonly.ts）
+  void setSnapshotRoot(join(configDir, "external-db-snapshots")).catch((error: unknown) =>
+    console.error("[main] 清理外部库临时副本失败", error),
+  );
+  const externalSessions = createExternalSessionReader({
     defaultCwd: workspaces.defaultPath(),
+    claudeDesktopDir: join(homedir(), "Library", "Application Support", "Claude", "claude-code-sessions"),
     sources: async () => {
       const context = { platform: process.platform, home: homedir(), env: process.env };
-      const spec = DATA_ROOT_SPECS["kimi-code"];
-      const kimiCodeRoots = await mergeCustomRoots(
-        await findDataRoots(spec, context),
-        dirsOf(await customRoots.read(), "kimi-code"),
-        spec,
-      );
-      const workRoot = kimiWorkDataRoot(baseDir("appData", context));
-      return [
-        { source: "kimi-code" as const, roots: kimiCodeRoots },
-        { source: "kimi-work" as const, roots: (await hasDirectory(join(workRoot, "sessions"))) ? [workRoot] : [] },
-      ];
+      const [located, current] = await Promise.all([locateExternalSources(context, await customRoots.read()), settings.read()]);
+      return located.map((item) => ({
+        source: item.source,
+        roots: item.roots,
+        enabled: isExternalSourceEnabled(current.externalSources, item.source),
+        expected: item.expected,
+        expectedExists: item.expectedExists,
+      }));
     },
   });
   /*
@@ -1184,21 +1190,10 @@ void app.whenReady().then(async () => {
     },
     workspaceRoot: async (id) => (await workspaces.list()).find((workspace) => workspace.id === id)?.path ?? null,
   });
-  // 迁移（设置 › Migration）：扫描/执行都在主进程，agent 进程不参与；skills 落进上面这个中心存储
-  registerImportIpc(
-    sessions,
-    workspaces,
-    providers,
-    settings,
-    join(configDir, "pi-sessions"),
-    join(configDir, "imports.jsonl"),
-    customRoots,
-    skills,
-    mcp,
-    async () => agentHost.mcpReload(),
-    async (model, messages) =>
-      agentHost.classifyGreetings(await resolveProviderSecrets(providers, model.providerId), model.modelId, messages),
-  );
+  registerExternalSourcesIpc(externalSessions, customRoots, settings);
+  // 设置 › 外部来源：技能 / MCP 的扫描与导入、自定义数据目录（都在主进程，agent 进程不参与）
+  registerImportIpc(workspaces, customRoots, skills, mcp, async () => agentHost.mcpReload());
+
   // Home（工作区缺席时 agent 的落脚点）先建出来，同 skills.ensureDirs 的处理：
   // 建不出来不拦启动，但要留日志——不然一个权限坏掉的 ~/Orbita 会表现成
   // 「Home 任务的文件写不进去」，那是最难查的一类

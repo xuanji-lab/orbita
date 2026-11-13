@@ -133,6 +133,14 @@ const CHECKS = [
     rightPad: 4,
     skipNoTrailing: true,
   },
+  {
+    name: "设置·外部来源行：开关 / 「没找到」钉在右血线",
+    row: ".ext-src",
+    leading: ".mg-name",
+    trailing: ".ext-src-head > .row-trailing",
+    // .ext-src 的左右内边距 var(--space-4)
+    rightPad: 16,
+  },
 ];
 
 const { evaluate, close } = await connectCdp({ cdpPort, devPort, watchdogMs: 60_000 });

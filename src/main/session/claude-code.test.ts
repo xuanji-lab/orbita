@@ -1,7 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  claudeCodeRootUuid,
   claudeCodeUserText,
   parseClaudeCodeSession,
   parseClaudeDesktopSession,
@@ -90,7 +89,25 @@ describe("parseClaudeCodeSession", () => {
     );
   });
 
-  test("sidechain / 附件 / system / 合成错误回复都不进对话；isMeta 进模型上下文但不显示", () => {
+  test("合成的错误回复是那一轮的结局：按出错收尾的回答收；用户接着重发不影响它", () => {
+    const raw = [
+      user("u1", null, "hi"),
+      assistant("e1", "u1", "err", { type: "text", text: "API Error: 529 Overloaded" }, { isApiErrorMessage: true }),
+      user("u2", "e1", "hi"),
+      assistant("a1", "u2", "m1", { type: "text", text: "你好！" }),
+    ].join("\n");
+    const session = parseClaudeCodeSession(raw);
+    assert.equal(session.stats.apiErrors, 1);
+    const { messages } = claudeRowsToMessages(session.rows, "anthropic");
+    assert.deepEqual(
+      messages.map((message) => `${message.role}${message.role === "assistant" ? `:${message.stopReason}` : ""}`),
+      ["user", "assistant:error", "user", "assistant:stop"],
+    );
+    const failed = messages[1];
+    assert.deepEqual(failed?.role === "assistant" ? failed.content : null, [{ type: "text", text: "API Error: 529 Overloaded" }]);
+  });
+
+  test("sidechain / 附件 / system 不进对话；被自动重试取代的合成错误回复不进；isMeta 进模型上下文但不显示", () => {
     const raw = [
       user("w1", null, "Warmup", { isSidechain: true }),
       user("u1", null, "你好"),
@@ -218,19 +235,6 @@ describe("claudeCodeUserText", () => {
 
   test("用户自己写的标签原样保留", () => {
     assert.equal(claudeCodeUserText("<!-- reply -->\n> 引用\n\n回复"), "<!-- reply -->\n> 引用\n\n回复");
-  });
-});
-
-describe("claudeCodeRootUuid", () => {
-  test("跳过 sidechain 与非消息行；截断的末行不炸", () => {
-    const head = [
-      JSON.stringify({ type: "mode", mode: "default" }),
-      user("w1", null, "Warmup", { isSidechain: true }),
-      user("u1", null, "hi"),
-      '{"type":"assistant","uuid":"a1"',
-    ].join("\n");
-    assert.equal(claudeCodeRootUuid(head), "u1");
-    assert.equal(claudeCodeRootUuid(JSON.stringify({ type: "mode" })), null);
   });
 });
 

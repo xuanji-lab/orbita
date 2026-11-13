@@ -51,7 +51,6 @@ import { applyBillingStreamPatch } from "./cc-billing-stream.ts";
 import { applyCacheRetentionPatch } from "./cache-retention.ts";
 import { createTurnFailureTracker } from "./turn-failure.ts";
 import { normalizeGeneratedTitle, TITLE_SYSTEM_PROMPT } from "./title.ts";
-import { GREETING_SYSTEM_PROMPT, greetingPrompt, parseGreetingReply } from "./greeting-check.ts";
 import { FOCUS_SUMMARY_SYSTEM_PROMPT, parseSummaryReply } from "./focus-summary.ts";
 import { planBranchCut } from "./branch-cut.ts";
 import { withOpencodeSession } from "./opencode-session.ts";
@@ -330,63 +329,7 @@ async function resolveChoreModel(
   }
 }
 
-/** 「只随手发了一句」检查一批的硬上限（主进程那头 2 分钟兜底，这里先放手） */
-const GREETING_TIMEOUT_MS = 90_000;
-
-/**
- * 迁移的「只随手发了一句 hi / test」检查（greeting-check.ts）：一次独立的 `completeSimple`，
- * 模型与密钥面由主进程装好（子会话模型或兜底模型）。结果经 `greetingsClassified` 回执；
- * 模型解不出、调用出错、回复读不懂都回 null 并带原因——用户在页面上等着这一步，失败要说出来。
- */
-async function classifyGreetings(command: Extract<AgentCommand, { type: "classifyGreetings" }>): Promise<void> {
-  const fail = (error: string): void => {
-    send({ type: "greetingsClassified", requestId: command.requestId, throwaway: null, error });
-  };
-  try {
-    const runtime = await createModelRuntime();
-    const model = registerAndResolveModel(runtime, command.provider, command.modelId);
-    if (model === undefined) {
-      fail(`unknown model "${command.provider.id}/${command.modelId}"`);
-      return;
-    }
-    const response = await completeSimple(
-      model,
-      {
-        systemPrompt: GREETING_SYSTEM_PROMPT,
-        messages: [{ role: "user", content: greetingPrompt(command.messages), timestamp: Date.now() }],
-      },
-      {
-        apiKey: command.provider.apiKey,
-        maxTokens: 2048,
-        timeoutMs: GREETING_TIMEOUT_MS,
-        signal: AbortSignal.timeout(GREETING_TIMEOUT_MS),
-        // 选中的模型可能是 OAuth Claude：completeSimple 不经主循环的扩展通路，
-        // 车道改写要随 options 带上（非 OAuth payload 原样过，见 cc-billing-patch.ts）
-        onPayload: ccBillingPatch,
-        ...(command.provider.headers ? { headers: command.provider.headers } : {}),
-      },
-    );
-    if (response.stopReason === "error") {
-      fail(response.errorMessage ?? `${model.id} returned an error`);
-      return;
-    }
-    let output = "";
-    for (const block of response.content) {
-      if (block.type === "text") output += block.text;
-    }
-    const throwaway = parseGreetingReply(output, command.messages.length);
-    if (throwaway === null) {
-      console.warn(`[greetings] ${model.id} 的回复读不懂，原文前 200 字：${JSON.stringify(output.slice(0, 200))}`);
-      fail(`${model.id}'s reply couldn't be read`);
-      return;
-    }
-    send({ type: "greetingsClassified", requestId: command.requestId, throwaway });
-  } catch (cause) {
-    fail(cause instanceof Error ? cause.message : String(cause));
-  }
-}
-
-/** 专注收工小结的硬上限（主进程那头 220 秒兑底，这里先放手）：素材比问候检查大得多 */
+/** 专注收工小结的硬上限（主进程那头 220 秒兑底，这里先放手）：素材比标题请求大得多 */
 const FOCUS_SUMMARY_TIMEOUT_MS = 180_000;
 
 /**
@@ -2399,13 +2342,8 @@ async function handle(command: AgentCommand): Promise<void> {
     send({ type: "mcp", servers: mcpHub.describe() });
     return;
   }
-  if (command.type === "classifyGreetings") {
-    // 不 await：判定是几秒量级的独立调用，不挡住后面进来的命令（与标题同理）
-    void classifyGreetings(command);
-    return;
-  }
   if (command.type === "summarizeFocus") {
-    // 同上：独立小调用（可能到分钟量级），不挡后续命令
+    // 不 await：独立小调用（可能到分钟量级），不挡后续命令（与标题同理）
     void summarizeFocus(command);
     return;
   }

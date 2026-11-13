@@ -19,12 +19,11 @@
  * **proma 例外（matchVariants = false，2026-10 开源准备）**：开源后，按名字能撞出来的
  * `.proma-dev`、`.proma-worktree` 这类变体是 orbita 团队自己的开发实例，不是用户数据，不该被
  * 自动扫描收进来——proma 的自动定位只认 canonical（`~/.proma`，同款小写比较）。真实用户手上
- * 散落的历史数据目录（备份、改名过的旧目录）走 Migration 页的自定义路径入口：手动添加、
- * validate 过了才参与扫描。其余来源的变体匹配不变——那是真实用户需求（上面的裁决记录）。
+ * 散落的历史数据目录（备份、改名过的旧目录）走设置 › 外部来源的自定义数据目录：手动添加、
+ * validate 过了才参与读取。其余来源的变体匹配不变——那是真实用户需求（上面的裁决记录）。
  *
- * 顺序必须稳定（env → canonical → 其余按名字）：执行导入时会重扫，用户在页面上勾的是扫描时
- * 看到的路径，两次扫描顺序不一样勾选会对错位。这个顺序同时决定几个目录里内容相同的会话留
- * 哪一份（排前面的胜），见 importer.ts 的 dedupeAcrossRoots。
+ * 顺序必须稳定（env → canonical → 其余按名字）：技能 / MCP 导入执行时会重扫，同名的取先到的；
+ * 外部会话的目录也按这个顺序列（同一个源文件在两个目录里出现只留排前的那份）。
  */
 import { readdir, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -106,8 +105,8 @@ export async function hasDirectory(path: string): Promise<boolean> {
 }
 
 /**
- * 各来源的定位规格。validate 的依据是导入器实际要读的会话入口文件（见 importer.ts 与
- * import-ipc.ts 里的 *Paths）：聊天记录的入口在，扫描就有活干；入口不在，目录名再像也不算。
+ * 各来源的定位规格。validate 的依据是只读读取实际要读的会话入口文件（external-adapters.ts
+ * 各 adapter 的 entry）：聊天记录的入口在，才算这个来源的数据目录；入口不在，目录名再像也不算。
  */
 export const DATA_ROOT_SPECS: Record<Exclude<ImportSourceId, "agent-skills">, DataRootSpec> = {
   proma: {

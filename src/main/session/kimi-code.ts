@@ -1,5 +1,6 @@
 /**
- * Kimi Code（~/.kimi-code）的会话 → pi Message 序列 —— 纯模块，`node --test` 直接测。
+ * Kimi Code（~/.kimi-code）的会话 → pi Message 序列 —— 不 import electron，`node --test` 直接测。
+ * 解析都是纯函数；唯一的读盘是末尾的 readKimiWorkspaces（只读一份工作区表）。
  *
  * ## 源格式（2026-09-25 本机 3 个会话 + kimi 1.x 程序里的读取逻辑）
  *
@@ -45,6 +46,7 @@ import type {
   Usage,
   UserMessage,
 } from "@earendil-works/pi-ai";
+import { readFile } from "node:fs/promises";
 import { auditToolPairs } from "./tool-pairing.ts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -290,7 +292,10 @@ export function parseKimiWire(raw: string, providerId: string, blobs: ReadonlyMa
     if (open === null) return;
     const step = open;
     open = null;
-    if (step.content.length > 0) {
+    const stopReason = toStopReason(finishReason, step.calls.length > 0);
+    // 以出错收尾、一个字都没回的一步也要留：不留的话这一轮只剩用户那句，看不出失败过
+    //（pi-book.markFailedAnswer 给它补上说明）
+    if (step.content.length > 0 || stopReason === "error") {
       entries.push({
         kind: "assistant",
         message: {
@@ -300,7 +305,7 @@ export function parseKimiWire(raw: string, providerId: string, blobs: ReadonlyMa
           provider: providerId,
           model: model ?? "unknown",
           usage: toUsage(usage),
-          stopReason: toStopReason(finishReason, step.calls.length > 0),
+          stopReason,
           timestamp: step.time,
         },
       });
@@ -430,4 +435,28 @@ export function parseKimiWire(raw: string, providerId: string, blobs: ReadonlyMa
     lastAt: audited.lastAt,
     stats,
   };
+}
+
+/** Kimi Code 的工作区表：工作区 id → root，以及在源里删掉的工作区。读不了 = 都没有。 */
+export async function readKimiWorkspaces(file: string): Promise<{ roots: Map<string, string>; deleted: Set<string> }> {
+  const roots = new Map<string, string>();
+  const deleted = new Set<string>();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(file, "utf8"));
+  } catch {
+    return { roots, deleted };
+  }
+  const record = isRecord(parsed) ? parsed : null;
+  const rawWorkspaces = record?.["workspaces"];
+  const workspaces = isRecord(rawWorkspaces) ? rawWorkspaces : null;
+  for (const [id, value] of Object.entries(workspaces ?? {})) {
+    const root = isRecord(value) ? optionalString(value["root"]) : null;
+    if (root !== null) roots.set(id, root);
+  }
+  const removed = record?.["deleted_workspace_ids"];
+  if (Array.isArray(removed)) {
+    for (const id of removed) if (typeof id === "string") deleted.add(id);
+  }
+  return { roots, deleted };
 }

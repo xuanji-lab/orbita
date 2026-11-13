@@ -7,25 +7,20 @@
  *    从 ~/.proma-dev/agent-sessions.json 过滤 legacyTranscript.sourceRuntime === "claude"，
  *    按 manifest.json 的 id 拷贝 <id>.jsonl。
  * 2. **人造边界 fixture**（动态生成 tmp）：坏行、流式碎片合并、usage 缺席/部分、图片、
- *    空会话、孤儿 tool_result、打断补合成结果、子代理行、旧扁平行、importer 集成
- *    （扫描进 plan / unsupported-format / 执行落盘 / 幂等重扫 / 与 pi 条目混批）。
+ *    空会话、孤儿 tool_result、打断补合成结果、子代理行、旧扁平行。只读投影（Proma adapter 读
+ *    Claude 时代会话）的端到端在 external-adapters.test.ts。
  */
-import { test, describe, beforeEach, afterEach } from "node:test";
+import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { Message } from "@earendil-works/pi-ai";
-import type { Workspace } from "../../shared/workspace.ts";
 import {
   claudeRowsToMessages,
-  hasAssistantRow,
-  lastModelFromRows,
   parseClaudeRows,
+  promaFlatRowsToMessages,
 } from "./claude-legacy.ts";
-import { runImport, scanImport, type RunImporterDeps } from "./importer.ts";
-import { SessionStore } from "./store.ts";
+import { messagesToRecords } from "./pi-book.ts";
 
 /** fixture 根（会话工作台 night-run，不进仓）。 */
 const FIXTURES =
@@ -56,72 +51,6 @@ interface FixtureManifestItem {
 // ---------------------------------------------------------------------------
 // 人造 fixture 的搭台
 // ---------------------------------------------------------------------------
-
-let root = "";
-let promaRoot = "";
-let sessionsDir = "";
-let piSessionDir = "";
-let store: SessionStore;
-let seq = 0;
-let idQueue: string[] = [];
-
-const takeId = (): string => idQueue.shift() ?? `00000000-0000-4000-8000-${String(++seq).padStart(12, "0")}`;
-
-const DEFAULT_CWD = "/Users/tester";
-
-function deps(overrides: Partial<RunImporterDeps> = {}): RunImporterDeps {
-  return {
-    promaRoots: [promaRoot],
-    piSessionDir,
-    defaultCwd: DEFAULT_CWD,
-    workspaces: [],
-    existingMetas: [],
-    newId: takeId,
-    ledgerFile: join(root, "imports.jsonl"),
-    createWorkspace: async () => undefined,
-    persistSession: async (meta, records) => store.commitImported(meta, records),
-    refreshSession: async (id, records, patch) => store.commitImportUpdate(id, records, patch),
-    skillTarget: { copyFrom: async () => "", importFrom: async () => "" },
-    mcpTarget: { add: async () => undefined, reload: async () => undefined },
-    ...overrides,
-  };
-}
-
-/** 写一条 claude legacy 索引条目（无 piSessionFile，legacyTranscript 标记）。 */
-interface ClaudeIndexEntry {
-  id: string;
-  title: string;
-  workspaceId?: string;
-  modelId?: string;
-  createdAt: number;
-  updatedAt: number;
-  archived?: boolean;
-  pinned?: boolean;
-  /** Proma delegation 子会话指向母会话的 id（claude 时代也有，本机 20 条） */
-  parentSessionId?: string;
-}
-
-async function writeIndex(entries: unknown[]): Promise<void> {
-  await writeFile(join(promaRoot, "agent-sessions.json"), JSON.stringify({ version: 2, sessions: entries }));
-}
-
-async function writeClaudeIndex(entries: ClaudeIndexEntry[]): Promise<void> {
-  await writeIndex(
-    entries.map((entry) => ({
-      ...entry,
-      legacyTranscript: { sourceRuntime: "claude", continuationRequired: true },
-    })),
-  );
-}
-
-/** 把 claude 渲染行写进 <promaRoot>/agent-sessions/<id>.jsonl（源路径惯例）。 */
-async function writeClaudeSession(id: string, lines: unknown[]): Promise<string> {
-  const dir = join(promaRoot, "agent-sessions");
-  await mkdir(dir, { recursive: true });
-  const path = join(dir, `${id}.jsonl`);
-  await writeFile(path, lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
-  return path;
-}
 
 /** 最小 user 行。 */
 const userTextRow = (text: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -159,21 +88,6 @@ const resultRow = (): Record<string, unknown> => ({
   is_error: false,
   usage: { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 },
   num_turns: 1,
-});
-
-beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), "orbita-claude-"));
-  promaRoot = join(root, "proma-dev");
-  sessionsDir = join(root, "sessions");
-  piSessionDir = join(root, "pi-sessions");
-  await mkdir(promaRoot, { recursive: true });
-  store = new SessionStore(sessionsDir);
-  idQueue = [];
-  seq = 0;
-});
-
-afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
 });
 
 // ---------------------------------------------------------------------------
@@ -414,175 +328,6 @@ describe("构造：配对审计", () => {
 // importer 集成：扫描与执行
 // ---------------------------------------------------------------------------
 
-describe("importer 集成：claude 条目", () => {
-  test("扫描：进 plan（sourceKind、模型从内容提、cwd 兜底 defaultCwd）", async () => {
-    await writeClaudeSession("c-1", [
-      userTextRow("问"),
-      assistantBlockRow("m1", { type: "text", text: "答" }),
-      resultRow(),
-    ]);
-    await writeClaudeIndex([{ id: "c-1", title: "一条 claude 会话", createdAt: 100, updatedAt: 200 }]);
-    const report = await scanImport(deps());
-    assert.equal(report.plan.length, 1);
-    const item = report.plan[0];
-    assert.equal(item?.sourceKind, "claude-legacy");
-    assert.equal(item?.sourceFile, join(promaRoot, "agent-sessions", "c-1.jsonl"));
-    assert.equal(item?.workspaceId, null);
-    assert.equal(item?.cwd, DEFAULT_CWD);
-    // 索引没记模型 → 从最后的 assistant 行提（glm-5.1）→ 原样存进 importedModel（导入不映射模型）
-    assert.equal(item?.importedModel, "glm-5.1");
-    assert.equal(report.withoutPiSession, 0);
-  });
-
-  test("扫描：无 assistant 消息（纯旧扁平/空）→ unsupported-format skip", async () => {
-    await writeClaudeSession("c-empty", [
-      { id: "old", role: "user", content: "旧格式", createdAt: 1, events: [] },
-    ]);
-    await writeClaudeIndex([{ id: "c-empty", title: "空的", createdAt: 1, updatedAt: 2 }]);
-    await writeClaudeSession("c-missing", [userTextRow("问")]);
-    await writeClaudeIndex([
-      { id: "c-empty", title: "空的", createdAt: 1, updatedAt: 2 },
-      { id: "c-ghost", title: "文件丢了", createdAt: 1, updatedAt: 2 },
-    ]);
-    const report = await scanImport(deps());
-    assert.equal(report.plan.length, 0);
-    const unsupported = report.skipped.find((s) => s.sourceId === "c-empty");
-    assert.ok(unsupported !== undefined);
-    assert.equal(unsupported.reason, "unsupported-format");
-    const missing = report.skipped.find((s) => s.sourceId === "c-ghost");
-    assert.ok(missing !== undefined);
-    assert.equal(missing.reason, "missing-file");
-  });
-
-  test("扫描：legacyTranscript 不是 claude（旧扁平/draft）→ 只计数不进清单", async () => {
-    await writeIndex([{ id: "c-old", title: "旧扁平", createdAt: 1, updatedAt: 2 }]);
-    const report = await scanImport(deps());
-    assert.equal(report.plan.length, 0);
-    assert.equal(report.withoutPiSession, 1);
-    assert.equal(report.skipped.length, 0);
-  });
-
-  test("执行：pi 文件从零构造、可被 SessionManager.open 回读、meta 结构正确", async () => {
-    await writeClaudeSession("c-1", [
-      userTextRow("问"),
-      assistantBlockRow("m1", { type: "thinking", thinking: "想", signature: "s" }),
-      assistantBlockRow("m1", { type: "tool_use", id: "t1", name: "read", input: { path: "/x" } }),
-      toolResultRow("t1", "内容"),
-      assistantBlockRow("m2", { type: "text", text: "答" }),
-      resultRow(),
-    ]);
-    await writeClaudeIndex([{ id: "c-1", title: "标题", createdAt: 100, updatedAt: 200, archived: true }]);
-    const report = await runImport(deps());
-    assert.equal(report.imported, 1);
-    assert.equal(report.failed.length, 0);
-
-    const [meta] = await store.list();
-    assert.ok(meta !== undefined);
-    assert.equal(meta.title, "标题");
-    assert.equal(meta.titleSource, "user");
-    assert.equal(meta.cwd, DEFAULT_CWD);
-    assert.equal(meta.mode, "plan");
-    assert.equal(meta.thinkingLevel, "medium");
-    assert.equal(meta.importedModel, "glm-5.1");
-    assert.equal(meta.importedFrom, join(promaRoot, "agent-sessions", "c-1.jsonl"));
-    assert.equal(meta.archived, true);
-    // pi 本子真实落盘且能回读续聊
-    assert.ok(meta.piSessionFile !== null && meta.piSessionFile !== undefined);
-    const reopened = SessionManager.open(meta.piSessionFile, piSessionDir, meta.cwd);
-    const context = reopened.buildSessionContext();
-    assert.equal(context.messages.length, 4);
-    // transcript 从 pi entries 派生（与 pi 同构路同一条派生代码）
-    const detail = await store.load(meta.id);
-    assert.ok(detail !== null);
-    assert.equal(detail.transcript.length, 4);
-    assert.equal(detail.transcript.filter((r) => r.role === "user").length, 1);
-    assert.equal(detail.transcript.filter((r) => r.role === "assistant").length, 2);
-    assert.equal(detail.transcript.filter((r) => r.role === "tool").length, 1);
-    // usage 进账本（两条 assistant 各 105 tokens）
-    assert.ok(meta.stats !== null);
-    assert.equal(meta.stats.tokens.total, 210);
-  });
-
-  test("幂等重扫：第二次全部 already-imported，源文件零改动", async () => {
-    const sourcePath = await writeClaudeSession("c-1", [
-      userTextRow("问"),
-      assistantBlockRow("m1", { type: "text", text: "答" }),
-    ]);
-    await writeClaudeIndex([{ id: "c-1", title: "一条", createdAt: 1, updatedAt: 2 }]);
-    const before = await readFile(sourcePath, "utf8");
-    const first = await runImport(deps());
-    assert.equal(first.imported, 1);
-    const second = await runImport(deps({ existingMetas: await store.list() }));
-    assert.equal(second.imported, 0);
-    assert.equal(second.skipped, 1);
-    assert.equal((await store.list()).length, 1);
-    assert.equal(await readFile(sourcePath, "utf8"), before);
-  });
-
-  test("混合批：pi 条目与 claude 条目同一索引共存，各走各的通路", async () => {
-    // pi 侧最小会话
-    const piDir = join(promaRoot, "sdk-config", "sessions");
-    await mkdir(piDir, { recursive: true });
-    const piFile = join(piDir, "2026-09-01T00-00-00-000Z_pi-0000000000000001.jsonl");
-    const piHeader = { type: "session", version: 3, id: "pi-0000000000000001", timestamp: "2026-09-01T00:00:00.000Z", cwd: "/tmp/p" };
-    const piUser = { type: "message", id: "e1", parentId: null, timestamp: "2026-09-01T00:00:01.000Z", message: { role: "user", content: [{ type: "text", text: "pi 侧提问" }], timestamp: 1780000001000 } };
-    const piAssistant = { type: "message", id: "e2", parentId: "e1", timestamp: "2026-09-01T00:00:02.000Z", message: { role: "assistant", content: [{ type: "text", text: "pi 侧回答" }], provider: "x", model: "glm-5.3", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: 1780000002000 } };
-    await writeFile(piFile, [piHeader, piUser, piAssistant].map((l) => JSON.stringify(l)).join("\n") + "\n");
-    // claude 侧
-    await writeClaudeSession("c-1", [
-      userTextRow("claude 侧提问"),
-      assistantBlockRow("m1", { type: "text", text: "claude 侧回答" }),
-    ]);
-    await writeIndex([
-      { id: "p-1", title: "pi 条目", piSessionFile: piFile, createdAt: 1, updatedAt: 2 },
-      { id: "c-1", title: "claude 条目", legacyTranscript: { sourceRuntime: "claude", continuationRequired: true }, createdAt: 3, updatedAt: 4 },
-    ]);
-    const report = await runImport(deps());
-    assert.equal(report.imported, 2);
-    const metas = (await store.list()).sort((a, b) => a.createdAt - b.createdAt);
-    assert.deepEqual(metas.map((m) => m.importedFrom?.endsWith("c-1.jsonl") ? "claude" : "pi"), ["pi", "claude"]);
-    // pi 条目副本是原字节；claude 条目的 pi 本子是从零构造（文件名是新铸的）
-    assert.equal(metas[0]?.piSessionFile, join(piSessionDir, "2026-09-01T00-00-00-000Z_pi-0000000000000001.jsonl"));
-    assert.ok(metas[1]?.piSessionFile !== undefined && metas[1].piSessionFile !== null);
-    assert.notEqual(metas[1]?.piSessionFile, metas[0]?.piSessionFile);
-  });
-
-  test("同源去重：两条 claude 索引指向同一文件路径 → 第二条 duplicate", async () => {
-    // 源路径按 <id>.jsonl 推导，同 id 两条索引即同源
-    await writeClaudeSession("c-dup", [userTextRow("问"), assistantBlockRow("m1", { type: "text", text: "答" })]);
-    await writeClaudeIndex([
-      { id: "c-dup", title: "甲", createdAt: 1, updatedAt: 2 },
-      { id: "c-dup", title: "乙", createdAt: 3, updatedAt: 4 },
-    ]);
-    const report = await scanImport(deps());
-    assert.equal(report.plan.length, 1);
-    assert.equal(report.plan[0]?.title, "甲");
-    assert.equal(report.skipped.length, 1);
-    assert.equal(report.skipped[0]?.reason, "duplicate");
-  });
-
-  test("子会话：claude 时代的 delegation 子会话同样挂回母会话，落盘带 parentId", async () => {
-    await writeClaudeSession("c-parent", [userTextRow("派一个调研"), assistantBlockRow("m1", { type: "text", text: "已派出" })]);
-    await writeClaudeSession("c-child", [userTextRow("调研 X"), assistantBlockRow("m2", { type: "text", text: "X 的结论" })]);
-    await writeClaudeIndex([
-      { id: "c-parent", title: "母", createdAt: 1, updatedAt: 2 },
-      { id: "c-child", title: "子", createdAt: 3, updatedAt: 4, parentSessionId: "c-parent" },
-    ]);
-    const report = await scanImport(deps());
-    assert.equal(report.subSessionCount, 1);
-    const run = await runImport(deps());
-    assert.equal(run.imported, 2);
-    const metas = await store.list();
-    const parent = metas.find((meta) => meta.title === "母");
-    assert.ok(parent !== undefined);
-    assert.equal(metas.find((meta) => meta.title === "子")?.parentId, parent.id);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 真实样本快照
-// ---------------------------------------------------------------------------
-
 describe("真实样本快照（night-run fixtures）", async () => {
   const present = await fixturesPresent();
   const manifest: FixtureManifestItem[] = present
@@ -613,13 +358,13 @@ describe("真实样本快照（night-run fixtures）", async () => {
         assert.ok(expected !== undefined, "manifest 里有、快照表没有——新 fixture 要先锚定计数");
         const raw = await readFile(join(FIXTURES, `${item.id}.jsonl`), "utf8");
         const { rows } = parseClaudeRows(raw);
-        assert.equal(hasAssistantRow(rows), expected.convertible);
+        const { messages } = claudeRowsToMessages(rows, "zai-coding");
+        assert.equal(messages.some((m) => m.role === "assistant"), expected.convertible);
         if (!expected.convertible) {
           // 纯旧扁平：扫描口径是 unsupported-format
           assert.equal(rows.length, expected.rows);
           return;
         }
-        const { messages } = claudeRowsToMessages(rows, "zai-coding");
         assert.equal(rows.length, expected.rows, "主对话行数");
         assert.equal(messages.length, expected.messages, "消息总数");
         const byRole = messages.reduce<Record<string, number>>((acc, m) => {
@@ -629,61 +374,65 @@ describe("真实样本快照（night-run fixtures）", async () => {
         assert.equal(byRole["user"] ?? 0, expected.user);
         assert.equal(byRole["assistant"] ?? 0, expected.assistant);
         assert.equal(byRole["toolResult"] ?? 0, expected.toolResult);
-        assert.equal(lastModelFromRows(rows), expected.model);
+        const lastAssistant = messages.filter((m) => m.role === "assistant").at(-1);
+        assert.equal(lastAssistant?.role === "assistant" ? lastAssistant.model : null, expected.model);
         // 配对不变量：每条 toolResult 的 toolCallId 都能在前文 assistant 找到
         const callIds = new Set<string>();
         for (const m of messages) {
           if (m.role === "assistant") for (const b of m.content) if (b.type === "toolCall") callIds.add(b.id);
           if (m.role === "toolResult") assert.ok(callIds.has(m.toolCallId), `孤儿 toolResult ${m.toolCallId}`);
         }
-        // 灌入通路：构造 pi 本子并回读
-        const manager = SessionManager.create("/tmp/snapshot", piSessionDir);
-        for (const message of messages) manager.appendMessage(message);
-        const path = manager.getSessionFile();
-        assert.ok(path !== undefined);
-        const reopened = SessionManager.open(path, piSessionDir, "/tmp/snapshot");
-        assert.equal(reopened.buildSessionContext().messages.length, expected.messages);
+        // 只读投影：每条消息都投成一条记录（空 error 回答除外，这批里没有）
+        const records = messagesToRecords(messages, messages.flatMap((m) => (m.role === "user" ? ["shown"] : [])));
+        assert.equal(records.length, expected.messages);
       },
     );
   }
+});
 
-  test("整批导入（manifest 全条目）：每条可转换的都落盘且可回读", { skip: present ? false : "fixtures 不在本机" }, async () => {
-    // 搭 Proma 索引：manifest 条目原样进（含 workspaceId / archived / pinned）
-    await mkdir(join(promaRoot, "agent-sessions"), { recursive: true });
-    for (const item of manifest) {
-      await copyFile(join(FIXTURES, `${item.id}.jsonl`), join(promaRoot, "agent-sessions", `${item.id}.jsonl`));
-    }
-    await writeClaudeIndex(
-      manifest.map((item) => ({
-        id: item.id,
-        title: item.title,
-        ...(item.workspaceId === null ? null : { workspaceId: item.workspaceId }),
-        ...(item.modelId === null ? null : { modelId: item.modelId }),
-        createdAt: item.createdAt ?? 1,
-        updatedAt: item.updatedAt ?? 2,
-        archived: item.archived,
-        pinned: item.pinned,
-      })),
+describe("promaFlatRowsToMessages（Proma 更早的扁平行）", () => {
+  test("用户原文、说明文字、工具调用与结果按 events 顺序重建；重复的 tool_start 只留完整那条；请求失败写成出错收尾的回答", () => {
+    const raw = [
+      JSON.stringify({ id: "1", role: "user", content: "建几个文件夹", createdAt: 1 }),
+      JSON.stringify({
+        id: "2",
+        role: "assistant",
+        content: "建好了",
+        createdAt: 2,
+        model: "claude-opus-4-6",
+        events: [
+          { type: "text_delta", text: "我" },
+          { type: "text_complete", text: "我来建。", isIntermediate: true },
+          { type: "tool_start", toolName: "Bash", toolUseId: "t1", input: {} },
+          { type: "tool_start", toolName: "Bash", toolUseId: "t1", input: { command: "mkdir a" } },
+          { type: "tool_result", toolName: "Bash", toolUseId: "t1", result: "", isError: false },
+          { type: "text_complete", text: "建好了" },
+          { type: "complete", usage: {} },
+        ],
+      }),
+      JSON.stringify({ id: "3", role: "user", content: "再来", createdAt: 3 }),
+      JSON.stringify({ id: "4", role: "status", content: "API Error: 400 thinking", createdAt: 4, errorCode: "unknown_error", errorTitle: "", errorOriginal: "API Error: 400 thinking" }),
+      JSON.stringify({ id: "5", role: "user", content: "老格式", createdAt: 5 }),
+      JSON.stringify({ id: "6", role: "assistant", content: "没有 events 的回答", createdAt: 6 }),
+      JSON.stringify({ type: "user", message: { role: "user", content: "typed 行不归这里" } }),
+    ].join("\n");
+    const { messages, userDisplays } = promaFlatRowsToMessages(raw, "p");
+    assert.deepEqual(userDisplays, ["建几个文件夹", "再来", "老格式"]);
+    const records = messagesToRecords(messages, userDisplays);
+    const shape = records.map((record) =>
+      record.role === "user" || record.role === "assistant"
+        ? `${record.role}:${record.content.map((block) => (block.type === "text" ? block.text : block.type === "toolCall" ? `call ${JSON.stringify(block.input)}` : block.type)).join("|")}`
+        : record.role,
     );
-    const orbitaWorkspace: Workspace = { id: "w-1", name: "ws", path: "/tmp/anywhere", createdAt: 1, attachedDirs: [] };
-    const report = await runImport(deps({ workspaces: [orbitaWorkspace] }));
-    const convertible = manifest.filter((item) => EXPECTED[item.id]?.convertible === true).length;
-    assert.equal(report.imported, convertible);
-    // 不可转换的（纯旧扁平）进 unsupported-format
-    assert.equal(
-      report.skipped + 0 >= manifest.length - convertible,
-      true,
-      "skipped 至少覆盖不可转换条目",
-    );
-    const metas = await store.list();
-    assert.equal(metas.length, convertible);
-    for (const meta of metas) {
-      assert.ok(meta.piSessionFile !== null && meta.piSessionFile !== undefined);
-      const reopened = SessionManager.open(meta.piSessionFile, piSessionDir, meta.cwd);
-      assert.ok(reopened.buildSessionContext().messages.length > 0);
-    }
-    // 幂等：再来一遍全 skip
-    const second = await runImport(deps({ existingMetas: metas, workspaces: [orbitaWorkspace] }));
-    assert.equal(second.imported, 0);
+    assert.deepEqual(shape, [
+      "user:建几个文件夹",
+      'assistant:我来建。|call {"command":"mkdir a"}',
+      "tool",
+      "assistant:建好了",
+      "user:再来",
+      "assistant:[This answer ended in an error: API Error: 400 thinking]",
+      "user:老格式",
+      "assistant:没有 events 的回答",
+    ]);
   });
 });

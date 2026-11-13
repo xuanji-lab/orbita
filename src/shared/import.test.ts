@@ -2,7 +2,6 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import {
   isCustomRootSource,
-  isImportSourceId,
   parseImportCustomRootInput,
   parseImportRunInput,
   parseImportScanInput,
@@ -16,17 +15,9 @@ describe("parseImportScanInput", () => {
     });
   });
 
-  test("isImportSourceId 只认契约里的来源", () => {
-    assert.equal(isImportSourceId("claude-code"), true);
-    assert.equal(isImportSourceId("kimi-code"), true);
-    assert.equal(isImportSourceId("opencode"), true);
-    assert.equal(isImportSourceId("proma"), true);
-    assert.equal(isImportSourceId("reasonix"), true);
-    assert.equal(isImportSourceId("agent-skills"), true);
-    assert.equal(isImportSourceId("zcode"), true);
-    assert.equal(isImportSourceId("codex"), true);
-    assert.equal(isImportSourceId("cursor"), false);
-    assert.equal(isImportSourceId(1), false);
+  test("契约里的八个来源都认（含只有技能的 agent-skills）", () => {
+    const all = ["proma", "claude-code", "kimi-code", "opencode", "reasonix", "zcode", "codex", "agent-skills"];
+    assert.deepEqual(parseImportScanInput({ sources: all }).sources, all);
   });
 
   test("空来源合法（什么都不读）", () => {
@@ -67,15 +58,10 @@ describe("parseImportCustomRootInput", () => {
 });
 
 describe("parseImportRunInput", () => {
-  test("三种去向与 null 文件夹都能过；会话去重", () => {
+  test("技能、作用域与 MCP 原样通过并去重；聊天记录的字段不再收", () => {
     const input = parseImportRunInput({
       sources: ["proma"],
-      sessions: ["/a.jsonl", "/a.jsonl", "/b.jsonl"],
-      destinations: [
-        { folder: null, destination: { kind: "tasks" } },
-        { folder: "/repo/x", destination: { kind: "workspace", workspaceId: "w-1" } },
-        { folder: "/repo/y", destination: { kind: "new-workspace" } },
-      ],
+      sessions: ["/a.jsonl"],
       skills: ["/s/a", "/s/a"],
       skillMode: "link",
       mcp: ["miyo", "miyo"],
@@ -84,26 +70,22 @@ describe("parseImportRunInput", () => {
         { dir: "/t", scope: { kind: "workspace", workspaceId: "w-1" } },
       ],
     });
-    assert.deepEqual(input.sessions, ["/a.jsonl", "/b.jsonl"]);
-    assert.deepEqual(input.skills, ["/s/a"]);
-    assert.equal(input.skillMode, "link");
-    assert.deepEqual(input.mcp, ["miyo"]);
-    assert.deepEqual(input.skillScopes[1], { dir: "/t", scope: { kind: "workspace", workspaceId: "w-1" } });
-    assert.equal(input.destinations.length, 3);
-    assert.deepEqual(input.destinations[1], { folder: "/repo/x", destination: { kind: "workspace", workspaceId: "w-1" } });
+    assert.deepEqual(input, {
+      sources: ["proma"],
+      skills: ["/s/a"],
+      skillMode: "link",
+      mcp: ["miyo"],
+      skillScopes: [
+        { dir: "/s", scope: { kind: "off" } },
+        { dir: "/t", scope: { kind: "workspace", workspaceId: "w-1" } },
+      ],
+    });
   });
 
-  test("坏去向、空文件夹串、非字符串会话都整体拒绝", () => {
-    const base = { sources: ["proma"], sessions: [], destinations: [], skills: [], skillMode: "copy", skillScopes: [], mcp: [] };
-    assert.throws(() => parseImportRunInput({ ...base, destinations: [{ folder: "/x", destination: { kind: "workspace" } }] }), /bad destination/);
-    assert.throws(() => parseImportRunInput({ ...base, destinations: [{ folder: "", destination: { kind: "tasks" } }] }), /bad folder/);
-    assert.throws(() => parseImportRunInput({ ...base, sessions: [1] }), /source files/);
-    assert.throws(() => parseImportRunInput({ ...base, sources: ["kimi"] }), /unknown import source/);
-  });
-
-  test("skills 的坏形状整体拒绝", () => {
-    const base = { sources: ["agent-skills"], sessions: [], destinations: [], skills: [], skillMode: "copy", skillScopes: [], mcp: [] };
+  test("坏形状整体拒绝", () => {
+    const base = { sources: ["agent-skills"], skills: [], skillMode: "copy", skillScopes: [], mcp: [] };
     assert.doesNotThrow(() => parseImportRunInput(base));
+    assert.throws(() => parseImportRunInput({ ...base, sources: ["kimi"] }), /unknown import source/);
     assert.throws(() => parseImportRunInput({ ...base, skillMode: "move" }), /copy or link/);
     assert.throws(() => parseImportRunInput({ ...base, mcp: [{}] }), /server names/);
     assert.throws(() => parseImportRunInput({ ...base, skills: [1] }), /array of folders/);

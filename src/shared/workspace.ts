@@ -52,7 +52,7 @@ export interface Workspace {
  * 没起名字时的默认名：路径的最后一段。服务的是**路径**：cwd 的目录尾段（scope 芯片）、
  * add / v1 迁移 / 导入铸名，以及 v2 → v3 迁移把老脏名治回来（store 的 healNames）。
  * 不服务名字本身——名字是自由显示文本，显示层原样显示不过这个函数。
- * 切分隔符的规则（按路径形认）在 shared/path.ts——文件面板、预览、迁移页的末段提取
+ * 切分隔符的规则（按路径形认）在 shared/path.ts——文件面板、预览、外部来源页的末段提取
  * 与它是同一套，别再各写一份。
  */
 export function deriveWorkspaceName(path: string): string {

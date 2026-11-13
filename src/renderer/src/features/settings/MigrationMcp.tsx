@@ -2,16 +2,18 @@ import type { ImportMcpItem } from "@shared/import";
 import { Icon } from "../../shell/Icon";
 import { PanelEmpty } from "../../shell/PanelEmpty";
 import { isSelectableMcp, mcpOriginLabel, mcpStatusLabel } from "./migration-mcp.ts";
-import type { StepState } from "./migration-page.ts";
+import type { StepState } from "./external-sources-page.ts";
 import { Step, TipBadge, Tipped } from "./MigrationStep.tsx";
 import { useT } from "../../locale.ts";
 
 /**
- * Migration 页第 4 步：MCP servers。一个名字一行（同名的多份按来源顺序取第一份，出处都写上）。
+ * 外部来源页第 3 步：MCP servers。一个名字一行（同名的多份按来源顺序取第一份，出处都写上）。
  * 导进来一律停用（设计稿裁决 #7）——这是这段唯一需要说的话，收成段头一枚 Off 徽标，整句进悬停。
  * 配置里带 headers / env 的行尾挂一把钥匙：它们会原样带过来，密钥也在里面。
  */
 export function McpSection(props: {
+  /** 步骤编号（外部来源页上是第 3 步） */
+  n: number;
   state: StepState;
   /** null = 还没扫描 */
   items: readonly ImportMcpItem[] | null;
@@ -26,7 +28,7 @@ export function McpSection(props: {
   const all = selectable.length > 0 && selectable.every((name) => props.selected.has(name));
   return (
     <Step
-      n={4}
+      n={props.n}
       title={t.migration.stepMcp}
       state={props.state}
       summary={

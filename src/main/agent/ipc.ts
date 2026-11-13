@@ -336,7 +336,7 @@ export function registerAgentIpc(
   };
 
   /**
-   * 家务活模型（设置里的 choreModel：起名、收尾扫描、迁移的随手一句检查）装配成
+   * 家务活模型（设置里的 choreModel：起名、收尾扫描）装配成
    * 带密钥的载荷。没指定、指的 provider 已删、或密钥取不到，一律返回 undefined
    * 让 runtime 退回会话模型——家务是易耗品，不该因为一个删掉的 provider 就停掉；
    * 但原因要落到 dev 终端，否则「我选了模型为什么没生效」无从查起。

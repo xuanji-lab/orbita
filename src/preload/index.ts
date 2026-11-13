@@ -13,6 +13,7 @@ import { excerptApi } from "./api/excerpt.ts";
 import { filesApi } from "./api/files.ts";
 import { focusApi } from "./api/focus.ts";
 import { importApi } from "./api/import.ts";
+import { externalSourcesApi } from "./api/external-sources.ts";
 import { intentApi } from "./api/intent.ts";
 import { notifyApi } from "./api/notify.ts";
 import { pluginApi } from "./api/plugin.ts";
@@ -56,6 +57,7 @@ const api = {
   usage: usageApi,
   updater: updaterApi,
   import: importApi,
+  externalSources: externalSourcesApi,
   intent: intentApi,
   browser: browserApi,
   voice: voiceApi,

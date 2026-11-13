@@ -11,7 +11,6 @@ import { join } from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
   isReasonixConversationFile,
-  listReasonixSessions,
   parseReasonixRows,
   readReasonixMeta,
   reasonixToMessages,
@@ -267,33 +266,5 @@ describe("meta 与清单", () => {
     }
   });
 
-  test("listReasonixSessions：走 projects/<项目>/sessions/，排除派生物与冲突副本", async () => {
-    const root = await mkdtemp(join(tmpdir(), "orbita-reasonix-list-"));
-    try {
-      const sessions = join(root, "proj-a", "sessions");
-      await mkdir(sessions, { recursive: true });
-      await writeFile(join(sessions, "s1.jsonl"), '{"role":"user","content":"hi"}\n', "utf8");
-      await writeFile(join(sessions, "s1.jsonl.meta"), JSON.stringify({ topic_title: "T1" }), "utf8");
-      await writeFile(join(sessions, "s2.jsonl"), '{"role":"user","content":"yo"}\n', "utf8");
-      await writeFile(join(sessions, "s2.jsonl.events.jsonl"), "{}\n", "utf8");
-      await writeFile(join(sessions, "s3.conflicts.jsonl"), "{}\n", "utf8");
-      await writeFile(join(sessions, "s3.jsonl.turns.jsonl"), "{}\n", "utf8");
-      // 没有 sessions/ 的项目目录：跳过不报错
-      await mkdir(join(root, "proj-b"), { recursive: true });
 
-      const found = await listReasonixSessions(root);
-      assert.equal(found.length, 2);
-      const names = found.map((item) => item.file.endsWith("s1.jsonl")).sort();
-      assert.deepEqual(names, [false, true]);
-      assert.equal(found.find((item) => item.file.endsWith("s1.jsonl"))?.meta?.title, "T1");
-      assert.equal(found.find((item) => item.file.endsWith("s2.jsonl"))?.meta, null);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  test("根不在（没装）返回空清单不抛", async () => {
-    const missing = join(tmpdir(), "orbita-reasonix-missing-never-created");
-    assert.deepEqual(await listReasonixSessions(missing), []);
-  });
 });

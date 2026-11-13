@@ -19,7 +19,7 @@ export const SHOT_IDS = [
   "home",
   "providers",
   "general",
-  "migration",
+  "external-sources",
   "composer",
   "permission",
   "working",
@@ -248,9 +248,9 @@ export const GUIDE: readonly GuideChapter[] = [
         pins: [pin(1, general.chore), pin(2, general.sub)],
         loupe: loupe(union(general.chore, general.sub), { x: 0.3, y: 0.71 }, 1.25),
       }),
-      step("import", "migration", {
-        focus: union(box("migration", "readonly"), box("migration", "scan")),
-        pins: [pin(1, box("migration", "scan"), "b"), pin(2, box("migration", "readonly"))],
+      step("sources", "external-sources", {
+        focus: union(box("external-sources", "list"), box("external-sources", "readonly")),
+        pins: [pin(1, box("external-sources", "toggle"), "l"), pin(2, box("external-sources", "readonly"), "r")],
       }),
     ],
   },

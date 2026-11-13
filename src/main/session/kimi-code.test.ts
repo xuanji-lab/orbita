@@ -57,6 +57,13 @@ describe("parseKimiSessionState", () => {
 });
 
 describe("parseKimiWire", () => {
+  test("以出错收尾、没有正文的一步留一条空的 error 回答；被打断的空步不留", () => {
+    const raw = [user("hi"), begin("s1"), end("s1", "error"), user("再试"), begin("s2"), end("s2", "interrupted"), user("算了")].join("\n");
+    const parsed = parseKimiWire(raw, "p", new Map());
+    assert.deepEqual(roles(parsed.messages), ["user:hi", "assistant:", "user:再试", "user:算了"]);
+    assert.equal((parsed.messages[1] as AssistantMessage).stopReason, "error");
+  });
+
   test("一轮带工具：step 拼成 assistant、结果跟在后面；注入进 pi 不进 transcript；思考带回原字段", () => {
     const raw = [
       rec({ type: "metadata", protocol_version: "1.5" }),
