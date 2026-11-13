@@ -4,7 +4,7 @@ import { api } from "../../api";
 import { Icon } from "../../shell/Icon";
 import { PanelEmpty } from "../../shell/PanelEmpty";
 import { useT } from "../../locale.ts";
-import { formatDay } from "../settings/migration-groups.ts";
+import { formatDay } from "../settings/display-format.ts";
 import { filterExcerpts, type ExcerptMode } from "./excerpt-filter.ts";
 import {
   isClipped,

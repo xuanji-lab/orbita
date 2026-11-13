@@ -6,8 +6,8 @@ import { PanelEmpty } from "../../shell/PanelEmpty";
 import { Menu, type MenuItem } from "../../shell/Menu";
 import { InfoTip, useSettingTip } from "./InfoTip";
 import { Step } from "./MigrationStep.tsx";
-import type { StepState } from "./migration-page.ts";
-import { abbreviateHome } from "./migration-groups.ts";
+import type { StepState } from "./external-sources-page.ts";
+import { abbreviateHome } from "./display-format.ts";
 import {
   DEFAULT_SKILL_SCOPE,
   isSelectableSkill,
@@ -25,12 +25,16 @@ import { useT } from "../../locale.ts";
 const SKILLS_BEFORE_MORE = 8;
 
 /**
- * Migration 页第 3 步：Skills。按源目录分组（Proma 一个工作区一组），重名先到先得。
+ * 外部来源页第 2 步：Skills（从别的工具导入，配置复制一次就对）。按源目录分组（Proma 一个工作区一组），重名先到先得。
  * 段头一个 Copy / Link 开关管全部（默认 Copy，设计稿裁决 #6），两者的后果进悬停；
  * 每组一个作用域菜单（默认 All sessions，列头 Available in）。没有可导的组整行置灰，写明原因。
  */
 export function SkillsSection(props: {
+  /** 步骤编号（外部来源页上是第 2 步） */
+  n: number;
   state: StepState;
+  /** 段头最前面的扫描键（扫描在这一步发起，技能与 MCP 一起扫） */
+  scan: React.ReactNode;
   /** null = 还没扫描 */
   groups: readonly ImportSkillGroup[] | null;
   home: string;
@@ -54,15 +58,16 @@ export function SkillsSection(props: {
   const all = selectable.length > 0 && selectable.every((skill) => props.selected.has(skill.dir));
   return (
     <Step
-      n={3}
+      n={props.n}
       title={t.migration.stepSkills}
       state={props.state}
       summary={
         <InfoTip label={t.migration.aboutSkills}>{t.migration.aboutSkillsBody}</InfoTip>
       }
       tools={
-        selectable.length > 0 && (
-          <span className="mg-tools">
+        <span className="mg-tools">
+          {selectable.length > 0 && (
+            <>
             <span className="seg-control" role="group" aria-label={t.migration.skillModeAria}>
               {(["copy", "link"] as const).map((mode) => (
                 <ModeButton
@@ -78,8 +83,11 @@ export function SkillsSection(props: {
             <button type="button" className="mg-textbtn" disabled={props.disabled} onClick={() => props.onSet(selectable, !all)}>
               {all ? t.migration.clearAll : t.migration.selectAll}
             </button>
-          </span>
-        )
+            <span className="mg-sep" />
+            </>
+          )}
+          {props.scan}
+        </span>
       }
     >
       {props.groups === null ? (

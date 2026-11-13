@@ -46,6 +46,8 @@ export const FEATURE_ICON = {
   archived: "archive",
   /** 新手引导：设置页签 */
   guide: "graduation-cap",
+  /** 外部来源（别的工具里的聊天记录，只读）：设置页签 */
+  externalSources: "message-square-dashed",
   /** 设置 */
   settings: "settings",
   /** 通知（右栏铃铛与通知卡空态） */

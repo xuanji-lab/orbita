@@ -1112,3 +1112,47 @@
   color: var(--color-text-tertiary);
 }
 
+
+/* ===== 外部来源 · 别的工具里的聊天记录 =====
+ * 一个来源一行：名字 + 会话数，开关钉在行尾血线（.row-trailing）；下面一列数据目录。
+ * 行与行之间只靠内边距分开——不给每行套框、不画行间线（界面去 AI 味：每行一条线是
+ * 「每块都加线」的变体）；整张清单共用一个 .mg-block（与技能 / MCP 两步同一个容器）。
+ */
+.ext-list {
+  padding: var(--space-1) 0;
+}
+
+.ext-src {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-4);
+}
+
+.ext-src-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: var(--control-height-sm);
+}
+
+.ext-src[data-missing] .mg-name {
+  color: var(--color-text-tertiary);
+}
+
+.ext-paths {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ext-paths .mg-path-line[data-warn] {
+  color: var(--color-warning);
+}
+
+/* 路径行里的说明字（「找过」「手动添加」）：用界面字体，路径本身仍是 mono */
+.ext-note {
+  font-family: var(--font-family-base);
+}

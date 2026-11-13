@@ -11,6 +11,9 @@ import { zh } from "./messages-zh.ts";
  * 新增文案撞到这里时：先想能不能说成中文；确实是专名，再加进白名单并写明它属于哪一类。
  */
 const ALLOWED_LATIN = new Set([
+  // 外部来源页的产品名（别的 agent 工具）：OpenCode（大小写照官方）、Kimi Work（Kimi 的桌面应用）
+  "OpenCode",
+  "Work",
   // 文件格式 / 产品专名：演示文稿导出菜单「PowerPoint」（2026-11-07，slides.* 文案）
   "PowerPoint",
   // 新手引导「文档与演示」一章：文档的写法跟 Obsidian 一致（笔记应用的产品名）

@@ -1,6 +1,6 @@
 import { Icon, type IconName } from "../../shell/Icon";
 import { useSettingTip } from "./InfoTip";
-import type { StepState } from "./migration-page.ts";
+import type { StepState } from "./external-sources-page.ts";
 import { useT } from "../../locale.ts";
 
 /**

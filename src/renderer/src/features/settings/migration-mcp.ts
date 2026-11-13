@@ -2,7 +2,7 @@
  * Migration 页 MCP 一段的纯逻辑：默认勾选与出处的写法。`node --test` 直接测。
  */
 import type { ImportMcpItem, ImportMcpOrigin, ImportSourceId } from "@shared/import";
-import { abbreviateHome } from "./migration-groups.ts";
+import { abbreviateHome } from "./display-format.ts";
 import type { Messages } from "../../messages-en.ts";
 
 /** 能勾的：只有 new。 */
