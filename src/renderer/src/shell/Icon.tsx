@@ -21,6 +21,7 @@ import brain from "../../../../design-system/assets/icons/lucide/brain.svg?raw";
 import alarmClock from "../../../../design-system/assets/icons/lucide/alarm-clock.svg?raw";
 import clipboardList from "../../../../design-system/assets/icons/lucide/clipboard-list.svg?raw";
 import hourglass from "../../../../design-system/assets/icons/lucide/hourglass.svg?raw";
+import libraryBig from "../../../../design-system/assets/icons/lucide/library-big.svg?raw";
 import notebookText from "../../../../design-system/assets/icons/lucide/notebook-text.svg?raw";
 import brainCircuit from "../../../../design-system/assets/icons/lucide/brain-circuit.svg?raw";
 import calendarClock from "../../../../design-system/assets/icons/lucide/calendar-clock.svg?raw";
@@ -183,6 +184,7 @@ const ICONS = {
   "alarm-clock": alarmClock,
   "clipboard-list": clipboardList,
   hourglass,
+  "library-big": libraryBig,
   "notebook-text": notebookText,
   "brain-circuit": brainCircuit,
   "calendar-clock": calendarClock,

@@ -7,6 +7,7 @@ import type { PanelUsageKey } from "../../shared/panel-usage.ts";
 import { REVIEW_DIFF_MAX_BYTES, REVIEW_DIFF_MAX_LINES } from "../../shared/review.ts";
 import type { AutomationIntervalUnit } from "../../shared/automation.ts";
 import { enRevealLabel, enTrashName, type FileManagerKind } from "./file-manager.ts";
+import { builtinCommand } from "./features/chat/builtin-commands.ts";
 /**
  * 界面文案表——英文，**真源**。`messages-zh.ts` 的类型由这里推出（`Messages`），
  * 少一个键、参数签名不一致，typecheck 就不过。
@@ -2307,7 +2308,9 @@ export const en = {
     toolEdit: "Edit",
     toolList: "List",
     /** 本轮统计行里的工具名：英文就写真实工具名（bash 3 · read 5） */
-    rollupTool: (toolName: string) => (toolName === "update_plan" ? "plan" : toolName === "update_goal" ? "goal" : toolName),
+    // 内置命令有英文名的用英文名（Zotero 三条）；其余照旧显示工具 id
+    rollupTool: (toolName: string) =>
+      toolName === "update_plan" ? "plan" : toolName === "update_goal" ? "goal" : (builtinCommand(toolName)?.labelEn ?? toolName),
     openTaskCard: (title: string) => `Open "${title}"`,
     open: "Open",
     repliedSteer: (child: string) => `replied to ${child} · steer`,
