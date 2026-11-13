@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { ImportMcpItem } from "@shared/import";
-import { defaultMcpSelection, mcpCountBySource, mcpOriginLabel, mcpStatusLabel, selectedMcpNames } from "./migration-mcp.ts";
+import { defaultMcpSelection, mcpOriginLabel, mcpStatusLabel, selectedMcpNames } from "./migration-mcp.ts";
 import { en } from "../../messages-en.ts";
 
 function item(name: string, status: ImportMcpItem["status"], reason: string | null = null): ImportMcpItem {
@@ -27,7 +27,6 @@ describe("migration-mcp", () => {
         { source: "claude-code", where: null },
       ],
     };
-    assert.deepEqual(mcpCountBySource([shared, item("b", "new"), item("c", "in-orbita")]), { proma: 2, "claude-code": 1 });
   });
 
   test("出处：来源名去重，只在项目里配的写出项目", () => {

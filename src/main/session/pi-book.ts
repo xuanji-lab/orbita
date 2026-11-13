@@ -27,7 +27,7 @@ export const PI_BOOK_VERSION = 3;
 
 /**
  * 本子里除 header 外的一条 entry。只声明投影用得到的字段，其余按未知输入防御。
- * pi 的 SessionEntry 结构化满足它（导入器在退场前仍传 pi 的类型进来）。
+ * pi 的 SessionEntry 结构化满足它。
  */
 export interface PiBookEntry {
   type: string;

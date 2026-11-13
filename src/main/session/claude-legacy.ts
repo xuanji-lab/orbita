@@ -3,9 +3,8 @@
  *
  * 源格式（Proma 的 `agent-sessions/<id>.jsonl`，索引里 legacyTranscript.sourceRuntime === "claude"）
  * 本来就是 Anthropic Messages 风格（调研 2026-09-21 §六），所以这里的分层是三段：
- * **清洗（parseClaudeRows）→ pi Message 构造（claudeRowsToMessages）→ 灌入（importer.ts 侧
- * SessionManager.create + appendMessage）**。第二个平台（zcode/reasonix）进场时把前两段
- * 抽成「平台 adapter → 中间层」的共享模块；现在只留形不留壳。
+ * **清洗（parseClaudeRows）→ pi Message 构造（claudeRowsToMessages）→ 投影成只读记录**
+ * （external-adapters.ts 的 Proma adapter 调 pi-book.ts 的 messagesToRecords）。
  *
  * ## 源格式的真实形态（2026-09-22 全量 257 文件调研）
  *
@@ -159,20 +158,6 @@ export function parseClaudeRows(raw: string): ClaudeRowParse {
   return { rows, stats };
 }
 
-/** 扫描期的模型提取：最后一个 assistant 组的 model（索引缺 modelId 时的兜底，同 PR-1 语义）。 */
-export function lastModelFromRows(rows: readonly ClaudeMainRow[]): string | null {
-  let last: string | null = null;
-  for (const row of rows) {
-    if (row.type === "assistant" && row.model !== null) last = row.model;
-  }
-  return last;
-}
-
-/** 主对话里有没有 assistant 行（pi 只在有 assistant 消息时落盘文件——没有就不可续聊）。 */
-export function hasAssistantRow(rows: readonly ClaudeMainRow[]): boolean {
-  return rows.some((row) => row.type === "assistant");
-}
-
 // ---------------------------------------------------------------------------
 // 第二段：pi Message 构造
 // ---------------------------------------------------------------------------
@@ -249,7 +234,7 @@ export interface ClaudeMessageParse {
 /**
  * 第二段：清洗后的行 → pi Message 序列。
  *
- * providerId 由调用方注入（importer 侧模型映射的结果）——源格式没有可靠的 provider 字段
+ * providerId 由调用方注入（只读投影给占位 provider）——源格式没有可靠的 provider 字段
  * （_channelProvider 是渠道名，anthropic 渠道跑过 glm），模型 id 保留源文件原值。
  */
 export function claudeRowsToMessages(rows: readonly ClaudeMainRow[], providerId: string): ClaudeMessageParse {

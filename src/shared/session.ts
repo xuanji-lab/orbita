@@ -531,8 +531,9 @@ export interface SessionMeta {
    */
   recentQueries: string[];
   /**
-   * 从外部应用导入的会话才有的标记（Proma pi 同构导入，importer.ts）：
-   * `importedFrom` = 源 pi session 文件的绝对路径，**幂等键**——重复导入按它判重；
+   * 从外部应用导入的会话才有的标记（2026-11 之前的「迁移」导入；聊天记录导入已退场，外部会话
+   * 改为只读读取，源坐标不进 SessionMeta——见 main/session/external-session.ts）。老 meta 照旧带着：
+   * `importedFrom` = 源 pi session 文件的绝对路径（当年导入的幂等键）；用量统计按它排除导入会话；
    * `importedModel` = 源应用记录的原始模型 id（渠道名不可信，只有 id 值得留；
    * 映射结果就在 providerId/modelId，miss 兜底时这里保住「原本跑的是谁」）。
    * 非导入会话两个字段都缺省——不加 `imported: false` 这类反字段，缺席即否。

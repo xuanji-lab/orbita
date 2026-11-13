@@ -5,7 +5,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TranscriptItem } from "../../shared/transcript.ts";
@@ -131,7 +131,8 @@ test("被回退撤掉的轮不进（经 SessionStore.load 的生效视图）", a
     const first = user("留下的", 1000);
     const reverted = user("被撤回的说法", 2000);
     const redo = user("重说的", 3000);
-    await store.commitImported(meta, [
+    // 直接按 SessionStore 的落盘形状写 meta 与 transcript（<id>.meta.json + <id>.jsonl）
+    const records: SessionRecord[] = [
       first,
       assistant("答一", 1100),
       reverted,
@@ -139,7 +140,10 @@ test("被回退撤掉的轮不进（经 SessionStore.load 的生效视图）", a
       { role: "revert", id: "rv1", targetMessageId: reverted.id, restored: [], timestamp: 2500 },
       redo,
       assistant("答重说的", 3100),
-    ]);
+    ];
+    await mkdir(join(dir, "sessions"), { recursive: true });
+    await writeFile(join(dir, "sessions", `${id}.meta.json`), JSON.stringify(meta));
+    await writeFile(join(dir, "sessions", `${id}.jsonl`), `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
     const detail = await store.load(id);
     const turns = historyTurnsOf({}, detail!.transcript);
     assert.deepEqual(

@@ -167,8 +167,6 @@ export function ExternalSourcesView(props: {
     void api.import
       .run({
         sources: [...CONFIG_SOURCES],
-        sessions: [],
-        destinations: [],
         skills: selectedSkillDirs(scan.report.skills, skillSelected),
         skillMode,
         skillScopes: skillScopeChoices(skillScopes),

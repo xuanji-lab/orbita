@@ -307,28 +307,6 @@ export function parseClaudeCodeSession(raw: string): ClaudeCodeSession {
 }
 
 /**
- * 文件开头一段里第一条消息行的 uuid（判断「是不是某个文件的续接 / 分叉」用，不必整份解析）。
- * 最后一行可能被截断，解析失败的行跳过；这一段里没有消息行返回 null，调用方再读整份。
- */
-export function claudeCodeRootUuid(head: string): string | null {
-  for (const text of head.split("\n")) {
-    if (text.trim() === "") continue;
-    let obj: unknown;
-    try {
-      obj = JSON.parse(text);
-    } catch {
-      continue;
-    }
-    if (!isRecord(obj) || obj["isSidechain"] === true) continue;
-    if (obj["type"] !== "user" && obj["type"] !== "assistant") continue;
-    if (obj["isApiErrorMessage"] === true || obj["isCompactSummary"] === true || obj["isVisibleInTranscriptOnly"] === true) continue;
-    const uuid = optionalString(obj["uuid"]);
-    if (uuid !== null) return uuid;
-  }
-  return null;
-}
-
-/**
  * Claude 桌面应用的会话清单里的一条（`claude-code-sessions/<账户>/<组织>/local_*.json`）。
  * 桌面应用每次续接旧会话都另起一个 Claude Code 文件、把历史整段复制过去；清单只指向最新的那个，
  * 旧文件列在 priorCliSessionIds 里——界面上始终是一条会话。

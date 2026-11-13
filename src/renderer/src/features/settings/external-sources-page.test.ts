@@ -27,12 +27,6 @@ const source = (id: ExternalSourceInfo["id"], over: Partial<ExternalSourceInfo> 
 });
 
 const report = (over: Partial<ImportRunReport> = {}): ImportRunReport => ({
-  imported: 0,
-  updated: 0,
-  skipped: 0,
-  failed: [],
-  createdWorkspaces: [],
-  mergedWorkspaceIds: [],
   skillsImported: 0,
   skillsFailed: [],
   mcpImported: 0,

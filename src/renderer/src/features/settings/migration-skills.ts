@@ -41,15 +41,6 @@ export function countSelectedSkills(groups: readonly ImportSkillGroup[], selecte
   return selectedSkillDirs(groups, selected).length;
 }
 
-/** 各来源能导的 skill 数（来源行上的计数）。 */
-export function skillCountBySource(groups: readonly ImportSkillGroup[]): Partial<Record<ImportSourceId, number>> {
-  const counts: Partial<Record<ImportSourceId, number>> = {};
-  for (const group of groups) {
-    counts[group.source] = (counts[group.source] ?? 0) + selectableSkills(group).length;
-  }
-  return counts;
-}
-
 /** 组名：「Proma · 默认工作区」「Claude Code · synced」；来源只有一个目录时就是来源名。 */
 export function skillGroupLabel(group: ImportSkillGroup, t: Messages): string {
   const source = t.migration.sources[group.source];

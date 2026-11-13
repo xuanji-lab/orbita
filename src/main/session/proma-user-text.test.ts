@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { PiBookEntry } from "./pi-book.ts";
 import type { SessionRecord } from "../../shared/session.ts";
 import {
   decodePromaMentions,
@@ -66,14 +66,14 @@ describe("promaUserTexts", () => {
   });
 });
 
-function userEntry(id: string, content: unknown): SessionEntry {
+function userEntry(id: string, content: unknown): PiBookEntry {
   return {
     type: "message",
     id,
     parentId: null,
     timestamp: "2026-09-24T00:00:00.000Z",
     message: { role: "user", content, timestamp: 1 },
-  } as SessionEntry;
+  } as PiBookEntry;
 }
 
 describe("promaUserTextMap", () => {

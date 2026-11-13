@@ -15,18 +15,6 @@ export function defaultMcpSelection(items: readonly ImportMcpItem[]): Set<string
   return new Set(items.filter((item) => item.status === "new").map((item) => item.name));
 }
 
-/** 各来源能导的 server 数（来源行上的计数）：同名的多份在每个出处来源各计一次。 */
-export function mcpCountBySource(items: readonly ImportMcpItem[]): Partial<Record<ImportSourceId, number>> {
-  const counts: Partial<Record<ImportSourceId, number>> = {};
-  for (const item of items) {
-    if (!isSelectableMcp(item)) continue;
-    for (const source of new Set(item.origins.map((origin) => origin.source))) {
-      counts[source] = (counts[source] ?? 0) + 1;
-    }
-  }
-  return counts;
-}
-
 export function selectedMcpNames(items: readonly ImportMcpItem[], selected: ReadonlySet<string>): string[] {
   return items.filter((item) => item.status === "new" && selected.has(item.name)).map((item) => item.name);
 }

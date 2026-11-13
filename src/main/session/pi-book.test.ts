@@ -1,93 +1,95 @@
 /**
- * pi-book.ts 的测试：自有只读解析器与 pi 的实现逐条对账（testdata 的三份本机 Proma 真本子），
- * 加上翻译规则的边界。
+ * pi-book.ts 的测试：自有只读解析器对 testdata 的三份本机 Proma 真本子逐条对账，加上翻译规则的边界。
  *
- * 对照用 pi-coding-agent 自己的解析（parseSessionEntries → SessionManager.inMemory → getBranch）
- * 与此前只读路径的投影（SessionManager.inMemory + appendMessage）。导入器删除时这一段改成快照对照。
+ * 对账的另一侧原是 pi-coding-agent 自己的解析（parseSessionEntries → SessionManager.inMemory →
+ * getBranch）与此前只读路径的投影（SessionManager.inMemory + appendMessage）。导入器退场后主进程
+ * 不再依赖 coding-agent，对照改成快照：testdata/pi-book-snapshot.json 是 2026-11-14 用 pi 1.5.2
+ * 的实现跑出来的（entry 数、当前分支的 id 序列、记录的角色序列与整份记录的 sha256）。
+ * 本子格式 v3 已冻结，快照不该再变；变了先查是不是解析器改坏了。
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseSessionEntries, SessionManager, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { Message } from "@earendil-works/pi-ai";
 import type { SessionRecord } from "../../shared/session.ts";
 import { branchEntries, entriesToRecords, messagesToRecords, parsePiBook, type PiBookEntry } from "./pi-book.ts";
-import { withUserTexts } from "./proma-user-text.ts";
 
 const TESTDATA = join(dirname(fileURLToPath(import.meta.url)), "testdata");
+
+interface BookSnapshot {
+  entries: number;
+  branchIds: string[];
+  roles: string[];
+  recordsSha256: string;
+  projectedRoles: string[];
+  projectedSha256: string;
+}
 
 async function testdataBooks(): Promise<{ name: string; raw: string }[]> {
   const names = (await readdir(TESTDATA)).filter((name) => name.endsWith(".jsonl")).sort();
   return Promise.all(names.map(async (name) => ({ name, raw: await readFile(join(TESTDATA, name), "utf8") })));
 }
 
-/** pi 的当前分支（它自己的 buildSessionPath 走 getBranch）。 */
-function piBranch(raw: string): SessionEntry[] {
-  const fileEntries = parseSessionEntries(raw);
-  return SessionManager.inMemory("/tmp/pi-book-oracle", undefined, fileEntries).getBranch();
+async function snapshot(): Promise<Record<string, BookSnapshot>> {
+  return JSON.parse(await readFile(join(TESTDATA, "pi-book-snapshot.json"), "utf8")) as Record<string, BookSnapshot>;
 }
 
-/** 此前只读路径的投影：SessionManager.inMemory + appendMessage 逐条灌入（external-session 的 recordsOf）。 */
-function oldProjection(messages: readonly Message[], userDisplays: readonly (string | null)[]): SessionRecord[] {
-  const manager = SessionManager.inMemory("/tmp/pi-book-oracle");
-  const hidden = new Set<string>();
-  const texts = new Map<string, string>();
-  let userIndex = 0;
-  for (const message of messages) {
-    const id = manager.appendMessage(message);
-    if (message.role !== "user") continue;
-    const display = userDisplays[userIndex] ?? null;
-    userIndex += 1;
-    if (display === null) hidden.add(id);
-    else texts.set(id, display);
-  }
-  const records = entriesToRecords(branchEntries(manager.getEntries())).filter(
-    (record) => record.role !== "user" || !hidden.has(record.id),
-  );
-  return withUserTexts(records, texts);
-}
+const sha256 = (value: unknown): string => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
 /** 两份记录比内容：id 是各自铸的，换成序号再比。 */
-function withoutIds(records: readonly SessionRecord[]): unknown[] {
-  return records.map((record, index) => ({ ...record, id: index }));
+function withoutIds(records: readonly SessionRecord[]): SessionRecord[] {
+  return records.map((record, index) => ({ ...record, id: index }) as unknown as SessionRecord);
 }
 
-describe("与 pi 的实现逐条对账（testdata 的三份真实本子）", () => {
-  test("解析：header、entry 列表与当前分支和 pi 一致", async () => {
+describe("与 pi 的实现逐条对账（testdata 的三份真实本子，pi 1.5.2 跑出的快照）", () => {
+  test("解析与当前分支：entry 数、分支 id 序列与 pi 一致", async () => {
     const books = await testdataBooks();
+    const expected = await snapshot();
     assert.equal(books.length, 3);
     for (const { name, raw } of books) {
       const book = parsePiBook(raw);
-      const piEntries = parseSessionEntries(raw).filter((entry) => entry.type !== "session");
-      assert.deepEqual(book.entries, piEntries, name);
       assert.equal(book.header.version, 3, name);
+      assert.equal(book.entries.length, expected[name]?.entries, name);
       assert.deepEqual(
         branchEntries(book.entries).map((entry) => entry.id),
-        piBranch(raw).map((entry) => entry.id),
+        expected[name]?.branchIds,
         name,
       );
     }
   });
 
-  test("投影：记录与 pi 当前分支投出的逐条相等", async () => {
+  test("投影：记录与 pi 当前分支投出的逐条相等（角色序列 + 整份 sha256）", async () => {
+    const expected = await snapshot();
     for (const { name, raw } of await testdataBooks()) {
       const ours = entriesToRecords(branchEntries(parsePiBook(raw).entries));
-      const theirs = entriesToRecords(piBranch(raw));
       assert.ok(ours.length > 20, name);
-      assert.deepEqual(ours, theirs, name);
+      assert.deepEqual(
+        ours.map((record) => record.role),
+        expected[name]?.roles,
+        name,
+      );
+      assert.equal(sha256(ours), expected[name]?.recordsSha256, name);
     }
   });
 
   test("Message[] 投影：messagesToRecords 与此前的 SessionManager.inMemory 投影逐条相等（id 除外）", async () => {
+    const expected = await snapshot();
     for (const { name, raw } of await testdataBooks()) {
-      const messages = piBranch(raw).flatMap((entry) => (entry.type === "message" ? [entry.message as Message] : []));
+      const branch = branchEntries(parsePiBook(raw).entries);
+      const messages = branch.flatMap((entry) => (entry.type === "message" ? [entry.message as Message] : []));
       // 用户原文：第一条藏起来（注入），其余给一句原文——两条路径的隐藏与替换都要对上
       const users = messages.filter((message) => message.role === "user").length;
       const displays = Array.from({ length: users }, (_, index) => (index === 0 ? null : `原文 ${index}`));
       const ours = messagesToRecords(messages, displays);
-      assert.deepEqual(withoutIds(ours), withoutIds(oldProjection(messages, displays)), name);
+      assert.deepEqual(
+        ours.map((record) => record.role),
+        expected[name]?.projectedRoles,
+        name,
+      );
+      assert.equal(sha256(withoutIds(ours)), expected[name]?.projectedSha256, name);
       // 稳定 id：同一份输入两次读出同样的记录
       assert.deepEqual(messagesToRecords(messages, displays), ours, name);
     }
@@ -108,7 +110,11 @@ describe("与 pi 的实现逐条对账（testdata 的三份真实本子）", () 
         ["v1-1", "v1-0"],
       ],
     );
-    assert.deepEqual(withoutIds(entriesToRecords(branchEntries(book.entries))), withoutIds(entriesToRecords(piBranch(v1))));
+    // pi 迁移后的 v1 本子同样是一条直链（id 是它随机铸的）：投出一问一答
+    assert.deepEqual(
+      entriesToRecords(branchEntries(book.entries)).map((record) => record.role),
+      ["user", "assistant"],
+    );
 
     const v2 = [
       JSON.stringify({ type: "session", version: 2, id: "s", timestamp: "2026-01-01T00:00:00.000Z", cwd: "/w" }),

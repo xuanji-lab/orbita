@@ -1,7 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  claudeCodeRootUuid,
   claudeCodeUserText,
   parseClaudeCodeSession,
   parseClaudeDesktopSession,
@@ -218,19 +217,6 @@ describe("claudeCodeUserText", () => {
 
   test("用户自己写的标签原样保留", () => {
     assert.equal(claudeCodeUserText("<!-- reply -->\n> 引用\n\n回复"), "<!-- reply -->\n> 引用\n\n回复");
-  });
-});
-
-describe("claudeCodeRootUuid", () => {
-  test("跳过 sidechain 与非消息行；截断的末行不炸", () => {
-    const head = [
-      JSON.stringify({ type: "mode", mode: "default" }),
-      user("w1", null, "Warmup", { isSidechain: true }),
-      user("u1", null, "hi"),
-      '{"type":"assistant","uuid":"a1"',
-    ].join("\n");
-    assert.equal(claudeCodeRootUuid(head), "u1");
-    assert.equal(claudeCodeRootUuid(JSON.stringify({ type: "mode" })), null);
   });
 });
 

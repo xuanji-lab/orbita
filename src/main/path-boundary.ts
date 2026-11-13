@@ -7,7 +7,7 @@
  *
  * 调用方：审查面板的 git 来源（review/git-source.ts，renderer 传来的相对路径）、
  * 文件面板的白名单（files/list.ts）、内置浏览器的本地网页闸（browser/local-file.ts）、
- * 会话导入（session/importer.ts，索引里记的源文件路径）。
+ * 外部会话只读（session/external-adapters.ts，Proma 索引里记的源文件路径不得越出数据目录）。
  */
 import { realpath as fsRealpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";

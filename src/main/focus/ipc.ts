@@ -4,7 +4,7 @@
  * 三个通道：U / M 走 git-source 的同一套只读 runner（不另起一套 git 调用），
  * 系统通知是 Electron 的 Notification（renderer sandbox 里没有），收工小结把
  * 主进程归拢的素材交给 agent 进程里的家务活模型（独立小调用，同
- * classifyGreetings 的通道）。路径策略在主进程：renderer 只传 workspaceId，
+ * summarizeFocus 的通道）。路径策略在主进程：renderer 只传 workspaceId，
  * 路径由 WorkspaceStore 解——不信 renderer 传来的任何路径。
  * 另有一条单向广播：powerMonitor 的 suspend → focus:suspend（睡眠即结束专注）。
  */

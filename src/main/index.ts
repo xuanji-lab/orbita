@@ -1189,21 +1189,9 @@ void app.whenReady().then(async () => {
     workspaceRoot: async (id) => (await workspaces.list()).find((workspace) => workspace.id === id)?.path ?? null,
   });
   registerExternalSourcesIpc(externalSessions, customRoots, settings);
-  // 迁移（设置 › Migration）：扫描/执行都在主进程，agent 进程不参与；skills 落进上面这个中心存储
-  registerImportIpc(
-    sessions,
-    workspaces,
-    providers,
-    settings,
-    join(configDir, "pi-sessions"),
-    join(configDir, "imports.jsonl"),
-    customRoots,
-    skills,
-    mcp,
-    async () => agentHost.mcpReload(),
-    async (model, messages) =>
-      agentHost.classifyGreetings(await resolveProviderSecrets(providers, model.providerId), model.modelId, messages),
-  );
+  // 设置 › 外部来源：技能 / MCP 的扫描与导入、自定义数据目录（都在主进程，agent 进程不参与）
+  registerImportIpc(workspaces, customRoots, skills, mcp, async () => agentHost.mcpReload());
+
   // Home（工作区缺席时 agent 的落脚点）先建出来，同 skills.ensureDirs 的处理：
   // 建不出来不拦启动，但要留日志——不然一个权限坏掉的 ~/Orbita 会表现成
   // 「Home 任务的文件写不进去」，那是最难查的一类

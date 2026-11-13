@@ -5,7 +5,6 @@ import {
   countSelectedSkills,
   defaultSkillSelection,
   selectedSkillDirs,
-  skillCountBySource,
   skillGroupLabel,
   skillGroupNote,
   skillScopeChoices,
@@ -42,7 +41,6 @@ describe("migration-skills", () => {
     selected.add("/a/archify");
     assert.deepEqual(selectedSkillDirs(groups, selected), ["/p/archify", "/p/docx", "/a/tabbit"]);
     assert.equal(countSelectedSkills(groups, selected), 3);
-    assert.deepEqual(skillCountBySource(groups), { proma: 2, "agent-skills": 1, "claude-code": 0 });
   });
 
   test("组名与说明：能导几个、其余为什么不导；全都不可导时一句话说原因", () => {

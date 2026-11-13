@@ -53,7 +53,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** 空串与缺席同为 null（与 importer.ts 的 optionalString 同一纪律——空 workspace_root 落 defaultCwd，不能落到进程 cwd）。 */
+/** 空串与缺席同为 null（与各解析器的 optionalString 同一纪律——空 workspace_root 落 defaultCwd，不能落到进程 cwd）。 */
 function optionalString(value: unknown): string | null {
   return typeof value === "string" && value !== "" ? value : null;
 }
@@ -142,45 +142,6 @@ export async function readReasonixMeta(file: string): Promise<ReasonixMeta | nul
     createdAt: isoMs(parsed["created_at"]),
     updatedAt: isoMs(parsed["updated_at"]),
   };
-}
-
-/**
- * 列出迁移源里的全部会话文件（projects/<项目>/sessions/ 一层一层走）。根不在（没装
- * Reasonix）返回空；某个项目下没有 sessions/ 也跳过（记账上的缺，不值得拦整批）。
- * 文件多、meta 小，一个项目的文件串行读 meta 也够快；整体交给调用方的进度提示。
- */
-export async function listReasonixSessions(projectsRoot: string): Promise<ReasonixSessionFile[]> {
-  const out: ReasonixSessionFile[] = [];
-  let projects: string[];
-  try {
-    projects = await readdir(projectsRoot);
-  } catch (cause) {
-    if (isNotFound(cause)) return out;
-    throw cause;
-  }
-  for (const project of projects) {
-    const sessionsDir = join(projectsRoot, project, "sessions");
-    let names: string[];
-    try {
-      names = await readdir(sessionsDir);
-    } catch (cause) {
-      if (isNotFound(cause)) continue;
-      throw cause;
-    }
-    for (const name of names) {
-      if (!isReasonixConversationFile(name)) continue;
-      const file = join(sessionsDir, name);
-      let bytes = 0;
-      try {
-        bytes = (await stat(file)).size;
-      } catch (cause) {
-        if (isNotFound(cause)) continue;
-        throw cause;
-      }
-      out.push({ file, meta: await readReasonixMeta(file), bytes });
-    }
-  }
-  return out;
 }
 
 // ---------------------------------------------------------------------------

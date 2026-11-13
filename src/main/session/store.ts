@@ -162,7 +162,7 @@ export function branchRoles(records: readonly SessionRecord[]): ("user" | "assis
  * UI 显示「未知」。前缀里没有任何带 usage 的回答（旧会话、纯提问、usage 缺席）
  * 返回 null（meta.stats 无账本）。
  */
-export function aggregatePrefixUsage(records: readonly SessionRecord[]): AgentStats | null {
+function aggregatePrefixUsage(records: readonly SessionRecord[]): AgentStats | null {
   let input = 0;
   let output = 0;
   let cacheRead = 0;
@@ -847,47 +847,6 @@ export class SessionStore {
         `${plan.records.map((record) => JSON.stringify(record)).join("\n")}\n`,
       );
     }
-  }
-
-  /**
-   * 导入落盘：一份现成的 meta + 整份 transcript（Proma pi 同构导入，importer.ts）。
-   * 与 commitBranch 同形状（meta + 全量 JSONL 原子写），不复用它是因为 BranchPlan
-   * 的形状是分支语义（roles/piSessionFile 占位）；两处耦合会把「分支的落盘约束」
-   * 泄进导入。id 由导入器铸（randomUUID），此处不重复校验存在性——同 id 撞库
-   * 概率为零，导入是离线批处理，不值得为它排写入链。
-   */
-  async commitImported(meta: SessionMeta, records: readonly SessionRecord[]): Promise<void> {
-    await mkdir(this.dir, { recursive: true });
-    await writeJsonAtomic(this.metaPath(meta.id), meta);
-    if (records.length > 0) {
-      await writeTextAtomic(
-        this.logPath(meta.id),
-        `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
-      );
-    }
-  }
-
-  /**
-   * 再次导入的追加落盘（importer.ts 的 updated 条目）：Proma 里有新消息、orbita 这边没接着聊的
-   * 会话，整份 transcript 换成从新源派生的（旧记录 id 由 entry id 派生，换完仍是同一批 id），
-   * meta 只动派生字段——标题、置顶、星标、归档、工作区、模型都是 orbita 这边的，不被源覆盖。
-   *
-   * **排进这条会话的写入链**：同一时刻 record() 可能在往日志里追加，不排队就会互相覆盖。
-   * 链内先确认 meta 还在：扫描与执行之间会话可能刚被删掉，这时不该把它写回来。
-   * transcript 先写、meta 后写：中间崩了留下的是「内容新、列表时间旧」，下次重扫它已与源
-   * 一致（pi 副本在调用方就换好了），只是卡片的最近提问晚一拍——可见且无害。
-   */
-  commitImportUpdate(
-    id: string,
-    records: readonly SessionRecord[],
-    patch: Pick<SessionMeta, "recentQueries" | "stats" | "updatedAt">,
-  ): Promise<void> {
-    return this.queueMeta(id, async () => {
-      const current = await this.readMeta(id);
-      if (current === null) throw new Error("the session was deleted before the update landed");
-      await writeTextAtomic(this.logPath(id), `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
-      await writeJsonAtomic(this.metaPath(id), { ...current, ...patch });
-    });
   }
 
   /**
