@@ -449,6 +449,17 @@ export const zh: Messages = {
       idleTitle: "没有进行中的自动化",
       idleBody: "结束了的收在下面的「已结束」里。可以新建一个，或在详情里重新启动已结束的。",
     },
+    guard: {
+      title: (total) => (total === 1 ? "自动化记录被应用之外的程序动过" : `自动化记录被应用之外的程序动过（${total} 次）`),
+      what: {
+        missing: (file, records) => `${file} 不见了，已按应用里的记录恢复（${records} 条）。`,
+        changed: (file, records, backup) => `${file} 被改过，已按应用里的记录恢复（${records} 条）；被改的那份留成 ${backup}。`,
+        coldMissing: (file) => `存放更早已结束记录的 ${file} 不见了，没有重建。`,
+        coldChanged: (file) => `存放更早已结束记录的 ${file} 被改动过，没有动它。`,
+        dataDirReplaced: (records) => `数据目录被改名或删除过，自动化记录已写回（${records} 条）；会话、设置等其它数据没有恢复。`,
+      },
+      dismiss: "知道了",
+    },
     finished: {
       title: (count) => `已结束（${count}）`,
       note: (keep) => `已结束的自动归档在这里，不占自动化名额。这里列最近 ${keep} 条，更早的仍保存在文件里。重新启动会让它回到进行中。`,

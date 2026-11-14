@@ -15,13 +15,22 @@ import { useT } from "../../locale.ts";
 import type { ProviderDto } from "@shared/provider";
 import type { SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
-import { AUTOMATION_ARCHIVE_KEEP, automationWorkspaceId, isFinished, type Automation, type AutomationAction } from "../../../../shared/automation.ts";
+import {
+  AUTOMATION_ARCHIVE_KEEP,
+  automationWorkspaceId,
+  isFinished,
+  type Automation,
+  type AutomationAction,
+  type AutomationGuardEvent,
+} from "../../../../shared/automation.ts";
 import { AutomationDetailView } from "./AutomationDetailView";
 import { AutomationEditView, type AutomationSeed } from "./AutomationEditView";
 import { AutomationRow } from "./AutomationRow";
 import {
   AUTOMATION_TEMPLATES,
+  formatWhen,
   groupAutomations,
+  type AutomationMessages,
   splitFinished,
   type AutomationGroup,
   type AutomationScope,
@@ -310,6 +319,10 @@ export function AutomationPanel(props: {
         {scope === "workspace" && <span className="auto-scope-name">{workspaceName}</span>}
       </div>
 
+      {state.archive !== null && state.archive.alerts.length > 0 && (
+        <GuardNotice alerts={state.archive.alerts} total={state.archive.alertsTotal} now={now} onDismiss={() => void state.ackAlerts()} />
+      )}
+
       {error !== null && (
         <div style={{ padding: "var(--space-1) var(--space-3)" }}>
           <PanelLine danger>{a.actionFailed(error)}</PanelLine>
@@ -375,6 +388,46 @@ export function AutomationPanel(props: {
       )}
     </RightPanelFrame>
   );
+}
+
+/**
+ * 记录文件被应用之外的力量动过：面板顶上一条可关闭的提示。说最近一次发生了什么、做了什么，
+ * 「知道了」只是收起提示（事件仍留在事件文件里）。主进程已经按内存写回，这里只告知。
+ */
+function GuardNotice(props: { alerts: readonly AutomationGuardEvent[]; total: number; now: number; onDismiss: () => void }) {
+  const a = useT().automation;
+  const latest = props.alerts[0];
+  if (latest === undefined) return null;
+  return (
+    <div className="auto-guard" role="alert">
+      <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
+      <div className="auto-guard-text">
+        <strong>{a.guard.title(props.total)}</strong>
+        <span>
+          {formatWhen(latest.at, props.now, a)} · {guardWhat(a.guard.what, latest)}
+        </span>
+      </div>
+      <button type="button" className="auto-btn" onClick={props.onDismiss}>
+        {a.guard.dismiss}
+      </button>
+    </div>
+  );
+}
+
+function guardWhat(what: AutomationMessages["guard"]["what"], event: AutomationGuardEvent): string {
+  const records = event.records ?? 0;
+  switch (event.kind) {
+    case "missing":
+      return what.missing(event.file, records);
+    case "changed":
+      return what.changed(event.file, records, event.backup ?? "");
+    case "coldMissing":
+      return what.coldMissing(event.file);
+    case "coldChanged":
+      return what.coldChanged(event.file);
+    case "dataDirReplaced":
+      return what.dataDirReplaced(records);
+  }
 }
 
 /** 正在编辑的那条自动化已经不在了：一帧空页后回列表（effect 里切视图，避免渲染期 setState） */

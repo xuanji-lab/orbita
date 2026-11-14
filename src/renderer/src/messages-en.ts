@@ -526,6 +526,21 @@ export const en = {
       idleTitle: "Nothing in progress",
       idleBody: "Finished automations are kept below. Create a new one, or restart a finished one from its details.",
     },
+    /** 记录文件被应用之外的力量动过（智能体的命令、手改、改数据目录名……）：主进程已按内存写回，面板顶上提示一行 */
+    guard: {
+      title: (total: number) => (total === 1 ? "Automation records were changed outside Orbita" : `Automation records were changed outside Orbita (${total} times)`),
+      /** 最近一次发生了什么、做了什么（按事件种类取一句） */
+      what: {
+        missing: (file: string, records: number) => `${file} was missing. Restored from what Orbita had (${records} records).`,
+        changed: (file: string, records: number, backup: string) =>
+          `${file} was edited. Restored from what Orbita had (${records} records); the edited copy is kept as ${backup}.`,
+        coldMissing: (file: string) => `${file}, which holds the older finished records, is missing. It was not recreated.`,
+        coldChanged: (file: string) => `${file}, which holds the older finished records, was modified. It was left as it is.`,
+        dataDirReplaced: (records: number) =>
+          `The data folder was renamed or deleted. Automation records were written back (${records} records); other data such as sessions and settings was not.`,
+      },
+      dismiss: "Got it",
+    },
     /** 默认折叠的「已结束」段：已结束的自动归档、不占 20 条名额 */
     finished: {
       title: (count: number) => `Finished (${count})`,

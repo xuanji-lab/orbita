@@ -22,6 +22,8 @@ export interface AutomationsState {
   archive: AutomationArchiveInfo | null;
   load: AutomationsLoad;
   reload: () => void;
+  /** 用户点了「知道了」：记录文件被动过的提示收起（事件仍留在事件文件里） */
+  ackAlerts: () => Promise<void>;
   create: (input: AutomationCreateInput) => Promise<AutomationOutcome>;
   update: (id: string, patch: AutomationPatch) => Promise<AutomationOutcome>;
   act: (id: string, action: AutomationAction) => Promise<AutomationOutcome>;
@@ -75,9 +77,17 @@ export function useAutomations(): AutomationsState {
       return { ok: false, error: messageOf(cause) };
     }
   }, []);
+  const ackAlerts = useCallback(async (): Promise<void> => {
+    try {
+      await api.automation.ackAlerts();
+    } catch (cause) {
+      console.error("[automation] 确认篡改提示失败", cause);
+    }
+    reload();
+  }, [reload]);
   const create = useCallback((input: AutomationCreateInput) => guard(() => api.automation.create(input)), [guard]);
   const update = useCallback((id: string, patch: AutomationPatch) => guard(() => api.automation.update(id, patch)), [guard]);
   const act = useCallback((id: string, action: AutomationAction) => guard(() => api.automation.act(id, action)), [guard]);
 
-  return { automations, archive, load, reload, create, update, act };
+  return { automations, archive, load, reload, ackAlerts, create, update, act };
 }
