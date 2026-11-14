@@ -174,6 +174,64 @@ export function unwrapHarnessError(call: { name: string }, result: ToolExecution
   return undefined;
 }
 
+/**
+ * 计划闸门的「按调用顺序」包装。旧内核里 pi 在执行前**按调用顺序**逐个过 tool_call 钩子：一批里 update_plan 决定停，
+ * 排在它后面的调用被拦、排在它前面的不受影响，下一批（同一轮里模型若还调工具）照样被拦。durable 把一批的工具任务
+ * 一起建、并发跑，beforeTool 的先后不保证。所以不靠钩子的先后：每次判定都把这一批里排在本调用之前的调用按顺序
+ * 重放一遍**同一个** createPlanGate（它对 update_plan 只改 stopping、不拦；对别的只读 stopping），起点是上一批全部
+ * 重放完的状态。重放是确定的：同一批的调用、同一份叶子路径，算出来的 stopping 与旧内核按序判的一致。
+ */
+export class PlanRoundGate {
+  private readonly gate: (event: ToolCallLike) => { block: true; reason: string } | null;
+  private readonly state: { stopping: boolean };
+  private roundKey: string | undefined;
+  private roundStart = false;
+  private roundCalls: ToolCallLike[] = [];
+
+  constructor(gate: (event: ToolCallLike) => { block: true; reason: string } | null, state: { stopping: boolean }) {
+    this.gate = gate;
+    this.state = state;
+  }
+
+  check(event: ToolCallLike, branch: readonly unknown[]): { block: true; reason: string } | null {
+    const round = findRound(branch, event.toolCallId);
+    if (round === null) return this.gate(event);
+    if (round.key !== this.roundKey) {
+      // 新的一批开始：上一批已全部结束，把它按顺序完整重放一遍得到它结束时的状态，作为这一批的起点
+      if (this.roundKey !== undefined) {
+        this.state.stopping = this.roundStart;
+        for (const call of this.roundCalls) this.gate(call);
+      }
+      this.roundKey = round.key;
+      this.roundStart = this.state.stopping;
+      this.roundCalls = round.calls;
+    }
+    this.state.stopping = this.roundStart;
+    for (const call of round.calls) {
+      if (call.toolCallId === event.toolCallId) break;
+      this.gate(call);
+    }
+    return this.gate(event);
+  }
+}
+
+/** 叶子路径里含这个调用的那条 assistant 消息：它的 id 与全部调用（按调用顺序） */
+function findRound(branch: readonly unknown[], callId: string): { key: string; calls: ToolCallLike[] } | null {
+  for (let index = branch.length - 1; index >= 0; index--) {
+    const entry = branch[index] as { id?: unknown; message?: { role?: unknown; content?: unknown } };
+    if (entry.message?.role !== "assistant" || !Array.isArray(entry.message.content)) continue;
+    const calls = (entry.message.content as { type?: unknown; id?: unknown; name?: unknown; arguments?: unknown }[])
+      .filter((block) => block.type === "toolCall" && typeof block.id === "string" && typeof block.name === "string")
+      .map((block) => ({
+        toolCallId: block.id as string,
+        toolName: block.name as string,
+        input: (typeof block.arguments === "object" && block.arguments !== null ? block.arguments : {}) as Record<string, unknown>,
+      }));
+    if (calls.some((call) => call.toolCallId === callId)) return { key: String(entry.id ?? index), calls };
+  }
+  return null;
+}
+
 /** 这一轮装进 durable 的东西（测试直接看它） */
 export interface AssembledTurn {
   extension: Extension;
@@ -205,7 +263,7 @@ export async function assembleTurn(
     branch: () => branch.entries,
     state: { stopping: false },
   };
-  const planGate = createPlanGate(planOptions);
+  const planGate = new PlanRoundGate(createPlanGate(planOptions), planOptions.state);
   // MCP：与旧内核同一个 hub 语义（按工作区分片、ensure 幂等、连不上不拦开轮）
   const mcpScope = command.workspaceId ?? "";
   await runtime.mcpHub.ensure(mcpScope, command.mcpServers, command.workspaceId === null ? "" : command.cwd);
@@ -281,7 +339,7 @@ export async function assembleTurn(
           // 闸门原地改入参（超时下限、用户在审批里改的参数）：给它一份拷贝，改了就回传新参数
           const input = JSON.parse(JSON.stringify(call.arguments)) as Record<string, unknown>;
           const event: ToolCallLike = { toolCallId: call.id, toolName: call.name, input };
-          const held = planGate(event);
+          const held = planGate.check(event, branch.entries);
           if (held !== null) return held.block === true ? { block: held.reason ?? "" } : undefined;
           const gate = createToolCallGate(
             currentMode,

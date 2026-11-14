@@ -4,14 +4,15 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { Api, Model, Tool, ToolResultMessage } from "@earendil-works/pi-ai";
+import type { Api, Message, Model, Tool, ToolResultMessage } from "@earendil-works/pi-ai";
 import { toToolDeclaration } from "@earendil-works/pi-ai/utils/transcript";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
 import { createRegistry, Harness, MemoryStorage, ToolResultEntry, type Conversation } from "@earendil-works/pi-durable";
 import type { AgentCommand, AgentEvent } from "../shared/agent-ipc.ts";
 import type { KernelTurnCommand } from "../shared/kernel.ts";
-import { assembleTurn, PermissionWaiter, runTurn, unwrapHarnessError, type KernelTurnRuntime } from "./kernel-turn.ts";
+import { assembleTurn, PermissionWaiter, PlanRoundGate, previousTools, runTurn, unwrapHarnessError, type KernelTurnRuntime } from "./kernel-turn.ts";
+import { createPlanGate } from "./plan-tools.ts";
 import { toDurableTool } from "./durable-tools.ts";
 import { deflateSync } from "node:zlib";
 import { TurnWire } from "./kernel-wire.ts";
@@ -175,6 +176,9 @@ describe("kernel-turn：新内核跑一轮带工具的对话", () => {
     const target2 = { registry, conversation: target, model: MODEL, providerSessionId: "p1" };
     const wire = await TurnWire.open(target, join(cwd, ".att"), BACKGROUND_CONTEXT);
     const fresh = await assembleTurn(command(cwd), runtime([]), target2, [], wire, 1);
+    // 新会话的全序：内建七件（ENABLED_BUILTIN_TOOLS 的顺序，与旧内核 defaultTools 同一份）在前，共用清单接后（黄金名单见 turn-tools.test.ts）
+    assert.deepEqual(fresh.toolNames.slice(0, 7), ["bash", "edit", "find", "grep", "ls", "read", "write"]);
+    assert.deepEqual(fresh.toolNames, fresh.activeNames);
     const declaration = (name: string): Tool => {
       const tool = fresh.extension.tools?.find((candidate) => candidate.name === name);
       assert.ok(tool !== undefined);
@@ -287,5 +291,71 @@ describe("kernel-turn：等审批时不挡别的会话", () => {
     assert.deepEqual(await turnA, { status: "done" });
     assert.equal(await readFile(join(cwd, "a.txt"), "utf8"), "A");
     await harness.close(BACKGROUND_CONTEXT);
+  });
+});
+
+describe("kernel-turn：计划展示后这一轮其余调用被拦（新内核的 plan gate）", () => {
+  it("「先给我看计划」：同一批里 update_plan 之后的 read 不执行，结果是旧内核的那句拦截语；下一轮复位", async () => {
+    const cwd = await tempDir();
+    await writeFile(join(cwd, "note.txt"), "secret\n");
+    faux.setResponses([
+      fauxAssistantMessage(
+        [fauxToolCall("update_plan", { items: [{ text: "读文件", status: "in_progress" }] }), fauxToolCall("read", { path: "note.txt" })],
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("这是计划"),
+      fauxAssistantMessage(fauxToolCall("read", { path: "note.txt" }), { stopReason: "toolUse" }),
+      fauxAssistantMessage("读完了"),
+    ]);
+    const { harness, registry, conversation: target } = await conversation();
+    const target2 = { registry, conversation: target, model: MODEL, providerSessionId: "p1" };
+    await runTurn(command(cwd, { planFirst: true }), runtime([]), target2, COMPACTION);
+    const first = new Map((await toolResults(target)).map((result) => [result.toolName, result]));
+    assert.match(text(first.get("update_plan") as ToolResultMessage), /Plan updated/);
+    assert.match(text(first.get("read") as ToolResultMessage), /^Not run: the plan is shown to the user/);
+    // 下一轮：计划已在（不再是新计划），read 照常执行
+    await runTurn(command(cwd, { planFirst: true, text: "go" }), runtime([]), target2, COMPACTION);
+    const reads = (await toolResults(target)).filter((result) => result.toolName === "read");
+    assert.match(text(reads.at(-1) as ToolResultMessage), /secret/);
+    await harness.close(BACKGROUND_CONTEXT);
+  });
+});
+
+describe("PlanRoundGate：计划闸门的判定不随钩子先后变", () => {
+  const plan = { items: [{ text: "a", status: "in_progress" }] };
+  const roundWith = (calls: [string, string, Record<string, unknown>][]) => [
+    { type: "message", id: "e1", message: { role: "assistant", content: calls.map(([id, name, args]) => ({ type: "toolCall", id, name, arguments: args })) } },
+  ];
+  const gateFor = (state: { stopping: boolean }) =>
+    new PlanRoundGate(createPlanGate({ getMode: () => "skip", planFirst: true, branch: () => [], state }), state);
+
+  it("update_plan 在前：后面的调用被拦，不管谁的钩子先跑", () => {
+    const branch = roundWith([["c1", "update_plan", plan], ["c2", "read", { path: "x" }]]);
+    const state = { stopping: false };
+    const gate = gateFor(state);
+    // 故意先判 read、后判 update_plan（durable 并发跑一批时可能发生）
+    assert.match(gate.check({ toolCallId: "c2", toolName: "read", input: { path: "x" } }, branch)?.reason ?? "", /^Not run/);
+    assert.equal(gate.check({ toolCallId: "c1", toolName: "update_plan", input: plan }, branch), null);
+  });
+
+  it("update_plan 在后：排在它前面的调用不受影响；下一批全部被拦", () => {
+    const branch = roundWith([["c1", "read", { path: "x" }], ["c2", "update_plan", plan]]);
+    const state = { stopping: false };
+    const gate = gateFor(state);
+    assert.equal(gate.check({ toolCallId: "c2", toolName: "update_plan", input: plan }, branch), null);
+    assert.equal(gate.check({ toolCallId: "c1", toolName: "read", input: { path: "x" } }, branch), null);
+    const next = [...branch, { type: "message", id: "e2", message: { role: "assistant", content: [{ type: "toolCall", id: "c3", name: "bash", arguments: { command: "ls" } }] } }];
+    assert.match(gate.check({ toolCallId: "c3", toolName: "bash", input: { command: "ls" } }, next)?.reason ?? "", /^Not run/);
+  });
+});
+
+describe("previousTools：模型此前看到的工具声明从哪来", () => {
+  const decl = (name: string): Tool => ({ name, description: name, parameters: { type: "object", properties: {} } }) as Tool;
+  it("刚迁来、新内核还没发过请求：用迁移时从旧本子带来的那份", () => {
+    assert.deepEqual(previousTools([], { legacyTools: [decl("read"), decl("terminal_open")] }).map((tool) => tool.name), ["read", "terminal_open"]);
+  });
+  it("新内核自己发过请求后：用会话自己的 pi.system 回放，不再看迁移带来的", () => {
+    const own = [{ role: "system", content: "", toolsAdded: [decl("bash")], timestamp: 1 }] as Message[];
+    assert.deepEqual(previousTools(own, { legacyTools: [decl("read")] }).map((tool) => tool.name), ["bash"]);
   });
 });
