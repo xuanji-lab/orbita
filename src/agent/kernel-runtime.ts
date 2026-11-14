@@ -3,9 +3,10 @@
  * （electron.vite.config 的 main 多入口）。**薄壳**：库池与迁移在 kernel.ts / legacy-migrate.ts
  * （纯模块，`node --test` 直接测），这里只管 parentPort 收发与模型目录。
  *
- * 只在开发开关 ORBITA_DURABLE_KERNEL=1 时由主进程拉起（main/agent/kernel-host.ts）；开关关着时
- * 这个进程不存在，agent runtime 一个字节都没变。单独一个进程而不是塞进 agent runtime：这一步不切换
- * 主循环，agent 进程不该为一个默认关着的开关多加载一整套 durable（启动时间与常驻内存，剧本第 3 条）。
+ * 这一步（换内核第二步）只由脚本直驱：主进程不拉起它（对话主循环仍是旧内核），开关关着时这个进程不存在、
+ * agent runtime 一个字节都没变。脚本发 init → turn，替主进程回审批与工具请求（agent 命令）。
+ * 单独一个进程而不是塞进 agent runtime：这一步不切换主循环，agent 进程不该为一个默认关着的开关
+ * 多加载一整套 durable（启动时间与常驻内存）。
  * 主循环迁过来那一步，库池随之搬进 agent 进程，这个入口删掉。
  *
  * 为什么是 utility 进程：SQLite 的同步调用（node:sqlite 是同步 API）与大会话迁移的 JSON 处理
@@ -97,29 +98,6 @@ parentPort.on("message", (event: { data: unknown }) => {
     return;
   }
   const ready = initialized ?? Promise.reject(new Error("kernel runtime got a command before init"));
-  if (command.type === "open") {
-    const { requestId, sessionId } = command;
-    void ready
-      .then(() => {
-        if (pool === null) throw new Error("kernel runtime is not initialized");
-        return pool.open({ library: command.library, sessionId, legacy: command.legacy, agent: command.agent });
-      })
-      .then((result) => {
-        if (result.ok) {
-          console.error(
-            `[kernel] ${sessionId} → ${command.library} 会话 ${result.conversationId}` +
-              (result.migrated ? `，迁入 ${result.entries} 条，${result.ms}ms` : "（库里已有）"),
-          );
-        } else {
-          console.error(`[kernel] ${sessionId} 打不开：${result.reason}`);
-        }
-        post({ type: "opened", requestId, sessionId, result });
-      })
-      .catch((cause: unknown) => {
-        post({ type: "opened", requestId, sessionId, result: { ok: false, reason: cause instanceof Error ? cause.message : String(cause) } });
-      });
-    return;
-  }
   if (command.type === "turn") {
     const { requestId } = command;
     void ready
@@ -158,16 +136,6 @@ parentPort.on("message", (event: { data: unknown }) => {
     }
     // 意图确认（intentConfirmResult）：新内核这一步不跑意图闸门（实验功能，主循环切过来时再接），收到就丢
     return;
-  }
-  if (command.type === "drop") {
-    const { requestId } = command;
-    void ready
-      .then(() => {
-        if (pool === null) throw new Error("kernel runtime is not initialized");
-        return pool.drop(command.library);
-      })
-      .then(() => post({ type: "dropped", requestId, error: null }))
-      .catch((cause: unknown) => post({ type: "dropped", requestId, error: cause instanceof Error ? cause.message : String(cause) }));
   }
 });
 

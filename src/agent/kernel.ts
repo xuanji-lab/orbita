@@ -14,7 +14,8 @@
  *   的 init 里，SQLite 事务要么全落要么全不落——迁到一半崩溃，重开后库里没有半份。
  *   init 里先查索引，已有就抛哨兵回滚——即使绕过进程内排队，也只会有一份。
  */
-import { readFile, rm, stat } from "node:fs/promises";
+import { open as openFile, readFile, rm, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Api, Model, Models, ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
@@ -31,11 +32,14 @@ import {
   type Storage,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { KERNEL_LIBRARY_NAME, type KernelAgent, type KernelOpenResult, type KernelTurnCommand, type KernelTurnResult } from "../shared/kernel.ts";
+import type { ProviderSecrets } from "../shared/agent-ipc.ts";
+import { KERNEL_LIBRARY_NAME, type KernelTurnCommand, type KernelTurnResult } from "../shared/kernel.ts";
+import type { ThinkingLevel } from "../shared/thinking.ts";
 import { COMPACTION_DEFAULT } from "../shared/settings.ts";
 import { chooseCacheRetention, type SessionRole } from "./cache-retention.ts";
 import { compactionKeepRecentTokens, compactionReserveTokens } from "./compaction-settings.ts";
-import { planLegacyMigration, type LegacyDraft } from "./legacy-migrate.ts";
+import { LEGACY_KINDS, planLegacyMigration, type LegacyDraft, type LegacyWireSeed } from "./legacy-migrate.ts";
+import { messageSignature, WireDoc } from "./kernel-wire.ts";
 import { RETRY_BASE_DELAY_MS, RETRY_MAX_ATTEMPTS, RETRY_MAX_DELAY_MS } from "./retry-policy.ts";
 import { runTurn, type KernelTurnRuntime } from "./kernel-turn.ts";
 import { piRequestOptions } from "./kernel-prompt.ts";
@@ -54,6 +58,78 @@ export const SessionIndexDoc = defineDoc<{ sessions: Record<string, number> }>({
   initial: () => ({ sessions: {} }),
   checkpointWhen: () => true,
 });
+
+/**
+ * 迁移时原件的指纹（库里按会话记，与迁移同一次提交）：大小 + 修改时刻 + 末尾 64 KiB 的 sha256。
+ * 新内核要发消息时先比它——原件之后又被旧内核续写过（指纹变了），库里那份就过期了，丢掉重迁。
+ * 末尾那一段是兜底：同秒内改了同样字节数的极端情形，mtime 与大小都分不出来（pi 本子只追加，变化总在末尾）。
+ */
+export type LegacyPrint = {
+  bytes: number;
+  mtimeMs: number;
+  tail: string;
+};
+const PRINT_TAIL_BYTES = 64 * 1024;
+
+export const LegacyPrintDoc = defineDoc<{ prints: Record<string, LegacyPrint> }>({
+  kind: "orbita.legacy-prints",
+  version: 1,
+  scope: "session",
+  initial: () => ({ prints: {} }),
+  checkpointWhen: () => true,
+});
+
+function tailHash(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes.subarray(Math.max(0, bytes.length - PRINT_TAIL_BYTES))).digest("hex");
+}
+
+/** 不读整份原件就算指纹：stat + 读末尾一段（几百 MB 的本子每次发消息前都要比一次） */
+export async function legacyPrint(file: string): Promise<LegacyPrint> {
+  const info = await stat(file);
+  const length = Math.min(info.size, PRINT_TAIL_BYTES);
+  const handle = await openFile(file, "r");
+  try {
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, info.size - length);
+    return { bytes: info.size, mtimeMs: info.mtimeMs, tail: tailHash(buffer) };
+  } finally {
+    await handle.close();
+  }
+}
+
+function samePrint(left: LegacyPrint | undefined, right: LegacyPrint): boolean {
+  return left !== undefined && left.bytes === right.bytes && left.mtimeMs === right.mtimeMs && left.tail === right.tail;
+}
+
+/** 新内核为一条会话要的 agent 设定（由开轮命令装配，见 turn） */
+export interface KernelAgent {
+  /** null = 没有可用的服务商，只开库不配模型 */
+  provider: ProviderSecrets | null;
+  modelId: string;
+  thinkingLevel: ThinkingLevel;
+  cwd: string;
+  /** 根会话 / 子会话：决定 Claude 官方直连的缓存时长（cache-retention.ts 的同一个判定） */
+  role: "root" | "child";
+  /** 自动压缩：同设置项「剩余百分比」，按模型窗口换算（compaction-settings.ts） */
+  compaction: { enabled: boolean; reservePercent: number };
+}
+
+/** 打开一条会话的结局 */
+export type KernelOpenResult =
+  | {
+      ok: true;
+      conversationId: number;
+      /** 这一次打开做了迁移（false = 库里的副本还是最新的 / 全新会话已建过） */
+      migrated: boolean;
+      /** 这次迁移是重迁：库里原来那份比原件旧，换成了新的一份（旧那份留在库里不再被索引指着） */
+      remigrated: boolean;
+      /** 迁进库的 entry 条数（没迁为 0） */
+      entries: number;
+      /** 迁移时原件的大小与修改时刻；新建为 null */
+      legacy: { bytes: number; mtimeMs: number } | null;
+      ms: number;
+    }
+  | { ok: false; reason: string };
 
 /** 运行策略：与旧内核的设置逐项对齐（见 kernelSettings 的注释）；读时现算，不落库 */
 export function kernelSettings(): HarnessSettings {
@@ -252,22 +328,37 @@ export class KernelPool {
     try {
       const registered = input.agent.provider === null ? undefined : this.options.registerProvider?.(input.agent);
       const indexed = (await harness.snapshot(SessionIndexDoc, BACKGROUND_CONTEXT))?.sessions[input.sessionId];
+      // 库里已有：原件没变（或本来就没有原件）就用库里那份；原件之后又被旧内核续写过（指纹变了 / 没记过指纹）就重迁
+      let replacing: number | undefined;
       if (indexed !== undefined) {
-        await this.remember(harness, indexed, input.agent.role);
-        return { ok: true, conversationId: indexed, migrated: false, entries: 0, legacy: null, ms: elapsed() };
+        if (input.legacy === null) {
+          await this.remember(harness, indexed, input.agent.role);
+          return { ok: true, conversationId: indexed, migrated: false, remigrated: false, entries: 0, legacy: null, ms: elapsed() };
+        }
+        const stored = (await harness.snapshot(LegacyPrintDoc, BACKGROUND_CONTEXT))?.prints[input.sessionId];
+        if (samePrint(stored, await legacyPrint(input.legacy.piSessionFile))) {
+          await this.remember(harness, indexed, input.agent.role);
+          return { ok: true, conversationId: indexed, migrated: false, remigrated: false, entries: 0, legacy: null, ms: elapsed() };
+        }
+        replacing = indexed;
+        this.options.log?.(`[kernel] ${input.sessionId} 库里的副本比原件旧（原件之后又被旧内核续写过），按原件重迁`);
       }
-      // 读原件：只读，读之前与之后各 stat 一次——读的过程中被旧内核续写了就如实记下读之前那一刻
+      // 读原件：只读。指纹与迁移读的是同一份字节（大小与末尾哈希取自读到的内容，修改时刻取读之前那一刻）
       let drafts: LegacyDraft[] = [];
       let providerSessionId: string | null = null;
       let legacy: { bytes: number; mtimeMs: number } | null = null;
+      let print: LegacyPrint | null = null;
+      let wire: LegacyWireSeed | null = null;
       if (input.legacy !== null) {
         const before = await stat(input.legacy.piSessionFile);
-        const raw = await readFile(input.legacy.piSessionFile, "utf8");
-        const planned = planLegacyMigration(raw);
+        const bytes = await readFile(input.legacy.piSessionFile);
+        const planned = planLegacyMigration(bytes.toString("utf8"));
         if (!planned.ok) return { ok: false, reason: planned.reason };
         drafts = planned.plan.drafts;
         providerSessionId = planned.plan.providerSessionId;
-        legacy = { bytes: before.size, mtimeMs: before.mtimeMs };
+        wire = planned.plan.wire;
+        legacy = { bytes: bytes.length, mtimeMs: before.mtimeMs };
+        print = { bytes: bytes.length, mtimeMs: before.mtimeMs, tail: tailHash(bytes) };
       }
       const agent: AgentChange = {
         ...(input.agent.provider === null ? {} : { model: { provider: input.agent.provider.id, modelId: input.agent.modelId } }),
@@ -284,10 +375,20 @@ export class KernelPool {
             init: async (tx, id) => {
               const index = await tx.doc(SessionIndexDoc);
               const already = index.sessions[input.sessionId];
-              if (already !== undefined) throw new AlreadyIndexed(already);
+              // 已有索引且不是我们要换掉的那一份（别人刚迁过 / 刚重迁过）：用它，不再迁一份
+              if (already !== undefined && already !== replacing) throw new AlreadyIndexed(already);
               index.sessions[input.sessionId] = id;
+              if (print !== null) (await tx.doc(LegacyPrintDoc)).prints[input.sessionId] = print;
               // 沿用旧本子的会话 id 作 provider sessionId：提示缓存的亲和不因换内核断掉
               if (providerSessionId !== null) (await tx.doc(ProviderDoc, id)).sessionId = providerSessionId;
+              // 逐请求注入的跨轮账（图片水位与引用、各轮记忆块）从本子读来；迁来的扩展消息记指纹（kernel-wire.ts）
+              if (wire !== null) {
+                const state = await tx.doc(WireDoc, id);
+                state.imageMark = wire.imageMark;
+                state.imageRefs = wire.imageRefs;
+                state.memory = wire.memory;
+                state.customs = drafts.filter((draft) => draft.kind === LEGACY_KINDS.custom).flatMap((draft) => draft.model.map((message) => messageSignature(message)));
+              }
               await appendDrafts(tx, id, drafts);
             },
           },
@@ -299,9 +400,11 @@ export class KernelPool {
         conversationId = error.conversationId;
         drafts = [];
         legacy = null;
+        replacing = undefined;
       }
       await this.remember(harness, conversationId, input.agent.role);
-      return { ok: true, conversationId, migrated: drafts.length > 0 || legacy !== null, entries: drafts.length, legacy, ms: elapsed() };
+      const migrated = drafts.length > 0 || legacy !== null;
+      return { ok: true, conversationId, migrated, remigrated: migrated && replacing !== undefined, entries: drafts.length, legacy, ms: elapsed() };
     } catch (error) {
       return { ok: false, reason: `迁移失败：${error instanceof Error ? error.message : String(error)}` };
     }
@@ -351,7 +454,7 @@ export class KernelPool {
       return {
         ok: true,
         conversationId: conversation.id,
-        migration: opened.migrated ? "migrated" : "none",
+        migration: opened.remigrated ? "remigrated" : opened.migrated ? "migrated" : "none",
         status: outcome.status,
         ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
       };

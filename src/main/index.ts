@@ -5,7 +5,7 @@
 import { preferIPv4 } from "../shared/dial-v4.ts";
 import { CATALOG_CACHE_ENV } from "../shared/agent-ipc.ts";
 import { catalogIdsOfProviders } from "../shared/known-providers.ts";
-import { app, BrowserWindow, nativeTheme, powerMonitor, powerSaveBlocker, shell, utilityProcess, type WebPreferences } from "electron";
+import { app, BrowserWindow, nativeTheme, powerMonitor, powerSaveBlocker, shell, type WebPreferences } from "electron";
 import { randomUUID } from "node:crypto";
 import { cpus, homedir, totalmem } from "node:os";
 import { join } from "node:path";
@@ -53,7 +53,7 @@ import {
 } from "./memory/vector-setup.ts";
 import { IntentIngestTracker } from "./agent/intent-ingest.ts";
 import { postIntentIngest, postIntentInvalidate } from "./agent/intent-lab-client.ts";
-import { COMPACTION_DEFAULT, effectiveIntentSettings } from "../shared/settings.ts";
+import { effectiveIntentSettings } from "../shared/settings.ts";
 import { broadcastChannelEvent, registerChannelIpc } from "./channel/ipc.ts";
 import { broadcastAutomationEvent, registerAutomationIpc } from "./automation/ipc.ts";
 import { KeepAwake } from "./automation/keep-awake.ts";
@@ -65,7 +65,7 @@ import { applyChannelSend, applyDelegate, type ChannelDeps } from "./channel/req
 import { ChannelStore } from "./channel/store.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
-import { durableKernelEnabled, KernelHost, openInKernel } from "./agent/kernel-host.ts";
+import { durableKernelEnabled, KernelHost } from "./agent/kernel-host.ts";
 import { kernelLibraryName } from "../shared/kernel.ts";
 import { moveSessions } from "./session/move.ts";
 import { registerWrapupIpc } from "./session/wrapup-ipc.ts";
@@ -550,12 +550,12 @@ void app.whenReady().then(async () => {
   };
   /**
    * 新内核（pi-durable）：开发开关 ORBITA_DURABLE_KERNEL=1 才建（kernel-host.ts）。**关着时为 null**，
-   * 下面三处（会话打开钩子、删会话、工具禁区）都按 null 走与基线相同的代码。
-   * kernel 进程用与 agent 进程同一份环境：模型目录缓存（CATALOG_CACHE_ENV）读同一个文件，型号参数才一致。
+   * 下面两处（删会话、工具禁区）都按 null 走与基线相同的代码。旧会话不在打开时迁：迁移在新内核第一次
+   * 为这条会话发消息时做（kernel.ts 的 turn），这一步对话主循环仍是旧内核，主进程不拉起 kernel 进程。
    */
   const durableDir = join(configDir, "durable");
   const kernel = durableKernelEnabled(process.env)
-    ? new KernelHost(() => utilityProcess.fork(join(__dirname, "kernel-runtime.js"), [], { stdio: "inherit", env: agentProcessEnv }), durableDir)
+    ? new KernelHost(durableDir)
     : null;
   const agentHost = new AgentHost(resolveRuntimePath(__dirname), agentProcessEnv, (event) => {
     // MCP 的连接状态由 agent 进程报上来（连接是它建的），主进程缓存最后一次快照给管理面看
@@ -1106,22 +1106,6 @@ void app.whenReady().then(async () => {
         memoryOnReverted(sessionId, reverted.fromTurn),
       ]);
     },
-    kernel === null
-      ? undefined
-      : (meta) => {
-          void openInKernel(
-            {
-              host: kernel,
-              readMeta: (id) => sessions.readMeta(id),
-              resolveProvider: (providerId) => resolveProviderSecrets(providers, providerId),
-              compaction: async () => (await settings.read()).compaction ?? COMPACTION_DEFAULT,
-              setDurable: (id, durable) => sessions.setDurable(id, durable),
-              notifyFailure: (sessionId, message) => broadcastAgentEvent({ type: "failed", sessionId, message }),
-              now: () => Date.now(),
-            },
-            meta,
-          ).catch((error: unknown) => console.error("[kernel] 打开会话时接手失败", error));
-        },
   );
   // 收尾（session:wrapup-*）：扫描计划、按反馈改清单、确认落账
   registerWrapupIpc({

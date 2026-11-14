@@ -12,8 +12,8 @@ import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/provid
 import { buildSessionContext, convertToLlm, migrateSessionEntries, parseSessionEntries, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { ConversationId, Storage } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import type { KernelAgent } from "../shared/kernel.ts";
-import { kernelCompaction, kernelSettings, KernelPool, SessionIndexDoc, withBillingPatch, withCacheRetention } from "./kernel.ts";
+import { kernelCompaction, kernelSettings, KernelPool, LegacyPrintDoc, SessionIndexDoc, withBillingPatch, withCacheRetention, type KernelAgent } from "./kernel.ts";
+import { WireDoc } from "./kernel-wire.ts";
 import { piRequestOptions } from "./kernel-prompt.ts";
 import { compactionKeepRecentTokens, compactionReserveTokens } from "./compaction-settings.ts";
 import { RETRY_BASE_DELAY_MS, RETRY_MAX_ATTEMPTS, RETRY_MAX_DELAY_MS } from "./retry-policy.ts";
@@ -191,6 +191,73 @@ describe("旧会话惰性迁移（剧本第 10、11、13 条）", () => {
     assert.equal(createHash("sha256").update(await readFile(file)).digest("hex"), digest);
     const harness = (await kernel.library("r.sqlite")).harness;
     assert.deepEqual((await harness.snapshot(SessionIndexDoc, BACKGROUND_CONTEXT))?.sessions, { s1: a.conversationId });
+    await kernel.closeAll();
+  });
+
+  it("迁移时机：原件之后又被旧内核续写了两轮 → 下次新内核发消息前比对指纹、丢掉旧副本按原件重迁；原件不变就不迁", async () => {
+    const dir = await tempDir();
+    const file = join(dir, "book.jsonl");
+    const twoTurns = [user("u1", "first"), assistant("a1", "one")];
+    await writeFile(file, book(twoTurns));
+    const kernel = pool(dir);
+    const first = await kernel.open({ library: "r.sqlite", sessionId: "s1", legacy: { piSessionFile: file }, agent: AGENT });
+    assert.ok(first.ok && first.migrated && !first.remigrated);
+
+    // 旧内核接着聊了两轮（本子只追加）
+    await writeFile(file, book([...twoTurns, user("u2", "second"), assistant("a2", "two"), user("u3", "third"), assistant("a3", "three")]));
+    const second = await kernel.open({ library: "r.sqlite", sessionId: "s1", legacy: { piSessionFile: file }, agent: AGENT });
+    assert.ok(second.ok && second.migrated && second.remigrated);
+    assert.notEqual(second.conversationId, first.conversationId);
+    const texts = (await migratedContext(kernel, "r.sqlite", second.conversationId)).map((message) => JSON.stringify(message.content));
+    assert.equal(texts.length, 6);
+    assert.match(texts[4] ?? "", /third/);
+    const harness = (await kernel.library("r.sqlite")).harness;
+    assert.deepEqual((await harness.snapshot(SessionIndexDoc, BACKGROUND_CONTEXT))?.sessions, { s1: second.conversationId });
+
+    const third = await kernel.open({ library: "r.sqlite", sessionId: "s1", legacy: { piSessionFile: file }, agent: AGENT });
+    assert.ok(third.ok && !third.migrated && !third.remigrated);
+    assert.equal(third.conversationId, second.conversationId);
+    await kernel.closeAll();
+  });
+
+  it("库里有副本却没记过原件指纹（上一步的库）：当作过期，按原件重迁一次", async () => {
+    const dir = await tempDir();
+    const file = join(dir, "book.jsonl");
+    await writeFile(file, book([user("u1", "first"), assistant("a1", "one")]));
+    const kernel = pool(dir);
+    const first = await kernel.open({ library: "r.sqlite", sessionId: "s1", legacy: { piSessionFile: file }, agent: AGENT });
+    assert.ok(first.ok);
+    const harness = (await kernel.library("r.sqlite")).harness;
+    await harness.commit(async (tx) => {
+      delete (await tx.doc(LegacyPrintDoc)).prints["s1"];
+    }, BACKGROUND_CONTEXT);
+    const again = await kernel.open({ library: "r.sqlite", sessionId: "s1", legacy: { piSessionFile: file }, agent: AGENT });
+    assert.ok(again.ok && again.remigrated);
+    const steady = await kernel.open({ library: "r.sqlite", sessionId: "s1", legacy: { piSessionFile: file }, agent: AGENT });
+    assert.ok(steady.ok && !steady.migrated);
+    await kernel.closeAll();
+  });
+
+  it("迁移把本子里的逐请求注入账（记忆块、迁来的扩展消息指纹）带进 orbita.wire", async () => {
+    const dir = await tempDir();
+    const file = join(dir, "book.jsonl");
+    await writeFile(
+      file,
+      book([
+        user("u1", "first"),
+        { type: "custom", id: "m1", customType: "orbita-memory-attach", data: { at: 1, text: "<orbita-memory>\nx\n</orbita-memory>" } },
+        assistant("a1", "one"),
+        { type: "custom_message", id: "cm", customType: "orbita.undo", content: "files restored", display: true },
+      ]),
+    );
+    const kernel = pool(dir);
+    const opened = await kernel.open({ library: "r.sqlite", sessionId: "s1", legacy: { piSessionFile: file }, agent: AGENT });
+    assert.ok(opened.ok);
+    const harness = (await kernel.library("r.sqlite")).harness;
+    const wire = await harness.snapshot(WireDoc, opened.conversationId as ConversationId, BACKGROUND_CONTEXT);
+    assert.deepEqual(wire?.memory, [[1, "<orbita-memory>\nx\n</orbita-memory>"]]);
+    assert.equal(wire?.customs.length, 1);
+    assert.match(wire?.customs[0] ?? "", /files restored/);
     await kernel.closeAll();
   });
 

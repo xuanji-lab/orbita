@@ -19,7 +19,10 @@
  *   半份上下文比没迁更糟——模型会在缺了一块的历史上接着干。
  */
 import type { Message, UserMessage } from "@earendil-works/pi-ai";
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { branchEntries, parsePiBook, type PiBookEntry } from "../main/session/pi-book.ts";
+import { readImageBudgetBook } from "./image-byte-budget.ts";
+import { memoryAttachments } from "./memory-inject.ts";
 
 /** pi 的 COMPACTION_SUMMARY_PREFIX / SUFFIX（coding-agent 1.5.2 core/messages.js，durable compaction.js 同文） */
 export const COMPACTION_PREFIX = "The conversation history before this point was compacted into the following summary:\n\n<summary>\n";
@@ -47,6 +50,16 @@ export interface LegacyDraft {
   headRef?: number | "self";
 }
 
+/**
+ * 逐请求注入的跨轮账：旧内核记在本子 custom entry 里（不进上下文、不迁成 entry），新内核记在会话文档 orbita.wire。
+ * 读法就是旧内核开轮时读本子的那两个函数（readImageBudgetBook / memoryAttachments，同一条当前分支）。
+ */
+export interface LegacyWireSeed {
+  imageMark: { cut: number; cutIndex: number } | null;
+  imageRefs: [string, string][];
+  memory: [number, string][];
+}
+
 export interface LegacyPlan {
   /** 本子头里的会话 id：pi 拿它当 provider 的 sessionId（提示缓存亲和），迁过去接着用 */
   providerSessionId: string | null;
@@ -56,6 +69,7 @@ export interface LegacyPlan {
   skipped: Record<string, number>;
   /** 当前分支之外（废枝）的 entry 数 */
   offBranch: number;
+  wire: LegacyWireSeed;
 }
 
 export type LegacyPlanResult = { ok: true; plan: LegacyPlan } | { ok: false; reason: string };
@@ -220,9 +234,17 @@ export function planLegacyMigration(raw: string): LegacyPlanResult {
   } catch (error) {
     return { ok: false, reason: `pi 本子里有认不出的内容：${error instanceof Error ? error.message : String(error)}` };
   }
+  // 本子 entry 与 pi 的 SessionEntry 同形（pi 写的 JSONL 行），旧内核读账的函数直接认
+  const branch = path as unknown as SessionEntry[];
+  const budget = readImageBudgetBook(branch);
   return {
     ok: true,
     plan: {
+      wire: {
+        imageMark: budget.mark === null ? null : { cut: budget.mark.cut, cutIndex: budget.mark.cutIndex },
+        imageRefs: [...budget.refs],
+        memory: [...memoryAttachments(branch)],
+      },
       providerSessionId: book.header.id,
       cwd: book.header.cwd,
       drafts,
