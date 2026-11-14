@@ -2898,6 +2898,8 @@ export const zh: Messages = {
       `原文件冻结了${rows > 0 ? `前 ${rows} 行` : ""}${rows > 0 && cols > 0 ? "、" : ""}${cols > 0 ? `前 ${cols} 列` : ""}；这里的预览可以自由滚动`,
     xlsxEmpty: "这张表是空的",
     xlsxPassword: "这个工作簿有密码保护，或者不是真正的 .xlsx 文件。",
+    xlsxRenderStillViewable:
+      "数据网格解析不了这个工作簿（是解析器的问题，不是文件没内容）。切到上面的「渲染」仍可查看。",
     xlsxBroken: "这个工作簿读不开——可能已经损坏。",
     xlsxHiddenOnly: "这个工作簿的表全部被隐藏了。在 Excel 里右键工作表标签可以取消隐藏。",
     xlsUnsupported: "旧版 .xls 工作簿看不了预览，用默认应用打开。",
@@ -2940,6 +2942,7 @@ export const zh: Messages = {
     modeOutline: "大纲",
     pickCell: "点单元格标注（Shift 点第二格选区间）",
     pickElement: "点形状、表格或图表来标注",
+    rangeCells: (n) => (n === 1 ? "1 格" : `${n} 格`),
     quote: "引用到对话",
     copyImage: "复制为图片",
     copied: "已复制",

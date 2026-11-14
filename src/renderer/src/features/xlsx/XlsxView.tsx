@@ -69,10 +69,15 @@ export function XlsxView(props: {
        * 也能接着点别的（后发的请求按 token 丢弃先回的）。首次打开没有标签可留，
        * 那种情况在上面的早返回里。
        */}
-      {workbook !== null && (
+      {/*
+       * 工具栏的「渲染 / 数据」芯片**不挂在 workbook 上**：结构解析失败（#341 读不动
+       * officecli 生成的 xlsx）时，数据视图仍然要能点进去看原因，不能整排消失（B3）。
+       * 表标签只在解析成功时才有。
+       */}
+      {data !== null && (
         <div className="xlsx-toolbar">
           {canRender && <OfficeModeChips mode={mode} onChange={setMode} dataLabel={t.office.modeGrid} />}
-          {shownMode === "data" && workbook.sheets.length > 1 && (
+          {shownMode === "data" && workbook !== null && workbook.sheets.length > 1 && (
             <div className="xlsx-sheets" role="group" aria-label={t.files.xlsxSheets}>
               {workbook.sheets.map((tab, index) => (
                 <Chip
@@ -127,11 +132,24 @@ export function XlsxView(props: {
       ) : data.kind === "unreadable" ? (
         <div className="file-preview-empty">
           <Icon name="file-spreadsheet" size={24} style={{ color: "var(--color-text-tertiary)" }} />
-          <PanelLine>{unreadableMessage(data.reason, t)}</PanelLine>
+          {/* corrupt + 渲染可用：先说「是解析器的问题、渲染视图仍可看」，不要先用
+              「可能已经损坏」把人吓回去（B3）。密码 / 全是隐藏表这些原因保持原话。 */}
+          <PanelLine>
+            {data.reason === "corrupt" && canRender
+              ? t.files.xlsxRenderStillViewable
+              : unreadableMessage(data.reason, t)}
+          </PanelLine>
           {/* 技术副行：解压 / 解析失败的原文，读得懂的人据此判断是不是文件本身坏了 */}
           <p className="xlsx-detail" title={data.detail}>
             {data.detail}
           </p>
+          {canRender && data.reason !== "corrupt" && <PanelLine>{t.files.xlsxRenderStillViewable}</PanelLine>}
+          {canRender && (
+            <PanelButton onClick={() => setMode("render")}>
+              <Icon name="file-spreadsheet" size={14} />
+              {t.office.modeRender}
+            </PanelButton>
+          )}
           <OpenDefaultButton onClick={props.onOpenDefault} />
         </div>
       ) : (

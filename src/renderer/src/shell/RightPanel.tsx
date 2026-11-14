@@ -564,6 +564,9 @@ export function PanelButton(props: {
         borderRadius: "var(--radius-md)",
         font: "inherit",
         fontSize: "var(--font-size-base)",
+        // 窄面板里按钮不许折成竖字（B6）：宁可让工具栏换行，也不把「用默认应用打开」拆成五列
+        whiteSpace: "nowrap",
+        flex: "0 0 auto",
         cursor: disabled ? "default" : "pointer",
       }}
     >

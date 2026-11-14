@@ -7,6 +7,8 @@ import { useT } from "../../locale.ts";
 import type { FileListRequest } from "@shared/files";
 import {
   officeDisplayPath,
+  sameOfficePath,
+  xlsxRangeCellCount,
   xlsxRangePath,
   type OfficeChanges,
   type OfficeFormat,
@@ -44,7 +46,8 @@ export function OfficePreview(props: {
   const [state, setState] = useState<{ status: "loading" } | { status: "error"; message: string } | { status: "ready"; data: Extract<OfficeRenderResult, { kind: "html" }> } | { status: "unavailable"; detail: string }>(
     { status: "loading" },
   );
-  const [picked, setPicked] = useState<{ path: string; preview: string } | null>(null);
+  // cells：xlsx 的多格区间时是格数（chip 上显示「15 格」而不是终点格的值，B4）
+  const [picked, setPicked] = useState<{ path: string; preview: string; cells: number | null } | null>(null);
   const [anchor, setAnchor] = useState<string | null>(null);
   const [captured, setCaptured] = useState<"idle" | "ok" | "fail">("idle");
   /** agent 改完这份文件（office:changed）→ 自增，重拉 HTML 与改动清单 */
@@ -120,11 +123,16 @@ export function OfficePreview(props: {
       const range = event.shiftKey && format === "xlsx" && anchor !== null ? xlsxRangePath(anchor, path) : null;
       if (range === null) setAnchor(path);
       const next = range ?? path;
+      const cellCount = format === "xlsx" ? xlsxRangeCellCount(next) : null;
       for (const el of Array.from(doc.querySelectorAll<HTMLElement>(".office-picked"))) {
         el.classList.remove("office-picked");
       }
       highlightRange(doc, next);
-      setPicked({ path: next, preview: officeValuePreview(hit.textContent) });
+      setPicked({
+        path: next,
+        preview: officeValuePreview(hit.textContent),
+        cells: cellCount !== null && cellCount > 1 ? cellCount : null,
+      });
     });
   }, [anchor, format]);
 
@@ -141,8 +149,15 @@ export function OfficePreview(props: {
 
   const quote = (): void => {
     if (picked === null) return;
+    // 区间：正文写「15 格」而不是终点格的值（终点格的值不代表整个区间）；单格写值
+    const text =
+      picked.cells !== null
+        ? t.office.rangeCells(picked.cells)
+        : picked.preview === ""
+          ? picked.path
+          : picked.preview;
     props.onQuote?.({
-      text: picked.preview === "" ? picked.path : picked.preview,
+      text,
       messageId: "",
       role: "user",
       filePath: request.dir,
@@ -222,7 +237,11 @@ export function OfficePreview(props: {
               <>
                 <span className="office-annotate-path" title={picked.path}>
                   {officeDisplayPath(format, picked.path)}
-                  {picked.preview !== "" && <span className="office-annotate-value"> · {picked.preview}</span>}
+                  {picked.cells !== null ? (
+                    <span className="office-annotate-value"> · {t.office.rangeCells(picked.cells)}</span>
+                  ) : (
+                    picked.preview !== "" && <span className="office-annotate-value"> · {picked.preview}</span>
+                  )}
                 </span>
                 <div className="office-annotate-actions row-trailing">
                   {props.onQuote !== undefined && (
@@ -403,7 +422,8 @@ export function useOfficeChanged(path: string, onChange: () => void): void {
   latest.current = onChange;
   useEffect(() => {
     return api.office.onChanged((event) => {
-      if (event.path === path) latest.current();
+      // 不能直接 ===：realpath 与「根 + / + 文件名」在同一台机器上就是两种写法（B1）
+      if (sameOfficePath(event.path, path)) latest.current();
     });
   }, [path]);
 }

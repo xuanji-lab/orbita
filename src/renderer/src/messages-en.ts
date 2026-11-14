@@ -3096,6 +3096,8 @@ export const en = {
       `The file freezes the first ${rows > 0 ? `${plural(rows, "row")}${cols > 0 ? " and " : ""}` : ""}${cols > 0 ? plural(cols, "column") : ""}; this preview scrolls freely`,
     xlsxEmpty: "This sheet is empty",
     xlsxPassword: "This workbook is password-protected, or it isn't a real .xlsx file.",
+    xlsxRenderStillViewable:
+      "The data grid could not parse this workbook (the parser, not the file's contents). Switch to Rendered above to view it.",
     xlsxBroken: "Couldn't read this workbook — it may be damaged.",
     xlsxHiddenOnly: "Every sheet in this workbook is hidden. Right-click a sheet tab in Excel to unhide one.",
     xlsUnsupported: "Old .xls workbooks can't be previewed — open it with the default app.",
@@ -3142,6 +3144,7 @@ export const en = {
     modeOutline: "Outline",
     pickCell: "Click a cell to annotate it (Shift-click a second cell for a range)",
     pickElement: "Click a shape, table or chart to annotate it",
+    rangeCells: (n: number) => (n === 1 ? "1 cell" : `${n} cells`),
     quote: "Quote to chat",
     copyImage: "Copy as image",
     copied: "Copied",
