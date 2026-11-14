@@ -119,6 +119,15 @@ import {
   liveTailLines,
   expectedSecondsOf,
   formatRunClock,
+  // bash 活行：交还会话的认领、事实槽与秒针外推
+  bashLiveFacts,
+  bashLiveSeconds,
+  bashLostFacts,
+  bashResultFacts,
+  bashResultOf,
+  detachedBashNotice,
+  formatSessionClock,
+  showsCallSummary,
   shellAutoExpand,
   stripTrailingBlankLines,
   tailPreviewLines,
@@ -246,6 +255,7 @@ import {
 } from "@shared/session";
 import type { FileTurnView, RevertRecord, UndoRecord } from "@shared/revert";
 import type { RetryStatus } from "@shared/agent-ipc";
+import { detachedNoticeIsLive, type BashSessionsSnapshot } from "@shared/bash-session";
 import type { ChatSession } from "./useChatSession";
 import type { ModelPair, ThemePreference } from "@shared/settings";
 import { useT } from "../../locale.ts";
@@ -3858,6 +3868,7 @@ function EntryView(props: {
       onOpenTask={props.onOpenTask}
       channel={props.channel}
       skills={props.skills}
+      sessionId={props.sessionId}
     />
   );
 }
@@ -3906,7 +3917,7 @@ function TurnRollupLine(props: {
   const { group } = props;
   // 「今天只写时分」的档位随日历日走：跨午夜翻档（today.ts 的 useToday）
   const today = useToday();
-  const stats = turnStats(group, props.toolResults, Date.now(), props.skills);
+  const stats = turnStats({ ...group, members: [...group.members, ...group.hoisted] }, props.toolResults, Date.now(), props.skills);
   // 统计段先收集再渲染：段与段之间插 · 分隔——纯 gap 挨在一起分不清边界；
   // 工具次数与它的失败数字是一个段，中间不插
   const segments: ReactNode[] = [];
@@ -3969,6 +3980,28 @@ function TurnRollupLine(props: {
           </Fragment>
         ))}
       </CollapseRow>
+      {/* 折叠外的后台命令行：在折叠行下面一直铺着（成员里已摘掉，见 TurnGroupUnit.hoisted） */}
+      {group.hoisted.map((call) => (
+        <EntryView
+          key={call.key}
+          entry={call}
+          toolResults={props.toolResults}
+          activeThinkingKey={null}
+          turnActive={false}
+          interruptedCalls={props.interruptedCalls}
+          onOpenTask={props.onOpenTask}
+          carryoverCards={props.carryoverCards}
+          channel={props.channel}
+          skills={props.skills}
+          cwd={props.cwd}
+          undoneTurnIds={props.undoneTurnIds}
+          onUndoTurn={props.onUndoTurn}
+          actionsBusy={props.actionsBusy}
+          onOpenReviewAt={props.onOpenReviewAt}
+          sessionId={props.sessionId}
+          streamingIds={EMPTY_STREAMING_IDS}
+        />
+      ))}
       {open && (
         <div style={{ display: "grid", gap: "var(--space-1)" }}>
           {group.members.map((member) => (
@@ -4559,6 +4592,10 @@ function BranchRow(props: {
  * 折叠行共用骨架（设计系统 ToolCard / ThinkingCard）：满宽热区、hover 淡底、
  * 圆角裁边。行首（图标+label）是「状态」本体，副标是注脚（tertiary mono），
  * 状态词是机器事实（xs mono 等宽数字）。
+ *
+ * `trailing`：行尾的**真按钮**（目前只有 bash 活行的停止钮）。它必须是折叠按钮的
+ * 兄弟而不是子元素——button 不能嵌 button（SubSessionsPanel 同一条规矩），否则点击
+ * 要 stopPropagation、读屏器也只看到一个奇怪的嵌套控件。
  */
 /**
  * 「一轮一行」的过程块（设置 › 过程显示 = turn；推导在 turn-process.ts）。
@@ -4595,7 +4632,7 @@ function TurnProcessLine(props: {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [unit.live]);
-  const counts = processCounts(unit.steps, props.toolResults, props.skills);
+  const counts = processCounts([...unit.steps, ...unit.hoisted], props.toolResults, props.skills);
   // 这个块里计划改了什么（每块最多一行；只打勾不提示），与现在在做的是计划里哪一步
   const planCallIds = processCalls(unit.steps)
     .filter((call) => call.toolName === PLAN_TOOL_NAME)
@@ -4616,6 +4653,15 @@ function TurnProcessLine(props: {
       {toolWord(t.chat.rollupTool, key)} {count}
     </span>
   ));
+  // 折叠外的后台命令行（还在跑的 bash 会话）：**一直在场**，不随块展开/收起消失——
+  // 秒针、上限、停止钮都在这一行上，它是人唯一的兜底入口。
+  const hoistedRows = unit.hoisted.length === 0 ? null : (
+    <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
+      {unit.hoisted.map((call) => (
+        <Fragment key={call.key}>{props.renderStep(call)}</Fragment>
+      ))}
+    </div>
+  );
   const failed = counts.failed > 0 && <span className="proc-bad">{t.chat.processFailed(counts.failed)}</span>;
   const timeLabel = unit.startedAt !== null && (
     <div className="turn-start-time" style={{ ...TIME_LABEL, paddingLeft: RAIL_X }} title={fullTimestamp(unit.startedAt, t.chat.timeWeekdays)}>
@@ -4639,62 +4685,65 @@ function TurnProcessLine(props: {
     const slow = current.kind === "think" && runMs !== null && runMs > SLOW_GAP_MS;
     const verb = (toolName: string, input: unknown) => toolWord(t.chat.rollupTool, rollupToolKey(toolName, input, props.skills), input);
     return (
-      <div className="proc-live" aria-live="off">
-        {timeLabel}
-        <div className="proc-head">
-          <Icon name="loader-circle" size={12} strokeWidth={1.8} spin />
-          <span className="proc-strong">{t.chat.processStepAt(Math.max(1, counts.steps))}</span>
-          <span className="proc-num">
-            {toolChips}
-            {failed}
-          </span>
-          {elapsed !== null && <span className="proc-time">{formatRunClock(elapsed)}</span>}
-        </div>
-        <div className={`proc-chapter${snap.chapter?.source === "think" ? " think" : ""}`}>
-          {planStepNow !== null && <span className="proc-plan-step">{planStepNow}</span>}
-          {snap.chapter !== null && <InlineMarks text={snap.chapter.title} />}
-        </div>
-        <div className="proc-trail">
-          {Array.from({ length: 3 - snap.trail.length }, (_, i) => (
-            <div key={`pad${i}`} className="proc-step" aria-hidden="true" />
-          ))}
-          {snap.trail.map((item, index) => (
-            <div key={item.call.toolCallId} className={`proc-step fade-${snap.trail.length - index}`}>
-              <span className={item.failed ? "proc-mark bad" : "proc-mark ok"}>
-                <Icon name={item.failed ? "x" : "check"} size={12} strokeWidth={2} />
-              </span>
-              <span className="proc-verb">{verb(item.call.toolName, item.call.input)}</span>
-              <code>{toolCallSummaryForRow(item.call.toolName, item.call.input, props.skills) ?? ""}</code>
-              {/* 一秒内落定的不标时长：一排 0.0s 是噪音，慢的那几步才值得看 */}
-              {item.ms !== null && item.ms >= 1000 && <span className="proc-dur">{formatToolDuration(item.ms, t)}</span>}
-            </div>
-          ))}
-          <div className="proc-step now">
-            <span className="proc-mark">
-              <Icon name="loader-circle" size={12} strokeWidth={1.8} spin />
+      <>
+        <div className="proc-live" aria-live="off">
+          {timeLabel}
+          <div className="proc-head">
+            <Icon name="loader-circle" size={12} strokeWidth={1.8} spin />
+            <span className="proc-strong">{t.chat.processStepAt(Math.max(1, counts.steps))}</span>
+            <span className="proc-num">
+              {toolChips}
+              {failed}
             </span>
-            {current.kind === "tool" ? (
-              <>
-                <span className="proc-verb">{verb(current.call.toolName, current.call.input)}</span>
-                <code>{toolCallSummaryForRow(current.call.toolName, current.call.input, props.skills) ?? ""}</code>
-              </>
-            ) : (
-              <>
-                <span className="proc-verb orbita-breath">{t.chat.processThinking}</span>
-                {/* 章节行已经是这段思考时不重复；章节是旁白时，这里补「此刻在想什么」 */}
-                <code className="proc-preview">{snap.chapter?.source === "think" ? "" : (current.preview ?? "")}</code>
-              </>
-            )}
-            {runMs !== null && <span className="proc-dur">{formatRunClock(runMs)}</span>}
+            {elapsed !== null && <span className="proc-time">{formatRunClock(elapsed)}</span>}
           </div>
+          <div className={`proc-chapter${snap.chapter?.source === "think" ? " think" : ""}`}>
+            {planStepNow !== null && <span className="proc-plan-step">{planStepNow}</span>}
+            {snap.chapter !== null && <InlineMarks text={snap.chapter.title} />}
+          </div>
+          <div className="proc-trail">
+            {Array.from({ length: 3 - snap.trail.length }, (_, i) => (
+              <div key={`pad${i}`} className="proc-step" aria-hidden="true" />
+            ))}
+            {snap.trail.map((item, index) => (
+              <div key={item.call.toolCallId} className={`proc-step fade-${snap.trail.length - index}`}>
+                <span className={item.failed ? "proc-mark bad" : "proc-mark ok"}>
+                  <Icon name={item.failed ? "x" : "check"} size={12} strokeWidth={2} />
+                </span>
+                <span className="proc-verb">{verb(item.call.toolName, item.call.input)}</span>
+                <code>{toolCallSummaryForRow(item.call.toolName, item.call.input, props.skills) ?? ""}</code>
+                {/* 一秒内落定的不标时长：一排 0.0s 是噪音，慢的那几步才值得看 */}
+                {item.ms !== null && item.ms >= 1000 && <span className="proc-dur">{formatToolDuration(item.ms, t)}</span>}
+              </div>
+            ))}
+            <div className="proc-step now">
+              <span className="proc-mark">
+                <Icon name="loader-circle" size={12} strokeWidth={1.8} spin />
+              </span>
+              {current.kind === "tool" ? (
+                <>
+                  <span className="proc-verb">{verb(current.call.toolName, current.call.input)}</span>
+                  <code>{toolCallSummaryForRow(current.call.toolName, current.call.input, props.skills) ?? ""}</code>
+                </>
+              ) : (
+                <>
+                  <span className="proc-verb orbita-breath">{t.chat.processThinking}</span>
+                  {/* 章节行已经是这段思考时不重复；章节是旁白时，这里补「此刻在想什么」 */}
+                  <code className="proc-preview">{snap.chapter?.source === "think" ? "" : (current.preview ?? "")}</code>
+                </>
+              )}
+              {runMs !== null && <span className="proc-dur">{formatRunClock(runMs)}</span>}
+            </div>
+          </div>
+          <div className={slow ? "proc-foot slow" : "proc-foot"}>{slow ? t.chat.processSlow : (tail ?? goalNoticeLine ?? planNoticeLine ?? "")}</div>
         </div>
-        <div className={slow ? "proc-foot slow" : "proc-foot"}>{slow ? t.chat.processSlow : (tail ?? goalNoticeLine ?? planNoticeLine ?? "")}</div>
-      </div>
+        {hoistedRows}
+      </>
     );
   }
 
   // 一步工具都没跑的轮说它做了什么（想了想 / 更新了计划），不写「0 步」（processOutcome）
-  const result = processOutcome(counts, unit.steps);
+  const result = processOutcome(counts, [...unit.steps, ...unit.hoisted]);
   const outcome =
     result.kind === "thought"
       ? t.chat.processThoughtOnly
@@ -4719,6 +4768,7 @@ function TurnProcessLine(props: {
           {unit.durationMs !== null && <span className="proc-time">{formatToolDuration(unit.durationMs, t)}</span>}
         </span>
       </CollapseRow>
+      {hoistedRows}
       {open && (
         <ol className="proc-chapters">
           {processChapters(unit.steps).map((chapter) => (
@@ -4800,11 +4850,21 @@ function CollapseRow(props: {
   /** 28px 的元数据行（轮折叠头）：它是注脚，不该和工具行一样高 */
   dense?: boolean;
   onToggle: () => void;
+  trailing?: React.ReactNode;
   children: React.ReactNode;
 }) {
   const interactive = props.disabled !== true;
   return (
-    <div style={{ minWidth: 0, borderRadius: "var(--radius-sm)", overflow: "hidden" }}>
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "var(--space-1)",
+        minWidth: 0,
+        borderRadius: "var(--radius-sm)",
+        overflow: "hidden",
+      }}
+    >
       <button
         type="button"
         aria-expanded={interactive ? props.open : undefined}
@@ -4815,7 +4875,8 @@ function CollapseRow(props: {
           display: "flex",
           alignItems: "center",
           gap: "var(--space-2)",
-          width: "100%",
+          flex: "1 1 auto",
+          minWidth: 0,
           minHeight: props.dense === true ? "var(--control-height-sm)" : "var(--control-height-md)",
           // 高度就是台阶本身（28 / 32），不由「字 + 上下内边距」撑：原来 6 + 21 + 6 = 33
           padding: `0 ${RAIL_X}`,
@@ -4830,6 +4891,7 @@ function CollapseRow(props: {
       >
         {props.children}
       </button>
+      {props.trailing}
     </div>
   );
 }
@@ -5047,8 +5109,9 @@ function ToolLine(props: {
   channel: ChannelViewContext;
   /** read SKILL.md 徽标的识别索引（透传自 EntryView） */
   skills: SkillMeta[];
-  /** install_plugin 的那一行点「安装」要带会话（主进程按它重验工作区）；别的工具不传 */
-  sessionId?: string;
+  /** 会话 id：后台 bash 会话的 owner，活行的状态轮询拿它去查；
+   * install_plugin 那一行点「安装」也要带会话（主进程按它重验工作区） */
+  sessionId: string;
 }) {
   const t = useT();
   const [open, setOpen] = useFoldState(`tool:${props.toolCallId}`);
@@ -5061,14 +5124,65 @@ function ToolLine(props: {
   // 运行」（PR 168）：被中断的 bash 不计时、不自动展开，与真跑着的命令分流 ──
   const shell = props.toolName === "bash" || props.toolName === "powershell";
   const shellActive = shell && active;
-  // 秒针：只挂运行中的 shell（Responding 同款，一秒一跳）。睡眠中的命令没有任何
-  // 事件帧，计时只能靠自己跳；跑完即停，不留空转的 interval。
+  // ── bash 活行：签到交还之后，这一行原地变成后台会话的观察窗 ──
+  // 交还事实从工具结果尾部的 `[orbita] kind=detached session=b1 elapsed=302s` 认出来；
+  // 结束事实来自 runtime 写回的那条终态记录（同 toolCallId，details 带 orbitaBash）。
+  // 认不出（短命令、旧记录的普通 bash）就没有活行，整块逻辑自然退化成今天的行。
+  const bashNotice = shell ? detachedBashNotice(result) : null;
+  const bashResult = shell ? bashResultOf(result) : null;
+  const bashId = bashNotice?.sessionId ?? bashResult?.sessionId ?? null;
+  // 交还了、还没有落定记录：这条命令还在后台跑（或者结果正在回来的路上）
+  const bashRunning = bashNotice !== null && bashResult === null;
+  // ── 这一行**真的**还活着吗 ──
+  // 交还提示是某个 agent 进程写下的事实，而会话表在**那个进程的内存里**：应用一重启
+  // 表就空了、命令连同进程树一起没了，转录里这一行却还在。不查就会一直假装在跑
+  // （秒针天天涨、停止钮挂着、结果永远不会回来）。
+  // 判据交给会话表的 owner（`bashSessions`）：快照带着回答它的进程标识，与提示里的
+  // `run=` 对不上就是上个进程留下的（失联）；对不上 id 也一样。
+  // null = 没问出来（超时）——那是不知道，维持原判，不拿空快照诬告失联。
+  const [bashSnapshot, setBashSnapshot] = useState<BashSessionsSnapshot | null>(null);
+  useEffect(() => {
+    if (!bashRunning) {
+      setBashSnapshot(null);
+      return;
+    }
+    let alive = true;
+    const ask = () => {
+      void api.agent
+        .bashSessions(props.sessionId)
+        .then((snapshot) => {
+          if (alive && snapshot !== null) setBashSnapshot(snapshot);
+        })
+        .catch(() => undefined);
+    };
+    ask();
+    // 20 秒复查一次：内核进程半途没了（崩了 / 被换掉），这一行也不该再装一小时的活人。
+    // 问不拉进程（主进程直接回空快照），代价只是一次 IPC。
+    const timer = window.setInterval(ask, 20_000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [bashRunning, props.sessionId]);
+  const bashLost = bashNotice !== null && bashSnapshot !== null && !detachedNoticeIsLive(bashNotice, bashSnapshot);
+  // 另一种死法：快照的进程标识与提示里的不一样 = 中途换过进程（应用重启 / 内核重启）
+  const bashLostToRestart =
+    bashLost &&
+    bashSnapshot !== null &&
+    bashNotice !== null &&
+    bashNotice.runId !== undefined &&
+    bashNotice.runId !== bashSnapshot.runId;
+  // 还在跑的行：交还没落定、也没失联。停止钮、秒针、活色都只认它
+  const bashLive = bashRunning && !bashLost;
+  // 秒针：只挂「跑着的东西」——运行中的 shell（Responding 同款，一秒一跳）与
+  // 后台活行（**本地外推**：从 detach 时已跑的秒数 + 之后本地走过的秒数，
+  // 不发任何 IPC）。睡眠中的命令没有任何事件帧，计时只能自己跳。
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (!shellActive) return;
+    if (!shellActive && !bashLive) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [shellActive]);
+  }, [shellActive, bashLive]);
   const runStart = shellActive ? toolStartAt(props.toolCallId) : null;
   const expectedSeconds = shell ? expectedSecondsOf(props.input) : null;
   const limitSeconds = shell ? timeoutSecondsOf(props.input) : null;
@@ -5179,8 +5293,15 @@ function ToolLine(props: {
     props.toolName === "write" ||
     props.toolName === "edit" ||
     props.toolName === "ls";
-  const baseCallLabel =
-    callSummary !== null && pathTool ? splitPathTail(callSummary).name : callSummary;
+  // 收起态不显示命令（A 版，用户已拍板）：长命令会把行尾的机器事实与停止钮挤掉，
+  // 命令全文在展开体顶部的命令专位。这里一并把摘要置空，省于后续每帧的比较。
+  const baseCallLabel = !showsCallSummary(props.toolName)
+    ? null
+    : callSummary !== null && pathTool
+      ? splitPathTail(callSummary).name
+      : callSummary;
+  // 命令全文（bash 的入参里就是它）：收起态不再显示，展开体顶部的命令专位用
+  const command = shell ? callSummary : null;
   // 跑着的 shell 有实时增量可展，其余工具跑完才有完整结果（见 toolExpandable）
   const expandable = toolExpandable(result, props.toolName);
   const live = expandable && active;
@@ -5217,11 +5338,41 @@ function ToolLine(props: {
   const fileLang = fileView !== null ? langFromPath(callSummary ?? "") : null;
   const writeLines =
     !open && props.toolName === "write" && fileView !== null ? writeLineCount(props.input) : null;
-  // 只有 shell 类值得看耗时（read/edit 毫秒级是噪音）；旧会话没见过 running 帧，量不到就没有
+
+  // ── bash 活行的事实槽（A 版）──
+  // 收起态**一个字都不给命令**（用户拍了 A 版）：长命令会把行尾的机器事实与停止钮
+  // 挤掉，而命令全文在展开体的命令专位。跑着的行只给一个本地秒针，落定后换成结果词。
+  const bashFacts =
+    bashResult !== null
+      ? bashResultFacts(bashResult, t)
+      : bashNotice !== null && bashLost
+        ? bashLostFacts(bashNotice, t, bashLostToRestart)
+        : bashNotice !== null
+          ? bashLiveFacts(
+              bashNotice,
+              bashLiveSeconds(
+                bashNotice,
+                bashNotice.elapsedSeconds,
+                now - (result?.timestamp ?? now),
+              ),
+              t,
+            )
+          : null;
+  const bashFactsColor =
+    bashFacts === null
+      ? undefined
+      : bashFacts.tone === "danger"
+        ? "var(--color-danger)"
+        : bashFacts.tone === "live"
+          ? "var(--color-text-secondary)"
+          : "var(--color-text-tertiary)";
+  // 活行的图标：被停 / 被上限杀掉不再假装是终端（同「已中断」那一枚 circle-off）；
+  // 失联也一样——这一行没有任何东西在跑了
+  const bashIcon: IconName | null = bashResult?.status === "killed" || bashLost ? "circle-off" : null;
+  // 只有 shell 类值得看耗时（read/edit 毫秒级是噪音）；旧会话没见过 running 帧，量不到就没有。
+  // 交还成后台会话的行不给这个数：它只是「交还时已经跑了多久」，真总量在事实槽的共 X 里
   const shellDuration =
-    (props.toolName === "bash" || props.toolName === "powershell") && !active
-      ? toolDurationText(props.toolCallId, t)
-      : null;
+    shell && !active && bashFacts === null ? toolDurationText(props.toolCallId, t) : null;
   // 运行中时钟：已跑多久（+上限，+预计）。起点没记到（旧会话重开）时退化为只报预计，
   // 连预计都没有就什么都不报——宁缺勿假。超出预计如实说「比预计慢」，不给负数倒计时。
   const runClock =
@@ -5239,6 +5390,10 @@ function ToolLine(props: {
   // 折叠行下的活尾：有流式输出时取末几行，让「它在动」不展开也看得见；
   // 展开时藏起（展开体本身就是完整活尾，别显两遍）
   const tailPreview = shellActive && !open ? tailPreviewLines(rawBody) : [];
+
+  // 事实槽占位时，摘要与耗时都是同一件事的第二遍（且会把行尾挤爆）——让位
+  const showSummary =
+    summary !== null && !active && stats === null && writeLines === null && builtin === null && bashFacts === null;
 
   // 外部能力芯片行（2026-09-27 两轮裁决）：skill 使用与 MCP 调用的身份收进一枚
   // 药丸芯片（图标 + 类型词 + 名字），与输入框附件 chip / 引用 chip 同族——「外部
@@ -5327,9 +5482,26 @@ function ToolLine(props: {
 
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
-      <CollapseRow open={open} disabled={!expandable} onToggle={toggleOpen}>
+      <CollapseRow
+        open={open}
+        disabled={!expandable}
+        onToggle={toggleOpen}
+        // 停止钮是真按钮，只能是折叠按钮的兄弟（button 不能嵌 button）。
+        // 常驻而不是悬停：这条行可能挂一小时，想停的时候人不该先学会悬停。
+        trailing={
+          bashLive && bashId !== null ? <BashStopButton sessionId={props.sessionId} bashId={bashId} /> : undefined
+        }
+      >
         <span className={active ? "orbita-breath" : undefined} style={HEAD_WRAP}>
-          <span style={{ color: failed ? "var(--color-danger)" : headIconColor(active) }}>
+          <span
+            style={{
+              color: failed
+                ? "var(--color-danger)"
+                : bashFacts?.tone === "danger"
+                  ? "var(--color-danger)"
+                  : headIconColor(active || bashLive),
+            }}
+          >
             <Icon
               name={
                 failed
@@ -5338,18 +5510,18 @@ function ToolLine(props: {
                     ? "circle-off"
                     : skillUse !== null
                       ? "book-open"
-                      : toolIcon(props.toolName)
+                      : (bashIcon ?? toolIcon(props.toolName))
               }
               size={14}
               strokeWidth={1.8}
             />
           </span>
           {builtin !== null || docEdit !== null ? (
-            <span className="command-pill" style={headLabel(active)}>
+            <span className="command-pill" style={headLabel(active || bashLive)}>
               {builtin?.label ?? docEdit}
             </span>
           ) : (
-            <span style={headLabel(active)}>{props.toolName}</span>
+            <span style={headLabel(active || bashLive)}>{props.toolName}</span>
           )}
         </span>
         {callLabel !== null && (
@@ -5371,8 +5543,18 @@ function ToolLine(props: {
         {!open && stats === null && writeLines !== null && (
           <span style={SLOT.status}>{t.chat.lines(writeLines)}</span>
         )}
+        {/* bash 活行的事实槽：跑着是 `b1 · 已 12:34 · 无输出 2:10`，落定换成
+            结果词（退出 0 / 已停止 / 已终止 · 上限）。钉在行的右血线上 */}
+        {bashFacts !== null && (
+          <span
+            className="row-trailing"
+            style={{ ...SLOT.status, color: bashFactsColor, fontFamily: "var(--font-family-mono)" }}
+          >
+            {bashFacts.text}
+          </span>
+        )}
         {/* 有统计时「N lines」是同一量级的第二遍，让位 */}
-        {summary !== null && !active && stats === null && writeLines === null && builtin === null && (
+        {showSummary && (
           <span
             style={failed ? { ...SLOT.status, color: "var(--color-danger)" } : SLOT.status}
           >
@@ -5444,7 +5626,17 @@ function ToolLine(props: {
         <FileContentView text={fileView.text} startLine={fileView.startLine} lang={fileLang} />
       )}
       {open && expandable && diff === null && fileView === null && builtinRows !== null && <BuiltinDetailBody rows={builtinRows} />}
-      {open && expandable && diff === null && fileView === null && builtinRows === null && (
+      {open && expandable && diff === null && fileView === null && builtinRows === null && shell && command !== null && (
+        // bash 的展开体：命令专位（$ + 全文 + copy）在上，输出在下，同一个虚线框
+        <ShellToolBody
+          command={command}
+          text={imagelessBody}
+          failed={failed}
+          live={live}
+          pendingResult={bashLive}
+        />
+      )}
+      {open && expandable && diff === null && fileView === null && builtinRows === null && (!shell || command === null) && (
         <PlainToolBody
           toolName={props.toolName}
           text={imagelessBody}
@@ -5489,6 +5681,130 @@ function BuiltinDetailBody(props: { rows: readonly DetailRow[] }) {
           </span>
         </Fragment>
       ))}
+    </div>
+  );
+}
+
+/**
+ * bash 活行的行尾停止钮（**点一下直接停**，没有两段式确认）。
+ *
+ * 用户 2026-11-13 裁决：命令本来就跑在非交互环境里，误停的代价远小于「点两下才停」
+ * 在长构建上耽误的时间。hover 变红与 disabled 态保留——那是「这是个会杀进程的按钮」
+ * 的信号，不是确认流程。
+ *
+ * 走 `agent:bash-stop`（四层契约）：主进程转给 agent 进程按 **owner** 停——只有
+ * 这条会话自己的命令停得掉，别的会话的同名 id 在这里当不存在。**没有回执**：
+ * 停完的落定态来自 runtime 写回对话的那条终态记录。
+ */
+function BashStopButton(props: { sessionId: string; bashId: string }) {
+  const t = useT();
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      type="button"
+      className="bash-stop"
+      title={t.chat.stopBash(props.bashId)}
+      aria-label={t.chat.stopBash(props.bashId)}
+      disabled={busy}
+      onClick={() => {
+        setBusy(true);
+        // 停失败（进程刚退 / runtime 不在）：不抹黑也不装作停掉了，结果记录到了自然落定
+        void api.agent.stopBashSession(props.sessionId, props.bashId).catch(() => undefined).finally(() => setBusy(false));
+      }}
+    >
+      <Icon name="square" size={13} strokeWidth={2} />
+    </button>
+  );
+}
+
+/**
+ * bash 的展开体（A 版）：**命令专位 + 发丝线 + 输出**，同一个圆角虚线框。
+ *
+ * 命令是这一行的身份，可它一长就会把行尾的机器事实与停止钮挤掉——所以收起态
+ * 一个字都不给（只留 `bash`），全文放到这里：`$` 提示符（不参与选中）、等宽、
+ * **只在空格处换行**（`break-word` 会把 `--reporter=verbose` 拆成 `--` + `reporter`，
+ * 命令行就读不得了）、可选中、行尾一枚 quiet-control 的 copy。
+ *
+ * 输出与今天的工具行一致（mono、贴底跟随、首尾截断都照旧），只是从属于同一个框；
+ * 交还提示行 `[orbita] kind=…` 是给模型与渲染层看的协议，不进人看的那一面
+ * （事实槽已经把它说成「已 12:34」）。
+ */
+function ShellToolBody(props: {
+  command: string;
+  text: string;
+  failed: boolean;
+  live: boolean;
+  /** 已交还、结果还没回来：没有输出时说「结果见下方」，不撒谎说「没有输出」 */
+  pendingResult: boolean;
+}) {
+  const t = useT();
+  const follow = useFollowScroll(props.live);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1_200);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+  // 协议行进仓库之前就丢掉：它们属于机器，不是命令的输出（交还行与落定行都以
+  // `[orbita] ` 开头，那是我们保留的前缀；模型在 pi 本子里仍读得到落定行）
+  const text = stripTrailingBlankLines(
+    props.text
+      .split("\n")
+      .filter((line) => !line.startsWith("[orbita] "))
+      .join("\n"),
+  );
+  const clamped = clampToolBody(text);
+  const truncationNote =
+    clamped.omitted === null ? null : (
+      <div style={TRUNCATION_NOTE}>{t.chat.bodyTruncated(clamped.omitted.lines, clamped.omitted.chars)}</div>
+    );
+  const lineColor = props.failed ? "var(--color-danger)" : "var(--color-text-secondary)";
+  return (
+    <div style={{ ...EXPANDED_FRAME, minWidth: 0, overflow: "hidden" }}>
+      <div className="bash-command">
+        <span className="bash-prompt" aria-hidden="true">
+          $
+        </span>
+        <code>{props.command}</code>
+        <button
+          type="button"
+          className={copied ? "bash-copy copied" : "bash-copy"}
+          title={copied ? t.chat.copied : t.chat.copyCommand}
+          aria-label={copied ? t.chat.copied : t.chat.copyCommand}
+          onClick={() => {
+            void navigator.clipboard.writeText(props.command).then(
+              () => setCopied(true),
+              () => undefined,
+            );
+          }}
+        >
+          <Icon name={copied ? "check" : "copy"} size={13} strokeWidth={1.8} />
+        </button>
+      </div>
+      <div className="bash-command-sep" />
+      <div ref={follow.ref} onScroll={follow.onScroll} className="scroll bash-output">
+        {text === "" ? (
+          <div style={{ ...BODY_LINE, color: "var(--color-text-tertiary)" }}>
+            {props.live
+              ? t.chat.waitingOutput
+              : props.pendingResult
+                ? t.chat.bashResultBelow
+                : t.chat.noOutput}
+          </div>
+        ) : (
+          clamped.head.map((line, index) => (
+            <div key={index} style={{ ...BODY_LINE, color: lineColor }}>
+              {line === "" ? " " : line}
+            </div>
+          ))
+        )}
+        {truncationNote}
+        {clamped.tail.map((line, index) => (
+          <div key={`tail-${index}`} style={{ ...BODY_LINE, color: lineColor }}>
+            {line === "" ? " " : line}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -5698,6 +6014,8 @@ function ToolGroupLine(props: {
   channel: ChannelViewContext;
   /** 透传给成员 ToolLine（read SKILL.md 徽标用） */
   skills: SkillMeta[];
+  /** 成员的 bash 活行靠它查后台会话状态（成员行与组头同一个会话） */
+  sessionId: string;
 }) {
   const t = useT();
   const { group } = props;
@@ -5755,6 +6073,7 @@ function ToolGroupLine(props: {
               onOpenTask={props.onOpenTask}
               channel={props.channel}
               skills={props.skills}
+              sessionId={props.sessionId}
             />
           ))}
         </div>

@@ -22,11 +22,23 @@ import { MEMORY_TOOLS_GUIDELINE } from "./memory-tools.ts";
  * bash 的 timeout 指引。数字与权限闸门同源（shared 的 `gatedCommandTimeout`）：小于下限的抬到下限，
  * 不填的补默认上限。后半句要讲：模型不知道有这条上限，就会把真要跑一小时以上的命令（长训练、
  * 大构建）也不带 timeout 发出去，到点被杀。
+ *
+ * 最后两句是另一件事，不跟前面打架：长驻命令（dev server、watch、CDP 探针）本来就不该
+ * 用 bash 跑——bash 不给人看中途输出、也不能打断；要看、要打断就走 terminal_*。
+ *
+ * 长命令那两句（2026-11-13）：bash 到签到点会自己交还、结果自己回来，所以长命令直接跑；
+ * 要跑更久就在 timeout 里写明总时长——那个值同时也是这条会话的寿命（见 bash-observe.ts）。
  */
 const TOOL_GUIDELINES =
   "For commands that may take a while (installing dependencies, builds, tests), do not pass a short timeout to bash/powershell: " +
   `these are slow on Windows and a short timeout kills a normal slow command halfway; values under ${COMMAND_TIMEOUT_FLOOR_SECONDS} seconds are raised to ${COMMAND_TIMEOUT_FLOOR_SECONDS}. ` +
-  `A command without a timeout is stopped after ${COMMAND_TIMEOUT_DEFAULT_SECONDS} seconds; pass a larger timeout only when a command really needs to run longer than that.`;
+  `A command without a timeout is stopped after ${COMMAND_TIMEOUT_DEFAULT_SECONDS} seconds. ` +
+  "Long bash commands can be started directly: when one is still running at its 5-minute check-in it detaches automatically, " +
+  "keeps running in the background, and its result is written back to the conversation when it finishes — do not poll for it. " +
+  "If it has to run longer than that, declare the total duration in timeout (for example 21600 for up to six hours); " +
+  "the session lifetime follows that number. " +
+  "Commands that keep running and need to be watched or interrupted (dev servers, watch mode, tail -f, CDP probe scripts, anything still running after launch) belong in the terminal_* tools, not bash. " +
+  "Use bash_list to see what is still running, and bash_stop to end one you no longer need.";
 
 const EXPECTED_SECONDS_GUIDELINE =
   "When calling bash/powershell with a command you expect to run longer than 10 seconds (tests, builds, installs, sleep, " +
@@ -34,15 +46,18 @@ const EXPECTED_SECONDS_GUIDELINE =
   "It only drives the UI (progress hint and auto-expand) and does not affect execution or timeouts.";
 
 /**
- * 自动化工具（automation_create）已注册时的长任务指引：用户 2026-11-05 裁决——这类建议要写进系统提示词，
- * 不能只靠工具 description（模型想不起来就不会去读）。没注册自动化时不讲（讲了模型也做不了，只会干等）。
+ * 自动化工具（automation_create）已注册时的指引：用户 2026-11-05 裁决——这类建议要写进系统提示词，
+ * 不能只靠工具 description（模型想不起来就不会去读）。没注册自动化时不讲。
+ *
+ * **只讲排期**（2026-11-13）：长 bash 不再走这条分流——bash 签到会自己交还、结果自己回来，
+ * 寿命也有上限，用 automation 去等它是多此一举（还多烧一轮模型）。automation 留给「以后还要再做一次」
+ * 与「要跨应用重启」的活。
  */
 const LONG_TASK_AUTOMATION_GUIDELINE =
-  "When a command you are about to run will likely take more than about 10 minutes (a long training run, a large build, a full scan), " +
-  "do not wait it out in a foreground bash call. Start it in the background with its output redirected to a log file, " +
-  "create a this_session automation (one-shot around the expected finish time, or a short interval) whose instruction tells you to read that log " +
-  "and check whether the job finished (cancel the automation once it has), then end your turn. " +
-  "Tell the user in one sentence what is running, where the log is, and that you will come back to it on your own.";
+  "Use automation_create when the work should happen again later on its own (a daily check, a reminder, a recurring scan) " +
+  "or when it only makes sense after the app restarts. Do not use an automation to wait for a bash command: " +
+  "a long bash command keeps running in the background and its result is written back to the conversation by itself. " +
+  "Tell the user in one sentence what will happen and when, then end your turn.";
 
 export interface SystemPromptInput {
   /** pi 基底，已由 adaptSystemPrompt 处理 */
@@ -59,7 +74,7 @@ export interface SystemPromptInput {
   intentGuideline: boolean;
   /** 本会话注册了记忆工具（根会话且记忆开着）：讲一段固定的使用说明 */
   memoryToolsGuideline: boolean;
-  /** 本会话注册了 automation_create（根会话且自动化开着）：讲长任务放后台、建自动化回来看的指引 */
+  /** 本会话注册了 automation_create（根会话且自动化开着）：讲「什么该排期」的指引（不再管长 bash） */
   longTaskAutomationGuideline: boolean;
 }
 

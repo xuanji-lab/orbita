@@ -21,6 +21,7 @@ import {
   SessionManager,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
+import type { TranscriptProgress } from "@earendil-works/pi-protocol";
 import type { AgentCommand, AgentEvent, ProviderSecrets } from "../shared/agent-ipc.ts";
 import type { MemoryRecallOutcome } from "../shared/memory.ts";
 import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
@@ -33,6 +34,7 @@ import { CATALOG_REFRESH_EVERY_MS, CatalogRefresher, createModelRuntime, refresh
 import { fetchTokenrhythmCatalog, tokenrhythmCachePath } from "./tokenrhythm-catalog.ts";
 import { createToolCallGate, ENABLED_BUILTIN_TOOLS, type PiExtensionApi } from "./permission.ts";
 import { createShellPathResolver } from "./shell-path.ts";
+import { nonInteractivePrefixFor } from "./shell-env.ts";
 import { TranscriptAdapter, type AdaptableEvent } from "./transcript-adapter.ts";
 import { forModel, preparePromptImages } from "./prompt-images.ts";
 import { attachmentBlocks, composePromptText, splitEchoBlocks } from "../shared/prompt-attachments.ts";
@@ -91,6 +93,29 @@ import { createMemoryTools, MEMORY_TOOL_NAMES } from "./memory-tools.ts";
 import { createTaskTools } from "./task-tools.ts";
 import { createBrowserTools } from "./browser-tools.ts";
 import { createTerminalTools, TERMINAL_TOOL_NAMES } from "./terminal-tools.ts";
+import { createObservedBashTool, killObservedChildren } from "./bash-observe.ts";
+import {
+  bashRunId,
+  createBashHandleTools,
+  listSessions,
+  runningSessionIds,
+  stopOwnedSessions,
+  stopSession,
+  withBashReminder,
+  type BashSessionEnd,
+} from "./bash-sessions.ts";
+import {
+  BASH_RESULT_DETAILS_KEY,
+  bashResultNotice,
+  type BashResultMeta,
+} from "../shared/bash-session.ts";
+import {
+  bashFollowUpPrompt,
+  bashQueuedFollowUpPrompt,
+  shouldDrainBashFollowUp,
+  shouldStartBashFollowUp,
+  type BashFollowUpFacts,
+} from "./bash-follow-up.ts";
 import {
   applyRecallEvent,
   composeAttachmentPrompt,
@@ -108,6 +133,7 @@ import { intentContextPath, writeIntentContextFiles } from "./intent-context-fil
 import type { IntentRecallRecord } from "../shared/session.ts";
 import {
   COMPACTION_DEFAULT,
+  effectiveBashLifetimeMinutes,
 } from "../shared/settings.ts";
 import {
   compactionBoundaryTimestamp,
@@ -640,6 +666,7 @@ async function setSessionModel(
     }
     await session.setModel(model);
     updateLedgerAuth(sessionId, scoped);
+    syncFollowUp(sessionId, { provider: scoped, modelId: model.id });
     send({ type: "model", sessionId, providerId: model.provider, modelId: model.id });
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
@@ -670,6 +697,7 @@ async function setLedgerModel(
       throw new Error(`unknown model "${scoped.id}/${modelId}"`);
     }
     updateLedgerAuth(sessionId, scoped);
+    syncFollowUp(sessionId, { provider: scoped, modelId: model.id });
     send({ type: "model", sessionId, providerId: model.provider, modelId: model.id });
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
@@ -697,7 +725,38 @@ interface LedgerNote {
    * （首轮 / 进程重启后只立基线不报变化）。
    */
   promptPrints: Record<string, string> | null;
+  /** 这一轮 pi 用的本子（bash 结果在空闲时直接追进这份文件） */
+  piSessionFile?: string;
+  /**
+   * 最近一次 submit 的装配模板（去掉这一轮自己的载荷）。后台 bash 结束要自动起
+   * 一轮时，必须用**这条会话当前的** provider / 模型 / 权限档 / 目录 / MCP 装配——
+   * 那正是主进程每轮发来的这份命令，存下来原样重放，不新造一条开轮装配。
+   */
+  followUp?: BashFollowUpTemplate;
+  /** 已经为哪一个后台会话起过后继轮（同一条会话的同一个结束只起一次） */
+  followUpFor?: string;
+  /**
+   * 在跑的轮里结束、**那一轮看不到**的后台结果。
+   *
+   * pi 在流式期间把 bashExecution 排进 `_pendingBashMessages`（tool_use / tool_result
+   * 的顺序不能被戳破），直到 agent_end 才落进本子——所以在跑的轮读不到它。
+   * 这批结果等轮结束时由 `drainPendingBashFollowUp` 补一轮，否则它们只能躺到
+   * 下一条用户消息才被读到（用户发两条几乎同时结束的命令时就是这样）。
+   */
+  pendingBash: BashFollowUpFacts[];
+  /** 这一轮是用户按停止结束的：轮结束后不再为挂起的结果自动起轮 */
+  userStopped?: boolean;
 }
+
+/**
+ * 自动起一轮用的模板：submit 命令去掉随这句话走的载荷（文本 / 图 / 文件 / 粘贴 /
+ * 意图注入 / 失败轮回填）。其余字段（provider、模型、目录、MCP、压缩偏好…）
+ * 都是「这条会话此刻怎么装配」，原样留着。
+ */
+type BashFollowUpTemplate = Omit<
+  Extract<AgentCommand, { type: "submit" }>,
+  "text" | "images" | "files" | "pasted" | "intent" | "backfill"
+>;
 
 /**
  * 跨轮账本：sessionId → 不持有 pi 对象的跨轮状态。key 在首次开机时落账，
@@ -709,10 +768,30 @@ const ledger = new Map<string, LedgerNote>();
 function ledgerNote(sessionId: string): LedgerNote {
   let note = ledger.get(sessionId);
   if (note === undefined) {
-    note = { mode: "plan", echoed: new Set(), titleInFlight: false, apiKey: "", promptPrints: null };
+    note = {
+      mode: "plan",
+      echoed: new Set(),
+      titleInFlight: false,
+      apiKey: "",
+      promptPrints: null,
+      pendingBash: [],
+    };
     ledger.set(sessionId, note);
   }
   return note;
+}
+
+/**
+ * 换模型 / 换档之后把自动起一轮的模板对齐到最新事实：模板是**下一次开轮**的装配，
+ * 不是「上一次的化石」。没有模板（还没跑过 submit）时什么都不做。
+ */
+function syncFollowUp(
+  sessionId: string,
+  patch: Partial<Pick<BashFollowUpTemplate, "provider" | "modelId" | "mode">>,
+): void {
+  const note = ledgerNote(sessionId);
+  if (note.followUp === undefined) return;
+  note.followUp = { ...note.followUp, ...patch };
 }
 
 /** 换 provider 后把标题鉴权面对齐到最近一次装配（setModel 两条路径共用）。 */
@@ -751,6 +830,12 @@ interface TurnParts {
 
 /** 运行态表：sessionId → 正在跑的那一轮。「在不在跑」的唯一真值。 */
 const running = new Map<string, CycleSlot<TurnParts>>();
+/**
+ * 正在被删掉的 Orbita 会话。删除时会按归属杀后台命令，杀会触发结束回调——
+ * 那条结果不该再写进一条已经删掉的会话（转录/pi 本子都可能已不在）。
+ * 删完 1 分钟后自动清掉标记（id 是 UUID，不重用）。
+ */
+const closingSessions = new Set<string>();
 
 /**
  * MCP 连接。一个 hub 托管所有工作区的实例（连接按 工作区×server 分片，见 mcp.ts）——
@@ -1288,6 +1373,25 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     if (shellPath !== undefined) services.settingsManager.applyOverrides({ shellPath });
   }
   /**
+   * 非交互环境前缀，与上面那条同一个口径（用户显式设过就不盖）。
+   *
+   * 治「命令在等人」：分页器（`git log` 进 less）、凭据提示（`git push` / `gh`）、
+   * 交互确认——这些命令在无 TTY 的 bash 里会一直等，实测有跑过 3.7 小时不收尾的。
+   * 路线是改环境不改命令（codex / dsh 已如此），理由与 pi 的接线点见 ./shell-env.ts。
+   *
+   * **顺序有讲究**：读 `getShellPath()` 必须在上一条 applyOverrides 之后——前缀按
+   * **最终生效的** shell 算。用探测前那个旧值（通常是 undefined）会在用户把 shellPath
+   * 设成 PowerShell 的机器上仍然判成 POSIX，`export` 那一行于是把每条命令弄成语法错误。
+   *
+   * 已知边界：pi 只把这个前缀给 **bash** 工具，`powershell` 工具不受影响（它自己就是
+   * 非交互探测式调用，没有分页器与 TTY 提示这回事）。
+   */
+  if (services.settingsManager.getShellCommandPrefix() === undefined) {
+    // 非 POSIX shell（cmd / PowerShell）拿到的是空串：不填，等于这台机器行为不变
+    const prefix = nonInteractivePrefixFor(services.settingsManager.getShellPath());
+    if (prefix !== "") services.settingsManager.applyOverrides({ shellCommandPrefix: prefix });
+  }
+  /**
    * 内建工具集**显式给**，不吃 pi 的默认四件套（read/bash/edit/write）。
    *
    * 因为 pi 的 system prompt 里有一条规则：**有 bash 而 grep / find / ls 一个都不在**时，
@@ -1339,6 +1443,11 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    * 用户至少还能接着说话，而不是对着一条打不开的会话干瞪眼。
    */
   const sessionManager = openOrCreate(command);
+  // bash 结果在「这一轮已结束」之后才回来时，要能直接追进 pi 的本子；这里记下本轮
+  // 真正打开的那份（open 失败退回新建时 pi 会换文件，按轮自愈）
+  note.piSessionFile = sessionManager.getSessionFile() ?? command.piSessionFile;
+  // 自动起一轮的重放模板：只留装配，不留这一轮的话（见 BashFollowUpTemplate）
+  if (command.type !== "compact") note.followUp = followUpTemplateOf(command);
   /**
    * 图片字节预算的轮内状态（image-byte-budget.ts 管算法，这里只管装配）：
    * 水位与附件引用从 pi 本子（当前叶子路径）读；本轮 submit 的附图引用在
@@ -1382,6 +1491,26 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   await mcpHub.ensure(mcpScope, command.mcpServers, mcpLabel);
   send({ type: "mcp", servers: mcpHub.describe() });
   const customTools = [
+    // bash 按名字覆盖 pi 的内建版本（registry 先建内建表、再按名字合并自定义工具）。
+    // 目的是签到点交还句柄（./bash-observe.ts）；**定义仍从 settingsManager 现读
+    // prefix / shellPath**，否则非交互前缀会被悄悄丢掉。ENABLED_BUILTIN_TOOLS 里的
+    // `bash` 不用动——名字没变，registry 用它选中我们这份。
+    createObservedBashTool(command.cwd, services.settingsManager, {
+      owner: command.sessionId,
+      // 默认寿命（模型没显式写 timeout 时用）：主进程每轮按设置装配，缺席回 4 小时。
+      // 显式声明 timeout 的命令不用它——那个值就是那条命令自己的上界（见 bash-observe.ts）
+      lifetimeMs: effectiveBashLifetimeMinutes(command.bashLifetimeMinutes) * 60_000,
+      // 后台命令结束时把结果写回对话（必要时自动起一轮）。回调可能远晚于这一轮
+      // 结束才触发，所以闭包里只留**纯数据**（这份 submit 命令），不留 pi 对象
+      onSessionEnd: (result) => {
+        void deliverBashSessionEnd(command, result).catch((cause: unknown) => {
+          console.error("[agent] bash 结果写回对话失败", command.sessionId, cause);
+        });
+      },
+    }),
+    // 句柄两件：stop / list。看进展不再需要工具（结果自己回来）。会话表在 agent
+    // 进程里，进程退出时由 installBashChildCleanup 一并收掉
+    ...createBashHandleTools(command.sessionId),
     ...mcpHub.toolsFor(mcpScope),
     // read_pdf 不过 broker：附件副本与工作区 PDF 都在 agent read 边界内，直读（./pdf-tools.ts）
     // cite_pdf 挂在实验功能「PDF 引用」的开关后面（缺席 = 关）
@@ -1667,6 +1796,12 @@ function openOrCreate(command: OpenInput): SessionManager {
  */
 function startTurn(command: OpenInput, run: (opened: OpenedTurn) => Promise<unknown>): Promise<void> {
   const id = command.sessionId;
+  // 任何一轮开起来都会从本子读历史：挂起的后台结果已经在那里面了（pi 在这之前的
+  // 上一轮 agent_end 就把它落了盘），所以没人再需要为它单独起轮。
+  // 用户刚发的这一轮读了也算——不再补一轮。
+  const note = ledgerNote(id);
+  note.pendingBash = [];
+  note.userStopped = false;
   return startCycle(
     running,
     id,
@@ -1705,8 +1840,300 @@ function startTurn(command: OpenInput, run: (opened: OpenedTurn) => Promise<unkn
       }),
     // settled 一定晚于 dispose 与出表（turn-cycle 的收尾序）——renderer 收到
     // idle 时本轮已完全收尾，排队投递不会撞 already running
-    () => send({ type: "phase", sessionId: id, phase: "idle" }),
+    () => {
+      send({ type: "phase", sessionId: id, phase: "idle" });
+      // idle 已经发出去了（renderer 的排队消息可以开始投递）；挂起的后台结果这时
+      // 才读得到（pi 在 prompt 的 finally 里把排队的 bashExecution 落了盘），补一轮。
+      // startTurn 自己会再判一次 busy：用户那条排队消息先到的话，就轮不到我们——
+      // 而那一轮 open 读的就是含这条结果的本子，同样算被读到。
+      void drainPendingBashFollowUp(id).catch((cause: unknown) => {
+        console.error("[agent] 挂起的后台结果补轮失败（结果本身已经写回）", id, cause);
+      });
+    },
   );
+}
+
+/* ------------------------------------------------------------------ *
+ * 后台 bash 的结果写回
+ *
+ * 目标（用户 2026-11-13 裁决）：会话结束就把结果写成一条**真正的会话消息**，
+ * 模型与用户都能在转录里看到它；满足三条触发条件时再自动起一轮接着处理。
+ * 判断权不再交给模型（没有 bash_poll、没有 waitSeconds）。
+ * ------------------------------------------------------------------ */
+
+/**
+ * 自动起一轮的模板：submit 命令去掉随那句话走的载荷。**其余字段原样留着**——
+ * provider / 模型 / 权限档 / 目录 / MCP 装配都是「这条会话此刻怎么开轮」，
+ * 主进程每轮都发这一份，存下来重放比在 agent 侧另拼一套安全。
+ */
+function followUpTemplateOf(command: Extract<OpenInput, { type: "submit" | "interrupt" }>): BashFollowUpTemplate {
+  const { text: _text, images: _images, files: _files, pasted: _pasted, intent: _intent, backfill: _backfill, ...rest } = command;
+  return { ...rest, type: "submit" };
+}
+
+/** pi 的 `BashResult` 形状（recordBashResult 的第二个参数，字段真名见 pi 的 bash-executor） */
+function piBashResult(result: BashSessionEnd): {
+  output: string;
+  exitCode: number | undefined;
+  cancelled: boolean;
+  truncated: boolean;
+} {
+  // 尾部输出 + 我们的一行机器事实：模型读到的既是真实输出，也一眼知道是哪个
+  // 后台会话、怎么结束的、跑了多久。pi 自己还会再补 cancelled / 非零退出码。
+  const notice = bashResultNotice(resultMetaOf(result));
+  return {
+    output: result.output.length > 0 ? `${result.output}
+
+${notice}` : notice,
+    exitCode: result.exitCode === null ? undefined : result.exitCode,
+    cancelled: result.cancelled,
+    truncated: false,
+  };
+}
+
+function resultMetaOf(result: BashSessionEnd): BashResultMeta {
+  const meta: BashResultMeta = {
+    sessionId: result.id,
+    status: result.status,
+    exitCode: result.exitCode,
+    elapsedSeconds: Math.round(result.elapsedMs / 1000),
+    command: result.command,
+  };
+  if (result.endReason !== undefined) meta.endReason = result.endReason;
+  return meta;
+}
+
+/**
+ * 写进 orbita 转录的那一条：终态 tool item，`toolCallId` 与原 bash 调用相同，
+ * 渲染层据此把它挂回 detach 那一行（同一 session id 也在 details 里留了一份）。
+ */
+function bashResultProgress(result: BashSessionEnd): TranscriptProgress {
+  const meta = resultMetaOf(result);
+  const notice = bashResultNotice(meta);
+  const output = result.output.length > 0 ? `${result.output}\n\n${notice}` : notice;
+  return {
+    type: "item_finished",
+    item: {
+      id: randomUUID(),
+      role: "tool",
+      toolCallId: result.toolCallId ?? `bash-${result.id}`,
+      toolName: "bash",
+      input: { command: result.command },
+      content: [{ type: "text", text: output }],
+      timestamp: Date.now(),
+      status: "complete",
+      isError: false,
+      details: {
+        [BASH_RESULT_DETAILS_KEY]: {
+          sessionId: meta.sessionId,
+          status: meta.status,
+          exitCode: meta.exitCode,
+          elapsedSeconds: meta.elapsedSeconds,
+          command: meta.command,
+          ...(meta.endReason === undefined ? {} : { endReason: meta.endReason }),
+        },
+      },
+    },
+  };
+}
+
+/**
+ * 空闲时把 bash 结果追进 pi 的本子。**与 `recordBashResult` 的空闲分支是同一件事**：
+ * 那边 append 的也是这条 `bashExecution` 消息（`isStreaming === false` 时不排队）。
+ * 之所以不为此再开一个 AgentSession：那要重建整套 services / 模型装配，而且会与
+ * 正在开的下一轮抢同一个 JSONL。这里只开一个只写的 SessionManager——它不持有对话
+ * 状态，追一行就关。
+ */
+function appendBashResultToPiBook(note: LedgerNote, cwd: string, result: BashSessionEnd): void {
+  const file = note.piSessionFile;
+  if (file === undefined) {
+    // 还没有 pi 本子（首轮都没跑完）：转录那一条仍会写（下面是 progress 事件）
+    return;
+  }
+  try {
+    const manager = SessionManager.open(file, undefined, cwd);
+    manager.appendMessage({
+      role: "bashExecution",
+      command: result.command,
+      output: result.output,
+      exitCode: result.exitCode === null ? undefined : result.exitCode,
+      cancelled: result.cancelled,
+      truncated: false,
+      timestamp: Date.now(),
+    });
+  } catch (cause) {
+    console.error("[agent] bash 结果追进 pi 本子失败", result.id, cause);
+  }
+}
+
+/** 回合正在 open（占坑了但对象面还没出来）时，等它的 AgentSession 出现 */
+async function waitForLiveSession(sessionId: string): Promise<AgentSession | undefined> {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const session = running.get(sessionId)?.opened?.session;
+    if (session !== undefined) return session;
+    if (!running.has(sessionId)) return undefined;
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+  }
+  return undefined;
+}
+
+/**
+ * 轮收尾后给挂起的后台结果补一轮之前，等一下 renderer 投递队首（理由见
+ * `drainPendingBashFollowUp`）：一次 IPC 往返足够，再长就只是白等。
+ */
+const DRAIN_AFTER_IDLE_MS = 600;
+
+/**
+ * 一条后台命令结束了：结果写回对话，必要时自动起一轮。
+ *
+ * 顺序有讲究：**先让 pi 收下结果，再发转录那一条，最后起轮**。自动起的那一轮
+ * open 时从本子读历史，结果必须在盘上（或已进活会话的队列）。
+ *
+ * **在跑的轮读不到这条结果**（pi 把流式期间的 bashExecution 排到 agent_end 才落进
+ * 本子），所以那种情况要把结果**挂起**，等这一轮收尾再补一轮——见
+ * `drainPendingBashFollowUp`。
+ */
+async function deliverBashSessionEnd(command: OpenInput, result: BashSessionEnd): Promise<void> {
+  const sessionId = command.sessionId;
+  // 会话正在被删：这条结果没有收件人（见 closingSessions 的说明）
+  if (closingSessions.has(sessionId)) return;
+  const note = ledgerNote(sessionId);
+  // ① 空闲判定在**结果到达这一刻**做一次（在跑的轮自己会看到结果，不需要后继轮）
+  const idle = !running.has(sessionId);
+  let live = running.get(sessionId)?.opened?.session;
+  if (live === undefined && running.has(sessionId)) live = await waitForLiveSession(sessionId);
+  // 这条结果有没有当场进模型上下文：有的话没人再需要为它起轮
+  let unseenByRunningTurn = false;
+  if (live !== undefined) {
+    // 流式期间 pi 会把它排队到回合结束，保证 tool_use / tool_result 的顺序不被打破
+    live.recordBashResult(result.command, piBashResult(result));
+    // 排进队列了 = 这一轮看不到它（pi 在 agent_end 才把它落进本子）。
+    // 没排队（轮刚开、还没开始流式）时 pi 直接推进 agent.state：那一轮的模型看得到。
+    unseenByRunningTurn = live.hasPendingBashMessages;
+  } else {
+    if (running.has(sessionId)) {
+      // 开轮卡了 3 秒还没交出 session：仍旧要把结果落地，并发窗口极窄（记一条日志备查）
+      console.warn("[agent] bash 结果到达时开轮仍未就绪，直接追进 pi 本子", sessionId, result.id);
+    }
+    appendBashResultToPiBook(note, command.cwd, result);
+  }
+  // 转录这一条与上面那本账各存一份：pi 的 bashExecution 是模型上下文，
+  // 这条 tool item 才是界面那一行的落定态（recorder 会把它落进会话 JSONL）
+  send({ type: "progress", sessionId, progress: bashResultProgress(result) });
+  if (idle) {
+    await startBashFollowUp(sessionId, result);
+    return;
+  }
+  // 在跑的那一轮看不到 → 挂起，轮收尾时一起补一轮。
+  // 只挂**自然结束**：用户停 / 寿命杀本来就不自动起轮（人已经知道），它们留在本子里，
+  // 下一条用户消息读得到。
+  if (unseenByRunningTurn && result.status === "finished") {
+    note.pendingBash.push({
+      id: result.id,
+      status: result.status,
+      exitCode: result.exitCode,
+      elapsedMs: result.elapsedMs,
+    });
+  }
+}
+
+/**
+ * 结果到达后自动起一轮：三条触发条件写死在这里。
+ * ① 这条会话此刻空闲（`deliverBashSessionEnd` 已判过一次，这里再判一次防竞态）；
+ * ② 结果是自然结束（用户停 / 寿命杀不自动起——人已经知道）；
+ * ③ 同一条会话的同一个结束后继只起一次（`followUpFor` 记着是哪一个会话 id）。
+ */
+async function startBashFollowUp(sessionId: string, result: BashSessionEnd): Promise<void> {
+  const note = ledgerNote(sessionId);
+  const template = note.followUp;
+  // 三条触发条件的真源在 bash-follow-up.ts（纯函数、可直测）：
+  // ① 空闲（busy=false）② 自然结束 ③ 同一个结束只起一次；没有模板也不起
+  const start = shouldStartBashFollowUp({
+    result,
+    busy: running.has(sessionId),
+    alreadyStartedFor: note.followUpFor,
+    hasTemplate: template !== undefined,
+  });
+  if (!start || template === undefined) return;
+  note.followUpFor = result.id;
+  const notice = bashFollowUpPrompt(result);
+  try {
+    await startTurn(
+      {
+        ...template,
+        sessionId,
+        ...(note.piSessionFile === undefined ? {} : { piSessionFile: note.piSessionFile }),
+        text: notice,
+      },
+      async (opened) => {
+        try {
+          // 机器生成的一句话不回声：转录里只留 bash 结果那一行，不留一个假的「用户气泡」。
+          // （pi 的本子里它仍是 user 消息——那是模型要读的那份上下文。）
+          note.echoed.add(notice);
+          await opened.session.prompt(notice, { expandPromptTemplates: false });
+        } finally {
+          await reportFileTurn(sessionId, opened.tracker, opened.webWatch);
+        }
+      },
+    );
+  } catch (cause) {
+    console.error("[agent] 后台命令结束后自动起一轮失败（结果本身已经写回）", sessionId, cause);
+  }
+}
+
+/**
+ * 轮结束时给**挂起的后台结果**补一轮。
+ *
+ * **什么时候用得上**：上一条结果起的那一轮还在跑，后面的命令陆续也结束了——
+ * pi 把它们的 bashExecution 排到 agent_end 才落盘，轮结束时才真的读得到。
+ * 不补这一轮，它们只能躺到「下一条用户消息」那一刻（用户发两条几乎同时结束的命令时，
+ * 第二条就是这样）。对用户来说，那就是“另一条结果没人管”。
+ *
+ * 四条条件（真源在 bash-follow-up.ts 的 `shouldDrainBashFollowUp`）：有东西挂着 / 空闲 /
+ * 不是用户刚喊的停 / 有可重放的装配模板。不满足就丢掉挂起——**它们不会因此丢**：
+ * 每条都已经在本子里，之后任何一轮 open 都会读到它们。
+ */
+async function drainPendingBashFollowUp(sessionId: string): Promise<void> {
+  const note = ledgerNote(sessionId);
+  const pending = note.pendingBash;
+  note.pendingBash = [];
+  // 让一步给**用户的排队消息**：idle 刚发出去，renderer 可能正要投递队首。
+  // 谁先开轮都行——用户那一轮读的就是含这些结果的本子，同样算被读到；
+  // 但反过来（我们先抢到坑）会让它的 submit 撞 already running，队列先出队再发，
+  // 那一条消息就丢了。Idle 到 renderer 发 submit 是一次 IPC 往返，600ms 足够宽松。
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, DRAIN_AFTER_IDLE_MS);
+  });
+  const template = note.followUp;
+  const start = shouldDrainBashFollowUp({
+    pending: pending.length,
+    busy: running.has(sessionId),
+    userStopped: note.userStopped === true,
+    hasTemplate: template !== undefined,
+  });
+  if (!start || template === undefined) return;
+  const notice = bashQueuedFollowUpPrompt(pending);
+  try {
+    await startTurn(
+      {
+        ...template,
+        sessionId,
+        ...(note.piSessionFile === undefined ? {} : { piSessionFile: note.piSessionFile }),
+        text: notice,
+      },
+      async (opened) => {
+        try {
+          // 同 startBashFollowUp：机器生成的一句话不回声，转录里只留结果那一行
+          note.echoed.add(notice);
+          await opened.session.prompt(notice, { expandPromptTemplates: false });
+        } finally {
+          await reportFileTurn(sessionId, opened.tracker, opened.webWatch);
+        }
+      },
+    );
+  } catch (cause) {
+    console.error("[agent] 为挂起的后台结果补轮失败（结果本身已经写回）", sessionId, cause);
+  }
 }
 
 /**
@@ -2088,7 +2515,13 @@ async function echoAndPrompt(
   // （直接返回；轮尾文件账由 startTurn 的 finally 兕）
   const gate = await runIntentGate(command, opened.intentAbort, turnId === "" ? randomUUID() : turnId);
   if (gate.injection === null) return;
-  const finalPrompt = composeIntentPrompt(gate.injection, promptText);
+  /**
+   * 后台 bash 会话的提醒（下一条用户消息）：上一轮交还的句柄可能还在跑，而模型
+   * 无状态——不告诉它，它就不会去 poll。**在这里拼**（而不是开轮命令里的字段）：
+   * 状态是「此刻」的事实，主进程早几百毫秒算的那份会旧；而每次用户说话正是模型
+   * 该知道后台还有活的时刻。没有 running 会话时逐字返回原 prompt。
+   */
+  const finalPrompt = withBashReminder(composeIntentPrompt(gate.injection, promptText), listSessions(command.sessionId));
   // 两本账对齐：失败轮留下的 user 尾巴补记进 pi 本子，必须在 prompt 之前
   flushBackfill(opened.session, command.backfill);
   // **回声对账记最终发给 pi 的那份**（有意图时是注入块 + 原话）：pi 随后 emit 的
@@ -2213,6 +2646,10 @@ async function handle(command: AgentCommand): Promise<void> {
     // 排队消息滞留在 renderer 的本地队列，idle 事件（startTurn 的 finally）到了
     // 自然逐条投递；不替用户清队（排队是用户的意图，停止不该替他放弃）。
     abortCycle(running, command.sessionId);
+    // 用户刚喊停：这一轮收尾后**不再**为挂起的后台结果自动起一轮。
+    // 停止就是停止——模型不该接着自己说起来话；那些结果留在本子里，
+    // 下一条用户消息自然读得到。
+    ledgerNote(command.sessionId).userStopped = true;
     // **审批与意图确认都不听 abort**（见 askPermission / IntentConfirmWaiter）：不
     // 在这里结掉的话，停止对「正卡在等用户点」的轮完全无效
     settlePendingPermissions(command.sessionId);
@@ -2226,7 +2663,16 @@ async function handle(command: AgentCommand): Promise<void> {
     // pi 的 dispose 自己会 abort 全部在飞工作（当前轮 / 重试 / 压缩 / 本会话的
     // bash），正在跑的会话被删也成立，无需先 abort。killCycle 标记 disposed，
     // 收尾跳过二次 dispose（退订与出表仍做），并等它完全收尾。
+    // 下面 killCycle / 按归属杀后台命令都会触发结束回调；先落标记，
+    // 那些结果不再写回一条已删的会话
+    closingSessions.add(command.sessionId);
+    setTimeout(() => closingSessions.delete(command.sessionId), 60_000).unref();
     await killCycle(running, command.sessionId);
+    // 签到之后交还给后台的 bash 会话已经不在 pi 手里（生产者是我们自己的会话表），
+    // dispose 的 abort 只盖得到「当前这一轮」还挂着的那个进程。这里按归属把它的
+    // 后台命令一并收掉——会话删了，「它名下的后台进程」没有任何人再会 poll / stop。
+    // 正在跑的轮已在上面被 abort 连坐杀过，stopSession 幂等，这里不会重复杀。
+    await stopOwnedSessions(command.sessionId);
     ledger.delete(command.sessionId);
     // 审批 resolve 函数不随会话一起结的话，会把已销毁会话的工具执行闭包整条钉在内存里；
     // 意图确认的等待同理（它也不听 abort）
@@ -2235,10 +2681,32 @@ async function handle(command: AgentCommand): Promise<void> {
     return;
   }
 
+  if (command.type === "bashStop") {
+    // 用户按了停止钮：与模型的 bash_stop 走同一个 stopSession，**owner 校验照旧**——
+    // 跨会话的 id 一律当不存在（主进程只转发当前会话自己发起的那一条）。
+    // 结束回调会把「已停止」写回对话（那条 progress 就是界面的落定态），所以这里
+    // 不需要返回值；等它真的退出（有上限）只是让 IPC 的 promise 说话算数。
+    await stopSession(command.bashId, undefined, command.sessionId);
+    return;
+  }
+
+  if (command.type === "bashState") {
+    // 界面问「转录里这一行（b1 / b2…）现在还活着吗」。**只有这里有资格回答**：会话表
+    // 在本进程内存里。回执带本进程标识——界面拿交还提示里的 `run=` 对比，对不上就是
+    // 上一个进程留下的（应用重启 / 内核进程重启），那一行不该再画成还在跑。
+    send({
+      type: "bashSessions",
+      requestId: command.requestId,
+      snapshot: { runId: bashRunId(), running: runningSessionIds(command.sessionId) },
+    });
+    return;
+  }
+
   if (command.type === "setMode") {
     // 档位是账本字段：每轮 before_agent_start 都重讲，这里只改账。会话不在跑
     // 也合法（Ctrl+R 后重开，renderer 会同步当前档位）——先落账，下一轮生效。
     ledgerNote(command.sessionId).mode = command.mode;
+    syncFollowUp(command.sessionId, { mode: command.mode });
     return;
   }
   if (command.type === "setModel") {
@@ -2481,6 +2949,27 @@ const catalogRefresher = new CatalogRefresher({
 setInterval(() => {
   void catalogRefresher.tick().catch((error: unknown) => console.warn("[catalog] 目录刷新失败：", error));
 }, CATALOG_REFRESH_EVERY_MS).unref();
+
+/**
+ * bash 子进程是我们自己 spawn 的（没有走 pi 的 detached 登记），进程退出时得自己收。
+ *
+ * 为什么挂在进程收尾而不是 `command.type === "dispose"`：后者是「删一条会话」，
+ * 登记表里还有别的会话正在跑的命令；在这里收的是「整个 utility 进程要没了」——
+ * 不补就是应用退出、dev server 还占着端口。
+ *
+ * 装了信号 handler 就得自己退出：Node 有监听者时不再默认终止，不 `process.exit`
+ * 的话主进程 `child.kill()` 之后进程会挂住。
+ */
+function installBashChildCleanup(): void {
+  process.on("exit", killObservedChildren);
+  for (const signal of ["SIGTERM", "SIGHUP"] as const) {
+    process.on(signal, () => {
+      killObservedChildren();
+      process.exit(0);
+    });
+  }
+}
+installBashChildCleanup();
 
 parentPort.on("message", (event) => {
   const command = event.data as AgentCommand;

@@ -5,15 +5,22 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import {
+  bashLiveFacts,
+  bashResultFacts,
+  bashResultOf,
+  detachedBashNotice,
   flattenRenderUnits,
   groupToolUnits,
   groupTurns,
   groupTurnsByTurn,
   indexToolResults,
+  turnStats,
+  type TurnGroupUnit,
   type TurnProcessUnit,
   type TurnViewEntry,
 } from "./tool-results.ts";
 import { firstLine, processChapters, processCounts, processLive, processOutcome } from "./turn-process.ts";
+import { zh } from "../../messages-zh.ts";
 
 const user = (id: string, timestamp: number): TranscriptItem =>
   ({ id, role: "user", content: [{ type: "text", text: "hi" }], timestamp }) as TranscriptItem;
@@ -157,6 +164,104 @@ describe("processOutcome —— 落定那一行开头说什么（不写「0 步�
     const proc = procOf(view(turn, false))[0];
     assert.ok(proc !== undefined);
     assert.deepEqual(processOutcome(processCounts(proc.steps, results), proc.steps), { kind: "work", steps: 3, files: 1 });
+  });
+});
+
+describe("后台命令行（交还出去的 bash 会话）不随回合结束消失", () => {
+  // 签到点交还后的工具结果：文本尾部带这一行，会话说它还在后台跑
+  const DETACH_NOTICE = "[orbita] kind=detached session=b1 elapsed=300s lifetime=1800s | 已交还控制权。";
+  const COMMAND = "sleep 900 && echo done";
+  const detachedCall = call("b1", "bash", { command: COMMAND });
+  // 落定那一轮写回的终态记录：同一个 toolCallId，details 带会话账（runtime.ts 的 bashResultProgress）
+  const terminal = tool({
+    id: "tb1",
+    toolCallId: "b1",
+    toolName: "bash",
+    input: { command: COMMAND },
+    timestamp: 1_200_000,
+    content: [{ type: "text", text: "done\n\n[orbita] b1 · 退出 0" }],
+    details: {
+      orbitaBash: { sessionId: "b1", status: "finished", exitCode: 0, elapsedSeconds: 900, command: COMMAND },
+    },
+  });
+  // 一轮：思考 → 对着干了 5 分钟的长命令 → （交还）→ 模型说「它在后台跑」收尾
+  const turnWith = (records: readonly TranscriptItem[]) => [
+    user("u1", 1000),
+    assistant("a1", 2000, [{ type: "thinking", thinking: "跑一条长命令" }, detachedCall]),
+    tool({ id: "tb1", toolCallId: "b1", toolName: "bash", input: { command: COMMAND }, timestamp: 302_000, content: [{ type: "text", text: DETACH_NOTICE }] }),
+    ...records,
+    assistant("a2", 1_201_000, [{ type: "text", text: "已经在后台跑起来了进程 b1。" }]),
+  ];
+
+  test("回合落定后行提到折叠外：章节里没有它，块头仍数得上这一步", () => {
+    const records = turnWith([]);
+    const results = indexToolResults(records);
+    const [proc] = procOf(view(records, false));
+    assert.ok(proc !== undefined);
+    // 折叠体（展开后的章节）里没有它——但它就在折叠外面，永远渲染
+    assert.deepEqual(proc.steps.flatMap((step) => (step.kind === "toolCall" ? [step.toolCallId] : [])), []);
+    assert.deepEqual(proc.hoisted.map((c) => c.toolCallId), ["b1"]);
+    // 统计不丢：块头仍写「1 步 · bash 1」（调用方把 hoisted 接回计数）
+    assert.equal(processCounts([...proc.steps, ...proc.hoisted], results).steps, 1);
+  });
+
+  test("跑着的事实槽 = 本地秒针 + 上限；还没落定 → 出停止钮", () => {
+    const results = indexToolResults(turnWith([]));
+    const result = results.get("b1");
+    const notice = detachedBashNotice(result);
+    assert.ok(notice !== null);
+    // ToolLine 的 bashRunning = 认出交还 && 还没有会话终态 → 行尾是停止钮
+    assert.equal(bashResultOf(result), null);
+    // 秒针本地外推：交还时 300s，交还之后自己又跳了 454s
+    assert.equal(bashLiveFacts(notice, notice.elapsedSeconds + 454, zh).text, "b1 · 已 12:34 · 上限 30:00");
+    assert.equal(bashLiveFacts(notice, 300, zh).tone, "live");
+  });
+
+  test("落定后同一行仍在折叠外，事实翻成结果词（停止钮的条件消失）", () => {
+    const records = turnWith([terminal]);
+    const results = indexToolResults(records);
+    const [proc] = procOf(view(records, false));
+    assert.ok(proc !== undefined);
+    assert.deepEqual(proc.hoisted.map((c) => c.toolCallId), ["b1"]);
+    const meta = bashResultOf(results.get("b1"));
+    assert.ok(meta !== null);
+    assert.equal(bashResultFacts(meta, zh).text, "b1 · 退出 0 · 共 15:00");
+  });
+
+  test("逐步铺开（大折叠）同理：成员里摘掉，行挂在折叠行下面、统计照旧", () => {
+    const records = turnWith([]);
+    const results = indexToolResults(records);
+    const v = groupTurns(groupToolUnits(flattenRenderUnits(records)), false, results);
+    const group = v.find((entry): entry is TurnGroupUnit => entry.kind === "turnGroup");
+    assert.ok(group !== undefined);
+    assert.deepEqual(group.members.flatMap((m) => (m.kind === "toolCall" ? [m.toolCallId] : [])), []);
+    assert.deepEqual(group.hoisted.map((c) => c.toolCallId), ["b1"]);
+    const stats = turnStats({ ...group, members: [...group.members, ...group.hoisted] }, results);
+    assert.equal(stats.calls, 1);
+    assert.deepEqual(stats.byTool.map((t) => [t.toolName, t.count]), [["bash", 1]]);
+  });
+
+  test("没交还过的短命令照旧进折叠（折叠语义不变）", () => {
+    const records = [user("u", 1), assistant("a", 2, [call("b", "bash", { command: "ls" })]), tool({ toolCallId: "b", toolName: "bash", timestamp: 3 })];
+    const [proc] = procOf(view(records, false));
+    assert.ok(proc !== undefined);
+    assert.deepEqual(proc.steps.flatMap((step) => (step.kind === "toolCall" ? [step.toolCallId] : [])), ["b"]);
+    assert.deepEqual(proc.hoisted, []);
+  });
+
+  test("相邻两条 bash 里只有一条交还：组里摘出来单独成行，另一条留在折叠里", () => {
+    const records = [
+      user("u", 1),
+      assistant("a", 2, [call("b1", "bash", { command: "sleep 900" }), call("b2", "bash", { command: "ls" })]),
+      tool({ toolCallId: "b1", toolName: "bash", timestamp: 302_000, content: [{ type: "text", text: DETACH_NOTICE }] }),
+      tool({ toolCallId: "b2", toolName: "bash", timestamp: 3_000 }),
+      assistant("z", 400_000, [{ type: "text", text: "都在跑了。" }]),
+    ];
+    const [proc] = procOf(view(records, false));
+    assert.ok(proc !== undefined);
+    assert.deepEqual(proc.hoisted.map((c) => c.toolCallId), ["b1"]);
+    // 剩下那条退回单行调用（一组一个还套着组壳是多余的）
+    assert.deepEqual(proc.steps.map((step) => (step.kind === "toolCall" ? step.toolCallId : step.kind)), ["b2"]);
   });
 });
 

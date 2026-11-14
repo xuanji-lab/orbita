@@ -18,6 +18,7 @@ import type { CompactedRecord } from "./session.ts";
 import type { FileChangePayload, FileChangeView } from "./revert.ts";
 import type { PromptImage, SentImage } from "./prompt-images.ts";
 import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
+import type { BashSessionsSnapshot } from "./bash-session.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
 import type { SlidesAgentRequest, SlidesOutcome } from "./slides-export.ts";
@@ -68,6 +69,17 @@ export const ipcChannels = {
   agentAnswerPermission: "agent:answer-permission",
   /** 意图确认卡的应答（实验功能 intent-system）：载荷 requestId + IntentConfirmDecision，回 void */
   agentAnswerIntentConfirm: "agent:answer-intent-confirm",
+  /**
+   * 停止钮：停掉这条会话名下的一个后台 bash 会话，回 void。
+   * **没有状态轮询**——结果由 runtime 写回对话（一条终态 tool 记录），界面据此落定。
+   */
+  agentBashStop: "agent:bash-stop",
+  /**
+   * 后台会话快照：这条会话名下「此刻还在跑的后台命令 + 回答它的 agent 进程标识」，
+   * 回 BashSessionsSnapshot | null（null = 问不到，界面维持原判）。
+   * **不是轮询接口**：界面只在渲染一条「交还」行时问一次、之后才偶发复查（见 ChatView）。
+   */
+  agentBashState: "agent:bash-state",
   /**
    * 意图系统（实验）的三条主进程 HTTP 通道：
    * - intent:health —— 探活 intent-lab（GET /health），回 IntentHealth | null
@@ -895,6 +907,12 @@ export type AgentCommand =
        */
       compaction?: CompactionSetting;
       /**
+       * 后台命令的「命令最长寿命」（分钟，设置里的 `bashLifetimeMinutes`）。**主进程每轮现读**，
+       * 只给模型没显式写 timeout 的 bash 命令用（显式声明的命令按它自己的上界活）。
+       * 缺席 = 4 小时（BASH_LIFETIME_MINUTES.default）。
+       */
+      bashLifetimeMinutes?: number;
+      /**
        * commit / PR 的 Orbita 标识开关。**主进程从设置装配**（同 compaction）：
        * runtime 不读设置文件，只收数据，每轮拼进 system prompt。
        * 缺席 = 开启（与设置契约同一口径）。
@@ -1048,6 +1066,8 @@ export type AgentCommand =
       piSessionFile?: string;
       /** 自动压缩偏好（A-1），语义同 submit */
       compaction?: CompactionSetting;
+      /** 后台命令的「命令最长寿命」（分钟），语义同 submit */
+      bashLifetimeMinutes?: number;
       /** commit / PR 的 Orbita 标识开关，语义同 submit */
       gitAttribution?: boolean;
       /** 署名语言，语义同 submit */
@@ -1117,6 +1137,8 @@ export type AgentCommand =
       piSessionFile?: string;
       /** 手动压缩轮不走阈值，但轮内的自动压缩（threshold/overflow）照此生效 */
       compaction?: CompactionSetting;
+      /** 后台命令的「命令最长寿命」（分钟），语义同 submit */
+      bashLifetimeMinutes?: number;
       /** 压缩轮自己不提交，但开轮装配是同一份（turnFields），语义同 submit */
       gitAttribution?: boolean;
       /** 署名语言，语义同 submit */
@@ -1267,7 +1289,20 @@ export type AgentCommand =
   | { type: "permissionAnswer"; requestId: string; answer: PermissionAnswer }
   /** 意图确认卡的回答（实验功能 intent-system），按 requestId 对回去；停止 / 抢跑时 runtime 侧按取消结掉 */
   | { type: "intentConfirmResult"; requestId: string; decision: IntentConfirmDecision }
-  | { type: "dispose"; sessionId: string };
+  | { type: "dispose"; sessionId: string }
+  /**
+   * 用户按了停止钮。`sessionId` 是 Orbita 会话（owner），`bashId` 是后台会话
+   * （b1 / b2…）。与模型的 `bash_stop` 走同一个 `stopSession`，owner 校验照旧。
+   * 结束回调会把「已停止」写回对话，所以没有回执字段。
+   */
+  | { type: "bashStop"; sessionId: string; bashId: string }
+  /**
+   * 界面问「转录里那条交还（b1 / b2…）现在还活着吗」。会话表在 agent 进程里，只有它
+   * 能如实回答：回执带本进程标识 + 在跑的会话 id（`bashSessions` 事件），
+   * 界面拿提示里的 `run=` 对比——对不上就是上个进程留下的（失联）。
+   * 不落盘、不开轮，也不为它拉起进程（进程没起时主进程直接回答空快照）。
+   */
+  | { type: "bashState"; requestId: string; sessionId: string };
 
 /**
  * B-1：read_task 读到的「这是一条什么 task」。**只给 UI、不入模型上下文**——
@@ -1641,6 +1676,11 @@ export type AgentEvent =
   | { type: "choreCompleted"; requestId: string; text: string | null; error?: string }
   /** `probeProvider` 的回执：ok = 真会话同源客户端拿到了模型响应；message 直接进 Test 的状态行 */
   | { type: "providerProbed"; requestId: string; ok: boolean; message: string }
+  /**
+   * `bashState` 的回执：回答这份快照的 agent 进程标识 + 此刻在跑的后台会话 id。
+   * 主进程吃掉它结掉等待者，**不广播**（renderer 不认这个事件，它拿的是 invoke 的返回值）。
+   */
+  | { type: "bashSessions"; requestId: string; snapshot: BashSessionsSnapshot }
   /**
    * 会话内模型切换成功（C-4 的 `setModel` 命令翻译而来）。主进程落 meta
    * （providerId / modelId——分支继承与重开恢复都读它）并转给 renderer 对齐

@@ -8,6 +8,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { joinSystemPrompt, orbitaSystemSegments, type SystemPromptInput } from "./system-prompt.ts";
 import type { TurnDirectories } from "../shared/agent-ipc.ts";
+import { COMMAND_TIMEOUT_DEFAULT_SECONDS, COMMAND_TIMEOUT_FLOOR_SECONDS } from "../shared/permission.ts";
 
 const dirs = (patch: Partial<TurnDirectories> = {}): TurnDirectories => ({
   attached: [],
@@ -108,16 +109,33 @@ describe("orbitaSystemSegments —— 段序与空段", () => {
     assert.equal(on[on.indexOf("channel-role") + 1], "memory-tools");
   });
 
-  test("longTaskAutomationGuideline：automation_create 已注册时多一段长任务指引（紧跟 expected-seconds），未注册时没有", () => {
+  test("longTaskAutomationGuideline：automation_create 已注册时多一段排期指引（紧跟 expected-seconds），未注册时没有", () => {
     const off = joinSystemPrompt(orbitaSystemSegments(input()));
-    assert.ok(!off.includes("background"), "未注册自动化时不讲长任务指引");
+    assert.ok(!off.includes("automation_create"), "未注册自动化时不讲自动化指引");
     const on = orbitaSystemSegments(input({ longTaskAutomationGuideline: true }));
     assert.equal(on[on.findIndex((segment) => segment.name === "expected-seconds") + 1]?.name, "long-task-automation");
     const text = on.find((segment) => segment.name === "long-task-automation")?.text ?? "";
-    for (const needle of ["10 minutes", "background", "log file", "this_session automation", "end your turn"])
-      assert.ok(text.includes(needle), `长任务指引里该有「${needle}」`);
-    // 讲的是「别在前台 bash 里干等」，不是让人不跑长命令
-    assert.ok(text.includes("do not wait it out in a foreground bash call"));
+    for (const needle of ["automation_create", "again later", "end your turn"])
+      assert.ok(text.includes(needle), `排期指引里该有「${needle}」`);
+    // 长 bash 不再被推向 automation：那句「不要用它等一条 bash 命令」必须在，旧的
+    // 后台 + 日志 + 建 automation 那条分流必须消失（2026-11-13 用户裁决）
+    assert.ok(text.includes("Do not use an automation to wait for a bash command"));
+    assert.ok(!text.includes("log file"));
+    assert.ok(!text.includes("10 minutes"));
+  });
+
+  test("tool guidelines：长 bash 直接跑、结果自动写回；默认上限与下限同 shared/permission 同源", () => {
+    const text = orbitaSystemSegments(input()).find((segment) => segment.name === "tool-guidelines")?.text ?? "";
+    for (const needle of [
+      "5-minute check-in",
+      "written back to the conversation",
+      "declare the total duration in timeout",
+      `${COMMAND_TIMEOUT_DEFAULT_SECONDS} seconds`,
+      `${COMMAND_TIMEOUT_FLOOR_SECONDS} seconds`,
+    ])
+      assert.ok(text.includes(needle), `bash 指引里该有「${needle}」`);
+    // 长 bash 的路由不再是 automation
+    assert.ok(!text.includes("automation"));
   });
 
   test("intentGuideline 开时多一段 intent，关时没有", () => {

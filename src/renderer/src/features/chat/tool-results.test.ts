@@ -54,6 +54,14 @@ import {
   thinkingPreview,
   toolCallSummary,
   toolDurationText,
+  bashLiveFacts,
+  bashLiveSeconds,
+  bashLostFacts,
+  bashResultFacts,
+  bashResultOf,
+  detachedBashNotice,
+  formatSessionClock,
+  showsCallSummary,
   toolExpandable,
   toolGroupStatus,
   toolResultText,
@@ -2059,5 +2067,153 @@ describe("运行时钟文案（en / zh）", () => {
     assert.equal(zh.chat.expectedAbout("40 秒"), "预计约 40 秒");
     assert.equal(en.chat.slowerThanExpected, "slower than expected");
     assert.equal(zh.chat.slowerThanExpected, "比预计慢");
+  });
+});
+
+describe("bash 活行（异步送达式）", () => {
+  const toolItem = (
+    text: string,
+    timestamp = 1_000,
+    details?: unknown,
+  ): ToolTranscriptItem =>
+    ({
+      role: "tool",
+      toolCallId: "t1",
+      toolName: "bash",
+      status: "complete",
+      timestamp,
+      content: [{ type: "text", text }],
+      ...(details === undefined ? {} : { details }),
+    }) as unknown as ToolTranscriptItem;
+
+  const resultDetails = (meta: Record<string, unknown>) => ({ orbitaBash: meta });
+
+  test("从工具结果尾部认出交还的会话 id 与交还时已跑的秒数", () => {
+    const output = "building\u2026\n\n[orbita] kind=detached session=b7 elapsed=302s | The command is still running\u2026\n";
+    const notice = detachedBashNotice(toolItem(output));
+    assert.equal(notice?.sessionId, "b7");
+    assert.equal(notice?.elapsedSeconds, 302);
+    assert.equal(detachedBashNotice(toolItem(output))?.sessionId, "b7");
+  });
+
+  test("旧记录没有 elapsed：按 0 起跳，不编造", () => {
+    const output = "[orbita] kind=detached session=b3 idle=0s | \u2026\n";
+    assert.equal(detachedBashNotice(toolItem(output))?.elapsedSeconds, 0);
+  });
+
+  test("短命令 / 坏形状一律当作没有活行", () => {
+    assert.equal(detachedBashNotice(undefined), null);
+    assert.equal(detachedBashNotice(toolItem("hello\n")), null);
+    assert.equal(detachedBashNotice(toolItem("[orbita] kind=detached session=xx | …")), null);
+  });
+
+  test("只扫尾部：几十万字的输出也认得出末尾那行", () => {
+    const output = "x".repeat(500_000) + "\n[orbita] kind=detached session=b2 elapsed=12s | \u2026\n";
+    assert.equal(detachedBashNotice(toolItem(output))?.sessionId, "b2");
+  });
+
+  test("A 版：收起行不给 shell 的参数摘要，其余工具照旧", () => {
+    assert.equal(showsCallSummary("bash"), false);
+    assert.equal(showsCallSummary("powershell"), false);
+    assert.equal(showsCallSummary("read"), true);
+    assert.equal(showsCallSummary("edit"), true);
+  });
+
+  test("活行事实：本地秒针 + 会话寿命上限（b1 · 已 12:34 · 上限 4:00:00）", () => {
+    const facts = bashLiveFacts({ sessionId: "b1", elapsedSeconds: 754, lifetimeSeconds: 14_400 }, 754, zh);
+    assert.equal(facts.text, "b1 · 已 12:34 · 上限 4:00:00");
+    assert.equal(facts.tone, "live");
+    assert.doesNotMatch(facts.text, /无输出/);
+    // 英文界面同一条事实（上限 4:00:00）
+    assert.equal(
+      bashLiveFacts({ sessionId: "b1", elapsedSeconds: 754, lifetimeSeconds: 14_400 }, 754, en).text,
+      "b1 · 12:34 · limit 4:00:00",
+    );
+  });
+
+  test("活行事实：旧记录没有 lifetime 就不显示上限这一段", () => {
+    const facts = bashLiveFacts({ sessionId: "b1", elapsedSeconds: 754 }, 754, zh);
+    assert.equal(facts.text, "b1 · 已 12:34");
+    assert.doesNotMatch(facts.text, /上限/);
+  });
+
+  test("秒针外推到上限就停跳（越过寿命的「已 X」一定是假的）", () => {
+    const notice = { sessionId: "b1", elapsedSeconds: 1_700, lifetimeSeconds: 1_800 };
+    // 交还时 1700 秒，本地又走了 10 秒 → 1710（还没到边界）
+    assert.equal(bashLiveSeconds(notice, notice.elapsedSeconds, 10_000), 1_710);
+    // 再走 10 分钟 → 停在 1800，不越过上限
+    assert.equal(bashLiveSeconds(notice, notice.elapsedSeconds, 600_000), 1_800);
+    // 旧记录没有上限：照常外推（没有上限可撞）
+    assert.equal(bashLiveSeconds({ sessionId: "b1", elapsedSeconds: 10 }, 10, 90_000), 100);
+    // detach 时间戳在未来（时钟回拨）：不产生负数
+    assert.equal(bashLiveSeconds({ sessionId: "b1", elapsedSeconds: 10 }, 10, -5_000), 10);
+  });
+
+  test("失联事实：不报耗时，只报失联（进程换了才说应用已重启）", () => {
+    const notice = { sessionId: "b3", elapsedSeconds: 382, lifetimeSeconds: 1_800, runId: "abc12345" };
+    const gone = bashLostFacts(notice, zh, false);
+    assert.equal(gone.text, "b3 · 已失联");
+    assert.equal(gone.tone, "neutral");
+    assert.doesNotMatch(gone.text, /已 \d/); // 之后跑了多久无人作证，不能报
+    assert.equal(bashLostFacts(notice, zh, true).text, "b3 · 已失联 · 应用已重启");
+    assert.equal(bashLostFacts(notice, en, true).text, "b3 · lost · app restarted");
+  });
+
+  test("交还提示里的 lifetime= 被认出来（界面靠它画上限）", () => {
+    const notice = detachedBashNotice(
+      toolItem("[orbita] kind=detached session=b3 elapsed=302s lifetime=7200s | …\n"),
+    );
+    assert.deepEqual(notice, { sessionId: "b3", elapsedSeconds: 302, lifetimeSeconds: 7200 });
+  });
+
+  test("落定事实：自然结束给退出码与总时长（非零染红）", () => {
+    const ok = bashResultFacts(
+      { sessionId: "b1", status: "finished", exitCode: 0, elapsedSeconds: 1_082, command: "make" },
+      zh,
+    );
+    assert.equal(ok.text, "b1 · 退出 0 · 共 18:02");
+    assert.equal(ok.tone, "neutral");
+
+    const failed = bashResultFacts(
+      { sessionId: "b1", status: "finished", exitCode: 1, elapsedSeconds: 3, command: "make" },
+      zh,
+    );
+    assert.equal(failed.text, "b1 · 退出 1 · 共 0:03");
+    assert.equal(failed.tone, "danger");
+  });
+
+  test("落定事实：被停不染红，寿命上限杀才是红字「已终止 · 上限」", () => {
+    const stopped = bashResultFacts(
+      { sessionId: "b1", status: "killed", exitCode: null, elapsedSeconds: 401, endReason: "stop", command: "make" },
+      zh,
+    );
+    assert.equal(stopped.text, "b1 · 已停止 · 共 6:41");
+    assert.equal(stopped.tone, "neutral", "人做的决定不是失败");
+
+    const capped = bashResultFacts(
+      { sessionId: "b1", status: "killed", exitCode: null, elapsedSeconds: 14_400, endReason: "lifetime", command: "make" },
+      zh,
+    );
+    assert.equal(capped.text, "b1 · 已终止 · 上限");
+    assert.equal(capped.tone, "danger");
+  });
+
+  test("落定事实从 details 的 orbitaBash 解析；坏形状 / 旧记录当没有", () => {
+    const finished = bashResultOf(
+      toolItem("done\n", 2_000, resultDetails({ sessionId: "b4", status: "finished", exitCode: 0, elapsedSeconds: 400, command: "make all" })),
+    );
+    assert.equal(finished?.sessionId, "b4");
+    assert.equal(finished?.command, "make all");
+    assert.equal(finished?.elapsedSeconds, 400);
+    assert.equal(bashResultOf(toolItem("done")), null);
+    assert.equal(bashResultOf(toolItem("done", 1_000, { orbitaBash: { sessionId: "xx" } })), null);
+    assert.equal(bashResultOf(toolItem("done", 1_000, { other: 1 })), null);
+  });
+
+  test("会话时钟：分:秒，满一小时多一段", () => {
+    assert.equal(formatSessionClock(0), "0:00");
+    assert.equal(formatSessionClock(754), "12:34");
+    assert.equal(formatSessionClock(3_600), "1:00:00");
+    assert.equal(formatSessionClock(14_400), "4:00:00");
   });
 });

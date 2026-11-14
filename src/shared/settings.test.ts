@@ -1,7 +1,9 @@
 import { deepStrictEqual, ok } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  BASH_LIFETIME_MINUTES,
   BOARD_DAYS_DEFAULT,
+  effectiveBashLifetimeMinutes,
   effectiveLanguage,
   selectableThemes,
   themeLanguage,
@@ -748,5 +750,27 @@ describe("parseSettings 的 docPaper", () => {
     deepStrictEqual(parseSettings({ docPaper: "neon" }).docPaper, undefined);
     deepStrictEqual(parseSettings({ docPaper: 3 }).docPaper, undefined);
     deepStrictEqual(parseSettings({}).docPaper, undefined);
+  });
+});
+
+describe("parseSettings 的 bashLifetimeMinutes（命令最长寿命）", () => {
+  it("合法值（10 分钟 – 24 小时）收下", () => {
+    deepStrictEqual(parseSettings({ bashLifetimeMinutes: 10 }).bashLifetimeMinutes, 10);
+    deepStrictEqual(parseSettings({ bashLifetimeMinutes: 240 }).bashLifetimeMinutes, 240);
+    deepStrictEqual(parseSettings({ bashLifetimeMinutes: 1440 }).bashLifetimeMinutes, 1440);
+  });
+
+  it("越界 / 非整数 / 非数 / 字符串一律当没设过，消费侧回默认 4 小时（不报错）", () => {
+    for (const bad of [9, 1441, 0, -60, 240.5, Number.NaN, "240", null, undefined]) {
+      deepStrictEqual(parseSettings({ bashLifetimeMinutes: bad }).bashLifetimeMinutes, undefined);
+      deepStrictEqual(effectiveBashLifetimeMinutes(bad), BASH_LIFETIME_MINUTES.default);
+    }
+    deepStrictEqual(effectiveBashLifetimeMinutes(undefined), 240);
+  });
+
+  it("生效值：合法用它，没动过 / 坏值回 4 小时", () => {
+    deepStrictEqual(BASH_LIFETIME_MINUTES.default, 240);
+    deepStrictEqual(effectiveBashLifetimeMinutes(parseSettings({ bashLifetimeMinutes: 480 }).bashLifetimeMinutes), 480);
+    deepStrictEqual(effectiveBashLifetimeMinutes(parseSettings({}).bashLifetimeMinutes), 240);
   });
 });

@@ -13,7 +13,7 @@
  * 所以 emit(ready) 之后必须先 `await flush()` 再喂后续事件，否则事件落空、
  * promise 永远不结。
  */
-import { describe, test } from "node:test";
+import { describe, test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import type { AgentCommand, AgentEvent } from "../../shared/agent-ipc.ts";
 import { AgentHostCore, type AgentChild } from "./host-core.ts";
@@ -801,5 +801,46 @@ describe("目录刷新范围 —— 只送已添加服务商的目录（审核 F
     ctx.host.syncCatalogScope();
     await flush();
     assert.deepEqual(refreshes(ctx.child()), []);
+  });
+});
+
+describe("bashStop —— 停止钮的一跳（没有状态轮询）", () => {
+  /** 起一条活着的 agent（submit 后收下 created），之后才能发命令 */
+  async function liveHost(t: TestContext) {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const ctx = await freshHost();
+    const pending = firstSubmit(ctx.host, "s1");
+    ctx.child().emit({ type: "ready" });
+    await flush();
+    ctx.child().emit({ type: "created", sessionId: "s1", piSessionFile: null });
+    await pending;
+    return ctx;
+  }
+
+  test("进程没起：静默 no-op，不为「停一条命令」fork 一个进程", async () => {
+    const ctx = await freshHost();
+    ctx.host.stopBashSession("s1", "b1");
+    await flush();
+    assert.equal(ctx.forks(), 0);
+  });
+
+  test("命令带 sessionId 与 bashId：agent 侧按 owner 校验", async (t) => {
+    const ctx = await liveHost(t);
+    ctx.host.stopBashSession("s1", "b1");
+    await flush();
+    const sent = ctx.child().posted.at(-1);
+    assert.equal(sent?.type, "bashStop");
+    const request = sent as Extract<AgentCommand, { type: "bashStop" }>;
+    assert.equal(request.sessionId, "s1");
+    assert.equal(request.bashId, "b1");
+  });
+
+  test("不发任何状态查询：轮询那一半已经删干净", async (t) => {
+    const ctx = await liveHost(t);
+    ctx.host.stopBashSession("s1", "b1");
+    await flush();
+    const posted = ctx.child().posted;
+    assert.equal(posted.filter((command) => command.type === "bashStop").length, 1);
+    assert.equal(posted.some((command) => String(command.type).startsWith("bashStatus")), false);
   });
 });

@@ -27,6 +27,7 @@ const environment = {
   directories: { attached: [], workbench: "/tmp/wb" },
   mcpServers: {},
   compaction: { enabled: true } as CompactionSetting,
+  bashLifetimeMinutes: 240,
   gitAttribution: true,
   attributionLanguage: "en" as const,
   pdfCitations: false,
@@ -72,6 +73,14 @@ describe("turnFields", () => {
       environment,
     );
     assert.equal(fields.piSessionFile, "/pi/2026-10-09_book.jsonl");
+  });
+
+  test("命令最长寿命随命令发给 agent（runtime 用它当后台会话的默认寿命）", () => {
+    assert.equal(turnFields(input, provider, "/a", "/a", [], environment).bashLifetimeMinutes, 240);
+    assert.equal(
+      turnFields(input, provider, "/a", "/a", [], { ...environment, bashLifetimeMinutes: 720 }).bashLifetimeMinutes,
+      720,
+    );
   });
 
   test("「先给我看计划」偏好随命令发给 agent（runtime 据此决定第一张新计划后停不停）", () => {

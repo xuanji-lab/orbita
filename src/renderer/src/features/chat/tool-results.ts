@@ -33,6 +33,12 @@ import { matchScanMessage, type ScanMessage } from "./carryover-parse.ts";
 // 值导入必须走相对路径带 .ts 后缀（同上一行的纪律：本文件被 node --test 直接加载）
 import { skillForReadPath } from "../../../../shared/skill.ts";
 import { parseQualifiedToolName } from "../../../../shared/mcp.ts";
+import {
+  bashResultMetaOf,
+  parseDetachedNotice,
+  type BashResultMeta,
+  type DetachedNotice,
+} from "../../../../shared/bash-session.ts";
 import { isThinkingLevel } from "../../../../shared/thinking.ts";
 import type { Messages } from "../../messages-en.ts";
 
@@ -240,6 +246,42 @@ function isPinnedToolCall(entry: RenderEntry): boolean {
 }
 
 /**
+ * 这条调用是「后台命令」的行：结果里认得出交还提示（detached），或者这条会话已经
+ * 落定（终态记录的 details 带 orbitaBash）。**落定了也算**——跑完就缩回折叠里，
+ * 等于用户点了停止之后那一行又凭空消失；事实槽的「退出 0 · 共 15:00」正是给它的。
+ *
+ * 短命令（没有交还提示、也没有会话账）一律不算：普通 bash 行照旧进折叠。
+ */
+export function isBackgroundShellCall(call: ToolCallUnit, results?: ToolResultIndex): boolean {
+  if (call.toolName !== "bash" && call.toolName !== "powershell") return false;
+  const result = results?.get(call.toolCallId);
+  if (result === undefined) return false;
+  return bashResultOf(result) !== null || detachedBashNotice(result) !== null;
+}
+
+/** 一个单元里的后台命令行：单行调用就是它自己，工具组里挑出匹配的那几个 */
+function backgroundShellCalls(entry: RenderEntry, results?: ToolResultIndex): ToolCallUnit[] {
+  if (entry.kind === "toolCall") return isBackgroundShellCall(entry, results) ? [entry] : [];
+  if (entry.kind === "toolGroup") return entry.calls.filter((call) => isBackgroundShellCall(call, results));
+  return [];
+}
+
+/**
+ * 把被提走的调用从折叠成员里摘掉：单行调用整体拿掉；工具组少了几个就少几个，
+ * 剩一个退回单行（一组一个还装成组是多余的壳）。
+ */
+function withoutBackgroundShell(entry: ProcessStep, hoisted: ReadonlySet<string>): ProcessStep | null {
+  if (entry.kind === "toolCall") return hoisted.has(entry.toolCallId) ? null : entry;
+  if (entry.kind === "toolGroup") {
+    const calls = entry.calls.filter((call) => !hoisted.has(call.toolCallId));
+    if (calls.length === entry.calls.length) return entry;
+    if (calls.length === 0) return null;
+    return calls.length === 1 ? (calls[0] ?? null) : { ...entry, calls };
+  }
+  return entry;
+}
+
+/**
  * 内置命令里要出完成卡的那几个（新建演示文稿 / 打开文档 / 导出 …）：不挂轮尾，**留在它被调用的位置**。
  * 过程行是时间线——先「新建演示文稿」、后「写幻灯片」就该按这个顺序读；挂到轮尾会让它排到后面的写幻灯片折叠之下
  * （验收 S1：新建画在写幻灯片那组下面）。做法同通道工具：在这里把块切开，卡原位放进视图，前后各自成折叠。
@@ -357,6 +399,14 @@ export interface TurnGroupUnit {
    * 后续折叠块为 null；缺时间戳的单元在场时 null，同 durationMs 的诚实未知口径。
    */
   startedAt: number | null;
+  /**
+   * 提到折叠外、**一直可见**的后台命令（交还出去的 bash 会话，见 isBackgroundShellCall）。
+   * 它们在 members 里照旧计数（turnStats 由调用方连它一起喂），但渲染时铺在折叠行
+   * 下面、不受展开/收起影响：它不是「这一轮做完了的一步」，是这一轮留在身后、还在跑
+   * （或刚跑完）的东西。折进去的后果是整行随收纳一起消失——秒针、上限、停止钮全没了
+   * （2026-11-14 真机：回合结束后这条行整条不见，用户点不到停止）。
+   */
+  hoisted: readonly ToolCallUnit[];
 }
 
 /**
@@ -379,6 +429,8 @@ export interface TurnProcessUnit {
   startedAt: number | null;
   live: boolean;
   answering: boolean;
+  /** 折叠外的后台命令行，语义同 TurnGroupUnit.hoisted（计数照算，但不在章节里渲染） */
+  hoisted: readonly ToolCallUnit[];
 }
 
 /** 过程块的一步：思考 / 工具 / 工具组，或夹在中间的说明性正文（章节标题） */
@@ -616,15 +668,31 @@ function foldChunk(chunk: readonly RenderEntry[], results?: ToolResultIndex): Tu
   let firstGroup = true;
   const flush = () => {
     if (run.length === 0) return;
-    view.push({
-      kind: "turnGroup",
-      key: `turn:${run[0]?.key ?? ""}`,
-      members: run,
-      durationMs: segmentSpan(run, results),
-      // 轮头时间只挂在第一个折叠块上（轮级信息），后续块不带
-      startedAt: firstGroup ? chunkStartAt(chunk) : null,
+    // 后台命令行提出来，一直铺在折叠行下面（见 TurnGroupUnit.hoisted）：成员里摘掉，
+    // 但它仍算这一轮做的步数（统计由调用方把它接回去）
+    const hoisted = run.flatMap((member) => backgroundShellCalls(member, results));
+    const ids = new Set(hoisted.map((call) => call.toolCallId));
+    const members = run.flatMap((member) => {
+      const rest = withoutBackgroundShell(member, ids);
+      return rest === null || rest.kind === "text" ? [] : [rest];
     });
-    firstGroup = false;
+    if (members.length > 0) {
+      view.push({
+        kind: "turnGroup",
+        // key 仍取**摘除前**的首成员：后台命令行进出（交还、落定）不该换掉这组的展开状态
+        key: `turn:${run[0]?.key ?? ""}`,
+        members,
+        durationMs: segmentSpan(members, results),
+        // 轮头时间只挂在第一个折叠块上（轮级信息），后续块不带
+        startedAt: firstGroup ? chunkStartAt(chunk) : null,
+        hoisted,
+      });
+      firstGroup = false;
+      run = [];
+      return;
+    }
+    // 这一组只剩后台命令：没有折叠行可挂，行自己就是视图（原位、不进折叠）
+    view.push(...hoisted);
     run = [];
   };
   for (const entry of chunk) {
@@ -667,17 +735,29 @@ function foldChunkByTurn(
     if (isTurnMember(entry) || entry.kind === "text") steps.push(entry);
     else aside.push(entry);
   }
+  // 后台命令行（交还 / 已落定）不留在块内：它得一直在场，不能被收起带走
+  const hoisted = steps.flatMap((step) => backgroundShellCalls(step, results));
+  const ids = new Set(hoisted.map((call) => call.toolCallId));
+  const visible = steps.flatMap((step) => {
+    const rest = withoutBackgroundShell(step, ids);
+    return rest === null ? [] : [rest];
+  });
   const after = kept.slice(last + 1);
+  const head = kept.slice(0, first);
+  // 摘完之后一个过程成员都不剩（这一轮只起了一条后台命令）：不壳一个空块，行直接铺
+  if (!visible.some(isTurnMember)) return [...head, ...hoisted, ...aside, ...after];
   return [
-    ...kept.slice(0, first),
+    ...head,
     {
       kind: "turnProcess",
+      // key 取摘除前的首步：块的展开状态不随后台命令行进出而变
       key: `proc:${steps[0]?.key ?? ""}`,
-      steps,
-      durationMs: segmentSpan(steps, results),
+      steps: visible,
+      durationMs: segmentSpan(visible, results),
       startedAt: firstChunk ? chunkStartAt(chunk) : null,
       live,
       answering: live && after.some((entry) => entry.kind === "text"),
+      hoisted,
     },
     ...aside,
     ...after,
@@ -1121,6 +1201,121 @@ function secondsValueOf(value: unknown): number | null {
 export function formatRunClock(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000));
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+// ── bash 活行（P2-lite）：交还会话的认领与事实槽 ──
+
+/**
+ * 后台会话时长的画法：`12:34`（分:秒），满一小时才多一段 `1:02:03`——
+ * 寿命上限是 4 小时，再长也不会出现第三段。与 `formatRunClock` 分开：那个是
+ * 「本次调用跑了多久」（永远在一轮之内），这个是「这条后台命令活了多久」。
+ */
+export function formatSessionClock(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  const minutes = Math.floor(seconds / 60);
+  const rest = String(seconds % 60).padStart(2, "0");
+  if (minutes < 60) return `${minutes}:${rest}`;
+  return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}:${rest}`;
+}
+
+/** 事实槽的三种语气：还在跑 / 已落定 / 上限杀（唯一需要警示色的一种） */
+export type BashFactsTone = "live" | "neutral" | "danger";
+
+export interface BashFacts {
+  /** 一行事实：`b1 · 已 12:34`（跑着）或 `b1 · 退出 0 · 共 6:40`（落定） */
+  text: string;
+  tone: BashFactsTone;
+}
+
+/**
+ * 交还提示（会话 id + 交还时已跑的秒数）。认不出就返回 null——这一行退回普通
+ * bash 行。只读最后 400 字符：提示行在结果尾部，而结果实测能到 479KB。
+ */
+export function detachedBashNotice(result: ToolTranscriptItem | undefined): DetachedNotice | null {
+  if (result === undefined) return null;
+  let tail = "";
+  for (let index = result.content.length - 1; index >= 0 && tail.length < 400; index -= 1) {
+    const block = result.content[index];
+    if (block !== undefined && block.type === "text") tail = block.text.slice(-400) + tail;
+  }
+  return parseDetachedNotice(tail);
+}
+
+/** 终态工具记录里的落定事实（由 runtime 的结束回调写进 details） */
+export function bashResultOf(result: ToolTranscriptItem | undefined): BashResultMeta | null {
+  if (result === undefined) return null;
+  return bashResultMetaOf(result.details);
+}
+
+/**
+ * 活行的事实槽：本地秒针 + 这条会话的寿命上限（旧记录没有上限就不画那一段）。
+ * 界面不需要内核信息（无输出多久那类字段要问进程）；上限来自交还提示里的 `lifetime=`，
+ * 秒数由调用方按 detach 时间戳外推。
+ */
+export function bashLiveFacts(notice: DetachedNotice, seconds: number, t: Messages): BashFacts {
+  const elapsed = `${notice.sessionId} · ${t.chat.bashElapsed(formatSessionClock(seconds))}`;
+  const limit =
+    notice.lifetimeSeconds === undefined
+      ? ""
+      : ` · ${t.chat.bashLimit(formatSessionClock(notice.lifetimeSeconds))}`;
+  return { text: `${elapsed}${limit}`, tone: "live" };
+}
+
+/**
+ * 活行秒针的本地外推，**到上限就停跳**。
+ *
+ * 寿命是硬边界（到点命令会被杀、结果会写回）：越过它还在涨的「已 X」一定是假的，
+ * 不论进程在不在。所以宁可停在边界上，也不给一个对不上任何事实的数字。
+ */
+export function bashLiveSeconds(
+  notice: DetachedNotice,
+  detachElapsedSeconds: number,
+  sinceDetachMs: number,
+): number {
+  const seconds = detachElapsedSeconds + Math.max(0, sinceDetachMs / 1000);
+  if (notice.lifetimeSeconds === undefined) return seconds;
+  return Math.min(seconds, notice.lifetimeSeconds);
+}
+
+/**
+ * 失联行的事实槽：写这条提示的那个进程已经不在了（应用重启 / 内核进程重启），
+ * 那台命令连同它的结果都不会再回来。
+ *
+ * **不报耗时**：我们只知道它在交还那一刻跑了多久，之后的时长无人作证——
+ * 报一个数字就是替它编。
+ */
+export function bashLostFacts(notice: DetachedNotice, t: Messages, restarted: boolean): BashFacts {
+  const reason = restarted ? ` · ${t.chat.bashLostRestart}` : "";
+  return { text: `${notice.sessionId} · ${t.chat.bashLost}${reason}`, tone: "neutral" };
+}
+
+/**
+ * 落定行的事实槽：机器事实，不是状态词。退出码 / 已停止 / 已终止 + 总耗时。
+ * 只有「寿命上限杀掉」是警示色——那一种不是你停的。
+ */
+export function bashResultFacts(meta: BashResultMeta, t: Messages): BashFacts {
+  const elapsed = formatSessionClock(meta.elapsedSeconds);
+  if (meta.status === "killed" && meta.endReason === "lifetime") {
+    return { text: `${meta.sessionId} · ${t.chat.bashTerminated} · ${t.chat.bashCapLimit}`, tone: "danger" };
+  }
+  if (meta.status === "killed") {
+    // 被停（用户按停止钮 / 模型 bash_stop / 停轮连坐）：人做的决定，不染红
+    return { text: `${meta.sessionId} · ${t.chat.bashStopped} · ${t.chat.bashTotal(elapsed)}`, tone: "neutral" };
+  }
+  if (meta.exitCode === null) return { text: `${meta.sessionId} · ${t.chat.bashTotal(elapsed)}`, tone: "neutral" };
+  return {
+    text: `${meta.sessionId} · ${t.chat.bashExit(meta.exitCode)} · ${t.chat.bashTotal(elapsed)}`,
+    tone: meta.exitCode === 0 ? "neutral" : "danger",
+  };
+}
+
+/**
+ * 收起行上的参数摘要该不该显示。**shell 类一律不给**（A 版，用户已拍板）：
+ * 命令一长就会把行尾的机器事实与停止钮挤掉，而全文在展开体的命令专位。
+ * 其余工具（read / edit / grep…）的摘要不变——它们短，而且就是那一行的身份。
+ */
+export function showsCallSummary(toolName: string): boolean {
+  return toolName !== "bash" && toolName !== "powershell";
 }
 
 /**
