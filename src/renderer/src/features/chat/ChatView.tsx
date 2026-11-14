@@ -1437,6 +1437,7 @@ function ChatViewBody(props: {
               : t.chat.readOnlyMigrationFailed(session.readOnlyReason.reason)}
         </Notice>
       )}
+      {session.resumedAfterRestart && <Notice icon="rotate-ccw">{t.chat.resumedAfterRestart}</Notice>}
     </>
   );
 

@@ -4,7 +4,7 @@ import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionMeta } from "../../shared/session.ts";
-import { DURABLE_MOVED_MESSAGE, durableKernelEnabled, editRouteFor, KernelHost, libraryRoot, markRunning, markSettled, routeFor } from "./kernel-host.ts";
+import { DURABLE_MOVED_MESSAGE, durableKernelEnabled, editRouteFor, KernelHost, libraryRoot, markRunning, markSettled, routeFor, sessionsToResume } from "./kernel-host.ts";
 
 const dirs: string[] = [];
 after(async () => {
@@ -34,10 +34,11 @@ describe("KernelHost", () => {
 
 describe("routeFor / markRunning / markSettled：一轮交给谁、会话的新内核标记", () => {
   const meta = (extra: Partial<SessionMeta> = {}): SessionMeta => ({ id: "s", title: "", titleSource: "derived", cwd: "/", workspaceId: null, providerId: "p", modelId: "m", mode: "plan", thinkingLevel: "medium", piSessionFile: "/p.jsonl", pinned: false, archived: false, recentQueries: [], stats: null, createdAt: 1, updatedAt: 1, ...extra });
-  it("开着：根会话（含全新的）→ kernel；子会话 → 旧内核；迁移失败过 → 拒绝（只读）；本子编辑按住处分流", () => {
+  it("开着：根会话（含全新的）与子会话 → kernel；迁移失败过 → 拒绝（只读）；本子编辑按住处分流", () => {
     assert.deepEqual(routeFor(null, true), { to: "kernel" });
     assert.deepEqual(routeFor(meta(), true), { to: "kernel" });
-    assert.deepEqual(routeFor(meta({ parentId: "root" }), true), { to: "legacy" });
+    // 子会话也交给新内核（与父同库，见 libraryRoot）
+    assert.deepEqual(routeFor(meta({ parentId: "root" }), true), { to: "kernel" });
     assert.equal(libraryRoot(meta({ parentId: "root" }), "c1"), "root");
     assert.equal(libraryRoot(null, "s1"), "s1");
     // 本子编辑：住在新内核里的去 kernel（子会话带父的树根），还没跑过的旧会话旧内核，迁移失败过的拒绝
@@ -61,3 +62,22 @@ describe("routeFor / markRunning / markSettled：一轮交给谁、会话的新�
     assert.deepEqual(markSettled({ since: 1, running: true }, { ok: false, reason: "shutdown", interrupted: true }, 9), { since: 1, running: true });
   });
 });
+
+describe("重启后接着跑：只续子会话（后台任务），树根给「继续」", () => {
+  const meta = (id: string, extra: Partial<SessionMeta> = {}): SessionMeta => ({ id, title: "", titleSource: "derived", cwd: "/", workspaceId: null, providerId: "p", modelId: "m", mode: "plan", thinkingLevel: "medium", piSessionFile: "/p.jsonl", pinned: false, archived: false, recentQueries: [], stats: null, createdAt: 1, updatedAt: 1, ...extra });
+  it("running 的子会话续；树根、没在跑的、迁移失败过的都不续", () => {
+    const picked = sessionsToResume([
+      meta("root", { durable: { since: 1, running: true } }),
+      meta("child", { parentId: "root", durable: { since: 1, running: true } }),
+      meta("idle-child", { parentId: "root", durable: { since: 1 } }),
+      meta("failed-child", { parentId: "root", durable: { since: 1, running: true, failed: "坏行" } }),
+      meta("legacy-child", { parentId: "root" }),
+    ]);
+    assert.deepEqual(picked.map((m) => m.id), ["child"]);
+  });
+  it("resumed 只留给那一次 continue：下一次由人开的轮清掉", () => {
+    assert.deepEqual(markRunning({ since: 1, resumed: 5 }, 9, true), { since: 1, resumed: 5, running: true });
+    assert.deepEqual(markRunning({ since: 1, resumed: 5 }, 9), { since: 1, running: true });
+  });
+});
+

@@ -942,6 +942,22 @@ describe("AgentHostCore：新内核那条道", () => {
     await assert.rejects(hanging, /kernel runtime exited/);
   });
 
+  test("插话退回（steerBounced）：交给通道的「子空闲时的投递」；没人接时按旧内核报 failed", async () => {
+    const r = kernelRig();
+    const turn = r.host.submit({ type: "submit", sessionId: "c1", text: "hi", piSessionFile: "/p.jsonl", ...TURN_FIELDS });
+    await flush();
+    r.kernel.emit({ type: "ready" });
+    await turn;
+    r.kernel.emit({ type: "steerBounced", sessionId: "c1", text: "<channel …>", delivery: "steer" });
+    assert.ok(r.events.some((event) => event.type === "failed" && event.sessionId === "c1"));
+    const bounced: string[] = [];
+    r.host.onSteerBounced((sessionId, text, delivery) => bounced.push(`${sessionId}|${delivery}|${text}`));
+    const before = r.events.length;
+    r.kernel.emit({ type: "steerBounced", sessionId: "c1", text: "<channel …>", delivery: "followUp" });
+    assert.deepEqual(bounced, ["c1|followUp|<channel …>"]);
+    assert.equal(r.events.length, before, "交给了通道就不再报失败");
+  });
+
   test("关着开关时的守卫：住在新内核里的会话不交给旧内核", async () => {
     const legacy = new FakeChild();
     const host = new AgentHostCore(() => legacy, () => undefined, undefined, undefined, async (id) => (id === "moved" ? "moved to durable" : null));

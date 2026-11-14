@@ -103,6 +103,7 @@ async function init(dir: string): Promise<void> {
     runtime: turnRuntime,
     intentConfirm,
     settled: (sessionId, result) => post({ type: "turnSettled", sessionId, result }),
+    bounceSteer: (sessionId, text, delivery) => post({ type: "steerBounced", sessionId, text, delivery }),
     // 换模型的校验与旧内核 setLedgerModel 同一条路径：一次性 ModelRuntime 注册 + 解析
     resolveModel: async (provider, modelId) => registerAndResolveModel(await createModelRuntime(), provider, modelId),
   });

@@ -319,6 +319,8 @@ export interface ChatSession {
   readOnlyReason: ReadOnlyReason | null;
   /** 新内核：这一轮是被打断的、可以接着跑（标注旁给「继续」） */
   turnContinuable: boolean;
+  /** 新内核：这个子会话在应用重启后被自动接着跑过（上次被打断的那一轮） */
+  resumedAfterRestart: boolean;
   /** 接着跑被打断的那一轮（不加新消息） */
   continueTurn: () => void;
   openSession: (id: string) => Promise<void>;
@@ -486,8 +488,8 @@ interface ViewHandle {
  * 引擎——与「正在看哪条」无关的共享真源。全应用一份，主槽与抽屉槽都从它读。
  */
 export interface SessionEngine {
-  /** 这次启动的对话主循环由新内核跑（开关 ORBITA_DURABLE_KERNEL；读不到当关） */
-  readonly kernelDurable: boolean;
+  /** 这次启动的对话主循环由新内核跑（开关 ORBITA_DURABLE_KERNEL）；null = 还没问到（不急着下「只读」的结论），读不到当关 */
+  readonly kernelDurable: boolean | null;
   /** 新内核：接着跑上次被中断的那一轮 */
   readonly continueTurn: (id: string) => void;
   /**
@@ -922,7 +924,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
    * 这次启动的对话内核（开关 ORBITA_DURABLE_KERNEL）。只用来判「住在新内核里的会话能不能在这里续」：
    * 关着开关时它只能看（主进程也会拒绝，界面先说清楚，别让输入框看起来能打字）。读不到当关（保守）。
    */
-  const [kernelDurable, setKernelDurable] = useState(false);
+  const [kernelDurable, setKernelDurable] = useState<boolean | null>(null);
   useEffect(() => {
     void api.agent
       .kernelInfo()
@@ -3448,7 +3450,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       ? { kind: "noBook" }
       : liveMeta?.durable?.failed !== undefined
         ? { kind: "migrationFailed", reason: liveMeta.durable.failed }
-        : liveMeta?.durable !== undefined && !engine.kernelDurable
+        : liveMeta?.durable !== undefined && engine.kernelDurable === false
           ? { kind: "durableMoved" }
           : null;
 
@@ -3541,7 +3543,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     turnContinuable:
       entry.phase === "idle" &&
       readOnlyReason === null &&
-      (entry.turnContinuable || (engine.kernelDurable && entry.turnError === null && liveMeta?.durable?.running === true)),
+      (entry.turnContinuable || (engine.kernelDurable === true && entry.turnError === null && liveMeta?.durable?.running === true)),
+    // 子会话在应用重启后被自动接着跑过（后台任务照常续跑）：界面说一句，直到下一次由人或父开的轮
+    resumedAfterRestart: engine.kernelDurable === true && liveMeta?.parentId !== undefined && liveMeta.durable?.resumed !== undefined,
     continueTurn: continueHere,
     openSession,
     renameSession: engine.renameSession,

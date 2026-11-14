@@ -33,13 +33,12 @@ function migrationFailedMessage(reason: string): string {
 }
 
 /**
- * 这一轮交给谁。开关开着：迁移失败过的只读（拒绝）；子会话仍走旧内核（delegate 接新内核在后面的 commit）；其余（含全新的会话）走新内核。
+ * 这一轮交给谁。开关开着：迁移失败过的只读（拒绝）；其余（根会话、子会话、全新的会话）走新内核。
  * 开关关着：住在新内核里的会话拒绝（旧内核续写会让两边分叉），其余旧内核。
  */
 export function routeFor(meta: SessionMeta | null, enabled: boolean): { to: TurnRoute } | { refuse: string } {
   if (!enabled) return meta?.durable === undefined ? { to: "legacy" } : { refuse: DURABLE_MOVED_MESSAGE };
   if (meta?.durable?.failed !== undefined) return { refuse: migrationFailedMessage(meta.durable.failed) };
-  if (meta?.parentId !== undefined) return { to: "legacy" };
   return { to: "kernel" };
 }
 
@@ -58,9 +57,13 @@ export function libraryRoot(meta: SessionMeta | null, sessionId: string): string
   return meta?.parentId ?? sessionId;
 }
 
-/** 开轮交给新内核时的标记：第一次接手记 since；开着一轮置 running */
-export function markRunning(current: DurableMark | undefined, now: number): DurableMark {
-  return { ...(current ?? { since: now }), running: true };
+/**
+ * 开轮交给新内核时的标记：第一次接手记 since；开着一轮置 running。resumed（重启后自动接着跑的子会话）只在
+ * 那一次 continue 留着，下一次由人或父开的轮清掉。
+ */
+export function markRunning(current: DurableMark | undefined, now: number, keepResumed = false): DurableMark {
+  const { resumed, ...rest } = current ?? { since: now };
+  return { ...rest, ...(keepResumed && resumed !== undefined ? { resumed } : {}), running: true };
 }
 
 /** 一轮落定：清 running；迁移那一步失败就记原因（会话回落只读）；应用退出时被停下的留着 running */
@@ -69,6 +72,16 @@ export function markSettled(current: DurableMark | undefined, result: KernelTurn
   if (!result.ok && result.interrupted === true) return current ?? { since: now, running: true };
   const { running: _running, ...rest } = current ?? { since: now };
   return result.ok || result.migrationFailed !== true ? rest : { ...rest, failed: result.reason };
+}
+
+/**
+ * 应用重启时要自动接着跑的会话：**子会话**（后台任务）上次在新内核里有一轮没跑完（running 留着）、没迁移失败过。
+ * 前台会话（树根）不续——界面给「上次被中断 · 继续」，由人决定（方案 §2.2 第 10 行的默认）。
+ * 续跑的风险：被打断的工具（含有副作用的命令）不会被 durable 重放，模型看到「被打断」的结果后**可能自己再发一次**——
+ * 不想要就把这里改成返回空表，子会话也和树根一样给「继续」（报告 ⑧ 要用户定）。
+ */
+export function sessionsToResume(metas: readonly SessionMeta[]): SessionMeta[] {
+  return metas.filter((meta) => meta.parentId !== undefined && meta.durable?.running === true && meta.durable.failed === undefined);
 }
 
 /** 主进程给 KernelHost 的依赖：会话 meta 的读与改、kernel 进程的拉起、孤儿善后 */
@@ -108,7 +121,7 @@ export class KernelHost {
         if ("refuse" in decision) throw new Error(decision.refuse);
         if (decision.to === "legacy") return { to: "legacy" };
         // 全新的会话还没有 meta：首轮 created 之后由 ipc 建 meta 时带上标记（host.durableMark）
-        if (meta !== null) await deps.updateDurable(command.sessionId, (current) => markRunning(current, now()));
+        if (meta !== null) await deps.updateDurable(command.sessionId, (current) => markRunning(current, now(), command.type === "continueRun"));
         return { to: "kernel", root: libraryRoot(meta, command.sessionId) };
       },
       editRoute: async (sessionId) => {

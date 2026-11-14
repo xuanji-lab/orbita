@@ -43,6 +43,9 @@ export interface KernelChild {
   kill(): unknown;
 }
 
+/** 插话没送进去时的那句话（旧内核 runtime.ts 的同一句） */
+const STEER_MISSED_MESSAGE = "steer 到达时这一轮已结束（或刚开机还没接上），注入没送进去——请重发";
+
 /** 一轮开轮命令该交给谁：新内核（kernel 进程）还是旧内核（agent 进程）；拒绝时抛错（原因给用户看） */
 export type TurnRoute = "kernel" | "legacy";
 
@@ -60,7 +63,7 @@ export type KernelRoute = { to: "kernel"; root: string } | { to: "legacy" };
 export interface KernelLane {
   fork: () => KernelChild;
   dir: string;
-  route: (command: { sessionId: string }) => Promise<KernelRoute>;
+  route: (command: { sessionId: string; type: string }) => Promise<KernelRoute>;
   editRoute: (sessionId: string) => Promise<KernelRoute>;
   settled: (sessionId: string, result: KernelTurnResult) => void;
   exited: (running: readonly string[]) => void;
@@ -132,6 +135,8 @@ export class AgentHostCore {
   private kernelReady: Promise<void> | null = null;
   /** 这次运行里交给过 kernel 的会话 → 它的树根（停止 / 插话 / 切档 / 标题跟着它们走） */
   private readonly kernelSessions = new Map<string, string>();
+  /** 插话退回时的去处（index.ts 接到通道的「子空闲时的投递」） */
+  private steerBounced: ((sessionId: string, text: string, delivery: "steer" | "followUp") => void) | null = null;
   /** 交给 kernel 还没回执的本子编辑 / 分支（会话 id；kernel 进程退出时要把等待者结掉） */
   private readonly kernelEdits = new Set<string>();
   /** kernel 里一轮没落定的会话（kernel 进程意外退出时它们是「被打断」） */
@@ -210,8 +215,9 @@ export class AgentHostCore {
           return;
         }
         if (message.type === "steerBounced") {
-          // 插话到达时子刚收尾：先按旧内核的说法报 failed（退回投递在后面的 commit）
-          this.onEvent({ type: "failed", sessionId: message.sessionId, message: "steer 到达时这一轮已结束（或刚开机还没接上），注入没送进去——请重发" });
+          // 插话到达时子刚收尾：交给通道当「子空闲时的投递」开一轮；没人接（测试夹具）就按旧内核的说法报 failed
+          if (this.steerBounced !== null) this.steerBounced(message.sessionId, message.text, message.delivery);
+          else this.onEvent({ type: "failed", sessionId: message.sessionId, message: STEER_MISSED_MESSAGE });
           return;
         }
         // 请求（工具请求带 requestId、审批带 requestId）：记下来源，回执回 kernel
@@ -437,6 +443,14 @@ export class AgentHostCore {
     }
     this.postKernel(command);
     return created;
+  }
+
+  /**
+   * 新内核：父→子插话到达时子刚收尾，kernel 把原文退回来（steerBounced）——由这里接到通道，按「子空闲时的投递」开一轮。
+   * 旧内核在这一刻只报 failed（消息留在通道里、没送到模型，要人重发）。
+   */
+  onSteerBounced(handler: (sessionId: string, text: string, delivery: "steer" | "followUp") => void): void {
+    this.steerBounced = handler;
   }
 
   /** kernel 进程此刻是否在（正常退出要不要先让它收尾） */

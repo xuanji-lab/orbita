@@ -1835,6 +1835,7 @@ export const zh: Messages = {
     readOnlyMigrationFailed: (reason) => `这个任务迁到新内核时失败了，只能读、不能接着聊，原件没动。（${reason}）`,
     interruptedTurn: "这一轮没跑完就被打断了。",
     continueTurn: "继续",
+    resumedAfterRestart: "应用重启时这个子会话还没跑完，已自动接着跑上次被打断的那一轮。",
     noMessages: "还没有消息。发出第一条就开始了。",
     loadingOlder: "正在加载更早的消息…",
     backToParent: (title) => `返回「${title}」`,

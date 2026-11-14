@@ -61,11 +61,11 @@ import { deliverAutomationRun, launchAutomationRun, type LaunchDeps } from "./au
 import { applyAutomationRequest, type AutomationRequestDeps } from "./automation/requests.ts";
 import { AutomationScheduler } from "./automation/scheduler.ts";
 import { AutomationStore } from "./automation/store.ts";
-import { applyChannelSend, applyDelegate, type ChannelDeps } from "./channel/requests.ts";
+import { applyChannelSend, applyDelegate, startChildTurn, type ChannelDeps } from "./channel/requests.ts";
 import { ChannelStore } from "./channel/store.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
-import { DURABLE_MOVED_MESSAGE, durableKernelEnabled, KernelHost } from "./agent/kernel-host.ts";
+import { DURABLE_MOVED_MESSAGE, durableKernelEnabled, KernelHost, sessionsToResume } from "./agent/kernel-host.ts";
 import { kernelChildTag, reapKernelChildren } from "../agent/kernel-children.ts";
 import { kernelLibraryName } from "../shared/kernel.ts";
 import { moveSessions } from "./session/move.ts";
@@ -1330,6 +1330,43 @@ void app.whenReady().then(async () => {
     broadcast: broadcastChannelEvent,
   };
   registerChannelIpc(deps);
+  // 新内核：上次退出（或被杀）时还在跑的子会话照常接着跑（后台任务；树根不续，界面给「继续」）。
+  // 先记 resumed（界面据此说一句「重启后接着跑的」），再走与「继续」按钮同一条开轮装配
+  if (kernel !== null) {
+    void (async () => {
+      for (const child of sessionsToResume(await sessions.list())) {
+        await sessions.updateDurable(child.id, (current) => (current === undefined ? current : { ...current, resumed: Date.now() }));
+        phases.set(child.id, "turn");
+        await agentIpc
+          .continueTurn({
+            sessionId: child.id,
+            cwd: child.cwd,
+            workspaceId: child.workspaceId,
+            resume: child.piSessionFile === null ? null : { piSessionFile: child.piSessionFile },
+            providerId: child.providerId,
+            modelId: child.modelId,
+            mode: child.mode,
+            thinkingLevel: child.thinkingLevel,
+          })
+          .catch((error: unknown) => {
+            phases.delete(child.id);
+            console.error("[kernel] 重启后接着跑子会话失败", child.id, error);
+          });
+        console.info(`[kernel] 重启后接着跑子会话 ${child.id}`);
+      }
+    })().catch((error: unknown) => console.error("[kernel] 重启后续跑子会话失败", error));
+  }
+  // 新内核：插话到达时子刚收尾，原文退回来——用同一封信当「子空闲时的投递」开一轮（旧内核这一刻只报失败、消息没送到）
+  agentHost.onSteerBounced((sessionId, text) => {
+    void (async () => {
+      const child = await sessions.readMeta(sessionId);
+      if (child === null) return;
+      await startChildTurn(deps, child, text);
+    })().catch((error: unknown) => {
+      console.error("[channel] 插话退回后开轮失败", sessionId, error);
+      broadcastAgentEvent({ type: "failed", sessionId, message: `steer 到达时这一轮已结束，补开一轮也没成：${error instanceof Error ? error.message : String(error)}` });
+    });
+  });
 
   /*
    * GitHub 出口只有一个：检查更新（provider）与「所有版本」列表共用同一个客户端——

@@ -19,7 +19,7 @@ import { KernelPool, SessionHistoryDoc, SessionIndexDoc } from "./kernel.ts";
 import { compactionSummary, contextUsage, KernelSessions } from "./kernel-session.ts";
 import { PermissionWaiter, type KernelTurnRuntime } from "./kernel-turn.ts";
 import { McpHub } from "./mcp.ts";
-import { RequestBroker } from "./request-broker.ts";
+import { RequestBroker, toolReplyResult } from "./request-broker.ts";
 
 const dirs: string[] = [];
 async function tempDir(): Promise<string> {
@@ -76,6 +76,8 @@ interface Rig {
   /** 等到某个事件出现（最多 5 秒） */
   until: (match: (event: AgentEvent) => boolean) => Promise<AgentEvent>;
   transcript: (sessionId?: string) => readonly TranscriptItem[];
+  /** 工具请求通道（测试替主进程回执） */
+  broker: RequestBroker;
 }
 
 /** storages = null：用真的 SQLite 文件（崩溃后重开的测试要它：MemoryStorage 随 Harness 一起关掉） */
@@ -139,6 +141,7 @@ async function rig(onEvent?: (event: AgentEvent, rig: Rig) => void, storages: Ma
     permissions,
     storages,
     pool,
+    broker: runtime.broker,
     until: (match) => {
       const found = events.find(match);
       if (found !== undefined) return Promise.resolve(found);
@@ -174,6 +177,11 @@ async function rig(onEvent?: (event: AgentEvent, rig: Rig) => void, storages: Ma
     },
   };
   return self;
+}
+
+/** 工具请求的回执（主进程那头）：channelSendRequest 回 ok */
+function runtimeReply(r: Rig, requestId: string): void {
+  r.broker.resolve(requestId, toolReplyResult({ type: "channelSendResult", requestId, ok: true, messageId: "m1" }));
 }
 
 const idle = (sessionId = "s1") => (event: AgentEvent) => event.type === "phase" && event.sessionId === sessionId && event.phase === "idle";
@@ -293,7 +301,7 @@ describe("KernelSessions：停止 / 抢跑 / 切档 / 插话", () => {
     assert.ok(r.events.some((event) => event.type === "permission" && event.toolName === "bash"), "切档后的 bash 要了审批");
   });
 
-  it("父→子插话（steer）：放在当前工具轮之后、同一轮里答；与用户排队无关；空闲时插话回失败语", async () => {
+  it("父→子插话（steer）：放在当前工具轮之后、同一轮里答；与用户排队无关；空闲时插话退回主进程（没有退回通道时回失败语）", async () => {
     const cwd = await tempDir();
     let release: () => void = () => undefined;
     const held = new Promise<void>((resolve) => {
@@ -321,9 +329,14 @@ describe("KernelSessions：停止 / 抢跑 / 切档 / 插话", () => {
     );
     assert.match(JSON.stringify(items.at(-1)), /收到插话/);
     assert.deepEqual(phases(r.events), ["turn", "idle"], "插话没有另开一轮");
-    // 空闲时插话：与旧内核同一句失败语
+    // 空闲时插话：没有退回通道（第三步的形状）回旧内核同一句失败语
     await r.sessions.handle("s1", { type: "steer", sessionId: "s1", text: "late", delivery: "steer" });
     assert.ok(r.events.some((event) => event.type === "failed" && /steer 到达时这一轮已结束/.test(event.message)));
+    // 有退回通道：原文退回主进程（由它开一轮），不报失败
+    const bounced: string[] = [];
+    const withBounce = new KernelSessions({ pool: r.pool, runtime: { broker: new RequestBroker(() => undefined), mcpHub: new McpHub(), permissions: r.permissions, send: () => undefined, resolveShellPath: () => undefined }, intentConfirm: new IntentConfirmWaiter(() => undefined), settled: () => undefined, resolveModel: async () => MODEL, bounceSteer: (sessionId, text, delivery) => bounced.push(`${sessionId}:${delivery}:${text}`) });
+    await withBounce.handle("s1", { type: "steer", sessionId: "s1", text: "late", delivery: "followUp" });
+    assert.deepEqual(bounced, ["s1:followUp:late"]);
   });
 });
 
@@ -607,3 +620,68 @@ describe("KernelSessions：删除（删树根 = 删库；删树里的一条 = �
     for (const suffix of ["", "-wal", "-shm", ".purge.json"]) await assert.rejects(readFile(join(libraryDir, `p1.sqlite${suffix}`)));
   });
 });
+
+describe("KernelSessions：子会话与父同库", () => {
+  it("父与子在同一个库里并行跑、事件不串台；停父不影响子（旧内核同一条规矩）", async () => {
+    const cwd = await tempDir();
+    faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("bash", { command: "sleep 30" }), { stopReason: "toolUse" }),
+      fauxAssistantMessage(fauxToolCall("bash", { command: "sleep 0.5; echo child-done" }), { stopReason: "toolUse" }),
+      fauxAssistantMessage("子答完-CHILD"),
+    ]);
+    const r = await rig();
+    void r.sessions.handle("p1", submit(cwd, { sessionId: "p1", text: "父" }));
+    await r.until((event) => event.type === "progress" && event.sessionId === "p1" && event.progress.type === "item_started" && event.progress.item.role === "tool");
+    void r.sessions.handle("p1", submit(cwd, { sessionId: "c1", text: "子", directories: { attached: [], workbench: join(cwd, "wb-c1"), related: [{ sessionId: "p1", relation: "parent", label: "父会话", path: join(cwd, "wb-p1") }] } }));
+    await r.until((event) => event.type === "progress" && event.sessionId === "c1" && event.progress.type === "item_started" && event.progress.item.role === "tool");
+    await r.sessions.handle("p1", { type: "abort", sessionId: "p1" });
+    await r.until(idle("p1"));
+    assert.equal(r.sessions.isRunning("c1"), true, "停父不停子");
+    await r.until(idle("c1"));
+    assert.match(JSON.stringify(r.transcript("c1")), /子答完-CHILD/);
+    assert.doesNotMatch(JSON.stringify(r.transcript("p1")), /CHILD/);
+    // 同一个库：两条会话都在 p1 的索引里
+    const { harness } = await r.pool.library("p1.sqlite");
+    const index = (await harness.snapshot(SessionIndexDoc, BACKGROUND_CONTEXT))?.sessions ?? {};
+    assert.ok(index["p1"] !== undefined && index["c1"] !== undefined && index["p1"] !== index["c1"]);
+  });
+
+  it("三个子会话并行（一个等父回话、一个模型报错、一个正常答完）：互不串台，报错只挂在它自己那条上，回报的信封是它自己的", async () => {
+    const cwd = await tempDir();
+    const childDirs = (id: string) => ({ attached: [], workbench: join(cwd, `wb-${id}`), related: [{ sessionId: "p1", relation: "parent" as const, label: "父会话", path: join(cwd, "wb-p1") }] });
+    const lastText = (context: { messages: readonly { role: string; content: unknown }[] }): string => JSON.stringify(context.messages.at(-1)?.content ?? "");
+    // 回答按最后一条消息定（三条会话的请求交错到达，按序排会错位）
+    const respond = (context: { messages: readonly { role: string; content: unknown }[] }) => {
+      const last = lastText(context);
+      if (last.includes("子一")) return fauxAssistantMessage("子一答完-ONE");
+      if (last.includes("子二")) return fauxAssistantMessage("", { stopReason: "error", errorMessage: "boom-TWO" });
+      if (last.includes("子三")) return fauxAssistantMessage(fauxToolCall("report_to_parent", { kind: "question", text: "要用哪个数据集？THREE" }), { stopReason: "toolUse" });
+      return fauxAssistantMessage("子三问完-THREE");
+    };
+    faux.setResponses(Array.from({ length: 30 }, () => respond));
+    const r = await rig((event, self) => {
+      // 子三的回报：主进程那头记账后回执（这里直接回 ok）
+      if (event.type === "channelSendRequest") setTimeout(() => runtimeReply(self, event.requestId), 300);
+    });
+    await Promise.all(
+      [
+        ["c1", "子一：说一句"],
+        ["c2", "子二：说一句"],
+        ["c3", "子三：先问父会话"],
+      ].map(([id, text]) => r.sessions.handle("p1", submit(cwd, { sessionId: id as string, text: text as string, directories: childDirs(id as string) }))),
+    );
+    await Promise.all(["c1", "c2", "c3"].map((id) => r.until(idle(id))));
+    const blob = (id: string) => JSON.stringify(r.transcript(id));
+    assert.match(blob("c1"), /ONE/);
+    assert.doesNotMatch(blob("c1"), /TWO|THREE/);
+    assert.doesNotMatch(blob("c2"), /ONE|THREE/);
+    assert.match(blob("c3"), /THREE/);
+    assert.doesNotMatch(blob("c3"), /ONE|TWO/);
+    const failed = r.events.filter((event) => event.type === "failed");
+    assert.ok(failed.length > 0 && failed.every((event) => event.type === "failed" && event.sessionId === "c2"), JSON.stringify(failed));
+    const sent = r.events.filter((event) => event.type === "channelSendRequest");
+    assert.equal(sent.length, 1);
+    assert.ok(sent[0]?.type === "channelSendRequest" && sent[0].sessionId === "c3" && sent[0].kind === "question" && /THREE/.test(sent[0].text));
+  });
+});
+

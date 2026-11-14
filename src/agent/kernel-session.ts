@@ -81,6 +81,11 @@ export interface KernelSessionsDeps {
   intentConfirm: IntentConfirmWaiter;
   /** 一轮落定（phase idle 之前到）：主进程据此清「在跑」标记、记迁移失败 */
   settled: (sessionId: string, result: KernelTurnResult) => void;
+  /**
+   * 父→子插话到达时子刚收尾（没有在跑的轮可插）：原文退回主进程，由它当「子空闲时的投递」开一轮（不丢消息）。
+   * 缺席时按旧内核报 failed（测试夹具与第三步的形状）。
+   */
+  bounceSteer?: (sessionId: string, text: string, delivery: "steer" | "followUp") => void;
   /** setModel 的校验：注册并解析型号（与旧内核 setLedgerModel 同一条路径）；解析不到返回 undefined */
   resolveModel: (provider: ProviderSecrets, modelId: string) => Promise<PiModel | undefined>;
   now?: () => number;
@@ -330,12 +335,18 @@ export class KernelSessions {
 
   /**
    * 父→子插话：交给 durable 的 inbox。steer = 当前工具轮结束后、下一次请求之前放进来；followUp = 这一轮回答之后再处理。
-   * 只在会话忙时收（whenIdle: reject）：到达时这一轮刚结束，回旧内核同一句话让人重发（主进程先看 phase 再分流）。
+   * 只在会话忙时收（whenIdle: reject）：到达时这一轮刚结束，原文退回主进程开一轮（bounceSteer）；旧内核这一刻只报
+   * failed、消息没送到模型（channel/requests.ts 记的已知限制），这里不丢。
    */
   private async steer(sessionId: string, text: string, delivery: "steer" | "followUp"): Promise<void> {
     const parts = this.running.get(sessionId)?.opened ?? null;
-    const failed = (): void =>
+    const failed = (): void => {
+      if (this.deps.bounceSteer !== undefined) {
+        this.deps.bounceSteer(sessionId, text, delivery);
+        return;
+      }
       this.send({ type: "failed", sessionId, message: "steer 到达时这一轮已结束（或刚开机还没接上），注入没送进去——请重发" });
+    };
     if (parts === null) {
       failed();
       return;

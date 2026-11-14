@@ -153,7 +153,7 @@ export function registerAgentIpc(
   /** 记忆构建的轮次跟踪器（undefined = 测试夹具不传）。
    * submit / interrupt 判过根会话 + 用户原话后 begin，轮落定时由它交给记忆服务 */
   memoryTurns?: { begin(sessionId: string, text: string): void },
-): { submitTurn(input: SubmitAgentInput): Promise<void> } {
+): { submitTurn(input: SubmitAgentInput): Promise<void>; continueTurn(input: ContinueAgentInput): Promise<void> } {
   /**
    * 某条会话所属的工作区。找不到（工作区被删了）就当作没有工作区：白名单与工作区
    * 变量都按 Home 处理，**不拦开轮**（同「一台坏的 MCP server 不该把会话堵死」）。
@@ -579,14 +579,16 @@ export function registerAgentIpc(
     if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
   });
 
-  // 新内核：接着跑上次被中断的那一轮（不加新消息）。开轮装配与压缩同一份（没有正文要组装）；旧内核下 host 拒绝
-  ipcMain.handle(ipcChannels.agentContinue, async (_e, input: ContinueAgentInput): Promise<void> => {
+  // 新内核：接着跑上次被中断的那一轮（不加新消息）。开轮装配与压缩同一份（没有正文要组装）；旧内核下 host 拒绝。
+  // 也是应用重启后自动接着跑子会话的那条路（index.ts 用返回的 continueTurn）
+  async function continueTurn(input: ContinueAgentInput): Promise<void> {
     const provider = await resolveForTurn(input.providerId);
     const automationTools = await readAutomationTools(input.sessionId);
     const capabilities = await readCapabilities(input.workspaceId);
     const piSessionFile = await host.continueRun({ type: "continueRun", sessionMemory: true, ...(automationTools ? { automationTools: true } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), planFirst: await readPlanFirst(), pluginTools: true }) });
     if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
-  });
+  }
+  ipcMain.handle(ipcChannels.agentContinue, (_e, input: ContinueAgentInput): Promise<void> => continueTurn(input));
   ipcMain.handle(ipcChannels.agentKernelInfo, (): AgentKernelInfo => ({ durable: host.kernelEnabled() }));
 
   ipcMain.handle(
@@ -636,7 +638,7 @@ export function registerAgentIpc(
     (_e, requestId: string, decision: IntentConfirmDecision) => host.answerIntentConfirm(requestId, decision),
   );
 
-  return { submitTurn };
+  return { submitTurn, continueTurn };
 }
 
 /** agent 进程的事件 → 所有主窗口（沙盒浏览器窗口的工具条不收，见 window/main-windows.ts） */

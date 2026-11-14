@@ -499,7 +499,19 @@ async function deliverToChild(
     deps.steer(child.id, text, message.delivery);
     return;
   }
-  // 空闲：delivery 对开轮无意义（没有正在跑的轮可注入），一律当普通开轮。
+  await startChildTurn(deps, child, text);
+}
+
+/**
+ * 子空闲时的投递：把一条父→子信封当普通开轮（delivery 对开轮无意义——没有正在跑的轮可注入）。
+ * 也是新内核里「插话到达时子刚收尾」的退回路径（kernel 回 steerBounced，主进程用同一封信开一轮），
+ * 所以信封原文由调用方给、这里不重拼。
+ */
+export async function startChildTurn(
+  deps: Pick<ChannelDeps, "phases" | "submitTurn">,
+  child: SessionMeta,
+  text: string,
+): Promise<void> {
   deps.phases.set(child.id, "turn");
   try {
     await deps.submitTurn({

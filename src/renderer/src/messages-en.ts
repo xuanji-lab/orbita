@@ -1996,6 +1996,8 @@ export const en = {
     /** 新内核：这一轮被打断了（kernel 进程崩溃 / 应用退出时它在跑），库里还留着上下文 */
     interruptedTurn: "This turn was interrupted before it finished.",
     continueTurn: "Continue",
+    /** 新内核：子会话在应用重启后被自动接着跑（后台任务照常续跑） */
+    resumedAfterRestart: "This sub-session was still running when the app restarted; it picked up the interrupted turn on its own.",
     noMessages: "No messages yet. Send the first one to start.",
     /** 源侧分页：触顶拉更早一页那一行 */
     loadingOlder: "Loading earlier messages…",
