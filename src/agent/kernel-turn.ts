@@ -34,7 +34,8 @@ import {
   type Submission,
   type ToolExecutionResult,
 } from "@earendil-works/pi-durable";
-import type { AgentEvent } from "../shared/agent-ipc.ts";
+import type { AgentEvent, ContextRulesInventory } from "../shared/agent-ipc.ts";
+import { buildRulesInventory } from "../shared/context-inventory.ts";
 import type { KernelContinueCommand, KernelTurnCommand } from "../shared/kernel.ts";
 import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
 import { composePromptText } from "../shared/prompt-attachments.ts";
@@ -162,17 +163,22 @@ function asPiEntry(entry: EntryRecord): unknown {
  * 被崩溃截断（interrupted / restart_limit）的不改：那是 durable 独有的恢复语义，旧内核没有对位。
  */
 const BLOCKED_PREFIX = "Tool call blocked: ";
+
+/** pi-agent-core 的 createErrorToolResult：一段原文 + 空的 details（界面的工具卡与旧内核同形：details 是 {}） */
+function piError(text: string): ToolExecutionResult {
+  return { output: [{ type: "text", text }], isError: true, details: {} };
+}
 export function unwrapHarnessError(call: { name: string }, result: ToolExecutionResult): ToolExecutionResult | undefined {
   for (const diagnostic of result.diagnostics ?? []) {
     if (diagnostic.code === "blocked") {
       const reason = diagnostic.message.startsWith(BLOCKED_PREFIX) ? diagnostic.message.slice(BLOCKED_PREFIX.length) : diagnostic.message;
-      return { output: [{ type: "text", text: reason }], isError: true };
+      return piError(reason);
     }
-    if (diagnostic.code === "invalid_arguments") return { output: [{ type: "text", text: diagnostic.message }], isError: true };
-    if (diagnostic.code === "tool_unavailable") return { output: [{ type: "text", text: `Tool ${call.name} not found` }], isError: true };
+    if (diagnostic.code === "invalid_arguments") return piError(diagnostic.message);
+    if (diagnostic.code === "tool_unavailable") return piError(`Tool ${call.name} not found`);
     // 被停止：durable 在工具自己报错之前就结了这次调用，工具那句话（bash 的 "Command aborted"）拿不到；
     // 用 pi-agent-core 对被停调用的通用说法 "Operation aborted"（报告里列为已知差别：措辞不同，形状相同）
-    if (diagnostic.code === "aborted") return { output: [{ type: "text", text: "Operation aborted" }], isError: true };
+    if (diagnostic.code === "aborted") return piError("Operation aborted");
   }
   return undefined;
 }
@@ -326,6 +332,8 @@ export interface AssembledTurn {
   activeNames: string[];
   /** 发给模型的系统提示全文（各段按 `\n\n` 拼接后） */
   systemPrompt: string;
+  /** 上下文面板「规则与说明」的清单（旧内核 before_agent_start 现场组装、每轮推一次的同一份） */
+  inventory: ContextRulesInventory;
 }
 
 /**
@@ -397,8 +405,9 @@ export async function assembleTurn(
     return tool === undefined ? [] : [tool];
   });
 
+  const piBase = resources.basePrompt(activeNames, definitions);
   const segments = orbitaSystemSegments({
-    piBase: adaptSystemPrompt(resources.basePrompt(activeNames, definitions)),
+    piBase: adaptSystemPrompt(piBase),
     mode: command.mode,
     extraToolNames: extraToolNames(
       mcpTools.map((tool) => tool.name),
@@ -466,7 +475,15 @@ export async function assembleTurn(
       }),
     ],
   });
-  return { extension, toolNames, activeNames, systemPrompt: segments.map((segment) => segment.text).filter((text) => text !== "").join("\n\n") };
+  // 规则清单：与旧内核同一个 buildRulesInventory、同一组原料（pi 基底单独计，不进 segments）
+  const inventory = buildRulesInventory({
+    agentsFiles: resources.agentsFiles,
+    skills: resources.skills,
+    basePrompt: piBase,
+    segments: segments.filter((segment) => segment.name !== "pi-base").map((segment) => ({ id: segment.name, text: segment.text })),
+    agentDir: resources.agentDir,
+  });
+  return { extension, toolNames, activeNames, systemPrompt: segments.map((segment) => segment.text).filter((text) => text !== "").join("\n\n"), inventory };
 }
 
 /**
@@ -491,6 +508,8 @@ export interface TurnHooks {
   echo?: (images: Awaited<ReturnType<typeof preparePromptImages>>, promptText: string) => Promise<string | null>;
   admitted?: () => void;
   continueRun?: boolean;
+  /** 这一轮的规则清单（上下文面板）装配好了 */
+  inventory?: (inventory: ContextRulesInventory) => void;
 }
 
 /** 「继续」落在半截回答上时发给模型、也回显给用户的那句话 */
@@ -520,6 +539,7 @@ export async function runTurn(
   const memoryTurn = liftMessages(messages, new Set()).filter((message) => (message as { role?: unknown }).role === "user").length + 1;
   const assembled = await assembleTurn(turnCommand, runtime, target, previousTools(messages, wire), wire, memoryTurn, hooks.observer);
   target.registry.install(assembled.extension);
+  hooks.inventory?.(assembled.inventory);
   await target.conversation.configure(
     {
       model: { provider: target.model.provider, modelId: target.model.id },

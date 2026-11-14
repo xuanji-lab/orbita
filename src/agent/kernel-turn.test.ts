@@ -202,9 +202,9 @@ describe("kernel-turn：新内核跑一轮带工具的对话", () => {
 describe("kernel-turn：工具结果与旧内核同形", () => {
   it("参数校验失败、调了没提供的工具：结果是旧内核那样的一段原文，不带 <harness> 包装", () => {
     const invalid = unwrapHarnessError({ name: "t" }, { isError: true, diagnostics: [{ severity: "error", code: "invalid_arguments", message: 'Validation failed for tool "t":\n  - x: required' }] });
-    assert.deepEqual(invalid, { output: [{ type: "text", text: 'Validation failed for tool "t":\n  - x: required' }], isError: true });
+    assert.deepEqual(invalid, { output: [{ type: "text", text: 'Validation failed for tool "t":\n  - x: required' }], isError: true, details: {} });
     const missing = unwrapHarnessError({ name: "ghost" }, { isError: true, diagnostics: [{ severity: "error", code: "tool_unavailable", message: "Tool ghost is not available" }] });
-    assert.deepEqual(missing, { output: [{ type: "text", text: "Tool ghost not found" }], isError: true });
+    assert.deepEqual(missing, { output: [{ type: "text", text: "Tool ghost not found" }], isError: true, details: {} });
     assert.equal(unwrapHarnessError({ name: "t" }, { output: [{ type: "text", text: "ok" }] }), undefined);
   });
 

@@ -510,6 +510,7 @@ export class KernelSessions {
           },
         },
         ...(command.type === "continueRun" ? { continueRun: true } : { echo: (images, promptText) => this.echo(parts, command, images, promptText) }),
+        inventory: (inventory) => this.send({ type: "contextInventory", sessionId, inventory }),
         admitted: () => {
           view.turnActive = true;
           this.send({ type: "phase", sessionId, phase: "turn" });

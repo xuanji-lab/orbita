@@ -149,7 +149,8 @@ export function toDurableTool(definition: ToolDefinition, scope: DurableToolScop
         };
       } catch (error) {
         // 被停止时 durable 丢掉这个返回值、改记它自己的 aborted 结果（kernel-turn.ts 的 unwrapHarnessError 再还原成一段原文）
-        return { output: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
+        // pi-agent-core 的 createErrorToolResult 同形：一段原文 + 空的 details
+        return { output: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true, details: {} };
       }
     },
   };
