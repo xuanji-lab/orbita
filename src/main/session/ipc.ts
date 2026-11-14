@@ -177,6 +177,7 @@ export function registerSessionIpc(
           roles: plan.roles,
         },
         plan.newId,
+        id,
       );
       await store.commitBranch(plan, piSessionFile);
       return plan.newId;

@@ -11,7 +11,7 @@ import { cpus, homedir, totalmem } from "node:os";
 import { join } from "node:path";
 import type { SessionPhase } from "../shared/transcript.ts";
 import { effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
-import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
+import { AgentHost, forkKernelRuntime, resolveRuntimePath } from "./agent/host.ts";
 import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";
 import { PI_PACKAGE_DIR_ENV, piPackageDir } from "./agent/pi-package.ts";
 import { existsSync } from "node:fs";
@@ -65,7 +65,8 @@ import { applyChannelSend, applyDelegate, type ChannelDeps } from "./channel/req
 import { ChannelStore } from "./channel/store.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
-import { durableKernelEnabled, KernelHost } from "./agent/kernel-host.ts";
+import { DURABLE_MOVED_MESSAGE, durableKernelEnabled, KernelHost } from "./agent/kernel-host.ts";
+import { kernelChildTag, reapKernelChildren } from "../agent/kernel-children.ts";
 import { kernelLibraryName } from "../shared/kernel.ts";
 import { moveSessions } from "./session/move.ts";
 import { registerWrapupIpc } from "./session/wrapup-ipc.ts";
@@ -549,14 +550,39 @@ void app.whenReady().then(async () => {
     ...(existsSync(join(piPackage, "package.json")) ? { [PI_PACKAGE_DIR_ENV]: piPackage } : {}),
   };
   /**
-   * 新内核（pi-durable）：开发开关 ORBITA_DURABLE_KERNEL=1 才建（kernel-host.ts）。**关着时为 null**，
-   * 下面两处（删会话、工具禁区）都按 null 走与基线相同的代码。旧会话不在打开时迁：迁移在新内核第一次
-   * 为这条会话发消息时做（kernel.ts 的 turn），这一步对话主循环仍是旧内核，主进程不拉起 kernel 进程。
+   * 新内核（pi-durable）：开发开关 ORBITA_DURABLE_KERNEL=1 才建（kernel-host.ts）。**关着时为 null**：
+   * AgentHost 不拿新内核那条道、主进程不拉起 kernel 进程，删会话、工具禁区都走与基线相同的代码；唯一多的一道是
+   * legacyGuard——住在新内核里的会话（meta.durable）不交给旧内核续写、不让它编辑 pi 本子。
+   * 开着时：根会话的对话主循环交给 kernel 进程（第一次有会话要跑时懒拉起，与 agent 进程同一份环境变量）。
    */
   const durableDir = join(configDir, "durable");
   const kernel = durableKernelEnabled(process.env)
     ? new KernelHost(durableDir)
     : null;
+  const kernelLane =
+    kernel === null
+      ? undefined
+      : kernel.lane({
+          readMeta: (id) => sessions.readMeta(id),
+          updateDurable: (id, change) => sessions.updateDurable(id, change),
+          fork: () => forkKernelRuntime(__dirname, agentProcessEnv),
+          // kernel 进程被杀：它拉起的 bash 进程组不会跟着死，按库目录的标签清掉（kernel-children.ts）
+          reap: () => {
+            void reapKernelChildren(kernelChildTag(durableDir)).then((count) => {
+              if (count > 0) console.error(`[kernel] kernel 进程退出，清掉 ${count} 个留下的 shell 子进程`);
+            });
+          },
+        });
+  // 上一次连主进程一起被杀（kill -9 / 崩溃）时 kernel 拉起的 shell 留下的孤儿：启动时就清，不等 kernel 进程下次被拉起
+  if (kernel !== null) {
+    void reapKernelChildren(kernelChildTag(durableDir)).then((count) => {
+      if (count > 0) console.error(`[kernel] 启动时清掉上一次留下的 ${count} 个 shell 子进程`);
+    });
+  }
+  const legacyGuard =
+    kernel === null
+      ? async (id: string): Promise<string | null> => ((await sessions.readMeta(id))?.durable === undefined ? null : DURABLE_MOVED_MESSAGE)
+      : undefined;
   const agentHost = new AgentHost(resolveRuntimePath(__dirname), agentProcessEnv, (event) => {
     // MCP 的连接状态由 agent 进程报上来（连接是它建的），主进程缓存最后一次快照给管理面看
     if (event.type === "mcp") mcpIpc.onAgentSnapshot(event.servers);
@@ -813,7 +839,7 @@ void app.whenReady().then(async () => {
     record(event);
     broadcastAgentEvent(event);
     // 目录联网刷新只刷用户已添加的服务商用到的目录（审核 F-1）：每次拉起 agent 进程时现读一次
-  }, async () => catalogIdsOfProviders(await providers.load()));
+  }, async () => catalogIdsOfProviders(await providers.load()), kernelLane, legacyGuard);
   // MCP 的 IPC 面（1-1 起含热重载）。reload 回调闭包引用 agentHost——
   // 事件回调只在事件到达时执行，那时两边都已定义，不存在 TDZ 问题
   const mcpIpc = registerMcpIpc(mcp, workspaces, () => agentHost.mcpReload());
@@ -1080,7 +1106,11 @@ void app.whenReady().then(async () => {
       ? onSessionRemoved
       : (id) => {
           onSessionRemoved(id);
-          void kernel.drop(kernelLibraryName(id)).catch((error: unknown) => console.error("[kernel] 删库失败", error));
+          // kernel 进程开着就让它停轮、关库再删（不在写者手里删文件）；没开着直接删文件
+          void agentHost
+            .dropKernelLibrary(kernelLibraryName(id))
+            .then((dropped) => (dropped ? undefined : kernel.drop(kernelLibraryName(id))))
+            .catch((error: unknown) => console.error("[kernel] 删库失败", error));
         },
     agentHost,
     carryovers,
@@ -1383,7 +1413,20 @@ void app.whenReady().then(async () => {
     console.warn("[更新] 初始化失败：", error instanceof Error ? error.message : String(error));
   });
 
-  app.on("before-quit", () => {
+  /**
+   * 正常退出时 kernel 进程里有轮在跑：先让它停轮、关库（最多等 3 秒），再继续退出——上下文与队列留在库里，
+   * 下次打开是「上次被中断」，由用户决定继续。关着开关时没有这一步（shutdownKernel 对没拉起的 kernel 立即返回）。
+   */
+  let kernelDrained = kernel === null;
+  app.on("before-quit", (event) => {
+    // kernel 进程没拉起（这次没跑过新内核的会话）就不拦：一个 preventDefault 都不多
+    if (!kernelDrained && agentHost.kernelAlive()) {
+      event.preventDefault();
+      kernelDrained = true;
+      // 下一拍再 quit：在 before-quit 里同步 / 紧跟着再发起退出，SIGTERM 触发的那次退出会卡住（2026-11-14 实测）
+      void agentHost.shutdownKernel().finally(() => setTimeout(() => app.quit(), 0));
+      return;
+    }
     automationScheduler.stop();
     keepAwake.release();
     appTray?.beginQuit();

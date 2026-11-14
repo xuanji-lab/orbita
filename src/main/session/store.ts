@@ -53,6 +53,7 @@ import {
   UNASSIGNED_PROVIDER_ID,
   type SessionCompletion,
   type SessionDetail,
+  type DurableMark,
   type SessionMeta,
   type SessionOlderPage,
   type SessionRecord,
@@ -648,6 +649,18 @@ export class SessionStore {
   /** 记住 pi 这一次用的那份 session 文件——没有它，这条会话下次就只能读不能续 */
   setPiSessionFile(id: string, piSessionFile: string | null): Promise<void> {
     return this.update(id, { piSessionFile });
+  }
+
+  /**
+   * 新内核的标记（DurableMark）：改它的一个字段。change 返回 undefined = 去掉标记（只给测试夹具）；
+   * 返回同一个对象引用 = 不写。meta 不在就悄悄不做（同 update）。
+   */
+  updateDurable(id: string, change: (current: DurableMark | undefined) => DurableMark | undefined): Promise<void> {
+    return this.update(id, (meta) => {
+      const next = change(meta.durable);
+      if (next === meta.durable) return null;
+      return next === undefined ? { durable: undefined } : { durable: next };
+    });
   }
 
   setMode(id: string, mode: PermissionMode): Promise<void> {

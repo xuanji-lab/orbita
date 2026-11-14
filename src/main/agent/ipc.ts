@@ -8,7 +8,9 @@ import { join } from "node:path";
 import { mainWindows } from "../window/main-windows.ts";
 import {
   ipcChannels,
+  type AgentKernelInfo,
   type CompactAgentInput,
+  type ContinueAgentInput,
   type ProviderSecrets,
   type SubmitAgentInput,
 } from "../../shared/agent-ipc.ts";
@@ -411,6 +413,8 @@ export function registerAgentIpc(
       modelId: input.modelId,
       mode: input.mode,
       thinkingLevel: input.thinkingLevel,
+      // 这一轮交给了新内核：会话从第一轮起就住在新内核里（旧内核不再续写它，见 SessionMeta.durable）
+      ...(host.durableMark(input.sessionId, now) === undefined ? {} : { durable: host.durableMark(input.sessionId, now) }),
       createdAt: now,
       updatedAt: now,
     });
@@ -574,6 +578,16 @@ export function registerAgentIpc(
     const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), planFirst: await readPlanFirst(), pluginTools: true }) });
     if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
   });
+
+  // 新内核：接着跑上次被中断的那一轮（不加新消息）。开轮装配与压缩同一份（没有正文要组装）；旧内核下 host 拒绝
+  ipcMain.handle(ipcChannels.agentContinue, async (_e, input: ContinueAgentInput): Promise<void> => {
+    const provider = await resolveForTurn(input.providerId);
+    const automationTools = await readAutomationTools(input.sessionId);
+    const capabilities = await readCapabilities(input.workspaceId);
+    const piSessionFile = await host.continueRun({ type: "continueRun", sessionMemory: true, ...(automationTools ? { automationTools: true } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), planFirst: await readPlanFirst(), pluginTools: true }) });
+    if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
+  });
+  ipcMain.handle(ipcChannels.agentKernelInfo, (): AgentKernelInfo => ({ durable: host.kernelEnabled() }));
 
   ipcMain.handle(
     ipcChannels.agentSetMode,

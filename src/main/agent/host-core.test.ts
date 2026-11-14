@@ -16,7 +16,8 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { AgentCommand, AgentEvent } from "../../shared/agent-ipc.ts";
-import { AgentHostCore, type AgentChild } from "./host-core.ts";
+import type { KernelCommand, KernelMessage } from "../../shared/kernel.ts";
+import { AgentHostCore, type AgentChild, type KernelLane, type TurnRoute } from "./host-core.ts";
 
 /** 脚本化的假子进程。 */
 class FakeChild implements AgentChild {
@@ -769,5 +770,149 @@ describe("目录刷新范围 —— 只送已添加服务商的目录（审核 F
     ctx.host.syncCatalogScope();
     await flush();
     assert.deepEqual(refreshes(ctx.child()), []);
+  });
+});
+
+/** kernel 进程的假货：命令记进 posted，事件由测试 emit（KernelMessage 是 AgentEvent 的超集） */
+class FakeKernel {
+  readonly posted: KernelCommand[] = [];
+  private readonly messageListeners = new Set<(message: KernelMessage) => void>();
+  private readonly exitListeners = new Set<(code: number) => void>();
+  on(event: "message", listener: (message: KernelMessage) => void): unknown;
+  on(event: "exit", listener: (code: number) => void): unknown;
+  on(event: "message" | "exit", listener: ((message: KernelMessage) => void) | ((code: number) => void)): unknown {
+    if (event === "message") this.messageListeners.add(listener as (message: KernelMessage) => void);
+    else this.exitListeners.add(listener as (code: number) => void);
+    return this;
+  }
+  postMessage(message: KernelCommand): unknown {
+    this.posted.push(message);
+    return undefined;
+  }
+  kill(): unknown {
+    for (const listener of this.exitListeners) listener(0);
+    return true;
+  }
+  emit(message: KernelMessage): void {
+    for (const listener of this.messageListeners) listener(message);
+  }
+  exitWith(code: number): void {
+    for (const listener of this.exitListeners) listener(code);
+  }
+}
+
+function kernelRig(routes: Record<string, TurnRoute> = {}) {
+  const legacy = new FakeChild();
+  const kernel = new FakeKernel();
+  const events: AgentEvent[] = [];
+  const settled: string[] = [];
+  const exited: string[][] = [];
+  const lane: KernelLane = {
+    fork: () => kernel,
+    dir: "/durable",
+    route: async (command) => routes[command.sessionId] ?? "kernel",
+    refuseLegacyEdit: async (sessionId) => (routes[sessionId] === "legacy" ? null : "not supported"),
+    settled: (sessionId) => settled.push(sessionId),
+    exited: (running) => exited.push([...running]),
+  };
+  const host = new AgentHostCore(() => legacy, (event) => events.push(event), undefined, lane);
+  return { host, legacy, kernel, events, settled, exited };
+}
+
+describe("AgentHostCore：新内核那条道", () => {
+  test("根会话的开轮交给 kernel（init 先于第一条会话命令）；子会话（route legacy）照旧交给 agent 进程", async () => {
+    const r = kernelRig({ child: "legacy" });
+    const turn = r.host.submit({ type: "submit", sessionId: "s1", text: "hi", piSessionFile: "/p.jsonl", ...TURN_FIELDS });
+    await flush();
+    r.kernel.emit({ type: "ready" });
+    assert.equal(await turn, null);
+    assert.deepEqual(
+      r.kernel.posted.map((command) => command.type),
+      ["init", "session"],
+    );
+    const session = r.kernel.posted[1];
+    assert.ok(session?.type === "session" && session.root === "s1" && session.command.type === "submit");
+    const child = r.host.submit({ type: "submit", sessionId: "child", text: "x", piSessionFile: "/c.jsonl", ...TURN_FIELDS });
+    await flush();
+    r.legacy.emit({ type: "ready" });
+    await child;
+    assert.equal(r.legacy.posted.at(-1)?.type, "submit");
+  });
+
+  test("停止 / 切档 / 插话 / 标题跟着会话走：交给过 kernel 的去 kernel，其余去 agent 进程", async () => {
+    const r = kernelRig();
+    const turn = r.host.submit({ type: "submit", sessionId: "s1", text: "hi", piSessionFile: "/p.jsonl", ...TURN_FIELDS });
+    await flush();
+    r.kernel.emit({ type: "ready" });
+    await turn;
+    await r.host.abort("s1");
+    await r.host.setMode("s1", "skip");
+    r.host.steer("s1", "插话", "steer");
+    r.host.generateTitle("s1", "标题素材");
+    const sessionCommands = r.kernel.posted.flatMap((command) => (command.type === "session" ? [command.command.type] : []));
+    assert.deepEqual(sessionCommands, ["submit", "abort", "setMode", "steer", "generateTitle"]);
+  });
+
+  test("每个事件只交给 onEvent 一次（两个子进程都是）——交两次会让 renderer 一个 idle 投递两条排队消息", async () => {
+    const r = kernelRig({ child: "legacy" });
+    const turn = r.host.submit({ type: "submit", sessionId: "s1", text: "hi", piSessionFile: "/p.jsonl", ...TURN_FIELDS });
+    await flush();
+    r.kernel.emit({ type: "ready" });
+    await turn;
+    r.kernel.emit({ type: "phase", sessionId: "s1", phase: "idle" });
+    const child = r.host.submit({ type: "submit", sessionId: "child", text: "x", piSessionFile: "/c.jsonl", ...TURN_FIELDS });
+    await flush();
+    r.legacy.emit({ type: "ready" });
+    await child;
+    r.legacy.emit({ type: "phase", sessionId: "child", phase: "idle" });
+    assert.equal(r.events.filter((event) => event.type === "phase" && event.sessionId === "s1").length, 1);
+    assert.equal(r.events.filter((event) => event.type === "phase" && event.sessionId === "child").length, 1);
+  });
+
+  test("kernel 发出的请求，回执回到 kernel；agent 进程发出的回到 agent 进程", async () => {
+    const r = kernelRig();
+    const turn = r.host.submit({ type: "submit", sessionId: "s1", text: "hi", piSessionFile: "/p.jsonl", ...TURN_FIELDS });
+    await flush();
+    r.kernel.emit({ type: "ready" });
+    await turn;
+    r.kernel.emit({ type: "permission", sessionId: "s1", requestId: "s1:c1", toolName: "bash", input: {} });
+    r.kernel.emit({ type: "readTaskRequest", requestId: "r-kernel", sessionId: "s1" });
+    r.host.answerPermission("s1:c1", { behavior: "allow" } as never);
+    r.host.answerReadTask("r-kernel", { ok: false, error: "x" });
+    r.host.answerReadTask("r-legacy", { ok: false, error: "y" });
+    const replies = r.kernel.posted.flatMap((command) => (command.type === "reply" ? [command.command.type] : []));
+    assert.deepEqual(replies, ["permissionAnswer", "readTaskResult"]);
+    assert.ok(r.events.some((event) => event.type === "permission"), "kernel 的事件照常交给 onEvent");
+  });
+
+  test("kernel 进程意外退出：在跑的会话标「被打断、可继续」并回到空闲，交给善后；落定过的不标", async () => {
+    const r = kernelRig();
+    const a = r.host.submit({ type: "submit", sessionId: "a", text: "hi", piSessionFile: "/a.jsonl", ...TURN_FIELDS });
+    await flush();
+    r.kernel.emit({ type: "ready" });
+    await a;
+    await r.host.submit({ type: "submit", sessionId: "b", text: "hi", piSessionFile: "/b.jsonl", ...TURN_FIELDS });
+    r.kernel.emit({ type: "turnSettled", sessionId: "b", result: { ok: true, conversationId: 1, migration: "none", status: "done" } });
+    r.kernel.exitWith(137);
+    assert.deepEqual(r.settled, ["b"]);
+    assert.deepEqual(r.exited, [["a"]]);
+    const failed = r.events.find((event) => event.type === "failed");
+    assert.ok(failed !== undefined && failed.type === "failed" && failed.sessionId === "a" && failed.continuable === true && failed.turn === true);
+    assert.ok(r.events.some((event) => event.type === "phase" && event.sessionId === "a" && event.phase === "idle"));
+    assert.ok(!r.events.some((event) => event.type === "failed" && event.sessionId === "b"));
+  });
+
+  test("pi 本子编辑（回退 / 分支）对住在新内核里的会话明确拒绝，不碰 agent 进程", async () => {
+    const r = kernelRig();
+    await assert.rejects(r.host.editPiBook({ type: "undoPiBook", sessionId: "s1" } as never), /not supported/);
+    await assert.rejects(r.host.branchSession({ sourcePiSessionFile: "/p", cwd: "/", roles: [] }, "new", "s1"), /not supported/);
+    assert.equal(r.legacy.posted.length, 0);
+  });
+
+  test("关着开关时的守卫：住在新内核里的会话不交给旧内核", async () => {
+    const legacy = new FakeChild();
+    const host = new AgentHostCore(() => legacy, () => undefined, undefined, undefined, async (id) => (id === "moved" ? "moved to durable" : null));
+    await assert.rejects(host.submit({ type: "submit", sessionId: "moved", text: "hi", piSessionFile: "/p.jsonl", ...TURN_FIELDS }), /moved to durable/);
+    assert.equal(legacy.posted.length, 0);
   });
 });
