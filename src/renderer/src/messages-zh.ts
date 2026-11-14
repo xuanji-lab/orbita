@@ -1253,6 +1253,17 @@ export const zh: Messages = {
       memory: "记忆库",
       experimental: "实验功能",
     },
+    /** Office 渲染（OfficeCLI）：状态行 + 显式路径（绝对路径，留空走自动定位） */
+    office: {
+      title: "Office",
+      cliPath: "OfficeCLI 路径",
+      cliPathInfo: "留空 = 随包二进制 / 环境变量 ORBITA_OFFICECLI / 常见安装目录（按这个顺序找）。",
+      status: "状态",
+      ready: (version, source) => `OfficeCLI ${version} · ${source}`,
+      missing: "未找到：Office 文件退回数据网格 / 大纲",
+      checking: "检测中…",
+      recheck: "重新检测",
+    },
     appearance: "外观",
     theme: "主题",
     language: "语言",
@@ -2920,6 +2931,25 @@ export const zh: Messages = {
   },
 
   /* ---------- 论文工作台的编译条 + 问题抽屉（LaTeX 项目） ---------- */
+  /**
+   * Office「指哪打哪」：xlsx / pptx 的渲染视图与点击标注（组件在 features/office/）。
+   */
+  office: {
+    modeRender: "渲染",
+    modeGrid: "数据",
+    modeOutline: "大纲",
+    pickCell: "点单元格标注（Shift 点第二格选区间）",
+    pickElement: "点形状、表格或图表来标注",
+    quote: "引用到对话",
+    copyImage: "复制为图片",
+    copied: "已复制",
+    changes: (n) => `本轮改动 · ${n} 处`,
+    revert: "回退这批改动",
+    retry: "重试渲染",
+    renderUnavailable: "Office 渲染不可用",
+    noticeGrid: "未启用 Office 渲染，当前显示数据网格",
+    noticeOutline: "未启用 Office 渲染，当前显示大纲",
+  },
   latex: {
     aria: "LaTeX 编译",
     engineTip: "引擎：只列本机探测到的引擎；选中会写进项目里的 .orbita/latex.json",

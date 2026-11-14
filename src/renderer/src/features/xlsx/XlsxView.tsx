@@ -8,6 +8,15 @@ import { formatSize } from "../files/tree-view";
 import { xlsxColumnLabel, xlsxColumnWidths, xlsxGridRows, type XlsxGridSlot } from "./xlsx-grid.ts";
 import type { FileListRequest } from "@shared/files";
 import type { XlsxPreview, XlsxSheet } from "@shared/xlsx";
+import type { TextQuote } from "@shared/quote";
+import {
+  OfficeChangesPanel,
+  OfficeModeChips,
+  OfficePreview,
+  OfficeUnavailableNotice,
+  useOfficeChanged,
+  useOfficeStatus,
+} from "../office/OfficePreview.tsx";
 
 /**
  * `.xlsx` 只读预览（契约在 `shared/xlsx.ts`）。
@@ -25,12 +34,24 @@ export function XlsxView(props: {
   reloadToken: number;
   /** 用系统默认应用打开（与空态那个按钮同一个动作，由 FilePreviewPane 给） */
   onOpenDefault: () => void;
+  /** 点单元格出的标注进输入框（Office 渲染视图里；缺席 = 只显示、不引用） */
+  onQuote?: (quote: TextQuote) => void;
 }) {
   const t = useT();
+  // Office 渲染（OfficeCLI）可用时就默认渲染视图；不可用 / 点了渲染却失败 → 数据网格
+  const office = useOfficeStatus();
+  const canRender = office?.available === true;
+  const [mode, setMode] = useState<"render" | "data">("render");
+  const [renderReload, setRenderReload] = useState(0);
+  /** 回退之后网格也要重读（回退是整份文件还原，不只是渲染） */
+  const [gridReload, setGridReload] = useState(0);
+  const shownMode = canRender ? mode : "data";
   // 换文件由 FilePreviewPane 的 key={path} 重挂载解决，这里不用再「重置表号」——
   // 否则旧文件那张表的号会先发一次请求，新文件再发一次，同一个工作簿白解析两遍
   const [sheet, setSheet] = useState(0);
-  const state = useXlsxPreview(props.request, sheet, props.reloadToken);
+  const state = useXlsxPreview(props.request, sheet, props.reloadToken + gridReload);
+  // agent 改了一份文件（edit_office / 回退）：数据网格也重读，别让两种视图各说各话
+  useOfficeChanged(props.request.dir, () => setGridReload((value) => value + 1));
   const data = state.data;
 
   // 还没有任何数据（首次打开）：只能给一行「正在载入…」——此时没有标签可留
@@ -50,7 +71,8 @@ export function XlsxView(props: {
        */}
       {workbook !== null && (
         <div className="xlsx-toolbar">
-          {workbook.sheets.length > 1 && (
+          {canRender && <OfficeModeChips mode={mode} onChange={setMode} dataLabel={t.office.modeGrid} />}
+          {shownMode === "data" && workbook.sheets.length > 1 && (
             <div className="xlsx-sheets" role="group" aria-label={t.files.xlsxSheets}>
               {workbook.sheets.map((tab, index) => (
                 <Chip
@@ -72,7 +94,26 @@ export function XlsxView(props: {
           </div>
         </div>
       )}
-      {state.error !== null ? (
+      {canRender && (
+        <OfficeChangesPanel
+          request={props.request}
+          reloadToken={props.reloadToken + renderReload}
+          onReverted={() => {
+            setGridReload((value) => value + 1);
+            setRenderReload((value) => value + 1);
+            setMode("data");
+          }}
+        />
+      )}
+      {canRender && shownMode === "render" ? (
+        <OfficePreview
+          request={props.request}
+          format="xlsx"
+          reloadToken={props.reloadToken + renderReload}
+          onFallback={() => setMode("data")}
+          {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
+        />
+      ) : state.error !== null ? (
         <XlsxError message={state.error} />
       ) : state.loading ? (
         // 加载落在网格区里：工具栏与标签保持原样，只是内容在等
@@ -99,6 +140,7 @@ export function XlsxView(props: {
           <XlsxFooter sheet={data.sheet} />
         </>
       )}
+      {office !== null && !canRender && <OfficeUnavailableNotice status={office} fallback="grid" />}
     </div>
   );
 }

@@ -15,6 +15,11 @@ const ALLOWED_LATIN = new Set([
   "PowerPoint",
   // 新手引导「文档与演示」一章：文档的写法跟 Obsidian 一致（笔记应用的产品名）
   "Obsidian",
+  // Office「指哪打哪」：产品名与它的环境变量（用户真的会在 settings.json / 环境里照写）
+  "Office",
+  "OfficeCLI",
+  "ORBITA",
+  "OFFICECLI",
   // 品牌
   "orbita",
   "GitHub",

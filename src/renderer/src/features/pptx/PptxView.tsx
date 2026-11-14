@@ -6,6 +6,15 @@ import { useT } from "../../locale.ts";
 import { formatSize } from "../files/tree-view";
 import type { FileListRequest } from "@shared/files";
 import { PPTX_SLIDE_TEXT_LIMIT, type PptxParagraph, type PptxPreview, type PptxSlide } from "@shared/pptx";
+import type { TextQuote } from "@shared/quote";
+import {
+  OfficeChangesPanel,
+  OfficeModeChips,
+  OfficePreview,
+  OfficeUnavailableNotice,
+  useOfficeChanged,
+  useOfficeStatus,
+} from "../office/OfficePreview.tsx";
 
 /**
  * `.pptx` 只读大纲（契约在 `shared/pptx.ts`）。
@@ -23,10 +32,21 @@ export function PptxView(props: {
   reloadToken: number;
   /** 用系统默认应用打开（与空态那个按钮同一个动作，由 FilePreviewPane 给） */
   onOpenDefault: () => void;
+  /** 点形状 / 表格 / 图表出的标注进输入框（Office 渲染视图里；缺席 = 只显示、不引用） */
+  onQuote?: (quote: TextQuote) => void;
 }) {
   const t = useT();
   const { request } = props;
-  const state = usePptxPreview(request, props.reloadToken);
+  // Office 渲染（OfficeCLI）可用时默认看图；不可用 / 渲染失败 → 大纲
+  const office = useOfficeStatus();
+  const canRender = office?.available === true;
+  const [mode, setMode] = useState<"render" | "outline">("render");
+  const [renderReload, setRenderReload] = useState(0);
+  const [outlineReload, setOutlineReload] = useState(0);
+  const shownMode = canRender && mode === "render" ? "render" : "outline";
+  const state = usePptxPreview(request, props.reloadToken + outlineReload);
+  // agent 改了一份文件（edit_office / 回退）：大纲也重读（同 XlsxView）
+  useOfficeChanged(request.dir, () => setOutlineReload((value) => value + 1));
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLElement | null>(null);
 
@@ -121,6 +141,13 @@ export function PptxView(props: {
   return (
     <div className="pptx-view">
       <div className="pptx-toolbar">
+        {canRender && (
+          <OfficeModeChips
+            mode={mode === "render" ? "render" : "data"}
+            onChange={(next) => setMode(next === "render" ? "render" : "outline")}
+            dataLabel={t.office.modeOutline}
+          />
+        )}
         <span className="pptx-toolbar-title">
           {t.files.pptxSlides}
           <span className="pptx-count">{data.slideCount}</span>
@@ -132,6 +159,26 @@ export function PptxView(props: {
           </PanelButton>
         </div>
       </div>
+      {canRender && (
+        <OfficeChangesPanel
+          request={request}
+          reloadToken={props.reloadToken + renderReload}
+          onReverted={() => {
+            setOutlineReload((value) => value + 1);
+            setRenderReload((value) => value + 1);
+            setMode("outline");
+          }}
+        />
+      )}
+      {shownMode === "render" ? (
+        <OfficePreview
+          request={request}
+          format="pptx"
+          reloadToken={props.reloadToken + renderReload}
+          onFallback={() => setMode("outline")}
+          {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
+        />
+      ) : (
       <div className="pptx-split">
         {/* 页列表：页码 + 版式名是定位用的坐标，标题是「这页在讲什么」 */}
         <nav className="pptx-slide-list" aria-label={t.files.pptxSlides} ref={listRef}>
@@ -172,6 +219,7 @@ export function PptxView(props: {
           )}
         </section>
       </div>
+      )}
       <div className="pptx-footer">
         <span className="pptx-notice">
           <Icon name="lock" size={11} />
@@ -185,6 +233,7 @@ export function PptxView(props: {
           </span>
         )}
       </div>
+      {office !== null && !canRender && <OfficeUnavailableNotice status={office} fallback="outline" />}
     </div>
   );
 }

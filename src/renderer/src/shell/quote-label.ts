@@ -3,6 +3,7 @@
  * 字数按码点计、短摘要取前 20 个字并如实加省略号——只露一截又不标省略，
  * 用户没法判断引用是不是完整带上了。
  */
+import { officeDisplayPath } from "../../../shared/office.ts";
 import { countChars, type TextQuote } from "../../../shared/quote.ts";
 import type { Messages } from "../messages-en.ts";
 
@@ -31,6 +32,8 @@ export function middleTruncate(name: string, max: number = QUOTE_FILE_NAME_MAX):
 function fileSourceParts(quote: TextQuote, t: Messages): { name: string; position: string } {
   const name = (quote.filePath ?? "").split(/[\\/]/).pop() || (quote.filePath ?? "");
   const parts: string[] = [];
+  // Office 标注：位置就是 DOM path（xlsx 显示成 Sheet1!B2:D5），比页号 / 行号更直接
+  if (quote.office !== undefined) parts.push(officeDisplayPath(quote.office.format, quote.office.path));
   if (quote.slide !== undefined) parts.push(t.quote.slide(quote.slide));
   if (quote.missing === true) parts.push(t.quote.missing);
   else if (quote.ambiguous !== undefined) parts.push(t.quote.ambiguous);

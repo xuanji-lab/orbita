@@ -8142,3 +8142,179 @@ html {
     vector-effect: non-scaling-stroke;
   }
 }
+
+/* ============================================================
+ * Office「指哪打哪」：OfficeCLI 的 HTML 渲染体、点击标注条、本轮改动清单
+ *
+ * 渲染体是 sandbox iframe（脚本全禁，见 features/office/OfficePreview.tsx），
+ * 外面这层只负责「占满面板 + 底部一条标注栏」。颜色 / 字号全走 token。
+ * ============================================================ */
+.office-mode {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+}
+.office-preview {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* iframe 自己是一张纸：白底由 OfficeCLI 的 HTML 给，这里只给边界与高度 */
+.office-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  display: block;
+  background: var(--color-bg-panel);
+}
+/* 标注栏：左半边是「点哪儿了」，右半边是动作（引用 / 复制图） */
+.office-annotate {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.office-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-text-tertiary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.office-annotate-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-family-mono);
+  color: var(--color-text-primary);
+}
+.office-annotate-value {
+  color: var(--color-text-tertiary);
+}
+.office-annotate-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+/* 渲染失败时的技术副行（读得懂的人据此判断是不是文件 / 二进制的问题） */
+.office-detail {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+/* 本轮改动：默认收成一行，点开才铺清单（不占常驻高度） */
+.office-changes {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.office-changes-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-1) var(--space-3);
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+.office-changes-head:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-muted);
+}
+.office-changes-body {
+  padding: 0 var(--space-3) var(--space-2);
+}
+.office-change-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.office-change {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-0-5) 0;
+  font-size: var(--font-size-xs);
+}
+.office-change-command {
+  flex: 0 0 auto;
+  font-family: var(--font-family-mono);
+  color: var(--color-text-tertiary);
+}
+.office-change-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-family-mono);
+  color: var(--color-text-primary);
+}
+.office-change-values {
+  flex: 0 0 auto;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.office-changes-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+.office-change-error {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-danger);
+  font-size: var(--font-size-xs);
+}
+/* 未启用 Office 渲染：一行说明（不是错误条），压在网格 / 大纲的底部 */
+.office-notice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: var(--space-1) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+.office-notice-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.office-notice-detail {
+  color: var(--color-text-tertiary);
+}
