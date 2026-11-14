@@ -23,6 +23,7 @@
  * 纯模块：不 import electron、不 import 进程相关的东西，可被 `node --test` 直接加载。
  */
 import { createHash } from "node:crypto";
+import { join } from "node:path";
 import type { ContextEvent, SessionEntry } from "@earendil-works/pi-coding-agent";
 
 /** context 事件给到的消息形状（AgentMessage 的结构化子集，经 pi 的 structuredClone 到手） */
@@ -93,6 +94,14 @@ export function readImageBudgetBook(branch: readonly SessionEntry[]): ImageBudge
     }
   }
   return book;
+}
+
+/**
+ * 本子里记的图片引用 → 原图路径（两个内核读账时同一个口径）：引用是 `<会话 id>/<文件名>`，
+ * 去掉第一段拼到本会话的附件目录下。
+ */
+export function imageRefPath(attachmentsDir: string, ref: string): string {
+  return join(attachmentsDir, ref.slice(ref.indexOf("/") + 1));
 }
 
 /** 一张图的 sha256（hex）。占位路径与水位重放都靠它对上同一张图 */

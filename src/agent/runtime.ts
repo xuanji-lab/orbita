@@ -109,6 +109,7 @@ import {
   IMAGE_BUDGET_ENTRY,
   IMAGE_REFS_ENTRY,
   hashImage,
+  imageRefPath,
   readImageBudgetBook,
   type TurnImageBudget,
 } from "./image-byte-budget.ts";
@@ -1198,7 +1199,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     refs: new Map(
       [...budgetBook.refs].map(([hash, ref]) => [
         hash,
-        join(command.attachmentsDir, ref.slice(ref.indexOf("/") + 1)),
+        imageRefPath(command.attachmentsDir, ref),
       ]),
     ),
     pendingRefs: new Map(),

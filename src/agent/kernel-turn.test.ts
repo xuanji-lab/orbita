@@ -11,6 +11,7 @@ import { createRegistry, Harness, MemoryStorage, ToolResultEntry, type Conversat
 import type { AgentCommand, AgentEvent } from "../shared/agent-ipc.ts";
 import type { KernelTurnCommand } from "../shared/kernel.ts";
 import { assembleTurn, PermissionWaiter, runTurn, type KernelTurnRuntime } from "./kernel-turn.ts";
+import { TurnWire } from "./kernel-wire.ts";
 import { McpHub } from "./mcp.ts";
 import { RequestBroker } from "./request-broker.ts";
 
@@ -168,7 +169,14 @@ describe("kernel-turn：新内核跑一轮带工具的对话", () => {
   it("工具清单顺序：已在的保持原位，新出现的接在后面", async () => {
     const cwd = await tempDir();
     const { harness, registry, conversation: target } = await conversation();
-    const assembled = await assembleTurn(command(cwd), runtime([]), { registry, conversation: target, model: MODEL, providerSessionId: "p1" }, ["write", "read"]);
+    const assembled = await assembleTurn(
+      command(cwd),
+      runtime([]),
+      { registry, conversation: target, model: MODEL, providerSessionId: "p1" },
+      ["write", "read"],
+      await TurnWire.open(target, join(cwd, ".att"), BACKGROUND_CONTEXT),
+      1,
+    );
     assert.deepEqual(assembled.toolNames.slice(0, 2), ["write", "read"]);
     assert.ok(assembled.toolNames.includes("bash") && assembled.toolNames.indexOf("bash") > 1);
     assert.match(assembled.systemPrompt, /<orbita-permission>/);

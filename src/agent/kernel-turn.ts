@@ -13,12 +13,14 @@
  *   不让 durable 包成 `<harness>[error] Tool call blocked: …</harness>`。
  * - 系统提示：pi 基础提示（kernel-prompt.ts）→ adaptSystemPrompt → orbitaSystemSegments，每段一个不加标签的
  *   section；durable 把它们按 `\n\n` 拼起来，与 joinSystemPrompt 逐字节相同。
+ * - 逐请求注入：`beforeRequest` 跑 kernel-wire.ts（图片预算、目标账、记忆附件、用户情境，与旧内核同一串函数）。
  */
 import { awaitWithContext, BACKGROUND_CONTEXT, type Context } from "@earendil-works/chord/context";
 import type { Api, Message, Model } from "@earendil-works/pi-ai";
 import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
 import {
   defineExtension,
+  GenerationTask,
   hook,
   section,
   ToolTask,
@@ -35,15 +37,17 @@ import type { KernelTurnCommand } from "../shared/kernel.ts";
 import type { PermissionAnswer } from "../shared/permission.ts";
 import { composePromptText } from "../shared/prompt-attachments.ts";
 import { builtinToolDefinitions, toDurableTool } from "./durable-tools.ts";
+import { liftMessages, TurnWire } from "./kernel-wire.ts";
 import { loadoutOrder, loadPiResources } from "./kernel-prompt.ts";
 import type { McpHub } from "./mcp.ts";
+import { recallMemories } from "./memory-inject.ts";
 import { createToolCallGate, type ToolCallLike } from "./permission.ts";
 import { createPlanGate, type PlanToolOptions } from "./plan-tools.ts";
 import { forModel, preparePromptImages } from "./prompt-images.ts";
 import { adaptSystemPrompt } from "./prompt-narration.ts";
 import type { RequestBroker } from "./request-broker.ts";
 import { orbitaSystemSegments } from "./system-prompt.ts";
-import { createTurnTools, extraToolNames, turnToolFlags } from "./turn-tools.ts";
+import { createTurnTools, extraToolNames, isChildSession, turnToolFlags } from "./turn-tools.ts";
 
 /** 每条会话的扩展名：会话 id 已过白名单（字母数字 _ -） */
 export function sessionExtensionName(sessionId: string): string {
@@ -170,6 +174,8 @@ export async function assembleTurn(
   runtime: KernelTurnRuntime,
   target: KernelTurnTarget,
   previousTools: readonly string[],
+  wire: TurnWire,
+  memoryTurn: number,
 ): Promise<AssembledTurn> {
   const flags = turnToolFlags(command);
   const currentMode = () => command.mode;
@@ -198,9 +204,8 @@ export async function assembleTurn(
       currentMode,
       planOptions,
       branch: () => branch.entries,
-      // 附图账（图片预算）在请求注入那一步接上；这一步还没有用户附图的账
-      attachedImages: () => [],
-      memoryTurn: () => 1,
+      attachedImages: () => wire.attachedImages(),
+      memoryTurn: () => memoryTurn,
     }),
   ];
   const byName = new Map(definitions.map((definition) => [definition.name, definition]));
@@ -261,22 +266,20 @@ export async function assembleTurn(
         },
         afterTool: (_call, result) => unwrapBlocked(result),
       }),
+      hook(GenerationTask, {
+        beforeRequest: async (request, api, context) => {
+          await branch.refresh(api, context);
+          return { messages: await wire.transform(request.messages, () => branch.entries, context) };
+        },
+      }),
     ],
   });
   return { extension, toolNames, systemPrompt: segments.map((segment) => segment.text).filter((text) => text !== "").join("\n\n") };
 }
 
-/** 模型此前看到的工具清单：会话视图里 pi.system 条目回放出来的 */
-export async function offeredTools(conversation: Conversation, context: Context): Promise<string[]> {
-  const { messages } = await conversation.context(context);
-  return getCurrentTools(messages as Message[]).map((tool) => tool.name);
-}
-
-/** 用户这一句：正文（粘贴块、文件引用拼进去，与旧内核 composePromptText 同一个函数）+ 附图 */
-export async function userInput(command: KernelTurnCommand): Promise<Exclude<Message, { role: "assistant" | "toolResult" | "system" }>["content"]> {
-  const images = await preparePromptImages(command.images);
-  const text = composePromptText(command.text, command.pasted ?? [], command.files ?? []);
-  return [{ type: "text", text }, ...forModel(images)];
+/** 模型此前看到的工具清单：会话上下文里 pi.system 条目回放出来的 */
+export function previousToolNames(messages: readonly Message[]): string[] {
+  return getCurrentTools([...messages]).map((tool) => tool.name);
 }
 
 /**
@@ -290,7 +293,11 @@ export async function runTurn(
   compaction: NonNullable<Parameters<Conversation["configure"]>[0]["compaction"]>,
 ): Promise<{ status: "done" | "unanswered"; reason?: string }> {
   const context = BACKGROUND_CONTEXT;
-  const assembled = await assembleTurn(command, runtime, target, await offeredTools(target.conversation, context));
+  const wire = await TurnWire.open(target.conversation, command.attachmentsDir, context);
+  const { messages } = await target.conversation.context(context);
+  // 本轮轮号（按用户消息计，1 起；与旧内核 echoAndPrompt 同口径：模型上下文里的 user 消息，不数压缩摘要与扩展消息）
+  const memoryTurn = liftMessages(messages, new Set()).filter((message) => (message as { role?: unknown }).role === "user").length + 1;
+  const assembled = await assembleTurn(command, runtime, target, previousToolNames(messages), wire, memoryTurn);
   target.registry.install(assembled.extension);
   await target.conversation.configure(
     {
@@ -302,7 +309,23 @@ export async function runTurn(
     },
     context,
   );
-  const submission = await target.conversation.submit({ type: "input", content: await userInput(command) }, context);
+  // 用户这一句：正文（粘贴块、文件引用拼进去，与旧内核同一个 composePromptText）+ 附图（同一个缩放）
+  const images = await preparePromptImages(command.images);
+  await wire.notePromptImages(images, command.attachmentsDir, context);
+  // 轮前记忆召回（与旧内核同一个函数）：召回块不拼进原话，首个请求时由 beforeRequest 挂到这一句上
+  wire.memory.pending =
+    command.sessionMemory === true
+      ? await recallMemories(
+          runtime.broker,
+          command.sessionId,
+          command.text,
+          memoryTurn,
+          { workspaceId: command.workspaceId, cwd: command.cwd },
+          !isChildSession(command),
+        )
+      : null;
+  const text = composePromptText(command.text, command.pasted ?? [], command.files ?? []);
+  const submission = await target.conversation.submit({ type: "input", content: [{ type: "text", text }, ...forModel(images)] }, context);
   const settled = await submission.wait(context);
   return settled.status === "done" ? { status: "done" } : { status: "unanswered", reason: "reason" in settled ? String(settled.reason) : undefined };
 }

@@ -22,11 +22,11 @@ import type { Message, UserMessage } from "@earendil-works/pi-ai";
 import { branchEntries, parsePiBook, type PiBookEntry } from "../main/session/pi-book.ts";
 
 /** pi 的 COMPACTION_SUMMARY_PREFIX / SUFFIX（coding-agent 1.5.2 core/messages.js，durable compaction.js 同文） */
-const COMPACTION_PREFIX = "The conversation history before this point was compacted into the following summary:\n\n<summary>\n";
-const COMPACTION_SUFFIX = "\n</summary>";
+export const COMPACTION_PREFIX = "The conversation history before this point was compacted into the following summary:\n\n<summary>\n";
+export const COMPACTION_SUFFIX = "\n</summary>";
 /** pi 的 BRANCH_SUMMARY_PREFIX / SUFFIX（同上；注意后缀前没有换行，照抄） */
-const BRANCH_PREFIX = "The following is a summary of a branch that this conversation came back from:\n\n<summary>\n";
-const BRANCH_SUFFIX = "</summary>";
+export const BRANCH_PREFIX = "The following is a summary of a branch that this conversation came back from:\n\n<summary>\n";
+export const BRANCH_SUFFIX = "</summary>";
 
 /** durable 内建 entry 的 kind（pi-durable entries.js），以及旧内核独有的两种投影 */
 export const LEGACY_KINDS = {
