@@ -39,7 +39,7 @@ const MUST_BLOCK: [string, string][] = [
   ["${HOME} 与转义空格", `rm "\${HOME}/Library/Application\\ Support/orbita-dev-x/automations-archive.json"`],
   ["~ 展开 rm 冷文件", `rm ~/Library/Application\\ Support/orbita-dev-x/automations-archive-old.jsonl`],
   ["符号链接第一步（以受保护文件为源 ln -s）", `cd /tmp && ln -s "${D}/automations-archive.json" /tmp/link`],
-  ["符号链接第一步（相对名）", `ln -s automations-archive.json /tmp/link`],
+  ["符号链接第一步（相对名，在数据目录里）", `cd "${D}" && ln -s automations-archive.json /tmp/link`],
   ["mv 数据目录本身", `mv "${D}" "${D}2"`],
   ["mv 数据目录（~ 写法）", `mv ~/Library/Application\\ Support/orbita-dev-x /tmp/x`],
   // —— 验收员没试的变形 ——
@@ -53,13 +53,13 @@ const MUST_BLOCK: [string, string][] = [
   ["两个变量拼出文件名", `a=automa; b=tions.json; rm $a$b`],
   ["export 变量里放目录再 cd", `export T="${D}"; cd "$T"`],
   ["花括号展开", `rm ${DS}/automations{,-archive}.json`],
-  ["引号拼接", `eval "rm autom""ations.json"`],
-  ["反斜杠打断名字", `rm autom\\ations.json`],
-  ["ANSI-C 引号", `rm $'\\x61utomations.json'`],
-  ["大小写变体", `rm AUTOMATIONS.JSON`],
-  ["here-doc 里写 rm", `bash <<EOF\nrm automations.json\nEOF`],
+  ["引号拼接（在数据目录里）", `cd "${D}" && eval "rm autom""ations.json"`],
+  ["反斜杠打断名字（在数据目录里）", `cd "${D}" && rm autom\\ations.json`],
+  ["ANSI-C 引号（在数据目录里）", `cd "${D}" && rm $'\\x61utomations.json'`],
+  ["大小写变体（在数据目录里）", `cd "${D}" && rm AUTOMATIONS.JSON`],
+  ["here-doc 里写 rm（在数据目录里）", `cd "${D}" && bash <<EOF\nrm automations.json\nEOF`],
   ["here-string", `bash <<< "cd ${DS}; rm automations.json"`],
-  ["sh -c 包一层", `sh -c 'rm automations.json'`],
+  ["sh -c 包一层（在数据目录里）", `cd "${D}" && sh -c 'rm automations.json'`],
   ["base64 解码后执行", `echo cm0gYXV0b21hdGlvbnMuanNvbg== | base64 -d | sh`],
   ["bash -c $(base64 --decode)", `bash -c "$(echo cm0gYXV0b21hdGlvbnMuanNvbg== | base64 --decode)"`],
   ["printf 十六进制拼命令再交给 sh", `printf '\\x72\\x6d\\x20\\x61' | sh`],
@@ -81,13 +81,13 @@ const MUST_BLOCK: [string, string][] = [
   ["find -exec rm", `find "${D}" -type f -exec rm {} +`],
   ["find 从根目录删", `find / -name 'automations*' -delete`],
   ["find 家目录 -delete", `find ~ -name 'automations.json' -delete`],
-  ["truncate", `truncate -s 0 automations.json`],
-  ["重定向清空", `> automations.json`],
-  ["cat /dev/null 覆盖", `cat /dev/null > automations-archive.json`],
-  ["exec 3> 打开 fd 重定向", `exec 3>automations.json`],
-  ["shred", `shred -u automations.json`],
+  ["truncate（在数据目录里）", `cd "${D}" && truncate -s 0 automations.json`],
+  ["重定向清空（在数据目录里）", `cd "${D}" && > automations.json`],
+  ["cat /dev/null 覆盖（在数据目录里）", `cd "${D}" && cat /dev/null > automations-archive.json`],
+  ["exec 3> 打开 fd 重定向（在数据目录里）", `cd "${D}" && exec 3>automations.json`],
+  ["shred（在数据目录里）", `cd "${D}" && shred -u automations.json`],
   ["unlink", `unlink "${D}/automations.json"`],
-  ["dd of=", `dd if=/dev/zero of=automations.json`],
+  ["dd of=（在数据目录里）", `cd "${D}" && dd if=/dev/zero of=automations.json`],
   ["cd 分两步走进数据目录", `cd ~/Library/Application\\ Support && cd orbita-dev-x && ls`],
   ["cd 绝对路径只 ls", `cd "${D}" && ls`],
   ["cd 相对路径（cwd = ~/Orbita-dev-x/Home）", `cd ../../Library/Application\\ Support/orbita-dev-x && ls`],
@@ -100,46 +100,43 @@ const MUST_BLOCK: [string, string][] = [
   ["rm 通配到数据目录", `rm -rf ~/Library/Application\\ Support/orbita*`],
   ["gio trash 数据目录", `gio trash ~/Library/Application\\ Support/orbita-dev-x`],
   ["osascript 让 Finder 删数据目录", `osascript -e 'tell application "Finder" to delete POSIX file "${D}"'`],
-  ["兄弟：.tmp", `rm automations.json.a1b2c3d4.tmp`],
-  ["兄弟：.bad-", `mv automations.json.bad-1763000000000 /tmp/`],
+  ["兄弟：.tmp（在数据目录里）", `cd "${D}" && rm automations.json.a1b2c3d4.tmp`],
+  ["兄弟：.bad-（在数据目录里）", `cd "${D}" && mv automations.json.bad-1763000000000 /tmp/`],
   // —— 第三轮复核时新想的写法（探针实测后固化）——
-  ["printf 拼命令交给 shell", `printf 'rm %s' automations.json | bash`],
-  ["echo 拼命令交给 sh", `echo "rm automations.json" | sh`],
-  ["alias 缩写 rm", `alias z='rm'; z automations.json`],
-  ["env / nice / command 前缀 rm", `env rm automations.json`],
-  ["nice 前缀 rm", `nice -n 5 rm automations.json`],
-  ["command rm", `command rm automations.json`],
-  ["内嵌引号 bash -c", `bash -c 'rm "automations.json"'`],
+  ["printf 拼命令交给 shell（在数据目录里）", `cd "${D}" && printf 'rm %s' automations.json | bash`],
+  ["echo 拼命令交给 sh（在数据目录里）", `cd "${D}" && echo "rm automations.json" | sh`],
+  ["alias 缩写 rm（在数据目录里）", `cd "${D}" && alias z='rm'; z automations.json`],
+  ["env 前缀 rm（在数据目录里）", `cd "${D}" && env rm automations.json`],
+  ["nice 前缀 rm（在数据目录里）", `cd "${D}" && nice -n 5 rm automations.json`],
+  ["command rm（在数据目录里）", `cd "${D}" && command rm automations.json`],
+  ["内嵌引号 bash -c（在数据目录里）", `cd "${D}" && bash -c 'rm "automations.json"'`],
   ["perl unlink 文件名", `perl -e 'unlink "automations.json"'`],
   ["ruby File.delete", `ruby -e 'File.delete("automations.json")'`],
   ["php -r unlink", `php -r 'unlink("automations.json");'`],
   ["bun --eval 删", `bun --eval 'fs.rmSync("automations.json")'`],
-  ["cp 覆盖（cp 不在破坏性动词表，靠文件名拦）", `cp /dev/null automations.json`],
-  ["tee 覆盖相对名", `tee automations.json < /dev/null`],
-  ["touch 记录文件（改 mtime 也是动它）", `touch automations.json`],
-  ["tab 分隔的 rm", `rm\tautomations.json`],
+  ["cp 覆盖（在数据目录里；cp 不在破坏性动词表）", `cd "${D}" && cp /dev/null automations.json`],
+  ["tee 覆盖相对名（在数据目录里）", `cd "${D}" && tee automations.json < /dev/null`],
+  ["touch 记录文件（在数据目录里）", `cd "${D}" && touch automations.json`],
+  ["tab 分隔的 rm（在数据目录里）", `cd "${D}" && rm\tautomations.json`],
   ["read 接力变量", "read f <<< automations.json; rm \"$f\""],
   ["here-doc 里变量接力", "bash <<'EOF'\nF=automations.json\nrm \"$F\"\nEOF"],
   ["cd 后 ./ 相对名", `cd "${D}" && rm ./automations.json`],
-  ["cd 后 .. 折叠绕路", `cd "${D}/workbenches/x/.." && rm automations.json`],
-  ["Windows cmd /c del", `cmd /c del automations.json`],
-  ["PowerShell -Command Remove-Item", `powershell -Command "Remove-Item automations.json"`],
-  ["PowerShell iex", `powershell -Command "iex 'rm automations.json'"`],
+  ["cd 后 ../.. 折叠绕回数据目录根", `cd "${D}/workbenches/x/../.." && rm automations.json`],
+  ["Windows cmd /c del（在数据目录里）", `cd "${D}" && cmd /c del automations.json`],
+  ["PowerShell -Command Remove-Item（在数据目录里）", `cd "${D}" && powershell -Command "Remove-Item automations.json"`],
+  ["PowerShell iex（在数据目录里）", `cd "${D}" && powershell -Command "iex 'rm automations.json'"`],
   ["数据目录改成别的名字", `mv "${D}" "${DATA}-old"`],
   ["rmdir 数据目录", `rmdir "${D}"`],
   ["ln -s 数据目录后经链接删记录", `ln -s "${D}" /tmp/dlink && rm /tmp/dlink/automations.json`],
   ["备份后再删数据目录（ditto）", `ditto "${D}" /tmp/backup && rm -rf "${D}"`],
-  // 已知代价（安全向的误伤，固化行为防当 bug 修）：别的应用目录里恰好叫 automations.json 的文件也会被拒——
-  // 文件名级匹配分不清目录；智能体正常工作几乎不会去删别的应用的数据文件，拦错的代价远小于放过
-  ["别的应用目录里的同名文件（文件名级匹配的代价，也拦）", `rm -rf ~/Library/Application\\ Support/OtherApp/automations.json`],
   // —— Windows 写法：只测命令串，没在 Windows 上实测 ——
   ["Windows del", `del /f "%APPDATA%\\orbita-dev-x\\automations.json"`],
   ["Windows Remove-Item 数据目录", `Remove-Item -Recurse -Force "$env:APPDATA\\orbita-dev-x"`],
   ["Windows move 数据目录", `move "%APPDATA%\\orbita-dev-x" "%APPDATA%\\x"`],
   ["Windows rd /s /q", `rd /s /q "%APPDATA%\\orbita-dev-x"`],
-  ["PowerShell Move-Item 文件", `Move-Item automations-archive.json C:\\tmp\\`],
-  ["PowerShell Set-Content", `Set-Content -Path automations.json -Value '{}'`],
-  ["PowerShell Out-File", `'{}' | Out-File automations.json`],
+  ["PowerShell Move-Item 文件（在数据目录里）", `cd "${D}" && Move-Item automations-archive.json C:\\tmp\\`],
+  ["PowerShell Set-Content（在数据目录里）", `cd "${D}" && Set-Content -Path automations.json -Value '{}'`],
+  ["PowerShell Out-File（在数据目录里）", `cd "${D}" && '{}' | Out-File automations.json`],
 ];
 
 /** 正常命令：不能误伤 */
@@ -228,10 +225,10 @@ describe("自动化记录闸门加固：命令串（bash / powershell）", () =>
     }
   });
 
-  test("三个文件都进名单后，各自的文件名与 .tmp / .bad- 兄弟都拦", async () => {
+  test("三个文件都进名单后，各自的文件名与 .tmp / .bad- 兄弟都拦（在数据目录里）", async () => {
     for (const name of ["automations.json", "automations-archive.json", "automations-archive-old.jsonl"]) {
       for (const suffix of ["", ".a1b2c3d4.tmp", ".bad-1763000000000"]) {
-        assert.equal((await bash(makeGate(), `rm ${name}${suffix}`)).block, true, `${name}${suffix}`);
+        assert.equal((await bash(makeGate(), `cd "${D}" && rm ${name}${suffix}`)).block, true, `${name}${suffix}`);
       }
     }
   });
@@ -303,4 +300,99 @@ describe("describePermissionMode 点名受保护的文件", () => {
     assert.match(text, /read tool or automation_list/);
     assert.match(describePermissionMode("skip"), /\(automations\.json\)/);
   });
+});
+
+/**
+ * 第三轮补一小轮（主会话实测发现的三类漏网 + 同名文件误伤收窄）。
+ * 数据目录换成 /tmp/gateprobe/data（与其它目录平级，方便测「cd 到上级再用相对名动手」）。
+ */
+const D2 = "/tmp/gateprobe/data"; // 本实例的数据目录（受保护文件在它下面）
+const F2 = [`${D2}/automations.json`, `${D2}/automations-archive.json`, `${D2}/automations-archive-old.jsonl`];
+const UP = "/tmp/gateprobe"; // 数据目录的上级
+const PROJ = "/tmp/gateprobe/proj"; // 会话的项目目录（cwd）
+const OTHER_INSTANCE = "/Users/tester/Library/Application Support/orbita-dev-other"; // 另一个 Orbita 实例
+
+const MUST_BLOCK_R3B: [string, string][] = [
+  // —— 主会话漏网 1：pushd + 重定向 ——
+  ["pushd 进数据目录带重定向后泛删", `pushd "${D2}" >/dev/null && rm -f auto*`],
+  ["cd 进数据目录带 2>&1 后泛删", `cd "${D2}" 2>&1 && rm -f *.json`],
+  ["cd 进数据目录带 || 兜底后泛删", `cd "${D2}" || exit 1; rm -rf *`],
+  ["子 shell 里 cd 上级再相对名改数据目录名", `( cd ${UP} && mv data data2 )`],
+  ["子 shell 里 cd 进数据目录后删", `( cd "${D2}" && rm -f *.json )`],
+  // —— 主会话漏网 2：cd 到上级再用相对名动手 ——
+  ["cd 上级后 mv 相对名改名数据目录", `cd ${UP} && mv data data2`],
+  ["cd 上级后 rm -rf 相对名删数据目录", `cd ${UP} && rm -rf data`],
+  ["cd 上级后 rm 相对名删记录文件", `cd ${UP} && rm data/automations.json`],
+  ["cd 上级后通配删数据目录内容", `cd ${UP} && rm -rf data/*`],
+  ["cd 上级（相对 ..）后改数据目录名", `cd ${PROJ}/.. && mv data data-old`],
+  ["cd 上级后 chmod 数据目录", `cd ${UP} && chmod 000 data`],
+  ["cd 别的目录后相对名不命中（解析后命中数据目录）", `cd ${PROJ}/../.. && cd gateprobe && rm -rf data`],
+  // —— 主会话漏网 3：有效 cwd 在数据目录（或上级）时的泛破坏 ——
+  ["cwd 就在数据目录：git clean -fdx", `git clean -fdx`],
+  ["cwd 就在数据目录：rm -rf *", `rm -rf *`],
+  ["cwd 就在数据目录：rm -rf .", `rm -rf .`],
+  ["cwd 就在数据目录：find . -delete", `find . -delete`],
+  ["cwd 就在数据目录：find . -type f -exec rm {} +", `find . -type f -exec rm {} +`],
+  ["cwd 就在数据目录：rm -f auto*", `rm -f auto*`],
+  ["cd 上级后泛删（rm -rf *）", `cd ${UP} && rm -rf *`],
+  ["cd 上级后 git clean -fdx（默认范围 . 覆盖数据目录）", `cd ${UP} && git clean -fdx`],
+  ["cd 上级后 find . -delete", `cd ${UP} && find . -name 'x' -delete`],
+  // —— 绕回：字面上在别的目录、折叠 .. 后仍是受保护文件 ——
+  ["经别的目录绕回受保护文件", `rm "/tmp/other-instance/../gateprobe/data/automations.json"`],
+  ["上级内绕回", `cd ${UP} && rm proj/../data/automations.json`],
+];
+
+/** 误伤收窄：这些命令的目标**能确定解析**且不指向本实例的记录文件 / 数据目录，应放行 */
+const MUST_ALLOW_R3B: [string, string][] = [
+  ["项目目录里的同名文件（主会话实测的误伤）", `rm /tmp/gateprobe/proj/automations.json`],
+  ["另一个 Orbita 实例数据目录里的同名文件（每个实例只护自己的）", `rm "${OTHER_INSTANCE}/automations.json"`],
+  ["另一个实例的归档", `rm "${OTHER_INSTANCE}/automations-archive.json"`],
+  ["/tmp 下随手建的同名文件", `rm /tmp/scratch/automations.json`],
+  ["别的应用目录里的同名文件（原「已知代价」，收窄后放行）", `rm -rf ~/Library/Application\\ Support/OtherApp/automations.json`],
+  ["项目 cwd 下的裸同名文件", `rm automations.json`],
+  ["项目 cwd 下的裸同名（大写变体）", `rm AUTOMATIONS.JSON`],
+  ["项目 cwd 下的裸同名（反斜杠打断）", `rm autom\\ations.json`],
+  ["会话工作台里 cd 后裸同名（工作台是用户的，解析不指向记录）", `cd "${D}/workbenches/x/.." && rm automations.json`],
+  ["项目 cwd 下 truncate 裸同名", `truncate -s 0 automations.json`],
+  ["项目 cwd 下重定向清空裸同名", `> automations.json`],
+  ["项目 cwd 下 cat 覆盖裸同名", `cat /dev/null > automations.json`],
+  ["项目 cwd 下 tee 覆盖裸同名", `tee automations.json < /dev/null`],
+  ["项目 cwd 下 cp 覆盖裸同名", `cp /dev/null automations.json`],
+  ["项目 cwd 下 shred 裸同名", `shred -u automations.json`],
+  ["项目 cwd 下 dd of= 裸同名", `dd if=/dev/zero of=automations.json`],
+  ["项目 cwd 下 mv 挪走裸同名", `mv automations.json /tmp/`],
+  ["项目 cwd 下 chmod 裸同名", `chmod 000 automations.json`],
+  ["项目 cwd 下 sed -i 裸同名", `sed -i '' 's/a/b/' automations.json`],
+  ["项目 cwd 下 touch 裸同名", `touch automations.json`],
+  ["项目 cwd 下 PowerShell Set-Content 裸同名", `Set-Content -Path automations.json -Value '{}'`],
+  ["另一实例目录里的通配", `rm -f "${OTHER_INSTANCE}"/automations*`],
+  ["数据目录的上级里删其它目录（不覆盖数据目录）", `cd ${UP} && rm -rf build`],
+  ["数据目录的上级里删缓存（带目录前缀，非泛目标）", `cd ${UP} && rm -rf caches/*`],
+  ["项目目录里 git clean / find -delete（cwd 与数据目录无关）", `git clean -fdx && find . -name '*.tmp' -delete`],
+  ["/tmp 里 rm -rf *（cwd 与数据目录及其上级无关）", `cd /tmp && rm -rf *`],
+];
+
+describe("第三轮补一小轮：cd 跟踪、相对名解析、泛破坏、同名误伤收窄", () => {
+  const gateAt = (cwd: string) =>
+    createToolCallGate(() => "skip", async () => ({ behavior: "allow" }), [`${D2}/sessions`], cwd, F2, GUARD);
+  const projGate = gateAt(PROJ);
+  const dataGate = gateAt(D2);
+
+  for (const [name, command] of MUST_BLOCK_R3B) {
+    test(`拦：${name}`, async () => {
+      // cwd 就在数据目录的两条用 dataGate，其余从项目目录出发（命令里自己 cd）
+      const gate = /^git clean -fdx$|^rm -rf \*$|^rm -rf \.$|^find \. -delete|^find \. -type f|^rm -f auto\*$/.test(command) ? dataGate : projGate;
+      const tool = /Set-Location|Remove-Item|Move-Item|Set-Content|Out-File/.test(command) ? "powershell" : "bash";
+      const result = await gate({ toolCallId: "c", toolName: tool, input: { command } } satisfies ToolCallLike);
+      assert.equal(result.block, true, `应该拦：${command}`);
+    });
+  }
+
+  for (const [name, command] of MUST_ALLOW_R3B) {
+    test(`放行：${name}`, async () => {
+      const tool = /Set-Content/.test(command) ? "powershell" : "bash";
+      const result = await projGate({ toolCallId: "c", toolName: tool, input: { command } } satisfies ToolCallLike);
+      assert.deepEqual(result, {}, `误伤了正常命令：${command}\n${result.reason ?? ""}`);
+    });
+  }
 });

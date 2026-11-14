@@ -164,17 +164,46 @@ interface Normalized {
   path: string;
   /** 文件名比对用：反斜杠当转义直接删（`au\tomations`） */
   name: string;
+  /** 展开前不含 `$` 与反引号：命令里的路径都是字面量，可以拿去解析（同名文件误伤收窄的前提）。
+ *   含变量的（`$D/automations.json`、`rm $a$b`）解析不出名字到底指哪——保守，维持一律拒 */
+  literal: boolean;
+}
+
+/**
+ * 引号内的空格与转义空格编码成 \`\u0000\`：路径可以含空格（"Application Support"），
+ * 引号折平后那些空格不能变成词边界——否则数据目录里的受保护路径会被拆成两个词，
+ * 「解析后放行」的判定（同名文件误伤收窄）就认不出它了。所有参与比对的路径同样编码。
+ */
+function encodeQuotedSpaces(text: string): string {
+  let out = "";
+  let quote: string | null = null;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i] ?? "";
+    if (quote === null) {
+      if (ch === '"' || ch === "'") quote = ch;
+      else if (ch === "\\" && text[i + 1] === " ") {
+        out += "\u0000";
+        i += 1;
+      } else out += ch;
+    } else {
+      if (ch === quote) quote = null;
+      else if (ch === " ") out += "\u0000";
+      else out += ch;
+    }
+  }
+  return out;
 }
 
 function normalizeVariants(command: string, guard: CommandGuardEnv): Normalized[] {
   const decoded = decodeAnsiC(command);
+  const literal = !/[$`]/.test(decoded);
   const vars = parseAssignments(decoded);
-  const expanded = expandTilde(expandVars(decoded, vars, guard), guard.home);
-  // 引号折平：相邻引号段拼成一个词；转义空格折成空格
-  const loosened = expanded.replaceAll(/["']/g, "").replaceAll("\\ ", " ");
+  const expanded = encodeQuotedSpaces(expandTilde(expandVars(decoded, vars, guard), guard.home));
+  // 引号折平：相邻引号段拼成一个词；引号内 / 转义的空格已编码成 \u0000，不再是词边界
+  const loosened = expanded.replaceAll(/["']/g, "");
   const variants: Normalized[] = [];
   for (const brace of expandBraces(loosened)) {
-    variants.push({ path: foldCmdPath(brace), name: brace.replaceAll("\\", "").replaceAll(/\/{2,}/g, "/").toLowerCase() });
+    variants.push({ path: foldCmdPath(brace), name: brace.replaceAll("\\", "").replaceAll(/\/{2,}/g, "/").toLowerCase(), literal });
   }
   return variants;
 }
@@ -233,7 +262,7 @@ function mentionsWholeOrHomeRelative(text: string, path: string, home: string): 
 /** 按 `;` `&&` `||` `|` `&` 换行与括号切成「一条条命令」；子进程替换里的也各算一段 */
 function segmentsOf(text: string): string[] {
   return text
-    .split(/\n|;|&&|\|\||\||&|\$\(|\(|\)|`|\{|\}/)
+    .split(/\n|;|&&|\|\||\||&|<<<|\$\(|\(|\)|`|\{|\}/)
     .map((segment) => segment.trim())
     .filter((segment) => segment !== "");
 }
@@ -337,6 +366,91 @@ function onlyAsDestination(segment: string, path: string): boolean {
   return trimmed.endsWith(path) && trimmed.indexOf(path) === trimmed.length - path.length;
 }
 
+/** 目标 token 是不是这个破坏性命令的**最后一个参数**（mv / cp 这类只有来源会被改动；相对名与绝对路径都判） */
+function tokenIsDestination(segment: string, word: string): boolean {
+  const head = firstWords(segment)[0];
+  if (head !== "mv" && head !== "ln" && head !== "move" && head !== "cp" && head !== "copy" && head !== "install") return false;
+  const trimmed = segment.replace(/[\s/]+$/, "");
+  const bare = word.replace(/\/+$/, "");
+  // lastIndexOf：短名（data）可能先出现在别的参数里（mv data2 data），目标只看最后一处
+  return trimmed.endsWith(bare) && trimmed.lastIndexOf(bare) === trimmed.length - bare.length;
+}
+
+/* ---------- cd 跟踪与相对名解析（主会话 2026-11-14 实测漏网后补） ---------- */
+
+/** cd / pushd 目标里的重定向（`>/dev/null`、`2>&1`、`&>`、`<`）不是目标的一部分，剥掉再解析 */
+function stripRedirects(target: string): string {
+  return target
+    .split(/\s+/)
+    .filter((word) => !/^(?:\d*&?>+|>&|&>|>+|<)/.test(word))
+    .join(" ");
+}
+
+/** token 里的赋值前缀（dd 的 `of=`、`VAR=`）与重定向前缀（`2>file`）剥掉 */
+function cleanToken(word: string): string {
+  return word.replace(/^[A-Za-z_][A-Za-z0-9_]*=/, "").replace(/^(?:\d*&?>+|>&|&>|>+|<)+/, "");
+}
+
+/** 是不是「能确定解析」的字面路径 token：无通配、无变量、无 shell 元字符（输入已折叠小写） */
+function isLiteralPathToken(word: string): boolean {
+  return word !== "" && !/[*?[\]()'";$`]/.test(word);
+}
+
+/** token 解析成绝对路径（输入已折叠；相对的按当前目录拼，`..` 折叠掉）。返回 null = 解析不了 */
+function resolveToken(word: string, current: string): string | null {
+  if (/^(?:\/|[a-z]:)/.test(word)) return collapseDots(word);
+  return collapseDots(`${current}/${word}`);
+}
+
+/**
+ * 「内容会被当成命令再执行」的宿主：内联解释器（python -c / node -e …）、`sh -c`、here-string（`<<<`）、eval。
+ * 它们的内容在引号里，里面的 `cd 数据目录` 空格被编码后 cd 跟踪看不见——内容闸门看不清（可先 chdir 再删），
+ * 文件名命中一律保守拒，不做「解析安全」放行。
+ */
+function isInterpreterSegment(segment: string): boolean {
+  if (segment.includes("<<<")) return true;
+  return (
+    /(?:^|[\s;&|(])(?:python[0-9.]*|node|bun|deno|perl|ruby|php|lua)\s+(?:--?[a-z]*[ce]\b|--?r\b|--?eval\b|--?e\b)/.test(segment) ||
+    /(?:^|[\s;&|(])(?:ba|z|da|k)?sh\s+-c\b/.test(segment) ||
+    /(?:^|[\s;&|(])eval\b/.test(segment)
+  );
+}
+
+/**
+ * 字面量 variant 里，文件名在一段里的每处出现是不是都能确定解析且**不**指向受保护文件 / 本实例的数据目录
+ * ——能（删的是项目里 / 别的实例里的同名文件）就放行；解析不了或命中就保守拒。
+ * 主会话 2026-11-14：用户用 Orbita 开发 Orbita，智能体常要造 / 清开发实例的数据，同名文件不能一刀切拦。
+ */
+function nameHitResolvesSafe(
+  segment: string,
+  entry: { path: string; base: string },
+  current: string,
+  dataDirs: readonly string[],
+): boolean {
+  let at = segment.indexOf(entry.base);
+  while (at !== -1) {
+    // 这一处出现所在的「词」：向两侧扩到空白（路径可以含空格，不能按空白切 token）
+    let from = at;
+    while (from > 0 && !/\s/.test(segment[from - 1] ?? "")) from -= 1;
+    let to = at + entry.base.length;
+    while (to < segment.length && !/\s/.test(segment[to] ?? "")) to += 1;
+    const word = cleanToken(segment.slice(from, to));
+    if (!isLiteralPathToken(word)) return false;
+    const resolved = resolveToken(word, current);
+    if (resolved === null) return false;
+    if (resolved === entry.path || resolved.startsWith(`${entry.path}.`)) return false;
+    if (dataDirs.some((dir) => resolved === dir)) return false;
+    at = segment.indexOf(entry.base, at + 1);
+  }
+  return true;
+}
+
+/** 泛目标 token：`*`、`.`、`..`、`*.json`、`auto*` 这类会把当前目录里的东西一并卷进去的 */
+function isWildTarget(word: string): boolean {
+  if (word === "*" || word === "." || word === "..") return true;
+  return !word.includes("/") && /\*/.test(word);
+}
+
 /* ---------- 入口 ---------- */
 
 export type CommandRefusal =
@@ -356,9 +470,12 @@ export function protectedCommandRefusal(
   guard: CommandGuardEnv = defaultGuardEnv(),
 ): CommandRefusal | null {
   if (protectedFiles.length === 0) return null;
-  const files = protectedFiles.map((file) => ({ file, path: foldCmdPath(file), base: baseOf(foldCmdPath(file)) }));
+  const files = protectedFiles.map((file) => {
+    const path = foldCmdPath(file).replaceAll(" ", "\u0000");
+    return { file, path, base: baseOf(path) };
+  });
   const dataDirs = [...new Set(files.map((entry) => parentOf(entry.path)).filter((dir) => dir !== ""))];
-  const home = foldCmdPath(guard.home);
+  const home = foldCmdPath(guard.home).replaceAll(" ", "\u0000");
   const variants = normalizeVariants(command, guard);
 
   // 「解码后执行」：base64 -d | sh、printf '\x72\x6d' | sh——名字在运行时才拼出来，字面上什么都看不见；
@@ -367,89 +484,154 @@ export function protectedCommandRefusal(
     /(?:base64\s+(?:-d|-D|--decode)|xxd\s+-r|openssl\s+(?:enc|base64)\b.*-d|printf\s+['"]?[^|]*\\x[0-9a-fA-F]{2}|echo\s+-e\s+['"]?[^|]*\\x[0-9a-fA-F]{2})/.test(command) &&
     /(?:\|\s*(?:ba|z|da|k)?sh\b|(?:^|[\s;&|(])eval\b|(?:^|\s)(?:ba|z|da|k)?sh\s+-c\b|\bsource\s+<\(|\bpython[0-9.]*\s+-c\b|\bnode\s+-e\b)/.test(command)
   ) {
-    return { kind: "dataDir", dir: dataDirs[0] ?? "", why: "running decoded text as a command" };
+    return { kind: "dataDir", dir: humanDir(dataDirs[0] ?? ""), why: "running decoded text as a command" };
   }
 
   for (const variant of variants) {
     const segments = segmentsOf(variant.name);
     const pathSegments = segmentsOf(variant.path);
+    const filePaths = files.map((entry) => entry.path);
 
-    // 1. 文件名本身。两种读法都试：反斜杠当转义（`au\tomations`）与当路径分隔符（Windows 的 `orbita\automations.json`）。
-    //    纯检索类命令里只是在搜字符串，放行
-    for (const segment of [...segments, ...pathSegments]) {
-      if (isSearchSegment(segment)) continue;
-      for (const entry of files) {
-        if (mentionsName(segment, entry.base)) return { kind: "file", file: entry.file };
-      }
-    }
-
-    // 2. 通配
-    //    a) 数据目录根里的任何通配（`<数据目录>/*.json`、`<数据目录>/*`、`<数据目录>/automations*`）：整个目录都危险，不管匹配到哪个名字
+    // 0. 数据目录根里的任何通配（`<数据目录>/*.json`、`<数据目录>/*`、`<数据目录>/automations*`）：整个目录都危险，不管匹配到哪个名字
     for (const dir of dataDirs) {
       const inDir = new RegExp(`${escapeRegExp(dir)}/+([^\\s/;&|)"']*[*?\\[][^\\s/;&|)"']*)`, "g");
       for (const match of variant.path.matchAll(inDir)) {
         const owner = variant.path.slice(0, match.index);
         if (isSearchSegment(segmentsOf(owner).pop() ?? "") && /^(?:find|grep|rg|ag|ack|git)\b/.test(firstWords(segmentsOf(owner).pop() ?? "").join(" "))) continue;
-        return { kind: "dataDir", dir, why: "a glob over the data folder" };
-      }
-    }
-    //    b) 不带目录的通配，前缀已经写到「automation」：`rm automations*`、`rm automation[s].json`
-    for (const segment of segments) {
-      if (isSearchSegment(segment)) continue;
-      for (const word of segment.split(/\s+/)) {
-        if (!/[*?[]/.test(word) || word.includes("/")) continue;
-        if (literalPrefix(word).length < "automation".length) continue;
-        const regex = globToRegExp(word);
-        const hit = files.find((entry) => regex.test(entry.base));
-        if (hit !== undefined) return { kind: "file", file: hit.file };
+        return { kind: "dataDir", dir: humanDir(dir), why: "a glob over the data folder" };
       }
     }
 
-    // 3. cd / pushd / Set-Location 模拟：顺着命令里的 cd 走，走进数据目录根就拒
-    let current = collapseDots(foldCmdPath(cwd));
-    for (const segment of pathSegments) {
-      const match = /^(?:cd|pushd|chdir|set-location|sl|push-location)(?:\s+\/d)?\s+(?:-[a-z]+\s+)*(?:--\s+)?(.+)$/.exec(firstWords(segment).join(" "));
-      if (match === null) continue;
-      const rawTarget = (match[1] ?? "").trim();
-      if (rawTarget === "" || rawTarget === "-" || /[$`]/.test(rawTarget)) continue;
-      const target = foldCmdPath(rawTarget).replace(/\/+$/, "") || "/";
-      current = collapseDots(/^(?:\/|[a-z]:)/.test(target) ? target : `${current}/${target}`);
-      if (dataDirs.includes(current)) return { kind: "dataDir", dir: current, why: "cd into the data folder" };
-    }
+    // 1-4 逐段过，带着当前目录跟踪：字面量 cd / pushd 更新 current，后面的段里能确定解析的
+    // 相对名按 current 解析，解析到数据目录或受保护文件就拒（`cd <上级> && mv data data2` 这类
+    // 不带完整路径的写法）。跟踪不出来（目标是变量、命令替换）就停在原地，按原有保守规则处理。
+    let current = collapseDots(foldCmdPath(cwd).replaceAll(" ", "\u0000"));
+    const dataDirSet = new Set(dataDirs);
+    const parentDirSet = new Set(dataDirs.map((dir) => parentOf(dir)).filter((dir) => dir !== ""));
+    for (let index = 0; index < pathSegments.length; index += 1) {
+      const pathSegment = pathSegments[index] ?? "";
+      const nameSegment = segments[index] ?? "";
 
-    // 4. 破坏性动词 + 数据目录 / 它的上级
-    const targets = dataDirs.flatMap((dir) => [dir, ...ancestorsOf(dir)]);
-    const filePaths = files.map((entry) => entry.path);
-    for (const segment of pathSegments) {
-      if (!hasDestructiveVerb(segment)) continue;
-      if (globPathHitsData(segment, dataDirs, filePaths, home)) {
-        return { kind: "dataDir", dir: dataDirs[0] ?? "", why: "a destructive command whose glob reaches the data folder" };
-      }
-      for (const target of targets) {
-        if (mentionsWholeOrHomeRelative(segment, target, home) && !onlyAsDestination(segment, target)) {
-          return { kind: "dataDir", dir: dataDirs[0] ?? target, why: "a destructive command aimed at the data folder or one of its parent folders" };
+      // cd / pushd / Set-Location：剥掉重定向（`>/dev/null`、`2>&1`）再解析目标；进到数据目录根就拒
+      const cdMatch = /^(?:cd|pushd|chdir|set-location|sl|push-location)(?:\s+\/d)?\s+(?:-[a-z]+\s+)*(?:--\s+)?(.+)$/.exec(firstWords(pathSegment).join(" "));
+      if (cdMatch !== null) {
+        const rawTarget = stripRedirects((cdMatch[1] ?? "").trim());
+        if (rawTarget !== "" && rawTarget !== "-" && !/[$`]/.test(rawTarget)) {
+          const target = foldCmdPath(rawTarget).replace(/\/+$/, "") || "/";
+          current = collapseDots(/^(?:\/|[a-z]:)/.test(target) ? target : `${current}/${target}`);
+          if (dataDirSet.has(current)) return { kind: "dataDir", dir: humanDir(current), why: "cd into the data folder" };
         }
       }
-      // `rm -rf /`：根目录本身也是上级
-      if (/(?:^|\s)\/\*?(?=\s|$)/.test(segment) && /(?:^|[\s;&|(`])(?:rm|chmod|chown|find|shred)(?=\s)/.test(segment)) {
-        return { kind: "dataDir", dir: dataDirs[0] ?? "/", why: "a destructive command aimed at the root folder" };
+
+      const isSearch = isSearchSegment(pathSegment) || isSearchSegment(nameSegment);
+      // 解释器 -c/-e 的代码里常有 ( ) ; ——切段后那些片段仍属于解释器内容：整条里任一段是解释器调用，
+      // 文件名命中就一律保守拒（代码可以先 chdir 再删，闸门看不清），不做「解析安全」放行
+      const isInterp = isInterpreterSegment(pathSegment) || isInterpreterSegment(nameSegment) || isInterpreterSegment(variant.path);
+
+      if (!isSearch) {
+        // 1. 文件名本身。两种读法都试：反斜杠当转义（`au\tomations`）与当路径分隔符（Windows 的 `orbita\automations.json`）。
+        //    字面量 variant 里能确定解析且不指向受保护文件 / 本数据目录的同名文件放行（误伤收窄：
+        //    用户拿 Orbita 开发 Orbita，项目目录 / 别的开发实例里的同名文件是正常操作对象）；
+        //    含变量 / 通配 / 解释器代码里出现的一律保守拒
+        for (const segment of [nameSegment, pathSegment]) {
+          if (segment === "") continue;
+          for (const entry of files) {
+            if (!mentionsName(segment, entry.base)) continue;
+            if (variant.literal && !isInterp && nameHitResolvesSafe(segment, entry, current, dataDirs)) continue;
+            return { kind: "file", file: entry.file };
+          }
+        }
+        // 1b. 不带目录的通配，前缀已经写到「automation」：`rm automations*`、`rm automation[s].json`（通配解析不了，保守拒）
+        for (const segment of [nameSegment, pathSegment]) {
+          if (segment === "") continue;
+          for (const word of segment.split(/\s+/)) {
+            if (!/[*?[]/.test(word) || word.includes("/")) continue;
+            if (literalPrefix(cleanToken(word)).length < "automation".length) continue;
+            const regex = globToRegExp(cleanToken(word));
+            const hit = files.find((entry) => regex.test(entry.base));
+            if (hit !== undefined) return { kind: "file", file: hit.file };
+          }
+        }
+      }
+
+      // 2. 破坏性动词
+      if (hasDestructiveVerb(pathSegment) || hasDestructiveVerb(nameSegment)) {
+        const segment = pathSegment;
+        if (globPathHitsData(segment, dataDirs, filePaths, home)) {
+          return { kind: "dataDir", dir: humanDir(dataDirs[0] ?? ""), why: "a destructive command whose glob reaches the data folder" };
+        }
+        const targets = dataDirs.flatMap((dir) => [dir, ...ancestorsOf(dir)]);
+        for (const target of targets) {
+          if (mentionsWholeOrHomeRelative(segment, target, home) && !onlyAsDestination(segment, target)) {
+            return { kind: "dataDir", dir: humanDir(dataDirs[0] ?? target), why: "a destructive command aimed at the data folder or one of its parent folders" };
+          }
+        }
+        // `rm -rf /`：根目录本身也是上级
+        if (/(?:^|\s)\/\*?(?=\s|$)/.test(segment) && /(?:^|[\s;&|(`])(?:rm|chmod|chown|find|shred)(?=\s)/.test(segment)) {
+          return { kind: "dataDir", dir: humanDir(dataDirs[0] ?? "/"), why: "a destructive command aimed at the root folder" };
+        }
+        // 2b. 字面量 token（含相对名）解析后指向数据目录或受保护文件：拒（mv / cp 的目标参数除外——只有来源会被改动）。
+        //     `data/*` 这类「相对目录 + 通配」：通配解析不了，但字面目录前缀能——解析到数据目录就是泛删它
+        if (!isInterp) {
+          for (const rawWord of segment.split(/\s+/)) {
+            const word = cleanToken(rawWord);
+            if (!isLiteralPathToken(word)) {
+              if (/[*?[]/.test(word)) {
+                const prefix = word.slice(0, Math.max(word.search(/[*?[]/), 0));
+                if (prefix !== "" || word.startsWith("*")) {
+                  const resolvedPrefix = resolveToken(prefix === "" ? "./" : prefix, current);
+                  if (resolvedPrefix !== null && dataDirSet.has(resolvedPrefix) && !tokenIsDestination(segment, rawWord)) {
+                    return { kind: "dataDir", dir: humanDir(resolvedPrefix), why: "a destructive command whose glob reaches the data folder" };
+                  }
+                }
+              }
+              continue;
+            }
+            const resolved = resolveToken(word, current);
+            if (resolved === null) continue;
+            if (dataDirSet.has(resolved) && !tokenIsDestination(segment, rawWord)) {
+              return { kind: "dataDir", dir: humanDir(resolved), why: "a destructive command aimed at the data folder" };
+            }
+            for (const entry of files) {
+              if ((resolved === entry.path || resolved.startsWith(`${entry.path}.`)) && !tokenIsDestination(segment, rawWord)) {
+                return { kind: "file", file: entry.file };
+              }
+            }
+          }
+        }
+        // 2c. 泛目标（`*`、`.`、`*.json`、`auto*`）与以 `.` 为默认范围的 find / git clean：
+        //     有效当前目录是数据目录本身或它的直接上级时，这些东西会把记录一并卷进去，拒
+        if (dataDirSet.has(current) || parentDirSet.has(current)) {
+          const words = segment.split(/\s+/).map((word) => cleanToken(word));
+          if (words.some((word) => isWildTarget(word))) {
+            return { kind: "dataDir", dir: humanDir(dataDirs[0] ?? current), why: dataDirSet.has(current) ? "a destructive command inside the data folder" : "a destructive command over the folder holding the data folder" };
+          }
+          if (/(?:^|\s)(?:find|git)(?=\s)/.test(segment) && (/(?:^|\s)\.(?:\s|$)/.test(segment) || /\bclean\b/.test(segment))) {
+            return { kind: "dataDir", dir: humanDir(dataDirs[0] ?? current), why: "a destructive command over the folder holding the data folder" };
+          }
+        }
       }
     }
 
     // 5. 管道 / 循环 / xargs / -exec 把「列出来的名字」交给破坏性命令：整条里点到数据目录或其上级
-    const wholeMentions = targets.some((target) => mentionsWholeOrHomeRelative(variant.path, target, home)) || globPathHitsData(variant.path, dataDirs, filePaths, home);
+    const targets5 = dataDirs.flatMap((dir) => [dir, ...ancestorsOf(dir)]);
+    const wholeMentions = targets5.some((target) => mentionsWholeOrHomeRelative(variant.path, target, home)) || globPathHitsData(variant.path, dataDirs, filePaths, home);
     if (wholeMentions) {
       if (/(?:^|[\s;&|])(?:xargs|parallel)(?=\s)|(?:^|\s)-(?:delete|exec|execdir)(?:\s|$)|(?:^|[\s;&|])(?:for|while)\s/.test(variant.path) && pathSegments.some(hasDestructiveVerb)) {
-        return { kind: "dataDir", dir: dataDirs[0] ?? "", why: "listing the data folder into a destructive command" };
+        return { kind: "dataDir", dir: humanDir(dataDirs[0] ?? ""), why: "listing the data folder into a destructive command" };
       }
       // 内联解释器点到数据目录（os.remove / rmSync / glob / rename …）
-      if (/(?:^|[\s;&|(])(?:python[0-9.]*|node|bun|deno|perl|ruby|php|lua)\s+(?:-[a-z]*[ce]\b|-r\b|eval\b|--eval\b|-e\b)/.test(variant.path)) {
-        return { kind: "dataDir", dir: dataDirs[0] ?? "", why: "an inline script touching the data folder" };
+      if (isInterpreterSegment(variant.path)) {
+        return { kind: "dataDir", dir: humanDir(dataDirs[0] ?? ""), why: "an inline script touching the data folder" };
       }
     }
-
   }
   return null;
+}
+
+/** 拒绝语里给人看的目录：把编码空格还原 */
+function humanDir(dir: string): string {
+  return dir.replaceAll("\u0000", " ");
 }
 
 /** 文件名在一段命令里出现，前后都落在名字边界上（`automations.json.bad-1` 是兄弟，`xautomations.json`、`automations.jsonx` 是别的文件） */
