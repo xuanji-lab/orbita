@@ -121,6 +121,11 @@ async function coldIds(): Promise<string[]> {
   }
 }
 
+async function archiveCounts(store: AutomationStore): Promise<{ older: number; file: string }> {
+  const { older, file } = await store.archiveInfo();
+  return { older, file };
+}
+
 async function olderOnDisk(): Promise<number | null> {
   try {
     return (JSON.parse(await readFile(join(dir, ARCHIVE), "utf8")) as { older?: number }).older ?? 0;
@@ -321,10 +326,10 @@ describe("AutomationStore 冷归档（热归档放不下的最旧记录先追加
     assert.equal(cold.length, 30);
     assert.deepEqual([...cold].sort(), Array.from({ length: 30 }, (_, i) => `e${i}`).sort(), "冷文件里是最旧的 30 条");
     assert.equal(new Set([...hot, ...cold]).size, total, "热 + 冷 = 全部，没丢没重");
-    assert.deepEqual(await store.archiveInfo(), { older: 30, file: COLD });
+    assert.deepEqual(await archiveCounts(store), { older: 30, file: COLD });
     assert.equal(await olderOnDisk(), 30);
     // 换实例：older 从热归档文件读回来，不用碰冷文件
-    assert.deepEqual(await new AutomationStore(dir).archiveInfo(), { older: 30, file: COLD });
+    assert.deepEqual(await archiveCounts(new AutomationStore(dir)), { older: 30, file: COLD });
     // 冷文件里每行都是完整记录（能解回 id / 标题 / 指令）
     const first = JSON.parse((await readFile(join(dir, COLD), "utf8")).split("\n")[0] ?? "") as Automation;
     assert.equal(first.prompt, "看一眼日志");
@@ -405,7 +410,7 @@ describe("AutomationStore 冷归档（热归档放不下的最旧记录先追加
     await writeFile(join(dir, COLD), `${all.slice(0, 30).map((record) => JSON.stringify(record)).join("\n")}\n`, "utf8"); // 冷文件已追加：最旧 30 条
     const store = new AutomationStore(dir);
     assert.equal((await store.listAll()).length, AUTOMATION_ARCHIVE_KEEP);
-    assert.deepEqual(await store.archiveInfo(), { older: 30, file: COLD });
+    assert.deepEqual(await archiveCounts(store), { older: 30, file: COLD });
     assert.deepEqual(await idsOnDisk(LIVE), []);
     assert.equal((await coldIds()).length, 30, "冷文件没重复追加");
     const hot = await idsOnDisk(ARCHIVE);
@@ -422,7 +427,7 @@ describe("AutomationStore 冷归档（热归档放不下的最旧记录先追加
     await writeFile(join(dir, COLD), `${all.slice(0, 30).map((record) => JSON.stringify(record)).join("\n")}\n`, "utf8");
     const store = new AutomationStore(dir);
     assert.equal((await store.listAll()).length, AUTOMATION_ARCHIVE_KEEP);
-    assert.deepEqual(await store.archiveInfo(), { older: 30, file: COLD });
+    assert.deepEqual(await archiveCounts(store), { older: 30, file: COLD });
     assert.equal(await olderOnDisk(), 30);
     assert.equal((await coldIds()).length, 30);
     assert.equal(new Set([...(await idsOnDisk(ARCHIVE)), ...(await coldIds())]).size, total);
@@ -440,7 +445,7 @@ describe("AutomationStore 冷归档（热归档放不下的最旧记录先追加
   test("禁区清单含冷文件", () => {
     assert.deepEqual(
       automationProtectedFiles("/u").map((file) => file.replace(/\\/g, "/")),
-      ["/u/automations.json", "/u/automations-archive.json", `/u/${COLD}`],
+      ["/u/automations.json", "/u/automations-archive.json", `/u/${COLD}`, "/u/automations-events.jsonl"],
     );
   });
 });

@@ -1297,7 +1297,8 @@ void app.whenReady().then(async () => {
    * 返回、工具不注册、list 回空。两种去处都走 agentIpc.submitTurn——与用户发消息、delegate 同一套开轮装配。
    * 睡眠唤醒（powerMonitor resume）立刻 tick 一次：Mac 睡眠时定时器不走。
    */
-  const automationStore = new AutomationStore(configDir);
+  // 记录文件被应用之外的力量动过（删 / 改 / 改数据目录名）：store 按内存真源写回并留事件，这里只负责通知 renderer 重拉（告警随 archiveInfo 带出）
+  const automationStore = new AutomationStore(configDir, Date.now, { onGuardEvent: broadcastAutomationEvent });
   const keepAwake = new KeepAwake(
     powerSaveBlocker,
     async () => (await settings.read()).automationKeepAwake === true,
@@ -1346,6 +1347,8 @@ void app.whenReady().then(async () => {
   });
   automationScheduler.start();
   setTimeout(() => void automationScheduler.tick().catch(() => undefined), 5_000);
+  // 冷归档的后台对账（older 与冷文件对一次、清孤儿副本）：不阻塞启动，晚几秒再做
+  setTimeout(() => void automationStore.auditInBackground().catch((cause: unknown) => console.error("[automation] 冷归档对账失败", cause)), 20_000);
   powerMonitor.on("resume", () => void automationScheduler.tick().catch(() => undefined));
 
   /*

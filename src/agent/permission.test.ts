@@ -194,7 +194,7 @@ describe("自动化记录文件不可变（protectedFiles）", () => {
 
   test("已结束的归档文件同护：用主进程真实给的清单，write / edit / bash 与 .tmp / .bad- 兄弟全档拦", async () => {
     const files = automationProtectedFiles("/userData");
-    assert.equal(files.length, 3);
+    assert.equal(files.length, 4);
     for (const mode of ["plan", "manual", "skip"] as const) {
       const gate = createToolCallGate(() => mode, async () => ({ behavior: "allow" }), ["/userData/sessions"], "/repo", files);
       for (const target of [
@@ -204,6 +204,8 @@ describe("自动化记录文件不可变（protectedFiles）", () => {
         "/userData/automations-archive-old.jsonl",
         "/userData/automations-archive-old.jsonl.a1b2c3d4.tmp",
         "/userData/automations-archive-old.jsonl.bad-1763000000000",
+        "/userData/automations-events.jsonl",
+        "/userData/automations.json.tampered-1763000000000",
       ]) {
         const write = await gate(event("write", { path: target, content: "[]" }));
         assert.equal(write.block, true, `${mode} write ${target}`);
