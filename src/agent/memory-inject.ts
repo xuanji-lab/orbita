@@ -16,7 +16,8 @@
  * 召回、打分、门控都在记忆服务进程（memory/retrieve.ts）；这里只做组装、兜底预算与挂载。
  */
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { memoryShortId, type MemoryHit } from "../shared/memory.ts";
+import { memoryShortId, type MemoryHit, type MemoryRecallOutcome } from "../shared/memory.ts";
+import type { RequestBroker } from "./request-broker.ts";
 import type { ContextMessage } from "./image-byte-budget.ts";
 
 /** pi 本子里记忆附件的 custom entry 类型名（data = { at: 用户消息时间戳, text: 块文本 }）。 */
@@ -134,4 +135,36 @@ export function attachMemoryBlocks(
     return { ...message, content } as ContextMessage;
   });
   return { messages: touched ? next : null, record };
+}
+
+/**
+ * 轮前记忆召回的硬超时：主进程读盘 + 词法打分是毫秒级，6 秒已是「出事了」
+ * （主进程侧另有 4 秒的转发超时先兑，这里只兑主进程失联）。
+ */
+const MEMORY_RECALL_TIMEOUT_MS = 6_000;
+
+/**
+ * 轮前召回（两个内核共用）：拿用户原话问主进程要相关记忆（主进程再
+ * 转发给记忆服务进程），组装注入块。**任何失败都返回 null**（超时 / ok:false /
+ * 异常 / 空命中）——轮前是同步等的，记忆的任何问题都不该拦住开轮（#228 的纪律）。
+ */
+export async function recallMemories(
+  broker: RequestBroker,
+  sessionId: string,
+  query: string,
+  turn: number,
+  scope: { workspaceId: string | null; cwd: string },
+  canRevise: boolean,
+): Promise<string | null> {
+  try {
+    const outcome = await broker.request<MemoryRecallOutcome>(
+      { type: "memoryRecallRequest", sessionId, query, turn, scope },
+      MEMORY_RECALL_TIMEOUT_MS,
+    );
+    if (!outcome.ok || outcome.hits.length === 0) return null;
+    return buildMemoryBlock(outcome.hits, { canRevise });
+  } catch (cause) {
+    console.warn("[memory] 轮前召回失败（不注入，照常开轮）", cause);
+    return null;
+  }
 }

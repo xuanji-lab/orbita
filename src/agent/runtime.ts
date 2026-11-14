@@ -22,7 +22,6 @@ import {
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import type { AgentCommand, AgentEvent, ProviderSecrets } from "../shared/agent-ipc.ts";
-import type { MemoryRecallOutcome } from "../shared/memory.ts";
 import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
 import {
   registerAndResolveModel,
@@ -42,9 +41,9 @@ import { adaptSystemPrompt } from "./prompt-narration.ts";
 import { ccBillingPatch } from "./cc-billing-patch.ts";
 import {
   attachMemoryBlocks,
-  buildMemoryBlock,
   MEMORY_ATTACH_ENTRY,
   memoryAttachments,
+  recallMemories,
   type TurnMemoryAttach,
 } from "./memory-inject.ts";
 import { applyBillingStreamPatch } from "./cc-billing-stream.ts";
@@ -106,12 +105,12 @@ import {
 import { preferIPv4 } from "../shared/dial-v4.ts";
 import { join } from "node:path";
 import {
+  applyImageBudget,
   IMAGE_BUDGET_ENTRY,
   IMAGE_REFS_ENTRY,
   hashImage,
-  planImageBudget,
   readImageBudgetBook,
-  type ImageBudgetMark,
+  type TurnImageBudget,
 } from "./image-byte-budget.ts";
 
 // pi-ai 的模型调用与 main 同一个坑（同一台机器、同一个全局 fetch）
@@ -817,28 +816,6 @@ interface OpenedTurn {
 }
 
 /**
- * 图片字节预算的轮内状态（image-byte-budget.ts 管算法，这里管装配与时序）：
- *
- * - `cut` / `refs` 开轮时从 pi 本子读一次（水位与附件引用都是跨轮持久化的
- *   custom entry）；轮内推进后 `cut` 原地更新，后续 LLM 调用按新水位重放。
- * - `pendingRefs` 是本轮 submit 附图的引用，在 echoAndPrompt 缩放后填
- *   （hash 必须对缩放后的 data 算——pi 本子里存的是那份），before_agent_start
- *   落成本子的 custom entry，此后任何一轮都能把占位路径拼回来。
- * - `protectedFloor` 是本轮见过的最小保护起点：steer 注入会把「最后一条用户
- *   消息」推后，不能让刚发过的本轮附图因此变成可替换。
- */
-interface TurnImageBudget {
-  /** 现行水位（ImageBudgetMark）；null = 还没触发过。轮内推进后原地更新 */
-  mark: ImageBudgetMark | null;
-  /** 图片 hash → 原图绝对路径（本子 refs entry 合并而来） */
-  refs: Map<string, string>;
-  /** 本轮 submit 附图（缩放后）的 hash → 绝对路径，before_agent_start 落本子 */
-  pendingRefs: Map<string, string>;
-  /** 本轮见过的最小保护起点：steer 会把「最后一条用户消息」推后，不能让本轮附图因此可替换 */
-  protectedFloor: number;
-}
-
-/**
  * 开一轮：装配（provider → model → services → 订阅 → created 事件）。
  * 与 startTurn 分开只是为了把「纯装配」单独读——每轮都走，路径必须与旧
  * create 命令一字不差地同源（同一套注册解析、同一套审批门、同一套事件翻译）。
@@ -1041,39 +1018,10 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
               pi.appendEntry(IMAGE_REFS_ENTRY, [...budget.pendingRefs]);
               for (const [hash, path] of budget.pendingRefs) budget.refs.set(hash, path);
             });
-            // wire-only 替换：只改发给模型的那份，pi 本子与 orbita 转录不动
+            // wire-only 替换：只改发给模型的那份，pi 本子与 orbita 转录不动（轮内胶水与新内核共用，见 image-byte-budget.ts）
             pi.on("context", (event) => {
-              try {
-                let lastUser = -1;
-                for (let i = event.messages.length - 1; i >= 0; i -= 1) {
-                  if ((event.messages[i] as { role?: unknown }).role === "user") {
-                    lastUser = i;
-                    break;
-                  }
-                }
-                const floor = lastUser === -1 ? 0 : Math.min(budget.protectedFloor, lastUser);
-                budget.protectedFloor = floor;
-                const plan = planImageBudget(event.messages, budget.mark, budget.refs, floor);
-                if (plan.advancedCut !== null) {
-                  budget.mark = plan.advancedCut;
-                  pi.appendEntry(IMAGE_BUDGET_ENTRY, {
-                    cut: plan.advancedCut.cut,
-                    cutIndex: plan.advancedCut.cutIndex,
-                    replaced: plan.replaced,
-                    bytesAfter: plan.bytesAfter,
-                  } satisfies ImageBudgetMark);
-                  console.error(
-                    `[image-budget] 请求估算 ${(plan.bytesBefore / 1048576).toFixed(1)}MiB 超过 24MiB，` +
-                      `已把 ${plan.replaced} 张早期图片替换为占位（水位落在第 ${plan.advancedCut.cutIndex} 条消息，` +
-                      `估算降至 ${(plan.bytesAfter / 1048576).toFixed(1)}MiB）`,
-                  );
-                }
-                return plan.replaced > 0 ? { messages: plan.messages } : undefined;
-              } catch (cause) {
-                // fail-open：预算模块自己的故障不该砸掉对话，本轮按原样发送
-                console.error("[image-budget] 处理失败，本轮请求按原样发送", cause);
-                return undefined;
-              }
+              const messages = applyImageBudget(event.messages, budget, (mark) => pi.appendEntry(IMAGE_BUDGET_ENTRY, mark));
+              return messages === undefined ? undefined : { messages };
             });
           },
         },
@@ -1834,37 +1782,6 @@ function flushBackfill(session: AgentSession, texts: readonly string[] | undefin
   }
 }
 
-/**
- * 轮前记忆召回的硬超时：主进程读盘 + 词法打分是毫秒级，6 秒已是「出事了」
- * （主进程侧另有 4 秒的转发超时先兑，这里只兑主进程失联）。
- */
-const MEMORY_RECALL_TIMEOUT_MS = 6_000;
-
-/**
- * 轮前召回：拿用户原话问主进程要相关记忆（主进程再
- * 转发给记忆服务进程），组装注入块。**任何失败都返回 null**（超时 / ok:false /
- * 异常 / 空命中）——轮前是同步等的，记忆的任何问题都不该拦住开轮（#228 的纪律）。
- */
-async function recallMemories(
-  sessionId: string,
-  query: string,
-  turn: number,
-  scope: { workspaceId: string | null; cwd: string },
-  canRevise: boolean,
-): Promise<string | null> {
-  try {
-    const outcome = await requestBroker.request<MemoryRecallOutcome>(
-      { type: "memoryRecallRequest", sessionId, query, turn, scope },
-      MEMORY_RECALL_TIMEOUT_MS,
-    );
-    if (!outcome.ok || outcome.hits.length === 0) return null;
-    return buildMemoryBlock(outcome.hits, { canRevise });
-  } catch (cause) {
-    console.warn("[memory] 轮前召回失败（不注入，照常开轮）", cause);
-    return null;
-  }
-}
-
 async function echoAndPrompt(
   opened: OpenedTurn,
   note: LedgerNote,
@@ -1891,6 +1808,7 @@ async function echoAndPrompt(
   opened.memory.pending =
     command.sessionMemory === true
       ? await recallMemories(
+          requestBroker,
           command.sessionId,
           command.text,
           turn,

@@ -377,3 +377,67 @@ export function planImageBudget(
 
   return { messages: working, advancedCut, replaced, bytesBefore, bytesAfter };
 }
+
+/**
+ * 图片字节预算的轮内状态（本文件管算法，两个内核各自管装配与时序：从哪读水位与引用、往哪落）：
+ *
+ * - `cut` / `refs` 开轮时从 pi 本子读一次（水位与附件引用都是跨轮持久化的
+ *   custom entry）；轮内推进后 `cut` 原地更新，后续 LLM 调用按新水位重放。
+ * - `pendingRefs` 是本轮 submit 附图的引用，在 echoAndPrompt 缩放后填
+ *   （hash 必须对缩放后的 data 算——pi 本子里存的是那份），before_agent_start
+ *   落成本子的 custom entry，此后任何一轮都能把占位路径拼回来。
+ * - `protectedFloor` 是本轮见过的最小保护起点：steer 注入会把「最后一条用户
+ *   消息」推后，不能让刚发过的本轮附图因此变成可替换。
+ */
+export interface TurnImageBudget {
+  /** 现行水位（ImageBudgetMark）；null = 还没触发过。轮内推进后原地更新 */
+  mark: ImageBudgetMark | null;
+  /** 图片 hash → 原图绝对路径（本子 refs entry 合并而来） */
+  refs: Map<string, string>;
+  /** 本轮 submit 附图（缩放后）的 hash → 绝对路径，before_agent_start 落本子 */
+  pendingRefs: Map<string, string>;
+  /** 本轮见过的最小保护起点：steer 会把「最后一条用户消息」推后，不能让本轮附图因此可替换 */
+  protectedFloor: number;
+}
+
+/**
+ * 一次请求的预算处理（context 事件 / beforeRequest 的轮内胶水，**两个内核共用**）：取保护起点、算计划、
+ * 水位推进了就经 `persist` 落账并打一行日志。返回替换后的消息；没有替换返回 undefined（按原样发）。
+ * fail-open：预算模块自己的故障不该砸掉对话，本轮按原样发送。
+ */
+export function applyImageBudget(
+  messages: readonly ContextMessage[],
+  budget: TurnImageBudget,
+  persist: (mark: ImageBudgetMark) => void,
+): ContextMessage[] | undefined {
+  try {
+    let lastUser = -1;
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if ((messages[i] as { role?: unknown }).role === "user") {
+        lastUser = i;
+        break;
+      }
+    }
+    const floor = lastUser === -1 ? 0 : Math.min(budget.protectedFloor, lastUser);
+    budget.protectedFloor = floor;
+    const plan = planImageBudget(messages, budget.mark, budget.refs, floor);
+    if (plan.advancedCut !== null) {
+      budget.mark = plan.advancedCut;
+      persist({
+        cut: plan.advancedCut.cut,
+        cutIndex: plan.advancedCut.cutIndex,
+        replaced: plan.replaced,
+        bytesAfter: plan.bytesAfter,
+      });
+      console.error(
+        `[image-budget] 请求估算 ${(plan.bytesBefore / 1048576).toFixed(1)}MiB 超过 24MiB，` +
+          `已把 ${plan.replaced} 张早期图片替换为占位（水位落在第 ${plan.advancedCut.cutIndex} 条消息，` +
+          `估算降至 ${(plan.bytesAfter / 1048576).toFixed(1)}MiB）`,
+      );
+    }
+    return plan.replaced > 0 ? plan.messages : undefined;
+  } catch (cause) {
+    console.error("[image-budget] 处理失败，本轮请求按原样发送", cause);
+    return undefined;
+  }
+}
