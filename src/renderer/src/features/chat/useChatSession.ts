@@ -460,7 +460,7 @@ export interface ChatSession {
   intentEnabled: boolean | null | undefined;
   setIntentEnabled: (next: boolean) => void;
   /** 乐观回显：发出即画的用户气泡（真回显事件一到即清）。ephemeral */
-  pendingEcho: { blocks: readonly string[] } | null;
+  pendingEcho: { blocks: readonly string[]; at: number } | null;
 }
 
 /** 查看槽回踩引擎用的窄接口——避免引擎与视图互相持有完整类型 */

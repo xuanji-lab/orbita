@@ -196,7 +196,7 @@ export interface SessionEntry {
    * 这里存**与 runtime 同款切法**的正文块（splitEchoBlocks），真回显一到即清。
    * ephemeral。
    */
-  pendingEcho: { blocks: readonly string[] } | null;
+  pendingEcho: { blocks: readonly string[]; at: number } | null;
 }
 
 /** 一份运行时报回的思考档真值，连同报它的型号 */
@@ -774,8 +774,8 @@ export function removeIntentAsk(states: SessionStates, requestId: string): Sessi
 }
 
 /** 发出即画：记下乐观回显的正文块（与 runtime 的回显同款切法）。 */
-export function setPendingEcho(states: SessionStates, sessionId: string, blocks: readonly string[]): SessionStates {
-  return update(states, sessionId, (entry) => ({ ...entry, pendingEcho: { blocks } }));
+export function setPendingEcho(states: SessionStates, sessionId: string, blocks: readonly string[], at = Date.now()): SessionStates {
+  return update(states, sessionId, (entry) => ({ ...entry, pendingEcho: { blocks, at } }));
 }
 
 /** runtime 没了：所有还在忙的槽（turn / 压缩中 / 重试等待中）一并归位。全是 idle 时返回原引用。 */

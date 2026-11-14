@@ -1883,7 +1883,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   /** 停止当前轮（= 取消召回）。引用稳定，不破 memo */
   onAbort: () => void;
   /** 乐观回显：发出即画的用户气泡（真回显事件一到即清）。ephemeral */
-  pendingEcho: { blocks: readonly string[] } | null;
+  pendingEcho: { blocks: readonly string[]; at: number } | null;
   /** 滚动容器（ChatViewBody 持有）：历史段虚拟器按它测视口、挂滚动监听 */
   scrollRef: React.RefObject<HTMLDivElement | null>;
   /** 跟随态（Latest | Reading）：测高补偿 override 要读它，避免把 Reading 拉回 */
@@ -2594,7 +2594,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
           <Retrying status={props.retry} />
         ) : liveBlockShown ? null : (
           <div className="revert-keep" data-kind="responding">
-            <Responding transcript={transcript} />
+            <Responding transcript={transcript} since={props.pendingEcho?.at ?? null} />
           </div>
         ))}
       {props.phase === "compaction" && (
@@ -6350,7 +6350,7 @@ function CompactedLine(props: { record: CompactedRecord }) {
   );
 }
 
-function Responding(props: { transcript: readonly TranscriptItem[] }) {
+function Responding(props: { transcript: readonly TranscriptItem[]; since: number | null }) {
   const t = useT();
   const { transcript } = props;
   // 秒针：Responding 只在回答期间挂载，一秒一跳不白算（Retrying 同款）
@@ -6360,9 +6360,13 @@ function Responding(props: { transcript: readonly TranscriptItem[] }) {
     return () => window.clearInterval(timer);
   }, []);
   // 耗时：本轮用户发话至今——「agent 回答了多久」是人感知的那段时间
-  let userTs: number | null = null;
-  for (const item of transcript) {
-    if (item.role === "user") userTs = item.timestamp;
+  // 真回显还没到（乐观回显挂着；新内核第一次发消息前要先迁大会话，这一段能有一两秒）：从点发送那一刻算，
+  // 不拿上一轮的用户消息算（那会显示「回应中 · 两万多分钟」）
+  let userTs: number | null = props.since;
+  if (userTs === null) {
+    for (const item of transcript) {
+      if (item.role === "user") userTs = item.timestamp;
+    }
   }
   const elapsed = userTs !== null ? formatThinkingDuration(Math.max(0, now - userTs), t) : null;
   // 流式速度：in-flight 的字符估算（estimateStreamingTokens，英文校准的粗账——
