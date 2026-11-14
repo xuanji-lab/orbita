@@ -1148,6 +1148,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    * `_refreshToolRegistry` 里同一个 `isAllowedTool` 会**连自定义工具一起过滤**——
    * 2026-10-04 实测：传 `tools: [七个内建]` 后 MCP、read_pdf、read_docx、show_image、store / task /
    * browser / channel 工具与 pi 自己的 ask_question / todo **全部消失**，而且不报错。
+   * （ask_question / todo 是用户 pi TUI 的全局扩展 ~/.pi/agent/extensions/ 注册的：pi 0.84 时代会出现在工具清单里；
+   * pi 1.5.2 起它们被加载但不被激活——工具清单、系统提示里都没有，模型调它们得到 "Tool todo not found"，2026-11-14 实测。）
    * `defaultTools` 是设置项，只决定**内建工具的初始选择**，不构成白名单，自定义工具不受影响
    * （实测：七个内建 + 自定义工具同时在位）。
    *
