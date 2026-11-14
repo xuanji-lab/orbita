@@ -561,3 +561,174 @@ describe("白名单闸门：判定细节", () => {
     assert.equal(refusal(`echo x > "${SCRATCH}/wb-link/out.txt"`), null);
   });
 });
+
+/**
+ * 复验后的修补：白名单里「只读」命令的输出类选项能往数据目录写（sort -o<文件> 连写、diff --output、find -fls / -fprint*）。
+ * 判断改成按**参数的角色**：数据目录里的词只能是输入操作数，或已知「只带输入」选项的取值；别的选项的取值位置、
+ * 含不认识的选项的命令里出现数据目录路径，一律拒（OPTION_SPECS，每个命令一份已知安全选项）。
+ */
+describe("白名单命令的选项按角色判：写文件的选项一律拒，已知只读选项照放", () => {
+  const block = (command: string, cwd = P): void => assert.notEqual(refusal(command, cwd), null, `漏了：${command}`);
+  const allow = (command: string, cwd = P): void => assert.equal(refusal(command, cwd), null, `误伤：${command}`);
+
+  test("sort -o / --output / -T：连写、分开写、等号写都拒（数据目录里的非记录文件也算）", () => {
+    block(`cat /tmp/x | sort -o"${D}/junk.txt"`);
+    block(`ls | sort -o"${D}/junk.txt"`);
+    block(`sort -o${DS}/junk.txt /tmp/x`);
+    block(`sort -o "${D}/junk.txt" /tmp/x`);
+    block(`sort --output="${D}/junk.txt" /tmp/x`);
+    block(`sort --output "${D}/junk.txt" /tmp/x`);
+    block(`sort -T "${D}" /tmp/x`);
+    block(`sort -T"${D}" /tmp/x`);
+    block(`sort -o"${D}/settings.json" /tmp/x`);
+    allow(`sort -o out.txt in.txt`);
+    allow(`cat in.txt | sort -oout.txt`);
+    allow(`sort -o "${W}/out.txt" in.txt`);
+  });
+
+  test("diff：--output / -o / 不认识的选项带着数据目录拒；已知输入类照放", () => {
+    block(`diff --output="${D}/o.txt" a b`);
+    block(`diff -o "${D}/o.txt" a b`);
+    block(`diff -o${DS}/o.txt a b`);
+    block(`diff --foo "${D}/settings.json" b`);
+    allow(`diff a "${D}/settings.json"`);
+    allow(`diff -u a "${D}/settings.json"`);
+    allow(`diff -rq a "${D}"`);
+    allow(`diff --brief --to-file="${D}/settings.json" a`);
+    allow(`diff -U 5 a "${D}/settings.json"`);
+  });
+
+  test("find：-fls / -fprint / -fprint0 / -fprintf 的输出文件、-exec 命令行里的数据目录都拒；只读的 find 照放", () => {
+    block(`find /tmp -fls "${D}/l.txt"`);
+    block(`find /tmp -fprint "${D}/l.txt"`);
+    block(`find /tmp -fprint0 "${D}/l.txt"`);
+    block(`find /tmp -fprintf "${D}/l.txt" %p`);
+    block(`find /tmp -name x -exec cp {} "${D}/" \\;`);
+    block(`find /tmp -name x -execdir tee "${D}/y" \\;`);
+    block(`find /tmp -ok mv {} "${D}/y" \\;`);
+    allow(`find "${D}" -name 'settings*' -print`);
+    allow(`find "${D}" -maxdepth 1 -type f -ls`);
+    allow(`find "${D}" -newer /tmp/x -print`);
+    allow(`find /tmp -newer "${D}/settings.json" -print`);
+    allow(`find . -name '*.tmp' -fprint /tmp/list.txt`);
+  });
+
+  test("grep / rg / head / tail / wc / cat / ls / stat / du / file / shasum / md5：已知选项照放，输出类与不认识的选项拒", () => {
+    // 已知只读选项 + 数据目录里的输入操作数：放行
+    for (const command of [
+      `grep -rn foo "${D}/workbenches"`,
+      `grep -f "${D}/settings.json" /tmp/x`,
+      `grep -r --exclude-from="${D}/settings.json" foo /tmp`,
+      `grep -c -e foo "${D}/settings.json"`,
+      `rg -n foo "${D}/workbenches"`,
+      `rg -f "${D}/settings.json" /tmp`,
+      `rg --files "${D}/workbenches"`,
+      `head -n 5 "${D}/settings.json"`,
+      `head -c10 "${D}/settings.json"`,
+      `tail -f "${D}/settings.json"`,
+      `tail -fn5 "${D}/settings.json"`,
+      `wc -l "${D}/settings.json"`,
+      `wc --files0-from="${D}/settings.json"`,
+      `cat -n "${D}/settings.json"`,
+      `ls -la "${D}"`,
+      `ls --color=auto "${D}"`,
+      `ls -1 "${D}/workbenches"`,
+      `stat -f %z "${D}/settings.json"`,
+      `stat -x "${D}"`,
+      `du -sh "${D}"`,
+      `du -d 1 "${D}"`,
+      `du --exclude-from="${D}/settings.json" /tmp`,
+      `file -b "${D}/settings.json"`,
+      `file -m "${D}/settings.json" /tmp/x`,
+      `shasum -a 256 "${D}/settings.json"`,
+      `md5 -r "${D}/settings.json"`,
+      `jq -c . "${D}/settings.json"`,
+    ]) allow(command);
+    // 输出类 / 取值位置落进数据目录 / 不认识的选项带数据目录：拒
+    for (const command of [
+      `rg --foo="${D}/x" y`,
+      `rg --pre "${D}/x" y /tmp`,
+      `grep --output "${D}/x" foo /tmp`,
+      `grep -e "${D}/settings.json" foo`,
+      `head -n "${D}/x" y`,
+      `tail --foo "${D}/settings.json"`,
+      `wc --weird "${D}/settings.json"`,
+      `cat --bogus "${D}/settings.json"`,
+      `ls -I "${D}/x" "${D}"`,
+      `ls --bogus "${D}"`,
+      `stat -f "${D}/x" y`,
+      `du --bogus "${D}"`,
+      `file -C -m "${D}/magic"`,
+      `file -C "${D}/magic"`,
+      `shasum --foo "${D}/settings.json"`,
+      `md5 --bogus "${D}/settings.json"`,
+      `jq --arg a "${D}/x" . y`,
+    ]) block(command);
+    // 不碰数据目录的命令不受影响（不认识的选项也无所谓）
+    allow(`ls --bogus /tmp`);
+    allow(`du --bogus /tmp`);
+  });
+
+  test("record 家族仍然读也拒（角色检查之前就拒）", () => {
+    block(`head -n 5 "${D}/automations.json"`);
+    block(`sort -o"${D}/automations.json" x`);
+  });
+});
+
+describe("解释器单行里的同名文件：能确定落点就放行，有任何不确定仍拒（两个方向）", () => {
+  const block = (command: string, cwd = P): void => assert.notEqual(refusal(command, cwd), null, `漏了：${command}`);
+  const allow = (command: string, cwd = P): void => assert.equal(refusal(command, cwd), null, `误伤：${command}`);
+
+  test("放行：当前目录是项目目录（不在数据目录里），裸名 / 相对路径 / 别处的绝对路径", () => {
+    allow(`python3 -c "open('automations.json','w').write('{}')"`);
+    allow(`python3 -c "from pathlib import Path; Path('automations-archive.json').write_text('')"`);
+    allow(`node -e "require('fs').writeFileSync('automations-archive.json','')"`);
+    allow(`node -e "require('fs').writeFileSync('./automations.json','{}')"`);
+    allow(`python3 -c "open('sub/dir/automations.json','w')"`);
+    allow(`python3 -c "open('../other/automations.json','w')"`);
+    allow(`python3 -c "open('${P}/automations.json','w')"`);
+    allow(`perl -e 'unlink "automations.json"'`);
+    allow(`python3 -c "open('automations.json','w')"`, W);
+    allow(`python3 -c "open('automations.json','w')"`, OTHER);
+  });
+
+  test("拒：出现 chdir / 环境变量 / 取 cwd / 路径拼接 / 起别的进程，裸名就不能按当前目录解析", () => {
+    block(`python3 -c "import os; os.chdir('/tmp'); open('automations.json','w')"`);
+    block(`node -e "process.chdir('/tmp'); require('fs').writeFileSync('automations.json','')"`);
+    block(`python3 -c "import os; open(os.environ['X'] + '/automations.json','w')"`);
+    block(`node -e "require('fs').writeFileSync(process.env.X + '/automations.json','')"`);
+    block(`python3 -c "import os; open(os.path.join(os.getcwd(), 'automations.json'), 'w')"`);
+    block(`python3 -c "import subprocess; subprocess.run(['rm','automations.json'])"`);
+    block(`python3 -c "import os; os.system('rm automations.json')"`);
+    block(`python3 -c "open(f'{d}/automations.json','w')".format(d='x')`);
+    block(`python3 -c "open('automations.json'.format(), 'w')"`);
+  });
+
+  test("拒：数据目录的字样、当前目录就在数据目录里、解析后落在数据目录上级里的记录名", () => {
+    block(`python3 -c "open('${D}/automations.json','w')"`);
+    block(`python3 -c "open('${D}/settings.json','w')"`);
+    block(`python3 -c "open('automations.json','w')"`, D);
+    block(`python3 -c "open('../../automations.json','w')"`, W);
+    block(`node -e "require('fs').writeFileSync('automations.json','')"`, D);
+  });
+});
+
+describe("CDPATH：设了 CDPATH 的相对 cd 不猜，按解析不出来拒", () => {
+  const withEnv = (command: string, env: Record<string, string>): string | null =>
+    protectedPathRefusal("bash", { command }, PATHS, P, FILES, { home: HOME, env: { ...GUARD.env, ...env } });
+
+  test("命令里自己设 CDPATH（行内赋值 / export）：相对 cd 拒", () => {
+    assert.notEqual(refusal(`CDPATH=/tmp/evil cd sub && rm automations.json`, P), null);
+    assert.notEqual(refusal(`export CDPATH=/tmp/evil; cd sub && ls`, P), null);
+    assert.notEqual(refusal(`CDPATH="${PARENT}" cd orbita-dev-re`, P), null);
+  });
+
+  test("环境里本来就有 CDPATH：相对 cd 拒；绝对路径与 ./ ../ 开头的不受 CDPATH 影响，照放", () => {
+    assert.notEqual(withEnv(`cd sub`, { CDPATH: "/tmp:/x" }), null);
+    assert.equal(withEnv(`cd /tmp && ls`, { CDPATH: "/tmp:/x" }), null);
+    assert.equal(withEnv(`cd ./sub && ls`, { CDPATH: "/tmp:/x" }), null);
+    assert.equal(withEnv(`cd ../sibling && ls`, { CDPATH: "/tmp:/x" }), null);
+    assert.equal(withEnv(`cd sub`, {}), null, "没设 CDPATH 就是普通的相对 cd");
+    assert.equal(refusal(`cd sub && ls`, P), null);
+  });
+});
