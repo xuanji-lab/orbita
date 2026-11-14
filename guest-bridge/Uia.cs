@@ -113,6 +113,12 @@ internal sealed class UiaSnapshot
     public Dictionary<string, UiaItemInfo> ById = new Dictionary<string, UiaItemInfo>();
     public bool Truncated;
     public int PasswordFields;
+    /**
+     * 整棵可动作控件树的指纹（stable id + 名字 + 类型 + 模式 + enabled/offscreen + 矩形）。
+     * **只用来判断「这一次与上一代是不是同一张清单」**：相同就复用上一代的代次，
+     * 让刚发出去的 ref 不作废。见 FingerprintOf 的注释。
+     */
+    public string Fingerprint = "";
     public string Title = "";
     public string ClassName = "";
 }
@@ -188,6 +194,14 @@ internal sealed class UiaHistoryStore
             UiaSnapshot previous = history.Snapshots[history.Snapshots.Count - 1];
             for (int i = 0; i < previous.Pointers.Count; i++) release(previous.Pointers[i]);
             previous.Pointers = new List<IntPtr>();
+            // 树没变时沿用同一代：**替换**而不是追加，否则同一代会有两张快照，
+            // 而 ByGeneration 只返回第一个（那份的指针已经被释放了）。
+            if (previous.Generation == snapshot.Generation)
+            {
+                history.Snapshots[history.Snapshots.Count - 1] = snapshot;
+                history.Latest = snapshot.Generation;
+                return;
+            }
         }
         history.Latest = snapshot.Generation;
         history.Snapshots.Add(snapshot);
@@ -529,6 +543,43 @@ internal static class Uia
         count++;
         seen[id] = count;
         return DisambiguateStableId(id, count);
+    }
+
+    /**
+     * 整棵可动作控件树的指纹（纯函数：selftest 直接验）。
+     *
+     * **为什么需要它**：代次的本意是「控件树变了，旧 ref 作废」。原来每查一次就 +1，
+     * 于是「查询」被当成「变化」——模型 list 完拿到 g2:r1，中间为了看变化又 list 一次
+     * （变 g3），再想用 g2:r1 就被拒。可它手里的引用**一秒前才拿到**，树根本没变。
+     *
+     * 指纹覆盖：stable id、名字、类型、支持模式、enabled/offscreen、矩形。
+     * 位置变了也算变化（模型据此知道控件挪了）；只改颜色之类不算（我们看不到）。
+     */
+    internal static string FingerprintOf(UiaSnapshot snapshot)
+    {
+        StringBuilder seed = new StringBuilder();
+        for (int i = 0; i < snapshot.Items.Count; i++)
+        {
+            UiaItemInfo it = snapshot.Items[i];
+            seed.Append(it.StableId).Append('')
+                .Append(it.Name).Append('')
+                .Append(it.ControlType).Append('')
+                // AutomationId 必须进指纹：CompareItems 会比对它，指纹漏了就会出现
+                // 「代次判为没变（复用）、diff 却说它变了」的自相矛盾（2026-11-14 真机撞到）
+                .Append(it.AutomationId).Append('')
+                .Append(it.Enabled ? '1' : '0').Append(it.Offscreen ? '1' : '0').Append('')
+                .Append(it.X).Append(',').Append(it.Y).Append(',')
+                .Append(it.W).Append(',').Append(it.H).Append('');
+            for (int p = 0; p < it.Patterns.Count; p++) seed.Append(it.Patterns[p]).Append(',');
+            seed.Append('');
+        }
+        uint hash = 2166136261;
+        for (int i = 0; i < seed.Length; i++)
+        {
+            hash = hash ^ seed[i];
+            hash = hash * 16777619;
+        }
+        return "f:" + hash.ToString("x8", CultureInfo.InvariantCulture) + ":" + snapshot.Items.Count;
     }
 
     /** 两个同名列表是不是同一组模式（顺序无关：UIA 的模式集合本身就是无序的） */
@@ -1466,7 +1517,11 @@ internal static class Uia
         // 写到新对象里就是跨线程 Release 别人的指针，正是看门狗要避开的那个坑。
         UiaHistoryStore store = _store;
         long key = hwnd.ToInt64();
-        int generation = Generations.Next(key);
+        // 代次要等**收集完**才定：树没变就复用上一代（见 FingerprintOf）。
+        // 原来在这里无条件 Generations.Next(key)，于是「查询」被当成「变化」——
+        // 模型 `list → list(since) → act(第一次的 ref)` 这条最自然的顺序必然失败
+        // （2026-11-14 真机撞到：刚拿到的 g2:r1，下一次 list 之后就成了过期引用）。
+        int generation = 0;
 
         IntPtr automation = EnsureAutomation();
         IntPtr window = ElementFromHandle(automation, hwnd);
@@ -1510,8 +1565,7 @@ internal static class Uia
                         if (info != null)
                         {
                             info.Ref = RefOf(snapshot.Items.Count);
-                            info.Generation = generation;
-                            info.RefToken = RefToken(generation, info.Ref);
+                            // Generation / RefToken 要等这一代定下来再填（见下面的指纹判定）
                             snapshot.Items.Add(info);
                             snapshot.ById[info.StableId] = info;
                             retained.Add(element);
@@ -1541,6 +1595,27 @@ internal static class Uia
             snapshot.Truncated = truncated;
             snapshot.PasswordFields = passwordRects.Count;
             snapshot.Pointers = retained;
+
+            // **代次在这里定**：树没变就复用上一代。
+            // 这样连续 list（哪怕中间插一次 diff 查询）不会把刚发出去的 ref 作废；
+            // 真的变了才 +1，旧 ref 才失效——代次的本意就是「树变了」。
+            string fingerprint = FingerprintOf(snapshot);
+            UiaSnapshot prior = store.Latest(key);
+            if (prior != null && prior.Fingerprint.Length > 0 && prior.Fingerprint == fingerprint)
+            {
+                generation = prior.Generation;
+            }
+            else
+            {
+                generation = Generations.Next(key);
+            }
+            snapshot.Generation = generation;
+            snapshot.Fingerprint = fingerprint;
+            for (int i = 0; i < snapshot.Items.Count; i++)
+            {
+                snapshot.Items[i].Generation = generation;
+                snapshot.Items[i].RefToken = RefToken(generation, snapshot.Items[i].Ref);
+            }
 
             // 清单跑完了：把这次看到的密码框位置记下（截图命令靠它遮罩）。
             // 空列表也记 —— 「看过，这个窗口没有密码框」与「从没看过」是两件事：
@@ -2197,7 +2272,53 @@ internal static class Uia
         UiaGenerations generations = new UiaGenerations();
         long hwndKey = 900001;
         CheckTrue(failures, ref cases, "代次从 1 起", generations.Next(hwndKey) == 1);
-        CheckTrue(failures, ref cases, "代次逐个递增", generations.Next(hwndKey) == 2 && generations.Next(hwndKey) == 3);
+        CheckTrue(failures, ref cases, "签发时逐个递增（复用由收集层按指纹决定，不走这里）",
+            generations.Next(hwndKey) == 2 && generations.Next(hwndKey) == 3);
+
+        // 指纹：树没变 → 同一串；改任何一处 → 变。收集层据此**复用代次**，
+        // 让「list 完刚拿到的 ref」不会因为又查了一次就作废（2026-11-14 真机撞到）。
+        UiaSnapshot fpSnap1 = new UiaSnapshot();
+        UiaItemInfo fpItem1 = new UiaItemInfo();
+        fpItem1.StableId = "rt:1";
+        fpItem1.Name = "确定";
+        fpItem1.ControlType = "button";
+        fpItem1.Patterns.Add("invoke");
+        fpItem1.Enabled = true;
+        fpItem1.X = 10;
+        fpItem1.Y = 20;
+        fpItem1.W = 80;
+        fpItem1.H = 30;
+        fpSnap1.Items.Add(fpItem1);
+        string fpBase = FingerprintOf(fpSnap1);
+        UiaSnapshot fpSnap2 = new UiaSnapshot();
+        UiaItemInfo fpItem2 = new UiaItemInfo();
+        fpItem2.StableId = "rt:1";
+        fpItem2.Name = "确定";
+        fpItem2.ControlType = "button";
+        fpItem2.Patterns.Add("invoke");
+        fpItem2.Enabled = true;
+        fpItem2.X = 10;
+        fpItem2.Y = 20;
+        fpItem2.W = 80;
+        fpItem2.H = 30;
+        fpSnap2.Items.Add(fpItem2);
+        CheckTrue(failures, ref cases, "指纹：同一棵树（新对象、同属性）→ 同一串", fpBase == FingerprintOf(fpSnap2));
+        CheckTrue(failures, ref cases, "指纹带 f: 前缀并附条数", fpBase.StartsWith("f:", StringComparison.Ordinal) && fpBase.EndsWith(":1", StringComparison.Ordinal));
+        fpItem2.Enabled = false;
+        CheckTrue(failures, ref cases, "指纹：enabled 变了 → 变了", fpBase != FingerprintOf(fpSnap2));
+        fpItem2.Enabled = true;
+        fpItem2.X = 11;
+        CheckTrue(failures, ref cases, "指纹：位置挪了 → 变了（控件挪动也是变化）", fpBase != FingerprintOf(fpSnap2));
+        fpItem2.X = 10;
+        fpItem2.Patterns.Add("value");
+        CheckTrue(failures, ref cases, "指纹：支持的模式变了 → 变了", fpBase != FingerprintOf(fpSnap2));
+        fpItem2.Patterns.RemoveAt(1);
+        UiaItemInfo itemC = new UiaItemInfo();
+        itemC.StableId = "rt:2";
+        itemC.Name = "取消";
+        itemC.ControlType = "button";
+        fpSnap2.Items.Add(itemC);
+        CheckTrue(failures, ref cases, "指纹：多了一个控件 → 变了（条数也进指纹）", fpBase != FingerprintOf(fpSnap2));
 
         UiaHistoryStore store = new UiaHistoryStore();
         List<IntPtr> releasedPointers = new List<IntPtr>();

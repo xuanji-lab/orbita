@@ -88,8 +88,11 @@ type BridgeReq = {
   hwnd?: number;
   title?: string;
   maxItems?: number;
-  ref?: number;
+  /** 2026-11-14：ref 从位置序号改成带代次的不透明 token（`g12:r3`），见 shared/computer-use.ts */
+  ref?: string;
   name?: string;
+  /** uia-list 的 diff 参数：只回与这一代相比的变化（缺省 = 全量） */
+  since?: number;
   action?: string;
   value?: string;
   timeoutMs?: number;
