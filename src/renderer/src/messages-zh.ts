@@ -2898,6 +2898,8 @@ export const zh: Messages = {
       `原文件冻结了${rows > 0 ? `前 ${rows} 行` : ""}${rows > 0 && cols > 0 ? "、" : ""}${cols > 0 ? `前 ${cols} 列` : ""}；这里的预览可以自由滚动`,
     xlsxEmpty: "这张表是空的",
     xlsxPassword: "这个工作簿有密码保护，或者不是真正的 .xlsx 文件。",
+    xlsxNormalized:
+      "该文件由 Office 工具重写过，数据视图按兼容模式读取（文件本身未改动）",
     xlsxRenderStillViewable:
       "数据网格解析不了这个工作簿（是解析器的问题，不是文件没内容）。切到上面的「渲染」仍可查看。",
     xlsxBroken: "这个工作簿读不开——可能已经损坏。",

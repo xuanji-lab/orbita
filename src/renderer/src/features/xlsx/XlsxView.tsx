@@ -155,7 +155,7 @@ export function XlsxView(props: {
       ) : (
         <>
           <XlsxGrid sheet={data.sheet} />
-          <XlsxFooter sheet={data.sheet} />
+          <XlsxFooter sheet={data.sheet} normalized={data.normalized === true} />
         </>
       )}
       {office !== null && !canRender && <OfficeUnavailableNotice status={office} fallback="grid" />}
@@ -349,7 +349,7 @@ function GridCell(props: { slot: XlsxGridSlot; firstRenderedRow: number }) {
  * 两件事都是「与你看到的原文件不一样」的地方，必须显式说出来——不说，用户会以为
  * 预览少读了数据 / 滚动不对劲。
  */
-function XlsxFooter(props: { sheet: XlsxSheet }) {
+function XlsxFooter(props: { sheet: XlsxSheet; /** 兼容模式读取（去前缀兜底成功） */ normalized: boolean }) {
   const t = useT();
   const shownRows = props.sheet.rows.length;
   const shownCols = props.sheet.rows[0]?.length ?? 0;
@@ -359,9 +359,15 @@ function XlsxFooter(props: { sheet: XlsxSheet }) {
   const frozenCols = Math.min(frozen.cols, shownCols);
   const hasFrozen = frozenRows > 0 || frozenCols > 0;
   // 没有要说的就不画这条：空 footer 会白占一行高（评审在 #341 指出的 17px）
-  if (!truncated && !hasFrozen) return null;
+  if (!truncated && !hasFrozen && !props.normalized) return null;
   return (
     <div className="xlsx-footer">
+      {props.normalized && (
+        <span className="xlsx-notice">
+          <Icon name="info" size={11} />
+          {t.files.xlsxNormalized}
+        </span>
+      )}
       {truncated && (
         <span className="xlsx-notice">
           {t.files.xlsxTruncated(shownRows, shownCols, props.sheet.rowCount, props.sheet.colCount)}

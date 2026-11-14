@@ -13,9 +13,19 @@
  * 存的是 0.1234——原样显示成「0.1234」是把 12.34% 说错了一个数量级。千分位 / 货币
  * 这类只是「不够好看」，保持原值不猜。日期由 ExcelJS 还原成 Date（带日期格式的格），
  * 这里按本地时区排成 `YYYY-MM-DD [HH:mm]`。
+ *
+ * **带前缀的 OOXML 兜底**（2026-11-14 验收 B7）：OfficeCLI 重写工作簿时把
+ * spreadsheetml 的元素写成 `<x:workbook>` / `<x:sheet>`（workbook / styles / worksheets
+ * 都是，sharedStrings 不是），ExcelJS 4.4.0 不认带前缀的元素，报
+ * `Cannot set properties of undefined (setting 'sheetNo')`。只要文件被 `edit_office`
+ * 写过一次，数据网格就永久打不开——我们自己写的文件自己读不了。这里在**解析失败时**
+ * 用 JSZip 在内存里做一份归一化副本（只去掉 `xl/` 下 XML 的元素名 / 属性名上的 `x:`
+ * 前缀，`r:` / `x14ac:` / `xmlns:x` 一律不动），重试一次；**绝不改写用户原文件**。
+ * 正常文件走原路径，零额外开销；兜底成功的结果带 `normalized: true`，界面标一句说明。
  */
-import { open, stat } from "node:fs/promises";
+import { open, readFile, stat } from "node:fs/promises";
 import ExcelJS from "exceljs";
+import JSZip from "jszip";
 import {
   XLSX_MAX_BYTES,
   XLSX_PREVIEW_COLS,
@@ -70,6 +80,79 @@ async function startsWith(path: string, magic: readonly number[]): Promise<boole
     await handle.close();
   }
   return magic.every((byte, index) => buffer[index] === byte);
+}
+
+/** 带前缀的工作簿特征：`<x:workbook` / `<x:sheet` 这类元素（只看元素名，不看属性值） */
+const PREFIXED_ELEMENT = /<x:[A-Za-z]/;
+
+/**
+ * 去掉 XML 里 `x:` 前缀（元素名与属性名），其余前缀与属性值一律不动。
+ *
+ * 逐标签、跳过引号内的内容地扫：`xmlns:x="…"` 的名字是 `xmlns:x`（不以 `x` 开头，不匹配），
+ * `r:id` / `x14ac:dyDescent` / `mc:Ignorable` 也不匹配；属性值里恰好出现 ` x:…` 的
+ * 极少数情况（例如自定义文本）不会被误改。导出给测试钉住。
+ */
+export function stripXPrefix(xml: string): string {
+  return xml.replace(/<[^>]*>/g, (tag) => {
+    let out = "";
+    let quote: string | null = null;
+    for (let index = 0; index < tag.length; index++) {
+      const char = tag[index] as string;
+      if (quote !== null) {
+        out += char;
+        if (char === quote) quote = null;
+        continue;
+      }
+      if (char === '"' || char === "'") {
+        quote = char;
+        out += char;
+        continue;
+      }
+      const boundary = index === 0 || /[<\s/]/.test(tag[index - 1] as string);
+      if (boundary && char === "x" && tag[index + 1] === ":") {
+        index += 1; // 吞掉冒号
+        continue;
+      }
+      out += char;
+    }
+    return out;
+  });
+}
+
+/**
+ * 解析失败后才走的兜底：把带 `x:` 前缀的 OOXML 在内存里归一化。
+ * 返回 null = 不像「前缀问题」（没有可归一化的部分 / 不是 zip），调用方原样报错。
+ */
+export async function normalizePrefixedWorkbook(path: string): Promise<Buffer | null> {
+  let buffer: Buffer;
+  try {
+    buffer = await readFile(path);
+  } catch {
+    return null;
+  }
+  let zip: JSZip;
+  try {
+    zip = await JSZip.loadAsync(buffer);
+  } catch {
+    return null; // 坏 zip：不是前缀问题，原错误更有用
+  }
+  let touched = false;
+  for (const name of Object.keys(zip.files)) {
+    // 只动 xl 下的 XML（workbook / styles / worksheets）；theme 是 drawingml 的 a: 前缀，不碰
+    if (!/^xl\/.*\.xml$/.test(name)) continue;
+    const entry = zip.file(name);
+    if (entry === null) continue;
+    const xml = await entry.async("string");
+    if (!PREFIXED_ELEMENT.test(xml)) continue;
+    zip.file(name, stripXPrefix(xml));
+    touched = true;
+  }
+  if (!touched) return null;
+  try {
+    return await zip.generateAsync({ type: "nodebuffer" });
+  } catch {
+    return null;
+  }
 }
 
 /** 百分比格式里小数点后的位数；不是百分比格式回 null */
@@ -255,11 +338,29 @@ export async function readXlsxPreview(path: string, options: XlsxReadOptions = {
     return { kind: "unreadable", reason: "corrupt", detail: "Not a zip container — not an .xlsx file", size, modifiedAt };
   }
 
-  const workbook = new ExcelJS.Workbook();
+  let workbook = new ExcelJS.Workbook();
+  let normalized = false;
   try {
     await workbook.xlsx.readFile(path);
   } catch (cause) {
-    return { kind: "unreadable", reason: "corrupt", detail: failMessage(cause), size, modifiedAt };
+    // 前缀兜底：只在失败路径发生；归一化副本解析不了就仍报**原始**错误
+    const fixed = await normalizePrefixedWorkbook(path);
+    const retry = fixed === null ? null : new ExcelJS.Workbook();
+    if (fixed !== null && retry !== null) {
+      try {
+        // ExcelJS 的 d.ts 自带一个 `interface Buffer extends ArrayBuffer {}`（假的 Buffer），
+        // 与 node 的 Buffer 结构不兼容：给一份真 ArrayBuffer（兜底路径才走，多一次拷贝无妨）
+        const bytes = new Uint8Array(fixed.byteLength);
+        bytes.set(fixed);
+        await retry.xlsx.load(bytes.buffer);
+        workbook = retry;
+        normalized = true;
+      } catch {
+        return { kind: "unreadable", reason: "corrupt", detail: failMessage(cause), size, modifiedAt };
+      }
+    } else {
+      return { kind: "unreadable", reason: "corrupt", detail: failMessage(cause), size, modifiedAt };
+    }
   }
 
   // 隐藏表（hidden / veryHidden）不上标签、不读数据：用户在 Excel 里把一张表藏起来，
@@ -286,6 +387,7 @@ export async function readXlsxPreview(path: string, options: XlsxReadOptions = {
   const target = worksheets[active] ?? first;
   return {
     kind: "workbook",
+    ...(normalized ? { normalized: true as const } : {}),
     sheets: worksheets.map((worksheet) => ({ name: worksheet.name })),
     sheet: buildSheet(target, maxRows, maxCols),
     active,
