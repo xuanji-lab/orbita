@@ -147,6 +147,11 @@ export interface SessionEntry {
    */
   turnError: string | null;
   /**
+   * 这条失败是「被打断、库里还留着上下文」（新内核：kernel 进程崩溃时它在跑）：标注旁给「继续」。
+   * 与 turnError 同生同灭；旧内核恒 false。纯 ephemeral。
+   */
+  turnContinuable: boolean;
+  /**
    * 最近一次用量快照。null = 还没有——纯浏览的旧会话不起 runtime session，
    * 不落盘也不算假数，等用户说话唤醒后由 runtime 的第一次推送填上。
    */
@@ -240,6 +245,7 @@ export const EMPTY_ENTRY: SessionEntry = {
   queued: [],
   retry: null,
   turnError: null,
+  turnContinuable: false,
   stats: null,
   thinking: null,
   approvals: [],
@@ -281,7 +287,7 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
       retry: null,
       // 回合失败标注只随「新一轮开跑」消失：非 idle 的 phase 事件清它；
       // 落定的 idle **不清**——failed(turn) 之后紧随的 agent_settled 正是 idle
-      ...(event.phase === "idle" ? null : { turnError: null }),
+      ...(event.phase === "idle" ? null : { turnError: null, turnContinuable: false }),
       // 轮结束就不可能还有挂起的审批：停止 / 抢跑时 runtime 已按拒绝把它们结清
       // （审批不听 abort，只能手动结）。卡片留着的话，用户会去回答一个已经不存在的请求。
       // 乐观回显同理：真回显没来轮就落定 = 它失败了，不留鬼影
@@ -384,6 +390,7 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
         phase: "idle",
         retry: null,
         turnError: event.message,
+        turnContinuable: event.continuable === true,
       }));
     }
     return setEntryPhase(states, event.sessionId, "idle");
@@ -403,7 +410,7 @@ export function setEntryPhase(
     ...entry,
     phase,
     retry: null,
-    ...(phase === "idle" ? { pendingEcho: null } : { turnError: null }),
+    ...(phase === "idle" ? { pendingEcho: null } : { turnError: null, turnContinuable: false }),
   }));
 }
 
@@ -528,8 +535,9 @@ export function seedFromDisk(
     // 排队是 ephemeral：盘上没有，也不该有（会话断了一次排队就物理消失了）
     queued: [],
     retry: null,
-    // 盘上没有失败标注（纯 ephemeral）：种盘即清
+    // 盘上没有失败标注（纯 ephemeral）：种盘即清（「上次被中断」另从 meta.durable.running 读）
     turnError: null,
+    turnContinuable: false,
     // **盘上有用量**（A1-Q1：`SessionMeta.stats` 存的是上一次跑完时的快照）。
     // 种盘就把它放回来——否则关掉应用再打开，底栏是空的，而账本明明还在。
     // 唤醒后 agent 会推真累计覆盖它（pi 的本子才是原始账本，这里只是上次看到的样子）。

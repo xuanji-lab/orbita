@@ -129,6 +129,9 @@ import { ipcErrorText } from "../../utils/ipc-error.ts";
  * 查看槽的每轮 submit 显式带上自己槽内的 model / mode / cwd。
  */
 /** 回退确认框的全部状态：计划 + 要放回输入框的那条原文（含附件）。 */
+/** 会话只能读不能续的原因（ChatSession.readOnlyReason） */
+export type ReadOnlyReason = { kind: "noBook" } | { kind: "durableMoved" } | { kind: "migrationFailed"; reason: string };
+
 export interface RevertDialogState {
   sessionId: string;
   targetMessageId: string;
@@ -312,6 +315,12 @@ export interface ChatSession {
    * 界面要如实说出来，不能让输入框看起来能打字（guideline §四写明的代价）。
    */
   readOnly: boolean;
+  /** 只能读的原因（readOnly 为真时非 null）：界面按它说清楚为什么 */
+  readOnlyReason: ReadOnlyReason | null;
+  /** 新内核：这一轮是被打断的、可以接着跑（标注旁给「继续」） */
+  turnContinuable: boolean;
+  /** 接着跑被打断的那一轮（不加新消息） */
+  continueTurn: () => void;
   openSession: (id: string) => Promise<void>;
   /** 改名。空名字会退回从第一条用户消息推导——侧栏不留看不见的行 */
   renameSession: (id: string, title: string) => void;
@@ -477,6 +486,10 @@ interface ViewHandle {
  * 引擎——与「正在看哪条」无关的共享真源。全应用一份，主槽与抽屉槽都从它读。
  */
 export interface SessionEngine {
+  /** 这次启动的对话主循环由新内核跑（开关 ORBITA_DURABLE_KERNEL；读不到当关） */
+  readonly kernelDurable: boolean;
+  /** 新内核：接着跑上次被中断的那一轮 */
+  readonly continueTurn: (id: string) => void;
   /**
    * pi 内建目录：模型项的 ctx 徽标、思考档支持集都要从这里查官方参数——
    * 一个 app 一次 fetch（此前 ComposerBar 与设置面各自 `useBuiltinCatalog()`，
@@ -905,6 +918,35 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
 
   useEffect(refreshWorkspaces, [refreshWorkspaces]);
 
+  /**
+   * 这次启动的对话内核（开关 ORBITA_DURABLE_KERNEL）。只用来判「住在新内核里的会话能不能在这里续」：
+   * 关着开关时它只能看（主进程也会拒绝，界面先说清楚，别让输入框看起来能打字）。读不到当关（保守）。
+   */
+  const [kernelDurable, setKernelDurable] = useState(false);
+  useEffect(() => {
+    void api.agent
+      .kernelInfo()
+      .then((info) => setKernelDurable(info.durable))
+      .catch(() => setKernelDurable(false));
+  }, []);
+
+  /**
+   * 新内核：接着跑上次被中断的那一轮（kernel 进程崩溃 / 应用被杀时它在跑）。不加新消息；
+   * 开工上下文与排队投递同一份（buildTurn），乐观置 turn 同 send 的规矩。
+   */
+  const continueTurn = useCallback(
+    (id: string): void => {
+      const turn = buildTurn(id);
+      if (turn === null) return;
+      const revert = beginOptimisticTurn(id);
+      api.agent.continue({ sessionId: id, ...turn }).catch((cause: unknown) => {
+        setError(ipcErrorText(cause));
+        revert();
+      });
+    },
+    [buildTurn, beginOptimisticTurn],
+  );
+
   useEffect(() => {
     void api.workspace
       .default()
@@ -1302,6 +1344,8 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
 
   return {
     catalog,
+    kernelDurable,
+    continueTurn,
     messagesRef,
     pickedThinkingRef,
     states,
@@ -3389,6 +3433,31 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     setScanNotice(engine.messagesRef.current.session.checklistDiscarded);
   }, [scanResult, engine]);
 
+  /**
+   * 只能读不能续的原因：
+   * - noBook：没有 pi 本子的旧会话、还没开新的（续会话靠把本子还给 pi）；
+   * - durableMoved：这条会话后来在新内核里继续过，这次启动开关关着——旧内核续写会让两边分叉；
+   * - migrationFailed：迁到新内核时失败（原件没动，原因在 meta.durable.failed）。
+   */
+  const liveMeta = useMemo(() => {
+    const id = sessionId ?? opened?.id ?? null;
+    return id === null ? null : (engine.sessions.find((meta) => meta.id === id) ?? null);
+  }, [engine.sessions, sessionId, opened]);
+  const readOnlyReason: ReadOnlyReason | null =
+    opened !== null && opened.piSessionFile === null && sessionId === null
+      ? { kind: "noBook" }
+      : liveMeta?.durable?.failed !== undefined
+        ? { kind: "migrationFailed", reason: liveMeta.durable.failed }
+        : liveMeta?.durable !== undefined && !engine.kernelDurable
+          ? { kind: "durableMoved" }
+          : null;
+
+  // 「继续」交给记忆化的转录列：引用要稳
+  const continueHere = useCallback((): void => {
+    const id = sessionId ?? opened?.id ?? null;
+    if (id !== null) engine.continueTurn(id);
+  }, [engine, sessionId, opened]);
+
   // selectTranscript 每次调用都造新数组（pi 的实现如此）——在这里按 entry 引用
   // 稳定化，否则 ChatView 的 memo 转录列每次渲染都被新引用击穿，隔离形同虚设
   const transcript = useMemo(() => selectTranscript(entry.transcript), [entry.transcript]);
@@ -3466,7 +3535,14 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     loadingHistory,
     opened,
     // 打开的是一条没有 pi 本子的旧会话，且还没开新的——只能读
-    readOnly: opened !== null && opened.piSessionFile === null && sessionId === null,
+    readOnly: readOnlyReason !== null,
+    readOnlyReason,
+    // 被打断、可继续：这一次运行里 kernel 崩溃时它在跑（槽里的标注），或上次应用退出 / 被杀时它在跑（meta 上的 running）
+    turnContinuable:
+      entry.phase === "idle" &&
+      readOnlyReason === null &&
+      (entry.turnContinuable || (engine.kernelDurable && entry.turnError === null && liveMeta?.durable?.running === true)),
+    continueTurn: continueHere,
     openSession,
     renameSession: engine.renameSession,
     pinSession: engine.pinSession,

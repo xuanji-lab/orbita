@@ -954,6 +954,19 @@ describe("turnError —— 回合失败标注的进出槽", () => {
     assert.equal(entry?.turnError, "重试 3 次后仍失败：fetch failed");
   });
 
+  test("新内核：被打断的轮（continuable）进槽带「可继续」，idle 不清；新一轮开跑与标注一起清", () => {
+    let states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "turn" });
+    states = applyAgentEvent(states, { type: "failed", sessionId: "A", message: "kernel runtime exited with code 137", turn: true, continuable: true });
+    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "idle" });
+    assert.equal(states.get("A")?.turnContinuable, true);
+    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "turn" });
+    assert.equal(states.get("A")?.turnContinuable, false);
+    assert.equal(states.get("A")?.turnError, null);
+    // 普通的回合失败不带「可继续」
+    states = applyAgentEvent(states, { type: "failed", sessionId: "A", message: "fetch failed", turn: true });
+    assert.equal(states.get("A")?.turnContinuable, false);
+  });
+
   test("failed 不带 turn：槽里不产生标注（操作级失败走全局红字），归位照旧", () => {
     let states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "turn" });
     states = applyAgentEvent(states, { type: "failed", sessionId: "A", message: "两本账对不上" });

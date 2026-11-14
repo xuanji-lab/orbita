@@ -1428,8 +1428,14 @@ function ChatViewBody(props: {
         只能读不能续：pi 没有这条会话的本子。**说清楚，别让输入框看起来能打字**
         （guideline §四把这条代价写明了）。
       */}
-      {session.readOnly && (
-        <Notice icon="lock">{t.chat.readOnlyTask}</Notice>
+      {session.readOnlyReason !== null && (
+        <Notice icon="lock">
+          {session.readOnlyReason.kind === "noBook"
+            ? t.chat.readOnlyTask
+            : session.readOnlyReason.kind === "durableMoved"
+              ? t.chat.readOnlyDurableMoved
+              : t.chat.readOnlyMigrationFailed(session.readOnlyReason.reason)}
+        </Notice>
       )}
     </>
   );
@@ -1756,6 +1762,8 @@ function ChatViewBody(props: {
           phase={session.phase}
           retry={session.retry}
           turnError={session.turnError}
+          turnContinuable={session.turnContinuable}
+          onContinue={session.continueTurn}
           loadingHistory={session.loadingHistory}
           loadingOlder={session.loadingOlder}
           onBranch={session.branchFrom}
@@ -1810,6 +1818,10 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   phase: "idle" | "turn" | "compaction";
   retry: RetryStatus | null;
   turnError: string | null;
+  /** 新内核：这一轮被打断了、可以接着跑（标注换成「被打断」并带「继续」） */
+  turnContinuable: boolean;
+  /** 「继续」：引用稳定（memo 列） */
+  onContinue: () => void;
   loadingHistory: boolean;
   /** 更早的一页在途（源侧分页触顶）：列首出一行次级灰提示 */
   loadingOlder: boolean;
@@ -2540,7 +2552,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
           (props.intentRun.status === "done" && props.intentRun.pendingAsks > 0)) && (
         <IntentRecallRunCard card={props.intentRun} onCancel={props.onAbort} />
       )}
-      {props.turnError !== null && (
+      {(props.turnError !== null || props.turnContinuable) && (
         /*
          * 回合失败标注（重试耗尽）：跟着失败的归属走——它追在谁后面，就贴着谁的
          * 对齐侧（用户消息居右、agent 消息居左，UserBubble 同款）。常见情形是模型
@@ -2554,7 +2566,12 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
             justifyContent: transcript.at(-1)?.role === "user" ? "flex-end" : "flex-start",
           }}
         >
-          <Notice tone="bad">{props.turnError}</Notice>
+          <Notice
+            tone="bad"
+            exit={props.turnContinuable ? { label: t.chat.continueTurn, onClick: props.onContinue } : undefined}
+          >
+            {props.turnContinuable ? t.chat.interruptedTurn : props.turnError}
+          </Notice>
         </div>
       )}
       {props.phase === "turn" &&
