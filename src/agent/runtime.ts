@@ -125,6 +125,7 @@ import { intentContextPath, writeIntentContextFiles } from "./intent-context-fil
 import type { IntentRecallRecord } from "../shared/session.ts";
 import {
   COMPACTION_DEFAULT,
+  effectiveBashLifetimeMinutes,
 } from "../shared/settings.ts";
 import {
   compactionBoundaryTimestamp,
@@ -1470,6 +1471,9 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     // `bash` 不用动——名字没变，registry 用它选中我们这份。
     createObservedBashTool(command.cwd, services.settingsManager, {
       owner: command.sessionId,
+      // 默认寿命（模型没显式写 timeout 时用）：主进程每轮按设置装配，缺席回 4 小时。
+      // 显式声明 timeout 的命令不用它——那个值就是那条命令自己的上界（见 bash-observe.ts）
+      lifetimeMs: effectiveBashLifetimeMinutes(command.bashLifetimeMinutes) * 60_000,
       // 后台命令结束时把结果写回对话（必要时自动起一轮）。回调可能远晚于这一轮
       // 结束才触发，所以闭包里只留**纯数据**（这份 submit 命令），不留 pi 对象
       onSessionEnd: (result) => {

@@ -34,7 +34,10 @@ export const TAIL_MAX_LINES = 2000;
 export const RESULT_TAIL_LINES = 200;
 /** `bash_stop` / `bash_list` 给模型的 tail 行数：看走势，不看全文 */
 export const TOOL_TAIL_LINES = 40;
-/** 会话寿命上限：4 小时。这是兜底，不是使用方式——正常情况下命令会自己结束或被停 */
+/**
+ * 会话寿命的**最后兜底**：4 小时。线上由执行层按调用传入——模型显式声明 timeout 的用它的值，
+ * 其余用设置里的「命令最长寿命」（默认也是 4 小时）。这是兜底，不是使用方式。
+ */
 export const SESSION_LIFETIME_MS = 4 * 60 * 60 * 1000;
 /** 命令结束后会话还留多久可查：10 分钟。模型可能隔几轮才回来 bash_list 看一眼 */
 export const SESSION_RETENTION_MS = 10 * 60 * 1000;
@@ -150,6 +153,11 @@ export interface SessionSummary {
   exitCode: number | null;
   elapsedMs: number;
   idleMs: number;
+  /**
+   * 这条会话的寿命上限（秒）。显式声明 timeout 的会话是那个值，其余是设置里的
+   * 「命令最长寿命」。界面 / 结果文案靠它说「上限是多少」——不再写死 4 小时。
+   */
+  lifetimeSeconds: number;
   endedAt?: number;
   endReason?: SessionEndReason;
 }
@@ -197,6 +205,11 @@ export class BashSession {
   private readonly retentionMs: number;
   private readonly onEnd: ((result: BashSessionEnd) => void) | undefined;
   private readonly killSettleMs: number;
+  /**
+   * 寿命上限。**从 spawn 算起**（不是从签到算起）：「命令最长寿命」说的是这条命令跑了多久。
+   * 显式声明 timeout 的命令就是那个值（模型自己的上界要被尊重），否则是设置里的默认寿命。
+   */
+  readonly lifetimeMs: number;
   private toolCallIdValue: string | undefined;
   private endNotified = false;
   private endWaiters = new Set<() => void>();
@@ -217,13 +230,13 @@ export class BashSession {
     this.retentionMs = init.retentionMs;
     this.onEnd = init.onEnd;
     this.killSettleMs = init.killSettleMs;
+    this.lifetimeMs = init.lifetimeMs;
     this.onAbort = () => this.kill("abort");
     if (init.signal !== undefined && !init.signal.aborted) {
       init.signal.addEventListener("abort", this.onAbort, { once: true });
     }
     // 寿命上限是最后一道兜底：模型跑偏、会话被弃时，进程树不能永远留着。
-    // 从 spawn 算起（不是从签到算起）：「命令最长寿命」说的是这条命令跑了多久。
-    // unref：这只是兜底定时器，不该单独把 utility 进程续命
+    // 从 spawn 算起；unref：这只是兜底定时器，不该单独把 utility 进程续命
     if (init.lifetimeMs > 0 && Number.isFinite(init.lifetimeMs)) {
       const remaining = Math.max(0, init.lifetimeMs - (Date.now() - init.startedAt));
       this.lifetimeTimer = setTimeout(() => {
@@ -275,9 +288,9 @@ export class BashSession {
     this.killedValue = true;
     this.endReasonValue = reason;
     if (reason === "lifetime") {
-      // 这条会进结果输出：模型看得到「为什么没了」，而不是只有一个退出码
+      // 这条会进结果输出：模型看得到「为什么没了、上限是多少」，而不是只有一个退出码
       const notice =
-        "\n[orbita] The command reached the 4-hour session lifetime limit and was stopped. " +
+        `\n[orbita] The command reached its ${formatBashDuration(this.lifetimeMs)} session lifetime limit and was stopped. ` +
         "Its remaining work is lost; run it again in smaller steps if you still need the result.\n";
       this.append(Buffer.from(notice, "utf8"));
     }
@@ -333,6 +346,7 @@ export class BashSession {
       exitCode: this.exitCodeValue,
       elapsedMs: Math.max(0, elapsedUntil - this.startedAt),
       idleMs: Math.max(0, elapsedUntil - this.lastDataAtValue),
+      lifetimeSeconds: Math.max(0, Math.round(this.lifetimeMs / 1000)),
     };
     if (this.endedAtValue !== undefined) summary.endedAt = this.endedAtValue;
     if (this.endReasonValue !== undefined) summary.endReason = this.endReasonValue;

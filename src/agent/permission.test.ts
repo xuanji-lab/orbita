@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { createToolCallGate, type ToolCallLike } from "./permission.ts";
+import { commandTimeoutDeclared, createToolCallGate, type ToolCallLike } from "./permission.ts";
 import { COMMAND_TIMEOUT_DEFAULT_SECONDS, type PermissionAnswer, type PermissionMode } from "../shared/permission.ts";
 
 function gateFor(mode: PermissionMode, answer?: PermissionAnswer) {
@@ -139,6 +139,39 @@ describe("命令超时兜底（经 createToolCallGate）", () => {
 
   test("显式 null 不当「不填」：那是非法值，留给 pi 报错，不偷偷补成 1 小时", async () => {
     assert.equal(await clampedTimeout("bash", null), null);
+  });
+
+  test("「显式声明」标记：模型自己写的 timeout 打标记，闸门补的默认值不打", async () => {
+    const injected = event("bash", { command: "bun run test" });
+    await gateFor("skip").gate(injected);
+    assert.equal(injected.input["timeout"], COMMAND_TIMEOUT_DEFAULT_SECONDS);
+    assert.equal(commandTimeoutDeclared(injected.input), false, "补出来的 3600 不算显式声明");
+
+    const declared = event("bash", { command: "bun run test", timeout: 7200 });
+    await gateFor("skip").gate(declared);
+    assert.equal(declared.input["timeout"], 7200);
+    assert.equal(commandTimeoutDeclared(declared.input), true);
+
+    // 抬到下限的也是模型自己声明的（值变了，但仍是它的选择）
+    const raised = event("bash", { command: "bun run test", timeout: 60 });
+    await gateFor("skip").gate(raised);
+    assert.equal(raised.input["timeout"], 600);
+    assert.equal(commandTimeoutDeclared(raised.input), true);
+  });
+
+  test("标记不污染入参：非枚举，JSON 与 Object.keys 都看不到", async () => {
+    const declared = event("bash", { command: "bun run test", timeout: 7200 });
+    await gateFor("skip").gate(declared);
+    assert.deepEqual(Object.keys(declared.input).sort(), ["command", "timeout"]);
+    assert.equal(JSON.stringify(declared.input), '{"command":"bun run test","timeout":7200}');
+  });
+
+  test("用户审批卡里亲手填的 timeout 也算显式声明", async () => {
+    const { gate } = gateFor("manual", { behavior: "allow", input: { command: "bun run test", timeout: 7200 } });
+    const e = event("bash", { command: "bun run test", timeout: COMMAND_TIMEOUT_DEFAULT_SECONDS });
+    await gate(e);
+    assert.equal(e.input["timeout"], 7200);
+    assert.equal(commandTimeoutDeclared(e.input), true);
   });
 
   test("非命令工具不填 timeout 也不补", async () => {

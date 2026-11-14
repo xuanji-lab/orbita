@@ -32,9 +32,11 @@ import {
   bindBashSessionToolCall,
   killAllSessions,
   registerSession,
+  SESSION_LIFETIME_MS,
   type BashSession,
   type BashSessionEnd,
 } from "./bash-sessions.ts";
+import { commandTimeoutDeclared } from "./permission.ts";
 
 /**
  * pi 的 `ShellConfig` 没从包根导出（只导出 `getShellConfig`）。用它的返回类型代替：
@@ -216,9 +218,9 @@ function waitForChildProcess(child: ChildProcess): Promise<WaitOutcome> {
  * 签到提示。sessionId 让模型知道下一步该用哪个句柄；逗号后的两句说明怎么继续。
  * 竖线左边那一截由 shared/bash-session.ts 铸（renderer 解析同一份格式）。
  */
-function detachNotice(sessionId: string, elapsedSeconds: number): string {
+function detachNotice(sessionId: string, elapsedSeconds: number, lifetimeSeconds: number): string {
   return (
-    `\n${detachedNoticeHeader(sessionId, elapsedSeconds)} | ` +
+    `\n${detachedNoticeHeader(sessionId, elapsedSeconds, lifetimeSeconds)} | ` +
     "The command is still running; it was detached so you can keep going. " +
     "Its result is written back to the conversation automatically when it finishes — do not poll. " +
     "Use bash_list to see running sessions and bash_stop to end one.\n"
@@ -234,8 +236,16 @@ export interface BashYieldOptions {
   owner?: string;
   /** 签到点毫秒数，默认 `CHECK_IN_MS`(5 分钟)。测试压到几百毫秒 */
   checkInMs?: number;
-  /** 会话寿命上限毫秒数，默认 `SESSION_LIFETIME_MS`(4 小时) */
+  /**
+   * 默认寿命（毫秒）：模型**没有显式声明** timeout 时用（线上是设置里的「命令最长寿命」，
+   * 默认 4 小时）。显式声明的会话不用它——那个命令自己的上界要被尊重，见 exec 里的 lifetimeMs。
+   */
   lifetimeMs?: number;
+  /**
+   * 本次调用的 timeout 是不是模型自己写的（而不是权限闸门补的 3600）。
+   * 由 `createObservedBashTool` 按**单次调用**传入——工具调用会并行，不能放在共享闭包里。
+   */
+  timeoutDeclared?: boolean;
   /** 命令结束后会话保留多久可查，默认 10 分钟 */
   retentionMs?: number;
   /**
@@ -260,6 +270,14 @@ export function createObservedBashOperations(
   return {
     exec: async (command, cwd, { onData, signal, timeout, env }) => {
       const timeoutMs = resolveTimeoutMs(timeout);
+      /**
+       * 会话寿命：
+       * - 模型显式声明了 timeout → **就用它**（2h 就是 2h，不能反过来跑 4h；6h 就是 6h）；
+       * - 没声明（含闸门替它补的 3600）→ 设置里的默认寿命（线上 4 小时，`options.lifetimeMs`）。
+       * 前台超时（`timeoutMs`）在签到那一刻就让位：签到后不归这次调用管。
+       */
+      const lifetimeMs =
+        (options.timeoutDeclared === true ? timeoutMs : undefined) ?? options.lifetimeMs ?? SESSION_LIFETIME_MS;
       if (signal?.aborted) throw new Error("aborted");
 
       const shellConfig = resolveShellConfig();
@@ -378,13 +396,19 @@ export function createObservedBashOperations(
             ...(signal === undefined ? {} : { signal }),
             killTree,
             ...(options.onSessionEnd === undefined ? {} : { onEnd: options.onSessionEnd }),
-            ...(options.lifetimeMs === undefined ? {} : { lifetimeMs: options.lifetimeMs }),
+            // 按调用算好的寿命（显式声明优先），不是 options 里那份默认值
+            lifetimeMs,
             ...(options.retentionMs === undefined ? {} : { retentionMs: options.retentionMs }),
           });
           // 契约：到期时停掉本次调用的所有定时器。超时不再杀它，寿命交给会话表
           clearDeadline();
           clearCheckIn();
-          onData(Buffer.from(detachNotice(session.id, (Date.now() - startedAt) / 1000), "utf8"));
+          onData(
+            Buffer.from(
+              detachNotice(session.id, (Date.now() - startedAt) / 1000, lifetimeMs / 1000),
+              "utf8",
+            ),
+          );
           forwardToTool = false;
           detachResolve?.();
           // 后台接力：命令自己结束后把退出码记到会话上，并触发写回对话
@@ -447,21 +471,35 @@ export function createObservedBashTool(
   settings: BashToolSettings,
   options: BashYieldOptions = {},
 ): ToolDefinition {
-  const definition = createBashToolDefinition(cwd, {
-    operations: createObservedBashOperations(() => getShellConfig(settings.getShellPath()), options),
-    commandPrefix: settings.getShellCommandPrefix(),
-    shellPath: settings.getShellPath(),
-  });
+  /**
+   * 造一份定义。**每次调用现造**，只是为了把「这次 timeout 是不是模型自己写的」
+   * 带进 exec——工具调用是并行的，`options` 里的共享字段会被另一条命令串号；
+   * 而 pi 把同一个 args 对象先交给 `beforeToolCall` 再交给 `execute`，标记就在那个对象上。
+   * 造一份定义的代价只是几个对象字面量（schema 是静态的）。
+   */
+  const build = (timeoutDeclared: boolean) =>
+    createBashToolDefinition(cwd, {
+      operations: createObservedBashOperations(() => getShellConfig(settings.getShellPath()), {
+        ...options,
+        timeoutDeclared,
+      }),
+      commandPrefix: settings.getShellCommandPrefix(),
+      shellPath: settings.getShellPath(),
+    });
+  const definition = build(false);
   /*
-   * 包一层 execute 只为拿 toolCallId：执行层的 `BashOperations.exec` 拿不到它，
-   * 而结束时要写回的那条记录必须挂回**同一次工具调用**那一行（渲染层按 toolCallId 归位）。
-   * 工具返回之后再从结果尾部认会话 id（认得出来才是一次签到）。
+   * 包一层 execute 只为拿 toolCallId 与「显式声明」标记：执行层的 `BashOperations.exec`
+   * 两者都拿不到，而结束时要写回的那条记录必须挂回**同一次工具调用**那一行
+   * （渲染层按 toolCallId 归位）。工具返回之后再从结果尾部认会话 id（认得出来才是一次签到）。
    */
   const execute = definition.execute.bind(definition);
   const wrapped = {
     ...definition,
     execute: async (...args: Parameters<typeof execute>) => {
-      const result = await execute(...args);
+      const declared = commandTimeoutDeclared(args[1]);
+      // 未声明时用外层那份（省一次定义构造）；声明时必须现造，寿命才会听这次的值
+      const runner = declared ? build(true) : definition;
+      const result = await (runner === definition ? execute(...args) : runner.execute(...args));
       const text = toolResultText(result);
       // 只扫尾部 400 字符：交还提示行就在最后，而结果实测能到 479KB
       const sessionId = parseDetachedSessionId(text.length > 400 ? text.slice(-400) : text);

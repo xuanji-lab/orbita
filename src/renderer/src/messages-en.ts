@@ -1452,6 +1452,11 @@ export const en = {
     completionSoundAria: "Completion sound",
     completionSoundInfo:
       "Play a cabin-call chime when a task finishes while you are looking elsewhere · the sidebar highlight and the card still appear when it is off",
+    bashLifetime: "Longest command lifetime",
+    bashLifetimeAria: "Longest background command lifetime",
+    bashLifetimeInfo:
+      "A bash command that runs past 5 minutes detaches; this sets how long it may keep running after that (minutes, 10 minutes – 24 hours, default 4 hours) · commands whose model wrote an explicit timeout keep their own bound · new detachments only",
+    bashLifetimeOption: (minutes: number) => (minutes < 60 ? `${minutes} min` : `${minutes / 60} h`),
     data: "Data",
     dataDirectory: "Data directory",
     dataDirectoryInfo: "Sessions, workspaces, skills and mcp.json live here as plain files",
@@ -2120,6 +2125,7 @@ export const en = {
     copyMessage: "Copy message",
     // bash 活行（P2-lite）：事实槽与停止钮
     bashElapsed: (clock: string) => clock,
+    bashLimit: (clock: string) => `limit ${clock}`,
     bashTotal: (clock: string) => `${clock} total`,
     bashExit: (code: number) => `exit ${code}`,
     bashStopped: "stopped",

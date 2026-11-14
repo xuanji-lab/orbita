@@ -2117,11 +2117,29 @@ describe("bash 活行（异步送达式）", () => {
     assert.equal(showsCallSummary("edit"), true);
   });
 
-  test("活行事实：只给一个本地秒针（已 12:34），不再有「无输出」", () => {
-    const facts = bashLiveFacts({ sessionId: "b1", elapsedSeconds: 754 }, 754, zh);
-    assert.equal(facts.text, "b1 · 已 12:34");
+  test("活行事实：本地秒针 + 会话寿命上限（b1 · 已 12:34 · 上限 4:00:00）", () => {
+    const facts = bashLiveFacts({ sessionId: "b1", elapsedSeconds: 754, lifetimeSeconds: 14_400 }, 754, zh);
+    assert.equal(facts.text, "b1 · 已 12:34 · 上限 4:00:00");
     assert.equal(facts.tone, "live");
     assert.doesNotMatch(facts.text, /无输出/);
+    // 英文界面同一条事实（上限 4:00:00）
+    assert.equal(
+      bashLiveFacts({ sessionId: "b1", elapsedSeconds: 754, lifetimeSeconds: 14_400 }, 754, en).text,
+      "b1 · 12:34 · limit 4:00:00",
+    );
+  });
+
+  test("活行事实：旧记录没有 lifetime 就不显示上限这一段", () => {
+    const facts = bashLiveFacts({ sessionId: "b1", elapsedSeconds: 754 }, 754, zh);
+    assert.equal(facts.text, "b1 · 已 12:34");
+    assert.doesNotMatch(facts.text, /上限/);
+  });
+
+  test("交还提示里的 lifetime= 被认出来（界面靠它画上限）", () => {
+    const notice = detachedBashNotice(
+      toolItem("[orbita] kind=detached session=b3 elapsed=302s lifetime=7200s | …\n"),
+    );
+    assert.deepEqual(notice, { sessionId: "b3", elapsedSeconds: 302, lifetimeSeconds: 7200 });
   });
 
   test("落定事实：自然结束给退出码与总时长（非零染红）", () => {

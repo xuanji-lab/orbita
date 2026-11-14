@@ -3914,7 +3914,7 @@ function TurnRollupLine(props: {
   const { group } = props;
   // 「今天只写时分」的档位随日历日走：跨午夜翻档（today.ts 的 useToday）
   const today = useToday();
-  const stats = turnStats(group, props.toolResults, Date.now(), props.skills);
+  const stats = turnStats({ ...group, members: [...group.members, ...group.hoisted] }, props.toolResults, Date.now(), props.skills);
   // 统计段先收集再渲染：段与段之间插 · 分隔——纯 gap 挨在一起分不清边界；
   // 工具次数与它的失败数字是一个段，中间不插
   const segments: ReactNode[] = [];
@@ -3977,6 +3977,28 @@ function TurnRollupLine(props: {
           </Fragment>
         ))}
       </CollapseRow>
+      {/* 折叠外的后台命令行：在折叠行下面一直铺着（成员里已摘掉，见 TurnGroupUnit.hoisted） */}
+      {group.hoisted.map((call) => (
+        <EntryView
+          key={call.key}
+          entry={call}
+          toolResults={props.toolResults}
+          activeThinkingKey={null}
+          turnActive={false}
+          interruptedCalls={props.interruptedCalls}
+          onOpenTask={props.onOpenTask}
+          carryoverCards={props.carryoverCards}
+          channel={props.channel}
+          skills={props.skills}
+          cwd={props.cwd}
+          undoneTurnIds={props.undoneTurnIds}
+          onUndoTurn={props.onUndoTurn}
+          actionsBusy={props.actionsBusy}
+          onOpenReviewAt={props.onOpenReviewAt}
+          sessionId={props.sessionId}
+          streamingIds={EMPTY_STREAMING_IDS}
+        />
+      ))}
       {open && (
         <div style={{ display: "grid", gap: "var(--space-1)" }}>
           {group.members.map((member) => (
@@ -4607,7 +4629,7 @@ function TurnProcessLine(props: {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [unit.live]);
-  const counts = processCounts(unit.steps, props.toolResults, props.skills);
+  const counts = processCounts([...unit.steps, ...unit.hoisted], props.toolResults, props.skills);
   // 这个块里计划改了什么（每块最多一行；只打勾不提示），与现在在做的是计划里哪一步
   const planCallIds = processCalls(unit.steps)
     .filter((call) => call.toolName === PLAN_TOOL_NAME)
@@ -4628,6 +4650,15 @@ function TurnProcessLine(props: {
       {toolWord(t.chat.rollupTool, key)} {count}
     </span>
   ));
+  // 折叠外的后台命令行（还在跑的 bash 会话）：**一直在场**，不随块展开/收起消失——
+  // 秒针、上限、停止钮都在这一行上，它是人唯一的兜底入口。
+  const hoistedRows = unit.hoisted.length === 0 ? null : (
+    <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
+      {unit.hoisted.map((call) => (
+        <Fragment key={call.key}>{props.renderStep(call)}</Fragment>
+      ))}
+    </div>
+  );
   const failed = counts.failed > 0 && <span className="proc-bad">{t.chat.processFailed(counts.failed)}</span>;
   const timeLabel = unit.startedAt !== null && (
     <div className="turn-start-time" style={{ ...TIME_LABEL, paddingLeft: RAIL_X }} title={fullTimestamp(unit.startedAt, t.chat.timeWeekdays)}>
@@ -4651,62 +4682,65 @@ function TurnProcessLine(props: {
     const slow = current.kind === "think" && runMs !== null && runMs > SLOW_GAP_MS;
     const verb = (toolName: string, input: unknown) => toolWord(t.chat.rollupTool, rollupToolKey(toolName, input, props.skills), input);
     return (
-      <div className="proc-live" aria-live="off">
-        {timeLabel}
-        <div className="proc-head">
-          <Icon name="loader-circle" size={12} strokeWidth={1.8} spin />
-          <span className="proc-strong">{t.chat.processStepAt(Math.max(1, counts.steps))}</span>
-          <span className="proc-num">
-            {toolChips}
-            {failed}
-          </span>
-          {elapsed !== null && <span className="proc-time">{formatRunClock(elapsed)}</span>}
-        </div>
-        <div className={`proc-chapter${snap.chapter?.source === "think" ? " think" : ""}`}>
-          {planStepNow !== null && <span className="proc-plan-step">{planStepNow}</span>}
-          {snap.chapter !== null && <InlineMarks text={snap.chapter.title} />}
-        </div>
-        <div className="proc-trail">
-          {Array.from({ length: 3 - snap.trail.length }, (_, i) => (
-            <div key={`pad${i}`} className="proc-step" aria-hidden="true" />
-          ))}
-          {snap.trail.map((item, index) => (
-            <div key={item.call.toolCallId} className={`proc-step fade-${snap.trail.length - index}`}>
-              <span className={item.failed ? "proc-mark bad" : "proc-mark ok"}>
-                <Icon name={item.failed ? "x" : "check"} size={12} strokeWidth={2} />
-              </span>
-              <span className="proc-verb">{verb(item.call.toolName, item.call.input)}</span>
-              <code>{toolCallSummaryForRow(item.call.toolName, item.call.input, props.skills) ?? ""}</code>
-              {/* 一秒内落定的不标时长：一排 0.0s 是噪音，慢的那几步才值得看 */}
-              {item.ms !== null && item.ms >= 1000 && <span className="proc-dur">{formatToolDuration(item.ms, t)}</span>}
-            </div>
-          ))}
-          <div className="proc-step now">
-            <span className="proc-mark">
-              <Icon name="loader-circle" size={12} strokeWidth={1.8} spin />
+      <>
+        <div className="proc-live" aria-live="off">
+          {timeLabel}
+          <div className="proc-head">
+            <Icon name="loader-circle" size={12} strokeWidth={1.8} spin />
+            <span className="proc-strong">{t.chat.processStepAt(Math.max(1, counts.steps))}</span>
+            <span className="proc-num">
+              {toolChips}
+              {failed}
             </span>
-            {current.kind === "tool" ? (
-              <>
-                <span className="proc-verb">{verb(current.call.toolName, current.call.input)}</span>
-                <code>{toolCallSummaryForRow(current.call.toolName, current.call.input, props.skills) ?? ""}</code>
-              </>
-            ) : (
-              <>
-                <span className="proc-verb orbita-breath">{t.chat.processThinking}</span>
-                {/* 章节行已经是这段思考时不重复；章节是旁白时，这里补「此刻在想什么」 */}
-                <code className="proc-preview">{snap.chapter?.source === "think" ? "" : (current.preview ?? "")}</code>
-              </>
-            )}
-            {runMs !== null && <span className="proc-dur">{formatRunClock(runMs)}</span>}
+            {elapsed !== null && <span className="proc-time">{formatRunClock(elapsed)}</span>}
           </div>
+          <div className={`proc-chapter${snap.chapter?.source === "think" ? " think" : ""}`}>
+            {planStepNow !== null && <span className="proc-plan-step">{planStepNow}</span>}
+            {snap.chapter !== null && <InlineMarks text={snap.chapter.title} />}
+          </div>
+          <div className="proc-trail">
+            {Array.from({ length: 3 - snap.trail.length }, (_, i) => (
+              <div key={`pad${i}`} className="proc-step" aria-hidden="true" />
+            ))}
+            {snap.trail.map((item, index) => (
+              <div key={item.call.toolCallId} className={`proc-step fade-${snap.trail.length - index}`}>
+                <span className={item.failed ? "proc-mark bad" : "proc-mark ok"}>
+                  <Icon name={item.failed ? "x" : "check"} size={12} strokeWidth={2} />
+                </span>
+                <span className="proc-verb">{verb(item.call.toolName, item.call.input)}</span>
+                <code>{toolCallSummaryForRow(item.call.toolName, item.call.input, props.skills) ?? ""}</code>
+                {/* 一秒内落定的不标时长：一排 0.0s 是噪音，慢的那几步才值得看 */}
+                {item.ms !== null && item.ms >= 1000 && <span className="proc-dur">{formatToolDuration(item.ms, t)}</span>}
+              </div>
+            ))}
+            <div className="proc-step now">
+              <span className="proc-mark">
+                <Icon name="loader-circle" size={12} strokeWidth={1.8} spin />
+              </span>
+              {current.kind === "tool" ? (
+                <>
+                  <span className="proc-verb">{verb(current.call.toolName, current.call.input)}</span>
+                  <code>{toolCallSummaryForRow(current.call.toolName, current.call.input, props.skills) ?? ""}</code>
+                </>
+              ) : (
+                <>
+                  <span className="proc-verb orbita-breath">{t.chat.processThinking}</span>
+                  {/* 章节行已经是这段思考时不重复；章节是旁白时，这里补「此刻在想什么」 */}
+                  <code className="proc-preview">{snap.chapter?.source === "think" ? "" : (current.preview ?? "")}</code>
+                </>
+              )}
+              {runMs !== null && <span className="proc-dur">{formatRunClock(runMs)}</span>}
+            </div>
+          </div>
+          <div className={slow ? "proc-foot slow" : "proc-foot"}>{slow ? t.chat.processSlow : (tail ?? goalNoticeLine ?? planNoticeLine ?? "")}</div>
         </div>
-        <div className={slow ? "proc-foot slow" : "proc-foot"}>{slow ? t.chat.processSlow : (tail ?? goalNoticeLine ?? planNoticeLine ?? "")}</div>
-      </div>
+        {hoistedRows}
+      </>
     );
   }
 
   // 一步工具都没跑的轮说它做了什么（想了想 / 更新了计划），不写「0 步」（processOutcome）
-  const result = processOutcome(counts, unit.steps);
+  const result = processOutcome(counts, [...unit.steps, ...unit.hoisted]);
   const outcome =
     result.kind === "thought"
       ? t.chat.processThoughtOnly
@@ -4731,6 +4765,7 @@ function TurnProcessLine(props: {
           {unit.durationMs !== null && <span className="proc-time">{formatToolDuration(unit.durationMs, t)}</span>}
         </span>
       </CollapseRow>
+      {hoistedRows}
       {open && (
         <ol className="proc-chapters">
           {processChapters(unit.steps).map((chapter) => (

@@ -37,8 +37,10 @@ import { ThemePicker } from "./ThemeCard";
 import { EXPERIMENTAL_FEATURES, pullRequestUrl, type ExperimentalFeature } from "../../experimental-features.ts";
 import { ModelPickerMenu, useBuiltinCatalog, usableProviders } from "./model-menu";
 import {
+  BASH_LIFETIME_CHOICES,
   COMPACTION_DEFAULT,
   DEFAULT_INTENT_BASE_URL,
+  effectiveBashLifetimeMinutes,
   effectiveIntentSettings,
   type AppSettings,
   type CompactionSetting,
@@ -299,6 +301,12 @@ function General(props: {
   const completionSound = props.settings.completionSound ?? true;
   // 过程显示：缺席 = 一轮一行（2026-10-30）
   const processView = props.settings.processView ?? "turn";
+  // 命令最长寿命：缺席 / 坏值 = 4 小时（消费侧同一个 effectiveBashLifetimeMinutes）。
+  // 手改盘上的合法但非档位值（如 200 分钟）也照实显示，不悄悄改写成别的档
+  const bashLifetimeMinutes = effectiveBashLifetimeMinutes(props.settings.bashLifetimeMinutes);
+  const bashLifetimeOptions = (BASH_LIFETIME_CHOICES as readonly number[]).includes(bashLifetimeMinutes)
+    ? BASH_LIFETIME_CHOICES
+    : [...BASH_LIFETIME_CHOICES, bashLifetimeMinutes].sort((a, b) => a - b);
 
   const catalog = useBuiltinCatalog();
   const usable = usableProviders(props.providers);
@@ -562,6 +570,17 @@ function General(props: {
             label={t.settings.pastedCollapseAria}
             checked={pastedCollapse}
             onChange={(next) => props.onChange({ collapsePastedText: next })}
+          />
+        </SettingRow>
+        <SettingRow name={t.settings.bashLifetime} info={t.settings.bashLifetimeInfo}>
+          <Segmented<number>
+            label={t.settings.bashLifetimeAria}
+            value={bashLifetimeMinutes}
+            options={bashLifetimeOptions.map((minutes) => ({
+              value: minutes,
+              label: t.settings.bashLifetimeOption(minutes),
+            }))}
+            onChange={(minutes) => props.onChange({ bashLifetimeMinutes: minutes })}
           />
         </SettingRow>
         <SettingRow name={t.settings.completionSound} info={t.settings.completionSoundInfo}>

@@ -171,6 +171,35 @@ export function parseIntentSettings(raw: unknown): IntentSettings | undefined {
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+/**
+ * 后台命令的「命令最长寿命」（分钟）：bash 跑满签到点转后台之后，最多还能活多久。
+ * 默认 4 小时（240 分钟）：这是兜底，不是使用方式。
+ *
+ * 合法区间 10 分钟 – 24 小时（1440 分钟）：比 10 分钟再短的寿命几乎没有意义——签到点
+ * 本身就是 5 分钟，命令刚转后台就被杀只会白干活；超过 24 小时的留在前台跑更合适。
+ * 越界 / 非法值不报错，直接当没设过（消费侧用 `effectiveBashLifetimeMinutes` 回默认）。
+ *
+ * **只影响新会话**：已签到的命令用自己登记时的寿命，改设置不会把它掐短。
+ */
+export const BASH_LIFETIME_MINUTES = { min: 10, max: 24 * 60, default: 240 } as const;
+
+/** 设置面的档位（分钟）：几个用户真的会选的量级。手改盘上的其它合法值也认 */
+export const BASH_LIFETIME_CHOICES = [10, 30, 60, 120, 240, 480, 1440] as const;
+
+export function isBashLifetimeMinutes(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= BASH_LIFETIME_MINUTES.min &&
+    value <= BASH_LIFETIME_MINUTES.max
+  );
+}
+
+/** 生效值：合法就用，坏值 / 缺席回落到默认 4 小时（不做钳制——钳制会把坏值变假选项） */
+export function effectiveBashLifetimeMinutes(value: unknown): number {
+  return isBashLifetimeMinutes(value) ? value : BASH_LIFETIME_MINUTES.default;
+}
+
 /** 星云摆放偏好：钉在哪天（本地日期键 YYYY-MM-DD）、收没收起 */
 export interface UsagePetPref {
   pinnedDate?: string;
@@ -310,6 +339,12 @@ export interface AppSettings {
    * DEFAULT_MEMORY_VECTOR_SETTINGS（同 intent 的纪律）。
    */
   vector?: Partial<MemoryVectorSettings>;
+  /**
+   * 后台命令的「命令最长寿命」（分钟）。**缺席 = 4 小时**（BASH_LIFETIME_MINUTES.default）。
+   * 只对**模型没显式写 timeout** 的命令生效：显式声明的命令按它自己的上界活，不受这里影响。
+   * 改动只影响之后新建的会话（已签到的命令用登记时的寿命）。
+   */
+  bashLifetimeMinutes?: number;
   /**
    * 左下角星云的摆放（2026-10-12 用户：不加设置项，直接在左下角点）：点一格把星云钉在
    * 那天（按**日期**记，滑出 7 天窗口后自然回到今天），点星云把它收起、让出空间。
@@ -597,6 +632,8 @@ export function parseSettings(raw: unknown): AppSettings {
     pluginsPage?: unknown;
     boardDays?: unknown;
     sidebarAgeDays?: unknown;
+    /** 后台 bash 会话的寿命（分钟，仅模型未显式声明 timeout 时生效） */
+    bashLifetimeMinutes?: unknown;
     /** 旧键（2026-10-25 之前）：providersPage.cardSize 缺席时读它，任何一次写入都把它从盘上带走 */
     providerCardSize?: unknown;
     experimentalFeatures?: unknown;
@@ -686,6 +723,10 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(isBoardDays(record.boardDays) ? { boardDays: record.boardDays } : {}),
     // 只认 1 / 3 / 5 / 7：别的值（含补丁里的 null）当作「不限」，不落键
     ...(isSidebarAgeDays(record.sidebarAgeDays) ? { sidebarAgeDays: record.sidebarAgeDays } : {}),
+    // 只认 [10, 1440] 的整数分钟：越界 / 非法值当作没设过，消费侧回默认 4 小时
+    ...(isBashLifetimeMinutes(record.bashLifetimeMinutes)
+      ? { bashLifetimeMinutes: record.bashLifetimeMinutes }
+      : {}),
     // 只认绝对路径（POSIX 以 / 开头，Windows 盘符或 UNC）：相对路径会随 cwd 漂，当作没设
     ...(typeof record.browserDownloadDir === "string" && isAbsolutePath(record.browserDownloadDir)
       ? { browserDownloadDir: record.browserDownloadDir }

@@ -61,6 +61,7 @@ function turnGroup(key: string, members: TurnViewEntry[]): TurnViewEntry {
     members: members.filter((entry) => entry.kind !== "text" && entry.kind !== "user"),
     durationMs: 0,
     startedAt: 0,
+    hoisted: [],
   } as TurnViewEntry;
 }
 
@@ -73,6 +74,7 @@ function turnProcess(key: string, steps: TurnViewEntry[]): TurnViewEntry {
     startedAt: 0,
     live: false,
     answering: false,
+    hoisted: [],
   } as TurnViewEntry;
 }
 

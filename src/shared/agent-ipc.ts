@@ -900,6 +900,12 @@ export type AgentCommand =
        */
       compaction?: CompactionSetting;
       /**
+       * 后台命令的「命令最长寿命」（分钟，设置里的 `bashLifetimeMinutes`）。**主进程每轮现读**，
+       * 只给模型没显式写 timeout 的 bash 命令用（显式声明的命令按它自己的上界活）。
+       * 缺席 = 4 小时（BASH_LIFETIME_MINUTES.default）。
+       */
+      bashLifetimeMinutes?: number;
+      /**
        * commit / PR 的 Orbita 标识开关。**主进程从设置装配**（同 compaction）：
        * runtime 不读设置文件，只收数据，每轮拼进 system prompt。
        * 缺席 = 开启（与设置契约同一口径）。
@@ -1053,6 +1059,8 @@ export type AgentCommand =
       piSessionFile?: string;
       /** 自动压缩偏好（A-1），语义同 submit */
       compaction?: CompactionSetting;
+      /** 后台命令的「命令最长寿命」（分钟），语义同 submit */
+      bashLifetimeMinutes?: number;
       /** commit / PR 的 Orbita 标识开关，语义同 submit */
       gitAttribution?: boolean;
       /** 署名语言，语义同 submit */
@@ -1122,6 +1130,8 @@ export type AgentCommand =
       piSessionFile?: string;
       /** 手动压缩轮不走阈值，但轮内的自动压缩（threshold/overflow）照此生效 */
       compaction?: CompactionSetting;
+      /** 后台命令的「命令最长寿命」（分钟），语义同 submit */
+      bashLifetimeMinutes?: number;
       /** 压缩轮自己不提交，但开轮装配是同一份（turnFields），语义同 submit */
       gitAttribution?: boolean;
       /** 署名语言，语义同 submit */

@@ -146,8 +146,39 @@ function raiseCommandTimeout(toolName: string, input: Record<string, unknown>): 
   if (!COMMAND_TOOLS.has(toolName)) return;
   const raw = input["timeout"];
   const gated = gatedCommandTimeout(raw);
+  // 模型**自己填过** timeout（哪怕填得比下限小，被抬的是同一个字段）→ 留下标记：
+  // bash 会话的寿命要听它自己的上界（见 bash-observe.ts 的 lifetimeMs）
+  if (raw !== undefined) markCommandTimeoutDeclared(input);
   // 值没变不写：非法值原样留给 pi 报错，NaN 也不被「重写成自己」
   if (!Object.is(gated, raw)) input["timeout"] = gated;
+}
+
+/**
+ * 「这个 timeout 是模型自己写的，不是闸门补的默认值」——挂在入参对象上的**非枚举 symbol**。
+ *
+ * 为什么不看值：闸门不填时的 3600 与模型显式写 3600 是同一个数，会话寿命却该不同
+ * （没声明 → 设置里的默认寿命；显式 3600 → 这条命令 1 小时后到期）。为什么不旁路进
+ * `BashYieldOptions`：工具调用是并行执行的（pi 的 toolExecution 默认 "parallel"），
+ * 共享闭包里的「本次是否显式」会被另一条命令串号；而 pi 把同一个 args 对象先交给
+ * `beforeToolCall` 再交给 `execute`，挂在对象上的标记天然按调用隔离。
+ *
+ * 非枚举：它不该出现在日志、truncate 或任何 JSON 化里，pi 的 schema 也看不到它。
+ */
+const TIMEOUT_DECLARED = Symbol("orbita.commandTimeoutDeclared");
+
+export function markCommandTimeoutDeclared(input: object): void {
+  Object.defineProperty(input, TIMEOUT_DECLARED, {
+    value: true,
+    enumerable: false,
+    configurable: true,
+  });
+}
+
+/** 入参上的 timeout 是不是模型显式写的（闸门补的默认值不算）。 */
+export function commandTimeoutDeclared(input: unknown): boolean {
+  return (
+    typeof input === "object" && input !== null && (input as Record<symbol, unknown>)[TIMEOUT_DECLARED] === true
+  );
 }
 
 /**
@@ -300,6 +331,10 @@ export function createToolCallGate(
       // pi 的约定：原地修改，后续 handler 与真正的执行都看到改后的值
       for (const key of Object.keys(event.input)) delete event.input[key];
       Object.assign(event.input, answer.input as Record<string, unknown>);
+      // 用户在审批卡里亲手填的 timeout 同样是显式声明（不是闸门补的默认值）
+      if ((answer.input as Record<string, unknown>)["timeout"] !== undefined) {
+        markCommandTimeoutDeclared(event.input);
+      }
     }
     return {};
   };

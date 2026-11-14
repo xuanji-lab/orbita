@@ -1340,6 +1340,11 @@ export const zh: Messages = {
     completionSound: "完成提示音",
     completionSoundAria: "完成提示音",
     completionSoundInfo: "你在看别处时任务跑完，响一声客舱呼唤铃 · 关掉后侧栏高亮与提醒卡片照常出现",
+    bashLifetime: "命令最长寿命",
+    bashLifetimeAria: "后台命令最长寿命",
+    bashLifetimeInfo:
+      "命令跑过 5 分钟会转后台，这里定它转后台后最多还能跑多久（分钟，10 分钟 – 24 小时，默认 4 小时）· 模型在调用里显式写明了时长的命令按它自己的上界活 · 只影响之后新转后台的命令",
+    bashLifetimeOption: (minutes) => (minutes < 60 ? `${minutes} 分钟` : `${minutes / 60} 小时`),
     data: "数据",
     dataDirectory: "数据目录",
     dataDirectoryInfo: "会话、工作区、技能与 mcp.json 以普通文件存放在这里",
@@ -1950,6 +1955,7 @@ export const zh: Messages = {
     copyMessage: "复制消息",
     // bash 活行（P2-lite）：事实槽与停止钮
     bashElapsed: (clock) => `已 ${clock}`,
+    bashLimit: (clock) => `上限 ${clock}`,
     bashTotal: (clock) => `共 ${clock}`,
     bashExit: (code) => `退出 ${code}`,
     bashStopped: "已停止",

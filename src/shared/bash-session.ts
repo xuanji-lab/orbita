@@ -3,7 +3,8 @@
  *
  * **一条协议**：
  * - 签到点（agent/bash-observe.ts）在工具结果尾部写一行
- *   `[orbita] kind=detached session=b1 elapsed=302s | …`，表示「命令还在跑，控制权已回到模型」；
+ *   `[orbita] kind=detached session=b1 elapsed=302s lifetime=14400s | …`，表示「命令还在跑，
+ *   控制权已回到模型」，并带上这条会话的寿命上限（界面活行的「上限」读它）；
  * - 结束时 runtime 把一条**终态工具记录**写回对话（同一条 toolCallId、details 带
  *   `orbitaBash`），渲染层据此把那一行从「已 12:34」翻成「退出 0 · 共 6:40」。
  *
@@ -70,15 +71,30 @@ export function bashResultMetaOf(details: unknown): BashResultMeta | null {
   return result;
 }
 
-/** 交还提示行的前言（竖线之左）。elapsed = 从 spawn 到交还已经跑了多久（秒） */
-export function detachedNoticeHeader(sessionId: string, elapsedSeconds: number): string {
-  return `[orbita] kind=detached session=${sessionId} elapsed=${Math.max(0, Math.round(elapsedSeconds))}s`;
+/**
+ * 交还提示行的前言（竖线之左）。elapsed = 从 spawn 到交还已经跑了多久（秒）。
+ * `lifetime` = 这条会话的寿命上限（秒）：界面活行的「· 上限 4:00:00」读它。
+ * 上限缺席（旧记录 / 会话表没给）时不写这个键，界面也就不显示那一段。
+ */
+export function detachedNoticeHeader(
+  sessionId: string,
+  elapsedSeconds: number,
+  lifetimeSeconds?: number,
+): string {
+  const elapsed = Math.max(0, Math.round(elapsedSeconds));
+  const lifetime =
+    lifetimeSeconds === undefined || !Number.isFinite(lifetimeSeconds) || lifetimeSeconds <= 0
+      ? ""
+      : ` lifetime=${Math.round(lifetimeSeconds)}s`;
+  return `[orbita] kind=detached session=${sessionId} elapsed=${elapsed}s${lifetime}`;
 }
 
-/** 从交还提示里认出的会话与已跑时长 */
+/** 从交还提示里认出的会话、已跑时长与寿命上限 */
 export interface DetachedNotice {
   sessionId: string;
   elapsedSeconds: number;
+  /** 寿命上限（秒）。旧记录没有这一段，界面不画「上限」 */
+  lifetimeSeconds?: number;
 }
 
 /**
@@ -89,9 +105,14 @@ export interface DetachedNotice {
  * `elapsed=` 缺席时按 0（旧记录）：秒针从交还那一刻起跳，至少不会编造。
  */
 export function parseDetachedNotice(text: string): DetachedNotice | null {
-  const match = /\[orbita\] kind=detached session=(b\d+)(?: elapsed=(\d+)s)?/.exec(text);
+  const match = /\[orbita\] kind=detached session=(b\d+)(?: elapsed=(\d+)s)?(?: lifetime=(\d+)s)?/.exec(text);
   if (match === null) return null;
-  return { sessionId: match[1] ?? "", elapsedSeconds: Number(match[2] ?? "0") };
+  const lifetimeSeconds = Number(match[3] ?? "0");
+  return {
+    sessionId: match[1] ?? "",
+    elapsedSeconds: Number(match[2] ?? "0"),
+    ...(lifetimeSeconds > 0 ? { lifetimeSeconds } : {}),
+  };
 }
 
 /** 从工具结果文本里认出交还的会话 id（parseDetachedNotice 的薄封装）。 */

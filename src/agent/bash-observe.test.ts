@@ -23,6 +23,7 @@ import {
   killObservedChildren,
   type BashYieldOptions,
 } from "./bash-observe.ts";
+import { markCommandTimeoutDeclared } from "./permission.ts";
 import {
   createBashHandleTools,
   listSessions,
@@ -273,7 +274,9 @@ describe("签到：交还控制权，不杀进程", () => {
         cwd: dir,
       });
       assert.equal(exitCode, null, "签到应让本次调用以 exitCode null 返回");
-      assert.match(output, /\[orbita\] kind=detached session=b\d+ elapsed=\d+s \| /);
+      assert.match(output, /\[orbita\] kind=detached session=b\d+ elapsed=\d+s lifetime=\d+s \| /);
+      // 上限跟着交还提示一起来（界面活行的「· 上限」读它）
+      assert.match(output, /lifetime=14400s/);
       assert.match(output, /The command is still running; it was detached so you can keep going\./);
       assert.match(output, /written back to the conversation automatically/);
       const id = sessionIdOf(output);
@@ -397,7 +400,84 @@ describe("会话生命周期", () => {
       assert.equal(result.endReason, "lifetime");
       assert.equal(result.cancelled, true);
       assert.match(result.output, /lifetime limit/);
+      // 文案写明**实际上限**，不再写死 4 小时（这里是 600ms → 1s）
+      assert.match(result.output, /reached its 1s session lifetime limit/);
       assert.ok(await waitForDeath(pid), `寿命上限后 pid ${pid} 仍然活着`);
+    } finally {
+      await cleanupTemp(dir);
+    }
+  });
+
+  test("会话寿命：模型没声明 timeout → 用设置里的默认寿命（4h）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bash-life-default-"));
+    try {
+      const { output } = await run(
+        observedOps({ checkInMs: 150, lifetimeMs: 4 * 60 * 60 * 1000, timeoutDeclared: false }),
+        tickingWithOwnPid(join(dir, "pid.txt")),
+        { cwd: dir },
+      );
+      const id = sessionIdOf(output);
+      const summary = listSessions().find((session) => session.id === id);
+      assert.equal(summary?.lifetimeSeconds, 14_400);
+      // 交还提示带上同一个上限（界面活行读它）
+      assert.match(output, new RegExp(`session=${id} elapsed=\\d+s lifetime=14400s`));
+    } finally {
+      await cleanupTemp(dir);
+    }
+  });
+
+  test("会话寿命：显式声明 timeout=7200 → 2h（它自己的上界，不反跑 4h）", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bash-life-2h-"));
+    try {
+      const { output } = await run(
+        observedOps({ checkInMs: 150, lifetimeMs: 4 * 60 * 60 * 1000, timeoutDeclared: true }),
+        tickingWithOwnPid(join(dir, "pid.txt")),
+        { cwd: dir, timeout: 7_200 },
+      );
+      const id = sessionIdOf(output);
+      assert.equal(listSessions().find((session) => session.id === id)?.lifetimeSeconds, 7_200);
+      assert.match(output, new RegExp(`session=${id} elapsed=\\d+s lifetime=7200s`));
+    } finally {
+      await cleanupTemp(dir);
+    }
+  });
+
+  test("会话寿命：显式声明 timeout=21600 → 6h", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bash-life-6h-"));
+    try {
+      const { output } = await run(
+        observedOps({ checkInMs: 150, lifetimeMs: 4 * 60 * 60 * 1000, timeoutDeclared: true }),
+        tickingWithOwnPid(join(dir, "pid.txt")),
+        { cwd: dir, timeout: 21_600 },
+      );
+      const id = sessionIdOf(output);
+      assert.equal(listSessions().find((session) => session.id === id)?.lifetimeSeconds, 21_600);
+    } finally {
+      await cleanupTemp(dir);
+    }
+  });
+
+  test("工具路径：闸门补的 3600 不算显式声明，模型自己写的 7200 算", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bash-life-tool-"));
+    const command = tickingWithOwnPid(join(dir, "pid.txt"));
+    const tool = createObservedBashTool(
+      dir,
+      { getShellPath: () => undefined, getShellCommandPrefix: () => undefined },
+      { checkInMs: 150, lifetimeMs: 4 * 60 * 60 * 1000 },
+    );
+    try {
+      // ① 闸门补出来的 3600（没有标记）→ 寿命仍是默认 4h
+      const injected = { command, timeout: 3_600 };
+      const injectedText = await runTool(tool, injected);
+      const injectedId = sessionIdOf(injectedText);
+      assert.equal(listSessions().find((session) => session.id === injectedId)?.lifetimeSeconds, 14_400);
+
+      // ② 模型显式写 7200（闸门打了「显式声明」标记）→ 寿命 2h
+      const declared = { command, timeout: 7_200 };
+      markCommandTimeoutDeclared(declared);
+      const declaredText = await runTool(tool, declared);
+      const declaredId = sessionIdOf(declaredText);
+      assert.equal(listSessions().find((session) => session.id === declaredId)?.lifetimeSeconds, 7_200);
     } finally {
       await cleanupTemp(dir);
     }
