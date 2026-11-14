@@ -22,6 +22,8 @@
  * 最近提问时要先剥掉引用——否则侧栏标题会是一行 `<quoted_context …>`。
  */
 
+import type { OfficeFormat } from "./office.ts";
+
 /** 被引用的消息是谁说的。Proma 还有 system，我们的转录里没有可划选的 system 消息 */
 export type QuoteRole = "user" | "assistant";
 
@@ -44,6 +46,12 @@ export interface TextQuote {
    * 只改这一处，不靠在全文里搜一句可能出现两次的话。Proma 迁移来的块没有
    */
   lines?: { from: number; to: number };
+  /**
+   * Office 标注（N1「指哪打哪」）：xlsx 的单元格 / 区间、pptx 的元素路径，就是预览里
+   * `[data-path]` 与 `edit_office` 认的同一套 DOM path。带这个字段的引用没有「选中的文字」，
+   * `text` 只是被点元素的值预览（chip 上给人看）。
+   */
+  office?: { format: OfficeFormat; path: string };
   /** 演示文稿里第几页（1 起）；只有演示文稿的引用带 */
   slide?: number;
   /** v2 演示文稿（.slides.json）：引用的是这一页上的哪个元素（slides_read 给的 id）；整页引用没有 */
@@ -88,7 +96,7 @@ export const QUOTE_MAX_CHARS = 2000;
 export const QUOTE_MAX_TOTAL_CHARS = 20000;
 
 /** 判重用的那几个字段（TextQuote 的子集，测试里只要写这几项） */
-type QuoteIdentity = Pick<TextQuote, "messageId" | "text" | "filePath" | "lines">;
+type QuoteIdentity = Pick<TextQuote, "messageId" | "text" | "filePath" | "lines" | "office">;
 
 /** 同一处：同一条消息的同一段，或同一个文件的同一段行（同样的话在文件里出现两处是两条引用） */
 function sameQuote(a: QuoteIdentity, b: QuoteIdentity): boolean {
@@ -97,7 +105,8 @@ function sameQuote(a: QuoteIdentity, b: QuoteIdentity): boolean {
     a.text === b.text &&
     a.filePath === b.filePath &&
     a.lines?.from === b.lines?.from &&
-    a.lines?.to === b.lines?.to
+    a.lines?.to === b.lines?.to &&
+    a.office?.path === b.office?.path
   );
 }
 
@@ -153,6 +162,9 @@ function encodeAttribute(value: string): string {
 function quoteBlock(quote: TextQuote, index: number): string {
   if (quote.filePath !== undefined) {
     const lines = quote.lines === undefined ? "" : ` lines="${quote.lines.from}-${quote.lines.to}"`;
+    // Office 标注：`office="xlsx /Sheet1/B2:D5"`（格式 + DOM path 一格说清）
+    const office =
+      quote.office === undefined ? "" : ` office="${encodeAttribute(`${quote.office.format} ${quote.office.path}`)}"`;
     const slide = quote.slide === undefined ? "" : ` slide="${quote.slide}"${quote.element === undefined ? "" : ` element="${encodeAttribute(quote.element)}"`}`;
     const missing = quote.missing === true ? ' missing="true"' : "";
     // 同一段原文在文件里出现多次：说清是第几处，并把这一处前后的字**按原文逐字**写在块体里（不放属性：
@@ -163,7 +175,7 @@ function quoteBlock(quote: TextQuote, index: number): string {
       quote.ambiguous === undefined
         ? ""
         : ` ambiguous="true" was_line="${quote.ambiguous.was}" occurs_at_lines="${quote.ambiguous.at.join(",")}"`;
-    return `<quoted_file index="${index}" path="${encodeAttribute(quote.filePath)}"${lines}${slide}${missing}${occurrenceAttr}${unsure}>\n${
+    return `<quoted_file index="${index}" path="${encodeAttribute(quote.filePath)}"${lines}${office}${slide}${missing}${occurrenceAttr}${unsure}>\n${
       several && quote.context !== undefined
         ? `<before>${sanitizeBody(quote.context.before)}</before>\n<quoted>${sanitizeBody(quote.text)}</quoted>\n<after>${sanitizeBody(quote.context.after)}</after>`
         : sanitizeBody(quote.text)
@@ -229,6 +241,10 @@ export const QUOTE_GUIDELINE = [
     'ambiguous="true" means the same text now occurs at several places (occurs_at_lines) and the app could not ' +
     "tell which one the user selected (was_line is where it was when selected): do not guess and do not edit; " +
     "list the candidate lines and ask the user which one.",
+  '<quoted_file … office="xlsx /Sheet1/B2:D5"> (or office="pptx /slide[3]/table[@id=3]") is an annotation the ' +
+    "user made by clicking a cell / shape / table in an Office preview: change exactly that node with " +
+    "edit_office (pass the path verbatim); read_office first when you need the surrounding content. Do not " +
+    "rewrite these files with write / edit / bash.",
   '<open_document path="…" kind="doc|slides"/> at the start of a message means the user has that file open ' +
     'in the document panel beside the chat; "the document", "the slides", "this page" mean it. kind=doc is ' +
     "plain Markdown. kind=slides is a Marp-style deck: optional front matter (keep `marp: true`), pages " +
@@ -257,6 +273,17 @@ function attribute(attrs: string, name: string): string | undefined {
  * 也不吞掉用户看不见的内容）。用户文字不含引用块时返回 `{ quotes: [], text }`，text 原样。
  */
 const OPEN_DOCUMENT = /<open_document\b([^>]*?)\/>(?:\r?\n)*/g;
+
+/** `office="xlsx /Sheet1/B2:D5"` → `{ office: { format, path } }`；格式不对返回空对象 */
+function parseOfficeAttribute(value: string | undefined): { office?: { format: OfficeFormat; path: string } } {
+  if (value === undefined) return {};
+  const space = value.indexOf(" ");
+  if (space <= 0) return {};
+  const format = value.slice(0, space);
+  const path = value.slice(space + 1).trim();
+  if ((format !== "xlsx" && format !== "pptx") || !path.startsWith("/")) return {};
+  return { office: { format, path } };
+}
 
 /** 行号范围属性 `a-b`（或单个 `a`）→ 1 起含两端的范围；格式不对返回 undefined */
 function parseLines(value: string | undefined): { from: number; to: number } | undefined {
@@ -288,6 +315,7 @@ export function parseQuotedMessage(message: string): { quotes: TextQuote[]; text
         filePath,
         ...(lines === undefined ? {} : { lines }),
         ...(Number.isInteger(slide) && slide > 0 ? { slide } : {}),
+        ...parseOfficeAttribute(attribute(attrs, "office")),
         ...(attribute(attrs, "element") === undefined ? {} : { element: attribute(attrs, "element") as string }),
         ...(attribute(attrs, "missing") === "true" ? { missing: true as const } : {}),
         ...(attribute(attrs, "ambiguous") === "true"

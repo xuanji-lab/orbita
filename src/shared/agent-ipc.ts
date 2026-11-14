@@ -24,6 +24,7 @@ import type { SlidesAgentRequest, SlidesOutcome } from "./slides-export.ts";
 import type { DocAgentRequest, DocOutcome } from "./doc.ts";
 import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
 import type { LatexCompileRequest, LatexRunOutcome } from "./latex.ts";
+import type { OfficeAgentOutcome, OfficeAgentRequest } from "./office.ts";
 import type {
   ChannelDelivery,
   ChannelKey,
@@ -348,6 +349,20 @@ export const ipcChannels = {
   docUnwatch: "doc:unwatch",
   /** 主进程 → renderer 推送（`DocChangedEvent`）：被监听的文档在盘上变了（含自己刚写的，renderer 按摘要去回声） */
   docChanged: "doc:changed",
+  /**
+   * Office「指哪打哪」（契约在 `office.ts`）：
+   *   - officeStatus：OfficeCLI 是否可用（定位 + 验活，主进程缓存）；
+   *   - officeRender：`view html` 的自包含 HTML（sandbox iframe 用）；
+   *   - officeChanges / officeRevert：这一批改动清单与整批回退；
+   *   - officeCapture：把预览区截成位图放进剪贴板（Electron capturePage，不用外部浏览器）；
+   *   - officeChanged：主进程 → renderer 推送，agent 改完一份文件后让面板重新渲染。
+   */
+  officeStatus: "office:status",
+  officeRender: "office:render",
+  officeChanges: "office:changes",
+  officeRevert: "office:revert",
+  officeCapture: "office:capture",
+  officeChanged: "office:changed",
   /** 另存为：把当前文字存成新文件（先弹保存对话框）；原文件只读 / 被删时的出路 */
   docSaveAs: "doc:save-as",
   /** 导出：演示文稿 → PDF（先弹保存对话框） */
@@ -1225,6 +1240,8 @@ export type AgentCommand =
   | ({ type: "terminalResult"; requestId: string } & TerminalToolOutcome)
   /** LaTeX：主进程对 latexRequest 的回执（terminalResult 同款） */
   | ({ type: "latexResult"; requestId: string } & LatexRunOutcome)
+  /** Office：主进程对 officeRequest 的回执（ok 双分支，形状见 shared/office.ts） */
+  | ({ type: "officeResult"; requestId: string } & OfficeAgentOutcome)
   /** 子会话：主进程对 delegateRequest 的回执（requestId 问答，readTaskResult 同款） */
   | ({ type: "delegateResult"; requestId: string } & DelegateOutcome)
   /** 派发参考：主进程对 modelCostsRequest 的回执（readTaskResult 同款 ok 双分支） */
@@ -1536,6 +1553,12 @@ export type AgentEvent =
    * 就是第二个真源。回 latexResult
    */
   | { type: "latexRequest"; requestId: string; sessionId: string; request: LatexCompileRequest }
+  /**
+   * Office：agent 的 read_office / edit_office 请求（形状见 shared/office.ts 的
+   * OfficeAgentRequest）。**OfficeCLI 子进程、备份与改动清单都在主进程**（terminalRequest
+   * 同一条边界）：二进制路径 / 验活缓存 / 会话工作台的备份目录都只该有一份。回 officeResult。
+   */
+  | { type: "officeRequest"; requestId: string; sessionId: string; request: OfficeAgentRequest }
   /**
    * 文档导出：agent 的 `doc_export` 请求（形状见 shared/doc.ts 的 DocAgentRequest）。
    * 导出在主进程（PDF 要隐藏窗口，agent 进程不碰 electron）；路径白名单按会话的根现算。回 docResult。
