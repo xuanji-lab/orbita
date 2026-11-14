@@ -68,3 +68,33 @@ describe("turn-tools：两个内核共用的一轮工具装配", () => {
     assert.ok(extra.includes("report_to_parent") && !extra.includes("delegate"));
   });
 });
+
+/**
+ * 工具名的全序是提示缓存前缀的一部分（两个内核发给模型的工具数组都从这张清单来）：
+ * 顺序变了 = 每条会话的缓存从工具清单处失效一次。改顺序必须是有意的，连这张黄金名单一起改。
+ */
+const ROOT_ORDER = [
+  "read_pdf", "read_docx", "show_image", "update_plan", "update_goal", "create_skill", "add_mcp_server",
+  "install_plugin", "preview_plugin", "list_plugins", "show_plugin_board", "read_task",
+  "browser_navigate", "browser_observe", "browser_extract", "browser_wait_for", "browser_console_messages",
+  "browser_network_requests", "browser_screenshot", "browser_tabs", "browser_scroll", "browser_click", "browser_type",
+  "browser_press", "request_user_action",
+  "slides_create", "slides_read", "slides_write", "slides_edit", "slides_insert_image", "slides_export",
+  "doc_open", "doc_insert_image", "doc_export",
+  "terminal_open", "terminal_execute", "terminal_read", "terminal_list", "terminal_interrupt", "terminal_close",
+  "delegate", "reply_subsession", "model_costs", "memory_search", "memory_revise", "memory_retire",
+  "automation_create", "automation_list", "automation_cancel", "automation_update",
+];
+
+describe("turn-tools：工具名全序（黄金名单）", () => {
+  it("根会话（插件 / 记忆 / 自动化全开）", () => {
+    assert.deepEqual(names(submit({ sessionMemory: true, automationTools: true, pluginTools: true })), ROOT_ORDER);
+  });
+
+  it("子会话：没有插件 / 记忆 / 自动化，通道工具换成 report_to_parent", () => {
+    const childOrder = ROOT_ORDER.filter(
+      (name) => !/^(install_plugin|preview_plugin|list_plugins|show_plugin_board|delegate|reply_subsession|model_costs|memory_|automation_)/.test(name),
+    );
+    assert.deepEqual(names(submit({ sessionMemory: true, automationTools: true, pluginTools: true, directories: CHILD })), [...childOrder, "report_to_parent"]);
+  });
+});
