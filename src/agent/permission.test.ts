@@ -2,6 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { automationProtectedFiles } from "../main/automation/store.ts";
 import { createToolCallGate, type ToolCallLike } from "./permission.ts";
 import { COMMAND_TIMEOUT_DEFAULT_SECONDS, type PermissionAnswer, type PermissionMode } from "../shared/permission.ts";
 
@@ -189,6 +190,40 @@ describe("自动化记录文件不可变（protectedFiles）", () => {
     assert.equal(set.block, true);
     const remove = await gate(event("powershell", { command: `Remove-Item ${AUTOMATION_FILE}` }));
     assert.equal(remove.block, true);
+  });
+
+  test("已结束的归档文件同护：用主进程真实给的清单，write / edit / bash 与 .tmp / .bad- 兄弟全档拦", async () => {
+    const files = automationProtectedFiles("/userData");
+    assert.equal(files.length, 4);
+    for (const mode of ["plan", "manual", "skip"] as const) {
+      const gate = createToolCallGate(() => mode, async () => ({ behavior: "allow" }), ["/userData/sessions"], "/repo", files);
+      for (const target of [
+        "/userData/automations-archive.json",
+        "/userData/automations-archive.json.a1b2c3d4.tmp",
+        "/userData/automations-archive.json.bad-1763000000000",
+        "/userData/automations-archive-old.jsonl",
+        "/userData/automations-archive-old.jsonl.a1b2c3d4.tmp",
+        "/userData/automations-archive-old.jsonl.bad-1763000000000",
+        "/userData/automations-events.jsonl",
+        "/userData/automations.json.tampered-1763000000000",
+      ]) {
+        const write = await gate(event("write", { path: target, content: "[]" }));
+        assert.equal(write.block, true, `${mode} write ${target}`);
+        const edit = await gate(event("edit", { path: target }));
+        assert.equal(edit.block, true, `${mode} edit ${target}`);
+      }
+      for (const command of [
+        "rm /userData/automations-archive.json",
+        "echo '{}' > /userData/automations-archive.json",
+        "mv /tmp/x /userData/automations-archive.json",
+        "rm /userData/automations-archive-old.jsonl",
+        "echo '' > /userData/automations-archive-old.jsonl",
+        "sed -i '' 's/a/b/' /userData/automations-archive-old.jsonl",
+      ]) {
+        const result = await gate(event("bash", { command }));
+        assert.equal(result.block, true, `${mode} ${command}`);
+      }
+    }
   });
 
   test("路径边界：相邻前缀是另一个文件，不拦", async () => {

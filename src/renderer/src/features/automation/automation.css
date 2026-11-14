@@ -335,6 +335,50 @@
   color: var(--color-text-primary);
 }
 
+/* ── 记录文件被动过的提示（面板顶部，可关闭） ── */
+
+.auto-guard {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: var(--space-1) var(--space-3) var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-border);
+  background: var(--color-bg-panel);
+  color: var(--color-warning);
+}
+.auto-guard > svg {
+  flex: none;
+  margin-top: var(--space-0-5);
+}
+.auto-guard-text {
+  display: grid;
+  gap: var(--space-0-5);
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+.auto-guard-text strong {
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+
+/* ── 已结束（默认折叠的归档段） ── */
+
+.auto-finished {
+  padding-bottom: var(--space-2);
+}
+.auto-finished-note {
+  margin: 0 var(--space-3) var(--space-2);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+
 /* ── 空态 ── */
 
 .auto-empty {

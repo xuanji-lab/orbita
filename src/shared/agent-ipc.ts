@@ -163,6 +163,10 @@ export const ipcChannels = {
   automationPromote: "automation:promote",
   /** 对话里「改权限」那一行的按钮（入参 AutomationModeRowRequest，回 AutomationModeRowResult；结局以数据返回，不抛） */
   automationModeFromRow: "automation:mode-from-row",
+  /** 冷归档的现状（无入参，回 `AutomationArchiveInfo`）：面板「已结束」段末尾说「更早的 N 条保存在 <文件>」 */
+  automationArchiveInfo: "automation:archive-info",
+  /** 用户点掉面板上的篡改提示（无入参、回 void）：主进程在事件文件里追加一行 ack，之后不再提示这些 */
+  automationAlertsAck: "automation:alerts-ack",
   /** 主进程 → renderer 推送（`AutomationEvent`）：任何一条自动化变了 */
   automationEvent: "automation:event",
   sessionList: "session:list",

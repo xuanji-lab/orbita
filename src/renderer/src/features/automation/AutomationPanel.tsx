@@ -15,13 +15,24 @@ import { useT } from "../../locale.ts";
 import type { ProviderDto } from "@shared/provider";
 import type { SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
-import { automationWorkspaceId, type Automation, type AutomationAction } from "../../../../shared/automation.ts";
+import {
+  AUTOMATION_ARCHIVE_KEEP,
+  automationWorkspaceId,
+  isFinished,
+  type Automation,
+  type AutomationAction,
+  type AutomationGuardEvent,
+} from "../../../../shared/automation.ts";
 import { AutomationDetailView } from "./AutomationDetailView";
 import { AutomationEditView, type AutomationSeed } from "./AutomationEditView";
 import { AutomationRow } from "./AutomationRow";
 import {
   AUTOMATION_TEMPLATES,
+  formatWhen,
   groupAutomations,
+  type AutomationMessages,
+  splitFinished,
+  type AutomationGroup,
   type AutomationScope,
   type AutomationTemplate,
 } from "./automation-view.ts";
@@ -89,6 +100,8 @@ export function AutomationPanel(props: {
   const [scope, setScope] = useState<AutomationScope>(() => props.sub?.scope ?? "workspace");
   const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 「已结束」段默认折叠：已结束的是记录，不是要天天看的任务
+  const [finishedOpen, setFinishedOpen] = useState(false);
 
   // 工作区被移除之后它名下的自动化还在（会话 id 同理）：组头如实说「已移除的工作区」，不留一个空标题
   const nameOf = (id: string | null): string =>
@@ -109,6 +122,8 @@ export function AutomationPanel(props: {
       return;
     }
     if (automationWorkspaceId(target) !== props.workspaceId) setScope("all");
+    // 看的是已结束的：退回列表时它所在的「已结束」段已经是展开的，不用再找
+    if (isFinished(target)) setFinishedOpen(true);
     setView({ kind: "detail", id: target.id });
     // focus 的 nonce 变了才重来；列表刷新不该把详情再打开一遍
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -128,11 +143,16 @@ export function AutomationPanel(props: {
     setError(outcome.ok ? null : outcome.error);
   };
 
-  const groups = groupAutomations(state.automations, scope, { workspaceId: props.workspaceId, sessionId: props.sessionId });
+  const here = { workspaceId: props.workspaceId, sessionId: props.sessionId };
+  const split = splitFinished(state.automations);
+  const groups = groupAutomations(split.open, scope, here);
+  // 已结束的跟着同一个范围走（本工作区 / 全部），分组方式与进行中的一样
+  const finishedGroups = groupAutomations(split.finished, scope, here);
+  const finishedCount = finishedGroups.reduce((sum, group) => sum + group.items.length, 0);
 
-  // 一把尺只按当前显示出来的那些行算（「本工作区 / 全部」切换时跟着变）
+  // 一把尺只按当前显示出来的那些行算（「本工作区 / 全部」切换时跟着变；折叠起来的已结束行不算）
   const sparkMax = sparkScale(
-    groups.flatMap((group) => group.items),
+    [...groups, ...(finishedOpen ? finishedGroups : [])].flatMap((group) => group.items),
     now,
   );
 
@@ -227,6 +247,39 @@ export function AutomationPanel(props: {
     );
   }
 
+  /**
+   * 一组行。已结束的段里：本工作区范围只有一组时不再摆组头（它就在「已结束」底下，再来一句
+   * 「这个工作区 · 每次新开会话」既重复、那句提示也是在说进行中的）；有多组（本会话 / 各工作区）才留标签、不带提示。
+   */
+  const renderGroup = (group: AutomationGroup, options: { finished: boolean; head: boolean }) => (
+    <div key={group.key}>
+      {options.head && (
+        <PanelGroupHead
+          label={
+            group.kind === "thisSession" ? a.groupThisSession : scope === "all" ? nameOf(group.workspaceId ?? null) : a.groupWorkspace
+          }
+          detail={options.finished ? "" : group.kind === "thisSession" ? a.groupThisSessionHint : scope === "all" ? "" : a.groupWorkspaceHint}
+        />
+      )}
+      <div className="auto-list">
+        {group.items.map((automation) => {
+          const bound = automation.target.kind === "this_session" ? sessionById.get(automation.target.sessionId) : undefined;
+          return (
+            <AutomationRow
+              key={automation.id}
+              automation={automation}
+              now={now}
+              sparkMax={sparkMax}
+              boundSession={bound === undefined ? null : { mode: bound.mode, title: bound.title }}
+              onOpen={() => setView({ kind: "detail", id: automation.id })}
+              onAct={(action) => void act(automation, action)}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+
   return (
     <RightPanelFrame header={header} headerExtra={headerExtra} contentKey="list" footer={footer}>
       {menuOpen && (
@@ -266,6 +319,10 @@ export function AutomationPanel(props: {
         {scope === "workspace" && <span className="auto-scope-name">{workspaceName}</span>}
       </div>
 
+      {state.archive !== null && state.archive.alerts.length > 0 && (
+        <GuardNotice alerts={state.archive.alerts} total={state.archive.alertsTotal} now={now} onDismiss={() => void state.ackAlerts()} />
+      )}
+
       {error !== null && (
         <div style={{ padding: "var(--space-1) var(--space-3)" }}>
           <PanelLine danger>{a.actionFailed(error)}</PanelLine>
@@ -288,54 +345,89 @@ export function AutomationPanel(props: {
             <span className="auto-empty-icon">
               <Icon name={FEATURE_ICON.automation} size={18} strokeWidth={1.8} />
             </span>
-            <strong>{scope === "all" ? a.empty.titleAll : a.empty.title}</strong>
-            <p>{a.empty.body}</p>
+            {/* 只有已结束的：说「没有进行中的」，别说「还没有自动化」——下面的「已结束」里明明有 */}
+            <strong>{finishedCount > 0 ? a.empty.idleTitle : scope === "all" ? a.empty.titleAll : a.empty.title}</strong>
+            <p>{finishedCount > 0 ? a.empty.idleBody : a.empty.body}</p>
           </div>
-          <PanelGroupHead label={a.empty.templates} />
-          {AUTOMATION_TEMPLATES.map((template) => (
-            <button key={template.id} type="button" className="auto-tpl" onClick={() => startTemplate(template)}>
-              <Icon name={template.icon} size={14} strokeWidth={1.8} />
-              <span>
-                <b>{a.templates[template.id].name}</b>
-                <span className="auto-tpl-desc">{a.templates[template.id].desc}</span>
-              </span>
-            </button>
-          ))}
+          {finishedCount === 0 && (
+            <>
+              <PanelGroupHead label={a.empty.templates} />
+              {AUTOMATION_TEMPLATES.map((template) => (
+                <button key={template.id} type="button" className="auto-tpl" onClick={() => startTemplate(template)}>
+                  <Icon name={template.icon} size={14} strokeWidth={1.8} />
+                  <span>
+                    <b>{a.templates[template.id].name}</b>
+                    <span className="auto-tpl-desc">{a.templates[template.id].desc}</span>
+                  </span>
+                </button>
+              ))}
+            </>
+          )}
         </>
       )}
 
-      {groups.map((group) => (
-        <div key={group.key}>
+      {groups.map((group) => renderGroup(group, { finished: false, head: true }))}
+
+      {finishedCount > 0 && (
+        <div className="auto-finished">
           <PanelGroupHead
-            label={
-              group.kind === "thisSession"
-                ? a.groupThisSession
-                : scope === "all"
-                  ? nameOf(group.workspaceId ?? null)
-                  : a.groupWorkspace
-            }
-            detail={group.kind === "thisSession" ? a.groupThisSessionHint : scope === "all" ? "" : a.groupWorkspaceHint}
+            label={a.finished.title(finishedCount)}
+            collapsed={!finishedOpen}
+            onToggle={() => setFinishedOpen((open) => !open)}
           />
-          <div className="auto-list">
-            {group.items.map((automation) => {
-              const bound = automation.target.kind === "this_session" ? sessionById.get(automation.target.sessionId) : undefined;
-              return (
-                <AutomationRow
-                  key={automation.id}
-                  automation={automation}
-                  now={now}
-                  sparkMax={sparkMax}
-                  boundSession={bound === undefined ? null : { mode: bound.mode, title: bound.title }}
-                  onOpen={() => setView({ kind: "detail", id: automation.id })}
-                  onAct={(action) => void act(automation, action)}
-                />
-              );
-            })}
-          </div>
+          {finishedOpen && (
+            <>
+              <p className="auto-finished-note">{a.finished.note(AUTOMATION_ARCHIVE_KEEP)}</p>
+              {finishedGroups.map((group) => renderGroup(group, { finished: true, head: scope === "all" || finishedGroups.length > 1 }))}
+              {state.archive !== null && state.archive.older > 0 && (
+                <p className="auto-finished-note">{a.finished.older(state.archive.older, state.archive.file)}</p>
+              )}
+            </>
+          )}
         </div>
-      ))}
+      )}
     </RightPanelFrame>
   );
+}
+
+/**
+ * 记录文件被应用之外的力量动过：面板顶上一条可关闭的提示。说最近一次发生了什么、做了什么，
+ * 「知道了」只是收起提示（事件仍留在事件文件里）。主进程已经按内存写回，这里只告知。
+ */
+function GuardNotice(props: { alerts: readonly AutomationGuardEvent[]; total: number; now: number; onDismiss: () => void }) {
+  const a = useT().automation;
+  const latest = props.alerts[0];
+  if (latest === undefined) return null;
+  return (
+    <div className="auto-guard" role="alert">
+      <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
+      <div className="auto-guard-text">
+        <strong>{a.guard.title(props.total)}</strong>
+        <span>
+          {formatWhen(latest.at, props.now, a)} · {guardWhat(a.guard.what, latest)}
+        </span>
+      </div>
+      <button type="button" className="auto-btn" onClick={props.onDismiss}>
+        {a.guard.dismiss}
+      </button>
+    </div>
+  );
+}
+
+function guardWhat(what: AutomationMessages["guard"]["what"], event: AutomationGuardEvent): string {
+  const records = event.records ?? 0;
+  switch (event.kind) {
+    case "missing":
+      return what.missing(event.file, records);
+    case "changed":
+      return what.changed(event.file, records, event.backup ?? "");
+    case "coldMissing":
+      return what.coldMissing(event.file);
+    case "coldChanged":
+      return what.coldChanged(event.file);
+    case "dataDirReplaced":
+      return what.dataDirReplaced(records);
+  }
 }
 
 /** 正在编辑的那条自动化已经不在了：一帧空页后回列表（effect 里切视图，避免渲染期 setState） */

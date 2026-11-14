@@ -428,6 +428,9 @@ export const zh: Messages = {
       mode: "权限",
       model: "模型",
       plugin: "插件",
+      createdBy: "创建者",
+      creatorUser: "你",
+      creatorAgent: "智能体，在对话里建的",
       newSession: "每次新开会话",
       modeSkip: "放行，不询问",
       modePlan: "计划，只读",
@@ -443,6 +446,24 @@ export const zh: Messages = {
       titleAll: "还没有自动化",
       body: "手动建一个，或者直接在对话里说「每周五帮我看……」「15 分钟后回来看下日志」。",
       templates: "从模板开始",
+      idleTitle: "没有进行中的自动化",
+      idleBody: "结束了的收在下面的「已结束」里。可以新建一个，或在详情里重新启动已结束的。",
+    },
+    guard: {
+      title: (total) => (total === 1 ? "自动化记录被应用之外的程序动过" : `自动化记录被应用之外的程序动过（${total} 次）`),
+      what: {
+        missing: (file, records) => `${file} 不见了，已按应用里的记录恢复（${records} 条）。`,
+        changed: (file, records, backup) => `${file} 被改过，已按应用里的记录恢复（${records} 条）；被改的那份留成 ${backup}。`,
+        coldMissing: (file) => `存放更早已结束记录的 ${file} 不见了，没有重建。`,
+        coldChanged: (file) => `存放更早已结束记录的 ${file} 被改动过，没有动它。`,
+        dataDirReplaced: (records) => `数据目录被改名或删除过，自动化记录已写回（${records} 条）；会话、设置等其它数据没有恢复。`,
+      },
+      dismiss: "知道了",
+    },
+    finished: {
+      title: (count) => `已结束（${count}）`,
+      note: (keep) => `已结束的自动归档在这里，不占自动化名额。这里列最近 ${keep} 条，更早的仍保存在文件里。重新启动会让它回到进行中。`,
+      older: (count, file) => `更早的 ${count} 条保存在数据目录的 ${file} 里。`,
     },
     templates: {
       paper: {
