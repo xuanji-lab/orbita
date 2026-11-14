@@ -26,10 +26,25 @@ import { normalizePrefixedWorkbook, readXlsxPreview, stripXPrefix } from "./read
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 const PRISTINE = join(FIXTURES, "grid-pristine.xlsx");
 const EDITED = join(FIXTURES, "grid-edited.xlsx");
+const CREATED = join(FIXTURES, "created-by-cli.xlsx");
 
 const sha256 = (buffer: Buffer): string => createHash("sha256").update(buffer).digest("hex");
 
 describe("stripXPrefix", () => {
+  test("ap:（docProps）也去掉；cp:/dc:/dcterms: 这些标准前缀不动", () => {
+    const xml =
+      '<ap:Properties xmlns:ap="http://ap">' +
+      '<ap:Application>OfficeCLI/1.0.158</ap:Application>' +
+      '<ap:AppVersion>16.0300</ap:AppVersion></ap:Properties>';
+    assert.equal(
+      stripXPrefix(xml),
+      '<Properties xmlns:ap="http://ap"><Application>OfficeCLI/1.0.158</Application>' +
+        "<AppVersion>16.0300</AppVersion></Properties>",
+    );
+    const core = '<cp:coreProperties xmlns:cp="http://cp"><dc:title>x</dc:title></cp:coreProperties>';
+    assert.equal(stripXPrefix(core), core);
+  });
+
   test("元素名与属性名上的 x: 去掉；其它前缀 / xmlns 声明 / 属性值不动", () => {
     const xml =
       '<x:workbook xmlns:x="http://x" xmlns:r="http://r" mc:Ignorable="x15">' +
@@ -92,6 +107,18 @@ describe("带前缀的工作簿（真实样张）", () => {
     // 原文件一个字节没动
     assert.equal(sha256(await readFile(EDITED)), sha256(before));
     assert.equal((await stat(EDITED)).mtimeMs, beforeStat.mtimeMs);
+  });
+
+  test("officecli create 的文件（x: + ap: 前缀）：兜底后能读", async () => {
+    const before = await readFile(CREATED);
+    const result = await readXlsxPreview(CREATED);
+    assert.equal(result.kind, "workbook");
+    assert.ok(result.kind === "workbook");
+    assert.equal(result.normalized, true);
+    assert.equal(result.sheet.name, "Sheet1");
+    assert.equal(result.sheet.rows[0]?.[0]?.text, "由 officecli 生成");
+    assert.equal(result.sheet.rows[1]?.[1]?.text, "7");
+    assert.equal(sha256(await readFile(CREATED)), sha256(before));
   });
 
   test("normalizePrefixedWorkbook：原样文件没有可归一化的部分 → null", async () => {

@@ -19,8 +19,9 @@
  * 都是，sharedStrings 不是），ExcelJS 4.4.0 不认带前缀的元素，报
  * `Cannot set properties of undefined (setting 'sheetNo')`。只要文件被 `edit_office`
  * 写过一次，数据网格就永久打不开——我们自己写的文件自己读不了。这里在**解析失败时**
- * 用 JSZip 在内存里做一份归一化副本（只去掉 `xl/` 下 XML 的元素名 / 属性名上的 `x:`
- * 前缀，`r:` / `x14ac:` / `xmlns:x` 一律不动），重试一次；**绝不改写用户原文件**。
+ * 用 JSZip 在内存里做一份归一化副本（去掉 `xl/`、`docProps/`、`[Content_Types].xml`
+ * 元素名 / 属性名上的 `x:` 与 `ap:` 前缀，`r:` / `x14ac:` / `xmlns:x` 一律不动），
+ * 重试一次；**绝不改写用户原文件**。
  * 正常文件走原路径，零额外开销；兜底成功的结果带 `normalized: true`，界面标一句说明。
  */
 import { open, readFile, stat } from "node:fs/promises";
@@ -82,15 +83,26 @@ async function startsWith(path: string, magic: readonly number[]): Promise<boole
   return magic.every((byte, index) => buffer[index] === byte);
 }
 
-/** 带前缀的工作簿特征：`<x:workbook` / `<x:sheet` 这类元素（只看元素名，不看属性值） */
-const PREFIXED_ELEMENT = /<x:[A-Za-z]/;
+/**
+ * 需要归一化的 XML 部件：`xl/` 下全部（workbook / styles / worksheets / sharedStrings）、
+ * `docProps/`（`app.xml` 用 `ap:` 前缀）与 `[Content_Types].xml`。`_rels/*.rels` 没有元素
+ * 前缀，不在名单里。
+ */
+const XML_PART = /^(?:xl\/.*|docProps\/.*|\[Content_Types\])\.xml$/;
+
+/** 带前缀的 OOXML 特征：`<x:workbook` / `<ap:Properties>` 这类元素（只看元素名） */
+const PREFIXED_ELEMENT = /<(?:x|ap):[A-Za-z]/;
+
+/** 只剥这两种前缀：`x:`（spreadsheetml）与 `ap:`（extended properties）。`r:` / `x14ac:` /
+ *  `mc:` / `cp:` / `dc:` / `dcterms:` 是标准前缀，ExcelJS 认，不能动。 */
+const PREFIXES = ["x", "ap"] as const;
 
 /**
- * 去掉 XML 里 `x:` 前缀（元素名与属性名），其余前缀与属性值一律不动。
+ * 去掉 XML 里 `x:` / `ap:` 前缀（元素名与属性名），其余前缀与属性值一律不动。
  *
  * 逐标签、跳过引号内的内容地扫：`xmlns:x="…"` 的名字是 `xmlns:x`（不以 `x` 开头，不匹配），
- * `r:id` / `x14ac:dyDescent` / `mc:Ignorable` 也不匹配；属性值里恰好出现 ` x:…` 的
- * 极少数情况（例如自定义文本）不会被误改。导出给测试钉住。
+ * `r:id` / `x14ac:dyDescent` / `mc:Ignorable` / `cp:lastModifiedBy` 也不匹配；属性值里
+ * 恰好出现 ` x:…` 的极少数情况（例如自定义文本）不会被误改。导出给测试钉住。
  */
 export function stripXPrefix(xml: string): string {
   return xml.replace(/<[^>]*>/g, (tag) => {
@@ -109,9 +121,13 @@ export function stripXPrefix(xml: string): string {
         continue;
       }
       const boundary = index === 0 || /[<\s/]/.test(tag[index - 1] as string);
-      if (boundary && char === "x" && tag[index + 1] === ":") {
-        index += 1; // 吞掉冒号
-        continue;
+      if (boundary) {
+        // 多字符前缀（`ap:`）要整段比，不能只看首字母
+        const prefix = PREFIXES.find((candidate) => tag.startsWith(`${candidate}:`, index));
+        if (prefix !== undefined) {
+          index += prefix.length; // 跳过前缀本身；循环的 ++ 再吞掉冒号
+          continue;
+        }
       }
       out += char;
     }
@@ -138,8 +154,9 @@ export async function normalizePrefixedWorkbook(path: string): Promise<Buffer | 
   }
   let touched = false;
   for (const name of Object.keys(zip.files)) {
-    // 只动 xl 下的 XML（workbook / styles / worksheets）；theme 是 drawingml 的 a: 前缀，不碰
-    if (!/^xl\/.*\.xml$/.test(name)) continue;
+    // 所有 XML 部件：xl/、docProps/、[Content_Types].xml。theme 是 drawingml 的 a: 前缀，
+    // 不在 PREFIXES 里，即使被扫到也一个字节不动
+    if (!XML_PART.test(name)) continue;
     const entry = zip.file(name);
     if (entry === null) continue;
     const xml = await entry.async("string");
