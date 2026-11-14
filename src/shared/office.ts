@@ -21,8 +21,22 @@ import type { FileListRequest } from "./files.ts";
 
 export type OfficeFormat = "xlsx" | "pptx";
 
-/** 单次调用的硬超时。杀整个进程树（Windows 下 officecli 会带子进程） */
-export const OFFICE_TIMEOUT_MS = 15_000;
+/**
+ * OfficeCLI 的超时（每次调用都杀整棵进程树）。
+ *
+ * **为什么不是统一的 15 秒**：验收实测同一台机器上单个 `officecli get` 0.62–23.8 s
+ * （`get / --depth 2` 23.2 s）、`view html` 9–13 s——.NET 单文件冷启动 + Defender 扫描
+ * 让同一条命令能在 0.3 s 与 24 s 之间跳。15 秒会把正常调用误杀成「读取超时」，用户
+ * 看到的是能力坏了。分档之后的数字都留了一个数量级的余量，同时仍是**硬上限**：
+ * 到点 killTree，工具拿到一句可读的超时文案，进程不会挂在后台。
+ *
+ * - 验活：只跑 `--version`（正常 <1 s），15 秒足够；
+ * - 读 / 渲染 / 批写：60 秒（实测最慢 23.8 s，留两倍半余量）。
+ */
+export const OFFICE_PROBE_TIMEOUT_MS = 15_000;
+export const OFFICE_READ_TIMEOUT_MS = 60_000;
+export const OFFICE_RENDER_TIMEOUT_MS = 60_000;
+export const OFFICE_BATCH_TIMEOUT_MS = 60_000;
 
 /** 一次渲染最多收多少 HTML（超过就不塞进 iframe，退回网格 / 大纲——几 MB 的 srcdoc 会把面板卡死） */
 export const OFFICE_HTML_MAX_BYTES = 8 * 1024 * 1024;
@@ -133,6 +147,50 @@ export interface OfficeRevertResult {
   error?: string;
   /** 还原回文件里的改动条数 */
   restored: number;
+}
+
+/**
+ * 文件路径的**比较键**：`\` 与 `/` 视为同一分隔符、折叠重复分隔符、去掉末尾斜杠；
+ * Windows 风格路径（盘符 / UNC）整串小写化（Windows 文件系统不区分大小写）。
+ *
+ * 为什么需要它：主进程手里的路径来自 `realpath`（`C:\...\Home\a.xlsx`），渲染层手里的
+ * 是「根 + "/" + 文件名」（`C:\...\Home/a.xlsx`）——直接用 `===` 比，两个都合法却永远不等，
+ * `office:changed` 就永远命中不了（2026-11-14 验收 B1）。
+ *
+ * **不许引入 node:path**（shared 是 renderer 也加载的一层）：分隔符与大小写规则在这里
+ * 自己实现，纯函数、单测钉住。
+ */
+export function officeFileKey(path: string): string {
+  let value = path.trim().replace(/\\/g, "/");
+  // UNC（`//server/share`）开头的两个斜杠是语义的一部分，折叠时留着
+  value = value.startsWith("//")
+    ? `//${value.slice(2).replace(/\/{2,}/g, "/")}`
+    : value.replace(/\/{2,}/g, "/");
+  if (value.length > 1 && value.endsWith("/")) value = value.replace(/\/+$/, "");
+  const windowsStyle = /^[A-Za-z]:\//.test(value) || value.startsWith("//");
+  return windowsStyle ? value.toLowerCase() : value;
+}
+
+/** 两个文件路径是不是同一份（分隔符 / 大小写 / 末尾斜杠不敏感；见 officeFileKey） */
+export function sameOfficePath(a: string, b: string): boolean {
+  return officeFileKey(a) === officeFileKey(b);
+}
+
+/** xlsx 区间里有多少格（`/Sheet1/A1:C5` → 15；单格 → 1；不是单元格 / 区间 → null） */
+export function xlsxRangeCellCount(path: string): number | null {
+  const range = xlsxRangeOf(path);
+  if (range === null) return null;
+  const split = (cell: string): { col: number; row: number } | null => {
+    const match = /^([A-Z]+)([0-9]+)$/.exec(cell);
+    if (match === null) return null;
+    return { col: xlsxColumnIndex(match[1] as string), row: Number(match[2]) };
+  };
+  const from = split(range.from);
+  const to = split(range.to);
+  if (from === null || to === null) return null;
+  const cols = Math.abs(to.col - from.col) + 1;
+  const rows = Math.abs(to.row - from.row) + 1;
+  return cols * rows;
 }
 
 /** 把文件改成可执行的绝对路径；认不出格式返回 null */

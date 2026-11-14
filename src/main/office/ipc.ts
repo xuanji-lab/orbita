@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import {
   OFFICE_HTML_MAX_BYTES,
+  officeFileKey,
   officeFormatOf,
   type OfficeChanges,
   type OfficeRenderRequest,
@@ -29,13 +30,22 @@ import { mainWindows } from "../window/main-windows.ts";
 import { officeCliCandidates } from "./cli.ts";
 import { OfficeService } from "./service.ts";
 
-/** 备份目录：会话工作台下的子目录（不进仓、不跟会话文件混在一起） */
+/** 备份根目录名（userData 下；与 docx-backups 同一层） */
 export const OFFICE_BACKUP_DIR = "office-backups";
 
 export interface OfficeIpcDeps {
   settings: { read(): Promise<AppSettings> };
   sessions: SessionStore;
   workspaces: WorkspaceStore;
+  /**
+   * 备份根目录（userData 下的 `office-backups/`，按 sessionId 再分一层）。
+   *
+   * 为什么放这里而不是会话工作台：工作台是文件面板的第一个根，模型 / 用户都会看到它——
+   * 验收时文件树里就出现了内部的 `office-backups` 目录（B5）。docx 的备份也是放
+   * `configDir/docx-backups`（同一条先例）。回退依赖的清单（`<backup>.json`）跟着备份
+   * 一起走，所以「杀实例重启后仍可回退」不退化（认领逻辑只看这个目录）。
+   */
+  backupRoot: string;
 }
 
 /**
@@ -57,15 +67,16 @@ export function registerOfficeIpc(deps: OfficeIpcDeps): OfficeService {
         envVars: process.env,
       }),
     backupDir: async (sessionId) => {
-      try {
-        return join(deps.sessions.workbenchPath(sessionId), OFFICE_BACKUP_DIR);
-      } catch {
-        return null;
-      }
+      // sessionId 会拼进路径：只认会话 id 的字符集（UUID），别的一律不备份
+      if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(sessionId)) return null;
+      return join(deps.backupRoot, sessionId);
     },
+    // 广播前归一化：主进程手里是 realpath，渲染层手里是「根 + / + 文件名」——两边都可能
+    // 混着 / 与 \、大小写不同。receiver 端仍用 sameOfficePath 再比一次（双保险）
     notify: (file) => {
+      const path = officeFileKey(file);
       for (const window of mainWindows.list()) {
-        window.webContents.send(ipcChannels.officeChanged, { path: file });
+        window.webContents.send(ipcChannels.officeChanged, { path });
       }
     },
   });

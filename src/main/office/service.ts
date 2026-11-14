@@ -21,7 +21,7 @@ import { writeBytesAtomic } from "../atomic-write.ts";
 import {
   buildOfficeBatch,
   officeChangesFromBatch,
-  OFFICE_TIMEOUT_MS,
+  OFFICE_BATCH_TIMEOUT_MS,
   officeFormatOf,
   parseOfficeBatchReport,
   type OfficeAgentOutcome,
@@ -285,7 +285,7 @@ export class OfficeService {
       return {
         ok: false,
         error:
-          `OfficeCLI timed out after ${Math.round(OFFICE_TIMEOUT_MS / 1000)}s and was killed (nothing was written; ` +
+          `OfficeCLI timed out after ${Math.round(OFFICE_BATCH_TIMEOUT_MS / 1000)}s and was killed (nothing was written; ` +
           `a backup is still at ${batch.backup ?? "—"}).`,
       };
     }

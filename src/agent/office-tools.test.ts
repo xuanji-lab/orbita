@@ -92,7 +92,7 @@ describe("read_office", () => {
     assert.equal(request.file, "/ws/book.xlsx");
     assert.equal(request.path, "/");
     assert.equal(request.depth, 2);
-    assert.equal(seen[0]?.timeoutMs, 90_000);
+    assert.equal(seen[0]?.timeoutMs, 240_000);
   });
 
   test("非 Office 扩展名 / 坏 node 直接拒绝，不发请求", async () => {

@@ -20,7 +20,13 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { OFFICE_TIMEOUT_MS, type OfficeBinSource } from "../../shared/office.ts";
+import {
+  OFFICE_BATCH_TIMEOUT_MS,
+  OFFICE_PROBE_TIMEOUT_MS,
+  OFFICE_READ_TIMEOUT_MS,
+  OFFICE_RENDER_TIMEOUT_MS,
+  type OfficeBinSource,
+} from "../../shared/office.ts";
 
 /** 一个候选：路径 + 来源（错误信息里要说清「试过哪儿」） */
 export interface OfficeCandidate {
@@ -142,8 +148,9 @@ export function parseOfficeVersion(stdout: string): string | null {
 }
 
 /**
- * 跑一条 officecli 命令。默认 15 秒硬超时（shared/office.ts 的 OFFICE_TIMEOUT_MS），
- * 超时按进程树杀；stdout / stderr 各封顶 maxBytes（默认 32 MB，html 渲染用得上），
+ * 跑一条 officecli 命令。超时分档（见 shared/office.ts 的四个常量：验活 15 s，
+ * 读 / 渲染 / 批写各 60 s——实测同类命令能在 0.3–24 s 之间跳，15 s 会误杀正常调用），
+ * 到点按进程树杀；stdout / stderr 各封顶 maxBytes（默认 32 MB，html 渲染用得上），
  * 超过就杀掉并按超时同样的方式报（一个把内存吃干的输出不该落进 IPC）。
  */
 export function runOfficeCli(
@@ -151,7 +158,7 @@ export function runOfficeCli(
   args: readonly string[],
   options: { timeoutMs?: number; maxBytes?: number; stdin?: string } = {},
 ): Promise<OfficeRunResult> {
-  const timeoutMs = options.timeoutMs ?? OFFICE_TIMEOUT_MS;
+  const timeoutMs = options.timeoutMs ?? OFFICE_READ_TIMEOUT_MS;
   const maxBytes = options.maxBytes ?? 32 * 1024 * 1024;
   return new Promise<OfficeRunResult>((resolve) => {
     const started = Date.now();
@@ -244,7 +251,7 @@ export async function resolveOfficeCli(
       tried.push(`${candidate.path}（不存在）`);
       continue;
     }
-    const result = await run(candidate.path, ["--version"], { timeoutMs: OFFICE_TIMEOUT_MS });
+    const result = await run(candidate.path, ["--version"], { timeoutMs: OFFICE_PROBE_TIMEOUT_MS });
     const version = parseOfficeVersion(result.stdout);
     if (result.code === 0 && version !== null) return { ok: true, candidate, version };
     tried.push(`${candidate.path}（--version 失败：${result.timedOut ? "超时" : `exit ${String(result.code)}`}）`);
@@ -267,9 +274,9 @@ export async function renderOfficeHtml(
   file: string,
   run: OfficeRunner,
 ): Promise<{ ok: true; html: string; elapsedMs: number } | { ok: false; detail: string }> {
-  const result = await run(bin, ["view", file, "html"], { timeoutMs: OFFICE_TIMEOUT_MS });
+  const result = await run(bin, ["view", file, "html"], { timeoutMs: OFFICE_RENDER_TIMEOUT_MS });
   if (result.timedOut) {
-    return { ok: false, detail: `OfficeCLI 渲染超时（${Math.round(OFFICE_TIMEOUT_MS / 1000)} 秒）` };
+    return { ok: false, detail: `OfficeCLI 渲染超时（${Math.round(OFFICE_RENDER_TIMEOUT_MS / 1000)} 秒）` };
   }
   const html = result.stdout;
   if (result.code !== 0) {
@@ -292,8 +299,8 @@ export async function getOfficeText(
   depth: number,
   run: OfficeRunner,
 ): Promise<{ ok: true; text: string } | { ok: false; detail: string }> {
-  const result = await run(bin, ["get", file, path, "--depth", String(depth)], { timeoutMs: OFFICE_TIMEOUT_MS });
-  if (result.timedOut) return { ok: false, detail: `OfficeCLI 读取超时（${Math.round(OFFICE_TIMEOUT_MS / 1000)} 秒）` };
+  const result = await run(bin, ["get", file, path, "--depth", String(depth)], { timeoutMs: OFFICE_READ_TIMEOUT_MS });
+  if (result.timedOut) return { ok: false, detail: `OfficeCLI 读取超时（${Math.round(OFFICE_READ_TIMEOUT_MS / 1000)} 秒）` };
   if (result.code !== 0) {
     return { ok: false, detail: `OfficeCLI 读取失败（exit ${String(result.code)}）：${(result.stderr || result.stdout).trim().slice(0, 300)}` };
   }
@@ -322,7 +329,7 @@ export async function runOfficeBatch(
     ...(options.bestEffort === true ? ["--best-effort"] : []),
   ];
   const result = await run(bin, argv, {
-    timeoutMs: OFFICE_TIMEOUT_MS,
+    timeoutMs: OFFICE_BATCH_TIMEOUT_MS,
     stdin: JSON.stringify(items),
   });
   return { ...result, argv };

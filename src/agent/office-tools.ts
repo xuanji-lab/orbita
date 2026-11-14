@@ -28,11 +28,12 @@ import type { RequestBroker } from "./request-broker.ts";
 export const OFFICE_TOOL_NAMES = ["read_office", "edit_office"] as const;
 
 /**
- * 等回执的上限：验活（15s，最坏一个候选挂死）+ 读旧值（15s）+ 写（15s）+ 余量。
- * RequestBroker 默认 30 秒不够——用默认值的话，第 31 秒工具就拿到「主进程没回执」，
- * 而 batch 还在跑。
+ * 等回执的上限：验活（15 s，最坏每个候选都挂死）+ 读旧值（60 s）+ 写（60 s）+ 余量。
+ * RequestBroker 默认 30 秒远远不够——用默认值的话，第 31 秒工具就拿到「主进程没回执」，
+ * 而 officecli 还在跑。这里只是「主进程失联」的兜底，真正的上限在主进程的四个超时常量
+ * （shared/office.ts），到点会杀进程树并回一句可读的超时原因。
  */
-const BROKER_TIMEOUT_MS = 90_000;
+const BROKER_TIMEOUT_MS = 240_000;
 
 /** read_office 一次最多回多少字符（与 read_docx 同量级：模型一次读得完的量） */
 const READ_MAX_CHARS = 20_000;

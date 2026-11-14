@@ -9,6 +9,12 @@ import assert from "node:assert/strict";
 import {
   buildOfficeBatch,
   normalizeOfficePath,
+  OFFICE_BATCH_TIMEOUT_MS,
+  OFFICE_READ_TIMEOUT_MS,
+  OFFICE_RENDER_TIMEOUT_MS,
+  officeFileKey,
+  sameOfficePath,
+  xlsxRangeCellCount,
   officeChangesFromBatch,
   officeDisplayPath,
   officeFormatOf,
@@ -20,6 +26,55 @@ import {
   xlsxRangePath,
   type OfficeOp,
 } from "./office.ts";
+
+describe("sameOfficePath —— 同一份文件的路径比较（B1）", () => {
+  const real = String.raw`C:\Users\dama\Home\多表样例.xlsx`;
+  const joined = String.raw`C:\Users\dama\Home/多表样例.xlsx`;
+
+  test("realpath 与「根 + / + 文件名」是同一份", () => {
+    assert.equal(sameOfficePath(real, joined), true);
+    assert.equal(sameOfficePath(joined, real), true);
+  });
+
+  test("大小写不同（Windows 路径）", () => {
+    assert.equal(sameOfficePath(String.raw`C:\Users\dama\A.xlsx`, String.raw`c:\USERS\DAMA\a.XLSX`), true);
+  });
+
+  test("末尾斜杠 / 重复分隔符", () => {
+    assert.equal(sameOfficePath(String.raw`C:\a\b.xlsx/`, String.raw`C:\a\b.xlsx`), true);
+    assert.equal(sameOfficePath("C://a//b.xlsx", String.raw`C:\a\b.xlsx`), true);
+  });
+
+  test("不是同一份：不同文件名 / 不同目录 / 前缀相似的目录", () => {
+    assert.equal(sameOfficePath(String.raw`C:\a\b.xlsx`, String.raw`C:\a\c.xlsx`), false);
+    assert.equal(sameOfficePath(String.raw`C:\a\b.xlsx`, String.raw`C:\a\..b\b.xlsx`), false);
+  });
+
+  test("POSIX 路径区分大小写；UNC 不区分", () => {
+    assert.equal(sameOfficePath("/home/u/A.xlsx", "/home/u/a.xlsx"), false);
+    assert.equal(sameOfficePath(String.raw`\\srv\share\A.xlsx`, "//srv/share/a.xlsx"), true);
+    // UNC 开头的两个斜杠是语义，不被折叠成一个
+    assert.equal(officeFileKey("//srv/share/a.xlsx"), "//srv/share/a.xlsx");
+  });
+});
+
+describe("xlsxRangeCellCount —— 区间 chip 上的格数（B4）", () => {
+  test("区间 / 单格 / 非单元格", () => {
+    assert.equal(xlsxRangeCellCount("/Sheet1/A1:C5"), 15);
+    assert.equal(xlsxRangeCellCount("/Sheet1/B2"), 1);
+    assert.equal(xlsxRangeCellCount("/Sheet1/C5:A1"), 15);
+    assert.equal(xlsxRangeCellCount("/Sheet1/col[A]"), null);
+    assert.equal(xlsxRangeCellCount("/slide[1]/shape[@id=2]"), null);
+  });
+});
+
+describe("超时分档（B2）", () => {
+  test("读 / 渲染 / 批写都是 60 秒（实测同类命令 0.3–23.8 秒，15 秒会误杀）", () => {
+    assert.equal(OFFICE_READ_TIMEOUT_MS, 60_000);
+    assert.equal(OFFICE_RENDER_TIMEOUT_MS, 60_000);
+    assert.equal(OFFICE_BATCH_TIMEOUT_MS, 60_000);
+  });
+});
 
 describe("officeFormatOf / normalizeOfficePath", () => {
   test("只认 .xlsx / .pptx（大小写不敏感）", () => {
