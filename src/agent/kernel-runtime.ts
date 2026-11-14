@@ -126,6 +126,8 @@ function runSession(root: string, command: KernelSessionCommand, ready: Promise<
 
 async function drop(library: string): Promise<void> {
   if (pool === null) throw new Error("kernel runtime is not initialized");
+  // 先停这个库里在跑的轮、等它们收尾，再关库删文件（删正在跑的会话 = 先停再删）
+  await sessions?.closeLibrary(library);
   await pool.drop(library);
 }
 

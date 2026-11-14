@@ -1,6 +1,7 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -553,5 +554,56 @@ describe("KernelSessions：回退 / 撤销 / 分支（旧内核本子编辑的�
     await r.sessions.handle("b2", { type: "branch", sessionId: "b2", sourcePiSessionFile: "durable:s1", cwd, roles: ["user"], sourceSessionId: "s1", sourceRoot: "s1" });
     const bad = await r.until((event) => r.events.indexOf(event) >= before && (event.type === "created" || event.type === "failed"));
     assert.ok(bad.type === "failed" && /agent reply/.test(bad.message));
+  });
+});
+
+describe("KernelSessions：删除（删树根 = 删库；删树里的一条 = 摘掉 + 关库时清行）", () => {
+  it("删树里的一条（在跑也行）：先停它的轮；关库后它的行与原文从库文件里消失，同库的父会话照常能聊，库完整", async () => {
+    const cwd = await tempDir();
+    const libraryDir = await tempDir();
+    faux.setResponses([fauxAssistantMessage("父答-PARENT-MARK"), fauxAssistantMessage(fauxToolCall("bash", { command: "sleep 30" }), { stopReason: "toolUse" }), fauxAssistantMessage("又答")]);
+    const r = await rig(undefined, null, libraryDir);
+    await r.sessions.handle("p1", submit(cwd, { sessionId: "p1", text: "父说" }));
+    await r.until(idle("p1"));
+    // 子会话与父同库（root = p1），正跑着一个慢 bash
+    void r.sessions.handle("p1", submit(cwd, { sessionId: "c1", text: "子说-CHILD-MARK" }));
+    await r.until((event) => event.type === "progress" && event.sessionId === "c1" && event.progress.type === "item_started" && event.progress.item.role === "tool");
+    await r.sessions.handle("p1", { type: "forget", sessionId: "c1" });
+    assert.equal(r.sessions.isRunning("c1"), false, "删之前先停了它的轮");
+    const file = join(libraryDir, "p1.sqlite");
+    assert.match(await readFile(`${file}.purge.json`, "utf8"), /\d/);
+    const onDisk = async (mark: string): Promise<boolean> =>
+      (await readFile(file)).includes(Buffer.from(mark)) || (await readFile(`${file}-wal`).catch(() => Buffer.alloc(0))).includes(Buffer.from(mark));
+    assert.ok(await onDisk("CHILD-MARK"), "摘掉之后、关库之前：行还在（墓碑等关库）");
+    await r.pool.closeAll();
+    // 关库时按墓碑清行：墓碑没了、原文不在文件里、库完整
+    await assert.rejects(readFile(`${file}.purge.json`, "utf8"));
+    assert.ok(!(await onDisk("CHILD-MARK")), "子会话的原文不在库文件里（含 WAL）");
+    assert.ok(await onDisk("PARENT-MARK"), "父会话的还在");
+    const db = new DatabaseSync(file);
+    assert.equal((db.prepare("PRAGMA integrity_check").get() as { integrity_check: string }).integrity_check, "ok");
+    db.close();
+    // 父会话照常能聊（同一个库重新打开）
+    const before = r.events.length;
+    await r.sessions.handle("p1", submit(cwd, { sessionId: "p1", text: "父又说", piSessionFile: "durable:p1" }));
+    await r.until((event) => r.events.indexOf(event) >= before && idle("p1")(event));
+    assert.match(JSON.stringify(r.transcript("p1")), /又答/);
+    const { harness } = await r.pool.library("p1.sqlite");
+    assert.equal((await harness.snapshot(SessionIndexDoc, BACKGROUND_CONTEXT))?.sessions["c1"], undefined);
+  });
+
+  it("删树根：先停库里所有在跑的轮（父与子），再关库删文件（库、-wal、-shm、墓碑都不在）", async () => {
+    const cwd = await tempDir();
+    const libraryDir = await tempDir();
+    faux.setResponses([fauxAssistantMessage(fauxToolCall("bash", { command: "sleep 30" }), { stopReason: "toolUse" }), fauxAssistantMessage(fauxToolCall("bash", { command: "sleep 30" }), { stopReason: "toolUse" })]);
+    const r = await rig(undefined, null, libraryDir);
+    void r.sessions.handle("p1", submit(cwd, { sessionId: "p1", text: "父" }));
+    void r.sessions.handle("p1", submit(cwd, { sessionId: "c1", text: "子" }));
+    await r.until((event) => event.type === "progress" && event.sessionId === "p1" && event.progress.type === "item_started" && event.progress.item.role === "tool");
+    await r.until((event) => event.type === "progress" && event.sessionId === "c1" && event.progress.type === "item_started" && event.progress.item.role === "tool");
+    await r.sessions.closeLibrary("p1.sqlite");
+    assert.equal(r.sessions.busy(), false);
+    await r.pool.drop("p1.sqlite");
+    for (const suffix of ["", "-wal", "-shm", ".purge.json"]) await assert.rejects(readFile(join(libraryDir, `p1.sqlite${suffix}`)));
   });
 });

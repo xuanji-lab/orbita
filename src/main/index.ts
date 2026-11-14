@@ -1101,16 +1101,23 @@ void app.whenReady().then(async () => {
   };
   registerSessionIpc(
     sessions,
-    // 新内核开着时：删的是树根就连它的库一起删（一棵树一库；子会话没有自己的库，drop 是空操作）
+    // 新内核开着时：删的是树根就连它的库一起删（一棵树一库）；删的是树里的一条（子会话）就只从树的库里摘掉它
+    // （库关闭时清行，kernel-purge.ts）。session:delete 等这里做完才删会话文件
     kernel === null
       ? onSessionRemoved
-      : (id) => {
+      : async (id) => {
           onSessionRemoved(id);
-          // kernel 进程开着就让它停轮、关库再删（不在写者手里删文件）；没开着直接删文件
-          void agentHost
-            .dropKernelLibrary(kernelLibraryName(id))
-            .then((dropped) => (dropped ? undefined : kernel.drop(kernelLibraryName(id))))
-            .catch((error: unknown) => console.error("[kernel] 删库失败", error));
+          const meta = await sessions.readMeta(id);
+          try {
+            if (meta?.parentId !== undefined) {
+              if (meta.durable !== undefined) await agentHost.forgetKernelSession(id, meta.parentId);
+              return;
+            }
+            // kernel 进程开着就让它停轮、关库再删（不在写者手里删文件）；没开着直接删文件
+            if (!(await agentHost.dropKernelLibrary(kernelLibraryName(id)))) await kernel.drop(kernelLibraryName(id));
+          } catch (error) {
+            console.error("[kernel] 删库 / 摘会话失败", error);
+          }
         },
     agentHost,
     carryovers,

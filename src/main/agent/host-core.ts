@@ -969,6 +969,16 @@ export class AgentHostCore {
   }
 
   /**
+   * 删树里的一条会话（不是树根）：让 kernel 停它的轮、从树的库里摘掉（库关闭时清行）。kernel 没开着就为这件事拉起它——
+   * 墓碑要写在库里摘掉之后，只有 kernel 进程碰得到库。
+   */
+  async forgetKernelSession(sessionId: string, root: string): Promise<void> {
+    await this.ensureKernel();
+    this.postKernel({ type: "forget", sessionId }, root);
+    this.kernelSessions.delete(sessionId);
+  }
+
+  /**
    * 删一棵会话树的库：kernel 进程开着就让它停轮、关库再删（不在写者手里删文件）；没开着返回 false，
    * 调用方直接删文件（KernelHost.drop）。
    */

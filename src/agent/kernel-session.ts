@@ -171,6 +171,8 @@ export class KernelSessions {
   private shuttingDown = false;
   /** 会话 → 用量累计（跨轮保留：增量读条目） */
   private readonly stats = new Map<string, KernelStats>();
+  /** 会话 → 它所在的库（删树时按库停轮） */
+  private readonly libraryOf = new Map<string, string>();
 
   constructor(deps: KernelSessionsDeps) {
     this.deps = deps;
@@ -196,6 +198,25 @@ export class KernelSessions {
   /** 这条会话现在有没有一轮在跑（测试与 shutdown 用） */
   isRunning(sessionId: string): boolean {
     return this.running.has(sessionId);
+  }
+
+  /** 有没有任何一轮在跑（闲置回收 kernel 进程前问） */
+  busy(): boolean {
+    return this.running.size > 0;
+  }
+
+  private forgetNotes(sessionId: string): void {
+    this.notes.delete(sessionId);
+    this.stats.delete(sessionId);
+    this.libraryOf.delete(sessionId);
+    this.deps.intentConfirm.settle(sessionId);
+  }
+
+  /** 删一棵树之前：停掉这个库里所有在跑的轮、等它们收尾（不在写者手里关库） */
+  async closeLibrary(library: string): Promise<void> {
+    const ids = [...this.libraryOf.entries()].filter(([, owner]) => owner === library).map(([id]) => id);
+    await Promise.all(ids.map((id) => killCycle(this.running, id)));
+    for (const id of ids) this.forgetNotes(id);
   }
 
   /** 一条会话的命令。root：这棵会话树的根会话 id（决定库） */
@@ -227,9 +248,7 @@ export class KernelSessions {
     }
     if (command.type === "dispose") {
       await killCycle(this.running, command.sessionId);
-      this.notes.delete(command.sessionId);
-      this.stats.delete(command.sessionId);
-      this.deps.intentConfirm.settle(command.sessionId);
+      this.forgetNotes(command.sessionId);
       return;
     }
     if (command.type === "setMode") {
@@ -271,8 +290,10 @@ export class KernelSessions {
       return;
     }
     if (command.type === "forget") {
-      // 删树里的一条：实现在后面的 commit
-      this.send({ type: "failed", sessionId: command.sessionId, message: `${command.type} is not supported by the durable kernel yet` });
+      // 删树里的一条：先停它在跑的轮（与删根同一条「先停再删」），再从库里摘掉、记墓碑（库关闭时清行）
+      await killCycle(this.running, command.sessionId);
+      this.forgetNotes(command.sessionId);
+      await this.deps.pool.forget(library, command.sessionId);
       return;
     }
     command satisfies never;
@@ -347,6 +368,7 @@ export class KernelSessions {
 
   private startTurn(library: string, command: OpenCommand): Promise<void> {
     const id = command.sessionId;
+    this.libraryOf.set(id, library);
     let settledResult: KernelTurnResult = { ok: false, reason: "turn did not start" };
     return startCycle(
       this.running,

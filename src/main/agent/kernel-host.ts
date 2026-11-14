@@ -89,11 +89,11 @@ export class KernelHost {
   }
 
   /**
-   * 删一棵会话树的库文件与 WAL 两个旁文件（kernel 进程没开着这个库时用；开着时 host 先让它关库再删）。库不在也算成功。
+   * 删一棵会话树的库文件、WAL 两个旁文件与墓碑（kernel 进程没开着这个库时用；开着时 host 先让它关库再删）。库不在也算成功。
    */
   async drop(library: string): Promise<void> {
     if (!KERNEL_LIBRARY_NAME.test(library)) throw new Error(`invalid library name "${library}"`);
-    for (const suffix of ["", "-wal", "-shm"]) await rm(join(this.dir, `${library}${suffix}`), { force: true });
+    for (const suffix of ["", "-wal", "-shm", ".purge.json"]) await rm(join(this.dir, `${library}${suffix}`), { force: true });
   }
 
   /** 交给 AgentHost 的新内核那条道 */

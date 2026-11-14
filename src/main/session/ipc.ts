@@ -34,7 +34,7 @@ import type { SessionStore } from "./store.ts";
 
 export function registerSessionIpc(
   store: SessionStore,
-  onSessionRemoved: ((id: string) => void) | undefined,
+  onSessionRemoved: ((id: string) => void | Promise<void>) | undefined,
   agentHost: AgentHost,
   carryovers: CarryoverStore,
   /** 给导入的会话分配模型：执行前校验目标 provider / 模型仍存在（model-assign.ts） */
@@ -109,9 +109,9 @@ export function registerSessionIpc(
     // 先停全部后代 + 自己在 runtime 里的活跑轮（onSessionRemoved = disposeSession，
     // 它的 dispose 会 abort 在跑的轮），store.remove 自己再级联删文件。
     for (const descendantId of await store.descendants(id)) {
-      onSessionRemoved?.(descendantId);
+      await onSessionRemoved?.(descendantId);
     }
-    onSessionRemoved?.(id);
+    await onSessionRemoved?.(id);
     await store.remove(id);
   });
   // 工作台现状：删除确认项要把「里面有几个文件」说出来（提示后删）。

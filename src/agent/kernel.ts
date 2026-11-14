@@ -34,6 +34,7 @@ import {
   type Storage,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { addTombstones, purgeFile, purgeTombstoned } from "./kernel-purge.ts";
 import type { ProviderSecrets } from "../shared/agent-ipc.ts";
 import { isDurableBookRef, KERNEL_LIBRARY_NAME } from "../shared/kernel.ts";
 import type { ThinkingLevel } from "../shared/thinking.ts";
@@ -292,6 +293,8 @@ export class KernelPool {
     if (existing !== undefined) return existing;
     const opening = (async (): Promise<OpenLibrary> => {
       const file = this.filePath(library);
+      // 上次删了树里的一条、还没来得及清行（关库前进程就没了）：打开之前清掉
+      if (this.options.openStorage === undefined) await this.purge(file);
       const storage = await (this.options.openStorage ?? ((path: string) => openNodeSqliteStorage(path)))(file);
       // 扩展（工具、系统提示、钩子）按会话在跑轮时装：迁移与开库用不到
       const registry = createRegistry();
@@ -506,7 +509,53 @@ export class KernelPool {
     }
   }
 
-  /** 删一棵会话树：关库 + 删库文件（含 WAL 两个旁文件）。库不在也算成功。 */
+  /**
+   * 删树里的一条会话（不是树根）：从索引、历史、原件指纹里摘掉（一次提交），停它用过的会话里还活着的任务，
+   * 再把这些会话号记进墓碑——库下一次关闭（或打开）时按墓碑清行（kernel-purge.ts）。返回记进墓碑的会话号。
+   */
+  async forget(library: string, sessionId: string): Promise<number[]> {
+    const { harness } = await this.library(library);
+    const ids = await harness.commit(async (tx) => {
+      const index = await tx.doc(SessionIndexDoc);
+      const indexed = index.sessions[sessionId];
+      delete index.sessions[sessionId];
+      const history = await tx.doc(SessionHistoryDoc);
+      const used = history.sessions[sessionId] ?? [];
+      delete history.sessions[sessionId];
+      delete (await tx.doc(LegacyPrintDoc)).prints[sessionId];
+      return [...new Set([...used, ...(indexed === undefined ? [] : [indexed])])];
+    }, BACKGROUND_CONTEXT);
+    for (const id of ids) {
+      const conversationId = id as ConversationId;
+      const live = await harness.snapshot(LiveDoc, conversationId, BACKGROUND_CONTEXT);
+      const tasks = [...(live?.run === undefined ? [] : [live.run.taskId]), ...(live?.compactions ?? []).map((status) => status.taskId)];
+      for (const task of tasks) await harness.abortTask(task, BACKGROUND_CONTEXT);
+      if (tasks.length > 0) await (await harness.conversation(conversationId, BACKGROUND_CONTEXT))?.waitForIdle(BACKGROUND_CONTEXT);
+    }
+    if (ids.length > 0) await addTombstones(this.filePath(library), ids);
+    return ids;
+  }
+
+  /** 按墓碑清行（库没被打开时）；失败只记日志，墓碑留着下次再清 */
+  private async purge(file: string): Promise<void> {
+    try {
+      const result = await purgeTombstoned(file);
+      if (result !== null) this.options.log?.(`[kernel] ${file}：清掉删除的会话 ${result.conversations} 条（条目 ${result.entries}、任务 ${result.tasks}、文档 ${result.documents}）`);
+    } catch (cause) {
+      this.options.log?.(`[kernel] ${file}：清删除会话的行失败，下次再试：${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+  }
+
+  /** 关一个库（不删）；关完按墓碑清行 */
+  async close(library: string): Promise<void> {
+    const opening = this.libraries.get(library);
+    this.libraries.delete(library);
+    const opened = opening === undefined ? null : await opening.catch(() => null);
+    if (opened !== null) await opened.harness.close(BACKGROUND_CONTEXT);
+    if (this.options.openStorage === undefined) await this.purge(this.filePath(library));
+  }
+
+  /** 删一棵会话树：关库 + 删库文件（含 WAL 两个旁文件与墓碑）。库不在也算成功。 */
   async drop(library: string): Promise<void> {
     const file = this.filePath(library);
     const opening = this.libraries.get(library);
@@ -516,16 +565,12 @@ export class KernelPool {
       if (opened !== null) await opened.harness.close(BACKGROUND_CONTEXT);
     }
     for (const suffix of ["", "-wal", "-shm"]) await rm(`${file}${suffix}`, { force: true });
+    await rm(purgeFile(file), { force: true });
   }
 
-  /** 关掉全部库（进程退出前）。 */
+  /** 关掉全部库（进程退出 / 闲置回收前）；关完按墓碑清行。 */
   async closeAll(): Promise<void> {
-    const all = [...this.libraries.values()];
-    this.libraries.clear();
-    for (const opening of all) {
-      const opened = await opening.catch(() => null);
-      if (opened !== null) await opened.harness.close(BACKGROUND_CONTEXT);
-    }
+    for (const library of [...this.libraries.keys()]) await this.close(library);
   }
 }
 
