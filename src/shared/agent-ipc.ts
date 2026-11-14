@@ -18,6 +18,7 @@ import type { CompactedRecord } from "./session.ts";
 import type { FileChangePayload, FileChangeView } from "./revert.ts";
 import type { PromptImage, SentImage } from "./prompt-images.ts";
 import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
+import type { BashSessionsSnapshot } from "./bash-session.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
 import type { SlidesAgentRequest, SlidesOutcome } from "./slides-export.ts";
@@ -73,6 +74,12 @@ export const ipcChannels = {
    * **没有状态轮询**——结果由 runtime 写回对话（一条终态 tool 记录），界面据此落定。
    */
   agentBashStop: "agent:bash-stop",
+  /**
+   * 后台会话快照：这条会话名下「此刻还在跑的后台命令 + 回答它的 agent 进程标识」，
+   * 回 BashSessionsSnapshot | null（null = 问不到，界面维持原判）。
+   * **不是轮询接口**：界面只在渲染一条「交还」行时问一次、之后才偶发复查（见 ChatView）。
+   */
+  agentBashState: "agent:bash-state",
   /**
    * 意图系统（实验）的三条主进程 HTTP 通道：
    * - intent:health —— 探活 intent-lab（GET /health），回 IntentHealth | null
@@ -1288,7 +1295,14 @@ export type AgentCommand =
    * （b1 / b2…）。与模型的 `bash_stop` 走同一个 `stopSession`，owner 校验照旧。
    * 结束回调会把「已停止」写回对话，所以没有回执字段。
    */
-  | { type: "bashStop"; sessionId: string; bashId: string };
+  | { type: "bashStop"; sessionId: string; bashId: string }
+  /**
+   * 界面问「转录里那条交还（b1 / b2…）现在还活着吗」。会话表在 agent 进程里，只有它
+   * 能如实回答：回执带本进程标识 + 在跑的会话 id（`bashSessions` 事件），
+   * 界面拿提示里的 `run=` 对比——对不上就是上个进程留下的（失联）。
+   * 不落盘、不开轮，也不为它拉起进程（进程没起时主进程直接回答空快照）。
+   */
+  | { type: "bashState"; requestId: string; sessionId: string };
 
 /**
  * B-1：read_task 读到的「这是一条什么 task」。**只给 UI、不入模型上下文**——
@@ -1662,6 +1676,11 @@ export type AgentEvent =
   | { type: "choreCompleted"; requestId: string; text: string | null; error?: string }
   /** `probeProvider` 的回执：ok = 真会话同源客户端拿到了模型响应；message 直接进 Test 的状态行 */
   | { type: "providerProbed"; requestId: string; ok: boolean; message: string }
+  /**
+   * `bashState` 的回执：回答这份快照的 agent 进程标识 + 此刻在跑的后台会话 id。
+   * 主进程吃掉它结掉等待者，**不广播**（renderer 不认这个事件，它拿的是 invoke 的返回值）。
+   */
+  | { type: "bashSessions"; requestId: string; snapshot: BashSessionsSnapshot }
   /**
    * 会话内模型切换成功（C-4 的 `setModel` 命令翻译而来）。主进程落 meta
    * （providerId / modelId——分支继承与重开恢复都读它）并转给 renderer 对齐

@@ -13,6 +13,7 @@ import {
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
+import type { BashSessionsSnapshot } from "../../shared/bash-session.ts";
 
 export const agentApi = {
   /**
@@ -47,6 +48,13 @@ export const agentApi = {
    */
   stopBashSession: (sessionId: string, bashId: string): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentBashStop, sessionId, bashId),
+  /**
+   * 这条会话名下「此刻还在跑的后台命令」快照（带着回答它的 agent 进程标识）。
+   * 界面拿交还提示里的 `run=` 比对，判出那一行是同一进程里正常在跑、还是上一个进程留下的。
+   * null = 没问出来（超时），调用方维持原判。
+   */
+  bashSessions: (sessionId: string): Promise<BashSessionsSnapshot | null> =>
+    ipcRenderer.invoke(ipcChannels.agentBashState, sessionId),
   /** 意图确认卡的回答（实验功能 intent-system）：对不上号的陈旧应答丢弃不串台 */
   answerIntentConfirm: (requestId: string, decision: IntentConfirmDecision): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentAnswerIntentConfirm, requestId, decision),

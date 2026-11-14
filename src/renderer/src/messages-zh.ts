@@ -1961,6 +1961,8 @@ export const zh: Messages = {
     bashStopped: "已停止",
     bashTerminated: "已终止",
     bashCapLimit: "上限",
+    bashLost: "已失联",
+    bashLostRestart: "应用已重启",
     copyCommand: "复制命令",
     stopBash: (id) => `停止 ${id}`,
     copyAnswer: "复制回答",

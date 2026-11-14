@@ -55,6 +55,8 @@ import {
   toolCallSummary,
   toolDurationText,
   bashLiveFacts,
+  bashLiveSeconds,
+  bashLostFacts,
   bashResultFacts,
   bashResultOf,
   detachedBashNotice,
@@ -2133,6 +2135,28 @@ describe("bash 活行（异步送达式）", () => {
     const facts = bashLiveFacts({ sessionId: "b1", elapsedSeconds: 754 }, 754, zh);
     assert.equal(facts.text, "b1 · 已 12:34");
     assert.doesNotMatch(facts.text, /上限/);
+  });
+
+  test("秒针外推到上限就停跳（越过寿命的「已 X」一定是假的）", () => {
+    const notice = { sessionId: "b1", elapsedSeconds: 1_700, lifetimeSeconds: 1_800 };
+    // 交还时 1700 秒，本地又走了 10 秒 → 1710（还没到边界）
+    assert.equal(bashLiveSeconds(notice, notice.elapsedSeconds, 10_000), 1_710);
+    // 再走 10 分钟 → 停在 1800，不越过上限
+    assert.equal(bashLiveSeconds(notice, notice.elapsedSeconds, 600_000), 1_800);
+    // 旧记录没有上限：照常外推（没有上限可撞）
+    assert.equal(bashLiveSeconds({ sessionId: "b1", elapsedSeconds: 10 }, 10, 90_000), 100);
+    // detach 时间戳在未来（时钟回拨）：不产生负数
+    assert.equal(bashLiveSeconds({ sessionId: "b1", elapsedSeconds: 10 }, 10, -5_000), 10);
+  });
+
+  test("失联事实：不报耗时，只报失联（进程换了才说应用已重启）", () => {
+    const notice = { sessionId: "b3", elapsedSeconds: 382, lifetimeSeconds: 1_800, runId: "abc12345" };
+    const gone = bashLostFacts(notice, zh, false);
+    assert.equal(gone.text, "b3 · 已失联");
+    assert.equal(gone.tone, "neutral");
+    assert.doesNotMatch(gone.text, /已 \d/); // 之后跑了多久无人作证，不能报
+    assert.equal(bashLostFacts(notice, zh, true).text, "b3 · 已失联 · 应用已重启");
+    assert.equal(bashLostFacts(notice, en, true).text, "b3 · lost · app restarted");
   });
 
   test("交还提示里的 lifetime= 被认出来（界面靠它画上限）", () => {

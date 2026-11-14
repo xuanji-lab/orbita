@@ -2131,6 +2131,8 @@ export const en = {
     bashStopped: "stopped",
     bashTerminated: "terminated",
     bashCapLimit: "session limit",
+    bashLost: "lost",
+    bashLostRestart: "app restarted",
     copyCommand: "Copy command",
     stopBash: (id: string) => `Stop ${id}`,
     copyAnswer: "Copy answer",

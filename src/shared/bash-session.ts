@@ -75,18 +75,25 @@ export function bashResultMetaOf(details: unknown): BashResultMeta | null {
  * 交还提示行的前言（竖线之左）。elapsed = 从 spawn 到交还已经跑了多久（秒）。
  * `lifetime` = 这条会话的寿命上限（秒）：界面活行的「· 上限 4:00:00」读它。
  * 上限缺席（旧记录 / 会话表没给）时不写这个键，界面也就不显示那一段。
+ *
+ * `run` = 写这条提示的 agent 进程的运行标识（每次进程启动生成一次）。**它是
+ * 「这一行属于哪个进程」的唯一凭据**：会话表在进程内存里，进程一换（应用重启 /
+ * 内核重启）那张表就空了，而转录里这一行还在——标识对不上，界面就不能再把它画成
+ * 还在跑。不带它（旧记录）时界面只能按 id 尽力判断。
  */
 export function detachedNoticeHeader(
   sessionId: string,
   elapsedSeconds: number,
   lifetimeSeconds?: number,
+  runId?: string,
 ): string {
   const elapsed = Math.max(0, Math.round(elapsedSeconds));
   const lifetime =
     lifetimeSeconds === undefined || !Number.isFinite(lifetimeSeconds) || lifetimeSeconds <= 0
       ? ""
       : ` lifetime=${Math.round(lifetimeSeconds)}s`;
-  return `[orbita] kind=detached session=${sessionId} elapsed=${elapsed}s${lifetime}`;
+  const run = runId === undefined || runId.length === 0 ? "" : ` run=${runId}`;
+  return `[orbita] kind=detached session=${sessionId} elapsed=${elapsed}s${lifetime}${run}`;
 }
 
 /** 从交还提示里认出的会话、已跑时长与寿命上限 */
@@ -95,6 +102,8 @@ export interface DetachedNotice {
   elapsedSeconds: number;
   /** 寿命上限（秒）。旧记录没有这一段，界面不画「上限」 */
   lifetimeSeconds?: number;
+  /** 写这条提示的 agent 进程标识。旧记录没有这一段 */
+  runId?: string;
 }
 
 /**
@@ -105,14 +114,48 @@ export interface DetachedNotice {
  * `elapsed=` 缺席时按 0（旧记录）：秒针从交还那一刻起跳，至少不会编造。
  */
 export function parseDetachedNotice(text: string): DetachedNotice | null {
-  const match = /\[orbita\] kind=detached session=(b\d+)(?: elapsed=(\d+)s)?(?: lifetime=(\d+)s)?/.exec(text);
+  const match = /\[orbita\] kind=detached session=(b\d+)(?: elapsed=(\d+)s)?(?: lifetime=(\d+)s)?(?: run=([0-9a-z]+))?/.exec(text);
   if (match === null) return null;
   const lifetimeSeconds = Number(match[3] ?? "0");
+  const runId = match[4] ?? "";
   return {
     sessionId: match[1] ?? "",
     elapsedSeconds: Number(match[2] ?? "0"),
     ...(lifetimeSeconds > 0 ? { lifetimeSeconds } : {}),
+    ...(runId.length > 0 ? { runId } : {}),
   };
+}
+
+/**
+ * agent 进程此刻的后台会话快照（`agent:bash-state` 的回执）。
+ *
+ * **为什么要问进程**：会话表在 agent 进程的内存里，只有它知道某条后台命令还在不在跑。
+ * 界面据此判定转录里那条「交还」行是**同一进程里正常在跑**，还是**上一个进程留下的**：
+ * `runId` 与交还提示里的 `run=` 对不上 = 那条命令的进程早随旧进程没了，结果也不会再回来。
+ */
+export interface BashSessionsSnapshot {
+  /** 回答这份快照的 agent 进程标识；空串 = 进程没起（那一条后台命令也不在跑） */
+  runId: string;
+  /** 此刻仍在跑的会话 id（不含已结束、只是还在保留期里的） */
+  running: string[];
+}
+
+/**
+ * 这一行交还提示是否**真的还在跑**。
+ *
+ * 两道关：
+ * 1. 会话 id 在快照的 running 里——会话表里没有它，它就不在跑了；
+ * 2. 快照的 runId 与提示里的 `run=` 一致——一致说明是同一个 agent 进程答的，
+ *    这条记录也出自它；不一致说明中间换过进程（应用重启 / 内核重启），旧进程的
+ *    会话表连同命令一起没了。
+ *
+ * 旧记录没有 `run=`：只能按 id 判（同一个进程重启后 id 会从 b1 重新发号，这一档
+ * 有极小概率误判成在跑——只影响本次改动之前写下的老转录）。
+ */
+export function detachedNoticeIsLive(notice: DetachedNotice, snapshot: BashSessionsSnapshot): boolean {
+  if (!snapshot.running.includes(notice.sessionId)) return false;
+  if (notice.runId === undefined) return true;
+  return notice.runId === snapshot.runId;
 }
 
 /** 从工具结果文本里认出交还的会话 id（parseDetachedNotice 的薄封装）。 */

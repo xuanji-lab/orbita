@@ -1262,6 +1262,34 @@ export function bashLiveFacts(notice: DetachedNotice, seconds: number, t: Messag
 }
 
 /**
+ * 活行秒针的本地外推，**到上限就停跳**。
+ *
+ * 寿命是硬边界（到点命令会被杀、结果会写回）：越过它还在涨的「已 X」一定是假的，
+ * 不论进程在不在。所以宁可停在边界上，也不给一个对不上任何事实的数字。
+ */
+export function bashLiveSeconds(
+  notice: DetachedNotice,
+  detachElapsedSeconds: number,
+  sinceDetachMs: number,
+): number {
+  const seconds = detachElapsedSeconds + Math.max(0, sinceDetachMs / 1000);
+  if (notice.lifetimeSeconds === undefined) return seconds;
+  return Math.min(seconds, notice.lifetimeSeconds);
+}
+
+/**
+ * 失联行的事实槽：写这条提示的那个进程已经不在了（应用重启 / 内核进程重启），
+ * 那台命令连同它的结果都不会再回来。
+ *
+ * **不报耗时**：我们只知道它在交还那一刻跑了多久，之后的时长无人作证——
+ * 报一个数字就是替它编。
+ */
+export function bashLostFacts(notice: DetachedNotice, t: Messages, restarted: boolean): BashFacts {
+  const reason = restarted ? ` · ${t.chat.bashLostRestart}` : "";
+  return { text: `${notice.sessionId} · ${t.chat.bashLost}${reason}`, tone: "neutral" };
+}
+
+/**
  * 落定行的事实槽：机器事实，不是状态词。退出码 / 已停止 / 已终止 + 总耗时。
  * 只有「寿命上限杀掉」是警示色——那一种不是你停的。
  */

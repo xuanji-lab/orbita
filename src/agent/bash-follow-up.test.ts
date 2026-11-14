@@ -7,7 +7,12 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { BashSessionEnd } from "./bash-sessions.ts";
-import { bashFollowUpPrompt, shouldStartBashFollowUp } from "./bash-follow-up.ts";
+import {
+  bashFollowUpPrompt,
+  bashQueuedFollowUpPrompt,
+  shouldDrainBashFollowUp,
+  shouldStartBashFollowUp,
+} from "./bash-follow-up.ts";
 
 const natural = (overrides: Partial<BashSessionEnd> = {}): BashSessionEnd => ({
   id: "b1",
@@ -62,5 +67,47 @@ describe("自动起一轮的提示词", () => {
 
   test("退出码未知时说 unknown，不编造 0", () => {
     assert.match(bashFollowUpPrompt(natural({ exitCode: null })), /exit unknown/);
+  });
+});
+
+describe("轮结束时补轮 —— 挂起的后台结果", () => {
+  /** 挂起判定的基线：有东西挂着、空闲、不是用户停的、有模板 */
+  const base = { pending: 2, busy: false, userStopped: false, hasTemplate: true } as const;
+
+  test("有挂起 + 空闲 + 有模板 + 不是用户停的 → 补一轮", () => {
+    assert.equal(shouldDrainBashFollowUp(base), true);
+  });
+
+  test("没挂起 → 什么都不做", () => {
+    assert.equal(shouldDrainBashFollowUp({ ...base, pending: 0 }), false);
+  });
+
+  test("新轮已经开起来（忙）→ 不补：它开轮时读的就是含这条结果的本子", () => {
+    assert.equal(shouldDrainBashFollowUp({ ...base, busy: true }), false);
+  });
+
+  test("用户刚按了停止 → 不补（停止就是停止，下一句由人起头）", () => {
+    assert.equal(shouldDrainBashFollowUp({ ...base, userStopped: true }), false);
+  });
+
+  test("还没有可重放的装配模板 → 不补", () => {
+    assert.equal(shouldDrainBashFollowUp({ ...base, hasTemplate: false }), false);
+  });
+});
+
+describe("挂起结果的提示词", () => {
+  test("几条结果一轮盖完：每条一行事实，说明结果都在上面", () => {
+    const prompt = bashQueuedFollowUpPrompt([
+      { id: "b1", status: "finished", exitCode: 0, elapsedMs: 320_000 },
+      { id: "b2", status: "finished", exitCode: 2, elapsedMs: 342_000 },
+    ]);
+    assert.match(prompt, /Background commands b1 \(exit 0, 5m20s\), b2 \(exit 2, 5m42s\)/);
+    assert.match(prompt, /finished while you were busy/);
+    assert.match(prompt, /The results are above/);
+  });
+
+  test("单数用 command（一条结果也走这条路时文案不能是复数）", () => {
+    const prompt = bashQueuedFollowUpPrompt([{ id: "b3", status: "finished", exitCode: null, elapsedMs: 1000 }]);
+    assert.match(prompt, /Background command b3 \(exit unknown, 1s\)/);
   });
 });

@@ -25,6 +25,7 @@ import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPreviewOutcome } from "../../shared/plugin.ts";
 import type { PluginBoardOutcome } from "../../shared/plugin-board.ts";
 import type { MemoryAgentOutcome, MemoryRecallOutcome } from "../../shared/memory.ts";
+import type { BashSessionsSnapshot } from "../../shared/bash-session.ts";
 
 /** host 对「子进程」的全部要求——Electron 的 UtilityProcess 结构上满足，测试用脚本假货顶上。 */
 export interface AgentChild {
@@ -96,6 +97,12 @@ export class AgentHostCore {
   /** 在等的 choreComplete 回执（收尾清单按反馈改写），按 requestId；进程退出全部 reject */
   private readonly pendingChores = new Map<string, { resolve: (text: string) => void; reject: (error: Error) => void }>();
   private choreSeq = 0;
+  /**
+   * 在等的 bashState 回执（界面问「转录里那条交还行还活着吗」），按 requestId。
+   * 超时/进程没了都**不当错误**：回 null 让界面维持原判（问不到 = 不知道，不冒充死了）。
+   */
+  private readonly pendingBashStates = new Map<string, { resolve: (snapshot: BashSessionsSnapshot | null) => void }>();
+  private bashStateSeq = 0;
 
   /**
    * catalogScope 缺席 = 不送目录刷新范围，agent 进程就一份目录也不联网（测试与裸跑）。
@@ -181,6 +188,13 @@ export class AgentHostCore {
           pending?.resolve({ ok: message.ok, message: message.message });
           return;
         }
+        if (message.type === "bashSessions") {
+          // 同 greetingsClassified：只结发起方，不广播
+          const pending = this.pendingBashStates.get(message.requestId);
+          this.pendingBashStates.delete(message.requestId);
+          pending?.resolve(message.snapshot);
+          return;
+        }
         if (message.type === "created") {
           const pending = this.pendingCreates.get(message.sessionId);
           if (pending) {
@@ -233,6 +247,10 @@ export class AgentHostCore {
         this.pendingFocusSummaries.clear();
         for (const pending of this.pendingChores.values()) pending.reject(new Error(message));
         this.pendingChores.clear();
+        // 进程没了 = 它名下的后台命令全部随进程树一起没了：这是**确定的空快照**，
+        // 不是「问不到」。界面据此把那些交还行标成失联
+        for (const pending of this.pendingBashStates.values()) pending.resolve({ runId: "", running: [] });
+        this.pendingBashStates.clear();
         reject(new Error(message));
         this.onEvent({ type: "failed", sessionId: null, message });
       });
@@ -747,6 +765,33 @@ export class AgentHostCore {
    */
   stopBashSession(sessionId: string, bashId: string): void {
     this.child?.postMessage({ type: "bashStop", sessionId, bashId } satisfies AgentCommand);
+  }
+
+  /**
+   * 这条会话名下「此刻还在跑的后台命令」快照（界面判定转录里那条交还行是活着还是失联）。
+   *
+   * **不 ensure**：会话表在 agent 进程内存里，进程没起就一条后台命令也不在跑——
+   * 空快照就是真话，为了一次询问拉起整个 runtime 才是本末倒置（stopBashSession 同源）。
+   * 5 秒内没答上来回 null：那是「不知道」，界面维持原判，不拿一个空快照去诬告失联。
+   */
+  bashSessions(sessionId: string): Promise<BashSessionsSnapshot | null> {
+    if (this.child === null) return Promise.resolve({ runId: "", running: [] });
+    this.bashStateSeq += 1;
+    const requestId = `bash-state-${this.bashStateSeq}`;
+    return new Promise<BashSessionsSnapshot | null>((resolve) => {
+      const timer = setTimeout(() => {
+        if (!this.pendingBashStates.has(requestId)) return;
+        this.pendingBashStates.delete(requestId);
+        resolve(null);
+      }, 5_000);
+      this.pendingBashStates.set(requestId, {
+        resolve: (snapshot) => {
+          clearTimeout(timer);
+          resolve(snapshot);
+        },
+      });
+      this.child?.postMessage({ type: "bashState", requestId, sessionId } satisfies AgentCommand);
+    });
   }
 
   dispose(): void {

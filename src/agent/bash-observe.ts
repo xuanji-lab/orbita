@@ -29,6 +29,7 @@ import {
 import { detachedNoticeHeader, parseDetachedSessionId } from "../shared/bash-session.ts";
 import {
   TailBuffer,
+  bashRunId,
   bindBashSessionToolCall,
   killAllSessions,
   registerSession,
@@ -217,10 +218,18 @@ function waitForChildProcess(child: ChildProcess): Promise<WaitOutcome> {
 /**
  * 签到提示。sessionId 让模型知道下一步该用哪个句柄；逗号后的两句说明怎么继续。
  * 竖线左边那一截由 shared/bash-session.ts 铸（renderer 解析同一份格式）。
+ *
+ * `run=` 是写这条提示的 agent 进程标识：应用重启后会话表清空，界面靠它认出
+ * 转录里那些「还在跑」的行其实是上一个进程留下的（见 detachedNoticeIsLive）。
  */
-function detachNotice(sessionId: string, elapsedSeconds: number, lifetimeSeconds: number): string {
+function detachNotice(
+  sessionId: string,
+  elapsedSeconds: number,
+  lifetimeSeconds: number,
+  runId?: string,
+): string {
   return (
-    `\n${detachedNoticeHeader(sessionId, elapsedSeconds, lifetimeSeconds)} | ` +
+    `\n${detachedNoticeHeader(sessionId, elapsedSeconds, lifetimeSeconds, runId)} | ` +
     "The command is still running; it was detached so you can keep going. " +
     "Its result is written back to the conversation automatically when it finishes — do not poll. " +
     "Use bash_list to see running sessions and bash_stop to end one.\n"
@@ -253,6 +262,11 @@ export interface BashYieldOptions {
    * 从工具调用 detach 之后才可能触发，可能远晚于这一轮结束。
    */
   onSessionEnd?: (result: BashSessionEnd) => void;
+  /**
+   * 交还提示里的 `run=`（agent 进程标识）。线上现取 `bashRunId()`；测试注入固定值，
+   * 免得断言里出现一条每次都变的随机串。
+   */
+  runId?: string;
 }
 
 /**
@@ -405,7 +419,12 @@ export function createObservedBashOperations(
           clearCheckIn();
           onData(
             Buffer.from(
-              detachNotice(session.id, (Date.now() - startedAt) / 1000, lifetimeMs / 1000),
+              detachNotice(
+                session.id,
+                (Date.now() - startedAt) / 1000,
+                lifetimeMs / 1000,
+                options.runId ?? bashRunId(),
+              ),
               "utf8",
             ),
           );

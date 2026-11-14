@@ -570,6 +570,12 @@ export function registerAgentIpc(
   ipcMain.handle(ipcChannels.agentBashStop, (_e, sessionId: string, bashId: string) => {
     host.stopBashSession(sessionId, bashId);
   });
+  /**
+   * 后台会话快照（界面判定转录里那条交还行还活着吗）。
+   * 回 `BashSessionsSnapshot | null`（null = 5 秒没答上来，界面维持原判）。
+   * 与 agentBashStop 同源：**不 ensure**，会话表不在 agent 进程里就是空快照。
+   */
+  ipcMain.handle(ipcChannels.agentBashState, (_e, sessionId: string) => host.bashSessions(sessionId));
   ipcMain.handle(ipcChannels.agentInterrupt, async (_e, input: SubmitAgentInput): Promise<void> => {
     const provider = await resolveForTurn(input.providerId);
     // interrupt 是排队消息的「立即发送」分支（会话还忙碌时）：与 submit 同一份组装，

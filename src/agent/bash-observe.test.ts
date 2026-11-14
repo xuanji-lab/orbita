@@ -270,11 +270,11 @@ describe("签到：交还控制权，不杀进程", () => {
     const dir = await mkdtemp(join(tmpdir(), "orbita-bash-detach-"));
     const pidFile = join(dir, "pid.txt");
     try {
-      const { exitCode, output } = await run(observedOps({ checkInMs: 600 }), tickingWithOwnPid(pidFile), {
+      const { exitCode, output } = await run(observedOps({ checkInMs: 600, runId: "runabc12" }), tickingWithOwnPid(pidFile), {
         cwd: dir,
       });
       assert.equal(exitCode, null, "签到应让本次调用以 exitCode null 返回");
-      assert.match(output, /\[orbita\] kind=detached session=b\d+ elapsed=\d+s lifetime=\d+s \| /);
+      assert.match(output, /\[orbita\] kind=detached session=b\d+ elapsed=\d+s lifetime=\d+s run=runabc12 \| /);
       // 上限跟着交还提示一起来（界面活行的「· 上限」读它）
       assert.match(output, /lifetime=14400s/);
       assert.match(output, /The command is still running; it was detached so you can keep going\./);

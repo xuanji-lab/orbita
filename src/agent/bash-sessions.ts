@@ -20,6 +20,7 @@
  * 交还控制权；结束之后结果自动写回。
  */
 import type { ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
   formatBashDuration,
@@ -43,6 +44,20 @@ export const SESSION_LIFETIME_MS = 4 * 60 * 60 * 1000;
 export const SESSION_RETENTION_MS = 10 * 60 * 1000;
 /** 杀掉之后等子进程真正退出的时限。超时仍没收到退出事件，也照样结一次结果（不吞记录） */
 const KILL_SETTLE_MS = 3_000;
+
+/**
+ * **这个 agent 进程**的运行标识（每次进程启动生成一次）。
+ *
+ * 会话表在进程内存里：进程一换（应用重启 / 内核进程重启）表就空了，命令也随之被
+ * 收掉。转录里的交还提示带上它，界面就能区分「同一进程里正常在跑」与「上一个进程
+ * 留下的」——只靠会话 id 不行，新进程会从 b1 重新发号。
+ */
+export const BASH_RUN_ID = randomUUID().replace(/-/g, "").slice(0, 8);
+
+/** 交还提示里的 `run=` 取它（执行层写提示时现取，测试可注入别的值） */
+export function bashRunId(): string {
+  return BASH_RUN_ID;
+}
 
 /** 会话结束的原因。取值与 `shared/bash-session.ts` 同一份（那是界面与 agent 共用的契约） */
 export type SessionEndReason = BashSessionEndReason;
@@ -554,6 +569,23 @@ export function listSessions(owner?: string): SessionSummary[] {
   return [...sessions.values()]
     .filter((session) => owner === undefined || session.owner === owner)
     .map((session) => session.summary());
+}
+
+/**
+ * 此刻**真的还在跑**的会话 id（按归属过滤）。
+ *
+ * 与 `listSessions` 的差别：这里不包含已经结束、只是还在 10 分钟保留期里的那些。
+ * 界面问「转录里这一行还活着吗」要的就是这个答案——结束了却还在表里，那是记录不是活人。
+ */
+export function runningSessionIds(owner?: string): string[] {
+  return [...sessions.values()]
+    .filter(
+      (session) =>
+        (owner === undefined || session.owner === owner) &&
+        session.endedAt === undefined &&
+        !session.killed,
+    )
+    .map((session) => session.id);
 }
 
 /** 进程退出 / 测试收尾：所有会话的进程树一起收，定时器清干净 */

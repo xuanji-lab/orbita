@@ -21,6 +21,7 @@ import {
   killAllSessions,
   listSessions,
   registerSession,
+  runningSessionIds,
   stopOwnedSessions,
   stopSession,
   withBashReminder,
@@ -233,5 +234,26 @@ describe("下轮提醒 —— 有 / 没有 running 会话", () => {
     const prompt = withBashReminder("继续", listSessions("A"));
     assert.equal(prompt.split("\n\n").length, 2);
     assert.match(prompt, /background bash sessions/);
+  });
+});
+
+describe("活体快照 —— 界面判定「这一行还活着吗」", () => {
+  test("只回在跑的，且按归属过滤（已结束的还在 10 分钟保留期里，但不算活人）", async () => {
+    const a = register({ command: "a", owner: "A" });
+    register({ command: "b", owner: "B" });
+    const done = register({ command: "done", owner: "A" });
+    done.end(0);
+    assert.deepEqual(runningSessionIds("A"), [a.id]);
+    assert.deepEqual(runningSessionIds("B").length, 1);
+    assert.equal(runningSessionIds("A").includes(done.id), false);
+    // 不限归属时两条都算（内部 / 诊断用）
+    assert.equal(runningSessionIds().length, 2);
+  });
+
+  test("被停的会话当场不在快照里（不必等 exit 事件）", async () => {
+    const stopped = register({ command: "x", owner: "A", killSettleMs: 5 });
+    assert.deepEqual(runningSessionIds("A"), [stopped.id]);
+    await stopSession(stopped.id, 5, "A");
+    assert.deepEqual(runningSessionIds("A"), []);
   });
 });

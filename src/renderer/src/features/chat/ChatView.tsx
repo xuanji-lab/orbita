@@ -121,6 +121,8 @@ import {
   formatRunClock,
   // bash 活行：交还会话的认领、事实槽与秒针外推
   bashLiveFacts,
+  bashLiveSeconds,
+  bashLostFacts,
   bashResultFacts,
   bashResultOf,
   detachedBashNotice,
@@ -253,6 +255,7 @@ import {
 } from "@shared/session";
 import type { FileTurnView, RevertRecord, UndoRecord } from "@shared/revert";
 import type { RetryStatus } from "@shared/agent-ipc";
+import { detachedNoticeIsLive, type BashSessionsSnapshot } from "@shared/bash-session";
 import type { ChatSession } from "./useChatSession";
 import type { ModelPair, ThemePreference } from "@shared/settings";
 import { useT } from "../../locale.ts";
@@ -5130,15 +5133,56 @@ function ToolLine(props: {
   const bashId = bashNotice?.sessionId ?? bashResult?.sessionId ?? null;
   // 交还了、还没有落定记录：这条命令还在后台跑（或者结果正在回来的路上）
   const bashRunning = bashNotice !== null && bashResult === null;
+  // ── 这一行**真的**还活着吗 ──
+  // 交还提示是某个 agent 进程写下的事实，而会话表在**那个进程的内存里**：应用一重启
+  // 表就空了、命令连同进程树一起没了，转录里这一行却还在。不查就会一直假装在跑
+  // （秒针天天涨、停止钮挂着、结果永远不会回来）。
+  // 判据交给会话表的 owner（`bashSessions`）：快照带着回答它的进程标识，与提示里的
+  // `run=` 对不上就是上个进程留下的（失联）；对不上 id 也一样。
+  // null = 没问出来（超时）——那是不知道，维持原判，不拿空快照诬告失联。
+  const [bashSnapshot, setBashSnapshot] = useState<BashSessionsSnapshot | null>(null);
+  useEffect(() => {
+    if (!bashRunning) {
+      setBashSnapshot(null);
+      return;
+    }
+    let alive = true;
+    const ask = () => {
+      void api.agent
+        .bashSessions(props.sessionId)
+        .then((snapshot) => {
+          if (alive && snapshot !== null) setBashSnapshot(snapshot);
+        })
+        .catch(() => undefined);
+    };
+    ask();
+    // 20 秒复查一次：内核进程半途没了（崩了 / 被换掉），这一行也不该再装一小时的活人。
+    // 问不拉进程（主进程直接回空快照），代价只是一次 IPC。
+    const timer = window.setInterval(ask, 20_000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [bashRunning, props.sessionId]);
+  const bashLost = bashNotice !== null && bashSnapshot !== null && !detachedNoticeIsLive(bashNotice, bashSnapshot);
+  // 另一种死法：快照的进程标识与提示里的不一样 = 中途换过进程（应用重启 / 内核重启）
+  const bashLostToRestart =
+    bashLost &&
+    bashSnapshot !== null &&
+    bashNotice !== null &&
+    bashNotice.runId !== undefined &&
+    bashNotice.runId !== bashSnapshot.runId;
+  // 还在跑的行：交还没落定、也没失联。停止钮、秒针、活色都只认它
+  const bashLive = bashRunning && !bashLost;
   // 秒针：只挂「跑着的东西」——运行中的 shell（Responding 同款，一秒一跳）与
   // 后台活行（**本地外推**：从 detach 时已跑的秒数 + 之后本地走过的秒数，
   // 不发任何 IPC）。睡眠中的命令没有任何事件帧，计时只能自己跳。
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (!shellActive && !bashRunning) return;
+    if (!shellActive && !bashLive) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [shellActive, bashRunning]);
+  }, [shellActive, bashLive]);
   const runStart = shellActive ? toolStartAt(props.toolCallId) : null;
   const expectedSeconds = shell ? expectedSecondsOf(props.input) : null;
   const limitSeconds = shell ? timeoutSecondsOf(props.input) : null;
@@ -5301,9 +5345,19 @@ function ToolLine(props: {
   const bashFacts =
     bashResult !== null
       ? bashResultFacts(bashResult, t)
-      : bashNotice !== null
-        ? bashLiveFacts(bashNotice, bashNotice.elapsedSeconds + Math.max(0, (now - (result?.timestamp ?? now)) / 1000), t)
-        : null;
+      : bashNotice !== null && bashLost
+        ? bashLostFacts(bashNotice, t, bashLostToRestart)
+        : bashNotice !== null
+          ? bashLiveFacts(
+              bashNotice,
+              bashLiveSeconds(
+                bashNotice,
+                bashNotice.elapsedSeconds,
+                now - (result?.timestamp ?? now),
+              ),
+              t,
+            )
+          : null;
   const bashFactsColor =
     bashFacts === null
       ? undefined
@@ -5312,8 +5366,9 @@ function ToolLine(props: {
         : bashFacts.tone === "live"
           ? "var(--color-text-secondary)"
           : "var(--color-text-tertiary)";
-  // 活行的图标：被停 / 被上限杀掉不再假装是终端（同「已中断」那一枚 circle-off）
-  const bashIcon: IconName | null = bashResult?.status === "killed" ? "circle-off" : null;
+  // 活行的图标：被停 / 被上限杀掉不再假装是终端（同「已中断」那一枚 circle-off）；
+  // 失联也一样——这一行没有任何东西在跑了
+  const bashIcon: IconName | null = bashResult?.status === "killed" || bashLost ? "circle-off" : null;
   // 只有 shell 类值得看耗时（read/edit 毫秒级是噪音）；旧会话没见过 running 帧，量不到就没有。
   // 交还成后台会话的行不给这个数：它只是「交还时已经跑了多久」，真总量在事实槽的共 X 里
   const shellDuration =
@@ -5434,7 +5489,7 @@ function ToolLine(props: {
         // 停止钮是真按钮，只能是折叠按钮的兄弟（button 不能嵌 button）。
         // 常驻而不是悬停：这条行可能挂一小时，想停的时候人不该先学会悬停。
         trailing={
-          bashRunning && bashId !== null ? <BashStopButton sessionId={props.sessionId} bashId={bashId} /> : undefined
+          bashLive && bashId !== null ? <BashStopButton sessionId={props.sessionId} bashId={bashId} /> : undefined
         }
       >
         <span className={active ? "orbita-breath" : undefined} style={HEAD_WRAP}>
@@ -5444,7 +5499,7 @@ function ToolLine(props: {
                 ? "var(--color-danger)"
                 : bashFacts?.tone === "danger"
                   ? "var(--color-danger)"
-                  : headIconColor(active || bashRunning),
+                  : headIconColor(active || bashLive),
             }}
           >
             <Icon
@@ -5462,11 +5517,11 @@ function ToolLine(props: {
             />
           </span>
           {builtin !== null || docEdit !== null ? (
-            <span className="command-pill" style={headLabel(active || bashRunning)}>
+            <span className="command-pill" style={headLabel(active || bashLive)}>
               {builtin?.label ?? docEdit}
             </span>
           ) : (
-            <span style={headLabel(active || bashRunning)}>{props.toolName}</span>
+            <span style={headLabel(active || bashLive)}>{props.toolName}</span>
           )}
         </span>
         {callLabel !== null && (
@@ -5578,7 +5633,7 @@ function ToolLine(props: {
           text={imagelessBody}
           failed={failed}
           live={live}
-          pendingResult={bashRunning}
+          pendingResult={bashLive}
         />
       )}
       {open && expandable && diff === null && fileView === null && builtinRows === null && (!shell || command === null) && (
