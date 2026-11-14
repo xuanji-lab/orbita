@@ -83,6 +83,11 @@ export default defineConfig({
            * 堆爆掉；与 xlsx-worker 同一个做法。
            */
           "pptx-worker": resolve(__dirname, "src/main/pptx/worker.ts"),
+          /**
+           * docx 打开时盖章（补齐 `w14:paraId`）的线程入口。实测 4145 段（≈104 页）
+           * 1.6 s 的同步 CPU，留在主进程就是窗口假死（xlsx-worker 同一个理由）。
+           */
+          "docx-worker": resolve(__dirname, "src/main/docx/worker.ts"),
           "memory-runtime": resolve(__dirname, "src/memory/runtime.ts"),
         },
         /**

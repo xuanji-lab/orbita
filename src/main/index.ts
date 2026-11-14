@@ -100,6 +100,8 @@ import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
 import { registerFilesIpc } from "./files/ipc.ts";
 import { registerDocxIpc } from "./docx/ipc.ts";
+import { applyDocxEditRequest } from "./docx/agent-edit.ts";
+import { dispatchDocxEdit } from "./docx/ipc.ts";
 import { applyDocRequest } from "./doc-panel/agent-requests.ts";
 import { printDocPdf } from "./doc-panel/print-doc-pdf.ts";
 import { registerDocIpc } from "./doc-panel/ipc.ts";
@@ -679,6 +681,21 @@ void app.whenReady().then(async () => {
         .catch((cause: unknown) =>
           agentHost.answerSlides(event.requestId, {
             ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
+    // docx 指哪打哪：agent 的 edit_docx。**写入在 renderer 里活着的编辑器**（docx:edit-reply
+    // 回来结账），主进程只判白名单并把请求送进窗口。同样任何路径都回执
+    if (event.type === "docxEditRequest") {
+      void resolveFileRoots(workspaces, sessions, { sessionId: event.sessionId, workspaceId: event.workspaceId })
+        .then((roots) => applyDocxEditRequest({ roots, dispatch: dispatchDocxEdit }, event))
+        .then((outcome) => agentHost.answerDocxEdit(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerDocxEdit(event.requestId, {
+            ok: false,
+            reason: "engine",
             error: cause instanceof Error ? cause.message : String(cause),
           }),
         );

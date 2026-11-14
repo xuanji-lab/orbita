@@ -40,7 +40,9 @@ export function sha256Hex(bytes: Uint8Array): string {
 function packageStats(documentXml: string): DocxPackageStats {
   const paragraphs = documentXml.match(/<w:p[\s>]/g)?.length ?? 0;
   const pageBreaks = documentXml.match(/<w:br\b[^>]*w:type="page"/g)?.length ?? 0;
-  return { paragraphs, pageBreaks };
+  // 段落标识覆盖率（N2 的盖章判据，见 stamp.ts）：`w14:paraId` 只出现在 `w:p` 上
+  const paraIds = documentXml.match(/w14:paraId=/g)?.length ?? 0;
+  return { paragraphs, pageBreaks, paraIds };
 }
 
 /**
@@ -96,6 +98,9 @@ export async function readDocxFile(path: string, limit: number = DOCX_MAX_BYTES)
     size,
     modifiedAt,
     hash: sha256Hex(bytes),
+    // 这一层不盖章（它是纯读模块，盖章要线程，见 stamp.ts）：先按「不需要盖章」回，
+    // 由 ipc.ts 在交给 renderer 之前换成真实结论（paraId 覆盖率不够就进线程盖）
+    stamp: { ok: true, assigned: 0, deduplicated: 0, reason: null },
     stats: classified.stats,
   };
 }

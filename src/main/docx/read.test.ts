@@ -111,7 +111,7 @@ describe("readDocxFile —— 挂载前的页数粗估依据", () => {
     await writeFile(path, await docxBytes(body));
     const result = await readDocxFile(path);
     assert.ok(result.kind === "docx");
-    assert.deepEqual(result.stats, { paragraphs: 3, pageBreaks: 1 });
+    assert.deepEqual(result.stats, { paragraphs: 3, pageBreaks: 1, paraIds: 0 });
   });
 });
 

@@ -18,6 +18,7 @@ import type { McpStatus } from "../../shared/mcp.ts";
 import type { AutomationToolOutcome } from "../../shared/automation.ts";
 import type { BrowserToolOutcome } from "../../shared/browser.ts";
 import type { DocOutcome } from "../../shared/doc.ts";
+import type { DocxEditOutcome } from "../../shared/docx.ts";
 import type { TerminalToolOutcome } from "../../shared/terminal.ts";
 import type { LatexRunOutcome } from "../../shared/latex.ts";
 import type { SlidesOutcome } from "../../shared/slides-export.ts";
@@ -655,6 +656,10 @@ export class AgentHostCore {
   /** 文档导出：docRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。 */
   answerDoc(requestId: string, outcome: DocOutcome): void {
     this.child?.postMessage({ type: "docResult", requestId, ...outcome } satisfies AgentCommand);
+  }
+  /** docx 指哪打哪：docxEditRequest 的回执（answerDoc 同款：不 ensure、发完即回）。 */
+  answerDocxEdit(requestId: string, outcome: DocxEditOutcome): void {
+    this.child?.postMessage({ type: "docxEditResult", requestId, ...outcome } satisfies AgentCommand);
   }
 
   /** 终端：terminalRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。 */
