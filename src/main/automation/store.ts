@@ -21,9 +21,9 @@
  * - **坏文件不吞用户的数据**：整份 JSON 解析失败 → 原文件改名为 `<文件>.bad-<时间戳>` 留给人看，
  *   再从空开始；单条解析失败（字段残缺）只丢那一条。两种都在 dev 终端留一行原因。
  */
-import { mkdir, open, readFile, readdir, rename, stat, unlink } from "node:fs/promises";
+import { mkdir, open, readFile, rename, stat } from "node:fs/promises";
 import { createReadStream } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import {
   AUTOMATION_ARCHIVE_KEEP,
@@ -36,15 +36,21 @@ import {
 } from "../../shared/automation.ts";
 import { writeJsonAtomic } from "../atomic-write.ts";
 import {
+  ColdTracker,
+  GuardLog,
   TrackedFile,
-  ackLine,
-  appendGuardLine,
+  automationAckFilePath,
   automationEventsFilePath,
-  checkColdMark,
   coldMarkOf,
+  extendColdMark,
+  findMovedDir,
+  guardMirrorFilePaths,
+  isUnreadable,
   parseColdMark,
-  readUnacknowledged,
+  setAsideTampered,
+  sha256,
   type ColdMark,
+  type Fingerprints,
 } from "./guard.ts";
 
 const FILE_NAME = "automations.json";
@@ -74,9 +80,28 @@ export function automationColdFilePath(dir: string): string {
 /** 冷文件的文件名（面板与 agent 的 list 告诉用户「更早的 N 条保存在哪」） */
 export const AUTOMATION_COLD_FILE_NAME = COLD_FILE_NAME;
 
-/** 工具禁区的单文件清单：四份记录（含事件文件）都不许智能体的 write / edit / bash 碰（连同它们的 `.tmp` / `.bad-` / `.tampered-` 兄弟，匹配在 agent/permission.ts） */
-export function automationProtectedFiles(dir: string): string[] {
-  return [automationStoreFilePath(dir), automationArchiveFilePath(dir), automationColdFilePath(dir), automationEventsFilePath(dir)];
+/**
+ * 数据目录之外的镜像目录：事件与已读位置的镜像、指纹文件放这里，数据目录被删 / 改名也还在。
+ * 放在 `<appData>/orbita-guard/<数据目录名>/`——appData 下的同级目录（不在 userData 里），按数据目录名分开（正式版 `orbita`、
+ * 各开发实例 `orbita-dev-<名字>` 互不串），与数据目录同一个卷（rename 不跨卷），改名 / 删除 userData 碰不到它。
+ */
+export function automationMirrorDir(dataDir: string): string {
+  return join(dirname(dataDir), "orbita-guard", basename(dataDir));
+}
+
+/**
+ * 工具禁区的单文件清单：记录文件（主文件、热归档、冷文件）、事件文件、已读位置、以及数据目录之外镜像里的三份，
+ * 都不许智能体的 write / edit / bash 碰（连同它们的 `.tmp` / `.bad-` / `.tampered-` 兄弟，匹配在 agent/permission.ts）。
+ */
+export function automationProtectedFiles(dir: string, mirrorDir: string = automationMirrorDir(dir)): string[] {
+  return [
+    automationStoreFilePath(dir),
+    automationArchiveFilePath(dir),
+    automationColdFilePath(dir),
+    automationEventsFilePath(dir),
+    automationAckFilePath(dir),
+    ...guardMirrorFilePaths(mirrorDir),
+  ];
 }
 
 function isNotFound(cause: unknown): boolean {
@@ -84,15 +109,16 @@ function isNotFound(cause: unknown): boolean {
 }
 
 /** 读一份文件成列表（+ 热归档文件里的 `older` 计数）：不存在 = 空；坏 JSON 改名留底后从空开始；单条残缺只丢那一条；读不了（权限等）照抛 */
-async function readAutomationFile(filePath: string, now: () => number): Promise<{ list: Automation[]; older: number; cold: ColdMark | null }> {
+async function readAutomationFile(filePath: string, now: () => number): Promise<{ list: Automation[]; older: number; cold: ColdMark | null; hash: string | null }> {
   let raw: string;
   try {
     raw = await readFile(filePath, "utf8");
   } catch (cause) {
-    if (isNotFound(cause)) return { list: [], older: 0, cold: null };
+    if (isNotFound(cause)) return { list: [], older: 0, cold: null, hash: null };
     // 读不了 ≠ 没有：权限等问题照抛，别吞成空列表再被下一次写盘覆盖
     throw cause;
   }
+  const hash = sha256(raw);
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -102,7 +128,7 @@ async function readAutomationFile(filePath: string, now: () => number): Promise<
     await rename(filePath, aside).catch((renameCause: unknown) => {
       console.error("[automation] 坏文件改名失败", renameCause);
     });
-    return { list: [], older: 0, cold: null };
+    return { list: [], older: 0, cold: null, hash };
   }
   const items = typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>)["automations"] : undefined;
   const list: Automation[] = [];
@@ -116,7 +142,7 @@ async function readAutomationFile(filePath: string, now: () => number): Promise<
   const olderRaw = typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>)["older"] : undefined;
   const older = typeof olderRaw === "number" && Number.isFinite(olderRaw) && olderRaw > 0 ? Math.floor(olderRaw) : 0;
   const cold = typeof parsed === "object" && parsed !== null ? parseColdMark((parsed as Record<string, unknown>)["cold"]) : null;
-  return { list, older, cold };
+  return { list, older, cold, hash };
 }
 
 /** 冷文件尾部已有的记录键（`id@updatedAt`）与「末尾是否缺换行」（上次追加被打断留下半行时，先补一个换行再追加，免得两条粘成一行） */
@@ -260,17 +286,27 @@ export interface AutomationStoreHooks {
   onGuardEvent?: () => void;
 }
 
-/** 被动过的文件留成 `<文件>.tampered-<时间戳>`，最多留这么多份（再多的删最旧的），免得被反复改动时撑满目录 */
-const TAMPERED_BACKUPS_KEPT = 5;
+/** store 的构造选项 */
+export interface AutomationStoreOptions {
+  /** 数据目录之外的镜像目录（事件与已读位置的镜像、上次退出时的指纹）；不给就没有镜像（测试） */
+  mirrorDir?: string;
+  /** stat 没变也至少隔这么久读文件全哈希一次（毫秒，默认 10 秒；0 = 每次都读） */
+  fullHashEveryMs?: number;
+}
+
+/** 后台整份比冷文件块哈希的周期：stat 没变时不读文件，这是兜底（ctime 在个别文件系统上不可信时） */
+const COLD_AUDIT_EVERY_MS = 10 * 60_000;
 
 export class AutomationStore {
   private readonly dir: string;
   private readonly filePath: string;
   private readonly archivePath: string;
   private readonly coldPath: string;
-  private readonly eventsPath: string;
+  private readonly mirrorDir: string | undefined;
   private readonly liveTrack: TrackedFile;
   private readonly archiveTrack: TrackedFile;
+  private readonly coldTrack: ColdTracker;
+  private readonly log: GuardLog;
   private snapshot: Snapshot | null = null;
   private loading: Promise<Snapshot> | null = null;
   /** 读盘对账后写盘失败的：内存已经是对的，磁盘还没跟上；下一次成功的写入顺带补上 */
@@ -281,17 +317,23 @@ export class AutomationStore {
   private readonly hooks: AutomationStoreHooks;
   /** 数据目录的 inode：变了 = 目录被改名 / 删除后又重建过（只在 posix 上有意义，Windows 上取不到稳定值就不比） */
   private dirIno: bigint | null = null;
-  /** 还没被用户点「知道了」的篡改事件，新→旧 */
-  private alerts: AutomationGuardEvent[] = [];
+  /** 写进指纹镜像的冷文件水位（写热归档文件时同步更新） */
+  private knownCold: ColdMark | null = null;
+  /** 读不了的文件：同一次「读不了」只记一条事件，恢复可读后清掉 */
+  private readonly unreadableReported = new Set<string>();
+  private coldAudit: Promise<void> | null = null;
+  private lastColdAuditAt = 0;
 
-  constructor(dir: string, now: () => number = Date.now, hooks: AutomationStoreHooks = {}) {
+  constructor(dir: string, now: () => number = Date.now, hooks: AutomationStoreHooks = {}, options: AutomationStoreOptions = {}) {
     this.dir = dir;
     this.filePath = automationStoreFilePath(dir);
     this.archivePath = automationArchiveFilePath(dir);
     this.coldPath = automationColdFilePath(dir);
-    this.eventsPath = automationEventsFilePath(dir);
-    this.liveTrack = new TrackedFile(this.filePath);
-    this.archiveTrack = new TrackedFile(this.archivePath);
+    this.mirrorDir = options.mirrorDir;
+    this.liveTrack = new TrackedFile(this.filePath, { fullHashEveryMs: options.fullHashEveryMs });
+    this.archiveTrack = new TrackedFile(this.archivePath, { fullHashEveryMs: options.fullHashEveryMs });
+    this.coldTrack = new ColdTracker(this.coldPath);
+    this.log = new GuardLog({ dir, now, ...(options.mirrorDir === undefined ? {} : { mirrorDir: options.mirrorDir }), ...(options.fullHashEveryMs === undefined ? {} : { fullHashEveryMs: options.fullHashEveryMs }) });
     this.now = now;
     this.hooks = hooks;
   }
@@ -302,16 +344,54 @@ export class AutomationStore {
     return this.loading;
   }
 
+  /** 读一份记录文件；读不了（权限被改）先记一条 unreadable 事件再抛——不能吞成空列表再被下一次写盘覆盖，也不能无声 */
+  private async readRecordFile(path: string): Promise<Awaited<ReturnType<typeof readAutomationFile>>> {
+    try {
+      return await readAutomationFile(path, this.now);
+    } catch (cause) {
+      if (isUnreadable(cause)) await this.reportUnreadable(basename(path));
+      throw cause;
+    }
+  }
+
+  private async reportUnreadable(name: string): Promise<void> {
+    if (this.unreadableReported.has(name)) return;
+    this.unreadableReported.add(name);
+    await this.recordEvent("unreadable", name, {});
+  }
+
   private async readAndReconcile(): Promise<Snapshot> {
-    const liveFile = await readAutomationFile(this.filePath, this.now);
-    const archiveFile = await readAutomationFile(this.archivePath, this.now);
+    // 事件日志先于记录文件加载：读不了记录文件时也要能记一条；数据目录里缺的事件从镜像补回
+    const loaded = await this.log.load().catch((cause: unknown) => {
+      console.error("[automation] 读事件日志失败", cause);
+      return { notes: [], unreadable: [] as string[] };
+    });
+    for (const name of loaded.unreadable) await this.reportUnreadable(name);
+    for (const note of loaded.notes) await this.recordEvent("eventsChanged", note.file, note.backup === undefined ? {} : { backup: note.backup });
+    const fingerprints = await this.log.readFingerprints();
+    const liveFile = await this.readRecordFile(this.filePath);
+    const archiveFile = await this.readRecordFile(this.archivePath);
+    // 应用关着期间有没有人动过：盘上的哈希不在上次留在数据目录之外的认可集合里。只告知，不恢复，以盘上为准
+    if (fingerprints !== null && fingerprints.dir === this.dir) {
+      for (const [name, file] of [[basename(this.filePath), liveFile], [basename(this.archivePath), archiveFile]] as const) {
+        const accepted = fingerprints.files[name] ?? [];
+        if (accepted.length > 0 && (file.hash === null || !accepted.includes(file.hash))) await this.recordEvent("changedWhileClosed", name, {});
+      }
+      const inoNow = await dirInode(this.dir);
+      if (fingerprints.dirIno !== null && inoNow !== null && fingerprints.dirIno !== String(inoNow)) {
+        const movedTo = await findMovedDir(this.dir, fingerprints.dirIno);
+        await this.recordEvent("changedWhileClosed", "(data folder)", movedTo === undefined ? {} : { movedTo });
+      }
+    }
     const full = reconcileSnapshot(liveFile.list, archiveFile.list);
     let olderBase = archiveFile.older;
-    let cold = archiveFile.cold;
-    // 启动时先核对冷文件水位：上次关应用后它被动过 = 留事件、告诉用户，水位以当前文件为准重新记
+    let cold = archiveFile.cold ?? fingerprints?.cold ?? null;
+    // 启动时先核对冷文件：精确大小对不上（外部追加 / 截断 / 被删）= 留事件、告诉用户，水位以当前文件为准重新记；
+    // 大小对的：不大的文件当场整份比块哈希，大文件（> 16 MiB）交给后台审计（不拖慢启动）
     if (cold !== null) {
-      const state = await checkColdMark(this.coldPath, cold).catch(() => "ok" as const);
-      if (state !== "ok") {
+      const state = await this.coldTrack.check(cold, { startup: true }).catch(() => "ok" as const);
+      if (state === "unreadable") await this.reportUnreadable(AUTOMATION_COLD_FILE_NAME);
+      else if (state !== "ok") {
         await this.recordEvent(state === "missing" ? "coldMissing" : "coldChanged", AUTOMATION_COLD_FILE_NAME, {});
         cold = await coldMarkOf(this.coldPath).catch(() => null);
       }
@@ -340,12 +420,13 @@ export class AutomationStore {
     if (evicted.length > 0) {
       try {
         await appendCold(this.coldPath, evicted);
-        reconciled = { ...reconciled, older: olderBase + evicted.length, cold: await coldMarkOf(this.coldPath) };
+        reconciled = { ...reconciled, older: olderBase + evicted.length, cold: await this.markAfterAppend(cold) };
       } catch (cause) {
         console.error("[automation] 追加冷归档失败，热归档暂不裁剪，下次写入时再试", cause);
         reconciled = { live: full.live, archive: full.archive, older: olderBase, cold };
       }
     }
+    this.knownCold = reconciled.cold;
     // 对账改动了哪边就写哪边：先写接收方（归档）后写交出方（主文件）。失败不抛：内存是对的，下一次写入补上
     const archiveChanged =
       !sameItems(reconciled.archive, archiveFile.list) || reconciled.older !== archiveFile.older || !sameMark(reconciled.cold, archiveFile.cold);
@@ -372,47 +453,70 @@ export class AutomationStore {
     return reconciled;
   }
 
-  /** 读盘对账收尾：给两份文件记基线指纹、记下数据目录的 inode、读还没确认的告警 */
+  /** 读盘对账收尾：给两份文件记基线指纹、记下数据目录的 inode、把指纹留一份到数据目录之外 */
   private async finishLoad(): Promise<void> {
     await Promise.all([this.liveTrack.baseline(), this.archiveTrack.baseline()]).catch((cause: unknown) => console.error("[automation] 记文件指纹失败", cause));
     this.dirIno = await dirInode(this.dir);
-    this.alerts = await readUnacknowledged(this.eventsPath);
+    if (this.snapshot !== null) await this.coldTrack.trust().catch(() => undefined);
+    await this.persistFingerprints();
   }
 
-  /** 原子写主文件并记指纹；写失败时旧的与想写的内容都认（半成品落盘不算篡改） */
+  /**
+   * 把三份记录文件认可的哈希、冷文件水位、数据目录的 inode 记到数据目录之外：应用关着期间有人动过，下次启动对不上就记
+   * `changedWhileClosed`。写盘前后各记一次（前一次新旧哈希都认，崩溃留在写盘中途不算被动过）。失败只留日志。
+   */
+  private async persistFingerprints(): Promise<void> {
+    if (this.mirrorDir === undefined) return;
+    const fingerprints: Fingerprints = {
+      version: 1,
+      dir: this.dir,
+      dirIno: this.dirIno === null ? null : String(this.dirIno),
+      files: { [basename(this.filePath)]: this.liveTrack.acceptedHashes(), [basename(this.archivePath)]: this.archiveTrack.acceptedHashes() },
+      cold: this.knownCold,
+    };
+    await this.log.writeFingerprints(fingerprints).catch((cause: unknown) => console.error("[automation] 写指纹镜像失败", cause));
+  }
+
+  /** 原子写并记指纹；写失败时旧的与想写的内容都认（半成品落盘不算篡改）。写前先把「新旧都认」留到数据目录之外 */
+  private async writeTracked(track: TrackedFile, text: string): Promise<void> {
+    track.acceptAlso(text);
+    await this.persistFingerprints();
+    await track.rewrite(text);
+    await this.persistFingerprints();
+  }
+
   private async writeLive(live: readonly Automation[]): Promise<void> {
-    const text = serialize({ version: FILE_VERSION, automations: live });
-    try {
-      await this.liveTrack.rewrite(text);
-    } catch (cause) {
-      this.liveTrack.acceptAlso(text);
-      throw cause;
-    }
+    await this.writeTracked(this.liveTrack, serialize({ version: FILE_VERSION, automations: live }));
   }
 
   private async writeArchive(snapshot: Snapshot): Promise<void> {
-    const text = serialize({ version: FILE_VERSION, automations: snapshot.archive, older: snapshot.older, ...(snapshot.cold === null ? {} : { cold: snapshot.cold }) });
-    try {
-      await this.archiveTrack.rewrite(text);
-    } catch (cause) {
-      this.archiveTrack.acceptAlso(text);
-      throw cause;
-    }
+    this.knownCold = snapshot.cold;
+    await this.writeTracked(
+      this.archiveTrack,
+      serialize({ version: FILE_VERSION, automations: snapshot.archive, older: snapshot.older, ...(snapshot.cold === null ? {} : { cold: snapshot.cold }) }),
+    );
   }
 
-  /** 记一条事件：追加事件文件、进内存告警、通知 renderer 重拉。记事件失败不影响主流程 */
-  private async recordEvent(kind: AutomationGuardKind, file: string, extra: { records?: number; backup?: string }): Promise<void> {
-    const event: AutomationGuardEvent = { seq: (this.alerts[0]?.seq ?? 0) + 1, at: this.now(), file, kind, ...extra };
+  /** 应用刚往冷文件追加完：只重算最后一块（及新增的块）得到新水位，并把此刻的 stat 记作「没动过」的基线 */
+  private async markAfterAppend(previous: ColdMark | null): Promise<ColdMark | null> {
+    const mark = await extendColdMark(this.coldPath, previous);
+    await this.coldTrack.trust().catch(() => undefined);
+    return mark;
+  }
+
+  /** 记一条事件：写事件日志（数据目录 + 镜像）、通知 renderer 重拉。记事件失败不影响主流程 */
+  private async recordEvent(kind: AutomationGuardKind, file: string, extra: { records?: number; archived?: number; backup?: string; movedTo?: string }): Promise<void> {
     console.warn(`[automation] 记录文件被动过：${file}（${kind}）`);
-    await appendGuardLine(this.eventsPath, event);
-    this.alerts = [event, ...this.alerts];
+    await this.log.append({ file, kind, ...extra });
     this.hooks.onGuardEvent?.();
   }
 
   /**
    * 核对盘上的主文件与热归档是不是还是我们上次写的那份，不是就按**内存里的真源**写回并留事件：
-   * 缺失 → 写回；被改 → 被改的那份改名留成 `.tampered-<时间戳>`（给人看，不是备份来源）再写回；
-   * 数据目录整个被改名 / 删除后重建（inode 变了或目录不见了）→ 一条事件说明，文件照样写回。
+   * 缺失 → 写回；被改（含同尺寸同 mtime 改内容）→ 被改的那份改名留成 `.tampered-<时间戳>`（给人看，不是备份来源）再写回；
+   * 读不了（chmod 000）→ 记一次 unreadable，权限恢复后下一次核对自愈；
+   * 数据目录整个被改名 / 删除后重建（inode 变了或目录不见了）→ 一条事件说明（带上被改名的旧目录现在叫什么），
+   * 事件与已读位置从内存写回新目录，记录文件照样写回。事件文件与已读位置自己也在这里核对。
    * 在写入链里跑（不会撞上自己的写入）；任何一步失败只留日志，不抛。
    */
   private async verify(): Promise<void> {
@@ -420,15 +524,23 @@ export class AutomationStore {
     if (snapshot === null) return;
     try {
       let dirReplaced = false;
+      let movedTo: string | undefined;
       const dirNow = await dirInodeOrMissing(this.dir);
+      const oldIno = this.dirIno;
       if (dirNow === "missing") {
         await mkdir(this.dir, { recursive: true });
         dirReplaced = true;
-      } else if (this.dirIno !== null && dirNow !== null && dirNow !== this.dirIno) {
+      } else if (oldIno !== null && dirNow !== null && dirNow !== oldIno) {
         dirReplaced = true;
       }
-      if (dirReplaced) this.dirIno = await dirInode(this.dir);
-      let restored = 0;
+      if (dirReplaced) {
+        this.dirIno = await dirInode(this.dir);
+        if (oldIno !== null) movedTo = await findMovedDir(this.dir, String(oldIno));
+        // 新目录里的事件文件与已读位置从内存写回（镜像里还有一份；dataDirReplaced 自己会追加在后面）
+        await this.log.restoreDataFiles();
+      } else if ((await this.log.verify()).length > 0) {
+        this.hooks.onGuardEvent?.();
+      }
       const targets: { track: TrackedFile; name: string; text: () => string; records: number }[] = [
         { track: this.liveTrack, name: basename(this.filePath), text: () => serialize({ version: FILE_VERSION, automations: snapshot.live }), records: snapshot.live.length },
         {
@@ -441,45 +553,52 @@ export class AutomationStore {
       ];
       for (const target of targets) {
         const check = await target.track.check();
+        if (check.state === "unreadable") {
+          await this.reportUnreadable(target.name);
+          continue;
+        }
+        this.unreadableReported.delete(target.name);
         if (check.state === "ok" || check.state === "unknown") continue;
         let backup: string | undefined;
-        if (check.state === "changed") {
-          backup = `${basename(target.track.path)}.tampered-${this.now()}`;
-          await rename(target.track.path, join(this.dir, backup)).catch((cause: unknown) => console.error("[automation] 被改的文件留底失败", cause));
-          await this.pruneTamperedBackups(basename(target.track.path));
-        }
-        await target.track.rewrite(target.text());
-        restored += target.records;
+        if (check.state === "changed") backup = await setAsideTampered(target.track.path, this.now());
+        await this.writeTracked(target.track, target.text());
         if (!dirReplaced) await this.recordEvent(check.state === "missing" ? "missing" : "changed", target.name, { records: target.records, ...(backup === undefined ? {} : { backup }) });
       }
-      if (dirReplaced) await this.recordEvent("dataDirReplaced", "(data folder)", { records: restored });
+      if (dirReplaced) {
+        await this.recordEvent("dataDirReplaced", "(data folder)", { records: snapshot.live.length, archived: snapshot.archive.length, ...(movedTo === undefined ? {} : { movedTo }) });
+      }
     } catch (cause) {
       console.error("[automation] 核对记录文件失败（下次再核对）", cause);
     }
   }
 
-  /** `.tampered-<时间戳>` 留底只留最新几份（时间戳是定长数字，字典序即时间序） */
-  private async pruneTamperedBackups(base: string): Promise<void> {
+  /**
+   * 核对冷文件（写入链里跑）：大小必须等于上次追加后的精确大小；大小对但 stat 变了才整份比块哈希，stat 没变不读文件。
+   * 对不上就留事件、水位以当前文件为准重新记（不动冷文件）；读不了记一次 unreadable。
+   */
+  private async verifyCold(full = false): Promise<void> {
+    const current = this.snapshot;
+    if (current === null) return;
     try {
-      const names = (await readdir(this.dir)).filter((name) => name.startsWith(`${base}.tampered-`)).sort();
-      for (const old of names.slice(0, Math.max(0, names.length - TAMPERED_BACKUPS_KEPT))) await unlink(join(this.dir, old)).catch(() => undefined);
+      await this.handleColdState(current, await this.coldTrack.check(current.cold, full ? { full: true } : {}));
     } catch (cause) {
-      console.error("[automation] 清理旧的留底失败", cause);
+      console.error("[automation] 核对冷归档失败（下次再核对）", cause);
     }
   }
 
-  /** 对着水位核对冷文件；对不上就留事件并把水位以当前文件为准重新记。返回当前（可能已更新的）水位 */
-  private async verifyCold(snapshot: Snapshot): Promise<ColdMark | null> {
-    if (snapshot.cold === null) return snapshot.cold;
-    try {
-      const state = await checkColdMark(this.coldPath, snapshot.cold);
-      if (state === "ok") return snapshot.cold;
-      await this.recordEvent(state === "missing" ? "coldMissing" : "coldChanged", AUTOMATION_COLD_FILE_NAME, {});
-      return await coldMarkOf(this.coldPath);
-    } catch (cause) {
-      console.error("[automation] 核对冷归档失败（下次再核对）", cause);
-      return snapshot.cold;
+  private async handleColdState(current: Snapshot, state: "ok" | "missing" | "changed" | "unreadable"): Promise<void> {
+    if (state === "unreadable") {
+      await this.reportUnreadable(AUTOMATION_COLD_FILE_NAME);
+      return;
     }
+    this.unreadableReported.delete(AUTOMATION_COLD_FILE_NAME);
+    if (state === "ok") return;
+    await this.recordEvent(state === "missing" ? "coldMissing" : "coldChanged", AUTOMATION_COLD_FILE_NAME, {});
+    const cold = await coldMarkOf(this.coldPath).catch(() => null);
+    const next = { ...current, cold };
+    await this.writeArchive(next);
+    this.snapshot = next;
+    await this.coldTrack.trust().catch(() => undefined);
   }
 
   /** 排进写入链、先核对一遍盘再返回内存快照。读取类入口都走它：调度器每个 tick、面板每次重拉都会顺带核对 */
@@ -487,10 +606,57 @@ export class AutomationStore {
     const task = this.chain.then(async () => {
       const snapshot = await this.load();
       await this.verify();
-      return snapshot;
+      await this.verifyCold();
+      this.maybeAuditCold();
+      return this.snapshot ?? snapshot;
     });
     this.chain = task.catch(() => undefined);
     return task;
+  }
+
+  /** 距上次整份比块哈希超过周期就在后台再来一次（不占写入链、不阻塞调用方） */
+  private maybeAuditCold(): void {
+    if (this.snapshot?.cold === null || this.snapshot === null) return;
+    if (this.coldAudit !== null || Date.now() - this.lastColdAuditAt < COLD_AUDIT_EVERY_MS) return;
+    void this.auditColdFull();
+  }
+
+  /**
+   * 整份顺序读一遍冷文件比块哈希（读在写入链之外，大文件也不卡住别的操作）；读完回到链里，
+   * 期间冷文件没被追加、水位没换才采信，否则放弃这一次。没有水位（旧格式 / 首次）就记一个。
+   */
+  private auditColdFull(): Promise<void> {
+    this.coldAudit ??= (async () => {
+      try {
+        this.lastColdAuditAt = Date.now();
+        const mark = this.snapshot?.cold ?? null;
+        const sizeBefore = await stat(this.coldPath).then((info) => info.size).catch(() => 0);
+        const state = mark === null ? "ok" : await this.coldTrack.check(mark, { full: true });
+        const task = this.chain.then(async () => {
+          const current = this.snapshot;
+          if (current === null || current.cold !== mark) return;
+          const sizeNow = await stat(this.coldPath).then((info) => info.size).catch(() => 0);
+          if (sizeNow !== sizeBefore) return; // 期间被追加过：下次再审
+          if (mark === null) {
+            if (sizeNow === 0) return;
+            const fresh = await coldMarkOf(this.coldPath);
+            const next = { ...current, cold: fresh };
+            await this.writeArchive(next);
+            this.snapshot = next;
+            await this.coldTrack.trust().catch(() => undefined);
+            return;
+          }
+          await this.handleColdState(current, state);
+        });
+        this.chain = task.catch(() => undefined);
+        await task;
+      } catch (cause) {
+        console.error("[automation] 冷归档整份核对失败（下次再核对）", cause);
+      } finally {
+        this.coldAudit = null;
+      }
+    })();
+    return this.coldAudit;
   }
 
   /**
@@ -502,19 +668,20 @@ export class AutomationStore {
     const task = this.chain.then(async () => {
       await this.load();
       await this.verify();
-      const current = this.snapshot as Snapshot;
+      let current = this.snapshot as Snapshot;
       const { next, result } = fn(current);
       if (next === current) return result(current);
       const { settled: draft, evicted } = settle(current, next);
       let settled = draft;
       const liveChanged = settled.live !== current.live || this.stale.live;
       // 第 0 步：被挤出热归档的先进冷文件（fsync）。中途崩溃最坏是「冷文件里有、热文件里也还有」，
-      // 下次重试按 id + updatedAt 去重，不会重复追加；绝不会「两边都没有」。追加前先核对冷文件水位，
-      // 对不上就留事件（不悄悄在一个被改过的冷文件后面接着写而不吭声）
+      // 下次重试按 id + updatedAt 去重，不会重复追加；绝不会「两边都没有」。追加前先核对冷文件
+      // （精确大小 + stat 变了才整份比块哈希），对不上就留事件（不悄悄在一个被改过的冷文件后面接着写而不吭声）
       if (evicted.length > 0) {
-        await this.verifyCold(current);
+        await this.verifyCold();
+        current = this.snapshot as Snapshot;
         await appendCold(this.coldPath, evicted);
-        settled = { ...settled, cold: await coldMarkOf(this.coldPath) };
+        settled = { ...settled, cold: await this.markAfterAppend(current.cold) };
       }
       const archiveChanged = settled.archive !== current.archive || settled.older !== current.older || !sameMark(settled.cold, current.cold) || this.stale.archive;
       // 谁收新记录谁先写：归档收新的（结束了）→ 先写归档；主文件收回来的（重新启动）→ 先写主文件。
@@ -544,43 +711,32 @@ export class AutomationStore {
   }
 
   /**
-   * 冷归档的现状：移进冷文件的条数（不读冷文件，数在热归档文件里）、文件名，以及还没被用户确认的篡改告警。
-   * 顺带核对冷文件水位：对不上就留事件（并把水位重新记到当前文件）。
+   * 冷归档的现状：移进冷文件的条数（不读冷文件，数在热归档文件里）、文件名，以及还没被用户确认的篡改告警
+   * （序号大于已读位置的事件，新→旧最多 5 条，另给总数）。fresh 已经顺带核对过冷文件。
    */
   async archiveInfo(): Promise<AutomationArchiveInfo> {
     const snapshot = await this.fresh();
-    const task = this.chain.then(async () => {
-      const current = this.snapshot ?? snapshot;
-      const cold = await this.verifyCold(current);
-      if (!sameMark(cold, current.cold)) {
-        const next = { ...current, cold };
-        await this.writeArchive(next);
-        this.snapshot = next;
-      }
-    });
-    this.chain = task.catch(() => undefined);
-    await task.catch((cause: unknown) => console.error("[automation] 更新冷归档水位失败", cause));
-    return { older: (this.snapshot ?? snapshot).older, file: AUTOMATION_COLD_FILE_NAME, alerts: this.alerts.slice(0, 5), alertsTotal: this.alerts.length };
+    const unacknowledged = this.log.unacknowledged();
+    return { older: snapshot.older, file: AUTOMATION_COLD_FILE_NAME, alerts: unacknowledged.slice(0, 5), alertsTotal: unacknowledged.length };
   }
 
-  /** 用户点了「知道了」：事件文件里追加一行 ack，之后这些不再提示 */
-  async ackAlerts(_upTo?: number): Promise<void> {
-    const task = this.chain.then(async () => {
-      await appendGuardLine(this.eventsPath, ackLine(this.now()));
-      this.alerts = [];
-    });
+  /** 用户点了「知道了」：已读位置移到 upTo（不给 = 目前最新一条），数据目录与镜像各记一份；晚到的事件不会被一起吞掉 */
+  async ackAlerts(upTo?: number): Promise<void> {
+    const task = this.chain.then(() => this.log.ack(upTo));
     this.chain = task.catch(() => undefined);
     await task;
   }
 
   /**
-   * 启动后后台对账（不阻塞启动，不占写入链）：流式数一遍冷文件的键（`id@updatedAt`）——
-   * ① `older` 与冷文件不符（捏造、双计、热归档文件缺席时没清点）→ 以冷文件为准；
-   * ② 热归档里还留着已在冷文件里的记录（崩溃在「冷已追加、热未写」留下的孤儿副本）→ 从热归档拿掉。
-   * 扫描期间冷文件又被追加了（水位变了）就放弃这一次，不拿过时的数去改。
+   * 启动后后台对账（不阻塞启动，不占写入链）：
+   * ① 整份比冷文件的块哈希（启动时只比了精确大小；中段等长改写靠它）；
+   * ② 流式数一遍冷文件的键（`id@updatedAt`）：`older` 与冷文件不符（捏造、双计、热归档文件缺席时没清点）→ 以冷文件为准；
+   *    热归档里还留着已在冷文件里的记录（崩溃在「冷已追加、热未写」留下的孤儿副本）→ 从热归档拿掉。
+   * 扫描期间冷文件又被追加了（大小变了）就放弃这一次，不拿过时的数去改。
    */
   async auditInBackground(): Promise<void> {
     const snapshot = await this.fresh();
+    await this.auditColdFull();
     const sizeBefore = await stat(this.coldPath).then((info) => info.size).catch(() => 0);
     if (sizeBefore === 0 && snapshot.older === 0) return;
     const keys = await scanColdKeys(this.coldPath);
@@ -590,7 +746,7 @@ export class AutomationStore {
       if (sizeNow !== sizeBefore) return; // 扫描期间被追加过：下次再对
       const orphans = current.archive.filter((record) => keys.has(`${record.id}@${record.updatedAt}`));
       if (orphans.length === 0 && keys.size === current.older) return;
-      const next: Snapshot = { ...current, archive: current.archive.filter((record) => !orphans.includes(record)), older: keys.size, cold: await coldMarkOf(this.coldPath) };
+      const next: Snapshot = { ...current, archive: current.archive.filter((record) => !orphans.includes(record)), older: keys.size };
       await this.writeArchive(next);
       this.snapshot = next;
       console.info(`[automation] 冷归档对账：older ${current.older} → ${keys.size}，热归档里移除 ${orphans.length} 条已在冷文件的副本`);
@@ -687,7 +843,7 @@ async function dirInodeOrMissing(dir: string): Promise<bigint | "missing" | null
 
 function sameMark(a: ColdMark | null, b: ColdMark | null): boolean {
   if (a === null || b === null) return a === b;
-  return a.size === b.size && a.head === b.head && a.tail === b.tail;
+  return a.size === b.size && a.blocks.length === b.blocks.length && a.blocks.every((block, index) => block === b.blocks[index]);
 }
 
 function findIn(snapshot: Snapshot, id: string): Automation | null {

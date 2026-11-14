@@ -216,15 +216,15 @@ describe("冷文件：有改动看得出来，不悄悄重建", () => {
     assert.equal((await store.archiveInfo()).alerts[0]?.kind, "coldMissing");
   });
 
-  test("冷文件末尾被追加了别的东西：水位处的头尾没变，不报（只增不改是合法的形态）", async () => {
+  test("冷文件末尾被外部追加了别的东西：大小必须等于应用上次追加后的精确大小，所以报 coldChanged（只增不改不再是合法形态）", async () => {
     const store = await filled();
     await appendFile(join(dir, COLD), "{}\n");
-    assert.deepEqual((await store.archiveInfo()).alerts, []);
+    assert.equal((await store.archiveInfo()).alerts[0]?.kind, "coldChanged");
   });
 });
 
 describe("事件确认与后台对账", () => {
-  test("点「知道了」之后告警清空，事件文件追加一行 ack；换实例不再提示；之后新的篡改照样提示", async () => {
+  test("点「知道了」之后告警清空（已读位置移到那条事件的序号，事件文件里不再有 ack 行）；换实例不再提示；之后新的篡改照样提示", async () => {
     const { store } = fresh();
     await store.insert(makeAutomation({ id: "a" }));
     await rm(join(dir, LIVE));
@@ -232,7 +232,7 @@ describe("事件确认与后台对账", () => {
     assert.equal((await store.archiveInfo()).alertsTotal, 1);
     await store.ackAlerts();
     assert.equal((await store.archiveInfo()).alertsTotal, 0);
-    assert.equal((await events()).at(-1)?.ack, true);
+    assert.equal((await events()).some((line) => line.ack === true), false, "已读位置是独立文件，不是事件文件里的一行");
     assert.equal((await fresh().store.archiveInfo()).alertsTotal, 0);
     await rm(join(dir, LIVE));
     await store.list();

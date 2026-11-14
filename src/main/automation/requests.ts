@@ -533,7 +533,7 @@ export async function applyAutomationRequest(
     const target = await deps.store.get(request.automationId);
     // 别的工作区的当作不存在：不泄露它的存在，也不让这里的 agent 去动它
     if (target === null || automationWorkspaceId(target) !== workspaceId) return fail("No such automation in this workspace.");
-    if (target.status === "completed") return { ok: true, text: `Automation "${target.title}" was already finished.` };
+    if (target.status === "completed") return { ok: true, text: `Automation "${target.title}" is already finished (${target.endReason ?? "completed"}) — nothing to cancel; it does not count toward the limit and cannot be removed with this tool.` };
     const saved = await deps.store.update(target.id, (existing) => {
       if (existing.status === "completed") return null;
       const next: Automation = { ...existing, status: "completed", endReason: "cancelled", nextRunAt: null, updatedAt: now };

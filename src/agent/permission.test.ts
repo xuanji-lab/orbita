@@ -194,7 +194,8 @@ describe("自动化记录文件不可变（protectedFiles）", () => {
 
   test("已结束的归档文件同护：用主进程真实给的清单，write / edit / bash 与 .tmp / .bad- 兄弟全档拦", async () => {
     const files = automationProtectedFiles("/userData");
-    assert.equal(files.length, 4);
+    // 主文件、热归档、冷文件、事件文件、已读位置，加数据目录之外镜像里的事件镜像、已读位置镜像、指纹
+    assert.equal(files.length, 8);
     for (const mode of ["plan", "manual", "skip"] as const) {
       const gate = createToolCallGate(() => mode, async () => ({ behavior: "allow" }), ["/userData/sessions"], "/repo", files);
       for (const target of [
@@ -206,6 +207,11 @@ describe("自动化记录文件不可变（protectedFiles）", () => {
         "/userData/automations-archive-old.jsonl.bad-1763000000000",
         "/userData/automations-events.jsonl",
         "/userData/automations.json.tampered-1763000000000",
+        "/userData/automations-ack.json",
+        "/orbita-guard/userData/automations-events.jsonl",
+        "/orbita-guard/userData/automations-ack.json",
+        "/orbita-guard/userData/fingerprints.json",
+        "/orbita-guard/userData/fingerprints.json.a1b2c3d4.tmp",
       ]) {
         const write = await gate(event("write", { path: target, content: "[]" }));
         assert.equal(write.block, true, `${mode} write ${target}`);
@@ -219,6 +225,11 @@ describe("自动化记录文件不可变（protectedFiles）", () => {
         "rm /userData/automations-archive-old.jsonl",
         "echo '' > /userData/automations-archive-old.jsonl",
         "sed -i '' 's/a/b/' /userData/automations-archive-old.jsonl",
+        "rm /orbita-guard/userData/automations-events.jsonl",
+        "echo '{}' > /orbita-guard/userData/fingerprints.json",
+        "rm -rf /orbita-guard",
+        "mv /orbita-guard/userData /orbita-guard/old",
+        "echo '{}' > /userData/automations-ack.json",
       ]) {
         const result = await gate(event("bash", { command }));
         assert.equal(result.block, true, `${mode} ${command}`);

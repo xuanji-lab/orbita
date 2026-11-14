@@ -57,7 +57,7 @@ import { KeepAwake } from "./automation/keep-awake.ts";
 import { deliverAutomationRun, launchAutomationRun, type LaunchDeps } from "./automation/launch.ts";
 import { applyAutomationRequest, type AutomationRequestDeps } from "./automation/requests.ts";
 import { AutomationScheduler } from "./automation/scheduler.ts";
-import { AutomationStore, automationProtectedFiles } from "./automation/store.ts";
+import { AutomationStore, automationMirrorDir, automationProtectedFiles } from "./automation/store.ts";
 import { applyChannelSend, applyDelegate, type ChannelDeps } from "./channel/requests.ts";
 import { ChannelStore } from "./channel/store.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
@@ -1300,7 +1300,8 @@ void app.whenReady().then(async () => {
    * 睡眠唤醒（powerMonitor resume）立刻 tick 一次：Mac 睡眠时定时器不走。
    */
   // 记录文件被应用之外的力量动过（删 / 改 / 改数据目录名）：store 按内存真源写回并留事件，这里只负责通知 renderer 重拉（告警随 archiveInfo 带出）
-  const automationStore = new AutomationStore(configDir, Date.now, { onGuardEvent: broadcastAutomationEvent });
+  // 事件与已读位置的镜像、上次退出时的指纹留在数据目录之外（<appData>/orbita-guard/<数据目录名>/）：目录被删 / 改名也还在
+  const automationStore = new AutomationStore(configDir, Date.now, { onGuardEvent: broadcastAutomationEvent }, { mirrorDir: automationMirrorDir(configDir) });
   const keepAwake = new KeepAwake(
     powerSaveBlocker,
     async () => (await settings.read()).automationKeepAwake === true,

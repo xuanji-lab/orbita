@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeAutomation } from "./fixtures.ts";
 import { AUTOMATION_ARCHIVE_KEEP, type Automation } from "../../shared/automation.ts";
-import { AUTOMATION_COLD_FILE_NAME, AutomationStore, automationProtectedFiles, reconcileSnapshot, trimArchive } from "./store.ts";
+import { AUTOMATION_COLD_FILE_NAME, AutomationStore, automationMirrorDir, automationProtectedFiles, reconcileSnapshot, trimArchive } from "./store.ts";
 
 let dir = "";
 beforeEach(async () => {
@@ -29,7 +29,8 @@ describe("AutomationStore", () => {
     const store = new AutomationStore(dir);
     await store.insert(makeAutomation({ id: "a" }));
     await store.update("a", (current) => ({ ...current, title: "改名" }));
-    assert.deepEqual(await readdir(dir), ["automations.json"]);
+    // 记录文件之外只有兜底的已读位置文件（启动时落盘），没有临时文件
+    assert.deepEqual((await readdir(dir)).sort(), ["automations-ack.json", "automations.json"]);
     const onDisk = JSON.parse(await readFile(join(dir, "automations.json"), "utf8")) as { version: number; automations: { title: string }[] };
     assert.equal(onDisk.version, 1);
     assert.equal(onDisk.automations[0]?.title, "改名");
@@ -159,7 +160,7 @@ describe("AutomationStore 归档", () => {
     assert.equal((await store.get("a"))?.endReason, "cancelled");
     assert.deepEqual(await idsOnDisk(LIVE), ["b"]);
     assert.deepEqual(await idsOnDisk(ARCHIVE), ["a"]);
-    assert.deepEqual((await readdir(dir)).sort(), [ARCHIVE, LIVE]);
+    assert.deepEqual((await readdir(dir)).filter((name) => name !== "automations-ack.json").sort(), [ARCHIVE, LIVE]);
     const reopened = new AutomationStore(dir);
     assert.deepEqual((await reopened.list()).map((automation) => automation.id), ["b"]);
     assert.equal((await reopened.get("a"))?.endReason, "cancelled");
@@ -442,10 +443,21 @@ describe("AutomationStore 冷归档（热归档放不下的最旧记录先追加
     assert.deepEqual(trimArchive([1, 2]), { kept: [1, 2], evicted: [] });
   });
 
-  test("禁区清单含冷文件", () => {
+  test("禁区清单含冷文件、事件文件、已读位置，以及数据目录之外镜像里的三份", () => {
     assert.deepEqual(
-      automationProtectedFiles("/u").map((file) => file.replace(/\\/g, "/")),
-      ["/u/automations.json", "/u/automations-archive.json", `/u/${COLD}`, "/u/automations-events.jsonl"],
+      automationProtectedFiles("/u/data", "/u/orbita-guard/data").map((file) => file.replace(/\\/g, "/")),
+      [
+        "/u/data/automations.json",
+        "/u/data/automations-archive.json",
+        `/u/data/${COLD}`,
+        "/u/data/automations-events.jsonl",
+        "/u/data/automations-ack.json",
+        "/u/orbita-guard/data/automations-events.jsonl",
+        "/u/orbita-guard/data/automations-ack.json",
+        "/u/orbita-guard/data/fingerprints.json",
+      ],
     );
+    // 默认的镜像目录：appData 下与数据目录同级的 orbita-guard/<数据目录名>
+    assert.equal(automationMirrorDir("/u/Application Support/orbita-dev-x").replace(/\\/g, "/"), "/u/Application Support/orbita-guard/orbita-dev-x");
   });
 });
