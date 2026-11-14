@@ -5228,6 +5228,10 @@ a.latex-setup-action {
 .xlsx-table td[data-num="true"] {
   text-align: right;
 }
+/* 公式有缓存值缺失（第三方工具重算后没写 <v>）：占位符用三级文字色，不抢眼 */
+.xlsx-table td[data-uncached="true"] .xlsx-cell-text {
+  color: var(--color-text-tertiary);
+}
 /* 错误值（#DIV/0! 这类）：坏掉的公式是故障，给危险色 */
 .xlsx-table td[data-error="true"] {
   color: var(--color-danger);

@@ -34,6 +34,7 @@ import {
   type OfficeRevertResult,
   type OfficeStatus,
 } from "../../shared/office.ts";
+import { fillMissingFormulaCaches, formulaCellKey, isNumericValue } from "./xlsx-cache.ts";
 import {
   getOfficeText,
   renderOfficeHtml,
@@ -258,6 +259,32 @@ export class OfficeService {
     return next;
   }
 
+  /**
+   * 写批次成功后补公式缓存值（B9）。OfficeCLI 重算时只写 `<f>` 不写 `<v>`，而网格用缓存值
+   * 当显示值——被改的行与汇总行会整格变空。只扫「有公式没缓存」的格，问一次 officecli
+   * 要计算值（get 会求值）再写回；没有缺缓存的格就什么都不做（不 spawn、不写盘）。
+   * 失败只记一行日志，不影响这次编辑（网格对缺缓存有 `—` 占位兜底）。
+   */
+  private async fillFormulaCaches(bin: string, file: string): Promise<void> {
+    if (officeFormatOf(file) !== "xlsx") return;
+    try {
+      await fillMissingFormulaCaches(file, async (cells) => {
+        const items = cells.map(({ sheet, cell }) => ({ command: "get", path: `/${sheet}/${cell}` }));
+        const run = await runOfficeBatch(bin, file, items, this.runner, { bestEffort: true });
+        const report = parseOfficeBatchReport(run.stdout);
+        const values = new Map<string, string>();
+        cells.forEach(({ sheet, cell }, index) => {
+          const result = report.results.find((entry) => entry.index === index);
+          const text = result?.success === true ? (result.text ?? "").trim() : "";
+          if (text !== "" && isNumericValue(text)) values.set(formulaCellKey(sheet, cell), text);
+        });
+        return values;
+      });
+    } catch (cause) {
+      console.error(`[office] formula cache fill failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+  }
+
   private async applyEdits(sessionId: string, file: string, ops: readonly OfficeOp[]): Promise<OfficeAgentOutcome> {
     const current = await this.current();
     if (!current.ok) return { ok: false, error: this.missingHint(current.detail) };
@@ -309,6 +336,7 @@ export class OfficeService {
         })),
       };
       const { items: changes, failures } = officeChangesFromBatch(ops, synthetic, readResults, startedAt);
+      await this.fillFormulaCaches(current.bin, file);
       await this.record(sessionId, file, batch, changes);
       this.notify(file, changes.length);
       return {
@@ -327,6 +355,7 @@ export class OfficeService {
       return { ok: false, error: this.describeReportFailure(report) };
     }
     const { items: changes, failures } = officeChangesFromBatch(ops, report, readResults, startedAt);
+    await this.fillFormulaCaches(current.bin, file);
     await this.record(sessionId, file, batch, changes);
     this.notify(file, changes.length);
     return {

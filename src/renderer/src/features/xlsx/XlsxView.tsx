@@ -318,6 +318,7 @@ function SpacerRow(props: { rows: number; span: number }) {
 }
 
 function GridCell(props: { slot: XlsxGridSlot; firstRenderedRow: number }) {
+  const t = useT();
   const slot = props.slot;
   if (slot.kind === "covered") {
     // 锚点在本段里：整格不画，位置由锚点那格的 colSpan / rowSpan 占掉
@@ -327,6 +328,9 @@ function GridCell(props: { slot: XlsxGridSlot; firstRenderedRow: number }) {
   }
   if (slot.kind === "empty") return <td className="xlsx-cell" />;
   const cell = slot.cell;
+  // 有公式、没有缓存值（第三方工具重算后没写 <v>）：不能画成空白——给占位并说明
+  // 「渲染视图可看」，否则用户会以为这个格真的没数据（B9 的兜底层）
+  const uncached = cell.formula !== undefined && cell.text === "";
   return (
     <td
       className="xlsx-cell"
@@ -335,11 +339,18 @@ function GridCell(props: { slot: XlsxGridSlot; firstRenderedRow: number }) {
       data-error={cell.error === true ? "true" : undefined}
       // 公式原文走 tooltip：格子里显示的是缓存值，与 Excel 打开时一致
       data-formula={cell.formula === undefined ? undefined : "true"}
-      title={cell.formula === undefined ? cell.text : `=${cell.formula}`}
+      data-uncached={uncached ? "true" : undefined}
+      title={
+        cell.formula === undefined
+          ? cell.text
+          : uncached
+            ? `=${cell.formula} · ${t.files.xlsxFormulaUncached}`
+            : `=${cell.formula}`
+      }
       colSpan={slot.colSpan === 1 ? undefined : slot.colSpan}
       rowSpan={slot.rowSpan === 1 ? undefined : slot.rowSpan}
     >
-      <span className="xlsx-cell-text">{cell.text}</span>
+      <span className="xlsx-cell-text">{uncached ? "—" : cell.text}</span>
     </td>
   );
 }

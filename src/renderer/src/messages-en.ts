@@ -3096,6 +3096,8 @@ export const en = {
       `The file freezes the first ${rows > 0 ? `${plural(rows, "row")}${cols > 0 ? " and " : ""}` : ""}${cols > 0 ? plural(cols, "column") : ""}; this preview scrolls freely`,
     xlsxEmpty: "This sheet is empty",
     xlsxPassword: "This workbook is password-protected, or it isn't a real .xlsx file.",
+    xlsxFormulaUncached:
+      "formula — no cached value yet; the rendered view can show it",
     xlsxNormalized:
       "This file was rewritten by the Office tool — read in compatibility mode (the file itself is unchanged).",
     xlsxRenderStillViewable:
