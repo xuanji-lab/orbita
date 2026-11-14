@@ -578,6 +578,11 @@ const FILTERS = new Set(["sort", "uniq", "cut", "tr", "nl", "rev", "tac", "colum
 const COPY_OUT = new Set(["cp", "copy", "copy-item", "rsync", "ditto", "install"]);
 const MOVERS = new Set(["mv", "move", "move-item"]);
 const LANG_RUNTIMES = /^(?:python[0-9.]*|node|nodejs|bun|deno|perl|ruby|php|lua|osascript)$/;
+/**
+ * 解释器单行里「路径可能在运行时变」的迹象：chdir / 环境变量 / 取 cwd / 路径拼接 / 起别的进程。出现任何一个，
+ * 代码里的相对名不能按当前目录解析（先 chdir 再删、环境变量里藏路径、拼出别的名字），保守拒。输入是折叠成小写的代码文本。
+ */
+const UNCERTAIN_CODE = /chdir|environ|getenv|process\.env|argv|getcwd|\bcwd\b|__file__|__dirname|expanduser|homedir|join\s*\(|path\.resolve|\+|\bformat\s*\(|\bsystem\b|popen|subprocess|spawn|child_process|\bexec|\beval\s*\(|\bimport\s*\(/;
 const FIND_MUTATING = /^-(?:delete|exec|execdir|ok|okdir|fprint0?|fls|fprintf)$/;
 const FIND_PATTERN_ARGS = new Set(["-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename", "-regex", "-iregex", "-lname", "-ilname", "-type", "-perm", "-user", "-group", "-size", "-mtime", "-atime", "-ctime", "-mmin", "-amin", "-cmin", "-maxdepth", "-mindepth"]);
 const GIT_CWD_MUTATING = /^(?:clean|reset|checkout|restore|rm|stash|gc|prune|mv|apply|merge|pull|rebase|switch|am|cherry-pick|revert)$/;
@@ -592,6 +597,108 @@ const OPTION_WITH_ARG: Record<string, readonly string[]> = {
     "--compare-dest", "--copy-dest", "--link-dest", "--chmod", "--chown", "--usermap", "--groupmap", "--max-size", "--min-size", "--bwlimit", "--timeout", "--port", "--rsync-path",
     "--password-file", "--out-format", "--info", "--debug", "--suffix", "--read-batch", "--write-batch",
   ],
+};
+
+/**
+ * 只读白名单命令的「已知安全选项」：每个命令一份。判断按参数的**角色**：落在数据目录里的词，必须是这个命令的**输入操作数**
+ * 或「已知只带输入的选项」的取值才放行；落在任何别的选项的取值位置、或出现在含**不认识的选项**的命令里，一律拒——
+ * 不再逐个追「又发现一个能写文件的选项」（sort -o、diff --output、find -fls …），名单之外的选项一概不信。
+ * 读 man（macOS BSD 与 GNU 两套）定的：flags = 不带取值的短选项字母；input = 取值是**读**的文件；other = 取值不是路径（模式、数字、格式串）。
+ * 故意不收：file -C（写 magic.mgc）、sort -o、diff --output、find -fprint* / -fls、rg --pre、任何 -o / --output / --out* / --log-file 一类。
+ */
+interface OptionSpec {
+  flags: string;
+  input: string;
+  other: string;
+  longFlags: readonly string[];
+  longInput: readonly string[];
+  longOther: readonly string[];
+}
+const words = (text: string): string[] => text.split(/\s+/).filter((word) => word !== "");
+const CHECKSUM_SPEC: OptionSpec = {
+  flags: "bcCghpqrstUvwxz01",
+  input: "",
+  other: "as",
+  longFlags: words("binary check tag text quiet status warn strict ignore-missing zero portable"),
+  longInput: [],
+  longOther: words("algorithm"),
+};
+const GREP_SPEC: OptionSpec = {
+  flags: "abcEFGHhIiLlnoOPpqRrSsTUuVvwxyZz",
+  input: "f",
+  other: "eAmBCdD",
+  longFlags: words(
+    "recursive dereference-recursive count no-filename with-filename ignore-case invert-match line-number only-matching quiet silent files-with-matches files-without-match word-regexp line-regexp text null-data null no-messages extended-regexp fixed-strings perl-regexp basic-regexp initial-tab byte-offset",
+  ),
+  longInput: words("file exclude-from"),
+  longOther: words("color colour regexp max-count after-context before-context context include exclude exclude-dir include-dir binary-files directories devices label"),
+};
+const OPTION_SPECS: Readonly<Record<string, OptionSpec>> = {
+  ls: {
+    flags: "1@AaBbCcdeFfGgHhiklmnOopqRrSsTtUuvWwxZ",
+    input: "",
+    other: "",
+    longFlags: words("all almost-all classify directory human-readable inode recursive reverse size si dereference group-directories-first literal numeric-uid-gid hide-control-chars show-control-chars quote-name no-group author escape"),
+    longInput: [],
+    longOther: words("color sort time format width tabsize indicator-style time-style quoting-style"),
+  },
+  cat: { flags: "AbeEnstTuv", input: "", other: "", longFlags: words("show-all number-nonblank show-ends number squeeze-blank show-tabs show-nonprinting"), longInput: [], longOther: [] },
+  head: { flags: "qvz", input: "", other: "nc", longFlags: words("quiet silent verbose zero-terminated"), longInput: [], longOther: words("lines bytes") },
+  tail: { flags: "fFqrRvz", input: "", other: "nbc", longFlags: words("follow quiet silent verbose retry zero-terminated"), longInput: [], longOther: words("lines bytes sleep-interval pid max-unchanged-stats") },
+  wc: { flags: "clmwL", input: "", other: "", longFlags: words("bytes chars lines words max-line-length"), longInput: words("files0-from"), longOther: [] },
+  grep: GREP_SPEC,
+  egrep: GREP_SPEC,
+  fgrep: GREP_SPEC,
+  rg: {
+    flags: "abcFHhiIlLnNoPqsSUuvwxZ",
+    input: "f",
+    other: "ABCegjmMtTrEd",
+    longFlags: words(
+      "files hidden no-ignore no-ignore-vcs ignore-case case-sensitive smart-case word-regexp fixed-strings invert-match line-number no-line-number only-matching count count-matches files-with-matches files-without-match quiet follow no-filename with-filename heading no-heading json column vimgrep sort-files stats text null no-messages unrestricted multiline binary type-list line-regexp trim",
+    ),
+    longInput: words("file ignore-file"),
+    longOther: words("glob iglob type type-not max-depth max-count max-filesize after-context before-context context regexp replace threads encoding color colors sort sortr path-separator"),
+  },
+  diff: {
+    flags: "abBdEiNpqrsTtuwyZcefhln",
+    input: "XS",
+    other: "CUILxD",
+    longFlags: words(
+      "brief recursive unified new-file ignore-case report-identical-files text side-by-side ignore-all-space ignore-space-change ignore-blank-lines expand-tabs initial-tab strip-trailing-cr minimal speed-large-files left-column suppress-common-lines show-c-function",
+    ),
+    longInput: words("exclude-from from-file to-file starting-file"),
+    longOther: words("unified context label exclude ignore-matching-lines width tabsize color palette"),
+  },
+  stat: { flags: "FLlnqrsxH", input: "", other: "fct", longFlags: words("dereference file-system terse"), longInput: [], longOther: words("format printf") },
+  du: {
+    flags: "aAcgHhkLlmnPrsSxZ0",
+    input: "",
+    other: "dBtI",
+    longFlags: words("all apparent-size bytes total dereference human-readable si summarize one-file-system separate-dirs count-links"),
+    longInput: words("files0-from exclude-from"),
+    longOther: words("max-depth block-size threshold exclude time"),
+  },
+  file: {
+    flags: "bchiLNnprsvzZ0",
+    input: "mf",
+    other: "F",
+    longFlags: words("brief mime mime-type mime-encoding dereference no-dereference keep-going raw uncompress special-files no-pad no-buffer preserve-date"),
+    longInput: words("magic-file files-from"),
+    longOther: words("separator exclude parameter"),
+  },
+  shasum: CHECKSUM_SPEC,
+  md5: CHECKSUM_SPEC,
+  md5sum: CHECKSUM_SPEC,
+  sha1sum: CHECKSUM_SPEC,
+  sha256sum: CHECKSUM_SPEC,
+  jq: {
+    flags: "CcenrjRsSaMhV",
+    input: "f",
+    other: "L",
+    longFlags: words("null-input raw-input slurp compact-output raw-output join-output ascii-output sort-keys tab color-output monochrome-output exit-status seq stream unbuffered"),
+    longInput: words("from-file"),
+    longOther: words("indent"),
+  },
 };
 
 interface WordInfo {
@@ -689,7 +796,7 @@ class Judge {
   }
 
   /** 内联解释器代码（看不懂）：出现数据目录 / 上级路径 / 记录文件名（非绝对安全路径）就拒 */
-  private interpreterRefusal(variantText: string): Refusal {
+  private interpreterRefusal(variantText: string, current: string | null): Refusal {
     // raw 保留 \u0000（引号内空格），词边界按它切；text 是还原空格的副本，两者等长
     const raw = fold(variantText);
     const text = raw.replaceAll("\u0000", " ");
@@ -714,7 +821,16 @@ class Judge {
           let to = index + entry.base.length;
           while (to < raw.length && !/[\s,;()[\]{}<>|&]/.test(raw[to] ?? "")) to += 1;
           const token = text.slice(from, to);
-          if (!ABSOLUTE.test(token)) return { kind: "file", file: entry.file };
+          // 代码里有「路径可能在运行时变」的迹象（chdir、环境变量、拼接……）：这个名字前面可能还拼着别的目录，不信
+          if (UNCERTAIN_CODE.test(text)) return { kind: "file", file: entry.file };
+          if (!ABSOLUTE.test(token)) {
+            // 裸名 / 相对路径：当前目录能确定，才按 当前目录/名字 解析；解析后落在别处放行
+            if (current === null) return { kind: "file", file: entry.file };
+            const here = this.model.relateAbsolute(collapseDots(`${current}/${token}`));
+            if (here.kind === "record" || here.kind === "data" || here.kind === "above") return { kind: "file", file: entry.file };
+            index = text.indexOf(entry.base, index + 1);
+            continue;
+          }
           const rel = this.model.relateAbsolute(collapseDots(token));
           if (rel.kind === "record" || rel.kind === "data" || rel.kind === "above") return { kind: "file", file: entry.file };
         }
@@ -734,15 +850,22 @@ class Judge {
       const { verb, args } = verbOf(parseSegment(segment.text).words);
       return LANG_RUNTIMES.test(verb) && (hasHeredoc || args.some((arg) => /^-[a-z]*[cerEp]$|^--eval$|^--print$/.test(arg) || arg === "-"));
     });
-    if (lang) {
-      const refusal = this.interpreterRefusal(variant.text);
-      if (refusal !== null) return refusal;
-    }
+    // 解释器代码在它自己那一段轮到时才判（那时 cd 已经走完，当前目录才是它真正的 cwd）
+    const langIndex = lang
+      ? segments.findIndex((segment) => {
+          const { verb } = verbOf(parseSegment(segment.text).words);
+          return LANG_RUNTIMES.test(verb);
+        })
+      : -1;
 
     // 第一遍：逐段分析（顺着 cd 更新当前目录）；第二遍：管道与命令替换里「把列出来的名字交给别的命令」
     const state = { current: collapseDots(cwd) as string | null };
     const analyses: SegmentAnalysis[] = [];
-    for (const segment of segments) {
+    for (const [index, segment] of segments.entries()) {
+      if (index === langIndex) {
+        const refusal = this.interpreterRefusal(variant.text, state.current);
+        if (refusal !== null) return refusal;
+      }
       const analysis = this.analyzeSegment(segment, variant, state, lang);
       analyses.push(analysis);
       if (analysis.refusal !== null) return analysis.refusal;
@@ -784,6 +907,13 @@ class Judge {
         // `--target-directory=X` 一类 `=` 后面是路径
         const eq = raw.indexOf("=");
         if (raw.startsWith("--") && eq !== -1) rels.push({ raw: raw.slice(eq + 1), rel: this.relateWord(raw.slice(eq + 1), current), abs: this.plainAbsolute(raw.slice(eq + 1), current), option: false });
+        // 短选项与取值连写（`-o/路径`、`-ofile`）：路径藏在选项词里，从紧跟字母的位置与每个 `/`、`=` 之后各取一个候选
+        if (!raw.startsWith("--") && raw.length > 2) {
+          for (const candidate of attachedCandidates(raw)) {
+            const rel = this.relateWord(candidate, current);
+            if (rel.kind === "data" || rel.kind === "record" || rel.kind === "above") rels.push({ raw: candidate, rel, abs: null, option: false, sub: true });
+          }
+        }
         if (skipPatternArgs && FIND_PATTERN_ARGS.has(raw)) i += 1;
         continue;
       }
@@ -807,11 +937,15 @@ class Judge {
 
     // —— 导航：cd / pushd 进数据目录拒；其余更新当前目录 ——
     if (NAVIGATION.has(verb)) {
+      const cdpathSet = /(?:^|[\s;&|(])(?:export\s+)?CDPATH=/.test(variant.text) || (this.guard.env["CDPATH"] ?? "") !== "";
       const targetWord = args.find((arg) => !arg.startsWith("-") && arg !== "/d");
       if (verb === "popd" || verb === "pop-location") state.current = null;
       else if (targetWord === undefined) state.current = verb === "cd" || verb === "chdir" ? collapseDots(this.guard.home) : current;
       else if (targetWord === "-" || /[$`]/.test(targetWord)) state.current = null;
-      else {
+      else if (cdpathSet && !ABSOLUTE.test(targetWord) && !/^\.{1,2}(?:\/|$)/.test(targetWord)) {
+        // 设了 CDPATH 的相对 cd 会按 CDPATH 里的目录找，落到哪里我们模拟不了：不猜，按解析不出来拒
+        return refuse(this.deny("a relative cd while CDPATH is set (it can land in a folder this check cannot see)"));
+      } else {
         const abs = this.absoluteOf(targetWord, current);
         if (abs === null) state.current = null;
         else {
@@ -863,20 +997,10 @@ class Judge {
   private touchingRefusal(verb: string, args: readonly string[], rels: readonly WordInfo[], strict: boolean, current: string | null, cwdInData: boolean): Refusal {
     const aboveWords = rels.filter((info) => !info.option && info.rel.kind === "above");
 
-    if (verb === "find") {
-      if (args.some((arg) => FIND_MUTATING.test(arg))) {
-        const roots = findRoots(args);
-        const rootRels = roots.length === 0 ? [current === null ? ({ kind: "unresolved" } as Rel) : this.model.relateAbsolute(current)] : roots.map((root) => this.relateWord(root, current));
-        if (rootRels.some((rel) => rel.kind === "data" || rel.kind === "above" || rel.kind === "record" || rel.kind === "unresolved") || cwdInData) {
-          return this.deny("find with -delete / -exec / -ok / -fprint over the data folder or a folder above it");
-        }
-        return null;
-      }
-      return null;
-    }
+    if (verb === "find") return this.findRefusal(args, current, cwdInData);
     if (READ_ONLY.has(verb)) {
       if (verb === "rg" && args.some((arg) => /^--(?:pre|hostname-bin|search-zip)/.test(arg) || arg === "-z")) return this.deny("rg with --pre can run a command");
-      return null;
+      return this.readOnlyRoleRefusal(verb, args, current);
     }
     if (COPY_OUT.has(verb)) return this.copyRefusal(verb, args, rels, strict, cwdInData);
     if (MOVERS.has(verb)) return this.moveRefusal(args, rels, strict, cwdInData);
@@ -885,6 +1009,106 @@ class Judge {
     if (cwdInData) return this.deny(`"${verb}" inside the data folder (only read-only commands are allowed there)`);
     if (strict) return this.deny(`"${verb}" touching the data folder (only read-only commands may)`);
     return this.deny(`"${verb}" aimed at a folder that holds the data folder or automation records`);
+  }
+
+  /**
+   * find：起点（命令词后面第一个表达式之前的词）是输入。带 -delete / -exec / -ok / -fprint* / -fls / -fprintf 的：起点碰到数据目录或上级拒；
+   * 另外这些动作后面出现的、落在数据目录里的词（`-fls D/x`、`-exec cp {} D \;`）是输出 / 命令参数，拒。
+   * 不带这些动作的 find 只读：起点与 `-newer` 之类的取值都是输入，放行。
+   */
+  private findRefusal(args: readonly string[], current: string | null, cwdInData: boolean): Refusal {
+    const firstAction = args.findIndex((arg) => FIND_MUTATING.test(arg));
+    if (firstAction === -1) return null;
+    const roots = findRoots(args);
+    const rootRels = roots.length === 0 ? [current === null ? ({ kind: "unresolved" } as Rel) : this.model.relateAbsolute(current)] : roots.map((root) => this.relateWord(root, current));
+    if (rootRels.some((rel) => rel.kind === "data" || rel.kind === "above" || rel.kind === "record" || rel.kind === "unresolved") || cwdInData) {
+      return this.deny("find with -delete / -exec / -ok / -fprint over the data folder or a folder above it");
+    }
+    for (const word of args.slice(firstAction)) {
+      if (word.startsWith("-") && word.length > 1) {
+        const eq = word.indexOf("=");
+        if (eq !== -1 && this.touchesData(word.slice(eq + 1), current)) return this.deny("find writing or running something on the data folder");
+        continue;
+      }
+      if (this.touchesData(word, current)) return this.deny("find with an action whose output or command line names the data folder");
+    }
+    return null;
+  }
+
+  private touchesData(text: string, current: string | null): boolean {
+    const kind = this.relateWord(text, current).kind;
+    if (kind === "data" || kind === "record") return true;
+    return attachedCandidates(`-x${text}`).some((candidate) => {
+      const rel = this.relateWord(candidate, current).kind;
+      return rel === "data" || rel === "record";
+    });
+  }
+
+  /**
+   * 只读白名单命令的参数角色检查（见 OPTION_SPECS）：数据目录里的词只能是输入操作数，或已知「只带输入」的选项的取值；
+   * 别的选项的取值位置、含不认识的选项的命令里出现数据目录路径，一律拒。
+   */
+  private readOnlyRoleRefusal(verb: string, args: readonly string[], current: string | null): Refusal {
+    const spec = OPTION_SPECS[verb];
+    if (spec === undefined) return null;
+    const bad = (text: string): boolean => this.touchesData(text, current);
+    const deny = (): CommandRefusal => this.deny(`"${verb}" with an option that may write to or run something on the data folder (only known read-only options are trusted there)`);
+    const operands: string[] = [];
+    const inputValues: string[] = [];
+    let unknownOption = false;
+    let endOfOptions = false;
+    for (let i = 0; i < args.length; i += 1) {
+      const arg = args[i] ?? "";
+      if (!endOfOptions && arg === "--") {
+        endOfOptions = true;
+        continue;
+      }
+      if (endOfOptions || !arg.startsWith("-") || arg === "-") {
+        operands.push(arg);
+        continue;
+      }
+      if (arg.startsWith("--")) {
+        const eq = arg.indexOf("=");
+        const name = arg.slice(2, eq === -1 ? undefined : eq);
+        const attached = eq === -1 ? undefined : arg.slice(eq + 1);
+        const nextValue = (): string | undefined => (attached !== undefined ? attached : args[++i]);
+        if (spec.longFlags.includes(name)) {
+          if (attached !== undefined && bad(attached)) return deny();
+        } else if (spec.longInput.includes(name)) {
+          const value = nextValue();
+          if (value !== undefined) inputValues.push(value);
+        } else if (spec.longOther.includes(name)) {
+          const value = nextValue();
+          if (value !== undefined && bad(value)) return deny();
+        } else {
+          unknownOption = true;
+          if (attached !== undefined && bad(attached)) return deny();
+        }
+        continue;
+      }
+      const bundle = arg.slice(1);
+      if (/^\d+$/.test(bundle)) continue;
+      for (let j = 0; j < bundle.length; j += 1) {
+        const letter = bundle[j] ?? "";
+        const rest = bundle.slice(j + 1);
+        if (spec.flags.includes(letter)) continue;
+        if (spec.input.includes(letter)) {
+          const value = rest !== "" ? rest : args[++i];
+          if (value !== undefined) inputValues.push(value);
+          break;
+        }
+        if (spec.other.includes(letter)) {
+          const value = rest !== "" ? rest : args[++i];
+          if (value !== undefined && bad(value)) return deny();
+          break;
+        }
+        unknownOption = true;
+        if (rest !== "" && bad(rest)) return deny();
+        break;
+      }
+    }
+    if (unknownOption && [...operands, ...inputValues].some((operand) => bad(operand))) return deny();
+    return null;
   }
 
   /** cp / rsync / ditto / install：以数据目录为**源**往外拷放行；目标落进数据目录 / 上级里同名子项拒 */
@@ -1022,6 +1246,18 @@ class Judge {
 
 function humanDir(dir: string): string {
   return dir.replaceAll("\u0000", " ");
+}
+
+/** 短选项与取值连写时，取值可能从哪里开始：紧跟选项字母的位置、每个 `/` 与 `=` 之后（`-o/a/b`、`-ofile`、`-x=/a`） */
+function attachedCandidates(option: string): string[] {
+  const out = new Set<string>();
+  const body = option.slice(2);
+  if (body !== "") out.add(body.replace(/^=/, ""));
+  for (let i = 2; i < option.length; i += 1) {
+    const ch = option[i];
+    if (ch === "/" || ch === "=") out.add(option.slice(ch === "=" ? i + 1 : i));
+  }
+  return [...out].filter((candidate) => candidate !== "");
 }
 
 /** find 的起点：命令词后面、第一个表达式之前的词 */
