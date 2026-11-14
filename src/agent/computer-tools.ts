@@ -430,11 +430,15 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       "`generation` (this window's 1st, 2nd, 3rd list…), and each ref is an opaque token like \"g12:r3\" (that " +
       "generation + the position in it). Pass since=<generation> on a later list of the same window to get ONLY " +
       "what changed — new controls, gone controls, and controls whose name / patterns / enabled / offscreen / " +
-      "position changed, plus how many stayed the same. Diff listings are far smaller, so in a long task keep " +
-      "listing with since instead of pulling the full list each round. A control that did not change is not in a " +
+      "position changed, plus how many stayed the same. A diff is usually much smaller, so in a long task keep " +
+      "listing with since instead of pulling the full list each round — but when more than half the controls " +
+      "changed (a page navigation moves every control), the bridge falls back to a full list and says why: a diff " +
+      "bigger than the full list would only cost you more. A control that did not change is not in a " +
       "diff listing: act on it by name, or list without since to get its current ref. " +
-      "**Refs expire with every list**: a ref from an older list is rejected with the reason (the control may " +
-      "now be a different one), so after an expiry just list again and copy the new token. Listing also records " +
+      "**Refs expire when the control tree changes**, not on every query: listing twice in a row keeps your refs " +
+      "valid (the generation only goes up when something actually changed). After a real change the old token is " +
+      "rejected with the reason and the current generation, so just list again and copy the new token. " +
+      "Listing also records " +
       "where that window's **native** password fields are, " +
       "so later screenshots can black them out. Browser page content is not exposed to UI Automation, so this covers " +
       "Win32 controls only — web pages draw their own password dots, and those never reach the image. " +

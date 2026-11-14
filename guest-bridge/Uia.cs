@@ -1626,6 +1626,18 @@ internal static class Uia
             // diff 要拿「这一代之前」的历史说话：先定基准、先算差异，再把新快照收进去
             UiaDiffPlan plan = PlanList(store, key, hasSince, sinceGen);
             UiaDiffResult diff = plan.Mode == "diff" ? DiffSnapshots(plan.Base, snapshot) : null;
+            // **diff 不省时就别硬用**：2026-11-14 真机，一次导航让每个控件的 rect 都变，
+            // 56 条 changed 的回执 7822B 比全量 6721B 还大——模型读得更多，而且 diff 里
+            // 没有未变控件的 ref（想动它们还得再 list 一次）。变化过半就回全量，并说清原因。
+            if (diff != null && (diff.Items.Count + diff.Removed.Count) * 2 > snapshot.Items.Count)
+            {
+                plan.Note = JoinNotes(plan.Note, "这次变化过半（" + (diff.Items.Count + diff.Removed.Count)
+                    + "/" + snapshot.Items.Count + " 个控件），回全量比 diff 更省。");
+                plan.Mode = "full";
+                plan.Since = 0;
+                plan.Base = null;
+                diff = null;
+            }
             store.Push(key, snapshot, Release);
 
             List<UiaItemInfo> shown = diff == null ? snapshot.Items : diff.Items;
