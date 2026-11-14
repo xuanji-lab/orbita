@@ -58,27 +58,30 @@ index 675a0996f56d0bccd8bccfdb3508e1c505519842..860569975cd0be9a96f195194c768405
                              // Read text content. Convert offset from 1-indexed input to 0-indexed line access.
                              const startLine = offset ? Math.max(0, offset - 1) : 0;
 diff --git a/dist/index.d.ts b/dist/index.d.ts
-index bb8acdb1b034f89e8fcb86a5933fa513d49a8ef3..bbaac81fb4607ab3b3e34f4e962d2bd19d5b42bd 100644
+index bb8acdb1b034f89e8fcb86a5933fa513d49a8ef3..c4510cdceff50e47a66949335297406e89083907 100644
 --- a/dist/index.d.ts
 +++ b/dist/index.d.ts
-@@ -25,6 +25,7 @@ export { createSyntheticSourceInfo } from "./core/source-info.ts";
+@@ -25,6 +25,8 @@ export { createSyntheticSourceInfo } from "./core/source-info.ts";
  export { type EditDiffResult, generateDiffString, generateUnifiedPatch } from "./core/tools/edit-diff.ts";
  export { type BashOperations, type BashSpawnContext, type BashSpawnHook, type BashToolDetails, type BashToolInput, type BashToolOptions, createBashToolDefinition, createEditToolDefinition, createFindToolDefinition, createGrepToolDefinition, createLocalBashOperations, createLocalPowerShellOperations, createLsToolDefinition, createPowerShellToolDefinition, createReadToolDefinition, createWriteToolDefinition, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, type EditOperations, type EditToolDetails, type EditToolInput, type EditToolOptions, type FindOperations, type FindToolDetails, type FindToolInput, type FindToolOptions, formatSize, type GrepOperations, type GrepToolDetails, type GrepToolInput, type GrepToolOptions, type LsOperations, type LsToolDetails, type LsToolInput, type LsToolOptions, type PowerShellOperations, type PowerShellSpawnContext, type PowerShellSpawnHook, type PowerShellToolDetails, type PowerShellToolInput, type PowerShellToolOptions, type ReadOperations, type ReadToolDetails, type ReadToolInput, type ReadToolOptions, type ToolsOptions, type TruncationOptions, type TruncationResult, truncateHead, truncateLine, truncateTail, type WriteOperations, type WriteToolInput, type WriteToolOptions, withFileMutationQueue, } from "./core/tools/index.ts";
  export { formatReadLineRange } from "./core/tools/render-utils.ts";
 +export { resolveToCwd } from "./core/tools/path-utils.ts";
++export { buildSystemPrompt } from "./core/system-prompt.ts";
  export { hasTrustRequiringProjectResources, type ProjectTrustDecision, ProjectTrustStore, type ProjectTrustStoreEntry, type ProjectTrustUpdate, } from "./core/trust-manager.ts";
  export { type ModelRoute, type ModelRouteReason, type ModelRouteRequest, VIRTUAL_MODEL_STATE_ENTRY, type VirtualModelDefinition, type VirtualModelStateData, } from "./core/virtual-models.ts";
  export { type CodemodeExtensionOptions, createCodemodeExtension } from "./extensions/codemode/index.ts";
 diff --git a/dist/index.js b/dist/index.js
-index ab5cfccc3a90939e533b9118122189507a7af326..e59d22fe5a2b1fa79707c0ee7ca103d21b6cc792 100644
+index ab5cfccc3a90939e533b9118122189507a7af326..1e9a86d860b020f8ff1345808010a5421675d2dc 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -29,6 +29,8 @@ export { generateDiffString, generateUnifiedPatch } from "./core/tools/edit-diff
+@@ -29,6 +29,10 @@ export { generateDiffString, generateUnifiedPatch } from "./core/tools/edit-diff
  // Tools
  export { createBashToolDefinition, createEditToolDefinition, createFindToolDefinition, createGrepToolDefinition, createLocalBashOperations, createLocalPowerShellOperations, createLsToolDefinition, createPowerShellToolDefinition, createReadToolDefinition, createWriteToolDefinition, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead, truncateLine, truncateTail, withFileMutationQueue, } from "./core/tools/index.js";
  export { formatReadLineRange } from "./core/tools/render-utils.js";
 +// orbita：write/edit 工具内部即用此函数解析路径，外部需同一实现保证路径口径一致
 +export { resolveToCwd } from "./core/tools/path-utils.js";
++// orbita：新内核（pi-durable）重建 pi 的基础系统提示，要与旧内核同一个函数（逐字节一致）
++export { buildSystemPrompt } from "./core/system-prompt.js";
  export { hasTrustRequiringProjectResources, ProjectTrustStore, } from "./core/trust-manager.js";
  export { VIRTUAL_MODEL_STATE_ENTRY, } from "./core/virtual-models.js";
  // Built-in extensions. The CLI loads them; SDK sessions add them to their extension factories.

@@ -12,10 +12,16 @@
  * 都不该占主进程的事件循环；崩溃也不带走窗口。
  */
 import type { Models } from "@earendil-works/pi-ai";
+import type { AgentEvent } from "../shared/agent-ipc.ts";
+import { COMPACTION_DEFAULT } from "../shared/settings.ts";
 import type { KernelCommand, KernelMessage } from "../shared/kernel.ts";
 import { KernelPool } from "./kernel.ts";
+import { PermissionWaiter, type KernelTurnRuntime } from "./kernel-turn.ts";
+import { McpHub } from "./mcp.ts";
 import { createModelRuntime } from "./model-catalog.ts";
 import { registerAndResolveModel } from "./model-registration.ts";
+import { isToolReply, RequestBroker, toolReplyResult } from "./request-broker.ts";
+import { createShellPathResolver } from "./shell-path.ts";
 
 /** Electron 的 utility 进程 parentPort 的结构面（memory runtime 的同款） */
 type ParentPortLike = {
@@ -46,6 +52,22 @@ let pool: KernelPool | null = null;
 /** init 之前到的命令排在它后面 */
 let initialized: Promise<void> | null = null;
 
+function sendAgent(event: AgentEvent): void {
+  post({ type: "agent", event });
+}
+
+/**
+ * 跑轮用的进程级依赖：与旧内核 runtime.ts 的同名单例同语义——工具请求通道（RequestBroker，主进程是唯一对端）、
+ * MCP 连接（按工作区分片）、审批等待表、bash 路径探测缓存。
+ */
+const turnRuntime: KernelTurnRuntime = {
+  broker: new RequestBroker((event) => sendAgent(event as AgentEvent)),
+  mcpHub: new McpHub(),
+  permissions: new PermissionWaiter(sendAgent),
+  send: sendAgent,
+  resolveShellPath: createShellPathResolver(),
+};
+
 function models(): Models {
   if (modelRuntime === null) throw new Error("kernel runtime is not initialized");
   return modelRuntime;
@@ -59,8 +81,7 @@ async function init(dir: string): Promise<void> {
     models,
     registerProvider: (agent) => {
       if (agent.provider === null) return undefined;
-      const model = registerAndResolveModel(runtime, agent.provider, agent.modelId);
-      return model === undefined ? undefined : { contextWindow: model.contextWindow };
+      return registerAndResolveModel(runtime, agent.provider, agent.modelId);
     },
     log: (text) => console.error(text),
   });
@@ -97,6 +118,45 @@ parentPort.on("message", (event: { data: unknown }) => {
       .catch((cause: unknown) => {
         post({ type: "opened", requestId, sessionId, result: { ok: false, reason: cause instanceof Error ? cause.message : String(cause) } });
       });
+    return;
+  }
+  if (command.type === "turn") {
+    const { requestId } = command;
+    void ready
+      .then(() => {
+        if (pool === null) throw new Error("kernel runtime is not initialized");
+        return pool.turn({
+          library: command.library,
+          command: command.turn,
+          runtime: turnRuntime,
+          compaction: {
+            enabled: command.turn.compaction?.enabled ?? true,
+            reservePercent: command.turn.compaction?.reservePercent ?? COMPACTION_DEFAULT.reservePercent,
+          },
+        });
+      })
+      .then((result) => post({ type: "turnDone", requestId, sessionId: command.turn.sessionId, result }))
+      .catch((cause: unknown) =>
+        post({
+          type: "turnDone",
+          requestId,
+          sessionId: command.turn.sessionId,
+          result: { ok: false, reason: cause instanceof Error ? cause.message : String(cause) },
+        }),
+      );
+    return;
+  }
+  if (command.type === "agent") {
+    const forwarded = command.command;
+    if (forwarded.type === "permissionAnswer") {
+      turnRuntime.permissions.answer(forwarded.requestId, forwarded.answer);
+    } else if (forwarded.type === "abort") {
+      void ready.then(() => pool?.abort(forwarded.sessionId)).catch((cause: unknown) => console.error("[kernel] 停止失败", cause));
+    } else if (isToolReply(forwarded)) {
+      // 工具请求的回执（*Result）：与旧内核同一份翻法（request-broker.ts），结掉在途的工具调用
+      turnRuntime.broker.resolve(forwarded.requestId, toolReplyResult(forwarded));
+    }
+    // 意图确认（intentConfirmResult）：新内核这一步不跑意图闸门（实验功能，主循环切过来时再接），收到就丢
     return;
   }
   if (command.type === "drop") {

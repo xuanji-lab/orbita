@@ -17,7 +17,7 @@
 import { readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { Models, ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { Api, Model, Models, ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
 import {
   createRegistry,
   defineDoc,
@@ -27,15 +27,19 @@ import {
   type ConversationId,
   type EntryId,
   type HarnessSettings,
+  type Registry,
   type Storage,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { KERNEL_LIBRARY_NAME, type KernelAgent, type KernelOpenResult } from "../shared/kernel.ts";
+import { KERNEL_LIBRARY_NAME, type KernelAgent, type KernelOpenResult, type KernelTurnCommand, type KernelTurnResult } from "../shared/kernel.ts";
 import { COMPACTION_DEFAULT } from "../shared/settings.ts";
 import { chooseCacheRetention, type SessionRole } from "./cache-retention.ts";
 import { compactionKeepRecentTokens, compactionReserveTokens } from "./compaction-settings.ts";
 import { planLegacyMigration, type LegacyDraft } from "./legacy-migrate.ts";
 import { RETRY_BASE_DELAY_MS, RETRY_MAX_ATTEMPTS, RETRY_MAX_DELAY_MS } from "./retry-policy.ts";
+import { runTurn, type KernelTurnRuntime } from "./kernel-turn.ts";
+import { turnToolFlags } from "./turn-tools.ts";
+import { withOpencodeSession } from "./opencode-session.ts";
 
 /**
  * 库里的「Orbita 会话 id → durable 会话号」索引（session 作用域的单例文档）。
@@ -103,8 +107,8 @@ export interface KernelPoolOptions {
   dir: string;
   /** 当前的模型访问（服务商注册在调用方）；每次用时现取 */
   models: () => Models;
-  /** 每条会话打开时把服务商注册进模型目录，返回模型窗口（压缩阈值要用）；没有服务商时不调 */
-  registerProvider?: (agent: KernelAgent) => { contextWindow: number } | undefined;
+  /** 每条会话打开 / 跑轮时把服务商注册进模型目录，返回解析出的模型（压缩阈值要它的窗口）；没有服务商时不调 */
+  registerProvider?: (agent: KernelAgent) => Model<Api> | undefined;
   /** 测试注入：不落 SQLite，用 MemoryStorage 之类 */
   openStorage?: (file: string) => Promise<Storage>;
   now?: () => number;
@@ -113,6 +117,8 @@ export interface KernelPoolOptions {
 
 interface OpenLibrary {
   harness: Harness;
+  /** 这个库的扩展注册表：每条会话一个 `orbita-session-<id>` 扩展，跑轮时按开轮命令重建装上 */
+  registry: Registry;
   /** 正在进行的 open（按会话 id），并发调用共享 */
   inflight: Map<string, Promise<KernelOpenResult>>;
 }
@@ -154,12 +160,13 @@ export class KernelPool {
     const opening = (async (): Promise<OpenLibrary> => {
       const file = this.filePath(library);
       const storage = await (this.options.openStorage ?? ((path: string) => openNodeSqliteStorage(path)))(file);
+      // 扩展（工具、系统提示、钩子）按会话在跑轮时装：迁移与开库用不到
+      const registry = createRegistry();
       const harness = await Harness.open(
         storage,
         {
           models: () => withCacheRetention(this.options.models(), (id) => this.roleOf(id)),
-          // 这一步不装任何扩展与工具：迁移与开库用不到，工具在主循环迁过来那一步再装
-          registry: createRegistry(),
+          registry,
           settings: () => kernelSettings(),
           ...(this.options.now === undefined ? {} : { now: this.options.now }),
           onReport: (report) => this.options.log?.(`[kernel] ${library} 报告 ${report.kind}：${String(report.error)}`),
@@ -170,7 +177,7 @@ export class KernelPool {
       void harness.closed.then(() => {
         if (this.libraries.get(library) === opening) this.libraries.delete(library);
       });
-      return { harness, inflight: new Map() };
+      return { harness, registry, inflight: new Map() };
     })();
     this.libraries.set(library, opening);
     opening.catch(() => {
@@ -270,6 +277,70 @@ export class KernelPool {
   private async remember(harness: Harness, conversationId: number, role: SessionRole): Promise<void> {
     const provider = await harness.snapshot(ProviderDoc, conversationId as ConversationId, BACKGROUND_CONTEXT);
     if (provider !== undefined) this.roles.set(provider.sessionId, role);
+  }
+
+  /**
+   * 用新内核跑一轮（脚本直驱的那条路：这一步对话主循环仍是旧内核）。会话不在库里就先迁 / 新建，再跑。
+   * 不抛错：失败折成 `{ ok: false, reason }`。
+   */
+  async turn(input: { library: string; command: KernelTurnCommand; runtime: KernelTurnRuntime; compaction: KernelAgent["compaction"] }): Promise<KernelTurnResult> {
+    const { command } = input;
+    try {
+      const agent: KernelAgent = {
+        // OpenCode Go 的会话头按会话注入（与旧内核 openTurn 同一个包装；官方 DeepSeek 等原样返回）
+        provider: withOpencodeSession(command.provider, command.sessionId),
+        modelId: command.modelId,
+        thinkingLevel: command.thinkingLevel,
+        cwd: command.cwd,
+        role: turnToolFlags(command).role,
+        compaction: input.compaction,
+      };
+      const opened = await this.open({
+        library: input.library,
+        sessionId: command.sessionId,
+        legacy: command.piSessionFile === undefined ? null : { piSessionFile: command.piSessionFile },
+        agent,
+      });
+      if (!opened.ok) return { ok: false, reason: opened.reason };
+      const library = await this.library(input.library);
+      const conversation = await library.harness.conversation(opened.conversationId as ConversationId, BACKGROUND_CONTEXT);
+      if (conversation === undefined) return { ok: false, reason: `库里找不到会话 ${opened.conversationId}` };
+      const model = this.options.registerProvider?.(agent);
+      if (model === undefined) return { ok: false, reason: `unknown model "${command.provider.id}/${command.modelId}"` };
+      const provider = await library.harness.snapshot(ProviderDoc, conversation.id, BACKGROUND_CONTEXT);
+      const outcome = await runTurn(
+        command,
+        input.runtime,
+        { registry: library.registry, conversation, model, providerSessionId: provider?.sessionId ?? "" },
+        kernelCompaction(agent, model.contextWindow),
+      );
+      return {
+        ok: true,
+        conversationId: conversation.id,
+        migration: opened.migrated ? "migrated" : "none",
+        status: outcome.status,
+        ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
+      };
+    } catch (error) {
+      return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /**
+   * 停这条会话正在跑的轮（脚本直驱的停止）。这一步没有排队（队列仍在 renderer、主循环仍是旧内核），
+   * 所以用 Conversation.abort()；Esc 不清队的语义（abortTask(run) + continue）在主循环切过来那一步做。
+   * 卡在审批上的轮也停得下：审批等待听 abort（kernel-turn.ts 的 PermissionWaiter）。
+   */
+  async abort(sessionId: string): Promise<void> {
+    for (const opening of this.libraries.values()) {
+      const opened = await opening.catch(() => null);
+      if (opened === null) continue;
+      const id = (await opened.harness.snapshot(SessionIndexDoc, BACKGROUND_CONTEXT))?.sessions[sessionId];
+      if (id === undefined) continue;
+      const conversation = await opened.harness.conversation(id as ConversationId, BACKGROUND_CONTEXT);
+      await conversation?.abort(BACKGROUND_CONTEXT);
+      return;
+    }
   }
 
   /** 删一棵会话树：关库 + 删库文件（含 WAL 两个旁文件）。库不在也算成功。 */
