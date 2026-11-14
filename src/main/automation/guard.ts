@@ -159,6 +159,7 @@ export async function readUnacknowledged(path: string): Promise<AutomationGuardE
       }
       if (typeof value["at"] === "number" && typeof value["file"] === "string" && KINDS.includes(value["kind"] as AutomationGuardKind)) {
         events.push({
+          seq: events.length + 1,
           at: value["at"],
           file: value["file"],
           kind: value["kind"] as AutomationGuardKind,

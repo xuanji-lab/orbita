@@ -402,7 +402,7 @@ export class AutomationStore {
 
   /** 记一条事件：追加事件文件、进内存告警、通知 renderer 重拉。记事件失败不影响主流程 */
   private async recordEvent(kind: AutomationGuardKind, file: string, extra: { records?: number; backup?: string }): Promise<void> {
-    const event: AutomationGuardEvent = { at: this.now(), file, kind, ...extra };
+    const event: AutomationGuardEvent = { seq: (this.alerts[0]?.seq ?? 0) + 1, at: this.now(), file, kind, ...extra };
     console.warn(`[automation] 记录文件被动过：${file}（${kind}）`);
     await appendGuardLine(this.eventsPath, event);
     this.alerts = [event, ...this.alerts];
@@ -564,7 +564,7 @@ export class AutomationStore {
   }
 
   /** 用户点了「知道了」：事件文件里追加一行 ack，之后这些不再提示 */
-  async ackAlerts(): Promise<void> {
+  async ackAlerts(_upTo?: number): Promise<void> {
     const task = this.chain.then(async () => {
       await appendGuardLine(this.eventsPath, ackLine(this.now()));
       this.alerts = [];

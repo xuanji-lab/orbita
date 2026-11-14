@@ -536,8 +536,21 @@ export const en = {
           `${file} was edited. Restored from what Orbita had (${records} records); the edited copy is kept as ${backup}.`,
         coldMissing: (file: string) => `${file}, which holds the older finished records, is missing. It was not recreated.`,
         coldChanged: (file: string) => `${file}, which holds the older finished records, was modified. It was left as it is.`,
-        dataDirReplaced: (records: number) =>
-          `The data folder was renamed or deleted. Automation records were written back (${records} records); other data such as sessions and settings was not.`,
+        /** 条数写成「N 条进行中 + M 条已归档」，免得被读成单一文件；找得到被改名的旧目录就说它现在在哪 */
+        dataDirReplaced: (records: number, archived: number, movedTo: string) =>
+          `The data folder was renamed or deleted. Automation records were written back (${records} in progress + ${archived} archived); other data such as sessions and settings was not.` +
+          (movedTo === "" ? "" : ` The old folder is now at ${movedTo}.`),
+        /** 文件读不了（权限被改）：没法确认它有没有被动过 */
+        unreadable: (file: string) => `${file} can't be read (its permissions were changed). Orbita can't tell whether it was edited; it re-checks automatically once it is readable again.`,
+        /** 事件文件 / 已读位置被动过：已按内存写回 */
+        eventsChanged: (file: string, backup: string) =>
+          `${file}, the log of these notices, was deleted or edited. It was rebuilt from what Orbita had${backup === "" ? "" : `; the edited copy is kept as ${backup}`}.`,
+        ackChanged: (file: string) => `${file}, which remembers which notices you have seen, was changed. It was rewritten from what Orbita had.`,
+        /** 应用关着期间被改过：只告知，不恢复 */
+        changedWhileClosed: (file: string, movedTo: string) =>
+          file === "(data folder)"
+            ? `The data folder was replaced while Orbita was closed${movedTo === "" ? "" : ` (the old folder is now at ${movedTo})`}. Orbita used what is on disk and did not restore anything.`
+            : `${file} was changed while Orbita was closed. Orbita used what is on disk and did not restore anything.`,
       },
       dismiss: "Got it",
     },

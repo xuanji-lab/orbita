@@ -22,9 +22,9 @@ export function registerAutomationIpc(deps: AutomationRequestDeps): void {
   ipcMain.handle(ipcChannels.automationList, () => listAutomations(deps));
   // 冷归档的现状：面板「已结束」段末尾说「更早的 N 条保存在 <文件>」。不读冷文件，数在热归档文件里
   ipcMain.handle(ipcChannels.automationArchiveInfo, () => deps.store.archiveInfo());
-  // 用户点掉面板上的篡改提示：事件文件里追加一行 ack，并推一次变更让所有窗口的提示一起消失
-  ipcMain.handle(ipcChannels.automationAlertsAck, async () => {
-    await deps.store.ackAlerts();
+  // 用户点掉面板上的篡改提示：已读位置移到他看到的那条事件（入参当不可信：只认非负整数），并推一次变更让所有窗口的提示一起消失
+  ipcMain.handle(ipcChannels.automationAlertsAck, async (_e, upTo: unknown) => {
+    await deps.store.ackAlerts(typeof upTo === "number" && Number.isInteger(upTo) && upTo >= 0 ? upTo : undefined);
     deps.notify();
   });
   ipcMain.handle(ipcChannels.automationCreate, (_e, input: unknown) => applyAutomationCreate(deps, input));

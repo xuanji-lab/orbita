@@ -426,7 +426,15 @@ function guardWhat(what: AutomationMessages["guard"]["what"], event: AutomationG
     case "coldChanged":
       return what.coldChanged(event.file);
     case "dataDirReplaced":
-      return what.dataDirReplaced(records);
+      return what.dataDirReplaced(records, event.archived ?? 0, event.movedTo ?? "");
+    case "unreadable":
+      return what.unreadable(event.file);
+    case "eventsChanged":
+      return what.eventsChanged(event.file, event.backup ?? "");
+    case "ackChanged":
+      return what.ackChanged(event.file);
+    case "changedWhileClosed":
+      return what.changedWhileClosed(event.file, event.movedTo ?? "");
   }
 }
 

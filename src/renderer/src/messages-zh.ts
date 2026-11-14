@@ -456,7 +456,15 @@ export const zh: Messages = {
         changed: (file, records, backup) => `${file} 被改过，已按应用里的记录恢复（${records} 条）；被改的那份留成 ${backup}。`,
         coldMissing: (file) => `存放更早已结束记录的 ${file} 不见了，没有重建。`,
         coldChanged: (file) => `存放更早已结束记录的 ${file} 被改动过，没有动它。`,
-        dataDirReplaced: (records) => `数据目录被改名或删除过，自动化记录已写回（${records} 条）；会话、设置等其它数据没有恢复。`,
+        dataDirReplaced: (records, archived, movedTo) =>
+          `数据目录被改名或删除过，自动化记录已写回（${records} 条进行中 + ${archived} 条已归档）；会话、设置等其它数据没有恢复。${movedTo === "" ? "" : `被改名的旧目录现在在 ${movedTo}。`}`,
+        unreadable: (file) => `${file} 读不了（权限被改过），没法确认它有没有被动过；权限恢复后会自动再核对。`,
+        eventsChanged: (file, backup) => `记录这些提示的 ${file} 被删或被改过，已按应用里的记录重建${backup === "" ? "" : `；被改的那份留成 ${backup}`}。`,
+        ackChanged: (file) => `记着你看过哪些提示的 ${file} 被改过，已按应用里的记录重写。`,
+        changedWhileClosed: (file, movedTo) =>
+          file === "(data folder)"
+            ? `应用关着时数据目录被换掉了${movedTo === "" ? "" : `（旧目录现在在 ${movedTo}）`}，已按盘上现有的内容启动，没有恢复任何东西。`
+            : `应用关着时 ${file} 被改过，已按盘上现有的内容启动，没有恢复任何东西。`,
       },
       dismiss: "知道了",
     },

@@ -165,7 +165,7 @@ export const ipcChannels = {
   automationModeFromRow: "automation:mode-from-row",
   /** 冷归档的现状（无入参，回 `AutomationArchiveInfo`）：面板「已结束」段末尾说「更早的 N 条保存在 <文件>」 */
   automationArchiveInfo: "automation:archive-info",
-  /** 用户点掉面板上的篡改提示（无入参、回 void）：主进程在事件文件里追加一行 ack，之后不再提示这些 */
+  /** 用户点掉面板上的篡改提示（入参：看到的最新一条事件的序号 `upTo`，回 void）：主进程把已读位置移到 upTo（数据目录与镜像各记一份），之后不再提示序号 ≤ upTo 的；不给 = 到目前最新一条。晚到的事件不会被一起吞掉 */
   automationAlertsAck: "automation:alerts-ack",
   /** 主进程 → renderer 推送（`AutomationEvent`）：任何一条自动化变了 */
   automationEvent: "automation:event",

@@ -355,25 +355,38 @@ export interface AutomationEndRecord {
 export type AutomationGuardKind =
   /** 主文件 / 热归档不见了：已按应用里的记录写回 */
   | "missing"
-  /** 主文件 / 热归档的内容不是应用上次写的那份：被改的那份留成 `.tampered-<时间戳>`，已按应用里的记录写回 */
+  /** 主文件 / 热归档的内容不是应用上次写的那份（同尺寸同 mtime 改内容也算）：被改的那份留成 `.tampered-<时间戳>`，已按应用里的记录写回 */
   | "changed"
+  /** 文件读不了（`chmod 000` 之类的 EACCES / EPERM）：没法核对内容也没法确认它没被动，只告知；权限恢复后下一次核对自愈 */
+  | "unreadable"
   /** 冷文件不见了（更早的记录没了）：不重建空文件，只告诉用户 */
   | "coldMissing"
-  /** 冷文件缩小或头尾对不上：不改它，只告诉用户 */
+  /** 冷文件的大小不是应用上次追加后的精确大小（被外部追加 / 截断），或块哈希对不上（中段被改）：不改它，只告诉用户 */
   | "coldChanged"
-  /** 数据目录被改名 / 删除后重建：自动化记录已写回新目录（其余数据不在这次范围） */
-  | "dataDirReplaced";
+  /** 数据目录被改名 / 删除后重建：自动化记录已写回新目录（其余数据不在这次范围）；找得到被改名的旧目录就带上它的路径 */
+  | "dataDirReplaced"
+  /** 事件文件 / 已读位置（数据目录里的或数据目录外的镜像）被删、截断、改写或被外部追加：已按内存写回，被改的那份留成 `.tampered-<时间戳>` */
+  | "eventsChanged"
+  | "ackChanged"
+  /** 应用关着期间记录文件被改过（对不上上次退出时留在数据目录之外的指纹）：只告知，不恢复，以盘上为准 */
+  | "changedWhileClosed";
 
 export interface AutomationGuardEvent {
+  /** 事件序号（从 1 起单调递增，事件日志里的主键；「知道了」按它记已读位置，不再靠事件文件里的某一行） */
+  seq: number;
   /** 发现的时刻（epoch ms） */
   at: number;
-  /** 哪个文件（文件名，不含目录；数据目录整体出事记 "(data folder)"） */
+  /** 哪个文件（文件名，不含目录；数据目录整体出事记 "(data folder)"；镜像里的带 "(mirror) " 前缀） */
   file: string;
   kind: AutomationGuardKind;
-  /** 写回了多少条记录（missing / changed / dataDirReplaced） */
+  /** 写回了多少条进行中的记录（missing / changed / dataDirReplaced） */
   records?: number;
+  /** 写回时已归档的条数（dataDirReplaced：提示里写成「N 条进行中 + M 条已归档」） */
+  archived?: number;
   /** 被改的那份留在哪（文件名） */
   backup?: string;
+  /** 被改名的旧数据目录现在的路径（dataDirReplaced / changedWhileClosed，找得到才有） */
+  movedTo?: string;
 }
 
 /**
