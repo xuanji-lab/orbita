@@ -321,6 +321,8 @@ export interface ChatSession {
   turnContinuable: boolean;
   /** 新内核：这个子会话在应用重启后被自动接着跑过（上次被打断的那一轮） */
   resumedAfterRestart: boolean;
+  /** 新内核：发消息前正在把这条旧会话迁进库（大会话要一两秒） */
+  migrating: boolean;
   /** 接着跑被打断的那一轮（不加新消息） */
   continueTurn: () => void;
   openSession: (id: string) => Promise<void>;
@@ -3544,6 +3546,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       entry.phase === "idle" &&
       readOnlyReason === null &&
       (entry.turnContinuable || (engine.kernelDurable === true && entry.turnError === null && liveMeta?.durable?.running === true)),
+    migrating: entry.migrating,
     // 子会话在应用重启后被自动接着跑过（后台任务照常续跑）：界面说一句，直到下一次由人或父开的轮
     resumedAfterRestart: engine.kernelDurable === true && liveMeta?.parentId !== undefined && liveMeta.durable?.resumed !== undefined,
     continueTurn: continueHere,

@@ -20,6 +20,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { AssistantMessage, Message, Usage } from "@earendil-works/pi-ai";
 import { calculateContextTokens, estimateTokens } from "@earendil-works/pi-coding-agent";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
+import { getCurrentSystemMessage } from "@earendil-works/pi-ai/utils/transcript";
 import { ConversationIdle, LiveDoc, UsageDoc, type ContextView, type Conversation, type ConversationId, type EntryRecord, type Harness } from "@earendil-works/pi-durable";
 import type { AgentCommand, AgentEvent, AgentStats, ProviderSecrets } from "../shared/agent-ipc.ts";
 import { composeIntentPrompt } from "../shared/intent-recall.ts";
@@ -35,7 +36,7 @@ import { SessionHistoryDoc, type KernelPool, type KernelTarget } from "./kernel.
 import { appendNotice, branchSession, revertSession, RUNNING_REFUSAL } from "./kernel-edit.ts";
 import { digestContext, DurableBranch, runTurn, ToolRounds, type ContextDigest, type KernelTurnRuntime, type TurnOutcome } from "./kernel-turn.ts";
 import { KernelView } from "./kernel-view.ts";
-import { WireDoc } from "./kernel-wire.ts";
+import { liftMessages, WireDoc } from "./kernel-wire.ts";
 import type { PiModel } from "./model-registration.ts";
 import { generateTitle } from "./session-title.ts";
 import { TranscriptAdapter } from "./transcript-adapter.ts";
@@ -166,6 +167,30 @@ export function contextUsage(messages: readonly Message[], compacted: boolean, c
   let tokens = index === -1 ? 0 : calculateContextTokens(validUsage(messages[index] as Message) as Usage);
   for (let at = index + 1; at < messages.length; at++) tokens += estimateTokens(messages[at] as Parameters<typeof estimateTokens>[0]);
   return { tokens, contextWindow: window, percent: (tokens / window) * 100 };
+}
+
+/**
+ * 压缩后上下文的估算 token（旧内核 compaction_end 的 estimatedTokensAfter：pi 的 estimateMessagesTokens 对压缩后的投影逐条
+ * estimateTokens 加总）。pi 的压缩条目自带一份「当时的系统消息」（提示词各段 + 工具声明）并投影进压缩后的上下文，估算里占大头；
+ * durable 的压缩之后要到下一次请求才写系统消息，所以这里把压缩之前回放出的当前系统消息（getCurrentSystemMessage）补上。
+ * 消息先还原成旧内核的形状再估。读不到 = null（界碑退回只显示压缩前）。
+ */
+async function tokensAfterCompaction(conversation: Conversation, compaction: EntryRecord): Promise<number | null> {
+  try {
+    const view = await conversation.context(BACKGROUND_CONTEXT);
+    const messages = liftMessages(view.messages, new Set());
+    let tokens = 0;
+    for (const message of messages) tokens += estimateTokens(message as Parameters<typeof estimateTokens>[0]);
+    if (!messages.some((message) => (message as { role?: unknown }).role === "system")) {
+      const previous = (await conversation.entries({ maxEntryId: (compaction.id - 1) as EntryRecord["id"], order: "descending" }, 1, undefined, BACKGROUND_CONTEXT)).items[0];
+      const before = previous === undefined ? [] : (await conversation.context(BACKGROUND_CONTEXT, { at: previous.id })).messages;
+      const system = getCurrentSystemMessage(before);
+      if (system !== undefined) tokens += estimateTokens(system as Parameters<typeof estimateTokens>[0]);
+    }
+    return tokens;
+  } catch {
+    return null;
+  }
 }
 
 const SUMMARY_PREFIX = "The conversation history before this point was compacted into the following summary:\n\n<summary>\n";
@@ -446,6 +471,8 @@ export class KernelSessions {
         enabled: command.compaction?.enabled ?? true,
         reservePercent: command.compaction?.reservePercent ?? COMPACTION_DEFAULT.reservePercent,
       },
+      // 迁旧本子（大会话要一两秒）：界面据此说一句「正在迁移这条会话」
+      onMigrating: (state) => this.send({ type: "migration", sessionId: command.sessionId, state }),
     });
     if (!target.ok) throw target.migrationFailed === true ? new MigrationFailed(target.reason) : new OpenFailed(target.reason);
     note.model = target.model;
@@ -474,18 +501,17 @@ export class KernelSessions {
         void tracker.noteExecutionEnd(callId);
       },
       compactionPlaced: (entry) => {
-        this.send({
-          type: "compaction",
-          sessionId,
-          record: {
-            role: "compacted",
-            id: randomUUID(),
-            summary: compactionSummary(entry),
-            tokensBefore: statsOf.lastContextTokens ?? 0,
-            timestamp: compactionBoundaryTimestamp({ echoedAt: timing.echoedAt, sawAssistant: view.sawAssistant }, this.now()),
-          },
+        const tokensBefore = statsOf.lastContextTokens ?? 0;
+        const timestamp = compactionBoundaryTimestamp({ echoedAt: timing.echoedAt, sawAssistant: view.sawAssistant }, this.now());
+        // 界碑带「压缩后」的估算（旧内核 compaction_end 的 estimatedTokensAfter：压缩后上下文逐条 estimateTokens 加总）
+        void tokensAfterCompaction(target.conversation, entry).then((tokensAfter) => {
+          this.send({
+            type: "compaction",
+            sessionId,
+            record: { role: "compacted", id: randomUUID(), summary: compactionSummary(entry), tokensBefore, ...(tokensAfter === null ? {} : { tokensAfter }), timestamp },
+          });
+          void this.pushStats(sessionId, target, statsOf, true);
         });
-        void this.pushStats(sessionId, target, statsOf, true);
       },
     });
     const observation = await target.harness.observeConversation(
@@ -690,7 +716,10 @@ export class KernelSessions {
         await conversation.waitForIdle(BACKGROUND_CONTEXT);
         return { status: "done" };
       }
-      if (!parts.aborted()) {
+      if (parts.aborted()) {
+        // 停止（或抢跑）一次正在进行的压缩：旧内核 session.compact() 抛 "Compaction cancelled"，命令循环报成一行红字
+        this.send({ type: "failed", sessionId: command.sessionId, message: "Compaction cancelled" });
+      } else {
         const live = await target.harness.snapshot(LiveDoc, conversation.id, BACKGROUND_CONTEXT);
         const reason = live?.compactionFailure?.error ?? outcome.error?.message ?? outcome.status;
         this.send({ type: "failed", sessionId: command.sessionId, message: compactionErrorText(reason) });

@@ -1998,6 +1998,8 @@ export const en = {
     continueTurn: "Continue",
     /** 新内核：子会话在应用重启后被自动接着跑（后台任务照常续跑） */
     resumedAfterRestart: "This sub-session was still running when the app restarted; it picked up the interrupted turn on its own.",
+    /** 新内核：第一次在旧会话里发消息时迁进库（超过 0.5 秒才显示） */
+    migratingSession: "Moving this conversation into the new kernel — only needed the first time you send…",
     noMessages: "No messages yet. Send the first one to start.",
     /** 源侧分页：触顶拉更早一页那一行 */
     loadingOlder: "Loading earlier messages…",

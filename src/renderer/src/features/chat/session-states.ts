@@ -151,6 +151,8 @@ export interface SessionEntry {
    * 与 turnError 同生同灭；旧内核恒 false。纯 ephemeral。
    */
   turnContinuable: boolean;
+  /** 新内核：发消息前正在把这条旧会话迁进库（migration running → done）；旧内核恒 false。纯 ephemeral */
+  migrating: boolean;
   /**
    * 最近一次用量快照。null = 还没有——纯浏览的旧会话不起 runtime session，
    * 不落盘也不算假数，等用户说话唤醒后由 runtime 的第一次推送填上。
@@ -246,6 +248,7 @@ export const EMPTY_ENTRY: SessionEntry = {
   retry: null,
   turnError: null,
   turnContinuable: false,
+  migrating: false,
   stats: null,
   thinking: null,
   approvals: [],
@@ -291,11 +294,14 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
       // 轮结束就不可能还有挂起的审批：停止 / 抢跑时 runtime 已按拒绝把它们结清
       // （审批不听 abort，只能手动结）。卡片留着的话，用户会去回答一个已经不存在的请求。
       // 乐观回显同理：真回显没来轮就落定 = 它失败了，不留鬼影
-      ...(event.phase === "idle" ? { approvals: [], pendingEcho: null } : null),
+      ...(event.phase === "idle" ? { approvals: [], pendingEcho: null, migrating: false } : null),
     }));
   }
   if (event.type === "retry") {
     return update(states, event.sessionId, (entry) => ({ ...entry, retry: event.status }));
+  }
+  if (event.type === "migration") {
+    return update(states, event.sessionId, (entry) => ({ ...entry, migrating: event.state === "running" }));
   }
   if (event.type === "compaction") {
     return update(states, event.sessionId, (entry) => ({
@@ -391,11 +397,27 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
         retry: null,
         turnError: event.message,
         turnContinuable: event.continuable === true,
+        // 被打断（新内核的 kernel 进程没了）：还在流的回答、还在跑的工具永远等不到收尾帧，也没落盘——清掉，
+        // 不让半截文字看起来像一条完整回答（与重启后从盘上读到的一致）；「继续」接着答
+        ...(event.continuable === true ? { transcript: withoutUnfinished(current.transcript) } : null),
       }));
     }
     return setEntryPhase(states, event.sessionId, "idle");
   }
   return states;
+}
+
+/** 去掉还在流的回答与还在跑的工具（只在 progress 里、没落盘的那些） */
+function withoutUnfinished(state: TranscriptState): TranscriptState {
+  const unfinished = (item: TranscriptItem): boolean =>
+    (item.role === "assistant" && item.status === "streaming") || (item.role === "tool" && item.status === "running");
+  const drop = new Set([...state.progressItems.values()].filter(unfinished).map((item) => item.id));
+  if (drop.size === 0) return state;
+  return {
+    ...state,
+    progressItems: new Map([...state.progressItems].filter(([id]) => !drop.has(id))),
+    progressOrder: state.progressOrder.filter((id) => !drop.has(id)),
+  };
 }
 
 /** 指定槽的 phase，顺带清重试槽。槽不存在就建（send 的乐观 turn 先于任何事件到达时用）。 */
@@ -538,6 +560,7 @@ export function seedFromDisk(
     // 盘上没有失败标注（纯 ephemeral）：种盘即清（「上次被中断」另从 meta.durable.running 读）
     turnError: null,
     turnContinuable: false,
+    migrating: false,
     // **盘上有用量**（A1-Q1：`SessionMeta.stats` 存的是上一次跑完时的快照）。
     // 种盘就把它放回来——否则关掉应用再打开，底栏是空的，而账本明明还在。
     // 唤醒后 agent 会推真累计覆盖它（pi 的本子才是原始账本，这里只是上次看到的样子）。

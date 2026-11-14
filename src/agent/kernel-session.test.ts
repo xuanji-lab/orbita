@@ -354,7 +354,35 @@ describe("KernelSessions：压缩、崩溃后的继续", () => {
     assert.deepEqual(phases(r.events).slice(-2), ["compaction", "idle"]);
     const record = await r.until((event) => event.type === "compaction");
     assert.ok(record.type === "compaction" && /摘要正文/.test(record.record.summary));
+    // 界碑带「压缩后」的估算（旧内核的 estimatedTokensAfter）：界碑上与旧内核一样显示「压缩前 → 压缩后」
+    assert.ok(record.type === "compaction" && typeof record.record.tokensAfter === "number" && record.record.tokensAfter > 0);
     assert.ok(!r.events.some((event) => event.type === "failed"));
+  });
+
+  it("停止一次正在进行的压缩：与旧内核一样报一行 Compaction cancelled，再 idle", async () => {
+    const cwd = await tempDir();
+    faux.setResponses([
+      fauxAssistantMessage("第一轮答"),
+      fauxAssistantMessage("第二轮答"),
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        return fauxAssistantMessage("## Goal\n摘要正文");
+      },
+    ]);
+    const r = await rig();
+    await r.sessions.handle("s1", submit(cwd, { text: "一" }));
+    await r.until(idle());
+    await r.sessions.handle("s1", submit(cwd, { text: "二" }));
+    await r.until((event) => r.events.filter(idle()).length >= 2 && idle()(event));
+    void r.sessions.handle("s1", { ...submit(cwd), type: "compact" } as Extract<AgentCommand, { type: "compact" }>);
+    await r.until((event) => event.type === "phase" && event.phase === "compaction");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await r.sessions.handle("s1", { type: "abort", sessionId: "s1" });
+    await r.until((event) => r.events.filter(idle()).length >= 3 && idle()(event));
+    const failed = r.events.filter((event) => event.type === "failed");
+    assert.deepEqual(failed.map((event) => (event.type === "failed" ? event.message : "")), ["Compaction cancelled"]);
+    const order = r.events.slice(-3).map((event) => event.type);
+    assert.ok(r.events.findIndex((event) => event.type === "failed") < r.events.lastIndexOf(r.events.filter(idle()).at(-1) as AgentEvent), String(order));
   });
 
   it("上一个进程跑到一半被杀：重开库时停下它（不自动续跑），continueRun 接着答", async () => {

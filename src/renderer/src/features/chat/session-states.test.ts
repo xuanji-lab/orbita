@@ -954,6 +954,25 @@ describe("turnError —— 回合失败标注的进出槽", () => {
     assert.equal(entry?.turnError, "重试 3 次后仍失败：fetch failed");
   });
 
+  test("新内核：被打断时还在流的半截回答、还在跑的工具清掉（不像一条完整回答）；普通的回合失败不清", () => {
+    const streaming = (id: string) => ({
+      type: "progress" as const,
+      sessionId: "A",
+      progress: { type: "item_started" as const, item: { role: "assistant" as const, id, content: [{ type: "text" as const, text: "半截" }], model: { provider: "p", id: "m" }, status: "streaming" as const, timestamp: 2 } },
+    });
+    const user = { type: "progress" as const, sessionId: "A", progress: { type: "item_started" as const, item: { role: "user" as const, id: "u1", content: [{ type: "text" as const, text: "问" }], timestamp: 1 } } };
+    let states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "turn" });
+    states = applyAgentEvent(states, user);
+    states = applyAgentEvent(states, streaming("a1"));
+    states = applyAgentEvent(states, { type: "failed", sessionId: "A", message: "kernel runtime exited with code 137", turn: true, continuable: true });
+    const ids = (s: typeof states) => [...(s.get("A")?.transcript.progressItems.keys() ?? [])];
+    assert.deepEqual(ids(states), ["u1"], "半截回答清掉，用户那句留着");
+    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "turn" });
+    states = applyAgentEvent(states, streaming("a2"));
+    states = applyAgentEvent(states, { type: "failed", sessionId: "A", message: "fetch failed", turn: true });
+    assert.deepEqual(ids(states), ["u1", "a2"], "普通的回合失败照旧（旧内核同样的界面）");
+  });
+
   test("新内核：被打断的轮（continuable）进槽带「可继续」，idle 不清；新一轮开跑与标注一起清", () => {
     let states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "turn" });
     states = applyAgentEvent(states, { type: "failed", sessionId: "A", message: "kernel runtime exited with code 137", turn: true, continuable: true });

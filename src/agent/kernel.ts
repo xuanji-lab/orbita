@@ -359,6 +359,8 @@ export class KernelPool {
     sessionId: string;
     legacy: { piSessionFile: string } | null;
     agent: KernelAgent;
+    /** 真要迁（或重迁）旧本子时：开始前报 running、结束（成败都算）报 done——界面说一句「正在迁移」 */
+    onMigrating?: (state: "running" | "done") => void;
   }): Promise<KernelOpenResult> {
     let opened: OpenLibrary;
     try {
@@ -375,7 +377,7 @@ export class KernelPool {
 
   private async openIn(
     harness: Harness,
-    input: { library: string; sessionId: string; legacy: { piSessionFile: string } | null; agent: KernelAgent },
+    input: { library: string; sessionId: string; legacy: { piSessionFile: string } | null; agent: KernelAgent; onMigrating?: (state: "running" | "done") => void },
   ): Promise<KernelOpenResult> {
     const started = (this.options.now ?? Date.now)();
     const elapsed = (): number => (this.options.now ?? Date.now)() - started;
@@ -429,7 +431,12 @@ export class KernelPool {
         await this.remember(harness, conversationId, input.agent.role);
         return { ok: true, conversationId, migrated: false, remigrated: false, entries: 0, legacy: null, ms: elapsed() };
       }
-      return await this.migrate(harness, input.library, input.sessionId, input.legacy.piSessionFile, agent, replacing, input.agent.role, elapsed);
+      input.onMigrating?.("running");
+      try {
+        return await this.migrate(harness, input.library, input.sessionId, input.legacy.piSessionFile, agent, replacing, input.agent.role, elapsed);
+      } finally {
+        input.onMigrating?.("done");
+      }
     } catch (error) {
       return { ok: false, reason: `迁移失败：${error instanceof Error ? error.message : String(error)}` };
     }
@@ -532,7 +539,12 @@ export class KernelPool {
    * 为一条会话的这一轮备好 durable 那一侧：开库、迁 / 重迁旧会话（发消息之前，见 open）、注册模型。
    * 不抛错：失败折成 `{ ok: false, reason }`；迁移那一步失败另带 migrationFailed（会话回落只读）。
    */
-  async target(input: { library: string; command: TurnInput; compaction: KernelAgent["compaction"] }): Promise<KernelTarget> {
+  async target(input: {
+    library: string;
+    command: TurnInput;
+    compaction: KernelAgent["compaction"];
+    onMigrating?: (state: "running" | "done") => void;
+  }): Promise<KernelTarget> {
     const { command } = input;
     try {
       const agent: KernelAgent = {
@@ -545,7 +557,7 @@ export class KernelPool {
         compaction: input.compaction,
       };
       const legacy = command.piSessionFile === undefined || isDurableBookRef(command.piSessionFile) ? null : { piSessionFile: command.piSessionFile };
-      const opened = await this.open({ library: input.library, sessionId: command.sessionId, legacy, agent });
+      const opened = await this.open({ library: input.library, sessionId: command.sessionId, legacy, agent, ...(input.onMigrating === undefined ? {} : { onMigrating: input.onMigrating }) });
       if (!opened.ok) return { ok: false, reason: opened.reason, migrationFailed: true };
       const library = await this.library(input.library);
       const conversation = await library.harness.conversation(opened.conversationId as ConversationId, BACKGROUND_CONTEXT);

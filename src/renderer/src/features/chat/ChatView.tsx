@@ -1398,6 +1398,19 @@ function ChatViewBody(props: {
     />
   );
 
+  /*
+    新内核：第一次在这条旧会话里发消息时要先把它迁进库，大会话要一两秒——超过 0.5 秒才说一句（快的不闪）。
+  */
+  const [migratingShown, setMigratingShown] = useState(false);
+  useEffect(() => {
+    if (!session.migrating) {
+      setMigratingShown(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setMigratingShown(true), 500);
+    return () => window.clearTimeout(timer);
+  }, [session.migrating]);
+
   const notices = (
     <>
       {providersError != null ? (
@@ -1438,6 +1451,7 @@ function ChatViewBody(props: {
         </Notice>
       )}
       {session.resumedAfterRestart && <Notice icon="rotate-ccw">{t.chat.resumedAfterRestart}</Notice>}
+      {migratingShown && <Notice icon="loader-circle">{t.chat.migratingSession}</Notice>}
     </>
   );
 
