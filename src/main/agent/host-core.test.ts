@@ -958,6 +958,57 @@ describe("AgentHostCore：新内核那条道", () => {
     assert.equal(r.events.length, before, "交给了通道就不再报失败");
   });
 
+  test("闲置回收：没有在跑的轮、没有等回执的请求时到点先收尾（关库）再结束进程；之后的命令懒拉起新进程；有请求挂着不回收", async () => {
+    const kernels: FakeKernel[] = [];
+    const events: AgentEvent[] = [];
+    const lane: KernelLane = {
+      fork: () => {
+        const next = new FakeKernel();
+        kernels.push(next);
+        return next;
+      },
+      dir: "/durable",
+      route: async (command): Promise<KernelRoute> => ({ to: "kernel", root: command.sessionId }),
+      editRoute: async (sessionId): Promise<KernelRoute> => ({ to: "kernel", root: sessionId }),
+      settled: () => undefined,
+      exited: () => undefined,
+      idleRecycleMs: 30,
+    };
+    const host = new AgentHostCore(() => new FakeChild(), (event) => events.push(event), undefined, lane);
+    const bounced: string[] = [];
+    host.onSteerBounced((sessionId) => bounced.push(sessionId));
+    const first = host.submit({ type: "submit", sessionId: "s1", text: "hi", piSessionFile: "/p.jsonl", ...TURN_FIELDS });
+    await flush();
+    kernels[0]?.emit({ type: "ready" });
+    await first;
+    // 一个工具请求挂着：到点也不回收
+    kernels[0]?.emit({ type: "readTaskRequest", requestId: "r1", sessionId: "s1" } as never);
+    kernels[0]?.emit({ type: "turnSettled", sessionId: "s1", result: { ok: true, conversationId: 1, migration: "none", status: "done" } });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.ok(!kernels[0]?.posted.some((command) => command.type === "shutdown"), "有请求挂着不回收");
+    host.answerReadTask("r1", { ok: false, error: "x" } as never);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const shutdown = kernels[0]?.posted.find((command) => command.type === "shutdown");
+    assert.ok(shutdown !== undefined && shutdown.type === "shutdown", "闲着到点：先让它收尾（关库）");
+    assert.equal(host.kernelAlive(), false);
+    // 回收期间插话：没有轮可插，退回通道开一轮；停止 / 切档不为闲着的会话拉起进程
+    host.steer("s1", "<channel>", "steer");
+    host.setMode("s1", "manual");
+    assert.deepEqual(bounced, ["s1"]);
+    kernels[0]?.emit({ type: "shutdownDone", requestId: shutdown.requestId });
+    await flush();
+    assert.equal(kernels.length, 1, "回收后没有命令就不拉起");
+    // 下一轮：懒拉起新进程（init 先于会话命令）
+    const second = host.submit({ type: "submit", sessionId: "s1", text: "again", piSessionFile: "/p.jsonl", ...TURN_FIELDS });
+    await flush();
+    kernels[1]?.emit({ type: "ready" });
+    await second;
+    assert.equal(kernels.length, 2);
+    assert.deepEqual(kernels[1]?.posted.map((command) => command.type), ["init", "session"]);
+    assert.ok(!events.some((event) => event.type === "failed"), "回收不是崩溃：不报被打断");
+    host.dispose();
+  });
+
   test("关着开关时的守卫：住在新内核里的会话不交给旧内核", async () => {
     const legacy = new FakeChild();
     const host = new AgentHostCore(() => legacy, () => undefined, undefined, undefined, async (id) => (id === "moved" ? "moved to durable" : null));

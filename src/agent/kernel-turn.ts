@@ -114,12 +114,27 @@ export interface KernelTurnTarget {
 
 /**
  * 叶子路径上的条目，换成 pi SessionEntry 的形状（`{ type: "message", message }` / `{ type: "compaction" }`）——
- * update_plan / update_goal 找上一份、压缩后挂目标账读的都是这个形状（plan-tools / goal-tools / goal-compaction）。
- * 增量拉：只拉上次之后的新条目（长会话每次工具调用都全量翻一遍太贵）。
+ * update_plan / update_goal 找上一份、压缩后挂目标账读的都是这个形状（plan-tools / goal-tools / goal-compaction），
+ * 工具轮的调用顺序（findRound）也从它找。增量拉：只拉上次之后的新条目。
+ *
+ * **只留消费方读的字段**（slimEntry）：以前整条留着，几百 MB 的大会话（图片 base64、长工具结果）每轮全量读进来、
+ * 挂在扩展的闭包上直到下一轮——kernel 进程的常驻内存高水位主要是它（第三步验收的 805 MB）。
+ * 一条会话一份（KernelSessions 跨轮留着，按会话号认；回退 fork 出来的新会话号重新拉）。
  */
+const BRANCH_PAGE = 100;
+
 export class DurableBranch {
   private readonly items: unknown[] = [];
   private lastId = 0;
+  /** 这份拉的是哪条 durable 会话（换了就作废） */
+  readonly conversationId: number;
+  /** 整页整页拉（第一次拉一条大会话）时每页之后收一次垃圾：几百 MB 的原文逐页解析成垃圾，不让它们堆起来 */
+  private readonly collect: (() => void) | undefined;
+
+  constructor(conversationId = 0, collect?: () => void) {
+    this.conversationId = conversationId;
+    this.collect = collect;
+  }
 
   get entries(): readonly unknown[] {
     return this.items;
@@ -127,10 +142,11 @@ export class DurableBranch {
 
   async refresh(reader: Pick<HookApi, "entries">, context: Context): Promise<void> {
     let cursor: Parameters<HookApi["entries"]>[2];
+    let sinceCollect = 0;
     for (;;) {
       const page = await reader.entries(
         { minEntryId: (this.lastId + 1) as EntryRecord["id"], order: "ascending" },
-        500,
+        BRANCH_PAGE,
         cursor,
         context,
       );
@@ -138,6 +154,11 @@ export class DurableBranch {
         this.lastId = Math.max(this.lastId, entry.id);
         const piEntry = asPiEntry(entry);
         if (piEntry !== null) this.items.push(piEntry);
+        // 一次拉了很多条（第一次拉一条大会话）：每 BRANCH_PAGE 条收一次垃圾（页的大小由存储定，不按页数算）
+        if (++sinceCollect >= BRANCH_PAGE) {
+          sinceCollect = 0;
+          this.collect?.();
+        }
       }
       if (page.next === undefined) return;
       cursor = page.next;
@@ -150,7 +171,23 @@ function asPiEntry(entry: EntryRecord): unknown {
   if (entry.kind !== "pi.user" && entry.kind !== "pi.assistant" && entry.kind !== "pi.tool-result") return null;
   const message = entry.model?.[0];
   if (message === undefined) return null;
-  return { type: "message", id: String(entry.id), message };
+  return { type: "message", id: String(entry.id), message: slimMessage(message) };
+}
+
+/**
+ * 消费方读的字段（previousPlanFrom / previousGoalFrom / findRound / ledgerEventsFromEntries / attachGoalLedger）：
+ * user 的文字块与时间戳；assistant 的工具调用块（名字、id、参数）；toolResult 的 toolCallId / toolName / isError。
+ * 图片、思考、回答正文、工具结果正文都不留。
+ */
+function slimMessage(message: Message): Record<string, unknown> {
+  const base = { role: message.role, timestamp: message.timestamp };
+  if (message.role === "user") {
+    const content = typeof message.content === "string" ? message.content : message.content.filter((block) => block.type === "text");
+    return { ...base, content };
+  }
+  if (message.role === "assistant") return { ...base, content: message.content.filter((block) => block.type === "toolCall") };
+  if (message.role === "toolResult") return { ...base, toolCallId: message.toolCallId, toolName: message.toolName, isError: message.isError, content: [] };
+  return base;
 }
 
 /**
@@ -321,6 +358,8 @@ export interface TurnObserver {
   rounds?: ToolRounds;
   /** 「继续」要补发一句话时先回显它（与用户自己发的话同一套回显） */
   echoContinue?: (text: string) => void;
+  /** 跨轮留着的这条会话的瘦条目（缺席 = 这一轮自己从头拉一份） */
+  branch?: DurableBranch;
 }
 
 /** 这一轮装进 durable 的东西（测试直接看它） */
@@ -351,7 +390,7 @@ export async function assembleTurn(
   const flags = turnToolFlags(command);
   const currentMode = observer.mode ?? (() => command.mode);
   const rounds = observer.rounds ?? new ToolRounds();
-  const branch = new DurableBranch();
+  const branch = observer.branch ?? new DurableBranch(target.conversation.id);
   const planOptions: PlanToolOptions = {
     getMode: currentMode,
     planFirst: command.planFirst === true,
@@ -490,6 +529,25 @@ export async function assembleTurn(
  * 模型此前看到的工具声明：会话上下文里 pi.system 条目回放出来的；这条会话在新内核里还没发过请求（刚迁来）时，
  * 用迁移时从旧本子 system 记录回放出的那份。
  */
+/**
+ * 开轮要从上下文里取的三样（取完就放手——大会话的上下文带着全部原图，留着过整轮等于多一份常驻）：
+ * 本轮轮号（按用户消息计，1 起；与旧内核 echoAndPrompt 同口径：模型上下文里的 user 消息，不数压缩摘要与扩展消息）、
+ * 上下文里的系统消息（回放模型此前看到的工具清单）、最后一条非 system 消息的角色（「继续」按它选做法）。
+ */
+export interface ContextDigest {
+  memoryTurn: number;
+  systemMessages: Message[];
+  lastRole: Message["role"] | undefined;
+}
+
+export function digestContext(messages: readonly Message[]): ContextDigest {
+  return {
+    memoryTurn: liftMessages(messages, new Set()).filter((message) => (message as { role?: unknown }).role === "user").length + 1,
+    systemMessages: messages.filter((message) => message.role === "system"),
+    lastRole: messages.findLast((message) => message.role !== "system")?.role,
+  };
+}
+
 export function previousTools(messages: readonly Message[], wire: Pick<TurnWire, "legacyTools">): Tool[] {
   const own = getCurrentTools([...messages]);
   return own.length > 0 ? own : [...wire.legacyTools];
@@ -504,6 +562,8 @@ export function previousTools(messages: readonly Message[], wire: Pick<TurnWire,
  * - continueRun：不加新消息，接着跑上次被中断的那一轮（durable 的 continue）。
  */
 export interface TurnHooks {
+  /** 开轮前已经从上下文里取好的三样（见 ContextDigest）；缺席 = runTurn 自己读一次 */
+  digest?: ContextDigest;
   observer?: TurnObserver;
   echo?: (images: Awaited<ReturnType<typeof preparePromptImages>>, promptText: string) => Promise<string | null>;
   admitted?: () => void;
@@ -534,11 +594,37 @@ export async function runTurn(
   const context = BACKGROUND_CONTEXT;
   const turnCommand: KernelTurnCommand = command.type === "continueRun" ? { ...command, type: "submit", text: "" } : command;
   const wire = await TurnWire.open(target.conversation, turnCommand.attachmentsDir, context);
-  const { messages } = await target.conversation.context(context);
-  // 本轮轮号（按用户消息计，1 起；与旧内核 echoAndPrompt 同口径：模型上下文里的 user 消息，不数压缩摘要与扩展消息）
-  const memoryTurn = liftMessages(messages, new Set()).filter((message) => (message as { role?: unknown }).role === "user").length + 1;
-  const assembled = await assembleTurn(turnCommand, runtime, target, previousTools(messages, wire), wire, memoryTurn, hooks.observer);
+  // 开轮时 kernel-session 读上下文推用量时顺手取好了（hooks.digest）；没给（测试）就自己读一次。只取三样就放手
+  let digest: ContextDigest;
+  if (hooks.digest !== undefined) digest = hooks.digest;
+  else digest = digestContext((await target.conversation.context(context)).messages);
+  const { memoryTurn, lastRole } = digest;
+  const offered = previousTools(digest.systemMessages, wire);
+  const assembled = await assembleTurn(turnCommand, runtime, target, offered, wire, memoryTurn, hooks.observer);
   target.registry.install(assembled.extension);
+  try {
+    return await runInstalled(command, runtime, target, compaction, hooks, assembled, wire, memoryTurn, lastRole);
+  } finally {
+    // 这一轮的扩展（工具、钩子、它们闭包里的这一轮的对象）这一轮结束就卸掉，不挂到下一轮才被换掉：
+    // 会话闲着时 kernel 进程不该还拉着上一轮的东西（registry 是库级的，换轮时同名替换）
+    target.registry.uninstall(assembled.extension);
+  }
+}
+
+async function runInstalled(
+  command: KernelTurnCommand | KernelContinueCommand,
+  runtime: KernelTurnRuntime,
+  target: KernelTurnTarget,
+  compaction: NonNullable<Parameters<Conversation["configure"]>[0]["compaction"]>,
+  hooks: TurnHooks,
+  assembled: AssembledTurn,
+  wire: TurnWire,
+  memoryTurn: number,
+  /** 这一轮开始时上下文里最后一条非 system 消息的角色（「继续」按它选做法） */
+  lastRole: Message["role"] | undefined,
+): Promise<TurnOutcome> {
+  const context = BACKGROUND_CONTEXT;
+  const turnCommand: KernelTurnCommand = command.type === "continueRun" ? { ...command, type: "submit", text: "" } : command;
   hooks.inventory?.(assembled.inventory);
   await target.conversation.configure(
     {
@@ -551,8 +637,7 @@ export async function runTurn(
     context,
   );
   let submission: Submission;
-  const last = messages.findLast((message) => message.role !== "system");
-  if (command.type === "continueRun" && (last?.role === "user" || last?.role === "toolResult")) {
+  if (command.type === "continueRun" && (lastRole === "user" || lastRole === "toolResult")) {
     // 上下文停在一句没答的话或工具结果上（被打断的工具得到 interrupted 结果）：durable 的 continue 直接接着答
     submission = await target.conversation.submit({ type: "continue" }, context);
   } else if (command.type === "continueRun") {

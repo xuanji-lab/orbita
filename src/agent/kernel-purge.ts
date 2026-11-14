@@ -33,6 +33,13 @@ export async function addTombstones(libraryFile: string, conversationIds: readon
   await writeTextAtomic(purgeFile(libraryFile), JSON.stringify([...new Set([...current, ...conversationIds])]));
 }
 
+/** 从墓碑里摘掉（迁移完成了：那条会话被索引指着，不再是半份） */
+export async function removeTombstone(libraryFile: string, conversationId: number): Promise<void> {
+  const rest = (await readTombstones(libraryFile)).filter((id) => id !== conversationId);
+  if (rest.length === 0) await rm(purgeFile(libraryFile), { force: true });
+  else await writeTextAtomic(purgeFile(libraryFile), JSON.stringify(rest));
+}
+
 interface PurgeResult {
   conversations: number;
   entries: number;

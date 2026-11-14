@@ -65,7 +65,7 @@ import { applyChannelSend, applyDelegate, startChildTurn, type ChannelDeps } fro
 import { ChannelStore } from "./channel/store.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
-import { DURABLE_MOVED_MESSAGE, durableKernelEnabled, KernelHost, sessionsToResume } from "./agent/kernel-host.ts";
+import { DURABLE_MOVED_MESSAGE, durableKernelEnabled, KernelHost, kernelIdleRecycleMs, sessionsToResume } from "./agent/kernel-host.ts";
 import { kernelChildTag, reapKernelChildren } from "../agent/kernel-children.ts";
 import { kernelLibraryName } from "../shared/kernel.ts";
 import { moveSessions } from "./session/move.ts";
@@ -566,6 +566,7 @@ void app.whenReady().then(async () => {
           readMeta: (id) => sessions.readMeta(id),
           updateDurable: (id, change) => sessions.updateDurable(id, change),
           fork: () => forkKernelRuntime(__dirname, agentProcessEnv),
+          idleRecycleMs: kernelIdleRecycleMs(process.env),
           // kernel 进程被杀：它拉起的 bash 进程组不会跟着死，按库目录的标签清掉（kernel-children.ts）
           reap: () => {
             void reapKernelChildren(kernelChildTag(durableDir)).then((count) => {

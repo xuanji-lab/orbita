@@ -31,7 +31,10 @@ export function resolveRuntimePath(dirname: string): string {
   return join(dirname, "agent-runtime.js");
 }
 
-/** 新内核的 kernel 进程（与 agent-runtime.js 同目录的另一个入口）。只在开关开着时由 KernelHost 的那条道调用 */
+/**
+ * 新内核的 kernel 进程（与 agent-runtime.js 同目录的另一个入口）。只在开关开着时由 KernelHost 的那条道调用。
+ * `--expose-gc`：迁移大本子时 kernel 定期收一次垃圾（kernel-gc 见 kernel-runtime.ts），不让解析出的大字符串堆到几百 MB。
+ */
 export function forkKernelRuntime(dirname: string, env: Record<string, string | undefined>): KernelChild {
-  return utilityProcess.fork(join(dirname, "kernel-runtime.js"), [], { stdio: "inherit", env });
+  return utilityProcess.fork(join(dirname, "kernel-runtime.js"), [], { stdio: "inherit", env, execArgv: ["--expose-gc"] });
 }

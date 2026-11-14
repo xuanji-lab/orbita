@@ -91,6 +91,21 @@ export interface KernelHostDeps {
   fork: () => KernelChild;
   reap: () => void;
   now?: () => number;
+  /** 闲置回收的时长（缺席 = KERNEL_IDLE_RECYCLE_MS） */
+  idleRecycleMs?: number;
+}
+
+/**
+ * kernel 进程闲置多久回收：剧本要求碰过大会话后闲置 5 分钟常驻 ≤ 300 MB，进程的高水位不还给系统（V8 与分配器），
+ * 只有结束进程才归零；2 分钟留了「刚答完又追问一句」的热身，又远在 5 分钟之内。
+ */
+const KERNEL_IDLE_RECYCLE_MS = 2 * 60 * 1000;
+
+/** 开发 / 验收用：环境变量 ORBITA_KERNEL_IDLE_MS 覆盖回收时长（正整数毫秒；别的值不认） */
+export function kernelIdleRecycleMs(env: Readonly<Record<string, string | undefined>>): number {
+  const raw = env["ORBITA_KERNEL_IDLE_MS"];
+  const value = raw === undefined ? Number.NaN : Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : KERNEL_IDLE_RECYCLE_MS;
 }
 
 export class KernelHost {
@@ -133,6 +148,7 @@ export class KernelHost {
         void deps.updateDurable(sessionId, (current) => markSettled(current, result, now())).catch((cause: unknown) => console.error("[kernel] 落定标记没写上", sessionId, cause));
       },
       exited: () => deps.reap(),
+      idleRecycleMs: deps.idleRecycleMs ?? KERNEL_IDLE_RECYCLE_MS,
     };
   }
 }

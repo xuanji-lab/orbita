@@ -20,7 +20,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { AssistantMessage, Message, Usage } from "@earendil-works/pi-ai";
 import { calculateContextTokens, estimateTokens } from "@earendil-works/pi-coding-agent";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
-import { ConversationIdle, LiveDoc, UsageDoc, type Conversation, type ConversationId, type EntryRecord, type Harness } from "@earendil-works/pi-durable";
+import { ConversationIdle, LiveDoc, UsageDoc, type ContextView, type Conversation, type ConversationId, type EntryRecord, type Harness } from "@earendil-works/pi-durable";
 import type { AgentCommand, AgentEvent, AgentStats, ProviderSecrets } from "../shared/agent-ipc.ts";
 import { composeIntentPrompt } from "../shared/intent-recall.ts";
 import { durableBookRef, kernelLibraryName, type KernelContinueCommand, type KernelSessionCommand, type KernelTurnResult } from "../shared/kernel.ts";
@@ -33,7 +33,7 @@ import type { IntentConfirmWaiter } from "./intent-confirm-wait.ts";
 import { runIntentGate } from "./intent-gate.ts";
 import { SessionHistoryDoc, type KernelPool, type KernelTarget } from "./kernel.ts";
 import { appendNotice, branchSession, revertSession, RUNNING_REFUSAL } from "./kernel-edit.ts";
-import { runTurn, ToolRounds, type KernelTurnRuntime, type TurnOutcome } from "./kernel-turn.ts";
+import { digestContext, DurableBranch, runTurn, ToolRounds, type ContextDigest, type KernelTurnRuntime, type TurnOutcome } from "./kernel-turn.ts";
 import { KernelView } from "./kernel-view.ts";
 import { WireDoc } from "./kernel-wire.ts";
 import type { PiModel } from "./model-registration.ts";
@@ -72,6 +72,8 @@ interface KernelParts extends CycleParts {
   stats: KernelStats;
   /** 这一轮的工具准备 / 执行节奏（kernel-turn.ts 的 ToolRounds） */
   rounds: ToolRounds;
+  /** 开轮时从上下文取好的三样（runTurn 不再读一遍） */
+  digest: ContextDigest;
 }
 
 /** 外面给的进程级依赖 */
@@ -86,6 +88,8 @@ export interface KernelSessionsDeps {
    * 缺席时按旧内核报 failed（测试夹具与第三步的形状）。
    */
   bounceSteer?: (sessionId: string, text: string, delivery: "steer" | "followUp") => void;
+  /** 第一次拉一条大会话的条目时逐页收垃圾（kernel 进程里注入完整 GC）；缺席 = 交给 V8 */
+  collectGarbage?: () => void;
   /** setModel 的校验：注册并解析型号（与旧内核 setLedgerModel 同一条路径）；解析不到返回 undefined */
   resolveModel: (provider: ProviderSecrets, modelId: string) => Promise<PiModel | undefined>;
   now?: () => number;
@@ -100,7 +104,15 @@ export class KernelStats {
   /** 最近一次算出的上下文占用（压缩界碑的 tokensBefore 用） */
   lastContextTokens: number | null = null;
 
-  async snapshot(harness: Harness, sessionId: string, conversation: Conversation, contextWindow: number | undefined): Promise<AgentStats> {
+  async snapshot(
+    harness: Harness,
+    sessionId: string,
+    conversation: Conversation,
+    contextWindow: number | undefined,
+    answered?: AssistantMessage,
+    /** 调用方刚读过的上下文（开轮时与取 ContextDigest 共用一次读） */
+    view?: ContextView,
+  ): Promise<AgentStats> {
     const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
     const add = (usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: { total?: number } } | undefined): void => {
       if (usage === undefined) return;
@@ -119,8 +131,13 @@ export class KernelStats {
       const ledger = await harness.snapshot(UsageDoc, id as ConversationId, BACKGROUND_CONTEXT);
       for (const usage of [...Object.values(ledger?.models ?? {}), ...Object.values(ledger?.tools ?? {})]) add(usage as Usage);
     }
-    const view = await conversation.context(BACKGROUND_CONTEXT);
-    const context = contextUsage(view.messages, view.head?.kind === "pi.compaction", contextWindow);
+    // 刚落定的回答带着有效 usage：上下文占用就是它（与 contextUsage 对同一份上下文算出的相同——它是最后一条消息）
+    const context =
+      answered !== undefined && validUsage(answered) !== undefined
+        ? contextUsage([answered], false, contextWindow)
+        : await (view === undefined ? conversation.context(BACKGROUND_CONTEXT) : Promise.resolve(view)).then((read) =>
+            contextUsage(read.messages, read.head?.kind === "pi.compaction", contextWindow),
+          );
     this.lastContextTokens = context?.tokens ?? null;
     const { input, output, cacheRead, cacheWrite, cost } = totals;
     return { tokens: { input, output, cacheRead, cacheWrite, total: input + output + cacheRead + cacheWrite }, cost, contextUsage: context };
@@ -178,6 +195,8 @@ export class KernelSessions {
   private readonly stats = new Map<string, KernelStats>();
   /** 会话 → 它所在的库（删树时按库停轮） */
   private readonly libraryOf = new Map<string, string>();
+  /** 会话 → 跨轮留着的瘦条目（plan / goal / 工具轮顺序读它；按会话号认，回退换了会话号就重拉） */
+  private readonly branches = new Map<string, DurableBranch>();
 
   constructor(deps: KernelSessionsDeps) {
     this.deps = deps;
@@ -214,6 +233,7 @@ export class KernelSessions {
     this.notes.delete(sessionId);
     this.stats.delete(sessionId);
     this.libraryOf.delete(sessionId);
+    this.branches.delete(sessionId);
     this.deps.intentConfirm.settle(sessionId);
   }
 
@@ -445,7 +465,9 @@ export class KernelSessions {
     const view = new KernelView(sessionId, adapter, {
       send: (event) => this.send(event),
       now: () => this.now(),
-      assistantEnd: () => void this.pushStats(sessionId, target, statsOf),
+      // 回答落定：上下文占用就是它自己的 usage（pi 的估算法：最后一条有效回答的 usage + 其后消息的估算，此刻其后没有消息），
+      // 不为这一下把整份上下文再读一遍（大会话的上下文带着全部原图）
+      assistantEnd: (message) => void this.pushStats(sessionId, target, statsOf, undefined, message),
       toolEnd: (callId) => {
         // 工具结果条目到了也算「准备完」（没走到 beforeTool 就被拒的调用），见 ToolRounds
         rounds.settled(callId);
@@ -482,11 +504,18 @@ export class KernelSessions {
       level: clampThinkingLevel(target.model, command.thinkingLevel),
       supported: getSupportedThinkingLevels(target.model),
     });
-    void this.pushStats(sessionId, target, statsOf, true);
+    // 开轮读一次上下文：推一次用量，顺手取好这一轮要的三样（ContextDigest）——大会话的上下文带着全部原图，
+    // 只读这一次、取完就放手，不和这一轮 durable 自己读的那份同时在内存里
+    const digest = await target.conversation.context(BACKGROUND_CONTEXT).then(async (view) => {
+      await this.pushStats(sessionId, target, statsOf, true, undefined, view);
+      return digestContext(view.messages);
+    });
+    this.deps.collectGarbage?.();
     // 主进程要把这条会话的「本子」记进 meta：旧会话是原件路径；新内核里新建的会话没有本子，记 durable 引用
     this.send({ type: "created", sessionId, piSessionFile: command.piSessionFile ?? durableBookRef(sessionId) });
     return {
       target,
+      digest,
       view,
       tracker,
       webWatch,
@@ -519,9 +548,16 @@ export class KernelSessions {
     }
   }
 
-  private async pushStats(sessionId: string, target: Extract<KernelTarget, { ok: true }>, stats: KernelStats, persist?: true): Promise<void> {
+  private async pushStats(
+    sessionId: string,
+    target: Extract<KernelTarget, { ok: true }>,
+    stats: KernelStats,
+    persist?: true,
+    answered?: AssistantMessage,
+    view?: ContextView,
+  ): Promise<void> {
     try {
-      const snapshot = await stats.snapshot(target.harness, sessionId, target.conversation, target.model.contextWindow);
+      const snapshot = await stats.snapshot(target.harness, sessionId, target.conversation, target.model.contextWindow, answered, view);
       this.send({ type: "stats", sessionId, stats: snapshot, ...(persist === true ? { persist } : null) });
     } catch (cause) {
       console.error("[kernel] 读用量失败", sessionId, cause);
@@ -572,6 +608,7 @@ export class KernelSessions {
           toolUpdate: (callId, name, partial) => view.toolUpdate(callId, name, partial),
           toolAllowed: (callId, name, input) => parts.tracker.noteAllowed(callId, name, input),
           rounds: parts.rounds,
+          branch: this.branchFor(sessionId, target.conversation.id),
           echoContinue: (text) => {
             for (const progress of view.userPrompt(splitEchoBlocks(text))) this.send({ type: "progress", sessionId, progress });
             view.noteEcho(text);
@@ -579,12 +616,21 @@ export class KernelSessions {
         },
         ...(command.type === "continueRun" ? { continueRun: true } : { echo: (images, promptText) => this.echo(parts, command, images, promptText) }),
         inventory: (inventory) => this.send({ type: "contextInventory", sessionId, inventory }),
+        digest: parts.digest,
         admitted: () => {
           view.turnActive = true;
           this.send({ type: "phase", sessionId, phase: "turn" });
         },
       },
     );
+  }
+
+  private branchFor(sessionId: string, conversationId: number): DurableBranch {
+    const kept = this.branches.get(sessionId);
+    if (kept !== undefined && kept.conversationId === conversationId) return kept;
+    const fresh = new DurableBranch(conversationId, this.deps.collectGarbage);
+    this.branches.set(sessionId, fresh);
+    return fresh;
   }
 
   /**

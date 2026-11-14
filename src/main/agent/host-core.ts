@@ -67,6 +67,11 @@ export interface KernelLane {
   editRoute: (sessionId: string) => Promise<KernelRoute>;
   settled: (sessionId: string, result: KernelTurnResult) => void;
   exited: (running: readonly string[]) => void;
+  /**
+   * kernel 进程闲置多久回收（毫秒；缺席 = 不回收）。闲置 = 没有在跑的轮、没有等回执的工具请求 / 审批、没有在途的
+   * 编辑 / 删库 / 收尾。回收 = 先让它关库（含按墓碑清行）再结束进程；下一条命令再懒拉起。
+   */
+  idleRecycleMs?: number;
 }
 
 /** 已添加的服务商用到哪几份目录（主进程从 providers.json 算，catalogIdsOfProviders） */
@@ -132,6 +137,11 @@ export class AgentHostCore {
   /** 新内核那条道；缺席 = 开关关着 */
   private readonly kernel: KernelLane | undefined;
   private kernelChild: KernelChild | null = null;
+  /** 闲置回收的计时器（每次与 kernel 往来都重新计时） */
+  private kernelIdleTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 正在回收的旧 kernel 进程（关库、退出）：新命令等它退干净再拉新的——一个库同一时刻只能有一个写者 */
+  private kernelRecycling: Promise<void> | null = null;
+  private kernelRecycled: (() => void) | null = null;
   private kernelReady: Promise<void> | null = null;
   /** 这次运行里交给过 kernel 的会话 → 它的树根（停止 / 插话 / 切档 / 标题跟着它们走） */
   private readonly kernelSessions = new Map<string, string>();
@@ -183,6 +193,7 @@ export class AgentHostCore {
    */
   private ensureKernel(): Promise<void> {
     if (this.kernelReady) return this.kernelReady;
+    if (this.kernelRecycling !== null) return this.kernelRecycling.then(() => this.ensureKernel());
     const lane = this.kernel;
     if (lane === undefined) return Promise.reject(new Error("durable kernel is not enabled"));
     let child: KernelChild;
@@ -194,6 +205,7 @@ export class AgentHostCore {
     this.kernelChild = child;
     this.kernelReady = new Promise<void>((resolve, reject) => {
       child.on("message", (message: KernelMessage) => {
+        if (this.kernelChild === child) this.armKernelRecycle();
         if (message.type === "ready") {
           child.postMessage({ type: "init", dir: lane.dir });
           resolve();
@@ -216,8 +228,7 @@ export class AgentHostCore {
         }
         if (message.type === "steerBounced") {
           // 插话到达时子刚收尾：交给通道当「子空闲时的投递」开一轮；没人接（测试夹具）就按旧内核的说法报 failed
-          if (this.steerBounced !== null) this.steerBounced(message.sessionId, message.text, message.delivery);
-          else this.onEvent({ type: "failed", sessionId: message.sessionId, message: STEER_MISSED_MESSAGE });
+          this.bounceSteer(message.sessionId, message.text, message.delivery);
           return;
         }
         // 请求（工具请求带 requestId、审批带 requestId）：记下来源，回执回 kernel
@@ -225,11 +236,19 @@ export class AgentHostCore {
         this.onChildEvent(message);
       });
       child.on("exit", (code) => {
+        if (this.kernelChild !== child) {
+          // 闲置回收的旧进程退干净了（它闲着：没有在跑的轮、没有等回执的东西）。会话 → 树根的账留着：
+          // 下一条命令照样认得这些会话是新内核的，懒拉起新进程
+          this.kernelRecycled?.();
+          lane.exited([]);
+          return;
+        }
         this.kernelChild = null;
         this.kernelReady = null;
+        if (this.kernelIdleTimer !== null) clearTimeout(this.kernelIdleTimer);
+        this.kernelIdleTimer = null;
         const running = [...this.kernelRunning];
         this.kernelRunning.clear();
-        this.kernelSessions.clear();
         this.kernelRequests.clear();
         // 交给它还没回执的本子编辑 / 分支：等待者结掉（不然调用方要等满超时）
         for (const sessionId of this.kernelEdits) {
@@ -259,10 +278,64 @@ export class AgentHostCore {
     return this.kernelReady;
   }
 
-  /** 交给 kernel 的会话命令；root 缺省 = 这次运行里记下的树根（没记过就是它自己） */
+  /**
+   * 交给 kernel 的会话命令；root 缺省 = 这次运行里记下的树根（没记过就是它自己）。
+   * kernel 进程不在（闲置回收了 / 崩了）时：那条会话一定没有在跑的轮——停止、切档、换模型、标题、释放都没有对象，
+   * 不为它们拉起进程；插话没有轮可插，按「插话到达时子刚收尾」退回通道开一轮。
+   */
   private postKernel(command: KernelSessionCommand, root?: string): void {
-    if (!this.kernelChild) throw new Error("kernel runtime is not running");
-    this.kernelChild.postMessage({ type: "session", root: root ?? this.kernelSessions.get(command.sessionId) ?? command.sessionId, command });
+    const child = this.kernelChild;
+    if (child === null) {
+      if (command.type === "steer") this.bounceSteer(command.sessionId, command.text, command.delivery ?? "steer");
+      return;
+    }
+    this.armKernelRecycle();
+    child.postMessage({ type: "session", root: root ?? this.kernelSessions.get(command.sessionId) ?? command.sessionId, command });
+  }
+
+  private bounceSteer(sessionId: string, text: string, delivery: "steer" | "followUp"): void {
+    if (this.steerBounced !== null) this.steerBounced(sessionId, text, delivery);
+    else this.onEvent({ type: "failed", sessionId, message: STEER_MISSED_MESSAGE });
+  }
+
+  /** kernel 此刻是不是闲着：没有在跑的轮、没有等回执的工具请求 / 审批、没有在途的编辑 / 删库 / 收尾 */
+  private kernelIdle(): boolean {
+    return this.kernelRunning.size === 0 && this.kernelRequests.size === 0 && this.kernelEdits.size === 0 && this.pendingKernel.size === 0;
+  }
+
+  /** 与 kernel 每往来一次都重新计时；到点还闲着就回收 */
+  private armKernelRecycle(): void {
+    const ms = this.kernel?.idleRecycleMs;
+    if (ms === undefined || this.kernelChild === null) return;
+    if (this.kernelIdleTimer !== null) clearTimeout(this.kernelIdleTimer);
+    this.kernelIdleTimer = setTimeout(() => this.maybeRecycleKernel(), ms);
+    this.kernelIdleTimer.unref?.();
+  }
+
+  /**
+   * 闲置回收：kernel 进程的常驻内存是 V8 与分配器留下的高水位（迁移 / 读大会话之后不还给系统，第三步验收实测停在 0.8 GB），
+   * 进程不在就是 0。先让它关库（库关闭时按墓碑清删除会话的行），再结束进程；回收期间来的命令等它退干净再拉新的。
+   */
+  private maybeRecycleKernel(): void {
+    this.kernelIdleTimer = null;
+    const child = this.kernelChild;
+    if (child === null) return;
+    if (!this.kernelIdle()) {
+      this.armKernelRecycle();
+      return;
+    }
+    this.kernelChild = null;
+    this.kernelReady = null;
+    this.kernelRecycling = (async () => {
+      await this.shutdownChild(child, 10_000);
+      await new Promise<void>((resolve) => {
+        this.kernelRecycled = resolve;
+        child.kill();
+      });
+    })().finally(() => {
+      this.kernelRecycling = null;
+      this.kernelRecycled = null;
+    });
   }
 
   /** 工具回执 / 审批回答：回到发出请求的那个进程 */
@@ -475,9 +548,12 @@ export class AgentHostCore {
     return this.postKernelTurn(command, route.root);
   }
 
-  /** 这条会话的会话级命令发给谁：这次运行里交给过 kernel 的走 kernel，其余旧内核 */
+  /**
+   * 这条会话的会话级命令发给谁：这次运行里交给过 kernel 的走 kernel（进程被回收 / 崩了也算——那时它没有在跑的轮，
+   * postKernel 不为这些命令拉起进程），其余旧内核。
+   */
   private ownedByKernel(sessionId: string): boolean {
-    return this.kernelSessions.has(sessionId) && this.kernelChild !== null;
+    return this.kernelSessions.has(sessionId);
   }
 
   /**
@@ -997,6 +1073,8 @@ export class AgentHostCore {
    * 调用方直接删文件（KernelHost.drop）。
    */
   async dropKernelLibrary(library: string): Promise<boolean> {
+    // 正在闲置回收：等它关完库，再由调用方直接删文件
+    if (this.kernelRecycling !== null) await this.kernelRecycling;
     if (this.kernelChild === null) return false;
     const child = this.kernelChild;
     this.kernelSeq += 1;
@@ -1014,12 +1092,24 @@ export class AgentHostCore {
    * 最多等 timeoutMs（卡住也不拖住退出）。
    */
   async shutdownKernel(timeoutMs = 3000): Promise<void> {
+    if (this.kernelIdleTimer !== null) clearTimeout(this.kernelIdleTimer);
+    this.kernelIdleTimer = null;
+    // 正在闲置回收：它自己在关库，等它退完
+    if (this.kernelRecycling !== null) await this.kernelRecycling;
     const child = this.kernelChild;
     if (child === null) return;
+    await this.shutdownChild(child, timeoutMs);
+  }
+
+  private async shutdownChild(child: KernelChild, timeoutMs: number): Promise<void> {
     this.kernelSeq += 1;
     const requestId = `shutdown-${this.kernelSeq}`;
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, timeoutMs);
+      const timer = setTimeout(() => {
+        // 卡住也不拖住：等待登记一并撤掉（不然它会一直算作「在途」，闲置回收永远等不到）
+        this.pendingKernel.delete(requestId);
+        resolve();
+      }, timeoutMs);
       this.pendingKernel.set(requestId, () => {
         clearTimeout(timer);
         resolve();
@@ -1032,6 +1122,8 @@ export class AgentHostCore {
     this.child?.kill();
     this.child = null;
     this.ready = null;
+    if (this.kernelIdleTimer !== null) clearTimeout(this.kernelIdleTimer);
+    this.kernelIdleTimer = null;
     this.kernelChild?.kill();
     this.kernelChild = null;
     this.kernelReady = null;

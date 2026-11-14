@@ -1,6 +1,7 @@
 /**
  * 旧会话（pi-coding-agent 的 pi 本子，JSONL v3）→ 新内核（pi-durable）的 entry 序列。
- * **纯模块**：只读一份本子的文本、产出要追加的 entry 草稿，不碰磁盘、不碰库，`node --test` 直接测。
+ * 不碰库，`node --test` 直接测：planLegacyMigration 吃整份文本（测试、小本子），planLegacyMigrationFile 两遍流式读文件
+ * （迁移用：几百 MB 的本子不整份进内存，草稿逐条交给调用方分批写库）。规则同一个 LegacyPlanner。
  *
  * 迁移的目标是**「下一轮会发给模型的上下文」不变**，不是把本子逐行搬过去：
  *
@@ -23,7 +24,8 @@
 import type { Message, Tool, UserMessage } from "@earendil-works/pi-ai";
 import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { branchEntries, parsePiBook, type PiBookEntry } from "../main/session/pi-book.ts";
+import { createReadStream } from "node:fs";
+import { branchEntries, parsePiBook, PI_BOOK_VERSION, type PiBookEntry } from "../main/session/pi-book.ts";
 import { readImageBudgetBook } from "./image-byte-budget.ts";
 import { memoryAttachments } from "./memory-inject.ts";
 
@@ -208,7 +210,97 @@ function messageDraft(entry: PiBookEntry, skipped: Record<string, number>): Lega
 const OUT_OF_CONTEXT = new Set(["model_change", "thinking_level_change", "custom", "label", "session_info"]);
 
 /**
- * 解析 + 规划。不抛错：认不出的本子返回 `{ ok: false, reason }`，reason 是给人看的一句话。
+ * 逐条规划当前分支上的 entry（按分支顺序 push）：产出草稿，顺带记下读账要的那几样（分支上的 custom 条目、system 消息）。
+ * 整份读（planLegacyMigration）与流式读（planLegacyMigrationFile）共用它，规则只有一份。
+ */
+class LegacyPlanner {
+  readonly skipped: Record<string, number> = {};
+  /** 已产出的草稿条数 */
+  private count = 0;
+  /** 本子 entry id → 它之后（含它）第一条迁过去的草稿下标；压缩的保留起点按它查 */
+  private readonly firstDraftAtOrAfter = new Map<string, number>();
+  private pendingIds: string[] = [];
+  /** 分支上的 custom 条目（图片水位、图片引用、记忆块；都很小） */
+  private readonly customs: PiBookEntry[] = [];
+  /** 分支上的 system 消息（回放模型此前看到的工具清单） */
+  private readonly systems: Message[] = [];
+
+  /** 一条分支上的 entry → 草稿（null = 不进上下文）。抛错 = 认不出，整条会话不迁 */
+  push(entry: PiBookEntry): LegacyDraft | null {
+    this.pendingIds.push(entry.id);
+    if (entry.type === "custom") this.customs.push(entry);
+    if (entry.type === "message") {
+      const message = entry.message as { role?: unknown } | undefined;
+      if (message?.role === "system") this.systems.push(message as unknown as Message);
+    }
+    let draft: LegacyDraft | null = null;
+    if (entry.type === "message") {
+      draft = messageDraft(entry, this.skipped);
+    } else if (entry.type === "custom_message") {
+      draft = {
+        kind: LEGACY_KINDS.custom,
+        model: [{ role: "user", content: customContent((entry as unknown as Record<string, unknown>)["content"] ?? []), timestamp: timestampOf(entry) }],
+        data: {
+          customType: typeof (entry as unknown as Record<string, unknown>)["customType"] === "string" ? String((entry as unknown as Record<string, unknown>)["customType"]) : null,
+          display: (entry as unknown as Record<string, unknown>)["display"] === true,
+        },
+      };
+    } else if (entry.type === "branch_summary") {
+      const summary = (entry as unknown as Record<string, unknown>)["summary"];
+      if (typeof summary === "string" && summary !== "") {
+        draft = { kind: LEGACY_KINDS.branchSummary, model: [userText(BRANCH_PREFIX + summary + BRANCH_SUFFIX, timestampOf(entry))], data: { legacyId: entry.id } };
+      } else {
+        bump(this.skipped, "branch_summary(empty)");
+      }
+    } else if (entry.type === "compaction") {
+      const record = entry as unknown as Record<string, unknown>;
+      const summary = typeof record["summary"] === "string" ? record["summary"] : "";
+      const firstKept = typeof record["firstKeptEntryId"] === "string" ? record["firstKeptEntryId"] : null;
+      // 保留段 = 当前分支上 firstKept 到这条压缩之间的 entry；firstKept 不在这之前的分支上 = 保留段为空（pi 同款）
+      const keptIndex = firstKept === null ? undefined : this.firstDraftAtOrAfter.get(firstKept);
+      // 保留段里一条可迁的都没有（只有 model_change 之类）：起点落到压缩自己
+      const headRef: number | "self" =
+        keptIndex === undefined || keptIndex >= this.count || (firstKept !== null && this.pendingIds.includes(firstKept)) ? "self" : keptIndex;
+      draft = {
+        kind: LEGACY_KINDS.compaction,
+        model: [userText(COMPACTION_PREFIX + summary + COMPACTION_SUFFIX, timestampOf(entry))],
+        data: { reason: "threshold" },
+        headRef,
+      };
+      if (record["systemMessage"] !== undefined) bump(this.skipped, "compaction.systemMessage");
+    } else if (entry.type === "context_edit") {
+      throw new Error(`entry ${entry.id} is a context_edit (not supported by the migration yet)`);
+    } else if (OUT_OF_CONTEXT.has(entry.type)) {
+      bump(this.skipped, entry.type);
+    } else {
+      throw new Error(`entry ${entry.id} has an unknown type ${JSON.stringify(entry.type)}`);
+    }
+    if (draft !== null) {
+      for (const id of this.pendingIds) this.firstDraftAtOrAfter.set(id, this.count);
+      this.pendingIds = [];
+      this.count++;
+    }
+    return draft;
+  }
+
+  /** 逐请求注入的跨轮账（旧内核开轮时读本子的同两个函数，同一条分支上的 custom 条目） */
+  wire(legacyUsage: LegacyUsage): LegacyWireSeed {
+    // 本子 entry 与 pi 的 SessionEntry 同形（pi 写的 JSONL 行），旧内核读账的函数直接认
+    const branch = this.customs as unknown as SessionEntry[];
+    const budget = readImageBudgetBook(branch);
+    return {
+      imageMark: budget.mark === null ? null : { cut: budget.mark.cut, cutIndex: budget.mark.cutIndex },
+      imageRefs: [...budget.refs],
+      memory: [...memoryAttachments(branch)],
+      legacyTools: getCurrentTools(this.systems),
+      legacyUsage,
+    };
+  }
+}
+
+/**
+ * 解析 + 规划（整份文本在内存里）。不抛错：认不出的本子返回 `{ ok: false, reason }`，reason 是给人看的一句话。
+ * 迁移走流式的 planLegacyMigrationFile；这一份给测试与小本子用，规则同一个 LegacyPlanner。
  */
 export function planLegacyMigration(raw: string): LegacyPlanResult {
   let book;
@@ -218,91 +310,196 @@ export function planLegacyMigration(raw: string): LegacyPlanResult {
     return { ok: false, reason: `pi 本子读不出来：${error instanceof Error ? error.message : String(error)}` };
   }
   const path = branchEntries(book.entries);
-  const skipped: Record<string, number> = {};
+  const planner = new LegacyPlanner();
   const drafts: LegacyDraft[] = [];
-  /** 本子 entry id → 它之后（含它）第一条迁过去的草稿下标；压缩的保留起点按它查 */
-  const firstDraftAtOrAfter = new Map<string, number>();
-  let pendingIds: string[] = [];
-  const settlePending = (): void => {
-    for (const id of pendingIds) firstDraftAtOrAfter.set(id, drafts.length);
-    pendingIds = [];
-  };
   try {
     for (const entry of path) {
-      pendingIds.push(entry.id);
-      let draft: LegacyDraft | null = null;
-      if (entry.type === "message") {
-        draft = messageDraft(entry, skipped);
-      } else if (entry.type === "custom_message") {
-        draft = {
-          kind: LEGACY_KINDS.custom,
-          model: [{ role: "user", content: customContent((entry as unknown as Record<string, unknown>)["content"] ?? []), timestamp: timestampOf(entry) }],
-          data: {
-            customType: typeof (entry as unknown as Record<string, unknown>)["customType"] === "string" ? String((entry as unknown as Record<string, unknown>)["customType"]) : null,
-            display: (entry as unknown as Record<string, unknown>)["display"] === true,
-          },
-        };
-      } else if (entry.type === "branch_summary") {
-        const summary = (entry as unknown as Record<string, unknown>)["summary"];
-        if (typeof summary === "string" && summary !== "") {
-          draft = { kind: LEGACY_KINDS.branchSummary, model: [userText(BRANCH_PREFIX + summary + BRANCH_SUFFIX, timestampOf(entry))], data: { legacyId: entry.id } };
-        } else {
-          bump(skipped, "branch_summary(empty)");
-        }
-      } else if (entry.type === "compaction") {
-        const record = entry as unknown as Record<string, unknown>;
-        const summary = typeof record["summary"] === "string" ? record["summary"] : "";
-        const firstKept = typeof record["firstKeptEntryId"] === "string" ? record["firstKeptEntryId"] : null;
-        // 保留段 = 当前分支上 firstKept 到这条压缩之间的 entry；firstKept 不在这之前的分支上 = 保留段为空（pi 同款）
-        const keptIndex = firstKept === null ? undefined : firstDraftAtOrAfter.get(firstKept);
-        // 保留段里一条可迁的都没有（只有 model_change 之类）：起点落到压缩自己
-        const headRef: number | "self" =
-          keptIndex === undefined || keptIndex >= drafts.length || (firstKept !== null && pendingIds.includes(firstKept)) ? "self" : keptIndex;
-        draft = {
-          kind: LEGACY_KINDS.compaction,
-          model: [userText(COMPACTION_PREFIX + summary + COMPACTION_SUFFIX, timestampOf(entry))],
-          data: { reason: "threshold" },
-          headRef,
-        };
-        if (record["systemMessage"] !== undefined) bump(skipped, "compaction.systemMessage");
-      } else if (entry.type === "context_edit") {
-        throw new Error(`entry ${entry.id} is a context_edit (not supported by the migration yet)`);
-      } else if (OUT_OF_CONTEXT.has(entry.type)) {
-        bump(skipped, entry.type);
-      } else {
-        throw new Error(`entry ${entry.id} has an unknown type ${JSON.stringify(entry.type)}`);
-      }
-      if (draft !== null) {
-        settlePending();
-        drafts.push(draft);
-      }
+      const draft = planner.push(entry);
+      if (draft !== null) drafts.push(draft);
     }
   } catch (error) {
     return { ok: false, reason: `pi 本子里有认不出的内容：${error instanceof Error ? error.message : String(error)}` };
   }
-  // 本子 entry 与 pi 的 SessionEntry 同形（pi 写的 JSONL 行），旧内核读账的函数直接认
-  const branch = path as unknown as SessionEntry[];
-  const budget = readImageBudgetBook(branch);
   return {
     ok: true,
     plan: {
-      wire: {
-        imageMark: budget.mark === null ? null : { cut: budget.mark.cut, cutIndex: budget.mark.cutIndex },
-        imageRefs: [...budget.refs],
-        memory: [...memoryAttachments(branch)],
-        legacyTools: getCurrentTools(
-          path.flatMap((entry) => {
-            const message = entry.type === "message" ? (entry.message as { role?: unknown } | undefined) : undefined;
-            return message?.role === "system" ? [message as unknown as Message] : [];
-          }),
-        ),
-        legacyUsage: legacyUsageOf(book.entries),
-      },
+      wire: planner.wire(legacyUsageOf(book.entries)),
       providerSessionId: book.header.id,
       cwd: book.header.cwd,
       drafts,
-      skipped,
+      skipped: planner.skipped,
       offBranch: book.entries.length - path.length,
     },
+  };
+}
+
+/** 流式规划的结局：草稿已经一条条交给了 onDraft，这里只剩汇总 */
+type LegacyStreamResult =
+  | { ok: true; providerSessionId: string | null; cwd: string; drafts: number; skipped: Record<string, number>; offBranch: number; wire: LegacyWireSeed; bytes: number }
+  | { ok: false; reason: string };
+
+/**
+ * 流式迁移每读这么多原文收一次垃圾。大行（图片 base64、长工具结果）解析出的字符串直接进大对象区，V8 要等老生代
+ * 涨到阈值才做完整 GC——不管的话 139 MB 的本子迁移时垃圾能堆到 300 MB 以上（实测），峰值就压不到本子大小的 2 倍。
+ */
+const GC_EVERY_BYTES = 4 * 1024 * 1024;
+
+/** 一行在文件里的位置（字节） */
+interface LineSpan {
+  ordinal: number;
+  start: number;
+  end: number;
+}
+
+/**
+ * 逐行读一个文件（按 `\n` 切字节、逐行解码），不把整份读进内存。visit 拿到行文本与位置；
+ * wanted 给了时只解码这些行号（第二遍只要分支上的行）。
+ */
+async function eachLine(file: string, visit: (text: string, span: LineSpan) => Promise<void> | void, wanted?: ReadonlySet<number>): Promise<number> {
+  const stream = createReadStream(file, { highWaterMark: 1 << 20 });
+  // 跨块的半行：攒成片段表、遇到换行才拼一次（大行一块块累加再 concat 会反复拷贝）
+  let parts: Buffer[] = [];
+  let partsLength = 0;
+  let offset = 0;
+  // 行号对两遍读都一样：按 \n 切出的每一行（含空行与坏行）都占一个号
+  let ordinal = 0;
+  const emit = async (pieces: Buffer[], length: number, start: number): Promise<void> => {
+    const at = ordinal++;
+    if (wanted !== undefined && !wanted.has(at)) return;
+    const line = pieces.length === 1 ? (pieces[0] ?? Buffer.alloc(0)) : Buffer.concat(pieces, length);
+    await visit(line.toString("utf8"), { ordinal: at, start, end: start + length });
+  };
+  for await (const chunk of stream as AsyncIterable<Buffer>) {
+    let from = 0;
+    for (let at = chunk.indexOf(10); at !== -1; at = chunk.indexOf(10, from)) {
+      const piece = chunk.subarray(from, at);
+      const start = offset + from - partsLength;
+      await emit([...parts, piece], partsLength + piece.length, start);
+      parts = [];
+      partsLength = 0;
+      from = at + 1;
+    }
+    if (from < chunk.length) {
+      parts.push(chunk.subarray(from));
+      partsLength += chunk.length - from;
+    }
+    offset += chunk.length;
+  }
+  if (partsLength > 0) await emit(parts, partsLength, offset - partsLength);
+  return offset;
+}
+
+/** 一条本子 body 行的索引（第一遍只留这些，不留内容） */
+interface IndexedLine {
+  ordinal: number;
+  rawId: unknown;
+  rawParentId: unknown;
+  type: string;
+  usage: LegacyUsage;
+}
+
+/**
+ * 流式规划：两遍读文件，**整份内容从不同时在内存里**。
+ * 第一遍：逐行解析，只留每行的 id / parentId / type 与它的用量（旧内核 getSessionStats 数整本本子），找出当前分支；
+ * 第二遍：只解析分支上的行，按分支顺序交给 LegacyPlanner，草稿逐条交给 onDraft（调用方分批写进库）。
+ * 解析规则与 parsePiBook / branchEntries 一致（坏行跳过、首个 session 行是头、v1 补 id 与线性 parentId 链、v<3 的 hookMessage → custom）。
+ * 分支顺序与文件顺序不一致（只可能来自手改的文件）时如实报错不迁——调用方不会拿到半份。
+ */
+export async function planLegacyMigrationFile(
+  file: string,
+  onDraft: (draft: LegacyDraft, bytes: number) => Promise<void>,
+  /** 每读过约 GC_EVERY_BYTES 原文调一次（kernel 进程里是一次完整 GC，见 kernel-gc.ts）；缺席 = 不调 */
+  collect?: () => void,
+): Promise<LegacyStreamResult> {
+  let sinceCollect = 0;
+  const maybeCollect = (bytes: number): void => {
+    sinceCollect += bytes;
+    if (collect === undefined || sinceCollect < GC_EVERY_BYTES) return;
+    sinceCollect = 0;
+    collect();
+  };
+  let head: Record<string, unknown> | null = null;
+  const body: IndexedLine[] = [];
+  let bytes: number;
+  try {
+    bytes = await eachLine(file, (text, span) => {
+      maybeCollect(span.end - span.start);
+      if (text.trim() === "") return;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        return;
+      }
+      if (!isRecord(parsed)) return;
+      if (head === null && parsed["type"] === "session") {
+        head = { id: parsed["id"], cwd: parsed["cwd"], version: parsed["version"] };
+        return;
+      }
+      if (typeof parsed["type"] !== "string") return;
+      body.push({ ordinal: span.ordinal, rawId: parsed["id"], rawParentId: parsed["parentId"], type: parsed["type"], usage: legacyUsageOf([parsed as { type: string }]) });
+    });
+  } catch (error) {
+    return { ok: false, reason: `pi 本子读不出来：${error instanceof Error ? error.message : String(error)}` };
+  }
+  const headRecord: Record<string, unknown> | null = head;
+  if (headRecord === null) return { ok: false, reason: "pi 本子读不出来：no session header" };
+  const version = typeof headRecord["version"] === "number" && Number.isFinite(headRecord["version"]) ? headRecord["version"] : 1;
+  if (version > PI_BOOK_VERSION) return { ok: false, reason: `pi 本子读不出来：session version ${version} is newer than supported (${PI_BOOK_VERSION})` };
+  // id / parentId：与 parsePiBook 同一套（v1 补链；没有 id 的行不算 entry）
+  const entries: (PiBookEntry & { ordinal: number; usage: LegacyUsage })[] = [];
+  let previous: string | null = null;
+  body.forEach((line, index) => {
+    const id = version < 2 ? `v1-${index}` : typeof line.rawId === "string" && line.rawId !== "" ? line.rawId : null;
+    if (id === null) return;
+    const parentId = version < 2 ? previous : typeof line.rawParentId === "string" && line.rawParentId !== "" ? line.rawParentId : null;
+    previous = id;
+    entries.push({ type: line.type, id, parentId, timestamp: "", ordinal: line.ordinal, usage: line.usage });
+  });
+  const path = branchEntries(entries);
+  for (let at = 1; at < path.length; at++) {
+    if ((path[at]?.ordinal ?? 0) <= (path[at - 1]?.ordinal ?? 0)) return { ok: false, reason: "pi 本子的当前分支不是按文件顺序写的（手改过？），不迁" };
+  }
+  const total: LegacyUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+  for (const entry of entries) {
+    total.input += entry.usage.input;
+    total.output += entry.usage.output;
+    total.cacheRead += entry.usage.cacheRead;
+    total.cacheWrite += entry.usage.cacheWrite;
+    total.cost += entry.usage.cost;
+  }
+  const idOf = new Map(path.map((entry) => [entry.ordinal, entry]));
+  const planner = new LegacyPlanner();
+  let drafts = 0;
+  try {
+    await eachLine(
+      file,
+      async (text, span) => {
+        const known = idOf.get(span.ordinal);
+        if (known === undefined) return;
+        maybeCollect(span.end - span.start);
+        const line = JSON.parse(text) as Record<string, unknown>;
+        const message = line["message"];
+        if (version < 3 && line["type"] === "message" && isRecord(message) && message["role"] === "hookMessage") message["role"] = "custom";
+        const entry: PiBookEntry = { ...line, type: known.type, id: known.id, parentId: known.parentId, timestamp: typeof line["timestamp"] === "string" ? line["timestamp"] : "" };
+        const draft = planner.push(entry);
+        if (draft === null) return;
+        drafts++;
+        await onDraft(draft, span.end - span.start);
+      },
+      new Set(idOf.keys()),
+    );
+  } catch (error) {
+    return { ok: false, reason: `pi 本子里有认不出的内容：${error instanceof Error ? error.message : String(error)}` };
+  }
+  return {
+    ok: true,
+    providerSessionId: typeof headRecord["id"] === "string" && headRecord["id"] !== "" ? headRecord["id"] : null,
+    cwd: typeof headRecord["cwd"] === "string" ? headRecord["cwd"] : "",
+    drafts,
+    skipped: planner.skipped,
+    offBranch: entries.length - path.length,
+    wire: planner.wire(total),
+    bytes,
   };
 }

@@ -75,6 +75,8 @@ const turnRuntime: KernelTurnRuntime = {
 };
 const intentConfirm = new IntentConfirmWaiter(sendAgent);
 let sessions: KernelSessions | null = null;
+/** `--expose-gc` 给的完整 GC（迁移大本子时用） */
+const exposedGc = (globalThis as { gc?: () => void }).gc;
 
 function models(): Models {
   if (modelRuntime === null) throw new Error("kernel runtime is not initialized");
@@ -97,6 +99,8 @@ async function init(dir: string): Promise<void> {
       return registerAndResolveModel(runtime, agent.provider, agent.modelId);
     },
     log: (text) => console.error(text),
+    // 主进程拉起时带了 --expose-gc（host.ts）；没带（比对台直接拉起）就交给 V8 自己
+    ...(typeof exposedGc === "function" ? { collectGarbage: () => exposedGc?.() } : {}),
   });
   sessions = new KernelSessions({
     pool,
@@ -104,6 +108,7 @@ async function init(dir: string): Promise<void> {
     intentConfirm,
     settled: (sessionId, result) => post({ type: "turnSettled", sessionId, result }),
     bounceSteer: (sessionId, text, delivery) => post({ type: "steerBounced", sessionId, text, delivery }),
+    ...(typeof exposedGc === "function" ? { collectGarbage: () => exposedGc?.() } : {}),
     // 换模型的校验与旧内核 setLedgerModel 同一条路径：一次性 ModelRuntime 注册 + 解析
     resolveModel: async (provider, modelId) => registerAndResolveModel(await createModelRuntime(), provider, modelId),
   });
@@ -175,6 +180,8 @@ parentPort.on("message", (event: { data: unknown }) => {
       .then(async () => {
         await sessions?.shutdown();
         await pool?.closeAll();
+        // MCP 服务进程是 kernel 拉起的：退出（含闲置回收）前一并关掉，不留给系统收
+        await turnRuntime.mcpHub.reset();
       })
       .catch((cause: unknown) => console.error("[kernel-runtime] 退出收尾失败", cause))
       .finally(() => post({ type: "shutdownDone", requestId: command.requestId }));

@@ -1,6 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { legacyUsageOf, planLegacyMigration, LEGACY_KINDS } from "./legacy-migrate.ts";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { legacyUsageOf, planLegacyMigration, planLegacyMigrationFile, LEGACY_KINDS } from "./legacy-migrate.ts";
 import { assistant, book, result, user } from "./legacy-book-fixture.ts";
 
 describe("planLegacyMigration", () => {
@@ -108,4 +111,52 @@ describe("legacyUsageOf：旧本子的用量累计与旧内核 getSessionStats �
     ] as never);
     assert.deepEqual(total, { input: 150, output: 5, cacheRead: 10, cacheWrite: 15, cost: 2.5 });
   });
+});
+
+describe("planLegacyMigrationFile：流式两遍读与整份读同一个结果（迁移用它，几百 MB 的本子不整份进内存）", () => {
+  const books: [string, string][] = [
+    [
+      "直链 + 工具结果 + 压缩 + 扩展消息 + 图片水位，坏行与空行、没有结尾换行",
+      book([
+        user("u1", "a"),
+        assistant("a1", "b", ["c1"]),
+        result("r1", "c1"),
+        { type: "custom", id: "img", customType: "orbita-image-budget", data: { cut: 3, cutIndex: 1 } },
+        user("u2", "c"),
+        assistant("a2", "d"),
+        { type: "compaction", id: "k1", summary: "S", firstKeptEntryId: "u2", tokensBefore: 10 },
+        { type: "custom_message", id: "cm", customType: "orbita-undo", content: "undone", display: false },
+        user("u3", "e"),
+      ]),
+    ],
+    ["认不出的条目整条不迁", book([user("u1", "a"), { type: "mystery", id: "m1" }])],
+  ];
+  for (const [name, text] of books) {
+    it(name, async () => {
+      const dir = await mkdtemp(join(tmpdir(), "orbita-legacy-stream-"));
+      try {
+        const file = join(dir, "book.jsonl");
+        // 中间夹坏行与空行、最后一行没有结尾换行：两条路径同样处理（最后一行是真 entry，流式读不能丢）
+        const lines = text.replace(/\n$/, "").split("\n");
+        await writeFile(file, [...lines.slice(0, 2), "not json", "", ...lines.slice(2)].join("\n"));
+        const whole = planLegacyMigration(await readFile(file, "utf8"));
+        const drafts: unknown[] = [];
+        const streamed = await planLegacyMigrationFile(file, async (draft) => {
+          drafts.push(draft);
+        });
+        assert.equal(streamed.ok, whole.ok);
+        if (!whole.ok || !streamed.ok) {
+          assert.equal(!streamed.ok && streamed.reason, !whole.ok && whole.reason);
+          return;
+        }
+        assert.deepEqual(drafts, whole.plan.drafts);
+        assert.deepEqual(streamed.wire, whole.plan.wire);
+        assert.deepEqual(streamed.skipped, whole.plan.skipped);
+        assert.equal(streamed.offBranch, whole.plan.offBranch);
+        assert.equal(streamed.providerSessionId, whole.plan.providerSessionId);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  }
 });

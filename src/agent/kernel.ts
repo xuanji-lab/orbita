@@ -14,7 +14,7 @@
  *   的 init 里，SQLite 事务要么全落要么全不落——迁到一半崩溃，重开后库里没有半份。
  *   init 里先查索引，已有就抛哨兵回滚——即使绕过进程内排队，也只会有一份。
  */
-import { open as openFile, readFile, rm, stat } from "node:fs/promises";
+import { open as openFile, rm, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -34,14 +34,14 @@ import {
   type Storage,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { addTombstones, purgeFile, purgeTombstoned } from "./kernel-purge.ts";
+import { addTombstones, purgeFile, purgeTombstoned, removeTombstone } from "./kernel-purge.ts";
 import type { ProviderSecrets } from "../shared/agent-ipc.ts";
 import { isDurableBookRef, KERNEL_LIBRARY_NAME } from "../shared/kernel.ts";
 import type { ThinkingLevel } from "../shared/thinking.ts";
 import { COMPACTION_DEFAULT } from "../shared/settings.ts";
 import { chooseCacheRetention, type SessionRole } from "./cache-retention.ts";
 import { compactionKeepRecentTokens, compactionReserveTokens } from "./compaction-settings.ts";
-import { LEGACY_KINDS, planLegacyMigration, type LegacyDraft, type LegacyWireSeed } from "./legacy-migrate.ts";
+import { LEGACY_KINDS, planLegacyMigrationFile, type LegacyDraft } from "./legacy-migrate.ts";
 import { messageSignature, WireDoc } from "./kernel-wire.ts";
 import { RETRY_BASE_DELAY_MS, RETRY_MAX_ATTEMPTS, RETRY_MAX_DELAY_MS } from "./retry-policy.ts";
 import type { KernelTurnTarget } from "./kernel-turn.ts";
@@ -86,6 +86,9 @@ export type LegacyPrint = {
   tail: string;
 };
 const PRINT_TAIL_BYTES = 64 * 1024;
+
+/** 迁移每批提交的原文量（字节）：批越大提交次数越少、峰值越高；8 MB 时 139 MB 的本子约 18 批 */
+const MIGRATION_BATCH_BYTES = 4 * 1024 * 1024;
 
 export const LegacyPrintDoc = defineDoc<{ prints: Record<string, LegacyPrint> }>({
   kind: "orbita.legacy-prints",
@@ -247,6 +250,8 @@ export interface KernelPoolOptions {
   openStorage?: (file: string) => Promise<Storage>;
   now?: () => number;
   log?: (text: string) => void;
+  /** 迁移大本子时定期收一次垃圾（kernel 进程里注入，见 kernel-gc.ts）；缺席 = 交给 V8 自己 */
+  collectGarbage?: () => void;
 }
 
 interface OpenLibrary {
@@ -392,75 +397,129 @@ export class KernelPool {
         replacing = indexed;
         this.options.log?.(`[kernel] ${input.sessionId} 库里的副本比原件旧（原件之后又被旧内核续写过），按原件重迁`);
       }
-      // 读原件：只读。指纹与迁移读的是同一份字节（大小与末尾哈希取自读到的内容，修改时刻取读之前那一刻）
-      let drafts: LegacyDraft[] = [];
-      let providerSessionId: string | null = null;
-      let legacy: { bytes: number; mtimeMs: number } | null = null;
-      let print: LegacyPrint | null = null;
-      let wire: LegacyWireSeed | null = null;
-      if (input.legacy !== null) {
-        const before = await stat(input.legacy.piSessionFile);
-        const bytes = await readFile(input.legacy.piSessionFile);
-        const planned = planLegacyMigration(bytes.toString("utf8"));
-        if (!planned.ok) return { ok: false, reason: planned.reason };
-        drafts = planned.plan.drafts;
-        providerSessionId = planned.plan.providerSessionId;
-        wire = planned.plan.wire;
-        legacy = { bytes: bytes.length, mtimeMs: before.mtimeMs };
-        print = { bytes: bytes.length, mtimeMs: before.mtimeMs, tail: tailHash(bytes) };
-      }
       const agent: AgentChange = {
         ...(input.agent.provider === null ? {} : { model: { provider: input.agent.provider.id, modelId: input.agent.modelId } }),
         thinkingLevel: input.agent.thinkingLevel,
         cwd: input.agent.cwd,
         compaction: kernelCompaction(input.agent, registered?.contextWindow),
       };
-      let conversationId: number;
-      try {
-        const conversation = await harness.createConversation(
-          {
-            ownership: { kind: "ownerless" },
-            agent,
-            init: async (tx, id) => {
-              const index = await tx.doc(SessionIndexDoc);
-              const already = index.sessions[input.sessionId];
-              // 已有索引且不是我们要换掉的那一份（别人刚迁过 / 刚重迁过）：用它，不再迁一份
-              if (already !== undefined && already !== replacing) throw new AlreadyIndexed(already);
-              index.sessions[input.sessionId] = id;
-              // 新建 / 迁移 / 重迁都从这一条重新开始记（重迁丢掉的旧副本不再算这条会话的）
-              (await tx.doc(SessionHistoryDoc)).sessions[input.sessionId] = [id];
-              if (print !== null) (await tx.doc(LegacyPrintDoc)).prints[input.sessionId] = print;
-              // 沿用旧本子的会话 id 作 provider sessionId：提示缓存的亲和不因换内核断掉
-              if (providerSessionId !== null) (await tx.doc(ProviderDoc, id)).sessionId = providerSessionId;
-              // 逐请求注入的跨轮账（图片水位与引用、各轮记忆块）从本子读来；迁来的扩展消息记指纹（kernel-wire.ts）
-              if (wire !== null) {
-                const state = await tx.doc(WireDoc, id);
-                state.imageMark = wire.imageMark;
-                state.imageRefs = wire.imageRefs;
-                state.memory = wire.memory;
-                if (wire.legacyTools.length > 0) state.legacyTools = JSON.parse(JSON.stringify(wire.legacyTools)) as JsonObject[];
-                state.legacyUsage = { ...wire.legacyUsage };
-                state.customs = drafts.filter((draft) => draft.kind === LEGACY_KINDS.custom).flatMap((draft) => draft.model.map((message) => messageSignature(message)));
-              }
-              await appendDrafts(tx, id, drafts);
+      if (input.legacy === null) {
+        // 新内核里新建的会话：一次提交建会话 + 索引 + 历史
+        let conversationId: number;
+        try {
+          const conversation = await harness.createConversation(
+            {
+              ownership: { kind: "ownerless" },
+              agent,
+              init: async (tx, id) => {
+                const index = await tx.doc(SessionIndexDoc);
+                const already = index.sessions[input.sessionId];
+                if (already !== undefined) throw new AlreadyIndexed(already);
+                index.sessions[input.sessionId] = id;
+                (await tx.doc(SessionHistoryDoc)).sessions[input.sessionId] = [id];
+              },
             },
-          },
-          BACKGROUND_CONTEXT,
-        );
-        conversationId = conversation.id;
-      } catch (error) {
-        if (!(error instanceof AlreadyIndexed)) throw error;
-        conversationId = error.conversationId;
-        drafts = [];
-        legacy = null;
-        replacing = undefined;
+            BACKGROUND_CONTEXT,
+          );
+          conversationId = conversation.id;
+        } catch (error) {
+          if (!(error instanceof AlreadyIndexed)) throw error;
+          conversationId = error.conversationId;
+        }
+        await this.remember(harness, conversationId, input.agent.role);
+        return { ok: true, conversationId, migrated: false, remigrated: false, entries: 0, legacy: null, ms: elapsed() };
       }
-      await this.remember(harness, conversationId, input.agent.role);
-      const migrated = drafts.length > 0 || legacy !== null;
-      return { ok: true, conversationId, migrated, remigrated: migrated && replacing !== undefined, entries: drafts.length, legacy, ms: elapsed() };
+      return await this.migrate(harness, input.library, input.sessionId, input.legacy.piSessionFile, agent, replacing, input.agent.role, elapsed);
     } catch (error) {
       return { ok: false, reason: `迁移失败：${error instanceof Error ? error.message : String(error)}` };
     }
+  }
+
+  /**
+   * 迁一本旧本子：**流式读、分批写**，整份内容从不同时在内存里（第三步验收：139 MB 的本子迁移时 kernel 进程冲到 1.25 GB，
+   * 闲置后停在 0.8 GB——读整份 + 拆字符串 + 解析出的对象 + 一次提交里攒着的全部草稿）。
+   * 1. 建一条**还没被索引指着**的会话，会话号先记进墓碑（迁到一半进程没了：下次关库 / 开库时按墓碑清掉这半份）；
+   * 2. 两遍读本子（legacy-migrate.ts 的 planLegacyMigrationFile），草稿每攒满 MIGRATION_BATCH_BYTES 原文提交一次；
+   * 3. 原件指纹前后一致才算数（迁移途中原件变了 = 读到的不是同一份，作废）；
+   * 4. 最后一次提交写索引、历史、指纹、provider 会话 id 与跨轮账——**它落了迁移才算完成**，之前的提交对谁都不可见；
+   *    然后从墓碑里摘掉这条会话。
+   * 被否决：一次提交（第三步的做法）——原子性最好，但一次提交要把全部草稿攒在内存里，峰值是本子大小的好几倍。
+   */
+  private async migrate(
+    harness: Harness,
+    library: string,
+    sessionId: string,
+    file: string,
+    agent: AgentChange,
+    replacing: number | undefined,
+    role: SessionRole,
+    elapsed: () => number,
+  ): Promise<KernelOpenResult> {
+    const libraryFile = this.filePath(library);
+    const before = await legacyPrint(file);
+    const conversation = await harness.createConversation({ ownership: { kind: "ownerless" }, agent }, BACKGROUND_CONTEXT);
+    await addTombstones(libraryFile, [conversation.id]);
+    const ids: EntryId[] = [];
+    const customs: string[] = [];
+    let batch: LegacyDraft[] = [];
+    let batchBytes = 0;
+    let written = 0;
+    const flush = async (): Promise<void> => {
+      if (batch.length === 0) return;
+      const drafts = batch;
+      batch = [];
+      batchBytes = 0;
+      await harness.commit((tx) => appendDrafts(tx, conversation.id, drafts, ids), BACKGROUND_CONTEXT);
+      written += drafts.length;
+    };
+    const planned = await planLegacyMigrationFile(
+      file,
+      async (draft, bytes) => {
+        if (draft.kind === LEGACY_KINDS.custom) for (const message of draft.model) customs.push(messageSignature(message));
+        batch.push(draft);
+        batchBytes += bytes;
+        if (batchBytes >= MIGRATION_BATCH_BYTES) await flush();
+      },
+      this.options.collectGarbage,
+    );
+    if (!planned.ok) return { ok: false, reason: planned.reason };
+    await flush();
+    const after = await legacyPrint(file);
+    if (!samePrint(before, after)) return { ok: false, reason: "迁移途中原件变了（读到的不是同一份），这次不迁" };
+    const wire = planned.wire;
+    let conversationId: number = conversation.id;
+    try {
+      await harness.commit(async (tx) => {
+        const index = await tx.doc(SessionIndexDoc);
+        const already = index.sessions[sessionId];
+        // 已有索引且不是我们要换掉的那一份（别人刚迁过 / 刚重迁过）：用它，这一份留在墓碑里等清
+        if (already !== undefined && already !== replacing) throw new AlreadyIndexed(already);
+        index.sessions[sessionId] = conversation.id;
+        // 新建 / 迁移 / 重迁都从这一条重新开始记（重迁丢掉的旧副本不再算这条会话的）
+        (await tx.doc(SessionHistoryDoc)).sessions[sessionId] = [conversation.id];
+        (await tx.doc(LegacyPrintDoc)).prints[sessionId] = before;
+        // 沿用旧本子的会话 id 作 provider sessionId：提示缓存的亲和不因换内核断掉
+        if (planned.providerSessionId !== null) (await tx.doc(ProviderDoc, conversation.id)).sessionId = planned.providerSessionId;
+        // 逐请求注入的跨轮账（图片水位与引用、各轮记忆块）从本子读来；迁来的扩展消息记指纹（kernel-wire.ts）
+        const state = await tx.doc(WireDoc, conversation.id);
+        state.imageMark = wire.imageMark;
+        state.imageRefs = wire.imageRefs;
+        state.memory = wire.memory;
+        if (wire.legacyTools.length > 0) state.legacyTools = JSON.parse(JSON.stringify(wire.legacyTools)) as JsonObject[];
+        state.legacyUsage = { ...wire.legacyUsage };
+        state.customs = customs;
+      }, BACKGROUND_CONTEXT);
+      await removeTombstone(libraryFile, conversation.id);
+      // 迁完把解析留下的垃圾收掉：紧接着这一轮要读上下文，堆里腾出来的地方先给它用，峰值不叠
+      this.options.collectGarbage?.();
+    } catch (error) {
+      if (!(error instanceof AlreadyIndexed)) throw error;
+      conversationId = error.conversationId;
+      await this.remember(harness, conversationId, role);
+      return { ok: true, conversationId, migrated: false, remigrated: false, entries: 0, legacy: null, ms: elapsed() };
+    }
+    await this.remember(harness, conversationId, role);
+    return { ok: true, conversationId, migrated: true, remigrated: replacing !== undefined, entries: written, legacy: { bytes: before.bytes, mtimeMs: before.mtimeMs }, ms: elapsed() };
   }
 
   /** 记下这条会话的 provider sessionId → 角色（缓存时长按它判） */
@@ -582,8 +641,9 @@ async function appendDrafts(
   tx: Parameters<NonNullable<Parameters<Harness["createConversation"]>[0]["init"]>>[0],
   conversationId: ConversationId,
   drafts: readonly LegacyDraft[],
+  /** 之前几批已写的 entry 的真 id（按草稿下标；headRef 是全局下标），本批写完接着往后追加 */
+  ids: EntryId[],
 ): Promise<void> {
-  const ids: EntryId[] = [];
   for (const draft of drafts) {
     const head = draft.headRef === undefined ? undefined : draft.headRef === "self" ? "self" : ids[draft.headRef];
     if (draft.headRef !== undefined && head === undefined) throw new Error(`compaction head ${String(draft.headRef)} points past the drafts`);

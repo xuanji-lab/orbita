@@ -352,8 +352,8 @@ describe("KernelSessions：压缩、崩溃后的继续", () => {
     await r.sessions.handle("s1", { ...submit(cwd), type: "compact" } as Extract<AgentCommand, { type: "compact" }>);
     await r.until((event) => r.events.filter(idle()).length >= 3 && idle()(event));
     assert.deepEqual(phases(r.events).slice(-2), ["compaction", "idle"]);
-    const record = r.events.find((event) => event.type === "compaction");
-    assert.ok(record !== undefined && record.type === "compaction" && /摘要正文/.test(record.record.summary));
+    const record = await r.until((event) => event.type === "compaction");
+    assert.ok(record.type === "compaction" && /摘要正文/.test(record.record.summary));
     assert.ok(!r.events.some((event) => event.type === "failed"));
   });
 
