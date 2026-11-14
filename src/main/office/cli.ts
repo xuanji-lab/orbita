@@ -161,6 +161,8 @@ export function runOfficeCli(
     let settled = false;
     let timedOut = false;
     let overflow = false;
+    /** 杀了还不退时的兜底计时器：close 事件没来也要兑现 promise，工具不能永远挂着 */
+    let force: ReturnType<typeof setTimeout> | null = null;
     // POSIX 下独立进程组：杀的时候连带子进程；Windows 走 taskkill /T
     const child = spawn(bin, [...args], {
       windowsHide: true,
@@ -191,17 +193,23 @@ export function runOfficeCli(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (force !== null) clearTimeout(force);
       resolve({ code, stdout, stderr, elapsedMs: Date.now() - started, timedOut: timedOut || overflow });
+    };
+    /** 超时 / 输出超限：先杀树，2 秒还没 close 就自己收尾（taskkill 也可能失败） */
+    const abort = (): void => {
+      killTree();
+      if (force === null) force = setTimeout(() => settle(null), 2_000);
     };
     const timer = setTimeout(() => {
       timedOut = true;
-      killTree();
+      abort();
     }, timeoutMs);
     child.stdout.on("data", (chunk: Buffer) => {
       bytes += chunk.length;
       if (bytes > maxBytes) {
         overflow = true;
-        killTree();
+        abort();
         return;
       }
       stdout += chunk.toString("utf8");
