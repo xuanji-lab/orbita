@@ -11,7 +11,9 @@
  * - 结果里的图：过 pi 同一道归一化（normalizeToolResultImages：按模型的图片上限缩放、附坐标换算提示），
  *   旧内核在 agent-session 的 _afterToolCall 里对每个工具结果做这一步。
  *
- * 不翻的：onUpdate 的流式进度（界面进度是主循环切过来那一步的事）、renderCall / renderResult（TUI 用）。
+ * - 流式进度：onUpdate 原样交给 scope.onUpdate（视图适配层翻成 tool_execution_update，与旧内核同一个回调）。
+ *
+ * 不翻的：renderCall / renderResult（TUI 用）。
  */
 import type { JsonValue } from "@earendil-works/chord/json";
 import type { Model, Api } from "@earendil-works/pi-ai";
@@ -43,6 +45,10 @@ export interface DurableToolScope {
   model: () => Model<Api> | undefined;
   thinkingLevel: () => string;
   providerSessionId: () => string;
+  /** 执行前等一下（一批工具「全部准备完才一起执行」的节奏，kernel-turn.ts 的 ToolRounds） */
+  beforeExecute?: (callId: string, signal: AbortSignal | undefined) => Promise<void>;
+  /** 工具的流式输出（pi 工具的 onUpdate，partialResult 原样）：界面上 bash 等的实时输出 */
+  onUpdate?: (callId: string, toolName: string, partialResult: unknown) => void;
 }
 
 /** durable 的输出上限放到最大：截断是工具自己的事，旧内核不截第二遍 */
@@ -121,7 +127,15 @@ export function toDurableTool(definition: ToolDefinition, scope: DurableToolScop
     outputLimits: NO_LIMIT,
     async execute(args, api, context): Promise<ToolExecutionResult> {
       try {
-        const result = await definition.execute(api.callId, args as never, context.abortSignal, undefined, toolContext(definition.name, scope));
+        await scope.beforeExecute?.(api.callId, context.abortSignal);
+        const onUpdate = scope.onUpdate;
+        const result = await definition.execute(
+          api.callId,
+          args as never,
+          context.abortSignal,
+          onUpdate === undefined ? undefined : (partial: unknown) => onUpdate(api.callId, definition.name, partial),
+          toolContext(definition.name, scope),
+        );
         const details = jsonDetails(result.details);
         const resizeOptions = scope.model()?.inputLimits?.images?.resize;
         const content = await normalizeToolResultImages(result.content ?? [], {
@@ -146,6 +160,8 @@ export interface BuiltinToolOptions {
   autoResizeImages: boolean;
   commandPrefix: string | undefined;
   shellPath: string | undefined;
+  /** 给 bash 子进程挂的环境变量（kernel 进程的孤儿善后标签，kernel-children.ts）；缺席 = 不挂 */
+  childEnv?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -156,7 +172,11 @@ export interface BuiltinToolOptions {
  */
 export function builtinToolDefinitions(cwd: string, options: BuiltinToolOptions): ToolDefinition[] {
   const all: Record<(typeof ENABLED_BUILTIN_TOOLS)[number], ToolDefinition> = {
-    bash: createBashToolDefinition(cwd, { commandPrefix: options.commandPrefix, shellPath: options.shellPath }) as unknown as ToolDefinition,
+    bash: createBashToolDefinition(cwd, {
+      commandPrefix: options.commandPrefix,
+      shellPath: options.shellPath,
+      ...(options.childEnv === undefined ? {} : { spawnHook: (context) => ({ ...context, env: { ...context.env, ...options.childEnv } }) }),
+    }) as unknown as ToolDefinition,
     edit: createEditToolDefinition(cwd) as unknown as ToolDefinition,
     find: createFindToolDefinition(cwd) as unknown as ToolDefinition,
     grep: createGrepToolDefinition(cwd) as unknown as ToolDefinition,

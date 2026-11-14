@@ -31,11 +31,12 @@ import {
   type HookApi,
   type JsonObject,
   type Registry,
+  type Submission,
   type ToolExecutionResult,
 } from "@earendil-works/pi-durable";
 import type { AgentEvent } from "../shared/agent-ipc.ts";
-import type { KernelTurnCommand } from "../shared/kernel.ts";
-import type { PermissionAnswer } from "../shared/permission.ts";
+import type { KernelContinueCommand, KernelTurnCommand } from "../shared/kernel.ts";
+import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
 import { composePromptText } from "../shared/prompt-attachments.ts";
 import { builtinToolDefinitions, toDurableTool } from "./durable-tools.ts";
 import { liftMessages, TurnWire } from "./kernel-wire.ts";
@@ -96,6 +97,8 @@ export interface KernelTurnRuntime {
   permissions: PermissionWaiter;
   send: (event: AgentEvent) => void;
   resolveShellPath: () => string | undefined;
+  /** 给 bash 子进程挂的环境变量（kernel 进程的孤儿善后标签）；缺席 = 不挂 */
+  childEnv?: Readonly<Record<string, string>>;
 }
 
 /** 一轮要的会话级对象 */
@@ -232,6 +235,88 @@ function findRound(branch: readonly unknown[], callId: string): { key: string; c
   return null;
 }
 
+/** 一个等着被放行的承诺（ToolRounds 用） */
+type Gate = { promise: Promise<void>; open: () => void };
+function gate(): Gate {
+  let open = (): void => undefined;
+  const promise = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { promise, open };
+}
+
+/**
+ * 一批工具调用的「准备」与「执行」节奏，复刻 pi-agent-core 的 executeToolCalls：
+ * - **准备按调用顺序**：pi 逐个跑 tool_execution_start → 参数校验 → tool_call 钩子（闸门、审批、快照跟踪的 before），
+ *   一个审批没点完下一个不开始——界面上审批卡一张一张出，快照的 before 读的是这一批谁都还没动手时的盘。
+ * - **并行批：全部准备完才一起执行**（executeToolCallsParallel 先 prepare 完整个循环，再 Promise.all 执行）；
+ *   顺序批（有 executionMode: sequential 的工具）：准备一个执行一个。
+ * durable 把一批的工具任务一起建、并发跑，这些先后它不保证，所以在 beforeTool 与工具的 execute 里各等一下。
+ * 「准备完」的信号：beforeTool 判完（放行或拒绝），或调用根本没走到 beforeTool（工具不存在、参数不对——
+ * durable 直接写错误结果，视图看到结果条目时报 settled），所以不会有谁永远等不到。
+ */
+export class ToolRounds {
+  private readonly prepared = new Map<string, Gate>();
+  private readonly rounds = new Map<string, { calls: string[]; sequential: boolean }>();
+
+  private gateOf(callId: string): Gate {
+    let found = this.prepared.get(callId);
+    if (found === undefined) {
+      found = gate();
+      this.prepared.set(callId, found);
+    }
+    return found;
+  }
+
+  /** 记下一批（从叶子路径找到的回答里的全部调用，按调用顺序）；sequential = 这一批按顺序跑 */
+  noteRound(calls: readonly string[], sequential: boolean): void {
+    for (const callId of calls) this.rounds.set(callId, { calls: [...calls], sequential });
+  }
+
+  /** beforeTool 开头：等这一批里排在前面的调用都准备完 */
+  async beforePrepare(callId: string, context: Context): Promise<void> {
+    const round = this.rounds.get(callId);
+    if (round === undefined) return;
+    const earlier = round.calls.slice(0, round.calls.indexOf(callId));
+    await awaitWithContext(Promise.all(earlier.map((id) => this.gateOf(id).promise)), context);
+  }
+
+  /** 准备完（beforeTool 判完 / 调用没走到 beforeTool 就有了结果） */
+  settled(callId: string): void {
+    this.gateOf(callId).open();
+  }
+
+  /** 工具 execute 开头：并行批等整批都准备完 */
+  async beforeExecute(callId: string, signal: AbortSignal | undefined): Promise<void> {
+    const round = this.rounds.get(callId);
+    if (round === undefined || round.sequential) return;
+    const all = Promise.all(round.calls.map((id) => this.gateOf(id).promise));
+    if (signal === undefined) return all.then(() => undefined);
+    if (signal.aborted) return;
+    await new Promise<void>((resolve) => {
+      signal.addEventListener("abort", () => resolve(), { once: true });
+      void all.then(() => resolve());
+    });
+  }
+}
+
+/**
+ * 一轮里外面要插手的几处（kernel-session.ts 给；测试缺省）：
+ * - mode：**现读**的权限档——对话进行中切档，正在跑的这一轮的下一个工具调用立刻按新档判（旧内核读账本，同语义）；
+ * - toolStart / toolUpdate：给视图适配层报工具开始（审批之前）与流式输出；
+ * - toolAllowed：闸门放行之后（文件快照跟踪记「改之前」，旧内核 tracker.noteAllowed 的同一个时点）；
+ * - rounds：一批工具的准备 / 执行节奏（见 ToolRounds）。
+ */
+export interface TurnObserver {
+  mode?: () => PermissionMode;
+  toolStart?: (callId: string, name: string, args: unknown) => void;
+  toolUpdate?: (callId: string, name: string, partialResult: unknown) => void;
+  toolAllowed?: (callId: string, name: string, input: unknown) => Promise<void>;
+  rounds?: ToolRounds;
+  /** 「继续」要补发一句话时先回显它（与用户自己发的话同一套回显） */
+  echoContinue?: (text: string) => void;
+}
+
 /** 这一轮装进 durable 的东西（测试直接看它） */
 export interface AssembledTurn {
   extension: Extension;
@@ -253,9 +338,11 @@ export async function assembleTurn(
   previousTools: readonly Tool[],
   wire: TurnWire,
   memoryTurn: number,
+  observer: TurnObserver = {},
 ): Promise<AssembledTurn> {
   const flags = turnToolFlags(command);
-  const currentMode = () => command.mode;
+  const currentMode = observer.mode ?? (() => command.mode);
+  const rounds = observer.rounds ?? new ToolRounds();
   const branch = new DurableBranch();
   const planOptions: PlanToolOptions = {
     getMode: currentMode,
@@ -272,7 +359,7 @@ export async function assembleTurn(
 
   const resources = await loadPiResources({ cwd: command.cwd, skillsDirs: command.skillsDirs, resolveShellPath: runtime.resolveShellPath });
   const definitions = [
-    ...builtinToolDefinitions(command.cwd, resources.builtinOptions),
+    ...builtinToolDefinitions(command.cwd, { ...resources.builtinOptions, ...(runtime.childEnv === undefined ? {} : { childEnv: runtime.childEnv }) }),
     ...createTurnTools({
       command,
       flags,
@@ -296,6 +383,8 @@ export async function assembleTurn(
     model: () => target.model,
     thinkingLevel: () => command.thinkingLevel,
     providerSessionId: () => target.providerSessionId,
+    beforeExecute: (callId: string, signal: AbortSignal | undefined) => rounds.beforeExecute(callId, signal),
+    ...(observer.toolUpdate === undefined ? {} : { onUpdate: observer.toolUpdate }),
   };
   const active = activeNames.flatMap((name) => {
     const definition = byName.get(name);
@@ -336,20 +425,36 @@ export async function assembleTurn(
       hook(ToolTask, {
         beforeTool: async (call, api, context) => {
           await branch.refresh(api, context);
-          // 闸门原地改入参（超时下限、用户在审批里改的参数）：给它一份拷贝，改了就回传新参数
-          const input = JSON.parse(JSON.stringify(call.arguments)) as Record<string, unknown>;
-          const event: ToolCallLike = { toolCallId: call.id, toolName: call.name, input };
-          const held = planGate.check(event, branch.entries);
-          if (held !== null) return held.block === true ? { block: held.reason ?? "" } : undefined;
-          const gate = createToolCallGate(
-            currentMode,
-            (request) => runtime.permissions.ask(command.sessionId, request, context),
-            command.protectedPaths,
-            command.cwd,
-          );
-          const verdict = await gate(event);
-          if (verdict.block === true) return { block: verdict.reason ?? "Tool execution was blocked" };
-          return JSON.stringify(input) === JSON.stringify(call.arguments) ? undefined : { arguments: input as JsonObject };
+          const round = findRound(branch.entries, call.id);
+          if (round !== null) {
+            rounds.noteRound(
+              round.calls.map((each) => each.toolCallId),
+              round.calls.some((each) => byTool.get(each.toolName)?.executionMode === "sequential"),
+            );
+          }
+          // 按调用顺序准备（pi 的节奏）：前面的调用判完才轮到这一个；判完（放行 / 拒绝 / 抛错）都要放下一个
+          await rounds.beforePrepare(call.id, context);
+          try {
+            observer.toolStart?.(call.id, call.name, call.arguments);
+            // 闸门原地改入参（超时下限、用户在审批里改的参数）：给它一份拷贝，改了就回传新参数
+            const input = JSON.parse(JSON.stringify(call.arguments)) as Record<string, unknown>;
+            const event: ToolCallLike = { toolCallId: call.id, toolName: call.name, input };
+            const held = planGate.check(event, branch.entries);
+            if (held !== null) return held.block === true ? { block: held.reason ?? "" } : undefined;
+            const toolGate = createToolCallGate(
+              currentMode,
+              (request) => runtime.permissions.ask(command.sessionId, request, context),
+              command.protectedPaths,
+              command.cwd,
+            );
+            const verdict = await toolGate(event);
+            if (verdict.block === true) return { block: verdict.reason ?? "Tool execution was blocked" };
+            // 放行之后记「改之前」（拒掉的调用不执行，记了是假账）——与旧内核 noteAllowed 同一个时点、同一份入参
+            await observer.toolAllowed?.(call.id, call.name, input);
+            return JSON.stringify(input) === JSON.stringify(call.arguments) ? undefined : { arguments: input as JsonObject };
+          } finally {
+            rounds.settled(call.id);
+          }
         },
         afterTool: (call, result) => unwrapHarnessError(call, result),
       }),
@@ -374,49 +479,91 @@ export function previousTools(messages: readonly Message[], wire: Pick<TurnWire,
 }
 
 /**
- * 跑一轮：装配 → 装扩展 → 配会话的 agent → 提交这一句 → 等它结局。
+ * 一轮里提交之前 / 之后外面要做的事（kernel-session.ts 给；测试缺省）：
+ * - observer：见 TurnObserver；
+ * - echo：这一句要提交了（附图已缩放）——kernel-session 在这里回显、跑意图闸门；返回 null = 这一轮不提交
+ *   （停止 / 闸门取消），返回字符串 = 实际发给模型的正文（意图注入块 + 原话）；
+ * - admitted：这一句已被 durable 收下（发 phase turn 用，旧内核的 agent_start）；
+ * - continueRun：不加新消息，接着跑上次被中断的那一轮（durable 的 continue）。
+ */
+export interface TurnHooks {
+  observer?: TurnObserver;
+  echo?: (images: Awaited<ReturnType<typeof preparePromptImages>>, promptText: string) => Promise<string | null>;
+  admitted?: () => void;
+  continueRun?: boolean;
+}
+
+/** 「继续」落在半截回答上时发给模型、也回显给用户的那句话 */
+const CONTINUE_PROMPT = "Continue from where you were interrupted.";
+
+export type TurnOutcome = { status: "done" | "unanswered" | "skipped"; reason?: string };
+
+/**
+ * 跑一轮：装配 → 装扩展 → 配会话的 agent → 提交这一句 → 等会话空闲。
  * 模型、思考档、cwd 每轮都随命令写进会话的 agent（与旧内核「每轮显式给，不退全局配置」同一条纪律）。
+ *
+ * **等到会话空闲，而不是只等这一句的结局**：父会话的插话（steer）在这一轮回答之后才放进来时，durable 用它再开一个 run；
+ * 旧内核里 pi 的 agent-loop 在同一次 prompt() 里接着处理它——对界面都是「这一轮还没完」，phase idle 要等它们都结束。
  */
 export async function runTurn(
-  command: KernelTurnCommand,
+  command: KernelTurnCommand | KernelContinueCommand,
   runtime: KernelTurnRuntime,
   target: KernelTurnTarget,
   compaction: NonNullable<Parameters<Conversation["configure"]>[0]["compaction"]>,
-): Promise<{ status: "done" | "unanswered"; reason?: string }> {
+  hooks: TurnHooks = {},
+): Promise<TurnOutcome> {
   const context = BACKGROUND_CONTEXT;
-  const wire = await TurnWire.open(target.conversation, command.attachmentsDir, context);
+  const turnCommand: KernelTurnCommand = command.type === "continueRun" ? { ...command, type: "submit", text: "" } : command;
+  const wire = await TurnWire.open(target.conversation, turnCommand.attachmentsDir, context);
   const { messages } = await target.conversation.context(context);
   // 本轮轮号（按用户消息计，1 起；与旧内核 echoAndPrompt 同口径：模型上下文里的 user 消息，不数压缩摘要与扩展消息）
   const memoryTurn = liftMessages(messages, new Set()).filter((message) => (message as { role?: unknown }).role === "user").length + 1;
-  const assembled = await assembleTurn(command, runtime, target, previousTools(messages, wire), wire, memoryTurn);
+  const assembled = await assembleTurn(turnCommand, runtime, target, previousTools(messages, wire), wire, memoryTurn, hooks.observer);
   target.registry.install(assembled.extension);
   await target.conversation.configure(
     {
       model: { provider: target.model.provider, modelId: target.model.id },
-      thinkingLevel: command.thinkingLevel,
-      cwd: command.cwd,
+      thinkingLevel: turnCommand.thinkingLevel,
+      cwd: turnCommand.cwd,
       compaction,
       extensions: [assembled.extension],
     },
     context,
   );
-  // 用户这一句：正文（粘贴块、文件引用拼进去，与旧内核同一个 composePromptText）+ 附图（同一个缩放）
-  const images = await preparePromptImages(command.images);
-  await wire.notePromptImages(images, command.attachmentsDir, context);
-  // 轮前记忆召回（与旧内核同一个函数）：召回块不拼进原话，首个请求时由 beforeRequest 挂到这一句上
-  wire.memory.pending =
-    command.sessionMemory === true
-      ? await recallMemories(
-          runtime.broker,
-          command.sessionId,
-          command.text,
-          memoryTurn,
-          { workspaceId: command.workspaceId, cwd: command.cwd },
-          !isChildSession(command),
-        )
-      : null;
-  const text = composePromptText(command.text, command.pasted ?? [], command.files ?? []);
-  const submission = await target.conversation.submit({ type: "input", content: [{ type: "text", text }, ...forModel(images)] }, context);
+  let submission: Submission;
+  const last = messages.findLast((message) => message.role !== "system");
+  if (command.type === "continueRun" && (last?.role === "user" || last?.role === "toolResult")) {
+    // 上下文停在一句没答的话或工具结果上（被打断的工具得到 interrupted 结果）：durable 的 continue 直接接着答
+    submission = await target.conversation.submit({ type: "continue" }, context);
+  } else if (command.type === "continueRun") {
+    // 停在半截回答上（模型说到一半进程没了：durable 把半截留成 aborted 条目，它也在上下文里，continue 会判「没东西可答」）：
+    // 发一句明说的「接着说」，回显在转录里——不悄悄替用户补话
+    const text = CONTINUE_PROMPT;
+    hooks.observer?.echoContinue?.(text);
+    submission = await target.conversation.submit({ type: "input", content: [{ type: "text", text }] }, context);
+  } else {
+    // 用户这一句：正文（粘贴块、文件引用拼进去，与旧内核同一个 composePromptText）+ 附图（同一个缩放）
+    const images = await preparePromptImages(command.images);
+    await wire.notePromptImages(images, command.attachmentsDir, context);
+    // 轮前记忆召回（与旧内核同一个函数）：召回块不拼进原话，首个请求时由 beforeRequest 挂到这一句上
+    wire.memory.pending =
+      command.sessionMemory === true
+        ? await recallMemories(
+            runtime.broker,
+            command.sessionId,
+            command.text,
+            memoryTurn,
+            { workspaceId: command.workspaceId, cwd: command.cwd },
+            !isChildSession(command),
+          )
+        : null;
+    const promptText = composePromptText(command.text, command.pasted ?? [], command.files ?? []);
+    const text = hooks.echo === undefined ? promptText : await hooks.echo(images, promptText);
+    if (text === null) return { status: "skipped" };
+    submission = await target.conversation.submit({ type: "input", content: [{ type: "text", text }, ...forModel(images)] }, context);
+  }
+  hooks.admitted?.();
   const settled = await submission.wait(context);
-  return settled.status === "done" ? { status: "done" } : { status: "unanswered", reason: "reason" in settled ? String(settled.reason) : undefined };
+  await target.conversation.waitForIdle(context);
+  return settled.status === "done" ? { status: "done" } : { status: "unanswered", ...("reason" in settled ? { reason: String(settled.reason) } : {}) };
 }

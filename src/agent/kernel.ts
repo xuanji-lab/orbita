@@ -23,6 +23,7 @@ import {
   createRegistry,
   defineDoc,
   Harness,
+  LiveDoc,
   ProviderDoc,
   type AgentChange,
   type ConversationId,
@@ -34,7 +35,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { ProviderSecrets } from "../shared/agent-ipc.ts";
-import { KERNEL_LIBRARY_NAME, type KernelTurnCommand, type KernelTurnResult } from "../shared/kernel.ts";
+import { isDurableBookRef, KERNEL_LIBRARY_NAME } from "../shared/kernel.ts";
 import type { ThinkingLevel } from "../shared/thinking.ts";
 import { COMPACTION_DEFAULT } from "../shared/settings.ts";
 import { chooseCacheRetention, type SessionRole } from "./cache-retention.ts";
@@ -42,10 +43,10 @@ import { compactionKeepRecentTokens, compactionReserveTokens } from "./compactio
 import { LEGACY_KINDS, planLegacyMigration, type LegacyDraft, type LegacyWireSeed } from "./legacy-migrate.ts";
 import { messageSignature, WireDoc } from "./kernel-wire.ts";
 import { RETRY_BASE_DELAY_MS, RETRY_MAX_ATTEMPTS, RETRY_MAX_DELAY_MS } from "./retry-policy.ts";
-import { runTurn, type KernelTurnRuntime } from "./kernel-turn.ts";
+import type { KernelTurnTarget } from "./kernel-turn.ts";
 import { piRequestOptions } from "./kernel-prompt.ts";
 import { ccBillingPatch } from "./cc-billing-patch.ts";
-import { turnToolFlags } from "./turn-tools.ts";
+import { turnToolFlags, type TurnInput } from "./turn-tools.ts";
 import { withOpencodeSession } from "./opencode-session.ts";
 
 /**
@@ -211,6 +212,16 @@ export function withBillingPatch(inner: Models): Models {
   });
 }
 
+/** KernelPool.target 的结局：durable 那一侧备好的会话（一轮要的 KernelTurnTarget + 它的 Harness 与压缩设定） */
+export type KernelTarget =
+  | (KernelTurnTarget & {
+      ok: true;
+      harness: Harness;
+      compaction: NonNullable<AgentChange["compaction"]>;
+      migration: "none" | "migrated" | "remigrated";
+    })
+  | { ok: false; reason: string; migrationFailed?: true };
+
 export interface KernelPoolOptions {
   /** 库目录（`<userData>/durable`）；库文件名都相对它 */
   dir: string;
@@ -284,6 +295,7 @@ export class KernelPool {
         },
         BACKGROUND_CONTEXT,
       );
+      await this.stopInterrupted(harness, library);
       // 存储出错 durable 会自己关掉 Harness：从池里摘掉，下次打开重来
       void harness.closed.then(() => {
         if (this.libraries.get(library) === opening) this.libraries.delete(library);
@@ -295,6 +307,26 @@ export class KernelPool {
       if (this.libraries.get(library) === opening) this.libraries.delete(library);
     });
     return opening;
+  }
+
+  /**
+   * 上一个进程留下的在途工作（崩溃 / 被杀时正在跑的轮、阻塞式压缩）：**前台会话不自动续跑**（方案 §2.2 第 10 行的默认）——
+   * durable 重开后 resume() 会把它们接着跑完，在用户不在场时花钱、跑命令。打开库时先 abortTask 它们（队列与上下文都留着），
+   * 等它们收尾；界面上这条会话是「上次被中断」，由用户点「继续」（submit continue）再接着答。
+   */
+  private async stopInterrupted(harness: Harness, library: string): Promise<void> {
+    const index = (await harness.snapshot(SessionIndexDoc, BACKGROUND_CONTEXT))?.sessions ?? {};
+    const stopped: ConversationId[] = [];
+    for (const id of Object.values(index)) {
+      const conversationId = id as ConversationId;
+      const live = await harness.snapshot(LiveDoc, conversationId, BACKGROUND_CONTEXT);
+      const tasks = [...(live?.run === undefined ? [] : [live.run.taskId]), ...(live?.compactions ?? []).map((status) => status.taskId)];
+      if (tasks.length === 0) continue;
+      for (const task of tasks) await harness.abortTask(task, BACKGROUND_CONTEXT);
+      stopped.push(conversationId);
+    }
+    for (const conversationId of stopped) await (await harness.conversation(conversationId, BACKGROUND_CONTEXT))?.waitForIdle(BACKGROUND_CONTEXT);
+    if (stopped.length > 0) this.options.log?.(`[kernel] ${library}：上次留下 ${stopped.length} 条会话在跑，已停下（不自动续跑）`);
   }
 
   /**
@@ -419,10 +451,10 @@ export class KernelPool {
   }
 
   /**
-   * 用新内核跑一轮（脚本直驱的那条路：这一步对话主循环仍是旧内核）。会话不在库里就先迁 / 新建，再跑。
-   * 不抛错：失败折成 `{ ok: false, reason }`。
+   * 为一条会话的这一轮备好 durable 那一侧：开库、迁 / 重迁旧会话（发消息之前，见 open）、注册模型。
+   * 不抛错：失败折成 `{ ok: false, reason }`；迁移那一步失败另带 migrationFailed（会话回落只读）。
    */
-  async turn(input: { library: string; command: KernelTurnCommand; runtime: KernelTurnRuntime; compaction: KernelAgent["compaction"] }): Promise<KernelTurnResult> {
+  async target(input: { library: string; command: TurnInput; compaction: KernelAgent["compaction"] }): Promise<KernelTarget> {
     const { command } = input;
     try {
       const agent: KernelAgent = {
@@ -434,51 +466,27 @@ export class KernelPool {
         role: turnToolFlags(command).role,
         compaction: input.compaction,
       };
-      const opened = await this.open({
-        library: input.library,
-        sessionId: command.sessionId,
-        legacy: command.piSessionFile === undefined ? null : { piSessionFile: command.piSessionFile },
-        agent,
-      });
-      if (!opened.ok) return { ok: false, reason: opened.reason };
+      const legacy = command.piSessionFile === undefined || isDurableBookRef(command.piSessionFile) ? null : { piSessionFile: command.piSessionFile };
+      const opened = await this.open({ library: input.library, sessionId: command.sessionId, legacy, agent });
+      if (!opened.ok) return { ok: false, reason: opened.reason, migrationFailed: true };
       const library = await this.library(input.library);
       const conversation = await library.harness.conversation(opened.conversationId as ConversationId, BACKGROUND_CONTEXT);
       if (conversation === undefined) return { ok: false, reason: `库里找不到会话 ${opened.conversationId}` };
       const model = this.options.registerProvider?.(agent);
       if (model === undefined) return { ok: false, reason: `unknown model "${command.provider.id}/${command.modelId}"` };
       const provider = await library.harness.snapshot(ProviderDoc, conversation.id, BACKGROUND_CONTEXT);
-      const outcome = await runTurn(
-        command,
-        input.runtime,
-        { registry: library.registry, conversation, model, providerSessionId: provider?.sessionId ?? "" },
-        kernelCompaction(agent, model.contextWindow),
-      );
       return {
         ok: true,
-        conversationId: conversation.id,
+        harness: library.harness,
+        registry: library.registry,
+        conversation,
+        model,
+        providerSessionId: provider?.sessionId ?? "",
+        compaction: kernelCompaction(agent, model.contextWindow),
         migration: opened.remigrated ? "remigrated" : opened.migrated ? "migrated" : "none",
-        status: outcome.status,
-        ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
       };
     } catch (error) {
       return { ok: false, reason: error instanceof Error ? error.message : String(error) };
-    }
-  }
-
-  /**
-   * 停这条会话正在跑的轮（脚本直驱的停止）。这一步没有排队（队列仍在 renderer、主循环仍是旧内核），
-   * 所以用 Conversation.abort()；Esc 不清队的语义（abortTask(run) + continue）在主循环切过来那一步做。
-   * 卡在审批上的轮也停得下：审批等待听 abort（kernel-turn.ts 的 PermissionWaiter）。
-   */
-  async abort(sessionId: string): Promise<void> {
-    for (const opening of this.libraries.values()) {
-      const opened = await opening.catch(() => null);
-      if (opened === null) continue;
-      const id = (await opened.harness.snapshot(SessionIndexDoc, BACKGROUND_CONTEXT))?.sessions[sessionId];
-      if (id === undefined) continue;
-      const conversation = await opened.harness.conversation(id as ConversationId, BACKGROUND_CONTEXT);
-      await conversation?.abort(BACKGROUND_CONTEXT);
-      return;
     }
   }
 

@@ -1,28 +1,33 @@
 /**
  * 新内核（pi-durable）的 utility 进程入口——与 agent / terminal / memory runtime 平行的第四个入口
- * （electron.vite.config 的 main 多入口）。**薄壳**：库池与迁移在 kernel.ts / legacy-migrate.ts
- * （纯模块，`node --test` 直接测），这里只管 parentPort 收发与模型目录。
+ * （electron.vite.config 的 main 多入口）。**薄壳**：会话生命周期在 kernel-session.ts、库池与迁移在 kernel.ts /
+ * legacy-migrate.ts（纯模块，`node --test` 直接测），这里只管 parentPort 收发、模型目录与进程级单例。
  *
- * 这一步（换内核第二步）只由脚本直驱：主进程不拉起它（对话主循环仍是旧内核），开关关着时这个进程不存在、
- * agent runtime 一个字节都没变。脚本发 init → turn，替主进程回审批与工具请求（agent 命令）。
- * 单独一个进程而不是塞进 agent runtime：这一步不切换主循环，agent 进程不该为一个默认关着的开关
- * 多加载一整套 durable（启动时间与常驻内存）。
- * 主循环迁过来那一步，库池随之搬进 agent 进程，这个入口删掉。
+ * 开关 ORBITA_DURABLE_KERNEL=1 开着时主进程拉起它，界面里根会话的对话主循环由它跑；关着时这个进程不存在，
+ * agent runtime 一个字节都没变（子会话、标题以外的家务活、目录刷新仍在 agent runtime）。
+ * 单独一个进程而不是塞进 agent runtime：开关关着时 agent 进程不该为它多加载一整套 durable（启动时间与常驻内存）；
+ * 删旧内核那一步两个进程合一。
  *
  * 为什么是 utility 进程：SQLite 的同步调用（node:sqlite 是同步 API）与大会话迁移的 JSON 处理
- * 都不该占主进程的事件循环；崩溃也不带走窗口。
+ * 都不该占主进程的事件循环；崩溃也不带走窗口（主进程把在跑的轮标成「上次被中断」，见 host-core.ts）。
  */
 import type { Models } from "@earendil-works/pi-ai";
 import type { AgentEvent } from "../shared/agent-ipc.ts";
-import { COMPACTION_DEFAULT } from "../shared/settings.ts";
-import { kernelLibraryName, type KernelCommand, type KernelMessage } from "../shared/kernel.ts";
+import type { KernelCommand, KernelMessage, KernelSessionCommand } from "../shared/kernel.ts";
+import { IntentConfirmWaiter } from "./intent-confirm-wait.ts";
 import { KernelPool } from "./kernel.ts";
+import { KERNEL_CHILD_ENV, kernelChildTag, reapKernelChildren } from "./kernel-children.ts";
+import { KernelSessions } from "./kernel-session.ts";
 import { PermissionWaiter, type KernelTurnRuntime } from "./kernel-turn.ts";
 import { McpHub } from "./mcp.ts";
 import { createModelRuntime } from "./model-catalog.ts";
 import { registerAndResolveModel } from "./model-registration.ts";
 import { isToolReply, RequestBroker, toolReplyResult } from "./request-broker.ts";
 import { createShellPathResolver } from "./shell-path.ts";
+import { preferIPv4 } from "../shared/dial-v4.ts";
+
+// pi-ai 的模型调用与旧内核同一个坑（同一台机器、同一个全局 fetch）
+preferIPv4();
 
 /** Electron 的 utility 进程 parentPort 的结构面（memory runtime 的同款） */
 type ParentPortLike = {
@@ -59,7 +64,7 @@ function sendAgent(event: AgentEvent): void {
 
 /**
  * 跑轮用的进程级依赖：与旧内核 runtime.ts 的同名单例同语义——工具请求通道（RequestBroker，主进程是唯一对端）、
- * MCP 连接（按工作区分片）、审批等待表、bash 路径探测缓存。
+ * MCP 连接（按工作区分片）、审批与意图确认的等待表、bash 路径探测缓存。
  */
 const turnRuntime: KernelTurnRuntime = {
   broker: new RequestBroker((event) => sendAgent(event as AgentEvent)),
@@ -68,6 +73,8 @@ const turnRuntime: KernelTurnRuntime = {
   send: sendAgent,
   resolveShellPath: createShellPathResolver(),
 };
+const intentConfirm = new IntentConfirmWaiter(sendAgent);
+let sessions: KernelSessions | null = null;
 
 function models(): Models {
   if (modelRuntime === null) throw new Error("kernel runtime is not initialized");
@@ -77,6 +84,11 @@ function models(): Models {
 async function init(dir: string): Promise<void> {
   modelRuntime = await createModelRuntime();
   const runtime = modelRuntime;
+  // 孤儿善后：bash 子进程挂上这个库目录的标签；上一次连主进程一起被杀留下的，现在清掉
+  const tag = kernelChildTag(dir);
+  turnRuntime.childEnv = { [KERNEL_CHILD_ENV]: tag };
+  const reaped = await reapKernelChildren(tag);
+  if (reaped > 0) console.error(`[kernel-runtime] 清掉上一次留下的 ${reaped} 个 shell 子进程`);
   pool = new KernelPool({
     dir,
     models,
@@ -86,6 +98,35 @@ async function init(dir: string): Promise<void> {
     },
     log: (text) => console.error(text),
   });
+  sessions = new KernelSessions({
+    pool,
+    runtime: turnRuntime,
+    intentConfirm,
+    settled: (sessionId, result) => post({ type: "turnSettled", sessionId, result }),
+    // 换模型的校验与旧内核 setLedgerModel 同一条路径：一次性 ModelRuntime 注册 + 解析
+    resolveModel: async (provider, modelId) => registerAndResolveModel(await createModelRuntime(), provider, modelId),
+  });
+}
+
+/**
+ * 一条会话命令。与旧内核的命令循环同一个语义：每条命令各自跑、不互相排队（停止 / 插话 / 切档要能插进正在跑的轮），
+ * 同一会话的轮由 turn-cycle 的占坑保证不并发。失败报 failed（同旧内核）。
+ */
+function runSession(root: string, command: KernelSessionCommand, ready: Promise<void>): void {
+  void ready
+    .then(() => {
+      if (sessions === null) throw new Error("kernel runtime is not initialized");
+      return sessions.handle(root, command);
+    })
+    .catch((cause: unknown) => {
+      console.error("[kernel-runtime] 命令失败", command.type, cause);
+      sendAgent({ type: "failed", sessionId: command.sessionId, message: cause instanceof Error ? cause.message : String(cause) });
+    });
+}
+
+async function drop(library: string): Promise<void> {
+  if (pool === null) throw new Error("kernel runtime is not initialized");
+  await pool.drop(library);
 }
 
 parentPort.on("message", (event: { data: unknown }) => {
@@ -99,40 +140,44 @@ parentPort.on("message", (event: { data: unknown }) => {
   }
   const ready = initialized ?? Promise.reject(new Error("kernel runtime got a command before init"));
   if (command.type === "session") {
-    const inner = command.command;
-    if (inner.type === "submit") {
-      void ready
-        .then(() => {
-          if (pool === null) throw new Error("kernel runtime is not initialized");
-          return pool.turn({
-            library: kernelLibraryName(command.root),
-            command: inner,
-            runtime: turnRuntime,
-            compaction: {
-              enabled: inner.compaction?.enabled ?? true,
-              reservePercent: inner.compaction?.reservePercent ?? COMPACTION_DEFAULT.reservePercent,
-            },
-          });
-        })
-        .then((result) => post({ type: "turnSettled", sessionId: inner.sessionId, result }))
-        .catch((cause: unknown) =>
-          post({ type: "turnSettled", sessionId: inner.sessionId, result: { ok: false, reason: cause instanceof Error ? cause.message : String(cause) } }),
-        );
-    } else if (inner.type === "abort") {
-      void ready.then(() => pool?.abort(inner.sessionId)).catch((cause: unknown) => console.error("[kernel] 停止失败", cause));
-    }
+    runSession(command.root, command.command, ready);
     return;
   }
   if (command.type === "reply") {
     const forwarded = command.command;
     if (forwarded.type === "permissionAnswer") {
       turnRuntime.permissions.answer(forwarded.requestId, forwarded.answer);
+    } else if (forwarded.type === "intentConfirmResult") {
+      intentConfirm.answer(forwarded.requestId, forwarded.decision);
     } else if (isToolReply(forwarded)) {
       // 工具请求的回执（*Result）：与旧内核同一份翻法（request-broker.ts），结掉在途的工具调用
       turnRuntime.broker.resolve(forwarded.requestId, toolReplyResult(forwarded));
     }
     return;
   }
+  if (command.type === "mcpReload") {
+    // 全拆，下一轮开机按新配置重建（与旧内核同义）
+    void turnRuntime.mcpHub.reset().then(() => sendAgent({ type: "mcp", servers: turnRuntime.mcpHub.describe() }));
+    return;
+  }
+  if (command.type === "drop") {
+    void ready
+      .then(() => drop(command.library))
+      .then(() => post({ type: "dropped", requestId: command.requestId }))
+      .catch((cause: unknown) => post({ type: "dropped", requestId: command.requestId, error: cause instanceof Error ? cause.message : String(cause) }));
+    return;
+  }
+  if (command.type === "shutdown") {
+    void ready
+      .then(async () => {
+        await sessions?.shutdown();
+        await pool?.closeAll();
+      })
+      .catch((cause: unknown) => console.error("[kernel-runtime] 退出收尾失败", cause))
+      .finally(() => post({ type: "shutdownDone", requestId: command.requestId }));
+    return;
+  }
+  command satisfies never;
 });
 
 post({ type: "ready" });
