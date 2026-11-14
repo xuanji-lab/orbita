@@ -539,8 +539,9 @@ export const en = {
         coldChanged: (file: string) => `${file}, which holds the older finished records, was modified. It was left as it is.`,
         /** 条数写成「N 条进行中 + M 条已归档」，免得被读成单一文件；找得到被改名的旧目录就说它现在在哪 */
         dataDirReplaced: (records: number, archived: number, movedTo: string) =>
-          `The data folder was renamed or deleted. Automation records were written back (${records} in progress + ${archived} archived); other data such as sessions and settings was not.` +
-          (movedTo === "" ? "" : ` The old folder is now at ${movedTo}.`),
+          movedTo === ""
+            ? `The data folder was renamed or deleted. Automation records were written back (${records} in progress + ${archived} archived); everything else (sessions, settings, providers…) was not restored.`
+            : `The data folder was replaced. Automation records were written back (${records} in progress + ${archived} archived); everything else (sessions, settings, providers…) is still in the old, renamed folder: ${movedTo}`,
         /** 文件读不了（权限被改）：没法确认它有没有被动过 */
         unreadable: (file: string) => `${file} can't be read (its permissions were changed). Orbita can't tell whether it was edited; it re-checks automatically once it is readable again.`,
         /** 事件文件 / 已读位置被动过：已按内存写回 */
