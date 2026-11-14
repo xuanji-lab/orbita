@@ -21,6 +21,8 @@ export function turnFields(
   attachmentsDir: string,
   /** 工具禁区（sessions/ 与 pi-sessions/）：主进程定，随每轮发给闸门 */
   protectedPaths: string[],
+  /** 工具禁区的单文件清单（automations.json）：命中判定与拒绝文案与目录版不同，语义同上 */
+  protectedFiles: string[],
   /** 开轮环境（skill 集合目录 + MCP 配置 + 压缩偏好 + Git 标识 + 目录清单）：无状态化后每轮命令都要带全 */
   environment: {
     skillsDirs: string[];
@@ -38,7 +40,7 @@ export function turnFields(
     /** 所属工作区名字（store-tools 的 scope 指引讲归属用）；语义同命令字段——缺席 = 翻不出名字 */
     workspaceName?: string;
   },
-): Pick<Extract<AgentCommand, { type: "submit" }>, "sessionId" | "cwd" | "workspaceId" | "workspaceName" | "provider" | "modelId" | "mode" | "thinkingLevel" | "piSessionDir" | "attachmentsDir" | "piSessionFile" | "protectedPaths" | "skillsDirs" | "directories" | "mcpServers" | "compaction" | "gitAttribution" | "attributionLanguage" | "pdfCitations" | "planFirst" | "pluginTools"> {
+): Pick<Extract<AgentCommand, { type: "submit" }>, "sessionId" | "cwd" | "workspaceId" | "workspaceName" | "provider" | "modelId" | "mode" | "thinkingLevel" | "piSessionDir" | "attachmentsDir" | "piSessionFile" | "protectedPaths" | "protectedFiles" | "skillsDirs" | "directories" | "mcpServers" | "compaction" | "gitAttribution" | "attributionLanguage" | "pdfCitations" | "planFirst" | "pluginTools"> {
   // workspaceName 缺席时彻底不进命令对象（可送化与深比较都要稳定形状）：
   // 有工作区但翻不出名字是「未知」，不是「无工作区」——两态靠 workspaceId 区分
   const { workspaceName, ...rest } = environment;
@@ -55,6 +57,7 @@ export function turnFields(
     piSessionDir,
     attachmentsDir,
     protectedPaths,
+    protectedFiles,
     ...rest,
     // 续会话的唯一通路：把 pi 自己的本子还给它（runtime 的 SessionManager.open）。
     // 缺了它 runtime 每轮都新建本子——模型看不到前文，created 事件还会把 meta 改指到

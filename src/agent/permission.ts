@@ -16,8 +16,10 @@ import {
   type PermissionAnswer,
   type PermissionMode,
 } from "../shared/permission.ts";
-import { isAbsolute, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { realpathSync } from "node:fs";
 import type { ContextMessage } from "./image-byte-budget.ts";
+import { dataDirRefusalMessage, defaultGuardEnv, protectedCommandRefusal, type CommandGuardEnv } from "./protected-command.ts";
 
 /**
  * **本会话实际启用的 pi 内建工具集**。真源一份、两个消费者：
@@ -65,8 +67,15 @@ export const ENABLED_BUILTIN_TOOLS = ["bash", "edit", "find", "grep", "ls", "rea
  * `mcp__server__tool` 全部由调用方从注册表里拿来传入）——不再只枚举内建的那几个，
  * 否则 plan 模式下模型不知道 MCP 工具会被拒，照样一头撞墙（已知缺口 #4）。
  * MCP 工具没有「只读」豁免，分桶全由 decidePermission 算，不在提示词里另立规则。
+ *
+ * @param protectedFiles 受保护的单文件（绝对路径）：说明里点名它们的文件名，模型被告知的禁区名单
+ * 与闸门真正拦的同一份（以前只写死 automations.json，归档文件对模型是隐形的）。
  */
-export function describePermissionMode(mode: PermissionMode, extraToolNames: readonly string[] = []): string {
+export function describePermissionMode(
+  mode: PermissionMode,
+  extraToolNames: readonly string[] = [],
+  protectedFiles: readonly string[] = [],
+): string {
   const allow: string[] = [];
   const ask: string[] = [];
   const deny: string[] = [];
@@ -91,10 +100,14 @@ export function describePermissionMode(mode: PermissionMode, extraToolNames: rea
         "change anything on disk — describe the change instead, and say that this mode cannot apply it.",
     );
   }
+  const recordNames = [...new Set(protectedFiles.map((file) => basename(file)))];
   lines.push(
     "Immutable in every mode: task session files (transcripts and their metadata) can never be " +
-      "written by any tool. Do not attempt it, including via shell commands — describe the change " +
-      "to the user instead; only the user can modify session data.",
+      `written by any tool, and neither can the automation records (${recordNames.length > 0 ? recordNames.join(", ") : "automations.json"}) — manage ` +
+      "automations only through the automation tools. Do not attempt to write, move, rename or delete these, or " +
+      "cd into the folder that holds them, or rename / delete / chmod that folder or any folder above it, including via " +
+      "shell commands — describe the change to the user instead; only the user can modify session data. " +
+      "Read automation records with the read tool or automation_list. Your session workbench stays yours to write.",
   );
   lines.push("</orbita-permission>");
   return lines.join("\n");
@@ -156,19 +169,84 @@ function raiseCommandTimeout(toolName: string, input: Record<string, unknown>): 
  * posix 保持原样——文件系统大小写敏感，不折。
  */
 function foldPath(value: string): string {
-  if (process.platform !== "win32") return value;
-  return value.replaceAll("\\", "/").replace(/\/{2,}/g, "/").toLowerCase();
+  // 小写一律折：macOS APFS 与 Windows NTFS 默认都不分大小写（2026-11-14 验收：大写变体能指到同一个文件）；
+  // Linux 上多折一点只会多拦一个大小写不同的同名文件，安全向
+  const slashed = process.platform === "win32" ? value.replaceAll("\\", "/").replace(/\/{2,}/g, "/") : value;
+  return slashed.toLowerCase();
+}
+
+/**
+ * 路径的真实位置：跟符号链接走（write / edit 的目标可能是指向受保护文件的链接）；
+ * 文件还不存在时，对「已存在的最深一级父目录」取真实路径再接上剩下的名字。
+ */
+function realpathLoose(path: string): string {
+  const start = resolve(path);
+  let current = start;
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      const real = realpathSync(current);
+      return tail.length === 0 ? real : join(real, ...tail.reverse());
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return start;
+      tail.push(basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
+ * 命令串比前把引号与转义空格折平：真命令里路径常被引号分段（`~/'Application Support'/x`）
+ * 或反斜杠转义空格（`Application\ Space`），折平后字面量才对得上。只剥引号、只把 `\ `
+ * 折成空格——**不能剥所有反斜杠**：posix 下它还是路径分隔符（`sessions\abc` 剥掉就成
+ * `sessionsabc`，边界判定反而漏拦）。折的是**比对用的副本**，不改真命令；副作用方向
+ * 是「多拦一条不常觊觎的命令」，安全向。
+ */
+function loosenShellQuoting(value: string): string {
+  return value.replaceAll(/["']/g, "").replaceAll("\\ ", " ");
+}
+
+/**
+ * 把命令串里参数位置的 `~` / `~/` 展开成家目录，给字面量比对用（2026-11-14 随自动化
+ * 记录保护补上；此前 sessions/ 也拦不住 `~` 形式——受保护路径都是绝对路径，`~/...`
+ * 字面量对不上）。只认前面是行首/空白/引号/`=`/`;`/`&`/`|`/`(`/重定向、后面跟 `/`
+ * 或结尾的 `~`；`~user`、`~+`、`$HOME`、`%APPDATA%` 这类展开规则各不相同，不认，
+ * 归入「蓄意混淆」的既定边界。只改比对用的副本，不改真命令。
+ */
+function expandTildeLiterals(command: string, home: string): string {
+  return command.replaceAll(/(^|[\s"'=; &|()><])~(?=\/|\s|$)/g, (_match: string, lead: string) => lead + home);
+}
+
+/**
+ * 单命令里 `needle` 是否落在路径边界上：`.../automations.json` 后面跟分隔符/引号/空白/
+ * 结尾才算命中，`.../automations.jsonx`、`.../automations-json` 这种相邻名字是另一个
+ * 文件，不拦。目录与单文件两条清单共用。
+ */
+function commandMentions(haystack: string, needle: string): boolean {
+  let index = haystack.indexOf(needle);
+  while (index !== -1) {
+    const next = haystack[index + needle.length];
+    if (next === undefined || !/[a-z0-9_-]/i.test(next)) return true;
+    index = haystack.indexOf(needle, index + 1);
+  }
+  return false;
 }
 
 /**
  * 会话文件不可变（2026-09-18 立规）：protectedPaths（sessions/ 与 pi-sessions/）
  * 对工具面**全档只读**——这条检查在权限档判定**之前**跑，Skip 也抬不掉。
+ * 自动化记录不可变（2026-11-13 用户提出：智能体不该能把自己的自动化记录删掉）：protectedFiles（单文件，目前只有
+ * automations.json）同一等级、同一条路。它记的是「智能体定时做过什么」，智能体
+ * 删改它 = 丢痕迹；智能体要改自动化走自动化工具（那套工具本来就不能删）。
  *
- * 拦截力度如实说：write / edit 是**路径精确拦**（resolve 后判前缀）；bash /
- * powershell 是**命令字面量拦**（受保护路径出现在命令串里就拒）——拦得住常规
- * 引用，拦不住刻意混淆（变量间接、编码变换）。对「防误伤、防顺手」足够；
- * 对蓄意对抗不是防线，那是 OS 级沙箱的活。MCP server 是用户显式安装的
- * 可信组件，不在本闸管辖内。读不受限——「只能读」正是这里要保的状态。
+ * 拦截力度如实说：write / edit 是**路径精确拦**（目录判前缀；单文件判相等与
+ * `<file>.` 开头的兄弟——原子写临时文件与坏文件隔离都长这样）；bash / powershell
+ * 是**命令字面量拦**（受保护路径出现在命令串里就拒；比对前展开参数位置的 `~`、
+ * 剥掉引号与反斜杠转义）——拦得住常规引用与引号分段，拦不住刻意混淆（变量间接、
+ * 编码变换）。对「防误伤、防顺手」足够；对蓄意对抗不是防线，那是 OS 级沙箱的活。
+ * MCP server 是用户显式安装的可信组件，不在本闸管辖内。读不受限——「只能读」
+ * 正是这里要保的状态。
  *
  * 命中返回讲给模型听的拒绝理由（改道指引），没命中返回 null。
  */
@@ -177,18 +255,33 @@ export function protectedPathRefusal(
   input: Record<string, unknown>,
   protectedPaths: readonly string[],
   cwd: string,
+  protectedFiles: readonly string[] = [],
+  guard: CommandGuardEnv = defaultGuardEnv(),
 ): string | null {
-  if (protectedPaths.length === 0) return null;
+  if (protectedPaths.length === 0 && protectedFiles.length === 0) return null;
 
   if (PATH_MUTATING_TOOLS.has(toolName)) {
     const target = input["path"];
     if (typeof target !== "string" || target === "") return null;
-    const resolved = foldPath(resolve(cwd, target));
+    // 字面路径与「跟着符号链接走之后的真实路径」两个都比：链接两步（ln -s 之后 write 链接）躲不过
+    const requested = resolve(cwd, target);
+    const candidates = [...new Set([foldPath(requested), foldPath(realpathLoose(requested))])];
+    for (const file of protectedFiles) {
+      // 单文件命中：文件本身，或它的 `.tmp` / `.bad-` 兄弟（原子写临时文件与坏文件
+      // 隔离都以 `<file>.` 开头）——精确圈住 store 的落盘足迹，不外溢到同目录别的文件
+      const entries = [...new Set([foldPath(resolve(file)), foldPath(realpathLoose(file))])];
+      for (const resolved of candidates) {
+        if (entries.some((entry) => resolved === entry || resolved.startsWith(`${entry}.`))) {
+          return fileRefusalMessage(file, "path");
+        }
+      }
+    }
     for (const dir of protectedPaths) {
-      const base = foldPath(resolve(dir));
-      const rel = relative(base, resolved);
-      if (!rel.startsWith("..") && !isAbsolute(rel)) {
-        return refusalMessage(dir, "path");
+      for (const base of new Set([foldPath(resolve(dir)), foldPath(realpathLoose(dir))])) {
+        for (const resolved of candidates) {
+          const rel = relative(base, resolved);
+          if (!rel.startsWith("..") && !isAbsolute(rel)) return refusalMessage(dir, "path");
+        }
       }
     }
     return null;
@@ -197,17 +290,17 @@ export function protectedPathRefusal(
   if (COMMAND_TOOLS.has(toolName)) {
     const command = input["command"];
     if (typeof command !== "string" || command === "") return null;
-    const haystack = foldPath(command);
+    // 先过命令串里不带完整路径的写法：文件名本身 / 变量 / 通配 / cd 进数据目录 / 对数据目录或其上级的破坏性命令
+    const loose = protectedCommandRefusal(command, protectedFiles, cwd, guard);
+    if (loose !== null) return loose.kind === "file" ? fileRefusalMessage(loose.file, "command") : dataDirRefusalMessage(loose);
+    const haystack = loosenShellQuoting(foldPath(expandTildeLiterals(command, guard.home)));
     for (const dir of protectedPaths) {
-      const needle = foldPath(dir);
-      // 命中必须落在路径边界上：`.../sessions` 后面跟分隔符/引号/空白/结尾才算，
-      // `.../sessions-extra` 这种相邻前缀是另一个目录，不拦
-      let index = haystack.indexOf(needle);
-      while (index !== -1) {
-        const next = haystack[index + needle.length];
-        if (next === undefined || !/[a-z0-9_-]/i.test(next)) return refusalMessage(dir, "command");
-        index = haystack.indexOf(needle, index + 1);
-      }
+      const needle = loosenShellQuoting(foldPath(dir));
+      if (commandMentions(haystack, needle)) return refusalMessage(dir, "command");
+    }
+    for (const file of protectedFiles) {
+      const needle = loosenShellQuoting(foldPath(file));
+      if (commandMentions(haystack, needle)) return fileRefusalMessage(file, "command");
     }
     return null;
   }
@@ -231,6 +324,25 @@ function refusalMessage(dir: string, via: "path" | "command"): string {
     lead +
     "To read it, use the ls / read / find / grep tools (not the shell), or read_task for a task's transcript. " +
     "To change it, describe the change to the user instead; only the user can modify session data."
+  );
+}
+
+/**
+ * 单文件保护的拒绝理由（目前只有自动化的账本 automations.json）：与目录版同一副骨架、
+ * 同一句「命令串分不出读写」的老实话；改道指引不同——自动化有工具面
+ * （automation_create / update / cancel，**没有删**），想删记录只能请用户到自动化面板里删。
+ */
+function fileRefusalMessage(file: string, via: "path" | "command"): string {
+  const lead =
+    via === "command"
+      ? `Automation records are immutable: "${file}" is protected, and shell commands may not reference it ` +
+        "in any permission mode — even read-only ones, because the check cannot tell reading from writing. "
+      : `Automation records are immutable: "${file}" is protected — no tool may write it in any permission mode. `;
+  return (
+    lead +
+    "To read it, use the read tool or automation_list (not the shell). " +
+    "To change automations, use the automation tools (automation_create / automation_update / automation_cancel); " +
+    "they cannot delete records — ask the user to do that in the Automations panel."
   );
 }
 
@@ -267,8 +379,9 @@ export type ContextBudgetMessage = ContextMessage;
 /**
  * 生成 `tool_call` 处理器。纯逻辑 + 一个注入的询问函数，可被测试穷尽。
  *
- * 会话文件不可变（2026-09-18）：protectedPaths 缺席（旧测试、或主进程没给）=
- * 不做禁区检查；给了就在权限档判定**之前**拦——Skip 档也拦。
+ * 会话文件不可变（2026-09-18）与自动化记录不可变（2026-11-13）：protectedPaths /
+ * protectedFiles 缺席（旧测试、或主进程没给）= 不做禁区检查；给了就在权限档判定
+ * **之前**拦——Skip 档也拦。
  *
  * 改写入参走 pi 的约定：**原地改 `event.input`**（不是返回新对象）。
  *
@@ -281,12 +394,14 @@ export function createToolCallGate(
   ask: PermissionAsk,
   protectedPaths: readonly string[] = [],
   cwd: string = process.cwd(),
+  protectedFiles: readonly string[] = [],
+  guard: CommandGuardEnv = defaultGuardEnv(),
 ) {
   return async (event: ToolCallLike): Promise<ToolCallGateResult> => {
     // **跑在每条早退之前**：放行 / 询问 / 拒绝三条路都不能绕过它，否则默认档（skip 直接
     // 放行）就漏掉了——而那正是模型填小超时的场景。
     raiseCommandTimeout(event.toolName, event.input);
-    const refusal = protectedPathRefusal(event.toolName, event.input, protectedPaths, cwd);
+    const refusal = protectedPathRefusal(event.toolName, event.input, protectedPaths, cwd, protectedFiles, guard);
     if (refusal !== null) return { block: true, reason: refusal };
     const decision = decidePermission(getMode(), event.toolName);
     if (decision.behavior === "allow") return {};

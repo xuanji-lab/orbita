@@ -57,7 +57,7 @@ import { KeepAwake } from "./automation/keep-awake.ts";
 import { deliverAutomationRun, launchAutomationRun, type LaunchDeps } from "./automation/launch.ts";
 import { applyAutomationRequest, type AutomationRequestDeps } from "./automation/requests.ts";
 import { AutomationScheduler } from "./automation/scheduler.ts";
-import { AutomationStore } from "./automation/store.ts";
+import { AutomationStore, automationStoreFilePath } from "./automation/store.ts";
 import { applyChannelSend, applyDelegate, type ChannelDeps } from "./channel/requests.ts";
 import { ChannelStore } from "./channel/store.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
@@ -1252,6 +1252,9 @@ void app.whenReady().then(async () => {
     (sessionId) => sessions.attachmentDirOf(sessionId),
     // 会话文件不可变（2026-09-18）：两个账本目录对工具面全档只读，含 Skip
     [join(configDir, "sessions"), join(configDir, "pi-sessions")],
+    // 自动化记录不可变（2026-11-13 用户裁决）：automations.json 记录「智能体定时做过什么」，
+    // 智能体删改它 = 丢痕迹；与它的 `.tmp` / `.bad-` 兄弟一起全档只读，智能体改自动化走自动化工具
+    [automationStoreFilePath(configDir)],
     (workspaceId) => skills.linkDirs(workspaceId),
     skills,
     plugins,
