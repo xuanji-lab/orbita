@@ -6,13 +6,25 @@ import "@stll/folio-react/editor.css";
 import { IntlProvider } from "use-intl";
 import { CATALOGS } from "@stll/folio-core/i18n/messages/catalogs";
 import { isMarkActive, toggleBold, toggleItalic, toggleUnderline } from "@stll/folio-core/prosemirror";
-import type { DocxInvalidReason } from "@shared/docx";
+import type {
+  DocxAgentEditRequest,
+  DocxAnchor,
+  DocxEditGroup,
+  DocxInvalidReason,
+  DocxParaIdStamp,
+} from "@shared/docx";
 import {
   DOCX_AUTOSAVE_DELAY_MS,
   DOCX_MAX_PAGES,
   estimateDocxPages,
   type DocxPackageStats,
 } from "@shared/docx";
+import { QUOTE_MAX_CHARS, type TextQuote } from "@shared/quote";
+import { anchorFromSelection, blockAt } from "./docx-anchor.ts";
+import { applyDocxEdit, resolveRevisionGroup } from "./docx-apply.ts";
+import { registerDocxEditHost } from "./docx-edit-host.ts";
+import { buildReviewRows, type DocxChangeRow } from "./docx-review.ts";
+import { DocxReviewBar } from "./DocxReviewBar.tsx";
 import type { FileListRequest } from "@shared/files";
 import { api } from "../../api";
 import { LocaleContext } from "../../locale.ts";
@@ -42,10 +54,23 @@ type LoadState =
   | { status: "error"; message: string }
   | { status: "too-large"; limit: number; size: number }
   | { status: "invalid"; reason: DocxInvalidReason }
-  | { status: "ready"; data: Uint8Array; hash: string; size: number; modifiedAt: number; stats: DocxPackageStats };
+  | {
+      status: "ready";
+      data: Uint8Array;
+      hash: string;
+      size: number;
+      modifiedAt: number;
+      stats: DocxPackageStats;
+      stamp: DocxParaIdStamp;
+    };
 
 /** 读盘 + 分派空态。换文件或刷新时代整份重来（引擎按 hash 重新挂载） */
-export function DocxView(props: { request: FileListRequest; reloadToken: number }) {
+export function DocxView(props: {
+  request: FileListRequest;
+  reloadToken: number;
+  /** 把锚点写成一条引用放进输入框（agent 据此调 edit_docx） */
+  onQuote?: (quote: TextQuote) => void;
+}) {
   const t = useT();
   const { request } = props;
   const [state, setState] = useState<LoadState>({ status: "loading" });
@@ -69,6 +94,7 @@ export function DocxView(props: { request: FileListRequest; reloadToken: number 
             size: result.size,
             modifiedAt: result.modifiedAt,
             stats: result.stats,
+            stamp: result.stamp,
           });
         } else if (result.kind === "too-large") {
           setState({ status: "too-large", limit: result.limit, size: result.size });
@@ -161,6 +187,7 @@ export function DocxView(props: { request: FileListRequest; reloadToken: number 
       key={`${request.dir}:${state.hash}`}
       request={request}
       opened={state}
+      {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
       onReload={() => setAttempt((n) => n + 1)}
     />
   );
@@ -192,6 +219,13 @@ const LAYOUT_POLL_MS = 50;
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, ms));
 
 /**
+ * 选区 → 锚点的防抖时长。拖一次鼠标会连发几十个 selection 事件，而锚点要算一次
+ * 块内干净文本（微秒级）+ 一次文档遍历（序号 / 表格坐标）。150 ms 对人是「松手就到」，
+ * 对 104 页的文档也只多跑一次遍历。
+ */
+const ANCHOR_DEBOUNCE_MS = 150;
+
+/**
  * 保存前那次目录自愈的结果（issue #276），只为界面提示；计数是「这次改了什么 / 什么没算出来」。
  * `noLayout` = 屏幕上还没有分页（排版没跑完），这一轮没有页码可对齐。
  */
@@ -213,7 +247,8 @@ const EDIT_KEYS = new Set(["Backspace", "Delete", "Enter", "Tab"]);
  */
 function DocxSurface(props: {
   request: FileListRequest;
-  opened: { data: Uint8Array; hash: string; size: number; modifiedAt: number };
+  opened: { data: Uint8Array; hash: string; size: number; modifiedAt: number; stamp: DocxParaIdStamp };
+  onQuote?: (quote: TextQuote) => void;
   onReload: () => void;
 }) {
   const t = useT();
@@ -247,6 +282,27 @@ function DocxSurface(props: {
    */
   const [unloadState, setUnloadState] = useState<"none" | "saved" | "blocked">("none");
   const rootRef = useRef<HTMLDivElement | null>(null);
+
+  /* ── N2「指哪打哪」：选区锚点 + agent 修订 + 审阅条 ────────────────────── */
+
+  /**
+   * 当前选区锚点。**选区事件里只做块内计算**（段落遍历 + 干净文本 + hash，微秒级）；
+   * 文档级遍历（序号、表格坐标）也在这里做，但要防抖——鼠标拖选一次会连发几十个事件，
+   * 每次全文档扫一遍会在长文档上卡掉帧（锚点调研 §5 的硬线）。
+   */
+  const [anchor, setAnchor] = useState<DocxAnchor | null>(null);
+  const anchorRef = useRef<DocxAnchor | null>(null);
+  /** 选区建不出锚点时的原因（跨段落 / 太长）：一句人话，不摆一个假 chip */
+  const [anchorNote, setAnchorNote] = useState<string | null>(null);
+  const selectionRef = useRef<{ from: number; to: number } | null>(null);
+  const anchorTimerRef = useRef<number | null>(null);
+  /** 本会话里 agent 写进去的改动（op → revisionIds）：审阅条按它整组裁决 */
+  const groupsRef = useRef<DocxEditGroup[]>([]);
+  const [reviewRows, setReviewRows] = useState<DocxChangeRow[]>([]);
+  /** 刚写完的那一条（给一句确认） */
+  const [editNote, setEditNote] = useState<string | null>(null);
+  /** 一条编辑请求在途：界面显示「正在写入」并把裁决按钮禁掉，免得半途点 */
+  const [editBusy, setEditBusy] = useState(false);
 
   /** 磁盘内容的 hash：保存时的冲突判据，保存成功后更新 */
   const hashRef = useRef(opened.hash);
@@ -361,9 +417,15 @@ function DocxSurface(props: {
   }, []);
 
   // 引擎的可编辑视图是延迟创建的（性能取舍）：工具栏命令与「打开时的事实」都要它，
-  // 所以挂载后主动要一份，但不抢焦点
+  // 所以挂载后主动要一份，但不抢焦点。ref 要等子组件的 ref 回调跑完才在，所以补一拍
+  // （少了这一拍，用户没点过文档时 agent 的第一次 edit_docx 会一直等到超时）
   useEffect(() => {
-    editorRef.current?.ensureEditorView({ focus: false });
+    const first = window.setTimeout(() => editorRef.current?.ensureEditorView({ focus: false }), 0);
+    const second = window.setTimeout(() => editorRef.current?.ensureEditorView({ focus: false }), 400);
+    return () => {
+      window.clearTimeout(first);
+      window.clearTimeout(second);
+    };
   }, []);
 
   /**
@@ -401,12 +463,236 @@ function DocxSurface(props: {
     }, DOCX_AUTOSAVE_DELAY_MS);
   }, []);
 
+  /* ── N2：审阅条、选区锚点、agent 写入 ───────────────────────────────────── */
+
+  /** 审阅条数据：我们自己的改动账 + 引擎此刻的修订清单 */
+  const refreshReview = useCallback(() => {
+    const ref = editorRef.current;
+    const changes = ref === null ? [] : ref.getTrackedChanges();
+    setReviewRows(buildReviewRows(groupsRef.current, changes));
+  }, []);
+
+  /** 文档一变就重算（300 ms 防抖：排版与修订遍历都不便宜，每次敲键跑一遍会掉帧） */
+  const reviewTimerRef = useRef<number | null>(null);
+  const refreshReviewLater = useCallback(() => {
+    if (reviewTimerRef.current !== null) window.clearTimeout(reviewTimerRef.current);
+    reviewTimerRef.current = window.setTimeout(() => {
+      reviewTimerRef.current = null;
+      refreshReview();
+    }, 300);
+  }, [refreshReview]);
+
+  /** 选区 → 锚点（防抖：拖选一次会连发几十个事件，每个都做全文档遍历会卡） */
+  const buildAnchor = useCallback(() => {
+    // 用 ref 取视图，不进依赖：getView 每次渲染都是新函数，进了依赖会让
+    // onSelectionText 每帧换身份——引擎的回调依赖它会重跑（本文件顶注释里的渲染循环）
+    const view = viewRef.current;
+    const selection = selectionRef.current;
+    if (view === null || selection === null || selection.to <= selection.from) {
+      anchorRef.current = null;
+      setAnchor(null);
+      setAnchorNote(null);
+      return;
+    }
+    const doc = view.state.doc;
+    const block = blockAt(doc, selection.from);
+    const next =
+      block === null
+        ? null
+        : anchorFromSelection({
+            path: request.dir,
+            docHash: opened.hash,
+            editSeq: editSeqRef.current,
+            block,
+            from: selection.from,
+            to: selection.to,
+            doc,
+          });
+    if (next !== null && Array.from(next.quote).length > QUOTE_MAX_CHARS) {
+      // 引用的总字数上限（2000）同时是锚点的上限：再长就不是「指一处」，也不该整段塞进消息
+      anchorRef.current = null;
+      setAnchor(null);
+      setAnchorNote(t.docx.anchorTooLong(QUOTE_MAX_CHARS));
+      return;
+    }
+    anchorRef.current = next;
+    setAnchor(next);
+    setAnchorNote(next === null ? t.docx.anchorSpanBlock : null);
+  }, [request.dir, opened.hash, t]);
+
+  const queueAnchor = useCallback(
+    (selection: { from: number; to: number }) => {
+      selectionRef.current = selection;
+      if (anchorTimerRef.current !== null) window.clearTimeout(anchorTimerRef.current);
+      anchorTimerRef.current = window.setTimeout(() => {
+        anchorTimerRef.current = null;
+        buildAnchor();
+      }, ANCHOR_DEBOUNCE_MS);
+    },
+    [buildAnchor],
+  );
+
+  /**
+   * 引擎的选区回调：这里只记账 + 排一次防抖。`syncMarks` 照旧同步跑（工具栏按下态
+   * 要跟手），锚点则可以慢半拍——它是给 agent 用的坐标，不是给眼睛看的。
+   */
+  const onSelectionText = useCallback(
+    (selection: { from: number; to: number }) => {
+      queueAnchor({ from: selection.from, to: selection.to });
+    },
+    [queueAnchor],
+  );
+
+  /**
+   * 一条 agent 写入请求（主进程转过来的）：写进活编辑器，回执交给登记表。
+   *
+   * **刚打开的那几百毫秒里引擎还没有可编辑视图**（`createAIEditSnapshot()` 回 null）：
+   * `not-ready` 不是失败，等一拍重试（最多 6 × 150 ms）。真等不到再如实回给模型。
+   */
+  const runAgentEdit = useCallback(
+    async (next: DocxAgentEditRequest, author: string) => {
+      setEditBusy(true);
+      try {
+        for (let attempt = 0; attempt < 6; attempt += 1) {
+          const ref = editorRef.current;
+          if (ref === null) {
+            return { ok: false as const, reason: "not-open" as const, error: "编辑器还在加载，稍后再试。" };
+          }
+          // 引擎的可编辑视图是**延迟创建**的：用户还没在文档里点过，视图可能根本不存于。
+          // 写入前主动要一份（同工具栏命令的做法），再等一拍让引擎把它建出来
+          if (attempt > 0) ref.ensureEditorView({ focus: false });
+          const outcome = applyDocxEdit({ ref, author: author === "" ? t.docx.agentAuthor : author }, next);
+          if (outcome.ok === false && outcome.reason === "not-ready") {
+            await sleep(150);
+            continue;
+          }
+          if (outcome.ok) {
+            groupsRef.current = [...groupsRef.current, ...outcome.groups];
+            setEditNote(
+              outcome.groups.length === 0
+                ? t.docx.agentEditNothing
+                : t.docx.agentEditDone(outcome.groups.length, outcome.skipped.length),
+            );
+            // 修订已经进内存：按普通编辑记账，1.5 s 后自动落盘（保存路径仍是 #308 那一条）
+            markDirty();
+          } else {
+            setEditNote(outcome.error);
+          }
+          refreshReview();
+          return outcome;
+        }
+        return { ok: false as const, reason: "engine" as const, error: "编辑器一直没就绪（排版卡住了？）。让用户点一下编辑器再试。" };
+      } finally {
+        setEditBusy(false);
+      }
+    },
+    [markDirty, refreshReview, t],
+  );
+  const runAgentEditRef = useRef(runAgentEdit);
+  runAgentEditRef.current = runAgentEdit;
+
+  // 登记成「这份文档的编辑宿主」：主进程推来的 edit_docx 请求按路径找到这里
+  useEffect(() => {
+    return registerDocxEditHost({
+      path: request.dir,
+      apply: (next, author) => runAgentEditRef.current(next, author),
+    });
+  }, [request.dir]);
+
+  /** 裁决一整组（一次 replace 的删除 + 插入两个 w:id 必须一起走，否则残留半条修订） */
+  const resolveRow = useCallback(
+    (row: DocxChangeRow, decision: "accept" | "reject") => {
+      const ref = editorRef.current;
+      if (ref === null) return;
+      const ok = resolveRevisionGroup(ref, row.revisionIds, decision);
+      if (!ok) {
+        // 这组 id 已经不在了（用户单独接受过 / 撤销过）：不当作错误，只刷新一次
+        setEditNote(t.docx.reviewStale);
+      } else {
+        setEditNote(null);
+        markDirty();
+      }
+      refreshReview();
+    },
+    [markDirty, refreshReview, t],
+  );
+
+  /** 整批：把审阅条上所有行一起接受 / 拒绝（用户说「全都不要」时不必一条条点） */
+  const resolveAll = useCallback(
+    (decision: "accept" | "reject") => {
+      const ref = editorRef.current;
+      if (ref === null) return;
+      for (const row of reviewRows) resolveRevisionGroup(ref, row.revisionIds, decision);
+      groupsRef.current = [];
+      setEditNote(null);
+      markDirty();
+      refreshReview();
+    },
+    [markDirty, refreshReview, reviewRows],
+  );
+
+  /**
+   * 审阅条的一次初始计算。挂在 `pages` 上而不是挂载时立刻算：引擎的视图是延迟创建的，
+   * 挂载那一刻 `getTrackedChanges()` 还是空的；排版落定（页数变化）时修订清单已经可读。
+   */
+  useEffect(() => {
+    refreshReview();
+  }, [pages, refreshReview]);
+
+  /** 把当前锚点写成一条引用放进输入框（agent 据此调 edit_docx） */
+  const quoteAnchor = (): void => {
+    const current = anchorRef.current;
+    if (current === null || props.onQuote === undefined) return;
+    // 不截断：锚点的偏移与引文必须逐字对应，截了就不是同一处了（超长选区在上面被拒）
+    props.onQuote({
+      text: current.quote,
+      messageId: "",
+      role: "user",
+      filePath: current.path,
+      docx: current,
+    });
+    anchorRef.current = null;
+    selectionRef.current = null;
+    setAnchor(null);
+    setAnchorNote(null);
+    setEditNote(t.docx.anchorQuoted);
+  };
+
+  /** 点审阅条一行：滚到那一处并选中（引擎的 scrollToAIEditOperation，按整组 id） */
+  const locateRow = (row: DocxChangeRow): void => {
+    editorRef.current?.scrollToAIEditOperation(row.revisionIds);
+  };
+
+  const anchorLabelText =
+    anchor === null
+      ? ""
+      : anchor.table === null
+        ? t.docx.anchorLabel(anchor.blockOrdinal, Array.from(anchor.quote).length)
+        : t.docx.anchorTableLabel(anchor.table.rowIndex + 1, anchor.table.cellIndex + 1, Array.from(anchor.quote).length);
+
+  // 说明性的提示（"请在一个段落内选择"）自己退场：用户可以什么都不做，它不该一直挂在那里
+  useEffect(() => {
+    if (anchorNote === null) return;
+    const timer = window.setTimeout(() => setAnchorNote(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [anchorNote]);
+
+  useEffect(() => {
+    return () => {
+      if (anchorTimerRef.current !== null) window.clearTimeout(anchorTimerRef.current);
+      if (reviewTimerRef.current !== null) window.clearTimeout(reviewTimerRef.current);
+    };
+  }, []);
+
   /**
    * 交给引擎的三份回调必须身份稳定：它们是引擎 effect 的依赖，每次渲染换一份会
    * 让引擎重跑（并再次回调我们），轻则白重渲染、重则渲染循环。
    */
   const onSelectionChange = useCallback(() => syncMarks(), [syncMarks]);
-  const onChange = useCallback(() => markDirty(), [markDirty]);
+  const onChange = useCallback(() => {
+    markDirty();
+    refreshReviewLater();
+  }, [markDirty, refreshReviewLater]);
   const onEngineError = useCallback((error: Error) => {
     // 保真回退是「需要确认」，不是「坏了」：交给保存流程里的闸门处理
     if (/fidelity fallback/i.test(error.message)) {
@@ -771,6 +1057,11 @@ function DocxSurface(props: {
       <DocxEditor
         documentBuffer={opened.data}
         ref={editorRef}
+        /*
+         * **只读只看页数**：回合内不锁输入。folio 在只读视图上会把这次 dispatch 丢掉——
+         * 实测「applied 有回执、文档里没有标记」，而 agent 的修订只能走这条路。
+         * 并发打字的防护换在写入那一刻：锚点按偏移 + 引文重新校验，命中不了就拒绝写入。
+         */
         readOnly={oversize}
         showToolbar={false}
         showReviewControls={false}
@@ -778,6 +1069,7 @@ function DocxSurface(props: {
         initialZoom="fit-width"
         onEditorViewReady={onViewReady}
         onSelectionChange={onSelectionChange}
+        onSelectionTextChange={onSelectionText}
         onChange={onChange}
         onError={onEngineError}
       />
@@ -976,6 +1268,77 @@ function DocxSurface(props: {
         </div>
       )}
 
+      {/* 盖章结果（N2）：盖上时说一句「补了多少段」，盖不上时说清「锚点只活在本次打开」 */}
+      {opened.stamp.ok && opened.stamp.assigned > 0 && (
+        <div className="docx-note" data-tone="info" role="status">
+          <Icon name="info" size={14} />
+          <span>{t.docx.stampNote(opened.stamp.assigned)}</span>
+        </div>
+      )}
+      {!opened.stamp.ok && (
+        <div className="docx-note" data-tone="info" role="status">
+          <Icon name="info" size={14} />
+          <span>{t.docx.stampFailed}</span>
+        </div>
+      )}
+
+      {/* 选区锚点（N2）：可读 chip + 一键放进输入框 */}
+      {anchor !== null && (
+        <div className="docx-anchor-row">
+          <button
+            type="button"
+            className="quiet-control docx-anchor-chip"
+            title={t.docx.anchorQuoteTitle}
+            aria-label={`${anchorLabelText} — ${t.docx.anchorQuote}`}
+            disabled={props.onQuote === undefined}
+            onClick={quoteAnchor}
+          >
+            <Icon name="quote" size={12} />
+            <span className="docx-anchor-label">{anchorLabelText}</span>
+          </button>
+          <button
+            type="button"
+            className="quiet-control docx-anchor-clear"
+            title={t.docx.anchorClear}
+            aria-label={t.docx.anchorClear}
+            onClick={() => {
+              anchorRef.current = null;
+              selectionRef.current = null;
+              setAnchor(null);
+            }}
+          >
+            <Icon name="x" size={11} strokeWidth={2.2} />
+          </button>
+        </div>
+      )}
+      {anchorNote !== null && (
+        <div className="docx-note" data-tone="info" role="status">
+          <Icon name="info" size={14} />
+          <span>{anchorNote}</span>
+        </div>
+      )}
+
+      {/* 审阅条（N2）：一行一条改动，按 applied[].revisionIds 整组裁决 */}
+      <DocxReviewBar
+        rows={reviewRows}
+        busy={editBusy}
+        onResolve={resolveRow}
+        onAll={resolveAll}
+        onLocate={locateRow}
+      />
+
+      {editBusy && (
+        <div className="docx-note" data-tone="info" role="status">
+          <Icon name="loader-circle" size={14} spin />
+          <span>{t.docx.agentWriting}</span>
+        </div>
+      )}
+      {editNote !== null && !editBusy && (
+        <div className="docx-note" data-tone="info" role="status">
+          <Icon name="info" size={14} />
+          <span>{editNote}</span>
+        </div>
+      )}
 
       <div className="docx-page-area">
         <IntlProvider locale={locale === "zh" ? "zh-CN" : "en"} messages={CATALOGS[locale === "zh" ? "zh-CN" : "en"]}>
