@@ -12,11 +12,13 @@
  * 它们的工具与提示词片段会混进 Orbita 的会话；那是另一个应用的配置，新内核不接（也接不了——那些扩展写的是
  * pi-coding-agent 的 ExtensionAPI）。报告里列为有意差异，待用户定。
  */
+import { PI_ATTRIBUTION, type ClientIdentity, type ThinkingBudgets } from "@earendil-works/pi-ai";
 import {
   buildSystemPrompt,
   DefaultResourceLoader,
   getAgentDir,
   SettingsManager,
+  VERSION as PI_VERSION,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { BuiltinToolOptions } from "./durable-tools.ts";
@@ -101,4 +103,52 @@ export function loadoutOrder(previous: readonly string[], desired: readonly stri
   const kept = previous.filter((name) => wanted.has(name));
   const keptSet = new Set(kept);
   return [...kept, ...desired.filter((name) => !keptSet.has(name))];
+}
+
+/**
+ * 请求层的选项：旧内核里 pi 每个请求从它的设置拼（sdk.js 的 buildRequestOptions 与 getClientIdentity），
+ * 新内核从**同一份设置**拼成 durable 的 HarnessOptions.identity 与 settings.stream。
+ * 读的是 pi 的全局设置（~/.pi/agent/settings.json）；工作区级的 `.pi/settings.json` 新内核不读（库是整树共用的，
+ * 不按某一轮的 cwd 变）——这几项（超时、重试、遥测开关）放在工作区级的情形没见过，报告里记为已知差别。
+ */
+export interface PiRequestOptions {
+  identity: ClientIdentity;
+  stream: {
+    timeoutMs: number;
+    websocketConnectTimeoutMs?: number;
+    maxRetries?: number;
+    maxRetryDelayMs?: number;
+    thinkingBudgets?: ThinkingBudgets;
+  };
+}
+
+/** pi 的 isTruthyEnvFlag（core/telemetry.js），照抄 */
+function truthyFlag(value: string | undefined): boolean {
+  if (!value) return false;
+  return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
+}
+
+/** pi 的 HTTP 空闲超时默认值（core/http-dispatcher.js 的 DEFAULT_HTTP_IDLE_TIMEOUT_MS） */
+const PI_HTTP_IDLE_TIMEOUT_MS = 300_000;
+
+export function piRequestOptions(): PiRequestOptions {
+  const agentDir = getAgentDir();
+  const settings = SettingsManager.create(agentDir, agentDir);
+  const telemetry = process.env["PI_TELEMETRY"];
+  const attribution = (telemetry !== undefined ? truthyFlag(telemetry) : settings.getEnableInstallTelemetry()) ? PI_ATTRIBUTION : null;
+  const provider = settings.getProviderRetrySettings();
+  const idle = settings.getHttpIdleTimeoutMs();
+  const websocket = settings.getWebSocketConnectTimeoutMs();
+  const budgets = settings.getThinkingBudgets();
+  return {
+    // 与 pi-coding-agent 的 getClientIdentity 同值：详细 User-Agent 带 pi 的版本号，遥测开着才带 pi 的署名
+    identity: { userAgent: "detailed", version: PI_VERSION, attribution },
+    stream: {
+      timeoutMs: provider.timeoutMs ?? (idle === 0 ? 2147483647 : idle ?? PI_HTTP_IDLE_TIMEOUT_MS),
+      ...(websocket === undefined ? {} : { websocketConnectTimeoutMs: websocket }),
+      ...(provider.maxRetries === undefined ? {} : { maxRetries: provider.maxRetries }),
+      ...(provider.maxRetryDelayMs === undefined ? {} : { maxRetryDelayMs: provider.maxRetryDelayMs }),
+      ...(budgets === undefined ? {} : { thinkingBudgets: budgets }),
+    },
+  };
 }

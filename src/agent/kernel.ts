@@ -38,6 +38,8 @@ import { compactionKeepRecentTokens, compactionReserveTokens } from "./compactio
 import { planLegacyMigration, type LegacyDraft } from "./legacy-migrate.ts";
 import { RETRY_BASE_DELAY_MS, RETRY_MAX_ATTEMPTS, RETRY_MAX_DELAY_MS } from "./retry-policy.ts";
 import { runTurn, type KernelTurnRuntime } from "./kernel-turn.ts";
+import { piRequestOptions } from "./kernel-prompt.ts";
+import { ccBillingPatch } from "./cc-billing-patch.ts";
 import { turnToolFlags } from "./turn-tools.ts";
 import { withOpencodeSession } from "./opencode-session.ts";
 
@@ -96,6 +98,36 @@ export function withCacheRetention(inner: Models, roleOf: (providerSessionId: st
   return new Proxy(inner, {
     get(target, property) {
       if (property === "streamSimple") return streamSimple;
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+/**
+ * 给 Models 包一层：**每一个**出站请求（对话主循环的 streamSimple 与压缩摘要的 completeSimple）都过一遍
+ * Claude 订阅车道的最小改写（cc-billing-patch.ts，只对带 pi OAuth 身份块的 Anthropic 请求生效，其余原样）。
+ * 旧内核分两处挂（主循环的 before_provider_request + 压缩绕过主循环时的 streamFunction 包装，cc-billing-stream.ts），
+ * durable 的模型调用都经 Models，一处就全覆盖。durable 自己的 onPayload（beforeProviderRequest 钩子链）先跑，改写在它之后。
+ */
+export function withBillingPatch(inner: Models): Models {
+  const shape = <O extends { onPayload?: ModelsSimpleStreamOptions["onPayload"] }>(options: O | undefined): O => {
+    const previous = options?.onPayload;
+    return {
+      ...(options ?? ({} as O)),
+      onPayload: async (payload: unknown, model: Model<Api>) => {
+        const replaced = previous === undefined ? undefined : await previous(payload, model);
+        const current = replaced ?? payload;
+        return ccBillingPatch(current) ?? replaced;
+      },
+    };
+  };
+  const streamSimple: Models["streamSimple"] = (model, context, options) => inner.streamSimple(model, context, shape(options));
+  const completeSimple: Models["completeSimple"] = (model, context, options) => inner.completeSimple(model, context, shape(options));
+  return new Proxy(inner, {
+    get(target, property) {
+      if (property === "streamSimple") return streamSimple;
+      if (property === "completeSimple") return completeSimple;
       const value: unknown = Reflect.get(target, property, target);
       return typeof value === "function" ? value.bind(target) : value;
     },
@@ -165,9 +197,11 @@ export class KernelPool {
       const harness = await Harness.open(
         storage,
         {
-          models: () => withCacheRetention(this.options.models(), (id) => this.roleOf(id)),
+          models: () => withBillingPatch(withCacheRetention(this.options.models(), (id) => this.roleOf(id))),
           registry,
-          settings: () => kernelSettings(),
+          // 请求身份（User-Agent、署名）与请求层选项（超时、SDK 内重试、思考预算）从 pi 的同一份设置读，与旧内核同值
+          identity: piRequestOptions().identity,
+          settings: () => ({ ...kernelSettings(), stream: piRequestOptions().stream }),
           ...(this.options.now === undefined ? {} : { now: this.options.now }),
           onReport: (report) => this.options.log?.(`[kernel] ${library} 报告 ${report.kind}：${String(report.error)}`),
         },

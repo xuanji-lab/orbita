@@ -13,7 +13,8 @@ import { buildSessionContext, convertToLlm, migrateSessionEntries, parseSessionE
 import type { ConversationId, Storage } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { KernelAgent } from "../shared/kernel.ts";
-import { kernelCompaction, kernelSettings, KernelPool, SessionIndexDoc, withCacheRetention } from "./kernel.ts";
+import { kernelCompaction, kernelSettings, KernelPool, SessionIndexDoc, withBillingPatch, withCacheRetention } from "./kernel.ts";
+import { piRequestOptions } from "./kernel-prompt.ts";
 import { compactionKeepRecentTokens, compactionReserveTokens } from "./compaction-settings.ts";
 import { RETRY_BASE_DELAY_MS, RETRY_MAX_ATTEMPTS, RETRY_MAX_DELAY_MS } from "./retry-policy.ts";
 import { assistant, book, result, user } from "./legacy-book-fixture.ts";
@@ -352,5 +353,61 @@ describe("运行策略与旧内核对齐（剧本第 8 条）", () => {
       baseDelayMs: RETRY_BASE_DELAY_MS,
       maxAgentDelayMs: RETRY_MAX_DELAY_MS,
     });
+  });
+});
+
+describe("withBillingPatch：订阅车道改写覆盖新内核的每一个出站请求", () => {
+  const IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
+  const oauth = (): Record<string, unknown> => ({ model: "claude", system: [{ type: "text", text: IDENTITY }, { type: "text", text: "You are an expert coding assistant." }], messages: [] });
+  function capturing(): { inner: Models; seen: { kind: string; onPayload: unknown }[] } {
+    const seen: { kind: string; onPayload: unknown }[] = [];
+    const inner = {
+      streamSimple: (_model: unknown, _context: unknown, options?: { onPayload?: unknown }) => {
+        seen.push({ kind: "stream", onPayload: options?.onPayload });
+        return null as unknown as ReturnType<Models["streamSimple"]>;
+      },
+      completeSimple: (_model: unknown, _context: unknown, options?: { onPayload?: unknown }) => {
+        seen.push({ kind: "complete", onPayload: options?.onPayload });
+        return Promise.resolve(null) as unknown as ReturnType<Models["completeSimple"]>;
+      },
+    } as unknown as Models;
+    return { inner, seen };
+  }
+  const model = { id: "claude" } as unknown as Model<Api>;
+
+  it("主循环（durable 已带 onPayload）与压缩（completeSimple，不带）都被改写；非 OAuth 原样", async () => {
+    const { inner, seen } = capturing();
+    const wrapped = withBillingPatch(inner);
+    wrapped.streamSimple(model, { messages: [] } as never, { onPayload: (payload: unknown) => payload });
+    await wrapped.completeSimple(model, { messages: [] } as never, {});
+    assert.deepEqual(seen.map((entry) => entry.kind), ["stream", "complete"]);
+    for (const entry of seen) {
+      const onPayload = entry.onPayload as (payload: unknown, model: Model<Api>) => Promise<unknown>;
+      const patched = (await onPayload(oauth(), model)) as { system: { text: string }[] } | undefined;
+      assert.ok(patched !== undefined, `${entry.kind} 的 OAuth 请求被改写`);
+      assert.doesNotMatch(JSON.stringify(patched.system), /official CLI for Claude\.","type/);
+      // 非 OAuth：不改写——返回的是 durable 自己钩子链的结果（主循环）或 undefined（压缩），内容都与原样相同
+      const plain = { model: "gpt", system: [{ type: "text", text: "plain" }] };
+      assert.deepEqual((await onPayload(plain, model)) ?? plain, plain);
+    }
+  });
+});
+
+describe("piRequestOptions：请求身份与请求层选项与旧内核同值", () => {
+  it("详细 User-Agent 带 pi 版本；PI_TELEMETRY=0 时不带署名，=1 时带 pi 的署名", () => {
+    const previous = process.env["PI_TELEMETRY"];
+    try {
+      process.env["PI_TELEMETRY"] = "0";
+      const off = piRequestOptions();
+      assert.equal(off.identity.userAgent, "detailed");
+      assert.match(String(off.identity.version), /^\d+\.\d+\.\d+/);
+      assert.equal(off.identity.attribution, null);
+      process.env["PI_TELEMETRY"] = "1";
+      assert.equal(piRequestOptions().identity.attribution?.name, "pi");
+      assert.ok(off.stream.timeoutMs > 0);
+    } finally {
+      if (previous === undefined) delete process.env["PI_TELEMETRY"];
+      else process.env["PI_TELEMETRY"] = previous;
+    }
   });
 });
