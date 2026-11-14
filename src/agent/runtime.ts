@@ -22,7 +22,6 @@ import {
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import type { AgentCommand, AgentEvent, ProviderSecrets } from "../shared/agent-ipc.ts";
-import type { MemoryRecallOutcome } from "../shared/memory.ts";
 import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
 import {
   registerAndResolveModel,
@@ -42,9 +41,9 @@ import { adaptSystemPrompt } from "./prompt-narration.ts";
 import { ccBillingPatch } from "./cc-billing-patch.ts";
 import {
   attachMemoryBlocks,
-  buildMemoryBlock,
   MEMORY_ATTACH_ENTRY,
   memoryAttachments,
+  recallMemories,
   type TurnMemoryAttach,
 } from "./memory-inject.ts";
 import { applyBillingStreamPatch } from "./cc-billing-stream.ts";
@@ -73,24 +72,11 @@ import {
   RETRY_MAX_ATTEMPTS,
   retryVisibleToUi,
 } from "./retry-policy.ts";
-import { AUTOMATION_TOOL_NAMES, createAutomationTools } from "./automation-tools.ts";
-import { createChannelTools } from "./channel-tools.ts";
 import { McpHub } from "./mcp.ts";
-import { createImageTools } from "./image-tools.ts";
 import { attachGoalLedger, type LedgerAttachCache } from "./goal-compaction.ts";
-import { createGoalTools } from "./goal-tools.ts";
-import { createPlanGate, createPlanTools, type PlanToolOptions } from "./plan-tools.ts";
-import { createDocxTools } from "./docx-tools.ts";
-import { createDocTools } from "./doc-tools.ts";
-import { createPdfTools } from "./pdf-tools.ts";
-import { createSlidesTools } from "./slides-tools.ts";
-import { createPluginTools, PLUGIN_TOOL_NAMES } from "./plugin-tools.ts";
-import { RequestBroker } from "./request-broker.ts";
-import { createStoreTools } from "./store-tools.ts";
-import { createMemoryTools, MEMORY_TOOL_NAMES } from "./memory-tools.ts";
-import { createTaskTools } from "./task-tools.ts";
-import { createBrowserTools } from "./browser-tools.ts";
-import { createTerminalTools, TERMINAL_TOOL_NAMES } from "./terminal-tools.ts";
+import { createPlanGate, type PlanToolOptions } from "./plan-tools.ts";
+import { isToolReply, RequestBroker, toolReplyResult } from "./request-broker.ts";
+import { createTurnTools, extraToolNames, isChildSession, turnToolFlags, type TurnInput } from "./turn-tools.ts";
 import {
   applyRecallEvent,
   composeAttachmentPrompt,
@@ -119,12 +105,13 @@ import {
 import { preferIPv4 } from "../shared/dial-v4.ts";
 import { join } from "node:path";
 import {
+  applyImageBudget,
   IMAGE_BUDGET_ENTRY,
   IMAGE_REFS_ENTRY,
   hashImage,
-  planImageBudget,
+  imageRefPath,
   readImageBudgetBook,
-  type ImageBudgetMark,
+  type TurnImageBudget,
 } from "./image-byte-budget.ts";
 
 // pi-ai 的模型调用与 main 同一个坑（同一台机器、同一个全局 fetch）
@@ -730,31 +717,6 @@ const intentConfirmWaiter = new IntentConfirmWaiter(send);
 const settleIntentAsks = (sessionId: string): void => intentConfirmWaiter.settle(sessionId);
 
 /**
- * 本轮计入权限说明与稳定性指纹的非内建工具名单（before_agent_start 的装配与
- * notePromptStability 共用这一份真源）：MCP 工具 + 内置自定义工具 + 终端组 +
- * 本会话实际注册的通道工具。
- */
-function extraToolNames(
-  role: "root" | "child",
-  workspaceId: string | null,
-  memoryTools: boolean,
-  automationTools: boolean,
-  pluginTools: boolean,
-): string[] {
-  return [
-    ...mcpHub.toolsFor(workspaceId ?? "").map((tool) => tool.name),
-    "create_skill",
-    "add_mcp_server",
-    "read_task",
-    ...TERMINAL_TOOL_NAMES,
-    ...(role === "root" ? ["delegate", "reply_subsession", "model_costs"] : ["report_to_parent"]),
-    ...(memoryTools ? MEMORY_TOOL_NAMES : []),
-    ...(automationTools ? AUTOMATION_TOOL_NAMES : []),
-    ...(pluginTools ? PLUGIN_TOOL_NAMES : []),
-  ];
-}
-
-/**
  * 提示词稳定性记账（prompt-stability.ts）：同一会话里指纹变了就往 stderr 打一行
  * 归因日志（哪一段 / 工具名单变了）。前缀缓存对系统提示词逐字节敏感，真实数据里
  * 又有大量无法归因的断点——这行日志就是查“谁动了提示词”的入口。
@@ -832,8 +794,8 @@ function asAdaptable(event: { type: string }): AdaptableEvent | null {
   return ADAPTABLE_TYPES.has(event.type) ? (event as AdaptableEvent) : null;
 }
 
-/** 开一轮需要的装配输入：submit / interrupt / compact 命令共有的那几个字段。 */
-type OpenInput = Extract<AgentCommand, { type: "submit" | "interrupt" | "compact" }>;
+/** 开一轮需要的装配输入（与新内核共用的那份定义，见 turn-tools.ts）。 */
+type OpenInput = TurnInput;
 
 /** open 的产物：一轮的全部挂件（退订闭包持有订阅，别弄丢）。 */
 interface OpenedTurn {
@@ -852,28 +814,6 @@ interface OpenedTurn {
   memory: TurnMemoryAttach;
   /** 意图召回的中止器：停止 / 抢跑 / 删会话时拆掉 /recall 的 HTTP 流（无意图时闲置） */
   intentAbort: AbortController;
-}
-
-/**
- * 图片字节预算的轮内状态（image-byte-budget.ts 管算法，这里管装配与时序）：
- *
- * - `cut` / `refs` 开轮时从 pi 本子读一次（水位与附件引用都是跨轮持久化的
- *   custom entry）；轮内推进后 `cut` 原地更新，后续 LLM 调用按新水位重放。
- * - `pendingRefs` 是本轮 submit 附图的引用，在 echoAndPrompt 缩放后填
- *   （hash 必须对缩放后的 data 算——pi 本子里存的是那份），before_agent_start
- *   落成本子的 custom entry，此后任何一轮都能把占位路径拼回来。
- * - `protectedFloor` 是本轮见过的最小保护起点：steer 注入会把「最后一条用户
- *   消息」推后，不能让刚发过的本轮附图因此变成可替换。
- */
-interface TurnImageBudget {
-  /** 现行水位（ImageBudgetMark）；null = 还没触发过。轮内推进后原地更新 */
-  mark: ImageBudgetMark | null;
-  /** 图片 hash → 原图绝对路径（本子 refs entry 合并而来） */
-  refs: Map<string, string>;
-  /** 本轮 submit 附图（缩放后）的 hash → 绝对路径，before_agent_start 落本子 */
-  pendingRefs: Map<string, string>;
-  /** 本轮见过的最小保护起点：steer 会把「最后一条用户消息」推后，不能让本轮附图因此可替换 */
-  protectedFloor: number;
 }
 
 /**
@@ -910,23 +850,9 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     throw new Error(`unknown model "${provider.id}/${command.modelId}"`);
   }
 
-  /**
-   * 子会话身份（2026-09-23）：决定注册哪些通道工具（createChannelTools）、讲哪段通道
-   * 提示词（describeChannelRole）——两处判定必须同源，不能分别猜（isChildSession）。
-   */
-  const role: "root" | "child" = isChildSession(command) ? "child" : "root";
-  /**
-   * 记忆工具（memory_search / revise / retire）只给根会话、且记忆开着时注册——子会话读不写。
-   * 注册与提示词段（MEMORY_TOOLS_GUIDELINE）、召回块里的纠错提示同用这一个判定。
-   */
-  const memoryTools = "sessionMemory" in command && command.sessionMemory === true && role === "root";
-  /**
-   * 自动化工具：主进程只在这条会话不是自动化跑出来的时候带
-   * automationTools；这里再叠一道「只给根会话」。与记忆工具同一个装配方式，提示词名单里也同步。
-   */
-  const automationTools = "automationTools" in command && command.automationTools === true && role === "root";
-  // 插件工具：命令带 pluginTools 才注册 install_plugin / preview_plugin / list_plugins（子会话不装插件，只有根会话注册）
-  const pluginTools = command.pluginTools === true && role === "root";
+  // 子会话身份与可选工具组（通道 / 记忆 / 自动化 / 插件）：注册与提示词段同用这一个判定（turn-tools.ts）
+  const flags = turnToolFlags(command);
+  const { role, memoryTools, automationTools, pluginTools } = flags;
 
   // 审批走 pi 官方的 `tool_call` 扩展钩子：block 即拒绝，原地改 input 即改写入参。
   // 内建工具默认全开，不需要我们自己装配。
@@ -1035,7 +961,10 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
               // 提示词逐字节相同」这类断言可以直接对着它测，指纹记账也吃同一份段名单。
               // 开轮目录清单同样逐轮重讲：工作区挂新目录、换工作区，下一轮就生效。
               // 父子会话行不进系统提示词（本 PR）：对方工作台由 delegate 回执与通道信封告知。
-              const extra = extraToolNames(role, command.workspaceId, memoryTools, automationTools, pluginTools);
+              const extra = extraToolNames(
+                mcpHub.toolsFor(command.workspaceId ?? "").map((tool) => tool.name),
+                flags,
+              );
               const segments = orbitaSystemSegments({
                 piBase: adaptSystemPrompt(event.systemPrompt),
                 mode: currentMode(),
@@ -1090,39 +1019,10 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
               pi.appendEntry(IMAGE_REFS_ENTRY, [...budget.pendingRefs]);
               for (const [hash, path] of budget.pendingRefs) budget.refs.set(hash, path);
             });
-            // wire-only 替换：只改发给模型的那份，pi 本子与 orbita 转录不动
+            // wire-only 替换：只改发给模型的那份，pi 本子与 orbita 转录不动（轮内胶水与新内核共用，见 image-byte-budget.ts）
             pi.on("context", (event) => {
-              try {
-                let lastUser = -1;
-                for (let i = event.messages.length - 1; i >= 0; i -= 1) {
-                  if ((event.messages[i] as { role?: unknown }).role === "user") {
-                    lastUser = i;
-                    break;
-                  }
-                }
-                const floor = lastUser === -1 ? 0 : Math.min(budget.protectedFloor, lastUser);
-                budget.protectedFloor = floor;
-                const plan = planImageBudget(event.messages, budget.mark, budget.refs, floor);
-                if (plan.advancedCut !== null) {
-                  budget.mark = plan.advancedCut;
-                  pi.appendEntry(IMAGE_BUDGET_ENTRY, {
-                    cut: plan.advancedCut.cut,
-                    cutIndex: plan.advancedCut.cutIndex,
-                    replaced: plan.replaced,
-                    bytesAfter: plan.bytesAfter,
-                  } satisfies ImageBudgetMark);
-                  console.error(
-                    `[image-budget] 请求估算 ${(plan.bytesBefore / 1048576).toFixed(1)}MiB 超过 24MiB，` +
-                      `已把 ${plan.replaced} 张早期图片替换为占位（水位落在第 ${plan.advancedCut.cutIndex} 条消息，` +
-                      `估算降至 ${(plan.bytesAfter / 1048576).toFixed(1)}MiB）`,
-                  );
-                }
-                return plan.replaced > 0 ? { messages: plan.messages } : undefined;
-              } catch (cause) {
-                // fail-open：预算模块自己的故障不该砸掉对话，本轮按原样发送
-                console.error("[image-budget] 处理失败，本轮请求按原样发送", cause);
-                return undefined;
-              }
+              const messages = applyImageBudget(event.messages, budget, (mark) => pi.appendEntry(IMAGE_BUDGET_ENTRY, mark));
+              return messages === undefined ? undefined : { messages };
             });
           },
         },
@@ -1248,6 +1148,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
    * `_refreshToolRegistry` 里同一个 `isAllowedTool` 会**连自定义工具一起过滤**——
    * 2026-10-04 实测：传 `tools: [七个内建]` 后 MCP、read_pdf、read_docx、show_image、store / task /
    * browser / channel 工具与 pi 自己的 ask_question / todo **全部消失**，而且不报错。
+   * （ask_question / todo 是用户 pi TUI 的全局扩展 ~/.pi/agent/extensions/ 注册的：pi 0.84 时代会出现在工具清单里；
+   * pi 1.5.2 起它们被加载但不被激活——工具清单、系统提示里都没有，模型调它们得到 "Tool todo not found"，2026-11-14 实测。）
    * `defaultTools` 是设置项，只决定**内建工具的初始选择**，不构成白名单，自定义工具不受影响
    * （实测：七个内建 + 自定义工具同时在位）。
    *
@@ -1299,7 +1201,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     refs: new Map(
       [...budgetBook.refs].map(([hash, ref]) => [
         hash,
-        join(command.attachmentsDir, ref.slice(ref.indexOf("/") + 1)),
+        imageRefPath(command.attachmentsDir, ref),
       ]),
     ),
     pendingRefs: new Map(),
@@ -1325,61 +1227,20 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   const mcpLabel = command.workspaceId === null ? "" : command.cwd;
   await mcpHub.ensure(mcpScope, command.mcpServers, mcpLabel);
   send({ type: "mcp", servers: mcpHub.describe() });
-  const customTools = [
-    ...mcpHub.toolsFor(mcpScope),
-    // read_pdf 不过 broker：附件副本与工作区 PDF 都在 agent read 边界内，直读（./pdf-tools.ts）
-    // cite_pdf 挂在实验功能「PDF 引用」的开关后面（缺席 = 关）
-    ...createPdfTools(command.cwd, { pdfCitations: command.pdfCitations === true }),
-    // read_docx 同样直读（./docx-tools.ts）：word 文档的结构化提取，块号轴分片
-    ...createDocxTools(command.cwd),
-    // show_image 同样直读展示（./image-tools.ts）：模型「把图给用户看」的显式动作
-    ...createImageTools(command.cwd),
-    // update_plan（./plan-tools.ts）：agent 写下计划、做一步勾一步；计划就在转录里，不另存
-    ...createPlanTools(planOptions),
-    // update_goal（./goal-tools.ts）：agent 替用户记下会话级目标；目标就在转录里，不另存
-    ...createGoalTools({ branch: () => sessionManager.getBranch() }),
-    ...createStoreTools(requestBroker, command.sessionId),
-    ...(pluginTools ? createPluginTools(requestBroker, command.sessionId, currentMode) : []),
-    ...createTaskTools(requestBroker, command.sessionId),
-    ...createBrowserTools(requestBroker, command.sessionId),
-    // 演示文稿（./slides-tools.ts）：slides_create / read / write / edit / insert_image / export。
-    // 文件读写在本进程直做（路径限工作区 + 附加目录），只有导出过 broker 找主进程
-    ...createSlidesTools(requestBroker, command.sessionId, {
-      cwd: command.cwd,
-      writeRoots: [command.cwd, ...(command.directories?.attached ?? [])],
-      workspaceId: command.workspaceId,
-      imageReadRoots: imageReadRoots(command),
-      // 用户附的图：预算账里记着 hash → 附件副本路径（本轮的在 pendingRefs，旧轮的在 refs）；最近的在前
-      attachedImages: () => [...new Set([...budget.refs.values(), ...budget.pendingRefs.values()])].reverse(),
-    }),
-    // 文档（./doc-tools.ts）：doc_open / doc_insert_image / doc_export。文件读写在本进程直做（路径限工作区 + 附加目录），
-    // 只有导出过 broker 找主进程（PDF 要隐藏窗口）
-    ...createDocTools(requestBroker, command.sessionId, {
-      cwd: command.cwd,
-      writeRoots: [command.cwd, ...(command.directories?.attached ?? [])],
-      workspaceId: command.workspaceId,
-      imageReadRoots: imageReadRoots(command),
-      mode: currentMode,
-    }),
-    // agent 的终端工具组（PR2）：开可见终端、写命令、读输出。
-    // 本分支只有用户发起这一种来源（没有定时任务 / 委派 / 外部桥），所以这里不按来源
-    // 拦；将来自动化入口出现时，在这里按来源决定要不要注册——Proma 的判据是
-    // 「没有用户在场的来源不配拿可见终端」（它会悄悄扩大权限）
-    ...createTerminalTools(requestBroker, command.sessionId, {
-      cwd: command.cwd,
-      // 授权目录与开轮目录清单同源：prompt 里说「你可以去这些目录」，这里就认这些
-      authorizedDirs: [command.cwd, ...(command.directories?.attached ?? [])],
-    }),
-    ...createChannelTools(requestBroker, command.sessionId, role),
-    ...(memoryTools
-      ? createMemoryTools(requestBroker, command.sessionId, {
-          scope: { workspaceId: command.workspaceId, cwd: command.cwd },
-          // 轮号在 echoAndPrompt 算好写进 memory.turn；没开轮（压缩）时不会调到工具
-          turn: () => memory.turn ?? 1,
-        })
-      : []),
-    ...(automationTools ? createAutomationTools(requestBroker, command.sessionId, currentMode) : []),
-  ];
+  // 这一轮的非内建工具：清单、顺序与依赖都在 turn-tools.ts，与新内核共用同一份装配
+  const customTools = createTurnTools({
+    command,
+    flags,
+    broker: requestBroker,
+    mcpTools: mcpHub.toolsFor(mcpScope),
+    currentMode,
+    planOptions,
+    branch: () => sessionManager.getBranch(),
+    // 用户附的图：预算账里记着 hash → 附件副本路径（本轮的在 pendingRefs，旧轮的在 refs）；最近的在前
+    attachedImages: () => [...new Set([...budget.refs.values(), ...budget.pendingRefs.values()])].reverse(),
+    // 轮号在 echoAndPrompt 算好写进 memory.turn；没开轮（压缩）时不会调到工具
+    memoryTurn: () => memory.turn ?? 1,
+  });
   const { session } = await createAgentSessionFromServices({
     services,
     sessionManager,
@@ -1924,61 +1785,6 @@ function flushBackfill(session: AgentSession, texts: readonly string[] | undefin
   }
 }
 
-/**
- * 拷图进文档 / 演示文稿时，工作区与附加目录之外额外放行的读根：会话工作台、本会话的附件副本目录、
- * 浏览器下载目录——系统提示词里都明说「可以去读」。其余位置（含 `../` 与工作区外绝对路径）一律不放。
- */
-function imageReadRoots(command: {
-  attachmentsDir: string;
-  directories?: { workbench: string; browserDownloads?: string };
-}): string[] {
-  const roots = [command.attachmentsDir];
-  if (command.directories !== undefined) {
-    roots.push(command.directories.workbench);
-    if (command.directories.browserDownloads !== undefined) roots.push(command.directories.browserDownloads);
-  }
-  return roots.filter((root) => root !== "");
-}
-
-/**
- * 子会话身份：开轮目录清单的 related 里有 `relation === "parent"` 的一项 → 本会话是被
- * 派出的子会话。通道工具、记忆工具的注册与召回块的纠错提示都认它一处。
- */
-function isChildSession(command: { directories?: { related?: readonly { relation: string }[] } }): boolean {
-  return command.directories?.related?.some((entry) => entry.relation === "parent") === true;
-}
-
-/**
- * 轮前记忆召回的硬超时：主进程读盘 + 词法打分是毫秒级，6 秒已是「出事了」
- * （主进程侧另有 4 秒的转发超时先兑，这里只兑主进程失联）。
- */
-const MEMORY_RECALL_TIMEOUT_MS = 6_000;
-
-/**
- * 轮前召回：拿用户原话问主进程要相关记忆（主进程再
- * 转发给记忆服务进程），组装注入块。**任何失败都返回 null**（超时 / ok:false /
- * 异常 / 空命中）——轮前是同步等的，记忆的任何问题都不该拦住开轮（#228 的纪律）。
- */
-async function recallMemories(
-  sessionId: string,
-  query: string,
-  turn: number,
-  scope: { workspaceId: string | null; cwd: string },
-  canRevise: boolean,
-): Promise<string | null> {
-  try {
-    const outcome = await requestBroker.request<MemoryRecallOutcome>(
-      { type: "memoryRecallRequest", sessionId, query, turn, scope },
-      MEMORY_RECALL_TIMEOUT_MS,
-    );
-    if (!outcome.ok || outcome.hits.length === 0) return null;
-    return buildMemoryBlock(outcome.hits, { canRevise });
-  } catch (cause) {
-    console.warn("[memory] 轮前召回失败（不注入，照常开轮）", cause);
-    return null;
-  }
-}
-
 async function echoAndPrompt(
   opened: OpenedTurn,
   note: LedgerNote,
@@ -2005,6 +1811,7 @@ async function echoAndPrompt(
   opened.memory.pending =
     command.sessionMemory === true
       ? await recallMemories(
+          requestBroker,
           command.sessionId,
           command.text,
           turn,
@@ -2215,101 +2022,9 @@ async function handle(command: AgentCommand): Promise<void> {
     }
     return;
   }
-  if (command.type === "skillWriteResult") {
-    requestBroker.resolve(
-      command.requestId,
-      command.ok
-        ? { ok: true, ...(command.path === undefined ? {} : { path: command.path }) }
-        : { ok: false, error: command.error ?? "Write failed" },
-    );
-    return;
-  }
-  if (command.type === "mcpWriteResult") {
-    requestBroker.resolve(
-      command.requestId,
-      command.ok
-        ? { ok: true, ...(command.status === undefined ? {} : { status: command.status }) }
-        : { ok: false, error: command.error ?? "Write failed" },
-    );
-    return;
-  }
-  if (command.type === "readTaskResult") {
-    requestBroker.resolve(
-      command.requestId,
-      command.ok
-        ? { ok: true, card: command.card, text: command.text }
-        : { ok: false, error: command.error ?? "Read failed" },
-    );
-    return;
-  }
-  if (command.type === "modelCostsResult") {
-    // 派发参考的回执：形状即契约（ok 双分支），原样结掉在途 promise
-    requestBroker.resolve(command.requestId, command);
-    return;
-  }
-  if (command.type === "pluginInstallResult" || command.type === "pluginListResult" || command.type === "pluginPreviewResult" || command.type === "pluginBoardResult") {
-    // 插件工具的回执：形状即契约（ok 双分支），原样结掉在途 promise（主进程任何路径都回执）
-    requestBroker.resolve(command.requestId, command);
-    return;
-  }
-  if (command.type === "memoryRecallResult") {
-    // 记忆召回的回执：形状即契约（ok 双分支），原样结掉在途 promise。
-    // 轮前调用方对超时 / ok:false / 空 hits 统一按「不注入」处理
-    requestBroker.resolve(command.requestId, command);
-    return;
-  }
-  if (command.type === "memoryToolResult") {
-    // 记忆工具的回执：形状即契约（ok 双分支），原样结掉在途 promise
-    requestBroker.resolve(command.requestId, command);
-    return;
-  }
-  if (command.type === "browserResult") {
-    requestBroker.resolve(
-      command.requestId,
-      command.ok
-        ? {
-            ok: true,
-            text: command.text,
-            card: command.card,
-            ...(command.image === undefined ? {} : { image: command.image }),
-          }
-        : { ok: false, error: command.error ?? "Browser request failed" },
-    );
-    return;
-  }
-  if (command.type === "slidesResult" || command.type === "docResult") {
-    // 演示文稿 / 文档导出的回执：形状即契约（ok 双分支），原样结掉在途 promise
-    requestBroker.resolve(command.requestId, command);
-    return;
-  }
-  if (command.type === "terminalResult") {
-    // 终端工具的回执：形状即契约（ok 双分支），原样结掉在途 promise。
-    // 主进程那边任何路径都回执（agent-requests.ts），这里不做二次加工
-    requestBroker.resolve(command.requestId, command);
-    return;
-  }
-  if (command.type === "delegateResult") {
-    // requestBroker 的同款胶水：回执翻给 pending 的 delegate 工具调用
-    requestBroker.resolve(
-      command.requestId,
-      command.ok
-        ? { ok: true, childId: command.childId, title: command.title, card: command.card }
-        : { ok: false, error: command.error ?? "Delegate failed" },
-    );
-    return;
-  }
-  if (command.type === "automationResult") {
-    // 自动化工具的回执：形状即契约（ok 双分支），原样结掉在途 promise
-    requestBroker.resolve(command.requestId, command);
-    return;
-  }
-  if (command.type === "channelSendResult") {
-    requestBroker.resolve(
-      command.requestId,
-      command.ok
-        ? { ok: true, messageId: command.messageId }
-        : { ok: false, error: command.error ?? "Send failed" },
-    );
+  // 工具请求的回执（*Result）：翻成在途工具调用认的形状再结掉 promise（翻法与新内核共用，见 request-broker.ts）
+  if (isToolReply(command)) {
+    requestBroker.resolve(command.requestId, toolReplyResult(command));
     return;
   }
   if (command.type === "steer") {

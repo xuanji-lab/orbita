@@ -8,6 +8,7 @@
 import { strict as assert } from "node:assert";
 import { describe, test } from "node:test";
 import {
+  applyImageBudget,
   IMAGE_BUDGET_ENTRY,
   IMAGE_BUDGET_TARGET_BYTES,
   IMAGE_BUDGET_TRIGGER_BYTES,
@@ -396,4 +397,32 @@ test("mark 写读往返", () => {
   const book = readImageBudgetBook(branch);
   assert.equal(book.mark?.cut, mark.cut);
   assert.equal(book.mark?.cutIndex, mark.cutIndex);
+});
+
+describe("applyImageBudget（两个内核共用的轮内胶水）：保护起点取「见过的最小值」", () => {
+  const imageCount = (message: ContextMessage | undefined): number =>
+    ((message as { content?: { type: string }[] } | undefined)?.content ?? []).filter((block) => block.type === "image").length;
+
+  test("本轮用户消息自己的图再大也不换（保护起点 = 最后一条用户消息）", () => {
+    // 早前 8 张 ~2MB + 本轮一张 ~20MB：换完早前的仍高于目标线，本轮这张也绝不能动
+    const messages = [...Array.from({ length: 8 }, (_, i) => userMessage(`早前 ${i}`, [fillerData(2_000_000)], 1000 + i)), userMessage("本轮", [fillerData(20_000_000)], 9999)];
+    const budget = { mark: null, refs: new Map<string, string>(), pendingRefs: new Map<string, string>(), protectedFloor: Number.MAX_SAFE_INTEGER };
+    const marks: ImageBudgetMark[] = [];
+    const out = applyImageBudget(messages, budget, (mark) => marks.push(mark));
+    assert.ok(out !== undefined && marks.length === 1, "越线触发了替换并落了一次账");
+    assert.equal(imageCount(out.at(-1)), 1, "本轮用户消息的图保留");
+    assert.equal(budget.protectedFloor, messages.length - 1);
+  });
+
+  test("插话（steer）把最后一条用户消息推后：本轮附图仍受保护（取此前见过的较小起点）", () => {
+    const early = Array.from({ length: 8 }, (_, i) => userMessage(`早前 ${i}`, [fillerData(2_000_000)], 1000 + i));
+    const turn = userMessage("本轮带图", [fillerData(20_000_000)], 9000);
+    const budget = { mark: null, refs: new Map<string, string>(), pendingRefs: new Map<string, string>(), protectedFloor: Number.MAX_SAFE_INTEGER };
+    applyImageBudget([...early, turn], budget, () => undefined);
+    // 同一轮里又来一句插话：最后一条用户消息变成它，本轮附图那条不该因此变成可替换
+    const steered = [...early, turn, assistantMessage([{ type: "text", text: "好" }], 9001), userMessage("插话", [], 9002)];
+    const out = applyImageBudget(steered, budget, () => undefined) ?? steered;
+    assert.equal(imageCount(out[early.length]), 1, "本轮附图保留");
+    assert.equal(budget.protectedFloor, early.length);
+  });
 });

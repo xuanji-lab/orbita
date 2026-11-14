@@ -65,6 +65,8 @@ import { applyChannelSend, applyDelegate, type ChannelDeps } from "./channel/req
 import { ChannelStore } from "./channel/store.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
+import { durableKernelEnabled, KernelHost } from "./agent/kernel-host.ts";
+import { kernelLibraryName } from "../shared/kernel.ts";
 import { moveSessions } from "./session/move.ts";
 import { registerWrapupIpc } from "./session/wrapup-ipc.ts";
 import { registerMcpIpc } from "./mcp/ipc.ts";
@@ -546,6 +548,15 @@ void app.whenReady().then(async () => {
     [CATALOG_CACHE_ENV]: join(configDir, "model-catalog-cache.json"),
     ...(existsSync(join(piPackage, "package.json")) ? { [PI_PACKAGE_DIR_ENV]: piPackage } : {}),
   };
+  /**
+   * 新内核（pi-durable）：开发开关 ORBITA_DURABLE_KERNEL=1 才建（kernel-host.ts）。**关着时为 null**，
+   * 下面两处（删会话、工具禁区）都按 null 走与基线相同的代码。旧会话不在打开时迁：迁移在新内核第一次
+   * 为这条会话发消息时做（kernel.ts 的 turn），这一步对话主循环仍是旧内核，主进程不拉起 kernel 进程。
+   */
+  const durableDir = join(configDir, "durable");
+  const kernel = durableKernelEnabled(process.env)
+    ? new KernelHost(durableDir)
+    : null;
   const agentHost = new AgentHost(resolveRuntimePath(__dirname), agentProcessEnv, (event) => {
     // MCP 的连接状态由 agent 进程报上来（连接是它建的），主进程缓存最后一次快照给管理面看
     if (event.type === "mcp") mcpIpc.onAgentSnapshot(event.servers);
@@ -1055,15 +1066,22 @@ void app.whenReady().then(async () => {
       },
     },
   });
+  const onSessionRemoved = (id: string): void => {
+    agentHost.disposeSession(id);
+    // 会话删了，它在受管浏览器里的 agent tab 也一并关掉；意图存档与记忆的尾账也丢
+    browserSandbox.closeSessionTab(id);
+    intentIngest.forget(id);
+    memoryTurns.forget(id);
+  };
   registerSessionIpc(
     sessions,
-    (id) => {
-      agentHost.disposeSession(id);
-      // 会话删了，它在受管浏览器里的 agent tab 也一并关掉；意图存档与记忆的尾账也丢
-      browserSandbox.closeSessionTab(id);
-      intentIngest.forget(id);
-      memoryTurns.forget(id);
-    },
+    // 新内核开着时：删的是树根就连它的库一起删（一棵树一库；子会话没有自己的库，drop 是空操作）
+    kernel === null
+      ? onSessionRemoved
+      : (id) => {
+          onSessionRemoved(id);
+          void kernel.drop(kernelLibraryName(id)).catch((error: unknown) => console.error("[kernel] 删库失败", error));
+        },
     agentHost,
     carryovers,
     providers,
@@ -1245,8 +1263,11 @@ void app.whenReady().then(async () => {
     join(configDir, "pi-sessions"),
     // 图片字节预算的占位要拼附图原图的绝对路径（agent 进程不做路径策略）
     (sessionId) => sessions.attachmentDirOf(sessionId),
-    // 会话文件不可变（2026-09-18）：两个账本目录对工具面全档只读，含 Skip
-    [join(configDir, "sessions"), join(configDir, "pi-sessions")],
+    // 会话文件不可变（2026-09-18）：两个账本目录对工具面全档只读，含 Skip。
+    // 新内核开着时它的库目录同样只读（智能体的 write / edit / bash 改不了会话库）
+    kernel === null
+      ? [join(configDir, "sessions"), join(configDir, "pi-sessions")]
+      : [join(configDir, "sessions"), join(configDir, "pi-sessions"), durableDir],
     (workspaceId) => skills.linkDirs(workspaceId),
     skills,
     plugins,
