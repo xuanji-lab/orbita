@@ -1,8 +1,9 @@
 /**
  * 新内核（pi-durable）的契约真源：主进程 ↔ kernel utility 进程的消息协议，与库文件的命名。
  *
- * 开关 `ORBITA_DURABLE_KERNEL=1` 开着时，界面里根会话的对话主循环由 kernel 进程跑：主进程把旧内核那套
- * 开轮 / 停止 / 抢跑 / 压缩 / 插话 / 切档命令**原样**转给它（同一份 AgentCommand，开轮装配不为新内核另拼），
+ * 开关 `ORBITA_DURABLE_KERNEL=1` 开着时，界面里的对话（根会话与它派出的子会话、自动化开的轮）由 kernel 进程跑：主进程把旧内核那套
+ * 开轮 / 停止 / 抢跑 / 压缩 / 插话 / 切档 / 回退 / 撤销 / 挪工作区 / 分支命令**原样**转给它（同一份 AgentCommand，
+ * 开轮装配不为新内核另拼），
  * kernel 进程回的也是同一套 AgentEvent（转录 progress、phase、stats、审批、工具请求……），renderer 不认识 durable。
  * 关着（默认）时主进程不拉起 kernel 进程，一切走旧内核。
  *
@@ -49,12 +50,31 @@ export type KernelContinueCommand = Omit<KernelTurnCommand, "type" | "text" | "i
 };
 
 /**
+ * 分支：从一条住在新内核里的会话的前缀开一棵新树（新库）。与发给旧内核的 branch 同形（sessionId 是主进程先铸好的
+ * **新会话 id**，roles 是我们这本账前缀的角色序列），另带源会话 id 与它的树根：源会话的「本子」在源树的库里，
+ * sourcePiSessionFile 对迁来的会话是旧本子的路径、对新建的是 durable 引用，都认不出库里是哪条。
+ */
+export type KernelBranchCommand = Extract<AgentCommand, { type: "branch" }> & { sourceSessionId: string; sourceRoot: string };
+
+/**
+ * 删树里的一条会话（不是树根；删树根走 drop，整库一起删）：停它在跑的轮、从索引摘掉、记进墓碑；
+ * 它在库文件里的行在这个库下一次关闭（或下一次打开）时清掉（durable 没有删一条 conversation 的办法）。
+ */
+export type KernelForgetCommand = { type: "forget"; sessionId: string };
+
+/**
  * 转给新内核的会话命令：开轮（submit / interrupt / compact / continueRun）、停止、父→子插话、
- * 中途切档 / 换模型、生成标题、释放。与发给旧内核的同形（continueRun 除外）。
+ * 中途切档 / 换模型、生成标题、释放；本子编辑（回退 / 撤销 / 挪工作区，回执同旧内核是 piBookEdited / failed）、
+ * 分支（回执 created）、删树里的一条。与发给旧内核的同形（continueRun / branch 的两个字段 / forget 除外）。
  */
 export type KernelSessionCommand =
-  | Extract<AgentCommand, { type: "submit" | "interrupt" | "compact" | "abort" | "steer" | "setMode" | "setModel" | "generateTitle" | "dispose" }>
-  | KernelContinueCommand;
+  | Extract<
+      AgentCommand,
+      { type: "submit" | "interrupt" | "compact" | "abort" | "steer" | "setMode" | "setModel" | "generateTitle" | "dispose" | "revertPiBook" | "undoPiBook" | "movePiBook" }
+    >
+  | KernelContinueCommand
+  | KernelBranchCommand
+  | KernelForgetCommand;
 
 /** 转给新内核的回执：审批回答、意图确认、工具请求的回执（`*Result`，按 requestId 配对） */
 export type KernelReplyCommand = Extract<AgentCommand, { type: "permissionAnswer" | "intentConfirmResult" | `${string}Result` }>;
@@ -62,7 +82,7 @@ export type KernelReplyCommand = Extract<AgentCommand, { type: "permissionAnswer
 export type KernelCommand =
   /** 进程就绪后的第一句：库目录（`<userData>/durable`） */
   | { type: "init"; dir: string }
-  /** 一条会话的命令；root = 这棵会话树的根会话 id（决定用哪个库） */
+  /** 一条会话的命令；root = 这棵会话树的根会话 id（决定用哪个库；子会话与父同库，分支是新树的根） */
   | { type: "session"; root: string; command: KernelSessionCommand }
   | { type: "reply"; command: KernelReplyCommand }
   /** MCP 热重载：拆掉全部连接，下一轮按新配置重建（与旧内核的 mcpReload 同义） */
@@ -101,4 +121,9 @@ export type KernelMessage =
   /** 一轮落定（phase idle 之前到）：主进程据此清 meta.durable.running、记迁移失败 */
   | { type: "turnSettled"; sessionId: string; result: KernelTurnResult }
   | { type: "dropped"; requestId: string; error?: string }
+  /**
+   * 父→子插话到达时子这一轮刚好收尾（没有在跑的轮可插）：原文退回主进程，由它当「子空闲时的投递」开一轮。
+   * 旧内核在这一刻只报 failed（消息留在通道里、没送到模型，要人重发），这里不丢。
+   */
+  | { type: "steerBounced"; sessionId: string; text: string; delivery: "steer" | "followUp" }
   | { type: "shutdownDone"; requestId: string };

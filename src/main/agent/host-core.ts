@@ -199,6 +199,11 @@ export class AgentHostCore {
           this.pendingKernel.delete(message.requestId);
           return;
         }
+        if (message.type === "steerBounced") {
+          // 插话到达时子刚收尾：先按旧内核的说法报 failed（退回投递在后面的 commit）
+          this.onEvent({ type: "failed", sessionId: message.sessionId, message: "steer 到达时这一轮已结束（或刚开机还没接上），注入没送进去——请重发" });
+          return;
+        }
         // 请求（工具请求带 requestId、审批带 requestId）：记下来源，回执回 kernel
         if ("requestId" in message && typeof message.requestId === "string") this.kernelRequests.add(message.requestId);
         this.onChildEvent(message);

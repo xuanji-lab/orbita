@@ -256,6 +256,11 @@ export class KernelSessions {
       await this.steer(command.sessionId, command.text, command.delivery ?? "steer");
       return;
     }
+    if (command.type === "revertPiBook" || command.type === "undoPiBook" || command.type === "movePiBook" || command.type === "branch" || command.type === "forget") {
+      // 本子编辑 / 分支 / 删树里的一条：实现在后面的 commit（契约先行）
+      this.send({ type: "failed", sessionId: command.sessionId, message: `${command.type} is not supported by the durable kernel yet` });
+      return;
+    }
     command satisfies never;
   }
 

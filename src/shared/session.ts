@@ -442,6 +442,11 @@ export interface DurableMark {
   running?: true;
   /** 迁移旧会话失败的原因：会话回落只读，输入框禁用（原件不动） */
   failed?: string;
+  /**
+   * 子会话在应用重启后被自动接着跑的时刻（Unix ms）：后台任务照常续跑（方案默认），界面据此说一句
+   * 「应用重启后接着跑的」。下一次由人开的轮清掉。
+   */
+  resumed?: number;
 }
 
 export interface SessionMeta {
@@ -744,6 +749,10 @@ function parseRecentQueries(value: unknown): string[] {
  * 未读丢了只是少一个提醒，会话本体还在；同 parse 系列的纪律。
  * 也用在 IPC 入口：renderer 传来的坏载荷当已读写回，不裸存进 meta。
  */
+function resumedField(resumed: number | null): { resumed: number } | Record<string, never> {
+  return resumed === null ? {} : { resumed };
+}
+
 /** DurableMark 的读盘校验：缺 since 整条丢（当旧内核的会话）；坏的可选字段逐个丢 */
 export function parseDurableMark(raw: unknown): DurableMark | null {
   if (typeof raw !== "object" || raw === null) return null;
@@ -754,6 +763,7 @@ export function parseDurableMark(raw: unknown): DurableMark | null {
     since,
     ...(value["running"] === true ? { running: true as const } : {}),
     ...(typeof value["failed"] === "string" && value["failed"] !== "" ? { failed: value["failed"] } : {}),
+    ...resumedField(num(value["resumed"])),
   };
 }
 
