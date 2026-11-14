@@ -22,6 +22,8 @@
  * 最近提问时要先剥掉引用——否则侧栏标题会是一行 `<quoted_context …>`。
  */
 
+import type { DocxAnchor } from "./docx.ts";
+
 /** 被引用的消息是谁说的。Proma 还有 system，我们的转录里没有可划选的 system 消息 */
 export type QuoteRole = "user" | "assistant";
 
@@ -71,6 +73,13 @@ export interface TextQuote {
   /** 发送时在文件里已找不到这段原文（被用户或 agent 改掉了）：进正文，告诉模型别改 */
   missing?: true;
   /**
+   * Word（.docx）编辑器里划选的一处：**锚点**（块 id + 块内干净偏移 + 文本哈希 + 表格坐标）。
+   * 带它的引用在正文里写成 `<quoted_docx>`，模型据此调 `edit_docx`——docx 不能按行号定位
+   * （行号是渲染概念），也不能让模型去改文件本身（会撞 hash 冲突、丢用户未存的改动）。
+   * **只活在输入框里时与 filePath 并存**：filePath 给 chip 显示文件名，锚点给模型地址。
+   */
+  docx?: DocxAnchor;
+  /**
    * 划选超过上限被截过。**只活在输入框里**（chip 要如实标出「只引了前 N 字」），
    * 不进正文——发出去之后它就是一段 2000 字的引用，模型不需要知道原文更长。
    */
@@ -88,10 +97,23 @@ export const QUOTE_MAX_CHARS = 2000;
 export const QUOTE_MAX_TOTAL_CHARS = 20000;
 
 /** 判重用的那几个字段（TextQuote 的子集，测试里只要写这几项） */
-type QuoteIdentity = Pick<TextQuote, "messageId" | "text" | "filePath" | "lines">;
+type QuoteIdentity = Pick<TextQuote, "messageId" | "text" | "filePath" | "lines" | "docx">;
 
-/** 同一处：同一条消息的同一段，或同一个文件的同一段行（同样的话在文件里出现两处是两条引用） */
+/**
+ * 同一处：同一条消息的同一段，或同一个文件的同一段行（同样的话在文件里出现两处是两条引用）。
+ * docx 按锚点判（同一段里同一处才算同一条）：同一段文字选两次但偏移不同，是两处。
+ */
 function sameQuote(a: QuoteIdentity, b: QuoteIdentity): boolean {
+  if (a.docx !== undefined || b.docx !== undefined) {
+    return (
+      a.docx !== undefined &&
+      b.docx !== undefined &&
+      a.docx.path === b.docx.path &&
+      a.docx.blockId === b.docx.blockId &&
+      a.docx.startOffset === b.docx.startOffset &&
+      a.docx.endOffset === b.docx.endOffset
+    );
+  }
   return (
     a.messageId === b.messageId &&
     a.text === b.text &&
@@ -150,7 +172,30 @@ function encodeAttribute(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+/**
+ * Word 引用块。只带模型真正用得上的地址（块内干净偏移 + 两个 hash 供失效判定 +
+ * 表格坐标给人看），不带 docHash / editSeq——那是宿主自己的对账，模型不需要。
+ * 块体固定是 before / quoted / after：锚点失效时模型能拿原文重找，而且这个正文就是
+ * 用户选中的那段字（和 `<quoted_file>` 的 occurrence 写法同形）。
+ */
+function docxBlock(quote: TextQuote, index: number): string {
+  const anchor = quote.docx as DocxAnchor;
+  const table =
+    anchor.table === null
+      ? ""
+      : ` table="${anchor.table.tableIndex}/${anchor.table.rowIndex}/${anchor.table.cellIndex}/${anchor.table.paragraphIndex}"`;
+  const ordinal = anchor.blockOrdinal > 0 ? ` ordinal="${anchor.blockOrdinal}"` : "";
+  return (
+    `<quoted_docx index="${index}" path="${encodeAttribute(anchor.path)}" block="${encodeAttribute(anchor.blockId)}"${ordinal}` +
+    ` start="${anchor.startOffset}" end="${anchor.endOffset}" hash="${encodeAttribute(anchor.selectedTextHash)}"` +
+    `${anchor.blockTextHash === "" ? "" : ` block_hash="${encodeAttribute(anchor.blockTextHash)}"`}${table}>\n` +
+    `<before>${sanitizeBody(anchor.contextBefore)}</before>\n<quoted>${sanitizeBody(anchor.quote)}</quoted>\n<after>${sanitizeBody(anchor.contextAfter)}</after>\n` +
+    `</quoted_docx>\n\n`
+  );
+}
+
 function quoteBlock(quote: TextQuote, index: number): string {
+  if (quote.docx !== undefined) return docxBlock(quote, index);
   if (quote.filePath !== undefined) {
     const lines = quote.lines === undefined ? "" : ` lines="${quote.lines.from}-${quote.lines.to}"`;
     const slide = quote.slide === undefined ? "" : ` slide="${quote.slide}"${quote.element === undefined ? "" : ` element="${encodeAttribute(quote.element)}"`}`;
@@ -237,6 +282,15 @@ export const QUOTE_GUIDELINE = [
     "Markdown separated by lines containing only `+++`, then a closing line `:::` (2–4 columns). Change the file with your normal read / edit / write tools — " +
     "the panel merges changes live, so prefer small edits to rewriting the file, and never touch pages or " +
     "paragraphs you were not asked about.",
+  'A `<quoted_docx index="n" path="…" block="…" start="a" end="b" hash="…">` block is a passage the user ' +
+    "selected in the Word (.docx) editor. Its body holds `<before>`, `<quoted>` and `<after>`: the passage " +
+    "verbatim and a little context around it. To change it, call `edit_docx` with path, anchor.blockId, " +
+    'anchor.startOffset, anchor.endOffset and anchor.selectedTextHash copied from the block, mode tracked ' +
+    'changes is the default, and `replace` set to the new text ("" deletes the passage). Never write the ' +
+    ".docx file itself with write/edit/shell — the editor holds the authoritative document and a direct " +
+    "file write loses unsaved work and fails the hash check. If `edit_docx` reports the anchored text is " +
+    "stale, re-select it with anchor.quote (or blockId + find) rather than guessing offsets; if it reports " +
+    "the document is not open, ask the user to open it in the Files panel.",
   'When the open document path ends in .slides.json it is a slide deck in the app\'s native format (a JSON list of slides, each a ' +
     "list of positioned elements) — not Marp markdown, ignore the Marp advice above for it. Never edit it with read / edit / write: " +
     "use slides_read, slides_write, slides_edit, slides_insert_image (and slides_export). A quote with slide=\"k\" is the whole " +
@@ -245,7 +299,7 @@ export const QUOTE_GUIDELINE = [
   "</orbita-quotes>",
 ].join("\n");
 
-const BLOCK = /<(quoted_context|quoted_file)\b([^>]*)>\r?\n([\s\S]*?)\r?\n<\/\1>(?:\r?\n)*/g;
+const BLOCK = /<(quoted_context|quoted_file|quoted_docx)\b([^>]*)>\r?\n([\s\S]*?)\r?\n<\/\1>(?:\r?\n)*/g;
 
 function attribute(attrs: string, name: string): string | undefined {
   const match = new RegExp(`\\b${name}="([^"]*)"`).exec(attrs);
@@ -274,6 +328,53 @@ export function parseQuotedMessage(message: string): { quotes: TextQuote[]; text
   const stripped = message.replace(OPEN_DOCUMENT, "");
   if (!stripped.includes("<quoted_")) return { quotes: [], text: stripped.trim() };
   const text = stripped.replace(BLOCK, (whole, tag: string, attrs: string, body: string) => {
+    if (tag === "quoted_docx") {
+      const path = attribute(attrs, "path");
+      const blockId = attribute(attrs, "block");
+      if (path === undefined || blockId === undefined) return whole;
+      // 正文固定是 before / quoted / after（docxBlock 的写形）；解析不出的退化为整段正文
+      const parts =
+        /^<before>([\s\S]*?)<\/before>\r?\n<quoted>([\s\S]*?)<\/quoted>\r?\n<after>([\s\S]*?)<\/after>$/.exec(body);
+      const quoteText = parts === null ? body : (parts[2] as string);
+      const ordinal = Number(attribute(attrs, "ordinal"));
+      const startOffset = Number(attribute(attrs, "start"));
+      const endOffset = Number(attribute(attrs, "end"));
+      const tableAttr = (attribute(attrs, "table") ?? "").split("/").map(Number);
+      const table =
+        tableAttr.length === 4 && tableAttr.every((n) => Number.isInteger(n) && n >= 0)
+          ? {
+              tableIndex: tableAttr[0] as number,
+              rowIndex: tableAttr[1] as number,
+              cellIndex: tableAttr[2] as number,
+              paragraphIndex: tableAttr[3] as number,
+            }
+          : null;
+      quotes.push({
+        text: quoteText,
+        messageId: "",
+        role: "user",
+        filePath: path,
+        // 发出去之后只用于显示（chip 的「第 N 段」）与跳转：docHash / editSeq 这类会话内的账
+        // 解析不回来（也没必要），留空值；模型拿到的是正文里的地址，不是这个对象。
+        docx: {
+          v: 1,
+          path,
+          blockId,
+          blockOrdinal: Number.isInteger(ordinal) ? ordinal : 0,
+          startOffset: Number.isInteger(startOffset) ? startOffset : 0,
+          endOffset: Number.isInteger(endOffset) ? endOffset : 0,
+          selectedTextHash: attribute(attrs, "hash") ?? "",
+          blockTextHash: attribute(attrs, "block_hash") ?? "",
+          quote: quoteText,
+          contextBefore: parts === null ? "" : (parts[1] as string),
+          contextAfter: parts === null ? "" : (parts[3] as string),
+          table,
+          docHash: "",
+          editSeq: 0,
+        },
+      });
+      return "";
+    }
     if (tag === "quoted_file") {
       const filePath = attribute(attrs, "path");
       if (filePath === undefined) return whole;

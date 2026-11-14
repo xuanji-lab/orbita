@@ -219,3 +219,69 @@ describe("open_document —— 右栏开着哪份文件", () => {
     assert.equal(parseOpenDocument("普通一句"), null);
   });
 });
+
+describe("Word 引用（<quoted_docx>）：锚点进出正文", () => {
+  /** 一条 docx 引用：块内干净偏移 + 两级哈希 + 表格坐标（与 renderer 建出来的形状一致） */
+  const anchor = {
+    v: 1 as const,
+    path: "C:\论文\第三章.docx",
+    blockId: "1A2B3C4D",
+    blockOrdinal: 12,
+    startOffset: 5,
+    endOffset: 9,
+    selectedTextHash: "hf9uw3p",
+    blockTextHash: "hb7k2m",
+    quote: "结果与讨论",
+    contextBefore: "三、",
+    contextAfter: "表明，模型",
+    table: null,
+    docHash: "sha",
+    editSeq: 3,
+  };
+
+  it("写进正文：地址在属性里，原文与前后文在块体里；不发 docHash / editSeq", () => {
+    const message = composeQuotedMessage(
+      [{ text: anchor.quote, messageId: "", role: "user", filePath: anchor.path, docx: anchor }],
+      "把这里改得更学术一点",
+    );
+    assert.match(message, /^<quoted_docx index="1" path="C:\论文\第三章\.docx" block="1A2B3C4D" ordinal="12" start="5" end="9" hash="hf9uw3p" block_hash="hb7k2m">/);
+    assert.match(message, /<before>三、<\/before>\n<quoted>结果与讨论<\/quoted>\n<after>表明，模型<\/after>/);
+    assert.equal(message.includes("sha"), false);
+    assert.equal(message.trimEnd().endsWith("把这里改得更学术一点"), true);
+  });
+
+  it("解析回来：chip 能显示「第几段」，锚点字段逐项对上（会话内那两个字段留空）", () => {
+    const message = composeQuotedMessage(
+      [{ text: anchor.quote, messageId: "", role: "user", filePath: anchor.path, docx: anchor }],
+      "改一下",
+    );
+    const parsed = parseQuotedMessage(message);
+    assert.equal(parsed.text, "改一下");
+    assert.equal(parsed.quotes.length, 1);
+    const quote = parsed.quotes[0]!;
+    assert.equal(quote.filePath, anchor.path);
+    assert.equal(quote.text, anchor.quote);
+    assert.equal(quote.docx?.blockId, anchor.blockId);
+    assert.equal(quote.docx?.blockOrdinal, 12);
+    assert.deepEqual([quote.docx?.startOffset, quote.docx?.endOffset], [5, 9]);
+    assert.equal(quote.docx?.selectedTextHash, "hf9uw3p");
+    assert.equal(quote.docx?.blockTextHash, "hb7k2m");
+    assert.equal(quote.docx?.contextBefore, "三、");
+    assert.equal(quote.docx?.contextAfter, "表明，模型");
+    assert.equal(quote.docx?.docHash, "");
+    assert.equal(quote.docx?.editSeq, 0);
+  });
+
+  it("判重按锚点：同一段里不同位置是两条引用，同一位置是重复", () => {
+    const a = { text: "结果", messageId: "", role: "user" as const, filePath: anchor.path, docx: anchor };
+    const moved = { ...a, docx: { ...anchor, startOffset: 20, endOffset: 22 } };
+    assert.equal(acceptQuote([a], moved).accepted, true);
+    assert.deepEqual(acceptQuote([a], a), { accepted: false, reason: "duplicate" });
+  });
+
+  it("给模型的说明里点名 edit_docx 与「不要直接写文件」", () => {
+    assert.match(QUOTE_GUIDELINE, /quoted_docx/);
+    assert.match(QUOTE_GUIDELINE, /edit_docx/);
+    assert.match(QUOTE_GUIDELINE, /Never write the \.docx file itself/);
+  });
+});

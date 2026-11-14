@@ -792,6 +792,7 @@ export const en = {
     tooLongTotal: (max: number) => `Quotes are capped at ${max} characters in total — remove a few first.`,
     lines: (from: number, to: number) => (from === to ? `line ${from}` : `lines ${from}–${to}`),
     slide: (n: number) => `page ${n}`,
+    docxBlock: (n: number) => (n > 0 ? `paragraph ${n}` : "Word paragraph"),
     more: (n: number) => `${n} more quotes…`,
     expand: "Show quoted text in full",
     collapse: "Collapse quotes",
@@ -3378,6 +3379,34 @@ export const en = {
       `Couldn't locate ${n} contents entr${n === 1 ? "y" : "ies"}; their page numbers were left as they were.`,
     tocStatic: (n: number) =>
       `Updated ${n} page number${n === 1 ? "" : "s"} in a static contents list — convert it to a field in Word for a lasting fix.`,
+    /* point-and-edit (N2): selection anchor chip, agent revisions, review bar */
+    anchorLabel: (ordinal: number, chars: number) =>
+      ordinal > 0 ? `paragraph ${ordinal} · ${chars} chars selected` : `${chars} chars selected`,
+    anchorTableLabel: (row: number, cell: number, chars: number) => `table row ${row}, cell ${cell} · ${chars} chars selected`,
+    anchorQuote: "Quote into composer",
+    anchorQuoteTitle: "Put this passage and its address in the composer — the agent edits it with edit_docx",
+    anchorClear: "Clear selection",
+    anchorSpanBlock: "Select inside one paragraph (a multi-paragraph selection can't be edited in one go yet)",
+    anchorQuoted: "Added to the composer.",
+    anchorTooLong: (max: number) => `The selection is longer than ${max} characters — select a shorter passage.`,
+    reviewTitle: (n: number) => `${n} revision${n === 1 ? "" : "s"}`,
+    reviewAccept: "Accept",
+    reviewReject: "Reject",
+    reviewAcceptAll: "Accept all",
+    reviewRejectAll: "Reject all",
+    reviewAgent: "agent edit",
+    reviewReanchored: "re-anchored",
+    reviewStale: "This revision is no longer in the document (already accepted or rejected).",
+    agentEditDone: (groups: number, skipped: number) =>
+      skipped === 0
+        ? `${groups} revision${groups === 1 ? "" : "s"} written — decide on them in the review bar below.`
+        : `${groups} revision${groups === 1 ? "" : "s"} written, ${skipped} not applied (see the tool result).`,
+    agentEditNothing: "That edit changed nothing (the replacement text equals the original).",
+    agentWriting: "The agent is writing a revision…",
+    agentAuthor: "Orbita",
+    stampNote: (n: number) => `Added paragraph ids to ${n} paragraph${n === 1 ? "" : "s"} (Word-compatible, body untouched) so edits can name the exact paragraph.`,
+    stampFailed:
+      "Couldn't add paragraph ids (the package may be signed): locating works for this session only — after saving and reopening you'll need to select again.",
   },
 
   /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */

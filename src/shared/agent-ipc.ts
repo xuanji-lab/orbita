@@ -22,6 +22,7 @@ import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
 import type { SlidesAgentRequest, SlidesOutcome } from "./slides-export.ts";
 import type { DocAgentRequest, DocOutcome } from "./doc.ts";
+import type { DocxAgentEditRequest, DocxEditOutcome } from "./docx.ts";
 import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
 import type { LatexCompileRequest, LatexRunOutcome } from "./latex.ts";
 import type {
@@ -334,6 +335,14 @@ export const ipcChannels = {
    * 上一版复制进应用数据目录的 docx-backups。
    */
   docxSave: "docx:save",
+  /**
+   * agent 的 `edit_docx`：主进程把请求转给 renderer 里**活的** docx 编辑器（`docx.ts` 的
+   * `DocxEditRequestMessage`），由它按锚点写 tracked-changes 修订。renderer 用
+   * `docxEditReply` 回执——写入口只能是一个（活的编辑器），agent 不碰磁盘。
+   */
+  docxEditRequest: "docx:edit-request",
+  /** renderer 对 docxEditRequest 的回执（`DocxEditReplyMessage`） */
+  docxEditReply: "docx:edit-reply",
   /** 文档 / 演示文稿面板（契约在 `doc.ts`）：读一份 .md，回内容 + 摘要。白名单同文件面板，只认 .md */
   docRead: "doc:read",
   /** 写回（原子写）：带 expectedHash，盘上已被改过就不写、回盘上的现状（比较后交换） */
@@ -1221,6 +1230,11 @@ export type AgentCommand =
   | ({ type: "slidesResult"; requestId: string } & SlidesOutcome)
   /** 文档导出：主进程对 docRequest 的回执（browserResult 同款 ok 双分支） */
   | ({ type: "docResult"; requestId: string } & DocOutcome)
+  /**
+   * docx 指哪打哪：主进程对 docxEditRequest 的回执。**经 renderer 的活编辑器**写入，
+   * 所以这里多一层值型失败（不在应用内打开 / 选中的字已被改 / 编辑器没就绪）。
+   */
+  | ({ type: "docxEditResult"; requestId: string } & DocxEditOutcome)
   /** 终端：主进程对 terminalRequest 的回执（browserResult 同款） */
   | ({ type: "terminalResult"; requestId: string } & TerminalToolOutcome)
   /** LaTeX：主进程对 latexRequest 的回执（terminalResult 同款） */
@@ -1541,6 +1555,18 @@ export type AgentEvent =
    * 导出在主进程（PDF 要隐藏窗口，agent 进程不碰 electron）；路径白名单按会话的根现算。回 docResult。
    */
   | { type: "docRequest"; requestId: string; sessionId: string; workspaceId: string | null; request: DocAgentRequest }
+  /**
+   * docx 指哪打哪：agent 的 `edit_docx` 请求（形状见 shared/docx.ts 的 DocxAgentEditRequest）。
+   * **写入必须经过 renderer 里活的编辑器**（applyAIEditOperations）：agent 直接改磁盘会
+   * 撞 #308 的 hash 冲突并丢用户未存的改动。主进程只做白名单、找窗口与回执中转。
+   */
+  | {
+      type: "docxEditRequest";
+      requestId: string;
+      sessionId: string;
+      workspaceId: string | null;
+      request: DocxAgentEditRequest;
+    }
   /**
    * 子会话：父模型的 delegate 工具请求。**建会话在主进程**（agent 进程不碰
    * userData，readTaskRequest 同一条边界）：主进程建子会话（parentId = sessionId、
