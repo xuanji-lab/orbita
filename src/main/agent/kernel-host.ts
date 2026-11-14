@@ -5,15 +5,15 @@
  * 开关：环境变量 `ORBITA_DURABLE_KERNEL=1`，**默认关**。关着时 index.ts 不给 AgentHost 这条道（KernelLane），
  * host 的行为与开关之前逐字节相同；唯一的差别是住在新内核里的会话（meta.durable）**不交给旧内核续写**（见 routeFor）。
  *
- * 开着时：根会话的对话主循环由 kernel 进程跑（第一次交给它时在 meta 上记 DurableMark）；子会话这一步仍跑旧内核
- * （delegate 在新内核下的实现是下一步——父在新内核、子在旧内核，通道照常走主进程）；pi 本子编辑类操作
- * （回退 / 撤销 / 分支 / 挪工作区）对住在新内核里的会话明确拒绝（下一步实现），不碰数据。
+ * 开着时：对话主循环（根会话、子会话、自动化开的轮）都由 kernel 进程跑（第一次交给它时在 meta 上记 DurableMark）；
+ * 子会话与父同库（一棵树一库，root = 父）。本子编辑类操作（回退 / 撤销 / 分支的源 / 挪工作区）：住在新内核里的会话
+ * 交给新内核，其余（开关开着但还没在新内核里跑过的旧会话）照旧由旧内核编辑 pi 本子——它下次发消息时按编辑后的本子迁。
  */
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { DurableMark, SessionMeta } from "../../shared/session.ts";
 import { KERNEL_LIBRARY_NAME, type KernelTurnResult } from "../../shared/kernel.ts";
-import type { KernelChild, KernelLane, TurnRoute } from "./host-core.ts";
+import type { KernelChild, KernelLane, KernelRoute, TurnRoute } from "./host-core.ts";
 
 /** 开发开关的环境变量名 */
 export const DURABLE_KERNEL_FLAG = "ORBITA_DURABLE_KERNEL";
@@ -32,12 +32,8 @@ function migrationFailedMessage(reason: string): string {
   return `Moving this conversation into the durable kernel failed (${reason}). It is read-only; the original file is untouched.`;
 }
 
-/** 住在新内核里的会话这一步不支持的操作 */
-const DURABLE_UNSUPPORTED_MESSAGE =
-  "Not supported yet for conversations in the durable kernel (revert, undo, branch and moving to another workspace come in the next step).";
-
 /**
- * 这一轮交给谁。开关开着：迁移失败过的只读（拒绝）；子会话走旧内核（这一步的降级）；其余（含全新的会话）走新内核。
+ * 这一轮交给谁。开关开着：迁移失败过的只读（拒绝）；子会话仍走旧内核（delegate 接新内核在后面的 commit）；其余（含全新的会话）走新内核。
  * 开关关着：住在新内核里的会话拒绝（旧内核续写会让两边分叉），其余旧内核。
  */
 export function routeFor(meta: SessionMeta | null, enabled: boolean): { to: TurnRoute } | { refuse: string } {
@@ -45,6 +41,21 @@ export function routeFor(meta: SessionMeta | null, enabled: boolean): { to: Turn
   if (meta?.durable?.failed !== undefined) return { refuse: migrationFailedMessage(meta.durable.failed) };
   if (meta?.parentId !== undefined) return { to: "legacy" };
   return { to: "kernel" };
+}
+
+/**
+ * 本子编辑交给谁（开关开着）：住在新内核里的会话 → kernel（迁移失败过的只读，拒绝）；还没在新内核里跑过的旧会话
+ * → 旧内核编辑 pi 本子（它下次发消息时按编辑后的本子迁，见 KernelPool 的指纹重迁）。
+ */
+export function editRouteFor(meta: SessionMeta | null, sessionId: string): KernelRoute | { refuse: string } {
+  if (meta?.durable === undefined) return { to: "legacy" };
+  if (meta.durable.failed !== undefined) return { refuse: migrationFailedMessage(meta.durable.failed) };
+  return { to: "kernel", root: libraryRoot(meta, sessionId) };
+}
+
+/** 这条会话所在的树根（决定库）：子会话与父同库 */
+export function libraryRoot(meta: SessionMeta | null, sessionId: string): string {
+  return meta?.parentId ?? sessionId;
 }
 
 /** 开轮交给新内核时的标记：第一次接手记 since；开着一轮置 running */
@@ -95,11 +106,16 @@ export class KernelHost {
         const meta = await deps.readMeta(command.sessionId);
         const decision = routeFor(meta, true);
         if ("refuse" in decision) throw new Error(decision.refuse);
+        if (decision.to === "legacy") return { to: "legacy" };
         // 全新的会话还没有 meta：首轮 created 之后由 ipc 建 meta 时带上标记（host.durableMark）
-        if (decision.to === "kernel" && meta !== null) await deps.updateDurable(command.sessionId, (current) => markRunning(current, now()));
-        return decision.to;
+        if (meta !== null) await deps.updateDurable(command.sessionId, (current) => markRunning(current, now()));
+        return { to: "kernel", root: libraryRoot(meta, command.sessionId) };
       },
-      refuseLegacyEdit: async (sessionId) => ((await deps.readMeta(sessionId))?.durable === undefined ? null : DURABLE_UNSUPPORTED_MESSAGE),
+      editRoute: async (sessionId) => {
+        const decision = editRouteFor(await deps.readMeta(sessionId), sessionId);
+        if ("refuse" in decision) throw new Error(decision.refuse);
+        return decision;
+      },
       settled: (sessionId, result) => {
         void deps.updateDurable(sessionId, (current) => markSettled(current, result, now())).catch((cause: unknown) => console.error("[kernel] 落定标记没写上", sessionId, cause));
       },

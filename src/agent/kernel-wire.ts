@@ -47,14 +47,19 @@ export type WireState = {
   legacyUsage?: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number };
 };
 
+/**
+ * rewindable + fork asOf：回退（fork 裁点）与分支拿到的是裁点那一刻的账——旧内核这些记在本子的 custom 条目里，
+ * 回退时随枝一起回退（图片水位的 cutIndex 是按消息下标记的，不回退的话会在回退后的会话里按错的位置裁图）。
+ * 每 32 次改动存一份全量，其余存增量（记忆账逐轮变长，次次全量会让库按轮数的平方长）。
+ */
 export const WireDoc = defineDoc<WireState>({
   kind: "orbita.wire",
   version: 1,
   scope: "conversation",
-  history: "latest",
-  fork: "current",
+  history: "rewindable",
+  fork: "asOf",
   initial: () => ({ imageMark: null, imageRefs: [], memory: [], customs: [] }),
-  checkpointWhen: () => true,
+  checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 32,
 });
 
 /** 一条消息的指纹：时间戳 + 第一段文字的开头。迁移时给扩展消息记、请求时据此认回来 */

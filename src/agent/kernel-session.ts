@@ -20,7 +20,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { AssistantMessage, Message, Usage } from "@earendil-works/pi-ai";
 import { calculateContextTokens, estimateTokens } from "@earendil-works/pi-coding-agent";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
-import { ConversationIdle, LiveDoc, UsageDoc, type Conversation, type EntryRecord, type Harness } from "@earendil-works/pi-durable";
+import { ConversationIdle, LiveDoc, UsageDoc, type Conversation, type ConversationId, type EntryRecord, type Harness } from "@earendil-works/pi-durable";
 import type { AgentCommand, AgentEvent, AgentStats, ProviderSecrets } from "../shared/agent-ipc.ts";
 import { composeIntentPrompt } from "../shared/intent-recall.ts";
 import { durableBookRef, kernelLibraryName, type KernelContinueCommand, type KernelSessionCommand, type KernelTurnResult } from "../shared/kernel.ts";
@@ -31,7 +31,8 @@ import { compactionBoundaryTimestamp, compactionErrorText, type TurnTiming } fro
 import { TurnFileTracker } from "./file-tracker.ts";
 import type { IntentConfirmWaiter } from "./intent-confirm-wait.ts";
 import { runIntentGate } from "./intent-gate.ts";
-import type { KernelPool, KernelTarget } from "./kernel.ts";
+import { SessionHistoryDoc, type KernelPool, type KernelTarget } from "./kernel.ts";
+import { appendNotice, branchSession, revertSession, RUNNING_REFUSAL } from "./kernel-edit.ts";
 import { runTurn, ToolRounds, type KernelTurnRuntime, type TurnOutcome } from "./kernel-turn.ts";
 import { KernelView } from "./kernel-view.ts";
 import { WireDoc } from "./kernel-wire.ts";
@@ -94,7 +95,7 @@ export class KernelStats {
   /** 最近一次算出的上下文占用（压缩界碑的 tokensBefore 用） */
   lastContextTokens: number | null = null;
 
-  async snapshot(harness: Harness, conversation: Conversation, contextWindow: number | undefined): Promise<AgentStats> {
+  async snapshot(harness: Harness, sessionId: string, conversation: Conversation, contextWindow: number | undefined): Promise<AgentStats> {
     const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
     const add = (usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: { total?: number } } | undefined): void => {
       if (usage === undefined) return;
@@ -104,10 +105,15 @@ export class KernelStats {
       totals.cacheWrite += usage.cacheWrite ?? 0;
       totals.cost += usage.cost?.total ?? 0;
     };
-    const legacy = (await harness.snapshot(WireDoc, conversation.id, BACKGROUND_CONTEXT))?.legacyUsage;
+    // 这条会话用过的全部会话号（回退一次多一条 fork）：旧内核数整本本子（含回退留下的废枝），durable 的 pi.usage 在 fork 时从零开始
+    const history = (await harness.snapshot(SessionHistoryDoc, BACKGROUND_CONTEXT))?.sessions[sessionId] ?? [conversation.id];
+    const first = history[0] ?? conversation.id;
+    const legacy = (await harness.snapshot(WireDoc, first as ConversationId, BACKGROUND_CONTEXT))?.legacyUsage;
     if (legacy !== undefined) add({ ...legacy, cost: { total: legacy.cost } });
-    const ledger = await harness.snapshot(UsageDoc, conversation.id, BACKGROUND_CONTEXT);
-    for (const usage of [...Object.values(ledger?.models ?? {}), ...Object.values(ledger?.tools ?? {})]) add(usage as Usage);
+    for (const id of history.includes(conversation.id) ? history : [...history, conversation.id]) {
+      const ledger = await harness.snapshot(UsageDoc, id as ConversationId, BACKGROUND_CONTEXT);
+      for (const usage of [...Object.values(ledger?.models ?? {}), ...Object.values(ledger?.tools ?? {})]) add(usage as Usage);
+    }
     const view = await conversation.context(BACKGROUND_CONTEXT);
     const context = contextUsage(view.messages, view.head?.kind === "pi.compaction", contextWindow);
     this.lastContextTokens = context?.tokens ?? null;
@@ -256,12 +262,49 @@ export class KernelSessions {
       await this.steer(command.sessionId, command.text, command.delivery ?? "steer");
       return;
     }
-    if (command.type === "revertPiBook" || command.type === "undoPiBook" || command.type === "movePiBook" || command.type === "branch" || command.type === "forget") {
-      // 本子编辑 / 分支 / 删树里的一条：实现在后面的 commit（契约先行）
+    if (command.type === "revertPiBook" || command.type === "undoPiBook" || command.type === "movePiBook") {
+      await this.editBook(library, command);
+      return;
+    }
+    if (command.type === "branch") {
+      await this.branch(library, command);
+      return;
+    }
+    if (command.type === "forget") {
+      // 删树里的一条：实现在后面的 commit
       this.send({ type: "failed", sessionId: command.sessionId, message: `${command.type} is not supported by the durable kernel yet` });
       return;
     }
     command satisfies never;
+  }
+
+  /**
+   * 本子编辑（旧内核 runtime.ts 的 revertPiBookCommand / undoPiBookCommand / movePiBookCommand 的对位）：会话在跑时拒绝；
+   * 回执同旧内核——成功 piBookEdited，失败（含对账不过）failed，主进程 revert.ts 收到失败就一条文件都不动。
+   */
+  private async editBook(library: string, command: Extract<KernelSessionCommand, { type: "revertPiBook" | "undoPiBook" | "movePiBook" }>): Promise<void> {
+    const edit = command.type === "revertPiBook" ? "revert" : command.type === "undoPiBook" ? "undo" : "move";
+    try {
+      if (this.running.has(command.sessionId)) throw new Error(RUNNING_REFUSAL[edit]);
+      const { harness } = await this.deps.pool.library(library);
+      if (command.type === "revertPiBook") await revertSession(harness, command.sessionId, command.roles);
+      else await appendNotice(harness, command.sessionId, edit === "undo" ? "orbita-undo" : "orbita-move", command.notice, this.now());
+      this.send({ type: "piBookEdited", sessionId: command.sessionId, edit });
+    } catch (cause) {
+      this.send({ type: "failed", sessionId: command.sessionId, message: cause instanceof Error ? cause.message : String(cause) });
+    }
+  }
+
+  /** 分支：源会话（源树的库）裁点之前的历史复制进新树的库；回执同旧内核——created（新会话的「本子」= durable 引用）/ failed */
+  private async branch(library: string, command: Extract<KernelSessionCommand, { type: "branch" }>): Promise<void> {
+    try {
+      const source = await this.deps.pool.library(kernelLibraryName(command.sourceRoot));
+      const target = await this.deps.pool.library(library);
+      await branchSession({ source: source.harness, sourceSessionId: command.sourceSessionId, roles: command.roles, target: target.harness, sessionId: command.sessionId });
+      this.send({ type: "created", sessionId: command.sessionId, piSessionFile: durableBookRef(command.sessionId) });
+    } catch (cause) {
+      this.send({ type: "failed", sessionId: command.sessionId, message: cause instanceof Error ? cause.message : String(cause) });
+    }
   }
 
   /**
@@ -445,7 +488,7 @@ export class KernelSessions {
 
   private async pushStats(sessionId: string, target: Extract<KernelTarget, { ok: true }>, stats: KernelStats, persist?: true): Promise<void> {
     try {
-      const snapshot = await stats.snapshot(target.harness, target.conversation, target.model.contextWindow);
+      const snapshot = await stats.snapshot(target.harness, sessionId, target.conversation, target.model.contextWindow);
       this.send({ type: "stats", sessionId, stats: snapshot, ...(persist === true ? { persist } : null) });
     } catch (cause) {
       console.error("[kernel] 读用量失败", sessionId, cause);

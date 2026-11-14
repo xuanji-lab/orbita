@@ -4,7 +4,7 @@ import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionMeta } from "../../shared/session.ts";
-import { DURABLE_MOVED_MESSAGE, durableKernelEnabled, KernelHost, markRunning, markSettled, routeFor } from "./kernel-host.ts";
+import { DURABLE_MOVED_MESSAGE, durableKernelEnabled, editRouteFor, KernelHost, libraryRoot, markRunning, markSettled, routeFor } from "./kernel-host.ts";
 
 const dirs: string[] = [];
 after(async () => {
@@ -34,10 +34,17 @@ describe("KernelHost", () => {
 
 describe("routeFor / markRunning / markSettled：一轮交给谁、会话的新内核标记", () => {
   const meta = (extra: Partial<SessionMeta> = {}): SessionMeta => ({ id: "s", title: "", titleSource: "derived", cwd: "/", workspaceId: null, providerId: "p", modelId: "m", mode: "plan", thinkingLevel: "medium", piSessionFile: "/p.jsonl", pinned: false, archived: false, recentQueries: [], stats: null, createdAt: 1, updatedAt: 1, ...extra });
-  it("开着：根会话（含全新的）→ kernel；子会话 → 旧内核；迁移失败过 → 拒绝（只读）", () => {
+  it("开着：根会话（含全新的）→ kernel；子会话 → 旧内核；迁移失败过 → 拒绝（只读）；本子编辑按住处分流", () => {
     assert.deepEqual(routeFor(null, true), { to: "kernel" });
     assert.deepEqual(routeFor(meta(), true), { to: "kernel" });
     assert.deepEqual(routeFor(meta({ parentId: "root" }), true), { to: "legacy" });
+    assert.equal(libraryRoot(meta({ parentId: "root" }), "c1"), "root");
+    assert.equal(libraryRoot(null, "s1"), "s1");
+    // 本子编辑：住在新内核里的去 kernel（子会话带父的树根），还没跑过的旧会话旧内核，迁移失败过的拒绝
+    assert.deepEqual(editRouteFor(meta(), "s1"), { to: "legacy" });
+    assert.deepEqual(editRouteFor(meta({ durable: { since: 1 } }), "s1"), { to: "kernel", root: "s1" });
+    assert.deepEqual(editRouteFor(meta({ parentId: "root", durable: { since: 1 } }), "c1"), { to: "kernel", root: "root" });
+    assert.ok("refuse" in editRouteFor(meta({ durable: { since: 1, failed: "坏行" } }), "s1"));
     const refused = routeFor(meta({ durable: { since: 1, failed: "坏行" } }), true);
     assert.ok("refuse" in refused && refused.refuse.includes("坏行"));
   });

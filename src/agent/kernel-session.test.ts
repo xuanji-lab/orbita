@@ -7,13 +7,14 @@ import { execFileSync } from "node:child_process";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { MemoryStorage } from "@earendil-works/pi-durable";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { MemoryStorage, ProviderDoc } from "@earendil-works/pi-durable";
 import type { AgentCommand, AgentEvent } from "../shared/agent-ipc.ts";
 import type { KernelTurnResult } from "../shared/kernel.ts";
 import { applyTranscriptProgress, createTranscriptState, selectTranscript } from "../shared/transcript-state.ts";
 import type { TranscriptItem } from "../shared/transcript.ts";
 import { IntentConfirmWaiter } from "./intent-confirm-wait.ts";
-import { KernelPool } from "./kernel.ts";
+import { KernelPool, SessionHistoryDoc, SessionIndexDoc } from "./kernel.ts";
 import { compactionSummary, contextUsage, KernelSessions } from "./kernel-session.ts";
 import { PermissionWaiter, type KernelTurnRuntime } from "./kernel-turn.ts";
 import { McpHub } from "./mcp.ts";
@@ -399,3 +400,158 @@ describe("contextUsage / compactionSummary", () => {
   });
 });
 
+
+describe("KernelSessions：回退 / 撤销 / 分支（旧内核本子编辑的对位）", () => {
+  /** 每次请求里各条 user 消息的正文（去掉逐请求注入的用户情境块） */
+  const requests: string[][] = [];
+  const answer = (text: string) => (context: { messages: readonly { role: string; content: unknown }[] }) => {
+    requests.push(
+      context.messages
+        .filter((message) => message.role === "user")
+        .map((message) => (Array.isArray(message.content) ? message.content.map((block: { text?: string }) => block.text ?? "").join("") : String(message.content)).replace(/<user_context>[\s\S]*?<\/user_context>\s*/g, "").trim()),
+    );
+    return fauxAssistantMessage(text);
+  };
+  const say = async (r: Rig, cwd: string, text: string, sessionId = "s1", root = sessionId): Promise<void> => {
+    const before = r.events.length;
+    await r.sessions.handle(root, submit(cwd, { sessionId, text, ...(sessionId === "s1" ? {} : { piSessionFile: `durable:${sessionId}` }) }));
+    await r.until((event) => r.events.indexOf(event) >= before && idle(sessionId)(event));
+  };
+  const edited = (r: Rig, from: number) => r.until((event) => r.events.indexOf(event) >= from && (event.type === "piBookEdited" || event.type === "failed"));
+
+  it("回退到第二句之前：下一个请求只带第一轮 + 新的一句；被回退的轮次留在库里；对账不过拒绝、在跑时拒绝；用量不因回退变少", async () => {
+    const cwd = await tempDir();
+    requests.length = 0;
+    faux.setResponses([answer("答一"), answer("答二"), answer("答三"), answer("答四")]);
+    const r = await rig();
+    await say(r, cwd, "一");
+    await say(r, cwd, "二");
+    await say(r, cwd, "三");
+    const statsBefore = [...r.events].reverse().find((event) => event.type === "stats" && event.persist === true);
+    // 对账不过（我们这本账说前面有三条 user，库里没有）：拒绝，什么都不动
+    let from = r.events.length;
+    await r.sessions.handle("s1", { type: "revertPiBook", sessionId: "s1", sourcePiSessionFile: "durable:s1", cwd, roles: ["user", "user", "user"], targetMessageId: "x" });
+    const refused = await edited(r, from);
+    assert.equal(refused.type, "failed");
+    // 回退到「二」之前（前缀 = 第一轮的 user + assistant）
+    from = r.events.length;
+    await r.sessions.handle("s1", { type: "revertPiBook", sessionId: "s1", sourcePiSessionFile: "durable:s1", cwd, roles: ["user", "assistant"], targetMessageId: "m2" });
+    assert.equal((await edited(r, from)).type, "piBookEdited");
+    await say(r, cwd, "四");
+    assert.deepEqual(requests.at(-1), ["一", "四"]);
+    // 被回退的轮次还在库里：索引指向 fork 出来的新会话，原会话的条目一条没少
+    const { harness } = await r.pool.library("s1.sqlite");
+    const history = (await harness.snapshot(SessionHistoryDoc, BACKGROUND_CONTEXT))?.sessions["s1"] ?? [];
+    assert.equal(history.length, 2);
+    assert.equal((await harness.snapshot(SessionIndexDoc, BACKGROUND_CONTEXT))?.sessions["s1"], history[1]);
+    const original = await harness.conversation(history[0] as never, BACKGROUND_CONTEXT);
+    const kept = (await original?.entries({ order: "ascending" }, 500, undefined, BACKGROUND_CONTEXT))?.items ?? [];
+    assert.ok(kept.some((entry) => JSON.stringify(entry.model ?? []).includes("答三")), "被回退的「三」那轮还在原会话里");
+    // provider 会话 id 沿用（旧内核回退不换本子，提示缓存的亲和不断）
+    const providerOf = async (id: number | undefined) => (await harness.snapshot(ProviderDoc, id as never, BACKGROUND_CONTEXT))?.sessionId;
+    assert.equal(await providerOf(history[1]), await providerOf(history[0]));
+    // 用量：旧内核数整本本子（含废枝），回退之后不变少
+    const statsAfter = [...r.events].reverse().find((event) => event.type === "stats" && event.persist === true);
+    assert.ok(statsBefore?.type === "stats" && statsAfter?.type === "stats" && statsAfter.stats.tokens.total > statsBefore.stats.tokens.total);
+    // 在跑时拒绝（旧内核同一句话）
+    faux.setResponses([fauxAssistantMessage(fauxToolCall("bash", { command: "sleep 30" }), { stopReason: "toolUse" }), fauxAssistantMessage("停了")]);
+    void r.sessions.handle("s1", submit(cwd, { text: "慢" }));
+    await r.until((event) => event.type === "progress" && event.progress.type === "item_started" && event.progress.item.role === "tool");
+    from = r.events.length;
+    await r.sessions.handle("s1", { type: "revertPiBook", sessionId: "s1", sourcePiSessionFile: "durable:s1", cwd, roles: [], targetMessageId: "m1" });
+    const running = await edited(r, from);
+    assert.ok(running.type === "failed" && /still running/.test(running.message));
+    from = r.events.length;
+    await r.sessions.handle("s1", { type: "abort", sessionId: "s1" });
+    await r.until((event) => r.events.indexOf(event) >= from && idle()(event));
+  });
+
+  it("回退到第一句之前（roles 为空，旧内核 resetLeaf）：下一个请求只有新的一句；连续回退两次照样对得上", async () => {
+    const cwd = await tempDir();
+    requests.length = 0;
+    faux.setResponses([answer("答一"), answer("答二"), answer("答三"), answer("答四")]);
+    const r = await rig();
+    await say(r, cwd, "一");
+    await say(r, cwd, "二");
+    let from = r.events.length;
+    await r.sessions.handle("s1", { type: "revertPiBook", sessionId: "s1", sourcePiSessionFile: "durable:s1", cwd, roles: ["user", "assistant"], targetMessageId: "m2" });
+    assert.equal((await edited(r, from)).type, "piBookEdited");
+    from = r.events.length;
+    await r.sessions.handle("s1", { type: "revertPiBook", sessionId: "s1", sourcePiSessionFile: "durable:s1", cwd, roles: [], targetMessageId: "m1" });
+    assert.equal((await edited(r, from)).type, "piBookEdited");
+    await say(r, cwd, "三");
+    assert.deepEqual(requests.at(-1), ["三"]);
+    await say(r, cwd, "四");
+    assert.deepEqual(requests.at(-1), ["三", "四"]);
+  });
+
+  it("停在工具中途的轮之后回退：对账按转录算出的角色对得上（停下的调用、被停的工具结果都算在那一轮里）", async () => {
+    const cwd = await tempDir();
+    requests.length = 0;
+    faux.setResponses([fauxAssistantMessage(fauxToolCall("bash", { command: "sleep 30" }), { stopReason: "toolUse" }), answer("答继续"), answer("答新的")]);
+    const r = await rig();
+    void r.sessions.handle("s1", submit(cwd, { text: "慢的" }));
+    await r.until((event) => event.type === "progress" && event.progress.type === "item_started" && event.progress.item.role === "tool");
+    let from = r.events.length;
+    await r.sessions.handle("s1", { type: "abort", sessionId: "s1" });
+    await r.until((event) => r.events.indexOf(event) >= from && idle()(event));
+    await say(r, cwd, "继续");
+    // 主进程 branchRoles 的同一个口径：user / assistant，跳过空 error 回答
+    const items = r.transcript();
+    const at = items.findIndex((item) => item.role === "user" && JSON.stringify(item).includes("继续"));
+    const roles = items
+      .slice(0, at)
+      .filter((item) => item.role === "user" || (item.role === "assistant" && !(item.status === "error" && item.content.length === 0)))
+      .map((item) => (item.role === "user" ? "user" : "assistant"));
+    from = r.events.length;
+    await r.sessions.handle("s1", { type: "revertPiBook", sessionId: "s1", sourcePiSessionFile: "durable:s1", cwd, roles, targetMessageId: "m" });
+    const reply = await edited(r, from);
+    assert.equal(reply.type, "piBookEdited", reply.type === "failed" ? reply.message : "");
+    await say(r, cwd, "新的");
+    assert.deepEqual(requests.at(-1)?.at(-1), "新的");
+    assert.ok(!(requests.at(-1) ?? []).includes("继续"));
+  });
+
+  it("撤销 / 挪工作区的告知进下一个请求的上下文（排在最后一轮之后）", async () => {
+    const cwd = await tempDir();
+    requests.length = 0;
+    faux.setResponses([answer("答一"), answer("答二")]);
+    const r = await rig();
+    await say(r, cwd, "一");
+    const from = r.events.length;
+    await r.sessions.handle("s1", { type: "undoPiBook", sessionId: "s1", sourcePiSessionFile: "durable:s1", cwd, notice: "The user undid the agent's changes to the following files" });
+    assert.equal((await edited(r, from)).type, "piBookEdited");
+    await say(r, cwd, "二");
+    const last = requests.at(-1) ?? [];
+    assert.equal(last[0], "一");
+    assert.match(last[1] ?? "", /The user undid the agent's changes/);
+    assert.equal(last[2], "二");
+  });
+
+  it("分支：源会话「答一」为止的历史复制进新树的库；新会话第一轮带着前缀，源会话不受影响", async () => {
+    const cwd = await tempDir();
+    requests.length = 0;
+    faux.setResponses([answer("答一"), answer("答二"), answer("分支答"), answer("源答")]);
+    const r = await rig();
+    await say(r, cwd, "一");
+    await say(r, cwd, "二");
+    const from = r.events.length;
+    await r.sessions.handle("b1", { type: "branch", sessionId: "b1", sourcePiSessionFile: "durable:s1", cwd, roles: ["user", "assistant"], sourceSessionId: "s1", sourceRoot: "s1" });
+    const created = await r.until((event) => r.events.indexOf(event) >= from && (event.type === "created" || event.type === "failed"));
+    assert.ok(created.type === "created" && created.piSessionFile === "durable:b1");
+    // 分出来的是新树：它自己的库里有它，源库里没有
+    const branched = await r.pool.library("b1.sqlite");
+    assert.notEqual((await branched.harness.snapshot(SessionIndexDoc, BACKGROUND_CONTEXT))?.sessions["b1"], undefined);
+    const source = await r.pool.library("s1.sqlite");
+    assert.equal((await source.harness.snapshot(SessionIndexDoc, BACKGROUND_CONTEXT))?.sessions["b1"], undefined);
+    await say(r, cwd, "分支里", "b1");
+    assert.deepEqual(requests.at(-1), ["一", "分支里"]);
+    await say(r, cwd, "源里");
+    assert.deepEqual(requests.at(-1), ["一", "二", "源里"]);
+    // 锚点不是回答：拒绝（旧内核 planBranchCut 同一句话）
+    const before = r.events.length;
+    await r.sessions.handle("b2", { type: "branch", sessionId: "b2", sourcePiSessionFile: "durable:s1", cwd, roles: ["user"], sourceSessionId: "s1", sourceRoot: "s1" });
+    const bad = await r.until((event) => r.events.indexOf(event) >= before && (event.type === "created" || event.type === "failed"));
+    assert.ok(bad.type === "failed" && /agent reply/.test(bad.message));
+  });
+});

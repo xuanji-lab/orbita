@@ -62,6 +62,19 @@ export const SessionIndexDoc = defineDoc<{ sessions: Record<string, number> }>({
 });
 
 /**
+ * 每条会话用过的全部 durable 会话号（session 作用域的单例文档）：迁移 / 新建时是 [号]，每回退一次追加 fork 出来的那条。
+ * 用量按它累计（旧内核的 getSessionStats 数整本本子，含回退留下的废枝；durable 的 pi.usage 在 fork 时从零开始），
+ * 删树里的一条时按它清行。缺席（第三步建的库）= 只有索引里那一条。
+ */
+export const SessionHistoryDoc = defineDoc<{ sessions: Record<string, number[]> }>({
+  kind: "orbita.session-history",
+  version: 1,
+  scope: "session",
+  initial: () => ({ sessions: {} }),
+  checkpointWhen: () => true,
+});
+
+/**
  * 迁移时原件的指纹（库里按会话记，与迁移同一次提交）：大小 + 修改时刻 + 末尾 64 KiB 的 sha256。
  * 新内核要发消息时先比它——原件之后又被旧内核续写过（指纹变了），库里那份就过期了，丢掉重迁。
  * 末尾那一段是兜底：同秒内改了同样字节数的极端情形，mtime 与大小都分不出来（pi 本子只追加，变化总在末尾）。
@@ -411,6 +424,8 @@ export class KernelPool {
               // 已有索引且不是我们要换掉的那一份（别人刚迁过 / 刚重迁过）：用它，不再迁一份
               if (already !== undefined && already !== replacing) throw new AlreadyIndexed(already);
               index.sessions[input.sessionId] = id;
+              // 新建 / 迁移 / 重迁都从这一条重新开始记（重迁丢掉的旧副本不再算这条会话的）
+              (await tx.doc(SessionHistoryDoc)).sessions[input.sessionId] = [id];
               if (print !== null) (await tx.doc(LegacyPrintDoc)).prints[input.sessionId] = print;
               // 沿用旧本子的会话 id 作 provider sessionId：提示缓存的亲和不因换内核断掉
               if (providerSessionId !== null) (await tx.doc(ProviderDoc, id)).sessionId = providerSessionId;

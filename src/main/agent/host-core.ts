@@ -46,19 +46,22 @@ export interface KernelChild {
 /** 一轮开轮命令该交给谁：新内核（kernel 进程）还是旧内核（agent 进程）；拒绝时抛错（原因给用户看） */
 export type TurnRoute = "kernel" | "legacy";
 
+/** 交给新内核时带上这棵会话树的根（决定用哪个库：子会话与父同库） */
+export type KernelRoute = { to: "kernel"; root: string } | { to: "legacy" };
+
 /**
  * 新内核那条道（开关 ORBITA_DURABLE_KERNEL=1 时由主进程给；关着时缺席，host 的行为与开关之前逐字节相同）。
  * - fork / dir：拉起 kernel 进程、它的库目录；
- * - route：开轮命令去哪（住在新内核里的会话 / 新的根会话 → kernel；子会话这一步仍走旧内核；不能续的抛错）；
- * - refuseLegacyEdit：pi 本子编辑类操作（回退 / 撤销 / 分支 / 挪工作区）对这条会话是否不支持（返回原因）；
+ * - route：开轮命令去哪（开关开着时一律 kernel，带树根；不能续的抛错），会话记上「住在新内核」；
+ * - editRoute：本子编辑类操作（回退 / 撤销 / 分支的源 / 挪工作区）去哪：住在新内核里的会话 → kernel，其余旧内核；不能编辑的抛错；
  * - settled：kernel 报一轮落定（清「在跑」标记、记迁移失败）；
  * - exited：kernel 进程意外退出（清孤儿 shell 进程）。running = 退出时还在跑的会话。
  */
 export interface KernelLane {
   fork: () => KernelChild;
   dir: string;
-  route: (command: { sessionId: string }) => Promise<TurnRoute>;
-  refuseLegacyEdit: (sessionId: string) => Promise<string | null>;
+  route: (command: { sessionId: string }) => Promise<KernelRoute>;
+  editRoute: (sessionId: string) => Promise<KernelRoute>;
   settled: (sessionId: string, result: KernelTurnResult) => void;
   exited: (running: readonly string[]) => void;
 }
@@ -127,8 +130,10 @@ export class AgentHostCore {
   private readonly kernel: KernelLane | undefined;
   private kernelChild: KernelChild | null = null;
   private kernelReady: Promise<void> | null = null;
-  /** 这次运行里交给过 kernel 的会话（停止 / 插话 / 切档 / 标题跟着它们走） */
-  private readonly kernelSessions = new Set<string>();
+  /** 这次运行里交给过 kernel 的会话 → 它的树根（停止 / 插话 / 切档 / 标题跟着它们走） */
+  private readonly kernelSessions = new Map<string, string>();
+  /** 交给 kernel 还没回执的本子编辑 / 分支（会话 id；kernel 进程退出时要把等待者结掉） */
+  private readonly kernelEdits = new Set<string>();
   /** kernel 里一轮没落定的会话（kernel 进程意外退出时它们是「被打断」） */
   private readonly kernelRunning = new Set<string>();
   /** kernel 发出的请求 id（工具请求、审批）：回执要回到 kernel 进程 */
@@ -156,10 +161,15 @@ export class AgentHostCore {
     this.legacyGuard = legacyGuard;
   }
 
-  /** pi 本子编辑类操作的拒绝原因（新内核那条道问它自己；关着开关时问守卫） */
-  private async refusedEdit(sessionId: string): Promise<string | null> {
-    if (this.kernel !== undefined) return this.kernel.refuseLegacyEdit(sessionId);
-    return (await this.legacyGuard?.(sessionId)) ?? null;
+  /**
+   * 本子编辑类操作（回退 / 撤销 / 分支的源 / 挪工作区）交给谁：开关开着问新内核那条道（住在新内核里的去 kernel，
+   * 不能编辑的抛错）；关着问守卫（住在新内核里的会话旧内核不碰，抛错）；都没有（开关之前的形状）旧内核。
+   */
+  private async editRoute(sessionId: string): Promise<KernelRoute> {
+    if (this.kernel !== undefined) return this.kernel.editRoute(sessionId);
+    const refused = (await this.legacyGuard?.(sessionId)) ?? null;
+    if (refused !== null) throw new Error(refused);
+    return { to: "legacy" };
   }
 
   /**
@@ -215,6 +225,14 @@ export class AgentHostCore {
         this.kernelRunning.clear();
         this.kernelSessions.clear();
         this.kernelRequests.clear();
+        // 交给它还没回执的本子编辑 / 分支：等待者结掉（不然调用方要等满超时）
+        for (const sessionId of this.kernelEdits) {
+          this.pendingPiEdits.get(sessionId)?.reject(new Error(`kernel runtime exited with code ${code}`));
+          this.pendingPiEdits.delete(sessionId);
+          this.pendingCreates.get(sessionId)?.reject(new Error(`kernel runtime exited with code ${code}`));
+          this.pendingCreates.delete(sessionId);
+        }
+        this.kernelEdits.clear();
         for (const resolvePending of this.pendingKernel.values()) resolvePending(`kernel runtime exited with code ${code}`);
         this.pendingKernel.clear();
         const message = `kernel runtime exited with code ${code}`;
@@ -235,10 +253,10 @@ export class AgentHostCore {
     return this.kernelReady;
   }
 
-  /** 交给 kernel 的会话命令 */
-  private postKernel(command: KernelSessionCommand): void {
+  /** 交给 kernel 的会话命令；root 缺省 = 这次运行里记下的树根（没记过就是它自己） */
+  private postKernel(command: KernelSessionCommand, root?: string): void {
     if (!this.kernelChild) throw new Error("kernel runtime is not running");
-    this.kernelChild.postMessage({ type: "session", root: command.sessionId, command });
+    this.kernelChild.postMessage({ type: "session", root: root ?? this.kernelSessions.get(command.sessionId) ?? command.sessionId, command });
   }
 
   /** 工具回执 / 审批回答：回到发出请求的那个进程 */
@@ -391,7 +409,10 @@ export class AgentHostCore {
   ): Promise<string | null> {
     // 新内核开着：先问这一轮交给谁（住在新内核里的会话 / 新的根会话 → kernel；不能续的这里抛错）
     // 没有新内核那条道、也没有守卫（开关之前的形状）时一个 await 都不多：fork 的时序与之前逐拍相同
-    if (this.kernel !== undefined && (await this.kernel.route(command)) === "kernel") return this.postKernelTurn(command);
+    if (this.kernel !== undefined) {
+      const route = await this.kernel.route(command);
+      if (route.to === "kernel") return this.postKernelTurn(command, route.root);
+    }
     if (this.kernel === undefined && this.legacyGuard !== undefined) {
       const refused = await this.legacyGuard(command.sessionId);
       if (refused !== null) throw new Error(refused);
@@ -406,9 +427,9 @@ export class AgentHostCore {
   }
 
   /** 交给 kernel 的开轮（含 continueRun）：与 postTurn 同一个 created 等待规则 */
-  private async postKernelTurn(command: Extract<AgentCommand, { type: "submit" | "interrupt" | "compact" }> | KernelContinueCommand): Promise<string | null> {
+  private async postKernelTurn(command: Extract<AgentCommand, { type: "submit" | "interrupt" | "compact" }> | KernelContinueCommand, root: string): Promise<string | null> {
     await this.ensureKernel();
-    this.kernelSessions.add(command.sessionId);
+    this.kernelSessions.set(command.sessionId, root);
     this.kernelRunning.add(command.sessionId);
     let created: Promise<string | null> | null = null;
     if (command.piSessionFile === undefined) {
@@ -435,10 +456,9 @@ export class AgentHostCore {
 
   /** 新内核：接着跑上次被中断的那一轮（不加新消息）。只有新内核有这件事 */
   async continueRun(command: KernelContinueCommand): Promise<string | null> {
-    if (this.kernel === undefined || (await this.kernel.route(command)) !== "kernel") {
-      throw new Error("only conversations that live in the durable kernel can be continued");
-    }
-    return this.postKernelTurn(command);
+    const route = this.kernel === undefined ? null : await this.kernel.route(command);
+    if (route?.to !== "kernel") throw new Error("only conversations that live in the durable kernel can be continued");
+    return this.postKernelTurn(command, route.root);
   }
 
   /** 这条会话的会话级命令发给谁：这次运行里交给过 kernel 的走 kernel，其余旧内核 */
@@ -453,12 +473,18 @@ export class AgentHostCore {
   async branchSession(
     input: Omit<Extract<AgentCommand, { type: "branch" }>, "type" | "sessionId">,
     sessionId: string,
-    /** 源会话 id：住在新内核里的会话这一步不支持分支（新内核的分支是下一步） */
+    /** 源会话 id：住在新内核里的会话由新内核分支（源本子在它树的库里，分出来的是新树、新库） */
     sourceSessionId?: string,
   ): Promise<string | null> {
     if (sourceSessionId !== undefined && (this.kernel !== undefined || this.legacyGuard !== undefined)) {
-      const refused = await this.refusedEdit(sourceSessionId);
-      if (refused !== null) throw new Error(refused);
+      const route = await this.editRoute(sourceSessionId);
+      if (route.to === "kernel") {
+        await this.ensureKernel();
+        const created = this.awaitCreated(sessionId, "kernel runtime did not confirm the branch in time");
+        this.kernelEdits.add(sessionId);
+        this.postKernel({ type: "branch", sessionId, ...input, sourceSessionId, sourceRoot: route.root }, sessionId);
+        return created.finally(() => this.kernelEdits.delete(sessionId));
+      }
     }
     await this.ensure();
     const created = this.awaitCreated(sessionId, "agent runtime did not confirm the branch in time");
@@ -475,17 +501,28 @@ export class AgentHostCore {
     command: Extract<AgentCommand, { type: "revertPiBook" | "undoPiBook" | "movePiBook" }>,
   ): Promise<void> {
     if (this.kernel !== undefined || this.legacyGuard !== undefined) {
-      const refused = await this.refusedEdit(command.sessionId);
-      if (refused !== null) throw new Error(refused);
+      const route = await this.editRoute(command.sessionId);
+      if (route.to === "kernel") {
+        await this.ensureKernel();
+        this.kernelEdits.add(command.sessionId);
+        return this.awaitPiEdit(command.sessionId, "kernel runtime did not confirm the edit in time", () => this.postKernel(command, route.root)).finally(() =>
+          this.kernelEdits.delete(command.sessionId),
+        );
+      }
     }
     await this.ensure();
+    return this.awaitPiEdit(command.sessionId, "agent runtime did not confirm the pi book edit in time", () => this.post(command));
+  }
+
+  /** 等一条本子编辑的回执（piBookEdited / failed），30 秒兜底 */
+  private awaitPiEdit(sessionId: string, timeoutMessage: string, send: () => void): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      this.pendingPiEdits.set(command.sessionId, { resolve, reject });
+      this.pendingPiEdits.set(sessionId, { resolve, reject });
       setTimeout(() => {
-        if (!this.pendingPiEdits.delete(command.sessionId)) return;
-        reject(new Error("agent runtime did not confirm the pi book edit in time"));
+        if (!this.pendingPiEdits.delete(sessionId)) return;
+        reject(new Error(timeoutMessage));
       }, 30_000);
-      this.post(command);
+      send();
     });
   }
 

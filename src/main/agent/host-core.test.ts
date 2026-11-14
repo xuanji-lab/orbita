@@ -17,7 +17,7 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { AgentCommand, AgentEvent } from "../../shared/agent-ipc.ts";
 import type { KernelCommand, KernelMessage } from "../../shared/kernel.ts";
-import { AgentHostCore, type AgentChild, type KernelLane, type TurnRoute } from "./host-core.ts";
+import { AgentHostCore, type AgentChild, type KernelLane, type KernelRoute, type TurnRoute } from "./host-core.ts";
 
 /** 脚本化的假子进程。 */
 class FakeChild implements AgentChild {
@@ -801,7 +801,8 @@ class FakeKernel {
   }
 }
 
-function kernelRig(routes: Record<string, TurnRoute> = {}) {
+/** routes：会话 → 交给谁（缺省 kernel）；roots：会话 → 树根（缺省它自己）；edits：本子编辑交给谁（缺省 kernel） */
+function kernelRig(routes: Record<string, TurnRoute> = {}, roots: Record<string, string> = {}, edits: Record<string, TurnRoute> = {}) {
   const legacy = new FakeChild();
   const kernel = new FakeKernel();
   const events: AgentEvent[] = [];
@@ -810,8 +811,10 @@ function kernelRig(routes: Record<string, TurnRoute> = {}) {
   const lane: KernelLane = {
     fork: () => kernel,
     dir: "/durable",
-    route: async (command) => routes[command.sessionId] ?? "kernel",
-    refuseLegacyEdit: async (sessionId) => (routes[sessionId] === "legacy" ? null : "not supported"),
+    route: async (command): Promise<KernelRoute> =>
+      routes[command.sessionId] === "legacy" ? { to: "legacy" } : { to: "kernel", root: roots[command.sessionId] ?? command.sessionId },
+    editRoute: async (sessionId): Promise<KernelRoute> =>
+      edits[sessionId] === "legacy" ? { to: "legacy" } : { to: "kernel", root: roots[sessionId] ?? sessionId },
     settled: (sessionId) => settled.push(sessionId),
     exited: (running) => exited.push([...running]),
   };
@@ -902,11 +905,41 @@ describe("AgentHostCore：新内核那条道", () => {
     assert.ok(!r.events.some((event) => event.type === "failed" && event.sessionId === "b"));
   });
 
-  test("pi 本子编辑（回退 / 分支）对住在新内核里的会话明确拒绝，不碰 agent 进程", async () => {
-    const r = kernelRig();
-    await assert.rejects(r.host.editPiBook({ type: "undoPiBook", sessionId: "s1" } as never), /not supported/);
-    await assert.rejects(r.host.branchSession({ sourcePiSessionFile: "/p", cwd: "/", roles: [] }, "new", "s1"), /not supported/);
-    assert.equal(r.legacy.posted.length, 0);
+  test("本子编辑（回退 / 撤销）与分支交给 kernel：子会话带父的树根、分支是新树；回执结掉等待；kernel 退出时等待者被拒", async () => {
+    const r = kernelRig({}, { child: "root" }, { legacyOne: "legacy" });
+    const revert = r.host.editPiBook({ type: "revertPiBook", sessionId: "child", sourcePiSessionFile: "/p", cwd: "/", roles: ["user", "assistant"], targetMessageId: "m" });
+    await flush();
+    r.kernel.emit({ type: "ready" });
+    await flush();
+    r.kernel.emit({ type: "piBookEdited", sessionId: "child", edit: "revert" });
+    await revert;
+    const branch = r.host.branchSession({ sourcePiSessionFile: "/p", cwd: "/", roles: ["user", "assistant"] }, "fresh", "child");
+    await flush();
+    r.kernel.emit({ type: "created", sessionId: "fresh", piSessionFile: "durable:fresh" });
+    assert.equal(await branch, "durable:fresh");
+    const sessions = r.kernel.posted.flatMap((command) => (command.type === "session" ? [command] : []));
+    assert.deepEqual(
+      sessions.map((command) => [command.root, command.command.type]),
+      [
+        ["root", "revertPiBook"],
+        ["fresh", "branch"],
+      ],
+    );
+    const branched = sessions[1]?.command;
+    assert.ok(branched?.type === "branch" && branched.sourceSessionId === "child" && branched.sourceRoot === "root");
+    // 还没在新内核里跑过的旧会话：照旧交给旧内核编辑 pi 本子
+    const legacyEdit = r.host.editPiBook({ type: "undoPiBook", sessionId: "legacyOne", sourcePiSessionFile: "/p", cwd: "/", notice: "n" });
+    await flush();
+    r.legacy.emit({ type: "ready" });
+    await flush();
+    assert.deepEqual(r.legacy.posted.map((command) => command.type), ["undoPiBook"]);
+    r.legacy.emit({ type: "piBookEdited", sessionId: "legacyOne", edit: "undo" });
+    await legacyEdit;
+    // 等着的编辑遇上 kernel 退出：立刻被拒，不等 30 秒
+    const hanging = r.host.editPiBook({ type: "undoPiBook", sessionId: "child", sourcePiSessionFile: "/p", cwd: "/", notice: "n" });
+    await flush();
+    r.kernel.exitWith(1);
+    await assert.rejects(hanging, /kernel runtime exited/);
   });
 
   test("关着开关时的守卫：住在新内核里的会话不交给旧内核", async () => {
