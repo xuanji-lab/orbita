@@ -113,6 +113,7 @@ import { LatexRunner } from "./latex/run.ts";
 import { applyLatexRequest } from "./latex/agent-requests.ts";
 import { registerLatexIpc } from "./latex/ipc.ts";
 import { OFFICE_BACKUP_DIR, registerOfficeIpc } from "./office/ipc.ts";
+import { removeEmptyLegacyOfficeBackupDirs } from "./office/legacy-backups.ts";
 import { applyOfficeRequest } from "./office/agent.ts";
 import { registerCiteIpc } from "./cite/ipc.ts";
 import { registerReviewIpc } from "./review/ipc.ts";
@@ -1290,6 +1291,8 @@ void app.whenReady().then(async () => {
     // 备份放 userData（不进会话工作台：那是文件面板的第一个根，会被当成用户文件看到）
     backupRoot: join(configDir, OFFICE_BACKUP_DIR),
   });
+  // 旧版本留在会话工作台里的空 office-backups（只删空目录，非空的旧备份一个字节都不动）
+  void removeEmptyLegacyOfficeBackupDirs(join(configDir, "workbenches")).catch(() => undefined);
   // 引用补全：读项目里的 .bib（只读盘、与编译同一道白名单与同一个项目目录）
   registerCiteIpc(workspaces, sessions);
   const agentIpc = registerAgentIpc(
