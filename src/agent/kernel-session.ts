@@ -20,7 +20,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { AssistantMessage, Message, Usage } from "@earendil-works/pi-ai";
 import { calculateContextTokens, estimateTokens } from "@earendil-works/pi-coding-agent";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
-import { ConversationIdle, LiveDoc, type Conversation, type EntryRecord, type Harness } from "@earendil-works/pi-durable";
+import { ConversationIdle, LiveDoc, UsageDoc, type Conversation, type EntryRecord, type Harness } from "@earendil-works/pi-durable";
 import type { AgentCommand, AgentEvent, AgentStats, ProviderSecrets } from "../shared/agent-ipc.ts";
 import { composeIntentPrompt } from "../shared/intent-recall.ts";
 import { durableBookRef, kernelLibraryName, type KernelContinueCommand, type KernelSessionCommand, type KernelTurnResult } from "../shared/kernel.ts";
@@ -34,6 +34,7 @@ import { runIntentGate } from "./intent-gate.ts";
 import type { KernelPool, KernelTarget } from "./kernel.ts";
 import { runTurn, ToolRounds, type KernelTurnRuntime, type TurnOutcome } from "./kernel-turn.ts";
 import { KernelView } from "./kernel-view.ts";
+import { WireDoc } from "./kernel-wire.ts";
 import type { PiModel } from "./model-registration.ts";
 import { generateTitle } from "./session-title.ts";
 import { TranscriptAdapter } from "./transcript-adapter.ts";
@@ -85,46 +86,32 @@ export interface KernelSessionsDeps {
 }
 
 /**
- * 用量快照（旧内核 pushStats 读 AgentSession.getSessionStats 的对位）：token 与花费累计本会话全部回答与工具结果的
- * usage（pi 的 getSessionStats 同口径：本子里每条消息的 usage 加总），上下文占用按 pi 同一个估算法
- * （最后一条有效回答的 usage + 其后消息的 estimateTokens；压缩之后还没有新回答 = 未知）。
+ * 用量快照（旧内核 pushStats 读 AgentSession.getSessionStats 的对位）。token 与花费 = 迁移时旧本子的累计（同 getSessionStats
+ * 的口径，迁移时算好存在 orbita.wire）+ 迁来之后 durable 自己记的 pi.usage（回答、工具结果、压缩摘要，含失败与被停的尝试）。
+ * 上下文占用按 pi 同一个估算法（最后一条有效回答的 usage + 其后消息的 estimateTokens；压缩之后还没有新回答 = 未知）。
  */
 export class KernelStats {
-  private readonly totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
-  private lastEntry = 0;
   /** 最近一次算出的上下文占用（压缩界碑的 tokensBefore 用） */
   lastContextTokens: number | null = null;
 
-  async refresh(conversation: Conversation): Promise<void> {
-    let cursor: Parameters<Conversation["entries"]>[2];
-    for (;;) {
-      const page = await conversation.entries({ minEntryId: (this.lastEntry + 1) as EntryRecord["id"], order: "ascending" }, 500, cursor, BACKGROUND_CONTEXT);
-      for (const entry of page.items) {
-        this.lastEntry = Math.max(this.lastEntry, entry.id);
-        for (const message of entry.model ?? []) {
-          const usage = (message as { role: string; usage?: Usage }).usage;
-          if ((message.role === "assistant" || message.role === "toolResult") && usage !== undefined) this.add(usage);
-        }
-      }
-      if (page.next === undefined) return;
-      cursor = page.next;
-    }
-  }
-
-  private add(usage: Usage): void {
-    this.totals.input += usage.input ?? 0;
-    this.totals.output += usage.output ?? 0;
-    this.totals.cacheRead += usage.cacheRead ?? 0;
-    this.totals.cacheWrite += usage.cacheWrite ?? 0;
-    this.totals.cost += usage.cost?.total ?? 0;
-  }
-
-  async snapshot(conversation: Conversation, contextWindow: number | undefined): Promise<AgentStats> {
-    await this.refresh(conversation);
+  async snapshot(harness: Harness, conversation: Conversation, contextWindow: number | undefined): Promise<AgentStats> {
+    const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+    const add = (usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: { total?: number } } | undefined): void => {
+      if (usage === undefined) return;
+      totals.input += usage.input ?? 0;
+      totals.output += usage.output ?? 0;
+      totals.cacheRead += usage.cacheRead ?? 0;
+      totals.cacheWrite += usage.cacheWrite ?? 0;
+      totals.cost += usage.cost?.total ?? 0;
+    };
+    const legacy = (await harness.snapshot(WireDoc, conversation.id, BACKGROUND_CONTEXT))?.legacyUsage;
+    if (legacy !== undefined) add({ ...legacy, cost: { total: legacy.cost } });
+    const ledger = await harness.snapshot(UsageDoc, conversation.id, BACKGROUND_CONTEXT);
+    for (const usage of [...Object.values(ledger?.models ?? {}), ...Object.values(ledger?.tools ?? {})]) add(usage as Usage);
     const view = await conversation.context(BACKGROUND_CONTEXT);
     const context = contextUsage(view.messages, view.head?.kind === "pi.compaction", contextWindow);
     this.lastContextTokens = context?.tokens ?? null;
-    const { input, output, cacheRead, cacheWrite, cost } = this.totals;
+    const { input, output, cacheRead, cacheWrite, cost } = totals;
     return { tokens: { input, output, cacheRead, cacheWrite, total: input + output + cacheRead + cacheWrite }, cost, contextUsage: context };
   }
 }
@@ -453,7 +440,7 @@ export class KernelSessions {
 
   private async pushStats(sessionId: string, target: Extract<KernelTarget, { ok: true }>, stats: KernelStats, persist?: true): Promise<void> {
     try {
-      const snapshot = await stats.snapshot(target.conversation, target.model.contextWindow);
+      const snapshot = await stats.snapshot(target.harness, target.conversation, target.model.contextWindow);
       this.send({ type: "stats", sessionId, stats: snapshot, ...(persist === true ? { persist } : null) });
     } catch (cause) {
       console.error("[kernel] 读用量失败", sessionId, cause);

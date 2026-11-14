@@ -66,6 +66,44 @@ export interface LegacyWireSeed {
    * 同一组记录：分支上全部 system 消息，压缩之前的也算）。没有 system 记录 = 空。
    */
   legacyTools: Tool[];
+  /**
+   * 旧本子的用量累计：与旧内核 getSessionStats 同一个口径（本子**全部** entry——含废枝——里回答与工具结果的 usage、
+   * 压缩 / 分支摘要的 usage、单独的 usage 记录）。新内核的用量 = 它 + 迁来之后 durable 自己记的（pi.usage），
+   * 迁移不往 pi.usage 里补账，不带走这份就会少算迁移之前的全部花费。
+   */
+  legacyUsage: LegacyUsage;
+}
+
+/** 用量累计（token 四项 + 花费） */
+export interface LegacyUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+}
+
+/** 旧内核 getSessionStats 的累计口径（pi-coding-agent agent-session.js 的同名函数逐条照抄判定） */
+export function legacyUsageOf(entries: readonly { type: string }[]): LegacyUsage {
+  const total: LegacyUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+  const add = (usage: unknown): void => {
+    if (typeof usage !== "object" || usage === null) return;
+    const value = usage as { input?: unknown; output?: unknown; cacheRead?: unknown; cacheWrite?: unknown; cost?: { total?: unknown } };
+    const num = (x: unknown): number => (typeof x === "number" && Number.isFinite(x) ? x : 0);
+    total.input += num(value.input);
+    total.output += num(value.output);
+    total.cacheRead += num(value.cacheRead);
+    total.cacheWrite += num(value.cacheWrite);
+    total.cost += num(value.cost?.total);
+  };
+  for (const entry of entries) {
+    const record = entry as { type: string; usage?: unknown; message?: { role?: unknown; usage?: unknown } };
+    if (record.type === "usage") add(record.usage);
+    else if ((record.type === "branch_summary" || record.type === "compaction") && record.usage !== undefined) add(record.usage);
+    if (record.type !== "message") continue;
+    if (record.message?.role === "toolResult" || record.message?.role === "assistant") add(record.message.usage);
+  }
+  return total;
 }
 
 export interface LegacyPlan {
@@ -258,6 +296,7 @@ export function planLegacyMigration(raw: string): LegacyPlanResult {
             return message?.role === "system" ? [message as unknown as Message] : [];
           }),
         ),
+        legacyUsage: legacyUsageOf(book.entries),
       },
       providerSessionId: book.header.id,
       cwd: book.header.cwd,

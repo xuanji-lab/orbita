@@ -286,6 +286,8 @@ describe("旧会话惰性迁移（剧本第 10、11、13 条）", () => {
       (wire?.legacyTools ?? []).map((tool) => tool["name"]),
       ["read", "terminal_execute", "terminal_open"],
     );
+    // 用量累计一并带走（旧本子的 getSessionStats 口径）：新内核的用量快照从它往上加
+    assert.deepEqual(Object.keys(wire?.legacyUsage ?? {}).sort(), ["cacheRead", "cacheWrite", "cost", "input", "output"]);
     await kernel.closeAll();
   });
 

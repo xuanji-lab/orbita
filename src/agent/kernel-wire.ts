@@ -43,6 +43,8 @@ export type WireState = {
    * 缺席 = 没迁过 / 旧本子里没有 system 记录。
    */
   legacyTools?: JsonObject[];
+  /** 迁移时旧本子的用量累计（legacy-migrate.ts 的 legacyUsageOf）；缺席 = 没迁过（新内核里新建的会话） */
+  legacyUsage?: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number };
 };
 
 export const WireDoc = defineDoc<WireState>({

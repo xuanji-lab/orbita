@@ -421,6 +421,7 @@ export class KernelPool {
                 state.imageRefs = wire.imageRefs;
                 state.memory = wire.memory;
                 if (wire.legacyTools.length > 0) state.legacyTools = JSON.parse(JSON.stringify(wire.legacyTools)) as JsonObject[];
+                state.legacyUsage = { ...wire.legacyUsage };
                 state.customs = drafts.filter((draft) => draft.kind === LEGACY_KINDS.custom).flatMap((draft) => draft.model.map((message) => messageSignature(message)));
               }
               await appendDrafts(tx, id, drafts);

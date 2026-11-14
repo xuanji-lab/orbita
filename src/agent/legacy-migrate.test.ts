@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { planLegacyMigration, LEGACY_KINDS } from "./legacy-migrate.ts";
+import { legacyUsageOf, planLegacyMigration, LEGACY_KINDS } from "./legacy-migrate.ts";
 import { assistant, book, result, user } from "./legacy-book-fixture.ts";
 
 describe("planLegacyMigration", () => {
@@ -91,5 +91,21 @@ describe("planLegacyMigration", () => {
     if (!noHeader.ok) assert.match(noHeader.reason, /读不出来/);
     const future = planLegacyMigration(book([], { version: 9 }));
     assert.equal(future.ok, false);
+  });
+});
+
+describe("legacyUsageOf：旧本子的用量累计与旧内核 getSessionStats 同口径", () => {
+  it("回答、工具结果、压缩 / 分支摘要、单独的 usage 记录都算，废枝也算；用户消息与别的不算", () => {
+    const u = (n: number) => ({ input: n, output: 1, cacheRead: 2, cacheWrite: 3, cost: { total: 0.5 } });
+    const total = legacyUsageOf([
+      { type: "message", message: { role: "user", usage: u(100) } },
+      { type: "message", message: { role: "assistant", usage: u(10) } },
+      { type: "message", message: { role: "toolResult", usage: u(20) } },
+      { type: "compaction", usage: u(30) },
+      { type: "branch_summary", usage: u(40) },
+      { type: "usage", usage: u(50) },
+      { type: "model_change" },
+    ] as never);
+    assert.deepEqual(total, { input: 150, output: 5, cacheRead: 10, cacheWrite: 15, cost: 2.5 });
   });
 });

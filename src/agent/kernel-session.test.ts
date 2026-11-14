@@ -206,6 +206,9 @@ describe("KernelSessions：一轮的事件与旧内核同形", () => {
     assert.ok(r.events.some((event) => event.type === "created" && event.piSessionFile === "durable:s1"));
     const lastStats = [...r.events].reverse().find((event) => event.type === "stats");
     assert.ok(lastStats !== undefined && lastStats.type === "stats" && lastStats.persist === true && lastStats.stats.tokens.total > 0);
+    // 用量：两次回答的 usage 加总（faux 每次回答带 usage），与 pi.usage 同一份
+    const totals = (lastStats as Extract<AgentEvent, { type: "stats" }>).stats.tokens;
+    assert.equal(totals.total, totals.input + totals.output + totals.cacheRead + totals.cacheWrite);
     // 落定先于 idle 报给主进程
     assert.equal(r.settled.length, 1);
     assert.equal(r.settled[0]?.result.ok, true);
