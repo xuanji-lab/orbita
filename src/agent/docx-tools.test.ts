@@ -7,6 +7,7 @@ import JSZip from "jszip";
 import * as ncanvas from "@napi-rs/canvas";
 import { createReadToolDefinition, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createDocxTools } from "./docx-tools.ts";
+import { RequestBroker } from "./request-broker.ts";
 
 /**
  * read_docx 的守护。夹具用 jszip 在内存造最小合法 docx（真实结构：
@@ -203,7 +204,7 @@ let tool: ToolDefinition;
 
 before(async () => {
   dir = await mkdtemp(join(tmpdir(), "orbita-docx-"));
-  tool = createDocxTools(dir)[0]!;
+  tool = createDocxTools(new RequestBroker(() => undefined), "session-1", dir)[0]!;
   await writeFile(join(dir, "full.docx"), await buildDocx({ body: BODY_FULL, title: "测试文档标题" }));
   await writeFile(join(dir, "long.docx"), await buildDocx({ body: BODY_LONG, media: [], withComments: false, withFootnotes: false }));
   await writeFile(join(dir, "empty.docx"), await buildDocx({ body: "<w:sectPr/>", media: [], withComments: false, withFootnotes: false }));
@@ -485,7 +486,7 @@ describe("read_docx", () => {
 
 describe("read_docx 的描述", () => {
   test("保留「代替 read」「块号 + 大纲」的触发词并指路 reading 技能；描述 ≤450 字符（瘦身前 588）", () => {
-    const description = createDocxTools(tmpdir())[0]!.description;
+    const description = createDocxTools(new RequestBroker(() => undefined), "session-1", tmpdir())[0]!.description;
     assert.match(description, /Use this instead of read for any \.docx file/);
     assert.match(description, /block number/);
     assert.match(description, /`reading` skill/);
