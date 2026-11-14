@@ -261,6 +261,34 @@ describe("旧会话惰性迁移（剧本第 10、11、13 条）", () => {
     await kernel.closeAll();
   });
 
+  it("迁移带走旧本子 system 记录回放出的工具清单与顺序（后加的接在末尾、删掉的不在）", async () => {
+    const dir = await tempDir();
+    const file = join(dir, "book.jsonl");
+    const decl = (name: string) => ({ name, description: `${name} tool`, parameters: { type: "object", properties: {} } });
+    const system = (id: string, extra: Record<string, unknown>) => ({ type: "message", id, message: { role: "system", content: "", timestamp: 1, ...extra } });
+    await writeFile(
+      file,
+      book([
+        system("s1", { toolsAdded: [decl("read"), decl("terminal_execute"), decl("write")] }),
+        user("u1", "first"),
+        assistant("a1", "one"),
+        system("s2", { toolsRemoved: [{ name: "write" }], toolsAdded: [decl("terminal_open")] }),
+        user("u2", "second"),
+        assistant("a2", "two"),
+      ]),
+    );
+    const kernel = pool(dir);
+    const opened = await kernel.open({ library: "r.sqlite", sessionId: "s1", legacy: { piSessionFile: file }, agent: AGENT });
+    assert.ok(opened.ok);
+    const harness = (await kernel.library("r.sqlite")).harness;
+    const wire = await harness.snapshot(WireDoc, opened.conversationId as ConversationId, BACKGROUND_CONTEXT);
+    assert.deepEqual(
+      (wire?.legacyTools ?? []).map((tool) => tool["name"]),
+      ["read", "terminal_execute", "terminal_open"],
+    );
+    await kernel.closeAll();
+  });
+
   it("绕过进程内排队的第二个库池（模拟另一次打开）也只迁出一份", async () => {
     const dir = await tempDir();
     const file = join(dir, "book.jsonl");

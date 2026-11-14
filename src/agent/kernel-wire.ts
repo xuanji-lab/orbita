@@ -17,10 +17,10 @@
  * 新内核记在会话文档 `orbita.wire` 里。
  */
 import type { Context } from "@earendil-works/chord/context";
-import type { Message } from "@earendil-works/pi-ai";
+import type { Message, Tool } from "@earendil-works/pi-ai";
 import { getCurrentSystemMessage } from "@earendil-works/pi-ai/utils/transcript";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
-import { defineDoc, type Conversation } from "@earendil-works/pi-durable";
+import { defineDoc, type Conversation, type JsonObject } from "@earendil-works/pi-durable";
 import { attachGoalLedger, type LedgerAttachCache } from "./goal-compaction.ts";
 import { applyImageBudget, hashImage, imageRefPath, type ContextMessage, type TurnImageBudget } from "./image-byte-budget.ts";
 import { BRANCH_PREFIX, BRANCH_SUFFIX, COMPACTION_PREFIX, COMPACTION_SUFFIX } from "./legacy-migrate.ts";
@@ -37,6 +37,12 @@ export type WireState = {
   memory: [number, string][];
   /** 迁移来的扩展消息（旧内核的 custom_message / custom 角色 / bashExecution）的指纹：它们在旧内核的 context 里不是 user */
   customs: string[];
+  /**
+   * 迁移时从旧本子 system 记录回放出的「模型此前看到的工具声明」（按顺序）。新内核在这条会话还没发过请求、
+   * 自己的 pi.system 里没有工具清单时，拿它当「此前看到的」排工具顺序（kernel-prompt.ts 的 offeredOrder）。
+   * 缺席 = 没迁过 / 旧本子里没有 system 记录。
+   */
+  legacyTools?: JsonObject[];
 };
 
 export const WireDoc = defineDoc<WireState>({
@@ -95,6 +101,8 @@ export class TurnWire {
   private readonly timeZone: string;
   private readonly conversation: Conversation;
   private writes: Promise<void>[] = [];
+  /** 迁移时带来的「此前看到的工具声明」（见 WireState.legacyTools） */
+  readonly legacyTools: readonly Tool[];
 
   private constructor(conversation: Conversation, state: WireState, attachmentsDir: string, timeZone: string) {
     this.conversation = conversation;
@@ -107,6 +115,7 @@ export class TurnWire {
       protectedFloor: Number.MAX_SAFE_INTEGER,
     };
     this.memory = { attached: new Map(state.memory), pending: null };
+    this.legacyTools = (state.legacyTools ?? []) as unknown as Tool[];
   }
 
   /**

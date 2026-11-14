@@ -14,11 +14,14 @@
  *   **不靠 id + 1 猜**（durable 1.5 的 group commit 只保证 id 单调）：调用方在同一次提交里按顺序追加，
  *   用 appendEntry 返回的真 id 回填（headRef 是本序列里的下标）。
  * - 不进上下文的 entry（model_change / thinking_level_change / custom / label / session_info）不迁；
- *   本子里的 system 消息不迁——新内核每轮自己写 `pi.system`（提示词与工具清单），旧本子里那条是旧内核的。
+ *   本子里的 system 消息不迁成 entry——新内核每轮自己写 `pi.system`（提示词与工具清单）；但它们回放出的
+ *   「模型此前看到的工具清单与顺序」要带走（plan.wire.legacyTools → 会话文档 orbita.wire），新内核迁来后的第一个
+ *   请求按它排工具，否则会话中途加过工具的旧会话，迁来后工具顺序变了、提示缓存从头失效一次。
  * - 认不出的东西（context_edit、未来版本的新 entry 类型、未知角色）**整条会话不迁**，如实报原因：
  *   半份上下文比没迁更糟——模型会在缺了一块的历史上接着干。
  */
-import type { Message, UserMessage } from "@earendil-works/pi-ai";
+import type { Message, Tool, UserMessage } from "@earendil-works/pi-ai";
+import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { branchEntries, parsePiBook, type PiBookEntry } from "../main/session/pi-book.ts";
 import { readImageBudgetBook } from "./image-byte-budget.ts";
@@ -58,6 +61,11 @@ export interface LegacyWireSeed {
   imageMark: { cut: number; cutIndex: number } | null;
   imageRefs: [string, string][];
   memory: [number, string][];
+  /**
+   * 当前分支上 system 记录回放出的工具声明（pi-ai 的 getCurrentTools，旧内核 _restoreToolsFromTranscript 同一个函数、
+   * 同一组记录：分支上全部 system 消息，压缩之前的也算）。没有 system 记录 = 空。
+   */
+  legacyTools: Tool[];
 }
 
 export interface LegacyPlan {
@@ -244,6 +252,12 @@ export function planLegacyMigration(raw: string): LegacyPlanResult {
         imageMark: budget.mark === null ? null : { cut: budget.mark.cut, cutIndex: budget.mark.cutIndex },
         imageRefs: [...budget.refs],
         memory: [...memoryAttachments(branch)],
+        legacyTools: getCurrentTools(
+          path.flatMap((entry) => {
+            const message = entry.type === "message" ? (entry.message as { role?: unknown } | undefined) : undefined;
+            return message?.role === "system" ? [message as unknown as Message] : [];
+          }),
+        ),
       },
       providerSessionId: book.header.id,
       cwd: book.header.cwd,

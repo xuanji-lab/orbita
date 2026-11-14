@@ -4,7 +4,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { Api, Model, ToolResultMessage } from "@earendil-works/pi-ai";
+import type { Api, Model, Tool, ToolResultMessage } from "@earendil-works/pi-ai";
+import { toToolDeclaration } from "@earendil-works/pi-ai/utils/transcript";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
 import { createRegistry, Harness, MemoryStorage, ToolResultEntry, type Conversation } from "@earendil-works/pi-durable";
@@ -168,20 +169,28 @@ describe("kernel-turn：新内核跑一轮带工具的对话", () => {
     await harness.close(BACKGROUND_CONTEXT);
   });
 
-  it("工具清单顺序：已在的保持原位，新出现的接在后面", async () => {
+  it("工具清单顺序：此前看到的保持原位、新出现的接末尾；声明变了的挪到末尾（与旧内核同一组 pi-ai 回放函数）", async () => {
     const cwd = await tempDir();
     const { harness, registry, conversation: target } = await conversation();
-    const assembled = await assembleTurn(
-      command(cwd),
-      runtime([]),
-      { registry, conversation: target, model: MODEL, providerSessionId: "p1" },
-      ["write", "read"],
-      await TurnWire.open(target, join(cwd, ".att"), BACKGROUND_CONTEXT),
-      1,
-    );
-    assert.deepEqual(assembled.toolNames.slice(0, 2), ["write", "read"]);
-    assert.ok(assembled.toolNames.includes("bash") && assembled.toolNames.indexOf("bash") > 1);
-    assert.match(assembled.systemPrompt, /<orbita-permission>/);
+    const target2 = { registry, conversation: target, model: MODEL, providerSessionId: "p1" };
+    const wire = await TurnWire.open(target, join(cwd, ".att"), BACKGROUND_CONTEXT);
+    const fresh = await assembleTurn(command(cwd), runtime([]), target2, [], wire, 1);
+    const declaration = (name: string): Tool => {
+      const tool = fresh.extension.tools?.find((candidate) => candidate.name === name);
+      assert.ok(tool !== undefined);
+      return toToolDeclaration(tool);
+    };
+    const kept = await assembleTurn(command(cwd), runtime([]), target2, [declaration("write"), declaration("read")], wire, 1);
+    assert.deepEqual(kept.toolNames.slice(0, 2), ["write", "read"]);
+    assert.deepEqual(kept.activeNames.slice(0, 2), ["write", "read"]);
+    assert.ok(kept.toolNames.indexOf("bash") > 1);
+    assert.match(kept.systemPrompt, /<orbita-permission>/);
+    // write 的声明此前不一样（描述改过）：发给模型时先删后加，挪到末尾；激活顺序（基础提示里的工具小节）仍按名字保持原位
+    const all = fresh.toolNames.map((name) => (name === "write" ? { ...declaration("write"), description: "old text" } : declaration(name)));
+    const changed = await assembleTurn(command(cwd), runtime([]), target2, all, wire, 1);
+    assert.equal(changed.toolNames.at(-1), "write");
+    assert.deepEqual(changed.toolNames.slice(0, -1), fresh.toolNames.filter((name) => name !== "write"));
+    assert.deepEqual(changed.activeNames, fresh.activeNames);
     await harness.close(BACKGROUND_CONTEXT);
   });
 });

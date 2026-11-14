@@ -7,7 +7,8 @@
  * 装配全部重来」同一个节奏：中途切档、MCP 重载、挂新目录，下一轮生效。
  *
  * - 工具：内建七件（pi 同一个工厂）+ turn-tools.ts 的同一份清单，经 durable-tools.ts 薄适配；顺序按
- *   「已在的保持原位、新的接后面」（kernel-prompt.ts 的 loadoutOrder），与旧内核从本子回放出来的顺序同规则。
+ *   旧内核同一套规则：激活顺序（loadoutOrder）定基础提示里的工具小节，发给模型的数组顺序用 pi-ai 同两个函数回放
+ *   （offeredOrder）；「此前看到的」取会话自己的 pi.system，刚迁来的会话取迁移时从旧本子带来的那份。
  * - 闸门：`beforeTool` 调**同一个** createToolCallGate（permission.ts）与 createPlanGate；询问档的等待经
  *   awaitWithContext 听 abort（停止时不卡住）。拒绝语经 `afterTool` 还原成旧内核那样的一段原文，
  *   不让 durable 包成 `<harness>[error] Tool call blocked: …</harness>`（参数校验失败、工具不存在同理，见 unwrapHarnessError）。
@@ -16,8 +17,8 @@
  * - 逐请求注入：`beforeRequest` 跑 kernel-wire.ts（图片预算、目标账、记忆附件、用户情境，与旧内核同一串函数）。
  */
 import { awaitWithContext, BACKGROUND_CONTEXT, type Context } from "@earendil-works/chord/context";
-import type { Api, Message, Model } from "@earendil-works/pi-ai";
-import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
+import type { Api, Message, Model, Tool } from "@earendil-works/pi-ai";
+import { getCurrentTools, toToolDeclaration } from "@earendil-works/pi-ai/utils/transcript";
 import {
   defineExtension,
   GenerationTask,
@@ -38,7 +39,7 @@ import type { PermissionAnswer } from "../shared/permission.ts";
 import { composePromptText } from "../shared/prompt-attachments.ts";
 import { builtinToolDefinitions, toDurableTool } from "./durable-tools.ts";
 import { liftMessages, TurnWire } from "./kernel-wire.ts";
-import { loadoutOrder, loadPiResources } from "./kernel-prompt.ts";
+import { loadoutOrder, loadPiResources, offeredOrder } from "./kernel-prompt.ts";
 import type { McpHub } from "./mcp.ts";
 import { recallMemories } from "./memory-inject.ts";
 import { createToolCallGate, type ToolCallLike } from "./permission.ts";
@@ -178,6 +179,8 @@ export interface AssembledTurn {
   extension: Extension;
   /** 发给模型的工具名，按发出顺序 */
   toolNames: string[];
+  /** 激活顺序（pi 基础提示里工具小节的顺序） */
+  activeNames: string[];
   /** 发给模型的系统提示全文（各段按 `\n\n` 拼接后） */
   systemPrompt: string;
 }
@@ -189,7 +192,7 @@ export async function assembleTurn(
   command: KernelTurnCommand,
   runtime: KernelTurnRuntime,
   target: KernelTurnTarget,
-  previousTools: readonly string[],
+  previousTools: readonly Tool[],
   wire: TurnWire,
   memoryTurn: number,
 ): Promise<AssembledTurn> {
@@ -225,7 +228,10 @@ export async function assembleTurn(
     }),
   ];
   const byName = new Map(definitions.map((definition) => [definition.name, definition]));
-  const toolNames = loadoutOrder(previousTools, definitions.map((definition) => definition.name));
+  const activeNames = loadoutOrder(
+    previousTools.map((tool) => tool.name),
+    definitions.map((definition) => definition.name),
+  );
   const scope = {
     cwd: command.cwd,
     autoResizeImages: resources.builtinOptions.autoResizeImages,
@@ -233,13 +239,19 @@ export async function assembleTurn(
     thinkingLevel: () => command.thinkingLevel,
     providerSessionId: () => target.providerSessionId,
   };
-  const tools = toolNames.flatMap((name) => {
+  const active = activeNames.flatMap((name) => {
     const definition = byName.get(name);
     return definition === undefined ? [] : [toDurableTool(definition, scope)];
   });
+  const toolNames = offeredOrder(previousTools, active.map((tool) => toToolDeclaration(tool)));
+  const byTool = new Map(active.map((tool) => [tool.name, tool]));
+  const tools = toolNames.flatMap((name) => {
+    const tool = byTool.get(name);
+    return tool === undefined ? [] : [tool];
+  });
 
   const segments = orbitaSystemSegments({
-    piBase: adaptSystemPrompt(resources.basePrompt(toolNames, definitions)),
+    piBase: adaptSystemPrompt(resources.basePrompt(activeNames, definitions)),
     mode: command.mode,
     extraToolNames: extraToolNames(
       mcpTools.map((tool) => tool.name),
@@ -291,12 +303,16 @@ export async function assembleTurn(
       }),
     ],
   });
-  return { extension, toolNames, systemPrompt: segments.map((segment) => segment.text).filter((text) => text !== "").join("\n\n") };
+  return { extension, toolNames, activeNames, systemPrompt: segments.map((segment) => segment.text).filter((text) => text !== "").join("\n\n") };
 }
 
-/** 模型此前看到的工具清单：会话上下文里 pi.system 条目回放出来的 */
-export function previousToolNames(messages: readonly Message[]): string[] {
-  return getCurrentTools([...messages]).map((tool) => tool.name);
+/**
+ * 模型此前看到的工具声明：会话上下文里 pi.system 条目回放出来的；这条会话在新内核里还没发过请求（刚迁来）时，
+ * 用迁移时从旧本子 system 记录回放出的那份。
+ */
+export function previousTools(messages: readonly Message[], wire: Pick<TurnWire, "legacyTools">): Tool[] {
+  const own = getCurrentTools([...messages]);
+  return own.length > 0 ? own : [...wire.legacyTools];
 }
 
 /**
@@ -314,7 +330,7 @@ export async function runTurn(
   const { messages } = await target.conversation.context(context);
   // 本轮轮号（按用户消息计，1 起；与旧内核 echoAndPrompt 同口径：模型上下文里的 user 消息，不数压缩摘要与扩展消息）
   const memoryTurn = liftMessages(messages, new Set()).filter((message) => (message as { role?: unknown }).role === "user").length + 1;
-  const assembled = await assembleTurn(command, runtime, target, previousToolNames(messages), wire, memoryTurn);
+  const assembled = await assembleTurn(command, runtime, target, previousTools(messages, wire), wire, memoryTurn);
   target.registry.install(assembled.extension);
   await target.conversation.configure(
     {

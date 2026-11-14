@@ -28,6 +28,7 @@ import {
   type ConversationId,
   type EntryId,
   type HarnessSettings,
+  type JsonObject,
   type Registry,
   type Storage,
 } from "@earendil-works/pi-durable";
@@ -387,6 +388,7 @@ export class KernelPool {
                 state.imageMark = wire.imageMark;
                 state.imageRefs = wire.imageRefs;
                 state.memory = wire.memory;
+                if (wire.legacyTools.length > 0) state.legacyTools = JSON.parse(JSON.stringify(wire.legacyTools)) as JsonObject[];
                 state.customs = drafts.filter((draft) => draft.kind === LEGACY_KINDS.custom).flatMap((draft) => draft.model.map((message) => messageSignature(message)));
               }
               await appendDrafts(tx, id, drafts);

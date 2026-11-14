@@ -12,7 +12,8 @@
  * 它们的工具与提示词片段会混进 Orbita 的会话；那是另一个应用的配置，新内核不接（也接不了——那些扩展写的是
  * pi-coding-agent 的 ExtensionAPI）。报告里列为有意差异，待用户定。
  */
-import { PI_ATTRIBUTION, type ClientIdentity, type ThinkingBudgets } from "@earendil-works/pi-ai";
+import { PI_ATTRIBUTION, type ClientIdentity, type Message, type ThinkingBudgets, type Tool } from "@earendil-works/pi-ai";
+import { getCurrentTools, getToolStateChanges } from "@earendil-works/pi-ai/utils/transcript";
 import {
   buildSystemPrompt,
   DefaultResourceLoader,
@@ -95,14 +96,30 @@ export async function loadPiResources(input: {
 }
 
 /**
- * 工具清单的顺序：已在的保持原位、新出现的接在后面（pi 的 _applyToolLoadout 与 durable 的 planTools 是同一条规则）。
- * `previous` 是模型此前看到的清单（durable 从会话的 pi.system 条目回放；刚迁来的会话用旧本子里记录的那份）。
+ * 激活顺序（pi 的 _restoreToolsFromTranscript + _applyToolLoadout）：此前清单里的工具保持原位、新出现的接在后面。
+ * 它决定 pi 基础提示里工具小节的顺序；发给模型的工具数组顺序见 offeredOrder。
  */
 export function loadoutOrder(previous: readonly string[], desired: readonly string[]): string[] {
   const wanted = new Set(desired);
   const kept = previous.filter((name) => wanted.has(name));
   const keptSet = new Set(kept);
   return [...kept, ...desired.filter((name) => !keptSet.has(name))];
+}
+
+/**
+ * 发给模型的工具数组顺序：**就是旧内核用的那两个 pi-ai 函数**——agent-loop 每次请求前算
+ * getToolStateChanges(此前看到的清单, 这一轮激活的清单)，把变化接在历史后面，模型看到的是 getCurrentTools 的回放：
+ * 声明没变的保持原位；声明变了的（描述 / 参数改过）先删后加、挪到末尾；新出现的按激活顺序接在末尾。
+ * `previous`：模型此前看到的声明（新内核从会话的 pi.system 条目回放；刚迁来、还没发过请求的会话用迁移时从旧本子
+ * system 记录回放出来的那份，kernel-wire.ts 的 legacyTools）。`current`：这一轮按激活顺序排好的声明。
+ */
+export function offeredOrder(previous: readonly Tool[], current: readonly Tool[]): string[] {
+  const changes = getToolStateChanges(previous, current);
+  const replay: Message[] = [
+    { role: "system", content: "", toolsAdded: [...previous], timestamp: 0 },
+    { role: "system", content: "", toolsRemoved: changes.toolsRemoved, toolsAdded: changes.toolsAdded, timestamp: 0 },
+  ];
+  return getCurrentTools(replay).map((tool) => tool.name);
 }
 
 /**
