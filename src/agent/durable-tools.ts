@@ -49,25 +49,53 @@ export interface DurableToolScope {
 const NO_LIMIT = { maxBytes: Number.MAX_SAFE_INTEGER, maxLines: Number.MAX_SAFE_INTEGER } as const;
 
 /**
- * pi 的 ExtensionToolContext 里工具真读到的那几项。其余字段（UI、会话管理器的写方法……）
- * 工具执行路径上不碰（各 `*-tools.ts` 与 pi 内建工具逐一核过），新内核没有对应物，不造假实现。
- * 会话文件（PI_SESSION_FILE）新内核没有——对话存在 SQLite 里，不给一个已经过期的 JSONL 路径。
+ * 新内核实际提供给工具的上下文字段（旧内核里 pi 给的是完整的 ExtensionToolContext）。各 `*-tools.ts` 与 pi 内建工具的
+ * 执行路径只读这几项（逐一核过：内建工具读 cwd / model / thinkingLevel / sessionManager 的两个 getter，read_pdf /
+ * read_docx / show_image 读 model）。会话文件（PI_SESSION_FILE）新内核没有——对话存在 SQLite 里，不给一个过期的 JSONL 路径。
  */
-function toolContext(scope: DurableToolScope): ExtensionToolContext {
-  const partial = {
+export interface KernelToolContext {
+  readonly cwd: ExtensionToolContext["cwd"];
+  readonly model: ExtensionToolContext["model"];
+  readonly thinkingLevel: ExtensionToolContext["thinkingLevel"];
+  readonly sessionManager: {
+    getSessionId: ExtensionToolContext["sessionManager"]["getSessionId"];
+    getSessionFile: () => undefined;
+  };
+}
+
+/**
+ * 只暴露 KernelToolContext 那几项的工具上下文：工具读了别的字段**当场报错**（哪个工具、哪个字段），而不是悄悄拿到
+ * undefined 走进另一条分支。工具的 execute 签名要求完整的 ExtensionToolContext（pi 的类型），类型层拦不住，
+ * 所以在运行时拦。`then` 与 symbol 键放行（await / 打印会探测它们，不是工具在读字段）。
+ */
+export function strictToolContext(toolName: string, provided: KernelToolContext): ExtensionToolContext {
+  const guard = <T extends object>(target: T, path: string): T =>
+    new Proxy(target, {
+      get(object, property, receiver) {
+        if (typeof property === "symbol" || property === "then" || property === "toJSON") return Reflect.get(object, property, receiver);
+        if (!(property in object)) {
+          throw new Error(`新内核的工具上下文没有提供 ${path}${property}（工具 ${toolName} 读了它）：要么在 durable-tools.ts 的 KernelToolContext 里补上，要么让工具不读它`);
+        }
+        return Reflect.get(object, property, receiver);
+      },
+    });
+  return guard({ ...provided, sessionManager: guard(provided.sessionManager, "sessionManager.") }, "") as unknown as ExtensionToolContext;
+}
+
+function toolContext(toolName: string, scope: DurableToolScope): ExtensionToolContext {
+  return strictToolContext(toolName, {
     cwd: scope.cwd,
     get model() {
       return scope.model();
     },
     get thinkingLevel() {
-      return scope.thinkingLevel();
+      return scope.thinkingLevel() as ExtensionToolContext["thinkingLevel"];
     },
     sessionManager: {
       getSessionId: () => scope.providerSessionId(),
       getSessionFile: () => undefined,
     },
-  };
-  return partial as unknown as ExtensionToolContext;
+  });
 }
 
 /** 工具的 details 要进 durable 的库：只留 JSON 能表示的部分（undefined 字段丢掉，与 pi 写 JSONL 时一致） */
@@ -93,7 +121,7 @@ export function toDurableTool(definition: ToolDefinition, scope: DurableToolScop
     outputLimits: NO_LIMIT,
     async execute(args, api, context): Promise<ToolExecutionResult> {
       try {
-        const result = await definition.execute(api.callId, args as never, context.abortSignal, undefined, toolContext(scope));
+        const result = await definition.execute(api.callId, args as never, context.abortSignal, undefined, toolContext(definition.name, scope));
         const details = jsonDetails(result.details);
         const resizeOptions = scope.model()?.inputLimits?.images?.resize;
         const content = await normalizeToolResultImages(result.content ?? [], {

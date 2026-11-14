@@ -13,7 +13,7 @@ import type { AgentCommand, AgentEvent } from "../shared/agent-ipc.ts";
 import type { KernelTurnCommand } from "../shared/kernel.ts";
 import { assembleTurn, PermissionWaiter, PlanRoundGate, previousTools, runTurn, unwrapHarnessError, type KernelTurnRuntime } from "./kernel-turn.ts";
 import { createPlanGate } from "./plan-tools.ts";
-import { toDurableTool } from "./durable-tools.ts";
+import { strictToolContext, toDurableTool } from "./durable-tools.ts";
 import { deflateSync } from "node:zlib";
 import { TurnWire } from "./kernel-wire.ts";
 import { McpHub } from "./mcp.ts";
@@ -357,5 +357,21 @@ describe("previousTools：模型此前看到的工具声明从哪来", () => {
   it("新内核自己发过请求后：用会话自己的 pi.system 回放，不再看迁移带来的", () => {
     const own = [{ role: "system", content: "", toolsAdded: [decl("bash")], timestamp: 1 }] as Message[];
     assert.deepEqual(previousTools(own, { legacyTools: [decl("read")] }).map((tool) => tool.name), ["bash"]);
+  });
+});
+
+describe("strictToolContext：工具只能读新内核提供的上下文字段", () => {
+  it("提供的字段照常读；读没提供的字段当场报错，说清哪个工具、哪个字段", () => {
+    const ctx = strictToolContext("bash", {
+      cwd: "/w",
+      model: undefined,
+      thinkingLevel: "off",
+      sessionManager: { getSessionId: () => "sid", getSessionFile: () => undefined },
+    });
+    assert.equal(ctx.cwd, "/w");
+    assert.equal(ctx.sessionManager.getSessionId(), "sid");
+    assert.equal(ctx.sessionManager.getSessionFile(), undefined);
+    assert.throws(() => ctx.hasUI, /没有提供 hasUI（工具 bash 读了它）/);
+    assert.throws(() => ctx.sessionManager.getBranch(), /没有提供 sessionManager\.getBranch（工具 bash 读了它）/);
   });
 });
