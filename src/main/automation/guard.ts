@@ -394,18 +394,28 @@ export class GuardLog {
     this.lastSeq = this.events[this.events.length - 1]?.seq ?? 0;
 
     const expected = serializeEvents(this.events);
+    // 两份互相校验：序号必须从 1 起连续（事件文件只追加不裁剪）、同一序号两份的内容必须一样。对不上 = 其中一份被伪造 / 改过
+    //（后果是多报假事件，不是藏真事件），记一条 eventsChanged，两份都留着给人看
+    const seqs = this.events.map((event) => event.seq);
+    const contiguous = seqs.every((seq, index) => (index === 0 ? this.events.length >= EVENTS_KEPT || seq === 1 : seq === (seqs[index - 1] ?? 0) + 1));
+    const contradicts = data.events.some((event) => {
+      const twin = mirror?.events.find((other) => other.seq === event.seq);
+      return twin !== undefined && eventLine(twin) !== eventLine(event);
+    });
+    if (!contiguous || contradicts) notes.push({ kind: "eventsChanged", file: mirror?.exists === true ? `(mirror) ${EVENTS_FILE_NAME}` : EVENTS_FILE_NAME });
     // 数据目录里的事件文件对不上并集：缺的行是被删 / 截断 / 目录被换（有镜像可补）→ 留副本、写回、记 eventsChanged；
-    // 镜像里缺的行多半是崩溃落在「数据目录已追加、镜像未追加」之间，静默补上
+    // 镜像里缺的行多半是崩溃落在「数据目录已追加、镜像未追加」之间，静默补上。
+    // 文件根本不存在时也建一个（空的也建）：没建的文件不被监视，外部塞进去的伪造内容就没人发现
     const repair = async (path: string, label: string, parsed: { events: AutomationGuardEvent[]; foreign: boolean; exists: boolean; unreadable: boolean }, isMirror: boolean): Promise<void> => {
       if (parsed.unreadable) return;
       const missingLines = parsed.events.length !== this.events.length;
-      const needsRewrite = parsed.exists ? parsed.foreign || missingLines : this.events.length > 0;
+      const needsRewrite = parsed.exists ? parsed.foreign || missingLines : true;
       if (!needsRewrite) return;
-      const loud = !isMirror || parsed.foreign;
+      const loud = parsed.exists ? !isMirror || parsed.foreign : !isMirror && this.events.length > 0;
       let backup: string | undefined;
       if (parsed.exists && loud) backup = await setAsideTampered(path, this.options.now());
       await writeTextAtomic(path, expected);
-      if (loud && (parsed.exists || !isMirror)) notes.push({ kind: "eventsChanged", file: label, ...(backup === undefined ? {} : { backup }) });
+      if (loud) notes.push({ kind: "eventsChanged", file: label, ...(backup === undefined ? {} : { backup }) });
     };
     await repair(automationEventsFilePath(this.options.dir), EVENTS_FILE_NAME, data, false);
     if (this.options.mirrorDir !== undefined && mirror !== null) await repair(join(this.options.mirrorDir, EVENTS_FILE_NAME), `(mirror) ${EVENTS_FILE_NAME}`, mirror, true);

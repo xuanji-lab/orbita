@@ -29,8 +29,8 @@ describe("AutomationStore", () => {
     const store = new AutomationStore(dir);
     await store.insert(makeAutomation({ id: "a" }));
     await store.update("a", (current) => ({ ...current, title: "改名" }));
-    // 记录文件之外只有兜底的已读位置文件（启动时落盘），没有临时文件
-    assert.deepEqual((await readdir(dir)).sort(), ["automations-ack.json", "automations.json"]);
+    // 记录文件之外只有兜底的事件文件与已读位置文件（启动时就建好，好被监视），没有临时文件
+    assert.deepEqual((await readdir(dir)).sort(), ["automations-ack.json", "automations-events.jsonl", "automations.json"]);
     const onDisk = JSON.parse(await readFile(join(dir, "automations.json"), "utf8")) as { version: number; automations: { title: string }[] };
     assert.equal(onDisk.version, 1);
     assert.equal(onDisk.automations[0]?.title, "改名");
@@ -160,7 +160,7 @@ describe("AutomationStore 归档", () => {
     assert.equal((await store.get("a"))?.endReason, "cancelled");
     assert.deepEqual(await idsOnDisk(LIVE), ["b"]);
     assert.deepEqual(await idsOnDisk(ARCHIVE), ["a"]);
-    assert.deepEqual((await readdir(dir)).filter((name) => name !== "automations-ack.json").sort(), [ARCHIVE, LIVE]);
+    assert.deepEqual((await readdir(dir)).filter((name) => name !== "automations-ack.json" && name !== "automations-events.jsonl").sort(), [ARCHIVE, LIVE]);
     const reopened = new AutomationStore(dir);
     assert.deepEqual((await reopened.list()).map((automation) => automation.id), ["b"]);
     assert.equal((await reopened.get("a"))?.endReason, "cancelled");

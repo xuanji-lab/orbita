@@ -389,3 +389,52 @@ describe("应用关着期间记录文件被改：只告知，不恢复，以盘�
     assert.deepEqual(await kinds(), []);
   });
 });
+
+describe("镜像事件文件与数据目录里的互相校验：伪造的只会多报，不会藏真事件，而且会被发现", () => {
+  test("从未记过事件时，镜像事件文件也在启动时建好并被监视：外部塞进伪造内容，下一次核对就发现、按内存重建", async () => {
+    const store = open();
+    await store.list();
+    assert.equal(await readFile(join(mirror, EVENTS), "utf8"), "", "空的镜像事件文件已建好");
+    await writeFile(join(mirror, EVENTS), `${JSON.stringify({ seq: 42, at: Date.now(), file: LIVE, kind: "missing", records: 7 })}\n`);
+    await store.list();
+    assert.deepEqual(await kinds(), ["eventsChanged"]);
+    assert.equal((await readFile(join(mirror, EVENTS), "utf8")).includes('"seq":42'), false, "伪造的那行没有留在镜像里");
+    assert.equal((await store.archiveInfo()).alerts.every((alert) => alert.seq !== 42), true);
+  });
+
+  test("应用关着时镜像里被塞了序号对不上的事件（数据目录又被删）：启动时记一条 eventsChanged，不静默当真", async () => {
+    const first = open();
+    await first.insert(makeAutomation({ id: "a" }));
+    await writeFile(join(mirror, EVENTS), `${JSON.stringify({ seq: 42, at: Date.now(), file: LIVE, kind: "missing", records: 7 })}\n`);
+    await rm(dir, { recursive: true, force: true });
+    const reopened = open();
+    const info = await reopened.archiveInfo();
+    assert.ok(info.alerts.some((alert) => alert.kind === "eventsChanged"), "序号不是从 1 起连续，发现并记下");
+  });
+
+  test("同一序号两份内容对不上：记 eventsChanged", async () => {
+    const first = open();
+    await first.insert(makeAutomation({ id: "a" }));
+    await rm(join(dir, LIVE));
+    await first.list(); // seq=1 missing
+    const forged = (await readFile(join(dir, EVENTS), "utf8")).replace('"records":1', '"records":9');
+    assert.notEqual(forged, await readFile(join(dir, EVENTS), "utf8"));
+    await writeFile(join(dir, EVENTS), forged, "utf8");
+    const reopened = open();
+    await reopened.list();
+    assert.ok((await kinds()).includes("eventsChanged"));
+  });
+
+  test("正常的事件序列不误报：重开多次、崩溃落在「数据目录已追加、镜像没追加」之间（镜像少最后一行）都不记", async () => {
+    const first = open();
+    await first.insert(makeAutomation({ id: "a" }));
+    await rm(join(dir, LIVE));
+    await first.list();
+    await rm(join(dir, LIVE));
+    await first.list();
+    const mirrorLines = (await readFile(join(mirror, EVENTS), "utf8")).split("\n").filter(Boolean);
+    await writeFile(join(mirror, EVENTS), `${mirrorLines[0]}\n`, "utf8"); // 镜像少了第 2 行
+    for (let i = 0; i < 3; i += 1) await open().list();
+    assert.deepEqual(await kinds(), ["missing", "missing"]);
+  });
+});
