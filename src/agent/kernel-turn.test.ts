@@ -250,3 +250,33 @@ async function sharpLessPng(width: number, height: number): Promise<string> {
     chunk("IEND", Buffer.alloc(0)),
   ]).toString("base64");
 }
+
+describe("kernel-turn：等审批时不挡别的会话", () => {
+  it("会话 A 卡在询问档的审批上，同库的会话 B 照常跑完一整轮；之后批准 A，A 也跑完", async () => {
+    const cwd = await tempDir();
+    const registry = createRegistry();
+    const harness = await Harness.open(new MemoryStorage(), { models, registry }, BACKGROUND_CONTEXT);
+    const a = await harness.createConversation({ ownership: { kind: "ownerless" } }, BACKGROUND_CONTEXT);
+    const b = await harness.createConversation({ ownership: { kind: "ownerless" } }, BACKGROUND_CONTEXT);
+    // 假模型按请求里的最后一句话回答：A 要写文件（要审批），B 直接答
+    faux.setResponses(
+      Array.from({ length: 6 }, () => (context: { messages: { role: string; content: unknown }[] }) => {
+        const last = JSON.stringify(context.messages.at(-1)?.content ?? "");
+        if (last.includes("write-for-a")) return fauxAssistantMessage(fauxToolCall("write", { path: "a.txt", content: "A" }), { stopReason: "toolUse" });
+        return fauxAssistantMessage("answered");
+      }),
+    );
+    const events: AgentEvent[] = [];
+    const shared = runtime(events);
+    const turnA = runTurn(command(cwd, { sessionId: "sa", mode: "manual", text: "write-for-a" }), shared, { registry, conversation: a, model: MODEL, providerSessionId: "pa" }, COMPACTION);
+    while (!events.some((event) => event.type === "permission")) await new Promise((resolve) => setTimeout(resolve, 10));
+    const turnB = await runTurn(command(cwd, { sessionId: "sb", text: "just answer" }), shared, { registry, conversation: b, model: MODEL, providerSessionId: "pb" }, COMPACTION);
+    assert.deepEqual(turnB, { status: "done" }, "A 等审批时 B 跑完了");
+    const ask = events.find((event) => event.type === "permission");
+    assert.ok(ask?.type === "permission");
+    shared.permissions.answer(ask.requestId, { behavior: "allow" });
+    assert.deepEqual(await turnA, { status: "done" });
+    assert.equal(await readFile(join(cwd, "a.txt"), "utf8"), "A");
+    await harness.close(BACKGROUND_CONTEXT);
+  });
+});
