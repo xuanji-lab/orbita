@@ -15,7 +15,7 @@
 import type { Models } from "@earendil-works/pi-ai";
 import type { AgentEvent } from "../shared/agent-ipc.ts";
 import { COMPACTION_DEFAULT } from "../shared/settings.ts";
-import type { KernelCommand, KernelMessage } from "../shared/kernel.ts";
+import { kernelLibraryName, type KernelCommand, type KernelMessage } from "../shared/kernel.ts";
 import { KernelPool } from "./kernel.ts";
 import { PermissionWaiter, type KernelTurnRuntime } from "./kernel-turn.ts";
 import { McpHub } from "./mcp.ts";
@@ -54,7 +54,7 @@ let pool: KernelPool | null = null;
 let initialized: Promise<void> | null = null;
 
 function sendAgent(event: AgentEvent): void {
-  post({ type: "agent", event });
+  post(event);
 }
 
 /**
@@ -98,43 +98,39 @@ parentPort.on("message", (event: { data: unknown }) => {
     return;
   }
   const ready = initialized ?? Promise.reject(new Error("kernel runtime got a command before init"));
-  if (command.type === "turn") {
-    const { requestId } = command;
-    void ready
-      .then(() => {
-        if (pool === null) throw new Error("kernel runtime is not initialized");
-        return pool.turn({
-          library: command.library,
-          command: command.turn,
-          runtime: turnRuntime,
-          compaction: {
-            enabled: command.turn.compaction?.enabled ?? true,
-            reservePercent: command.turn.compaction?.reservePercent ?? COMPACTION_DEFAULT.reservePercent,
-          },
-        });
-      })
-      .then((result) => post({ type: "turnDone", requestId, sessionId: command.turn.sessionId, result }))
-      .catch((cause: unknown) =>
-        post({
-          type: "turnDone",
-          requestId,
-          sessionId: command.turn.sessionId,
-          result: { ok: false, reason: cause instanceof Error ? cause.message : String(cause) },
-        }),
-      );
+  if (command.type === "session") {
+    const inner = command.command;
+    if (inner.type === "submit") {
+      void ready
+        .then(() => {
+          if (pool === null) throw new Error("kernel runtime is not initialized");
+          return pool.turn({
+            library: kernelLibraryName(command.root),
+            command: inner,
+            runtime: turnRuntime,
+            compaction: {
+              enabled: inner.compaction?.enabled ?? true,
+              reservePercent: inner.compaction?.reservePercent ?? COMPACTION_DEFAULT.reservePercent,
+            },
+          });
+        })
+        .then((result) => post({ type: "turnSettled", sessionId: inner.sessionId, result }))
+        .catch((cause: unknown) =>
+          post({ type: "turnSettled", sessionId: inner.sessionId, result: { ok: false, reason: cause instanceof Error ? cause.message : String(cause) } }),
+        );
+    } else if (inner.type === "abort") {
+      void ready.then(() => pool?.abort(inner.sessionId)).catch((cause: unknown) => console.error("[kernel] 停止失败", cause));
+    }
     return;
   }
-  if (command.type === "agent") {
+  if (command.type === "reply") {
     const forwarded = command.command;
     if (forwarded.type === "permissionAnswer") {
       turnRuntime.permissions.answer(forwarded.requestId, forwarded.answer);
-    } else if (forwarded.type === "abort") {
-      void ready.then(() => pool?.abort(forwarded.sessionId)).catch((cause: unknown) => console.error("[kernel] 停止失败", cause));
     } else if (isToolReply(forwarded)) {
       // 工具请求的回执（*Result）：与旧内核同一份翻法（request-broker.ts），结掉在途的工具调用
       turnRuntime.broker.resolve(forwarded.requestId, toolReplyResult(forwarded));
     }
-    // 意图确认（intentConfirmResult）：新内核这一步不跑意图闸门（实验功能，主循环切过来时再接），收到就丢
     return;
   }
 });

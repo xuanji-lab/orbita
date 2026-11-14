@@ -69,6 +69,13 @@ export const ipcChannels = {
   /** 意图确认卡的应答（实验功能 intent-system）：载荷 requestId + IntentConfirmDecision，回 void */
   agentAnswerIntentConfirm: "agent:answer-intent-confirm",
   /**
+   * 新内核（开关 ORBITA_DURABLE_KERNEL=1）：接着跑上次被中断的那一轮（kernel 进程崩溃 / 应用被杀时正在跑的轮），
+   * 不加新的用户消息。载荷 ContinueAgentInput；只对住在新内核里的会话有效，旧内核下拒绝。
+   */
+  agentContinue: "agent:continue",
+  /** 这次启动的对话内核：`{ durable: boolean }`（开关开着 = true）。renderer 判「这条会话能不能在这里续」要它 */
+  agentKernelInfo: "agent:kernel-info",
+  /**
    * 意图系统（实验）的三条主进程 HTTP 通道：
    * - intent:health —— 探活 intent-lab（GET /health），回 IntentHealth | null
    * - intent:edges —— 某一问的图数据（GET /edges?sessionId=&turnId=），回 IntentEdges | null
@@ -724,6 +731,15 @@ export interface SubmitAgentInput extends AgentTurnContext {
    * meta.resumedCarryovers，会话收尾确认时那条遗留事项自动标为做完。
    */
   carryoverId?: string;
+}
+
+/** 接着跑上次被中断的那一轮（renderer → 主进程，新内核独有）：不带新消息，开工上下文照常全套 */
+export type ContinueAgentInput = AgentTurnContext;
+
+/** `agent:kernel-info` 的回执 */
+export interface AgentKernelInfo {
+  /** 这次启动的对话主循环由新内核（pi-durable）跑 */
+  durable: boolean;
 }
 
 /** 手动压缩（renderer → 主进程）。压缩是一次真实的 LLM 调用，同样要带全套开工上下文 */
@@ -1694,7 +1710,17 @@ export type AgentEvent =
    * 该会话的槽、挂在这轮没送出去的消息下面（转录末尾）；缺省 = 操作级失败
    * （建会话 / 压缩 / 分支对账拒绝），仍报在输入框上方的全局红字里。
    */
-  | { type: "failed"; sessionId: string | null; message: string; turn?: true }
+  | {
+      type: "failed";
+      sessionId: string | null;
+      message: string;
+      turn?: true;
+      /**
+       * 这一轮是被打断的（新内核：kernel 进程崩溃 / 应用被杀时它正在跑），库里还留着它的上下文：
+       * renderer 在失败标注旁给「继续」（agent:continue），不自动续跑。缺席 = 普通失败。
+       */
+      continuable?: true;
+    }
   /* ---------- 意图系统（实验功能 intent-system）的三条事件 ---------- */
   /**
    * /recall 流式事件的原样透传（心跳除外）：renderer 用 applyRecallEvent 归约成

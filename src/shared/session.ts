@@ -430,6 +430,20 @@ export interface SessionMoveResult {
   skipped: { id: string; reason: "running" | "missing" | "failed" }[];
 }
 
+/**
+ * 这条会话住在新内核（pi-durable）的库里（开关 ORBITA_DURABLE_KERNEL=1 时由主进程在第一次为它开轮时写）。
+ * 有了它，旧内核（开关关着的应用）**不再续写**这条会话：它在新内核里跑过的轮次只在新内核的库里，
+ * pi 本子停在迁移那一刻，旧内核续写会让两边分叉。界面照常能看（转录是我们自己存的，含新内核的轮次）。
+ */
+export interface DurableMark {
+  /** 新内核第一次接手（迁移旧会话 / 新建）的时刻（Unix ms） */
+  since: number;
+  /** 新内核有一轮在跑（开轮时置、这一轮落定时清）。应用重启后还在 = 上次被中断，界面给「继续」 */
+  running?: true;
+  /** 迁移旧会话失败的原因：会话回落只读，输入框禁用（原件不动） */
+  failed?: string;
+}
+
 export interface SessionMeta {
   id: string;
   /** 首条用户消息的第一行；模型生成成功后替换为概括（titleSource = auto） */
@@ -588,6 +602,8 @@ export interface SessionMeta {
    * 同一份 pi session 被别的客户端续过的话，这份快照会偏旧，直到它在这里再跑一轮。
    */
   stats: AgentStats | null;
+  /** 住在新内核里（见 DurableMark）；缺席 = 旧内核的会话 */
+  durable?: DurableMark;
   createdAt: number;
   updatedAt: number;
 }
@@ -728,6 +744,19 @@ function parseRecentQueries(value: unknown): string[] {
  * 未读丢了只是少一个提醒，会话本体还在；同 parse 系列的纪律。
  * 也用在 IPC 入口：renderer 传来的坏载荷当已读写回，不裸存进 meta。
  */
+/** DurableMark 的读盘校验：缺 since 整条丢（当旧内核的会话）；坏的可选字段逐个丢 */
+export function parseDurableMark(raw: unknown): DurableMark | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const value = raw as Record<string, unknown>;
+  const since = num(value["since"]);
+  if (since === null) return null;
+  return {
+    since,
+    ...(value["running"] === true ? { running: true as const } : {}),
+    ...(typeof value["failed"] === "string" && value["failed"] !== "" ? { failed: value["failed"] } : {}),
+  };
+}
+
 export function parseSessionUnread(raw: unknown): { at: number; failed: boolean } | null {
   if (typeof raw !== "object" || raw === null) return null;
   const value = raw as Record<string, unknown>;
@@ -813,6 +842,7 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
   const parentId = str(value["parentId"]);
   const automationId = str(value["automationId"]);
   const automationRun = parseAutomationRunLabel(value["automationRun"]);
+  const durable = parseDurableMark(value["durable"]);
 
   return {
     id,
@@ -862,6 +892,8 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     ...(value["intentEnabled"] === true || value["intentEnabled"] === false
       ? { intentEnabled: value["intentEnabled"] }
       : {}),
+    // 新内核的标记：坏值当没有（旧内核的会话）
+    ...(durable === null ? null : { durable }),
     createdAt,
     updatedAt: typeof value["updatedAt"] === "number" ? value["updatedAt"] : createdAt,
   };
