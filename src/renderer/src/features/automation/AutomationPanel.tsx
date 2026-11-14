@@ -156,6 +156,13 @@ export function AutomationPanel(props: {
     now,
   );
 
+  // 记录文件被动过的提示：列表、详情、编辑三个视图都在最上面显示（停在某条自动化的详情 / 编辑页时也看得到）
+  const latestAlert = state.archive?.alerts[0];
+  const guardNotice =
+    state.archive !== null && latestAlert !== undefined ? (
+      <GuardNotice alerts={state.archive.alerts} total={state.archive.alertsTotal} now={now} onDismiss={() => void state.ackAlerts(latestAlert.seq)} />
+    ) : null;
+
   if (view.kind === "edit") {
     const target = view.id === null ? null : (state.automations.find((automation) => automation.id === view.id) ?? null);
     // 编辑的那一条被删了（别处删的 / 会话级联）：回列表
@@ -173,6 +180,7 @@ export function AutomationPanel(props: {
         create={state.create}
         update={state.update}
         remove={(id) => state.act(id, { type: "delete" })}
+        banner={guardNotice}
         onBack={() => setView(view.from === "detail" && view.id !== null ? { kind: "detail", id: view.id } : { kind: "list" })}
       />
     );
@@ -227,6 +235,7 @@ export function AutomationPanel(props: {
     const bound = detailTarget.target.kind === "this_session" ? sessionById.get(detailTarget.target.sessionId) : undefined;
     return (
       <RightPanelFrame header={header} headerExtra={headerExtra} contentKey={`detail:${detailTarget.id}`} footer={footer}>
+        {guardNotice}
         <div className="auto-detail-wrap">
           <button type="button" className="auto-back" onClick={() => setView({ kind: "list" })}>
             <Icon name="chevron-left" size={14} strokeWidth={2} /> {a.detail.back}
@@ -319,9 +328,7 @@ export function AutomationPanel(props: {
         {scope === "workspace" && <span className="auto-scope-name">{workspaceName}</span>}
       </div>
 
-      {state.archive !== null && state.archive.alerts.length > 0 && (
-        <GuardNotice alerts={state.archive.alerts} total={state.archive.alertsTotal} now={now} onDismiss={() => void state.ackAlerts()} />
-      )}
+      {guardNotice}
 
       {error !== null && (
         <div style={{ padding: "var(--space-1) var(--space-3)" }}>

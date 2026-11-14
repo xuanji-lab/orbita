@@ -336,7 +336,7 @@ export const zh: Messages = {
 
   automation: {
     title: "自动化",
-    railLabel: (running) => (running > 0 ? `自动化 · ${running} 个在跑` : "自动化"),
+    railLabel: (running, alerts) => (alerts > 0 ? `自动化 · ${alerts} 条记录文件提示` : running > 0 ? `自动化 · ${running} 个在跑` : "自动化"),
     help: "定时任务。到点把一段指令交给智能体，可以每次新开一条会话跑，也可以投回创建它的那条会话。自动化新开的会话收在这里、各自那条自动化下面，不进左侧栏。",
     helpLabel: "关于自动化",
     add: "新建",

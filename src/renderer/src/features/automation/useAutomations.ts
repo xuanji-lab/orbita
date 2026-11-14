@@ -22,8 +22,8 @@ export interface AutomationsState {
   archive: AutomationArchiveInfo | null;
   load: AutomationsLoad;
   reload: () => void;
-  /** 用户点了「知道了」：记录文件被动过的提示收起（事件仍留在事件文件里） */
-  ackAlerts: () => Promise<void>;
+  /** 用户点了「知道了」：看到的最新一条（序号 upTo）及更早的提示收起，晚到的不被吞（事件仍留在事件文件里） */
+  ackAlerts: (upTo: number) => Promise<void>;
   create: (input: AutomationCreateInput) => Promise<AutomationOutcome>;
   update: (id: string, patch: AutomationPatch) => Promise<AutomationOutcome>;
   act: (id: string, action: AutomationAction) => Promise<AutomationOutcome>;
@@ -77,9 +77,9 @@ export function useAutomations(): AutomationsState {
       return { ok: false, error: messageOf(cause) };
     }
   }, []);
-  const ackAlerts = useCallback(async (): Promise<void> => {
+  const ackAlerts = useCallback(async (upTo: number): Promise<void> => {
     try {
-      await api.automation.ackAlerts();
+      await api.automation.ackAlerts(upTo);
     } catch (cause) {
       console.error("[automation] 确认篡改提示失败", cause);
     }

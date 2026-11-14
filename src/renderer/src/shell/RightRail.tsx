@@ -83,7 +83,7 @@ export function RightRail(props: {
    * 角标只在有运行时出现（没有「未读」这类计数——自动化的结果在面板里那条任务下面看）。
    * 归「智能体」组、常驻条上（tooltip 带运行数）。
    */
-  automation: { running: number };
+  automation: { running: number; alerts: number };
   subSessions: { count: number; waiting: number } | null;
   /**
    * 后台会话跑完的提醒卡（2026-10-10）：弹在主槽右上角。null = 没有提醒。
@@ -193,10 +193,12 @@ export function RightRail(props: {
       id: "automation",
       group: "agent" as const,
       icon: FEATURE_ICON.automation,
-      label: t.automation.railLabel(props.automation.running),
+      label: t.automation.railLabel(props.automation.running, props.automation.alerts),
       lit: props.panel === "automation",
       onSelect: toggle("automation"),
-      badge: props.automation.running,
+      // 记录文件被动过、还没确认的提示比「几个在跑」更要紧：有就把角标换成提示数（橙色），点开面板顶部就是那条提示
+      badge: props.automation.alerts > 0 ? props.automation.alerts : props.automation.running,
+      ...(props.automation.alerts > 0 ? { badgeTone: "alert" as const } : {}),
     },
     // 收起来以后再看的：全部在「更多」菜单里（记忆库在设置里，不在右栏）
     ...fromApp("carryovers", { group: "shelf", inMore: true }),
@@ -217,6 +219,7 @@ export function RightRail(props: {
         lit={item.lit}
         onClick={item.onSelect}
         badge={item.badge}
+        {...(item.badgeTone === undefined ? {} : { badgeTone: item.badgeTone })}
       />
     );
     return button;
@@ -289,6 +292,8 @@ interface RailItem extends RailPlacement {
   onSelect: () => void;
   /** 角标（铃铛未读 / 子会话在等你）；缺席或 0 不渲染 */
   badge?: number;
+  /** 角标的语气：alert = 需要你看一眼的提示（橙色），缺省是普通计数 */
+  badgeTone?: "alert";
 }
 
 /**
@@ -305,6 +310,7 @@ function RailEntryButton(props: {
   onClick: () => void;
   /** 未读角标；缺席或 0 不渲染 */
   badge?: number;
+  badgeTone?: "alert";
 }) {
   return (
     <button
@@ -329,7 +335,7 @@ function RailEntryButton(props: {
     >
       <Icon name={props.icon} size={16} />
       {props.badge !== undefined && props.badge > 0 && (
-        <span className="rail-badge" aria-hidden="true">
+        <span className="rail-badge" data-tone={props.badgeTone} aria-hidden="true">
           {props.badge > 99 ? "99+" : props.badge}
         </span>
       )}

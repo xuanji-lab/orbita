@@ -406,7 +406,8 @@ export const en = {
   automation: {
     title: "Automations",
     /** 右栏入口的提示：有运行在跑时带上数量 */
-    railLabel: (running: number) => (running > 0 ? `Automations · ${running} running` : "Automations"),
+    railLabel: (running: number, alerts: number) =>
+      alerts > 0 ? `Automations · ${alerts} ${alerts === 1 ? "notice" : "notices"} about the record files` : running > 0 ? `Automations · ${running} running` : "Automations",
     help: "Scheduled tasks. At the due time a prompt goes to the agent — in a fresh task for each run, or back into the task that created it. Tasks an automation starts are kept here, under their automation, not in the left sidebar.",
     helpLabel: "About automations",
     add: "New automation",
