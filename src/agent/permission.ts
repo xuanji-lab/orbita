@@ -16,10 +16,9 @@ import {
   type PermissionAnswer,
   type PermissionMode,
 } from "../shared/permission.ts";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import type { ContextMessage } from "./image-byte-budget.ts";
-import { dataDirRefusalMessage, defaultGuardEnv, protectedCommandRefusal, type CommandGuardEnv } from "./protected-command.ts";
+import { dataDirRefusalMessage, defaultGuardEnv, protectedCommandRefusal, realpathLoose, type CommandGuardEnv } from "./protected-command.ts";
 
 /**
  * **本会话实际启用的 pi 内建工具集**。真源一份、两个消费者：
@@ -107,6 +106,8 @@ export function describePermissionMode(
       "automations only through the automation tools. Do not attempt to write, move, rename or delete these, or " +
       "cd into the folder that holds them, or rename / delete / chmod that folder or any folder above it, including via " +
       "shell commands — describe the change to the user instead; only the user can modify session data. " +
+      "Any other shell command that touches Orbita's data folder outside your session workbench is refused unless it is read-only " +
+      "(ls, stat, du, wc, head, tail, cat, grep / rg, find without -delete or -exec, diff) or only copies out of it. " +
       "Read automation records with the read tool or automation_list. Your session workbench stays yours to write.",
   );
   lines.push("</orbita-permission>");
@@ -176,27 +177,6 @@ function foldPath(value: string): string {
 }
 
 /**
- * 路径的真实位置：跟符号链接走（write / edit 的目标可能是指向受保护文件的链接）；
- * 文件还不存在时，对「已存在的最深一级父目录」取真实路径再接上剩下的名字。
- */
-function realpathLoose(path: string): string {
-  const start = resolve(path);
-  let current = start;
-  const tail: string[] = [];
-  for (;;) {
-    try {
-      const real = realpathSync(current);
-      return tail.length === 0 ? real : join(real, ...tail.reverse());
-    } catch {
-      const parent = dirname(current);
-      if (parent === current) return start;
-      tail.push(basename(current));
-      current = parent;
-    }
-  }
-}
-
-/**
  * 命令串比前把引号与转义空格折平：真命令里路径常被引号分段（`~/'Application Support'/x`）
  * 或反斜杠转义空格（`Application\ Space`），折平后字面量才对得上。只剥引号、只把 `\ `
  * 折成空格——**不能剥所有反斜杠**：posix 下它还是路径分隔符（`sessions\abc` 剥掉就成
@@ -234,6 +214,17 @@ function commandMentions(haystack: string, needle: string): boolean {
 }
 
 /**
+ * 本实例的数据目录（命令串闸门的白名单管辖区）：会话账本目录（sessions/、pi-sessions/）的父目录——
+ * 它们由主进程按本实例的 userData 拼出，一定在本实例的数据目录里。
+ * 受保护文件在这些目录**之外**的（开发实例里的正式实例记录、数据目录外的事件镜像）只按文件保，不整目录管。
+ * 没给会话目录（只给了文件）时退回「文件的父目录」。
+ */
+function ownDataDirs(protectedPaths: readonly string[], protectedFiles: readonly string[]): string[] {
+  const dirs = protectedPaths.length > 0 ? protectedPaths.map((dir) => dirname(dir)) : protectedFiles.map((file) => dirname(file));
+  return [...new Set(dirs)];
+}
+
+/**
  * 会话文件不可变（2026-09-18 立规）：protectedPaths（sessions/ 与 pi-sessions/）
  * 对工具面**全档只读**——这条检查在权限档判定**之前**跑，Skip 也抬不掉。
  * 自动化记录不可变（2026-11-13 用户提出：智能体不该能把自己的自动化记录删掉）：protectedFiles（单文件，目前只有
@@ -242,9 +233,10 @@ function commandMentions(haystack: string, needle: string): boolean {
  *
  * 拦截力度如实说：write / edit 是**路径精确拦**（目录判前缀；单文件判相等与
  * `<file>.` 开头的兄弟——原子写临时文件与坏文件隔离都长这样）；bash / powershell
- * 是**命令字面量拦**（受保护路径出现在命令串里就拒；比对前展开参数位置的 `~`、
- * 剥掉引号与反斜杠转义）——拦得住常规引用与引号分段，拦不住刻意混淆（变量间接、
- * 编码变换）。对「防误伤、防顺手」足够；对蓄意对抗不是防线，那是 OS 级沙箱的活。
+ * 先过 protected-command.ts 的**数据目录白名单**（碰到本实例数据目录的命令默认拒，只有只读的放行；判定流程见该文件头注释），
+ * 再过完整路径字面量拦（受保护路径出现在命令串里就拒；比对前展开参数位置的 `~`、
+ * 剥掉引号与反斜杠转义）——拦得住常规引用、引号分段与几十种变形，拦不住刻意混淆（变量间接、
+ * 编码变换、写好脚本再执行）。对「防误伤、防顺手」足够；对蓄意对抗不是防线，那是 OS 级沙箱的活。
  * MCP server 是用户显式安装的可信组件，不在本闸管辖内。读不受限——「只能读」
  * 正是这里要保的状态。
  *
@@ -291,7 +283,7 @@ export function protectedPathRefusal(
     const command = input["command"];
     if (typeof command !== "string" || command === "") return null;
     // 先过命令串里不带完整路径的写法：文件名本身 / 变量 / 通配 / cd 进数据目录 / 对数据目录或其上级的破坏性命令
-    const loose = protectedCommandRefusal(command, protectedFiles, cwd, guard);
+    const loose = protectedCommandRefusal(command, { files: protectedFiles, ownDirs: ownDataDirs(protectedPaths, protectedFiles) }, cwd, guard);
     if (loose !== null) return loose.kind === "file" ? fileRefusalMessage(loose.file, "command") : dataDirRefusalMessage(loose);
     const haystack = loosenShellQuoting(foldPath(expandTildeLiterals(command, guard.home)));
     for (const dir of protectedPaths) {

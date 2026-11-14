@@ -128,7 +128,7 @@ import { resolveTurnDirectories } from "./agent/turn-directories.ts";
 import { mainWindows } from "./window/main-windows.ts";
 import { isOwnRendererPage, type RendererOriginDeps } from "./window/renderer-origin.ts";
 import { SafeStorageSecrets } from "./provider/safe-storage-secrets.ts";
-import { devDataDirs } from "./data-dirs.ts";
+import { devDataDirs, formalUserDataDir } from "./data-dirs.ts";
 import { ProviderStore } from "./provider/store.ts";
 import { createDoubaoProtocol } from "./voice/doubao-protocol.ts";
 import { DictationSessions } from "./voice/dictation.ts";
@@ -1254,8 +1254,10 @@ void app.whenReady().then(async () => {
     [join(configDir, "sessions"), join(configDir, "pi-sessions")],
     // 自动化记录不可变（2026-11-13 用户裁决）：automations.json 记录「智能体定时做过什么」，
     // 智能体删改它 = 丢痕迹；与它的 `.tmp` / `.bad-` 兄弟一起全档只读，智能体改自动化走自动化工具。
-    // 已结束的归档（automations-archive.json）同一等级——它正是「查得到、改不了」的那份记录
-    automationProtectedFiles(configDir),
+    // 已结束的归档（automations-archive.json）同一等级——它正是「查得到、改不了」的那份记录。
+    // 开发实例（devDirs 非空）再多护一份：正式版（`<appData>/orbita`）的记录文件——用户就是用开发实例做验收的，
+    // 开发实例里的智能体不该能删到他真实在用的自动化；其它开发实例之间仍互相放行。数据目录之外的文件只按文件保
+    [...automationProtectedFiles(configDir), ...(devDirs !== null ? automationProtectedFiles(formalUserDataDir(app.getPath("appData"))) : [])],
     (workspaceId) => skills.linkDirs(workspaceId),
     skills,
     plugins,
