@@ -10,7 +10,7 @@
  *   「已在的保持原位、新的接后面」（kernel-prompt.ts 的 loadoutOrder），与旧内核从本子回放出来的顺序同规则。
  * - 闸门：`beforeTool` 调**同一个** createToolCallGate（permission.ts）与 createPlanGate；询问档的等待经
  *   awaitWithContext 听 abort（停止时不卡住）。拒绝语经 `afterTool` 还原成旧内核那样的一段原文，
- *   不让 durable 包成 `<harness>[error] Tool call blocked: …</harness>`。
+ *   不让 durable 包成 `<harness>[error] Tool call blocked: …</harness>`（参数校验失败、工具不存在同理，见 unwrapHarnessError）。
  * - 系统提示：pi 基础提示（kernel-prompt.ts）→ adaptSystemPrompt → orbitaSystemSegments，每段一个不加标签的
  *   section；durable 把它们按 `\n\n` 拼起来，与 joinSystemPrompt 逐字节相同。
  * - 逐请求注入：`beforeRequest` 跑 kernel-wire.ts（图片预算、目标账、记忆附件、用户情境，与旧内核同一串函数）。
@@ -148,13 +148,25 @@ function asPiEntry(entry: EntryRecord): unknown {
   return { type: "message", id: String(entry.id), message };
 }
 
-/** 把 durable 写的拒绝结果还原成旧内核的样子：一段拒绝原文（pi-agent-core 的 createErrorToolResult） */
+/**
+ * 把 durable 自己写的错误结果还原成旧内核（pi-agent-core）的样子：一段原文的错误结果，不带
+ * `<harness>[error] …</harness>` 诊断包装。三种：
+ * - blocked：闸门的拒绝语（去掉 durable 加的 "Tool call blocked: " 前缀；pi 用 createErrorToolResult(reason)）；
+ * - invalid_arguments：参数校验失败（两边都是 pi-ai validateToolArguments 的同一段文字）；
+ * - tool_unavailable：模型调了没提供的工具（pi 写 "Tool <name> not found"）。
+ * 被中断 / 停止（interrupted / aborted）的不改：那是 durable 独有的恢复语义，旧内核没有对位（报告里列为已知差别）。
+ */
 const BLOCKED_PREFIX = "Tool call blocked: ";
-export function unwrapBlocked(result: ToolExecutionResult): ToolExecutionResult | undefined {
-  const blocked = result.diagnostics?.find((diagnostic) => diagnostic.code === "blocked");
-  if (blocked === undefined) return undefined;
-  const reason = blocked.message.startsWith(BLOCKED_PREFIX) ? blocked.message.slice(BLOCKED_PREFIX.length) : blocked.message;
-  return { output: [{ type: "text", text: reason }], isError: true };
+export function unwrapHarnessError(call: { name: string }, result: ToolExecutionResult): ToolExecutionResult | undefined {
+  for (const diagnostic of result.diagnostics ?? []) {
+    if (diagnostic.code === "blocked") {
+      const reason = diagnostic.message.startsWith(BLOCKED_PREFIX) ? diagnostic.message.slice(BLOCKED_PREFIX.length) : diagnostic.message;
+      return { output: [{ type: "text", text: reason }], isError: true };
+    }
+    if (diagnostic.code === "invalid_arguments") return { output: [{ type: "text", text: diagnostic.message }], isError: true };
+    if (diagnostic.code === "tool_unavailable") return { output: [{ type: "text", text: `Tool ${call.name} not found` }], isError: true };
+  }
+  return undefined;
 }
 
 /** 这一轮装进 durable 的东西（测试直接看它） */
@@ -212,6 +224,7 @@ export async function assembleTurn(
   const toolNames = loadoutOrder(previousTools, definitions.map((definition) => definition.name));
   const scope = {
     cwd: command.cwd,
+    autoResizeImages: resources.builtinOptions.autoResizeImages,
     model: () => target.model,
     thinkingLevel: () => command.thinkingLevel,
     providerSessionId: () => target.providerSessionId,
@@ -264,7 +277,7 @@ export async function assembleTurn(
           if (verdict.block === true) return { block: verdict.reason ?? "Tool execution was blocked" };
           return JSON.stringify(input) === JSON.stringify(call.arguments) ? undefined : { arguments: input as JsonObject };
         },
-        afterTool: (_call, result) => unwrapBlocked(result),
+        afterTool: (call, result) => unwrapHarnessError(call, result),
       }),
       hook(GenerationTask, {
         beforeRequest: async (request, api, context) => {

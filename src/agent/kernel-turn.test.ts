@@ -10,7 +10,9 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseStep
 import { createRegistry, Harness, MemoryStorage, ToolResultEntry, type Conversation } from "@earendil-works/pi-durable";
 import type { AgentCommand, AgentEvent } from "../shared/agent-ipc.ts";
 import type { KernelTurnCommand } from "../shared/kernel.ts";
-import { assembleTurn, PermissionWaiter, runTurn, type KernelTurnRuntime } from "./kernel-turn.ts";
+import { assembleTurn, PermissionWaiter, runTurn, unwrapHarnessError, type KernelTurnRuntime } from "./kernel-turn.ts";
+import { toDurableTool } from "./durable-tools.ts";
+import { deflateSync } from "node:zlib";
 import { TurnWire } from "./kernel-wire.ts";
 import { McpHub } from "./mcp.ts";
 import { RequestBroker } from "./request-broker.ts";
@@ -183,3 +185,68 @@ describe("kernel-turn：新内核跑一轮带工具的对话", () => {
     await harness.close(BACKGROUND_CONTEXT);
   });
 });
+
+describe("kernel-turn：工具结果与旧内核同形", () => {
+  it("参数校验失败、调了没提供的工具：结果是旧内核那样的一段原文，不带 <harness> 包装", () => {
+    const invalid = unwrapHarnessError({ name: "t" }, { isError: true, diagnostics: [{ severity: "error", code: "invalid_arguments", message: 'Validation failed for tool "t":\n  - x: required' }] });
+    assert.deepEqual(invalid, { output: [{ type: "text", text: 'Validation failed for tool "t":\n  - x: required' }], isError: true });
+    const missing = unwrapHarnessError({ name: "ghost" }, { isError: true, diagnostics: [{ severity: "error", code: "tool_unavailable", message: "Tool ghost is not available" }] });
+    assert.deepEqual(missing, { output: [{ type: "text", text: "Tool ghost not found" }], isError: true });
+    assert.equal(unwrapHarnessError({ name: "t" }, { output: [{ type: "text", text: "ok" }] }), undefined);
+  });
+
+  it("工具结果里的大图过 pi 同一道归一化：缩放并附坐标换算提示", async () => {
+    // 一张 3000×10 的 PNG（全白），超过 pi 的默认图片上限（长边 2000）
+    const png = await sharpLessPng(3000, 10);
+    const tool = toDurableTool(
+      {
+        name: "pic",
+        label: "pic",
+        description: "returns a picture",
+        parameters: { type: "object", properties: {} } as never,
+        execute: async () => ({ content: [{ type: "image", data: png, mimeType: "image/png" }], details: undefined }),
+      },
+      { cwd: "/", autoResizeImages: true, model: () => MODEL, thinkingLevel: () => "off", providerSessionId: () => "p" },
+    );
+    const result = await tool.execute({}, { callId: "c1" } as never, BACKGROUND_CONTEXT);
+    const output = result.output ?? [];
+    assert.equal(output[0]?.type, "image");
+    assert.notEqual((output[0] as { data: string }).data, png, "图被缩放了");
+    assert.match((output[1] as { text?: string } | undefined)?.text ?? "", /Multiply coordinates/);
+  });
+});
+
+/** 不依赖图像库造一张全白 RGB PNG（宽 × 高） */
+async function sharpLessPng(width: number, height: number): Promise<string> {
+  const crcTable = Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  const crc = (bytes: Buffer): number => {
+    let c = 0xffffffff;
+    for (const byte of bytes) c = (crcTable[(c ^ byte) & 0xff] as number) ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type: string, data: Buffer): Buffer => {
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type, "latin1"), data]);
+    const sum = Buffer.alloc(4);
+    sum.writeUInt32BE(crc(body));
+    return Buffer.concat([length, body, sum]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8;
+  header[9] = 2;
+  const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(width * 3, 255)]);
+  const raw = Buffer.concat(Array.from({ length: height }, () => row));
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", header),
+    chunk("IDAT", deflateSync(raw)),
+    chunk("IEND", Buffer.alloc(0)),
+  ]).toString("base64");
+}

@@ -7,7 +7,9 @@
  * - 声明：name / description / parameters（JSON 化，durable 的 toToolDeclaration 也是这么转）/ constrainedSampling 原样；
  * - 结果：content 原样当 output；`isError` 原样；**抛错**按 pi-agent-core 的 createErrorToolResult 折成
  *   「一段文字 = error.message」的错误结果，而不是让 durable 记成 `<harness>[error] …</harness>` 诊断；
- * - 截断：工具自己截（pi 的内建工具都带截断与提示语），durable 不再截第二遍（outputLimits 放到最大）。
+ * - 截断：工具自己截（pi 的内建工具都带截断与提示语），durable 不再截第二遍（outputLimits 放到最大）；
+ * - 结果里的图：过 pi 同一道归一化（normalizeToolResultImages：按模型的图片上限缩放、附坐标换算提示），
+ *   旧内核在 agent-session 的 _afterToolCall 里对每个工具结果做这一步。
  *
  * 不翻的：onUpdate 的流式进度（界面进度是主循环切过来那一步的事）、renderCall / renderResult（TUI 用）。
  */
@@ -21,6 +23,7 @@ import {
   createLsToolDefinition,
   createReadToolDefinition,
   createWriteToolDefinition,
+  normalizeToolResultImages,
   type ExtensionToolContext,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
@@ -35,6 +38,8 @@ import { ENABLED_BUILTIN_TOOLS } from "./permission.ts";
  */
 export interface DurableToolScope {
   cwd: string;
+  /** pi 设置的 images.autoResize（旧内核 _afterToolCall 读同一项） */
+  autoResizeImages: boolean;
   model: () => Model<Api> | undefined;
   thinkingLevel: () => string;
   providerSessionId: () => string;
@@ -90,8 +95,13 @@ export function toDurableTool(definition: ToolDefinition, scope: DurableToolScop
       try {
         const result = await definition.execute(api.callId, args as never, context.abortSignal, undefined, toolContext(scope));
         const details = jsonDetails(result.details);
+        const resizeOptions = scope.model()?.inputLimits?.images?.resize;
+        const content = await normalizeToolResultImages(result.content ?? [], {
+          autoResizeImages: scope.autoResizeImages,
+          ...(resizeOptions === undefined ? {} : { resizeOptions }),
+        });
         return {
-          output: result.content,
+          output: content,
           ...(result.isError === true ? { isError: true } : {}),
           ...(details === undefined ? {} : { details }),
         };
