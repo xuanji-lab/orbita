@@ -16,7 +16,7 @@ import type { AgentEvent } from "../shared/agent-ipc.ts";
 import type { KernelCommand, KernelMessage, KernelSessionCommand } from "../shared/kernel.ts";
 import { IntentConfirmWaiter } from "./intent-confirm-wait.ts";
 import { KernelPool } from "./kernel.ts";
-import { KERNEL_CHILD_ENV, kernelChildTag, reapKernelChildren } from "./kernel-children.ts";
+import { kernelChildTag, reapKernelChildren, tagShellCommand } from "./kernel-children.ts";
 import { KernelSessions } from "./kernel-session.ts";
 import { PermissionWaiter, type KernelTurnRuntime } from "./kernel-turn.ts";
 import { McpHub } from "./mcp.ts";
@@ -86,7 +86,7 @@ async function init(dir: string): Promise<void> {
   const runtime = modelRuntime;
   // 孤儿善后：bash 子进程挂上这个库目录的标签；上一次连主进程一起被杀留下的，现在清掉
   const tag = kernelChildTag(dir);
-  turnRuntime.childEnv = { [KERNEL_CHILD_ENV]: tag };
+  turnRuntime.tagCommand = (command) => tagShellCommand(command, tag);
   const reaped = await reapKernelChildren(tag);
   if (reaped > 0) console.error(`[kernel-runtime] 清掉上一次留下的 ${reaped} 个 shell 子进程`);
   pool = new KernelPool({

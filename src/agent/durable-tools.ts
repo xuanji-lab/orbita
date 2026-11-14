@@ -160,8 +160,8 @@ export interface BuiltinToolOptions {
   autoResizeImages: boolean;
   commandPrefix: string | undefined;
   shellPath: string | undefined;
-  /** 给 bash 子进程挂的环境变量（kernel 进程的孤儿善后标签，kernel-children.ts）；缺席 = 不挂 */
-  childEnv?: Readonly<Record<string, string>>;
+  /** 给 bash 命令打标签（kernel 进程的孤儿善后，kernel-children.ts 的 tagShellCommand）；缺席 = 不打 */
+  tagCommand?: (command: string) => string;
 }
 
 /**
@@ -175,7 +175,7 @@ export function builtinToolDefinitions(cwd: string, options: BuiltinToolOptions)
     bash: createBashToolDefinition(cwd, {
       commandPrefix: options.commandPrefix,
       shellPath: options.shellPath,
-      ...(options.childEnv === undefined ? {} : { spawnHook: (context) => ({ ...context, env: { ...context.env, ...options.childEnv } }) }),
+      ...(options.tagCommand === undefined ? {} : { spawnHook: (context) => ({ ...context, command: (options.tagCommand as (command: string) => string)(context.command) }) }),
     }) as unknown as ToolDefinition,
     edit: createEditToolDefinition(cwd) as unknown as ToolDefinition,
     find: createFindToolDefinition(cwd) as unknown as ToolDefinition,

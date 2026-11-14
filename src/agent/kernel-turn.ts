@@ -97,8 +97,8 @@ export interface KernelTurnRuntime {
   permissions: PermissionWaiter;
   send: (event: AgentEvent) => void;
   resolveShellPath: () => string | undefined;
-  /** 给 bash 子进程挂的环境变量（kernel 进程的孤儿善后标签）；缺席 = 不挂 */
-  childEnv?: Readonly<Record<string, string>>;
+  /** 给 bash 命令打孤儿善后的标签（kernel-children.ts）；缺席 = 不打 */
+  tagCommand?: (command: string) => string;
 }
 
 /** 一轮要的会话级对象 */
@@ -359,7 +359,7 @@ export async function assembleTurn(
 
   const resources = await loadPiResources({ cwd: command.cwd, skillsDirs: command.skillsDirs, resolveShellPath: runtime.resolveShellPath });
   const definitions = [
-    ...builtinToolDefinitions(command.cwd, { ...resources.builtinOptions, ...(runtime.childEnv === undefined ? {} : { childEnv: runtime.childEnv }) }),
+    ...builtinToolDefinitions(command.cwd, { ...resources.builtinOptions, ...(runtime.tagCommand === undefined ? {} : { tagCommand: runtime.tagCommand }) }),
     ...createTurnTools({
       command,
       flags,
