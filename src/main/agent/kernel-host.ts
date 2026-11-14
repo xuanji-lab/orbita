@@ -60,7 +60,8 @@ export class KernelHost {
     const child = this.fork();
     this.child = child;
     child.on("message", (message) => {
-      if (message.type === "ready") return;
+      // agent 事件只在新内核跑轮时才有；这一步主进程还不驱动新内核跑轮（对话主循环仍是旧内核），不该收到
+      if (message.type === "ready" || message.type === "agent") return;
       const waiting = this.pending.get(message.requestId);
       this.pending.delete(message.requestId);
       waiting?.resolve(message);
