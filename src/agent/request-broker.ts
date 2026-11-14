@@ -1,3 +1,4 @@
+import type { AgentCommand } from "../shared/agent-ipc.ts";
 import { randomUUID } from "node:crypto";
 
 /**
@@ -45,5 +46,95 @@ export class RequestBroker {
     clearTimeout(pending.timer);
     this.pending.delete(requestId);
     pending.settle(result);
+  }
+}
+
+/** 工具请求的回执命令（主进程 → agent 进程，各工具请求事件的应答） */
+export type ToolReplyCommand = Extract<
+  AgentCommand,
+  {
+    type:
+      | "skillWriteResult"
+      | "mcpWriteResult"
+      | "readTaskResult"
+      | "modelCostsResult"
+      | "pluginInstallResult"
+      | "pluginListResult"
+      | "pluginPreviewResult"
+      | "pluginBoardResult"
+      | "memoryRecallResult"
+      | "memoryToolResult"
+      | "browserResult"
+      | "slidesResult"
+      | "docResult"
+      | "terminalResult"
+      | "delegateResult"
+      | "automationResult"
+      | "channelSendResult";
+  }
+>;
+
+const TOOL_REPLY_TYPES: ReadonlySet<string> = new Set<ToolReplyCommand["type"]>([
+  "skillWriteResult",
+  "mcpWriteResult",
+  "readTaskResult",
+  "modelCostsResult",
+  "pluginInstallResult",
+  "pluginListResult",
+  "pluginPreviewResult",
+  "pluginBoardResult",
+  "memoryRecallResult",
+  "memoryToolResult",
+  "browserResult",
+  "slidesResult",
+  "docResult",
+  "terminalResult",
+  "delegateResult",
+  "automationResult",
+  "channelSendResult",
+]);
+
+export function isToolReply(command: AgentCommand): command is ToolReplyCommand {
+  return TOOL_REPLY_TYPES.has(command.type);
+}
+
+/**
+ * 回执 → 在途工具调用认的结果形状。**两个内核共用这一份翻法**（旧内核 runtime.ts 的命令分支、新内核
+ * kernel-runtime.ts 的 agent 命令）：多数回执形状即契约原样给，几种要补默认错误文案或挑字段。
+ */
+export function toolReplyResult(command: ToolReplyCommand): unknown {
+  switch (command.type) {
+    case "skillWriteResult":
+      return command.ok
+        ? { ok: true, ...(command.path === undefined ? {} : { path: command.path }) }
+        : { ok: false, error: command.error ?? "Write failed" };
+    case "mcpWriteResult":
+      return command.ok
+        ? { ok: true, ...(command.status === undefined ? {} : { status: command.status }) }
+        : { ok: false, error: command.error ?? "Write failed" };
+    case "readTaskResult":
+      return command.ok
+        ? { ok: true, card: command.card, text: command.text }
+        : { ok: false, error: command.error ?? "Read failed" };
+    case "browserResult":
+      return command.ok
+        ? {
+            ok: true,
+            text: command.text,
+            card: command.card,
+            ...(command.image === undefined ? {} : { image: command.image }),
+          }
+        : { ok: false, error: command.error ?? "Browser request failed" };
+    case "delegateResult":
+      return command.ok
+        ? { ok: true, childId: command.childId, title: command.title, card: command.card }
+        : { ok: false, error: command.error ?? "Delegate failed" };
+    case "channelSendResult":
+      return command.ok
+        ? { ok: true, messageId: command.messageId }
+        : { ok: false, error: command.error ?? "Send failed" };
+    default:
+      // 派发参考 / 插件 / 记忆召回与记忆工具 / 演示文稿与文档导出 / 终端 / 自动化：形状即契约（ok 双分支），原样给
+      return command;
   }
 }

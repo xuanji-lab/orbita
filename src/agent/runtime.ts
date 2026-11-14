@@ -76,7 +76,7 @@ import {
 import { McpHub } from "./mcp.ts";
 import { attachGoalLedger, type LedgerAttachCache } from "./goal-compaction.ts";
 import { createPlanGate, type PlanToolOptions } from "./plan-tools.ts";
-import { RequestBroker } from "./request-broker.ts";
+import { isToolReply, RequestBroker, toolReplyResult } from "./request-broker.ts";
 import { createTurnTools, extraToolNames, isChildSession, turnToolFlags, type TurnInput } from "./turn-tools.ts";
 import {
   applyRecallEvent,
@@ -2101,101 +2101,9 @@ async function handle(command: AgentCommand): Promise<void> {
     }
     return;
   }
-  if (command.type === "skillWriteResult") {
-    requestBroker.resolve(
-      command.requestId,
-      command.ok
-        ? { ok: true, ...(command.path === undefined ? {} : { path: command.path }) }
-        : { ok: false, error: command.error ?? "Write failed" },
-    );
-    return;
-  }
-  if (command.type === "mcpWriteResult") {
-    requestBroker.resolve(
-      command.requestId,
-      command.ok
-        ? { ok: true, ...(command.status === undefined ? {} : { status: command.status }) }
-        : { ok: false, error: command.error ?? "Write failed" },
-    );
-    return;
-  }
-  if (command.type === "readTaskResult") {
-    requestBroker.resolve(
-      command.requestId,
-      command.ok
-        ? { ok: true, card: command.card, text: command.text }
-        : { ok: false, error: command.error ?? "Read failed" },
-    );
-    return;
-  }
-  if (command.type === "modelCostsResult") {
-    // 派发参考的回执：形状即契约（ok 双分支），原样结掉在途 promise
-    requestBroker.resolve(command.requestId, command);
-    return;
-  }
-  if (command.type === "pluginInstallResult" || command.type === "pluginListResult" || command.type === "pluginPreviewResult" || command.type === "pluginBoardResult") {
-    // 插件工具的回执：形状即契约（ok 双分支），原样结掉在途 promise（主进程任何路径都回执）
-    requestBroker.resolve(command.requestId, command);
-    return;
-  }
-  if (command.type === "memoryRecallResult") {
-    // 记忆召回的回执：形状即契约（ok 双分支），原样结掉在途 promise。
-    // 轮前调用方对超时 / ok:false / 空 hits 统一按「不注入」处理
-    requestBroker.resolve(command.requestId, command);
-    return;
-  }
-  if (command.type === "memoryToolResult") {
-    // 记忆工具的回执：形状即契约（ok 双分支），原样结掉在途 promise
-    requestBroker.resolve(command.requestId, command);
-    return;
-  }
-  if (command.type === "browserResult") {
-    requestBroker.resolve(
-      command.requestId,
-      command.ok
-        ? {
-            ok: true,
-            text: command.text,
-            card: command.card,
-            ...(command.image === undefined ? {} : { image: command.image }),
-          }
-        : { ok: false, error: command.error ?? "Browser request failed" },
-    );
-    return;
-  }
-  if (command.type === "slidesResult" || command.type === "docResult") {
-    // 演示文稿 / 文档导出的回执：形状即契约（ok 双分支），原样结掉在途 promise
-    requestBroker.resolve(command.requestId, command);
-    return;
-  }
-  if (command.type === "terminalResult") {
-    // 终端工具的回执：形状即契约（ok 双分支），原样结掉在途 promise。
-    // 主进程那边任何路径都回执（agent-requests.ts），这里不做二次加工
-    requestBroker.resolve(command.requestId, command);
-    return;
-  }
-  if (command.type === "delegateResult") {
-    // requestBroker 的同款胶水：回执翻给 pending 的 delegate 工具调用
-    requestBroker.resolve(
-      command.requestId,
-      command.ok
-        ? { ok: true, childId: command.childId, title: command.title, card: command.card }
-        : { ok: false, error: command.error ?? "Delegate failed" },
-    );
-    return;
-  }
-  if (command.type === "automationResult") {
-    // 自动化工具的回执：形状即契约（ok 双分支），原样结掉在途 promise
-    requestBroker.resolve(command.requestId, command);
-    return;
-  }
-  if (command.type === "channelSendResult") {
-    requestBroker.resolve(
-      command.requestId,
-      command.ok
-        ? { ok: true, messageId: command.messageId }
-        : { ok: false, error: command.error ?? "Send failed" },
-    );
+  // 工具请求的回执（*Result）：翻成在途工具调用认的形状再结掉 promise（翻法与新内核共用，见 request-broker.ts）
+  if (isToolReply(command)) {
+    requestBroker.resolve(command.requestId, toolReplyResult(command));
     return;
   }
   if (command.type === "steer") {
