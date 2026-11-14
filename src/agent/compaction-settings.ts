@@ -63,3 +63,17 @@ export interface TurnTiming {
 export function compactionBoundaryTimestamp(turn: TurnTiming, now: number): number {
   return !turn.sawAssistant && turn.echoedAt !== null ? turn.echoedAt : now;
 }
+
+/**
+ * pi 的两种「压不了」是预期拒绝而不是故障（见 compaction.js prepareCompaction 的守卫），
+ * 直接透传英文会让人以为系统坏了；其余报错照原样走。
+ */
+export function compactionErrorText(raw: string): string {
+  if (raw === "Already compacted") {
+    return "Already compacted — nothing new since the last one. Continue the conversation, then compact again.";
+  }
+  if (raw === "Nothing to compact (session too small)") {
+    return "This conversation is too short — not enough context worth compacting.";
+  }
+  return raw;
+}
