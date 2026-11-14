@@ -150,11 +150,12 @@ function asPiEntry(entry: EntryRecord): unknown {
 
 /**
  * 把 durable 自己写的错误结果还原成旧内核（pi-agent-core）的样子：一段原文的错误结果，不带
- * `<harness>[error] …</harness>` 诊断包装。三种：
+ * `<harness>[error] …</harness>` 诊断包装。四种：
  * - blocked：闸门的拒绝语（去掉 durable 加的 "Tool call blocked: " 前缀；pi 用 createErrorToolResult(reason)）；
  * - invalid_arguments：参数校验失败（两边都是 pi-ai validateToolArguments 的同一段文字）；
  * - tool_unavailable：模型调了没提供的工具（pi 写 "Tool <name> not found"）。
- * 被中断 / 停止（interrupted / aborted）的不改：那是 durable 独有的恢复语义，旧内核没有对位（报告里列为已知差别）。
+ * - aborted：被停止——pi-agent-core 对被停调用的通用说法 "Operation aborted"。
+ * 被崩溃截断（interrupted / restart_limit）的不改：那是 durable 独有的恢复语义，旧内核没有对位。
  */
 const BLOCKED_PREFIX = "Tool call blocked: ";
 export function unwrapHarnessError(call: { name: string }, result: ToolExecutionResult): ToolExecutionResult | undefined {
@@ -165,6 +166,9 @@ export function unwrapHarnessError(call: { name: string }, result: ToolExecution
     }
     if (diagnostic.code === "invalid_arguments") return { output: [{ type: "text", text: diagnostic.message }], isError: true };
     if (diagnostic.code === "tool_unavailable") return { output: [{ type: "text", text: `Tool ${call.name} not found` }], isError: true };
+    // 被停止：durable 在工具自己报错之前就结了这次调用，工具那句话（bash 的 "Command aborted"）拿不到；
+    // 用 pi-agent-core 对被停调用的通用说法 "Operation aborted"（报告里列为已知差别：措辞不同，形状相同）
+    if (diagnostic.code === "aborted") return { output: [{ type: "text", text: "Operation aborted" }], isError: true };
   }
   return undefined;
 }

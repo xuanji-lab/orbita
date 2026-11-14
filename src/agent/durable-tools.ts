@@ -106,8 +106,7 @@ export function toDurableTool(definition: ToolDefinition, scope: DurableToolScop
           ...(details === undefined ? {} : { details }),
         };
       } catch (error) {
-        // 被停止时把错误交还 durable：它记成 aborted 结果（与 pi 对被停工具的处理同一个语义）
-        if (context.abortSignal?.aborted === true) throw error;
+        // 被停止时 durable 丢掉这个返回值、改记它自己的 aborted 结果（kernel-turn.ts 的 unwrapHarnessError 再还原成一段原文）
         return { output: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
       }
     },
