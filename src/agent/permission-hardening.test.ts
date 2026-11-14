@@ -73,9 +73,6 @@ const MUST_BLOCK: [string, string][] = [
   ["unzip 到数据目录", `unzip -o /tmp/x.zip -d "${D}"`],
   ["通配：数据目录/*.json", `rm "${D}"/*.json`],
   ["通配：数据目录/*", `rm -rf "${D}"/*`],
-  ["通配：automations*", `rm automations*`],
-  ["通配：问号", `rm automations?json`],
-  ["通配：方括号", `rm automation[s].json`],
   ["for 循环删数据目录里的东西", `for f in "${D}"/*; do rm "$f"; done`],
   ["ls 数据目录接 xargs rm", `ls "${D}" | xargs rm -f`],
   ["find -exec rm", `find "${D}" -type f -exec rm {} +`],
@@ -186,6 +183,10 @@ const MUST_ALLOW: [string, string][] = [
   ["git clean 项目", `git clean -fd`],
   ["find 家目录只列", `find ~ -maxdepth 1 -name '*.pdf'`],
   ["通配 *.json 在项目目录", `cat package*.json`],
+  // 白名单口径：通配只看「它可能展开到哪」——cwd 在项目里，automations* 展开不到数据目录（cwd 在数据目录里的见下面 R3B 组）
+  ["通配：automations*（cwd 不在数据目录）", `rm automations*`],
+  ["通配：问号（cwd 不在数据目录）", `rm automations?json`],
+  ["通配：方括号（cwd 不在数据目录）", `rm automation[s].json`],
   ["名字相近的别的文件", `cat src/automations-view.ts src/automations.test.ts`],
   ["xautomations.json 是另一个文件", `cat xautomations.json`],
   ["base64 解码但不执行", `echo aGVsbG8= | base64 -d`],
@@ -334,6 +335,10 @@ const MUST_BLOCK_R3B: [string, string][] = [
   ["cwd 就在数据目录：find . -delete", `find . -delete`],
   ["cwd 就在数据目录：find . -type f -exec rm {} +", `find . -type f -exec rm {} +`],
   ["cwd 就在数据目录：rm -f auto*", `rm -f auto*`],
+  ["cwd 就在数据目录：rm automations*", `rm automations*`],
+  ["cwd 就在数据目录：问号通配", `rm automations?json`],
+  ["cwd 就在数据目录：方括号通配", `rm automation[s].json`],
+  ["cd 到数据目录的上级 /tmp 再 rm -rf *（数据目录就在 /tmp/gateprobe 下，泛删会卷走它）", `cd /tmp && rm -rf *`],
   ["cd 上级后泛删（rm -rf *）", `cd ${UP} && rm -rf *`],
   ["cd 上级后 git clean -fdx（默认范围 . 覆盖数据目录）", `cd ${UP} && git clean -fdx`],
   ["cd 上级后 find . -delete", `cd ${UP} && find . -name 'x' -delete`],
@@ -369,7 +374,7 @@ const MUST_ALLOW_R3B: [string, string][] = [
   ["数据目录的上级里删其它目录（不覆盖数据目录）", `cd ${UP} && rm -rf build`],
   ["数据目录的上级里删缓存（带目录前缀，非泛目标）", `cd ${UP} && rm -rf caches/*`],
   ["项目目录里 git clean / find -delete（cwd 与数据目录无关）", `git clean -fdx && find . -name '*.tmp' -delete`],
-  ["/tmp 里 rm -rf *（cwd 与数据目录及其上级无关）", `cd /tmp && rm -rf *`],
+  ["数据目录的上级之外的目录里 rm -rf *（cwd 与数据目录及其上级无关）", `cd /var/tmp && rm -rf *`],
 ];
 
 describe("第三轮补一小轮：cd 跟踪、相对名解析、泛破坏、同名误伤收窄", () => {
@@ -381,7 +386,7 @@ describe("第三轮补一小轮：cd 跟踪、相对名解析、泛破坏、同�
   for (const [name, command] of MUST_BLOCK_R3B) {
     test(`拦：${name}`, async () => {
       // cwd 就在数据目录的两条用 dataGate，其余从项目目录出发（命令里自己 cd）
-      const gate = /^git clean -fdx$|^rm -rf \*$|^rm -rf \.$|^find \. -delete|^find \. -type f|^rm -f auto\*$/.test(command) ? dataGate : projGate;
+      const gate = /^git clean -fdx$|^rm -rf \*$|^rm -rf \.$|^find \. -delete|^find \. -type f|^rm -f auto\*$|^rm automation/.test(command) ? dataGate : projGate;
       const tool = /Set-Location|Remove-Item|Move-Item|Set-Content|Out-File/.test(command) ? "powershell" : "bash";
       const result = await gate({ toolCallId: "c", toolName: tool, input: { command } } satisfies ToolCallLike);
       assert.equal(result.block, true, `应该拦：${command}`);
