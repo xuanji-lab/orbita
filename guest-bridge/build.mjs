@@ -68,6 +68,7 @@ const args = [
   // UI Automation 车道（0.10.0）：uia-list / uia-act + 手写 COM interop、STA 看门狗
   // （不引 UIAutomationClient.dll：那是 .NET 的包装，不暴露 AutoSetFocus）
   path.join(scriptDir, "Uia.cs"),
+  path.join(scriptDir, "WmPost.cs"),
   // 应用级准入（0.11.0）：目标窗口 → guest 内 pid → 自己起的进程树 / exe 白名单。
   // 纯判定 + 自测（--selftest-admission），不碰真实窗口
   path.join(scriptDir, "Admission.cs"),

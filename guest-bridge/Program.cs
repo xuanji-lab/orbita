@@ -244,6 +244,8 @@ internal static class Program
             // UIA 车道的纯函数自测（ref 编号 / 动作→模式 / 参数校验 / 超时与降级文案；
             // **不启 COM、不碰桌面**——在宿主上对任何用户窗口做 UIA 写操作都是红线）
             if (args[i] == "--selftest-uia") return Uia.RunSelfTest();
+            // PostMessage 车道的纯函数自测（动作/文本/MAKELPARAM/中心点；不碰任何窗口）
+            if (args[i] == "--selftest-wm") return WmPost.RunSelfTest();
             // UIA 客户端自检：只建 in-proc 客户端、关 AutoSetFocus 并读回（不取窗口、不调模式）。
             // 验的是 CLSID / IID / vtable 槽这三件纯函数测不到的东西；不碰用户桌面。
             if (args[i] == "--selftest-uia-client") return Uia.RunClientSelfTest();
@@ -945,6 +947,10 @@ internal static class Program
         // 0.11.0 起 uia-act 只接受 invoke / setValue / selection（focus 已删，它动桌面级焦点）。
         if (command == "uia-list") return Uia.ExecuteList(raw);
         if (command == "uia-act") return Uia.ExecuteAct(raw);
+        // 会话内 PostMessage 车道（P2 / L2b）：UIA 有元素但没有模式时，把字符/鼠标消息直接投给那个 HWND。
+        // 这一条**必须由桥发**：宿主跨会话 PostMessage = ERROR_ACCESS_DENIED，而会话里的
+        // SendInput 返回成功却毫无效果（RDP 形态，光标冻在 0,0）。
+        if (command == "wm-act") return Uia.ExecuteWm(raw);
         if (command == "click") return ExecuteClick(raw);
         if (command == "type") return ExecuteType(raw);
         if (command == "key") return ExecuteKey(raw);

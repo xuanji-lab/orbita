@@ -965,6 +965,13 @@ internal static class Uia
      * 数错一个槽就会读到 HWND（非 0）而把每个元素都当成密码框，所以这里把依据写下来。
      */
     private const int SlotCurrentIsPassword = 3 + 33 - 1;
+    /**
+     * IUIAutomationElement 第 34 个方法 get_CurrentNativeWindowHandle（UIA_NativeWindowHandlePropertyId
+     * = 30020，类型 int）。槽号依据与 IsPassword 同一串：31 IsControlElement → 32 IsContentElement
+     * → 33 IsPassword → **34 NativeWindowHandle** → 35 ItemType → 36 IsOffscreen（已实测）。
+     * PostMessage 车道靠它把控件对到一个真实 HWND 上。
+     */
+    private const int SlotCurrentNativeWindowHandle = 3 + 34 - 1;
     /** IUIAutomationElement 第 41 个方法 get_CurrentBoundingRectangle */
     private const int SlotCurrentBoundingRectangle = 3 + 41 - 1;
     /**
@@ -1775,6 +1782,156 @@ internal static class Uia
     // ---- uia-act -------------------------------------------------------------
 
     /**
+     * 会话内 PostMessage 车道（P2 / L2b）：把字符或一对鼠标消息直接投给控件自己的 HWND。
+     *
+     * 目标解析与 uia-act 完全同一套（ref 代次校验 / name 包含匹配），因为这一条存在的
+     * 理由就是「UIA 有元素、但没有可用模式」——定位能力是它的前提。
+     *
+     * 为什么必须由桥来发：宿主跨会话 PostMessage = ERROR_ACCESS_DENIED（真机实测），
+     * 而会话里的 SendInput 返回成功却毫无效果（光标冻在 0,0）。三条路里只剩这一条。
+     */
+    internal static string ExecuteWm(string raw)
+    {
+        string action = NormalizeAction(Program.ExtractJsonString(raw, "action"));
+        string text = Program.ExtractJsonString(raw, "text");
+        string name = Program.ExtractJsonString(raw, "name");
+        if (name != null) name = name.Trim();
+
+        string refRaw = Program.ExtractJsonString(raw, "ref");
+        bool hasRef = refRaw != null && refRaw.Trim().Length > 0;
+        if (hasRef)
+        {
+            int genCheck;
+            int refCheck;
+            string badRef = ParseRefToken(refRaw, out genCheck, out refCheck);
+            if (badRef != null) return Fail(badRef);
+        }
+        bool hasName = name != null && name.Length > 0;
+        string bad = WmPost.Validate(action, hasRef || hasName, text);
+        if (bad != null) return Fail(bad);
+
+        string error;
+        IntPtr hwnd = ResolveTarget(raw, "wm-act", out error);
+        if (error != null) return Fail(error);
+
+        int timeoutMs;
+        string badTimeout = NormalizeTimeout(Program.ExtractNumber(raw, "timeoutMs"), out timeoutMs);
+        if (badTimeout != null) return Fail(badTimeout);
+
+        bool timedOut;
+        string json;
+        try
+        {
+            json = Run(delegate
+            {
+                return BuildWmJson(hwnd, action, hasRef, refRaw, hasName, name, text);
+            }, timeoutMs, out timedOut);
+        }
+        catch (Exception ex)
+        {
+            Program.Log("wm-act 失败：" + ex.Message);
+            return Fail(ex.Message);
+        }
+        if (timedOut) return Fail(TimeoutMessage("wm-act", timeoutMs));
+        return json;
+    }
+
+    private static string BuildWmJson(IntPtr hwnd, string action, bool hasRef, string refToken, bool hasName,
+        string name, string text)
+    {
+        Stopwatch clock = Stopwatch.StartNew();
+        IntPtr automation = EnsureAutomation();
+        IntPtr window = ElementFromHandle(automation, hwnd);
+        IntPtr target = IntPtr.Zero;
+        bool ownsTarget = false;
+        try
+        {
+            if (hasRef)
+            {
+                UiaHistoryStore store = _store;
+                UiaSnapshot snapshot;
+                int index;
+                string badRef = ResolveRefToken(store, hwnd.ToInt64(), refToken, out snapshot, out index);
+                if (badRef != null) throw new InvalidOperationException(badRef);
+                if (index < 0 || index >= snapshot.Pointers.Count)
+                    throw new InvalidOperationException("ref " + refToken + " 指向的控件已经不在了——重新 list 再动作。");
+                target = snapshot.Pointers[index];
+            }
+            else
+            {
+                target = FindByName(window, automation, name);
+                if (target == IntPtr.Zero)
+                    throw new InvalidOperationException("没找到名字包含「" + name + "」的控件——先用 uia-list 看这个窗口里有哪些控件。");
+                ownsTarget = true;
+            }
+
+            string targetName = ReadString(target, SlotCurrentName);
+            string controlType = ControlTypeName(ReadInt(target, SlotCurrentControlType));
+            int nativeRaw = ReadInt(target, SlotCurrentNativeWindowHandle);
+            if (nativeRaw == 0)
+                throw new InvalidOperationException("这个控件没有独立的窗口句柄（" + controlType
+                    + "）——PostMessage 送不进去；改用 uia-act（invoke / setValue）或截图看一眼。");
+            IntPtr native = new IntPtr(nativeRaw);
+
+            StringBuilder json = new StringBuilder();
+            json.Append("{\"ok\":true,\"hwnd\":").Append(hwnd.ToInt64())
+                .Append(",\"action\":").Append(Program.JsonQuote(action))
+                .Append(",\"targetHwnd\":").Append(native.ToInt64())
+                .Append(",\"name\":").Append(Program.JsonQuote(targetName))
+                .Append(",\"controlType\":").Append(Program.JsonQuote(controlType));
+
+            if (action == "type")
+            {
+                int posted = WmPost.PostText(native, text);
+                int expected = WmPost.CharPayload(text).Length;
+                json.Append(",\"posted\":").Append(posted)
+                    .Append(",\"expected\":").Append(expected);
+                if (posted != expected)
+                    throw new InvalidOperationException("只投出去 " + posted + "/" + expected
+                        + " 条 WM_CHAR——目标窗口可能已经销毁；重新 list 确认它还在。");
+            }
+            else
+            {
+                RECT rect = ReadRect(target);
+                int centerX;
+                int centerY;
+                if (!WmPost.CenterOf(rect.Left, rect.Top, rect.Right, rect.Bottom, out centerX, out centerY))
+                    throw new InvalidOperationException("这个控件的矩形是空的（" + rect.Left + "," + rect.Top + "–"
+                        + rect.Right + "," + rect.Bottom + "）——它可能不可见；先截图或换一个控件。");
+                int clientX;
+                int clientY;
+                bool sent = WmPost.PostClick(native, centerX, centerY, out clientX, out clientY);
+                json.Append(",\"x\":").Append(centerX).Append(",\"y\":").Append(centerY)
+                    .Append(",\"clientX\":").Append(clientX).Append(",\"clientY\":").Append(clientY);
+                if (!sent)
+                    throw new InvalidOperationException("WM_LBUTTONDOWN/UP 没投出去——目标窗口可能已经销毁。");
+            }
+            json.Append(",\"elapsedMs\":").Append(clock.ElapsedMilliseconds).Append("}");
+            Program.Log("wm-act hwnd " + native.ToInt64() + " " + action + " → 「" + targetName + "」（"
+                + controlType + "，" + clock.ElapsedMilliseconds + "ms）");
+            return json.ToString();
+        }
+        finally
+        {
+            if (ownsTarget) Release(target);
+            Release(window);
+        }
+    }
+
+    /**
+     * 控件不支持 ValuePattern 时改走会话内 PostMessage（uia-act setValue 的兜底）。
+     * **只在 L2b 有意义**（那一档没有真实键盘），但在 WSB 里同样可用：
+     * 一批自绘 / 第三方 Win32 控件本来就没有 ValuePattern，以前只能报「不支持」。
+     * 回实际投出去的字符数；控件没有独立 HWND 时回 -1（调用方照旧报不支持）。
+     */
+    internal static int PostTextFallback(IntPtr target, string text)
+    {
+        int nativeRaw = ReadInt(target, SlotCurrentNativeWindowHandle);
+        if (nativeRaw == 0) return -1;
+        return WmPost.PostText(new IntPtr(nativeRaw), text);
+    }
+
+    /**
      * uia-act {hwnd?, title?, ref?, name?, action, value?, timeoutMs?}
      *   → `{ok:true,hwnd,action,usedPattern,name,controlType,autoSetFocus,elapsedMs}`
      *
@@ -1885,6 +2042,23 @@ internal static class Uia
             int hr;
             string usedPattern;
             int patternId = PatternIdForAction(action);
+            // setValue 遇上**没有 ValuePattern** 的控件：改走会话内 PostMessage（WM_CHAR）。
+            // 这条兜底在 L2b 里是主路（那一档没有真实键盘），在 WSB 里也救了一批自绘控件。
+            // 只对 setValue 开这个口子：invoke / selection 用消息伪造会改错语义。
+            if (action == "setValue" && !patterns.Contains("value"))
+            {
+                int posted = PostTextFallback(target, value);
+                if (posted < 0)
+                    throw new InvalidOperationException(UnsupportedMessage(action, controlType, patterns));
+                int expected = WmPost.CharPayload(value).Length;
+                if (posted != expected)
+                    throw new InvalidOperationException("只投出去 " + posted + "/" + expected
+                        + " 条 WM_CHAR——目标窗口可能已经销毁；重新 list 确认它还在。");
+                hr = 0;
+                usedPattern = "postMessage";
+            }
+            else
+            {
             IntPtr pattern = GetPattern(target, patternId, action, controlType, patterns);
             try
             {
@@ -1913,6 +2087,7 @@ internal static class Uia
             finally
             {
                 Release(pattern);
+            }
             }
             if (hr < 0) throw new InvalidOperationException(DescribeHresult(hr, "UIA 动作 " + action + " "));
 
