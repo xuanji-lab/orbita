@@ -853,9 +853,28 @@ describe("AgentHostCore：新内核那条道", () => {
     await r.host.abort("s1");
     await r.host.setMode("s1", "skip");
     r.host.steer("s1", "插话", "steer");
-    r.host.generateTitle("s1", "标题素材");
     const sessionCommands = r.kernel.posted.flatMap((command) => (command.type === "session" ? [command.command.type] : []));
-    assert.deepEqual(sessionCommands, ["submit", "abort", "setMode", "steer", "generateTitle"]);
+    assert.deepEqual(sessionCommands, ["submit", "abort", "setMode", "steer"]);
+  });
+
+  test("标题（新内核）：只给这一轮建出来的全新会话起一次——续聊、分支会话的第一句不起（与旧内核实际的门一致）", async () => {
+    const r = kernelRig();
+    const titles = () => r.kernel.posted.flatMap((command) => (command.type === "session" && command.command.type === "generateTitle" ? [command.root] : []));
+    // 全新会话：开轮命令没带本子，等过 created
+    const fresh = r.host.submit({ type: "submit", sessionId: "fresh", text: "hi", ...TURN_FIELDS });
+    await flush();
+    r.kernel.emit({ type: "ready" });
+    await flush();
+    r.kernel.emit({ type: "created", sessionId: "fresh", piSessionFile: "durable:fresh" });
+    await fresh;
+    r.host.generateTitle("fresh", "第一句");
+    // 同一条会话的第二轮：不再起
+    await r.host.submit({ type: "submit", sessionId: "fresh", text: "again", piSessionFile: "durable:fresh", ...TURN_FIELDS });
+    r.host.generateTitle("fresh", "第二句");
+    // 分支出来的会话（带着本子）第一句：不起
+    await r.host.submit({ type: "submit", sessionId: "branch", text: "b1", piSessionFile: "durable:branch", ...TURN_FIELDS });
+    r.host.generateTitle("branch", "分支里");
+    assert.deepEqual(titles(), ["fresh"]);
   });
 
   test("每个事件只交给 onEvent 一次（两个子进程都是）——交两次会让 renderer 一个 idle 投递两条排队消息", async () => {

@@ -251,6 +251,44 @@ describe("KernelSessions：一轮的事件与旧内核同形", () => {
     assert.ok(stopped.reported !== null && done.reported !== null && stopped.reported.tokens !== done.reported.tokens);
   });
 
+  it("起标题与旧内核同一个门：这一轮还在开（分支会话的第一句，主进程发送即发标题命令）就跳过；开好、还在跑才生成", async () => {
+    const cwd = await tempDir();
+    faux.setResponses([
+      fauxAssistantMessage("第一轮答"),
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        return fauxAssistantMessage("答");
+      },
+    ]);
+    // 标题调用走 pi-ai 的全局注册表（这里的假模型不在里面）：数「[title] 生成失败」的日志就是数尝试了几次
+    const attempts: string[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => {
+      if (String(args[0]).startsWith("[title]")) attempts.push(String(args[0]));
+      else original(...args);
+    };
+    try {
+      const r = await rig();
+      // 先跑完一轮：这条会话的账（note）已经在了——分支会话、续聊的会话都是这样，只差「这一轮开好没有」
+      await r.sessions.handle("t1", submit(cwd, { sessionId: "t1", text: "第一句" }));
+      await r.until(idle("t1"));
+      const turnsBefore = r.events.filter((event) => event.type === "phase" && event.phase === "turn").length;
+      void r.sessions.handle("t1", submit(cwd, { sessionId: "t1", text: "第二句" }));
+      // 还在开（slot 有了、opened 还没有）：跳过
+      await r.sessions.handle("t1", { type: "generateTitle", sessionId: "t1", text: "第一句" });
+      await r.until((event) => event.type === "phase" && event.phase === "turn" && r.events.filter((each) => each.type === "phase" && each.phase === "turn").length > turnsBefore);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(attempts.length, 0, "开好之前不生成");
+      // 开好了、还在跑：生成（这里因假模型不在全局注册表里失败，失败也是一次尝试）
+      await r.sessions.handle("t1", { type: "generateTitle", sessionId: "t1", text: "第一句" });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(attempts.length, 1, "开好之后生成了一次");
+      await r.until((event) => idle("t1")(event) && r.events.filter(idle("t1")).length >= 2);
+    } finally {
+      console.error = original;
+    }
+  });
+
   it("bash 的实时输出经 onUpdate 上界面（tool item_updated 带部分输出），终态是完整输出", async () => {
     const cwd = await tempDir();
     faux.setResponses([fauxAssistantMessage(fauxToolCall("bash", { command: "echo one; sleep 0.3; echo two" }), { stopReason: "toolUse" }), fauxAssistantMessage("ok")]);

@@ -152,6 +152,12 @@ export class AgentHostCore {
   private steerBounced: ((sessionId: string, text: string, delivery: "steer" | "followUp") => void) | null = null;
   /** 交给 kernel 还没回执的本子编辑 / 分支（会话 id；kernel 进程退出时要把等待者结掉） */
   private readonly kernelEdits = new Set<string>();
+  /**
+   * 这一轮由新内核建出来的全新会话（开轮命令没带本子）：标题只给它们起，起一次就划掉。与旧内核实际的门一致——旧内核只在
+   * 「主进程等过 created」的那一轮（全新会话的首轮）开好之后才收到标题命令，别的轮（含分支会话的第一句）命令到时
+   * 那一轮还在开，runtime 跳过；新内核开得快，不在这里拦就会给分支会话也起标题（第四步验收组 6）。
+   */
+  private readonly kernelTitleOnce = new Set<string>();
   /** 发送时事先报了「正在迁移」的会话：kernel 开完它（created）或这一轮落定时补一个 done */
   private readonly expectedMigrations = new Set<string>();
   /** kernel 里一轮没落定的会话（kernel 进程意外退出时它们是「被打断」） */
@@ -528,6 +534,7 @@ export class AgentHostCore {
     let created: Promise<string | null> | null = null;
     if (command.piSessionFile === undefined) {
       created = this.awaitCreated(command.sessionId, "kernel runtime did not confirm the session in time");
+      this.kernelTitleOnce.add(command.sessionId);
     }
     this.postKernel(command);
     return created;
@@ -723,6 +730,7 @@ export class AgentHostCore {
     model?: Extract<AgentCommand, { type: "generateTitle" }>["model"],
   ): void {
     if (this.ownedByKernel(sessionId)) {
+      if (!this.kernelTitleOnce.delete(sessionId)) return;
       this.postKernel({ type: "generateTitle", sessionId, text, ...(model === undefined ? {} : { model }) });
       return;
     }

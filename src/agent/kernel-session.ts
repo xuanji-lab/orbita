@@ -313,9 +313,12 @@ export class KernelSessions {
       return;
     }
     if (command.type === "generateTitle") {
-      // 与旧内核同：只在这一轮还在跑时生成（用当轮的模型与鉴权面），迟到就跳过——下一条消息自然重试
+      // 与旧内核同一个门：这一轮**已经开好**（slot.opened）、还在跑时才生成（用当轮的模型与鉴权面）。
+      // 旧内核 runtime.ts 的 generateTitle 只认 `running.get(id)?.opened`：主进程只在全新会话的首轮等 created（开好之后）
+      // 才发标题命令，别的轮（含分支出来的会话的第一句）发送即发、那时这一轮还在开——于是旧内核只给全新会话起标题，
+      // 分支保持「… (branch)」。新内核开得快，只看「在跑」会给分支也起标题（第四步验收组 6 的差异）
       const note = this.notes.get(command.sessionId);
-      if (!this.running.has(command.sessionId) || note === undefined || note.titleInFlight) return;
+      if (this.running.get(command.sessionId)?.opened == null || note === undefined || note.titleInFlight) return;
       note.titleInFlight = true;
       void generateTitle({
         sessionModel: note.model,
