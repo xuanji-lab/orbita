@@ -8,6 +8,7 @@ import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
 import { PRICE_CHART_CATEGORIES, type PriceChartCategory } from "./price-chart.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 import { MEMORY_VECTOR_MODELS, type MemoryVectorSettings } from "./memory.ts";
+import { isDocxTemplateMode, type DocxTemplateMode } from "./docx-export.ts";
 
 /**
  * 主题偏好。"system" 是真正的默认，不是「light 的别名」：
@@ -338,6 +339,24 @@ export interface AppSettings {
    */
   officeCliPath?: string;
   /**
+   * Word 导出用的 pandoc 可执行文件（绝对路径）。**缺席 = 只靠 PATH 与常见安装根探测**。
+   * 与 latexmkPath 同一条纪律：机器级、只认绝对路径、坏的路径不把导出变成死路
+   * （probe 验不活会回退到 PATH）。
+   */
+  pandocPath?: string;
+  /**
+   * Word 导出的模板来源：`default`（内置，pandoc reference.docx + 中文字体）、
+   * `project`（源文件旁边的 template.docx）、`custom`（docxTemplatePath）。
+   * 缺席 = default。
+   */
+  docxTemplateMode?: DocxTemplateMode;
+  /**
+   * 学校 / 期刊模板 .docx 的绝对路径（`docxTemplateMode === "custom"` 时用）。
+   * 机器级：同一所学校的所有论文共用一个模板。配了但文件不在时导出**报错而不是
+   * 静默回落内置模板**——用户以为在用学校模板、实际没有，是最坏的一种「成功」。
+   */
+  docxTemplatePath?: string;
+  /**
    * 设置 › 模型服务这一页的界面记忆：卡片尺寸、「仅显示已添加」、价格 · 能力图停在哪个分类，
    * 放在一个对象里管（用户 2026-10-25）。缺席 = 全部默认。store 写入时按键合并一层（同 drawer），
    * 页面上每个开关只发自己那个键。
@@ -609,6 +628,9 @@ export function parseSettings(raw: unknown): AppSettings {
     browserDownloadDir?: unknown;
     latexmkPath?: unknown;
     officeCliPath?: unknown;
+    pandocPath?: unknown;
+    docxTemplateMode?: unknown;
+    docxTemplatePath?: unknown;
     starredModels?: unknown;
     usagePet?: unknown;
     providersPage?: unknown;
@@ -714,11 +736,25 @@ export function parseSettings(raw: unknown): AppSettings {
     isAbsolutePath(record.latexmkPath.trim())
       ? { latexmkPath: record.latexmkPath.trim() }
       : {}),
+<<<<<<< HEAD
     // OfficeCLI 的显式路径：同一条纪律（绝对路径、非空）
     ...(typeof record.officeCliPath === "string" &&
     record.officeCliPath.trim() !== "" &&
     isAbsolutePath(record.officeCliPath.trim())
       ? { officeCliPath: record.officeCliPath.trim() }
+=======
+    // pandoc / 学校模板同一条纪律：只认绝对路径
+    ...(typeof record.pandocPath === "string" &&
+    record.pandocPath.trim() !== "" &&
+    isAbsolutePath(record.pandocPath.trim())
+      ? { pandocPath: record.pandocPath.trim() }
+      : {}),
+    ...(isDocxTemplateMode(record.docxTemplateMode) ? { docxTemplateMode: record.docxTemplateMode } : {}),
+    ...(typeof record.docxTemplatePath === "string" &&
+    record.docxTemplatePath.trim() !== "" &&
+    isAbsolutePath(record.docxTemplatePath.trim())
+      ? { docxTemplatePath: record.docxTemplatePath.trim() }
+>>>>>>> origin/feat/docx-export
       : {}),
     // 只认布尔（同 gitAttribution 的纪律）："yes" 这类手改值该被丢掉，而不是当成真；
     // 逐项开关下「全关」不落键（空表 undefined，同 starredModels 的纪律）

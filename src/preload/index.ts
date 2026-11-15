@@ -10,6 +10,7 @@ import { browserApi } from "./api/browser.ts";
 import { channelApi } from "./api/channel.ts";
 import { citeApi } from "./api/cite.ts";
 import { docxApi } from "./api/docx.ts";
+import { docxExportApi } from "./api/docx-export.ts";
 import { docsApi } from "./api/docs.ts";
 import { excerptApi } from "./api/excerpt.ts";
 import { filesApi } from "./api/files.ts";
@@ -54,6 +55,7 @@ const api = {
   workspace: workspaceApi,
   files: filesApi,
   docx: docxApi,
+  docxExport: docxExportApi,
   docs: docsApi,
   focus: focusApi,
   notify: notifyApi,

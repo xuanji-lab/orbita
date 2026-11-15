@@ -26,6 +26,7 @@ import type { DocxAgentEditRequest, DocxEditOutcome } from "./docx.ts";
 import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
 import type { LatexCompileRequest, LatexRunOutcome } from "./latex.ts";
 import type { OfficeAgentOutcome, OfficeAgentRequest } from "./office.ts";
+import type { DocxExportOutcome, DocxExportRequest } from "./docx-export.ts";
 import type {
   ChannelDelivery,
   ChannelKey,
@@ -1256,6 +1257,8 @@ export type AgentCommand =
   | ({ type: "latexResult"; requestId: string } & LatexRunOutcome)
   /** Office：主进程对 officeRequest 的回执（ok 双分支，形状见 shared/office.ts） */
   | ({ type: "officeResult"; requestId: string } & OfficeAgentOutcome)
+  /** Word 导出：主进程对 docxExportRequest 的回执（ok 双分支，形状见 shared/docx-export.ts） */
+  | ({ type: "docxExportResult"; requestId: string } & DocxExportOutcome)
   /** 子会话：主进程对 delegateRequest 的回执（requestId 问答，readTaskResult 同款） */
   | ({ type: "delegateResult"; requestId: string } & DelegateOutcome)
   /** 派发参考：主进程对 modelCostsRequest 的回执（readTaskResult 同款 ok 双分支） */
@@ -1568,11 +1571,19 @@ export type AgentEvent =
    */
   | { type: "latexRequest"; requestId: string; sessionId: string; request: LatexCompileRequest }
   /**
+<<<<<<< HEAD
    * Office：agent 的 read_office / edit_office 请求（形状见 shared/office.ts 的
    * OfficeAgentRequest）。**OfficeCLI 子进程、备份与改动清单都在主进程**（terminalRequest
    * 同一条边界）：二进制路径 / 验活缓存 / 会话工作台的备份目录都只该有一份。回 officeResult。
    */
   | { type: "officeRequest"; requestId: string; sessionId: string; request: OfficeAgentRequest }
+=======
+   * Word 导出：agent 的 export_docx 请求（形状见 shared/docx-export.ts）。
+   * pandoc 进程、模板体检、OOXML 后处理与原子写都在主进程（latexRequest 同一条边界：
+   * 外部进程 + 机器级模板 + 文件授权只该有一份）。回 docxExportResult。
+   */
+  | { type: "docxExportRequest"; requestId: string; sessionId: string; request: DocxExportRequest }
+>>>>>>> origin/feat/docx-export
   /**
    * 文档导出：agent 的 `doc_export` 请求（形状见 shared/doc.ts 的 DocAgentRequest）。
    * 导出在主进程（PDF 要隐藏窗口，agent 进程不碰 electron）；路径白名单按会话的根现算。回 docResult。

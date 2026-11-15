@@ -33,6 +33,8 @@ const ALLOWED_LATIN = new Set([
   "SSE",
   "HTTP",
   "Markdown",
+  // Word 导出的转换引擎（产品名，设置页与工具文案都照写）
+  "pandoc",
   // 文档面板的导出格式名
   "Word",
   "PDF",
