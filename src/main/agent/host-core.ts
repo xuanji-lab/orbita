@@ -13,6 +13,7 @@
 import type {
   AgentCommand,
   AgentEvent,
+  AgentHouseholdCommand,
   BuiltinProvider,
   ChannelSendOutcome,
   DelegateOutcome,
@@ -33,11 +34,11 @@ import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPrev
 import type { PluginBoardOutcome } from "../../shared/plugin-board.ts";
 import type { MemoryAgentOutcome, MemoryRecallOutcome } from "../../shared/memory.ts";
 
-/** host 对「子进程」的全部要求——Electron 的 UtilityProcess 结构上满足，测试用脚本假货顶上。 */
+/** host 对 agent 进程（家务）的全部要求——Electron 的 UtilityProcess 结构上满足，测试用脚本假货顶上。 */
 export interface AgentChild {
   on(event: "message", listener: (message: AgentEvent) => void): unknown;
   on(event: "exit", listener: (code: number) => void): unknown;
-  postMessage(message: AgentCommand): unknown;
+  postMessage(message: AgentHouseholdCommand): unknown;
   kill(): unknown;
 }
 
@@ -1096,7 +1097,7 @@ export class AgentHostCore {
     this.kernelReady = null;
   }
 
-  private post(command: AgentCommand): void {
+  private post(command: AgentHouseholdCommand): void {
     if (!this.child) throw new Error("agent runtime is not running");
     this.child.postMessage(command);
   }

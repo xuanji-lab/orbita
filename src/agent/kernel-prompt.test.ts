@@ -94,6 +94,10 @@ describe("kernel-prompt：pi 基础系统提示两个内核逐字节相同", () 
     assert.match(oldPrompt, /先跑测试再提交/);
     assert.match(oldPrompt, /demo/);
     assert.equal(newPrompt, oldPrompt);
+    // grep / find / ls 在位：pi「有 bash、而三个搜索工具一个都不在」时才下的那句「用 bash 干搜索」不出现
+    //（原 tools-wiring.test.ts 守的因果，旧内核的装配删了以后挪到这里守新内核）
+    assert.ok(!newPrompt.includes("Use bash for file operations"));
+    assert.ok(["grep", "find", "ls"].every((name) => order.includes(name)));
   });
 
   it("loadoutOrder：已在的保持原位，新出现的接在后面，消失的去掉", () => {

@@ -43,8 +43,8 @@ patch 在 pi-ai 而不在 Orbita 侧：AgentSession 的 `_isRetryableError` 是�
 订阅 `auto_retry_start` 再 `abortRetry()` 会把真错误换成 "Retry cancelled"，且盖不住压缩的
 `retryAssistantCall`。这一个函数是两条重试路径的共同判据。
 
-**行为守卫**：`src/agent/retry-4xx-patch.test.ts`（纯判定 + 真 AgentSession 走 faux provider，
-含 502 仍重试的对照组）。pi 升级后若原生按状态码判，删掉这段 patch。
+**行为守卫**：`src/agent/retry-4xx-patch.test.ts`（纯判定含 502 仍重试的对照组；另断言 pi-durable 用的正是顶层这份
+打过 patch 的 pi-ai，它的对话与压缩两条重试路径都调这个函数）。pi 升级后若原生按状态码判，删掉这段 patch。
 
 ## @earendil-works/pi-coding-agent — 公开入口导出 `resolveToCwd`
 

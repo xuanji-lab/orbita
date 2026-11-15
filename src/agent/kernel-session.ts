@@ -630,7 +630,7 @@ export class KernelSessions {
       // 不为这一下再读一遍带着全部原图的上下文（第四步验收后的修补：28 MB 的会话在这里冲出约 90 MB 的尖峰）
       await this.pushStats(sessionId, target, parts.stats, true, await this.stillLast(target, parts.lastAnswer()));
     });
-    // 回合级失败（模型报错、重试耗尽）：挂到这轮没得到回答的话下面；被我们自己停下的轮不报（turn-failure.ts 的同一条规矩）
+    // 回合级失败（模型报错、重试耗尽）：挂到这轮没得到回答的话下面；被我们自己停下的轮不报（停止 / 抢跑时模型调用拿着已 abort 的 signal 立刻报错，那不是模型错误）
     if (outcome.status === "unanswered" && !parts.aborted()) {
       const live = await target.harness.snapshot(LiveDoc, target.conversation.id, BACKGROUND_CONTEXT);
       const failure = live?.runFailure;

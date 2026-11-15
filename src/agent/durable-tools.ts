@@ -166,10 +166,10 @@ export interface BuiltinToolOptions {
 }
 
 /**
- * 内建七件，按 ENABLED_BUILTIN_TOOLS 的顺序。工厂与旧内核里 pi 自己建内建工具用的是**同一组**
+ * 内建七件，按 ENABLED_BUILTIN_TOOLS 的顺序。工厂与 pi 会话自己建内建工具用的是**同一组**
  * （agent-session 的 _buildRuntime → createAllToolDefinitions，它内部就是逐个调下面这些 create*ToolDefinition，
- * 只给 read 与 bash 传选项），所以实现只有一份；旧内核那一侧的注册是 pi 的 `defaultTools` 设置
- * （runtime.ts 里为什么不传 `tools` 的注释）。createAllToolDefinitions 本身不在 pi 的公开入口里。
+ * 只给 read 与 bash 传选项），所以与 pi 会话发出的工具声明逐字节相同（kernel-prompt.test.ts 守）。
+ * createAllToolDefinitions 本身不在 pi 的公开入口里。
  */
 export function builtinToolDefinitions(cwd: string, options: BuiltinToolOptions): ToolDefinition[] {
   const all: Record<(typeof ENABLED_BUILTIN_TOOLS)[number], ToolDefinition> = {

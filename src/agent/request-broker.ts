@@ -99,8 +99,7 @@ export function isToolReply(command: AgentCommand): command is ToolReplyCommand 
 }
 
 /**
- * 回执 → 在途工具调用认的结果形状。**两个内核共用这一份翻法**（旧内核 runtime.ts 的命令分支、新内核
- * kernel-runtime.ts 的 agent 命令）：多数回执形状即契约原样给，几种要补默认错误文案或挑字段。
+ * 回执 → 在途工具调用认的结果形状。翻法只有这一份（kernel-runtime.ts 收到的回执命令）：多数回执形状即契约原样给，几种要补默认错误文案或挑字段。
  */
 export function toolReplyResult(command: ToolReplyCommand): unknown {
   switch (command.type) {

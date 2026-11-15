@@ -21,7 +21,7 @@ import type { TerminalToolOutcome, TerminalToolRequest } from "../shared/termina
  *    一个新 tab）。所以纪律写在给模型看的地方，代码只保证写不进去错的终端。
  * 3. **终端必须可见**。主进程在开终端时广播 terminal:agent-open，renderer 自动点亮
  *    面板——agent 在用户眼前干活，人随时能接手敲键盘。没有用户在场的来源（定时任务、
- *    委派）根本不该有这套工具，见 runtime.ts 的注册处。
+ *    委派）根本不该有这套工具，见 turn-tools.ts 的注册处。
  */
 
 /** 六个工具的名字。权限档描述（describePermissionMode）与测试都认这一份 */

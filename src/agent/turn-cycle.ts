@@ -1,7 +1,6 @@
 /**
- * 无状态轮的占坑-收尾骨架 —— 从 runtime.ts 抽出只为可测（runtime 本体被
- * parentPort 守卫钉死在 utility 进程里，node --test 加载即退出；同款先例见
- * model-registration.ts 的文件头注释）。
+ * 无状态轮的占坑-收尾骨架（kernel-session.ts 用）——单独成模块只为可测
+ * （进程壳被 parentPort 守卫钉死在 utility 进程里，node --test 加载即退出）。
  *
  * 三个不变量（B2 无状态化的核心正确性主张，测试盖住）：
  *

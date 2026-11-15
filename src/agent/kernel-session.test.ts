@@ -340,6 +340,20 @@ describe("KernelSessions：一轮的事件与旧内核同形", () => {
 });
 
 describe("KernelSessions：停止 / 抢跑 / 切档 / 插话", () => {
+  it("回合级失败：模型回不可重试的错误（400）——挂到这句话下面报一次 failed（turn），不重试，然后 idle", async () => {
+    const cwd = await tempDir();
+    faux.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "API error (400): Model is not available" })]);
+    const r = await rig();
+    await r.sessions.handle("s1", submit(cwd));
+    await r.until(idle());
+    const failures = r.events.filter((event) => event.type === "failed" && event.sessionId === "s1");
+    assert.equal(failures.length, 1);
+    const failure = failures[0];
+    assert.ok(failure?.type === "failed" && failure.turn === true && /Model is not available/.test(failure.message));
+    assert.ok(!r.events.some((event) => event.type === "retry" && event.status !== null), "400 不进重试");
+    assert.equal(r.settled[0]?.result.ok === true && r.settled[0].result.status, "unanswered");
+  });
+
   it("停止正在跑的 bash：这一轮停下、子进程被杀干净、立刻能再发", async () => {
     const cwd = await tempDir();
     const marker = `orbita-stop-${Date.now()}`;
@@ -352,6 +366,8 @@ describe("KernelSessions：停止 / 抢跑 / 切档 / 插话", () => {
     await r.until(idle());
     const tool = r.transcript().find((item) => item.role === "tool");
     assert.match(JSON.stringify(tool), /Operation aborted|aborted/);
+    // 被我们自己停下的轮不报回合级失败（那不是模型错误；报出去 renderer 会把已发出的话放回输入框）
+    assert.ok(!r.events.some((event) => event.type === "failed" && event.turn === true), "停止不报回合级失败");
     await new Promise((resolve) => setTimeout(resolve, 200));
     const ps = execFileSync("ps", ["-A", "-ww", "-o", "command="]).toString();
     assert.ok(!ps.includes(marker), "sleep 子进程已被杀");

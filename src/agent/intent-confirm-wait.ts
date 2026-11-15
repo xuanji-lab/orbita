@@ -1,7 +1,6 @@
 /**
- * 回答前确认的等待编排（Tier B 第二批）—— runtime 的 pendingPermissions /
- * askPermission / settlePendingPermissions 同款请求-应答，单独成文件只为可测
- * （runtime 本体被 parentPort 守卫钉死在 utility 进程里）。
+ * 回答前确认的等待编排（Tier B 第二批）—— 与审批等待表（kernel-turn.ts 的 PermissionWaiter）同款请求-应答，
+ * 单独成文件只为可测（进程壳被 parentPort 守卫钉死在 utility 进程里）。
  *
  * 语义（审核 2026-09-25 第二批裁决）：
  * - **没有超时**：用户可能去泡杯咖啡再回来点（askPermission 同款纪律）；

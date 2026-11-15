@@ -19,15 +19,12 @@ import {
 import { statSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { resolveToCwd } from "@earendil-works/pi-coding-agent";
-import type { ContextMessage } from "./image-byte-budget.ts";
 import { dataDirRefusalMessage, defaultGuardEnv, protectedCommandRefusal, realpathLoose, stripFirmlinkPrefix, tildeHome, type CommandGuardEnv, type DataDirSubject } from "./protected-command.ts";
 
 /**
  * **本会话实际启用的 pi 内建工具集**。真源一份、两个消费者：
  *
- *   1. `runtime.ts` 开轮时经 `settingsManager.applyOverrides({ defaultTools })` 交给 pi，
- *      决定本会话**内建工具的初始选择**（不是 `tools` 白名单——那个是全局的，会连自定义
- *      工具一起过滤掉，实测见 runtime.ts 那段注释）；
+ *   1. `durable-tools.ts` 按这份顺序建内建工具（builtinToolDefinitions），决定本会话**内建工具的清单与顺序**；
  *   2. `describePermissionMode` 把「哪些工具会放行 / 询问 / 拒绝」讲给模型听（见下）。
  *
  * 两者**必须同一份**：分开写就会漂——这份名单以前带着一个 pi 根本没有的 `glob`，
@@ -504,36 +501,6 @@ function fileRefusalMessage(file: string, via: "path" | "command"): string {
     "they cannot delete records — ask the user to do that in the Automations panel."
   );
 }
-
-/** pi 扩展 API 里我们用到的钩子。上游类型没导出成可直接消费的形状，这里只声明用得着的部分。 */
-export interface PiExtensionApi {
-  on(
-    event: "tool_call",
-    handler: (event: ToolCallLike) => ToolCallGateResult | Promise<ToolCallGateResult>,
-  ): void;
-  on(
-    event: "before_agent_start",
-    handler: (event: { systemPrompt: string }) => { systemPrompt: string } | void,
-  ): void;
-  /** 返回非 undefined 的值替换请求 payload（cc-billing-patch 用）；上游契约 BeforeProviderRequestEventResult = unknown */
-  on(
-    event: "before_provider_request",
-    handler: (event: { payload: unknown }) => unknown,
-  ): void;
-  /** 每次 LLM 调用前触发（transformContext）：返回 { messages } 替换发往 provider 的那份，
-   * 不写回 pi 本子（image-byte-budget 的 wire-only 替换用它）。上游契约 ContextEvent */
-  on(
-    event: "context",
-    handler: (
-      event: { type: "context"; messages: ContextBudgetMessage[] },
-    ) => { messages: ContextBudgetMessage[] } | undefined | void,
-  ): void;
-  /** 往 pi 本子追加 custom entry（不进 LLM 上下文）：跨轮持久化扩展自己的状态 */
-  appendEntry(customType: string, data?: unknown): void;
-}
-
-/** context 事件里的消息形状（AgentMessage 的结构化子集），image-byte-budget 定义 */
-export type ContextBudgetMessage = ContextMessage;
 
 /**
  * 生成 `tool_call` 处理器。纯逻辑 + 一个注入的询问函数，可被测试穷尽。

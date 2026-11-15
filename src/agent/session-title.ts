@@ -1,5 +1,5 @@
 /**
- * 会话标题生成（C-3）与家务活模型的解析：旧内核（runtime.ts）与新内核（kernel-session.ts）共用这一份——
+ * 会话标题生成（C-3）与家务活模型的解析（kernel-session.ts 调）——
  * 「标题怎么生成、失败怎么静默、超时多久」只有一套真相。在途去重（同一会话连发两条只生成一次）由调用方管。
  */
 import { completeSimple } from "@earendil-works/pi-ai/compat";

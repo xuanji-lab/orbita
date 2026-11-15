@@ -2,9 +2,9 @@
  * 新内核（pi-durable）的库池：一棵会话树一个 SQLite 库，按需打开、按需迁旧会话。
  * 不 import electron，`node --test` 直接测（存储与模型可注入）；进程壳在 kernel-runtime.ts。
  *
- * 这一步**只装配、存储与迁移，不跑任何一轮**：对话主循环仍是 pi-coding-agent（runtime.ts）。
- * 所以 Harness 打开后从不 resume()——库里没有在途任务；以后主循环迁过来，「重启后前台会话
- * 不自动续跑」的策略在那一步定，这里只保证数据层撑得住（在途任务都在库里）。
+ * 这里只管装配、存储与迁移；跑一轮在 kernel-session.ts / kernel-turn.ts。Harness 打开后不 resume()：
+ * 「重启后哪些会话自动续跑」由主进程按 meta 决定（resumePolicy：子会话续、树根给「继续」），
+ * 这里只保证数据层撑得住（在途任务都在库里）。
  *
  * 并发与幂等（剧本第 13 条）：
  * - 同一个库只有一个 Harness（durable 不做跨进程锁，一个库同一时刻只能有一个写者——
@@ -168,7 +168,7 @@ export function kernelSettings(): HarnessSettings {
 
 /**
  * 压缩设定（每条会话自己的，存在 pi.agent 里）：阈值按「剩余百分比」× 本会话模型窗口换算，
- * 与旧内核 runtime.ts 的 applyOverrides({ compaction }) 同一个公式；**不开后台压缩**（backgroundTokens 0）——
+ * 与删掉的旧内核主循环（applyOverrides({ compaction })）同一个公式；**不开后台压缩**（backgroundTokens 0）——
  * 旧内核没有这个行为，换内核这一步不悄悄加。
  */
 export function kernelCompaction(agent: KernelAgent, contextWindow: number | undefined): NonNullable<AgentChange["compaction"]> {
@@ -206,8 +206,7 @@ export function withCacheRetention(inner: Models, roleOf: (providerSessionId: st
 /**
  * 给 Models 包一层：**每一个**出站请求（对话主循环的 streamSimple 与压缩摘要的 completeSimple）都过一遍
  * Claude 订阅车道的最小改写（cc-billing-patch.ts，只对带 pi OAuth 身份块的 Anthropic 请求生效，其余原样）。
- * 旧内核分两处挂（主循环的 before_provider_request + 压缩绕过主循环时的 streamFunction 包装，cc-billing-stream.ts），
- * durable 的模型调用都经 Models，一处就全覆盖。durable 自己的 onPayload（beforeProviderRequest 钩子链）先跑，改写在它之后。
+ * durable 的模型调用都经 Models，一处就全覆盖（删掉的旧内核要分主循环与压缩摘要两处挂）。durable 自己的 onPayload（beforeProviderRequest 钩子链）先跑，改写在它之后。
  */
 export function withBillingPatch(inner: Models): Models {
   const shape = <O extends { onPayload?: ModelsSimpleStreamOptions["onPayload"] }>(options: O | undefined): O => {

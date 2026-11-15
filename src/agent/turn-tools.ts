@@ -1,13 +1,9 @@
 /**
- * 一轮的工具装配——**两个内核共用的那一份**。
- *
- * 旧内核（runtime.ts 的 openTurn，pi-coding-agent）把这里返回的 ToolDefinition 当 customTools 交给 pi；
- * 新内核（kernel-turn.ts，pi-durable）把**同一批对象**经 durable-tools.ts 的薄适配注册进 durable。
+ * 一轮的工具装配：kernel-turn.ts（pi-durable）把这里返回的 ToolDefinition 经 durable-tools.ts 的薄适配注册进 durable。
  * 工具的逻辑（参数、描述、execute）只在各 `*-tools.ts` 里写一份，这里只决定「这一轮装哪些、按什么顺序、
- * 各自拿什么依赖」——顺序就是发给模型的工具清单顺序，两边必须一致（提示缓存对它逐字节敏感）。
+ * 各自拿什么依赖」——顺序就是发给模型的工具清单顺序（提示缓存对它逐字节敏感）。
  *
- * 内建七件（read / write / edit / bash / grep / find / ls）不在这里：旧内核由 pi 按 `defaultTools`
- * 设置自己建，新内核用 pi 建它们的同一个工厂（见 durable-tools.ts）。
+ * 内建七件（read / write / edit / bash / grep / find / ls）不在这里：用 pi 建它们的同一个工厂（见 durable-tools.ts）。
  */
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { AgentCommand } from "../shared/agent-ipc.ts";

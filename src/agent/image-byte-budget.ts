@@ -464,7 +464,8 @@ export function planImageBudget(
 }
 
 /**
- * 图片字节预算的轮内状态（本文件管算法，两个内核各自管装配与时序：从哪读水位与引用、往哪落）：
+ * 图片字节预算的轮内状态（本文件管算法；装配与时序在 kernel-wire.ts。下文的「pi 本子」是删掉的旧内核的落点——
+ * 新内核把水位与引用存在库里的 wire 状态，迁旧会话时从旧本子读一次，legacy-migrate.ts / readImageBudgetBook）：
  *
  * - `cut` / `refs` 开轮时从 pi 本子读一次（水位与附件引用都是跨轮持久化的
  *   custom entry）；轮内推进后 `cut` 原地更新，后续 LLM 调用按新水位重放。

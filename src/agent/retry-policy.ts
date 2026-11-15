@@ -12,7 +12,7 @@
  * 「哪些错误该重试」不在这里：那是 pi-ai 的 isRetryableAssistantError，Orbita 只能经
  * patch 改它（错误带明确的 4xx 除 408 / 429 不重试，见 patches/README.md）。
  *
- * 纯模块：不 import pi（与 branch-cut.ts 同一纪律），由 runtime.ts 消费、
+ * 纯模块：不 import pi（与 branch-cut.ts 同一纪律），由 kernel.ts（重试节奏）与 kernel-view.ts（界面可见阈值）消费、
  * retry-policy.test.ts 守卫。
  */
 

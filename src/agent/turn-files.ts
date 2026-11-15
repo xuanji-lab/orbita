@@ -1,5 +1,5 @@
 /**
- * 一轮落定时的文件账与旁路网页产物上报：旧内核（runtime.ts）与新内核（kernel-session.ts）共用这一份。
+ * 一轮落定时的文件账与旁路网页产物上报（kernel-session.ts 调）。
  */
 import type { AgentEvent } from "../shared/agent-ipc.ts";
 import type { TurnFileTracker } from "./file-tracker.ts";

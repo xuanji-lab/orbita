@@ -1,5 +1,5 @@
 /**
- * 意图系统（实验功能 intent-system）的轮内闸门：旧内核（runtime.ts）与新内核（kernel-session.ts）共用这一份。
+ * 意图系统（实验功能 intent-system）的轮内闸门（kernel-session.ts 开轮时调）。
  * 依赖从外面给（事件出口、确认卡的等待表），本身不持有进程级状态。
  */
 import { randomUUID } from "node:crypto";
@@ -29,7 +29,7 @@ export interface IntentGateDeps {
  *
  * 三种结局：
  * - `injection: null` = 这一轮失败 / 取消——
- *   失败时本轮不回答（卡片终态事件已发，phase idle 由 startTurn 的 finally 兕）；
+ *   失败时本轮不回答（卡片终态事件已发，phase idle 由 kernel-session 的 startTurn 收尾时发）；
  * - `injection: ""` = 开关关闭（command.intent 缺席，见 INTENT_GATE_OFF）/ 门卫跳过 / 空注入：
  *   照常用原话回答（composeIntentPrompt 直通）；
  * - 其它字符串 = 交给模型的注入块（附件方式时是交付说明）。
