@@ -67,7 +67,7 @@ export function sha256Hex(bytes) {
 
 /**
  * 按顺序尝试每个 URL：网络失败或 sha256 不符都记为这个源不可用，继续下一个；
- * 全都不行才抛错，且把每个源各自的失败原因一起带出来（排障时不用再猜是墙还是哈希）。
+ * 全都不行才抛错，且把每个源各自的失败原因一起带出来（排障时不用再猜是墙还是 DNS 还是哈希）。
  */
 export async function fetchVerified({ urls, sha256, fetchBytes }) {
   const failures = [];
@@ -76,7 +76,7 @@ export async function fetchVerified({ urls, sha256, fetchBytes }) {
     try {
       bytes = await fetchBytes(url);
     } catch (cause) {
-      failures.push(`${url}：${cause instanceof Error ? cause.message : String(cause)}`);
+      failures.push(`${url}：${describeFetchFailure(cause)}`);
       continue;
     }
     const actual = sha256Hex(bytes);
@@ -90,6 +90,24 @@ export async function fetchVerified({ urls, sha256, fetchBytes }) {
 }
 
 const REAL_IO = { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync };
+
+/**
+ * 一句话说清一次取件失败。**必须带上 `cause`**：node fetch 把真正的病因埋在那里
+ * （undici 的 `ECONNREFUSED` / `UND_ERR_CONNECT_TIMEOUT` / `CERT_HAS_EXPIRED` /
+ * `ENOTFOUND`，我们自己抛的 `HTTP 404` 则在 message 里）。只报 `fetch failed` 时，
+ * 排障的人分不清是墙、是超时、是 DNS 还是证书——这正是要避免的那种报错。
+ * 同一段信息（code 与 message 常常重复）只留一次。
+ */
+export function describeFetchFailure(cause) {
+  if (!(cause instanceof Error)) return String(cause);
+  const inner = cause.cause instanceof Error ? cause.cause : undefined;
+  const code = inner?.code ?? cause.code;
+  const detail = inner?.message ?? cause.message;
+  const prefix = typeof code === "string" && code.length > 0 ? code : "";
+  // "ECONNREFUSED: connect ECONNREFUSED 1.2.3.4:443" 这种重复只留一次（message 已经说了就不再加一遍）
+  const text = prefix === "" || detail.includes(prefix) ? detail : `${prefix} ${detail}`;
+  return text.length > 0 ? text : cause.name;
+}
 
 /**
  * 把某个资产落到 `dir`（= build/bin/<platform>-<arch>）。表里的 sha256 由调用方传进来——

@@ -3,12 +3,13 @@
  * 全部离线：fetch 与 fs 都是注入的桩，不打网络、不写磁盘。
  */
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { describe } from "node:test";
 import { join } from "node:path";
 import {
   OFFICECLI_SUBDIR,
   OFFICECLI_TARGETS,
   OFFICECLI_VERSION,
+  describeFetchFailure,
   ensureAsset,
   ensureOfficecli,
   fetchVerified,
@@ -215,4 +216,50 @@ test("ensureAsset：给定 dir 就是落盘目录（子目录由 ensureOfficecli
 test("ensureOfficecli：表外平台的错误信息带平台键", async () => {
   const h = harness();
   await assert.rejects(() => ensureOfficecli({ targetKey: "linux-arm64", binRoot: "b", fetchBytes: h.fetchBytes, io: h.io }), /linux-arm64/);
+});
+
+describe("describeFetchFailure", () => {
+  test("undici 的超时：带出 cause 里的 code 与 message", () => {
+    const cause = Object.assign(new Error("Connect Timeout Error (attempted address: github.com:443, timeout: 10000ms)"), {
+      code: "UND_ERR_CONNECT_TIMEOUT",
+    });
+    const error = new Error("fetch failed", { cause });
+    const text = describeFetchFailure(error);
+    assert.match(text, /UND_ERR_CONNECT_TIMEOUT/);
+    assert.match(text, /github\.com:443/);
+  });
+
+  test("连接被拒：code 与 message 重复时只留一次", () => {
+    const cause = Object.assign(new Error("connect ECONNREFUSED 1.2.3.4:443"), { code: "ECONNREFUSED" });
+    const text = describeFetchFailure(new TypeError("fetch failed", { cause }));
+    assert.match(text, /ECONNREFUSED/);
+    assert.equal(text.split("ECONNREFUSED").length - 1, 1, "同一个词不该重复两遍");
+  });
+
+  test("我们自己抛的 HTTP 404：message 原样带出", () => {
+    assert.equal(describeFetchFailure(new Error("HTTP 404")), "HTTP 404");
+  });
+
+  test("不是 Error 也说得出一句话", () => {
+    assert.equal(describeFetchFailure("boom"), "boom");
+  });
+
+  test("fetchVerified 的失败行里有 code（排障能分清墙 / 超时 / DNS）", async () => {
+    const urls = releaseUrls("1.0.0", WIN_TARGET.asset);
+    const cause = Object.assign(new Error("getaddrinfo ENOTFOUND github.com"), { code: "ENOTFOUND" });
+    const h = harness({
+      sources: {
+        [urls[0]]: new TypeError("fetch failed", { cause }),
+        [urls[1]]: Object.assign(new Error("Connect Timeout Error"), { code: "UND_ERR_CONNECT_TIMEOUT" }),
+      },
+    });
+    await assert.rejects(
+      () => fetchVerified({ urls, sha256: GOOD_SHA, fetchBytes: h.fetchBytes }),
+      (error) => {
+        assert.match(error.message, /ENOTFOUND/);
+        assert.match(error.message, /UND_ERR_CONNECT_TIMEOUT/);
+        return true;
+      },
+    );
+  });
 });
