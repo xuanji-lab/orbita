@@ -48,7 +48,7 @@ import { useLatexIndex } from "./useLatexIndex.ts";
 import { useLatexLint } from "./useLatexLint.ts";
 import { issueAbsolutePath } from "./latex-diagnostics.ts";
 import type { CiteVerification } from "@shared/cite";
-import { closeDecision } from "./editor-state.ts";
+import { closeDecision, isEditableLatexFile } from "./editor-state.ts";
 import { useEditorCollab } from "./useEditorCollab.ts";
 import type { EditorHunk } from "./editor-collab.ts";
 import type { FlushOutcome, TexEditorHandle } from "./TexEditorPane.tsx";
@@ -613,9 +613,21 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
     stale: pdfStale(latex.project?.pdf?.modifiedAt ?? null, latex.project?.sourceModifiedAt ?? null),
     hasPdf: latex.project?.pdf !== null && latex.project !== undefined,
   });
+  /**
+   * 编译条 / 问题行只给**项目里的 LaTeX 文件**（.tex / .bib / .sty / .cls 与这份项目的
+   * PDF）。编译与错误都是**项目级**的，但这两块的位置是文件级（编辑器正上方 / 面板
+   * 底部）——挂在 docx / xlsx / pptx 上时，读者只能理解成「这是在说这张表」
+   * （2026-11-15 验收 P1-1）。
+   */
+  const latexBarVisible =
+    latex.project !== null &&
+    shownTab !== null &&
+    (isEditableLatexFile(shownTab.path) ||
+      (latex.project.pdf !== null && samePath(shownTab.path, latex.project.pdf.path)));
   useEffect(() => {
+    if (!latexBarVisible) return;
     if (latex.last !== null && isFailedStatus(latex.last.status)) setProblemsOpen(true);
-  }, [latex.last]);
+  }, [latex.last, latexBarVisible]);
 
   // 切文件 / 换项目：抽屉收起（上一份问题不属于新文件）
   useEffect(() => {
@@ -1613,7 +1625,7 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
       {/* 论文工作台：编译条（项目内才在）+ 文件内容 + 问题抽屉。三者同住一个
           纵向 flex，抽屉钉在面板底部；非 LaTeX 文件只多一层无副作用的包裹 */}
       <div className="files-workbench">
-        {latex.project !== null && (
+        {latexBarVisible && latex.project !== null && (
           <LatexBuildBar
             project={latex.project}
             probe={latex.probe}
@@ -1631,7 +1643,7 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
         )}
         {/* 「这台机器没有 latexmk」引导卡：项目已识别、探测失败时才出现。
             它不遮不拦——用户仍可以看源码、问 agent，装完点「重新检测」即可 */}
-        {latex.project !== null && latex.probe !== null && !latex.probe.ok && (
+        {latexBarVisible && latex.probe !== null && !latex.probe.ok && (
           <LatexSetupCard
             probe={latex.probe}
             busy={latex.probeBusy}
@@ -1834,7 +1846,7 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
           )}
         </div>
       </div>
-        {latex.project !== null && (
+        {latexBarVisible && (
           <LatexProblems
             groups={latexGroups}
             open={problemsOpen}
