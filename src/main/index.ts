@@ -1235,7 +1235,7 @@ void app.whenReady().then(async () => {
     appPath: app.getAppPath(),
   });
   installReaderProtocol({ buildDir: readerBuildDir, hostDir: readerHostDir, pdfPathOf: (token) => readerDocs.pdfPathOf(token) });
-  registerPdfReaderIpc({ workspaces, sessions, docs: readerDocs, buildDir: readerBuildDir, hostDir: readerHostDir });
+  registerPdfReaderIpc({ workspaces, sessions, docs: readerDocs, buildDir: readerBuildDir, hostDir: readerHostDir, packaged: app.isPackaged });
   registerSlidesIpc(workspaces, sessions);
   // 审查面板（review:list / review:diff）：task 来源读会话快照账，git 来源只读
   registerReviewIpc(sessions);

@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkReaderBuild, readerDirs } from "./build-check.ts";
+import { checkReaderBuild, readerDirs, unavailableResult } from "./build-check.ts";
 import { PDF_READER_COMMIT } from "../../shared/pdf-reader.ts";
 
 const sha = (text: string): string => createHash("sha256").update(text).digest("hex");
@@ -61,4 +61,14 @@ test("缺产物、缺桥脚本、提交不符、文件被改、多出文件都�
 test("开发时在仓库 build/ 下，打包后在 resources 下；桥脚本总在 out/reader-host", () => {
   assert.deepEqual(readerDirs({ packaged: false, resourcesPath: "/R", appPath: "/A" }), { buildDir: join("/A", "build", "pdf-reader"), hostDir: join("/A", "out", "reader-host") });
   assert.equal(readerDirs({ packaged: true, resourcesPath: "/R", appPath: "/A" }).buildDir, join("/R", "pdf-reader"));
+});
+
+test("出错态：打包版不带路径与命令（detail 为 null），开发版带排查细节、命令统一成 bun run reader:fetch", async () => {
+  const missing = await checkReaderBuild("/nonexistent/pdf-reader", "/nonexistent/host");
+  assert.equal(missing.ok, false);
+  if (missing.ok) return;
+  assert.deepEqual(unavailableResult(missing, true), { kind: "unavailable", reason: "missing", detail: null });
+  const dev = unavailableResult(missing, false);
+  assert.match(dev.detail ?? "", /bun run reader:fetch/);
+  assert.doesNotMatch(dev.detail ?? "", /node scripts\/fetch-pdf-reader/);
 });

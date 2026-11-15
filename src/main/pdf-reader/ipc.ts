@@ -18,7 +18,7 @@ import type { SessionStore } from "../session/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import { resolveFileRoots } from "../files/roots.ts";
 import { whitelistedPath } from "../files/list.ts";
-import { checkReaderBuild, type BuildCheck } from "./build-check.ts";
+import { checkReaderBuild, unavailableResult, type BuildCheck } from "./build-check.ts";
 import type { PdfReaderDocs } from "./docs.ts";
 
 export function registerPdfReaderIpc(deps: {
@@ -27,6 +27,8 @@ export function registerPdfReaderIpc(deps: {
   docs: PdfReaderDocs;
   buildDir: string;
   hostDir: string;
+  /** 打包版（app.isPackaged）：出错态不带路径与命令 */
+  packaged: boolean;
 }): void {
   const { docs } = deps;
   // 产物核对一次就够（进程内不变）；失败的结果不缓存——开发时补跑构建后重开面板即可，不必重启应用
@@ -45,7 +47,7 @@ export function registerPdfReaderIpc(deps: {
     const path = await whitelistedPath(roots, req);
     if (!isPdfFile(path)) throw new Error(`Not a PDF file: ${path}`);
     const build = await check();
-    if (!build.ok) return { kind: "unavailable", reason: build.reason, detail: build.detail };
+    if (!build.ok) return unavailableResult(build, deps.packaged);
     return { kind: "ready", ...(await docs.open(path, ticket)) };
   });
 

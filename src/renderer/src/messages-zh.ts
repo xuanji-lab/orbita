@@ -2894,7 +2894,7 @@ export const zh: Messages = {
         orange: "橙",
         gray: "灰",
       },
-      unavailable: "PDF 阅读器没有装好。",
+      unavailable: "阅读器文件缺失或损坏。",
       useSimplePreview: "改用简单预览",
       readOnly: "这个文件夹不可写，这里的批注只能看、不能改。",
       corrupt: (file) => `${file} 读不出来，没有动它。这里的批注只能看、不能改。`,

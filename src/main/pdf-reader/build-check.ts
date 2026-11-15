@@ -10,7 +10,7 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
-import { PDF_READER_COMMIT } from "../../shared/pdf-reader.ts";
+import { PDF_READER_COMMIT, type PdfReaderUnavailable } from "../../shared/pdf-reader.ts";
 
 export type BuildCheck = { ok: true } | { ok: false; reason: "missing" | "mismatch" | "corrupt"; detail: string };
 
@@ -32,12 +32,23 @@ async function listFiles(dir: string): Promise<string[]> {
   return out;
 }
 
+/**
+ * 给界面的「阅读器不可用」：**打包版不出路径与命令**（用户手里没有仓库，命令对他没用、绝对路径是噪音），
+ * 只回原因，界面说「阅读器文件缺失或损坏」；开发版把排查细节（含 `bun run reader:fetch`）带上。
+ */
+export function unavailableResult(
+  check: Extract<BuildCheck, { ok: false }>,
+  packaged: boolean,
+): PdfReaderUnavailable {
+  return { kind: "unavailable", reason: check.reason, detail: packaged ? null : check.detail };
+}
+
 export async function checkReaderBuild(buildDir: string, hostDir: string): Promise<BuildCheck> {
   let manifestText: string;
   try {
     manifestText = await readFile(join(buildDir, "manifest.json"), "utf8");
   } catch {
-    return { ok: false, reason: "missing", detail: `没有找到阅读器文件（${buildDir}）。开发时先运行 node scripts/fetch-pdf-reader.mjs` };
+    return { ok: false, reason: "missing", detail: `没有找到阅读器文件（${buildDir}）。先运行 bun run reader:fetch` };
   }
   try {
     await readFile(join(hostDir, "orbita-host.js"));

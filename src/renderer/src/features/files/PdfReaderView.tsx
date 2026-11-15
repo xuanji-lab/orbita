@@ -35,7 +35,7 @@ import {
 type OpenState =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "unavailable"; detail: string }
+  | { status: "unavailable"; detail: string | null }
   | { status: "ready"; doc: Extract<PdfReaderOpenResult, { kind: "ready" }> };
 
 interface ViewState {
@@ -299,7 +299,8 @@ export function PdfReaderView(props: {
       <div className="pdr-state file-preview-empty">
         <Icon name="triangle-alert" size={24} style={{ color: "var(--color-text-tertiary)" }} />
         <PanelLine>{tr.unavailable}</PanelLine>
-        <PanelLine>{open.detail}</PanelLine>
+        {/* 排查细节只有开发版有（打包版 detail 为 null，不出路径与命令） */}
+        {open.detail !== null && <PanelLine>{open.detail}</PanelLine>}
         <PanelButton onClick={props.onFallback}>{tr.useSimplePreview}</PanelButton>
       </div>
     );

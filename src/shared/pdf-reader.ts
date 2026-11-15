@@ -176,8 +176,17 @@ export type PdfReaderOpenResult =
       /** null = 可以写；否则是写不了的原因 */
       blocked: PdfAnnotationsBlock | null;
     }
-  /** 阅读器产物缺失 / 与钉住的版本不符 / 文件被改过：界面给出错态，不白屏 */
-  | { kind: "unavailable"; reason: "missing" | "mismatch" | "corrupt"; detail: string };
+  | PdfReaderUnavailable;
+
+/**
+ * 阅读器产物缺失 / 与钉住的版本不符 / 文件被改过：界面给出错态，不白屏。
+ * `detail` 是给开发者的排查细节（路径、要跑的命令），**打包版为 null**——用户只看到「缺失或损坏」与退路。
+ */
+export interface PdfReaderUnavailable {
+  kind: "unavailable";
+  reason: "missing" | "mismatch" | "corrupt";
+  detail: string | null;
+}
 
 export interface PdfReaderSaveRequest {
   token: string;

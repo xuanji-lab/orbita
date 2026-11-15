@@ -3089,7 +3089,7 @@ export const en = {
         orange: "Orange",
         gray: "Gray",
       },
-      unavailable: "The PDF reader isn't installed correctly.",
+      unavailable: "The PDF reader's files are missing or damaged.",
       useSimplePreview: "Use simple preview",
       readOnly: "This folder isn't writable, so annotations here are read-only.",
       corrupt: (file: string) => `${file} can't be read, so it was left untouched. Annotations here are read-only.`,
