@@ -20,6 +20,7 @@ import type { BrowserToolOutcome } from "../../shared/browser.ts";
 import type { DocOutcome } from "../../shared/doc.ts";
 import type { TerminalToolOutcome } from "../../shared/terminal.ts";
 import type { LatexRunOutcome } from "../../shared/latex.ts";
+import type { DocxExportOutcome } from "../../shared/docx-export.ts";
 import type { SlidesOutcome } from "../../shared/slides-export.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
@@ -675,6 +676,11 @@ export class AgentHostCore {
       requestId,
       ...(outcome.ok ? { ok: true as const, result: outcome.result } : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);
+  }
+
+  /** Word 导出：docxExportRequest 的回执。形状即契约（ok 双分支），原样透传。 */
+  answerDocxExport(requestId: string, outcome: DocxExportOutcome): void {
+    this.child?.postMessage({ type: "docxExportResult", requestId, ...outcome } satisfies AgentCommand);
   }
 
   /** 自动化：automationRequest 的回执（delegate 同款）：不 ensure、发完即回。 */
