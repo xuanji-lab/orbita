@@ -13,6 +13,7 @@ import type { SessionPhase } from "@earendil-works/pi-protocol";
 import { effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";
+import { OFFICECLI_PATH_ENV, resolveOfficecliPath } from "./agent/officecli-bin.ts";
 import { PI_PACKAGE_DIR_ENV, piPackageDir } from "./agent/pi-package.ts";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -548,8 +549,21 @@ void app.whenReady().then(async () => {
   });
   // pi 打进 bundle 后会把 Orbita 的 package.json 当成自己的，版本号错了 pi.dev 的目录就是 404（pi-package.ts）
   const piPackage = piPackageDir({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() });
+  // 随包的 OfficeCLI（officecli-bin.ts）：**不进 PATH**，只把绝对路径交给 agent 进程——工具层用
+  // execFile 调它，模型没法在 bash 里直接 officecli open / install 绕过「只用 batch、禁自更新」。
+  // 二进制缺失（开发版没跑 fetch 脚本）就不设这个变量，工具层据此报「Office 能力未就绪」。
+  const officecli = resolveOfficecliPath({
+    env: process.env,
+    exists: existsSync,
+    packaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath(),
+    platform: process.platform,
+    arch: process.arch,
+  });
   const agentProcessEnv = {
     ...(existsSync(searchBins) ? agentEnv(process.env, searchBins, process.platform) : process.env),
+    ...(officecli === null ? {} : { [OFFICECLI_PATH_ENV]: officecli }),
     // pi.dev 目录覆盖层的缓存落我们自己的数据目录（model-catalog.ts），不写 pi CLI 的 ~/.pi/agent
     [CATALOG_CACHE_ENV]: join(configDir, "model-catalog-cache.json"),
     ...(existsSync(join(piPackage, "package.json")) ? { [PI_PACKAGE_DIR_ENV]: piPackage } : {}),

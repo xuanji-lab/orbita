@@ -73,6 +73,9 @@ const ALLOWED_LATIN = new Set([
   // 更新出口的环境变量名（HTTPS_PROXY / HTTP_PROXY，用户照抄进终端或启动脚本）
   "HTTPS",
   "PROXY",
+  // 随包的第三方二进制与它的许可（软件更新 › 当前版本：产品名与许可名是字面量，翻成中文就不是它了）
+  "OfficeCLI",
+  "Apache-2.0",
   // 命令名与工具名前缀（用户照抄的字面量）
   "node",
   "npx",

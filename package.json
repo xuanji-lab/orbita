@@ -13,8 +13,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "node --test --experimental-test-module-mocks \"src/**/*.test.ts\" \"scripts/*.test.mjs\"",
     "ui:smoke": "bun scripts/ui-smoke.mjs",
-    "dist": "node scripts/fetch-search-bins.mjs darwin arm64 && node scripts/fetch-llama.mjs darwin arm64 && electron-vite build && node scripts/dist-mac.mjs",
-    "dist:win": "node scripts/fetch-search-bins.mjs win32 x64 && node scripts/fetch-llama.mjs win32 x64 && electron-vite build && electron-builder --win --publish never",
+    "dist": "node scripts/fetch-search-bins.mjs darwin arm64 && node scripts/fetch-officecli.mjs darwin arm64 && node scripts/fetch-llama.mjs darwin arm64 && electron-vite build && node scripts/dist-mac.mjs",
+    "dist:win": "node scripts/fetch-search-bins.mjs win32 x64 && node scripts/fetch-officecli.mjs win32 x64 && node scripts/fetch-llama.mjs win32 x64 && electron-vite build && electron-builder --win --publish never",
     "icon": "bash scripts/make-icon.sh",
     "icon:win": "node scripts/make-icon-win.mjs"
   },
@@ -123,6 +123,10 @@
         "to": "builtin-plugins"
       },
       {
+        "from": "resources/licenses",
+        "to": "licenses"
+      },
+      {
         "from": "node_modules/@earendil-works/pi-coding-agent/package.json",
         "to": "pi-coding-agent/package.json"
       }
@@ -164,6 +168,13 @@
           ]
         },
         {
+          "from": "build/bin/darwin-arm64/officecli",
+          "to": "bin/officecli",
+          "filter": [
+            "officecli"
+          ]
+        },
+        {
           "from": "build/bin/darwin-arm64/llama",
           "to": "bin/llama"
         }
@@ -171,6 +182,7 @@
       "extendInfo": {
         "NSMicrophoneUsageDescription": "orbita uses the microphone for voice input: what you say is transcribed into the message box."
       },
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "identity": "-",
       "hardenedRuntime": false
     },
@@ -182,6 +194,13 @@
           "filter": [
             "rg.exe",
             "fd.exe"
+          ]
+        },
+        {
+          "from": "build/bin/win32-x64/officecli",
+          "to": "bin/officecli",
+          "filter": [
+            "officecli.exe"
           ]
         },
         {

@@ -1477,6 +1477,9 @@ export const en = {
       group: "Software update",
       currentVersion: "Current version",
       currentNotesMissing: "This version has no release notes.",
+      // 与 zh 同一条事实：随包的 OfficeCLI 与其许可文件位置（版本号不写进文案，见 messages-zh.ts）
+      bundledThirdParty:
+        "Bundled third party: OfficeCLI (Apache-2.0). Its license and third-party notices ship with the app under /resources/licenses/officecli.",
       viewOnGitHub: "View this release on GitHub",
       updates: "Updates",
       idleHint: "Checked automatically in the background.",
