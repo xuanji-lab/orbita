@@ -1938,6 +1938,7 @@ export const zh: Messages = {
     thinkingTip: "思考 · 下一条消息起生效",
     compactConfirm: "把到目前为止的对话压缩成摘要？",
     compactShort: "对话还很短——现在压缩省不了多少。仍要压缩？",
+    compactGo: "压缩",
     compactAnyway: "仍要压缩",
     compactNow: "立即压缩上下文",
     compactReadOnly: "这个任务不能接着聊",
