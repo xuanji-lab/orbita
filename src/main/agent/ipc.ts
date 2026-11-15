@@ -591,7 +591,7 @@ export function registerAgentIpc(
     if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
   }
   ipcMain.handle(ipcChannels.agentContinue, (_e, input: ContinueAgentInput): Promise<void> => continueTurn(input));
-  ipcMain.handle(ipcChannels.agentKernelInfo, (): AgentKernelInfo => ({ durable: host.kernelEnabled(), running: host.kernelRunningSessions() }));
+  ipcMain.handle(ipcChannels.agentKernelInfo, (): AgentKernelInfo => ({ running: host.kernelRunningSessions() }));
 
   ipcMain.handle(
     ipcChannels.agentSetMode,

@@ -1,11 +1,10 @@
 /**
  * 新内核（pi-durable）的契约真源：主进程 ↔ kernel utility 进程的消息协议，与库文件的命名。
  *
- * 开关 `ORBITA_DURABLE_KERNEL=1` 开着时，界面里的对话（根会话与它派出的子会话、自动化开的轮）由 kernel 进程跑：主进程把旧内核那套
- * 开轮 / 停止 / 抢跑 / 压缩 / 插话 / 切档 / 回退 / 撤销 / 挪工作区 / 分支命令**原样**转给它（同一份 AgentCommand，
- * 开轮装配不为新内核另拼），
+ * 界面里的对话（根会话与它派出的子会话、自动化开的轮）由 kernel 进程跑：主进程把开轮 / 停止 / 抢跑 / 压缩 / 插话 /
+ * 切档 / 回退 / 撤销 / 挪工作区 / 分支命令**原样**转给它（同一份 AgentCommand，开轮装配不为新内核另拼），
  * kernel 进程回的也是同一套 AgentEvent（转录 progress、phase、stats、审批、工具请求……），renderer 不认识 durable。
- * 关着（默认）时主进程不拉起 kernel 进程，一切走旧内核。
+ * 旧内核的主循环已删（2026-11-16）；还没迁进库的旧会话第一次开轮时由 kernel 迁（legacy-migrate.ts）。
  *
  * 队列仍在 renderer 的槽里（2026-11-14 主会话裁决，方案 §2.3 的 A）：kernel 一次只跑一条完整的开轮命令，
  * 排队、撤回、挪位、「立即发送」都与旧内核同源；durable 的 inbox 只用于父→子的真插话（steer）。
@@ -26,8 +25,8 @@ export function kernelLibraryName(rootSessionId: string): string {
 
 /**
  * 新内核里新建的会话没有 pi 本子：meta.piSessionFile 记这个引用（非 null = 「能续」，界面与主进程里判「有没有本子」的
- * 那些地方照常认它）。kernel 进程见到它就知道这条会话不是旧会话、没有原件可迁。旧内核永远拿不到它——
- * 住在新内核里的会话（meta.durable）主进程不交给旧内核。
+ * 那些地方照常认它）。kernel 进程见到它就知道这条会话不是旧会话、没有原件可迁。agent 进程改 pi 本子（还没迁的旧会话的
+ * 回退 / 撤销 / 分支 / 挪工作区）永远拿不到它——住在新内核里的会话（meta.durable）的本子编辑交给 kernel。
  */
 export const DURABLE_BOOK_PREFIX = "durable:";
 
@@ -166,14 +165,6 @@ export function restartNote(meta: Pick<SessionMeta, "parentId" | "durable">, run
  * 子会话收件箱行据此归进「等你」。点了「继续」就在跑（running 为真）；跑完落定清掉 durable.running，标记消失。
  * 正常退出后自动续跑的（resumePolicy "resume"）与树根（"ask"）不算。
  */
-function awaitsContinue(meta: Pick<SessionMeta, "parentId" | "durable">, running: boolean): boolean {
+export function awaitsContinue(meta: Pick<SessionMeta, "parentId" | "durable">, running: boolean): boolean {
   return !running && resumePolicy(meta) === "crashed";
-}
-
-/**
- * 界面上算不算「被打断、等你点继续」：awaitsContinue，且这次运行开着新内核（kernelOn，主进程报的；还没报到 = null）。
- * 开关关着时这条会话只能读、点不了继续——亮一个永远消不掉的「等你」只会误导。
- */
-export function interruptedNow(kernelOn: boolean | null, meta: Pick<SessionMeta, "parentId" | "durable">, running: boolean): boolean {
-  return kernelOn === true && awaitsContinue(meta, running);
 }

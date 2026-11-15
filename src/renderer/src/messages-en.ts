@@ -1990,9 +1990,6 @@ export const en = {
     noProviderExit: "Add a provider",
     readOnlyTask:
       "This task was recorded before tasks could be resumed, so it can be read but not continued. Start a new task to keep working.",
-    /** 新内核：这条会话后来在新内核里继续过，这次启动开关关着 */
-    readOnlyDurableMoved:
-      "This task was continued in experimental mode. With experimental mode off, it can be read here but not continued — this view only has the earlier turns.",
     /** 新内核：迁移旧会话失败，只读（原件没动） */
     readOnlyMigrationFailed: (reason: string) => `Preparing this task's history failed, so it can be read but not continued. The original is untouched. (${reason})`,
     /** 新内核：这一轮被打断了（kernel 进程崩溃 / 应用退出时它在跑），库里还留着上下文 */

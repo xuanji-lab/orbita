@@ -1833,7 +1833,6 @@ export const zh: Messages = {
     noProvider: "还没有能发消息的模型，草稿会留在这里。",
     noProviderExit: "添加服务商",
     readOnlyTask: "这个任务记录于支持续聊之前，只能读、不能接着聊。新开一个任务继续吧。",
-    readOnlyDurableMoved: "这个任务之后是在实验模式下接着聊的。现在实验模式没开，这里只能读、不能接着聊——这里只有之前的那些轮次。",
     readOnlyMigrationFailed: (reason) => `这个任务的历史记录整理失败了，只能读、不能接着聊，原件没动。（${reason}）`,
     interruptedTurn: "这一轮没跑完就被打断了。",
     interruptedByCrash: "应用上次是异常退出的，这个子会话被打断了。",

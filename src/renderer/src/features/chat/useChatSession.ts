@@ -6,7 +6,7 @@ import { prefillLeft, reconcileLeft } from "./carryover-prefill.ts";
 import type { TranscriptItem } from "@shared/transcript";
 import { api } from "../../api";
 import type { IntentRecallRecord } from "@shared/session";
-import { interruptedNow, restartNote } from "@shared/kernel";
+import { awaitsContinue, restartNote } from "@shared/kernel";
 import type { RecallCardState } from "@shared/intent-recall";
 import type { IntentConfirmDecision } from "@shared/intent-confirm";
 import { splitEchoBlocks } from "../../../../shared/prompt-attachments.ts";
@@ -133,7 +133,7 @@ import { ipcErrorText } from "../../utils/ipc-error.ts";
  */
 /** 回退确认框的全部状态：计划 + 要放回输入框的那条原文（含附件）。 */
 /** 会话只能读不能续的原因（ChatSession.readOnlyReason） */
-export type ReadOnlyReason = { kind: "noBook" } | { kind: "durableMoved" } | { kind: "migrationFailed"; reason: string };
+export type ReadOnlyReason = { kind: "noBook" } | { kind: "migrationFailed"; reason: string };
 
 export interface RevertDialogState {
   sessionId: string;
@@ -499,8 +499,6 @@ interface ViewHandle {
  * 引擎——与「正在看哪条」无关的共享真源。全应用一份，主槽与抽屉槽都从它读。
  */
 export interface SessionEngine {
-  /** 这次启动的对话主循环由新内核跑（开关 ORBITA_DURABLE_KERNEL）；null = 还没问到（不急着下「只读」的结论），读不到当关 */
-  readonly kernelDurable: boolean | null;
   /** 新内核：接着跑上次被中断的那一轮 */
   readonly continueTurn: (id: string) => void;
   /**
@@ -932,11 +930,6 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
 
   useEffect(refreshWorkspaces, [refreshWorkspaces]);
 
-  /**
-   * 这次启动的对话内核（开关 ORBITA_DURABLE_KERNEL）。只用来判「住在新内核里的会话能不能在这里续」：
-   * 关着开关时它只能看（主进程也会拒绝，界面先说清楚，别让输入框看起来能打字）。读不到当关（保守）。
-   */
-  const [kernelDurable, setKernelDurable] = useState<boolean | null>(null);
   useEffect(() => {
     void api.agent
       .kernelInfo()
@@ -944,9 +937,8 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
         // 窗口起来之前就开跑的轮（应用重启时自动续跑的子会话）：那条 phase turn 没收到，按主进程的账补上。
         // 之后这一轮落定的 idle 照常到（主进程先回这份、后发的事件排在它后面）
         if (info.running.length > 0) applyStates((prev) => seedRunningPhases(prev, info.running));
-        setKernelDurable(info.durable);
       })
-      .catch(() => setKernelDurable(false));
+      .catch(() => undefined);
   }, [applyStates]);
 
   /**
@@ -1359,20 +1351,18 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     if (entry === undefined || entry.phase !== "idle") return false;
     return planAwaitingIn(selectTranscript(entry.transcript));
   }, []);
-  // 被崩溃打断、停着等人点「继续」的子会话（「等你」的第三个来源）：判断只在 @shared/kernel，这里只喂「此刻在不在跑」。
-  // 开关关着时不算——那时这条会话只能读、点不了继续，亮一个永远消不掉的「等你」只会误导
+  // 被崩溃打断、停着等人点「继续」的子会话（「等你」的第三个来源）：判断只在 @shared/kernel，这里只喂「此刻在不在跑」
   const interruptedOf = useCallback(
     (id: string): boolean => {
       const meta = sessions.find((entry) => entry.id === id);
-      return meta !== undefined && interruptedNow(kernelDurable, meta, (statesRef.current.get(id)?.phase ?? "idle") !== "idle");
+      return meta !== undefined && awaitsContinue(meta, (statesRef.current.get(id)?.phase ?? "idle") !== "idle");
     },
-    [kernelDurable, sessions],
+    [sessions],
   );
   const entryOf = useCallback((id: string): SessionEntry | undefined => statesRef.current.get(id), []);
 
   return {
     catalog,
-    kernelDurable,
     continueTurn,
     messagesRef,
     pickedThinkingRef,
@@ -3462,7 +3452,6 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   /**
    * 只能读不能续的原因：
    * - noBook：没有 pi 本子的旧会话、还没开新的（续会话靠把本子还给 pi）；
-   * - durableMoved：这条会话后来在新内核里继续过，这次启动开关关着——旧内核续写会让两边分叉；
    * - migrationFailed：迁到新内核时失败（原件没动，原因在 meta.durable.failed）。
    */
   const liveMeta = useMemo(() => {
@@ -3474,9 +3463,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       ? { kind: "noBook" }
       : liveMeta?.durable?.failed !== undefined
         ? { kind: "migrationFailed", reason: liveMeta.durable.failed }
-        : liveMeta?.durable !== undefined && engine.kernelDurable === false
-          ? { kind: "durableMoved" }
-          : null;
+        : null;
 
   // 「继续」交给记忆化的转录列：引用要稳
   const continueHere = useCallback((): void => {
@@ -3568,13 +3555,13 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     turnContinuable:
       entry.phase === "idle" &&
       readOnlyReason === null &&
-      (entry.turnContinuable || (engine.kernelDurable === true && entry.turnError === null && liveMeta?.durable?.running === true)),
+      (entry.turnContinuable || (entry.turnError === null && liveMeta?.durable?.running === true)),
     migrating: entry.migrating,
     migratingExpected: entry.migratingExpected,
     // 子会话在应用重启后被自动接着跑过（后台任务照常续跑）：界面说一句，直到下一次由人或父开的轮。
     // 与「被打断了 · 继续」只出一句（restartNote：崩溃压过旧的 resumed）
-    resumedAfterRestart: engine.kernelDurable === true && liveMeta !== null && restartNote(liveMeta, entry.phase !== "idle") === "resumed",
-    interruptedByCrash: engine.kernelDurable === true && !entry.turnContinuable && liveMeta !== null && restartNote(liveMeta, entry.phase !== "idle") === "crashed",
+    resumedAfterRestart: liveMeta !== null && restartNote(liveMeta, entry.phase !== "idle") === "resumed",
+    interruptedByCrash: !entry.turnContinuable && liveMeta !== null && restartNote(liveMeta, entry.phase !== "idle") === "crashed",
     continueTurn: continueHere,
     openSession,
     renameSession: engine.renameSession,

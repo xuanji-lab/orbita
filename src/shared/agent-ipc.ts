@@ -69,11 +69,11 @@ export const ipcChannels = {
   /** 意图确认卡的应答（实验功能 intent-system）：载荷 requestId + IntentConfirmDecision，回 void */
   agentAnswerIntentConfirm: "agent:answer-intent-confirm",
   /**
-   * 新内核（开关 ORBITA_DURABLE_KERNEL=1）：接着跑上次被中断的那一轮（kernel 进程崩溃 / 应用被杀时正在跑的轮），
-   * 不加新的用户消息。载荷 ContinueAgentInput；只对住在新内核里的会话有效，旧内核下拒绝。
+   * 接着跑上次被中断的那一轮（kernel 进程崩溃 / 应用被杀时正在跑的轮），不加新的用户消息。
+   * 载荷 ContinueAgentInput；只对住在新内核里的会话（meta.durable）有效，别的拒绝。
    */
   agentContinue: "agent:continue",
-  /** 这次启动的对话内核：`{ durable: boolean }`（开关开着 = true）。renderer 判「这条会话能不能在这里续」要它 */
+  /** 此刻在 kernel 里跑着一轮的会话（AgentKernelInfo）：窗口晚于这一轮开起来时 renderer 拿它补上 phase */
   agentKernelInfo: "agent:kernel-info",
   /**
    * 意图系统（实验）的三条主进程 HTTP 通道：
@@ -738,8 +738,6 @@ export type ContinueAgentInput = AgentTurnContext;
 
 /** `agent:kernel-info` 的回执 */
 export interface AgentKernelInfo {
-  /** 这次启动的对话主循环由新内核（pi-durable）跑 */
-  durable: boolean;
   /**
    * 此刻新内核里正在跑一轮的会话（主进程的账：开轮交给 kernel 之后、这一轮落定之前）。窗口晚于这一轮开起来
    * （应用重启时自动续跑的子会话、Ctrl+R 刷新）就收不到那条 phase turn——renderer 拿这份补上，否则这条会话显示
@@ -1290,6 +1288,29 @@ export type AgentCommand =
   /** 意图确认卡的回答（实验功能 intent-system），按 requestId 对回去；停止 / 抢跑时 runtime 侧按取消结掉 */
   | { type: "intentConfirmResult"; requestId: string; decision: IntentConfirmDecision }
   | { type: "dispose"; sessionId: string };
+
+/**
+ * 发给 agent 进程（runtime.ts）的命令：它不跑轮（对话主循环在 kernel 进程），只做家务——内建目录与联网刷新、
+ * 还没迁进库的旧会话的 pi 本子编辑与分支、没交给过 kernel 的会话换模型时的校验、MCP 热重载的回执、
+ * 专注小结、连接测试、收尾清单。
+ */
+export type AgentHouseholdCommand = Extract<
+  AgentCommand,
+  {
+    type:
+      | "listBuiltins"
+      | "refreshCatalogs"
+      | "branch"
+      | "revertPiBook"
+      | "undoPiBook"
+      | "movePiBook"
+      | "setModel"
+      | "mcpReload"
+      | "summarizeFocus"
+      | "probeProvider"
+      | "choreComplete";
+  }
+>;
 
 /**
  * B-1：read_task 读到的「这是一条什么 task」。**只给 UI、不入模型上下文**——

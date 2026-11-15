@@ -1471,9 +1471,7 @@ function ChatViewBody(props: {
         <Notice icon="lock">
           {session.readOnlyReason.kind === "noBook"
             ? t.chat.readOnlyTask
-            : session.readOnlyReason.kind === "durableMoved"
-              ? t.chat.readOnlyDurableMoved
-              : t.chat.readOnlyMigrationFailed(session.readOnlyReason.reason)}
+            : t.chat.readOnlyMigrationFailed(session.readOnlyReason.reason)}
         </Notice>
       )}
       {session.resumedAfterRestart && <Notice icon="rotate-ccw">{t.chat.resumedAfterRestart}</Notice>}

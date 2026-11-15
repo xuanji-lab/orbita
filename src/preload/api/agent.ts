@@ -40,9 +40,9 @@ export const agentApi = {
   /** 会话内换模型（C-4）：下一轮生效。结果走 agent:event 的 model / failed 事件 */
   setModel: (sessionId: string, providerId: string, modelId: string): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentSetModel, sessionId, providerId, modelId),
-  /** 新内核：接着跑上次被中断的那一轮（不加新消息）。旧内核下主进程拒绝 */
+  /** 接着跑上次被中断的那一轮（不加新消息）。只对住在新内核里的会话有效 */
   continue: (input: ContinueAgentInput): Promise<void> => ipcRenderer.invoke(ipcChannels.agentContinue, input),
-  /** 这次启动的对话内核（开关开着 = durable） */
+  /** 此刻在 kernel 里跑着一轮的会话（窗口晚起来时补 phase） */
   kernelInfo: (): Promise<AgentKernelInfo> => ipcRenderer.invoke(ipcChannels.agentKernelInfo),
   /** 回答一次工具审批 */
   answerPermission: (requestId: string, answer: PermissionAnswer): Promise<void> =>
