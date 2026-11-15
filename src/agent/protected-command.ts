@@ -85,18 +85,23 @@ export type CommandRefusal =
 
 /* ---------- 规整 ---------- */
 
-/** `$'\x61…'` ANSI-C 引号：解成明文（只处理 \xHH、\NNN 八进制、\uHHHH 与常见单字符转义） */
+/**
+ * `$'\x61…'` ANSI-C 引号：解成明文（只处理 \xHH、\NNN 八进制、\uHHHH 与常见单字符转义）。
+ * **解完仍包在单引号里**：引号里的空格是路径的一部分（`$'…/Application Support/…/dura\x62le/x'`），
+ * 丢了引号，后面按空格切参数会把路径拆成两半、对不上受保护路径（2026-11-16 复验在真实例里用它删成了文件）。
+ */
 function decodeAnsiC(command: string): string {
-  return command.replaceAll(/\$'((?:[^'\\]|\\.)*)'/g, (_whole: string, body: string) =>
-    body.replaceAll(/\\(x[0-9a-fA-F]{1,2}|[0-7]{1,3}|u[0-9a-fA-F]{4}|.)/g, (_m: string, esc: string) => {
+  return command.replaceAll(/\$'((?:[^'\\]|\\.)*)'/g, (_whole: string, body: string) => {
+    const plain = body.replaceAll(/\\(x[0-9a-fA-F]{1,2}|[0-7]{1,3}|u[0-9a-fA-F]{4}|.)/g, (_m: string, esc: string) => {
       if (esc[0] === "x" && esc.length > 1) return String.fromCharCode(parseInt(esc.slice(1), 16));
       if (esc[0] === "u" && esc.length === 5) return String.fromCharCode(parseInt(esc.slice(1), 16));
       if (/^[0-7]+$/.test(esc)) return String.fromCharCode(parseInt(esc, 8));
       if (esc === "n") return "\n";
       if (esc === "t") return "\t";
       return esc;
-    }),
-  );
+    });
+    return `'${plain.replaceAll("'", "'\\''")}'`;
+  });
 }
 
 /** 命令里自己写的 `NAME=值`（含 export / declare / local）；值可以带引号 */
@@ -133,9 +138,21 @@ function expandVars(text: string, vars: ReadonlyMap<string, string>, guard: Comm
   return current;
 }
 
-/** 参数位置的 `~` 展开成家目录（行首 / 空白 / 引号 / `=` / 分隔符之后、`/` 或结尾之前） */
-function expandTilde(text: string, home: string): string {
-  return text.replaceAll(/(^|[\s"'=;&|()><])~(?=\/|\\|\s|$)/g, (_m: string, lead: string) => lead + home);
+/** 参数位置的 `~` / `~用户名` 展开成家目录（行首 / 空白 / 引号 / `=` / 分隔符之后、`/` 或结尾之前） */
+function expandTilde(text: string, guard: CommandGuardEnv): string {
+  return text.replaceAll(/(^|[\s"'=;&|()><])~([A-Za-z0-9._-]*)(?=\/|\\|\s|$)/g, (_m: string, lead: string, user: string) => lead + tildeHome(user, guard));
+}
+
+/**
+ * `~` / `~用户名` 指向哪个家目录（shell 的展开规则）：`~` 与本人的用户名（家目录末段、USER、LOGNAME）→ 本人家目录；
+ * 别的用户名 → 与本人家目录同级的同名目录（macOS `/Users/<名>`、Linux `/home/<名>` 的惯例）。
+ * 2026-11-16 复验：`rm ~guanhongli/Library/…/automations.json` 绕过了只认 `~/` 的展开，在真实例里删成了。
+ * 只给闸门比对用，不改真命令。
+ */
+export function tildeHome(user: string, guard: CommandGuardEnv): string {
+  if (user === "") return guard.home;
+  const own = [basename(guard.home), guard.env["USER"], guard.env["LOGNAME"]];
+  return own.includes(user) ? guard.home : join(dirname(guard.home), user);
 }
 
 /** 找第一个带逗号的 `{a,b}` 组（没有逗号的 `{}` 是字面量，跳过） */
@@ -235,7 +252,7 @@ function normalizeVariants(command: string, guard: CommandGuardEnv, knownSpacePa
   const decoded = decodeAnsiC(command);
   const literal = !/[$`]/.test(decoded);
   const vars = parseAssignments(decoded);
-  const expanded = encodeQuotedSpaces(expandTilde(expandVars(decoded, vars, guard), guard.home), knownSpacePaths);
+  const expanded = encodeQuotedSpaces(expandTilde(expandVars(decoded, vars, guard), guard), knownSpacePaths);
   const loosened = expanded.replaceAll(/["']/g, "");
   const variants: Variant[] = [];
   const hasBackslash = loosened.includes("\\");

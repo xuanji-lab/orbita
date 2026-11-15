@@ -16,10 +16,11 @@ import {
   type PermissionAnswer,
   type PermissionMode,
 } from "../shared/permission.ts";
+import { statSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { resolveToCwd } from "@earendil-works/pi-coding-agent";
 import type { ContextMessage } from "./image-byte-budget.ts";
-import { dataDirRefusalMessage, defaultGuardEnv, protectedCommandRefusal, realpathLoose, type CommandGuardEnv } from "./protected-command.ts";
+import { dataDirRefusalMessage, defaultGuardEnv, protectedCommandRefusal, realpathLoose, tildeHome, type CommandGuardEnv } from "./protected-command.ts";
 
 /**
  * **本会话实际启用的 pi 内建工具集**。真源一份、两个消费者：
@@ -130,8 +131,26 @@ export interface ToolCallGateResult {
 
 export type PermissionAsk = (request: ToolCallLike) => Promise<PermissionAnswer>;
 
-/** 拦截面：按路径改文件的（write/edit 的 input.path）与跑命令的（bash/powershell 的 input.command）。 */
-const PATH_MUTATING_TOOLS = new Set(["write", "edit"]);
+/**
+ * 拦截面：按路径改文件的（input.path）与跑命令的（bash/powershell 的 input.command）。
+ * 按路径改文件的除了 write / edit，还有文档与演示文稿那几件：新建（slides_create；doc_open 只在 create:true 时，见
+ * `writePaths`）、改写演示文稿（slides_write / slides_edit / slides_insert_image）、文档插图（附件放在文档旁边）、导出
+ * （doc_export / slides_export，out 相对文档所在目录）。2026-11-16 复验：slides_create / doc_open 经工作区里的符号链接在
+ * sessions/、durable/ 里新建成功——这几件以前不过这道闸；工作区恰好是家目录时连符号链接都不用。
+ */
+const PATH_MUTATING_TOOLS = new Set([
+  "write",
+  "edit",
+  "slides_create",
+  "slides_write",
+  "slides_edit",
+  "slides_insert_image",
+  "slides_export",
+  "doc_insert_image",
+  "doc_export",
+]);
+/** 导出工具：另有 `out`，相对文档所在目录解析 */
+const EXPORT_TOOLS = new Set(["doc_export", "slides_export"]);
 const COMMAND_TOOLS = new Set(["bash", "powershell"]);
 /**
  * 受保护路径的命令串检查另外管着可见终端：terminal_execute 把一整行命令敲进终端，和 bash 一样能删能改
@@ -147,15 +166,99 @@ const PROTECTED_COMMAND_TOOLS = new Set([...COMMAND_TOOLS, "terminal_execute"]);
  * 只做字面解析时，`~/Library/…/sessions/x` 会被当成 cwd 下一个叫 `~` 的相对目录而放行，随后 pi 把它
  * 写进真实的会话目录（2026-11-15 独立验收在真实例里写成功）。两种解析都比，各自再跟一遍符号链接。
  */
-function writeTargets(cwd: string, target: string): string[] {
+function resolvedForms(cwd: string, target: string): string[] {
   const resolved = [resolve(cwd, target)];
   try {
     resolved.push(resolveToCwd(target, cwd));
   } catch {
     // 规整不了的输入（如畸形 file:// URL）pi 自己也会抛、写不成；字面解析那一份照比
   }
-  return [...new Set(resolved.flatMap((path) => [foldPath(path), foldPath(realpathLoose(path))]))];
+  return resolved;
 }
+
+/**
+ * 这次工具调用会写到哪些路径（绝对路径，未折叠）；null = 这个工具不按路径写文件，[] = 没给路径（工具自己会报错）。
+ * doc_open 只有 create:true 才写盘（新建空文档），只是打开不算。导出的 out 相对文档所在目录；不给 out 时写在文档旁边，
+ * 文档路径本身已经覆盖了那个目录。
+ */
+function writePaths(toolName: string, input: Record<string, unknown>, cwd: string): string[] | null {
+  const writes = PATH_MUTATING_TOOLS.has(toolName) || (toolName === "doc_open" && input["create"] === true);
+  if (!writes) return null;
+  const target = input["path"];
+  if (typeof target !== "string" || target === "") return [];
+  const paths = resolvedForms(cwd, target);
+  const out = input["out"];
+  if (EXPORT_TOOLS.has(toolName) && typeof out === "string" && out !== "") {
+    for (const doc of [...paths]) paths.push(resolve(dirname(doc), out));
+  }
+  return [...new Set(paths)];
+}
+
+/**
+ * 文件身份（设备号 + inode，stat 跟符号链接走）。字符串规整与 realpath 认不出的写法，身份认得出：macOS 的 firmlink
+ * （`/System/Volumes/Data/Users/…` 与 `/Users/…` 是同一个目录，realpath 不换）、硬链接、大小写变体。
+ * 2026-11-16 独立复验在真实例里用 firmlink 前缀的 write / edit 覆盖了会话库、会话记录与自动化记录。
+ * 读不到、或文件系统不给 inode（ino 为 0）时为 null——只剩字符串那几道比较。
+ */
+function identityOf(path: string): string | null {
+  try {
+    const stat = statSync(path, { bigint: true });
+    return stat.ino === 0n ? null : `${stat.dev}:${stat.ino}`;
+  } catch {
+    return null;
+  }
+}
+
+/** path 与它往上各级中已存在的那些的身份（判「落在受保护目录里」用：任一级就是受保护目录本身） */
+function ancestorIdentities(path: string): Set<string> {
+  const ids = new Set<string>();
+  for (let current = path; ; current = dirname(current)) {
+    const id = identityOf(current);
+    if (id !== null) ids.add(id);
+    if (dirname(current) === current) return ids;
+  }
+}
+
+/**
+ * 按身份判受保护路径（字符串与 realpath 比过之后的第二道）。没命中返回 null。
+ * - `/.vol/<设备>/<inode>`（macOS 按 inode 寻址）一律拒：它的上级在字面上不是真实目录，判不出落在哪；正常工作用不着它。
+ * - 受保护文件：目标就是它（硬链接 / firmlink），或目标与它同目录且同名 / 是 `<名>.` 开头的兄弟（原子写临时文件）。
+ * - 受保护目录：目标往上任一已存在的一级就是它。
+ * 仍拦不住（已知）：工作区里事先存在的、指向 sessions/ 或 durable/ 里某个文件的硬链接——要逐个比对目录里全部文件的
+ *   inode，代价不值；造这样的硬链接本身要先绕过命令串闸门。
+ */
+function identityRefusal(paths: readonly string[], protectedPaths: readonly string[], protectedFiles: readonly string[]): string | null {
+  if (process.platform === "darwin" && paths.some((path) => /^\/\.vol(\/|$)/i.test(path))) return VOLFS_REFUSAL;
+  for (const file of protectedFiles) {
+    const fileId = identityOf(file);
+    const parentId = identityOf(dirname(file));
+    const name = basename(file).toLowerCase();
+    for (const path of paths) {
+      if (fileId !== null && identityOf(path) === fileId) return fileRefusalMessage(file, "path");
+      const own = basename(path).toLowerCase();
+      if (parentId !== null && (own === name || own.startsWith(`${name}.`)) && identityOf(dirname(path)) === parentId) {
+        return fileRefusalMessage(file, "path");
+      }
+    }
+  }
+  const dirs = new Map<string, string>();
+  for (const dir of protectedPaths) {
+    const id = identityOf(dir);
+    if (id !== null) dirs.set(id, dir);
+  }
+  if (dirs.size === 0) return null;
+  for (const path of paths) {
+    for (const id of ancestorIdentities(path)) {
+      const dir = dirs.get(id);
+      if (dir !== undefined) return refusalMessage(dir, "path");
+    }
+  }
+  return null;
+}
+
+const VOLFS_REFUSAL =
+  "Paths under /.vol address a file by its inode, so Orbita cannot tell whether they reach protected session or automation " +
+  "records; writing through them is refused in every permission mode. Use the file's ordinary path instead.";
 
 /**
  * 模型自填的命令超时**下限**（秒）：低于它的 `timeout` 抬到它，不填就不动。
@@ -218,8 +321,9 @@ function loosenShellQuoting(value: string): string {
  * 或结尾的 `~`；`~user`、`~+`、`$HOME`、`%APPDATA%` 这类展开规则各不相同，不认，
  * 归入「蓄意混淆」的既定边界。只改比对用的副本，不改真命令。
  */
-function expandTildeLiterals(command: string, home: string): string {
-  return command.replaceAll(/(^|[\s"'=; &|()><])~(?=\/|\s|$)/g, (_match: string, lead: string) => lead + home);
+function expandTildeLiterals(command: string, guard: CommandGuardEnv): string {
+  // `~用户名` 也展开（2026-11-16 复验：`rm ~guanhongli/Library/…` 在真实例里删成了）；规则见 tildeHome
+  return command.replaceAll(/(^|[\s"'=; &|()><])~([A-Za-z0-9._-]*)(?=\/|\s|$)/g, (_match: string, lead: string, user: string) => lead + tildeHome(user, guard));
 }
 
 /**
@@ -276,11 +380,11 @@ export function protectedPathRefusal(
 ): string | null {
   if (protectedPaths.length === 0 && protectedFiles.length === 0) return null;
 
-  if (PATH_MUTATING_TOOLS.has(toolName)) {
-    const target = input["path"];
-    if (typeof target !== "string" || target === "") return null;
+  const paths = writePaths(toolName, input, cwd);
+  if (paths !== null) {
+    if (paths.length === 0) return null;
     // 字面路径与「跟着符号链接走之后的真实路径」两个都比：链接两步（ln -s 之后 write 链接）躲不过
-    const candidates = writeTargets(cwd, target);
+    const candidates = [...new Set(paths.flatMap((path) => [foldPath(path), foldPath(realpathLoose(path))]))];
     for (const file of protectedFiles) {
       // 单文件命中：文件本身，或它的 `.tmp` / `.bad-` 兄弟（原子写临时文件与坏文件
       // 隔离都以 `<file>.` 开头）——精确圈住 store 的落盘足迹，不外溢到同目录别的文件
@@ -299,7 +403,8 @@ export function protectedPathRefusal(
         }
       }
     }
-    return null;
+    // 字符串对不上的（firmlink、硬链接、/.vol）再按文件身份比一道
+    return identityRefusal(paths, protectedPaths, protectedFiles);
   }
 
   if (PROTECTED_COMMAND_TOOLS.has(toolName)) {
@@ -308,7 +413,7 @@ export function protectedPathRefusal(
     // 先过命令串里不带完整路径的写法：文件名本身 / 变量 / 通配 / cd 进数据目录 / 对数据目录或其上级的破坏性命令
     const loose = protectedCommandRefusal(command, { files: protectedFiles, ownDirs: ownDataDirs(protectedPaths, protectedFiles) }, cwd, guard);
     if (loose !== null) return loose.kind === "file" ? fileRefusalMessage(loose.file, "command") : dataDirRefusalMessage(loose);
-    const haystack = loosenShellQuoting(foldPath(expandTildeLiterals(command, guard.home)));
+    const haystack = loosenShellQuoting(foldPath(expandTildeLiterals(command, guard)));
     for (const dir of protectedPaths) {
       const needle = loosenShellQuoting(foldPath(dir));
       if (commandMentions(haystack, needle)) return refusalMessage(dir, "command");
