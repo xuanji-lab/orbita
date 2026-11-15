@@ -740,6 +740,12 @@ export type ContinueAgentInput = AgentTurnContext;
 export interface AgentKernelInfo {
   /** 这次启动的对话主循环由新内核（pi-durable）跑 */
   durable: boolean;
+  /**
+   * 此刻新内核里正在跑一轮的会话（主进程的账：开轮交给 kernel 之后、这一轮落定之前）。窗口晚于这一轮开起来
+   * （应用重启时自动续跑的子会话、Ctrl+R 刷新）就收不到那条 phase turn——renderer 拿这份补上，否则这条会话显示
+   * 「空闲」+「上次被中断 · 继续」，点了报 already running。
+   */
+  running: string[];
 }
 
 /** 手动压缩（renderer → 主进程）。压缩是一次真实的 LLM 调用，同样要带全套开工上下文 */

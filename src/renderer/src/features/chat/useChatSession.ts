@@ -14,6 +14,7 @@ import {
   EMPTY_ENTRY,
   dequeue,
   applyAgentEvent,
+  seedRunningPhases,
   enqueue,
   enqueueChannelMessage,
   createSessionStates,
@@ -935,9 +936,14 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
   useEffect(() => {
     void api.agent
       .kernelInfo()
-      .then((info) => setKernelDurable(info.durable))
+      .then((info) => {
+        // 窗口起来之前就开跑的轮（应用重启时自动续跑的子会话）：那条 phase turn 没收到，按主进程的账补上。
+        // 之后这一轮落定的 idle 照常到（主进程先回这份、后发的事件排在它后面）
+        if (info.running.length > 0) applyStates((prev) => seedRunningPhases(prev, info.running));
+        setKernelDurable(info.durable);
+      })
       .catch(() => setKernelDurable(false));
-  }, []);
+  }, [applyStates]);
 
   /**
    * 新内核：接着跑上次被中断的那一轮（kernel 进程崩溃 / 应用被杀时它在跑）。不加新消息；

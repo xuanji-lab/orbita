@@ -558,6 +558,11 @@ export class AgentHostCore {
     return this.kernel !== undefined;
   }
 
+  /** 此刻在新内核里跑着一轮的会话（交给 kernel 之后、turnSettled 之前） */
+  kernelRunningSessions(): string[] {
+    return [...this.kernelRunning];
+  }
+
   /** 首轮建 meta 时要带的新内核标记：这一轮交给了 kernel 就记（since + running），否则 undefined */
   durableMark(sessionId: string, now: number): { since: number; running: true } | undefined {
     return this.kernelRunning.has(sessionId) ? { since: now, running: true } : undefined;

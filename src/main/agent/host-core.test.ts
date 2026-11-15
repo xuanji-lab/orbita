@@ -1030,6 +1030,17 @@ describe("AgentHostCore：新内核那条道", () => {
     host.dispose();
   });
 
+  test("kernelRunningSessions：交给 kernel 的轮在 turnSettled 之前都算在跑（窗口晚起来时据此补上 phase turn）", async () => {
+    const r = kernelRig();
+    const turn = r.host.submit({ type: "submit", sessionId: "c1", text: "hi", piSessionFile: "/p.jsonl", ...TURN_FIELDS });
+    await flush();
+    r.kernel.emit({ type: "ready" });
+    await turn;
+    assert.deepEqual(r.host.kernelRunningSessions(), ["c1"]);
+    r.kernel.emit({ type: "turnSettled", sessionId: "c1", result: { ok: true, conversationId: 1, migration: "none", status: "done" } });
+    assert.deepEqual(r.host.kernelRunningSessions(), []);
+  });
+
   test("要迁一条大会话（本子 ≥ 16 MB）：发送那一刻就报 migration running（expected），kernel 开完这条会话时补 done；小的不报", async () => {
     const r = kernelRig({}, {}, {}, { big: MIGRATION_HINT_BYTES, small: MIGRATION_HINT_BYTES - 1 });
     const big = r.host.submit({ type: "submit", sessionId: "big", text: "hi", piSessionFile: "/big.jsonl", ...TURN_FIELDS });

@@ -270,6 +270,19 @@ export const EMPTY_ENTRY: SessionEntry = {
  * ready / builtins / created 与槽无关（live 集合是 hook 自己的账）。
  * 没有对应槽时**就地建槽**——renderer 重载后事件照样开始累积。
  */
+/**
+ * 主进程说这几条会话此刻在新内核里跑着一轮（AgentKernelInfo.running）：槽里还是 idle 的补成 turn——
+ * 与收到那条 phase turn 同一个归约。已经不是 idle 的不动（已收到过真事件）。
+ */
+export function seedRunningPhases(states: SessionStates, running: readonly string[]): SessionStates {
+  let next = states;
+  for (const sessionId of running) {
+    if ((next.get(sessionId)?.phase ?? "idle") !== "idle") continue;
+    next = applyAgentEvent(next, { type: "phase", sessionId, phase: "turn" });
+  }
+  return next;
+}
+
 export function applyAgentEvent(states: SessionStates, event: AgentEvent): SessionStates {
   if (event.type === "progress") {
     return update(states, event.sessionId, (entry) => ({

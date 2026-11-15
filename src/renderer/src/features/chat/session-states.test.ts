@@ -19,6 +19,7 @@ import {
   parseCompactCommand,
   createSessionStates,
   removeApproval,
+  seedRunningPhases,
   setPendingEcho,
   nextDeliverable,
   removeSessionEntry,
@@ -1098,6 +1099,15 @@ describe("意图系统的槽位（实验功能 intent-system）", () => {
     states = applyAgentEvent(states, { type: "intentRecallRecord", sessionId: "s1", record });
     assert.deepEqual(states.get("s1")?.intentRun, null);
     assert.deepEqual(states.get("s1")?.intentRecalls.length, 1);
+  });
+
+  test("seedRunningPhases：主进程说在跑的会话，槽里 idle 的补成 turn（不显示「上次被中断 · 继续」）；已收到真事件的不动；之后的 idle 照常收", () => {
+    let states = applyAgentEvent(createSessionStates(), { type: "phase", sessionId: "busy", phase: "compaction" });
+    states = seedRunningPhases(states, ["child", "busy"]);
+    assert.equal(states.get("child")?.phase, "turn");
+    assert.equal(states.get("busy")?.phase, "compaction");
+    states = applyAgentEvent(states, { type: "phase", sessionId: "child", phase: "idle" });
+    assert.equal(states.get("child")?.phase, "idle");
   });
 
   test("迁移提示：事先报的（expected）立刻露出；kernel 随后自己的 running 不把它降回去；done / idle 都收起", () => {
