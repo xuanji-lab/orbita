@@ -2,5 +2,5 @@
 <!-- 应用图标原稿 = 设置 › 外观里的默认款「墨底白圈」（design-system/assets/app-icons/basic-ink.svg，100 画布）放大到 1024，
      自带 rx 232 的圆角裁切：scripts/make-icon.sh（macOS，再缩进 824 的图标网格）与 scripts/make-icon-win.mjs 都从它出图 -->
 <defs><clipPath id="sq"><rect width="1024" height="1024" rx="232"/></clipPath></defs>
-<g clip-path="url(#sq)"><g transform="scale(10.24)"><rect width="100" height="100" fill="#18202a"/><circle cx="50.00" cy="50.00" r="40.00" fill="none" stroke="#ffffff" stroke-width="4.40"/><circle cx="59.37" cy="58.72" r="27.20" fill="none" stroke="#ffffff" stroke-width="2.99"/><circle cx="48.42" cy="62.01" r="15.78" fill="none" stroke="#ffffff" stroke-width="2.40"/><circle cx="49.98" cy="55.57" r="9.15" fill="none" stroke="#ffffff" stroke-width="2.40"/><circle cx="52.75" cy="58.24" r="5.31" fill="#ffffff"/></g></g>
+<g clip-path="url(#sq)"><g transform="scale(10.24)"><rect width="100" height="100" fill="#18202a"/><circle cx="50.00" cy="50.00" r="37.80" fill="none" stroke="#ffffff" stroke-width="8.80"/><circle cx="59.37" cy="58.72" r="25.70" fill="none" stroke="#ffffff" stroke-width="5.98"/><circle cx="48.42" cy="62.01" r="14.68" fill="none" stroke="#ffffff" stroke-width="4.60"/><circle cx="49.98" cy="55.57" r="8.05" fill="none" stroke="#ffffff" stroke-width="4.60"/><circle cx="52.75" cy="58.24" r="5.31" fill="#ffffff"/></g></g>
 </svg>
