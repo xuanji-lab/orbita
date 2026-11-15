@@ -26,6 +26,7 @@ import {
   revertOptimisticTurn,
   prependOlder,
   seedFromDisk,
+  seedHistory,
   setOlderLoading,
   setEntryPhase,
   observedThinkingFor,
@@ -1328,5 +1329,38 @@ describe("prependOlder / setOlderLoading —— 源侧分页向前的方向", ()
     assert.notEqual(on, seeded);
     assert.equal(on.get("A")?.window.loading, true);
     assert.equal(seeded.get("A")?.window.loading, false);
+  });
+});
+
+describe("seedHistory：打开会话时种盘上的历史（窗口晚于事件起来的槽也要种）", () => {
+  const ids = (states: SessionStates, id: string) => selectTranscript(states.get(id)!.transcript).map((item) => item.id);
+  test("复现：槽由 seedRunningPhases 先建（重启续跑的子会话），打开时历史要在，且仍在跑", () => {
+    let states = seedRunningPhases(createSessionStates(), ["c"]);
+    states = seedHistory(states, "c", [userItem("u1", 1000), userItem("u2", 2000)], null, { hasMore: true, compactionsBefore: 1 });
+    assert.deepEqual(ids(states, "c"), ["u1", "u2"]);
+    assert.equal(states.get("c")?.phase, "turn");
+    assert.equal(states.get("c")?.window.firstId, "u1");
+    assert.equal(states.get("c")?.window.hasMore, true);
+    assert.equal(states.get("c")?.window.compactionsBefore, 1);
+  });
+  test("复现：槽由这一轮的实时事件先建——盘上的在前、实时的在后；当前这一轮的条目盘上也有时不重复，同 id 以实时为准", () => {
+    let states = applyAgentEvent(createSessionStates(), { type: "phase", sessionId: "c", phase: "turn" });
+    states = applyAgentEvent(states, progress("c", assistantDone("a2", "实时的那一版")));
+    // 盘上：更早的两条 + 这一轮已落盘的 a2（文字是旧的一版）
+    const diskA2 = { ...assistantDone("a2", "盘上的旧版").item };
+    states = seedHistory(states, "c", [userItem("u1", 1000), userItem("u2", 2000), diskA2]);
+    assert.deepEqual(ids(states, "c"), ["u1", "u2", "a2"]);
+    assert.deepEqual(texts(states, "c"), ["实时的那一版"]);
+  });
+  test("盘上比第一条重合记录更晚、槽里还没有的（实时事件还在路上）不并到前面，免得乱序", () => {
+    let states = applyAgentEvent(createSessionStates(), progress("c", assistantDone("a2", "实时")));
+    states = seedHistory(states, "c", [userItem("u1", 1000), { ...assistantDone("a2", "盘").item }, { ...assistantDone("a3", "还在路上").item }]);
+    assert.deepEqual(ids(states, "c"), ["u1", "a2"]);
+  });
+  test("槽不在：与种盘老路径逐字段相同；种过的槽再打开不动（同一个引用）", () => {
+    const disk = [userItem("u1", 1000), userItem("u2", 2000)];
+    const fresh = seedHistory(new Map(), "A", disk, null, { hasMore: false, compactionsBefore: 0 });
+    assert.deepEqual(fresh.get("A"), seedFromDisk(new Map(), "A", disk, null, { hasMore: false, compactionsBefore: 0 }).get("A"));
+    assert.equal(seedHistory(fresh, "A", [userItem("u0", 500), ...disk]), fresh);
   });
 });

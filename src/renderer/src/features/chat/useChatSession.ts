@@ -29,6 +29,7 @@ import {
   removeSessionEntry,
   revertOptimisticTurn,
   seedFromDisk,
+  seedHistory,
   setOlderLoading,
   setEntryPhase,
   type PendingApproval,
@@ -2371,11 +2372,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           const live = (engine.statesRef.current.get(id)?.phase ?? "idle") !== "idle";
           setSessionId(live ? id : null);
           sessionRef.current = live ? id : null;
-          if (!engine.statesRef.current.has(id)) {
-            engine.applyStates((prev) =>
-              seedFromDisk(prev, id, detail.transcript, detail.meta.stats, detail.window),
-            );
-          }
+          // 槽不在：种盘；槽在但没从盘上种过（窗口晚于事件起来，如重启续跑的子会话）：把更早的历史并到前面；种过的不动
+          engine.applyStates((prev) => seedHistory(prev, id, detail.transcript, detail.meta.stats, detail.window));
         })
         .catch((cause: unknown) => {
           setLoadingHistory(false);

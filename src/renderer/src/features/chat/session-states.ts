@@ -199,6 +199,11 @@ export interface SessionEntry {
    * ephemeral。
    */
   pendingEcho: { blocks: readonly string[]; at: number } | null;
+  /**
+   * 盘上的历史种进来过没有（seedFromDisk / seedHistory 置真）。槽由实时事件或 seedRunningPhases 先建时为假：
+   * 打开会话时 seedHistory 据此补种历史，种过的不再碰。
+   */
+  diskSeeded: boolean;
 }
 
 /** 一份运行时报回的思考档真值，连同报它的型号 */
@@ -263,6 +268,7 @@ export const EMPTY_ENTRY: SessionEntry = {
   intentAsk: null,
   rules: null,
   pendingEcho: null,
+  diskSeeded: false,
 };
 
 /**
@@ -600,8 +606,40 @@ export function seedFromDisk(
     // 注入清单不落盘：种盘即清（见字段注释），下一次开轮的推送会再填上
     rules: null,
     pendingEcho: null,
+    diskSeeded: true,
   });
   return next;
+}
+
+/**
+ * 打开一条会话时种盘上的历史（openSession 调）：
+ * - 槽不在：seedFromDisk（老路径，一字未改）。
+ * - 槽在、已从盘上种过：不动（同一个引用）——事件一直实时进槽，再种等于把画面倒回去。
+ * - 槽在、**还没从盘上种过**：窗口晚于事件起来——重启后自动续跑的子会话（槽由 seedRunningPhases 或它的第一条实时事件建）、
+ *   窗口打开前就开跑的自动化轮。槽里只有这一轮的实时条目，之前的历史从没进来过（2026-11-15 真实例：续跑中打开子会话只有
+ *   「回应中」）。把盘上**早于槽里第一条已有记录**的那段并到前面（prependOlder，实时的尾部一个字不动）：盘上的在前；
+ *   从第一条重合的 id 起以实时为准——那之后的盘上记录要么槽里已有，要么它的实时事件还在路上，并进来会重复或乱序。
+ */
+export function seedHistory(
+  states: SessionStates,
+  sessionId: string,
+  transcript: readonly SessionRecord[],
+  stats: AgentStats | null = null,
+  page?: { hasMore: boolean; compactionsBefore: number },
+): SessionStates {
+  const entry = states.get(sessionId);
+  if (entry === undefined) return seedFromDisk(states, sessionId, transcript, stats, page);
+  if (entry.diskSeeded) return states;
+  const known = loadedIds(entry);
+  const overlap = transcript.findIndex((record) => known.has(record.id));
+  const merged = prependOlder(states, sessionId, overlap < 0 ? transcript : transcript.slice(0, overlap), { hasMore: page?.hasMore ?? false });
+  const next = merged.get(sessionId) ?? entry;
+  return new Map(merged).set(sessionId, {
+    ...next,
+    window: { ...next.window, firstId: transcript[0]?.id ?? next.window.firstId, compactionsBefore: page?.compactionsBefore ?? 0 },
+    stats: next.stats ?? stats,
+    diskSeeded: true,
+  });
 }
 
 /** 同一 turnId 只留最后一张（重跑 recall 会追加新记录）。 */
