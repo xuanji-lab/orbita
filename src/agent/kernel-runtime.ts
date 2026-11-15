@@ -15,7 +15,8 @@ import type { Models } from "@earendil-works/pi-ai";
 import type { AgentEvent } from "../shared/agent-ipc.ts";
 import type { KernelCommand, KernelMessage, KernelSessionCommand } from "../shared/kernel.ts";
 import { IntentConfirmWaiter } from "./intent-confirm-wait.ts";
-import { KernelPool } from "./kernel.ts";
+import { join } from "node:path";
+import { forkMigrator, KernelPool } from "./kernel.ts";
 import { kernelChildTag, reapKernelChildren, tagShellCommand } from "./kernel-children.ts";
 import { KernelSessions } from "./kernel-session.ts";
 import { PermissionWaiter, type KernelTurnRuntime } from "./kernel-turn.ts";
@@ -99,6 +100,8 @@ async function init(dir: string): Promise<void> {
       return registerAndResolveModel(runtime, agent.provider, agent.modelId);
     },
     log: (text) => console.error(text),
+    // 迁旧会话交给用完即退的迁移进程（同目录的 kernel-migrator.js）：迁移的内存高水位不留在 kernel 进程里
+    migrateElsewhere: (request) => forkMigrator(join(__dirname, "kernel-migrator.js"), request),
     // 主进程拉起时带了 --expose-gc（host.ts）；没带（比对台直接拉起）就交给 V8 自己
     ...(typeof exposedGc === "function" ? { collectGarbage: () => exposedGc?.() } : {}),
   });

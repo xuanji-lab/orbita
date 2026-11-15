@@ -72,6 +72,8 @@ export default defineConfig({
           "memory-runtime": resolve(__dirname, "src/memory/runtime.ts"),
           // 新内核（pi-durable）：只在开发开关 ORBITA_DURABLE_KERNEL=1 时被拉起（main/agent/kernel-host.ts）
           "kernel-runtime": resolve(__dirname, "src/agent/kernel-runtime.ts"),
+          // 新内核迁旧会话的一次性进程（kernel 进程按需 fork，迁完即退，见 src/agent/kernel-migrator.ts）
+          "kernel-migrator": resolve(__dirname, "src/agent/kernel-migrator.ts"),
         },
         /**
          * @napi-rs/canvas（read_pdf 页图渲染）保持 external：它的入口是一串平台包

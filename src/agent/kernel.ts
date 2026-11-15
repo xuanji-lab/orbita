@@ -14,6 +14,7 @@
  *   的 init 里，SQLite 事务要么全落要么全不落——迁到一半崩溃，重开后库里没有半份。
  *   init 里先查索引，已有就抛哨兵回滚——即使绕过进程内排队，也只会有一份。
  */
+import { fork } from "node:child_process";
 import { open as openFile, rm, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -255,6 +256,59 @@ export interface KernelPoolOptions {
   log?: (text: string) => void;
   /** 迁移大本子时定期收一次垃圾（kernel 进程里注入，见 kernel-gc.ts）；缺席 = 交给 V8 自己 */
   collectGarbage?: () => void;
+  /**
+   * 把迁移交给用完即退的进程（kernel-migrator.ts，见 forkMigrator）：迁移的内存高水位不留在 kernel 进程里。
+   * 只在这个库此刻没别人用时交出去（见 openIn）；进程没起来 / 没回结果就退回本进程里迁。缺席 = 一律本进程迁。
+   */
+  migrateElsewhere?: (request: MigratorRequest) => Promise<KernelOpenResult>;
+}
+
+/** 发给迁移进程的一件事：库目录、库名、会话 id、本子路径、建会话用的设定（不带服务商密钥） */
+export interface MigratorRequest {
+  dir: string;
+  library: string;
+  sessionId: string;
+  piSessionFile: string;
+  agent: Omit<KernelAgent, "provider">;
+}
+
+export type MigratorReply = { type: "result"; result: KernelOpenResult } | { type: "error"; message: string };
+
+/** 迁移进程没起来 / 中途没了：调用方退回本进程迁 */
+export class MigratorUnavailable extends Error {}
+
+/**
+ * 拉起一次迁移进程（kernel-migrator.js），等它回结果。Electron 的 utility 进程里 process.execPath 是 Electron 本体，
+ * ELECTRON_RUN_AS_NODE 让它当 Node 跑；`node --test` 里就是 node。进程没起来、没回结果就退出、超时：抛 MigratorUnavailable。
+ */
+export function forkMigrator(script: string, request: MigratorRequest, timeoutMs = 10 * 60 * 1000): Promise<KernelOpenResult> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (done: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      done();
+    };
+    const child = fork(script, [], {
+      execPath: process.execPath,
+      execArgv: ["--expose-gc"],
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+      stdio: ["ignore", "inherit", "inherit", "ipc"],
+    });
+    const timer = setTimeout(() => {
+      child.kill();
+      finish(() => reject(new MigratorUnavailable("migrator timed out")));
+    }, timeoutMs);
+    child.once("error", (error) => finish(() => reject(new MigratorUnavailable(error.message))));
+    child.once("exit", (code) => finish(() => reject(new MigratorUnavailable(`migrator exited (${String(code)}) without a result`))));
+    child.once("message", (message) => {
+      const reply = message as MigratorReply;
+      if (reply.type === "result") finish(() => resolve(reply.result));
+      else finish(() => reject(new MigratorUnavailable(reply.message)));
+    });
+    child.send(request);
+  });
 }
 
 interface OpenLibrary {
@@ -278,6 +332,8 @@ export class KernelPool {
   private readonly options: KernelPoolOptions;
   /** 库名 → 打开中 / 已打开的库（Promise 让并发的第一次打开只开一次） */
   private readonly libraries = new Map<string, Promise<OpenLibrary>>();
+  /** 库名 → 交给迁移进程、正在迁的那一段：库在这一段里关着，别人要开它等这一段过去（一个库只有一个写者） */
+  private readonly handedOff = new Map<string, Promise<void>>();
   /** provider sessionId → 会话角色（缓存时长判定用，见 withCacheRetention） */
   private readonly roles = new Map<string, SessionRole>();
 
@@ -295,8 +351,13 @@ export class KernelPool {
     return join(this.options.dir, library);
   }
 
-  /** 打开（或拿已打开的）库。打开失败不缓存失败：下一次再试。 */
-  library(library: string): Promise<OpenLibrary> {
+  /** 打开（或拿已打开的）库。打开失败不缓存失败：下一次再试。库正交给迁移进程时等它迁完再开。 */
+  async library(library: string): Promise<OpenLibrary> {
+    for (let gate = this.handedOff.get(library); gate !== undefined; gate = this.handedOff.get(library)) await gate;
+    return this.openLibrary(library);
+  }
+
+  private openLibrary(library: string): Promise<OpenLibrary> {
     const existing = this.libraries.get(library);
     if (existing !== undefined) return existing;
     const opening = (async (): Promise<OpenLibrary> => {
@@ -379,6 +440,8 @@ export class KernelPool {
     onMigrating?: (state: "running" | "done") => void;
   }): Promise<KernelOpenResult> {
     let opened: OpenLibrary;
+    // 这一次是不是由我们第一次打开这个库（库原来没开着）：只有这样，要迁时才能把库关掉交给迁移进程
+    const fresh = !this.libraries.has(input.library) && !this.handedOff.has(input.library);
     try {
       opened = await this.library(input.library);
     } catch (error) {
@@ -386,15 +449,17 @@ export class KernelPool {
     }
     const running = opened.inflight.get(input.sessionId);
     if (running !== undefined) return running;
-    const work = this.openIn(opened.harness, input).finally(() => opened.inflight.delete(input.sessionId));
+    const work = this.openIn(opened, input, fresh).finally(() => opened.inflight.delete(input.sessionId));
     opened.inflight.set(input.sessionId, work);
     return work;
   }
 
   private async openIn(
-    harness: Harness,
+    opened: OpenLibrary,
     input: { library: string; sessionId: string; legacy: { piSessionFile: string } | null; agent: KernelAgent; onMigrating?: (state: "running" | "done") => void },
+    fresh: boolean,
   ): Promise<KernelOpenResult> {
+    let harness = opened.harness;
     const started = (this.options.now ?? Date.now)();
     const elapsed = (): number => (this.options.now ?? Date.now)() - started;
     try {
@@ -449,6 +514,13 @@ export class KernelPool {
       }
       input.onMigrating?.("running");
       try {
+        // 库是这一次才打开的、此刻只有这一条在开：关掉库，交给迁移进程迁（内存高水位不留在 kernel 进程里）。
+        // 库原来就开着（同一棵树里别的会话在用）不交——关库会打断它们；那就在本进程里迁
+        if (this.options.migrateElsewhere !== undefined && fresh && opened.inflight.size === 1) {
+          const handed = await this.handOff(input, elapsed);
+          if (handed !== null) return handed;
+          harness = (await this.library(input.library)).harness;
+        }
         return await this.migrate(harness, input.library, input.sessionId, input.legacy.piSessionFile, agent, replacing, input.agent.role, elapsed);
       } finally {
         input.onMigrating?.("done");
@@ -543,6 +615,37 @@ export class KernelPool {
     }
     await this.remember(harness, conversationId, role);
     return { ok: true, conversationId, migrated: true, remigrated: replacing !== undefined, entries: written, legacy: { bytes: before.bytes, mtimeMs: before.mtimeMs }, ms: elapsed() };
+  }
+
+  /**
+   * 把这一次迁移交给迁移进程：关库（开着的门挂上，别人要开等着）→ 迁移进程开库、迁、写索引、关库退出 → 重开库，
+   * 读索引拿到会话号。迁移进程如实迁失败（本子坏了等）原样返回；进程没起来 / 中途没了返回 null，调用方在本进程里迁
+   * （迁到一半的那份在墓碑里，重开库时已清掉；它要是其实迁完了，本进程迁的最后一次提交看到索引已有，用那一份）。
+   */
+  private async handOff(
+    input: { library: string; sessionId: string; legacy: { piSessionFile: string } | null; agent: KernelAgent },
+    elapsed: () => number,
+  ): Promise<KernelOpenResult | null> {
+    const migrateElsewhere = this.options.migrateElsewhere;
+    if (migrateElsewhere === undefined || input.legacy === null) return null;
+    let release = (): void => undefined;
+    this.handedOff.set(input.library, new Promise<void>((resolve) => (release = resolve)));
+    let result: KernelOpenResult | null;
+    try {
+      await this.close(input.library);
+      const { provider: _provider, ...agent } = input.agent;
+      result = await migrateElsewhere({ dir: this.options.dir, library: input.library, sessionId: input.sessionId, piSessionFile: input.legacy.piSessionFile, agent });
+    } catch (error) {
+      this.options.log?.(`[kernel] ${input.sessionId} 迁移进程没完成（${error instanceof Error ? error.message : String(error)}），改在本进程里迁`);
+      result = null;
+    } finally {
+      this.handedOff.delete(input.library);
+      release();
+    }
+    if (result === null || !result.ok) return result;
+    const { harness } = await this.library(input.library);
+    await this.remember(harness, result.conversationId, input.agent.role);
+    return { ...result, ms: elapsed() };
   }
 
   /** 记下这条会话的 provider sessionId → 角色（缓存时长按它判） */

@@ -12,7 +12,7 @@ import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/provid
 import { buildSessionContext, convertToLlm, migrateSessionEntries, parseSessionEntries, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { ConversationId, Storage } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { kernelCompaction, kernelSettings, KernelPool, LegacyPrintDoc, SessionIndexDoc, withBillingPatch, withCacheRetention, type KernelAgent } from "./kernel.ts";
+import { forkMigrator, kernelCompaction, kernelSettings, KernelPool, LegacyPrintDoc, MigratorUnavailable, SessionIndexDoc, withBillingPatch, withCacheRetention, type KernelAgent, type MigratorRequest } from "./kernel.ts";
 import { WireDoc } from "./kernel-wire.ts";
 import { piRequestOptions } from "./kernel-prompt.ts";
 import { compactionKeepRecentTokens, compactionReserveTokens } from "./compaction-settings.ts";
@@ -359,6 +359,82 @@ describe("旧会话惰性迁移（剧本第 10、11、13 条）", () => {
     assert.equal(missing.ok, false);
     const fine = await kernel.open({ library: "r.sqlite", sessionId: "good", legacy: { piSessionFile: good }, agent: AGENT });
     assert.ok(fine.ok);
+    await kernel.closeAll();
+  });
+});
+
+describe("迁移交给用完即退的进程（kernel 进程的内存高水位不被迁移顶上去）", () => {
+  async function bookFile(dir: string): Promise<string> {
+    const file = join(dir, "book.jsonl");
+    await writeFile(file, COMPACTED);
+    return file;
+  }
+
+  it("库是这一次才打开的：关库交出去，迁移进程迁完，重开库读到同一份；交出去的那一段里别人开这个库要等", async () => {
+    const dir = await tempDir();
+    const file = await bookFile(dir);
+    const order: string[] = [];
+    let kernel: KernelPool | null = null;
+    const migrateElsewhere = async (request: MigratorRequest) => {
+      order.push("handed");
+      // 交出去的那一段：另一个调用方开同一个库，要等迁移进程迁完
+      const waiting = kernel?.library(request.library).then(() => order.push("other opened"));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      order.push("migrating");
+      const elsewhere = pool(request.dir);
+      const result = await elsewhere.open({ library: request.library, sessionId: request.sessionId, legacy: { piSessionFile: request.piSessionFile }, agent: { ...request.agent, provider: null } });
+      await elsewhere.closeAll();
+      order.push("migrated");
+      void waiting;
+      return result;
+    };
+    kernel = pool(dir, { migrateElsewhere });
+    const opened = await kernel.open({ library: "r.sqlite", sessionId: "r", legacy: { piSessionFile: file }, agent: AGENT });
+    assert.ok(opened.ok && opened.migrated);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(order, ["handed", "migrating", "migrated", "other opened"]);
+    assert.deepEqual(fingerprints(await migratedContext(kernel, "r.sqlite", opened.conversationId)), fingerprints(oldContext(COMPACTED)));
+    // 再开一次：索引里有，不再迁
+    const again = await kernel.open({ library: "r.sqlite", sessionId: "r", legacy: { piSessionFile: file }, agent: AGENT });
+    assert.ok(again.ok && !again.migrated && again.conversationId === opened.conversationId);
+    await kernel.closeAll();
+  });
+
+  it("迁移进程没完成（没起来 / 中途没了）：退回本进程迁，结果一样", async () => {
+    const dir = await tempDir();
+    const file = await bookFile(dir);
+    const kernel = pool(dir, { migrateElsewhere: async () => Promise.reject(new MigratorUnavailable("no process")) });
+    const opened = await kernel.open({ library: "r.sqlite", sessionId: "r", legacy: { piSessionFile: file }, agent: AGENT });
+    assert.ok(opened.ok && opened.migrated);
+    assert.deepEqual(fingerprints(await migratedContext(kernel, "r.sqlite", opened.conversationId)), fingerprints(oldContext(COMPACTED)));
+    await kernel.closeAll();
+  });
+
+  it("库原来就开着（同一棵树里别的会话在用）：不交，在本进程里迁", async () => {
+    const dir = await tempDir();
+    const file = await bookFile(dir);
+    let handed = 0;
+    const kernel = pool(dir, {
+      migrateElsewhere: async () => {
+        handed++;
+        return Promise.reject(new MigratorUnavailable("should not be called"));
+      },
+    });
+    const parent = await kernel.open({ library: "r.sqlite", sessionId: "r", legacy: null, agent: AGENT });
+    assert.ok(parent.ok);
+    const child = await kernel.open({ library: "r.sqlite", sessionId: "c", legacy: { piSessionFile: file }, agent: { ...AGENT, role: "child" } });
+    assert.ok(child.ok && child.migrated);
+    assert.equal(handed, 0);
+    await kernel.closeAll();
+  });
+
+  it("真的拉起迁移进程（kernel-migrator.ts）：迁完回结果、进程退出，库里是同一份", async () => {
+    const dir = await tempDir();
+    const file = await bookFile(dir);
+    const kernel = pool(dir, { migrateElsewhere: (request) => forkMigrator(join(import.meta.dirname, "kernel-migrator.ts"), request, 60_000) });
+    const opened = await kernel.open({ library: "r.sqlite", sessionId: "r", legacy: { piSessionFile: file }, agent: AGENT });
+    assert.ok(opened.ok && opened.migrated, JSON.stringify(opened));
+    assert.deepEqual(fingerprints(await migratedContext(kernel, "r.sqlite", opened.conversationId)), fingerprints(oldContext(COMPACTED)));
     await kernel.closeAll();
   });
 });
