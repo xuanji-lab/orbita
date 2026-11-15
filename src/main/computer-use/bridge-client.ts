@@ -298,6 +298,7 @@ export async function fetchGuestUiaList(
     rectMoved: Math.max(0, Math.round(numberOr(resp.rectMoved, 0))),
     truncated: resp.truncated === true,
     passwordFields: Math.max(0, Math.round(numberOr(resp.passwordFields, 0))),
+    editFields: Math.max(0, Math.round(numberOr(resp.editFields, 0))),
   };
   if (reply.mode === "diff") {
     const since = resp.since;

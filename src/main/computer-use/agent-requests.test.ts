@@ -170,7 +170,7 @@ function fakeGuest(options: {
           unchanged: 0,
           rectMoved: 0,
           truncated: false,
-          passwordFields: 0,
+          passwordFields: 0, editFields: 0,
         }
       );
     },
@@ -555,7 +555,7 @@ describe("applyComputerUseRequest：UIA 车道（uia-list / uia-act，桥 0.10.0
         unchanged: 7,
         rectMoved: 0,
         truncated: false,
-        passwordFields: 0,
+        passwordFields: 0, editFields: 0,
       },
     });
     const outcome = await run(guest, { action: "uia-list", window: 4321, since: 4 });
@@ -584,6 +584,7 @@ describe("applyComputerUseRequest：UIA 车道（uia-list / uia-act，桥 0.10.0
         rectMoved: 0,
         truncated: false,
         passwordFields: 0,
+        editFields: 0,
         note: "记不住那么早的清单了（每个窗口只保留最近 5 代）——这是全量。",
       },
     });
@@ -609,7 +610,7 @@ describe("applyComputerUseRequest：UIA 车道（uia-list / uia-act，桥 0.10.0
         unchanged: 0,
         rectMoved: 0,
         truncated: true,
-        passwordFields: 0,
+        passwordFields: 0, editFields: 0,
       },
     });
     const outcome = await run(truncated.guest, { action: "uia-list", window: "记事", maxItems: 1 });
@@ -839,7 +840,7 @@ describe("applyComputerUseRequest：密码框遮罩（桥 0.12.0）", () => {
         unchanged: 0,
         rectMoved: 0,
         truncated: false,
-        passwordFields: 1,
+        passwordFields: 1, editFields: 0,
       },
     });
     const outcome = await run(guest, { action: "uia-list", window: 4321 });
@@ -848,5 +849,50 @@ describe("applyComputerUseRequest：密码框遮罩（桥 0.12.0）", () => {
     assert.match(outcome.text, /g2:r1 · edit \(automationId password\) · supports value, password/);
     assert.match(outcome.text, /1 password field\(s\) are in this window/);
     assert.match(outcome.text, /screenshots of this window will black them out/);
+  });
+
+  test("uia-list：有输入框但一个密码框都没认出 → 明确警告「树可能还没长完，截图不会遮」", async () => {
+    // 真机现场（2026-11-15 验收）：登录页刚打开 +2.5s 只看到 17 条、0 个密码框，
+    // +4.5s 才 20 条、1 个。这 2 秒里截图不遮也不报警——所以「有 edit 没 password」
+    // 必须给模型一句人话，而不是沉默。
+    const { guest } = fakeGuest({
+      uiaList: {
+        ok: true,
+        hwnd: 4321,
+        window: { title: "Sign in", className: "Chrome_WidgetWin_1" },
+        generation: 1,
+        mode: "full",
+        items: [
+          {
+            ref: "g1:r1",
+            stableId: "rt:1",
+            name: "",
+            controlType: "edit",
+            automationId: "user",
+            className: "Edit",
+            x: 10,
+            y: 20,
+            w: 200,
+            h: 24,
+            patterns: ["value"],
+            enabled: true,
+            offscreen: false,
+            isPassword: false,
+          },
+        ],
+        removed: [],
+        unchanged: 0,
+        rectMoved: 0,
+        truncated: false,
+        passwordFields: 0,
+        editFields: 1,
+      },
+    });
+    const outcome = await run(guest, { action: "uia-list", window: 4321 });
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.match(outcome.text, /1 input field\(s\) but no password field was recognised/);
+    assert.match(outcome.text, /control tree may still be growing/);
+    assert.doesNotMatch(outcome.text, /password field\(s\) are in this window/);
   });
 });

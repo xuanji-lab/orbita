@@ -390,6 +390,8 @@ function uiaListText(reply: {
   rectMoved: number;
   truncated: boolean;
   passwordFields: number;
+  /** 树里的输入框个数（含密码框）；用来发现「登录页还没长完」 */
+  editFields: number;
   note?: string;
 }): string {
   const title = reply.window.title === "" ? "(no title)" : reply.window.title;
@@ -399,7 +401,11 @@ function uiaListText(reply: {
     reply.passwordFields > 0
       ? `. ${reply.passwordFields} password field(s) are in this window: never put a secret in them and do not ` +
         "try to read them. Their positions are remembered, so screenshots of this window will black them out"
-      : "";
+      : reply.editFields > 0
+        ? `. This window has ${reply.editFields} input field(s) but no password field was recognised: if this ` +
+          "is a login page that just opened, its control tree may still be growing — list again a moment " +
+          "later before screenshotting, or the password box will not be blacked out yet"
+        : "";
   const noteLine = reply.note === undefined ? "" : `\nNote: ${reply.note}`;
   const body =
     reply.mode === "diff" ? uiaDiffBody(reply) : reply.items.map(uiaItemLine).join("\n");

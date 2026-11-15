@@ -114,6 +114,14 @@ internal sealed class UiaSnapshot
     public bool Truncated;
     public int PasswordFields;
     /**
+     * 树里有多少个输入框（`edit` 类型，含密码框）。**为什么单列这个数**：密码遮罩靠
+     * `uia-list` 记下的密码框位置，可页面刚加载时控件树还没长完（实测 +2.5s 只有 17 条、
+     * 0 个密码框，+4.5s 才是 20 条、1 个），这时截图不会遮、也不报警——登录页刚打开就
+     * 「list 一次再截图」有一个约 2 秒的裸奔窗口。宿主据此在「有输入框但没认出密码框」
+     * 时给模型一句警告（2026-11-15 验收获证）。
+     */
+    public int EditFields;
+    /**
      * 整棵可动作控件树的指纹（stable id + 名字 + 类型 + 模式 + enabled/offscreen + 矩形）。
      * **只用来判断「这一次与上一代是不是同一张清单」**：相同就复用上一代的代次，
      * 让刚发出去的 ref 不作废。见 FingerprintOf 的注释。
@@ -1608,6 +1616,13 @@ internal static class Uia
             snapshot.ClassName = windowClass;
             snapshot.Truncated = truncated;
             snapshot.PasswordFields = passwordRects.Count;
+            int editFields = 0;
+            for (int i = 0; i < snapshot.Items.Count; i++)
+            {
+                if (string.Equals(snapshot.Items[i].ControlType, "edit", StringComparison.OrdinalIgnoreCase))
+                    editFields++;
+            }
+            snapshot.EditFields = editFields;
             snapshot.Pointers = retained;
 
             // **代次在这里定**：树没变就复用上一代。
@@ -1679,7 +1694,8 @@ internal static class Uia
             json.Append("],\"unchanged\":").Append(diff == null ? 0 : diff.Unchanged)
                 .Append(",\"rectMoved\":").Append(diff == null ? 0 : diff.RectMoved)
                 .Append(",\"truncated\":").Append(truncated ? "true" : "false")
-                .Append(",\"passwordFields\":").Append(passwordFields);
+                .Append(",\"passwordFields\":").Append(passwordFields)
+                .Append(",\"editFields\":").Append(snapshot.EditFields);
 
             string note = plan.Note;
             if (diff != null && truncated)

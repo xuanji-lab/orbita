@@ -440,6 +440,10 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       "**Refs expire when the control tree changes**, not on every query: listing twice in a row keeps your refs " +
       "valid (the generation only goes up when something actually changed). After a real change the old token is " +
       "rejected with the reason and the current generation, so just list again and copy the new token. " +
+      "**A login page that just opened is the one case where the masking is not ready**: the control tree " +
+      "keeps growing for the first couple of seconds, so the first list may report input fields but no password " +
+      "field (the answer says so explicitly) — list again a moment later before you screenshot, or the password " +
+      "box will not be blacked out yet. " +
       "Listing also records " +
       "where that window's **native** password fields are, " +
       "so later screenshots can black them out. Browser page content is not exposed to UI Automation, so this covers " +
