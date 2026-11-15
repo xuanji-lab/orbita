@@ -6,7 +6,7 @@ import { prefillLeft, reconcileLeft } from "./carryover-prefill.ts";
 import type { TranscriptItem } from "@shared/transcript";
 import { api } from "../../api";
 import type { IntentRecallRecord } from "@shared/session";
-import { resumePolicy } from "@shared/kernel";
+import { awaitsContinue, restartNote } from "@shared/kernel";
 import type { RecallCardState } from "@shared/intent-recall";
 import type { IntentConfirmDecision } from "@shared/intent-confirm";
 import { splitEchoBlocks } from "../../../../shared/prompt-attachments.ts";
@@ -207,6 +207,8 @@ export interface ChatSession {
   approvalsOf: (id: string) => readonly PendingApproval[];
   /** 按 id 查是否停在「计划等你确认」上——状态饼「在等你」的第二个来源（plan-timeline 的 planAwaitingIn） */
   planAwaitingOf: (id: string) => boolean;
+  /** 按 id 查子会话是否被崩溃打断、停着等人点「继续」（@shared/kernel 的 awaitsContinue）——「在等你」的第三个来源 */
+  interruptedOf: (id: string) => boolean;
   /**
    * 按 id 取整个槽（没载过 = undefined）。首页会话卡要说「此刻在干什么」：后台在跑的会话
    * 槽里有它这一轮的过程，不另存——与 phaseOf 同一套 ref 读法，引用稳定
@@ -593,6 +595,7 @@ export interface SessionEngine {
   readonly turnErrorOf: (id: string) => string | null;
   readonly approvalsOf: (id: string) => readonly PendingApproval[];
   readonly planAwaitingOf: (id: string) => boolean;
+  readonly interruptedOf: (id: string) => boolean;
   readonly entryOf: (id: string) => SessionEntry | undefined;
   readonly answerApproval: (requestId: string, answer: PermissionAnswer) => void;
   /** 意图确认卡的回答（实验功能 intent-system） */
@@ -1355,6 +1358,16 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     if (entry === undefined || entry.phase !== "idle") return false;
     return planAwaitingIn(selectTranscript(entry.transcript));
   }, []);
+  // 被崩溃打断、停着等人点「继续」的子会话（「等你」的第三个来源）：判断只在 @shared/kernel，这里只喂「此刻在不在跑」。
+  // 开关关着时不算——那时这条会话只能读、点不了继续，亮一个永远消不掉的「等你」只会误导
+  const interruptedOf = useCallback(
+    (id: string): boolean => {
+      if (kernelDurable !== true) return false;
+      const meta = sessions.find((entry) => entry.id === id);
+      return meta !== undefined && awaitsContinue(meta, (statesRef.current.get(id)?.phase ?? "idle") !== "idle");
+    },
+    [kernelDurable, sessions],
+  );
   const entryOf = useCallback((id: string): SessionEntry | undefined => statesRef.current.get(id), []);
 
   return {
@@ -1395,6 +1408,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     turnErrorOf,
     approvalsOf,
     planAwaitingOf,
+    interruptedOf,
     entryOf,
     answerApproval,
     renameSession,
@@ -3495,6 +3509,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     turnErrorOf: engine.turnErrorOf,
     approvalsOf: engine.approvalsOf,
     planAwaitingOf: engine.planAwaitingOf,
+    interruptedOf: engine.interruptedOf,
     entryOf: engine.entryOf,
     error: engine.error,
     draft,
@@ -3559,9 +3574,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       (entry.turnContinuable || (engine.kernelDurable === true && entry.turnError === null && liveMeta?.durable?.running === true)),
     migrating: entry.migrating,
     migratingExpected: entry.migratingExpected,
-    // 子会话在应用重启后被自动接着跑过（后台任务照常续跑）：界面说一句，直到下一次由人或父开的轮
-    resumedAfterRestart: engine.kernelDurable === true && liveMeta?.parentId !== undefined && liveMeta.durable?.resumed !== undefined,
-    interruptedByCrash: engine.kernelDurable === true && !entry.turnContinuable && liveMeta !== null && resumePolicy(liveMeta) === "crashed",
+    // 子会话在应用重启后被自动接着跑过（后台任务照常续跑）：界面说一句，直到下一次由人或父开的轮。
+    // 与「被打断了 · 继续」只出一句（restartNote：崩溃压过旧的 resumed）
+    resumedAfterRestart: engine.kernelDurable === true && liveMeta !== null && restartNote(liveMeta, entry.phase !== "idle") === "resumed",
+    interruptedByCrash: engine.kernelDurable === true && !entry.turnContinuable && liveMeta !== null && restartNote(liveMeta, entry.phase !== "idle") === "crashed",
     continueTurn: continueHere,
     openSession,
     renameSession: engine.renameSession,

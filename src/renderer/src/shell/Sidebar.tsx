@@ -90,8 +90,8 @@ function openTodoCount(carryovers: readonly Carryover[], sessionId: string): num
  * 状态饼的 tooltip：见 completion-notice.ts 的 runStateLabel（侧栏行与铃铛清单
  * 同一套句子）。包一层是让调用点读起来像个本地词。
  */
-function barLabel(state: "running" | "waiting" | "done" | "failed", t: Messages): string {
-  return runStateLabel(state, t);
+function barLabel(state: "running" | "waiting" | "done" | "failed", t: Messages, childInterrupted: boolean): string {
+  return runStateLabel(state, t, childInterrupted);
 }
 
 /** 已归档 / 以后再做的选择条：有「任务」档，没有「全局」档 */
@@ -1881,7 +1881,7 @@ function SessionRow(props: {
           iconTitle={status?.label}
           active={props.active}
           bar={bar ?? undefined}
-          barTitle={bar === null ? undefined : barLabel(bar, t)}
+          barTitle={bar === null ? undefined : barLabel(bar, t, children.some((child) => session.interruptedOf(child.id)))}
           onClick={props.onClick}
           style={{ flex: 1, minWidth: 0 }}
         />

@@ -151,7 +151,8 @@ export function planNotice(input: { watched: boolean; windowActive: boolean; sou
  * - `"running"`：在跑（1/3 蓝）——自己或任一直接子会话的 phase 不是 idle。
  *   子会话在跑算母会话在跑：侧栏只列根会话，母会话的行就是那个任务的唯一入口；
  *   行首状态槽的 git-fork 再说「是孩子在跑」这一句。
- * - `"waiting"`：在等你回复（2/3 橙）——自己或任一直接子会话挂着工具审批。
+ * - `"waiting"`：在等你回复（2/3 橙）——自己或任一直接子会话挂着工具审批；或任一直接子会话被崩溃打断、
+ *   停着等你点「继续」（父会话也一直在等它，不点就卡着）。
  *   子会话的审批亮在母会话那一行（同上：入口在母）。今天接的是审批，以后的
  *   「问用户问题」也走这一档。
  * - `"done"`：跑完、还没看（3/3 绿）——meta 上的未读标记（落盘，重启后还在）。
@@ -175,6 +176,11 @@ export interface RunSlot {
    * 会把它画成跑完的绿饼。缺席 = 否。
    */
   planAwaiting?: boolean;
+  /**
+   * 子会话被崩溃打断、停着等人点「继续」（@shared/kernel 的 awaitsContinue）。算「等你」的第三个来源——不加的话
+   * 父会话行与入口什么都不亮，用户得逐个点开子会话才发现它停了，父会话一直等（2026-11-15 真模型试用）。缺席 = 否。
+   */
+  interrupted?: boolean;
 }
 
 export function sessionRunState(input: {
@@ -186,7 +192,7 @@ export function sessionRunState(input: {
   unread: { at: number; failed: boolean } | null;
 }): SessionRunState {
   const slots = [input.slot, ...input.children];
-  if (slots.some((slot) => slot !== undefined && (slot.approvals > 0 || slot.planAwaiting === true))) return "waiting";
+  if (slots.some((slot) => slot !== undefined && (slot.approvals > 0 || slot.planAwaiting === true || slot.interrupted === true))) return "waiting";
   if (slots.some((slot) => slot !== undefined && slot.phase !== "idle")) return "running";
   if (input.unread === null) return null;
   return input.unread.failed ? "failed" : "done";
@@ -243,9 +249,14 @@ export function orderNoticeEntries<T extends { tier: NoticeTier; at: number }>(
 export function runStateLabel(
   state: Exclude<SessionRunState, null>,
   t: Messages,
+  /**
+   * 有直接子会话被崩溃打断、等你点「继续」：「等你」这一档说清等的是什么——饼与审批同一个 2/3 橙，
+   * 只看饼会以为要去批什么（2026-11-15 真模型试用）。缺席 = 否。
+   */
+  childInterrupted = false,
 ): string {
   if (state === "running") return t.rowStatus.running;
-  if (state === "waiting") return t.rowStatus.waiting;
+  if (state === "waiting") return childInterrupted ? t.rowStatus.subInterrupted : t.rowStatus.waiting;
   if (state === "failed") return t.rowStatus.unreadFailed;
   return t.rowStatus.unread;
 }
@@ -257,6 +268,8 @@ export interface RunStateSource {
   approvalsOf(id: string): readonly unknown[];
   /** 停在「计划等你确认」上（缺席 = 不认这个来源） */
   planAwaitingOf?(id: string): boolean;
+  /** 子会话被崩溃打断、等你点「继续」（缺席 = 不认这个来源） */
+  interruptedOf?(id: string): boolean;
 }
 
 /**
@@ -276,6 +289,7 @@ export function runStateOf(source: RunStateSource, meta: SessionMeta): SessionRu
       phase: source.phaseOf(child.id),
       approvals: source.approvalsOf(child.id).length,
       planAwaiting: source.planAwaitingOf?.(child.id) ?? false,
+      interrupted: source.interruptedOf?.(child.id) ?? false,
     })),
     unread: meta.unread ?? null,
   });

@@ -468,11 +468,11 @@ export function App() {
    */
   const subSessionChildren = channelParentId === null ? [] : childSessions(session.sessions, channelParentId);
   const hasSubSessions = subSessionChildren.length > 0;
-  /** 「在等你」的子会话数（question + 待审批）：右栏入口的角标，为 0 不显示 */
-  const waitingOnYou = subSessionChildren.filter((meta) => {
-    const status = subSessionStatusOf(meta.id, channelSummaries.get(meta.id)?.status, engine);
-    return status === "waiting" || status === "approval";
-  }).length;
+  /** 「在等你」的子会话数（question + 待审批 + 被崩溃打断等你点继续）：右栏入口的角标，为 0 不显示 */
+  const subStatuses = subSessionChildren.map((meta) => subSessionStatusOf(meta.id, channelSummaries.get(meta.id)?.status, engine));
+  const waitingOnYou = subStatuses.filter((status) => status === "waiting" || status === "approval" || status === "interrupted").length;
+  /** 其中被崩溃打断、等你点「继续」的：子会话入口的提示里单说一句（只说「等你」会以为是去批什么） */
+  const interruptedChildren = subStatuses.filter((status) => status === "interrupted").length;
 
   /**
    * 面板两层状态机（`sub-sessions-state.ts`，原样搬自旧 wip）：App 持有，
@@ -874,6 +874,7 @@ export function App() {
           phase: session.phaseOf(child.id),
           approvals: session.approvalsOf(child.id).length,
           planAwaiting: session.planAwaitingOf(child.id),
+          interrupted: session.interruptedOf(child.id),
         })),
         unread: meta.unread ?? null,
       });
@@ -891,7 +892,7 @@ export function App() {
     }
     return orderNoticeEntries(rows);
     // phaseOf / approvalsOf 引用稳定（useCallback([])），槽变化靠 engine.states 进依赖
-  }, [session.sessions, session.workspaces, session.phaseOf, session.approvalsOf, session.planAwaitingOf, engine.states]);
+  }, [session.sessions, session.workspaces, session.phaseOf, session.approvalsOf, session.planAwaitingOf, session.interruptedOf, engine.states]);
   /** 铃铛清单点行：主槽打开它；有未读的话顺手清（watchedKey 那一拍也会清，
    *  但它若已在主槽就没有那一拍了，这里兑底） */
   const openFromNotice = useCallback(
@@ -1403,7 +1404,7 @@ export function App() {
               }
             : null
         }
-        subChip={hasSubSessions ? { count: subSessionChildren.length, waiting: waitingOnYou } : null}
+        subChip={hasSubSessions ? { count: subSessionChildren.length, waiting: waitingOnYou, interrupted: interruptedChildren } : null}
         onOpenSubSessions={openSubSessionsList}
         crumb={
           capsuleParentId !== undefined

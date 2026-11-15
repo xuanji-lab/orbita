@@ -1977,8 +1977,16 @@ html[data-pointer-drag] iframe {
 }
 
 /* 「在问你」的行下展开的回答框：代父回信（channel:speak），Enter 发送 */
-.channel-reply-box {
+/* 被崩溃打断的行（.inbox-row-resume）：行下一句说明 + 「继续」（.notice-exit，与子会话页那一行同一个键），左起与回答框同一条线 */
+.channel-reply-box,
+.inbox-row-resume {
   padding: 0 var(--space-3) var(--space-2) calc(var(--space-2) + 3px + var(--space-2));
+}
+
+.inbox-row-resume {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
 }
 
 .channel-reply-error {

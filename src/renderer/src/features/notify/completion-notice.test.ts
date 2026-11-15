@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   aggregateRunStates,
   runStateOf,
+  runStateLabel,
   noticeTierOf,
   orderNoticeEntries,
   planNotice,
@@ -14,6 +15,7 @@ import {
   type TreeNode,
   type RunSlot,
 } from "./completion-notice.ts";
+import { en } from "../../messages-en.ts";
 
 const slot = (phase: PhaseSlot["phase"], queued = 0): PhaseSlot => ({ phase, queued: Array(queued).fill(null) });
 const map = (entries: Record<string, PhaseSlot>) => new Map(Object.entries(entries));
@@ -151,6 +153,22 @@ describe("runStateOf（侧栏 / 首页卡 / 工作区文件共用）", () => {
       approvalsOf: (id: string) => (id === "c" ? [{}] : []),
     };
     strictEqual(runStateOf(source, meta("p")), "waiting");
+  });
+  it("子会话被崩溃打断、等你点继续 = 母会话在等你（不点父会话一直等）；点了继续在跑 = 在跑", () => {
+    const source = (interrupted: boolean, phase: "idle" | "turn") => ({
+      sessions: [meta("p"), meta("c", "p")],
+      phaseOf: (id: string) => (id === "c" ? phase : ("idle" as const)),
+      approvalsOf: () => [],
+      interruptedOf: (id: string) => id === "c" && interrupted,
+    });
+    strictEqual(runStateOf(source(true, "idle"), meta("p")), "waiting");
+    strictEqual(runStateOf(source(false, "turn"), meta("p")), "running");
+    strictEqual(runStateOf(source(false, "idle"), meta("p")), null);
+  });
+  it("「等你」的提示说清等的是被打断的子会话（饼与审批同色，只看饼会以为要去批什么）", () => {
+    strictEqual(runStateLabel("waiting", en, true), "A sub-session was interrupted · waiting for you to continue it");
+    strictEqual(runStateLabel("waiting", en), en.rowStatus.waiting);
+    strictEqual(runStateLabel("running", en, true), en.rowStatus.running);
   });
 });
 

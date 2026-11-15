@@ -17,6 +17,7 @@ import {
 } from "./ChannelViews";
 import { useChannelMessages, useParentChannels } from "./useChannelMessages";
 import { useChannelSummaries } from "./useChannelSummaries";
+import { delegateCardStatus } from "./sub-sessions-rows";
 import { HOME_CARD_QUERY_ROWS, homeCardLine, selectHomeCards, selectHomeLog, type HomeCardLineText } from "./home-cards";
 import { selectTranscript } from "../../../../shared/transcript-state.ts";
 import { relativeTime } from "../../shell/relative-time.ts";
@@ -1302,6 +1303,7 @@ function ChatViewBody(props: {
       titles,
       channelSummaries,
       childPhaseOf: session.phaseOf,
+      childInterruptedOf: session.interruptedOf,
       openSubSession,
       litSubSessionId,
       channelMessages,
@@ -1314,6 +1316,7 @@ function ChatViewBody(props: {
       titles,
       channelSummaries,
       session.phaseOf,
+      session.interruptedOf,
       openSubSession,
       litSubSessionId,
       channelMessages,
@@ -1533,6 +1536,7 @@ function ChatViewBody(props: {
           phase: session.phaseOf(child.id),
           approvals: session.approvalsOf(child.id).length,
           planAwaiting: session.planAwaitingOf(child.id),
+          interrupted: session.interruptedOf(child.id),
         })),
         unread: meta.unread ?? null,
       });
@@ -1545,6 +1549,7 @@ function ChatViewBody(props: {
       doing: t.homeCard.doing,
       approve: t.homeCard.approve,
       childWaiting: t.homeCard.childWaiting,
+      childInterrupted: t.homeCard.childInterrupted,
       failed: t.homeCard.failed,
       done: t.homeCard.done,
       noText: t.homeCard.noText,
@@ -1562,6 +1567,7 @@ function ChatViewBody(props: {
         meta?.workspaceId === null || meta === undefined
           ? t.sidebar.tasks
           : (session.workspaces.find((w) => w.id === meta.workspaceId)?.name ?? t.sidebar.tasks);
+      const kids = childrenOf.get(sessionId) ?? [];
       const line = homeCardLine(
         {
           state,
@@ -1569,6 +1575,7 @@ function ChatViewBody(props: {
           approval: approval === undefined ? null : { toolName: approval.toolName, input: approval.input },
           turnError: session.turnErrorOf(sessionId),
           lastAsk: meta?.recentQueries[0] ?? null,
+          childInterrupted: kids.some((child) => session.interruptedOf(child.id)) && kids.every((child) => session.approvalsOf(child.id).length === 0),
         },
         lineText,
       );
@@ -5650,15 +5657,11 @@ function DelegateToolLine(props: {
   // 状态优先读通道摘要的终态（done/failed/waiting/stopped）；否则看子会话在 renderer
   // 会话槽里的 phase——不为 idle 就是还在跑（子会话 PR4a 的「状态从哪来」）。
   // stopped 不读的话，用户终止过的子会话在派出卡上会退回「空闲」（验收发现）
-  const status: DelegateCardStatus =
-    summary?.status === "done" ||
-    summary?.status === "failed" ||
-    summary?.status === "waiting" ||
-    summary?.status === "stopped"
-      ? summary.status
-      : props.channel.childPhaseOf(card.childId) !== "idle"
-        ? "running"
-        : "idle";
+  const status: DelegateCardStatus = delegateCardStatus(
+    summary?.status,
+    props.channel.childPhaseOf(card.childId) !== "idle",
+    props.channel.childInterruptedOf(card.childId),
+  );
   const openSubSession = props.channel.openSubSession;
   return (
     <DelegateCardView

@@ -804,6 +804,7 @@ export const en = {
   rowStatus: {
     pinned: "Pinned",
     subRunning: "Sub-session running",
+    subInterrupted: "A sub-session was interrupted · waiting for you to continue it",
     running: "Running",
     waiting: "Waiting for your reply",
     unread: "Finished · not viewed yet",
@@ -828,6 +829,7 @@ export const en = {
     doing: (step: string, now: string) => `${step}: ${now}`,
     approve: (what: string) => `Waiting for your approval: ${what}`,
     childWaiting: "A sub-session is waiting for your approval",
+    childInterrupted: "A sub-session was interrupted and is waiting for you to continue it",
     failed: "Stopped with an error",
     done: "Finished — open it to see the result",
     noText: "(no text)",
@@ -2017,6 +2019,10 @@ export const en = {
     reopenTip: "Reopen this task — clears the done state",
     subSessionCount: (count: number) => plural(count, "sub-session"),
     subSessionWaiting: (waiting: number) => `${waiting} waiting`,
+    /** 子会话入口：等你的全是被崩溃打断的，芯片上直接说「被打断」 */
+    subSessionInterruptedShort: (count: number) => `${count} interrupted`,
+    /** 子会话入口的悬停提示：其中几个被崩溃打断、等你点继续 */
+    subSessionInterrupted: (count: number) => `${count} interrupted · waiting for you to continue`,
     openSubSessions: "Open sub-sessions",
     home: "Home",
     scopeTip: (path: string) => `${path} · switching starts a new task`,
@@ -2316,6 +2322,8 @@ export const en = {
     delegateStatus: {
       running: "running",
       waiting: "waiting for reply",
+      /** 被应用崩溃打断、等你点继续 */
+      interrupted: "interrupted",
       done: "done",
       failed: "failed",
       idle: "idle",
@@ -2362,6 +2370,8 @@ export const en = {
       running: "running",
       waiting: "waiting for you",
       approval: "needs approval",
+      /** 被应用崩溃打断、等你点继续 */
+      interrupted: "interrupted",
       done: "done",
       failed: "failed",
       /** 用户终止（通道 stopped）：比 closed 更硬，父模型的回信不能重开 */

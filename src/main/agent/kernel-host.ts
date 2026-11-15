@@ -59,11 +59,14 @@ export function libraryRoot(meta: SessionMeta | null, sessionId: string): string
 
 /**
  * 开轮交给新内核时的标记：第一次接手记 since；开着一轮置 running。resumed（重启后自动接着跑的子会话）只在
- * 那一次 continue 留着，下一次由人或父开的轮清掉。
+ * **自动续跑的那一次** continue 留着：认法是「这是 continue，而且上一轮是正常退出停下的（stoppedOnQuit）」——只有这种会被
+ * 自动续跑。人点的「继续」（崩溃后，没有 stoppedOnQuit）与下一次由人或父开的轮都清掉它，否则续跑中崩溃、人再点「继续」
+ * 之后，面板还会说「已自动接着跑」。
  */
-export function markRunning(current: DurableMark | undefined, now: number, keepResumed = false): DurableMark {
-  const { resumed, stoppedOnQuit: _stoppedOnQuit, ...rest } = current ?? { since: now };
-  return { ...rest, ...(keepResumed && resumed !== undefined ? { resumed } : {}), running: true };
+export function markRunning(current: DurableMark | undefined, now: number, isContinue = false): DurableMark {
+  const { resumed, stoppedOnQuit, ...rest } = current ?? { since: now };
+  const keepResumed = isContinue && stoppedOnQuit === true && resumed !== undefined;
+  return { ...rest, ...(keepResumed ? { resumed } : {}), running: true };
 }
 
 /** 一轮落定：清 running；迁移那一步失败就记原因（会话回落只读）；应用退出时被停下的留着 running */

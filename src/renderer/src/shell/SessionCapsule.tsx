@@ -34,7 +34,8 @@ export function SessionCapsule(props: {
    */
   completion: CapCompletionState | null;
   /** 左端子会话芯片；null = 留空（用户默认：不放「0」占位，可推翻） */
-  subChip: { count: number; waiting: number } | null;
+  /** interrupted：等你的子会话里被崩溃打断、等你点「继续」的个数（悬停提示单说一句；芯片上照旧只写「N 个等你」） */
+  subChip: { count: number; waiting: number; interrupted: number } | null;
   onOpenSubSessions?: () => void;
   /** 左端面包屑「↑ 父标题」（子会话被 Open as main 时才有）；与子会话芯片同一槽位 */
   crumb: { title: string; onClick: () => void } | null;
@@ -62,14 +63,25 @@ export function SessionCapsule(props: {
             className="cap-subchip"
             onClick={props.onOpenSubSessions}
             title={
-              props.subChip.waiting > 0
-                ? `${t.chat.subSessionCount(props.subChip.count)} · ${t.chat.subSessionWaiting(props.subChip.waiting)}`
-                : t.chat.subSessionCount(props.subChip.count)
+              [
+                t.chat.subSessionCount(props.subChip.count),
+                props.subChip.waiting > 0 ? t.chat.subSessionWaiting(props.subChip.waiting) : null,
+                props.subChip.interrupted > 0 ? t.chat.subSessionInterrupted(props.subChip.interrupted) : null,
+              ]
+                .filter((part): part is string => part !== null)
+                .join(" · ")
             }
           >
             <Icon name={FEATURE_ICON.subsessions} size={12} strokeWidth={1.8} />
             <b>{props.subChip.count}</b>
-            {props.subChip.waiting > 0 && <span>· {t.chat.subSessionWaiting(props.subChip.waiting)}</span>}
+            {props.subChip.waiting > 0 && (
+              <span>
+                ·{" "}
+                {props.subChip.interrupted === props.subChip.waiting
+                  ? t.chat.subSessionInterruptedShort(props.subChip.interrupted)
+                  : t.chat.subSessionWaiting(props.subChip.waiting)}
+              </span>
+            )}
           </button>
         ) : null}
       </div>

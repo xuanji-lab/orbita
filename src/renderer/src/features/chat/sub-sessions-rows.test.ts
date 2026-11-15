@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import type { ChannelMessage } from "@shared/channel";
 import type { Messages } from "../../messages-en.ts";
 import {
+  delegateCardStatus,
   latestChannelLine,
   sortSubSessionRows,
   subSessionBarFill,
@@ -99,6 +100,18 @@ describe("subSessionStatusOf", () => {
 
   it("没有摘要（还没拉到）也按槽走，不因缺席先验成 idle", () => {
     strictEqual(subSessionStatusOf("c1", undefined, engine(["c1"], [])), "running");
+  });
+
+  it("被崩溃打断、等你点继续：判 interrupted，排进「等你」、亮 2/3 橙；用户终止过的仍是 stopped", () => {
+    const crashed: SubSessionEngineSlots = { ...engine([], []), interruptedOf: (id) => id === "c1" };
+    strictEqual(subSessionStatusOf("c1", "running", crashed), "interrupted");
+    strictEqual(subSessionStatusOf("c1", "stopped", crashed), "stopped");
+    strictEqual(subSessionBarFill("interrupted"), "waiting");
+    const rows = sortSubSessionRows([
+      { status: "running" as const, lastAt: 9 },
+      { status: "interrupted" as const, lastAt: 1 },
+    ]);
+    strictEqual(rows[0]?.status, "interrupted");
   });
 });
 
@@ -231,5 +244,15 @@ describe("latestChannelLine（收件箱行的最新一句）", () => {
     strictEqual(latestChannelLine(taskOnly, "idle", t), "还没说话");
     strictEqual(latestChannelLine(undefined, "running", t), "在跑 · 还没说话");
     strictEqual(latestChannelLine([], "stopped", t), "还没说话");
+  });
+});
+
+describe("delegateCardStatus（父会话转录里派出卡的状态）", () => {
+  it("通道终态优先；在跑 = running；被崩溃打断等你继续 = interrupted（不是「空闲」）；都不是 = idle", () => {
+    strictEqual(delegateCardStatus("done", false, true), "done");
+    strictEqual(delegateCardStatus("stopped", false, true), "stopped");
+    strictEqual(delegateCardStatus("running", true, false), "running");
+    strictEqual(delegateCardStatus("running", false, true), "interrupted");
+    strictEqual(delegateCardStatus(undefined, false, false), "idle");
   });
 });

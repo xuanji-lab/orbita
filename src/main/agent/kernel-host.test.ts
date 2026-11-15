@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SessionMeta } from "../../shared/session.ts";
+import type { DurableMark, SessionMeta } from "../../shared/session.ts";
 import { DURABLE_MOVED_MESSAGE, durableKernelEnabled, editRouteFor, KernelHost, legacyBookBytes, libraryRoot, markRunning, markSettled, routeFor, sessionsToResume } from "./kernel-host.ts";
-import { resumePolicy } from "../../shared/kernel.ts";
+import { awaitsContinue, restartNote, resumePolicy } from "../../shared/kernel.ts";
 
 const dirs: string[] = [];
 after(async () => {
@@ -88,9 +88,38 @@ describe("重启后接着跑：只续子会话（后台任务），树根给「�
     assert.equal(resumePolicy({ parentId: "r", durable: { since: 1, running: true, failed: "坏" } }), null);
     assert.equal(resumePolicy({ parentId: "r" }), null);
   });
-  it("resumed 只留给那一次 continue：下一次由人开的轮清掉", () => {
-    assert.deepEqual(markRunning({ since: 1, resumed: 5 }, 9, true), { since: 1, resumed: 5, running: true });
+  it("resumed 只留给自动续跑的那一次 continue：人点的「继续」与下一次由人开的轮都清掉", () => {
+    assert.deepEqual(markRunning({ since: 1, running: true, stoppedOnQuit: true, resumed: 5 }, 9, true), { since: 1, resumed: 5, running: true });
+    // 崩溃后人点「继续」：也是 continue，但上一轮不是正常退出停的——resumed 是更早那次的旧账
+    assert.deepEqual(markRunning({ since: 1, running: true, resumed: 5 }, 9, true), { since: 1, running: true });
     assert.deepEqual(markRunning({ since: 1, resumed: 5 }, 9), { since: 1, running: true });
+  });
+  it("先正常退出重启（自动续跑）→ 续跑中崩溃重启 → 点继续 → 跑完：面板每一刻只说一句，点了继续不再说旧的", () => {
+    const child = (durable: DurableMark): Pick<SessionMeta, "parentId" | "durable"> => ({ parentId: "root", durable });
+    // 子会话在跑 → 正常退出：停下的轮落定为 interrupted
+    let mark = markSettled(markRunning(undefined, 1), { ok: false, reason: "shutdown", interrupted: true }, 2);
+    assert.equal(resumePolicy(child(mark)), "resume");
+    // 重启：index.ts 先记 resumed，再走 continue 的开轮（route 的 markRunning）
+    mark = markRunning({ ...mark, resumed: 3 }, 3, true);
+    assert.equal(restartNote(child(mark), true), "resumed", "自动续跑那一轮在跑：说「已自动接着跑」，不说被打断");
+    // 续跑那一轮里崩溃：什么都写不上，meta 停在 { resumed, running }
+    assert.equal(resumePolicy(child(mark)), "crashed");
+    assert.equal(restartNote(child(mark), false), "crashed", "崩溃压过旧的 resumed：只说「被打断了 · 继续」");
+    assert.equal(awaitsContinue(child(mark), false), true);
+    // 人点「继续」：在跑——不再等你；跑完落定：两句都不说
+    mark = markRunning(mark, 4, true);
+    assert.equal(awaitsContinue(child(mark), true), false);
+    assert.equal(restartNote(child(mark), true), null, "点了继续之后不再说「已自动接着跑」");
+    mark = markSettled(mark, { ok: true, conversationId: 1, migration: "none", status: "done" }, 5);
+    assert.equal(restartNote(child(mark), false), null);
+    assert.equal(awaitsContinue(child(mark), false), false);
+  });
+  it("awaitsContinue：只有崩溃留下、此刻没在跑的子会话等你；正常退出待续跑的、树根、在跑的都不算", () => {
+    assert.equal(awaitsContinue({ parentId: "r", durable: { since: 1, running: true } }, false), true);
+    assert.equal(awaitsContinue({ parentId: "r", durable: { since: 1, running: true } }, true), false);
+    assert.equal(awaitsContinue({ parentId: "r", durable: { since: 1, running: true, stoppedOnQuit: true } }, false), false);
+    assert.equal(awaitsContinue({ parentId: undefined, durable: { since: 1, running: true } }, false), false);
+    assert.equal(awaitsContinue({ parentId: "r", durable: { since: 1 } }, false), false);
   });
 });
 

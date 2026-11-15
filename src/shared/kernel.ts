@@ -147,3 +147,25 @@ export function resumePolicy(meta: Pick<SessionMeta, "parentId" | "durable">): R
   if (meta.parentId === undefined) return "ask";
   return mark.stoppedOnQuit === true ? "resume" : "crashed";
 }
+
+/**
+ * 子会话面板底部关于「上次重启」的那一句，只给一句：
+ * - "crashed"：被崩溃打断、停着等人点「继续」（awaitsContinue）。running = 这条会话此刻在跑：自动续跑那一轮的 meta 已没有
+ *   stoppedOnQuit，按 resumePolicy 也是 "crashed"，在跑时不能据此说「被打断了」。**压过 resumed**——先正常退出重启（自动续跑、
+ *   记下 resumed）、续跑那一轮里又崩溃时，resumed 是上一次的旧账（崩溃时写不上清除），两句同时出现自相矛盾。
+ * - "resumed"：重启后被自动接着跑过的子会话，直到下一次由人或父开的轮（kernel-host 的 markRunning 清掉）。
+ * - null：都不是。
+ */
+export function restartNote(meta: Pick<SessionMeta, "parentId" | "durable">, running: boolean): "crashed" | "resumed" | null {
+  if (awaitsContinue(meta, running)) return "crashed";
+  return meta.parentId !== undefined && meta.durable?.resumed !== undefined ? "resumed" : null;
+}
+
+/**
+ * 子会话被崩溃打断、此刻没在跑——停在那里等人点「继续」（父会话也一直等它）。侧栏父会话行、父会话的子会话入口、
+ * 子会话收件箱行据此归进「等你」。点了「继续」就在跑（running 为真）；跑完落定清掉 durable.running，标记消失。
+ * 正常退出后自动续跑的（resumePolicy "resume"）与树根（"ask"）不算。
+ */
+export function awaitsContinue(meta: Pick<SessionMeta, "parentId" | "durable">, running: boolean): boolean {
+  return !running && resumePolicy(meta) === "crashed";
+}
