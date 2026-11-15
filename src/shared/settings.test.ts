@@ -1,5 +1,6 @@
 import { deepStrictEqual, ok } from "node:assert/strict";
 import { describe, it } from "node:test";
+import { DEFAULT_APP_ICON } from "./app-icon.ts";
 import {
   BOARD_DAYS_DEFAULT,
   effectiveLanguage,
@@ -748,5 +749,19 @@ describe("parseSettings 的 docPaper", () => {
     deepStrictEqual(parseSettings({ docPaper: "neon" }).docPaper, undefined);
     deepStrictEqual(parseSettings({ docPaper: 3 }).docPaper, undefined);
     deepStrictEqual(parseSettings({}).docPaper, undefined);
+  });
+});
+
+describe("parseSettings 的 appIcon", () => {
+  it("32 款里的合法值原样留下（含默认款）；缺席 / 非法值 / 非字符串丢掉，消费侧兜默认", () => {
+    for (const id of ["basic-ink", "basic-yellow", "stone-feicui", "nebula-hongheitang"]) {
+      deepStrictEqual(parseSettings({ appIcon: id }).appIcon, id);
+    }
+    deepStrictEqual(parseSettings({}).appIcon, undefined);
+    deepStrictEqual(parseSettings({ appIcon: "stone-nope" }).appIcon, undefined);
+    deepStrictEqual(parseSettings({ appIcon: "basic-ink.svg" }).appIcon, undefined);
+    deepStrictEqual(parseSettings({ appIcon: 3 }).appIcon, undefined);
+    deepStrictEqual(parseSettings({ appIcon: null }).appIcon, undefined);
+    deepStrictEqual(DEFAULT_APP_ICON, "basic-ink");
   });
 });

@@ -7,10 +7,22 @@ import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { GUIDE } from "../onboarding/onboarding-pages.ts";
 import { SETTINGS_TABS } from "./settings-tabs.ts";
 
-describe("设置页签：新手引导是「通用」之后的独立一页", () => {
-  test("登记在 general 之后第二个位置，图标走 FEATURE_ICON", () => {
-    assert.deepEqual(SETTINGS_TABS.slice(0, 2).map((tab) => tab.id), ["general", "guide"]);
-    assert.equal(SETTINGS_TABS[1]?.icon, FEATURE_ICON.guide);
+describe("设置页签：外观与新手引导是「通用」之后的独立页", () => {
+  test("外观排在 general 之后第二个位置（图标 palette），新手引导紧随其后（图标走 FEATURE_ICON）", () => {
+    assert.deepEqual(SETTINGS_TABS.slice(0, 3).map((tab) => tab.id), ["general", "appearance", "guide"]);
+    assert.equal(SETTINGS_TABS[1]?.icon, "palette");
+    assert.equal(SETTINGS_TABS[2]?.icon, FEATURE_ICON.guide);
+  });
+
+  test("外观页签：中英名字，主题 / 语言整组从「通用」挪走，通用页不再渲染 ThemePicker", () => {
+    assert.equal(zh.settings.tabs.appearance, "外观");
+    assert.equal(en.settings.tabs.appearance, "Appearance");
+    const view = readFileSync(new URL("./SettingsView.tsx", import.meta.url), "utf8");
+    assert.ok(view.includes("<AppearanceSettings"));
+    assert.ok(!view.includes("ThemePicker"));
+    assert.ok(!view.includes("t.settings.theme"));
+    const appearance = readFileSync(new URL("./AppearanceSettings.tsx", import.meta.url), "utf8");
+    assert.ok(appearance.includes("<ThemePicker") && appearance.includes("t.settings.language"));
   });
 
   test("每个页签中英都有名字；新手引导 = 「新手引导」/ Guide", () => {

@@ -95,6 +95,8 @@ import { createRecentReleases } from "./updater/recent-releases.ts";
 import { applyNativeTheme, registerSettingsIpc } from "./settings/ipc.ts";
 import { SettingsStore } from "./settings/store.ts";
 import { registerWindowIpc } from "./window/ipc.ts";
+import { AppIconStore } from "./app-icon/store.ts";
+import { applyCachedAppIcon, registerAppIconIpc, windowIconOption } from "./app-icon/ipc.ts";
 import { installCloseToTray, loadTrayIcon, type AppTray } from "./window/tray.ts";
 import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
@@ -248,6 +250,8 @@ function createMainWindow(
         // （标题栏上还有「复制 transcript」与「抽屉开关」，这是 right-drawer-X 的落位）。
         // resizable 的帧式窗口在 Windows 上保留系统缩放边，不受 frame:false 影响。
         { frame: false, backgroundColor: "#e7ebef" }),
+    // Windows / Linux：用户选过的应用图标（没选过 = 打包图标）；macOS 的窗口没有图标，Dock 另走 app-icon/ipc.ts
+    ...windowIconOption(),
     webPreferences: rendererPreferences(theme, language),
   });
   mainWindows.track(window);
@@ -426,6 +430,12 @@ void app.whenReady().then(async () => {
   registerWindowIpc();
   const initialSettings = await settings.read();
   applyNativeTheme(initialSettings);
+
+  // 应用图标：renderer 选中后画好 PNG 发来（app-icon:apply）；启动时先读缓存应用，
+  // 赶在第一扇窗口出现之前，Dock / 任务栏不会先闪一下打包的默认图标
+  const appIconStore = new AppIconStore(configDir);
+  registerAppIconIpc(appIconStore);
+  await applyCachedAppIcon(appIconStore);
 
   // agent 跑在独立 utility 进程；主进程只转发事件，不加工（guideline §二）——
   // 唯一的例外是**落盘**，那本来就是主进程的职责，挂在同一条转发路径上是最短的一跳。

@@ -8,6 +8,7 @@ import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
 import { PRICE_CHART_CATEGORIES, type PriceChartCategory } from "./price-chart.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 import { MEMORY_VECTOR_MODELS, type MemoryVectorSettings } from "./memory.ts";
+import { isAppIconId, type AppIconId } from "./app-icon.ts";
 
 /**
  * 主题偏好。"system" 是真正的默认，不是「light 的别名」：
@@ -182,6 +183,13 @@ export type ProcessView = "turn" | "steps";
 
 export interface AppSettings {
   theme: ThemePreference;
+  /**
+   * 应用图标款式（设置 › 外观；32 款，见 shared/app-icon.ts）。缺席 = 默认款 `basic-ink`（墨底白圈）。
+   * 这里只记「选了哪一款」；Dock / 任务栏上的实际图标是 renderer 画好 PNG 经 `app-icon:apply`
+   * 交给主进程应用的，主进程把 PNG 缓存在 userData，下次启动先读缓存再开窗。
+   * 不认识的值（手改、以后下架的款式）当没选过。
+   */
+  appIcon?: AppIconId;
   /**
    * 界面语言偏好。**只在双语主题下生效**（见 `effectiveLanguage`）：选了小学作业 / 打字稿时
    * 这个值留着不动，切回双语主题就恢复。缺席 = "en"。
@@ -571,6 +579,7 @@ export function parseSettings(raw: unknown): AppSettings {
   const record = raw as {
     theme?: unknown;
     language?: unknown;
+    appIcon?: unknown;
     drawer?: unknown;
     rightPanelWidth?: unknown;
     docPanelWidth?: unknown;
@@ -633,6 +642,8 @@ export function parseSettings(raw: unknown): AppSettings {
     theme,
     // 不认识的语言当作「没选过」丢掉，同 gitAttribution 的纪律
     ...((LANGUAGES as readonly unknown[]).includes(record.language) ? { language: record.language as Language } : {}),
+    // 不认识的款式当没选过（缺席 = DEFAULT_APP_ICON），合法值（含默认款）原样留下
+    ...(isAppIconId(record.appIcon) ? { appIcon: record.appIcon } : {}),
     // 右栏只做 ≥ 地板的硬校验：上界随 pane 宽度变，存储层判不了，渲染层每次夹
     ...(typeof width === "number" && Number.isFinite(width) && width >= RIGHT_PANEL_WIDTH_FLOOR
       ? { rightPanelWidth: Math.round(width) }
