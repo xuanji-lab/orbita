@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Contents/** 下**所有嵌套可执行文件**（Electron 的 Helper、以及随包的 rg / fd / officecli）的
+  entitlements。由 electron-builder 的 mac.entitlementsInherit 指到这里，osx-sign 递归遍历 Contents
+  时对每个 Mach-O 用同一 identity + 本文件重签。
+
+  为什么显式写一份、而不是沿用模板默认值：
+  - 之前没配 entitlementsInherit，app-builder-lib 对非 app 根一律回落到内置模板
+    templates/entitlements.mac.plist，恰好也是这三项（node_modules/app-builder-lib/out/mac/
+    MacTargetHelper.js 的 getEntitlements）。也就是说下面是**既有行为的显式化**，不是新的放宽。
+  - 显式化的理由：随包的 OfficeCLI 是 .NET 自包含单文件，CoreCLR 在 hardened runtime 下**没有
+    allow-jit 就起不来**（上游 iOfficeAI/OfficeCLI PR #142：`Failed to create CoreCLR,
+    HRESULT: 0x80070008`；他们自己的 build/officecli.entitlements 也只写 allow-jit）。这一项一旦
+    因为 electron-builder 升级、模板变动而静默消失，表现是「mac 上 Office 能力 100% 不可用」，
+    而打包仍然成功——所以把它钉在仓库里，改的时候看得见。
+  - allow-unsigned-executable-memory / disable-library-validation 同理来自模板：Electron 的
+    V8 与原生模块需要它们，收窄要单独验过 mac 上的渲染进程与插件原生模块，不顺手改。
+
+  **mac.binaries 故意留空**（package.json 里没有这一项）：walkAsync 已经递归遍历 Contents 下
+  每个 Mach-O 并用同一 identity 重签，rg / fd 一直就是这么签的；再列一条只会让同一个文件被
+  第二次 codesign 覆盖签名（sign.js 把 binaries 直接 push 进 children）。列错的时候代价更大：
+  指到目录（BUG-3 就指到了 bin/officecli 目录）时 codesign 报 bundle format unrecognized,
+  invalid, or unsuitable，整条 mac 打包在签名阶段挂掉。真要重新加，必须先过
+  officecli-bin.test.ts 里那条「与运行时落点逐字相同」的断言。
+
+  **不要在打包后用 codesign 手工补签**：手工带 force 选项重签会让外层 bundle 的封印失效
+  （Apple：The signature of the binary is invalid），而 electron-builder 的签名顺序是
+  「先子后父、同一 identity」，手工插一脚正好破坏这个顺序，公证也过不去。
+-->
+<plist version="1.0">
+  <dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+  </dict>
+</plist>
