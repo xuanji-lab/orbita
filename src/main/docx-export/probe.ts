@@ -35,11 +35,18 @@ export interface PandocProbeDeps {
 
 export interface PandocProbe {
   probe(explicit?: string): Promise<PandocProbeResult>;
+  /**
+   * 只验这一条路径，**不回退**到 PATH。设置页「选择 / 手填路径」用它：
+   * 选到一个坏文件时报「这条路径跑不起 pandoc」，而不是悄悄拿 PATH 上那份顶包。
+   * 路径不存在 / `--version` 非 0 / 版本解不出都回 null。
+   */
+  probeExact(path: string): Promise<PandocProbeResult | null>;
   refresh(): void;
 }
 
 export function createPandocProbe(deps: PandocProbeDeps = realDeps()): PandocProbe {
   const cache = new Map<string, PandocProbeResult>();
+  const exact = new Map<string, PandocProbeResult | null>();
   return {
     async probe(explicit?: string): Promise<PandocProbeResult> {
       const key = explicit?.trim() ?? "";
@@ -49,8 +56,19 @@ export function createPandocProbe(deps: PandocProbeDeps = realDeps()): PandocPro
       cache.set(key, result);
       return result;
     },
+    async probeExact(path: string): Promise<PandocProbeResult | null> {
+      const command = path.trim();
+      if (command === "" || !deps.exists(command)) return null;
+      if (exact.has(command)) return exact.get(command) ?? null;
+      const output = await deps.version(command);
+      const version = output === null ? null : parsePandocVersion(output);
+      const result = version === null ? null : found(command, version, []);
+      exact.set(command, result);
+      return result;
+    },
     refresh(): void {
       cache.clear();
+      exact.clear();
     },
   };
 }

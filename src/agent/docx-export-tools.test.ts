@@ -126,6 +126,17 @@ describe("export_docx 工具", () => {
     await assert.rejects(() => execute(tool2, { source: "a.md", out: "a.docx" }), /Word export failed: boom[\s\S]*Warnings/);
   });
 
+  test("LaTeX 表格降级 → 抛 Table gate 前缀（模型该改源文件）", async () => {
+    const { broker } = brokerOf({
+      ok: false,
+      code: "table-degraded",
+      error: "The source uses LaTeX table environment(s): \begin{tabular}.",
+      warnings: [],
+    });
+    const [tool] = createDocxExportTools(broker, "s1", { cwd: "/w" });
+    await assert.rejects(() => execute(tool, { source: "a.tex", out: "a.docx" }), /^Error: Table gate: /);
+  });
+
   test("缺参数 / 已停止：不发明回执", async () => {
     const { broker, recorded } = brokerOf(success);
     const [tool] = createDocxExportTools(broker, "s1", { cwd: "/w" });

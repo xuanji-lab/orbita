@@ -4,7 +4,7 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { buildPandocArgs, detectInputFormat } from "./argv.ts";
+import { buildPandocArgs, detectInputFormat, latexTableEnvironments } from "./argv.ts";
 
 const base = { sourcePath: "/work/paper.md", outPath: "/work/paper.docx", referenceDoc: null };
 
@@ -28,28 +28,27 @@ describe("argv 拼装", () => {
     assert.equal(plan.args.filter((arg) => arg === "--number-sections").length, 0);
   });
 
-  test("latex：latex 读取器；\\section 触发 toc，equation/table 触发 lot", () => {
-    const text = "\\section{Intro}\n\\begin{equation}a=b\\end{equation}\n\\begin{table}\\begin{tabular}{lc}A&B\\end{tabular}\\end{table}";
+  test("latex：latex 读取器；目录三节总是先要（空节由后处理裁）", () => {
+    const text = "\\section{Intro}\n\\begin{equation}a=b\\end{equation}";
     const plan = buildPandocArgs({ ...base, sourcePath: "/work/paper.tex", format: "latex", text });
     assert.equal(plan.from, "latex");
-    assert.equal(plan.lists.toc, true);
-    assert.equal(plan.lists.tables, true);
     assert.ok(plan.args.includes("--toc"));
+    assert.ok(plan.args.includes("--lof"));
     assert.ok(plan.args.includes("--lot"));
     assert.ok(!plan.args.includes("--number-sections"));
   });
 
-  test("目录 / 图目录 / 表目录按输入有没有", () => {
+  test("目录三节一律先让 pandoc 生成；有没有内容由 pruneEmptyLists 按产物裁", () => {
     const none = buildPandocArgs({ ...base, format: "markdown", text: "just text" });
-    assert.deepEqual(none.lists, { toc: false, figures: false, tables: false });
-    assert.ok(!none.args.includes("--toc"));
+    assert.ok(none.args.includes("--toc") && none.args.includes("--lof") && none.args.includes("--lot"));
+  });
 
-    const all = buildPandocArgs({
-      ...base,
-      format: "markdown",
-      text: "# H\n\n![fig](a.png)\n\n| a | b |\n|---|---|\n| 1 | 2 |\n",
-    });
-    assert.deepEqual(all.lists, { toc: true, figures: true, tables: true });
+  test("LaTeX 表格环境识别（tabular / tabularx / longtable）", () => {
+    assert.deepEqual(latexTableEnvironments("\\begin{tabular}{lc}a&b\\end{tabular}"), ["tabular"]);
+    assert.deepEqual(latexTableEnvironments("\\begin{tabularx}{\\linewidth}{lc}a&b\\end{tabularx}"), ["tabularx"]);
+    assert.deepEqual(latexTableEnvironments("\\begin{longtable}{lc}a&b\\end{longtable}"), ["longtable"]);
+    assert.deepEqual(latexTableEnvironments("文本只有 \\begin{table} 包着图"), []);
+    assert.deepEqual(latexTableEnvironments("# markdown 表格\n| a | b |\n|---|---|"), []);
   });
 
   test("引用：markdown @key / latex \\cite 才加 --citeproc", () => {

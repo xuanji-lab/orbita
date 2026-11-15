@@ -1525,6 +1525,12 @@ export const en = {
     pandocTooOld: "Too old — 3.10.2 or newer is required",
     pandocDetect: "Check again",
     pandocDetecting: "Checking…",
+    pandocPathAria: "pandoc executable path",
+    pandocPathPlaceholder: "Absolute path; leave empty to auto-detect",
+    pandocChoose: "Choose…",
+    pandocPathAbsolute: "Enter an absolute path (type it or choose the executable)",
+    pandocPathInvalid: "This path does not run as pandoc; settings were left unchanged",
+    pandocUpgrade: "Upgrade pandoc",
     docxTemplate: "Word template",
     docxTemplateInfo:
       "Where the styles come from · use a school template when you need its headers, footers and cover styles · only styles and page setup are read; macros are never executed",

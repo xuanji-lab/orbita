@@ -10,8 +10,11 @@ import {
   type DocxTemplateInspectOutcome,
   type DocxTemplateInspectRequest,
   type DocxTemplatePickOutcome,
+  type PandocLocateOutcome,
   type PandocProbeRequest,
   type PandocProbeResult,
+  type PandocVerifyOutcome,
+  type PandocVerifyRequest,
 } from "../../shared/docx-export.ts";
 
 export const docxExportApi = {
@@ -23,4 +26,9 @@ export const docxExportApi = {
     ipcRenderer.invoke(docxExportChannels.inspect, req ?? {}),
   /** 选择学校模板：系统文件选择器 → 体检通过才写设置 */
   pickTemplate: (): Promise<DocxTemplatePickOutcome> => ipcRenderer.invoke(docxExportChannels.pickTemplate),
+  /** 现验一条 pandoc 路径（不回退 PATH）；设置页手填路径用 */
+  verifyPandoc: (req: PandocVerifyRequest): Promise<PandocVerifyOutcome> =>
+    ipcRenderer.invoke(docxExportChannels.verifyPandoc, req),
+  /** 选择 pandoc 可执行文件：系统文件选择器 → 现验；写设置由渲染层做 */
+  pickPandoc: (): Promise<PandocLocateOutcome> => ipcRenderer.invoke(docxExportChannels.pickPandoc),
 } as const;

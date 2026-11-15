@@ -16,6 +16,7 @@ import {
   insertCaptionBookmarks,
   numberEquations,
   postProcessDocx,
+  pruneEmptyLists,
   setUpdateFields,
   topLevelSlices,
 } from "./postprocess.ts";
@@ -258,5 +259,54 @@ describe("目录缓存条目", () => {
     assert.equal((once.match(/w:styleId="TOC1"/g) ?? []).length, 1);
     assert.match(once, /w:styleId="TOC3"/);
     assert.equal(ensureTocStyles(once), once);
+  });
+});
+
+describe("按产物裁掉空目录", () => {
+  const lists = `<w:document xmlns:w="w"><w:body>
+<w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Table of Contents"/></w:docPartObj></w:sdtPr><w:sdtContent><w:p><w:r><w:t>Table of Contents</w:t></w:r></w:p></w:sdtContent></w:sdt>
+<w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="List of Tables"/></w:docPartObj></w:sdtPr><w:sdtContent><w:p><w:r><w:t>List of Tables</w:t></w:r></w:p></w:sdtContent></w:sdt>
+<w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="List of Figures"/></w:docPartObj></w:sdtPr><w:sdtContent><w:p><w:r><w:t>List of Figures</w:t></w:r></w:p></w:sdtContent></w:sdt>
+<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>引言</w:t></w:r></w:p>
+BODY
+<w:sectPr/></w:body></w:document>`;
+
+  test("没有表格 / 图片 / 题注：只留 TOC，两个 List 整节消失", () => {
+    const input = lists.replace("BODY", "<w:tbl><w:tblPr/></w:tbl>");
+    const result = pruneEmptyLists(input);
+    assert.deepEqual(result.lists, { toc: true, figures: false, tables: false });
+    assert.match(result.xml, /Table of Contents/);
+    assert.doesNotMatch(result.xml, /List of Tables/);
+    assert.doesNotMatch(result.xml, /List of Figures/);
+    // 表本身不能跟着被删
+    assert.match(result.xml, /<w:tbl>/);
+  });
+
+  test("有表 + 题注：List of Tables 留下；没有图片仍删 List of Figures", () => {
+    const input = lists.replace(
+      "BODY",
+      "<w:tbl><w:tblPr/></w:tbl><w:p><w:pPr><w:pStyle w:val=\"TableCaption\"/></w:pPr><w:r><w:t>表 1 数据</w:t></w:r></w:p>",
+    );
+    const result = pruneEmptyLists(input);
+    assert.deepEqual(result.lists, { toc: true, figures: false, tables: true });
+    assert.match(result.xml, /List of Tables/);
+    assert.doesNotMatch(result.xml, /List of Figures/);
+  });
+
+  test("有图 + ImageCaption：List of Figures 留下", () => {
+    const input = lists.replace(
+      "BODY",
+      '<w:p><w:r><w:drawing/></w:r></w:p><w:p><w:pPr><w:pStyle w:val="ImageCaption"/></w:pPr><w:r><w:t>图 1</w:t></w:r></w:p>',
+    );
+    const result = pruneEmptyLists(input);
+    assert.equal(result.lists.figures, true);
+    assert.match(result.xml, /List of Figures/);
+  });
+
+  test("没有标题：连 TOC 一起删（--toc 总是传，内容由产物决定）", () => {
+    const input = lists.replace(/<w:p><w:pPr><w:pStyle w:val="Heading1"\/>[\s\S]*?<\/w:p>/, "");
+    const result = pruneEmptyLists(input);
+    assert.equal(result.lists.toc, false);
+    assert.doesNotMatch(result.xml, /Table of Contents/);
   });
 });

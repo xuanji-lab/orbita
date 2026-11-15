@@ -21,8 +21,11 @@ import {
   type DocxTemplateInspectRequest,
   type DocxTemplatePickOutcome,
   type DocxTemplateReport,
+  type PandocLocateOutcome,
   type PandocProbeRequest,
   type PandocProbeResult,
+  type PandocVerifyOutcome,
+  type PandocVerifyRequest,
 } from "../../shared/docx-export.ts";
 import type { SettingsStore } from "../settings/store.ts";
 import { ensureDefaultTemplate } from "./default-template.ts";
@@ -78,6 +81,50 @@ export function registerDocxExportIpc(options: DocxExportIpcOptions): void {
       return inspectDefault(options, settings.pandocPath);
     },
   );
+
+  /**
+   * 现验一条 pandoc 路径（手填 / 选择共同用）。**不回退**：这条路径跑不起来就明确失败，
+   * 界面据此给行内错误，而不是拿 PATH 上那份顶包、让用户以为自己的路径生效了。
+   * 版本低于 3.10.2 仍算「跑得起来」——设置会写进去，状态显示「版本过低」；
+   * 那是一个需要用户升级的真实状态，不是坏路径。
+   */
+  ipcMain.handle(
+    docxExportChannels.verifyPandoc,
+    async (_event, req: PandocVerifyRequest): Promise<PandocVerifyOutcome> => {
+      const path = typeof req?.path === "string" ? req.path.trim() : "";
+      if (path === "") return { ok: false, message: "Enter the absolute path to the pandoc executable." };
+      const probe = await options.probe.probeExact(path);
+      if (probe === null) {
+        return {
+          ok: false,
+          message: `This path does not run as pandoc: ${path}. Pick the pandoc executable (pandoc.exe on Windows).`,
+        };
+      }
+      return { ok: true, probe };
+    },
+  );
+
+  /** 「选择 pandoc…」：系统文件选择器 → 现验 → 回结果；写设置由渲染层做（一个写入者） */
+  ipcMain.handle(docxExportChannels.pickPandoc, async (): Promise<PandocLocateOutcome> => {
+    const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null;
+    const dialogOptions: Electron.OpenDialogOptions = {
+      title: "Select the pandoc executable",
+      properties: ["openFile"],
+      ...(process.platform === "win32" ? { filters: [{ name: "pandoc", extensions: ["exe"] }] } : {}),
+    };
+    const picked = window === null ? await dialog.showOpenDialog(dialogOptions) : await dialog.showOpenDialog(window, dialogOptions);
+    const path = picked.filePaths[0];
+    if (picked.canceled || path === undefined) return { kind: "cancelled" };
+    const probe = await options.probe.probeExact(path);
+    if (probe === null) {
+      return {
+        kind: "invalid",
+        path,
+        message: `This file does not run as pandoc: ${path}. Pick the pandoc executable (pandoc.exe on Windows).`,
+      };
+    }
+    return { kind: "ok", path, probe };
+  });
 
   ipcMain.handle(docxExportChannels.pickTemplate, async (): Promise<DocxTemplatePickOutcome> => {
     const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null;

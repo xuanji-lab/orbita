@@ -939,3 +939,12 @@ a.exp-pr:hover {
   gap: var(--space-2);
   min-width: 0;
 }
+
+/* pandoc 路径：输入框 + 选择 + 重新检测。窄面板下换行，不把行撑破。 */
+.pandoc-path-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}

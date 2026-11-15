@@ -113,3 +113,42 @@ describe("pandoc 探测", () => {
     assert.equal(result.path, "/opt/tools/pandoc");
   });
 });
+
+describe("pandoc 路径现验（probeExact：不回退 PATH）", () => {
+  test("这条路径能跑：回它自己的版本", async () => {
+    const probe = createPandocProbe(
+      deps({
+        existing: ["C:\pandoc-3.12.1\pandoc.exe", "C:\bin\pandoc.exe"],
+        versions: {
+          "C:\pandoc-3.12.1\pandoc.exe": "pandoc 3.12.1",
+          "C:\bin\pandoc.exe": "pandoc 3.9",
+        },
+      }),
+    );
+    const result = await probe.probeExact("C:\pandoc-3.12.1\pandoc.exe");
+    assert.equal(result?.path, "C:\pandoc-3.12.1\pandoc.exe");
+    assert.equal(result?.supported, true);
+  });
+
+  test("这条路径跑不起来：null，不拿 PATH 上那份顶包", async () => {
+    const probe = createPandocProbe(
+      deps({ existing: ["C:\bin\pandoc.exe"], versions: { "C:\bin\pandoc.exe": "pandoc 3.12.1" } }),
+    );
+    assert.equal(await probe.probeExact("D:\missing\pandoc.exe"), null);
+    assert.equal(await probe.probeExact(""), null);
+  });
+
+  test("路径存在但 --version 非 0 / 解不出版本：null", async () => {
+    const probe = createPandocProbe(deps({ existing: ["C:\bad\pandoc.exe"], versions: {} }));
+    assert.equal(await probe.probeExact("C:\bad\pandoc.exe"), null);
+  });
+
+  test("版本过低也算跑得起来（写进设置，界面显示版本过低）", async () => {
+    const probe = createPandocProbe(
+      deps({ existing: ["C:\app\pandoc-3.9\pandoc.exe"], versions: { "C:\app\pandoc-3.9\pandoc.exe": "pandoc 3.9" } }),
+    );
+    const result = await probe.probeExact("C:\app\pandoc-3.9\pandoc.exe");
+    assert.equal(result?.supported, false);
+    assert.match(result?.message ?? "", /3\.10\.2/);
+  });
+});

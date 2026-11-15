@@ -142,9 +142,11 @@ export function createDocxExportTools(
         const prefix =
           result.code === "formula-degraded"
             ? "Formula gate: "
-            : result.code === "pandoc-too-old" || result.code === "pandoc-missing"
-              ? "pandoc: "
-              : "Word export failed: ";
+            : result.code === "table-degraded"
+              ? "Table gate: "
+              : result.code === "pandoc-too-old" || result.code === "pandoc-missing"
+                ? "pandoc: "
+                : "Word export failed: ";
         throw new Error(
           `${prefix}${result.error}` +
             (result.warnings.length === 0

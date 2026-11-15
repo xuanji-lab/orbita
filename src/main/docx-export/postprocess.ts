@@ -413,18 +413,23 @@ function tocEntryXml(entry: TocEntry): string {
   const style = `TOC${Math.min(Math.max(entry.level, 1), 3)}`;
   const anchor = xmlEscapeAttribute(entry.bookmark);
   const title = entry.text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // PAGEREF **放在 hyperlink 外面**：folio 的 w:hyperlink 子节点解析只保留有 payload 的 run，
+  // 域字符（fldChar）会被丢掉——存一次盘目录就变成静态数字，Word 里按 F9 也不会再算。
+  // 放在段落这一层，folio 能把 begin/instr/separate/result/end 装配成一个 ComplexField，
+  // 保存时原样写回（serializeComplexField），#308 的字段路径才能持续生效。
   return (
     `<w:p><w:pPr><w:pStyle w:val="${style}"/></w:pPr>` +
     `<w:hyperlink w:anchor="${anchor}" w:history="1">` +
     `<w:r><w:t xml:space="preserve">${title}</w:t></w:r>` +
     "<w:r><w:tab/></w:r>" +
+    "</w:hyperlink>" +
     '<w:r><w:fldChar w:fldCharType="begin"/></w:r>' +
     `<w:r><w:instrText xml:space="preserve"> PAGEREF ${anchor} \\h </w:instrText></w:r>` +
     '<w:r><w:fldChar w:fldCharType="separate"/></w:r>' +
     // 缓存页码：folio 打开时按书签位置重算（#308 的自愈也读同一个域）；Word 会按 F9 重算
     "<w:r><w:t>1</w:t></w:r>" +
     '<w:r><w:fldChar w:fldCharType="end"/></w:r>' +
-    "</w:hyperlink></w:p>"
+    "</w:p>"
   );
 }
 
@@ -489,6 +494,61 @@ export function ensureTocStyles(stylesXml: string): string {
     })
     .join("");
   return stylesXml.replace(/<\/w:styles>/, `${styles}</w:styles>`);
+}
+
+// ─── 3.6 按产物裁掉空目录（TOC / LOF / LOT） ─────────────────────────────
+
+export interface DocxLists {
+  toc: boolean;
+  figures: boolean;
+  tables: boolean;
+}
+
+function countStyledParagraphs(body: string, styleName: string): number {
+  let count = 0;
+  for (const slice of topLevelSlices(body)) {
+    if (/^<w:p\b/.test(slice.text) && styleOf(slice.text) === styleName) count += 1;
+  }
+  return count;
+}
+
+/** 删掉一个 docPartGallery 对应的整块 `w:sdt`（连「List of Tables」标题一起） */
+function stripGallerySection(documentXml: string, gallery: string): string {
+  const escaped = gallery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(
+    `<w:sdt\\b[^>]*>(?:(?!</w:sdt>)[\\s\\S])*?<w:docPartGallery\\b[^>]*w:val="${escaped}"[\\s\\S]*?</w:sdt>`,
+    "g",
+  );
+  return documentXml.replace(pattern, "");
+}
+
+/**
+ * pandoc 的 `--toc/--lof/--lot` 只按标志插域，不看内容：源里没有标题、表格没有题注、
+ * 图片没有题注时，产物会多出空的「Table of Contents / List of Tables / List of Figures」
+ * 标题。这里按**产物里真实的事实**裁：
+ *   - TOC：有 Heading1–6 才留；
+ *   - LOT：有真实表格（顶层 `w:tbl`）且至少一个 TableCaption 才留；
+ *   - LOF：有图片（`w:drawing` / `w:pict`）且至少一个 ImageCaption 才留。
+ * 返回裁完之后还留下的节，工具摘要与 `lists` 都读这一份（不再按源码正则猜）。
+ */
+export function pruneEmptyLists(documentXml: string): { xml: string; lists: DocxLists } {
+  const body = bodyInner(documentXml);
+  if (body === null) return { xml: documentXml, lists: { toc: false, figures: false, tables: false } };
+  const headings = (body.match(/<w:pStyle\b[^>]*w:val="Heading[1-6]"/g) ?? []).length;
+  const tableCaptions = countStyledParagraphs(body, "TableCaption");
+  const figureCaptions = countStyledParagraphs(body, "ImageCaption");
+  const tables = topLevelSlices(body).filter((slice) => /^<w:tbl\b/.test(slice.text)).length;
+  const figures = (body.match(/<w:drawing\b/g) ?? []).length + (body.match(/<w:pict\b/g) ?? []).length;
+  const lists: DocxLists = {
+    toc: headings > 0,
+    tables: tables > 0 && tableCaptions > 0,
+    figures: figures > 0 && figureCaptions > 0,
+  };
+  let xml = documentXml;
+  if (!lists.toc) xml = stripGallerySection(xml, "Table of Contents");
+  if (!lists.tables) xml = stripGallerySection(xml, "List of Tables");
+  if (!lists.figures) xml = stripGallerySection(xml, "List of Figures");
+  return { xml, lists };
 }
 
 // ─── 4. updateFields ───────────────────────────────────────────────────────
@@ -564,6 +624,7 @@ export function countDocumentStats(documentXml: string): Pick<DocxExportStats, "
 
 export interface PostProcessResult {
   bytes: Uint8Array;
+  lists: DocxLists;
   stats: Omit<DocxExportStats, "bytes">;
   warnings: string[];
   /** 公式降级的原文片段（非空即调用方应判失败） */
@@ -584,13 +645,16 @@ export async function postProcessDocx(bytes: Uint8Array): Promise<PostProcessRes
   let numberedEquations = 0;
   let threeLineTables = 0;
   let coverSection = false;
+  let lists: DocxLists = { toc: false, figures: false, tables: false };
 
   const transformDocument = (text: string): string => {
     const tables = applyThreeLineTables(text);
     const cover = applyCoverSection(tables.xml);
     // 图表题注先盖书签，目录条目才有 PAGEREF 的落点；空 TOC 域再展开成缓存条目
     const captions = insertCaptionBookmarks(cover.xml);
-    const toc = fillTocEntries(captions.xml);
+    const pruned = pruneEmptyLists(captions.xml);
+    lists = pruned.lists;
+    const toc = fillTocEntries(pruned.xml);
     const equations = numberEquations(toc.xml);
     documentAfter = equations.xml;
     threeLineTables = tables.count;
@@ -628,6 +692,7 @@ export async function postProcessDocx(bytes: Uint8Array): Promise<PostProcessRes
   const stats = countDocumentStats(documentAfter);
   return {
     bytes: output,
+    lists,
     stats: {
       paragraphs: stats.paragraphs,
       headings: stats.headings,

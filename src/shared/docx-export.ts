@@ -190,6 +190,7 @@ export type DocxExportErrorCode =
   | "pandoc-too-old"
   | "template-invalid"
   | "formula-degraded"
+  | "table-degraded"
   | "pandoc-failed"
   | "write-failed";
 
@@ -207,7 +208,27 @@ export const docxExportChannels = {
   probe: "docx-export:probe",
   inspect: "docx-export:inspect",
   pickTemplate: "docx-export:pick-template",
+  verifyPandoc: "docx-export:verify-pandoc",
+  pickPandoc: "docx-export:pick-pandoc",
 } as const;
+
+/** `docx-export:verify-pandoc`：现验一条路径能不能跑起 pandoc（不回退到 PATH） */
+export interface PandocVerifyRequest {
+  path: string;
+}
+
+export type PandocVerifyOutcome =
+  | { ok: true; probe: PandocProbeResult }
+  | { ok: false; message: string };
+
+/**
+ * 「选择 pandoc…」：系统文件选择器 → 现验 → 只回结果，**不写设置**
+ * （写设置是渲染层 onChange 的事，一个写入者）。
+ */
+export type PandocLocateOutcome =
+  | { kind: "cancelled" }
+  | { kind: "ok"; path: string; probe: PandocProbeResult }
+  | { kind: "invalid"; path: string; message: string };
 
 /** `docx-export:inspect` 的入参：path 缺席 = 看设置里当前那份 */
 export interface DocxTemplateInspectRequest {

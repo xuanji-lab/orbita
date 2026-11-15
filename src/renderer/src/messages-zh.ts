@@ -1408,6 +1408,12 @@ export const zh: Messages = {
     pandocTooOld: "版本过低，需要 3.10.2 或更新",
     pandocDetect: "重新检测",
     pandocDetecting: "检测中…",
+    pandocPathAria: "pandoc 可执行文件路径",
+    pandocPathPlaceholder: "绝对路径；留空则自动探测",
+    pandocChoose: "选择…",
+    pandocPathAbsolute: "请填写绝对路径（手填或点「选择…」）",
+    pandocPathInvalid: "这个路径跑不起 pandoc，设置未改动",
+    pandocUpgrade: "升级 pandoc",
     docxTemplate: "Word 模板",
     docxTemplateInfo:
       "导出时套用的样式来源 · 需要页眉页脚与封面样式时用学校模板 · 模板只读取样式与页面设置，不执行宏",

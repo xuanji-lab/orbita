@@ -27,7 +27,7 @@ import {
   type DocxExportStats,
 } from "../../shared/docx-export.ts";
 import { writeBytesAtomic } from "../atomic-write.ts";
-import { buildPandocArgs, detectInputFormat } from "./argv.ts";
+import { buildPandocArgs, detectInputFormat, latexTableEnvironments } from "./argv.ts";
 import { ensureDefaultTemplate } from "./default-template.ts";
 import { postProcessDocx } from "./postprocess.ts";
 import { inspectDocxTemplate } from "./template.ts";
@@ -157,6 +157,22 @@ export function createDocxExporter(deps: DocxExportDeps) {
         };
       }
 
+      if (format === "latex") {
+        const tables = latexTableEnvironments(text);
+        if (tables.length > 0) {
+          return {
+            ok: false,
+            code: "table-degraded",
+            error:
+              `The source uses LaTeX table environment(s): ${tables.map((name) => `\\begin{${name}}`).join(", ")}. ` +
+              "pandoc's LaTeX reader does not parse them (3.9 and 3.12.1 both turn the rows into literal text), " +
+              "so the Word file would lose the tables. Convert those tables to a Markdown pipe table in the source " +
+              "(or lay them out in Word afterwards) and export again. Nothing was written.",
+            warnings: [],
+          };
+        }
+      }
+
       const template = await resolveTemplate(deps, options, probe, warnings);
       if (template.error !== null || template.report === null) {
         return { ok: false, code: "template-invalid", error: template.error ?? "Template could not be read.", warnings };
@@ -228,7 +244,7 @@ export function createDocxExporter(deps: DocxExportDeps) {
           pandocPath: probe.path,
           pandocVersion: formatPandocVersion(probe.version),
           inputFormat: format,
-          lists: plan.lists,
+          lists: processed.lists,
         };
       } catch (cause) {
         return {

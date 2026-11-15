@@ -65,6 +65,12 @@ export interface TocStaticFact {
   before: string;
   /** 去掉尾部数字后的条目文字（已归一化） */
   title: string;
+  /**
+   * 条目里 `w:hyperlink` 的锚点（导出时我们写的 `_引言` 这类书签名）。
+   * 有它时优先按书签定位：标题文字被用户改掉后，文字匹配会失效，书签不会。
+   * 老文档 / 没有 hyperlink 的静态目录为 null，走原来的文字匹配。
+   */
+  bookmark: string | null;
 }
 
 export interface TocFacts {
@@ -218,7 +224,25 @@ function staticPageNumber(paragraph: TocHealNode, pos: number): TocStaticFact | 
     to: tail.pos + text.length - (match[0].length - digits.length),
     before: digits,
     title: before,
+    bookmark: anchorOfParagraph(paragraph),
   };
+}
+
+/** 静态目录条目里的书签锚点：`w:hyperlink` 的 anchor（或 href 的 `#名字`） */
+function anchorOfParagraph(paragraph: TocHealNode): string | null {
+  let found: string | null = null;
+  paragraph.forEach((child) => {
+    if (found !== null) return;
+    if (child.type.name !== "hyperlink") return;
+    const anchor = child.attrs["anchor"];
+    if (typeof anchor === "string" && anchor !== "") {
+      found = anchor;
+      return;
+    }
+    const href = child.attrs["href"];
+    if (typeof href === "string" && href.startsWith("#") && href.length > 1) found = href.slice(1);
+  });
+  return found;
 }
 
 /**
@@ -328,7 +352,10 @@ export function planTocHeal(facts: TocFacts, layout: TocHealLayout): TocHealPlan
 
   for (const entry of facts.staticEntries) {
     plan.staticEntries += 1;
-    const page = headingPages.get(entry.title);
+    // 书签优先：导出时每条目录都带 `w:hyperlink w:anchor=_引言` + 同名书签；
+    // 用户改了标题文字后文字匹配就找不到，书签仍然指向那一段。
+    const byBookmark = entry.bookmark === null ? undefined : bookmarkPages.get(entry.bookmark);
+    const page = byBookmark ?? headingPages.get(entry.title);
     if (page === undefined) {
       plan.missed += 1;
       continue;

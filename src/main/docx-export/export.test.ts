@@ -193,6 +193,21 @@ describe("导出", () => {
     assert.equal(h.calls.length, 0);
   });
 
+  test("LaTeX 表格：转换前明确失败 table-degraded，不跑 pandoc、不写目标", async () => {
+    const h = await harness({});
+    const source = join(h.dir, "paper.tex");
+    const out = join(h.dir, "paper.docx");
+    await writeFile(source, "\\begin{tabular}{lc}A & B \\\\ \\end{tabular}");
+    const result = await createDocxExporter(h.deps).export({ sourcePath: source, outPath: out, templateMode: "project" });
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.code, "table-degraded");
+    assert.match(result.error, /\\begin\{tabular\}/);
+    assert.match(result.error, /Markdown pipe table/);
+    assert.equal(h.calls.length, 0);
+    assert.equal(await readFile(out).catch(() => null), null);
+  });
+
   test("非公式告警：产物写成功，status:warning 并带上告警", async () => {
     const h = await harness({ stderr: "[WARNING] Citeproc: citation lewis2020 not found\n" });
     const source = join(h.dir, "paper.md");
