@@ -60,7 +60,7 @@ import { KeepAwake } from "./automation/keep-awake.ts";
 import { deliverAutomationRun, launchAutomationRun, type LaunchDeps } from "./automation/launch.ts";
 import { applyAutomationRequest, type AutomationRequestDeps } from "./automation/requests.ts";
 import { AutomationScheduler } from "./automation/scheduler.ts";
-import { AutomationStore } from "./automation/store.ts";
+import { AutomationStore, automationStoreFilePath } from "./automation/store.ts";
 import { applyChannelSend, applyDelegate, startChildTurn, type ChannelDeps } from "./channel/requests.ts";
 import { ChannelStore } from "./channel/store.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
@@ -134,7 +134,7 @@ import { resolveTurnDirectories } from "./agent/turn-directories.ts";
 import { mainWindows } from "./window/main-windows.ts";
 import { isOwnRendererPage, type RendererOriginDeps } from "./window/renderer-origin.ts";
 import { SafeStorageSecrets } from "./provider/safe-storage-secrets.ts";
-import { devDataDirs } from "./data-dirs.ts";
+import { devDataDirs, formalUserDataDir } from "./data-dirs.ts";
 import { ProviderStore } from "./provider/store.ts";
 import { createDoubaoProtocol } from "./voice/doubao-protocol.ts";
 import { DictationSessions } from "./voice/dictation.ts";
@@ -1306,6 +1306,11 @@ void app.whenReady().then(async () => {
     kernel === null
       ? [join(configDir, "sessions"), join(configDir, "pi-sessions")]
       : [join(configDir, "sessions"), join(configDir, "pi-sessions"), durableDir],
+    // 自动化记录不可变（2026-11-13 用户裁决）：automations.json 记录「智能体定时做过什么」，
+    // 智能体删改它 = 丢痕迹；与它的 `.tmp` / `.bad-` 兄弟一起全档只读，智能体改自动化走自动化工具
+    // 开发实例（devDirs 非空）再多护一份：正式版（`<appData>/orbita`）的记录文件——用户就是用开发实例做验收的，
+    // 开发实例里的智能体不该能删到他真实在用的自动化；其它开发实例之间仍互相放行。数据目录之外的文件只按文件保
+    [automationStoreFilePath(configDir), ...(devDirs !== null ? [automationStoreFilePath(formalUserDataDir(app.getPath("appData")))] : [])],
     (workspaceId) => skills.linkDirs(workspaceId),
     skills,
     plugins,

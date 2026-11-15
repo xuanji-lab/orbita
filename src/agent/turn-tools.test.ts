@@ -20,6 +20,7 @@ function submit(overrides: Partial<Submit> = {}): TurnInput {
     piSessionDir: "/tmp/pi",
     attachmentsDir: "/tmp/att",
     protectedPaths: [],
+    protectedFiles: [],
     skillsDirs: [],
     mcpServers: {},
     ...overrides,

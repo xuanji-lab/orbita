@@ -41,6 +41,7 @@ function command(cwd: string, skillsDir: string): TurnInput {
     piSessionDir: join(cwd, ".pi"),
     attachmentsDir: join(cwd, ".att"),
     protectedPaths: [],
+    protectedFiles: [],
     skillsDirs: [skillsDir],
     mcpServers: {},
     sessionMemory: true,

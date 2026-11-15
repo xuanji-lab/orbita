@@ -59,6 +59,7 @@ function command(cwd: string, overrides: Partial<Submit> = {}): KernelTurnComman
     piSessionDir: join(cwd, ".pi"),
     attachmentsDir: join(cwd, ".att"),
     protectedPaths: [join(cwd, "sessions")],
+    protectedFiles: [],
     skillsDirs: [],
     mcpServers: {},
     ...overrides,
