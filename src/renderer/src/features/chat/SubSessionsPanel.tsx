@@ -38,6 +38,7 @@ import {
   sortSubSessionRows,
   subSessionBarFill,
   subSessionStatusOf,
+  waitingSummary,
   type SubSessionRowStatus,
 } from "./sub-sessions-rows";
 import type { SubSessionsView } from "./sub-sessions-state";
@@ -186,6 +187,7 @@ export function SubSessionsPanel(props: {
     }),
   );
   const waitingCount = rows.filter((row) => row.status === "waiting" || row.status === "approval" || row.status === "interrupted").length;
+  const interruptedCount = rows.filter((row) => row.status === "interrupted").length;
 
   return (
     <RightPanelFrame
@@ -194,7 +196,7 @@ export function SubSessionsPanel(props: {
           <PanelTitle icon={FEATURE_ICON.subsessions} title={t.rail.subSessions(children.length)} tip={t.subSessions.of(props.parentTitle)} />
           {waitingCount > 0 && (
             <span className="inbox-waiting-count" style={{ color: "var(--color-warning)" }}>
-              {t.subSessions.waitingCount(waitingCount)}
+              {waitingSummary(waitingCount, interruptedCount, { interrupted: t.chat.subSessionInterruptedShort, waiting: t.subSessions.waitingCount })}
             </span>
           )}
         </>

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { FEATURE_ICON } from "./feature-icons.ts";
+import { waitingSummary } from "../features/chat/sub-sessions-rows.ts";
 import { InlineName } from "./InlineName";
 import { useT } from "../locale.ts";
 import type { Messages } from "../messages-en.ts";
@@ -34,7 +35,7 @@ export function SessionCapsule(props: {
    */
   completion: CapCompletionState | null;
   /** 左端子会话芯片；null = 留空（用户默认：不放「0」占位，可推翻） */
-  /** interrupted：等你的子会话里被崩溃打断、等你点「继续」的个数（悬停提示单说一句；芯片上照旧只写「N 个等你」） */
+  /** interrupted：等你的子会话里被崩溃打断、等你点「继续」的个数（芯片与右栏列表标题同一套说法，见 waitingSummary） */
   subChip: { count: number; waiting: number; interrupted: number } | null;
   onOpenSubSessions?: () => void;
   /** 左端面包屑「↑ 父标题」（子会话被 Open as main 时才有）；与子会话芯片同一槽位 */
@@ -65,10 +66,9 @@ export function SessionCapsule(props: {
             title={
               [
                 t.chat.subSessionCount(props.subChip.count),
-                props.subChip.waiting > 0 ? t.chat.subSessionWaiting(props.subChip.waiting) : null,
-                props.subChip.interrupted > 0 ? t.chat.subSessionInterrupted(props.subChip.interrupted) : null,
+                waitingSummary(props.subChip.waiting, props.subChip.interrupted, { interrupted: t.chat.subSessionInterrupted, waiting: t.chat.subSessionWaiting }),
               ]
-                .filter((part): part is string => part !== null)
+                .filter((part) => part !== "")
                 .join(" · ")
             }
           >
@@ -77,9 +77,7 @@ export function SessionCapsule(props: {
             {props.subChip.waiting > 0 && (
               <span>
                 ·{" "}
-                {props.subChip.interrupted === props.subChip.waiting
-                  ? t.chat.subSessionInterruptedShort(props.subChip.interrupted)
-                  : t.chat.subSessionWaiting(props.subChip.waiting)}
+                {waitingSummary(props.subChip.waiting, props.subChip.interrupted, { interrupted: t.chat.subSessionInterruptedShort, waiting: t.chat.subSessionWaiting })}
               </span>
             )}
           </button>

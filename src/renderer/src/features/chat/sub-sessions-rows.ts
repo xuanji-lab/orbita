@@ -160,6 +160,21 @@ function firstLineOf(text: string): string {
 }
 
 /**
+ * 「等你」那几个子会话怎么说（父会话顶部胶囊与右栏子会话列表标题同一套，2026-11-16 验收：一处写「被打断」一处写「在等你」，
+ * 读的人会以为是两件事）：有被打断的，先写被打断的个数；其余等你的（问你 / 待批准）照各处原来的说法写个数；都没有 = 空串。
+ */
+export function waitingSummary(
+  waiting: number,
+  interrupted: number,
+  words: { interrupted: (count: number) => string; waiting: (count: number) => string },
+): string {
+  const parts: string[] = [];
+  if (interrupted > 0) parts.push(words.interrupted(interrupted));
+  if (waiting - interrupted > 0) parts.push(words.waiting(waiting - interrupted));
+  return parts.join(" · ");
+}
+
+/**
  * 父会话转录里派出卡的状态：通道摘要的终态（done / failed / waiting / stopped）优先；否则看子会话在 renderer
  * 会话槽里的 phase——不为 idle 就是还在跑；都不是时，被崩溃打断、等你点继续的说「被打断」（不说「空闲」——
  * 它停着是因为应用崩了，父会话还在等它）。

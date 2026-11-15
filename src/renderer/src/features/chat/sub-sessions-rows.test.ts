@@ -9,6 +9,7 @@ import {
   subSessionBarFill,
   subSessionRowStatus,
   subSessionStatusOf,
+  waitingSummary,
   type SubSessionEngineSlots,
   type SubSessionRowStatus,
 } from "./sub-sessions-rows.ts";
@@ -259,5 +260,15 @@ describe("delegateCardStatus（父会话转录里派出卡的状态）", () => {
     strictEqual(delegateCardStatus("failed", true, true), "failed");
     strictEqual(delegateCardStatus("waiting", true, false), "waiting");
     strictEqual(delegateCardStatus("running", true, true), "running");
+  });
+});
+
+describe("waitingSummary（父会话胶囊与右栏列表标题的「等你」同一套说法）", () => {
+  const words = { interrupted: (n: number) => `${n} 个被打断`, waiting: (n: number) => `${n} 个等你` };
+  it("全是被打断：只写被打断的数；混着：被打断的在前、其余等你的照旧；都没有：空串", () => {
+    strictEqual(waitingSummary(2, 2, words), "2 个被打断");
+    strictEqual(waitingSummary(3, 1, words), "1 个被打断 · 2 个等你");
+    strictEqual(waitingSummary(2, 0, words), "2 个等你");
+    strictEqual(waitingSummary(0, 0, words), "");
   });
 });
