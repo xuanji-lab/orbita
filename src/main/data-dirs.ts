@@ -31,7 +31,7 @@ export function formalUserDataDir(appData: string): string {
 
 /**
  * 工具面全档只读的目录（protectedPaths）：会话账本两本（sessions/、pi-sessions/）与新内核的库目录（durable/，含迁移的
- * 半份与墓碑）。**durable/ 开关关着也护**：开过开关的会话还在库里，关掉开关后旧内核的智能体同样不该能改它。
+ * 半份与墓碑）。
  * 开发实例（formalUserData 非 null）再多护一份正式实例的 durable/——用户就是用开发实例做验收的，开发实例里的智能体
  * 不该能动他真实在用的会话库。它进了这份名单，正式实例的数据目录就整个归命令串闸门的白名单管（只读命令放行，
  * protected-command.ts）；正式实例的 sessions/、pi-sessions/ 不额外列，写 / 改工具对它们的拦截与之前一样不管。

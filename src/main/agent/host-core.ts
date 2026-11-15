@@ -3,6 +3,12 @@
  * （recorder.ts 同款先例）。真的 fork 在 `host.ts` 那层注入。
  *
  * 只做三件事：懒启动进程、把命令发进去、把事件广播给窗口。业务判断全在两端，不在这里。
+ *
+ * 两个子进程：
+ * - kernel 进程（kernel-runtime.ts）：对话主循环——开轮 / 停止 / 抢跑 / 压缩 / 插话 / 切档 / 换模型 / 标题、工具请求与审批、
+ *   住在新内核里的会话的本子编辑与分支；
+ * - agent 进程（runtime.ts）：不跑轮的家务——内建型号目录与联网刷新、连接测试、专注小结、收尾清单、还没迁的旧会话的
+ *   pi 本子编辑与分支、没交给过 kernel 的会话换模型时的校验、MCP 热重载的回执。
  */
 import type {
   AgentCommand,
@@ -43,30 +49,30 @@ export interface KernelChild {
   kill(): unknown;
 }
 
-/** 插话没送进去时的那句话（旧内核 runtime.ts 的同一句） */
+/** 插话没送进去时的那句话（与删掉的旧内核主循环同一句） */
 const STEER_MISSED_MESSAGE = "steer 到达时这一轮已结束（或刚开机还没接上），注入没送进去——请重发";
 
-/** 一轮开轮命令该交给谁：新内核（kernel 进程）还是旧内核（agent 进程）；拒绝时抛错（原因给用户看） */
-export type TurnRoute = "kernel" | "legacy";
+/** 开轮交给新内核时带上这棵会话树的根（决定用哪个库：子会话与父同库）；这一轮要迁的旧本子多大 */
+export type KernelTurnRoute = { to: "kernel"; root: string; migrateBytes?: number };
 
-/** 交给新内核时带上这棵会话树的根（决定用哪个库：子会话与父同库） */
-export type KernelRoute = { to: "kernel"; root: string; migrateBytes?: number } | { to: "legacy" };
+/** 本子编辑交给谁：住在新内核里的会话 → kernel（带树根），还没迁的旧会话 → agent 进程改 pi 本子 */
+export type KernelRoute = { to: "kernel"; root: string } | { to: "legacy" };
 
 /** 这一轮要迁的旧本子有多大时，发送那一刻就说「正在迁移」（小的迁得快，不说） */
 export const MIGRATION_HINT_BYTES = 16 * 1024 * 1024;
 
 /**
- * 新内核那条道（开关 ORBITA_DURABLE_KERNEL=1 时由主进程给；关着时缺席，host 的行为与开关之前逐字节相同）。
+ * 新内核那条道（主进程给）。
  * - fork / dir：拉起 kernel 进程、它的库目录；
- * - route：开轮命令去哪（开关开着时一律 kernel，带树根；不能续的抛错），会话记上「住在新内核」；
- * - editRoute：本子编辑类操作（回退 / 撤销 / 分支的源 / 挪工作区）去哪：住在新内核里的会话 → kernel，其余旧内核；不能编辑的抛错；
+ * - route：开轮命令交给 kernel（带树根；不能续的抛错），会话记上「住在新内核」；
+ * - editRoute：本子编辑类操作（回退 / 撤销 / 分支的源 / 挪工作区）去哪：住在新内核里的会话 → kernel，其余（还没迁的旧会话）agent 进程改 pi 本子；不能编辑的抛错；
  * - settled：kernel 报一轮落定（清「在跑」标记、记迁移失败）；
  * - exited：kernel 进程意外退出（清孤儿 shell 进程）。running = 退出时还在跑的会话。
  */
 export interface KernelLane {
   fork: () => KernelChild;
   dir: string;
-  route: (command: { sessionId: string; type: string }) => Promise<KernelRoute>;
+  route: (command: { sessionId: string; type: string }) => Promise<KernelTurnRoute>;
   editRoute: (sessionId: string) => Promise<KernelRoute>;
   settled: (sessionId: string, result: KernelTurnResult) => void;
   exited: (running: readonly string[]) => void;
@@ -93,7 +99,7 @@ export class AgentHostCore {
   private builtinsArrived: Promise<BuiltinProvider[]> | null = null;
   /**
    * 正在等待 `created` 的命令（submit / interrupt / compact 的首轮开机、branch）。
-   * runtime 无状态化后每轮开机都会发 `created`：等待者拿到 pi 本子路径；
+   * 每轮开机都会发 `created`：等待者拿到本子引用；
    * 没人等的（续轮）交 onEvent 转发，主进程用它把真值校准回 meta（自愈）。
    */
   private readonly pendingCreates = new Map<
@@ -137,8 +143,8 @@ export class AgentHostCore {
   /**
    * catalogScope 缺席 = 不送目录刷新范围，agent 进程就一份目录也不联网（测试与裸跑）。
    */
-  /** 新内核那条道；缺席 = 开关关着 */
-  private readonly kernel: KernelLane | undefined;
+  /** 新内核那条道 */
+  private readonly kernel: KernelLane;
   private kernelChild: KernelChild | null = null;
   /** 闲置回收的计时器（每次与 kernel 往来都重新计时） */
   private kernelIdleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -167,35 +173,11 @@ export class AgentHostCore {
   private readonly pendingKernel = new Map<string, (error?: string) => void>();
   private kernelSeq = 0;
 
-  /**
-   * 开关关着时的守卫：住在新内核里的会话不交给旧内核续写、不让旧内核编辑它的 pi 本子（返回拒绝原因；null = 放行）。
-   * 缺席 = 不守（测试夹具与开关之前的形状）。
-   */
-  private readonly legacyGuard: ((sessionId: string) => Promise<string | null>) | undefined;
-
-  constructor(
-    forkRuntime: () => AgentChild,
-    onEvent: (event: AgentEvent) => void,
-    catalogScope?: CatalogScope,
-    kernel?: KernelLane,
-    legacyGuard?: (sessionId: string) => Promise<string | null>,
-  ) {
+  constructor(forkRuntime: () => AgentChild, onEvent: (event: AgentEvent) => void, kernel: KernelLane, catalogScope?: CatalogScope) {
     this.forkRuntime = forkRuntime;
     this.onEvent = onEvent;
-    this.catalogScope = catalogScope;
     this.kernel = kernel;
-    this.legacyGuard = legacyGuard;
-  }
-
-  /**
-   * 本子编辑类操作（回退 / 撤销 / 分支的源 / 挪工作区）交给谁：开关开着问新内核那条道（住在新内核里的去 kernel，
-   * 不能编辑的抛错）；关着问守卫（住在新内核里的会话旧内核不碰，抛错）；都没有（开关之前的形状）旧内核。
-   */
-  private async editRoute(sessionId: string): Promise<KernelRoute> {
-    if (this.kernel !== undefined) return this.kernel.editRoute(sessionId);
-    const refused = (await this.legacyGuard?.(sessionId)) ?? null;
-    if (refused !== null) throw new Error(refused);
-    return { to: "legacy" };
+    this.catalogScope = catalogScope;
   }
 
   /**
@@ -206,7 +188,6 @@ export class AgentHostCore {
     if (this.kernelReady) return this.kernelReady;
     if (this.kernelRecycling !== null) return this.kernelRecycling.then(() => this.ensureKernel());
     const lane = this.kernel;
-    if (lane === undefined) return Promise.reject(new Error("durable kernel is not enabled"));
     let child: KernelChild;
     try {
       child = lane.fork();
@@ -241,7 +222,7 @@ export class AgentHostCore {
           return;
         }
         if (message.type === "steerBounced") {
-          // 插话到达时子刚收尾：交给通道当「子空闲时的投递」开一轮；没人接（测试夹具）就按旧内核的说法报 failed
+          // 插话到达时子刚收尾：交给通道当「子空闲时的投递」开一轮；没人接（测试夹具）就报 failed（消息没送到，要人重发）
           this.bounceSteer(message.sessionId, message.text, message.delivery);
           return;
         }
@@ -319,7 +300,7 @@ export class AgentHostCore {
 
   /** 与 kernel 每往来一次都重新计时；到点还闲着就回收 */
   private armKernelRecycle(): void {
-    const ms = this.kernel?.idleRecycleMs;
+    const ms = this.kernel.idleRecycleMs;
     if (ms === undefined || this.kernelChild === null) return;
     if (this.kernelIdleTimer !== null) clearTimeout(this.kernelIdleTimer);
     this.kernelIdleTimer = setTimeout(() => this.maybeRecycleKernel(), ms);
@@ -352,13 +333,12 @@ export class AgentHostCore {
     });
   }
 
-  /** 工具回执 / 审批回答：回到发出请求的那个进程 */
+  /**
+   * 工具回执 / 审批回答：回到 kernel 进程（工具请求与审批只有它发）。对不上号的（请求早已不在：停止、kernel 退出）丢掉——
+   * agent 进程不跑轮，没有在途的请求可结。
+   */
   private reply(command: KernelReplyCommand): void {
-    if (this.kernelRequests.delete(command.requestId)) {
-      this.kernelChild?.postMessage({ type: "reply", command });
-      return;
-    }
-    this.child?.postMessage(command);
+    if (this.kernelRequests.delete(command.requestId)) this.kernelChild?.postMessage({ type: "reply", command });
   }
 
   /** 懒启动：第一次真正要用 agent 时才付进程启动的钱。 */
@@ -500,30 +480,14 @@ export class AgentHostCore {
   private async postTurn(
     command: Extract<AgentCommand, { type: "submit" | "interrupt" | "compact" }>,
   ): Promise<string | null> {
-    // 新内核开着：先问这一轮交给谁（住在新内核里的会话 / 新的根会话 → kernel；不能续的这里抛错）
-    // 没有新内核那条道、也没有守卫（开关之前的形状）时一个 await 都不多：fork 的时序与之前逐拍相同
-    if (this.kernel !== undefined) {
-      const route = await this.kernel.route(command);
-      if (route.to === "kernel") {
-        // 事先就知道要迁一条大会话：发送那一刻就报 running（界面立刻说一句），kernel 开完这条会话（created）时补 done
-        if ((route.migrateBytes ?? 0) >= MIGRATION_HINT_BYTES) {
-          this.expectedMigrations.add(command.sessionId);
-          this.onEvent({ type: "migration", sessionId: command.sessionId, state: "running", expected: true });
-        }
-        return this.postKernelTurn(command, route.root);
-      }
+    // 先问这一轮能不能开（不能续的这里抛错），会话记上「住在新内核」
+    const route = await this.kernel.route(command);
+    // 事先就知道要迁一条大会话：发送那一刻就报 running（界面立刻说一句），kernel 开完这条会话（created）时补 done
+    if ((route.migrateBytes ?? 0) >= MIGRATION_HINT_BYTES) {
+      this.expectedMigrations.add(command.sessionId);
+      this.onEvent({ type: "migration", sessionId: command.sessionId, state: "running", expected: true });
     }
-    if (this.kernel === undefined && this.legacyGuard !== undefined) {
-      const refused = await this.legacyGuard(command.sessionId);
-      if (refused !== null) throw new Error(refused);
-    }
-    await this.ensure();
-    let created: Promise<string | null> | null = null;
-    if (command.piSessionFile === undefined) {
-      created = this.awaitCreated(command.sessionId, "agent runtime did not confirm the session in time");
-    }
-    this.post(command);
-    return created;
+    return this.postKernelTurn(command, route.root);
   }
 
   /** 交给 kernel 的开轮（含 continueRun）：与 postTurn 同一个 created 等待规则 */
@@ -553,11 +517,6 @@ export class AgentHostCore {
     return this.kernelChild !== null;
   }
 
-  /** 这次启动的对话主循环由新内核跑（开关开着） */
-  kernelEnabled(): boolean {
-    return this.kernel !== undefined;
-  }
-
   /** 此刻在新内核里跑着一轮的会话（交给 kernel 之后、turnSettled 之前） */
   kernelRunningSessions(): string[] {
     return [...this.kernelRunning];
@@ -570,14 +529,14 @@ export class AgentHostCore {
 
   /** 新内核：接着跑上次被中断的那一轮（不加新消息）。只有新内核有这件事 */
   async continueRun(command: KernelContinueCommand): Promise<string | null> {
-    const route = this.kernel === undefined ? null : await this.kernel.route(command);
-    if (route?.to !== "kernel") throw new Error("only conversations that live in the durable kernel can be continued");
+    const route = await this.kernel.route(command);
     return this.postKernelTurn(command, route.root);
   }
 
   /**
-   * 这条会话的会话级命令发给谁：这次运行里交给过 kernel 的走 kernel（进程被回收 / 崩了也算——那时它没有在跑的轮，
-   * postKernel 不为这些命令拉起进程），其余旧内核。
+   * 这条会话这次运行里交给过 kernel 没有：交给过的，会话级命令（停止 / 切档 / 换模型 / 插话 / 标题 / 释放）走 kernel
+   * （进程被回收 / 崩了也算——那时它没有在跑的轮，postKernel 不为这些命令拉起进程）。没交给过的此刻一定没有在跑的轮：
+   * 停止、切档、标题、释放都没有对象（档位随下一轮的开轮命令送）；换模型只做校验并报 model 事件（agent 进程，见 setModel）。
    */
   private ownedByKernel(sessionId: string): boolean {
     return this.kernelSessions.has(sessionId);
@@ -593,8 +552,8 @@ export class AgentHostCore {
     /** 源会话 id：住在新内核里的会话由新内核分支（源本子在它树的库里，分出来的是新树、新库） */
     sourceSessionId?: string,
   ): Promise<string | null> {
-    if (sourceSessionId !== undefined && (this.kernel !== undefined || this.legacyGuard !== undefined)) {
-      const route = await this.editRoute(sourceSessionId);
+    if (sourceSessionId !== undefined) {
+      const route = await this.kernel.editRoute(sourceSessionId);
       if (route.to === "kernel") {
         await this.ensureKernel();
         const created = this.awaitCreated(sessionId, "kernel runtime did not confirm the branch in time");
@@ -617,15 +576,13 @@ export class AgentHostCore {
   async editPiBook(
     command: Extract<AgentCommand, { type: "revertPiBook" | "undoPiBook" | "movePiBook" }>,
   ): Promise<void> {
-    if (this.kernel !== undefined || this.legacyGuard !== undefined) {
-      const route = await this.editRoute(command.sessionId);
-      if (route.to === "kernel") {
-        await this.ensureKernel();
-        this.kernelEdits.add(command.sessionId);
-        return this.awaitPiEdit(command.sessionId, "kernel runtime did not confirm the edit in time", () => this.postKernel(command, route.root)).finally(() =>
-          this.kernelEdits.delete(command.sessionId),
-        );
-      }
+    const route = await this.kernel.editRoute(command.sessionId);
+    if (route.to === "kernel") {
+      await this.ensureKernel();
+      this.kernelEdits.add(command.sessionId);
+      return this.awaitPiEdit(command.sessionId, "kernel runtime did not confirm the edit in time", () => this.postKernel(command, route.root)).finally(() =>
+        this.kernelEdits.delete(command.sessionId),
+      );
     }
     await this.ensure();
     return this.awaitPiEdit(command.sessionId, "agent runtime did not confirm the pi book edit in time", () => this.post(command));
@@ -734,13 +691,9 @@ export class AgentHostCore {
     /** 命名专用模型（已在调用方解好密钥面）；缺席 = 用会话当前的模型 */
     model?: Extract<AgentCommand, { type: "generateTitle" }>["model"],
   ): void {
-    if (this.ownedByKernel(sessionId)) {
-      if (!this.kernelTitleOnce.delete(sessionId)) return;
-      this.postKernel({ type: "generateTitle", sessionId, text, ...(model === undefined ? {} : { model }) });
-      return;
-    }
-    if (!this.child) return; // 进程没起：标题不重要，别为它拉起整个 runtime
-    this.post({ type: "generateTitle", sessionId, text, ...(model === undefined ? {} : { model }) });
+    // 只给这次运行里由 kernel 新建的会话起一次（kernelTitleOnce）；别的会话不起
+    if (!this.ownedByKernel(sessionId) || !this.kernelTitleOnce.delete(sessionId)) return;
+    this.postKernel({ type: "generateTitle", sessionId, text, ...(model === undefined ? {} : { model }) });
   }
 
   /**
@@ -841,18 +794,15 @@ export class AgentHostCore {
   }
 
   async setMode(sessionId: string, mode: PermissionMode): Promise<void> {
-    // 新内核里正在跑的会话：它的闸门现读这一档（下一个工具调用立刻生效）
-    if (this.ownedByKernel(sessionId)) {
-      this.postKernel({ type: "setMode", sessionId, mode });
-      return;
-    }
-    await this.ensure();
-    this.post({ type: "setMode", sessionId, mode });
+    // 新内核里正在跑的会话：它的闸门现读这一档（下一个工具调用立刻生效）。没交给过 kernel 的：档位随下一轮的开轮命令送
+    if (this.ownedByKernel(sessionId)) this.postKernel({ type: "setMode", sessionId, mode });
   }
 
   /**
    * 会话内换模型（C-4）。**发完即回**：成功经 `model` 事件、失败经 `failed` 事件
    * 回传，调用方不等也不该等——切换是一次真实的注册与校验，忙碌态由事件链表达。
+   * 这次运行里交给过 kernel 的会话由 kernel 校验；没交给过的（空闲的旧会话）由 agent 进程做同一套注册与校验并报
+   * model 事件（recorder 据此把新型号落进 meta，下一轮按 meta 装配）。
    */
   async setModel(
     sessionId: string,
@@ -955,16 +905,13 @@ export class AgentHostCore {
   }
 
   /**
-   * 子会话：父→子注入（Q2' 裁决）。**走 `post`，不 `ensure`**——调用方（requests.ts
-   * 的 deliverToChild）只在目标 phase 不是 idle 时才发这条，进程没起说明状态已经
-   * 失步，`post` 会抛，调用方据此按「已记入通道但没送达」处理，不静默丢。
+   * 子会话：父→子注入（Q2' 裁决）。调用方（requests.ts 的 deliverToChild）只在目标 phase 不是 idle 时才发这条——
+   * 在跑的轮一定是这次运行里交给 kernel 的。没交给过 kernel 说明状态已经失步：抛错，调用方据此按「已记入通道但没送达」
+   * 处理，不静默丢。
    */
   steer(sessionId: string, text: string, delivery: ChannelDelivery): void {
-    if (this.ownedByKernel(sessionId)) {
-      this.postKernel({ type: "steer", sessionId, text, delivery });
-      return;
-    }
-    this.post({ type: "steer", sessionId, text, delivery });
+    if (!this.ownedByKernel(sessionId)) throw new Error("the session has no running turn to steer");
+    this.postKernel({ type: "steer", sessionId, text, delivery });
   }
 
   /** 受管浏览器：browserRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。 */
@@ -1058,13 +1005,9 @@ export class AgentHostCore {
     return this.postTurn(command);
   }
 
+  /** 停止只停当前轮。没交给过 kernel 的会话没有在跑的轮：「停止」对空闲会话本就是 no-op */
   async abort(sessionId: string): Promise<void> {
-    if (this.ownedByKernel(sessionId)) {
-      this.postKernel({ type: "abort", sessionId });
-      return;
-    }
-    await this.ensure();
-    this.post({ type: "abort", sessionId });
+    if (this.ownedByKernel(sessionId)) this.postKernel({ type: "abort", sessionId });
   }
 
   /** 手动压缩上下文。**发完即回**（续轮）：忙碌态与界碑走 compaction 事件链。首轮开机时等 created */
@@ -1073,17 +1016,13 @@ export class AgentHostCore {
   }
 
   /**
-   * 释放一条会话（runtime 侧退订 + `session.dispose()` + 出 Map）。
-   * **不 ensure**：进程没起的话这条会话本来就不在 runtime 里（answerPermission 同款理由），
-   * 为释放去拉起一个进程才是本末倒置。发完即回，runtime 对不存在的 id 静默容忍。
+   * 释放一条会话（kernel 侧停轮、出表）。没交给过 kernel 的会话 kernel 里本来就没有它；
+   * 进程不在时不为释放去拉起（postKernel 的规矩）。
    */
   disposeSession(sessionId: string): void {
-    if (this.ownedByKernel(sessionId)) {
-      this.postKernel({ type: "dispose", sessionId });
-      this.kernelSessions.delete(sessionId);
-      return;
-    }
-    this.child?.postMessage({ type: "dispose", sessionId } satisfies AgentCommand);
+    if (!this.ownedByKernel(sessionId)) return;
+    this.postKernel({ type: "dispose", sessionId });
+    this.kernelSessions.delete(sessionId);
   }
 
   /**

@@ -3,10 +3,9 @@
  * （electron.vite.config 的 main 多入口）。**薄壳**：会话生命周期在 kernel-session.ts、库池与迁移在 kernel.ts /
  * legacy-migrate.ts（纯模块，`node --test` 直接测），这里只管 parentPort 收发、模型目录与进程级单例。
  *
- * 开关 ORBITA_DURABLE_KERNEL=1 开着时主进程拉起它，界面里根会话的对话主循环由它跑；关着时这个进程不存在，
- * agent runtime 一个字节都没变（子会话、标题以外的家务活、目录刷新仍在 agent runtime）。
- * 单独一个进程而不是塞进 agent runtime：开关关着时 agent 进程不该为它多加载一整套 durable（启动时间与常驻内存）；
- * 删旧内核那一步两个进程合一。
+ * 主进程在第一次有会话要跑时拉起它，界面里的对话主循环（根会话、子会话、自动化开的轮）由它跑。
+ * agent runtime（runtime.ts）只剩不跑轮的家务（内建目录与刷新、连接测试、小结与收尾清单、还没迁的旧会话的 pi 本子编辑）；
+ * 两个进程合一留到去掉 pi-coding-agent 依赖的那一步（家务里有几件还用着它）。
  *
  * 为什么是 utility 进程：SQLite 的同步调用（node:sqlite 是同步 API）与大会话迁移的 JSON 处理
  * 都不该占主进程的事件循环；崩溃也不带走窗口（主进程把在跑的轮标成「上次被中断」，见 host-core.ts）。

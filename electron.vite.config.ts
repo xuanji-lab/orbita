@@ -70,7 +70,7 @@ export default defineConfig({
           "agent-runtime": resolve(__dirname, "src/agent/runtime.ts"),
           "terminal-runtime": resolve(__dirname, "src/terminal/runtime.ts"),
           "memory-runtime": resolve(__dirname, "src/memory/runtime.ts"),
-          // 新内核（pi-durable）：只在开发开关 ORBITA_DURABLE_KERNEL=1 时被拉起（main/agent/kernel-host.ts）
+          // 新内核（pi-durable）：对话主循环，第一次有会话要跑时被拉起（main/agent/kernel-host.ts）
           "kernel-runtime": resolve(__dirname, "src/agent/kernel-runtime.ts"),
           // 新内核迁旧会话的一次性进程（kernel 进程按需 fork，迁完即退，见 src/agent/kernel-migrator.ts）
           "kernel-migrator": resolve(__dirname, "src/agent/kernel-migrator.ts"),

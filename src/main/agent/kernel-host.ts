@@ -1,31 +1,16 @@
 /**
- * 新内核（pi-durable）的主进程侧：开发开关、开轮命令交给谁、会话「住在新内核」的标记、删会话时连带删库。
+ * 新内核（pi-durable）的主进程侧：开轮命令能不能交给 kernel、会话「住在新内核」的标记、删会话时连带删库。
  * **纯模块**（不 import electron，fork 由 index.ts 注入），`node --test` 直接测。
  *
- * 开关：环境变量 `ORBITA_DURABLE_KERNEL=1`，**默认关**。关着时 index.ts 不给 AgentHost 这条道（KernelLane），
- * host 的行为与开关之前逐字节相同；唯一的差别是住在新内核里的会话（meta.durable）**不交给旧内核续写**（见 routeFor）。
- *
- * 开着时：对话主循环（根会话、子会话、自动化开的轮）都由 kernel 进程跑（第一次交给它时在 meta 上记 DurableMark）；
+ * 对话主循环（根会话、子会话、自动化开的轮）都由 kernel 进程跑（第一次交给它时在 meta 上记 DurableMark）；
  * 子会话与父同库（一棵树一库，root = 父）。本子编辑类操作（回退 / 撤销 / 分支的源 / 挪工作区）：住在新内核里的会话
- * 交给新内核，其余（开关开着但还没在新内核里跑过的旧会话）照旧由旧内核编辑 pi 本子——它下次发消息时按编辑后的本子迁。
+ * 交给新内核，其余（还没在新内核里跑过的旧会话）由 agent 进程编辑 pi 本子——它下次发消息时按编辑后的本子迁。
  */
 import { rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { DurableMark, SessionMeta } from "../../shared/session.ts";
 import { isDurableBookRef, KERNEL_LIBRARY_NAME, resumePolicy, type KernelTurnResult } from "../../shared/kernel.ts";
-import type { KernelChild, KernelLane, KernelRoute, TurnRoute } from "./host-core.ts";
-
-/** 开发开关的环境变量名 */
-export const DURABLE_KERNEL_FLAG = "ORBITA_DURABLE_KERNEL";
-
-/** 开关只认字面量 "1"：别的值（空串、"0"、"true"）一律当关——宁可没开，不要误开 */
-export function durableKernelEnabled(env: Readonly<Record<string, string | undefined>>): boolean {
-  return env[DURABLE_KERNEL_FLAG] === "1";
-}
-
-/** 关着开关打开一条住在新内核里的会话：只能看，不能续（界面也按它禁用输入框，这里是最后一道） */
-export const DURABLE_MOVED_MESSAGE =
-  "This conversation continued in the durable kernel. With ORBITA_DURABLE_KERNEL off it is read-only here (the old kernel only has the turns before the move).";
+import type { KernelChild, KernelLane, KernelRoute } from "./host-core.ts";
 
 /** 迁移失败：只读 */
 function migrationFailedMessage(reason: string): string {
@@ -33,18 +18,15 @@ function migrationFailedMessage(reason: string): string {
 }
 
 /**
- * 这一轮交给谁。开关开着：迁移失败过的只读（拒绝）；其余（根会话、子会话、全新的会话）走新内核。
- * 开关关着：住在新内核里的会话拒绝（旧内核续写会让两边分叉），其余旧内核。
+ * 这一轮能不能开：迁移失败过的只读（返回拒绝原因）；其余（根会话、子会话、全新的会话）都交给新内核（null）。
  */
-export function routeFor(meta: SessionMeta | null, enabled: boolean): { to: TurnRoute } | { refuse: string } {
-  if (!enabled) return meta?.durable === undefined ? { to: "legacy" } : { refuse: DURABLE_MOVED_MESSAGE };
-  if (meta?.durable?.failed !== undefined) return { refuse: migrationFailedMessage(meta.durable.failed) };
-  return { to: "kernel" };
+export function turnRefusal(meta: SessionMeta | null): string | null {
+  return meta?.durable?.failed === undefined ? null : migrationFailedMessage(meta.durable.failed);
 }
 
 /**
- * 本子编辑交给谁（开关开着）：住在新内核里的会话 → kernel（迁移失败过的只读，拒绝）；还没在新内核里跑过的旧会话
- * → 旧内核编辑 pi 本子（它下次发消息时按编辑后的本子迁，见 KernelPool 的指纹重迁）。
+ * 本子编辑交给谁：住在新内核里的会话 → kernel（迁移失败过的只读，拒绝）；还没在新内核里跑过的旧会话
+ * → agent 进程编辑 pi 本子（它下次发消息时按编辑后的本子迁，见 KernelPool 的指纹重迁）。
  */
 export function editRouteFor(meta: SessionMeta | null, sessionId: string): KernelRoute | { refuse: string } {
   if (meta?.durable === undefined) return { to: "legacy" };
@@ -140,9 +122,8 @@ export class KernelHost {
       dir: this.dir,
       route: async (command) => {
         const meta = await deps.readMeta(command.sessionId);
-        const decision = routeFor(meta, true);
-        if ("refuse" in decision) throw new Error(decision.refuse);
-        if (decision.to === "legacy") return { to: "legacy" };
+        const refused = turnRefusal(meta);
+        if (refused !== null) throw new Error(refused);
         // 这一轮要迁的旧本子多大（还没在新内核里跑过、有旧本子）：大的发送那一刻就说「正在迁移」
         const migrateBytes = await legacyBookBytes(meta);
         // 全新的会话还没有 meta：首轮 created 之后由 ipc 建 meta 时带上标记（host.durableMark）

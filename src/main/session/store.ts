@@ -854,7 +854,7 @@ export class SessionStore {
     } catch (cause) {
       if (!isNotFound(cause)) throw cause;
     }
-    // 新内核分出来的（「本子」是 durable 引用）：一出生就住在新内核里——关着开关时旧内核不碰它（它没有 pi 本子可续）
+    // 新内核分出来的（「本子」是 durable 引用）：一出生就住在新内核里（它没有 pi 本子，本子编辑交给 kernel）
     const durable = isDurableBookRef(piSessionFile) ? { durable: { since: Date.now() } } : {};
     await writeJsonAtomic(this.metaPath(plan.meta.id), { ...plan.meta, piSessionFile, ...durable });
     if (plan.records.length > 0) {

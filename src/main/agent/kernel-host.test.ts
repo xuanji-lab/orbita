@@ -4,20 +4,12 @@ import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DurableMark, SessionMeta } from "../../shared/session.ts";
-import { DURABLE_MOVED_MESSAGE, durableKernelEnabled, editRouteFor, KernelHost, legacyBookBytes, libraryRoot, markRunning, markSettled, routeFor, sessionsToResume } from "./kernel-host.ts";
+import { editRouteFor, KernelHost, legacyBookBytes, libraryRoot, markRunning, markSettled, sessionsToResume, turnRefusal } from "./kernel-host.ts";
 import { awaitsContinue, restartNote, resumePolicy } from "../../shared/kernel.ts";
 
 const dirs: string[] = [];
 after(async () => {
   for (const dir of dirs) await rm(dir, { recursive: true, force: true });
-});
-
-describe("durableKernelEnabled", () => {
-  it("只认字面量 1", () => {
-    assert.equal(durableKernelEnabled({ ORBITA_DURABLE_KERNEL: "1" }), true);
-    for (const value of ["0", "", "true", "yes", " 1"]) assert.equal(durableKernelEnabled({ ORBITA_DURABLE_KERNEL: value }), false);
-    assert.equal(durableKernelEnabled({}), false);
-  });
 });
 
 describe("KernelHost", () => {
@@ -33,26 +25,22 @@ describe("KernelHost", () => {
   });
 });
 
-describe("routeFor / markRunning / markSettled：一轮交给谁、会话的新内核标记", () => {
+describe("turnRefusal / markRunning / markSettled：一轮能不能开、会话的新内核标记", () => {
   const meta = (extra: Partial<SessionMeta> = {}): SessionMeta => ({ id: "s", title: "", titleSource: "derived", cwd: "/", workspaceId: null, providerId: "p", modelId: "m", mode: "plan", thinkingLevel: "medium", piSessionFile: "/p.jsonl", pinned: false, archived: false, recentQueries: [], stats: null, createdAt: 1, updatedAt: 1, ...extra });
-  it("开着：根会话（含全新的）与子会话 → kernel；迁移失败过 → 拒绝（只读）；本子编辑按住处分流", () => {
-    assert.deepEqual(routeFor(null, true), { to: "kernel" });
-    assert.deepEqual(routeFor(meta(), true), { to: "kernel" });
+  it("根会话（含全新的）与子会话 → 能开；迁移失败过 → 拒绝（只读）；本子编辑按住处分流", () => {
+    assert.equal(turnRefusal(null), null);
+    assert.equal(turnRefusal(meta()), null);
+    assert.equal(turnRefusal(meta({ durable: { since: 1 } })), null);
     // 子会话也交给新内核（与父同库，见 libraryRoot）
-    assert.deepEqual(routeFor(meta({ parentId: "root" }), true), { to: "kernel" });
+    assert.equal(turnRefusal(meta({ parentId: "root" })), null);
     assert.equal(libraryRoot(meta({ parentId: "root" }), "c1"), "root");
     assert.equal(libraryRoot(null, "s1"), "s1");
-    // 本子编辑：住在新内核里的去 kernel（子会话带父的树根），还没跑过的旧会话旧内核，迁移失败过的拒绝
+    // 本子编辑：住在新内核里的去 kernel（子会话带父的树根），还没跑过的旧会话 agent 进程改 pi 本子，迁移失败过的拒绝
     assert.deepEqual(editRouteFor(meta(), "s1"), { to: "legacy" });
     assert.deepEqual(editRouteFor(meta({ durable: { since: 1 } }), "s1"), { to: "kernel", root: "s1" });
     assert.deepEqual(editRouteFor(meta({ parentId: "root", durable: { since: 1 } }), "c1"), { to: "kernel", root: "root" });
     assert.ok("refuse" in editRouteFor(meta({ durable: { since: 1, failed: "坏行" } }), "s1"));
-    const refused = routeFor(meta({ durable: { since: 1, failed: "坏行" } }), true);
-    assert.ok("refuse" in refused && refused.refuse.includes("坏行"));
-  });
-  it("关着：住在新内核里的会话拒绝（旧内核续写会两边分叉），其余旧内核", () => {
-    assert.deepEqual(routeFor(meta(), false), { to: "legacy" });
-    assert.deepEqual(routeFor(meta({ durable: { since: 1 } }), false), { refuse: DURABLE_MOVED_MESSAGE });
+    assert.match(turnRefusal(meta({ durable: { since: 1, failed: "坏行" } })) ?? "", /坏行/);
   });
   it("开轮置 running（第一次接手记 since）；落定清 running，迁移失败记原因", () => {
     assert.deepEqual(markRunning(undefined, 5), { since: 5, running: true });

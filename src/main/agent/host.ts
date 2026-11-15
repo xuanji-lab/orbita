@@ -17,12 +17,10 @@ export class AgentHost extends AgentHostCore {
     env: Record<string, string | undefined>,
     onEvent: (event: AgentEvent) => void,
     catalogScope: CatalogScope,
-    /** 新内核那条道（开关开着时）；关着时缺席 */
-    kernel?: KernelLane,
-    /** 关着开关时的守卫：住在新内核里的会话不交给旧内核 */
-    legacyGuard?: (sessionId: string) => Promise<string | null>,
+    /** 新内核那条道 */
+    kernel: KernelLane,
   ) {
-    super(() => utilityProcess.fork(runtimePath, [], { stdio: "inherit", env }), onEvent, catalogScope, kernel, legacyGuard);
+    super(() => utilityProcess.fork(runtimePath, [], { stdio: "inherit", env }), onEvent, kernel, catalogScope);
   }
 }
 
@@ -32,7 +30,7 @@ export function resolveRuntimePath(dirname: string): string {
 }
 
 /**
- * 新内核的 kernel 进程（与 agent-runtime.js 同目录的另一个入口）。只在开关开着时由 KernelHost 的那条道调用。
+ * 新内核的 kernel 进程（与 agent-runtime.js 同目录的另一个入口）。由 KernelHost 的那条道调用。
  * `--expose-gc`：迁移大本子时 kernel 定期收一次垃圾（kernel-gc 见 kernel-runtime.ts），不让解析出的大字符串堆到几百 MB。
  */
 export function forkKernelRuntime(dirname: string, env: Record<string, string | undefined>): KernelChild {
