@@ -952,6 +952,39 @@ describe("AgentHostCore：新内核那条道", () => {
     host.dispose();
   });
 
+  test("kernel 闲置回收之后换模型：交给 agent 进程校验并报 model 事件（不能丢——meta 靠这个事件落新型号）", async () => {
+    const kernels: FakeKernel[] = [];
+    let agent!: FakeChild;
+    const lane: KernelLane = { ...laneOf(() => {
+      const next = new FakeKernel();
+      kernels.push(next);
+      return next;
+    }), idleRecycleMs: 30 };
+    const host = new AgentHostCore(() => {
+      agent = new FakeChild();
+      return agent;
+    }, () => undefined, lane);
+    const first = host.submit({ type: "submit", sessionId: "s1", text: "hi", piSessionFile: "/p.jsonl", ...TURN_FIELDS });
+    await flush();
+    kernels[0]?.emit({ type: "ready" });
+    await first;
+    kernels[0]?.emit({ type: "turnSettled", sessionId: "s1", result: { ok: true, conversationId: 1, migration: "none", status: "done" } });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const shutdown = kernels[0]?.posted.find((command) => command.type === "shutdown");
+    assert.ok(shutdown?.type === "shutdown");
+    kernels[0]?.emit({ type: "shutdownDone", requestId: shutdown.requestId });
+    await flush();
+    assert.equal(host.kernelAlive(), false, "kernel 已闲置回收");
+    const provider = { id: "zai", api: "openai-completions", baseUrl: "", apiKey: "k2", models: [] };
+    const pending = host.setModel("s1", provider, "glm-5.3");
+    await flush();
+    agent.emit({ type: "ready" });
+    await pending;
+    assert.deepEqual(agent.posted.filter((command) => command.type === "setModel"), [{ type: "setModel", sessionId: "s1", provider, modelId: "glm-5.3" }]);
+    assert.equal(kernels.length, 1, "不为换模型拉起 kernel");
+    host.dispose();
+  });
+
   test("kernelRunningSessions：交给 kernel 的轮在 turnSettled 之前都算在跑（窗口晚起来时据此补上 phase turn）", async () => {
     const r = kernelRig();
     const turn = r.host.submit({ type: "submit", sessionId: "c1", text: "hi", piSessionFile: "/p.jsonl", ...TURN_FIELDS });

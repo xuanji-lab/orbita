@@ -802,15 +802,16 @@ export class AgentHostCore {
   /**
    * 会话内换模型（C-4）。**发完即回**：成功经 `model` 事件、失败经 `failed` 事件
    * 回传，调用方不等也不该等——切换是一次真实的注册与校验，忙碌态由事件链表达。
-   * 这次运行里交给过 kernel 的会话由 kernel 校验；没交给过的（空闲的旧会话）由 agent 进程做同一套注册与校验并报
-   * model 事件（recorder 据此把新型号落进 meta，下一轮按 meta 装配）。
+   * kernel 进程在、且这次运行里交给过它的会话由 kernel 校验；其余（空闲的旧会话，或 kernel 已闲置回收 / 崩了——那时
+   * 这条会话没有在跑的轮）由 agent 进程做同一套注册与校验并报 model 事件（recorder 据此把新型号落进 meta，下一轮按 meta 装配）。
+   * 以前 kernel 不在时这条命令被 postKernel 丢掉：没有 model 事件，meta 不落新型号，下一轮仍用旧型号。
    */
   async setModel(
     sessionId: string,
     provider: Extract<AgentCommand, { type: "setModel" }>["provider"],
     modelId: string,
   ): Promise<void> {
-    if (this.ownedByKernel(sessionId)) {
+    if (this.ownedByKernel(sessionId) && this.kernelChild !== null) {
       this.postKernel({ type: "setModel", sessionId, provider, modelId });
       return;
     }
