@@ -1348,6 +1348,9 @@ export const zh: Messages = {
       group: "软件更新",
       currentVersion: "当前版本",
       currentNotesMissing: "这一版没有更新说明。",
+      // 随包第三方二进制的事实登记（Apache-2.0 的 NOTICE 义务：分发方要说清这包里带了什么）。
+      // 版本号故意不写进文案——版本跟 fetch-officecli.mjs 的表走，写在界面里必然过期。
+      bundledThirdParty: "随包第三方：OfficeCLI（Apache-2.0）。许可与第三方声明在安装目录的 /resources/licenses/officecli 下。",
       viewOnGitHub: "在 GitHub 上查看本版",
       updates: "更新",
       idleHint: "后台自动检查更新。",

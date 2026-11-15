@@ -372,6 +372,12 @@ function CurrentVersionNotesPanel(props: { notes: readonly UpdateNote[] | null; 
       ) : (
         <ReleaseNotes notes={props.notes} />
       )}
+      {/*
+       * 随包第三方的事实登记，**常驻**（不受上面说明有没有影响）：Apache-2.0 §4 要求分发方
+       * 带 NOTICE，这里说的是「这包里有它、声明在哪个目录」。完整许可正文不进界面，随包放
+       * resources/licenses/officecli（electron-builder 的 extraResources，见 package.json）。
+       */}
+      <p className="upd-hint">{x.bundledThirdParty}</p>
       {props.tagUrl !== null && <ReleaseFooter url={props.tagUrl}>{x.viewOnGitHub}</ReleaseFooter>}
     </>
   );
