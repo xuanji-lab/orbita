@@ -141,6 +141,15 @@ const CHECKS = [
     // .pdr-bar 的横向内边距 var(--space-3)；没打开 PDF（或实验开关没开）时跳过
     rightPad: 12,
   },
+  {
+    name: "PDF 阅读器·提示带（删多条的确认、没存上、只读）：出口钉在右血线，说明贴左血线",
+    row: ".pdr > .file-preview-notice",
+    leading: ".file-preview-notice-text",
+    trailing: ".file-preview-notice-actions",
+    // 与工具栏同一条左右血线：横向内边距 var(--space-3)；没有提示带时跳过；只读提示没有出口，跳过
+    rightPad: 12,
+    skipNoTrailing: true,
+  },
 ];
 
 const { evaluate, close } = await connectCdp({ cdpPort, devPort, watchdogMs: 60_000 });
