@@ -27,6 +27,7 @@ import { voiceApi } from "./api/voice.ts";
 import { mcpApi, skillApi } from "./api/skill.ts";
 import { memoryApi } from "./api/memory.ts";
 import { panelUsageApi } from "./api/panel-usage.ts";
+import { pdfReaderApi } from "./api/pdf-reader.ts";
 import { rightPanelMemoryApi } from "./api/right-panel-memory.ts";
 import { windowApi } from "./api/window.ts";
 import { workspaceApi } from "./api/workspace.ts";
@@ -49,6 +50,7 @@ const api = {
   window: windowApi,
   workspace: workspaceApi,
   files: filesApi,
+  pdfReader: pdfReaderApi,
   docs: docsApi,
   focus: focusApi,
   notify: notifyApi,
