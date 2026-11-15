@@ -140,6 +140,7 @@ import trash2 from "../../../../design-system/assets/icons/lucide/trash-2.svg?ra
 import trendingUp from "../../../../design-system/assets/icons/lucide/trending-up.svg?raw";
 import shieldCheck from "../../../../design-system/assets/icons/lucide/shield-check.svg?raw";
 import waypoints from "../../../../design-system/assets/icons/lucide/waypoints.svg?raw";
+import palette from "../../../../design-system/assets/icons/lucide/palette.svg?raw";
 import sliders from "../../../../design-system/assets/icons/lucide/sliders.svg?raw";
 import star from "../../../../design-system/assets/icons/lucide/star.svg?raw";
 import triangleAlert from "../../../../design-system/assets/icons/lucide/triangle-alert.svg?raw";
@@ -280,6 +281,7 @@ const ICONS = {
   settings,
   "shield-check": shieldCheck,
   waypoints,
+  palette,
   sliders,
   star,
   square,
