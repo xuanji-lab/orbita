@@ -15,5 +15,5 @@
     "composite": true,
     "paths": { "@shared/*": ["./src/shared/*"] }
   },
-  "include": ["src/renderer/src/**/*", "src/preload/**/*", "src/shared/**/*"]
+  "include": ["src/renderer/src/**/*", "src/preload/**/*", "src/shared/**/*", "src/reader-host/**/*"]
 }

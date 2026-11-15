@@ -8,8 +8,8 @@
   "main": "./out/main/index.js",
   "scripts": {
     "postinstall": "node scripts/ensure-node-pty-helper.mjs",
-    "dev": "electron-vite dev --watch",
-    "build": "electron-vite build",
+    "dev": "bun scripts/build-reader-host.mjs && electron-vite dev --watch",
+    "build": "bun scripts/build-reader-host.mjs && electron-vite build",
     "reader:fetch": "node scripts/fetch-pdf-reader.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "node --test --experimental-test-module-mocks \"src/**/*.test.ts\" \"scripts/*.test.mjs\"",

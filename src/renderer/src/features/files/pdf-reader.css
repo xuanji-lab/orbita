@@ -1,0 +1,123 @@
+/*
+ * PDF 阅读器面板（实验功能「PDF 阅读器」，PdfReaderView.tsx）。工具栏照文档面板的 .dp-bar：单行不折行，
+ * 按 .pdr 容器的宽度逐级收起（不靠 JS 量宽）：
+ *  1. 够宽（> 560px）：页码、三个常用批注工具 + 其余工具菜单、颜色、缩放三键、查找全部平铺；
+ *  2. ≤ 560px：缩放三键收进行尾「…」；
+ *  3. ≤ 460px：批注工具合成一个「批注工具」菜单键（图标是当前工具）。
+ * 分隔线（.dp-bar-rule）、行尾推右（.dp-bar-grow）复用 doc-panel.css。
+ */
+.pdr {
+  container: pdr / inline-size;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  background: var(--color-bg-panel);
+}
+
+.pdr-bar {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.pdr-bar > * {
+  flex-shrink: 0;
+}
+
+.pdr-page {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.pdr-page-input {
+  width: 4ch;
+  min-width: 32px;
+  height: var(--control-height-xs);
+  padding: 0 var(--space-1);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: center;
+}
+.pdr-page-input:focus {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.pdr-page-input:disabled {
+  color: var(--color-text-tertiary);
+}
+
+.pdr-tools,
+.pdr-zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.pdr-tools-all,
+.pdr-more {
+  display: none;
+}
+
+@container pdr (max-width: 560px) {
+  .pdr-zoom {
+    display: none;
+  }
+  .pdr-more {
+    display: inline-flex;
+  }
+}
+@container pdr (max-width: 460px) {
+  .pdr-tools,
+  .pdr-tools-more {
+    display: none;
+  }
+  .pdr-tools-all {
+    display: inline-flex;
+  }
+}
+
+/* 提示带（只读 / 没存上 / 删多条的确认 / 引用找不到）：复用文件预览的 PreviewNotice；它在预览体里靠体的内边距对齐，
+   这里的体没有内边距（阅读器要铺满），所以自己补上与工具栏同一条左右血线，并用发丝线与页面分开 */
+.pdr > .file-preview-notice {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.pdr-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.pdr-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--color-bg-muted);
+}
+/*
+ * 阅读器还没初始化完：盖一层与文件预览同款的加载行（它首帧是阅读器自己的空白界面）。
+ * 不能把 iframe 设成 visibility: hidden——pdf.js 按可见区渲染，藏着时首页永远画不出来，阅读器也就一直不报就绪。
+ */
+.pdr-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: var(--color-bg-panel);
+}

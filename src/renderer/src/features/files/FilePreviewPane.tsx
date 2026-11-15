@@ -7,7 +7,7 @@ import { MarkdownBlock } from "../chat/MarkdownBlock";
 import { highlightBlock, highlighterReady, langFromPath } from "../chat/highlight";
 import { fileIcon, formatAge, formatSize } from "./tree-view";
 import { crumbSegmentsFromRoot, fileTabName } from "./panel-layout.ts";
-import { largeTextNotice, textPreviewMode, textRenderKind } from "./preview-view";
+import { largeTextNotice, pdfPreviewKind, textPreviewMode, textRenderKind } from "./preview-view";
 import { WindowedText } from "./WindowedText";
 import { RangeTextPreview } from "./RangeTextPreview";
 import { EmptyPreview, PreviewNotice } from "./PreviewChrome";
@@ -15,6 +15,7 @@ import { DOC_MAX_BYTES } from "@shared/doc";
 import { isPdfFile, isWebPageFile, type FilePreview } from "@shared/files";
 import type { PromptImage } from "@shared/prompt-images";
 import { PdfView, type PdfJump } from "./PdfView";
+import { PdfReaderView } from "./PdfReaderView";
 import { DocEditPane } from "../doc-panel/DocEditPane";
 import { watchDocMeta } from "./doc-meta-refresh.ts";
 import type { TextQuote } from "@shared/quote";
@@ -69,7 +70,15 @@ export function FilePreviewPane(props: {
   // PDF 预览挂在自己的实验开关后面（实验功能「PDF 引用」）：关着时 PDF 照旧读不出
   // 内容（fs:read 只回二进制占位）。附图走 session.attachment，不会是 PDF
   const pdfCitations = useExperimentalFeature("pdf-citations");
-  const pdf = sentImage === undefined && pdfCitations && isPdfFile(path);
+  // 实验功能「PDF 阅读器」：开着时 PDF 一律用新阅读器打开（能划、能批注），不再看「PDF 引用」开没开——
+  // 两个开关管的是两件事：「PDF 引用」管智能体的 cite_pdf 与旧预览，「PDF 阅读器」管打开 PDF 用哪个界面。
+  // 阅读器产物缺失时这个标签可以退回旧预览（readerFallback）
+  const pdfReader = useExperimentalFeature("pdf-reader");
+  const [readerFallback, setReaderFallback] = useState(false);
+  useEffect(() => setReaderFallback(false), [path]);
+  const pdfKind = pdfPreviewKind({ isPdf: sentImage === undefined && isPdfFile(path), pdfReader, pdfCitations, fallback: readerFallback });
+  const useReader = pdfKind === "reader";
+  const pdf = pdfKind !== null;
   const [pdfReload, setPdfReload] = useState(0);
   const name = sentImage?.name ?? fileTabName(path);
   // 面包屑从所在的根开始（绝对路径放不下时截掉的总是末尾的文件名）；完整路径进 tooltip
@@ -280,6 +289,13 @@ export function FilePreviewPane(props: {
             path={path}
             onClose={() => pickMode("rendered")}
             {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
+          />
+        ) : useReader ? (
+          <PdfReaderView
+            request={{ sessionId, workspaceId, ...extra, root, dir: path }}
+            jump={props.jump ?? null}
+            reloadToken={pdfReload}
+            onFallback={() => setReaderFallback(true)}
           />
         ) : pdf ? (
           <PdfView

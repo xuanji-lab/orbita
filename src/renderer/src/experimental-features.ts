@@ -160,4 +160,23 @@ export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
       },
     ],
   },
+  {
+    id: "pdf-reader",
+    icon: "highlighter",
+    name: { zh: "PDF 阅读器", en: "PDF reader" },
+    summary: {
+      zh: "在文件面板里读 PDF：划高亮、下划线、写便签，批注存在 PDF 旁边的 .annotations.json 里，关掉再开还在。阅读器来自开源的 zotero/reader。",
+      en: "Read PDFs in the Files panel: highlight, underline and add notes. Annotations are saved next to the PDF in a .annotations.json file and are still there when you reopen it. The reader is the open-source zotero/reader.",
+    },
+    changelog: [
+      {
+        pr: null,
+        date: "2026-11-16",
+        note: {
+          zh: "首版：右侧半屏里打开 PDF，紧凑工具栏（翻页、批注工具、颜色、缩放、查找），窄面板里批注栏浮在页面上；中英文界面与深浅主题跟着 Orbita 走；点引用编号跳到原文那一页并闪一下高亮。",
+          en: "First version: PDFs open in the right half of the window with a compact toolbar (pages, annotation tools, color, zoom, find); in a narrow panel the annotations list floats over the page; interface language and light / dark follow Orbita; clicking a citation number jumps to the page and flashes the passage.",
+        },
+      },
+    ],
+  },
 ];
