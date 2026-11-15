@@ -237,6 +237,12 @@ internal sealed class UiaDiffResult
     public List<UiaItemInfo> Removed = new List<UiaItemInfo>();
     /** 完全没变的条数 */
     public int Unchanged;
+    /**
+     * 只有矩形变了、别的都没变的条数（2026-11-14）。**不逐个列**：Edge 的控件 rect 一直在
+     * 微动，逐条列出来会让 diff 比全量还大（实测 21 条里 16 条），而模型拿到 ref 就能动作，
+     * 不需要知道它挪了几个像素——真要按坐标点，看截图更准。
+     */
+    public int RectMoved;
 }
 
 /** 这一次 list 回全量还是 diff（PlanList 的结论） */
@@ -567,9 +573,11 @@ internal static class Uia
                 // AutomationId 必须进指纹：CompareItems 会比对它，指纹漏了就会出现
                 // 「代次判为没变（复用）、diff 却说它变了」的自相矛盾（2026-11-14 真机撞到）
                 .Append(it.AutomationId).Append('')
-                .Append(it.Enabled ? '1' : '0').Append(it.Offscreen ? '1' : '0').Append('')
-                .Append(it.X).Append(',').Append(it.Y).Append(',')
-                .Append(it.W).Append(',').Append(it.H).Append('');
+                .Append(it.Enabled ? '1' : '0').Append(it.Offscreen ? '1' : '0').Append('');
+            // **矩形不进指纹**：位置挪动不代表「控件树变了」。ref 按 stableId 映射，挪 20 像素
+            // 它还是同一个控件——让代次因位置抖动而推进，就会误伤刚发出去的 ref
+            // （Edge 实测 21 条里 16 条的 rect 一直在微动，2026-11-14）。位置变化由 diff 的
+            // rectMoved 单独计数，那才是模型真正需要的信号。
             for (int p = 0; p < it.Patterns.Count; p++) seed.Append(it.Patterns[p]).Append(',');
             seed.Append('');
         }
@@ -636,6 +644,12 @@ internal static class Uia
             if (changed.Count == 0)
             {
                 diff.Unchanged++;
+                continue;
+            }
+            // 只挪了位置（别的都没变）：计入 rectMoved，不逐条塞进 items
+            if (changed.Count == 1 && changed[0] == "rect")
+            {
+                diff.RectMoved++;
                 continue;
             }
             now.Change = "changed";
@@ -1663,6 +1677,7 @@ internal static class Uia
                 json.Append(RemovedJson(removed[i]));
             }
             json.Append("],\"unchanged\":").Append(diff == null ? 0 : diff.Unchanged)
+                .Append(",\"rectMoved\":").Append(diff == null ? 0 : diff.RectMoved)
                 .Append(",\"truncated\":").Append(truncated ? "true" : "false")
                 .Append(",\"passwordFields\":").Append(passwordFields);
 
@@ -1678,7 +1693,7 @@ internal static class Uia
                 + snapshot.Items.Count + " 个可动作控件" + (truncated ? "（还有更多，已截断）" : "")
                 + "，密码框 " + passwordFields + " 个（已记下位置，截图会遮），mode=" + plan.Mode
                 + (diff == null ? "" : "，变化 " + diff.Items.Count + " / 消失 " + diff.Removed.Count
-                    + " / 没变 " + diff.Unchanged));
+                    + " / 没变 " + diff.Unchanged + " / 只挪位置 " + diff.RectMoved));
             return json.ToString();
         }
         finally
@@ -2320,7 +2335,10 @@ internal static class Uia
         CheckTrue(failures, ref cases, "指纹：enabled 变了 → 变了", fpBase != FingerprintOf(fpSnap2));
         fpItem2.Enabled = true;
         fpItem2.X = 11;
-        CheckTrue(failures, ref cases, "指纹：位置挪了 → 变了（控件挪动也是变化）", fpBase != FingerprintOf(fpSnap2));
+        // 矩形**不进指纹**（2026-11-14 决定）：位置挪动不代表控件树变了，ref 按 stableId 映射，
+        // 让代次因 rect 微动而推进，就会误伤刚发出去的 ref（Edge 实测 21 条里 16 条 rect 在动）。
+        // 位置变化由 diff 的 rectMoved 单独计数。
+        CheckTrue(failures, ref cases, "指纹：位置挪了 → 指纹不变（ref 仍有效）", fpBase == FingerprintOf(fpSnap2));
         fpItem2.X = 10;
         fpItem2.Patterns.Add("value");
         CheckTrue(failures, ref cases, "指纹：支持的模式变了 → 变了", fpBase != FingerprintOf(fpSnap2));
@@ -2412,9 +2430,17 @@ internal static class Uia
             && diffRenamed.Items[0].ChangedFields.Contains("name") && diffRenamed.Removed.Count == 0);
         UiaSnapshot moved = TestSnapshot(6, new string[] { "rt:a", "rt:c", "rt:d" }, new string[] { "确定", "帮助", "保存" });
         moved.ById["rt:a"].X = 123;
-        CheckTrue(failures, ref cases, "diff：位置变了算变化（rect）",
-            DiffSnapshots(afterDiff, moved).Items.Count == 1
-            && DiffSnapshots(afterDiff, moved).Items[0].ChangedFields.Contains("rect"));
+        UiaDiffResult diffMoved = DiffSnapshots(afterDiff, moved);
+        CheckTrue(failures, ref cases, "diff：只挪了位置 → 不逐条列，计入 rectMoved",
+            diffMoved.Items.Count == 0 && diffMoved.RectMoved == 1);
+        // 位置 + 别的字段一起变：仍按「变了」列出来（rect 在 ChangedFields 里，但那条有真变化）
+        moved.ById["rt:c"].Enabled = false;
+        UiaDiffResult diffBoth2 = DiffSnapshots(afterDiff, moved);
+        // rt:c 只有 enabled 变（它的 rect 没动）→ 按 changed 列出；rt:a 只挪位置 → 仍计 rectMoved。
+        // 两条互不干扰：这是「真变化」与「纯位置变化」分流的直接证据。
+        CheckTrue(failures, ref cases, "diff：真变化那条按 changed 列出，纯位置那条仍只计 rectMoved",
+            diffBoth2.Items.Count == 1 && diffBoth2.Items[0].ChangedFields.Contains("enabled")
+            && !diffBoth2.Items[0].ChangedFields.Contains("rect") && diffBoth2.RectMoved == 1);
 
         // ⑯ since 的三种处境：没带 → 全量；带且还在 → diff；太旧 / 不是这个窗口的 → 全量 + 说明
         UiaSnapshot probe = TestSnapshot(2, new string[] { "rt:x" }, new string[] { "X" });

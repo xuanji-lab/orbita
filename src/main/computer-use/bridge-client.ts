@@ -294,6 +294,8 @@ export async function fetchGuestUiaList(
     items,
     removed,
     unchanged: Math.max(0, Math.round(numberOr(resp.unchanged, 0))),
+    // 只挪了位置的条数（老桥没有这个字段 → 0）：不逐个列，但要让模型知道「有 N 个动了」
+    rectMoved: Math.max(0, Math.round(numberOr(resp.rectMoved, 0))),
     truncated: resp.truncated === true,
     passwordFields: Math.max(0, Math.round(numberOr(resp.passwordFields, 0))),
   };

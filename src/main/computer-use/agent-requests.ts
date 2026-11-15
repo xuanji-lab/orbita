@@ -386,6 +386,8 @@ function uiaListText(reply: {
   }[];
   removed: readonly { stableId: string; name: string; controlType: string }[];
   unchanged: number;
+  /** 只挪了位置的条数（diff 才可能 >0）：不逐条列，正文只说一句 */
+  rectMoved: number;
   truncated: boolean;
   passwordFields: number;
   note?: string;
@@ -407,10 +409,13 @@ function uiaListText(reply: {
         ? "Nothing changed since that list."
         : "No actionable controls were found in this window."
       : body;
+  // rectMoved 只在 diff 里出现：那批控件只是位置挪了（名字 / 状态都没变），不逐条列。
+  // 模型要按坐标点它们时看截图比看数字准；这里有这个计数它就够了。
+  const movedNote = reply.mode === "diff" && reply.rectMoved > 0 ? `, ${reply.rectMoved} moved only` : "";
   const listLine =
     reply.mode === "diff"
-      ? `${head}: ${reply.items.length} changed, ${reply.removed.length} gone, ${reply.unchanged} unchanged ` +
-        `since generation ${reply.since ?? "?"}${truncatedNote}. Only the changes are listed.`
+      ? `${head}: ${reply.items.length} changed, ${reply.removed.length} gone, ${reply.unchanged} unchanged` +
+        `${movedNote} since generation ${reply.since ?? "?"}${truncatedNote}. Only the changes are listed.`
       : `${head}: ${reply.items.length} listed${truncatedNote}. Lines are: ref · control type "name" · ` +
         "supported patterns · position/size · automationId.";
   const tail =

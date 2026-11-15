@@ -1082,6 +1082,12 @@ export interface ComputerUseUiaListReply {
   removed: ComputerUseUiaRemovedItem[];
   /** diff 时有多少控件完全没变（全量时是 0） */
   unchanged: number;
+  /**
+   * diff 时有多少控件**只是位置挪了**（名字/模式/状态都没变，全量时是 0）。
+   * 不逐条列：Edge 的控件 rect 一直在微动（实测 21 条里 16 条），逐条列出来会让 diff
+   * 比全量还大，而模型拿到 ref 就能动作，不需要知道它挪了几个像素（要按坐标点就看截图）。
+   */
+  rectMoved: number;
   /** 命中的控件超过 maxItems，后面的没回（模型可以调大 maxItems，或者按 name 直接动作） */
   truncated: boolean;
   /**
