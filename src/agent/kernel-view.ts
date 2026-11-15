@@ -29,6 +29,7 @@ import type { AgentEvent } from "../shared/agent-ipc.ts";
 import { splitEchoBlocks } from "../shared/prompt-attachments.ts";
 import { RETRY_MAX_ATTEMPTS, retryVisibleToUi } from "./retry-policy.ts";
 import type { AdaptableEvent, TranscriptAdapter } from "./transcript-adapter.ts";
+import { INTERRUPTED_BY_CRASH } from "./kernel-turn.ts";
 
 /** 视图适配层要的外部能力 */
 export interface KernelViewHooks {
@@ -87,14 +88,37 @@ export class KernelView {
   private pending: ConversationView | null = null;
   private attached = false;
 
-  /** 接上视图：只记下当时的最新条目，之前的都不重放；attach 之前到的那一帧随后补上 */
+  /**
+   * 接上视图：只记下当时的最新条目，之前的都不重放；attach 之前到的那一帧随后补上。
+   * 例外：会话末尾那几条「被崩溃打断」的工具结果——kernel 重开库时才写下（那时没有视图在看），界面上那次调用
+   * 一直没有结果；这里补发它们的结束帧，界面上那一步显示成失败、展开看得到为什么（续跑 / 点「继续」之后看得出哪一步被打断过）。
+   */
   attach(value: ConversationView): void {
     const newest = value.entries.at(-1);
     this.lastEntry = newest === undefined ? (value.before ?? 0) : newest.id;
     this.attached = true;
+    this.replayCrashResults(value.entries);
     const pending = this.pending;
     this.pending = null;
     if (pending !== null) this.advance(pending);
+  }
+
+  private replayCrashResults(entries: readonly EntryRecord[]): void {
+    const tail: ToolResultMessage[] = [];
+    let at = entries.length - 1;
+    for (; at >= 0; at--) {
+      const entry = entries[at];
+      const message = entry?.model?.[0] as Message | undefined;
+      if (entry?.kind !== "pi.tool-result" || message?.role !== "toolResult") break;
+      tail.unshift(message);
+    }
+    const crashed = tail.filter((message) => message.isError && textOf(message.content).startsWith(INTERRUPTED_BY_CRASH));
+    if (crashed.length === 0) return;
+    const assistant = entries[at]?.model?.[0] as Message | undefined;
+    if (assistant?.role === "assistant") {
+      for (const block of assistant.content) if (block.type === "toolCall") this.toolArgs.set(block.id, { name: block.name, args: block.arguments });
+    }
+    for (const message of crashed) this.endTool(message);
   }
 
   /** 我们自己回显过的一句（随后它的 pi.user 条目对账丢掉） */

@@ -22,7 +22,10 @@ import type { Api, Model, Models, ModelsSimpleStreamOptions } from "@earendil-wo
 import {
   createRegistry,
   defineDoc,
+  defineExtension,
   Harness,
+  hook,
+  ToolTask,
   LiveDoc,
   ProviderDoc,
   type AgentChange,
@@ -44,7 +47,7 @@ import { compactionKeepRecentTokens, compactionReserveTokens } from "./compactio
 import { LEGACY_KINDS, planLegacyMigrationFile, type LegacyDraft } from "./legacy-migrate.ts";
 import { messageSignature, WireDoc } from "./kernel-wire.ts";
 import { RETRY_BASE_DELAY_MS, RETRY_MAX_ATTEMPTS, RETRY_MAX_DELAY_MS } from "./retry-policy.ts";
-import type { KernelTurnTarget } from "./kernel-turn.ts";
+import { interruptedResult, sessionExtensionName, type KernelTurnTarget } from "./kernel-turn.ts";
 import { piRequestOptions } from "./kernel-prompt.ts";
 import { ccBillingPatch } from "./cc-billing-patch.ts";
 import { turnToolFlags, type TurnInput } from "./turn-tools.ts";
@@ -316,7 +319,7 @@ export class KernelPool {
         },
         BACKGROUND_CONTEXT,
       );
-      await this.stopInterrupted(harness, library);
+      await this.stopInterrupted(harness, registry, library);
       // 存储出错 durable 会自己关掉 Harness：从池里摘掉，下次打开重来
       void harness.closed.then(() => {
         if (this.libraries.get(library) === opening) this.libraries.delete(library);
@@ -335,18 +338,31 @@ export class KernelPool {
    * durable 重开后 resume() 会把它们接着跑完，在用户不在场时花钱、跑命令。打开库时先 abortTask 它们（队列与上下文都留着），
    * 等它们收尾；界面上这条会话是「上次被中断」，由用户点「继续」（submit continue）再接着答。
    */
-  private async stopInterrupted(harness: Harness, library: string): Promise<void> {
+  private async stopInterrupted(harness: Harness, registry: Registry, library: string): Promise<void> {
     const index = (await harness.snapshot(SessionIndexDoc, BACKGROUND_CONTEXT))?.sessions ?? {};
     const stopped: ConversationId[] = [];
-    for (const id of Object.values(index)) {
+    const recovering: ReturnType<typeof defineExtension>[] = [];
+    for (const [sessionId, id] of Object.entries(index)) {
       const conversationId = id as ConversationId;
       const live = await harness.snapshot(LiveDoc, conversationId, BACKGROUND_CONTEXT);
       const tasks = [...(live?.run === undefined ? [] : [live.run.taskId]), ...(live?.compactions ?? []).map((status) => status.taskId)];
       if (tasks.length === 0) continue;
+      // 被崩溃打断的调用：结果如实写「可能没跑、跑了一半或已经跑完」，不写成普通的被停（模型会当它没跑、照样重做）。
+      // 会话的 agent 选的是同名扩展；这时只装一个 afterTool，停完就卸
+      const extension = defineExtension({
+        name: sessionExtensionName(sessionId),
+        hooks: [hook(ToolTask, { afterTool: (_call, result) => interruptedResult("crash", result) })],
+      });
+      registry.install(extension);
+      recovering.push(extension);
       for (const task of tasks) await harness.abortTask(task, BACKGROUND_CONTEXT);
       stopped.push(conversationId);
     }
-    for (const conversationId of stopped) await (await harness.conversation(conversationId, BACKGROUND_CONTEXT))?.waitForIdle(BACKGROUND_CONTEXT);
+    try {
+      for (const conversationId of stopped) await (await harness.conversation(conversationId, BACKGROUND_CONTEXT))?.waitForIdle(BACKGROUND_CONTEXT);
+    } finally {
+      for (const extension of recovering) registry.uninstall(extension);
+    }
     if (stopped.length > 0) this.options.log?.(`[kernel] ${library}：上次留下 ${stopped.length} 条会话在跑，已停下（不自动续跑）`);
   }
 

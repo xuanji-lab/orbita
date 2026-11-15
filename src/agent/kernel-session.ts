@@ -624,7 +624,7 @@ export class KernelSessions {
     const sessionId = command.sessionId;
     return runTurn(
       command.type === "interrupt" ? { ...command, type: "submit" } : command,
-      this.deps.runtime,
+      { ...this.deps.runtime, quitting: () => this.shuttingDown },
       target,
       target.compaction,
       {

@@ -1834,6 +1834,7 @@ export const zh: Messages = {
     readOnlyDurableMoved: "这个任务后来在新内核里继续过。这次新内核没开，这里只能读、不能接着聊——旧内核只有迁移之前的那些轮次。",
     readOnlyMigrationFailed: (reason) => `这个任务迁到新内核时失败了，只能读、不能接着聊，原件没动。（${reason}）`,
     interruptedTurn: "这一轮没跑完就被打断了。",
+    interruptedByCrash: "应用上次是异常退出的，这个子会话被打断了。",
     continueTurn: "继续",
     resumedAfterRestart: "应用重启时这个子会话还没跑完，已自动接着跑上次被打断的那一轮。",
     migratingSession: "正在把这条会话迁到新内核，只有第一次发消息时需要……",

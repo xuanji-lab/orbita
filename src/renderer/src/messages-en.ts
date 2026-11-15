@@ -1995,6 +1995,7 @@ export const en = {
     readOnlyMigrationFailed: (reason: string) => `Moving this task into the new kernel failed, so it can be read but not continued. The original is untouched. (${reason})`,
     /** 新内核：这一轮被打断了（kernel 进程崩溃 / 应用退出时它在跑），库里还留着上下文 */
     interruptedTurn: "This turn was interrupted before it finished.",
+    interruptedByCrash: "The app quit unexpectedly last time, so this sub-session was interrupted.",
     continueTurn: "Continue",
     /** 新内核：子会话在应用重启后被自动接着跑（后台任务照常续跑） */
     resumedAfterRestart: "This sub-session was still running when the app restarted; it picked up the interrupted turn on its own.",

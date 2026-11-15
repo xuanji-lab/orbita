@@ -447,6 +447,11 @@ export interface DurableMark {
    * 「应用重启后接着跑的」。下一次由人开的轮清掉。
    */
   resumed?: number;
+  /**
+   * 这一轮是应用**正常退出**时被停下的（退出流程停掉了它的命令，状态是确定的）。缺席而 running 还在 = 崩溃 / 强杀
+   * （或 kernel 进程死掉）留下的——命令可能成了孤儿、跑没跑完不知道。决定重启后要不要自动续跑（kernel-host 的 resumePolicy）。
+   */
+  stoppedOnQuit?: true;
 }
 
 export interface SessionMeta {
@@ -764,6 +769,7 @@ export function parseDurableMark(raw: unknown): DurableMark | null {
     ...(value["running"] === true ? { running: true as const } : {}),
     ...(typeof value["failed"] === "string" && value["failed"] !== "" ? { failed: value["failed"] } : {}),
     ...resumedField(num(value["resumed"])),
+    ...(value["stoppedOnQuit"] === true ? { stoppedOnQuit: true as const } : {}),
   };
 }
 

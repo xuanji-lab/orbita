@@ -6,6 +6,7 @@ import { prefillLeft, reconcileLeft } from "./carryover-prefill.ts";
 import type { TranscriptItem } from "@shared/transcript";
 import { api } from "../../api";
 import type { IntentRecallRecord } from "@shared/session";
+import { resumePolicy } from "@shared/kernel";
 import type { RecallCardState } from "@shared/intent-recall";
 import type { IntentConfirmDecision } from "@shared/intent-confirm";
 import { splitEchoBlocks } from "../../../../shared/prompt-attachments.ts";
@@ -321,6 +322,8 @@ export interface ChatSession {
   turnContinuable: boolean;
   /** 新内核：这个子会话在应用重启后被自动接着跑过（上次被打断的那一轮） */
   resumedAfterRestart: boolean;
+  /** 上次崩溃 / 强杀留下的子会话：没自动续跑，「继续」旁说一句应用上次是异常退出的（resumePolicy "crashed"） */
+  interruptedByCrash: boolean;
   /** 新内核：发消息前正在把这条旧会话迁进库（大会话要一两秒） */
   migrating: boolean;
   /** 接着跑被打断的那一轮（不加新消息） */
@@ -3549,6 +3552,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     migrating: entry.migrating,
     // 子会话在应用重启后被自动接着跑过（后台任务照常续跑）：界面说一句，直到下一次由人或父开的轮
     resumedAfterRestart: engine.kernelDurable === true && liveMeta?.parentId !== undefined && liveMeta.durable?.resumed !== undefined,
+    interruptedByCrash: engine.kernelDurable === true && !entry.turnContinuable && liveMeta !== null && resumePolicy(liveMeta) === "crashed",
     continueTurn: continueHere,
     openSession,
     renameSession: engine.renameSession,

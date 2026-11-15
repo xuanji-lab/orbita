@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionMeta } from "../../shared/session.ts";
 import { DURABLE_MOVED_MESSAGE, durableKernelEnabled, editRouteFor, KernelHost, libraryRoot, markRunning, markSettled, routeFor, sessionsToResume } from "./kernel-host.ts";
+import { resumePolicy } from "../../shared/kernel.ts";
 
 const dirs: string[] = [];
 after(async () => {
@@ -59,21 +60,33 @@ describe("routeFor / markRunning / markSettled：一轮交给谁、会话的新�
     assert.deepEqual(markSettled({ since: 1, running: true }, { ok: true, conversationId: 1, migration: "none", status: "done" }, 9), { since: 1 });
     assert.deepEqual(markSettled({ since: 1, running: true }, { ok: false, reason: "坏行", migrationFailed: true }, 9), { since: 1, failed: "坏行" });
     assert.deepEqual(markSettled({ since: 1, running: true }, { ok: false, reason: "网络" }, 9), { since: 1 });
-    assert.deepEqual(markSettled({ since: 1, running: true }, { ok: false, reason: "shutdown", interrupted: true }, 9), { since: 1, running: true });
+    assert.deepEqual(markSettled({ since: 1, running: true }, { ok: false, reason: "shutdown", interrupted: true }, 9), { since: 1, running: true, stoppedOnQuit: true });
+    // 下一轮开跑清掉「正常退出停的」标记（它只描述上一次中断）
+    assert.deepEqual(markRunning({ since: 1, running: true, stoppedOnQuit: true }, 9), { since: 1, running: true });
   });
 });
 
 describe("重启后接着跑：只续子会话（后台任务），树根给「继续」", () => {
   const meta = (id: string, extra: Partial<SessionMeta> = {}): SessionMeta => ({ id, title: "", titleSource: "derived", cwd: "/", workspaceId: null, providerId: "p", modelId: "m", mode: "plan", thinkingLevel: "medium", piSessionFile: "/p.jsonl", pinned: false, archived: false, recentQueries: [], stats: null, createdAt: 1, updatedAt: 1, ...extra });
-  it("running 的子会话续；树根、没在跑的、迁移失败过的都不续", () => {
+  it("正常退出停下的子会话续；崩溃留下的子会话、树根、没在跑的、迁移失败过的都不续", () => {
     const picked = sessionsToResume([
-      meta("root", { durable: { since: 1, running: true } }),
-      meta("child", { parentId: "root", durable: { since: 1, running: true } }),
+      meta("root", { durable: { since: 1, running: true, stoppedOnQuit: true } }),
+      meta("child", { parentId: "root", durable: { since: 1, running: true, stoppedOnQuit: true } }),
+      meta("crashed-child", { parentId: "root", durable: { since: 1, running: true } }),
       meta("idle-child", { parentId: "root", durable: { since: 1 } }),
       meta("failed-child", { parentId: "root", durable: { since: 1, running: true, failed: "坏行" } }),
       meta("legacy-child", { parentId: "root" }),
     ]);
     assert.deepEqual(picked.map((m) => m.id), ["child"]);
+  });
+  it("resumePolicy：拿不准（没有正常退出的标记）的子会话按崩溃处理；树根一律交给人", () => {
+    assert.equal(resumePolicy({ parentId: "r", durable: { since: 1, running: true } }), "crashed");
+    assert.equal(resumePolicy({ parentId: "r", durable: { since: 1, running: true, stoppedOnQuit: true } }), "resume");
+    assert.equal(resumePolicy({ parentId: undefined, durable: { since: 1, running: true } }), "ask");
+    assert.equal(resumePolicy({ parentId: undefined, durable: { since: 1, running: true, stoppedOnQuit: true } }), "ask");
+    assert.equal(resumePolicy({ parentId: "r", durable: { since: 1 } }), null);
+    assert.equal(resumePolicy({ parentId: "r", durable: { since: 1, running: true, failed: "坏" } }), null);
+    assert.equal(resumePolicy({ parentId: "r" }), null);
   });
   it("resumed 只留给那一次 continue：下一次由人开的轮清掉", () => {
     assert.deepEqual(markRunning({ since: 1, resumed: 5 }, 9, true), { since: 1, resumed: 5, running: true });

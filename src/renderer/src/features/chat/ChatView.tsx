@@ -1779,6 +1779,7 @@ function ChatViewBody(props: {
           turnError={session.turnError}
           turnContinuable={session.turnContinuable}
           onContinue={session.continueTurn}
+          interruptedByCrash={session.interruptedByCrash}
           loadingHistory={session.loadingHistory}
           loadingOlder={session.loadingOlder}
           onBranch={session.branchFrom}
@@ -1837,6 +1838,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   turnContinuable: boolean;
   /** 「继续」：引用稳定（memo 列） */
   onContinue: () => void;
+  /** 被打断的是崩溃留下的子会话（resumePolicy "crashed"）：说「应用上次是异常退出的」 */
+  interruptedByCrash: boolean;
   loadingHistory: boolean;
   /** 更早的一页在途（源侧分页触顶）：列首出一行次级灰提示 */
   loadingOlder: boolean;
@@ -2585,7 +2588,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
             tone="bad"
             exit={props.turnContinuable ? { label: t.chat.continueTurn, onClick: props.onContinue } : undefined}
           >
-            {props.turnContinuable ? t.chat.interruptedTurn : props.turnError}
+            {props.turnContinuable ? (props.interruptedByCrash ? t.chat.interruptedByCrash : t.chat.interruptedTurn) : props.turnError}
           </Notice>
         </div>
       )}

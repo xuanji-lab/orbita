@@ -100,6 +100,8 @@ export interface KernelTurnRuntime {
   resolveShellPath: () => string | undefined;
   /** 给 bash 命令打孤儿善后的标签（kernel-children.ts）；缺席 = 不打 */
   tagCommand?: (command: string) => string;
+  /** 应用正在正常退出（这时被停下的调用如实告诉模型「退出时停掉的、没跑完」）；缺席 = 不在退出 */
+  quitting?: () => boolean;
 }
 
 /** 一轮要的会话级对象 */
@@ -205,6 +207,28 @@ const BLOCKED_PREFIX = "Tool call blocked: ";
 function piError(text: string): ToolExecutionResult {
   return { output: [{ type: "text", text }], isError: true, details: {} };
 }
+/**
+ * 被应用退出 / 崩溃打断的工具调用，给模型的结果如实说清它可能处在什么状态（旧内核没有这两种：它退出时不停命令、
+ * 重启后不续跑，旧内核路径一个字不改）。两种都以固定的方括号开头，视图层据此认出「崩溃后补的结果」（INTERRUPTED_BY_CRASH）。
+ * - 崩溃 / 强杀：kernel 下次打开库时才把在跑的调用结掉——命令可能没跑、跑了一半，也可能（孤儿进程）自己跑完了；
+ * - 正常退出：退出时把命令停掉了——它确实没跑完，但停之前可能已经做了一部分。
+ * 停下之前已经拿到的输出照样带上。
+ */
+export const INTERRUPTED_BY_CRASH =
+  "[Interrupted by an app crash] This tool call was still running when the app quit unexpectedly (crash or force quit). It may not have run, may have run partially, or may have finished on its own. Check the actual state before doing it again.";
+const STOPPED_BY_QUIT =
+  "[Stopped when the app quit] This tool call was stopped because the app was quitting; it did not finish, though it may have done part of its work. Check the actual state before doing it again.";
+
+/** durable 结掉一次调用时的诊断码：被停（aborted）、重启打断（interrupted）、重启时还没开始（abandoned） */
+const CUT_OFF = new Set(["aborted", "interrupted", "abandoned"]);
+
+export function interruptedResult(kind: "crash" | "quit", result: ToolExecutionResult): ToolExecutionResult | undefined {
+  if (!(result.diagnostics ?? []).some((diagnostic) => CUT_OFF.has(diagnostic.code ?? ""))) return undefined;
+  const output = (result.output ?? []).flatMap((block) => (block.type === "text" && block.text !== "" ? [block.text] : [])).join("\n");
+  const note = kind === "crash" ? INTERRUPTED_BY_CRASH : STOPPED_BY_QUIT;
+  return piError(output === "" ? note : `${note}\n\nOutput before it was cut off:\n${output}`);
+}
+
 export function unwrapHarnessError(call: { name: string }, result: ToolExecutionResult): ToolExecutionResult | undefined {
   for (const diagnostic of result.diagnostics ?? []) {
     if (diagnostic.code === "blocked") {
@@ -504,7 +528,7 @@ export async function assembleTurn(
             rounds.settled(call.id);
           }
         },
-        afterTool: (call, result) => unwrapHarnessError(call, result),
+        afterTool: (call, result) => (runtime.quitting?.() === true ? interruptedResult("quit", result) : undefined) ?? unwrapHarnessError(call, result),
       }),
       hook(GenerationTask, {
         beforeRequest: async (request, api, context) => {

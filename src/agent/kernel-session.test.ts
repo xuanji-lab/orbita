@@ -426,6 +426,81 @@ describe("KernelSessions：压缩、崩溃后的继续", () => {
   });
 });
 
+describe("KernelSessions：被应用退出 / 崩溃打断的工具调用，如实告诉模型与界面", () => {
+  /** 第二个进程「继续」时发给模型的最后一条（被打断的那次调用的结果） */
+  const lastToolText = (context: { messages: readonly { role: string; content: unknown }[] }): string => {
+    const last = context.messages.at(-1);
+    return last?.role === "toolResult" ? JSON.stringify(last.content) : `not a tool result: ${last?.role ?? "none"}`;
+  };
+  const toolItem = (r: Rig) => r.transcript().find((item) => item.role === "tool");
+
+  it("崩溃：重开库时结掉的那次调用，写的是「可能没跑、跑了一半或已经跑完」；继续时界面补上这一步的失败结果", async () => {
+    const cwd = await tempDir();
+    faux.setResponses([fauxAssistantMessage(fauxToolCall("bash", { command: "sleep 3" }), { stopReason: "toolUse" })]);
+    const libraryDir = await tempDir();
+    const first = await rig(undefined, null, libraryDir);
+    void first.sessions.handle("s1", submit(cwd, { text: "跑一条长命令" })).catch(() => undefined);
+    await first.until((event) => event.type === "progress" && event.progress.type === "item_started" && event.progress.item.role === "tool");
+    // 进程没了（不走 shutdown）
+    await first.pool.closeAll();
+    const seen: string[] = [];
+    faux.setResponses([
+      (context) => {
+        seen.push(lastToolText(context));
+        return fauxAssistantMessage("先查了实际状态");
+      },
+    ]);
+    const second = await rig(undefined, null, libraryDir);
+    await second.sessions.handle("s1", { ...submit(cwd), type: "continueRun" } as never);
+    await second.until(idle());
+    assert.equal(seen.length, 1);
+    assert.match(seen[0] ?? "", /Interrupted by an app crash/);
+    assert.match(seen[0] ?? "", /may have finished on its own/);
+    assert.doesNotMatch(seen[0] ?? "", /harness|Operation aborted/);
+    const item = toolItem(second);
+    assert.ok(item?.role === "tool" && item.status === "error" && /Interrupted by an app crash/.test(JSON.stringify(item.content)), JSON.stringify(item));
+  });
+
+  it("正常退出：退出时停掉的那次调用，写的是「退出时停掉的、没跑完」；界面当场就是失败；下次继续时不再补发", async () => {
+    const cwd = await tempDir();
+    faux.setResponses([fauxAssistantMessage(fauxToolCall("bash", { command: "sleep 3" }), { stopReason: "toolUse" })]);
+    const libraryDir = await tempDir();
+    const first = await rig(undefined, null, libraryDir);
+    void first.sessions.handle("s1", submit(cwd, { text: "跑一条长命令" })).catch(() => undefined);
+    await first.until((event) => event.type === "progress" && event.progress.type === "item_started" && event.progress.item.role === "tool");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await first.sessions.shutdown();
+    assert.deepEqual(first.settled.at(-1)?.result, { ok: false, reason: "shutdown", interrupted: true });
+    const stopped = toolItem(first);
+    assert.ok(stopped?.role === "tool" && stopped.status === "error" && /Stopped when the app quit/.test(JSON.stringify(stopped.content)), JSON.stringify(stopped));
+    await first.pool.closeAll();
+    const seen: string[] = [];
+    faux.setResponses([
+      (context) => {
+        seen.push(lastToolText(context));
+        return fauxAssistantMessage("接着做");
+      },
+    ]);
+    const second = await rig(undefined, null, libraryDir);
+    await second.sessions.handle("s1", { ...submit(cwd), type: "continueRun" } as never);
+    await second.until(idle());
+    assert.match(seen[0] ?? "", /Stopped when the app quit/);
+    assert.equal(toolItem(second), undefined, "界面早就有这一步的结果，继续时不重复补");
+  });
+
+  it("用户点停止仍是旧内核那句 Operation aborted（不受退出 / 崩溃措辞影响）", async () => {
+    const cwd = await tempDir();
+    faux.setResponses([fauxAssistantMessage(fauxToolCall("bash", { command: "sleep 3" }), { stopReason: "toolUse" })]);
+    const r = await rig();
+    void r.sessions.handle("s1", submit(cwd, { text: "跑" }));
+    await r.until((event) => event.type === "progress" && event.progress.type === "item_started" && event.progress.item.role === "tool");
+    await r.sessions.handle("s1", { type: "abort", sessionId: "s1" });
+    await r.until(idle());
+    const item = toolItem(r);
+    assert.ok(item?.role === "tool" && item.status === "error" && /Operation aborted/.test(JSON.stringify(item.content)), JSON.stringify(item));
+  });
+});
+
 describe("contextUsage / compactionSummary", () => {
   const assistant = (tokens: number, stopReason: AssistantMessage["stopReason"] = "stop"): AssistantMessage =>
     ({ role: "assistant", content: [], api: "faux", provider: "faux", model: "tiny", usage: { input: tokens, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: tokens, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason, timestamp: 1 }) as AssistantMessage;

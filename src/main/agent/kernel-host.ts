@@ -12,7 +12,7 @@
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { DurableMark, SessionMeta } from "../../shared/session.ts";
-import { KERNEL_LIBRARY_NAME, type KernelTurnResult } from "../../shared/kernel.ts";
+import { KERNEL_LIBRARY_NAME, resumePolicy, type KernelTurnResult } from "../../shared/kernel.ts";
 import type { KernelChild, KernelLane, KernelRoute, TurnRoute } from "./host-core.ts";
 
 /** 开发开关的环境变量名 */
@@ -62,26 +62,21 @@ export function libraryRoot(meta: SessionMeta | null, sessionId: string): string
  * 那一次 continue 留着，下一次由人或父开的轮清掉。
  */
 export function markRunning(current: DurableMark | undefined, now: number, keepResumed = false): DurableMark {
-  const { resumed, ...rest } = current ?? { since: now };
+  const { resumed, stoppedOnQuit: _stoppedOnQuit, ...rest } = current ?? { since: now };
   return { ...rest, ...(keepResumed && resumed !== undefined ? { resumed } : {}), running: true };
 }
 
 /** 一轮落定：清 running；迁移那一步失败就记原因（会话回落只读）；应用退出时被停下的留着 running */
 export function markSettled(current: DurableMark | undefined, result: KernelTurnResult, now: number): DurableMark {
-  // 应用退出时被停下的轮：留着 running，下次打开是「上次被中断」，给「继续」
-  if (!result.ok && result.interrupted === true) return current ?? { since: now, running: true };
+  // 应用正常退出时被停下的轮：留着 running（下次打开是「上次被中断」），并记下「是正常退出停的」——重启后据此决定续不续
+  if (!result.ok && result.interrupted === true) return { ...(current ?? { since: now }), running: true, stoppedOnQuit: true };
   const { running: _running, ...rest } = current ?? { since: now };
   return result.ok || result.migrationFailed !== true ? rest : { ...rest, failed: result.reason };
 }
 
-/**
- * 应用重启时要自动接着跑的会话：**子会话**（后台任务）上次在新内核里有一轮没跑完（running 留着）、没迁移失败过。
- * 前台会话（树根）不续——界面给「上次被中断 · 继续」，由人决定（方案 §2.2 第 10 行的默认）。
- * 续跑的风险：被打断的工具（含有副作用的命令）不会被 durable 重放，模型看到「被打断」的结果后**可能自己再发一次**——
- * 不想要就把这里改成返回空表，子会话也和树根一样给「继续」（报告 ⑧ 要用户定）。
- */
+/** 应用重启时要自动接着跑的会话（resumePolicy 为 "resume" 的） */
 export function sessionsToResume(metas: readonly SessionMeta[]): SessionMeta[] {
-  return metas.filter((meta) => meta.parentId !== undefined && meta.durable?.running === true && meta.durable.failed === undefined);
+  return metas.filter((meta) => resumePolicy(meta) === "resume");
 }
 
 /** 主进程给 KernelHost 的依赖：会话 meta 的读与改、kernel 进程的拉起、孤儿善后 */

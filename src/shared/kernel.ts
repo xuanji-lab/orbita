@@ -14,6 +14,7 @@
  * （`<userData>/durable/<根会话 id>.sqlite`），删一棵树 = 关库 + 删文件；不同的树互不相干。
  */
 import type { AgentCommand, AgentEvent } from "./agent-ipc.ts";
+import type { SessionMeta } from "./session.ts";
 
 /** 库文件名：根会话 id（与 SessionStore 的 id 白名单同形）+ `.sqlite`。路径只由主进程拼，kernel 进程再校验一次。 */
 export const KERNEL_LIBRARY_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]*\.sqlite$/;
@@ -127,3 +128,22 @@ export type KernelMessage =
    */
   | { type: "steerBounced"; sessionId: string; text: string; delivery: "steer" | "followUp" }
   | { type: "shutdownDone"; requestId: string };
+
+/**
+ * 一条上次没跑完的会话，应用重启后怎么办——**唯一的判断点**，换策略只改这里（主进程续跑（kernel-host 的 sessionsToResume）、renderer 的说明都读它）：
+ * - "resume"：自动接着跑。只给**子会话**（后台任务）、且上次是**正常退出**停下的（退出流程把命令停掉了，状态确定；
+ *   被停的调用给模型的结果写着「退出时停掉的、没跑完」）。
+ * - "crashed"：停下，界面说「应用上次是异常退出的」+「继续」，由人决定。子会话上次是崩溃 / 强杀 / kernel 死掉留下的
+ *   ——命令可能成了孤儿自己跑完，自动续跑会让模型把有副作用的命令再做一遍（第四步验收组 2 复现过 start·end·start·end）。
+ *   **拿不准就归这一类**：缺了「正常退出」的标记一律当崩溃（标记写在退出流程里、被停的轮落定时，崩溃时写不上）。
+ * - "ask"：树根（前台会话）——界面照旧「这一轮没跑完就被打断了 · 继续」（方案 §2.2 第 10 行的默认）。
+ * - null：没在跑 / 迁移失败过 / 不在新内核里。
+ */
+export type ResumePolicy = "resume" | "crashed" | "ask";
+
+export function resumePolicy(meta: Pick<SessionMeta, "parentId" | "durable">): ResumePolicy | null {
+  const mark = meta.durable;
+  if (mark?.running !== true || mark.failed !== undefined) return null;
+  if (meta.parentId === undefined) return "ask";
+  return mark.stoppedOnQuit === true ? "resume" : "crashed";
+}
