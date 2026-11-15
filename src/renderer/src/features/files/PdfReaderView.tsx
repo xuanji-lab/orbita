@@ -359,7 +359,7 @@ export function PdfReaderView(props: {
               }
             }}
           />
-          <span className="pdr-page-count">{tr.pageCount(view?.pagesCount ?? 0)}</span>
+          {view !== null && view.pagesCount > 0 && <span className="pdr-page-count">{tr.pageCount(view.pagesCount)}</span>}
         </span>
         <IconButton
           label={tr.nextPage}

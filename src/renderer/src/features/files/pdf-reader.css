@@ -18,7 +18,9 @@
 }
 
 /* 加载 / 出错 / 阅读器没装好：预览体在 PDF 模式下没有内边距（阅读器要铺满），这几种状态自己补回与文件预览同样的边距 */
-.pdr-state {
+.pdr-state.file-preview-loading,
+.pdr-state.file-preview-error,
+.pdr-state.file-preview-empty {
   padding: var(--space-3);
 }
 
@@ -120,9 +122,11 @@
  * 阅读器还没初始化完：盖一层与文件预览同款的加载行（它首帧是阅读器自己的空白界面）。
  * 不能把 iframe 设成 visibility: hidden——pdf.js 按可见区渲染，藏着时首页永远画不出来，阅读器也就一直不报就绪。
  */
-.pdr-loading {
+.pdr-stage > .pdr-loading {
   position: absolute;
   inset: 0;
   z-index: 1;
+  align-items: flex-start;
+  padding: var(--space-3);
   background: var(--color-bg-panel);
 }
