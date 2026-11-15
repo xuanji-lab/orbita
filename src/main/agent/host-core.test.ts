@@ -1009,6 +1009,50 @@ describe("AgentHostCore：新内核那条道", () => {
     host.dispose();
   });
 
+  test("闲置回收不在在途的本子编辑、分支、删库收尾当中发生：到点先等它们回执，回执到了才回收", async () => {
+    const kernels: FakeKernel[] = [];
+    const lane: KernelLane = {
+      fork: () => {
+        const next = new FakeKernel();
+        kernels.push(next);
+        return next;
+      },
+      dir: "/durable",
+      route: async (command): Promise<KernelRoute> => ({ to: "kernel", root: command.sessionId }),
+      editRoute: async (sessionId): Promise<KernelRoute> => ({ to: "kernel", root: sessionId }),
+      settled: () => undefined,
+      exited: () => undefined,
+      idleRecycleMs: 30,
+    };
+    const host = new AgentHostCore(() => new FakeChild(), () => undefined, undefined, lane);
+    const shutdowns = () => kernels[0]?.posted.filter((command) => command.type === "shutdown").length ?? 0;
+    // 本子编辑（回退）在途：kernel 还没回 piBookEdited
+    const revert = host.editPiBook({ type: "revertPiBook", sessionId: "s1", sourcePiSessionFile: "/p", cwd: "/", roles: ["user", "assistant"], targetMessageId: "m" });
+    await flush();
+    kernels[0]?.emit({ type: "ready" });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.equal(shutdowns(), 0, "回退在途不回收");
+    // 分支在途：kernel 还没回 created
+    const branch = host.branchSession({ sourcePiSessionFile: "/p", cwd: "/", roles: ["user", "assistant"] }, "fresh", "s1");
+    kernels[0]?.emit({ type: "piBookEdited", sessionId: "s1", edit: "revert" });
+    await revert;
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.equal(shutdowns(), 0, "分支在途不回收");
+    kernels[0]?.emit({ type: "created", sessionId: "fresh", piSessionFile: "durable:fresh" });
+    await branch;
+    // 删库的收尾在途（kernel 还没回 dropped）
+    const drop = host.dropKernelLibrary("s1.sqlite");
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.equal(shutdowns(), 0, "删库收尾在途不回收");
+    const dropMessage = kernels[0]?.posted.find((command) => command.type === "drop");
+    assert.ok(dropMessage?.type === "drop");
+    kernels[0]?.emit({ type: "dropped", requestId: dropMessage.requestId });
+    assert.equal(await drop, true);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.equal(shutdowns(), 1, "都回执了、闲着到点：回收");
+    host.dispose();
+  });
+
   test("关着开关时的守卫：住在新内核里的会话不交给旧内核", async () => {
     const legacy = new FakeChild();
     const host = new AgentHostCore(() => legacy, () => undefined, undefined, undefined, async (id) => (id === "moved" ? "moved to durable" : null));
