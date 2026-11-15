@@ -16,6 +16,15 @@ import { writeJsonAtomic } from "../atomic-write.ts";
 const FILE_NAME = "automations.json";
 const FILE_VERSION = 1;
 
+/**
+ * automations.json 的完整路径。真源一份，两个消费者：store 自己用，主进程拿去拼
+ * 工具禁区的单文件清单（protectedFiles，2026-11-13 自动化记录不可立）。名字写在
+ * 两处的话，改道改名时禁区会静默漏护。
+ */
+export function automationStoreFilePath(dir: string): string {
+  return join(dir, FILE_NAME);
+}
+
 function isNotFound(cause: unknown): boolean {
   return typeof cause === "object" && cause !== null && (cause as { code?: unknown }).code === "ENOENT";
 }
@@ -28,7 +37,7 @@ export class AutomationStore {
   private readonly now: () => number;
 
   constructor(dir: string, now: () => number = Date.now) {
-    this.filePath = join(dir, FILE_NAME);
+    this.filePath = automationStoreFilePath(dir);
     this.now = now;
   }
 

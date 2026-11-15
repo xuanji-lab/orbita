@@ -50,6 +50,8 @@ export interface SystemPromptInput {
   mode: PermissionMode;
   /** 当前实际注册的非内建工具名，与工具注册共用同一来源 */
   extraToolNames: readonly string[];
+  /** 受保护的单文件（自动化记录）：权限说明里点名它们 */
+  protectedFiles?: readonly string[];
   role: "root" | "child";
   workspace: { name?: string } | null;
   cwd: string;
@@ -72,7 +74,7 @@ export interface PromptSegment {
 export function orbitaSystemSegments(input: SystemPromptInput): PromptSegment[] {
   return [
     { name: "pi-base", text: input.piBase },
-    { name: "permission", text: describePermissionMode(input.mode, input.extraToolNames) },
+    { name: "permission", text: describePermissionMode(input.mode, input.extraToolNames, input.protectedFiles) },
     { name: "directories", text: describeDirectories(input.cwd, input.directories) },
     { name: "channel-role", text: describeChannelRole(input.role) },
     ...(input.memoryToolsGuideline ? [{ name: "memory-tools", text: MEMORY_TOOLS_GUIDELINE }] : []),

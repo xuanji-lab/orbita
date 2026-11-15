@@ -21,6 +21,15 @@ const DEV_USER_DATA = "orbita-dev";
 const DEV_ORBITA_ROOT = "Orbita-dev";
 
 /**
+ * 正式版的 userData（`<appData>/orbita`）。开发实例里的智能体不该能删到用户的真实自动化记录，
+ * 主进程拿它拼「只保记录文件」的名单（见 index.ts 的 protectedFiles）。与 {@link devDataDirs} 同一套命名：
+ * 正式版的路径一个字都不改，开发版是 orbita-dev[-名字]，所以这里与开发实例的 userData 永不相同。
+ */
+export function formalUserDataDir(appData: string): string {
+  return join(appData, "orbita");
+}
+
+/**
  * 开发版的两个数据根。**正式版返回 null**：正式版的路径不由这里决定，保持 Electron /
  * WorkspaceStore 的默认值——真实数据的位置不能因为这层逻辑的一个 bug 而漂走。
  *

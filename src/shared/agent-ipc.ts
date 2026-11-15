@@ -860,6 +860,14 @@ export type AgentCommand =
        */
       protectedPaths: string[];
       /**
+       * 工具永不许写的单个文件（2026-11-13 用户裁决：自动化记录不可变）。目前只有
+       * `automations.json`——任务定义与运行记录都在这一个文件里，智能体删改它 = 丢痕迹。
+       * 与 protectedPaths 同一条纪律（主进程定、闸门在权限档判定之前拦、全档不可绕）；
+       * 分开一个字段是因为命中判定与拒绝文案都不同：文件是精确相等加 `<file>.` 兄弟
+       * （原子写临时文件与坏文件隔离），文案要改道到自动化工具而不是「请用户改」。
+       */
+      protectedFiles: string[];
+      /**
        * skill 的链接集合目录（2-1 起是数组：global 恒在，当前工作区再加一条）。
        * **路径由主进程给**（同 `piSessionDir`）：哪个集合对该会话生效是主进程的策略，
        * agent 进程只收数据。目录里是指向中心存储的 symlink，pi 的加载器跟符号链接。
@@ -1041,6 +1049,8 @@ export type AgentCommand =
       attachmentsDir: string;
       /** 会话文件不可变（2026-09-18）：主进程定的工具禁区，全档拦截，语义同 submit */
       protectedPaths: string[];
+      /** 自动化记录不可变（2026-11-13）：单文件禁区（automations.json），语义同 submit */
+      protectedFiles: string[];
       /** 开轮环境，语义同 submit（skill 集合目录 + 目录清单 + MCP 配置）——无状态化后每轮开机都要带全 */
       skillsDirs: string[];
       directories?: TurnDirectories;
@@ -1110,6 +1120,8 @@ export type AgentCommand =
       attachmentsDir: string;
       /** 会话文件不可变（2026-09-18）：主进程定的工具禁区，全档拦截，语义同 submit */
       protectedPaths: string[];
+      /** 自动化记录不可变（2026-11-13）：单文件禁区（automations.json），语义同 submit */
+      protectedFiles: string[];
       /** 开轮环境，语义同 submit（skill 集合目录 + 目录清单 + MCP 配置）——无状态化后每轮开机都要带全 */
       skillsDirs: string[];
       directories?: TurnDirectories;

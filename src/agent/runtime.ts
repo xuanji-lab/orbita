@@ -988,12 +988,15 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   // 内建工具默认全开，不需要我们自己装配。
   // **模式读账本**：跨轮的 mode 在 ledger，不在 pi 对象上——对象这轮结束就销毁了。
   // **会话文件不可变**：protectedPaths 由主进程随每轮发，闸门在档位判定之前拦。
+  // **自动化记录不可变**（2026-11-13）：protectedFiles 同一条路（automations.json，
+  // 删改即丢「智能体定时做过什么」的痕迹）。
   const currentMode = () => ledgerNote(command.sessionId).mode;
   const gate = createToolCallGate(
     currentMode,
     askPermission(command.sessionId),
     command.protectedPaths,
     command.cwd,
+    command.protectedFiles,
   );
   // 计划（update_plan）的「停下来对齐」：闸门里 update_plan 判定要停，本轮其余工具调用就被拦下，
   // 让 agent 回头用正文说话（plan-tools.ts 头注释）；下一轮开轮时复位
@@ -1096,6 +1099,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                 piBase: adaptSystemPrompt(event.systemPrompt),
                 mode: currentMode(),
                 extraToolNames: extra,
+                protectedFiles: command.protectedFiles,
                 role,
                 workspace: command.workspaceId === null ? null : { name: command.workspaceName },
                 cwd: command.cwd,
