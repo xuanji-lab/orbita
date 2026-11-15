@@ -183,7 +183,10 @@ export function WordExportSettings(props: {
         info={t.settings.pandocStatusInfo}
         note={
           probeNote === null ? undefined : (
-            <span className={probeNote.error ? "set-row-error" : "set-row-note"} title={probeTooltip}>
+            <span
+              className={`${probeNote.error ? "set-row-error" : "set-row-note"} pandoc-status-note`}
+              title={probeTooltip}
+            >
               {probeNote.error && <Icon name="triangle-alert" size={12} strokeWidth={1.8} />}
               <span>{probeNote.text}</span>
               {needsUpgrade && (
@@ -204,32 +207,39 @@ export function WordExportSettings(props: {
             </span>
           )
         }
+        // 路径 + 两个按钮放进行底整幅一格：说明 / 状态留在左列，长路径不再挤进右列
+        // （窄面板下说明与控件重叠过，见 2026-11-15 验收 P3）
+        below={
+          <span className="pandoc-path-row">
+            <input
+              className="text-field voice-field"
+              aria-label={t.settings.pandocPathAria}
+              spellCheck={false}
+              value={draftPath}
+              placeholder={t.settings.pandocPathPlaceholder}
+              onChange={(event) => {
+                setDraftPath(event.target.value);
+                if (pathError !== null) setPathError(null);
+              }}
+              onBlur={() => applyPandocPath(draftPath)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                applyPandocPath(draftPath);
+              }}
+            />
+            <span className="pandoc-path-actions">
+              <PanelButton onClick={choosePandoc} disabled={pickingPandoc || pathBusy}>
+                {t.settings.pandocChoose}
+              </PanelButton>
+              <PanelButton onClick={recheck} disabled={probeBusy || pathBusy}>
+                <Icon name="refresh-cw" size={14} /> {probeBusy ? t.settings.pandocDetecting : t.settings.pandocDetect}
+              </PanelButton>
+            </span>
+          </span>
+        }
       >
-        <span className="pandoc-path-row">
-          <input
-            className="text-field voice-field"
-            aria-label={t.settings.pandocPathAria}
-            spellCheck={false}
-            value={draftPath}
-            placeholder={t.settings.pandocPathPlaceholder}
-            onChange={(event) => {
-              setDraftPath(event.target.value);
-              if (pathError !== null) setPathError(null);
-            }}
-            onBlur={() => applyPandocPath(draftPath)}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter") return;
-              event.preventDefault();
-              applyPandocPath(draftPath);
-            }}
-          />
-          <PanelButton onClick={choosePandoc} disabled={pickingPandoc || pathBusy}>
-            {t.settings.pandocChoose}
-          </PanelButton>
-          <PanelButton onClick={recheck} disabled={probeBusy || pathBusy}>
-            <Icon name="refresh-cw" size={14} /> {probeBusy ? t.settings.pandocDetecting : t.settings.pandocDetect}
-          </PanelButton>
-        </span>
+        <span />
       </SettingRow>
 
       <SettingRow
