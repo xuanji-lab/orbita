@@ -19,7 +19,26 @@ import { WebSocketServer } from "ws";
 
 const argv = process.argv.slice(2);
 const port = Number(argv[argv.indexOf("--port") + 1] || NOVNC_PORT) || NOVNC_PORT;
-const NOVNC_DIR = process.env.ORBITA_NOVNC_DIR ?? path.join(IMAGE_DIR, "novnc", "node_modules", "novnc");
+/**
+ * noVNC 根目录。**优先完整发行版**（`novnc-dist/noVNC-*`），因为：
+ * - npm 上的 `novnc` 包只有库（core/vendor/lib），**没有 `vnc.html`/`vnc_lite.html`**；
+ * - 完整版才带 app 层和入口页。
+ * 2026-11-16 真机踩到的坑：用 `vnc.html`（完整 UI）时 `autoconnect=1` 不生效，页面停在
+ * 欢迎界面（canvas 都没建，表现为「深色背景 + 两个小方块」）；同一个 URL 换成
+ * `vnc_lite.html` 立刻连上并渲染出桌面。所以入口固定用 lite。
+ */
+function resolveNovncDir() {
+  if (process.env.ORBITA_NOVNC_DIR) return process.env.ORBITA_NOVNC_DIR;
+  const distRoot = path.join(IMAGE_DIR, "novnc-dist");
+  if (fs.existsSync(distRoot)) {
+    for (const name of fs.readdirSync(distRoot)) {
+      const candidate = path.join(distRoot, name);
+      if (fs.existsSync(path.join(candidate, "vnc_lite.html"))) return candidate;
+    }
+  }
+  return path.join(IMAGE_DIR, "novnc", "node_modules", "novnc");
+}
+const NOVNC_DIR = resolveNovncDir();
 const RFB_PORT = Number(process.env.ORBITA_P3_RFB_PORT ?? DESKTOP_RFB_PORT);
 
 if (!fs.existsSync(path.join(NOVNC_DIR, "core", "rfb.js"))) {
@@ -90,13 +109,14 @@ const TYPES = {
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
-  const distVnc = path.join(NOVNC_DIR, "vnc.html");
+  // **入口用 vnc_lite 而不是 vnc**：完整 UI（vnc.html）在本机实测 autoconnect 不生效，
+  // 停在欢迎页且不建 canvas；lite 版同样的参数一次就通（2026-11-16 真机验证）。
+  const distVnc = path.join(NOVNC_DIR, "vnc_lite.html");
   if ((url.pathname === "/" || url.pathname === "/index.html") && fs.existsSync(distVnc)) {
-    // 完整发行版：直接重定向到它自己的 vnc.html（带 app/ 层，不需要 stub）
-    res.writeHead(302, { location: "/vnc.html?autoconnect=1&resize=scale&path=websockify" }).end();
+    res.writeHead(302, { location: "/vnc_lite.html?autoconnect=1&resize=scale&path=websockify" }).end();
     return;
   }
-  if (!fs.existsSync(distVnc) && (url.pathname === "/" || url.pathname === "/vnc.html" || url.pathname === "/index.html")) {
+  if (!fs.existsSync(distVnc) && (url.pathname === "/" || url.pathname === "/vnc.html" || url.pathname === "/vnc_lite.html" || url.pathname === "/index.html")) {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
     res.end(PAGE);
     return;
