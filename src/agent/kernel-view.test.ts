@@ -22,7 +22,7 @@ function view(entries: EntryRecord[], live?: unknown): ConversationView {
   return { conversation: {} as ConversationView["conversation"], entries, docs: live === undefined ? {} : { "pi.live": live as never } };
 }
 
-function rig(): { view: KernelView; events: AgentEvent[]; transcript: () => readonly TranscriptItem[]; compactions: EntryRecord[]; tools: string[] } {
+function rig(quitting = false): { view: KernelView; events: AgentEvent[]; transcript: () => readonly TranscriptItem[]; compactions: EntryRecord[]; tools: string[] } {
   const events: AgentEvent[] = [];
   const compactions: EntryRecord[] = [];
   const tools: string[] = [];
@@ -33,6 +33,7 @@ function rig(): { view: KernelView; events: AgentEvent[]; transcript: () => read
     now: () => 1000,
     compactionPlaced: (placed) => compactions.push(placed),
     toolEnd: (callId) => tools.push(callId),
+    quitting: () => quitting,
   });
   return {
     view: kernelView,
@@ -61,6 +62,23 @@ describe("KernelView：durable 视图 → 旧内核同形的转录 progress", ()
     assert.equal(items.length, 1, "旧条目没有重放");
     assert.match(JSON.stringify(items[0]), /你好，世界！/);
     assert.equal((items[0] as { status: string }).status, "complete");
+  });
+
+  it("应用正常退出时流到一半被停：半截回答不落终态帧（重启后界面没有它，与发给模型的一致）；用户点停止的半截照旧落终态帧", () => {
+    const finished = (r: ReturnType<typeof rig>) =>
+      r.events.filter((event) => event.type === "progress" && event.progress.type === "item_finished" && event.progress.item.role === "assistant");
+    for (const quitting of [true, false]) {
+      const r = rig(quitting);
+      r.view.attach(view([]));
+      r.view.advance(view([], { generation: { attempt: 1, message: assistant([{ type: "text", text: "半截甲乙" }]) } }));
+      r.view.advance(view([entry(1, "pi.assistant", [assistant([{ type: "text", text: "半截甲乙" }], "aborted")])]));
+      assert.equal(finished(r).length, quitting ? 0 : 1, `quitting=${quitting}`);
+    }
+    // 退出中正常答完的回答照常落盘（只拦被停下的）
+    const r = rig(true);
+    r.view.attach(view([]));
+    r.view.advance(view([entry(1, "pi.assistant", [assistant([{ type: "text", text: "答完了" }])])]));
+    assert.equal(finished(r).length, 1);
   });
 
   it("流到一半失败、durable 等重试：上一次尝试按 error 终态收掉，重试状态报出去（前几次不进界面），新尝试开跑时清掉", () => {

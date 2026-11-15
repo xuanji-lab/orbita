@@ -492,6 +492,7 @@ export class KernelSessions {
     const view = new KernelView(sessionId, adapter, {
       send: (event) => this.send(event),
       now: () => this.now(),
+      quitting: () => this.shuttingDown,
       // 回答落定：上下文占用就是它自己的 usage（pi 的估算法：最后一条有效回答的 usage + 其后消息的估算，此刻其后没有消息），
       // 不为这一下把整份上下文再读一遍（大会话的上下文带着全部原图）
       assistantEnd: (message) => void this.pushStats(sessionId, target, statsOf, undefined, message),

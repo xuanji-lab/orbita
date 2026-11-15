@@ -42,6 +42,8 @@ export interface KernelViewHooks {
   toolEnd?(callId: string): void;
   /** 压缩摘要条目落进会话（发界碑用） */
   compactionPlaced?(entry: EntryRecord): void;
+  /** 应用正在正常退出：这时被停下的半截回答不落终态帧（见 endAssistant）；缺席 = 不在退出 */
+  quitting?(): boolean;
 }
 
 type BlockState = { type: string; length: number; args: string };
@@ -199,6 +201,13 @@ export class KernelView {
   }
 
   private endAssistant(message: AssistantMessage): void {
+    // 应用正常退出时流到一半被停下的回答：不发终态帧（落盘只收终态帧，重启后界面上就没有它），与模型一致——
+    // 下一次请求里没有这半截（durable 把被停的半截记成 aborted 条目，发给模型时滤掉）。与 kernel 被杀那一格同样：
+    // 清掉 + 「继续」。用户自己点停止的半截照旧落盘（旧内核也留着它），只有退出这一格不同。
+    if (message.stopReason === "aborted" && this.hooks.quitting?.() === true) {
+      this.streaming = null;
+      return;
+    }
     if (this.streaming === null) this.apply({ type: "message_start", message: { ...message, content: [] } });
     this.streaming = null;
     for (const block of message.content) {
