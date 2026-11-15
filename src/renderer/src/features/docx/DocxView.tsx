@@ -253,6 +253,12 @@ function DocxSurface(props: {
 }) {
   const t = useT();
   const locale = useContext(LocaleContext);
+  /**
+   * 正文区的可读下限宽（px）：A4 纸面按 fit-width 缩到容器宽，窄于这个宽度时正文
+   * 落到 ~9px 以下，审阅条点一行「跳到那一处」也读不清。低于它就给一句可操作提示
+   * （拖宽面板 / 切稿件布局），不硬缩。
+   */
+  const DOCX_READABLE_WIDTH = 472;
   const { request, opened } = props;
 
   const editorRef = useRef<DocxEditorRef | null>(null);
@@ -282,6 +288,24 @@ function DocxSurface(props: {
    */
   const [unloadState, setUnloadState] = useState<"none" | "saved" | "blocked">("none");
   const rootRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * 面板太窄（正文区 < 可读下限）：页是 A4、fit-width 缩到容器宽，再窄下去正文就
+   * 读不清了。不硬缩——给一句可操作的提示（拖宽面板 / 切到稿件布局）。右栏
+   * 的宽度规则属既有 UI，这一版不在 App 层强加下限（见报告里的提案）。
+   */
+  const [tooNarrow, setTooNarrow] = useState(false);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (el === null) return undefined;
+    const measure = (): void => {
+      const width = el.getBoundingClientRect().width;
+      setTooNarrow(width > 0 && width < DOCX_READABLE_WIDTH);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   /* ── N2「指哪打哪」：选区锚点 + agent 修订 + 审阅条 ────────────────────── */
 
@@ -1348,6 +1372,13 @@ function DocxSurface(props: {
         <div className="docx-note" data-tone="info" role="status">
           <Icon name="info" size={14} />
           <span>{editNote}</span>
+        </div>
+      )}
+
+      {tooNarrow && (
+        <div className="docx-note" data-tone="info" role="status">
+          <Icon name="arrow-left-right" size={14} />
+          <span>{t.docx.tooNarrow}</span>
         </div>
       )}
 

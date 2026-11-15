@@ -149,6 +149,16 @@ export function rowNeedsContext(row: DocxChangeRow): boolean {
   return chars(row.before) + chars(row.after) <= 6;
 }
 
+/**
+ * 审阅条两行展示用的一段正文：折叠空白后只限字符上限（不切成一句半），
+ * 超长部分交给 CSS 的两行截断。`describeRow` 的 40 字截图是给单行短描述用的，
+ * 两行版的「旧文 / 新文」要看得见改动本身（2026-11-15 验收 P0-3）。
+ */
+export function reviewLineText(text: string, max = 160): string {
+  const chars = Array.from(text.replace(/\s+/g, " ").trim());
+  return chars.length <= max ? chars.join("") : `${chars.slice(0, max).join("")}…`;
+}
+
 const clip = (text: string, max = 40): string => {
   const chars = Array.from(text.replace(/\s+/g, " ").trim());
   return chars.length <= max ? chars.join("") : `${chars.slice(0, max).join("")}…`;

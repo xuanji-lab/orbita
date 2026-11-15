@@ -4951,6 +4951,29 @@ a.latex-setup-action {
   background: var(--color-bg-muted);
 }
 /*
+ * 修订的显示（2026-11-15 验收 P1-5）：形状是第一信号、颜色是第二信号。
+ * 引擎按「作者色」给插入 / 删除上同一支红（`AUTHOR_COLORS`），并给插入画下划线、
+ * 删除画删除线——但线宽是 1px，纸面缩小时落在半像素上看不见，只剩一色红。
+ * 这里按语义重着色（增 = success、删 = danger，深浅主题都取 token），并把线加粗、
+ * 下划线抬离字身。引擎把颜色 / 装饰写在 span 的**行内 style** 上，所以要 !important。
+ */
+.docx-view .docx-insertion {
+  color: var(--color-success) !important;
+  text-decoration-color: var(--color-success) !important;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 2px;
+}
+.docx-view .docx-deletion {
+  color: var(--color-danger) !important;
+  text-decoration-color: var(--color-danger) !important;
+  text-decoration-thickness: 1.5px;
+}
+/* AI 建议（folio 的 suggested）：形状仍是下划线 / 删除线，颜色沿用建议色，不抢修订语义 */
+.docx-view .docx-insertion--suggested {
+  color: var(--color-info) !important;
+  text-decoration-color: var(--color-info) !important;
+}
+/*
  * 选区锚点（N2「指哪打哪」）：一行 chip，点一下把这一处写进输入框。
  * 它是上下文不是主操作——颜色全用中性 token，accent 不在这里出现。
  */
@@ -5063,6 +5086,34 @@ a.latex-setup-action {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 改前 / 改后各一行（2026-11-15 验收 P0-3）：不做单行 ellipsis，各最多两行，
+ * 旧文删除线、新文下划线——形状先于颜色（设计系统：颜色不是唯一的状态信号） */
+.docx-review-pair {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+.docx-review-old,
+.docx-review-new {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.docx-review-old {
+  color: var(--color-text-tertiary);
+  text-decoration: line-through;
+  text-decoration-color: var(--color-danger);
+}
+.docx-review-new {
+  color: var(--color-text-primary);
+  text-decoration: underline;
+  text-decoration-color: var(--color-success);
 }
 .docx-review-meta {
   font-size: var(--font-size-xs);
