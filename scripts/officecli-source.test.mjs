@@ -6,11 +6,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { join } from "node:path";
 import {
+  OFFICECLI_SUBDIR,
   OFFICECLI_TARGETS,
   OFFICECLI_VERSION,
   ensureAsset,
   ensureOfficecli,
   fetchVerified,
+  officecliBinDir,
   releaseUrls,
   sha256Hex,
 } from "./officecli-source.mjs";
@@ -193,4 +195,24 @@ test("ensureOfficecli：表外平台直接失败，不猜也不下载", async ()
     /linux-x64 没有钉死的 OfficeCLI 版本/,
   );
   assert.deepEqual(h.fetched, []);
+});
+
+test("落点：officecli 在 bin 下的子目录里（不是 agent PATH 上那一层）", () => {
+  // 子目录名同时写死在 src/main/agent/officecli-bin.ts 的 BIN_SUBDIR 里，两边各有测试盯着
+  assert.equal(OFFICECLI_SUBDIR, "officecli");
+  assert.equal(officecliBinDir(join("build", "bin", "win32-x64")), join("build", "bin", "win32-x64", "officecli"));
+});
+
+test("ensureAsset：给定 dir 就是落盘目录（子目录由 ensureOfficecli 拼）", async () => {
+  const dir = join("build/bin/win32-x64", OFFICECLI_SUBDIR);
+  const urls = releaseUrls("1.0.0", WIN_TARGET.asset);
+  const h = harness({ sources: { [urls[0]]: GOOD } });
+  const result = await ensureAsset({ target: WIN_TARGET, dir, version: "1.0.0", fetchBytes: h.fetchBytes, io: h.io });
+  assert.equal(result.path, join(dir, "officecli.exe"));
+  assert.deepEqual([...h.disk.keys()].sort(), [join(dir, "officecli.exe"), join(dir, "officecli.exe.version")].sort());
+});
+
+test("ensureOfficecli：表外平台的错误信息带平台键", async () => {
+  const h = harness();
+  await assert.rejects(() => ensureOfficecli({ targetKey: "linux-arm64", binRoot: "b", fetchBytes: h.fetchBytes, io: h.io }), /linux-arm64/);
 });

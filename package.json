@@ -140,7 +140,13 @@
           "to": "bin",
           "filter": [
             "rg",
-            "fd",
+            "fd"
+          ]
+        },
+        {
+          "from": "build/bin/darwin-arm64/officecli",
+          "to": "bin/officecli",
+          "filter": [
             "officecli"
           ]
         },
@@ -166,7 +172,13 @@
           "to": "bin",
           "filter": [
             "rg.exe",
-            "fd.exe",
+            "fd.exe"
+          ]
+        },
+        {
+          "from": "build/bin/win32-x64/officecli",
+          "to": "bin/officecli",
+          "filter": [
             "officecli.exe"
           ]
         },

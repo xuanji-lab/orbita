@@ -23,6 +23,17 @@ const MIRROR_BASE = "https://d.officecli.ai/releases/download";
 const GITHUB_BASE = "https://github.com/iOfficeAI/OfficeCLI/releases/download";
 
 /**
+ * officecli 在自己的**子目录**里落盘（`bin/officecli/officecli[.exe]`），不跟 rg / fd 挤同一层。
+ * 理由不是整洁，是安全边界：agent 进程的 PATH 最前面挂的就是 `resources/bin`（search-bins.ts，给 pi 的
+ * grep / find 用）。officecli 如果也躺在那一层，模型在 bash 里随手一句 `officecli open`
+ * 就能起常驻服务、`officecli install` 就能绕过我们的版本钉死自我更新——「只用 batch、15 s 超时、
+ * 禁 resident、禁自更新」这些约束当场失效。放进子目录后，PATH 上那一层**没有它**，
+ * 只有拿到绝对路径（主进程发给工具的 ORBIT_OFFICECLI_PATH）才调得到。
+ * 这个常量与 src/main/agent/officecli-bin.ts 的落点必须一致（两边各自有测试盯着）。
+ */
+export const OFFICECLI_SUBDIR = "officecli";
+
+/**
  * 每个目标三个字段：
  * - `asset`：上游发布资产名（下载路径用的就是它，带平台后缀）；
  * - `file`：**本地落盘名**（与 rg / fd 同一套约定：就叫 officecli[.exe]），因为
@@ -120,11 +131,19 @@ export async function ensureAsset({
   return { path: binaryPath, action: "downloaded" };
 }
 
-/** 按平台架构键取表里那一项；表外平台直接失败，不猜也没有「兜底版本」。 */
-export async function ensureOfficecli(options) {
+/** officecli 的落盘目录（`binRoot` = build/bin/<platform>-<arch>）。子目录的理由见 OFFICECLI_SUBDIR。 */
+export function officecliBinDir(binRoot) {
+  return join(binRoot, OFFICECLI_SUBDIR);
+}
+
+/**
+ * 按平台架构键取表里那一项，落到 `binRoot/officecli/`。
+ * 表外平台直接失败，不猜也没有「兜底版本」。
+ */
+export async function ensureOfficecli({ binRoot, ...options }) {
   const target = OFFICECLI_TARGETS[options.targetKey];
   if (target === undefined) {
     throw new Error(`${options.targetKey} 没有钉死的 OfficeCLI 版本——在 scripts/officecli-source.mjs 的表里补上`);
   }
-  return ensureAsset({ ...options, target });
+  return ensureAsset({ ...options, target, dir: officecliBinDir(binRoot) });
 }

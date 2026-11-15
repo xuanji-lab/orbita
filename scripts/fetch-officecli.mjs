@@ -1,8 +1,12 @@
 /**
- * 打包前取 OfficeCLI 到 build/bin/<platform>-<arch>/（electron-builder 再放进 resources/bin）。
+ * 打包前取 OfficeCLI 到 build/bin/<platform>-<arch>/officecli/（electron-builder 再放进 resources/bin/officecli）。
  * 版本表、下载顺序、sha256 校验都在 officecli-source.mjs（有测试）。
  *
  * 用法：node scripts/fetch-officecli.mjs [platform] [arch]   （默认本机）
+ *
+ * **落在 officecli 子目录里是有意的**：resources/bin 是 agent 进程 PATH 的第一项（给 rg / fd），
+ * 二进制不能在那里，否则模型在 bash 里直接就能 `officecli open` / `install`。见 officecli-source.mjs 的
+ * OFFICECLI_SUBDIR。
  *
  * 二进制不进 git（.gitignore 的 /build/bin/）。已取过同版本 + 同 sha256 就跳过。
  * 许可：Apache-2.0；LICENSE / NOTICE / THIRD-PARTY-NOTICES 在 resources/licenses/officecli，随包发。
@@ -56,11 +60,10 @@ async function fetchBytes(url) {
 const platform = process.argv[2] ?? process.platform;
 const arch = process.argv[3] ?? process.arch;
 const dir = join(dirname(fileURLToPath(import.meta.url)), "..", "build", "bin", `${platform}-${arch}`);
-
 try {
   const result = await ensureOfficecli({
     targetKey: `${platform}-${arch}`,
-    dir,
+    binRoot: dir,
     version: OFFICECLI_VERSION,
     fetchBytes,
     log: (line) => console.log(line),
