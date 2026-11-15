@@ -39,12 +39,14 @@ export function registerPdfReaderIpc(deps: {
   };
 
   ipcMain.handle(ipcChannels.pdfReaderOpen, async (_event, req: PdfReaderOpenRequest): Promise<PdfReaderOpenResult> => {
+    // 先领号再 await：几次 open 谁算「当前」按请求到达的先后定（见 PdfReaderDocs.begin）
+    const ticket = docs.begin();
     const roots = await resolveFileRoots(deps.workspaces, deps.sessions, req);
     const path = await whitelistedPath(roots, req);
     if (!isPdfFile(path)) throw new Error(`Not a PDF file: ${path}`);
     const build = await check();
     if (!build.ok) return { kind: "unavailable", reason: build.reason, detail: build.detail };
-    return { kind: "ready", ...(await docs.open(path)) };
+    return { kind: "ready", ...(await docs.open(path, ticket)) };
   });
 
   ipcMain.handle(ipcChannels.pdfReaderSave, (_event, req: PdfReaderSaveRequest): Promise<PdfReaderWriteResult> =>

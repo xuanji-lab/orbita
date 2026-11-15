@@ -127,3 +127,22 @@ test("PDF 所在目录不可写：打开时报 read-only，写入回 read-only �
     f.done();
   }
 });
+
+test("快速连开两次：按领号先后定谁是当前，后做完的旧请求抢不走", async () => {
+  const f = fixture();
+  try {
+    const docs = new PdfReaderDocs(tokens);
+    const first = docs.begin();
+    const second = docs.begin();
+    // 后发的先做完、先发的后做完（白名单 / 产物核对的 await 顺序不保证）
+    const newer = await docs.open(f.pdf, second);
+    const older = await docs.open(f.pdf, first);
+    assert.equal(docs.pdfPathOf(newer.token), f.pdf);
+    assert.equal(docs.pdfPathOf(older.token), null);
+    // 旧的那次被调用方关掉（组件已卸载）也不影响当前那份
+    docs.close(older.token);
+    assert.equal(docs.pdfPathOf(newer.token), f.pdf);
+  } finally {
+    f.done();
+  }
+});

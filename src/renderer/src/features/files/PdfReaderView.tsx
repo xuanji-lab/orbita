@@ -6,6 +6,7 @@ import { PanelButton, PanelLine } from "../../shell/RightPanel";
 import { ColorButton } from "../slides-editor/FormatBar";
 import { PreviewNotice } from "./PreviewChrome";
 import { api } from "../../api";
+import { ipcErrorText } from "../../utils/ipc-error.ts";
 import { LocaleContext, useT } from "../../locale.ts";
 import { citeRectsForReader } from "./pdf-cite-rects.ts";
 import {
@@ -104,6 +105,8 @@ export function PdfReaderView(props: {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [missing, setMissing] = useState<number | null>(null);
   const [pageDraft, setPageDraft] = useState<string | null>(null);
+  /** 出错态里「重试」：同一份文件整份重开 */
+  const [retry, setRetry] = useState(0);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const pendingRef = useRef(new Map<string, ReaderAnnotation>());
@@ -135,14 +138,15 @@ export function PdfReaderView(props: {
         setOpen(result.kind === "ready" ? { status: "ready", doc: result } : { status: "unavailable", detail: result.detail });
       })
       .catch((cause: unknown) => {
-        if (alive) setOpen({ status: "error", message: cause instanceof Error ? cause.message : String(cause) });
+        if (alive) setOpen({ status: "error", message: ipcErrorText(cause) });
       });
     return () => {
       alive = false;
       if (opened !== null) void api.pdfReader.close(opened);
     };
-    // request 每次渲染都是新对象：按它的字段判变化
-  }, [request.sessionId, request.workspaceId, request.root, request.dir, props.reloadToken]);
+    // request 每次渲染都是新对象：按它的字段判变化。换语言也整份重开：阅读器只在创建时收 ftl，新 iframe 要重新
+    // 走一遍就绪 → init → layout / 深浅（只换 iframe 的 key 不重置 initialized 的话，新页面收不到这几条命令）
+  }, [request.sessionId, request.workspaceId, request.root, request.dir, props.reloadToken, locale, retry]);
 
   const send = (command: ReaderCommand): void => {
     frameRef.current?.contentWindow?.postMessage(command, PDF_READER_ORIGIN);
@@ -276,7 +280,7 @@ export function PdfReaderView(props: {
 
   if (open.status === "loading") {
     return (
-      <div className="file-preview-loading">
+      <div className="pdr-state file-preview-loading">
         <Icon name="loader-circle" size={14} spin />
         {t.common.loading}
       </div>
@@ -284,14 +288,15 @@ export function PdfReaderView(props: {
   }
   if (open.status === "error") {
     return (
-      <div className="file-preview-error">
+      <div className="pdr-state file-preview-error">
         <PanelLine danger>{tr.failed(open.message)}</PanelLine>
+        <PanelButton onClick={() => setRetry((n) => n + 1)}>{t.common.retry}</PanelButton>
       </div>
     );
   }
   if (open.status === "unavailable") {
     return (
-      <div className="file-preview-empty">
+      <div className="pdr-state file-preview-empty">
         <Icon name="triangle-alert" size={24} style={{ color: "var(--color-text-tertiary)" }} />
         <PanelLine>{tr.unavailable}</PanelLine>
         <PanelLine>{open.detail}</PanelLine>

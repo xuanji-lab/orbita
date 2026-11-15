@@ -17,6 +17,11 @@
   background: var(--color-bg-panel);
 }
 
+/* 加载 / 出错 / 阅读器没装好：预览体在 PDF 模式下没有内边距（阅读器要铺满），这几种状态自己补回与文件预览同样的边距 */
+.pdr-state {
+  padding: var(--space-3);
+}
+
 .pdr-bar {
   display: flex;
   flex: 0 0 auto;

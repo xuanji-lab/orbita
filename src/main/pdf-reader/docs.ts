@@ -55,6 +55,8 @@ const isErrno = (error: unknown, ...codes: string[]): boolean =>
 
 export class PdfReaderDocs {
   private current: OpenDoc | null = null;
+  /** 最近一次 begin 发的号：只有拿着它的那次 open 能成为「当前」 */
+  private ticket = 0;
   private queue: Promise<unknown> = Promise.resolve();
   private readonly newToken: () => string;
 
@@ -62,11 +64,22 @@ export class PdfReaderDocs {
     this.newToken = newToken;
   }
 
-  /** 打开 `pdfPath`（调用方已过白名单并 realpath）：作废上一份，读数据文件 */
-  async open(pdfPath: string): Promise<OpenedDoc> {
+  /**
+   * 领号：IPC handler 收到请求时**同步**调（在任何 await 之前）。open 之前还要过白名单、核对产物，这些 await
+   * 的完成顺序不保证与请求顺序一致——快速连开两次（React 开发态的双跑、连点两个文件），先发的那次可能后做完，
+   * 把「当前」抢回去，后发那次拿到的 token 就 404 了（2026-11-16 实例里复现过：阅读器停在加载、PDF 请求 404）。
+   * 按领号的先后裁决，与 await 完成的先后无关。
+   */
+  begin(): number {
+    this.ticket += 1;
+    return this.ticket;
+  }
+
+  /** 打开 `pdfPath`（调用方已过白名单并 realpath）：拿着最新号的才成为当前、作废上一份；过期的号照样读数据文件，但 token 不登记 */
+  async open(pdfPath: string, ticket: number = this.begin()): Promise<OpenedDoc> {
     const token = this.newToken();
     const dataPath = join(dirname(pdfPath), annotationsFileName(basename(pdfPath)));
-    this.current = { token, pdfPath, dataPath };
+    if (ticket === this.ticket) this.current = { token, pdfPath, dataPath };
     const state = await readDisk(dataPath, basename(pdfPath));
     const blocked = state.kind === "blocked" ? state.reason : (await canWrite(dataPath, state.exists)) ? null : "read-only";
     return {
