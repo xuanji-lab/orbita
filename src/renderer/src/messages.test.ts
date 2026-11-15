@@ -18,6 +18,9 @@ const ALLOWED_LATIN = new Set([
   // 品牌
   "orbita",
   "GitHub",
+  // git 尾注键：设置页讲「提交署名加的是哪一行」时必须原样写出（机器读的字面量，
+  // 2026-11-15 从 Made-with 换成这个键）
+  "Co-authored-by",
   // 协议 / 格式 / 技术名
   "MCP",
   "Git",
