@@ -112,3 +112,31 @@ describe("新内核的库目录（durable/）受保护", () => {
   }
   test("攻击 30 条", () => assert.equal(attacks.length, 30));
 });
+
+/**
+ * 拒绝理由按碰到的是什么说（2026-11-16 验收：命令碰 durable/ 回的是「Automation records are immutable」，与目标对不上）。
+ * 这些话只在被拒时回给模型，不进系统提示。
+ */
+describe("拒绝理由按被碰到的是什么来说", () => {
+  const SESS = join(DATA, "sessions");
+  const AUTO = join(DATA, "automations.json");
+  const cases: [string, string, Record<string, unknown>, RegExp][] = [
+    ["write 库文件：会话库", "write", { path: join(D, LIB), content: "" }, /^The session database is immutable: its folder ".*durable" is protected — no tool may write/],
+    ["bash rm 库文件：会话库", "bash", { command: `rm "${D}/${LIB}"` }, /^The session database is immutable/],
+    ["bash ls 库目录：会话库", "bash", { command: `ls "${D}"` }, /^The session database is immutable/],
+    ["正式实例的库：会话库", "bash", { command: `rm "${F}/${LIB}"` }, /^The session database is immutable/],
+    ["bash rm 会话账本：会话记录", "bash", { command: `rm "${SESS}/a.jsonl"` }, /^Session records are immutable/],
+    ["write 会话账本：会话记录", "write", { path: join(SESS, "a.jsonl"), content: "" }, /^Session records are immutable/],
+    ["bash 改自动化记录：自动化记录", "bash", { command: `rm "${AUTO}"` }, /^Automation records are immutable/],
+    ["cd 进数据目录再删：说整个数据目录", "bash", { command: `cd "${DATA}" && rm -rf x` }, /^Orbita's data folder ".*" holds session records, the session database and automation records/],
+  ];
+  for (const [name, tool, input, pattern] of cases) {
+    test(name, () => {
+      const message = refused(tool, input);
+      assert.ok(message !== null, "应当被拒");
+      assert.match(message, pattern);
+      // 讲会话库的话不该再提自动化记录，反之亦然
+      if (/session database/.test(pattern.source)) assert.doesNotMatch(message, /Automation records/);
+    });
+  }
+});

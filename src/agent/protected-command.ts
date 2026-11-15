@@ -1351,14 +1351,40 @@ function parentDirOf(file: string): string {
   return dirname(file);
 }
 
-/** 给模型的拒绝理由（数据目录一类）：改道说清——读用 read / automation_list，工作台照常能用 */
-export function dataDirRefusalMessage(refusal: Extract<CommandRefusal, { kind: "dataDir" }>): string {
+/**
+ * 被拒的命令碰的是数据目录里的什么（调用方按命令串里出现的受保护路径判，见 permission.ts 的 touchedSubject）：
+ * 会话库目录 / 会话账本 / 自动化记录 / 说不出具体哪个（cd 进去、相对路径、上级目录）。
+ */
+export type DataDirSubject = "database" | "sessions" | "automation" | "dataFolder";
+
+const DATA_DIR_SUBJECT: Readonly<Record<DataDirSubject, { lead: (dir: string) => string; read: string }>> = {
+  automation: {
+    lead: (dir) => `Automation records are immutable, and they live in Orbita's data folder "${dir}". `,
+    read: "To read automation records use the read tool or automation_list (not the shell). ",
+  },
+  sessions: {
+    lead: (dir) => `Session records are immutable, and they live in Orbita's data folder "${dir}". `,
+    read: "To read session records use the read tool, or read_task for a task's transcript (not the shell). ",
+  },
+  database: {
+    lead: (dir) => `The session database is immutable, and it lives in Orbita's data folder "${dir}". `,
+    read: "To read a task's history use read_task (not the shell). ",
+  },
+  dataFolder: {
+    lead: (dir) => `Orbita's data folder "${dir}" holds session records, the session database and automation records, all immutable. `,
+    read: "To read them use the read tool or automation_list, or read_task for a task's transcript (not the shell). ",
+  },
+};
+
+/** 给模型的拒绝理由（数据目录一类）：按碰到的是什么说；改道说清——读用哪个工具，工作台照常能用 */
+export function dataDirRefusalMessage(refusal: Extract<CommandRefusal, { kind: "dataDir" }>, subject: DataDirSubject): string {
+  const words = DATA_DIR_SUBJECT[subject];
   return (
-    `Automation records are immutable, and they live in Orbita's data folder "${refusal.dir}". ` +
+    words.lead(refusal.dir) +
     `This shell command was refused (${refusal.why}) in every permission mode: a command that touches that folder ` +
     "(or cd's into it, or renames / deletes / chmods it or any folder above it) is allowed only when it is read-only — " +
     "ls, stat, du, file, wc, head, tail, cat, grep / rg, find without -delete or -exec, diff — or when it only copies out of it. " +
-    "To read automation records use the read tool or automation_list (not the shell). " +
+    words.read +
     `Your session workbench inside it ("${refusal.dir}/workbenches/<session>") is still yours — use absolute paths there.`
   );
 }

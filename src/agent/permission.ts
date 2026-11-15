@@ -19,7 +19,7 @@ import {
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { resolveToCwd } from "@earendil-works/pi-coding-agent";
 import type { ContextMessage } from "./image-byte-budget.ts";
-import { dataDirRefusalMessage, defaultGuardEnv, protectedCommandRefusal, realpathLoose, type CommandGuardEnv } from "./protected-command.ts";
+import { dataDirRefusalMessage, defaultGuardEnv, protectedCommandRefusal, realpathLoose, type CommandGuardEnv, type DataDirSubject } from "./protected-command.ts";
 
 /**
  * **本会话实际启用的 pi 内建工具集**。真源一份、两个消费者：
@@ -307,8 +307,10 @@ export function protectedPathRefusal(
     if (typeof command !== "string" || command === "") return null;
     // 先过命令串里不带完整路径的写法：文件名本身 / 变量 / 通配 / cd 进数据目录 / 对数据目录或其上级的破坏性命令
     const loose = protectedCommandRefusal(command, { files: protectedFiles, ownDirs: ownDataDirs(protectedPaths, protectedFiles) }, cwd, guard);
-    if (loose !== null) return loose.kind === "file" ? fileRefusalMessage(loose.file, "command") : dataDirRefusalMessage(loose);
     const haystack = loosenShellQuoting(foldPath(expandTildeLiterals(command, guard.home)));
+    if (loose !== null) {
+      return loose.kind === "file" ? fileRefusalMessage(loose.file, "command") : dataDirRefusalMessage(loose, touchedSubject(haystack, protectedPaths, protectedFiles));
+    }
     for (const dir of protectedPaths) {
       const needle = loosenShellQuoting(foldPath(dir));
       if (commandMentions(haystack, needle)) return refusalMessage(dir, "command");
@@ -323,6 +325,23 @@ export function protectedPathRefusal(
   return null;
 }
 
+/** 受保护目录是哪一类：新内核的会话库目录（`durable/`）与会话账本（sessions/、pi-sessions/）给模型的说法不同 */
+function dirSubject(dir: string): "database" | "sessions" {
+  return basename(dir) === "durable" ? "database" : "sessions";
+}
+
+/**
+ * 被数据目录白名单拒掉的命令碰的是什么（拒绝理由按它说）：命令串里出现了哪个受保护目录 / 文件的完整路径；
+ * 会话库目录优先于账本、账本优先于自动化记录；都没出现（cd 进数据目录、相对路径、上级目录）= 说整个数据目录。
+ */
+function touchedSubject(haystack: string, protectedPaths: readonly string[], protectedFiles: readonly string[]): DataDirSubject {
+  const mentioned = protectedPaths.filter((dir) => commandMentions(haystack, loosenShellQuoting(foldPath(dir)))).map(dirSubject);
+  if (mentioned.includes("database")) return "database";
+  if (mentioned.includes("sessions")) return "sessions";
+  if (protectedFiles.some((file) => commandMentions(haystack, loosenShellQuoting(foldPath(file))))) return "automation";
+  return "dataFolder";
+}
+
 /**
  * 拒绝理由分两种讲法。命令串拦是字面量拦，分不出读写——`ls` 一个会话目录也会撞上。
  * 只说「不能写」模型会以为自己在写，原地重试或卡住（实测）；所以命令这一支要
@@ -330,6 +349,7 @@ export function protectedPathRefusal(
  * 让它第一次撞墙就知道往哪绕。保护强度不变。
  */
 function refusalMessage(dir: string, via: "path" | "command"): string {
+  if (dirSubject(dir) === "database") return databaseRefusalMessage(dir, via);
   const lead =
     via === "command"
       ? `Session records are immutable: "${dir}" is protected, and shell commands may not reference it ` +
@@ -338,6 +358,23 @@ function refusalMessage(dir: string, via: "path" | "command"): string {
   return (
     lead +
     "To read it, use the ls / read / find / grep tools (not the shell), or read_task for a task's transcript. " +
+    "To change it, describe the change to the user instead; only the user can modify session data."
+  );
+}
+
+/**
+ * 会话库目录（`<userData>/durable/`：每棵会话树一个 SQLite 库）的拒绝理由：与账本同一副骨架；改道指引是 read_task
+ * （库文件是二进制，读它的原文对模型没有用）。
+ */
+function databaseRefusalMessage(dir: string, via: "path" | "command"): string {
+  const lead =
+    via === "command"
+      ? `The session database is immutable: its folder "${dir}" is protected, and shell commands may not reference it ` +
+        "in any permission mode — even read-only ones, because the check cannot tell reading from writing. "
+      : `The session database is immutable: its folder "${dir}" is protected — no tool may write there in any permission mode. `;
+  return (
+    lead +
+    "To read a task's history, use read_task (not the shell). " +
     "To change it, describe the change to the user instead; only the user can modify session data."
   );
 }
