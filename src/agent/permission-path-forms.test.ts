@@ -146,3 +146,33 @@ describe("命令串：~用户名 与 ANSI-C 引号里带空格的路径", () => 
     assert.equal((await call("bash", { command: "echo $'hello world' > notes.txt" })).block, undefined);
   });
 });
+
+// 2026-11-16 增量复验：`~+` / `$PWD` / `$(pwd)` 等价于当前目录，闸门原来不认，后面接的相对段落落不到受保护路径上
+describe("命令串：「当前目录」的几种写法后面接相对路径", () => {
+  // CWD 在家目录下一层：../Library/… 就到受保护的数据目录
+  const up = `../${DURABLE.slice(homedir().length + 1)}/x.sqlite`;
+  const upFile = `../${FILE.slice(homedir().length + 1)}`;
+  const esc = (path: string) => path.replaceAll(" ", "\\ ");
+  const forms: [string, string][] = [
+    ["~+/", `rm ~+/${esc(up)}`],
+    ["$PWD/", `rm "$PWD/${up}"`],
+    ["${PWD}/", `rm "\${PWD}/${up}"`],
+    ["$(pwd)/", `rm "$(pwd)/${up}"`],
+    ["$(pwd -P)/", `rm "$(pwd -P)/${up}"`],
+    ["反引号 pwd", `rm "\`pwd\`/${up}"`],
+    ["$PWD 指向自动化记录", `mv "$PWD/${upFile}" /tmp/x`],
+  ];
+  for (const [name, command] of forms) {
+    for (const tool of ["bash", "terminal_execute"]) {
+      test(`${tool}：${name}`, async () => {
+        assert.equal((await call(tool, { command })).block, true, command);
+      });
+    }
+  }
+
+  test("不误伤：当前目录写法后面是工作区里的普通路径", async () => {
+    for (const command of ["ls $PWD", 'echo "$(pwd)"', "cp a.txt ~+/b.txt", 'rm "$PWD/build/out.js"', "cd $(pwd)/src && ls"]) {
+      assert.equal((await call("bash", { command })).block, undefined, command);
+    }
+  });
+});

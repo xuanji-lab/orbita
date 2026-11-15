@@ -248,8 +248,22 @@ interface Variant {
   literal: boolean;
 }
 
+/**
+ * 「当前目录」的几种写法换成 `.`：`~+`、`$PWD` / `${PWD}`、`$(pwd)` / `` `pwd` ``（可带 -L / -P）。它们的值完全可预测，
+ * 换成 `.` 之后，后面的相对段落按（跟踪了 cd 的）当前目录解析，与直接写相对路径走同一套判定。
+ * 2026-11-16 复验：`rm ~+/../../Library/…/durable/x`、`rm "$PWD/../../…"`、`rm "$(pwd)/../../…"` 在真实例里删成了——
+ * 闸门不认这几种写法，相对段落就落不到受保护路径上（直接写 `../../Library/…` 是拦得住的）。
+ * `~-` / `$OLDPWD`（上一个目录）闸门不知道是哪，不换，归入变量一类。
+ */
+function currentDirForms(command: string): string {
+  return command
+    .replaceAll(/\$\(\s*pwd(?:\s+-[LP])?\s*\)|`\s*pwd(?:\s+-[LP])?\s*`/g, ".")
+    .replaceAll(/\$\{PWD\}|\$PWD(?![A-Za-z0-9_])/g, ".")
+    .replaceAll(/(^|[\s"'=;&|()><])~\+(?=\/|\\|\s|$)/g, "$1.");
+}
+
 function normalizeVariants(command: string, guard: CommandGuardEnv, knownSpacePaths: readonly string[]): Variant[] {
-  const decoded = decodeAnsiC(command);
+  const decoded = decodeAnsiC(currentDirForms(command));
   const literal = !/[$`]/.test(decoded);
   const vars = parseAssignments(decoded);
   const expanded = encodeQuotedSpaces(expandTilde(expandVars(decoded, vars, guard), guard), knownSpacePaths);
