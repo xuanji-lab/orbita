@@ -493,3 +493,77 @@ describe("read_docx 的描述", () => {
     assert.equal(description.length <= 450, true, `read_docx 描述 ${description.length} 字符，超了——细则写进 reading 技能`);
   });
 });
+
+describe("edit_docx：锚点必须带文本佐证（验收 R1）", () => {
+  /** 桩 broker：真被调用就记下来（这一组全是「连请求都不该发出去」） */
+  function tools() {
+    const calls: unknown[] = [];
+    const broker = {
+      request: (event: unknown) => {
+        calls.push(event);
+        return Promise.resolve({ ok: false, error: "不该走到这里" });
+      },
+    } as unknown as RequestBroker;
+    const tool = createDocxTools(broker, "session-1", dir)[1]!;
+    return { tool, calls };
+  }
+
+  test("裸锚点（只有 blockId + 偏移）→ 拒绝，且一条请求都不发", async () => {
+    const { tool, calls } = tools();
+    await assert.rejects(
+      () =>
+        tool.execute(
+          "call-1",
+          { path: join(dir, "full.docx"), replace: "X", anchor: { blockId: "30AD52B0", startOffset: 0, endOffset: 3 } },
+          undefined,
+          undefined,
+          undefined as never,
+        ),
+      /锚点缺文本佐证/,
+    );
+    assert.equal(calls.length, 0);
+  });
+
+  test("只带 hash → 放行（请求发出去）", async () => {
+    const { tool, calls } = tools();
+    await tool.execute(
+      "call-2",
+      {
+        path: join(dir, "full.docx"),
+        replace: "X",
+        anchor: { blockId: "30AD52B0", startOffset: 0, endOffset: 3, selectedTextHash: "hf9uw3p" },
+      },
+      undefined,
+      undefined,
+      undefined as never,
+    );
+    assert.equal(calls.length, 1);
+  });
+
+  test("只带 quote → 放行", async () => {
+    const { tool, calls } = tools();
+    await tool.execute(
+      "call-3",
+      { path: join(dir, "full.docx"), replace: "X", anchor: { blockId: "30AD52B0", startOffset: 0, endOffset: 3, quote: "流域出" } },
+      undefined,
+      undefined,
+      undefined as never,
+    );
+    assert.equal(calls.length, 1);
+  });
+
+  test("锚点缺 blockId / 偏移 → 拒绝并说清缺什么", async () => {
+    const { tool, calls } = tools();
+    await assert.rejects(
+      () => tool.execute("call-4", { path: join(dir, "full.docx"), replace: "X", anchor: { startOffset: 0, endOffset: 3 } }, undefined, undefined, undefined as never),
+      /anchor 需要 blockId/,
+    );
+    assert.equal(calls.length, 0);
+  });
+
+  test("完全不给 anchor（用 find）→ 不受这条规则限制", async () => {
+    const { tool, calls } = tools();
+    await tool.execute("call-5", { path: join(dir, "full.docx"), replace: "X", find: "流域出" }, undefined, undefined, undefined as never);
+    assert.equal(calls.length, 1);
+  });
+});

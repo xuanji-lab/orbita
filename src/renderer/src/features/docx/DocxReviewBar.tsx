@@ -17,6 +17,8 @@ import { useT } from "../../locale.ts";
 
 export function DocxReviewBar(props: {
   rows: readonly DocxChangeRow[];
+  /** 块 id → 段号（1 起；0 / 缺省 = 不知道）。只给「文字太短、看不出位置」的行补上下文 */
+  ordinals: ReadonlyMap<string, number>;
   busy: boolean;
   onResolve: (row: DocxChangeRow, decision: "accept" | "reject") => void;
   onAll: (decision: "accept" | "reject") => void;
@@ -49,15 +51,17 @@ export function DocxReviewBar(props: {
         </div>
       </div>
       <ul className="docx-review-list">
-        {props.rows.map((row) => (
+        {props.rows.map((row) => {
+          const ordinal = row.blockId === null ? 0 : (props.ordinals.get(row.blockId) ?? 0);
+          return (
           <li key={row.key} className="docx-review-row" data-ours={row.ours ? "" : undefined}>
             <button
               type="button"
               className="docx-review-text"
-              title={describeRow(row)}
+              title={describeRow(row, ordinal)}
               onClick={() => props.onLocate(row)}
             >
-              <span className="docx-review-what">{describeRow(row)}</span>
+              <span className="docx-review-what">{describeRow(row, ordinal)}</span>
               <span className="docx-review-meta">
                 {row.ours ? t.docx.reviewAgent : row.author === "" ? t.docx.reviewAgent : row.author}
                 {row.reanchored ? ` · ${t.docx.reviewReanchored}` : ""}
@@ -86,7 +90,8 @@ export function DocxReviewBar(props: {
               </button>
             </div>
           </li>
-        ))}
+          );
+        })}
       </ul>
     </section>
   );

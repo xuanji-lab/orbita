@@ -736,7 +736,9 @@ export function createDocxTools(
       }
       const replace = typeof args["replace"] === "string" ? (args["replace"] as string) : null;
       if (replace === null) throw new Error('edit_docx requires "replace" (use "" to delete the passage)');
-      const anchor = anchorOf(args["anchor"]);
+      const parsedAnchor = anchorOf(args["anchor"]);
+      if (parsedAnchor.kind === "invalid") throw new Error(`edit_docx: ${parsedAnchor.error}`);
+      const anchor = parsedAnchor.kind === "ok" ? parsedAnchor.anchor : null;
       const blockId = typeof args["blockId"] === "string" ? (args["blockId"] as string).trim() : "";
       const find = typeof args["find"] === "string" ? (args["find"] as string).trim() : "";
       const request: DocxAgentEditRequest = {
@@ -761,15 +763,47 @@ export function createDocxTools(
   return [readDocx, editDocx];
 }
 
-/** 模型给的 anchor 对象 → 契约里的锚点；缺必需字段就当作没给（降级到 blockId / find） */
-function anchorOf(raw: unknown): DocxAnchor | null {
+/** 模型给的 anchor 参数解析结果：没给 / 给了但不可用（带原因）/ 可用 */
+type AnchorParse =
+  | { kind: "none" }
+  | { kind: "invalid"; error: string }
+  | { kind: "ok"; anchor: DocxAnchor };
+
+/**
+ * 模型给的 anchor 对象 → 契约里的锚点。
+ *
+ * - 一个字段都没给 → `none`（降级到 blockId + find）；
+ * - 给了 blockId / 偏移但**两项文本佐证都缺** → `invalid`：块内偏移只对「选中那一刻」
+ *   的文档成立，盲信它就会把任意位置的文字改掉（验收复现：裸传 `{blockId,start,end}`
+ *   把「流域出」改成 X 并回 ok:true）。这一步与 renderer 的 resolveRange 双保险。
+ * - 缺 blockId / 偏移本身无效 → 也 `invalid`（说清缺什么），不让它静默降级成「改整块」。
+ */
+function anchorOf(raw: unknown): AnchorParse {
+  if (raw === undefined || raw === null) return { kind: "none" };
   const args = asRecord(raw);
+  if (Object.keys(args).length === 0) return { kind: "none" };
   const blockId = typeof args["blockId"] === "string" ? args["blockId"] : "";
   const startOffset = typeof args["startOffset"] === "number" ? args["startOffset"] : NaN;
   const endOffset = typeof args["endOffset"] === "number" ? args["endOffset"] : NaN;
-  if (blockId === "" || !Number.isInteger(startOffset) || !Number.isInteger(endOffset)) return null;
-  if (startOffset < 0 || endOffset <= startOffset) return null;
+  if (blockId === "" || !Number.isInteger(startOffset) || !Number.isInteger(endOffset)) {
+    return { kind: "invalid", error: "anchor 需要 blockId + startOffset + endOffset 三个整数/字符串字段（照抄 <quoted_docx> 的属性）" };
+  }
+  if (startOffset < 0 || endOffset <= startOffset) {
+    return { kind: "invalid", error: `anchor 的偏移不成立：start=${startOffset}，end=${endOffset}` };
+  }
+  const selectedTextHash = typeof args["selectedTextHash"] === "string" ? args["selectedTextHash"] : "";
+  const quote = typeof args["quote"] === "string" ? args["quote"] : "";
+  if (selectedTextHash.trim() === "" && quote.trim() === "") {
+    return {
+      kind: "invalid",
+      error:
+        "锚点缺文本佐证：请把 <quoted_docx> 的 hash（selectedTextHash）与 block 体里的 <quoted> 原文一起带上，" +
+        "或者改用 blockId + find / 只给 find。只有块号和偏移不写——那会改到用户没选的地方。",
+    };
+  }
   return {
+    kind: "ok",
+    anchor: {
     v: 1,
     // path / docHash / editSeq 由 renderer 用它自己那份核对，模型给的这几项不参与判定
     path: "",
@@ -777,14 +811,15 @@ function anchorOf(raw: unknown): DocxAnchor | null {
     blockOrdinal: typeof args["blockOrdinal"] === "number" ? args["blockOrdinal"] : 0,
     startOffset,
     endOffset,
-    selectedTextHash: typeof args["selectedTextHash"] === "string" ? args["selectedTextHash"] : "",
-    blockTextHash: typeof args["blockTextHash"] === "string" ? args["blockTextHash"] : "",
-    quote: typeof args["quote"] === "string" ? args["quote"] : "",
-    contextBefore: "",
-    contextAfter: "",
-    table: tableOf(args["table"]),
-    docHash: "",
-    editSeq: 0,
+      selectedTextHash,
+      blockTextHash: typeof args["blockTextHash"] === "string" ? args["blockTextHash"] : "",
+      quote,
+      contextBefore: "",
+      contextAfter: "",
+      table: tableOf(args["table"]),
+      docHash: "",
+      editSeq: 0,
+    },
   };
 }
 

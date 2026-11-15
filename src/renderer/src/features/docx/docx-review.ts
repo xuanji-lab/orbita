@@ -140,14 +140,37 @@ export function buildReviewRows(
   return rows;
 }
 
-/** 一行的短描述（「把 A 改成 B」/「插入 X」/「删除 Y」），UI 与回执共用 */
-export function describeRow(row: DocxChangeRow): string {
-  const clip = (text: string, max = 40): string => {
-    const chars = Array.from(text.replace(/\s+/g, " ").trim());
-    return chars.length <= max ? chars.join("") : `${chars.slice(0, max).join("")}…`;
-  };
-  if (row.kind === "replace") return `${clip(row.before)} → ${clip(row.after)}`;
-  if (row.kind === "insert") return `+ ${clip(row.after)}`;
-  if (row.kind === "delete") return `- ${clip(row.before)}`;
-  return clip(row.before !== "" ? row.before : row.after);
+/**
+ * 这一行的文字能不能自己说明改了什么。字太少（「8 → 5」这种）时说得再准也没用——
+ * 用户看不出是哪一处，得补段号。
+ */
+export function rowNeedsContext(row: DocxChangeRow): boolean {
+  const chars = (text: string): number => Array.from(text.trim()).length;
+  return chars(row.before) + chars(row.after) <= 6;
+}
+
+const clip = (text: string, max = 40): string => {
+  const chars = Array.from(text.replace(/\s+/g, " ").trim());
+  return chars.length <= max ? chars.join("") : `${chars.slice(0, max).join("")}…`;
+};
+
+/**
+ * 一行的短描述（「把 A 改成 B」/「插入 X」/「删除 Y」），UI 与回执共用。
+ *
+ * `ordinal`（第几段，0 = 不知道）只用来补上下文：短到看不出位置的改动写成
+ * 「第 12 段 · 「8」→「5」」；连段号也没有就明说「改动范围未知」，别只丢两个数字。
+ */
+export function describeRow(row: DocxChangeRow, ordinal = 0): string {
+  const core =
+    row.kind === "replace"
+      ? `${clip(row.before)} → ${clip(row.after)}`
+      : row.kind === "insert"
+        ? `+ ${clip(row.after)}`
+        : row.kind === "delete"
+          ? `- ${clip(row.before)}`
+          : clip(row.before !== "" ? row.before : row.after);
+  if (!rowNeedsContext(row)) return core;
+  const where = ordinal > 0 ? `第 ${ordinal} 段 · ` : "";
+  const quotes = row.kind === "insert" ? `新增「${clip(row.after)}」` : row.kind === "delete" ? `删除「${clip(row.before)}」` : `「${clip(row.before)}」→「${clip(row.after)}」`;
+  return `${where}${quotes}${ordinal > 0 ? "" : "（改动范围未知）"}`;
 }

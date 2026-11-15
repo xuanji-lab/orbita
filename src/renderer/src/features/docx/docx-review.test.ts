@@ -10,7 +10,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { FolioReviewChange } from "@stll/folio-core/ai-edits";
 import type { DocxEditGroup } from "@shared/docx";
-import { buildReviewRows, describeRow } from "./docx-review.ts";
+import { buildReviewRows, describeRow, rowNeedsContext, type DocxChangeRow } from "./docx-review.ts";
 
 const change = (id: number, type: FolioReviewChange["type"], author: string, text: string, date = "2026-10-27T10:00:00Z"): FolioReviewChange => ({
   id,
@@ -82,11 +82,56 @@ describe("buildReviewRows", () => {
   });
 
   it("describeRow：改成 / 插入 / 删除三种说法，长文本截断", () => {
-    const [replace] = buildReviewRows([], [change(1, "deletion", "A", "旧"), change(2, "insertion", "A", "新")]);
-    assert.equal(describeRow(replace as NonNullable<typeof replace>), "旧 → 新");
-    assert.match(describeRow({ ...(replace as NonNullable<typeof replace>), kind: "insert", before: "", after: "新译文" }), /^\+ 新译文$/);
-    assert.match(describeRow({ ...(replace as NonNullable<typeof replace>), kind: "delete", before: "旧译文", after: "" }), /^- 旧译文$/);
+    const [replace] = buildReviewRows([], [change(1, "deletion", "A", "旧的那句话"), change(2, "insertion", "A", "新的那句话")]);
+    assert.equal(describeRow(replace as NonNullable<typeof replace>), "旧的那句话 → 新的那句话");
+    assert.match(
+      describeRow({ ...(replace as NonNullable<typeof replace>), kind: "insert", before: "", after: "这是新加的整句话" }),
+      /^\+ 这是新加的整句话$/,
+    );
+    assert.match(
+      describeRow({ ...(replace as NonNullable<typeof replace>), kind: "delete", before: "这是要删的整句话", after: "" }),
+      /^- 这是要删的整句话$/,
+    );
     const long = "字".repeat(80);
     assert.equal(Array.from(describeRow({ ...(replace as NonNullable<typeof replace>), kind: "insert", before: "", after: long })).length, 2 + 40 + 1);
+  });
+});
+
+describe("describeRow —— 文字太短时补上下文（验收 O3）", () => {
+  const row = (before: string, after: string, blockId: string | null = "B1"): DocxChangeRow => ({
+    key: "k",
+    revisionIds: [1, 2],
+    author: "张三",
+    blockId,
+    before,
+    after,
+    kind: "replace",
+    date: null,
+    ours: false,
+    reanchored: false,
+  });
+
+  it("看得懂的改动不加料（段号不抢位置）", () => {
+    assert.equal(describeRow(row("本章报告三组实验的结果", "本章汇报三组实验的结果"), 12), "本章报告三组实验的结果 → 本章汇报三组实验的结果");
+  });
+
+  it("只剩两个数字：前面补「第 N 段」并把字引起来", () => {
+    assert.equal(describeRow(row("8", "5"), 12), "第 12 段 · 「8」→「5」");
+  });
+
+  it("连段号都不知道：明说改动范围未知，不只丢两个数字", () => {
+    assert.equal(describeRow(row("8", "5"), 0), "「8」→「5」（改动范围未知）");
+  });
+
+  it("短插入 / 短删除同样补上下文", () => {
+    assert.equal(describeRow({ ...row("", "3"), kind: "insert" }, 7), "第 7 段 · 新增「3」");
+    assert.equal(describeRow({ ...row("9", ""), kind: "delete" }, 7), "第 7 段 · 删除「9」");
+  });
+
+  it("rowNeedsContext：合计 6 字以内算「看不出位置」", () => {
+    assert.equal(rowNeedsContext(row("8", "5")), true);
+    assert.equal(rowNeedsContext(row("abc", "ab")), true);
+    assert.equal(rowNeedsContext(row("abc", "abcd")), false);
+    assert.equal(rowNeedsContext(row("本章报告", "本章汇报")), false);
   });
 });

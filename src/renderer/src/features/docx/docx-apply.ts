@@ -121,10 +121,25 @@ function resolveRange(
   snapshot: FolioAIEditSnapshot,
   doc: Node,
   request: DocxAgentEditRequest,
-): FoundRange | { error: string; reason: "stale-anchor" | "ambiguous-anchor" | "missing-block" } {
+): FoundRange | { error: string; reason: "stale-anchor" | "ambiguous-anchor" | "missing-block" | "missing-evidence" } {
   const anchor = request.anchor ?? null;
   const wanted = request.find ?? anchor?.quote ?? "";
   const ids = candidateBlockIds(snapshot, request);
+
+  /*
+   * **锚点必须带文本佐证**：`selectedTextHash` / `quote` / `find` 至少有一个。三项都缺时
+   * 「块内偏移」是唯一依据，而它只对「选中那一刻」的文档成立——盲信它就是把一段随便哪个
+   * 位置的文字改成模型想写的东西（验收实测：裸传 `{blockId, startOffset, endOffset}`
+   * 会把「流域出」改掉并回 ok:true）。宁可拒绝，让用户重选。
+   */
+  if (anchor !== null && anchor.selectedTextHash.trim() === "" && anchor.quote.trim() === "" && wanted.trim() === "") {
+    return {
+      error:
+        "锚点缺文本佐证（既没有 selectedTextHash 也没有 quote / find），无法确认这一段还是不是用户选中的那一处。" +
+        "请让用户重新选中，或带上 hash / quote / find 再试。",
+      reason: "missing-evidence",
+    };
+  }
 
   // ① 锚点偏移：原样命中就用它；哈希对不上说明选区之后那段文字被改过
   for (const blockId of ids) {

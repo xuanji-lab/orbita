@@ -13,6 +13,7 @@ import type { Node } from "prosemirror-model";
 import {
   anchorFromSelection,
   blockAt,
+  blockOrdinalMap,
   blockOrdinal,
   cleanBlockOf,
   cleanOffsetOf,
@@ -196,5 +197,16 @@ describe("tableLocationOf", () => {
 
   it("不在表格里回 null", () => {
     assert.equal(tableLocationOf(docOf(paragraph("正文")), 1), null);
+  });
+});
+
+describe("blockOrdinalMap", () => {
+  it("块 id → 段号（只数带文本的段落；审阅条给「第 N 段」用）", () => {
+    const doc = docOf(paraType.create({ paraId: "AAA" }, [schema.text("一")]), paraType.create({ paraId: "BLANK" }, []), paraType.create({ paraId: "BBB" }, [schema.text("二")]));
+    const map = blockOrdinalMap(doc);
+    assert.equal(map.get("AAA"), 1);
+    assert.equal(map.get("BLANK"), undefined);
+    assert.equal(map.get("BBB"), 2);
+    assert.equal(map.size, 2);
   });
 });

@@ -107,6 +107,25 @@ export function blockOrdinal(doc: Node, blockFrom: number): number {
 }
 
 /**
+ * 块 id → 有文本块的 1 起序号（同 `blockOrdinal` 的语义，一次遍历建全表）。
+ * 审阅条给「第 N 段」用：重开文档后退回启发式分组的那些行没有我们自己的账，
+ * 只能拿段号补一点上下文（「8 → 5」这种最小 diff 至少能指到哪一段）。
+ */
+export function blockOrdinalMap(doc: Node): Map<string, number> {
+  const map = new Map<string, number>();
+  let ordinal = 0;
+  doc.descendants((node) => {
+    if (!node.isTextblock) return true;
+    if (node.textContent.trim().length === 0) return true;
+    ordinal += 1;
+    const id = paragraphBlockId(node);
+    if (id !== null) map.set(id, ordinal);
+    return true;
+  });
+  return map;
+}
+
+/**
  * 块在它最内层表格里的坐标（零基，同 `FolioAIBlockTableLocation`）。不在表格里回 null。
  * 只有表格内选区才付这份成本（要数前面的表格）。
  */

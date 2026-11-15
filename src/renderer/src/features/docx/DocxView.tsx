@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { Command } from "prosemirror-state";
 import type { EditorView } from "prosemirror-view";
 import { DocxEditor, type DocxEditorRef } from "@stll/folio-react";
@@ -20,10 +20,10 @@ import {
   type DocxPackageStats,
 } from "@shared/docx";
 import { QUOTE_MAX_CHARS, type TextQuote } from "@shared/quote";
-import { anchorFromSelection, blockAt } from "./docx-anchor.ts";
+import { anchorFromSelection, blockAt, blockOrdinalMap } from "./docx-anchor.ts";
 import { applyDocxEdit, resolveRevisionGroup } from "./docx-apply.ts";
 import { registerDocxEditHost } from "./docx-edit-host.ts";
-import { buildReviewRows, type DocxChangeRow } from "./docx-review.ts";
+import { buildReviewRows, rowNeedsContext, type DocxChangeRow } from "./docx-review.ts";
 import { DocxReviewBar } from "./DocxReviewBar.tsx";
 import type { FileListRequest } from "@shared/files";
 import { api } from "../../api";
@@ -638,6 +638,16 @@ function DocxSurface(props: {
   useEffect(() => {
     refreshReview();
   }, [pages, refreshReview]);
+
+  /**
+   * 审阅条要的段号表：**只在有「文字太短、看不出位置」的行时才建**（一次文档遍历）。
+   * 重开文档后退回启发式分组，我们的账没了，行里可能只剩「8 → 5」——段号是仅剩的定位线索。
+   */
+  const reviewOrdinals = useMemo(() => {
+    if (!reviewRows.some(rowNeedsContext)) return new Map<string, number>();
+    const view = viewRef.current;
+    return view === null ? new Map<string, number>() : blockOrdinalMap(view.state.doc);
+  }, [reviewRows]);
 
   /** 把当前锚点写成一条引用放进输入框（agent 据此调 edit_docx） */
   const quoteAnchor = (): void => {
@@ -1321,6 +1331,7 @@ function DocxSurface(props: {
       {/* 审阅条（N2）：一行一条改动，按 applied[].revisionIds 整组裁决 */}
       <DocxReviewBar
         rows={reviewRows}
+        ordinals={reviewOrdinals}
         busy={editBusy}
         onResolve={resolveRow}
         onAll={resolveAll}
