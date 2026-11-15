@@ -30,6 +30,7 @@ import { formatDay } from "./migration-groups.ts";
 import { MigrationView } from "./MigrationView";
 import { GuideSettings } from "./GuideSettings";
 import { SettingGroup, SettingRow } from "./SettingRow";
+import { WordExportSettings } from "./WordExportSettings";
 import { Segmented, SelectButton, Switch } from "./SettingControls";
 import { UpdateCard } from "./UpdateCard";
 import { ProvidersView } from "./ProvidersView";
@@ -576,6 +577,9 @@ function General(props: {
           />
         </SettingRow>
       </SettingGroup>
+      {/* Word 导出：pandoc 版本与学校模板（机器级，换项目不重选）。放在「智能体」之后、
+          「数据」之前——它调的是"agent 怎么写文件"，与上面的 agent 组同一层意思 */}
+      <WordExportSettings settings={props.settings} onChange={props.onChange} />
       <SettingGroup label={t.settings.data}>
         <DataDirectoryRow />
       </SettingGroup>

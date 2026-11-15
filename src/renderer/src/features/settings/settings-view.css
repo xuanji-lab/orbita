@@ -902,3 +902,40 @@ a.exp-pr:hover {
     }
   }
 }
+
+/* ===== Word 导出（WordExportSettings.tsx） =====
+ * 体检结论摊在模板行下方：一行一条，warn 用警示色、其余退到三级文字。
+ * 不套第二张卡——它与这行是同一件事的两种读法（结论 + 依据）。 */
+.docx-template-findings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.docx-template-findings li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+
+.docx-template-findings li[data-level="warn"] {
+  color: var(--color-warning);
+}
+
+.docx-template-finding-detail {
+  color: var(--color-text-tertiary);
+}
+
+.docx-template-path {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
