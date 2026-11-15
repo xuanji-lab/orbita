@@ -38,6 +38,10 @@ export async function citeRectsForReader(request: FileListRequest, citation: Pdf
     // 看不见但参与排版：文本层要真排出来，Range 才量得到矩形。复用 .pdf-page 的文本层样式（styles.css）
     host.className = "pdf-page";
     host.setAttribute("aria-hidden", "true");
+    // 语言置空：pdf.js 用 canvas 按默认字体量字宽、算出每段的 scaleX，而 DOM 里的 sans-serif 跟着 <html lang> 走——
+    // 中文界面下它落到中文字体（拉丁字母更宽），量出来的矩形比字形宽约 8%（2026-11-16 实测：同一段 324.3pt 量成 351.0pt）。
+    // 置空后 DOM 与 canvas 用同一个默认字体，矩形宽度与 pdf.js 给的条目宽度一致
+    host.setAttribute("lang", "");
     Object.assign(host.style, {
       position: "fixed",
       left: "-100000px",
