@@ -64,6 +64,7 @@ import { noticeIconBoxStyle, noticeParagraphStyle, noticeTextStyle } from "./not
 import { PluginInstallLine } from "../plugins/PluginInstallLine.tsx";
 import { PluginBoardResultView } from "../board/PluginBoardResult.tsx";
 import { builtinCommand, type DetailRow, docEditLabel, docEditPath, docEditSection, docEditSummary, toolWord } from "./builtin-commands.ts";
+import { compactConfirmLabels } from "./compact-confirm.ts";
 import { getOpenDocumentText } from "../doc-panel/open-document.ts";
 import { CommandCard } from "./CommandCard.tsx";
 import { ExitCard } from "./ExitCard";
@@ -3498,6 +3499,7 @@ function UsageRing(props: {
   const freshTokens =
     usageTokens === null ? null : lastCompactedTo === null ? usageTokens : Math.max(0, usageTokens - lastCompactedTo);
   const worthIt = freshTokens !== null && freshTokens > 20_000;
+  const confirmText = compactConfirmLabels(worthIt, t.chat);
   const items: MenuItem[] = [
     ...usageBreakdown(stats, t, billing).map((row): MenuItem => ({
       id: row.label,
@@ -3554,14 +3556,12 @@ function UsageRing(props: {
       ? [
           {
             id: "compact-confirm-hint",
-            label: worthIt
-              ? t.chat.compactConfirm
-              : t.chat.compactShort,
+            label: confirmText.hint,
             fact: true,
           } satisfies MenuItem,
           {
             id: "compact-confirm",
-            label: t.chat.compactAnyway,
+            label: confirmText.action,
             icon: "fold-vertical" as const,
             onSelect: () => {
               setConfirming(false);
