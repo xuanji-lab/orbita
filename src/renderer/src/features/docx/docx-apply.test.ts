@@ -58,7 +58,7 @@ describe("pickOccurrence", () => {
 import { schema } from "@stll/folio-core/prosemirror/schema";
 import { createFolioAIEditSnapshot, hashFolioAIBlockText } from "@stll/folio-core/ai-edits";
 import type { DocxEditorRef } from "@stll/folio-react";
-import type { DocxAgentEditRequest } from "@shared/docx";
+import type { DocxAgentEditRequest, DocxAnchor } from "@shared/docx";
 import { applyDocxEdit } from "./docx-apply.ts";
 
 const paragraphType = schema.nodes["paragraph"];
@@ -171,5 +171,57 @@ describe("锚点的文本佐证（R1）", () => {
     const outcome = applyDocxEdit({ ref, author: "张三" }, request({ blockId: PARAGRAPH_ID }));
     assert.equal(outcome.ok, false);
     assert.deepEqual(applied, []);
+  });
+});
+
+describe("锚点字段整个缺省（RV-R1a）", () => {
+  it("selectedTextHash / quote / find 都是 undefined：同一句 missing-evidence，不是 TypeError", () => {
+    const { doc, snapshot } = fixture();
+    const { ref, applied } = fakeRef(doc, snapshot);
+    // 线上真的会这么来：模型给的 JSON 少字段，或别的调用方直接构造一个瘦对象
+    const bare = {
+      v: 1,
+      path: "",
+      blockId: PARAGRAPH_ID,
+      blockOrdinal: 1,
+      startOffset: 0,
+      endOffset: 2,
+      blockTextHash: "",
+      contextBefore: "",
+      contextAfter: "",
+      table: null,
+      docHash: "",
+      editSeq: 0,
+    } as unknown as DocxAnchor;
+    const outcome = applyDocxEdit({ ref, author: "张三" }, request({ anchor: bare, find: undefined as unknown as string }));
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.ok === false ? outcome.reason : "", "stale");
+    assert.match(outcome.ok === false ? outcome.error : "", /锚点缺文本佐证/);
+    // 不能是运行时异常被兜成一句引擎错误
+    assert.doesNotMatch(outcome.ok === false ? outcome.error : "", /trim|Cannot read|undefined/);
+    assert.deepEqual(applied, []);
+  });
+
+  it("只有 hash（quote / find 缺省）照常写入 —— 缺省不影响有佐证的那条路", () => {
+    const { doc, snapshot } = fixture();
+    const { ref, applied } = fakeRef(doc, snapshot);
+    const anchor = {
+      v: 1,
+      path: "",
+      blockId: PARAGRAPH_ID,
+      blockOrdinal: 1,
+      startOffset: 2,
+      endOffset: 5,
+      selectedTextHash: hashFolioAIBlockText(BLOCK_TEXT.slice(2, 5)),
+      blockTextHash: "",
+      contextBefore: "",
+      contextAfter: "",
+      table: null,
+      docHash: "",
+      editSeq: 0,
+    } as unknown as DocxAnchor;
+    const outcome = applyDocxEdit({ ref, author: "张三" }, request({ anchor, find: undefined as unknown as string }));
+    assert.equal(outcome.ok, true);
+    assert.equal(applied.length, 1);
   });
 });

@@ -123,7 +123,17 @@ function resolveRange(
   request: DocxAgentEditRequest,
 ): FoundRange | { error: string; reason: "stale-anchor" | "ambiguous-anchor" | "missing-block" | "missing-evidence" } {
   const anchor = request.anchor ?? null;
-  const wanted = request.find ?? anchor?.quote ?? "";
+  /*
+   * 这些字段来自跨进程的消息：**类型说是 string，运行时不保证**——模型给的 JSON、别的
+   * 调用方，都可能把整个字段省掉（`undefined` 而不是空串）。在那里 `.trim()` 会抛
+   * TypeError，回执就变成一句「reading 'trim'」，而不是设计好的拒绝文案（验收 RV-R1a）。
+   * 所以先按「不是字符串就是没给」归一，缺省与空串走同一条路。
+   */
+  const text = (value: unknown): string => (typeof value === "string" ? value : "");
+  const anchorHash = text(anchor?.selectedTextHash);
+  const anchorQuote = text(anchor?.quote);
+  const find = text(request.find);
+  const wanted = find !== "" ? find : anchorQuote;
   const ids = candidateBlockIds(snapshot, request);
 
   /*
@@ -132,7 +142,7 @@ function resolveRange(
    * 位置的文字改成模型想写的东西（验收实测：裸传 `{blockId, startOffset, endOffset}`
    * 会把「流域出」改掉并回 ok:true）。宁可拒绝，让用户重选。
    */
-  if (anchor !== null && anchor.selectedTextHash.trim() === "" && anchor.quote.trim() === "" && wanted.trim() === "") {
+  if (anchor !== null && anchorHash.trim() === "" && anchorQuote.trim() === "" && wanted.trim() === "") {
     return {
       error:
         "锚点缺文本佐证（既没有 selectedTextHash 也没有 quote / find），无法确认这一段还是不是用户选中的那一处。" +
@@ -148,9 +158,16 @@ function resolveRange(
     const node = doc.nodeAt(range.from);
     if (node === null || !node.isTextblock) continue;
     const clean = cleanBlockOf({ node, from: range.from });
-    if (anchor !== null && anchor.startOffset >= 0 && anchor.endOffset <= clean.text.length && anchor.endOffset > anchor.startOffset) {
+    if (
+      anchor !== null &&
+      Number.isInteger(anchor.startOffset) &&
+      Number.isInteger(anchor.endOffset) &&
+      anchor.startOffset >= 0 &&
+      anchor.endOffset <= clean.text.length &&
+      anchor.endOffset > anchor.startOffset
+    ) {
       const slice = clean.text.slice(anchor.startOffset, anchor.endOffset);
-      const fresh = anchor.selectedTextHash === "" || hashFolioAIBlockText(slice) === anchor.selectedTextHash;
+      const fresh = anchorHash === "" || hashFolioAIBlockText(slice) === anchorHash;
       if (fresh && (wanted === "" || slice === wanted)) {
         return { blockId, clean, start: anchor.startOffset, end: anchor.endOffset, reanchored: false };
       }
