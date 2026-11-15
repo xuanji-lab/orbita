@@ -3,9 +3,13 @@
  *
  * 定位顺序（先到先得，每一条都过 `--version` 验活，验不过就当下一条）：
  *   1. 设置里的显式路径（`settings.officeCliPath`）——装在非常规位置的人用；
- *   2. 环境变量 `ORBITA_OFFICECLI`（验收 / 排障时换一份二进制，不改设置）；
- *   3. 打包资源 `resources/bin/officecli[.exe]`（随包分发，scripts/fetch-officecli.mjs 取回）；
- *   4. 开发态 `build/bin/<platform>-<arch>/officecli[.exe]`；
+ *   2. 环境变量 `ORBITA_OFFICECLI`（兼容分发 PR 的 `ORBIT_OFFICECLI_PATH`）——
+ *      验收 / 排障时换一份二进制，不改设置；
+ *   3. 打包资源 **`resources/bin/officecli/officecli[.exe]`**（随包分发，独立子目录——
+ *      `resources/bin` 本身会被挂进 agent 的 PATH 给 rg/fd 用，officecli 放根目录就等于
+ *      「挂了 PATH」，模型能直接 `officecli open/install` 绕过我们的约束）；
+ *      旧构建的 `resources/bin/officecli[.exe]` 作为回退；
+ *   4. 开发态 **`build/bin/<platform>-<arch>/officecli/officecli[.exe]`**，旧布局回退；
  *   5. 常见安装目录（用户自己装的）。
  *
  * **不挂进 agent 的 PATH**（与 rg / fd 相反）：一旦挂上去，模型可以在 bash 里随手
@@ -133,8 +137,14 @@ export function officeCliCandidates(input: {
   };
   if (typeof input.settingsPath === "string") push(input.settingsPath, "settings");
   if (typeof input.env === "string") push(input.env, "env");
-  if (input.packaged) push(join(input.resourcesPath, "bin", exe), "packaged");
-  push(join(input.appPath, "build", "bin", `${input.platform}-${input.arch}`, exe), "dev");
+  if (input.packaged) {
+    // 新布局优先：独立子目录（不随 resources/bin 挂 PATH）；旧布局回退（已装的旧版本）
+    push(join(input.resourcesPath, "bin", "officecli", exe), "packaged");
+    push(join(input.resourcesPath, "bin", exe), "packaged");
+  }
+  const devRoot = join(input.appPath, "build", "bin", `${input.platform}-${input.arch}`);
+  push(join(devRoot, "officecli", exe), "dev");
+  push(join(devRoot, exe), "dev");
   for (const path of commonOfficeCliDirs({ platform: input.platform, home: input.home, env: input.envVars })) {
     push(path, "common");
   }

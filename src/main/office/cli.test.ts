@@ -7,9 +7,9 @@
  */
 import { describe, test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   commonOfficeCliDirs,
   officeCliCandidates,
@@ -39,24 +39,33 @@ describe("候选顺序", () => {
     envVars: { LOCALAPPDATA: "C:\\Users\\u\\AppData\\Local" },
   };
 
-  test("设置 → 环境变量 → 打包资源 → 开发态 → 常见目录", () => {
+  test("设置 → 环境变量 → 打包资源 → 开发态 → 常见目录（每个布局新旧两条）", () => {
     const list = officeCliCandidates({ ...base, settingsPath: "C:\\tools\\officecli.exe", env: "D:\\x\\officecli.exe" });
     assert.deepEqual(
       list.map((entry) => entry.source),
-      ["settings", "env", "dev", "common", "common", "common"],
+      ["settings", "env", "dev", "dev", "common", "common", "common"],
     );
     assert.equal(list[0]?.path, "C:\\tools\\officecli.exe");
   });
 
-  test("打包版插在开发态之前，路径指向 resources/bin", () => {
+  test("打包版：新布局（bin/officecli/）在先，旧布局（bin/）回退", () => {
     const list = officeCliCandidates({ ...base, packaged: true });
-    assert.equal(list[0]?.source, "packaged");
-    assert.equal(list[0]?.path, join("/res", "bin", "officecli.exe"));
-    assert.equal(list[1]?.source, "dev");
+    assert.deepEqual(
+      list.map((entry) => entry.source),
+      ["packaged", "packaged", "dev", "dev", "common", "common", "common"],
+    );
+    assert.equal(list[0]?.path, join("/res", "bin", "officecli", "officecli.exe"));
+    assert.equal(list[1]?.path, join("/res", "bin", "officecli.exe"));
+  });
+
+  test("开发态：新布局（build/bin/<p>-<a>/officecli/）在先，旧布局回退", () => {
+    const list = officeCliCandidates({ ...base });
+    assert.equal(list[0]?.path, join("/app", "build", "bin", "win32-x64", "officecli", "officecli.exe"));
+    assert.equal(list[1]?.path, join("/app", "build", "bin", "win32-x64", "officecli.exe"));
   });
 
   test("重复路径只留第一个来源；空串当作没设", () => {
-    const devPath = join(base.appPath, "build", "bin", "win32-x64", "officecli.exe");
+    const devPath = join(base.appPath, "build", "bin", "win32-x64", "officecli", "officecli.exe");
     const list = officeCliCandidates({ ...base, settingsPath: "  ", env: devPath, packaged: true });
     assert.equal(list[0]?.source, "env");
     assert.equal(list.filter((entry) => entry.path === devPath).length, 1);
@@ -106,6 +115,41 @@ describe("resolveOfficeCli", () => {
     assert.ok(result.ok);
     assert.equal(result.version, "1.0.158");
     assert.deepEqual(tried, [good]);
+  });
+
+  test("新布局存在用新的；只有旧布局回退旧的；都没有则不可用（跨 PR 路径约定）", async () => {
+    const resources = join(dir, "layout-resources");
+    const appPath = join(dir, "layout-app");
+    const fresh = join(resources, "bin", "officecli", "officecli.exe");
+    const legacy = join(resources, "bin", "officecli.exe");
+    const candidates = () =>
+      officeCliCandidates({ packaged: true, resourcesPath: resources, appPath, platform: "win32", arch: "x64", envVars: {} });
+    const okRunner = async (): Promise<{ code: number; stdout: string; stderr: string; elapsedMs: number; timedOut: boolean }> => ({
+      code: 0,
+      stdout: "1.0.158",
+      stderr: "",
+      elapsedMs: 5,
+      timedOut: false,
+    });
+
+    // 新旧都在：用新的（独立子目录，不挂在 resources/bin 的 PATH 上）
+    await mkdir(dirname(fresh), { recursive: true });
+    await writeFile(fresh, "");
+    await writeFile(legacy, "");
+    let result = await resolveOfficeCli(candidates(), okRunner);
+    assert.ok(result.ok);
+    assert.equal(result.candidate.path, fresh);
+
+    // 去掉新路径：回退旧的（用户机器上已有旧安装 / 旧构建）
+    await rm(fresh);
+    result = await resolveOfficeCli(candidates(), okRunner);
+    assert.ok(result.ok);
+    assert.equal(result.candidate.path, legacy);
+
+    // 都没有：不可用（不是「随便找个路径就算」）
+    await rm(legacy);
+    result = await resolveOfficeCli(candidates(), okRunner);
+    assert.equal(result.ok, false);
   });
 
   test("全部失败：说清试过哪儿、为什么不认，不抛异常", async () => {

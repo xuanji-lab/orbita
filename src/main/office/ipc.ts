@@ -58,7 +58,8 @@ export function registerOfficeIpc(deps: OfficeIpcDeps): OfficeService {
     candidatesFor: (configuredPath) =>
       officeCliCandidates({
         settingsPath: configuredPath,
-        env: process.env["ORBITA_OFFICECLI"],
+        // 两个名字都认：本仓一直用 ORBITA_OFFICECLI；分发 PR 用 ORBIT_OFFICECLI_PATH
+        env: process.env["ORBITA_OFFICECLI"] ?? process.env["ORBIT_OFFICECLI_PATH"],
         packaged: app.isPackaged,
         resourcesPath: process.resourcesPath,
         appPath: app.getAppPath(),
