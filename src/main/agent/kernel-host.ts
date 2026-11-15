@@ -9,10 +9,10 @@
  * 子会话与父同库（一棵树一库，root = 父）。本子编辑类操作（回退 / 撤销 / 分支的源 / 挪工作区）：住在新内核里的会话
  * 交给新内核，其余（开关开着但还没在新内核里跑过的旧会话）照旧由旧内核编辑 pi 本子——它下次发消息时按编辑后的本子迁。
  */
-import { rm } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { DurableMark, SessionMeta } from "../../shared/session.ts";
-import { KERNEL_LIBRARY_NAME, resumePolicy, type KernelTurnResult } from "../../shared/kernel.ts";
+import { isDurableBookRef, KERNEL_LIBRARY_NAME, resumePolicy, type KernelTurnResult } from "../../shared/kernel.ts";
 import type { KernelChild, KernelLane, KernelRoute, TurnRoute } from "./host-core.ts";
 
 /** 开发开关的环境变量名 */
@@ -79,6 +79,16 @@ export function sessionsToResume(metas: readonly SessionMeta[]): SessionMeta[] {
   return metas.filter((meta) => resumePolicy(meta) === "resume");
 }
 
+/** 还没在新内核里跑过、有旧 pi 本子的会话：本子的字节数（这一轮要迁它）；别的情形 null */
+export async function legacyBookBytes(meta: Pick<SessionMeta, "durable" | "piSessionFile"> | null): Promise<number | null> {
+  if (meta === null || meta.durable !== undefined || meta.piSessionFile === null || isDurableBookRef(meta.piSessionFile)) return null;
+  try {
+    return (await stat(meta.piSessionFile)).size;
+  } catch {
+    return null;
+  }
+}
+
 /** 主进程给 KernelHost 的依赖：会话 meta 的读与改、kernel 进程的拉起、孤儿善后 */
 export interface KernelHostDeps {
   readMeta: (sessionId: string) => Promise<SessionMeta | null>;
@@ -130,9 +140,11 @@ export class KernelHost {
         const decision = routeFor(meta, true);
         if ("refuse" in decision) throw new Error(decision.refuse);
         if (decision.to === "legacy") return { to: "legacy" };
+        // 这一轮要迁的旧本子多大（还没在新内核里跑过、有旧本子）：大的发送那一刻就说「正在迁移」
+        const migrateBytes = await legacyBookBytes(meta);
         // 全新的会话还没有 meta：首轮 created 之后由 ipc 建 meta 时带上标记（host.durableMark）
         if (meta !== null) await deps.updateDurable(command.sessionId, (current) => markRunning(current, now(), command.type === "continueRun"));
-        return { to: "kernel", root: libraryRoot(meta, command.sessionId) };
+        return { to: "kernel", root: libraryRoot(meta, command.sessionId), ...(migrateBytes === null ? {} : { migrateBytes }) };
       },
       editRoute: async (sessionId) => {
         const decision = editRouteFor(await deps.readMeta(sessionId), sessionId);

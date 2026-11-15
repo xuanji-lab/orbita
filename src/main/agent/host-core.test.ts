@@ -17,7 +17,7 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { AgentCommand, AgentEvent } from "../../shared/agent-ipc.ts";
 import type { KernelCommand, KernelMessage } from "../../shared/kernel.ts";
-import { AgentHostCore, type AgentChild, type KernelLane, type KernelRoute, type TurnRoute } from "./host-core.ts";
+import { AgentHostCore, MIGRATION_HINT_BYTES, type AgentChild, type KernelLane, type KernelRoute, type TurnRoute } from "./host-core.ts";
 
 /** 脚本化的假子进程。 */
 class FakeChild implements AgentChild {
@@ -802,7 +802,7 @@ class FakeKernel {
 }
 
 /** routes：会话 → 交给谁（缺省 kernel）；roots：会话 → 树根（缺省它自己）；edits：本子编辑交给谁（缺省 kernel） */
-function kernelRig(routes: Record<string, TurnRoute> = {}, roots: Record<string, string> = {}, edits: Record<string, TurnRoute> = {}) {
+function kernelRig(routes: Record<string, TurnRoute> = {}, roots: Record<string, string> = {}, edits: Record<string, TurnRoute> = {}, migrateBytes: Record<string, number> = {}) {
   const legacy = new FakeChild();
   const kernel = new FakeKernel();
   const events: AgentEvent[] = [];
@@ -812,7 +812,9 @@ function kernelRig(routes: Record<string, TurnRoute> = {}, roots: Record<string,
     fork: () => kernel,
     dir: "/durable",
     route: async (command): Promise<KernelRoute> =>
-      routes[command.sessionId] === "legacy" ? { to: "legacy" } : { to: "kernel", root: roots[command.sessionId] ?? command.sessionId },
+      routes[command.sessionId] === "legacy"
+        ? { to: "legacy" }
+        : { to: "kernel", root: roots[command.sessionId] ?? command.sessionId, ...(migrateBytes[command.sessionId] === undefined ? {} : { migrateBytes: migrateBytes[command.sessionId] }) },
     editRoute: async (sessionId): Promise<KernelRoute> =>
       edits[sessionId] === "legacy" ? { to: "legacy" } : { to: "kernel", root: roots[sessionId] ?? sessionId },
     settled: (sessionId) => settled.push(sessionId),
@@ -1007,6 +1009,21 @@ describe("AgentHostCore：新内核那条道", () => {
     assert.deepEqual(kernels[1]?.posted.map((command) => command.type), ["init", "session"]);
     assert.ok(!events.some((event) => event.type === "failed"), "回收不是崩溃：不报被打断");
     host.dispose();
+  });
+
+  test("要迁一条大会话（本子 ≥ 16 MB）：发送那一刻就报 migration running（expected），kernel 开完这条会话时补 done；小的不报", async () => {
+    const r = kernelRig({}, {}, {}, { big: MIGRATION_HINT_BYTES, small: MIGRATION_HINT_BYTES - 1 });
+    const big = r.host.submit({ type: "submit", sessionId: "big", text: "hi", piSessionFile: "/big.jsonl", ...TURN_FIELDS });
+    const small = r.host.submit({ type: "submit", sessionId: "small", text: "hi", piSessionFile: "/small.jsonl", ...TURN_FIELDS });
+    await flush();
+    const migrations = () => r.events.flatMap((event) => (event.type === "migration" ? [`${event.sessionId}:${event.state}:${event.expected === true ? "expected" : ""}`] : []));
+    assert.deepEqual(migrations(), ["big:running:expected"], "kernel 还没起来就已经报了，小的不报");
+    r.kernel.emit({ type: "ready" });
+    await big;
+    await small;
+    r.kernel.emit({ type: "created", sessionId: "big", piSessionFile: "/big.jsonl" });
+    r.kernel.emit({ type: "created", sessionId: "small", piSessionFile: "/small.jsonl" });
+    assert.deepEqual(migrations(), ["big:running:expected", "big:done:"]);
   });
 
   test("闲置回收不在在途的本子编辑、分支、删库收尾当中发生：到点先等它们回执，回执到了才回收", async () => {

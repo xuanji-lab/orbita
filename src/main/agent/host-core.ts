@@ -50,7 +50,10 @@ const STEER_MISSED_MESSAGE = "steer 到达时这一轮已结束（或刚开机�
 export type TurnRoute = "kernel" | "legacy";
 
 /** 交给新内核时带上这棵会话树的根（决定用哪个库：子会话与父同库） */
-export type KernelRoute = { to: "kernel"; root: string } | { to: "legacy" };
+export type KernelRoute = { to: "kernel"; root: string; migrateBytes?: number } | { to: "legacy" };
+
+/** 这一轮要迁的旧本子有多大时，发送那一刻就说「正在迁移」（小的迁得快，不说） */
+export const MIGRATION_HINT_BYTES = 16 * 1024 * 1024;
 
 /**
  * 新内核那条道（开关 ORBITA_DURABLE_KERNEL=1 时由主进程给；关着时缺席，host 的行为与开关之前逐字节相同）。
@@ -149,6 +152,8 @@ export class AgentHostCore {
   private steerBounced: ((sessionId: string, text: string, delivery: "steer" | "followUp") => void) | null = null;
   /** 交给 kernel 还没回执的本子编辑 / 分支（会话 id；kernel 进程退出时要把等待者结掉） */
   private readonly kernelEdits = new Set<string>();
+  /** 发送时事先报了「正在迁移」的会话：kernel 开完它（created）或这一轮落定时补一个 done */
+  private readonly expectedMigrations = new Set<string>();
   /** kernel 里一轮没落定的会话（kernel 进程意外退出时它们是「被打断」） */
   private readonly kernelRunning = new Set<string>();
   /** kernel 发出的请求 id（工具请求、审批）：回执要回到 kernel 进程 */
@@ -206,6 +211,9 @@ export class AgentHostCore {
     this.kernelReady = new Promise<void>((resolve, reject) => {
       child.on("message", (message: KernelMessage) => {
         if (this.kernelChild === child) this.armKernelRecycle();
+        if ((message.type === "created" || message.type === "turnSettled") && this.expectedMigrations.delete(message.sessionId)) {
+          this.onEvent({ type: "migration", sessionId: message.sessionId, state: "done" });
+        }
         if (message.type === "ready") {
           child.postMessage({ type: "init", dir: lane.dir });
           resolve();
@@ -490,7 +498,14 @@ export class AgentHostCore {
     // 没有新内核那条道、也没有守卫（开关之前的形状）时一个 await 都不多：fork 的时序与之前逐拍相同
     if (this.kernel !== undefined) {
       const route = await this.kernel.route(command);
-      if (route.to === "kernel") return this.postKernelTurn(command, route.root);
+      if (route.to === "kernel") {
+        // 事先就知道要迁一条大会话：发送那一刻就报 running（界面立刻说一句），kernel 开完这条会话（created）时补 done
+        if ((route.migrateBytes ?? 0) >= MIGRATION_HINT_BYTES) {
+          this.expectedMigrations.add(command.sessionId);
+          this.onEvent({ type: "migration", sessionId: command.sessionId, state: "running", expected: true });
+        }
+        return this.postKernelTurn(command, route.root);
+      }
     }
     if (this.kernel === undefined && this.legacyGuard !== undefined) {
       const refused = await this.legacyGuard(command.sessionId);

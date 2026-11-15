@@ -1100,6 +1100,22 @@ describe("意图系统的槽位（实验功能 intent-system）", () => {
     assert.deepEqual(states.get("s1")?.intentRecalls.length, 1);
   });
 
+  test("迁移提示：事先报的（expected）立刻露出；kernel 随后自己的 running 不把它降回去；done / idle 都收起", () => {
+    let states = applyAgentEvent(createSessionStates(), { type: "migration", sessionId: "s1", state: "running", expected: true });
+    assert.equal(states.get("s1")?.migrating, true);
+    assert.equal(states.get("s1")?.migratingExpected, true);
+    states = applyAgentEvent(states, { type: "migration", sessionId: "s1", state: "running" });
+    assert.equal(states.get("s1")?.migratingExpected, true);
+    states = applyAgentEvent(states, { type: "migration", sessionId: "s1", state: "done" });
+    assert.equal(states.get("s1")?.migrating, false);
+    assert.equal(states.get("s1")?.migratingExpected, false);
+    // 没有事先报的：只有 kernel 的 running（界面等 0.5 秒才露）
+    states = applyAgentEvent(states, { type: "migration", sessionId: "s1", state: "running" });
+    assert.equal(states.get("s1")?.migratingExpected, false);
+    states = applyAgentEvent(states, { type: "phase", sessionId: "s1", phase: "idle" });
+    assert.equal(states.get("s1")?.migrating, false);
+  });
+
   test("乐观回显：真回显（item_started user）一到即清；phase idle 与失败归位也清", () => {
     let states = setPendingEcho(createSessionStates(), "s1", ["第一句"]);
     assert.deepEqual(states.get("s1")?.pendingEcho?.blocks, ["第一句"]);

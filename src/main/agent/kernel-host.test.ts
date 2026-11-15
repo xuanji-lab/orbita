@@ -4,7 +4,7 @@ import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionMeta } from "../../shared/session.ts";
-import { DURABLE_MOVED_MESSAGE, durableKernelEnabled, editRouteFor, KernelHost, libraryRoot, markRunning, markSettled, routeFor, sessionsToResume } from "./kernel-host.ts";
+import { DURABLE_MOVED_MESSAGE, durableKernelEnabled, editRouteFor, KernelHost, legacyBookBytes, libraryRoot, markRunning, markSettled, routeFor, sessionsToResume } from "./kernel-host.ts";
 import { resumePolicy } from "../../shared/kernel.ts";
 
 const dirs: string[] = [];
@@ -94,3 +94,17 @@ describe("重启后接着跑：只续子会话（后台任务），树根给「�
   });
 });
 
+describe("legacyBookBytes：这一轮要迁的旧本子多大（大的发送那一刻就说正在迁移）", () => {
+  it("还没在新内核里跑过、有旧本子：本子的字节数；已在新内核里 / 新内核里新建的 / 没有本子 / 本子读不到：null", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-kernel-host-"));
+    const book = join(dir, "book.jsonl");
+    await writeFile(book, "x".repeat(1234));
+    assert.equal(await legacyBookBytes({ piSessionFile: book }), 1234);
+    assert.equal(await legacyBookBytes({ piSessionFile: book, durable: { since: 1 } }), null);
+    assert.equal(await legacyBookBytes({ piSessionFile: "durable:s1" }), null);
+    assert.equal(await legacyBookBytes({ piSessionFile: null }), null);
+    assert.equal(await legacyBookBytes({ piSessionFile: join(dir, "missing.jsonl") }), null);
+    assert.equal(await legacyBookBytes(null), null);
+    await rm(dir, { recursive: true, force: true });
+  });
+});

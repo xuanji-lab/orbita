@@ -1372,8 +1372,9 @@ export type AgentEvent =
   /**
    * 新内核：发消息前在把这条旧会话迁进库（running），迁完（done，成功失败都发）。只有新内核发；
    * 迁大会话要一两秒，界面据此在输入框上方说一句「正在迁移这条会话」（超过 0.5 秒才露出来）。
+   * expected：主进程按本子大小事先就知道这次要迁一条大会话，发送那一刻就报（界面立刻露出来、不等 0.5 秒）。
    */
-  | { type: "migration"; sessionId: string; state: "running" | "done" }
+  | { type: "migration"; sessionId: string; state: "running" | "done"; expected?: true }
   /**
    * MCP 连接结果。**没有 sessionId**：连接是进程级的，不属于哪一条会话。
    * 主进程接住它当缓存，管理面查的就是这份快照（连接状态是运行时事实，不落盘）。

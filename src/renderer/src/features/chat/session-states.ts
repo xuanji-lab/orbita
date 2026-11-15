@@ -153,6 +153,8 @@ export interface SessionEntry {
   turnContinuable: boolean;
   /** 新内核：发消息前正在把这条旧会话迁进库（migration running → done）；旧内核恒 false。纯 ephemeral */
   migrating: boolean;
+  /** 这次迁移是主进程按本子大小事先报的（大会话）：界面立刻露出提示，不等 0.5 秒 */
+  migratingExpected: boolean;
   /**
    * 最近一次用量快照。null = 还没有——纯浏览的旧会话不起 runtime session，
    * 不落盘也不算假数，等用户说话唤醒后由 runtime 的第一次推送填上。
@@ -249,6 +251,7 @@ export const EMPTY_ENTRY: SessionEntry = {
   turnError: null,
   turnContinuable: false,
   migrating: false,
+  migratingExpected: false,
   stats: null,
   thinking: null,
   approvals: [],
@@ -294,14 +297,19 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
       // 轮结束就不可能还有挂起的审批：停止 / 抢跑时 runtime 已按拒绝把它们结清
       // （审批不听 abort，只能手动结）。卡片留着的话，用户会去回答一个已经不存在的请求。
       // 乐观回显同理：真回显没来轮就落定 = 它失败了，不留鬼影
-      ...(event.phase === "idle" ? { approvals: [], pendingEcho: null, migrating: false } : null),
+      ...(event.phase === "idle" ? { approvals: [], pendingEcho: null, migrating: false, migratingExpected: false } : null),
     }));
   }
   if (event.type === "retry") {
     return update(states, event.sessionId, (entry) => ({ ...entry, retry: event.status }));
   }
   if (event.type === "migration") {
-    return update(states, event.sessionId, (entry) => ({ ...entry, migrating: event.state === "running" }));
+    return update(states, event.sessionId, (entry) => ({
+      ...entry,
+      migrating: event.state === "running",
+      // kernel 自己的 running 晚于主进程事先报的那个：不把「事先知道」降回去
+      migratingExpected: event.state === "running" && (entry.migratingExpected || event.expected === true),
+    }));
   }
   if (event.type === "compaction") {
     return update(states, event.sessionId, (entry) => ({
@@ -561,6 +569,7 @@ export function seedFromDisk(
     turnError: null,
     turnContinuable: false,
     migrating: false,
+    migratingExpected: false,
     // **盘上有用量**（A1-Q1：`SessionMeta.stats` 存的是上一次跑完时的快照）。
     // 种盘就把它放回来——否则关掉应用再打开，底栏是空的，而账本明明还在。
     // 唤醒后 agent 会推真累计覆盖它（pi 的本子才是原始账本，这里只是上次看到的样子）。

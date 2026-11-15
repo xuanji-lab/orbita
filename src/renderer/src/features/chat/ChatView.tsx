@@ -1399,17 +1399,40 @@ function ChatViewBody(props: {
   );
 
   /*
-    新内核：第一次在这条旧会话里发消息时要先把它迁进库，大会话要一两秒——超过 0.5 秒才说一句（快的不闪）。
+    新内核：第一次在这条旧会话里发消息时要先把它迁进库，大会话要一两秒。
+    - 主进程按本子大小事先知道是大会话（migratingExpected）：发送那一刻就说；
+    - 否则超过 0.5 秒才说（快的不出现）；
+    - 露出来了就至少停 MIGRATING_MIN_SHOWN_MS，读得清——闪一下比没有更糟（第四步验收：只露 0.16–0.36 秒）。
   */
   const [migratingShown, setMigratingShown] = useState(false);
+  const migratingShownAt = useRef<number | null>(null);
   useEffect(() => {
-    if (!session.migrating) {
+    if (session.migrating) {
+      const reveal = (): void => {
+        migratingShownAt.current = Date.now();
+        setMigratingShown(true);
+      };
+      if (session.migratingExpected) {
+        reveal();
+        return;
+      }
+      const timer = window.setTimeout(reveal, 500);
+      return () => window.clearTimeout(timer);
+    }
+    const shownAt = migratingShownAt.current;
+    if (shownAt === null) {
       setMigratingShown(false);
       return;
     }
-    const timer = window.setTimeout(() => setMigratingShown(true), 500);
+    const timer = window.setTimeout(
+      () => {
+        migratingShownAt.current = null;
+        setMigratingShown(false);
+      },
+      Math.max(0, MIGRATING_MIN_SHOWN_MS - (Date.now() - shownAt)),
+    );
     return () => window.clearTimeout(timer);
-  }, [session.migrating]);
+  }, [session.migrating, session.migratingExpected]);
 
   const notices = (
     <>
@@ -6352,6 +6375,9 @@ function CompactedLine(props: { record: CompactedRecord }) {
     </div>
   );
 }
+
+/** 迁移提示露出来后至少停多久（毫秒）：一句十几个字，读得清 */
+const MIGRATING_MIN_SHOWN_MS = 1500;
 
 function Responding(props: { transcript: readonly TranscriptItem[]; since: number | null }) {
   const t = useT();
