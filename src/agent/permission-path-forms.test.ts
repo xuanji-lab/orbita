@@ -176,3 +176,40 @@ describe("命令串：「当前目录」的几种写法后面接相对路径", (
     }
   });
 });
+
+// 2026-11-16 增量复验（二）：先改 HOME 再用 ~；cd 的目标写成 firmlink 前缀；受保护目录还不存在时的 firmlink 写
+describe("命令里改 HOME、cd 到 firmlink 前缀；写到还不存在的受保护目录", () => {
+  const parent = join(DATA, ".."); // Application Support
+  const name = basename(DATA);
+  test("先给 HOME 赋值再用 ~：拦", async () => {
+    for (const tool of ["bash", "terminal_execute"]) {
+      assert.equal((await call(tool, { command: `HOME="${parent}"; rm ~/${name}/sessions/x.jsonl` })).block, true, tool);
+      assert.equal((await call(tool, { command: `export HOME="${parent}" && rm -rf ~/${name}/durable` })).block, true, tool);
+      assert.equal((await call(tool, { command: `HOME="${parent}"; mv ~/${name}/automations.json /tmp/x` })).block, true, tool);
+    }
+  });
+
+  test("cd 的目标写成 firmlink 前缀，再用相对名：拦", async () => {
+    for (const tool of ["bash", "terminal_execute"]) {
+      assert.equal((await call(tool, { command: `cd "/System/Volumes/Data${parent}" && rm ${name}/automations.json` })).block, true, tool);
+      assert.equal((await call(tool, { command: `cd "/System/Volumes/Data${DATA}" && rm -rf durable` })).block, true, tool);
+    }
+  });
+
+  test("write / edit 到还不存在的受保护目录（firmlink 前缀，stat 不到）：拦", async () => {
+    // pi-sessions/ 这类目录可能还没建：身份比对认不出，靠去掉 firmlink 前缀后的字符串比对
+    const notYet = join(DATA, "pi-sessions");
+    const gateNotYet = createToolCallGate(() => "skip", async () => ({ behavior: "allow" }), [notYet], CWD, [], { home: homedir(), env: { HOME: homedir() } });
+    for (const tool of ["write", "edit"]) {
+      const result = await gateNotYet({ toolCallId: "c", toolName: tool, input: { path: `/System/Volumes/Data${notYet}/x.jsonl`, content: "x" } });
+      assert.equal(result.block, true, tool);
+    }
+  });
+
+  test("不误伤：给 HOME 赋值后读写别处、firmlink 前缀指向工作区", async () => {
+    for (const command of ["HOME=/tmp/fakehome; ls ~", "HOME=/tmp/x bun test", `cd "/System/Volumes/Data${CWD}" && rm -rf build`]) {
+      assert.equal((await call("bash", { command })).block, undefined, command);
+    }
+    assert.equal((await call("write", { path: `/System/Volumes/Data${CWD}/notes.md`, content: "x" })).block, undefined);
+  });
+});

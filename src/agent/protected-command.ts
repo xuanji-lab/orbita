@@ -140,7 +140,11 @@ function expandVars(text: string, vars: ReadonlyMap<string, string>, guard: Comm
 
 /** 参数位置的 `~` / `~用户名` 展开成家目录（行首 / 空白 / 引号 / `=` / 分隔符之后、`/` 或结尾之前） */
 function expandTilde(text: string, guard: CommandGuardEnv): string {
-  return text.replaceAll(/(^|[\s"'=;&|()><])~([A-Za-z0-9._-]*)(?=\/|\\|\s|$)/g, (_m: string, lead: string, user: string) => lead + tildeHome(user, guard));
+  return text.replaceAll(/(^|[\s"'=;&|()><])~([A-Za-z0-9._-]*)(?=\/|\\|\s|$)/g, (_m: string, lead: string, user: string) => {
+    // 家目录带空格（命令里自己给 HOME 赋了 `…/Application Support` 这种值）：包上引号，免得后面按空格切参数时把路径拆成两半
+    const home = tildeHome(user, guard);
+    return lead + (/\s/.test(home) ? `"${home}"` : home);
+  });
 }
 
 /**
@@ -262,18 +266,34 @@ function currentDirForms(command: string): string {
     .replaceAll(/(^|[\s"'=;&|()><])~\+(?=\/|\\|\s|$)/g, "$1.");
 }
 
+/**
+ * macOS 的 firmlink 前缀：`/System/Volumes/Data/Users/…` 与 `/Users/…` 是同一批文件（`/Library`、`/private`、`/opt` 等同理），
+ * realpath 不换它。比对前去掉这段前缀，路径就与受保护路径的写法对得上。只给闸门比对用。
+ * 2026-11-16 复验：`cd /System/Volumes/Data/…/Application\ Support && rm 相对名` 删成了（cd 跟踪是字符串比较）；
+ * write 到还不存在的受保护目录时，按文件身份比也认不出这个前缀（stat 不到）。
+ */
+export function stripFirmlinkPrefix(text: string): string {
+  return text.replaceAll(/\/System\/Volumes\/Data(?=\/)/gi, "");
+}
+
 function normalizeVariants(command: string, guard: CommandGuardEnv, knownSpacePaths: readonly string[]): Variant[] {
-  const decoded = decodeAnsiC(currentDirForms(command));
+  const decoded = stripFirmlinkPrefix(decodeAnsiC(currentDirForms(command)));
   const literal = !/[$`]/.test(decoded);
   const vars = parseAssignments(decoded);
-  const expanded = encodeQuotedSpaces(expandTilde(expandVars(decoded, vars, guard), guard), knownSpacePaths);
-  const loosened = expanded.replaceAll(/["']/g, "");
+  // 命令里自己给 HOME 赋了值（`HOME=…; rm ~/…`）：`~` 可能按新值展开（前缀式 `HOME=… rm ~/…` 则仍按旧值），
+  // 两种都判。2026-11-16 复验：先把 HOME 改成数据目录的上级再 `rm ~/orbita/…` 删成了
+  const assignedHome = vars.get("HOME");
+  const homes = assignedHome !== undefined && assignedHome !== "" && assignedHome !== guard.home ? [guard.home, assignedHome] : [guard.home];
   const variants: Variant[] = [];
-  const hasBackslash = loosened.includes("\\");
-  for (const brace of expandBraces(loosened)) {
-    // 反斜杠的两种读法：Windows 路径分隔符（`orbita\automations.json`）与 posix 转义（`au\tomations`）
-    variants.push({ text: brace.replaceAll("\\", "/"), literal });
-    if (hasBackslash) variants.push({ text: brace.replaceAll("\\", ""), literal });
+  for (const home of homes) {
+    const expanded = encodeQuotedSpaces(expandTilde(expandVars(decoded, vars, guard), { ...guard, home }), knownSpacePaths);
+    const loosened = expanded.replaceAll(/["']/g, "");
+    const hasBackslash = loosened.includes("\\");
+    for (const brace of expandBraces(loosened)) {
+      // 反斜杠的两种读法：Windows 路径分隔符（`orbita\automations.json`）与 posix 转义（`au\tomations`）
+      variants.push({ text: brace.replaceAll("\\", "/"), literal });
+      if (hasBackslash) variants.push({ text: brace.replaceAll("\\", ""), literal });
+    }
   }
   return variants;
 }

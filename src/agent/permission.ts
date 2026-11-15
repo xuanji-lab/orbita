@@ -20,7 +20,7 @@ import { statSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { resolveToCwd } from "@earendil-works/pi-coding-agent";
 import type { ContextMessage } from "./image-byte-budget.ts";
-import { dataDirRefusalMessage, defaultGuardEnv, protectedCommandRefusal, realpathLoose, tildeHome, type CommandGuardEnv } from "./protected-command.ts";
+import { dataDirRefusalMessage, defaultGuardEnv, protectedCommandRefusal, realpathLoose, stripFirmlinkPrefix, tildeHome, type CommandGuardEnv } from "./protected-command.ts";
 
 /**
  * **本会话实际启用的 pi 内建工具集**。真源一份、两个消费者：
@@ -173,7 +173,9 @@ function resolvedForms(cwd: string, target: string): string[] {
   } catch {
     // 规整不了的输入（如畸形 file:// URL）pi 自己也会抛、写不成；字面解析那一份照比
   }
-  return resolved;
+  // firmlink 前缀去掉的那一份也比：受保护目录还不存在时（stat 不到），按文件身份比认不出它
+  // （2026-11-16 复验：开关开着时 pi-sessions/ 还没建，firmlink 前缀的 write 把它连同文件一起建了出来）
+  return [...new Set(resolved.flatMap((path) => [path, stripFirmlinkPrefix(path)]))];
 }
 
 /**
@@ -413,7 +415,7 @@ export function protectedPathRefusal(
     // 先过命令串里不带完整路径的写法：文件名本身 / 变量 / 通配 / cd 进数据目录 / 对数据目录或其上级的破坏性命令
     const loose = protectedCommandRefusal(command, { files: protectedFiles, ownDirs: ownDataDirs(protectedPaths, protectedFiles) }, cwd, guard);
     if (loose !== null) return loose.kind === "file" ? fileRefusalMessage(loose.file, "command") : dataDirRefusalMessage(loose);
-    const haystack = loosenShellQuoting(foldPath(expandTildeLiterals(command, guard)));
+    const haystack = loosenShellQuoting(foldPath(stripFirmlinkPrefix(expandTildeLiterals(command, guard))));
     for (const dir of protectedPaths) {
       const needle = loosenShellQuoting(foldPath(dir));
       if (commandMentions(haystack, needle)) return refusalMessage(dir, "command");
