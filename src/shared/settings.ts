@@ -6,7 +6,7 @@
  */
 import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
 import { PRICE_CHART_CATEGORIES, type PriceChartCategory } from "./price-chart.ts";
-import { COMPUTER_USE_DEFAULT_ALLOW_NETWORK, COMPUTER_USE_DEFAULT_BROWSER, COMPUTER_USE_BROWSER_CHOICES, isComputerUseBrowser, mergeGuestAllowExe, normalizeGuestAppName, type ComputerUseBrowser } from "./computer-use.ts";
+import { COMPUTER_USE_DEFAULT_ALLOW_NETWORK, COMPUTER_USE_DEFAULT_BROWSER, COMPUTER_USE_BROWSER_CHOICES, COMPUTER_USE_DEFAULT_BACKEND, isComputerUseBackend, isComputerUseBrowser, mergeGuestAllowExe, normalizeGuestAppName, type ComputerUseBackend, type ComputerUseBrowser } from "./computer-use.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 import { MEMORY_VECTOR_MODELS, type MemoryVectorSettings } from "./memory.ts";
 
@@ -215,6 +215,14 @@ export interface ComputerUseSettings {
    * 不认识的字符串落回 `edge` 并留一行日志：手改错的 json 不该把整个功能挡住。
    */
   browser?: ComputerUseBrowser;
+  /**
+   * 用哪个隔离桌面（`wsb` = L2 Windows Sandbox，`isolation-session` = L2b 多会话隔离）。
+   * 缺席 = `wsb`：P2 是**可选升级**，不是默认路径（它没有真实指针，像素工具整组降级）。
+   *
+   * 改这个值**不会**重启正在跑的会话：下一次「启动」才按新档位起。档位切了之后老的那只
+   * 必须自己 stop（不同后端各自一个单例，启动其中一个时先把另一个停掉——接线在运行时门面里）。
+   */
+  backend?: ComputerUseBackend;
 }
 
 /**
@@ -247,6 +255,19 @@ export function effectiveGuestBrowser(
 }
 
 /**
+ * 用哪个隔离桌面。缺席 / 坏值都按缺省（`COMPUTER_USE_DEFAULT_BACKEND` = wsb）。
+ * 与 `effectiveAllowNetwork` 同一条纪律：兜底走 shared 的常量。
+ */
+export function effectiveComputerUseBackend(
+  settings: { computerUse?: ComputerUseSettings } | undefined,
+): ComputerUseBackend {
+  // 比另外两个 effective* 多一道校验：未知值如果溜进运行时门面，`controllerOf` 会把它
+  // 当成 L2b（三元表达式的 else 支）——用户手改错一个字母就换了一个隔离边界。
+  const raw = settings?.computerUse?.backend;
+  return isComputerUseBackend(raw) ? raw : COMPUTER_USE_DEFAULT_BACKEND;
+}
+
+/**
  * computerUse 子对象的解析：`allowNetwork` 只认布尔，`allowedApps` 只认能规范化的 exe 名字，
  * `browser` 只认五个选项（上级未知的字符串落回 edge 并留一行日志）。
  * 两样都没给出可用的值时返回 undefined（整段缺席 / 全是坏值 = 没设置）。
@@ -257,16 +278,35 @@ export function effectiveGuestBrowser(
  */
 export function parseComputerUse(raw: unknown): ComputerUseSettings | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
-  const record = raw as { allowNetwork?: unknown; allowedApps?: unknown; browser?: unknown };
+  const record = raw as { allowNetwork?: unknown; allowedApps?: unknown; browser?: unknown; backend?: unknown };
   const allowedApps = parseAllowedApps(record.allowedApps);
   const browser = parseComputerUseBrowser(record.browser);
+  const backend = parseComputerUseBackend(record.backend);
   const hasNetwork = typeof record.allowNetwork === "boolean";
-  if (!hasNetwork && allowedApps === undefined && browser === undefined) return undefined;
+  if (!hasNetwork && allowedApps === undefined && browser === undefined && backend === undefined) return undefined;
   return {
     ...(hasNetwork ? { allowNetwork: record.allowNetwork as boolean } : {}),
     ...(allowedApps === undefined ? {} : { allowedApps }),
     ...(browser === undefined ? {} : { browser }),
+    ...(backend === undefined ? {} : { backend }),
   };
+}
+
+/**
+ * 隔离档位的解析。**只认两个合法值**，其它一律当作没设过（不落假值）：
+ * 与 `parseComputerUseBrowser` 不同，这里**没有“就近归一”的地方**——`wsb` / `isolation-session`
+ * 是两个真正不同的隔离边界，猜错一个就把用户放进了他没选的档位。跳过不回退成默认值，
+ * 让 `effectiveComputerUseBackend` 在实际使用时兜（老文件语义不变）。
+ */
+function parseComputerUseBackend(raw: unknown): ComputerUseBackend | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (isComputerUseBackend(raw)) return raw;
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (isComputerUseBackend(trimmed)) return trimmed;
+    console.warn(`[settings] computerUse.backend 的值「${raw}」不认识，按 ${COMPUTER_USE_DEFAULT_BACKEND} 处理`);
+  }
+  return undefined;
 }
 
 /**

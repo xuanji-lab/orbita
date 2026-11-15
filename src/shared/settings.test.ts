@@ -12,6 +12,7 @@ import {
   effectiveAllowNetwork,
   effectiveGuestAllowExe,
   effectiveGuestBrowser,
+  effectiveComputerUseBackend,
   parseComputerUse,
   DEFAULT_SETTINGS,
   DRAWER_WIDTH,
@@ -21,7 +22,12 @@ import {
   SIDEBAR_WIDTH_MIN,
   THEME_PREFERENCES,
 } from "./settings.ts";
-import { COMPUTER_USE_DEFAULT_ALLOW_NETWORK, COMPUTER_USE_DEFAULT_BROWSER, COMPUTER_USE_BROWSER_CHOICES } from "./computer-use.ts";
+import {
+  COMPUTER_USE_DEFAULT_ALLOW_NETWORK,
+  COMPUTER_USE_DEFAULT_BACKEND,
+  COMPUTER_USE_DEFAULT_BROWSER,
+  COMPUTER_USE_BROWSER_CHOICES,
+} from "./computer-use.ts";
 
 describe("parseSettings", () => {
   it("四档主题都认（含 black 手动档）", () => {
@@ -882,5 +888,30 @@ describe("parseSettings 的 docPaper", () => {
     deepStrictEqual(parseSettings({ docPaper: "neon" }).docPaper, undefined);
     deepStrictEqual(parseSettings({ docPaper: 3 }).docPaper, undefined);
     deepStrictEqual(parseSettings({}).docPaper, undefined);
+  });
+});
+
+describe("parseSettings 的 computerUse.backend（隔离后端）", () => {
+  it("两个合法值都认；缺席 = 不落键，effectiveComputerUseBackend 兜 shared 的缺省（wsb）", () => {
+    deepStrictEqual(parseSettings({ computerUse: { backend: "wsb" } }).computerUse, { backend: "wsb" });
+    deepStrictEqual(parseSettings({ computerUse: { backend: "isolation-session" } }).computerUse, {
+      backend: "isolation-session",
+    });
+    deepStrictEqual(parseComputerUse({}), undefined);
+    deepStrictEqual(effectiveComputerUseBackend(undefined), COMPUTER_USE_DEFAULT_BACKEND);
+    deepStrictEqual(effectiveComputerUseBackend({ computerUse: {} }), "wsb");
+  });
+
+  it("不认识的值当没设过（不猜成另一个档位：两个档位是不同的隔离边界）", () => {
+    deepStrictEqual(parseComputerUse({ backend: "l3" }), undefined);
+    deepStrictEqual(parseComputerUse({ backend: 1 }), undefined);
+    deepStrictEqual(effectiveComputerUseBackend({ computerUse: { backend: "l3" as never } }), "wsb");
+  });
+
+  it("与其它键同住一个子对象时各自独立（只发一个键的补丁不冲掉别的）", () => {
+    deepStrictEqual(parseComputerUse({ backend: "isolation-session", browser: "chrome" }), {
+      browser: "chrome",
+      backend: "isolation-session",
+    });
   });
 });

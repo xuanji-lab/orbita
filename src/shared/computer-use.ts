@@ -590,6 +590,28 @@ export function computerUseGuestTimeoutMs(command: string): number {
  */
 export const COMPUTER_USE_DESKTOP_KEY = "desktop:exclusive";
 
+/** 每会话桌面键的前缀（只在「每个 agent 一个桌面」的档位下用） */
+export const COMPUTER_USE_SESSION_DESKTOP_KEY_PREFIX = "desktop:session:";
+
+/**
+ * L2b（多会话隔离）的桌面键：**每个会话自己的桌面**。
+ *
+ * 为什么不是同一个键：L2 里所有会话共用一块屏幕（所以必须全局独占）；L2b 里每个会话是
+ * 一个独立 OS 会话，A 的窗口 B 根本看不见，也不共享前台焦点——让它们排队是把并行能力
+ * 白白锁死。反过来，同一会话的两条动作序列仍然要串（同一个桌面、同一个焦点），所以键里
+ * 必须带会话 id。
+ *
+ * 前缀是 `desktop:session:`，**不是** `desktop:`——`desktop:exclusive` 是全局键，用短前缀
+ * 就会被一个叫 exclusive 的会话 id 撞上（lease 只把键当不透明字符串排，撞了就是两个不同的
+ * 桌面被串成一把锁）。空 id 退回全局键：空 id 只会在调用方 bug 时出现，那种时候宁可退成
+ * 一个保守的共享锁。
+ */
+export function sessionDesktopKey(sessionId: string): string {
+  const raw = sessionId.trim();
+  if (raw === "") return COMPUTER_USE_DESKTOP_KEY;
+  return COMPUTER_USE_SESSION_DESKTOP_KEY_PREFIX + raw;
+}
+
 /** 浏览器键的前缀（lease.ts 靠它选策略；两端字符串必须一致） */
 export const COMPUTER_USE_BROWSER_KEY_PREFIX = "browser:";
 
@@ -775,10 +797,21 @@ export type SandboxState = "off" | "starting" | "running" | "stopping" | "error"
  */
 export type SandboxStatus =
   | { state: "off" }
-  | { state: "starting"; startedAt: number }
-  | { state: "running"; startedAt: number; bridgeVersion: string }
+  | { state: "starting"; startedAt: number; backend?: ComputerUseBackend }
+  | {
+      state: "running";
+      startedAt: number;
+      bridgeVersion: string;
+      /**
+       * 这一局用的是哪个后端。**可选**：老记录 / 还没起过时没有。设置页用它区分
+       * 「L2 沙箱」与「L2b 多会话隔离」，也用它决定桌面租约的粒度。
+       */
+      backend?: ComputerUseBackend;
+      /** L2b：OS 为这个会话现造的 agent 账号（日志与设置页展示用，不是凭据） */
+      agentUserName?: string;
+    }
   | { state: "stopping" }
-  | { state: "error"; message: string };
+  | { state: "error"; message: string; backend?: ComputerUseBackend };
 
 // ── 能力探测（全部只读；绝不自动执行提权命令）────────────────────────────
 
@@ -814,11 +847,51 @@ export type HypervisorState = "present" | "absent" | "unknown";
  *   l2  Windows 沙箱档：沙箱里的像素操作（computer_*）与沙箱内 Edge（sandbox_*）。
  *       需要 Windows 专业版 / 企业版 / 教育版 + 已启用 Windows 沙箱 + 虚拟化开着。
  *
+ *   l2b 多会话隔离档（Windows，MXC IsolationSession）：每个 agent 一个独立 OS 会话，
+ *       宿主 EnumWindows 看不见它的窗口、别的会话也看不见。与 l2 的差别是**没有真实
+ *       输入设备**（会话是 RDP 形态，SendInput 返回成功却毫无效果），所以像素点击/打字
+ *       在 l2b 里一律被拒，动作走 UIA / CDP / 会话内 PostMessage 三条合成车道。
+ *       出网也不能关（MXC 的 provision 只接受全 allow 的网络姿态）。
+ *
  * 注意 l1 的实现是 browser_*，不是 sandbox_*：sandbox_* 的每条命令都走 guest 桥，而 guest
  * 桥只住在 Windows 沙箱里（main/computer-use/cdp.ts、guest-bridge/）。macOS 上没有「宿主
  * 浏览器版的 sandbox_*」——所以非 Windows 的文案只能承诺内置浏览器那条车道。
  */
-export type IsolationTier = "l1" | "l2";
+export type IsolationTier = "l1" | "l2" | "l2b";
+
+/**
+ * 主进程该用哪个控制器起「隔离桌面」。
+ *   wsb                   L2：Windows Sandbox（一份 VM、一个桌面，多 agent 共享）
+ *   isolation-session     L2b：MXC IsolationSession（每个 agent 一个 OS 会话）
+ *
+ * 两端字符串必须一致（settings.json 里存的就是这两个字面值）。默认 wsb——P2 是
+ * **可选升级**，不是默认路径：它没有真实指针，像素工具整组降级。
+ */
+export type ComputerUseBackend = "wsb" | "isolation-session";
+
+export const COMPUTER_USE_DEFAULT_BACKEND: ComputerUseBackend = "wsb";
+
+export const COMPUTER_USE_BACKEND_CHOICES: readonly ComputerUseBackend[] = ["wsb", "isolation-session"];
+
+export function isComputerUseBackend(value: unknown): value is ComputerUseBackend {
+  return value === "wsb" || value === "isolation-session";
+}
+
+/**
+ * L2b 的依赖检查（设置页那一行：「可用 / 不可用 + 为什么」）。
+ *
+ * `available` 为 false 时 `reason` **必须有话**：只说一句「不可用」而不说是缺 Node、缺服务、
+ * 还是非 Windows，用户没任何办法处置。
+ */
+export interface IsolationSessionCapability {
+  available: boolean;
+  /** 不可用的原因（人话）；可用时为 null */
+  reason: string | null;
+  /** 运行时 Node 版本（MXC 的 native stdio 要 ≥24.21 <25 或 ≥26.8；Electron 43 带的是 24.21.0） */
+  nodeVersion: string;
+  /** Node 版本够不够（单独一项：它是最常见的「SDK 装了但跑不了」） */
+  nodeOk: boolean;
+}
 
 /**
  * WSL2 能不能用。**它不是隔离档**：WSL2 的所有发行版共享同一个 utility VM，里面的进程
@@ -843,8 +916,20 @@ export interface ComputerUseProbeResult {
   sandboxExeFound: boolean;
   /** 虚拟化在不在（BIOS 关 VT-x 的机器会栽在这里）。unknown = 查不成，不阻塞 */
   hypervisorState: HypervisorState;
-  /** 这台机器实际能到的最高隔离档位：ready → l2，否则 l1（浏览器档在任何平台都可用） */
+  /**
+   * 这台机器实际能到的最高隔离档位：
+   *   沙箱就绪 → l2；沙箱不就绪但 MXC IsolationSession 可用 → l2b；否则 l1（浏览器档任何平台都有）。
+   * **l2b 不是 l2 的超集**：它的 UI 隔离更强（每个 agent 一个 OS 会话，宿主 EnumWindows 看不见、
+   * 互相也看不见），但代价写在 `isolationSession` 与 `computerUseIsolationErrors` 里——
+   * 出网**不能关**（MXC 的 provision 只接受「三个方向全 allow」）、**没有真实指针/键盘**
+   * （SendInput 静默失效），像素点击/打字一律被拒。
+   */
   isolationTier: IsolationTier;
+  /**
+   * MXC IsolationSession 的依赖检查（多会话隔离档）。**不可用时必须有 reason**：
+   * 设置页不能只把开关画灰——用户要看得出「缺什么」。
+   */
+  isolationSession: IsolationSessionCapability;
   /** WSL2 的状态。**只是能力信号，不是隔离边界**，不参与档位判定 */
   wsl2: WslState;
   /** 四项全过（hypervisorState 为 unknown 也算过）。false 时看 guidance */
@@ -1178,6 +1263,40 @@ export const computerUseUiaErrors = {
     "focus 动作已删除：Element.SetFocus 会移动整块桌面的键盘焦点，与 UIA 车道「不碰桌面」的前提冲突。" +
     "要移动焦点，用 computer_click 点到目标控件；或者直接用 invoke（通常同时给焦点）/ setValue（不需要焦点）。",
 } as const;
+
+/**
+ * L2b（多会话隔离）里像素输入车道的拒用文案。
+ *
+ * **为什么必须明拒而不是发出去让桥自己回**：在 IsolationSession 里 `SendInput` 返回 3、
+ * `err=0`，看起来完全成功，而光标永远停在 (0,0)（会话是 RDP 形态，`SM_REMOTESESSION=1`，
+ * 没有接真实输入设备）。它不会报错，只会什么都不做——而模型看到「已点击」会接着往下走，
+ * 错的是一整条动作序列。所以在**下发之前**就拒，并把可用的三条车道写进同一句话里。
+ *
+ * 三个要素必须同时在：① 为什么不行；② 换哪条路（UIA / CDP / 会话内 PostMessage）；
+ * ③ 提醒它别重试同一个动作（模型看不见 UI，不告诉它换什么它只会重试）。
+ */
+export const computerUseIsolationErrors = {
+  noPointer:
+    "这个隔离档位（多会话隔离 / L2b）没有真实的鼠标键盘：会话是 RDP 形态，" +
+    "SendInput 会返回成功但光标不动——所以像素点击 / 打字 / 按键 / 滚动一律不下发。" +
+    "改用：uia-list + uia-act（Win32 控件与大部分桌面程序）、sandbox_*（浏览器，走 CDP）、" +
+    "或 screenshot + window 看一眼现状。不要重试同一个像素动作。",
+  /** 像素动作的降级只在隔离档上发生；这条给工具描述 / 设置页复用同一句 */
+  noPointerShort: "多会话隔离档没有真实鼠标键盘，像素输入不可用（SendInput 静默失效）。",
+} as const;
+
+/**
+ * 这四条命令在 L2b 里一律不发：它们都靠 SendInput 注入当前桌面的真实输入流。
+ * 判据与桥的命令名同源（`computerUseGuestCommands`），改名字不会漏。
+ */
+export function isPixelInputCommand(command: ComputerUseGuestCommand): boolean {
+  return (
+    command === computerUseGuestCommands.click ||
+    command === computerUseGuestCommands.type ||
+    command === computerUseGuestCommands.key ||
+    command === computerUseGuestCommands.scroll
+  );
+}
 
 /**
  * 这条请求是不是那个**已删除**的 focus 动作（uia-act + perform=focus）。
