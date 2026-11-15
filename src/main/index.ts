@@ -74,10 +74,11 @@ import { BoardTemplateStore, PluginBoards, boardPluginsIn } from "./plugin/board
 import { registerBoardIpc } from "./plugin/board-ipc.ts";
 import { BOARD_TEMPLATES_DIR } from "../shared/plugin-board.ts";
 import { registerPluginIpc } from "./plugin/ipc.ts";
-import { PanelFrames, isPanelFrameUrl } from "./plugin/panel-frame.ts";
-import { installPanelProtocol, PANEL_SCHEME_PRIVILEGE, panelRequestGate } from "./plugin/panel-protocol.ts";
+import { PanelFrames, isPanelFrameUrl, panelRequestGate } from "./plugin/panel-frame.ts";
+import { installPanelProtocol, PANEL_SCHEME_PRIVILEGE } from "./plugin/panel-protocol.ts";
 import { installRequestGates, registerPrivilegedSchemes } from "./window/request-gate.ts";
-import { installReaderProtocol, READER_SCHEME_PRIVILEGE, readerRequestGate } from "./pdf-reader/protocol.ts";
+import { installReaderProtocol, READER_SCHEME_PRIVILEGE } from "./pdf-reader/protocol.ts";
+import { readerRequestGate } from "./pdf-reader/gate.ts";
 import { registerPdfReaderIpc } from "./pdf-reader/ipc.ts";
 import { PdfReaderDocs } from "./pdf-reader/docs.ts";
 import { readerDirs } from "./pdf-reader/build-check.ts";

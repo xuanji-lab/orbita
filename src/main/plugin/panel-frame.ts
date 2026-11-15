@@ -19,6 +19,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { PANEL_FRAME_HOST, PANEL_FRAME_SCHEME } from "../../shared/plugin-panel.ts";
+import type { RequestGate } from "../window/request-gate-rules.ts";
 
 /**
  * 文档的 CSP。前五条是约定里的（不能联网、不能读文件、不能嵌别的框架：default-src 'none' 兜住
@@ -141,4 +142,13 @@ export function isPanelFrameLoad(info: PanelRequestInfo, isOwnPage: (url: string
 /** 主窗口子框架的导航闸（will-frame-navigate）：只放行面板协议——renderer 里除了面板 iframe 没有别的子框架。 */
 export function isPanelFrameUrl(url: string): boolean {
   return url.startsWith(`${PANEL_FRAME_SCHEME}://${PANEL_FRAME_HOST}/`);
+}
+
+/** `isOwnPage`：这个 URL 是不是我们自己的 renderer 页面（index.ts 注入，与 will-navigate 闸同一份判定） */
+export function panelRequestGate(isOwnPage: (url: string) => boolean): RequestGate {
+  return {
+    scheme: PANEL_FRAME_SCHEME,
+    allow: (info) =>
+      isPanelFrameLoad({ resourceType: info.resourceType, parentUrl: info.parentUrl, parentHasParent: info.parentHasParent }, isOwnPage),
+  };
 }

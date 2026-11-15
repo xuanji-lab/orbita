@@ -5,26 +5,16 @@
  * - `PANEL_SCHEME_PRIVILEGE`：**必须在 app ready 之前**登记（模块顶层，registerPrivilegedSchemes）。只给 `standard`
  *   （相对 URL、主机段按标准解析）；不给 secure / supportFetchAPI / bypassCSP / corsEnabled / stream——
  *   文档不需要，也不该有。
- * - `panelRequestGate()`：webRequest 在请求发出前按类型与发起者取消不该加载的（只放行主窗口 renderer 页面的直接子框架的
+ * - `panelRequestGate()`（在 panel-frame.ts，纯函数）：webRequest 在请求发出前按类型与发起者取消不该加载的（只放行主窗口 renderer 页面的直接子框架的
  *   subFrame 请求）；
  * - `installPanelProtocol()`：ready 之后在默认 session 上挂应答，按一次性 token 给文档。内置浏览器用的是别的持久化分区，
  *   没有这个协议，网页里导航到 `orbita-panel://` 只会得到「未知协议」。
  */
 import { protocol, type CustomScheme } from "electron";
 import { PANEL_FRAME_SCHEME } from "../../shared/plugin-panel.ts";
-import { isPanelFrameLoad, type PanelFrames } from "./panel-frame.ts";
-import type { RequestGate } from "../window/request-gate.ts";
+import type { PanelFrames } from "./panel-frame.ts";
 
 export const PANEL_SCHEME_PRIVILEGE: CustomScheme = { scheme: PANEL_FRAME_SCHEME, privileges: { standard: true } };
-
-/** `isOwnPage`：这个 URL 是不是我们自己的 renderer 页面（index.ts 注入，与 will-navigate 闸同一份判定） */
-export function panelRequestGate(isOwnPage: (url: string) => boolean): RequestGate {
-  return {
-    scheme: PANEL_FRAME_SCHEME,
-    allow: (info) =>
-      isPanelFrameLoad({ resourceType: info.resourceType, parentUrl: info.parentUrl, parentHasParent: info.parentHasParent }, isOwnPage),
-  };
-}
 
 export function installPanelProtocol(frames: PanelFrames): void {
   protocol.handle(PANEL_FRAME_SCHEME, (request) => {

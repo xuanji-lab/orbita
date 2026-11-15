@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { isReaderRequestAllowed } from "./gate.ts";
-import type { GateRequestInfo } from "../window/request-gate.ts";
+import type { GateRequestInfo } from "../window/request-gate-rules.ts";
 
 const OWN = "http://127.0.0.1:5273/";
 const isOwnPage = (url: string): boolean => url.startsWith(OWN);

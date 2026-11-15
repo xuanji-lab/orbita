@@ -1,8 +1,8 @@
 /**
  * `orbita-reader://` 的请求闸判定（纯函数，可单测；装在 window/request-gate.ts 的合并监听里）。
  */
-import { PDF_READER_ORIGIN, PDF_READER_PAGE_URL } from "../../shared/pdf-reader.ts";
-import type { GateRequestInfo } from "../window/request-gate.ts";
+import { PDF_READER_ORIGIN, PDF_READER_PAGE_URL, PDF_READER_SCHEME } from "../../shared/pdf-reader.ts";
+import type { GateRequestInfo, RequestGate } from "../window/request-gate-rules.ts";
 
 const isOurs = (url: string | null): boolean => url !== null && url.startsWith(`${PDF_READER_ORIGIN}/`);
 const withoutQuery = (url: string): string => url.split(/[?#]/)[0] ?? url;
@@ -25,4 +25,8 @@ export function isReaderRequestAllowed(info: GateRequestInfo, isOwnPage: (url: s
   }
   if (info.frameUrl !== null) return isOurs(info.frameUrl);
   return isOurs(info.referrer);
+}
+
+export function readerRequestGate(isOwnPage: (url: string) => boolean): RequestGate {
+  return { scheme: PDF_READER_SCHEME, allow: (info) => isReaderRequestAllowed(info, isOwnPage) };
 }

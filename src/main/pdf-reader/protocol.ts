@@ -15,16 +15,12 @@ import { protocol, type CustomScheme } from "electron";
 import { PDF_READER_SCHEME } from "../../shared/pdf-reader.ts";
 import { isReaderRequestAllowed } from "./gate.ts";
 import { respondReader, type ReaderResponseDeps } from "./respond.ts";
-import type { RequestGate } from "../window/request-gate.ts";
+import type { RequestGate } from "../window/request-gate-rules.ts";
 
 export const READER_SCHEME_PRIVILEGE: CustomScheme = {
   scheme: PDF_READER_SCHEME,
   privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true },
 };
-
-export function readerRequestGate(isOwnPage: (url: string) => boolean): RequestGate {
-  return { scheme: PDF_READER_SCHEME, allow: (info) => isReaderRequestAllowed(info, isOwnPage) };
-}
 
 export function installReaderProtocol(deps: ReaderResponseDeps): void {
   protocol.handle(PDF_READER_SCHEME, async (request) => {
