@@ -129,6 +129,9 @@ describe("拒绝理由按被碰到的是什么来说", () => {
     ["write 会话账本：会话记录", "write", { path: join(SESS, "a.jsonl"), content: "" }, /^Session records are immutable/],
     ["bash 改自动化记录：自动化记录", "bash", { command: `rm "${AUTO}"` }, /^Automation records are immutable/],
     ["cd 进数据目录再删：说整个数据目录", "bash", { command: `cd "${DATA}" && rm -rf x` }, /^Orbita's data folder ".*" holds session records, the session database and automation records/],
+    // 一条命令碰了好几样时按优先级说：会话库 > 会话记录 > 自动化记录（2026-11-16 复验：把优先级对调，原有测试不红）
+    ["同时碰会话记录与会话库：说会话库", "bash", { command: `rm "${SESS}/a.jsonl" "${D}/${LIB}"` }, /^The session database is immutable/],
+    ["会话库在后面也一样：说会话库", "bash", { command: `cp "${D}/${LIB}" /tmp/x && rm "${SESS}/a.jsonl" "${D}/${LIB}"` }, /^The session database is immutable/],
   ];
   for (const [name, tool, input, pattern] of cases) {
     test(name, () => {
