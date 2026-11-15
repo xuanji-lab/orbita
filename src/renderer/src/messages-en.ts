@@ -1537,7 +1537,7 @@ export const en = {
     pandocStatusInfo:
       "The engine that turns Markdown / LaTeX into Word · needs 3.10.2 or newer (equation numbering relies on that fix) · older versions make the export fail loudly instead of producing wrong numbers silently",
     pandocMissing: "pandoc not found · install it, then re-check",
-    pandocTooOld: "Too old — 3.10.2 or newer is required",
+    pandocTooOld: (version: string, min: string) => `pandoc ${version} is too old (${min} or newer is required)`,
     pandocDetect: "Check again",
     pandocDetecting: "Checking…",
     pandocPathAria: "pandoc executable path",
@@ -1557,6 +1557,70 @@ export const en = {
     docxTemplateChoosing: "Choosing…",
     docxTemplateNone: "No template selected yet",
     docxTemplateInvalid: "This file cannot be used as a template; settings were left unchanged",
+    /* Template check: the main process returns kinds and numbers, the sentences live here */
+    docxTemplateReport: {
+      summary: (styles: number | null, headerFooter: number, macros: boolean, warnings: number) =>
+        `${
+          styles === null ? "no styles" : `${styles} style${styles === 1 ? "" : "s"}`
+        } · ${headerFooter} header/footer · ${macros ? "macros" : "no macros"} · ${
+          warnings > 0 ? `${warnings} warning${warnings === 1 ? "" : "s"} (export still works)` : "ready"
+        }`,
+      problem: {
+        noneSelected: "No school template is selected yet.",
+        notFound: (path: string, detail: string | null) =>
+          `Cannot read the template: ${path}${detail === null ? "" : ` (${detail})`}`,
+        pandocMissing: (message: string) => `The built-in template needs pandoc: ${message}`,
+        builtinUnavailable: (detail: string | null) =>
+          `Could not prepare the built-in template${detail === null ? "" : `: ${detail}`}`,
+        empty: "This file is empty.",
+        tooLarge: (mb: number) => `The file is larger than ${mb} MB — that is not a template.`,
+        encrypted: "This is a password-protected Word file (OLE2 container), not a readable .docx.",
+        notZip: "This is not a .docx package (it is not a ZIP container).",
+        corrupt: (detail: string | null) =>
+          `The .docx package cannot be opened (the ZIP is corrupt or truncated)${detail === null ? "" : `: ${detail}`}`,
+        noDocument: "The package has no word/document.xml — it is not a Word document.",
+      },
+      finding: {
+        contentTypesMissing: "Missing [Content_Types].xml",
+        contentTypesMissingDetail: "Word may refuse to open the output; re-save the template from Word.",
+        stylesMissing: "No word/styles.xml",
+        stylesMissingDetail: "pandoc falls back to its own reference styles, so the school formatting will not be applied.",
+        styles: (styles: number, headings: number) =>
+          headings === 0
+            ? `${styles} paragraph / character styles · no Heading 1–6`
+            : `${styles} paragraph / character styles · ${headings} heading levels`,
+        headingsMissing: "No built-in heading styles",
+        headingsMissingDetail:
+          "Table of contents and equation numbering rely on Heading 1; add them in Word for chapter-based numbering.",
+        eastAsian: (language: string) => `East-Asian language: ${language}`,
+        pageSetupMissing: "No page setup (w:sectPr)",
+        pageSetupMissingDetail: "pandoc will use its default page size and margins.",
+        sections: (count: number, body: boolean, width: number | null, height: number | null) =>
+          `${count} section${count === 1 ? "" : "s"}${body ? "" : " (no body sectPr)"}${
+            width === null || height === null ? "" : ` · ${width}×${height} twips`
+          }`,
+        numberingMissing: "No numbering.xml",
+        numberingMissingDetail: "Numbered / bulleted lists will use pandoc's default list formatting.",
+        numbering: (count: number) => `${count} numbering definition${count === 1 ? "" : "s"}`,
+        headerFooterMissing: "No headers or footers",
+        headerFooterMissingDetail: "Page numbers and the school running head will be missing from the output.",
+        headerFooter: (headers: number, footers: number) =>
+          `${headers} header${headers === 1 ? "" : "s"} · ${footers} footer${footers === 1 ? "" : "s"}`,
+        fields: (count: number, instructions: string) =>
+          `${count} field marker${count === 1 ? "" : "s"}${instructions === "" ? "" : ` · ${instructions}`}`,
+        toc: "Existing table of contents",
+        tocMissing: "No existing table of contents",
+        tocMissingDetail: "The export adds one automatically when the source has headings.",
+        cover: "Cover-like first page detected",
+        coverMissing: "No cover page detected",
+        macros: "No VBA macros",
+        macrosPresent: "Contains VBA macros (word/vbaProject.bin)",
+        macrosPresentDetail: "Macros are never executed; pandoc only reads styles, page setup and headers/footers.",
+        trackChanges: "Track changes is on in the template",
+        trackChangesDetail: "New edits may open as revisions.",
+        builtinUnavailable: "Built-in template unavailable",
+      },
+    },
     changeDirectory: "Change…",
     chooseDownloadDirectory: "Choose a download location",
     openDownloadDirectory: "Open the download location",
@@ -3432,6 +3496,7 @@ export const en = {
     oversize: (limit: number, pages: number) =>
       `This document has ${pages} pages — the in-app editor stops at ${limit}. It is read-only here; edit it in Word.`,
     tooLarge: (size: string, limit: string) => `Too large to open here (${size} — the limit is ${limit})`,
+    tooNarrow: "The panel is too narrow for a readable page — widen it, or press Ctrl+\\ to switch to the paper layout.",
     invalid: {
       password: "This document is password-protected. Remove the password in Word and save again.",
       "not-docx": "This file isn't a Word document.",

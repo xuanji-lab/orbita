@@ -328,8 +328,10 @@ async function resolveTemplate(
         path: null,
         ok: true,
         verdict: "warning",
-        summary: `Built-in default template unavailable (${made.error ?? "unknown error"}); using pandoc's default styles.`,
-        findings: [{ level: "warn", label: "Built-in template unavailable", ...(made.error === null ? {} : { detail: made.error }) }],
+        problem: null,
+        summary: { styles: null, headerFooter: 0, macros: false, warnings: 1 },
+        note: null,
+        findings: [{ level: "warn", kind: "builtin-unavailable", detail: made.error }],
       },
       warnings,
       error: null,
@@ -352,7 +354,8 @@ async function inspectPath(path: string, requested: DocxTemplateMode): Promise<R
   }
   const report = await inspectDocxTemplate(bytes, { requested, path });
   if (!report.ok) {
-    return { path: null, report, warnings: [], error: `The template cannot be used: ${report.summary}` };
+    // 工具回执是给模型看的（语言无关），报告自己的句子在设置页拼
+    return { path: null, report, warnings: [], error: `The template cannot be used: ${report.problem?.kind ?? "unknown"}` };
   }
   return { path, report, warnings: [], error: null };
 }

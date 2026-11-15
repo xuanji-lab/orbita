@@ -102,10 +102,66 @@ export function isDocxTemplateMode(value: unknown): value is DocxTemplateMode {
 }
 
 /** 体检结论的一行。level 只是显示层（ok / warn / info），不参与判定 */
-export interface DocxTemplateFinding {
-  level: "ok" | "warn" | "info";
-  label: string;
-  detail?: string;
+export type DocxTemplateFindingLevel = "ok" | "warn" | "info";
+
+/**
+ * 体检结论的一行：**只回结构化事实**（kind + 数字 / 枚举），句子交给设置页的
+ * `messages-zh/en`（2026-11-15 验收 P1-3）。主进程拼英文字面量会把「文案只在这两张
+ * 表里」这条约定拆掉——界面语言跟着主题走，主进程不知道用户看的是哪一版。
+ */
+export type DocxTemplateFinding =
+  | { level: DocxTemplateFindingLevel; kind: "content-types-missing" }
+  | { level: DocxTemplateFindingLevel; kind: "styles-missing" }
+  | { level: DocxTemplateFindingLevel; kind: "styles"; styles: number; headings: number }
+  | { level: DocxTemplateFindingLevel; kind: "headings-missing" }
+  | { level: DocxTemplateFindingLevel; kind: "east-asian"; language: string }
+  | { level: DocxTemplateFindingLevel; kind: "page-setup-missing" }
+  | {
+      level: DocxTemplateFindingLevel;
+      kind: "sections";
+      count: number;
+      /** 正文末尾有没有 sectPr（没有 = 节属性只挂在段落上） */
+      body: boolean;
+      /** 页面宽高（twip）；没读到就是 null */
+      width: number | null;
+      height: number | null;
+    }
+  | { level: DocxTemplateFindingLevel; kind: "numbering-missing" }
+  | { level: DocxTemplateFindingLevel; kind: "numbering"; count: number }
+  | { level: DocxTemplateFindingLevel; kind: "header-footer-missing" }
+  | { level: DocxTemplateFindingLevel; kind: "header-footer"; headers: number; footers: number }
+  | { level: DocxTemplateFindingLevel; kind: "fields"; count: number; instructions: string[] }
+  | { level: DocxTemplateFindingLevel; kind: "toc"; present: boolean }
+  | { level: DocxTemplateFindingLevel; kind: "cover"; present: boolean }
+  | { level: DocxTemplateFindingLevel; kind: "macros"; present: boolean }
+  | { level: DocxTemplateFindingLevel; kind: "track-changes" }
+  /** 内置模板这条生成不出来（pandoc 在但 reference.docx 造不出来）：details 是机器原因 */
+  | { level: DocxTemplateFindingLevel; kind: "builtin-unavailable"; detail: string | null }
+  /** 不可用时的唯一一条结论：句子由 problem 的同一套文案出 */
+  | { level: DocxTemplateFindingLevel; kind: "problem"; problem: DocxTemplateProblem };
+
+/** 模板不可用（ok=false）的机器原因；界面按 kind 出人话 */
+export type DocxTemplateProblem =
+  | { kind: "none-selected" }
+  | { kind: "not-found"; path: string; detail: string | null }
+  | { kind: "pandoc-missing"; message: string }
+  | { kind: "builtin-unavailable"; detail: string | null }
+  | { kind: "empty" }
+  | { kind: "too-large"; mb: number }
+  | { kind: "encrypted" }
+  | { kind: "not-zip" }
+  | { kind: "corrupt"; detail: string | null }
+  | { kind: "no-document" };
+
+/** 摘要那一行的数字事实（句子在渲染层拼） */
+export interface DocxTemplateSummaryFacts {
+  /** styles.xml 里的样式数；styles.xml 缺席 = null */
+  styles: number | null;
+  /** 页眉 + 页脚条目数 */
+  headerFooter: number;
+  macros: boolean;
+  /** warn 级结论的条数：> 0 时结论是 warning（导出仍可用） */
+  warnings: number;
 }
 
 /**
@@ -114,13 +170,21 @@ export interface DocxTemplateFinding {
  * `ok` 是「pandoc 能拿它当 reference-doc」的硬判据：zip 打得开、word/document.xml
  * 存在。宏 / 缺页眉 / 没有 numbering 都只是 warning——**有宏也照样能转**，只是要
  * 在结论里说清楚（宏不会被执行，但产物会带着 vbaProject）。
+ *
+ * 三种「没有实体报告」的形态各有出口：不可用 = `problem`；项目内模板 = `note`；
+ * 可用 = `summary` + `findings`。
  */
 export interface DocxTemplateReport {
   requested: DocxTemplateMode;
   path: string | null;
   ok: boolean;
   verdict: "ok" | "warning" | "unusable";
-  summary: string;
+  /** ok=false 时的原因 */
+  problem: DocxTemplateProblem | null;
+  /** ok=true 时的摘要事实（项目内模板没有实体可体检，是 null） */
+  summary: DocxTemplateSummaryFacts | null;
+  /** 「项目内模板」这类没有实体报告的说明 */
+  note: "project" | null;
   findings: DocxTemplateFinding[];
 }
 

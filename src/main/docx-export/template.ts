@@ -10,7 +10,12 @@
  * 同一份报告，测试直接拿手工 zip 当夹具。
  */
 import JSZip from "jszip";
-import type { DocxTemplateFinding, DocxTemplateMode, DocxTemplateReport } from "../../shared/docx-export.ts";
+import type {
+  DocxTemplateFinding,
+  DocxTemplateMode,
+  DocxTemplateProblem,
+  DocxTemplateReport,
+} from "../../shared/docx-export.ts";
 
 /** 模板体积上限（80 MB）。再大就不是模板，是论文本体——读进内存做正则会拖住主进程 */
 export const DOCX_TEMPLATE_MAX_BYTES = 80 * 1024 * 1024;
@@ -69,45 +74,33 @@ export async function inspectDocxTemplate(
   const path = options.path ?? null;
   const findings: DocxTemplateFinding[] = [];
 
-  const unusable = (summary: string, detail?: string): DocxTemplateReport => ({
+  const unusable = (problem: DocxTemplateProblem): DocxTemplateReport => ({
     requested,
     path,
     ok: false,
     verdict: "unusable",
-    summary,
-    findings: [...findings, { level: "warn", label: summary, ...(detail === undefined ? {} : { detail }) }],
+    problem,
+    summary: null,
+    note: null,
+    findings: [...findings, { level: "warn", kind: "problem", problem }],
   });
 
-  if (bytes.byteLength === 0) return unusable("The file is empty.");
+  if (bytes.byteLength === 0) return unusable({ kind: "empty" });
   if (bytes.byteLength > DOCX_TEMPLATE_MAX_BYTES) {
-    return unusable(
-      `The template is larger than ${Math.round(DOCX_TEMPLATE_MAX_BYTES / 1024 / 1024)} MB — that is not a template.`,
-    );
+    return unusable({ kind: "too-large", mb: Math.round(DOCX_TEMPLATE_MAX_BYTES / 1024 / 1024) });
   }
-  if (isOle2(bytes)) {
-    return unusable(
-      "This is a password-protected Word file (OLE2 container), not a readable .docx.",
-      "Open it in Word, remove the password, save as .docx and choose it again.",
-    );
-  }
-  if (!isZip(bytes)) {
-    return unusable("This is not a .docx package (it is not a ZIP container).", "Pick a .docx file saved by Word / WPS.");
-  }
+  if (isOle2(bytes)) return unusable({ kind: "encrypted" });
+  if (!isZip(bytes)) return unusable({ kind: "not-zip" });
 
   let zip: JSZip;
   try {
     zip = await JSZip.loadAsync(bytes);
   } catch (cause) {
-    return unusable(
-      "The .docx package cannot be opened (the ZIP is corrupt or truncated).",
-      cause instanceof Error ? cause.message : String(cause),
-    );
+    return unusable({ kind: "corrupt", detail: cause instanceof Error ? cause.message : String(cause) });
   }
 
   const documentXml = await readText(zip, "word/document.xml");
-  if (documentXml === null) {
-    return unusable("The package has no word/document.xml — it is not a Word document.");
-  }
+  if (documentXml === null) return unusable({ kind: "no-document" });
   const stylesXml = await readText(zip, "word/styles.xml");
   const settingsXml = await readText(zip, "word/settings.xml");
   const numberingXml = await readText(zip, "word/numbering.xml");
@@ -116,125 +109,88 @@ export async function inspectDocxTemplate(
 
   // ── 结构：pandoc 只读 styles / 页面设置 / 页眉页脚，缺了照样能转，但要说明白 ──
   if (contentTypes === null) {
-    findings.push({ level: "warn", label: "Missing [Content_Types].xml", detail: "Word may refuse to open the output; re-save the template from Word." });
+    findings.push({ level: "warn", kind: "content-types-missing" });
   }
 
   if (stylesXml === null) {
-    findings.push({
-      level: "warn",
-      label: "No word/styles.xml",
-      detail: "pandoc falls back to its own reference styles, so the school formatting will not be applied.",
-    });
+    findings.push({ level: "warn", kind: "styles-missing" });
   } else {
     const styles = countMatches(stylesXml, /<w:style\b/g);
     const headings = countMatches(stylesXml, HEADING_STYLE);
-    findings.push({
-      level: "ok",
-      label: `${styles} paragraph / character styles`,
-      detail: headings === 0 ? "No Heading 1–6 styles: pandoc will use its own headings." : `${headings} heading levels defined.`,
-    });
+    findings.push({ level: "ok", kind: "styles", styles, headings });
     if (headings === 0) {
-      findings.push({
-        level: "warn",
-        label: "No built-in heading styles",
-        detail: "Table of contents and equation numbering rely on Heading 1; add them in Word for chapter-based numbering.",
-      });
+      findings.push({ level: "warn", kind: "headings-missing" });
     }
     const eastAsia = /w:eastAsia="([^"]+)"/.exec(stylesXml)?.[1];
     if (eastAsia !== undefined && eastAsia !== "") {
-      findings.push({ level: "info", label: `East-Asian language: ${decodeXml(eastAsia)}` });
+      findings.push({ level: "info", kind: "east-asian", language: decodeXml(eastAsia) });
     }
   }
 
   const sectionProps = countMatches(documentXml, /<w:sectPr\b/g);
   const bodySection = /<w:body>[\s\S]*<w:sectPr\b/.test(documentXml);
   if (sectionProps === 0) {
-    findings.push({
-      level: "warn",
-      label: "No page setup (w:sectPr)",
-      detail: "pandoc will use its default page size and margins.",
-    });
+    findings.push({ level: "warn", kind: "page-setup-missing" });
   } else {
     const size = /<w:pgSz\b[^>]*w:w="(\d+)"[^>]*w:h="(\d+)"/.exec(documentXml);
-    const sizeText = size === null ? "" : ` · ${size[1]}×${size[2]} twips`;
     findings.push({
       level: "ok",
-      label: `${sectionProps} section(s)${bodySection ? "" : " (no body sectPr)"}${sizeText}`,
+      kind: "sections",
+      count: sectionProps,
+      body: bodySection,
+      width: size === null ? null : Number(size[1]),
+      height: size === null ? null : Number(size[2]),
     });
   }
 
   if (numberingXml === null) {
-    findings.push({
-      level: "info",
-      label: "No numbering.xml",
-      detail: "Numbered / bulleted lists will use pandoc's default list formatting.",
-    });
+    findings.push({ level: "info", kind: "numbering-missing" });
   } else {
-    const abstract = countMatches(numberingXml, /<w:abstractNum\b/g);
-    findings.push({ level: "ok", label: `${abstract} numbering definitions` });
+    findings.push({ level: "ok", kind: "numbering", count: countMatches(numberingXml, /<w:abstractNum\b/g) });
   }
 
   const headers = zip.file(/^word\/header\d*\.xml$/);
   const footers = zip.file(/^word\/footer\d*\.xml$/);
   if (headers.length === 0 && footers.length === 0) {
-    findings.push({
-      level: "warn",
-      label: "No headers or footers",
-      detail: "Page numbers and the school running head will be missing from the output.",
-    });
+    findings.push({ level: "warn", kind: "header-footer-missing" });
   } else {
-    findings.push({ level: "ok", label: `${headers.length} header(s), ${footers.length} footer(s)` });
+    findings.push({ level: "ok", kind: "header-footer", headers: headers.length, footers: footers.length });
   }
 
   const instr = fieldInstructions(documentXml);
   if (instr.length > 0) {
-    findings.push({ level: "info", label: `${countMatches(documentXml, /<w:fldChar\b/g)} field markers`, detail: instr.join(" · ") });
+    findings.push({ level: "info", kind: "fields", count: countMatches(documentXml, /<w:fldChar\b/g), instructions: instr });
   }
 
   const hasToc = instr.some((text) => /^\s*TOC\b/i.test(text));
-  findings.push({
-    level: hasToc ? "ok" : "info",
-    label: hasToc ? "Existing table of contents" : "No existing table of contents",
-    ...(hasToc ? {} : { detail: "The export adds one automatically when the source has headings." }),
-  });
+  findings.push({ level: hasToc ? "ok" : "info", kind: "toc", present: hasToc });
 
   // 封面：首节在正文第一段就结束（有 pPr/sectPr）或存在 Title 样式段落
   const hasTitle = /<w:pStyle w:val="Title"\s*\/>/.test(documentXml);
   const earlySection = /<w:p\b[^>]*>(?:(?!<\/w:p>)[\s\S])*?<w:sectPr\b/.test(documentXml);
-  findings.push({
-    level: hasTitle || earlySection ? "ok" : "info",
-    label: hasTitle || earlySection ? "Cover-like first page detected" : "No cover page detected",
-  });
+  findings.push({ level: hasTitle || earlySection ? "ok" : "info", kind: "cover", present: hasTitle || earlySection });
 
-  findings.push({
-    level: macro ? "warn" : "ok",
-    label: macro ? "Contains VBA macros (word/vbaProject.bin)" : "No VBA macros",
-    ...(macro
-      ? { detail: "Macros are never executed; pandoc only reads styles, page setup and headers/footers, so they do not reach the output." }
-      : {}),
-  });
+  findings.push({ level: macro ? "warn" : "ok", kind: "macros", present: macro });
 
   const trackChanges = settingsXml !== null && /<w:trackRevisions\b/.test(settingsXml);
   if (trackChanges) {
-    findings.push({ level: "info", label: "Track changes is on in the template", detail: "New edits may open as revisions." });
+    findings.push({ level: "info", kind: "track-changes" });
   }
 
   const warnings = findings.filter((finding) => finding.level === "warn").length;
-  const verdict = warnings === 0 ? "ok" : "warning";
-  const summaryParts = [
-    stylesXml === null ? "no styles" : `${countMatches(stylesXml, /<w:style\b/g)} styles`,
-    `${headers.length + footers.length} header/footer`,
-    macro ? "macros" : "no macros",
-  ];
   return {
     requested,
     path,
     ok: true,
-    verdict,
-    summary:
-      verdict === "warning"
-        ? `${summaryParts.join(" · ")} — ${warnings} warning${warnings === 1 ? "" : "s"} (export still works)`
-        : `${summaryParts.join(" · ")} — ready`,
+    verdict: warnings === 0 ? "ok" : "warning",
+    problem: null,
+    summary: {
+      styles: stylesXml === null ? null : countMatches(stylesXml, /<w:style\b/g),
+      headerFooter: headers.length + footers.length,
+      macros: macro,
+      warnings,
+    },
+    note: null,
     findings,
   };
 }

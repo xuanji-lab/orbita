@@ -200,6 +200,19 @@ const ALLOWED_LATIN = new Set([
   "volc.bigasr.sauc.duration",
   // 语音厂商凭证字段名（阶跃星辰 API Key，用户原样照填）
   "Key",
+  // Word 模板体检里的 OOXML 术语与包内条目名（用户要拿它们去 Word 里对）
+  "OLE2",
+  "ZIP",
+  "word",
+  "xml",
+  "Content",
+  "Types",
+  "Heading",
+  "w",
+  "sectPr",
+  "twip",
+  "numbering.xml",
+  "VBA",
   // 按键名
   "Ctrl",
   "Alt",

@@ -1420,7 +1420,7 @@ export const zh: Messages = {
     pandocStatusInfo:
       "把 Markdown / LaTeX 转成 Word 的引擎 · 需要 3.10.2 或更新（公式编号依赖这个版本的修复）· 低于它时导出会明确报错，不会悄悄产出编号错乱的文件",
     pandocMissing: "未找到 pandoc · 安装后点「重新检测」",
-    pandocTooOld: "版本过低，需要 3.10.2 或更新",
+    pandocTooOld: (version: string, min: string) => `pandoc ${version} 版本过低（需要 ${min} 或更新）`,
     pandocDetect: "重新检测",
     pandocDetecting: "检测中…",
     pandocPathAria: "pandoc 可执行文件路径",
@@ -1440,6 +1440,65 @@ export const zh: Messages = {
     docxTemplateChoosing: "正在选择…",
     docxTemplateNone: "还没有选择模板",
     docxTemplateInvalid: "这个文件不能当模板，设置未改动",
+    /* 模板体检：主进程只回 kind + 数字，句子在这里拼（2026-11-15 验收 P1-3） */
+    docxTemplateReport: {
+      summary: (styles: number | null, headerFooter: number, macros: boolean, warnings: number) =>
+        `${
+          styles === null ? "没有样式表" : `${styles} 个样式`
+        } · ${headerFooter} 个页眉页脚 · ${macros ? "含宏" : "无宏"} · ${
+          warnings > 0 ? `${warnings} 条提示（导出仍可用）` : "可以导出"
+        }`,
+      problem: {
+        noneSelected: "还没有选择学校模板。",
+        notFound: (path: string, detail: string | null) => `模板读不到：${path}${detail === null ? "" : `（${detail}）`}`,
+        pandocMissing: (message: string) => `内置模板要用 pandoc 现生成：${message}`,
+        builtinUnavailable: (detail: string | null) => `内置模板生成失败${detail === null ? "" : `：${detail}`}`,
+        empty: "这个文件是空的。",
+        tooLarge: (mb: number) => `文件大于 ${mb} MB——这不是模板，是论文本体。`,
+        encrypted: "这是一份有密码保护的 Word 文件（OLE2 容器），不是能读的 .docx。",
+        notZip: "这不是 .docx 包（不是 ZIP 容器）。",
+        corrupt: (detail: string | null) => `这个 .docx 包打不开（ZIP 损坏或被截断）${detail === null ? "" : `：${detail}`}`,
+        noDocument: "包里没有 word/document.xml——不是 Word 文档。",
+      },
+      finding: {
+        contentTypesMissing: "缺少 [Content_Types].xml",
+        contentTypesMissingDetail: "Word 可能打不开产物；请在 Word 里重新保存一次模板。",
+        stylesMissing: "没有 word/styles.xml",
+        stylesMissingDetail: "pandoc 会用自带的参考样式，学校的格式不会套上。",
+        styles: (styles: number, headings: number) =>
+          headings === 0
+            ? `${styles} 个段落 / 字符样式 · 没有 Heading 1–6`
+            : `${styles} 个段落 / 字符样式 · 定义了 ${headings} 级标题`,
+        headingsMissing: "没有内置标题样式",
+        headingsMissingDetail: "目录与公式编号依赖 Heading 1；在 Word 里加上才能按章编号。",
+        eastAsian: (language: string) => `东亚语言：${language}`,
+        pageSetupMissing: "没有页面设置（w:sectPr）",
+        pageSetupMissingDetail: "pandoc 会用默认纸张与页边距。",
+        sections: (count: number, body: boolean, width: number | null, height: number | null) =>
+          `${count} 节${body ? "" : " · 正文末没有节属性"}${
+            width === null || height === null ? "" : ` · ${width}×${height} twip`
+          }`,
+        numberingMissing: "没有 numbering.xml",
+        numberingMissingDetail: "编号与项目符号列表会用 pandoc 的默认格式。",
+        numbering: (count: number) => `${count} 个编号定义`,
+        headerFooterMissing: "没有页眉页脚",
+        headerFooterMissingDetail: "产物里会缺页码与学校的页眉。",
+        headerFooter: (headers: number, footers: number) => `${headers} 个页眉 · ${footers} 个页脚`,
+        fields: (count: number, instructions: string) =>
+          `${count} 个域标记${instructions === "" ? "" : ` · ${instructions}`}`,
+        toc: "已有目录",
+        tocMissing: "没有现成目录",
+        tocMissingDetail: "源文件有标题时导出会自动加一份。",
+        cover: "识别到封面页",
+        coverMissing: "没有识别到封面页",
+        macros: "没有 VBA 宏",
+        macrosPresent: "含 VBA 宏（word/vbaProject.bin）",
+        macrosPresentDetail: "宏不会被执行；pandoc 只读样式、页面设置与页眉页脚。",
+        trackChanges: "模板打开着修订模式",
+        trackChangesDetail: "新改动可能以修订形式打开。",
+        builtinUnavailable: "内置模板生成失败",
+      },
+    },
     changeDirectory: "更改…",
     chooseDownloadDirectory: "选择下载位置",
     openDownloadDirectory: "打开下载位置",
@@ -3210,6 +3269,7 @@ export const zh: Messages = {
     openAnyway: "仍然打开",
     oversize: (limit, pages) => `这份文档有 ${pages} 页，超过应用内编辑的上限（${limit} 页）：这里只读，要改请在 Word 里改。`,
     tooLarge: (size, limit) => `太大，这里打不开（${size}，上限 ${limit}）`,
+    tooNarrow: `面板太窄，正文会缩到读不清——拖宽右栏，或按 Ctrl+\\ 切到稿件布局。`,
     invalid: {
       password: "这份文档有密码保护。请在 Word 里去掉密码再保存一次。",
       "not-docx": "这个文件不是 Word 文档。",

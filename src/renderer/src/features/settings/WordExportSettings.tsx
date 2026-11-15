@@ -20,6 +20,7 @@ import { Icon } from "../../shell/Icon";
 import { PanelButton } from "../../shell/RightPanel";
 import type { AppSettings, SettingsPatch } from "../../../../shared/settings.ts";
 import type { DocxTemplateMode, DocxTemplateReport, PandocProbeResult } from "../../../../shared/docx-export.ts";
+import { reportFindings, reportText } from "./docx-template-text.ts";
 import { SettingGroup, SettingRow } from "./SettingRow";
 import { Segmented } from "./SettingControls";
 
@@ -150,7 +151,7 @@ export function WordExportSettings(props: {
       .then((outcome) => {
         if (outcome.kind === "cancelled") return;
         if (outcome.kind === "invalid") {
-          setPickError(`${t.settings.docxTemplateInvalid}: ${outcome.report.summary}`);
+          setPickError(`${t.settings.docxTemplateInvalid}: ${reportText(outcome.report, t)}`);
           return;
         }
         setReport({ kind: "ready", value: outcome.report });
@@ -166,7 +167,11 @@ export function WordExportSettings(props: {
     if (probe.kind === "error") return { text: probe.error, error: true };
     const value = probe.value;
     if (!value.ok) return { text: t.settings.pandocMissing, error: true };
-    if (!value.supported) return { text: `${t.settings.pandocTooOld} · ${value.versionText ?? ""}`, error: true };
+    if (!value.supported) {
+      // 三段分开说：「当前版本」「需要的版本」「升级」（链接在行尾）——旧句把版本号与
+      // 「或更新」粘在一起，读起来像「需要 3.9.0」（2026-11-15 验收 P1-4）
+      return { text: t.settings.pandocTooOld(value.versionText ?? "?", value.minVersion), error: true };
+    }
     return { text: `${value.versionText ?? ""}${value.path === null ? "" : ` · ${value.path}`}`, error: false };
   })();
 
@@ -174,7 +179,8 @@ export function WordExportSettings(props: {
   const needsUpgrade = probe.kind === "ready" && (!probe.value.ok || !probe.value.supported);
 
   const reportValue = report.kind === "ready" ? report.value : null;
-  const findings = reportValue === null ? [] : reportValue.findings.slice(0, 6);
+  // 句子在这里拼（主进程只回 kind + 数字）：界面语言变了，体检结论跟着变
+  const findings = reportValue === null ? [] : reportFindings(reportValue, t).slice(0, 6);
 
   return (
     <SettingGroup label={t.settings.wordExportGroup}>
@@ -258,7 +264,7 @@ export function WordExportSettings(props: {
               title={reportValue.path ?? undefined}
             >
               {!reportValue.ok && <Icon name="triangle-alert" size={12} strokeWidth={1.8} />}
-              <span>{reportValue.summary}</span>
+              <span>{reportText(reportValue, t)}</span>
             </span>
           )
         }
@@ -268,7 +274,7 @@ export function WordExportSettings(props: {
               {findings.map((finding) => (
                 <li key={`${finding.level}:${finding.label}`} data-level={finding.level}>
                   <span>{finding.label}</span>
-                  {finding.detail !== undefined && <span className="docx-template-finding-detail">{finding.detail}</span>}
+                  {finding.detail !== null && <span className="docx-template-finding-detail">{finding.detail}</span>}
                 </li>
               ))}
             </ul>
