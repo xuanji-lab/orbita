@@ -188,6 +188,41 @@ function runtimeReply(r: Rig, requestId: string): void {
 const idle = (sessionId = "s1") => (event: AgentEvent) => event.type === "phase" && event.sessionId === sessionId && event.phase === "idle";
 const phases = (events: readonly AgentEvent[]): string[] => events.flatMap((event) => (event.type === "phase" ? [event.phase] : []));
 
+describe("KernelSessions：工具禁区（会话账本、新内核的库目录、自动化记录）在新内核里同样拦", () => {
+  it("write 自动化记录、bash 删库文件、edit 库目录里的文件：都被闸门拒（模型拿到拒绝语），文件原样；工作台照常可写", async () => {
+    const cwd = await tempDir();
+    const data = join(cwd, "data");
+    const durable = join(data, "durable");
+    await mkdir(durable, { recursive: true });
+    await mkdir(join(data, "workbenches", "w1"), { recursive: true });
+    await writeFile(join(durable, "lib.sqlite"), "LIB");
+    await writeFile(join(data, "automations.json"), "AUTO");
+    faux.setResponses([
+      fauxAssistantMessage(
+        [
+          fauxToolCall("write", { path: join(data, "automations.json"), content: "" }),
+          fauxToolCall("bash", { command: `rm -f "${join(durable, "lib.sqlite")}"` }),
+          fauxToolCall("edit", { path: join(durable, "lib.sqlite"), edits: [{ oldText: "LIB", newText: "X" }] }),
+          fauxToolCall("write", { path: join(data, "workbenches", "w1", "ok.txt"), content: "ok" }),
+        ],
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("好"),
+    ]);
+    const r = await rig();
+    await r.sessions.handle("s1", submit(cwd, { protectedPaths: [join(data, "sessions"), join(data, "pi-sessions"), durable], protectedFiles: [join(data, "automations.json")] }));
+    await r.until(idle());
+    const tools = r.transcript().filter((item) => item.role === "tool");
+    assert.deepEqual(
+      tools.map((item) => (item.role === "tool" ? item.status : "")),
+      ["error", "error", "error", "complete"],
+    );
+    assert.equal(await readFile(join(data, "automations.json"), "utf8"), "AUTO");
+    assert.equal(await readFile(join(durable, "lib.sqlite"), "utf8"), "LIB");
+    assert.equal(await readFile(join(data, "workbenches", "w1", "ok.txt"), "utf8"), "ok");
+  });
+});
+
 describe("KernelSessions：一轮的事件与旧内核同形", () => {
   it("回显 → phase turn → 流式回答（思考、文字）→ 工具开始 / 结束 → 最终回答 → stats 落盘 → idle，转录归约出与旧内核同样的四条", async () => {
     const cwd = await tempDir();

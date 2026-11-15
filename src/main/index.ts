@@ -134,7 +134,7 @@ import { resolveTurnDirectories } from "./agent/turn-directories.ts";
 import { mainWindows } from "./window/main-windows.ts";
 import { isOwnRendererPage, type RendererOriginDeps } from "./window/renderer-origin.ts";
 import { SafeStorageSecrets } from "./provider/safe-storage-secrets.ts";
-import { devDataDirs, formalUserDataDir } from "./data-dirs.ts";
+import { devDataDirs, formalUserDataDir, toolProtectedDirs } from "./data-dirs.ts";
 import { ProviderStore } from "./provider/store.ts";
 import { createDoubaoProtocol } from "./voice/doubao-protocol.ts";
 import { DictationSessions } from "./voice/dictation.ts";
@@ -1301,11 +1301,9 @@ void app.whenReady().then(async () => {
     join(configDir, "pi-sessions"),
     // 图片字节预算的占位要拼附图原图的绝对路径（agent 进程不做路径策略）
     (sessionId) => sessions.attachmentDirOf(sessionId),
-    // 会话文件不可变（2026-09-18）：两个账本目录对工具面全档只读，含 Skip。
-    // 新内核开着时它的库目录同样只读（智能体的 write / edit / bash 改不了会话库）
-    kernel === null
-      ? [join(configDir, "sessions"), join(configDir, "pi-sessions")]
-      : [join(configDir, "sessions"), join(configDir, "pi-sessions"), durableDir],
+    // 会话文件不可变（2026-09-18）：两个账本目录与新内核的库目录（开关关着也护）对工具面全档只读，含 Skip；
+    // 开发实例再多护一份正式实例的库目录（data-dirs.ts 的 toolProtectedDirs）
+    toolProtectedDirs(configDir, devDirs !== null ? formalUserDataDir(app.getPath("appData")) : null),
     // 自动化记录不可变（2026-11-13 用户裁决）：automations.json 记录「智能体定时做过什么」，
     // 智能体删改它 = 丢痕迹；与它的 `.tmp` / `.bad-` 兄弟一起全档只读，智能体改自动化走自动化工具
     // 开发实例（devDirs 非空）再多护一份：正式版（`<appData>/orbita`）的记录文件——用户就是用开发实例做验收的，

@@ -476,6 +476,7 @@ export async function assembleTurn(
       mcpTools.map((tool) => tool.name),
       flags,
     ),
+    protectedFiles: command.protectedFiles,
     role: flags.role,
     workspace: command.workspaceId === null ? null : { name: command.workspaceName },
     cwd: command.cwd,
@@ -518,6 +519,7 @@ export async function assembleTurn(
               (request) => runtime.permissions.ask(command.sessionId, request, context),
               command.protectedPaths,
               command.cwd,
+              command.protectedFiles,
             );
             const verdict = await toolGate(event);
             if (verdict.block === true) return { block: verdict.reason ?? "Tool execution was blocked" };

@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { devDataDirs, formalUserDataDir } from "./data-dirs.ts";
+import { devDataDirs, formalUserDataDir, toolProtectedDirs } from "./data-dirs.ts";
 
 // 期望值一律用 join 拼，与产品代码同一套规则：写死 "/AS/orbita-dev" 只在 POSIX 上成立，
 // Windows 上产品代码产出的是 "\\AS\\orbita-dev"——那是分隔符差异，不是产品行为差异。
@@ -119,5 +119,13 @@ describe("formalUserDataDir", () => {
       const dev = devDataDirs({ packaged: false, appData: APP_DATA, home: HOME, ...(instance !== undefined ? { instance } : {}) });
       assert.notEqual(dev?.userData.toLowerCase(), formalUserDataDir(APP_DATA).toLowerCase());
     }
+  });
+});
+
+describe("toolProtectedDirs", () => {
+  test("会话账本两本 + 新内核的库目录恒在（不看开关）；开发实例再加正式实例的库目录", () => {
+    const own = join(APP_DATA, "orbita-dev-x");
+    assert.deepEqual(toolProtectedDirs(own, null), [join(own, "sessions"), join(own, "pi-sessions"), join(own, "durable")]);
+    assert.deepEqual(toolProtectedDirs(own, formalUserDataDir(APP_DATA)), [join(own, "sessions"), join(own, "pi-sessions"), join(own, "durable"), join(PACKAGED_USER_DATA, "durable")]);
   });
 });

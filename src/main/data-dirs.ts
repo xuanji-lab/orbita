@@ -30,6 +30,17 @@ export function formalUserDataDir(appData: string): string {
 }
 
 /**
+ * 工具面全档只读的目录（protectedPaths）：会话账本两本（sessions/、pi-sessions/）与新内核的库目录（durable/，含迁移的
+ * 半份与墓碑）。**durable/ 开关关着也护**：开过开关的会话还在库里，关掉开关后旧内核的智能体同样不该能改它。
+ * 开发实例（formalUserData 非 null）再多护一份正式实例的 durable/——用户就是用开发实例做验收的，开发实例里的智能体
+ * 不该能动他真实在用的会话库。它进了这份名单，正式实例的数据目录就整个归命令串闸门的白名单管（只读命令放行，
+ * protected-command.ts）；正式实例的 sessions/、pi-sessions/ 不额外列，写 / 改工具对它们的拦截与之前一样不管。
+ */
+export function toolProtectedDirs(configDir: string, formalUserData: string | null): string[] {
+  return [join(configDir, "sessions"), join(configDir, "pi-sessions"), join(configDir, "durable"), ...(formalUserData === null ? [] : [join(formalUserData, "durable")])];
+}
+
+/**
  * 开发版的两个数据根。**正式版返回 null**：正式版的路径不由这里决定，保持 Electron /
  * WorkspaceStore 的默认值——真实数据的位置不能因为这层逻辑的一个 bug 而漂走。
  *
