@@ -75,6 +75,8 @@ interface KernelParts extends CycleParts {
   rounds: ToolRounds;
   /** 开轮时从上下文取好的三样（runTurn 不再读一遍） */
   digest: ContextDigest;
+  /** 这一轮最后落定的一条回答（轮尾推用量时，它若还是会话的最后一条，就不再读整份上下文） */
+  lastAnswer: () => AssistantMessage | undefined;
 }
 
 /** 外面给的进程级依赖 */
@@ -464,6 +466,7 @@ export class KernelSessions {
     if (provider.headers === undefined) delete note.headers;
     else note.headers = provider.headers;
     const turnForm = command.type === "continueRun" ? ({ ...command, type: "submit", text: "" } as const) : command;
+    ((label: string) => { if (process.env["MEM_MARK"]) { const m = process.memoryUsage(); process.stderr.write(`[mark] ${Date.now()} ${label} rss=${Math.round(m.rss / 1048576)} heap=${Math.round(m.heapUsed / 1048576)} ext=${Math.round(m.external / 1048576)} max=${Math.round(process.resourceUsage().maxRSS / 1024)}\n`); } })("open-start");
     const target = await this.deps.pool.target({
       library,
       command: turnForm,
@@ -486,6 +489,7 @@ export class KernelSessions {
     const webWatch: WebArtifactWatch = { roots: webScanRoots(command.cwd, command.directories), startedAt: this.now() };
     const adapter = new TranscriptAdapter({ newId: () => randomUUID(), now: () => this.now() });
     let abortRequested = false;
+    let lastAnswer: AssistantMessage | undefined;
     const sessionId = command.sessionId;
     const statsOf = stats;
     const rounds = new ToolRounds();
@@ -495,7 +499,10 @@ export class KernelSessions {
       quitting: () => this.shuttingDown,
       // 回答落定：上下文占用就是它自己的 usage（pi 的估算法：最后一条有效回答的 usage + 其后消息的估算，此刻其后没有消息），
       // 不为这一下把整份上下文再读一遍（大会话的上下文带着全部原图）
-      assistantEnd: (message) => void this.pushStats(sessionId, target, statsOf, undefined, message),
+      assistantEnd: (message) => {
+        lastAnswer = message;
+        void this.pushStats(sessionId, target, statsOf, undefined, message);
+      },
       toolEnd: (callId) => {
         // 工具结果条目到了也算「准备完」（没走到 beforeTool 就被拒的调用），见 ToolRounds
         rounds.settled(callId);
@@ -533,16 +540,19 @@ export class KernelSessions {
     });
     // 开轮读一次上下文：推一次用量，顺手取好这一轮要的三样（ContextDigest）——大会话的上下文带着全部原图，
     // 只读这一次、取完就放手，不和这一轮 durable 自己读的那份同时在内存里
+    ((label: string) => { if (process.env["MEM_MARK"]) { const m = process.memoryUsage(); process.stderr.write(`[mark] ${Date.now()} ${label} rss=${Math.round(m.rss / 1048576)} heap=${Math.round(m.heapUsed / 1048576)} ext=${Math.round(m.external / 1048576)} max=${Math.round(process.resourceUsage().maxRSS / 1024)}\n`); } })("target-ready");
     const digest = await target.conversation.context(BACKGROUND_CONTEXT).then(async (view) => {
       await this.pushStats(sessionId, target, statsOf, true, undefined, view);
       return digestContext(view.messages);
     });
+    ((label: string) => { if (process.env["MEM_MARK"]) { const m = process.memoryUsage(); process.stderr.write(`[mark] ${Date.now()} ${label} rss=${Math.round(m.rss / 1048576)} heap=${Math.round(m.heapUsed / 1048576)} ext=${Math.round(m.external / 1048576)} max=${Math.round(process.resourceUsage().maxRSS / 1024)}\n`); } })("digest-done");
     this.deps.collectGarbage?.();
     // 主进程要把这条会话的「本子」记进 meta：旧会话是原件路径；新内核里新建的会话没有本子，记 durable 引用
     this.send({ type: "created", sessionId, piSessionFile: command.piSessionFile ?? durableBookRef(sessionId) });
     return {
       target,
       digest,
+      lastAnswer: () => lastAnswer,
       view,
       tracker,
       webWatch,
@@ -575,6 +585,18 @@ export class KernelSessions {
     }
   }
 
+  /** answer 还是会话最后一条（只读最新一条条目，不读整份上下文）时原样返回，否则 undefined */
+  private async stillLast(target: Extract<KernelTarget, { ok: true }>, answer: AssistantMessage | undefined): Promise<AssistantMessage | undefined> {
+    if (answer === undefined) return undefined;
+    try {
+      const latest = (await target.conversation.entries({}, 1, undefined, BACKGROUND_CONTEXT)).items[0];
+      const message = latest?.model?.[0] as Message | undefined;
+      return latest?.kind === "pi.assistant" && message?.role === "assistant" && message.timestamp === answer.timestamp ? answer : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   private async pushStats(
     sessionId: string,
     target: Extract<KernelTarget, { ok: true }>,
@@ -598,7 +620,9 @@ export class KernelSessions {
     const outcome = await this.runBody(parts, command).finally(async () => {
       view.turnActive = false;
       await reportFileTurn(sessionId, parts.tracker, parts.webWatch, (event) => this.send(event));
-      await this.pushStats(sessionId, target, parts.stats, true);
+      // 轮尾的用量：这一轮最后那条回答若还是会话的最后一条，上下文占用就是它自己的 usage（与读整份上下文算出的相同），
+      // 不为这一下再读一遍带着全部原图的上下文（第四步验收后的修补：28 MB 的会话在这里冲出约 90 MB 的尖峰）
+      await this.pushStats(sessionId, target, parts.stats, true, await this.stillLast(target, parts.lastAnswer()));
     });
     // 回合级失败（模型报错、重试耗尽）：挂到这轮没得到回答的话下面；被我们自己停下的轮不报（turn-failure.ts 的同一条规矩）
     if (outcome.status === "unanswered" && !parts.aborted()) {

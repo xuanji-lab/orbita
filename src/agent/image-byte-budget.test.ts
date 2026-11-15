@@ -16,6 +16,7 @@ import {
   estimateMessagesBytes,
   hashImage,
   imageSizeOf,
+  jsonUtf8Length,
   planImageBudget,
   readImageBudgetBook,
   type ContextMessage,
@@ -378,6 +379,44 @@ describe("estimateMessagesBytes", () => {
     assert.ok(bytes < 10_000);
     const imageMessage: ContextMessage[] = [userMessage("x", [fillerData(1000)], 1)];
     assert.ok(estimateMessagesBytes(imageMessage) > 1000, "base64 本体要计入");
+  });
+});
+
+describe("jsonUtf8Length：与 Buffer.byteLength(JSON.stringify(x)) 同一个数，不拼字符串", () => {
+  const same = (value: unknown, label: string): void => assert.equal(jsonUtf8Length(value), Buffer.byteLength(JSON.stringify(value), "utf8"), label);
+  test("各种字符：引号、反斜杠、控制字符、中文、表情（代理对）、落单的代理项、长 base64、带空格的长 ASCII", () => {
+    const cases: [unknown, string][] = [
+      ['say "hi" \\ there', "quote and backslash"],
+      ["\b\t\n\f\r\u0000\u0001\u001f\u007f", "control chars"],
+      ["中文与 emoji 😀👍🏽", "cjk and surrogate pairs"],
+      ["lone \ud800 high and \udc00 low", "lone surrogates"],
+      [fillerData(5000), "long base64"],
+      ["a b-c_d.e:f;g,h ".repeat(100), "long plain ascii with punctuation"],
+      ["long with quote ".repeat(40) + '"', "long string that fails the fast path"],
+      ["", "empty"],
+    ];
+    for (const [value, label] of cases) same(value, label);
+  });
+  test("数字、布尔、null、undefined 字段与数组里的 undefined、嵌套、toJSON", () => {
+    same({ a: 1, b: -0, c: 1e21, d: 1.5e-7, e: Number.NaN, f: Number.POSITIVE_INFINITY, g: true, h: false, i: null }, "scalars");
+    same({ a: undefined, b: () => 1, c: Symbol("x"), d: "kept" }, "skipped members");
+    same([undefined, () => 1, Symbol("y"), 2], "array holes become null");
+    same({ nested: [{ deep: [[], {}, [1, [2, { x: "y" }]]] }], "键\"名": "v" }, "nested and escaped keys");
+    same({ when: new Date(0), list: [new Date(1)] }, "toJSON");
+    same([], "empty array");
+    same({}, "empty object");
+  });
+  test("真实形状的上下文（带图、工具调用、工具结果）", () => {
+    const messages: ContextMessage[] = [userMessage("看这张图：中文", [fillerData(20000), fillerData(300)], 1), userMessage("第二句 \"quoted\"", [], 2)];
+    same(messages, "context messages");
+    assert.equal(jsonUtf8Length(messages), estimateMessagesBytes(messages));
+  });
+  test("planImageBudget 用它算出的计划与默认算法逐字段相同", () => {
+    const messages: ContextMessage[] = [userMessage("old", [fillerData(30 * 1024 * 1024)], 1), userMessage("new", [], 2)];
+    const byDefault = planImageBudget(messages, null, new Map(), 1);
+    const byCount = planImageBudget(messages, null, new Map(), 1, jsonUtf8Length);
+    assert.deepEqual(byCount, byDefault);
+    assert.ok(byDefault.replaced > 0, "这个夹具确实触发了替换");
   });
 });
 

@@ -224,6 +224,33 @@ describe("KernelSessions：一轮的事件与旧内核同形", () => {
     assert.equal(r.settled[0]?.result.ok, true);
   });
 
+  it("轮尾落盘的上下文占用与重读整份上下文算出的相同：正常答完（取最后那条回答）、停在工具中途（回答后面还有工具结果，照读）", async () => {
+    const cwd = await tempDir();
+    const finalUsage = async (r: Rig, sessionId: string) => {
+      const lastStats = [...r.events].reverse().find((event) => event.type === "stats" && event.sessionId === sessionId && event.persist === true);
+      assert.ok(lastStats?.type === "stats");
+      const libraryHarness = (await r.pool.library(`${sessionId}.sqlite`)).harness;
+      const index = (await libraryHarness.snapshot(SessionIndexDoc, BACKGROUND_CONTEXT))?.sessions[sessionId];
+      const conversation = await libraryHarness.conversation(index as never, BACKGROUND_CONTEXT);
+      const read = await conversation?.context(BACKGROUND_CONTEXT);
+      assert.ok(read !== undefined);
+      return { reported: lastStats.stats.contextUsage, fromFullRead: contextUsage(read.messages, read.head?.kind === "pi.compaction", 100_000) };
+    };
+    faux.setResponses([fauxAssistantMessage("答完"), fauxAssistantMessage(fauxToolCall("bash", { command: "sleep 3" }), { stopReason: "toolUse" })]);
+    const r = await rig();
+    await r.sessions.handle("done", submit(cwd, { sessionId: "done", text: "一句" }));
+    await r.until(idle("done"));
+    const done = await finalUsage(r, "done");
+    assert.deepEqual(done.reported, done.fromFullRead);
+    void r.sessions.handle("tool", submit(cwd, { sessionId: "tool", text: "跑" }));
+    await r.until((event) => event.type === "progress" && event.sessionId === "tool" && event.progress.type === "item_started" && event.progress.item.role === "tool");
+    await r.sessions.handle("tool", { type: "abort", sessionId: "tool" });
+    await r.until(idle("tool"));
+    const stopped = await finalUsage(r, "tool");
+    assert.deepEqual(stopped.reported, stopped.fromFullRead);
+    assert.ok(stopped.reported !== null && done.reported !== null && stopped.reported.tokens !== done.reported.tokens);
+  });
+
   it("bash 的实时输出经 onUpdate 上界面（tool item_updated 带部分输出），终态是完整输出", async () => {
     const cwd = await tempDir();
     faux.setResponses([fauxAssistantMessage(fauxToolCall("bash", { command: "echo one; sleep 0.3; echo two" }), { stopReason: "toolUse" }), fauxAssistantMessage("ok")]);

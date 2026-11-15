@@ -171,6 +171,80 @@ export function estimateMessagesBytes(messages: readonly ContextMessage[]): numb
   return Buffer.byteLength(JSON.stringify(messages), "utf8");
 }
 
+/**
+ * 与 estimateMessagesBytes 同一个数（`Buffer.byteLength(JSON.stringify(value), "utf8")`），但**不拼出那个字符串**：
+ * 逐值数出 JSON 序列化后的 UTF-8 字节数。上下文里带着全部原图时，那个字符串有上百 MB，拼一次就是一个内存尖峰
+ * （第四步验收后的修补：一条 28 MB 的会话发第一句，kernel 进程在这里从 338 MB 冲到 452 MB）。
+ * 新内核用它；旧内核仍用 estimateMessagesBytes（旧内核路径不动）。两者相等由测试守着。
+ * 认的是 JSON 能表示的值（对象、数组、字符串、数字、布尔、null）；带 toJSON 或别的类型的子树退回真序列化。
+ */
+export function jsonUtf8Length(value: unknown): number {
+  return valueLength(value) ?? 4;
+}
+
+/** base64 / 纯 ASCII 安全字符：JSON 里原样输出、每个字符 1 字节 */
+const PLAIN_ASCII = /^[A-Za-z0-9+/=._:;, -]*$/;
+
+function stringLength(text: string): number {
+  if (text.length > 256 && PLAIN_ASCII.test(text)) return text.length + 2;
+  let bytes = 2;
+  for (let at = 0; at < text.length; at++) {
+    const code = text.charCodeAt(at);
+    if (code === 0x22 || code === 0x5c) bytes += 2;
+    else if (code < 0x20) bytes += code === 0x08 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d ? 2 : 6;
+    else if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff) {
+      const next = text.charCodeAt(at + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        bytes += 4;
+        at++;
+      } else bytes += 6;
+    } else if (code >= 0xdc00 && code <= 0xdfff) bytes += 6;
+    else bytes += 3;
+  }
+  return bytes;
+}
+
+/** 一个值序列化后的字节数；undefined = 这个值在 JSON 里不出现（undefined、函数、symbol） */
+function valueLength(value: unknown): number | undefined {
+  if (value === null) return 4;
+  switch (typeof value) {
+    case "string":
+      return stringLength(value);
+    case "number":
+      return Number.isFinite(value) ? String(value).length : 4;
+    case "boolean":
+      return value ? 4 : 5;
+    case "undefined":
+    case "function":
+    case "symbol":
+      return undefined;
+    case "object":
+      break;
+    default:
+      return Buffer.byteLength(JSON.stringify(value) ?? "", "utf8");
+  }
+  if (typeof (value as { toJSON?: unknown }).toJSON === "function") {
+    const text = JSON.stringify(value);
+    return text === undefined ? undefined : Buffer.byteLength(text, "utf8");
+  }
+  if (Array.isArray(value)) {
+    let bytes = 2 + Math.max(0, value.length - 1);
+    for (const item of value) bytes += valueLength(item) ?? 4;
+    return bytes;
+  }
+  let bytes = 2;
+  let members = 0;
+  for (const key of Object.keys(value)) {
+    const length = valueLength((value as Record<string, unknown>)[key]);
+    if (length === undefined) continue;
+    bytes += stringLength(key) + 1 + length;
+    members++;
+  }
+  return bytes + Math.max(0, members - 1);
+}
+
 /** 替换计划：messages 已是替换后的副本（原数组不动）；advancedCut 为 null 表示不推进 */
 export interface ImageBudgetPlan {
   messages: ContextMessage[];
@@ -317,8 +391,10 @@ export function planImageBudget(
   watermark: ImageBudgetMark | null,
   refs: ReadonlyMap<string, string>,
   protectedFloor: number,
+  /** 算整份请求的字节数（缺席 = estimateMessagesBytes；新内核传 jsonUtf8Length，同一个数、不拼字符串） */
+  estimate: (messages: readonly ContextMessage[]) => number = estimateMessagesBytes,
 ): ImageBudgetPlan {
-  const bytesBefore = estimateMessagesBytes(messages);
+  const bytesBefore = estimate(messages);
   // 保护段：floor 之前才可替换；没有用户消息（floor 为 +∞ 的初值场景）时全部可替换
   const floor = Math.min(protectedFloor, messages.length);
   const calls = toolCallIndex(messages);
@@ -418,6 +494,8 @@ export function applyImageBudget(
   messages: readonly ContextMessage[],
   budget: TurnImageBudget,
   persist: (mark: ImageBudgetMark) => void,
+  /** 见 planImageBudget 的 estimate（旧内核不传） */
+  estimate?: (messages: readonly ContextMessage[]) => number,
 ): ContextMessage[] | undefined {
   try {
     let lastUser = -1;
@@ -429,7 +507,7 @@ export function applyImageBudget(
     }
     const floor = lastUser === -1 ? 0 : Math.min(budget.protectedFloor, lastUser);
     budget.protectedFloor = floor;
-    const plan = planImageBudget(messages, budget.mark, budget.refs, floor);
+    const plan = planImageBudget(messages, budget.mark, budget.refs, floor, estimate);
     if (plan.advancedCut !== null) {
       budget.mark = plan.advancedCut;
       persist({

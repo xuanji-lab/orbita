@@ -22,7 +22,7 @@ import { getCurrentSystemMessage } from "@earendil-works/pi-ai/utils/transcript"
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { defineDoc, type Conversation, type JsonObject } from "@earendil-works/pi-durable";
 import { attachGoalLedger, type LedgerAttachCache } from "./goal-compaction.ts";
-import { applyImageBudget, hashImage, imageRefPath, type ContextMessage, type TurnImageBudget } from "./image-byte-budget.ts";
+import { applyImageBudget, hashImage, imageRefPath, jsonUtf8Length, type ContextMessage, type TurnImageBudget } from "./image-byte-budget.ts";
 import { BRANCH_PREFIX, BRANCH_SUFFIX, COMPACTION_PREFIX, COMPACTION_SUFFIX } from "./legacy-migrate.ts";
 import { attachMemoryBlocks, type TurnMemoryAttach } from "./memory-inject.ts";
 import { injectUserContext } from "./user-context.ts";
@@ -170,10 +170,15 @@ export class TurnWire {
   async transform(messages: readonly Message[], branch: () => readonly unknown[], context: Context): Promise<Message[]> {
     let current = liftMessages(messages, this.customs);
     current =
-      applyImageBudget(current, this.budget, (mark) =>
-        this.persist((state) => {
-          state.imageMark = { cut: mark.cut, cutIndex: mark.cutIndex };
-        }, context),
+      applyImageBudget(
+        current,
+        this.budget,
+        (mark) =>
+          this.persist((state) => {
+            state.imageMark = { cut: mark.cut, cutIndex: mark.cutIndex };
+          }, context),
+        // 同一个数、不拼出上百 MB 的 JSON 字符串（带全部原图的大会话在这里冲出内存尖峰）
+        jsonUtf8Length,
       ) ?? current;
     try {
       current =
