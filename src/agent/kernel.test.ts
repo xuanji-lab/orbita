@@ -1,7 +1,7 @@
-import { after, describe, it } from "node:test";
+import { after, describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -454,6 +454,97 @@ describe("迁移交给用完即退的进程（kernel 进程的内存高水位不
     const opened = await kernel.open({ library: "r.sqlite", sessionId: "r", legacy: { piSessionFile: file }, agent: AGENT });
     assert.ok(opened.ok && opened.migrated);
     assert.deepEqual(fingerprints(await migratedContext(kernel, "r.sqlite", opened.conversationId)), fingerprints(oldContext(COMPACTED)));
+    await kernel.closeAll();
+  });
+
+  it("默认门槛是 64 MB：不给 migrateElsewhereMinBytes 时，差 1 字节不交、整 64 MB 交", async () => {
+    const MIB64 = 64 * 1024 * 1024;
+    for (const [size, expected] of [[MIB64 - 1, 0], [MIB64, 1]] as const) {
+      const dir = await tempDir();
+      const file = join(dir, "book.jsonl");
+      // 门槛只看 stat 的大小：稀疏文件凑到目标字节数，第一行就不是 JSON——本进程那条路很快失败，这里只数交没交
+      await writeFile(file, "not a pi book\n");
+      await truncate(file, size);
+      let tried = 0;
+      const kernel = pool(dir, {
+        migrateElsewhere: async () => {
+          tried++;
+          return Promise.reject(new MigratorUnavailable("counted"));
+        },
+      });
+      await kernel.open({ library: "r.sqlite", sessionId: "r", legacy: { piSessionFile: file }, agent: AGENT });
+      assert.equal(tried, expected, `本子 ${size} 字节`);
+      await kernel.closeAll();
+    }
+  });
+
+  it("默认卡死时限是 30 秒：不给 stallMs 时，29.999 秒还在等、30 秒整判卡死", async () => {
+    const dir = await tempDir();
+    const file = await bookFile(dir);
+    const hang = join(dir, "hang.mjs");
+    await writeFile(hang, "process.on('message', () => undefined); setInterval(() => undefined, 1000);\n");
+    mock.timers.enable({ apis: ["setTimeout"] });
+    const settle = () => new Promise((resolve) => setImmediate(resolve));
+    try {
+      let outcome: string | null = null;
+      void forkMigrator(hang, { dir, library: "x.sqlite", sessionId: "x", piSessionFile: file, agent: { modelId: "m", thinkingLevel: "off", cwd: "/", role: "root", compaction: { enabled: false, reservePercent: 20 } } }).catch((error: unknown) => {
+        outcome = error instanceof Error ? error.message : String(error);
+      });
+      mock.timers.tick(29_999);
+      await settle();
+      assert.equal(outcome, null);
+      mock.timers.tick(1);
+      await settle();
+      await settle();
+      assert.equal(outcome, "migrator made no progress for 30000 ms");
+    } finally {
+      // 断言没过（时限被改长）时也把卡死判定推到点：杀掉那个永不回话的进程，不让测试挂住
+      mock.timers.tick(24 * 60 * 60 * 1000);
+      await settle();
+      mock.timers.reset();
+    }
+  });
+
+  it("卡死时用 SIGKILL：被挂起（SIGSTOP）的迁移进程收不到 SIGTERM，换成 SIGTERM 它会一直留着", async () => {
+    const dir = await tempDir();
+    const file = await bookFile(dir);
+    const pidFile = join(dir, "pid");
+    const stopped = join(dir, "stopped.mjs");
+    // 起来就记下 pid 再把自己挂起：模拟真实例里被 SIGSTOP 的迁移进程
+    await writeFile(stopped, `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); process.kill(process.pid, "SIGSTOP");\n`);
+    let pid: number | null = null;
+    try {
+      await assert.rejects(forkMigrator(stopped, { dir, library: "x.sqlite", sessionId: "x", piSessionFile: file, agent: { modelId: "m", thinkingLevel: "off", cwd: "/", role: "root", compaction: { enabled: false, reservePercent: 20 } } }, 500), MigratorUnavailable);
+      pid = Number(await readFile(pidFile, "utf8"));
+      let alive = true;
+      for (let i = 0; i < 40 && alive; i++) {
+        try {
+          process.kill(pid, 0);
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        } catch {
+          alive = false;
+        }
+      }
+      assert.equal(alive, false, "卡死判定之后迁移进程还活着");
+    } finally {
+      if (pid !== null) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // 已经没了
+        }
+      }
+    }
+  });
+
+  it("迁移每提交一批报一次进展（迁移进程据此给父进程发心跳，见 forkMigrator 的卡死判定）", async () => {
+    const dir = await tempDir();
+    const file = await bookFile(dir);
+    let progress = 0;
+    const kernel = pool(dir, { onMigrationProgress: () => progress++ });
+    const opened = await kernel.open({ library: "r.sqlite", sessionId: "r", legacy: { piSessionFile: file }, agent: AGENT });
+    assert.ok(opened.ok && opened.migrated);
+    assert.ok(progress >= 1, String(progress));
     await kernel.closeAll();
   });
 

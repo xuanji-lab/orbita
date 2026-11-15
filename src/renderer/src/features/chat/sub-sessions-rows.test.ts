@@ -254,5 +254,10 @@ describe("delegateCardStatus（父会话转录里派出卡的状态）", () => {
     strictEqual(delegateCardStatus("running", true, false), "running");
     strictEqual(delegateCardStatus("running", false, true), "interrupted");
     strictEqual(delegateCardStatus(undefined, false, false), "idle");
+    // 判断顺序：通道终态压过「槽里还在跑」（子会话已回报完成、最后一个 phase 事件还没到），在跑压过被打断
+    strictEqual(delegateCardStatus("done", true, false), "done");
+    strictEqual(delegateCardStatus("failed", true, true), "failed");
+    strictEqual(delegateCardStatus("waiting", true, false), "waiting");
+    strictEqual(delegateCardStatus("running", true, true), "running");
   });
 });

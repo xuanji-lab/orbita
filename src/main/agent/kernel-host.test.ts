@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DurableMark, SessionMeta } from "../../shared/session.ts";
 import { DURABLE_MOVED_MESSAGE, durableKernelEnabled, editRouteFor, KernelHost, legacyBookBytes, libraryRoot, markRunning, markSettled, routeFor, sessionsToResume } from "./kernel-host.ts";
-import { awaitsContinue, restartNote, resumePolicy } from "../../shared/kernel.ts";
+import { interruptedNow, restartNote, resumePolicy } from "../../shared/kernel.ts";
 
 const dirs: string[] = [];
 after(async () => {
@@ -105,21 +105,28 @@ describe("重启后接着跑：只续子会话（后台任务），树根给「�
     // 续跑那一轮里崩溃：什么都写不上，meta 停在 { resumed, running }
     assert.equal(resumePolicy(child(mark)), "crashed");
     assert.equal(restartNote(child(mark), false), "crashed", "崩溃压过旧的 resumed：只说「被打断了 · 继续」");
-    assert.equal(awaitsContinue(child(mark), false), true);
+    assert.equal(interruptedNow(true, child(mark), false), true);
     // 人点「继续」：在跑——不再等你；跑完落定：两句都不说
     mark = markRunning(mark, 4, true);
-    assert.equal(awaitsContinue(child(mark), true), false);
+    assert.equal(interruptedNow(true, child(mark), true), false);
     assert.equal(restartNote(child(mark), true), null, "点了继续之后不再说「已自动接着跑」");
     mark = markSettled(mark, { ok: true, conversationId: 1, migration: "none", status: "done" }, 5);
     assert.equal(restartNote(child(mark), false), null);
-    assert.equal(awaitsContinue(child(mark), false), false);
+    assert.equal(interruptedNow(true, child(mark), false), false);
   });
-  it("awaitsContinue：只有崩溃留下、此刻没在跑的子会话等你；正常退出待续跑的、树根、在跑的都不算", () => {
-    assert.equal(awaitsContinue({ parentId: "r", durable: { since: 1, running: true } }, false), true);
-    assert.equal(awaitsContinue({ parentId: "r", durable: { since: 1, running: true } }, true), false);
-    assert.equal(awaitsContinue({ parentId: "r", durable: { since: 1, running: true, stoppedOnQuit: true } }, false), false);
-    assert.equal(awaitsContinue({ parentId: undefined, durable: { since: 1, running: true } }, false), false);
-    assert.equal(awaitsContinue({ parentId: "r", durable: { since: 1 } }, false), false);
+  it("interruptedNow：开关关着（或还没报到）时不算被打断——那时点不了继续", () => {
+    const crashed = { parentId: "r", durable: { since: 1, running: true as const } };
+    assert.equal(interruptedNow(true, crashed, false), true);
+    assert.equal(interruptedNow(false, crashed, false), false);
+    assert.equal(interruptedNow(null, crashed, false), false);
+    assert.equal(interruptedNow(true, crashed, true), false);
+  });
+  it("interruptedNow（开关开着）：只有崩溃留下、此刻没在跑的子会话等你；正常退出待续跑的、树根、在跑的都不算", () => {
+    assert.equal(interruptedNow(true, { parentId: "r", durable: { since: 1, running: true } }, false), true);
+    assert.equal(interruptedNow(true, { parentId: "r", durable: { since: 1, running: true } }, true), false);
+    assert.equal(interruptedNow(true, { parentId: "r", durable: { since: 1, running: true, stoppedOnQuit: true } }, false), false);
+    assert.equal(interruptedNow(true, { parentId: undefined, durable: { since: 1, running: true } }, false), false);
+    assert.equal(interruptedNow(true, { parentId: "r", durable: { since: 1 } }, false), false);
   });
 });
 

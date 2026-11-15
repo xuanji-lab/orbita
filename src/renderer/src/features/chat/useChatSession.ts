@@ -6,7 +6,7 @@ import { prefillLeft, reconcileLeft } from "./carryover-prefill.ts";
 import type { TranscriptItem } from "@shared/transcript";
 import { api } from "../../api";
 import type { IntentRecallRecord } from "@shared/session";
-import { awaitsContinue, restartNote } from "@shared/kernel";
+import { interruptedNow, restartNote } from "@shared/kernel";
 import type { RecallCardState } from "@shared/intent-recall";
 import type { IntentConfirmDecision } from "@shared/intent-confirm";
 import { splitEchoBlocks } from "../../../../shared/prompt-attachments.ts";
@@ -1363,9 +1363,8 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
   // 开关关着时不算——那时这条会话只能读、点不了继续，亮一个永远消不掉的「等你」只会误导
   const interruptedOf = useCallback(
     (id: string): boolean => {
-      if (kernelDurable !== true) return false;
       const meta = sessions.find((entry) => entry.id === id);
-      return meta !== undefined && awaitsContinue(meta, (statesRef.current.get(id)?.phase ?? "idle") !== "idle");
+      return meta !== undefined && interruptedNow(kernelDurable, meta, (statesRef.current.get(id)?.phase ?? "idle") !== "idle");
     },
     [kernelDurable, sessions],
   );

@@ -276,13 +276,13 @@ export interface KernelPoolOptions {
  * 561 → 349 MB（各省 200 MB 以上）；27–30 MB 的四条在本进程迁峰值 376–442 MB、交出去 313–414 MB，省得少还时有时无，
  * 首发却从 0.77–0.91 秒变成 1.1–1.35 秒。64 MB 落在两档之间：大的交出去，30 MB 级的在本进程迁（首发与上一步持平）。
  */
-export const MIGRATE_ELSEWHERE_MIN_BYTES = 64 * 1024 * 1024;
+const MIGRATE_ELSEWHERE_MIN_BYTES = 64 * 1024 * 1024;
 
 /**
  * 迁移进程多久没有进展（一批都没提交）就当它卡死：杀掉、退回本进程迁。一批是 4 MB 原文，正常迁移每批几十毫秒；
  * 起进程 + 开库 + 第一批也在一秒以内。30 秒没有一批 = 卡住了（被挂起、死锁、磁盘卡死），不让用户再等。
  */
-export const MIGRATOR_STALL_MS = 30_000;
+const MIGRATOR_STALL_MS = 30_000;
 
 /** 发给迁移进程的一件事：库目录、库名、会话 id、本子路径、建会话用的设定（不带服务商密钥） */
 export interface MigratorRequest {

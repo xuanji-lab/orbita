@@ -166,6 +166,14 @@ export function restartNote(meta: Pick<SessionMeta, "parentId" | "durable">, run
  * 子会话收件箱行据此归进「等你」。点了「继续」就在跑（running 为真）；跑完落定清掉 durable.running，标记消失。
  * 正常退出后自动续跑的（resumePolicy "resume"）与树根（"ask"）不算。
  */
-export function awaitsContinue(meta: Pick<SessionMeta, "parentId" | "durable">, running: boolean): boolean {
+function awaitsContinue(meta: Pick<SessionMeta, "parentId" | "durable">, running: boolean): boolean {
   return !running && resumePolicy(meta) === "crashed";
+}
+
+/**
+ * 界面上算不算「被打断、等你点继续」：awaitsContinue，且这次运行开着新内核（kernelOn，主进程报的；还没报到 = null）。
+ * 开关关着时这条会话只能读、点不了继续——亮一个永远消不掉的「等你」只会误导。
+ */
+export function interruptedNow(kernelOn: boolean | null, meta: Pick<SessionMeta, "parentId" | "durable">, running: boolean): boolean {
+  return kernelOn === true && awaitsContinue(meta, running);
 }
