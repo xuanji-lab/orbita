@@ -17,6 +17,13 @@
   - allow-unsigned-executable-memory / disable-library-validation 同理来自模板：Electron 的
     V8 与原生模块需要它们，收窄要单独验过 mac 上的渲染进程与插件原生模块，不顺手改。
 
+  **mac.binaries 故意留空**（package.json 里没有这一项）：walkAsync 已经递归遍历 Contents 下
+  每个 Mach-O 并用同一 identity 重签，rg / fd 一直就是这么签的；再列一条只会让同一个文件被
+  第二次 codesign 覆盖签名（sign.js 把 binaries 直接 push 进 children）。列错的时候代价更大：
+  指到目录（BUG-3 就指到了 bin/officecli 目录）时 codesign 报 bundle format unrecognized,
+  invalid, or unsuitable，整条 mac 打包在签名阶段挂掉。真要重新加，必须先过
+  officecli-bin.test.ts 里那条「与运行时落点逐字相同」的断言。
+
   **不要在打包后用 codesign 手工补签**：手工带 force 选项重签会让外层 bundle 的封印失效
   （Apple：The signature of the binary is invalid），而 electron-builder 的签名顺序是
   「先子后父、同一 identity」，手工插一脚正好破坏这个顺序，公证也过不去。

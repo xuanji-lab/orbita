@@ -158,9 +158,6 @@
       "extendInfo": {
         "NSMicrophoneUsageDescription": "orbita uses the microphone for voice input: what you say is transcribed into the message box."
       },
-      "binaries": [
-        "Contents/Resources/bin/officecli"
-      ],
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "identity": "-",
       "hardenedRuntime": false

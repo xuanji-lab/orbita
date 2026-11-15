@@ -1,7 +1,18 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { OFFICECLI_PATH_ENV, officecliBinPath, resolveOfficecliPath } from "./officecli-bin.ts";
+
+const ROOT = join(import.meta.dirname, "..", "..", "..");
+
+/**
+ * 把绝对路径写成 electron-builder 配置里的样子：相对 `.app` 包根、正斜杠、不带前导斜杠。
+ * `mac.binaries` 的条目就是这么解析的（MacTargetHelper：`path.resolve(appPath, d)`）。
+ */
+function relativeToApp(absolute: string, appDir: string): string {
+  return absolute.slice(appDir.length + 1).split(/[\\/]/).join("/");
+}
 
 const base = { packaged: true, resourcesPath: "/R", appPath: "/A", platform: "win32", arch: "x64" };
 
@@ -70,5 +81,72 @@ describe("resolveOfficecliPath", () => {
 
   test("开发态 + 没跑过 fetch 脚本 → null", () => {
     assert.equal(resolveOfficecliPath({ ...input, packaged: false, exists: () => false }), null);
+  });
+});
+
+/**
+ * 打包配置与运行时落点必须说同一件事。
+ *
+ * 这两条是为 BUG-3 加的：`mac.binaries` 曾写 `Contents/Resources/bin/officecli`，而文件其实在
+ * 子目录里——那一条把**目录**交给 osx-sign，codesign 对普通目录报 `bundle format unrecognized,
+ * invalid, or unsuitable`，整条 mac 打包在签名阶段挂掉；而没有任何测试看着，改落点就会静默跑偏。
+ */
+describe("package.json 的打包配置与运行时落点一致", () => {
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as {
+    build?: {
+      mac?: { binaries?: string[]; extraResources?: { from: string; to: string }[] };
+      win?: { extraResources?: { from: string; to: string }[] };
+    };
+  };
+  const macApp = "/App";
+  const macContents = join(macApp, "Contents");
+  const packagedRelative = relativeToApp(
+    officecliBinPath({ packaged: true, resourcesPath: join(macContents, "Resources"), appPath: "/unused", platform: "darwin", arch: "arm64" }),
+    macApp,
+  );
+
+  test("落点本身就是 Contents/Resources/bin/officecli/officecli（相对形式的基准）", () => {
+    assert.equal(packagedRelative, "Contents/Resources/bin/officecli/officecli");
+  });
+
+  test("mac.binaries 的每一项要么不存在、要么与运行时落点逐字相同（含子目录）", () => {
+    // 现在这一项是故意空着的：osx-sign 的 walkAsync 已经递归签 Contents 下所有 Mach-O，
+    // 再列一条只会让同一个文件被第二次 codesign。要重新加，就得先过这条断言。
+    for (const entry of pkg.build?.mac?.binaries ?? []) {
+      assert.equal(
+        entry.split(/[\\/]/).join("/"),
+        packagedRelative,
+        `mac.binaries 的 ${entry} 与运行时落点 ${packagedRelative} 不一致（写错路径会让 mac 打包在签名阶段挂）`,
+      );
+    }
+  });
+
+  test("两个平台的 extraResources 都把 officecli 目录放到运行时找它的那个位置", () => {
+    for (const platform of ["mac", "win"] as const) {
+      const packaged = officecliBinPath({
+        packaged: true,
+        resourcesPath: platform === "mac" ? join(macContents, "Resources") : "C:\\Resources",
+        appPath: "/unused",
+        platform: platform === "mac" ? "darwin" : "win32",
+        arch: platform === "mac" ? "arm64" : "x64",
+      });
+      const devDir = dirname(
+        officecliBinPath({
+          packaged: false,
+          resourcesPath: "/unused",
+          appPath: "/repo",
+          platform: platform === "mac" ? "darwin" : "win32",
+          arch: platform === "mac" ? "arm64" : "x64",
+        }),
+      );
+      const to = dirname(packaged).split(/[\\/]/).slice(-2).join("/");
+      const entry = (pkg.build?.[platform]?.extraResources ?? []).find((item) => item.to === to);
+      assert.ok(entry, `package.json 的 build.${platform}.extraResources 缺 ${to}`);
+      assert.equal(
+        entry.from.split(/[\\/]/).join("/"),
+        devDir.split(/[\\/]/).slice(-4).join("/"),
+        `${platform} 的 from 与开发态落点不一致`,
+      );
+    }
   });
 });
