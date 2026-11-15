@@ -21,6 +21,7 @@ import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
   BRIDGE_INFO_FILE,
+  COMPUTER_USE_DESKTOP_KEY,
   COMPUTER_USE_CMD_DIR,
   COMPUTER_USE_DEFAULT_ALLOW_NETWORK,
   COMPUTER_USE_GUEST_BRIDGE_DIR,
@@ -46,6 +47,7 @@ import {
 } from "../../shared/computer-use.ts";
 import { writeTextAtomic } from "../atomic-write.ts";
 import { platformGuidance, probe as probeCapability } from "./capability.ts";
+import type { SandboxCapabilities, SandboxProviderId } from "./provider.ts";
 import type { ProbeDeps } from "./capability.ts";
 import {
   fetchGuestScreenshot,
@@ -98,6 +100,24 @@ const GUEST_APP_SANDBOX_FOLDER = `${WSB_DESKTOP_USER}\\${GUEST_APP_DIR_NAME}`;
  * 与 .wsb 里那条 app 映射的 SandboxFolder 同一个常量来源——改名字时不会只改一半。
  */
 export const COMPUTER_USE_GUEST_APP_EXE = `${GUEST_APP_SANDBOX_FOLDER}\\orbita.exe`;
+
+/**
+ * L2（WSB）的能力声明 —— 全部取自这个后端已经在做的事，不是计划：
+ *   - 真桌面 + 真指针：WSB 是一个 RDP 形态的完整桌面，`SendInput` 落得下去（P1 起就在用）；
+ *   - 上传/下载能走：`out` 目录是双向映射的，宿主与 guest 看到同一份文件；
+ *   - 不能快照：实例是「杀掉即销毁」，没有可回滚的中间态（重新起 = 冷启动 20–105 秒）。
+ */
+export const WSB_CAPABILITIES: SandboxCapabilities = {
+  gui: true,
+  realPointer: true,
+  screenshot: true,
+  windows: true,
+  uia: true,
+  cdp: true,
+  sandboxFiles: true,
+  desktopScope: "shared",
+  snapshot: "none",
+};
 
 // ── .wsb 生成 ──────────────────────────────────────────────────────────
 
@@ -475,6 +495,8 @@ const ALLOW_NETWORK_READ_TIMEOUT_MS = 2_000;
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export class SandboxController {
+  readonly id: SandboxProviderId = "wsb";
+  readonly capabilities: SandboxCapabilities = WSB_CAPABILITIES;
   private readonly deps: SandboxDeps;
   private state: SandboxState = "off";
   private errorMessage: string | null = null;
@@ -504,6 +526,11 @@ export class SandboxController {
 
   constructor(deps: SandboxDeps) {
     this.deps = deps;
+  }
+
+  /** 一块共享屏幕：所有会话排队用同一个桌面（全局独占键） */
+  desktopKey(): string {
+    return COMPUTER_USE_DESKTOP_KEY;
   }
 
   status(): SandboxStatus {

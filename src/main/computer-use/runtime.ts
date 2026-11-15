@@ -5,6 +5,11 @@
  * 让上层（ipc / agent-requests / dispatch / cdp）按设置各查一次后端，会有好几份「选谁」的
  * 判断散在各处，迟早互相不一致。这里只有一份。
  *
+ * 三个后端（L2 / L2b / P3 的 QEMU）**各自是一个 SandboxProvider**（见 provider.ts）：
+ * 「能做哪些事」由后端自己声明（capabilities），这里只负责选谁、并把它的话原样转出去。
+ * 为什么不在这里按 id 判断：id 只能回答「是谁」，回答不了「它能不能上传文件」——
+ * 每加一个后端就要回来改一次 if，而漏改一次就是「命令发下去、它成功了、但什么也没发生」。
+ *
  * 三条纪律：
  *   1. **启动一个后端前先把另一个停掉**：不同后端各自一份 OS 资源（一个 VM / 一个 OS 会话），
  *      同时起来就是两份隔离同时跑，设置页说不清现在用的是哪个，租约也说不对。
@@ -15,7 +20,6 @@
  */
 import {
   COMPUTER_USE_DESKTOP_KEY,
-  sessionDesktopKey,
   type ComputerUseBackend,
   type ComputerUseProbeResult,
   type ComputerUseScreenshotResult,
@@ -30,27 +34,20 @@ import {
 } from "../../shared/computer-use.ts";
 import type { ComputerUseGuest } from "./agent-requests.ts";
 import type { IsolationSessionController, IsolationSessionProbe } from "./isolation-session.ts";
+import { QemuSandboxProvider } from "./qemu.ts";
+import {
+  SANDBOX_NOT_RUNNING,
+  type SandboxCapabilities,
+  type SandboxProvider,
+} from "./provider.ts";
 import type { GuestCommandReply, GuestShotReply } from "./sandbox.ts";
 
 /** 门面要的那部分控制器（两个控制器结构上都满足它） */
-export interface BackendController extends ComputerUseGuest {
-  status(): SandboxStatus;
-  start(): Promise<ComputerUseStartResult>;
-  stop(): Promise<ComputerUseStopResult>;
-  guestCommandReply(
-    command: Parameters<ComputerUseGuest["guestCommand"]>[0],
-    fields: Record<string, unknown>,
-  ): Promise<GuestCommandReply>;
-  guestShot(
-    command: Parameters<ComputerUseGuest["guestCommand"]>[0],
-    fields: Record<string, unknown>,
-  ): Promise<GuestShotReply>;
-  /** 应用退出时的总清理（WSB 是同步的、L2b 是异步的，所以两边都允许 */
-  dispose(): void | Promise<void>;
-}
+/** 门面要的后端面：provider（统一面）+ 各自的能力探测 */
+export type BackendController = SandboxProvider;
 
 export interface ComputerUseRuntimeDeps {
-  wsb: BackendController & {
+  wsb: SandboxProvider & {
     probe(options?: { isolationProbe?: () => Promise<IsolationSessionProbe> }): Promise<ComputerUseProbeResult>;
   };
   isolation: IsolationSessionController;
@@ -66,8 +63,13 @@ export interface ComputerUseRuntime extends ComputerUseGuest {
   start(): Promise<ComputerUseStartResult>;
   stop(): Promise<ComputerUseStopResult>;
   probe(): Promise<ComputerUseProbeResult>;
-  /** 现在实际在跑哪个后端（两个都没跑 = null）。租约粒度与 CDP 能力判定都读它 */
+  /** 现在实际在跑哪个后端（两个都没跑 = null）。只用于日志与状态文案 */
   runningBackend(): ComputerUseBackend | null;
+  /**
+   * 现在在跑那个后端的能力声明；一个都没跑 = null。
+   * 上层按它判断「这件事这个后端做不做得到」，不要再认 id（见 index.ts 的上传/下载闸门）。
+   */
+  capabilities(): SandboxCapabilities | null;
   /** 桌面租约键（L2 = 全局独占；L2b = 每会话一个） */
   desktopKey(sessionId: string): string;
   guestCommandReply(...args: Parameters<ComputerUseGuest["guestCommand"]>): Promise<GuestCommandReply>;
@@ -75,23 +77,30 @@ export interface ComputerUseRuntime extends ComputerUseGuest {
   dispose(): Promise<void>;
 }
 
-/** 一个后端都没在跑时的统一回执（与两个控制器 notRunning 的措辞同源） */
-const NOT_RUNNING = "隔离桌面没有在运行——先在「设置 › 实验功能 › 电脑使用」里启动它";
-
 export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): ComputerUseRuntime {
   const log = deps.log ?? ((message: string) => console.log(`[computer-use] ${message}`));
 
   /**
-   * 「现在在跑的是谁」。**不缓存**：两个控制器的状态机就是真值，缓存一份迟早与它分叉
+   * 后端注册表。顺序即优先级：`running()` 取第一个「不在 off 的」。
+   * QEMU 也在这张表里（P3 的空位），它的 status() 恒为 off——注册在这里是为了让
+   * 「谁在跑」这件事只有一处枚举，而不是每个方法各写一份 if。
+   */
+  const providers: readonly SandboxProvider[] = [deps.isolation, deps.wsb, new QemuSandboxProvider()];
+
+  /**
+   * 「现在在跑的是谁」。**不缓存**：后端自己的状态机就是真值，缓存一份迟早与它分叉
    * （start 失败、用户点停止、会话自己退出，每一条都要维护缓存）。
    */
+  const runningProvider = (): SandboxProvider | null => providers.find((p) => p.status().state !== "off") ?? null;
+
+  /** 对外仍报 shared 的两个 id：设置里能选的只有这两个（QEMU 的开关在 P3-2） */
   const running = (): ComputerUseBackend | null => {
-    if (deps.isolation.status().state !== "off") return "isolation-session";
-    if (deps.wsb.status().state !== "off") return "wsb";
-    return null;
+    const provider = runningProvider();
+    if (provider === null) return null;
+    return provider.id === "qemu" ? null : provider.id;
   };
 
-  const controllerOf = (backend: ComputerUseBackend): BackendController =>
+  const controllerOf = (backend: ComputerUseBackend): SandboxProvider =>
     backend === "wsb" ? deps.wsb : deps.isolation;
 
   /**
@@ -149,7 +158,7 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
     }
   };
 
-  const notRunning = <T>(error: string = NOT_RUNNING): Extract<T, { ok: false }> =>
+  const notRunning = <T>(error: string = SANDBOX_NOT_RUNNING): Extract<T, { ok: false }> =>
     ({ ok: false, error }) as unknown as Extract<T, { ok: false }>;
 
   return {
@@ -162,10 +171,12 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
     stop,
     probe,
     runningBackend: running,
+    capabilities: (): SandboxCapabilities | null => runningProvider()?.capabilities ?? null,
     desktopKey: (sessionId: string): string => {
-      // L2b：每个会话自己的桌面，键里带会话 id；L2 / 没在跑：全局独占键（保守）
-      if (running() === "isolation-session") return sessionDesktopKey(sessionId);
-      return COMPUTER_USE_DESKTOP_KEY;
+      const provider = runningProvider();
+      // 没在跑：全局独占键（保守——让人排队，总比两个人同时点同一个不存在的桌面强）
+      if (provider === null) return COMPUTER_USE_DESKTOP_KEY;
+      return provider.desktopKey(sessionId);
     },
     screenshot: async (maxWidth?: number): Promise<ComputerUseScreenshotResult> => {
       const backend = running();
@@ -216,10 +227,10 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
       return controllerOf(backend).guestShot(command, fields);
     },
     dispose: async (): Promise<void> => {
-      // 两只都收：一只可能停在 error（资源还在），另一只可能是上一局残留
-      // 两个控制器都收：一只可能停在 error（资源还在），另一只可能是上一局残留。
-      await Promise.resolve(deps.isolation.dispose()).catch(() => undefined);
-      await Promise.resolve(deps.wsb.dispose()).catch(() => undefined);
+      // 全部都收：一只可能停在 error（资源还在），另一只可能是上一局残留
+      for (const provider of providers) {
+        await Promise.resolve(provider.dispose()).catch(() => undefined);
+      }
     },
   };
 }

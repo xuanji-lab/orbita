@@ -878,8 +878,11 @@ void app.whenReady().then(async () => {
      * 文件落在会话内部、宿主永远拿不到——所以在这里就拒，并告诉模型换路。
      */
     runBrowser: (sessionId, request) => {
+      // 按后端声明判断，不按 id 猜：`sandboxFiles: false` 的后端（L2b）guest 里没有宿主那份
+      // 映射目录，发下去会「成功」而文件落在 guest 内部、宿主永远拿不到。没在跑时 capabilities
+      // 为 null，闸门不拦（与改动前一致：那时 cdp 自己会回「沙箱没在跑」）。
       if (
-        computerUse.runningBackend() === "isolation-session" &&
+        computerUse.capabilities()?.sandboxFiles === false &&
         (request.action === "sandbox-upload" || request.action === "sandbox-download")
       ) {
         return Promise.resolve({

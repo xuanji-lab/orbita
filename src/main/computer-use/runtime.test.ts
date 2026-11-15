@@ -16,6 +16,9 @@ import {
   type SandboxStatus,
 } from "../../shared/computer-use.ts";
 import { createComputerUseRuntime, type BackendController } from "./runtime.ts";
+import { QemuSandboxProvider, QEMU_CAPABILITIES } from "./qemu.ts";
+import { ISOLATION_SESSION_CAPABILITIES } from "./isolation-session.ts";
+import { WSB_CAPABILITIES } from "./sandbox.ts";
 import type { IsolationSessionController } from "./isolation-session.ts";
 import type { GuestCommandReply, GuestShotReply } from "./sandbox.ts";
 
@@ -32,6 +35,21 @@ function fakeController(name: "wsb" | "iso", state: SandboxState = "off") {
           ? { state: "error", message: "假的" }
           : { state: "starting", startedAt: 1 };
   const controller: BackendController = {
+    // provider 面：假控制器也如实声明自己是谁、能做什么、桌面怎么算（与真控制器同一个形状）
+    id: name === "wsb" ? "wsb" : "isolation-session",
+    capabilities: {
+      gui: true,
+      realPointer: name === "wsb",
+      screenshot: true,
+      windows: true,
+      uia: true,
+      cdp: true,
+      sandboxFiles: name === "wsb",
+      desktopScope: name === "wsb" ? "shared" : "per-session",
+      snapshot: "none",
+    },
+    desktopKey: (sessionId: string) =>
+      name === "wsb" ? COMPUTER_USE_DESKTOP_KEY : sessionDesktopKey(sessionId),
     status,
     start: async () => {
       calls.push("start");
@@ -235,5 +253,51 @@ describe("运行时门面", () => {
     const result = await runtime.probe();
     assert.equal(result.isolationSession.available, false);
     assert.match(result.isolationSession.reason ?? "", /24\.21/);
+  });
+});
+
+describe("provider 面（P3 的空位与能力声明）", () => {
+  it("capabilities() 跟着正在跑的后端走；一个都没跑 = null", async () => {
+    const wsb = fakeController("wsb");
+    const iso = fakeController("iso", "running");
+    const runtime = createComputerUseRuntime({
+      wsb: { ...wsb.controller, probe: async () => probeResult() },
+      isolation: iso.controller as unknown as IsolationSessionController,
+      backend: () => "isolation-session",
+      probeIsolation: async () => ({ available: true, reason: null, nodeVersion: "24.21.0", nodeOk: true }),
+    });
+    // 没在跑的那只不算：L2b 只会话桌面、没有真实指针
+    assert.equal(runtime.capabilities()?.realPointer, false);
+    assert.equal(runtime.capabilities()?.desktopScope, "per-session");
+    iso.setState("off");
+    assert.equal(runtime.capabilities(), null);
+    wsb.setState("running");
+    assert.equal(runtime.capabilities()?.realPointer, true);
+    assert.equal(runtime.capabilities()?.sandboxFiles, true);
+  });
+
+  it("QEMU 空位：状态恒 off、启动如实回「还没接上」，不抛异常也不假装成功", async () => {
+    const qemu = new QemuSandboxProvider();
+    assert.deepEqual(qemu.status(), { state: "off" });
+    const started = await qemu.start();
+    assert.equal(started.ok, false);
+    assert.match(started.ok === false ? started.error : "", /还没接上/);
+    // 没起来过 → stop 是幂等的成功（语义是「让它别在跑」）
+    assert.deepEqual(await qemu.stop(), { ok: true });
+    // 目标能力是 P3-2 的验收清单：Linux 侧没有 UIA，但能快照
+    assert.equal(qemu.capabilities.uia, false);
+    assert.equal(qemu.capabilities.snapshot, "overlay");
+    assert.equal(qemu.desktopKey("A"), sessionDesktopKey("A"));
+  });
+
+  it("三个后端的租约粒度只在 provider 里定义一次（门面不再按 id 猜）", () => {
+    assert.equal(WSB_CAPABILITIES.desktopScope, "shared");
+    assert.equal(ISOLATION_SESSION_CAPABILITIES.desktopScope, "per-session");
+    assert.equal(QEMU_CAPABILITIES.desktopScope, "per-session");
+    // L2b 与 QEMU 都不能把宿主文件放进 guest 的映射目录；只有 L2 能
+    assert.deepEqual(
+      [WSB_CAPABILITIES, ISOLATION_SESSION_CAPABILITIES, QEMU_CAPABILITIES].map((c) => c.sandboxFiles),
+      [true, false, false],
+    );
   });
 });
