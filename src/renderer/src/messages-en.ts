@@ -1137,12 +1137,30 @@ export const en = {
     /** 隔离档位（IsolationTier）：只回答「这台机器现在能到哪一档」，到不了更高的原因在 guidance */
     isolationTier: "Isolation level",
     isolationTierInfo:
-      "How far this machine can go. Browser: web automation in the built-in browser — every platform has it. Windows Sandbox: mouse, keyboard and the browser inside the sandbox — needs Windows Pro / Enterprise / Education with Windows Sandbox enabled and virtualisation on. The next level, a Linux microVM, is still on the roadmap.",
+      "How far this machine can go. L1 Browser: web automation in the built-in browser — every platform has it. L2 Windows Sandbox: mouse, keyboard and the browser inside the sandbox — needs Windows Pro / Enterprise / Education with Windows Sandbox enabled and virtualisation on. L2b Multi-session isolation: one OS session per agent, invisible to each other (and to the host's EnumWindows) — but it has no real pointer or keyboard, so clicks and typing go through UIA / CDP instead; works on Windows Home too. The next level, a Linux microVM, is still on the roadmap.",
     tierFallback: "Why it can't go higher is in the steps above",
     tiers: {
       l1: "L1 · Browser",
       l2: "L2 · Windows Sandbox",
+      l2b: "L2b · Multi-session isolation",
     },
+    backend: "Isolation backend",
+    backendInfo:
+      "Windows Sandbox: one sandbox, one desktop shared by every session (real mouse and keyboard work, but the sessions can see each other's windows). Multi-session isolation: one OS session per agent, invisible to the host and to each other (stronger isolation, but there is no real pointer — pixel clicks and typing are refused and actions go through UIA, CDP and screenshots).",
+    backendBelow: "Takes effect the next time it starts; a running session keeps the level it started with.",
+    backendAria: "Isolation backend",
+    backendLabels: {
+      wsb: "Windows Sandbox (L2)",
+      "isolation-session": "Multi-session isolation (L2b)",
+    },
+    isolationSessionRow: "Multi-session dependency",
+    isolationSessionInfo:
+      "One OS session per agent comes from Microsoft's MXC (IsolationSession): it needs a Node runtime that can load native modules plus the IsoSession service that ships with Windows. When it is unavailable this row says what is missing.",
+    isolationSessionReady: "Available",
+    isolationSessionNode: (version: string, ok: boolean) =>
+      ok ? `Node ${version} (new enough)` : `Node ${version} (MXC needs 24.21 or newer)`,
+    isolationSessionNoPointer:
+      "This level has no real mouse or keyboard, so pixel clicks and typing are unavailable; use UIA (controls), CDP (browser) or screenshots instead.",
     /** WSL2 只是能力信号：所有发行版共享同一个轻量虚拟机，不是一个隔离档 */
     wsl2: "WSL2",
     wsl2Info:

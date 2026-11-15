@@ -29,6 +29,7 @@
     "@earendil-works/pi-client": "0.84.3",
     "@earendil-works/pi-coding-agent": "0.84.3",
     "@earendil-works/pi-protocol": "0.84.3",
+    "@microsoft/mxc-sdk": "1.1.0",
     "@modelcontextprotocol/sdk": "1.31.0",
     "@napi-rs/canvas": "1.0.9",
     "@tanstack/react-virtual": "3.13.23",

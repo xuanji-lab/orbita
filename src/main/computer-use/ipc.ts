@@ -8,17 +8,29 @@ import { ipcMain } from "electron";
 import { mainWindows } from "../window/main-windows.ts";
 import {
   computerUseChannels,
-  type ComputerUseLeaseStatus,
   type ComputerUseProbeResult,
   type ComputerUseScreenshotResult,
   type ComputerUseStartResult,
   type ComputerUseStopResult,
   type EmergencyStopStatus,
   type SandboxStatus,
+  type ComputerUseLeaseStatus,
 } from "../../shared/computer-use.ts";
-import type { SandboxController } from "./sandbox.ts";
 import type { EmergencyStopController } from "./emergency-stop.ts";
 import { desktopLeaseStatus, type ComputerUseLease } from "./lease.ts";
+
+/**
+ * IPC 真正要的那几个方法。**收窄成接口而不是吃 SandboxController**：现在有两个后端
+ * （WSB 与 IsolationSession），renderer 面对的是运行时门面；测试注入一个只有
+ * 这四个方法的假控制器就够。两个控制器结构上都满足它。
+ */
+export interface ComputerUseIpcController {
+  probe(): Promise<ComputerUseProbeResult>;
+  status(): SandboxStatus;
+  start(): Promise<ComputerUseStartResult>;
+  stop(): Promise<ComputerUseStopResult>;
+  screenshot(maxWidth?: number): Promise<ComputerUseScreenshotResult>;
+}
 
 /**
  * 停沙箱前的收尾钩子（可选）。PR3 用它把沙箱里的 Edge 先停掉：`cdp-stop` 只杀我们自己
@@ -30,7 +42,7 @@ export interface ComputerUseIpcHooks {
 }
 
 export function registerComputerUseIpc(
-  controller: SandboxController,
+  controller: ComputerUseIpcController,
   hooks: ComputerUseIpcHooks = {},
   /**
    * 急停热键的控制器（optional：旧测试 / 未接线的场景没有它）。设置页问注册状态，

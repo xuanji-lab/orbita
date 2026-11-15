@@ -8,7 +8,9 @@ import type { IconName } from "../../shell/Icon";
 import type { Messages } from "../../messages-en.ts";
 import {
   COMPUTER_USE_DEFAULT_ALLOW_NETWORK,
+  COMPUTER_USE_DEFAULT_BACKEND,
   COMPUTER_USE_DEFAULT_BROWSER,
+  type ComputerUseBackend,
   type ComputerUseBrowser,
   type ComputerUseProbeResult,
   type ComputerUseScreenshotResult,
@@ -103,6 +105,20 @@ export function browserChoice(settings: AppSettings): ComputerUseBrowser {
 /** 选一个浏览器：同样只发 browser 这一个键（不碰 allowNetwork / allowedApps） */
 export function browserPatch(browser: ComputerUseBrowser): Pick<SettingsPatch, "computerUse"> {
   return { computerUse: { browser } };
+}
+
+/**
+ * 隔离后端（L2 Window沙箱 / L2b 多会话隔离）的当前值。缺席 = 缺省（wsb）：
+ * P2 是可选升级，不是默认路径。
+ */
+export function backendChoice(settings: AppSettings): ComputerUseBackend {
+  return settings.computerUse?.backend ?? COMPUTER_USE_DEFAULT_BACKEND;
+}
+
+/** 换后端：只发 backend 一个键。**改完不自动重启**：正在跑的会话按它启动时的档位继续，
+ *  设置页那一行常驻说明这件事（与出网开关同一条纪律）。 */
+export function backendPatch(backend: ComputerUseBackend): Pick<SettingsPatch, "computerUse"> {
+  return { computerUse: { backend } };
 }
 
 /**

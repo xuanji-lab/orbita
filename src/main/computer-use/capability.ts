@@ -9,8 +9,9 @@
  *      功能与 exe 都对、一跑就退，这一项让探测提前拦住它（审查意见 B）；
  *   4. 查 wsl.exe 在不在、`wsl -l -v` 跑不跑得动。**WSL2 不是隔离档**（所有发行版共享
  *      同一个 utility VM），它只是这台机器虚拟化能力的一条旁证；
- *   5. 汇总成一个**隔离档位**（isolationTier）：能起沙箱就是 L2，否则 L1（内置浏览器那条
- *      车道所有平台都有）。到不了更高档的原因就是 guidance 里那几条；
+ *   5. 汇总成一个**隔离档位**（isolationTier）：能起沙箱就是 L2，否则看 MXC 的独立会话
+ *      （L2b），再不到就是 L1（内置浏览器那条车道所有平台都有）。到不了更高档的原因就是
+ *      guidance 里那几条 + isolationSession.reason；
  *   6. 以上全部的汇总：ready + 给用户看的手动开启指引（guidance）。
  *
  * 平台文案：非 Windows 分两种说法（macOS 用户要拿到「那我今天能用什么」的出路），
@@ -30,11 +31,13 @@ import { promisify } from "node:util";
 import type {
   ComputerUseProbeResult,
   HypervisorState,
+  IsolationSessionCapability,
   IsolationTier,
   SandboxFeatureState,
   WindowsEdition,
   WslState,
 } from "../../shared/computer-use.ts";
+import type { IsolationSessionProbe } from "./isolation-session.ts";
 
 const execFileP = promisify(execFile);
 
@@ -208,6 +211,13 @@ export interface ProbeDeps {
   exeExists?: (path: string) => boolean;
   /** 默认 %SystemRoot%，测试可注入 */
   systemRoot?: string;
+  /**
+   * L2b（MXC IsolationSession）的依赖检查。**默认不注入 = 不看这一项**：
+   * SDK 的 import 会立刻加载原生 DLL（koffi），探测函数不该为一个没装的可选依赖付出代价；
+   * 生产在 index.ts 里接真实的 MXC 适配器（懒加载），测试注入假值。
+   * 不注入时结果显式写 `available:false` + 一句「本次没检查」，而不是静默当成不可用。
+   */
+  isolationProbe?: () => Promise<IsolationSessionProbe> | IsolationSessionProbe;
 }
 
 /** 能力探测：五项全只读，任何一查失败都按「unknown / 未找到」处理并给指引，绝不抛。
@@ -260,15 +270,22 @@ export async function probe(deps: ProbeDeps = {}): Promise<ComputerUseProbeResul
     }
   };
 
-  const [edition, hypervisorState, wsl2] = await Promise.all([probeEdition(), probeHypervisor(), probeWsl()]);
+  const [edition, hypervisorState, wsl2, isolationSession] = await Promise.all([
+    probeEdition(),
+    probeHypervisor(),
+    probeWsl(),
+    probeIsolationSession(platform, deps.isolationProbe),
+  ]);
 
   const featureState = featureStateFromExe(sandboxExeFound);
   const editionOk = edition === "pro" || edition === "enterprise" || edition === "education";
   // unknown 不拦（见 HypervisorState 的注释）；只有明确 absent 才判不就绪
   const ready = platformOk && editionOk && sandboxExeFound && hypervisorState !== "absent";
   // 浏览器档（内置浏览器 + browser_*）在哪个平台都有，所以下限恒为 l1；
-  // 只有沙箱真能起来才算到 L2（wsl2 **不参与**——它不是隔离边界）
-  const isolationTier: IsolationTier = ready ? "l2" : "l1";
+  // 沙箱真能起来 → L2；沙箱不行但 MXC 的独立会话可用 → L2b（Win11 家庭版也能到这一档）；
+  // wsl2 **不参与**档位判定——它不是隔离边界。
+  // 两档都在时显示 l2：WSB 是默认后端（像素输入可用），L2b 是设置里显式选的升级。
+  const isolationTier: IsolationTier = ready ? "l2" : isolationSession.available ? "l2b" : "l1";
   const facts = { platform, platformOk, edition, sandboxExeFound, hypervisorState };
   return {
     platformOk,
@@ -278,8 +295,51 @@ export async function probe(deps: ProbeDeps = {}): Promise<ComputerUseProbeResul
     sandboxExeFound,
     hypervisorState,
     isolationTier,
+    isolationSession,
     wsl2,
     ready,
     guidance: ready ? null : buildGuidance(facts),
   };
+}
+
+/**
+ * L2b 的依赖检查：非 Windows 直接不可用；没接探测函数时显式写「本次没检查」——
+ * 空白比一句「不可用」更容易被误读成「机器不支持」。
+ */
+async function probeIsolationSession(
+  platform: NodeJS.Platform,
+  run: ProbeDeps["isolationProbe"],
+): Promise<IsolationSessionCapability> {
+  if (platform !== "win32") {
+    return {
+      available: false,
+      reason: `多会话隔离只在 Windows 上有（当前平台 ${platform}）`,
+      nodeVersion: process.versions.node,
+      nodeOk: false,
+    };
+  }
+  if (run === undefined) {
+    return {
+      available: false,
+      reason: "本次没有接 MXC 探测（多会话隔离需要 @microsoft/mxc-sdk）",
+      nodeVersion: process.versions.node,
+      nodeOk: false,
+    };
+  }
+  try {
+    const result = await run();
+    return {
+      available: result.available,
+      reason: result.reason,
+      nodeVersion: result.nodeVersion,
+      nodeOk: result.nodeOk,
+    };
+  } catch (cause: unknown) {
+    return {
+      available: false,
+      reason: `MXC 探测失败：${cause instanceof Error ? cause.message : String(cause)}`,
+      nodeVersion: process.versions.node,
+      nodeOk: false,
+    };
+  }
 }

@@ -23,13 +23,15 @@ import type {
 import type { Workspace } from "@shared/workspace";
 import type { DoubaoVoiceConfig, StepfunVoiceConfig, VoiceFailure, DictationProvider, DictationSelection } from "@shared/voice";
 import type { ComputerUseLeaseStatus, ComputerUseProbeResult, EmergencyStopStatus, SandboxStatus, WslState } from "@shared/computer-use";
-import { COMPUTER_USE_BROWSER_CHOICES, type ComputerUseBrowser } from "@shared/computer-use";
+import { COMPUTER_USE_BACKEND_CHOICES, COMPUTER_USE_BROWSER_CHOICES, type ComputerUseBrowser } from "@shared/computer-use";
 import { DICTATION_PROVIDERS } from "@shared/voice";
 import { CompactViz } from "./CompactViz";
 import { COMPACTION_CHOICES } from "./compact-viz.ts";
 import {
   allowNetworkEnabled,
   allowNetworkPatch,
+  backendChoice,
+  backendPatch,
   browserChoice,
   browserLabel,
   browserPatch,
@@ -1830,6 +1832,8 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
   const allowNetwork = allowNetworkEnabled(props.settings);
   /** 沙箱浏览器：缺席 = Edge（同上，UI 自己兜缺省） */
   const browser = browserChoice(props.settings);
+  /** 隔离后端：缺席 = Windows 沙箱（P2 是可选升级，不是默认路径） */
+  const backend = backendChoice(props.settings);
   /** 错误行：在途调用的失败原话优先（更新），其次是状态机停在 error 时的 message。
       用户中途「关闭」取消启动时主进程回「启动已取消」——如实显示，它解释了为什么
       沙箱回到了未启动；下一次动作即清掉。 */
@@ -1952,6 +1956,25 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
             {COMPUTER_USE_BROWSER_CHOICES.map((choice) => (
               <Chip key={choice} active={browser === choice} onClick={() => props.onChange(browserPatch(choice))}>
                 {browserLabel(choice, t.computerUse.browserAuto)}
+              </Chip>
+            ))}
+          </span>
+        </SettingRow>
+        {/*
+          隔离后端：WSB（一个桌面、多会话共享）与 MXC 的 IsolationSession（每会话一个 OS 会话）。
+          两个选项都是 Chip（与这个页里其它选项集合同一个形状，设计系统不给 select 样式）；
+          不可用的那一档**照样能点**——点了会在「启动」时拿到一句带原因的错误，
+          比一个点不动的灰色芯片更容易让人知道该去装什么。
+        */}
+        <SettingRow
+          name={t.computerUse.backend}
+          info={t.computerUse.backendInfo}
+          below={<p className="cu-hint">{t.computerUse.backendBelow}</p>}
+        >
+          <span className="set-chips" role="group" aria-label={t.computerUse.backendAria}>
+            {COMPUTER_USE_BACKEND_CHOICES.map((choice) => (
+              <Chip key={choice} active={backend === choice} onClick={() => props.onChange(backendPatch(choice))}>
+                {t.computerUse.backendLabels[choice]}
               </Chip>
             ))}
           </span>
@@ -2110,8 +2133,41 @@ function ProbeGroup(props: { result: ComputerUseProbeResult | null; onResult: (r
         >
           {/* 档位是机器事实，不是可操作项：图标 + 文字，颜色只是第二信号（不借成功绿，那是就绪的专用色） */}
           <span className="cu-state">
-            <Icon name={props.result.isolationTier === "l2" ? "shield-check" : "globe"} size={14} />
+            <Icon name={props.result.isolationTier === "l1" ? "globe" : "shield-check"} size={14} />
             {t.computerUse.tiers[props.result.isolationTier]}
+          </span>
+        </SettingRow>
+      )}
+      {/*
+        多会话隔离的依赖检查（L2b）。**不可用时必须说原因**：只把开关画灰，用户没任何办法
+        处置（缺 Node / 缺服务 / 非 Windows 是三件不同的事）。Node 版本单独一行写出来：
+        它是本机最容易踩的那个（MXC 的 native stdio 要 24.21+，而很多发行版还是 24.14）。
+      */}
+      {props.result !== null && props.result.platformOk && (
+        <SettingRow
+          name={t.computerUse.isolationSessionRow}
+          info={t.computerUse.isolationSessionInfo}
+          note={
+            props.result.isolationSession.available ? (
+              <span className="set-row-hint">
+                {t.computerUse.isolationSessionNode(
+                  props.result.isolationSession.nodeVersion,
+                  props.result.isolationSession.nodeOk,
+                )}
+              </span>
+            ) : (
+              <span className="set-row-hint">{props.result.isolationSession.reason}</span>
+            )
+          }
+        >
+          <span className="cu-state">
+            <Icon
+              name={props.result.isolationSession.available ? "shield-check" : "circle-off"}
+              size={14}
+            />
+            {props.result.isolationSession.available
+              ? t.computerUse.isolationSessionReady
+              : t.computerUse.probeNotReady}
           </span>
         </SettingRow>
       )}

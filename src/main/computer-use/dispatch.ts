@@ -59,6 +59,13 @@ export interface ComputerUseDispatcherDeps {
   runPixels: (sessionId: string, request: ComputerUseToolRequest) => Promise<ComputerUseToolOutcome>;
   /** 浏览器通道（browser:<session> 之下） */
   runBrowser: (sessionId: string, request: ComputerUseToolRequest) => Promise<ComputerUseToolOutcome>;
+  /**
+   * 桌面租约键。**默认 = 全局独占键**（L2 的一块共享屏幕）；L2b（每会话一个桌面）时
+   * 运行时门面传 `desktop:session:<id>`，于是两个会话的像素/截图不再互相排队。
+   *
+   * 不传就是旧行为——单测不需要知道档位这回事，生产在 index.ts 一律传。
+   */
+  desktopKey?: (sessionId: string) => string;
 }
 
 export interface ComputerUseDispatcher {
@@ -98,7 +105,7 @@ export function createComputerUseDispatcher(deps: ComputerUseDispatcherDeps): Co
       return await deps.runPixels(sessionId, request);
     }
     const browser = isSandboxBrowserAction(request.action);
-    const key = browser ? browserKey(sessionId) : COMPUTER_USE_DESKTOP_KEY;
+    const key = browser ? browserKey(sessionId) : (deps.desktopKey ?? (() => COMPUTER_USE_DESKTOP_KEY))(sessionId);
     if (expiredSessions.has(sessionId)) {
       expiredSessions.delete(sessionId);
       return { ok: false, error: computerUseLeaseErrors.holdExpired(COMPUTER_USE_LEASE.holdMaxMs / 60_000) };

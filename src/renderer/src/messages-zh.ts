@@ -1052,12 +1052,30 @@ export const zh: Messages = {
     // guidance——同一张卡里逐条列在探针行下面，这里只给徽标与一句指路
     isolationTier: "隔离档位",
     isolationTierInfo:
-      "这台机器现在能到哪一档。L1 浏览器档：内置浏览器里的网页自动化，所有平台都有。L2 Windows 沙箱档：沙箱里的鼠标键盘与沙箱内浏览器，需要 Windows 专业版 / 企业版 / 教育版、启用 Windows 沙箱、并开着虚拟化。L3（Linux 微虚拟机）还在路线图上。",
+      "这台机器现在能到哪一档。L1 浏览器档：内置浏览器里的网页自动化，所有平台都有。L2 Windows 沙箱档：沙箱里的鼠标键盘与沙箱内浏览器，需要 Windows 专业版 / 企业版 / 教育版、启用 Windows 沙箱、并开着虚拟化。L2b 多会话隔离档：每个智能体一个独立 OS 会话（彼此看不见窗口），但**没有真实的鼠标键盘**——点击与打字改走 UIA / CDP，Win11 家庭版也能用。L3（Linux 微虚拟机）还在路线图上。",
     tierFallback: "到不了更高档，原因见上方几条",
     tiers: {
       l1: "L1 浏览器档",
       l2: "L2 Windows 沙箱档",
+      l2b: "L2b 多会话隔离档",
     },
+    backend: "隔离后端",
+    backendInfo:
+      "沙箱：一份 Windows 沙箱、一个桌面，多个会话共享（鼠标键盘与像素点击完整可用，但窗口互相可见）。多会话隔离：每个会话一个独立 OS 会话，宿主 EnumWindows 看不见、彼此也看不见（隔离更强，但没有真实指针：像素点击 / 打字会被直接拒掉，动作走 UIA、CDP 与截图）。",
+    backendBelow: "改动在下次启动时生效；正在运行的会话仍按启动时的档位。",
+    backendAria: "隔离后端选择",
+    backendLabels: {
+      wsb: "Windows 沙箱（L2）",
+      "isolation-session": "多会话隔离（L2b）",
+    },
+    isolationSessionRow: "多会话隔离依赖",
+    isolationSessionInfo:
+      "每个智能体一个独立 OS 会话走的是微软官方的 MXC（IsolationSession）：需要一个能加载原生模块的 Node 运行时与 Windows 自带的 IsoSession 服务。不可用时这一行会说是缺什么。",
+    isolationSessionReady: "可用",
+    isolationSessionNode: (version: string, ok: boolean) =>
+      ok ? `Node ${version}（够用）` : `Node ${version}（MXC 要 24.21 以上）`,
+    isolationSessionNoPointer:
+      "这一档没有真实的鼠标键盘，像素点击 / 打字不可用；用 UIA（控件）、CDP（浏览器）或截图代替。",
     // WSL2 只是能力信号：所有发行版共享同一个轻量虚拟机，不是一个隔离档
     wsl2: "WSL2",
     wsl2Info:

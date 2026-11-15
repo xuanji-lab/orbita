@@ -289,3 +289,91 @@ describe("能力探测 · 档位判定", () => {
     assert.ok(result.guidance !== null && result.guidance.length > 0);
   });
 });
+
+describe("能力探测 · L2b（多会话隔离）的依赖检查", () => {
+  test("沙箱不就绪但 MXC 可用 → 档位是 L2b（Win11 家庭版也能到这一档）", async () => {
+    const result = await probe({
+      platform: "win32",
+      run: makeRun({ reg: REG_HOME, hypervisor: "True", wsl: "x" }),
+      exeExists: makeExeExists({ sandbox: false, wsl: true }),
+      isolationProbe: () => ({ available: true, reason: null, nodeVersion: "24.21.0", nodeOk: true }),
+    });
+    assert.equal(result.ready, false);
+    assert.equal(result.isolationTier, "l2b");
+    assert.deepEqual(result.isolationSession, {
+      available: true,
+      reason: null,
+      nodeVersion: "24.21.0",
+      nodeOk: true,
+    });
+  });
+
+  test("沙箱就绪时档位仍是 L2（默认后端是沙箱；L2b 要在设置里显式选）", async () => {
+    const result = await probe({
+      platform: "win32",
+      run: makeRun({ reg: REG_PRO, hypervisor: "True", wsl: "x" }),
+      exeExists: makeExeExists({ sandbox: true, wsl: true }),
+      isolationProbe: () => ({ available: true, reason: null, nodeVersion: "24.21.0", nodeOk: true }),
+    });
+    assert.equal(result.isolationTier, "l2");
+    assert.equal(result.isolationSession.available, true);
+  });
+
+  test("MXC 不可用时**必有原因**（设置页不能只把开关画灰）", async () => {
+    const result = await probe({
+      platform: "win32",
+      run: makeRun({ reg: REG_PRO, hypervisor: "True", wsl: "x" }),
+      exeExists: makeExeExists({ sandbox: true, wsl: true }),
+      isolationProbe: () => ({
+        available: false,
+        reason: "当前 Node 24.14.0 太旧：MXC 的 native stdio 要求 Node 24.21 以上",
+        nodeVersion: "24.14.0",
+        nodeOk: false,
+      }),
+    });
+    assert.equal(result.isolationSession.available, false);
+    assert.match(result.isolationSession.reason ?? "", /24\.14/);
+    assert.equal(result.isolationSession.nodeOk, false);
+  });
+
+  test("没接探测函数时显式写「本次没检查」，而不是静默当成不支持", async () => {
+    const result = await probe({
+      platform: "win32",
+      run: makeRun({ reg: REG_PRO, hypervisor: "True", wsl: "x" }),
+      exeExists: makeExeExists({ sandbox: true, wsl: true }),
+    });
+    assert.equal(result.isolationSession.available, false);
+    assert.match(result.isolationSession.reason ?? "", /没有接 MXC 探测/);
+  });
+
+  test("探测函数自己抛 → 只影响 L2b 那一行，WSB 的结论不变", async () => {
+    const result = await probe({
+      platform: "win32",
+      run: makeRun({ reg: REG_PRO, hypervisor: "True", wsl: "x" }),
+      exeExists: makeExeExists({ sandbox: true, wsl: true }),
+      isolationProbe: () => {
+        throw new Error("DLL 加载失败");
+      },
+    });
+    assert.equal(result.ready, true);
+    assert.equal(result.isolationTier, "l2");
+    assert.equal(result.isolationSession.available, false);
+    assert.match(result.isolationSession.reason ?? "", /DLL 加载失败/);
+  });
+
+  test("macOS 上 L2b 也不可用（先报平台，不碰 SDK）", async () => {
+    let probed = false;
+    const result = await probe({
+      platform: "darwin",
+      run: makeRun({}),
+      exeExists: () => false,
+      isolationProbe: () => {
+        probed = true;
+        return { available: true, reason: null, nodeVersion: "24.21.0", nodeOk: true };
+      },
+    });
+    assert.equal(probed, false);
+    assert.equal(result.isolationSession.available, false);
+    assert.match(result.isolationSession.reason ?? "", /只在 Windows 上有/);
+  });
+});

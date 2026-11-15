@@ -46,6 +46,7 @@ import {
 } from "../../shared/computer-use.ts";
 import { writeTextAtomic } from "../atomic-write.ts";
 import { platformGuidance, probe as probeCapability } from "./capability.ts";
+import type { ProbeDeps } from "./capability.ts";
 import {
   fetchGuestScreenshot,
   fetchGuestShot,
@@ -525,8 +526,14 @@ export class SandboxController {
   }
 
   /** 能力探测（全只读）。委托 capability.ts，这里只是门面。 */
-  probe(): Promise<ComputerUseProbeResult> {
-    return probeCapability();
+  /**
+   * 能力探测（全只读）。委托 capability.ts，这里只是门面。
+   *
+   * `deps` 只为运行时门面（runtime.ts）而开：L2b 的依赖检查要跟着同一份结果走，
+   * 而 probeCapability 需要注入那个（会加载原生 DLL 的）探测函数。不传 = 不查 L2b。
+   */
+  probe(deps?: ProbeDeps): Promise<ComputerUseProbeResult> {
+    return probeCapability(deps ?? {});
   }
 
   async start(): Promise<ComputerUseStartResult> {
@@ -1538,7 +1545,11 @@ export class SandboxController {
   }
 }
 
-function clampMaxWidth(value: number | undefined): number {
+/**
+ * 回图宽度的夹取。**导出**是因为 L2b 的控制器（isolation-session.ts）走同一条回图路径：
+ * 两处各写一份夹取规则，迟早会出现「WSB 回 4096、L2b 回 1280」这种难以解释的差异。
+ */
+export function clampMaxWidth(value: number | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return 1280;
   return Math.min(Math.max(Math.round(value), 320), 4096);
 }

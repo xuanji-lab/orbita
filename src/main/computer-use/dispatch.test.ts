@@ -12,6 +12,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { createComputerUseDispatcher } from "./dispatch.ts";
 import { createComputerUseLease, type LeaseClock } from "./lease.ts";
+import { COMPUTER_USE_DESKTOP_KEY, sessionDesktopKey } from "../../shared/computer-use.ts";
 import type { ComputerUseToolOutcome, ComputerUseToolRequest } from "../../shared/computer-use.ts";
 
 /** 假时钟（同 lease.test.ts：手动推进，触发期间新挂的定时器也参与本次推进） */
@@ -297,5 +298,57 @@ describe("接线：已删除的 focus 请求被当场拒，并给出替代路径
     assert.deepEqual(calls, ["pixels:B", "pixels:B"]);
     assert.equal(lease.owner("desktop:exclusive")?.sessionId, "A");
     assert.equal(lease.queueDepth("desktop:exclusive"), 0);
+  });
+});
+
+describe("接线：L2b 的桌面键是「每会话一个」", () => {
+  /** 与生产接线同形：desktopKey 由运行时门面给（L2b → desktop:session:<id>） */
+  function setupPerSession(titles: Record<string, string> = {}) {
+    const clock = fakeClock();
+    const lease = createComputerUseLease({ clock });
+    const calls: string[] = [];
+    const dispatcher = createComputerUseDispatcher({
+      lease,
+      titleOf: titled(titles),
+      desktopKey: (sessionId) => sessionDesktopKey(sessionId),
+      runPixels: async (sessionId): Promise<ComputerUseToolOutcome> => {
+        calls.push(`pixels:${sessionId}`);
+        return { ok: true, text: "点完了" };
+      },
+      runBrowser: async (sessionId): Promise<ComputerUseToolOutcome> => {
+        calls.push(`browser:${sessionId}`);
+        return { ok: true, text: "页面打开了" };
+      },
+    });
+    return { clock, lease, dispatcher, calls };
+  }
+
+  test("A 与 B 各自的桌面上课互不排队（L2b 的核心收益）", async () => {
+    const { dispatcher, calls, lease } = setupPerSession({ A: "任务甲", B: "任务乙" });
+    const [a, b] = await Promise.all([dispatcher.dispatch("A", SCREENSHOT), dispatcher.dispatch("B", SCREENSHOT)]);
+    assert.equal(a.ok, true);
+    assert.equal(b.ok, true);
+    // 两次都立刻下发；键是两个不同的键
+    assert.deepEqual(calls.sort(), ["pixels:A", "pixels:B"]);
+    assert.notEqual(lease.owner(sessionDesktopKey("A"))?.sessionId, lease.owner(sessionDesktopKey("B"))?.sessionId);
+  });
+
+  test("同一会话的两条动作仍然串行（同一块桌面、同一个焦点）", async () => {
+    const { dispatcher, lease } = setupPerSession({ A: "任务甲" });
+    const first = dispatcher.dispatch("A", SCREENSHOT);
+    const second = dispatcher.dispatch("A", SCREENSHOT);
+    await flush();
+    // 同一会话的 acquire 是幂等续期，所以两条都能过；关键是键没变、没有为第二个位置排队
+    const [a, b] = await Promise.all([first, second]);
+    assert.equal(a.ok, true);
+    assert.equal(b.ok, true);
+    assert.equal(lease.owner(sessionDesktopKey("A"))?.sessionId, "A");
+  });
+
+  test("L2b 的键不会撞上 L2 的全局键（desktop:exclusive 不是某个会话的键）", async () => {
+    assert.equal(sessionDesktopKey("exclusive"), "desktop:session:exclusive");
+    assert.notEqual(sessionDesktopKey("exclusive"), COMPUTER_USE_DESKTOP_KEY);
+    // 空 id 退回全局键：调用方 bug 时宁可拿一把保守的共享锁
+    assert.equal(sessionDesktopKey("  "), COMPUTER_USE_DESKTOP_KEY);
   });
 });

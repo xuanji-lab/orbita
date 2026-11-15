@@ -13,6 +13,7 @@ import { spawn, spawnSync } from "node:child_process";
 import type { SessionPhase } from "@earendil-works/pi-protocol";
 import {
   effectiveAllowNetwork,
+  effectiveComputerUseBackend,
   effectiveGuestAllowExe,
   effectiveGuestBrowser,
   effectiveLanguage,
@@ -140,6 +141,9 @@ import {
 } from "../shared/computer-use.ts";
 import { parseSandboxProcesses, type SandboxProcessInfo } from "./computer-use/process-list.ts";
 import { SandboxController } from "./computer-use/sandbox.ts";
+import { IsolationSessionController } from "./computer-use/isolation-session.ts";
+import { createMxcSdk } from "./computer-use/mxc-sdk.ts";
+import { createComputerUseRuntime } from "./computer-use/runtime.ts";
 import { applyComputerUseRequest } from "./computer-use/agent-requests.ts";
 import { applySandboxBrowserRequest, CdpSession } from "./computer-use/cdp.ts";
 import { createComputerUseDispatcher } from "./computer-use/dispatch.ts";
@@ -682,7 +686,7 @@ void app.whenReady().then(async () => {
   };
 
 
-  const computerUse = new SandboxController({
+  const wsbComputerUse = new SandboxController({
     computerUseDir: join(configDir, "computer-use"),
     bridgeDir: app.isPackaged
       ? join(process.resourcesPath, "guest-bridge")
@@ -795,6 +799,38 @@ void app.whenReady().then(async () => {
     },
   });
   /**
+   * 运行时门面：两个隔离后端（L2 Windows 沙箱 / L2b 多会话隔离）选一个。
+   *
+   * L2b 的依赖（MXC 的 IsolationSession）是**可选**的：它的 SDK 会加载一个原生 DLL，
+   * 所以只在真正探测/启动时碰它（createMxcSdk 内部就是那个边界）；没装 / Node 不够 / 非
+   * Windows 时它只回一句带原因的话，不影响 L2 与 L1。
+   *
+   * `backend` 每次 start 现读设置：改档位不改正在跑的那一只（与出网开关同一条纪律——
+   * 运行中的隔离环境改不了形态，只能下次启动生效）。
+   */
+  const computerUseIsolation = new IsolationSessionController({
+    bridgeDir: app.isPackaged
+      ? join(process.resourcesPath, "guest-bridge")
+      : join(app.getAppPath(), "guest-bridge", "bin"),
+    sdk: createMxcSdk(),
+    // 清理验证要判「agent 账号真的没了」：工作区之外，profile 目录也必须消失
+    usersRoot: join(process.env.SystemDrive ?? "C:", "Users"),
+    allowedApps: async () => effectiveGuestAllowExe(await settings.read()),
+    onStatus: (status) => {
+      // 与 L2 同一条纪律：隔离环境没了，桌面租约一并作废（排队者等的是一个不存在的东西）
+      if (status.state === "off" || status.state === "error") {
+        computerUseLease.revoke(status.state === "off" ? "隔离会话已停止" : "隔离会话出错");
+      }
+      broadcastComputerUseStatus(status);
+    },
+  });
+  const computerUse = createComputerUseRuntime({
+    wsb: wsbComputerUse,
+    isolation: computerUseIsolation,
+    backend: async () => effectiveComputerUseBackend(await settings.read()),
+    probeIsolation: () => computerUseIsolation.probe(),
+  });
+  /**
    * CDP 浏览器通道（PR3）：沙箱里有几个浏览器实例的会话级状态。
    *
    * v1.5-1 起**一个 agent 会话一个浏览器**（不再是全员共用一份）：宿主这一侧按会话记「起没起」
@@ -836,7 +872,27 @@ void app.whenReady().then(async () => {
       return meta?.title ?? "";
     },
     runPixels: (sessionId, request) => applyComputerUseRequest(computerUse, sessionId, request),
-    runBrowser: (sessionId, request) => applySandboxBrowserRequest(cdp, sessionId, request),
+    /**
+     * 浏览器通道。**L2b 里上传/下载目前不支持**：桥把映射目录写死在 `C:\orbita-out`，而
+     * 独立会话里没有那个目录（它的映射目录是自己的工作区）。让它发下去会「成功」——
+     * 文件落在会话内部、宿主永远拿不到——所以在这里就拒，并告诉模型换路。
+     */
+    runBrowser: (sessionId, request) => {
+      if (
+        computerUse.runningBackend() === "isolation-session" &&
+        (request.action === "sandbox-upload" || request.action === "sandbox-download")
+      ) {
+        return Promise.resolve({
+          ok: false,
+          error:
+            "这个隔离档位（多会话隔离）暂不支持文件上传/下载：会话里的映射目录与宿主不同路径。" +
+            "导航、点击、输入、截图与读页面都可用；要传文件请改用内置浏览器，或切回 Windows 沙箱档。",
+        });
+      }
+      return applySandboxBrowserRequest(cdp, sessionId, request);
+    },
+    // 桌面租约的粒度跟着后端：L2 一块共享屏幕（全局），L2b 每会话一个桌面（见 runtime.ts）
+    desktopKey: (sessionId) => computerUse.desktopKey(sessionId),
   });
   /**
    * 急停热键（computer use PR4）：`Control+Alt+Shift+Escape`。沙箱窗口在前台时用户够不到
@@ -1799,8 +1855,10 @@ void app.whenReady().then(async () => {
     memoryHost.stop();
     // 关窗口全杀：runtime 逐个 taskkill 进程树（dev server 的孙进程不留占端口）
     terminals.dispose();
-    // 沙箱是我们 spawn 的：应用退出时一并带走，别给用户留一个连不上宿主的孤儿沙箱窗口
-    computerUse.dispose();
+    // 隔离环境是我们起的（VM 或 OS 会话）：应用退出时一并带走，别给用户留一个孤儿会话 /
+    // 一个还活着的 agent 账号。L2b 的收尾链是异步的（stop + deprovision + 验证），
+    // 不 await：退出路径不能被 OS 回收时间拖住，但会话自己会被注销。
+    void computerUse.dispose();
     // 租约只在内存里（见 lease.ts 头部：落盘会留下没人能放掉的死锁）；退出前把定时器收掉，
     // 不给进程留一个拽着退出 30s 的句柄
     computerUseLease.revoke("应用退出");

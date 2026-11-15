@@ -33,6 +33,7 @@ function probeResult(overrides: Partial<ComputerUseProbeResult> = {}): ComputerU
     sandboxExeFound: true,
     hypervisorState: "present",
     isolationTier: "l2",
+    isolationSession: { available: false, reason: null, nodeVersion: "24.21.0", nodeOk: true },
     wsl2: "available",
     ready: true,
     guidance: null,
