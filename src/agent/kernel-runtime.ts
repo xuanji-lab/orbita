@@ -115,6 +115,8 @@ async function init(dir: string): Promise<void> {
     // 换模型的校验与旧内核 setLedgerModel 同一条路径：一次性 ModelRuntime 注册 + 解析
     resolveModel: async (provider, modelId) => registerAndResolveModel(await createModelRuntime(), provider, modelId),
   });
+  // 上次删了树里的一条、还没清行进程就没了（强杀 / 崩溃）：起来时把没打开的库的遗留墓碑清掉，不等那棵树下次被打开
+  void pool.sweepTombstones().catch((cause: unknown) => console.error("[kernel-runtime] 清遗留墓碑失败", cause));
 }
 
 /**

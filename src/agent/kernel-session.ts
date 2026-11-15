@@ -346,6 +346,9 @@ export class KernelSessions {
       await killCycle(this.running, command.sessionId);
       this.forgetNotes(command.sessionId);
       await this.deps.pool.forget(library, command.sessionId);
+      // 这个库此刻没有在跑的轮（父与兄弟都闲着）：当场关库清行，原文不留到 kernel 回收 / 下次打开；有在跑的就等它们关库时清
+      const busy = [...this.running.keys()].some((id) => this.libraryOf.get(id) === library);
+      if (!busy) await this.deps.pool.purgeNow(library);
       return;
     }
     command satisfies never;

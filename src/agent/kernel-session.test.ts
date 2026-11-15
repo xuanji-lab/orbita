@@ -1,6 +1,6 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -701,7 +701,7 @@ describe("KernelSessions：回退 / 撤销 / 分支（旧内核本子编辑的�
 });
 
 describe("KernelSessions：删除（删树根 = 删库；删树里的一条 = 摘掉 + 关库时清行）", () => {
-  it("删树里的一条（在跑也行）：先停它的轮；关库后它的行与原文从库文件里消失，同库的父会话照常能聊，库完整", async () => {
+  it("删树里的一条（在跑也行）：先停它的轮；库里没有别的轮在跑就当场清行——它的原文从库文件里消失、墓碑不留，同库的父会话照常能聊，库完整", async () => {
     const cwd = await tempDir();
     const libraryDir = await tempDir();
     faux.setResponses([fauxAssistantMessage("父答-PARENT-MARK"), fauxAssistantMessage(fauxToolCall("bash", { command: "sleep 30" }), { stopReason: "toolUse" }), fauxAssistantMessage("又答")]);
@@ -714,12 +714,9 @@ describe("KernelSessions：删除（删树根 = 删库；删树里的一条 = �
     await r.sessions.handle("p1", { type: "forget", sessionId: "c1" });
     assert.equal(r.sessions.isRunning("c1"), false, "删之前先停了它的轮");
     const file = join(libraryDir, "p1.sqlite");
-    assert.match(await readFile(`${file}.purge.json`, "utf8"), /\d/);
     const onDisk = async (mark: string): Promise<boolean> =>
       (await readFile(file)).includes(Buffer.from(mark)) || (await readFile(`${file}-wal`).catch(() => Buffer.alloc(0))).includes(Buffer.from(mark));
-    assert.ok(await onDisk("CHILD-MARK"), "摘掉之后、关库之前：行还在（墓碑等关库）");
-    await r.pool.closeAll();
-    // 关库时按墓碑清行：墓碑没了、原文不在文件里、库完整
+    // 父闲着：forget 回来时已经清完——墓碑没了、原文不在文件里、库完整
     await assert.rejects(readFile(`${file}.purge.json`, "utf8"));
     assert.ok(!(await onDisk("CHILD-MARK")), "子会话的原文不在库文件里（含 WAL）");
     assert.ok(await onDisk("PARENT-MARK"), "父会话的还在");
@@ -733,6 +730,36 @@ describe("KernelSessions：删除（删树根 = 删库；删树里的一条 = �
     assert.match(JSON.stringify(r.transcript("p1")), /又答/);
     const { harness } = await r.pool.library("p1.sqlite");
     assert.equal((await harness.snapshot(SessionIndexDoc, BACKGROUND_CONTEXT))?.sessions["c1"], undefined);
+  });
+
+  it("删树里的一条时同库还有别的轮在跑：不打断它，墓碑留着，关库时清行；kernel 下次起来时没打开的库的遗留墓碑一并清掉", async () => {
+    const cwd = await tempDir();
+    const libraryDir = await tempDir();
+    faux.setResponses([fauxAssistantMessage("子答-CHILD2-MARK"), fauxAssistantMessage(fauxToolCall("bash", { command: "sleep 30" }), { stopReason: "toolUse" })]);
+    const r = await rig(undefined, null, libraryDir);
+    await r.sessions.handle("p2", submit(cwd, { sessionId: "c2", text: "子说" }));
+    await r.until(idle("c2"));
+    // 父在跑（慢 bash）
+    void r.sessions.handle("p2", submit(cwd, { sessionId: "p2", text: "父说" }));
+    await r.until((event) => event.type === "progress" && event.sessionId === "p2" && event.progress.type === "item_started" && event.progress.item.role === "tool");
+    await r.sessions.handle("p2", { type: "forget", sessionId: "c2" });
+    assert.equal(r.sessions.isRunning("p2"), true, "父的轮没被打断");
+    const file = join(libraryDir, "p2.sqlite");
+    assert.match(await readFile(`${file}.purge.json`, "utf8"), /\d/);
+    // 进程「没了」（不关库、不清行）：把这一刻的库文件、WAL、墓碑原样拷到另一个目录当作崩溃后留下的盘，
+    // 新进程起来扫一遍遗留墓碑，没打开的库当场清
+    await r.sessions.handle("p2", { type: "abort", sessionId: "p2" });
+    await r.until(idle("p2"));
+    const crashed = await tempDir();
+    for (const suffix of ["", "-wal", "-shm", ".purge.json"]) await copyFile(`${file}${suffix}`, join(crashed, `p2.sqlite${suffix}`)).catch(() => undefined);
+    const left = join(crashed, "p2.sqlite");
+    const leftOnDisk = async (): Promise<boolean> =>
+      (await readFile(left)).includes(Buffer.from("CHILD2-MARK")) || (await readFile(`${left}-wal`).catch(() => Buffer.alloc(0))).includes(Buffer.from("CHILD2-MARK"));
+    assert.ok(await leftOnDisk(), "崩溃留下的盘上：原文还在");
+    await new KernelPool({ dir: crashed, models: () => models }).sweepTombstones();
+    await assert.rejects(readFile(`${left}.purge.json`, "utf8"));
+    assert.ok(!(await leftOnDisk()), "扫过之后：原文不在库文件里（含 WAL）");
+    await r.pool.closeAll();
   });
 
   it("删树根：先停库里所有在跑的轮（父与子），再关库删文件（库、-wal、-shm、墓碑都不在）", async () => {

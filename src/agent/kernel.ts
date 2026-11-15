@@ -15,7 +15,7 @@
  *   init 里先查索引，已有就抛哨兵回滚——即使绕过进程内排队，也只会有一份。
  */
 import { fork } from "node:child_process";
-import { open as openFile, rm, stat } from "node:fs/promises";
+import { open as openFile, readdir, rm, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -38,7 +38,7 @@ import {
   type Storage,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { addTombstones, purgeFile, purgeTombstoned, removeTombstone } from "./kernel-purge.ts";
+import { addTombstones, PURGE_SUFFIX, purgeFile, purgeTombstoned, removeTombstone } from "./kernel-purge.ts";
 import type { ProviderSecrets } from "../shared/agent-ipc.ts";
 import { isDurableBookRef, KERNEL_LIBRARY_NAME } from "../shared/kernel.ts";
 import type { ThinkingLevel } from "../shared/thinking.ts";
@@ -743,6 +743,45 @@ export class KernelPool {
     const opened = opening === undefined ? null : await opening.catch(() => null);
     if (opened !== null) await opened.harness.close(BACKGROUND_CONTEXT);
     if (this.options.openStorage === undefined) await this.purge(this.filePath(library));
+  }
+
+  /**
+   * 当场按墓碑清行：关库（关库时清行、VACUUM），关的那一段挂上门（别人要开这个库等它关完，一个库只有一个写者），
+   * 下次用到时再开。调用方保证这个库此刻没有在跑的轮。返回用了多少毫秒。
+   */
+  async purgeNow(library: string): Promise<number> {
+    const started = Date.now();
+    for (let gate = this.handedOff.get(library); gate !== undefined; gate = this.handedOff.get(library)) await gate;
+    let release = (): void => undefined;
+    this.handedOff.set(library, new Promise<void>((resolve) => (release = resolve)));
+    try {
+      await this.close(library);
+    } finally {
+      this.handedOff.delete(library);
+      release();
+    }
+    const ms = Date.now() - started;
+    this.options.log?.(`[kernel] ${library}：库闲着，当场关库清行（${ms} ms）`);
+    return ms;
+  }
+
+  /**
+   * 清掉库目录里遗留的墓碑（上次删了树里的一条、还没来得及清行进程就没了）：kernel 进程起来时扫一遍，
+   * 没打开的库当场清，不等它们下次被打开（崩溃后没人再开那棵树，原文就一直留在文件里）。
+   */
+  async sweepTombstones(): Promise<void> {
+    let names: string[];
+    try {
+      names = await readdir(this.options.dir);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      if (!name.endsWith(PURGE_SUFFIX)) continue;
+      const library = name.slice(0, -PURGE_SUFFIX.length);
+      if (!KERNEL_LIBRARY_NAME.test(library) || this.libraries.has(library) || this.handedOff.has(library)) continue;
+      await this.purge(this.filePath(library));
+    }
   }
 
   /** 删一棵会话树：关库 + 删库文件（含 WAL 两个旁文件与墓碑）。库不在也算成功。 */

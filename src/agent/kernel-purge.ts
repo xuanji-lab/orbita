@@ -14,8 +14,11 @@ import { DatabaseSync } from "node:sqlite";
 import { writeTextAtomic } from "../main/atomic-write.ts";
 
 /** 墓碑文件：库旁边，记着还没清的会话号 */
+/** 墓碑文件名的后缀（库文件名 + 它） */
+export const PURGE_SUFFIX = ".purge.json";
+
 export function purgeFile(libraryFile: string): string {
-  return `${libraryFile}.purge.json`;
+  return `${libraryFile}${PURGE_SUFFIX}`;
 }
 
 async function readTombstones(libraryFile: string): Promise<number[]> {
