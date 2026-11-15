@@ -79,6 +79,11 @@ let sessions: KernelSessions | null = null;
 /** `--expose-gc` 给的完整 GC（迁移大本子时用） */
 const exposedGc = (globalThis as { gc?: () => void }).gc;
 
+function migratorMinBytes(raw: string | undefined): { migrateElsewhereMinBytes?: number } {
+  const value = raw === undefined ? Number.NaN : Number(raw);
+  return Number.isInteger(value) && value >= 0 ? { migrateElsewhereMinBytes: value } : {};
+}
+
 function models(): Models {
   if (modelRuntime === null) throw new Error("kernel runtime is not initialized");
   return modelRuntime;
@@ -102,6 +107,8 @@ async function init(dir: string): Promise<void> {
     log: (text) => console.error(text),
     // 迁旧会话交给用完即退的迁移进程（同目录的 kernel-migrator.js）：迁移的内存高水位不留在 kernel 进程里
     migrateElsewhere: (request) => forkMigrator(join(__dirname, "kernel-migrator.js"), request),
+    // 开发 / 验收用：ORBITA_MIGRATOR_MIN_BYTES 覆盖交给迁移进程的门槛（非负整数字节；别的值不认）
+    ...migratorMinBytes(process.env["ORBITA_MIGRATOR_MIN_BYTES"]),
     // 主进程拉起时带了 --expose-gc（host.ts）；没带（比对台直接拉起）就交给 V8 自己
     ...(typeof exposedGc === "function" ? { collectGarbage: () => exposedGc?.() } : {}),
   });

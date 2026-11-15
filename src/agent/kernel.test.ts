@@ -388,7 +388,7 @@ describe("迁移交给用完即退的进程（kernel 进程的内存高水位不
       void waiting;
       return result;
     };
-    kernel = pool(dir, { migrateElsewhere });
+    kernel = pool(dir, { migrateElsewhere, migrateElsewhereMinBytes: 0 });
     const opened = await kernel.open({ library: "r.sqlite", sessionId: "r", legacy: { piSessionFile: file }, agent: AGENT });
     assert.ok(opened.ok && opened.migrated);
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -403,7 +403,54 @@ describe("迁移交给用完即退的进程（kernel 进程的内存高水位不
   it("迁移进程没完成（没起来 / 中途没了）：退回本进程迁，结果一样", async () => {
     const dir = await tempDir();
     const file = await bookFile(dir);
-    const kernel = pool(dir, { migrateElsewhere: async () => Promise.reject(new MigratorUnavailable("no process")) });
+    let tried = 0;
+    const kernel = pool(dir, {
+      migrateElsewhereMinBytes: 0,
+      migrateElsewhere: async () => {
+        tried++;
+        return Promise.reject(new MigratorUnavailable("no process"));
+      },
+    });
+    const opened = await kernel.open({ library: "r.sqlite", sessionId: "r", legacy: { piSessionFile: file }, agent: AGENT });
+    assert.ok(opened.ok && opened.migrated);
+    assert.equal(tried, 1);
+    assert.deepEqual(fingerprints(await migratedContext(kernel, "r.sqlite", opened.conversationId)), fingerprints(oldContext(COMPACTED)));
+    await kernel.closeAll();
+  });
+
+  it("本子小于门槛：不交给迁移进程，在本进程里迁（起进程的固定开销比迁移本身贵）", async () => {
+    const dir = await tempDir();
+    const file = await bookFile(dir);
+    let tried = 0;
+    const kernel = pool(dir, {
+      migrateElsewhereMinBytes: COMPACTED.length + 1,
+      migrateElsewhere: async () => {
+        tried++;
+        return Promise.reject(new MigratorUnavailable("should not be called"));
+      },
+    });
+    const opened = await kernel.open({ library: "r.sqlite", sessionId: "r", legacy: { piSessionFile: file }, agent: AGENT });
+    assert.ok(opened.ok && opened.migrated);
+    assert.equal(tried, 0);
+    await kernel.closeAll();
+  });
+
+  it("迁移进程卡死（一直没有进展）：stallMs 到点 SIGKILL，退回本进程迁；有进展的照常等它迁完", async () => {
+    const dir = await tempDir();
+    const file = await bookFile(dir);
+    // 一个只收消息、永不回话的「迁移进程」：模拟被挂起 / 死锁
+    const hang = join(dir, "hang.mjs");
+    await writeFile(hang, "process.on('message', () => undefined); setInterval(() => undefined, 1000);\n");
+    const started = Date.now();
+    await assert.rejects(forkMigrator(hang, { dir, library: "x.sqlite", sessionId: "x", piSessionFile: file, agent: { modelId: "m", thinkingLevel: "off", cwd: "/", role: "root", compaction: { enabled: false, reservePercent: 20 } } }, 300), (error: unknown) => error instanceof MigratorUnavailable && /no progress/.test(error.message));
+    const waited = Date.now() - started;
+    assert.ok(waited >= 280 && waited < 3000, String(waited));
+    // 有进展（每 100 ms 报一次，共 0.8 s，超过 stallMs 的两倍）就不算卡死：等到它自己回话
+    const slow = join(dir, "slow.mjs");
+    await writeFile(slow, "process.on('message', () => { let n = 0; const t = setInterval(() => { process.send({ type: 'progress' }); if (++n === 8) { clearInterval(t); process.send({ type: 'error', message: 'SLOW-DONE' }, () => process.exit(0)); } }, 100); });\n");
+    await assert.rejects(forkMigrator(slow, { dir, library: "x.sqlite", sessionId: "x", piSessionFile: file, agent: { modelId: "m", thinkingLevel: "off", cwd: "/", role: "root", compaction: { enabled: false, reservePercent: 20 } } }, 300), /SLOW-DONE/);
+    // 接进 KernelPool：卡死的迁移进程被杀，这一条在本进程迁完
+    const kernel = pool(dir, { migrateElsewhereMinBytes: 0, migrateElsewhere: (request) => forkMigrator(hang, request, 300) });
     const opened = await kernel.open({ library: "r.sqlite", sessionId: "r", legacy: { piSessionFile: file }, agent: AGENT });
     assert.ok(opened.ok && opened.migrated);
     assert.deepEqual(fingerprints(await migratedContext(kernel, "r.sqlite", opened.conversationId)), fingerprints(oldContext(COMPACTED)));
@@ -415,6 +462,7 @@ describe("迁移交给用完即退的进程（kernel 进程的内存高水位不
     const file = await bookFile(dir);
     let handed = 0;
     const kernel = pool(dir, {
+      migrateElsewhereMinBytes: 0,
       migrateElsewhere: async () => {
         handed++;
         return Promise.reject(new MigratorUnavailable("should not be called"));
@@ -431,9 +479,17 @@ describe("迁移交给用完即退的进程（kernel 进程的内存高水位不
   it("真的拉起迁移进程（kernel-migrator.ts）：迁完回结果、进程退出，库里是同一份", async () => {
     const dir = await tempDir();
     const file = await bookFile(dir);
-    const kernel = pool(dir, { migrateElsewhere: (request) => forkMigrator(join(import.meta.dirname, "kernel-migrator.ts"), request, 60_000) });
+    let forked = 0;
+    const kernel = pool(dir, {
+      migrateElsewhereMinBytes: 0,
+      migrateElsewhere: (request) => {
+        forked++;
+        return forkMigrator(join(import.meta.dirname, "kernel-migrator.ts"), request, 30_000);
+      },
+    });
     const opened = await kernel.open({ library: "r.sqlite", sessionId: "r", legacy: { piSessionFile: file }, agent: AGENT });
     assert.ok(opened.ok && opened.migrated, JSON.stringify(opened));
+    assert.equal(forked, 1);
     assert.deepEqual(fingerprints(await migratedContext(kernel, "r.sqlite", opened.conversationId)), fingerprints(oldContext(COMPACTED)));
     await kernel.closeAll();
   });

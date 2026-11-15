@@ -15,11 +15,15 @@ import { KernelPool, type KernelOpenResult, type MigratorReply, type MigratorReq
 
 type Channel = { send?: (message: unknown, callback?: () => void) => boolean; on(event: "message" | "disconnect", listener: (message: unknown) => void): unknown };
 
+const channel = process as unknown as Channel;
+
 async function migrateOnce(request: MigratorRequest, gc: (() => void) | undefined): Promise<KernelOpenResult> {
   const pool = new KernelPool({
     dir: request.dir,
     models: () => createModels(),
     log: (text) => console.error(text),
+    // 每提交一批报一次进展：父进程据此判断没卡死（forkMigrator 的 stallMs）
+    onMigrationProgress: () => channel.send?.({ type: "progress" } satisfies MigratorReply),
     ...(gc === undefined ? {} : { collectGarbage: gc }),
   });
   try {
@@ -29,7 +33,6 @@ async function migrateOnce(request: MigratorRequest, gc: (() => void) | undefine
   }
 }
 
-const channel = process as unknown as Channel;
 if (typeof channel.send === "function") {
   const exposed = (globalThis as { gc?: () => void }).gc;
   channel.on("disconnect", () => process.exit(1));

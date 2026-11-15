@@ -261,7 +261,28 @@ export interface KernelPoolOptions {
    * 只在这个库此刻没别人用时交出去（见 openIn）；进程没起来 / 没回结果就退回本进程里迁。缺席 = 一律本进程迁。
    */
   migrateElsewhere?: (request: MigratorRequest) => Promise<KernelOpenResult>;
+  /**
+   * 旧本子至少多大才交给迁移进程（字节；缺席 = MIGRATE_ELSEWHERE_MIN_BYTES）。小的在本进程迁：起进程 + 关库重开的固定开销
+   * 比迁移本身还贵，而它们在本进程迁顶起来的峰值也不高（见 MIGRATE_ELSEWHERE_MIN_BYTES 的实测）。
+   */
+  migrateElsewhereMinBytes?: number;
+  /** 迁移每提交一批调一次（迁移进程里接到父进程的心跳，见 forkMigrator 的卡死判定）；缺席 = 不报 */
+  onMigrationProgress?: () => void;
 }
+
+/**
+ * 交给迁移进程的门槛：旧本子 ≥ 64 MB。真实例实测（6 条真实旧会话 × 3 遍，每遍新起实例，假模型端点；中位数）：
+ * 交给迁移进程固定多付 0.35–0.5 秒（起进程 + 关库重开），换来的 kernel 峰值：146 MB 的会话 589 → 333 MB、92 MB 的
+ * 561 → 349 MB（各省 200 MB 以上）；27–30 MB 的四条在本进程迁峰值 376–442 MB、交出去 313–414 MB，省得少还时有时无，
+ * 首发却从 0.77–0.91 秒变成 1.1–1.35 秒。64 MB 落在两档之间：大的交出去，30 MB 级的在本进程迁（首发与上一步持平）。
+ */
+export const MIGRATE_ELSEWHERE_MIN_BYTES = 64 * 1024 * 1024;
+
+/**
+ * 迁移进程多久没有进展（一批都没提交）就当它卡死：杀掉、退回本进程迁。一批是 4 MB 原文，正常迁移每批几十毫秒；
+ * 起进程 + 开库 + 第一批也在一秒以内。30 秒没有一批 = 卡住了（被挂起、死锁、磁盘卡死），不让用户再等。
+ */
+export const MIGRATOR_STALL_MS = 30_000;
 
 /** 发给迁移进程的一件事：库目录、库名、会话 id、本子路径、建会话用的设定（不带服务商密钥） */
 export interface MigratorRequest {
@@ -272,16 +293,17 @@ export interface MigratorRequest {
   agent: Omit<KernelAgent, "provider">;
 }
 
-export type MigratorReply = { type: "result"; result: KernelOpenResult } | { type: "error"; message: string };
+export type MigratorReply = { type: "result"; result: KernelOpenResult } | { type: "error"; message: string } | { type: "progress" };
 
 /** 迁移进程没起来 / 中途没了：调用方退回本进程迁 */
 export class MigratorUnavailable extends Error {}
 
 /**
  * 拉起一次迁移进程（kernel-migrator.js），等它回结果。Electron 的 utility 进程里 process.execPath 是 Electron 本体，
- * ELECTRON_RUN_AS_NODE 让它当 Node 跑；`node --test` 里就是 node。进程没起来、没回结果就退出、超时：抛 MigratorUnavailable。
+ * ELECTRON_RUN_AS_NODE 让它当 Node 跑；`node --test` 里就是 node。进程没起来、没回结果就退出、卡死（stallMs 内没有一次
+ * 进展）：抛 MigratorUnavailable。卡死时用 SIGKILL——被挂起（SIGSTOP）的进程收不到 SIGTERM。
  */
-export function forkMigrator(script: string, request: MigratorRequest, timeoutMs = 10 * 60 * 1000): Promise<KernelOpenResult> {
+export function forkMigrator(script: string, request: MigratorRequest, stallMs = MIGRATOR_STALL_MS): Promise<KernelOpenResult> {
   return new Promise((resolve, reject) => {
     let settled = false;
     const finish = (done: () => void): void => {
@@ -296,14 +318,21 @@ export function forkMigrator(script: string, request: MigratorRequest, timeoutMs
       env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
       stdio: ["ignore", "inherit", "inherit", "ipc"],
     });
-    const timer = setTimeout(() => {
-      child.kill();
-      finish(() => reject(new MigratorUnavailable("migrator timed out")));
-    }, timeoutMs);
+    const stalled = (): void => {
+      child.kill("SIGKILL");
+      finish(() => reject(new MigratorUnavailable(`migrator made no progress for ${stallMs} ms`)));
+    };
+    let timer = setTimeout(stalled, stallMs);
     child.once("error", (error) => finish(() => reject(new MigratorUnavailable(error.message))));
     child.once("exit", (code) => finish(() => reject(new MigratorUnavailable(`migrator exited (${String(code)}) without a result`))));
-    child.once("message", (message) => {
+    child.on("message", (message) => {
       const reply = message as MigratorReply;
+      if (reply.type === "progress") {
+        if (settled) return;
+        clearTimeout(timer);
+        timer = setTimeout(stalled, stallMs);
+        return;
+      }
       if (reply.type === "result") finish(() => resolve(reply.result));
       else finish(() => reject(new MigratorUnavailable(reply.message)));
     });
@@ -516,7 +545,12 @@ export class KernelPool {
       try {
         // 库是这一次才打开的、此刻只有这一条在开：关掉库，交给迁移进程迁（内存高水位不留在 kernel 进程里）。
         // 库原来就开着（同一棵树里别的会话在用）不交——关库会打断它们；那就在本进程里迁
-        if (this.options.migrateElsewhere !== undefined && fresh && opened.inflight.size === 1) {
+        if (
+          this.options.migrateElsewhere !== undefined &&
+          fresh &&
+          opened.inflight.size === 1 &&
+          (await stat(input.legacy.piSessionFile)).size >= (this.options.migrateElsewhereMinBytes ?? MIGRATE_ELSEWHERE_MIN_BYTES)
+        ) {
           const handed = await this.handOff(input, elapsed);
           if (handed !== null) return handed;
           harness = (await this.library(input.library)).harness;
@@ -566,6 +600,7 @@ export class KernelPool {
       batchBytes = 0;
       await harness.commit((tx) => appendDrafts(tx, conversation.id, drafts, ids), BACKGROUND_CONTEXT);
       written += drafts.length;
+      this.options.onMigrationProgress?.();
     };
     const planned = await planLegacyMigrationFile(
       file,
