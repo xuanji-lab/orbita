@@ -28,12 +28,14 @@ export function middleTruncate(name: string, max: number = QUOTE_FILE_NAME_MAX):
   return `${chars.slice(0, head).join("")}…${chars.slice(chars.length - tail).join("")}`;
 }
 
-/** 文件引用的出处拆成两段：文件名、位置（页号 / 行号 / 原文已改）。窄格里先省文件名、位置留着 */
+/** 文件引用的出处拆成两段：文件名、位置（页号 / 行号 / Word 段号 / 原文已改）。窄格里先省文件名、位置留着 */
 function fileSourceParts(quote: TextQuote, t: Messages): { name: string; position: string } {
   const name = (quote.filePath ?? "").split(/[\\/]/).pop() || (quote.filePath ?? "");
   const parts: string[] = [];
   // Office 标注：位置就是 DOM path（xlsx 显示成 Sheet1!B2:D5），比页号 / 行号更直接
   if (quote.office !== undefined) parts.push(officeDisplayPath(quote.office.format, quote.office.path));
+  // Word 里没有行号可报（行号是渲染概念）：说「第 N 段」——用户看到的段落序号
+  if (quote.docx !== undefined) parts.push(t.quote.docxBlock(quote.docx.blockOrdinal));
   if (quote.slide !== undefined) parts.push(t.quote.slide(quote.slide));
   if (quote.missing === true) parts.push(t.quote.missing);
   else if (quote.ambiguous !== undefined) parts.push(t.quote.ambiguous);

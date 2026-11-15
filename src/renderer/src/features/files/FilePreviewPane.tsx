@@ -401,6 +401,7 @@ export function FilePreviewPane(props: {
           <DocxView
             request={{ sessionId, workspaceId, ...extra, root, dir: path }}
             reloadToken={docxReload}
+            {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
           />
         ) : pdf ? (
           <PdfView

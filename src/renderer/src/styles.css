@@ -4950,6 +4950,138 @@ a.latex-setup-action {
 .docx-page-area .folio-root {
   background: var(--color-bg-muted);
 }
+/*
+ * 选区锚点（N2「指哪打哪」）：一行 chip，点一下把这一处写进输入框。
+ * 它是上下文不是主操作——颜色全用中性 token，accent 不在这里出现。
+ */
+.docx-anchor-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  min-width: 0;
+  margin: var(--space-2) var(--space-2) 0;
+}
+.docx-anchor-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 100%;
+  height: var(--control-height-xs);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.docx-anchor-chip:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.docx-anchor-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.docx-anchor-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: var(--control-height-xs);
+  height: var(--control-height-xs);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-tertiary);
+}
+/*
+ * 审阅条（N2）：坐在工具栏与正文之间，不盖住页面；行高按内容，超出则在条内滚动
+ * （长文档一次几十条修订，不能把正文挤没）。
+ */
+.docx-review {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  max-height: 32%;
+  margin: var(--space-2) var(--space-2) 0;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-border);
+  overflow: hidden;
+}
+.docx-review-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.docx-review-title {
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.docx-review-batch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.docx-review-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+.docx-review-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+}
+.docx-review-row:first-child {
+  border-top: 0;
+}
+.docx-review-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  text-align: left;
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+.docx-review-what {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.docx-review-meta {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.docx-review-verdict {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.docx-review-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--control-height-xs);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+}
 
 .pdf-view {
   flex: 1 1 auto;
