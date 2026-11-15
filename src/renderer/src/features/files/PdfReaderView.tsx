@@ -422,30 +422,33 @@ export function PdfReaderView(props: {
           </>
         )}
         <span className="dp-bar-grow" />
-        <span className="pdr-zoom">
-          <IconButton label={tr.zoomOut} size={28} disabled={!ready} onClick={() => send({ type: "zoom", action: "out" })}>
-            <Icon name="zoom-out" size={16} strokeWidth={1.8} />
+        {/* 行尾一组（缩放 / 查找 / 「…」）：整组右缘钉在工具栏右内边距上（ui-edges 守这条线） */}
+        <span className="pdr-bar-end">
+          <span className="pdr-zoom">
+            <IconButton label={tr.zoomOut} size={28} disabled={!ready} onClick={() => send({ type: "zoom", action: "out" })}>
+              <Icon name="zoom-out" size={16} strokeWidth={1.8} />
+            </IconButton>
+            <IconButton label={tr.zoomIn} size={28} disabled={!ready} onClick={() => send({ type: "zoom", action: "in" })}>
+              <Icon name="zoom-in" size={16} strokeWidth={1.8} />
+            </IconButton>
+            <IconButton label={tr.fitWidth} size={28} disabled={!ready} onClick={() => send({ type: "zoom", action: "page-width" })}>
+              <Icon name="move-horizontal" size={16} strokeWidth={1.8} />
+            </IconButton>
+          </span>
+          <IconButton label={tr.find} size={28} disabled={!ready} onClick={() => send({ type: "find" })}>
+            <Icon name="search" size={16} strokeWidth={1.8} />
           </IconButton>
-          <IconButton label={tr.zoomIn} size={28} disabled={!ready} onClick={() => send({ type: "zoom", action: "in" })}>
-            <Icon name="zoom-in" size={16} strokeWidth={1.8} />
-          </IconButton>
-          <IconButton label={tr.fitWidth} size={28} disabled={!ready} onClick={() => send({ type: "zoom", action: "page-width" })}>
-            <Icon name="move-horizontal" size={16} strokeWidth={1.8} />
-          </IconButton>
-        </span>
-        <IconButton label={tr.find} size={28} disabled={!ready} onClick={() => send({ type: "find" })}>
-          <Icon name="search" size={16} strokeWidth={1.8} />
-        </IconButton>
-        <span className="pdr-more">
-          <Menu
-            items={zoomItems}
-            align="end"
-            trigger={({ open: menuOpen, toggle }) => (
-              <IconButton label={tr.more} size={28} ariaExpanded={menuOpen} disabled={!ready} onClick={toggle}>
-                <Icon name="ellipsis-vertical" size={16} strokeWidth={1.8} />
-              </IconButton>
-            )}
-          />
+          <span className="pdr-more">
+            <Menu
+              items={zoomItems}
+              align="end"
+              trigger={({ open: menuOpen, toggle }) => (
+                <IconButton label={tr.more} size={28} ariaExpanded={menuOpen} disabled={!ready} onClick={toggle}>
+                  <Icon name="ellipsis-vertical" size={16} strokeWidth={1.8} />
+                </IconButton>
+              )}
+            />
+          </span>
         </span>
       </div>
       {doc.blocked !== null && <PreviewNotice messages={[blockedMessage(doc.blocked, doc.dataFile, tr)]} actions={[]} />}

@@ -133,6 +133,14 @@ const CHECKS = [
     rightPad: 4,
     skipNoTrailing: true,
   },
+  {
+    name: "PDF 阅读器·工具栏：行尾一组（缩放 / 查找 / 「…」）钉在右血线",
+    row: ".pdr-bar",
+    leading: "button",
+    trailing: ".pdr-bar-end",
+    // .pdr-bar 的横向内边距 var(--space-3)；没打开 PDF（或实验开关没开）时跳过
+    rightPad: 12,
+  },
 ];
 
 const { evaluate, close } = await connectCdp({ cdpPort, devPort, watchdogMs: 60_000 });

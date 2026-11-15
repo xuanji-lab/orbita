@@ -68,7 +68,8 @@
 }
 
 .pdr-tools,
-.pdr-zoom {
+.pdr-zoom,
+.pdr-bar-end {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
