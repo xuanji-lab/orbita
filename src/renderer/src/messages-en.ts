@@ -1437,7 +1437,7 @@ export const en = {
       "After the agent writes the first plan of a task, it stops and waits for your reply in the chat box before doing anything (no buttons). Off by default · Plan mode and questions from the agent always pause first",
     attributionAria: "Commit and PR attribution",
     attributionInfo:
-      "Adds a trailer to commits the agent writes and a line to PR descriptions · never sets Co-Authored-By or changes the author",
+      "Adds a Co-authored-by trailer pointing at Orbita's bot account to commits the agent writes, and a line to PR descriptions · never changes the author or committer",
     pastedCollapse: "Collapse pasted text",
     pastedCollapseAria: "Collapse pasted text",
     pastedCollapseInfo:

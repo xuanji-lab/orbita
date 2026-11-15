@@ -849,7 +849,8 @@ function ExperimentalPrLink(props: { pr: number | null }) {
  * 提交署名的效果预览：直接写出会追加的那两行（commit trailer、PR 描述行），
  * 代替原来那句「Adds a Made-with: Orbita trailer…」。Off 时同样两行划掉，
  * 用户看得出「关掉的是什么」。字面量与讲给模型的说明同源（shared/attribution.ts），
- * PR 那一行跟着界面语言走；commit trailer 的键恒为英文（git 只认 ASCII 键）。
+ * PR 那一行跟着界面语言走；commit trailer 永远是英文（GitHub 按它认 bot 账号）。
+ * 2026-11-15 起是 `Co-authored-by` 全行（近 90 字），设置行右侧放不下会折行，见 settings-view.css。
  */
 function AttributionPreview(props: { enabled: boolean; language: Language }) {
   // 预览只写链接文字，不写 URL：这一行在设置页里是示意，完整的 markdown 在 PR 描述里
