@@ -112,6 +112,10 @@ import { registerTerminalIpc } from "./terminal/ipc.ts";
 import { LatexRunner } from "./latex/run.ts";
 import { applyLatexRequest } from "./latex/agent-requests.ts";
 import { registerLatexIpc } from "./latex/ipc.ts";
+import { applyDocxExportRequest } from "./docx-export/agent-requests.ts";
+import { createDocxExporter, printReferenceDoc, spawnPandoc } from "./docx-export/export.ts";
+import { createPandocProbe } from "./docx-export/probe.ts";
+import { registerDocxExportIpc } from "./docx-export/ipc.ts";
 import { registerCiteIpc } from "./cite/ipc.ts";
 import { registerReviewIpc } from "./review/ipc.ts";
 import { registerFocusIpc } from "./focus/ipc.ts";
@@ -710,6 +714,34 @@ void app.whenReady().then(async () => {
         );
       return;
     }
+    // Word 导出：pandoc 进程、模板体检、OOXML 后处理与原子写都在主进程（latexRequest
+    // 同一条边界）。同样任何路径都回执
+    if (event.type === "docxExportRequest") {
+      void applyDocxExportRequest(
+        docxExporter,
+        sessions,
+        workspaces,
+        async () => {
+          const current = await settings.read();
+          return {
+            pandocPath: current.pandocPath ?? null,
+            templateMode: current.docxTemplateMode ?? "default",
+            customTemplatePath: current.docxTemplatePath ?? null,
+          };
+        },
+        event,
+      )
+        .then((outcome) => agentHost.answerDocxExport(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerDocxExport(event.requestId, {
+            ok: false,
+            code: "write-failed",
+            error: cause instanceof Error ? cause.message : String(cause),
+            warnings: [],
+          }),
+        );
+      return;
+    }
     // LaTeX：agent 的 compile_latex——latexmk 进程与 .log 解析都在主进程（terminalRequest
     // 同一条边界）。同样任何路径都回执，否则那次工具调用会永远等下去
     if (event.type === "latexRequest") {
@@ -1268,6 +1300,22 @@ void app.whenReady().then(async () => {
     explicitPath: async () => (await settings.read()).latexmkPath,
   });
   registerLatexIpc(latex, workspaces, sessions, settings);
+  // Word 导出：pandoc 探测 / 模板体检 / 内置默认模板的 IPC 面（设置页的「Word 导出」组）。
+  // 模板与 pandoc 都是机器级配置，主进程是唯一真源；导出流水线本身走 agentRequest。
+  const docxProbe = createPandocProbe();
+  const docxTemplatesDir = join(configDir, "docx-templates");
+  const docxExporter = createDocxExporter({
+    probe: (explicit) => docxProbe.probe(explicit),
+    runPandoc: spawnPandoc,
+    printReference: printReferenceDoc,
+    cacheDir: docxTemplatesDir,
+  });
+  registerDocxExportIpc({
+    probe: docxProbe,
+    settings,
+    cacheDir: docxTemplatesDir,
+    printReference: printReferenceDoc,
+  });
   // 引用补全：读项目里的 .bib（只读盘、与编译同一道白名单与同一个项目目录）
   registerCiteIpc(workspaces, sessions);
   const agentIpc = registerAgentIpc(

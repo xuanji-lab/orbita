@@ -902,3 +902,79 @@ a.exp-pr:hover {
     }
   }
 }
+
+/* ===== Word 导出（WordExportSettings.tsx） =====
+ * 体检结论摊在模板行下方：一行一条，warn 用警示色、其余退到三级文字。
+ * 不套第二张卡——它与这行是同一件事的两种读法（结论 + 依据）。 */
+.docx-template-findings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.docx-template-findings li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+
+.docx-template-findings li[data-level="warn"] {
+  color: var(--color-warning);
+}
+
+.docx-template-finding-detail {
+  color: var(--color-text-tertiary);
+}
+
+.docx-template-path {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* pandoc 路径：行底整幅一格（说明 / 状态在左列，控件不挤进说明）。
+ * 2026-11-15 验收 P3：原来放在右列时，长路径 note 把左列撑到控件列里，窄面板下
+ * 说明文字与输入框重叠。改成整幅一行后两个宽度都不会重叠；输入框可收窄、
+ * 按钮在同一 flex 行里按需换行。 */
+.pandoc-path-row {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+}
+
+.pandoc-path-row .text-field {
+  flex: 1 1 280px;
+  width: auto;
+  min-width: 0;
+  max-width: 520px;
+}
+
+/* 两个按钮成组：窄面板换行时一起下移，不会一个贴着输入框、另一个掉到下一行 */
+.pandoc-path-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.pandoc-status-note {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.pandoc-status-note > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

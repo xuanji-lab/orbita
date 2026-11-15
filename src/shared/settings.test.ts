@@ -515,6 +515,27 @@ describe("parseSettings 的 latexmkPath（显式指定的 latexmk）", () => {
   });
 });
 
+describe("parseSettings 的 Word 导出配置（pandoc / 模板）", () => {
+  it("pandocPath / docxTemplatePath 只认绝对路径（两侧空白去掉）", () => {
+    deepStrictEqual(parseSettings({ pandocPath: "/usr/local/bin/pandoc" }).pandocPath, "/usr/local/bin/pandoc");
+    deepStrictEqual(parseSettings({ pandocPath: " C:\\Program Files\\Pandoc\\pandoc.exe " }).pandocPath, "C:\\Program Files\\Pandoc\\pandoc.exe");
+    deepStrictEqual(parseSettings({ docxTemplatePath: "D:\\school\\template.docx" }).docxTemplatePath, "D:\\school\\template.docx");
+  });
+
+  it("相对路径 / 空串 / 非字符串都当没设", () => {
+    deepStrictEqual(parseSettings({ pandocPath: "pandoc" }).pandocPath, undefined);
+    deepStrictEqual(parseSettings({ pandocPath: 42 }).pandocPath, undefined);
+    deepStrictEqual(parseSettings({ docxTemplatePath: "template.docx" }).docxTemplatePath, undefined);
+  });
+
+  it("模板模式只认 default / project / custom", () => {
+    deepStrictEqual(parseSettings({ docxTemplateMode: "project" }).docxTemplateMode, "project");
+    deepStrictEqual(parseSettings({ docxTemplateMode: "custom" }).docxTemplateMode, "custom");
+    deepStrictEqual(parseSettings({ docxTemplateMode: "school" }).docxTemplateMode, undefined);
+    deepStrictEqual(parseSettings({ docxTemplateMode: true }).docxTemplateMode, undefined);
+  });
+});
+
 describe("parseSettings 的 starredModels（模型星标）", () => {
   it("成对的留下，顺序照旧", () => {
     deepStrictEqual(

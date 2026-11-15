@@ -377,3 +377,61 @@ describe("docx 目录页码自愈：写回", () => {
     deepStrictEqual(calls, []);
   });
 });
+
+describe("docx 目录页码自愈：改了标题仍按书签定位（N3 导出结构）", () => {
+  /** 目录条目里带 w:hyperlink 的锚点，页码数字在外面（导出 / 保存后的形态） */
+  function linkedEntry(title: string, anchor: string, page: string): FakeNode {
+    return paragraph({ styleId: "TOC1" }, [
+      container("hyperlink", { anchor }, [text(title), atom("tab", {})]),
+      text(page),
+    ]);
+  }
+
+  test("标题文字改了、书签还在：按书签找到页码，不看文字", () => {
+    const d = doc([
+      linkedEntry("第一章 项目背景（改）", "_Toc1", "9"),
+      filler(20),
+      filler(20),
+      paragraph({ styleId: "Heading1" }, [bookmark("_Toc1"), text("第一章 项目背景")]),
+    ]);
+    const facts = collectTocFacts(d);
+    deepStrictEqual(facts.staticEntries.map((entry) => entry.bookmark), ["_Toc1"]);
+    const plan = planTocHeal(facts, layout);
+    const entry = facts.staticEntries[0];
+    ok(entry !== undefined);
+    deepStrictEqual(plan.ops, [{ kind: "text", from: entry.from, to: entry.to, text: "3" }]);
+    deepStrictEqual([plan.staticChanged, plan.missed], [1, 0]);
+  });
+
+  test("书签找不到：回退按标题文字匹配（老文档 / 无链接条目仍能自愈）", () => {
+    const d = doc([
+      linkedEntry("第一章 项目背景", "_Missing", "99"),
+      paragraph({ styleId: "Heading1" }, [text("第一章 项目背景")]),
+    ]);
+    const plan = planTocHeal(collectTocFacts(d), layout);
+    deepStrictEqual(plan.ops.map((op) => (op.kind === "text" ? op.text : null)), ["1"]);
+    deepStrictEqual([plan.staticChanged, plan.missed], [1, 0]);
+  });
+
+  test("书签与标题都不中：不写，记一条没定位到", () => {
+    const d = doc([
+      linkedEntry("第九章 不存在", "_Missing", "9"),
+      paragraph({ styleId: "Heading1" }, [text("第一章 项目背景")]),
+    ]);
+    const plan = planTocHeal(collectTocFacts(d), layout);
+    deepStrictEqual(plan.ops, []);
+    deepStrictEqual([plan.staticEntries, plan.missed], [1, 1]);
+  });
+
+  test("href 的 #锚点也认（没有 anchor 属性时）", () => {
+    const d = doc([
+      paragraph({ styleId: "TOC1" }, [
+        container("hyperlink", { href: "#_Toc1" }, [text("第一章 项目背景（改）"), atom("tab", {})]),
+        text("9"),
+      ]),
+      paragraph({ styleId: "Heading1" }, [bookmark("_Toc1"), text("第一章 项目背景")]),
+    ]);
+    const facts = collectTocFacts(d);
+    strictEqual(facts.staticEntries[0]?.bookmark, "_Toc1");
+  });
+});
