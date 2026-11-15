@@ -303,6 +303,17 @@ export const ipcChannels = {
    * 同时 openFile + openDirectory，文件与文件夹只能分两个入口（文件仍走隐藏 input）。
    */
   fsPickFolders: "fs:pick-folders",
+  /**
+   * PDF 阅读器（契约在 `pdf-reader.ts`，实验功能「PDF 阅读器」）：打开一份 PDF（同文件面板白名单，须是 .pdf），
+   * 回一次性 token、阅读器取字节的地址与它旁边数据文件里的批注。同一时刻只有一份是「当前」的：再开一份即作废上一份。
+   */
+  pdfReaderOpen: "pdf-reader:open",
+  /** 按 id 合并存批注（只认 token，不收路径；原子写） */
+  pdfReaderSave: "pdf-reader:save",
+  /** 按 id 删批注（同上） */
+  pdfReaderDelete: "pdf-reader:delete",
+  /** 关掉：作废 token（不是当前那份就什么都不做） */
+  pdfReaderClose: "pdf-reader:close",
   /** 文档 / 演示文稿面板（契约在 `doc.ts`）：读一份 .md，回内容 + 摘要。白名单同文件面板，只认 .md */
   docRead: "doc:read",
   /** 写回（原子写）：带 expectedHash，盘上已被改过就不写、回盘上的现状（比较后交换） */

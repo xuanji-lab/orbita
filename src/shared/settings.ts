@@ -123,6 +123,7 @@ export const EXPERIMENTAL_FEATURE_IDS = [
   "paper-themes",
   "pdf-citations",
   "intent-system",
+  "pdf-reader",
 ] as const;
 export type ExperimentalFeatureId = (typeof EXPERIMENTAL_FEATURE_IDS)[number];
 
