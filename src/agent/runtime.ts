@@ -1442,15 +1442,12 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     // agent 的 LaTeX 工具（PR1）：compile_latex。latexmk 与 .log 解析在主进程
     // （main/latex/），这里只翻译参数；目录授权在主进程按会话名单硬校验
     ...createLatexTools(requestBroker, command.sessionId, { cwd: command.cwd }),
-<<<<<<< HEAD
     // Office（./office-tools.ts）：read_office / edit_office。OfficeCLI 子进程、备份与
     // 改动清单在主进程（office/service.ts）；这一层只翻译参数
     ...createOfficeTools(requestBroker, command.sessionId, { cwd: command.cwd }),
-=======
     // Word 导出：export_docx。pandoc / 模板体检 / OOXML 后处理 / 原子写都在主进程
     // （main/docx-export/），这里只翻译参数与把产物交给右栏打开
     ...createDocxExportTools(requestBroker, command.sessionId, { cwd: command.cwd }),
->>>>>>> origin/feat/docx-export
     ...createChannelTools(requestBroker, command.sessionId, role),
     ...(memoryTools
       ? createMemoryTools(requestBroker, command.sessionId, {

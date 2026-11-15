@@ -736,13 +736,12 @@ export function parseSettings(raw: unknown): AppSettings {
     isAbsolutePath(record.latexmkPath.trim())
       ? { latexmkPath: record.latexmkPath.trim() }
       : {}),
-<<<<<<< HEAD
     // OfficeCLI 的显式路径：同一条纪律（绝对路径、非空）
     ...(typeof record.officeCliPath === "string" &&
     record.officeCliPath.trim() !== "" &&
     isAbsolutePath(record.officeCliPath.trim())
       ? { officeCliPath: record.officeCliPath.trim() }
-=======
+      : {}),
     // pandoc / 学校模板同一条纪律：只认绝对路径
     ...(typeof record.pandocPath === "string" &&
     record.pandocPath.trim() !== "" &&
@@ -754,7 +753,6 @@ export function parseSettings(raw: unknown): AppSettings {
     record.docxTemplatePath.trim() !== "" &&
     isAbsolutePath(record.docxTemplatePath.trim())
       ? { docxTemplatePath: record.docxTemplatePath.trim() }
->>>>>>> origin/feat/docx-export
       : {}),
     // 只认布尔（同 gitAttribution 的纪律）："yes" 这类手改值该被丢掉，而不是当成真；
     // 逐项开关下「全关」不落键（空表 undefined，同 starredModels 的纪律）
