@@ -17,6 +17,7 @@ import {
   type PermissionMode,
 } from "../shared/permission.ts";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
+import { resolveToCwd } from "@earendil-works/pi-coding-agent";
 import type { ContextMessage } from "./image-byte-budget.ts";
 import { dataDirRefusalMessage, defaultGuardEnv, protectedCommandRefusal, realpathLoose, type CommandGuardEnv } from "./protected-command.ts";
 
@@ -132,6 +133,29 @@ export type PermissionAsk = (request: ToolCallLike) => Promise<PermissionAnswer>
 /** 拦截面：按路径改文件的（write/edit 的 input.path）与跑命令的（bash/powershell 的 input.command）。 */
 const PATH_MUTATING_TOOLS = new Set(["write", "edit"]);
 const COMMAND_TOOLS = new Set(["bash", "powershell"]);
+/**
+ * 受保护路径的命令串检查另外管着可见终端：terminal_execute 把一整行命令敲进终端，和 bash 一样能删能改
+ * （2026-11-15 独立验收在真实例里用它删掉了受保护文件——它原先不过这道闸）。不并进 COMMAND_TOOLS：
+ * 那个集合还决定「抬超时」，终端命令没有超时参数。终端的当前目录可能已不是会话 cwd，相对路径按会话 cwd
+ * 解析只是近似——带完整路径、~、变量指向数据目录的写法照拦。
+ */
+const PROTECTED_COMMAND_TOOLS = new Set([...COMMAND_TOOLS, "terminal_execute"]);
+
+/**
+ * write / edit 的目标路径可能落到哪：闸门自己的字面解析，加上 **pi 落盘前实际用的那套规整**
+ * （resolveToCwd：展开 `~`、去掉 `@` 前缀、把不间断空格等换成普通空格、认 `file://`）。
+ * 只做字面解析时，`~/Library/…/sessions/x` 会被当成 cwd 下一个叫 `~` 的相对目录而放行，随后 pi 把它
+ * 写进真实的会话目录（2026-11-15 独立验收在真实例里写成功）。两种解析都比，各自再跟一遍符号链接。
+ */
+function writeTargets(cwd: string, target: string): string[] {
+  const resolved = [resolve(cwd, target)];
+  try {
+    resolved.push(resolveToCwd(target, cwd));
+  } catch {
+    // 规整不了的输入（如畸形 file:// URL）pi 自己也会抛、写不成；字面解析那一份照比
+  }
+  return [...new Set(resolved.flatMap((path) => [foldPath(path), foldPath(realpathLoose(path))]))];
+}
 
 /**
  * 模型自填的命令超时**下限**（秒）：低于它的 `timeout` 抬到它，不填就不动。
@@ -256,8 +280,7 @@ export function protectedPathRefusal(
     const target = input["path"];
     if (typeof target !== "string" || target === "") return null;
     // 字面路径与「跟着符号链接走之后的真实路径」两个都比：链接两步（ln -s 之后 write 链接）躲不过
-    const requested = resolve(cwd, target);
-    const candidates = [...new Set([foldPath(requested), foldPath(realpathLoose(requested))])];
+    const candidates = writeTargets(cwd, target);
     for (const file of protectedFiles) {
       // 单文件命中：文件本身，或它的 `.tmp` / `.bad-` 兄弟（原子写临时文件与坏文件
       // 隔离都以 `<file>.` 开头）——精确圈住 store 的落盘足迹，不外溢到同目录别的文件
@@ -279,7 +302,7 @@ export function protectedPathRefusal(
     return null;
   }
 
-  if (COMMAND_TOOLS.has(toolName)) {
+  if (PROTECTED_COMMAND_TOOLS.has(toolName)) {
     const command = input["command"];
     if (typeof command !== "string" || command === "") return null;
     // 先过命令串里不带完整路径的写法：文件名本身 / 变量 / 通配 / cd 进数据目录 / 对数据目录或其上级的破坏性命令
