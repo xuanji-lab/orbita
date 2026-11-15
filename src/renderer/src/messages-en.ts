@@ -1990,9 +1990,9 @@ export const en = {
       "This task was recorded before tasks could be resumed, so it can be read but not continued. Start a new task to keep working.",
     /** 新内核：这条会话后来在新内核里继续过，这次启动开关关着 */
     readOnlyDurableMoved:
-      "This task continued in the new kernel. With it switched off, it can be read here but not continued — the old kernel only has the turns before the move.",
+      "This task was continued in experimental mode. With experimental mode off, it can be read here but not continued — this view only has the earlier turns.",
     /** 新内核：迁移旧会话失败，只读（原件没动） */
-    readOnlyMigrationFailed: (reason: string) => `Moving this task into the new kernel failed, so it can be read but not continued. The original is untouched. (${reason})`,
+    readOnlyMigrationFailed: (reason: string) => `Preparing this task's history failed, so it can be read but not continued. The original is untouched. (${reason})`,
     /** 新内核：这一轮被打断了（kernel 进程崩溃 / 应用退出时它在跑），库里还留着上下文 */
     interruptedTurn: "This turn was interrupted before it finished.",
     interruptedByCrash: "The app quit unexpectedly last time, so this sub-session was interrupted.",
@@ -2000,7 +2000,7 @@ export const en = {
     /** 新内核：子会话在应用重启后被自动接着跑（后台任务照常续跑） */
     resumedAfterRestart: "This sub-session was still running when the app restarted; it picked up the interrupted turn on its own.",
     /** 新内核：第一次在旧会话里发消息时迁进库（超过 0.5 秒才显示） */
-    migratingSession: "Moving this conversation into the new kernel — only needed the first time you send…",
+    migratingSession: "Preparing this conversation's history — only needed the first time, one moment…",
     noMessages: "No messages yet. Send the first one to start.",
     /** 源侧分页：触顶拉更早一页那一行 */
     loadingOlder: "Loading earlier messages…",
