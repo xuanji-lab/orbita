@@ -63,3 +63,8 @@ UPDATE_NOTES.md
 CLAUDE.md
 # 本地打包输出到别名目录（dist-1106 等）
 dist-*/
+
+# PDF 阅读器：scripts/fetch-pdf-reader.mjs 的克隆缓存与产物（钉提交 + manifest sha256），不进仓
+/build/pdf-reader/
+/build/pdf-reader-src/
+/build/pdf-reader.tmp/

@@ -148,6 +148,13 @@ import user from "../../../../design-system/assets/icons/lucide/user.svg?raw";
 import unlink from "../../../../design-system/assets/icons/lucide/unlink.svg?raw";
 import workflow from "../../../../design-system/assets/icons/lucide/workflow.svg?raw";
 import x from "../../../../design-system/assets/icons/lucide/x.svg?raw";
+import highlighter from "../../../../design-system/assets/icons/lucide/highlighter.svg?raw";
+import stickyNote from "../../../../design-system/assets/icons/lucide/sticky-note.svg?raw";
+import eraser from "../../../../design-system/assets/icons/lucide/eraser.svg?raw";
+import mousePointer2 from "../../../../design-system/assets/icons/lucide/mouse-pointer-2.svg?raw";
+import squareDashed from "../../../../design-system/assets/icons/lucide/square-dashed.svg?raw";
+import penLine from "../../../../design-system/assets/icons/lucide/pen-line.svg?raw";
+import moveHorizontal from "../../../../design-system/assets/icons/lucide/move-horizontal.svg?raw";
 import zoomIn from "../../../../design-system/assets/icons/lucide/zoom-in.svg?raw";
 import zoomOut from "../../../../design-system/assets/icons/lucide/zoom-out.svg?raw";
 import maximize from "../../../../design-system/assets/icons/lucide/maximize.svg?raw";
@@ -299,6 +306,13 @@ const ICONS = {
   x,
   zap,
   // 意图图的缩放组（放大 / 缩小 / 适配）——2026-10-14
+  "highlighter": highlighter,
+  "sticky-note": stickyNote,
+  "eraser": eraser,
+  "mouse-pointer-2": mousePointer2,
+  "square-dashed": squareDashed,
+  "pen-line": penLine,
+  "move-horizontal": moveHorizontal,
   "zoom-in": zoomIn,
   "zoom-out": zoomOut,
   maximize,

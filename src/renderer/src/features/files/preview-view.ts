@@ -170,3 +170,15 @@ export function largeTextNotice(
 export function truncatedNotice(shownBytes: number, totalBytes: number, t: Messages): string {
   return t.files.truncated(formatSize(shownBytes), formatSize(totalBytes));
 }
+
+/**
+ * PDF 用哪个界面打开（两个实验开关的关系）：「PDF 阅读器」开着 → 新阅读器（能划、能批注），不看「PDF 引用」；
+ * 它关着 → 照旧：「PDF 引用」开才有旧预览，否则 PDF 不进预览（null，走二进制空态）。
+ * 阅读器产物缺失时用户点了「改用简单预览」（fallback）→ 这个标签用旧预览，不论「PDF 引用」开没开。
+ */
+export function pdfPreviewKind(input: { isPdf: boolean; pdfReader: boolean; pdfCitations: boolean; fallback: boolean }): "reader" | "simple" | null {
+  if (!input.isPdf) return null;
+  if (input.pdfReader && !input.fallback) return "reader";
+  if (input.fallback || input.pdfCitations) return "simple";
+  return null;
+}

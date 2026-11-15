@@ -1,0 +1,42 @@
+/*
+ * 阅读器页面里我们加的样式（与桥脚本一起插进 reader.html）。阅读器是为整屏设计的，这里把它收成半屏：
+ * - 自带的顶部工具栏藏掉：面板外面有我们自己的紧凑工具栏（FilePreviewPane 里的 PdfReaderView），
+ *   命令经桥脚本转给阅读器；侧栏与页面区随之顶到上边。
+ * - 窄宽度（面板判，data-orbita-narrow）：批注侧栏浮在页面上（不挤页面，页面保持适宽），带一道阴影分层。
+ * - 标签入口（「添加标签…」）是宿主应用的东西，我们没有：盖掉。
+ * 选择器出自钉住的提交（5581a8d）；升级阅读器时这里要回归。
+ */
+#reader-ui > .toolbar,
+.toolbar[role="application"] {
+  display: none !important;
+}
+
+#sidebarContainer {
+  top: 0 !important;
+}
+
+#split-view,
+.split-view {
+  top: 0 !important;
+}
+
+body[data-orbita-narrow].sidebar-open #split-view,
+body[data-orbita-narrow].sidebar-open .split-view {
+  inset-inline-start: 0 !important;
+}
+
+body[data-orbita-narrow] #sidebarContainer {
+  box-shadow: 0 0 24px rgba(0, 0, 0, 0.18);
+}
+
+body[data-orbita-narrow] #sidebarResizer {
+  display: none !important;
+}
+
+/* 标签：卡片上的标签行与「添加标签…」按钮、筛选栏里的标签 */
+.annotation .tags,
+.annotation-popup .tags,
+.selector .tags,
+.tags-box {
+  display: none !important;
+}

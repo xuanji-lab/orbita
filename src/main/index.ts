@@ -74,8 +74,15 @@ import { BoardTemplateStore, PluginBoards, boardPluginsIn } from "./plugin/board
 import { registerBoardIpc } from "./plugin/board-ipc.ts";
 import { BOARD_TEMPLATES_DIR } from "../shared/plugin-board.ts";
 import { registerPluginIpc } from "./plugin/ipc.ts";
-import { PanelFrames, isPanelFrameUrl } from "./plugin/panel-frame.ts";
-import { installPanelProtocol, registerPanelScheme } from "./plugin/panel-protocol.ts";
+import { PanelFrames, isPanelFrameUrl, panelRequestGate } from "./plugin/panel-frame.ts";
+import { installPanelProtocol, PANEL_SCHEME_PRIVILEGE } from "./plugin/panel-protocol.ts";
+import { installRequestGates, registerPrivilegedSchemes } from "./window/request-gate.ts";
+import { installReaderProtocol, READER_SCHEME_PRIVILEGE } from "./pdf-reader/protocol.ts";
+import { readerRequestGate } from "./pdf-reader/gate.ts";
+import { registerPdfReaderIpc } from "./pdf-reader/ipc.ts";
+import { PdfReaderDocs } from "./pdf-reader/docs.ts";
+import { readerDirs } from "./pdf-reader/build-check.ts";
+import { PDF_READER_ORIGIN } from "../shared/pdf-reader.ts";
 import { PluginPanels } from "./plugin/panel-service.ts";
 import { PluginStore } from "./plugin/store.ts";
 import { registerSkillIpc } from "./skill/ipc.ts";
@@ -139,8 +146,9 @@ import { VoiceStore } from "./voice/store.ts";
 // 出站固定 IPv4：双栈 WAF + 本机无全局 v6 的间歇超时，见 dial-v4.ts 的取证
 preferIPv4();
 
-// 插件面板的 iframe 协议（orbita-panel://）：Electron 要求自定义协议在 app ready 之前登记
-registerPanelScheme();
+// 自定义协议：插件面板的 iframe（orbita-panel://）与 PDF 阅读器（orbita-reader://）。Electron 要求在
+// app ready 之前登记，且只认最后一次调用——两个协议必须一起登记（window/request-gate.ts）
+registerPrivilegedSchemes([PANEL_SCHEME_PRIVILEGE, READER_SCHEME_PRIVILEGE]);
 
 // Windows 的系统通知按 AUMID 归到应用（否则打包版可能根本不弹，或弹成 Electron 的
 // 默认名）。与 electron-builder 的 appId 同值；要在任何通知发出前设（模块顶层即可）。
@@ -281,7 +289,8 @@ function createMainWindow(
    */
   window.webContents.on("will-frame-navigate", (event) => {
     if (event.isMainFrame) return;
-    if (!isPanelFrameUrl(event.url)) event.preventDefault();
+    // PDF 阅读器的两层 iframe（reader.html 与它里面 pdf.js 的 viewer.html）都在 orbita-reader://app 下
+    if (!isPanelFrameUrl(event.url) && !event.url.startsWith(`${PDF_READER_ORIGIN}/`)) event.preventDefault();
   });
 
   /*
@@ -1146,7 +1155,10 @@ void app.whenReady().then(async () => {
   });
   // 面板文档仓库：模板由主进程按一次性 token 从内存给 iframe，CSP 走响应头（plugin/panel-frame.ts）
   const panelFrames = new PanelFrames();
-  installPanelProtocol(panelFrames, (url) => isOwnRendererPage(url, ownRendererOrigin()));
+  installPanelProtocol(panelFrames);
+  // 两个协议的请求闸合在一个 onBeforeRequest 里装（每个 session 只能有一个监听）
+  const isOwnPage = (url: string): boolean => isOwnRendererPage(url, ownRendererOrigin());
+  installRequestGates([panelRequestGate(isOwnPage), readerRequestGate(isOwnPage)]);
   const panels = new PluginPanels({
     plugins,
     frames: panelFrames,
@@ -1215,6 +1227,15 @@ void app.whenReady().then(async () => {
   registerFilesIpc(workspaces, sessions, (path, roots) => browserSandbox.openLocalFile(path, roots));
   // 文档 / 演示文稿面板（doc:*）：白名单同文件面板，写入比较后交换 + 原子写
   registerDocIpc(workspaces, sessions);
+  // PDF 阅读器（pdf-reader:*，实验功能）：同文件面板白名单；之后读字节 / 存删批注只认一次性 token
+  const readerDocs = new PdfReaderDocs();
+  const { buildDir: readerBuildDir, hostDir: readerHostDir } = readerDirs({
+    packaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath(),
+  });
+  installReaderProtocol({ buildDir: readerBuildDir, hostDir: readerHostDir, pdfPathOf: (token) => readerDocs.pdfPathOf(token) });
+  registerPdfReaderIpc({ workspaces, sessions, docs: readerDocs, buildDir: readerBuildDir, hostDir: readerHostDir, packaged: app.isPackaged });
   registerSlidesIpc(workspaces, sessions);
   // 审查面板（review:list / review:diff）：task 来源读会话快照账，git 来源只读
   registerReviewIpc(sessions);

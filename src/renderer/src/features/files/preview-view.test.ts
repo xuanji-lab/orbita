@@ -9,6 +9,7 @@ import { highlighterReady } from "../chat/highlight.ts";
 import { PREVIEW_HIGHLIGHT_LIMIT, PREVIEW_MARKDOWN_LIMIT, PREVIEW_ROW_CHARS, PREVIEW_WINDOW_LIMIT } from "../../../../shared/files.ts";
 import {
   largeTextNotice,
+  pdfPreviewKind,
   textLines,
   textPreviewMode,
   textRenderKind,
@@ -268,5 +269,23 @@ describe("largeTextNotice", () => {
 
   test("超过高亮上限但未到窗口化阈值的代码：只降级不提示（排版没变，仍是一整块）", () => {
     assert.equal(largeTextNotice("code", "rendered", PREVIEW_HIGHLIGHT_LIMIT + 1, PREVIEW_HIGHLIGHT_LIMIT + 1, en), null);
+  });
+});
+
+describe("pdfPreviewKind：两个实验开关的关系", () => {
+  const kind = (pdfReader: boolean, pdfCitations: boolean, fallback = false, isPdf = true) => pdfPreviewKind({ isPdf, pdfReader, pdfCitations, fallback });
+  test("阅读器开着：不看「PDF 引用」，一律新阅读器", () => {
+    assert.equal(kind(true, false), "reader");
+    assert.equal(kind(true, true), "reader");
+  });
+  test("阅读器关着：照旧（「PDF 引用」开 → 旧预览，关 → 不预览）", () => {
+    assert.equal(kind(false, true), "simple");
+    assert.equal(kind(false, false), null);
+  });
+  test("阅读器产物缺失、用户点了改用简单预览：这个标签用旧预览", () => {
+    assert.equal(kind(true, false, true), "simple");
+  });
+  test("不是 PDF：两个开关都不管", () => {
+    assert.equal(kind(true, true, false, false), null);
   });
 });
