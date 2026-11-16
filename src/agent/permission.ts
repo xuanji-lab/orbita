@@ -192,7 +192,7 @@ function identityRefusal(paths: readonly string[], protectedPaths: readonly stri
 
 const VOLFS_REFUSAL =
   "Paths under /.vol address a file by its inode, so Orbita cannot tell whether they reach protected session or automation " +
-  "records; writing through them is refused in every permission mode. Use the file's ordinary path instead.";
+  "records; writing through them is always refused. Use the file's ordinary path instead.";
 
 /**
  * 模型自填的命令超时**下限**（秒）：低于它的 `timeout` 抬到它，不填就不动。
@@ -392,8 +392,8 @@ function refusalMessage(dir: string, via: "path" | "command"): string {
   const lead =
     via === "command"
       ? `Session records are immutable: "${dir}" is protected, and shell commands may not reference it ` +
-        "in any permission mode — even read-only ones, because the check cannot tell reading from writing. "
-      : `Session records are immutable: "${dir}" is protected — no tool may write there in any permission mode. `;
+        "at all — even read-only ones, because the check cannot tell reading from writing. "
+      : `Session records are immutable: "${dir}" is protected — no tool may write there. `;
   return (
     lead +
     "To read it, use the ls / read / find / grep tools (not the shell), or read_task for a task's transcript. " +
@@ -409,8 +409,8 @@ function databaseRefusalMessage(dir: string, via: "path" | "command"): string {
   const lead =
     via === "command"
       ? `The session database is immutable: its folder "${dir}" is protected, and shell commands may not reference it ` +
-        "in any permission mode — even read-only ones, because the check cannot tell reading from writing. "
-      : `The session database is immutable: its folder "${dir}" is protected — no tool may write there in any permission mode. `;
+        "at all — even read-only ones, because the check cannot tell reading from writing. "
+      : `The session database is immutable: its folder "${dir}" is protected — no tool may write there. `;
   return (
     lead +
     "To read a task's history, use read_task (not the shell). " +
@@ -421,18 +421,18 @@ function databaseRefusalMessage(dir: string, via: "path" | "command"): string {
 /**
  * 单文件保护的拒绝理由（目前只有自动化的账本 automations.json）：与目录版同一副骨架、
  * 同一句「命令串分不出读写」的老实话；改道指引不同——自动化有工具面
- * （automation_create / update / cancel，**没有删**），想删记录只能请用户到自动化面板里删。
+ * （automation_create / cancel，**没有删**），想删记录只能请用户到自动化面板里删。
  */
 function fileRefusalMessage(file: string, via: "path" | "command"): string {
   const lead =
     via === "command"
       ? `Automation records are immutable: "${file}" is protected, and shell commands may not reference it ` +
-        "in any permission mode — even read-only ones, because the check cannot tell reading from writing. "
-      : `Automation records are immutable: "${file}" is protected — no tool may write it in any permission mode. `;
+        "at all — even read-only ones, because the check cannot tell reading from writing. "
+      : `Automation records are immutable: "${file}" is protected — no tool may write it. `;
   return (
     lead +
     "To read it, use the read tool or automation_list (not the shell). " +
-    "To change automations, use the automation tools (automation_create / automation_update / automation_cancel); " +
+    "To change automations, use the automation tools (automation_create / automation_cancel); " +
     "they cannot delete records — ask the user to do that in the Automations panel."
   );
 }

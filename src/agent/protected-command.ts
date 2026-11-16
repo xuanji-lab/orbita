@@ -1432,7 +1432,7 @@ export function dataDirRefusalMessage(refusal: Extract<CommandRefusal, { kind: "
   const words = DATA_DIR_SUBJECT[subject];
   return (
     words.lead(refusal.dir) +
-    `This shell command was refused (${refusal.why}) in every permission mode: a command that touches that folder ` +
+    `This shell command was refused (${refusal.why}): a command that touches that folder ` +
     "(or cd's into it, or renames / deletes / chmods it or any folder above it) is allowed only when it is read-only — " +
     "ls, stat, du, file, wc, head, tail, cat, grep / rg, find without -delete or -exec, diff — or when it only copies out of it. " +
     words.read +
