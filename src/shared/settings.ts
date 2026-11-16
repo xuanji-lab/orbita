@@ -249,6 +249,12 @@ export interface AppSettings {
    */
   onboardingSeen?: boolean;
   /**
+   * 故事版新手引导的画风（2026-11-08）：observe = 观测记录（守设计系统）/ lines = 星座线路图 /
+   * journal = 航行日志。结构与交互只有一套，只换皮。缺席 = observe；不认识的值丢掉。
+   * lines / journal 只覆盖浅色与两档暗色，纸面主题在渲染层回落 observe。
+   */
+  onboardingStyle?: OnboardingStyle;
+  /**
    * 文档 / 演示文稿编辑面板的「纸面」：同一套结构与交互，只换样式变量（安静编辑台 / 印刷版式 /
    * 专注写作）。缺席 = quiet（守 design-system 的默认）。只认三个已知值，手改的乱值丢掉。
    */
@@ -421,6 +427,11 @@ export type DocPaper = (typeof DOC_PAPERS)[number];
 export const isDocPaper = (value: unknown): value is DocPaper =>
   typeof value === "string" && (DOC_PAPERS as readonly string[]).includes(value);
 
+export const ONBOARDING_STYLES = ["observe", "lines", "journal"] as const;
+export type OnboardingStyle = (typeof ONBOARDING_STYLES)[number];
+export const isOnboardingStyle = (value: unknown): value is OnboardingStyle =>
+  typeof value === "string" && (ONBOARDING_STYLES as readonly string[]).includes(value);
+
 export type SettingsPatch = Partial<
   Omit<
     AppSettings,
@@ -581,6 +592,7 @@ export function parseSettings(raw: unknown): AppSettings {
     processView?: unknown;
     automationKeepAwake?: unknown;
     onboardingSeen?: unknown;
+    onboardingStyle?: unknown;
     docPaper?: unknown;
     gitAttribution?: unknown;
     planFirst?: unknown;
@@ -675,6 +687,7 @@ export function parseSettings(raw: unknown): AppSettings {
       : {}),
     // 同上：非布尔丢掉，缺席 = 没看过新手引导
     ...(typeof record.onboardingSeen === "boolean" ? { onboardingSeen: record.onboardingSeen } : {}),
+    ...(isOnboardingStyle(record.onboardingStyle) ? { onboardingStyle: record.onboardingStyle } : {}),
     ...(isDocPaper(record.docPaper) ? { docPaper: record.docPaper } : {}),
     ...(choreModel === undefined ? {} : { choreModel }),
     ...(subSessionModel === undefined ? {} : { subSessionModel }),

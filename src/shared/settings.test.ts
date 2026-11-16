@@ -299,6 +299,22 @@ describe("parseSettings 的 onboardingSeen", () => {
   });
 });
 
+describe("parseSettings 的 onboardingStyle", () => {
+  it("只认三个已知画风：缺席 / 乱值都不落键", () => {
+    deepStrictEqual(parseSettings({ onboardingStyle: "observe" }).onboardingStyle, "observe");
+    deepStrictEqual(parseSettings({ onboardingStyle: "lines" }).onboardingStyle, "lines");
+    deepStrictEqual(parseSettings({ onboardingStyle: "journal" }).onboardingStyle, "journal");
+    deepStrictEqual(parseSettings({}).onboardingStyle, undefined);
+    deepStrictEqual(parseSettings({ onboardingStyle: "neon" }).onboardingStyle, undefined);
+    deepStrictEqual(parseSettings({ onboardingStyle: 2 }).onboardingStyle, undefined);
+  });
+
+  it("原样穿过 parseSettings 的整对象重建（写盘再读回不丢）", () => {
+    const once = parseSettings({ onboardingStyle: "lines", onboardingSeen: true });
+    deepStrictEqual(parseSettings(once).onboardingStyle, "lines");
+  });
+});
+
 describe("parseSettings 的 automationKeepAwake", () => {
   it("只认布尔：缺席 / 非布尔都不落键", () => {
     deepStrictEqual(parseSettings({ automationKeepAwake: true }).automationKeepAwake, true);

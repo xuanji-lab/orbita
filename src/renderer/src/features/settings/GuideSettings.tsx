@@ -1,6 +1,6 @@
 /**
  * 设置 › 新手引导页签：全屏引导的唯一常驻入口。
- * 顶上一句说明 + 主按钮「从头看」（小字写看没看过），下面是整张章节目录——入门篇 / 进阶篇 / 附录三组，
+ * 顶上是故事版入口（主按钮，小字写看没看过），其下是手册：一句说明 + 「从头看」+ 整张章节目录——入门篇 / 进阶篇 / 附录三组，
  * 点任意一章全屏打开到那一章的章首页（← 仍能翻回上一章）。
  * 行的长相复用设置页的行（.set-row）与引导左侧目录的等宽章号（.ob-ch-no），不另造。
  */
@@ -13,21 +13,32 @@ import { SettingGroup } from "./SettingRow";
 export function GuideSettings(props: {
   /** 设置里的 onboardingSeen：只决定按钮下面那行小字，不限制重看 */
   seen: boolean;
-  /** 全屏打开引导，从摊平后的第几页开始（0 = 从头） */
+  /** 全屏打开手册（13 章），从摊平后的第几页开始（0 = 从头） */
   onOpen: (startAt: number) => void;
+  /** 全屏打开故事版「璇玑对接」 */
+  onOpenStory: () => void;
 }) {
   const t = useT();
   const copy = t.onboarding;
   return (
     <div className="set-page">
       <div className="set-guide-head">
+        <p className="set-guide-lead">{t.settings.guideStoryDesc}</p>
+        <div className="set-guide-start">
+          <button type="button" className="btn-accent set-guide-btn" onClick={props.onOpenStory}>
+            <Icon name="orbit" size={14} />
+            {t.settings.guideStory}
+          </button>
+          <span className="set-guide-seen">{props.seen ? t.settings.guideSeen : t.settings.guideUnseen}</span>
+        </div>
+      </div>
+      <div className="set-guide-head">
         <p className="set-guide-lead">{t.settings.guideLead}</p>
         <div className="set-guide-start">
-          <button type="button" className="btn-accent set-guide-btn" onClick={() => props.onOpen(0)}>
+          <button type="button" className="quiet-control set-guide-btn set-guide-btn-ghost" onClick={() => props.onOpen(0)}>
             <Icon name="play" size={14} />
             {t.settings.guideStart}
           </button>
-          <span className="set-guide-seen">{props.seen ? t.settings.guideSeen : t.settings.guideUnseen}</span>
         </div>
       </div>
       {guideParts(GUIDE).map((group) => (

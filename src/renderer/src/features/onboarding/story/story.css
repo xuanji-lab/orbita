@@ -1,0 +1,1721 @@
+/*
+ * 故事版引导「璇玑对接」（StoryView / StarMap）。全屏覆盖层：左边一直亮着的星图，右边领航员的台词、
+ * 站内真截图、辨伪环节；底栏是三幕的进度。
+ *
+ * 守设计系统：纸底 + 发丝线分层、不用阴影、字号只取 --font-size-* 五档、颜色只取 token、
+ * accent 只给底栏那一个主按钮。对话那一列用的就是首页 / 会话里的**子午线**语法：
+ * 空心圆 = 你，实心圆 = 领航员的话头，短刻度 = 同一段话的后续，空心菱形 = 另一个 agent（僚机）。
+ *
+ * 动效只用 transform / opacity，运动都有含义（转 = 运转、抖 = 失步、线长出来 = 通讯建立、扩散 = 对接锁定），
+ * 持续的动效挂在窗口失焦时暂停的清单上（见文末），prefers-reduced-motion 由全局规则塌成 0。
+ *
+ * 三种画风只换这里的变量与少数几处皮（data-style）：observe 观测记录 / lines 线路图 / journal 航行日志。
+ * 线路图与航行日志只覆盖浅色与两档暗色；纸面两档在 JS 里回落 observe（effectiveStyle），这里不用管。
+ */
+.sv {
+  --ob-paper: color-mix(in srgb, var(--color-bg-app) 70%, var(--color-bg-panel));
+  --sv-paper: var(--ob-paper);
+  --sv-ink: var(--color-text-primary);
+  --sv-ink-2: var(--color-text-secondary);
+  --sv-ink-3: var(--color-text-tertiary);
+  --sv-hair: var(--color-border-default);
+  --sv-hair-strong: var(--color-border-strong);
+  /* 接通 = 实心墨色星（设计系统的「实心 = 助手 / 已就绪」）；不用 nebula 当站色（浅色下与 accent 肉眼同蓝）。
+     通讯连线才用 nebula，且淡一档 */
+  --sv-fill: var(--sv-ink);
+  --sv-comm: color-mix(in srgb, var(--color-nebula) 50%, var(--color-border-strong));
+  /* 线路图三条线：浅色 绿 / 琥珀 / 紫（避开 accent 的蓝，也不用红——红在这里是「出错」）；夜空 绿 / 蓝 / 珊瑚（避开 accent 的黄） */
+  --sv-line-1: var(--color-success);
+  --sv-line-2: var(--color-warning);
+  --sv-line-3: color-mix(in srgb, var(--color-danger) 40%, var(--color-info));
+  --sv-dust-o: 0.2;
+  --sv-traffic: 56px; /* macOS 红绿灯占的宽度 */
+  --sv-mark: var(--space-3);
+  --font-size-sv-title: calc(var(--ui-font-size) * 3.2);
+  --font-size-sv-tag: calc(var(--ui-font-size) + 8px);
+
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-tooltip);
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: var(--titlebar-row) minmax(0, 1fr) auto;
+  background: var(--sv-paper);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  animation: sv-in 220ms var(--ease-out-quint);
+}
+
+/* 夜空档：两档暗色，以及航行日志（永远走夜空，浅色主题下 JS 给它挂 data-theme-preview="black"，整棵子树用玄的 token） */
+.sv[data-night="true"] {
+  --ob-paper: var(--color-bg-panel);
+  --sv-dust-o: 0.55;
+  --sv-line-2: var(--color-info);
+  --sv-line-3: var(--color-danger);
+}
+
+/* 线路图：纸面用井的颜色（比壳亮 / 暗一档），线用三个类别色，一幕一条 */
+.sv[data-style="lines"] {
+  --sv-paper: var(--color-bg-panel);
+  --ob-paper: var(--color-bg-panel);
+}
+
+/* 航行日志：永远是夜空——最深的一层上贴略亮的卡片 */
+.sv[data-style="journal"] {
+  --sv-paper: var(--color-bg-app);
+  --ob-paper: var(--color-bg-app);
+}
+
+.sv[data-style="journal"][data-night="true"] {
+  --sv-paper: var(--color-bg-panel);
+  --ob-paper: var(--color-bg-panel);
+}
+
+.sv[hidden] {
+  display: none;
+}
+
+/* Windows / Linux：商标行与自绘三键露在引导上面（同手册 .ob 的做法） */
+:root:not([data-platform="darwin"]) .sv {
+  top: var(--titlebar-brand-row);
+}
+
+.sv:focus-visible {
+  outline: none;
+}
+
+.sv button {
+  -webkit-app-region: no-drag;
+}
+
+@keyframes sv-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.sv-drag {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: var(--titlebar-row);
+  -webkit-app-region: drag;
+}
+
+.sv-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  list-style: none;
+  white-space: nowrap;
+}
+
+/* ---------- 顶栏 ---------- */
+.sv-top {
+  position: relative;
+  display: flex;
+  gap: var(--space-4);
+  align-items: center;
+  padding: 0 var(--space-8);
+}
+
+/* macOS 的红绿灯压在左上角：商标让出来 */
+:root[data-platform="darwin"] .sv-top {
+  padding-left: calc(var(--space-8) + var(--sv-traffic));
+}
+
+.sv-brand {
+  font-family: var(--font-family-brand);
+  font-size: var(--font-size-sv-tag);
+  font-weight: var(--weight-medium);
+  line-height: var(--line-height-tight);
+}
+
+.sv-brand span {
+  margin-left: var(--space-1-5);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-xs);
+  color: var(--sv-ink-3);
+}
+
+.sv-act {
+  font-size: var(--font-size-sm);
+  color: var(--sv-ink-2);
+}
+
+.sv-act::before {
+  content: "";
+  display: inline-block;
+  width: var(--space-2);
+  height: var(--space-2);
+  margin-right: var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--sv-ink-3);
+  vertical-align: 0.05em;
+}
+
+.sv[data-style="lines"][data-act="1"] .sv-act::before {
+  background: var(--sv-line-1);
+}
+
+.sv[data-style="lines"][data-act="2"] .sv-act::before {
+  background: var(--sv-line-2);
+}
+
+.sv[data-style="lines"][data-act="3"] .sv-act::before {
+  background: var(--sv-line-3);
+}
+
+.sv-tools {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  margin-left: auto;
+}
+
+.sv-looks {
+  display: flex;
+  gap: var(--space-0-5);
+  padding: var(--space-0-5);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+}
+
+.sv-look {
+  height: var(--control-height-xs);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--sv-ink-2);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.sv-look:hover {
+  color: var(--sv-ink);
+}
+
+.sv-look[aria-checked="true"] {
+  background: var(--color-bg-panel);
+  color: var(--sv-ink);
+  font-weight: var(--weight-semibold);
+}
+
+.sv-tool {
+  display: inline-flex;
+  gap: var(--space-1-5);
+  align-items: center;
+  height: var(--control-height-sm);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--sv-ink-2);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.sv-tool:hover {
+  background: var(--color-bg-hover);
+  color: var(--sv-ink);
+}
+
+/* ---------- 主区：星图 | 场景 ---------- */
+.sv-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr);
+  gap: var(--space-8);
+  min-height: 0;
+  padding: 0 var(--space-8) var(--space-4);
+}
+
+.sv-mapcol {
+  container-type: size;
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 0;
+}
+
+.sv-count {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--sv-ink-3);
+}
+
+/* 星图：固定 600 × 600 的 viewBox，容器取能放下的最大正方形 */
+.sv-map {
+  --u: calc(100cqw / 600);
+  container-type: inline-size;
+  position: relative;
+  width: min(100cqw, 100cqh);
+  aspect-ratio: 1;
+}
+
+.sv-svg,
+.sv-ov {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.sv-ov {
+  pointer-events: none;
+}
+
+/* ---------- 星图：站（三层图形按状态淡入淡出） ---------- */
+.sv-hollow {
+  fill: var(--sv-paper);
+  stroke: var(--sv-ink);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 3;
+  opacity: 0;
+  transition: opacity 260ms var(--ease-out-quint);
+}
+
+.sv-fill {
+  fill: var(--sv-fill);
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: scale(0.35);
+  transition:
+    opacity 260ms var(--ease-out-quint),
+    transform 320ms var(--ease-out-quint);
+}
+
+.sv-drift {
+  transition: transform 700ms var(--ease-out-quint) var(--arrive, 0ms);
+}
+
+/* 失步：偏离自己的位置（轨道 / 线路外），接通时锁回 */
+.sv-node[data-state="lost"] .sv-drift {
+  transform: translate(calc(var(--dx, 0) * 1px), calc(var(--dy, 0) * 1px));
+}
+
+.sv-core {
+  fill: var(--sv-ink);
+  opacity: 0;
+  display: none;
+  transition: opacity 260ms var(--ease-out-quint) var(--arrive, 0ms);
+}
+
+.sv-hintring {
+  fill: none;
+  stroke: var(--sv-ink);
+  stroke-width: 1.5;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: sv-hint 1.8s ease-in-out infinite alternate;
+}
+
+.sv-nope {
+  animation: sv-nope 380ms linear both;
+}
+
+@keyframes sv-nope {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  25% {
+    transform: translate(-5px, 0);
+  }
+  75% {
+    transform: translate(5px, 0);
+  }
+}
+
+.sv-moon-orbit {
+  animation: sv-spin 7s linear infinite;
+  animation-delay: var(--phase, 0s);
+}
+
+.sv-moon {
+  fill: var(--sv-ink);
+}
+
+.sv-focus {
+  fill: none;
+  stroke: var(--sv-ink);
+  stroke-width: 1;
+  opacity: 0;
+  transition: opacity 260ms var(--ease-out-quint);
+}
+
+.sv-halo {
+  fill: none;
+  stroke: var(--sv-ink);
+  stroke-width: 1;
+  opacity: 0;
+  transition: opacity 260ms var(--ease-out-quint);
+}
+
+.sv-node[data-focus="true"] .sv-focus {
+  opacity: 0.55;
+}
+
+.sv-node[data-state="lost"] .sv-hollow {
+  opacity: 1;
+}
+
+.sv-node[data-state="linked"] .sv-fill {
+  opacity: 1;
+  transform: scale(1);
+  transition-delay: var(--arrive, 0ms);
+}
+
+.sv-node[data-state="linked"] .sv-hollow {
+  transition-delay: var(--arrive, 0ms);
+}
+
+.sv-node[data-state="linked"] .sv-halo {
+  opacity: 0.45;
+}
+
+/* 抖 = 失步：出场了、没接通的站原地小幅跳动、忽明忽暗 */
+.sv-node[data-state="lost"] .sv-shake {
+  animation: sv-shake 2.6s steps(1, end) infinite;
+  animation-delay: calc(var(--i, 0) * -0.43s);
+}
+
+.sv-node[data-state="lost"] .sv-hollow {
+  animation: sv-flicker 3.4s steps(1, end) infinite;
+  animation-delay: calc(var(--i, 0) * -0.61s);
+}
+
+@keyframes sv-shake {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  18% {
+    transform: translate(1.4px, -0.8px);
+  }
+  34% {
+    transform: translate(-1.2px, 1px);
+  }
+  52% {
+    transform: translate(0.6px, 0.8px);
+  }
+  71% {
+    transform: translate(-0.9px, -0.5px);
+  }
+}
+
+@keyframes sv-flicker {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  22% {
+    opacity: 0.35;
+  }
+  27% {
+    opacity: 1;
+  }
+  64% {
+    opacity: 0.5;
+  }
+  67% {
+    opacity: 1;
+  }
+}
+
+/* 对接锁定：接通那一刻站上扩出一圈就消失 */
+.sv-ping {
+  fill: none;
+  stroke: var(--sv-fill);
+  stroke-width: 1.5;
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: sv-ping 900ms var(--ease-out-quint) calc(var(--arrive, 0ms) + 120ms) both;
+}
+
+@keyframes sv-ping {
+  from {
+    opacity: 0.6;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(3.4);
+  }
+}
+
+/* ---------- 星图：连线（通讯建立 = 线以起点为原点从 0 长到 1） ---------- */
+.sv-link,
+.sv-ghost {
+  fill: none;
+  stroke: var(--sv-comm);
+  stroke-width: 1;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.sv-link {
+  animation: sv-draw 520ms var(--ease-out-quint) both;
+  animation-delay: calc(var(--s, 0) * 260ms);
+}
+
+@keyframes sv-draw {
+  from {
+    transform: scale(0);
+  }
+}
+
+.sv-ghost {
+  stroke: var(--sv-hair-strong);
+  stroke-dasharray: 2 6;
+  opacity: 0.55;
+}
+
+/* 观测记录的刻度环 */
+.sv-ticks line {
+  stroke: var(--sv-hair);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.sv-ticks line[data-long="true"] {
+  stroke: var(--sv-hair-strong);
+}
+
+/* 观测记录的轨道圈：没同步是虚线，同步了变实线，并且开始转 */
+.sv-orbit-off,
+.sv-orbit-on {
+  fill: none;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  transition: opacity 400ms var(--ease-out-quint);
+}
+
+.sv-orbit-off {
+  stroke: var(--sv-hair);
+  stroke-dasharray: 2 6;
+}
+
+.sv-orbit-on {
+  stroke: var(--sv-hair-strong);
+  opacity: 0;
+}
+
+.sv-orbit[data-synced="true"] .sv-orbit-off {
+  opacity: 0;
+}
+
+.sv-orbit[data-synced="true"] .sv-orbit-on {
+  opacity: 1;
+}
+
+/* 转 = 运转：这一圈的站全接通了，这一圈才转（SVG 圈组与叠在上面的标签层同一周期、同一时刻起停） */
+.sv-ring {
+  transform-origin: 300px 300px;
+  animation: sv-spin var(--period) linear infinite;
+  animation-play-state: paused;
+}
+
+.sv-ring[data-spin="on"],
+.sv-ov-ring[data-spin="on"],
+.sv-ov-ring[data-spin="on"] .sv-lbl-in {
+  animation-play-state: running;
+}
+
+.sv-ov-ring {
+  position: absolute;
+  inset: 0;
+  animation: sv-spin var(--period) linear infinite;
+  animation-play-state: paused;
+}
+
+.sv-lbl-in {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+  animation: sv-spin-back var(--period) linear infinite;
+  animation-play-state: paused;
+}
+
+@keyframes sv-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes sv-spin-back {
+  to {
+    transform: rotate(-360deg);
+  }
+}
+
+/* ---------- 星图：标签（HTML 层，永远是真字号） ---------- */
+.sv-lbl {
+  position: absolute;
+  width: 0;
+  height: 0;
+  /* 失步的站偏离自己的位置，标签跟着偏；接通时一起锁回 */
+  translate: calc(var(--dx0, 0) * var(--u)) calc(var(--dy0, 0) * var(--u));
+  transition: translate 700ms var(--ease-out-quint) var(--arrive, 0ms);
+}
+
+.sv-lbl[data-state="linked"] {
+  translate: 0 0;
+}
+
+/* 站是按钮：热区是个 50 单位的圆，看不见；悬停淡淡一圈，键盘焦点一圈实线 */
+.sv-hit {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: calc(var(--u) * 50);
+  height: calc(var(--u) * 50);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: none;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.sv-hit:disabled {
+  pointer-events: none;
+  cursor: default;
+}
+
+.sv-hit:not(:disabled):hover {
+  background: color-mix(in srgb, var(--sv-ink) 8%, transparent);
+}
+
+.sv-hit:focus-visible {
+  outline: 2px solid var(--sv-ink);
+  outline-offset: 1px;
+}
+
+.sv-lbl-txt {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: grid;
+  justify-items: center;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-xs);
+  background: var(--sv-paper);
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-tight);
+  color: var(--sv-ink-2);
+  transform: translate(calc(-50% + var(--dx, 0) * var(--u)), calc(-50% + var(--dy, 0) * var(--u)));
+  transition: opacity 260ms var(--ease-out-quint);
+}
+
+.sv-lbl-txt[data-side="start"] {
+  justify-items: start;
+  transform: translate(calc(var(--dx, 0) * var(--u)), calc(-50% + var(--dy, 0) * var(--u)));
+}
+
+.sv-lbl-txt[data-side="end"] {
+  justify-items: end;
+  transform: translate(calc(-100% + var(--dx, 0) * var(--u)), calc(-50% + var(--dy, 0) * var(--u)));
+}
+
+.sv-lbl-txt b {
+  font-weight: var(--weight-medium);
+}
+
+.sv-lbl-txt small {
+  font-size: var(--font-size-xs);
+  color: var(--sv-ink-3);
+}
+
+.sv-lbl[data-state="linked"] .sv-lbl-txt {
+  color: var(--sv-ink);
+}
+
+.sv-lbl[data-focus="true"] .sv-lbl-txt b {
+  font-weight: var(--weight-bold);
+}
+
+/* ---------- 画风 lines：地铁线路图 ---------- */
+.sv[data-style="lines"] .sv-link,
+.sv[data-style="lines"] .sv-ghost {
+  stroke-width: 7;
+}
+
+.sv[data-style="lines"] .sv-ghost {
+  stroke: var(--sv-hair);
+  stroke-width: 3;
+  stroke-dasharray: 1 7;
+  opacity: 1;
+}
+
+.sv[data-style="lines"] [data-line="1"] {
+  --sv-line: var(--sv-line-1);
+}
+
+.sv[data-style="lines"] [data-line="2"] {
+  --sv-line: var(--sv-line-2);
+}
+
+.sv[data-style="lines"] [data-line="3"] {
+  --sv-line: var(--sv-line-3);
+}
+
+.sv[data-style="lines"] .sv-link {
+  stroke: var(--sv-line, var(--sv-ink));
+}
+
+/* 站 = 白圈粗描边；接通后描边换成这条线的颜色；换乘站（领航站）双圈 */
+.sv[data-style="lines"] .sv-hollow {
+  stroke: var(--sv-hair-strong);
+  stroke-width: 3;
+}
+
+.sv[data-style="lines"] .sv-fill {
+  fill: var(--sv-paper);
+  stroke: var(--sv-line, var(--sv-ink));
+  stroke-width: 4.5;
+}
+
+.sv[data-style="lines"] .sv-core {
+  display: inline;
+}
+
+.sv[data-style="lines"] .sv-node[data-state="linked"] .sv-core {
+  opacity: 1;
+}
+
+.sv[data-style="lines"] .sv-node[data-id="pilot"] .sv-fill {
+  stroke: var(--sv-ink);
+  stroke-width: 5;
+}
+
+.sv[data-style="lines"] .sv-ping {
+  stroke: var(--sv-line, var(--sv-ink));
+}
+
+.sv[data-style="lines"] .sv-lbl-txt {
+  font-weight: var(--weight-medium);
+}
+
+/* ---------- 画风 journal：航行日志（线索卡片 + 虚线牵线） ---------- */
+.sv-dust circle {
+  fill: var(--sv-ink);
+}
+
+.sv-dust {
+  opacity: var(--sv-dust-o);
+}
+
+.sv[data-style="journal"] .sv-link {
+  stroke: var(--sv-ink-3);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 5;
+}
+
+.sv-card {
+  position: absolute;
+  width: calc(var(--u) * 124);
+  min-height: calc(var(--u) * 46);
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: var(--space-0-5);
+  padding: var(--space-1-5) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  /* 容器只用一种语言——底色，不描边：失步是 muted，接通是卡面 */
+  background: var(--color-bg-muted);
+  color: var(--sv-ink);
+  font: inherit;
+  text-align: center;
+  line-height: var(--line-height-tight);
+  transform: translate(-50%, -50%) rotate(var(--tilt, 0deg));
+  /* 失步：偏离自己的位置（translate 属性，与下面抖动用的 transform 互不打架），接通时锁回 */
+  translate: calc(var(--dx, 0) * var(--u)) calc(var(--dy, 0) * var(--u));
+  transition:
+    translate 700ms var(--ease-out-quint) var(--arrive, 0ms),
+    background-color 300ms var(--ease-out-quint) var(--arrive, 0ms);
+  cursor: default;
+  pointer-events: none;
+}
+
+.sv-card:not(:disabled) {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.sv-card:focus-visible {
+  outline: 2px solid var(--sv-ink);
+  outline-offset: 2px;
+}
+
+.sv-card[data-state="linked"] {
+  translate: 0 0;
+  background: var(--color-bg-panel);
+}
+
+.sv[data-night="true"] .sv-card[data-state="linked"] {
+  background: var(--color-bg-app);
+}
+
+.sv-card-name {
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.sv-card-sub {
+  font-size: var(--font-size-xs);
+  color: var(--sv-ink-2);
+  white-space: nowrap;
+}
+
+.sv-card-pin {
+  position: absolute;
+  top: calc(-1 * var(--space-1));
+  left: 50%;
+  width: var(--space-2);
+  height: var(--space-2);
+  margin-left: calc(-0.5 * var(--space-2));
+  border: 1.5px solid var(--sv-ink-3);
+  border-radius: var(--radius-pill);
+  background: var(--sv-paper);
+}
+
+
+.sv-card[data-state="lost"] {
+  animation: sv-card-shake 2.6s steps(1, end) infinite;
+  animation-delay: calc(var(--i, 0) * -0.43s);
+}
+
+.sv-card[data-state="linked"] .sv-card-pin {
+  border-color: var(--sv-ink);
+  background: var(--sv-ink);
+}
+
+.sv-card[data-state="linked"] {
+  animation: sv-stamp 420ms var(--ease-out-quint) var(--arrive, 0ms) both;
+}
+
+.sv-card[data-focus="true"] .sv-card-name {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+}
+
+.sv-card[data-hint="true"]::after {
+  content: "";
+  position: absolute;
+  inset: calc(-1 * var(--space-1-5));
+  border: 1.5px solid var(--sv-ink);
+  border-radius: var(--radius-lg);
+  animation: sv-hint 1.8s ease-in-out infinite alternate;
+}
+
+.sv-card[data-nope="true"] {
+  animation: sv-card-nope 380ms linear both;
+}
+
+.sv-card-moons {
+  position: absolute;
+  right: var(--space-1-5);
+  bottom: var(--space-1);
+  display: flex;
+  gap: var(--space-0-5);
+}
+
+.sv-card-moons i {
+  width: var(--space-1-5);
+  height: var(--space-1-5);
+  border-radius: var(--radius-pill);
+  background: var(--sv-ink);
+}
+
+.sv-card[data-id="pilot"] {
+  width: calc(var(--u) * 150);
+  min-height: calc(var(--u) * 54);
+}
+
+.sv-card[data-id="wing"] {
+  border-radius: var(--radius-xs);
+}
+
+@keyframes sv-card-shake {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) rotate(calc(var(--tilt, 0deg) + 2.5deg));
+    opacity: 1;
+  }
+  18% {
+    transform: translate(calc(-50% + 1.4px), calc(-50% - 0.8px)) rotate(calc(var(--tilt, 0deg) + 3deg));
+  }
+  34% {
+    transform: translate(calc(-50% - 1.2px), calc(-50% + 1px)) rotate(calc(var(--tilt, 0deg) + 2deg));
+    opacity: 0.6;
+  }
+  52% {
+    transform: translate(calc(-50% + 0.6px), calc(-50% + 0.8px)) rotate(calc(var(--tilt, 0deg) + 3deg));
+    opacity: 1;
+  }
+  71% {
+    transform: translate(calc(-50% - 0.9px), calc(-50% - 0.5px)) rotate(calc(var(--tilt, 0deg) + 2.2deg));
+  }
+}
+
+@keyframes sv-card-nope {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) rotate(var(--tilt, 0deg));
+  }
+  25% {
+    transform: translate(calc(-50% - 5px), -50%) rotate(var(--tilt, 0deg));
+  }
+  75% {
+    transform: translate(calc(-50% + 5px), -50%) rotate(var(--tilt, 0deg));
+  }
+}
+
+@keyframes sv-hint {
+  from {
+    opacity: 0.15;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 0.85;
+    transform: scale(1.04);
+  }
+}
+
+@keyframes sv-stamp {
+  from {
+    scale: 1.12;
+    opacity: 0.4;
+  }
+}
+
+/* ---------- 右边：场景 ---------- */
+.sv-scene {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+  min-height: 0;
+  padding: var(--space-2) var(--space-1) var(--space-2) 0;
+  overflow-y: auto;
+  animation: sv-scene-in 260ms var(--ease-out-quint) both;
+}
+
+/* 序幕：只有标题与两句话，竖向居中，不贴在顶上 */
+.sv-scene[data-step="wake"] {
+  justify-content: center;
+}
+
+@keyframes sv-scene-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+.sv-intro {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.sv-title {
+  margin: 0;
+  font-family: var(--font-family-brand);
+  font-size: var(--font-size-sv-title);
+  font-weight: var(--weight-regular);
+  letter-spacing: 0.06em;
+  line-height: var(--line-height-tight);
+}
+
+.sv-lede {
+  max-width: 34em;
+  margin: 0;
+  text-wrap: pretty;
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-reading);
+  color: var(--sv-ink-2);
+}
+
+/* 对话：子午线（左边一根 1px 的线）+ 圆 / 刻度 */
+.sv-log {
+  position: relative;
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sv-log::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--sv-mark) / 2 - 0.5px);
+  top: var(--space-2);
+  bottom: var(--space-2);
+  width: 1px;
+  background: var(--sv-hair);
+}
+
+.sv[data-style="journal"] .sv-log::before {
+  background: none;
+  border-left: 1px dashed var(--sv-hair-strong);
+}
+
+.sv-row {
+  display: grid;
+  grid-template-columns: var(--sv-mark) minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+  animation: sv-line-in 420ms var(--ease-out-quint) both;
+  animation-delay: var(--d, 0ms);
+}
+
+@keyframes sv-line-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.sv-mark {
+  position: relative;
+  z-index: 1;
+  width: var(--sv-mark);
+  height: var(--sv-mark);
+  margin-top: calc(var(--line-height-reading) * 0.5em - var(--space-1-5));
+}
+
+.sv-row[data-first="true"] .sv-mark {
+  margin-top: 0;
+}
+
+.sv-row[data-first="true"] .sv-say {
+  padding-top: 0;
+}
+
+/* 你 = 空心圆；领航员话头 = 实心圆；同一段的后续 = 短刻度 */
+.sv-row[data-who="you"] .sv-mark {
+  box-sizing: border-box;
+  border: 1.5px solid var(--sv-ink);
+  border-radius: var(--radius-pill);
+  background: var(--sv-paper);
+}
+
+.sv-row[data-who="pilot"][data-first="true"] .sv-mark {
+  border-radius: var(--radius-pill);
+  background: var(--sv-ink);
+}
+
+.sv-row[data-who="pilot"]:not([data-first="true"]) .sv-mark {
+  height: 1px;
+  margin-top: calc(var(--line-height-reading) * 0.5em);
+  background: var(--sv-ink-3);
+}
+
+.sv-who {
+  display: block;
+  margin-bottom: var(--space-0-5);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--sv-ink-3);
+}
+
+.sv-say p {
+  margin: 0;
+  text-wrap: pretty;
+  font-size: var(--font-size-lg);
+  line-height: var(--line-height-reading);
+  color: var(--sv-ink);
+}
+
+.sv-row[data-who="you"] .sv-say p {
+  color: var(--sv-ink-2);
+}
+
+.sv[data-style="journal"] .sv-row[data-who="pilot"] .sv-say p {
+  font-family: var(--font-family-brand);
+}
+
+/* 没电的领航员：话说得断断续续，第一句忽明忽暗一次 */
+.sv-log[data-weak="true"] .sv-row[data-who="pilot"] .sv-say p {
+  color: var(--sv-ink-2);
+  animation: sv-crackle 1.6s steps(1, end) 1 both;
+  animation-delay: calc(var(--d, 0ms) + 300ms);
+}
+
+@keyframes sv-crackle {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  10% {
+    opacity: 0.3;
+  }
+  16% {
+    opacity: 1;
+  }
+  48% {
+    opacity: 0.55;
+  }
+  52% {
+    opacity: 1;
+  }
+}
+
+.sv-exit {
+  margin: calc(-1 * var(--space-1)) 0 0 calc(var(--sv-mark) + var(--space-3));
+  font-size: var(--font-size-sm);
+}
+
+.sv-exit-btn {
+  margin-left: 0;
+}
+
+/* ---------- 玩家的动作：选项、任务提示、放僚机、按顺序点站 ---------- */
+.sv-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* 选项 / 小按钮：底色一种语言（muted），不描边 */
+.sv-opt {
+  min-height: var(--control-height-md);
+  padding: var(--space-1) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  color: var(--sv-ink);
+  font: inherit;
+  font-size: var(--font-size-base);
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.sv-opt:hover:not(:disabled) {
+  background: var(--color-bg-active);
+}
+
+.sv-opt:focus-visible,
+.sv-pick:focus-visible,
+.sv-look:focus-visible {
+  outline: 2px solid var(--sv-ink);
+  outline-offset: 1px;
+}
+
+.sv-opt:disabled {
+  color: var(--sv-ink-3);
+  cursor: default;
+}
+
+.sv-task {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  align-items: baseline;
+  margin: calc(-1 * var(--space-1)) 0 0 calc(var(--sv-mark) + var(--space-3));
+  font-size: var(--font-size-sm);
+  color: var(--sv-ink-2);
+}
+
+.sv-task-text {
+  font-weight: var(--weight-semibold);
+  color: var(--sv-ink);
+}
+
+.sv-task[data-nudge="true"] {
+  animation: sv-nudge 360ms linear both;
+}
+
+@keyframes sv-nudge {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-6px);
+  }
+  75% {
+    transform: translateX(6px);
+  }
+}
+
+.sv-assist {
+  margin-left: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-regular);
+  color: var(--sv-ink-2);
+}
+
+.sv-exits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-left: calc(var(--sv-mark) + var(--space-3));
+}
+
+.sv-jobs,
+.sv-slots {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0 0 0 calc(var(--sv-mark) + var(--space-3));
+  padding: 0;
+  list-style: none;
+}
+
+.sv-job {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-1-5) var(--space-1-5) var(--space-1-5) var(--space-3);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-muted);
+  font-size: var(--font-size-base);
+}
+
+.sv-job .sv-opt {
+  background: var(--color-bg-panel);
+}
+
+.sv-job[data-sent="true"] .sv-job-name {
+  color: var(--sv-ink-3);
+}
+
+.sv-slots {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.sv-slot {
+  display: grid;
+  gap: var(--space-0-5);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-muted);
+  font-size: var(--font-size-sm);
+  color: var(--sv-ink-3);
+}
+
+.sv-slot b {
+  font-weight: var(--weight-semibold);
+}
+
+.sv-slot em {
+  min-height: calc(var(--font-size-xs) * 1.4);
+  font-style: normal;
+  font-size: var(--font-size-xs);
+}
+
+.sv-slot[data-filled="true"] {
+  background: var(--color-bg-panel);
+  color: var(--sv-ink);
+  animation: sv-line-in 320ms var(--ease-out-quint) both;
+}
+
+.sv-slot-n {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+
+/* ---------- 站内窗口：功能真截图 + 一句「它替你解决了什么」 ---------- */
+.sv-win {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 220px;
+  margin: 0;
+}
+
+.sv-win-head {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  font-size: var(--font-size-sm);
+  color: var(--sv-ink-2);
+}
+
+.sv-win-name {
+  font-weight: var(--weight-semibold);
+  color: var(--sv-ink);
+}
+
+.sv-win-feature {
+  font-size: var(--font-size-xs);
+  color: var(--sv-ink-3);
+}
+
+.sv-win-state {
+  margin-left: auto;
+  font-size: var(--font-size-xs);
+  color: var(--sv-ink-3);
+}
+
+.sv-win-state::before {
+  content: "";
+  display: inline-block;
+  box-sizing: border-box;
+  width: var(--space-2);
+  height: var(--space-2);
+  margin-right: var(--space-1-5);
+  border: 1.5px dashed var(--sv-ink);
+  border-radius: var(--radius-pill);
+  vertical-align: 0.04em;
+}
+
+.sv-win[data-state="linked"] .sv-win-state::before {
+  border: 0;
+  background: var(--sv-fill);
+}
+
+.sv-win-shot {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.sv-win-shot .ob-frame {
+  left: 50%;
+  transform: translate(-50%, -52%);
+}
+
+.sv[data-style="lines"] .sv-win-head {
+  padding-left: var(--space-2);
+  border-left: var(--space-1) solid var(--sv-line-1);
+}
+
+.sv[data-style="lines"][data-act="2"] .sv-win-head {
+  border-left-color: var(--sv-line-2);
+}
+
+.sv[data-style="lines"][data-act="3"] .sv-win-head {
+  border-left-color: var(--sv-line-3);
+}
+
+.sv-solve {
+  margin: 0;
+  text-wrap: pretty;
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-reading);
+  color: var(--sv-ink-2);
+}
+
+.sv-solve-label {
+  display: block;
+  font-size: var(--font-size-xs);
+  letter-spacing: 0.08em;
+  color: var(--sv-ink-3);
+}
+
+/* ---------- 辨伪环节 ---------- */
+.sv-gate {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.sv-reports {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+/* 报告：一种容器语言——muted 底，不描边；谁对谁错靠文字与图标，不靠再叠一圈线 */
+.sv-report {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-muted);
+  animation: sv-line-in 420ms var(--ease-out-quint) both;
+}
+
+.sv-report[data-id="b"] {
+  animation-delay: 140ms;
+}
+
+.sv-report-tag {
+  margin: 0;
+  font-family: var(--font-family-brand);
+  font-size: var(--font-size-lg);
+  font-weight: var(--weight-medium);
+}
+
+.sv-report-claim {
+  margin: 0;
+  text-wrap: pretty;
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-reading);
+  color: var(--sv-ink);
+}
+
+.sv-report-quote {
+  display: grid;
+  gap: var(--space-0-5);
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--sv-ink-3);
+}
+
+.sv-report-quote q {
+  quotes: "\201C" "\201D";
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-reading);
+  color: var(--color-chat-link);
+  overflow-wrap: anywhere;
+}
+
+.sv-report-foot {
+  display: flex;
+  min-height: var(--control-height-sm);
+  align-items: center;
+}
+
+.sv-pick {
+  height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  color: var(--sv-ink);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.sv-pick:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+
+.sv-pick:disabled {
+  background: transparent;
+  color: var(--sv-ink-3);
+  font-weight: var(--weight-regular);
+  cursor: not-allowed;
+}
+
+.sv-verdict {
+  display: inline-flex;
+  gap: var(--space-1-5);
+  align-items: center;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: color-mix(in srgb, var(--color-success) 55%, var(--sv-ink));
+}
+
+.sv-verdict[data-fake="true"] {
+  color: color-mix(in srgb, var(--color-danger) 60%, var(--sv-ink));
+}
+
+/* 原文：一张纸（井的颜色 + 发丝线），衬线字，被引的那一句像 PDF 里的荧光笔 */
+.sv-original {
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-muted);
+}
+
+.sv-original-open {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  align-items: center;
+  width: 100%;
+  padding: var(--space-3);
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: none;
+  color: var(--sv-ink);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.sv-original-open:hover {
+  background: var(--color-bg-hover);
+}
+
+.sv-original[data-open="true"] {
+  padding: var(--space-3);
+  animation: sv-line-in 380ms var(--ease-out-quint) both;
+}
+
+.sv-original-hint {
+  font-weight: var(--weight-regular);
+  color: var(--sv-ink-3);
+}
+
+.sv-original-head {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  margin-bottom: var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--sv-ink-3);
+}
+
+.sv-original-head b {
+  font-weight: var(--weight-semibold);
+  color: var(--sv-ink);
+}
+
+.sv-original-text {
+  margin: 0;
+  font-family: var(--font-family-brand);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-reading);
+  color: var(--sv-ink);
+}
+
+.sv-original-text mark {
+  padding: 0 var(--space-0-5);
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--color-warning) 30%, transparent);
+  color: inherit;
+}
+
+/* ---------- 底栏 ---------- */
+.sv-bar {
+  display: flex;
+  gap: var(--space-4);
+  align-items: center;
+  height: calc(var(--list-item-rich) + var(--space-6));
+  padding: 0 var(--space-8);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.sv-segs {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+}
+
+.sv-segs i {
+  width: var(--space-4);
+  height: var(--space-1);
+  border-radius: var(--radius-xs);
+  background: var(--color-border-default);
+}
+
+.sv-segs i[data-start="true"] {
+  margin-left: var(--space-2);
+}
+
+.sv-segs i[data-state="done"] {
+  background: var(--sv-ink-3);
+}
+
+.sv-segs i[data-state="on"] {
+  background: var(--sv-ink);
+}
+
+.sv-where {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--font-size-sm);
+  color: var(--sv-ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sv-keys {
+  flex: none;
+  font-size: var(--font-size-xs);
+  color: var(--sv-ink-3);
+}
+
+.sv-btn {
+  display: inline-flex;
+  flex: none;
+  gap: var(--space-1-5);
+  align-items: center;
+  height: var(--control-height-lg);
+  padding: 0 var(--space-4);
+  border: 0;
+  border-radius: var(--radius-lg);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.sv-btn-ghost {
+  box-shadow: inset 0 0 0 1px var(--color-border-default);
+}
+
+/* ---------- 看完：星座收拢成一颗星，面板淡出，露出底下真正的首页 ---------- */
+.sv[data-leaving="true"] {
+  animation: sv-out 240ms var(--ease-in-out) 380ms both;
+}
+
+.sv[data-leaving="true"] .sv-scene,
+.sv[data-leaving="true"] .sv-top,
+.sv[data-leaving="true"] .sv-bar,
+.sv[data-leaving="true"] .sv-count {
+  animation: sv-fade 260ms var(--ease-in-out) both;
+}
+
+.sv[data-leaving="true"] .sv-map {
+  animation: sv-fold 560ms var(--ease-in-out) both;
+}
+
+@keyframes sv-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes sv-fade {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes sv-fold {
+  to {
+    transform: translate(var(--leave-x, 0px), var(--leave-y, 0px)) scale(0.06);
+  }
+}
+
+/* ---------- 窄窗 / 矮窗 ---------- */
+@media (max-width: 1180px) {
+  .sv-body {
+    grid-template-columns: minmax(0, 0.92fr) minmax(0, 1fr);
+    gap: var(--space-5);
+    padding-right: var(--space-6);
+    padding-left: var(--space-6);
+  }
+
+  .sv-top,
+  .sv-bar {
+    padding-right: var(--space-6);
+    padding-left: var(--space-6);
+  }
+
+  :root[data-platform="darwin"] .sv-top {
+    padding-left: calc(var(--space-6) + var(--sv-traffic));
+  }
+
+  .sv-keys {
+    display: none;
+  }
+}
+
+@media (max-height: 760px) {
+  .sv {
+    --font-size-sv-title: calc(var(--ui-font-size) * 2.4);
+  }
+
+  .sv-say p {
+    font-size: var(--font-size-base);
+  }
+
+  .sv-scene {
+    gap: var(--space-3);
+  }
+
+  .sv-log {
+    gap: var(--space-2);
+  }
+
+  .sv-win {
+    min-height: 120px;
+  }
+
+  .sv-solve-label {
+    display: none;
+  }
+
+  .sv-slot {
+    padding: var(--space-1-5) var(--space-3);
+  }
+
+  .sv-job {
+    padding-block: var(--space-1);
+  }
+
+  /* 辨伪环节：矮窗里把两张报告与原文收紧，过关后的台词也不用滚 */
+  .sv-gate {
+    gap: var(--space-2);
+  }
+
+  .sv-report {
+    gap: var(--space-1-5);
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .sv-report-tag {
+    font-size: var(--font-size-base);
+  }
+
+  .sv-report-quote-label {
+    display: none;
+  }
+
+  .sv-original[data-open="true"] {
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .sv-original-text,
+  .sv-report-claim {
+    line-height: var(--line-height-ui);
+  }
+}
+
+/* 持续的动效（转、抖、闪）窗口不在前台时暂停；一次性的入场不管，免得定在半途 */
+[data-window-inactive="true"] .sv-ring,
+[data-window-inactive="true"] .sv-ov-ring,
+[data-window-inactive="true"] .sv-lbl-in,
+[data-window-inactive="true"] .sv-shake,
+[data-window-inactive="true"] .sv-hollow,
+[data-window-inactive="true"] .sv-moon-orbit,
+[data-window-inactive="true"] .sv-hintring,
+[data-window-inactive="true"] .sv-card[data-hint="true"]::after,
+[data-window-inactive="true"] .sv-card[data-state="lost"] {
+  animation-play-state: paused !important;
+}
+
+/* 故事版收起来去设置接模型时，窗口底部留一枚「回到故事」（主操作，用 accent；z 在设置之上） */
+.sv-resume {
+  position: fixed;
+  left: 50%;
+  bottom: var(--space-6);
+  z-index: var(--z-tooltip);
+  display: inline-flex;
+  gap: var(--space-1-5);
+  align-items: center;
+  height: var(--control-height-lg);
+  padding: 0 var(--space-4);
+  border: 0;
+  border-radius: var(--radius-lg);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  transform: translateX(-50%);
+}
