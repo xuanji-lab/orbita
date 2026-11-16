@@ -18,12 +18,7 @@
  *
  * 不读 PI_CACHE_RETENTION：那是全局开关，网关上会每条失败。
  */
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
-
-/** 会话的 provider 调用入口（`Agent.streamFunction` 的公开形状） */
-type SessionStreamFn = AgentSession["agent"]["streamFunction"];
-
-/** 本会话在父子关系里的身份（与 runtime 里决定通道工具的 role 同源：meta.parentId） */
+/** 本会话在父子关系里的身份（与决定通道工具的 role 同源：meta.parentId）。按请求判的包装在 kernel.ts 的 withCacheRetention */
 export type SessionRole = "root" | "child";
 
 /** Anthropic 官方 API 主机：只有它对 1 小时 cache_control 的行为经过实测 */
@@ -47,22 +42,4 @@ export function chooseCacheRetention(
     return undefined;
   }
   return host === OFFICIAL_ANTHROPIC_HOST ? "long" : undefined;
-}
-
-/**
- * 包一层 streamFn：调用方没给 cacheRetention 时按判定补。调用方显式给了的
- * （pi 压缩 / 分支摘要固定传 "none"）原样保留。判定为 undefined 时 options 逐字透传。
- */
-export function wrapStreamWithCacheRetention(inner: SessionStreamFn, role: SessionRole): SessionStreamFn {
-  return (model, context, options) => {
-    if (options?.cacheRetention !== undefined) return inner(model, context, options);
-    const retention = chooseCacheRetention(model, role);
-    if (retention === undefined) return inner(model, context, options);
-    return inner(model, context, { ...options, cacheRetention: retention });
-  };
-}
-
-/** 给会话装上包装（openTurn 建出 session 后调一次，同 applyBillingStreamPatch 的落点） */
-export function applyCacheRetentionPatch(session: AgentSession, role: SessionRole): void {
-  session.agent.streamFunction = wrapStreamWithCacheRetention(session.agent.streamFunction, role);
 }

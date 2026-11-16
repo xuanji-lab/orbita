@@ -4,7 +4,7 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { RequestBroker } from "./request-broker.ts";
+import { isToolReply, RequestBroker, toolReplyResult } from "./request-broker.ts";
 import type { ReadTaskOutcome } from "../shared/agent-ipc.ts";
 
 describe("RequestBroker", () => {
@@ -58,5 +58,24 @@ describe("RequestBroker", () => {
     assert.equal(result.ok, false);
     if (!result.ok) assert.match(result.error, /回执/);
     broker.resolve(String((sent[0] as Record<string, unknown>).requestId), { ok: true, card: null, text: "late" });
+  });
+});
+
+describe("toolReplyResult：两个内核共用的回执翻法", () => {
+  test("失败回执补默认错误文案，成功回执只挑工具认的字段", () => {
+    assert.deepEqual(toolReplyResult({ type: "skillWriteResult", requestId: "r", ok: false }), { ok: false, error: "Write failed" });
+    assert.deepEqual(toolReplyResult({ type: "readTaskResult", requestId: "r", ok: false, error: "" }), { ok: false, error: "" });
+    assert.deepEqual(
+      toolReplyResult({ type: "channelSendResult", requestId: "r", ok: true, messageId: "m1" }),
+      { ok: true, messageId: "m1" },
+    );
+  });
+
+  test("形状即契约的回执原样给；意图确认等非工具回执不认", () => {
+    const terminal = { type: "terminalResult", requestId: "r", ok: true, text: "t" } as const;
+    assert.equal(isToolReply(terminal as never), true);
+    assert.equal(toolReplyResult(terminal as never), terminal);
+    assert.equal(isToolReply({ type: "intentConfirmResult", requestId: "r", decision: "cancel" } as never), false);
+    assert.equal(isToolReply({ type: "abort", sessionId: "s" }), false);
   });
 });

@@ -4,22 +4,16 @@
  * 错误体里的 `"type":"server_error"`——永久错误按指数退避重试到上限（8 次约 4 分钟），
  * 前 5 次界面不显示，用户看到的就是一直「回应中」。
  *
- * pi-coding-agent 的 AgentSession._isRetryableError 与压缩的 retryAssistantCall 都直接调
+ * pi-durable 的对话重试（harness/generation.js）与压缩重试（harness/compaction.js）都直接调
  * 这一个函数，守住它即守住两条重试路径。
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-ai/compat";
-import {
-  createAgentSessionFromServices,
-  createAgentSessionServices,
-  SessionManager,
-} from "@earendil-works/pi-coding-agent";
 
 function failed(errorMessage: string): AssistantMessage {
   return {
@@ -113,47 +107,17 @@ test("非 error 的消息与没有错误文本的一律不重试（pi 原行为�
 });
 
 /**
- * 走真 AgentSession 跑一轮：首个回复是给定错误，其后是成功。
- * 证明 pi-coding-agent 加载到的正是打过 patch 的那份 pi-ai（node_modules 里 pi-agent-core
- * 另挂着一份 0.84.4，解析错了这里会露馅）。retry 参数显式给，不吃用户全局 settings。
+ * 证明新内核用的正是打过 patch 的那份 pi-ai：pi-durable 自己底下没有另挂一份（解析会落到它自己的那份上，
+ * patch 就白打了），而顶层那份的重试判定里确实有 patch 加的那道。
  */
-async function runTurn(errorMessage: string): Promise<{ calls: number; retryEvents: number }> {
-  const providerId = "orbita-retry-probe";
-  const faux = registerFauxProvider({ provider: providerId });
-  const cwd = await mkdtemp(join(tmpdir(), "orbita-retry-4xx-"));
-  try {
-    faux.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage }), fauxAssistantMessage("ok")]);
-    const services = await createAgentSessionServices({
-      cwd,
-      resourceLoaderOptions: { noSkills: true, extensionFactories: [] },
-    });
-    services.settingsManager.applyOverrides({ retry: { maxRetries: 2, baseDelayMs: 1 } });
-    services.modelRuntime.registerProvider(providerId, { apiKey: "test" });
-    const { session } = await createAgentSessionFromServices({
-      services,
-      sessionManager: SessionManager.inMemory(cwd),
-      model: faux.getModel(),
-    });
-    let retryEvents = 0;
-    session.subscribe((event) => {
-      if (event.type === "auto_retry_start") retryEvents++;
-    });
-    await session.prompt("hi");
-    return { calls: faux.state.callCount, retryEvents };
-  } finally {
-    faux.unregister();
-    await rm(cwd, { recursive: true, force: true });
+test("pi-durable 用的是顶层那份打过 patch 的 pi-ai（它底下没有另挂一份）", () => {
+  const durableDist = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-durable")));
+  const durableRoot = dirname(durableDist);
+  assert.equal(existsSync(join(durableRoot, "node_modules", "@earendil-works", "pi-ai")), false, "pi-durable 底下另挂了一份 pi-ai");
+  const piAiDist = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-ai")));
+  assert.match(readFileSync(join(piAiDist, "utils", "retry.js"), "utf8"), /hasNonRetryableClientStatus/);
+  // 新内核的两条重试路径确实调这一个函数
+  for (const file of ["generation.js", "compaction.js"]) {
+    assert.match(readFileSync(join(durableDist, "harness", file), "utf8"), /isRetryableAssistantError/, file);
   }
-}
-
-test("真会话：OpenCode 403 只发一次、不进重试", async () => {
-  const result = await runTurn(
-    'OpenAI API error (403): {"type":"server_error","message":"Upstream request failed: Model access is disabled"}',
-  );
-  assert.deepEqual(result, { calls: 1, retryEvents: 0 });
-});
-
-test("真会话对照组：502 照常重试一次后成功（否则上一条什么都没证明）", async () => {
-  const result = await runTurn("OpenAI API error (502): Bad Gateway");
-  assert.deepEqual(result, { calls: 2, retryEvents: 1 });
 });

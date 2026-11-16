@@ -16,6 +16,8 @@ import type { Messages } from "../../messages-en.ts";
  *   waiting  = 通道状态 waiting，子问了、父还没回（warning，"waiting for you"）
  *   approval = 子会话在 renderer 会话槽里有未答的工具审批（warning，"needs approval"）——
  *     manual 档下每个工具都要批，用户往往不在看这条子会话，必须顶到审批之上单独一档
+ *   interrupted = 子会话被应用崩溃打断、停着等你点「继续」（@shared/kernel 的 awaitsContinue；warning，归「等你」）——
+ *     不点它就一直停着，父会话也一直等它
  *   stopped  = 通道状态 stopped，**用户**终止了这个子会话（tertiary，"stopped"）——
  *     用户的裁决压过审批 / 在跑这些瞬时态：停都停了，不该再引导用户去批一个死轮
  *   done     = 通道 closed 于 done（success）
@@ -26,6 +28,7 @@ export type SubSessionRowStatus =
   | "running"
   | "waiting"
   | "approval"
+  | "interrupted"
   | "done"
   | "failed"
   | "stopped"
@@ -43,11 +46,14 @@ export function subSessionRowStatus(input: {
   channelStatus: ChannelStatus | undefined;
   needsApproval: boolean;
   running: boolean;
+  /** 被崩溃打断、等你点「继续」（缺席 = 否）；只在没在跑时为真，排在 running 之后只为读着顺 */
+  interrupted?: boolean;
 }): SubSessionRowStatus {
   if (input.channelStatus === "waiting") return "waiting";
   if (input.channelStatus === "stopped") return "stopped";
   if (input.needsApproval) return "approval";
   if (input.running) return "running";
+  if (input.interrupted === true) return "interrupted";
   if (input.channelStatus === "done") return "done";
   if (input.channelStatus === "failed") return "failed";
   return "idle";
@@ -64,6 +70,7 @@ export function subSessionRowStatus(input: {
 const STATUS_PRIORITY: Record<SubSessionRowStatus, number> = {
   waiting: 0,
   approval: 0,
+  interrupted: 0,
   running: 1,
   failed: 2,
   done: 3,
@@ -97,6 +104,7 @@ export function subSessionBarFill(status: SubSessionRowStatus): "running" | "wai
       return "running";
     case "waiting":
     case "approval":
+    case "interrupted":
       return "waiting";
     case "done":
       return "done";
@@ -152,6 +160,36 @@ function firstLineOf(text: string): string {
 }
 
 /**
+ * 「等你」那几个子会话怎么说（父会话顶部胶囊与右栏子会话列表标题同一套，2026-11-16 验收：一处写「被打断」一处写「在等你」，
+ * 读的人会以为是两件事）：有被打断的，先写被打断的个数；其余等你的（问你 / 待批准）照各处原来的说法写个数；都没有 = 空串。
+ */
+export function waitingSummary(
+  waiting: number,
+  interrupted: number,
+  words: { interrupted: (count: number) => string; waiting: (count: number) => string },
+): string {
+  const parts: string[] = [];
+  if (interrupted > 0) parts.push(words.interrupted(interrupted));
+  if (waiting - interrupted > 0) parts.push(words.waiting(waiting - interrupted));
+  return parts.join(" · ");
+}
+
+/**
+ * 父会话转录里派出卡的状态：通道摘要的终态（done / failed / waiting / stopped）优先；否则看子会话在 renderer
+ * 会话槽里的 phase——不为 idle 就是还在跑；都不是时，被崩溃打断、等你点继续的说「被打断」（不说「空闲」——
+ * 它停着是因为应用崩了，父会话还在等它）。
+ */
+export function delegateCardStatus(
+  channelStatus: ChannelStatus | undefined,
+  running: boolean,
+  interrupted: boolean,
+): "running" | "waiting" | "interrupted" | "done" | "failed" | "stopped" | "idle" {
+  if (channelStatus === "done" || channelStatus === "failed" || channelStatus === "waiting" || channelStatus === "stopped") return channelStatus;
+  if (running) return "running";
+  return interrupted ? "interrupted" : "idle";
+}
+
+/**
  * `subSessionStatusOf` 从引擎读的两个槽的**最小结构面**——结构化而不是直接引用
  * `SessionEngine` 整型：本模块保持纯模块纪律（不 import useChatSession），
  * 测试拿字面量假对象就能喂，真实引擎天然满足这个形状。
@@ -161,6 +199,8 @@ export interface SubSessionEngineSlots {
   states: ReadonlyMap<string, { approvals: readonly unknown[] }>;
   /** 会话 phase：非 idle = 这条会话此刻真的在跑 */
   phaseOf: (id: string) => string;
+  /** 被崩溃打断、等你点「继续」（引擎的 interruptedOf；缺席 = 不认这个来源） */
+  interruptedOf?: (id: string) => boolean;
 }
 
 /**
@@ -182,5 +222,6 @@ export function subSessionStatusOf(
     channelStatus,
     needsApproval: (engine.states.get(childId)?.approvals.length ?? 0) > 0,
     running: engine.phaseOf(childId) !== "idle",
+    interrupted: engine.interruptedOf?.(childId) ?? false,
   });
 }

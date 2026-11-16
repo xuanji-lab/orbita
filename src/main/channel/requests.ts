@@ -478,9 +478,8 @@ async function broadcastAfterAppend(deps: ChannelDeps, key: ChannelKey, message:
 /**
  * 把一条父→子消息真正送进子会话：正在跑就 steer 注入，空闲就当普通开轮。
  *
- * **已知限制**（不在本 PR 解决）：子这一轮恰好在 steer 到达前收尾，runtime 会
- * 回 failed（`runtime.ts` 的 steer 处理，目标不在跑就说明状态失步）。消息已经
- * 落在通道里，只是没有真正送达模型——用户能在通道里看到它，重发即可。
+ * 子这一轮恰好在 steer 到达前收尾：kernel 把原文退回来（steerBounced），主进程用同一封信当「子空闲时的投递」
+ * 开一轮（index.ts 的 onSteerBounced → startChildTurn），消息不丢。
  */
 async function deliverToChild(
   deps: ChannelDeps,
@@ -499,7 +498,19 @@ async function deliverToChild(
     deps.steer(child.id, text, message.delivery);
     return;
   }
-  // 空闲：delivery 对开轮无意义（没有正在跑的轮可注入），一律当普通开轮。
+  await startChildTurn(deps, child, text);
+}
+
+/**
+ * 子空闲时的投递：把一条父→子信封当普通开轮（delivery 对开轮无意义——没有正在跑的轮可注入）。
+ * 也是新内核里「插话到达时子刚收尾」的退回路径（kernel 回 steerBounced，主进程用同一封信开一轮），
+ * 所以信封原文由调用方给、这里不重拼。
+ */
+export async function startChildTurn(
+  deps: Pick<ChannelDeps, "phases" | "submitTurn">,
+  child: SessionMeta,
+  text: string,
+): Promise<void> {
   deps.phases.set(child.id, "turn");
   try {
     await deps.submitTurn({

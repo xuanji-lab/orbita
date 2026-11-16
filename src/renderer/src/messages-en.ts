@@ -804,6 +804,7 @@ export const en = {
   rowStatus: {
     pinned: "Pinned",
     subRunning: "Sub-session running",
+    subInterrupted: "A sub-session was interrupted · waiting for you to continue it",
     running: "Running",
     waiting: "Waiting for your reply",
     unread: "Finished · not viewed yet",
@@ -828,6 +829,7 @@ export const en = {
     doing: (step: string, now: string) => `${step}: ${now}`,
     approve: (what: string) => `Waiting for your approval: ${what}`,
     childWaiting: "A sub-session is waiting for your approval",
+    childInterrupted: "A sub-session was interrupted and is waiting for you to continue it",
     failed: "Stopped with an error",
     done: "Finished — open it to see the result",
     noText: "(no text)",
@@ -1988,6 +1990,16 @@ export const en = {
     noProviderExit: "Add a provider",
     readOnlyTask:
       "This task was recorded before tasks could be resumed, so it can be read but not continued. Start a new task to keep working.",
+    /** 新内核：迁移旧会话失败，只读（原件没动） */
+    readOnlyMigrationFailed: (reason: string) => `Preparing this task's history failed, so it can be read but not continued. The original is untouched. (${reason})`,
+    /** 新内核：这一轮被打断了（kernel 进程崩溃 / 应用退出时它在跑），库里还留着上下文 */
+    interruptedTurn: "This turn was interrupted before it finished.",
+    interruptedByCrash: "The app quit unexpectedly last time, so this sub-session was interrupted.",
+    continueTurn: "Continue",
+    /** 新内核：子会话在应用重启后被自动接着跑（后台任务照常续跑） */
+    resumedAfterRestart: "This sub-session was still running when the app restarted; it picked up the interrupted turn on its own.",
+    /** 新内核：第一次在旧会话里发消息时迁进库（超过 0.5 秒才显示） */
+    migratingSession: "Preparing this conversation's history — only needed the first time, one moment…",
     noMessages: "No messages yet. Send the first one to start.",
     /** 源侧分页：触顶拉更早一页那一行 */
     loadingOlder: "Loading earlier messages…",
@@ -2004,6 +2016,10 @@ export const en = {
     reopenTip: "Reopen this task — clears the done state",
     subSessionCount: (count: number) => plural(count, "sub-session"),
     subSessionWaiting: (waiting: number) => `${waiting} waiting`,
+    /** 子会话入口：等你的全是被崩溃打断的，芯片上直接说「被打断」 */
+    subSessionInterruptedShort: (count: number) => `${count} interrupted`,
+    /** 子会话入口的悬停提示：其中几个被崩溃打断、等你点继续 */
+    subSessionInterrupted: (count: number) => `${count} interrupted · waiting for you to continue`,
     openSubSessions: "Open sub-sessions",
     home: "Home",
     scopeTip: (path: string) => `${path} · switching starts a new task`,
@@ -2303,6 +2319,8 @@ export const en = {
     delegateStatus: {
       running: "running",
       waiting: "waiting for reply",
+      /** 被应用崩溃打断、等你点继续 */
+      interrupted: "interrupted",
       done: "done",
       failed: "failed",
       idle: "idle",
@@ -2349,6 +2367,8 @@ export const en = {
       running: "running",
       waiting: "waiting for you",
       approval: "needs approval",
+      /** 被应用崩溃打断、等你点继续 */
+      interrupted: "interrupted",
       done: "done",
       failed: "failed",
       /** 用户终止（通道 stopped）：比 closed 更硬，父模型的回信不能重开 */

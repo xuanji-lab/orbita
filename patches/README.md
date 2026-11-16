@@ -43,8 +43,8 @@ patch 在 pi-ai 而不在 Orbita 侧：AgentSession 的 `_isRetryableError` 是�
 订阅 `auto_retry_start` 再 `abortRetry()` 会把真错误换成 "Retry cancelled"，且盖不住压缩的
 `retryAssistantCall`。这一个函数是两条重试路径的共同判据。
 
-**行为守卫**：`src/agent/retry-4xx-patch.test.ts`（纯判定 + 真 AgentSession 走 faux provider，
-含 502 仍重试的对照组）。pi 升级后若原生按状态码判，删掉这段 patch。
+**行为守卫**：`src/agent/retry-4xx-patch.test.ts`（纯判定含 502 仍重试的对照组；另断言 pi-durable 用的正是顶层这份
+打过 patch 的 pi-ai，它的对话与压缩两条重试路径都调这个函数）。pi 升级后若原生按状态码判，删掉这段 patch。
 
 ## @earendil-works/pi-coding-agent — 公开入口导出 `resolveToCwd`
 
@@ -71,3 +71,18 @@ Word 按扩展名不按 zip 魔数：PK 是通用 zip 魔数，会误指路 xlsx
 
 **行为守卫**：`src/agent/pdf-tools.test.ts`、`src/agent/docx-tools.test.ts` 里标「patch 守护」的三条。
 
+
+## @earendil-works/pi-coding-agent — 公开入口导出 `buildSystemPrompt` 与 `normalizeToolResultImages`
+
+`dist/index.js` / `dist/index.d.ts`：追加两行 `export { buildSystemPrompt } from "./core/system-prompt.js"`、
+`export { normalizeToolResultImages } from "./utils/tool-result-images.js"`（1.5.2 都不在公开入口里）。
+
+**为什么（2026-11-14）**：换内核期间新内核（pi-durable）要发出与旧内核**逐字节相同**的系统提示。
+旧内核的提示词 = pi 的基础提示（`buildSystemPrompt`：工具清单、规则、项目说明、技能索引、cwd）经
+`adaptSystemPrompt` 再拼上 Orbita 自己的段。新内核用同一个函数、同样的输入重建基础提示，
+而不是手抄一份 pi 的模板（抄的那份会在 pi 升级时静默漂移）。工具结果里的图同理：旧内核在 agent-session 的
+`_afterToolCall` 里对每个工具结果过 `normalizeToolResultImages`（按模型的图片上限缩放、附坐标换算提示），
+新内核注册的同一批工具要过同一个函数。删 pi-coding-agent 的那一步随它一起删。
+
+**行为守卫**：`src/agent/kernel-prompt.test.ts`（同一组输入下与 pi 会话实际发出的基础提示逐字节相等）、
+`src/agent/kernel-turn.test.ts`（工具结果里的大图被缩放、带换算提示）。

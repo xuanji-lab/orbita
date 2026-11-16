@@ -136,6 +136,7 @@ describe("homeCardLine —— 卡上「此刻在干什么」那一句", () => {
     doing: (step, now) => `${step}：${now}`,
     approve: (what) => `等你批准：${what}`,
     childWaiting: "子会话在等你批准",
+    childInterrupted: "子会话被打断了，等你点继续",
     failed: "出错停下了",
     done: "跑完了",
     noText: "（没有文字）",
@@ -206,6 +207,8 @@ describe("homeCardLine —— 卡上「此刻在干什么」那一句", () => {
     const approval = { toolName: "bash", input: { command: "git push origin main" } };
     assert.equal(homeCardLine({ ...base, state: "waiting", records: null, approval }, text), "等你批准：bash git push origin main");
     assert.equal(homeCardLine({ ...base, state: "waiting", records: null }, text), "子会话在等你批准");
+    // 子会话被崩溃打断：没有审批可批，不能说「在等你批准」
+    assert.equal(homeCardLine({ ...base, state: "waiting", records: null, childInterrupted: true }, text), "子会话被打断了，等你点继续");
   });
 
   test("出错：错误原文第一行；没有原文（重启后只剩未读标记）说出错停下了", () => {
@@ -287,6 +290,7 @@ describe("visibleAsk / 首页记录行的「此刻」一格不露系统提示", 
     doing: (step, now) => `${step}：${now}`,
     approve: (what) => `等你批准：${what}`,
     childWaiting: "子会话在等你批准",
+    childInterrupted: "子会话被打断了，等你点继续",
     failed: "出错停下了",
     done: "跑完了",
     noText: "（没有文字）",

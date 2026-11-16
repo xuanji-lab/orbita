@@ -19,12 +19,14 @@ import {
   parseCompactCommand,
   createSessionStates,
   removeApproval,
+  seedRunningPhases,
   setPendingEcho,
   nextDeliverable,
   removeSessionEntry,
   revertOptimisticTurn,
   prependOlder,
   seedFromDisk,
+  seedHistory,
   setOlderLoading,
   setEntryPhase,
   observedThinkingFor,
@@ -954,6 +956,38 @@ describe("turnError —— 回合失败标注的进出槽", () => {
     assert.equal(entry?.turnError, "重试 3 次后仍失败：fetch failed");
   });
 
+  test("新内核：被打断时还在流的半截回答、还在跑的工具清掉（不像一条完整回答）；普通的回合失败不清", () => {
+    const streaming = (id: string) => ({
+      type: "progress" as const,
+      sessionId: "A",
+      progress: { type: "item_started" as const, item: { role: "assistant" as const, id, content: [{ type: "text" as const, text: "半截" }], model: { provider: "p", id: "m" }, status: "streaming" as const, timestamp: 2 } },
+    });
+    const user = { type: "progress" as const, sessionId: "A", progress: { type: "item_started" as const, item: { role: "user" as const, id: "u1", content: [{ type: "text" as const, text: "问" }], timestamp: 1 } } };
+    let states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "turn" });
+    states = applyAgentEvent(states, user);
+    states = applyAgentEvent(states, streaming("a1"));
+    states = applyAgentEvent(states, { type: "failed", sessionId: "A", message: "kernel runtime exited with code 137", turn: true, continuable: true });
+    const ids = (s: typeof states) => [...(s.get("A")?.transcript.progressItems.keys() ?? [])];
+    assert.deepEqual(ids(states), ["u1"], "半截回答清掉，用户那句留着");
+    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "turn" });
+    states = applyAgentEvent(states, streaming("a2"));
+    states = applyAgentEvent(states, { type: "failed", sessionId: "A", message: "fetch failed", turn: true });
+    assert.deepEqual(ids(states), ["u1", "a2"], "普通的回合失败照旧（旧内核同样的界面）");
+  });
+
+  test("新内核：被打断的轮（continuable）进槽带「可继续」，idle 不清；新一轮开跑与标注一起清", () => {
+    let states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "turn" });
+    states = applyAgentEvent(states, { type: "failed", sessionId: "A", message: "kernel runtime exited with code 137", turn: true, continuable: true });
+    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "idle" });
+    assert.equal(states.get("A")?.turnContinuable, true);
+    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "turn" });
+    assert.equal(states.get("A")?.turnContinuable, false);
+    assert.equal(states.get("A")?.turnError, null);
+    // 普通的回合失败不带「可继续」
+    states = applyAgentEvent(states, { type: "failed", sessionId: "A", message: "fetch failed", turn: true });
+    assert.equal(states.get("A")?.turnContinuable, false);
+  });
+
   test("failed 不带 turn：槽里不产生标注（操作级失败走全局红字），归位照旧", () => {
     let states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "turn" });
     states = applyAgentEvent(states, { type: "failed", sessionId: "A", message: "两本账对不上" });
@@ -1066,6 +1100,31 @@ describe("意图系统的槽位（实验功能 intent-system）", () => {
     states = applyAgentEvent(states, { type: "intentRecallRecord", sessionId: "s1", record });
     assert.deepEqual(states.get("s1")?.intentRun, null);
     assert.deepEqual(states.get("s1")?.intentRecalls.length, 1);
+  });
+
+  test("seedRunningPhases：主进程说在跑的会话，槽里 idle 的补成 turn（不显示「上次被中断 · 继续」）；已收到真事件的不动；之后的 idle 照常收", () => {
+    let states = applyAgentEvent(createSessionStates(), { type: "phase", sessionId: "busy", phase: "compaction" });
+    states = seedRunningPhases(states, ["child", "busy"]);
+    assert.equal(states.get("child")?.phase, "turn");
+    assert.equal(states.get("busy")?.phase, "compaction");
+    states = applyAgentEvent(states, { type: "phase", sessionId: "child", phase: "idle" });
+    assert.equal(states.get("child")?.phase, "idle");
+  });
+
+  test("迁移提示：事先报的（expected）立刻露出；kernel 随后自己的 running 不把它降回去；done / idle 都收起", () => {
+    let states = applyAgentEvent(createSessionStates(), { type: "migration", sessionId: "s1", state: "running", expected: true });
+    assert.equal(states.get("s1")?.migrating, true);
+    assert.equal(states.get("s1")?.migratingExpected, true);
+    states = applyAgentEvent(states, { type: "migration", sessionId: "s1", state: "running" });
+    assert.equal(states.get("s1")?.migratingExpected, true);
+    states = applyAgentEvent(states, { type: "migration", sessionId: "s1", state: "done" });
+    assert.equal(states.get("s1")?.migrating, false);
+    assert.equal(states.get("s1")?.migratingExpected, false);
+    // 没有事先报的：只有 kernel 的 running（界面等 0.5 秒才露）
+    states = applyAgentEvent(states, { type: "migration", sessionId: "s1", state: "running" });
+    assert.equal(states.get("s1")?.migratingExpected, false);
+    states = applyAgentEvent(states, { type: "phase", sessionId: "s1", phase: "idle" });
+    assert.equal(states.get("s1")?.migrating, false);
   });
 
   test("乐观回显：真回显（item_started user）一到即清；phase idle 与失败归位也清", () => {
@@ -1270,5 +1329,38 @@ describe("prependOlder / setOlderLoading —— 源侧分页向前的方向", ()
     assert.notEqual(on, seeded);
     assert.equal(on.get("A")?.window.loading, true);
     assert.equal(seeded.get("A")?.window.loading, false);
+  });
+});
+
+describe("seedHistory：打开会话时种盘上的历史（窗口晚于事件起来的槽也要种）", () => {
+  const ids = (states: SessionStates, id: string) => selectTranscript(states.get(id)!.transcript).map((item) => item.id);
+  test("复现：槽由 seedRunningPhases 先建（重启续跑的子会话），打开时历史要在，且仍在跑", () => {
+    let states = seedRunningPhases(createSessionStates(), ["c"]);
+    states = seedHistory(states, "c", [userItem("u1", 1000), userItem("u2", 2000)], null, { hasMore: true, compactionsBefore: 1 });
+    assert.deepEqual(ids(states, "c"), ["u1", "u2"]);
+    assert.equal(states.get("c")?.phase, "turn");
+    assert.equal(states.get("c")?.window.firstId, "u1");
+    assert.equal(states.get("c")?.window.hasMore, true);
+    assert.equal(states.get("c")?.window.compactionsBefore, 1);
+  });
+  test("复现：槽由这一轮的实时事件先建——盘上的在前、实时的在后；当前这一轮的条目盘上也有时不重复，同 id 以实时为准", () => {
+    let states = applyAgentEvent(createSessionStates(), { type: "phase", sessionId: "c", phase: "turn" });
+    states = applyAgentEvent(states, progress("c", assistantDone("a2", "实时的那一版")));
+    // 盘上：更早的两条 + 这一轮已落盘的 a2（文字是旧的一版）
+    const diskA2 = { ...assistantDone("a2", "盘上的旧版").item };
+    states = seedHistory(states, "c", [userItem("u1", 1000), userItem("u2", 2000), diskA2]);
+    assert.deepEqual(ids(states, "c"), ["u1", "u2", "a2"]);
+    assert.deepEqual(texts(states, "c"), ["实时的那一版"]);
+  });
+  test("盘上比第一条重合记录更晚、槽里还没有的（实时事件还在路上）不并到前面，免得乱序", () => {
+    let states = applyAgentEvent(createSessionStates(), progress("c", assistantDone("a2", "实时")));
+    states = seedHistory(states, "c", [userItem("u1", 1000), { ...assistantDone("a2", "盘").item }, { ...assistantDone("a3", "还在路上").item }]);
+    assert.deepEqual(ids(states, "c"), ["u1", "a2"]);
+  });
+  test("槽不在：与种盘老路径逐字段相同；种过的槽再打开不动（同一个引用）", () => {
+    const disk = [userItem("u1", 1000), userItem("u2", 2000)];
+    const fresh = seedHistory(new Map(), "A", disk, null, { hasMore: false, compactionsBefore: 0 });
+    assert.deepEqual(fresh.get("A"), seedFromDisk(new Map(), "A", disk, null, { hasMore: false, compactionsBefore: 0 }).get("A"));
+    assert.equal(seedHistory(fresh, "A", [userItem("u0", 500), ...disk]), fresh);
   });
 });

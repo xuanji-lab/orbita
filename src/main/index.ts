@@ -11,7 +11,7 @@ import { cpus, homedir, totalmem } from "node:os";
 import { join } from "node:path";
 import type { SessionPhase } from "../shared/transcript.ts";
 import { effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
-import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
+import { AgentHost, forkKernelRuntime, resolveRuntimePath } from "./agent/host.ts";
 import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";
 import { PI_PACKAGE_DIR_ENV, piPackageDir } from "./agent/pi-package.ts";
 import { existsSync } from "node:fs";
@@ -60,11 +60,14 @@ import { KeepAwake } from "./automation/keep-awake.ts";
 import { deliverAutomationRun, launchAutomationRun, type LaunchDeps } from "./automation/launch.ts";
 import { applyAutomationRequest, type AutomationRequestDeps } from "./automation/requests.ts";
 import { AutomationScheduler } from "./automation/scheduler.ts";
-import { AutomationStore } from "./automation/store.ts";
-import { applyChannelSend, applyDelegate, type ChannelDeps } from "./channel/requests.ts";
+import { AutomationStore, automationStoreFilePath } from "./automation/store.ts";
+import { applyChannelSend, applyDelegate, startChildTurn, type ChannelDeps } from "./channel/requests.ts";
 import { ChannelStore } from "./channel/store.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
+import { KernelHost, kernelIdleRecycleMs, sessionsToResume } from "./agent/kernel-host.ts";
+import { kernelChildTag, reapKernelChildren } from "../agent/kernel-children.ts";
+import { kernelLibraryName } from "../shared/kernel.ts";
 import { moveSessions } from "./session/move.ts";
 import { registerWrapupIpc } from "./session/wrapup-ipc.ts";
 import { registerMcpIpc } from "./mcp/ipc.ts";
@@ -131,7 +134,7 @@ import { resolveTurnDirectories } from "./agent/turn-directories.ts";
 import { mainWindows } from "./window/main-windows.ts";
 import { isOwnRendererPage, type RendererOriginDeps } from "./window/renderer-origin.ts";
 import { SafeStorageSecrets } from "./provider/safe-storage-secrets.ts";
-import { devDataDirs } from "./data-dirs.ts";
+import { devDataDirs, formalUserDataDir, toolProtectedDirs } from "./data-dirs.ts";
 import { ProviderStore } from "./provider/store.ts";
 import { createDoubaoProtocol } from "./voice/doubao-protocol.ts";
 import { DictationSessions } from "./voice/dictation.ts";
@@ -546,6 +549,28 @@ void app.whenReady().then(async () => {
     [CATALOG_CACHE_ENV]: join(configDir, "model-catalog-cache.json"),
     ...(existsSync(join(piPackage, "package.json")) ? { [PI_PACKAGE_DIR_ENV]: piPackage } : {}),
   };
+  /**
+   * 新内核（pi-durable，kernel-host.ts）：对话主循环（根会话、子会话、自动化开的轮）交给 kernel 进程
+   * （第一次有会话要跑时懒拉起，与 agent 进程同一份环境变量）。
+   */
+  const durableDir = join(configDir, "durable");
+  const kernel = new KernelHost(durableDir);
+  const kernelLane = kernel.lane({
+    readMeta: (id) => sessions.readMeta(id),
+    updateDurable: (id, change) => sessions.updateDurable(id, change),
+    fork: () => forkKernelRuntime(__dirname, agentProcessEnv),
+    idleRecycleMs: kernelIdleRecycleMs(process.env),
+    // kernel 进程被杀：它拉起的 bash 进程组不会跟着死，按库目录的标签清掉（kernel-children.ts）
+    reap: () => {
+      void reapKernelChildren(kernelChildTag(durableDir)).then((count) => {
+        if (count > 0) console.error(`[kernel] kernel 进程退出，清掉 ${count} 个留下的 shell 子进程`);
+      });
+    },
+  });
+  // 上一次连主进程一起被杀（kill -9 / 崩溃）时 kernel 拉起的 shell 留下的孤儿：启动时就清，不等 kernel 进程下次被拉起
+  void reapKernelChildren(kernelChildTag(durableDir)).then((count) => {
+    if (count > 0) console.error(`[kernel] 启动时清掉上一次留下的 ${count} 个 shell 子进程`);
+  });
   const agentHost = new AgentHost(resolveRuntimePath(__dirname), agentProcessEnv, (event) => {
     // MCP 的连接状态由 agent 进程报上来（连接是它建的），主进程缓存最后一次快照给管理面看
     if (event.type === "mcp") mcpIpc.onAgentSnapshot(event.servers);
@@ -802,7 +827,7 @@ void app.whenReady().then(async () => {
     record(event);
     broadcastAgentEvent(event);
     // 目录联网刷新只刷用户已添加的服务商用到的目录（审核 F-1）：每次拉起 agent 进程时现读一次
-  }, async () => catalogIdsOfProviders(await providers.load()));
+  }, async () => catalogIdsOfProviders(await providers.load()), kernelLane);
   // MCP 的 IPC 面（1-1 起含热重载）。reload 回调闭包引用 agentHost——
   // 事件回调只在事件到达时执行，那时两边都已定义，不存在 TDZ 问题
   const mcpIpc = registerMcpIpc(mcp, workspaces, () => agentHost.mcpReload());
@@ -1055,14 +1080,30 @@ void app.whenReady().then(async () => {
       },
     },
   });
+  const onSessionRemoved = (id: string): void => {
+    agentHost.disposeSession(id);
+    // 会话删了，它在受管浏览器里的 agent tab 也一并关掉；意图存档与记忆的尾账也丢
+    browserSandbox.closeSessionTab(id);
+    intentIngest.forget(id);
+    memoryTurns.forget(id);
+  };
   registerSessionIpc(
     sessions,
-    (id) => {
-      agentHost.disposeSession(id);
-      // 会话删了，它在受管浏览器里的 agent tab 也一并关掉；意图存档与记忆的尾账也丢
-      browserSandbox.closeSessionTab(id);
-      intentIngest.forget(id);
-      memoryTurns.forget(id);
+    // 删的是树根就连它的库一起删（一棵树一库）；删的是树里的一条（子会话）就只从树的库里摘掉它
+    // （库关闭时清行，kernel-purge.ts）。session:delete 等这里做完才删会话文件
+    async (id) => {
+      onSessionRemoved(id);
+      const meta = await sessions.readMeta(id);
+      try {
+        if (meta?.parentId !== undefined) {
+          if (meta.durable !== undefined) await agentHost.forgetKernelSession(id, meta.parentId);
+          return;
+        }
+        // kernel 进程开着就让它停轮、关库再删（不在写者手里删文件）；没开着直接删文件
+        if (!(await agentHost.dropKernelLibrary(kernelLibraryName(id)))) await kernel.drop(kernelLibraryName(id));
+      } catch (error) {
+        console.error("[kernel] 删库 / 摘会话失败", error);
+      }
     },
     agentHost,
     carryovers,
@@ -1245,8 +1286,14 @@ void app.whenReady().then(async () => {
     join(configDir, "pi-sessions"),
     // 图片字节预算的占位要拼附图原图的绝对路径（agent 进程不做路径策略）
     (sessionId) => sessions.attachmentDirOf(sessionId),
-    // 会话文件不可变（2026-09-18）：两个账本目录对工具面全档只读，含 Skip
-    [join(configDir, "sessions"), join(configDir, "pi-sessions")],
+    // 会话文件不可变（2026-09-18）：两个账本目录与新内核的库目录对工具面全档只读，含 Skip；
+    // 开发实例再多护一份正式实例的库目录（data-dirs.ts 的 toolProtectedDirs）
+    toolProtectedDirs(configDir, devDirs !== null ? formalUserDataDir(app.getPath("appData")) : null),
+    // 自动化记录不可变（2026-11-13 用户裁决）：automations.json 记录「智能体定时做过什么」，
+    // 智能体删改它 = 丢痕迹；与它的 `.tmp` / `.bad-` 兄弟一起全档只读，智能体改自动化走自动化工具
+    // 开发实例（devDirs 非空）再多护一份：正式版（`<appData>/orbita`）的记录文件——用户就是用开发实例做验收的，
+    // 开发实例里的智能体不该能删到他真实在用的自动化；其它开发实例之间仍互相放行。数据目录之外的文件只按文件保
+    [automationStoreFilePath(configDir), ...(devDirs !== null ? [automationStoreFilePath(formalUserDataDir(app.getPath("appData")))] : [])],
     (workspaceId) => skills.linkDirs(workspaceId),
     skills,
     plugins,
@@ -1272,6 +1319,41 @@ void app.whenReady().then(async () => {
     broadcast: broadcastChannelEvent,
   };
   registerChannelIpc(deps);
+  // 新内核：上次退出（或被杀）时还在跑的子会话照常接着跑（后台任务；树根不续，界面给「继续」）。
+  // 先记 resumed（界面据此说一句「重启后接着跑的」），再走与「继续」按钮同一条开轮装配
+  void (async () => {
+    for (const child of sessionsToResume(await sessions.list())) {
+      await sessions.updateDurable(child.id, (current) => (current === undefined ? current : { ...current, resumed: Date.now() }));
+      phases.set(child.id, "turn");
+      await agentIpc
+        .continueTurn({
+          sessionId: child.id,
+          cwd: child.cwd,
+          workspaceId: child.workspaceId,
+          resume: child.piSessionFile === null ? null : { piSessionFile: child.piSessionFile },
+          providerId: child.providerId,
+          modelId: child.modelId,
+          mode: child.mode,
+          thinkingLevel: child.thinkingLevel,
+        })
+        .catch((error: unknown) => {
+          phases.delete(child.id);
+          console.error("[kernel] 重启后接着跑子会话失败", child.id, error);
+        });
+      console.info(`[kernel] 重启后接着跑子会话 ${child.id}`);
+    }
+  })().catch((error: unknown) => console.error("[kernel] 重启后续跑子会话失败", error));
+  // 新内核：插话到达时子刚收尾，原文退回来——用同一封信当「子空闲时的投递」开一轮（旧内核这一刻只报失败、消息没送到）
+  agentHost.onSteerBounced((sessionId, text) => {
+    void (async () => {
+      const child = await sessions.readMeta(sessionId);
+      if (child === null) return;
+      await startChildTurn(deps, child, text);
+    })().catch((error: unknown) => {
+      console.error("[channel] 插话退回后开轮失败", sessionId, error);
+      broadcastAgentEvent({ type: "failed", sessionId, message: `steer 到达时这一轮已结束，补开一轮也没成：${error instanceof Error ? error.message : String(error)}` });
+    });
+  });
 
   /*
    * GitHub 出口只有一个：检查更新（provider）与「所有版本」列表共用同一个客户端——
@@ -1362,7 +1444,20 @@ void app.whenReady().then(async () => {
     console.warn("[更新] 初始化失败：", error instanceof Error ? error.message : String(error));
   });
 
-  app.on("before-quit", () => {
+  /**
+   * 正常退出时 kernel 进程里有轮在跑：先让它停轮、关库（最多等 3 秒），再继续退出——上下文与队列留在库里，
+   * 下次打开是「上次被中断」，由用户决定继续（shutdownKernel 对没拉起的 kernel 立即返回）。
+   */
+  let kernelDrained = false;
+  app.on("before-quit", (event) => {
+    // kernel 进程没拉起（这次没跑过新内核的会话）就不拦：一个 preventDefault 都不多
+    if (!kernelDrained && agentHost.kernelAlive()) {
+      event.preventDefault();
+      kernelDrained = true;
+      // 下一拍再 quit：在 before-quit 里同步 / 紧跟着再发起退出，SIGTERM 触发的那次退出会卡住（2026-11-14 实测）
+      void agentHost.shutdownKernel().finally(() => setTimeout(() => app.quit(), 0));
+      return;
+    }
     automationScheduler.stop();
     keepAwake.release();
     appTray?.beginQuit();

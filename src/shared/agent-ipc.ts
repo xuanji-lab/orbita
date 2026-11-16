@@ -69,6 +69,13 @@ export const ipcChannels = {
   /** 意图确认卡的应答（实验功能 intent-system）：载荷 requestId + IntentConfirmDecision，回 void */
   agentAnswerIntentConfirm: "agent:answer-intent-confirm",
   /**
+   * 接着跑上次被中断的那一轮（kernel 进程崩溃 / 应用被杀时正在跑的轮），不加新的用户消息。
+   * 载荷 ContinueAgentInput；只对住在新内核里的会话（meta.durable）有效，别的拒绝。
+   */
+  agentContinue: "agent:continue",
+  /** 此刻在 kernel 里跑着一轮的会话（AgentKernelInfo）：窗口晚于这一轮开起来时 renderer 拿它补上 phase */
+  agentKernelInfo: "agent:kernel-info",
+  /**
    * 意图系统（实验）的三条主进程 HTTP 通道：
    * - intent:health —— 探活 intent-lab（GET /health），回 IntentHealth | null
    * - intent:edges —— 某一问的图数据（GET /edges?sessionId=&turnId=），回 IntentEdges | null
@@ -726,6 +733,19 @@ export interface SubmitAgentInput extends AgentTurnContext {
   carryoverId?: string;
 }
 
+/** 接着跑上次被中断的那一轮（renderer → 主进程，新内核独有）：不带新消息，开工上下文照常全套 */
+export type ContinueAgentInput = AgentTurnContext;
+
+/** `agent:kernel-info` 的回执 */
+export interface AgentKernelInfo {
+  /**
+   * 此刻新内核里正在跑一轮的会话（主进程的账：开轮交给 kernel 之后、这一轮落定之前）。窗口晚于这一轮开起来
+   * （应用重启时自动续跑的子会话、Ctrl+R 刷新）就收不到那条 phase turn——renderer 拿这份补上，否则这条会话显示
+   * 「空闲」+「上次被中断 · 继续」，点了报 already running。
+   */
+  running: string[];
+}
+
 /** 手动压缩（renderer → 主进程）。压缩是一次真实的 LLM 调用，同样要带全套开工上下文 */
 export interface CompactAgentInput extends AgentTurnContext {
   instructions?: string;
@@ -859,6 +879,14 @@ export type AgentCommand =
        * 在权限档判定**之前**拦——「会话记录不可变」是全档不变量，Skip 也抬不掉。
        */
       protectedPaths: string[];
+      /**
+       * 工具永不许写的单个文件（2026-11-13 用户裁决：自动化记录不可变）。目前只有
+       * `automations.json`——任务定义与运行记录都在这一个文件里，智能体删改它 = 丢痕迹。
+       * 与 protectedPaths 同一条纪律（主进程定、闸门在权限档判定之前拦、全档不可绕）；
+       * 分开一个字段是因为命中判定与拒绝文案都不同：文件是精确相等加 `<file>.` 兄弟
+       * （原子写临时文件与坏文件隔离），文案要改道到自动化工具而不是「请用户改」。
+       */
+      protectedFiles: string[];
       /**
        * skill 的链接集合目录（2-1 起是数组：global 恒在，当前工作区再加一条）。
        * **路径由主进程给**（同 `piSessionDir`）：哪个集合对该会话生效是主进程的策略，
@@ -1029,6 +1057,8 @@ export type AgentCommand =
       attachmentsDir: string;
       /** 会话文件不可变（2026-09-18）：主进程定的工具禁区，全档拦截，语义同 submit */
       protectedPaths: string[];
+      /** 自动化记录不可变（2026-11-13）：单文件禁区（automations.json），语义同 submit */
+      protectedFiles: string[];
       /** 开轮环境，语义同 submit（skill 集合目录 + 目录清单 + MCP 配置）——无状态化后每轮开机都要带全 */
       skillsDirs: string[];
       directories?: TurnDirectories;
@@ -1098,6 +1128,8 @@ export type AgentCommand =
       attachmentsDir: string;
       /** 会话文件不可变（2026-09-18）：主进程定的工具禁区，全档拦截，语义同 submit */
       protectedPaths: string[];
+      /** 自动化记录不可变（2026-11-13）：单文件禁区（automations.json），语义同 submit */
+      protectedFiles: string[];
       /** 开轮环境，语义同 submit（skill 集合目录 + 目录清单 + MCP 配置）——无状态化后每轮开机都要带全 */
       skillsDirs: string[];
       directories?: TurnDirectories;
@@ -1258,6 +1290,29 @@ export type AgentCommand =
   | { type: "dispose"; sessionId: string };
 
 /**
+ * 发给 agent 进程（runtime.ts）的命令：它不跑轮（对话主循环在 kernel 进程），只做家务——内建目录与联网刷新、
+ * 还没迁进库的旧会话的 pi 本子编辑与分支、没交给过 kernel 的会话换模型时的校验、MCP 热重载的回执、
+ * 专注小结、连接测试、收尾清单。
+ */
+export type AgentHouseholdCommand = Extract<
+  AgentCommand,
+  {
+    type:
+      | "listBuiltins"
+      | "refreshCatalogs"
+      | "branch"
+      | "revertPiBook"
+      | "undoPiBook"
+      | "movePiBook"
+      | "setModel"
+      | "mcpReload"
+      | "summarizeFocus"
+      | "probeProvider"
+      | "choreComplete";
+  }
+>;
+
+/**
  * B-1：read_task 读到的「这是一条什么 task」。**只给 UI、不入模型上下文**——
  * 走 pi ToolResult 的 `details` 通路（adapter 对它明写「不入模型上下文，只给
  * UI 与日志」，edit 的 diff 是同款先例）：模型拿 text 全文，renderer 拿它
@@ -1353,6 +1408,12 @@ export interface ContextRulesInventory {
 export type AgentEvent =
   | { type: "ready" }
   | { type: "builtins"; providers: BuiltinProvider[] }
+  /**
+   * 新内核：发消息前在把这条旧会话迁进库（running），迁完（done，成功失败都发）。只有新内核发；
+   * 迁大会话要一两秒，界面据此在输入框上方说一句「正在迁移这条会话」（超过 0.5 秒才露出来）。
+   * expected：主进程按本子大小事先就知道这次要迁一条大会话，发送那一刻就报（界面立刻露出来、不等 0.5 秒）。
+   */
+  | { type: "migration"; sessionId: string; state: "running" | "done"; expected?: true }
   /**
    * MCP 连接结果。**没有 sessionId**：连接是进程级的，不属于哪一条会话。
    * 主进程接住它当缓存，管理面查的就是这份快照（连接状态是运行时事实，不落盘）。
@@ -1694,7 +1755,17 @@ export type AgentEvent =
    * 该会话的槽、挂在这轮没送出去的消息下面（转录末尾）；缺省 = 操作级失败
    * （建会话 / 压缩 / 分支对账拒绝），仍报在输入框上方的全局红字里。
    */
-  | { type: "failed"; sessionId: string | null; message: string; turn?: true }
+  | {
+      type: "failed";
+      sessionId: string | null;
+      message: string;
+      turn?: true;
+      /**
+       * 这一轮是被打断的（新内核：kernel 进程崩溃 / 应用被杀时它正在跑），库里还留着它的上下文：
+       * renderer 在失败标注旁给「继续」（agent:continue），不自动续跑。缺席 = 普通失败。
+       */
+      continuable?: true;
+    }
   /* ---------- 意图系统（实验功能 intent-system）的三条事件 ---------- */
   /**
    * /recall 流式事件的原样透传（心跳除外）：renderer 用 applyRecallEvent 归约成

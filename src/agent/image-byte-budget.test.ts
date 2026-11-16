@@ -8,6 +8,7 @@
 import { strict as assert } from "node:assert";
 import { describe, test } from "node:test";
 import {
+  applyImageBudget,
   IMAGE_BUDGET_ENTRY,
   IMAGE_BUDGET_TARGET_BYTES,
   IMAGE_BUDGET_TRIGGER_BYTES,
@@ -15,6 +16,7 @@ import {
   estimateMessagesBytes,
   hashImage,
   imageSizeOf,
+  jsonUtf8Length,
   planImageBudget,
   readImageBudgetBook,
   type ContextMessage,
@@ -380,6 +382,44 @@ describe("estimateMessagesBytes", () => {
   });
 });
 
+describe("jsonUtf8Length：与 Buffer.byteLength(JSON.stringify(x)) 同一个数，不拼字符串", () => {
+  const same = (value: unknown, label: string): void => assert.equal(jsonUtf8Length(value), Buffer.byteLength(JSON.stringify(value), "utf8"), label);
+  test("各种字符：引号、反斜杠、控制字符、中文、表情（代理对）、落单的代理项、长 base64、带空格的长 ASCII", () => {
+    const cases: [unknown, string][] = [
+      ['say "hi" \\ there', "quote and backslash"],
+      ["\b\t\n\f\r\u0000\u0001\u001f\u007f", "control chars"],
+      ["中文与 emoji 😀👍🏽", "cjk and surrogate pairs"],
+      ["lone \ud800 high and \udc00 low", "lone surrogates"],
+      [fillerData(5000), "long base64"],
+      ["a b-c_d.e:f;g,h ".repeat(100), "long plain ascii with punctuation"],
+      ["long with quote ".repeat(40) + '"', "long string that fails the fast path"],
+      ["", "empty"],
+    ];
+    for (const [value, label] of cases) same(value, label);
+  });
+  test("数字、布尔、null、undefined 字段与数组里的 undefined、嵌套、toJSON", () => {
+    same({ a: 1, b: -0, c: 1e21, d: 1.5e-7, e: Number.NaN, f: Number.POSITIVE_INFINITY, g: true, h: false, i: null }, "scalars");
+    same({ a: undefined, b: () => 1, c: Symbol("x"), d: "kept" }, "skipped members");
+    same([undefined, () => 1, Symbol("y"), 2], "array holes become null");
+    same({ nested: [{ deep: [[], {}, [1, [2, { x: "y" }]]] }], "键\"名": "v" }, "nested and escaped keys");
+    same({ when: new Date(0), list: [new Date(1)] }, "toJSON");
+    same([], "empty array");
+    same({}, "empty object");
+  });
+  test("真实形状的上下文（带图、工具调用、工具结果）", () => {
+    const messages: ContextMessage[] = [userMessage("看这张图：中文", [fillerData(20000), fillerData(300)], 1), userMessage("第二句 \"quoted\"", [], 2)];
+    same(messages, "context messages");
+    assert.equal(jsonUtf8Length(messages), estimateMessagesBytes(messages));
+  });
+  test("planImageBudget 用它算出的计划与默认算法逐字段相同", () => {
+    const messages: ContextMessage[] = [userMessage("old", [fillerData(30 * 1024 * 1024)], 1), userMessage("new", [], 2)];
+    const byDefault = planImageBudget(messages, null, new Map(), 1);
+    const byCount = planImageBudget(messages, null, new Map(), 1, jsonUtf8Length);
+    assert.deepEqual(byCount, byDefault);
+    assert.ok(byDefault.replaced > 0, "这个夹具确实触发了替换");
+  });
+});
+
 /** ImageBudgetMark 形状自查：运行时 appendEntry 的载荷必须能被 readImageBudgetBook 读回 */
 test("mark 写读往返", () => {
   const mark: ImageBudgetMark = { cut: 123456, cutIndex: 7, replaced: 9, bytesAfter: 15_000_000 };
@@ -396,4 +436,32 @@ test("mark 写读往返", () => {
   const book = readImageBudgetBook(branch);
   assert.equal(book.mark?.cut, mark.cut);
   assert.equal(book.mark?.cutIndex, mark.cutIndex);
+});
+
+describe("applyImageBudget（两个内核共用的轮内胶水）：保护起点取「见过的最小值」", () => {
+  const imageCount = (message: ContextMessage | undefined): number =>
+    ((message as { content?: { type: string }[] } | undefined)?.content ?? []).filter((block) => block.type === "image").length;
+
+  test("本轮用户消息自己的图再大也不换（保护起点 = 最后一条用户消息）", () => {
+    // 早前 8 张 ~2MB + 本轮一张 ~20MB：换完早前的仍高于目标线，本轮这张也绝不能动
+    const messages = [...Array.from({ length: 8 }, (_, i) => userMessage(`早前 ${i}`, [fillerData(2_000_000)], 1000 + i)), userMessage("本轮", [fillerData(20_000_000)], 9999)];
+    const budget = { mark: null, refs: new Map<string, string>(), pendingRefs: new Map<string, string>(), protectedFloor: Number.MAX_SAFE_INTEGER };
+    const marks: ImageBudgetMark[] = [];
+    const out = applyImageBudget(messages, budget, (mark) => marks.push(mark));
+    assert.ok(out !== undefined && marks.length === 1, "越线触发了替换并落了一次账");
+    assert.equal(imageCount(out.at(-1)), 1, "本轮用户消息的图保留");
+    assert.equal(budget.protectedFloor, messages.length - 1);
+  });
+
+  test("插话（steer）把最后一条用户消息推后：本轮附图仍受保护（取此前见过的较小起点）", () => {
+    const early = Array.from({ length: 8 }, (_, i) => userMessage(`早前 ${i}`, [fillerData(2_000_000)], 1000 + i));
+    const turn = userMessage("本轮带图", [fillerData(20_000_000)], 9000);
+    const budget = { mark: null, refs: new Map<string, string>(), pendingRefs: new Map<string, string>(), protectedFloor: Number.MAX_SAFE_INTEGER };
+    applyImageBudget([...early, turn], budget, () => undefined);
+    // 同一轮里又来一句插话：最后一条用户消息变成它，本轮附图那条不该因此变成可替换
+    const steered = [...early, turn, assistantMessage([{ type: "text", text: "好" }], 9001), userMessage("插话", [], 9002)];
+    const out = applyImageBudget(steered, budget, () => undefined) ?? steered;
+    assert.equal(imageCount(out[early.length]), 1, "本轮附图保留");
+    assert.equal(budget.protectedFloor, early.length);
+  });
 });

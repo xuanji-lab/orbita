@@ -1,24 +1,16 @@
 /**
- * Claude 提示缓存时长（cache-retention.ts）：判定表、包装层、以及到真实请求体的端到端。
+ * Claude 提示缓存时长（cache-retention.ts 的判定）：判定表、新内核的包装层（kernel.ts 的 withCacheRetention，
+ * 与订阅车道改写 withBillingPatch 按生产顺序叠起来），以及到真实请求体的端到端。
  * 端到端走 pi 1.5.2 的 anthropic-messages streamSimple，用假 fetch 截下真正要发出的
  * HTTP body（不联网），断言 tools / system / 最后一条消息上的 cache_control。
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
-import type { Context, FetchFunction, Model } from "@earendil-works/pi-ai";
+import type { Api, Context, FetchFunction, Model, Models, ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/api/anthropic-messages";
 import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
-import {
-  applyCacheRetentionPatch,
-  chooseCacheRetention,
-  wrapStreamWithCacheRetention,
-  type SessionRole,
-} from "./cache-retention.ts";
-import { wrapStreamWithBilling } from "./cc-billing-stream.ts";
-import { ccBillingPatch } from "./cc-billing-patch.ts";
-
-type SessionStreamFn = AgentSession["agent"]["streamFunction"];
+import { chooseCacheRetention, type SessionRole } from "./cache-retention.ts";
+import { withBillingPatch, withCacheRetention } from "./kernel.ts";
 
 const OFFICIAL = "https://api.anthropic.com";
 const GATEWAY = "https://rnm.wublubdubdub.fyi";
@@ -50,69 +42,65 @@ describe("chooseCacheRetention —— 判定表", () => {
   }
 });
 
-/** 只捕获 options 的假 streamFn */
-function fakeInner(captured: unknown[]): SessionStreamFn {
-  const settled = Promise.resolve(null as unknown as Awaited<ReturnType<SessionStreamFn>>);
-  return (_model, _context, options) => {
+/** 只捕获 options 的假 Models（只用到 streamSimple） */
+function fakeModels(captured: (ModelsSimpleStreamOptions | undefined)[]): Models {
+  const streamSimple = (_model: Model<Api>, _context: Context, options?: ModelsSimpleStreamOptions) => {
     captured.push(options);
-    return settled;
+    return null;
   };
+  return { streamSimple } as unknown as Models;
 }
-const fakeContext = { systemPrompt: "", messages: [] } as unknown as Parameters<SessionStreamFn>[1];
-const officialModel = { id: "claude-sonnet-5-5", api: "anthropic-messages", baseUrl: OFFICIAL } as unknown as Parameters<SessionStreamFn>[0];
-const gatewayModel = { id: "claude-sonnet-5-5", api: "anthropic-messages", baseUrl: GATEWAY } as unknown as Parameters<SessionStreamFn>[0];
+const fakeContext: Context = { systemPrompt: "", messages: [] };
+const officialModel = { id: "claude-sonnet-5-5", api: "anthropic-messages", baseUrl: OFFICIAL } as unknown as Model<Api>;
+const gatewayModel = { id: "claude-sonnet-5-5", api: "anthropic-messages", baseUrl: GATEWAY } as unknown as Model<Api>;
+const rootOnly = (): SessionRole => "root";
 
-describe("wrapStreamWithCacheRetention —— 包装层", () => {
-  test("官方主会话、调用方没给：补 long，其余字段原样", async () => {
-    const captured: unknown[] = [];
-    await wrapStreamWithCacheRetention(fakeInner(captured), "root")(officialModel, fakeContext, { apiKey: "k", maxTokens: 9 });
+describe("withCacheRetention（新内核的 Models 包装）", () => {
+  test("官方主会话、调用方没给：补 long，其余字段原样", () => {
+    const captured: (ModelsSimpleStreamOptions | undefined)[] = [];
+    withCacheRetention(fakeModels(captured), rootOnly).streamSimple(officialModel, fakeContext, { apiKey: "k", maxTokens: 9 });
     assert.deepEqual(captured.at(-1), { apiKey: "k", maxTokens: 9, cacheRetention: "long" });
   });
 
-  test("options 整个缺席也补", async () => {
-    const captured: unknown[] = [];
-    await wrapStreamWithCacheRetention(fakeInner(captured), "root")(officialModel, fakeContext);
+  test("options 整个缺席也补", () => {
+    const captured: (ModelsSimpleStreamOptions | undefined)[] = [];
+    withCacheRetention(fakeModels(captured), rootOnly).streamSimple(officialModel, fakeContext);
     assert.deepEqual(captured.at(-1), { cacheRetention: "long" });
   });
 
-  test("调用方显式给了 none（pi 压缩 / 分支摘要）：原样保留", async () => {
-    const captured: unknown[] = [];
+  test("调用方显式给了 none（压缩摘要）：原样保留", () => {
+    const captured: (ModelsSimpleStreamOptions | undefined)[] = [];
     const given = { apiKey: "k", cacheRetention: "none" as const };
-    await wrapStreamWithCacheRetention(fakeInner(captured), "root")(officialModel, fakeContext, given);
+    withCacheRetention(fakeModels(captured), rootOnly).streamSimple(officialModel, fakeContext, given);
     assert.equal(captured.at(-1), given);
   });
 
-  test("调用方显式给了 short：不改成 long", async () => {
-    const captured: unknown[] = [];
-    await wrapStreamWithCacheRetention(fakeInner(captured), "root")(officialModel, fakeContext, { cacheRetention: "short" });
+  test("调用方显式给了 short：不改成 long", () => {
+    const captured: (ModelsSimpleStreamOptions | undefined)[] = [];
+    withCacheRetention(fakeModels(captured), rootOnly).streamSimple(officialModel, fakeContext, { cacheRetention: "short" });
     assert.deepEqual(captured.at(-1), { cacheRetention: "short" });
   });
 
-  test("子会话 / 网关：options 逐字透传（同一个对象，不补字段）", async () => {
-    const captured: unknown[] = [];
-    const given = { apiKey: "k" };
-    await wrapStreamWithCacheRetention(fakeInner(captured), "child")(officialModel, fakeContext, given);
+  test("子会话 / 网关：options 逐字透传（同一个对象，不补字段）；角色按请求带的 provider sessionId 判", () => {
+    const captured: (ModelsSimpleStreamOptions | undefined)[] = [];
+    const roles: (string | undefined)[] = [];
+    const given = { apiKey: "k", sessionId: "child-1" };
+    withCacheRetention(fakeModels(captured), (id) => {
+      roles.push(id);
+      return "child";
+    }).streamSimple(officialModel, fakeContext, given);
     assert.equal(captured.at(-1), given);
-    await wrapStreamWithCacheRetention(fakeInner(captured), "root")(gatewayModel, fakeContext, given);
+    assert.deepEqual(roles, ["child-1"]);
+    withCacheRetention(fakeModels(captured), rootOnly).streamSimple(gatewayModel, fakeContext, given);
     assert.equal(captured.at(-1), given);
   });
 
-  test("按每次请求的 model 判：同一包装中途换到网关就不再补", async () => {
-    const captured: unknown[] = [];
-    const wrapped = wrapStreamWithCacheRetention(fakeInner(captured), "root");
-    await wrapped(officialModel, fakeContext, {});
-    await wrapped(gatewayModel, fakeContext, {});
+  test("按每次请求的 model 判：同一包装中途换到网关就不再补", () => {
+    const captured: (ModelsSimpleStreamOptions | undefined)[] = [];
+    const wrapped = withCacheRetention(fakeModels(captured), rootOnly);
+    wrapped.streamSimple(officialModel, fakeContext, {});
+    wrapped.streamSimple(gatewayModel, fakeContext, {});
     assert.deepEqual(captured, [{ cacheRetention: "long" }, {}]);
-  });
-
-  test("applyCacheRetentionPatch 换掉会话的 streamFunction 且生效", async () => {
-    const captured: unknown[] = [];
-    const inner = fakeInner(captured);
-    const session = { agent: { streamFunction: inner } } as unknown as AgentSession;
-    applyCacheRetentionPatch(session, "root");
-    assert.notEqual(session.agent.streamFunction, inner);
-    await session.agent.streamFunction(officialModel, fakeContext, {});
-    assert.deepEqual(captured.at(-1), { cacheRetention: "long" });
   });
 });
 
@@ -171,24 +159,24 @@ function capturingFetch(captured: { url?: string; body?: WireBody }): FetchFunct
 }
 
 /**
- * 按生产装配顺序走一遍：billing 包装在内、cacheRetention 包装在外（runtime openTurn 同序），
- * 最里层是真的 pi streamSimple。mainLoop 为真时模拟主循环（扩展注册的 onPayload = ccBillingPatch）。
+ * 按生产装配顺序走一遍：订阅车道改写在外、cacheRetention 包装在内（kernel.ts 的 KernelPool 同序：
+ * withBillingPatch(withCacheRetention(models))），最里层是真的 pi streamSimple。
+ * 新内核里每一个出站请求（对话主循环与压缩摘要）都过订阅改写——没有旧内核那种「绕过主循环的请求」。
  */
 async function wireBody(
   model: Model<"anthropic-messages">,
   role: SessionRole,
   apiKey: string,
-  extra: { cacheRetention?: "none"; mainLoop: boolean },
+  extra: { cacheRetention?: "none" } = {},
 ): Promise<WireBody> {
   const captured: { url?: string; body?: WireBody } = {};
   const fetch = capturingFetch(captured);
-  // 只桥接类型：SessionStreamFn 的事件流类型来自 pi-agent-core 的声明
-  const inner: SessionStreamFn = (m, ctx, options) =>
-    streamSimple(m as Model<"anthropic-messages">, ctx, { ...options, fetch }) as unknown as ReturnType<SessionStreamFn>;
-  const wrapped = wrapStreamWithCacheRetention(wrapStreamWithBilling(inner), role);
-  const events = await wrapped(model, normalizeContext(context), {
+  const inner = {
+    streamSimple: (m: Model<Api>, ctx: Context, options?: ModelsSimpleStreamOptions) => streamSimple(m as Model<"anthropic-messages">, normalizeContext(ctx), { ...options, fetch }),
+  } as unknown as Models;
+  const wrapped = withBillingPatch(withCacheRetention(inner, () => role));
+  const events = wrapped.streamSimple(model, normalizeContext(context), {
     apiKey,
-    ...(extra.mainLoop ? { onPayload: (payload: unknown) => ccBillingPatch(payload) } : {}),
     ...(extra.cacheRetention !== undefined ? { cacheRetention: extra.cacheRetention } : {}),
   });
   for await (const _event of events) {
@@ -225,8 +213,8 @@ const ONE_HOUR = { type: "ephemeral", ttl: "1h" };
 const DEFAULT = { type: "ephemeral" };
 
 describe("端到端：真正发出的请求体", () => {
-  test("Claude 订阅 OAuth 主会话（主循环，过订阅改写）：三处断点都是 1h", async () => {
-    const body = await wireBody(claudeModel("claude", OFFICIAL), "root", "sk-ant-oat01-fake", { mainLoop: true });
+  test("Claude 订阅 OAuth 主会话（过订阅改写）：三处断点都是 1h", async () => {
+    const body = await wireBody(claudeModel("claude", OFFICIAL), "root", "sk-ant-oat01-fake", {});
     // 确实走了 OAuth 分支 + 订阅改写：路由标打头、身份块已删
     const system = body.system as { text?: string }[];
     assert.match(system[0]?.text ?? "", /^x-anthropic-billing-header/);
@@ -236,27 +224,26 @@ describe("端到端：真正发出的请求体", () => {
   });
 
   test("Anthropic 官方 API key 主会话：三处断点都是 1h", async () => {
-    const body = await wireBody(claudeModel("anthropic", OFFICIAL), "root", "sk-ant-api03-fake", { mainLoop: true });
+    const body = await wireBody(claudeModel("anthropic", OFFICIAL), "root", "sk-ant-api03-fake", {});
     assert.deepEqual(breakpoints(body), [ONE_HOUR, ONE_HOUR, ONE_HOUR]);
   });
 
   test("官方地址子会话：断点在，但没有 ttl（pi 默认 5 分钟）", async () => {
-    const body = await wireBody(claudeModel("claude", OFFICIAL), "child", "sk-ant-oat01-fake", { mainLoop: true });
+    const body = await wireBody(claudeModel("claude", OFFICIAL), "child", "sk-ant-oat01-fake", {});
     assert.deepEqual(breakpoints(body), [DEFAULT, DEFAULT, DEFAULT]);
     assert.ok(allCacheControls(body).every((cc) => JSON.stringify(cc) === JSON.stringify(DEFAULT)));
   });
 
   test("anthropic-compatible 网关主会话：断点在，但没有 ttl", async () => {
-    const body = await wireBody(claudeModel("anthropic-compatible", GATEWAY), "root", "sk-gateway-fake", { mainLoop: true });
+    const body = await wireBody(claudeModel("anthropic-compatible", GATEWAY), "root", "sk-gateway-fake", {});
     assert.deepEqual(breakpoints(body), [DEFAULT, DEFAULT, DEFAULT]);
     assert.ok(allCacheControls(body).every((cc) => JSON.stringify(cc) === JSON.stringify(DEFAULT)));
   });
 
-  test("官方主会话的压缩摘要（pi 传 none、无 onPayload）：一个 cache_control 都没有", async () => {
-    const body = await wireBody(claudeModel("claude", OFFICIAL), "root", "sk-ant-oat01-fake", {
-      cacheRetention: "none",
-      mainLoop: false,
-    });
+  test("官方主会话的压缩摘要（传 none）：一个 cache_control 都没有，订阅改写照样过", async () => {
+    const body = await wireBody(claudeModel("claude", OFFICIAL), "root", "sk-ant-oat01-fake", { cacheRetention: "none" });
     assert.deepEqual(allCacheControls(body), []);
+    const system = body.system as { text?: string }[];
+    assert.match(system[0]?.text ?? "", /^x-anthropic-billing-header/);
   });
 });

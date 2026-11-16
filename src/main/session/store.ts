@@ -30,6 +30,7 @@ import type { PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import type { SessionWrapup } from "../../shared/wrapup.ts";
 import { parseAutomationHeader } from "../../shared/automation.ts";
+import { isDurableBookRef } from "../../shared/kernel.ts";
 import { isClosingScanText } from "../../shared/wrapup-scan.ts";
 
 /** 收尾扫描的机器提问（用户消息形，但不是用户说的话） */
@@ -53,6 +54,7 @@ import {
   UNASSIGNED_PROVIDER_ID,
   type SessionCompletion,
   type SessionDetail,
+  type DurableMark,
   type SessionMeta,
   type SessionOlderPage,
   type SessionRecord,
@@ -650,6 +652,18 @@ export class SessionStore {
     return this.update(id, { piSessionFile });
   }
 
+  /**
+   * 新内核的标记（DurableMark）：改它的一个字段。change 返回 undefined = 去掉标记（只给测试夹具）；
+   * 返回同一个对象引用 = 不写。meta 不在就悄悄不做（同 update）。
+   */
+  updateDurable(id: string, change: (current: DurableMark | undefined) => DurableMark | undefined): Promise<void> {
+    return this.update(id, (meta) => {
+      const next = change(meta.durable);
+      if (next === meta.durable) return null;
+      return next === undefined ? { durable: undefined } : { durable: next };
+    });
+  }
+
   setMode(id: string, mode: PermissionMode): Promise<void> {
     return this.update(id, { mode });
   }
@@ -840,7 +854,9 @@ export class SessionStore {
     } catch (cause) {
       if (!isNotFound(cause)) throw cause;
     }
-    await writeJsonAtomic(this.metaPath(plan.meta.id), { ...plan.meta, piSessionFile });
+    // 新内核分出来的（「本子」是 durable 引用）：一出生就住在新内核里（它没有 pi 本子，本子编辑交给 kernel）
+    const durable = isDurableBookRef(piSessionFile) ? { durable: { since: Date.now() } } : {};
+    await writeJsonAtomic(this.metaPath(plan.meta.id), { ...plan.meta, piSessionFile, ...durable });
     if (plan.records.length > 0) {
       await writeTextAtomic(
         this.logPath(plan.meta.id),

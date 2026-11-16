@@ -23,6 +23,7 @@
  * 纯模块：不 import electron、不 import 进程相关的东西，可被 `node --test` 直接加载。
  */
 import { createHash } from "node:crypto";
+import { join } from "node:path";
 import type { ContextEvent, SessionEntry } from "@earendil-works/pi-coding-agent";
 
 /** context 事件给到的消息形状（AgentMessage 的结构化子集，经 pi 的 structuredClone 到手） */
@@ -95,6 +96,14 @@ export function readImageBudgetBook(branch: readonly SessionEntry[]): ImageBudge
   return book;
 }
 
+/**
+ * 本子里记的图片引用 → 原图路径（两个内核读账时同一个口径）：引用是 `<会话 id>/<文件名>`，
+ * 去掉第一段拼到本会话的附件目录下。
+ */
+export function imageRefPath(attachmentsDir: string, ref: string): string {
+  return join(attachmentsDir, ref.slice(ref.indexOf("/") + 1));
+}
+
 /** 一张图的 sha256（hex）。占位路径与水位重放都靠它对上同一张图 */
 export function hashImage(data: string): string {
   return createHash("sha256").update(data).digest("hex");
@@ -160,6 +169,80 @@ export function imageSizeOf(data: string, mimeType: string): { width: number; he
  * 留了 8MB，余量足够。 */
 export function estimateMessagesBytes(messages: readonly ContextMessage[]): number {
   return Buffer.byteLength(JSON.stringify(messages), "utf8");
+}
+
+/**
+ * 与 estimateMessagesBytes 同一个数（`Buffer.byteLength(JSON.stringify(value), "utf8")`），但**不拼出那个字符串**：
+ * 逐值数出 JSON 序列化后的 UTF-8 字节数。上下文里带着全部原图时，那个字符串有上百 MB，拼一次就是一个内存尖峰
+ * （第四步验收后的修补：一条 28 MB 的会话发第一句，kernel 进程在这里从 338 MB 冲到 452 MB）。
+ * 新内核用它；旧内核仍用 estimateMessagesBytes（旧内核路径不动）。两者相等由测试守着。
+ * 认的是 JSON 能表示的值（对象、数组、字符串、数字、布尔、null）；带 toJSON 或别的类型的子树退回真序列化。
+ */
+export function jsonUtf8Length(value: unknown): number {
+  return valueLength(value) ?? 4;
+}
+
+/** base64 / 纯 ASCII 安全字符：JSON 里原样输出、每个字符 1 字节 */
+const PLAIN_ASCII = /^[A-Za-z0-9+/=._:;, -]*$/;
+
+function stringLength(text: string): number {
+  if (text.length > 256 && PLAIN_ASCII.test(text)) return text.length + 2;
+  let bytes = 2;
+  for (let at = 0; at < text.length; at++) {
+    const code = text.charCodeAt(at);
+    if (code === 0x22 || code === 0x5c) bytes += 2;
+    else if (code < 0x20) bytes += code === 0x08 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d ? 2 : 6;
+    else if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff) {
+      const next = text.charCodeAt(at + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        bytes += 4;
+        at++;
+      } else bytes += 6;
+    } else if (code >= 0xdc00 && code <= 0xdfff) bytes += 6;
+    else bytes += 3;
+  }
+  return bytes;
+}
+
+/** 一个值序列化后的字节数；undefined = 这个值在 JSON 里不出现（undefined、函数、symbol） */
+function valueLength(value: unknown): number | undefined {
+  if (value === null) return 4;
+  switch (typeof value) {
+    case "string":
+      return stringLength(value);
+    case "number":
+      return Number.isFinite(value) ? String(value).length : 4;
+    case "boolean":
+      return value ? 4 : 5;
+    case "undefined":
+    case "function":
+    case "symbol":
+      return undefined;
+    case "object":
+      break;
+    default:
+      return Buffer.byteLength(JSON.stringify(value) ?? "", "utf8");
+  }
+  if (typeof (value as { toJSON?: unknown }).toJSON === "function") {
+    const text = JSON.stringify(value);
+    return text === undefined ? undefined : Buffer.byteLength(text, "utf8");
+  }
+  if (Array.isArray(value)) {
+    let bytes = 2 + Math.max(0, value.length - 1);
+    for (const item of value) bytes += valueLength(item) ?? 4;
+    return bytes;
+  }
+  let bytes = 2;
+  let members = 0;
+  for (const key of Object.keys(value)) {
+    const length = valueLength((value as Record<string, unknown>)[key]);
+    if (length === undefined) continue;
+    bytes += stringLength(key) + 1 + length;
+    members++;
+  }
+  return bytes + Math.max(0, members - 1);
 }
 
 /** 替换计划：messages 已是替换后的副本（原数组不动）；advancedCut 为 null 表示不推进 */
@@ -308,8 +391,10 @@ export function planImageBudget(
   watermark: ImageBudgetMark | null,
   refs: ReadonlyMap<string, string>,
   protectedFloor: number,
+  /** 算整份请求的字节数（缺席 = estimateMessagesBytes；新内核传 jsonUtf8Length，同一个数、不拼字符串） */
+  estimate: (messages: readonly ContextMessage[]) => number = estimateMessagesBytes,
 ): ImageBudgetPlan {
-  const bytesBefore = estimateMessagesBytes(messages);
+  const bytesBefore = estimate(messages);
   // 保护段：floor 之前才可替换；没有用户消息（floor 为 +∞ 的初值场景）时全部可替换
   const floor = Math.min(protectedFloor, messages.length);
   const calls = toolCallIndex(messages);
@@ -376,4 +461,71 @@ export function planImageBudget(
   }
 
   return { messages: working, advancedCut, replaced, bytesBefore, bytesAfter };
+}
+
+/**
+ * 图片字节预算的轮内状态（本文件管算法；装配与时序在 kernel-wire.ts。下文的「pi 本子」是删掉的旧内核的落点——
+ * 新内核把水位与引用存在库里的 wire 状态，迁旧会话时从旧本子读一次，legacy-migrate.ts / readImageBudgetBook）：
+ *
+ * - `cut` / `refs` 开轮时从 pi 本子读一次（水位与附件引用都是跨轮持久化的
+ *   custom entry）；轮内推进后 `cut` 原地更新，后续 LLM 调用按新水位重放。
+ * - `pendingRefs` 是本轮 submit 附图的引用，在 echoAndPrompt 缩放后填
+ *   （hash 必须对缩放后的 data 算——pi 本子里存的是那份），before_agent_start
+ *   落成本子的 custom entry，此后任何一轮都能把占位路径拼回来。
+ * - `protectedFloor` 是本轮见过的最小保护起点：steer 注入会把「最后一条用户
+ *   消息」推后，不能让刚发过的本轮附图因此变成可替换。
+ */
+export interface TurnImageBudget {
+  /** 现行水位（ImageBudgetMark）；null = 还没触发过。轮内推进后原地更新 */
+  mark: ImageBudgetMark | null;
+  /** 图片 hash → 原图绝对路径（本子 refs entry 合并而来） */
+  refs: Map<string, string>;
+  /** 本轮 submit 附图（缩放后）的 hash → 绝对路径，before_agent_start 落本子 */
+  pendingRefs: Map<string, string>;
+  /** 本轮见过的最小保护起点：steer 会把「最后一条用户消息」推后，不能让本轮附图因此可替换 */
+  protectedFloor: number;
+}
+
+/**
+ * 一次请求的预算处理（context 事件 / beforeRequest 的轮内胶水，**两个内核共用**）：取保护起点、算计划、
+ * 水位推进了就经 `persist` 落账并打一行日志。返回替换后的消息；没有替换返回 undefined（按原样发）。
+ * fail-open：预算模块自己的故障不该砸掉对话，本轮按原样发送。
+ */
+export function applyImageBudget(
+  messages: readonly ContextMessage[],
+  budget: TurnImageBudget,
+  persist: (mark: ImageBudgetMark) => void,
+  /** 见 planImageBudget 的 estimate（旧内核不传） */
+  estimate?: (messages: readonly ContextMessage[]) => number,
+): ContextMessage[] | undefined {
+  try {
+    let lastUser = -1;
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if ((messages[i] as { role?: unknown }).role === "user") {
+        lastUser = i;
+        break;
+      }
+    }
+    const floor = lastUser === -1 ? 0 : Math.min(budget.protectedFloor, lastUser);
+    budget.protectedFloor = floor;
+    const plan = planImageBudget(messages, budget.mark, budget.refs, floor, estimate);
+    if (plan.advancedCut !== null) {
+      budget.mark = plan.advancedCut;
+      persist({
+        cut: plan.advancedCut.cut,
+        cutIndex: plan.advancedCut.cutIndex,
+        replaced: plan.replaced,
+        bytesAfter: plan.bytesAfter,
+      });
+      console.error(
+        `[image-budget] 请求估算 ${(plan.bytesBefore / 1048576).toFixed(1)}MiB 超过 24MiB，` +
+          `已把 ${plan.replaced} 张早期图片替换为占位（水位落在第 ${plan.advancedCut.cutIndex} 条消息，` +
+          `估算降至 ${(plan.bytesAfter / 1048576).toFixed(1)}MiB）`,
+      );
+    }
+    return plan.replaced > 0 ? plan.messages : undefined;
+  } catch (cause) {
+    console.error("[image-budget] 处理失败，本轮请求按原样发送", cause);
+    return undefined;
+  }
 }

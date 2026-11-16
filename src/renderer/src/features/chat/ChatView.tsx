@@ -17,6 +17,7 @@ import {
 } from "./ChannelViews";
 import { useChannelMessages, useParentChannels } from "./useChannelMessages";
 import { useChannelSummaries } from "./useChannelSummaries";
+import { delegateCardStatus } from "./sub-sessions-rows";
 import { HOME_CARD_QUERY_ROWS, homeCardLine, selectHomeCards, selectHomeLog, type HomeCardLineText } from "./home-cards";
 import { selectTranscript } from "../../../../shared/transcript-state.ts";
 import { relativeTime } from "../../shell/relative-time.ts";
@@ -1302,6 +1303,7 @@ function ChatViewBody(props: {
       titles,
       channelSummaries,
       childPhaseOf: session.phaseOf,
+      childInterruptedOf: session.interruptedOf,
       openSubSession,
       litSubSessionId,
       channelMessages,
@@ -1314,6 +1316,7 @@ function ChatViewBody(props: {
       titles,
       channelSummaries,
       session.phaseOf,
+      session.interruptedOf,
       openSubSession,
       litSubSessionId,
       channelMessages,
@@ -1398,6 +1401,42 @@ function ChatViewBody(props: {
     />
   );
 
+  /*
+    新内核：第一次在这条旧会话里发消息时要先把它迁进库，大会话要一两秒。
+    - 主进程按本子大小事先知道是大会话（migratingExpected）：发送那一刻就说；
+    - 否则超过 0.5 秒才说（快的不出现）；
+    - 露出来了就至少停 MIGRATING_MIN_SHOWN_MS，读得清——闪一下比没有更糟（第四步验收：只露 0.16–0.36 秒）。
+  */
+  const [migratingShown, setMigratingShown] = useState(false);
+  const migratingShownAt = useRef<number | null>(null);
+  useEffect(() => {
+    if (session.migrating) {
+      const reveal = (): void => {
+        migratingShownAt.current = Date.now();
+        setMigratingShown(true);
+      };
+      if (session.migratingExpected) {
+        reveal();
+        return;
+      }
+      const timer = window.setTimeout(reveal, 500);
+      return () => window.clearTimeout(timer);
+    }
+    const shownAt = migratingShownAt.current;
+    if (shownAt === null) {
+      setMigratingShown(false);
+      return;
+    }
+    const timer = window.setTimeout(
+      () => {
+        migratingShownAt.current = null;
+        setMigratingShown(false);
+      },
+      Math.max(0, MIGRATING_MIN_SHOWN_MS - (Date.now() - shownAt)),
+    );
+    return () => window.clearTimeout(timer);
+  }, [session.migrating, session.migratingExpected]);
+
   const notices = (
     <>
       {providersError != null ? (
@@ -1428,9 +1467,15 @@ function ChatViewBody(props: {
         只能读不能续：pi 没有这条会话的本子。**说清楚，别让输入框看起来能打字**
         （guideline §四把这条代价写明了）。
       */}
-      {session.readOnly && (
-        <Notice icon="lock">{t.chat.readOnlyTask}</Notice>
+      {session.readOnlyReason !== null && (
+        <Notice icon="lock">
+          {session.readOnlyReason.kind === "noBook"
+            ? t.chat.readOnlyTask
+            : t.chat.readOnlyMigrationFailed(session.readOnlyReason.reason)}
+        </Notice>
       )}
+      {session.resumedAfterRestart && <Notice icon="rotate-ccw">{t.chat.resumedAfterRestart}</Notice>}
+      {migratingShown && <Notice icon="loader-circle">{t.chat.migratingSession}</Notice>}
     </>
   );
 
@@ -1489,6 +1534,7 @@ function ChatViewBody(props: {
           phase: session.phaseOf(child.id),
           approvals: session.approvalsOf(child.id).length,
           planAwaiting: session.planAwaitingOf(child.id),
+          interrupted: session.interruptedOf(child.id),
         })),
         unread: meta.unread ?? null,
       });
@@ -1501,6 +1547,7 @@ function ChatViewBody(props: {
       doing: t.homeCard.doing,
       approve: t.homeCard.approve,
       childWaiting: t.homeCard.childWaiting,
+      childInterrupted: t.homeCard.childInterrupted,
       failed: t.homeCard.failed,
       done: t.homeCard.done,
       noText: t.homeCard.noText,
@@ -1518,6 +1565,7 @@ function ChatViewBody(props: {
         meta?.workspaceId === null || meta === undefined
           ? t.sidebar.tasks
           : (session.workspaces.find((w) => w.id === meta.workspaceId)?.name ?? t.sidebar.tasks);
+      const kids = childrenOf.get(sessionId) ?? [];
       const line = homeCardLine(
         {
           state,
@@ -1525,6 +1573,7 @@ function ChatViewBody(props: {
           approval: approval === undefined ? null : { toolName: approval.toolName, input: approval.input },
           turnError: session.turnErrorOf(sessionId),
           lastAsk: meta?.recentQueries[0] ?? null,
+          childInterrupted: kids.some((child) => session.interruptedOf(child.id)) && kids.every((child) => session.approvalsOf(child.id).length === 0),
         },
         lineText,
       );
@@ -1756,6 +1805,9 @@ function ChatViewBody(props: {
           phase={session.phase}
           retry={session.retry}
           turnError={session.turnError}
+          turnContinuable={session.turnContinuable}
+          onContinue={session.continueTurn}
+          interruptedByCrash={session.interruptedByCrash}
           loadingHistory={session.loadingHistory}
           loadingOlder={session.loadingOlder}
           onBranch={session.branchFrom}
@@ -1810,6 +1862,12 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   phase: "idle" | "turn" | "compaction";
   retry: RetryStatus | null;
   turnError: string | null;
+  /** 新内核：这一轮被打断了、可以接着跑（标注换成「被打断」并带「继续」） */
+  turnContinuable: boolean;
+  /** 「继续」：引用稳定（memo 列） */
+  onContinue: () => void;
+  /** 被打断的是崩溃留下的子会话（resumePolicy "crashed"）：说「应用上次是异常退出的」 */
+  interruptedByCrash: boolean;
   loadingHistory: boolean;
   /** 更早的一页在途（源侧分页触顶）：列首出一行次级灰提示 */
   loadingOlder: boolean;
@@ -1856,7 +1914,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   /** 停止当前轮（= 取消召回）。引用稳定，不破 memo */
   onAbort: () => void;
   /** 乐观回显：发出即画的用户气泡（真回显事件一到即清）。ephemeral */
-  pendingEcho: { blocks: readonly string[] } | null;
+  pendingEcho: { blocks: readonly string[]; at: number } | null;
   /** 滚动容器（ChatViewBody 持有）：历史段虚拟器按它测视口、挂滚动监听 */
   scrollRef: React.RefObject<HTMLDivElement | null>;
   /** 跟随态（Latest | Reading）：测高补偿 override 要读它，避免把 Reading 拉回 */
@@ -2540,7 +2598,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
           (props.intentRun.status === "done" && props.intentRun.pendingAsks > 0)) && (
         <IntentRecallRunCard card={props.intentRun} onCancel={props.onAbort} />
       )}
-      {props.turnError !== null && (
+      {(props.turnError !== null || props.turnContinuable) && (
         /*
          * 回合失败标注（重试耗尽）：跟着失败的归属走——它追在谁后面，就贴着谁的
          * 对齐侧（用户消息居右、agent 消息居左，UserBubble 同款）。常见情形是模型
@@ -2554,7 +2612,12 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
             justifyContent: transcript.at(-1)?.role === "user" ? "flex-end" : "flex-start",
           }}
         >
-          <Notice tone="bad">{props.turnError}</Notice>
+          <Notice
+            tone="bad"
+            exit={props.turnContinuable ? { label: t.chat.continueTurn, onClick: props.onContinue } : undefined}
+          >
+            {props.turnContinuable ? (props.interruptedByCrash ? t.chat.interruptedByCrash : t.chat.interruptedTurn) : props.turnError}
+          </Notice>
         </div>
       )}
       {props.phase === "turn" &&
@@ -2562,7 +2625,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
           <Retrying status={props.retry} />
         ) : liveBlockShown ? null : (
           <div className="revert-keep" data-kind="responding">
-            <Responding transcript={transcript} />
+            <Responding transcript={transcript} since={props.pendingEcho?.at ?? null} />
           </div>
         ))}
       {props.phase === "compaction" && (
@@ -5592,15 +5655,11 @@ function DelegateToolLine(props: {
   // 状态优先读通道摘要的终态（done/failed/waiting/stopped）；否则看子会话在 renderer
   // 会话槽里的 phase——不为 idle 就是还在跑（子会话 PR4a 的「状态从哪来」）。
   // stopped 不读的话，用户终止过的子会话在派出卡上会退回「空闲」（验收发现）
-  const status: DelegateCardStatus =
-    summary?.status === "done" ||
-    summary?.status === "failed" ||
-    summary?.status === "waiting" ||
-    summary?.status === "stopped"
-      ? summary.status
-      : props.channel.childPhaseOf(card.childId) !== "idle"
-        ? "running"
-        : "idle";
+  const status: DelegateCardStatus = delegateCardStatus(
+    summary?.status,
+    props.channel.childPhaseOf(card.childId) !== "idle",
+    props.channel.childInterruptedOf(card.childId),
+  );
   const openSubSession = props.channel.openSubSession;
   return (
     <DelegateCardView
@@ -6318,7 +6377,10 @@ function CompactedLine(props: { record: CompactedRecord }) {
   );
 }
 
-function Responding(props: { transcript: readonly TranscriptItem[] }) {
+/** 迁移提示露出来后至少停多久（毫秒）：一句十几个字，读得清 */
+const MIGRATING_MIN_SHOWN_MS = 1500;
+
+function Responding(props: { transcript: readonly TranscriptItem[]; since: number | null }) {
   const t = useT();
   const { transcript } = props;
   // 秒针：Responding 只在回答期间挂载，一秒一跳不白算（Retrying 同款）
@@ -6328,9 +6390,13 @@ function Responding(props: { transcript: readonly TranscriptItem[] }) {
     return () => window.clearInterval(timer);
   }, []);
   // 耗时：本轮用户发话至今——「agent 回答了多久」是人感知的那段时间
-  let userTs: number | null = null;
-  for (const item of transcript) {
-    if (item.role === "user") userTs = item.timestamp;
+  // 真回显还没到（乐观回显挂着；新内核第一次发消息前要先迁大会话，这一段能有一两秒）：从点发送那一刻算，
+  // 不拿上一轮的用户消息算（那会显示「回应中 · 两万多分钟」）
+  let userTs: number | null = props.since;
+  if (userTs === null) {
+    for (const item of transcript) {
+      if (item.role === "user") userTs = item.timestamp;
+    }
   }
   const elapsed = userTs !== null ? formatThinkingDuration(Math.max(0, now - userTs), t) : null;
   // 流式速度：in-flight 的字符估算（estimateStreamingTokens，英文校准的粗账——

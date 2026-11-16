@@ -8,7 +8,9 @@ import { join } from "node:path";
 import { mainWindows } from "../window/main-windows.ts";
 import {
   ipcChannels,
+  type AgentKernelInfo,
   type CompactAgentInput,
+  type ContinueAgentInput,
   type ProviderSecrets,
   type SubmitAgentInput,
 } from "../../shared/agent-ipc.ts";
@@ -135,6 +137,8 @@ export function registerAgentIpc(
   attachmentDirOf: (sessionId: string) => string,
   /** 工具禁区（sessions/ 与 pi-sessions/）。**路径策略在主进程**，随每轮发给闸门 */
   protectedPaths: string[],
+  /** 工具禁区的单文件清单（automations.json）。与 protectedPaths 同一条纪律；分开传是因为命中判定与文案不同 */
+  protectedFiles: string[],
   /** 某条会话该拿哪些 skill 集合目录（global 恒在 + 它的工作区）；路径策略在主进程 */
   skillDirs: (workspaceId: string | null) => string[],
   /** skill 中心存储：`/skill:` 展开在这里查名与读正文（真源在 store，别人不再认一遍） */
@@ -151,7 +155,7 @@ export function registerAgentIpc(
   /** 记忆构建的轮次跟踪器（undefined = 测试夹具不传）。
    * submit / interrupt 判过根会话 + 用户原话后 begin，轮落定时由它交给记忆服务 */
   memoryTurns?: { begin(sessionId: string, text: string): void },
-): { submitTurn(input: SubmitAgentInput): Promise<void> } {
+): { submitTurn(input: SubmitAgentInput): Promise<void>; continueTurn(input: ContinueAgentInput): Promise<void> } {
   /**
    * 某条会话所属的工作区。找不到（工作区被删了）就当作没有工作区：白名单与工作区
    * 变量都按 Home 处理，**不拦开轮**（同「一台坏的 MCP server 不该把会话堵死」）。
@@ -411,6 +415,8 @@ export function registerAgentIpc(
       modelId: input.modelId,
       mode: input.mode,
       thinkingLevel: input.thinkingLevel,
+      // 这一轮交给了新内核：会话从第一轮起就住在新内核里（旧内核不再续写它，见 SessionMeta.durable）
+      ...(host.durableMark(input.sessionId, now) === undefined ? {} : { durable: host.durableMark(input.sessionId, now) }),
       createdAt: now,
       updatedAt: now,
     });
@@ -517,7 +523,7 @@ export function registerAgentIpc(
       ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}),
       ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}),
       ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}),
-      ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, {
+      ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, protectedFiles, {
         skillsDirs: capabilities.skillsDirs,
         directories: await readDirectories(input),
         mcpServers: capabilities.mcpServers,
@@ -565,15 +571,27 @@ export function registerAgentIpc(
     await beginMemoryTurn(input.sessionId, text);
     const automationTools = await readAutomationTools(input.sessionId);
     const capabilities = await readCapabilities(input.workspaceId);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text, sessionMemory: true, ...(automationTools ? { automationTools: true } : {}), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), planFirst: await readPlanFirst(), pluginTools: true }) });
+    const piSessionFile = await host.interrupt({ type: "interrupt", text, sessionMemory: true, ...(automationTools ? { automationTools: true } : {}), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, protectedFiles, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), planFirst: await readPlanFirst(), pluginTools: true }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
     const provider = await resolveForTurn(input.providerId);
     const capabilities = await readCapabilities(input.workspaceId);
-    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), planFirst: await readPlanFirst(), pluginTools: true }) });
+    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, protectedFiles, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), planFirst: await readPlanFirst(), pluginTools: true }) });
     if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
   });
+
+  // 新内核：接着跑上次被中断的那一轮（不加新消息）。开轮装配与压缩同一份（没有正文要组装）；旧内核下 host 拒绝。
+  // 也是应用重启后自动接着跑子会话的那条路（index.ts 用返回的 continueTurn）
+  async function continueTurn(input: ContinueAgentInput): Promise<void> {
+    const provider = await resolveForTurn(input.providerId);
+    const automationTools = await readAutomationTools(input.sessionId);
+    const capabilities = await readCapabilities(input.workspaceId);
+    const piSessionFile = await host.continueRun({ type: "continueRun", sessionMemory: true, ...(automationTools ? { automationTools: true } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, protectedFiles, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), planFirst: await readPlanFirst(), pluginTools: true }) });
+    if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
+  }
+  ipcMain.handle(ipcChannels.agentContinue, (_e, input: ContinueAgentInput): Promise<void> => continueTurn(input));
+  ipcMain.handle(ipcChannels.agentKernelInfo, (): AgentKernelInfo => ({ running: host.kernelRunningSessions() }));
 
   ipcMain.handle(
     ipcChannels.agentSetMode,
@@ -622,7 +640,7 @@ export function registerAgentIpc(
     (_e, requestId: string, decision: IntentConfirmDecision) => host.answerIntentConfirm(requestId, decision),
   );
 
-  return { submitTurn };
+  return { submitTurn, continueTurn };
 }
 
 /** agent 进程的事件 → 所有主窗口（沙盒浏览器窗口的工具条不收，见 window/main-windows.ts） */

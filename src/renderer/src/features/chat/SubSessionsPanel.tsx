@@ -38,6 +38,7 @@ import {
   sortSubSessionRows,
   subSessionBarFill,
   subSessionStatusOf,
+  waitingSummary,
   type SubSessionRowStatus,
 } from "./sub-sessions-rows";
 import type { SubSessionsView } from "./sub-sessions-state";
@@ -50,6 +51,7 @@ const STATUS_COLOR: Record<SubSessionRowStatus, string> = {
   running: "var(--color-accent)",
   waiting: "var(--color-warning)",
   approval: "var(--color-warning)",
+  interrupted: "var(--color-warning)",
   done: "var(--color-success)",
   failed: "var(--color-danger)",
   // stopped 是用户的裁决不是故障：中性灰，区别于 failed 的红（图标已经在说话）
@@ -61,6 +63,8 @@ const STATUS_ICON: Record<SubSessionRowStatus, IconName> = {
   running: "loader-circle",
   waiting: "message-square",
   approval: "shield-check",
+  // 与子会话页里「应用上次是异常退出的…继续」那一行同一个图标
+  interrupted: "triangle-alert",
   done: "circle-check",
   failed: "triangle-alert",
   stopped: "octagon-x",
@@ -182,7 +186,8 @@ export function SubSessionsPanel(props: {
       return { meta, status, lastAt, messages };
     }),
   );
-  const waitingCount = rows.filter((row) => row.status === "waiting" || row.status === "approval").length;
+  const waitingCount = rows.filter((row) => row.status === "waiting" || row.status === "approval" || row.status === "interrupted").length;
+  const interruptedCount = rows.filter((row) => row.status === "interrupted").length;
 
   return (
     <RightPanelFrame
@@ -191,7 +196,7 @@ export function SubSessionsPanel(props: {
           <PanelTitle icon={FEATURE_ICON.subsessions} title={t.rail.subSessions(children.length)} tip={t.subSessions.of(props.parentTitle)} />
           {waitingCount > 0 && (
             <span className="inbox-waiting-count" style={{ color: "var(--color-warning)" }}>
-              {t.subSessions.waitingCount(waitingCount)}
+              {waitingSummary(waitingCount, interruptedCount, { interrupted: t.chat.subSessionInterruptedShort, waiting: t.subSessions.waitingCount })}
             </span>
           )}
         </>
@@ -211,6 +216,7 @@ export function SubSessionsPanel(props: {
               lastAt={row.lastAt}
               asking={row.status === "waiting"}
               onClick={() => props.onOpenChild(row.meta.id)}
+              onContinue={row.status === "interrupted" ? () => props.engine.continueTurn(row.meta.id) : undefined}
             />
           ))}
           <p className="inbox-foot">{t.subSessions.inboxFoot}</p>
@@ -224,7 +230,8 @@ export function SubSessionsPanel(props: {
  * 收件箱的一行（2026-10-12）：行首状态饼（与侧栏 / 铃铛清单同一个 `StatusPie`，
  * `subSessionBarFill` 定亮几节）+ 名字 + 最新一句 + 相对时间（行尾，钉在行的右内
  * 边距上）。**只有「在问你」的行展开回答框**（ChannelReplyBox）——其余行单行收着，
- * 点击进会话层看完整往来。行按钮与回答框是兄弟（button 不能嵌 button），整行 hover
+ * 点击进会话层看完整往来。被崩溃打断的行在下面多一行「应用上次是异常退出的…继续」（与子会话页里那一行同文同键），
+ * 不用点进去就能让它接着跑。行按钮与回答框 / 继续键是兄弟（button 不能嵌 button），整行 hover
  * 由外层 `.inbox-row` 统一画。
  */
 function SubSessionRow(props: {
@@ -235,12 +242,14 @@ function SubSessionRow(props: {
   /** waiting：行下展开「回答它」输入框（代父回信，同一个 send 路径） */
   asking: boolean;
   onClick: () => void;
+  /** 被崩溃打断的行：行下的「继续」（接着跑上次被打断的那一轮，与子会话页里的「继续」同一条路）；其余行不给 */
+  onContinue: (() => void) | undefined;
 }) {
   const t = useT();
   const status = props.status;
   const bar = subSessionBarFill(status);
   return (
-    <div className={`inbox-row${props.asking ? " asking" : ""}`}>
+    <div className={`inbox-row${props.asking || props.onContinue !== undefined ? " asking" : ""}`}>
       <button type="button" className="inbox-row-main" onClick={props.onClick}>
         {bar !== undefined && (
           <StatusPie state={bar} title={t.subSessions.rowStatus[status]} className="inbox-row-pie" />
@@ -254,6 +263,14 @@ function SubSessionRow(props: {
         </span>
       </button>
       {props.asking && <ChannelReplyBox parentId={props.meta.parentId ?? ""} childId={props.meta.id} />}
+      {props.onContinue !== undefined && (
+        <p className="inbox-row-resume">
+          {t.chat.interruptedByCrash}
+          <button type="button" className="notice-exit" onClick={props.onContinue}>
+            {t.chat.continueTurn}
+          </button>
+        </p>
+      )}
     </div>
   );
 }

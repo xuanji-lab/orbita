@@ -430,6 +430,30 @@ export interface SessionMoveResult {
   skipped: { id: string; reason: "running" | "missing" | "failed" }[];
 }
 
+/**
+ * 这条会话住在新内核（pi-durable）的库里（由主进程在第一次为它开轮时写）。
+ * 有了它，这条会话的本子编辑（回退 / 撤销 / 分支 / 挪工作区）交给 kernel；没有它的是还没迁的旧会话，本子编辑改 pi 本子，
+ * 下一次开轮时 kernel 按编辑后的本子迁。它在新内核里跑过的轮次只在库里，pi 本子停在迁移那一刻。
+ */
+export interface DurableMark {
+  /** 新内核第一次接手（迁移旧会话 / 新建）的时刻（Unix ms） */
+  since: number;
+  /** 新内核有一轮在跑（开轮时置、这一轮落定时清）。应用重启后还在 = 上次被中断，界面给「继续」 */
+  running?: true;
+  /** 迁移旧会话失败的原因：会话回落只读，输入框禁用（原件不动） */
+  failed?: string;
+  /**
+   * 子会话在应用重启后被自动接着跑的时刻（Unix ms）：后台任务照常续跑（方案默认），界面据此说一句
+   * 「应用重启后接着跑的」。下一次由人开的轮清掉。
+   */
+  resumed?: number;
+  /**
+   * 这一轮是应用**正常退出**时被停下的（退出流程停掉了它的命令，状态是确定的）。缺席而 running 还在 = 崩溃 / 强杀
+   * （或 kernel 进程死掉）留下的——命令可能成了孤儿、跑没跑完不知道。决定重启后要不要自动续跑（kernel-host 的 resumePolicy）。
+   */
+  stoppedOnQuit?: true;
+}
+
 export interface SessionMeta {
   id: string;
   /** 首条用户消息的第一行；模型生成成功后替换为概括（titleSource = auto） */
@@ -588,6 +612,8 @@ export interface SessionMeta {
    * 同一份 pi session 被别的客户端续过的话，这份快照会偏旧，直到它在这里再跑一轮。
    */
   stats: AgentStats | null;
+  /** 住在新内核里（见 DurableMark）；缺席 = 旧内核的会话 */
+  durable?: DurableMark;
   createdAt: number;
   updatedAt: number;
 }
@@ -728,6 +754,25 @@ function parseRecentQueries(value: unknown): string[] {
  * 未读丢了只是少一个提醒，会话本体还在；同 parse 系列的纪律。
  * 也用在 IPC 入口：renderer 传来的坏载荷当已读写回，不裸存进 meta。
  */
+function resumedField(resumed: number | null): { resumed: number } | Record<string, never> {
+  return resumed === null ? {} : { resumed };
+}
+
+/** DurableMark 的读盘校验：缺 since 整条丢（当旧内核的会话）；坏的可选字段逐个丢 */
+export function parseDurableMark(raw: unknown): DurableMark | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const value = raw as Record<string, unknown>;
+  const since = num(value["since"]);
+  if (since === null) return null;
+  return {
+    since,
+    ...(value["running"] === true ? { running: true as const } : {}),
+    ...(typeof value["failed"] === "string" && value["failed"] !== "" ? { failed: value["failed"] } : {}),
+    ...resumedField(num(value["resumed"])),
+    ...(value["stoppedOnQuit"] === true ? { stoppedOnQuit: true as const } : {}),
+  };
+}
+
 export function parseSessionUnread(raw: unknown): { at: number; failed: boolean } | null {
   if (typeof raw !== "object" || raw === null) return null;
   const value = raw as Record<string, unknown>;
@@ -813,6 +858,7 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
   const parentId = str(value["parentId"]);
   const automationId = str(value["automationId"]);
   const automationRun = parseAutomationRunLabel(value["automationRun"]);
+  const durable = parseDurableMark(value["durable"]);
 
   return {
     id,
@@ -862,6 +908,8 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     ...(value["intentEnabled"] === true || value["intentEnabled"] === false
       ? { intentEnabled: value["intentEnabled"] }
       : {}),
+    // 新内核的标记：坏值当没有（旧内核的会话）
+    ...(durable === null ? null : { durable }),
     createdAt,
     updatedAt: typeof value["updatedAt"] === "number" ? value["updatedAt"] : createdAt,
   };

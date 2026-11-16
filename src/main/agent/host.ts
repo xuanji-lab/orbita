@@ -5,7 +5,7 @@
 import { join } from "node:path";
 import { utilityProcess } from "electron";
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
-import { AgentHostCore, type CatalogScope } from "./host-core.ts";
+import { AgentHostCore, type CatalogScope, type KernelChild, type KernelLane } from "./host-core.ts";
 
 export class AgentHost extends AgentHostCore {
   /**
@@ -17,12 +17,22 @@ export class AgentHost extends AgentHostCore {
     env: Record<string, string | undefined>,
     onEvent: (event: AgentEvent) => void,
     catalogScope: CatalogScope,
+    /** 新内核那条道 */
+    kernel: KernelLane,
   ) {
-    super(() => utilityProcess.fork(runtimePath, [], { stdio: "inherit", env }), onEvent, catalogScope);
+    super(() => utilityProcess.fork(runtimePath, [], { stdio: "inherit", env }), onEvent, kernel, catalogScope);
   }
 }
 
 /** 打包产物里 runtime 与主进程同目录（electron.vite.config 的 main 多入口）。 */
 export function resolveRuntimePath(dirname: string): string {
   return join(dirname, "agent-runtime.js");
+}
+
+/**
+ * 新内核的 kernel 进程（与 agent-runtime.js 同目录的另一个入口）。由 KernelHost 的那条道调用。
+ * `--expose-gc`：迁移大本子时 kernel 定期收一次垃圾（kernel-gc 见 kernel-runtime.ts），不让解析出的大字符串堆到几百 MB。
+ */
+export function forkKernelRuntime(dirname: string, env: Record<string, string | undefined>): KernelChild {
+  return utilityProcess.fork(join(dirname, "kernel-runtime.js"), [], { stdio: "inherit", env, execArgv: ["--expose-gc"] });
 }

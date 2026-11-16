@@ -70,6 +70,10 @@ export default defineConfig({
           "agent-runtime": resolve(__dirname, "src/agent/runtime.ts"),
           "terminal-runtime": resolve(__dirname, "src/terminal/runtime.ts"),
           "memory-runtime": resolve(__dirname, "src/memory/runtime.ts"),
+          // 新内核（pi-durable）：对话主循环，第一次有会话要跑时被拉起（main/agent/kernel-host.ts）
+          "kernel-runtime": resolve(__dirname, "src/agent/kernel-runtime.ts"),
+          // 新内核迁旧会话的一次性进程（kernel 进程按需 fork，迁完即退，见 src/agent/kernel-migrator.ts）
+          "kernel-migrator": resolve(__dirname, "src/agent/kernel-migrator.ts"),
         },
         /**
          * @napi-rs/canvas（read_pdf 页图渲染）保持 external：它的入口是一串平台包

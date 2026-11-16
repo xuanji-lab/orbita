@@ -1,5 +1,6 @@
 /**
- * pi 本子的原地编辑 —— 会话回退与单轮撤销在 agent 进程里的一刀。
+ * pi 本子的原地编辑 —— 还没迁进库的旧会话的回退、单轮撤销与挪工作区在 agent 进程里的一刀
+ * （住在新内核里的会话由 kernel-edit.ts 编辑库）。
  *
  * 为什么是独立模块：runtime.ts 被 parentPort 守卫钉死在 utility 进程里，
  * `node --test` 加载即退出（turn-cycle.ts 同款先例）；这一刀的行为

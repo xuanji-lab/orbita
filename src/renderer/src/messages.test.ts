@@ -275,3 +275,17 @@ describe("「和智能体一起做一个」的预填首句", () => {
     doesNotMatch(en.plugins.makeWithAgentDraft, /[\u4e00-\u9fff]/);
   });
 });
+
+describe("对话界面的文案不出现内部说法（内核 / kernel / durable）", () => {
+  /** 一个文案表里的全部字符串（函数用样例参数调一遍） */
+  const strings = (value: unknown): string[] => {
+    if (typeof value === "string") return [value];
+    if (typeof value === "function") return strings((value as (...args: unknown[]) => unknown)("x", 1, 2));
+    if (typeof value === "object" && value !== null) return Object.values(value).flatMap(strings);
+    return [];
+  };
+  test("zh.chat / en.chat 里没有「内核」「kernel」「durable」——用户不知道什么是内核", () => {
+    for (const text of [...strings(zh.chat), ...strings(en.chat)]) doesNotMatch(text, /内核|kernel|durable/i, text);
+  });
+});
+

@@ -6,6 +6,7 @@ import { prefillLeft, reconcileLeft } from "./carryover-prefill.ts";
 import type { TranscriptItem } from "@shared/transcript";
 import { api } from "../../api";
 import type { IntentRecallRecord } from "@shared/session";
+import { awaitsContinue, restartNote } from "@shared/kernel";
 import type { RecallCardState } from "@shared/intent-recall";
 import type { IntentConfirmDecision } from "@shared/intent-confirm";
 import { splitEchoBlocks } from "../../../../shared/prompt-attachments.ts";
@@ -13,6 +14,7 @@ import {
   EMPTY_ENTRY,
   dequeue,
   applyAgentEvent,
+  seedRunningPhases,
   enqueue,
   enqueueChannelMessage,
   createSessionStates,
@@ -27,6 +29,7 @@ import {
   removeSessionEntry,
   revertOptimisticTurn,
   seedFromDisk,
+  seedHistory,
   setOlderLoading,
   setEntryPhase,
   type PendingApproval,
@@ -129,6 +132,9 @@ import { ipcErrorText } from "../../utils/ipc-error.ts";
  * 查看槽的每轮 submit 显式带上自己槽内的 model / mode / cwd。
  */
 /** 回退确认框的全部状态：计划 + 要放回输入框的那条原文（含附件）。 */
+/** 会话只能读不能续的原因（ChatSession.readOnlyReason） */
+export type ReadOnlyReason = { kind: "noBook" } | { kind: "migrationFailed"; reason: string };
+
 export interface RevertDialogState {
   sessionId: string;
   targetMessageId: string;
@@ -202,6 +208,8 @@ export interface ChatSession {
   approvalsOf: (id: string) => readonly PendingApproval[];
   /** 按 id 查是否停在「计划等你确认」上——状态饼「在等你」的第二个来源（plan-timeline 的 planAwaitingIn） */
   planAwaitingOf: (id: string) => boolean;
+  /** 按 id 查子会话是否被崩溃打断、停着等人点「继续」（@shared/kernel 的 awaitsContinue）——「在等你」的第三个来源 */
+  interruptedOf: (id: string) => boolean;
   /**
    * 按 id 取整个槽（没载过 = undefined）。首页会话卡要说「此刻在干什么」：后台在跑的会话
    * 槽里有它这一轮的过程，不另存——与 phaseOf 同一套 ref 读法，引用稳定
@@ -312,6 +320,20 @@ export interface ChatSession {
    * 界面要如实说出来，不能让输入框看起来能打字（guideline §四写明的代价）。
    */
   readOnly: boolean;
+  /** 只能读的原因（readOnly 为真时非 null）：界面按它说清楚为什么 */
+  readOnlyReason: ReadOnlyReason | null;
+  /** 新内核：这一轮是被打断的、可以接着跑（标注旁给「继续」） */
+  turnContinuable: boolean;
+  /** 新内核：这个子会话在应用重启后被自动接着跑过（上次被打断的那一轮） */
+  resumedAfterRestart: boolean;
+  /** 上次崩溃 / 强杀留下的子会话：没自动续跑，「继续」旁说一句应用上次是异常退出的（resumePolicy "crashed"） */
+  interruptedByCrash: boolean;
+  /** 新内核：发消息前正在把这条旧会话迁进库（大会话要一两秒） */
+  migrating: boolean;
+  /** 迁移是事先知道的（大会话）：提示立刻露出 */
+  migratingExpected: boolean;
+  /** 接着跑被打断的那一轮（不加新消息） */
+  continueTurn: () => void;
   openSession: (id: string) => Promise<void>;
   /** 改名。空名字会退回从第一条用户消息推导——侧栏不留看不见的行 */
   renameSession: (id: string, title: string) => void;
@@ -447,7 +469,7 @@ export interface ChatSession {
   intentEnabled: boolean | null | undefined;
   setIntentEnabled: (next: boolean) => void;
   /** 乐观回显：发出即画的用户气泡（真回显事件一到即清）。ephemeral */
-  pendingEcho: { blocks: readonly string[] } | null;
+  pendingEcho: { blocks: readonly string[]; at: number } | null;
 }
 
 /** 查看槽回踩引擎用的窄接口——避免引擎与视图互相持有完整类型 */
@@ -477,6 +499,8 @@ interface ViewHandle {
  * 引擎——与「正在看哪条」无关的共享真源。全应用一份，主槽与抽屉槽都从它读。
  */
 export interface SessionEngine {
+  /** 新内核：接着跑上次被中断的那一轮 */
+  readonly continueTurn: (id: string) => void;
   /**
    * pi 内建目录：模型项的 ctx 徽标、思考档支持集都要从这里查官方参数——
    * 一个 app 一次 fetch（此前 ComposerBar 与设置面各自 `useBuiltinCatalog()`，
@@ -570,6 +594,7 @@ export interface SessionEngine {
   readonly turnErrorOf: (id: string) => string | null;
   readonly approvalsOf: (id: string) => readonly PendingApproval[];
   readonly planAwaitingOf: (id: string) => boolean;
+  readonly interruptedOf: (id: string) => boolean;
   readonly entryOf: (id: string) => SessionEntry | undefined;
   readonly answerApproval: (requestId: string, answer: PermissionAnswer) => void;
   /** 意图确认卡的回答（实验功能 intent-system） */
@@ -904,6 +929,34 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
   }, [refreshWorkspaces]);
 
   useEffect(refreshWorkspaces, [refreshWorkspaces]);
+
+  useEffect(() => {
+    void api.agent
+      .kernelInfo()
+      .then((info) => {
+        // 窗口起来之前就开跑的轮（应用重启时自动续跑的子会话）：那条 phase turn 没收到，按主进程的账补上。
+        // 之后这一轮落定的 idle 照常到（主进程先回这份、后发的事件排在它后面）
+        if (info.running.length > 0) applyStates((prev) => seedRunningPhases(prev, info.running));
+      })
+      .catch(() => undefined);
+  }, [applyStates]);
+
+  /**
+   * 新内核：接着跑上次被中断的那一轮（kernel 进程崩溃 / 应用被杀时它在跑）。不加新消息；
+   * 开工上下文与排队投递同一份（buildTurn），乐观置 turn 同 send 的规矩。
+   */
+  const continueTurn = useCallback(
+    (id: string): void => {
+      const turn = buildTurn(id);
+      if (turn === null) return;
+      const revert = beginOptimisticTurn(id);
+      api.agent.continue({ sessionId: id, ...turn }).catch((cause: unknown) => {
+        setError(ipcErrorText(cause));
+        revert();
+      });
+    },
+    [buildTurn, beginOptimisticTurn],
+  );
 
   useEffect(() => {
     void api.workspace
@@ -1298,10 +1351,19 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     if (entry === undefined || entry.phase !== "idle") return false;
     return planAwaitingIn(selectTranscript(entry.transcript));
   }, []);
+  // 被崩溃打断、停着等人点「继续」的子会话（「等你」的第三个来源）：判断只在 @shared/kernel，这里只喂「此刻在不在跑」
+  const interruptedOf = useCallback(
+    (id: string): boolean => {
+      const meta = sessions.find((entry) => entry.id === id);
+      return meta !== undefined && awaitsContinue(meta, (statesRef.current.get(id)?.phase ?? "idle") !== "idle");
+    },
+    [sessions],
+  );
   const entryOf = useCallback((id: string): SessionEntry | undefined => statesRef.current.get(id), []);
 
   return {
     catalog,
+    continueTurn,
     messagesRef,
     pickedThinkingRef,
     states,
@@ -1336,6 +1398,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     turnErrorOf,
     approvalsOf,
     planAwaitingOf,
+    interruptedOf,
     entryOf,
     answerApproval,
     renameSession,
@@ -2298,11 +2361,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           const live = (engine.statesRef.current.get(id)?.phase ?? "idle") !== "idle";
           setSessionId(live ? id : null);
           sessionRef.current = live ? id : null;
-          if (!engine.statesRef.current.has(id)) {
-            engine.applyStates((prev) =>
-              seedFromDisk(prev, id, detail.transcript, detail.meta.stats, detail.window),
-            );
-          }
+          // 槽不在：种盘；槽在但没从盘上种过（窗口晚于事件起来，如重启续跑的子会话）：把更早的历史并到前面；种过的不动
+          engine.applyStates((prev) => seedHistory(prev, id, detail.transcript, detail.meta.stats, detail.window));
         })
         .catch((cause: unknown) => {
           setLoadingHistory(false);
@@ -3389,6 +3449,28 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     setScanNotice(engine.messagesRef.current.session.checklistDiscarded);
   }, [scanResult, engine]);
 
+  /**
+   * 只能读不能续的原因：
+   * - noBook：没有 pi 本子的旧会话、还没开新的（续会话靠把本子还给 pi）；
+   * - migrationFailed：迁到新内核时失败（原件没动，原因在 meta.durable.failed）。
+   */
+  const liveMeta = useMemo(() => {
+    const id = sessionId ?? opened?.id ?? null;
+    return id === null ? null : (engine.sessions.find((meta) => meta.id === id) ?? null);
+  }, [engine.sessions, sessionId, opened]);
+  const readOnlyReason: ReadOnlyReason | null =
+    opened !== null && opened.piSessionFile === null && sessionId === null
+      ? { kind: "noBook" }
+      : liveMeta?.durable?.failed !== undefined
+        ? { kind: "migrationFailed", reason: liveMeta.durable.failed }
+        : null;
+
+  // 「继续」交给记忆化的转录列：引用要稳
+  const continueHere = useCallback((): void => {
+    const id = sessionId ?? opened?.id ?? null;
+    if (id !== null) engine.continueTurn(id);
+  }, [engine, sessionId, opened]);
+
   // selectTranscript 每次调用都造新数组（pi 的实现如此）——在这里按 entry 引用
   // 稳定化，否则 ChatView 的 memo 转录列每次渲染都被新引用击穿，隔离形同虚设
   const transcript = useMemo(() => selectTranscript(entry.transcript), [entry.transcript]);
@@ -3411,6 +3493,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     turnErrorOf: engine.turnErrorOf,
     approvalsOf: engine.approvalsOf,
     planAwaitingOf: engine.planAwaitingOf,
+    interruptedOf: engine.interruptedOf,
     entryOf: engine.entryOf,
     error: engine.error,
     draft,
@@ -3466,7 +3549,20 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     loadingHistory,
     opened,
     // 打开的是一条没有 pi 本子的旧会话，且还没开新的——只能读
-    readOnly: opened !== null && opened.piSessionFile === null && sessionId === null,
+    readOnly: readOnlyReason !== null,
+    readOnlyReason,
+    // 被打断、可继续：这一次运行里 kernel 崩溃时它在跑（槽里的标注），或上次应用退出 / 被杀时它在跑（meta 上的 running）
+    turnContinuable:
+      entry.phase === "idle" &&
+      readOnlyReason === null &&
+      (entry.turnContinuable || (entry.turnError === null && liveMeta?.durable?.running === true)),
+    migrating: entry.migrating,
+    migratingExpected: entry.migratingExpected,
+    // 子会话在应用重启后被自动接着跑过（后台任务照常续跑）：界面说一句，直到下一次由人或父开的轮。
+    // 与「被打断了 · 继续」只出一句（restartNote：崩溃压过旧的 resumed）
+    resumedAfterRestart: liveMeta !== null && restartNote(liveMeta, entry.phase !== "idle") === "resumed",
+    interruptedByCrash: !entry.turnContinuable && liveMeta !== null && restartNote(liveMeta, entry.phase !== "idle") === "crashed",
+    continueTurn: continueHere,
     openSession,
     renameSession: engine.renameSession,
     pinSession: engine.pinSession,

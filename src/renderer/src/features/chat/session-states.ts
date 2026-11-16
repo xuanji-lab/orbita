@@ -147,6 +147,15 @@ export interface SessionEntry {
    */
   turnError: string | null;
   /**
+   * 这条失败是「被打断、库里还留着上下文」（新内核：kernel 进程崩溃时它在跑）：标注旁给「继续」。
+   * 与 turnError 同生同灭；旧内核恒 false。纯 ephemeral。
+   */
+  turnContinuable: boolean;
+  /** 新内核：发消息前正在把这条旧会话迁进库（migration running → done）；旧内核恒 false。纯 ephemeral */
+  migrating: boolean;
+  /** 这次迁移是主进程按本子大小事先报的（大会话）：界面立刻露出提示，不等 0.5 秒 */
+  migratingExpected: boolean;
+  /**
    * 最近一次用量快照。null = 还没有——纯浏览的旧会话不起 runtime session，
    * 不落盘也不算假数，等用户说话唤醒后由 runtime 的第一次推送填上。
    */
@@ -189,7 +198,12 @@ export interface SessionEntry {
    * 这里存**与 runtime 同款切法**的正文块（splitEchoBlocks），真回显一到即清。
    * ephemeral。
    */
-  pendingEcho: { blocks: readonly string[] } | null;
+  pendingEcho: { blocks: readonly string[]; at: number } | null;
+  /**
+   * 盘上的历史种进来过没有（seedFromDisk / seedHistory 置真）。槽由实时事件或 seedRunningPhases 先建时为假：
+   * 打开会话时 seedHistory 据此补种历史，种过的不再碰。
+   */
+  diskSeeded: boolean;
 }
 
 /** 一份运行时报回的思考档真值，连同报它的型号 */
@@ -240,6 +254,9 @@ export const EMPTY_ENTRY: SessionEntry = {
   queued: [],
   retry: null,
   turnError: null,
+  turnContinuable: false,
+  migrating: false,
+  migratingExpected: false,
   stats: null,
   thinking: null,
   approvals: [],
@@ -251,6 +268,7 @@ export const EMPTY_ENTRY: SessionEntry = {
   intentAsk: null,
   rules: null,
   pendingEcho: null,
+  diskSeeded: false,
 };
 
 /**
@@ -258,6 +276,19 @@ export const EMPTY_ENTRY: SessionEntry = {
  * ready / builtins / created 与槽无关（live 集合是 hook 自己的账）。
  * 没有对应槽时**就地建槽**——renderer 重载后事件照样开始累积。
  */
+/**
+ * 主进程说这几条会话此刻在新内核里跑着一轮（AgentKernelInfo.running）：槽里还是 idle 的补成 turn——
+ * 与收到那条 phase turn 同一个归约。已经不是 idle 的不动（已收到过真事件）。
+ */
+export function seedRunningPhases(states: SessionStates, running: readonly string[]): SessionStates {
+  let next = states;
+  for (const sessionId of running) {
+    if ((next.get(sessionId)?.phase ?? "idle") !== "idle") continue;
+    next = applyAgentEvent(next, { type: "phase", sessionId, phase: "turn" });
+  }
+  return next;
+}
+
 export function applyAgentEvent(states: SessionStates, event: AgentEvent): SessionStates {
   if (event.type === "progress") {
     return update(states, event.sessionId, (entry) => ({
@@ -281,15 +312,23 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
       retry: null,
       // 回合失败标注只随「新一轮开跑」消失：非 idle 的 phase 事件清它；
       // 落定的 idle **不清**——failed(turn) 之后紧随的 agent_settled 正是 idle
-      ...(event.phase === "idle" ? null : { turnError: null }),
+      ...(event.phase === "idle" ? null : { turnError: null, turnContinuable: false }),
       // 轮结束就不可能还有挂起的审批：停止 / 抢跑时 runtime 已按拒绝把它们结清
       // （审批不听 abort，只能手动结）。卡片留着的话，用户会去回答一个已经不存在的请求。
       // 乐观回显同理：真回显没来轮就落定 = 它失败了，不留鬼影
-      ...(event.phase === "idle" ? { approvals: [], pendingEcho: null } : null),
+      ...(event.phase === "idle" ? { approvals: [], pendingEcho: null, migrating: false, migratingExpected: false } : null),
     }));
   }
   if (event.type === "retry") {
     return update(states, event.sessionId, (entry) => ({ ...entry, retry: event.status }));
+  }
+  if (event.type === "migration") {
+    return update(states, event.sessionId, (entry) => ({
+      ...entry,
+      migrating: event.state === "running",
+      // kernel 自己的 running 晚于主进程事先报的那个：不把「事先知道」降回去
+      migratingExpected: event.state === "running" && (entry.migratingExpected || event.expected === true),
+    }));
   }
   if (event.type === "compaction") {
     return update(states, event.sessionId, (entry) => ({
@@ -384,11 +423,28 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
         phase: "idle",
         retry: null,
         turnError: event.message,
+        turnContinuable: event.continuable === true,
+        // 被打断（新内核的 kernel 进程没了）：还在流的回答、还在跑的工具永远等不到收尾帧，也没落盘——清掉，
+        // 不让半截文字看起来像一条完整回答（与重启后从盘上读到的一致）；「继续」接着答
+        ...(event.continuable === true ? { transcript: withoutUnfinished(current.transcript) } : null),
       }));
     }
     return setEntryPhase(states, event.sessionId, "idle");
   }
   return states;
+}
+
+/** 去掉还在流的回答与还在跑的工具（只在 progress 里、没落盘的那些） */
+function withoutUnfinished(state: TranscriptState): TranscriptState {
+  const unfinished = (item: TranscriptItem): boolean =>
+    (item.role === "assistant" && item.status === "streaming") || (item.role === "tool" && item.status === "running");
+  const drop = new Set([...state.progressItems.values()].filter(unfinished).map((item) => item.id));
+  if (drop.size === 0) return state;
+  return {
+    ...state,
+    progressItems: new Map([...state.progressItems].filter(([id]) => !drop.has(id))),
+    progressOrder: state.progressOrder.filter((id) => !drop.has(id)),
+  };
 }
 
 /** 指定槽的 phase，顺带清重试槽。槽不存在就建（send 的乐观 turn 先于任何事件到达时用）。 */
@@ -403,7 +459,7 @@ export function setEntryPhase(
     ...entry,
     phase,
     retry: null,
-    ...(phase === "idle" ? { pendingEcho: null } : { turnError: null }),
+    ...(phase === "idle" ? { pendingEcho: null } : { turnError: null, turnContinuable: false }),
   }));
 }
 
@@ -528,8 +584,11 @@ export function seedFromDisk(
     // 排队是 ephemeral：盘上没有，也不该有（会话断了一次排队就物理消失了）
     queued: [],
     retry: null,
-    // 盘上没有失败标注（纯 ephemeral）：种盘即清
+    // 盘上没有失败标注（纯 ephemeral）：种盘即清（「上次被中断」另从 meta.durable.running 读）
     turnError: null,
+    turnContinuable: false,
+    migrating: false,
+    migratingExpected: false,
     // **盘上有用量**（A1-Q1：`SessionMeta.stats` 存的是上一次跑完时的快照）。
     // 种盘就把它放回来——否则关掉应用再打开，底栏是空的，而账本明明还在。
     // 唤醒后 agent 会推真累计覆盖它（pi 的本子才是原始账本，这里只是上次看到的样子）。
@@ -547,8 +606,40 @@ export function seedFromDisk(
     // 注入清单不落盘：种盘即清（见字段注释），下一次开轮的推送会再填上
     rules: null,
     pendingEcho: null,
+    diskSeeded: true,
   });
   return next;
+}
+
+/**
+ * 打开一条会话时种盘上的历史（openSession 调）：
+ * - 槽不在：seedFromDisk（老路径，一字未改）。
+ * - 槽在、已从盘上种过：不动（同一个引用）——事件一直实时进槽，再种等于把画面倒回去。
+ * - 槽在、**还没从盘上种过**：窗口晚于事件起来——重启后自动续跑的子会话（槽由 seedRunningPhases 或它的第一条实时事件建）、
+ *   窗口打开前就开跑的自动化轮。槽里只有这一轮的实时条目，之前的历史从没进来过（2026-11-15 真实例：续跑中打开子会话只有
+ *   「回应中」）。把盘上**早于槽里第一条已有记录**的那段并到前面（prependOlder，实时的尾部一个字不动）：盘上的在前；
+ *   从第一条重合的 id 起以实时为准——那之后的盘上记录要么槽里已有，要么它的实时事件还在路上，并进来会重复或乱序。
+ */
+export function seedHistory(
+  states: SessionStates,
+  sessionId: string,
+  transcript: readonly SessionRecord[],
+  stats: AgentStats | null = null,
+  page?: { hasMore: boolean; compactionsBefore: number },
+): SessionStates {
+  const entry = states.get(sessionId);
+  if (entry === undefined) return seedFromDisk(states, sessionId, transcript, stats, page);
+  if (entry.diskSeeded) return states;
+  const known = loadedIds(entry);
+  const overlap = transcript.findIndex((record) => known.has(record.id));
+  const merged = prependOlder(states, sessionId, overlap < 0 ? transcript : transcript.slice(0, overlap), { hasMore: page?.hasMore ?? false });
+  const next = merged.get(sessionId) ?? entry;
+  return new Map(merged).set(sessionId, {
+    ...next,
+    window: { ...next.window, firstId: transcript[0]?.id ?? next.window.firstId, compactionsBefore: page?.compactionsBefore ?? 0 },
+    stats: next.stats ?? stats,
+    diskSeeded: true,
+  });
 }
 
 /** 同一 turnId 只留最后一张（重跑 recall 会追加新记录）。 */
@@ -743,8 +834,8 @@ export function removeIntentAsk(states: SessionStates, requestId: string): Sessi
 }
 
 /** 发出即画：记下乐观回显的正文块（与 runtime 的回显同款切法）。 */
-export function setPendingEcho(states: SessionStates, sessionId: string, blocks: readonly string[]): SessionStates {
-  return update(states, sessionId, (entry) => ({ ...entry, pendingEcho: { blocks } }));
+export function setPendingEcho(states: SessionStates, sessionId: string, blocks: readonly string[], at = Date.now()): SessionStates {
+  return update(states, sessionId, (entry) => ({ ...entry, pendingEcho: { blocks, at } }));
 }
 
 /** runtime 没了：所有还在忙的槽（turn / 压缩中 / 重试等待中）一并归位。全是 idle 时返回原引用。 */

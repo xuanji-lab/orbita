@@ -3,11 +3,13 @@ import { describe, it } from "node:test";
 import type { ChannelMessage } from "@shared/channel";
 import type { Messages } from "../../messages-en.ts";
 import {
+  delegateCardStatus,
   latestChannelLine,
   sortSubSessionRows,
   subSessionBarFill,
   subSessionRowStatus,
   subSessionStatusOf,
+  waitingSummary,
   type SubSessionEngineSlots,
   type SubSessionRowStatus,
 } from "./sub-sessions-rows.ts";
@@ -99,6 +101,18 @@ describe("subSessionStatusOf", () => {
 
   it("没有摘要（还没拉到）也按槽走，不因缺席先验成 idle", () => {
     strictEqual(subSessionStatusOf("c1", undefined, engine(["c1"], [])), "running");
+  });
+
+  it("被崩溃打断、等你点继续：判 interrupted，排进「等你」、亮 2/3 橙；用户终止过的仍是 stopped", () => {
+    const crashed: SubSessionEngineSlots = { ...engine([], []), interruptedOf: (id) => id === "c1" };
+    strictEqual(subSessionStatusOf("c1", "running", crashed), "interrupted");
+    strictEqual(subSessionStatusOf("c1", "stopped", crashed), "stopped");
+    strictEqual(subSessionBarFill("interrupted"), "waiting");
+    const rows = sortSubSessionRows([
+      { status: "running" as const, lastAt: 9 },
+      { status: "interrupted" as const, lastAt: 1 },
+    ]);
+    strictEqual(rows[0]?.status, "interrupted");
   });
 });
 
@@ -231,5 +245,30 @@ describe("latestChannelLine（收件箱行的最新一句）", () => {
     strictEqual(latestChannelLine(taskOnly, "idle", t), "还没说话");
     strictEqual(latestChannelLine(undefined, "running", t), "在跑 · 还没说话");
     strictEqual(latestChannelLine([], "stopped", t), "还没说话");
+  });
+});
+
+describe("delegateCardStatus（父会话转录里派出卡的状态）", () => {
+  it("通道终态优先；在跑 = running；被崩溃打断等你继续 = interrupted（不是「空闲」）；都不是 = idle", () => {
+    strictEqual(delegateCardStatus("done", false, true), "done");
+    strictEqual(delegateCardStatus("stopped", false, true), "stopped");
+    strictEqual(delegateCardStatus("running", true, false), "running");
+    strictEqual(delegateCardStatus("running", false, true), "interrupted");
+    strictEqual(delegateCardStatus(undefined, false, false), "idle");
+    // 判断顺序：通道终态压过「槽里还在跑」（子会话已回报完成、最后一个 phase 事件还没到），在跑压过被打断
+    strictEqual(delegateCardStatus("done", true, false), "done");
+    strictEqual(delegateCardStatus("failed", true, true), "failed");
+    strictEqual(delegateCardStatus("waiting", true, false), "waiting");
+    strictEqual(delegateCardStatus("running", true, true), "running");
+  });
+});
+
+describe("waitingSummary（父会话胶囊与右栏列表标题的「等你」同一套说法）", () => {
+  const words = { interrupted: (n: number) => `${n} 个被打断`, waiting: (n: number) => `${n} 个等你` };
+  it("全是被打断：只写被打断的数；混着：被打断的在前、其余等你的照旧；都没有：空串", () => {
+    strictEqual(waitingSummary(2, 2, words), "2 个被打断");
+    strictEqual(waitingSummary(3, 1, words), "1 个被打断 · 2 个等你");
+    strictEqual(waitingSummary(2, 0, words), "2 个等你");
+    strictEqual(waitingSummary(0, 0, words), "");
   });
 });

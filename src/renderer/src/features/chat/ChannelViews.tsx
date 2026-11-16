@@ -46,6 +46,8 @@ export interface ChannelViewContext {
   channelSummaries: ReadonlyMap<string, ChannelSummary>;
   /** 派出卡状态的兜底——channelSummaries 没有终态时看子会话是否还在跑 */
   childPhaseOf: (id: string) => SessionEntry["phase"];
+  /** 子会话被崩溃打断、等你点「继续」（引擎的 interruptedOf）：派出卡说「被打断」而不是「空闲」 */
+  childInterruptedOf: (id: string) => boolean;
   /**
    * 点主流里的派出卡 / 子会话消息胶囊 → 打开右栏 Sub-sessions 面板并直接进入该子
    * 会话的会话层。null = 不可点（辅助对话抽屉不传；子会话自己没有子会话入口）。
@@ -218,7 +220,7 @@ export function ChannelToolMarkLine(props: {
   );
 }
 
-export type DelegateCardStatus = "running" | "waiting" | "done" | "failed" | "stopped" | "idle";
+export type DelegateCardStatus = "running" | "waiting" | "interrupted" | "done" | "failed" | "stopped" | "idle";
 
 
 function delegateStatusColor(status: DelegateCardStatus): string {
@@ -226,6 +228,7 @@ function delegateStatusColor(status: DelegateCardStatus): string {
     case "running":
       return "var(--color-accent)";
     case "waiting":
+    case "interrupted":
       return "var(--color-warning)";
     case "done":
       return "var(--color-success)";

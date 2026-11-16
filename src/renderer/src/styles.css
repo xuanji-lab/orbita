@@ -1981,6 +1981,15 @@ html[data-pointer-drag] iframe {
   padding: 0 var(--space-3) var(--space-2) calc(var(--space-2) + 3px + var(--space-2));
 }
 
+/* 被崩溃打断的行：行下一句说明 + 「继续」（.notice-exit，与子会话页那一行同一个键）。
+   左起对齐标题文字：行内边距 --space-2 + 状态饼 10px（.status-pie 的宽，即 --space-2-5）+ 饼与标题的间距 --space-2 */
+.inbox-row-resume {
+  margin: 0;
+  padding: 0 var(--space-3) var(--space-2) calc(var(--space-2) + var(--space-2-5) + var(--space-2));
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
 .channel-reply-error {
   margin: 0 0 var(--space-1);
   font-size: var(--font-size-sm);
