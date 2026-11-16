@@ -13,7 +13,6 @@ import type { SessionPhase } from "../shared/transcript.ts";
 import { effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
 import { AgentHost, forkKernelRuntime, resolveRuntimePath } from "./agent/host.ts";
 import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";
-import { PI_PACKAGE_DIR_ENV, piPackageDir } from "./agent/pi-package.ts";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { applyMcpWrite, applySkillWrite } from "./agent/write-requests.ts";
@@ -531,13 +530,10 @@ void app.whenReady().then(async () => {
     platform: process.platform,
     arch: process.arch,
   });
-  // pi 打进 bundle 后会把 Orbita 的 package.json 当成自己的，版本号错了 pi.dev 的目录就是 404（pi-package.ts）
-  const piPackage = piPackageDir({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() });
   const agentProcessEnv = {
     ...(existsSync(searchBins) ? agentEnv(process.env, searchBins, process.platform) : process.env),
     // pi.dev 目录覆盖层的缓存落我们自己的数据目录（model-catalog.ts），不写 pi CLI 的 ~/.pi/agent
     [CATALOG_CACHE_ENV]: join(configDir, "model-catalog-cache.json"),
-    ...(existsSync(join(piPackage, "package.json")) ? { [PI_PACKAGE_DIR_ENV]: piPackage } : {}),
   };
   /**
    * 新内核（pi-durable，kernel-host.ts）：对话主循环（根会话、子会话、自动化开的轮）交给 kernel 进程

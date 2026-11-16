@@ -26,7 +26,6 @@
     "@codemirror/view": "6.43.15",
     "@earendil-works/chord": "1.5.2",
     "@earendil-works/pi-ai": "1.5.2",
-    "@earendil-works/pi-coding-agent": "1.5.2",
     "@earendil-works/pi-durable": "1.5.2",
     "@modelcontextprotocol/sdk": "1.31.0",
     "@napi-rs/canvas": "1.0.9",
@@ -76,8 +75,7 @@
     "vite": "^7.3.6"
   },
   "patchedDependencies": {
-    "@earendil-works/pi-ai@1.5.2": "patches/@earendil-works%2Fpi-ai@1.5.2.patch",
-    "@earendil-works/pi-coding-agent@1.5.2": "patches/@earendil-works%2Fpi-coding-agent@1.5.2.patch"
+    "@earendil-works/pi-ai@1.5.2": "patches/@earendil-works%2Fpi-ai@1.5.2.patch"
   },
   "build": {
     "appId": "com.orbita.desktop",
@@ -98,10 +96,6 @@
       {
         "from": "resources/builtin-plugins",
         "to": "builtin-plugins"
-      },
-      {
-        "from": "node_modules/@earendil-works/pi-coding-agent/package.json",
-        "to": "pi-coding-agent/package.json"
       }
     ],
     "npmRebuild": false,

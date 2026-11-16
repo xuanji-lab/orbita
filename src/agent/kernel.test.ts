@@ -2,6 +2,7 @@ import { after, describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm, truncate, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -9,7 +10,6 @@ import type { Api, Message, Model, Models } from "@earendil-works/pi-ai";
 import { transformMessages } from "@earendil-works/pi-ai/api/transform-messages";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
-import { buildSessionContext, convertToLlm, migrateSessionEntries, parseSessionEntries, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { ConversationId, Storage } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { forkMigrator, kernelCompaction, kernelSettings, KernelPool, LegacyPrintDoc, MigratorUnavailable, SessionIndexDoc, withBillingPatch, withCacheRetention, type KernelAgent, type MigratorRequest } from "./kernel.ts";
@@ -47,12 +47,19 @@ function pool(dir: string, extra: Partial<ConstructorParameters<typeof KernelPoo
   return new KernelPool({ dir, models: () => models, ...extra });
 }
 
-/** 旧内核下一轮会发的上下文：pi 1.5.2 自己的 buildSessionContext + convertToLlm（纯函数，不碰文件） */
-function oldContext(raw: string): Message[] {
-  const entries = parseSessionEntries(raw);
-  migrateSessionEntries(entries);
-  const body = entries.filter((entry): entry is SessionEntry => entry.type !== "session");
-  return convertToLlm(buildSessionContext(body).messages).filter((message) => message.role !== "system");
+/**
+ * 旧内核下一轮会发的上下文的指纹（见 fingerprints），按本子原文的 sha256 存。删旧库前用 pi-coding-agent 1.5.2
+ * 自己的 parseSessionEntries → migrateSessionEntries → buildSessionContext → convertToLlm 对每份本子
+ * 算好落盘（testdata/old-kernel-context-fingerprints.json）；本子原文一改，这里查不到就当场失败。
+ */
+const OLD_CONTEXT: Record<string, string[]> = JSON.parse(
+  readFileSync(join(import.meta.dirname, "../main/session/testdata/old-kernel-context-fingerprints.json"), "utf8"),
+);
+
+function oldFingerprints(raw: string): string[] {
+  const expected = OLD_CONTEXT[createHash("sha256").update(raw).digest("hex")];
+  assert.ok(expected !== undefined, "这份本子没有旧内核的指纹快照（本子原文改过？）");
+  return expected;
 }
 
 const COMPARE_MODEL = { id: "m", provider: "p", api: "anthropic-messages", input: ["text", "image"] } as unknown as Model<Api>;
@@ -147,9 +154,9 @@ describe("旧会话惰性迁移（剧本第 10、11、13 条）", () => {
     const opened = await kernel.open({ library: "r.sqlite", sessionId: "s1", legacy: { piSessionFile: file }, agent: AGENT });
     assert.ok(opened.ok);
     assert.equal(opened.migrated, true);
-    const expected = oldContext(COMPACTED);
+    const expected = oldFingerprints(COMPACTED);
     const actual = await migratedContext(kernel, "r.sqlite", opened.conversationId);
-    assert.deepEqual(fingerprints(actual), fingerprints(expected));
+    assert.deepEqual(fingerprints(actual), expected);
     // 第二次压缩之后：摘要 S2 + 保留段 a5 r3 + u4
     assert.equal(expected.length, 4);
     await kernel.closeAll();
@@ -165,7 +172,7 @@ describe("旧会话惰性迁移（剧本第 10、11、13 条）", () => {
       const raw = await readFile(join(testdata, name), "utf8");
       const opened = await kernel.open({ library: "t.sqlite", sessionId: `t${index}`, legacy: { piSessionFile: join(testdata, name) }, agent: AGENT });
       assert.ok(opened.ok, name);
-      assert.deepEqual(fingerprints(await migratedContext(kernel, "t.sqlite", opened.conversationId)), fingerprints(oldContext(raw)), name);
+      assert.deepEqual(fingerprints(await migratedContext(kernel, "t.sqlite", opened.conversationId)), oldFingerprints(raw), name);
     }
     await kernel.closeAll();
   });
@@ -339,7 +346,7 @@ describe("旧会话惰性迁移（剧本第 10、11、13 条）", () => {
     const fixed = await second.open({ library: "r.sqlite", sessionId: "s1", legacy: { piSessionFile: file }, agent: AGENT });
     assert.ok(fixed.ok);
     assert.equal(fixed.migrated, true);
-    assert.deepEqual(fingerprints(await migratedContext(second, "r.sqlite", fixed.conversationId)), fingerprints(oldContext(COMPACTED)));
+    assert.deepEqual(fingerprints(await migratedContext(second, "r.sqlite", fixed.conversationId)), oldFingerprints(COMPACTED));
     await second.closeAll();
   });
 
@@ -393,7 +400,7 @@ describe("迁移交给用完即退的进程（kernel 进程的内存高水位不
     assert.ok(opened.ok && opened.migrated);
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.deepEqual(order, ["handed", "migrating", "migrated", "other opened"]);
-    assert.deepEqual(fingerprints(await migratedContext(kernel, "r.sqlite", opened.conversationId)), fingerprints(oldContext(COMPACTED)));
+    assert.deepEqual(fingerprints(await migratedContext(kernel, "r.sqlite", opened.conversationId)), oldFingerprints(COMPACTED));
     // 再开一次：索引里有，不再迁
     const again = await kernel.open({ library: "r.sqlite", sessionId: "r", legacy: { piSessionFile: file }, agent: AGENT });
     assert.ok(again.ok && !again.migrated && again.conversationId === opened.conversationId);
@@ -414,7 +421,7 @@ describe("迁移交给用完即退的进程（kernel 进程的内存高水位不
     const opened = await kernel.open({ library: "r.sqlite", sessionId: "r", legacy: { piSessionFile: file }, agent: AGENT });
     assert.ok(opened.ok && opened.migrated);
     assert.equal(tried, 1);
-    assert.deepEqual(fingerprints(await migratedContext(kernel, "r.sqlite", opened.conversationId)), fingerprints(oldContext(COMPACTED)));
+    assert.deepEqual(fingerprints(await migratedContext(kernel, "r.sqlite", opened.conversationId)), oldFingerprints(COMPACTED));
     await kernel.closeAll();
   });
 
@@ -453,7 +460,7 @@ describe("迁移交给用完即退的进程（kernel 进程的内存高水位不
     const kernel = pool(dir, { migrateElsewhereMinBytes: 0, migrateElsewhere: (request) => forkMigrator(hang, request, 300) });
     const opened = await kernel.open({ library: "r.sqlite", sessionId: "r", legacy: { piSessionFile: file }, agent: AGENT });
     assert.ok(opened.ok && opened.migrated);
-    assert.deepEqual(fingerprints(await migratedContext(kernel, "r.sqlite", opened.conversationId)), fingerprints(oldContext(COMPACTED)));
+    assert.deepEqual(fingerprints(await migratedContext(kernel, "r.sqlite", opened.conversationId)), oldFingerprints(COMPACTED));
     await kernel.closeAll();
   });
 
@@ -581,7 +588,7 @@ describe("迁移交给用完即退的进程（kernel 进程的内存高水位不
     const opened = await kernel.open({ library: "r.sqlite", sessionId: "r", legacy: { piSessionFile: file }, agent: AGENT });
     assert.ok(opened.ok && opened.migrated, JSON.stringify(opened));
     assert.equal(forked, 1);
-    assert.deepEqual(fingerprints(await migratedContext(kernel, "r.sqlite", opened.conversationId)), fingerprints(oldContext(COMPACTED)));
+    assert.deepEqual(fingerprints(await migratedContext(kernel, "r.sqlite", opened.conversationId)), oldFingerprints(COMPACTED));
     await kernel.closeAll();
   });
 });

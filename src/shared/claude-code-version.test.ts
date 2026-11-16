@@ -8,13 +8,13 @@ import { CLAUDE_CODE_VERSION } from "./claude-code-version.ts";
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
 /**
- * agent 真会话发请求用的是 pi-coding-agent 引用的那份 pi-ai（compat 入口的 streamSimple）。
- * 按 Node 的解析顺序找它：先 pi-coding-agent 自己的 node_modules，再顶层。
- * pi-agent-core 底下另有一份没打补丁的 pi-ai，只提供 EventStream 等工具函数，不发请求。
+ * agent 真会话发请求用的是顶层那份（打过补丁的）pi-ai：模型目录（model-catalog.ts）与 pi-durable 都从顶层解析它。
+ * 顶层不在（依赖布局变了）就当场失败，不去猜别处的副本。
  */
 function piAiUsedByAgent(): string {
-  const nested = join(ROOT, "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai");
-  return existsSync(nested) ? nested : join(ROOT, "node_modules/@earendil-works/pi-ai");
+  const top = join(ROOT, "node_modules/@earendil-works/pi-ai");
+  assert.ok(existsSync(top), "顶层没有 @earendil-works/pi-ai");
+  return top;
 }
 
 describe("Claude Code 版本口径", () => {

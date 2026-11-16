@@ -577,7 +577,7 @@ export interface RetryStatus {
  * 一条会话到此刻的用量。**pi 的 `SessionStats` 只搬界面要显示的那几项**（D1，2026-09-03）。
  *
  * 为什么不直接透传 pi 的类型：
- * 1. 透传会把 `@earendil-works/pi-coding-agent` 漏进 shared 契约，而 AGENTS.md 的架构边界
+ * 1. 透传会把 pi 的内核包漏进 shared 契约，而 AGENTS.md 的架构边界
  *    写的是「适配层吸收内核差异，换内核时 renderer 不动」。
  * 2. 它要**落盘**（`SessionMeta.stats`）。落盘的形状必须是我们自己拥有、能逐字段校验的，
  *    不能是 pi 随时可能加字段的结构。

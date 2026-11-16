@@ -1,5 +1,5 @@
 /**
- * 转录归约器 —— 从 @earendil-works/pi-coding-agent 0.84.3 的 `./client` 子入口收编。
+ * 转录归约器 —— 从 pi 的 coding-agent 包 0.84.3 的 `./client` 子入口收编。
  *
  * 收编原因：pi 1.1.0 删掉了未发布的实验 server / client 栈，`pi-coding-agent/client`
  * 子入口随之消失（coding-agent CHANGELOG 1.1.0「Removed the unreleased experimental
