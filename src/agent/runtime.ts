@@ -9,21 +9,20 @@
  * - 没交给过 kernel 的会话换模型时的注册与校验（setModel：报 model 事件，主进程的 recorder 据此落 meta）；
  * - MCP 热重载的回执（mcpReload）；
  * - 专注小结、连接测试两种独立小调用（completeSimple）。
- * 这几件里有的还用着 pi-coding-agent（SessionManager、ModelRuntime）；两个进程合一留到去掉这个依赖的那一步。
+ * 暂不并进 kernel 进程：主进程对两个进程是两套宿主与命令通道（AgentHouseholdCommand / kernel 命令），
+ * 合一要改主进程里每一处发命令、收回执的地方，不是删旧库必需的。
  *
  * 为什么单独一个进程：这些活与 UI 抢事件循环（目录 JSON、本子解析）；崩了不带走窗口。**不碰 UI，不碰持久化路径策略。**
  */
 import { completeSimple } from "@earendil-works/pi-ai/compat";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { AgentEvent, AgentHouseholdCommand } from "../shared/agent-ipc.ts";
 import { registerAndResolveModel, toBuiltinProvider } from "./model-registration.ts";
 import { CATALOG_REFRESH_EVERY_MS, CatalogRefresher, createModelRuntime, refreshCatalogs } from "./model-catalog.ts";
 import { fetchTokenrhythmCatalog, tokenrhythmCachePath } from "./tokenrhythm-catalog.ts";
 import { ccBillingPatch } from "./cc-billing-patch.ts";
 import { FOCUS_SUMMARY_SYSTEM_PROMPT, parseSummaryReply } from "./focus-summary.ts";
-import { planBranchCut } from "./branch-cut.ts";
 import { withOpencodeSession } from "./opencode-session.ts";
-import { movePiBook, revertPiBook, undoPiBook } from "./pi-book-edit.ts";
+import { branchPiBook, movePiBook, PiBookFile, revertPiBook, undoPiBook } from "./pi-book-edit.ts";
 import { preferIPv4 } from "../shared/dial-v4.ts";
 
 // pi-ai 的模型调用与 main 同一个坑（同一台机器、同一个全局 fetch）
@@ -174,16 +173,11 @@ async function validateModel(command: Extract<AgentHouseholdCommand, { type: "se
 }
 
 /**
- * pi 侧分支（C-2），源是还没迁进库的旧会话：开一个**一次性的** SessionManager 读源本子，对账后用 pi 自己的
- * `createBranchedSession` 裁新文件。绝不碰活着的 manager——那个方法会把实例原地换绑到新文件上。
- * 对账输入是 **getBranch()（当前叶子路径）**：会话回退会在本子里留废枝，文件序（getEntries）会把废枝也数进来，
- * 从第一次回退起对账必然错位。
+ * 分支，源是还没迁进库的旧会话：读源本子，在**当前叶子路径**上对账（回退会在本子里留废枝，按文件序数会错位），
+ * 裁到锚点写成新本子（pi-book-edit.ts）。
  */
 function branchPiSession(command: Extract<AgentHouseholdCommand, { type: "branch" }>): void {
-  const manager = SessionManager.open(command.sourcePiSessionFile, undefined, command.cwd);
-  const targetId = planBranchCut(manager.getBranch(), command.roles);
-  const branchFile = manager.createBranchedSession(targetId);
-  if (branchFile === undefined) throw new Error("pi produced no branch file");
+  const branchFile = branchPiBook(PiBookFile.open(command.sourcePiSessionFile, command.cwd), command.roles);
   // 复用 created 事件通路：主进程对 branch 与开机用同一条等待逻辑
   send({ type: "created", sessionId: command.sessionId, piSessionFile: branchFile });
 }
@@ -216,17 +210,17 @@ async function handle(command: AgentHouseholdCommand): Promise<void> {
   // 回退 / 撤销 / 挪工作区的 pi 侧一刀（详见 pi-book-edit.ts）：同步文件操作，完成经 piBookEdited 回执。
   // 「会话不在跑」由主进程保证：在跑的轮一定在 kernel 里，会话已记上 durable，本子编辑交给 kernel 而不是这里
   if (command.type === "revertPiBook") {
-    revertPiBook(SessionManager.open(command.sourcePiSessionFile, undefined, command.cwd), command.roles, { targetMessageId: command.targetMessageId });
+    revertPiBook(PiBookFile.open(command.sourcePiSessionFile, command.cwd), command.roles, { targetMessageId: command.targetMessageId });
     send({ type: "piBookEdited", sessionId: command.sessionId, edit: "revert" });
     return;
   }
   if (command.type === "undoPiBook") {
-    undoPiBook(SessionManager.open(command.sourcePiSessionFile, undefined, command.cwd), command.notice);
+    undoPiBook(PiBookFile.open(command.sourcePiSessionFile, command.cwd), command.notice);
     send({ type: "piBookEdited", sessionId: command.sessionId, edit: "undo" });
     return;
   }
   if (command.type === "movePiBook") {
-    movePiBook(SessionManager.open(command.sourcePiSessionFile, undefined, command.cwd), command.notice);
+    movePiBook(PiBookFile.open(command.sourcePiSessionFile, command.cwd), command.notice);
     send({ type: "piBookEdited", sessionId: command.sessionId, edit: "move" });
     return;
   }
