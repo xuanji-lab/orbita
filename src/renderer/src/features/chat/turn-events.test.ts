@@ -18,6 +18,7 @@ import {
   type TurnViewEntry,
 } from "./tool-results.ts";
 import {
+  processVerb,
   processEvents,
   processSummary,
   processTally,
@@ -340,5 +341,38 @@ describe("一连串同一种来往收成一行（满载：一轮派 41 件）", 
     const two = procOf(view(rs(2)))[0];
     assert.ok(two !== undefined);
     assert.deepEqual(processEvents(two.steps, sources(rs(2))).map((e) => e.kind), ["tools", "delegate", "delegate"]);
+  });
+});
+
+describe("外面插进来的一行（不在转录里的事，比如重开后「断过」）", () => {
+  test("按时间并进去，不计入摘要", () => {
+    const rs: TranscriptRecord[] = [
+      user("u1", 1),
+      assistant("a1", 10, [call("r1")]),
+      tool({ toolCallId: "r1", timestamp: 11 }),
+      assistant("a2", 30, [call("r2", "bash", { command: "ls" })]),
+      tool({ toolCallId: "r2", toolName: "bash", timestamp: 31 }),
+      assistant("a3", 40, [text("好")]),
+    ];
+    const p = procOf(view(rs))[0];
+    assert.ok(p !== undefined);
+    const events = processEvents(p.steps, sources(rs, { extra: [{ kind: "note", key: "n1", verb: "断过", text: "从第 2 步接着做", time: 20 }] }));
+    assert.deepEqual(events.map((e) => e.kind), ["tools", "note", "tools"]);
+    assert.deepEqual(processSummary(zh, processTally(events)), []);
+  });
+});
+
+describe("processVerb：过程明细左列不出现英文工具名", () => {
+  const words = zh.chat.procVerb;
+  test("常用工具都有动词", () => {
+    assert.deepEqual(
+      ["bash", "read", "write", "edit", "grep", "read_task", "web_fetch", "browser_navigate"].map((name) => processVerb(name, name, words).verb),
+      ["跑命令", "读文件", "写文件", "改文件", "搜索", "读任务", "打开网页", "打开网页"],
+    );
+    assert.equal(processVerb("read", "skill", words).verb, "读技能");
+  });
+  test("外接工具写所属服务名 +「工具」，原名放悬停；对不上的归「用工具」", () => {
+    assert.deepEqual(processVerb("mcp__qgis__render_map", "mcp", words), { verb: "qgis 工具", raw: "mcp__qgis__render_map" });
+    assert.deepEqual(processVerb("some_new_tool", "some_new_tool", words), { verb: "用工具", raw: "some_new_tool" });
   });
 });

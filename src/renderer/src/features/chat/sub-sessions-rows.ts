@@ -33,6 +33,7 @@ export type SubSessionRowStatus =
   | "done"
   | "failed"
   | "stopped"
+  /** 主智能体暂停了这件活：停下保留现场，说一声就接着做（通道状态 paused，subSessionStatusOf 接上）。单列在「在做」之后，不带记号 */
   | "paused"
   | "idle";
 
@@ -48,12 +49,13 @@ export function subSessionRowStatus(input: {
   running: boolean;
   /** 被崩溃打断、等你点「继续」（缺席 = 否）；只在没在跑时为真，排在 running 之后只为读着顺 */
   interrupted?: boolean;
+  /** 主智能体暂停了它（缺席 = 否）：没在跑时才算 */
+  paused?: boolean;
 }): SubSessionRowStatus {
   if (input.channelStatus === "waiting") return "waiting";
   if (input.channelStatus === "stopped") return "stopped";
   if (input.running) return "running";
-  // 暂停压过「被打断」：暂停是主智能体的决定，重启后也不自动续，等它一句话
-  if (input.channelStatus === "paused") return "paused";
+  if (input.paused === true) return "paused";
   if (input.interrupted === true) return "interrupted";
   if (input.channelStatus === "done") return "done";
   if (input.channelStatus === "failed") return "failed";
@@ -72,12 +74,11 @@ const STATUS_PRIORITY: Record<SubSessionRowStatus, number> = {
   waiting: 0,
   interrupted: 0,
   running: 1,
-  // 停着的单列在「在做」之后（2026-11-17）：它会接着做，比没做成 / 做完更近
-  paused: 2,
-  failed: 3,
-  done: 4,
-  stopped: 5,
-  idle: 5,
+  paused: 1.5,
+  failed: 2,
+  done: 3,
+  stopped: 4,
+  idle: 4,
 };
 
 /**
@@ -187,6 +188,11 @@ export function jobElapsed(
   return rest === 0 || hours >= 10 ? words.hours(hours) : words.hoursMinutes(hours, rest);
 }
 
+/** 结论自己已经以「完成 / 做完 / 验收完成……」开头：不再加「完成：」，免得说两遍（2026-11-17 截图：「完成：验收完成：……」） */
+const SAYS_DONE = /^(已?完成|做完|已经做完|验收完成|都做完|全部完成|搞定|done\b|finished\b|completed\b)/i;
+/** 同理，「没做成 / 失败 / 做不了……」开头的不再加「没做成：」 */
+const SAYS_FAILED = /^(没做成|没能|失败|做不了|做不成|卡住|failed\b|couldn['’]?t\b|could not\b)/i;
+
 /**
  * 通道里能说明「它怎么样了」的那一句（2026-11-17 改）：只取子会话自己说的话——问：…/ 进度：…/ 完成：…/ 没做成：…，
  * 取第一个非空行的第一句、先过 work-line 的 sanitizeWorkLine（不露命令、网址、路径、英文代号）。
@@ -211,9 +217,9 @@ export function latestChannelLine(
     case "progress":
       return said === "" ? "" : t.channel.latestProgress(said);
     case "done":
-      return said === "" ? t.channel.latestDone : t.channel.latestDoneWith(said);
+      return said === "" ? t.channel.latestDone : SAYS_DONE.test(said) ? said : t.channel.latestDoneWith(said);
     case "failed":
-      return said === "" ? t.channel.latestFailed : t.channel.latestFailedWith(said);
+      return said === "" ? t.channel.latestFailed : SAYS_FAILED.test(said) ? said : t.channel.latestFailedWith(said);
     default:
       return "";
   }
@@ -238,7 +244,6 @@ export function subSessionLine(
   },
   t: Messages,
 ): string {
-  // 主智能体暂停的不说最近一句（那多半是它停下前的进度，读着像还在做）：只说「停着，说一声就接着做」
   if (input.status === "paused") return t.channel.pausedLine;
   const quietish = input.status === "running" || input.status === "idle" || input.status === "stopped";
   if (!quietish) return latestChannelLine(input.messages, input.status, t);
@@ -322,5 +327,8 @@ export function subSessionStatusOf(
     channelStatus,
     running: engine.phaseOf(childId) !== "idle",
     interrupted: engine.interruptedOf?.(childId) ?? false,
+    // 暂停的真实来源就是通道状态（主智能体 pause_subsession 落一条 pause，状态翻 paused；父的 reply 重开）——
+    // 每个调用方手上本来就有这一份，不再让引擎另挂一个 pausedOf（降噪分支留的那个入口合并时删了，免得两条路径）
+    paused: channelStatus === "paused",
   });
 }

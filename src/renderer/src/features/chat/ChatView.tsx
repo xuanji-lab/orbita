@@ -43,6 +43,7 @@ import { deriveHistorySegment, type HistoryCache } from "./history-segment.ts";
 import { splitAtLastUser } from "./transcript-split.ts";
 import { pathParts } from "./path-parts.ts";
 import {
+  processVerb,
   processEvents,
   processSummary,
   processTally,
@@ -4680,6 +4681,13 @@ function ProcessEventList(props: {
 }) {
   const t = useT();
   const r = t.chat.procRow;
+  // 左列动词：映射表（processVerb）优先；表里没有的，内置命令、文档改写已有中文名的用它（toolWord）；都没有归「用工具」，原名放悬停里
+  const verbOf = (toolName: string, statKey: string, input: unknown): { verb: string; raw: string | null } => {
+    const mapped = processVerb(toolName, statKey, t.chat.procVerb);
+    if (mapped.raw === null || toolName.startsWith("mcp__")) return mapped;
+    const named = toolWord(t.chat.rollupTool, statKey, input);
+    return named !== statKey && named !== toolName && !/^[a-z_]+$/.test(named) ? { verb: named, raw: null } : mapped;
+  };
   const openSession = props.channel.openSubSession;
   const sessionLink = (peerId: string | null) =>
     openSession !== null && peerId !== null && peerId !== ""
@@ -4704,8 +4712,10 @@ function ProcessEventList(props: {
                   fileCallName(first.toolName, first.input) ??
                   toolCallSummaryForRow(first.toolName, first.input, props.skills) ??
                   "");
+            const readTaskName =
+              first?.toolName === "read_task" ? readTaskTitle(first.input, props.toolResults.get(first.toolCallId), props.channel.titles) ?? r.someTask : null;
             const content = [
-              (event.caption ?? label) + (event.calls.length > 1 ? ` ${r.more(event.calls.length)}` : ""),
+              (event.caption ?? readTaskName ?? label) + (event.calls.length > 1 ? ` ${r.more(event.calls.length)}` : ""),
               ...(event.failed > 0 ? [r.failed(event.failed)] : []),
             ]
               .filter((part) => part.trim() !== "")
@@ -4713,7 +4723,8 @@ function ProcessEventList(props: {
             return (
               <ProcessToolsRow
                 key={event.key}
-                verb={toolWord(t.chat.rollupTool, event.toolKey, first?.input)}
+                verb={verbOf(first?.toolName ?? event.toolKey, event.toolKey, first?.input).verb}
+                verbTitle={verbOf(first?.toolName ?? event.toolKey, event.toolKey, first?.input).raw}
                 content={content}
                 time={time}
                 steps={event.steps}
@@ -4758,6 +4769,8 @@ function ProcessEventList(props: {
                 link={progressLink}
               />
             );
+          case "note":
+            return <ProcessEventRow key={event.key} verb={event.verb} content={event.text} time={time} />;
           case "memory": {
             const review = props.onOpenMemoryReview;
             const link = review === undefined ? null : { label: r.openMemory, onClick: review };
@@ -4802,6 +4815,17 @@ function ProcessGroupRow(props: { verb: string; content: string; time: string; c
       {open && <ol className="proc-events nested">{props.children}</ol>}
     </li>
   );
+}
+
+/** 读任务那一行写读了哪条：结果卡上的标题 → 会话清单里的标题 → 入参（不是一串 id 时）；都没有给 null */
+function readTaskTitle(input: unknown, result: ToolTranscriptItem | undefined, titles: ReadonlyMap<string, string>): string | null {
+  const card = readTaskCard(result);
+  if (card !== null && card.title !== "(untitled)") return card.title;
+  const task = (input as Record<string, unknown> | null)?.["task"];
+  if (typeof task !== "string" || task.trim() === "") return null;
+  const known = titles.get(task);
+  if (known !== undefined && known !== "") return known;
+  return /^[0-9a-f-]{8,}$/i.test(task.trim()) ? null : task.trim();
 }
 
 /** 读 / 写 / 改文件那一行只写文件名（全路径在点开后的工具行里） */
@@ -4947,6 +4971,8 @@ function memoryOfTurn(row: MemorySessionTurnView | undefined): Extract<ProcessEv
 /** 工具那一行：整行可点，点开原样画这几步（沿用现有的工具行展开） */
 function ProcessToolsRow(props: {
   verb: string;
+  /** 动词对不上时的原工具名：放悬停里 */
+  verbTitle?: string | null;
   content: string;
   time: string;
   steps: readonly ProcessStep[];
@@ -4956,7 +4982,7 @@ function ProcessToolsRow(props: {
   return (
     <li className="proc-ev-wrap">
       <button type="button" className="proc-ev proc-ev-btn" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
-        <span className="proc-ev-verb">{props.verb}</span>
+        <span className="proc-ev-verb" title={props.verbTitle ?? undefined}>{props.verb}</span>
         <span className="proc-ev-text">{props.content}</span>
         <span className="proc-ev-time row-trailing">{props.time}</span>
       </button>

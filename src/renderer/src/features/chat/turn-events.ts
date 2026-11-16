@@ -47,6 +47,12 @@ export type ProcessEvent =
    * 满载时（2026-11-17 演练：一轮派 41 件）不收，点开过程行就是 41 行「派了」，别的事全被挤出屏。
    */
   | { kind: "group"; key: string; members: ChannelEvent[]; time: number }
+  /**
+   * 不在转录里、由外面插进来的一行（2026-11-17 留的入口）：比如重开应用后「断过一次，从第 N 步接着做」——那条记录存在会话档案里、
+   * 不能写进转录（旧版读转录不认识新类型），合并 feat/main-agent 后由调用方按时间塞进来（EventSources.extra）。
+   * 不计入摘要。
+   */
+  | { kind: "note"; key: string; verb: string; text: string; time: number }
   /** 认不出的种类（以后新加的单元）：默认进过程，展开时原样画 */
   | { kind: "other"; key: string; step: ProcessStep; time: number };
 
@@ -71,6 +77,8 @@ export interface EventSources {
   goalChanged: (toolCallId: string) => boolean;
   /** 子会话派活回执里的 childId（delegate 的结果卡）；拿不到给 null */
   delegatedChild: (toolCallId: string) => string | null;
+  /** 外面插进来的几行（不在转录里的事，见 ProcessEvent 的 note）：按时间并进去；缺席 = 没有 */
+  extra?: readonly Extract<ProcessEvent, { kind: "note" }>[];
 }
 
 const PLAN_TOOL = "update_plan";
@@ -156,7 +164,21 @@ export function processEvents(steps: readonly ProcessStep[], src: EventSources):
   // 最后几段思考后面没有工具了：挂到上一行工具上，没有就不出行（思考不单独占一行）
   const tail = lastTools();
   if (pendingThinking.length > 0 && tail !== null) tail.steps.push(...pendingThinking);
-  return groupRuns(captionCommands(events));
+  return mergeByTime(groupRuns(captionCommands(events)), src.extra ?? []);
+}
+
+/** 外面插进来的行按时间并进去（同一时刻排在转录里那一行之后；两边各自本就有序） */
+function mergeByTime(events: ProcessEvent[], extra: readonly ProcessEvent[]): ProcessEvent[] {
+  if (extra.length === 0) return events;
+  const out: ProcessEvent[] = [];
+  let j = 0;
+  const pending = [...extra].sort((a, b) => a.time - b.time);
+  for (const event of events) {
+    while (j < pending.length && (pending[j]?.time ?? 0) < event.time) out.push(pending[j++] as ProcessEvent);
+    out.push(event);
+  }
+  while (j < pending.length) out.push(pending[j++] as ProcessEvent);
+  return out;
 }
 
 function runKey(event: ProcessEvent): string | null {
@@ -335,3 +357,51 @@ export function userTurnHasProcess(view: readonly TurnViewEntry[], index: number
   return continuesInTail;
 }
 
+
+/** 过程明细最左一列的动词：用户可见的文字不出现英文工具名（2026-11-17） */
+export interface ProcVerbWords {
+  command: string;
+  read: string;
+  write: string;
+  edit: string;
+  list: string;
+  find: string;
+  search: string;
+  readTask: string;
+  web: string;
+  browse: string;
+  skill: string;
+  other: string;
+  /** 外接工具：所属服务名 + 「工具」 */
+  mcp: (server: string) => string;
+}
+
+const VERB_OF_TOOL: Readonly<Record<string, keyof Omit<ProcVerbWords, "mcp">>> = {
+  bash: "command",
+  powershell: "command",
+  shell: "command",
+  read: "read",
+  write: "write",
+  edit: "edit",
+  ls: "list",
+  find: "find",
+  glob: "find",
+  grep: "search",
+  read_task: "readTask",
+  web_search: "web",
+  web_fetch: "browse",
+  skill: "skill",
+};
+
+/**
+ * 工具名 → 动词。statKey 是统计词汇（rollupToolKey：已知技能的 SKILL.md 读取是 skill）；内置命令与文档改写已有中文名的由调用方先用。
+ * 外接工具（mcp__服务__工具）写「服务 工具」；浏览器工具（browser_*）写「打开网页」；都对不上归「用工具」，raw 给原名放悬停里。
+ */
+export function processVerb(toolName: string, statKey: string, words: ProcVerbWords): { verb: string; raw: string | null } {
+  const mcp = /^mcp__([a-zA-Z0-9_-]+)__(.+)$/.exec(toolName);
+  if (mcp !== null) return { verb: words.mcp(mcp[1] ?? ""), raw: toolName };
+  const known = VERB_OF_TOOL[statKey] ?? VERB_OF_TOOL[toolName];
+  if (known !== undefined) return { verb: words[known], raw: null };
+  if (toolName.startsWith("browser_")) return { verb: words.browse, raw: null };
+  return { verb: words.other, raw: toolName };
+}
