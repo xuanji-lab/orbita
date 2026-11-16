@@ -599,7 +599,10 @@ function startsNewTurn(mark: Extract<RenderEntry, { kind: "channelMark" }>, curr
   for (let i = current.length - 1; i >= 0; i -= 1) {
     const entry = current[i];
     if (entry === undefined || (entry.kind === "text" && entry.text.trim() === "")) continue;
-    return entry.kind === "text";
+    if (entry.kind === "text") return true;
+    // 轮尾文件账、钉在回答前的图这类结果卡跟在回答后面落盘：越过它们看回答（实测：答完 → 轮尾文件账 → 子会话交回）
+    if (!isProcessEntry(entry)) continue;
+    return false;
   }
   return false;
 }

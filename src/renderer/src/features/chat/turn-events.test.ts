@@ -95,6 +95,20 @@ describe("一轮一行：子会话的来往收进过程块", () => {
     assert.equal(procOf(v)[0]?.steps.filter((s) => s.kind === "channelMark").length, 2);
   });
 
+  test("答完之后先落了轮尾文件账、再来交回：仍是新的一轮，前一轮的回答不被收进过程（实例里复现过）", () => {
+    const fileTurn = { role: "file-turn", id: "ft1", timestamp: 5, changes: [], webArtifacts: ["/h/p.html"] } as unknown as TranscriptRecord;
+    const records: TranscriptRecord[] = [
+      user("u1", 1),
+      assistant("a1", 2, [call("r1", "bash", { command: "x" })]),
+      tool({ toolCallId: "r1", toolName: "bash", timestamp: 3 }),
+      assistant("a2", 4, [text("父会话那张写好了")]),
+      fileTurn,
+      mark("k1", 6),
+      assistant("a3", 7, [text("交回来了")]),
+    ];
+    assert.deepEqual(kinds(view(records)), ["user", "turnProcess", "text", "fileTurn", "turnProcess", "text"]);
+  });
+
   test("只交回、主会话一个工具没跑就答：也有一行过程（交回 1 件），不再画灰块", () => {
     const records: TranscriptRecord[] = [user("u1", 1), assistant("a1", 2, [text("派了。")]), mark("k1", 3), assistant("a2", 4, [text("收到。")])];
     assert.deepEqual(kinds(view(records)), ["user", "text", "turnProcess", "text"]);
