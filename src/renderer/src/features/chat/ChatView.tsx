@@ -139,6 +139,9 @@ import {
   toolExpandable,
   toolGroupStatus,
   toolResultText,
+  toolResultNotes,
+  splitHarnessNotes,
+  type HarnessNote,
   rollupLead,
   streamingRecordIds,
   turnAssistantRecords,
@@ -5108,8 +5111,10 @@ function ToolLine(props: {
       : [];
   const imagelessBody =
     needBody && toolImages.length > 0 && result !== undefined
-      ? result.content.filter((block) => block.type === "text").map((block) => block.text).join("\n")
+      ? splitHarnessNotes(result.content.filter((block) => block.type === "text").map((block) => block.text).join("\n")).body
       : body;
+  // 新内核附在结果末尾的说明（截断、Full output、退出码、超时、出错原因）：展开体里正文下面画成次要说明
+  const resultNotes = needBody && finished && result !== undefined ? toolResultNotes(result, t) : NO_NOTES;
   // write 的正文在入参不在结果（pi 同款：结果只有一行统计），展开走文件内容视图
   const fileView = finished ? fileViewFor(props.toolName, props.input, result) : null;
   const fileLang = fileView !== null ? langFromPath(callSummary ?? "") : null;
@@ -5215,6 +5220,7 @@ function ToolLine(props: {
                 failed={failed}
                 live={live}
                 images={toolImages}
+                notes={resultNotes}
               />
             )}
           </>
@@ -5349,6 +5355,7 @@ function ToolLine(props: {
           failed={failed}
           live={live}
           images={toolImages}
+          notes={resultNotes}
         />
       )}
     </div>
@@ -5953,9 +5960,20 @@ function PlainToolBody(props: {
   failed: boolean;
   live?: boolean;
   images?: readonly { type: "image"; data: string; mimeType: string }[];
+  /** 新内核附的说明（`<harness>` 块拆出来的行）：画在正文下面，次级字号；出错的用错误色 */
+  notes?: readonly HarnessNote[];
 }) {
   const t = useT();
   const follow = useFollowScroll(props.live === true);
+  const notes = props.notes ?? NO_NOTES;
+  const noteLines =
+    notes.length === 0
+      ? null
+      : notes.map((note, index) => (
+          <div key={`note-${index}`} style={{ ...TRUNCATION_NOTE, ...(note.severity === "error" ? { color: "var(--color-danger)" } : {}) }}>
+            {note.message}
+          </div>
+        ));
   // shell 输出几乎总以 \n 结尾，拆行后末尾多一个空行——以前没有下边框看不出来，
   // 套了圆角虚线框后框底会多出一整行空白（2026-10-12 返工），渲染前剥掉尾部空行。
   // 中间的空行是内容结构，保留。
@@ -6012,6 +6030,14 @@ function PlainToolBody(props: {
       </div>
     ) : null;
   if (text === "" && images.length === 0) {
+    if (noteLines !== null) {
+      // 没有正文、只有说明（「Command timed out」「Command exited with code 1」）：说明就是全部内容
+      return (
+        <div className="scroll" style={PLAIN_BODY}>
+          {noteLines}
+        </div>
+      );
+    }
     return (
       <div
         className="scroll"
@@ -6040,6 +6066,7 @@ function PlainToolBody(props: {
           </div>
         ))}
         {imageStrip}
+        {noteLines}
       </div>
     );
   }
@@ -6049,9 +6076,12 @@ function PlainToolBody(props: {
       {truncationNote}
       {clamped.tail.map((line, index) => toolBodyLine(props.toolName, line, clamped.head.length + index))}
       {imageStrip}
+      {noteLines}
     </div>
   );
 }
+
+const NO_NOTES: readonly HarnessNote[] = [];
 
 /** 展开体滚动容器的共用形态（无水平内边距——行自带）；套圆角虚线框，同 EXPANDED_BODY。 */
 const PLAIN_BODY = {

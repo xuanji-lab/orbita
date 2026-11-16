@@ -1311,10 +1311,9 @@ export function summarizeToolResult(result: ToolTranscriptItem | undefined, t: M
   if (result === undefined) return null;
   if (result.status === "running") return t.common.running;
   if (result.status === "error") return t.common.failed;
-  const text = result.content
-    .map((block) => (block.type === "text" ? block.text : "[image]"))
-    .join("\n")
-    .trim();
+  const text = splitHarnessNotes(
+    result.content.map((block) => (block.type === "text" ? block.text : "[image]")).join("\n"),
+  ).body.trim();
   if (text === "") return t.chat.noOutputShort;
   const lines = text.split("\n").length;
   return lines > 1 ? t.chat.lines(lines) : t.chat.chars(text.length);
@@ -1391,11 +1390,48 @@ export function mcpFailureLead(result: ToolTranscriptItem, t: Messages): string 
   return t.chat.unreachableLead;
 }
 
-/** 展开后要显示的正文。图片暂不渲染，只标记它存在——真正的图片渲染是后面的事。 */
+/** 新内核给工具结果附的说明（`<harness>` 块里的一行）：截断、Full output 路径、退出码、超时、出错原因 */
+export interface HarnessNote {
+  severity: "error" | "warn" | "info";
+  message: string;
+}
+
+const HARNESS_BLOCK = /(?:^|\n)<harness>\n([\s\S]*?)\n<\/harness>\s*$/;
+
+/**
+ * 把一段工具结果文字末尾的 `<harness>…</harness>` 说明块拆出来（新内核把诊断渲染成这个块接在结果最后，
+ * 模型看的就是这一份）。界面上正文照常画，说明块不当正文糊在里面，按行变成状态 / 次要说明。
+ * 没有说明块（旧内核的结果、别的工具）原样返回、notes 为空。块里认不出级别的行按 info 处理，不丢字。
+ */
+export function splitHarnessNotes(text: string): { body: string; notes: HarnessNote[] } {
+  const match = HARNESS_BLOCK.exec(text);
+  if (match === null) return { body: text, notes: [] };
+  const notes: HarnessNote[] = [];
+  for (const line of (match[1] ?? "").split("\n")) {
+    if (line.trim() === "") continue;
+    const head = /^\[(error|warn|info)\] ([\s\S]*)$/.exec(line);
+    if (head !== null) notes.push({ severity: head[1] as HarnessNote["severity"], message: head[2] ?? "" });
+    else if (notes.length > 0) notes[notes.length - 1] = { ...notes[notes.length - 1]!, message: `${notes[notes.length - 1]!.message}\n${line}` };
+    else notes.push({ severity: "info", message: line });
+  }
+  return { body: text.slice(0, match.index), notes };
+}
+
+/** 结果的全部文字（图换成标记），拆成正文与说明 */
+function splitResult(result: ToolTranscriptItem, t: Messages): { body: string; notes: HarnessNote[] } {
+  return splitHarnessNotes(
+    result.content.map((block) => (block.type === "text" ? block.text : t.chat.imageMarker(block.mimeType))).join("\n"),
+  );
+}
+
+/** 展开后要显示的正文（不含 `<harness>` 说明块，见 toolResultNotes）。图片只标记它存在。 */
 export function toolResultText(result: ToolTranscriptItem, t: Messages): string {
-  return result.content
-    .map((block) => (block.type === "text" ? block.text : t.chat.imageMarker(block.mimeType)))
-    .join("\n");
+  return splitResult(result, t).body;
+}
+
+/** 工具结果末尾新内核附的说明（没有为空）：展开体在正文下面按行画成次要说明，出错的用错误色 */
+export function toolResultNotes(result: ToolTranscriptItem, t: Messages): HarnessNote[] {
+  return splitResult(result, t).notes;
 }
 
 /**

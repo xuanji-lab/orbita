@@ -56,6 +56,8 @@ import {
   toolExpandable,
   toolGroupStatus,
   toolResultText,
+  toolResultNotes,
+  splitHarnessNotes,
   turnAssistantRecords,
   writeContent,
   writeLineCount,
@@ -2007,5 +2009,54 @@ describe("运行时钟文案（en / zh）", () => {
     assert.equal(zh.chat.expectedAbout("40 秒"), "预计约 40 秒");
     assert.equal(en.chat.slowerThanExpected, "slower than expected");
     assert.equal(zh.chat.slowerThanExpected, "比预计慢");
+  });
+});
+
+describe("splitHarnessNotes / toolResultText：新内核附的 <harness> 说明块不当正文", () => {
+  test("末尾的说明块拆成按级别的行；正文原样", () => {
+    const text = "line 1\nline 2\n\n<harness>\n[error] Command exited with code 2\n[info] Full output: /tmp/pi-output-1.log\n</harness>";
+    assert.deepEqual(splitHarnessNotes(text), {
+      body: "line 1\nline 2\n",
+      notes: [
+        { severity: "error", message: "Command exited with code 2" },
+        { severity: "info", message: "Full output: /tmp/pi-output-1.log" },
+      ],
+    });
+  });
+
+  test("只有说明块（超时、没有输出）：正文为空；认不出级别的续行并进上一条", () => {
+    assert.deepEqual(splitHarnessNotes("<harness>\n[error] Command timed out after 5 seconds\n</harness>"), {
+      body: "",
+      notes: [{ severity: "error", message: "Command timed out after 5 seconds" }],
+    });
+    assert.deepEqual(splitHarnessNotes("<harness>\n[warn] Output truncated\nkept its end\n</harness>").notes, [
+      { severity: "warn", message: "Output truncated\nkept its end" },
+    ]);
+  });
+
+  test("旧格式与正文里提到 <harness> 的不动", () => {
+    for (const text of ["hello\n\nCommand exited with code 1", "echo '<harness>' is a tag", "<harness>\nnot closed"]) {
+      assert.deepEqual(splitHarnessNotes(text), { body: text, notes: [] });
+    }
+  });
+
+  test("toolResultText 去掉说明块、toolResultNotes 取出它；summarizeToolResult 不把说明算进行数", () => {
+    const result = {
+      id: "t",
+      role: "tool",
+      toolCallId: "c",
+      toolName: "bash",
+      input: {},
+      content: [
+        { type: "text", text: "ok" },
+        { type: "text", text: "<harness>\n[info] Full output: /tmp/x.log\n</harness>" },
+      ],
+      timestamp: 0,
+      status: "complete",
+      isError: false,
+    } as ToolTranscriptItem;
+    assert.equal(toolResultText(result, en), "ok");
+    assert.deepEqual(toolResultNotes(result, en), [{ severity: "info", message: "Full output: /tmp/x.log" }]);
+    assert.equal(summarizeToolResult(result, en), en.chat.chars(2));
   });
 });
