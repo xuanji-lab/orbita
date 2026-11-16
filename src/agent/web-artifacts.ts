@@ -72,7 +72,40 @@ export interface ScanRoot {
 export interface WebScanResult {
   /** mtime 判为本轮新出现的网页文件绝对路径（按路径排序，显示稳定） */
   paths: string[];
+  /** 每个命中文件的 mtime（毫秒）：轮尾再按「本会话的工具在跑的时段」筛一遍（ToolWindows） */
+  mtimes: ReadonlyMap<string, number>;
   truncated: boolean;
+}
+
+/**
+ * 本会话这一轮里工具在跑的时段（2026-11-17 修归属）：旁路网页产物只认 mtime 落在某段之内（含余量）的文件。
+ *
+ * 根因：扫描根有会话工作台，而子会话按规矩把产出写进**父会话**的工作台（`subsessions/<名>/`、示意图目录）；
+ * 父会话这一轮从开轮到收尾常常要几分钟（等子会话、写长回答），子会话在这段时间里写的网页 mtime 全落在
+ * 「≥ 开轮时刻」的窗口里，于是父会话轮尾卡写「生成了 2 个网页」（用户 11-16 截图，实为子会话产的）。
+ * 本会话自己用脚本生成的网页，一定是在它的某个工具（多半是 bash）跑着的时候落盘的；工具没在跑时冒出来的，
+ * 是别人写的。代价：本会话正在跑一条长命令（比如 sleep 等子会话）时子会话写的文件仍会算进来——少见，且只是多报。
+ */
+export class ToolWindows {
+  private readonly open = new Map<string, number>();
+  private readonly closed: { start: number; end: number }[] = [];
+
+  start(callId: string, at: number): void {
+    if (!this.open.has(callId)) this.open.set(callId, at);
+  }
+
+  end(callId: string, at: number): void {
+    const start = this.open.get(callId);
+    if (start === undefined) return;
+    this.open.delete(callId);
+    this.closed.push({ start, end: at });
+  }
+
+  /** mtime 落在某段工具时段里（两头各留 slack）；还没结束的调用算到 now */
+  covers(mtimeMs: number, now: number, slackMs: number = WEB_ARTIFACT_MTIME_SLACK_MS): boolean {
+    const spans = [...this.closed, ...[...this.open.values()].map((start) => ({ start, end: now }))];
+    return spans.some((span) => mtimeMs >= span.start - slackMs && mtimeMs <= span.end + slackMs);
+  }
 }
 
 /** 注入的读盘面：readDir 列目录（抛错 = 目录不在 / 读不了，scan 自己兜）；statFile 给网页文件取 mtime（毫秒）。 */
@@ -111,6 +144,7 @@ export async function scanWebArtifacts(
 ): Promise<WebScanResult> {
   const maxDepth = limits.maxDepth ?? SCAN_MAX_DEPTH;
   const paths = new Set<string>();
+  const mtimes = new Map<string, number>();
   let truncated = false;
   const scanned = new Set<string>();
   for (const { root, maxEntries } of roots) {
@@ -142,13 +176,16 @@ export async function scanWebArtifacts(
         } else if (isWebArtifactFile(entry.name)) {
           const path = join(dir, entry.name);
           const mtimeMs = await fs.statFile(path);
-          if (mtimeMs !== null && mtimeMs >= sinceMs) paths.add(path);
+          if (mtimeMs !== null && mtimeMs >= sinceMs) {
+            paths.add(path);
+            mtimes.set(path, mtimeMs);
+          }
         }
       }
     }
     if (rootTruncated) truncated = true;
   }
-  return { paths: [...paths].sort(), truncated };
+  return { paths: [...paths].sort(), mtimes, truncated };
 }
 
 /**

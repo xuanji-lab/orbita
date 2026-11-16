@@ -41,7 +41,7 @@ import { TranscriptAdapter } from "./transcript-adapter.ts";
 import type { preparePromptImages } from "./prompt-images.ts";
 import { abortCycle, killCycle, startCycle, type CycleParts, type CycleSlot } from "./turn-cycle.ts";
 import { reportFileTurn, type WebArtifactWatch } from "./turn-files.ts";
-import { webScanRoots } from "./web-artifacts.ts";
+import { ToolWindows, webScanRoots } from "./web-artifacts.ts";
 import { withOpencodeSession } from "./opencode-session.ts";
 
 type TurnCommand = Extract<AgentCommand, { type: "submit" | "interrupt" }>;
@@ -596,7 +596,11 @@ export class KernelSessions {
     }
     const timing: TurnTiming = { echoedAt: null, sawAssistant: false };
     const tracker = new TurnFileTracker(command.cwd);
-    const webWatch: WebArtifactWatch = { roots: webScanRoots(command.cwd, command.directories), startedAt: this.now() };
+    const webWatch: WebArtifactWatch = {
+      roots: webScanRoots(command.cwd, command.directories),
+      startedAt: this.now(),
+      windows: new ToolWindows(),
+    };
     const adapter = new TranscriptAdapter({ newId: () => randomUUID(), now: () => this.now() });
     let abortRequested = false;
     let lastAnswer: AssistantMessage | undefined;
@@ -617,6 +621,7 @@ export class KernelSessions {
       toolEnd: (callId) => {
         // 工具结果条目到了也算「准备完」（没走到 beforeTool 就被拒的调用），见 ToolRounds
         rounds.settled(callId);
+        webWatch.windows.end(callId, Date.now());
         void tracker.noteExecutionEnd(callId);
       },
       compactionPlaced: (entry) => {
@@ -765,7 +770,10 @@ export class KernelSessions {
       target.compaction,
       {
         observer: {
-          toolStart: (callId, name, args) => view.toolStart(callId, name, args),
+          toolStart: (callId, name, args) => {
+            parts.webWatch.windows.start(callId, Date.now());
+            view.toolStart(callId, name, args);
+          },
           toolUpdate: (callId, name, partial) => view.toolUpdate(callId, name, partial),
           toolAllowed: (callId, name, input) => parts.tracker.noteAllowed(callId, name, input),
           rounds: parts.rounds,
