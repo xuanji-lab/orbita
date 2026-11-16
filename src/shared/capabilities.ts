@@ -103,18 +103,21 @@ export function namedInstalled(capabilities: readonly string[], prefix: (typeof 
 /** 小卡那一行给人看的说法（界面语言的文案在 renderer 的 messages 里） */
 export interface CapabilitiesWords {
   chatOnly: string;
+  /** 只带基础（[]）；不给 = 不画 */
+  basicsOnly?: string;
   has: (names: string) => string;
   separator: string;
   modules: Readonly<Record<CapabilityModule, string>>;
 }
 
 /**
- * 小卡一行「带了：浏览器、读 PDF 与 Word」的数据：只列可选模块与用户装的（基础不写）；全带 / 只带基础 = null（不画）；纯聊天单说。
+ * 一件活的详情页头那行灰字「带了：浏览器、读 PDF 与 Word」：只列可选模块与用户装的（基础不写）；全带 = null（默认，不说）；
+ * 只带基础按 words.basicsOnly（没给 = null）；纯聊天单说。
  */
 export function capabilitiesLine(capabilities: readonly string[] | undefined, words: CapabilitiesWords): string | null {
   if (capabilities === undefined) return null;
   if (isChatOnly(capabilities)) return words.chatOnly;
   const names = capabilities.map((entry) => (isCapabilityModule(entry) ? words.modules[entry] : entry.slice(entry.indexOf(":") + 1)));
-  if (names.length === 0) return null;
+  if (names.length === 0) return words.basicsOnly ?? null;
   return words.has(names.join(words.separator));
 }

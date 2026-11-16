@@ -2196,6 +2196,7 @@ export const zh: Messages = {
     inboxFoot: "点一行：看这个子会话与父会话的完整往来",
     capabilities: {
       chatOnly: "只聊天，不动文件",
+      basicsOnly: "只带了读写文件与跑命令",
       has: (names) => `带了：${names}`,
       separator: "、",
       modules: {

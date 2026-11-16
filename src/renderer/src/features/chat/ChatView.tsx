@@ -1,3 +1,4 @@
+import { capabilitiesLine } from "@shared/capabilities";
 import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
@@ -1660,6 +1661,8 @@ function ChatViewBody(props: {
         title={session.opened?.title || (sessionTitle(session.transcript) ?? t.common.newTask)}
         badge={props.asJob === true ? null : openId.slice(0, 6)}
         badgeTitle={openId}
+        // 一件活的页头：派活时没给全带（主智能体收窄过能力集）才露一行灰字说带了什么；行上与别处都不露
+        note={props.asJob === true ? capabilitiesLine(openMeta?.capabilities, t.subSessions.capabilities) : null}
         scrollRef={scrollRef}
         onScroll={handleScroll}
         onWheelIntent={onWheelIntent}
@@ -2938,6 +2941,8 @@ function Pane(props: {
    * 对话卡从面板顶上直接开始）；子会话面板里的 ChatView 保留页头。
    */
   hideHeader?: boolean;
+  /** 页头标题后的一行灰字（一件活带了什么）；null / 缺席 = 不画 */
+  note?: string | null;
   /** 页头与消息列之间的一条通栏（自动化新开的会话：「任务名 · 第 n 次」+ 转成普通会话）；缺席不渲染 */
   banner?: React.ReactNode;
   /**
@@ -3057,6 +3062,22 @@ function Pane(props: {
         >
           {props.badge}
         </span>
+        )}
+        {props.note != null && (
+          <span
+            title={props.note}
+            style={{
+              flex: "0 1 auto",
+              minWidth: 0,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              fontSize: "var(--font-size-xs)",
+              color: "var(--color-text-tertiary)",
+            }}
+          >
+            {props.note}
+          </span>
         )}
       </header>
       )}

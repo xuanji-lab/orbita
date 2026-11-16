@@ -2372,9 +2372,10 @@ export const en = {
     doneCount: (count: number) => `${count} done`,
     parkedCount: (count: number) => `${count} parked`,
     inboxFoot: "Click a row to see that sub-session's full exchange with the parent",
-    /** 这件活带了什么（派活时定的能力集，@shared/capabilities）：全带与只带基础不画这一行 */
+    /** 这件活带了什么（派活时定的能力集，@shared/capabilities）：只在这件活的页头露一行灰字，全带（默认）不露 */
     capabilities: {
       chatOnly: "Chat only, no file access",
+      basicsOnly: "Only reads, writes and runs commands",
       has: (names: string) => `Has: ${names}`,
       separator: ", ",
       modules: {

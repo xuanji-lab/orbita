@@ -46,7 +46,7 @@ describe("能力集：解析与规范化", () => {
     assert.deepEqual(namedInstalled(["browser", "skill:a", "mcp:b", "skill:c"], "skill:"), ["a", "c"]);
   });
 
-  test("小卡一行：全带与只带基础不画；纯聊天与模块用口语", () => {
+  test("详情页头那行：全带不画；只带基础看给不给说法；纯聊天与模块用口语", () => {
     const words = {
       chatOnly: "只聊天",
       has: (names: string) => `带了：${names}`,
@@ -55,6 +55,7 @@ describe("能力集：解析与规范化", () => {
     };
     assert.equal(capabilitiesLine(undefined, words), null);
     assert.equal(capabilitiesLine([], words), null);
+    assert.equal(capabilitiesLine([], { ...words, basicsOnly: "只带读写" }), "只带读写");
     assert.equal(capabilitiesLine(["none"], words), "只聊天");
     assert.equal(capabilitiesLine(["pdf-docx", "browser", "skill:lit-intake"], words), "带了：读 PDF、浏览器、lit-intake");
   });
