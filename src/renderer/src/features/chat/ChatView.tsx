@@ -44,7 +44,7 @@ import { deriveHistorySegment, type HistoryCache } from "./history-segment.ts";
 import { splitAtLastUser } from "./transcript-split.ts";
 import { pathParts } from "./path-parts.ts";
 import {
-  processVerb,
+  eventVerb,
   processEvents,
   processSummary,
   processTally,
@@ -4743,12 +4743,8 @@ function ProcessEventList(props: {
   const t = useT();
   const r = t.chat.procRow;
   // 左列动词：映射表（processVerb）优先；表里没有的，内置命令、文档改写已有中文名的用它（toolWord）；都没有归「用工具」，原名放悬停里
-  const verbOf = (toolName: string, statKey: string, input: unknown): { verb: string; raw: string | null } => {
-    const mapped = processVerb(toolName, statKey, t.chat.procVerb);
-    if (mapped.raw === null || toolName.startsWith("mcp__")) return mapped;
-    const named = toolWord(t.chat.rollupTool, statKey, input);
-    return named !== statKey && named !== toolName && !/^[a-z_]+$/.test(named) ? { verb: named, raw: null } : mapped;
-  };
+  const verbOf = (toolName: string, statKey: string, input: unknown): { verb: string; raw: string | null } =>
+    eventVerb(toolName, statKey, t.chat.procVerb, toolWord(t.chat.rollupTool, statKey, input));
   const openSession = props.channel.openSubSession;
   const sessionLink = (peerId: string | null) =>
     openSession !== null && peerId !== null && peerId !== ""

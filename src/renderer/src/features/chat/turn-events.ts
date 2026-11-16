@@ -370,6 +370,18 @@ export interface ProcVerbWords {
   readTask: string;
   /** 主智能体读小卡（work_cards）：看手上派出去的活 */
   workCards: string;
+  /** 可见终端（terminal_*） */
+  terminal: string;
+  document: string;
+  image: string;
+  config: string;
+  plugin: string;
+  askUser: string;
+  pause: string;
+  report: string;
+  memorySearch: string;
+  memoryEdit: string;
+  automation: string;
   web: string;
   browse: string;
   skill: string;
@@ -391,6 +403,31 @@ const VERB_OF_TOOL: Readonly<Record<string, keyof Omit<ProcVerbWords, "mcp">>> =
   grep: "search",
   read_task: "readTask",
   work_cards: "workCards",
+  terminal_open: "terminal",
+  terminal_execute: "terminal",
+  terminal_read: "terminal",
+  terminal_list: "terminal",
+  terminal_interrupt: "terminal",
+  terminal_close: "terminal",
+  read_pdf: "document",
+  cite_pdf: "document",
+  read_docx: "document",
+  show_image: "image",
+  create_skill: "config",
+  add_mcp_server: "config",
+  install_plugin: "plugin",
+  preview_plugin: "plugin",
+  list_plugins: "plugin",
+  show_plugin_board: "plugin",
+  request_user_action: "askUser",
+  pause_subsession: "pause",
+  report_to_parent: "report",
+  memory_search: "memorySearch",
+  memory_revise: "memoryEdit",
+  memory_retire: "memoryEdit",
+  automation_create: "automation",
+  automation_list: "automation",
+  automation_cancel: "automation",
   web_search: "web",
   web_fetch: "browse",
   skill: "skill",
@@ -400,6 +437,16 @@ const VERB_OF_TOOL: Readonly<Record<string, keyof Omit<ProcVerbWords, "mcp">>> =
  * 工具名 → 动词。statKey 是统计词汇（rollupToolKey：已知技能的 SKILL.md 读取是 skill）；内置命令与文档改写已有中文名的由调用方先用。
  * 外接工具（mcp__服务__工具）写「服务 工具」；浏览器工具（browser_*）写「打开网页」；都对不上归「用工具」，raw 给原名放悬停里。
  */
+/**
+ * 过程明细左列的动词（ChatView 的 ProcessEventList 用）：映射表（processVerb）优先；表里没有的，内置命令、
+ * 文档改写已有中文名的用它（toolWord 的结果，由调用方给）；都没有归「用工具」，原名放悬停里。
+ */
+export function eventVerb(toolName: string, statKey: string, words: ProcVerbWords, named: string): { verb: string; raw: string | null } {
+  const mapped = processVerb(toolName, statKey, words);
+  if (mapped.raw === null || toolName.startsWith("mcp__")) return mapped;
+  return named !== statKey && named !== toolName && !/^[a-z_]+$/.test(named) ? { verb: named, raw: null } : mapped;
+}
+
 export function processVerb(toolName: string, statKey: string, words: ProcVerbWords): { verb: string; raw: string | null } {
   const mcp = /^mcp__([a-zA-Z0-9_-]+)__(.+)$/.exec(toolName);
   if (mcp !== null) return { verb: words.mcp(mcp[1] ?? ""), raw: toolName };
