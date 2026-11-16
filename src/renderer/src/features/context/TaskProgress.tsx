@@ -751,7 +751,8 @@ function DispatchedSection(props: { parentId: string; sessions: readonly Session
           return (
             <li key={row.meta.id} className="tp-job">
               <span className={`inbox-row-mark${mark === null ? "" : ` ${mark}`}`} aria-hidden="true">
-                <span className="inbox-row-dot" />
+                {/* 停着的行首不带记号（只占位，名字左缘对齐） */}
+                {mark !== null && <span className="inbox-row-dot" />}
               </span>
               <div className="tp-step">
                 <div className="tp-step-head">

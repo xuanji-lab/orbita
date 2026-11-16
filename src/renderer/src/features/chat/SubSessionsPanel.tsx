@@ -54,6 +54,7 @@ const STATUS_COLOR: Record<SubSessionRowStatus, string> = {
   failed: "var(--color-danger)",
   // stopped 是用户的裁决不是故障：中性灰，区别于 failed 的红（图标已经在说话）
   stopped: "var(--color-text-tertiary)",
+  paused: "var(--color-text-tertiary)",
   idle: "var(--color-text-tertiary)",
 };
 
@@ -65,6 +66,7 @@ const STATUS_ICON: Record<SubSessionRowStatus, IconName> = {
   done: "circle-check",
   failed: "triangle-alert",
   stopped: "octagon-x",
+  paused: "pause",
   idle: "circle-off",
 };
 

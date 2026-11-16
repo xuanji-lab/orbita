@@ -23,6 +23,7 @@ import { currentPlanStep, isQuiet, latestSentence, sanitizeWorkLine, workFacts, 
  *     用户的裁决压过在跑这类瞬时态：停都停了，不该再引导用户去盯一个死轮
  *   done     = 通道 closed 于 done（success）
  *   failed   = 通道 closed 于 failed（danger）
+ *   paused   = 通道状态 paused，主智能体暂停了它自己派的活（现场留着，父一句话就接着做；不算「等你」）
  *   idle     = 都不是（tertiary）——子会话建了但通道还没有除 task 外的往来，也没在跑
  */
 export type SubSessionRowStatus =
@@ -32,6 +33,7 @@ export type SubSessionRowStatus =
   | "done"
   | "failed"
   | "stopped"
+  | "paused"
   | "idle";
 
 /**
@@ -50,6 +52,8 @@ export function subSessionRowStatus(input: {
   if (input.channelStatus === "waiting") return "waiting";
   if (input.channelStatus === "stopped") return "stopped";
   if (input.running) return "running";
+  // 暂停压过「被打断」：暂停是主智能体的决定，重启后也不自动续，等它一句话
+  if (input.channelStatus === "paused") return "paused";
   if (input.interrupted === true) return "interrupted";
   if (input.channelStatus === "done") return "done";
   if (input.channelStatus === "failed") return "failed";
@@ -68,10 +72,12 @@ const STATUS_PRIORITY: Record<SubSessionRowStatus, number> = {
   waiting: 0,
   interrupted: 0,
   running: 1,
-  failed: 2,
-  done: 3,
-  stopped: 4,
-  idle: 4,
+  // 停着的单列在「在做」之后（2026-11-17）：它会接着做，比没做成 / 做完更近
+  paused: 2,
+  failed: 3,
+  done: 4,
+  stopped: 5,
+  idle: 5,
 };
 
 /**
@@ -164,7 +170,7 @@ export function displaySubSessionTitle(title: string): string {
  * 终止的、还没开口的也不列。排序沿用收件箱（要你出手的在前）。
  */
 export function dispatchedRows<T extends { status: SubSessionRowStatus }>(rows: readonly T[]): T[] {
-  return rows.filter((row) => row.status === "running" || subSessionMark(row.status) === "ask");
+  return rows.filter((row) => row.status === "running" || row.status === "paused" || subSessionMark(row.status) === "ask");
 }
 
 /** 一件活用了多久（派出去到现在）：「不到 1 分钟」「21 分钟」「1 小时」「1 小时 5 分钟」 */
@@ -236,6 +242,8 @@ export function subSessionLine(
   },
   t: Messages,
 ): string {
+  // 停着的不说最近一句（那多半是它停下前的进度，读着像还在做）：只说「停着，说一声就接着做」
+  if (input.status === "paused") return t.channel.pausedLine;
   if (input.status !== "running") return latestChannelLine(input.messages, input.status, t);
   const facts = workFacts(input.items, true);
   const plan = planTimeline(input.items)?.current.items ?? null;
@@ -278,9 +286,10 @@ export function delegateCardStatus(
   channelStatus: ChannelStatus | undefined,
   running: boolean,
   interrupted: boolean,
-): "running" | "waiting" | "interrupted" | "done" | "failed" | "stopped" | "idle" {
+): "running" | "waiting" | "interrupted" | "done" | "failed" | "stopped" | "paused" | "idle" {
   if (channelStatus === "done" || channelStatus === "failed" || channelStatus === "waiting" || channelStatus === "stopped") return channelStatus;
   if (running) return "running";
+  if (channelStatus === "paused") return "paused";
   return interrupted ? "interrupted" : "idle";
 }
 

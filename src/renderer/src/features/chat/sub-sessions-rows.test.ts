@@ -386,3 +386,31 @@ describe("dispatchedRows / jobElapsed（进度面板「派出去的活」）", (
     strictEqual(jobElapsed(11 * 3600_000 + 60_000, words), "11 小时");
   });
 });
+
+describe("暂停的活（主智能体暂停了自己派的活）", () => {
+  it("通道 paused、不在跑：判 paused；还在跑的那一轮先按在跑", () => {
+    strictEqual(subSessionRowStatus({ channelStatus: "paused", running: false }), "paused");
+    strictEqual(subSessionRowStatus({ channelStatus: "paused", running: true }), "running");
+    strictEqual(subSessionRowStatus({ channelStatus: "paused", running: false, interrupted: true }), "paused");
+  });
+  it("排在「在做」之后、没做成之前；行首不带记号；在「派出去的活」里列着", () => {
+    const rows = sortSubSessionRows([
+      { id: "f", status: "failed" as const, lastAt: 3 },
+      { id: "p", status: "paused" as const, lastAt: 2 },
+      { id: "r", status: "running" as const, lastAt: 1 },
+    ]);
+    deepStrictEqual(rows.map((r) => r.id), ["r", "p", "f"]);
+    strictEqual(subSessionMark("paused"), null);
+    deepStrictEqual(dispatchedRows(rows).map((r) => r.id), ["r", "p", "f"]);
+  });
+  it("第二行固定说「停着，说一声就接着做」，不说停下前的进度", () => {
+    const line = subSessionLine(
+      { status: "paused", messages: [{ kind: "progress", text: "在跑第三组" } as ChannelMessage], items: [], now: 0, lastActivityAt: null },
+      { channel: { pausedLine: "停着，说一声就接着做" } } as unknown as Messages,
+    );
+    strictEqual(line, "停着，说一声就接着做");
+  });
+  it("派出卡：paused 不再落成「空闲」", () => {
+    strictEqual(delegateCardStatus("paused", false, false), "paused");
+  });
+});

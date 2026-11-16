@@ -2280,6 +2280,8 @@ export const en = {
       failed: "failed",
       idle: "idle",
       stopped: "stopped",
+      /** 主智能体暂停了这件活 */
+      paused: "paused",
     },
     delegating: "delegating…",
     delegated: "DELEGATED",
@@ -2293,6 +2295,8 @@ export const en = {
     childDone: (peer: string) => `${peer} finished`,
     childFailed: (peer: string) => `${peer} failed`,
     notSpokenRunning: "running · hasn't spoken yet",
+    /** 主智能体暂停了这件活：子会话面板与「派出去的活」的第二行 */
+    pausedLine: "On hold — say the word and it picks up again",
     notSpoken: "hasn't spoken yet",
     latestQuestion: (text: string) => `Q: ${text}`,
     latestProgress: (text: string) => `Progress: ${text}`,
@@ -2344,6 +2348,7 @@ export const en = {
       failed: "failed",
       /** 用户终止（通道 stopped）：比 closed 更硬，父模型的回信不能重开 */
       stopped: "stopped",
+      paused: "on hold",
       idle: "idle",
     },
     back: "Back to sub-sessions",
