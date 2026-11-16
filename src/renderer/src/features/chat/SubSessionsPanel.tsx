@@ -48,8 +48,9 @@ import { useT } from "../../locale.ts";
 
 const STATUS_COLOR: Record<SubSessionRowStatus, string> = {
   running: "var(--color-accent)",
-  waiting: "var(--color-warning)",
-  interrupted: "var(--color-warning)",
+  // 等你只用字说（橙点只在侧栏顶「等你」一处，2026-11-17）：正文色
+  waiting: "var(--color-text-primary)",
+  interrupted: "var(--color-text-primary)",
   done: "var(--color-success)",
   failed: "var(--color-danger)",
   // stopped 是用户的裁决不是故障：中性灰，区别于 failed 的红（图标已经在说话）
@@ -286,7 +287,7 @@ function SubSessionRow(props: {
     <div className="inbox-row">
       <button type="button" className="inbox-row-main" onClick={props.onClick} title={t.subSessions.rowStatus[status]}>
         <span className={`inbox-row-mark${mark === null ? "" : ` ${mark}`}`} aria-hidden="true">
-          {mark === "done" ? <Icon name="check" size={12} strokeWidth={2} /> : mark !== null ? <span className="inbox-row-dot" /> : null}
+          {mark === "done" ? <Icon name="check" size={12} strokeWidth={2} /> : mark === "work" ? <span className="inbox-row-dot" /> : null}
         </span>
         <span className="inbox-row-item">
           <span className="inbox-row-l1">
@@ -295,7 +296,7 @@ function SubSessionRow(props: {
             </b>
             <span className="inbox-row-ago row-trailing">{relativeTime(props.lastAt, t)}</span>
           </span>
-          {props.latest !== "" && <span className="inbox-row-l2">{props.latest}</span>}
+          {props.latest !== "" && <span className={`inbox-row-l2${mark === "ask" ? " ask" : ""}`}>{props.latest}</span>}
         </span>
       </button>
       {props.onContinue !== undefined && (

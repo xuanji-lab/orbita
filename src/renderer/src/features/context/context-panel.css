@@ -238,7 +238,7 @@
   font-weight: var(--weight-semibold);
 }
 /* 在等的步：标题下面独占一行写等什么，不截断，最多两行（2026-11-17 改：挤在标题右边会截断、还把标题挤成两行）。
-   等你 = 橙点 + 正文色字（浅色主题下橙字对比度不够）；等机器 / 等别的 = 灰字。不占「正在做」，不加粗 */
+   等你 = 正文色字（橙点只在侧栏顶「等你」一处，2026-11-17）；等机器 / 等别的 = 灰字。不占「正在做」，不加粗 */
 .tp-wait {
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -257,13 +257,6 @@
   height: 6px;
   border-radius: 50%;
   background: var(--color-text-tertiary);
-}
-.tp-wait .tp-dot {
-  margin-right: var(--space-1-5);
-  vertical-align: middle;
-}
-.tp-dot.you {
-  background: var(--color-warning);
 }
 /* 在做那一步下面的一句细节（我刚说的那句话） */
 .tp-detail {
@@ -644,6 +637,9 @@ button.tp-editlog-src:hover {
   white-space: nowrap;
   text-overflow: ellipsis;
   font-weight: var(--weight-semibold);
+}
+.tp-job-line.ask {
+  color: var(--color-text-primary);
 }
 .tp-job-line {
   min-width: 0;

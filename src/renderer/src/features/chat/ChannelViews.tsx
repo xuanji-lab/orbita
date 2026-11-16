@@ -84,7 +84,8 @@ export function peerTitleOf(context: ChannelViewContext, peerId: string, t: Mess
 function toneColor(tone: ChannelMarkTone): string {
   switch (tone) {
     case "question":
-      return "var(--color-warning)";
+      // 在问你：只用图标与字说，不上橙（橙只在侧栏顶「等你」一处，2026-11-17）
+      return "var(--color-text-primary)";
     case "reply":
       return "var(--color-accent)";
     case "done":
@@ -229,7 +230,8 @@ function delegateStatusColor(status: DelegateCardStatus): string {
       return "var(--color-accent)";
     case "waiting":
     case "interrupted":
-      return "var(--color-warning)";
+      // 等你：只用字说，不上橙（同上）
+      return "var(--color-text-primary)";
     case "done":
       return "var(--color-success)";
     case "failed":

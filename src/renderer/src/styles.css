@@ -1561,9 +1561,13 @@ html[data-pointer-drag] iframe {
   border-radius: 50%;
   background: currentColor;
 }
-/* 只有「要你出手」是橙点（在问你、被打断、没做成）；橙只做第二信号，旁边都有字 */
+/* 橙点只在侧栏顶「等你」一处（2026-11-17 设计 11-attention）：那里的行首用 .ask；子会话面板与进度面板里
+   要你出手的行不画点，第二行「等你：…」用正文色（.inbox-row-l2.ask） */
 .inbox-row-mark.ask {
   color: var(--color-warning);
+}
+.inbox-row-l2.ask {
+  color: var(--color-text-primary);
 }
 
 .inbox-row-item {
@@ -1750,7 +1754,8 @@ html[data-pointer-drag] iframe {
 }
 
 .channel-from-child-pill[data-tone="question"] > .orbita-icon {
-  color: var(--color-warning);
+  /* 在问你：图标与字说（橙点只在侧栏顶「等你」一处，2026-11-17） */
+  color: var(--color-text-primary);
 }
 
 .channel-from-child-pill[data-tone="done"] > .orbita-icon {

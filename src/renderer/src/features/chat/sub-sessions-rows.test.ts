@@ -426,3 +426,23 @@ describe("暂停的活（主智能体暂停了自己派的活）", () => {
     strictEqual(delegateCardStatus("paused", false, false), "paused");
   });
 });
+
+describe("要你出手的行只用字说（橙点只在侧栏顶「等你」）", () => {
+  const t = {
+    subSessions: {
+      askQuestion: (said: string) => `等你：${said}`,
+      askQuestionBare: "等你：它在问你一件事",
+      askInterrupted: "等你：被打断了，点继续接着做",
+      askFailed: (said: string) => `等你看：没做成，${said}`,
+      askFailedBare: "等你看：没做成",
+    },
+  } as unknown as Messages;
+  const q = (kind: ChannelMessage["kind"], text: string) =>
+    ({ id: text, from: "child", author: "model", kind, text, delivery: "followUp", createdAt: 1 }) as ChannelMessage;
+  it("在问你：等你 + 原话第一句；没做成：等你看 + 原因；被打断：说点继续", () => {
+    strictEqual(subSessionLine({ status: "waiting", messages: [q("question", "两种结构选哪个？我倾向第二种。")], items: [], now: 0, lastActivityAt: null }, t), "等你：两种结构选哪个？");
+    strictEqual(subSessionLine({ status: "failed", messages: [q("failed", "磁盘只读，删不掉。")], items: [], now: 0, lastActivityAt: null }, t), "等你看：没做成，磁盘只读，删不掉。");
+    strictEqual(subSessionLine({ status: "interrupted", messages: [], items: [], now: 0, lastActivityAt: null }, t), "等你：被打断了，点继续接着做");
+    strictEqual(subSessionLine({ status: "waiting", messages: [], items: [], now: 0, lastActivityAt: null }, t), "等你：它在问你一件事");
+  });
+});

@@ -2160,6 +2160,12 @@ export const zh: Messages = {
       paused: "停着",
       idle: "空闲",
     },
+    /** 要你出手那几行的第二行（不点橙点，只用字说） */
+    askQuestion: (said) => `等你：${said}`,
+    askQuestionBare: "等你：它在问你一件事",
+    askInterrupted: "等你：被打断了，点继续接着做",
+    askFailed: (said) => `等你看：没做成，${said}`,
+    askFailedBare: "等你看：没做成",
     back: "返回子会话列表",
     openAsMain: "在主面板打开",
     openInPanel: "在子会话面板里查看",

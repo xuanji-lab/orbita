@@ -1284,7 +1284,8 @@ export function App() {
         shortId={mainAgentWorkspace === undefined ? capsuleShortId : null}
         // 主智能体的名字就是工作区名（改名去侧栏改工作区）
         onRename={mainOpenId === "" || mainAgentWorkspace !== undefined ? undefined : (title) => session.renameSession(mainOpenId, title)}
-        subChip={hasSubSessions ? { count: subSessionChildren.length, waiting: waitingOnYou, interrupted: interruptedChildren } : null}
+        // 主智能体的顶栏不挂「N · M 个等你」：等你的事在侧栏顶「等你」里，派出去的活在右栏，这里再数一遍是重复（2026-11-17）
+        subChip={hasSubSessions && mainAgentWorkspace === undefined ? { count: subSessionChildren.length, waiting: waitingOnYou, interrupted: interruptedChildren } : null}
         onOpenSubSessions={openSubSessionsList}
         crumb={
           capsuleParentId !== undefined
@@ -1648,7 +1649,7 @@ export function App() {
           automation={{ running: runningCount(automations.automations) }}
           subSessions={
             channelParentId !== null && hasSubSessions
-              ? { count: subSessionChildren.length, waiting: waitingOnYou }
+              ? { count: subSessionChildren.length }
               : null
           }
         />

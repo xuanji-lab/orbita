@@ -2338,6 +2338,12 @@ export const en = {
       paused: "on hold",
       idle: "idle",
     },
+    /** 要你出手那几行的第二行（不点橙点，只用字说） */
+    askQuestion: (said: string) => `Waiting on you: ${said}`,
+    askQuestionBare: "Waiting on you: it has a question",
+    askInterrupted: "Waiting on you: interrupted — press continue",
+    askFailed: (said: string) => `For you to look at: didn't make it, ${said}`,
+    askFailedBare: "For you to look at: didn't make it",
     back: "Back to sub-sessions",
     openAsMain: "Open as main",
     openInPanel: "Open in the Sub-sessions panel",

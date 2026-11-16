@@ -82,7 +82,7 @@ export function RightRail(props: {
    * 归「智能体」组、常驻条上（tooltip 带运行数）。
    */
   automation: { running: number };
-  subSessions: { count: number; waiting: number } | null;
+  subSessions: { count: number } | null;
 }) {
   const t = useT();
   const toggle = (kind: RightPanelKind) => () => props.onPanel(props.panel === kind ? null : kind);
@@ -115,7 +115,7 @@ export function RightRail(props: {
             label: t.rail.subSessions(props.subSessions.count),
             lit: props.panel === "subsessions",
             onSelect: toggle("subsessions"),
-            badge: props.subSessions.waiting,
+            // 不挂「等你」角标：等你的事只在侧栏顶「等你」那一处叫人（2026-11-17 设计 11-attention）
           },
         ]),
     // 终端（人工验收自己的开发）：收起面板不杀 PTY

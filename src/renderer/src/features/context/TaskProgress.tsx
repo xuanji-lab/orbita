@@ -151,13 +151,9 @@ export function TaskProgress(props: {
         />
       )}
       <div className="tp-now">
-        {/* 一个面上只留一个会动的记号：在做 = 灰色转圈；要你出手（等你 / 出错）= 橙点；其余不标（2026-11-17 减色） */}
+        {/* 一个面上只留一个会动的记号：在做 = 灰色转圈；其余不标——要你出手的靠后面的字说（橙点只在侧栏顶「等你」，2026-11-17） */}
         <span className="tp-slot">
-          {headState === "running" ? (
-            <Icon name="loader-circle" size={12} strokeWidth={1.8} spin />
-          ) : headState === "waiting" || headState === "failed" ? (
-            <span className="tp-dot you" />
-          ) : null}
+          {headState === "running" ? <Icon name="loader-circle" size={12} strokeWidth={1.8} spin /> : null}
         </span>
         <b>{t.taskPanel.state(headState ?? "idle")}</b>
         {turns.length > 0 && <span className="tp-sub">· {t.taskPanel.turns(turns.length)}</span>}
@@ -440,12 +436,11 @@ function PlanSection(props: {
     // 章节默认收着（以前在做的那步默认展开）：计划是一张朴素的待办，过程点开才看
     const shown = open[item.id] ?? false;
     const since = status === "in_progress" ? stepActiveSince(timeline, item.id) : null;
-    // 在等的步：行尾写等什么。等你 = 橙点 + 正文色字；等机器 / 等别的 = 灰字
+    // 在等的步：标题下写等什么。等你 = 正文色字（不点橙点，橙点只在侧栏顶「等你」）；等机器 / 等别的 = 灰字
     const you = status === "waiting" && waitsOnYou(item.waitingFor);
     const waitTag =
       status === "waiting" ? (
         <span className={you ? "tp-wait you" : "tp-wait"} title={item.waitingFor ?? t.planText.waitingTitle}>
-          {you && <span className="tp-dot you" />}
           <span>{item.waitingFor ?? t.planText.waitingDefault}</span>
         </span>
       ) : null;
@@ -751,15 +746,15 @@ function DispatchedSection(props: { parentId: string; sessions: readonly Session
           return (
             <li key={row.meta.id} className="tp-job">
               <span className={`inbox-row-mark${mark === null ? "" : ` ${mark}`}`} aria-hidden="true">
-                {/* 停着的行首不带记号（只占位，名字左缘对齐） */}
-                {mark !== null && <span className="inbox-row-dot" />}
+                {/* 只有在做的画灰点；停着的、要你出手的行首都空着（要你出手的靠排最前与「等你：…」那句说，橙点只在侧栏顶） */}
+                {mark === "work" && <span className="inbox-row-dot" />}
               </span>
               <div className="tp-step">
                 <div className="tp-step-head">
                   <span className="tp-text tp-job-name" title={row.meta.title}>{row.meta.title === "" ? t.subSessions.untitled : displaySubSessionTitle(row.meta.title)}</span>
                   <span className="tp-tail row-trailing">{jobElapsed(now - row.meta.createdAt, t.taskPanel.elapsed)}</span>
                 </div>
-                {line !== "" && <div className="tp-job-line">{line}</div>}
+                {line !== "" && <div className={`tp-job-line${mark === "ask" ? " ask" : ""}`}>{line}</div>}
                 {note !== null && <div className="tp-note">{note}</div>}
               </div>
             </li>
