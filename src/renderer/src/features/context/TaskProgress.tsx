@@ -446,16 +446,17 @@ function PlanSection(props: {
       status === "waiting" ? (
         <span className={you ? "tp-wait you" : "tp-wait"} title={item.waitingFor ?? t.planText.waitingTitle}>
           {you && <span className="tp-dot you" />}
-          <span className="tp-wait-text">{item.waitingFor ?? t.planText.waitingDefault}</span>
+          <span>{item.waitingFor ?? t.planText.waitingDefault}</span>
         </span>
       ) : null;
     const clock = active && props.turnActive && since !== null ? formatRunClock(props.now - stepClockFrom(since, props.turns)) : null;
     return (
-      <li key={item.id} data-status={status} data-active={active || undefined}>
+      // 在做的那步：会话停了也照样加粗、画圈点（静止的，不带会动的记号），只是不走表、不带细节（2026-11-17）
+      <li key={item.id} data-status={status} data-active={status === "in_progress" || undefined}>
         <span className="tp-slot">
           {status === "done" ? (
             <Icon name="check" size={12} strokeWidth={2} />
-          ) : active ? (
+          ) : status === "in_progress" ? (
             <Icon name="circle-dot" size={12} strokeWidth={1.8} />
           ) : (
             <span className="tp-ring" />
@@ -471,16 +472,15 @@ function PlanSection(props: {
               onClick={() => setOpen((prev) => ({ ...prev, [item.id]: !shown }))}
             >
               <span className="tp-text">{item.text}</span>
-              {waitTag}
               {clock !== null && <span className="tp-clock">{clock}</span>}
             </button>
           ) : (
             <div className="tp-step-head">
               <span className="tp-text">{item.text}</span>
-              {waitTag}
               {clock !== null && <span className="tp-clock">{clock}</span>}
             </div>
           )}
+          {waitTag}
           {active && props.detail !== null && props.detail !== item.text && <div className="tp-detail">{props.detail}</div>}
           {shown && rows.length > 0 && <ChapterList rows={rows} statusOf={props.statusOf} />}
         </div>
@@ -755,10 +755,10 @@ function DispatchedSection(props: { parentId: string; sessions: readonly Session
               </span>
               <div className="tp-step">
                 <div className="tp-step-head">
-                  <span className="tp-text tp-job-name">{row.meta.title === "" ? t.subSessions.untitled : displaySubSessionTitle(row.meta.title)}</span>
+                  <span className="tp-text tp-job-name" title={row.meta.title}>{row.meta.title === "" ? t.subSessions.untitled : displaySubSessionTitle(row.meta.title)}</span>
                   <span className="tp-tail row-trailing">{jobElapsed(now - row.meta.createdAt, t.taskPanel.elapsed)}</span>
                 </div>
-                <div className="tp-job-line">{line}</div>
+                {line !== "" && <div className="tp-job-line">{line}</div>}
                 {note !== null && <div className="tp-note">{note}</div>}
               </div>
             </li>
