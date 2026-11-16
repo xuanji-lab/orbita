@@ -21,7 +21,7 @@ import { HOME_CARD_QUERY_ROWS, homeCardLine, selectHomeCards, selectHomeLog, typ
 import { selectTranscript } from "../../../../shared/transcript-state.ts";
 import { relativeTime } from "../../shell/relative-time.ts";
 import { InlineMarks } from "../../shell/InlineMarks";
-import { isAtBottom, isBeyondScrollDown, shouldJumpToEnd, shouldLoadOlder } from "./scroll.ts";
+import { isAtBottom, isBeyondScrollDown, shouldFillOlder, shouldJumpToEnd, shouldLoadOlder } from "./scroll.ts";
 import { shouldInterceptSelectAll, transcriptCopyText } from "./transcript-copy.ts";
 // 显式跟随态（Latest | Reading）：用户意图捕获与钉底判定全在这个纯模块里，聊天面只接线
 import {
@@ -49,6 +49,7 @@ import {
   processTurnUser,
   tallyHasEvents,
   userTurnHasProcess,
+  type ChannelEvent,
   type ProcessEvent,
 } from "./turn-events.ts";
 import { readFoldState, writeFoldState } from "./fold-state.ts";
@@ -1041,6 +1042,13 @@ function ChatViewBody(props: {
       session.loadOlder();
     }
   };
+
+  // 内容不满一屏时没有滚动事件，触顶拉页就永远不会发生：渲染后量一下，不满一屏就按触顶处理（每拉回一页再量一次）
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el === null || !session.hasMoreHistory || session.loadingOlder) return;
+    if (shouldFillOlder({ scrollHeight: el.scrollHeight, clientHeight: el.clientHeight })) handleScroll();
+  });
 
   // 滚动锚定（源侧分页）：更早的一页 prepend 之后，按**同一行的 key** 反算 scrollTop
   // ——前面插进来多高，视口就跟着走多远。有历史行可锚时用虚拟器的 measurement.start；
@@ -4665,9 +4673,12 @@ function ProcessEventList(props: {
       ? { label: r.openSession, onClick: () => openSession(peerId) }
       : null;
   const progressLink = props.onOpenProgress === undefined ? null : { label: r.openProgress, onClick: props.onOpenProgress };
-  return (
-    <ol className="proc-events">
-      {props.events.map((event) => {
+  // 一行来往的「对面是谁」：派活取回执里的子会话标题，回话 / 交回取对面的名字
+  const peerName = (event: ChannelEvent): string =>
+    event.kind === "delegate"
+      ? r.quoted((event.peerId !== null ? (props.channel.titles.get(event.peerId) ?? event.title) : event.title) ?? t.channel.subSession)
+      : r.quoted(peerTitleOf(props.channel, event.peerId ?? "", t));
+  const renderEvent = (event: ProcessEvent): ReactNode => {
         // 只写时刻：日期已经在过程行头上了
         const time = clockOfDay(event.time);
         switch (event.kind) {
@@ -4748,11 +4759,35 @@ function ProcessEventList(props: {
               </Fragment>
             );
           }
+          case "group": {
+            const first = event.members[0];
+            const verb = first === undefined ? "" : first.kind === "delegate" ? r.delegated : first.kind === "reply" ? r.replied : first.msgKind === "done" ? r.returned : first.msgKind === "question" ? r.asked : first.msgKind === "failed" ? r.childFailed : r.childOther;
+            const names = event.members.slice(0, 3).map(peerName).join("");
+            return (
+              <ProcessGroupRow key={event.key} verb={verb} content={`${names} ${r.groupMore(event.members.length)}`} time={time}>
+                {event.members.map((member) => renderEvent(member))}
+              </ProcessGroupRow>
+            );
+          }
           default:
             return <li key={event.key} className="proc-ev-other">{props.renderStep(event.step)}</li>;
         }
-      })}
-    </ol>
+  };
+  return <ol className="proc-events">{props.events.map((event) => renderEvent(event))}</ol>;
+}
+
+/** 一连串同一种来往收成的一行：整行可点，点开逐件列（每件一行，行尾能点到它的会话） */
+function ProcessGroupRow(props: { verb: string; content: string; time: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <li className="proc-ev-wrap">
+      <button type="button" className="proc-ev proc-ev-btn" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        <span className="proc-ev-verb">{props.verb}</span>
+        <span className="proc-ev-text">{props.content}</span>
+        <span className="proc-ev-time row-trailing">{props.time}</span>
+      </button>
+      {open && <ol className="proc-events nested">{props.children}</ol>}
+    </li>
   );
 }
 

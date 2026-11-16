@@ -8,7 +8,6 @@ import {
   latestChannelLine,
   subSessionLine,
   sortSubSessionRows,
-  dispatchedRows,
   displaySubSessionTitle,
   jobElapsed,
   splitDoneRows,
@@ -379,11 +378,7 @@ describe("subSessionLine（子会话面板第二行：每件活一句话）", ()
   });
 });
 
-describe("dispatchedRows / jobElapsed（进度面板「派出去的活」）", () => {
-  it("只列在做的与要你出手的；做完、终止、还没开口的不列", () => {
-    const rows = ["running", "waiting", "interrupted", "failed", "done", "stopped", "idle"].map((status) => ({ status: status as SubSessionRowStatus }));
-    deepStrictEqual(dispatchedRows(rows).map((row) => row.status), ["running", "waiting", "interrupted", "failed"]);
-  });
+describe("jobElapsed（进度面板「派出去的活」用了多久）", () => {
   it("用了多久：不到 1 分钟 / N 分钟 / N 小时 M 分钟 / 十小时以上只说小时", () => {
     const words = {
       lessThanMinute: "不到 1 分钟",
@@ -405,7 +400,7 @@ describe("暂停的活（主智能体暂停了自己派的活）", () => {
     strictEqual(subSessionRowStatus({ channelStatus: "paused", running: true }), "running");
     strictEqual(subSessionRowStatus({ channelStatus: "paused", running: false, interrupted: true }), "paused");
   });
-  it("排在「在做」之后、没做成之前；行首不带记号；在「派出去的活」里列着", () => {
+  it("排在「在做」之后、没做成之前；行首不带记号；不折进末尾「停着 M 件」", () => {
     const rows = sortSubSessionRows([
       { id: "f", status: "failed" as const, lastAt: 3 },
       { id: "p", status: "paused" as const, lastAt: 2 },
@@ -413,7 +408,8 @@ describe("暂停的活（主智能体暂停了自己派的活）", () => {
     ]);
     deepStrictEqual(rows.map((r) => r.id), ["r", "p", "f"]);
     strictEqual(subSessionMark("paused"), null);
-    deepStrictEqual(dispatchedRows(rows).map((r) => r.id), ["r", "p", "f"]);
+    // 不和「停着」（idle / stopped）一起折起来：暂停的照旧列在外面
+    deepStrictEqual(splitDoneRows(rows).open.map((r) => r.id), ["r", "p", "f"]);
   });
   it("第二行固定说「停着，说一声就接着做」，不说停下前的进度", () => {
     const line = subSessionLine(

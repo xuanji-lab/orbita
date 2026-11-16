@@ -42,6 +42,11 @@ export type ProcessEvent =
   | { kind: "goal"; key: string; toolCallId: string; time: number }
   /** 读了 / 记住的记忆：挂在用户消息上，由视图层按这一轮补进来 */
   | { kind: "memory"; key: string; used: readonly MemoryLine[]; remembered: readonly MemoryLine[]; time: number }
+  /**
+   * 一连串同一种来往（连派 41 件、连着交回 31 件、连回几句）收成一行：「「A」「B」「C」等 41 件」，点开才逐件列。
+   * 满载时（2026-11-17 演练：一轮派 41 件）不收，点开过程行就是 41 行「派了」，别的事全被挤出屏。
+   */
+  | { kind: "group"; key: string; members: ChannelEvent[]; time: number }
   /** 认不出的种类（以后新加的单元）：默认进过程，展开时原样画 */
   | { kind: "other"; key: string; step: ProcessStep; time: number };
 
@@ -50,6 +55,12 @@ export interface MemoryLine {
   id: string;
   text: string;
 }
+
+/** 和子会话的来往：会成串出现、要收成一行的那几种 */
+export type ChannelEvent = Extract<ProcessEvent, { kind: "childIn" | "reply" | "delegate" }>;
+
+/** 连着几件同一种来往才收成一行 */
+export const GROUP_RUN_MIN = 3;
 
 export interface EventSources {
   results: ToolResultIndex;
@@ -145,7 +156,38 @@ export function processEvents(steps: readonly ProcessStep[], src: EventSources):
   // 最后几段思考后面没有工具了：挂到上一行工具上，没有就不出行（思考不单独占一行）
   const tail = lastTools();
   if (pendingThinking.length > 0 && tail !== null) tail.steps.push(...pendingThinking);
-  return captionCommands(events);
+  return groupRuns(captionCommands(events));
+}
+
+function runKey(event: ProcessEvent): string | null {
+  if (event.kind === "delegate" || event.kind === "reply") return event.kind;
+  if (event.kind === "childIn") return `childIn:${event.msgKind}`;
+  return null;
+}
+
+/** 连着 GROUP_RUN_MIN 件以上同一种来往（派活 / 回话 / 同一种交回）收成一个 group；少于这个数原样留着 */
+function groupRuns(events: readonly ProcessEvent[]): ProcessEvent[] {
+  const out: ProcessEvent[] = [];
+  let run: ChannelEvent[] = [];
+  const flush = () => {
+    const first = run[0];
+    if (first !== undefined && run.length >= GROUP_RUN_MIN) out.push({ kind: "group", key: `group:${first.key}`, members: run, time: first.time });
+    else out.push(...run);
+    run = [];
+  };
+  for (const event of events) {
+    const key = runKey(event);
+    const head = run[0];
+    if (key !== null && (head === undefined || runKey(head) === key)) {
+      run.push(event as ChannelEvent);
+      continue;
+    }
+    flush();
+    if (key !== null) run.push(event as ChannelEvent);
+    else out.push(event);
+  }
+  flush();
+  return out;
 }
 
 /**
@@ -198,7 +240,7 @@ export function processTally(events: readonly ProcessEvent[]): ProcessTally {
     failed: 0,
     failedAllCommands: true,
   };
-  for (const event of events) {
+  for (const event of events.flatMap((item) => (item.kind === "group" ? item.members : [item]))) {
     switch (event.kind) {
       case "memory":
         tally.memoryRead += event.used.length;
@@ -292,3 +334,4 @@ export function userTurnHasProcess(view: readonly TurnViewEntry[], index: number
   }
   return continuesInTail;
 }
+

@@ -2051,6 +2051,7 @@ export const zh: Messages = {
       openSession: "看它的会话",
       openProgress: "在进度面板看",
       openMemory: "在记忆页看",
+      groupMore: (n: number) => `等 ${n} 件`,
       planChanges: (n, first) => (n > 1 ? `${n} 处：${first}等` : first),
     },
   },

@@ -5286,6 +5286,10 @@ mark.intent-mark {
 .proc-ev-other {
   min-width: 0;
 }
+/* 收成一行的一连串来往点开后：逐件一行，缩进一格 */
+.proc-events.nested {
+  margin: 0 0 var(--space-1) var(--space-2);
+}
 /* 一条记忆一行，点开看全文（按钮去掉默认外观，和别的行同一种字） */
 .proc-ev-mem {
   padding: 0;

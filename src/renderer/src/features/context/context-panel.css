@@ -535,13 +535,14 @@ button.tp-editlog-src:hover {
   background: var(--color-bg-panel);
   border: 1.5px solid var(--color-text-tertiary);
 }
+/* 2026-11-17 减色：「做过的」里有失败的章、在跑的章都不上红蓝——实心点是第二信号，失败写成字（每章下面的「N 步没成」） */
 .tp-chapters li[data-failed]::before {
-  border-color: var(--color-danger);
-  background: var(--color-danger);
+  border-color: var(--color-text-tertiary);
+  background: var(--color-text-tertiary);
 }
 .tp-chapters li[data-live]::before {
-  border-color: var(--color-info);
-  background: var(--color-info);
+  border-color: var(--color-text-secondary);
+  background: var(--color-text-secondary);
 }
 .tp-chapters button,
 .tp-chapters .tp-ch-row {
@@ -648,4 +649,22 @@ button.tp-editlog-src:hover {
   text-overflow: ellipsis;
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
+}
+/* 派出去的活末尾「做完 N 件 · 停着 M 件」：和子会话面板同一个规矩，点开才列 */
+.tp-jobs-fold {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--color-text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+.tp-jobs-fold .inbox-row-mark {
+  width: 14px;
+  height: auto;
 }

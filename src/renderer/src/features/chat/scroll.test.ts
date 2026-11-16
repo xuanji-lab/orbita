@@ -8,6 +8,7 @@ import {
   isBeyondScrollDown,
   shouldJumpToEnd,
   shouldLoadOlder,
+  shouldFillOlder,
 } from "./scroll.ts";
 
 describe("isAtBottom", () => {
@@ -84,5 +85,14 @@ describe("shouldJumpToEnd", () => {
   test("非 End 键不接管", () => {
     assert.equal(shouldJumpToEnd("Home", mods, { tagName: "DIV", isContentEditable: false }), false);
     assert.equal(shouldJumpToEnd("a", mods, { tagName: "DIV", isContentEditable: false }), false);
+  });
+});
+
+describe("shouldFillOlder（内容不满一屏也接着拉更早的一页）", () => {
+  test("不满一屏 / 差不多一屏：要拉；溢出得多：交给滚动事件；视口还没量出来（0）：不拉", () => {
+    assert.equal(shouldFillOlder({ scrollHeight: 300, clientHeight: 600 }), true);
+    assert.equal(shouldFillOlder({ scrollHeight: 600, clientHeight: 600 }), true);
+    assert.equal(shouldFillOlder({ scrollHeight: 4000, clientHeight: 600 }), false);
+    assert.equal(shouldFillOlder({ scrollHeight: 0, clientHeight: 0 }), false);
   });
 });
