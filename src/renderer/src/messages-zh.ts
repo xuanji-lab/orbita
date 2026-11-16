@@ -2136,6 +2136,7 @@ export const zh: Messages = {
     },
     waitingStep: (step, who) => `${step} · ${who}`,
     quietFor: (text, minutes) => `${text} · ${minutes} 分钟没动静`,
+    pausedLine: "停着，说一声就接着做",
   },
 
   queue: {
@@ -2162,6 +2163,7 @@ export const zh: Messages = {
       done: "完成",
       failed: "失败",
       stopped: "已终止",
+      paused: "暂停了",
       idle: "空闲",
     },
     back: "返回子会话列表",

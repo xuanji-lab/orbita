@@ -32,6 +32,11 @@ export type SubSessionRowStatus =
   | "done"
   | "failed"
   | "stopped"
+  /**
+   * 主智能体暂停了这件活：停下保留现场，说一声就接着做（feat/main-agent 加的通道状态，合并后由 subSessionStatusOf 接上；
+   * 这个分支上还没有来源，留位置）。单列在「在做」之后，不带记号。
+   */
+  | "paused"
   | "idle";
 
 /**
@@ -46,10 +51,13 @@ export function subSessionRowStatus(input: {
   running: boolean;
   /** 被崩溃打断、等你点「继续」（缺席 = 否）；只在没在跑时为真，排在 running 之后只为读着顺 */
   interrupted?: boolean;
+  /** 主智能体暂停了它（缺席 = 否）：没在跑时才算 */
+  paused?: boolean;
 }): SubSessionRowStatus {
   if (input.channelStatus === "waiting") return "waiting";
   if (input.channelStatus === "stopped") return "stopped";
   if (input.running) return "running";
+  if (input.paused === true) return "paused";
   if (input.interrupted === true) return "interrupted";
   if (input.channelStatus === "done") return "done";
   if (input.channelStatus === "failed") return "failed";
@@ -68,6 +76,7 @@ const STATUS_PRIORITY: Record<SubSessionRowStatus, number> = {
   waiting: 0,
   interrupted: 0,
   running: 1,
+  paused: 1.5,
   failed: 2,
   done: 3,
   stopped: 4,
@@ -232,6 +241,7 @@ export function subSessionLine(
   },
   t: Messages,
 ): string {
+  if (input.status === "paused") return t.channel.pausedLine;
   const quietish = input.status === "running" || input.status === "idle" || input.status === "stopped";
   if (!quietish) return latestChannelLine(input.messages, input.status, t);
   const running = input.status === "running";
@@ -292,6 +302,8 @@ export interface SubSessionEngineSlots {
   phaseOf: (id: string) => string;
   /** 被崩溃打断、等你点「继续」（引擎的 interruptedOf；缺席 = 不认这个来源） */
   interruptedOf?: (id: string) => boolean;
+  /** 主智能体暂停了它（合并 feat/main-agent 后接上；缺席 = 不认这个来源） */
+  pausedOf?: (id: string) => boolean;
 }
 
 /**
@@ -313,5 +325,6 @@ export function subSessionStatusOf(
     channelStatus,
     running: engine.phaseOf(childId) !== "idle",
     interrupted: engine.interruptedOf?.(childId) ?? false,
+    paused: engine.pausedOf?.(childId) ?? false,
   });
 }

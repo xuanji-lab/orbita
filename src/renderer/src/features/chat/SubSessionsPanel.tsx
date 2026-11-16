@@ -55,6 +55,8 @@ const STATUS_ICON: Record<SubSessionRowStatus, IconName> = {
   done: "circle-check",
   failed: "triangle-alert",
   stopped: "octagon-x",
+  // 暂停：先借「空闲」那枚（没有登记暂停图标；状态写在字里）
+  paused: "circle-off",
   idle: "circle-off",
 };
 

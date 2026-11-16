@@ -342,3 +342,21 @@ describe("一连串同一种来往收成一行（满载：一轮派 41 件）", 
     assert.deepEqual(processEvents(two.steps, sources(rs(2))).map((e) => e.kind), ["tools", "delegate", "delegate"]);
   });
 });
+
+describe("外面插进来的一行（不在转录里的事，比如重开后「断过」）", () => {
+  test("按时间并进去，不计入摘要", () => {
+    const rs: TranscriptRecord[] = [
+      user("u1", 1),
+      assistant("a1", 10, [call("r1")]),
+      tool({ toolCallId: "r1", timestamp: 11 }),
+      assistant("a2", 30, [call("r2", "bash", { command: "ls" })]),
+      tool({ toolCallId: "r2", toolName: "bash", timestamp: 31 }),
+      assistant("a3", 40, [text("好")]),
+    ];
+    const p = procOf(view(rs))[0];
+    assert.ok(p !== undefined);
+    const events = processEvents(p.steps, sources(rs, { extra: [{ kind: "note", key: "n1", verb: "断过", text: "从第 2 步接着做", time: 20 }] }));
+    assert.deepEqual(events.map((e) => e.kind), ["tools", "note", "tools"]);
+    assert.deepEqual(processSummary(zh, processTally(events)), []);
+  });
+});

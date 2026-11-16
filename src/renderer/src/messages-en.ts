@@ -2311,6 +2311,7 @@ export const en = {
     },
     waitingStep: (step: string, who: string) => `${step} · ${who}`,
     quietFor: (text: string, minutes: number) => `${text} · quiet for ${minutes} min`,
+    pausedLine: "Paused — say the word and it picks up",
   },
 
   queue: {
@@ -2339,6 +2340,7 @@ export const en = {
       failed: "failed",
       /** 用户终止（通道 stopped）：比 closed 更硬，父模型的回信不能重开 */
       stopped: "stopped",
+      paused: "Paused",
       idle: "idle",
     },
     back: "Back to sub-sessions",

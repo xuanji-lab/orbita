@@ -393,3 +393,18 @@ describe("jobElapsed（进度面板「派出去的活」用了多久）", () => 
     strictEqual(jobElapsed(11 * 3600_000 + 60_000, words), "11 小时");
   });
 });
+
+describe("paused（主智能体暂停的活，合并 feat/main-agent 后接上真实来源）", () => {
+  it("没在跑且被暂停 = paused；在跑压过暂停；排在在做之后、没做成之前；不带记号；留在露出的那组", () => {
+    strictEqual(subSessionRowStatus({ channelStatus: "running", running: false, paused: true }), "paused");
+    strictEqual(subSessionRowStatus({ channelStatus: "running", running: true, paused: true }), "running");
+    const rows = sortSubSessionRows([
+      { status: "failed" as const, lastAt: 9 },
+      { status: "paused" as const, lastAt: 9 },
+      { status: "running" as const, lastAt: 1 },
+    ]);
+    deepStrictEqual(rows.map((row) => row.status), ["running", "paused", "failed"]);
+    strictEqual(subSessionMark("paused"), null);
+    deepStrictEqual(splitDoneRows([{ status: "paused" as const }]).open.length, 1);
+  });
+});

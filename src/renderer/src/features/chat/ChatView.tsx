@@ -4771,6 +4771,8 @@ function ProcessEventList(props: {
                 link={progressLink}
               />
             );
+          case "note":
+            return <ProcessEventRow key={event.key} verb={event.verb} content={event.text} time={time} />;
           case "memory": {
             const review = props.onOpenMemoryReview;
             const link = review === undefined ? null : { label: r.openMemory, onClick: review };
