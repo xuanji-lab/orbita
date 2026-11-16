@@ -9,11 +9,7 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { getSupportedThinkingLevels, type Model } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, InMemoryModelsStore, type Model } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/api/anthropic-messages";
 import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
 import { KNOWN_MODELS } from "../shared/known-models.ts";
@@ -27,17 +23,15 @@ import {
 } from "../shared/known-providers.ts";
 import { modelThinkingLevels, resolveModelDefaults } from "../shared/model-defaults.ts";
 import { THINKING_LEVELS, type ThinkingLevel } from "../shared/thinking.ts";
+import { createModelRuntime, type ModelCatalog } from "./model-catalog.ts";
 import { registerAndResolveModel, toBuiltinProvider } from "./model-registration.ts";
 
 /** 会话里解析出的模型（registerAndResolveModel 的非空返回） */
 type PiModelLike = NonNullable<ReturnType<typeof registerAndResolveModel>>;
 
-/** 真 pi 运行时，但不读用户的 ~/.pi/agent（凭据文件放临时目录，models.json 跳过，不联网） */
-async function freshRuntime(): Promise<ModelRuntime> {
-  return ModelRuntime.create({
-    modelsPath: null,
-    authPath: join(mkdtempSync(join(tmpdir(), "orbita-whitelist-")), "auth.json"),
-  });
+/** 真模型目录（不读 ~/.pi/agent，不联网） */
+async function freshRuntime(): Promise<ModelCatalog> {
+  return createModelRuntime(new InMemoryModelsStore());
 }
 
 const ordered = (levels: readonly ThinkingLevel[]) =>
@@ -111,7 +105,7 @@ async function bothSides(
  * （inference/go，不是 inference/go/v1；存的是 zen/go 就是 zen/go）；否则协议、地址都听条目的。
  * **不看目录里型号的地址**——那会随上游改名漂移（审核 F-2）。
  */
-function expectedEndpoint(known: KnownProvider, modelId: string, runtime: ModelRuntime): { api: string; baseUrl: string } {
+function expectedEndpoint(known: KnownProvider, modelId: string, runtime: ModelCatalog): { api: string; baseUrl: string } {
   const entry = { api: known.api, baseUrl: baseUrlOf(known) };
   if (known.catalogId === undefined || known.protocolPerModel !== true) return entry;
   const family = accessFamilyOf(known, entry);

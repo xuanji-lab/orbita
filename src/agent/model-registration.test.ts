@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { ModelCatalog } from "./model-catalog.ts";
 import { clampThinkingLevel, getSupportedThinkingLevels, type Model, type ThinkingLevel } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/api/anthropic-messages";
 import { streamSimple as streamOpenAI } from "@earendil-works/pi-ai/api/openai-completions";
@@ -393,7 +393,7 @@ describe("registerAndResolveModel —— create 与会话内换模型（C-4）�
         kinds.push(registration.models === undefined ? "auth" : "fallback");
         // models 元素是 chat / image / classifier 的联合（pi 1.0 起）；我们只注册对话模型
         registeredModels = registration.models?.flatMap((model) =>
-          model.type === "image" || model.type === "classifier"
+          model.type !== undefined && model.type !== "chat"
             ? []
             : [{ ...model, provider: "prov" as const, api: registration.api ?? "openai-completions", baseUrl: registration.baseUrl ?? "" }],
         );
@@ -412,7 +412,7 @@ describe("registerAndResolveModel —— create 与会话内换模型（C-4）�
   }
 
   const cast = (fake: ReturnType<typeof fakeRuntime>) =>
-    fake as unknown as Pick<ModelRuntime, "registerProvider" | "getModel" | "getProviders">;
+    fake as unknown as Pick<ModelCatalog, "registerProvider" | "getModel" | "getProviders">;
 
   test("目录认识的 id：只注册 auth 面，拿到目录原值——官方窗口不被兜底盖掉", () => {
     const rt = fakeRuntime([catalogModel("glm-4.7", 204_800, 0.6)]);
@@ -998,7 +998,7 @@ describe("OpenCode Go —— 目录地址漂了，型号的协议与地址不跟
       },
       getModel: (_provider: string, id: string) => models.find((model) => model.id === id),
       getProviders: () => [{ id: "opencode-go", getModels: () => models }],
-    } as unknown as Pick<ModelRuntime, "registerProvider" | "getModel" | "getProviders">;
+    } as unknown as Pick<ModelCatalog, "registerProvider" | "getModel" | "getProviders">;
   }
 
   const resolve = (stored: string, modelId: string) => {

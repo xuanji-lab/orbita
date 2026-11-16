@@ -13,8 +13,8 @@
  * 型号说同一句话——以前白名单的思考档只进菜单、不进会话，菜单里选 max 实际被 pi
  * 夹成 high（2026-10-24 实测：kimi-for-coding、OpenCode Go 的 deepseek-v4.1-flash）。
  */
-import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, type Api, type Model, type Provider } from "@earendil-works/pi-ai";
+import type { ModelCatalog, ModelDefinition, ProviderRegistration } from "./model-catalog.ts";
 import type { BuiltinModel, BuiltinProvider } from "../shared/agent-ipc.ts";
 import type { ModelParams } from "../shared/known-models.ts";
 import {
@@ -26,8 +26,8 @@ import {
 import type { ModelDecl } from "../shared/provider.ts";
 import { THINKING_LEVELS, type ThinkingLevel } from "../shared/thinking.ts";
 
-/** pi 注册表里的模型对象——从 ModelRuntime 的方法签名推出来，不另维护一份类型 */
-export type PiModel = NonNullable<ReturnType<ModelRuntime["getModel"]>>;
+/** 目录里的对话模型（pi-ai 的 Model） */
+export type PiModel = Model<Api>;
 
 /**
  * compat 里属于「模型怎么思考」而不是「网关怎么认字」的两项。
@@ -88,10 +88,10 @@ function borrowedThinkingReplay(
   }
   return undefined;
 }
-/** pi 注册表里的 provider 对象（同上，签名推导） */
-export type PiProvider = ReturnType<ModelRuntime["getProviders"]>[number];
-/** registerProvider 第二参的完整形状（同上，签名推导） */
-export type PiProviderRegistration = Parameters<ModelRuntime["registerProvider"]>[1];
+/** 目录里的服务商（pi-ai 的 Provider） */
+export type PiProvider = Provider;
+/** registerProvider 第二参的完整形状（model-catalog） */
+export type PiProviderRegistration = ProviderRegistration;
 
 /** 注册的 auth 面：**不带 models**——带了会把目录的官方窗口 / 单价盖成兜底值 */
 export function toAuthConfig(provider: {
@@ -185,12 +185,8 @@ export function toFallbackModels(
   });
 }
 
-/**
- * 补注册时一条模型的形状（registerProvider 的 models 元素）。pi 1.0 起 models 元素是
- * chat / image / classifier 三种配置的联合（0.99.0「Unified image models into the regular
- * Provider/Models surface」）；Orbita 只注册对话模型，取 chat 那支（`type` 缺省或 "chat"）。
- */
-type RegisteredModel = Exclude<NonNullable<PiProviderRegistration["models"]>[number], { type: "image" | "classifier" }>;
+/** 补注册时一条模型的形状（registerProvider 的 models 元素；Orbita 只注册对话模型） */
+type RegisteredModel = ModelDefinition;
 
 /**
  * 本家目录认识的型号：目录条目带回**参数**，白名单逐字段盖上。
@@ -505,7 +501,7 @@ export function toFallbackRegistration(
  * 否则「建会话能用的模型」和「切过去能用的模型」是两套真相。
  */
 export function registerAndResolveModel(
-  runtime: Pick<ModelRuntime, "registerProvider" | "getModel" | "getProviders">,
+  runtime: Pick<ModelCatalog, "registerProvider" | "getModel" | "getProviders">,
   provider: ProviderWire & { id: string },
   modelId: string,
 ): PiModel | undefined {

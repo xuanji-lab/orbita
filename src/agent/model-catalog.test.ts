@@ -5,8 +5,7 @@ import type { AddressInfo } from "node:net";
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryCredentialStore, InMemoryModelsStore, type Api, type Model } from "@earendil-works/pi-ai";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { InMemoryModelsStore, type Api, type Model } from "@earendil-works/pi-ai";
 import { KNOWN_PROVIDERS } from "../shared/known-providers.ts";
 import { CatalogRefresher, createModelRuntime, JsonFileModelsStore, piCatalogIds, refreshCatalogs } from "./model-catalog.ts";
 import type { FetchTokenrhythmResult } from "./tokenrhythm-catalog.ts";
@@ -62,37 +61,29 @@ describe("JsonFileModelsStore", () => {
 });
 
 describe("createModelRuntime 不读 pi CLI 的 ~/.pi/agent", () => {
-  test("pi 配置目录里的自定义 provider 与登录凭据都不进来（对照：pi 的默认选项会读进来）", async () => {
+  test("pi 配置目录里的自定义 provider 与登录凭据都不进来", async () => {
     const agentDir = tempDir();
     writeFileSync(
       join(agentDir, "models.json"),
       JSON.stringify({
         providers: {
-          leaky: {
-            baseUrl: "http://127.0.0.1:9/v1",
-            api: "openai-completions",
-            apiKey: "sk-leaky",
-            models: [{ id: "leaky-model" }],
-          },
+          leaky: { baseUrl: "http://127.0.0.1:9/v1", api: "openai-completions", apiKey: "sk-leaky", models: [{ id: "leaky-model" }] },
         },
       }),
     );
     writeFileSync(join(agentDir, "auth.json"), JSON.stringify({ anthropic: { type: "api_key", key: "sk-from-pi-cli" } }));
-    const previous = process.env["PI_CODING_AGENT_DIR"];
+    const saved = { dir: process.env["PI_CODING_AGENT_DIR"], key: process.env["ANTHROPIC_API_KEY"] };
     process.env["PI_CODING_AGENT_DIR"] = agentDir;
+    delete process.env["ANTHROPIC_API_KEY"];
     try {
-      // 对照组：证明这份配置 pi 确实读得懂，下面的「没读进来」才有意义
-      const piDefault = await ModelRuntime.create({ modelsStore: new InMemoryModelsStore() });
-      assert.ok(piDefault.getModel("leaky", "leaky-model"), "对照组应读到 models.json 里的自定义 provider");
-      assert.equal(piDefault.hasConfiguredAuth("anthropic"), true, "对照组应读到 auth.json 里的凭据");
-
       const ours = await createModelRuntime(new InMemoryModelsStore());
       assert.equal(ours.getModel("leaky", "leaky-model"), undefined);
-      assert.equal(ours.hasConfiguredAuth("anthropic"), false);
+      assert.equal(await ours.models.checkAuth("anthropic"), undefined, "auth.json 里的凭据不算数");
       assert.ok(ours.getModels("anthropic").length > 0, "内建目录照旧在");
     } finally {
-      if (previous === undefined) delete process.env["PI_CODING_AGENT_DIR"];
-      else process.env["PI_CODING_AGENT_DIR"] = previous;
+      if (saved.dir === undefined) delete process.env["PI_CODING_AGENT_DIR"];
+      else process.env["PI_CODING_AGENT_DIR"] = saved.dir;
+      if (saved.key !== undefined) process.env["ANTHROPIC_API_KEY"] = saved.key;
     }
   });
 });
@@ -123,7 +114,7 @@ describe("refreshCatalogs", () => {
       if (path === "/api/models/providers/opencode-go") {
         res.writeHead(200, {
           "content-type": "application/json",
-          // 比内建快照新，pi 才会采用（remoteModels 按 lastModified 比）
+          // 比内建快照新才会采用（按 lastModified 比）
           "last-modified": new Date(Date.now() + 60_000).toUTCString(),
           etag: '"v1"',
         });
@@ -156,21 +147,21 @@ describe("refreshCatalogs", () => {
       assert.equal(sent.includes("orbita-catalog-refresh-placeholder"), false, "占位凭据不该出现在请求里");
       assert.equal(seen[0]?.headers.authorization, undefined);
 
-      // 对照组：不放占位凭据、只开 pi 自己的联网开关，一个请求都不会发——闸门确实存在，
-      // 「只传 allowModelNetwork: true」在 Orbita 里等于什么都没做
-      await ModelRuntime.create({
-        modelsPath: null,
-        modelsStore: new JsonFileModelsStore(join(tempDir(), "cache.json")),
-        credentials: new InMemoryCredentialStore(),
-        allowModelNetwork: true,
-        catalogBaseUrl: `http://127.0.0.1:${port}`,
-      });
-      assert.equal(seen.length, 1, "没有凭据时 pi 不联网");
+      // 4 小时节流：不带 force 再刷一次，落在节流里，不再下载
+      const again = await refreshCatalogs({ store, ids: ["opencode-go"], catalogBaseUrl: `http://127.0.0.1:${port}` });
+      assert.equal(again.size, 0);
+      assert.equal(seen.length, 1, "4 小时内查过就不再下载");
 
       const after = await createModelRuntime(store);
       assert.ok(after.getModel("opencode-go", "brand-new-model"), "新型号进了目录");
       assert.equal(after.getModels("opencode-go").length, builtinCount + 1, "覆盖层是合并，内建条目一条不少");
-      assert.equal(after.hasConfiguredAuth("opencode-go"), false, "会话用的 runtime 看不到占位凭据");
+      const envKey = process.env["OPENCODE_API_KEY"];
+      delete process.env["OPENCODE_API_KEY"];
+      try {
+        assert.equal(await after.models.checkAuth("opencode-go"), undefined, "会话用的目录看不到占位凭据");
+      } finally {
+        if (envKey !== undefined) process.env["OPENCODE_API_KEY"] = envKey;
+      }
     } finally {
       server.close();
     }

@@ -1,41 +1,53 @@
 /**
- * pi 的 ModelRuntime 在 Orbita 里怎么建，以及内建目录怎么跟着 pi.dev 上新。
+ * 模型目录：pi-ai 的 `createModels` 之上，我们自己的服务商装配与 pi.dev 目录覆盖层。
  *
- * **为什么要自己给选项**：`ModelRuntime.create({})` 的默认值全指向 pi CLI 的 `~/.pi/agent`——
- * 读那里的 models.json（用户给 pi CLI 配的自定义 provider 会混进来）、auth.json（pi CLI 的
- * 登录凭据会被当成这里的凭据），目录缓存也写那里。那是另一个应用的配置。Orbita 的 provider 与
- * 密钥由主进程管、每次经内存注册交给 pi（model-registration.ts），所以这里一律：
- * - `modelsPath: null`：不读任何 models.json；
- * - `credentials`：空的内存凭据库，鉴权只来自注册时给的 apiKey；
- * - `modelsStore`：目录覆盖层缓存落 Orbita 自己的数据目录（主进程经 CATALOG_CACHE_ENV 告知路径）。
+ * **为什么不直接用 pi-ai 的 builtinProviders**：内建目录只是 pi 发版时的快照；新型号由 pi.dev 的
+ * 目录覆盖层补（4 小时节流、ETag 复验、比快照旧的缓存不用）。pi-ai 不带这一层（它在 pi 的
+ * coding-agent 包里），这里按同一个协议自己拉——只拉主进程说过的那几家（审核 F-1）。
  *
- * **为什么要占位凭据**：pi 的目录刷新以「这家有凭据」为闸门（pi-ai Models.refresh →
- * resolveRefreshCredential：解不出凭据就不联网）——它只给用户在 pi 里配置过的服务商刷新。
- * Orbita 的密钥不进 pi 的凭据库，pi 眼里一家都没配，闸门永远不开。所以刷新专用的那个 runtime
- * 给要刷新的目录各放一枚占位凭据，只为开闸：pi.dev 的目录请求不带凭据（remote-catalog-provider：
- * 只发 accept、User-Agent 与 If-None-Match），占位值不会发给任何人。这个 runtime 只用来刷新，
- * 用完即弃，绝不拿它发模型请求。
+ * **服务商怎么装配**：Orbita 的服务商与密钥由主进程管、每次经内存注册交给这里
+ * （model-registration.ts）。注册是「同 id 的内建服务商 + 我们的注册」叠一层：
+ * - 带 `models`：型号整份替换成注册里的（目录的官方参数由 model-registration 先合并好再交来）；
+ * - 不带：沿用内建型号，地址换成注册的；
+ * - 密钥是**字面值**：按注册给的原样发，不当环境变量名、不当命令；`headers` 同理，加在鉴权头上；
+ * - 再次注册同一家：没给的字段沿用上一次（kernel 进程长寿，先注 auth 面、再补 models 两步走）；
+ * - 发请求：型号的协议内建服务商有实现就走内建的（保住各家的特殊处理），否则按协议取 pi-ai 的通用实现。
+ * 其余（鉴权解析、OpenCode 会话头、上下文规整、思考档夹取）全是 pi-ai `Models` 自己的，原样用。
  *
- * 刷新哪些：**只有用户已添加的服务商用到的那几份目录**（审核 F-1，2026-10-25）——agent 进程
- * 不知道用户添加了谁，由主进程经 `refreshCatalogs` 命令告知（CatalogRefresher）；没收到之前
- * 一份也不拉。没添加的服务商在设置页「添加」里看到的是内建快照或旧缓存（点开卡片时现拉一次）。
- * 每家的节流（4 小时内不重复下载、过期用 ETag 复验）是 pi 自己做的。
- * pi 升级后，比内建快照旧的缓存会被它自动忽略（remoteModels 按 lastModified 比），不用我们清。
+ * **不读 ~/.pi/agent**：不读 models.json / auth.json，凭据库是空的内存库，鉴权只来自注册时给的 apiKey；
+ * 目录缓存落 Orbita 自己的数据目录（主进程经 CATALOG_CACHE_ENV 告知路径）。
+ *
+ * **为什么要占位凭据**：pi-ai 的 refresh 以「这家已配置」为联网闸门（Models.refresh →
+ * checkProviderAuth）。刷新专用的 catalog 给要刷新的目录各放一枚占位凭据，只为开闸：pi.dev 的目录请求
+ * 不带凭据（只发 accept、User-Agent 与 If-None-Match），占位值不会发给任何人。用完即弃，不拿它发模型请求。
  */
 import {
+  createModels,
+  getModelType,
   InMemoryCredentialStore,
   InMemoryModelsStore,
+  isModelType,
+  lazyStream,
+  type AnyModel,
+  type Api,
+  type ApiKeyAuth,
+  type Model,
+  type Models,
   type ModelsStore,
   type ModelsStoreEntry,
   type ModelsStoreOperationOptions,
+  type MutableModels,
+  type Provider,
+  type RefreshModelsContext,
 } from "@earendil-works/pi-ai";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { getApiProvider } from "@earendil-works/pi-ai/compat";
+import { builtinProviders, getBuiltinModelDataGeneratedAt } from "@earendil-works/pi-ai/providers/all";
 import { readFileSync } from "node:fs";
 import { writeJsonAtomic } from "../main/atomic-write.ts";
 import { CATALOG_CACHE_ENV } from "../shared/agent-ipc.ts";
 import { applyTokenrhythmFromCache, TOKENRHYTHM_CATALOG_ID, type FetchTokenrhythmResult } from "./tokenrhythm-catalog.ts";
 
-/** 刷新间隔。与 pi 的单家节流同为 4 小时（REMOTE_CATALOG_REFRESH_INTERVAL_MS，未导出） */
+/** 刷新间隔，也是单家目录的节流窗口：4 小时内查过就不再下载 */
 export const CATALOG_REFRESH_EVERY_MS = 4 * 60 * 60 * 1000;
 
 /**
@@ -116,16 +128,340 @@ export function catalogStore(): ModelsStore {
   return sharedStore;
 }
 
+// ── pi.dev 目录覆盖层 ─────────────────────────────────────────────────────────────
+
+const CATALOG_BASE_URL = "https://pi.dev";
+/** 单次请求的超时；超时与 408/425/429/5xx 立刻重试，最多 3 次（与 pi 的目录拉取同一口径） */
+const CATALOG_ATTEMPT_TIMEOUT_MS = 4_000;
+const CATALOG_ATTEMPTS = 3;
+const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+/** 能消费的型号类型：随 `?types=` 发出，服务端回全类型分片 */
+const CATALOG_MODEL_TYPES = ["chat", "image", "classifier"];
+
+/** 内建快照的生成时间：比它旧的 pi.dev 目录不用（pi 升级后旧缓存自动作废） */
+const BUILTIN_GENERATED_AT = getBuiltinModelDataGeneratedAt();
+
+async function requestCatalog(providerId: string, baseUrl: string, signal: AbortSignal, etag?: string): Promise<Response> {
+  const url = new URL(`/api/models/providers/${encodeURIComponent(providerId)}`, baseUrl);
+  url.searchParams.set("types", CATALOG_MODEL_TYPES.join(","));
+  const headers: Record<string, string> = { accept: "application/json", "User-Agent": "Orbita" };
+  if (etag !== undefined) headers["if-none-match"] = etag;
+  for (let attempt = 1; ; attempt++) {
+    signal.throwIfAborted();
+    try {
+      const response = await fetch(url, { headers, signal: AbortSignal.any([signal, AbortSignal.timeout(CATALOG_ATTEMPT_TIMEOUT_MS)]) });
+      if (!RETRYABLE_STATUS.has(response.status) || attempt >= CATALOG_ATTEMPTS) return response;
+      await response.body?.cancel().catch(() => undefined);
+    } catch (error) {
+      if (signal.aborted || attempt >= CATALOG_ATTEMPTS) throw error;
+    }
+  }
+}
+
+/** 响应体 → 这家的型号（数组 / `{models}` / 以 id 为键的对象三种写法都认）；类型不认识的丢掉 */
+function parseCatalog(providerId: string, value: unknown): AnyModel[] {
+  const entries = Array.isArray(value)
+    ? value
+    : typeof value === "object" && value !== null && "models" in value && Array.isArray(value.models)
+      ? value.models
+      : typeof value === "object" && value !== null
+        ? Object.values(value)
+        : undefined;
+  if (entries === undefined) throw new Error(`Invalid model catalog for provider "${providerId}"`);
+  return entries
+    .filter((entry): entry is { id: unknown; type?: unknown } => typeof entry === "object" && entry !== null && "id" in entry)
+    .filter((entry) => entry.type === undefined || (typeof entry.type === "string" && CATALOG_MODEL_TYPES.includes(entry.type)))
+    .map((entry) => ({ ...entry, provider: providerId }) as AnyModel);
+}
+
+async function readCatalog(providerId: string, response: Response): Promise<Required<Pick<ModelsStoreEntry, "models" | "lastModified">> & { etag?: string }> {
+  const lastModified = Date.parse(response.headers.get("last-modified") ?? "");
+  const etag = response.headers.get("etag") ?? undefined;
+  return {
+    models: parseCatalog(providerId, await response.json()),
+    lastModified: Number.isNaN(lastModified) ? 0 : lastModified,
+    ...(etag === undefined ? {} : { etag }),
+  };
+}
+
+function isNewer(lastModified: number | undefined): boolean {
+  return BUILTIN_GENERATED_AT === undefined || (lastModified !== undefined && lastModified > BUILTIN_GENERATED_AT);
+}
+
+/** 同类型同 id 后者覆盖前者 */
+function mergeModels(baseline: readonly AnyModel[], overlay: readonly AnyModel[]): AnyModel[] {
+  const merged = new Map<string, AnyModel>();
+  for (const model of [...baseline, ...overlay]) merged.set(`${getModelType(model)}\0${model.id}`, model);
+  return [...merged.values()];
+}
+
+function allModelsOf(provider: Provider | undefined): readonly AnyModel[] {
+  return provider === undefined ? [] : (provider.getAllModels?.() ?? provider.getModels());
+}
+
 /**
- * Orbita 里建 ModelRuntime 的唯一入口：不读 ~/.pi/agent，目录读 Orbita 自己的缓存，不联网。
- * 会话、起名、探测、列目录都走它——「能不能用某个模型」只该有一套真相。
+ * 内建服务商 + pi.dev 覆盖层。缓存比内建快照新才用；4 小时内查过不再下载（force 除外），
+ * 过期且有缓存体时带 ETag 复验；404 / 501 记「这家没有在线目录」；其余失败保留旧缓存并报错。
+ */
+function withPiDevCatalog(provider: Provider, baseUrl: string): Provider {
+  let overlay: AnyModel[] = [];
+  const fromEntry = (entry: Readonly<ModelsStoreEntry> | undefined) =>
+    entry !== undefined && isNewer(entry.lastModified) ? entry.models.filter((model) => model.provider === provider.id) : [];
+  return {
+    ...provider,
+    getModels: () => mergeModels(provider.getModels(), overlay.filter((model) => isModelType(model, "chat"))).filter((model): model is Model<Api> => isModelType(model, "chat")),
+    getAllModels: () => mergeModels(allModelsOf(provider), overlay),
+    // pi.dev 的目录不看这家的登录状态
+    refreshModelsAuth: "configured",
+    refreshModels: async (context: RefreshModelsContext) => {
+      const stored = context.stored;
+      const restored = fromEntry(stored);
+      if (!(await context.publish({ update: () => void (overlay = restored) }))) return;
+      if (!context.allowNetwork || context.signal.aborted) return;
+      // 4 小时内查过就不下载。没有 lastModified 的条目（首次失败留下的）总是重拉：它不会被采用，等就是一直空着
+      if (
+        context.force !== true &&
+        stored?.checkedAt !== undefined &&
+        stored.lastModified !== undefined &&
+        Date.now() - stored.checkedAt < CATALOG_REFRESH_EVERY_MS
+      ) {
+        return;
+      }
+      // 只有手上有缓存体时才复验，304 才不会把覆盖层留空
+      const validator = stored !== undefined && stored.models.length > 0 ? stored.etag : undefined;
+      const response = await requestCatalog(provider.id, baseUrl, context.signal, validator);
+      if (context.signal.aborted) return;
+      const checkedAt = Date.now();
+      if (response.status === 304 && stored !== undefined) {
+        await context.publish({ persist: { ...stored, checkedAt } });
+        return;
+      }
+      if (response.status === 404 || response.status === 501) {
+        await context.publish({ persist: { ...(stored ?? { models: [] }), checkedAt, lastModified: 0, etag: undefined } });
+        return;
+      }
+      if (!response.ok) {
+        // 临时失败：缓存体与 ETag 仍有效，只挪检查时间
+        await context.publish({ persist: { ...(stored ?? { models: [] }), checkedAt } });
+        throw new Error(`Model catalog request failed for ${provider.id}: ${response.status}`);
+      }
+      const entry = { ...(await readCatalog(provider.id, response)), checkedAt };
+      if (context.signal.aborted) return;
+      const published = fromEntry(entry);
+      await context.publish({ persist: entry, update: () => void (overlay = published) });
+    },
+  };
+}
+
+/**
+ * OpenRouter 的缓存是另一种形状（沿用 pi 的个性化目录）：存的是「内建 + 更新的 pi.dev 目录」合并后的整份清单，
+ * 有就整份顶替内建；每次联网都重下、不节流不复验。pi 原本还拿用户的密钥按 /models/user 收窄成这把 key 能用的
+ * 型号——我们的刷新只有占位凭据（OpenRouter 必回 401、清单原样），这一步不做。
+ */
+function withOpenRouterCatalog(provider: Provider, baseUrl: string): Provider {
+  let saved: AnyModel[] = [];
+  const all = () => (saved.length > 0 ? saved : allModelsOf(provider));
+  return {
+    ...provider,
+    getModels: () => all().filter((model): model is Model<Api> => isModelType(model, "chat")),
+    getAllModels: all,
+    refreshModels: async (context: RefreshModelsContext) => {
+      const restored = (context.stored?.models ?? []).filter((model) => model.provider === provider.id);
+      if (!(await context.publish({ update: () => void (saved = restored) }))) return;
+      if (!context.allowNetwork || context.signal.aborted) return;
+      const response = await requestCatalog(provider.id, baseUrl, context.signal);
+      if (context.signal.aborted) return;
+      let remote: AnyModel[] = [];
+      if (response.status !== 404 && response.status !== 501) {
+        if (!response.ok) throw new Error(`Model catalog request failed for ${provider.id}: ${response.status}`);
+        const catalog = await readCatalog(provider.id, response);
+        if (isNewer(catalog.lastModified)) remote = [...catalog.models];
+      }
+      const merged = mergeModels(allModelsOf(provider), remote);
+      await context.publish({ persist: { models: merged, checkedAt: Date.now() }, update: () => void (saved = merged) });
+    },
+  };
+}
+
+function catalogProviders(baseUrl: string): Provider[] {
+  return builtinProviders().map((provider) => {
+    // radius 是自托管网关，没有 pi.dev 目录（pi 同样不给它挂覆盖层）
+    if (provider.id === "radius") return provider;
+    return provider.id === "openrouter" ? withOpenRouterCatalog(provider, baseUrl) : withPiDevCatalog(provider, baseUrl);
+  });
+}
+
+// ── 我们的注册叠在内建服务商上 ─────────────────────────────────────────────────────────
+
+/** 注册里的一条型号：协议、地址、所属可省（省了取注册的 / 内建的） */
+export type ModelDefinition = Omit<Model<Api>, "api" | "provider" | "baseUrl"> & { api?: Api; provider?: string; baseUrl?: string };
+
+/** registerProvider 的第二参：Orbita 真传的就这几样（model-registration 的 toAuthConfig / toFallbackRegistration、基元律动） */
+export interface ProviderRegistration {
+  name?: string;
+  /** 字面值，原样发出 */
+  apiKey?: string;
+  baseUrl?: string;
+  api?: Api;
+  /** 字面值，加在鉴权头上 */
+  headers?: Record<string, string>;
+  /** 给了就整份替换这家的型号 */
+  models?: ModelDefinition[];
+}
+
+/** 一条型号定义 → 型号对象。协议 / 地址：型号的 ?? 注册的 ?? 内建同 id（否则同协议、否则 openai-completions、否则第一条）的 */
+function modelOf(providerId: string, base: readonly AnyModel[], registration: ProviderRegistration, definition: ModelDefinition): Model<Api> {
+  const chat = base.filter((model): model is Model<Api> => isModelType(model, "chat"));
+  const defaults =
+    chat.find((model) => model.id === definition.id) ??
+    (definition.api === undefined ? undefined : chat.find((model) => model.api === definition.api)) ??
+    chat.find((model) => model.api === "openai-completions") ??
+    chat[0];
+  const api = definition.api ?? registration.api ?? defaults?.api;
+  if (api === undefined) {
+    throw new Error(`Provider ${providerId}, model ${definition.id}: no "api" specified. Set it at model level or provider level.`);
+  }
+  const baseUrl = definition.baseUrl ?? registration.baseUrl ?? defaults?.baseUrl;
+  if (baseUrl === undefined) throw new Error(`Provider ${providerId}: "baseUrl" is required when defining custom models.`);
+  return { ...definition, api, provider: providerId, baseUrl };
+}
+
+function composeProvider(providerId: string, base: Provider | undefined, registration: ProviderRegistration): Provider {
+  const allModels = (): AnyModel[] => {
+    const baseModels = allModelsOf(base);
+    if (registration.models === undefined) {
+      const baseUrl = registration.baseUrl;
+      return baseUrl === undefined ? [...baseModels] : baseModels.map((model) => ({ ...model, baseUrl }));
+    }
+    return registration.models.map((definition) => modelOf(providerId, baseModels, registration, definition));
+  };
+  // 当场校验：注册坏了在 registerProvider 里就抛，不等到发请求
+  allModels();
+  const inherited = base?.auth.apiKey;
+  const key = registration.apiKey;
+  const oauth = base?.auth.oauth;
+  // 只有 OAuth 的内建服务商、注册又没给密钥：不凭空造一个密钥鉴权
+  const apiKey: ApiKeyAuth | undefined =
+    inherited === undefined && key === undefined && oauth !== undefined
+      ? undefined
+      : {
+          name: inherited?.name ?? "API key",
+          ...(inherited?.login === undefined ? {} : { login: inherited.login }),
+          check: async (input) => {
+            if (key !== undefined) return { type: "api_key", source: "configured API key" };
+            if (inherited?.check !== undefined) return inherited.check(input);
+            const resolved = await inherited?.resolve(input);
+            return resolved === undefined ? undefined : { type: "api_key", source: resolved.source };
+          },
+          resolve: async (input) => {
+            // 内建服务商的解析照走（个别家要据密钥补地址 / 头），只是密钥换成注册给的
+            const result =
+              key === undefined
+                ? await inherited?.resolve(input)
+                : inherited !== undefined
+                  ? await inherited.resolve({ ...input, credential: { type: "api_key", key } })
+                  : { auth: { apiKey: key }, source: "configured API key" };
+            if (result === undefined) return undefined;
+            const headers = registration.headers;
+            return headers === undefined ? result : { ...result, auth: { ...result.auth, headers: { ...result.auth.headers, ...headers } } };
+          },
+        };
+  if (apiKey === undefined && oauth === undefined) throw new Error(`Provider ${providerId}: no authentication method configured.`);
+  const baseSpeaks = (model: Model<Api>) => base?.getModels().some((entry) => entry.api === model.api) ?? false;
+  const streamWith = (model: Model<Api>, simple: boolean, run: (target: Pick<Provider, "stream" | "streamSimple">) => ReturnType<Provider["stream"]>, signal: AbortSignal | undefined) =>
+    lazyStream(
+      model,
+      async () => {
+        if (base !== undefined && baseSpeaks(model)) return run(base);
+        const api = getApiProvider(model.api);
+        if (api === undefined) throw new Error(`No API provider registered for api: ${model.api}`);
+        return run(api);
+      },
+      undefined,
+      signal,
+    );
+  const baseUrl = registration.baseUrl ?? base?.baseUrl;
+  return {
+    id: providerId,
+    name: registration.name ?? base?.name ?? providerId,
+    ...(baseUrl === undefined ? {} : { baseUrl }),
+    ...(base?.headers === undefined ? {} : { headers: base.headers }),
+    auth: { ...(apiKey === undefined ? {} : { apiKey }), ...(oauth === undefined ? {} : { oauth }) },
+    getModels: () => allModels().filter((model): model is Model<Api> => isModelType(model, "chat")),
+    getAllModels: allModels,
+    // 覆盖层的状态在内建服务商的闭包里：重新注册不丢、刷新照旧由它做
+    ...(base?.refreshModelsAuth === undefined ? {} : { refreshModelsAuth: base.refreshModelsAuth }),
+    ...(base?.refreshModels === undefined ? {} : { refreshModels: (context: RefreshModelsContext) => base.refreshModels?.(context) ?? Promise.resolve() }),
+    ...(base?.filterModels === undefined ? {} : { filterModels: base.filterModels.bind(base) }),
+    ...(base?.filterAllModels === undefined ? {} : { filterAllModels: base.filterAllModels.bind(base) }),
+    ...(base?.fetchDeferred === undefined ? {} : { fetchDeferred: base.fetchDeferred.bind(base) }),
+    ...(base?.cancelDeferred === undefined ? {} : { cancelDeferred: base.cancelDeferred.bind(base) }),
+    ...(base?.generateImages === undefined ? {} : { generateImages: base.generateImages.bind(base) }),
+    ...(base?.classify === undefined ? {} : { classify: base.classify.bind(base) }),
+    stream: (model, context, options) => streamWith(model, false, (target) => target.stream(model, context, options), options?.signal),
+    streamSimple: (model, context, options) => streamWith(model, true, (target) => target.streamSimple(model, context, options), options?.signal),
+  };
+}
+
+/**
+ * Orbita 的模型目录：pi-ai 的 Models（`models`，交给新内核与发请求）+ 注册 / 查询服务商。
+ * 会话、起名、探测、列目录都用它——「能不能用某个模型」只该有一套真相。
+ */
+export class ModelCatalog {
+  readonly models: MutableModels;
+  private readonly builtins: ReadonlyMap<string, Provider>;
+  private readonly registrations = new Map<string, ProviderRegistration>();
+
+  constructor(models: MutableModels, builtins: readonly Provider[]) {
+    this.models = models;
+    this.builtins = new Map(builtins.map((provider) => [provider.id, provider]));
+    for (const provider of builtins) models.setProvider(provider);
+  }
+
+  /** 注册 / 重注册一家。没给的字段沿用上一次注册的（undefined 不算给了） */
+  registerProvider(providerId: string, registration: ProviderRegistration): void {
+    const effective: ProviderRegistration = { ...this.registrations.get(providerId) };
+    for (const [field, value] of Object.entries(registration)) {
+      if (value !== undefined) Object.assign(effective, { [field]: value });
+    }
+    // 先装配（坏注册当场抛，不动已存的），再存
+    const provider = composeProvider(providerId, this.builtins.get(providerId), effective);
+    this.registrations.set(providerId, effective);
+    this.models.setProvider(provider);
+  }
+
+  getModel(providerId: string, modelId: string): Model<Api> | undefined {
+    return this.models.getModel(providerId, modelId);
+  }
+
+  getModels(providerId?: string): readonly Model<Api>[] {
+    return this.models.getModels(providerId);
+  }
+
+  getProviders(): readonly Provider[] {
+    return this.models.getProviders();
+  }
+}
+
+function newCatalog(store: ModelsStore, credentials: InMemoryCredentialStore, catalogBaseUrl = CATALOG_BASE_URL): ModelCatalog {
+  return new ModelCatalog(createModels({ credentials, modelsStore: store }), catalogProviders(catalogBaseUrl));
+}
+
+/**
+ * Orbita 里建模型目录的唯一入口：不读 ~/.pi/agent，目录读 Orbita 自己的缓存，不联网。
  * 建好顺手把基元律动的目录缓存灌进去（tokenrhythm-catalog.ts）：它不在 pi.dev 目录里，
  * 但设置页与会话注册都把它当一条普通目录条目用。
  */
-export async function createModelRuntime(store: ModelsStore = catalogStore()): Promise<ModelRuntime> {
-  const runtime = await ModelRuntime.create({ modelsPath: null, modelsStore: store, credentials: new InMemoryCredentialStore() });
-  applyTokenrhythmFromCache(runtime);
-  return runtime;
+export async function createModelRuntime(store: ModelsStore = catalogStore()): Promise<ModelCatalog> {
+  const catalog = newCatalog(store, new InMemoryCredentialStore());
+  await catalog.models.refresh({ allowNetwork: false });
+  applyTokenrhythmFromCache(catalog);
+  return catalog;
+}
+
+/** 交给新内核的 Models（durable 只认 pi-ai 的接口） */
+export function modelsOf(catalog: ModelCatalog): Models {
+  return catalog.models;
 }
 
 export interface RefreshCatalogsInput {
@@ -134,7 +470,7 @@ export interface RefreshCatalogsInput {
   ids: readonly string[];
   /** 测试用：把 pi.dev 换成本地假服务 */
   catalogBaseUrl?: string;
-  /** 不论 4 小时节流，立刻下载（测试用；pi 的 force） */
+  /** 不论 4 小时节流，立刻下载（测试用） */
   force?: boolean;
   signal?: AbortSignal;
 }
@@ -150,14 +486,8 @@ export async function refreshCatalogs(input: RefreshCatalogsInput): Promise<Read
   for (const id of ids) {
     await credentials.modify(id, async () => ({ type: "api_key", key: CATALOG_GATE_KEY }));
   }
-  const runtime = await ModelRuntime.create({
-    modelsPath: null,
-    modelsStore: input.store ?? catalogStore(),
-    credentials,
-    refreshOnCreate: false,
-    ...(input.catalogBaseUrl === undefined ? {} : { catalogBaseUrl: input.catalogBaseUrl }),
-  });
-  const result = await runtime.refresh({
+  const catalog = newCatalog(input.store ?? catalogStore(), credentials, input.catalogBaseUrl);
+  const result = await catalog.models.refresh({
     providers: [...ids],
     allowNetwork: true,
     ...(input.force === true ? { force: true } : {}),

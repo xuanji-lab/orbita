@@ -20,7 +20,7 @@ import { kernelChildTag, reapKernelChildren, tagShellCommand } from "./kernel-ch
 import { KernelSessions } from "./kernel-session.ts";
 import type { KernelTurnRuntime } from "./kernel-turn.ts";
 import { McpHub } from "./mcp.ts";
-import { createModelRuntime } from "./model-catalog.ts";
+import { createModelRuntime, modelsOf } from "./model-catalog.ts";
 import { registerAndResolveModel } from "./model-registration.ts";
 import { isToolReply, RequestBroker, toolReplyResult } from "./request-broker.ts";
 import { createShellPathResolver } from "./shell-path.ts";
@@ -48,8 +48,7 @@ function post(message: KernelMessage): void {
 /**
  * 模型目录：与旧内核**同一条装配路径**（model-catalog 的 createModelRuntime + model-registration 的
  * registerAndResolveModel）——服务商的协议、地址、白名单参数、思考档位表都按旧内核的规则解析，
- * 不让用户为新内核再配一遍。ModelRuntime 本身就实现 pi-ai 的 Models 接口，直接交给 durable。
- * （删旧内核那一步要换成 pi-ai 自己的 createModels：ModelRuntime 在 pi-coding-agent 里。）
+ * 不让用户为新内核再配一遍。交给 durable 的是目录里 pi-ai 的 Models（modelsOf）。
  */
 type KernelModelRuntime = Awaited<ReturnType<typeof createModelRuntime>>;
 let modelRuntime: KernelModelRuntime | null = null;
@@ -84,7 +83,7 @@ function migratorMinBytes(raw: string | undefined): { migrateElsewhereMinBytes?:
 
 function models(): Models {
   if (modelRuntime === null) throw new Error("kernel runtime is not initialized");
-  return modelRuntime;
+  return modelsOf(modelRuntime);
 }
 
 async function init(dir: string): Promise<void> {
@@ -117,7 +116,7 @@ async function init(dir: string): Promise<void> {
     settled: (sessionId, result) => post({ type: "turnSettled", sessionId, result }),
     bounceSteer: (sessionId, text, delivery) => post({ type: "steerBounced", sessionId, text, delivery }),
     ...(typeof exposedGc === "function" ? { collectGarbage: () => exposedGc?.() } : {}),
-    // 换模型的校验与旧内核 setLedgerModel 同一条路径：一次性 ModelRuntime 注册 + 解析
+    // 换模型的校验与旧内核 setLedgerModel 同一条路径：一次性模型目录注册 + 解析
     resolveModel: async (provider, modelId) => registerAndResolveModel(await createModelRuntime(), provider, modelId),
   });
   // 上次删了树里的一条、还没清行进程就没了（强杀 / 崩溃）：起来时把没打开的库的遗留墓碑清掉，不等那棵树下次被打开

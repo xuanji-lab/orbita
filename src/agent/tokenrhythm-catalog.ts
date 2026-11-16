@@ -40,7 +40,7 @@
  */
 import { readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { ModelCatalog, ModelDefinition } from "./model-catalog.ts";
 import { writeJsonAtomic } from "../main/atomic-write.ts";
 import { officialRates } from "../main/usage/task-cost.ts";
 import { CATALOG_CACHE_ENV, type BuiltinProvider } from "../shared/agent-ipc.ts";
@@ -178,7 +178,7 @@ export function tokenrhythmOfficialRates(
 }
 
 /** 注册条目的形状（pi registerProvider 第二参的 models 元素，从 PiProviderRegistration 推不出的字段按字面写） */
-type RegisteredModel = NonNullable<Parameters<ModelRuntime["registerProvider"]>[1]["models"]>[number];
+type RegisteredModel = ModelDefinition;
 
 /** 型号清单 + 官方单价 → pi 的 provider 注册配置（无鉴权：目录条目只供参数与清单，key 由用户实例注册时合并进来） */
 export function tokenrhythmRegistration(
@@ -208,7 +208,7 @@ export function tokenrhythmRegistration(
  * 把一份目录响应注册进运行时（解析 + 官方单价 + registerProvider）。
  * 返回注册进去的型号数；形状不对或一条不剩时返回 0、什么都不注册。幂等：重复注册 merge。
  */
-export function applyTokenrhythmCatalog(runtime: ModelRuntime, payload: unknown): number {
+export function applyTokenrhythmCatalog(runtime: Pick<ModelCatalog, "registerProvider" | "getProviders">, payload: unknown): number {
   const registration = registrationFor(runtime, payload);
   if (registration === null) return 0;
   runtime.registerProvider(TOKENRHYTHM_CATALOG_ID, registration);
@@ -218,7 +218,7 @@ export function applyTokenrhythmCatalog(runtime: ModelRuntime, payload: unknown)
 type Registration = ReturnType<typeof tokenrhythmRegistration>;
 
 /** 解析 + 查官方单价，得出注册配置；形状不对或一条不剩 → null */
-function registrationFor(runtime: ModelRuntime, payload: unknown): Registration | null {
+function registrationFor(runtime: Pick<ModelCatalog, "registerProvider" | "getProviders">, payload: unknown): Registration | null {
   const parsed = parseTokenrhythmCatalog(payload);
   if (parsed === null || parsed.models.length === 0) return null;
   // 官方单价从 pi 目录查：排除我们自己（重复 apply 时不自引用），也排除用户实例的合并条目
@@ -291,7 +291,7 @@ function fileStamp(path: string): string | undefined {
 let fromCacheMemo: { key: string; registration: Registration } | undefined;
 
 /** 建运行时时把缓存里的目录灌进去（createModelRuntime 调；没缓存就什么都不做） */
-export function applyTokenrhythmFromCache(runtime: ModelRuntime): number {
+export function applyTokenrhythmFromCache(runtime: Pick<ModelCatalog, "registerProvider" | "getProviders">): number {
   const path = tokenrhythmCachePath();
   if (path === undefined) return 0;
   const stamp = fileStamp(path);

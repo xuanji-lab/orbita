@@ -7,7 +7,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { InMemoryModelsStore } from "@earendil-works/pi-ai";
+import { createModelRuntime, type ModelCatalog } from "./model-catalog.ts";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { BuiltinProvider } from "../shared/agent-ipc.ts";
 import { CATALOG_CACHE_ENV } from "../shared/agent-ipc.ts";
@@ -294,12 +295,9 @@ describe("官方美元单价 —— 复用 officialRates，日期后缀去掉再
   });
 });
 
-/** 真 pi 运行时（不读 ~/.pi/agent、不联网），whitelist-consistency.test 同款 */
-async function freshRuntime(): Promise<ModelRuntime> {
-  return ModelRuntime.create({
-    modelsPath: null,
-    authPath: join(mkdtempSync(join(tmpdir(), "orbita-tokenrhythm-")), "auth.json"),
-  });
+/** 真模型目录（不读 ~/.pi/agent、不联网），whitelist-consistency.test 同款 */
+async function freshRuntime(): Promise<ModelCatalog> {
+  return createModelRuntime(new InMemoryModelsStore());
 }
 
 describe("注册进 pi 运行时 —— 下游当普通目录条目用", () => {
