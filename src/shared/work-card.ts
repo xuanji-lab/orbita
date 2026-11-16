@@ -6,6 +6,7 @@
  *
  * 纯模块：不 import electron / node，node --test 直接测。
  */
+import { isChatOnly } from "./capabilities.ts";
 import type { ChannelMessage, ChannelStatus } from "./channel.ts";
 import { parsePlan, PLAN_TOOL_NAME, type PlanItem } from "./plan.ts";
 import type { TranscriptItem } from "./transcript.ts";
@@ -29,6 +30,8 @@ export interface WorkCard {
   resumedAt: number | null;
   /** 暂停时父写的理由；没暂停 = null */
   pausedFor: string | null;
+  /** 派活时定的能力集（shared/capabilities.ts）；全带 = undefined */
+  capabilities?: string[];
 }
 
 /** 给模型读的说法（英文；模型回用户时按用户的语言说） */
@@ -60,7 +63,7 @@ export function latestPlan(items: readonly TranscriptItem[]): PlanItem[] | null 
 }
 
 export function workCardOf(input: {
-  meta: { id: string; title: string; durable?: { resumed?: number } };
+  meta: { id: string; title: string; durable?: { resumed?: number }; capabilities?: string[] };
   status: ChannelStatus;
   messages: readonly ChannelMessage[];
   items: readonly TranscriptItem[];
@@ -90,7 +93,14 @@ export function workCardOf(input: {
     quiet: isQuiet(input.now, input.running, input.lastActivityAt),
     resumedAt: input.meta.durable?.resumed ?? null,
     pausedFor: input.status === "paused" ? (lastPause?.text ?? null) : null,
+    ...(input.meta.capabilities === undefined ? {} : { capabilities: [...input.meta.capabilities] }),
   };
+}
+
+/** 小卡给模型看的「带了什么」：纯聊天 / 只带基础 / 基础 + 清单 */
+function givenText(capabilities: readonly string[]): string {
+  if (isChatOnly(capabilities)) return "chat only, no tools";
+  return capabilities.length === 0 ? "basic tools only" : `basic tools + ${capabilities.join(", ")}`;
 }
 
 /** 一组小卡压成给模型读的几行（每件一行；没有派出去的活就说没有） */
@@ -107,6 +117,7 @@ export function workCardsText(cards: readonly WorkCard[], now: number): string {
       if (card.pausedFor !== null) parts.push(`paused: ${card.pausedFor}`);
       if (card.quiet) parts.push("no activity for a while");
       if (card.resumedAt !== null) parts.push(`resumed after an app restart ${minutes(card.resumedAt)} min ago`);
+      if (card.capabilities !== undefined) parts.push(`given: ${givenText(card.capabilities)}`);
       return parts.join("; ");
     })
     .join("\n");

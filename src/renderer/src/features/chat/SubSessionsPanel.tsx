@@ -13,6 +13,7 @@
  * `SubSessionControls`——用户裁决：这些权限归用户，不经过父模型）+ `ChatView`
  * （自带标题头 + transcript，`hideComposer` 关掉输入框与排队条）。
  */
+import { capabilitiesLine } from "@shared/capabilities";
 import { useContext, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { selectTranscript } from "../../../../shared/transcript-state.ts";
 import { createPortal } from "react-dom";
@@ -273,6 +274,8 @@ function SubSessionRow(props: {
   const t = useT();
   const status = props.status;
   const mark = subSessionMark(status);
+  // 派活时定的能力集：带了哪几样（全带、只带基础不画）
+  const given = capabilitiesLine(props.meta.capabilities, t.subSessions.capabilities);
   return (
     <div className="inbox-row">
       <button type="button" className="inbox-row-main" onClick={props.onClick} title={t.subSessions.rowStatus[status]}>
@@ -287,6 +290,7 @@ function SubSessionRow(props: {
             <span className="inbox-row-ago row-trailing">{relativeTime(props.lastAt, t)}</span>
           </span>
           {props.latest !== "" && <span className={mark === "ask" ? "inbox-row-l2 ask" : "inbox-row-l2"}>{props.latest}</span>}
+          {given !== null && <span className="inbox-row-l3">{given}</span>}
         </span>
       </button>
       {props.onContinue !== undefined && (

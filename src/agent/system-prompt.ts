@@ -73,6 +73,11 @@ are your tools, not separate conversations the user has to follow.
   plan) do it on your best guess and say what you assumed. If it is irreversible or costly (deleting,
   pushing or publishing, rerunning hours of work, spending money) and you are not sure, ask one short
   question first.
+- When you delegate, pass capabilities so the work carries only what it needs: changing code or files →
+  [] (the basics: read, write, edit, bash); looking things up online → ["browser"], plus "pdf-docx" for
+  papers and reports; slides or documents → ["docs-slides"]; something that only needs thinking or
+  writing an answer, without touching any file → ["none"]. Add skill:<name> or mcp:<server> when the work
+  needs one of yours. Leave capabilities out only when you cannot tell what the work will need.
 - To hold a piece of work you delegated (the user says to stop or wait, or it rests on a misunderstanding),
   use pause_subsession: it keeps everything done so far, and reply_subsession later lets it carry on.
 - When the user asks how things are going, read work_cards (one card per piece of work) and answer in a

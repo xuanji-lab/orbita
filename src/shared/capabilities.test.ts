@@ -47,11 +47,16 @@ describe("能力集：解析与规范化", () => {
   });
 
   test("小卡一行：全带与只带基础不画；纯聊天与模块用口语", () => {
-    assert.equal(capabilitiesLine(undefined, "zh"), null);
-    assert.equal(capabilitiesLine([], "zh"), null);
-    assert.equal(capabilitiesLine(["none"], "zh"), "只聊天，不动文件");
-    assert.equal(capabilitiesLine(["pdf-docx", "browser", "skill:lit-intake"], "zh"), "带了：读 PDF 与 Word、浏览器、lit-intake");
-    assert.equal(capabilitiesLine(["browser"], "en"), "Has: browser");
+    const words = {
+      chatOnly: "只聊天",
+      has: (names: string) => `带了：${names}`,
+      separator: "、",
+      modules: { "pdf-docx": "读 PDF", image: "看图", browser: "浏览器", "docs-slides": "文档", terminal: "终端", store: "配置", tasks: "读会话" },
+    };
+    assert.equal(capabilitiesLine(undefined, words), null);
+    assert.equal(capabilitiesLine([], words), null);
+    assert.equal(capabilitiesLine(["none"], words), "只聊天");
+    assert.equal(capabilitiesLine(["pdf-docx", "browser", "skill:lit-intake"], words), "带了：读 PDF、浏览器、lit-intake");
   });
 });
 

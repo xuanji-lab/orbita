@@ -2372,6 +2372,21 @@ export const en = {
     doneCount: (count: number) => `${count} done`,
     parkedCount: (count: number) => `${count} parked`,
     inboxFoot: "Click a row to see that sub-session's full exchange with the parent",
+    /** 这件活带了什么（派活时定的能力集，@shared/capabilities）：全带与只带基础不画这一行 */
+    capabilities: {
+      chatOnly: "Chat only, no file access",
+      has: (names: string) => `Has: ${names}`,
+      separator: ", ",
+      modules: {
+        "pdf-docx": "PDF and Word",
+        image: "showing images",
+        browser: "browser",
+        "docs-slides": "documents and slides",
+        terminal: "terminal",
+        store: "agent settings",
+        tasks: "reading other sessions",
+      },
+    },
     openAsMainTip: "Switch the main pane to this sub-session",
     gone: "This sub-session is gone.",
     of: (title: string) => `Sub-sessions of "${title}"`,

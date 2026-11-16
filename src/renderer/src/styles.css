@@ -1615,6 +1615,15 @@ html[data-pointer-drag] iframe {
   color: var(--color-text-secondary);
 }
 
+/* 第三行：这件活带了什么（派活时定的能力集）；只是说明，最轻的一档 */
+.inbox-row-l3 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
 /* 末尾「做完 N 件」：一行，可聚焦，回车展开 */
 .inbox-done-fold {
   display: flex;

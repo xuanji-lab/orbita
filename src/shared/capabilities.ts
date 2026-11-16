@@ -36,27 +36,6 @@ export const MODULE_SUMMARY: Readonly<Record<CapabilityModule, string>> = {
   tasks: "read_task (read other sessions' transcripts)",
 };
 
-/** 给人看的模块名（小卡「带了：…」） */
-export const MODULE_LABEL_ZH: Readonly<Record<CapabilityModule, string>> = {
-  "pdf-docx": "读 PDF 与 Word",
-  image: "给你看图",
-  browser: "浏览器",
-  "docs-slides": "文档与幻灯片",
-  terminal: "终端",
-  store: "改智能体配置",
-  tasks: "读别的会话",
-};
-
-export const MODULE_LABEL_EN: Readonly<Record<CapabilityModule, string>> = {
-  "pdf-docx": "PDF and Word",
-  image: "images",
-  browser: "browser",
-  "docs-slides": "documents and slides",
-  terminal: "terminal",
-  store: "agent settings",
-  tasks: "other sessions",
-};
-
 export function isCapabilityModule(value: string): value is CapabilityModule {
   return (CAPABILITY_MODULES as readonly string[]).includes(value);
 }
@@ -121,14 +100,21 @@ export function namedInstalled(capabilities: readonly string[], prefix: (typeof 
   return capabilities.filter((entry) => entry.startsWith(prefix)).map((entry) => entry.slice(prefix.length));
 }
 
+/** 小卡那一行给人看的说法（界面语言的文案在 renderer 的 messages 里） */
+export interface CapabilitiesWords {
+  chatOnly: string;
+  has: (names: string) => string;
+  separator: string;
+  modules: Readonly<Record<CapabilityModule, string>>;
+}
+
 /**
- * 小卡一行「带了：浏览器、读 PDF 与 Word」的数据：只列可选模块与用户装的（基础不写）；全带 / 只带基础 = null（不画）；纯聊天 = 「只聊天」。
+ * 小卡一行「带了：浏览器、读 PDF 与 Word」的数据：只列可选模块与用户装的（基础不写）；全带 / 只带基础 = null（不画）；纯聊天单说。
  */
-export function capabilitiesLine(capabilities: readonly string[] | undefined, language: "zh" | "en"): string | null {
+export function capabilitiesLine(capabilities: readonly string[] | undefined, words: CapabilitiesWords): string | null {
   if (capabilities === undefined) return null;
-  if (isChatOnly(capabilities)) return language === "zh" ? "只聊天，不动文件" : "Chat only, no file access";
-  const labels = language === "zh" ? MODULE_LABEL_ZH : MODULE_LABEL_EN;
-  const names = capabilities.map((entry) => (isCapabilityModule(entry) ? labels[entry] : entry.slice(entry.indexOf(":") + 1)));
+  if (isChatOnly(capabilities)) return words.chatOnly;
+  const names = capabilities.map((entry) => (isCapabilityModule(entry) ? words.modules[entry] : entry.slice(entry.indexOf(":") + 1)));
   if (names.length === 0) return null;
-  return language === "zh" ? `带了：${names.join("、")}` : `Has: ${names.join(", ")}`;
+  return words.has(names.join(words.separator));
 }

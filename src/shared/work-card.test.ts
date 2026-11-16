@@ -41,4 +41,13 @@ describe("小卡（主智能体读的）", () => {
     const idle = workCardOf({ meta: { id: "c", title: "t" }, status: "running", messages: [], items: [], running: false, lastActivityAt: null, now: 0 });
     assert.match(workCardsText([idle], 0), /idle \(not finished/);
   });
+
+  test("能力集：全带不写；纯聊天、只带基础、基础 + 清单各说一句", () => {
+    const of = (capabilities?: string[]) =>
+      workCardsText([workCardOf({ meta: { id: "c", title: "t", ...(capabilities === undefined ? {} : { capabilities }) }, status: "running", messages: [], items: [], running: true, lastActivityAt: 0, now: 0 })], 0);
+    assert.doesNotMatch(of(), /given:/);
+    assert.match(of(["none"]), /given: chat only, no tools/);
+    assert.match(of([]), /given: basic tools only/);
+    assert.match(of(["pdf-docx", "browser"]), /given: basic tools \+ pdf-docx, browser/);
+  });
 });
