@@ -2,8 +2,8 @@
  * 新内核（pi-durable）的契约真源：主进程 ↔ kernel utility 进程的消息协议，与库文件的命名。
  *
  * 界面里的对话（根会话与它派出的子会话、自动化开的轮）由 kernel 进程跑：主进程把开轮 / 停止 / 抢跑 / 压缩 / 插话 /
- * 切档 / 回退 / 撤销 / 挪工作区 / 分支命令**原样**转给它（同一份 AgentCommand，开轮装配不为新内核另拼），
- * kernel 进程回的也是同一套 AgentEvent（转录 progress、phase、stats、审批、工具请求……），renderer 不认识 durable。
+ * 回退 / 撤销 / 挪工作区 / 分支命令**原样**转给它（同一份 AgentCommand，开轮装配不为新内核另拼），
+ * kernel 进程回的也是同一套 AgentEvent（转录 progress、phase、stats、工具请求……），renderer 不认识 durable。
  * 旧内核的主循环已删（2026-11-16）；还没迁进库的旧会话第一次开轮时由 kernel 迁（legacy-migrate.ts）。
  *
  * 队列仍在 renderer 的槽里（2026-11-14 主会话裁决，方案 §2.3 的 A）：kernel 一次只跑一条完整的开轮命令，
@@ -64,20 +64,20 @@ export type KernelForgetCommand = { type: "forget"; sessionId: string };
 
 /**
  * 转给新内核的会话命令：开轮（submit / interrupt / compact / continueRun）、停止、父→子插话、
- * 中途切档 / 换模型、生成标题、释放；本子编辑（回退 / 撤销 / 挪工作区，回执同旧内核是 piBookEdited / failed）、
+ * 中途换模型、生成标题、释放；本子编辑（回退 / 撤销 / 挪工作区，回执同旧内核是 piBookEdited / failed）、
  * 分支（回执 created）、删树里的一条。与发给旧内核的同形（continueRun / branch 的两个字段 / forget 除外）。
  */
 export type KernelSessionCommand =
   | Extract<
       AgentCommand,
-      { type: "submit" | "interrupt" | "compact" | "abort" | "steer" | "setMode" | "setModel" | "generateTitle" | "dispose" | "revertPiBook" | "undoPiBook" | "movePiBook" }
+      { type: "submit" | "interrupt" | "compact" | "abort" | "steer" | "setModel" | "generateTitle" | "dispose" | "revertPiBook" | "undoPiBook" | "movePiBook" }
     >
   | KernelContinueCommand
   | KernelBranchCommand
   | KernelForgetCommand;
 
-/** 转给新内核的回执：审批回答、意图确认、工具请求的回执（`*Result`，按 requestId 配对） */
-export type KernelReplyCommand = Extract<AgentCommand, { type: "permissionAnswer" | "intentConfirmResult" | `${string}Result` }>;
+/** 转给新内核的回执：意图确认、工具请求的回执（`*Result`，按 requestId 配对） */
+export type KernelReplyCommand = Extract<AgentCommand, { type: "intentConfirmResult" | `${string}Result` }>;
 
 export type KernelCommand =
   /** 进程就绪后的第一句：库目录（`<userData>/durable`） */
@@ -116,7 +116,7 @@ export type KernelTurnResult =
     };
 
 export type KernelMessage =
-  /** 一轮的界面事件、工具请求、审批：与旧内核同一套 AgentEvent（含 ready） */
+  /** 一轮的界面事件、工具请求：与旧内核同一套 AgentEvent（含 ready） */
   | AgentEvent
   /** 一轮落定（phase idle 之前到）：主进程据此清 meta.durable.running、记迁移失败 */
   | { type: "turnSettled"; sessionId: string; result: KernelTurnResult }

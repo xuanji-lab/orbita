@@ -443,7 +443,7 @@ export function App() {
     overlay !== null || mainOpenId === "" || mainOpenMeta?.parentId !== undefined ? null : mainOpenId;
   const channelParentTitle = mainOpenMeta?.title ?? "";
 
-  // 通道清单：右栏入口的「在等你」角标（waiting + approval）从这里算。父子会话面板
+  // 通道清单：右栏入口的「在等你」角标（waiting + interrupted）从这里算。父子会话面板
   // 已删（2026-10-12 用户裁决）：它总是自己弹出，且把两边对话抽到第三个又长又啰嗦
   // 的地方——沟通回到两边对话流，Sub-sessions 面板变收件箱，不再有任何自动弹出。
   const channelSummaries = useChannelSummaries(channelParentId);
@@ -468,9 +468,9 @@ export function App() {
    */
   const subSessionChildren = channelParentId === null ? [] : childSessions(session.sessions, channelParentId);
   const hasSubSessions = subSessionChildren.length > 0;
-  /** 「在等你」的子会话数（question + 待审批 + 被崩溃打断等你点继续）：右栏入口的角标，为 0 不显示 */
+  /** 「在等你」的子会话数（question + 被崩溃打断等你点继续）：右栏入口的角标，为 0 不显示 */
   const subStatuses = subSessionChildren.map((meta) => subSessionStatusOf(meta.id, channelSummaries.get(meta.id)?.status, engine));
-  const waitingOnYou = subStatuses.filter((status) => status === "waiting" || status === "approval" || status === "interrupted").length;
+  const waitingOnYou = subStatuses.filter((status) => status === "waiting" || status === "interrupted").length;
   /** 其中被崩溃打断、等你点「继续」的：子会话入口的提示里单说一句（只说「等你」会以为是去批什么） */
   const interruptedChildren = subStatuses.filter((status) => status === "interrupted").length;
 
@@ -867,12 +867,10 @@ export function App() {
       const state = sessionRunState({
         slot: {
           phase: session.phaseOf(meta.id),
-          approvals: session.approvalsOf(meta.id).length,
           planAwaiting: session.planAwaitingOf(meta.id),
         },
         children: childSessions(session.sessions, meta.id).map((child) => ({
           phase: session.phaseOf(child.id),
-          approvals: session.approvalsOf(child.id).length,
           planAwaiting: session.planAwaitingOf(child.id),
           interrupted: session.interruptedOf(child.id),
         })),
@@ -891,8 +889,8 @@ export function App() {
       });
     }
     return orderNoticeEntries(rows);
-    // phaseOf / approvalsOf 引用稳定（useCallback([])），槽变化靠 engine.states 进依赖
-  }, [session.sessions, session.workspaces, session.phaseOf, session.approvalsOf, session.planAwaitingOf, session.interruptedOf, engine.states]);
+    // phaseOf 引用稳定（useCallback([])），槽变化靠 engine.states 进依赖
+  }, [session.sessions, session.workspaces, session.phaseOf, session.planAwaitingOf, session.interruptedOf, engine.states]);
   /** 铃铛清单点行：主槽打开它；有未读的话顺手清（watchedKey 那一拍也会清，
    *  但它若已在主槽就没有那一拍了，这里兑底） */
   const openFromNotice = useCallback(

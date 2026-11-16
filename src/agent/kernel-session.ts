@@ -1,5 +1,5 @@
 /**
- * 新内核里一条会话的生命周期：旧内核 runtime.ts 的 handle()（submit / interrupt / compact / abort / steer / setMode /
+ * 新内核里一条会话的生命周期：旧内核 runtime.ts 的 handle()（submit / interrupt / compact / abort / steer /
  * setModel / generateTitle / dispose）在 durable 上的对位。不 import electron，`node --test` 直接测
  * （库池用 MemoryStorage、模型用 faux）；进程壳在 kernel-runtime.ts。
  *
@@ -13,7 +13,6 @@
  *   并行（方案 §2.2 第 11 行），这一步不改界面的压缩语义。
  * - 父→子插话（steer）：交给 durable 的 inbox（whenBusy: steer / followUp，whenIdle: reject），这一轮等到会话空闲才算完
  *   （kernel-turn.ts 的 runTurn），所以插话开出的后续 run 仍在这一轮里；用户排队的消息不进 inbox，两条路互不相交。
- * - 中途切档：账本里的 mode 现读（闸门的 currentMode），对正在跑的这一轮的下一个工具调用立刻生效。
  */
 import { randomUUID } from "node:crypto";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -25,7 +24,6 @@ import { ConversationIdle, LiveDoc, UsageDoc, type ContextView, type Conversatio
 import type { AgentCommand, AgentEvent, AgentStats, ProviderSecrets } from "../shared/agent-ipc.ts";
 import { composeIntentPrompt } from "../shared/intent-recall.ts";
 import { durableBookRef, kernelLibraryName, type KernelContinueCommand, type KernelSessionCommand, type KernelTurnResult } from "../shared/kernel.ts";
-import type { PermissionMode } from "../shared/permission.ts";
 import { attachmentBlocks, splitEchoBlocks } from "../shared/prompt-attachments.ts";
 import { COMPACTION_DEFAULT } from "../shared/settings.ts";
 import { compactionBoundaryTimestamp, compactionErrorText, type TurnTiming } from "./compaction-settings.ts";
@@ -52,7 +50,6 @@ type OpenCommand = TurnCommand | CompactCommand | KernelContinueCommand;
 
 /** 跨轮账本里的一条（旧内核 runtime.ts 的 LedgerNote 的对位）：不持有 durable 对象，会话不在跑时也活着 */
 interface SessionNote {
-  mode: PermissionMode;
   titleInFlight: boolean;
   apiKey: string;
   headers?: Record<string, string>;
@@ -240,7 +237,7 @@ export class KernelSessions {
   private note(sessionId: string): SessionNote {
     let note = this.notes.get(sessionId);
     if (note === undefined) {
-      note = { mode: "plan", titleInFlight: false, apiKey: "", model: undefined };
+      note = { titleInFlight: false, apiKey: "", model: undefined };
       this.notes.set(sessionId, note);
     }
     return note;
@@ -293,7 +290,7 @@ export class KernelSessions {
       return;
     }
     if (command.type === "abort") {
-      // 只停当前轮；排队在 renderer，idle 到了照常投（停止不替用户清队）。挂着的审批随 abort 的 context 结掉
+      // 只停当前轮；排队在 renderer，idle 到了照常投（停止不替用户清队）
       abortCycle(this.running, command.sessionId);
       this.deps.intentConfirm.settle(command.sessionId);
       return;
@@ -301,11 +298,6 @@ export class KernelSessions {
     if (command.type === "dispose") {
       await killCycle(this.running, command.sessionId);
       this.forgetNotes(command.sessionId);
-      return;
-    }
-    if (command.type === "setMode") {
-      // 账本字段：正在跑的轮的闸门现读它，下一个工具调用立刻按新档判；不在跑也合法，下一轮开轮时被命令里的档覆盖
-      this.note(command.sessionId).mode = command.mode;
       return;
     }
     if (command.type === "setModel") {
@@ -466,7 +458,6 @@ export class KernelSessions {
 
   private async open(library: string, command: OpenCommand): Promise<KernelParts> {
     const note = this.note(command.sessionId);
-    note.mode = command.mode;
     const provider = withOpencodeSession(command.provider, command.sessionId);
     note.apiKey = provider.apiKey;
     if (provider.headers === undefined) delete note.headers;
@@ -660,7 +651,6 @@ export class KernelSessions {
       target.compaction,
       {
         observer: {
-          mode: () => this.note(sessionId).mode,
           toolStart: (callId, name, args) => view.toolStart(callId, name, args),
           toolUpdate: (callId, name, partial) => view.toolUpdate(callId, name, partial),
           toolAllowed: (callId, name, input) => parts.tracker.noteAllowed(callId, name, input),

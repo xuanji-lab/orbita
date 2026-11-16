@@ -15,96 +15,78 @@ import {
 } from "./sub-sessions-rows.ts";
 
 describe("subSessionRowStatus", () => {
-  it("channelStatus waiting：不管 running/needsApproval 是什么都判 waiting", () => {
+  it("channelStatus waiting：不管 running 是什么都判 waiting", () => {
     strictEqual(
-      subSessionRowStatus({ channelStatus: "waiting", needsApproval: true, running: true }),
+      subSessionRowStatus({ channelStatus: "waiting", running: true }),
       "waiting",
     );
   });
 
-  it("有未答审批、非 waiting：判 approval，即便同时在跑", () => {
+  it("在跑、非 waiting：判 running", () => {
     strictEqual(
-      subSessionRowStatus({ channelStatus: "running", needsApproval: true, running: true }),
-      "approval",
-    );
-  });
-
-  it("在跑、无审批、非 waiting：判 running", () => {
-    strictEqual(
-      subSessionRowStatus({ channelStatus: "running", needsApproval: false, running: true }),
+      subSessionRowStatus({ channelStatus: "running", running: true }),
       "running",
     );
   });
 
-  it("通道 done、不在跑、无审批：判 done", () => {
+  it("通道 done、不在跑：判 done", () => {
     strictEqual(
-      subSessionRowStatus({ channelStatus: "done", needsApproval: false, running: false }),
+      subSessionRowStatus({ channelStatus: "done", running: false }),
       "done",
     );
   });
 
-  it("通道 failed、不在跑、无审批：判 failed", () => {
+  it("通道 failed、不在跑：判 failed", () => {
     strictEqual(
-      subSessionRowStatus({ channelStatus: "failed", needsApproval: false, running: false }),
+      subSessionRowStatus({ channelStatus: "failed", running: false }),
       "failed",
     );
   });
 
-  it("通道 running（只有 task）、不在跑、无审批：判 idle", () => {
+  it("通道 running（只有 task）、不在跑：判 idle", () => {
     strictEqual(
-      subSessionRowStatus({ channelStatus: "running", needsApproval: false, running: false }),
+      subSessionRowStatus({ channelStatus: "running", running: false }),
       "idle",
     );
   });
 
-  it("channelStatus 缺席（还没有通道摘要）：按 running/needsApproval 走，否则 idle", () => {
+  it("channelStatus 缺席（还没有通道摘要）：按 running 走，否则 idle", () => {
     strictEqual(
-      subSessionRowStatus({ channelStatus: undefined, needsApproval: false, running: false }),
+      subSessionRowStatus({ channelStatus: undefined, running: false }),
       "idle",
     );
   });
 
-  it("stopped 压过 needsApproval / running——用户终止了就别再拿待批 / 在跑引导用户", () => {
-    strictEqual(
-      subSessionRowStatus({ channelStatus: "stopped", needsApproval: true, running: true }),
-      "stopped",
-    );
-    strictEqual(
-      subSessionRowStatus({ channelStatus: "stopped", needsApproval: false, running: false }),
-      "stopped",
-    );
+  it("stopped 压过 running——用户终止了就别再拿在跑引导用户", () => {
+    strictEqual(subSessionRowStatus({ channelStatus: "stopped", running: true }), "stopped");
+    strictEqual(subSessionRowStatus({ channelStatus: "stopped", running: false }), "stopped");
   });
 });
 
 describe("subSessionStatusOf", () => {
-  /** 假引擎：running 里的会话在跑，approving 里的有待答审批（两者可同时） */
-  const engine = (running: readonly string[], approving: readonly string[]): SubSessionEngineSlots => ({
-    states: new Map(approving.map((id) => [id, { approvals: [{}] }])),
+  /** 假引擎：running 里的会话在跑 */
+  const engine = (running: readonly string[]): SubSessionEngineSlots => ({
     phaseOf: (id: string) => (running.includes(id) ? "turn" : "idle"),
   });
 
   it("子在跑：通道只有 task（channelStatus running）也判 running", () => {
-    strictEqual(subSessionStatusOf("c1", "running", engine(["c1"], [])), "running");
+    strictEqual(subSessionStatusOf("c1", "running", engine(["c1"])), "running");
   });
 
   it("子不在跑、通道也没报终态：判 idle——通道开着不等于在跑（2026-10 bug 回归）", () => {
-    strictEqual(subSessionStatusOf("c1", "running", engine([], [])), "idle");
+    strictEqual(subSessionStatusOf("c1", "running", engine([])), "idle");
   });
 
-  it("审批槽优先于 phase：在跑但有待答审批判 approval", () => {
-    strictEqual(subSessionStatusOf("c1", "running", engine(["c1"], ["c1"])), "approval");
-  });
-
-  it("waiting 压过审批与 phase", () => {
-    strictEqual(subSessionStatusOf("c1", "waiting", engine(["c1"], ["c1"])), "waiting");
+  it("waiting 压过 phase", () => {
+    strictEqual(subSessionStatusOf("c1", "waiting", engine(["c1"])), "waiting");
   });
 
   it("没有摘要（还没拉到）也按槽走，不因缺席先验成 idle", () => {
-    strictEqual(subSessionStatusOf("c1", undefined, engine(["c1"], [])), "running");
+    strictEqual(subSessionStatusOf("c1", undefined, engine(["c1"])), "running");
   });
 
   it("被崩溃打断、等你点继续：判 interrupted，排进「等你」、亮 2/3 橙；用户终止过的仍是 stopped", () => {
-    const crashed: SubSessionEngineSlots = { ...engine([], []), interruptedOf: (id) => id === "c1" };
+    const crashed: SubSessionEngineSlots = { ...engine([]), interruptedOf: (id) => id === "c1" };
     strictEqual(subSessionStatusOf("c1", "running", crashed), "interrupted");
     strictEqual(subSessionStatusOf("c1", "stopped", crashed), "stopped");
     strictEqual(subSessionBarFill("interrupted"), "waiting");
@@ -123,20 +105,20 @@ describe("sortSubSessionRows", () => {
     lastAt,
   });
 
-  it("收件箱次序：等你（question/approval）最前，其次 running，其次 failed，其次 done，stopped/idle 收尾", () => {
+  it("收件箱次序：等你（question / 被打断）最前，其次 running，其次 failed，其次 done，stopped/idle 收尾", () => {
     const rows = [
       row("idle-1", "idle"),
       row("running-1", "running"),
       row("waiting-1", "waiting"),
       row("done-1", "done"),
       row("stopped-1", "stopped"),
-      row("approval-1", "approval"),
+      row("interrupted-1", "interrupted"),
       row("failed-1", "failed"),
       row("running-2", "running"),
     ];
     deepStrictEqual(
       sortSubSessionRows(rows).map((r) => r.id),
-      ["waiting-1", "approval-1", "running-1", "running-2", "failed-1", "done-1", "idle-1", "stopped-1"],
+      ["waiting-1", "interrupted-1", "running-1", "running-2", "failed-1", "done-1", "idle-1", "stopped-1"],
     );
   });
 
@@ -170,10 +152,10 @@ describe("sortSubSessionRows", () => {
 });
 
 describe("subSessionBarFill（行首状态饼亮几节）", () => {
-  it("running = 1/3 蓝（running）；waiting 与 approval 同为 2/3 橙（waiting）", () => {
+  it("running = 1/3 蓝（running）；waiting 与 interrupted 同为 2/3 橙（waiting）", () => {
     strictEqual(subSessionBarFill("running"), "running");
     strictEqual(subSessionBarFill("waiting"), "waiting");
-    strictEqual(subSessionBarFill("approval"), "waiting");
+    strictEqual(subSessionBarFill("interrupted"), "waiting");
   });
 
   it("done = 3/3 绿、failed = 3/3 红", () => {

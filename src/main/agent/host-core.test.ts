@@ -387,11 +387,10 @@ describe("会话级命令跟着会话走 —— 没交给过 kernel 的会话此
     ctx.host.disposeSession("s1"); // 不抛
   });
 
-  test("停止 / 切档 / 标题：没交给过 kernel 的会话什么都不发、不拉起进程（档位随下一轮的开轮命令送）", async () => {
+  test("停止 / 标题：没交给过 kernel 的会话什么都不发、不拉起进程", async () => {
     const ctx = await freshHost();
     // 不 await：改坏成「拉起进程再发」时它会等 ready 挂住，这里照样能看出拉起了
     void ctx.host.abort("idle");
-    void ctx.host.setMode("idle", "skip");
     ctx.host.generateTitle("idle", "第一句");
     await flush();
     assert.equal(ctx.forks(), 0);
@@ -478,12 +477,11 @@ describe("回执回到 kernel —— 载荷逐字段（漏一个字段，工具�
       nextRunAt: 1,
       runCount: 0,
     };
-    const modeRow = { state: "pending" as const, requestId: "r1", automationId: "au1", title: "每日一篇", sessionMode: "manual" as const };
-    ctx.host.answerAutomation("q1", { ok: true, text: "NOT changed", automation: card, modeRow });
+    ctx.host.answerAutomation("q1", { ok: true, text: "created", automation: card });
     ctx.host.answerAutomation("q2", { ok: true, text: "list", automations: [card] });
     ctx.host.answerAutomation("q3", { ok: false, error: "No such automation" });
     assert.deepEqual(ctx.kernel().replies(), [
-      { type: "automationResult", requestId: "q1", ok: true, text: "NOT changed", automation: card, modeRow },
+      { type: "automationResult", requestId: "q1", ok: true, text: "created", automation: card },
       { type: "automationResult", requestId: "q2", ok: true, text: "list", automations: [card] },
       { type: "automationResult", requestId: "q3", ok: false, error: "No such automation" },
     ]);
@@ -759,17 +757,16 @@ describe("AgentHostCore：新内核那条道", () => {
     assert.equal(r.legacy.posted.length, 0);
   });
 
-  test("停止 / 切档 / 插话跟着会话走：交给过 kernel 的去 kernel", async () => {
+  test("停止 / 插话跟着会话走：交给过 kernel 的去 kernel", async () => {
     const r = kernelRig();
     const turn = r.host.submit({ type: "submit", sessionId: "s1", text: "hi", piSessionFile: "/p.jsonl", ...TURN_FIELDS });
     await flush();
     r.kernel.emit({ type: "ready" });
     await turn;
     await r.host.abort("s1");
-    await r.host.setMode("s1", "skip");
     r.host.steer("s1", "插话", "steer");
     const sessionCommands = r.kernel.posted.flatMap((command) => (command.type === "session" ? [command.command.type] : []));
-    assert.deepEqual(sessionCommands, ["submit", "abort", "setMode", "steer"]);
+    assert.deepEqual(sessionCommands, ["submit", "abort", "steer"]);
   });
 
   test("标题（新内核）：只给这一轮建出来的全新会话起一次——续聊、分支会话的第一句不起（与旧内核实际的门一致）", async () => {
@@ -820,15 +817,13 @@ describe("AgentHostCore：新内核那条道", () => {
     await flush();
     r.legacy.emit({ type: "builtins", providers: [] });
     await builtins;
-    r.kernel.emit({ type: "permission", sessionId: "s1", requestId: "s1:c1", toolName: "bash", input: {} });
     r.kernel.emit({ type: "readTaskRequest", requestId: "r-kernel", sessionId: "s1" });
-    r.host.answerPermission("s1:c1", { behavior: "allow" } as never);
     r.host.answerReadTask("r-kernel", { ok: false, error: "x" });
     r.host.answerReadTask("r-legacy", { ok: false, error: "y" });
     const replies = r.kernel.posted.flatMap((command) => (command.type === "reply" ? [command.command.type] : []));
-    assert.deepEqual(replies, ["permissionAnswer", "readTaskResult"]);
+    assert.deepEqual(replies, ["readTaskResult"]);
     assert.deepEqual(r.legacy.posted.map((command) => command.type), [], "agent 进程一条回执都没收到");
-    assert.ok(r.events.some((event) => event.type === "permission"), "kernel 的事件照常交给 onEvent");
+    assert.ok(r.events.some((event) => event.type === "readTaskRequest"), "kernel 的事件照常交给 onEvent");
   });
 
   test("kernel 进程意外退出：在跑的会话标「被打断、可继续」并回到空闲，交给善后；落定过的不标", async () => {
@@ -934,9 +929,9 @@ describe("AgentHostCore：新内核那条道", () => {
     const shutdown = kernels[0]?.posted.find((command) => command.type === "shutdown");
     assert.ok(shutdown !== undefined && shutdown.type === "shutdown", "闲着到点：先让它收尾（关库）");
     assert.equal(host.kernelAlive(), false);
-    // 回收期间插话：没有轮可插，退回通道开一轮；停止 / 切档不为闲着的会话拉起进程
+    // 回收期间插话：没有轮可插，退回通道开一轮；停止不为闲着的会话拉起进程
     host.steer("s1", "<channel>", "steer");
-    host.setMode("s1", "manual");
+    void host.abort("s1");
     assert.deepEqual(bounced, ["s1"]);
     kernels[0]?.emit({ type: "shutdownDone", requestId: shutdown.requestId });
     await flush();

@@ -184,10 +184,9 @@ export interface HomeCardLineText {
   thinking: string;
   /** 计划里在做的那一步 + 此刻的一句 */
   doing: (step: string, now: string) => string;
-  /** 挂着的审批：要做什么（动词 + 对象） */
-  approve: (what: string) => string;
-  childWaiting: string;
-  /** 子会话被崩溃打断、等你点「继续」（没有审批可批，「在等你批准」不对） */
+  /** 停着等你回复（计划等确认，自己的或子会话的） */
+  waitingReply: string;
+  /** 子会话被崩溃打断、等你点「继续」 */
   childInterrupted: string;
   failed: string;
   done: string;
@@ -203,12 +202,10 @@ export interface HomeCardLineInput {
   state: SessionRunState;
   /** 这条会话槽里的记录（selectTranscript 的结果）；槽没载过 = null */
   records: readonly TranscriptRecord[] | null;
-  /** 挂着的第一个工具审批；没有 = null */
-  approval: { toolName: string; input: unknown } | null;
   turnError: string | null;
   /** 最近一次提问（meta.recentQueries[0]） */
   lastAsk: string | null;
-  /** 有直接子会话被崩溃打断、等你点「继续」，且没有子会话挂着审批（有审批时先说审批）；缺席 = 否 */
+  /** 有直接子会话被崩溃打断、等你点「继续」；缺席 = 否 */
   childInterrupted?: boolean;
 }
 
@@ -218,8 +215,7 @@ export interface HomeCardLineInput {
  * - 在跑：这一轮的当前章节（agent 刚说的话，没说话取最近一段思考）；没有章节就是正在跑的那个
  *   工具（动词 + 对象），都没有是「在想」。有计划且有一步在做时，前面带上那一步：
  *   「跑一遍检查：路径不对，换成 src」——计划说做到哪了，章节说此刻在干嘛。
- * - 等你：挂着的那个审批要做什么；自己没有审批（是子会话在等）就说子会话在等你批准；子会话被崩溃打断、
- *   没有审批可批时说它被打断了、等你点继续。
+ * - 等你：子会话被崩溃打断时说它被打断了、等你点继续；其余（计划写好了等你回复，自己的或子会话的）说在等你回复。
  * - 出错：这一轮的错误原文第一行；槽没载过（重启后只剩未读标记）说「出错停下了」。
  * - 跑完没看：最后一段正文的第一行（结果）；槽没载过说「跑完了」。
  * - 没在跑：最近一次提问（只取用户看得见的文字，剥掉系统包装，见 visibleAsk）——这条任务最后在说什么。要写「agent 最后一句话」得读它的整份
@@ -230,10 +226,7 @@ export interface HomeCardLineInput {
 export function homeCardLine(input: HomeCardLineInput, text: HomeCardLineText): string | null {
   const records = input.records;
   if (input.state === "waiting") {
-    if (input.approval === null) return input.childInterrupted === true ? text.childInterrupted : text.childWaiting;
-    const summary = toolCallSummary(input.approval.toolName, input.approval.input);
-    const verb = text.verb(input.approval.toolName, input.approval.input);
-    return text.approve(summary === null ? verb : `${verb} ${summary}`);
+    return input.childInterrupted === true ? text.childInterrupted : text.waitingReply;
   }
   if (input.state === "failed") {
     return (input.turnError === null ? null : firstLine(input.turnError)) ?? text.failed;

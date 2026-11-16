@@ -7,7 +7,6 @@ export function makeAutomation(patch: Partial<Automation> & { id: string }): Aut
     prompt: "看一眼日志",
     schedule: { kind: "interval", unit: "minute", every: 15 },
     target: { kind: "new_session", workspaceId: null },
-    mode: "plan",
     status: "active",
     createdBy: { kind: "user" },
     nextRunAt: 1_000,

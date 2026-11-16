@@ -175,7 +175,7 @@ function deps(overrides: { submitTurn?: (input: SubmitAgentInput) => Promise<voi
 
 describe("launchAutomationRun（new_session）", () => {
   const automation = (patch: Partial<Automation> = {}): Automation =>
-    makeAutomation({ id: "au1", title: "开源 CLI 速览", mode: "skip", maxRuns: 12, ...patch, target: { kind: "new_session", workspaceId: "ws1" } });
+    makeAutomation({ id: "au1", title: "开源 CLI 速览", maxRuns: 12, ...patch, target: { kind: "new_session", workspaceId: "ws1" } });
 
   test("先建带 automationId / automationRun 的会话 meta，再开轮：cwd = 工作区路径、模型按设置解析、权限档用任务的", async () => {
     const { launchDeps, submitted } = deps();
@@ -188,13 +188,13 @@ describe("launchAutomationRun（new_session）", () => {
     assert.equal(meta.titleSource, "user");
     assert.equal(meta.cwd, "/repo/orbita");
     assert.equal(meta.workspaceId, "ws1");
-    assert.equal(meta.mode, "skip");
+    assert.equal("mode" in meta, false, "新会话不再记权限档");
     assert.equal(meta.parentId, undefined);
     assert.equal(submitted.length, 1);
     const input = submitted[0];
     assert.equal(input?.resume, null);
     assert.equal(input?.cwd, "/repo/orbita");
-    assert.equal(input?.mode, "skip");
+    assert.equal(input !== undefined && "mode" in input, false);
     assert.equal(input?.modelId, "glm-5.3");
     assert.ok(input?.text.startsWith("[定时任务「开源 CLI 速览」第 3/12 次 · 10-31 01:45]"));
     assert.ok(input?.text.includes("上周说了 A"));
@@ -259,7 +259,6 @@ describe("deliverAutomationRun（this_session）", () => {
     workspaceId: "ws1",
     providerId: "zai",
     modelId: "glm-5.3-flash",
-    mode: "manual",
     thinkingLevel: "high",
     piSessionFile: "/pi/sessions/abc.jsonl",
     pinned: false,
@@ -283,7 +282,7 @@ describe("deliverAutomationRun（this_session）", () => {
     assert.equal(input?.workspaceId, "ws1");
     assert.equal(input?.providerId, "zai");
     assert.equal(input?.modelId, "glm-5.3-flash");
-    assert.equal(input?.mode, "manual", "不替用户改档：manual 就是 manual");
+    assert.equal(input !== undefined && "mode" in input, false, "没有权限档：按放行跑");
     assert.equal(input?.thinkingLevel, "high");
     assert.equal(input?.text, "[定时任务「等 vLLM」第 3/12 次 · 10-31 01:45]\n\n看日志");
   });

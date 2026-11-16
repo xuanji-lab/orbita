@@ -17,7 +17,7 @@ import type { TranscriptItem } from "../shared/transcript.ts";
 import { IntentConfirmWaiter } from "./intent-confirm-wait.ts";
 import { KernelPool, SessionHistoryDoc, SessionIndexDoc } from "./kernel.ts";
 import { compactionSummary, contextUsage, KernelSessions } from "./kernel-session.ts";
-import { PermissionWaiter, type KernelTurnRuntime } from "./kernel-turn.ts";
+import type { KernelTurnRuntime } from "./kernel-turn.ts";
 import { McpHub } from "./mcp.ts";
 import { RequestBroker, toolReplyResult } from "./request-broker.ts";
 
@@ -55,7 +55,6 @@ function submit(cwd: string, overrides: Partial<Submit> = {}): Submit {
     workspaceId: null,
     provider: { id: "faux", api: "faux", baseUrl: "http://127.0.0.1:1", apiKey: "k" } as Submit["provider"],
     modelId: "tiny",
-    mode: "skip",
     thinkingLevel: "off",
     piSessionDir: join(cwd, ".pi"),
     attachmentsDir: join(cwd, ".att"),
@@ -71,7 +70,6 @@ interface Rig {
   sessions: KernelSessions;
   events: AgentEvent[];
   settled: { sessionId: string; result: KernelTurnResult }[];
-  permissions: PermissionWaiter;
   storages: Map<string, MemoryStorage> | null;
   pool: KernelPool;
   /** 等到某个事件出现（最多 5 秒） */
@@ -98,7 +96,6 @@ async function rig(onEvent?: (event: AgentEvent, rig: Rig) => void, storages: Ma
     }
     if (self !== null) onEvent?.(event, self);
   };
-  const permissions = new PermissionWaiter(send);
   const runtime: KernelTurnRuntime = {
     broker: new RequestBroker((event) => {
       send(event as AgentEvent);
@@ -107,7 +104,6 @@ async function rig(onEvent?: (event: AgentEvent, rig: Rig) => void, storages: Ma
       if (request.type === "memoryRecallRequest") queueMicrotask(() => runtime.broker.resolve(request.requestId, { ok: true, hits: [] }));
     }),
     mcpHub: new McpHub(),
-    permissions,
     send,
     resolveShellPath: () => undefined,
   };
@@ -139,7 +135,6 @@ async function rig(onEvent?: (event: AgentEvent, rig: Rig) => void, storages: Ma
     sessions,
     events,
     settled,
-    permissions,
     storages,
     pool,
     broker: runtime.broker,
@@ -394,30 +389,6 @@ describe("KernelSessions：停止 / 抢跑 / 切档 / 插话", () => {
     );
   });
 
-  it("对话进行中切到「手动审批」档：这一轮的下一个工具调用立刻要审批", async () => {
-    const cwd = await tempDir();
-    let release: () => void = () => undefined;
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    faux.setResponses([
-      async () => {
-        await held;
-        return fauxAssistantMessage(fauxToolCall("bash", { command: "echo hi" }), { stopReason: "toolUse" });
-      },
-      fauxAssistantMessage("done"),
-    ]);
-    const r = await rig((event, self) => {
-      if (event.type === "permission") self.permissions.answer(event.requestId, { behavior: "allow" } as never);
-    });
-    void r.sessions.handle("s1", submit(cwd, { mode: "skip" }));
-    await r.until((event) => event.type === "phase" && event.phase === "turn");
-    await r.sessions.handle("s1", { type: "setMode", sessionId: "s1", mode: "manual" });
-    release();
-    await r.until(idle());
-    assert.ok(r.events.some((event) => event.type === "permission" && event.toolName === "bash"), "切档后的 bash 要了审批");
-  });
-
   it("父→子插话（steer）：放在当前工具轮之后、同一轮里答；与用户排队无关；空闲时插话退回主进程（没有退回通道时回失败语）", async () => {
     const cwd = await tempDir();
     let release: () => void = () => undefined;
@@ -451,7 +422,7 @@ describe("KernelSessions：停止 / 抢跑 / 切档 / 插话", () => {
     assert.ok(r.events.some((event) => event.type === "failed" && /steer 到达时这一轮已结束/.test(event.message)));
     // 有退回通道：原文退回主进程（由它开一轮），不报失败
     const bounced: string[] = [];
-    const withBounce = new KernelSessions({ pool: r.pool, runtime: { broker: new RequestBroker(() => undefined), mcpHub: new McpHub(), permissions: r.permissions, send: () => undefined, resolveShellPath: () => undefined }, intentConfirm: new IntentConfirmWaiter(() => undefined), settled: () => undefined, resolveModel: async () => MODEL, bounceSteer: (sessionId, text, delivery) => bounced.push(`${sessionId}:${delivery}:${text}`) });
+    const withBounce = new KernelSessions({ pool: r.pool, runtime: { broker: new RequestBroker(() => undefined), mcpHub: new McpHub(), send: () => undefined, resolveShellPath: () => undefined }, intentConfirm: new IntentConfirmWaiter(() => undefined), settled: () => undefined, resolveModel: async () => MODEL, bounceSteer: (sessionId, text, delivery) => bounced.push(`${sessionId}:${delivery}:${text}`) });
     await withBounce.handle("s1", { type: "steer", sessionId: "s1", text: "late", delivery: "followUp" });
     assert.deepEqual(bounced, ["s1:followUp:late"]);
   });

@@ -35,7 +35,6 @@ const meta = (id: string, piSessionFile: string | null): SessionMeta =>
     workspaceId: null,
     providerId: "p",
     modelId: "m",
-    mode: "plan",
     thinkingLevel: "medium",
     piSessionFile,
     pinned: false,

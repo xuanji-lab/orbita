@@ -5,7 +5,7 @@
  * 只做三件事：懒启动进程、把命令发进去、把事件广播给窗口。业务判断全在两端，不在这里。
  *
  * 两个子进程：
- * - kernel 进程（kernel-runtime.ts）：对话主循环——开轮 / 停止 / 抢跑 / 压缩 / 插话 / 切档 / 换模型 / 标题、工具请求与审批、
+ * - kernel 进程（kernel-runtime.ts）：对话主循环——开轮 / 停止 / 抢跑 / 压缩 / 插话 / 换模型 / 标题、工具请求、
  *   住在新内核里的会话的本子编辑与分支；
  * - agent 进程（runtime.ts）：不跑轮的家务——内建型号目录与联网刷新、连接测试、专注小结、收尾清单、还没迁的旧会话的
  *   pi 本子编辑与分支、没交给过 kernel 的会话换模型时的校验、MCP 热重载的回执。
@@ -28,7 +28,6 @@ import type { BrowserToolOutcome } from "../../shared/browser.ts";
 import type { DocOutcome } from "../../shared/doc.ts";
 import type { TerminalToolOutcome } from "../../shared/terminal.ts";
 import type { SlidesOutcome } from "../../shared/slides-export.ts";
-import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPreviewOutcome } from "../../shared/plugin.ts";
 import type { PluginBoardOutcome } from "../../shared/plugin-board.ts";
@@ -78,7 +77,7 @@ export interface KernelLane {
   settled: (sessionId: string, result: KernelTurnResult) => void;
   exited: (running: readonly string[]) => void;
   /**
-   * kernel 进程闲置多久回收（毫秒；缺席 = 不回收）。闲置 = 没有在跑的轮、没有等回执的工具请求 / 审批、没有在途的
+   * kernel 进程闲置多久回收（毫秒；缺席 = 不回收）。闲置 = 没有在跑的轮、没有等回执的工具请求、没有在途的
    * 编辑 / 删库 / 收尾。回收 = 先让它关库（含按墓碑清行）再结束进程；下一条命令再懒拉起。
    */
   idleRecycleMs?: number;
@@ -153,7 +152,7 @@ export class AgentHostCore {
   private kernelRecycling: Promise<void> | null = null;
   private kernelRecycled: (() => void) | null = null;
   private kernelReady: Promise<void> | null = null;
-  /** 这次运行里交给过 kernel 的会话 → 它的树根（停止 / 插话 / 切档 / 标题跟着它们走） */
+  /** 这次运行里交给过 kernel 的会话 → 它的树根（停止 / 插话 / 标题跟着它们走） */
   private readonly kernelSessions = new Map<string, string>();
   /** 插话退回时的去处（index.ts 接到通道的「子空闲时的投递」） */
   private steerBounced: ((sessionId: string, text: string, delivery: "steer" | "followUp") => void) | null = null;
@@ -169,7 +168,7 @@ export class AgentHostCore {
   private readonly expectedMigrations = new Set<string>();
   /** kernel 里一轮没落定的会话（kernel 进程意外退出时它们是「被打断」） */
   private readonly kernelRunning = new Set<string>();
-  /** kernel 发出的请求 id（工具请求、审批）：回执要回到 kernel 进程 */
+  /** kernel 发出的请求 id（工具请求、意图确认）：回执要回到 kernel 进程 */
   private readonly kernelRequests = new Set<string>();
   private readonly pendingKernel = new Map<string, (error?: string) => void>();
   private kernelSeq = 0;
@@ -183,7 +182,7 @@ export class AgentHostCore {
 
   /**
    * 懒启动 kernel 进程（第一次有会话交给新内核时）。事件流与 agent 进程的同形，走同一个 onEvent：
-   * 工具请求、审批、转录 progress 的处理一份不改；回执按请求 id 回到发出它的进程（kernelRequests）。
+   * 工具请求、转录 progress 的处理一份不改；回执按请求 id 回到发出它的进程（kernelRequests）。
    */
   private ensureKernel(): Promise<void> {
     if (this.kernelReady) return this.kernelReady;
@@ -227,7 +226,7 @@ export class AgentHostCore {
           this.bounceSteer(message.sessionId, message.text, message.delivery);
           return;
         }
-        // 请求（工具请求带 requestId、审批带 requestId）：记下来源，回执回 kernel
+        // 请求（工具请求带 requestId）：记下来源，回执回 kernel
         if ("requestId" in message && typeof message.requestId === "string") this.kernelRequests.add(message.requestId);
         this.onChildEvent(message);
       });
@@ -276,7 +275,7 @@ export class AgentHostCore {
 
   /**
    * 交给 kernel 的会话命令；root 缺省 = 这次运行里记下的树根（没记过就是它自己）。
-   * kernel 进程不在（闲置回收了 / 崩了）时：那条会话一定没有在跑的轮——停止、切档、换模型、标题、释放都没有对象，
+   * kernel 进程不在（闲置回收了 / 崩了）时：那条会话一定没有在跑的轮——停止、换模型、标题、释放都没有对象，
    * 不为它们拉起进程；插话没有轮可插，按「插话到达时子刚收尾」退回通道开一轮。
    */
   private postKernel(command: KernelSessionCommand, root?: string): void {
@@ -294,7 +293,7 @@ export class AgentHostCore {
     else this.onEvent({ type: "failed", sessionId, message: STEER_MISSED_MESSAGE });
   }
 
-  /** kernel 此刻是不是闲着：没有在跑的轮、没有等回执的工具请求 / 审批、没有在途的编辑 / 删库 / 收尾 */
+  /** kernel 此刻是不是闲着：没有在跑的轮、没有等回执的工具请求、没有在途的编辑 / 删库 / 收尾 */
   private kernelIdle(): boolean {
     return this.kernelRunning.size === 0 && this.kernelRequests.size === 0 && this.kernelEdits.size === 0 && this.pendingKernel.size === 0;
   }
@@ -335,7 +334,7 @@ export class AgentHostCore {
   }
 
   /**
-   * 工具回执 / 审批回答：回到 kernel 进程（工具请求与审批只有它发）。对不上号的（请求早已不在：停止、kernel 退出）丢掉——
+   * 工具回执 / 意图确认的回答：回到 kernel 进程（这些请求只有它发）。对不上号的（请求早已不在：停止、kernel 退出）丢掉——
    * agent 进程不跑轮，没有在途的请求可结。
    */
   private reply(command: KernelReplyCommand): void {
@@ -535,9 +534,9 @@ export class AgentHostCore {
   }
 
   /**
-   * 这条会话这次运行里交给过 kernel 没有：交给过的，会话级命令（停止 / 切档 / 换模型 / 插话 / 标题 / 释放）走 kernel
+   * 这条会话这次运行里交给过 kernel 没有：交给过的，会话级命令（停止 / 换模型 / 插话 / 标题 / 释放）走 kernel
    * （进程被回收 / 崩了也算——那时它没有在跑的轮，postKernel 不为这些命令拉起进程）。没交给过的此刻一定没有在跑的轮：
-   * 停止、切档、标题、释放都没有对象（档位随下一轮的开轮命令送）；换模型只做校验并报 model 事件（agent 进程，见 setModel）。
+   * 停止、标题、释放都没有对象；换模型只做校验并报 model 事件（agent 进程，见 setModel）。
    */
   private ownedByKernel(sessionId: string): boolean {
     return this.kernelSessions.has(sessionId);
@@ -794,11 +793,6 @@ export class AgentHostCore {
     });
   }
 
-  async setMode(sessionId: string, mode: PermissionMode): Promise<void> {
-    // 新内核里正在跑的会话：它的闸门现读这一档（下一个工具调用立刻生效）。没交给过 kernel 的：档位随下一轮的开轮命令送
-    if (this.ownedByKernel(sessionId)) this.postKernel({ type: "setMode", sessionId, mode });
-  }
-
   /**
    * 会话内换模型（C-4）。**发完即回**：成功经 `model` 事件、失败经 `failed` 事件
    * 回传，调用方不等也不该等——切换是一次真实的注册与校验，忙碌态由事件链表达。
@@ -819,17 +813,12 @@ export class AgentHostCore {
     this.post({ type: "setModel", sessionId, provider, modelId });
   }
 
-  /** 用户的审批回答。**不需要 ensure**：进程没了的话请求也早没了。 */
-  answerPermission(requestId: string, answer: PermissionAnswer): void {
-    this.reply({ type: "permissionAnswer", requestId, answer } satisfies AgentCommand);
-  }
-
-  /** 意图确认卡的回答（实验功能 intent-system）。同 answerPermission：不 ensure、发完即回。 */
+  /** 意图确认卡的回答（实验功能 intent-system）。**不需要 ensure**：进程没了的话请求也早没了，发完即回。 */
   answerIntentConfirm(requestId: string, decision: IntentConfirmDecision): void {
     this.reply({ type: "intentConfirmResult", requestId, decision } satisfies AgentCommand);
   }
 
-  /** 写盘请求的回执（4-3）。同 answerPermission 的理由：不 ensure、发完即回。 */
+  /** 写盘请求的回执（4-3）。同 answerIntentConfirm 的理由：不 ensure、发完即回。 */
   answerSkillWrite(requestId: string, result: { ok: boolean; path?: string; error?: string }): void {
     this.reply({
       type: "skillWriteResult",
@@ -964,8 +953,6 @@ export class AgentHostCore {
             text: outcome.text,
             ...(outcome.automation === undefined ? {} : { automation: outcome.automation }),
             ...(outcome.automations === undefined ? {} : { automations: outcome.automations }),
-            // 「改权限」那一行的数据：漏了它，工具结果里就没有那一行（2026-11-06 验收时抓到：按字段拷贝丢了新字段）
-            ...(outcome.modeRow === undefined ? {} : { modeRow: outcome.modeRow }),
           }
         : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);

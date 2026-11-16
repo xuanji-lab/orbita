@@ -11,7 +11,7 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseStep
 import { createRegistry, Harness, MemoryStorage, ToolResultEntry, type Conversation } from "@earendil-works/pi-durable";
 import type { AgentCommand, AgentEvent } from "../shared/agent-ipc.ts";
 import type { KernelTurnCommand } from "../shared/kernel.ts";
-import { assembleTurn, PermissionWaiter, PlanRoundGate, previousTools, runTurn, unwrapHarnessError, type KernelTurnRuntime } from "./kernel-turn.ts";
+import { assembleTurn, PlanRoundGate, previousTools, runTurn, unwrapHarnessError, type KernelTurnRuntime } from "./kernel-turn.ts";
 import { createPlanGate } from "./plan-tools.ts";
 import { strictToolContext, toDurableTool } from "./durable-tools.ts";
 import { deflateSync } from "node:zlib";
@@ -54,7 +54,6 @@ function command(cwd: string, overrides: Partial<Submit> = {}): KernelTurnComman
     workspaceId: null,
     provider: { id: "faux", api: "faux", baseUrl: "http://127.0.0.1:1", apiKey: "k" } as Submit["provider"],
     modelId: "tiny",
-    mode: "skip",
     thinkingLevel: "off",
     piSessionDir: join(cwd, ".pi"),
     attachmentsDir: join(cwd, ".att"),
@@ -66,16 +65,13 @@ function command(cwd: string, overrides: Partial<Submit> = {}): KernelTurnComman
   };
 }
 
-function runtime(events: AgentEvent[], onEvent?: (event: AgentEvent, waiter: PermissionWaiter) => void): KernelTurnRuntime {
+function runtime(events: AgentEvent[]): KernelTurnRuntime {
   const send = (event: AgentEvent): void => {
     events.push(event);
-    onEvent?.(event, permissions);
   };
-  const permissions = new PermissionWaiter(send);
   return {
     broker: new RequestBroker((event) => send(event as AgentEvent)),
     mcpHub: new McpHub(),
-    permissions,
     send,
     resolveShellPath: () => undefined,
   };
@@ -134,40 +130,6 @@ describe("kernel-turn：新内核跑一轮带工具的对话", () => {
     assert.equal(blocked.isError, true);
     assert.match(text(blocked), /^Session records are immutable: ".*sessions" is protected/);
     assert.doesNotMatch(text(blocked), /harness|Tool call blocked/);
-    await harness.close(BACKGROUND_CONTEXT);
-  });
-
-  it("询问档：批准放行、拒绝回拒绝语、等待中停止能在 1 秒内收尾", async () => {
-    const cwd = await tempDir();
-    const { harness, registry, conversation: target } = await conversation();
-    const target2 = { registry, conversation: target, model: MODEL, providerSessionId: "p1" };
-
-    faux.setResponses([fauxAssistantMessage(fauxToolCall("write", { path: "a.txt", content: "A" }), { stopReason: "toolUse" }), fauxAssistantMessage("ok")]);
-    const approve = runtime([], (event, waiter) => {
-      if (event.type === "permission") waiter.answer(event.requestId, { behavior: "allow" });
-    });
-    await runTurn(command(cwd, { mode: "manual" }), approve, target2, COMPACTION);
-    assert.equal(await readFile(join(cwd, "a.txt"), "utf8"), "A");
-
-    faux.setResponses([fauxAssistantMessage(fauxToolCall("write", { path: "b.txt", content: "B" }), { stopReason: "toolUse" }), fauxAssistantMessage("ok")]);
-    const deny = runtime([], (event, waiter) => {
-      if (event.type === "permission") waiter.answer(event.requestId, { behavior: "deny", message: "nope from user" });
-    });
-    await runTurn(command(cwd, { mode: "manual" }), deny, target2, COMPACTION);
-    const denied = (await toolResults(target)).at(-1);
-    assert.equal(denied === undefined ? "" : text(denied), "nope from user");
-
-    faux.setResponses([fauxAssistantMessage(fauxToolCall("write", { path: "c.txt", content: "C" }), { stopReason: "toolUse" }), fauxAssistantMessage("ok")]);
-    const events: AgentEvent[] = [];
-    const hang = runtime(events);
-    const running = runTurn(command(cwd, { mode: "manual" }), hang, target2, COMPACTION);
-    while (!events.some((event) => event.type === "permission")) await new Promise((resolve) => setTimeout(resolve, 10));
-    const started = Date.now();
-    await target.abort(BACKGROUND_CONTEXT);
-    const settled = await running;
-    assert.ok(Date.now() - started < 1000, "停止没有被挂着的审批卡住");
-    assert.equal(settled.status, "unanswered");
-    assert.equal(hang.permissions.size, 0, "等待表里没有残留");
     await harness.close(BACKGROUND_CONTEXT);
   });
 
@@ -265,36 +227,6 @@ async function sharpLessPng(width: number, height: number): Promise<string> {
   ]).toString("base64");
 }
 
-describe("kernel-turn：等审批时不挡别的会话", () => {
-  it("会话 A 卡在询问档的审批上，同库的会话 B 照常跑完一整轮；之后批准 A，A 也跑完", async () => {
-    const cwd = await tempDir();
-    const registry = createRegistry();
-    const harness = await Harness.open(new MemoryStorage(), { models, registry }, BACKGROUND_CONTEXT);
-    const a = await harness.createConversation({ ownership: { kind: "ownerless" } }, BACKGROUND_CONTEXT);
-    const b = await harness.createConversation({ ownership: { kind: "ownerless" } }, BACKGROUND_CONTEXT);
-    // 假模型按请求里的最后一句话回答：A 要写文件（要审批），B 直接答
-    faux.setResponses(
-      Array.from({ length: 6 }, () => (context: { messages: { role: string; content: unknown }[] }) => {
-        const last = JSON.stringify(context.messages.at(-1)?.content ?? "");
-        if (last.includes("write-for-a")) return fauxAssistantMessage(fauxToolCall("write", { path: "a.txt", content: "A" }), { stopReason: "toolUse" });
-        return fauxAssistantMessage("answered");
-      }),
-    );
-    const events: AgentEvent[] = [];
-    const shared = runtime(events);
-    const turnA = runTurn(command(cwd, { sessionId: "sa", mode: "manual", text: "write-for-a" }), shared, { registry, conversation: a, model: MODEL, providerSessionId: "pa" }, COMPACTION);
-    while (!events.some((event) => event.type === "permission")) await new Promise((resolve) => setTimeout(resolve, 10));
-    const turnB = await runTurn(command(cwd, { sessionId: "sb", text: "just answer" }), shared, { registry, conversation: b, model: MODEL, providerSessionId: "pb" }, COMPACTION);
-    assert.deepEqual(turnB, { status: "done" }, "A 等审批时 B 跑完了");
-    const ask = events.find((event) => event.type === "permission");
-    assert.ok(ask?.type === "permission");
-    shared.permissions.answer(ask.requestId, { behavior: "allow" });
-    assert.deepEqual(await turnA, { status: "done" });
-    assert.equal(await readFile(join(cwd, "a.txt"), "utf8"), "A");
-    await harness.close(BACKGROUND_CONTEXT);
-  });
-});
-
 describe("kernel-turn：计划展示后这一轮其余调用被拦（新内核的 plan gate）", () => {
   it("「先给我看计划」：同一批里 update_plan 之后的 read 不执行，结果是旧内核的那句拦截语；下一轮复位", async () => {
     const cwd = await tempDir();
@@ -328,7 +260,7 @@ describe("PlanRoundGate：计划闸门的判定不随钩子先后变", () => {
     { type: "message", id: "e1", message: { role: "assistant", content: calls.map(([id, name, args]) => ({ type: "toolCall", id, name, arguments: args })) } },
   ];
   const gateFor = (state: { stopping: boolean }) =>
-    new PlanRoundGate(createPlanGate({ getMode: () => "skip", planFirst: true, branch: () => [], state }), state);
+    new PlanRoundGate(createPlanGate({ planFirst: true, branch: () => [], state }), state);
 
   it("update_plan 在前：后面的调用被拦，不管谁的钩子先跑", () => {
     const branch = roundWith([["c1", "update_plan", plan], ["c2", "read", { path: "x" }]]);

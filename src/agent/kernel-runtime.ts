@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { forkMigrator, KernelPool } from "./kernel.ts";
 import { kernelChildTag, reapKernelChildren, tagShellCommand } from "./kernel-children.ts";
 import { KernelSessions } from "./kernel-session.ts";
-import { PermissionWaiter, type KernelTurnRuntime } from "./kernel-turn.ts";
+import type { KernelTurnRuntime } from "./kernel-turn.ts";
 import { McpHub } from "./mcp.ts";
 import { createModelRuntime } from "./model-catalog.ts";
 import { registerAndResolveModel } from "./model-registration.ts";
@@ -64,12 +64,11 @@ function sendAgent(event: AgentEvent): void {
 
 /**
  * 跑轮用的进程级依赖：与旧内核 runtime.ts 的同名单例同语义——工具请求通道（RequestBroker，主进程是唯一对端）、
- * MCP 连接（按工作区分片）、审批与意图确认的等待表、bash 路径探测缓存。
+ * MCP 连接（按工作区分片）、意图确认的等待表、bash 路径探测缓存。
  */
 const turnRuntime: KernelTurnRuntime = {
   broker: new RequestBroker((event) => sendAgent(event as AgentEvent)),
   mcpHub: new McpHub(),
-  permissions: new PermissionWaiter(sendAgent),
   send: sendAgent,
   resolveShellPath: createShellPathResolver(),
 };
@@ -126,7 +125,7 @@ async function init(dir: string): Promise<void> {
 }
 
 /**
- * 一条会话命令。与旧内核的命令循环同一个语义：每条命令各自跑、不互相排队（停止 / 插话 / 切档要能插进正在跑的轮），
+ * 一条会话命令。与旧内核的命令循环同一个语义：每条命令各自跑、不互相排队（停止 / 插话要能插进正在跑的轮），
  * 同一会话的轮由 turn-cycle 的占坑保证不并发。失败报 failed（同旧内核）。
  */
 function runSession(root: string, command: KernelSessionCommand, ready: Promise<void>): void {
@@ -164,9 +163,7 @@ parentPort.on("message", (event: { data: unknown }) => {
   }
   if (command.type === "reply") {
     const forwarded = command.command;
-    if (forwarded.type === "permissionAnswer") {
-      turnRuntime.permissions.answer(forwarded.requestId, forwarded.answer);
-    } else if (forwarded.type === "intentConfirmResult") {
+    if (forwarded.type === "intentConfirmResult") {
       intentConfirm.answer(forwarded.requestId, forwarded.decision);
     } else if (isToolReply(forwarded)) {
       // 工具请求的回执（*Result）：与旧内核同一份翻法（request-broker.ts），结掉在途的工具调用

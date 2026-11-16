@@ -26,7 +26,7 @@ describe("KernelHost", () => {
 });
 
 describe("turnRefusal / markRunning / markSettled：一轮能不能开、会话的新内核标记", () => {
-  const meta = (extra: Partial<SessionMeta> = {}): SessionMeta => ({ id: "s", title: "", titleSource: "derived", cwd: "/", workspaceId: null, providerId: "p", modelId: "m", mode: "plan", thinkingLevel: "medium", piSessionFile: "/p.jsonl", pinned: false, archived: false, recentQueries: [], stats: null, createdAt: 1, updatedAt: 1, ...extra });
+  const meta = (extra: Partial<SessionMeta> = {}): SessionMeta => ({ id: "s", title: "", titleSource: "derived", cwd: "/", workspaceId: null, providerId: "p", modelId: "m", thinkingLevel: "medium", piSessionFile: "/p.jsonl", pinned: false, archived: false, recentQueries: [], stats: null, createdAt: 1, updatedAt: 1, ...extra });
   it("根会话（含全新的）与子会话 → 能开；迁移失败过 → 拒绝（只读）；本子编辑按住处分流", () => {
     assert.equal(turnRefusal(null), null);
     assert.equal(turnRefusal(meta()), null);
@@ -55,7 +55,7 @@ describe("turnRefusal / markRunning / markSettled：一轮能不能开、会话�
 });
 
 describe("重启后接着跑：只续子会话（后台任务），树根给「继续」", () => {
-  const meta = (id: string, extra: Partial<SessionMeta> = {}): SessionMeta => ({ id, title: "", titleSource: "derived", cwd: "/", workspaceId: null, providerId: "p", modelId: "m", mode: "plan", thinkingLevel: "medium", piSessionFile: "/p.jsonl", pinned: false, archived: false, recentQueries: [], stats: null, createdAt: 1, updatedAt: 1, ...extra });
+  const meta = (id: string, extra: Partial<SessionMeta> = {}): SessionMeta => ({ id, title: "", titleSource: "derived", cwd: "/", workspaceId: null, providerId: "p", modelId: "m", thinkingLevel: "medium", piSessionFile: "/p.jsonl", pinned: false, archived: false, recentQueries: [], stats: null, createdAt: 1, updatedAt: 1, ...extra });
   it("正常退出停下的子会话续；崩溃留下的子会话、树根、没在跑的、迁移失败过的都不续", () => {
     const picked = sessionsToResume([
       meta("root", { durable: { since: 1, running: true, stoppedOnQuit: true } }),

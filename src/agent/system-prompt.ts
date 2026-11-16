@@ -2,15 +2,15 @@
  * 系统提示词的段装配。抽成纯函数后，测试可以直接比较「派出 / 删除子会话前后」
  * 整份提示词的字节。
  *
- * attached、权限模式、cwd、本会话工作台与浏览器下载目录仍按原行为留在这里；
+ * attached、受保护数据说明、cwd、本会话工作台与浏览器下载目录仍按原行为留在这里；
  * 父子会话清单不进系统提示词，对方工作台由 delegate 回执和通道信封告知。
  */
 import type { TurnDirectories } from "../shared/agent-ipc.ts";
-import { COMMAND_TIMEOUT_DEFAULT_SECONDS, COMMAND_TIMEOUT_FLOOR_SECONDS, type PermissionMode } from "../shared/permission.ts";
+import { COMMAND_TIMEOUT_DEFAULT_SECONDS, COMMAND_TIMEOUT_FLOOR_SECONDS } from "../shared/permission.ts";
 import { QUOTE_GUIDELINE } from "../shared/quote.ts";
 import type { Language } from "../shared/settings.ts";
 import { INTENT_CONTEXT_GUIDELINE } from "../shared/intent-recall.ts";
-import { describePermissionMode } from "./permission.ts";
+import { describeProtectedData } from "./permission.ts";
 import { describeDirectories } from "./directories-prompt.ts";
 import { describeChannelRole } from "./channel-tools.ts";
 import { storeToolsGuideline } from "./store-tools.ts";
@@ -19,7 +19,7 @@ import { REPLY_LANGUAGE_GUIDELINE } from "./prompt-narration.ts";
 import { MEMORY_TOOLS_GUIDELINE } from "./memory-tools.ts";
 
 /**
- * bash 的 timeout 指引。数字与权限闸门同源（shared 的 `gatedCommandTimeout`）：小于下限的抬到下限，
+ * bash 的 timeout 指引。数字与工具闸门同源（shared 的 `gatedCommandTimeout`）：小于下限的抬到下限，
  * 不填的补默认上限。后半句要讲：模型不知道有这条上限，就会把真要跑一小时以上的命令（长训练、
  * 大构建）也不带 timeout 发出去，到点被杀。
  */
@@ -47,10 +47,7 @@ const LONG_TASK_AUTOMATION_GUIDELINE =
 export interface SystemPromptInput {
   /** pi 基底，已由 adaptSystemPrompt 处理 */
   piBase: string;
-  mode: PermissionMode;
-  /** 当前实际注册的非内建工具名，与工具注册共用同一来源 */
-  extraToolNames: readonly string[];
-  /** 受保护的单文件（自动化记录）：权限说明里点名它们 */
+  /** 受保护的单文件（自动化记录）：受保护数据说明里点名它们 */
   protectedFiles?: readonly string[];
   role: "root" | "child";
   workspace: { name?: string } | null;
@@ -74,7 +71,7 @@ export interface PromptSegment {
 export function orbitaSystemSegments(input: SystemPromptInput): PromptSegment[] {
   return [
     { name: "pi-base", text: input.piBase },
-    { name: "permission", text: describePermissionMode(input.mode, input.extraToolNames, input.protectedFiles) },
+    { name: "permission", text: describeProtectedData(input.protectedFiles) },
     { name: "directories", text: describeDirectories(input.cwd, input.directories) },
     { name: "channel-role", text: describeChannelRole(input.role) },
     ...(input.memoryToolsGuideline ? [{ name: "memory-tools", text: MEMORY_TOOLS_GUIDELINE }] : []),

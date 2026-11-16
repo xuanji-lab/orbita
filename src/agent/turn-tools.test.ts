@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AgentCommand } from "../shared/agent-ipc.ts";
 import { RequestBroker } from "./request-broker.ts";
-import { createTurnTools, extraToolNames, turnToolFlags, type TurnInput } from "./turn-tools.ts";
+import { createTurnTools, turnToolFlags, type TurnInput } from "./turn-tools.ts";
 
 type Submit = Extract<AgentCommand, { type: "submit" }>;
 
@@ -15,7 +15,6 @@ function submit(overrides: Partial<Submit> = {}): TurnInput {
     workspaceId: null,
     provider: { id: "p", api: "openai-completions", baseUrl: "http://127.0.0.1:1", apiKey: "k" } as Submit["provider"],
     modelId: "m",
-    mode: "skip",
     thinkingLevel: "off",
     piSessionDir: "/tmp/pi",
     attachmentsDir: "/tmp/att",
@@ -34,8 +33,7 @@ function names(command: TurnInput): string[] {
     flags,
     broker: new RequestBroker(() => undefined),
     mcpTools: [],
-    currentMode: () => "skip",
-    planOptions: { getMode: () => "skip", planFirst: false, branch: () => [], state: { stopping: false } },
+    planOptions: { planFirst: false, branch: () => [], state: { stopping: false } },
     branch: () => [],
     attachedImages: () => [],
     memoryTurn: () => 1,
@@ -58,15 +56,8 @@ describe("turn-tools：两个内核共用的一轮工具装配", () => {
     assert.ok(root.includes("delegate") && !root.includes("report_to_parent"));
     assert.ok(child.includes("report_to_parent") && !child.includes("delegate"));
     assert.ok(root.indexOf("memory_search") > root.indexOf("delegate"));
-    assert.equal(root.at(-1), "automation_update");
+    assert.equal(root.at(-1), "automation_cancel");
     assert.equal(new Set(root).size, root.length, "工具名不重复");
-  });
-
-  it("权限段的工具名单含 MCP 工具在前、与注册同一个开关", () => {
-    const flags = turnToolFlags(submit({ directories: CHILD }));
-    const extra = extraToolNames(["mcp__x__y"], flags);
-    assert.equal(extra[0], "mcp__x__y");
-    assert.ok(extra.includes("report_to_parent") && !extra.includes("delegate"));
   });
 });
 
@@ -84,7 +75,7 @@ const ROOT_ORDER = [
   "doc_open", "doc_insert_image", "doc_export",
   "terminal_open", "terminal_execute", "terminal_read", "terminal_list", "terminal_interrupt", "terminal_close",
   "delegate", "reply_subsession", "model_costs", "memory_search", "memory_revise", "memory_retire",
-  "automation_create", "automation_list", "automation_cancel", "automation_update",
+  "automation_create", "automation_list", "automation_cancel",
 ];
 
 describe("turn-tools：工具名全序（黄金名单）", () => {

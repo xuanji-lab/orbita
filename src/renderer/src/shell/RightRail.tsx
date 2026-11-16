@@ -73,7 +73,7 @@ export function RightRail(props: {
   /**
    * Sub-sessions 面板入口（子会话 PR4c）：null = 不出现（没在看根会话，或这条
    * 根会话没有子会话）。与 `panel` 共用互斥语义，走 `onPanel` 同一条切换逻辑。
-   * `waiting` 是「在等你」（question + 待审批）的子会话数：右上角角标，为 0 不显示。
+   * `waiting` 是「在等你」（question + 被打断）的子会话数：右上角角标，为 0 不显示。
    * **入口不自己弹开**（2026-10-12 用户裁决）：需要你看的事用角标说话，不抢面板位。
    */
   /** 意图面板入口（实验功能 intent-system）：null = 不出现（实验开关关着） */

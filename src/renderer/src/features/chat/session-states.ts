@@ -3,7 +3,7 @@
  *
  * 老实现是**单份** TranscriptState + 按 `sessionRef` 过滤事件：切走正在跑的会话，
  * 它的事件被直接扔掉，切回来只能读到落盘的部分然后卡住。这里改成
- * **一个会话一个槽**（transcript / phase / 审批），事件无条件进自己的槽——
+ * **一个会话一个槽**（transcript / phase / 队列），事件无条件进自己的槽——
  * 「看哪条」只是显示问题，不再决定「记不记」。
  *
  * 本文件是纯函数（不碰 React、不碰 IPC），事件的归约可以脱离 hook 单测。
@@ -33,13 +33,6 @@ import {
 import type { FileTurnView, RevertRecord, UndoRecord } from "@shared/revert";
 import type { TranscriptRecord } from "@shared/session";
 import type { Messages } from "../../messages-en.ts";
-
-/** 一次待应答的工具审批。requestId = `${sessionId}:${toolCallId}`，全局唯一。 */
-export interface PendingApproval {
-  requestId: string;
-  toolName: string;
-  input: unknown;
-}
 
 /**
  * 排队里的一条。
@@ -167,7 +160,6 @@ export interface SessionEntry {
    * observedThinkingFor**，不直接拿 supported（切型号不清这里，按型号判过期）。
    */
   thinking: ObservedThinking | null;
-  approvals: PendingApproval[];
   /**
    * 轮尾文件账（revert.ts，与 marks 同一条纪律）：不进归约器，卡片层直接消费；
    * 实时事件（fileTurnView，剥掉正文的视图）与盘上种子（FileTurnRecord，视图的
@@ -259,7 +251,6 @@ export const EMPTY_ENTRY: SessionEntry = {
   migratingExpected: false,
   stats: null,
   thinking: null,
-  approvals: [],
   fileTurns: [],
   reverts: [],
   undos: [],
@@ -272,7 +263,7 @@ export const EMPTY_ENTRY: SessionEntry = {
 };
 
 /**
- * 事件的唯一入口。progress / phase / permission / failed 各进各的槽；
+ * 事件的唯一入口。progress / phase / failed 各进各的槽；
  * ready / builtins / created 与槽无关（live 集合是 hook 自己的账）。
  * 没有对应槽时**就地建槽**——renderer 重载后事件照样开始累积。
  */
@@ -313,10 +304,8 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
       // 回合失败标注只随「新一轮开跑」消失：非 idle 的 phase 事件清它；
       // 落定的 idle **不清**——failed(turn) 之后紧随的 agent_settled 正是 idle
       ...(event.phase === "idle" ? null : { turnError: null, turnContinuable: false }),
-      // 轮结束就不可能还有挂起的审批：停止 / 抢跑时 runtime 已按拒绝把它们结清
-      // （审批不听 abort，只能手动结）。卡片留着的话，用户会去回答一个已经不存在的请求。
-      // 乐观回显同理：真回显没来轮就落定 = 它失败了，不留鬼影
-      ...(event.phase === "idle" ? { approvals: [], pendingEcho: null, migrating: false, migratingExpected: false } : null),
+      // 乐观回显：真回显没来轮就落定 = 它失败了，不留鬼影
+      ...(event.phase === "idle" ? { pendingEcho: null, migrating: false, migratingExpected: false } : null),
     }));
   }
   if (event.type === "retry") {
@@ -375,15 +364,6 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
         level: event.level,
         supported: event.supported,
       },
-    }));
-  }
-  if (event.type === "permission") {
-    return update(states, event.sessionId, (entry) => ({
-      ...entry,
-      approvals: [
-        ...entry.approvals,
-        { requestId: event.requestId, toolName: event.toolName, input: event.input },
-      ],
     }));
   }
   // 意图系统（实验功能）：流事件归约运行卡、终态记录落桶并收摊运行卡、确认请示挂起
@@ -547,8 +527,7 @@ function splitRecords(transcript: readonly SessionRecord[]): SplitRecords {
 }
 
 /**
- * 用落盘的 transcript 覆盖一个槽。**整槽覆盖**：历史会话的真相在盘上，
- * 顺带把上次看它时留下的审批清掉——与老实现 `setApprovals([])` 同语义。
+ * 用落盘的 transcript 覆盖一个槽。**整槽覆盖**：历史会话的真相在盘上。
  * 活会话**不走这里**：槽里的累积比盘新，种盘等于回退。
  *
  * `page` 是源侧分页的窗口信息（尾部一段 + 外面还有没有更多）；不给就是「这一份
@@ -595,7 +574,6 @@ export function seedFromDisk(
     stats,
     // 思考档真值不落盘（meta 里的意图档才是持久事实）：种盘即空，等下一次开轮的推送
     thinking: null,
-    approvals: [],
     fileTurns,
     reverts,
     undos,
@@ -667,7 +645,7 @@ function loadedIds(entry: SessionEntry): Set<string> {
  * 把更早的一页并到槽的**前面**（源侧分页向前的方向，`session:loadOlder` 的回执）。
  *
  * - **前半部分拼接**：只往已加载窗口之前放记录，尾部的实时累积（progress 条目、
- *   审批、队列）一个字不动——流式只发生在尾部，两件事正交。这里也因此直接改
+ *   队列）一个字不动——流式只发生在尾部，两件事正交。这里也因此直接改
  *   `snapshot.transcript`（pi 的归约器只在种盘时建它，之后靠 progress 事件追加）：
  *   重建 TranscriptState 会把流式中间态（progressItems / toolCallBuffers）洗掉。
  * - **去重**：重试 / 并发拉回同一页时按记录 id 丢掉已有的（同一页里重复的也丢），
@@ -807,19 +785,6 @@ export function compactionBoundaryStatus(record: CompactedRecord, t: Messages): 
     return t.chat.tokensApprox(before);
   }
   return t.chat.tokensArrow(before, record.tokensAfter.toLocaleString("en-US"));
-}
-
-/** 按 requestId 跨槽摘除一条审批。没有匹配就原样返回（同一引用）。 */export function removeApproval(states: SessionStates, requestId: string): SessionStates {
-  for (const [sessionId, entry] of states) {
-    if (!entry.approvals.some((approval) => approval.requestId === requestId)) continue;
-    const next = new Map(states);
-    next.set(sessionId, {
-      ...entry,
-      approvals: entry.approvals.filter((approval) => approval.requestId !== requestId),
-    });
-    return next;
-  }
-  return states;
 }
 
 /** 按 requestId 跨槽摘掉挂起的意图确认请示。没有匹配就原样返回（同一引用）。 */

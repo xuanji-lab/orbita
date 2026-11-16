@@ -32,7 +32,6 @@ const baseMeta = (patch: Partial<SessionMeta> & { id: string }): SessionMeta => 
   workspaceId: null,
   providerId: "zai",
   modelId: "glm-5.3",
-  mode: "plan",
   thinkingLevel: "medium",
   piSessionFile: null,
   pinned: false,
@@ -291,7 +290,7 @@ describe("applyDelegate · 服务商开关", () => {
 
 describe("applyDelegate", () => {
   test("成功：子 meta 字段正确、通道仅一条 task、text 是可解析的信封、card.workbench 对", async () => {
-    await sessions.ensureSession(baseMeta({ id: PARENT, cwd: "/work/proj", workspaceId: "ws1", mode: "skip" }));
+    await sessions.ensureSession(baseMeta({ id: PARENT, cwd: "/work/proj", workspaceId: "ws1" }));
     const { deps, submitCalls } = fakeDeps({ providers: [provider("zai", ["glm-5.3"])] });
 
     const outcome = await applyDelegate(deps, delegateEvent());
@@ -304,7 +303,7 @@ describe("applyDelegate", () => {
     assert.equal(child?.meta.title, "调研分支");
     assert.equal(child?.meta.cwd, "/work/proj");
     assert.equal(child?.meta.workspaceId, "ws1");
-    assert.equal(child?.meta.mode, "skip");
+    assert.equal(child !== null && "mode" in child.meta, false, "子会话不再记权限档");
 
     const channelMessages = await channels.load({ parentId: PARENT, childId: outcome.childId });
     assert.equal(channelMessages.length, 1);

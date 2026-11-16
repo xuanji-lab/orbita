@@ -7,23 +7,22 @@
  */
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { AgentCommand } from "../shared/agent-ipc.ts";
-import type { PermissionMode } from "../shared/permission.ts";
-import { AUTOMATION_TOOL_NAMES, createAutomationTools } from "./automation-tools.ts";
+import { createAutomationTools } from "./automation-tools.ts";
 import { createBrowserTools } from "./browser-tools.ts";
 import { createChannelTools } from "./channel-tools.ts";
 import { createDocTools } from "./doc-tools.ts";
 import { createDocxTools } from "./docx-tools.ts";
 import { createGoalTools } from "./goal-tools.ts";
 import { createImageTools } from "./image-tools.ts";
-import { createMemoryTools, MEMORY_TOOL_NAMES } from "./memory-tools.ts";
+import { createMemoryTools } from "./memory-tools.ts";
 import { createPdfTools } from "./pdf-tools.ts";
 import { createPlanTools, type PlanToolOptions } from "./plan-tools.ts";
-import { createPluginTools, PLUGIN_TOOL_NAMES } from "./plugin-tools.ts";
+import { createPluginTools } from "./plugin-tools.ts";
 import type { RequestBroker } from "./request-broker.ts";
 import { createSlidesTools } from "./slides-tools.ts";
 import { createStoreTools } from "./store-tools.ts";
 import { createTaskTools } from "./task-tools.ts";
-import { createTerminalTools, TERMINAL_TOOL_NAMES } from "./terminal-tools.ts";
+import { createTerminalTools } from "./terminal-tools.ts";
 
 /** 开一轮需要的装配输入：submit / interrupt / compact 命令共有的那几个字段。 */
 export type TurnInput = Extract<AgentCommand, { type: "submit" | "interrupt" | "compact" }>;
@@ -68,24 +67,6 @@ export function turnToolFlags(command: TurnInput): TurnToolFlags {
 }
 
 /**
- * 本轮计入权限说明与稳定性指纹的非内建工具名单（系统提示的权限段与提示词稳定性记账共用这一份真源）：
- * MCP 工具 + 内置自定义工具 + 终端组 + 本会话实际注册的通道工具。
- */
-export function extraToolNames(mcpToolNames: readonly string[], flags: TurnToolFlags): string[] {
-  return [
-    ...mcpToolNames,
-    "create_skill",
-    "add_mcp_server",
-    "read_task",
-    ...TERMINAL_TOOL_NAMES,
-    ...(flags.role === "root" ? ["delegate", "reply_subsession", "model_costs"] : ["report_to_parent"]),
-    ...(flags.memoryTools ? MEMORY_TOOL_NAMES : []),
-    ...(flags.automationTools ? AUTOMATION_TOOL_NAMES : []),
-    ...(flags.pluginTools ? PLUGIN_TOOL_NAMES : []),
-  ];
-}
-
-/**
  * 拷图进文档 / 演示文稿时，工作区与附加目录之外额外放行的读根：会话工作台、本会话的附件副本目录、
  * 浏览器下载目录——系统提示词里都明说「可以去读」。其余位置（含 `../` 与工作区外绝对路径）一律不放。
  */
@@ -109,7 +90,6 @@ export interface TurnToolDeps {
   broker: RequestBroker;
   /** 这一轮这个工作区的 MCP 工具（McpHub.toolsFor 的结果） */
   mcpTools: readonly ToolDefinition[];
-  currentMode: () => PermissionMode;
   planOptions: PlanToolOptions;
   /** 当前叶子路径上的会话条目（pi SessionEntry 的形状：`{ type: "message", message }` 等），update_goal 找上一个目标用 */
   branch: () => readonly unknown[];
@@ -136,7 +116,7 @@ export function createTurnTools(deps: TurnToolDeps): ToolDefinition[] {
     // update_goal（./goal-tools.ts）：agent 替用户记下会话级目标；目标就在转录里，不另存
     ...createGoalTools({ branch: deps.branch }),
     ...createStoreTools(broker, command.sessionId),
-    ...(flags.pluginTools ? createPluginTools(broker, command.sessionId, deps.currentMode) : []),
+    ...(flags.pluginTools ? createPluginTools(broker, command.sessionId) : []),
     ...createTaskTools(broker, command.sessionId),
     ...createBrowserTools(broker, command.sessionId),
     // 演示文稿（./slides-tools.ts）：slides_create / read / write / edit / insert_image / export。
@@ -155,7 +135,6 @@ export function createTurnTools(deps: TurnToolDeps): ToolDefinition[] {
       writeRoots: [command.cwd, ...(command.directories?.attached ?? [])],
       workspaceId: command.workspaceId,
       imageReadRoots: imageReadRoots(command),
-      mode: deps.currentMode,
     }),
     // agent 的终端工具组（PR2）：开可见终端、写命令、读输出。
     // 本分支只有用户发起这一种来源（没有定时任务 / 委派 / 外部桥），所以这里不按来源
@@ -173,6 +152,6 @@ export function createTurnTools(deps: TurnToolDeps): ToolDefinition[] {
           turn: deps.memoryTurn,
         })
       : []),
-    ...(flags.automationTools ? createAutomationTools(broker, command.sessionId, deps.currentMode) : []),
+    ...(flags.automationTools ? createAutomationTools(broker, command.sessionId) : []),
   ];
 }

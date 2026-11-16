@@ -38,7 +38,7 @@ import {
   type AutomationRunTrigger,
   type AutomationSkipReason,
 } from "../../shared/automation.ts";
-import { PLUGIN_BOARD_TOOL } from "../../shared/permission.ts";
+import { PLUGIN_BOARD_TOOL } from "../../shared/plugin-board.ts";
 import { clipText } from "./launch.ts";
 import type { AutomationStore } from "./store.ts";
 

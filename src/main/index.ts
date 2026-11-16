@@ -1333,7 +1333,6 @@ void app.whenReady().then(async () => {
           resume: child.piSessionFile === null ? null : { piSessionFile: child.piSessionFile },
           providerId: child.providerId,
           modelId: child.modelId,
-          mode: child.mode,
           thinkingLevel: child.thinkingLevel,
         })
         .catch((error: unknown) => {

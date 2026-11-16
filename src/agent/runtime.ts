@@ -1,7 +1,7 @@
 /**
  * agent runtime —— 跑在 Electron utility 进程里的「家务进程」。
  *
- * **它不跑轮**：对话主循环（开轮 / 停止 / 抢跑 / 压缩 / 插话 / 切档 / 审批 / 工具请求）在 kernel 进程
+ * **它不跑轮**：对话主循环（开轮 / 停止 / 抢跑 / 压缩 / 插话 / 工具请求）在 kernel 进程
  * （kernel-runtime.ts，pi-durable）。旧内核的主循环与运行时装配已删（2026-11-16）；这里只剩不属于任何一轮的几件事：
  * - 内建型号目录（listBuiltins）与联网刷新（refreshCatalogs）；
  * - 还没迁进库的旧会话的 pi 本子编辑与分支（branch / revertPiBook / undoPiBook / movePiBook，pi-book-edit.ts）——

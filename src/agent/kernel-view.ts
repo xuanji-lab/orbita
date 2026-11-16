@@ -14,7 +14,7 @@
  *   `*_delta`，工具调用块的参数变了发非增量帧。第一次看到它时先发一条空内容的 message_start——
  *   TranscriptAdapter 记「已发出的增量」从 0 起，否则整条重发时会把已有的字截掉。
  * - 回答落定：`pi.assistant` 条目追加 → message_end（终态以条目里的消息为准）。
- * - 工具：开始由 beforeTool 钩子报（按调用顺序，审批之前——与 pi 的 tool_execution_start 同一个时点）；
+ * - 工具：开始由 beforeTool 钩子报（按调用顺序，闸门之前——与 pi 的 tool_execution_start 同一个时点）；
  *   流式输出由工具的 onUpdate 报（进程内，与旧内核同一个回调）；结束看 `pi.tool-result` 条目
  *   （闸门拒绝、参数不对、被停的结果也是条目，钩子没报开始的先补一个开始）。
  * - 用户消息：开轮时我们自己回显（与旧内核同一个 userPrompt），对应的 `pi.user` 条目按原文对账丢掉；
@@ -147,7 +147,7 @@ export class KernelView {
     }
   }
 
-  /** beforeTool：一个工具调用要开始了（审批之前） */
+  /** beforeTool：一个工具调用要开始了（闸门之前） */
   toolStart(callId: string, name: string, args: unknown): void {
     if (this.startedTools.has(callId)) return;
     this.startedTools.add(callId);

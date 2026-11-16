@@ -1,106 +1,44 @@
 /**
- * 工具审批 —— 走 pi 官方的 `tool_call` 扩展钩子。
+ * 工具调用闸门 —— 每个工具调用执行之前过一遍（新内核的 `beforeTool` 钩子，kernel-turn.ts）。
  *
- * ⚠ 修正一个我先前的错误判断：我说过「pi 没有审批钩子，所以要把工具的 execute 包一层」。
- * **pi 有**，在扩展 API 里：`pi.on("tool_call", handler)`，handler 返回
- * `{ block?, reason? }` 即可拦截，注释还明写「要改参数就原地改 `event.input`」。
- * 那正好是我们要的三种行为，而且比包装 execute 正确得多——
- * 包装的路子当时还写错了（`createAgentSession` 的 `tools` 是**名字白名单**，
- * 不是工具对象数组，传对象进去等于一个工具都没装上）。
- *
- * 这层因此只剩一件事：把「模式 + 用户回答」翻成 pi 的 ToolCallEventResult。
+ * 2026-11-16 用户定「只留放行」：没有权限档、没有审批卡（进度面板里的目标与计划替代了它：能看到、能改、能理解）。
+ * 闸门只剩两件与档位无关的事：
+ * 1. 抬命令超时（模型自填的小值、没填时补默认上限）；
+ * 2. 受保护路径：会话记录、会话库、自动化记录对工具面只读——写、删、改名都拒，shell 命令另过数据目录白名单。
+ * 两件都原地改 / 拦，不问人。
  */
-import {
-  decidePermission,
-  gatedCommandTimeout,
-  type PermissionAnswer,
-  type PermissionMode,
-} from "../shared/permission.ts";
+import { gatedCommandTimeout } from "../shared/permission.ts";
 import { statSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { resolveToCwd } from "@earendil-works/pi-coding-agent";
 import { dataDirRefusalMessage, defaultGuardEnv, protectedCommandRefusal, realpathLoose, stripFirmlinkPrefix, tildeHome, type CommandGuardEnv, type DataDirSubject } from "./protected-command.ts";
 
 /**
- * **本会话实际启用的 pi 内建工具集**。真源一份、两个消费者：
+ * **本会话实际启用的 pi 内建工具集**：`durable-tools.ts` 按这份顺序建内建工具（builtinToolDefinitions），决定本会话
+ * **内建工具的清单与顺序**。
  *
- *   1. `durable-tools.ts` 按这份顺序建内建工具（builtinToolDefinitions），决定本会话**内建工具的清单与顺序**；
- *   2. `describePermissionMode` 把「哪些工具会放行 / 询问 / 拒绝」讲给模型听（见下）。
- *
- * 两者**必须同一份**：分开写就会漂——这份名单以前带着一个 pi 根本没有的 `glob`，
- * 于是提示词常年在告诉模型一个不存在的工具（2026-10-04 查证：pi 0.84.3 的
- * `createAllToolDefinitions` 只有 read / bash / powershell / edit / write / grep / find / ls）。
- *
- * **为什么搜索类工具必须在里面**：pi 的默认集是 `["read","bash","edit","write"]`，而 pi 的
+ * **为什么搜索类工具在里面**：pi 的默认集是 `["read","bash","edit","write"]`，而 pi 的
  * system prompt 里有一条规则——**当工具集里有 bash、却一个 grep / find / ls 都没有的时候**，
- * 它给模型下一句 "Use bash for file operations like ls, rg, find"（0.84.3 与上游 1.0.0 同构，
- * 条件写死在 system-prompt 里）。于是搜索全走 shell：真实会话 33,201 次 bash 调用里
- * **52.4% 是搜索类命令**；而 `grep -rn X .` 会递归进 node_modules（本仓 34,337 个文件里
- * 30,997 个是它），实测 **5.57s** —— pi 自带的 grep 走 ripgrep、尊重 .gitignore，
- * 同一个任务 **0.08s**。
+ * 它给模型下一句 "Use bash for file operations like ls, rg, find"。补进来让那句话的触发条件不成立。
  *
- * 把这三个补进来**同时做两件事**：搜索改走 ripgrep / fd；并且上面那条把模型推向 bash 的
- * 规则的**触发条件不再成立**，那句话自动消失。这比「在提示词里劝模型别用 bash 搜索」硬：
- * 我们只能往 pi 的 system prompt 后面**追加**，删不掉它写的那句，劝也劝不过
- * （模型自填 timeout 那件事已经证明：提示词管不住模型）。
- *
- * 顺序只影响提示词里工具清单的先后（pi 拿它当「内建工具的初始选择」，顺序无功能含义），
- * 保持按名字排列。
+ * 顺序只影响提示词里工具清单的先后，保持按名字排列。
  */
 export const ENABLED_BUILTIN_TOOLS = ["bash", "edit", "find", "grep", "ls", "read", "write"] as const;
 
 /**
- * 把当前模式翻成一段系统提示。
+ * 讲给模型听的受保护数据说明（系统提示的 `orbita-permission` 段）。
  *
- * 为什么需要它：审批只拦在 `tool_call` 上，**模型对此一无所知**。实测的表现是——
- * plan 模式下问 agent「能不能改这个文件」，它答「能」，然后真去动工具，撞墙了才发现不能。
- * 它不是在撒谎，是没人告诉过它。
- *
- * 文案**从 `decidePermission` 推出来**，不是另写一遍：三档的工具分桶由策略函数当场算，
- * 策略改了这段话跟着改。两处描述各说各话，比没有描述更糟。
- *
- * 枚举的是 `ENABLED_BUILTIN_TOOLS`——**真的启用了哪些**，不是「pi 有哪些」。
- *
- * @param extraToolNames 内建之外当前真实注册的工具名（1-2 起 MCP 的
- * `mcp__server__tool` 全部由调用方从注册表里拿来传入）——不再只枚举内建的那几个，
- * 否则 plan 模式下模型不知道 MCP 工具会被拒，照样一头撞墙（已知缺口 #4）。
- * MCP 工具没有「只读」豁免，分桶全由 decidePermission 算，不在提示词里另立规则。
+ * 为什么需要它：闸门只拦在工具调用上，**模型对此一无所知**——不说，它会照样去写会话记录、撞墙了才发现。
+ * 以前这一段还讲三档权限下哪些工具放行 / 询问 / 拒绝；档位删了，只剩「哪些东西任何工具都改不了」。
  *
  * @param protectedFiles 受保护的单文件（绝对路径）：说明里点名它们的文件名，模型被告知的禁区名单
- * 与闸门真正拦的同一份（以前只写死 automations.json，归档文件对模型是隐形的）。
+ * 与闸门真正拦的同一份。
  */
-export function describePermissionMode(
-  mode: PermissionMode,
-  extraToolNames: readonly string[] = [],
-  protectedFiles: readonly string[] = [],
-): string {
-  const allow: string[] = [];
-  const ask: string[] = [];
-  const deny: string[] = [];
-  for (const tool of [...ENABLED_BUILTIN_TOOLS, ...extraToolNames]) {
-    const decision = decidePermission(mode, tool);
-    if (decision.behavior === "allow") allow.push(tool);
-    else if (decision.behavior === "ask") ask.push(tool);
-    else deny.push(tool);
-  }
-
-  const lines = ["<orbita-permission>", `The user has set tool permission to "${mode}".`];
-  if (allow.length > 0) lines.push(`Runs immediately: ${allow.join(", ")}.`);
-  if (ask.length > 0) {
-    lines.push(
-      `Asks the user first: ${ask.join(", ")}. Each call is shown to them before it runs; ` +
-        "they may allow it, deny it, or edit the arguments. Expect pauses, and expect denials.",
-    );
-  }
-  if (deny.length > 0) {
-    lines.push(
-      `Refused outright: ${deny.join(", ")}. Do not call them, and do not tell the user you will ` +
-        "change anything on disk — describe the change instead, and say that this mode cannot apply it.",
-    );
-  }
+export function describeProtectedData(protectedFiles: readonly string[] = []): string {
   const recordNames = [...new Set(protectedFiles.map((file) => basename(file)))];
-  lines.push(
-    "Immutable in every mode: task session files (transcripts and their metadata) can never be " +
+  return [
+    "<orbita-permission>",
+    "Immutable: task session files (transcripts and their metadata) can never be " +
       `written by any tool, and neither can the automation records (${recordNames.length > 0 ? recordNames.join(", ") : "automations.json"}) — manage ` +
       "automations only through the automation tools. Do not attempt to write, move, rename or delete these, or " +
       "cd into the folder that holds them, or rename / delete / chmod that folder or any folder above it, including via " +
@@ -108,9 +46,8 @@ export function describePermissionMode(
       "Any other shell command that touches Orbita's data folder outside your session workbench is refused unless it is read-only " +
       "(ls, stat, du, wc, head, tail, cat, grep / rg, find without -delete or -exec, diff) or only copies out of it. " +
       "Read automation records with the read tool or automation_list. Your session workbench stays yours to write.",
-  );
-  lines.push("</orbita-permission>");
-  return lines.join("\n");
+    "</orbita-permission>",
+  ].join("\n");
 }
 
 /** pi 的 tool_call 事件里我们用得上的部分 */
@@ -125,8 +62,6 @@ export interface ToolCallGateResult {
   block?: boolean;
   reason?: string;
 }
-
-export type PermissionAsk = (request: ToolCallLike) => Promise<PermissionAnswer>;
 
 /**
  * 拦截面：按路径改文件的（input.path）与跑命令的（bash/powershell 的 input.command）。
@@ -353,7 +288,7 @@ function ownDataDirs(protectedPaths: readonly string[], protectedFiles: readonly
 
 /**
  * 会话文件不可变（2026-09-18 立规）：protectedPaths（sessions/ 与 pi-sessions/）
- * 对工具面**全档只读**——这条检查在权限档判定**之前**跑，Skip 也抬不掉。
+ * 对工具面**只读**——任何工具都写不了。
  * 自动化记录不可变（2026-11-13 用户提出：智能体不该能把自己的自动化记录删掉）：protectedFiles（单文件，目前只有
  * automations.json）同一等级、同一条路。它记的是「智能体定时做过什么」，智能体
  * 删改它 = 丢痕迹；智能体要改自动化走自动化工具（那套工具本来就不能删）。
@@ -503,45 +438,23 @@ function fileRefusalMessage(file: string, via: "path" | "command"): string {
 }
 
 /**
- * 生成 `tool_call` 处理器。纯逻辑 + 一个注入的询问函数，可被测试穷尽。
+ * 生成工具调用闸门。纯逻辑，可被测试穷尽。
  *
  * 会话文件不可变（2026-09-18）与自动化记录不可变（2026-11-13）：protectedPaths /
- * protectedFiles 缺席（旧测试、或主进程没给）= 不做禁区检查；给了就在权限档判定
- * **之前**拦——Skip 档也拦。
+ * protectedFiles 缺席（旧测试、或主进程没给）= 不做禁区检查；给了就拦。
  *
- * 改写入参走 pi 的约定：**原地改 `event.input`**（不是返回新对象）。
- *
- * 顺序上讲一句：参数兜底（`raiseCommandTimeout`）跑在**所有早退之前**，而用户在审批卡片里
- * 改的入参跑在**最后**——两条都是原地改，含义不同：兜底是防模型失手，人工明确填的秒表
- * 是当事人自己的选择，不以兜底覆盖它。
+ * 抬超时**原地改 `event.input`**（kernel-turn.ts 给的是入参的拷贝，改了就回传新参数），跑在受保护路径判定之前：
+ * 被拒的调用不执行，改不改无所谓；放行的调用一定带着抬过的 timeout。
  */
 export function createToolCallGate(
-  getMode: () => PermissionMode,
-  ask: PermissionAsk,
   protectedPaths: readonly string[] = [],
   cwd: string = process.cwd(),
   protectedFiles: readonly string[] = [],
   guard: CommandGuardEnv = defaultGuardEnv(),
 ) {
-  return async (event: ToolCallLike): Promise<ToolCallGateResult> => {
-    // **跑在每条早退之前**：放行 / 询问 / 拒绝三条路都不能绕过它，否则默认档（skip 直接
-    // 放行）就漏掉了——而那正是模型填小超时的场景。
+  return (event: ToolCallLike): ToolCallGateResult => {
     raiseCommandTimeout(event.toolName, event.input);
     const refusal = protectedPathRefusal(event.toolName, event.input, protectedPaths, cwd, protectedFiles, guard);
-    if (refusal !== null) return { block: true, reason: refusal };
-    const decision = decidePermission(getMode(), event.toolName);
-    if (decision.behavior === "allow") return {};
-    if (decision.behavior === "deny") return { block: true, reason: decision.message };
-
-    const answer = await ask(event);
-    if (answer.behavior === "deny") {
-      return { block: true, reason: answer.message ?? "Denied by the user." };
-    }
-    if (answer.input !== undefined && typeof answer.input === "object" && answer.input !== null) {
-      // pi 的约定：原地修改，后续 handler 与真正的执行都看到改后的值
-      for (const key of Object.keys(event.input)) delete event.input[key];
-      Object.assign(event.input, answer.input as Record<string, unknown>);
-    }
-    return {};
+    return refusal === null ? {} : { block: true, reason: refusal };
   };
 }

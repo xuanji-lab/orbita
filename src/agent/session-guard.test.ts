@@ -54,59 +54,23 @@ describe("protectedPathRefusal", () => {
   });
 });
 
-describe("createToolCallGate 的禁区前置（2026-09-18）", () => {
-  const gate = createToolCallGate(() => "skip", async () => {
-    throw new Error("Skip 档不该走到询问");
-  }, PROTECTED, CWD);
+describe("createToolCallGate 的禁区（2026-09-18；2026-11-16 起没有权限档，闸门只剩它与抬超时）", () => {
+  const gate = createToolCallGate(PROTECTED, CWD);
 
-  test("Skip 档写禁区：拦在权限档判定之前，询问函数根本不被调", async () => {
+  test("写禁区：拦", () => {
     const inside = `${SESSIONS}${resolve("/") === "/" ? "/" : "\\"}abc.meta.json`;
-    const result = await gate({ toolCallId: "c1", toolName: "write", input: { path: inside } });
+    const result = gate({ toolCallId: "c1", toolName: "write", input: { path: inside } });
     assert.equal(result.block, true);
     if (result.reason !== undefined) assert.match(result.reason, /immutable/);
   });
 
-  test("Skip 档写普通路径：照常放行（不变量不改变 Skip 的语义）", async () => {
-    const result = await gate({ toolCallId: "c2", toolName: "write", input: { path: "src/app.ts" } });
+  test("写普通路径：放行", () => {
+    const result = gate({ toolCallId: "c2", toolName: "write", input: { path: "src/app.ts" } });
     assert.deepEqual(result, {});
   });
 
-  test("Manual 档读禁区：不因禁区触发审批（读不受限）", async () => {
-    let asked = 0;
-    const manualGate = createToolCallGate(() => "manual", async () => {
-      asked += 1;
-      return { behavior: "allow" };
-    }, PROTECTED, CWD);
-    const result = await manualGate({
-      toolCallId: "c3",
-      toolName: "read",
-      input: { path: `${SESSIONS}${resolve("/") === "/" ? "/" : "\\"}abc.jsonl` },
-    });
-    assert.deepEqual(result, {});
-    assert.equal(asked, 1); // 只因 manual 档「全都问」问了一次，不是禁区拦的
-  });
-});
-
-describe("plan 档跨会话读静默放行（2026-09-18 二次裁决：读取而已）", () => {
-  test("plan 档 read_task 不弹审批——弹审批的政策立过又撤，钉住最终裁决", async () => {
-    let asked = 0;
-    const g = createToolCallGate(() => "plan", async () => {
-      asked += 1;
-      return { behavior: "allow" };
-    }, PROTECTED, CWD);
-    const result = await g({ toolCallId: "c1", toolName: "read_task", input: { task: "素材task" } });
-    assert.deepEqual(result, {});
-    assert.equal(asked, 0);
-  });
-
-  test("plan 档 read 翻禁区路径同样静默——读的敞开不因路径分档", async () => {
-    let asked = 0;
-    const g = createToolCallGate(() => "plan", async () => {
-      asked += 1;
-      return { behavior: "allow" };
-    }, PROTECTED, CWD);
-    const result = await g({ toolCallId: "c2", toolName: "read", input: { path: join(SESSIONS, "a.jsonl") } });
-    assert.deepEqual(result, {});
-    assert.equal(asked, 0);
+  test("读禁区、跨会话读：放行（读不受限）", () => {
+    assert.deepEqual(gate({ toolCallId: "c3", toolName: "read", input: { path: join(SESSIONS, "a.jsonl") } }), {});
+    assert.deepEqual(gate({ toolCallId: "c4", toolName: "read_task", input: { task: "素材task" } }), {});
   });
 });

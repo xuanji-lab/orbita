@@ -9,7 +9,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
-import type { PermissionMode } from "../../shared/permission.ts";
 import { parsePluginInstallRow, type PluginAgentInstallOutcome, type PluginInstallRow } from "../../shared/plugin.ts";
 import type { SecretsPort } from "../provider/store.ts";
 import { PluginAgentRequests, draftBoardFiles, fingerprintOf, locateInside, needsLook, type PluginDraftEvent } from "./agent-requests.ts";
@@ -72,14 +71,13 @@ function makeRequests(): PluginAgentRequests {
 
 const request = (
   path: string,
-  over: { scope?: "workspace" | "global" | null; sessionId?: string; mode?: PermissionMode; requestId?: string } = {},
+  over: { scope?: "workspace" | "global" | null; sessionId?: string; requestId?: string } = {},
 ): Extract<AgentEvent, { type: "pluginInstallRequest" }> => ({
   type: "pluginInstallRequest",
   requestId: over.requestId ?? "r1",
   sessionId: over.sessionId ?? S,
   path,
   scope: over.scope ?? null,
-  mode: over.mode ?? "skip",
 });
 
 /** 在工作区里做一个好插件（一个技能、workflow 对得上；可带 MCP） */
@@ -277,22 +275,15 @@ describe("install：需要用户看一眼 → 不装，只留带「安装」的�
     assert.equal(installedCalls, 0);
   });
 
-  test("manual 档：低风险的也不直接装（那一行就是用户的点头）", async () => {
+  test("没有权限档：低风险的直接装，请求里也不带档", async () => {
     const root = await makePlugin();
-    const outcome = await requests.install(request(root, { mode: "manual" }));
-    assert.equal(outcome.ok && outcome.kind, "pending");
-    assert.equal(rowOf(outcome).reason, "manual");
-    assert.deepEqual(await store.records(), []);
+    const event = request(root);
+    assert.equal("mode" in event, false);
+    const outcome = await requests.install(event);
+    assert.equal(outcome.ok && outcome.kind, "installed");
   });
 
-  test("plan 档（权限层本来就拒，万一走到这里）也按保守处理，不装", async () => {
-    const root = await makePlugin();
-    const outcome = await requests.install(request(root, { mode: "plan" }));
-    assert.equal(outcome.ok && outcome.kind, "pending");
-    assert.deepEqual(await store.records(), []);
-  });
-
-  test("范围是所有工作区：skip 档也留一行，reason global", async () => {
+  test("范围是所有工作区：也留一行，reason global", async () => {
     const root = await makePlugin();
     const outcome = await requests.install(request(root, { scope: "global" }));
     assert.equal(rowOf(outcome).reason, "global");
@@ -301,13 +292,13 @@ describe("install：需要用户看一眼 → 不装，只留带「安装」的�
     assert.deepEqual(await store.records(), []);
   });
 
-  test("多个原因同时成立：取最要紧的（mcp > global > manual）", () => {
+  test("多个原因同时成立：取最要紧的（mcp > global）", () => {
     const withMcp = { mcp: [{ name: "s" }] } as never;
     const without = { mcp: [] } as never;
-    assert.equal(needsLook(withMcp, "global", "manual"), "mcp");
-    assert.equal(needsLook(without, "global", "manual"), "global");
-    assert.equal(needsLook(without, "workspace", "manual"), "manual");
-    assert.equal(needsLook(without, "workspace", "skip"), null);
+    assert.equal(needsLook(withMcp, "global"), "mcp");
+    assert.equal(needsLook(without, "global"), "global");
+    assert.equal(needsLook(withMcp, "workspace"), "mcp");
+    assert.equal(needsLook(without, "workspace"), null);
   });
 
   test("不重复弹：这一行没点之前 agent 又调一次，仍是 pending（行是幂等的），不会装", async () => {
@@ -344,7 +335,7 @@ describe("installFromRow：用户点那一行的「安装」", () => {
 
   test("落盘后重开仍可装：行经 JSON 来回、换一个全新的 PluginAgentRequests（模拟重启）照样装得上", async () => {
     const root = await makePlugin();
-    const shown = rowOf(await requests.install(request(root, { mode: "manual" })));
+    const shown = rowOf(await requests.install(request(root, { scope: "global" })));
     const reopened = parsePluginInstallRow({ pluginInstall: JSON.parse(JSON.stringify(shown)) });
     assert.ok(reopened !== null);
     const fresh = makeRequests();
@@ -356,7 +347,7 @@ describe("installFromRow：用户点那一行的「安装」", () => {
 
   test("已经装上（在别处装的 / 点了两次）：幂等，不再装第二次", async () => {
     const root = await makePlugin();
-    const row = rowOf(await requests.install(request(root, { mode: "manual" })));
+    const row = rowOf(await requests.install(request(root, { scope: "global" })));
     assert.equal((await requests.installFromRow(clickOf(row))).ok, true);
     assert.equal((await requests.installFromRow(clickOf(row))).ok, true);
     assert.equal(installedCalls, 1);
@@ -374,8 +365,8 @@ describe("installFromRow：用户点那一行的「安装」", () => {
   });
 
   test("renderer 传来的范围与行上的不一致（把工作区的行改成所有工作区）：指纹对不上，拒装", async () => {
-    const root = await makePlugin();
-    const row = rowOf(await requests.install(request(root, { mode: "manual" })));
+    const root = await makePlugin("withmcp", { mcp: { srv: { command: "node" } } });
+    const row = rowOf(await requests.install(request(root)));
     const result = await requests.installFromRow(clickOf(row, { scope: "global" }));
     assert.equal(!result.ok && result.reason, "changed");
     assert.deepEqual(await store.records(), []);
@@ -385,7 +376,7 @@ describe("installFromRow：用户点那一行的「安装」", () => {
     await put(outside, ".claude-plugin/plugin.json", JSON.stringify({ name: "x" }));
     await put(outside, "skills/x/SKILL.md", SKILL("x"));
     const root = await makePlugin();
-    const row = rowOf(await requests.install(request(root, { mode: "manual" })));
+    const row = rowOf(await requests.install(request(root, { scope: "global" })));
     const result = await requests.installFromRow(clickOf(row, { path: outside }));
     assert.equal(!result.ok && result.reason, "not-found");
     assert.deepEqual(await store.records(), []);
@@ -393,7 +384,7 @@ describe("installFromRow：用户点那一行的「安装」", () => {
 
   test("文件夹被删了 / 会话不在了：各自回清楚的原因", async () => {
     const root = await makePlugin();
-    const row = rowOf(await requests.install(request(root, { mode: "manual" })));
+    const row = rowOf(await requests.install(request(root, { scope: "global" })));
     await rm(root, { recursive: true, force: true });
     const gone = await requests.installFromRow(clickOf(row));
     assert.equal(!gone.ok && gone.reason, "not-found");
@@ -403,7 +394,7 @@ describe("installFromRow：用户点那一行的「安装」", () => {
 
   test("等的时候又冒出同名用户技能：点安装时权威复查，回 invalid，不装", async () => {
     const root = await makePlugin();
-    const row = rowOf(await requests.install(request(root, { mode: "manual" })));
+    const row = rowOf(await requests.install(request(root, { scope: "global" })));
     userSkills = [{ slug: "lit-scan", name: "lit-scan" }];
     const result = await requests.installFromRow(clickOf(row));
     assert.equal(!result.ok && result.reason, "invalid");

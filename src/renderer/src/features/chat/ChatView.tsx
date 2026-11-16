@@ -3,7 +3,6 @@ import type { ReactNode } from "react";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { QuoteToolbar, type QuoteCandidate } from "../../shell/QuoteToolbar";
 import type { ToolTranscriptItem, TranscriptItem } from "@shared/transcript";
-import { ApprovalBar } from "./ApprovalBar";
 import { QueueStrip } from "./QueueStrip";
 import { compactionBoundaryStatus, mergeSideRecords } from "./session-states";
 import {
@@ -97,7 +96,6 @@ import {
   delegateCard,
   pluginBoardOf,
   pluginInstallRowOf,
-  automationModeRowOf,
   handoffOutcome,
   editDiffText,
   failedFoldKey,
@@ -190,7 +188,6 @@ import { collectCitations } from "./citation-markers.ts";
 import { CitationTableContext } from "./citation-context.ts";
 import { RevertPreviewContext, type RevertPreview } from "./revert-preview.ts";
 import { CarryoverScanCard } from "./CarryoverScanCard";
-import { AutomationModeLine } from "../automation/AutomationModeLine";
 import { AutomationRunBar } from "../automation/AutomationRunBar";
 import { AutomationToolLine } from "../automation/AutomationToolLine";
 import { AutomationWakeLine } from "../automation/AutomationWakeLine";
@@ -234,7 +231,6 @@ import { IntentRecallFinalCard, IntentRecallRunCard } from "./IntentRecallCard.t
 import { IntentConfirmCard } from "./IntentConfirmCard.tsx";
 import type { IntentRecallRecord } from "@shared/session";
 import type { RecallCardState } from "@shared/intent-recall";
-import { PERMISSION_MODES } from "@shared/permission";
 import { THINKING_LEVELS, THINKING_LEVEL_LABELS } from "@shared/thinking";
 import {
   childSessions,
@@ -436,7 +432,7 @@ const QuoteJumpContext = createContext<(quote: TextQuote) => (() => void) | unde
 /**
  * 把一处（引用的那段文字，或整块）滚到转录区**顶部**，留一点边距。不用
  * `scrollIntoView({ block: "center" })`：一条长回复整块居中时，被引用的那句常落在
- * 下半截，正好压在输入框上方叠起来的卡片（排队条、审批条、附图与引用）后面。
+ * 下半截，正好压在输入框上方叠起来的卡片（排队条、确认卡、附图与引用）后面。
  */
 function scrollToTop(target: Element, rect: DOMRect, behavior: ScrollBehavior = "smooth"): void {
   const container = target.closest<HTMLElement>(".scroll");
@@ -715,8 +711,7 @@ function ChatViewBody(props: {
   litSubSessionId?: string | null;
   /**
    * 不渲染输入框与排队条（子会话 PR4c）：Sub-sessions 面板的会话层用它——那里是
-   * 只读查看 + 审批，不给用户直接对子会话说话的入口（说话走 Open as main）。
-   * 审批条不受影响，照常渲染——用户必须能在这里直接批子会话的工具调用。
+   * 只读查看，不给用户直接对子会话说话的入口（说话走 Open as main）。
    */
   hideComposer?: boolean;
   /**
@@ -1527,12 +1522,10 @@ function ChatViewBody(props: {
       sessionRunState({
         slot: {
           phase: session.phaseOf(meta.id),
-          approvals: session.approvalsOf(meta.id).length,
           planAwaiting: session.planAwaitingOf(meta.id),
         },
         children: (childrenOf.get(meta.id) ?? []).map((child) => ({
           phase: session.phaseOf(child.id),
-          approvals: session.approvalsOf(child.id).length,
           planAwaiting: session.planAwaitingOf(child.id),
           interrupted: session.interruptedOf(child.id),
         })),
@@ -1545,8 +1538,7 @@ function ChatViewBody(props: {
     const lineText: HomeCardLineText = {
       thinking: t.homeCard.thinking,
       doing: t.homeCard.doing,
-      approve: t.homeCard.approve,
-      childWaiting: t.homeCard.childWaiting,
+      waitingReply: t.homeCard.waitingReply,
       childInterrupted: t.homeCard.childInterrupted,
       failed: t.homeCard.failed,
       done: t.homeCard.done,
@@ -1560,7 +1552,6 @@ function ChatViewBody(props: {
       const state = meta === undefined ? null : stateOf(meta);
       // 槽只在说「此刻」时才读：没在跑的会话说最近一次提问，不碰转录
       const entry = state === null ? undefined : session.entryOf(sessionId);
-      const approval = session.approvalsOf(sessionId)[0];
       const where =
         meta?.workspaceId === null || meta === undefined
           ? t.sidebar.tasks
@@ -1570,10 +1561,9 @@ function ChatViewBody(props: {
         {
           state,
           records: entry === undefined ? null : selectTranscript(entry.transcript),
-          approval: approval === undefined ? null : { toolName: approval.toolName, input: approval.input },
           turnError: session.turnErrorOf(sessionId),
           lastAsk: meta?.recentQueries[0] ?? null,
-          childInterrupted: kids.some((child) => session.interruptedOf(child.id)) && kids.every((child) => session.approvalsOf(child.id).length === 0),
+          childInterrupted: kids.some((child) => session.interruptedOf(child.id)),
         },
         lineText,
       );
@@ -1717,7 +1707,7 @@ function ChatViewBody(props: {
         footer={
           <>
             {notices}
-            {/* 回退 / 撤销的预演确认栏：与审批条、收尾清单同位同配方（就地，不遮消息流） */}
+            {/* 回退 / 撤销的预演确认栏：与意图确认卡、收尾清单同位同配方（就地，不遮消息流） */}
             {session.revertDialog !== null && (
               <RevertPreviewBar
                 mode="revert"
@@ -1740,10 +1730,7 @@ function ChatViewBody(props: {
                 onOpenFile={props.onOpenReviewAt}
               />
             )}
-            {session.approvals[0] && (
-              <ApprovalBar approval={session.approvals[0]} onAnswer={session.answerApproval} />
-            )}
-            {/* 回答前确认（实验功能 intent-system）：与审批条同位同配方——比聊天面高
+            {/* 回答前确认（实验功能 intent-system）：浮在输入框上方——比聊天面高
                 一层、要求一个回答才继续，但不霸屏、不抢焦点、不藏输入框。草稿不跨
                 刷新（实验功能：内存态即可，重弹重选） */}
             {intentOn && session.intentAsk !== null && (
@@ -1759,7 +1746,7 @@ function ChatViewBody(props: {
                 openableSessionIds={props.intentOpenableIds}
               />
             )}
-            {/* 收尾确认卡：inline 浮层，与审批条同位同配方；只在查看发起会话时显示
+            {/* 收尾确认卡：inline 浮层，与意图确认卡同位同配方；只在查看发起会话时显示
                 （scanResult 由 hook 查看槽持有，切走再切回还在） */}
             {session.scanResult !== null && session.scanResult.sessionId === openId && (
               <WrapupCard
@@ -1775,13 +1762,12 @@ function ChatViewBody(props: {
               />
             )}
             {/*
-              子会话 PR4c：Sub-sessions 面板的会话层不给输入框——那里是只读查看 +
-              审批（上面 ApprovalBar 不受影响，照常渲染）。排队条跟着composer一起
+              子会话 PR4c：Sub-sessions 面板的会话层不给输入框——那里是只读查看。排队条跟着composer一起
               藏：排队是「等发出的下一句话」，没有输入框就没有下一句话可排。
             */}
             {hideComposer !== true && (
               <>
-                {/* 排队卡片：比 composer 高一层（等待发出的事），比审批低一层（审批要求回答才继续） */}
+                {/* 排队卡片：比 composer 高一层（等待发出的事） */}
                 <QueueStrip
                   items={session.queued}
                   phase={session.phase}
@@ -3283,15 +3269,6 @@ function ComposerBar(props: {
     })),
   ];
 
-  // 菜单卡片只有词，不带描述——与思考档菜单同一口径（描述是悬停在芯片上的事，
-  // 展开卡片里一行行小字只会让它显得吵；宽度也因此能固定）
-  const modeItems: MenuItem[] = PERMISSION_MODES.map((value): MenuItem => ({
-    id: value,
-    label: t.permissionModes[value].label,
-    checked: session.mode === value,
-    onSelect: () => session.changeMode(value),
-  }));
-
   // 按厂商分组的模型菜单（与设置面的命名模型同一份构造）
   // 模型卡片的行（两行：模型名 + 厂商）与左栏（全部 / 各厂商）。
   // 设置面那份「按厂商分组」的构造还在用，两边的参数口径（ctx 徽标、当前项）同源。
@@ -3405,25 +3382,6 @@ function ComposerBar(props: {
             </Chip>
           )
         }
-      />
-      <Menu
-        items={modeItems}
-        placement="above"
-        panelMinWidth={112}
-        trigger={({ open, toggle }) => (
-          <Chip
-            icon="shield-check"
-            active={open}
-            fixedWidth={84}
-            title={t.permissionModes[session.mode].hint}
-            onClick={toggle}
-            chevron
-            // 窄槽下只留图标，fixedWidth 也在同一断点被覆盖掉（见 styles.css）
-            className="chip-mode"
-          >
-            {t.permissionModes[session.mode].label}
-          </Chip>
-        )}
       />
       {props.intentToggle !== null && (
         <Chip
@@ -5178,13 +5136,7 @@ function ToolLine(props: {
   // 「派出中」而不是「失败了」。
   // 自动化：automation_create 的结果是一张卡（在右栏查看 / 暂停）；失败照通用骨架走
   if (props.toolName === "automation_create" && !failed) {
-    return <AutomationToolLine result={result} interrupted={interrupted} sessionId={props.sessionId} />;
-  }
-  // automation_update：留下的是一行「已改成放行 [改回只读]」或「让它到点能写文件？[允许] [保持只读]」；
-  // 失败 / 没留行（改成只读、本来就是放行）/ 还在跑照通用骨架走
-  if (props.toolName === "automation_update") {
-    const modeRow = automationModeRowOf(result);
-    if (modeRow !== null) return <AutomationModeLine row={modeRow} sessionId={props.sessionId ?? null} />;
+    return <AutomationToolLine result={result} interrupted={interrupted} />;
   }
   if (props.toolName === "delegate" && !failed) {
     return (

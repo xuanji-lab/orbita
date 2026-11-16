@@ -15,7 +15,6 @@ const PNG = Buffer.from(
 
 let dir = "";
 let outside = "";
-let mode = "skip";
 const sent: Record<string, unknown>[] = [];
 let reply: (event: Record<string, unknown>) => unknown = () => ({ ok: false, error: "no reply" });
 
@@ -33,7 +32,7 @@ before(async () => {
     sent.push(e);
     queueMicrotask(() => broker.resolve(e["requestId"] as string, reply(e)));
   });
-  const list = createDocTools(broker, "s1", { cwd: dir, writeRoots: [dir], workspaceId: "w1", mode: () => mode });
+  const list = createDocTools(broker, "s1", { cwd: dir, writeRoots: [dir], workspaceId: "w1" });
   tools = Object.fromEntries(list.map((tool) => [tool.name, tool]));
 });
 after(async () => {
@@ -84,9 +83,6 @@ describe("doc_open", () => {
     const again = await run("doc_open", { path: "新笔记.md", create: true });
     assert.match(textOf(again), /^Opened/);
     assert.equal(await readFile(join(dir, "新笔记.md"), "utf8"), "# 已有内容\n");
-    mode = "plan";
-    await assert.rejects(run("doc_open", { path: "plan.md", create: true }), /Plan mode/);
-    mode = "skip";
   });
 
   it("拒绝：根外、非文档扩展名、不存在（没给 create）、越界相对路径", async () => {
@@ -105,7 +101,7 @@ describe("doc_open", () => {
       await writeFile(join(base, "real", "周报", "w.md"), "# 周报\n");
       await symlink(join(base, "real"), join(base, "Home"));
       const broker = new RequestBroker(() => undefined);
-      const list = createDocTools(broker, "s2", { cwd: join(base, "Home"), writeRoots: [join(base, "Home")], workspaceId: "w2", mode: () => "skip" });
+      const list = createDocTools(broker, "s2", { cwd: join(base, "Home"), writeRoots: [join(base, "Home")], workspaceId: "w2" });
       const open = list.find((tool) => tool.name === "doc_open") as ToolDefinition;
       const result = (await open.execute("c2", { path: "周报/w.md" } as never, undefined as never, undefined as never, undefined as never)) as { details?: Record<string, unknown> };
       assert.equal(readOpenPanel(result.details)?.path, join(base, "Home", "周报", "w.md"));
@@ -172,7 +168,7 @@ describe("doc_insert_image", () => {
       await writeFile(join(dir, "周报", "h.md"), "# h\n");
       const broker = new RequestBroker(() => undefined);
       const wide = Object.fromEntries(
-        createDocTools(broker, "s2", { cwd: dir, writeRoots: [dir, attachedDir], imageReadRoots: [extra], workspaceId: "w1", mode: () => "skip" }).map((tool) => [tool.name, tool]),
+        createDocTools(broker, "s2", { cwd: dir, writeRoots: [dir, attachedDir], imageReadRoots: [extra], workspaceId: "w1" }).map((tool) => [tool.name, tool]),
       );
       const call = (image: string) => (wide["doc_insert_image"] as ToolDefinition).execute("c", { path: "周报/h.md", image_path: image } as never, undefined as never, undefined as never, undefined as never);
       assert.match(JSON.stringify(await call(join(attachedDir, "a.png"))), /Inserted/);

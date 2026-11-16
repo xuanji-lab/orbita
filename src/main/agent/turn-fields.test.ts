@@ -15,7 +15,6 @@ const input = {
   workspaceId: "ws-1",
   providerId: "p",
   modelId: "m",
-  mode: "plan",
   thinkingLevel: "medium",
   resume: null,
 } as const;

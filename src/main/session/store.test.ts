@@ -21,7 +21,6 @@ const meta = (patch: Partial<SessionMeta> = {}): SessionMeta => ({
   cwd: "/repo/orbita-lab",
   providerId: "zai",
   modelId: "glm-5.3",
-  mode: "plan",
   thinkingLevel: "medium",
   createdAt: 1000,
   updatedAt: 1000,
@@ -203,14 +202,6 @@ describe("SessionStore", () => {
     assert.deepEqual((await store.load(ID))?.meta.recentQueries, ["真问题"]);
   });
 
-  test("收尾扫描轮压过的权限档不写回会话 meta（审核 F-4）", async () => {
-    // 扫描轮在已有会话上 submit：主进程走 settleFirstTurn → ensureSession（带着压成 manual 的档）+ 落扫描提问
-    await store.ensureSession(meta({ mode: "skip", piSessionFile: "/pi/a.jsonl" }));
-    await store.ensureSession(meta({ mode: "manual", piSessionFile: "/pi/a.jsonl" }));
-    await store.record(ID, userItem(buildClosingScanPrompt({ sinceTurn: 1, lastTurn: 1, turns: [] }), 4000));
-    assert.equal((await store.load(ID))?.meta.mode, "skip");
-  });
-
   test("列表按 updatedAt 倒序——新的在前", async () => {
     await store.ensureSession(meta({ id: ID, updatedAt: 1000 }));
     await store.ensureSession(meta({ id: OTHER, updatedAt: 5000 }));
@@ -255,12 +246,6 @@ describe("SessionStore", () => {
     await writeFile(join(dir, "sessions", `${ID}.jsonl`), '{"id":"u1"}\n', "utf8");
     assert.deepEqual(await store.list(), []);
     assert.equal(await store.load(ID), null);
-  });
-
-  test("setMode 落盘——重开会话不该静默换档", async () => {
-    await store.ensureSession(meta());
-    await store.setMode(ID, "skip");
-    assert.equal((await store.load(ID))?.meta.mode, "skip");
   });
 
   test("setThinkingLevel 落盘——重开与下一轮开机的装配都读它", async () => {

@@ -376,7 +376,6 @@ export function createExternalSessionReader(deps: ExternalSessionReaderDeps): Ex
         workspaceId: null,
         providerId: UNASSIGNED_PROVIDER_ID,
         modelId: model ?? UNASSIGNED_MODEL_ID,
-        mode: "plan",
         thinkingLevel: "medium",
         piSessionFile: null,
         pinned: false,

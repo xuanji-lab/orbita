@@ -1664,7 +1664,7 @@ function SessionRow(props: {
    */
   const [workbenchFiles, setWorkbenchFiles] = useState<number | null>(null);
   // 行的运行态查它自己的槽：后台在跑的会话切走了也照样亮状态饼，与「当前看哪条」无关。
-  // 子会话只取一层（childSessions 同口径）——子会话在跑 / 在等审批都记到母会话
+  // 子会话只取一层（childSessions 同口径）——子会话在跑 / 在等你都记到母会话
   // 这一行的状态饼上（入口在母），fork 图标再补「跑的是孩子」那一句
   const children = childSessions(session.sessions, meta.id);
   // 状态饼（sessionRunState，与右下角铃铛清单同一份真源）

@@ -2,7 +2,7 @@
  * 会话落盘 —— 每条会话两个文件（设计与被否决的方案见
  * `docs/plans/2026-08-25-会话存储与命名工作区.md`）：
  *
- *   sessions/<id>.meta.json   可变（标题 / updatedAt / 权限档），原子写
+ *   sessions/<id>.meta.json   可变（标题 / updatedAt / 模型），原子写
  *   sessions/<id>.jsonl       只追加，一行一个 SessionRecord
  *
  * 分两个文件的理由：meta 会变而 transcript 只增。把可变记录塞进只追加的日志里，
@@ -26,7 +26,6 @@ import { headStringField, scanJsonlLines } from "../jsonl-scan.ts";
 import { CitedPdfIndex } from "./cited-pdfs.ts";
 import { EXTERNAL_FILE_COPY_MAX_BYTES, type PromptFileRef, type SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
-import type { PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import type { SessionWrapup } from "../../shared/wrapup.ts";
 import { parseAutomationHeader } from "../../shared/automation.ts";
@@ -664,10 +663,6 @@ export class SessionStore {
     });
   }
 
-  setMode(id: string, mode: PermissionMode): Promise<void> {
-    return this.update(id, { mode });
-  }
-
   /**
    * 「转成普通会话」：把一条自动化新开的会话标成 promoted，从此进左侧栏。
    * 只对带 automationId 的会话有意义——别的会话原样不动（返回 false）。
@@ -682,7 +677,7 @@ export class SessionStore {
     return changed;
   }
 
-  /** 改思考档（照 setMode）：重开与下一轮开机的装配都读它 */
+  /** 改思考档：重开与下一轮开机的装配都读它 */
   setThinkingLevel(id: string, thinkingLevel: ThinkingLevel): Promise<void> {
     return this.update(id, { thinkingLevel });
   }
@@ -821,7 +816,6 @@ export class SessionStore {
         workspaceId: meta.workspaceId,
         providerId: meta.providerId,
         modelId: meta.modelId,
-        mode: meta.mode,
         thinkingLevel: meta.thinkingLevel,
         piSessionFile: null,
         pinned: false,

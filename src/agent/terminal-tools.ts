@@ -24,16 +24,6 @@ import type { TerminalToolOutcome, TerminalToolRequest } from "../shared/termina
  *    委派）根本不该有这套工具，见 turn-tools.ts 的注册处。
  */
 
-/** 六个工具的名字。权限档描述（describePermissionMode）与测试都认这一份 */
-export const TERMINAL_TOOL_NAMES = [
-  "terminal_open",
-  "terminal_execute",
-  "terminal_read",
-  "terminal_list",
-  "terminal_interrupt",
-  "terminal_close",
-] as const;
-
 /** 开轮时由 runtime 给的会话上下文：授权目录清单（cwd + 附加目录）与解析基准 */
 export interface TerminalToolContext {
   /** 会话 cwd：相对 cwd 的解析基准，也是 cwd 缺席时终端开在哪 */

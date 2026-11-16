@@ -433,9 +433,9 @@ describe("parseSettings 的 lastUsed（A-0 复验 bug A：重启忘了上次选�
     deepStrictEqual(
       parseSettings({
         theme: "system",
-        lastUsed: { mode: "skip", providerId: "zhipu-coding", modelId: "glm-5.3-flash" },
+        lastUsed: { providerId: "zhipu-coding", modelId: "glm-5.3-flash" },
       }).lastUsed,
-      { mode: "skip", providerId: "zhipu-coding", modelId: "glm-5.3-flash" },
+      { providerId: "zhipu-coding", modelId: "glm-5.3-flash" },
     );
   });
 
@@ -446,11 +446,11 @@ describe("parseSettings 的 lastUsed（A-0 复验 bug A：重启忘了上次选�
     );
     deepStrictEqual(
       parseSettings({ theme: "system", lastUsed: { mode: "skip", thinkingLevel: "xhigh" } }).lastUsed,
-      { mode: "skip" },
+      undefined,
     );
   });
 
-  it("坏 mode 丢 mode 留 id；键全无效 = 整段不落盘", () => {
+  it("旧版本存的 mode 不再读（只留 id）；键全无效 = 整段不落盘", () => {
     deepStrictEqual(
       parseSettings({
         theme: "system",

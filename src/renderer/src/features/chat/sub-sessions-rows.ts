@@ -11,15 +11,13 @@ import type { ChannelMessage, ChannelStatus } from "@shared/channel";
 import type { Messages } from "../../messages-en.ts";
 
 /**
- * 一行的显示状态（七档，字面对应设计裁决的颜色/图标分配）：
+ * 一行的显示状态（字面对应设计裁决的颜色/图标分配）：
  *   running  = 子在跑（accent）
  *   waiting  = 通道状态 waiting，子问了、父还没回（warning，"waiting for you"）
- *   approval = 子会话在 renderer 会话槽里有未答的工具审批（warning，"needs approval"）——
- *     manual 档下每个工具都要批，用户往往不在看这条子会话，必须顶到审批之上单独一档
  *   interrupted = 子会话被应用崩溃打断、停着等你点「继续」（@shared/kernel 的 awaitsContinue；warning，归「等你」）——
  *     不点它就一直停着，父会话也一直等它
  *   stopped  = 通道状态 stopped，**用户**终止了这个子会话（tertiary，"stopped"）——
- *     用户的裁决压过审批 / 在跑这些瞬时态：停都停了，不该再引导用户去批一个死轮
+ *     用户的裁决压过在跑这类瞬时态：停都停了，不该再引导用户去盯一个死轮
  *   done     = 通道 closed 于 done（success）
  *   failed   = 通道 closed 于 failed（danger）
  *   idle     = 都不是（tertiary）——子会话建了但通道还没有除 task 外的往来，也没在跑
@@ -27,7 +25,6 @@ import type { Messages } from "../../messages-en.ts";
 export type SubSessionRowStatus =
   | "running"
   | "waiting"
-  | "approval"
   | "interrupted"
   | "done"
   | "failed"
@@ -35,23 +32,20 @@ export type SubSessionRowStatus =
   | "idle";
 
 /**
- * 一行状态怎么定：**waiting 优先于 stopped，优先于 approval，优先于 running**——
+ * 一行状态怎么定：**waiting 优先于 stopped，优先于 running**——
  * waiting 与 stopped 同源（通道状态，互斥），摆在一起只是让检查顺序可读；stopped
- * 压过 approval / running 是用户裁决的语义：终止了就别再拿「待批 / 在跑」引导用户。
- * approval 又比单纯 running 紧迫——running 只是「知会」，approval 是「卡住了，等你」。
- * done/failed 只在不满足前者时才看（正常情况下 done/failed 的通道不会同时在跑或有
- * 待批审批，但状态机不为「不会发生」的组合留特判缺口，见 channelStatus 同款纪律）。
+ * 压过 running 是用户裁决的语义：终止了就别再拿「在跑」引导用户。
+ * done/failed 只在不满足前者时才看（正常情况下 done/failed 的通道不会同时在跑，
+ * 但状态机不为「不会发生」的组合留特判缺口，见 channelStatus 同款纪律）。
  */
 export function subSessionRowStatus(input: {
   channelStatus: ChannelStatus | undefined;
-  needsApproval: boolean;
   running: boolean;
   /** 被崩溃打断、等你点「继续」（缺席 = 否）；只在没在跑时为真，排在 running 之后只为读着顺 */
   interrupted?: boolean;
 }): SubSessionRowStatus {
   if (input.channelStatus === "waiting") return "waiting";
   if (input.channelStatus === "stopped") return "stopped";
-  if (input.needsApproval) return "approval";
   if (input.running) return "running";
   if (input.interrupted === true) return "interrupted";
   if (input.channelStatus === "done") return "done";
@@ -60,7 +54,7 @@ export function subSessionRowStatus(input: {
 }
 
 /**
- * 排序优先级：数字越小越靠前——**等你（question / 审批）最前，其次 running，其次 failed，
+ * 排序优先级：数字越小越靠前——**等你（question / 被打断）最前，其次 running，其次 failed，
  * 其次 done**；stopped / idle 收尾（终局或还没说话，都不需要用户动手）。
  * running 原在 done 之后（2026-10-12 收件箱裁决）；2026-11-06 用户改：子会话一多（十几二十个），
  * 新派出、正在跑的被已完成的压到底部，每次都得往下翻——在跑的才是此刻在盯的，提到等你之后。注意与 subSessionRowStatus 的支配关系不是一回事：
@@ -69,7 +63,6 @@ export function subSessionRowStatus(input: {
  */
 const STATUS_PRIORITY: Record<SubSessionRowStatus, number> = {
   waiting: 0,
-  approval: 0,
   interrupted: 0,
   running: 1,
   failed: 2,
@@ -79,7 +72,7 @@ const STATUS_PRIORITY: Record<SubSessionRowStatus, number> = {
 };
 
 /**
- * 列表层的行排序（收件箱）：**等你（question / 审批）最前，其次 running，其次
+ * 列表层的行排序（收件箱）：**等你（question / 被打断）最前，其次 running，其次
  * failed，其次 done**；同组之内**新的在前**（lastAt 倒序——通道里最后一条消息
  * 的时间，没有账本的按会话创建时间）。收件箱是待办清单：越新的越可能是你现在
  * 要处理的，老的沉下去。
@@ -94,7 +87,7 @@ export function sortSubSessionRows<T extends { status: SubSessionRowStatus; last
 
 /**
  * 行首状态饼的档位（shell/StatusPie.tsx 的 `.status-pie`，与侧栏 / 铃铛清单同一个）：
- * running = 1/3 蓝、waiting / approval = 2/3 橙、done = 3/3 绿、failed = 3/3 红；
+ * running = 1/3 蓝、waiting / interrupted = 2/3 橙、done = 3/3 绿、failed = 3/3 红；
  * stopped / idle 不亮——「没什么要你做的」是整个东西退场，不是留一根灰杠。
  * stopped 是用户的裁决不是故障，与 idle 同槽。
  */
@@ -103,7 +96,6 @@ export function subSessionBarFill(status: SubSessionRowStatus): "running" | "wai
     case "running":
       return "running";
     case "waiting":
-    case "approval":
     case "interrupted":
       return "waiting";
     case "done":
@@ -132,7 +124,7 @@ export function latestChannelLine(
 ): string {
   const spoken = [...(messages ?? [])].reverse().find((message) => message.kind !== "task");
   if (spoken === undefined) {
-    return status === "running" || status === "waiting" || status === "approval"
+    return status === "running" || status === "waiting"
       ? t.channel.notSpokenRunning
       : t.channel.notSpoken;
   }
@@ -161,7 +153,7 @@ function firstLineOf(text: string): string {
 
 /**
  * 「等你」那几个子会话怎么说（父会话顶部胶囊与右栏子会话列表标题同一套，2026-11-16 验收：一处写「被打断」一处写「在等你」，
- * 读的人会以为是两件事）：有被打断的，先写被打断的个数；其余等你的（问你 / 待批准）照各处原来的说法写个数；都没有 = 空串。
+ * 读的人会以为是两件事）：有被打断的，先写被打断的个数；其余等你的（问你）照各处原来的说法写个数；都没有 = 空串。
  */
 export function waitingSummary(
   waiting: number,
@@ -195,8 +187,6 @@ export function delegateCardStatus(
  * 测试拿字面量假对象就能喂，真实引擎天然满足这个形状。
  */
 export interface SubSessionEngineSlots {
-  /** 分槽状态里的审批槽：有未答审批 = approval 档 */
-  states: ReadonlyMap<string, { approvals: readonly unknown[] }>;
   /** 会话 phase：非 idle = 这条会话此刻真的在跑 */
   phaseOf: (id: string) => string;
   /** 被崩溃打断、等你点「继续」（引擎的 interruptedOf；缺席 = 不认这个来源） */
@@ -204,7 +194,7 @@ export interface SubSessionEngineSlots {
 }
 
 /**
- * 一行 / 一张通道卡的显示状态怎么取：通道摘要的 status + 引擎的审批槽与 phase，
+ * 一行 / 一张通道卡的显示状态怎么取：通道摘要的 status + 引擎的 phase，
  * 拼成 `subSessionRowStatus` 的输入。Sub-sessions 面板的行与父子会话面板的通道卡
  * **共用这一份 glue**，两处画出来的状态永远同源。
  *
@@ -220,7 +210,6 @@ export function subSessionStatusOf(
 ): SubSessionRowStatus {
   return subSessionRowStatus({
     channelStatus,
-    needsApproval: (engine.states.get(childId)?.approvals.length ?? 0) > 0,
     running: engine.phaseOf(childId) !== "idle",
     interrupted: engine.interruptedOf?.(childId) ?? false,
   });

@@ -5,7 +5,6 @@
 import type { TranscriptItem } from "@shared/transcript";
 import type { SubmitAgentInput } from "@shared/agent-ipc";
 import type { WrapupPlan } from "@shared/wrapup";
-import { atMostManual } from "../../../../shared/permission.ts";
 import { buildClosingScanPrompt, parseWrapupBlock, soleFencedJson } from "../../../../shared/wrapup-scan.ts";
 
 /**
@@ -47,7 +46,7 @@ export function scanSubmitInput(
   turn: Omit<SubmitAgentInput, "sessionId" | "text">,
   plan: Pick<WrapupPlan, "sinceTurn" | "lastTurn" | "turns" | "compactions">,
 ): SubmitAgentInput {
-  return { ...turn, mode: atMostManual(turn.mode), sessionId, text: buildClosingScanPrompt(plan) };
+  return { ...turn, sessionId, text: buildClosingScanPrompt(plan) };
 }
 
 /** 消息流里的扫描回答（只读展示卡吃它） */

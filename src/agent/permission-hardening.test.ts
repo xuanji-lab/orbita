@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createToolCallGate, describePermissionMode, type ToolCallLike } from "./permission.ts";
+import { createToolCallGate, describeProtectedData, type ToolCallLike } from "./permission.ts";
 import { expandBraces } from "./protected-command.ts";
 
 const HOME = "/Users/tester";
@@ -23,7 +23,7 @@ function bash(gate: ReturnType<typeof makeGate>, command: string, tool = "bash")
   return gate({ toolCallId: "c", toolName: tool, input: { command } } satisfies ToolCallLike);
 }
 function makeGate() {
-  return createToolCallGate(() => "skip", async () => ({ behavior: "allow" }), PATHS, CWD, FILES, GUARD);
+  return createToolCallGate(PATHS, CWD, FILES, GUARD);
 }
 const D = DATA;
 const DS = DATA.replaceAll(" ", "\\ ");
@@ -229,13 +229,6 @@ describe("自动化记录闸门加固：命令串（bash / powershell）", () =>
     assert.match(result.reason ?? "", /workbench/);
   });
 
-  test("plan / manual 档也拦（在权限档判定之前）", async () => {
-    for (const mode of ["plan", "manual"] as const) {
-      const gate = createToolCallGate(() => mode, async () => ({ behavior: "allow" }), PATHS, CWD, FILES, GUARD);
-      assert.equal((await bash(gate, `cd "${D}" && rm automations.json`)).block, true, mode);
-    }
-  });
-
   test("三个文件都进名单后，各自的文件名与 .tmp / .bad- 兄弟都拦（在数据目录里）", async () => {
     for (const name of ["automations.json", "automations-archive.json", "automations-archive-old.jsonl"]) {
       for (const suffix of ["", ".a1b2c3d4.tmp", ".bad-1763000000000"]) {
@@ -267,7 +260,7 @@ describe("自动化记录闸门加固：write / edit 跟符号链接走、大小
   symlinkSync(data, join(root, "tmp", "datalink"));
   symlinkSync(join(root, "tmp", "link.json"), join(root, "tmp", "link2.json"));
   const files = [join(data, "automations.json"), join(data, "automations-archive.json"), join(data, "automations-archive-old.jsonl")];
-  const gate = createToolCallGate(() => "skip", async () => ({ behavior: "allow" }), [join(data, "sessions")], join(root, "ws"), files, { home: root, env: {} });
+  const gate = createToolCallGate([join(data, "sessions")], join(root, "ws"), files, { home: root, env: {} });
   const write = (path: string, tool = "write") => gate({ toolCallId: "c", toolName: tool, input: { path, content: "x" } });
 
   test("符号链接两步：write 指向受保护文件的链接被拦（含链接的链接）", async () => {
@@ -303,13 +296,13 @@ describe("自动化记录闸门加固：write / edit 跟符号链接走、大小
   });
 });
 
-describe("describePermissionMode 点名受保护的文件", () => {
+describe("describeProtectedData 点名受保护的文件", () => {
   test("给了名单就把三个文件名都写进说明；没给回落 automations.json", () => {
-    const text = describePermissionMode("skip", [], FILES);
+    const text = describeProtectedData(FILES);
     for (const name of ["automations.json", "automations-archive.json", "automations-archive-old.jsonl"]) assert.ok(text.includes(name), name);
     assert.match(text, /cd into the folder that holds them/);
     assert.match(text, /read tool or automation_list/);
-    assert.match(describePermissionMode("skip"), /\(automations\.json\)/);
+    assert.match(describeProtectedData(), /\(automations\.json\)/);
   });
 });
 
@@ -389,7 +382,7 @@ const MUST_ALLOW_R3B: [string, string][] = [
 
 describe("第三轮补一小轮：cd 跟踪、相对名解析、泛破坏、同名误伤收窄", () => {
   const gateAt = (cwd: string) =>
-    createToolCallGate(() => "skip", async () => ({ behavior: "allow" }), [`${D2}/sessions`], cwd, F2, GUARD);
+    createToolCallGate([`${D2}/sessions`], cwd, F2, GUARD);
   const projGate = gateAt(PROJ);
   const dataGate = gateAt(D2);
 

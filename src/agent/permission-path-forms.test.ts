@@ -14,7 +14,7 @@ const DURABLE = join(DATA, "durable");
 const FILE = join(DATA, "automations.json");
 const CWD = join(homedir(), "orbita-gate-test-cwd");
 const REL = SESSIONS.slice(homedir().length + 1);
-const gate = createToolCallGate(() => "skip", async () => ({ behavior: "allow" }), [SESSIONS, DURABLE], CWD, [FILE], { home: homedir(), env: { HOME: homedir() } });
+const gate = createToolCallGate([SESSIONS, DURABLE], CWD, [FILE], { home: homedir(), env: { HOME: homedir() } });
 const call = (toolName: string, input: Record<string, unknown>) => gate({ toolCallId: "c", toolName, input });
 
 describe("write / edit：pi 会规整成受保护路径的写法都要拦", () => {
@@ -44,7 +44,7 @@ describe("write / edit：pi 会规整成受保护路径的写法都要拦", () =
   });
 
   test("规整不了的输入不让闸门抛错", async () => {
-    await assert.doesNotReject(() => call("write", { path: "file://%zz/bad", content: "x" }));
+    assert.doesNotThrow(() => call("write", { path: "file://%zz/bad", content: "x" }));
   });
 });
 
@@ -84,7 +84,7 @@ describe("按文件身份比：字符串与 realpath 认不出、但指到同一
   symlinkSync(durable, join(work, "into-durable"));
   symlinkSync(sessions, join(work, "into-sessions"));
   after(() => rmSync(root, { recursive: true, force: true }));
-  const idGate = createToolCallGate(() => "skip", async () => ({ behavior: "allow" }), [sessions, durable], work, [record], { home: root, env: { HOME: root } });
+  const idGate = createToolCallGate([sessions, durable], work, [record], { home: root, env: { HOME: root } });
   const run = (toolName: string, input: Record<string, unknown>) => idGate({ toolCallId: "c", toolName, input });
 
   const firm = "/System/Volumes/Data";
@@ -199,7 +199,7 @@ describe("命令里改 HOME、cd 到 firmlink 前缀；写到还不存在的受�
   test("write / edit 到还不存在的受保护目录（firmlink 前缀，stat 不到）：拦", async () => {
     // pi-sessions/ 这类目录可能还没建：身份比对认不出，靠去掉 firmlink 前缀后的字符串比对
     const notYet = join(DATA, "pi-sessions");
-    const gateNotYet = createToolCallGate(() => "skip", async () => ({ behavior: "allow" }), [notYet], CWD, [], { home: homedir(), env: { HOME: homedir() } });
+    const gateNotYet = createToolCallGate([notYet], CWD, [], { home: homedir(), env: { HOME: homedir() } });
     for (const tool of ["write", "edit"]) {
       const result = await gateNotYet({ toolCallId: "c", toolName: tool, input: { path: `/System/Volumes/Data${notYet}/x.jsonl`, content: "x" } });
       assert.equal(result.block, true, tool);

@@ -20,7 +20,6 @@ import {
   createSessionStates,
   moveQueued as moveQueuedIn,
   parseCompactCommand,
-  removeApproval,
   removeIntentAsk,
   setPendingEcho,
   nextDeliverable,
@@ -32,7 +31,6 @@ import {
   seedHistory,
   setOlderLoading,
   setEntryPhase,
-  type PendingApproval,
   type QueuedMessage,
   type SessionEntry,
   type SessionStates,
@@ -72,7 +70,6 @@ import {
 import { getOpenDocument, resolveQuotes } from "../doc-panel/open-document.ts";
 import { acceptQuote, composeQuotedMessage, parseQuotedMessage, QUOTE_MAX_TOTAL_CHARS, type TextQuote } from "../../../../shared/quote.ts";
 import { recordAssistantStart } from "./stats-format.ts";
-import { atMostManual, DEFAULT_PERMISSION_MODE, type PermissionAnswer, type PermissionMode } from "@shared/permission";
 import type { ThinkingLevel as PiThinkingLevel } from "@shared/transcript";
 import { isThinkingLevel, type ThinkingLevel } from "@shared/thinking";
 import { modelThinkingLevels } from "@shared/model-defaults";
@@ -113,7 +110,7 @@ import { ipcErrorText } from "../../utils/ipc-error.ts";
  * app shell 里左栏（会话列表 / 工作区）与中卡（聊天面）需要读同一份状态，
  * 而它们在 DOM 上是兄弟，状态没法再留在中卡里。
  *
- * transcript / phase / 审批**按会话分槽**（session-states.ts）：事件无条件进自己的槽，
+ * transcript / phase **按会话分槽**（session-states.ts）：事件无条件进自己的槽，
  * 切走正在跑的会话不再丢更新——「看哪条」只是显示问题，不再决定「记不记」。
  * transcript 归约仍是 **pi 自带的归约器**，我们不写第二份归约逻辑（guideline §三）。
  *
@@ -125,11 +122,11 @@ import { ipcErrorText } from "../../utils/ipc-error.ts";
  * - **引擎**（`useChatSessionEngine`）：与「正在看哪条」无关的共享真源——事件泵、
  *   分槽状态、会话/工作区列表、会话级意图账本。全应用只有一份。
  * - **查看槽**（`useSessionView`）：某个「正在看」的全部——session id、草稿、
- *   模型/权限档意图、绑住本槽的 send/stop/…。主槽与抽屉槽各一份，互不串。
+ *   模型意图、绑住本槽的 send/stop/…。主槽与抽屉槽各一份，互不串。
  *
  * 拆分与无状态 runtime（submit 每轮带全套开工上下文）是一体的：引擎持有
  * `buildTurn` 与会话级意图账本（它们按会话 id 记账，天然多槽安全）；
- * 查看槽的每轮 submit 显式带上自己槽内的 model / mode / cwd。
+ * 查看槽的每轮 submit 显式带上自己槽内的 model / cwd。
  */
 /** 回退确认框的全部状态：计划 + 要放回输入框的那条原文（含附件）。 */
 /** 会话只能读不能续的原因（ChatSession.readOnlyReason） */
@@ -204,11 +201,9 @@ export interface ChatSession {
   phaseOf: (id: string) => SessionEntry["phase"];
   /** 按 id 查回合失败标注（槽里有真相）——未读标记的 failed 快照用，与「当前看哪条」无关 */
   turnErrorOf: (id: string) => string | null;
-  /** 按 id 查挂着的工具审批（槽里有真相）——状态饼「在等你」要读到后台会话的审批 */
-  approvalsOf: (id: string) => readonly PendingApproval[];
-  /** 按 id 查是否停在「计划等你确认」上——状态饼「在等你」的第二个来源（plan-timeline 的 planAwaitingIn） */
+  /** 按 id 查是否停在「计划等你确认」上——状态饼「在等你」的一个来源（plan-timeline 的 planAwaitingIn） */
   planAwaitingOf: (id: string) => boolean;
-  /** 按 id 查子会话是否被崩溃打断、停着等人点「继续」（@shared/kernel 的 awaitsContinue）——「在等你」的第三个来源 */
+  /** 按 id 查子会话是否被崩溃打断、停着等人点「继续」（@shared/kernel 的 awaitsContinue）——「在等你」的另一个来源 */
   interruptedOf: (id: string) => boolean;
   /**
    * 按 id 取整个槽（没载过 = undefined）。首页会话卡要说「此刻在干什么」：后台在跑的会话
@@ -245,8 +240,6 @@ export interface ChatSession {
   /** 加一条引用。同一条消息里的同一段重复加不重复记 */
   addQuote: (quote: TextQuote) => void;
   removeQuote: (index: number) => void;
-  mode: PermissionMode;
-  changeMode: (next: PermissionMode) => void;
   /** 当前查看会话的思考档（意图；clamp 真值经事件自动纠） */
   thinkingLevel: ThinkingLevel;
   changeThinkingLevel: (next: ThinkingLevel) => void;
@@ -254,7 +247,6 @@ export interface ChatSession {
   thinkingSupported: readonly PiThinkingLevel[] | null;
   /** pi 内建目录（引擎一份 fetch 的透传，见 SessionEngine.catalog）——ComposerBar 从这读 */
   catalog: readonly BuiltinProvider[];
-  approvals: PendingApproval[];
   /** 侧栏列的工作区（落盘、跨会话）。 */
   workspaces: Workspace[];
   /**
@@ -436,7 +428,7 @@ export interface ChatSession {
   confirmUndo: () => void;
   cancelUndo: () => void;
   send: () => void;
-  /** 打断当前这一轮。pi 的 abort 走的是与工具审批不同的一条路，不需要等审批答复 */
+  /** 打断当前这一轮 */
   stop: () => void;
   /** 排队队列（当前槽），按显示顺序。唯一真源，操作一律按 id */
   queued: readonly QueuedMessage[];
@@ -455,7 +447,6 @@ export interface ChatSession {
    * 草稿写进**新任务槽自己的键**：newTaskIn 之后立刻 setDraft 写的是旧会话的键（闭包里的 draftKey 还是旧的）。
    */
   startTaskWithDraft: (workspace: Workspace | null, text: string) => void;
-  answerApproval: (requestId: string, answer: PermissionAnswer) => void;
   /* ---------- 意图系统（实验功能 intent-system） ---------- */
   /** 终态召回卡（实时事件 + 盘上种子；同一 turn 只留最后一张） */
   intentRecalls: readonly IntentRecallRecord[];
@@ -483,8 +474,6 @@ interface ViewHandle {
   /** model 事件回环对齐（C-4）：只对齐正看着那条会话的槽 */
   alignModel(event: { providerId: string; modelId: string }): void;
   alignThinking(event: { providerId: string; modelId: string; level: PiThinkingLevel }): void;
-  /** 档位被父会话切档联动改了（主进程已落 meta / runtime）：mode 芯片对齐 */
-  alignMode(mode: PermissionMode): void;
   /** 正在看/正打开的那条被删了：本槽退回首页 */
   handleRemoved(id: string): void;
   /** 正开着的那条迁到了别的工作区：meta、作用域芯片与 cwd 跟着变 */
@@ -535,7 +524,6 @@ export interface SessionEngine {
    */
   syncIntent(patch: {
     model: { providerId: string; modelId: string } | null;
-    mode: PermissionMode;
     thinkingLevel: ThinkingLevel;
     cwd: string | null;
     workspaceId: string | null;
@@ -545,7 +533,6 @@ export interface SessionEngine {
     current: ReadonlyMap<
       string,
       {
-        mode?: PermissionMode;
         model?: { providerId: string; modelId: string };
         thinkingLevel?: ThinkingLevel;
       }
@@ -554,20 +541,10 @@ export interface SessionEngine {
   rememberSessionIntent(
     id: string,
     patch: {
-      mode?: PermissionMode;
       model?: { providerId: string; modelId: string };
       thinkingLevel?: ThinkingLevel;
     },
   ): void;
-  /**
-   * 子会话档位联动（renderer 侧）：用户切父会话档时，主进程已把子会话的 runtime
-   * 账与 meta 一起切（applyModeCascade，agent 域）；这里同步三样衍生状态——
-   *   ① 子会话的会话级意图覆写（intent 优先于 meta：buildTurn / openSession 都
-   *      先读它，不覆写的话下一轮 submit 仍带旧档、切回子会话 chip 也显示旧档）；
-   *   ② 会话列表缓存乐观更新（Sub-sessions 面板等直读这份缓存）；
-   *   ③ 正看着某条子会话的查看槽，mode 芯片对齐。
-   */
-  cascadeSubSessionModes(parentId: string, mode: PermissionMode): void;
   /**
    * 组装无状态开工上下文（AgentTurnContext 的主体）：meta 真值（cwd / 归属 /
    * pi 本子）+ 会话级意图。拿不出可用上下文时把错误写进引擎 error 并返回 null。
@@ -592,11 +569,9 @@ export interface SessionEngine {
   readonly usable: ProviderDto[];
   readonly phaseOf: (id: string) => SessionEntry["phase"];
   readonly turnErrorOf: (id: string) => string | null;
-  readonly approvalsOf: (id: string) => readonly PendingApproval[];
   readonly planAwaitingOf: (id: string) => boolean;
   readonly interruptedOf: (id: string) => boolean;
   readonly entryOf: (id: string) => SessionEntry | undefined;
-  readonly answerApproval: (requestId: string, answer: PermissionAnswer) => void;
   /** 意图确认卡的回答（实验功能 intent-system） */
   readonly answerIntentConfirm: (requestId: string, decision: IntentConfirmDecision) => void;
   /** 乐观回显：发出即画用户气泡（真回显事件一到即清）。ephemeral */
@@ -696,14 +671,12 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
    */
   const intentRef = useRef<{
     model: { providerId: string; modelId: string } | null;
-    mode: PermissionMode;
     thinkingLevel: ThinkingLevel;
     cwd: string | null;
     workspaceId: string | null;
     defaultCwd: string;
   }>({
     model: null,
-    mode: DEFAULT_PERMISSION_MODE,
     thinkingLevel: "medium",
     cwd: null,
     workspaceId: null,
@@ -715,7 +688,6 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
   const syncIntent = useCallback(
     (patch: {
       model: { providerId: string; modelId: string } | null;
-      mode: PermissionMode;
       thinkingLevel: ThinkingLevel;
       cwd: string | null;
       workspaceId: string | null;
@@ -726,13 +698,12 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
   );
 
   /**
-   * **会话级意图**：用户在哪条会话上改的档位 / 模型，就记在哪条名下。
+   * **会话级意图**：用户在哪条会话上改的模型 / 思考档，就记在哪条名下。
    *
-   * 查看槽的 UI 意图跟着「你正在看哪条」走（`openSession` 会把 mode / model 改成
+   * 查看槽的 UI 意图跟着「你正在看哪条」走（`openSession` 会把 model 改成
    * 被查看会话的值）；而 `deliverNext` 是**不按「正看着谁」过滤**的，后台会话的
-   * 队首照样会投递。两者合起来就是串台：A（plan）跑着且队列非空 → 切去看 B（skip）
-   * → A 的轮结束 → A 的排队卡拿着 **B 的权限档与 B 的模型**跑出去。档位决定
-   * bash 能不能跑，这是安全边界上的串台。
+   * 队首照样会投递。两者合起来就是串台：A 跑着且队列非空 → 切去看 B
+   * → A 的轮结束 → A 的排队卡拿着 **B 的模型**跑出去。
    *
    * 所以意图必须按会话记账：你在 A 上选的就只给 A。它不需要清——这就是「用户对
    * 这条会话的最新选择」，永远至少和 meta 一样新（闲着时两边会自行收敛）。
@@ -741,7 +712,6 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     Map<
       string,
       {
-        mode?: PermissionMode;
         model?: { providerId: string; modelId: string };
         thinkingLevel?: ThinkingLevel;
       }
@@ -751,7 +721,6 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     (
       id: string,
       patch: {
-        mode?: PermissionMode;
         model?: { providerId: string; modelId: string };
         thinkingLevel?: ThinkingLevel;
       },
@@ -760,31 +729,6 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
       map.set(id, { ...map.get(id), ...patch });
     },
     [],
-  );
-
-  /**
-   * 子会话档位联动（renderer 侧）。真值由主进程落盘，这里只同步衍生状态——
-   * 缓存里还没有的子会话（刚派出、列表未刷新）跳过：它没有旧 intent 可挡，
-   * meta 已被主进程切，buildTurn 拿到的就是新档。
-   */
-  const cascadeSubSessionModes = useCallback(
-    (parentId: string, mode: PermissionMode) => {
-      const children = childSessions(sessionsRef.current, parentId);
-      if (children.length === 0) return;
-      const childIds = new Set(children.map((child) => child.id));
-      const next = sessionsRef.current.map((meta) =>
-        childIds.has(meta.id) ? { ...meta, mode } : meta,
-      );
-      sessionsRef.current = next;
-      setSessions(next);
-      for (const child of children) {
-        rememberSessionIntent(child.id, { mode });
-        for (const view of views.current) {
-          if (view.sessionRef.current === child.id) view.alignMode(mode);
-        }
-      }
-    },
-    [rememberSessionIntent],
   );
 
   /**
@@ -829,7 +773,6 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
         resume: meta?.piSessionFile != null ? { piSessionFile: meta.piSessionFile } : null,
         providerId: model.providerId,
         modelId: model.modelId,
-        mode: own?.mode ?? meta?.mode ?? intent.mode,
         // 思考档同一条三级链：会话级意图 → meta → 投递兑底（新会话的 UI 选择）
         thinkingLevel: own?.thinkingLevel ?? meta?.thinkingLevel ?? intent.thinkingLevel,
       };
@@ -1179,14 +1122,6 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     [],
   );
 
-  const answerApproval = useCallback(
-    (requestId: string, answer: PermissionAnswer) => {
-      applyStates((prev) => removeApproval(prev, requestId));
-      void api.agent.answerPermission(requestId, answer);
-    },
-    [applyStates],
-  );
-
   /** 乐观回显：与 beginOptimisticTurn 同拍写入（发出那一刻），真回显清掉它 */
   const setPendingEchoCb = useCallback(
     (id: string, blocks: readonly string[]) => {
@@ -1338,12 +1273,6 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     (id: string): string | null => statesRef.current.get(id)?.turnError ?? null,
     [],
   );
-  // 按 id 查挂着的审批（2026-10-10 未读/状态饼一刀）：状态饼「在等你」要读到后台
-  // 会话的审批，不只当前看着的那条；与 phaseOf / turnErrorOf 同一套 ref 读法
-  const approvalsOf = useCallback(
-    (id: string): readonly PendingApproval[] => statesRef.current.get(id)?.approvals ?? [],
-    [],
-  );
   // 停在「计划等你确认」上（状态饼 / 铃铛 / 首页卡「等你」的第二个来源）：只在 idle 时判——在跑的
   // 轮不可能停在确认上，也免得每次渲染对在跑会话扫转录
   const planAwaitingOf = useCallback((id: string): boolean => {
@@ -1376,7 +1305,6 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     syncIntent,
     sessionIntent: sessionIntentRef,
     rememberSessionIntent,
-    cascadeSubSessionModes,
     buildTurn,
     modelMissingText,
     setError,
@@ -1396,11 +1324,9 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     usable,
     phaseOf,
     turnErrorOf,
-    approvalsOf,
     planAwaitingOf,
     interruptedOf,
     entryOf,
-    answerApproval,
     renameSession,
     pinSession,
     starSession,
@@ -1467,7 +1393,6 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     modelRef.current = model;
   }, [model]);
 
-  const [mode, setMode] = useState<PermissionMode>(DEFAULT_PERMISSION_MODE);
   // 思考档初始 medium：不是新拍的默认，是这些会话一直实际在跑的那一档（pi 出厂默认）
   const [thinkingLevel, setThinkingLevelState] = useState<ThinkingLevel>("medium");
   const sessionRef = useRef<string | null>(null);
@@ -1516,7 +1441,6 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       .then((settings) => {
         const last = settings.lastUsed;
         if (last === undefined) return;
-        if (last.mode !== undefined) setMode(last.mode);
         if (last.providerId !== undefined && last.modelId !== undefined) {
           setModel({ providerId: last.providerId, modelId: last.modelId });
           // 恢复了模型之后，思考档按规则起（手选 > 这个模型的默认档）——
@@ -1665,8 +1589,6 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         modelRef.current = next;
         setModel(next);
       },
-      // 档位联动对齐：父会话切档带过来的新档直接上 chip（值只来自用户切档路径）
-      alignMode: (mode) => setMode(mode),
       // clamp 真值只认 5 档内的（xhigh/max 是目录未搬运前的边缘，进了也点不到）；
       // 不认识就保持原样——意图档继续显示，下一轮事件再纠
       // 只认当前型号报的：轮中切了型号（新型号下一轮才生效），旧型号此后因改档再报的
@@ -1717,8 +1639,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
 
   // 本槽的 UI 选择推进引擎的投递兜底（见引擎 syncIntent 的注释）
   useEffect(() => {
-    engine.syncIntent({ model, mode, thinkingLevel, cwd, workspaceId });
-  }, [engine, model, mode, cwd, workspaceId]);
+    engine.syncIntent({ model, thinkingLevel, cwd, workspaceId });
+  }, [engine, model, cwd, workspaceId]);
 
   // 草稿键 = 当前查看的会话；send 与收回都写自己的键，互不串。
   // 兜底键带槽名：主槽与抽屉槽的「首页」是两份草稿
@@ -2077,7 +1999,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       workspace: string | null,
       resume: { piSessionFile: string } | null,
       images?: readonly PromptImage[],
-      extras?: { files?: readonly ComposerFileRef[]; carryoverId?: string; mode?: PermissionMode },
+      extras?: { files?: readonly ComposerFileRef[]; carryoverId?: string },
     ): Promise<void> => {
       if (model === null) {
         engine.setError(engine.modelMissingText());
@@ -2095,7 +2017,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       // （与 runtime 的回显同款切法，真回显一到无缝换下）
       engine.setPendingEcho(id, splitEchoBlocks(text));
       try {
-        // submit 自带全套开工上下文：换过的模型 / 权限档随本轮显式生效。
+        // submit 自带全套开工上下文：换过的模型随本轮显式生效。
         // 文件引用与粘贴块跟图同行：主进程落盘副本 / agent 进程组装进正文
         await api.agent.submit({
           sessionId: id,
@@ -2108,8 +2030,6 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           resume,
           providerId: model.providerId,
           modelId: model.modelId,
-          // 遗留事项开工压过档（见 startCarryoverTask）：本轮按压过的发，setMode 要到下一次渲染才生效
-          mode: extras?.mode ?? mode,
           thinkingLevel,
         });
         // 新本子的首轮：submit 的开机确认（等 created → 建 meta）返回后侧栏才看得见它
@@ -2127,7 +2047,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         revertTurn();
       }
     },
-    [engine, model, mode, thinkingLevel, restoreSent],
+    [engine, model, thinkingLevel, restoreSent],
   );
 
   const send = useCallback(async () => {
@@ -2202,7 +2122,6 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         resume: opened?.piSessionFile != null ? { piSessionFile: opened.piSessionFile } : null,
         providerId: model.providerId,
         modelId: model.modelId,
-        mode,
         thinkingLevel,
         ...(compact.instructions !== undefined ? { instructions: compact.instructions } : {}),
       });
@@ -2273,7 +2192,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     } catch (cause) {
       engine.setError(cause instanceof Error ? cause.message : String(cause));
     }
-  }, [engine, draft, attachments, quotes, files, pasted, sessionId, model, mode, cwd, workspaceId, opened, draftKey, writeDraft, writeAttachments, writeFiles, writeBlocks, writeQuotes, submitTurn]);
+  }, [engine, draft, attachments, quotes, files, pasted, sessionId, model, cwd, workspaceId, opened, draftKey, writeDraft, writeAttachments, writeFiles, writeBlocks, writeQuotes, submitTurn]);
 
   const stop = useCallback(() => {
     // 只停本槽当前轮。排队不动：pi 队列滞留给下次发送自动带上；压缩缓冲在压缩结束
@@ -2319,10 +2238,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           setOpened(detail.meta);
           setCwd(detail.meta.cwd);
           setWorkspaceId(detail.meta.workspaceId);
-          // 会话级意图优先于 meta：这条会话跑着时改的档位 / 模型落不进 meta，
-          // 切走再切回时若拿 meta 重置 chip，chip 就会说 plan 而下一轮实际跑 skip
+          // 会话级意图优先于 meta：这条会话跑着时改的模型落不进 meta，
+          // 切走再切回时若拿 meta 重置 chip，chip 就会说旧模型而下一轮实际跑新模型
           const own = engine.sessionIntent.current.get(id);
-          setMode(own?.mode ?? detail.meta.mode);
           const restoredModel = own?.model ?? { providerId: detail.meta.providerId, modelId: detail.meta.modelId };
           setModel(restoredModel);
           /**
@@ -2410,12 +2328,6 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       setCwd(source?.cwd ?? null);
       setWorkspaceId(source?.workspaceId ?? null);
       engine.setError(null);
-      // 权限档压到不高于「询问」（atMostManual，审核 F-4）：种子里的 detail 常带上一个会话的绝对
-      // 路径，「放行」档下智能体会照着往用户真实目录写。输入卡同步显示这一档（新会话 meta 也按它建），
-      // 用户可以自己再切；不写 settings.lastUsed——那是用户给新任务选的起始档，不归这次开工改。
-      // 在原会话里续跑（continueCarryoverInSource）不降档：那是用户自己的会话、自己的档。
-      const startMode = atMostManual(mode);
-      setMode(startMode);
       if (prefill) {
         // 预填不发：种子进首页草稿，遗留事项 id 挂在 pendingCarryoverRef 上，回车发出时带上
         // （主进程记进新会话的 meta.resumedCarryovers，它收尾确认时这条自动标为做完）
@@ -2423,9 +2335,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         pendingCarryoverRef.current = extra.carryoverId ?? null;
         return;
       }
-      void submitTurn(crypto.randomUUID(), seed, target, workspace, null, undefined, { ...extra, mode: startMode });
+      void submitTurn(crypto.randomUUID(), seed, target, workspace, null, undefined, extra);
     },
-    [engine, model, mode, cwd, workspaceId, reset, submitTurn, writeDraft, key],
+    [engine, model, cwd, workspaceId, reset, submitTurn, writeDraft, key],
   );
 
   /**
@@ -2670,7 +2582,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         applyNewTaskThinking(providerId, modelId);
         return;
       }
-      // 理由同 changeMode：模型也是「选给哪条会话」的，不能让后台会话的排队卡
+      // 理由同会话级意图（sessionIntentRef）：模型是「选给哪条会话」的，不能让后台会话的排队卡
       // 拿到你刚才给别的会话选的模型
       engine.rememberSessionIntent(id, { model: { providerId, modelId } });
       if (currentPhase() === "idle") {
@@ -2688,36 +2600,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     [engine, catalog, opened, currentPhase, thinkingLevel, applyNewTaskThinking, applySessionThinking],
   );
 
-  const changeMode = useCallback(
-    (next: PermissionMode) => {
-      // 理由同 chooseModel 的记账链：UI 即时、意图记在会话名下（跑着时改不进
-      // meta，排队卡投递时要拿这一档）。
-      // **总是发 IPC（不再只在 idle 时发）**：档位联动子会话（父带子）不能等父
-      // 会话空闲——用户切档解救卡在 plan 档的子会话时，父多半正跑着等子会话回报，
-      // 只在 idle 发的话联动在那条时间线上根本不触发。轮内改档是安全的：runtime
-      // 的 setMode 只改账本，工具审批闸门每次调用现场读账，当前轮后续工具立刻
-      // 按新档判；system prompt 里的档位描述下一个 before_agent_start 重讲。
-      setMode(next);
-      // 启动恢复点跟随（bug A）：下次启动应用从这一档开始
-      void api.settings.set({ lastUsed: { mode: next } }).catch(() => undefined);
-      // 盘上打开的旧会话同样记账并落 meta（同 chooseModel 的口径：选择当场落盘，
-      // 不留「切走再回就回跳」的键面）；首页新任务槽两者皆空
-      const id = sessionRef.current ?? opened?.id ?? null;
-      if (id === null) return; // 本槽开新任务：还没有会话可记，槽意图就是意图
-      engine.rememberSessionIntent(id, { mode: next });
-      // 子会话的 renderer 侧联动（intent 覆写 + 列表缓存 + 正看着子会话的槽）；
-      // 子会话切档时它没有下级，这里是 no-op（联动单向：父带子）
-      engine.cascadeSubSessionModes(id, next);
-      void api.agent
-        .setMode(id, next)
-        .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
-    },
-    [engine, opened],
-  );
-
   const changeThinkingLevel = useCallback(
     (next: ThinkingLevel) => {
-      // 同 changeMode 的整条规矩：本地即设（UI 即时）→ 记在会话名下（跑着时改不进
+      // 同 chooseModel 的整条规矩：本地即设（UI 即时）→ 记在会话名下（跑着时改不进
       // meta，排队卡投递时要拿这一档）→ 闲着才落 meta。下一轮 submit 自带新档——轮中
       // 改不影响当前轮（pi 在轮启动时已快照档位，与换模型同一条语义）。
       // **不写 lastUsed**：思考档不跨重启，重启落回模型默认档（wafo 2026-09-23）。
@@ -3491,7 +3376,6 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     stats: entry.stats,
     phaseOf: engine.phaseOf,
     turnErrorOf: engine.turnErrorOf,
-    approvalsOf: engine.approvalsOf,
     planAwaitingOf: engine.planAwaitingOf,
     interruptedOf: engine.interruptedOf,
     entryOf: engine.entryOf,
@@ -3512,14 +3396,11 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     quotes,
     addQuote,
     removeQuote,
-    mode,
-    changeMode,
     thinkingLevel,
     changeThinkingLevel,
     // 只给当前型号报回的支持集；别的型号报的（切过型号还没开轮）当没有，菜单回落目录
     thinkingSupported: observedThinkingFor(entry.thinking, model),
     catalog: engine.catalog,
-    approvals: entry.approvals,
     intentRecalls: entry.intentRecalls,
     intentRun: entry.intentRun,
     pendingEcho: entry.pendingEcho,
@@ -3611,7 +3492,6 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     newTask,
     newTaskIn,
     startTaskWithDraft,
-    answerApproval: engine.answerApproval,
   };
 }
 

@@ -14,8 +14,6 @@ import {
   parseSchedule,
   type Automation,
   type AutomationIntervalUnit,
-  type AutomationModeRow,
-  type AutomationModeRowResult,
   type AutomationRun,
   type AutomationSchedule,
 } from "../../../../shared/automation.ts";
@@ -217,21 +215,14 @@ export function countLabel(automation: Automation, t: AutomationMessages): strin
   return t.countTotal(automation.runCount);
 }
 
-/** 这一行要单独提醒的一句话（失败原因 / 最近一次失败 / 会话是 manual 档会卡在审批）；没有返回 null */
-export function noteOf(
-  automation: Automation,
-  t: AutomationMessages,
-  boundSession: { mode: string } | null,
-): { text: string; tone: "danger" | "warn" } | null {
+/** 这一行要单独提醒的一句话（失败原因 / 最近一次失败）；没有返回 null */
+export function noteOf(automation: Automation, t: AutomationMessages): { text: string; tone: "danger" } | null {
   if (automation.status === "failed") {
     return { text: t.failedBecause(automation.failureReason ?? ""), tone: "danger" };
   }
   const last = automation.runs.find((run) => run.status !== "skipped" && run.status !== "running");
   if (automation.status === "active" && last?.status === "error" && last.error !== undefined) {
     return { text: t.lastFailed(last.error), tone: "danger" };
-  }
-  if (automation.target.kind === "this_session" && boundSession?.mode === "manual" && automation.status === "active") {
-    return { text: t.manualWarn, tone: "warn" };
   }
   return null;
 }
@@ -461,40 +452,3 @@ export const AUTOMATION_TEMPLATES: readonly AutomationTemplate[] = [
   { id: "changes", icon: "git-branch", schedule: { kind: "daily", time: "09:00", weekdays: [1, 2, 3, 4, 5] } },
   { id: "watch", icon: "scroll-text", schedule: { kind: "interval", unit: "minute", every: 15 }, maxRuns: 12 },
 ];
-
-/* ---------- 对话里「改权限」那一行（AutomationModeLine） ---------- */
-
-/** 这一行此刻画哪一种：allowed = 已放行 [改回只读]；pending = 待确认 [允许][保持只读]；kept = 保持只读；gone = 自动化已不存在 */
-export type ModeRowView = "allowed" | "pending" | "kept" | "gone";
-
-/**
- * 看**此刻**那条自动化，不看这一行落盘时的样子（用户在面板里改了、点了按钮，行都照实说）：
- * - 已经是 skip → allowed（不论这一行怎么来的）；
- * - 是 plan：点过「保持只读 / 改回只读」（requestId 在 modeDeclined 里）→ kept；
- *   落盘时就是「已改成放行」、后来被改回只读的（在别处改的）也 kept；没点过的待确认 → pending；
- * - 自动化没了 → gone。列表还没读到（live 为 null）按落盘时的样子画，免得闪成「已不存在」。
- */
-export function modeRowView(
-  row: Pick<AutomationModeRow, "state" | "requestId">,
-  live: Pick<Automation, "mode" | "modeDeclined"> | undefined | null,
-): ModeRowView {
-  if (live === null) return row.state === "applied" ? "allowed" : "pending";
-  if (live === undefined) return "gone";
-  if (live.mode === "skip") return "allowed";
-  if (row.state === "applied" || (live.modeDeclined ?? []).includes(row.requestId)) return "kept";
-  return "pending";
-}
-
-/** 点按钮没成的原因（主进程给稳定的代码，句子在这里出） */
-export function modeRowFailureText(t: AutomationMessages["modeRow"], failure: Extract<AutomationModeRowResult, { ok: false }>): string {
-  switch (failure.reason) {
-    case "noSession":
-      return t.failed.noSession;
-    case "notFound":
-      return t.failed.notFound;
-    case "notApplicable":
-      return t.failed.notApplicable;
-    case "finished":
-      return t.failed.finished;
-  }
-}

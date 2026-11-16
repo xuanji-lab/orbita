@@ -18,7 +18,7 @@ import { LAYOUT_GUIDE, LAYOUT_NAMES } from "../../shared/slides-layouts.ts";
 import { DEFAULT_THEME_ID, THEME_BLURBS, THEME_IDS } from "../../shared/slides-theme.ts";
 import { SLIDES_EXPORT_FORMATS } from "../../shared/slides-export.ts";
 import { TERMINAL_READ_DEFAULT_LIMIT, TERMINAL_READ_MAX_LIMIT } from "../../shared/terminal.ts";
-import { TERMINAL_TOOL_NAMES } from "../../agent/terminal-tools.ts";
+import { createTerminalTools } from "../../agent/terminal-tools.ts";
 import {
   AUTOMATION_AGENT_DEFAULT_MAX_RUNS,
   AUTOMATION_AGENT_MAX_RUNS_CAP,
@@ -28,12 +28,11 @@ import {
   AUTOMATION_MAX_CONSECUTIVE_FAILURES,
   AUTOMATION_MAX_RUNS_PER_DAY,
   AUTOMATION_MAX_TOTAL,
-  AUTOMATION_MODES,
   AUTOMATION_PROMPT_MAX,
   AUTOMATION_STATUSES,
   AUTOMATION_TITLE_MAX,
 } from "../../shared/automation.ts";
-import { AUTOMATION_TOOL_NAMES, createAutomationTools } from "../../agent/automation-tools.ts";
+import { createAutomationTools } from "../../agent/automation-tools.ts";
 import { QUOTE_MIN_CHARS } from "../../shared/pdf-quote.ts";
 import {
   CITE_MAX_QUOTES,
@@ -383,12 +382,13 @@ describe("内置插件 terminal", () => {
     assert.match(skill?.description ?? "", /use bash/);
   });
 
-  // 工具名单与读取上限的真源在代码里（权限档描述认 TERMINAL_TOOL_NAMES；上限在 shared/terminal.ts）；技能里是给模型读的那一份，不许分叉
+  // 工具名单与读取上限的真源在代码里（工具名单是 createTerminalTools 注册的那一份；上限在 shared/terminal.ts）；技能里是给模型读的那一份，不许分叉
   test("terminal 技能与代码同源：六个工具各占表里一行且一个不多；读取默认 / 上限数字一致；红线与「没有退出码事件」原文在", async () => {
     const text = await readFile(join(TERMINAL, "skills", "terminal", "SKILL.md"), "utf8");
     const tableSection = text.split("## The six tools")[1]?.split("## Red line")[0] ?? "";
     const rows = tableSection.split("\n").filter((line) => /^\| `terminal_[a-z]+` \|/.test(line));
-    assert.deepEqual(rows.map((line) => /^\| `(terminal_[a-z]+)` \|/.exec(line)?.[1]), [...TERMINAL_TOOL_NAMES]);
+    const names = createTerminalTools(new RequestBroker(() => {}), "S", { cwd: "/repo", authorizedDirs: ["/repo"] }).map((tool) => tool.name);
+    assert.deepEqual(rows.map((line) => /^\| `(terminal_[a-z]+)` \|/.exec(line)?.[1]), names);
     const grouped = (value: number): string => value.toLocaleString("en-US");
     assert.equal(text.includes(`last ${grouped(TERMINAL_READ_DEFAULT_LIMIT)} characters`), true, "技能里的默认读取字符数与 TERMINAL_READ_DEFAULT_LIMIT 不一致");
     assert.equal(text.includes(`1–${grouped(TERMINAL_READ_MAX_LIMIT)}, default ${grouped(TERMINAL_READ_DEFAULT_LIMIT)}`), true, "技能里的 limit 范围与 TERMINAL_READ_MAX_LIMIT 不一致");
@@ -412,9 +412,10 @@ describe("内置插件 automation", () => {
   });
 
   // 触发规则与取值的真源在代码里（工具的 schema 与主进程的 parseSchedule）；技能里是给模型读的那一份，两边不许分叉
-  test("技能与代码同源：schedule 的 kind / unit / 字段、状态、权限档、四个工具名都在 SKILL.md 里；表里列的 kind 不能比 schema 多", async () => {
+  test("技能与代码同源：schedule 的 kind / unit / 字段、状态、三个工具名都在 SKILL.md 里；没有权限档；表里列的 kind 不能比 schema 多", async () => {
     const text = await readSkill();
-    const create = createAutomationTools(new RequestBroker(() => {}), "S", () => "skip").find((tool) => tool.name === "automation_create");
+    const tools = createAutomationTools(new RequestBroker(() => {}), "S");
+    const create = tools.find((tool) => tool.name === "automation_create");
     assert.ok(create);
     const properties = (create.parameters as unknown as { properties: Record<string, { properties?: Record<string, { enum?: string[] }> }> }).properties;
     const schedule = properties["schedule"]?.properties ?? {};
@@ -428,8 +429,8 @@ describe("内置插件 automation", () => {
     for (const field of ["at", "every", "minute", "time", "weekdays", "day"]) assert.equal(text.includes(`\`${field}\``), true, `技能没讲 schedule 字段 ${field}`);
     assert.equal(text.includes("everyMinutes"), true, "技能没讲 everyMinutes 简写");
     for (const status of AUTOMATION_STATUSES) assert.equal(text.includes(status), true, `技能没提状态 ${status}`);
-    for (const mode of AUTOMATION_MODES) assert.equal(text.includes(`"${mode}"`), true, `技能没提权限档 ${mode}`);
-    for (const name of AUTOMATION_TOOL_NAMES) assert.equal(text.includes(`\`${name}\``), true, `技能没讲工具 ${name}`);
+    assert.doesNotMatch(text, /automation_update|read-only|"plan"|"skip"/, "技能里还在讲权限档");
+    for (const name of tools.map((tool) => tool.name)) assert.equal(text.includes(`\`${name}\``), true, `技能没讲工具 ${name}`);
     for (const param of Object.keys(properties)) assert.equal(text.includes(`\`${param}\``), true, `技能没讲 automation_create 的参数 ${param}`);
   });
 
