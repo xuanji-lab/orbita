@@ -109,6 +109,11 @@ export const READ_ONLY_TOOLS = [
   "doc_open",
   // 插件列表：读已装插件的名字与技能，不改任何东西
   "list_plugins",
+  // Zotero：只读 Zotero 的数据目录（查文献 / 读条目 / 读全文），对它零写入
+  // （../agent/zotero-tools.ts）。与 read_pdf 同一待遇：plan 档放行，manual 档照「全都问」
+  "zotero_search",
+  "zotero_item",
+  "zotero_fulltext",
 ] as const;
 
 export function isReadOnlyTool(toolName: string): boolean {

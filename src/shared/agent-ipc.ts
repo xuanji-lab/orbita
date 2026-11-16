@@ -22,6 +22,7 @@ import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
 import type { SlidesAgentRequest, SlidesOutcome } from "./slides-export.ts";
 import type { DocAgentRequest, DocOutcome } from "./doc.ts";
+import type { ZoteroAgentRequest, ZoteroOutcome } from "./zotero.ts";
 import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
 import type {
   ChannelDelivery,
@@ -1190,6 +1191,8 @@ export type AgentCommand =
   | ({ type: "slidesResult"; requestId: string } & SlidesOutcome)
   /** 文档导出：主进程对 docRequest 的回执（browserResult 同款 ok 双分支） */
   | ({ type: "docResult"; requestId: string } & DocOutcome)
+  /** Zotero：主进程对 zoteroRequest 的回执（ok 双分支；连不上时 unavailable 说是哪一种） */
+  | ({ type: "zoteroResult"; requestId: string } & ZoteroOutcome)
   /** 终端：主进程对 terminalRequest 的回执（browserResult 同款） */
   | ({ type: "terminalResult"; requestId: string } & TerminalToolOutcome)
   /** 子会话：主进程对 delegateRequest 的回执（requestId 问答，readTaskResult 同款） */
@@ -1501,6 +1504,11 @@ export type AgentEvent =
    * 导出在主进程（PDF 要隐藏窗口，agent 进程不碰 electron）；路径白名单按会话的根现算。回 docResult。
    */
   | { type: "docRequest"; requestId: string; sessionId: string; workspaceId: string | null; request: DocAgentRequest }
+  /**
+   * Zotero 只读：agent 的 zotero_search / zotero_item / zotero_fulltext（形状见 shared/zotero.ts）。
+   * 主进程只读 Zotero 的数据目录（zotero.sqlite + storage/），把表里的数据收窄成我们自己的类型再回 zoteroResult。
+   */
+  | { type: "zoteroRequest"; requestId: string; sessionId: string; request: ZoteroAgentRequest }
   /**
    * 子会话：父模型的 delegate 工具请求。**建会话在主进程**（agent 进程不碰
    * userData，readTaskRequest 同一条边界）：主进程建子会话（parentId = sessionId、

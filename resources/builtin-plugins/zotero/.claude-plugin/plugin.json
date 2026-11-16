@@ -1,0 +1,17 @@
+{
+  "name": "zotero",
+  "displayName": "Zotero 文献库",
+  "version": "0.1.0",
+  "description": "让智能体读你本机 Zotero 里的文献：按标题词、作者、年份、分类查条目，读完整元数据、摘要、所在分类、附件和你在 Zotero 里做的批注，读 Zotero 的全文索引。PDF 用 Zotero 存储里的原文件，不拷进会话；要引用原文时交给 read_pdf / cite_pdf，引用角标点开在文件面板原地打开。直接只读 Zotero 的数据目录：Zotero 不用开着，也不改 Zotero 的任何文件。",
+  "author": { "name": "Orbita" },
+  "license": "MIT",
+  "orbita": {
+    "workflow": [
+      { "title": "查文献：zotero_search 按标题词、作者、年份、分类查", "skill": "zotero", "detail": "每个词都要命中；中文标题与作者照样能查；默认 20 条，说明还有多少" },
+      { "title": "读条目：zotero_item 看元数据、分类、附件路径与批注", "skill": "zotero", "detail": "附件给 Zotero 存储里的原路径；批注一次 30 条，按页序" },
+      { "title": "扫读全文：zotero_fulltext 按字符区间读 Zotero 的全文索引", "skill": "zotero", "detail": "没有索引的条目改用 read_pdf 读 PDF 原文件" },
+      { "title": "要引用原文：照全文里的原句交给 cite_pdf，用同一个 PDF 路径核验", "skill": "zotero", "detail": "一段引文别跨页；不把 PDF 拷进会话；引用角标点开在文件面板原地打开", "output": "[^编号] 引用标记" },
+      { "title": "读不了时：告诉用户是没找到 Zotero 的数据目录，还是数据库版本还不认识", "skill": "zotero", "detail": "工具会说是哪一种、Orbita 是从哪里找的" }
+    ]
+  }
+}

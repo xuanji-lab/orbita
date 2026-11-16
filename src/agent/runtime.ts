@@ -83,6 +83,7 @@ import { createPlanGate, createPlanTools, type PlanToolOptions } from "./plan-to
 import { createDocxTools } from "./docx-tools.ts";
 import { createDocTools } from "./doc-tools.ts";
 import { createPdfTools } from "./pdf-tools.ts";
+import { createZoteroTools } from "./zotero-tools.ts";
 import { createSlidesTools } from "./slides-tools.ts";
 import { createPluginTools, PLUGIN_TOOL_NAMES } from "./plugin-tools.ts";
 import { RequestBroker } from "./request-broker.ts";
@@ -1388,6 +1389,9 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     ...createPdfTools(command.cwd, { pdfCitations: command.pdfCitations === true }),
     // read_docx 同样直读（./docx-tools.ts）：word 文档的结构化提取，块号轴分片
     ...createDocxTools(command.cwd),
+    // Zotero 只读（./zotero-tools.ts）：查文献 / 读条目 / 读全文，经 broker 找主进程（只读 Zotero 的数据目录，Zotero 关着也能用）。
+    // 没装 Zotero 也照常注册：调用时说明「没有发现 Zotero」；注册本身不碰磁盘
+    ...createZoteroTools(requestBroker, command.sessionId),
     // show_image 同样直读展示（./image-tools.ts）：模型「把图给用户看」的显式动作
     ...createImageTools(command.cwd),
     // update_plan（./plan-tools.ts）：agent 写下计划、做一步勾一步；计划就在转录里，不另存
@@ -2333,8 +2337,8 @@ async function handle(command: AgentCommand): Promise<void> {
     );
     return;
   }
-  if (command.type === "slidesResult" || command.type === "docResult") {
-    // 演示文稿 / 文档导出的回执：形状即契约（ok 双分支），原样结掉在途 promise
+  if (command.type === "slidesResult" || command.type === "docResult" || command.type === "zoteroResult") {
+    // 演示文稿 / 文档导出 / Zotero 只读的回执：形状即契约（ok 双分支），原样结掉在途 promise
     requestBroker.resolve(command.requestId, command);
     return;
   }
