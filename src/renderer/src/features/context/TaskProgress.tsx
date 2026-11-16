@@ -20,7 +20,7 @@ import {
   subSessionMark,
   subSessionStatusOf,
 } from "../chat/sub-sessions-rows.ts";
-import { workFacts, workLine } from "../chat/work-line.ts";
+import { workFacts, workLine } from "../../../../shared/work-line.ts";
 import { formatTokens } from "../../utils/format-tokens.ts";
 import type { SessionEntry } from "../chat/session-states.ts";
 import { formatRunClock, formatToolDuration } from "../chat/tool-results.ts";
