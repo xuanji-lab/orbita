@@ -8,9 +8,14 @@ describe("主智能体「断过」那一行", () => {
     assert.equal(placeResumes(undefined, []).atEnd.length, 0);
     const users = [{ id: "u1", timestamp: 5 }, { id: "u2", timestamp: 15 }];
     const placed = placeResumes([r(20), r(10), r(12)], users);
-    assert.deepEqual(placed.beforeUser.get("u2"), [r(10), r(12)]);
+    // 10 与 12 之间没有用户消息也没有回答：并成一组
+    assert.deepEqual(placed.beforeUser.get("u2"), [[r(10), r(12)]]);
     assert.equal(placed.beforeUser.has("u1"), false);
-    assert.deepEqual(placed.atEnd, [r(20)]);
+    assert.deepEqual(placed.atEnd, [[r(20)]]);
+  });
+  test("中间有回答就不并；什么都没接上的不画", () => {
+    const placed = placeResumes([r(10), r(12), r(30), { at: 40, from: 39, resumed: [], stopped: [] }], [], [11]);
+    assert.deepEqual(placed.atEnd, [[r(10)], [r(12), r(30)]]);
   });
   test("同一天只写时刻，跨天带日期；文案拿到起止与件数", () => {
     const now = new Date(2026, 10, 17, 9, 0).getTime();

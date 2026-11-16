@@ -9,21 +9,39 @@ export interface ResumeLineText {
   line: (from: string, to: string, resumed: number, stopped: number) => string;
 }
 
+/** 并成一行的几次「断过」（时间正序，至少一次） */
+export type ResumeGroup = readonly MainAgentResume[];
+
 /**
  * 每一次「断过」放在对话流的哪里：按时间插在它之后的第一条用户消息前面；之后没有用户消息的放在对话末尾。
- * 全部留着（事后翻得到），不再「说过话就算看过」——它是过程里的一行，不是要你处理的提示。
- * users = 对话里的用户消息（时间正序）。
+ * 全部留着（事后翻得到）——它是过程里的一行，不是要你处理的提示。
+ * **相邻的并成一行**（2026-11-17 主会话：用户一天重启很多次，每次一行会越攒越多）：两次断过之间没有任何用户消息
+ * 或回答（boundaries = 用户消息与回答的时刻），就是相邻。两次之间什么都没接上（没有活在跑）的本来就不记（主进程 resumeOf），
+ * 这里也再挡一道（resumed 与 stopped 都空的不画）。
  */
 export function placeResumes(
   resumes: readonly MainAgentResume[] | undefined,
   users: readonly { id: string; timestamp: number }[],
-): { beforeUser: ReadonlyMap<string, readonly MainAgentResume[]>; atEnd: readonly MainAgentResume[] } {
-  const beforeUser = new Map<string, MainAgentResume[]>();
-  const atEnd: MainAgentResume[] = [];
-  for (const resume of [...(resumes ?? [])].sort((a, b) => a.at - b.at)) {
-    const next = users.find((user) => user.timestamp > resume.at);
-    if (next === undefined) atEnd.push(resume);
-    else beforeUser.set(next.id, [...(beforeUser.get(next.id) ?? []), resume]);
+  boundaries: readonly number[] = [],
+): { beforeUser: ReadonlyMap<string, readonly ResumeGroup[]>; atEnd: readonly ResumeGroup[] } {
+  const marks = [...users.map((user) => user.timestamp), ...boundaries].sort((a, b) => a - b);
+  const sorted = [...(resumes ?? [])]
+    .filter((resume) => resume.resumed.length > 0 || resume.stopped.length > 0)
+    .sort((a, b) => a.at - b.at);
+  const groups: MainAgentResume[][] = [];
+  for (const resume of sorted) {
+    const last = groups.at(-1);
+    const previous = last?.at(-1);
+    if (last !== undefined && previous !== undefined && !marks.some((mark) => mark > previous.at && mark <= resume.at)) last.push(resume);
+    else groups.push([resume]);
+  }
+  const beforeUser = new Map<string, ResumeGroup[]>();
+  const atEnd: ResumeGroup[] = [];
+  for (const group of groups) {
+    const latest = group[group.length - 1] as MainAgentResume;
+    const next = users.find((user) => user.timestamp > latest.at);
+    if (next === undefined) atEnd.push(group);
+    else beforeUser.set(next.id, [...(beforeUser.get(next.id) ?? []), group]);
   }
   return { beforeUser, atEnd };
 }

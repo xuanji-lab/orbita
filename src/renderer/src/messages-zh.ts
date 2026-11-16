@@ -1762,6 +1762,7 @@ export const zh: Messages = {
     interruptedTurn: "这一轮没跑完就被打断了。",
     interruptedByCrash: "应用上次是异常退出的，这个子会话被打断了。",
     continueTurn: "继续",
+    mainResumedMany: (latest, count, today) => `${latest}；${today ? "今天" : "这几天"}断过 ${count} 次`,
     mainResumed: (from, to, resumed, stopped) =>
       [
         `接着做 · ${from} 到 ${to} 璇玑没开着`,

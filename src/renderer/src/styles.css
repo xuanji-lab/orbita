@@ -5050,6 +5050,22 @@ mark.intent-mark {
   flex: none;
   align-self: center;
 }
+/* 相邻几次并成一行时：整行是按钮（点开逐次列出），样子不变 */
+.proc-resume-btn {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-family-base);
+  text-align: left;
+  cursor: pointer;
+}
+.proc-resume-btn:hover {
+  color: var(--color-text-secondary);
+}
+/* 点开后的每一次：缩进到图标之后，和摘要那行的字对齐 */
+.proc-resume-sub {
+  padding-left: calc(var(--content-hem) + var(--space-3) + var(--space-2));
+}
 
 .proc-head-row {
   display: flex;

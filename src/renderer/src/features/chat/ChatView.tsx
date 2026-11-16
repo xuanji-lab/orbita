@@ -186,7 +186,7 @@ import { MarkdownBlock } from "./MarkdownBlock";
 import { HomeHero } from "./HomeHero";
 import { HomeLog, type HomeLogRowView } from "./HomeLog";
 import { MainAgentEmpty } from "./MainAgentEmpty";
-import { placeResumes, resumeLine } from "./main-resume.ts";
+import { placeResumes, resumeLine, type ResumeGroup } from "./main-resume.ts";
 import type { MainAgentResume } from "@shared/main-agent";
 import { heroFace } from "./home-hero.ts";
 import { useExperimentalFeature } from "../../experimental.ts";
@@ -2030,6 +2030,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       placeResumes(
         props.resumes,
         props.transcript.flatMap((item) => (item.role === "user" ? [{ id: item.id, timestamp: item.timestamp }] : [])),
+        // 回答也是分界：两次断过之间有它回过话，就不并成一行
+        props.transcript.flatMap((item) => (item.role === "assistant" ? [item.timestamp] : [])),
       ),
     [props.resumes, props.transcript],
   );
@@ -2554,8 +2556,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
           />
         );
       })}
-      {placedResumes.atEnd.map((resume) => (
-        <ResumeLine key={`resume:${resume.at}`} resume={resume} />
+      {placedResumes.atEnd.map((group) => (
+        <ResumeLine key={`resume:${group[0]?.at ?? 0}`} group={group} />
       ))}
       {props.pendingEcho !== null && (
         // 与真回显同一个包裹层与 data-kind：发出即画的这一行也要有空心星 / 时间（子午线认 data-kind）
@@ -2640,8 +2642,8 @@ interface RowScope {
   cwd: string | null;
   undoneTurnIds: ReadonlySet<string>;
   memory: MemoryLines | null;
-  /** 主智能体「断过」那几行：key = 它后面的那条用户消息 id */
-  resumes: ReadonlyMap<string, readonly MainAgentResume[]>;
+  /** 主智能体「断过」那几行（相邻的已并成一组）：key = 它后面的那条用户消息 id */
+  resumes: ReadonlyMap<string, readonly ResumeGroup[]>;
   /** 尾段：历史段最后一条用户消息（尾段开头的过程行是它那一轮的，记忆挂上去）；历史段 null */
   leadUserId: string | null;
   /** 历史段：尾段里已经有过程行（历史段最后一条用户消息的记忆挂到那里，不在消息下单画一行） */
@@ -2766,7 +2768,7 @@ const TranscriptRow = memo(function TranscriptRow(props: {
   const resumesBefore = entry.kind === "user" ? scope.resumes.get(entry.item.id) : undefined;
   return (
     <Fragment>
-      {resumesBefore?.map((resume) => <ResumeLine key={`resume:${resume.at}`} resume={resume} />)}
+      {resumesBefore?.map((group) => <ResumeLine key={`resume:${group[0]?.at ?? 0}`} group={group} />)}
       {props.isCut && (
         <div ref={scope.cutRef} className="revert-cut">
           <Icon name="rotate-ccw" size={11} strokeWidth={1.8} />
@@ -4849,15 +4851,40 @@ function ProcessMemoryRow(props: { verb: string; text: string; time: string; lin
  * 这一轮没有过程行（只答没干活）时，记忆单独成一行，长相与过程行一致：「读了 7 条记忆 · 记住 1 条 ›」。
  */
 /**
- * 主智能体对话里「断过」的一行（设计 5-resume-after）：和过程行同一个样子（灰字、同一条左缘），不能点、不要你处理，
+ * 主智能体对话里「断过」的一行（设计 5-resume-after）：和过程行同一个样子（灰字、同一条左缘），不要你处理，
  * 只是事后翻得到「那段时间璇玑没开着，回来后接着做了几件」。字长了换行，不截断。
+ * 相邻的几次并成一行：写最近一次，后面跟「今天断过 N 次」；点开才逐次列出（2026-11-17 主会话）。
  */
-function ResumeLine(props: { resume: MainAgentResume }) {
+function ResumeLine(props: { group: ResumeGroup }) {
   const t = useT();
+  const [open, setOpen] = useFoldState(`resume:${props.group[0]?.at ?? 0}`);
+  const latest = props.group[props.group.length - 1];
+  if (latest === undefined) return null;
+  const now = Date.now();
+  const line = (resume: MainAgentResume) => resumeLine(resume, now, { line: t.chat.mainResumed });
+  if (props.group.length === 1) {
+    return (
+      <div className="proc-resume" data-kind="resume">
+        <Icon name="history" size={12} strokeWidth={1.8} />
+        <span>{line(latest)}</span>
+      </div>
+    );
+  }
+  const first = props.group[0] as MainAgentResume;
+  const sameDay = new Date(first.at).toDateString() === new Date(now).toDateString();
   return (
-    <div className="proc-resume" data-kind="resume">
-      <Icon name="history" size={12} strokeWidth={1.8} />
-      <span>{resumeLine(props.resume, Date.now(), { line: t.chat.mainResumed })}</span>
+    <div data-kind="resume">
+      <button type="button" className="proc-resume proc-resume-btn" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        <Icon name="history" size={12} strokeWidth={1.8} />
+        <span>{t.chat.mainResumedMany(line(latest), props.group.length, sameDay)}</span>
+        <Icon name={open ? "chevron-down" : "chevron-right"} size={12} strokeWidth={1.8} />
+      </button>
+      {open &&
+        props.group.map((resume) => (
+          <div key={resume.at} className="proc-resume proc-resume-sub">
+            <span>{line(resume)}</span>
+          </div>
+        ))}
     </div>
   );
 }

@@ -1918,6 +1918,8 @@ export const en = {
     interruptedByCrash: "The app quit unexpectedly last time, so this sub-session was interrupted.",
     continueTurn: "Continue",
     /** 新内核：子会话在应用重启后被自动接着跑（后台任务照常续跑） */
+    /** 相邻几次「断过」并成一行：最近一次那句 + 一共几次 */
+    mainResumedMany: (latest: string, count: number, today: boolean) => `${latest}; closed ${count} times ${today ? "today" : "lately"}`,
     mainResumed: (from: string, to: string, resumed: number, stopped: number) =>
       [
         `Picked up again · Orbita was closed from ${from} to ${to}`,
