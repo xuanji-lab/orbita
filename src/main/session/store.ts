@@ -222,6 +222,15 @@ export class SessionStore {
     this.citedPdfs = new CitedPdfIndex((id) => this.logPath(id));
   }
 
+  /**
+   * meta 的唯一写入口：一律盖上 `mode: "skip"`。
+   * 只为回滚兼容——旧内核把缺的 mode 读成「计划档（只读）」，装回旧版后新版聊过的会话会全部写不了文件。
+   * 新版自己不读它（parseSessionMeta 不解析）；不再支持回滚到旧内核版本时可连同类型字段一起删掉。
+   */
+  private writeMeta(id: string, meta: SessionMeta): Promise<void> {
+    return writeJsonAtomic(this.metaPath(id), { ...meta, mode: "skip" });
+  }
+
   private metaPath(id: string): string {
     if (!SESSION_ID.test(id)) throw new Error(`invalid session id "${id}"`);
     return join(this.dir, `${id}${META_SUFFIX}`);
@@ -444,11 +453,11 @@ export class SessionStore {
     return this.queueMeta(meta.id, async () => {
       const current = await this.readMeta(meta.id);
       if (current === null) {
-        await writeJsonAtomic(this.metaPath(meta.id), meta);
+        await this.writeMeta(meta.id, meta);
         return;
       }
       if (current.piSessionFile === meta.piSessionFile) return;
-      await writeJsonAtomic(this.metaPath(meta.id), {
+      await this.writeMeta(meta.id, {
         ...current,
         piSessionFile: meta.piSessionFile,
       });
@@ -595,7 +604,7 @@ export class SessionStore {
     return this.queueMeta(id, async () => {
       const meta = await this.readMeta(id);
       if (meta === null || meta.providerId !== UNASSIGNED_PROVIDER_ID) return false;
-      await writeJsonAtomic(this.metaPath(id), { ...meta, providerId, modelId });
+      await this.writeMeta(id, { ...meta, providerId, modelId });
       return true;
     });
   }
@@ -613,7 +622,7 @@ export class SessionStore {
       if (meta === null) return;
       const patch = typeof changes === "function" ? changes(meta) : changes;
       if (patch === null) return;
-      await writeJsonAtomic(this.metaPath(id), { ...meta, ...patch });
+      await this.writeMeta(id, { ...meta, ...patch });
     });
   }
 
@@ -813,7 +822,7 @@ export class SessionStore {
     }
     // 新内核分出来的（「本子」是 durable 引用）：一出生就住在新内核里（它没有 pi 本子，本子编辑交给 kernel）
     const durable = isDurableBookRef(piSessionFile) ? { durable: { since: Date.now() } } : {};
-    await writeJsonAtomic(this.metaPath(plan.meta.id), { ...plan.meta, piSessionFile, ...durable });
+    await this.writeMeta(plan.meta.id, { ...plan.meta, piSessionFile, ...durable });
     if (plan.records.length > 0) {
       await writeTextAtomic(
         this.logPath(plan.meta.id),

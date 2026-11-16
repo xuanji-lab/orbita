@@ -95,6 +95,33 @@ describe("SessionStore", () => {
     }
   });
 
+  // 回滚兼容：旧内核把缺的 mode 读成只读的计划档，新版写的 meta 必须带 mode:"skip"
+  describe("meta 的 mode 回滚兼容字段", () => {
+    const rawMeta = async (id: string): Promise<Record<string, unknown>> =>
+      JSON.parse(await readFile(join(dir, "sessions", `${id}.meta.json`), "utf8")) as Record<string, unknown>;
+
+    test("新建会话的 meta 带 mode:skip", async () => {
+      await store.ensureSession(meta());
+      assert.equal((await rawMeta(ID))["mode"], "skip");
+    });
+
+    test("旧会话 meta 是 plan，新版动过一次后改写成 skip", async () => {
+      await mkdir(join(dir, "sessions"), { recursive: true });
+      await writeFile(join(dir, "sessions", `${ID}.meta.json`), JSON.stringify({ ...meta(), mode: "plan" }), "utf8");
+      await store.setPiSessionFile(ID, null);
+      assert.equal((await rawMeta(ID))["mode"], "skip");
+    });
+
+    test("没被碰过的旧会话 meta 原样不动", async () => {
+      await mkdir(join(dir, "sessions"), { recursive: true });
+      const path = join(dir, "sessions", `${ID}.meta.json`);
+      const text = JSON.stringify({ ...meta(), mode: "manual" });
+      await writeFile(path, text, "utf8");
+      await store.list();
+      assert.equal(await readFile(path, "utf8"), text);
+    });
+  });
+
   test("建了就能列出来、能读回来", async () => {
     await store.ensureSession(meta());
     assert.deepEqual((await store.list()).map((m) => m.id), [ID]);
