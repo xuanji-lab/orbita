@@ -2769,6 +2769,14 @@ export const zh: Messages = {
   },
 
   taskPanel: {
+    doneSteps: (n) => `做完 ${n} 步`,
+    dispatched: "派出去的活",
+    elapsed: {
+      lessThanMinute: "不到 1 分钟",
+      minutes: (n) => `${n} 分钟`,
+      hours: (n) => `${n} 小时`,
+      hoursMinutes: (h, m) => `${h} 小时 ${m} 分钟`,
+    },
     tabProgress: "进度",
     tabContext: "上下文",
     state: (state) =>

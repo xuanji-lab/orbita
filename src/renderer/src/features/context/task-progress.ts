@@ -82,6 +82,18 @@ export function taskHeadState(input: {
 }
 
 /**
+ * 计划里在等的那一步，等的是不是你（2026-11-17 减色）：等你的用橙点 + 正文色字（浅色主题下橙字对比度只有
+ * 3.54，不够），等机器、等下载这类跟你无关的用灰字。没写等什么 = 默认「等你」；写了的看里面有没有「你」/ you。
+ */
+export function waitsOnYou(waitingFor: string | undefined): boolean {
+  if (waitingFor === undefined || waitingFor.trim() === "") return true;
+  return /你|您|\byour?\b/i.test(waitingFor);
+}
+
+/** 计划超过这么多步，才把做完的折成一行（六步的计划一眼看得完，不折） */
+export const PLAN_FOLD_AFTER = 8;
+
+/**
  * 「在做」那步从几点开始计：它这一次变成「在做」的时刻（plan-timeline 的 stepActiveSince）。
  * 那是前几轮的事、这一轮模型没再更新（续聊）时从这一轮开始算——不然两轮之间闲着的时间都算进去，隔夜续聊就是十几个小时。
  */

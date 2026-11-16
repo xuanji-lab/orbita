@@ -2965,6 +2965,14 @@ export const en = {
 
   /** 右栏「这条任务」：进度页签（计划 / 做过的 / 留到以后）+ 上下文页签 */
   taskPanel: {
+    doneSteps: (n: number) => `${n} done`,
+    dispatched: "Delegated work",
+    elapsed: {
+      lessThanMinute: "under a minute",
+      minutes: (n: number) => `${n} min`,
+      hours: (n: number) => `${n} h`,
+      hoursMinutes: (h: number, m: number) => `${h} h ${m} min`,
+    },
     tabProgress: "Progress",
     tabContext: "Context",
     state: (state: string): string =>

@@ -145,6 +145,27 @@ export function displaySubSessionTitle(title: string): string {
 }
 
 /**
+ * 进度面板「派出去的活」列哪几件：在做的、要你出手的（在问你、被打断、没做成）；做完的交回来就不在这里了，
+ * 终止的、还没开口的也不列。排序沿用收件箱（要你出手的在前）。
+ */
+export function dispatchedRows<T extends { status: SubSessionRowStatus }>(rows: readonly T[]): T[] {
+  return rows.filter((row) => row.status === "running" || subSessionMark(row.status) === "ask");
+}
+
+/** 一件活用了多久（派出去到现在）：「不到 1 分钟」「21 分钟」「1 小时」「1 小时 5 分钟」 */
+export function jobElapsed(
+  ms: number,
+  words: { lessThanMinute: string; minutes: (n: number) => string; hours: (n: number) => string; hoursMinutes: (h: number, m: number) => string },
+): string {
+  const minutes = Math.floor(Math.max(0, ms) / 60_000);
+  if (minutes < 1) return words.lessThanMinute;
+  if (minutes < 60) return words.minutes(minutes);
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 || hours >= 10 ? words.hours(hours) : words.hoursMinutes(hours, rest);
+}
+
+/**
  * 收件箱行的「最新一句」（2026-10-12 用户裁决：只需要看到沟通，不需要看到子会话在干嘛）：通道里**最新一条非 task
  * 消息**的一句话——问：…/ 进度：…/ 完成：…/ 失败：…/ 回复：…（最新的是父侧回信时）。2026-11-17 起取第一个非空行的
  * 第一句、先过 work-line 的 sanitizeWorkLine：**不露出命令、网址、路径、英文代号**（以前「进度：」后面

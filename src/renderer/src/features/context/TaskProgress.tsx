@@ -5,7 +5,22 @@ import { Icon } from "../../shell/Icon";
 import { InlineMarks } from "../../shell/InlineMarks";
 import { inlinePlain } from "../../shell/inline-marks.ts";
 import { RowHoverAction } from "../../shell/RowHoverAction";
-import { StatusPie } from "../../shell/StatusPie";
+import { childSessions, type SessionMeta } from "@shared/session";
+import { selectTranscript } from "../../../../shared/transcript-state.ts";
+import { useChannelSummaries } from "../chat/useChannelSummaries";
+import { useParentChannels } from "../chat/useChannelMessages";
+import type { SessionEngine } from "../chat/useChatSession";
+import {
+  dispatchedRows,
+  displaySubSessionTitle,
+  jobElapsed,
+  sortSubSessionRows,
+  subSessionHeadline,
+  subSessionLine,
+  subSessionMark,
+  subSessionStatusOf,
+} from "../chat/sub-sessions-rows.ts";
+import { workFacts, workLine } from "../chat/work-line.ts";
 import { formatTokens } from "../../utils/format-tokens.ts";
 import type { SessionEntry } from "../chat/session-states.ts";
 import { formatRunClock, formatToolDuration } from "../chat/tool-results.ts";
@@ -26,6 +41,8 @@ import {
   taskHeadState,
   toolIndexOf,
   turnDigests,
+  PLAN_FOLD_AFTER,
+  waitsOnYou,
   type TurnDigest,
 } from "./task-progress.ts";
 import {
@@ -69,6 +86,9 @@ export function TaskProgress(props: {
   /** 带着目标开新会话：种子由这里按来源标题现拼（goal-seed.ts），App 负责开会话 */
   onStartGoalTask: (sourceSessionId: string, makeSeed: (sourceTitle: string | null) => string | null) => void;
   onOpenContext: () => void;
+  /** 「派出去的活」：会话清单（找这条会话的子会话）与引擎（在不在跑、那一句从哪来） */
+  sessions: readonly SessionMeta[];
+  engine: SessionEngine;
 }) {
   const t = useT();
   const { entry } = props;
@@ -108,6 +128,11 @@ export function TaskProgress(props: {
   const working = headState === "running" || headState === "waiting";
   const clock = turnActive && last !== undefined ? formatRunClock(now - last.at) : last?.durationMs != null ? formatToolDuration(last.durationMs, t) : null;
   const usage = entry.stats?.contextUsage ?? null;
+  // 在做的那一步下面那句细节：我刚说的那句话（work-line 的第一来源；洗掉命令、路径、代号）
+  const stepDetail = useMemo(() => {
+    const said = workFacts(selectTranscript(entry.transcript), true).said;
+    return said === null ? null : (workLine({ said, planStep: null, clerk: null, activity: null }, { activity: t.channel.activity, waiting: t.channel.waitingStep })?.text ?? null);
+  }, [entry.transcript, t]);
 
   return (
     <div className="tp-body">
@@ -126,7 +151,14 @@ export function TaskProgress(props: {
         />
       )}
       <div className="tp-now">
-        <span className="tp-slot">{headState !== null && headState !== "stopped" && <StatusPie state={headState} />}</span>
+        {/* 一个面上只留一个会动的记号：在做 = 灰色转圈；要你出手（等你 / 出错）= 橙点；其余不标（2026-11-17 减色） */}
+        <span className="tp-slot">
+          {headState === "running" ? (
+            <Icon name="loader-circle" size={12} strokeWidth={1.8} spin />
+          ) : headState === "waiting" || headState === "failed" ? (
+            <span className="tp-dot you" />
+          ) : null}
+        </span>
         <b>{t.taskPanel.state(headState ?? "idle")}</b>
         {turns.length > 0 && <span className="tp-sub">· {t.taskPanel.turns(turns.length)}</span>}
         {clock !== null && <span className="tp-clock">{clock}</span>}
@@ -139,6 +171,7 @@ export function TaskProgress(props: {
           activity={activity}
           working={working}
           awaiting={timeline.current.awaiting && planAwaitingIn(view.current)}
+          detail={working ? stepDetail : null}
           turnActive={turnActive}
           now={now}
           inChat={inChat}
@@ -151,6 +184,8 @@ export function TaskProgress(props: {
       ) : (
         turnActive && <p className="tp-hint">{t.taskPanel.noPlan}</p>
       )}
+
+      <DispatchedSection parentId={props.sessionId} sessions={props.sessions} engine={props.engine} />
 
       {plan !== null && turns.length > 0 && (
         <button
@@ -367,6 +402,8 @@ function PlanSection(props: {
   working: boolean;
   /** 计划停下等你确认（最后一次 update_plan 要求确认、之后还没有用户消息）：计划里不出现在做的步 */
   awaiting: boolean;
+  /** 在做的那一步下面的一句细节；null = 不写 */
+  detail: string | null;
   turnActive: boolean;
   now: number;
   inChat: ReadonlySet<string>;
@@ -382,6 +419,9 @@ function PlanSection(props: {
   const { current } = timeline;
   const done = current.items.filter((item) => item.status === "done").length;
   const [open, setOpen] = useState<Record<string, boolean>>({});
+  // 超过 8 步才把做完的折成一行「做完 N 步」
+  const foldDone = current.items.length > PLAN_FOLD_AFTER && done > 0;
+  const [doneOpen, setDoneOpen] = useState(false);
   const turnStart = props.turns.at(-1)?.at ?? 0;
   // 去掉的步只在它被去掉的那一轮里露面，之后只留在改动记录里
   const recentRemoved = current.at >= turnStart ? current.removed : [];
@@ -397,25 +437,27 @@ function PlanSection(props: {
     const act = activity.get(item.id);
     const { status, active } = stepDisplay(item.status, { working: props.working, awaiting: props.awaiting });
     const rows = rowsFor(act);
-    const shown = open[item.id] ?? active;
+    // 章节默认收着（以前在做的那步默认展开）：计划是一张朴素的待办，过程点开才看
+    const shown = open[item.id] ?? false;
     const since = status === "in_progress" ? stepActiveSince(timeline, item.id) : null;
     const note = item.note;
+    // 在等的步：行尾写等什么。等你 = 橙点 + 正文色字；等机器 / 等别的 = 灰字
+    const you = status === "waiting" && waitsOnYou(item.waitingFor);
     const waitTag =
       status === "waiting" ? (
-        <span className="tp-wait" title={t.planText.waitingTitle}>
+        <span className={you ? "tp-wait you" : "tp-wait"} title={t.planText.waitingTitle}>
+          {you && <span className="tp-dot you" />}
           {item.waitingFor ?? t.planText.waitingDefault}
         </span>
       ) : null;
+    const clock = active && props.turnActive && since !== null ? formatRunClock(props.now - stepClockFrom(since, props.turns)) : null;
     return (
-      <li key={item.id} data-status={status}>
+      <li key={item.id} data-status={status} data-active={active || undefined}>
         <span className="tp-slot">
           {status === "done" ? (
             <Icon name="check" size={12} strokeWidth={2} />
           ) : active ? (
-            <StatusPie state="running" />
-          ) : status === "waiting" ? (
-            // 等你 / 等外部：沙漏 + 黄签，不占「正在做」，也不是做完
-            <Icon name="hourglass" size={12} strokeWidth={1.8} />
+            <Icon name="circle-dot" size={12} strokeWidth={1.8} />
           ) : (
             <span className="tp-ring" />
           )}
@@ -429,21 +471,18 @@ function PlanSection(props: {
               title={t.planText.stepTitle(rows.length, act?.files.length ?? 0)}
               onClick={() => setOpen((prev) => ({ ...prev, [item.id]: !shown }))}
             >
-              <span className="tp-text">
-                {item.text}
-                {waitTag}
-              </span>
-              <StepTail act={act} clock={active && props.turnActive && since !== null ? formatRunClock(props.now - stepClockFrom(since, props.turns)) : null} />
+              <span className="tp-text">{item.text}</span>
+              {waitTag}
+              {clock !== null && <span className="tp-clock">{clock}</span>}
             </button>
           ) : (
             <div className="tp-step-head">
-              <span className="tp-text">
-                {item.text}
-                {waitTag}
-              </span>
-              <StepTail act={act} clock={active && props.turnActive && since !== null ? formatRunClock(props.now - stepClockFrom(since, props.turns)) : null} />
+              <span className="tp-text">{item.text}</span>
+              {waitTag}
+              {clock !== null && <span className="tp-clock">{clock}</span>}
             </div>
           )}
+          {active && props.detail !== null && props.detail !== item.text && <div className="tp-detail">{props.detail}</div>}
           {note !== null && (
             <div className="tp-note">
               <b>
@@ -512,8 +551,21 @@ function PlanSection(props: {
       <ol className="tp-plan">
         {pseudo(BEFORE_PLAN, t.planText.beforePlan)}
         {recentRemoved.filter((entry) => entry.afterNext === -1).map((entry, i) => removedRow(entry, `rm-first-${i}`))}
+        {foldDone && (
+          <li data-status="done">
+            <span className="tp-slot">
+              <Icon name="check" size={12} strokeWidth={2} />
+            </span>
+            <div className="tp-step">
+              <button type="button" className="tp-step-head" aria-expanded={doneOpen} onClick={() => setDoneOpen((value) => !value)}>
+                <span className="tp-text">{t.taskPanel.doneSteps(done)}</span>
+                <Icon name={doneOpen ? "chevron-down" : "chevron-right"} size={12} strokeWidth={1.8} />
+              </button>
+            </div>
+          </li>
+        )}
         {current.items.flatMap((item, index) => [
-          stepRow(item),
+          ...(foldDone && !doneOpen && item.status === "done" ? [] : [stepRow(item)]),
           ...recentRemoved.filter((entry) => entry.afterNext === index).map((entry, i) => removedRow(entry, `rm-${index}-${i}`)),
         ])}
         {pseudo(OUTSIDE_PLAN, t.planText.outsidePlan)}
@@ -652,3 +704,83 @@ function StepTail(props: { act: StepActivity | undefined; clock: string | null }
   );
 }
 
+
+/**
+ * 进度面板「派出去的活」（2026-11-17；设计 main-agent-design 的 decisions 第 3 件，选 B）：每件两行——名字与用了多久 / 那一句
+ * （和子会话面板、状态位是同一句，sub-sessions-rows 的 subSessionLine）；第三行只在有变化时出（断过一次、按你的话改了口径），
+ * 现在没有数据来源，接口留着不出。在做 = 灰点，要你出手 = 橙点；做完交回来的不在这里。没有派过活整节不出。
+ */
+function DispatchedSection(props: { parentId: string; sessions: readonly SessionMeta[]; engine: SessionEngine }) {
+  const t = useT();
+  const children = childSessions([...props.sessions], props.parentId);
+  const summaries = useChannelSummaries(props.parentId);
+  const channels = useParentChannels(props.parentId, children.map((meta) => meta.id));
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
+  const rows = dispatchedRows(
+    sortSubSessionRows(
+      children.map((meta) => {
+        const messages = channels.get(meta.id);
+        const last = messages?.[messages.length - 1];
+        return {
+          meta,
+          messages,
+          status: subSessionStatusOf(meta.id, summaries.get(meta.id)?.status, props.engine),
+          lastAt: last !== undefined ? last.createdAt : meta.createdAt,
+        };
+      }),
+    ),
+  );
+  if (rows.length === 0) return null;
+  const itemsOf = (id: string) => {
+    const slot = props.engine.entryOf(id);
+    return slot === undefined ? [] : selectTranscript(slot.transcript);
+  };
+  const headline = subSessionHeadline(rows, {
+    interrupted: t.chat.subSessionInterruptedShort,
+    waiting: t.subSessions.waitingCount,
+    working: t.subSessions.workingCount,
+  });
+  return (
+    <section className="tp-sec" aria-label={t.taskPanel.dispatched}>
+      <div className="tp-gh">
+        {t.taskPanel.dispatched}
+        <span className="tp-n">{headline}</span>
+      </div>
+      <ol className="tp-jobs">
+        {rows.map((row) => {
+          const mark = subSessionMark(row.status);
+          const line = subSessionLine(
+            {
+              status: row.status,
+              messages: row.messages,
+              items: itemsOf(row.meta.id),
+              now,
+              lastActivityAt: props.engine.lastActivityOf(row.meta.id),
+            },
+            t,
+          );
+          const note: string | null = null;
+          return (
+            <li key={row.meta.id} className="tp-job">
+              <span className={`inbox-row-mark${mark === null ? "" : ` ${mark}`}`} aria-hidden="true">
+                <span className="inbox-row-dot" />
+              </span>
+              <div className="tp-step">
+                <div className="tp-step-head">
+                  <span className="tp-text tp-job-name">{row.meta.title === "" ? t.subSessions.untitled : displaySubSessionTitle(row.meta.title)}</span>
+                  <span className="tp-tail row-trailing">{jobElapsed(now - row.meta.createdAt, t.taskPanel.elapsed)}</span>
+                </div>
+                <div className="tp-job-line">{line}</div>
+                {note !== null && <div className="tp-note">{note}</div>}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </section>
+  );
+}

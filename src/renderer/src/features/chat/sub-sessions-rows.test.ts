@@ -8,7 +8,9 @@ import {
   latestChannelLine,
   subSessionLine,
   sortSubSessionRows,
+  dispatchedRows,
   displaySubSessionTitle,
+  jobElapsed,
   splitDoneRows,
   subSessionHeadline,
   subSessionMark,
@@ -357,5 +359,25 @@ describe("subSessionLine（子会话面板第二行：每件活一句话）", ()
     strictEqual(subSessionLine({ status: "running", messages: progress, items: [bash], now: 7 * 60_000, lastActivityAt: 0 }, t), "正在跑命令 · 7 分钟没动静");
     strictEqual(subSessionLine({ status: "running", messages: progress, items: [bash], now: 4 * 60_000, lastActivityAt: 0 }, t), "正在跑命令");
     strictEqual(subSessionLine({ status: "done", messages: progress, items: [bash], now: 7 * 60_000, lastActivityAt: 0 }, t), "报了一次进度");
+  });
+});
+
+describe("dispatchedRows / jobElapsed（进度面板「派出去的活」）", () => {
+  it("只列在做的与要你出手的；做完、终止、还没开口的不列", () => {
+    const rows = ["running", "waiting", "interrupted", "failed", "done", "stopped", "idle"].map((status) => ({ status: status as SubSessionRowStatus }));
+    deepStrictEqual(dispatchedRows(rows).map((row) => row.status), ["running", "waiting", "interrupted", "failed"]);
+  });
+  it("用了多久：不到 1 分钟 / N 分钟 / N 小时 M 分钟 / 十小时以上只说小时", () => {
+    const words = {
+      lessThanMinute: "不到 1 分钟",
+      minutes: (n: number) => `${n} 分钟`,
+      hours: (n: number) => `${n} 小时`,
+      hoursMinutes: (h: number, m: number) => `${h} 小时 ${m} 分钟`,
+    };
+    strictEqual(jobElapsed(30_000, words), "不到 1 分钟");
+    strictEqual(jobElapsed(21 * 60_000, words), "21 分钟");
+    strictEqual(jobElapsed(60 * 60_000, words), "1 小时");
+    strictEqual(jobElapsed(65 * 60_000, words), "1 小时 5 分钟");
+    strictEqual(jobElapsed(11 * 3600_000 + 60_000, words), "11 小时");
   });
 });

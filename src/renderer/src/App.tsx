@@ -1671,6 +1671,8 @@ export function App() {
                   onSubChange={(sub) => reportRailPath({ panel: "context", ...(sub === undefined ? {} : { sub }) })}
                   runState={mainMeta === undefined ? null : runStateOf(session, mainMeta)}
                   onStartGoalTask={startGoalTask}
+                  sessions={session.sessions}
+                  engine={engine}
                 />
               ) : shownPanel === "plugins" ? (
                 <PluginsView

@@ -1,3 +1,5 @@
+import type { SessionMeta } from "@shared/session";
+import type { SessionEngine } from "../chat/useChatSession";
 import { useCallback, useState } from "react";
 import type {
   ContextAttachRow,
@@ -67,6 +69,9 @@ export function ContextPanel(props: {
    */
   sub?: ContextSub;
   onSubChange?: (sub: ContextSub | undefined) => void;
+  /** 进度页签「派出去的活」：会话清单与引擎 */
+  sessions: readonly SessionMeta[];
+  engine: SessionEngine;
 }) {
   const t = useT();
   const [scope, setScope] = useState<ContextScope>(() => props.sub?.scope ?? "turn");
@@ -116,6 +121,8 @@ export function ContextPanel(props: {
           runState={props.runState}
           onStartGoalTask={props.onStartGoalTask}
           onOpenContext={() => props.onTab("context")}
+          sessions={props.sessions}
+          engine={props.engine}
         />
       ) : (
         <>

@@ -206,7 +206,8 @@
   color: var(--color-danger);
 }
 
-/* 计划：空圈 / 在做（蓝饼）/ 勾；做完的退到三级色 */
+/* 计划（2026-11-17 减色）：一张朴素的待办——没开始空圈、在做圈点加粗带一句细节、做完灰勾字变淡；
+   没有饼、沙漏、色条。全图唯一的颜色是「等你」前面那个橙点（字用正文色：浅色主题下橙字对比度不够） */
 .tp-plan {
   list-style: none;
   margin: 0;
@@ -228,25 +229,42 @@
   color: var(--color-text-tertiary);
 }
 .tp-plan li[data-status="done"] .tp-slot {
-  color: var(--color-success);
+  color: var(--color-text-tertiary);
 }
-.tp-plan li[data-status="in_progress"] .tp-text {
+.tp-plan .tp-slot {
+  color: var(--color-text-secondary);
+}
+.tp-plan li[data-active] .tp-text {
   font-weight: var(--weight-semibold);
 }
-/* 等你 / 等外部：沙漏（黄）+ 文字旁一枚黄签写等什么。不占「正在做」，不加粗、不退成三级色（还没做完） */
-.tp-plan li[data-status="waiting"] .tp-slot {
-  color: var(--color-warning);
-}
+/* 在等的步：行尾写等什么。等你 = 橙点 + 正文色字；等机器 / 等别的 = 灰字。不占「正在做」，不加粗 */
 .tp-wait {
-  display: inline-block;
-  margin-left: var(--space-1-5);
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-pill);
-  font-size: var(--font-size-xs);
-  font-weight: var(--weight-semibold);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin-left: auto;
+  flex: none;
+  font-size: var(--font-size-sm);
   line-height: var(--line-height-ui);
-  color: var(--color-warning);
-  background: color-mix(in srgb, var(--color-warning) 14%, transparent);
+  color: var(--color-text-tertiary);
+}
+.tp-wait.you {
+  color: var(--color-text-primary);
+}
+.tp-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-text-tertiary);
+}
+.tp-dot.you {
+  background: var(--color-warning);
+}
+/* 在做那一步下面的一句细节（我刚说的那句话） */
+.tp-detail {
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
 }
 .tp-ring {
   width: 10px;
@@ -293,7 +311,7 @@ button.tp-step-head:hover .tp-text {
   color: var(--color-text-tertiary);
 }
 .tp-tail-bad {
-  color: var(--color-danger);
+  color: var(--color-text-tertiary);
 }
 .tp-step-head .tp-clock {
   margin-left: 0;
@@ -596,4 +614,34 @@ button.tp-editlog-src:hover {
   display: block;
   height: 100%;
   background: var(--color-text-tertiary);
+}
+
+/* 派出去的活：每件两行——名字与用了多久 / 那一句；行首记号同子会话面板（.inbox-row-mark：在做灰点、要你出手橙点） */
+.tp-jobs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+.tp-job {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  line-height: var(--line-height-ui);
+}
+.tp-job .inbox-row-mark {
+  width: 14px;
+}
+.tp-job-name {
+  font-weight: var(--weight-semibold);
+}
+.tp-job-line {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
 }
