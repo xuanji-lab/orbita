@@ -269,3 +269,20 @@ describe("记忆挂在哪一行：这一轮的第一个过程行；没有过程�
     assert.equal(userTurnHasProcess(v, u2, true), true);
   });
 });
+
+describe("用户中途插的话：和用户消息同一个框（同一种 user 单元），不另造样子", () => {
+  test("子会话开的轮里用户插话：落成普通 user 单元，前后各一行过程", () => {
+    const records: TranscriptRecord[] = [
+      user("u1", 1),
+      assistant("a1", 2, [text("派了")]),
+      mark("k1", 3),
+      assistant("a2", 4, [call("r1")]),
+      tool({ toolCallId: "r1", timestamp: 5 }),
+      user("u-steer", 6),
+      assistant("a3", 7, [call("r2")]),
+      tool({ toolCallId: "r2", timestamp: 8 }),
+      assistant("a4", 9, [text("好")]),
+    ];
+    assert.deepEqual(kinds(view(records)), ["user", "text", "turnProcess", "user", "turnProcess", "text"]);
+  });
+});
