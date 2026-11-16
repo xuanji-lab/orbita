@@ -1093,3 +1093,115 @@ describe("KernelSessions：子会话与父同库", () => {
   });
 });
 
+
+describe("KernelSessions：轮末预先压缩（下一次发送不被压缩挡住）", () => {
+  // 100k 窗口、剩余 20%：内核阻塞线 80k；提前量 5k → 轮末占用 > 75k 就预先压。faux 的 usage = prompt 字符 / 4。
+  // 系统段约 14k token，前两句各约 29.5k、第三句 4k：第二轮答完约 73k（< 75k，不压）；内核准备第三轮时按 字符/3.5 估新消息，
+  // 约 77.7k（< 80k，不阻塞）；答完 faux 报的 usage（字符/4）约 77.1k（> 75k，轮末预先压）。切点在第二句（保留 ≥ 20k），摘要第一轮
+  const chunk = (tag: string): string => `${tag}${"a".repeat(tag === "三" ? 16_000 : 118_000)}`;
+  const summary = (delayMs = 0) => async () => {
+    if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return fauxAssistantMessage("## Goal\n预先压缩的摘要");
+  };
+  /** 跑三轮大块，返回第三轮 idle 前的事件下标起点 */
+  async function fill(r: Rig, cwd: string, sessionId = "s1", root = sessionId): Promise<void> {
+    for (const [index, tag] of ["一", "二", "三"].entries()) {
+      void r.sessions.handle(root, submit(cwd, { sessionId, text: chunk(tag) }));
+      if (index < 2) await r.until((event) => r.events.filter(idle(sessionId)).length >= index + 1 && idle(sessionId)(event));
+    }
+  }
+  const phaseEvents = (r: Rig, sessionId = "s1") =>
+    r.events.flatMap((event) => (event.type === "phase" && event.sessionId === sessionId ? [`${event.phase}${event.background === true ? "(bg)" : ""}`] : []));
+
+  it("越线的一轮答完：后台压缩（phase compaction 带 background）→ 界碑 → idle；下一次发送只发一次请求、不再压", async () => {
+    const cwd = await tempDir();
+    faux.setResponses([fauxAssistantMessage("答一"), fauxAssistantMessage("答二"), fauxAssistantMessage("答三"), summary()]);
+    const r = await rig();
+    await fill(r, cwd);
+    await r.until((event) => r.events.filter(idle()).length >= 3 && idle()(event));
+    assert.deepEqual(phaseEvents(r).slice(-3), ["turn", "compaction(bg)", "idle"]);
+    const record = await r.until((event) => event.type === "compaction");
+    assert.ok(record.type === "compaction" && /预先压缩的摘要/.test(record.record.summary));
+    const last = r.settled.at(-1)?.result;
+    assert.equal(last?.ok === true ? last.status : last?.reason, "done");
+    assert.ok(!r.events.some((event) => event.type === "failed"));
+    // 下一句：只发一次（回答），不再先压
+    const before = faux.state.callCount;
+    const seen: string[] = [];
+    faux.setResponses([
+      (context) => {
+        seen.push(JSON.stringify(context.messages.map((message) => message.role)));
+        return fauxAssistantMessage("答四");
+      },
+    ]);
+    await r.sessions.handle("s1", submit(cwd, { text: "四" }));
+    await r.until((event) => r.events.filter(idle()).length >= 4 && idle()(event));
+    assert.equal(faux.state.callCount - before, 1, "下一次发送没有被压缩挡住");
+    assert.deepEqual(phaseEvents(r).slice(-2), ["turn", "idle"]);
+    assert.match(JSON.stringify(r.transcript()), /答四/);
+  });
+
+  it("没越线：不压（压缩有损，还多一次摘要调用）", async () => {
+    const cwd = await tempDir();
+    faux.setResponses([fauxAssistantMessage("答一")]);
+    const r = await rig();
+    await r.sessions.handle("s1", submit(cwd, { text: chunk("一") }));
+    await r.until(idle());
+    assert.deepEqual(phaseEvents(r), ["turn", "idle"]);
+    assert.equal(faux.state.callCount > 0, true);
+  });
+
+  it("派出去的活（子会话，库根是父）：越线也不预先压", async () => {
+    const cwd = await tempDir();
+    faux.setResponses([fauxAssistantMessage("答一"), fauxAssistantMessage("答二"), fauxAssistantMessage("答三"), summary()]);
+    const r = await rig();
+    await fill(r, cwd, "c1", "p1");
+    await r.until((event) => r.events.filter(idle("c1")).length >= 3 && idle("c1")(event));
+    assert.deepEqual(phaseEvents(r, "c1").slice(-2), ["turn", "idle"]);
+    assert.equal(faux.getPendingResponseCount(), 1, "摘要那一条没被取走");
+  });
+
+  it("后台压的时候来了开轮命令：不打断压缩，界面改成可见的「正在压缩」，压完接着开这一轮（中间没有 idle）", async () => {
+    const cwd = await tempDir();
+    faux.setResponses([fauxAssistantMessage("答一"), fauxAssistantMessage("答二"), fauxAssistantMessage("答三"), summary(800), fauxAssistantMessage("答四")]);
+    const r = await rig();
+    await fill(r, cwd);
+    await r.until((event) => event.type === "phase" && event.phase === "compaction" && event.background === true);
+    const idlesBefore = r.events.filter(idle()).length;
+    await r.sessions.handle("s1", submit(cwd, { text: "四" }));
+    await r.until((event) => r.events.filter(idle()).length > idlesBefore && idle()(event));
+    const tail = phaseEvents(r).slice(phaseEvents(r).lastIndexOf("compaction(bg)"));
+    assert.deepEqual(tail[0], "compaction(bg)");
+    assert.equal(tail[1], "compaction");
+    assert.ok(!tail.slice(0, -1).includes("idle"), `压完到开轮之间没有 idle：${tail.join(",")}`);
+    // 界碑在第四句的回答之前、第四句只答了一次
+    const transcript = JSON.stringify(r.transcript());
+    assert.match(transcript, /答四/);
+    const compactionAt = r.events.findIndex((event) => event.type === "compaction");
+    const answerAt = r.events.findIndex((event) => event.type === "progress" && JSON.stringify(event.progress).includes("答四"));
+    assert.ok(compactionAt !== -1 && compactionAt < answerAt);
+    assert.equal(faux.getPendingResponseCount(), 0);
+  });
+
+  it("后台压的时候点停止：压缩中止、不报红字，这一轮仍按答完落定；没越过内核阻塞线的下一句照常直接答，答完再预先压", async () => {
+    const cwd = await tempDir();
+    faux.setResponses([fauxAssistantMessage("答一"), fauxAssistantMessage("答二"), fauxAssistantMessage("答三"), summary(2000)]);
+    const r = await rig();
+    await fill(r, cwd);
+    await r.until((event) => event.type === "phase" && event.phase === "compaction" && event.background === true);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await r.sessions.handle("s1", { type: "abort", sessionId: "s1" });
+    await r.until((event) => r.events.filter(idle()).length >= 3 && idle()(event));
+    assert.ok(!r.events.some((event) => event.type === "failed"));
+    assert.ok(!r.events.some((event) => event.type === "compaction"), "压缩被停下，没有界碑");
+    const last = r.settled.at(-1)?.result;
+    assert.equal(last?.ok === true ? last.status : last?.reason, "done");
+    // 被停后上下文没变：这里仍在内核阻塞线下（77k < 80k，提前量那一截），下一句直接答，不被挡；答完判据仍成立，轮末再预先压一次
+    faux.setResponses([fauxAssistantMessage("答四"), summary()]);
+    await r.sessions.handle("s1", submit(cwd, { text: "四" }));
+    await r.until((event) => r.events.filter(idle()).length >= 4 && idle()(event));
+    assert.deepEqual(phaseEvents(r).slice(-3), ["turn", "compaction(bg)", "idle"]);
+    assert.equal(faux.getPendingResponseCount(), 0);
+    assert.match(JSON.stringify(r.transcript()), /答四/);
+  });
+});
