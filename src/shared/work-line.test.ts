@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import type { TranscriptItem } from "@shared/transcript";
+import type { TranscriptItem } from "./transcript.ts";
 import { activityOfTool, currentPlanStep, isQuiet, latestSentence, sanitizeWorkLine, workFacts, workLine, type WorkLineWords } from "./work-line.ts";
 
 /** 可测的规则：洗出来的句子里不得有这些 */

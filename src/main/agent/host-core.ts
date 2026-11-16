@@ -18,6 +18,7 @@ import type {
   ChannelSendOutcome,
   DelegateOutcome,
   ModelCostsOutcome,
+  WorkCardsOutcome,
   ReadTaskOutcome,
 } from "../../shared/agent-ipc.ts";
 import type { ChannelDelivery } from "../../shared/channel.ts";
@@ -940,6 +941,15 @@ export class AgentHostCore {
   answerModelCosts(requestId: string, outcome: ModelCostsOutcome): void {
     this.reply({
       type: "modelCostsResult",
+      requestId,
+      ...(outcome.ok ? { ok: true as const, text: outcome.text } : { ok: false as const, error: outcome.error }),
+    } satisfies AgentCommand);
+  }
+
+  /** 主智能体读小卡：workCardsRequest 的回执。同 answerModelCosts。 */
+  answerWorkCards(requestId: string, outcome: WorkCardsOutcome): void {
+    this.reply({
+      type: "workCardsResult",
       requestId,
       ...(outcome.ok ? { ok: true as const, text: outcome.text } : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);

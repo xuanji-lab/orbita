@@ -55,6 +55,8 @@ describe("turn-tools：两个内核共用的一轮工具装配", () => {
 
   it("pause_subsession 只给主智能体：普通根会话与子会话的工具清单不变", () => {
     assert.ok(names(submit({ mainAgent: true })).includes("pause_subsession"));
+    assert.ok(names(submit({ mainAgent: true })).includes("work_cards"));
+    assert.ok(!names(submit({})).includes("work_cards"));
     assert.ok(!names(submit({})).includes("pause_subsession"));
     assert.ok(!names(submit({ mainAgent: true, directories: CHILD })).includes("pause_subsession"));
   });

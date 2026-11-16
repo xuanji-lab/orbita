@@ -1,7 +1,7 @@
 import type { ToolDefinition } from "./agent-shapes.ts";
 import { RequestBroker } from "./request-broker.ts";
 import type { ChannelDelivery } from "../shared/channel.ts";
-import type { ChannelSendOutcome, DelegateCard, DelegateOutcome, ModelCostsOutcome } from "../shared/agent-ipc.ts";
+import type { ChannelSendOutcome, DelegateCard, DelegateOutcome, ModelCostsOutcome, WorkCardsOutcome } from "../shared/agent-ipc.ts";
 import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from "../shared/thinking.ts";
 
 /**
@@ -29,7 +29,7 @@ export function createChannelTools(
     delegateTool(broker, sessionId),
     replySubsessionTool(broker, sessionId),
     modelCostsTool(broker, sessionId),
-    ...(mainAgent ? [pauseSubsessionTool(broker, sessionId)] : []),
+    ...(mainAgent ? [pauseSubsessionTool(broker, sessionId), workCardsTool(broker, sessionId)] : []),
   ];
 }
 
@@ -266,6 +266,28 @@ function pauseSubsessionTool(broker: RequestBroker, sessionId: string): ToolDefi
         content: [{ type: "text", text: "Paused. Send reply_subsession when it should carry on." }],
         details: { messageId: result.messageId },
       };
+    },
+  };
+}
+
+/**
+ * 主智能体读小卡（2026-11-17）：每件派出去的活一行（那一句、几个勾、在等什么、有没有动静、断过没有）。
+ * 回答用户「做到哪了」时读它，不去翻各条子会话的原文（快、省上下文，说法与界面上的小卡同源）。
+ * 取舍：做成工具而不是每轮塞进上下文——塞进去每轮都变，会打断这一轮之后的前缀缓存；工具结果只在问到时出现一次。
+ */
+function workCardsTool(broker: RequestBroker, sessionId: string): ToolDefinition {
+  return {
+    name: "work_cards",
+    label: "work_cards",
+    description:
+      "Read one short card per piece of work you handed out: its status, what it is doing now, plan " +
+      "progress, what it is waiting for, whether it has gone quiet, and whether it was resumed after an " +
+      "app restart. Use this to answer 'how far along is it' instead of reading the sub-sessions' transcripts.",
+    parameters: { type: "object", properties: {} } as never,
+    async execute() {
+      const result = await broker.request<WorkCardsOutcome>({ type: "workCardsRequest", sessionId });
+      if (!result.ok) throw new Error(result.error);
+      return { content: [{ type: "text", text: result.text }], details: {} };
     },
   };
 }

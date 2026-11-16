@@ -58,6 +58,7 @@ export type ToolReplyCommand = Extract<
       | "mcpWriteResult"
       | "readTaskResult"
       | "modelCostsResult"
+      | "workCardsResult"
       | "pluginInstallResult"
       | "pluginListResult"
       | "pluginPreviewResult"
@@ -79,6 +80,7 @@ const TOOL_REPLY_TYPES: ReadonlySet<string> = new Set<ToolReplyCommand["type"]>(
   "mcpWriteResult",
   "readTaskResult",
   "modelCostsResult",
+  "workCardsResult",
   "pluginInstallResult",
   "pluginListResult",
   "pluginPreviewResult",

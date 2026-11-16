@@ -1222,6 +1222,8 @@ export type AgentCommand =
   | ({ type: "delegateResult"; requestId: string } & DelegateOutcome)
   /** 派发参考：主进程对 modelCostsRequest 的回执（readTaskResult 同款 ok 双分支） */
   | ({ type: "modelCostsResult"; requestId: string } & ModelCostsOutcome)
+  /** 主智能体读小卡：主进程对 workCardsRequest 的回执（modelCostsResult 同款 ok 双分支） */
+  | ({ type: "workCardsResult"; requestId: string } & WorkCardsOutcome)
   /** 子会话：主进程对 channelSendRequest 的回执；kind 与方向不匹配等错误走 ok: false */
   | ({ type: "channelSendResult"; requestId: string } & ChannelSendOutcome)
   /** 自动化：主进程对 automationRequest 的回执（delegateResult 同款） */
@@ -1372,6 +1374,9 @@ export type DelegateOutcome =
  * （main/usage/model-costs.ts），agent 进程原样当工具结果。没有卡：这张表只给模型，UI 走通用工具卡。
  */
 export type ModelCostsOutcome = { ok: true; text: string } | { ok: false; error: string };
+
+/** workCardsRequest 的回执载荷：每件派出去的活一行（workCardsText），agent 进程原样当工具结果 */
+export type WorkCardsOutcome = { ok: true; text: string } | { ok: false; error: string };
 
 /** channelSendRequest 的回执载荷：成功回落进通道的那条消息 id（供对账与测试断言） */
 export type ChannelSendOutcome =
@@ -1585,6 +1590,8 @@ export type AgentEvent =
    * （同一个 memo），压成一张表回 modelCostsResult。只根会话注册（子会话不能再派）。
    */
   | { type: "modelCostsRequest"; requestId: string; sessionId: string }
+  /** 主智能体读小卡（work_cards）：主进程按它派出的每件活现算一张小卡，压成几行给模型（shared/work-card.ts） */
+  | { type: "workCardsRequest"; requestId: string; sessionId: string }
   /**
    * 自动化：agent 的 automation_create / list / cancel / update 请求。
    * **存盘在主进程**（agent 进程不碰 userData，delegateRequest 同一条边界）：主进程校验入参、

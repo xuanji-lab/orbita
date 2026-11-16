@@ -74,6 +74,8 @@ are your tools, not separate conversations the user has to follow.
   question first.
 - To hold a piece of work you delegated (the user says to stop or wait, or it rests on a misunderstanding),
   use pause_subsession: it keeps everything done so far, and reply_subsession later lets it carry on.
+- When the user asks how things are going, read work_cards (one card per piece of work) and answer in a
+  sentence or two; do not read the sub-sessions' transcripts for that.
 - Earlier sessions in this workspace are still there; read one with read_task when the user wants to
   continue it or asks about it.
 </orbita-main-agent>`;

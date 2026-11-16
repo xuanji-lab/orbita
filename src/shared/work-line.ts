@@ -15,8 +15,8 @@
  *
  * 纯模块：不 import React，node --test 直接测。
  */
-import type { TranscriptItem } from "@shared/transcript";
-import type { PlanItem } from "../../../../shared/plan.ts";
+import type { TranscriptItem } from "./transcript.ts";
+import type { PlanItem } from "./plan.ts";
 
 /** 不带参数的动作说法的种类（工具名映射过来，界面文案在 messages） */
 export type WorkActivity = "command" | "read" | "edit" | "web" | "delegate" | "think" | "work";

@@ -115,6 +115,7 @@ import { registerTerminalIpc } from "./terminal/ipc.ts";
 import { registerReviewIpc } from "./review/ipc.ts";
 import { registerFocusIpc } from "./focus/ipc.ts";
 import { MainAgentStore } from "./agents/main-agent.ts";
+import { workCardsFor } from "./work/cards.ts";
 import { registerMainAgentIpc } from "./agents/ipc.ts";
 import { ChimeLog } from "./notify/chime-log.ts";
 import { registerNotifyIpc } from "./notify/ipc.ts";
@@ -530,6 +531,8 @@ void app.whenReady().then(async () => {
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
   const phases = new Map<string, SessionPhase>();
+  /** 每条会话最后一次收到 progress 的时刻（主智能体读小卡的「没动静」用；不落盘） */
+  const lastActivity = new Map<string, number>();
   // 随包的 rg / fd 挂到 agent 与内核进程 PATH 最前面：bash 里直接能用（search-bins.ts）。
   // 目录不在（开发版没跑过 fetch 脚本）就原样给环境
   const searchBins = bundledBinDir({
@@ -643,6 +646,24 @@ void app.whenReady().then(async () => {
         );
       return;
     }
+    // 主智能体读小卡（work_cards）：按它派出的每件活现算小卡，不翻原文。任何路径都回执
+    if (event.type === "workCardsRequest") {
+      void workCardsFor(
+        {
+          sessions,
+          channels,
+          running: (id) => (phases.get(id) ?? "idle") !== "idle",
+          lastActivityAt: (id) => lastActivity.get(id) ?? null,
+        },
+        event.sessionId,
+        Date.now(),
+      )
+        .then((text) => agentHost.answerWorkCards(event.requestId, { ok: true, text }))
+        .catch((cause: unknown) =>
+          agentHost.answerWorkCards(event.requestId, { ok: false, error: cause instanceof Error ? cause.message : String(cause) }),
+        );
+      return;
+    }
     // 自动化：agent 的 automation_create / list / cancel——存盘在主进程，任何路径都回执
     if (event.type === "automationRequest") {
       void applyAutomationRequest(automationDeps, event)
@@ -670,6 +691,8 @@ void app.whenReady().then(async () => {
     // 活跑状态都不可信了，清空。**都不 return**——事件照常往下 record + broadcast
     // （failed(null) 本来就要转发给 renderer，告诉它进程挂了）。
     if (event.type === "phase") phases.set(event.sessionId, event.phase);
+    // 每件活「最后一次动静」（小卡的「没动静」）：新动作与命令新输出都会来一条 progress
+    if (event.type === "progress" || (event.type === "phase" && event.phase !== "idle")) lastActivity.set(event.sessionId, Date.now());
     // 自动化的运行收尾 / this_session 的等待送达都靠这些事件（phase idle、最终回答、stats、failed）。
     // 只旁听，不 return：事件照常往下 record + broadcast
     automationScheduler.onAgentEvent(event);

@@ -11,7 +11,7 @@ import type { ChannelMessage, ChannelStatus } from "@shared/channel";
 import type { Messages } from "../../messages-en.ts";
 import type { TranscriptItem } from "@shared/transcript";
 import { planTimeline } from "../context/plan-timeline.ts";
-import { currentPlanStep, isQuiet, latestSentence, sanitizeWorkLine, workFacts, workLine } from "./work-line.ts";
+import { currentPlanStep, isQuiet, latestSentence, sanitizeWorkLine, workFacts, workLine } from "../../../../shared/work-line.ts";
 
 /**
  * 一行的显示状态（字面对应设计裁决的颜色/图标分配）：
