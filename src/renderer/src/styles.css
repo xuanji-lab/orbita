@@ -6170,8 +6170,13 @@ html {
  * 一行：记号位 + 「事情名：等什么」（长了换行，不截断）+ 工作区名（行尾，钉在行右内边距上）。 */
 .attention {
   display: grid;
+  align-content: start;
   gap: var(--space-0-5);
   flex: none;
+  /* 矮窗（720 高）里 5 件两行的「等你」会吃掉侧栏一半，工作区只剩四五行：封顶约四成高，超出在它自己里面滚。
+     900 高以上 5 件放得下，不出滚动条 */
+  max-height: 42%;
+  overflow-y: auto;
 }
 .attention-head {
   display: flex;

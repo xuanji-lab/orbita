@@ -161,6 +161,14 @@ const CHECKS = [
     skipNoTrailing: true,
   },
   {
+    name: "左栏·等你行：工作区名钉在右血线（名字可换行，不截断）",
+    row: ".attention-row",
+    leading: ".inbox-row-mark",
+    trailing: ".attention-ws",
+    // .attention-row 的左右内边距 var(--space-2)
+    rightPad: 8,
+  },
+  {
     name: "设置·外部来源行：开关 / 「没找到」钉在右血线",
     row: ".ext-src",
     leading: ".mg-name",
