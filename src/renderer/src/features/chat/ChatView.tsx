@@ -2547,7 +2547,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
         !props.loadingHistory &&
         props.phase === "idle" &&
         props.turnError === null && (
-          <StatusLine>{t.chat.noMessages}</StatusLine>
+          // 只能看的会话发不了消息：不说「发出第一条就开始了」
+          <StatusLine>{props.readOnly ? t.chat.noMessagesReadOnly : t.chat.noMessages}</StatusLine>
         )}
       {/* 历史段：只挂视口 + overscan 内的行；尾段与状态行仍在虚拟占位块之后按普通流渲染。
           虚拟行仍是 .revert-keep（data-kind 不变），子午线选择器在 styles.css 里同步认

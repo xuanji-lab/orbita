@@ -1936,6 +1936,8 @@ export const en = {
     /** 新内核：第一次在旧会话里发消息时迁进库（超过 0.5 秒才显示） */
     migratingSession: "Preparing this conversation's history — only needed the first time, one moment…",
     noMessages: "No messages yet. Send the first one to start.",
+    /** 只能看、又没有任何记录的会话：发不了消息，不叫人「发出第一条」 */
+    noMessagesReadOnly: "Nothing has been recorded for this work yet.",
     /** 源侧分页：触顶拉更早一页那一行 */
     loadingOlder: "Loading earlier messages…",
     backToParent: (title: string) => `Back to "${title}"`,

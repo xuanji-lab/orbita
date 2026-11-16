@@ -1778,6 +1778,8 @@ export const zh: Messages = {
     resumedAfterRestart: "应用重启时这个子会话还没跑完，已自动接着跑上次被打断的那一轮。",
     migratingSession: "正在整理这条会话的历史记录，只有第一次需要，稍等……",
     noMessages: "还没有消息。发出第一条就开始了。",
+    /** 只能看、又没有任何记录的会话（比如右栏里一件只读的活）：发不了消息，不叫人「发出第一条」 */
+    noMessagesReadOnly: "这件活还没有留下记录。",
     loadingOlder: "正在加载更早的消息…",
     backToParent: (title) => `返回「${title}」`,
     renameTask: "重命名任务",
