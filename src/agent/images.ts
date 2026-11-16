@@ -8,14 +8,61 @@
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
 import { DEFAULT_IMAGE_LIMITS, type ImageLimits, type ImageProcessor, type PreparedImage } from "@earendil-works/pi-durable/tools";
+import { PhotonImage } from "@silvia-odwyer/photon/photon_rs.js";
 
 let photon: Promise<ImageProcessor> | undefined;
 
-/** 进程内唯一的图片处理器（第一次用到才加载 WASM） */
+/**
+ * 缩过 / 重编码后的 PNG 再试一次 JPEG，取小的（旧内核的口径：「PNG 与 JPEG 里挑小的」）。
+ *
+ * 为什么要包这一层：新内核自带处理器先用 PNG，只有超过 maxBytes 才降 JPEG，且没有选项能改——
+ * 一张缩到上限的照片类 PNG 会发 2.6 MB（旧版 JPEG 161 KB）。
+ * 规矩：
+ * - 只动被处理器重编码过的 PNG；原样放行的图（在上限内、字节没变）不碰，与旧版一致。
+ * - 有透明像素的只能 PNG（JPEG 会把透明压成黑）。
+ * - JPEG 要明显更小（< PNG 的 80%）才换：平涂截图两种格式差不多时保住无损的文字边缘。
+ * 用的是 photon 自己的 JPEG 编码（q80，与处理器首选档同），不另写编码器。
+ */
+const JPEG_QUALITY = 80;
+
+/** 字节数对应的 base64 长度（上游没导出这个函数） */
+const base64Length = (byteLength: number): number => Math.ceil(byteLength / 3) * 4;
+const JPEG_MUST_BE_SMALLER_THAN = 0.8;
+
+function preferSmallerEncoding(prepared: PreparedImage, original: Uint8Array, originalMime: string): PreparedImage {
+  if (prepared.mimeType !== "image/png") return prepared;
+  if (prepared.data.length === base64Length(original.byteLength) && prepared.data === Buffer.from(original).toString("base64")) {
+    return prepared;
+  }
+  let image: PhotonImage | undefined;
+  try {
+    image = PhotonImage.new_from_byteslice(Buffer.from(prepared.data, "base64"));
+    const pixels = image.get_raw_pixels();
+    for (let i = 3; i < pixels.length; i += 4) {
+      if (pixels[i] !== 255) return prepared;
+    }
+    const jpeg = Buffer.from(image.get_bytes_jpeg(JPEG_QUALITY));
+    if (base64Length(jpeg.byteLength) >= prepared.data.length * JPEG_MUST_BE_SMALLER_THAN) return prepared;
+    return {
+      ...prepared,
+      data: jpeg.toString("base64"),
+      mimeType: "image/jpeg",
+      convertedFrom: prepared.convertedFrom ?? (originalMime === "image/jpeg" ? undefined : originalMime),
+    };
+  } catch {
+    // 再编码失败不该让图发不出去：留着处理器给的 PNG
+    return prepared;
+  } finally {
+    image?.free();
+  }
+}
+
+/** 进程内唯一的图片处理器（第一次用到才加载 WASM）。read 读图、工具结果图、用户贴图三条路都经这里 */
 export const imageProcessor: ImageProcessor = {
   async prepare(bytes, mimeType, limits) {
     photon ??= createNodePhotonImages({ worker: false });
-    return (await photon).prepare(bytes, mimeType, limits);
+    const prepared = await (await photon).prepare(bytes, mimeType, limits);
+    return prepared === undefined ? undefined : preferSmallerEncoding(prepared, bytes, mimeType);
   },
 };
 
