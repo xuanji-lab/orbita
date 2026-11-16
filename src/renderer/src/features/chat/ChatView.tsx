@@ -41,6 +41,7 @@ import {
 // 历史段 / 实时尾段的切分与派生复用（纯模块，可与整段一次性计算等价）
 import { deriveHistorySegment, type HistoryCache } from "./history-segment.ts";
 import { splitAtLastUser } from "./transcript-split.ts";
+import { pathParts } from "./path-parts.ts";
 import { processEvents, processSummary, processTally, tallyHasEvents, type ProcessEvent } from "./turn-events.ts";
 import { readFoldState, writeFoldState } from "./fold-state.ts";
 // 历史段虚拟化：行过滤 / 下标映射 / 高度 LRU / 锚点换算（纯模块）
@@ -4692,7 +4693,6 @@ function ProcessEventList(props: {
   onOpenProgress?: () => void;
 }) {
   const t = useT();
-  const today = useToday();
   const r = t.chat.procRow;
   const openSession = props.channel.openSubSession;
   const sessionLink = (peerId: string | null) =>
@@ -4703,7 +4703,8 @@ function ProcessEventList(props: {
   return (
     <ol className="proc-events">
       {props.events.map((event) => {
-        const time = formatMessageTime(event.time, today);
+        // 只写时刻：日期已经在过程行头上了
+        const time = clockOfDay(event.time);
         switch (event.kind) {
           case "tools": {
             const first = event.calls[0];
@@ -4711,6 +4712,7 @@ function ProcessEventList(props: {
               first === undefined
                 ? ""
                 : (docEditCallLabel(first.toolName, first.input, props.toolResults.get(first.toolCallId)) ??
+                  fileCallName(first.toolName, first.input) ??
                   toolCallSummaryForRow(first.toolName, first.input, props.skills) ??
                   "");
             const content = [
@@ -4775,6 +4777,18 @@ function ProcessEventList(props: {
       })}
     </ol>
   );
+}
+
+/** 读 / 写 / 改文件那一行只写文件名（全路径在点开后的工具行里） */
+function fileCallName(toolName: string, input: unknown): string | null {
+  if (toolName !== "read" && toolName !== "write" && toolName !== "edit") return null;
+  const path = (input as Record<string, unknown> | null)?.["path"];
+  return typeof path === "string" && path !== "" ? pathParts(path, null).name : null;
+}
+
+function clockOfDay(at: number): string {
+  const date = new Date(at);
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
 function ProcessEventRow(props: {

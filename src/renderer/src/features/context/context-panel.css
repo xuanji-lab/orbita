@@ -248,6 +248,20 @@
   line-height: var(--line-height-ui);
   color: var(--color-text-tertiary);
 }
+/* 等什么写长了也不挤标题：最多占一半宽，全文在悬停里 */
+.tp-wait {
+  max-width: 50%;
+  min-width: 0;
+}
+.tp-wait-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tp-dot {
+  flex: none;
+}
 .tp-wait.you {
   color: var(--color-text-primary);
 }
@@ -635,6 +649,9 @@ button.tp-editlog-src:hover {
   width: 14px;
 }
 .tp-job-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-weight: var(--weight-semibold);
 }
 .tp-job-line {

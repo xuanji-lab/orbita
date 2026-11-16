@@ -121,15 +121,30 @@ export function splitDoneRows<T extends { status: SubSessionRowStatus }>(rows: r
   return { open, done };
 }
 
-/** 头上那句：「2 件等你 · 3 件在做」（灰字，不上色——行前的橙点已经够了） */
+/**
+ * 头上那句：「1 件等你 · 1 件没做成 · 3 件在做」（灰字，不上色——行前的橙点已经够了）。「等你」与父会话顶上胶囊同一个数
+ * （在问你 + 被打断），没做成单说，免得两处数字对不上。
+ */
 export function subSessionHeadline(
   rows: readonly { status: SubSessionRowStatus }[],
-  words: { interrupted: (count: number) => string; waiting: (count: number) => string; working: (count: number) => string },
+  words: {
+    interrupted: (count: number) => string;
+    waiting: (count: number) => string;
+    failed: (count: number) => string;
+    working: (count: number) => string;
+  },
 ): string {
-  const waiting = rows.filter((row) => row.status === "waiting" || row.status === "interrupted" || row.status === "failed").length;
+  const waiting = rows.filter((row) => row.status === "waiting" || row.status === "interrupted").length;
   const interrupted = rows.filter((row) => row.status === "interrupted").length;
+  const failed = rows.filter((row) => row.status === "failed").length;
   const working = rows.filter((row) => row.status === "running").length;
-  return [waitingSummary(waiting, interrupted, words), ...(working > 0 ? [words.working(working)] : [])].filter((part) => part !== "").join(" · ");
+  return [
+    waitingSummary(waiting, interrupted, words),
+    ...(failed > 0 ? [words.failed(failed)] : []),
+    ...(working > 0 ? [words.working(working)] : []),
+  ]
+    .filter((part) => part !== "")
+    .join(" · ");
 }
 
 /**

@@ -200,6 +200,7 @@ export function SubSessionsPanel(props: {
   const headline = subSessionHeadline(rows, {
     interrupted: t.chat.subSessionInterruptedShort,
     waiting: t.subSessions.waitingCount,
+    failed: t.subSessions.failedCount,
     working: t.subSessions.workingCount,
   });
   const { open, done } = splitDoneRows(rows);

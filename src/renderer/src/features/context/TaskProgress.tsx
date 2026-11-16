@@ -440,14 +440,13 @@ function PlanSection(props: {
     // 章节默认收着（以前在做的那步默认展开）：计划是一张朴素的待办，过程点开才看
     const shown = open[item.id] ?? false;
     const since = status === "in_progress" ? stepActiveSince(timeline, item.id) : null;
-    const note = item.note;
     // 在等的步：行尾写等什么。等你 = 橙点 + 正文色字；等机器 / 等别的 = 灰字
     const you = status === "waiting" && waitsOnYou(item.waitingFor);
     const waitTag =
       status === "waiting" ? (
-        <span className={you ? "tp-wait you" : "tp-wait"} title={t.planText.waitingTitle}>
+        <span className={you ? "tp-wait you" : "tp-wait"} title={item.waitingFor ?? t.planText.waitingTitle}>
           {you && <span className="tp-dot you" />}
-          {item.waitingFor ?? t.planText.waitingDefault}
+          <span className="tp-wait-text">{item.waitingFor ?? t.planText.waitingDefault}</span>
         </span>
       ) : null;
     const clock = active && props.turnActive && since !== null ? formatRunClock(props.now - stepClockFrom(since, props.turns)) : null;
@@ -483,22 +482,6 @@ function PlanSection(props: {
             </div>
           )}
           {active && props.detail !== null && props.detail !== item.text && <div className="tp-detail">{props.detail}</div>}
-          {note !== null && (
-            <div className="tp-note">
-              <b>
-                {note.kind === "added"
-                  ? t.planText.noteAdded
-                  : note.kind === "reworded"
-                    ? t.planText.noteReworded
-                    : note.kind === "moved"
-                      ? t.planText.noteMoved
-                      : t.planText.noteSplit}
-              </b>
-              {note.kind === "reworded" && note.from !== null && <span>{t.planText.was(note.from)}</span>}
-              {note.kind === "split" && note.from !== null && <span>{t.planText.splitFrom(note.from)}</span>}
-              {note.why !== null && <span>{note.why}</span>}
-            </div>
-          )}
           {shown && rows.length > 0 && <ChapterList rows={rows} statusOf={props.statusOf} />}
         </div>
       </li>
@@ -742,6 +725,7 @@ function DispatchedSection(props: { parentId: string; sessions: readonly Session
   const headline = subSessionHeadline(rows, {
     interrupted: t.chat.subSessionInterruptedShort,
     waiting: t.subSessions.waitingCount,
+    failed: t.subSessions.failedCount,
     working: t.subSessions.workingCount,
   });
   return (

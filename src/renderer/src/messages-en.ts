@@ -2357,6 +2357,7 @@ export const en = {
     openInPanel: "Open in the Sub-sessions panel",
     waitingCount: (count: number) => `${count} waiting on you`,
     workingCount: (count: number) => `${count} working`,
+    failedCount: (count: number) => `${count} not done`,
     doneCount: (count: number) => `${count} done`,
     inboxFoot: "Click a row to see that sub-session's full exchange with the parent",
     openAsMainTip: "Switch the main pane to this sub-session",
@@ -3020,17 +3021,12 @@ export const en = {
       `${count === 1 ? "Plan changed" : `Plan changed in ${count} places`}: ${summary}${count > 1 ? " and more" : ""}${why === "" ? "" : ` — ${why}`}`,
     /** 把一段文字加上引号（拆成 / 合成里并排列出几步用） */
     quoted: (text: string) => `"${text}" `,
-    noteAdded: "New",
-    noteReworded: "Reworded",
-    noteSplit: "Split out",
     /** 被往前提的步下面写一句出处（后面跟理由） */
-    noteMoved: "Moved up",
     /** waiting 的步，waitingFor 没写时小签上的默认字 */
     waitingDefault: "Waiting",
     waitingTitle: "Waiting on you or something external; not in progress",
     /** 改过的步下面写原文字 */
     was: (from: string) => `was: ${from}`,
-    splitFrom: (from: string) => `from "${from}"`,
     editsCount: (n: number) => (n === 1 ? "changed once" : `changed ${n} times`),
     editsTitle: "What changed in the plan, and why",
     dropped: "dropped",

@@ -186,9 +186,14 @@ describe("splitDoneRows / subSessionHeadline（做完的折起来，头上一句
     deepStrictEqual(open.map((row) => row.status), ["waiting", "running", "failed"]);
     deepStrictEqual(done.map((row) => row.lastAt), [9, 2]);
   });
-  it("「2 件等你 · 1 件在做」：没做成也算等你；没有的种类不出", () => {
-    const words = { interrupted: (n: number) => `${n} 个被打断`, waiting: (n: number) => `${n} 件等你`, working: (n: number) => `${n} 件在做` };
-    strictEqual(subSessionHeadline(rows, words), "2 件等你 · 1 件在做");
+  it("「1 件等你 · 1 件没做成 · 1 件在做」：等你与顶上胶囊同一个数，没做成单说；没有的种类不出", () => {
+    const words = {
+      interrupted: (n: number) => `${n} 个被打断`,
+      waiting: (n: number) => `${n} 件等你`,
+      failed: (n: number) => `${n} 件没做成`,
+      working: (n: number) => `${n} 件在做`,
+    };
+    strictEqual(subSessionHeadline(rows, words), "1 件等你 · 1 件没做成 · 1 件在做");
     strictEqual(subSessionHeadline([{ status: "done" }], words), "");
   });
 });
