@@ -22,7 +22,7 @@ describe("workCardsFor —— 只读它自己派出的活，按小卡说，不�
       0,
     );
     assert.equal(text.split("\n").length, 1);
-    assert.ok(text.includes('"跑基线"') && text.includes("waiting") && text.includes("要不要算进对比？"));
-    assert.ok(!text.includes('"x"'));
+    assert.ok(text.includes("「跑基线」") && text.includes("在等它问的那个问题的回答") && text.includes("要不要算进对比？"));
+    assert.ok(!text.includes("「x」"));
   });
 });

@@ -30,26 +30,27 @@ describe("小卡（主智能体读的）", () => {
     assert.equal(card.quiet, true);
     assert.equal(card.resumedAt, 1000);
     const text = workCardsText([card], 10 * 60_000);
-    assert.ok(text.includes("plan 1/2") && text.includes("waiting for: 要不要算进对比？") && text.includes("no activity"));
+    assert.ok(text.includes("计划做了 1/2 步") && text.includes("在等：要不要算进对比？") && text.includes("有一阵没动静了"));
   });
 
   test("暂停带理由；没有活时说没有", () => {
     const card = workCardOf({ meta: { id: "c", title: "t" }, status: "paused", messages: [msg("pause", "等口径", "parent")], items: [], running: false, lastActivityAt: null, now: 0 });
     assert.equal(card.pausedFor, "等口径");
     assert.equal(card.quiet, false);
-    assert.match(workCardsText([], 0), /No work/);
+    assert.match(workCardsText([], 0), /还没有派出去的活/);
     const idle = workCardOf({ meta: { id: "c", title: "t" }, status: "running", messages: [], items: [], running: false, lastActivityAt: null, now: 0 });
-    assert.match(workCardsText([idle], 0), /not finished, but nothing is happening right now/);
-    // 不给状态码：模型拿到什么就转述什么
-    assert.doesNotMatch(workCardsText([card, idle], 0), /: (running|paused|idle)\b/);
+    assert.match(workCardsText([idle], 0), /没做完，但这会儿没在动/);
+    // 给模型的说法会被它转述给用户：除了 id，不留英文词
+    const all = workCardsText([card, idle], 3 * 60_000);
+    assert.doesNotMatch(all.replace(/\(id [\w-]+\)/g, ""), /[A-Za-z]{3,}/);
   });
 
   test("能力集：全带不写；纯聊天、只带基础、基础 + 清单各说一句", () => {
     const of = (capabilities?: string[]) =>
       workCardsText([workCardOf({ meta: { id: "c", title: "t", ...(capabilities === undefined ? {} : { capabilities }) }, status: "running", messages: [], items: [], running: true, lastActivityAt: 0, now: 0 })], 0);
-    assert.doesNotMatch(of(), /given:/);
-    assert.match(of(["none"]), /given: chat only, no tools/);
-    assert.match(of([]), /given: basic tools only/);
-    assert.match(of(["pdf-docx", "browser"]), /given: basic tools \+ pdf-docx, browser/);
+    assert.doesNotMatch(of(), /带了|只聊天|只带了/);
+    assert.match(of(["none"]), /只聊天，不动文件/);
+    assert.match(of([]), /只带了读写文件与跑命令/);
+    assert.match(of(["pdf-docx", "browser"]), /带了：读 PDF 与 Word、浏览器/);
   });
 });

@@ -198,7 +198,7 @@ describe("delegate", () => {
     });
     const result = await pending;
     const text = result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
-    assert.match(text, /Besides the basic tools it has: pdf-docx, browser\./);
+    assert.match(text, /What it has, in the user's words: 带了：读 PDF 与 Word、浏览器\./);
     await assert.rejects(delegate.execute("call-d", { title: "t", task: "d", capabilities: "browser" }, undefined, undefined, undefined as never), /list of strings/);
     assert.equal(fake.sent.length, 1);
     // 参数说明列出全部模块与纯聊天写法

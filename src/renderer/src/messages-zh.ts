@@ -1,3 +1,4 @@
+import { CAPABILITIES_WORDS_ZH } from "../../shared/capabilities.ts";
 import type { Messages } from "./messages-en.ts";
 import { zhRevealLabel, zhTrashName } from "./file-manager.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
@@ -2197,21 +2198,8 @@ export const zh: Messages = {
     doneCount: (count) => `做完 ${count} 件`,
     parkedCount: (count) => `停着 ${count} 件`,
     inboxFoot: "点一行：看这个子会话与父会话的完整往来",
-    capabilities: {
-      chatOnly: "只聊天，不动文件",
-      basicsOnly: "只带了读写文件与跑命令",
-      has: (names) => `带了：${names}`,
-      separator: "、",
-      modules: {
-        "pdf-docx": "读 PDF 与 Word",
-        image: "给你看图",
-        browser: "浏览器",
-        "docs-slides": "文档与幻灯片",
-        terminal: "终端",
-        store: "改智能体配置",
-        tasks: "读别的会话",
-      },
-    },
+    // 与主智能体读的小卡同一套词（@shared/capabilities 的 CAPABILITIES_WORDS_ZH）
+    capabilities: CAPABILITIES_WORDS_ZH,
     openAsMainTip: "把主面板切到这个子会话",
     gone: "这个子会话已不存在。",
     of: (title) => `「${title}」的子会话`,

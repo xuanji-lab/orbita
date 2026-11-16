@@ -121,3 +121,23 @@ export function capabilitiesLine(capabilities: readonly string[] | undefined, wo
   if (names.length === 0) return words.basicsOnly ?? null;
   return words.has(names.join(words.separator));
 }
+
+/**
+ * 中文说法：一件活页头那行灰字（renderer messages-zh）与主智能体读的小卡（work_cards）用同一套词——
+ * 小卡给模型的说法会被它原样转述给用户（真型号下它把英文 basic tools only 直接说给了用户）。
+ */
+export const CAPABILITIES_WORDS_ZH = {
+  chatOnly: "只聊天，不动文件",
+  basicsOnly: "只带了读写文件与跑命令",
+  has: (names: string) => `带了：${names}`,
+  separator: "、",
+  modules: {
+    "pdf-docx": "读 PDF 与 Word",
+    image: "给你看图",
+    browser: "浏览器",
+    "docs-slides": "文档与幻灯片",
+    terminal: "终端",
+    store: "改智能体配置",
+    tasks: "读别的会话",
+  },
+} satisfies Required<CapabilitiesWords>;

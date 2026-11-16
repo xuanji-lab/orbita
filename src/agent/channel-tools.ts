@@ -3,7 +3,7 @@ import { RequestBroker } from "./request-broker.ts";
 import type { ChannelDelivery } from "../shared/channel.ts";
 import type { ChannelSendOutcome, DelegateCard, DelegateOutcome, ModelCostsOutcome, WorkCardsOutcome } from "../shared/agent-ipc.ts";
 import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from "../shared/thinking.ts";
-import { CAPABILITY_MODULES, isCapabilityModule, isChatOnly, MODULE_SUMMARY } from "../shared/capabilities.ts";
+import { CAPABILITIES_WORDS_ZH, CAPABILITY_MODULES, capabilitiesLine, isCapabilityModule, isChatOnly, MODULE_SUMMARY } from "../shared/capabilities.ts";
 
 /**
  * 子会话的三个通道工具（子会话 2026-09-23）：delegate / reply_subsession /
@@ -67,14 +67,17 @@ const CAPABILITIES_PARAM_DESCRIPTION =
   '[] = the basics only. ["none"] = chat only: no tools at all, its final answer is handed back to you as done. ' +
   "What it gets is fixed for the life of the sub-session.";
 
-/** delegate 回执里的一句：这件活带了什么（全带不说） */
+/**
+ * delegate 回执里的一句：这件活带了什么。说法用与小卡、页头同一套中文词（CAPABILITIES_WORDS_ZH）——
+ * 主智能体会把它转述给用户（真型号下它把英文 basic tools only 原样说给了用户）。
+ */
 function describeGiven(capabilities: readonly string[] | undefined): string {
   // 全带也说一句：主智能体拿到回执就知道它没收窄（真型号下它没传 capabilities 却对用户说「没给它浏览器」）
   if (capabilities === undefined) return "It has all of your tools (no capabilities were given). ";
-  if (isChatOnly(capabilities)) return "It is chat only (no tools); its final answer comes back to you as done. ";
-  return capabilities.length === 0
-    ? "It has the basic tools only. "
-    : `Besides the basic tools it has: ${capabilities.join(", ")}. `;
+  const line = capabilitiesLine(capabilities, CAPABILITIES_WORDS_ZH) ?? "";
+  return isChatOnly(capabilities)
+    ? `It is chat only (no tools); its final answer comes back to you as done. In the user's words: ${line}. `
+    : `What it has, in the user's words: ${line}. `;
 }
 
 /** delegate 说明里催它查价挑型号的那一段（普通会话才有） */

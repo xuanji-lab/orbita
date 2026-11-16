@@ -6,7 +6,7 @@
  *
  * 纯模块：不 import electron / node，node --test 直接测。
  */
-import { isChatOnly } from "./capabilities.ts";
+import { CAPABILITIES_WORDS_ZH, capabilitiesLine } from "./capabilities.ts";
 import type { ChannelMessage, ChannelStatus } from "./channel.ts";
 import { parsePlan, PLAN_TOOL_NAME, type PlanItem } from "./plan.ts";
 import type { TranscriptItem } from "./transcript.ts";
@@ -36,16 +36,17 @@ export interface WorkCard {
 
 /** 给模型读的说法（英文；模型回用户时按用户的语言说） */
 export const MODEL_WORK_WORDS: WorkLineWords = {
+  // 用中文：这些词主智能体会原样转述给用户（真型号下它把小卡里的英文直接说给了用户）
   activity: {
-    command: "running a command",
-    read: "reading files",
-    edit: "editing files",
-    web: "looking something up online",
-    delegate: "handing out work",
-    think: "thinking",
-    work: "working",
+    command: "在跑命令",
+    read: "在读文件",
+    edit: "在改文件",
+    web: "在上网查",
+    delegate: "在派活",
+    think: "在想",
+    work: "在做",
   },
-  waiting: (step, who) => `${step} (waiting for ${who})`,
+  waiting: (step, who) => `${step}（在等${who}）`,
 };
 
 /** 转录里最近一次 update_plan 的清单（回退 / 分支的细节不管：小卡要的是「现在大概在哪一步」） */
@@ -102,36 +103,32 @@ export function workCardOf(input: {
  * 「状态是 running」；给它一句话，它转述出来也是一句话）。
  */
 const STATUS_WORDS: Readonly<Record<ChannelStatus, string>> = {
-  running: "in progress",
-  waiting: "waiting for an answer to its question",
-  done: "finished",
-  failed: "could not be done",
-  stopped: "stopped by the user",
-  paused: "on hold (you paused it)",
+  running: "在做",
+  waiting: "在等它问的那个问题的回答",
+  done: "做完了",
+  failed: "没做成",
+  stopped: "用户叫停了",
+  paused: "暂停着（你暂停的）",
 };
 
-/** 小卡给模型看的「带了什么」：纯聊天 / 只带基础 / 基础 + 清单 */
-function givenText(capabilities: readonly string[]): string {
-  if (isChatOnly(capabilities)) return "chat only, no tools";
-  return capabilities.length === 0 ? "basic tools only" : `basic tools + ${capabilities.join(", ")}`;
-}
 
 /** 一组小卡压成给模型读的几行（每件一行；没有派出去的活就说没有） */
 export function workCardsText(cards: readonly WorkCard[], now: number): string {
-  if (cards.length === 0) return "No work has been handed out from this conversation yet.";
+  if (cards.length === 0) return "这个对话里还没有派出去的活。";
   const minutes = (at: number): number => Math.max(0, Math.round((now - at) / 60_000));
   return cards
     .map((card) => {
-      const status = card.status === "running" && !card.working ? "not finished, but nothing is happening right now" : STATUS_WORDS[card.status];
-      const parts = [`- "${card.title}" (id ${card.sessionId}): ${status}`];
-      if (card.plan !== null) parts.push(`plan ${card.plan.done}/${card.plan.total}`);
-      if (card.line !== null) parts.push(`now: ${card.line}`);
-      if (card.waitingFor !== null) parts.push(`waiting for: ${card.waitingFor}`);
-      if (card.pausedFor !== null) parts.push(`paused: ${card.pausedFor}`);
-      if (card.quiet) parts.push("no activity for a while");
-      if (card.resumedAt !== null) parts.push(`resumed after an app restart ${minutes(card.resumedAt)} min ago`);
-      if (card.capabilities !== undefined) parts.push(`given: ${givenText(card.capabilities)}`);
-      return parts.join("; ");
+      const status = card.status === "running" && !card.working ? "没做完，但这会儿没在动" : STATUS_WORDS[card.status];
+      // id 留给 reply_subsession / pause_subsession 用；其余字段都是会被转述给用户的说法，一律中文
+      const parts = [`- 「${card.title}」(id ${card.sessionId})：${status}`];
+      if (card.plan !== null) parts.push(`计划做了 ${card.plan.done}/${card.plan.total} 步`);
+      if (card.line !== null) parts.push(`眼下：${card.line}`);
+      if (card.waitingFor !== null) parts.push(`在等：${card.waitingFor}`);
+      if (card.pausedFor !== null) parts.push(`暂停的原因：${card.pausedFor}`);
+      if (card.quiet) parts.push("有一阵没动静了");
+      if (card.resumedAt !== null) parts.push(`${minutes(card.resumedAt)} 分钟前应用重启后接着做了`);
+      if (card.capabilities !== undefined) parts.push(capabilitiesLine(card.capabilities, CAPABILITIES_WORDS_ZH) ?? "");
+      return parts.filter((part) => part !== "").join("；");
     })
     .join("\n");
 }
