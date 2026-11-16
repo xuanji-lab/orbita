@@ -51,6 +51,23 @@ export function workspaceRows(
   return { main, open: open.map((item) => item.meta), earlier };
 }
 
+/**
+ * 当前工作区展开后「没了结的活」最多露几行（设计 11-sidebar-full：最多 6 行，超出折成「还有 N 件」）。
+ * 等你的永远露出来——等你的多于 6 件就全露；点过「还有 N 件」（showAll）= 全露。
+ * 不再套 groupVisibleLimit 的「每组 5 条 + 再显示」：那是给列会话用的，满载时第 6 件活被它藏了。
+ * open 已按急的在前排好（等你在最前），所以前 N 行里必然先是等你的。
+ */
+export const OPEN_ROWS_MAX = 6;
+
+export function openRowsLimit(
+  open: readonly SessionMeta[],
+  stateOf: (meta: SessionMeta) => SessionRunState,
+  showAll: boolean,
+): number {
+  if (showAll) return open.length;
+  return Math.max(OPEN_ROWS_MAX, open.filter((meta) => stateOf(meta) === "waiting").length);
+}
+
 /** 「以前的会话」里的搜索：标题与最近几次提问里有没有这几个字（不分大小写；空查询 = 全部） */
 export function matchesSessionQuery(meta: SessionMeta, query: string): boolean {
   const needle = query.trim().toLowerCase();

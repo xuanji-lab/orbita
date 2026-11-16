@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { matchesSessionQuery, workspaceRows } from "./workspace-rows.ts";
+import { matchesSessionQuery, openRowsLimit, workspaceRows } from "./workspace-rows.ts";
 import type { SessionMeta } from "../../../shared/session.ts";
 import type { SessionRunState } from "../features/notify/completion-notice.ts";
 
@@ -90,4 +90,15 @@ describe("matchesSessionQuery", () => {
     assert.equal(matchesSessionQuery(m, "  "), true);
     assert.equal(matchesSessionQuery(m, "海报"), false);
   });
+});
+
+describe("openRowsLimit —— 展开的工作区最多露 6 行，等你的永远露出", () => {
+  const list = (waiting: number, other: number) => [
+    ...Array.from({ length: waiting }, (_, i) => meta(`w${i}`)),
+    ...Array.from({ length: other }, (_, i) => meta(`o${i}`)),
+  ];
+  const stateOf = (m: SessionMeta): SessionRunState => (m.id.startsWith("w") ? "waiting" : "running");
+  test("平常最多 6 行", () => assert.equal(openRowsLimit(list(2, 6), stateOf, false), 6));
+  test("等你的多于 6 件就全露", () => assert.equal(openRowsLimit(list(8, 2), stateOf, false), 8));
+  test("点过「还有 N 件」= 全露", () => assert.equal(openRowsLimit(list(2, 6), stateOf, true), 8));
 });

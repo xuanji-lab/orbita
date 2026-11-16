@@ -1018,6 +1018,8 @@ export const zh: Messages = {
     collapseTip: "收成图标栏",
     mainAgent: "主智能体",
     openMainAgentTip: (name) => `跟「${name}」的主智能体说话`,
+    /** 当前工作区里没了结的活超过 6 件时，末尾那一行 */
+    moreJobs: (n) => `还有 ${n} 件`,
     earlierSessions: (n) => `以前的会话 ${n}`,
     earlierSessionsTip: "做完看过的活，和以前攒下的会话",
     earlierTitle: "以前的会话",

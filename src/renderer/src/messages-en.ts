@@ -1102,6 +1102,8 @@ export const en = {
     collapseTip: "Collapse to the icon rail",
     mainAgent: "Main agent",
     openMainAgentTip: (name: string) => `Talk to the main agent of ${name}`,
+    /** 当前工作区里没了结的活超过 6 件时，末尾那一行 */
+    moreJobs: (n: number) => `${n} more`,
     earlierSessions: (n: number) => `Earlier sessions ${n}`,
     earlierSessionsTip: "Finished work you have seen, and sessions from before",
     earlierTitle: "Earlier sessions",

@@ -39,7 +39,7 @@ import { chipCompactAt, nextCompactLevel } from "./filter-row-compact.ts";
 import { ageCounts, filterByAge } from "./sidebar-age.ts";
 import { sessionAgeLabel } from "./relative-time.ts";
 import { useMinuteTick } from "./use-minute-tick.ts";
-import { matchesSessionQuery, workspaceRows } from "./workspace-rows.ts";
+import { matchesSessionQuery, openRowsLimit, workspaceRows } from "./workspace-rows.ts";
 import { useChannelStatuses } from "../features/chat/useChannelSummaries.ts";
 import { effectiveSidebarFilters } from "./sidebar-filters.ts";
 import {
@@ -421,7 +421,8 @@ export function Sidebar(props: {
           ...(workspaceList.body === "list" ? workspaceMatches : []).flatMap((workspace) => {
             const key = foldKeyForWorkspace(workspace.id);
             if (workspace.id !== currentWorkspaceId) return [];
-            return visibleWithOpen(rowsOf.get(workspace.id)?.open ?? [], limitFor(key), openId).map((m) => m.id);
+            const rows = rowsOf.get(workspace.id)?.open ?? [];
+            return visibleWithOpen(rows, openRowsLimit(rows, rowState, groups.pages.has(key)), openId).map((m) => m.id);
           }),
           ...(tasksFolded || sessionList.body !== "list" ? [] : looseVisible.map((m) => m.id)),
         ];
@@ -950,7 +951,11 @@ export function Sidebar(props: {
                         setEarlierFor(workspace.id);
                       }}
                       folded={workspace.id !== currentWorkspaceId}
-                      limit={limitFor(foldKeyForWorkspace(workspace.id))}
+                      limit={openRowsLimit(
+                        rowsOf.get(workspace.id)?.open ?? [],
+                        rowState,
+                        groups.pages.has(foldKeyForWorkspace(workspace.id)),
+                      )}
                       expanded={groups.pages.has(foldKeyForWorkspace(workspace.id))}
                       onMore={() =>
                         setGroups((current) => showMoreInGroup(current, foldKeyForWorkspace(workspace.id)))
@@ -1097,7 +1102,7 @@ function WorkspaceGroup(props: {
   onOpenEarlier: () => void;
   /** 收着：不是当前所在的工作区（只有当前那个展开，Sidebar 的 currentWorkspaceId） */
   folded: boolean;
-  /** 眼下最多列几条（groupVisibleLimit；时间范围开着时是 Infinity）；expanded = 点过 Show more */
+  /** 眼下最多列几件（workspace-rows 的 openRowsLimit：6 件，等你的全露）；expanded = 点过「还有 N 件」 */
   limit: number;
   expanded: boolean;
   onMore: () => void;
@@ -1318,13 +1323,21 @@ function WorkspaceGroup(props: {
               onMove={props.onMove}
             />
           ))}
-          <ShowMoreRow
-            hidden={props.sessions.length - visible.length}
-            next={nextPageSize(foldKeyForWorkspace(props.workspace.id), props.sessions.length - visible.length)}
-            expanded={props.expanded}
-            onMore={props.onMore}
-            onLess={props.onLess}
-          />
+          {/* 超出的折成「还有 N 件」（点开全露，再点收起）；口径是「件」不是「条」——列的是没了结的活 */}
+          {(visible.length < props.sessions.length || props.expanded) && (
+            <NavRow
+              icon={visible.length < props.sessions.length ? "chevron-down" : "chevron-up"}
+              label={
+                visible.length < props.sessions.length
+                  ? t.sidebar.moreJobs(props.sessions.length - visible.length)
+                  : t.sidebar.showLess
+              }
+              active={false}
+              tone="var(--color-text-tertiary)"
+              onClick={visible.length < props.sessions.length ? props.onMore : props.onLess}
+              style={{ color: "var(--color-text-secondary)", fontSize: "var(--font-size-sm)" }}
+            />
+          )}
           {/* 做完看过的活与以前攒下的会话都在这一行后面：点开能看能搜，旧会话点开照旧是完整的会话 */}
           {props.earlierCount > 0 && (
             <NavRow
