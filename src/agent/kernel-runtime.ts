@@ -25,6 +25,27 @@ import { registerAndResolveModel } from "./model-registration.ts";
 import { isToolReply, RequestBroker, toolReplyResult } from "./request-broker.ts";
 import { createShellPathResolver } from "./shell-path.ts";
 import { preferIPv4 } from "../shared/dial-v4.ts";
+import inspector from "node:inspector";
+import { writeFileSync } from "node:fs";
+
+// 测量用（bench 分支，不进 main）：ORBITA_KERNEL_INSPECT=1 时进程内自己激活 inspector，并按 Node CLI 的格式打印、同时写文件；
+// Windows 的 utilityProcess 不消费继承来的 NODE_OPTIONS（2026-11-05 实测），所以不靠 --inspect=0。
+if (process.env.ORBITA_KERNEL_INSPECT === "1") {
+  let url = inspector.url();
+  if (!url) {
+    try {
+      inspector.open(0);
+      url = inspector.url();
+    } catch (e) {
+      console.error(`[kernel-runtime] inspector 激活失败：${String(e)}`);
+    }
+  }
+  if (url) {
+    console.error(`Debugger listening on ${url}`);
+    const file = process.env.ORBITA_KERNEL_INSPECT_FILE;
+    if (file) writeFileSync(file, url);
+  }
+}
 
 // pi-ai 的模型调用与旧内核同一个坑（同一台机器、同一个全局 fetch）
 preferIPv4();
