@@ -710,9 +710,15 @@ export function App() {
    * 侧栏那件活的饼变红、直到你看过；侧栏顶「等你」也靠它（同时要求通道还停在 failed，见 Sidebar 的 attentionHandled）。
    * 只在这一拍记一次——你看过清掉以后不会再被补上。正看着它的不记（人就在跟前）。
    */
+  /**
+   * 报过 failed 的子会话：它这一轮紧接着落定时，下面「做完记未读」那一步不许再碰它——新派的活落定那一拍常常还不在会话列表里，
+   * 会被当成根会话记成「做完没看」，把这里的「没做成」盖掉（满载实例实测：导出图表那件落盘成 failed:false）。
+   */
+  const failedChildrenRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     return api.channel.onEvent((event) => {
       if (event.type !== "message" || event.message.from !== "child" || event.message.kind !== "failed") return;
+      failedChildrenRef.current.add(event.childId);
       if (watchedIdsRef.current.includes(event.childId)) return;
       void api.session
         .setUnread(event.childId, { at: Date.now(), failed: true })
@@ -738,6 +744,7 @@ export function App() {
     // 只认根会话；列表里还查不到的（刚建）当根会话。自动化新开的运行会话（没转成普通会话的）也不单独
     // 打扰人——它们收在右栏自动化面板里，跑完的结果看那一条自动化的运行记录
     const settled = settledSessions(prev, engine.states).filter((id) => {
+      if (failedChildrenRef.current.has(id)) return false;
       const meta = session.sessions.find((candidate) => candidate.id === id);
       return meta === undefined || (meta.parentId === undefined && (meta.automationId === undefined || meta.promoted === true));
     });
