@@ -2775,16 +2775,17 @@ export const zh: Messages = {
     tabProgress: "进度",
     tabContext: "上下文",
     state: (state) =>
+      // 主会话自己的状态用第一人称（2026-11-17；子会话在做的事仍写「正在……」）
       state === "running"
-        ? "在跑"
+        ? "我在做"
         : state === "waiting"
-          ? "等你"
+          ? "在等你"
           : state === "failed"
-            ? "出错了"
+            ? "我这轮出错了"
             : state === "stopped"
-              ? "停下了"
+              ? "我停下了"
               : state === "done"
-                ? "做完了"
+                ? "我做完了"
                 : "空闲",
     turns: (count) => `${count} 轮`,
     plan: "计划",

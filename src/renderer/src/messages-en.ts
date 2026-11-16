@@ -2971,15 +2971,15 @@ export const en = {
     tabContext: "Context",
     state: (state: string): string =>
       state === "running"
-        ? "Working"
+        ? "I'm working"
         : state === "waiting"
           ? "Waiting for you"
           : state === "failed"
-            ? "Stopped with an error"
+            ? "I hit an error this turn"
             : state === "stopped"
-              ? "Stopped"
+              ? "I stopped"
               : state === "done"
-                ? "Done"
+                ? "I'm done"
                 : "Idle",
     turns: (count: number) => plural(count, "turn"),
     plan: "Plan",
