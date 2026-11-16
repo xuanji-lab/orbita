@@ -3156,6 +3156,13 @@ function ComposerBar(props: {
    * 项灰掉并说明原因，不弹窗。
    */
   const moving = session.inConversation;
+  /**
+   * 正在跟某个工作区的主智能体说话（会话已在，或还没说过话的空态）：不摆「放在哪」的芯片——
+   * 它永远是当前工作区，芯片只是重复顶栏，点开还能把主智能体挪走（2026-11-17）。旧会话与「任务」组照旧。
+   */
+  const talkingToMain =
+    session.mainPending !== null ||
+    session.sessions.some((meta) => meta.role === "main" && meta.id === (session.sessionId ?? session.opened?.id));
   /** 一项菜单的行为：按 scopeChipAction 接到 onSelect / disabled 上 */
   const scopeEntry = (target: string | null, newTask: () => void): Partial<MenuItem> => {
     const action = scopeChipAction({
@@ -3242,6 +3249,7 @@ function ComposerBar(props: {
         「哪边空往哪开」会往下方弹（还会同一排芯片朝向不一）；聊天页钉底又全朝上。
         点名朝上，两边同一朝向（2026-10-03 用户定）
       */}
+      {!talkingToMain && (
       <Menu
         items={scopeItems}
         placement="above"
@@ -3310,6 +3318,7 @@ function ComposerBar(props: {
           )
         }
       />
+      )}
       {props.intentToggle !== null && (
         <Chip
           icon={FEATURE_ICON.intent}
