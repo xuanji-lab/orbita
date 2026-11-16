@@ -38,7 +38,7 @@ test("基础样式靠右（copybook / typescript 仍是右侧气泡）", () => {
 test("子午线版式的用户消息块里，图片与纸签一起靠左、不限气泡宽", () => {
   const start = styles.indexOf("/* 用户消息：左对齐的整块纸签");
   assert.ok(start >= 0, "找不到子午线版式的用户消息块");
-  const block = styles.slice(start, styles.indexOf(".user-turn .memrow-list", start));
+  const block = styles.slice(start, styles.indexOf("/* 复制 / 回退 / 记忆这排动作", start));
   assert.match(block, /\.user-images \{\n\s*justify-content: flex-start;\n\s*\}|\.user-images \{[^}]*justify-content: flex-start;/);
   assert.match(block, /\.user-images \{\n\s*max-width: none;/);
 });

@@ -259,9 +259,6 @@ export const zh: Messages = {
     sessionEmpty: "这个任务还没记住什么。",
     sessionEmptyHint: "聊完一段、闲下来后会整理；整理出的记忆出现在这里。",
     noTask: "先打开一个任务，才能看它记住了什么。",
-    used: (count) => `用到 ${count}`,
-    usedHint: "这一轮开始前召回进上下文的记忆",
-    rememberedHint: "这一轮整理出的记忆",
     openReview: "在审查面板里看",
     vectorIntro: "召回时把「换了说法」的记忆也找回来。默认关闭；打开后在这台电脑上跑一个小模型，数据不出本机。",
     device: "这台电脑",
@@ -2064,6 +2061,7 @@ export const zh: Messages = {
       quoted: (name) => `「${name}」`,
       openSession: "看它的会话",
       openProgress: "在进度面板看",
+      openMemory: "在记忆页看",
       planChanges: (n, first) => (n > 1 ? `${n} 处：${first}等` : first),
     },
   },
@@ -3183,7 +3181,7 @@ export const zh: Messages = {
           used: {
             name: "用到了哪些记忆",
             title: "这一轮用到了什么",
-            body: "你说的话下面有一行「用到 N · 记住 M」，点开就看到这一轮带上了哪几条、又新记住了什么。",
+            body: "这一轮的过程行里写着「读了 N 条记忆 · 记住 M 条」，点开就看到这一轮带上了哪几条、又新记住了什么。",
             notes: ["每一轮用到的和记住的。"],
           },
           correct: {

@@ -318,10 +318,6 @@ export const en = {
     sessionEmptyHint:
       "After a stretch of conversation goes quiet it's distilled; what gets remembered shows up here.",
     noTask: "Open a task to see what it remembered.",
-    /** 用户消息动作行里的「用到 N」：这一轮开始前召回进上下文的记忆 */
-    used: (count: number) => `Used ${count}`,
-    usedHint: "Memories recalled into this turn",
-    rememberedHint: "What this turn was distilled into",
     openReview: "Open in the review panel",
     vectorIntro:
       "Also finds memories phrased differently from your question. Off by default; when on, a small model runs on this computer and nothing leaves it.",
@@ -2237,6 +2233,7 @@ export const en = {
       quoted: (name: string) => `“${name}”`,
       openSession: "Open its session",
       openProgress: "See in Progress",
+      openMemory: "See in Memory",
       planChanges: (n: number, first: string) => (n > 1 ? `${n} changes: ${first}, …` : first),
     },
   },
@@ -3406,7 +3403,7 @@ export const en = {
           used: {
             name: "Which memories it used",
             title: "What this turn drew on",
-            body: "Under your message, “used N · remembered M”: open it to see which memories came along this turn and what it newly remembered.",
+            body: "The turn’s process line says “read N memories · remembered M”: open it to see which memories came along this turn and what it newly remembered.",
             notes: ["Used and remembered, per turn."],
           },
           correct: {

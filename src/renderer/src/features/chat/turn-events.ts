@@ -12,7 +12,7 @@
 import type { ChannelMessageKind } from "@shared/channel";
 import { isBookkeepingTool } from "../../../../shared/goal.ts";
 import type { Messages } from "../../messages-en.ts";
-import type { ProcessStep, ToolCallUnit, ToolResultIndex } from "./tool-results.ts";
+import type { ProcessStep, ToolCallUnit, ToolResultIndex, TurnViewEntry } from "./tool-results.ts";
 import { rollupToolKey, stepTime } from "./tool-results.ts";
 import { firstLine } from "./turn-process.ts";
 
@@ -36,9 +36,15 @@ export type ProcessEvent =
   | { kind: "plan"; key: string; toolCallId: string; time: number }
   | { kind: "goal"; key: string; toolCallId: string; time: number }
   /** 读了 / 记住的记忆：挂在用户消息上，由视图层按这一轮补进来 */
-  | { kind: "memory"; key: string; read: number; remembered: number; time: number }
+  | { kind: "memory"; key: string; used: readonly MemoryLine[]; remembered: readonly MemoryLine[]; time: number }
   /** 认不出的种类（以后新加的单元）：默认进过程，展开时原样画 */
   | { kind: "other"; key: string; step: ProcessStep; time: number };
+
+/** 一条记忆在过程明细里的样子：一行字，点开看全文 */
+export interface MemoryLine {
+  id: string;
+  text: string;
+}
 
 export interface EventSources {
   results: ToolResultIndex;
@@ -172,8 +178,8 @@ export function processTally(events: readonly ProcessEvent[]): ProcessTally {
   for (const event of events) {
     switch (event.kind) {
       case "memory":
-        tally.memoryRead += event.read;
-        tally.remembered += event.remembered;
+        tally.memoryRead += event.used.length;
+        tally.remembered += event.remembered.length;
         break;
       case "childIn":
         if (event.msgKind === "done") tally.returned += 1;
@@ -231,4 +237,35 @@ export function tallyHasEvents(tally: ProcessTally): boolean {
     tally.memoryRead + tally.remembered + tally.returned + tally.asked + tally.childFailed + tally.goal + tally.plan + tally.replied + tally.delegated >
     0
   );
+}
+
+/**
+ * 记忆挂在哪一行（2026-11-17：「用到 N 条记忆」从用户消息的动作行挪进这一轮的过程行）：
+ * 过程行 → 这一轮的用户消息 id，只给这一轮的**第一个**过程行（一轮可能被正文切成几块）；
+ * 往前找到别的过程行就说明不是第一个；找到视图开头还没碰到用户消息，就是尾段里接着历史段最后那条用户消息的一轮
+ * （leadUserId）。
+ */
+export function processTurnUser(view: readonly TurnViewEntry[], index: number, leadUserId: string | null): string | null {
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const entry = view[i];
+    if (entry === undefined) continue;
+    if (entry.kind === "turnProcess") return null;
+    if (entry.kind === "user") return entry.item.id;
+    if (entry.kind === "compacted" || entry.kind === "revertMark") return null;
+  }
+  return leadUserId;
+}
+
+/**
+ * 这条用户消息的这一轮有没有过程行：没有（只想了想就答、或答之前就断了）时，记忆单独画一行同样长相的过程行挂在消息下面，
+ * 不然就没处放了。`continuesInTail`：这是历史段最后一条用户消息、尾段里已经有过程行。
+ */
+export function userTurnHasProcess(view: readonly TurnViewEntry[], index: number, continuesInTail: boolean): boolean {
+  for (let i = index + 1; i < view.length; i += 1) {
+    const entry = view[i];
+    if (entry === undefined) continue;
+    if (entry.kind === "turnProcess") return true;
+    if (entry.kind === "user" || entry.kind === "compacted" || entry.kind === "revertMark") return false;
+  }
+  return continuesInTail;
 }

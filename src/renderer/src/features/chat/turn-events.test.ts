@@ -17,7 +17,15 @@ import {
   type TurnProcessUnit,
   type TurnViewEntry,
 } from "./tool-results.ts";
-import { processEvents, processSummary, processTally, tallyHasEvents, type EventSources } from "./turn-events.ts";
+import {
+  processEvents,
+  processSummary,
+  processTally,
+  processTurnUser,
+  tallyHasEvents,
+  userTurnHasProcess,
+  type EventSources,
+} from "./turn-events.ts";
 import { splitAtLastUser } from "./transcript-split.ts";
 import { zh } from "../../messages-zh.ts";
 
@@ -211,7 +219,8 @@ describe("过程行的摘要：按种类数，只列发生了的", () => {
   });
 
   test("记忆：读了 7 条 · 记住 1 条排在最前", () => {
-    const tally = processTally([{ kind: "memory", key: "m", read: 7, remembered: 1, time: 0 }]);
+    const lines = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `m${i}`, text: `第 ${i} 条` }));
+    const tally = processTally([{ kind: "memory", key: "m", used: lines(7), remembered: lines(1), time: 0 }]);
     assert.deepEqual(processSummary(zh, tally), ["读了 7 条记忆", "记住 1 条"]);
   });
 
@@ -227,5 +236,36 @@ describe("过程行的摘要：按种类数，只列发生了的", () => {
     const events = processEvents(p.steps, sources(rs));
     assert.deepEqual(events.map((e) => e.kind), ["tools"]);
     assert.deepEqual(events[0]?.kind === "tools" ? events[0].steps.map((s) => s.kind) : [], ["thinking", "toolCall"]);
+  });
+});
+
+describe("记忆挂在哪一行：这一轮的第一个过程行；没有过程行时挂在用户消息下", () => {
+  const records: TranscriptRecord[] = [
+    user("u1", 1),
+    assistant("a1", 2, [call("r1")]),
+    tool({ toolCallId: "r1", timestamp: 3 }),
+    assistant("a2", 4, [text("先说一句")]),
+    assistant("a3", 5, [call("r2")]),
+    tool({ toolCallId: "r2", timestamp: 6 }),
+    assistant("a4", 7, [text("答")]),
+    user("u2", 8),
+    assistant("a5", 9, [text("只答不干活")]),
+  ];
+  const v = view(records);
+  test("第一个过程行拿到这一轮的用户消息；同一轮后面的过程行不拿", () => {
+    const procs = v.flatMap((e, i) => (e.kind === "turnProcess" ? [i] : []));
+    assert.equal(processTurnUser(v, procs[0] ?? -1, null), "u1");
+    if (procs.length > 1) assert.equal(processTurnUser(v, procs[1] ?? -1, null), null);
+  });
+  test("尾段开头的过程行（用户消息在历史段）：拿 leadUserId", () => {
+    const tail = view([assistant("a1", 2, [call("r1")]), tool({ toolCallId: "r1", timestamp: 3 })]);
+    assert.equal(processTurnUser(tail, 0, "u9"), "u9");
+  });
+  test("用户消息这一轮有没有过程行；历史段最后一条看尾段", () => {
+    const u1 = v.findIndex((e) => e.kind === "user" && e.item.id === "u1");
+    const u2 = v.findIndex((e) => e.kind === "user" && e.item.id === "u2");
+    assert.equal(userTurnHasProcess(v, u1, false), true);
+    assert.equal(userTurnHasProcess(v, u2, false), false);
+    assert.equal(userTurnHasProcess(v, u2, true), true);
   });
 });

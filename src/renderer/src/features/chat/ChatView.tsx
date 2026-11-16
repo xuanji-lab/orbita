@@ -42,7 +42,15 @@ import {
 import { deriveHistorySegment, type HistoryCache } from "./history-segment.ts";
 import { splitAtLastUser } from "./transcript-split.ts";
 import { pathParts } from "./path-parts.ts";
-import { processEvents, processSummary, processTally, tallyHasEvents, type ProcessEvent } from "./turn-events.ts";
+import {
+  processEvents,
+  processSummary,
+  processTally,
+  processTurnUser,
+  tallyHasEvents,
+  userTurnHasProcess,
+  type ProcessEvent,
+} from "./turn-events.ts";
 import { readFoldState, writeFoldState } from "./fold-state.ts";
 // 历史段虚拟化：行过滤 / 下标映射 / 高度 LRU / 锚点换算（纯模块）
 import {
@@ -1972,6 +1980,16 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   // 记忆行（用户消息全部落在历史段——最后一条 user 就是边界）：按历史段记录配账，
   // 引用随历史段与记忆查询稳定，流式吐字不换对象（历史行 memo 才命中）。
   // 随回退停用的条目不挂在对话里（重说的那一轮与被撤回的同轮号，见 liveRemembered）。
+  // 记忆挂在这一轮的第一个过程行上：尾段开头那块属于历史段最后一条用户消息；历史段只需知道尾段里有没有过程行
+  // （一轮里翻一次，不随流式每帧变）
+  const tailHasProcess = useMemo(() => tailTurnView.some((entry) => entry.kind === "turnProcess"), [tailTurnView]);
+  const leadUserId = useMemo(() => {
+    for (let i = historySegment.records.length - 1; i >= 0; i -= 1) {
+      const record = historySegment.records[i];
+      if (record?.role === "user") return record.id;
+    }
+    return null;
+  }, [historySegment.records]);
   const memoryLines = useMemo((): MemoryLines | null => {
     const view = props.memoryView;
     if (view === null) return null;
@@ -2023,6 +2041,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       cwd: props.cwd,
       undoneTurnIds,
       memory: memoryLines,
+      leadUserId: null,
+      tailHasProcess,
       actionsBusy: props.actionsBusy,
       sessionId: props.sessionId,
       onBranch,
@@ -2037,6 +2057,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
     }),
     [
       historySegment,
+      tailHasProcess,
       ledger,
       toolsRunning,
       props.skills,
@@ -2077,6 +2098,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       cwd: props.cwd,
       undoneTurnIds,
       memory: memoryLines,
+      leadUserId,
+      tailHasProcess: false,
       actionsBusy: props.actionsBusy,
       sessionId: props.sessionId,
       onBranch,
@@ -2091,6 +2114,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
     }),
     [
       tailTurnView,
+      leadUserId,
       tailRecords,
       tailToolResults,
       plan,
@@ -2594,6 +2618,10 @@ interface RowScope {
   cwd: string | null;
   undoneTurnIds: ReadonlySet<string>;
   memory: MemoryLines | null;
+  /** 尾段：历史段最后一条用户消息（尾段开头的过程行是它那一轮的，记忆挂上去）；历史段 null */
+  leadUserId: string | null;
+  /** 历史段：尾段里已经有过程行（历史段最后一条用户消息的记忆挂到那里，不在消息下单画一行） */
+  tailHasProcess: boolean;
   actionsBusy: boolean;
   sessionId: string;
   onBranch: (anchorItemId: string) => void;
@@ -2732,6 +2760,8 @@ const TranscriptRow = memo(function TranscriptRow(props: {
           interruptedCalls={scope.interruptedCalls}
           channel={scope.channel}
           onOpenProgress={scope.onOpenProgress}
+          memory={memoryOfTurn(scope.memory?.rows.get(processTurnUser(scope.view, index, scope.leadUserId) ?? ""))}
+          onOpenMemoryReview={scope.onOpenMemoryReview}
           renderStep={(step) => (
             <EntryView
               key={step.key}
@@ -2791,6 +2821,7 @@ const TranscriptRow = memo(function TranscriptRow(props: {
           onRevertTo={scope.onRevertTo}
           streamingIds={scope.streamingIds}
           memory={scope.memory}
+          memoryStandalone={entry.kind === "user" && !userTurnHasProcess(scope.view, index, scope.tailHasProcess)}
           onOpenMemoryReview={scope.onOpenMemoryReview}
         />
       )}
@@ -3672,8 +3703,9 @@ function EntryView(props: {
   onOpenIntentPanel?: () => void;
   /** 过程行里「改了计划」那一行的「在进度面板看」：打开右栏「这条任务 › 进度」 */
   onOpenProgress?: () => void;
-  /** 记忆行：挂在用户气泡下；undefined = 不画 */
+  /** 记忆行：挂在这一轮的过程行里；这一轮没有过程行时（memoryStandalone）在用户消息下单画一行 */
   memory?: MemoryLines | null;
+  memoryStandalone?: boolean;
   onOpenMemoryReview?: () => void;
   /** 产物打开按钮的会话对账（主进程白名单按它查） */
   sessionId: string;
@@ -3695,16 +3727,17 @@ function EntryView(props: {
         <AutomationWakeLine title={wake.title} number={wake.number} max={wake.max} stamp={wake.stamp} body={wake.body} />
       );
     }
-    const memoryRow = props.memory?.rows.get(entry.item.id);
+    const memory = props.memoryStandalone === true ? memoryOfTurn(props.memory?.rows.get(entry.item.id)) : null;
     return (
-      <UserBubble
-        item={entry.item}
-        onRevertTo={props.onRevertTo}
-        revertDisabled={props.actionsBusy || props.readOnly === true}
-        revertDisabledWhy={props.readOnly ? t.chat.revertReadOnly : t.chat.revertBusy}
-        memory={memoryRow}
-        onOpenMemoryReview={props.onOpenMemoryReview}
-      />
+      <>
+        <UserBubble
+          item={entry.item}
+          onRevertTo={props.onRevertTo}
+          revertDisabled={props.actionsBusy || props.readOnly === true}
+          revertDisabledWhy={props.readOnly ? t.chat.revertReadOnly : t.chat.revertBusy}
+        />
+        {memory !== null && <TurnMemoryLine memory={memory} channel={props.channel} onOpenMemoryReview={props.onOpenMemoryReview} />}
+      </>
     );
   }
   if (entry.kind === "fileTurn") {
@@ -3953,17 +3986,10 @@ function UserBubble(props: {
   revertDisabled: boolean;
   revertDisabledWhy?: string;
   /** 记忆：这一轮用到 / 记住的；undefined = 这一轮没账（不画） */
-  memory?: MemorySessionTurnView;
-  /** 展开清单底部的「在审查面板里看」（改 / 删 / 别再用在那里） */
-  onOpenMemoryReview?: () => void;
 }) {
   const t = useT();
   const today = useToday();
   const [copied, setCopied] = useState(false);
-  // 记忆清单开着哪一份（用到 / 记住）；同一时刻至多一份，再点同一个收起
-  const [memoryOpen, setMemoryOpen] = useState<"used" | "remembered" | null>(null);
-  const usedMemories = props.memory?.used ?? [];
-  const rememberedMemories = props.memory?.remembered ?? [];
   // 垂直 clamp 到约 4 行（composer 上限 12 行的 1/3，wafo 2026-09-20）：溢出时底部
   // 渐变遮罩 + Show more/less 开合。overflowing 只在折叠态量——展开后
   // scrollHeight == clientHeight，结论会丢，按钮就再也收不回了。
@@ -4110,33 +4136,6 @@ function UserBubble(props: {
         </div>
       )}
       <div className="msg-acts">
-        {/* 记忆挂在用到它的那句话旁边（原型 .memrow，2026-10-30「信息挂在用到它的地方、按需展开」）：
-            「用到 N」= 这一轮开始前召回注入的条目，「记住 M」= 这一轮整理出的新条目。点开在下面列出是哪几条；
-            0 条的那枚不画。图标只给排在前面的那一枚 */}
-        {usedMemories.length > 0 && (
-          <button
-            type="button"
-            className="memrow-btn"
-            title={t.memory.usedHint}
-            aria-pressed={memoryOpen === "used"}
-            onClick={() => setMemoryOpen((open) => (open === "used" ? null : "used"))}
-          >
-            <Icon name={FEATURE_ICON.memory} size={12} strokeWidth={1.8} />
-            {t.memory.used(usedMemories.length)}
-          </button>
-        )}
-        {rememberedMemories.length > 0 && (
-          <button
-            type="button"
-            className="memrow-btn"
-            title={t.memory.rememberedHint}
-            aria-pressed={memoryOpen === "remembered"}
-            onClick={() => setMemoryOpen((open) => (open === "remembered" ? null : "remembered"))}
-          >
-            {usedMemories.length === 0 && <Icon name={FEATURE_ICON.memory} size={12} strokeWidth={1.8} />}
-            {t.memory.remembered(rememberedMemories.length)}
-          </button>
-        )}
         {overflowing && (
           <button
             type="button"
@@ -4231,21 +4230,6 @@ function UserBubble(props: {
           {formatMessageTime(props.item.timestamp, today)}
         </span>
       </div>
-      {memoryOpen !== null && (
-        <div className="memrow-list">
-          <ul>
-            {memoryOpen === "used"
-              ? usedMemories.map((hit) => <li key={hit.id}>{hit.text}</li>)
-              : rememberedMemories.map((view) => <li key={view.entry.id}>{view.entry.text}</li>)}
-          </ul>
-          {props.onOpenMemoryReview !== undefined && (
-            <button type="button" className="mem-link" onClick={props.onOpenMemoryReview}>
-              {t.memory.openReview}
-              <Icon name="arrow-right" size={12} strokeWidth={1.8} />
-            </button>
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -4513,6 +4497,9 @@ function TurnProcessLine(props: {
   /** 点开后和子会话来往那几行的「看它的会话」与对面的名字 */
   channel: ChannelViewContext;
   onOpenProgress?: () => void;
+  /** 这一轮读了 / 记住的记忆（只给这一轮的第一个过程行） */
+  memory: Extract<ProcessEvent, { kind: "memory" }> | null;
+  onOpenMemoryReview?: () => void;
 }) {
   const t = useT();
   const today = useToday();
@@ -4625,13 +4612,14 @@ function TurnProcessLine(props: {
 
   // 落定：一行「N 步 · 用时」+ 一句按种类数出来的摘要（turn-events.ts），点开每件事一行灰字。
   // 改计划、子会话交回 / 提问、给子会话回话、派活都只在这里（2026-11-17 对话流降噪）
-  const events = processEvents(unit.steps, {
+  const stepEvents = processEvents(unit.steps, {
     results: props.toolResults,
     skills: props.skills,
     planChanged: (id) => planNoticeOf(props.plan, [id]) !== null,
     goalChanged: (id) => goalNoticeText(t, props.ledger, [id]) !== null,
     delegatedChild: (id) => delegateCard(props.toolResults.get(id))?.childId ?? null,
   });
+  const events = props.memory === null ? stepEvents : [props.memory, ...stepEvents];
   const tally = processTally(events);
   const summary = processSummary(t, tally);
   // 只是干活（读、跑、改）没有别的事：摘要退回按工具数（灰字，失败也不上色）
@@ -4669,6 +4657,7 @@ function TurnProcessLine(props: {
           channel={props.channel}
           renderStep={props.renderStep}
           onOpenProgress={props.onOpenProgress}
+          onOpenMemoryReview={props.onOpenMemoryReview}
         />
       )}
       {props.awaitingPlan !== null && planCallIds.includes(props.awaitingPlan.toolCallId) && (
@@ -4691,6 +4680,7 @@ function ProcessEventList(props: {
   channel: ChannelViewContext;
   renderStep: (step: ProcessStep) => ReactNode;
   onOpenProgress?: () => void;
+  onOpenMemoryReview?: () => void;
 }) {
   const t = useT();
   const r = t.chat.procRow;
@@ -4769,8 +4759,20 @@ function ProcessEventList(props: {
                 link={progressLink}
               />
             );
-          case "memory":
-            return null;
+          case "memory": {
+            const review = props.onOpenMemoryReview;
+            const link = review === undefined ? null : { label: r.openMemory, onClick: review };
+            return (
+              <Fragment key={event.key}>
+                {event.used.map((line, i) => (
+                  <ProcessMemoryRow key={`u:${line.id}`} verb={i === 0 ? r.memory : ""} text={line.text} time={i === 0 ? time : ""} link={i === 0 ? link : null} />
+                ))}
+                {event.remembered.map((line, i) => (
+                  <ProcessMemoryRow key={`r:${line.id}`} verb={i === 0 ? r.remembered : ""} text={line.text} time="" link={null} />
+                ))}
+              </Fragment>
+            );
+          }
           default:
             return <li key={event.key} className="proc-ev-other">{props.renderStep(event.step)}</li>;
         }
@@ -4811,6 +4813,73 @@ function ProcessEventRow(props: {
       <span className="proc-ev-time row-trailing">{props.time}</span>
     </li>
   );
+}
+
+/** 一条记忆一行：一行放不下省略，点开看全文 */
+function ProcessMemoryRow(props: { verb: string; text: string; time: string; link: { label: string; onClick: () => void } | null }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <li className="proc-ev">
+      <span className="proc-ev-verb">{props.verb}</span>
+      <button type="button" className={open ? "proc-ev-text proc-ev-mem open" : "proc-ev-text proc-ev-mem"} aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        {props.text}
+      </button>
+      {props.link !== null && (
+        <button type="button" className="proc-ev-link" onClick={props.link.onClick}>
+          {props.link.label}
+        </button>
+      )}
+      {props.time !== "" && <span className="proc-ev-time row-trailing">{props.time}</span>}
+    </li>
+  );
+}
+
+/**
+ * 这一轮没有过程行（只答没干活）时，记忆单独成一行，长相与过程行一致：「读了 7 条记忆 · 记住 1 条 ›」。
+ */
+function TurnMemoryLine(props: { memory: Extract<ProcessEvent, { kind: "memory" }>; channel: ChannelViewContext; onOpenMemoryReview?: () => void }) {
+  const t = useT();
+  const [open, setOpen] = useFoldState(`mem:${props.memory.key}`);
+  const sentence = processSummary(t, processTally([props.memory])).join(" · ");
+  return (
+    <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
+      <CollapseRow dense open={open} onToggle={() => setOpen((value) => !value)}>
+        <span className="proc-head-row">
+          <span className="proc-sum">{sentence}</span>
+          <span className="proc-chev" aria-hidden="true">
+            <Icon name={open ? "chevron-down" : "chevron-right"} size={12} strokeWidth={1.8} />
+          </span>
+        </span>
+      </CollapseRow>
+      {open && (
+        <ProcessEventList
+          events={[props.memory]}
+          plan={null}
+          ledger={EMPTY_LEDGER}
+          toolResults={EMPTY_RESULTS}
+          skills={[]}
+          channel={props.channel}
+          renderStep={() => null}
+          onOpenMemoryReview={props.onOpenMemoryReview}
+        />
+      )}
+    </div>
+  );
+}
+
+/** 一轮的记忆账 → 过程明细里的记忆事件（没有就 null） */
+const EMPTY_LEDGER: GoalLedger = { goal: null, entries: [], todos: { done: [], open: [], waiting: [] } };
+const EMPTY_RESULTS: ToolResultIndex = new Map();
+
+function memoryOfTurn(row: MemorySessionTurnView | undefined): Extract<ProcessEvent, { kind: "memory" }> | null {
+  if (row === undefined || (row.used.length === 0 && row.remembered.length === 0)) return null;
+  return {
+    kind: "memory",
+    key: `mem:${row.turn}:${row.at}`,
+    used: row.used.map((hit) => ({ id: hit.id, text: hit.text })),
+    remembered: row.remembered.map((view) => ({ id: view.entry.id, text: view.entry.text })),
+    time: row.at,
+  };
 }
 
 /** 工具那一行：整行可点，点开原样画这几步（沿用现有的工具行展开） */
