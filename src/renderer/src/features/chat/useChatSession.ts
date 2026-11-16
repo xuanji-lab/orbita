@@ -24,6 +24,7 @@ import {
   nextDeliverable,
   planDelivery,
   settleUserSteer,
+  queueControlTarget,
   prependOlder,
   compactionCount,
   removeSessionEntry,
@@ -2858,10 +2859,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     setUndoDialog(null);
   }, [undoBusy]);
 
-  /** 撤回：移出队列，文字落回草稿。全程本地，没有往返也就没有落空。 */
+  /** 撤回：移出队列，文字落回草稿。全程本地，没有往返也就没有落空。认排队条画的那条会话（queueControlTarget） */
   const withdrawQueued = useCallback(
     (queuedId: string) => {
-      const id = sessionRef.current;
+      const id = queueControlTarget(engine.statesRef.current, viewedIdRef.current, queuedId);
       if (id === null) return;
       const item = engine.statesRef.current.get(id)?.queued.find((entry) => entry.id === queuedId);
       if (item === undefined) return;
@@ -2875,10 +2876,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     [engine, restoreToDraft],
   );
 
-  /** 拖拽排序：纯本地一次 splice，即时生效。 */
+  /** 拖拽排序：纯本地一次 splice，即时生效。认排队条画的那条会话（queueControlTarget） */
   const moveQueuedTo = useCallback(
     (sourceId: string, targetId: string, placement: "before" | "after") => {
-      const id = sessionRef.current;
+      const id = queueControlTarget(engine.statesRef.current, viewedIdRef.current, sourceId);
       if (id === null) return;
       engine.applyStates((prev) => moveQueuedIn(prev, id, sourceId, targetId, placement));
     },
@@ -2892,11 +2893,16 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    */
   const sendQueuedNow = useCallback(
     (queuedId: string) => {
-      const id = sessionRef.current;
+      const id = queueControlTarget(engine.statesRef.current, viewedIdRef.current, queuedId);
       if (id === null) return;
       const entry = engine.statesRef.current.get(id);
       const item = entry?.queued.find((queued) => queued.id === queuedId);
       if (entry === undefined || item === undefined) return;
+      // 发出去的那一刻起它就是本槽的活会话（同 submitTurn）：之后的停止 / 排队按钮都找得到它
+      if (sessionRef.current !== id) {
+        setSessionId(id);
+        sessionRef.current = id;
+      }
       engine.applyStates((prev) => dequeue(prev, id, queuedId));
       const fail = (cause: unknown): void => {
         engine.setError(ipcErrorText(cause));

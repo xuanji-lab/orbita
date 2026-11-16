@@ -23,6 +23,7 @@ import {
   nextDeliverable,
   planDelivery,
   settleUserSteer,
+  queueControlTarget,
   removeSessionEntry,
   revertOptimisticTurn,
   prependOlder,
@@ -1380,5 +1381,37 @@ describe("待投的子会话消息重开后重新入队：按 message id 去重�
     const twice = enqueueChannelMessage(once, "p", { ...item });
     assert.equal(twice, once);
     assert.equal(twice.get("p")?.queued.length, 1);
+  });
+});
+
+describe("queueControlTarget：排队条按钮动的是排队条画的那条会话（2026-11-17 用户报：换不了顺序、撤不回）", () => {
+  const ch: QueuedMessage = {
+    id: "c1",
+    kind: "channel",
+    childId: "k",
+    childWorkbench: "/wb",
+    message: { id: "c1", from: "child", author: "model", kind: "done", text: "做完了", delivery: "followUp", createdAt: 1 },
+  };
+  // 会话 A：投递失败归位后停在空闲、队列里还有一条原本就在的、一条新发的、一条子会话消息
+  const states = (): SessionStates => {
+    let next = enqueue(createSessionStates(), "A", { id: "old", kind: "text", text: "原本就在的" });
+    next = enqueue(next, "A", { id: "new", kind: "text", text: "新发的" });
+    next = enqueue(next, "A", ch);
+    return setEntryPhase(next, "A", "idle");
+  };
+  it("点开过别的会话再点回来（活会话被置空、正看着 A）：三个按钮都认 A", () => {
+    const target = queueControlTarget(states(), "A", "new");
+    assert.equal(target, "A");
+    const moved = moveQueued(states(), target ?? "", "new", "old", "before");
+    assert.deepEqual(moved.get("A")?.queued.map((item) => item.id), ["new", "old", "c1"]);
+    assert.deepEqual(dequeue(moved, target ?? "", "new").get("A")?.queued.map((item) => item.id), ["old", "c1"]);
+  });
+  it("会话空闲但队列里有消息、混着子会话消息：子会话那条也能动", () => {
+    assert.equal(queueControlTarget(states(), "A", "c1"), "A");
+  });
+  it("这一项不在正看着的那条的队列里（已投出 / 看的是别的会话）= null，不去动别的会话", () => {
+    assert.equal(queueControlTarget(states(), "B", "new"), null);
+    assert.equal(queueControlTarget(states(), null, "new"), null);
+    assert.equal(queueControlTarget(states(), "A", "gone"), null);
   });
 });

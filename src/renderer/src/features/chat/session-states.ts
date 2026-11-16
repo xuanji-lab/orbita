@@ -861,6 +861,19 @@ export function enqueueChannelMessage(
   return enqueue(states, parentId, item);
 }
 
+/**
+ * 排队条上的按钮（撤回 / 拖拽 / 立即发送）该动哪条会话的队列：**排队条画的是哪条就是哪条**（正看着的那条，
+ * 活会话优先、否则盘上打开的），且这条的队列里确实有这一项；否则 null。
+ *
+ * 不认「本槽的活会话」（sessionRef）：从侧栏打开一条空闲会话时它被置空（readOnly 靠它判），而空闲会话的队列
+ * 照样画在排队条上——投递失败归位（revertOptimisticTurn 把 phase 拨回 idle、不再投下一条）后队列就停在空闲
+ * 会话上；这时点开别的会话再点回来，三个按钮都静默无效（用户 2026-11-17 报：排队的两条换不了顺序、也撤不回）。
+ */
+export function queueControlTarget(states: SessionStates, viewedId: string | null, queuedId: string): string | null {
+  if (viewedId === null) return null;
+  return states.get(viewedId)?.queued.some((item) => item.id === queuedId) === true ? viewedId : null;
+}
+
 /** 按 id 移出一条（撤回 / 删除 / 投递后出队都走它）。找不到就原样返回。 */
 export function dequeue(states: SessionStates, sessionId: string, id: string): SessionStates {
   const entry = states.get(sessionId);
