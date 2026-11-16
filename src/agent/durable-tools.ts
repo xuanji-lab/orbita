@@ -20,9 +20,6 @@ import type { Model, Api } from "@earendil-works/pi-ai";
 import {
   createBashToolDefinition,
   createEditToolDefinition,
-  createFindToolDefinition,
-  createGrepToolDefinition,
-  createLsToolDefinition,
   createReadToolDefinition,
   createWriteToolDefinition,
   normalizeToolResultImages,
@@ -166,7 +163,7 @@ export interface BuiltinToolOptions {
 }
 
 /**
- * 内建七件，按 ENABLED_BUILTIN_TOOLS 的顺序。工厂与 pi 会话自己建内建工具用的是**同一组**
+ * 内建四件（read / write / edit / bash），按 ENABLED_BUILTIN_TOOLS 的顺序。工厂与 pi 会话自己建内建工具用的是**同一组**
  * （agent-session 的 _buildRuntime → createAllToolDefinitions，它内部就是逐个调下面这些 create*ToolDefinition，
  * 只给 read 与 bash 传选项），所以与 pi 会话发出的工具声明逐字节相同（kernel-prompt.test.ts 守）。
  * createAllToolDefinitions 本身不在 pi 的公开入口里。
@@ -179,9 +176,6 @@ export function builtinToolDefinitions(cwd: string, options: BuiltinToolOptions)
       ...(options.tagCommand === undefined ? {} : { spawnHook: (context) => ({ ...context, command: (options.tagCommand as (command: string) => string)(context.command) }) }),
     }) as unknown as ToolDefinition,
     edit: createEditToolDefinition(cwd) as unknown as ToolDefinition,
-    find: createFindToolDefinition(cwd) as unknown as ToolDefinition,
-    grep: createGrepToolDefinition(cwd) as unknown as ToolDefinition,
-    ls: createLsToolDefinition(cwd) as unknown as ToolDefinition,
     read: createReadToolDefinition(cwd, { autoResizeImages: options.autoResizeImages }) as unknown as ToolDefinition,
     write: createWriteToolDefinition(cwd) as unknown as ToolDefinition,
   };

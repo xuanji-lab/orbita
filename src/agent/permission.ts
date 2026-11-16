@@ -14,16 +14,17 @@ import { resolveToCwd } from "@earendil-works/pi-coding-agent";
 import { dataDirRefusalMessage, defaultGuardEnv, protectedCommandRefusal, realpathLoose, stripFirmlinkPrefix, tildeHome, type CommandGuardEnv, type DataDirSubject } from "./protected-command.ts";
 
 /**
- * **本会话实际启用的 pi 内建工具集**：`durable-tools.ts` 按这份顺序建内建工具（builtinToolDefinitions），决定本会话
+ * **本会话实际启用的内建工具集**：`durable-tools.ts` 按这份顺序建内建工具（builtinToolDefinitions），决定本会话
  * **内建工具的清单与顺序**。
  *
- * **为什么搜索类工具在里面**：pi 的默认集是 `["read","bash","edit","write"]`，而 pi 的
- * system prompt 里有一条规则——**当工具集里有 bash、却一个 grep / find / ls 都没有的时候**，
- * 它给模型下一句 "Use bash for file operations like ls, rg, find"。补进来让那句话的触发条件不成立。
+ * 2026-11-16 起只剩四件：grep / find / ls 三个搜索工具用户定「不要」——搜索走 bash（随包的 rg / fd 挂在
+ * 内核进程 PATH 最前面，见 main/agent/search-bins.ts）。以前补它们进来，一是 pi 的 grep 走 ripgrep、尊重
+ * .gitignore（`grep -rn X .` 会递归进 node_modules），二是让 pi 系统提示里「Use bash for file operations
+ * like ls, rg, find」那句的触发条件不成立；现在那句话会出现，正好指向 bash 里的 rg。
  *
  * 顺序只影响提示词里工具清单的先后，保持按名字排列。
  */
-export const ENABLED_BUILTIN_TOOLS = ["bash", "edit", "find", "grep", "ls", "read", "write"] as const;
+export const ENABLED_BUILTIN_TOOLS = ["bash", "edit", "read", "write"] as const;
 
 /**
  * 讲给模型听的受保护数据说明（系统提示的 `orbita-permission` 段）。
@@ -384,7 +385,7 @@ function touchedSubject(haystack: string, protectedPaths: readonly string[], pro
 /**
  * 拒绝理由分两种讲法。命令串拦是字面量拦，分不出读写——`ls` 一个会话目录也会撞上。
  * 只说「不能写」模型会以为自己在写，原地重试或卡住（实测）；所以命令这一支要
- * 直说「命令里不能出现这个目录，读请换 ls / read / find / grep 工具或 read_task」，
+ * 直说「命令里不能出现这个目录，读请换 read 工具或 read_task」，
  * 让它第一次撞墙就知道往哪绕。保护强度不变。
  */
 function refusalMessage(dir: string, via: "path" | "command"): string {
@@ -396,7 +397,7 @@ function refusalMessage(dir: string, via: "path" | "command"): string {
       : `Session records are immutable: "${dir}" is protected — no tool may write there. `;
   return (
     lead +
-    "To read it, use the ls / read / find / grep tools (not the shell), or read_task for a task's transcript. " +
+    "To read it, use the read tool (not the shell), or read_task for a task's transcript. " +
     "To change it, describe the change to the user instead; only the user can modify session data."
   );
 }

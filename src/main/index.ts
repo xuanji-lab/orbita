@@ -522,8 +522,8 @@ void app.whenReady().then(async () => {
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
   const phases = new Map<string, SessionPhase>();
-  // 随包的 rg / fd 挂到 agent 进程 PATH 最前面：pi 的 grep / find 不再去 GitHub 下载（search-bins.ts）。
-  // 目录不在（开发版没跑过 fetch 脚本）就原样给环境，pi 照旧自己找
+  // 随包的 rg / fd 挂到 agent 与内核进程 PATH 最前面：bash 里直接能用（search-bins.ts）。
+  // 目录不在（开发版没跑过 fetch 脚本）就原样给环境
   const searchBins = bundledBinDir({
     packaged: app.isPackaged,
     resourcesPath: process.resourcesPath,

@@ -1,11 +1,10 @@
 /**
  * 随安装包分发的 rg / fd。**纯模块**（不 import electron），可被 `node --test` 直接加载。
  *
- * 为什么要分发：pi 的 grep / find 工具依赖 rg / fd，查找顺序是 `~/.pi/agent/bin` → PATH，
- * 都没有就去 GitHub 下载（120 秒超时，匿名 API 配额 60 次/小时）——没装过 pi CLI 的用户
- * 第一次搜索可能卡满两分钟。pi 每次调用都会重新查 PATH，所以把安装包里的目录挂到
- * agent utility 进程 PATH 的最前面就够了：不往用户目录拷文件、不 patch pi。
- * 顺带 bash 里也能直接用 rg / fd。
+ * 为什么要分发：搜索走 bash（grep / find / ls 三个搜索工具 2026-11-16 删了），模型在 bash 里最常用的是
+ * rg / fd——它们尊重 .gitignore、不递归进 node_modules。很多机器（尤其 Windows）没装，安装包带一份、
+ * 挂到 agent 与内核进程 PATH 的最前面，bash 里就能直接用：不往用户目录拷文件。
+ * （以前另一个理由是 pi 的 grep / find 工具依赖它们、没有就去 GitHub 下载，工具删了，这条不再成立。）
  *
  * 二进制不进 git：打包前由 scripts/fetch-search-bins.mjs 按钉死的版本与 sha256 下载到
  * build/bin/<platform>-<arch>/，electron-builder 再放进 resources/bin。

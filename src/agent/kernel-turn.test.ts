@@ -139,8 +139,9 @@ describe("kernel-turn：新内核跑一轮带工具的对话", () => {
     const target2 = { registry, conversation: target, model: MODEL, providerSessionId: "p1" };
     const wire = await TurnWire.open(target, join(cwd, ".att"), BACKGROUND_CONTEXT);
     const fresh = await assembleTurn(command(cwd), runtime([]), target2, [], wire, 1);
-    // 新会话的全序：内建七件（ENABLED_BUILTIN_TOOLS 的顺序，与旧内核 defaultTools 同一份）在前，共用清单接后（黄金名单见 turn-tools.test.ts）
-    assert.deepEqual(fresh.toolNames.slice(0, 7), ["bash", "edit", "find", "grep", "ls", "read", "write"]);
+    // 新会话的全序：内建四件（ENABLED_BUILTIN_TOOLS 的顺序）在前，共用清单接后（黄金名单见 turn-tools.test.ts）
+    assert.deepEqual(fresh.toolNames.slice(0, 4), ["bash", "edit", "read", "write"]);
+    assert.ok(!fresh.toolNames.some((name) => name === "grep" || name === "find" || name === "ls"));
     assert.deepEqual(fresh.toolNames, fresh.activeNames);
     const declaration = (name: string): Tool => {
       const tool = fresh.extension.tools?.find((candidate) => candidate.name === name);

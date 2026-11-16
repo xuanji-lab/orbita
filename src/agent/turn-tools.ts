@@ -3,7 +3,7 @@
  * 工具的逻辑（参数、描述、execute）只在各 `*-tools.ts` 里写一份，这里只决定「这一轮装哪些、按什么顺序、
  * 各自拿什么依赖」——顺序就是发给模型的工具清单顺序（提示缓存对它逐字节敏感）。
  *
- * 内建七件（read / write / edit / bash / grep / find / ls）不在这里：用 pi 建它们的同一个工厂（见 durable-tools.ts）。
+ * 内建四件（read / write / edit / bash）不在这里：用 pi 建它们的同一个工厂（见 durable-tools.ts）。
  */
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { AgentCommand } from "../shared/agent-ipc.ts";
