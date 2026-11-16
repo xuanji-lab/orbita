@@ -165,6 +165,7 @@ export function SubSessionsPanel(props: {
             session={props.view}
             providersError={props.providersError}
             hideComposer
+            asJob
             scrollToEnd
           />
         </div>

@@ -1909,6 +1909,8 @@ export const en = {
     // 阻塞提示 = 一句说清卡在哪 + 句尾一个出口（Notice 的 exit）；草稿不会丢，说出来
     noProvider: "No model to send with yet. Your draft stays here.",
     noProviderExit: "Add a provider",
+    /** 主智能体派出去的活只能看时（右栏子会话面板）：不引导「新开任务」 */
+    readOnlyJob: "This piece of work is view-only; to carry it on, tell the main agent.",
     readOnlyTask:
       "This task was recorded before tasks could be resumed, so it can be read but not continued. Start a new task to keep working.",
     /** 新内核：迁移旧会话失败，只读（原件没动） */
@@ -2335,7 +2337,7 @@ export const en = {
       /** 被应用崩溃打断、等你点继续 */
       interrupted: "interrupted",
       done: "done",
-      failed: "failed",
+      failed: "didn't make it",
       /** 用户终止（通道 stopped）：比 closed 更硬，父模型的回信不能重开 */
       stopped: "stopped",
       paused: "on hold",

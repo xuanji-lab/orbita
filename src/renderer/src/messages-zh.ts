@@ -1758,6 +1758,8 @@ export const zh: Messages = {
     noProvider: "还没有能发消息的模型，草稿会留在这里。",
     noProviderExit: "添加服务商",
     readOnlyTask: "这个任务记录于支持续聊之前，只能读、不能接着聊。新开一个任务继续吧。",
+    /** 主智能体派出去的活只能看时（右栏子会话面板）：不引导「新开任务」 */
+    readOnlyJob: "这件活只能看；要接着做，跟主智能体说。",
     readOnlyMigrationFailed: (reason) => `这个任务的历史记录整理失败了，只能读、不能接着聊，原件没动。（${reason}）`,
     interruptedTurn: "这一轮没跑完就被打断了。",
     interruptedByCrash: "应用上次是异常退出的，这个子会话被打断了。",
@@ -2157,7 +2159,8 @@ export const zh: Messages = {
       waiting: "等你",
       interrupted: "被打断",
       done: "完成",
-      failed: "失败",
+      // 不写「失败」、不上红：没做成的事只用字说（2026-11-17）
+      failed: "没做成",
       stopped: "已终止",
       paused: "停着",
       idle: "空闲",

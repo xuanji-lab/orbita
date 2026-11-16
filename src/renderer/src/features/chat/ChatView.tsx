@@ -726,6 +726,11 @@ function ChatViewBody(props: {
    */
   hideComposer?: boolean;
   /**
+   * 看的是主智能体派出去的一件活（右栏子会话面板的会话层，2026-11-17 主会话）：页头不露会话编号、不给改名的铅笔；
+   * 只读时那句不引导「新开任务」（工作区里已经没有新开任务这回事），改说「跟主智能体说」。
+   */
+  asJob?: boolean;
+  /**
    * 轮尾卡 / 界碑卡的「在面板里看」：打开右侧审查面板并定位该文件。
    * 只有主槽的 ChatView 拿到它（面板开在主槽旁边）；右栏与抽屉里不传，行不可点。
    */
@@ -1436,7 +1441,9 @@ function ChatViewBody(props: {
       {session.readOnlyReason !== null && (
         <Notice icon="lock">
           {session.readOnlyReason.kind === "noBook"
-            ? t.chat.readOnlyTask
+            ? props.asJob === true
+              ? t.chat.readOnlyJob
+              : t.chat.readOnlyTask
             : t.chat.readOnlyMigrationFailed(session.readOnlyReason.reason)}
         </Notice>
       )}
@@ -1649,7 +1656,7 @@ function ChatViewBody(props: {
     <>
       <Pane
         title={session.opened?.title || (sessionTitle(session.transcript) ?? t.common.newTask)}
-        badge={openId.slice(0, 6)}
+        badge={props.asJob === true ? null : openId.slice(0, 6)}
         badgeTitle={openId}
         scrollRef={scrollRef}
         onScroll={handleScroll}
@@ -1658,7 +1665,7 @@ function ChatViewBody(props: {
         onPointerDownIntent={onPointerDownIntent}
         scrollToEnd={props.scrollToEnd === true ? { visible: showScrollToEnd, onClick: scrollToEnd } : null}
         // 只要这条会话已经落盘就能改名——刚发完第一句正是最想改名的时候
-        onRename={openId === "" ? undefined : (title) => session.renameSession(openId, title)}
+        onRename={openId === "" || props.asJob === true ? undefined : (title) => session.renameSession(openId, title)}
         hideHeader={props.bareHeader === true}
         transcriptNotice={copyNotice}
         banner={
@@ -2873,7 +2880,8 @@ const TranscriptRow = memo(function TranscriptRow(props: {
  */
 function Pane(props: {
   title: string;
-  badge: string;
+  /** 页头右边的会话编号；null = 不露（主智能体派出去的活） */
+  badge: string | null;
   badgeTitle: string;
   /** 有值才出现铅笔——首条消息还没发的会话还没有记录可改 */
   onRename?: ((title: string) => void) | undefined;
@@ -2998,6 +3006,7 @@ function Pane(props: {
             <Icon name="pencil-line" size={13} />
           </IconButton>
         )}
+        {props.badge !== null && (
         <span
           title={props.badgeTitle}
           style={{
@@ -3013,6 +3022,7 @@ function Pane(props: {
         >
           {props.badge}
         </span>
+        )}
       </header>
       )}
 
