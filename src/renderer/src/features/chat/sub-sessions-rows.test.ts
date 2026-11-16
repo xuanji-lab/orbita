@@ -8,7 +8,12 @@ import {
   latestChannelLine,
   subSessionLine,
   sortSubSessionRows,
-  subSessionBarFill,
+  dispatchedRows,
+  displaySubSessionTitle,
+  jobElapsed,
+  splitDoneRows,
+  subSessionHeadline,
+  subSessionMark,
   subSessionRowStatus,
   subSessionStatusOf,
   waitingSummary,
@@ -91,7 +96,7 @@ describe("subSessionStatusOf", () => {
     const crashed: SubSessionEngineSlots = { ...engine([]), interruptedOf: (id) => id === "c1" };
     strictEqual(subSessionStatusOf("c1", "running", crashed), "interrupted");
     strictEqual(subSessionStatusOf("c1", "stopped", crashed), "stopped");
-    strictEqual(subSessionBarFill("interrupted"), "waiting");
+    strictEqual(subSessionMark("interrupted"), "ask");
     const rows = sortSubSessionRows([
       { status: "running" as const, lastAt: 9 },
       { status: "interrupted" as const, lastAt: 1 },
@@ -153,21 +158,59 @@ describe("sortSubSessionRows", () => {
   });
 });
 
-describe("subSessionBarFill（行首状态饼亮几节）", () => {
-  it("running = 1/3 蓝（running）；waiting 与 interrupted 同为 2/3 橙（waiting）", () => {
-    strictEqual(subSessionBarFill("running"), "running");
-    strictEqual(subSessionBarFill("waiting"), "waiting");
-    strictEqual(subSessionBarFill("interrupted"), "waiting");
+describe("subSessionMark（行首记号，2026-11-17 减色）", () => {
+  it("只有要你出手的是橙点：在问你、被打断、没做成", () => {
+    strictEqual(subSessionMark("waiting"), "ask");
+    strictEqual(subSessionMark("interrupted"), "ask");
+    strictEqual(subSessionMark("failed"), "ask");
   });
 
-  it("done = 3/3 绿、failed = 3/3 红", () => {
-    strictEqual(subSessionBarFill("done"), "done");
-    strictEqual(subSessionBarFill("failed"), "failed");
+  it("在做 = 灰点，做完 = 灰勾，终止的 / 还没开口的不标", () => {
+    strictEqual(subSessionMark("running"), "work");
+    strictEqual(subSessionMark("done"), "done");
+    strictEqual(subSessionMark("stopped"), null);
+    strictEqual(subSessionMark("idle"), null);
   });
+});
 
-  it("stopped / idle 不亮（undefined = 不渲染状态饼）", () => {
-    strictEqual(subSessionBarFill("stopped"), undefined);
-    strictEqual(subSessionBarFill("idle"), undefined);
+describe("splitDoneRows / subSessionHeadline（做完的折起来，头上一句灰字）", () => {
+  const rows = sortSubSessionRows([
+    { status: "done" as const, lastAt: 9 },
+    { status: "running" as const, lastAt: 5 },
+    { status: "waiting" as const, lastAt: 1 },
+    { status: "failed" as const, lastAt: 3 },
+    { status: "done" as const, lastAt: 2 },
+  ]);
+  it("要你看的与在做的留着（排序不变），做完的另放", () => {
+    const { open, done } = splitDoneRows(rows);
+    deepStrictEqual(open.map((row) => row.status), ["waiting", "running", "failed"]);
+    deepStrictEqual(done.map((row) => row.lastAt), [9, 2]);
+  });
+  it("「1 件等你 · 1 件没做成 · 1 件在做」：等你与顶上胶囊同一个数，没做成单说；没有的种类不出", () => {
+    const words = {
+      interrupted: (n: number) => `${n} 个被打断`,
+      waiting: (n: number) => `${n} 件等你`,
+      failed: (n: number) => `${n} 件没做成`,
+      working: (n: number) => `${n} 件在做`,
+    };
+    strictEqual(subSessionHeadline(rows, words), "1 件等你 · 1 件没做成 · 1 件在做");
+    strictEqual(subSessionHeadline([{ status: "done" }], words), "");
+  });
+});
+
+describe("displaySubSessionTitle（剥英文代号前缀，只当保险）", () => {
+  it("小写代号 + 空白 / 冒号 + 中文：剥掉代号", () => {
+    strictEqual(displaySubSessionTitle("ss-b-storybench 叙事类比数据集"), "叙事类比数据集");
+    strictEqual(displaySubSessionTitle("e6-accept：新内核验收"), "新内核验收");
+    strictEqual(displaySubSessionTitle("ss_a_acl 会议论文"), "会议论文");
+  });
+  it("真以英文开头的名字原样留着", () => {
+    strictEqual(displaySubSessionTitle("UrbanGPT 复现"), "UrbanGPT 复现");
+    strictEqual(displaySubSessionTitle("S1-S3 验收"), "S1-S3 验收");
+    strictEqual(displaySubSessionTitle("Windows 新旧对比"), "Windows 新旧对比");
+    strictEqual(displaySubSessionTitle("foo-bar baz"), "foo-bar baz");
+    strictEqual(displaySubSessionTitle("dsh-plugin"), "dsh-plugin");
+    strictEqual(displaySubSessionTitle("叙事类比数据集"), "叙事类比数据集");
   });
 });
 
@@ -321,5 +364,25 @@ describe("subSessionLine（子会话面板第二行：每件活一句话）", ()
     strictEqual(subSessionLine({ status: "running", messages: progress, items: [bash], now: 7 * 60_000, lastActivityAt: 0 }, t), "正在跑命令 · 7 分钟没动静");
     strictEqual(subSessionLine({ status: "running", messages: progress, items: [bash], now: 4 * 60_000, lastActivityAt: 0 }, t), "正在跑命令");
     strictEqual(subSessionLine({ status: "done", messages: progress, items: [bash], now: 7 * 60_000, lastActivityAt: 0 }, t), "报了一次进度");
+  });
+});
+
+describe("dispatchedRows / jobElapsed（进度面板「派出去的活」）", () => {
+  it("只列在做的与要你出手的；做完、终止、还没开口的不列", () => {
+    const rows = ["running", "waiting", "interrupted", "failed", "done", "stopped", "idle"].map((status) => ({ status: status as SubSessionRowStatus }));
+    deepStrictEqual(dispatchedRows(rows).map((row) => row.status), ["running", "waiting", "interrupted", "failed"]);
+  });
+  it("用了多久：不到 1 分钟 / N 分钟 / N 小时 M 分钟 / 十小时以上只说小时", () => {
+    const words = {
+      lessThanMinute: "不到 1 分钟",
+      minutes: (n: number) => `${n} 分钟`,
+      hours: (n: number) => `${n} 小时`,
+      hoursMinutes: (h: number, m: number) => `${h} 小时 ${m} 分钟`,
+    };
+    strictEqual(jobElapsed(30_000, words), "不到 1 分钟");
+    strictEqual(jobElapsed(21 * 60_000, words), "21 分钟");
+    strictEqual(jobElapsed(60 * 60_000, words), "1 小时");
+    strictEqual(jobElapsed(65 * 60_000, words), "1 小时 5 分钟");
+    strictEqual(jobElapsed(11 * 3600_000 + 60_000, words), "11 小时");
   });
 });

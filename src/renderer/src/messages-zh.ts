@@ -259,9 +259,6 @@ export const zh: Messages = {
     sessionEmpty: "这个任务还没记住什么。",
     sessionEmptyHint: "聊完一段、闲下来后会整理；整理出的记忆出现在这里。",
     noTask: "先打开一个任务，才能看它记住了什么。",
-    used: (count) => `用到 ${count}`,
-    usedHint: "这一轮开始前召回进上下文的记忆",
-    rememberedHint: "这一轮整理出的记忆",
     openReview: "在审查面板里看",
     vectorIntro: "召回时把「换了说法」的记忆也找回来。默认关闭；打开后在这台电脑上跑一个小模型，数据不出本机。",
     device: "这台电脑",
@@ -1939,17 +1936,13 @@ export const zh: Messages = {
     revertedHere: "已回退——对话从这里重新来过",
     undoTitle: "撤销文件改动",
     undoConfirm: "撤销改动",
-    fileCardChanged: (n: number) => `${n} 个文件已更改`,
-    fileCardWebMade: (n: number) => `生成了 ${n} 个网页`,
-    fileCardScripted: "脚本生成 · 仅可打开",
-    fileCardWebBatchShort: "网页文件有批量变动",
+    fileCardScripted: "脚本生成",
+    fileRowsMore: (n: number) => `还有 ${n} 个文件`,
     fileCardWebBatch: (n: number) => `本轮有 ${n} 个网页文件变动（像是批量操作，未逐个列出）`,
     fileCardExpand: "展开改动的文件",
     fileCardCollapse: "收起改动的文件",
-    fileCardUndo: "撤销",
     fileCardUndoHint: "撤销这一轮的文件改动——对话不动",
     fileCardUndone: "已撤销",
-    fileCardWebPage: "网页",
     openInOrbita: "在 orbita 打开",
     openInOrbitaRefused: (reason) => {
       switch (reason) {
@@ -2032,10 +2025,41 @@ export const zh: Messages = {
     processThinking: "在想",
     processSlow: "这一步比平时久（九成的间隔在 10 秒内）",
     processMore: (n) => `还有 ${n} 步`,
-    processToolsTitle: (parts) => parts,
-    processToolPart: (tool, n) => `${tool} ${n} 次`,
-    processEveryStep: "逐条看",
-    processChapterSteps: "展开这一段的每一步",
+    // 过程行的摘要（turn-events.ts 按种类数出来，只列发生了的）与点开后每行的动词
+    procSum: {
+      memoryRead: (n) => `读了 ${n} 条记忆`,
+      remembered: (n) => `记住 ${n} 条`,
+      returned: (n) => `交回 ${n} 件`,
+      asked: (n) => `被问了 ${n} 句`,
+      childFailed: (n) => `${n} 件没做成`,
+      goal: "改了目标",
+      plan: (n) => (n > 1 ? `改了 ${n} 次计划` : "改了计划"),
+      replied: (n) => `回了 ${n} 句`,
+      delegated: (n) => `派了 ${n} 件`,
+      commandsFailed: (n) => `${n} 条命令没成`,
+      stepsFailed: (n) => `${n} 步没成`,
+    },
+    procRow: {
+      returned: "交回来了",
+      asked: "在问",
+      childFailed: "没做成",
+      childOther: "发来消息",
+      replied: "回了话",
+      delegated: "派了",
+      plan: "改了计划",
+      goal: "改了目标",
+      say: "说",
+      memory: "读了记忆",
+      remembered: "记住了",
+      more: (n) => `等 ${n} 个`,
+      failed: (n) => `${n} 个没成`,
+      toWhom: (name) => `给「${name}」`,
+      quoted: (name) => `「${name}」`,
+      openSession: "看它的会话",
+      openProgress: "在进度面板看",
+      openMemory: "在记忆页看",
+      planChanges: (n, first) => (n > 1 ? `${n} 处：${first}等` : first),
+    },
   },
 
   stats: {
@@ -2094,16 +2118,15 @@ export const zh: Messages = {
     goAnswer: "去回答 ›",
     childDone: (peer) => `「${peer}」完成`,
     childFailed: (peer) => `「${peer}」失败`,
-    answerIt: "回答它…",
     notSpokenRunning: "在跑 · 还没说话",
     notSpoken: "还没说话",
-    latestQuestion: (text) => `问：${text}`,
+    latestQuestion: (text) => `在问：${text}`,
     latestProgress: (text) => `进度：${text}`,
     latestDone: "完成",
-    latestFailed: "失败",
+    latestFailed: "没做成",
     latestReply: (text) => `回复：${text}`,
     latestDoneWith: (text) => `完成：${text}`,
-    latestFailedWith: (text) => `失败：${text}`,
+    latestFailedWith: (text) => `没做成：${text}`,
     latestQuestionBare: "在问你",
     latestProgressBare: "报了一次进度",
     latestReplyBare: "收到了回复",
@@ -2149,7 +2172,10 @@ export const zh: Messages = {
     back: "返回子会话列表",
     openAsMain: "在主面板打开",
     openInPanel: "在子会话面板里查看",
-    waitingCount: (count) => `${count} 个在等你`,
+    waitingCount: (count) => `${count} 件等你`,
+    workingCount: (count) => `${count} 件在做`,
+    failedCount: (count) => `${count} 件没做成`,
+    doneCount: (count) => `做完 ${count} 件`,
     inboxFoot: "点一行：看这个子会话与父会话的完整往来",
     openAsMainTip: "把主面板切到这个子会话",
     gone: "这个子会话已不存在。",
@@ -2739,19 +2765,28 @@ export const zh: Messages = {
   },
 
   taskPanel: {
+    doneSteps: (n) => `做完 ${n} 步`,
+    dispatched: "派出去的活",
+    elapsed: {
+      lessThanMinute: "不到 1 分钟",
+      minutes: (n) => `${n} 分钟`,
+      hours: (n) => `${n} 小时`,
+      hoursMinutes: (h, m) => `${h} 小时 ${m} 分钟`,
+    },
     tabProgress: "进度",
     tabContext: "上下文",
     state: (state) =>
+      // 主会话自己的状态用第一人称（2026-11-17；子会话在做的事仍写「正在……」）
       state === "running"
-        ? "在跑"
+        ? "我在做"
         : state === "waiting"
-          ? "等你"
+          ? "在等你"
           : state === "failed"
-            ? "出错了"
+            ? "我这轮出错了"
             : state === "stopped"
-              ? "停下了"
+              ? "我停下了"
               : state === "done"
-                ? "做完了"
+                ? "我做完了"
                 : "空闲",
     turns: (count) => `${count} 轮`,
     plan: "计划",
@@ -2779,14 +2814,9 @@ export const zh: Messages = {
     notice: (count, summary, why) =>
       `${count === 1 ? "计划改了" : `计划改了 ${count} 处`}：${summary}${count > 1 ? "等" : ""}${why === "" ? "" : `——${why}`}`,
     quoted: (text) => `「${text}」`,
-    noteAdded: "新加",
-    noteReworded: "改过",
-    noteSplit: "拆出",
-    noteMoved: "提前",
     waitingDefault: "等你",
     waitingTitle: "在等你或外部，不是正在做",
     was: (from) => `原：${from}`,
-    splitFrom: (from) => `从「${from}」拆出`,
     editsCount: (n) => `改过 ${n} 次`,
     editsTitle: "计划改了什么、为什么",
     dropped: "去掉了",
@@ -3149,7 +3179,7 @@ export const zh: Messages = {
           used: {
             name: "用到了哪些记忆",
             title: "这一轮用到了什么",
-            body: "你说的话下面有一行「用到 N · 记住 M」，点开就看到这一轮带上了哪几条、又新记住了什么。",
+            body: "这一轮的过程行里写着「读了 N 条记忆 · 记住 M 条」，点开就看到这一轮带上了哪几条、又新记住了什么。",
             notes: ["每一轮用到的和记住的。"],
           },
           correct: {

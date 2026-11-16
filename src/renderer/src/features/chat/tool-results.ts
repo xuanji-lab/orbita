@@ -170,6 +170,17 @@ export function flattenRenderUnits(records: readonly TranscriptRecord[]): Render
  * `channelMarkOf` 判定，只是画在渲染层而不是落盘层（重载前的活会话还没走过
  * recorder，实时流里它仍是一条带信封文本的 user item）。
  */
+/**
+ * 这条记录是不是「子会话发给父会话」的通道消息（落盘前的实时形态是一条 user 记录）。
+ * 历史段 / 尾段切分用：一轮一行里，子会话交回来的消息不一定是轮边界（见 groupTurnsByTurn），
+ * 所以不能在它上面切。
+ */
+export function isChildChannelRecord(record: TranscriptRecord): boolean {
+  if (record.role === "channel-mark") return record.from === "child";
+  if (record.role !== "user") return false;
+  return channelEnvelopeOf(record)?.from === "child";
+}
+
 function channelEnvelopeOf(
   item: Extract<TranscriptItem, { role: "user" }>,
 ): { peerId: string; messageId: string; from: "parent" | "child"; kind: ChannelMessageKind } | null {
@@ -231,6 +242,51 @@ const PINNED_TOOL_NAMES: ReadonlySet<string> = new Set(["show_image", PLUGIN_BOA
 
 function isPinnedToolCall(entry: RenderEntry): boolean {
   return entry.kind === "toolCall" && PINNED_TOOL_NAMES.has(entry.toolName);
+}
+
+/**
+ * 一条记录属于「过程」还是「结果」（2026-11-17 对话流降噪，用户：「每加一种事件，我们就给它造了一种新的块」）。
+ *
+ * 对话流里只有两种东西占地方：用户说的话、智能体给的结果（正文、图、看板、要用户点的卡、自己产的文件）。
+ * 其余一切都是过程，收进这一轮的过程行，点开才看。**这里列的是结果，没列到的都算过程**——
+ * 以后新加一种事件（新的记录类型、新的工具），默认进过程行，不会自己长出一种新块。
+ *
+ * 只在「一轮一行」里用；逐步铺开（steps）保持原样。
+ */
+export function isProcessEntry(entry: RenderEntry): boolean {
+  switch (entry.kind) {
+    case "user":
+    case "compacted":
+    case "revertMark":
+    case "fileTurn":
+    case "text":
+      return false;
+    case "channelMark":
+      // 子会话视图里父会话派来的任务 / 回话：那是子会话的「用户消息」，是结果侧
+      return entry.mark.from === "child";
+    case "toolCall":
+      return !RESULT_TOOL_NAMES.has(entry.toolName) && !PINNED_TOOL_NAMES.has(entry.toolName);
+    default:
+      return true;
+  }
+}
+
+/**
+ * 结果侧的工具：调用本身就是给用户看 / 要用户点的东西（交接卡、装插件那一行、自动化卡、
+ * 子会话交给父会话的报告）。派活与给子会话回话（delegate / reply_subsession）不在这里——
+ * 子会话是主会话的工具，来往是工具的中间过程（用户 2026-11-16）。
+ */
+const RESULT_TOOL_NAMES: ReadonlySet<string> = new Set([
+  HANDOFF_TOOL_NAME,
+  PLUGIN_INSTALL_TOOL_NAME,
+  "automation_create",
+  "report_to_parent",
+  ...PINNED_CARD_COMMANDS,
+]);
+
+/** 一轮一行里，这一条是不是收进过程块的成员（正文另算：它是章节或结尾回答） */
+function isProcessMember(entry: RenderEntry): boolean {
+  return entry.kind !== "text" && isProcessEntry(entry);
 }
 
 /**
@@ -375,8 +431,11 @@ export interface TurnProcessUnit {
   answering: boolean;
 }
 
-/** 过程块的一步：思考 / 工具 / 工具组，或夹在中间的说明性正文（章节标题） */
-export type ProcessStep = TurnMemberEntry | Extract<RenderUnit, { kind: "text" }>;
+/**
+ * 过程块的一步：思考 / 工具 / 工具组，夹在中间的说明性正文（章节标题），子会话交回来的消息，
+ * 以及别的过程侧单元（isProcessEntry 判定；以后新加的种类默认也落在这里，展开时原样画）。
+ */
+export type ProcessStep = Exclude<RenderEntry, { kind: "user" | "compacted" | "revertMark" | "fileTurn" }>;
 
 export type TurnViewEntry = RenderEntry | TurnGroupUnit | TurnProcessUnit;
 
@@ -508,16 +567,17 @@ export function groupTurnsByTurn(
 ): TurnViewEntry[] {
   const segments: RenderEntry[][] = [];
   for (const entry of entries) {
+    const current = segments[segments.length - 1];
     if (
       entry.kind === "user" ||
       entry.kind === "compacted" ||
-      entry.kind === "channelMark" ||
       entry.kind === "revertMark" ||
-      segments.length === 0
+      (entry.kind === "channelMark" && startsNewTurn(entry, current)) ||
+      current === undefined
     ) {
       segments.push([entry]);
     } else {
-      segments[segments.length - 1]?.push(entry);
+      current.push(entry);
     }
   }
   const activeIndex = turnActive ? segments.length - 1 : -1;
@@ -526,6 +586,25 @@ export function groupTurnsByTurn(
     view.push(...foldSegment(segment, results, index === activeIndex ? "live" : "turn"));
   });
   return view;
+}
+
+/**
+ * 一轮一行里，通道标记什么时候开新的一轮（2026-11-17）：
+ * - 子会话视图里父会话派来的任务 / 回话：那是子会话的「用户消息」，照旧开新轮；
+ * - 主会话视图里子会话交回来的消息：这一轮已经答完（段尾是正文）再来的，是它把主会话叫醒的新一轮；
+ *   主会话还在干活时插进来的（段尾不是正文），只是这一轮过程里的一件事，不切。
+ */
+function startsNewTurn(mark: Extract<RenderEntry, { kind: "channelMark" }>, current: readonly RenderEntry[] | undefined): boolean {
+  if (mark.mark.from !== "child" || current === undefined) return true;
+  for (let i = current.length - 1; i >= 0; i -= 1) {
+    const entry = current[i];
+    if (entry === undefined || (entry.kind === "text" && entry.text.trim() === "")) continue;
+    if (entry.kind === "text") return true;
+    // 轮尾文件账、钉在回答前的图这类结果卡跟在回答后面落盘：越过它们看回答（实测：答完 → 轮尾文件账 → 子会话交回）
+    if (!isProcessEntry(entry)) continue;
+    return false;
+  }
+  return false;
 }
 
 /**
@@ -575,7 +654,8 @@ function foldSegment(
       tailCards.push(entry);
       continue;
     }
-    if (isChannelToolCall(entry)) {
+    // 一轮一行：派活、给子会话回话是过程（isProcessEntry），收进块里，不切开
+    if (isChannelToolCall(entry) && !(mode !== "steps" && isProcessEntry(entry))) {
       flushChunk(false);
       view.push(entry);
       continue;
@@ -650,7 +730,7 @@ function foldChunkByTurn(
   let first = -1;
   let last = -1;
   kept.forEach((entry, index) => {
-    if (!isTurnMember(entry)) return;
+    if (!isProcessMember(entry)) return;
     if (first === -1) first = index;
     last = index;
   });
@@ -658,7 +738,8 @@ function foldChunkByTurn(
   const steps: ProcessStep[] = [];
   const aside: RenderEntry[] = [];
   for (const entry of kept.slice(first, last + 1)) {
-    if (isTurnMember(entry) || entry.kind === "text") steps.push(entry);
+    const step = asProcessStep(entry);
+    if (step !== null) steps.push(step);
     else aside.push(entry);
   }
   const after = kept.slice(last + 1);
@@ -676,6 +757,21 @@ function foldChunkByTurn(
     ...aside,
     ...after,
   ];
+}
+
+/** 过程块一步的时刻：工具组取最后一个调用，没有自带时刻的单元（意图召回卡）取它记录的时刻 */
+export function stepTime(step: ProcessStep, edge: "first" | "last" = "last"): number {
+  if (step.kind === "toolGroup") return (edge === "first" ? step.calls[0] : step.calls.at(-1))?.timestamp ?? 0;
+  if (step.kind === "intentRecall") return step.record.timestamp;
+  return step.timestamp;
+}
+
+/** 收进过程块的单元收窄成 ProcessStep；结果侧单元（夹在过程中间的卡）返回 null，挪到块后 */
+function asProcessStep(entry: RenderEntry): ProcessStep | null {
+  if (entry.kind === "text") return entry;
+  if (!isProcessMember(entry)) return null;
+  if (entry.kind === "user" || entry.kind === "compacted" || entry.kind === "revertMark" || entry.kind === "fileTurn") return null;
+  return entry;
 }
 
 /**

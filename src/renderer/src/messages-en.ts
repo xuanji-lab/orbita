@@ -318,10 +318,6 @@ export const en = {
     sessionEmptyHint:
       "After a stretch of conversation goes quiet it's distilled; what gets remembered shows up here.",
     noTask: "Open a task to see what it remembered.",
-    /** 用户消息动作行里的「用到 N」：这一轮开始前召回进上下文的记忆 */
-    used: (count: number) => `Used ${count}`,
-    usedHint: "Memories recalled into this turn",
-    rememberedHint: "What this turn was distilled into",
     openReview: "Open in the review panel",
     vectorIntro:
       "Also finds memories phrased differently from your question. Off by default; when on, a small model runs on this computer and nothing leaves it.",
@@ -2107,18 +2103,14 @@ export const en = {
     revertedHere: "Reverted — the conversation continued from here",
     undoTitle: "Undo file changes",
     undoConfirm: "Undo changes",
-    fileCardChanged: (n: number) => `${n} file${n === 1 ? "" : "s"} changed`,
-    fileCardWebMade: (n: number) => `${n} web page${n === 1 ? "" : "s"} generated`,
-    fileCardScripted: "Script-generated · open only",
-    fileCardWebBatchShort: "Web files changed in bulk",
+    fileCardScripted: "made by a script",
+    fileRowsMore: (n: number) => `${n} more files`,
     fileCardWebBatch: (n: number) =>
       `${n} web file${n === 1 ? "" : "s"} changed this turn (looks like a bulk operation, not listed)`,
     fileCardExpand: "Show changed files",
     fileCardCollapse: "Hide changed files",
-    fileCardUndo: "Undo",
     fileCardUndoHint: "Undo this round's file changes — the conversation stays",
     fileCardUndone: "Undone",
-    fileCardWebPage: "Web page",
     openInOrbita: "Open in orbita",
     /** 「在 orbita 打开」不放行的原因（ArtifactOpenResult.reason）；「Show in folder」不受影响 */
     openInOrbitaRefused: (reason: Extract<ArtifactOpenResult, { ok: false }>["reason"]): string => {
@@ -2206,10 +2198,40 @@ export const en = {
     processThinking: "Thinking",
     processSlow: "Taking longer than usual — 9 in 10 gaps are under 10s",
     processMore: (n: number) => `${n} more`,
-    processToolsTitle: (parts: string) => parts,
-    processToolPart: (tool: string, n: number) => `${tool} ×${n}`,
-    processEveryStep: "Every step",
-    processChapterSteps: "Show the steps in this part",
+    procSum: {
+      memoryRead: (n: number) => `read ${plural(n, "memory", "memories")}`,
+      remembered: (n: number) => `remembered ${n}`,
+      returned: (n: number) => `${n} handed back`,
+      asked: (n: number) => `${plural(n, "question")} from sub-sessions`,
+      childFailed: (n: number) => `${n} not done`,
+      goal: "goal changed",
+      plan: (n: number) => (n > 1 ? `plan changed ${n} times` : "plan changed"),
+      replied: (n: number) => `${plural(n, "reply", "replies")} sent`,
+      delegated: (n: number) => `${n} delegated`,
+      commandsFailed: (n: number) => `${plural(n, "command")} didn't work`,
+      stepsFailed: (n: number) => `${plural(n, "step")} didn't work`,
+    },
+    procRow: {
+      returned: "Handed back",
+      asked: "Asked",
+      childFailed: "Not done",
+      childOther: "Message",
+      replied: "Replied",
+      delegated: "Delegated",
+      plan: "Plan changed",
+      goal: "Goal changed",
+      say: "Said",
+      memory: "Read memories",
+      remembered: "Remembered",
+      more: (n: number) => `and ${n} more`,
+      failed: (n: number) => `${n} didn't work`,
+      toWhom: (name: string) => `to “${name}”`,
+      quoted: (name: string) => `“${name}”`,
+      openSession: "Open its session",
+      openProgress: "See in Progress",
+      openMemory: "See in Memory",
+      planChanges: (n: number, first: string) => (n > 1 ? `${n} changes: ${first}, …` : first),
+    },
   },
 
   stats: {
@@ -2270,7 +2292,6 @@ export const en = {
     goAnswer: "Answer ›",
     childDone: (peer: string) => `${peer} finished`,
     childFailed: (peer: string) => `${peer} failed`,
-    answerIt: "Answer it…",
     notSpokenRunning: "running · hasn't spoken yet",
     notSpoken: "hasn't spoken yet",
     latestQuestion: (text: string) => `Q: ${text}`,
@@ -2329,6 +2350,9 @@ export const en = {
     openAsMain: "Open as main",
     openInPanel: "Open in the Sub-sessions panel",
     waitingCount: (count: number) => `${count} waiting on you`,
+    workingCount: (count: number) => `${count} working`,
+    failedCount: (count: number) => `${count} not done`,
+    doneCount: (count: number) => `${count} done`,
     inboxFoot: "Click a row to see that sub-session's full exchange with the parent",
     openAsMainTip: "Switch the main pane to this sub-session",
     gone: "This sub-session is gone.",
@@ -2936,19 +2960,27 @@ export const en = {
 
   /** 右栏「这条任务」：进度页签（计划 / 做过的 / 留到以后）+ 上下文页签 */
   taskPanel: {
+    doneSteps: (n: number) => `${n} done`,
+    dispatched: "Delegated work",
+    elapsed: {
+      lessThanMinute: "under a minute",
+      minutes: (n: number) => `${n} min`,
+      hours: (n: number) => `${n} h`,
+      hoursMinutes: (h: number, m: number) => `${h} h ${m} min`,
+    },
     tabProgress: "Progress",
     tabContext: "Context",
     state: (state: string): string =>
       state === "running"
-        ? "Working"
+        ? "I'm working"
         : state === "waiting"
           ? "Waiting for you"
           : state === "failed"
-            ? "Stopped with an error"
+            ? "I hit an error this turn"
             : state === "stopped"
-              ? "Stopped"
+              ? "I stopped"
               : state === "done"
-                ? "Done"
+                ? "I'm done"
                 : "Idle",
     turns: (count: number) => plural(count, "turn"),
     plan: "Plan",
@@ -2983,17 +3015,12 @@ export const en = {
       `${count === 1 ? "Plan changed" : `Plan changed in ${count} places`}: ${summary}${count > 1 ? " and more" : ""}${why === "" ? "" : ` — ${why}`}`,
     /** 把一段文字加上引号（拆成 / 合成里并排列出几步用） */
     quoted: (text: string) => `"${text}" `,
-    noteAdded: "New",
-    noteReworded: "Reworded",
-    noteSplit: "Split out",
     /** 被往前提的步下面写一句出处（后面跟理由） */
-    noteMoved: "Moved up",
     /** waiting 的步，waitingFor 没写时小签上的默认字 */
     waitingDefault: "Waiting",
     waitingTitle: "Waiting on you or something external; not in progress",
     /** 改过的步下面写原文字 */
     was: (from: string) => `was: ${from}`,
-    splitFrom: (from: string) => `from "${from}"`,
     editsCount: (n: number) => (n === 1 ? "changed once" : `changed ${n} times`),
     editsTitle: "What changed in the plan, and why",
     dropped: "dropped",
@@ -3373,7 +3400,7 @@ export const en = {
           used: {
             name: "Which memories it used",
             title: "What this turn drew on",
-            body: "Under your message, “used N · remembered M”: open it to see which memories came along this turn and what it newly remembered.",
+            body: "The turn’s process line says “read N memories · remembered M”: open it to see which memories came along this turn and what it newly remembered.",
             notes: ["Used and remembered, per turn."],
           },
           correct: {

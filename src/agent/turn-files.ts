@@ -3,7 +3,7 @@
  */
 import type { AgentEvent } from "../shared/agent-ipc.ts";
 import type { TurnFileTracker } from "./file-tracker.ts";
-import { foldWebArtifacts, scanWebArtifacts, WEB_ARTIFACT_MTIME_SLACK_MS, type ScanRoot, type WebScanResult } from "./web-artifacts.ts";
+import { foldWebArtifacts, scanWebArtifacts, WEB_ARTIFACT_MTIME_SLACK_MS, type ScanRoot, type ToolWindows, type WebScanResult } from "./web-artifacts.ts";
 
 /**
  * 轮落定的文件账上报：主进程写快照 blob、落 FileTurnRecord 并广播给轮尾卡片。
@@ -27,7 +27,10 @@ export async function reportFileTurn(
       scanWebArtifactsLogged(webWatch.roots, webWatch.startedAt),
     ]);
     const tracked = new Set(changes.map((change) => change.path));
-    const folded = foldWebArtifacts(scan.paths.filter((path) => !tracked.has(path)));
+    // 只认本会话自己的工具在跑时落盘的（ToolWindows 的文件头说了根因）：子会话写进父会话工作台的网页不算父会话的
+    const now = Date.now();
+    const own = scan.paths.filter((path) => !tracked.has(path) && webWatch.windows.covers(scan.mtimes.get(path) ?? 0, now));
+    const folded = foldWebArtifacts(own);
     if (changes.length > 0 || folded.webArtifacts.length > 0 || folded.webArtifactsBatch !== undefined) {
       send({
         type: "fileTurn",
@@ -50,6 +53,8 @@ export interface WebArtifactWatch {
   roots: ScanRoot[];
   /** 开轮时刻（Date.now()）：轮尾扫描收 mtime ≥ startedAt − slack 的文件 */
   startedAt: number;
+  /** 本会话这一轮工具在跑的时段：轮尾只认落在其中的文件 */
+  windows: ToolWindows;
 }
 
 /** 扫一遍并处理好日志面：截断 warn、失败按空结果（本轮没有旁路产物，不让扫描拖砸轮尾）。 */
@@ -66,7 +71,7 @@ async function scanWebArtifactsLogged(roots: readonly ScanRoot[], startedAt: num
     return result;
   } catch (cause) {
     console.error("[web-artifacts] 扫描失败，本轮按没有旁路网页产物处理", cause);
-    return { paths: [], truncated: false };
+    return { paths: [], mtimes: new Map(), truncated: false };
   }
 }
 

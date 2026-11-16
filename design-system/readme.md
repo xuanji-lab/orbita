@@ -125,7 +125,11 @@ the English copy; the Chinese copy follows the same voice.
   one look and a stepped height (see *Control recipes*). Two chips reading "On" "Off" made you read
   two words to learn the state; a switch says it at a glance.
 - **Second person, only when the user must act.** "You can retry this view or reload the app." Never
-  first person, never "we". The agent does not speak about itself in the UI chrome.
+  "we". **The agent's own state and actions read in first person** ("我在做", "我做完了", "10 分钟没动静，我在查"),
+  **a sub-session's read "正在……"** ("正在统一几项指标的算法") — the user talks to one agent, and the
+  sub-sessions are its tools. Only say what actually happens: no "我在查" unless something is checking.
+  (Changed 2026-11-17. Before, the rule was "the agent does not speak about itself in the UI chrome"; the
+  user, comparing both voices on the same row on 2026-11-16: 「第一人称好像会舒服一些」.)
 - **Consequences before actions.** "Remove this workspace? Its branch and directory will be deleted.
   This cannot be undone." Destructive copy names the object, the effect, and the finality — in that
   order, in three short sentences.

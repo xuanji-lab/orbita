@@ -1552,11 +1552,9 @@ html[data-pointer-drag] iframe {
   padding-left: calc(var(--tree-name-x) - var(--row-glyph-x));
 }
 
-/* ===== Sub-sessions 收件箱（2026-10-12：列表层改为收件箱） =====
- * 一个子会话一行：行首状态饼（.status-pie，与侧栏 / 铃铛清单同一个）+ 名字 +
- * 最新一句 + 相对时间（行尾，钉在行的右内边距上）。「在问你」的行展开回答框
- * （.channel-reply-box）并给一抹 warning 底，其余行单行收着。行按钮与回答框是
- * 兄弟（button 不能嵌 button），整行 hover 由外层 .inbox-row 统一画。 */
+/* ===== Sub-sessions 收件箱（2026-10-12：列表层改为收件箱；2026-11-17 减色、去回答框） =====
+ * 一个子会话一行：行首记号（要你出手的橙点、在做灰点、做完灰勾）+ 名字 + 那一句 + 相对时间（行尾，钉在行的
+ * 右内边距上）。做完的折成末尾一行「做完 N 件」。整面不放会动的记号。 */
 .inbox-rows {
   display: grid;
   padding: 0 0 var(--space-2);
@@ -1571,17 +1569,8 @@ html[data-pointer-drag] iframe {
   border-top: 0;
 }
 
-/* 在问你：一抹 warning 底（color-mix 7%，同铃铛清单选中项的调制），回答框在行下 */
-.inbox-row.asking {
-  background: color-mix(in srgb, var(--color-warning) 7%, transparent);
-}
-
 .inbox-row:hover {
   background: var(--color-bg-hover);
-}
-
-.inbox-row.asking:hover {
-  background: color-mix(in srgb, var(--color-warning) 11%, transparent);
 }
 
 .inbox-row-main {
@@ -1597,9 +1586,24 @@ html[data-pointer-drag] iframe {
   background: transparent;
 }
 
-/* 行首状态饼：与标题行第一行同高居中（收件箱行是两行高，贴首行读得更清楚） */
-.inbox-row-pie {
-  margin-top: var(--space-1);
+/* 行首记号位：固定宽，与标题首行同高居中；没有记号的行也占位，名字左缘对齐 */
+.inbox-row-mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: var(--space-3);
+  height: calc(var(--font-size-base) * 1.5);
+  color: var(--color-text-tertiary);
+}
+.inbox-row-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+/* 只有「要你出手」是橙点（在问你、被打断、没做成）；橙只做第二信号，旁边都有字 */
+.inbox-row-mark.ask {
+  color: var(--color-warning);
 }
 
 .inbox-row-item {
@@ -1626,6 +1630,11 @@ html[data-pointer-drag] iframe {
   font-size: var(--font-size-base);
   color: var(--color-text-primary);
 }
+/* 做完的（展开「做完 N 件」后）：字变淡，不加粗 */
+.inbox-row-title.done {
+  font-weight: var(--weight-regular);
+  color: var(--color-text-secondary);
+}
 
 .inbox-row-ago {
   flex: 0 0 auto;
@@ -1641,6 +1650,35 @@ html[data-pointer-drag] iframe {
   color: var(--color-text-secondary);
 }
 
+/* 末尾「做完 N 件」：一行，可聚焦，回车展开 */
+.inbox-done-fold {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--control-height-md);
+  padding: 0 var(--space-3) 0 var(--space-2);
+  border: 0;
+  border-top: 1px solid var(--color-border-subtle);
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-base);
+  color: var(--color-text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+.inbox-done-fold:hover {
+  background: var(--color-bg-hover);
+}
+.inbox-done-fold .inbox-row-mark {
+  height: auto;
+}
+.inbox-done-chev {
+  display: inline-grid;
+  place-items: center;
+  color: var(--color-text-tertiary);
+}
+
 /* 列表尾的一句用法说明：最新一句是概括，完整往来进会话层看 */
 .inbox-foot {
   margin: 0;
@@ -1650,76 +1688,21 @@ html[data-pointer-drag] iframe {
   color: var(--color-text-tertiary);
 }
 
-/* 页头里「N 个在等你」的计数（warning 色由 inline 给） */
+/* 页头里「2 件等你 · 3 件在做」：灰字，不上色——行前的橙点已经够了 */
 .inbox-waiting-count {
   flex: 0 0 auto;
   font-size: var(--font-size-sm);
   white-space: nowrap;
-}
-
-/* 「在问你」的行下展开的回答框：代父回信（channel:speak），Enter 发送 */
-.channel-reply-box {
-  padding: 0 var(--space-3) var(--space-2) calc(var(--space-2) + 3px + var(--space-2));
+  color: var(--color-text-tertiary);
 }
 
 /* 被崩溃打断的行：行下一句说明 + 「继续」（.notice-exit，与子会话页那一行同一个键）。
-   左起对齐标题文字：行内边距 --space-2 + 状态饼 10px（.status-pie 的宽，即 --space-2-5）+ 饼与标题的间距 --space-2 */
+   左起对齐标题文字：行内边距 --space-2 + 记号位 --space-3 + 间距 --space-2 */
 .inbox-row-resume {
   margin: 0;
-  padding: 0 var(--space-3) var(--space-2) calc(var(--space-2) + var(--space-2-5) + var(--space-2));
+  padding: 0 var(--space-3) var(--space-2) calc(var(--space-2) + var(--space-3) + var(--space-2));
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
-}
-
-.channel-reply-error {
-  margin: 0 0 var(--space-1);
-  font-size: var(--font-size-sm);
-  color: var(--color-danger);
-}
-
-.channel-reply-row {
-  display: flex;
-  align-items: flex-end;
-  gap: var(--space-2);
-}
-
-.channel-reply-input {
-  flex: 1 1 auto;
-  min-width: 0;
-  resize: none;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-panel);
-  outline: none;
-  font-family: var(--font-family-base);
-  font-size: var(--font-size-sm);
-  line-height: var(--line-height-ui);
-  color: var(--color-text-primary);
-  padding: 3px var(--space-2);
-}
-
-.channel-reply-input:focus {
-  border-color: var(--color-accent);
-}
-
-.channel-reply-send {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border: 0;
-  border-radius: var(--radius-pill);
-  background: var(--color-accent);
-  color: var(--color-accent-fg);
-  cursor: pointer;
-}
-
-.channel-reply-send:disabled {
-  background: var(--color-bg-hover);
-  color: var(--color-text-tertiary);
-  cursor: not-allowed;
 }
 
 /*
@@ -2213,56 +2196,6 @@ html[data-pointer-drag] iframe {
 
 .bubble-chip-icon {
   flex: 0 0 auto;
-}
-
-/*
- * 用户消息动作行里的「用到 N · 记住 M」（原型 .memrow，2026-10-30）：与复制 / 回到这里 / 时间同一排，
- * 一种字号（sm）、三级灰，像动作行的注脚；悬停铺中性底、字回正墨；点开时取选中行的底色。
- * 下面的清单右对齐在气泡宽度里，一条记忆一行，次要色——它是证据，不和正文抢。
- */
-.memrow-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  height: var(--control-height-xs);
-  padding: 0 var(--space-1-5);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  font: inherit;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-tertiary);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.memrow-btn:hover {
-  background: var(--option-hover-bg);
-  color: var(--color-text-primary);
-}
-.memrow-btn[aria-pressed="true"] {
-  background: var(--option-active-bg);
-  color: var(--color-text-primary);
-}
-
-.memrow-list {
-  display: grid;
-  gap: var(--space-1);
-  justify-items: end;
-  max-width: var(--bubble-max-width);
-  padding: 0 0 var(--space-1);
-}
-.memrow-list ul {
-  display: grid;
-  gap: var(--space-1);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  font-size: var(--font-size-sm);
-  line-height: var(--line-height-ui);
-  color: var(--color-text-secondary);
-}
-.memrow-list .mem-link {
-  justify-self: end;
 }
 
 .chat-md li::marker {
@@ -5346,8 +5279,9 @@ mark.intent-mark {
   min-height: var(--control-height-sm);
   padding: 0 var(--content-hem);
 }
+/* 一个面上只留一个会动的记号：现场块头上这一个转圈，灰色（2026-11-17：太红绿灯了，太想提醒我） */
 .proc-head > .orbita-icon {
-  color: var(--color-info);
+  color: var(--color-text-tertiary);
   flex: none;
 }
 .proc-strong {
@@ -5366,8 +5300,9 @@ mark.intent-mark {
   font-variant-numeric: tabular-nums;
   color: var(--color-text-tertiary);
 }
+/* 没让这一轮失败的失败不上色：灰字照实写 */
 .proc-bad {
-  color: var(--color-danger);
+  color: var(--color-text-tertiary);
 }
 .proc-time {
   margin-left: auto;
@@ -5436,9 +5371,16 @@ mark.intent-mark {
   flex: none;
   width: 12px;
 }
-.proc-mark.ok { color: var(--color-success); }
-.proc-mark.bad { color: var(--color-danger); }
-.proc-step.now .proc-mark { color: var(--color-info); }
+.proc-mark.ok,
+.proc-mark.bad,
+.proc-step.now .proc-mark { color: var(--color-text-tertiary); }
+/* 此刻这一步：静止的实心小点（会动的只有块头那一个转圈） */
+.proc-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
 .proc-verb {
   flex: none;
   min-width: 3em;
@@ -5464,7 +5406,210 @@ mark.intent-mark {
 .proc-foot.slow {
   padding-left: var(--content-hem);
   font-family: var(--font-family-base);
-  color: var(--color-warning);
+  color: var(--color-text-secondary);
+}
+
+/* 落定那一行的摘要：按种类数出来的一句（turn-events.ts），灰字；放不下就省略号 */
+.proc-sum {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: var(--weight-regular);
+  color: var(--color-text-tertiary);
+}
+.proc-chev {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+
+/* 过程行点开：每件事一行灰字（动词 · 内容 · 时间），按时间排，不要小标题。左边一根发丝挂在内线上 */
+.proc-events {
+  list-style: none;
+  margin: 0 0 var(--space-2) var(--content-hem);
+  padding: 0 0 0 var(--space-3);
+  border-left: 1px solid var(--color-border-subtle);
+  display: grid;
+  gap: 0;
+  min-width: 0;
+}
+.proc-ev-wrap {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.proc-ev {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: var(--control-height-sm);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+.proc-ev-btn {
+  width: 100%;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.proc-ev-btn:hover {
+  background: var(--color-bg-hover);
+}
+.proc-ev-verb {
+  flex: none;
+  min-width: 5em;
+  color: var(--color-text-tertiary);
+}
+.proc-ev-text {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.proc-ev-link {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--color-text-secondary);
+  text-decoration: underline;
+  text-decoration-color: var(--color-border-default);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.proc-ev-link:hover {
+  color: var(--color-text-primary);
+  text-decoration-color: currentColor;
+}
+.proc-ev-time {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.proc-ev-other {
+  min-width: 0;
+}
+/* 一条记忆一行，点开看全文（按钮去掉默认外观，和别的行同一种字） */
+.proc-ev-mem {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.proc-ev-mem:hover {
+  color: var(--color-text-primary);
+}
+.proc-ev-mem.open {
+  white-space: normal;
+}
+
+/* ===== 轮尾文件行（FileTurnCard，2026-11-17）：挂在产出它的那段回复下面，一行一个文件，不套卡片框 =====
+ * 图标 · 文件名（点开；全路径在悬停提示里）· 行尾灰字尾巴；动作只在悬停 / 键盘聚焦时出，出现时尾巴让位。 */
+.ft-rows {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+  padding: 0 var(--content-hem);
+}
+.ft-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: var(--control-height-sm);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.ft-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.ft-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--color-text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.ft-name:hover:not(:disabled) {
+  text-decoration: underline;
+  text-decoration-color: var(--color-border-default);
+  text-underline-offset: 3px;
+}
+.ft-name:disabled {
+  cursor: default;
+}
+.ft-trail {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.ft-tail {
+  font-family: var(--font-family-business);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.ft-act {
+  display: none;
+  width: var(--control-height-xs);
+  height: var(--control-height-xs);
+}
+.ft-row:hover .ft-act,
+.ft-row:focus-within .ft-act {
+  display: inline-flex;
+}
+.ft-row:hover .ft-tail,
+.ft-row:focus-within .ft-tail {
+  display: none;
+}
+.ft-more {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ft-more .ft-name {
+  color: var(--color-text-secondary);
+}
+/* 撤销预演中的那一轮：字加深，底部确认栏说的就是这几行 */
+.ft-rows.previewing .ft-row {
+  color: var(--color-text-primary);
+}
+.ft-refusal {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  padding-left: calc(var(--space-3) + var(--space-2));
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
 }
 
 /* 落定后展开的章节时间线：竖线挂在内线上，章节点压在线上 */
@@ -6112,9 +6257,6 @@ mark.intent-mark {
   }
   .user-images {
     max-width: none;
-  }
-  .user-turn .memrow-list {
-    justify-items: start;
   }
   /* 复制 / 回退 / 记忆这排动作悬停（或键盘聚焦）才出：静止时它是一排每条消息都有的小灰图标。
      行尾的时间已经搬进边栏，这排里剩下的都是操作。不用 visibility:hidden——那会把键盘用户挡在外面；

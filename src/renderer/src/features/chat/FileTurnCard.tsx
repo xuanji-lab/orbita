@@ -1,5 +1,6 @@
-import { useContext, useState } from "react";
+import { useContext, useState, type ReactNode } from "react";
 import { Icon } from "../../shell/Icon";
+import { RowHoverAction } from "../../shell/RowHoverAction";
 import { useT } from "../../locale.ts";
 import { api } from "../../api";
 import type { FileTurnView, RevertRecord } from "@shared/revert";
@@ -41,15 +42,18 @@ const SLOT_DIR: React.CSSProperties = {
 };
 
 /**
- * 轮尾文件账卡。头：chevron｜「N 个文件已更改」（· 生成了 M 个网页）｜+x −y｜撤销。
- * **收起态也直接露出网页行**（文件账里的与旁路的都算）——网页产物是这一轮最
- * 常被点开的东西，不该藏在展开里；其余文件行仍要展开才见。已撤销的轮：数字
- * 列表保留、加「已撤销」徽标、撤销按钮禁用（不做重新应用——重新应用等于重跑
- * 那轮，交给回退后重发）。
+ * 轮尾文件账（2026-11-17 对话流降噪）：挂在产出它的那段回复下面，**一行一个文件**，不套卡片框。
+ * 用户 2026-11-16 截图里这里是一张带框的「生成了 2 个网页」卡，每行常显两个按钮；定稿图（mock-bgstrip 8-stream-busy-after）
+ * 是一行一个：图标 · 文件名 · 灰字尾巴（改了几行 / 脚本生成），动作只在悬停或键盘聚焦时出（行尾血线 .row-trailing）。
  *
- * 只有旁路网页产物、没有文件改动的轮也出卡（头部「生成了 N 个网页」，无 chevron、
- * 无撤销——旁路产物开轮没拍内容快照，不参与撤销）。
+ * - 点文件名：改过的文件去审查面板看 diff，网页在 Orbita 浏览器里打开；
+ * - 悬停动作：网页「打开文件位置」；改过的文件「撤销这一轮的文件改动」（整轮撤，对话不动；只对文件账有意义）；
+ * - 已撤销：尾巴写「已撤销」；撤销预演中的那一轮：行字加深，底部确认栏说的就是这几行；
+ * - 多于 FILE_ROWS_SHOWN 个时，其余收成一行「还有 N 个文件」，点开再列。
+ * 旁路网页产物（脚本生成）不参与撤销，只能打开。
  */
+const FILE_ROWS_SHOWN = 5;
+
 export function FileTurnCard(props: {
   record: FileTurnView;
   cwd: string | null;
@@ -63,231 +67,87 @@ export function FileTurnCard(props: {
 }) {
   const t = useT();
   const preview = useContext(RevertPreviewContext);
-  // 撤销预演中的那一轮：描边加重 + 自动展开，底部确认栏说的就是这张卡里的文件
   const previewing = preview?.kind === "undo" && preview.turnId === props.record.id;
-  const [open, setOpen] = useState(false);
-  const shown = open || previewing;
-  const added = props.record.changes.reduce((sum, change) => sum + change.added, 0);
-  const removed = props.record.changes.reduce((sum, change) => sum + change.removed, 0);
-  // 网页行两处来源：文件账里命中的（write / edit 写的，可撤销）与旁路（脚本生成，仅可打开）；
-  // batch 是批量折叠：本轮网页文件变动超过上限，不逐个列、只报一行计数（无按钮）
-  const webFromAccount = props.record.changes.filter((change) => isWebArtifactFile(change.path));
+  const [more, setMore] = useState(false);
   const scripted = props.record.webArtifacts ?? [];
   const batch = props.record.webArtifactsBatch;
-  const fileRows = props.record.changes.filter((change) => !isWebArtifactFile(change.path));
-  const hasWeb = webFromAccount.length + scripted.length > 0 || batch !== undefined;
-  // 展开键只在确有藏着的文件行时才给：网页行收起态就可见，chevron 展不出新东西就是噪音
-  const expandable = fileRows.length > 0;
-  // 撤销 / 已撤销只对文件账有意义：旁路产物撤不回去，没账的轮不给撤销按钮
-  const undoable = props.record.changes.length > 0;
-  const label = undoable
-    ? t.chat.fileCardChanged(props.record.changes.length) +
-      (scripted.length > 0 ? ` · ${t.chat.fileCardWebMade(scripted.length)}` : "")
-    : scripted.length > 0
-      ? t.chat.fileCardWebMade(scripted.length)
-      : // 没账、没逐个列的网页行，只剩批量折叠一行：头部给短摘要，计数全句在行里
-        t.chat.fileCardWebBatchShort;
-  const webSection = (bordered: boolean) => (
-    <div
-      style={{
-        display: "grid",
-        gap: 2,
-        ...(bordered
-          ? { marginTop: "var(--space-1)", paddingTop: "var(--space-1)", borderTop: "1px solid var(--color-border-subtle)" }
-          : null),
-      }}
-    >
-      {webFromAccount.map((change) => (
-        <ArtifactRow key={change.path} path={change.path} cwd={props.cwd} sessionId={props.sessionId} />
-      ))}
-      {scripted.map((path) => (
-        <ArtifactRow key={path} path={path} cwd={props.cwd} sessionId={props.sessionId} scripted />
-      ))}
-      {batch !== undefined && <WebBatchRow count={batch} />}
-    </div>
-  );
+  const undo = props.undone || props.busy ? null : () => props.onUndo(props.record.id);
+  const rows: ReactNode[] = [
+    ...props.record.changes.map((change) =>
+      isWebArtifactFile(change.path) ? (
+        <ArtifactRow key={change.path} path={change.path} cwd={props.cwd} sessionId={props.sessionId} undone={props.undone} onUndo={undo} />
+      ) : (
+        <ChangedRow key={change.path} change={change} cwd={props.cwd} undone={props.undone} onOpenFile={props.onOpenFile} onUndo={undo} />
+      ),
+    ),
+    ...scripted.map((path) => <ArtifactRow key={path} path={path} cwd={props.cwd} sessionId={props.sessionId} scripted undone={false} onUndo={null} />),
+  ];
+  const shown = more || previewing ? rows : rows.slice(0, FILE_ROWS_SHOWN);
   return (
-    <div
-      className="file-turn-card"
-      style={{
-        display: "grid",
-        gap: shown || hasWeb ? "var(--space-1)" : 0,
-        padding: "var(--space-2) var(--space-3)",
-        background: "var(--color-chat-card-bg)",
-        border: `1px solid ${previewing ? "var(--color-border-strong)" : "var(--color-border-subtle)"}`,
-        boxShadow: previewing ? "0 0 0 1px var(--color-border-strong)" : "none",
-        borderRadius: "var(--radius-md)",
-        fontSize: "var(--font-size-sm)",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0 }}>
-        {/* 整个头部左段都是展开键（不是只有 13px 的 chevron）：zcode 同款，点哪都开 */}
-        {expandable ? (
-          <button
-            type="button"
-            title={shown ? t.chat.fileCardCollapse : t.chat.fileCardExpand}
-            aria-expanded={shown}
-            onClick={() => setOpen((value) => !value)}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "var(--space-2)",
-              flex: "1 1 auto",
-              minWidth: 0,
-              padding: 0,
-              border: "none",
-              background: "none",
-              font: "inherit",
-              color: "inherit",
-              textAlign: "left",
-              cursor: "pointer",
-            }}
-          >
-            <span
-              style={{
-                display: "inline-flex",
-                color: "var(--color-text-tertiary)",
-                transition: "transform var(--duration-fast) var(--ease-out-quint)",
-                transform: shown ? "rotate(90deg)" : "none",
-              }}
-            >
-              <Icon name="chevron-right" size={13} strokeWidth={1.8} />
-            </span>
-            <span style={{ color: "var(--color-text-secondary)", fontWeight: 600 }}>{label}</span>
-            <Stats added={added} removed={removed} />
-          </button>
-        ) : (
-          // 没有藏着的行（只有网页行）：头部是静态的，不装展开键
-          <span
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "var(--space-2)",
-              flex: "1 1 auto",
-              minWidth: 0,
-              color: "var(--color-text-secondary)",
-              fontWeight: 600,
-            }}
-          >
-            {label}
-            <Stats added={added} removed={removed} />
+    <div className={previewing ? "ft-rows previewing" : "ft-rows"}>
+      {shown}
+      {shown.length < rows.length && (
+        <button type="button" className="ft-row ft-more" aria-expanded={false} onClick={() => setMore(true)}>
+          <span className="ft-icon">
+            <Icon name="chevron-right" size={12} strokeWidth={1.8} />
           </span>
-        )}
-        {undoable &&
-          (props.undone ? (
-            <span
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-                padding: "1px var(--space-2)",
-                borderRadius: "var(--radius-pill)",
-                background: "var(--color-bg-muted)",
-                fontSize: "var(--font-size-sm)",
-                color: "var(--color-text-tertiary)",
-                flex: "0 0 auto",
-              }}
-            >
-              <Icon name="check" size={11} strokeWidth={1.8} />
-              {t.chat.fileCardUndone}
-            </span>
-          ) : (
-            <button
-              type="button"
-              title={t.chat.fileCardUndoHint}
-              aria-label={t.chat.fileCardUndoHint}
-              disabled={props.busy}
-              onClick={() => props.onUndo(props.record.id)}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-                padding: "2px var(--space-2)",
-                border: "1px solid var(--color-border-subtle)",
-                borderRadius: "var(--radius-sm)",
-                background: "transparent",
-                color: props.busy ? "var(--color-text-tertiary)" : "var(--color-text-secondary)",
-                font: "inherit",
-                fontSize: "var(--font-size-sm)",
-                cursor: props.busy ? "default" : "pointer",
-                flex: "0 0 auto",
-              }}
-            >
-              <Icon name="undo-2" size={11} strokeWidth={1.8} />
-              {t.chat.fileCardUndo}
-            </button>
-          ))}
-      </div>
-      {/* 收起态也露出网页行（用户裁决）：文件账里的与旁路的都直接可见、可点 */}
-      {hasWeb && !shown && webSection(false)}
-      {shown && (
-        <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
-          {fileRows.map((change) => {
-            const parts = pathParts(change.path, props.cwd);
-            const clickable = props.onOpenFile !== undefined;
-            return (
-              <button
-                key={change.path}
-                type="button"
-                disabled={!clickable}
-                title={clickable ? undefined : undefined}
-                onClick={() => props.onOpenFile?.(change.path)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "var(--space-2)",
-                  minWidth: 0,
-                  width: "100%",
-                  padding: "2px 0",
-                  border: 0,
-                  background: "transparent",
-                  color: "inherit",
-                  font: "inherit",
-                  textAlign: "left",
-                  cursor: clickable ? "pointer" : "default",
-                }}
-              >
-                <span style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}>
-                  <Icon name="file-text" size={12} strokeWidth={1.8} />
-                </span>
-                <span style={{ minWidth: 0, display: "flex", gap: "var(--space-1)", flex: "1 1 auto" }}>
-                  <span style={{ fontWeight: 600, color: "var(--color-text-primary)", whiteSpace: "nowrap" }}>
-                    {parts.name}
-                  </span>
-                  {parts.dir !== "" && <span style={SLOT_DIR}>{parts.dir}</span>}
-                </span>
-                <Stats added={change.added} removed={change.removed} />
-              </button>
-            );
-          })}
-          {hasWeb && webSection(true)}
-        </div>
+          <span className="ft-name">{t.chat.fileRowsMore(rows.length - shown.length)}</span>
+        </button>
       )}
+      {batch !== undefined && <WebBatchRow count={batch} />}
     </div>
   );
 }
 
-/** 旁路标记的槽位：小字、三级灰，不参与 rtl 折叠（它是固定文案，不是路径）。 */
-const SLOT_MARK: React.CSSProperties = {
-  fontSize: "var(--font-size-sm)",
-  color: "var(--color-text-tertiary)",
-  whiteSpace: "nowrap",
-  flex: "0 0 auto",
-};
+/** 灰字尾巴：改了几行（不上色——颜色只给「等你」）；已撤销的写「已撤销」 */
+function ChangeTail(props: { added: number; removed: number; undone: boolean }) {
+  const t = useT();
+  if (props.undone) return <span className="ft-tail">{t.chat.fileCardUndone}</span>;
+  const parts = [props.added > 0 ? `+${props.added}` : "", props.removed > 0 ? `−${props.removed}` : ""].filter((part) => part !== "");
+  return parts.length === 0 ? null : <span className="ft-tail">{parts.join(" ")}</span>;
+}
+
+/** 改过的文件一行：点名字去审查面板看 diff；悬停出「撤销这一轮的文件改动」 */
+function ChangedRow(props: {
+  change: FileTurnView["changes"][number];
+  cwd: string | null;
+  undone: boolean;
+  onOpenFile?: (path: string) => void;
+  onUndo: (() => void) | null;
+}) {
+  const t = useT();
+  const parts = pathParts(props.change.path, props.cwd);
+  const open = props.onOpenFile;
+  return (
+    <div className="ft-row">
+      <span className="ft-icon">
+        <Icon name="file-text" size={12} strokeWidth={1.8} />
+      </span>
+      <button type="button" className="ft-name" disabled={open === undefined} title={props.change.path} onClick={() => open?.(props.change.path)}>
+        {parts.name}
+      </button>
+      <span className="ft-trail row-trailing">
+        <ChangeTail added={props.change.added} removed={props.change.removed} undone={props.undone} />
+        {props.onUndo !== null && <RowHoverAction icon="undo-2" title={t.chat.fileCardUndoHint} onClick={props.onUndo} className="row-hover-act ft-act" />}
+      </span>
+    </div>
+  );
+}
 
 /**
- * 轮尾产物行（.html / .htm / .svg）：左图标、名称 + 类型「网页」（zcode 参考的
- * 形态），末端两个按钮——「在 Orbita 浏览器打开」（网页产物的默认出口，沙盒里
- * 还能开着 DevTools 看）与「打开文件所在位置」。主进程按会话文件账白名单校验
- * （changes 与旁路 webArtifacts 都算）。
- *
- * scripted = 旁路产物（脚本生成）：行内标「脚本生成 · 仅可打开」——它不在文件
- * 账里、不参与撤销，这是卡片上如实交代的两件事。
- *
- * 「在 orbita 打开」不放行时（不在本会话的目录里、文件已不在、链接指向别的类型……），行下一行说清楚
- * 原因；以前失败只进 console，用户点了没反应。「打开文件位置」不受影响。
+ * 网页一行（.html / .htm / .svg）：点名字在 Orbita 浏览器打开（网页产物的默认出口，沙盒里还能开 DevTools）；
+ * 悬停出「打开文件位置」。主进程按会话文件账白名单校验（changes 与旁路 webArtifacts 都算）。
+ * scripted = 旁路产物（脚本生成）：尾巴写「脚本生成」——它不在文件账里、不参与撤销。
+ * 打不开时（不在本会话的目录里、文件已不在……）行下一行说清楚原因，不让用户点了没反应。
  */
-function ArtifactRow(props: { path: string; cwd: string | null; sessionId: string; scripted?: boolean }) {
+function ArtifactRow(props: {
+  path: string;
+  cwd: string | null;
+  sessionId: string;
+  scripted?: boolean;
+  undone: boolean;
+  onUndo: (() => void) | null;
+}) {
   const t = useT();
   const parts = pathParts(props.path, props.cwd);
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -308,65 +168,28 @@ function ArtifactRow(props: { path: string; cwd: string | null; sessionId: strin
       console.error("[file-card] 定位文件失败", cause);
     });
   };
-  const button: React.CSSProperties = {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 4,
-    padding: "2px var(--space-2)",
-    border: "1px solid var(--color-border-subtle)",
-    borderRadius: "var(--radius-sm)",
-    background: "transparent",
-    color: "var(--color-text-secondary)",
-    font: "inherit",
-    fontSize: "var(--font-size-sm)",
-    cursor: "pointer",
-    whiteSpace: "nowrap",
-  };
   return (
-    <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0 }}>
-        <span style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}>
+    <>
+      <div className="ft-row">
+        <span className="ft-icon">
           <Icon name="globe" size={12} strokeWidth={1.8} />
         </span>
-        <span style={{ minWidth: 0, display: "flex", gap: "var(--space-1)", flex: "1 1 auto" }}>
-          <span style={{ fontWeight: 600, color: "var(--color-text-primary)", whiteSpace: "nowrap" }}>
-            {parts.name}
-          </span>
-          <span style={{ ...SLOT_DIR, flex: "0 0 auto" }}>{t.chat.fileCardWebPage}</span>
-          {props.scripted === true && <span style={SLOT_MARK}>{t.chat.fileCardScripted}</span>}
-          {parts.dir !== "" && <span style={SLOT_DIR}>{parts.dir}</span>}
+        <button type="button" className="ft-name" title={`${t.chat.openInOrbita} · ${props.path}`} onClick={openInBrowser}>
+          {parts.name}
+        </button>
+          <span className="ft-trail row-trailing">
+          {props.scripted === true ? <span className="ft-tail">{t.chat.fileCardScripted}</span> : props.undone && <span className="ft-tail">{t.chat.fileCardUndone}</span>}
+          <RowHoverAction icon="folder-open" title={t.chat.revealArtifact} onClick={reveal} className="row-hover-act ft-act" />
+          {props.onUndo !== null && <RowHoverAction icon="undo-2" title={t.chat.fileCardUndoHint} onClick={props.onUndo} className="row-hover-act ft-act" />}
         </span>
-        <button type="button" style={button} onClick={openInBrowser} title={t.chat.openInOrbita}>
-          <Icon name="arrow-up-right" size={11} strokeWidth={1.8} />
-          {t.chat.openInOrbita}
-        </button>
-        <button type="button" style={button} onClick={reveal} title={t.chat.revealArtifact}>
-          <Icon name="folder-open" size={11} strokeWidth={1.8} />
-          {t.chat.revealArtifact}
-        </button>
       </div>
       {refusal !== null && (
-        // 拒绝原因：图标 + 文字（颜色只是第二信号），与文件名左缘对齐（左图标 12px + 间距）
-        <div
-          role="status"
-          style={{
-            display: "flex",
-            gap: "var(--space-1)",
-            alignItems: "flex-start",
-            paddingLeft: "calc(12px + var(--space-2))",
-            fontSize: "var(--font-size-sm)",
-            color: "var(--color-danger)",
-            overflowWrap: "anywhere",
-          }}
-        >
-          {/* 图标钉在第一行的行高里居中：原因折成两行时不悬在两行中间 */}
-          <span style={{ display: "inline-flex", alignItems: "center", height: "1lh", flex: "0 0 auto" }}>
-            <Icon name="triangle-alert" size={11} strokeWidth={2} />
-          </span>
+        <div role="status" className="ft-refusal">
+          <Icon name="triangle-alert" size={11} strokeWidth={2} />
           <span>{refusal}</span>
         </div>
       )}
-    </div>
+    </>
   );
 }
 

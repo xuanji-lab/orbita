@@ -12,7 +12,7 @@
  */
 import { isBookkeepingTool } from "../../../../shared/goal.ts";
 import type { ProcessStep, ToolCallUnit, ToolResultIndex, TurnProcessUnit } from "./tool-results.ts";
-import { rollupToolKey, thinkingPreview } from "./tool-results.ts";
+import { rollupToolKey, stepTime, thinkingPreview } from "./tool-results.ts";
 
 /** 97% 的间隔在这之内；再长才算「比平时久」 */
 export const SLOW_GAP_MS = 28_000;
@@ -20,8 +20,6 @@ export const SLOW_GAP_MS = 28_000;
 export const TAIL_AFTER_MS = 5_000;
 /** 现场块里最近完成的几步（再多就是在刷屏） */
 export const TRAIL_KEEP = 3;
-/** 章节里平铺几步，多的收成「还有 N 步」 */
-export const CHAPTER_STEPS_SHOWN = 4;
 
 /** 块里的全部工具调用（工具组摊开），按发生顺序 */
 export function processCalls(steps: readonly ProcessStep[]): ToolCallUnit[] {
@@ -63,7 +61,10 @@ export function processCounts(
   skills: ReadonlyArray<{ slug: string; name: string }> = [],
 ): ProcessCounts {
   // 写计划不是干活的一步：它是记账（计划本身在右栏「这条任务 › 进度」），不进步数与次数
-  const calls = processCalls(steps).filter((call) => !isBookkeepingTool(call.toolName));
+  // 派活、给子会话回话也不算步：它们在摘要里按种类数（「派了 3 件」「回了 1 句」），不和读、跑命令混着数
+  const calls = processCalls(steps).filter(
+    (call) => !isBookkeepingTool(call.toolName) && call.toolName !== "delegate" && call.toolName !== "reply_subsession",
+  );
   const by = new Map<string, number>();
   const files = new Set<string>();
   let failed = 0;
@@ -209,7 +210,7 @@ export function processLive(
   // 在想：从最后一个事件（步的时间戳、工具落定）算起
   let since: number | null = null;
   for (const step of unit.steps) {
-    const ts = step.kind === "toolGroup" ? (step.calls.at(-1)?.timestamp ?? null) : step.timestamp;
+    const ts = stepTime(step);
     if (ts !== null && (since === null || ts > since)) since = ts;
   }
   for (const call of finished) {

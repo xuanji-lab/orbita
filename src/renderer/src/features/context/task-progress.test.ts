@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolTranscriptItem, TranscriptItem } from "@shared/transcript";
-import { chapterTitle, liveTail, settledEnd, stepClockFrom, stepDisplay, taskHeadState, turnDigests } from "./task-progress.ts";
+import { chapterTitle, liveTail, settledEnd, stepClockFrom, stepDisplay, taskHeadState, turnDigests, waitsOnYou } from "./task-progress.ts";
 import { planTimeline, planView, type PlanView } from "./plan-timeline.ts";
 
 /** 当前这张计划（面板头一行与计时吃的形状） */
@@ -237,5 +237,19 @@ describe("chapterTitle（面板里一章的标题：别把看不懂的英文思�
   test("正文旁白（say）永远用：语言由回复语言规则负责；没有标题 = null", () => {
     assert.equal(chapterTitle({ title: "Reading the files", source: "say" }, "先做第 3 步"), "Reading the files");
     assert.equal(chapterTitle({ title: null, source: "tools" }, "先做第 3 步"), null);
+  });
+});
+
+describe("waitsOnYou：在等的步等的是不是你（等你 = 橙点，等别的 = 灰字）", () => {
+  test("没写等什么 = 默认等你；写了「你」/ you 的是等你", () => {
+    assert.equal(waitsOnYou(undefined), true);
+    assert.equal(waitsOnYou(""), true);
+    assert.equal(waitsOnYou("等你验"), true);
+    assert.equal(waitsOnYou("waiting for your review"), true);
+  });
+  test("等机器、等下载、等别的会话：不是等你", () => {
+    assert.equal(waitsOnYou("等机器上线"), false);
+    assert.equal(waitsOnYou("等下载完"), false);
+    assert.equal(waitsOnYou("waiting for the build"), false);
   });
 });

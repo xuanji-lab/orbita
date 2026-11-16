@@ -20,6 +20,8 @@ export function ImageThumb(props: {
   caption?: boolean;
   onRemove?: () => void;
   removeLabel?: string;
+  /** 对话流里给用户看的图（show_image）：不描边——图本身就是结果，不再套框（2026-11-17 对话流降噪） */
+  bare?: boolean;
 }) {
   const named = props.name !== "";
   return (
@@ -39,7 +41,7 @@ export function ImageThumb(props: {
             height: "100%",
             padding: 0,
             borderRadius: "var(--radius-md)",
-            border: "1px solid var(--color-border-subtle)",
+            border: props.bare === true ? "none" : "1px solid var(--color-border-subtle)",
             overflow: "hidden",
             background: "var(--color-bg-muted)",
             cursor: "zoom-in",
