@@ -193,8 +193,6 @@ export const ipcChannels = {
   sessionPin: "session:pin",
   /** 星标：价值标记，不参与排序（排序只认 pinned）；消费者是侧栏标识与筛选 chip */
   sessionStar: "session:star",
-  /** 完成状态：open → done/done_with_todos 记关闭时刻，reopen 清空；消费者是侧栏菜单/标识、会话头部按钮与筛选 chip */
-  sessionSetCompletion: "session:set-completion",
   /**
    * 意图召回的会话级开关（实验功能 intent-system）：载荷 (sessionId, boolean)，回 void。
    * 只落 meta（intentEnabled），下一轮开轮时主进程现读现装配；输入框旁的小开关用。

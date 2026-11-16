@@ -699,21 +699,6 @@ export class SessionStore {
   }
 
   /**
-   * 完成状态：翻到 done / done_with_todos 的那一刻记下关闭时刻，reopen（回 open）
-   * 时清掉——closedAt 与 completion 同进退，不留「open 却带着关闭时刻」的半态。
-   * **同态幂等**：已是 done 再设 done 不刷新关闭时刻，「什么时候干完的」是历史
-   * 事实，不是最后一次点击。非 open 两态之间切换（done → done_with_todos）算一次
-   * 真实的翻档，刷新；界面只产生 open ↔ done，done_with_todos 只在旧会话里有。
-   */
-  setCompletion(id: string, completion: SessionCompletion): Promise<void> {
-    return this.update(id, (meta) =>
-      (meta.completion ?? "open") === completion
-        ? null
-        : { completion, closedAt: completion === "open" ? null : Date.now() },
-    );
-  }
-
-  /**
    * 未读标记（后台跑完还没看，2026-10-10 落盘）：`{ at, failed }` 标未读，null 清。
    * at / failed 由 renderer 在落定那一刻铸——什么时候跑完的、是不是挂了，是落定时
    * 的事实不是写盘时的事实。不做幂等判断：renderer 只在标 / 清那两次调，重复写

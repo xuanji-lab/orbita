@@ -9,7 +9,6 @@ import { ipcChannels } from "../../shared/agent-ipc.ts";
 import {
   parseSessionUnread,
   transcriptToMarkdown,
-  type SessionCompletion,
   type SessionMoveResult,
   type SessionOlderPage,
 } from "../../shared/session.ts";
@@ -123,10 +122,6 @@ export function registerSessionIpc(
   );
   ipcMain.handle(ipcChannels.sessionStar, (_event, id: string, starred: boolean) =>
     store.setStarred(id, starred),
-  );
-  ipcMain.handle(
-    ipcChannels.sessionSetCompletion,
-    (_event, id: string, completion: SessionCompletion) => store.setCompletion(id, completion),
   );
   // 意图召回的会话级开关（实验功能 intent-system）：只落 meta，下一轮生效
   ipcMain.handle(

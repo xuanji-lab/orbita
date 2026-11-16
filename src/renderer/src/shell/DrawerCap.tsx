@@ -1,7 +1,7 @@
 import { useContext } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
-import { CapCompletion, CapSessionId, CapTitle, type CapCompletionState } from "./SessionCapsule";
+import { CapSessionId, CapTitle } from "./SessionCapsule";
 import { PanelIconButton } from "./RightPanel";
 import { ToolbarPanelSlotContext } from "./Toolbar";
 import { useHScroll } from "./h-scroll.ts";
@@ -13,19 +13,18 @@ import "./h-scroll.css";
  * 辅助对话在顶部右栏胶囊里的页头（2026-11-07 用户：「session 名字和加号应该放在顶部那个
  * bubble 里的」）：与文件 / 能力 / 选择器同一个思路——页头住胶囊，面板里只剩对话。
  *
- * 左段 = 当前激活的那条会话，写法与主会话胶囊同一套（CapTitle / CapSessionId /
- * CapCompletion，改名、复制 id、完成键的行为只有一份）；右段 = 其它停靠的标签（灰、可 ×）
+ * 左段 = 当前激活的那条会话，写法与主会话胶囊同一套（CapTitle / CapSessionId，
+ * 改名、复制 id 的行为只有一份）；右段 = 其它停靠的标签（灰、可 ×）
  * + 「+」进选择器。标签多了在胶囊里横向滚动（h-scroll.ts：Shift+滚轮与普通竖滚轮都转横向、
  * 被裁的一侧淡出）。激活的标签住在左段当标题，所以它不在右段里——点右段一枚标签 = 与
  * 当前激活的互换位置。窄到放不下时：左段标题先省略号，标签区封顶占一半宽，「+」永远可见。
  */
 export function DrawerCap(props: {
-  /** 当前激活标签的信息：标题、短 id、改名、完成键；新任务占位没有 id（短 id / 改名 / 完成都不摆） */
+  /** 当前激活标签的信息：标题、短 id、改名；新任务占位没有 id（短 id / 改名都不摆） */
   active: {
     title: string;
     shortId: string | null;
     onRename?: ((title: string) => void) | undefined;
-    completion: CapCompletionState | null;
   };
   /** 右段的其它标签（已排除激活的），按停靠顺序 */
   others: { tab: DockedTab; label: string }[];
@@ -64,7 +63,6 @@ export function DrawerCap(props: {
         </button>
       </div>
       <span className="cap-grow" aria-hidden="true" />
-      {props.active.completion !== null && <CapCompletion completion={props.active.completion} />}
       {props.others.length > 0 && <span className="cap-vsep" />}
       {props.others.length > 0 && (
         <div

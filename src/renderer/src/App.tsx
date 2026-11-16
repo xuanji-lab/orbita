@@ -1365,18 +1365,8 @@ export function App() {
         title={capsuleTitle}
         tag={mainAgentWorkspace === undefined ? undefined : t.sidebar.mainAgent}
         shortId={capsuleShortId}
-        // 主智能体的名字就是工作区名（改名去侧栏改工作区）；它是常驻的，也没有「收工」
+        // 主智能体的名字就是工作区名（改名去侧栏改工作区）
         onRename={mainOpenId === "" || mainAgentWorkspace !== undefined ? undefined : (title) => session.renameSession(mainOpenId, title)}
-        completion={
-          mainOpenId !== "" && mainAgentWorkspace === undefined
-            ? {
-                state: mainOpenMeta?.completion ?? "open",
-                busy: session.phase !== "idle",
-                onMark: session.markDone,
-                onSet: (next) => session.setCompletionSession(mainOpenId, next),
-              }
-            : null
-        }
         subChip={hasSubSessions ? { count: subSessionChildren.length, waiting: waitingOnYou, interrupted: interruptedChildren } : null}
         onOpenSubSessions={openSubSessionsList}
         crumb={

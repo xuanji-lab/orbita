@@ -20,7 +20,7 @@ import {
 } from "./sidebar-selection.ts";
 import { api } from "../api";
 import type { ChatSession } from "../features/chat/useChatSession";
-import { childSessions, isSessionDone, rootSessions, type SessionMeta } from "@shared/session";
+import { childSessions, rootSessions, type SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 import {
   SIDEBAR_AGE_CHOICES,
@@ -32,7 +32,6 @@ import {
 } from "@shared/settings";
 import { SETTINGS_TABS, type SettingsTab } from "../features/settings/settings-tabs.ts";
 import { describeList } from "../features/chat/load-state.ts";
-import { nextCompletion } from "./completion-mark.ts";
 import { rowStatusIcon } from "./row-status.ts";
 import { aggregateRunStates, runStateLabel, runStateOf, type SessionRunState } from "../features/notify/completion-notice.ts";
 import { StatusPie } from "./StatusPie";
@@ -42,10 +41,7 @@ import { sessionAgeLabel } from "./relative-time.ts";
 import { useMinuteTick } from "./use-minute-tick.ts";
 import { matchesSessionQuery, workspaceRows } from "./workspace-rows.ts";
 import { useChannelStatuses } from "../features/chat/useChannelSummaries.ts";
-import {
-  effectiveSidebarFilters,
-  type StatusFilter,
-} from "./sidebar-filters.ts";
+import { effectiveSidebarFilters } from "./sidebar-filters.ts";
 import {
   TASKS_FOLD_KEY,
   foldKeyForWorkspace,
@@ -69,15 +65,8 @@ import type { Messages } from "../messages-en.ts";
  */
 export type Overlay = "settings" | "board" | null;
 
-/**
- * 闲置建议线：open 且未归档、最后一次活动超过这个天数的会话，行内轻提示
- * 「Mark done?」。**纯派生不落盘**——建议只是当下的一句提醒，不是会话状态；
- * 每次渲染按 updatedAt 现算，不弹通知、不加角标，hover 才出现。
- */
-const IDLE_SUGGEST_DAYS = 7;
 /** 子会话行的菜单里不给的项（见 SessionRow 的 menuItems） */
-const CHILD_ROW_HIDDEN: ReadonlySet<string> = new Set(["pin", "move", "archive", "archive-done"]);
-const IDLE_SUGGEST_MS = IDLE_SUGGEST_DAYS * 24 * 60 * 60 * 1000;
+const CHILD_ROW_HIDDEN: ReadonlySet<string> = new Set(["pin", "move", "archive"]);
 
 /**
  * 状态饼的 tooltip：见 completion-notice.ts 的 runStateLabel（侧栏行与铃铛清单
@@ -95,14 +84,11 @@ const SESSION_FILTER_ALLOW: WsAllow = { tasks: true, global: false };
  * 不给一条对不上当前筛选的提示。
  */
 function filterEmptyText(
-  status: StatusFilter,
-  starredOnly: boolean,
   /** 非 null = 时间范围开着，且去掉它之后本来是有会话的（范围才是「扑空」的原因） */
   emptiedByAge: SidebarAgeDays | null,
   t: Messages,
 ): string {
   if (emptiedByAge !== null) return t.sidebar.emptyInRange(emptiedByAge);
-  if (status === "done") return starredOnly ? t.sidebar.emptyDoneStarred : t.sidebar.emptyDone;
   return t.sidebar.emptyStarred;
 }
 
@@ -196,7 +182,7 @@ export function Sidebar(props: {
    */
   const filterRowRef = useRef<HTMLDivElement | null>(null);
   const [filterLevel, setFilterLevel] = useState(0);
-  const chipFullWidths = useRef<(number | null)[]>([null, null, null, null, null]);
+  const chipFullWidths = useRef<(number | null)[]>([null, null]);
   const chipWidthKey = useRef<{ t: Messages; aged: boolean } | null>(null);
   useLayoutEffect(() => {
     const row = filterRowRef.current;
@@ -204,7 +190,7 @@ export function Sidebar(props: {
     const aged = props.ageDays !== null;
     if (chipWidthKey.current === null || chipWidthKey.current.t !== t || chipWidthKey.current.aged !== aged) {
       chipWidthKey.current = { t, aged };
-      chipFullWidths.current = [null, null, null, null];
+      chipFullWidths.current = [null, null];
       if (filterLevel !== 0) {
         // 完整态才量得到完整宽度：先回 0 档，下一轮（依赖 filterLevel 变）再量
         setFilterLevel(0);
@@ -242,11 +228,6 @@ export function Sidebar(props: {
    * Settings 是另一块列表，都不受（也不该隐形地受）筛选。
    */
   const [starredOnly, setStarredOnly] = useState(false);
-  /**
-   * 完成状态筛选：单选组（All / Done 互斥，点一个顶掉另一个）。
-   * 默认 All = 无过滤；与 Starred 是两条独立的开关，叠加生效。
-   */
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   /**
    * 「以前的会话」子视图开在哪个工作区上（工作区下面最后那一行点进来的）；null = 没开。
    * 与「已归档」同一种子视图：换掉主列表区、标题旁带返回键，不弹窗。不持久化。
@@ -392,7 +373,6 @@ export function Sidebar(props: {
    * 有效值过 effectiveSidebarFilters（全是默认值时 null = 不过滤），见 sidebar-filters.ts。
    */
   const filters = effectiveSidebarFilters({
-    status: statusFilter,
     starredOnly,
     ageDays,
   });
@@ -401,7 +381,6 @@ export function Sidebar(props: {
   const beforeAge = earlierBase.filter((m) => {
     if (!matchesSessionQuery(m, earlierQuery)) return false;
     if (filters === null) return true;
-    if (filters.status === "done" && !isSessionDone(m)) return false;
     if (filters.starredOnly && m.starred !== true) return false;
     return true;
   });
@@ -673,7 +652,7 @@ export function Sidebar(props: {
       {/**
         筛选区：会话浏览的过滤 chips。状态是单选组（All / Done 互斥，
         点一个顶掉另一个），Starred 是叠加开关——两者正交，可组合出
-        「已完成且星标」这样的视图。2026-11-17 起**只在「以前的会话」那一页**：主列表只剩没了结的几行活，
+        「已完成且星标」这样的视图。2026-11-17 手动「完成」整个去掉（用户：伪需求），「全部 / 已完成」一组随之删掉。2026-11-17 起**只在「以前的会话」那一页**：主列表只剩没了结的几行活，
         筛选无从谈起。「进行中」2026-10-24 去掉（用户：「似乎完全没用」）。
       */}
       {earlierWs !== null && earlierBase.length > 0 && (
@@ -682,26 +661,8 @@ export function Sidebar(props: {
           style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, overflow: "hidden" }}
         >
           <Chip
-            icon="list"
-            compact={chipCompactAt(filterLevel, 0)}
-            active={statusFilter === "all"}
-            title={t.sidebar.filterAllTip}
-            onClick={() => setStatusFilter("all")}
-          >
-            {t.sidebar.filterAll}
-          </Chip>
-          <Chip
-            icon="check"
-            compact={chipCompactAt(filterLevel, 1)}
-            active={statusFilter === "done"}
-            title={t.sidebar.filterDoneTip}
-            onClick={() => setStatusFilter("done")}
-          >
-            {t.sidebar.filterDone}
-          </Chip>
-          <Chip
             icon="star"
-            compact={chipCompactAt(filterLevel, 2)}
+            compact={chipCompactAt(filterLevel, 0)}
             active={starredOnly}
             title={t.sidebar.filterStarredTip}
             onClick={() => setStarredOnly((value) => !value)}
@@ -738,8 +699,8 @@ export function Sidebar(props: {
             trigger={({ toggle }) => (
               <Chip
                 icon="clock"
-                compact={chipCompactAt(filterLevel, 3)}
-                chevron={!chipCompactAt(filterLevel, 3)}
+                compact={chipCompactAt(filterLevel, 1)}
+                chevron={!chipCompactAt(filterLevel, 1)}
                 active={ageDays !== null}
                 title={ageDays === null ? t.sidebar.filterAgeTip : t.sidebar.filterAgeChoice(ageDays)}
                 onClick={toggle}
@@ -884,7 +845,7 @@ export function Sidebar(props: {
             <Empty icon="list-filter">
               {filters === null
                 ? t.sidebar.earlierNoMatch
-                : filterEmptyText(statusFilter, starredOnly, ageDays !== null && beforeAge.length > 0 ? ageDays : null, t)}
+                : filterEmptyText(ageDays !== null && beforeAge.length > 0 ? ageDays : null, t)}
             </Empty>
           ) : (
             scoped.map((meta) => (
@@ -1711,7 +1672,7 @@ function SessionRow(props: {
   const t = useT();
   const { meta, session } = props;
   const [editing, setEditing] = useState(false);
-  const [step, setStep] = useState<"main" | "move" | "delete" | "archive" | "archive-done">(
+  const [step, setStep] = useState<"main" | "move" | "delete" | "archive">(
     "main",
   );
   /**
@@ -1726,7 +1687,6 @@ function SessionRow(props: {
   const children = childSessions(session.sessions, meta.id);
   // 状态饼（sessionRunState，与右下角铃铛清单同一份真源）
   const bar = props.bar !== undefined ? props.bar : runStateOf(session, meta);
-  const done = isSessionDone(meta);
   /**
    * 行首状态槽：subRunning > pinned > 空。运行 / 未读 / 失败已归状态饼，槽里只剩
    * 静态标记。优先级与理由在 `row-status.ts`（纯函数 + 测试）。`null` = 这一
@@ -1741,17 +1701,6 @@ function SessionRow(props: {
     },
     t,
   );
-  // 批量归档的目标数（清理入口随处可点，但只收已完成且未归档的）。子会话不参与
-  // 归档（session.ts 的契约），`archiveDoneSessions` 的目标同样已过 rootSessions
-  // 过滤——这里的显示数必须与它的实际目标数一致，否则按钮上写的数比真做的多
-  const doneCount = rootSessions(session.sessions).filter(
-    (m) => isSessionDone(m) && !m.archived,
-  ).length;
-  /**
-   * 闲置建议：open 且未归档、最后一次活动超过 7 天——纯派生（每次渲染按
-   * updatedAt 现算，不落盘），hover 才出现的一个轻提示，不弹通知不加角标。
-   */
-  const idleSuggested = !done && !meta.archived && Date.now() - meta.updatedAt > IDLE_SUGGEST_MS;
   // 行尾常显的「多久没动了」（按最后活动 updatedAt，格式见 sessionAgeLabel）；每分钟随 Sidebar 重渲染刷新
   const ageLabel = sessionAgeLabel(meta.updatedAt, Date.now(), t);
   // 删父连带删子（session.ts 的级联契约）：删除确认要把这个后果说出来，不能只
@@ -1822,17 +1771,7 @@ function SessionRow(props: {
               onSelect: () => session.archiveSession(meta.id, true),
             },
           ]
-      : step === "archive-done"
-        ? [
-            { id: "cancel", label: t.common.cancel, icon: "x", keepOpen: true, onSelect: () => setStep("main") },
-            {
-              id: "confirm",
-              label: t.sidebar.archiveDoneTasks(doneCount),
-              icon: "archive",
-              onSelect: () => session.archiveDoneSessions(),
-            },
-          ]
-        : step === "move"
+      : step === "move"
         ? moveTargetItems(
             t,
             session.workspaces,
@@ -1880,19 +1819,6 @@ function SessionRow(props: {
                   keepOpen: true,
                   onSelect: () => setStep("archive"),
                 },
-            // 批量清理：收走全部已完成的会话。入口随处可点（清理不挑入口），但
-            // 数量与后果写在文案里，且与删除一样走两段式——批量动作先讲清楚再动。
-            ...(doneCount > 0
-              ? [
-                  {
-                    id: "archive-done",
-                    label: t.sidebar.archiveAllDone(doneCount),
-                    icon: "archive" as const,
-                    keepOpen: true,
-                    onSelect: () => setStep("archive-done"),
-                  },
-                ]
-              : []),
             {
               id: "delete",
               label: t.sidebar.deleteTask,
@@ -1960,11 +1886,6 @@ function SessionRow(props: {
               <Icon name="star" size={13} strokeWidth={1.8} fill />
             </span>
           )}
-          {done && (
-            <span className="task-row-mark" style={{ color: "var(--color-accent)" }}>
-              <Icon name="check" size={13} strokeWidth={3} />
-            </span>
-          )}
           <span className="task-row-age">{ageLabel}</span>
         </span>
         <span className="task-row-acts">
@@ -1988,34 +1909,6 @@ function SessionRow(props: {
             }}
           >
             <Icon name="star" size={13} strokeWidth={1.8} fill={meta.starred === true} />
-          </IconButton>
-          {/**
-            完成标记：**与星标同一条行内标记规则**（wafo 2026-09-22，「之后的标也沿用这个逻辑」）：
-            hover / 键盘聚焦时浮出描边勾（tertiary），点一下即落定；落定后静止层常显、accent；再点 = Reopen。
-            图标是单纯的 `check`，不是圈勾——行首状态槽不再画完成，勾只在这里出现一次。
-            tooltip 兼任闲置建议：超过 7 天没动静的任务，建议写在这个开关的 tooltip 里，
-            不另摆一个建议按钮。旧会话的 done_with_todos 与 done 同画——完成就是完成。
-          */}
-          <IconButton
-            label={done ? t.sidebar.reopen : t.sidebar.markDone}
-            title={
-              done
-                ? t.sidebar.doneTip
-                : idleSuggested
-                  ? t.sidebar.idleSuggest(IDLE_SUGGEST_DAYS)
-                  : t.sidebar.markDone
-            }
-            size={20}
-            onClick={() =>
-              session.setCompletionSession(meta.id, nextCompletion(meta.completion ?? "open"))
-            }
-            className="reveal"
-            style={{
-              borderRadius: "var(--radius-xs)",
-              color: done ? "var(--color-accent)" : "var(--color-text-tertiary)",
-            }}
-          >
-            <Icon name="check" size={13} strokeWidth={done ? 3 : 1.8} />
           </IconButton>
           <Menu
             items={menuItems}

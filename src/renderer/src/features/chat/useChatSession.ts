@@ -87,11 +87,9 @@ import { reconcileThinkingLevel, resolveThinkingLevel } from "./thinking-choice.
 import { modelRequiredText } from "./model-required.ts";
 import {
   childSessions,
-  rootSessions,
   SESSION_PAGE_RECORDS,
   type ChannelMarkRecord,
   type CompactedRecord,
-  type SessionCompletion,
   type SessionMeta,
   type SessionMoveResult,
 } from "@shared/session";
@@ -332,13 +330,6 @@ export interface ChatSession {
   /** 星标：价值标记，与置顶正交——不置顶，只给侧栏标识与筛选 */
   starSession: (id: string, starred: boolean) => void;
   /**
-   * 完成状态：done / done_with_todos 记关闭时刻，reopen（回 open）清空。
-   * 纯 meta 操作——不碰 transcript、不起 runtime，只读会话同样可用。
-   */
-  setCompletionSession: (id: string, completion: SessionCompletion) => void;
-  /** 把所有已完成且未归档的会话批量归档（清理动作，一次计算目标、一次刷新） */
-  archiveDoneSessions: () => void;
-  /**
    * 带着会话目标新开一单（右栏进度「目标」上的动作）：cwd / 归属跟随来源会话，种子由调用方按来源标题现拼。
    */
   startGoalTask: (sourceSessionId: string, makeSeed: (sourceTitle: string | null) => string | null) => void;
@@ -358,8 +349,6 @@ export interface ChatSession {
   /** 导出成 Markdown；取消时什么都不做 */
   exportSession: (id: string) => void;
   removeSession: (id: string) => void;
-  /** 点「完成」：只把会话标完成（收尾扫描 2026-11-16 删了） */
-  markDone: () => void;
   /** 轮尾文件账（fileTurn 事件 + 盘上种子）——轮尾卡片的数据源 */
   fileTurns: readonly FileTurnView[];
   /** 回退界碑（盘上种子）——「已回退」标记行与还原卡 */
@@ -561,8 +550,6 @@ export interface SessionEngine {
   readonly renameSession: (id: string, title: string) => void;
   readonly pinSession: (id: string, pinned: boolean) => void;
   readonly starSession: (id: string, starred: boolean) => void;
-  readonly setCompletionSession: (id: string, completion: SessionCompletion) => void;
-  readonly archiveDoneSessions: () => void;
   readonly archiveSession: (id: string, archived: boolean) => void;
   readonly moveSessions: (ids: readonly string[], workspaceId: string | null) => Promise<SessionMoveResult>;
   readonly exportSession: (id: string) => void;
@@ -1255,34 +1242,6 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     [refreshSessions],
   );
 
-  const setCompletionSession = useCallback(
-    (id: string, completion: SessionCompletion) => {
-      void api.session.setCompletion(id, completion).then(refreshSessions);
-    },
-    [refreshSessions],
-  );
-
-
-  /**
-   * 批量归档已完成的会话（会话菜单的清理动作）。**循环调既有 archive 通道**
-   * 而不是新开批量通道：归档是幂等的单字段写，N 次往返没有原子性问题
-   * （最坏部分成功，再点一次即收敛）；新通道要四层同步 + store 批量方法，
-   * 而它只有一个消费者，不值。目标从 sessionsRef 真值取（事件回调闭包里的
-   * 列表可能是旧的），全部落定后只刷新一次列表。
-   */
-  const archiveDoneSessions = useCallback(() => {
-    // 子会话不参与归档（session.ts 的契约：它们永不进左栏/Archived，母会话归档
-    // 与否也不影响它——子会话 PR4c 2.3）；rootSessions 过滤，不止是不显示它，
-    // 批量动作本身就不该碰它
-    const targets = rootSessions(sessionsRef.current).filter(
-      (meta) => (meta.completion ?? "open") !== "open" && !meta.archived,
-    );
-    if (targets.length === 0) return;
-    void Promise.all(targets.map((meta) => api.session.archive(meta.id, true))).then(
-      refreshSessions,
-    );
-  }, [refreshSessions]);
-
   const archiveSession = useCallback(
     (id: string, archived: boolean) => {
       void api.session.archive(id, archived).then(refreshSessions);
@@ -1406,8 +1365,6 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     renameSession,
     pinSession,
     starSession,
-    setCompletionSession,
-    archiveDoneSessions,
     archiveSession,
     moveSessions,
     exportSession,
@@ -3067,18 +3024,6 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   const entry = (viewedId !== null ? engine.states.get(viewedId) : undefined) ?? EMPTY_ENTRY;
 
   /**
-   * 点「完成」（头部按钮）：只把会话标完成。2026-11-16 起不再发收尾扫描、不再记遗留事项
-   * （用户：「做不到 proactive 的话……就是熵增……有消费者了再做」）。在跑时按钮本就禁用，这里再守一道。
-   */
-  const markDone = useCallback((): void => {
-    const id = sessionRef.current ?? opened?.id ?? null;
-    if (id === null) return;
-    const current = engine.statesRef.current.get(id);
-    if (current !== undefined && current.phase !== "idle") return;
-    engine.setCompletionSession(id, "done");
-  }, [engine, opened]);
-
-  /**
    * 只能读不能续的原因：
    * - noBook：没有 pi 本子的旧会话、还没开新的（续会话靠把本子还给 pi）；
    * - migrationFailed：迁到新内核时失败（原件没动，原因在 meta.durable.failed）。
@@ -3192,15 +3137,12 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     renameSession: engine.renameSession,
     pinSession: engine.pinSession,
     starSession: engine.starSession,
-    setCompletionSession: engine.setCompletionSession,
-    archiveDoneSessions: engine.archiveDoneSessions,
     archiveSession: engine.archiveSession,
     moveSessions: engine.moveSessions,
     branchFrom,
     exportSession: engine.exportSession,
     removeSession: engine.removeSession,
     startGoalTask,
-    markDone,
     fileTurns: entry.fileTurns,
     reverts: entry.reverts,
     undos: entry.undos,

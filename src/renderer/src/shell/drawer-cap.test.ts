@@ -24,21 +24,19 @@ test("面板里不再画自己的标签行；ChatView 去掉卡内标题行", ()
   assert.match(drawer, /<ChatView[\s\S]*?\bbareHeader\b[\s\S]*?\/>/, "辅助对话的 ChatView 没传 bareHeader");
 });
 
-test("标题信息仍可达：胶囊用主会话胶囊同一批组件（改名 / 短 id 复制 / 完成键）", () => {
+test("标题信息仍可达：胶囊用主会话胶囊同一批组件（改名 / 短 id 复制；完成键 2026-11-17 随手动「完成」一起去掉）", () => {
   assert.match(cap, /<CapTitle[\s\S]*?onRename=/, "DrawerCap 没接改名");
   assert.match(cap, /<CapSessionId /, "DrawerCap 没摆短 id");
-  assert.match(cap, /<CapCompletion /, "DrawerCap 没摆完成键");
   // 主会话胶囊是同一批组件的另一个消费者——不是复制粘贴
   assert.match(session, /<CapTitle[\s\S]*?balance/, "SessionCapsule 没用 CapTitle");
   assert.match(session, /<CapSessionId /, "SessionCapsule 没用 CapSessionId");
-  assert.match(session, /<CapCompletion /, "SessionCapsule 没用 CapCompletion");
-  // Drawer 把改名 / 完成接到抽屉槽上
+  // Drawer 把改名接到抽屉槽上
   assert.match(drawer, /renameSession\(realTab, title\)/, "Drawer 没把改名接到抽屉槽");
-  assert.match(drawer, /setCompletionSession\(realTab, next\)/, "Drawer 没把完成接到抽屉槽");
 });
 
-test("完成键只在抽屉槽确实开着这条会话时才摆（切标签那一帧不点到上一条头上）", () => {
-  assert.match(drawer, /realTab !== null && viewOpenId === realTab/);
+test("手动「完成」去掉了：两颗胶囊都不再摆完成键", () => {
+  assert.ok(!cap.includes("CapCompletion") && !session.includes("CapCompletion"));
+  assert.ok(!drawer.includes("setCompletionSession"));
 });
 
 test("胶囊里的标签区：横滚走共用 hook，「+」在滚动区外永远可见，激活的有自己的关闭出口", () => {

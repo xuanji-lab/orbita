@@ -13,7 +13,6 @@ import type {
   ModelAssignRunResult,
 } from "../../shared/model-assign.ts";
 import type {
-  SessionCompletion,
   SessionMeta,
   SessionMoveResult,
   SessionOlderPage,
@@ -59,9 +58,6 @@ export const sessionApi = {
   /** 星标：价值标记，与置顶正交——不置顶，只给侧栏标识与筛选 */
   star: (id: string, starred: boolean): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionStar, id, starred),
-  /** 完成状态：done/done_with_todos 记关闭时刻；回 open（reopen）清空。纯 meta 操作，只读会话也可用 */
-  setCompletion: (id: string, completion: SessionCompletion): Promise<void> =>
-    ipcRenderer.invoke(ipcChannels.sessionSetCompletion, id, completion),
   /** 意图召回的会话级开关（实验功能 intent-system）：只落 meta，下一轮生效 */
   setIntentEnabled: (id: string, enabled: boolean): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionSetIntentEnabled, id, enabled),

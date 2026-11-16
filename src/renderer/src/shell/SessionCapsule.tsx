@@ -4,15 +4,6 @@ import { FEATURE_ICON } from "./feature-icons.ts";
 import { waitingSummary } from "../features/chat/sub-sessions-rows.ts";
 import { InlineName } from "./InlineName";
 import { useT } from "../locale.ts";
-import type { Messages } from "../messages-en.ts";
-import type { SessionCompletion } from "@shared/session";
-
-export interface CapCompletionState {
-  state: SessionCompletion;
-  busy: boolean;
-  onMark: () => void;
-  onSet: (next: "open" | "done") => void;
-}
 
 /**
  * 会话胶囊（工具栏居中那颗，排法甲 · 地址栏式，2026-10-19 用户裁决）：固定宽，
@@ -29,11 +20,6 @@ export function SessionCapsule(props: {
   /** 短 id（前 6 位）；null = 会话还没落盘（首条消息未发），右端次要件不摆 */
   shortId: string | null;
   onRename?: (title: string) => void;
-  /**
-   * 完成入口（open → 收工，非 open → Reopen）；null = 不摆（没落盘 / 生命周期关）。
-   * 与 ChatView 页头同源的降级矩阵：扫描中转圈、在跑禁用、只读在 tooltip 说明。
-   */
-  completion: CapCompletionState | null;
   /** 左端子会话芯片；null = 留空（用户默认：不放「0」占位，可推翻） */
   /** interrupted：等你的子会话里被崩溃打断、等你点「继续」的个数（芯片与右栏列表标题同一套说法，见 waitingSummary） */
   subChip: { count: number; waiting: number; interrupted: number } | null;
@@ -42,7 +28,6 @@ export function SessionCapsule(props: {
   crumb: { title: string; onClick: () => void } | null;
 }) {
   const t = useT();
-  const completion = props.completion;
 
   return (
     <div className="cap-sess" style={{ width: "100%", height: "100%" }}>
@@ -94,15 +79,9 @@ export function SessionCapsule(props: {
         )}
       </div>
 
-      {/* 右端：短 id · 复制（悬停）· 竖线 · 收工（一直显示） */}
+      {/* 右端：短 id · 复制（悬停）。原来的「收工」键 2026-11-17 去掉（手动标完成是伪需求，用户裁决） */}
       <div className="cap-sr">
         <CapSessionId shortId={props.shortId} />
-        {completion !== null && (
-          <>
-            {props.shortId !== null && <span className="cap-vsep" />}
-            <CapCompletion completion={completion} />
-          </>
-        )}
       </div>
     </div>
   );
@@ -197,34 +176,4 @@ export function CapSessionId(props: { shortId: string | null }) {
       )}
     </>
   );
-}
-
-/**
- * 完成键（open → 收工，非 open → Reopen），一直显示——它是会话的主要出口。
- * 在跑禁用，与 ChatView 页头同口径。
- */
-export function CapCompletion(props: { completion: CapCompletionState }) {
-  const t = useT();
-  const completion = props.completion;
-  const blocked = completion.state === "open" && completion.busy;
-  return (
-    <button
-      type="button"
-      className="quiet-control cap-seg solo"
-      title={completionTitle(completion, t)}
-      aria-label={completion.state === "open" ? t.chat.markTaskDone : t.chat.reopenTask}
-      disabled={blocked}
-      aria-disabled={blocked}
-      onClick={() => (completion.state === "open" ? completion.onMark() : completion.onSet("open"))}
-    >
-      <Icon name={completion.state === "open" ? "check" : "rotate-ccw"} size={16} strokeWidth={2} />
-    </button>
-  );
-}
-
-/** 收工键的悬停说明（同 ChatView 页头的文案口径） */
-function completionTitle(completion: { state: SessionCompletion; busy: boolean }, t: Messages): string {
-  if (completion.state !== "open") return t.chat.reopenTip;
-  if (completion.busy) return t.chat.waitBeforeDone;
-  return t.chat.doneTip;
 }

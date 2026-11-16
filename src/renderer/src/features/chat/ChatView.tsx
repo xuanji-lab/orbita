@@ -238,7 +238,6 @@ import {
   deriveSessionTitle,
   type ChannelMarkRecord,
   type CompactedRecord,
-  type SessionCompletion,
   type SessionMeta,
   type TranscriptRecord,
 } from "@shared/session";
@@ -1328,12 +1327,6 @@ function ChatViewBody(props: {
       bottomSlot={
         <ComposerBar
           session={session}
-          // 用量环浮层里的「标记完成」：与头部完成入口同一道门（已落盘 + 未完成）
-          markDone={
-            openId !== "" && (openMeta?.completion ?? "open") === "open"
-              ? { onSelect: session.markDone, busy: session.phase !== "idle" }
-              : null
-          }
           starredModels={props.starredModels ?? []}
           onToggleStarModel={props.onToggleStarModel ?? (() => {})}
           onOpenProviders={props.onOpenProviders ?? (() => {})}
@@ -1650,18 +1643,6 @@ function ChatViewBody(props: {
         onTouchMoveIntent={onTouchMoveIntent}
         onPointerDownIntent={onPointerDownIntent}
         scrollToEnd={props.scrollToEnd === true ? { visible: showScrollToEnd, onClick: scrollToEnd } : null}
-        // 只要这条会话已经落盘就能标记完成——与改名同一条门槛，只读会话同样可用。
-        completion={
-          openId !== "" ? (openMeta?.completion ?? "open") : null
-        }
-        onSetCompletion={
-          openId !== ""
-            ? (next) => session.setCompletionSession(openId, next)
-            : undefined
-        }
-        // open 态点击标完成；Reopen 仍走 onSetCompletion
-        onMarkDone={openId !== "" ? session.markDone : undefined}
-        busy={session.phase !== "idle"}
         // 只要这条会话已经落盘就能改名——刚发完第一句正是最想改名的时候
         onRename={openId === "" ? undefined : (title) => session.renameSession(openId, title)}
         hideHeader={props.bareHeader === true}
@@ -2816,14 +2797,6 @@ function Pane(props: {
   title: string;
   badge: string;
   badgeTitle: string;
-  /** 当前会话的完成状态；null = 还没落盘（首条消息未发），完成入口不摆 */
-  completion: SessionCompletion | null;
-  /** 翻完成状态（Reopen 用）；没落盘时不传 */
-  onSetCompletion?: ((next: SessionCompletion) => void) | undefined;
-  /** open 态点击「完成」的回调：只标完成；不给则直接 onSetCompletion("done") */
-  onMarkDone?: (() => void) | undefined;
-  /** 会话在跑：open 态的完成按钮禁用（等这一轮说完） */
-  busy?: boolean;
   /** 有值才出现铅笔——首条消息还没发的会话还没有记录可改 */
   onRename?: ((title: string) => void) | undefined;
   /** 消息列的滚动容器：跟随/跳底逻辑在 ChatView，骨架只交出节点 */
@@ -2945,32 +2918,6 @@ function Pane(props: {
             onClick={() => setEditing(true)}
           >
             <Icon name="pencil-line" size={13} />
-          </IconButton>
-        )}
-        {/**
-          完成入口（第二处，与侧栏菜单同源）：open → 标完成，非 open → Reopen；在跑时禁用。
-        */}
-        {props.completion !== null && props.onSetCompletion !== undefined && (
-          <IconButton
-            size="var(--titlebar-control)"
-            label={
-              props.completion === "open" ? t.chat.markTaskDone : t.chat.reopenTask
-            }
-            title={
-              props.completion === "open"
-                ? props.busy === true
-                  ? t.chat.waitBeforeDone
-                  : t.chat.doneTip
-                : t.chat.reopenTip
-            }
-            disabled={props.completion === "open" && props.busy === true}
-            onClick={() =>
-              props.completion === "open"
-                ? (props.onMarkDone ?? (() => props.onSetCompletion?.("done")))()
-                : props.onSetCompletion?.("open")
-            }
-          >
-            <Icon name={props.completion === "open" ? "check" : "rotate-ccw"} size={13} />
           </IconButton>
         )}
         <span
@@ -3111,8 +3058,6 @@ function ComposerBar(props: {
   onOpenProviders: () => void;
   /** 意图召回的会话级开关（实验功能）：null = 不渲染（实验关 / 子会话 / 新任务） */
   intentToggle: { on: boolean; onToggle: (next: boolean) => void } | null;
-  /** 用量环浮层里的「标记完成」（见 UsageRing）；null = 不给 */
-  markDone: { onSelect: () => void; busy: boolean } | null;
   /** 用量环浮层里的「查看上下文」；null = 不给（非主槽） */
   onOpenContext: (() => void) | null;
 }) {
@@ -3371,7 +3316,7 @@ function ComposerBar(props: {
           </Chip>
         )}
       />
-      <UsageRing session={session} markDone={props.markDone} onOpenContext={props.onOpenContext} />
+      <UsageRing session={session} onOpenContext={props.onOpenContext} />
     </>
   );
 }
@@ -3390,11 +3335,6 @@ function ComposerBar(props: {
  */
 function UsageRing(props: {
   session: ChatSession;
-  /**
-   * 「标记完成」入口（压缩 ≥ 2 次时浮层里给）。null = 不给这一项、只留提示文字：
-   * 会话生命周期实验开关关着、会话还没落盘、或已经是完成态。
-   */
-  markDone: { onSelect: () => void; busy: boolean } | null;
   /** 「查看上下文」：打开右栏上下文面板（分项之后、压缩之前）；null = 不给 */
   onOpenContext: (() => void) | null;
 }) {
@@ -3467,22 +3407,10 @@ function UsageRing(props: {
       ? [
           {
             id: "wrap-up-hint",
-            label: props.markDone === null ? t.chat.compactSuggestNew : t.chat.compactSuggestDone,
+            label: t.chat.compactSuggestNew,
             icon: "lightbulb" as const,
             fact: true,
           } satisfies MenuItem,
-          ...(props.markDone === null
-            ? []
-            : [
-                {
-                  id: "wrap-up-done",
-                  label: t.chat.markTaskDone,
-                  icon: "check" as const,
-                  hint: props.markDone.busy ? t.chat.compactWait : undefined,
-                  disabled: props.markDone.busy,
-                  onSelect: props.markDone.onSelect,
-                } satisfies MenuItem,
-              ]),
         ]
       : []),
     ...(confirming

@@ -12,8 +12,8 @@
  * 纯函数：输入各 chip 的完整宽度、图标态宽度、间距与容器宽，返回「收几个」。
  */
 
-/** 收成图标的先后：从最右边的字 chip 起往左，时间范围（下标 3）最后——它平时本来就不带字 */
-export const COMPACT_ORDER = [2, 1, 0, 3] as const;
+/** 收成图标的先后：星标（下标 0）先，时间范围（下标 1）最后——它平时本来就不带字（「全部 / 已完成」两格 2026-11-17 去掉） */
+export const COMPACT_ORDER = [0, 1] as const;
 
 /** 档位 level（0 = 全部完整，COMPACT_ORDER.length = 全部图标）下，第 index 个 chip 是不是图标态 */
 export function chipCompactAt(level: number, index: number): boolean {

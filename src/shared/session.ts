@@ -313,16 +313,6 @@ export function recentQueriesFromRecords(records: readonly SessionRecord[]): str
 export type SessionCompletion = "open" | "done" | "done_with_todos";
 
 /**
- * 是否已完成（done / done_with_todos）。parse 已补默认，运行时恒有值；
- * `?? "open"` 只防构造点未写这三个键的 meta 字面量（构造点不写是既定决策）。
- * 抽成函数是因为判断有两个消费者（侧栏筛选/行内标识、会话头部按钮），
- * 各写一份 `completion !== "open"` 迟早漂移。
- */
-export function isSessionDone(meta: SessionMeta): boolean {
-  return (meta.completion ?? "open") !== "open";
-}
-
-/**
  * 批量迁移（`session:move`）的回执。moved 含连带迁过去的子会话；
  * skipped 是没动的根会话及原因——running = 它或它的子会话正在跑（这一轮已拿到旧 cwd），
  * missing = meta 已不在（列表是旧快照），failed = 写 pi 本子的通知失败（这一条整家没动）。
@@ -430,6 +420,8 @@ export interface SessionMeta {
    */
   unread?: { at: number; failed: boolean } | null;
   /**
+   * **只读的旧字段**（2026-11-17 手动「完成」整个去掉：用户判定是伪需求，两个月只标过 9 条；新版不再写，
+   * 旧数据照读不报错，旧版标过完成的会话在新版里就是普通的旧会话）。
    * 完成状态：open = 还在跑；done = 干完了；done_with_todos = 干完了但留了
    * 遗留事项（只出现在 2026-11-16 之前收尾过的旧会话里：收尾扫描删了以后没人再写它，界面上与 done 同画）。
    * **可撤销**——重开 done 的会话继续干活就回 open。缺席即 open。

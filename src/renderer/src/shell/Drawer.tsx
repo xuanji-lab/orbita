@@ -155,15 +155,6 @@ export function Drawer(props: {
           title: tabLabel(activeTab, activeMeta?.title ?? null, t.common.newTask),
           shortId: tabShortId(activeTab),
           onRename: realTab === null ? undefined : (title) => props.view.renameSession(realTab, title),
-          completion:
-            realTab !== null && viewOpenId === realTab
-              ? {
-                  state: activeMeta?.completion ?? "open",
-                  busy: props.view.phase !== "idle",
-                  onMark: props.view.markDone,
-                  onSet: (next) => props.view.setCompletionSession(realTab, next),
-                }
-              : null,
         }}
         others={otherTabs(props.docked, activeTab).map((tab) => ({
           tab,
