@@ -298,6 +298,26 @@ describe("recorder 的通道标记识别（子会话 2026-09-23：信封自描�
     });
   });
 
+  test("通道标记落盘之后才回调（主进程据此出待投账）；普通 user 消息不回调", async () => {
+    const marked: string[] = [];
+    let landedWhenCalled = -1;
+    const withHook = createSessionRecorder(store, undefined, (sessionId, mark) => {
+      marked.push(`${sessionId}:${mark.from}:${mark.messageId}`);
+      void store.load(ID).then((detail) => {
+        landedWhenCalled = detail?.transcript.length ?? -1;
+      });
+    });
+    const prompt = composeChannelPrompt(
+      { id: "m9", from: "child", author: "model", kind: "done", text: "做完了", delivery: "followUp", createdAt: 1 },
+      { id: "c1", title: "子任务" },
+    );
+    withHook(progress({ type: "item_started", item: user }));
+    withHook(progress({ type: "item_started", item: envelopeUser(prompt) }));
+    await settleUntil(async () => marked.length === 1 && landedWhenCalled === 2);
+    assert.deepEqual(marked, [`${ID}:child:m9`]);
+    assert.equal(landedWhenCalled, 2, "回调时标记已在盘上");
+  });
+
   test("普通 user 消息照旧落成 user 记录——不是每条 user 消息都要过一遍解析开销地改变落盘形状", async () => {
     record(progress({ type: "item_started", item: user }));
     await settleUntil(transcriptLanded(1));

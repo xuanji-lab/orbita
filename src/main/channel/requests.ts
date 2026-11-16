@@ -25,6 +25,7 @@ import type {
 } from "../../shared/agent-ipc.ts";
 import {
   allowedKinds,
+  channelOpensTurn,
   channelStatus,
   composeChannelPrompt,
   type ChannelDelivery,
@@ -315,8 +316,8 @@ export async function applyChannelSend(
           "This sub-session was stopped by the user; its channel is closed. Only the user can re-open it by speaking as the parent in the channel.",
       };
     }
-    // 子→父恒 followUp：进父的 renderer 队列，本 PR 不为它开轮、不 steer父——
-    // 那是后续 PR 的事，主进程这里只落账 + 广播。
+    // 子→父恒 followUp：主进程只落账 + 广播（+ 待投账），排队与开轮归 renderer 的父会话槽——
+    // 进度只入账、不开轮；完成 / 提问 / 失败挨着到的合成一轮（useChatSession 的 deliverNext）。
     const message: ChannelMessage = {
       id: randomUUID(),
       from: "child",
@@ -327,6 +328,8 @@ export async function applyChannelSend(
       createdAt: Date.now(),
     };
     await deps.channels.append(key, message);
+    // 要父开口的（完成 / 提问 / 失败）记一笔待投：投给父模型之前应用退出 / 崩了，重开后还在（ChannelStore 待投账）
+    if (channelOpensTurn(message.kind)) await deps.channels.addPending(parent.id, { childId: sender.id, messageId: message.id });
     await broadcastAfterAppend(deps, key, message);
     return { ok: true, messageId: message.id };
   }

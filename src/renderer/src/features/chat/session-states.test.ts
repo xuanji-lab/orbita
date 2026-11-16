@@ -21,6 +21,8 @@ import {
   seedRunningPhases,
   setPendingEcho,
   nextDeliverable,
+  planDelivery,
+  settleUserSteer,
   removeSessionEntry,
   revertOptimisticTurn,
   prependOlder,
@@ -1317,5 +1319,66 @@ describe("seedHistory：打开会话时种盘上的历史（窗口晚于事件�
     const fresh = seedHistory(new Map(), "A", disk, null, { hasMore: false, compactionsBefore: 0 });
     assert.deepEqual(fresh.get("A"), seedFromDisk(new Map(), "A", disk, null, { hasMore: false, compactionsBefore: 0 }).get("A"));
     assert.equal(seedHistory(fresh, "A", [userItem("u0", 500), ...disk]), fresh);
+  });
+});
+
+describe("planDelivery：子会话消息合并成一轮、用户的话优先", () => {
+  const ch = (id: string): Extract<QueuedMessage, { kind: "channel" }> => ({
+    id,
+    kind: "channel",
+    childId: `c-${id}`,
+    childWorkbench: "/wb",
+    message: { id, from: "child", author: "model", kind: "done", text: id, delivery: "followUp", createdAt: 1 } satisfies ChannelMessage,
+  });
+  const text = (id: string): QueuedMessage => ({ id, kind: "text", text: id });
+  const ids = (plan: ReturnType<typeof planDelivery>) =>
+    plan === null ? null : { carrier: plan.carrier?.id ?? null, channels: plan.channels.map((item) => item.id) };
+
+  it("空队列 = null；队首压缩只发它", () => {
+    assert.equal(planDelivery([]), null);
+    assert.deepEqual(ids(planDelivery([{ id: "k", kind: "compact" }, ch("a")])), { carrier: "k", channels: [] });
+  });
+  it("挨着的子会话消息合成一批（不各开一轮）", () => {
+    assert.deepEqual(ids(planDelivery([ch("a"), ch("b"), ch("c")])), { carrier: null, channels: ["a", "b", "c"] });
+  });
+  it("子会话消息后面紧跟用户的话：由用户这句带上它们（用户这一轮看到全部结果）", () => {
+    assert.deepEqual(ids(planDelivery([ch("a"), ch("b"), text("u"), ch("c")])), { carrier: "u", channels: ["a", "b"] });
+  });
+  it("队首是用户的话：带上紧跟其后、下一句用户的话之前的子会话消息", () => {
+    assert.deepEqual(ids(planDelivery([text("u1"), ch("a"), ch("b"), text("u2"), ch("c")])), { carrier: "u1", channels: ["a", "b"] });
+    assert.deepEqual(ids(planDelivery([text("u1"), text("u2")])), { carrier: "u1", channels: [] });
+  });
+});
+
+describe("settleUserSteer：用户插话的结局", () => {
+  const states = (): SessionStates =>
+    enqueue(enqueue(createSessionStates(), "s", { id: "q1", kind: "text", text: "插话", steered: true }), "s", { id: "q2", kind: "text", text: "普通" });
+  it("placed：队列里摘掉", () => {
+    assert.deepEqual(settleUserSteer(states(), "s", "q1", "placed").get("s")?.queued.map((item) => item.id), ["q2"]);
+  });
+  it("bounced：去掉 steered、留在原位（退回普通排队，空闲照常发）", () => {
+    const queued = settleUserSteer(states(), "s", "q1", "bounced").get("s")?.queued ?? [];
+    assert.deepEqual(queued.map((item) => item.id), ["q1", "q2"]);
+    assert.equal(queued[0]?.kind === "text" && queued[0].steered, undefined);
+  });
+  it("找不到（已被「立即发送」摘掉）= 原样返回", () => {
+    const before = states();
+    assert.equal(settleUserSteer(before, "s", "gone", "bounced"), before);
+  });
+});
+
+describe("待投的子会话消息重开后重新入队：按 message id 去重（宁可重不可丢，但同一条不排两份）", () => {
+  it("实时事件与启动时取回的同一条只排一份", () => {
+    const item: Extract<QueuedMessage, { kind: "channel" }> = {
+      id: "m1",
+      kind: "channel",
+      childId: "c",
+      childWorkbench: "/wb",
+      message: { id: "m1", from: "child", author: "model", kind: "done", text: "做完了", delivery: "followUp", createdAt: 1 },
+    };
+    const once = enqueueChannelMessage(createSessionStates(), "p", item);
+    const twice = enqueueChannelMessage(once, "p", { ...item });
+    assert.equal(twice, once);
+    assert.equal(twice.get("p")?.queued.length, 1);
   });
 });

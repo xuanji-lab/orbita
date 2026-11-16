@@ -162,3 +162,44 @@ describe("ChannelStore.removeForParent / removeChannel", () => {
     await store.removeChannel({ parentId: PARENT, childId: CHILD });
   });
 });
+
+describe("ChannelStore 待投账（子→父消息投给父模型之前落盘）", () => {
+  const child = (id: string, kind: ChannelMessage["kind"] = "done"): ChannelMessage => message({ id, from: "child", kind, text: `子说 ${id}` });
+
+  test("记 → 列（带账本原文、按记的顺序）→ 出账；同一条只记一次；新 ChannelStore 读回来一样（重开应用）", async () => {
+    const key = { parentId: PARENT, childId: CHILD };
+    await store.append(key, child("m1"));
+    await store.append(key, child("m2", "question"));
+    await store.addPending(PARENT, { childId: CHILD, messageId: "m1" });
+    await store.addPending(PARENT, { childId: CHILD, messageId: "m2" });
+    await store.addPending(PARENT, { childId: CHILD, messageId: "m1" });
+    const reopened = new ChannelStore(join(dir, "channels"));
+    assert.deepEqual((await reopened.listPending()).map((item) => [item.parentId, item.childId, item.message.id, item.message.text]), [
+      [PARENT, CHILD, "m1", "子说 m1"],
+      [PARENT, CHILD, "m2", "子说 m2"],
+    ]);
+    await reopened.clearPending(PARENT, "m1");
+    assert.deepEqual((await store.listPending()).map((item) => item.message.id), ["m2"]);
+    await store.clearPending(PARENT, "m2");
+    assert.deepEqual(await store.listPending(), []);
+    // 清空后文件删掉；pending.json 不被当成一条通道
+    assert.deepEqual(await readdir(join(dir, "channels", PARENT)), [`${CHILD}.jsonl`]);
+    assert.deepEqual((await store.listForParent(PARENT, async () => "")).map((summary) => summary.childId), [CHILD]);
+  });
+
+  test("并发记账不互相覆盖（同一父会话串行写）", async () => {
+    const key = { parentId: PARENT, childId: CHILD };
+    const ids = ["a", "b", "c", "d", "e"];
+    for (const id of ids) await store.append(key, child(id));
+    await Promise.all(ids.map((id) => store.addPending(PARENT, { childId: CHILD, messageId: id })));
+    assert.deepEqual((await store.listPending()).map((item) => item.message.id).sort(), ids);
+  });
+
+  test("坏文件当空、指向已删通道的指针跳过——不拦启动", async () => {
+    await mkdir(join(dir, "channels", PARENT), { recursive: true });
+    await writeFile(join(dir, "channels", PARENT, "pending.json"), "{坏");
+    assert.deepEqual(await store.listPending(), []);
+    await store.addPending(PARENT, { childId: CHILD2, messageId: "gone" });
+    assert.deepEqual(await store.listPending(), []);
+  });
+});

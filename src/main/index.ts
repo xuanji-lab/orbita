@@ -439,7 +439,10 @@ void app.whenReady().then(async () => {
   // 路径上按「会话 × 型号 × 档的连续一段」增量记账，意图召回另记按天的一份；升级后第一次启动回填
   // 一次，注册即异步装载 + 回填，不阻塞启动。取代原来的日账本 usage-daily.json（不再读写，留在盘上无害）
   const taskLedger = new TaskLedger(join(configDir, "usage-tasks.json"));
-  const record = createSessionRecorder(sessions, taskLedger);
+  const record = createSessionRecorder(sessions, taskLedger, (sessionId, mark) => {
+    if (mark.from !== "child") return;
+    void channels.clearPending(sessionId, mark.messageId).catch((error: unknown) => console.error("[channel] 待投账出账失败", sessionId, error));
+  });
   startTaskLedger(taskLedger, {
     list: () => sessions.list(),
     readUsageLog: (id) => sessions.readUsageLog(id),

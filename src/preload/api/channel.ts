@@ -9,6 +9,7 @@ import {
   type ChannelEvent,
   type ChannelSpeakInput,
   type ChannelStopInput,
+  type PendingChannelDelivery,
 } from "../../shared/agent-ipc.ts";
 import type { ChannelKey, ChannelMessage, ChannelSummary } from "../../shared/channel.ts";
 
@@ -21,6 +22,8 @@ export const channelApi = {
   speak: (input: ChannelSpeakInput): Promise<ChannelMessage> => ipcRenderer.invoke(ipcChannels.channelSpeak, input),
   /** 用户终止一个子会话（中止在跑的轮 + 结掉挂着的浏览器交接 + 账本落 stop） */
   stop: (input: ChannelStopInput): Promise<void> => ipcRenderer.invoke(ipcChannels.channelStop, input),
+  /** 还没投给父模型的子→父消息（全部父会话）：renderer 启动时拉一次重新入队，应用退出 / 崩溃时排着的不丢 */
+  pending: (): Promise<PendingChannelDelivery[]> => ipcRenderer.invoke(ipcChannels.channelPending),
   onEvent: (listener: (event: ChannelEvent) => void): (() => void) => {
     const handler = (_e: unknown, event: ChannelEvent) => listener(event);
     ipcRenderer.on(ipcChannels.channelEvent, handler);

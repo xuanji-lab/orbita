@@ -10,6 +10,7 @@ import {
   type AgentKernelInfo,
   type CompactAgentInput,
   type ContinueAgentInput,
+  type SteerAgentInput,
   type SubmitAgentInput,
 } from "../../shared/agent-ipc.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
@@ -27,6 +28,9 @@ export const agentApi = {
   /** 停下当前这一轮（含工具调用），把这句话作为新一轮发出去。队列在 renderer 一侧 */
   interrupt: (input: SubmitAgentInput): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentInterrupt, input),
+
+  /** 用户的话插进正在跑的那一轮（只给子会话消息开的轮用）；结局走 agent:event 的 userSteer */
+  steer: (input: SteerAgentInput): Promise<void> => ipcRenderer.invoke(ipcChannels.agentSteer, input),
 
   /** 手动压缩上下文（`/compact`）。忙碌态与界碑从 agent:event 的 compaction 事件回来 */
   compact: (input: CompactAgentInput): Promise<void> =>

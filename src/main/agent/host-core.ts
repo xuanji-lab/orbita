@@ -278,7 +278,8 @@ export class AgentHostCore {
   private postKernel(command: KernelSessionCommand, root?: string): void {
     const child = this.kernelChild;
     if (child === null) {
-      if (command.type === "steer") this.bounceSteer(command.sessionId, command.text, command.delivery ?? "steer");
+      if (command.type === "steer" && command.userSteerId !== undefined) this.onEvent({ type: "userSteer", sessionId: command.sessionId, id: command.userSteerId, outcome: "bounced" });
+      else if (command.type === "steer") this.bounceSteer(command.sessionId, command.text, command.delivery ?? "steer");
       return;
     }
     this.armKernelRecycle();
@@ -857,6 +858,18 @@ export class AgentHostCore {
   steer(sessionId: string, text: string, delivery: ChannelDelivery): void {
     if (!this.ownedByKernel(sessionId)) throw new Error("the session has no running turn to steer");
     this.postKernel({ type: "steer", sessionId, text, delivery });
+  }
+
+  /**
+   * 用户的话插进这条会话正在跑的那一轮（agent:steer）。没交给过 kernel / kernel 不在：没有轮可插，当场回 bounced
+   * （renderer 队列里那条退回普通排队）——不抛错，用户的话本来就还在队列里，不丢。
+   */
+  steerUser(sessionId: string, id: string, text: string): void {
+    if (!this.ownedByKernel(sessionId) || this.kernelChild === null) {
+      this.onEvent({ type: "userSteer", sessionId, id, outcome: "bounced" });
+      return;
+    }
+    this.postKernel({ type: "steer", sessionId, text, userSteerId: id });
   }
 
   /** 受管浏览器：browserRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。 */

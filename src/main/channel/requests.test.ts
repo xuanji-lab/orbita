@@ -437,6 +437,22 @@ describe("applyChannelSend", () => {
     assert.equal(steerCalls.length, 0);
   });
 
+  test("待投账：完成 / 提问 / 失败记一笔（投给父模型之前崩了重开还在），进度不记（只入账、不让父开口）", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT }));
+    await sessions.ensureSession(baseMeta({ id: CHILD, parentId: PARENT }));
+    const { deps } = fakeDeps();
+    const ids: Record<string, string> = {};
+    for (const kind of ["progress", "question", "done", "failed"] as const) {
+      const outcome = await applyChannelSend(deps, channelSendEvent({ kind, requestId: kind }));
+      assert.ok(outcome.ok);
+      ids[kind] = outcome.messageId;
+    }
+    const pending = await channels.listPending();
+    assert.deepEqual(pending.map((item) => item.message.kind), ["question", "done", "failed"]);
+    assert.ok(pending.every((item) => item.parentId === PARENT && item.childId === CHILD));
+    assert.ok(!pending.some((item) => item.message.id === ids["progress"]));
+  });
+
   test("子→父发 reply 被拒——reply 只属于父→子方向", async () => {
     await sessions.ensureSession(baseMeta({ id: PARENT }));
     await sessions.ensureSession(baseMeta({ id: CHILD, parentId: PARENT }));

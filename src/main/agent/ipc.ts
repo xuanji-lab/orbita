@@ -12,8 +12,15 @@ import {
   type CompactAgentInput,
   type ContinueAgentInput,
   type ProviderSecrets,
+  type SteerAgentInput,
   type SubmitAgentInput,
 } from "../../shared/agent-ipc.ts";
+
+/** 子会话信封（preface）只透传字符串、空的不带——缺席时命令与以前一字不差 */
+function prefaceField(input: SubmitAgentInput): { preface?: string[] } {
+  const preface = (input.preface ?? []).filter((text) => typeof text === "string" && text !== "");
+  return preface.length > 0 ? { preface } : {};
+}
 import { parseChannelPrompt } from "../../shared/channel.ts";
 import {
   composeInvocationPrompt,
@@ -515,6 +522,7 @@ export function registerAgentIpc(
       ...(await sentImages(input)),
       ...(await sentFileRefs(input)),
       ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}),
+      ...prefaceField(input),
       ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}),
       ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}),
       ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, protectedFiles, {
@@ -548,6 +556,10 @@ export function registerAgentIpc(
 
   ipcMain.handle(ipcChannels.agentSubmit, (_e, input: SubmitAgentInput): Promise<void> => submitTurn(input));
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
+  ipcMain.handle(ipcChannels.agentSteer, (_e, input: SteerAgentInput): void => {
+    if (typeof input?.text !== "string" || input.text.trim() === "" || typeof input.id !== "string") throw new Error("steer needs an id and non-empty text");
+    host.steerUser(input.sessionId, input.id, input.text);
+  });
   ipcMain.handle(ipcChannels.agentInterrupt, async (_e, input: SubmitAgentInput): Promise<void> => {
     const provider = await resolveForTurn(input.providerId);
     // interrupt 是排队消息的「立即发送」分支（会话还忙碌时）：与 submit 同一份组装，
@@ -558,7 +570,7 @@ export function registerAgentIpc(
     await beginMemoryTurn(input.sessionId, text);
     const automationTools = await readAutomationTools(input.sessionId);
     const capabilities = await readCapabilities(input.workspaceId);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text, sessionMemory: true, ...(automationTools ? { automationTools: true } : {}), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, protectedFiles, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), pluginTools: true }) });
+    const piSessionFile = await host.interrupt({ type: "interrupt", text, sessionMemory: true, ...(automationTools ? { automationTools: true } : {}), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...prefaceField(input), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, protectedFiles, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), pluginTools: true }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {

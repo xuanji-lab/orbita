@@ -22,6 +22,8 @@ import {
   removeIntentAsk,
   setPendingEcho,
   nextDeliverable,
+  planDelivery,
+  settleUserSteer,
   prependOlder,
   compactionCount,
   removeSessionEntry,
@@ -73,7 +75,7 @@ import type { ThinkingLevel as PiThinkingLevel } from "@shared/transcript";
 import { isThinkingLevel, type ThinkingLevel } from "@shared/thinking";
 import { modelThinkingLevels } from "@shared/model-defaults";
 import type { AgentEvent, AgentStats, BuiltinProvider, RetryStatus, SubmitAgentInput } from "@shared/agent-ipc";
-import { composeChannelPrompt, userRepliesNote, userRepliesSincePreviousReport } from "@shared/channel";
+import { channelOpensTurn, composeChannelPrompt, userRepliesNote, userRepliesSincePreviousReport } from "@shared/channel";
 import type { ProviderDto } from "@shared/provider";
 import { useBuiltinCatalog, usableProviders } from "../settings/model-menu";
 import { isProviderEnabled } from "../../../../shared/provider.ts";
@@ -439,6 +441,9 @@ interface ViewHandle {
 /**
  * 引擎——与「正在看哪条」无关的共享真源。全应用一份，主槽与抽屉槽都从它读。
  */
+/** 父会话空闲时子会话消息的合并窗口：挨着到的几条合成一轮。代价是父最多晚这么久开口 */
+export const CHANNEL_MERGE_MS = 1500;
+
 export interface SessionEngine {
   /** 新内核：接着跑上次被中断的那一轮 */
   readonly continueTurn: (id: string) => void;
@@ -470,6 +475,16 @@ export interface SessionEngine {
    * 归位带防踩（revertOptimisticTurn）：期间来过 phase 事件就不动，交给 runtime 的 idle。
    */
   beginOptimisticTurn(id: string): () => void;
+  /**
+   * 这条会话正在跑的这一轮是不是**子会话消息开的**（只有子会话的消息、没有用户的话）。是 = 用户此刻发话自动插进这一轮
+   * （agent:steer），不排到它跑完之后；用户自己开的轮照旧排队。
+   */
+  isChannelTurn(id: string): boolean;
+  /**
+   * 用户空闲直发时：把排在这条会话队列里的子会话消息全部取出（出队）、组好信封，作为这一句的前置上下文一起发
+   * （用户的话优先：子会话消息不各自先开一轮）。没有 = 空数组。
+   */
+  takeQueuedChannels(id: string): Promise<string[]>;
   /**
    * 各槽把自己的 UI 选择推进引擎的投递兜底：deliverNext 对拿不到会话级意图
    * 与 meta 的新会话（极少：排队首条发出时 meta 已落盘），只能拿「最近的 UI 选择」。
@@ -859,71 +874,135 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
    * 这期间用户回车会被当成「空闲直发」、撞 already running，开头就是
    * 「发出去的字留在输入框里」那条链（2026-09-28 CDP 复现）。
    */
+  /**
+   * 子会话消息开的那一轮：这几条会话此刻在跑的轮只装着子会话的消息。用户这时发话自动插进去（agent:steer），
+   * 不排到它跑完之后（2026-11-16 用户：「我现在要回复你东西，但是子会话接二连三的过来了，然后你就先回复子会话的东西了」）。
+   * phase 回 idle 时清掉。
+   */
+  const channelTurns = useRef(new Set<string>());
+  const isChannelTurn = useCallback((id: string) => channelTurns.current.has(id), []);
+
+  /** 一条子会话消息的信封全文：子标题从 sessionsRef 真值查；用户在收件箱里代父回复过的话拼在后面（父模型上下文里没有） */
+  const envelopeOf = useCallback(
+    async (parentId: string, item: Extract<QueuedMessage, { kind: "channel" }>): Promise<string> => {
+      const childTitle = sessionsRef.current.find((meta) => meta.id === item.childId)?.title ?? "";
+      // 子工作台随事件携带（主进程派生），每条回报都重新告知模型——就算 delegate 回执被压缩掉，路径也会随这条信封回来
+      const envelope = composeChannelPrompt(item.message, { id: item.childId, title: childTitle, workbench: item.childWorkbench });
+      // 读账本失败就照原样投递，不拦这一轮
+      const ledger = await api.channel.load({ parentId, childId: item.childId }).catch(() => []);
+      const note = userRepliesNote(userRepliesSincePreviousReport(ledger, item.message.id));
+      return note === "" ? envelope : `${envelope}\n${note}`;
+    },
+    [],
+  );
+
+  const takeQueuedChannels = useCallback(
+    async (id: string): Promise<string[]> => {
+      const queued = statesRef.current.get(id)?.queued ?? [];
+      const channels = queued.filter((item): item is Extract<QueuedMessage, { kind: "channel" }> => item.kind === "channel");
+      if (channels.length === 0) return [];
+      applyStates((prev) => channels.reduce((acc, item) => dequeue(acc, id, item.id), prev));
+      return Promise.all(channels.map((item) => envelopeOf(id, item)));
+    },
+    [applyStates, envelopeOf],
+  );
+
+  /**
+   * 投递队首。**一次只开一轮**——发完这一轮结束会再来一次 phase 事件，那时再取下一批。先出队再发：出队是同步的，
+   * 避免同一拍被投递两次。与「哪个槽在看」无关：队是按会话分的，事件带着 id 来。
+   *
+   * 发什么由 planDelivery 定：挨着的子会话消息合成一轮（每封仍各是一条 user 消息、各落一条通道标记，但只开一轮、
+   * 只花一次模型调用）；紧跟着用户的话时，子会话消息作为那句话的前置上下文一起带上，不先各开一轮。
+   *
+   * **发出前乐观置 turn**（与 send 直发同一条规矩）：runtime 收到 submit 就占坑，但它的 turn 事件要等 open 完、
+   * agent_start 才来（几百毫秒）。不填这段空档的话，这期间用户回车会被当成「空闲直发」、撞 already running
+   * （2026-09-28 CDP 复现）。
+   */
   const deliverNext = useCallback(
     (id: string) => {
       const entry = statesRef.current.get(id);
-      if (entry === undefined) return;
-      const head = nextDeliverable(entry);
-      if (head === null) return;
-      applyStates((prev) => dequeue(prev, id, head.id));
+      if (entry === undefined || nextDeliverable(entry) === null) return;
+      const plan = planDelivery(entry.queued);
+      if (plan === null) return;
+      const { carrier, channels } = plan;
+      // 先装配、后出队：装配不出来（没有可用模型 / 工作区）时这一批留在队里，不在这里丢掉
+      const turn = buildTurn(id);
+      if (turn === null) return;
+      applyStates((prev) => [...(carrier === null ? [] : [carrier]), ...channels].reduce((acc, item) => dequeue(acc, id, item.id), prev));
+      const channelOnly = carrier === null;
       const dispatch = (request: () => Promise<void>): void => {
         const revert = beginOptimisticTurn(id);
+        if (channelOnly) channelTurns.current.add(id);
         request().catch((cause: unknown) => {
           setError(ipcErrorText(cause));
+          channelTurns.current.delete(id);
           revert();
         });
       };
-      if (head.kind === "compact") {
-        const turn = buildTurn(id);
-        if (turn === null) return;
+      if (carrier?.kind === "compact") {
         dispatch(() =>
           api.agent.compact({
             sessionId: id,
             ...turn,
-            ...(head.instructions !== undefined ? { instructions: head.instructions } : {}),
+            ...(carrier.instructions !== undefined ? { instructions: carrier.instructions } : {}),
           }),
         );
-      } else if (head.kind === "channel") {
-        // 子会话 PR4a：子→父投递就在这里发生——子标题从 sessionsRef 真值查
-        // （查不到用 ""，composeChannelPrompt 自己会写 Untitled，不是哨兵值）。
-        // buildTurn 已支持从 meta 装配从没在本窗口打开过的会话（新会话/新槽由
-        // dequeue/enqueue 就地建），父会话不必先被用户点开过才能收到子的消息。
-        const childTitle = sessionsRef.current.find((meta) => meta.id === head.childId)?.title ?? "";
-        const envelope = composeChannelPrompt(head.message, {
-          id: head.childId,
-          title: childTitle,
-          // 子工作台随事件携带（主进程派生），每条回报都重新告知模型——就算 delegate
-          // 回执被压缩掉，路径也会随这条信封回来
-          workbench: head.childWorkbench,
-        });
-        const turn = buildTurn(id);
-        if (turn === null) return;
-        // 用户在收件箱里代父回复过的话，父模型上下文里没有：投递前从账本取出，拼在信封后
-        // （userRepliesSincePreviousReport 的注释）。读账本失败就照原样投递，不拦这一轮。
-        dispatch(async () => {
-          const ledger = await api.channel.load({ parentId: id, childId: head.childId }).catch(() => []);
-          const note = userRepliesNote(userRepliesSincePreviousReport(ledger, head.message.id));
-          const text = note === "" ? envelope : `${envelope}\n${note}`;
-          await api.agent.submit({ sessionId: id, text, ...turn });
-        });
-      } else {
-        const turn = buildTurn(id);
-        if (turn === null) return;
-        // 乐观回显同直发路径：投递那一刻先画气泡（真回显一到即换下）
-        applyStates((prev) => setPendingEcho(prev, id, splitEchoBlocks(head.text)));
-        dispatch(() =>
-          api.agent.submit({
-            sessionId: id,
-            text: head.text,
-            ...imagesField(head.images),
-            ...filesField(head.files),
-            ...turn,
-          }),
-        );
+        return;
       }
+      // buildTurn 从 meta 装配从没在本窗口打开过的会话（新会话/新槽由 dequeue/enqueue 就地建），
+      // 父会话不必先被用户点开过才能收到子的消息
+      if (carrier === null) {
+        // 只有子会话消息：最后一封当这一轮的话，前面的排在它前面（同一轮）
+        dispatch(async () => {
+          const texts = await Promise.all(channels.map((item) => envelopeOf(id, item)));
+          const text = texts[texts.length - 1] ?? "";
+          const preface = texts.slice(0, -1);
+          await api.agent.submit({ sessionId: id, text, ...(preface.length > 0 ? { preface } : {}), ...turn });
+        });
+        return;
+      }
+      // 乐观回显同直发路径：投递那一刻先画气泡（真回显一到即换下）
+      applyStates((prev) => setPendingEcho(prev, id, splitEchoBlocks(carrier.text)));
+      dispatch(async () => {
+        const preface = await Promise.all(channels.map((item) => envelopeOf(id, item)));
+        await api.agent.submit({
+          sessionId: id,
+          text: carrier.text,
+          ...imagesField(carrier.images),
+          ...filesField(carrier.files),
+          ...(preface.length > 0 ? { preface } : {}),
+          ...turn,
+        });
+      });
     },
-    [applyStates, beginOptimisticTurn, buildTurn],
+    [applyStates, beginOptimisticTurn, buildTurn, envelopeOf],
   );
+
+  /**
+   * 父会话空闲时子会话消息到了：等一个短窗口再投（几条挨着到的合成一轮）。父在跑时不必等——那时本来就攒到这一轮结束，
+   * phase 回 idle 的那一拍 deliverNext 接手。同一父会话窗口内只排一个定时器（不顺延：最晚 CHANNEL_MERGE_MS 后开口）。
+   */
+  const mergeTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const scheduleChannelDelivery = useCallback(
+    (parentId: string) => {
+      if (mergeTimers.current.has(parentId)) return;
+      mergeTimers.current.set(
+        parentId,
+        setTimeout(() => {
+          mergeTimers.current.delete(parentId);
+          deliverNext(parentId);
+        }, CHANNEL_MERGE_MS),
+      );
+    },
+    [deliverNext],
+  );
+  useEffect(() => {
+    const timers = mergeTimers.current;
+    return () => {
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
+    };
+  }, []);
 
   useEffect(() => {
     // 流式帧合帧：progress 的归约是纯函数（廉价），贵的是每次应用触发的渲染。
@@ -1006,7 +1085,15 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
         // **投递节奏归我们**：phase 一变就看队首该不该发，一次只发一条。
         // 交给 pi 的 post-run 自动 drain 会把好几条一起吹出去——用户一条条点、
         // 最后两条自己一起飞，就是那么来的（2026-09-06 事故）。
-        if (event.type === "phase") deliverNext(event.sessionId);
+        // 用户插话的结局：placed = 队列里摘掉（转录里已出现这句话）；bounced = 退回普通排队，下面照常投
+        if (event.type === "userSteer") {
+          applyStates((prev) => settleUserSteer(prev, event.sessionId, event.id, event.outcome));
+          if (event.outcome === "bounced") deliverNext(event.sessionId);
+        }
+        if (event.type === "phase") {
+          if (event.phase === "idle") channelTurns.current.delete(event.sessionId);
+          deliverNext(event.sessionId);
+        }
       });
     return () => {
       off();
@@ -1024,6 +1111,8 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
   useEffect(() => {
     const off = api.channel.onEvent((event) => {
       if (event.type !== "message" || event.message.from !== "child") return;
+      // 进度只入账（通道账本 + 状态广播，子会话面板从账本读），不让父开口——子会话是父的工具，要的是结果
+      if (!channelOpensTurn(event.message.kind)) return;
       // enqueueChannelMessage 内建按 message.id 去重：订阅重连等场景同一条事件
       // 重复到达不会让队列里出现两条一样的话。
       applyStates((prev) =>
@@ -1035,19 +1124,50 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
           message: event.message,
         }),
       );
-      // 父此刻空闲就立即投；在跑的话 nextDeliverable 在这里会拿到 null，
-      // 是安全的 no-op——真正的投递等这一轮 phase 回 idle 时上面那个
-      // agent.onEvent 效果里的 deliverNext 调用点接手。
-      deliverNext(event.parentId);
+      // 父此刻空闲：等合并窗口再投（挨着到的合成一轮）；在跑的话窗口到了 nextDeliverable 也拿到 null，
+      // 真正的投递等这一轮 phase 回 idle 时上面那个 agent.onEvent 效果里的 deliverNext 调用点接手。
+      scheduleChannelDelivery(event.parentId);
     });
     return off;
-  }, [applyStates, deliverNext]);
+  }, [applyStates, scheduleChannelDelivery]);
+
 
   /** 「配置好」的标准与设置面的命名模型菜单同源（model-menu），不各写一份 */
   const usable = useMemo(() => usableProviders(providers), [providers]);
   /** usable 的 ref 镜像：事件回调（buildTurn / modelMissingText）在闭包里也要读最新一份 */
   const usableRef = useRef(usable);
   usableRef.current = usable;
+
+  /**
+   * 启动时取回还没投给父模型的子会话消息（主进程的待投账）：上次应用退出 / 崩溃 / 窗口重载时排在队列里的，
+   * 重新入队、照常投（按 message.id 去重；父会话的转录落下标记时主进程出账）。
+   */
+  const pendingFetched = useRef(false);
+  useEffect(() => {
+    // 等会话清单与服务商都到了再取：buildTurn 要按父会话的 meta 装配（cwd、模型），清单没到时会落到界面当前的选择上
+    if (pendingFetched.current || loads.sessions.kind === "loading" || usable.length === 0) return;
+    pendingFetched.current = true;
+    void api.channel
+      .pending()
+      .then((items) => {
+        if (items.length === 0) return;
+        applyStates((prev) =>
+          items.reduce(
+            (acc, item) =>
+              enqueueChannelMessage(acc, item.parentId, {
+                id: item.message.id,
+                kind: "channel",
+                childId: item.childId,
+                childWorkbench: item.childWorkbench,
+                message: item.message,
+              }),
+            prev,
+          ),
+        );
+        for (const parentId of new Set(items.map((item) => item.parentId))) scheduleChannelDelivery(parentId);
+      })
+      .catch((cause: unknown) => console.error("[channel] 取回待投的子会话消息失败", cause));
+  }, [applyStates, scheduleChannelDelivery, loads.sessions.kind, usable.length]);
 
   /**
    * 没选模型时的发送报错（model-required.ts 的取舍）：有可用服务商但没选模型
@@ -1231,6 +1351,8 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     views: views.current,
     applyStates,
     beginOptimisticTurn,
+    isChannelTurn,
+    takeQueuedChannels,
     syncIntent,
     sessionIntent: sessionIntentRef,
     rememberSessionIntent,
@@ -1915,7 +2037,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       workspace: string | null,
       resume: { piSessionFile: string } | null,
       images?: readonly PromptImage[],
-      extras?: { files?: readonly ComposerFileRef[] },
+      extras?: { files?: readonly ComposerFileRef[]; preface?: readonly string[] },
     ): Promise<void> => {
       if (model === null) {
         engine.setError(engine.modelMissingText());
@@ -1940,6 +2062,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           text,
           ...imagesField(images),
           ...filesField(extras?.files),
+          ...(extras?.preface !== undefined && extras.preface.length > 0 ? { preface: [...extras.preface] } : {}),
           cwd: target,
           workspaceId: workspace,
           resume,
@@ -2049,8 +2172,13 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     const busy = id !== null && engine.statesRef.current.get(id)?.phase !== "idle";
     if (id !== null && busy) {
       const queuedId = crypto.randomUUID();
+      const busyId: string = id;
+      // 这一轮是子会话消息开的：用户的话优先，自动插进这一轮（agent:steer，不停它、不等它跑完）。
+      // 仍入队：排队条照常显示、「立即发送」照常是停掉重开的快路（父可能正跑着几分钟的命令，插话要等那个工具跑完）。
+      // 带图 / 文件的不插（插话只送文字；那两样要主进程先落盘副本），照旧排队
+      const steer = engine.isChannelTurn(busyId) && images.length === 0 && files.length === 0;
       engine.applyStates((prev) =>
-        enqueue(prev, id as string, {
+        enqueue(prev, busyId, {
           id: queuedId,
           kind: "text",
           text,
@@ -2058,8 +2186,14 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           // 队列存 renderer 原生形状（带 id），投递 / 撤回原样交出或退回输入框。
           // 粘贴块已内联进 text（token 换块），撤回时 draftFromSentText 拆回来
           ...(files.length > 0 ? { files } : {}),
+          ...(steer ? { steered: true as const } : {}),
         }),
       );
+      if (steer) {
+        api.agent
+          .steer({ sessionId: busyId, id: queuedId, text })
+          .catch(() => engine.applyStates((prev) => settleUserSteer(prev, busyId, queuedId, "bounced")));
+      }
       setDraft("");
       writeAttachments(draftKey, () => []);
       writeFiles(draftKey, () => []);
@@ -2097,7 +2231,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       writeFiles(draftKey, () => []);
       writeBlocks(draftKey, () => []);
       writeQuotes(draftKey, () => []);
-      await submitTurn(id, text, target, workspace, resume, images, { files });
+      // 用户的话优先：排在这条会话队列里、还在合并窗口里等着的子会话消息作为这一句的前置上下文一起发，不各自先开一轮
+      const preface = await engine.takeQueuedChannels(id);
+      await submitTurn(id, text, target, workspace, resume, images, { files, preface });
     } catch (cause) {
       engine.setError(cause instanceof Error ? cause.message : String(cause));
     }

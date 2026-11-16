@@ -58,6 +58,12 @@ export type QueuedMessage =
       text: string;
       images?: readonly PromptImage[];
       files?: readonly ComposerFileRef[];
+      /**
+       * 已经插进正在跑的那一轮（agent:steer，只在子会话消息开的轮里自动发生）、内核还没放进上下文。
+       * 仍留在队列里：排队条照常显示、「立即发送」照常可点（停掉重开，内核先撤回插话）。结局回来时
+       * placed = 摘掉（转录里出现这句话），bounced = 去掉这个标记、退回普通排队。
+       */
+      steered?: true;
     }
   | { id: string; kind: "compact"; instructions?: string }
   | { id: string; kind: "channel"; childId: string; childWorkbench: string; message: ChannelMessage };
@@ -908,6 +914,51 @@ export function nextDeliverable(entry: SessionEntry): QueuedMessage | null {
   return entry.queued[0] ?? null;
 }
 
+
+/**
+ * 一次投递发什么（子会话消息合并 + 用户的话优先，2026-11-16 用户：「子会话是主会话的一个工具」「我现在要回复你东西，
+ * 但是子会话接二连三的过来了，然后你就先回复子会话的东西了」）：
+ *   - 队首是压缩 → 只发它（carrier 为它、不带信封）；
+ *   - 队首是用户的话 → 发它，把紧跟在它后面、下一条用户的话之前的子会话消息一起带上当前置上下文；
+ *   - 队首是子会话消息 → 连着的子会话消息合成一轮；紧跟着是用户的话就让那句话带上它们（用户这一轮看到全部结果），
+ *     否则只发这些子会话消息（carrier 为 null）。
+ * 子会话消息永远不会单独抢在用户的话前面各开一轮。纯函数：调用方据此出队、组信封、发一轮。
+ */
+export function planDelivery(
+  queued: readonly QueuedMessage[],
+): { carrier: Exclude<QueuedMessage, { kind: "channel" }> | null; channels: Extract<QueuedMessage, { kind: "channel" }>[] } | null {
+  const head = queued[0];
+  if (head === undefined) return null;
+  if (head.kind === "compact") return { carrier: head, channels: [] };
+  const channels: Extract<QueuedMessage, { kind: "channel" }>[] = [];
+  let at = head.kind === "text" ? 1 : 0;
+  while (at < queued.length) {
+    const item = queued[at];
+    if (item?.kind !== "channel") break;
+    channels.push(item);
+    at += 1;
+  }
+  if (head.kind === "text") return { carrier: head, channels };
+  const next = queued[at];
+  return { carrier: next?.kind === "text" ? next : null, channels };
+}
+
+/** 用户插话的结局（agent:event 的 userSteer）：placed = 摘掉这条；bounced = 去掉 steered、退回普通排队。找不到就原样返回 */
+export function settleUserSteer(states: SessionStates, sessionId: string, id: string, outcome: "placed" | "bounced"): SessionStates {
+  const entry = states.get(sessionId);
+  const item = entry?.queued.find((queued) => queued.id === id);
+  if (item === undefined || item.kind !== "text") return states;
+  if (outcome === "placed") return dequeue(states, sessionId, id);
+  if (item.steered !== true) return states;
+  return update(states, sessionId, (current) => ({
+    ...current,
+    queued: current.queued.map((queued) => {
+      if (queued.id !== id || queued.kind !== "text") return queued;
+      const { steered: _steered, ...rest } = queued;
+      return rest;
+    }),
+  }));
+}
 
 /** 会话被删除：槽一并丢掉，否则它连同整份 transcript 在 renderer 内存里留一具尸体。 */
 export function removeSessionEntry(states: SessionStates, sessionId: string): SessionStates {

@@ -11,6 +11,7 @@ import {
   type ChannelEvent,
   type ChannelSpeakInput,
   type ChannelStopInput,
+  type PendingChannelDelivery,
 } from "../../shared/agent-ipc.ts";
 import type { ChannelKey } from "../../shared/channel.ts";
 import { applySpeak, applyStop, type ChannelDeps } from "./requests.ts";
@@ -22,6 +23,9 @@ export function registerChannelIpc(deps: ChannelDeps): void {
   ipcMain.handle(ipcChannels.channelLoad, (_e, key: ChannelKey) => deps.channels.load(key));
   ipcMain.handle(ipcChannels.channelSpeak, (_e, input: ChannelSpeakInput) => applySpeak(deps, input));
   ipcMain.handle(ipcChannels.channelStop, (_e, input: ChannelStopInput) => applyStop(deps, input));
+  ipcMain.handle(ipcChannels.channelPending, async (): Promise<PendingChannelDelivery[]> =>
+    (await deps.channels.listPending()).map((item) => ({ ...item, childWorkbench: deps.sessions.workbenchPath(item.childId) })),
+  );
 }
 
 /** 主进程 → 所有主窗口，同 agent/ipc.ts 的 broadcastAgentEvent 形态 */

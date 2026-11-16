@@ -45,6 +45,11 @@ export function createSessionRecorder(
    * 另记一份按天的账。失败不拦对话——账本是可以从会话 JSONL 重建的派生数据。
    */
   tasks?: TaskLedger,
+  /**
+   * 一条通道标记落盘之后（这条通道消息已经交给这条会话的内核）：主进程据此给子→父消息出待投账
+   * （ChannelStore.clearPending）。落盘失败不回调——没落下就当没投，重开后再投一次（宁可重不可丢）。
+   */
+  onChannelMarked?: (sessionId: string, mark: ChannelMarkRecord) => void,
 ): (event: AgentEvent) => void {
   // 写失败不该让对话中断——记一条到 stderr，界面照常
   const persist = (sessionId: string, item: SessionRecord): void => {
@@ -127,7 +132,10 @@ export function createSessionRecorder(
     if (item.role === "user") {
       const mark = channelMarkOf(item);
       if (mark !== null) {
-        persist(event.sessionId, mark);
+        void store
+          .record(event.sessionId, mark)
+          .then(() => onChannelMarked?.(event.sessionId, mark))
+          .catch((error: unknown) => console.error("[session] 落盘失败", event.sessionId, error));
         return;
       }
     }
