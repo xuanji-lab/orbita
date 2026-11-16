@@ -874,6 +874,17 @@ export function queueControlTarget(states: SessionStates, viewedId: string | nul
   return states.get(viewedId)?.queued.some((item) => item.id === queuedId) === true ? viewedId : null;
 }
 
+/**
+ * 投递没送出去（IPC 直接失败：服务商被关、装配失败……）：出队的那几条按原顺序放回队首，不丢。已经在队里的（同 id）不重复放。
+ * 不自动重投（持续失败时会一遍遍地试）：会话停在空闲、队列留着，用户点「立即发送」或下一条消息时再发。
+ */
+export function requeueFront(states: SessionStates, sessionId: string, items: readonly QueuedMessage[]): SessionStates {
+  const current = states.get(sessionId)?.queued ?? [];
+  const back = items.filter((item) => !current.some((queued) => queued.id === item.id));
+  if (back.length === 0) return states;
+  return update(states, sessionId, (entry) => ({ ...entry, queued: [...back, ...entry.queued] }));
+}
+
 /** 按 id 移出一条（撤回 / 删除 / 投递后出队都走它）。找不到就原样返回。 */
 export function dequeue(states: SessionStates, sessionId: string, id: string): SessionStates {
   const entry = states.get(sessionId);

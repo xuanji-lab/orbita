@@ -24,6 +24,7 @@ import {
   planDelivery,
   settleUserSteer,
   queueControlTarget,
+  requeueFront,
   removeSessionEntry,
   revertOptimisticTurn,
   prependOlder,
@@ -1413,5 +1414,14 @@ describe("queueControlTarget：排队条按钮动的是排队条画的那条会�
     assert.equal(queueControlTarget(states(), "B", "new"), null);
     assert.equal(queueControlTarget(states(), null, "new"), null);
     assert.equal(queueControlTarget(states(), "A", "gone"), null);
+  });
+});
+
+describe("requeueFront：投递没送出去，出队的放回队首、不丢", () => {
+  it("按原顺序放回最前；已在队里的不重复", () => {
+    let states = enqueue(createSessionStates(), "A", { id: "c", kind: "text", text: "三" });
+    states = requeueFront(states, "A", [{ id: "a", kind: "text", text: "一" }, { id: "b", kind: "text", text: "二" }]);
+    assert.deepEqual(states.get("A")?.queued.map((item) => item.id), ["a", "b", "c"]);
+    assert.equal(requeueFront(states, "A", [{ id: "a", kind: "text", text: "一" }]), states);
   });
 });

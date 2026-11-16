@@ -25,6 +25,7 @@ import {
   planDelivery,
   settleUserSteer,
   queueControlTarget,
+  requeueFront,
   prependOlder,
   compactionCount,
   removeSessionEntry,
@@ -937,7 +938,10 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
       // 先装配、后出队：装配不出来（没有可用模型 / 工作区）时这一批留在队里，不在这里丢掉
       const turn = buildTurn(id);
       if (turn === null) return;
-      applyStates((prev) => [...(carrier === null ? [] : [carrier]), ...channels].reduce((acc, item) => dequeue(acc, id, item.id), prev));
+      // 按队列里原来的顺序记下这一批（放回队首时顺序不变）
+      const takenIds = new Set([...(carrier === null ? [] : [carrier.id]), ...channels.map((item) => item.id)]);
+      const taken = entry.queued.filter((item) => takenIds.has(item.id));
+      applyStates((prev) => taken.reduce((acc, item) => dequeue(acc, id, item.id), prev));
       const channelOnly = carrier === null;
       const dispatch = (request: () => Promise<void>): void => {
         const revert = beginOptimisticTurn(id);
@@ -945,6 +949,8 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
         request().catch((cause: unknown) => {
           setError(ipcErrorText(cause));
           channelTurns.current.delete(id);
+          // 没送出去：放回队首（以前出队即丢——用户排着的话就没了），会话归位空闲
+          applyStates((prev) => requeueFront(prev, id, taken));
           revert();
         });
       };
