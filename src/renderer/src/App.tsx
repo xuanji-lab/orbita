@@ -1349,7 +1349,7 @@ export function App() {
   };
   /**
    * 工具栏居中那颗胶囊的内容：设置页 = 标题（只有标题）；会话页 = SessionCapsule；
-   * 首页 = 不渲染。
+   * 首页 = 不渲染（主智能体还没说过话的空态例外：也要写明「这是谁」）。
    */
   const sessionSlot =
     overlay === "settings" || overlay === "board" ? (
@@ -1360,7 +1360,7 @@ export function App() {
           </strong>
         </div>
       </div>
-    ) : mainOpenId === "" && session.opened === null ? null : (
+    ) : mainOpenId === "" && session.opened === null && mainAgentWorkspace === undefined ? null : (
       <SessionCapsule
         title={capsuleTitle}
         tag={mainAgentWorkspace === undefined ? undefined : t.sidebar.mainAgent}

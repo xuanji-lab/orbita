@@ -34,13 +34,14 @@ import { SETTINGS_TABS, type SettingsTab } from "../features/settings/settings-t
 import { describeList } from "../features/chat/load-state.ts";
 import { nextCompletion } from "./completion-mark.ts";
 import { rowStatusIcon } from "./row-status.ts";
-import { aggregateRunStates, runStateLabel, runStateOf } from "../features/notify/completion-notice.ts";
+import { aggregateRunStates, runStateLabel, runStateOf, type SessionRunState } from "../features/notify/completion-notice.ts";
 import { StatusPie } from "./StatusPie";
 import { chipCompactAt, nextCompactLevel } from "./filter-row-compact.ts";
 import { ageCounts, filterByAge } from "./sidebar-age.ts";
 import { sessionAgeLabel } from "./relative-time.ts";
 import { useMinuteTick } from "./use-minute-tick.ts";
 import { matchesSessionQuery, workspaceRows } from "./workspace-rows.ts";
+import { useChannelStatuses } from "../features/chat/useChannelSummaries.ts";
 import {
   effectiveSidebarFilters,
   type StatusFilter,
@@ -364,8 +365,13 @@ export function Sidebar(props: {
    * 工作区下面列什么（常驻主智能体，2026-11-17）：工作区那一行就是主智能体，下面只露没了结的活，
    * 其余收进「以前的会话 N」（workspace-rows.ts）。状态与状态饼同一份真源（runStateOf）。
    */
+  const mainIds = session.sessions.filter((meta) => meta.role === "main").map((meta) => meta.id);
+  const channelStatus = useChannelStatuses(mainIds);
+  /** 行的状态：主智能体派出的活在问问题时转录是空闲的，按通道状态画成「等你」，其余同状态饼 */
+  const rowState = (meta: SessionMeta): SessionRunState =>
+    meta.parentId !== undefined && channelStatus.get(meta.id) === "waiting" ? "waiting" : runStateOf(session, meta);
   const rowsOf = new Map(
-    session.workspaces.map((workspace) => [workspace.id, workspaceRows(session.sessions, workspace.id, (meta) => runStateOf(session, meta))]),
+    session.workspaces.map((workspace) => [workspace.id, workspaceRows(session.sessions, workspace.id, rowState)]),
   );
   /** 「以前的会话」子视图开在哪个工作区上；工作区被移除了按没开处理 */
   const earlierWs =
@@ -409,6 +415,8 @@ export function Sidebar(props: {
   const openMain = (workspace: Workspace): void => {
     props.onOverlay(null);
     setEarlierFor(null);
+    // 进主智能体时把这一组展开：它名下没了结的活就在眼前（之后用户再折上，尊重用户）
+    setGroups((current) => unfoldGroup(current, foldKeyForWorkspace(workspace.id)));
     session.openMainAgent(workspace);
   };
   /** 这个工作区的主智能体此刻正打开着（盖着别的面时谁也不高亮） */
@@ -966,6 +974,7 @@ export function Sidebar(props: {
                       workspace={workspace}
                       sessions={rowsOf.get(workspace.id)?.open ?? []}
                       earlierCount={rowsOf.get(workspace.id)?.earlier.length ?? 0}
+                      rowState={rowState}
                       session={session}
                       openId={openId}
                       mainActive={mainActive(workspace.id)}
@@ -1115,6 +1124,8 @@ function WorkspaceGroup(props: {
   sessions: SessionMeta[];
   /** 收进「以前的会话」的条数；0 = 不画那一行 */
   earlierCount: number;
+  /** 行的状态饼（在问问题的子会话画成「等你」，见 Sidebar 的 rowState） */
+  rowState: (meta: SessionMeta) => SessionRunState;
   session: ChatSession;
   openId: string | null;
   /** 这个工作区的主智能体此刻正打开着：组头那一行高亮 */
@@ -1153,7 +1164,7 @@ function WorkspaceGroup(props: {
   const visible = visibleWithOpen(props.sessions, props.limit, props.openId);
   // 折叠时组头上的运行态汇总：组收起来就看不到行，这是「里面还有东西在干活 / 在等你」
   // 的唯一信号（2026-10-30 用户点名）。展开时行自己说，组头不重复
-  const agg = props.folded ? aggregateRunStates(props.sessions.map((meta) => runStateOf(props.session, meta))) : [];
+  const agg = props.folded ? aggregateRunStates(props.sessions.map(props.rowState)) : [];
 
   const commit = () => {
     if (editing !== null) props.onRename(editing);
@@ -1349,6 +1360,7 @@ function WorkspaceGroup(props: {
               key={meta.id}
               meta={meta}
               session={props.session}
+              bar={props.rowState(meta)}
               active={props.rowActive(meta.id)}
               onClick={(event) => props.onRowClick(meta.id, event)}
               checkbox={props.checking ? props.isChecked(meta.id) : undefined}
@@ -1679,6 +1691,8 @@ function NavRow(props: {
 function SessionRow(props: {
   meta: SessionMeta;
   session: ChatSession;
+  /** 状态饼由调用方给（主智能体派出的活要看通道状态）；缺席 = 按 runStateOf 现算 */
+  bar?: SessionRunState | undefined;
   active: boolean;
   onClick: (event: React.MouseEvent) => void;
   /** 勾选态：true / false = 画勾选框（是否勾上）；undefined = 不在勾选态 */
@@ -1704,7 +1718,7 @@ function SessionRow(props: {
   // 这一行的状态饼上（入口在母），fork 图标再补「跑的是孩子」那一句
   const children = childSessions(session.sessions, meta.id);
   // 状态饼（sessionRunState，与右下角铃铛清单同一份真源）
-  const bar = runStateOf(session, meta);
+  const bar = props.bar !== undefined ? props.bar : runStateOf(session, meta);
   const done = isSessionDone(meta);
   /**
    * 行首状态槽：subRunning > pinned > 空。运行 / 未读 / 失败已归状态饼，槽里只剩

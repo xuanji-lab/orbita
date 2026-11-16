@@ -1773,6 +1773,7 @@ export const zh: Messages = {
     moveBlocked: "任务正在运行，停下后再移",
     // 批改的落款：全角空格隔开评语与「阅 月.日」（原型「字迹工整　阅 9.25」）
     homeMark: (month, day) => `字迹工整　阅 ${month}.${day}`,
+    placeholderMain: "交给它一件事，或者问问做到哪了",
     placeholderNew: "问点什么，或交办一件事",
     placeholderReply: "回一句，或调整方向",
     providersFailed: (error) => `服务商载入失败：${error}——打开设置重试。`,

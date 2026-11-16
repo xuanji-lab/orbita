@@ -1926,6 +1926,7 @@ export const en = {
      * 两档出现。月份照美式批改的缩写（原型写「Sept 25」）：五个字母以内的月份写全
      */
     homeMark: (month: number, day: number) => `Neat. — ${MARK_MONTHS[month - 1] ?? month} ${day}`,
+    placeholderMain: "Hand it something to do, or ask how things are going",
     placeholderNew: "Ask anything, or start a task",
     placeholderReply: "Reply, or steer the agent",
     providersFailed: (error: string) => `Providers failed to load: ${error} — open Settings to retry.`,

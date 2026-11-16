@@ -1315,9 +1315,12 @@ function ChatViewBody(props: {
       placeholder={
         session.quotes.length > 0
           ? t.quote.replyPlaceholder(session.quotes.length)
-          : homeActive
-            ? t.chat.placeholderNew
-            : t.chat.placeholderReply
+          : session.mainPending !== null ||
+              session.sessions.some((meta) => meta.role === "main" && meta.id === (session.sessionId ?? session.opened?.id))
+            ? t.chat.placeholderMain
+            : homeActive
+              ? t.chat.placeholderNew
+              : t.chat.placeholderReply
       }
       disabled={session.usable.length === 0 || session.readOnly}
       running={session.phase !== "idle"}

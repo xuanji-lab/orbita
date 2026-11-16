@@ -45,3 +45,39 @@ export function useChannelSummaries(parentId: string | null): ReadonlyMap<string
 
   return summaries;
 }
+
+/**
+ * 侧栏用：好几个主智能体（每个工作区一个）派出去的活，各自的通道状态（子会话 id → 状态）。
+ * 子会话在问问题（status = waiting）时它自己的转录是空闲的，状态饼会画成「做完没看」——
+ * 侧栏要靠这份把它画成「等你」（设计稿 1-entry-after：在问你的那件是橙点）。
+ * 拉取口径与 useChannelSummaries 相同：父集合变了拉一遍，之后任一父的通道事件就重拉那一个。
+ */
+export function useChannelStatuses(parentIds: readonly string[]): ReadonlyMap<string, ChannelSummary["status"]> {
+  const [byParent, setByParent] = useState<ReadonlyMap<string, readonly ChannelSummary[]>>(new Map());
+  const key = [...parentIds].sort().join(",");
+  useEffect(() => {
+    const parents = key === "" ? [] : key.split(",");
+    let cancelled = false;
+    const refresh = (parentId: string): void => {
+      void api.channel
+        .list(parentId)
+        .then((list) => {
+          if (cancelled) return;
+          setByParent((current) => new Map(current).set(parentId, list));
+        })
+        .catch((cause: unknown) => console.error("[channel] 通道列表读取失败", parentId, cause));
+    };
+    setByParent(new Map());
+    parents.forEach(refresh);
+    const off = api.channel.onEvent((event) => {
+      if (parents.includes(event.parentId)) refresh(event.parentId);
+    });
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, [key]);
+  const out = new Map<string, ChannelSummary["status"]>();
+  for (const list of byParent.values()) for (const summary of list) out.set(summary.childId, summary.status);
+  return out;
+}
