@@ -25,10 +25,18 @@ export interface TranscriptSplit<T> {
  * 按最后一条 user 记录切分。没有 user 记录时整段都是尾段（历史为空）——派生口径与
  * 不切时一致：尾段从第一条记录开始，`groupTurns*` 仍按 user / 界碑切段。
  */
-export function splitAtLastUser<T extends { role: string }>(records: readonly T[]): TranscriptSplit<T> {
+export function splitAtLastUser<T extends { role: string }>(
+  records: readonly T[],
+  /**
+   * 哪些记录算切点（默认：role 为 user）。一轮一行里子会话交回来的消息不一定是轮边界
+   * （groupTurnsByTurn 的 startsNewTurn），调用方据此把它排除——切点必须是所有显示方式下都成立的轮边界。
+   */
+  isBoundary: (record: T) => boolean = (record) => record.role === "user",
+): TranscriptSplit<T> {
   let boundary = 0;
   for (let i = records.length - 1; i >= 0; i -= 1) {
-    if (records[i]?.role === "user") {
+    const record = records[i];
+    if (record !== undefined && isBoundary(record)) {
       boundary = i + 1;
       break;
     }

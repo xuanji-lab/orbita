@@ -24,6 +24,7 @@ import {
 } from "../../../../shared/plan.ts";
 import { assignStepIds, diffPlans, type PlanChange } from "../../../../shared/plan-diff.ts";
 import type { ProcessChapter } from "../chat/turn-process.ts";
+import { stepTime } from "../chat/tool-results.ts";
 
 /** 一步的出处：它是这张计划写下之后才出现的（加 / 改说法 / 拆出），面板在行下写一句 */
 export interface StepNote {
@@ -281,7 +282,7 @@ export function groupBySteps(
       // 只有 update_plan 的章（纯记账）不挂；没有干活调用的旁白章按第一步的时刻归属
       if (work.length === 0 && chapter.calls.length > 0) return;
       const first = chapter.steps[0];
-      const t = first === undefined ? 0 : first.kind === "toolGroup" ? (first.calls[0]?.timestamp ?? 0) : first.timestamp;
+      const t = first === undefined ? 0 : stepTime(first, "first");
       chapterBucket ??= bucketAt(timeline, t);
       of(chapterBucket).chapters.push({
         chapter,

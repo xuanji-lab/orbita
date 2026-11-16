@@ -912,6 +912,11 @@ export function App() {
   /** 输入框旁上下文环菜单的「查看上下文」：直达右栏上下文面板 */
   // 「这条任务」面板的页签：右侧图标条开它时保持上次的页签；输入框旁的用量环开它时直接落在「上下文」
   const [taskTab, setTaskTab] = useState<TaskPanelTab>("progress");
+  /** 过程行「改了计划」那一行的「在进度面板看」：直达「这条任务 › 进度」 */
+  const openProgressPanel = useCallback(() => {
+    setTaskTab("progress");
+    handlePanel("context");
+  }, [handlePanel]);
   const openContextPanel = useCallback(() => {
     setTaskTab("context");
     handlePanel("context");
@@ -1545,6 +1550,7 @@ export function App() {
                 tokenPickResult={tokenPickResult}
                 intentNewSessionDefault={effectiveIntentSettings(settings.intent).newSessionOn}
                 onOpenIntentPanel={openIntentPanel}
+                onOpenProgress={openProgressPanel}
                 onOpenMemoryReview={openMemoryReview}
                 onOpenContextPanel={openContextPanel}
                 onOpenSideChat={openInSideChat}

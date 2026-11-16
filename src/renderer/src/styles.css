@@ -5346,8 +5346,9 @@ mark.intent-mark {
   min-height: var(--control-height-sm);
   padding: 0 var(--content-hem);
 }
+/* 一个面上只留一个会动的记号：现场块头上这一个转圈，灰色（2026-11-17：太红绿灯了，太想提醒我） */
 .proc-head > .orbita-icon {
-  color: var(--color-info);
+  color: var(--color-text-tertiary);
   flex: none;
 }
 .proc-strong {
@@ -5366,8 +5367,9 @@ mark.intent-mark {
   font-variant-numeric: tabular-nums;
   color: var(--color-text-tertiary);
 }
+/* 没让这一轮失败的失败不上色：灰字照实写 */
 .proc-bad {
-  color: var(--color-danger);
+  color: var(--color-text-tertiary);
 }
 .proc-time {
   margin-left: auto;
@@ -5436,9 +5438,16 @@ mark.intent-mark {
   flex: none;
   width: 12px;
 }
-.proc-mark.ok { color: var(--color-success); }
-.proc-mark.bad { color: var(--color-danger); }
-.proc-step.now .proc-mark { color: var(--color-info); }
+.proc-mark.ok,
+.proc-mark.bad,
+.proc-step.now .proc-mark { color: var(--color-text-tertiary); }
+/* 此刻这一步：静止的实心小点（会动的只有块头那一个转圈） */
+.proc-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
 .proc-verb {
   flex: none;
   min-width: 3em;
@@ -5464,7 +5473,100 @@ mark.intent-mark {
 .proc-foot.slow {
   padding-left: var(--content-hem);
   font-family: var(--font-family-base);
-  color: var(--color-warning);
+  color: var(--color-text-secondary);
+}
+
+/* 落定那一行的摘要：按种类数出来的一句（turn-events.ts），灰字；放不下就省略号 */
+.proc-sum {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: var(--weight-regular);
+  color: var(--color-text-tertiary);
+}
+.proc-chev {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+
+/* 过程行点开：每件事一行灰字（动词 · 内容 · 时间），按时间排，不要小标题。左边一根发丝挂在内线上 */
+.proc-events {
+  list-style: none;
+  margin: 0 0 var(--space-2) var(--content-hem);
+  padding: 0 0 0 var(--space-3);
+  border-left: 1px solid var(--color-border-subtle);
+  display: grid;
+  gap: 0;
+  min-width: 0;
+}
+.proc-ev-wrap {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.proc-ev {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: var(--control-height-sm);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+.proc-ev-btn {
+  width: 100%;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.proc-ev-btn:hover {
+  background: var(--color-bg-hover);
+}
+.proc-ev-verb {
+  flex: none;
+  min-width: 5em;
+  color: var(--color-text-tertiary);
+}
+.proc-ev-text {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.proc-ev-link {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--color-text-secondary);
+  text-decoration: underline;
+  text-decoration-color: var(--color-border-default);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.proc-ev-link:hover {
+  color: var(--color-text-primary);
+  text-decoration-color: currentColor;
+}
+.proc-ev-time {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.proc-ev-other {
+  min-width: 0;
 }
 
 /* 落定后展开的章节时间线：竖线挂在内线上，章节点压在线上 */

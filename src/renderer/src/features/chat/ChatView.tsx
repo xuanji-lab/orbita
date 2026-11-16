@@ -41,6 +41,7 @@ import {
 // 历史段 / 实时尾段的切分与派生复用（纯模块，可与整段一次性计算等价）
 import { deriveHistorySegment, type HistoryCache } from "./history-segment.ts";
 import { splitAtLastUser } from "./transcript-split.ts";
+import { processEvents, processSummary, processTally, tallyHasEvents, type ProcessEvent } from "./turn-events.ts";
 import { readFoldState, writeFoldState } from "./fold-state.ts";
 // 历史段虚拟化：行过滤 / 下标映射 / 高度 LRU / 锚点换算（纯模块）
 import {
@@ -73,21 +74,19 @@ import { sessionRunState, type SessionRunState } from "../notify/completion-noti
 import { REVEAL_ENTRY_EVENT } from "../context/task-progress.ts";
 import { planAwaitingIn, planNoticeOf, planTimeline, type PlanTimeline, type PlanVersion } from "../context/plan-timeline.ts";
 import { PlanCard } from "./PlanCard";
-import { goalNoticeText, planNoticeText } from "../context/plan-text.ts";
+import { goalNoticeText, planChangeText, planNoticeText } from "../context/plan-text.ts";
 import { useGoalLedger } from "../context/useGoalLedger.ts";
 import { GOAL_TOOL_NAME } from "../../../../shared/goal.ts";
 import type { GoalLedger } from "../../../../shared/goal-ledger.ts";
 import { PLAN_TOOL_NAME } from "../../../../shared/plan.ts";
 import {
-  CHAPTER_STEPS_SHOWN,
+  firstLine,
   processOutcome,
   SLOW_GAP_MS,
   TAIL_AFTER_MS,
-  processChapters,
   processCounts,
   processCalls,
   processLive,
-  type ProcessChapter,
 } from "./turn-process.ts";
 import {
   branchAnchorEntries,
@@ -106,6 +105,7 @@ import {
   groupToolUnits,
   groupTurns,
   groupTurnsByTurn,
+  isChildChannelRecord,
   rollupToolKey,
   indexToolResults,
   interruptedToolCallIds,
@@ -731,6 +731,8 @@ function ChatViewBody(props: {
    * 主槽旁边）；右栏与抽屉里不传，终态卡不画这个链接。
    */
   onOpenIntentPanel?: () => void;
+  /** 过程行里「改了计划」那一行的「在进度面板看」：打开右栏「这条任务 › 进度」 */
+  onOpenProgress?: () => void;
   /**
    * 对话里记忆行的「在审查面板里看」：打开右栏审查面板的记忆页签。只有主槽拿到它；
    * 右栏与抽屉里不传，记忆行照常显示、只是没有这个链接。
@@ -1748,6 +1750,7 @@ function ChatViewBody(props: {
           readOnly={session.readOnly}
           onOpenReviewAt={props.onOpenReviewAt}
           onOpenIntentPanel={props.onOpenIntentPanel}
+          onOpenProgress={props.onOpenProgress}
           memoryView={memorySession.data}
           onOpenMemoryReview={props.onOpenMemoryReview}
           sessionId={openId}
@@ -1822,6 +1825,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   onOpenReviewAt?: (path: string) => void;
   /** 召回终态卡的「在右栏看图谱」（主槽才有；引用稳定，不破 memo） */
   onOpenIntentPanel?: () => void;
+  /** 过程行里「改了计划」那一行的「在进度面板看」：打开右栏「这条任务 › 进度」 */
+  onOpenProgress?: () => void;
   /** 记忆查询（会话作用域）：历史段据此配「记忆 · 用到 N 条」行；null = 关着 / 没数据 */
   memoryView: MemorySessionView | null;
   /** 记忆行的「在审查面板里看」（主槽才有） */
@@ -1897,7 +1902,11 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   // 通道标记都是段边界）保证两段各自派生与整段一次性计算等价（推导与测试见
   // history-segment.ts / transcript-split.ts）。历史段的派生物在记录前缀不变时按引用
   // 复用，尾段每帧重建——目标是不做虚拟化也让流式只重算尾轮。
-  const boundary = useMemo(() => splitAtLastUser(records).boundary, [records]);
+  // 子会话交回来的消息不当切点：一轮一行里它不一定是轮边界（实时流里它先以 user 记录出现）
+  const boundary = useMemo(
+    () => splitAtLastUser(records, (record) => record.role === "user" && !isChildChannelRecord(record)).boundary,
+    [records],
+  );
   const historyCacheRef = useRef<HistoryCache | null>(null);
   const history = useMemo(() => {
     const next = deriveHistorySegment(historyCacheRef.current, {
@@ -2021,6 +2030,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       onRevertTo,
       onOpenReviewAt: props.onOpenReviewAt,
       onOpenIntentPanel: props.onOpenIntentPanel,
+      onOpenProgress: props.onOpenProgress,
       onOpenMemoryReview: props.onOpenMemoryReview,
       cutRef,
     }),
@@ -2041,6 +2051,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       onRevertTo,
       props.onOpenReviewAt,
       props.onOpenIntentPanel,
+      props.onOpenProgress,
       props.onOpenMemoryReview,
     ],
   );
@@ -2073,6 +2084,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       onRevertTo,
       onOpenReviewAt: props.onOpenReviewAt,
       onOpenIntentPanel: props.onOpenIntentPanel,
+      onOpenProgress: props.onOpenProgress,
       onOpenMemoryReview: props.onOpenMemoryReview,
       cutRef,
     }),
@@ -2103,6 +2115,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       onRevertTo,
       props.onOpenReviewAt,
       props.onOpenIntentPanel,
+      props.onOpenProgress,
       props.onOpenMemoryReview,
     ],
   );
@@ -2588,6 +2601,8 @@ interface RowScope {
   onRevertTo: (messageId: string) => void;
   onOpenReviewAt?: (path: string) => void;
   onOpenIntentPanel?: () => void;
+  /** 过程行里「改了计划」那一行的「在进度面板看」：打开右栏「这条任务 › 进度」 */
+  onOpenProgress?: () => void;
   onOpenMemoryReview?: () => void;
   /** 回退预演切点那条虚线的落点 */
   cutRef: React.RefObject<HTMLDivElement | null>;
@@ -2714,6 +2729,8 @@ const TranscriptRow = memo(function TranscriptRow(props: {
           turnFailed={entry.key === scope.failedFold}
           skills={scope.skills}
           interruptedCalls={scope.interruptedCalls}
+          channel={scope.channel}
+          onOpenProgress={scope.onOpenProgress}
           renderStep={(step) => (
             <EntryView
               key={step.key}
@@ -3652,6 +3669,8 @@ function EntryView(props: {
   onOpenReviewAt?: (path: string) => void;
   /** 召回终态卡的「在右栏看图谱」（主槽才有） */
   onOpenIntentPanel?: () => void;
+  /** 过程行里「改了计划」那一行的「在进度面板看」：打开右栏「这条任务 › 进度」 */
+  onOpenProgress?: () => void;
   /** 记忆行：挂在用户气泡下；undefined = 不画 */
   memory?: MemoryLines | null;
   onOpenMemoryReview?: () => void;
@@ -4490,6 +4509,9 @@ function TurnProcessLine(props: {
   skills: SkillMeta[];
   interruptedCalls: ReadonlySet<string>;
   renderStep: (step: ProcessStep) => ReactNode;
+  /** 点开后和子会话来往那几行的「看它的会话」与对面的名字 */
+  channel: ChannelViewContext;
+  onOpenProgress?: () => void;
 }) {
   const t = useT();
   const today = useToday();
@@ -4578,7 +4600,7 @@ function TurnProcessLine(props: {
           ))}
           <div className="proc-step now">
             <span className="proc-mark">
-              <Icon name="loader-circle" size={12} strokeWidth={1.8} spin />
+              <span className="proc-dot" />
             </span>
             {current.kind === "tool" ? (
               <>
@@ -4587,7 +4609,7 @@ function TurnProcessLine(props: {
               </>
             ) : (
               <>
-                <span className="proc-verb orbita-breath">{t.chat.processThinking}</span>
+                <span className="proc-verb">{t.chat.processThinking}</span>
                 {/* 章节行已经是这段思考时不重复；章节是旁白时，这里补「此刻在想什么」 */}
                 <code className="proc-preview">{snap.chapter?.source === "think" ? "" : (current.preview ?? "")}</code>
               </>
@@ -4600,14 +4622,25 @@ function TurnProcessLine(props: {
     );
   }
 
-  // 一步工具都没跑的轮说它做了什么（想了想 / 更新了计划），不写「0 步」（processOutcome）
+  // 落定：一行「N 步 · 用时」+ 一句按种类数出来的摘要（turn-events.ts），点开每件事一行灰字。
+  // 改计划、子会话交回 / 提问、给子会话回话、派活都只在这里（2026-11-17 对话流降噪）
+  const events = processEvents(unit.steps, {
+    results: props.toolResults,
+    skills: props.skills,
+    planChanged: (id) => planNoticeOf(props.plan, [id]) !== null,
+    goalChanged: (id) => goalNoticeText(t, props.ledger, [id]) !== null,
+    delegatedChild: (id) => delegateCard(props.toolResults.get(id))?.childId ?? null,
+  });
+  const tally = processTally(events);
+  const summary = processSummary(t, tally);
+  // 只是干活（读、跑、改）没有别的事：摘要退回按工具数（灰字，失败也不上色）
+  const fallback = tallyHasEvents(tally) ? [] : counts.byTool.slice(0, 4).map(({ key, count }) => `${toolWord(t.chat.rollupTool, key)} ${count}`);
   const result = processOutcome(counts, unit.steps);
-  const outcome =
-    result.kind === "thought"
-      ? t.chat.processThoughtOnly
-      : result.kind === "plan"
-        ? t.chat.processPlanOnly
-        : [...(result.files > 0 ? [t.chat.processWrote(result.files)] : []), t.chat.processSteps(result.steps)].join(" · ");
+  const lead = [
+    ...(result.kind === "work" ? [t.chat.processSteps(result.steps)] : tallyHasEvents(tally) ? [] : [result.kind === "thought" ? t.chat.processThoughtOnly : t.chat.processPlanOnly]),
+    ...(unit.durationMs !== null ? [formatToolDuration(unit.durationMs, t)] : []),
+  ].join(" · ");
+  const sentence = [...summary.slice(0, summary.length - (tally.failed > 0 ? 1 : 0)), ...fallback, ...(tally.failed > 0 ? summary.slice(-1) : [])].join(" · ");
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
       {timeLabel}
@@ -4618,23 +4651,25 @@ function TurnProcessLine(props: {
           </span>
         )}
         <span className="proc-head-row">
-          <span className="proc-strong">{outcome}</span>
-          <span className="proc-num">
-            {toolChips}
-            {failed}
+          {lead !== "" && <span className="proc-strong">{lead}</span>}
+          {sentence !== "" && <span className="proc-sum">{sentence}</span>}
+          <span className="proc-chev" aria-hidden="true">
+            <Icon name={open ? "chevron-down" : "chevron-right"} size={12} strokeWidth={1.8} />
           </span>
-          {unit.durationMs !== null && <span className="proc-time">{formatToolDuration(unit.durationMs, t)}</span>}
         </span>
       </CollapseRow>
       {open && (
-        <ol className="proc-chapters">
-          {processChapters(unit.steps).map((chapter) => (
-            <ProcessChapterItem key={chapter.key} chapter={chapter} {...props} />
-          ))}
-        </ol>
+        <ProcessEventList
+          events={events}
+          plan={props.plan}
+          ledger={props.ledger}
+          toolResults={props.toolResults}
+          skills={props.skills}
+          channel={props.channel}
+          renderStep={props.renderStep}
+          onOpenProgress={props.onOpenProgress}
+        />
       )}
-      {goalNoticeLine !== null && <Notice icon="pencil-line">{goalNoticeLine}</Notice>}
-      {planNoticeLine !== null && <Notice icon="pencil-line">{planNoticeLine}</Notice>}
       {props.awaitingPlan !== null && planCallIds.includes(props.awaitingPlan.toolCallId) && (
         <PlanCard version={props.awaitingPlan} />
       )}
@@ -4642,7 +4677,149 @@ function TurnProcessLine(props: {
   );
 }
 
-/** 章节时间线的一章：标题 + 前几步的小标签；点开看这一章的每一步（原样的工具行） */
+/**
+ * 过程行点开：每件事一行灰字（动词 · 内容 · 时间），按时间排，不要小标题。和子会话的来往、改计划也只是一行，
+ * 行尾能点到那条子会话或进度面板；工具那几行点开沿用原样的工具行。
+ */
+function ProcessEventList(props: {
+  events: readonly ProcessEvent[];
+  plan: PlanTimeline | null;
+  ledger: GoalLedger;
+  toolResults: ToolResultIndex;
+  skills: SkillMeta[];
+  channel: ChannelViewContext;
+  renderStep: (step: ProcessStep) => ReactNode;
+  onOpenProgress?: () => void;
+}) {
+  const t = useT();
+  const today = useToday();
+  const r = t.chat.procRow;
+  const openSession = props.channel.openSubSession;
+  const sessionLink = (peerId: string | null) =>
+    openSession !== null && peerId !== null && peerId !== ""
+      ? { label: r.openSession, onClick: () => openSession(peerId) }
+      : null;
+  const progressLink = props.onOpenProgress === undefined ? null : { label: r.openProgress, onClick: props.onOpenProgress };
+  return (
+    <ol className="proc-events">
+      {props.events.map((event) => {
+        const time = formatMessageTime(event.time, today);
+        switch (event.kind) {
+          case "tools": {
+            const first = event.calls[0];
+            const label =
+              first === undefined
+                ? ""
+                : (docEditCallLabel(first.toolName, first.input, props.toolResults.get(first.toolCallId)) ??
+                  toolCallSummaryForRow(first.toolName, first.input, props.skills) ??
+                  "");
+            const content = [
+              label + (event.calls.length > 1 ? ` ${r.more(event.calls.length)}` : ""),
+              ...(event.failed > 0 ? [r.failed(event.failed)] : []),
+            ]
+              .filter((part) => part.trim() !== "")
+              .join(t.common.listSeparator);
+            return (
+              <ProcessToolsRow
+                key={event.key}
+                verb={toolWord(t.chat.rollupTool, event.toolKey, first?.input)}
+                content={content}
+                time={time}
+                steps={event.steps}
+                renderStep={props.renderStep}
+              />
+            );
+          }
+          case "say":
+            return <ProcessEventRow key={event.key} verb={r.say} content={event.text} time={time} />;
+          case "childIn": {
+            const verb =
+              event.msgKind === "done" ? r.returned : event.msgKind === "question" ? r.asked : event.msgKind === "failed" ? r.childFailed : r.childOther;
+            const body = props.channel.channelMessages.get(event.messageId)?.text ?? "";
+            const line = firstLine(body);
+            const content = r.quoted(peerTitleOf(props.channel, event.peerId, t)) + (line === null ? "" : ` ${line}`);
+            return <ProcessEventRow key={event.key} verb={verb} content={content} time={time} link={sessionLink(event.peerId)} />;
+          }
+          case "reply": {
+            const line = event.text === null ? null : firstLine(event.text);
+            const content = r.toWhom(peerTitleOf(props.channel, event.peerId ?? "", t)) + (line === null ? "" : `：${line}`);
+            return <ProcessEventRow key={event.key} verb={r.replied} content={content} time={time} link={sessionLink(event.peerId)} />;
+          }
+          case "delegate": {
+            const title = event.peerId !== null ? (props.channel.titles.get(event.peerId) ?? event.title) : event.title;
+            return (
+              <ProcessEventRow key={event.key} verb={r.delegated} content={r.quoted(title ?? t.channel.subSession)} time={time} link={sessionLink(event.peerId)} />
+            );
+          }
+          case "plan": {
+            const notice = planNoticeOf(props.plan, [event.toolCallId]);
+            const first = notice?.changes[0];
+            const content = notice === null || first === undefined ? "" : r.planChanges(notice.changes.length, planChangeText(t, first));
+            return <ProcessEventRow key={event.key} verb={r.plan} content={content} time={time} link={progressLink} />;
+          }
+          case "goal":
+            return (
+              <ProcessEventRow
+                key={event.key}
+                verb={r.goal}
+                content={goalNoticeText(t, props.ledger, [event.toolCallId]) ?? ""}
+                time={time}
+                link={progressLink}
+              />
+            );
+          case "memory":
+            return null;
+          default:
+            return <li key={event.key} className="proc-ev-other">{props.renderStep(event.step)}</li>;
+        }
+      })}
+    </ol>
+  );
+}
+
+function ProcessEventRow(props: {
+  verb: string;
+  content: string;
+  time: string;
+  link?: { label: string; onClick: () => void } | null;
+}) {
+  return (
+    <li className="proc-ev">
+      <span className="proc-ev-verb">{props.verb}</span>
+      <span className="proc-ev-text">
+        <InlineMarks text={props.content} />
+      </span>
+      {props.link != null && (
+        <button type="button" className="proc-ev-link" onClick={props.link.onClick}>
+          {props.link.label}
+        </button>
+      )}
+      <span className="proc-ev-time row-trailing">{props.time}</span>
+    </li>
+  );
+}
+
+/** 工具那一行：整行可点，点开原样画这几步（沿用现有的工具行展开） */
+function ProcessToolsRow(props: {
+  verb: string;
+  content: string;
+  time: string;
+  steps: readonly ProcessStep[];
+  renderStep: (step: ProcessStep) => ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <li className="proc-ev-wrap">
+      <button type="button" className="proc-ev proc-ev-btn" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        <span className="proc-ev-verb">{props.verb}</span>
+        <span className="proc-ev-text">{props.content}</span>
+        <span className="proc-ev-time row-trailing">{props.time}</span>
+      </button>
+      {open && <div className="proc-ch-body">{props.steps.map((step) => props.renderStep(step))}</div>}
+    </li>
+  );
+}
+
 /**
  * 落在文档文件上的 edit / write 的摘要：「文件名 · 第几节」（节取自 edit 结果的 diff 上下文，退到此刻开着的文档全文）。
  * 不是文档上的 edit / write 返回 null，调用方用通用摘要。
@@ -4652,53 +4829,6 @@ function docEditCallLabel(toolName: string, input: unknown, result: ToolTranscri
   if (path === null) return null;
   const diff = toolName === "edit" && result !== undefined && result.status !== "running" ? editDiffText(result) : null;
   return docEditSummary(path, diff === null ? null : docEditSection(parseEditDiff(diff), getOpenDocumentText(path)));
-}
-
-function ProcessChapterItem(props: {
-  chapter: ProcessChapter;
-  toolResults: ToolResultIndex;
-  skills: SkillMeta[];
-  renderStep: (step: ProcessStep) => ReactNode;
-}) {
-  const t = useT();
-  const [open, setOpen] = useFoldState(`chapter:${props.chapter.key}`);
-  const { chapter } = props;
-  const failed = chapter.calls.some((call) => props.toolResults.get(call.toolCallId)?.status === "error");
-  const title =
-    chapter.title ??
-    t.chat.processToolsTitle(
-      processCounts(chapter.steps, props.toolResults, props.skills)
-        .byTool.map(({ key, count }) => t.chat.processToolPart(toolWord(t.chat.rollupTool, key), count))
-        .join(t.common.listSeparator),
-    );
-  const shown = chapter.calls.slice(0, CHAPTER_STEPS_SHOWN);
-  return (
-    <li className={failed ? "bad" : undefined}>
-      <button
-        type="button"
-        className="proc-chapter-btn"
-        aria-expanded={open}
-        title={t.chat.processChapterSteps}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <span className={chapter.source === "say" ? "proc-ch-title" : "proc-ch-title think"}>
-          <InlineMarks text={title} />
-        </span>
-        {chapter.calls.length > 0 && (
-          <span className="proc-ch-steps">
-            {shown.map((call) => (
-              <span key={call.toolCallId} className={props.toolResults.get(call.toolCallId)?.status === "error" ? "bad" : undefined}>
-                {toolWord(t.chat.rollupTool, rollupToolKey(call.toolName, call.input, props.skills), call.input)}{" "}
-                {docEditCallLabel(call.toolName, call.input, props.toolResults.get(call.toolCallId)) ?? toolCallSummaryForRow(call.toolName, call.input, props.skills) ?? ""}
-              </span>
-            ))}
-            {chapter.calls.length > shown.length && <span>{t.chat.processMore(chapter.calls.length - shown.length)}</span>}
-          </span>
-        )}
-      </button>
-      {open && <div className="proc-ch-body">{chapter.steps.filter((step) => step.kind !== "text").map((step) => props.renderStep(step))}</div>}
-    </li>
-  );
 }
 
 function CollapseRow(props: {
