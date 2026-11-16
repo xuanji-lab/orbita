@@ -384,6 +384,11 @@ export interface SessionMeta {
    */
   thinkingLevel: ThinkingLevel;
   /**
+   * 只写不读：store 写盘时固定盖 "skip"，只为回滚兼容旧内核（旧版缺 mode 会读成只读的计划档）。
+   * 新版不解析、不依赖它；不再支持回滚到旧内核版本时可删掉。
+   */
+  mode?: "skip";
+  /**
    * pi 自己那份 session 文件的路径；**null = 这条会话只能读不能续**。
    *
    * 续会话不是我们把历史重讲一遍，而是把 pi 自己的本子还给它
