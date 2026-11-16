@@ -349,6 +349,46 @@ describe("KernelSessions：停止 / 抢跑 / 切档 / 插话", () => {
     assert.equal(r.settled[0]?.result.ok === true && r.settled[0].result.status, "unanswered");
   });
 
+  it("403 带 server_error 的错误体（OpenCode 的形状）走新运行时的重试循环也不重试：只请求一次；同形的 503 会重试", async () => {
+    const forbidden = 'OpenAI API error (403): {"type":"server_error","message":"Upstream request failed: Model access is disabled"}';
+    let calls = 0;
+    faux.setResponses([
+      () => {
+        calls++;
+        return fauxAssistantMessage("", { stopReason: "error", errorMessage: forbidden });
+      },
+      () => {
+        calls++;
+        return fauxAssistantMessage("不该走到这里");
+      },
+    ]);
+    const cwd = await tempDir();
+    const r = await rig();
+    await r.sessions.handle("s1", submit(cwd));
+    await r.until(idle());
+    assert.equal(calls, 1, "403 只请求一次");
+    assert.ok(!r.events.some((event) => event.type === "retry" && event.status !== null), "403 不进重试");
+    assert.ok(r.events.some((event) => event.type === "failed" && event.sessionId === "s1" && /Model access is disabled/.test(event.message)));
+
+    // 对照：同一个错误体换成 503，重试一次后答出来——证明上面的「不重试」是判定拦下的，不是循环没开
+    let retried = 0;
+    faux.setResponses([
+      () => {
+        retried++;
+        return fauxAssistantMessage("", { stopReason: "error", errorMessage: forbidden.replace("(403)", "(503)") });
+      },
+      () => {
+        retried++;
+        return fauxAssistantMessage("重试后答出");
+      },
+    ]);
+    const cwd2 = await tempDir();
+    const r2 = await rig();
+    await r2.sessions.handle("s2", submit(cwd2, { sessionId: "s2" }));
+    await r2.until(idle("s2"));
+    assert.equal(retried, 2, "503 重试了一次");
+  });
+
   it("停止正在跑的 bash：这一轮停下、子进程被杀干净、立刻能再发", async () => {
     const cwd = await tempDir();
     const marker = `orbita-stop-${Date.now()}`;
