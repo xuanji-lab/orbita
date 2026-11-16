@@ -15,6 +15,7 @@ import { EMPTY_ENTRY } from "./features/chat/session-states.ts";
 import { ChatView } from "./features/chat/ChatView";
 import { useChannelSummaries } from "./features/chat/useChannelSummaries";
 import { subSessionStatusOf } from "./features/chat/sub-sessions-rows";
+import type { AttentionItem } from "./shell/attention.ts";
 import { SubSessionsPanel } from "./features/chat/SubSessionsPanel";
 import {
   SUB_SESSIONS_LIST,
@@ -1226,6 +1227,35 @@ export function App() {
     setRailCtx((current) => ({ owner: target, epoch: current.epoch + 1 }));
   }, [mainOpenId, rightPanel, taskTab]);
 
+  /**
+   * 侧栏「等你」点一行：主智能体派出去的活 → 打开那个工作区的主对话，再在右栏子会话面板里打开那件活
+   * （「定位到那件事」）；没做成的那件点开就算看过了，清掉未读，那一行随之消失（点一个只消一个）。
+   * 不属于主智能体的根会话 → 直接打开它。
+   * 定位要等主槽真的换成那条主会话：切主槽那一拍上面两个效果会把右栏恢复成那条会话记着的样子，
+   * 所以记一个待定位，等 mainOpenId 对上再开（本效果排在它们后面，同一拍里后写的生效）。
+   */
+  const [pendingLocate, setPendingLocate] = useState<{ parentId: string; childId: string } | null>(null);
+  const openAttention = (item: AttentionItem): void => {
+    const meta = item.meta;
+    if (meta.parentId === undefined) {
+      void session.openSession(meta.id);
+      return;
+    }
+    const workspace = session.workspaces.find((candidate) => candidate.id === item.workspaceId);
+    if (workspace === undefined) {
+      void session.openSession(meta.parentId);
+    } else {
+      session.openMainAgent(workspace);
+    }
+    setPendingLocate({ parentId: meta.parentId, childId: meta.id });
+    if (meta.unread != null) clearUnreadOf([meta.id]);
+  };
+  useEffect(() => {
+    if (pendingLocate === null || mainOpenId !== pendingLocate.parentId) return;
+    openSubSessionInPanel(pendingLocate.childId);
+    setPendingLocate(null);
+  }, [pendingLocate, mainOpenId, openSubSessionInPanel]);
+
   // 写穿：右栏路径一变就记进这条会话的记忆（不等切走那一拍——切会话时离开的会话已经是最新）
   const memoryLoadedRef = useRef(false);
   const [memoryLoaded, setMemoryLoaded] = useState(false);
@@ -1471,6 +1501,7 @@ export function App() {
           onExitBrowse={focus.exitBrowse}
           onStartFocusHere={focus.startAt}
           onOpenFile={focus.openFile}
+          onOpenAttention={openAttention}
         />
 
         <main className="pane">

@@ -40,6 +40,9 @@ import { ageCounts, filterByAge } from "./sidebar-age.ts";
 import { sessionAgeLabel } from "./relative-time.ts";
 import { useMinuteTick } from "./use-minute-tick.ts";
 import { matchesSessionQuery, openRowsLimit, workspaceRows } from "./workspace-rows.ts";
+import { ATTENTION_SHOWN, attentionItems, attentionLine, type AttentionItem } from "./attention.ts";
+import { displaySubSessionTitle } from "../features/chat/sub-sessions-rows.ts";
+import type { ChannelMessage } from "@shared/channel";
 import { useChannelStatuses } from "../features/chat/useChannelSummaries.ts";
 import { effectiveSidebarFilters } from "./sidebar-filters.ts";
 import {
@@ -159,6 +162,8 @@ export function Sidebar(props: {
   onStartFocusHere: (workspaceId: string) => void;
   /** 双击 / Enter 打开左栏文件预览（绝对路径 → App → 右栏文件面板） */
   onOpenFile: (absPath: string) => void;
+  /** 点「等你」的一行：跳到那个工作区的主对话并定位到那件活（App 管跳转与右栏定位） */
+  onOpenAttention: (item: AttentionItem) => void;
   /** 星云的常驻小气泡（专注：正在整理 / 要不要总结）；null = 无 */
   usageSay: React.ReactNode | null;
   /** 星云头顶的卡片（专注时间到）；null = 无 */
@@ -361,6 +366,24 @@ export function Sidebar(props: {
   const rowsOf = new Map(
     session.workspaces.map((workspace) => [workspace.id, workspaceRows(session.sessions, workspace.id, rowState, held)]),
   );
+  /**
+   * 侧栏顶上的「等你」：跨工作区每件在等你的事（attention.ts）。数据就是上面这份行状态，不另存；
+   * 「任务」组里在等你的根会话也算（它们在任务组收起时同样看不到）。
+   */
+  const attention = attentionItems(
+    [
+      ...session.workspaces.map((workspace) => ({ workspaceId: workspace.id, rows: rowsOf.get(workspace.id)?.open ?? [] })),
+      { workspaceId: null, rows: live.filter((m) => m.workspaceId === null || !known.has(m.workspaceId)) },
+    ],
+    rowState,
+  );
+  /** 「等你」的一行点下去：先退出子视图与设置，再交给 App 跳转 */
+  const openAttention = (item: AttentionItem): void => {
+    props.onOverlay(null);
+    props.onShowArchived(false);
+    setEarlierFor(null);
+    props.onOpenAttention(item);
+  };
   /** 「以前的会话」子视图开在哪个工作区上；工作区被移除了按没开处理 */
   const earlierWs =
     earlierFor === null || overlayOpen || props.showArchived
@@ -784,6 +807,9 @@ export function Sidebar(props: {
           />
         </div>
       )}
+
+      {/* 钉在列表外：列表怎么滚它都在最上面；没有等你的事时整段不出现 */}
+      <AttentionSection items={attention} session={session} onOpen={openAttention} />
 
       <div
         className="scroll"
@@ -1354,6 +1380,104 @@ function WorkspaceGroup(props: {
         </div>
       )}
     </div>
+  );
+}
+
+/** 「等你」里子会话那几件的通道全文（取问题原话 / 没做成的原因）；有新消息就补上 */
+function useAttentionMessages(pairs: readonly { parentId: string; childId: string }[]): ReadonlyMap<string, readonly ChannelMessage[]> {
+  const key = pairs.map((pair) => `${pair.parentId}:${pair.childId}`).join(",");
+  const [byChild, setByChild] = useState<ReadonlyMap<string, readonly ChannelMessage[]>>(new Map());
+  useEffect(() => {
+    const wanted = key === "" ? [] : key.split(",").map((part) => {
+      const [parentId = "", childId = ""] = part.split(":");
+      return { parentId, childId };
+    });
+    let cancelled = false;
+    const load = (parentId: string, childId: string): void => {
+      void api.channel
+        .load({ parentId, childId })
+        .then((list) => {
+          if (!cancelled) setByChild((current) => new Map(current).set(childId, list));
+        })
+        // 读不到就只说是哪种事（attentionLine 的兜底），不挡侧栏
+        .catch((cause: unknown) => console.error("[attention] 通道读取失败", { parentId, childId }, cause));
+    };
+    wanted.forEach((pair) => load(pair.parentId, pair.childId));
+    const off = api.channel.onEvent((event) => {
+      if (event.type !== "message") return;
+      if (wanted.some((pair) => pair.childId === event.childId)) load(event.parentId, event.childId);
+    });
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, [key]);
+  return byChild;
+}
+
+/**
+ * 侧栏最上面的「等你」（设计 11-sidebar-full C）：每件一行——橙点 + 事情名 + 属于哪个工作区，下面一行等什么的那一句
+ * （288px 里「事情名：那一句」挤一行必然折成三行，工作区名还要占一截，所以分两行，名字左缘对齐）。
+ * 一屏里只有这里点橙点；最多露 5 行，超出「还有 N 件」点开全露。没有等你的事时整段不出现，不留空标题。
+ * 处理完的那一行自己消失（数据就是行状态）；没有「全部清除」——点一个只消一个。
+ */
+function AttentionSection(props: { items: readonly AttentionItem[]; session: ChatSession; onOpen: (item: AttentionItem) => void }) {
+  const t = useT();
+  const [showAll, setShowAll] = useState(false);
+  const pairs = props.items.flatMap((item) =>
+    item.meta.parentId === undefined ? [] : [{ parentId: item.meta.parentId, childId: item.meta.id }],
+  );
+  const messages = useAttentionMessages(pairs);
+  if (props.items.length === 0) return null;
+  const shown = showAll ? props.items : props.items.slice(0, ATTENTION_SHOWN);
+  const hidden = props.items.length - shown.length;
+  const workspaceName = (id: string | null): string =>
+    id === null ? t.sidebar.tasks : (props.session.workspaces.find((workspace) => workspace.id === id)?.name ?? "");
+  return (
+    <section className="attention" aria-label={t.sidebar.attentionTitle}>
+      <div className="attention-head">
+        <NodeLabel>{t.sidebar.attentionTitle}</NodeLabel>
+        <span className="attention-count row-trailing">{props.items.length}</span>
+      </div>
+      {shown.map((item) => {
+        const title = item.meta.title === "" ? t.subSessions.untitled : displaySubSessionTitle(item.meta.title);
+        const line = attentionLine(
+          item,
+          messages.get(item.meta.id),
+          {
+            planAwaiting: props.session.planAwaitingOf(item.meta.id),
+            childInterrupted: childSessions(props.session.sessions, item.meta.id).some((child) => props.session.interruptedOf(child.id)),
+          },
+          t.sidebar.attention,
+        );
+        return (
+          <button
+            key={item.meta.id}
+            type="button"
+            className="option-row attention-row"
+            title={`${title}：${line}`}
+            onClick={() => props.onOpen(item)}
+          >
+            <span className="inbox-row-mark ask" aria-hidden="true">
+              <span className="inbox-row-dot" />
+            </span>
+            <span className="attention-text">
+              <span className="attention-l1">
+                <span className="attention-title">{title}</span>
+                <span className="attention-ws row-trailing">{workspaceName(item.workspaceId)}</span>
+              </span>
+              <span className="attention-line">{line}</span>
+            </span>
+          </button>
+        );
+      })}
+      {(hidden > 0 || showAll) && (
+        <button type="button" className="option-row attention-more" onClick={() => setShowAll((value) => !value)}>
+          <span className="inbox-row-mark" aria-hidden="true" />
+          {hidden > 0 ? t.sidebar.moreJobs(hidden) : t.sidebar.showLess}
+        </button>
+      )}
+    </section>
   );
 }
 

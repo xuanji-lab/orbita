@@ -6399,3 +6399,77 @@ html {
     vector-effect: non-scaling-stroke;
   }
 }
+
+/* ===== 侧栏最上面的「等你」（2026-11-17 设计 11-sidebar-full C）=====
+ * 钉在列表外，不随列表滚。一屏里只有这里点橙点（.inbox-row-mark.ask，与子会话面板同一个记号）。
+ * 一行：记号位 + 「事情名：等什么」（长了换行，不截断）+ 工作区名（行尾，钉在行右内边距上）。 */
+.attention {
+  display: grid;
+  gap: var(--space-0-5);
+  flex: none;
+}
+.attention-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-right: var(--space-2);
+}
+.attention-count {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.attention-row,
+.attention-more {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--control-height-md);
+  padding: var(--space-1-5) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-ui);
+  text-align: left;
+  cursor: pointer;
+}
+.attention-more {
+  align-items: center;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+.attention-text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: var(--space-0-5);
+}
+.attention-l1 {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.attention-title {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.attention-line {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+.attention-ws {
+  flex: none;
+  max-width: 50%;
+  overflow-wrap: anywhere;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+  text-align: right;
+}
