@@ -39,11 +39,13 @@ export function turnFields(
     mainAgent?: boolean;
     /** 所属工作区名字（store-tools 的 scope 指引讲归属用）；语义同命令字段——缺席 = 翻不出名字 */
     workspaceName?: string;
+    /** 这件活的能力集（子会话 meta，plugin: 已展开）；缺席 / undefined = 全带，命令里不带这个键 */
+    capabilities?: string[] | undefined;
   },
-): Pick<Extract<AgentCommand, { type: "submit" }>, "sessionId" | "cwd" | "workspaceId" | "workspaceName" | "provider" | "modelId" | "thinkingLevel" | "piSessionDir" | "attachmentsDir" | "piSessionFile" | "protectedPaths" | "protectedFiles" | "skillsDirs" | "directories" | "mcpServers" | "compaction" | "gitAttribution" | "attributionLanguage" | "pdfCitations" | "pluginTools" | "mainAgent"> {
+): Pick<Extract<AgentCommand, { type: "submit" }>, "sessionId" | "cwd" | "workspaceId" | "workspaceName" | "provider" | "modelId" | "thinkingLevel" | "piSessionDir" | "attachmentsDir" | "piSessionFile" | "protectedPaths" | "protectedFiles" | "skillsDirs" | "directories" | "mcpServers" | "compaction" | "gitAttribution" | "attributionLanguage" | "pdfCitations" | "pluginTools" | "mainAgent" | "capabilities"> {
   // workspaceName 缺席时彻底不进命令对象（可送化与深比较都要稳定形状）：
   // 有工作区但翻不出名字是「未知」，不是「无工作区」——两态靠 workspaceId 区分
-  const { workspaceName, mainAgent, ...rest } = environment;
+  const { workspaceName, mainAgent, capabilities, ...rest } = environment;
   return {
     sessionId: input.sessionId,
     cwd: input.cwd,
@@ -52,6 +54,8 @@ export function turnFields(
     ...(workspaceName === undefined ? {} : { workspaceName }),
     // 普通会话不带这个键：命令形状与改动前一字不差（深比较与可送化都稳）
     ...(mainAgent === true ? { mainAgent: true } : {}),
+    // 没定能力集（全带）不带这个键：同上，普通会话的命令一字不差
+    ...(capabilities === undefined ? {} : { capabilities }),
     provider,
     modelId: input.modelId,
     thinkingLevel: input.thinkingLevel,

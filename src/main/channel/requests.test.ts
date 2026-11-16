@@ -754,3 +754,40 @@ describe("stopped 通道上的发信（用户裁决的硬拦）", () => {
     assert.equal(outcome.ok, true);
   });
 });
+
+describe("applyDelegate · 能力集", () => {
+  test("缺席 = 全带：子 meta 与派出卡都不出现 capabilities 这个键", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT }));
+    const { deps } = fakeDeps({ providers: [provider("zai", ["glm-5.3"])] });
+    const outcome = await applyDelegate(deps, delegateEvent());
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    const child = await sessions.readMeta(outcome.childId);
+    assert.equal(child !== null && "capabilities" in child, false);
+    assert.equal("capabilities" in outcome.card, false);
+  });
+
+  test("给了就规范化后落子 meta（顺序与重复不影响），派出卡带回同一串；空数组与纯聊天各自保留", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT }));
+    const { deps } = fakeDeps({ providers: [provider("zai", ["glm-5.3"])] });
+    const one = await applyDelegate(deps, delegateEvent({ capabilities: ["browser", "pdf-docx", "browser"] }));
+    assert.equal(one.ok, true);
+    if (!one.ok) return;
+    assert.deepEqual((await sessions.readMeta(one.childId))?.capabilities, ["pdf-docx", "browser"]);
+    assert.deepEqual(one.card.capabilities, ["pdf-docx", "browser"]);
+    const empty = await applyDelegate(deps, delegateEvent({ capabilities: [] }));
+    assert.deepEqual(empty.ok && (await sessions.readMeta(empty.childId))?.capabilities, []);
+    const chat = await applyDelegate(deps, delegateEvent({ capabilities: ["none"] }));
+    assert.deepEqual(chat.ok && (await sessions.readMeta(chat.childId))?.capabilities, ["none"]);
+  });
+
+  test("点名不存在的模块：派出被拒、错误列出可用模块，不建子会话、不开轮", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT }));
+    const { deps, submitCalls } = fakeDeps({ providers: [provider("zai", ["glm-5.3"])] });
+    const outcome = await applyDelegate(deps, delegateEvent({ capabilities: ["browser", "qgis"] }));
+    assert.equal(outcome.ok, false);
+    assert.match(!outcome.ok ? outcome.error : "", /Unknown capability "qgis".*browser/);
+    assert.equal(submitCalls.length, 0);
+    assert.equal((await sessions.list()).length, 1);
+  });
+});

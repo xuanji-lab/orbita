@@ -163,6 +163,28 @@ describe("delegate", () => {
     await pending;
   });
 
+  test("capabilities 给了就原样上船（规范化在主进程）；回执里说清带了什么；不是字符串列表就不发请求", async () => {
+    const { tools, fake } = setup("root");
+    const delegate = toolByName(tools, "delegate");
+    const pending = delegate.execute("call-c", { title: "t", task: "d", capabilities: ["browser", "pdf-docx"] }, undefined, undefined, undefined as never);
+    assert.deepEqual((fake.sent[0] as Record<string, unknown>).capabilities, ["browser", "pdf-docx"]);
+    fake.answer(fake.requestIdAt(0), {
+      ok: true,
+      childId: "c",
+      title: "t",
+      card: { childId: "c", title: "t", modelId: "m", thinkingLevel: "high", workbench: "/w", capabilities: ["pdf-docx", "browser"] },
+    });
+    const result = await pending;
+    const text = result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+    assert.match(text, /Besides the basic tools it has: pdf-docx, browser\./);
+    await assert.rejects(delegate.execute("call-d", { title: "t", task: "d", capabilities: "browser" }, undefined, undefined, undefined as never), /list of strings/);
+    assert.equal(fake.sent.length, 1);
+    // 参数说明列出全部模块与纯聊天写法
+    const props = (delegate.parameters as { properties: { capabilities: { description: string } } }).properties;
+    assert.match(props.capabilities.description, /"browser" = /);
+    assert.match(props.capabilities.description, /\["none"\] = chat only/);
+  });
+
   test("title / task 缺席或空白：不发请求，直接抛错", async () => {
     const { tools, fake } = setup("root");
     const delegate = toolByName(tools, "delegate");

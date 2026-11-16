@@ -32,6 +32,7 @@ import {
   type ChannelKey,
   type ChannelMessage,
 } from "../../shared/channel.ts";
+import { parseCapabilities } from "../../shared/capabilities.ts";
 import { defaultThinkingLevel } from "../../shared/model-defaults.ts";
 import { isProviderEnabled, type ProviderDto } from "../../shared/provider.ts";
 import { deriveSessionTitle, type SessionMeta } from "../../shared/session.ts";
@@ -169,6 +170,9 @@ export async function applyDelegate(
   if (event.thinkingLevel !== undefined && !isThinkingLevel(event.thinkingLevel)) {
     return { ok: false, error: `"${event.thinkingLevel}" is not a valid thinking level.` };
   }
+  // 能力集：派出那一刻定、之后不变（工具集一变就是另一个提示前缀）。缺席 = 全带，meta 里不写这个键
+  const capabilities = parseCapabilities(event.capabilities);
+  if (!capabilities.ok) return capabilities;
 
   const settings = await deps.settings.read();
   const providers = await deps.providers.list();
@@ -223,6 +227,7 @@ export async function applyDelegate(
     archived: false,
     recentQueries: [],
     stats: null,
+    ...(capabilities.value === undefined ? {} : { capabilities: capabilities.value }),
     createdAt: now,
     updatedAt: now,
   });
@@ -276,6 +281,7 @@ export async function applyDelegate(
       modelId: resolved.modelId,
       thinkingLevel,
       workbench: deps.sessions.workbenchPath(childId),
+      ...(capabilities.value === undefined ? {} : { capabilities: capabilities.value }),
     },
   };
 }

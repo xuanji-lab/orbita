@@ -3,6 +3,7 @@ import { RequestBroker } from "./request-broker.ts";
 import type { ChannelDelivery } from "../shared/channel.ts";
 import type { ChannelSendOutcome, DelegateCard, DelegateOutcome, ModelCostsOutcome, WorkCardsOutcome } from "../shared/agent-ipc.ts";
 import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from "../shared/thinking.ts";
+import { CAPABILITY_MODULES, isChatOnly, MODULE_SUMMARY } from "../shared/capabilities.ts";
 
 /**
  * 子会话的三个通道工具（子会话 2026-09-23）：delegate / reply_subsession /
@@ -56,6 +57,25 @@ function isDelivery(value: unknown): value is ChannelDelivery {
   return value === "steer" || value === "followUp";
 }
 
+/** delegate 的 capabilities 参数说明（模块清单与 shared/capabilities.ts 同源） */
+const CAPABILITIES_PARAM_DESCRIPTION =
+  "Optional: what the sub-session gets beyond the basics. Always included: read, write, edit, bash, update_plan, " +
+  "update_goal and report_to_parent. Leave this out to give it everything you have. Otherwise list only what the work " +
+  "needs: " +
+  CAPABILITY_MODULES.map((module) => `"${module}" = ${MODULE_SUMMARY[module]}`).join("; ") +
+  '; "skill:<name>" = one of your skills; "mcp:<server>" = one MCP server; "plugin:<name>" = a plugin\'s skills and MCP servers. ' +
+  '[] = the basics only. ["none"] = chat only: no tools at all, its final answer is handed back to you as done. ' +
+  "What it gets is fixed for the life of the sub-session.";
+
+/** delegate 回执里的一句：这件活带了什么（全带不说） */
+function describeGiven(capabilities: readonly string[] | undefined): string {
+  if (capabilities === undefined) return "";
+  if (isChatOnly(capabilities)) return "It is chat only (no tools); its final answer comes back to you as done. ";
+  return capabilities.length === 0
+    ? "It has the basic tools only. "
+    : `Besides the basic tools it has: ${capabilities.join(", ")}. `;
+}
+
 function delegateTool(broker: RequestBroker, sessionId: string): ToolDefinition {
   return {
     name: "delegate",
@@ -102,6 +122,11 @@ function delegateTool(broker: RequestBroker, sessionId: string): ToolDefinition 
           enum: [...THINKING_LEVELS],
           description: "Optional thinking level override for the sub-session.",
         },
+        capabilities: {
+          type: "array",
+          items: { type: "string" },
+          description: CAPABILITIES_PARAM_DESCRIPTION,
+        },
       },
       required: ["title", "task"],
     } as never,
@@ -118,6 +143,10 @@ function delegateTool(broker: RequestBroker, sessionId: string): ToolDefinition 
         }
         thinkingLevel = thinkingRaw;
       }
+      const capabilitiesRaw = args["capabilities"];
+      if (capabilitiesRaw !== undefined && (!Array.isArray(capabilitiesRaw) || capabilitiesRaw.some((entry) => typeof entry !== "string"))) {
+        throw new Error('"capabilities" must be a list of strings.');
+      }
       const result = await broker.request<DelegateOutcome>({
         type: "delegateRequest",
         sessionId,
@@ -125,12 +154,13 @@ function delegateTool(broker: RequestBroker, sessionId: string): ToolDefinition 
         task,
         ...(model === undefined ? {} : { modelId: model }),
         ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+        ...(capabilitiesRaw === undefined ? {} : { capabilities: capabilitiesRaw as string[] }),
       });
       if (!result.ok) throw new Error(result.error);
       const card = result.card;
       const text =
         `Sub-session "${result.title}" (id ${result.childId}) started, running on ${card.modelId} ` +
-        `(thinking: ${card.thinkingLevel}). Its private scratch workbench is ${card.workbench}. It is now working; its messages will arrive as <channel> ` +
+        `(thinking: ${card.thinkingLevel}). ${describeGiven(card.capabilities)}Its private scratch workbench is ${card.workbench}. It is now working; its messages will arrive as <channel> ` +
         "blocks in a later turn. Unless you have unrelated work to do right now, end this turn — do " +
         "not poll or wait for it.";
       return {

@@ -66,6 +66,7 @@ import type { SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { TurnDirectories } from "../../shared/agent-ipc.ts";
 import { resolveTurnDirectories } from "./turn-directories.ts";
 import { turnFields } from "./turn-fields.ts";
+import { turnCapabilities } from "./turn-capabilities.ts";
 import type { MainAgentStore } from "../agents/main-agent.ts";
 import { browserDownloadDir } from "../browser/download-dir.ts";
 import { AgentHost } from "./host.ts";
@@ -219,14 +220,22 @@ export function registerAgentIpc(
     return resolveServersForWorkspace(mergeMcpConfigs(pluginServers, mergeMcpConfigs(configured, local)), scope);
   };
 
-  /** 开轮要带的两样「能力」：skill 目录（用户的在前、插件的在后）与 MCP 配置。三条开轮路径共用。 */
-  const readCapabilities = async (
-    workspaceId: string | null,
-  ): Promise<{ skillsDirs: string[]; mcpServers: Record<string, McpServer> }> => {
-    const assembly = await readPluginAssembly(workspaceId);
+  /**
+   * 开轮要带的「能力」：skill 目录（用户的在前、插件的在后）、MCP 配置，以及这件活的能力集（子会话 meta 定的，
+   * `plugin:` 已展开，见 turn-capabilities.ts）。四条开轮路径共用。
+   * 技能目录与 MCP 配置照旧全量送：MCP 连接按工作区共用（McpHub.ensure 按送来的清单增删实例），按一件活收窄
+   * 送过去会拆掉同工作区别的会话正在用的连接——收窄在 runtime 里按能力集挑工具与技能做。
+   */
+  const readCapabilities = async (input: {
+    sessionId: string;
+    workspaceId: string | null;
+  }): Promise<{ skillsDirs: string[]; mcpServers: Record<string, McpServer>; capabilities?: string[] }> => {
+    const assembly = await readPluginAssembly(input.workspaceId);
+    const meta = await sessions.readMeta(input.sessionId).catch(() => null);
     return {
-      skillsDirs: [...skillDirs(workspaceId), ...assembly.skillDirs],
-      mcpServers: await readMcpServers(workspaceId, assembly.mcpServers),
+      skillsDirs: [...skillDirs(input.workspaceId), ...assembly.skillDirs],
+      mcpServers: await readMcpServers(input.workspaceId, assembly.mcpServers),
+      ...turnCapabilities(meta?.capabilities, assembly),
     };
   };
 
@@ -525,7 +534,7 @@ export function registerAgentIpc(
     if (intentEnv.ingest) intentIngest?.begin(input.sessionId, text, input.pasted ?? []);
     await beginMemoryTurn(input.sessionId, text);
     const automationTools = await readAutomationTools(input.sessionId);
-    const capabilities = await readCapabilities(input.workspaceId);
+    const capabilities = await readCapabilities(input);
     // 主智能体身份在开轮前定：settleFirstTurn 必须紧跟 host.submit 同步入链（见它的注释），中间不能再 await
     const main = await mainIdentity(input);
     const piSessionFile = await host.submit({
@@ -542,7 +551,7 @@ export function registerAgentIpc(
       ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, protectedFiles, {
         skillsDirs: capabilities.skillsDirs,
         directories: await readDirectories(input),
-        mcpServers: capabilities.mcpServers,
+        mcpServers: capabilities.mcpServers, capabilities: capabilities.capabilities,
         compaction: await readCompaction(),
         gitAttribution: await readGitAttribution(),
         attributionLanguage: await readAttributionLanguage(),
@@ -583,15 +592,15 @@ export function registerAgentIpc(
     if (intentEnv.ingest) intentIngest?.begin(input.sessionId, text, input.pasted ?? []);
     await beginMemoryTurn(input.sessionId, text);
     const automationTools = await readAutomationTools(input.sessionId);
-    const capabilities = await readCapabilities(input.workspaceId);
+    const capabilities = await readCapabilities(input);
     const main = await mainIdentity(input);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text, sessionMemory: true, ...(automationTools ? { automationTools: true } : {}), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...prefaceField(input), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, protectedFiles, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), pluginTools: true, mainAgent: main !== undefined }) });
+    const piSessionFile = await host.interrupt({ type: "interrupt", text, sessionMemory: true, ...(automationTools ? { automationTools: true } : {}), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...prefaceField(input), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, protectedFiles, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, capabilities: capabilities.capabilities, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), pluginTools: true, mainAgent: main !== undefined }) });
     await settleFirstTurn(input, piSessionFile, main);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
     const provider = await resolveForTurn(input.providerId);
-    const capabilities = await readCapabilities(input.workspaceId);
-    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, protectedFiles, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), pluginTools: true, mainAgent: await isMainAgent(input) }) });
+    const capabilities = await readCapabilities(input);
+    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, protectedFiles, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, capabilities: capabilities.capabilities, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), pluginTools: true, mainAgent: await isMainAgent(input) }) });
     if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
   });
 
@@ -600,8 +609,8 @@ export function registerAgentIpc(
   async function continueTurn(input: ContinueAgentInput): Promise<void> {
     const provider = await resolveForTurn(input.providerId);
     const automationTools = await readAutomationTools(input.sessionId);
-    const capabilities = await readCapabilities(input.workspaceId);
-    const piSessionFile = await host.continueRun({ type: "continueRun", sessionMemory: true, ...(automationTools ? { automationTools: true } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, protectedFiles, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), pluginTools: true, mainAgent: await isMainAgent(input) }) });
+    const capabilities = await readCapabilities(input);
+    const piSessionFile = await host.continueRun({ type: "continueRun", sessionMemory: true, ...(automationTools ? { automationTools: true } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, protectedFiles, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, capabilities: capabilities.capabilities, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), pluginTools: true, mainAgent: await isMainAgent(input) }) });
     if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
   }
   ipcMain.handle(ipcChannels.agentContinue, (_e, input: ContinueAgentInput): Promise<void> => continueTurn(input));

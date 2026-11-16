@@ -72,6 +72,13 @@ describe("turnFields", () => {
     assert.equal("mainAgent" in turnFields(input, provider, "/pi", "/a", [], [], environment), false);
   });
 
+  test("capabilities：缺席 / undefined 时命令与以前逐字节相同（没有这个键）；给了原样带", () => {
+    const before = JSON.stringify(turnFields(input, provider, "/pi", "/a", [], [], environment));
+    assert.equal(JSON.stringify(turnFields(input, provider, "/pi", "/a", [], [], { ...environment, capabilities: undefined })), before);
+    assert.deepEqual(turnFields(input, provider, "/pi", "/a", [], [], { ...environment, capabilities: [] }).capabilities, []);
+    assert.deepEqual(turnFields(input, provider, "/pi", "/a", [], [], { ...environment, capabilities: ["browser"] }).capabilities, ["browser"]);
+  });
+
   test("pluginTools 原样进命令：开 = true，关 = false", () => {
     assert.equal(turnFields(input, provider, "/pi", "/a", [], [], { ...environment, pluginTools: true }).pluginTools, true);
     assert.equal(turnFields(input, provider, "/pi", "/a", [], [], environment).pluginTools, false);
