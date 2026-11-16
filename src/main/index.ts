@@ -66,7 +66,8 @@ import { registerProviderIpc } from "./provider/ipc.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
 import { KernelHost, kernelIdleRecycleMs, sessionsToResume } from "./agent/kernel-host.ts";
 import { kernelChildTag, reapKernelChildren } from "../agent/kernel-children.ts";
-import { kernelLibraryName } from "../shared/kernel.ts";
+import { kernelLibraryName, resumePolicy } from "../shared/kernel.ts";
+import { resumeOf } from "../shared/main-agent.ts";
 import { moveSessions } from "./session/move.ts";
 import { registerMcpIpc } from "./mcp/ipc.ts";
 import { McpStore } from "./mcp/store.ts";
@@ -1300,10 +1301,21 @@ void app.whenReady().then(async () => {
     broadcast: broadcastChannelEvent,
   };
   registerChannelIpc(deps);
-  // 新内核：上次退出（或被杀）时还在跑的子会话照常接着跑（后台任务；树根不续，界面给「继续」）。
+  // 新内核：上次退出（或被杀）时还在跑的子会话照常接着跑（后台任务；树根不续，界面给「继续」——
+  // 工作区的主智能体例外：正常退出停下的那一轮也自己接着做，见 resumePolicy）。
   // 先记 resumed（界面据此说一句「重启后接着跑的」），再走与「继续」按钮同一条开轮装配
   void (async () => {
-    for (const child of sessionsToResume(await sessions.list())) {
+    const atStart = await sessions.list();
+    // 主智能体名下（它自己 + 它派出的活）有活被打断：先记一次「断过」（断了多久、几件接着做、几件停着），
+    // 主智能体的对话里据此记一行；要在下面续跑改 updatedAt 之前算（from 取被打断的活最后一次落盘的时刻）
+    for (const main of atStart.filter((meta) => meta.role === "main" && meta.workspaceId !== null)) {
+      const family = atStart.filter((meta) => meta.id === main.id || meta.parentId === main.id);
+      const resume = resumeOf(family.map((meta) => ({ id: meta.id, updatedAt: meta.updatedAt, policy: resumePolicy(meta) })), Date.now());
+      if (resume !== null && main.workspaceId !== null) {
+        await mainAgents.addResume(main.workspaceId, resume).catch((error: unknown) => console.error("[agents] 记「断过」失败", main.id, error));
+      }
+    }
+    for (const child of sessionsToResume(atStart)) {
       await sessions.updateDurable(child.id, (current) => (current === undefined ? current : { ...current, resumed: Date.now() }));
       phases.set(child.id, "turn");
       await agentIpc

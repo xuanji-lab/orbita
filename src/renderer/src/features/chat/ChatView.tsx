@@ -176,6 +176,7 @@ import { MarkdownBlock } from "./MarkdownBlock";
 import { HomeHero } from "./HomeHero";
 import { HomeLog, type HomeLogRowView } from "./HomeLog";
 import { MainAgentEmpty } from "./MainAgentEmpty";
+import { pendingResume, resumeLine } from "./main-resume.ts";
 import { heroFace } from "./home-hero.ts";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { FileTurnCard, RevertMarkView } from "./FileTurnCard";
@@ -1399,6 +1400,11 @@ function ChatViewBody(props: {
     return () => window.clearTimeout(timer);
   }, [session.migrating, session.migratingExpected]);
 
+  // 主智能体「断过」那一行：最近一次断过、且回来之后还没说过话（main-resume.ts）
+  const mainResume = pendingResume(
+    session.mainProfile?.resumes,
+    session.transcript.reduce((latest, item) => (item.role === "user" ? Math.max(latest, item.timestamp) : latest), 0),
+  );
   const notices = (
     <>
       {providersError != null ? (
@@ -1427,6 +1433,7 @@ function ChatViewBody(props: {
         </Notice>
       )}
       {session.resumedAfterRestart && <Notice icon="rotate-ccw">{t.chat.resumedAfterRestart}</Notice>}
+      {mainResume !== null && <Notice icon="history">{resumeLine(mainResume, Date.now(), { line: t.chat.mainResumed })}</Notice>}
       {migratingShown && <Notice icon="loader-circle">{t.chat.migratingSession}</Notice>}
     </>
   );

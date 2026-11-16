@@ -1942,6 +1942,14 @@ export const en = {
     interruptedByCrash: "The app quit unexpectedly last time, so this sub-session was interrupted.",
     continueTurn: "Continue",
     /** 新内核：子会话在应用重启后被自动接着跑（后台任务照常续跑） */
+    mainResumed: (from: string, to: string, resumed: number, stopped: number) =>
+      [
+        `Picked up again · Orbita was closed from ${from} to ${to}`,
+        resumed > 0 ? `${resumed} ${resumed === 1 ? "piece of work" : "pieces of work"} carried on from where ${resumed === 1 ? "it" : "they"} stopped` : null,
+        stopped > 0 ? `${stopped} stopped by a crash ${stopped === 1 ? "is" : "are"} left as ${stopped === 1 ? "it was" : "they were"} (not rerun on ${stopped === 1 ? "its" : "their"} own, so nothing done gets done twice); tell me and I will carry on` : null,
+      ]
+        .filter((part) => part !== null)
+        .join("; "),
     resumedAfterRestart: "This sub-session was still running when the app restarted; it picked up the interrupted turn on its own.",
     /** 新内核：第一次在旧会话里发消息时迁进库（超过 0.5 秒才显示） */
     migratingSession: "Preparing this conversation's history — only needed the first time, one moment…",

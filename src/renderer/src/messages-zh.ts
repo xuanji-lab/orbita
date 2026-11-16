@@ -1784,6 +1784,14 @@ export const zh: Messages = {
     interruptedTurn: "这一轮没跑完就被打断了。",
     interruptedByCrash: "应用上次是异常退出的，这个子会话被打断了。",
     continueTurn: "继续",
+    mainResumed: (from, to, resumed, stopped) =>
+      [
+        `接着做 · ${from} 到 ${to} 璇玑没开着`,
+        resumed > 0 ? `回来后 ${resumed} 件活都从断的地方接着做了` : null,
+        stopped > 0 ? `${stopped} 件上次是异常退出，停在原处没自动重跑（怕把做过的事再做一遍），跟我说一声就接着做` : null,
+      ]
+        .filter((part) => part !== null)
+        .join("；"),
     resumedAfterRestart: "应用重启时这个子会话还没跑完，已自动接着跑上次被打断的那一轮。",
     migratingSession: "正在整理这条会话的历史记录，只有第一次需要，稍等……",
     noMessages: "还没有消息。发出第一条就开始了。",

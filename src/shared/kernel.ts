@@ -136,14 +136,17 @@ export type KernelMessage =
  *   ——命令可能成了孤儿自己跑完，自动续跑会让模型把有副作用的命令再做一遍（第四步验收组 2 复现过 start·end·start·end）。
  *   **拿不准就归这一类**：缺了「正常退出」的标记一律当崩溃（标记写在退出流程里、被停的轮落定时，崩溃时写不上）。
  * - "ask"：树根（前台会话）——界面照旧「这一轮没跑完就被打断了 · 继续」（方案 §2.2 第 10 行的默认）。
+ *   工作区的主智能体（role main）正常退出时停下的那一轮按 "resume" 自动接着做（2026-11-17）。
  * - null：没在跑 / 迁移失败过 / 不在新内核里。
  */
 export type ResumePolicy = "resume" | "crashed" | "ask";
 
-export function resumePolicy(meta: Pick<SessionMeta, "parentId" | "durable">): ResumePolicy | null {
+export function resumePolicy(meta: Pick<SessionMeta, "parentId" | "durable"> & { role?: "main" }): ResumePolicy | null {
   const mark = meta.durable;
   if (mark?.running !== true || mark.failed !== undefined) return null;
-  if (meta.parentId === undefined) return "ask";
+  // 树根照旧给「继续」——工作区的主智能体例外：它是常驻入口，上次正常退出时停下的那一轮自己接着做（设计第 6 件），
+  // 崩溃留下的仍归「继续」（它自己跑的命令同样可能成了孤儿）
+  if (meta.parentId === undefined) return meta.role === "main" && mark.stoppedOnQuit === true ? "resume" : "ask";
   return mark.stoppedOnQuit === true ? "resume" : "crashed";
 }
 

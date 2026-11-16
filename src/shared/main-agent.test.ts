@@ -21,3 +21,43 @@ describe("主智能体档案与 meta 的 role 字段", () => {
     assert.equal("role" in (parseSessionMeta({ ...base, role: "boss" }) ?? {}), false);
   });
 });
+
+import { resumeOf, MAIN_AGENT_RESUMES_KEPT } from "./main-agent.ts";
+import { resumePolicy } from "./kernel.ts";
+
+describe("重开后「断过」与主智能体的续跑口径", () => {
+  test("resumeOf：名下没被打断的不记；接着做的与停着的分开，from 取最后落盘时刻", () => {
+    assert.equal(resumeOf([{ id: "m", updatedAt: 5, policy: null }], 100), null);
+    assert.deepEqual(
+      resumeOf(
+        [
+          { id: "m", updatedAt: 5, policy: "resume" },
+          { id: "a", updatedAt: 9, policy: "resume" },
+          { id: "b", updatedAt: 7, policy: "crashed" },
+          { id: "c", updatedAt: 99, policy: null },
+        ],
+        100,
+      ),
+      { at: 100, from: 9, resumed: ["m", "a"], stopped: ["b"] },
+    );
+  });
+
+  test("resumePolicy：主智能体正常退出停下的自己接着做，崩溃的仍给「继续」；普通树根不变", () => {
+    const running = (extra: object) => ({ durable: { since: 1, running: true as const, ...extra } });
+    assert.equal(resumePolicy({ role: "main", ...running({ stoppedOnQuit: true }) }), "resume");
+    assert.equal(resumePolicy({ role: "main", ...running({}) }), "ask");
+    assert.equal(resumePolicy({ ...running({ stoppedOnQuit: true }) }), "ask");
+    assert.equal(resumePolicy({ parentId: "p", ...running({ stoppedOnQuit: true }) }), "resume");
+  });
+
+  test("档案读回：坏的「断过」条目逐条丢，常量有上限", () => {
+    const profile = parseMainAgentProfile({
+      workspaceId: "w",
+      sessionId: "s",
+      createdAt: 1,
+      resumes: [{ at: 2, from: 1, resumed: ["a"], stopped: [] }, { at: "x" }],
+    });
+    assert.deepEqual(profile?.resumes, [{ at: 2, from: 1, resumed: ["a"], stopped: [] }]);
+    assert.ok(MAIN_AGENT_RESUMES_KEPT > 0);
+  });
+});

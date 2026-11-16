@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { writeJsonAtomic } from "../atomic-write.ts";
-import { parseMainAgentProfile, type MainAgentProfile } from "../../shared/main-agent.ts";
+import { MAIN_AGENT_RESUMES_KEPT, parseMainAgentProfile, type MainAgentProfile, type MainAgentResume } from "../../shared/main-agent.ts";
 import type { SessionStore } from "../session/store.ts";
 
 /** 工作区 id 进文件名：只放行 uuid 一类的字符，挡住 `../` 之类越出目录的 id（IPC 入参不可信） */
@@ -59,6 +59,14 @@ export class MainAgentStore {
     })();
     this.#pending.set(workspaceId, task);
     return task.finally(() => this.#pending.delete(workspaceId));
+  }
+
+  /** 记一次「断过」（重开应用时由主进程调）；没有档案就不记（没进过的工作区不会有主智能体名下的活） */
+  async addResume(workspaceId: string, resume: MainAgentResume): Promise<void> {
+    const current = await this.read(workspaceId);
+    if (current === null) return;
+    const resumes = [...(current.resumes ?? []), resume].slice(-MAIN_AGENT_RESUMES_KEPT);
+    await writeJsonAtomic(this.#path(workspaceId), { ...current, resumes });
   }
 
   /** 这条会话是不是这个工作区的主智能体（开轮装配身份提示词、首轮建 meta 打 role 用） */

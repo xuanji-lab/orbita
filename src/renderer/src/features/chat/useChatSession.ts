@@ -404,6 +404,8 @@ export interface ChatSession {
   openMainAgent: (workspace: Workspace) => void;
   /** 本槽停在某个工作区主智能体的空态（还没说过话）：那份档案；null = 不是 */
   mainPending: MainAgentProfile | null;
+  /** 正看着的主智能体（已说过话的那条会话）的档案；不是主智能体 = null */
+  mainProfile: MainAgentProfile | null;
   /**
    * 新开一条任务（落在 workspace 里；null = 不属于任何工作区，落 Home）并把输入框预填成 text。
    * 草稿写进**新任务槽自己的键**：newTaskIn 之后立刻 setDraft 写的是旧会话的键（闭包里的 draftKey 还是旧的）。
@@ -1652,6 +1654,29 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   useEffect(() => {
     viewedIdRef.current = sessionId ?? opened?.id ?? null;
   }, [sessionId, opened]);
+  /**
+   * 正看着的是某个工作区的主智能体时，它的档案（「断过」那一行要用 resumes）。
+   * 打开主智能体或它的元数据变了（比如这一轮跑完）就重拉一次；不是主智能体 = null。
+   */
+  const viewedMain = engine.sessions.find((meta) => meta.id === (sessionId ?? opened?.id) && meta.role === "main") ?? null;
+  const [mainProfile, setMainProfile] = useState<MainAgentProfile | null>(null);
+  useEffect(() => {
+    const workspace = viewedMain?.workspaceId ?? null;
+    if (workspace === null) {
+      setMainProfile(null);
+      return;
+    }
+    let cancelled = false;
+    api.agents
+      .main(workspace)
+      .then((profile) => {
+        if (!cancelled) setMainProfile(profile);
+      })
+      .catch((cause: unknown) => console.error("[agents] 读主智能体档案失败", workspace, cause));
+    return () => {
+      cancelled = true;
+    };
+  }, [viewedMain?.id, viewedMain?.workspaceId, viewedMain?.updatedAt]);
   useEffect(() => {
     const handle: ViewHandle = {
       sessionRef,
@@ -3198,6 +3223,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     newTask,
     openMainAgent,
     mainPending: sessionId === null ? mainPending : null,
+    mainProfile,
     startTaskWithDraft,
   };
 }

@@ -78,3 +78,17 @@ describe("MainAgentStore —— 每个工作区一份主智能体档案", () => 
     await rm(dir, { recursive: true, force: true });
   });
 });
+
+describe("MainAgentStore.addResume", () => {
+  test("追加到档案、最多留 MAIN_AGENT_RESUMES_KEPT 条；没有档案不记", async () => {
+    const { dir, store } = await fresh();
+    await store.addResume("nope", { at: 1, from: 0, resumed: [], stopped: [] });
+    assert.equal(await store.read("nope"), null);
+    await store.ensure("w1");
+    for (let i = 0; i < 25; i++) await store.addResume("w1", { at: i, from: 0, resumed: ["a"], stopped: [] });
+    const resumes = (await store.read("w1"))?.resumes ?? [];
+    assert.equal(resumes.length, 20);
+    assert.equal(resumes[19]?.at, 24);
+    await rm(dir, { recursive: true, force: true });
+  });
+});
