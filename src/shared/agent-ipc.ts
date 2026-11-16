@@ -1733,7 +1733,12 @@ export type AgentEvent =
       level: PiThinkingLevel;
       supported: readonly PiThinkingLevel[];
     }
-  | { type: "phase"; sessionId: string; phase: SessionPhase }
+  /**
+   * background（只随 phase compaction）：轮末预先压缩——这一轮已经答完，压缩在后台把下一次发送要做的压缩提前做掉。
+   * 用户没在等它：renderer 在队列为空时按空闲显示（不出压缩行、不出停止键）；用户这时发话照常进排队条「压缩完成后发出」，
+   * 这才显示在等什么。缺席 = 阻塞式压缩（手动压缩、一轮里发请求前的压缩），照旧显示。
+   */
+  | { type: "phase"; sessionId: string; phase: SessionPhase; background?: true }
   /**
    * 一份会话用量快照（token 分项 / 花费 / 上下文余量）。推送粒度与 pi 的数据粒度对齐
    * ——usage 跟着每次 LLM 响应落地，所以每条 assistant 消息完成（message_end）推一次；
