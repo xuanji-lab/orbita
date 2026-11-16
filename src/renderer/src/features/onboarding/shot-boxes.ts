@@ -53,6 +53,26 @@ export const SHOT_BOXES: Readonly<Record<string, Readonly<Record<string, Box>>>>
       "h": 0.1306
     }
   },
+  "bg-status": {
+    "strip": {
+      "x": 0.3031,
+      "y": 0.8356,
+      "w": 0.625,
+      "h": 0.02
+    },
+    "list": {
+      "x": 0.3031,
+      "y": 0.7467,
+      "w": 0.3889,
+      "h": 0.0822
+    },
+    "row": {
+      "x": 0.3066,
+      "y": 0.7522,
+      "w": 0.3819,
+      "h": 0.0356
+    }
+  },
   "board-week": {
     "days": {
       "x": 0.9197,
@@ -305,16 +325,16 @@ export const SHOT_BOXES: Readonly<Record<string, Readonly<Record<string, Box>>>>
   },
   "delegate": {
     "bubble": {
-      "x": 0.3309,
-      "y": 0.0956,
-      "w": 0.5917,
+      "x": 0.3122,
+      "y": 0.0944,
+      "w": 0.6069,
       "h": 0.0817
     },
     "cards": {
-      "x": 0.2378,
-      "y": 0.3517,
-      "w": 0.6944,
-      "h": 0.3072
+      "x": 0.3031,
+      "y": 0.3144,
+      "w": 0.625,
+      "h": 0.3172
     }
   },
   "doc-note": {
@@ -708,7 +728,7 @@ export const SHOT_BOXES: Readonly<Record<string, Readonly<Record<string, Box>>>>
     },
     "rail": {
       "x": 0.9708,
-      "y": 0.1689,
+      "y": 0.24,
       "w": 0.0194,
       "h": 0.0311
     },

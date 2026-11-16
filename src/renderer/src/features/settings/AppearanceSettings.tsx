@@ -33,6 +33,8 @@ export function AppearanceSettings(props: { settings: AppSettings; onChange: (pa
   // 单语主题定死的语言（null = 双语主题，听设置）；芯片亮的是实际生效的那一门
   const lockedLanguage = themeLanguage(props.settings.theme);
   const shownLanguage = effectiveLanguage(props.settings.theme, props.settings.language);
+  // 后台任务状态位的形态：缺席 = 一行（#488）
+  const backgroundStrip = props.settings.backgroundStrip ?? "line";
   return (
     <div className="set-page">
       <SettingGroup label={t.settings.interfaceGroup}>
@@ -58,6 +60,17 @@ export function AppearanceSettings(props: { settings: AppSettings; onChange: (pa
               {lockedLanguage === "zh" ? t.settings.languageLockedZh : t.settings.languageLockedEn}
             </span>
           )}
+        </SettingRow>
+        <SettingRow name={t.settings.backgroundStrip} info={t.settings.backgroundStripInfo}>
+          <Segmented
+            label={t.settings.backgroundStripAria}
+            value={backgroundStrip}
+            options={[
+              { value: "line" as const, label: t.settings.backgroundStripLine },
+              { value: "capsule" as const, label: t.settings.backgroundStripCapsule },
+            ]}
+            onChange={(next) => props.onChange({ backgroundStrip: next })}
+          />
         </SettingRow>
       </SettingGroup>
       <SettingGroup label={t.settings.appIcon}>

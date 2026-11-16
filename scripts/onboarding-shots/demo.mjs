@@ -97,3 +97,15 @@ export const DOC_SCREENPLAY = [
   { id: "deck", task: "new", prompt: DOC_SAY.deck, minutes: 8 },
   { id: "note", task: "new", prompt: DOC_SAY.note, minutes: 6 },
 ];
+
+/**
+ * 后台状态位那一页（seed.mjs subs）要的第三幕：在「三篇相关工作」那条任务里再派一个**还在跑**的子会话，
+ * 清单里才有一行「在跑 + 计划里那一步」，和「在问你」那行并排。sleep 是为了让它在拍图期间一直在跑。
+ */
+export const BG_RUNNING = {
+  id: "bg-running",
+  task: "UrbanGPT三篇",
+  prompt:
+    "再派一个子会话（glm-5.3-flash，思考档选最低）核对 data/nyc_taxi_slice.csv 的覆盖范围：先用 update_plan 列两步计划（第一步「数一数区域个数」标为进行中，第二步「核对时间跨度」待做），再运行 bash 命令 sleep 900 模拟这一步还在跑，最后用 report_to_parent 汇报 done。派出之后你不用等它，只回复「已派出」。",
+  minutes: 4,
+};

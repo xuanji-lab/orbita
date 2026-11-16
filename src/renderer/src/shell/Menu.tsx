@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Icon, type IconName } from "./Icon";
 import { isMenuDismissKey } from "./escape-key.ts";
 import { placeMenu, type MenuBox, type MenuPlacementSide } from "./menu-position";
+import { shouldReturnFocus } from "./menu-focus.ts";
 import { useT } from "../locale.ts";
 
 export interface MenuItem {
@@ -26,6 +27,11 @@ export interface MenuItem {
    */
   searchText?: string;
   icon?: IconName;
+  /**
+   * 行首 14px 槽里的自定义小件（后台任务清单的状态饼）。与 `icon` 同槽、优先于它；
+   * 与 `avatar` 不同——avatar 把首列撑到 34px，这个不改行的几何。
+   */
+  glyph?: React.ReactNode;
   /**
    * 行首的头像（模型卡片：型号头像，见 ModelAvatar）。给了它，行首这一格就是头像而不是对勾：
    * 选中改由头像一圈 accent 描边表示（styles.css 的 .model-avatar），底色与半粗照旧。
@@ -142,6 +148,21 @@ export function Menu(props: {
   /** 开合的回声。给调用方复位自己的两段式状态用（菜单关了，确认态不该留着） */
   onOpenChange?: (open: boolean) => void;
   /**
+   * 锚点撑满父容器的宽（默认 shrink-to-fit 的 inline-flex）。给「整行都是触发器」的调用方用：
+   * 后台任务细条——点在行里任何位置都开清单，菜单也从行的左缘起。
+   */
+  fill?: boolean;
+  /**
+   * **opt-in** 的焦点管理（默认关；不传时 Menu 的行为与加这个 prop 之前逐字一致）：
+   * 点开 / 键盘开的菜单，位置落定后把焦点交给面板（搜索框优先），上下键与 Enter 才到得了行；
+   * 关的时候把焦点还给打开前的元素——但**在真正执行 focus 的那一刻**才判（那时焦点仍在 body 或
+   * 已被面板销毁才还），所以菜单项自己交出去的焦点（重命名输入框、新建工作区输入框）不会被抢走。
+   * 为什么不是默认：第一版是全局改法，关闭那一刻判一次、过一拍无条件还焦点，抢走了侧栏「重命名」与
+   * 工作区「新建工作区」自己 autoFocus 的输入框（失焦即提交，编辑态立刻退出）。全局的「首帧 focus() 落空、
+   * 方向键推不动光标」是真问题，但要有自己的全菜单回归，不在后台任务状态位这个功能里捎带。
+   */
+  manageFocus?: boolean;
+  /**
    * 面板最小宽度（px）。全局默认 180 是给带描述/徽标的菜单定的；短词菜单
    * （思考档的 Low/High/Max）被它撑出一大截空白，显得轻浮。给**窄值**时面板
    * 收窄到内容，maxWidth 320 仍兜底。
@@ -233,6 +254,8 @@ export function Menu(props: {
   /** 这次是点开的还是悬停开的——决定要不要把焦点交给菜单 */
   const byClickRef = useRef(false);
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** manageFocus：把焦点交给面板之前谁有焦点（通常是触发器），关的时候还回去 */
+  const returnFocusRef = useRef<HTMLElement | null>(null);
 
   const close = useCallback(() => {
     setOpen(false);
@@ -459,6 +482,31 @@ export function Menu(props: {
     // revealCursor 只读 ref，不进依赖
   }, [open, appliedCap]);
 
+  /*
+   * manageFocus（opt-in）：位置落定、面板可见之后把焦点交给面板。打开那一帧面板还是 visibility: hidden
+   * （在量高度），上面 useLayoutEffect 里的 focus() 是空操作，焦点一直留在触发器上。
+   */
+  useLayoutEffect(() => {
+    if (props.manageFocus !== true || !open || appliedCap === null || !byClickRef.current) return;
+    const panel = menuRef.current;
+    if (panel === null || panel.contains(document.activeElement)) return;
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    (props.searchable === true ? searchRef.current : panel)?.focus();
+  }, [props.manageFocus, open, appliedCap, props.searchable]);
+
+  // manageFocus（opt-in）：关了之后还焦点。**下一拍、执行 focus 的那一刻**才判焦点在哪——
+  // 菜单项 onSelect 同步交出去的焦点（autoFocus 的输入框）此时在别的元素上，就不还
+  useEffect(() => {
+    if (props.manageFocus !== true || open) return;
+    const target = returnFocusRef.current;
+    if (target === null) return;
+    returnFocusRef.current = null;
+    const timer = setTimeout(() => {
+      if (shouldReturnFocus(document.activeElement, document.body)) target.focus();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [props.manageFocus, open]);
+
   const choose = (item: MenuItem) => {
     if (item.keepOpen !== true) close();
     else setActive(0);
@@ -469,7 +517,7 @@ export function Menu(props: {
     <>
       <span
         ref={anchorRef}
-        style={{ display: "inline-flex", minWidth: 0 }}
+        style={props.fill === true ? { display: "flex", minWidth: 0, width: "100%" } : { display: "inline-flex", minWidth: 0 }}
         onPointerEnter={
           props.hoverOpen === true
             ? () => {
@@ -828,6 +876,8 @@ function MenuRow(props: {
       >
         {item.avatar !== undefined ? (
           item.avatar
+        ) : item.glyph !== undefined ? (
+          item.glyph
         ) : item.checked === true ? (
           <Icon name="check" size={13} strokeWidth={2} />
         ) : item.icon !== undefined ? (
