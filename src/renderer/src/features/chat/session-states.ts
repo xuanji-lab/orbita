@@ -117,6 +117,16 @@ export interface SessionEntry {
   /** turn = 这一轮还在跑；compaction = 上下文压缩中（居中呼吸行）；idle = 可以发下一句 */
   phase: "idle" | "turn" | "compaction";
   /**
+   * phase compaction 是轮末的预先压缩（agent 发的 phase 事件带 background）：这一轮已经答完，用户没在等它。
+   * 队列空时界面按空闲显示（shownPhase）；投递与排队仍按真实 phase——压完（idle）才投下一条。
+   */
+  compactionQuiet?: boolean;
+  /**
+   * 用户在压缩时按了停止、队里还有话：先不自动投（不然停完立刻又发、内核又先压一次，等于没停）。
+   * 用户下一次发送（排在队尾一起发）或点「立即发送」时恢复；任何一轮开跑（非 idle 的 phase）清掉。
+   */
+  queueHeld?: boolean;
+  /**
    * 收到过几次 phase 事件（只增）。乐观置 turn 的失败归位靠它判「提交以来 runtime
    * 有没有报过真相」——见 revertOptimisticTurn。纯 ephemeral，不落盘。
    */
@@ -301,6 +311,8 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
     return update(states, event.sessionId, (entry) => ({
       ...entry,
       phase: event.phase === "idle" ? "idle" : event.phase === "compaction" ? "compaction" : "turn",
+      compactionQuiet: event.phase === "compaction" && event.background === true,
+      ...(event.phase === "idle" ? null : { queueHeld: false }),
       phaseEpoch: entry.phaseEpoch + 1,
       // 任何 phase 事件都清重试槽：重试尝试开跑（agent_start）、整轮落定（settled）、
       // 压缩起止——都是「重试等待结束了」的时刻，倒数行不该再挂。
@@ -926,6 +938,28 @@ export function moveQueued(
 }
 
 /**
+ * 界面上显示的 phase：轮末预先压缩（compactionQuiet）且队列空 = 用户没在等，按空闲显示——不出压缩行、不出停止键、
+ * 侧栏不转、未读按轮末算。用户这时发了话（进队列），才显示在等压缩。投递、排队的判断仍用真实 phase。
+ */
+export function shownPhase(slot: { phase: SessionEntry["phase"]; compactionQuiet?: boolean; queued: readonly unknown[] }): SessionEntry["phase"] {
+  return slot.phase === "compaction" && slot.compactionQuiet === true && slot.queued.length === 0 ? "idle" : slot.phase;
+}
+
+/** 停止时正在压缩、队里还有话：队列先停住（见 SessionEntry.queueHeld）。不在压缩或队列空时原样返回 */
+export function holdQueueOnStop(states: SessionStates, sessionId: string): SessionStates {
+  const entry = states.get(sessionId);
+  if (entry === undefined || entry.phase !== "compaction" || entry.queued.length === 0) return states;
+  return update(states, sessionId, (current) => ({ ...current, queueHeld: true }));
+}
+
+/** 用户恢复投递（发了下一句 / 点了立即发送）：解除停住 */
+export function releaseQueue(states: SessionStates, sessionId: string): SessionStates {
+  const entry = states.get(sessionId);
+  if (entry?.queueHeld !== true) return states;
+  return update(states, sessionId, (current) => ({ ...current, queueHeld: false }));
+}
+
+/**
  * 下一条该投递的是谁。取不到返回 null，调用方什么都不做。
  *
  * 条件只有一个：**完全空闲**。队列归我们之后，投递就发生在「上一轮落定」那一拍，
@@ -934,7 +968,7 @@ export function moveQueued(
  * 不会出现 pi 的 post-run 那种「好几条一起吹出去」。
  */
 export function nextDeliverable(entry: SessionEntry): QueuedMessage | null {
-  if (entry.phase !== "idle") return null;
+  if (entry.phase !== "idle" || entry.queueHeld === true) return null;
   return entry.queued[0] ?? null;
 }
 

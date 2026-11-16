@@ -2230,6 +2230,8 @@ export const zh: Messages = {
     pickModelFirst: "先选一个模型。",
     noWorkspaceFolder: "先选一个工作区文件夹",
     noRunningToCompact: "没有正在运行的任务可压缩",
+    compactionStoppedQueued: "压缩停了。你那句话还没发出去，再发的时候我得先压缩一下。",
+    compactionStoppedTurn: "压缩停了，你那句话我还没回。再发的时候我得先压缩一下。",
   },
 
   terminal: {

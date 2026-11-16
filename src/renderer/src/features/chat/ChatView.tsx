@@ -1770,7 +1770,7 @@ function ChatViewBody(props: {
           cwd={session.cwd}
           onUndoTurn={session.undoTurn}
           onRevertTo={session.revertToMessage}
-          actionsBusy={session.phase !== "idle" || session.queued.length > 0 || revertPreview !== null}
+          actionsBusy={session.busy || session.queued.length > 0 || revertPreview !== null}
           readOnly={session.readOnly}
           onOpenReviewAt={props.onOpenReviewAt}
           onOpenIntentPanel={props.onOpenIntentPanel}

@@ -13,6 +13,9 @@ import { splitEchoBlocks } from "../../../../shared/prompt-attachments.ts";
 import {
   EMPTY_ENTRY,
   dequeue,
+  holdQueueOnStop,
+  releaseQueue,
+  shownPhase,
   applyAgentEvent,
   seedRunningPhases,
   enqueue,
@@ -177,8 +180,13 @@ export interface ChatSession {
    * `ChannelMarkRecord`；显示时由 `mergeSideRecords` 按时间插回往来流。
    */
   marks: readonly ChannelMarkRecord[];
-  /** turn = 这一轮还在跑；compaction = 上下文压缩中；idle = 可以发下一句 */
+  /**
+   * turn = 这一轮还在跑；compaction = 上下文压缩中；idle = 可以发下一句。**显示用**：轮末预先压缩且队列空时是 idle
+   * （session-states 的 shownPhase）
+   */
   phase: "idle" | "turn" | "compaction";
+  /** 真实 phase 不是空闲（含没人在等的轮末预先压缩）：本子编辑（回退 / 撤销）这时会被 agent 拒绝 */
+  busy: boolean;
   /** 自动重试等待态：非 null 时重试行替换 Responding（或补在压缩行下） */
   retry: RetryStatus | null;
   /**
@@ -481,6 +489,8 @@ export interface SessionEngine {
    * （agent:steer），不排到它跑完之后；用户自己开的轮照旧排队。
    */
   isChannelTurn(id: string): boolean;
+  /** 投递这条会话的队首（idle 且队列没停住时才发；见 nextDeliverable） */
+  deliverNext(id: string): void;
   /**
    * 这条会话最后一次收到 progress 的时间（新的条目或正在跑的命令有了新输出都算）；本窗口还没收到过 = null。
    * 「每件活一句话」判没动静用（work-line.ts 的 isQuiet）。
@@ -1303,7 +1313,11 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
   // PR4a 的派出卡（TranscriptColumn 的 memo）新引入了 childPhaseOf 这个消费者，
   // 不稳定的话每次引擎渲染都会传一个新函数进去，直接打穿那层 memo（见 TranscriptColumn 的注释）。
   const phaseOf = useCallback(
-    (id: string): SessionEntry["phase"] => statesRef.current.get(id)?.phase ?? "idle",
+    (id: string): SessionEntry["phase"] => {
+      const entry = statesRef.current.get(id);
+      // 显示用：轮末预先压缩且没人在等 = 空闲（侧栏、子会话卡都按这个画）
+      return entry === undefined ? "idle" : shownPhase(entry);
+    },
     [],
   );
   const turnErrorOf = useCallback(
@@ -1340,6 +1354,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     applyStates,
     beginOptimisticTurn,
     isChannelTurn,
+    deliverNext,
     lastActivityOf,
     takeQueuedChannels,
     syncIntent,
@@ -2181,7 +2196,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     let id: string | null = sessionId ?? opened?.id ?? null;
     // **忙就排队，闲才直发**：这是队列归我们之后的核心分流。不再把消息推进 pi 的
     // steering/followUp——那边只有裸字符串、没有 id，正是一整晚竞态的来源。
-    const busy = id !== null && engine.statesRef.current.get(id)?.phase !== "idle";
+    const busyEntry = id !== null ? engine.statesRef.current.get(id) : undefined;
+    // 停止压缩后队列停住着（queueHeld）：这一句排到队尾，解除停住、从队首按顺序发——不让新的一句抢在先说的前面
+    const heldQueue = busyEntry?.queueHeld === true && busyEntry.queued.length > 0;
+    const busy = id !== null && (busyEntry?.phase !== "idle" || heldQueue);
     if (id !== null && busy) {
       const queuedId = crypto.randomUUID();
       const busyId: string = id;
@@ -2211,6 +2229,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       writeFiles(draftKey, () => []);
       writeBlocks(draftKey, () => []);
       writeQuotes(draftKey, () => []);
+      if (heldQueue) {
+        engine.applyStates((prev) => releaseQueue(prev, busyId));
+        engine.deliverNext(busyId);
+      }
       return;
     }
     try {
@@ -2253,11 +2275,21 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   }, [engine, draft, attachments, quotes, files, pasted, sessionId, model, cwd, workspaceId, opened, draftKey, writeDraft, writeAttachments, writeFiles, writeBlocks, writeQuotes, submitTurn, mainPending]);
 
   const stop = useCallback(() => {
-    // 只停本槽当前轮。排队不动：pi 队列滞留给下次发送自动带上；压缩缓冲在压缩结束
-    // （含被停止的压缩）的 phase 事件里自动发出——停止不替用户放弃任何已说的话
-    if (sessionRef.current === null) return;
-    void api.agent.abort(sessionRef.current);
-  }, []);
+    // 只停本槽当前轮。排队不动：停止不替用户放弃任何已说的话
+    const id = sessionRef.current;
+    if (id === null) return;
+    const entry = engine.statesRef.current.get(id);
+    // 停的是压缩（轮末预先压缩时用户发了话在等，或一轮里请求前的阻塞压缩）：上下文没变，判据仍成立——
+    // 再发送时内核一定先压。说清后果；队里有话就先停住不自动投（不然停完立刻又发、又压，等于没停），
+    // 用户再发一句或点「立即发送」时恢复。没人在等的轮末压缩（队列空）界面上没有停止键，不在这里交代
+    if (entry !== undefined && entry.phase === "compaction" && !(entry.compactionQuiet === true && entry.queued.length === 0)) {
+      const queuedText = entry.queued.length > 0;
+      engine.applyStates((prev) => holdQueueOnStop(prev, id));
+      const t = engine.messagesRef.current.session;
+      engine.setError(queuedText ? t.compactionStoppedQueued : t.compactionStoppedTurn);
+    }
+    void api.agent.abort(id);
+  }, [engine]);
 
   /** 回到首页（本槽）。会话在首条消息提交时才真正创建（R8-01 ①）。 */
   const reset = useCallback(() => {
@@ -2917,7 +2949,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         setSessionId(id);
         sessionRef.current = id;
       }
-      engine.applyStates((prev) => dequeue(prev, id, queuedId));
+      engine.applyStates((prev) => releaseQueue(dequeue(prev, id, queuedId), id));
       const fail = (cause: unknown): void => {
         engine.setError(ipcErrorText(cause));
         // IPC 直接失败（provider 装配等）不发 agent 事件，回填
@@ -3064,7 +3096,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     compactions: entry.compactions,
     compactionCount: compactionCount(entry),
     marks: entry.marks,
-    phase: entry.phase,
+    // 显示用的 phase：轮末预先压缩且队列空时是 idle（不出压缩行、不出停止键）；投递与排队仍按真实 phase（statesRef）
+    phase: shownPhase(entry),
+    /** 真实 phase 不是空闲（含没人在等的轮末预先压缩）：这时 agent 拒绝回退 / 撤销等本子编辑 */
+    busy: entry.phase !== "idle",
     retry: entry.retry,
     turnError: entry.turnError,
     stats: entry.stats,

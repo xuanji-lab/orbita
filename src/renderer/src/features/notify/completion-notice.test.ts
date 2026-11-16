@@ -219,3 +219,16 @@ describe("treeNotices", () => {
     deepStrictEqual(result.notify, ["B", "C"]);
   });
 });
+
+describe("轮末预先压缩不拖住「跑完」", () => {
+  const quiet = (queued = 0): PhaseSlot => ({ phase: "compaction", queued: Array(queued).fill(null), compactionQuiet: true });
+  it("turn → 后台压缩（队列空）：这一轮答完就算跑完；压完回 idle 不再算一次", () => {
+    deepStrictEqual(settledSessions(map({ a: slot("turn") }), map({ a: quiet() })), ["a"]);
+    deepStrictEqual(settledSessions(map({ a: quiet() }), map({ a: slot("idle") })), []);
+  });
+  it("后台压缩时用户发了话（在等）：不算跑完；子树在后台压缩不算忙", () => {
+    deepStrictEqual(settledSessions(map({ a: slot("turn") }), map({ a: quiet(1) })), []);
+    const sessions: TreeNode[] = [{ id: "p" }, { id: "c", parentId: "p" }];
+    strictEqual(subtreeBusy("p", sessions, map({ c: quiet() })), false);
+  });
+});

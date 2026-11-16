@@ -21,6 +21,9 @@ import {
   seedRunningPhases,
   setPendingEcho,
   nextDeliverable,
+  holdQueueOnStop,
+  releaseQueue,
+  shownPhase,
   planDelivery,
   settleUserSteer,
   queueControlTarget,
@@ -1423,5 +1426,51 @@ describe("requeueFront：投递没送出去，出队的放回队首、不丢", (
     states = requeueFront(states, "A", [{ id: "a", kind: "text", text: "一" }, { id: "b", kind: "text", text: "二" }]);
     assert.deepEqual(states.get("A")?.queued.map((item) => item.id), ["a", "b", "c"]);
     assert.equal(requeueFront(states, "A", [{ id: "a", kind: "text", text: "一" }]), states);
+  });
+});
+
+describe("轮末预先压缩：显示按空闲、投递按真实 phase、停止后队列停住", () => {
+  const phase = (states: SessionStates, event: Omit<Extract<AgentEvent, { type: "phase" }>, "type" | "sessionId">): SessionStates =>
+    applyAgentEvent(states, { type: "phase", sessionId: "s", ...event } as AgentEvent);
+  const text = (id: string): QueuedMessage => ({ id, kind: "text", text: id });
+  const quiet = (): SessionStates => phase(phase(createSessionStates(), { phase: "turn" }), { phase: "compaction", background: true });
+
+  it("后台压缩、队列空：显示空闲（不出压缩行与停止键）；真实 phase 仍是 compaction，不投递", () => {
+    const states = quiet();
+    const entry = states.get("s") as SessionEntry;
+    assert.equal(entry.phase, "compaction");
+    assert.equal(entry.compactionQuiet, true);
+    assert.equal(shownPhase(entry), "idle");
+  });
+
+  it("后台压缩时用户发话：进队列，这时才显示在等压缩；压完 idle 才投队首，顺序不变", () => {
+    let states = enqueue(enqueue(quiet(), "s", text("a")), "s", text("b"));
+    const waiting = states.get("s") as SessionEntry;
+    assert.equal(shownPhase(waiting), "compaction");
+    assert.equal(nextDeliverable(waiting), null, "压缩没完不投");
+    states = phase(states, { phase: "idle" });
+    assert.equal(nextDeliverable(states.get("s") as SessionEntry)?.id, "a");
+  });
+
+  it("阻塞式压缩（不带 background）照旧显示", () => {
+    const states = phase(createSessionStates(), { phase: "compaction" });
+    assert.equal(shownPhase(states.get("s") as SessionEntry), "compaction");
+  });
+
+  it("压缩时停止、队里有话：队列停住，idle 后不自动投；用户恢复后照常投；下一轮开跑清掉停住", () => {
+    let states = holdQueueOnStop(enqueue(quiet(), "s", text("a")), "s");
+    states = phase(states, { phase: "idle" });
+    assert.equal(nextDeliverable(states.get("s") as SessionEntry), null, "停了就不自动再发");
+    const released = releaseQueue(states, "s");
+    assert.equal(nextDeliverable(released.get("s") as SessionEntry)?.id, "a");
+    const restarted = phase(states, { phase: "turn" });
+    assert.equal((restarted.get("s") as SessionEntry).queueHeld, false);
+  });
+
+  it("不在压缩、或队列空时停止：不停住队列", () => {
+    const turn = enqueue(phase(createSessionStates(), { phase: "turn" }), "s", text("a"));
+    assert.equal(holdQueueOnStop(turn, "s"), turn);
+    const empty = phase(createSessionStates(), { phase: "compaction" });
+    assert.equal(holdQueueOnStop(empty, "s"), empty);
   });
 });

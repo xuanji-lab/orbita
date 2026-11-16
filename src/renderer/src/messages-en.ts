@@ -2425,6 +2425,8 @@ export const en = {
     pickModelFirst: "Pick a model first.",
     noWorkspaceFolder: "Choose a workspace folder first",
     noRunningToCompact: "No running task to compact",
+    compactionStoppedQueued: "Compaction stopped. Your message hasn't gone out yet — I'll need to compact first when you send again.",
+    compactionStoppedTurn: "Compaction stopped, so I haven't answered that yet. I'll need to compact first when you send again.",
   },
 
   terminal: {
