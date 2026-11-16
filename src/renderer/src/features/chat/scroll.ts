@@ -43,6 +43,14 @@ export function shouldLoadOlder(scrollTop: number, threshold: number = OLDER_TRI
 }
 
 /**
+ * 内容不满一屏、没法往上滚时，也要接着拉更早的一页（2026-11-17）：触顶判定挂在滚动事件上，可内容没溢出就没有滚动事件。
+ * 一轮一行把一大段来往收成几行之后，尾窗那一页常常不满一屏——满载演练里打开会话只剩两行、更早的一轮再也拉不出来。
+ */
+export function shouldFillOlder(geo: { scrollHeight: number; clientHeight: number }, threshold: number = OLDER_TRIGGER_PX): boolean {
+  return geo.clientHeight > 0 && geo.scrollHeight <= geo.clientHeight + threshold;
+}
+
+/**
  * End 键是否归「一键回底」管：非 End 键、带修饰键（组合键各有各的语义，不抢）、
  * 焦点在文本框里（INPUT / TEXTAREA / contentEditable——composer 里 End 是行尾光标）
  * 都不接管。

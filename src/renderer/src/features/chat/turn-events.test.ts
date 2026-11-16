@@ -321,3 +321,24 @@ describe("跑命令那一行默认说为什么跑，命令原文点开才看", (
     assert.equal(events[3]?.kind === "tools" ? events[3].caption : "none", undefined);
   });
 });
+
+describe("一连串同一种来往收成一行（满载：一轮派 41 件）", () => {
+  test("连派 4 件收成一个 group，摘要照旧数 4 件；只派 2 件不收", () => {
+    const delegates = (n: number) => Array.from({ length: n }, (_, i) => call(`d${i}`, "delegate", { title: `活${i}`, task: "x" }));
+    const rs = (n: number): TranscriptRecord[] => [
+      user("u1", 1),
+      assistant("a1", 2, [call("r0"), ...delegates(n)]),
+      tool({ toolCallId: "r0", timestamp: 3 }),
+      assistant("a2", 4, [text("派了")]),
+    ];
+    const four = procOf(view(rs(4)))[0];
+    assert.ok(four !== undefined);
+    const events = processEvents(four.steps, sources(rs(4)));
+    assert.deepEqual(events.map((e) => e.kind), ["tools", "group"]);
+    assert.equal(events[1]?.kind === "group" ? events[1].members.length : 0, 4);
+    assert.deepEqual(processSummary(zh, processTally(events)), ["派了 4 件"]);
+    const two = procOf(view(rs(2)))[0];
+    assert.ok(two !== undefined);
+    assert.deepEqual(processEvents(two.steps, sources(rs(2))).map((e) => e.kind), ["tools", "delegate", "delegate"]);
+  });
+});

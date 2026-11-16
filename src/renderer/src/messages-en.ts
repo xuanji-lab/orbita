@@ -2230,6 +2230,7 @@ export const en = {
       openSession: "Open its session",
       openProgress: "See in Progress",
       openMemory: "See in Memory",
+      groupMore: (n: number) => `and others · ${n} in all`,
       planChanges: (n: number, first: string) => (n > 1 ? `${n} changes: ${first}, …` : first),
     },
   },
