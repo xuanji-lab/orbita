@@ -111,14 +111,22 @@ export function subSessionMark(status: SubSessionRowStatus): SubSessionMark {
 }
 
 /**
- * 默认只列要你看的和在做的；做完的折成末尾一行「做完 N 件」（点开才列）。没做成的留着，直到主会话处理过。
+ * 默认只列要你看的和在做的；做完的与停着的折成末尾一行「做完 N 件 · 停着 M 件」（点开才列）。没做成的留着，直到主会话处理过。
  * 入参已按 sortSubSessionRows 排好，两段各自保持原顺序。
  */
-export function splitDoneRows<T extends { status: SubSessionRowStatus }>(rows: readonly T[]): { open: T[]; done: T[] } {
+export function splitDoneRows<T extends { status: SubSessionRowStatus }>(
+  rows: readonly T[],
+): { open: T[]; done: T[]; parked: T[] } {
   const open: T[] = [];
   const done: T[] = [];
-  for (const row of rows) (row.status === "done" ? done : open).push(row);
-  return { open, done };
+  // 停着的：没在跑、也没交回 / 提问 / 失败（这一轮跑完没报、或被用户终止）。不混在「在做」里，和做完的一起折起来
+  const parked: T[] = [];
+  for (const row of rows) {
+    if (row.status === "done") done.push(row);
+    else if (row.status === "idle" || row.status === "stopped") parked.push(row);
+    else open.push(row);
+  }
+  return { open, done, parked };
 }
 
 /**
@@ -181,48 +189,43 @@ export function jobElapsed(
 }
 
 /**
- * 收件箱行的「最新一句」（2026-10-12 用户裁决：只需要看到沟通，不需要看到子会话在干嘛）：通道里**最新一条非 task
- * 消息**的一句话——问：…/ 进度：…/ 完成：…/ 失败：…/ 回复：…（最新的是父侧回信时）。2026-11-17 起取第一个非空行的
- * 第一句、先过 work-line 的 sanitizeWorkLine：**不露出命令、网址、路径、英文代号**（以前「进度：」后面
- * 原样是子会话写的第一行，常是命令或路径；完成 / 失败只写两个字），洗空了就只说是哪种消息。
- * 还没有非 task 消息时按状态说「在跑 · 还没说话」（idle / stopped 只说「还没说话」——它没在跑）。
+ * 通道里能说明「它怎么样了」的那一句（2026-11-17 改）：只取子会话自己说的话——问：…/ 进度：…/ 完成：…/ 没做成：…，
+ * 取第一个非空行的第一句、先过 work-line 的 sanitizeWorkLine（不露命令、网址、路径、英文代号）。
+ * 父会话的回信（reply）、还没开口、洗空了的进度都不算——「收到了回复」「还没说话」「报了一次进度」说的是通道状态，
+ * 不是它在干什么（主会话 11-17 看图挑出来的），这些情况返回空串，由调用方决定退回什么。
+ * 提问、完成、没做成洗空了照旧说是哪种（「在问你」「完成」「没做成」本身就是结论）。
  *
  * `messages` 为该子通道时间正序的全文（useParentChannels）；通道拉不到（undefined）与空列表同待遇。
  */
 export function latestChannelLine(
   messages: readonly ChannelMessage[] | undefined,
-  status: SubSessionRowStatus,
+  _status: SubSessionRowStatus,
   t: Messages,
 ): string {
-  const spoken = [...(messages ?? [])].reverse().find((message) => message.kind !== "task");
-  if (spoken === undefined) {
-    return status === "running" || status === "waiting"
-      ? t.channel.notSpokenRunning
-      : t.channel.notSpoken;
-  }
+  const spoken = [...(messages ?? [])].reverse().find((message) => message.from === "child");
+  if (spoken === undefined) return "";
   // 第一句：回报的结论 / 问题写在最前（子会话的说明要求先写结论）
   const said = sanitizeWorkLine(firstSentenceOf(spoken.text));
   switch (spoken.kind) {
     case "question":
       return said === "" ? t.channel.latestQuestionBare : t.channel.latestQuestion(said);
     case "progress":
-      return said === "" ? t.channel.latestProgressBare : t.channel.latestProgress(said);
+      return said === "" ? "" : t.channel.latestProgress(said);
     case "done":
       return said === "" ? t.channel.latestDone : t.channel.latestDoneWith(said);
     case "failed":
       return said === "" ? t.channel.latestFailed : t.channel.latestFailedWith(said);
-    case "reply":
-      return said === "" ? t.channel.latestReplyBare : t.channel.latestReply(said);
     default:
-      // stop：账本里可能有（旧数据），行上不渲染裁决细节——状态条已经说了 stopped
-      return t.channel.notSpoken;
+      return "";
   }
 }
 
 /**
- * 子会话面板一行的第二行（每件活一句话）。在跑的：按 work-line 的来源顺序（刚说的话 → 计划在做的那步 → 书记员 →
- * 不带参数的动作）从这条子会话的转录里取，取不到才退回通道里最新一句；「没动静」（在跑、N 分钟没有任何 progress）时
- * 后面带上几分钟。没在跑的：通道里最新一句（完成 / 失败 / 在问你的结论）。
+ * 子会话面板一行的第二行（每件活一句话）。
+ * - 在跑 / 停着没交回（idle、stopped）：按 work-line 的来源顺序从这条子会话的转录里取（它刚说的话 → 计划里在做的那步 →
+ *   书记员 → 不带参数的动作，动作只给在跑的）；取不到再看通道里它最后说的那句（进度：…）；都没有就空串——宁可只留名字一行，
+ *   也不写「还没说话」。在跑且 N 分钟没动静时后面带上几分钟。
+ * - 在问你 / 没做成 / 做完 / 被打断：通道里它最后说的那句（结论）。
  *
  * `items` = 这条子会话在 renderer 槽里的转录（窗口晚于它开起来时可能是空的，那时只能退回通道）。
  */
@@ -236,15 +239,17 @@ export function subSessionLine(
   },
   t: Messages,
 ): string {
-  if (input.status !== "running") return latestChannelLine(input.messages, input.status, t);
-  const facts = workFacts(input.items, true);
+  const quietish = input.status === "running" || input.status === "idle" || input.status === "stopped";
+  if (!quietish) return latestChannelLine(input.messages, input.status, t);
+  const running = input.status === "running";
+  const facts = workFacts(input.items, running);
   const plan = planTimeline(input.items)?.current.items ?? null;
   const line = workLine(
-    { said: facts.said, planStep: currentPlanStep(plan), clerk: null, activity: input.items.length === 0 ? null : facts.activity },
+    { said: facts.said, planStep: currentPlanStep(plan), clerk: null, activity: running && input.items.length > 0 ? facts.activity : null },
     { activity: t.channel.activity, waiting: t.channel.waitingStep },
   );
   const text = line?.text ?? latestChannelLine(input.messages, input.status, t);
-  if (!isQuiet(input.now, true, input.lastActivityAt)) return text;
+  if (!running || text === "" || !isQuiet(input.now, true, input.lastActivityAt)) return text;
   return t.channel.quietFor(text, Math.floor((input.now - (input.lastActivityAt ?? input.now)) / 60_000));
 }
 

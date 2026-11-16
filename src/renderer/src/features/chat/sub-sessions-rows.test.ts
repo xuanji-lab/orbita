@@ -180,11 +180,14 @@ describe("splitDoneRows / subSessionHeadline（做完的折起来，头上一句
     { status: "waiting" as const, lastAt: 1 },
     { status: "failed" as const, lastAt: 3 },
     { status: "done" as const, lastAt: 2 },
+    { status: "idle" as const, lastAt: 8 },
+    { status: "stopped" as const, lastAt: 7 },
   ]);
-  it("要你看的与在做的留着（排序不变），做完的另放", () => {
-    const { open, done } = splitDoneRows(rows);
+  it("要你看的与在做的留着（排序不变），做完的另放；停着的（没在跑、也没交回）不混在在做里，单放一组", () => {
+    const { open, done, parked } = splitDoneRows(rows);
     deepStrictEqual(open.map((row) => row.status), ["waiting", "running", "failed"]);
     deepStrictEqual(done.map((row) => row.lastAt), [9, 2]);
+    deepStrictEqual(parked.map((row) => row.status), ["idle", "stopped"]);
   });
   it("「1 件等你 · 1 件没做成 · 1 件在做」：等你与顶上胶囊同一个数，没做成单说；没有的种类不出", () => {
     const words = {
@@ -271,24 +274,25 @@ describe("latestChannelLine（收件箱行的最新一句）", () => {
       { id: "q", from: "child", author: "model", kind: "question", text: "/Users/x/a.ts?", delivery: "followUp", createdAt: 2 },
     ];
     strictEqual(latestChannelLine(question, "waiting", t), "在问你");
+    // 进度洗空了：没有信息，不写「报了一次进度」
+    const bare: ChannelMessage[] = [{ id: "p", from: "child", author: "model", kind: "progress", text: "`bun test`", delivery: "followUp", createdAt: 2 }];
+    strictEqual(latestChannelLine(bare, "running", t), "");
   });
 
-  it("最新的是父侧回信：回复：首行", () => {
+  it("父会话的回信不是它在干什么：跳过，取它自己最后说的那句", () => {
     const messages: ChannelMessage[] = [
-      { id: "q", from: "child", author: "model", kind: "question", text: "问个事", delivery: "followUp", createdAt: 1 },
+      { id: "q", from: "child", author: "model", kind: "question", text: "指标口径要不要按论文改", delivery: "followUp", createdAt: 1 },
       { id: "r", from: "parent", author: "user", kind: "reply", text: "先不支持扫描件", delivery: "steer", createdAt: 2 },
     ];
-    strictEqual(latestChannelLine(messages, "running", t), "回复：先不支持扫描件");
+    strictEqual(latestChannelLine(messages, "running", t), "问：指标口径要不要按论文改");
   });
 
-  it("还没说过话：在跑的说「在跑 · 还没说话」，idle / stopped 只说「还没说话」", () => {
+  it("还没开过口：空串（不写「还没说话」，宁可只留名字一行）", () => {
     const taskOnly: ChannelMessage[] = [
       { id: "t", from: "parent", author: "model", kind: "task", text: "任务", delivery: "steer", createdAt: 1 },
     ];
-    strictEqual(latestChannelLine(taskOnly, "running", t), "在跑 · 还没说话");
-    strictEqual(latestChannelLine(taskOnly, "idle", t), "还没说话");
-    strictEqual(latestChannelLine(undefined, "running", t), "在跑 · 还没说话");
-    strictEqual(latestChannelLine([], "stopped", t), "还没说话");
+    strictEqual(latestChannelLine(taskOnly, "running", t), "");
+    strictEqual(latestChannelLine(undefined, "idle", t), "");
   });
 });
 
@@ -357,13 +361,21 @@ describe("subSessionLine（子会话面板第二行：每件活一句话）", ()
     strictEqual(line([plan, say("`bun run test`"), bash]), "改投递逻辑");
     strictEqual(line([bash]), "正在跑命令");
   });
-  it("在跑但窗口里没有它的转录：退回通道里最新一句（同样洗过）", () => {
-    strictEqual(subSessionLine({ status: "running", messages: progress, items: [], now: 0, lastActivityAt: null }, t), "报了一次进度");
+  it("在跑但窗口里没有它的转录：退回通道里它说的那句；洗空了就空串（只留名字），不写「报了一次进度」", () => {
+    strictEqual(subSessionLine({ status: "running", messages: progress, items: [], now: 0, lastActivityAt: null }, t), "");
+    const said: ChannelMessage[] = [{ id: "p", from: "child", author: "model", kind: "progress", text: "统一几项指标的算法", delivery: "followUp", createdAt: 2 }];
+    strictEqual(subSessionLine({ status: "running", messages: said, items: [], now: 0, lastActivityAt: null }, t), "进度：统一几项指标的算法");
+  });
+  it("停着没交回（idle / stopped）：也走 work-line——它刚说的话 → 计划在做的那步；不说「正在……」的动作", () => {
+    strictEqual(subSessionLine({ status: "idle", messages: undefined, items: [plan, say("我把投递改成合并的了。")], now: 0, lastActivityAt: 0 }, t), "我把投递改成合并的了。");
+    strictEqual(subSessionLine({ status: "stopped", messages: undefined, items: [plan, bash], now: 0, lastActivityAt: 0 }, t), "改投递逻辑");
+    strictEqual(subSessionLine({ status: "idle", messages: undefined, items: [], now: 0, lastActivityAt: 0 }, t), "");
   });
   it("没动静：在跑、5 分钟以上没有任何 progress，带上几分钟；没在跑的照旧说通道里那句", () => {
     strictEqual(subSessionLine({ status: "running", messages: progress, items: [bash], now: 7 * 60_000, lastActivityAt: 0 }, t), "正在跑命令 · 7 分钟没动静");
     strictEqual(subSessionLine({ status: "running", messages: progress, items: [bash], now: 4 * 60_000, lastActivityAt: 0 }, t), "正在跑命令");
-    strictEqual(subSessionLine({ status: "done", messages: progress, items: [bash], now: 7 * 60_000, lastActivityAt: 0 }, t), "报了一次进度");
+    const done: ChannelMessage[] = [{ id: "d", from: "child", author: "model", kind: "done", text: "三件都做完了。", delivery: "followUp", createdAt: 3 }];
+    strictEqual(subSessionLine({ status: "done", messages: done, items: [bash], now: 7 * 60_000, lastActivityAt: 0 }, t), "完成：三件都做完了。");
   });
 });
 

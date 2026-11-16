@@ -300,3 +300,24 @@ describe("用户中途插的话：和用户消息同一个框（同一种 user �
     assert.deepEqual(kinds(view(records)), ["user", "text", "turnProcess", "user", "turnProcess", "text"]);
   });
 });
+
+describe("跑命令那一行默认说为什么跑，命令原文点开才看", () => {
+  test("紧挨着的「说」并进命令那一行当说明，不单出；读文件那一行不并", () => {
+    const records: TranscriptRecord[] = [
+      user("u1", 1),
+      assistant("a0", 2, [call("r0")]),
+      tool({ toolCallId: "r0", timestamp: 2 }),
+      assistant("a1", 2, [text("先数一下这屏的颜色记号"), call("b1", "bash", { command: "cd /very/long/path && node probe.js" })]),
+      tool({ toolCallId: "b1", toolName: "bash", timestamp: 3 }),
+      assistant("a2", 4, [text("再读一下图"), call("r1")]),
+      tool({ toolCallId: "r1", timestamp: 5 }),
+      assistant("a3", 6, [text("好")]),
+    ];
+    const p = procOf(view(records))[0];
+    assert.ok(p !== undefined);
+    const events = processEvents(p.steps, sources(records));
+    assert.deepEqual(events.map((e) => e.kind), ["tools", "tools", "say", "tools"]);
+    assert.equal(events[1]?.kind === "tools" ? events[1].caption : null, "先数一下这屏的颜色记号");
+    assert.equal(events[3]?.kind === "tools" ? events[3].caption : "none", undefined);
+  });
+});
