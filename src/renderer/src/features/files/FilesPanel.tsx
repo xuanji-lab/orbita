@@ -43,6 +43,7 @@ import {
   pdfStale,
 } from "./latex-workbench.ts";
 import { useLatexWorkbench } from "./useLatexWorkbench.ts";
+import { latexContextOf } from "./latex-context.ts";
 import { useCiteLibrary } from "./useCiteLibrary.ts";
 import { useLatexIndex } from "./useLatexIndex.ts";
 import { useLatexLint } from "./useLatexLint.ts";
@@ -308,16 +309,16 @@ export function FilesPanel(props: {
    * 授权上下文与 fs:read 同形（root + path），所以附图标签（path 是原图引用、
    * root 是空串）直接跳过——它不可能是 LaTeX 项目里的文件。
    */
-  const latexContext = useMemo<LatexFileContext | null>(() => {
-    if (activeTab === null || activeTab.name !== undefined) return null;
-    return {
-      sessionId,
-      workspaceId,
-      ...(focusWorkspaceId === null ? {} : { extraWorkspaceId: focusWorkspaceId }),
-      root: activeTab.root,
-      path: activeTab.path,
-    };
-  }, [activeTab, sessionId, workspaceId, focusWorkspaceId]);
+  const latexContext = useMemo<LatexFileContext | null>(
+    () =>
+      latexContextOf({
+        activeTab,
+        sessionId,
+        workspaceId,
+        focusWorkspaceId,
+      }),
+    [activeTab, sessionId, workspaceId, focusWorkspaceId],
+  );
   const latex = useLatexWorkbench(latexContext);
   /** 文献库：`\cite{` 的候选（编辑器）与坏 .bib 的 warning（问题抽屉）都读这一份 */
   const citeLibrary = useCiteLibrary(latexContext, latex.project);
@@ -1631,6 +1632,7 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
             probe={latex.probe}
             state={latexState}
             last={latex.last}
+            error={latex.error}
             startedAt={latex.startedAt}
             cleaning={latex.cleaning}
             onCompile={compileWithSave}

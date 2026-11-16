@@ -3067,6 +3067,8 @@ export const zh: Messages = {
     cancelled: "编译已取消",
     notInstalled: "这台电脑上没找到 latexmk",
     noMainFile: "选一个主 .tex 才能编译这个项目",
+    notStarted: (detail) => `编译没能开始：${detail}`,
+    noSession: "编译没能开始：这个文件面板还没有绑定会话——先发一条消息，或把文件挂到工作区再编",
     stalePdf: (time) => `显示的是 ${time} 编译的那一版`,
     problems: "问题",
     noProblems: "无问题",

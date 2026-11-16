@@ -17,6 +17,7 @@ import { Menu, type MenuItem } from "../../shell/Menu";
 import type { LatexEngine, LatexProjectInfo, LatexProbeResult } from "@shared/latex";
 import type { Messages } from "../../messages-en.ts";
 import {
+  compileErrorKind,
   engineLabel,
   formatDuration,
   formatElapsed,
@@ -30,6 +31,11 @@ export function LatexBuildBar(props: {
   probe: LatexProbeResult | null;
   state: LatexBarState;
   last: LatexBuildSummary | null;
+  /**
+   * 编译**没能开始**的原因（IPC 抛错 / outcome.ok=false）：一条人话。
+   * 有它时状态行优先说这句话——静默的「点了没反应」是 2026-11-16 的现场 bug。
+   */
+  error: string | null;
   /** 这一轮开始的时刻（编译中计时） */
   startedAt: number | null;
   /** 清理辅助文件在跑（菜单项置灰，不让连点两次） */
@@ -168,7 +174,7 @@ export function LatexBuildBar(props: {
 
       {/* 行尾血线：状态行才是尾元素；动作菜单在它左边，不抢右缘 */}
       <span className="latex-status row-trailing">
-        {statusOf({ state, last, project, startedAt: props.startedAt, now, t })}
+        {statusOf({ state, last, project, startedAt: props.startedAt, now, t, error: props.error })}
       </span>
     </div>
   );
@@ -182,8 +188,22 @@ function statusOf(input: {
   startedAt: number | null;
   now: number;
   t: Messages;
+  error: string | null;
 }): React.ReactNode {
   const { state, last, project, t } = input;
+  // 编译没能开始（IPC 抛错 / 主进程回 ok=false）：**先说话**。这一支原先不存在，
+  // 于是「invalid session id」这类失败在界面上完全静默（点了没反应）。
+  if (input.error !== null) {
+    const kind = compileErrorKind(input.error);
+    return (
+      <>
+        <Icon name="octagon-x" size={12} style={{ color: "var(--color-danger)" }} />
+        <span title={input.error}>
+          {kind === "session" ? t.latex.noSession : t.latex.notStarted(input.error)}
+        </span>
+      </>
+    );
+  }
   if (state === "running") {
     const elapsed = input.startedAt === null ? "0:00" : formatElapsed(input.now - input.startedAt);
     return (

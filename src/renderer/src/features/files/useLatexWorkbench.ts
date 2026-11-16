@@ -23,6 +23,7 @@ import type {
 } from "@shared/latex";
 
 import { recallBuild, rememberBuild, type LatexBuildSummary } from "./latex-build-store.ts";
+import { COMPILE_NO_CONTEXT } from "./latex-workbench.ts";
 
 export type { LatexBuildSummary } from "./latex-build-store.ts";
 
@@ -248,7 +249,11 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
   runCompileRef.current = runCompile;
 
   const compile = useCallback((): void => {
-    if (contextRef.current === null) return;
+    // 没有上下文（没绑会话 / 没有激活文件）：不能静默返回——那正是「点了没反应」
+    if (contextRef.current === null) {
+      setError(COMPILE_NO_CONTEXT);
+      return;
+    }
     if (runningRef.current) {
       queuedRef.current = true;
       return;
