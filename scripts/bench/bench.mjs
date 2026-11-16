@@ -865,7 +865,7 @@ step(`假模型 127.0.0.1:${mockPort}，CDP ${cdpPort}，结果 → ${outDir}`);
 const ctx = { mock, mockPort, cdpPort, outDir, machine: machineInfo() };
 const result = {
   schema: 2, label: LABEL, startedAt: new Date().toISOString(), machine: ctx.machine,
-  build: { kernel: NEW_KERNEL ? "new（pi-durable，kernel 进程）" : "old（coding-agent，agent 进程）", prewarm: PREWARM, type: "生产构建（electron-vite build，electron . 加载 out/，React 生产模式）", commit: sh("git", ["-C", REPO, "rev-parse", "--short", "HEAD"]) ?? (existsSync(join(REPO, ".bench-commit")) ? readFileSync(join(REPO, ".bench-commit"), "utf8").trim() : null), // 没有 .git 的解压副本读 .bench-commit dirty: (sh("git", ["-C", REPO, "status", "--porcelain", "--untracked-files=no"]) ?? "") !== "", electron: null },
+  build: { kernel: NEW_KERNEL ? "new（pi-durable，kernel 进程）" : "old（coding-agent，agent 进程）", prewarm: PREWARM, type: "生产构建（electron-vite build，electron . 加载 out/，React 生产模式）", commit: sh("git", ["-C", REPO, "rev-parse", "--short", "HEAD"]) ?? (existsSync(join(REPO, ".bench-commit")) ? readFileSync(join(REPO, ".bench-commit"), "utf8").trim() : null), dirty: (sh("git", ["-C", REPO, "status", "--porcelain", "--untracked-files=no"]) ?? "") !== "", electron: null },
   fixtures: fixtures.map(({ name, sha256, ticks }) => ({ name, sha256, ticks })),
   config: { runs: RUNS, runsBig: RUNS_BIG, compactReps: COMPACT_REPS, actions: ACTION_SPEC, turnPrompt: TURN_PROMPT, typePrompt: TYPE_PROMPT, compactPrompt: COMPACT_PROMPT, keys: KEYS.length, platform: process.platform },
   ticks: [],
