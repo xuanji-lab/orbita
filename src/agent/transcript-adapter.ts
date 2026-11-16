@@ -124,15 +124,30 @@ function toToolDetails(result: unknown): ToolTranscriptItem["details"] {
   return details as ToolTranscriptItem["details"];
 }
 
-function toToolContent(result: unknown): ToolContent[] {
+/**
+ * 终态工具结果没有任何可显示内容（mkdir / true / cd 等）时落盘的占位。
+ * 与界面空态、旧版落盘同一个说法；模型自己看到的「(no tool output)」由 pi-ai 生成，
+ * 不在我们这一层，两句话各管各的（一个给模型，一个给人看）。
+ */
+export const EMPTY_TOOL_OUTPUT = "(no output)";
+
+/**
+ * @param final 终态帧：空内容落成占位文本；流式中间帧保持空数组（还没有输出不等于没有输出）。
+ */
+function toToolContent(result: unknown, final = false): ToolContent[] {
+  const empty = (): ToolContent[] => (final ? [{ type: "text", text: EMPTY_TOOL_OUTPUT }] : []);
   if (isRecord(result) && Array.isArray(result.content)) {
+    // 有 content 数组就是标准 AgentToolResult：空数组 / 只有空文本块 = 没有输出，
+    // 不能退到 JSON.stringify(result)（会落成 {"content":[]} 并在工具卡显示「14 字」）
     const blocks = result.content.filter(isToolContent);
-    if (blocks.length > 0) return blocks;
+    const meaningful = blocks.some((b) => b.type === "image" || b.text !== "");
+    return meaningful ? blocks : empty();
   }
-  if (typeof result === "string") return [{ type: "text", text: result }];
-  if (result === undefined || result === null) return [];
+  if (typeof result === "string") return result === "" ? empty() : [{ type: "text", text: result }];
+  if (result === undefined || result === null) return empty();
   try {
-    return [{ type: "text", text: JSON.stringify(result) ?? "" }];
+    const json = JSON.stringify(result);
+    return json === undefined || json === "" ? empty() : [{ type: "text", text: json }];
   } catch {
     // 循环引用之类：宁可记一句「没法显示」，也不要抛异常打断整条链路
     return [{ type: "text", text: "[unserializable tool result]" }];
@@ -312,7 +327,7 @@ export class TranscriptAdapter {
           event.toolCallId,
           event.toolName,
           active.input,
-          toToolContent(event.result),
+          toToolContent(event.result, true),
           event.isError ? "error" : "complete",
           toToolDetails(event.result),
         ),

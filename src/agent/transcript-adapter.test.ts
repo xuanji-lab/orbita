@@ -443,6 +443,50 @@ describe("TranscriptAdapter · 工具结果", () => {
     assert.deepEqual(item.input, { command: "ls src" });
   });
 
+  describe("终态没有输出时落可读占位，不落 JSON", () => {
+    const endContent = (result: unknown) => {
+      const { transcript } = replay([
+        { type: "tool_execution_start", toolCallId: "c", toolName: "bash", args: {} },
+        { type: "tool_execution_end", toolCallId: "c", toolName: "bash", result, isError: false },
+      ]);
+      const item = transcript[0];
+      assert.equal(item?.role, "tool");
+      return item?.role === "tool" ? item.content : [];
+    };
+    const placeholder = [{ type: "text", text: "(no output)" }];
+
+    test("content 为空数组", () => {
+      assert.deepEqual(endContent({ content: [], details: undefined }), placeholder);
+    });
+    test("只有空字符串的文本块", () => {
+      assert.deepEqual(endContent({ content: [{ type: "text", text: "" }] }), placeholder);
+    });
+    test("全是畸形块", () => {
+      assert.deepEqual(endContent({ content: [{ type: "bogus" }] }), placeholder);
+    });
+    test("result 为空串 / undefined / null", () => {
+      assert.deepEqual(endContent(""), placeholder);
+      assert.deepEqual(endContent(undefined), placeholder);
+      assert.deepEqual(endContent(null), placeholder);
+    });
+    test("正常文本原样", () => {
+      assert.deepEqual(endContent({ content: [{ type: "text", text: "hi" }] }), [{ type: "text", text: "hi" }]);
+    });
+    test("带图片块原样保留（文本为空也不加占位）", () => {
+      const blocks = [{ type: "text", text: "" }, { type: "image", data: "AAAA", mimeType: "image/png" }];
+      assert.deepEqual(endContent({ content: blocks }), blocks);
+    });
+    test("流式中间帧的空内容不加占位", () => {
+      const { transcript } = replay([
+        { type: "tool_execution_start", toolCallId: "c", toolName: "bash", args: {} },
+        { type: "tool_execution_update", toolCallId: "c", toolName: "bash", args: {}, partialResult: { content: [] } },
+      ]);
+      const item = transcript[0];
+      assert.equal(item?.role, "tool");
+      if (item?.role === "tool") assert.deepEqual(item.content, []);
+    });
+  });
+
   test("失败的工具：status=error 且 isError=true", () => {
     const { transcript } = replay([
       { type: "tool_execution_start", toolCallId: "c", toolName: "bash", args: {} },
@@ -529,7 +573,7 @@ describe("TranscriptAdapter · 工具结果", () => {
 
     assert.deepEqual(seen("plain string"), [{ type: "text", text: "plain string" }]);
     assert.deepEqual(seen({ ok: 1 }), [{ type: "text", text: '{"ok":1}' }]);
-    assert.deepEqual(seen(null), []);
+    assert.deepEqual(seen(null), [{ type: "text", text: "(no output)" }]);
     // 循环引用：JSON.stringify 会抛——宁可记一句「没法显示」也不能抛出去
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
