@@ -3099,7 +3099,8 @@ function SubSessionsChip(props: { chip: { count: number; waiting: number }; onCl
     padding: 0,
     font: "inherit",
     fontSize: "var(--font-size-sm)",
-    color: waiting > 0 ? "var(--color-warning)" : "var(--color-text-tertiary)",
+    // 等你的数写成字、不上色：同一件等你的事全应用只在侧栏顶「等你」那一处出橙色（2026-11-17）
+    color: waiting > 0 ? "var(--color-text-secondary)" : "var(--color-text-tertiary)",
     ...(props.onClick !== undefined ? { cursor: "pointer" } : {}),
   };
   const content = (

@@ -96,8 +96,8 @@ export function sortSubSessionRows<T extends { status: SubSessionRowStatus; last
 
 /**
  * 行首记号（2026-11-17 减色，用户：「红蓝绿黄灯可以保留，在左侧栏是很直观的，但在子会话的 panel 里有点烦人」）：
- * 在做 = 灰点；做完 = 灰勾；终止的 / 还没开口的不标。要你出手的（在问你、被打断等你点继续、没做成）记作 ask，
- * 但面板里**不画橙点**（同日设计 11-attention：橙点只在侧栏顶「等你」一处）——行首空着，排最前，第二行写「等你：…」正文色字。
+ * 要你出手的（在问你、被打断等你点继续、没做成）= ask：排最前、那一句用正文色写明，**不点橙点**（2026-11-17 用户看满载图后：
+ * 同一件等你的事全应用只在侧栏顶「等你」那一处出橙色）；在做 = 灰点；做完 = 灰勾；终止的 / 还没开口的不标。
  * 侧栏的四色饼不动——这里不再用 StatusPie。
  */
 export type SubSessionMark = "ask" | "work" | "done" | null;
@@ -238,9 +238,6 @@ export function subSessionLine(
   },
   t: Messages,
 ): string {
-  // 要你出手的（在问你、被打断、没做成）：只用字与位置说（排最前、「等你：…」正文色字），不点橙点——
-  // 一屏只有侧栏顶的「等你」点橙点（2026-11-17 设计 11-attention）
-  if (subSessionMark(input.status) === "ask") return askLine(input.status, input.messages, t);
   // 主智能体暂停的不说最近一句（那多半是它停下前的进度，读着像还在做）：只说「停着，说一声就接着做」
   if (input.status === "paused") return t.channel.pausedLine;
   const quietish = input.status === "running" || input.status === "idle" || input.status === "stopped";
@@ -255,19 +252,6 @@ export function subSessionLine(
   const text = line?.text ?? latestChannelLine(input.messages, input.status, t);
   if (!running || text === "" || !isQuiet(input.now, true, input.lastActivityAt)) return text;
   return t.channel.quietFor(text, Math.floor((input.now - (input.lastActivityAt ?? input.now)) / 60_000));
-}
-
-/**
- * 要你出手那几行的第二行：「等你：<它问的原话第一句>」/「等你：被打断了，点继续接着做」/「等你看：没做成，<原因>」。
- * 原话先过 work-line 的洗句子，洗空了只说是哪种事。
- */
-export function askLine(status: SubSessionRowStatus, messages: readonly ChannelMessage[] | undefined, t: Messages): string {
-  if (status === "interrupted") return t.subSessions.askInterrupted;
-  const kind = status === "failed" ? "failed" : "question";
-  const last = [...(messages ?? [])].reverse().find((message) => message.kind === kind && message.from === "child");
-  const said = last === undefined ? "" : sanitizeWorkLine(firstSentenceOf(last.text));
-  if (status === "failed") return said === "" ? t.subSessions.askFailedBare : t.subSessions.askFailed(said);
-  return said === "" ? t.subSessions.askQuestionBare : t.subSessions.askQuestion(said);
 }
 
 /** 第一个非空行的第一句（收件箱行里只放得下一句话） */

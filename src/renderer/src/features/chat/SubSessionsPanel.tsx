@@ -46,18 +46,6 @@ import type { ChatSession, SessionEngine } from "./useChatSession";
 import { useT } from "../../locale.ts";
 
 
-const STATUS_COLOR: Record<SubSessionRowStatus, string> = {
-  running: "var(--color-accent)",
-  // 等你只用字说（橙点只在侧栏顶「等你」一处，2026-11-17）：正文色
-  waiting: "var(--color-text-primary)",
-  interrupted: "var(--color-text-primary)",
-  done: "var(--color-success)",
-  failed: "var(--color-danger)",
-  // stopped 是用户的裁决不是故障：中性灰，区别于 failed 的红（图标已经在说话）
-  stopped: "var(--color-text-tertiary)",
-  paused: "var(--color-text-tertiary)",
-  idle: "var(--color-text-tertiary)",
-};
 
 const STATUS_ICON: Record<SubSessionRowStatus, IconName> = {
   running: "loader-circle",
@@ -133,7 +121,8 @@ export function SubSessionsPanel(props: {
                   gap: "var(--space-1)",
                   minWidth: 0,
                   fontSize: "var(--font-size-sm)",
-                  color: STATUS_COLOR[status],
+                  // 状态写成字，不上色（2026-11-17：同一件等你的事全应用只在侧栏顶「等你」那一处出橙色）
+                  color: "var(--color-text-secondary)",
                 }}
               >
                 <Icon
@@ -296,7 +285,7 @@ function SubSessionRow(props: {
             </b>
             <span className="inbox-row-ago row-trailing">{relativeTime(props.lastAt, t)}</span>
           </span>
-          {props.latest !== "" && <span className={`inbox-row-l2${mark === "ask" ? " ask" : ""}`}>{props.latest}</span>}
+          {props.latest !== "" && <span className={mark === "ask" ? "inbox-row-l2 ask" : "inbox-row-l2"}>{props.latest}</span>}
         </span>
       </button>
       {props.onContinue !== undefined && (

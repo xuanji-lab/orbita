@@ -153,7 +153,9 @@ export function TaskProgress(props: {
       <div className="tp-now">
         {/* 一个面上只留一个会动的记号：在做 = 灰色转圈；其余不标——要你出手的靠后面的字说（橙点只在侧栏顶「等你」，2026-11-17） */}
         <span className="tp-slot">
-          {headState === "running" ? <Icon name="loader-circle" size={12} strokeWidth={1.8} spin /> : null}
+          {headState === "running" ? (
+            <Icon name="loader-circle" size={12} strokeWidth={1.8} spin />
+          ) : null}
         </span>
         <b>{t.taskPanel.state(headState ?? "idle")}</b>
         {turns.length > 0 && <span className="tp-sub">· {t.taskPanel.turns(turns.length)}</span>}
@@ -782,7 +784,6 @@ function DispatchedSection(props: { parentId: string; sessions: readonly Session
           return (
             <li key={row.meta.id} className="tp-job">
               <span className={`inbox-row-mark${mark === null ? "" : ` ${mark}`}`} aria-hidden="true">
-                {/* 只有在做的画灰点；停着的、要你出手的行首都空着（要你出手的靠排最前与「等你：…」那句说，橙点只在侧栏顶） */}
                 {mark === "work" && <span className="inbox-row-dot" />}
               </span>
               <div className="tp-step">
@@ -790,7 +791,7 @@ function DispatchedSection(props: { parentId: string; sessions: readonly Session
                   <span className="tp-text tp-job-name" title={row.meta.title}>{row.meta.title === "" ? t.subSessions.untitled : displaySubSessionTitle(row.meta.title)}</span>
                   <span className="tp-tail row-trailing">{jobElapsed(now - row.meta.createdAt, t.taskPanel.elapsed)}</span>
                 </div>
-                {line !== "" && <div className={`tp-job-line${mark === "ask" ? " ask" : ""}`}>{line}</div>}
+                {line !== "" && <div className={mark === "ask" ? "tp-job-line ask" : "tp-job-line"}>{line}</div>}
                 {note !== null && <div className="tp-note">{note}</div>}
               </div>
             </li>
