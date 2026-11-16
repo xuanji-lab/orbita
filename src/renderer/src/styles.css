@@ -3272,6 +3272,11 @@ html[data-pointer-drag] iframe {
   pointer-events: none;
 }
 
+/* 需要看一眼的提示（自动化记录文件被动过）：同一个角标，换成橙色；文字色沿用角标的反色 */
+.rail-badge[data-tone="alert"] {
+  background: var(--color-warning);
+}
+
 /*
  * 右侧分屏面板（S-0）：进入向右滑入 + 淡入，220ms（--duration-enter --ease-out-quint）；
  * 两个面板之间原地切内容时 120ms 淡入。动效只解释「东西去哪了」。

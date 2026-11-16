@@ -604,6 +604,47 @@ describe("AutomationScheduler：new_session", () => {
     }
   });
 
+  test("已结束的归档不进调度：到点的只有没结束的那条在跑，归档的记录连带不被碰；收尾后的 maxRuns 记录进归档", async () => {
+    const h = harness();
+    await h.store.insert(makeAutomation({ id: "live", nextRunAt: T0, maxRuns: 1 }));
+    // nextRunAt 是旧数据里可能残留的值：即使带着「到点」的 nextRunAt，归档里的也不能被调度
+    await h.store.insert(makeAutomation({ id: "old", status: "completed", endReason: "finished", nextRunAt: T0 - MIN }));
+    await h.scheduler.tick();
+    assert.deepEqual(h.launches.map((launched) => launched.automation.id), ["live"]);
+    const sessionId = h.launches[0]?.sessionId ?? "";
+    h.scheduler.onAgentEvent(answerEvent(sessionId, "好"));
+    h.scheduler.onAgentEvent(idleEvent(sessionId));
+    await h.settled();
+    assert.deepEqual((await h.store.list()).map((a) => a.id), [], "跑满的进了归档，不再在没结束的里");
+    assert.deepEqual((await h.store.listAll()).map((a) => a.id).sort(), ["live", "old"]);
+    assert.equal((await h.store.get("live"))?.endReason, "finished");
+    assert.equal((await h.store.get("old"))?.runs.length, 0, "归档里的老记录没被碰");
+    h.clock.now = T0 + 60 * MIN;
+    await h.scheduler.tick();
+    assert.equal(h.launches.length, 1, "之后的 tick 什么都不再开");
+  });
+
+  test("跑到一半被取消：记录进归档且不复活；那次运行迟到的结果仍记在归档里的那条上", async () => {
+    const h = harness();
+    await h.store.insert(makeAutomation({ id: "a", nextRunAt: T0 }));
+    await h.scheduler.tick();
+    const sessionId = h.launches[0]?.sessionId ?? "";
+    await h.store.update("a", (current) => ({ ...current, status: "completed", endReason: "cancelled", nextRunAt: null, updatedAt: T0 + 1 }));
+    assert.deepEqual(await h.store.list(), []);
+    h.clock.now = T0 + 30_000;
+    h.scheduler.onAgentEvent(answerEvent(sessionId, "取消前跑完的结果"));
+    h.scheduler.onAgentEvent(idleEvent(sessionId));
+    await h.settled();
+    const archived = await h.store.get("a");
+    assert.equal(archived?.status, "completed", "被取消的不会复活");
+    assert.equal(archived?.endReason, "cancelled");
+    assert.equal(archived?.runs[0]?.status, "success", "迟到的运行结果落在归档里的记录上");
+    assert.deepEqual(await h.store.list(), []);
+    h.clock.now = T0 + 60 * MIN;
+    await h.scheduler.tick();
+    assert.equal(h.launches.length, 1);
+  });
+
   test("立即运行：不动排期；在跑时拒；failed 要先重新启动；paused 可以跑", async () => {
     const h = harness();
     await h.store.insert(makeAutomation({ id: "a", nextRunAt: T0 + 10 * MIN }));

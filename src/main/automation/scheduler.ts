@@ -664,7 +664,8 @@ export class AutomationScheduler {
    * 应用退出不是自动化的错）；排期丢了的补上；等着送达的会话登记回来。
    */
   private async recover(now: number): Promise<void> {
-    for (const automation of await this.deps.store.list()) {
+    // 连归档一起扫：取消时还在跑的那次运行，应用退出后留在归档里仍标着 running，面板会一直转圈
+    for (const automation of await this.deps.store.listAll()) {
       if (automation.target.kind === "this_session" && automation.pendingDelivery !== undefined) {
         this.pendingSessions.add(automation.target.sessionId);
       }

@@ -522,9 +522,12 @@ describe("answerAutomation —— 自动化工具请求的回执", () => {
     ctx.host.answerAutomation("q1", { ok: true, text: "NOT changed", automation: card, modeRow });
     ctx.host.answerAutomation("q2", { ok: true, text: "list", automations: [card] });
     ctx.host.answerAutomation("q3", { ok: false, error: "No such automation" });
-    assert.deepEqual(ctx.child().posted.at(-3), { type: "automationResult", requestId: "q1", ok: true, text: "NOT changed", automation: card, modeRow });
-    assert.deepEqual(ctx.child().posted.at(-2), { type: "automationResult", requestId: "q2", ok: true, text: "list", automations: [card] });
-    assert.deepEqual(ctx.child().posted.at(-1), { type: "automationResult", requestId: "q3", ok: false, error: "No such automation" });
+    ctx.host.answerAutomation("q4", { ok: true, text: "list", automations: [card], footer: "3 more finished automation(s) are archived." });
+    assert.deepEqual(ctx.child().posted.at(-4), { type: "automationResult", requestId: "q1", ok: true, text: "NOT changed", automation: card, modeRow });
+    assert.deepEqual(ctx.child().posted.at(-3), { type: "automationResult", requestId: "q2", ok: true, text: "list", automations: [card] });
+    assert.deepEqual(ctx.child().posted.at(-2), { type: "automationResult", requestId: "q3", ok: false, error: "No such automation" });
+    // list 的 footer（另有 N 条已结束的归档）必须过边界：漏了，模型默认看不到归档就不知道它们存在
+    assert.deepEqual(ctx.child().posted.at(-1), { type: "automationResult", requestId: "q4", ok: true, text: "list", automations: [card], footer: "3 more finished automation(s) are archived." });
   });
 });
 

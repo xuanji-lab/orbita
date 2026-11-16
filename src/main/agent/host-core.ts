@@ -680,6 +680,8 @@ export class AgentHostCore {
             ...(outcome.automations === undefined ? {} : { automations: outcome.automations }),
             // 「改权限」那一行的数据：漏了它，工具结果里就没有那一行（2026-11-06 验收时抓到：按字段拷贝丢了新字段）
             ...(outcome.modeRow === undefined ? {} : { modeRow: outcome.modeRow }),
+            // list 末尾那一行「另有 N 条已结束的归档」：同样是按字段拷贝，漏了它模型就不知道还有归档（2026-11-14 真实例里抓到）
+            ...(outcome.footer === undefined ? {} : { footer: outcome.footer }),
           }
         : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);
