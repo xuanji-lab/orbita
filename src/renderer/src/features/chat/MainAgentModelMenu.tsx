@@ -83,7 +83,7 @@ export function MainAgentModelMenu(props: {
     <Menu
       // 一行灰字（组头行，不可选）说清这里定的是什么
       items={[{ id: "main-model-note", label: t.chat.mainModelNote, header: true }]}
-      panelMinWidth={280}
+      panelMinWidth={300}
       footer={() => (
         <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", padding: "var(--space-1) var(--space-2)" }}>
           {session.usable.length > 0 && (
