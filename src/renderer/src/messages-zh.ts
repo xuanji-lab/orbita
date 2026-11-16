@@ -2037,6 +2037,7 @@ export const zh: Messages = {
       find: "找文件",
       search: "搜索",
       readTask: "读任务",
+      workCards: "看了手上的活",
       web: "查网页",
       browse: "打开网页",
       skill: "读技能",

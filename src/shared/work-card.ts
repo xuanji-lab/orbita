@@ -97,6 +97,19 @@ export function workCardOf(input: {
   };
 }
 
+/**
+ * 状态给模型看的说法：大白话，不给状态码（2026-11-17 真型号试下来，模型拿到 running 就原样转述给用户
+ * 「状态是 running」；给它一句话，它转述出来也是一句话）。
+ */
+const STATUS_WORDS: Readonly<Record<ChannelStatus, string>> = {
+  running: "in progress",
+  waiting: "waiting for an answer to its question",
+  done: "finished",
+  failed: "could not be done",
+  stopped: "stopped by the user",
+  paused: "on hold (you paused it)",
+};
+
 /** 小卡给模型看的「带了什么」：纯聊天 / 只带基础 / 基础 + 清单 */
 function givenText(capabilities: readonly string[]): string {
   if (isChatOnly(capabilities)) return "chat only, no tools";
@@ -109,7 +122,7 @@ export function workCardsText(cards: readonly WorkCard[], now: number): string {
   const minutes = (at: number): number => Math.max(0, Math.round((now - at) / 60_000));
   return cards
     .map((card) => {
-      const status = card.status === "running" && !card.working ? "idle (not finished, but not working right now)" : card.status;
+      const status = card.status === "running" && !card.working ? "not finished, but nothing is happening right now" : STATUS_WORDS[card.status];
       const parts = [`- "${card.title}" (id ${card.sessionId}): ${status}`];
       if (card.plan !== null) parts.push(`plan ${card.plan.done}/${card.plan.total}`);
       if (card.line !== null) parts.push(`now: ${card.line}`);

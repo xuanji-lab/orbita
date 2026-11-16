@@ -39,7 +39,9 @@ describe("小卡（主智能体读的）", () => {
     assert.equal(card.quiet, false);
     assert.match(workCardsText([], 0), /No work/);
     const idle = workCardOf({ meta: { id: "c", title: "t" }, status: "running", messages: [], items: [], running: false, lastActivityAt: null, now: 0 });
-    assert.match(workCardsText([idle], 0), /idle \(not finished/);
+    assert.match(workCardsText([idle], 0), /not finished, but nothing is happening right now/);
+    // 不给状态码：模型拿到什么就转述什么
+    assert.doesNotMatch(workCardsText([card, idle], 0), /: (running|paused|idle)\b/);
   });
 
   test("能力集：全带不写；纯聊天、只带基础、基础 + 清单各说一句", () => {

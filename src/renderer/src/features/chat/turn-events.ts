@@ -368,6 +368,8 @@ export interface ProcVerbWords {
   find: string;
   search: string;
   readTask: string;
+  /** 主智能体读小卡（work_cards）：看手上派出去的活 */
+  workCards: string;
   web: string;
   browse: string;
   skill: string;
@@ -388,6 +390,7 @@ const VERB_OF_TOOL: Readonly<Record<string, keyof Omit<ProcVerbWords, "mcp">>> =
   glob: "find",
   grep: "search",
   read_task: "readTask",
+  work_cards: "workCards",
   web_search: "web",
   web_fetch: "browse",
   skill: "skill",

@@ -370,6 +370,8 @@ describe("processVerb：过程明细左列不出现英文工具名", () => {
       ["跑命令", "读文件", "写文件", "改文件", "搜索", "读任务", "打开网页", "打开网页"],
     );
     assert.equal(processVerb("read", "skill", words).verb, "读技能");
+    // 主智能体读小卡：不露 work_cards 这个工具名
+    assert.deepEqual(processVerb("work_cards", "work_cards", words), { verb: "看了手上的活", raw: null });
   });
   test("外接工具写所属服务名 +「工具」，原名放悬停；对不上的归「用工具」", () => {
     assert.deepEqual(processVerb("mcp__qgis__render_map", "mcp", words), { verb: "qgis 工具", raw: "mcp__qgis__render_map" });

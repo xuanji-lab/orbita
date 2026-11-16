@@ -2210,6 +2210,7 @@ export const en = {
       find: "Found",
       search: "Searched",
       readTask: "Read task",
+      workCards: "Checked the work in hand",
       web: "Searched web",
       browse: "Opened page",
       skill: "Read skill",
