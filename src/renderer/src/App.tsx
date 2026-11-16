@@ -377,13 +377,6 @@ export function App() {
    */
   const newTaskNonceRef = useRef(0);
   const [newTaskSignal, setNewTaskSignal] = useState(0);
-  const startNewTaskFromTools = (): void => {
-    setOverlay(null);
-    setSidebarCollapsed(false);
-    newTaskNonceRef.current += 1;
-    setNewTaskSignal(newTaskNonceRef.current);
-    session.newTask();
-  };
   /**
    * 带着会话目标开新会话（右栏进度「目标」上的动作）：开工即回对话、侧栏展开、
    * 新会话落在来源会话的组里（工作区组在新会话打开时由 Sidebar 自己展开，TASKS 组靠新任务信号）。
@@ -1364,7 +1357,8 @@ export function App() {
       <SessionCapsule
         title={capsuleTitle}
         tag={mainAgentWorkspace === undefined ? undefined : t.sidebar.mainAgent}
-        shortId={capsuleShortId}
+        // 主智能体的对话不是一条让用户管理的会话：不露会话编号（也就没有复制编号的入口）
+        shortId={mainAgentWorkspace === undefined ? capsuleShortId : null}
         // 主智能体的名字就是工作区名（改名去侧栏改工作区）
         onRename={mainOpenId === "" || mainAgentWorkspace !== undefined ? undefined : (title) => session.renameSession(mainOpenId, title)}
         subChip={hasSubSessions ? { count: subSessionChildren.length, waiting: waitingOnYou, interrupted: interruptedChildren } : null}
@@ -1434,7 +1428,6 @@ export function App() {
           sidebarCollapsed={sidebarCollapsed}
           sidebarWidth={sidebarWidth}
           onToggleSidebar={() => setSidebarCollapsed((collapsed) => !collapsed)}
-          onNewTask={startNewTaskFromTools}
           windowWidth={windowWidth}
           panelOpen={rightPanel !== null}
           panelWidth={panelRenderedWidth}

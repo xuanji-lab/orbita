@@ -74,9 +74,6 @@
   font: inherit;
   padding: 0;
 }
-.toolbar-capsule button.cap-dot {
-  background: var(--color-accent);
-}
 /* 带文字的键豁免上面的 padding:0（2026-10-19 复测：页签被压到 44px、
  * 「图标 + 两个字」溢出）——重申各自的内边距与自然宽（width: auto） */
 .toolbar-capsule .cap-tab {
@@ -173,27 +170,6 @@
   letter-spacing: 0;
 }
 
-/* 新任务：accent 圆点（一屏一个 accent 的那一个） */
-.cap-accent {
-  display: grid;
-  place-items: center;
-  width: 36px;
-  height: var(--titlebar-control);
-  flex: 0 0 auto;
-}
-.cap-accent .cap-dot {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  border-radius: var(--radius-pill);
-  background: var(--color-accent);
-  color: var(--color-accent-fg);
-  transition: var(--transition-hover);
-}
-.cap-accent:hover .cap-dot {
-  background: var(--color-accent-strong);
-}
 
 /* —— 会话胶囊（排法甲 · 地址栏式，用户裁决）：三栏网格，标题永远在胶囊正中 —— */
 .cap-sess {

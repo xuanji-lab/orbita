@@ -38,7 +38,6 @@ export function Toolbar(props: {
   sidebarCollapsed: boolean;
   sidebarWidth: number;
   onToggleSidebar: () => void;
-  onNewTask: () => void;
   windowWidth: number;
   panelOpen: boolean;
   panelWidth: number;
@@ -143,16 +142,8 @@ export function Toolbar(props: {
         >
           <Icon name="panel-left" size={16} strokeWidth={1.9} />
         </button>
-        <span className="cap-accent" title={t.common.newTask}>
-          <button
-            type="button"
-            className="cap-dot"
-            aria-label={t.common.newTask}
-            onClick={props.onNewTask}
-          >
-            <Icon name="plus" size={16} strokeWidth={2.2} />
-          </button>
-        </span>
+        {/* 原来这里是 accent 的「+ 新任务」：2026-11-17 去掉——工作区里的新事情交给主智能体，
+            不属于工作区的新任务用侧栏「任务」组自己的「+」（两者重复，设计稿 1-entry-after） */}
         {/* 专注模式：专注键 / 倒计时格（App 注入的 FocusControl）；没注入时退回
             planned 占位，槽位不塌 */}
         {props.focus ?? (
