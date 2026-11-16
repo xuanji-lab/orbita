@@ -54,6 +54,9 @@ import { ccBillingPatch } from "./cc-billing-patch.ts";
 import { turnToolFlags, type TurnInput } from "./turn-tools.ts";
 import { withOpencodeSession } from "./opencode-session.ts";
 
+/** 排在一句前面、同一轮交给模型的子会话信封（submit 的 preface）在库里的条目种类：对账按 user 消息计（kernel-edit.ts） */
+export const CHANNEL_PREFACE_KIND = "orbita.channel";
+
 /**
  * 库里的「Orbita 会话 id → durable 会话号」索引（session 作用域的单例文档）。
  * 与迁移写在同一次提交里：它在，迁移就完整；它不在，库里就没有这条会话的任何东西。

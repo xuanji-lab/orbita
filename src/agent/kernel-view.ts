@@ -44,6 +44,8 @@ export interface KernelViewHooks {
   compactionPlaced?(entry: EntryRecord): void;
   /** 应用正在正常退出：这时被停下的半截回答不落终态帧（见 endAssistant）；缺席 = 不在退出 */
   quitting?(): boolean;
+  /** 一条没回显过的 user 条目显出来了（插话放进上下文的那一刻；用户插话据此回 placed） */
+  userShown?(text: string): void;
 }
 
 type BlockState = { type: string; length: number; args: string };
@@ -197,6 +199,7 @@ export class KernelView {
       for (const progress of this.adapter.userPrompt(splitEchoBlocks(text))) {
         this.hooks.send({ type: "progress", sessionId: this.sessionId, progress });
       }
+      this.hooks.userShown?.(text);
     }
   }
 

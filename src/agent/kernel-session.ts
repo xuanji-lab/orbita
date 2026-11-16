@@ -19,7 +19,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { AssistantMessage, Message, Usage } from "@earendil-works/pi-ai";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 import { getCurrentSystemMessage } from "@earendil-works/pi-ai/utils/transcript";
-import { ConversationIdle, LiveDoc, UsageDoc, type ContextView, type Conversation, type ConversationId, type EntryRecord, type Harness } from "@earendil-works/pi-durable";
+import { ConversationIdle, LiveDoc, UsageDoc, type ContextView, type Conversation, type ConversationId, type EntryRecord, type Harness, type Submission } from "@earendil-works/pi-durable";
 import type { AgentCommand, AgentEvent, AgentStats, ProviderSecrets } from "../shared/agent-ipc.ts";
 import { composeIntentPrompt } from "../shared/intent-recall.ts";
 import { durableBookRef, kernelLibraryName, type KernelContinueCommand, type KernelSessionCommand, type KernelTurnResult } from "../shared/kernel.ts";
@@ -29,7 +29,7 @@ import { compactionBoundaryTimestamp, compactionErrorText, type TurnTiming } fro
 import { TurnFileTracker } from "./file-tracker.ts";
 import type { IntentConfirmWaiter } from "./intent-confirm-wait.ts";
 import { runIntentGate } from "./intent-gate.ts";
-import { SessionHistoryDoc, type KernelPool, type KernelTarget } from "./kernel.ts";
+import { CHANNEL_PREFACE_KIND, SessionHistoryDoc, type KernelPool, type KernelTarget } from "./kernel.ts";
 import { appendNotice, branchSession, revertSession, RUNNING_REFUSAL } from "./kernel-edit.ts";
 import { digestContext, DurableBranch, runTurn, ToolRounds, type ContextDigest, type KernelTurnRuntime, type TurnOutcome } from "./kernel-turn.ts";
 import { KernelView } from "./kernel-view.ts";
@@ -55,6 +55,12 @@ interface SessionNote {
   headers?: Record<string, string>;
   /** 最近一轮用的模型（标题与 setModel 校验用） */
   model: PiModel | undefined;
+  /**
+   * 用户插进正在跑的那一轮、还没放进上下文的话（agent:steer）：id = renderer 队列里那条，text 用来认出它放进来的那一刻
+   * （视图里一条没回显过的 user 条目），submission 用来在停 / 抢跑时撤回（不撤回的话 inbox 里那句会在下一轮再冒出来，
+   * renderer 又会把队列里那条照常发一遍——发两遍）。
+   */
+  userSteers?: { id: string; text: string; submission: Submission }[];
 }
 
 /** 正在跑的一轮的对象面（turn-cycle 的 CycleParts） */
@@ -328,6 +334,7 @@ export class KernelSessions {
     if (command.type === "interrupt" || command.type === "compact") {
       // 抢跑：停旧轮、等它收尾（不发 idle），紧接着开新的一轮。中间没有「空闲」——否则 renderer 收到 idle 就投递队首，
       // 撞上新轮的 already running（与旧内核同一条理由）
+      await this.withdrawUserSteers(command.sessionId);
       abortCycle(this.running, command.sessionId, { preempt: true });
       this.deps.intentConfirm.settle(command.sessionId);
       await this.running.get(command.sessionId)?.lifecycle;
@@ -340,7 +347,9 @@ export class KernelSessions {
       return;
     }
     if (command.type === "abort") {
-      // 只停当前轮；排队在 renderer，idle 到了照常投（停止不替用户清队）
+      // 只停当前轮；排队在 renderer，idle 到了照常投（停止不替用户清队）。用户插进去还没放进上下文的话先撤回，
+      // 它在 renderer 队列里那条退回普通排队（userSteer bounced），idle 后照常发——不撤的话会发两遍
+      await this.withdrawUserSteers(command.sessionId);
       abortCycle(this.running, command.sessionId);
       this.deps.intentConfirm.settle(command.sessionId);
       return;
@@ -375,7 +384,8 @@ export class KernelSessions {
       return;
     }
     if (command.type === "steer") {
-      await this.steer(command.sessionId, command.text, command.delivery ?? "steer");
+      if (command.userSteerId !== undefined) await this.steerUser(command.sessionId, command.userSteerId, command.text);
+      else await this.steer(command.sessionId, command.text, command.delivery ?? "steer");
       return;
     }
     if (command.type === "revertPiBook" || command.type === "undoPiBook" || command.type === "movePiBook") {
@@ -454,6 +464,59 @@ export class KernelSessions {
         return;
       }
       throw cause;
+    }
+  }
+
+  /**
+   * 用户的话插进正在跑的那一轮（agent:steer）：同父→子插话走 durable 的 inbox steer（当前工具轮结束后、下一次请求前放进来，
+   * 这一轮不停）。到达时这一轮已结束：退回 renderer（userSteer bounced），队列里那条当普通消息等空闲再发。
+   * 放进来的那一刻由视图认出（userShown），回 placed。
+   */
+  private async steerUser(sessionId: string, id: string, text: string): Promise<void> {
+    const parts = this.running.get(sessionId)?.opened ?? null;
+    const bounced = (): void => this.send({ type: "userSteer", sessionId, id, outcome: "bounced" });
+    if (parts === null) {
+      bounced();
+      return;
+    }
+    try {
+      const submission = await parts.target.conversation.submit(
+        { type: "input", content: [{ type: "text", text }], whenBusy: "steer", whenIdle: "reject" },
+        BACKGROUND_CONTEXT,
+      );
+      const note = this.note(sessionId);
+      note.userSteers = [...(note.userSteers ?? []), { id, text, submission }];
+    } catch (cause) {
+      if (cause instanceof ConversationIdle) {
+        bounced();
+        return;
+      }
+      throw cause;
+    }
+  }
+
+  /** 视图显出一条没回显过的 user 条目：是用户插进来的话就回 placed（renderer 从队列里摘掉它） */
+  private userShown(sessionId: string, text: string): void {
+    const note = this.notes.get(sessionId);
+    const at = note?.userSteers?.findIndex((steer) => steer.text === text) ?? -1;
+    if (note?.userSteers === undefined || at === -1) return;
+    const [placed] = note.userSteers.splice(at, 1);
+    if (placed !== undefined) this.send({ type: "userSteer", sessionId, id: placed.id, outcome: "placed" });
+  }
+
+  /** 停 / 抢跑之前：撤回还没放进上下文的用户插话，各回 bounced（已经放进去的等视图显出来回 placed） */
+  private async withdrawUserSteers(sessionId: string): Promise<void> {
+    const note = this.notes.get(sessionId);
+    const pending = note?.userSteers ?? [];
+    if (note !== undefined) note.userSteers = [];
+    for (const steer of pending) {
+      const result = await steer.submission.abort(BACKGROUND_CONTEXT).catch(() => "settled" as const);
+      if (result === "already_placed") {
+        // 已经放进上下文：留给视图认（它会显出来、回 placed）
+        note?.userSteers?.push(steer);
+        continue;
+      }
+      this.send({ type: "userSteer", sessionId, id: steer.id, outcome: "bounced" });
     }
   }
 
@@ -544,6 +607,7 @@ export class KernelSessions {
       send: (event) => this.send(event),
       now: () => this.now(),
       quitting: () => this.shuttingDown,
+      userShown: (text) => this.userShown(sessionId, text),
       // 回答落定：上下文占用就是它自己的 usage（pi 的估算法：最后一条有效回答的 usage + 其后消息的估算，此刻其后没有消息），
       // 不为这一下把整份上下文再读一遍（大会话的上下文带着全部原图）
       assistantEnd: (message) => {
@@ -741,6 +805,11 @@ export class KernelSessions {
     promptText: string,
   ): Promise<string | null> {
     if (parts.aborted()) return null;
+    // 排在这一句前面的子会话信封：先各自回显（recorder 认出信封、各落一条通道标记），这一句的回显排在它们后面
+    const preface = command.preface ?? [];
+    for (const text of preface) {
+      for (const progress of parts.view.userPrompt(splitEchoBlocks(text))) this.send({ type: "progress", sessionId: command.sessionId, progress });
+    }
     let turnId = "";
     for (const progress of parts.view.userPrompt(splitEchoBlocks(command.text), images, attachmentBlocks(command.pasted ?? [], command.files ?? []))) {
       if (progress.type === "item_started") {
@@ -753,16 +822,29 @@ export class KernelSessions {
       send: (event) => this.send(event),
       confirm: this.deps.intentConfirm,
     });
-    if (gate.injection === null || parts.aborted()) return null;
-    const finalPrompt = composeIntentPrompt(gate.injection, promptText);
+    const stopped = gate.injection === null || parts.aborted();
     // 两本账对齐：失败轮留下的 user 尾巴补记进库（旧内核补进 pi 本子），必须在这一句之前
-    for (const text of command.backfill ?? []) {
+    if (!stopped) {
+      for (const text of command.backfill ?? []) {
+        await parts.target.conversation.submit(
+          { type: "write", entry: { kind: "orbita.backfill", model: [{ role: "user", content: [{ type: "text", text }], timestamp: this.now() }] } },
+          BACKGROUND_CONTEXT,
+        );
+        parts.view.noteEcho(text);
+      }
+    }
+    // 子会话信封写进库（被动写入：进上下文、不开 run），排在这一句前面——这一句的 input 开出的那一个 run 一起看到它们。
+    // 已回显（标记已落、待投账已出），所以这一轮就算停了也照写：模型下一轮仍看得到，不丢
+    for (const text of preface) {
+      // 先记「已回显」再写：视图可能在写入的提交里就看到这条条目（advance 同步到达），晚记会让它再显形一次
+      parts.view.noteEcho(text);
       await parts.target.conversation.submit(
-        { type: "write", entry: { kind: "orbita.backfill", model: [{ role: "user", content: [{ type: "text", text }], timestamp: this.now() }] } },
+        { type: "write", entry: { kind: CHANNEL_PREFACE_KIND, model: [{ role: "user", content: [{ type: "text", text }], timestamp: this.now() }] } },
         BACKGROUND_CONTEXT,
       );
-      parts.view.noteEcho(text);
     }
+    if (stopped || gate.injection === null) return null;
+    const finalPrompt = composeIntentPrompt(gate.injection, promptText);
     parts.view.noteEcho(finalPrompt);
     return finalPrompt;
   }

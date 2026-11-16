@@ -5,7 +5,8 @@
  * 守住的是旧内核的**对账规矩**：两本账（我们的转录、durable 的 entry）没有 id 映射，按 user / assistant 出现的顺序
  * 一一对应（branch-cut.ts 的 planCutEntry / planBranchCut，同一份函数）；对不上就拒绝，一条文件都不动（主进程 revert.ts
  * 先等这里回执再还原文件）。durable 的 entry 投影成 pi 本子的形状再交给它：
- * - pi.user / pi.assistant / pi.tool-result / orbita.backfill（失败轮补记的 user）= pi 的 message 条目；
+ * - pi.user / pi.assistant / pi.tool-result / orbita.backfill（失败轮补记的 user）/ orbita.channel（排在一句前面的子会话信封）
+ *   = pi 的 message 条目；
  * - 其余（压缩、扩展消息、系统提示……）= 别的类型，不计入对账（与 pi 本子里 custom_message / compaction 不计同理）。
  *
  * 回退 = durable 的 fork(at)：新会话从裁点那一刻的上下文开始，索引改指向它；**被回退掉的几轮还在库里**
@@ -33,10 +34,10 @@ import {
 import { planBranchCut, planCutEntry, type BranchCutEntry } from "./branch-cut.ts";
 import { LEGACY_KINDS, legacyUsageOf } from "./legacy-migrate.ts";
 import { messageSignature, WireDoc } from "./kernel-wire.ts";
-import { SessionHistoryDoc, SessionIndexDoc } from "./kernel.ts";
+import { CHANNEL_PREFACE_KIND, SessionHistoryDoc, SessionIndexDoc } from "./kernel.ts";
 
 /** 对账里算作 pi「message 条目」的 entry 种类 */
-const MESSAGE_KINDS = new Set([LEGACY_KINDS.user, LEGACY_KINDS.assistant, LEGACY_KINDS.toolResult, "orbita.backfill"]);
+const MESSAGE_KINDS = new Set([LEGACY_KINDS.user, LEGACY_KINDS.assistant, LEGACY_KINDS.toolResult, "orbita.backfill", CHANNEL_PREFACE_KIND]);
 
 /** 回退 / 撤销 / 挪工作区：会话在跑时拒绝（旧内核 runtime.ts 同一句话；主进程按 phase 先筛过一道，这里是信任边界） */
 export const RUNNING_REFUSAL = {

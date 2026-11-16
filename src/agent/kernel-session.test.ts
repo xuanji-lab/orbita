@@ -468,6 +468,84 @@ describe("KernelSessions：停止 / 抢跑 / 切档 / 插话", () => {
   });
 });
 
+describe("KernelSessions：子会话消息合并成一轮、用户的话插进子会话消息开的轮", () => {
+  const envelope = (id: string, text: string): string =>
+    `<channel from="child" kind="done" peer="c-${id}" message="${id}" title="T${id}">\n${text}\n</channel>\nnotice`;
+
+  it("preface：几封信封各是一条 user 消息、排在这一句前面，只开一轮、只请求一次模型；回显顺序 = 信封在前、这一句在后", async () => {
+    const cwd = await tempDir();
+    const seen: string[] = [];
+    faux.setResponses([
+      (context) => {
+        seen.push(JSON.stringify(context.messages.filter((message) => message.role === "user").map((message) => JSON.stringify(message.content))));
+        return fauxAssistantMessage("三件都收到");
+      },
+    ]);
+    const r = await rig();
+    await r.sessions.handle("s1", submit(cwd, { text: "用户的话", preface: [envelope("m1", "A 做完了"), envelope("m2", "B 做完了")] }));
+    await r.until(idle());
+    assert.equal(seen.length, 1, "只请求一次模型");
+    const users = JSON.parse(seen[0] ?? "[]") as string[];
+    assert.equal(users.length, 3, "三条 user 消息（两封信封 + 用户的话），不是拼成一条");
+    assert.match(users[0] ?? "", /A 做完了/);
+    assert.match(users[1] ?? "", /B 做完了/);
+    assert.match(users[2] ?? "", /用户的话/);
+    const echoed = r.events.flatMap((event) =>
+      event.type === "progress" && event.progress.type === "item_started" && event.progress.item.role === "user"
+        ? [JSON.stringify(event.progress.item.content)]
+        : [],
+    );
+    assert.equal(echoed.length, 3, "每封信封各回显一次（recorder 据此各落一条通道标记），没有重复显形");
+    assert.match(echoed[0] ?? "", /message=\\"m1\\"/);
+    assert.match(echoed[2] ?? "", /用户的话/);
+    assert.deepEqual(phases(r.events), ["turn", "idle"]);
+  });
+
+  it("用户插话（userSteerId）：放进这一轮、回 placed；空闲时回 bounced；停止时撤回还没放进去的插话、回 bounced 且不会在下一轮冒出来", async () => {
+    const cwd = await tempDir();
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("bash", { command: "sleep 0.4; echo tool-done" }), { stopReason: "toolUse" }),
+      async (context) => {
+        await held;
+        return fauxAssistantMessage(JSON.stringify(context.messages).includes("用户插话") ? "收到用户插话" : "没看到");
+      },
+    ]);
+    const r = await rig();
+    void r.sessions.handle("s1", submit(cwd, { text: envelope("m1", "子会话做完了") }));
+    await r.until((event) => event.type === "progress" && event.progress.type === "item_started" && event.progress.item.role === "tool");
+    await r.sessions.handle("s1", { type: "steer", sessionId: "s1", text: "用户插话", userSteerId: "q1" });
+    release();
+    await r.until(idle());
+    assert.ok(r.events.some((event) => event.type === "userSteer" && event.id === "q1" && event.outcome === "placed"));
+    assert.match(JSON.stringify(r.transcript().at(-1)), /收到用户插话/);
+    assert.deepEqual(phases(r.events), ["turn", "idle"], "插话没有另开一轮");
+    // 空闲：退回
+    await r.sessions.handle("s1", { type: "steer", sessionId: "s1", text: "晚了", userSteerId: "q2" });
+    assert.ok(r.events.some((event) => event.type === "userSteer" && event.id === "q2" && event.outcome === "bounced"));
+
+    // 停止：父在跑长命令，插话排在 inbox 里；用户点停止 → 撤回、回 bounced
+    faux.setResponses([fauxAssistantMessage(fauxToolCall("bash", { command: "sleep 30" }), { stopReason: "toolUse" }), (context) => fauxAssistantMessage(JSON.stringify(context.messages).includes("被撤回的插话") ? "插话冒出来了" : "干净")]);
+    const before = r.events.length;
+    void r.sessions.handle("s1", submit(cwd, { text: envelope("m3", "又一件") }));
+    await r.until((event) => r.events.indexOf(event) >= before && event.type === "progress" && event.progress.type === "item_started" && event.progress.item.role === "tool");
+    await r.sessions.handle("s1", { type: "steer", sessionId: "s1", text: "被撤回的插话", userSteerId: "q3" });
+    await r.sessions.handle("s1", { type: "abort", sessionId: "s1" });
+    await r.until((event) => r.events.indexOf(event) > before && idle()(event));
+    assert.ok(r.events.some((event) => event.type === "userSteer" && event.id === "q3" && event.outcome === "bounced"));
+    assert.ok(!r.events.some((event) => event.type === "userSteer" && event.id === "q3" && event.outcome === "placed"));
+    // 下一轮（renderer 会把退回的那句照常发）：上下文里只有这一份，inbox 里没有残留的那一份
+    const after = r.events.length;
+    await r.sessions.handle("s1", submit(cwd, { text: "被撤回的插话" }));
+    await r.until((event) => r.events.indexOf(event) >= after && idle()(event));
+    const users = r.transcript().filter((item) => item.role === "user" && JSON.stringify(item.content).includes("被撤回的插话"));
+    assert.equal(users.length, 1, "撤回的插话不会和重发的那句一起出现（不发两遍）");
+  });
+});
+
 describe("KernelSessions：压缩、崩溃后的继续", () => {
   it("手动压缩独占一轮：phase compaction → 界碑 → idle", async () => {
     const cwd = await tempDir();
@@ -663,6 +741,26 @@ describe("KernelSessions：回退 / 撤销 / 分支（旧内核本子编辑的�
     await r.until((event) => r.events.indexOf(event) >= before && idle(sessionId)(event));
   };
   const edited = (r: Rig, from: number) => r.until((event) => r.events.indexOf(event) >= from && (event.type === "piBookEdited" || event.type === "failed"));
+
+  it("排在一句前面的子会话信封（preface）在对账里按 user 计：转录里每条信封是一条通道标记（与 user 同级），回退按位对得上", async () => {
+    const cwd = await tempDir();
+    requests.length = 0;
+    faux.setResponses([answer("答一"), answer("答二")]);
+    const r = await rig();
+    const before = r.events.length;
+    await r.sessions.handle("s1", submit(cwd, { text: "一", preface: ["信封甲", "信封乙"] }));
+    await r.until((event) => r.events.indexOf(event) >= before && idle()(event));
+    // 我们这本账：信封甲、信封乙（两条标记，按 user 计）、一、答一。回退到「一」之前：前缀 = 两条 user
+    let from = r.events.length;
+    await r.sessions.handle("s1", { type: "revertPiBook", sessionId: "s1", sourcePiSessionFile: "durable:s1", cwd, roles: ["user", "user"], targetMessageId: "m" });
+    assert.equal((await edited(r, from)).type, "piBookEdited");
+    await say(r, cwd, "二");
+    assert.deepEqual(requests.at(-1), ["信封甲", "信封乙", "二"]);
+    // 对账只数到一条 user（信封没算进去）就对不上：拒绝
+    from = r.events.length;
+    await r.sessions.handle("s1", { type: "revertPiBook", sessionId: "s1", sourcePiSessionFile: "durable:s1", cwd, roles: ["user", "assistant"], targetMessageId: "m" });
+    assert.equal((await edited(r, from)).type, "failed");
+  });
 
   it("回退到第二句之前：下一个请求只带第一轮 + 新的一句；被回退的轮次留在库里；对账不过拒绝、在跑时拒绝；用量不因回退变少", async () => {
     const cwd = await tempDir();
