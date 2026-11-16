@@ -689,6 +689,9 @@ export function App() {
     ...(rightPanel === "drawer" && drawerOpenId !== null ? [drawerOpenId] : []),
   ];
   const watchedKey = watchedIds.join("\n");
+  /** 「没做成」记未读那一拍要读此刻在看谁（事件回调里读 ref，不重挂监听） */
+  const watchedIdsRef = useRef<readonly string[]>([]);
+  watchedIdsRef.current = watchedIds;
   /** 未读清单：从 meta 读（真源在盘上），不再另存一份 renderer state */
   const unreadSessions = session.sessions.filter((meta) => meta.unread != null);
   /** 把一批会话标成未读：at 此刻铸；failed 查槽的回合失败（重试耗尽），同样是快照 */
@@ -702,6 +705,21 @@ export function App() {
     },
     [engine, session],
   );
+  /**
+   * 主智能体派出去的活没做成（子会话报 failed）的那一刻，给它记一笔「没做成、还没看」（未读带 failed，落盘）：
+   * 侧栏那件活的饼变红、直到你看过；侧栏顶「等你」也靠它（同时要求通道还停在 failed，见 Sidebar 的 attentionHandled）。
+   * 只在这一拍记一次——你看过清掉以后不会再被补上。正看着它的不记（人就在跟前）。
+   */
+  useEffect(() => {
+    return api.channel.onEvent((event) => {
+      if (event.type !== "message" || event.message.from !== "child" || event.message.kind !== "failed") return;
+      if (watchedIdsRef.current.includes(event.childId)) return;
+      void api.session
+        .setUnread(event.childId, { at: Date.now(), failed: true })
+        .then(() => engine.refreshSessions())
+        .catch((cause: unknown) => console.warn("[unread] 没做成的活记未读失败", cause));
+    });
+  }, [engine]);
   /** 清未读（看过即清 / 全部标为已读）：目标 id 由调用方从真值现算，不闭包旧列表 */
   const clearUnreadOf = useCallback(
     (ids: readonly string[]) => {

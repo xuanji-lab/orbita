@@ -85,4 +85,10 @@ describe("侧栏顶上的「等你」", () => {
     assert.deepEqual(freshAttention(["a", "b"], new Set(["a"])), ["b"]);
     assert.deepEqual(freshAttention(["a"], new Set(["a", "b"])), []);
   });
+
+  test("没做成的那件被主智能体处理过（回了话 / 暂停 / 放弃 / 重派）就不在「等你」里", () => {
+    const rows = [meta("bad", { parentId: "main" }), meta("ask1", { parentId: "main" })];
+    const items = attentionItems([{ workspaceId: "a", rows }], stateOf, (m) => m.id === "bad");
+    assert.deepEqual(items.map((item) => item.meta.id), ["ask1"]);
+  });
 });

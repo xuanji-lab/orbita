@@ -369,6 +369,18 @@ export function Sidebar(props: {
     session.workspaces.map((workspace) => [workspace.id, workspaceRows(session.sessions, workspace.id, rowState, held)]),
   );
   /**
+   * 主智能体派出去、没做成的那件算不算已经处理了（2026-11-17 主会话定）：通道离开 failed 就是处理了——
+   * 主智能体回了话（重开成 running）、暂停了、放弃了（stopped）；或者它重派了一件同名的新活。处理了就不在「等你」里，
+   * 失败这个事实留在那件活自己的行上（饼红到你看过）。通道状态还没拉到时先当处理了（宁可晚出现一拍，不错叫）。
+   */
+  const attentionHandled = (meta: SessionMeta): boolean => {
+    if (meta.parentId === undefined) return false;
+    if (channelStatus.get(meta.id) !== "failed") return true;
+    return session.sessions.some(
+      (other) => other.parentId === meta.parentId && other.id !== meta.id && other.title === meta.title && other.createdAt > meta.createdAt,
+    );
+  };
+  /**
    * 侧栏顶上的「等你」：跨工作区每件在等你的事（attention.ts）。数据就是上面这份行状态，不另存；
    * 「任务」组里在等你的根会话也算（它们在任务组收起时同样看不到）。
    */
@@ -378,6 +390,7 @@ export function Sidebar(props: {
       { workspaceId: null, rows: live.filter((m) => m.workspaceId === null || !known.has(m.workspaceId)) },
     ],
     rowState,
+    attentionHandled,
   );
   /**
    * 提示音只为新冒出的等你响一次（做完不响，2026-11-17）：同一件事不重复响——按 id 记着响过的，处理完再出现也不响。

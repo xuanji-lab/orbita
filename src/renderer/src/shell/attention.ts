@@ -1,6 +1,6 @@
 /**
  * 侧栏最上面钉住的「等你」（设计 11-sidebar-full C、11-attention，2026-11-17）：跨工作区每件在等用户的事一行——
- * 在问的、没做成等他看的。一屏只有这一处在叫人（橙点只在这里出现）；点一行跳过去，处理完那一行自己消失
+ * 在问的、没做成等他看的（主智能体派的活报了 failed 那一刻记一笔「没做成、没看」，见 App；你看过、或主智能体已处理就退场）。一屏只有这一处在叫人（橙点只在这里出现）；点一行跳过去，处理完那一行自己消失
  * （点一个只消一个，没有「全部清除」）。它替掉了右下角的铃铛与未读清单。
  *
  * 数据不另存：每一件就是侧栏行状态（Sidebar 的 rowState：runStateOf + 子会话通道状态）里 waiting / failed 的那些，
@@ -35,11 +35,17 @@ export interface AttentionItem {
 export function attentionItems(
   groups: readonly { workspaceId: string | null; rows: readonly SessionMeta[] }[],
   stateOf: (meta: SessionMeta) => SessionRunState,
+  /**
+   * 没做成的那件已经被处理了（主智能体回了话 / 暂停 / 放弃 / 重派）：不再在「等你」里，但它自己那一行的饼照旧红到你看过。
+   * 缺席 = 都没处理。
+   */
+  handled: (meta: SessionMeta) => boolean = () => false,
 ): AttentionItem[] {
   const items: AttentionItem[] = [];
   for (const group of groups) {
     for (const meta of group.rows) {
       const state = stateOf(meta);
+      if (state === "failed" && handled(meta)) continue;
       if (state === "waiting" || state === "failed") items.push({ meta, state, workspaceId: group.workspaceId });
     }
   }
