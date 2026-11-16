@@ -1776,7 +1776,7 @@ export function App() {
           onPanel={handlePanel}
           railEntries={railEntries}
           intentAvailable={settings.experimentalFeatures?.["intent-system"] === true}
-          automation={{ running: runningCount(automations.automations) }}
+          automation={{ running: runningCount(automations.automations), alerts: automations.archive?.alertsTotal ?? 0 }}
           subSessions={
             channelParentId !== null && hasSubSessions
               ? { count: subSessionChildren.length, waiting: waitingOnYou }

@@ -407,7 +407,8 @@ export const en = {
   automation: {
     title: "Automations",
     /** 右栏入口的提示：有运行在跑时带上数量 */
-    railLabel: (running: number) => (running > 0 ? `Automations · ${running} running` : "Automations"),
+    railLabel: (running: number, alerts: number) =>
+      alerts > 0 ? `Automations · ${alerts} ${alerts === 1 ? "notice" : "notices"} about the record files` : running > 0 ? `Automations · ${running} running` : "Automations",
     help: "Scheduled tasks. At the due time a prompt goes to the agent — in a fresh task for each run, or back into the task that created it. Tasks an automation starts are kept here, under their automation, not in the left sidebar.",
     helpLabel: "About automations",
     add: "New automation",
@@ -504,6 +505,10 @@ export const en = {
       mode: "Permission",
       model: "Model",
       plugin: "Plugin",
+      /** 「谁建的」：留痕的一部分，已结束的归档记录里也查得到 */
+      createdBy: "Created by",
+      creatorUser: "You",
+      creatorAgent: "The agent, in a conversation",
       newSession: "A fresh task each run",
       modeSkip: "Skip, nothing is asked",
       modePlan: "Plan, read-only",
@@ -519,6 +524,46 @@ export const en = {
       titleAll: "No automations yet",
       body: "Create one, or just say it in a conversation: “every Friday, check …”, “come back in 15 minutes and look at the log”.",
       templates: "Start from a template",
+      /** 只有已结束的：没有进行中的，但下面的「已结束」里有 */
+      idleTitle: "Nothing in progress",
+      idleBody: "Finished automations are kept below. Create a new one, or restart a finished one from its details.",
+    },
+    /** 记录文件被应用之外的力量动过（智能体的命令、手改、改数据目录名……）：主进程已按内存写回，面板顶上提示一行 */
+    guard: {
+      title: (total: number) => (total === 1 ? "Automation records were changed outside Orbita" : `Automation records were changed outside Orbita (${total} times)`),
+      /** 最近一次发生了什么、做了什么（按事件种类取一句） */
+      what: {
+        missing: (file: string, records: number) => `${file} was missing. Restored from what Orbita had (${records} records).`,
+        changed: (file: string, records: number, backup: string) =>
+          `${file} was edited. Restored from what Orbita had (${records} records); the edited copy is kept as ${backup}.`,
+        coldMissing: (file: string) => `${file}, which holds the older finished records, is missing. It was not recreated.`,
+        coldChanged: (file: string) => `${file}, which holds the older finished records, was modified. It was left as it is.`,
+        /** 条数写成「N 条进行中 + M 条已归档」，免得被读成单一文件；找得到被改名的旧目录就说它现在在哪 */
+        dataDirReplaced: (records: number, archived: number, movedTo: string) =>
+          movedTo === ""
+            ? `The data folder was renamed or deleted. Automation records were written back (${records} in progress + ${archived} archived); everything else (sessions, settings, providers…) was not restored.`
+            : `The data folder was replaced. Automation records were written back (${records} in progress + ${archived} archived); everything else (sessions, settings, providers…) is still in the old, renamed folder: ${movedTo}`,
+        /** 文件读不了（权限被改）：没法确认它有没有被动过 */
+        unreadable: (file: string) => `${file} can't be read (its permissions were changed). Orbita can't tell whether it was edited; it re-checks automatically once it is readable again.`,
+        /** 事件文件 / 已读位置被动过：已按内存写回 */
+        eventsChanged: (file: string, backup: string) =>
+          `${file}, the log of these notices, was deleted or edited. It was rebuilt from what Orbita had${backup === "" ? "" : `; the edited copy is kept as ${backup}`}.`,
+        ackChanged: (file: string) => `${file}, which remembers which notices you have seen, was changed. It was rewritten from what Orbita had.`,
+        /** 应用关着期间被改过：只告知，不恢复 */
+        changedWhileClosed: (file: string, movedTo: string) =>
+          file === "(data folder)"
+            ? `The data folder was replaced while Orbita was closed${movedTo === "" ? "" : ` (the old folder is now at ${movedTo})`}. Orbita used what is on disk and did not restore anything.`
+            : `${file} was changed while Orbita was closed. Orbita used what is on disk and did not restore anything.`,
+      },
+      dismiss: "Got it",
+    },
+    /** 默认折叠的「已结束」段：已结束的自动归档、不占 20 条名额 */
+    finished: {
+      title: (count: number) => `Finished (${count})`,
+      note: (keep: number) =>
+        `Finished automations are archived here and don't count toward the limit. The latest ${keep} are listed here; older ones stay saved in a file. Restarting one puts it back in progress.`,
+      /** 热归档放不下的更早记录：移进了冷文件，不进列表，但仍保存在数据目录里 */
+      older: (count: number, file: string) => `${count} older ${count === 1 ? "one is" : "ones are"} saved in ${file} in the data folder.`,
     },
     templates: {
       paper: {

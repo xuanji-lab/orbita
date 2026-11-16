@@ -191,6 +191,22 @@ describe("automation_list / automation_cancel", () => {
     assert.equal(result.details, undefined);
   });
 
+  test("list 默认不带 includeFinished；includeFinished: true 才带；footer 排在卡片行之后（最后一行）", async () => {
+    const h = harness({
+      ok: true,
+      text: "1 unfinished automation(s) in this workspace.",
+      automations: [card],
+      footer: "3 more finished automation(s) are archived and not listed; call automation_list with includeFinished: true to see them.",
+    });
+    const result = await h.byName("automation_list").execute("c", { includeFinished: "yes" }, undefined, undefined, noSignal);
+    assert.deepEqual(h.requests[0]?.request, { op: "list" }, "只认布尔 true，别的值当没给");
+    const lines = (result.content[0]?.type === "text" ? result.content[0].text : "").split("\n");
+    assert.match(lines[lines.length - 1] ?? "", /^3 more finished automation\(s\) are archived/);
+    assert.match(lines[1] ?? "", /^- au1 /);
+    await h.byName("automation_list").execute("c", { includeFinished: true }, undefined, undefined, noSignal);
+    assert.deepEqual(h.requests[1]?.request, { op: "list", includeFinished: true });
+  });
+
   test("cancel：发 cancel 请求带 id；缺 id 本地就抛", async () => {
     const h = harness({ ok: true, text: 'Automation "等 vLLM" is cancelled; it will not run again.' });
     const result = await h.byName("automation_cancel").execute("c", { automationId: "au1" }, undefined, undefined, noSignal);

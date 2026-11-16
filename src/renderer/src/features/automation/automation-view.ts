@@ -8,6 +8,7 @@ import {
   AUTOMATION_RUNS_VISIBLE,
   automationWorkspaceId,
   intervalMinutes,
+  isFinished,
   isRunning,
   nextRunAfter,
   parseClockTime,
@@ -46,11 +47,12 @@ export const ROW_STATE_ICON: Record<RowState, IconName> = {
 
 const STATE_RANK: Record<RowState, number> = { running: 0, active: 1, paused: 2, failed: 3, completed: 4 };
 
-/** 排序：在跑的、在排期的在前；同档里下一次到点早的在前，没有下一次的按创建时间新→旧 */
+/** 排序：在跑的、在排期的在前；同档里下一次到点早的在前，没有下一次的按创建时间新→旧；已结束的按结束时间新→旧 */
 export function sortAutomations(list: readonly Automation[]): Automation[] {
   return [...list].sort((a, b) => {
     const rank = STATE_RANK[rowStateOf(a)] - STATE_RANK[rowStateOf(b)];
     if (rank !== 0) return rank;
+    if (a.status === "completed" && b.status === "completed" && a.updatedAt !== b.updatedAt) return b.updatedAt - a.updatedAt;
     if (a.nextRunAt !== null && b.nextRunAt !== null && a.nextRunAt !== b.nextRunAt) return a.nextRunAt - b.nextRunAt;
     if (a.nextRunAt !== null && b.nextRunAt === null) return -1;
     if (a.nextRunAt === null && b.nextRunAt !== null) return 1;
@@ -111,6 +113,14 @@ export function groupAutomations(
   return groups;
 }
 
+/**
+ * 面板的两段：没结束的（默认列出）与已结束的（收在默认折叠的「已结束」里，主进程归档、不占名额）。
+ * 分界线同主进程 store 的归档判定（shared 的 isFinished），不在这里另写一份。
+ */
+export function splitFinished(all: readonly Automation[]): { open: Automation[]; finished: Automation[] } {
+  return { open: all.filter((automation) => !isFinished(automation)), finished: all.filter(isFinished) };
+}
+
 /** 能「立即运行」：排期中或暂停的任务，且此刻没有一次运行在跑（列表行悬停的 ▶ 与详情页的按钮共用） */
 export function canRunNow(automation: Automation): boolean {
   return (automation.status === "active" || automation.status === "paused") && rowStateOf(automation) !== "running";
@@ -168,6 +178,14 @@ export function formatWhen(at: number, now: number, t: AutomationMessages): stri
   return `${head} ${t.weekdays[date.getDay()] ?? ""} ${clock(at)}`;
 }
 
+/** 过去的时刻（结束时间）：「今天 09:55」「11-13 23:50」；比 formatWhen 短（不带星期），窄栏里不先被截断；跨年带年份 */
+export function formatEnded(at: number, now: number, t: AutomationMessages): string {
+  const date = new Date(at);
+  if (sameDay(date, new Date(now))) return `${t.today} ${clock(at)}`;
+  const day = `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  return `${date.getFullYear() === new Date(now).getFullYear() ? day : `${date.getFullYear()}-${day}`} ${clock(at)}`;
+}
+
 const WORKDAYS = [1, 2, 3, 4, 5];
 
 function sameDays(a: readonly number[], b: readonly number[]): boolean {
@@ -202,7 +220,8 @@ export function subtitleOf(automation: Automation, now: number, t: AutomationMes
     case "failed":
       return `${schedule} · ${t.state.failed}`;
     case "completed":
-      return `${schedule} · ${automation.endReason === undefined ? t.state.completed : t.endReason[automation.endReason]}`;
+      // 已结束的先说「怎么结束的、什么时候」，调度放最后：窄栏里被截掉的该是它，不是结束时间
+      return `${automation.endReason === undefined ? t.state.completed : t.endReason[automation.endReason]} · ${formatEnded(automation.updatedAt, now, t)} · ${schedule}`;
     case "running":
     case "active": {
       if (automation.pendingDelivery !== undefined) return `${schedule} · ${t.waitingIdle}`;

@@ -75,7 +75,8 @@ function toToolResult(outcome: AutomationToolOutcome): {
 } {
   if (!outcome.ok) throw new Error(outcome.error);
   const lines = outcome.automations === undefined ? [] : outcome.automations.map(describeCard);
-  const text = lines.length === 0 ? outcome.text : `${outcome.text}\n${lines.join("\n")}`;
+  const body = lines.length === 0 ? outcome.text : `${outcome.text}\n${lines.join("\n")}`;
+  const text = outcome.footer === undefined ? body : `${body}\n${outcome.footer}`;
   // details.automation 是 renderer 画对话卡的素材（create 才有）：与 delegate 的 details.delegate 同款；
   // details.automationMode 是对话里「改权限」那一行（已改成放行 / 待你点「允许」），与 install_plugin 的 details.pluginInstall 同款
   const details = {
@@ -103,7 +104,7 @@ export function createAutomationTools(broker: RequestBroker, sessionId: string, 
       'Write access: never pass mode "skip" yourself — ask the user in ONE plain sentence first, and only after they agree call automation_update. ' +
       `Limits: intervals of at least ${AUTOMATION_INTERVAL_MIN_MINUTES} minutes, at most ${AUTOMATION_MAX_RUNS_PER_DAY} runs per 24 hours; ` +
       `it stops after ${AUTOMATION_AGENT_DEFAULT_MAX_RUNS} runs if you give neither maxRuns nor until (maxRuns at most ${AUTOMATION_AGENT_MAX_RUNS_CAP}); ` +
-      "at most 5 active tasks per conversation, 20 in total; times are local. " +
+      "at most 5 active tasks per conversation, 20 unfinished in total (finished ones do not count); times are local. " +
       "Before the first automation_create in a conversation, read the `automation` skill (schedule format, writing the instruction, long jobs, write access).",
     parameters: {
       type: "object",
@@ -172,10 +173,14 @@ export function createAutomationTools(broker: RequestBroker, sessionId: string, 
     name: "automation_list",
     label: "automation_list",
     description:
-      "List this workspace's automations (all statuses) with schedule, target, run count and next run. Check it before creating one, so you do not duplicate a task; ids come from here.",
-    parameters: { type: "object", properties: {} } as never,
-    async execute() {
-      return toToolResult(await send({ op: "list" }));
+      "List this workspace's unfinished automations with schedule, target, run count and next run; finished ones are archived (includeFinished adds them). Check it before creating one, so you do not duplicate a task; ids come from here.",
+    parameters: {
+      type: "object",
+      properties: { includeFinished: { type: "boolean", description: "Add finished ones." } },
+    } as never,
+    async execute(_toolCallId, params) {
+      const args = (params ?? {}) as Record<string, unknown>;
+      return toToolResult(await send({ op: "list", ...(args["includeFinished"] === true ? { includeFinished: true } : {}) }));
     },
   };
 

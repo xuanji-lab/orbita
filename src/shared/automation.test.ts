@@ -263,6 +263,16 @@ describe("parseAutomation", () => {
     assert.equal(parsed.maxRuns, 12);
     assert.equal(parsed.nextRunAt, 1000);
   });
+  test("previousEnds：逐条校验保留（坏条目丢、未知原因只留时间、封顶 5 条），没有就不带这个字段", () => {
+    assert.equal("previousEnds" in (parseAutomation(good) as Automation), false);
+    const parsed = parseAutomation({
+      ...good,
+      previousEnds: [{ reason: "cancelled", at: 9 }, { reason: "胡写", at: 8 }, { at: "x" }, null, "z", ...Array.from({ length: 8 }, (_, i) => ({ reason: "finished", at: i }))],
+    }) as Automation;
+    assert.deepEqual(parsed.previousEnds?.slice(0, 2), [{ reason: "cancelled", at: 9 }, { at: 8 }]);
+    assert.equal(parsed.previousEnds?.length, 5);
+    assert.equal(parseAutomation({ ...good, previousEnds: "x" })?.previousEnds, undefined);
+  });
   test("缺 id / 标题 / 指令 / 合法规则 / 去处 / 合法状态，整条丢", () => {
     assert.equal(parseAutomation({ ...good, id: "" }), null);
     assert.equal(parseAutomation({ ...good, title: undefined }), null);

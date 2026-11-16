@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "../../api";
 import { scopeApplies } from "../../../../shared/plugin.ts";
 import { Icon } from "../../shell/Icon";
@@ -59,6 +59,8 @@ export function AutomationEditView(props: {
   create: (input: AutomationCreateInput) => Promise<AutomationOutcome>;
   update: (id: string, patch: AutomationPatch) => Promise<AutomationOutcome>;
   remove: (id: string) => Promise<AutomationOutcome>;
+  /** 面板顶部的提示（记录文件被动过）：编辑页里也要看得到 */
+  banner?: ReactNode;
   onBack: () => void;
 }) {
   const t = useT();
@@ -218,6 +220,7 @@ export function AutomationEditView(props: {
         </div>
       }
     >
+      {props.banner}
       <div className="auto-form">
         <label className="auto-field">
           <span className="auto-label">{a.edit.title}</span>
