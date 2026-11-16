@@ -298,7 +298,9 @@ or repository changes) before reporting to the user. Do not delegate for small t
 
 const CHILD_CHANNEL_GUIDELINES = `<orbita-sub-sessions>
 You are a sub-session delegated by a parent session. Your task is in the first
-<channel from="parent" kind="task"> block. Your normal replies are not visible to the parent — only
+<channel from="parent" kind="task"> block. Before any real work, call update_plan with your plan (short
+steps, the first one in_progress); then update it each time you finish a step or move on, so the parent
+and the user can see where you are. Your normal replies are not visible to the parent — only
 report_to_parent is delivered. If the task is unclear, or looks like it may conflict with what the user
 actually wants, send a question early — before you sink real work into a guess — stating what is
 unclear and what you would default to; do not ask about things that are already obvious just to look

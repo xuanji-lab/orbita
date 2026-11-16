@@ -546,6 +546,58 @@ describe("KernelSessions：子会话消息合并成一轮、用户的话插进�
   });
 });
 
+describe("KernelSessions：计划提醒附在工具结果末尾", () => {
+  it("有没做完的计划、连续 12 次工具调用没动它：第 12 次的结果末尾附提醒；每次请求的前缀（系统提示 + 之前的消息）逐字节不变", async () => {
+    const cwd = await tempDir();
+    await writeFile(join(cwd, "a.txt"), "A\n");
+    const requests: { system: string; messages: string[] }[] = [];
+    const capture = (context: { systemPrompt?: unknown; messages: readonly unknown[] }) => {
+      requests.push({ system: JSON.stringify(context.systemPrompt ?? null), messages: context.messages.map((message) => JSON.stringify(message)) });
+    };
+    const plan = { items: [{ text: "读文件", status: "in_progress" }, { text: "写结论", status: "pending" }] };
+    faux.setResponses([
+      (context) => {
+        capture(context);
+        return fauxAssistantMessage(fauxToolCall("update_plan", plan), { stopReason: "toolUse" });
+      },
+      ...Array.from({ length: 13 }, () => (context: Parameters<typeof capture>[0]) => {
+        capture(context);
+        return fauxAssistantMessage(fauxToolCall("read", { path: "a.txt" }), { stopReason: "toolUse" });
+      }),
+      (context) => {
+        capture(context);
+        return fauxAssistantMessage("完");
+      },
+    ]);
+    const r = await rig();
+    await r.sessions.handle("s1", submit(cwd, { text: "读一读" }));
+    await r.until(idle());
+    const tools = r.transcript().filter((item) => item.role === "tool");
+    const reminded = tools.flatMap((item, index) => (JSON.stringify(item).includes("system-reminder") ? [index] : []));
+    assert.deepEqual(reminded, [12], "第 1 个是 update_plan，其后第 12 次 read 的结果带提醒（只一次）");
+    // 缓存前缀：每次请求 = 上一次请求的全部消息原样在前 + 新增的；系统提示不变
+    for (let i = 1; i < requests.length; i += 1) {
+      const previous = requests[i - 1];
+      const current = requests[i];
+      assert.ok(previous !== undefined && current !== undefined);
+      assert.equal(current.system, previous.system, `第 ${i + 1} 次请求的系统提示变了`);
+      assert.deepEqual(current.messages.slice(0, previous.messages.length), previous.messages, `第 ${i + 1} 次请求改了前缀`);
+    }
+    const last = requests.at(-1)?.messages ?? [];
+    assert.ok(last.some((message) => message.includes("system-reminder")), "提醒进了模型的上下文");
+  });
+
+  it("没有计划的轮：再多工具调用也不提醒", async () => {
+    const cwd = await tempDir();
+    await writeFile(join(cwd, "a.txt"), "A\n");
+    faux.setResponses([...Array.from({ length: 14 }, () => fauxAssistantMessage(fauxToolCall("read", { path: "a.txt" }), { stopReason: "toolUse" })), fauxAssistantMessage("完")]);
+    const r = await rig();
+    await r.sessions.handle("s1", submit(cwd, { text: "读" }));
+    await r.until(idle());
+    assert.ok(!JSON.stringify(r.transcript()).includes("system-reminder"));
+  });
+});
+
 describe("KernelSessions：压缩、崩溃后的继续", () => {
   it("手动压缩独占一轮：phase compaction → 界碑 → idle", async () => {
     const cwd = await tempDir();

@@ -43,7 +43,8 @@ import { loadoutOrder, loadPiResources, offeredOrder } from "./kernel-prompt.ts"
 import type { McpHub } from "./mcp.ts";
 import { recallMemories } from "./memory-inject.ts";
 import { createToolCallGate, type ToolCallLike } from "./permission.ts";
-import { createPlanGate, type PlanToolOptions } from "./plan-tools.ts";
+import { createPlanGate, previousPlanFrom, type PlanToolOptions } from "./plan-tools.ts";
+import { PlanNudge } from "./plan-nudge.ts";
 import { forModel, preparePromptImages } from "./prompt-images.ts";
 import { adaptSystemPrompt } from "./prompt-narration.ts";
 import type { RequestBroker } from "./request-broker.ts";
@@ -380,6 +381,7 @@ export async function assembleTurn(
     state: { stopping: false },
   };
   const planGate = new PlanRoundGate(createPlanGate(planOptions), planOptions.state);
+  const planNudge = new PlanNudge();
   // MCP：与旧内核同一个 hub 语义（按工作区分片、ensure 幂等、连不上不拦开轮）
   const mcpScope = command.workspaceId ?? "";
   await runtime.mcpHub.ensure(mcpScope, command.mcpServers, command.workspaceId === null ? "" : command.cwd);
@@ -479,7 +481,14 @@ export async function assembleTurn(
             rounds.settled(call.id);
           }
         },
-        afterTool: (call, result) => (runtime.quitting?.() === true ? interruptedResult("quit", result) : undefined) ?? unwrapHarnessError(call, result),
+        afterTool: (call, result) => {
+          const replaced = (runtime.quitting?.() === true ? interruptedResult("quit", result) : undefined) ?? unwrapHarnessError(call, result);
+          const final = replaced ?? result;
+          // 计划提醒（plan-nudge.ts）：连续若干次工具调用没动计划，附在这次结果末尾（随结果落库，请求前缀不变）
+          const nudge = planNudge.afterTool(call.name, () => previousPlanFrom(branch.entries, ""), final.output !== undefined);
+          if (nudge === null || final.output === undefined) return replaced;
+          return { ...final, output: [...final.output, { type: "text", text: `\n\n${nudge}` }] };
+        },
       }),
       hook(GenerationTask, {
         beforeRequest: async (request, api, context) => {
