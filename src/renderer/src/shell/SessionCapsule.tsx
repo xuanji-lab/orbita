@@ -24,6 +24,8 @@ export interface CapCompletionState {
  */
 export function SessionCapsule(props: {
   title: string;
+  /** 标题后面的一个灰字身份（主智能体）；undefined = 不摆 */
+  tag?: string | undefined;
   /** 短 id（前 6 位）；null = 会话还没落盘（首条消息未发），右端次要件不摆 */
   shortId: string | null;
   onRename?: (title: string) => void;
@@ -84,7 +86,12 @@ export function SessionCapsule(props: {
 
       {/* 正中：标题（重命名就地变输入框，外框不动）。左右各留一个铅笔位，悬停显形 */}
       <div className="cap-sc">
-        <CapTitle title={props.title} onRename={props.onRename} balance />
+        <CapTitle title={props.title} onRename={props.onRename} balance={props.tag === undefined} />
+        {props.tag !== undefined && (
+          <span style={{ flex: "none", fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)", whiteSpace: "nowrap" }}>
+            {props.tag}
+          </span>
+        )}
       </div>
 
       {/* 右端：短 id · 复制（悬停）· 竖线 · 收工（一直显示） */}

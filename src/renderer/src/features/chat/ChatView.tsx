@@ -175,6 +175,7 @@ import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { HomeHero } from "./HomeHero";
 import { HomeLog, type HomeLogRowView } from "./HomeLog";
+import { MainAgentEmpty } from "./MainAgentEmpty";
 import { heroFace } from "./home-hero.ts";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { FileTurnCard, RevertMarkView } from "./FileTurnCard";
@@ -1566,7 +1567,8 @@ function ChatViewBody(props: {
             {/* 门面：slogan（纸面两档再加红笔批语），样子与理由在 HomeHero.tsx */}
             <HomeHero theme={props.theme} />
             {/* 纸面档：一排最近会话卡（SessionCard 规格：恒三槽、等高、hover 只抬阴影） */}
-            {!logMode &&
+            {/* 主智能体的空态不铺最近会话卡与记录（那些归侧栏「以前的会话」），只留输入框下面一行 */}
+            {!logMode && session.mainPending === null &&
               (!session.sessionsLoaded ? (
                 <div style={{ width: "100%", display: "flex", gap: "var(--space-3)" }}>
                   {[0, 1, 2].map((index) => (
@@ -1610,10 +1612,16 @@ function ChatViewBody(props: {
             {composer}
           </div>
           {/* 记录组：在输入框下面（先写，再读别的活的进展），随 slogan 一起淡出 */}
-          {logMode && (
+          {session.mainPending !== null ? (
             <div className="home-fade home-fade-log">
-              <HomeLog groups={logGroups} loading={!session.sessionsLoaded} onOpen={openFromHome} />
+              <MainAgentEmpty session={session} profile={session.mainPending} />
             </div>
+          ) : (
+            logMode && (
+              <div className="home-fade home-fade-log">
+                <HomeLog groups={logGroups} loading={!session.sessionsLoaded} onOpen={openFromHome} />
+              </div>
+            )
           )}
         </div>
       </div>
@@ -3160,7 +3168,8 @@ function ComposerBar(props: {
       subLabelEllipsis: "head" as const,
       icon: "folder" as const,
       checked: session.workspaceId === item.id,
-      ...scopeEntry(item.id, () => session.newTaskIn(item)),
+      // 首页选一个工作区 = 去它的主智能体（工作区里不再新开会话，2026-11-17）
+      ...scopeEntry(item.id, () => session.openMainAgent(item)),
     })),
   ];
 

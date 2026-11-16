@@ -213,12 +213,13 @@ export function WorkspaceFiles(props: {
               </button>
               <span style={{ marginLeft: "auto" }}>
                 <IconButton
-                  label={t.focus.newTaskHere}
+                  label={t.sidebar.openMainAgentTip(workspace.name)}
                   size={20}
-                  onClick={() => session.newTaskIn(workspace)}
+                  // 工作区里不再新开会话：「在这儿做点事」= 去它的主智能体（2026-11-17）
+                  onClick={() => session.openMainAgent(workspace)}
                   style={{ borderRadius: "var(--radius-xs)" }}
                 >
-                  <Icon name="plus" size={13} />
+                  <Icon name="message-square" size={13} />
                 </IconButton>
               </span>
             </div>

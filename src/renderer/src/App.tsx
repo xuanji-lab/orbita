@@ -432,7 +432,12 @@ export function App() {
    * 收工 / 子会话芯片 / 父会话面包屑全住这颗胶囊，见 SessionCapsule）。
    * 标题口径同旧页头：落盘的 meta 标题，没落盘就是「新任务」。
    */
-  const capsuleTitle = mainOpenMeta?.title ?? t.common.newTask;
+  // 主智能体（会话已在，或还没说过话的空态）：标题是工作区名（随工作区改名走，不读 meta 里的旧名），后面标「主智能体」
+  const mainAgentWorkspaceId =
+    mainOpenMeta?.role === "main" ? mainOpenMeta.workspaceId : (session.mainPending?.workspaceId ?? null);
+  const mainAgentWorkspace =
+    mainAgentWorkspaceId === null ? undefined : session.workspaces.find((workspace) => workspace.id === mainAgentWorkspaceId);
+  const capsuleTitle = mainAgentWorkspace?.name ?? mainOpenMeta?.title ?? t.common.newTask;
   const capsuleShortId = mainOpenId === "" ? null : mainOpenId.slice(0, 6);
   const capsuleParentId = mainOpenMeta?.parentId;
 
@@ -1358,10 +1363,12 @@ export function App() {
     ) : mainOpenId === "" && session.opened === null ? null : (
       <SessionCapsule
         title={capsuleTitle}
+        tag={mainAgentWorkspace === undefined ? undefined : t.sidebar.mainAgent}
         shortId={capsuleShortId}
-        onRename={mainOpenId === "" ? undefined : (title) => session.renameSession(mainOpenId, title)}
+        // 主智能体的名字就是工作区名（改名去侧栏改工作区）；它是常驻的，也没有「收工」
+        onRename={mainOpenId === "" || mainAgentWorkspace !== undefined ? undefined : (title) => session.renameSession(mainOpenId, title)}
         completion={
-          mainOpenId !== ""
+          mainOpenId !== "" && mainAgentWorkspace === undefined
             ? {
                 state: mainOpenMeta?.completion ?? "open",
                 busy: session.phase !== "idle",

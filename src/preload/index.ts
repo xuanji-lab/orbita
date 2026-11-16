@@ -12,6 +12,7 @@ import { docsApi } from "./api/docs.ts";
 import { excerptApi } from "./api/excerpt.ts";
 import { filesApi } from "./api/files.ts";
 import { focusApi } from "./api/focus.ts";
+import { agentsApi } from "./api/agents.ts";
 import { importApi } from "./api/import.ts";
 import { externalSourcesApi } from "./api/external-sources.ts";
 import { intentApi } from "./api/intent.ts";
@@ -52,6 +53,7 @@ const api = {
   files: filesApi,
   docs: docsApi,
   focus: focusApi,
+  agents: agentsApi,
   notify: notifyApi,
   terminal: terminalApi,
   usage: usageApi,

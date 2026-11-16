@@ -5,6 +5,7 @@ import { PLAN_TOOL_NAME } from "../../../../shared/plan.ts";
 import type { TranscriptItem } from "@shared/transcript";
 import { api } from "../../api";
 import type { IntentRecallRecord } from "@shared/session";
+import type { MainAgentProfile } from "@shared/main-agent";
 import { awaitsContinue, restartNote } from "@shared/kernel";
 import type { RecallCardState } from "@shared/intent-recall";
 import type { IntentConfirmDecision } from "@shared/intent-confirm";
@@ -396,8 +397,13 @@ export interface ChatSession {
   moveQueuedTo: (sourceId: string, targetId: string, placement: "before" | "after") => void;
   /** 不属于任何工作区的新任务：落在 defaultCwd */
   newTask: () => void;
-  /** 这个工作区里的新任务：cwd 与 workspaceId 一起按它填好 */
-  newTaskIn: (workspace: Workspace) => void;
+  /**
+   * 打开这个工作区的常驻主智能体（点侧栏工作区那一行）：会话已在就打开它；还没说过话就回到
+   * 这个工作区的空态，第一句话发出时用档案预留的 id 建会话（主进程据档案打 role、起名）。
+   */
+  openMainAgent: (workspace: Workspace) => void;
+  /** 本槽停在某个工作区主智能体的空态（还没说过话）：那份档案；null = 不是 */
+  mainPending: MainAgentProfile | null;
   /**
    * 新开一条任务（落在 workspace 里；null = 不属于任何工作区，落 Home）并把输入框预填成 text。
    * 草稿写进**新任务槽自己的键**：newTaskIn 之后立刻 setDraft 写的是旧会话的键（闭包里的 draftKey 还是旧的）。
@@ -1451,6 +1457,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   const [opened, setOpened] = useState<SessionMeta | null>(null);
   const [cwd, setCwd] = useState<string | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  /** 停在主智能体空态时那份档案（第一句话用它预留的 id 建会话）；回首页 / 开别的会话即清 */
+  const [mainPending, setMainPending] = useState<MainAgentProfile | null>(null);
   const [model, setModel] = useState<{ providerId: string; modelId: string } | null>(null);
   // alignThinking 判「真值是不是当前型号报的」用的镜像：注册只发生一次，闭包里的 model 会陈旧
   const modelRef = useRef<{ providerId: string; modelId: string } | null>(null);
@@ -2228,7 +2236,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       const target = meta?.cwd ?? cwd ?? engine.defaultCwd;
       if (target === "") throw new Error(engine.messagesRef.current.session.noWorkspaceFolder);
       const workspace = meta?.workspaceId ?? workspaceId ?? null;
-      if (id === null) id = crypto.randomUUID();
+      // 主智能体的第一句话：用档案预留的 id（主进程按档案认出它，建 meta 时打 role、起名）
+      if (id === null) id = mainPending !== null && mainPending.workspaceId === workspace ? mainPending.sessionId : crypto.randomUUID();
       // 留回填快照：这条没落账就失败（provider 装配、图片解码……）时内容放回输入框。
       // 落账（用户条目回显）由事件订阅作废它；submitTurn 的 catch 兜底 IPC 直接失败的那类
       restoreRef.current = {
@@ -2254,7 +2263,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     } catch (cause) {
       engine.setError(cause instanceof Error ? cause.message : String(cause));
     }
-  }, [engine, draft, attachments, quotes, files, pasted, sessionId, model, cwd, workspaceId, opened, draftKey, writeDraft, writeAttachments, writeFiles, writeBlocks, writeQuotes, submitTurn]);
+  }, [engine, draft, attachments, quotes, files, pasted, sessionId, model, cwd, workspaceId, opened, draftKey, writeDraft, writeAttachments, writeFiles, writeBlocks, writeQuotes, submitTurn, mainPending]);
 
   const stop = useCallback(() => {
     // 只停本槽当前轮。排队不动：pi 队列滞留给下次发送自动带上；压缩缓冲在压缩结束
@@ -2265,6 +2274,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
 
   /** 回到首页（本槽）。会话在首条消息提交时才真正创建（R8-01 ①）。 */
   const reset = useCallback(() => {
+    setMainPending(null);
     setSessionId(null);
     sessionRef.current = null;
     engine.setError(null);
@@ -2290,6 +2300,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     (id: string): Promise<void> => {
       if (id === sessionRef.current) return Promise.resolve();
       engine.setError(null);
+      setMainPending(null);
       setLoadingHistory(true);
       return api.session
         .load(id)
@@ -2407,14 +2418,24 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     setWorkspaceId(null);
   }, [reset]);
 
-  /** 这个工作区里的新任务：路径与归属一起填好，用户不用再点一次 */
-  const newTaskIn = useCallback(
+  const openMainAgent = useCallback(
     (workspace: Workspace) => {
-      reset();
-      setCwd(workspace.path);
-      setWorkspaceId(workspace.id);
+      void api.agents
+        .main(workspace.id)
+        .then((profile) => {
+          // 已说过话：主智能体就是一条普通会话，照常打开（在跑的直接接上活槽）
+          if (engine.sessions.some((meta) => meta.id === profile.sessionId)) {
+            void openSession(profile.sessionId);
+            return;
+          }
+          reset();
+          setCwd(workspace.path);
+          setWorkspaceId(workspace.id);
+          setMainPending(profile);
+        })
+        .catch((cause: unknown) => engine.setError(cause instanceof Error ? cause.message : String(cause)));
     },
-    [reset],
+    [engine, reset, openSession],
   );
 
   /**
@@ -3175,7 +3196,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     withdrawQueued,
     moveQueuedTo,
     newTask,
-    newTaskIn,
+    openMainAgent,
+    mainPending: sessionId === null ? mainPending : null,
     startTaskWithDraft,
   };
 }
