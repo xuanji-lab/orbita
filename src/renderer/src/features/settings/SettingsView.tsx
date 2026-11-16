@@ -33,7 +33,7 @@ import { SettingGroup, SettingRow } from "./SettingRow";
 import { Segmented, SelectButton, Switch } from "./SettingControls";
 import { UpdateCard } from "./UpdateCard";
 import { ProvidersView } from "./ProvidersView";
-import { ThemePicker } from "./ThemeCard";
+import { AppearanceSettings } from "./AppearanceSettings";
 import { EXPERIMENTAL_FEATURES, pullRequestUrl, type ExperimentalFeature } from "../../experimental-features.ts";
 import { ModelPickerMenu, useBuiltinCatalog, usableProviders } from "./model-menu";
 import {
@@ -51,10 +51,7 @@ import { intentChannelUnavailable } from "@shared/intent-lab";
 import { THINKING_LEVELS } from "@shared/thinking";
 import { panelUsageRows, type PanelUsageSnapshot } from "@shared/panel-usage";
 import { COMMIT_TRAILER, prAttributionLine } from "@shared/attribution";
-import { effectiveLanguage, LANGUAGES, themeLanguage, type Language, type ModelPair } from "@shared/settings";
-
-/** 语言芯片上写各自的自称（English / 中文）：找自己语言的人认的是自称，这两个词不翻译 */
-const LANGUAGE_NAMES: Record<Language, string> = { en: "English", zh: "中文" };
+import { effectiveLanguage, type Language, type ModelPair } from "@shared/settings";
 import { defaultThinkingLevel, modelThinkingLevels } from "@shared/model-defaults";
 import { declaredThinkingLevels, isPairOnClosedProvider, modelPreferenceById } from "./providers-view-model.ts";
 import { useT } from "../../locale.ts";
@@ -153,6 +150,10 @@ export function SettingsView(props: {
       ) : props.tab === "voice" ? (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
           <VoiceSettings />
+        </div>
+      ) : props.tab === "appearance" ? (
+        <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
+          <AppearanceSettings settings={props.settings} onChange={props.onSettingsChange} />
         </div>
       ) : props.tab === "guide" ? (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
@@ -372,37 +373,11 @@ function General(props: {
           })),
         );
 
-  // 单语主题定死的语言（null = 双语主题，听设置）；芯片亮的是实际生效的那一门
-  const lockedLanguage = themeLanguage(props.settings.theme);
+  // 实际生效的语言（提交署名预览要用）
   const shownLanguage = effectiveLanguage(props.settings.theme, props.settings.language);
 
   return (
     <div className="set-page">
-      <SettingGroup label={t.settings.appearance}>
-        <SettingRow name={t.settings.theme}>
-          <ThemePicker
-            value={props.settings.theme}
-            paperThemes={props.settings.experimentalFeatures?.["paper-themes"] === true}
-            onChange={props.onChange}
-          />
-        </SettingRow>
-        <SettingRow name={t.settings.language} info={t.settings.languageInfo}>
-          {/* 单语主题下两个芯片都置灰、亮的是主题定的那门语言，旁边说清为什么——
-              设置里存的值不动，切回双语主题就恢复 */}
-          <Segmented
-            label={t.settings.language}
-            value={shownLanguage}
-            options={LANGUAGES.map((language) => ({ value: language, label: LANGUAGE_NAMES[language] }))}
-            disabled={lockedLanguage !== null}
-            onChange={(language) => props.onChange({ language })}
-          />
-          {lockedLanguage !== null && (
-            <span className="set-row-hint">
-              {lockedLanguage === "zh" ? t.settings.languageLockedZh : t.settings.languageLockedEn}
-            </span>
-          )}
-        </SettingRow>
-      </SettingGroup>
       {/* 原来的 Context / Git / Sessions 各只有一两行，三个分组标题比内容还显眼；
           它们调的都是「agent 怎么干活」，并成一组（实验开关与功能清单已搬到独立的实验功能 Tab） */}
       <SettingGroup label={t.settings.agent}>

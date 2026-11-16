@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 生成 macOS 应用图标 build/icon.icns（electron-builder 默认从 build/ 取）。
-# 原稿是设计系统的 assets/app-icon.svg（稿纸：绿格上一枚红圈印「璇玑」）；母版由
+# 原稿是设计系统的 assets/app-icon.svg（璇玑 · 分形 O：墨底白圈，= 设置 › 外观的默认款）；母版由
 # scripts/icon/render-icon.swift 缩进 macOS 图标网格绘出，再用系统自带的 sips 缩出 iconset
 # 各档、iconutil 合成 icns——不引入任何 npm 依赖。
 # 只在 macOS 上跑；产物入库，打包本身不依赖 Swift 工具链。
