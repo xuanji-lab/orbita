@@ -239,7 +239,8 @@ export interface ChatSession {
   removeQuote: (index: number) => void;
   /** 当前查看会话的思考档（意图；clamp 真值经事件自动纠） */
   thinkingLevel: ThinkingLevel;
-  changeThinkingLevel: (next: ThinkingLevel) => void;
+  /** options.remember = false：不记成「用户上一次手选的档」（主智能体档案定的档只属于它，不带到新任务） */
+  changeThinkingLevel: (next: ThinkingLevel, options?: { remember?: boolean }) => void;
   /** 模型支持的思考档（开轮事件回的真值）。null = 还没开过轮，未知 */
   thinkingSupported: readonly PiThinkingLevel[] | null;
   /** pi 内建目录（引擎一份 fetch 的透传，见 SessionEngine.catalog）——ComposerBar 从这读 */
@@ -282,7 +283,8 @@ export interface ChatSession {
    * 活会话切换成功后由 `model` 事件回环对齐——不乐观，失败时 chip 不动。
    */
   model: { providerId: string; modelId: string } | null;
-  chooseModel: (providerId: string, modelId: string) => void;
+  /** options.remember = false：不写 lastUsed（主智能体档案定的型号只属于它，不改新任务的起点） */
+  chooseModel: (providerId: string, modelId: string, options?: { remember?: boolean }) => void;
   /** 立刻压一次上下文（用量菜单里那一项）。只在 phase 为 idle 时可用 */
   compact: () => void;
   /** 落盘的会话列表，新的在前。侧栏 TASKS 节点列的就是它。 */
@@ -2533,10 +2535,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    * 才落新模型默认档——且**不写** pickedThinkingRef，这不是用户直接选的档。
    */
   const chooseModel = useCallback(
-    (providerId: string, modelId: string) => {
+    (providerId: string, modelId: string, options?: { remember?: boolean }) => {
       setModel({ providerId, modelId });
       // 启动恢复点跟随（bug A）：下次启动应用从这个模型开始
-      void api.settings.set({ lastUsed: { providerId, modelId } }).catch(() => undefined);
+      if (options?.remember !== false) void api.settings.set({ lastUsed: { providerId, modelId } }).catch(() => undefined);
       // 这条会话的档要不要跟着动：新模型仍支持当前档（或支持集未知）就不动，
       // 不支持才落新模型的默认档——换模型不该顺手改掉会话自己的设定
       // 新模型仍支持当前档（或支持集未知）就不动，不支持才落新模型的默认档——与打开旧会话
@@ -2575,14 +2577,14 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   );
 
   const changeThinkingLevel = useCallback(
-    (next: ThinkingLevel) => {
+    (next: ThinkingLevel, options?: { remember?: boolean }) => {
       // 同 chooseModel 的整条规矩：本地即设（UI 即时）→ 记在会话名下（跑着时改不进
       // meta，排队卡投递时要拿这一档）→ 闲着才落 meta。下一轮 submit 自带新档——轮中
       // 改不影响当前轮（pi 在轮启动时已快照档位，与换模型同一条语义）。
       // **不写 lastUsed**：思考档不跨重启，重启落回模型默认档（wafo 2026-09-23）。
       // **这是用户手选**：记进本次运行的手选记忆——重启前的新任务槽起档都从它
       // 开始，双查看槽共用（用户上一次手选是全局的，不按槽分）
-      engine.pickedThinkingRef.current = next;
+      if (options?.remember !== false) engine.pickedThinkingRef.current = next;
       // 盘上打开的旧会话同样记账并落 meta（同 chooseModel 的口径）；首页新任务槽两者皆空
       const id = sessionRef.current ?? opened?.id ?? null;
       if (id === null) {

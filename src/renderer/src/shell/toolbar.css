@@ -745,3 +745,27 @@
     display: none;
   }
 }
+
+/* 顶栏胶囊里的「主智能体」（features/chat/MainAgentModelMenu.tsx）：平时就是原来那两个灰字，
+   悬停 / 打开时铺一层选项悬停底色、字升一级——点开定这个主智能体以后都用的型号与思考档 */
+.cap-tag-button {
+  flex: none;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.toolbar-capsule .cap-tag-button {
+  padding: 0 var(--space-1);
+  width: auto;
+}
+.cap-tag-button:hover,
+.cap-tag-button[aria-expanded="true"] {
+  background: var(--option-hover-bg);
+  color: var(--color-text-secondary);
+}

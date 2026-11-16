@@ -360,6 +360,9 @@ export function Menu(props: {
       const target = event.target as Node;
       if (menuRef.current?.contains(target) === true) return;
       if (anchorRef.current?.contains(target) === true) return;
+      // 从这个菜单里再开的菜单（主智能体的型号卡：弹层里放着输入框那两个芯片，各自再开一层）在 body 上另一个 portal：
+      // 点在别的菜单面板里不算点在外面，否则外层一关，里层跟着卸载、那一下的选择就丢了
+      if (target instanceof Element && target.closest(".menu-panel") !== null) return;
       close();
     };
     // 滚动与改窗口大小：追着重定位而不是关门。锚点跟着界面动了，菜单跟着锚点走；

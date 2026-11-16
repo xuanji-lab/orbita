@@ -1953,6 +1953,9 @@ export const en = {
     home: "Home",
     scopeTip: (path: string) => `${path} · switching starts a new task`,
     modelTip: "Model · applies from the next message",
+    /** 顶栏「主智能体」点开的那一行灰字：这里定的是这个工作区的主智能体以后都用的 */
+    mainModelNote: "The main agent of this workspace uses this model and thinking level from now on; work it hands out follows it too.",
+    mainModelButton: "Main agent: model and thinking level",
     noModel: "No model",
     thinkingOffTip: "Thinking · this model does not think",
     thinkingTip: "Thinking · applies from the next message",

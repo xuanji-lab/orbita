@@ -17,6 +17,8 @@ export function SessionCapsule(props: {
   title: string;
   /** 标题后面的一个灰字身份（主智能体）；undefined = 不摆 */
   tag?: string | undefined;
+  /** 身份做成可点的（主智能体：点开定型号与思考档）时，整个换成调用方给的件；给了它 tag 只用来定标题居中 */
+  tagSlot?: React.ReactNode;
   /** 短 id（前 6 位）；null = 会话还没落盘（首条消息未发），右端次要件不摆 */
   shortId: string | null;
   onRename?: (title: string) => void;
@@ -72,7 +74,8 @@ export function SessionCapsule(props: {
       {/* 正中：标题（重命名就地变输入框，外框不动）。左右各留一个铅笔位，悬停显形 */}
       <div className="cap-sc">
         <CapTitle title={props.title} onRename={props.onRename} balance={props.tag === undefined} />
-        {props.tag !== undefined && (
+        {props.tag !== undefined && props.tagSlot !== undefined && props.tagSlot}
+        {props.tag !== undefined && props.tagSlot === undefined && (
           <span style={{ flex: "none", fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)", whiteSpace: "nowrap" }}>
             {props.tag}
           </span>

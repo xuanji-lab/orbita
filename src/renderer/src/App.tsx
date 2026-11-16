@@ -1,3 +1,4 @@
+import { MainAgentModelMenu } from "./features/chat/MainAgentModelMenu";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTheme } from "./useTheme";
 import { LocaleContext, messagesOf } from "./locale.ts";
@@ -1305,6 +1306,19 @@ export function App() {
       <SessionCapsule
         title={capsuleTitle}
         tag={mainAgentWorkspace === undefined ? undefined : t.sidebar.mainAgent}
+        // 点「主智能体」定这个工作区的主智能体以后都用的型号与思考档（输入框里没有这两个选择器）
+        tagSlot={
+          mainAgentWorkspace === undefined ? undefined : (
+            <MainAgentModelMenu
+              session={session}
+              workspaceId={mainAgentWorkspace.id}
+              label={t.sidebar.mainAgent}
+              starredModels={settings.starredModels ?? []}
+              onToggleStarModel={toggleStarModel}
+              onOpenProviders={openProvidersTab}
+            />
+          )
+        }
         // 主智能体的对话不是一条让用户管理的会话：不露会话编号（也就没有复制编号的入口）
         shortId={mainAgentWorkspace === undefined ? capsuleShortId : null}
         // 主智能体的名字就是工作区名（改名去侧栏改工作区）

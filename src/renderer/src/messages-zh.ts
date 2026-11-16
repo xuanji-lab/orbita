@@ -1792,6 +1792,8 @@ export const zh: Messages = {
     home: "主目录",
     scopeTip: (path) => `${path} · 切换会新开一个任务`,
     modelTip: "模型 · 下一条消息起生效",
+    mainModelNote: "这个工作区的主智能体以后都用这个型号和思考档，它派出去的活也跟着用。",
+    mainModelButton: "主智能体：型号与思考档",
     noModel: "没有模型",
     thinkingOffTip: "思考 · 这个模型不支持思考",
     thinkingTip: "思考 · 下一条消息起生效",

@@ -3407,7 +3407,8 @@ function ComposerBar(props: {
           {t.composer.intentToggle}
         </Chip>
       )}
-      {session.usable.length > 0 && (
+      {/* 主智能体：型号与思考档在顶栏「主智能体」里定一次（档案），输入框不摆这两个选择器；旧会话与「任务」组照旧 */}
+      {!talkingToMain && session.usable.length > 0 && (
         <ModelPickerMenu
           t={t}
           providers={session.usable}
@@ -3448,6 +3449,7 @@ function ComposerBar(props: {
           }}
         />
       )}
+      {!talkingToMain && (
       <Menu
         items={thinkingItems}
         placement="above"
@@ -3470,6 +3472,7 @@ function ComposerBar(props: {
           </Chip>
         )}
       />
+      )}
       <UsageRing session={session} onOpenContext={props.onOpenContext} />
     </>
   );
