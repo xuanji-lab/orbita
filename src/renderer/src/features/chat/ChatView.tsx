@@ -6087,19 +6087,8 @@ function ShowImageGalleryGroup(props: { cards: ShowImageCardView[] }) {
   const lightboxImages = images.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
   return (
     <div style={{ display: "grid", gap: "var(--space-2)", minWidth: 0 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-        <Icon name="image" size={13} strokeWidth={1.8} style={{ flex: "0 0 auto" }} />
-        <span
-          style={{
-            fontSize: "var(--font-size-sm)",
-            fontFamily: "var(--font-family-mono)",
-            color: "var(--color-text-secondary)",
-          }}
-        >
-          {/* 组首自己还在跑（卡片未落）时组是空的——省略号占位，别显示「0 张图片」 */}
-          {props.cards.length === 0 ? "…" : t.chat.images(total)}
-        </span>
-      </div>
+      {/* 不再有「N 张图片」标题：图直接排，文件名写在图下（2026-11-17）；组首还在跑（卡片未落）时只留省略号占位 */}
+      {props.cards.length === 0 && <span style={{ color: "var(--color-text-tertiary)" }}>…</span>}
       {total === 1 ? (
         images.map((img, i) => (
           <figure key={`show-${i}`} style={{ margin: 0, display: "grid", gap: 2, minWidth: 0 }}>
@@ -6118,7 +6107,6 @@ function ShowImageGalleryGroup(props: { cards: ShowImageCardView[] }) {
                   maxHeight: 320,
                   objectFit: "contain",
                   borderRadius: "var(--radius-md)",
-                  border: "1px solid var(--color-border-subtle)",
                   background: "var(--color-bg-panel)",
                 }}
               />
@@ -6156,6 +6144,7 @@ function ShowImageGalleryGroup(props: { cards: ShowImageCardView[] }) {
               openLabel={t.lightbox.open}
               onOpen={() => setViewing(i)}
               caption
+              bare
             />
           ))}
         </div>

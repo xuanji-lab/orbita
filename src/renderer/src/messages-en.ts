@@ -2103,18 +2103,14 @@ export const en = {
     revertedHere: "Reverted — the conversation continued from here",
     undoTitle: "Undo file changes",
     undoConfirm: "Undo changes",
-    fileCardChanged: (n: number) => `${n} file${n === 1 ? "" : "s"} changed`,
-    fileCardWebMade: (n: number) => `${n} web page${n === 1 ? "" : "s"} generated`,
-    fileCardScripted: "Script-generated · open only",
-    fileCardWebBatchShort: "Web files changed in bulk",
+    fileCardScripted: "made by a script",
+    fileRowsMore: (n: number) => `${n} more files`,
     fileCardWebBatch: (n: number) =>
       `${n} web file${n === 1 ? "" : "s"} changed this turn (looks like a bulk operation, not listed)`,
     fileCardExpand: "Show changed files",
     fileCardCollapse: "Hide changed files",
-    fileCardUndo: "Undo",
     fileCardUndoHint: "Undo this round's file changes — the conversation stays",
     fileCardUndone: "Undone",
-    fileCardWebPage: "Web page",
     openInOrbita: "Open in orbita",
     /** 「在 orbita 打开」不放行的原因（ArtifactOpenResult.reason）；「Show in folder」不受影响 */
     openInOrbitaRefused: (reason: Extract<ArtifactOpenResult, { ok: false }>["reason"]): string => {

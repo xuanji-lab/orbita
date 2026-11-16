@@ -5518,6 +5518,100 @@ mark.intent-mark {
   white-space: normal;
 }
 
+/* ===== 轮尾文件行（FileTurnCard，2026-11-17）：挂在产出它的那段回复下面，一行一个文件，不套卡片框 =====
+ * 图标 · 文件名（点开；全路径在悬停提示里）· 行尾灰字尾巴；动作只在悬停 / 键盘聚焦时出，出现时尾巴让位。 */
+.ft-rows {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+  padding: 0 var(--content-hem);
+}
+.ft-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: var(--control-height-sm);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.ft-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.ft-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--color-text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.ft-name:hover:not(:disabled) {
+  text-decoration: underline;
+  text-decoration-color: var(--color-border-default);
+  text-underline-offset: 3px;
+}
+.ft-name:disabled {
+  cursor: default;
+}
+.ft-trail {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.ft-tail {
+  font-family: var(--font-family-business);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.ft-act {
+  display: none;
+  width: var(--control-height-xs);
+  height: var(--control-height-xs);
+}
+.ft-row:hover .ft-act,
+.ft-row:focus-within .ft-act {
+  display: inline-flex;
+}
+.ft-row:hover .ft-tail,
+.ft-row:focus-within .ft-tail {
+  display: none;
+}
+.ft-more {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ft-more .ft-name {
+  color: var(--color-text-secondary);
+}
+/* 撤销预演中的那一轮：字加深，底部确认栏说的就是这几行 */
+.ft-rows.previewing .ft-row {
+  color: var(--color-text-primary);
+}
+.ft-refusal {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  padding-left: calc(var(--space-3) + var(--space-2));
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+
 /* 落定后展开的章节时间线：竖线挂在内线上，章节点压在线上 */
 .proc-chapters {
   list-style: none;
