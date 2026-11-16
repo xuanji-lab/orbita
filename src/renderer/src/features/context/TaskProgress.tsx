@@ -155,8 +155,6 @@ export function TaskProgress(props: {
         <span className="tp-slot">
           {headState === "running" ? (
             <Icon name="loader-circle" size={12} strokeWidth={1.8} spin />
-          ) : headState === "waiting" || headState === "failed" ? (
-            <span className="tp-dot you" />
           ) : null}
         </span>
         <b>{t.taskPanel.state(headState ?? "idle")}</b>
@@ -455,7 +453,6 @@ function PlanSection(props: {
     const waitTag =
       status === "waiting" ? (
         <span className={you ? "tp-wait you" : "tp-wait"} title={item.waitingFor ?? t.planText.waitingTitle}>
-          {you && <span className="tp-dot you" />}
           <span>{item.waitingFor ?? t.planText.waitingDefault}</span>
         </span>
       ) : null;
@@ -787,14 +784,14 @@ function DispatchedSection(props: { parentId: string; sessions: readonly Session
           return (
             <li key={row.meta.id} className="tp-job">
               <span className={`inbox-row-mark${mark === null ? "" : ` ${mark}`}`} aria-hidden="true">
-                <span className="inbox-row-dot" />
+                {mark === "work" && <span className="inbox-row-dot" />}
               </span>
               <div className="tp-step">
                 <div className="tp-step-head">
                   <span className="tp-text tp-job-name" title={row.meta.title}>{row.meta.title === "" ? t.subSessions.untitled : displaySubSessionTitle(row.meta.title)}</span>
                   <span className="tp-tail row-trailing">{jobElapsed(now - row.meta.createdAt, t.taskPanel.elapsed)}</span>
                 </div>
-                {line !== "" && <div className="tp-job-line">{line}</div>}
+                {line !== "" && <div className={mark === "ask" ? "tp-job-line ask" : "tp-job-line"}>{line}</div>}
                 {note !== null && <div className="tp-note">{note}</div>}
               </div>
             </li>

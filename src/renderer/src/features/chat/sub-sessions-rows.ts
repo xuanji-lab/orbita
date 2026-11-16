@@ -90,7 +90,8 @@ export function sortSubSessionRows<T extends { status: SubSessionRowStatus; last
 
 /**
  * 行首记号（2026-11-17 减色，用户：「红蓝绿黄灯可以保留，在左侧栏是很直观的，但在子会话的 panel 里有点烦人」）：
- * 只有要你出手的（在问你、被打断等你点继续、没做成）是橙点；在做 = 灰点；做完 = 灰勾；终止的 / 还没开口的不标。
+ * 要你出手的（在问你、被打断等你点继续、没做成）= ask：排最前、那一句用正文色写明，**不点橙点**（2026-11-17 用户看满载图后：
+ * 同一件等你的事全应用只在侧栏顶「等你」那一处出橙色）；在做 = 灰点；做完 = 灰勾；终止的 / 还没开口的不标。
  * 侧栏的四色饼不动——这里不再用 StatusPie。
  */
 export type SubSessionMark = "ask" | "work" | "done" | null;

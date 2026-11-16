@@ -1601,9 +1601,10 @@ html[data-pointer-drag] iframe {
   border-radius: 50%;
   background: currentColor;
 }
-/* 只有「要你出手」是橙点（在问你、被打断、没做成）；橙只做第二信号，旁边都有字 */
-.inbox-row-mark.ask {
-  color: var(--color-warning);
+/* 要你出手的（在问你、被打断、没做成）不点橙点：排在最前、那一句用正文色写明「在问：……」「没做成：……」
+   （2026-11-17 用户看满载图后：同一件等你的事，全应用只在侧栏顶「等你」那一处出橙色） */
+.inbox-row-l2.ask {
+  color: var(--color-text-primary);
 }
 
 .inbox-row-item {
