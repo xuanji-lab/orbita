@@ -41,6 +41,7 @@ import {
   type RefreshModelsContext,
 } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
+import { formatUserAgent } from "@earendil-works/pi-ai/utils/identity";
 import { builtinProviders, getBuiltinModelDataGeneratedAt } from "@earendil-works/pi-ai/providers/all";
 import { readFileSync } from "node:fs";
 import { writeJsonAtomic } from "../main/atomic-write.ts";
@@ -144,7 +145,9 @@ const BUILTIN_GENERATED_AT = getBuiltinModelDataGeneratedAt();
 async function requestCatalog(providerId: string, baseUrl: string, signal: AbortSignal, etag?: string): Promise<Response> {
   const url = new URL(`/api/models/providers/${encodeURIComponent(providerId)}`, baseUrl);
   url.searchParams.set("types", CATALOG_MODEL_TYPES.join(","));
-  const headers: Record<string, string> = { accept: "application/json", "User-Agent": "Orbita" };
+  // pi.dev 按 User-Agent 里的 pi 版本分发目录（版本不认识会 307 到 404）。版本取 pi-ai 编译进去的常量，
+  // 打进 bundle 也不会错认成 Orbita 的版本号
+  const headers: Record<string, string> = { accept: "application/json", "User-Agent": formatUserAgent() };
   if (etag !== undefined) headers["if-none-match"] = etag;
   for (let attempt = 1; ; attempt++) {
     signal.throwIfAborted();
