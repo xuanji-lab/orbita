@@ -176,7 +176,8 @@ export function TaskProgress(props: {
               activity,
               working,
               awaiting: timeline.current.awaiting && planAwaitingIn(view.current),
-              detail: working ? stepDetail : null,
+              // 那句细节是我自己刚说的话：只在我自己这一轮在跑时才算数（只有子会话在跑时，我上一句话早过时了）
+              detail: turnActive ? stepDetail : null,
               turnActive,
               now,
               inChat,
@@ -363,7 +364,8 @@ function ChapterList(props: { rows: readonly ChapterRow[]; statusOf: (toolCallId
   return (
     <ol className="tp-chapters">
       {props.rows.map(({ chapter, processKey, inChat, live, ask }) => {
-        const failed = chapter.calls.some((call) => props.statusOf(call.toolCallId) === "error");
+        const failedCount = chapter.calls.filter((call) => props.statusOf(call.toolCallId) === "error").length;
+        const failed = failedCount > 0;
         const work = chapter.calls.filter((call) => !isBookkeepingTool(call.toolName)).length;
         const label =
           chapterTitle(chapter, ask) ?? chapter.calls.map((call) => toolWord(t.chat.rollupTool, call.toolName, call.input)).filter((v, i, a) => a.indexOf(v) === i).join(" · ");
@@ -373,7 +375,11 @@ function ChapterList(props: { rows: readonly ChapterRow[]; statusOf: (toolCallId
             <span className={chapter.source === "say" ? "tp-ch" : "tp-ch think"} title={inlinePlain(label)}>
               <InlineMarks text={label} />
             </span>
-            {work > 0 && <span className="tp-meta">{t.chat.processSteps(work)}</span>}
+            {work > 0 && (
+              <span className="tp-meta">
+                {[t.chat.processSteps(work), ...(failed ? [t.chat.procSum.stepsFailed(failedCount)] : [])].join(" · ")}
+              </span>
+            )}
           </>
         );
         return (
