@@ -17,13 +17,16 @@
  */
 import type { JsonValue } from "@earendil-works/chord/json";
 import type { Model, Api } from "@earendil-works/pi-ai";
+import { randomUUID } from "node:crypto";
 import { open } from "node:fs/promises";
 import type { ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
 import type { ToolContext, ToolDefinition } from "./agent-shapes.ts";
 import { imageProcessor, normalizeToolResultImages } from "./images.ts";
+import { KERNEL_RUN_ENV, kernelRunMark, reapMsysProcesses } from "./kernel-children.ts";
 import { ENABLED_BUILTIN_TOOLS } from "./permission.ts";
+import { findBash } from "./shell-path.ts";
 import { toolPathArgument, toolTargetPath } from "./tool-paths.ts";
 
 /**
@@ -157,8 +160,51 @@ export interface BuiltinToolOptions {
   shellPath: string | undefined;
   /** 给 bash 命令打标签（kernel 进程的孤儿善后，kernel-children.ts 的 tagShellCommand）；缺席 = 不打 */
   tagCommand?: (command: string) => string;
-  /** 平台（测试注入）：只有 win32 才把 Git Bash / MSYS 的盘符路径折成 Windows 路径 */
+  /**
+   * 孤儿善后的标签（kernel-children.ts 的 kernelChildTag）。Windows 上 bash 每次运行在环境变量里挂 `ORBITA_KERNEL_RUN=<标签>.<运行 id>`，
+   * 停止或超时后按它经 MSYS 的 /proc 收割（pi-durable 的 taskkill /T 在 MSYS exec 处断树，漏掉 sleep.exe 这类 MSYS 子孙）；
+   * 缺席或非 Windows = 不做
+   */
+  childTag?: string;
+  /** 测试注入：收割一次运行（参数是环境变量条目前缀）；默认用 shellPath（没有就 findBash()）跑 reapMsysProcesses */
+  reapRun?: (mark: string) => Promise<number>;
+  /** 平台（测试注入）：只有 win32 才把 Git Bash / MSYS 的盘符路径折成 Windows 路径；也只有 win32 才做上面的收割 */
   platform?: NodeJS.Platform;
+}
+
+/** Windows 上 bash 运行的收割账：调用 id → 这次运行的环境变量标记（prepare 记，执行完删） */
+interface RunReaper {
+  tag: string;
+  runs: Map<string, string>;
+  reap: (mark: string) => Promise<number>;
+}
+
+/**
+ * 跑一次 bash 调用，停止（abortSignal）或超时之后把这次运行留下的进程收割掉。正常跑完不收：命令故意留在后台的进程
+ * （`npm run dev &`）不该被带走——与 macOS 上 pi 只在停止 / 超时才杀进程组同一口径。
+ * 停止时收割在 abort 事件里立刻起（pi 的 taskkill 同时在跑，两边各杀各的、互不等待）；超时按「跑满了模型给的 timeout」判。
+ */
+async function withRunReap<T>(reaper: RunReaper, callId: string, signal: AbortSignal | undefined, timeoutSeconds: number | undefined, run: () => Promise<T>): Promise<T> {
+  const started = Date.now();
+  let reaped = false;
+  const reap = (why: string): void => {
+    const mark = reaper.runs.get(callId);
+    if (reaped || mark === undefined) return;
+    reaped = true;
+    void reaper.reap(mark).then((count) => {
+      if (count > 0) console.error(`[durable-tools] bash ${why}：清掉这条命令留下的 ${count} 个进程`);
+    });
+  };
+  const onAbort = (): void => reap("停止");
+  signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    return await run();
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+    if (signal?.aborted === true) reap("停止");
+    else if (timeoutSeconds !== undefined && Date.now() - started >= timeoutSeconds * 1000) reap("超时");
+    reaper.runs.delete(callId);
+  }
 }
 
 /** bash 子进程里留给智能体自己查的会话事实（名字沿用旧内核，用户的技能与验收脚本靠 PI_SESSION_ID 认人） */
@@ -229,7 +275,7 @@ function liveTail(text: string): string {
  * - 一批工具「全部准备完才一起执行」的节奏（beforeExecute）；
  * - bash 的实时输出交给界面（onUpdate，partialResult 与旧内核同形）。
  */
-function wrapBuiltin(tool: ToolRegistration, env: NodeExecutionEnv, scope: DurableToolScope, cwd: string, platform: NodeJS.Platform): ToolRegistration {
+function wrapBuiltin(tool: ToolRegistration, env: NodeExecutionEnv, scope: DurableToolScope, cwd: string, platform: NodeJS.Platform, reaper: RunReaper | undefined): ToolRegistration {
   const hasPath = tool.name === "read" || tool.name === "write" || tool.name === "edit";
   return {
     ...tool,
@@ -260,7 +306,9 @@ function wrapBuiltin(tool: ToolRegistration, env: NodeExecutionEnv, scope: Durab
           return typeof value === "function" ? (value as (...rest: unknown[]) => unknown).bind(target) : value;
         },
       });
-      return tool.execute(input as never, wrapped, context);
+      if (reaper === undefined || tool.name !== "bash") return tool.execute(input as never, wrapped, context);
+      const timeout = typeof input["timeout"] === "number" ? input["timeout"] : undefined;
+      return withRunReap(reaper, api.callId, context.abortSignal, timeout, () => tool.execute(input as never, wrapped, context));
     },
   };
 }
@@ -273,18 +321,37 @@ export function builtinTools(cwd: string, options: BuiltinToolOptions, scope: Du
   const platform = options.platform ?? process.platform;
   const env = new NodeExecutionEnv({ cwd, ...(options.shellPath === undefined ? {} : { shellPath: options.shellPath }) });
   const tag = options.tagCommand;
+  const childTag = options.childTag;
+  const reaper: RunReaper | undefined =
+    platform === "win32" && childTag !== undefined
+      ? {
+          tag: childTag,
+          runs: new Map(),
+          reap:
+            options.reapRun ??
+            ((mark) => {
+              const shell = options.shellPath ?? findBash(platform);
+              return shell === undefined ? Promise.resolve(0) : reapMsysProcesses(shell, { env: mark });
+            }),
+        }
+      : undefined;
   const all: Record<(typeof ENABLED_BUILTIN_TOOLS)[number], ToolRegistration> = {
     bash: createBashTool({
       ...(options.commandPrefix === undefined || options.commandPrefix === "" ? {} : { commandPrefix: options.commandPrefix }),
-      prepare: (execution) => {
+      prepare: (execution, api) => {
         if (tag !== undefined) execution.command = tag(execution.command);
         execution.inheritEnv = false;
         execution.env = bashSessionEnv(process.env, scope);
+        if (reaper !== undefined) {
+          const run = randomUUID();
+          execution.env[KERNEL_RUN_ENV] = `${reaper.tag}.${run}`;
+          reaper.runs.set(api.callId, kernelRunMark(reaper.tag, run));
+        }
       },
     }) as unknown as ToolRegistration,
     edit: createEditTool() as unknown as ToolRegistration,
     read: createReadTool(options.autoResizeImages ? { images: imageProcessor } : {}) as unknown as ToolRegistration,
     write: createWriteTool() as unknown as ToolRegistration,
   };
-  return ENABLED_BUILTIN_TOOLS.map((name) => wrapBuiltin(all[name], env, scope, cwd, platform));
+  return ENABLED_BUILTIN_TOOLS.map((name) => wrapBuiltin(all[name], env, scope, cwd, platform, reaper));
 }

@@ -92,6 +92,8 @@ async function init(dir: string): Promise<void> {
   // 孤儿善后：bash 子进程挂上这个库目录的标签；上一次连主进程一起被杀留下的，现在清掉
   const tag = kernelChildTag(dir);
   turnRuntime.tagCommand = (command) => tagShellCommand(command, tag);
+  turnRuntime.childTag = tag;
+  // 要等完：Windows 上按「标签.」前缀收割，收割还在扫 /proc 时就开跑的命令会被当成上一次的孤儿杀掉（起一个 bash 扫一遍几百毫秒）
   const reaped = await reapKernelChildren(tag);
   if (reaped > 0) console.error(`[kernel-runtime] 清掉上一次留下的 ${reaped} 个 shell 子进程`);
   pool = new KernelPool({

@@ -66,6 +66,8 @@ export interface KernelTurnRuntime {
   resolveShellPath: () => string | undefined;
   /** 给 bash 命令打孤儿善后的标签（kernel-children.ts）；缺席 = 不打 */
   tagCommand?: (command: string) => string;
+  /** 孤儿善后的标签本身（Windows 上 bash 每次运行挂运行标记、停止 / 超时后收割，durable-tools.ts）；缺席 = 不做 */
+  childTag?: string;
   /** 应用正在正常退出（这时被停下的调用如实告诉模型「退出时停掉的、没跑完」）；缺席 = 不在退出 */
   quitting?: () => boolean;
 }
@@ -433,7 +435,7 @@ export async function assembleTurn(
   };
   // 内建四件是新内核自带的实现（外面包一层 Orbita 的环境、路径折算与 PDF 指路）；其余是 Orbita 自己的工具，薄翻译一层
   const registrations = [
-    ...(chatOnly ? [] : builtinTools(command.cwd, { ...resources.builtinOptions, ...(runtime.tagCommand === undefined ? {} : { tagCommand: runtime.tagCommand }) }, scope)),
+    ...(chatOnly ? [] : builtinTools(command.cwd, { ...resources.builtinOptions, ...(runtime.tagCommand === undefined ? {} : { tagCommand: runtime.tagCommand }), ...(runtime.childTag === undefined ? {} : { childTag: runtime.childTag }) }, scope)),
     ...definitions.map((definition) => toDurableTool(definition, scope)),
   ];
   const byName = new Map(registrations.map((tool) => [tool.name, tool]));

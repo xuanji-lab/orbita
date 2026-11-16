@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { BACKGROUND_CONTEXT, withAbortSignal, type Context } from "@earendil-works/chord/context";
 import type { ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
 import { bashSessionEnv, builtinTools, DOC_POINTER, DOCX_POINTER, PDF_POINTER, type DurableToolScope } from "./durable-tools.ts";
 
@@ -33,7 +33,7 @@ function scope(patch: Partial<DurableToolScope> = {}): DurableToolScope {
 }
 
 /** 不经 Harness 直接调一个工具：api 只给工具会碰到的那几样（env 由包装层换成它自己的） */
-async function run(tool: ToolRegistration, args: object, callId = "c1"): Promise<ToolExecutionResult & { text: string }> {
+async function run(tool: ToolRegistration, args: object, callId = "c1", context: Context = BACKGROUND_CONTEXT): Promise<ToolExecutionResult & { text: string }> {
   let output = "";
   const diagnostics: unknown[] = [];
   const api = {
@@ -48,7 +48,7 @@ async function run(tool: ToolRegistration, args: object, callId = "c1"): Promise
     retainedOutput: () => ({ text: output, truncated: false }),
     diagnostic: (diagnostic: unknown) => diagnostics.push(diagnostic),
   } as never;
-  const result = (await tool.execute(args as never, api, BACKGROUND_CONTEXT)) as ToolExecutionResult;
+  const result = (await tool.execute(args as never, api, context)) as ToolExecutionResult;
   const text = (result.output ?? []).flatMap((item) => (item.type === "text" ? [item.text] : [])).join("") || output;
   return { ...result, text };
 }
@@ -103,6 +103,60 @@ describe("builtinTools", () => {
     const result = await run(byName(tools, "bash"), { command: "echo $ORBITA_PREFIX" }, "call-9");
     assert.equal(result.text.trim(), "on");
     assert.deepEqual(updates.at(-1), { callId: "call-9", name: "bash", partial: { content: [{ type: "text", text: "on\n" }] } });
+  });
+
+  describe("Windows：bash 每次运行挂运行标记，停止 / 超时后按它收割（platform 注入 win32，命令在本机 bash 里真跑）", () => {
+    const winTools = (reaped: string[]) =>
+      builtinTools(cwd, { ...OPTIONS, platform: "win32", childTag: "orbita-t", reapRun: async (mark) => (reaped.push(mark), 1) }, scope());
+
+    test("子进程拿到 ORBITA_KERNEL_RUN=<标签>.<运行 id>，每次不同；正常跑完不收割（留在后台的进程不该被带走）", async () => {
+      const reaped: string[] = [];
+      const bash = byName(winTools(reaped), "bash");
+      const first = (await run(bash, { command: "echo $ORBITA_KERNEL_RUN" }, "r1")).text.trim();
+      const second = (await run(bash, { command: "echo $ORBITA_KERNEL_RUN" }, "r2")).text.trim();
+      assert.match(first, /^orbita-t\.[0-9a-f-]{36}$/);
+      assert.match(second, /^orbita-t\.[0-9a-f-]{36}$/);
+      assert.notEqual(first, second);
+      assert.deepEqual(reaped, []);
+    });
+
+    test("停止：abort 时按这一次的运行标记收割一次（与子进程环境里的值对得上）", async () => {
+      const reaped: string[] = [];
+      const bash = byName(winTools(reaped), "bash");
+      const marker = join(cwd, "run-mark.txt");
+      const controller = new AbortController();
+      const running = run(bash, { command: `echo -n "$ORBITA_KERNEL_RUN" > "${marker}"; sleep 5` }, "r3", withAbortSignal(controller.signal, BACKGROUND_CONTEXT)).catch((error: unknown) => error);
+      for (let i = 0; i < 50; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        if ((await readFile(marker, "utf8").catch(() => "")) !== "") break;
+      }
+      controller.abort();
+      await running;
+      const value = await readFile(marker, "utf8");
+      assert.deepEqual(reaped, [`ORBITA_KERNEL_RUN=${value}`]);
+    });
+
+    test("超时：跑满 timeout 后收割；只收一次", async () => {
+      const reaped: string[] = [];
+      const bash = byName(winTools(reaped), "bash");
+      await run(bash, { command: "sleep 3", timeout: 1 }, "r4").catch((error: unknown) => error);
+      assert.equal(reaped.length, 1);
+      assert.match(reaped[0] ?? "", /^ORBITA_KERNEL_RUN=orbita-t\.[0-9a-f-]{36}$/);
+    });
+
+    test("非 Windows 或没给标签：不挂运行标记、不收割", async () => {
+      const reaped: string[] = [];
+      const reapRun = async (mark: string): Promise<number> => (reaped.push(mark), 1);
+      for (const options of [{ ...OPTIONS, platform: "darwin" as const, childTag: "orbita-t", reapRun }, { ...OPTIONS, platform: "win32" as const, reapRun }]) {
+        const bash = byName(builtinTools(cwd, options, scope()), "bash");
+        assert.equal((await run(bash, { command: 'echo "${ORBITA_KERNEL_RUN-unset}"' })).text.trim(), "unset");
+        const controller = new AbortController();
+        const running = run(bash, { command: "sleep 5" }, "r5", withAbortSignal(controller.signal, BACKGROUND_CONTEXT)).catch((error: unknown) => error);
+        setTimeout(() => controller.abort(), 200);
+        await running;
+      }
+      assert.deepEqual(reaped, []);
+    });
   });
 
   test("执行前先等 beforeExecute（一批工具准备完才一起执行）", async () => {
