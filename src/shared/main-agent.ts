@@ -12,6 +12,8 @@
  * （没说过话的工作区不在磁盘上留一条空会话）。不迁、不吞旧会话——旧会话照旧是普通会话，主智能体能用 read_task 读。
  */
 
+import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
+
 export interface MainAgentProfile {
   workspaceId: string;
   /** 主智能体那条会话的 id（第一句话之前是预留的，会话还不存在） */
@@ -24,6 +26,36 @@ export interface MainAgentProfile {
    * **不写进会话转录**：旧版本读转录时不认识的记录不会跳过（会当消息画），写进去回滚就会出错。缺席 = 没断过。
    */
   resumes?: MainAgentResume[];
+  /**
+   * 这个工作区的主智能体以后都用的型号与思考档（2026-11-17，用户在顶栏「主智能体」上定）。
+   * **缺席 = 沿用现在新会话的默认**（上次用的型号与新任务的思考档规则）；建档时不抄一份进来——默认值改了它要跟着走。
+   * 有值时主智能体那条会话每轮开轮以它为准（输入框里不再有型号与思考档选择器），它派活不点名型号也沿用它。
+   */
+  model?: MainAgentModel;
+}
+
+export interface MainAgentModel {
+  providerId: string;
+  modelId: string;
+  thinkingLevel: ThinkingLevel;
+}
+
+/** agents:set-main-model 的载荷 */
+export interface MainAgentModelInput {
+  workspaceId: string;
+  model: MainAgentModel;
+}
+
+/** 档案里的型号：三项齐全且合法才认，坏了当缺席（沿用默认，不让一份坏档案把主智能体堵死） */
+export function parseMainAgentModel(raw: unknown): MainAgentModel | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const value = raw as Record<string, unknown>;
+  const providerId = value["providerId"];
+  const modelId = value["modelId"];
+  const thinkingLevel = value["thinkingLevel"];
+  if (typeof providerId !== "string" || providerId === "" || typeof modelId !== "string" || modelId === "") return null;
+  if (!isThinkingLevel(thinkingLevel)) return null;
+  return { providerId, modelId, thinkingLevel };
 }
 
 /** 一次「断过」：from = 被打断的活最后一次落盘的时刻（约等于断的时刻），at = 重开后接上的时刻 */
@@ -64,7 +96,8 @@ export function parseMainAgentProfile(raw: unknown): MainAgentProfile | null {
   const resumes = Array.isArray(value["resumes"])
     ? value["resumes"].map(parseResume).filter((item): item is MainAgentResume => item !== null)
     : [];
-  return { workspaceId, sessionId, createdAt, ...(resumes.length > 0 ? { resumes } : {}) };
+  const model = parseMainAgentModel(value["model"]);
+  return { workspaceId, sessionId, createdAt, ...(resumes.length > 0 ? { resumes } : {}), ...(model === null ? {} : { model }) };
 }
 
 /**

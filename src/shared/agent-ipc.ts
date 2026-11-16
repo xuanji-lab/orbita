@@ -388,6 +388,11 @@ export const ipcChannels = {
   /** 专注模式：一个工作区此刻的 U / M 改动（含增删行数与当前分支名，载荷形状在 shared/focus.ts）。git 只读，与审查面板同一套 git-source */
   /** 常驻主智能体：取（没有就惰性建）某个工作区的主智能体档案（载荷形状在 shared/main-agent.ts）。只建档案、不建会话——会话在第一句话发出时才落盘 */
   agentsMain: "agents:main",
+  /**
+   * 常驻主智能体：定这个工作区的主智能体以后都用的型号与思考档（写进档案的 model；载荷 MainAgentModelInput）。
+   * 回更新后的档案。之后主智能体那条会话每轮开轮以档案为准，它派活时不点名型号也沿用这一个。
+   */
+  agentsSetMainModel: "agents:set-main-model",
   focusChanges: "focus:changes",
   /** 专注模式：时间到的系统通知（Electron Notification，点按聚焦窗口；载荷 FocusNotifyRequest） */
   focusNotifyDone: "focus:notify-done",

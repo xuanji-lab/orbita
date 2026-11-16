@@ -61,3 +61,17 @@ describe("重开后「断过」与主智能体的续跑口径", () => {
     assert.ok(MAIN_AGENT_RESUMES_KEPT > 0);
   });
 });
+
+describe("主智能体档案里的型号", () => {
+  test("缺席 = 沿用默认（档案里没有 model 键）；齐全合法才认；坏值当缺席，不连累整份档案", () => {
+    const base = { workspaceId: "w1", sessionId: "s1", createdAt: 5 };
+    assert.equal("model" in (parseMainAgentProfile(base) ?? {}), false);
+    const model = { providerId: "zhipu", modelId: "glm-5.3", thinkingLevel: "high" };
+    assert.deepEqual(parseMainAgentProfile({ ...base, model })?.model, model);
+    for (const bad of [{ ...model, thinkingLevel: "turbo" }, { ...model, modelId: "" }, "glm-5.3", null]) {
+      const profile = parseMainAgentProfile({ ...base, model: bad });
+      assert.notEqual(profile, null);
+      assert.equal("model" in (profile ?? {}), false);
+    }
+  });
+});
