@@ -54,6 +54,8 @@ export interface TurnToolFlags {
   automationTools: boolean;
   /** 插件工具：命令带 pluginTools 才注册 install_plugin / preview_plugin / list_plugins（子会话不装插件，只有根会话注册） */
   pluginTools: boolean;
+  /** 工作区的常驻主智能体（命令带 mainAgent，且只认根会话）：提示词加身份与派活规矩一段 */
+  mainAgent: boolean;
 }
 
 export function turnToolFlags(command: TurnInput): TurnToolFlags {
@@ -63,6 +65,7 @@ export function turnToolFlags(command: TurnInput): TurnToolFlags {
     memoryTools: "sessionMemory" in command && command.sessionMemory === true && role === "root",
     automationTools: "automationTools" in command && command.automationTools === true && role === "root",
     pluginTools: command.pluginTools === true && role === "root",
+    mainAgent: "mainAgent" in command && command.mainAgent === true && role === "root",
   };
 }
 

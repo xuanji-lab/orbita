@@ -436,6 +436,7 @@ export async function assembleTurn(
     piBase: adaptSystemPrompt(piBase),
     protectedFiles: command.protectedFiles,
     role: flags.role,
+    mainAgent: flags.mainAgent,
     workspace: command.workspaceId === null ? null : { name: command.workspaceName },
     cwd: command.cwd,
     directories: command.directories,

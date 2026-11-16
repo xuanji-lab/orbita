@@ -45,9 +45,12 @@ const CHILD = { workbench: "/tmp/wb", attached: [], related: [{ sessionId: "p", 
 describe("turn-tools：两个内核共用的一轮工具装配", () => {
   it("根会话：记忆 / 自动化 / 插件按命令开关装，子会话一律不装", () => {
     const root = submit({ sessionMemory: true, automationTools: true, pluginTools: true });
-    assert.deepEqual(turnToolFlags(root), { role: "root", memoryTools: true, automationTools: true, pluginTools: true });
+    assert.deepEqual(turnToolFlags(root), { role: "root", memoryTools: true, automationTools: true, pluginTools: true, mainAgent: false });
     const child = submit({ sessionMemory: true, automationTools: true, pluginTools: true, directories: CHILD });
-    assert.deepEqual(turnToolFlags(child), { role: "child", memoryTools: false, automationTools: false, pluginTools: false });
+    assert.deepEqual(turnToolFlags(child), { role: "child", memoryTools: false, automationTools: false, pluginTools: false, mainAgent: false });
+    // 主智能体标记只认根会话：带 mainAgent 的子会话（不该出现）也不讲主智能体那段
+    assert.equal(turnToolFlags(submit({ mainAgent: true })).mainAgent, true);
+    assert.equal(turnToolFlags(submit({ mainAgent: true, directories: CHILD })).mainAgent, false);
   });
 
   it("工具清单与顺序：根会话有 delegate 一组，子会话换成 report_to_parent；可选组接在最后", () => {

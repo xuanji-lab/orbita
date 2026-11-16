@@ -103,6 +103,13 @@ describe("moveSessions", () => {
     assert.equal(h.edits.length, 3);
   });
 
+  test("工作区的主智能体不搬（记作没迁动），同批别的照搬", async () => {
+    const h = harness([meta("main", { role: "main" }), meta("idle")]);
+    const result = await moveSessions(h.deps, ["main", "idle"], "w-new");
+    assert.deepEqual(result, { moved: ["idle"], skipped: [{ id: "main", reason: "failed" }] });
+    assert.equal(h.metas.get("main")?.cwd, "/old");
+  });
+
   test("自己或子会话在跑：整家跳过、一字不改，别的照搬", async () => {
     const h = harness([meta("busy"), meta("kid", { parentId: "busy" }), meta("idle")], { running: ["kid"] });
     const result = await moveSessions(h.deps, ["busy", "idle"], "w-new");

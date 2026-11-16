@@ -84,6 +84,11 @@ export async function moveSessions(
       continue;
     }
     for (const meta of family) handled.add(meta.id);
+    // 工作区的主智能体不搬：它就是「这个工作区」本身，搬走了档案指向别的工作区里的会话（记作没迁动）
+    if (family[0]?.role === "main") {
+      result.skipped.push({ id, reason: "failed" });
+      continue;
+    }
     if (family.some((meta) => deps.isRunning(meta.id))) {
       result.skipped.push({ id, reason: "running" });
       continue;

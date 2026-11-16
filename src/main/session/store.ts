@@ -729,6 +729,11 @@ export class SessionStore {
   }
 
   /** 归档：从主列表移走，收进侧栏底部的 Archived。**不是删除**，随时能拿回来 */
+  /** 主智能体标记（档案是真源，这里只是校准 meta；见 SessionMeta.role） */
+  setRole(id: string, role: "main"): Promise<void> {
+    return this.update(id, { role });
+  }
+
   setArchived(id: string, archived: boolean): Promise<void> {
     return this.update(id, { archived });
   }

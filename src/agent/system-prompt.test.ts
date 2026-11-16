@@ -151,3 +151,22 @@ describe("orbitaSystemSegments —— 段序与空段", () => {
     assert.ok(joinSystemPrompt(segments).includes("pi base prompt (adapted)"));
   });
 });
+
+describe("orbitaSystemSegments —— 常驻主智能体一段", () => {
+  test("主智能体：channel-role 之后多一段身份与派活规矩；普通会话没有这一段、字节不变", () => {
+    const plain = orbitaSystemSegments(input());
+    const main = orbitaSystemSegments(input({ mainAgent: true }));
+    assert.deepEqual(
+      main.map((segment) => segment.name).filter((name) => name !== "main-agent"),
+      plain.map((segment) => segment.name),
+    );
+    const at = main.findIndex((segment) => segment.name === "main-agent");
+    assert.equal(main[at - 1]?.name, "channel-role");
+    assert.equal(joinSystemPrompt(orbitaSystemSegments(input({ mainAgent: false }))), joinSystemPrompt(plain));
+    // 用户 11-17 的修正：能撤回的猜了就做，撤不回 / 花钱的拿不准才问；DynaFlow 三条
+    const text = main[at]?.text ?? "";
+    for (const phrase of ["reversible", "irreversible or costly", "unverified conclusion", "do not tell it the answer", "upstream output itself", "read_task"]) {
+      assert.ok(text.includes(phrase), phrase);
+    }
+  });
+});

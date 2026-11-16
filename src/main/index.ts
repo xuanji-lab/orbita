@@ -113,6 +113,8 @@ import { TerminalService } from "./terminal/service.ts";
 import { registerTerminalIpc } from "./terminal/ipc.ts";
 import { registerReviewIpc } from "./review/ipc.ts";
 import { registerFocusIpc } from "./focus/ipc.ts";
+import { MainAgentStore } from "./agents/main-agent.ts";
+import { registerMainAgentIpc } from "./agents/ipc.ts";
 import { ChimeLog } from "./notify/chime-log.ts";
 import { registerNotifyIpc } from "./notify/ipc.ts";
 import { registerBrowserIpc } from "./browser/ipc.ts";
@@ -435,6 +437,9 @@ void app.whenReady().then(async () => {
   // 通道账本（子会话 2026-09-23）先于 SessionStore 建：SessionStore 的级联删要用它
   const channels = new ChannelStore(join(configDir, "channels"));
   const sessions = new SessionStore(join(configDir, "sessions"), join(configDir, "workbenches"), channels);
+  // 常驻主智能体的档案（agents:main）：每个工作区一份「主智能体是哪条会话」，第一次点进工作区时惰性建
+  const mainAgents = new MainAgentStore(join(configDir, "agents", "main"));
+  registerMainAgentIpc(mainAgents, sessions);
   // 任务账本（侧栏用量格 usage:week / usage:event 与价格 · 能力图共用）：assistant 记录落盘的同一条
   // 路径上按「会话 × 型号 × 档的连续一段」增量记账，意图召回另记按天的一份；升级后第一次启动回填
   // 一次，注册即异步装载 + 回填，不阻塞启动。取代原来的日账本 usage-daily.json（不再读写，留在盘上无害）
@@ -1081,6 +1086,10 @@ void app.whenReady().then(async () => {
     async (id) => {
       onSessionRemoved(id);
       const meta = await sessions.readMeta(id);
+      // 删的是主智能体：档案一起删，下次点进工作区预留新 id（不复用刚清掉的旧 id）
+      if (meta?.role === "main" && meta.workspaceId !== null) {
+        await mainAgents.forget(meta.workspaceId, id).catch((error: unknown) => console.error("[agents] 删主智能体档案失败", error));
+      }
       try {
         if (meta?.parentId !== undefined) {
           if (meta.durable !== undefined) await agentHost.forgetKernelSession(id, meta.parentId);
@@ -1272,6 +1281,7 @@ void app.whenReady().then(async () => {
     settings,
     intentIngest,
     memoryTurns,
+    mainAgents,
   );
   // 子会话：派出 / 发信 / 代父发言 / 终止的依赖注入（channel/requests.ts 的纯核 + 这里的胶水）。
   // submitTurn 拿 agentIpc 刚返回的那个函数——子首轮与父→子空闲投递不重新拼一遍

@@ -66,6 +66,12 @@ describe("turnFields", () => {
     assert.equal("workspaceName" in fields, false);
   });
 
+  test("mainAgent：主智能体带 true，普通会话命令里没有这个键（形状不变）", () => {
+    assert.equal(turnFields(input, provider, "/pi", "/a", [], [], { ...environment, mainAgent: true }).mainAgent, true);
+    assert.equal("mainAgent" in turnFields(input, provider, "/pi", "/a", [], [], { ...environment, mainAgent: false }), false);
+    assert.equal("mainAgent" in turnFields(input, provider, "/pi", "/a", [], [], environment), false);
+  });
+
   test("pluginTools 原样进命令：开 = true，关 = false", () => {
     assert.equal(turnFields(input, provider, "/pi", "/a", [], [], { ...environment, pluginTools: true }).pluginTools, true);
     assert.equal(turnFields(input, provider, "/pi", "/a", [], [], environment).pluginTools, false);

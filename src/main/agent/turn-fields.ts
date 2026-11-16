@@ -35,19 +35,23 @@ export function turnFields(
     pdfCitations: boolean;
     /** 插件工具的注册开关：true 才注册 install_plugin / preview_plugin / list_plugins */
     pluginTools: boolean;
+    /** 这条会话是工作区的常驻主智能体：runtime 加一段身份与派活规矩（缺席 / false 时命令里不带这个键） */
+    mainAgent?: boolean;
     /** 所属工作区名字（store-tools 的 scope 指引讲归属用）；语义同命令字段——缺席 = 翻不出名字 */
     workspaceName?: string;
   },
-): Pick<Extract<AgentCommand, { type: "submit" }>, "sessionId" | "cwd" | "workspaceId" | "workspaceName" | "provider" | "modelId" | "thinkingLevel" | "piSessionDir" | "attachmentsDir" | "piSessionFile" | "protectedPaths" | "protectedFiles" | "skillsDirs" | "directories" | "mcpServers" | "compaction" | "gitAttribution" | "attributionLanguage" | "pdfCitations" | "pluginTools"> {
+): Pick<Extract<AgentCommand, { type: "submit" }>, "sessionId" | "cwd" | "workspaceId" | "workspaceName" | "provider" | "modelId" | "thinkingLevel" | "piSessionDir" | "attachmentsDir" | "piSessionFile" | "protectedPaths" | "protectedFiles" | "skillsDirs" | "directories" | "mcpServers" | "compaction" | "gitAttribution" | "attributionLanguage" | "pdfCitations" | "pluginTools" | "mainAgent"> {
   // workspaceName 缺席时彻底不进命令对象（可送化与深比较都要稳定形状）：
   // 有工作区但翻不出名字是「未知」，不是「无工作区」——两态靠 workspaceId 区分
-  const { workspaceName, ...rest } = environment;
+  const { workspaceName, mainAgent, ...rest } = environment;
   return {
     sessionId: input.sessionId,
     cwd: input.cwd,
     // MCP 连接按工作区分片（同一工作区共用一份，不同工作区各一份实例）
     workspaceId: input.workspaceId,
     ...(workspaceName === undefined ? {} : { workspaceName }),
+    // 普通会话不带这个键：命令形状与改动前一字不差（深比较与可送化都稳）
+    ...(mainAgent === true ? { mainAgent: true } : {}),
     provider,
     modelId: input.modelId,
     thinkingLevel: input.thinkingLevel,

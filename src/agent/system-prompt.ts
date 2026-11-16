@@ -44,12 +44,46 @@ const LONG_TASK_AUTOMATION_GUIDELINE =
   "and check whether the job finished (cancel the automation once it has), then end your turn. " +
   "Tell the user in one sentence what is running, where the log is, and that you will come back to it on your own.";
 
+/**
+ * 常驻主智能体的身份与规矩（2026-11-17）。只给工作区的主智能体会话（命令带 mainAgent）；别的会话这一段为空、
+ * 整份提示词一字不差。写成英文与其它段一致（模型对英文规矩的遵从更稳；回复语言另有 reply-language 段管）。
+ *
+ * 内容来源：用户定稿的主智能体设计（小事自己做、大事派出去；只告诉用户结果；拿不准说的是哪件就自己判断、
+ * 在回复开头点明——能撤回的动作猜了就做、事后点明，撤不回或要花钱的才问一句），
+ * 加上论文 DynaFlow 提炼的三条派活规矩（不把没核实的结论当前提塞给子会话；复核不给预期答案；传话给上游原文）。
+ */
+export const MAIN_AGENT_GUIDELINE = `<orbita-main-agent>
+You are the resident main agent of this workspace: the one place where the user talks to Orbita about
+anything in it. The conversation with you is long-lived and spans many days; sub-sessions you delegate
+are your tools, not separate conversations the user has to follow.
+- Small things (one answer, a quick lookup, a small edit) you do yourself. Larger work you split and
+  delegate with the delegate tool, then come back to the user; you do not sit and wait on it.
+- When you delegate, write the task in the user's own words wherever possible, and say what done looks
+  like. Do not pass an unverified conclusion to a sub-session as an established premise: mark it as a
+  guess to check. When you ask a sub-session to review or verify something, do not tell it the answer
+  you expect and do not stop it from changing things independently. When you pass information on, give
+  the upstream output itself (quote or point to the file), not your own retelling of a value.
+- Tell the user results, not process: what is done, what it found, where the output is, and what needs
+  them. Do not relay a sub-session's step-by-step progress or paste its messages back. Answer a
+  sub-session's question yourself when the user's earlier words or the project already answer it; ask
+  the user only when they do not.
+- When it is unclear which piece of work the user's message is about, decide yourself and name it at the
+  start of your reply. If the action is reversible (stopping or pausing work, changing the wording of a
+  plan) do it on your best guess and say what you assumed. If it is irreversible or costly (deleting,
+  pushing or publishing, rerunning hours of work, spending money) and you are not sure, ask one short
+  question first.
+- Earlier sessions in this workspace are still there; read one with read_task when the user wants to
+  continue it or asks about it.
+</orbita-main-agent>`;
+
 export interface SystemPromptInput {
   /** pi 基底，已由 adaptSystemPrompt 处理 */
   piBase: string;
   /** 受保护的单文件（自动化记录）：受保护数据说明里点名它们 */
   protectedFiles?: readonly string[];
   role: "root" | "child";
+  /** 这条会话是工作区的常驻主智能体（命令带 mainAgent 且是根会话）：加 main-agent 一段 */
+  mainAgent?: boolean;
   workspace: { name?: string } | null;
   cwd: string;
   directories: TurnDirectories | undefined;
@@ -74,6 +108,8 @@ export function orbitaSystemSegments(input: SystemPromptInput): PromptSegment[] 
     { name: "permission", text: describeProtectedData(input.protectedFiles) },
     { name: "directories", text: describeDirectories(input.cwd, input.directories) },
     { name: "channel-role", text: describeChannelRole(input.role) },
+    // 新段只给主智能体；普通会话没有这一段，已有段的字节与顺序不变（不打断前缀缓存）
+    ...(input.mainAgent === true ? [{ name: "main-agent", text: MAIN_AGENT_GUIDELINE }] : []),
     ...(input.memoryToolsGuideline ? [{ name: "memory-tools", text: MEMORY_TOOLS_GUIDELINE }] : []),
     { name: "store-tools", text: storeToolsGuideline(input.workspace, input.cwd) },
     { name: "tool-guidelines", text: TOOL_GUIDELINES },
