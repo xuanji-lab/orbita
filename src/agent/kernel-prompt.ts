@@ -28,6 +28,8 @@ export interface PiResources {
   basePrompt: (selectedTools: readonly string[], definitions: readonly ToolDefinition[]) => string;
   agentsFiles: { path: string; content: string }[];
   skills: { name: string; description: string }[];
+  /** 这一轮挑进来的技能的 slug（与 skills 同序）：能力集点名了却没装的，靠它与 skills 的名字一起认出来 */
+  skillSlugs: string[];
   agentDir: string;
   /** 内建工具的装配选项：从 ~/.pi/agent/settings.json 读的三项 */
   builtinOptions: BuiltinToolOptions;
@@ -408,6 +410,18 @@ export function buildBasePrompt(input: BasePromptInput): string {
   return [PREAMBLE, ...sections.map(([name, body]) => `<${name}>\n${body}\n</${name}>`)].join("\n\n");
 }
 
+/** 技能的 slug：SKILL.md 所在文件夹的名字（中心存储与插件都按它放） */
+export function skillSlug(skill: Pick<SkillEntry, "filePath">): string {
+  return basename(dirname(skill.filePath));
+}
+
+/** 按能力集点名的技能挑（slug 或 frontmatter 名都认）；缺席 = 原样全部 */
+export function pickSkills(skills: SkillEntry[], names: readonly string[] | undefined): SkillEntry[] {
+  if (names === undefined) return skills;
+  const wanted = new Set(names);
+  return skills.filter((skill) => wanted.has(skillSlug(skill)) || wanted.has(skill.name));
+}
+
 /**
  * 每轮现读（用户中途改了 AGENTS.md、链了新技能，下一轮就生效）。
  * `resolveShellPath` 是进程级缓存的 bash 探测（shell-path.ts）。
@@ -416,15 +430,18 @@ export async function loadPiResources(input: {
   cwd: string;
   skillsDirs: readonly string[];
   resolveShellPath: () => string | undefined;
+  /** 这件活的能力集点名了哪些技能（slug 或名字）；缺席 = 全部技能（能力集之前的行为） */
+  skillNames?: readonly string[];
 }): Promise<PiResources> {
   const agentDir = piAgentDir();
   const settings = readPiSettings(agentDir);
   const contextFiles = loadProjectContextFiles(input.cwd);
-  const skills = loadSkills(input.skillsDirs);
+  const skills = pickSkills(loadSkills(input.skillsDirs), input.skillNames);
   return {
     basePrompt: (selectedTools, definitions) => buildBasePrompt({ cwd: input.cwd, selectedTools, definitions, contextFiles, skills }),
     agentsFiles: contextFiles.map((file) => ({ path: file.path, content: file.content })),
     skills: skills.map((skill) => ({ name: skill.name, description: skill.description })),
+    skillSlugs: skills.map((skill) => skillSlug(skill)),
     agentDir,
     builtinOptions: {
       autoResizeImages: settings.autoResizeImages,

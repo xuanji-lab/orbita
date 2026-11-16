@@ -2,6 +2,7 @@
  * 主进程入口。职责边界（AGENTS.md「架构边界」）：只负责窗口、IPC 与持久化。
  * agent runtime 将跑在独立 utility 进程，不在这里 —— 见 docs/single-agent-guideline.md §二。
  */
+import { ChatHandback } from "./channel/chat-handback.ts";
 import { preferIPv4 } from "../shared/dial-v4.ts";
 import { CATALOG_CACHE_ENV } from "../shared/agent-ipc.ts";
 import { catalogIdsOfProviders } from "../shared/known-providers.ts";
@@ -569,6 +570,8 @@ void app.whenReady().then(async () => {
   void reapKernelChildren(kernelChildTag(durableDir)).then((count) => {
     if (count > 0) console.error(`[kernel] 启动时清掉上一次留下的 ${count} 个 shell 子进程`);
   });
+  // 纯聊天的活交回结果（见 deps 之后的赋值）
+  let chatHandback: ChatHandback | undefined;
   const agentHost = new AgentHost(resolveRuntimePath(__dirname), agentProcessEnv, (event) => {
     // MCP 的连接状态由 agent 进程报上来（连接是它建的），主进程缓存最后一次快照给管理面看
     if (event.type === "mcp") mcpIpc.onAgentSnapshot(event.servers);
@@ -696,6 +699,8 @@ void app.whenReady().then(async () => {
     // 自动化的运行收尾 / this_session 的等待送达都靠这些事件（phase idle、最终回答、stats、failed）。
     // 只旁听，不 return：事件照常往下 record + broadcast
     automationScheduler.onAgentEvent(event);
+    // 纯聊天的活（能力集 ["none"]）没有工具交回结果：这一轮的最终回答由主进程当「完成」投回父（channel/chat-handback.ts）
+    void chatHandback?.onAgentEvent(event);
     // 这一轮停了（完成、被用户停掉、出错）：还挂着的交接按取消结掉——等它的那次工具调用已经不在了
     if (event.type === "phase" && event.phase === "idle") browserSandbox.cancelSessionHandoff(event.sessionId);
     if (event.type === "failed" && event.sessionId === null) phases.clear();
@@ -1323,6 +1328,11 @@ void app.whenReady().then(async () => {
     phases,
     broadcast: broadcastChannelEvent,
   };
+  // deps 之后才能建（它要 applyChannelSend 的 deps）；onAgentEvent 只在事件到达时调，那时已定义（同 deps 的 TDZ 说明）
+  chatHandback = new ChatHandback({
+    readMeta: (sessionId) => sessions.readMeta(sessionId),
+    send: (request) => applyChannelSend(deps, request),
+  });
   registerChannelIpc(deps);
   // 新内核：上次退出（或被杀）时还在跑的子会话照常接着跑（后台任务；树根不续，界面给「继续」——
   // 工作区的主智能体例外：正常退出停下的那一轮也自己接着做，见 resumePolicy）。

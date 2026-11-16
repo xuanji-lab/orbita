@@ -3,7 +3,7 @@ import { RequestBroker } from "./request-broker.ts";
 import type { ChannelDelivery } from "../shared/channel.ts";
 import type { ChannelSendOutcome, DelegateCard, DelegateOutcome, ModelCostsOutcome, WorkCardsOutcome } from "../shared/agent-ipc.ts";
 import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from "../shared/thinking.ts";
-import { CAPABILITY_MODULES, isChatOnly, MODULE_SUMMARY } from "../shared/capabilities.ts";
+import { CAPABILITY_MODULES, isCapabilityModule, isChatOnly, MODULE_SUMMARY } from "../shared/capabilities.ts";
 
 /**
  * 子会话的三个通道工具（子会话 2026-09-23）：delegate / reply_subsession /
@@ -418,7 +418,31 @@ sub-sessions do not collide. In report_to_parent, especially done, give the abso
 files. Requested code and repository deliverables still belong in cwd and are unaffected by this rule.
 </orbita-sub-sessions>`;
 
-/** 按角色选一段通道使用说明；root/child 各自固定，不随 related 内容变化。 */
-export function describeChannelRole(role: "root" | "child"): string {
-  return role === "root" ? ROOT_CHANNEL_GUIDELINES : CHILD_CHANNEL_GUIDELINES;
+/**
+ * 按角色选一段通道使用说明；root/child 各自固定，不随 related 内容变化。
+ * 子会话定了能力集（shared/capabilities.ts）时在段末多讲一句它带了什么、缺了要找谁——能力集派出时定、之后不变，
+ * 所以这一段在子会话生命期内仍然固定（前缀稳定）。缺席（全带）时一字不差。
+ */
+export function describeChannelRole(role: "root" | "child", capabilities?: { list: readonly string[]; missing: readonly string[] }): string {
+  if (role === "root") return ROOT_CHANNEL_GUIDELINES;
+  if (capabilities === undefined) return CHILD_CHANNEL_GUIDELINES;
+  const given = capabilities.list.map((entry) => (isCapabilityModule(entry) ? `${entry} (${MODULE_SUMMARY[entry]})` : entry));
+  const lines = [
+    "This piece of work was handed out with a limited set of capabilities. Besides read, write, edit, bash, update_plan, " +
+      `update_goal and report_to_parent, you have: ${given.length > 0 ? given.join("; ") : "nothing else"}.`,
+    ...(capabilities.missing.length > 0 ? [`Asked for but not available here: ${capabilities.missing.join(", ")}.`] : []),
+    'If the work needs something you do not have, ask with report_to_parent (kind "question") and say what for, instead of working around it.',
+  ];
+  return CHILD_CHANNEL_GUIDELINES.replace(/\n<\/orbita-sub-sessions>$/, `\n${lines.join("\n")}\n</orbita-sub-sessions>`);
 }
+
+/**
+ * 纯聊天的子会话（能力集 ["none"]）整份系统提示只有这一段身份与回复语言段：没有工具，工具、目录、权限、技能那些段都是噪音。
+ * 它没有 report_to_parent：这一轮的最终回答由主进程当「完成」交回父（main/channel/chat-handback.ts）。
+ */
+export const CHAT_ONLY_GUIDELINE = `You are a sub-session inside Orbita, a desktop agent on the user's own computer, handed a piece of work by
+another agent (the parent). This piece of work is chat only: you have no tools, so you cannot read or change files,
+run commands or browse. The task is in the first <channel from="parent" kind="task"> block; later
+<channel from="parent" kind="reply"> blocks are the parent's replies. Answer in your reply. Your final answer is handed
+back to the parent automatically as your report, so make it complete and self-contained. If the work cannot be done
+without tools, say so plainly in your answer.`;

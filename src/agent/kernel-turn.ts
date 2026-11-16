@@ -49,7 +49,9 @@ import { forModel, preparePromptImages } from "./prompt-images.ts";
 import { adaptSystemPrompt } from "./prompt-narration.ts";
 import type { RequestBroker } from "./request-broker.ts";
 import { orbitaSystemSegments } from "./system-prompt.ts";
-import { createTurnTools, isChildSession, turnToolFlags } from "./turn-tools.ts";
+import { isChildSession, selectTurnTools, turnToolFlags, withheldToolReceipt } from "./turn-tools.ts";
+import { isChatOnly, namedInstalled } from "../shared/capabilities.ts";
+import { parseQualifiedToolName } from "../shared/mcp.ts";
 
 /** 每条会话的扩展名：会话 id 已过白名单（字母数字 _ -） */
 export function sessionExtensionName(sessionId: string): string {
@@ -193,14 +195,19 @@ export function interruptedResult(kind: "crash" | "quit", result: ToolExecutionR
   return piError(output === "" ? note : `${note}\n\nOutput before it was cut off:\n${output}`);
 }
 
-export function unwrapHarnessError(call: { name: string }, result: ToolExecutionResult): ToolExecutionResult | undefined {
+export function unwrapHarnessError(
+  call: { name: string },
+  result: ToolExecutionResult,
+  /** 这件活的能力集收掉了这个工具时的回执（缺模块回执，turn-tools.ts 的 withheldToolReceipt）；没收掉 = undefined */
+  withheldReceipt: (name: string) => string | undefined = () => undefined,
+): ToolExecutionResult | undefined {
   for (const diagnostic of result.diagnostics ?? []) {
     if (diagnostic.code === "blocked") {
       const reason = diagnostic.message.startsWith(BLOCKED_PREFIX) ? diagnostic.message.slice(BLOCKED_PREFIX.length) : diagnostic.message;
       return piError(reason);
     }
     if (diagnostic.code === "invalid_arguments") return piError(diagnostic.message);
-    if (diagnostic.code === "tool_unavailable") return piError(`Tool ${call.name} not found`);
+    if (diagnostic.code === "tool_unavailable") return piError(withheldReceipt(call.name) ?? `Tool ${call.name} not found`);
     // 被停止：durable 在工具自己报错之前就结了这次调用，工具那句话（bash 的 "Command aborted"）拿不到；
     // 用 pi-agent-core 对被停调用的通用说法 "Operation aborted"（报告里列为已知差别：措辞不同，形状相同）
     if (diagnostic.code === "aborted") return piError("Operation aborted");
@@ -382,15 +389,26 @@ export async function assembleTurn(
   };
   const planGate = new PlanRoundGate(createPlanGate(planOptions), planOptions.state);
   const planNudge = new PlanNudge();
-  // MCP：与旧内核同一个 hub 语义（按工作区分片、ensure 幂等、连不上不拦开轮）
+  // 这件活的能力集（shared/capabilities.ts）：缺席 = 全带，下面每一处都与能力集之前一字不差
+  const capabilities = command.capabilities;
+  const chatOnly = isChatOnly(capabilities);
+  // MCP：与旧内核同一个 hub 语义（按工作区分片、ensure 幂等、连不上不拦开轮）。
+  // 能力集没点名任何 MCP 服务就不碰 hub：ensure 按送来的清单增删同工作区的实例，送一份空的会拆掉别的会话正在用的连接
+  const wantsMcp = capabilities === undefined || namedInstalled(capabilities, "mcp:").length > 0;
   const mcpScope = command.workspaceId ?? "";
-  await runtime.mcpHub.ensure(mcpScope, command.mcpServers, command.workspaceId === null ? "" : command.cwd);
-  runtime.send({ type: "mcp", servers: runtime.mcpHub.describe() });
-  const mcpTools = runtime.mcpHub.toolsFor(mcpScope);
+  if (wantsMcp) {
+    await runtime.mcpHub.ensure(mcpScope, command.mcpServers, command.workspaceId === null ? "" : command.cwd);
+    runtime.send({ type: "mcp", servers: runtime.mcpHub.describe() });
+  }
+  const mcpTools = wantsMcp ? runtime.mcpHub.toolsFor(mcpScope) : [];
 
-  const resources = await loadPiResources({ cwd: command.cwd, skillsDirs: command.skillsDirs, resolveShellPath: runtime.resolveShellPath });
-  const definitions = [
-    ...createTurnTools({
+  const resources = await loadPiResources({
+    cwd: command.cwd,
+    skillsDirs: command.skillsDirs,
+    resolveShellPath: runtime.resolveShellPath,
+    ...(capabilities === undefined ? {} : { skillNames: namedInstalled(capabilities, "skill:") }),
+  });
+  const selected = selectTurnTools({
       command,
       flags,
       broker: runtime.broker,
@@ -399,8 +417,11 @@ export async function assembleTurn(
       branch: () => branch.entries,
       attachedImages: () => wire.attachedImages(),
       memoryTurn: () => memoryTurn,
-    }),
-  ];
+  });
+  const definitions = selected.tools;
+  const withheld = new Map(selected.withheld);
+  // 纯聊天连内建四件也不带
+  if (chatOnly) for (const name of ["read", "bash", "edit", "write"]) withheld.set(name, "any tools (it is chat only)");
   const scope: DurableToolScope = {
     cwd: command.cwd,
     autoResizeImages: resources.builtinOptions.autoResizeImages,
@@ -412,7 +433,7 @@ export async function assembleTurn(
   };
   // 内建四件是新内核自带的实现（外面包一层 Orbita 的环境、路径折算与 PDF 指路）；其余是 Orbita 自己的工具，薄翻译一层
   const registrations = [
-    ...builtinTools(command.cwd, { ...resources.builtinOptions, ...(runtime.tagCommand === undefined ? {} : { tagCommand: runtime.tagCommand }) }, scope),
+    ...(chatOnly ? [] : builtinTools(command.cwd, { ...resources.builtinOptions, ...(runtime.tagCommand === undefined ? {} : { tagCommand: runtime.tagCommand }) }, scope)),
     ...definitions.map((definition) => toDurableTool(definition, scope)),
   ];
   const byName = new Map(registrations.map((tool) => [tool.name, tool]));
@@ -445,6 +466,7 @@ export async function assembleTurn(
     intentGuideline: command.intent !== undefined,
     memoryToolsGuideline: flags.memoryTools,
     longTaskAutomationGuideline: flags.automationTools,
+    ...(capabilities === undefined ? {} : { capabilities: { list: capabilities, missing: missingInstalled(capabilities, resources, mcpTools) } }),
   });
   // 空段（Git 标识关了）不渲染：与 joinSystemPrompt 滤掉空串同效
   const sections = segments.map((segment) => section(segment.name, () => (segment.text === "" ? undefined : segment.text), { tag: false }));
@@ -483,7 +505,12 @@ export async function assembleTurn(
           }
         },
         afterTool: (call, result) => {
-          const replaced = (runtime.quitting?.() === true ? interruptedResult("quit", result) : undefined) ?? unwrapHarnessError(call, result);
+          const replaced =
+            (runtime.quitting?.() === true ? interruptedResult("quit", result) : undefined) ??
+            unwrapHarnessError(call, result, (name) => {
+              const what = withheld.get(name);
+              return what === undefined ? undefined : withheldToolReceipt(name, what, chatOnly);
+            });
           const final = replaced ?? result;
           // 计划提醒（plan-nudge.ts）：连续若干次工具调用没动计划，附在这次结果末尾（随结果落库，请求前缀不变）
           const nudge = planNudge.afterTool(call.name, () => previousPlanFrom(branch.entries, ""), final.output !== undefined);
@@ -508,6 +535,23 @@ export async function assembleTurn(
     agentDir: resources.agentDir,
   });
   return { extension, toolNames, activeNames, systemPrompt: segments.map((segment) => segment.text).filter((text) => text !== "").join("\n\n"), inventory };
+}
+
+/**
+ * 能力集点名了、这一轮却没有的技能与 MCP 服务（没装、名字写错、服务没连上）：写进子会话的通道说明，
+ * 让它知道不是它看漏了，要用就跟派活的人说。
+ */
+function missingInstalled(
+  capabilities: readonly string[],
+  resources: { skills: readonly { name: string }[]; skillSlugs: readonly string[] },
+  mcpTools: readonly { name: string }[],
+): string[] {
+  const skillKeys = new Set([...resources.skillSlugs, ...resources.skills.map((skill) => skill.name)]);
+  const servers = new Set(mcpTools.flatMap((tool) => parseQualifiedToolName(tool.name)?.server ?? []));
+  return [
+    ...namedInstalled(capabilities, "skill:").filter((name) => !skillKeys.has(name)).map((name) => `skill:${name}`),
+    ...namedInstalled(capabilities, "mcp:").filter((name) => !servers.has(name)).map((name) => `mcp:${name}`),
+  ];
 }
 
 /**

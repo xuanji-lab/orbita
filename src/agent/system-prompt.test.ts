@@ -170,3 +170,25 @@ describe("orbitaSystemSegments —— 常驻主智能体一段", () => {
     }
   });
 });
+
+describe("orbitaSystemSegments —— 能力集", () => {
+  test("没有能力集：段名单与全文与改动前一致（store-tools、quote 都在）", () => {
+    const segments = orbitaSystemSegments(input({ role: "child" }));
+    assert.deepEqual(segments.map((segment) => segment.name), [
+      "pi-base", "permission", "directories", "channel-role", "store-tools", "tool-guidelines", "expected-seconds", "quote", "git-attribution", "reply-language",
+    ]);
+    assert.doesNotMatch(joinSystemPrompt(segments), /limited set of capabilities/);
+  });
+  test("只带基础：去掉 store-tools 与 quote；带了 pdf-docx 就讲 quote", () => {
+    const base = orbitaSystemSegments(input({ role: "child", capabilities: { list: [], missing: [] } })).map((segment) => segment.name);
+    assert.ok(!base.includes("store-tools") && !base.includes("quote"));
+    const pdf = orbitaSystemSegments(input({ role: "child", capabilities: { list: ["pdf-docx"], missing: [] } })).map((segment) => segment.name);
+    assert.ok(pdf.includes("quote") && !pdf.includes("store-tools"));
+    const store = orbitaSystemSegments(input({ role: "child", capabilities: { list: ["store"], missing: [] } })).map((segment) => segment.name);
+    assert.ok(store.includes("store-tools"));
+  });
+  test("纯聊天：只有身份与回复语言两段", () => {
+    const chat = orbitaSystemSegments(input({ role: "child", capabilities: { list: ["none"], missing: [] } }));
+    assert.deepEqual(chat.map((segment) => segment.name), ["chat-only", "reply-language"]);
+  });
+});

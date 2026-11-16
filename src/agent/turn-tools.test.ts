@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AgentCommand } from "../shared/agent-ipc.ts";
 import { RequestBroker } from "./request-broker.ts";
-import { createTurnTools, turnToolFlags, type TurnInput } from "./turn-tools.ts";
+import { createTurnTools, selectTurnTools, turnToolFlags, withheldToolReceipt, type TurnInput } from "./turn-tools.ts";
 
 type Submit = Extract<AgentCommand, { type: "submit" }>;
 
@@ -99,5 +99,57 @@ describe("turn-tools：工具名全序（黄金名单）", () => {
       (name) => !/^(install_plugin|preview_plugin|list_plugins|show_plugin_board|delegate|reply_subsession|model_costs|memory_|automation_)/.test(name),
     );
     assert.deepEqual(names(submit({ sessionMemory: true, automationTools: true, pluginTools: true, directories: CHILD })), [...childOrder, "report_to_parent"]);
+  });
+});
+
+function selection(command: TurnInput, mcpTools: { name: string }[] = []) {
+  return selectTurnTools({
+    command,
+    flags: turnToolFlags(command),
+    broker: new RequestBroker(() => undefined),
+    mcpTools: mcpTools.map((tool) => ({ name: tool.name, label: tool.name, description: "d", parameters: { type: "object", properties: {} } as never, execute: async () => ({ content: [], details: {} }) })),
+    planOptions: { branch: () => [], state: { stopping: false } },
+    branch: () => [],
+    attachedImages: () => [],
+    memoryTurn: () => 1,
+  });
+}
+
+describe("turn-tools：按能力集挑工具", () => {
+  const MCP = [{ name: "mcp__zotero__search" }, { name: "mcp__qgis__render" }];
+
+  it("缺席 = 全带：与能力集之前同一份清单、同一顺序，没有被收掉的", () => {
+    const child = submit({ directories: CHILD });
+    const full = selection(child, MCP);
+    assert.deepEqual(full.tools.map((tool) => tool.name), ["mcp__zotero__search", "mcp__qgis__render", ...names(child)]);
+    assert.equal(full.withheld.size, 0);
+  });
+
+  it("[] = 只带基础：计划、目标、report_to_parent；浏览器 / 幻灯片 / 终端 / MCP 都收掉并记下属于什么", () => {
+    const base = selection(submit({ directories: CHILD, capabilities: [] }), MCP);
+    assert.deepEqual(base.tools.map((tool) => tool.name), ["update_plan", "update_goal", "report_to_parent"]);
+    assert.match(base.withheld.get("browser_navigate") ?? "", /^the browser module: /);
+    assert.match(base.withheld.get("slides_write") ?? "", /^the docs-slides module/);
+    assert.equal(base.withheld.get("mcp__qgis__render"), 'the MCP server "qgis"');
+  });
+
+  it("只读调研：带 browser + pdf-docx + 点名一台 MCP，其余收掉；工具顺序仍是全带时的相对顺序", () => {
+    const command = submit({ directories: CHILD, capabilities: ["pdf-docx", "browser", "mcp:zotero"] });
+    const picked = selection(command, MCP).tools.map((tool) => tool.name);
+    const full = selection(submit({ directories: CHILD }), MCP).tools.map((tool) => tool.name);
+    assert.ok(picked.includes("read_pdf") && picked.includes("browser_navigate") && picked.includes("mcp__zotero__search"));
+    assert.ok(!picked.includes("mcp__qgis__render") && !picked.includes("terminal_open") && !picked.includes("slides_write"));
+    assert.deepEqual(picked, full.filter((name) => picked.includes(name)));
+  });
+
+  it('["none"] = 纯聊天：一个工具都不带（连 report_to_parent 也没有，结果由主进程交回）', () => {
+    const chat = selection(submit({ directories: CHILD, capabilities: ["none"] }), MCP);
+    assert.deepEqual(chat.tools, []);
+    assert.equal(chat.withheld.get("report_to_parent"), "any tools (it is chat only)");
+  });
+
+  it("缺模块回执：说清这件活没带什么、要用找谁；纯聊天的回执让它在回答里说", () => {
+    assert.match(withheldToolReceipt("browser_navigate", "the browser module: x", false), /handed out without the browser module.*report_to_parent \(kind "question"\)/);
+    assert.match(withheldToolReceipt("read", "any tools (it is chat only)", true), /chat only.*say so in your answer/);
   });
 });

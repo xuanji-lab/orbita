@@ -12,7 +12,8 @@ import type { Language } from "../shared/settings.ts";
 import { INTENT_CONTEXT_GUIDELINE } from "../shared/intent-recall.ts";
 import { describeProtectedData } from "./permission.ts";
 import { describeDirectories } from "./directories-prompt.ts";
-import { describeChannelRole } from "./channel-tools.ts";
+import { CHAT_ONLY_GUIDELINE, describeChannelRole } from "./channel-tools.ts";
+import { hasModule, isChatOnly } from "../shared/capabilities.ts";
 import { storeToolsGuideline } from "./store-tools.ts";
 import { gitAttributionGuideline } from "./git-attribution.ts";
 import { REPLY_LANGUAGE_GUIDELINE } from "./prompt-narration.ts";
@@ -98,6 +99,11 @@ export interface SystemPromptInput {
   memoryToolsGuideline: boolean;
   /** 本会话注册了 automation_create（根会话且自动化开着）：讲长任务放后台、建自动化回来看的指引 */
   longTaskAutomationGuideline: boolean;
+  /**
+   * 这件活的能力集（shared/capabilities.ts，规范化后的）与其中点名了却没有的技能 / MCP。
+   * 缺席 = 全带：段与以前逐字节相同。纯聊天只留身份与回复语言两段；别的按模块跳过对应段（store-tools、quote）。
+   */
+  capabilities?: { list: readonly string[]; missing: readonly string[] };
 }
 
 export interface PromptSegment {
@@ -107,20 +113,30 @@ export interface PromptSegment {
 
 /** 段序就是线上字节序：已有段不重排，避免无意义地打断整份前缀缓存。 */
 export function orbitaSystemSegments(input: SystemPromptInput): PromptSegment[] {
+  const capabilities = input.capabilities;
+  if (capabilities !== undefined && isChatOnly(capabilities.list)) {
+    return [
+      { name: "chat-only", text: CHAT_ONLY_GUIDELINE },
+      { name: "reply-language", text: REPLY_LANGUAGE_GUIDELINE },
+    ];
+  }
+  const list = capabilities?.list;
   return [
     { name: "pi-base", text: input.piBase },
     { name: "permission", text: describeProtectedData(input.protectedFiles) },
     { name: "directories", text: describeDirectories(input.cwd, input.directories) },
-    { name: "channel-role", text: describeChannelRole(input.role) },
+    { name: "channel-role", text: describeChannelRole(input.role, capabilities) },
     // 新段只给主智能体；普通会话没有这一段，已有段的字节与顺序不变（不打断前缀缓存）
     ...(input.mainAgent === true ? [{ name: "main-agent", text: MAIN_AGENT_GUIDELINE }] : []),
     ...(input.memoryToolsGuideline ? [{ name: "memory-tools", text: MEMORY_TOOLS_GUIDELINE }] : []),
-    { name: "store-tools", text: storeToolsGuideline(input.workspace, input.cwd) },
+    // 讲 create_skill / add_mcp_server 的：没带 store 模块就没有这两个工具，这段也不讲
+    ...(hasModule(list, "store") ? [{ name: "store-tools", text: storeToolsGuideline(input.workspace, input.cwd) }] : []),
     { name: "tool-guidelines", text: TOOL_GUIDELINES },
     { name: "expected-seconds", text: EXPECTED_SECONDS_GUIDELINE },
     ...(input.longTaskAutomationGuideline ? [{ name: "long-task-automation", text: LONG_TASK_AUTOMATION_GUIDELINE }] : []),
     ...(input.intentGuideline ? [{ name: "intent", text: INTENT_CONTEXT_GUIDELINE }] : []),
-    { name: "quote", text: QUOTE_GUIDELINE },
+    // 引用块讲的是文档面板里选中的段落与 PDF 原文：读文件的两个模块都没带就不讲
+    ...(hasModule(list, "pdf-docx") || hasModule(list, "docs-slides") ? [{ name: "quote", text: QUOTE_GUIDELINE }] : []),
     {
       name: "git-attribution",
       text: gitAttributionGuideline(input.gitAttribution, input.attributionLanguage ?? "en"),

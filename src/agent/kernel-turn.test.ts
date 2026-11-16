@@ -311,3 +311,76 @@ describe("strictToolContext：工具只能读新内核提供的上下文字段",
     assert.throws(() => loose.sessionManager.getBranch(), /没有提供 sessionManager\.getBranch（工具 bash 读了它）/);
   });
 });
+
+describe("kernel-turn：按能力集装配一轮", () => {
+  const child = (cwd: string, sessionId: string, capabilities?: string[]): KernelTurnCommand =>
+    command(cwd, {
+      sessionId,
+      directories: { workbench: join(cwd, "wb", sessionId), attached: [], related: [{ sessionId: "parent", relation: "parent", label: "p", path: join(cwd, "wb", "parent") }] },
+      ...(capabilities === undefined ? {} : { capabilities }),
+    });
+
+  async function assemble(cmd: KernelTurnCommand) {
+    const cwd = cmd.cwd;
+    const { harness, registry, conversation: target } = await conversation();
+    const wire = await TurnWire.open(target, join(cwd, ".att", cmd.sessionId), BACKGROUND_CONTEXT);
+    const turn = await assembleTurn(cmd, runtime([]), { registry, conversation: target, model: MODEL, providerSessionId: "p1" }, [], wire, 1);
+    await harness.close(BACKGROUND_CONTEXT);
+    const declarations = JSON.stringify((turn.extension.tools ?? []).map((tool) => toToolDeclaration(tool)));
+    return { turn, declarations };
+  }
+
+  it("同一能力集的两件活：发给模型的工具定义逐字节相同；系统提示只差各自工作台那一行（与全带时一样）", async () => {
+    const cwd = await tempDir();
+    const one = await assemble(child(cwd, "c1", ["pdf-docx", "browser"]));
+    const two = await assemble(child(cwd, "c2", ["pdf-docx", "browser"]));
+    assert.equal(one.declarations, two.declarations);
+    assert.equal(one.turn.systemPrompt.replaceAll("/c1", "/c2"), two.turn.systemPrompt);
+    // 同一件活再开一轮：整份前缀逐字节相同
+    const again = await assemble(child(cwd, "c1", ["pdf-docx", "browser"]));
+    assert.equal(again.declarations, one.declarations);
+    assert.equal(again.turn.systemPrompt, one.turn.systemPrompt);
+  });
+
+  it("全带 / 只带基础 / 纯聊天：工具与提示段依次变少", async () => {
+    const cwd = await tempDir();
+    const full = await assemble(child(cwd, "c1"));
+    const base = await assemble(child(cwd, "c1", []));
+    const chat = await assemble(child(cwd, "c1", ["none"]));
+    assert.deepEqual(base.turn.toolNames, ["bash", "edit", "read", "write", "update_plan", "update_goal", "report_to_parent"]);
+    assert.deepEqual(chat.turn.toolNames, []);
+    assert.ok(full.turn.toolNames.length > 40);
+    // 实测（这份夹具，无 MCP、无技能）：工具定义 35,582 → 8,452 → 2 字符
+    assert.ok(base.declarations.length * 4 < full.declarations.length);
+    // 只带基础：没有 store-tools、quote 两段；通道说明末尾讲带了什么、缺了找谁
+    assert.doesNotMatch(base.turn.systemPrompt, /<orbita-store-tools>|<orbita-quotes>/);
+    assert.match(full.turn.systemPrompt, /<orbita-store-tools>/);
+    assert.match(base.turn.systemPrompt, /you have: nothing else\.\nIf the work needs something you do not have, ask with report_to_parent/);
+    // 纯聊天：只有身份与回复语言两段
+    assert.match(chat.turn.systemPrompt, /^You are a sub-session inside Orbita[\s\S]*This piece of work is chat only/);
+    assert.match(chat.turn.systemPrompt, /\n\nReply language:/);
+    assert.doesNotMatch(chat.turn.systemPrompt, /<tools>|<orbita-permission>|<orbita-sub-sessions>/);
+    assert.ok(chat.turn.systemPrompt.length * 4 < full.turn.systemPrompt.length);
+  });
+
+  it("点名了却没有的技能与 MCP 服务写进通道说明", async () => {
+    const cwd = await tempDir();
+    const { turn } = await assemble(child(cwd, "c1", ["browser", "mcp:zotero", "skill:lit-intake"]));
+    assert.match(turn.systemPrompt, /Asked for but not available here: skill:lit-intake, mcp:zotero\./);
+  });
+
+  it("缺模块回执：只带基础的活调了浏览器，结果说清没带、找谁，而不是一句 not found", async () => {
+    const cwd = await tempDir();
+    faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("browser_navigate", { url: "https://example.com" }), { stopReason: "toolUse" }),
+      fauxAssistantMessage("ok"),
+    ]);
+    const { harness, registry, conversation: target } = await conversation();
+    await runTurn(child(cwd, "c1", []), runtime([]), { registry, conversation: target, model: MODEL, providerSessionId: "p1" }, COMPACTION);
+    const result = (await toolResults(target))[0] as ToolResultMessage;
+    assert.equal(result.isError, true);
+    assert.match(text(result), /^Tool browser_navigate is not available: this piece of work was handed out without the browser module/);
+    assert.match(text(result), /report_to_parent \(kind "question"\)/);
+    await harness.close(BACKGROUND_CONTEXT);
+  });
+});
