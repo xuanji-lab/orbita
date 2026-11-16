@@ -408,3 +408,27 @@ describe("paused（主智能体暂停的活，合并 feat/main-agent 后接上�
     deepStrictEqual(splitDoneRows([{ status: "paused" as const }]).open.length, 1);
   });
 });
+
+describe("结论自己已经说了完成 / 没做成：不再加前缀说两遍", () => {
+  const t = {
+    channel: {
+      latestQuestion: (text: string) => `问：${text}`,
+      latestProgress: (text: string) => `进度：${text}`,
+      latestDone: "完成",
+      latestFailed: "没做成",
+      latestDoneWith: (text: string) => `完成：${text}`,
+      latestFailedWith: (text: string) => `没做成：${text}`,
+      latestQuestionBare: "在问你",
+    },
+  } as unknown as Messages;
+  const one = (kind: "done" | "failed", text: string): ChannelMessage[] => [{ id: "x", from: "child", author: "model", kind, text, delivery: "followUp", createdAt: 1 }];
+  it("「验收完成：有条件通过」不再写成「完成：验收完成：……」；普通结论照旧加前缀", () => {
+    strictEqual(latestChannelLine(one("done", "验收完成：有条件通过，没有阻断项。"), "done", t), "验收完成：有条件通过，没有阻断项。");
+    strictEqual(latestChannelLine(one("done", "做完了：结论写在报告第一节。"), "done", t), "做完了：结论写在报告第一节。");
+    strictEqual(latestChannelLine(one("done", "三件都交了。"), "done", t), "完成：三件都交了。");
+  });
+  it("「没做成 / 失败」开头的不再加「没做成：」", () => {
+    strictEqual(latestChannelLine(one("failed", "没做成：论文库连不上。"), "failed", t), "没做成：论文库连不上。");
+    strictEqual(latestChannelLine(one("failed", "论文库连不上，换了两个镜像都超时。"), "failed", t), "没做成：论文库连不上，换了两个镜像都超时。");
+  });
+});

@@ -357,3 +357,51 @@ export function userTurnHasProcess(view: readonly TurnViewEntry[], index: number
   return continuesInTail;
 }
 
+
+/** 过程明细最左一列的动词：用户可见的文字不出现英文工具名（2026-11-17） */
+export interface ProcVerbWords {
+  command: string;
+  read: string;
+  write: string;
+  edit: string;
+  list: string;
+  find: string;
+  search: string;
+  readTask: string;
+  web: string;
+  browse: string;
+  skill: string;
+  other: string;
+  /** 外接工具：所属服务名 + 「工具」 */
+  mcp: (server: string) => string;
+}
+
+const VERB_OF_TOOL: Readonly<Record<string, keyof Omit<ProcVerbWords, "mcp">>> = {
+  bash: "command",
+  powershell: "command",
+  shell: "command",
+  read: "read",
+  write: "write",
+  edit: "edit",
+  ls: "list",
+  find: "find",
+  glob: "find",
+  grep: "search",
+  read_task: "readTask",
+  web_search: "web",
+  web_fetch: "browse",
+  skill: "skill",
+};
+
+/**
+ * 工具名 → 动词。statKey 是统计词汇（rollupToolKey：已知技能的 SKILL.md 读取是 skill）；内置命令与文档改写已有中文名的由调用方先用。
+ * 外接工具（mcp__服务__工具）写「服务 工具」；浏览器工具（browser_*）写「打开网页」；都对不上归「用工具」，raw 给原名放悬停里。
+ */
+export function processVerb(toolName: string, statKey: string, words: ProcVerbWords): { verb: string; raw: string | null } {
+  const mcp = /^mcp__([a-zA-Z0-9_-]+)__(.+)$/.exec(toolName);
+  if (mcp !== null) return { verb: words.mcp(mcp[1] ?? ""), raw: toolName };
+  const known = VERB_OF_TOOL[statKey] ?? VERB_OF_TOOL[toolName];
+  if (known !== undefined) return { verb: words[known], raw: null };
+  if (toolName.startsWith("browser_")) return { verb: words.browse, raw: null };
+  return { verb: words.other, raw: toolName };
+}

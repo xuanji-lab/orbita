@@ -18,6 +18,7 @@ import {
   type TurnViewEntry,
 } from "./tool-results.ts";
 import {
+  processVerb,
   processEvents,
   processSummary,
   processTally,
@@ -358,5 +359,20 @@ describe("外面插进来的一行（不在转录里的事，比如重开后「�
     const events = processEvents(p.steps, sources(rs, { extra: [{ kind: "note", key: "n1", verb: "断过", text: "从第 2 步接着做", time: 20 }] }));
     assert.deepEqual(events.map((e) => e.kind), ["tools", "note", "tools"]);
     assert.deepEqual(processSummary(zh, processTally(events)), []);
+  });
+});
+
+describe("processVerb：过程明细左列不出现英文工具名", () => {
+  const words = zh.chat.procVerb;
+  test("常用工具都有动词", () => {
+    assert.deepEqual(
+      ["bash", "read", "write", "edit", "grep", "read_task", "web_fetch", "browser_navigate"].map((name) => processVerb(name, name, words).verb),
+      ["跑命令", "读文件", "写文件", "改文件", "搜索", "读任务", "打开网页", "打开网页"],
+    );
+    assert.equal(processVerb("read", "skill", words).verb, "读技能");
+  });
+  test("外接工具写所属服务名 +「工具」，原名放悬停；对不上的归「用工具」", () => {
+    assert.deepEqual(processVerb("mcp__qgis__render_map", "mcp", words), { verb: "qgis 工具", raw: "mcp__qgis__render_map" });
+    assert.deepEqual(processVerb("some_new_tool", "some_new_tool", words), { verb: "用工具", raw: "some_new_tool" });
   });
 });

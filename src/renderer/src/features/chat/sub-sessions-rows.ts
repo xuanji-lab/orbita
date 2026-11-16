@@ -190,6 +190,11 @@ export function jobElapsed(
   return rest === 0 || hours >= 10 ? words.hours(hours) : words.hoursMinutes(hours, rest);
 }
 
+/** 结论自己已经以「完成 / 做完 / 验收完成……」开头：不再加「完成：」，免得说两遍（2026-11-17 截图：「完成：验收完成：……」） */
+const SAYS_DONE = /^(已?完成|做完|已经做完|验收完成|都做完|全部完成|搞定|done\b|finished\b|completed\b)/i;
+/** 同理，「没做成 / 失败 / 做不了……」开头的不再加「没做成：」 */
+const SAYS_FAILED = /^(没做成|没能|失败|做不了|做不成|卡住|failed\b|couldn['’]?t\b|could not\b)/i;
+
 /**
  * 通道里能说明「它怎么样了」的那一句（2026-11-17 改）：只取子会话自己说的话——问：…/ 进度：…/ 完成：…/ 没做成：…，
  * 取第一个非空行的第一句、先过 work-line 的 sanitizeWorkLine（不露命令、网址、路径、英文代号）。
@@ -214,9 +219,9 @@ export function latestChannelLine(
     case "progress":
       return said === "" ? "" : t.channel.latestProgress(said);
     case "done":
-      return said === "" ? t.channel.latestDone : t.channel.latestDoneWith(said);
+      return said === "" ? t.channel.latestDone : SAYS_DONE.test(said) ? said : t.channel.latestDoneWith(said);
     case "failed":
-      return said === "" ? t.channel.latestFailed : t.channel.latestFailedWith(said);
+      return said === "" ? t.channel.latestFailed : SAYS_FAILED.test(said) ? said : t.channel.latestFailedWith(said);
     default:
       return "";
   }
