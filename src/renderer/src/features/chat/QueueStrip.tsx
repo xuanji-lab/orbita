@@ -145,6 +145,8 @@ function labelOf(item: QueuedMessage, titles: ReadonlyMap<string, string>, t: Me
 /** 注脚：如实写清「这条什么时候会发出去」，机制约束不粉饰。 */
 function noteOf(item: QueuedMessage, phase: "idle" | "turn" | "compaction", t: Messages): string {
   if (item.kind === "compact") return t.queue.compactsWhenIdle;
+  // 已插进正在跑的这一轮（子会话消息开的轮里用户发话）：当前这一步做完就送到，不是等整轮结束
+  if (item.kind === "text" && item.steered === true && phase === "turn") return t.queue.steered;
   if (phase === "compaction") return t.queue.waitsCompaction;
   if (phase === "idle") return t.queue.haltedNote;
   return t.queue.waitsTurnEnd;

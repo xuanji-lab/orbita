@@ -2123,6 +2123,7 @@ export const zh: Messages = {
     queued: "排队的消息",
     haltedNote: "随你的下一条消息发出",
     waitsTurnEnd: "这一轮结束后发出",
+    steered: "已插进这一轮，当前这一步做完就送到",
     waitsCompaction: "压缩完成后发出",
     compactsWhenIdle: "空闲时压缩（排在前面的先发）",
     runNow: "立即发送——会打断这一轮",

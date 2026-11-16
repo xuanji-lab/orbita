@@ -2300,6 +2300,7 @@ export const en = {
     queued: "Queued messages",
     haltedNote: "Sends with your next message",
     waitsTurnEnd: "Sends after this turn",
+    steered: "Slipped into this turn — delivered once the current step finishes",
     waitsCompaction: "Sends when compaction finishes",
     compactsWhenIdle: "Compacts when idle (queued items go first)",
     runNow: "Send now — interrupts this turn",
