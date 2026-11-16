@@ -166,6 +166,7 @@ import {
   type ToolGroupUnit,
   type ToolResultIndex,
   type TurnGroupUnit,
+  stepTime,
   type TurnViewEntry,
 } from "./tool-results";
 import { useToday } from "./today.ts";
@@ -187,7 +188,7 @@ import { MarkdownBlock } from "./MarkdownBlock";
 import { HomeHero } from "./HomeHero";
 import { HomeLog, type HomeLogRowView } from "./HomeLog";
 import { MainAgentEmpty } from "./MainAgentEmpty";
-import { placeResumes, resumeLine, type ResumeGroup } from "./main-resume.ts";
+import { placeResumes, resumeLine, splitResumesByTurn, type ResumeGroup } from "./main-resume.ts";
 import type { MainAgentResume } from "@shared/main-agent";
 import { heroFace } from "./home-hero.ts";
 import { useExperimentalFeature } from "../../experimental.ts";
@@ -2032,16 +2033,41 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   const onUndoTurn = useStableCallback(props.onUndoTurn);
   const onRevertTo = useStableCallback(props.onRevertTo);
 
-  // 「断过」那几行按时间落在哪条用户消息前面 / 对话末尾（数据只在档案里，不进转录）
+  // 「断过」：断在一轮干到一半的，进那一轮的过程明细（note）；两轮之间的按时间落在哪条用户消息前面 / 对话末尾
+  // （数据只在档案里，不进转录）
+  const resumeSplit = useMemo(() => {
+    const turns = [...historySegment.turnView, ...tailTurnView].flatMap((entry) => {
+      if (entry.kind !== "turnProcess") return [];
+      const first = entry.steps[0];
+      const last = entry.steps[entry.steps.length - 1];
+      return first === undefined || last === undefined ? [] : [{ key: entry.key, start: stepTime(first, "first"), end: stepTime(last) }];
+    });
+    return splitResumesByTurn(props.resumes, turns);
+  }, [props.resumes, historySegment.turnView, tailTurnView]);
+  const resumeNotes = useMemo(() => {
+    const now = Date.now();
+    return new Map(
+      [...resumeSplit.inTurn].map(([key, list]) => [
+        key,
+        list.map((resume) => ({
+          kind: "note" as const,
+          key: `resume:${resume.at}`,
+          verb: t.chat.resumeVerb,
+          text: resumeLine(resume, now, { line: t.chat.mainResumed }),
+          time: resume.at,
+        })),
+      ]),
+    );
+  }, [resumeSplit, t]);
   const placedResumes = useMemo(
     () =>
       placeResumes(
-        props.resumes,
+        resumeSplit.between,
         props.transcript.flatMap((item) => (item.role === "user" ? [{ id: item.id, timestamp: item.timestamp }] : [])),
         // 回答也是分界：两次断过之间有它回过话，就不并成一行
         props.transcript.flatMap((item) => (item.role === "assistant" ? [item.timestamp] : [])),
       ),
-    [props.resumes, props.transcript],
+    [resumeSplit, props.transcript],
   );
 
   // 行作用域：历史段一份（字段全稳定 ⇒ 历史行 memo 命中）、尾段一份（每帧重建）
@@ -2067,6 +2093,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       undoneTurnIds,
       memory: memoryLines,
       resumes: placedResumes.beforeUser,
+      resumeNotes,
       leadUserId: null,
       tailHasProcess,
       actionsBusy: props.actionsBusy,
@@ -2092,6 +2119,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       undoneTurnIds,
       memoryLines,
       placedResumes,
+      resumeNotes,
       props.actionsBusy,
       props.sessionId,
       onBranch,
@@ -2126,6 +2154,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       undoneTurnIds,
       memory: memoryLines,
       resumes: placedResumes.beforeUser,
+      resumeNotes,
       leadUserId,
       tailHasProcess: false,
       actionsBusy: props.actionsBusy,
@@ -2161,6 +2190,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       undoneTurnIds,
       memoryLines,
       placedResumes,
+      resumeNotes,
       props.actionsBusy,
       props.sessionId,
       onBranch,
@@ -2652,6 +2682,8 @@ interface RowScope {
   memory: MemoryLines | null;
   /** 主智能体「断过」那几行（相邻的已并成一组）：key = 它后面的那条用户消息 id */
   resumes: ReadonlyMap<string, readonly ResumeGroup[]>;
+  /** 断在一轮之内的「断过」：key = 那一轮过程块的 key，进它的过程明细（turn-events 的 note） */
+  resumeNotes: ReadonlyMap<string, readonly Extract<ProcessEvent, { kind: "note" }>[]>;
   /** 尾段：历史段最后一条用户消息（尾段开头的过程行是它那一轮的，记忆挂上去）；历史段 null */
   leadUserId: string | null;
   /** 历史段：尾段里已经有过程行（历史段最后一条用户消息的记忆挂到那里，不在消息下单画一行） */
@@ -2797,6 +2829,7 @@ const TranscriptRow = memo(function TranscriptRow(props: {
           channel={scope.channel}
           onOpenProgress={scope.onOpenProgress}
           memory={memoryOfTurn(scope.memory?.rows.get(processTurnUser(scope.view, index, scope.leadUserId) ?? ""))}
+          notes={scope.resumeNotes.get(entry.key)}
           onOpenMemoryReview={scope.onOpenMemoryReview}
           renderStep={(step) => (
             <EntryView
@@ -4497,6 +4530,8 @@ function TurnProcessLine(props: {
   /** 这一轮读了 / 记住的记忆（只给这一轮的第一个过程行） */
   memory: Extract<ProcessEvent, { kind: "memory" }> | null;
   onOpenMemoryReview?: () => void;
+  /** 转录外插进来的几行（这一轮里断过的那一下，见 main-resume 的 splitResumesByTurn）；缺席 = 没有 */
+  notes?: readonly Extract<ProcessEvent, { kind: "note" }>[] | undefined;
 }) {
   const t = useT();
   const today = useToday();
@@ -4615,6 +4650,7 @@ function TurnProcessLine(props: {
     planChanged: (id) => planNoticeOf(props.plan, [id]) !== null,
     goalChanged: (id) => goalNoticeText(t, props.ledger, [id]) !== null,
     delegatedChild: (id) => delegateCard(props.toolResults.get(id))?.childId ?? null,
+    extra: props.notes,
   });
   const events = props.memory === null ? stepEvents : [props.memory, ...stepEvents];
   const tally = processTally(events);

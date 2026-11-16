@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { clock, placeResumes, resumeLine } from "./main-resume.ts";
+import { clock, placeResumes, resumeLine, splitResumesByTurn } from "./main-resume.ts";
 
 describe("主智能体「断过」那一行", () => {
   const r = (at: number) => ({ at, from: at - 1000, resumed: ["a", "b"], stopped: [] });
@@ -24,5 +24,10 @@ describe("主智能体「断过」那一行", () => {
     const seen: unknown[] = [];
     resumeLine({ at: now, from: now - 60_000, resumed: ["a"], stopped: ["b", "c"] }, now, { line: (...args) => (seen.push(...args), "") });
     assert.deepEqual(seen, ["08:59", "09:00", 1, 2]);
+  });
+  test("断在一轮之内的进那一轮的过程明细，两轮之间的照旧独立一行", () => {
+    const split = splitResumesByTurn([r(15), r(30)], [{ key: "p1", start: 10, end: 20 }, { key: "p2", start: 31, end: 40 }]);
+    assert.deepEqual(split.inTurn.get("p1"), [r(15)]);
+    assert.deepEqual(split.between, [r(30)]);
   });
 });

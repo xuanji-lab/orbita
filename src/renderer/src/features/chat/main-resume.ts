@@ -46,6 +46,25 @@ export function placeResumes(
   return { beforeUser, atEnd };
 }
 
+/**
+ * 先分出落在某一轮时间段之内的「断过」（2026-11-17 主会话）：那一下断在一轮干到一半——塞进那一轮的过程明细（降噪留的 note 入口），
+ * 不单独占行；落在两轮之间的（最常见）照 placeResumes 独立一行、相邻的并成一行。
+ * turns = 各过程块的 key 与首末步的时刻；之内 = 严格在首末之间（断前断后都有步）。
+ */
+export function splitResumesByTurn(
+  resumes: readonly MainAgentResume[] | undefined,
+  turns: readonly { key: string; start: number; end: number }[],
+): { inTurn: ReadonlyMap<string, readonly MainAgentResume[]>; between: readonly MainAgentResume[] } {
+  const inTurn = new Map<string, MainAgentResume[]>();
+  const between: MainAgentResume[] = [];
+  for (const resume of resumes ?? []) {
+    const turn = turns.find((candidate) => candidate.start < resume.at && resume.at < candidate.end);
+    if (turn === undefined) between.push(resume);
+    else inTurn.set(turn.key, [...(inTurn.get(turn.key) ?? []), resume]);
+  }
+  return { inTurn, between };
+}
+
 /** 时刻写成 HH:MM（本地时间；跨天时前面带月-日） */
 export function clock(at: number, now: number): string {
   const date = new Date(at);

@@ -1764,6 +1764,8 @@ export const zh: Messages = {
     interruptedTurn: "这一轮没跑完就被打断了。",
     interruptedByCrash: "应用上次是异常退出的，这个子会话被打断了。",
     continueTurn: "继续",
+    /** 过程明细里「断过」那一行的动词（断在一轮干到一半时） */
+    resumeVerb: "断过",
     mainResumedMany: (latest, count, today) => `${latest}；${today ? "今天" : "这几天"}断过 ${count} 次`,
     mainResumed: (from, to, resumed, stopped) =>
       [
