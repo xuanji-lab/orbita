@@ -1,13 +1,12 @@
 /**
- * 后台会话完成提醒的纯逻辑：谁刚跑完、该不该响、要不要标未读、一条会话此刻的运行态是什么。
+ * 后台会话做完的纯逻辑：谁刚跑完、要不要标未读、一条会话此刻的运行态是什么。
  *
  * 场景（用户 2026-10-10）：在一条会话里起了长程任务，转去别的会话干活，任务跑完时
  * 界面上什么都不发生——只能隔一会儿回去看一眼。这里判定「刚跑完」与「用户此刻
- * 有没有在看它」，App 据此响提示音、把未读写进 meta、在辅助对话图标旁弹卡片。
+ * 有没有在看它」，App 据此把未读写进 meta（2026-11-17 起做完不响、不弹卡）。
  *
- * 2026-10-10 二轮（用户改需求）：侧栏行首的状态饼与右下角铃铛清单都从这里的
- * sessionRunState 读状态——**单一真源**，两个入口只是同一份状态的两个视图，
- * 不各算一份（各算一份迟早漂移成「侧栏说在跑、铃铛说没事」）。
+ * 侧栏行首的状态饼、收起工作区的汇总、侧栏顶的「等你」都从这里的 sessionRunState 读状态——
+ * **单一真源**，不各算一份。
  *
  * 不碰 React、不碰 Audio，node --test 直接测。
  */
@@ -124,29 +123,8 @@ export function treeNotices(input: {
   return { notify, held };
 }
 
-export interface NoticePlan {
-  /** 响提示音 */
-  sound: boolean;
-  /** 侧栏行标未读 + 弹卡片 */
-  unread: boolean;
-}
-
 /**
- * 一条会话跑完时该做什么。
- *
- * - 正看着且窗口在前台：什么都不做——人就在跟前，结果正在眼前滚出来。
- * - 正看着但窗口不在前台（切去别的应用了）：只响，不标未读——切回来就在屏上。
- * - 没在看：响 + 标未读 + 弹卡片。
- *
- * 提示音另受设置开关管（`soundOn`）；未读与卡片不受它管——静音的人同样需要知道。
- */
-export function planNotice(input: { watched: boolean; windowActive: boolean; soundOn: boolean }): NoticePlan {
-  if (input.watched) return { sound: input.soundOn && !input.windowActive, unread: false };
-  return { sound: input.soundOn, unread: true };
-}
-
-/**
- * 一条会话此刻的运行态（状态饼 + 铃铛清单共用的推导，单一真源）：
+ * 一条会话此刻的运行态（状态饼、收起工作区的汇总、侧栏顶「等你」共用的推导，单一真源）：
  *
  * - `"running"`：在跑（1/3 蓝）——自己或任一直接子会话的 phase 不是 idle。
  *   子会话在跑算母会话在跑：侧栏只列根会话，母会话的行就是那个任务的唯一入口；
@@ -167,7 +145,7 @@ export interface RunSlot {
   phase: "idle" | "turn" | "compaction";
   /**
    * 停在「计划等你确认」上（最后一次 update_plan 要求确认，且之后还没有用户消息；plan-timeline 的
-   * planAwaitingIn）。算「等你」的一个来源——不加的话写完计划停下，侧栏 / 铃铛 / 首页卡
+   * planAwaitingIn）。算「等你」的一个来源——不加的话写完计划停下，侧栏 / 首页卡
    * 会把它画成跑完的绿饼。缺席 = 否。
    */
   planAwaiting?: boolean;
@@ -212,34 +190,8 @@ export function aggregateRunStates(
   }));
 }
 
-/** 铃铛清单的档位：状态饼亮着的根会话按「等你 > 未读 > 在跑」分档 */
-export type NoticeTier = "waiting" | "unread" | "running";
-
-/** 运行态 → 清单档位。null（不亮）不进清单。 */
-export function noticeTierOf(state: SessionRunState): NoticeTier | null {
-  if (state === "waiting") return "waiting";
-  if (state === "done" || state === "failed") return "unread";
-  if (state === "running") return "running";
-  return null;
-}
-
-const TIER_ORDER: Readonly<Record<NoticeTier, number>> = { waiting: 0, unread: 1, running: 2 };
-
 /**
- * 铃铛清单的排序：等你 > 未读 > 在跑，同档新的在前（at = 未读那一刻；在跑 /
- * 等你的用 updatedAt 凑同一种「最近活动」语义）。不改原数组。
- */
-export function orderNoticeEntries<T extends { tier: NoticeTier; at: number }>(
-  entries: readonly T[],
-): T[] {
-  return [...entries].sort(
-    (a, b) => TIER_ORDER[a.tier] - TIER_ORDER[b.tier] || b.at - a.at,
-  );
-}
-
-/**
- * 运行态的可读名字（状态饼的 tooltip，也是铃铛清单行尾的句子）：侧栏行与铃铛
- * 清单同一套词——同一个状态在两个入口该叫同一个名字，否则像两个东西。
+ * 运行态的可读名字（状态饼的 tooltip、收起的工作区汇总的读屏文字）：同一个状态在各处叫同一个名字。
  */
 export function runStateLabel(
   state: Exclude<SessionRunState, null>,

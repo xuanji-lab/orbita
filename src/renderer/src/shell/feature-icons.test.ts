@@ -40,7 +40,6 @@ const GENERIC_ICON_NAMES = new Map<string, string>([
   ["settings", "词同时是 overlay id（overlay === \"settings\"），字面量扫描分不出；「设置」的入口走表"],
   ["file-text", "通用的文本文件图标（文件树 / 附件 chip / 改动卡 / 插件文件）；「文档」的入口与面板走表"],
   ["presentation", "pptx 文件的类型图标（文件树 / 附件 chip / 菜单项）；「演示文稿」的入口与面板走表"],
-  ["bell", "词同时是面板 id（countPanel(\"bell\")、item.id === \"bell\"），字面量扫描分不出；「通知」的入口与空态走表"],
 ]);
 
 const TABLE_VALUES: readonly string[] = [...new Set(Object.values(FEATURE_ICON))];

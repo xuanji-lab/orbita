@@ -5,7 +5,7 @@ import { Icon, type IconName } from "./Icon";
  * 与对话里的提示行（ChatView 的 Notice）同一句法，换了地方也是同一种说法。
  *
  * 以前全应用五六种写法各管各的：右栏 `.panel-empty` 一行灰字不画图标，记忆的 `.mem-empty`
- * 图标 16 + 说明另起一行，铃铛清单 `.bell-card-empty` 次级灰，模型服务的 `.pv-wall-empty`
+ * 图标 16 + 说明另起一行，模型服务的 `.pv-wall-empty`
  * 居中，侧栏的 Empty 内联样式……同一件事（「这里现在什么都没有」）说法、字色、对齐各不相同。
  *
  * 长相（样式在 styles.css 的 `.panel-empty`）：

@@ -794,25 +794,6 @@ export const en = {
     noText: "(no text)",
   },
 
-  /** 后台会话跑完时，辅助对话图标旁弹出的卡片 */
-  notice: {
-    finished: "Task finished",
-    failed: "Task stopped with an error",
-    openNow: "Open",
-    sideChat: "Side chat",
-    later: "Later",
-    openNowTip: "Open it here, replacing the current chat",
-    sideChatTip: "Open it in the side chat, keep the current chat",
-    laterTip: "Keep it marked unread in the sidebar",
-  },
-
-  /** 右下角铃铛弹出的清单（侧栏状态饼的另一个入口） */
-  bell: {
-    title: "Notifications",
-    empty: "Nothing running, waiting, or unread",
-    markAllRead: "Mark all read",
-  },
-
   menu: {
     searchModels: "Search models or providers…",
     noModels: "No matching models.",
@@ -1038,7 +1019,6 @@ export const en = {
     sideChat: "Side chat Ctrl+Alt+D",
     subSessions: (count: number) => `Sub-sessions (${count})`,
     browser: "Built-in browser",
-    bell: (count: number) => (count > 0 ? `Notifications · ${count} unread` : "Notifications"),
     intent: "Intent graph",
     /** 「这条任务」面板（进度 + 上下文，2026-10-30） */
     context: "This task",
@@ -1395,10 +1375,10 @@ export const en = {
       "One line per turn: while it works, a fixed-height block ticks with the current step; when it's done, one line you can open into parts · Every step: each thought and tool call on its own row",
     processViewTurn: "One line per turn",
     processViewSteps: "Every step",
-    completionSound: "Completion sound",
-    completionSoundAria: "Completion sound",
+    completionSound: "Chime when something waits on you",
+    completionSoundAria: "Chime when something waits on you",
     completionSoundInfo:
-      "Play a cabin-call chime when a task finishes while you are looking elsewhere · the sidebar highlight and the card still appear when it is off",
+      "Chimes once when something new is waiting on you (a question, or work that didn't make it); never for finished work · when off, the “Waiting on you” list at the top of the sidebar still shows",
     data: "Data",
     dataDirectory: "Data directory",
     dataDirectoryInfo: "Sessions, workspaces, skills and mcp.json live here as plain files",
@@ -3601,7 +3581,7 @@ export const en = {
           background: {
             name: "Long tasks in the background",
             title: "Can I walk away from a long task?",
-            body: "Yes. Switching to other tasks or starting new ones doesn't stop it; the small pie before each task says running, waiting for you, or finished. It chimes and shows a card when done.\nOn Windows, closing the window sends it to the tray and work goes on; on macOS it stays in the Dock. Sleep stops it — the Automations panel has “keep the computer awake while something runs”.",
+            body: "Yes. Switching to other tasks or starting new ones doesn't stop it; the small pie before each task says running, waiting for you, or finished. When something needs you, it shows up at the top of the sidebar under “Waiting on you” with one chime; finishing makes no sound.\nOn Windows, closing the window sends it to the tray and work goes on; on macOS it stays in the Dock. Sleep stops it — the Automations panel has “keep the computer awake while something runs”.",
           },
           update: {
             name: "Updating",

@@ -40,7 +40,7 @@ import { ageCounts, filterByAge } from "./sidebar-age.ts";
 import { sessionAgeLabel } from "./relative-time.ts";
 import { useMinuteTick } from "./use-minute-tick.ts";
 import { matchesSessionQuery, openRowsLimit, workspaceRows } from "./workspace-rows.ts";
-import { ATTENTION_SHOWN, attentionItems, attentionLine, type AttentionItem } from "./attention.ts";
+import { ATTENTION_SHOWN, ATTENTION_WARMUP_MS, attentionItems, attentionLine, freshAttention, type AttentionItem } from "./attention.ts";
 import { displaySubSessionTitle } from "../features/chat/sub-sessions-rows.ts";
 import type { ChannelMessage } from "@shared/channel";
 import { useChannelStatuses } from "../features/chat/useChannelSummaries.ts";
@@ -72,7 +72,7 @@ export type Overlay = "settings" | "board" | null;
 const CHILD_ROW_HIDDEN: ReadonlySet<string> = new Set(["pin", "move", "archive"]);
 
 /**
- * 状态饼的 tooltip：见 completion-notice.ts 的 runStateLabel（侧栏行与铃铛清单
+ * 状态饼的 tooltip：见 completion-notice.ts 的 runStateLabel（侧栏行与侧栏顶「等你」
  * 同一套句子）。包一层是让调用点读起来像个本地词。
  */
 function barLabel(state: "running" | "waiting" | "done" | "failed", t: Messages, childInterrupted: boolean): string {
@@ -164,6 +164,8 @@ export function Sidebar(props: {
   onOpenFile: (absPath: string) => void;
   /** 点「等你」的一行：跳到那个工作区的主对话并定位到那件活（App 管跳转与右栏定位） */
   onOpenAttention: (item: AttentionItem) => void;
+  /** 「等你」里新冒出了几件（每件只报一次）：App 响提示音 */
+  onAttentionAppeared: (ids: readonly string[]) => void;
   /** 星云的常驻小气泡（专注：正在整理 / 要不要总结）；null = 无 */
   usageSay: React.ReactNode | null;
   /** 星云头顶的卡片（专注时间到）；null = 无 */
@@ -377,6 +379,20 @@ export function Sidebar(props: {
     ],
     rowState,
   );
+  /**
+   * 提示音只为新冒出的等你响一次（做完不响，2026-11-17）：同一件事不重复响——按 id 记着响过的，处理完再出现也不响。
+   * 启动后头几秒是「读盘把已有的等你一件件读出来」，不是新冒出来的：这段时间只记账不报（ATTENTION_WARMUP_MS）。
+   */
+  const attentionKey = attention.map((item) => item.meta.id).join(",");
+  const rungRef = useRef<Set<string>>(new Set());
+  const mountedAtRef = useRef(Date.now());
+  const onAttentionAppeared = props.onAttentionAppeared;
+  useEffect(() => {
+    const ids = attentionKey === "" ? [] : attentionKey.split(",");
+    const fresh = freshAttention(ids, rungRef.current);
+    for (const id of fresh) rungRef.current.add(id);
+    if (fresh.length > 0 && Date.now() - mountedAtRef.current > ATTENTION_WARMUP_MS) onAttentionAppeared(fresh);
+  }, [attentionKey, onAttentionAppeared]);
   /** 「等你」的一行点下去：先退出子视图与设置，再交给 App 跳转 */
   const openAttention = (item: AttentionItem): void => {
     props.onOverlay(null);
@@ -1696,7 +1712,7 @@ function NavRow(props: {
   /**
    * 行首的状态饼（2026-10-30，取代 10-10 的状态饼）：running = 1/3 蓝，
    * waiting = 2/3 橙，done = 满绿，failed = 满红；读完就不亮（undefined）。状态由
-   * sessionRunState 推导（与铃铛清单同一份真源）；占行首状态槽，亮着时盖过
+   * sessionRunState 推导（与侧栏顶「等你」同一份真源）；占行首状态槽，亮着时盖过
    * fork / pin。规则在 styles.css 的 `.status-pie`。**静态，无动效**。
    */
   bar?: "running" | "waiting" | "done" | "failed" | undefined;
@@ -1805,7 +1821,7 @@ function SessionRow(props: {
   // 子会话只取一层（childSessions 同口径）——子会话在跑 / 在等你都记到母会话
   // 这一行的状态饼上（入口在母），fork 图标再补「跑的是孩子」那一句
   const children = childSessions(session.sessions, meta.id);
-  // 状态饼（sessionRunState，与右下角铃铛清单同一份真源）
+  // 状态饼（sessionRunState，与侧栏顶「等你」同一份真源）
   const bar = props.bar !== undefined ? props.bar : runStateOf(session, meta);
   /**
    * 行首状态槽：subRunning > pinned > 空。运行 / 未读 / 失败已归状态饼，槽里只剩

@@ -28,7 +28,7 @@ export const CHIME_SUBJECTS_MAX = 20;
 /** 标题截断字数：对照用，不需要全文 */
 export const CHIME_TITLE_MAX = 120;
 
-const REASONS: readonly ChimeReason[] = ["session-settled", "focus-done"];
+const REASONS: readonly ChimeReason[] = ["waiting", "session-settled", "focus-done"];
 
 function subjectOf(value: unknown): ChimeSubject | null {
   if (typeof value !== "object" || value === null) return null;

@@ -12,7 +12,11 @@
  */
 
 /** 为什么响：根会话（连同子会话）整棵跑完 / 专注计时到点 */
-export type ChimeReason = "session-settled" | "focus-done";
+/**
+ * 为什么响：waiting = 新冒出一件等你的事（侧栏顶「等你」里多了一行；2026-11-17 起做完不再响）；
+ * focus-done = 专注到点。session-settled 是旧版「后台会话跑完」那一声，只留着读旧账本。
+ */
+export type ChimeReason = "waiting" | "session-settled" | "focus-done";
 
 /** 这一声为谁响的：会话 id 与当时的标题（标题会被改，记下当时的便于对照） */
 export interface ChimeSubject {

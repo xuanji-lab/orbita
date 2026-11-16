@@ -4,9 +4,6 @@ import {
   aggregateRunStates,
   runStateOf,
   runStateLabel,
-  noticeTierOf,
-  orderNoticeEntries,
-  planNotice,
   sessionRunState,
   settledSessions,
   subtreeBusy,
@@ -52,25 +49,6 @@ describe("settledSessions", () => {
   });
 });
 
-describe("planNotice", () => {
-  it("正看着且窗口在前台：什么都不做", () => {
-    deepStrictEqual(planNotice({ watched: true, windowActive: true, soundOn: true }), { sound: false, unread: false });
-  });
-
-  it("正看着但窗口在后台：只响不标未读", () => {
-    deepStrictEqual(planNotice({ watched: true, windowActive: false, soundOn: true }), { sound: true, unread: false });
-  });
-
-  it("没在看：响 + 未读", () => {
-    deepStrictEqual(planNotice({ watched: false, windowActive: true, soundOn: true }), { sound: true, unread: true });
-  });
-
-  it("关了提示音：不响，但未读照标", () => {
-    deepStrictEqual(planNotice({ watched: false, windowActive: false, soundOn: false }), { sound: false, unread: true });
-    deepStrictEqual(planNotice({ watched: true, windowActive: false, soundOn: false }), { sound: false, unread: false });
-  });
-});
-
 describe("sessionRunState（状态饼与铃铛清单的单一真源）", () => {
   const idle: RunSlot = run("idle");
 
@@ -105,30 +83,6 @@ describe("sessionRunState（状态饼与铃铛清单的单一真源）", () => {
   });
 });
 
-describe("铃铛清单分档与排序", () => {
-  it("档位映射：done / failed 都是未读档，null 不进清单", () => {
-    strictEqual(noticeTierOf("waiting"), "waiting");
-    strictEqual(noticeTierOf("done"), "unread");
-    strictEqual(noticeTierOf("failed"), "unread");
-    strictEqual(noticeTierOf("running"), "running");
-    strictEqual(noticeTierOf(null), null);
-  });
-
-  it("等你 > 未读 > 在跑，同档新的在前；不改原数组", () => {
-    const rows = [
-      { id: "old-running", tier: "running" as const, at: 1 },
-      { id: "fresh-unread", tier: "unread" as const, at: 90 },
-      { id: "waiting", tier: "waiting" as const, at: 5 },
-      { id: "stale-unread", tier: "unread" as const, at: 20 },
-      { id: "fresh-running", tier: "running" as const, at: 80 },
-    ];
-    deepStrictEqual(
-      orderNoticeEntries(rows).map((row) => row.id),
-      ["waiting", "fresh-unread", "stale-unread", "fresh-running", "old-running"],
-    );
-    strictEqual(rows[0]?.id, "old-running");
-  });
-});
 describe("aggregateRunStates（工作区折叠时组头的汇总）", () => {
   it("只列亮着的档，顺序 等你 > 出错 > 在跑 > 跑完", () => {
     deepStrictEqual(aggregateRunStates(["done", "running", null, "waiting", "running", "failed"]), [

@@ -4,7 +4,7 @@
  * 加上这个工作区里以前攒下的会话——状态饼亮着（在跑 / 等你 / 没做成 / 做完没看）的那些；
  * 其余（做完看过的活、以前攒下的会话）收进最后一行「以前的会话 N」。
  *
- * 纯函数：状态由调用方给（runStateOf，与侧栏状态饼、铃铛清单同一份真源）；不读转录。
+ * 纯函数：状态由调用方给（runStateOf，与侧栏状态饼、侧栏顶「等你」同一份真源）；不读转录。
  */
 import type { SessionMeta } from "@shared/session";
 import type { SessionRunState } from "../features/notify/completion-notice.ts";

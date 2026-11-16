@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { ChannelMessage } from "../../../shared/channel.ts";
 import type { SessionMeta } from "../../../shared/session.ts";
 import type { SessionRunState } from "../features/notify/completion-notice.ts";
-import { attentionItems, attentionLine, type AttentionWords } from "./attention.ts";
+import { attentionItems, attentionLine, freshAttention, type AttentionWords } from "./attention.ts";
 
 function meta(id: string, extra: Partial<SessionMeta> = {}): SessionMeta {
   return {
@@ -80,4 +80,9 @@ describe("侧栏顶上的「等你」", () => {
     assert.equal(attentionLine({ ...root, state: "failed" }, undefined, none, words), "没做成，等你看");
   });
 
+
+  test("提示音只为新冒出来的那件响：响过的不再响", () => {
+    assert.deepEqual(freshAttention(["a", "b"], new Set(["a"])), ["b"]);
+    assert.deepEqual(freshAttention(["a"], new Set(["a", "b"])), []);
+  });
 });

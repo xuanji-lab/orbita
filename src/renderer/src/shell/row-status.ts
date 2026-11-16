@@ -7,7 +7,7 @@ import type { Messages } from "../messages-en.ts";
  *
  * 2026-10-10 二轮（用户裁决）：运行中实心点、未读圈勾、失败三角全部撤掉——
  * 运行态改由行最左侧的**状态饼**表达（completion-notice.ts 的 sessionRunState，
- * 与右下角铃铛清单同一份真源）。槽里只剩两样静态标记：
+ * 与侧栏顶「等你」同一份真源）。槽里只剩两样静态标记：
  *
  * subRunning > pinned > 空。
  *

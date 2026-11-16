@@ -147,7 +147,7 @@ the English copy; the Chinese copy follows the same voice.
   centred, never a big icon, never italic. Loading uses the same line with a turning
   `loader-circle`; a failure turns the whole line red with `role="alert"`. Hosts only align it
   (`className`), they do not restyle it: before this there were six spellings (`.panel-empty`,
-  `.mem-empty`, `.bell-card-empty`, `.pv-wall-empty`, the sidebar's inline style, the sub-session
+  `.mem-empty`, `.pv-wall-empty`, the sidebar's inline style, the sub-session
   and intent panels' own).
 - **Placeholders invite, they don't instruct.** The composer reads "Ask anything, or start a task";
   a name field reads "Enter branch or workspace name".
@@ -473,9 +473,13 @@ stopped with an error and not yet viewed. A viewed row shows nothing; a lit pie 
 rather than the accent are deliberate — the dark theme's accent is yellow and would blur into the
 orange. **A folded workspace sums its rows** on the group head — one pie and a count per lit
 state, ordered waiting › failed › running › done — so a collapsed group still says something is
-working or waiting; it yields to the hover actions. The same pie (same derivation, same state)
-heads each row of the notifications list behind the `bell`, the sub-session inbox and the
-completion card; unread marks persist in the session meta, so it survives a restart.
+working or waiting; it yields to the hover actions; only the current workspace is unfolded
+(2026-11-17), so every other one is that single line. Unread marks persist in the session meta,
+so the pie survives a restart. **One place calls you**: the pinned "Waiting on you" block at the
+top of the sidebar lists, across workspaces, everything waiting on you (asking, or failed and
+unseen) with the only orange dot on screen; clicking a row jumps there and the row leaves once
+handled — one at a time, never "clear all". The bell, its unread list and the completion card
+are gone; the chime rings once when something new starts waiting, never for finished work.
 
 **The home record says what each task is doing now** (2026-11-07 replaced the three equal-weight cards that
 2026-10-30 introduced; `features/chat/home-cards.ts` `selectHomeLog`, `HomeLog.tsx`). Home reads top to
@@ -716,7 +720,7 @@ model list) are native `<input type="checkbox">` tinted with `accent-color: var(
   is running, empty otherwise (run states take the slot as a status pie, see *Motion*),
   `lock` = a field fixed by its preset or identity (Providers), `brain` = thinking,
   `terminal`/`wrench`/`file-text` = tool calls, `panel-left`/`panel-right` = the two sidebars,
-  `arrow-up` = send, `bell` = the unread notifications list (bottom of the action rail).
+  `arrow-up` = send.
 - **No emoji, no Unicode glyphs as icons, no icon font, no PNG icons.** The renderer source ships no
   raster images at all.
 - **One raster exception: model avatars** (`assets/model-avatars/`). An avatar identifies a specific model

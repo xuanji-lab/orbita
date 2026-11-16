@@ -17,6 +17,9 @@ import type { SessionRunState } from "../features/notify/completion-notice.ts";
 /** 「等你」最多露几行；超出的写「还有 N 件」 */
 export const ATTENTION_SHOWN = 5;
 
+/** 启动后多久之内冒出来的等你不响：那是读盘把已有的读出来（会话列表、各主智能体的通道状态陆续到），不是新事 */
+export const ATTENTION_WARMUP_MS = 8000;
+
 export interface AttentionItem {
   meta: SessionMeta;
   /** waiting = 在问你 / 计划等你点头 / 被打断等你说继续；failed = 没做成、你还没看 */
@@ -84,4 +87,9 @@ export function attentionLine(
   if (why.planAwaiting) return words.planAwaiting;
   if (why.childInterrupted) return words.interrupted;
   return words.waiting;
+}
+
+/** 新冒出来的等你（提示音只为它们响一次）：这一拍有、以前从没响过的 id */
+export function freshAttention(current: readonly string[], rung: ReadonlySet<string>): string[] {
+  return current.filter((id) => !rung.has(id));
 }

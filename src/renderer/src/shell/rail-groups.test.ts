@@ -130,9 +130,9 @@ describe("结构守卫", () => {
     assert.doesNotMatch(read("../experimental-features.ts"), /lean-rail/);
   });
 
-  it("「更多」里只有归档 / 通知（以后再做的侧栏子视图 2026-11-16 删了）（记忆库已挪进设置的页签，不在右栏）", () => {
+  it("「更多」里只有归档（以后再做的侧栏子视图 2026-11-16 删了；通知 2026-11-17 删了，等你的事钉在侧栏顶）（记忆库已挪进设置的页签，不在右栏）", () => {
     const inMore = [...rail.matchAll(/id: "(\w+)", group: "shelf", inMore: true|fromApp\("(\w+)", \{ group: "shelf", inMore: true \}\)/g)].map((m) => m[1] ?? m[2]);
-    assert.deepEqual(inMore, ["archived", "bell"]);
+    assert.deepEqual(inMore, ["archived"]);
   });
 
   it("插件转正后条上没有「技能与 MCP」入口，插件与自动化常驻", () => {

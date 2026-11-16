@@ -48,6 +48,4 @@ export const FEATURE_ICON = {
   externalSources: "message-square-dashed",
   /** 设置 */
   settings: "settings",
-  /** 通知（右栏铃铛与通知卡空态） */
-  bell: "bell",
 } as const satisfies Record<string, IconName>;

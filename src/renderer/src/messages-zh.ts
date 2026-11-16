@@ -713,24 +713,6 @@ export const zh: Messages = {
     noText: "（没有文字）",
   },
 
-  notice: {
-    finished: "任务完成",
-    failed: "任务出错停下了",
-    openNow: "打开",
-    sideChat: "辅助对话",
-    later: "稍后",
-    openNowTip: "在这里打开，替换当前对话",
-    sideChatTip: "在辅助对话里打开，当前对话不动",
-    laterTip: "侧栏里保持未读",
-  },
-
-  /** 右下角铃铛弹出的清单（侧栏状态饼的另一个入口） */
-  bell: {
-    title: "通知",
-    empty: "没有在跑、在等或未读的任务",
-    markAllRead: "全部已读",
-  },
-
   menu: {
     // 搜索是**跨全部厂商**的（搜索时左栏复位到「全部」），而且它连厂商名也搜——
     // 占位符不说的话，用户不知道搜「智谱」能命中整家
@@ -959,7 +941,6 @@ export const zh: Messages = {
     sideChat: "辅助对话 Ctrl+Alt+D",
     subSessions: (count) => `子会话（${count}）`,
     browser: "内置浏览器",
-    bell: (count) => (count > 0 ? `通知 · ${count} 条未读` : "通知"),
     intent: "意图图谱",
     context: "这条任务",
     groups: {
@@ -1289,9 +1270,9 @@ export const zh: Messages = {
     processViewInfo: "一轮一行：干活时一块定高的现场，只走表和当前这一步；做完收成一行，可展开成几段 · 逐步铺开：每次思考与工具调用各占一行",
     processViewTurn: "一轮一行",
     processViewSteps: "逐步铺开",
-    completionSound: "完成提示音",
-    completionSoundAria: "完成提示音",
-    completionSoundInfo: "你在看别处时任务跑完，响一声客舱呼唤铃 · 关掉后侧栏高亮与提醒卡片照常出现",
+    completionSound: "等你时的提示音",
+    completionSoundAria: "等你时的提示音",
+    completionSoundInfo: "新冒出一件等你的事（在问你、没做成）时响一声，同一件事只响一次；做完不响 · 关掉后侧栏顶上的「等你」照常出现",
     data: "数据",
     dataDirectory: "数据目录",
     dataDirectoryInfo: "会话、工作区、技能与 mcp.json 以普通文件存放在这里",
@@ -3378,7 +3359,7 @@ export const zh: Messages = {
           background: {
             name: "长任务放后台",
             title: "跑很久的任务，我能走开吗？",
-            body: "能。切去别的任务、开新任务都不影响它；左栏任务前的小饼告诉你在跑、等你还是跑完了。跑完会响一声、弹一张卡。\nWindows 上关窗是收进托盘，任务照跑；macOS 关窗后程序还在程序坞里，任务照跑。电脑睡着了任务会停——自动化面板里有「有任务在跑时阻止系统睡眠」。",
+            body: "能。切去别的任务、开新任务都不影响它；左栏任务前的小饼告诉你在跑、等你还是跑完了。有事要你出手时，它出现在左栏最上面的「等你」里，响一声；做完不响。\nWindows 上关窗是收进托盘，任务照跑；macOS 关窗后程序还在程序坞里，任务照跑。电脑睡着了任务会停——自动化面板里有「有任务在跑时阻止系统睡眠」。",
           },
           update: {
             name: "怎么更新",

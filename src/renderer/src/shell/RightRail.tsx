@@ -1,11 +1,9 @@
-import { Fragment, useRef, useState, type ComponentProps } from "react";
+import { Fragment } from "react";
 import { Icon, type IconName } from "./Icon";
 import { Menu, type MenuItem } from "./Menu";
 import { useT } from "../locale.ts";
 import { layoutRail, withGroupRules, type RailPlacement } from "./rail-groups.ts";
 import { FEATURE_ICON } from "./feature-icons.ts";
-import { CompletionCard } from "../features/notify/CompletionCard";
-import { BellCard, useBellDismiss, type NoticeRow } from "../features/notify/BellCard";
 
 /**
  * 右图标条，32px，**常驻**（首页也可达）。与左栏同款「无自己的面」：直接坐在
@@ -85,42 +83,8 @@ export function RightRail(props: {
    */
   automation: { running: number };
   subSessions: { count: number; waiting: number } | null;
-  /**
-   * 后台会话跑完的提醒卡（2026-10-10）：弹在主槽右上角。null = 没有提醒。
-   */
-  completionNotice: Omit<ComponentProps<typeof CompletionCard>, "host"> | null;
-  /**
-   * 两张卡的弹出宿主：主槽（`.pane-main`）里的 `.pane-pop-host`，App 挂好传进来。
-   * 卡片的开关与数据跟着入口住在右栏，渲染位置在主槽——层级属于内容面，不骑在
-   * 右栏与内容面之间（用户 2026-10-10 第三轮）。
-   */
-  popHost: HTMLElement | null;
-  /**
-   * 右下角铃铛（2026-10-10 二轮）：未读清单的第二个入口。常驻；count 是未读数
-   * （绿 + 红两档，角标只数它）；entries 是所有状态饼亮着的根会话（等你 > 未读 >
-   * 在跑，新在前），点行在主槽打开那条会话。状态与侧栏状态饼同一份推导（App 算好）。
-   */
-  bell: {
-    count: number;
-    entries: readonly NoticeRow[];
-    onOpen: (id: string) => void;
-    /** 在辅助对话里打开（主槽不动） */
-    onSideChat: (id: string) => void;
-    onMarkAllRead: () => void;
-    /** 清单被打开（记面板打开次数用） */
-    onOpened: () => void;
-  };
 }) {
   const t = useT();
-  // 铃铛锚点（外部关闭判定要排除它）+ 弹层开关；开关在本体（右栏不重建），不随内容变
-  const [bellOpen, setBellOpen] = useState(false);
-  const [bellAnchor, setBellAnchor] = useState<HTMLSpanElement | null>(null);
-  const bellCardRef = useRef<HTMLDivElement | null>(null);
-  useBellDismiss(bellOpen, () => setBellOpen(false), bellAnchor, bellCardRef);
-  const openBell = (): void => {
-    if (!bellOpen) props.bell.onOpened();
-    setBellOpen(!bellOpen);
-  };
   const toggle = (kind: RightPanelKind) => () => props.onPanel(props.panel === kind ? null : kind);
   const entry = (id: RailEntry["id"]): RailEntry | undefined => props.railEntries.find((each) => each.id === id);
   /** App 传入的入口 → 右栏条目（没传 = 对应功能没开，不出现） */
@@ -130,23 +94,6 @@ export function RightRail(props: {
       ? []
       : [{ id, ...place, icon: found.icon, label: found.label, lit: found.lit, onSelect: found.onClick }];
   };
-  const bellCard = bellOpen && (
-    <BellCard
-      host={props.popHost}
-      cardRef={bellCardRef}
-      entries={props.bell.entries}
-      onOpen={(id) => {
-        setBellOpen(false);
-        props.bell.onOpen(id);
-      }}
-      onSideChat={(id) => {
-        setBellOpen(false);
-        props.bell.onSideChat(id);
-      }}
-      onMarkAllRead={props.bell.count > 0 ? props.bell.onMarkAllRead : null}
-    />
-  );
-
   // 全部入口，**组内顺序即数组顺序**（条上的堆叠顺序，也是「更多」里的行序）。
   // 分组的理由见 rail-groups.ts；inMore = 收进「更多」
   const items: RailItem[] = [
@@ -200,10 +147,9 @@ export function RightRail(props: {
     },
     // 收起来以后再看的：全部在「更多」菜单里（记忆库在设置里，不在右栏）
     ...fromApp("archived", { group: "shelf", inMore: true }),
-    // 应用级：看板、设置，钉右下。通知收进「更多」，未读数写在菜单项上
+    // 应用级：看板、设置，钉右下。原来「更多」里的通知（铃铛与未读清单）2026-11-17 去掉：等你的事钉在侧栏最上面
     ...fromApp("board", { group: "app" }),
     ...fromApp("settings", { group: "app" }),
-    { id: "bell", group: "shelf", inMore: true, icon: FEATURE_ICON.bell, label: t.rail.bell(props.bell.count), lit: bellOpen, onSelect: openBell, badge: props.bell.count },
   ];
   const layout = layoutRail(items);
   const renderItem = (item: RailItem) => {
@@ -246,8 +192,7 @@ export function RightRail(props: {
           <>
             <span className="rail-sep" aria-hidden="true" />
             <div className="rail-group" role="group" aria-label={t.rail.groups.shelf}>
-              {/* 「更多」也是通知清单的锚点：清单从菜单里打开，外部点击判定排除这颗键 */}
-              <span ref={setBellAnchor} style={{ display: "inline-flex" }}>
+              <span style={{ display: "inline-flex" }}>
                 <Menu
                   items={moreMenu}
                   placement="below"
@@ -271,7 +216,6 @@ export function RightRail(props: {
       <div className="rail-group" role="group" aria-label={t.rail.groups.app}>
         {layout.dock.map(renderItem)}
       </div>
-      {bellCard}
     </aside>
   );
 }
