@@ -236,5 +236,5 @@ export function createTurnTools(deps: TurnToolDeps): ToolDefinition[] {
 export function withheldToolReceipt(name: string, what: string, chatOnly: boolean): string {
   return chatOnly
     ? `Tool ${name} is not available: this piece of work was handed out as chat only, without ${what}. Answer in your reply; if the work needs tools, say so in your answer so the agent that delegated you can hand it out again.`
-    : `Tool ${name} is not available: this piece of work was handed out without ${what}. If you really need it, tell the agent that delegated you with report_to_parent (kind "question") and say what for; otherwise carry on with the tools you have.`;
+    : `Tool ${name} is not available: this piece of work was handed out without ${what}. If the work really cannot be done without it, ask for it with report_to_parent (kind "question"), saying what for, and end this turn (do not report it as failed); if it can be done with the tools you have, carry on without it.`;
 }

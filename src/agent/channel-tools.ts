@@ -442,7 +442,9 @@ export function describeChannelRole(role: "root" | "child", capabilities?: { lis
     "This piece of work was handed out with a limited set of capabilities. Besides read, write, edit, bash, update_plan, " +
       `update_goal and report_to_parent, you have: ${given.length > 0 ? given.join("; ") : "nothing else"}.`,
     ...(capabilities.missing.length > 0 ? [`Asked for but not available here: ${capabilities.missing.join(", ")}.`] : []),
-    'If the work needs something you do not have, ask with report_to_parent (kind "question") and say what for, instead of working around it.',
+    'If the work really cannot be done without something you do not have, do not report it as failed and do not work around it: ask for it with ' +
+      'report_to_parent (kind "question"), saying what you need and what for, then end this turn; the agent that delegated you can hand the work out again with it. ' +
+      "If the work can be done well with what you have, just do it; do not ask for things for their own sake.",
   ];
   return CHILD_CHANNEL_GUIDELINES.replace(/\n<\/orbita-sub-sessions>$/, `\n${lines.join("\n")}\n</orbita-sub-sessions>`);
 }

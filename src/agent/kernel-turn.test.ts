@@ -355,7 +355,7 @@ describe("kernel-turn：按能力集装配一轮", () => {
     // 只带基础：没有 store-tools、quote 两段；通道说明末尾讲带了什么、缺了找谁
     assert.doesNotMatch(base.turn.systemPrompt, /<orbita-store-tools>|<orbita-quotes>/);
     assert.match(full.turn.systemPrompt, /<orbita-store-tools>/);
-    assert.match(base.turn.systemPrompt, /you have: nothing else\.\nIf the work needs something you do not have, ask with report_to_parent/);
+    assert.match(base.turn.systemPrompt, /you have: nothing else\.\nIf the work really cannot be done without something you do not have, do not report it as failed[\s\S]*kind "question"[\s\S]*do not ask for things for their own sake/);
     // 纯聊天：只有身份与回复语言两段
     assert.match(chat.turn.systemPrompt, /^You are a sub-session inside Orbita[\s\S]*This piece of work is chat only/);
     assert.match(chat.turn.systemPrompt, /\n\nReply language:/);

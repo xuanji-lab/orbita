@@ -149,7 +149,7 @@ describe("turn-tools：按能力集挑工具", () => {
   });
 
   it("缺模块回执：说清这件活没带什么、要用找谁；纯聊天的回执让它在回答里说", () => {
-    assert.match(withheldToolReceipt("browser_navigate", "the browser module: x", false), /handed out without the browser module.*report_to_parent \(kind "question"\)/);
+    assert.match(withheldToolReceipt("browser_navigate", "the browser module: x", false), /handed out without the browser module.*report_to_parent \(kind "question"\).*do not report it as failed/);
     assert.match(withheldToolReceipt("read", "any tools (it is chat only)", true), /chat only.*say so in your answer/);
   });
 });
