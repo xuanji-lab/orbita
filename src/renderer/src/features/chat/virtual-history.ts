@@ -3,13 +3,12 @@
  * 缓存（LRU）、前插锚点的目标 scrollTop。不依赖 React / DOM，`node --test` 直接加载。
  *
  * **为什么还要过滤行。** 虚拟化的单位是 `TurnViewEntry`，但其中有一部分条目渲染为
- * `null`（相邻 show_image 已被前一张的合画画廊吸收、同一条消息的后续正文块已并进
- * 扫描回答卡、父流里的子会话进度标记不画）。它们若仍占虚拟行，`gap` 会留下一段
+ * `null`（相邻 show_image 已被前一张的合画画廊吸收、父流里的子会话进度标记不画）。它们若仍占虚拟行，`gap` 会留下一段
  * 空白，前插/跳转的下标也会对不上「屏幕上真有的行」。过滤规则与 `TranscriptRow` /
  * `EntryView` 的提前返回逐条对应；带分支按钮行的条目保留——`TranscriptRow` 会只画
  * 分支行（正文为 null 时按钮仍要出现）。
  */
-import type { ScanAnswerCard, ToolResultIndex, TurnViewEntry } from "./tool-results.ts";
+import type { ToolResultIndex, TurnViewEntry } from "./tool-results.ts";
 
 /** 一个渲染行：`index` 是它在历史段 `turnView` 里的原下标（分支行、show_image 前项判定都用它） */
 export interface VirtualHistoryRow {
@@ -29,14 +28,12 @@ function showCallRenders(entry: TurnViewEntry, results: ToolResultIndex): boolea
 /**
  * 历史段里真正会产出 DOM 的行。规则（按顺序，与渲染层一致）：
  * 1. 相邻成功 show_image：后一张被前一张的画廊吸收（`TranscriptRow` 返回 null）；
- * 2. 同一条 assistant 消息的多个 text 块：只有扫描回答卡的 `firstKey` 画卡，其余 null；
- * 3. 通道标记：只有「子看父」与「父看子（非 progress）」画，其余 null；
- * 4. 带有分支按钮行的条目一律保留——即使正文为 null，按钮仍要渲染。
+ * 2. 通道标记：只有「子看父」与「父看子（非 progress）」画，其余 null；
+ * 3. 带有分支按钮行的条目一律保留——即使正文为 null，按钮仍要渲染。
  */
 export function virtualHistoryRows(
   view: readonly TurnViewEntry[],
   results: ToolResultIndex,
-  carryoverCards: ReadonlyMap<string, ScanAnswerCard>,
   ownSide: "parent" | "child",
   branchRows: ReadonlyMap<number, string>,
 ): VirtualHistoryRow[] {
@@ -48,9 +45,6 @@ export function virtualHistoryRows(
     if (showCallRenders(entry, results)) {
       const prev = view[index - 1];
       if (prev !== undefined && showCallRenders(prev, results)) renders = false;
-    } else if (entry.kind === "text") {
-      const card = carryoverCards.get(entry.messageId);
-      if (card !== undefined && entry.key !== card.firstKey) renders = false;
     } else if (entry.kind === "channelMark") {
       const fromParent = ownSide === "child" && entry.mark.from === "parent";
       const fromChild = ownSide === "parent" && entry.mark.from === "child" && entry.mark.kind !== "progress";

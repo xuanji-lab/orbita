@@ -140,12 +140,10 @@ import {
   toolGroupStatus,
   toolResultText,
   rollupLead,
-  scanAnswerCards,
   streamingRecordIds,
   turnAssistantRecords,
   turnStats,
   type ProcessStep,
-  type ScanAnswerCard,
   type TurnProcessUnit,
   writeLineCount,
   type ChannelMarkTone,
@@ -175,7 +173,6 @@ import { MarkdownBlock } from "./MarkdownBlock";
 import { HomeHero } from "./HomeHero";
 import { HomeLog, type HomeLogRowView } from "./HomeLog";
 import { heroFace } from "./home-hero.ts";
-import { WrapupCard } from "./WrapupCard";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { FileTurnCard, RevertMarkView } from "./FileTurnCard";
 import type { MemorySessionTurnView, MemorySessionView } from "@shared/memory";
@@ -187,7 +184,6 @@ import { RevertPreviewBar } from "./RevertPreviewBar";
 import { collectCitations } from "./citation-markers.ts";
 import { CitationTableContext } from "./citation-context.ts";
 import { RevertPreviewContext, type RevertPreview } from "./revert-preview.ts";
-import { CarryoverScanCard } from "./CarryoverScanCard";
 import { AutomationRunBar } from "../automation/AutomationRunBar";
 import { AutomationToolLine } from "../automation/AutomationToolLine";
 import { AutomationWakeLine } from "../automation/AutomationWakeLine";
@@ -888,16 +884,7 @@ function ChatViewBody(props: {
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [showCopyNotice, t]);
-  // 收尾卡上的型号名：与模型菜单同一套显示名（声明名 > 白名单 > 目录名 > id）
-  const wrapupModelName = useCallback(
-    (modelId: string): string => {
-      const declared = session.usable.flatMap((p) => p.models.declared).find((m) => m.id === modelId);
-      return modelDisplayName(session.catalog, modelId, {}, declared?.name);
-    },
-    [session.usable, session.catalog],
-  );
-  // 收尾卡「第 x–y 轮」：跳回那一轮的用户消息并闪一下。不在已加载的窗口里就往前翻页再找
-  // （每页 SESSION_PAGE_RECORDS 条，最多翻 20 页——再远的历史不值得一直等）
+  // 历史段翻页用：还有没有更早的、往前翻一页（TranscriptColumn 经 props 读写）
   const hasMoreRef = useRef(session.hasMoreHistory);
   hasMoreRef.current = session.hasMoreHistory;
   const loadOlderRef = useRef(session.loadOlder);
@@ -911,28 +898,6 @@ function ChatViewBody(props: {
   /** 前插锚点落定窗口：窗口内虚拟器的逐行补偿关闭，由按 key 的重算统一接管 */
   const pageSettleRef = useRef<{ key: string; offsetTop: number; until: number } | null>(null);
 
-  const jumpToMessage = useCallback((messageId: string) => {
-    const controller = historyControllerRef.current;
-    if (controller !== null) {
-      controller.jumpToMessage(messageId);
-      return;
-    }
-    // 列还没挂载（极少）：只查当前 DOM，必要时翻页
-    let tries = 0;
-    const attempt = () => {
-      const pane = scrollRef.current;
-      if (pane === null) return;
-      if (pane.querySelector(`[data-quote-id="${CSS.escape(messageId)}"]`) !== null) {
-        highlightQuote(pane, messageId, "");
-        return;
-      }
-      if (!hasMoreRef.current || tries >= 20) return;
-      tries += 1;
-      loadOlderRef.current();
-      window.setTimeout(attempt, 400);
-    };
-    attempt();
-  }, []);
   // 跟随态（Latest | Reading）：显式状态机在 scroll-follow.ts。只有用户意图窗口内的
   // 滚动能改状态；离底后任何程序化贴底 / 测高 / 内容长高都不会把 Reading 拉回底部。
   const followTrackerRef = useRef(createFollowTracker());
@@ -1343,12 +1308,8 @@ function ChatViewBody(props: {
       // 按「是不是首页」分，不按 sessionId：从侧栏打开的历史会话 sessionId 还是 null
       // （agent 要等发第一条才起），只有 opened 有值——按 sessionId 判会给它首页那句
       // 有引用时提示按编号逐条回复——编号就是 chip 上的角标，也是模型看到的 index。
-      // 收尾扫描中：扫描轮不设超时，唯一出口是这张卡上的停止键（空草稿 + 在跑 = 发送键变停止），
-      // 占位里直接说出来（审核 S-4）
       placeholder={
-        session.closingScan
-          ? t.chat.placeholderScanning
-          : session.quotes.length > 0
+        session.quotes.length > 0
           ? t.quote.replyPlaceholder(session.quotes.length)
           : homeActive
             ? t.chat.placeholderNew
@@ -1359,11 +1320,10 @@ function ChatViewBody(props: {
       bottomSlot={
         <ComposerBar
           session={session}
-          // 用量环浮层里的「标记完成」：与头部完成入口同一道门（已落盘 + 未完成；会话生命周期已转正，
-          // 不再看实验开关），同一条收尾仪式
+          // 用量环浮层里的「标记完成」：与头部完成入口同一道门（已落盘 + 未完成）
           markDone={
             openId !== "" && (openMeta?.completion ?? "open") === "open"
-              ? { onSelect: session.startClosingRitual, busy: session.phase !== "idle" || session.closingScan }
+              ? { onSelect: session.markDone, busy: session.phase !== "idle" }
               : null
           }
           starredModels={props.starredModels ?? []}
@@ -1448,16 +1408,6 @@ function ChatViewBody(props: {
         )
       )}
       {session.error !== null && <Notice tone="bad">{session.error}</Notice>}
-      {/*
-        收尾仪式的降级 / 结果反馈：一句中性的话，不当错误报。
-        读不懂扫描结果时这行带一个 Retry（重发同一条扫描消息）——失败不该只留一句
-        「已标完成」就无路可走。
-      */}
-      {session.scanNotice !== null && (
-        <Notice exit={session.retryClosingScan === null ? undefined : { label: t.common.retry, onClick: session.retryClosingScan }}>
-          {session.scanNotice}
-        </Notice>
-      )}
       {/*
         只能读不能续：pi 没有这条会话的本子。**说清楚，别让输入框看起来能打字**
         （guideline §四把这条代价写明了）。
@@ -1690,11 +1640,9 @@ function ChatViewBody(props: {
             ? (next) => session.setCompletionSession(openId, next)
             : undefined
         }
-        // open 态点击走收尾仪式（降级矩阵在 hook）；Reopen 仍走 onSetCompletion
-        onMarkDone={openId !== "" ? session.startClosingRitual : undefined}
-        closing={session.closingScan}
+        // open 态点击标完成；Reopen 仍走 onSetCompletion
+        onMarkDone={openId !== "" ? session.markDone : undefined}
         busy={session.phase !== "idle"}
-        scanless={openMeta?.piSessionFile == null}
         // 只要这条会话已经落盘就能改名——刚发完第一句正是最想改名的时候
         onRename={openId === "" ? undefined : (title) => session.renameSession(openId, title)}
         hideHeader={props.bareHeader === true}
@@ -1744,21 +1692,6 @@ function ChatViewBody(props: {
                 onAnswer={session.answerIntentConfirm}
                 onOpenSideChat={props.onOpenSideChat}
                 openableSessionIds={props.intentOpenableIds}
-              />
-            )}
-            {/* 收尾确认卡：inline 浮层，与意图确认卡同位同配方；只在查看发起会话时显示
-                （scanResult 由 hook 查看槽持有，切走再切回还在） */}
-            {session.scanResult !== null && session.scanResult.sessionId === openId && (
-              <WrapupCard
-                // 每次扫描是一张新卡：换一份清单就重挂，卡内的编辑状态不串到下一次
-                key={`${session.scanResult.sessionId}:${session.scanResult.plan.lastTurn}:${session.scanResult.plan.sinceTurn}`}
-                plan={session.scanResult.plan}
-                draft={session.scanResult.draft}
-                nameOf={wrapupModelName}
-                onConfirm={session.confirmCarryovers}
-                onCancel={session.cancelCarryovers}
-                onRevise={session.reviseWrapup}
-                onJumpTurn={jumpToMessage}
               />
             )}
             {/*
@@ -1996,9 +1929,6 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
     () => interruptedToolCallIds(tailRecords, tailToolResults, turnActive),
     [tailRecords, tailToolResults, turnActive],
   );
-  // 收尾扫描回答卡（记录 id → 卡片与首个 text 单元）：历史段与尾段各按自己的记录算，
-  // 引用随记录稳定（历史段卡片不会因为流式吐字换新 Map）
-  const tailCarryoverCards = useMemo(() => scanAnswerCards(tailRecords), [tailRecords]);
   // 分支锚点（C-2）：每轮最终完整输出的最后一个单元后面挂一条分支按钮行；
   // 本轮还在跑（turnActive）时末尾候选不确认——复制/分支行等回答结束再出现；速度不在此列：
   // 实时速度本就在 Responding 行（估算，每秒一跳），这里整行藏着的是落定后的 BranchRow
@@ -2071,7 +2001,6 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       // 历史段的计划不可能是「等你确认」的那一版：最后一条 user 记录是边界，回应已经给了
       awaitingPlan: null,
       branchRows: historySegment.branchRows,
-      carryoverCards: historySegment.carryoverCards,
       interruptedCalls: historySegment.interruptedCalls,
       streamingIds: historySegment.streamingIds,
       activeThinkingKey: null,
@@ -2124,7 +2053,6 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       ledger,
       awaitingPlan,
       branchRows: tailBranchRows,
-      carryoverCards: tailCarryoverCards,
       interruptedCalls: tailInterruptedCalls,
       streamingIds: tailStreamingIds,
       activeThinkingKey,
@@ -2155,7 +2083,6 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       ledger,
       awaitingPlan,
       tailBranchRows,
-      tailCarryoverCards,
       tailInterruptedCalls,
       tailStreamingIds,
       activeThinkingKey,
@@ -2332,14 +2259,12 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       virtualHistoryRows(
         historySegment.turnView,
         historySegment.toolResults,
-        historySegment.carryoverCards,
         props.channel.ownSide,
         historySegment.branchRows,
       ),
     [
       historySegment.turnView,
       historySegment.toolResults,
-      historySegment.carryoverCards,
       historySegment.branchRows,
       props.channel.ownSide,
     ],
@@ -2642,7 +2567,6 @@ interface RowScope {
   ledger: GoalLedger;
   awaitingPlan: PlanVersion | null;
   branchRows: ReadonlyMap<number, string>;
-  carryoverCards: ReadonlyMap<string, ScanAnswerCard>;
   interruptedCalls: ReadonlySet<string>;
   streamingIds: ReadonlySet<string>;
   activeThinkingKey: string | null;
@@ -2798,7 +2722,6 @@ const TranscriptRow = memo(function TranscriptRow(props: {
               turnActive={false}
               interruptedCalls={scope.interruptedCalls}
               onOpenTask={scope.onOpenTask}
-              carryoverCards={scope.carryoverCards}
               channel={scope.channel}
               skills={scope.skills}
               cwd={scope.cwd}
@@ -2819,7 +2742,6 @@ const TranscriptRow = memo(function TranscriptRow(props: {
           toolResults={scope.toolResults}
           turnFailed={entry.key === scope.failedFold}
           onOpenTask={scope.onOpenTask}
-          carryoverCards={scope.carryoverCards}
           channel={scope.channel}
           skills={scope.skills}
           cwd={scope.cwd}
@@ -2838,7 +2760,6 @@ const TranscriptRow = memo(function TranscriptRow(props: {
           turnActive={scope.turnActive}
           interruptedCalls={scope.interruptedCalls}
           onOpenTask={scope.onOpenTask}
-          carryoverCards={scope.carryoverCards}
           channel={scope.channel}
           skills={scope.skills}
           cwd={scope.cwd}
@@ -2880,17 +2801,10 @@ function Pane(props: {
   completion: SessionCompletion | null;
   /** 翻完成状态（Reopen 用）；没落盘时不传 */
   onSetCompletion?: ((next: SessionCompletion) => void) | undefined;
-  /**
-   * open 态点击「Mark task done」的回调——收尾仪式（注入扫描、弹清单），
-   * 降级矩阵（在跑 / 只读 / 空对话）在 hook；不给则退回纯标记。
-   */
+  /** open 态点击「完成」的回调：只标完成；不给则直接 onSetCompletion("done") */
   onMarkDone?: (() => void) | undefined;
-  /** 收尾扫描进行中：按钮转圈 */
-  closing?: boolean;
-  /** 会话在跑：open 态的完成按钮禁用（收尾要等话说完） */
+  /** 会话在跑：open 态的完成按钮禁用（等这一轮说完） */
   busy?: boolean;
-  /** 只读（没有 pi 本子）：纯标记路径，tooltip 说明为什么没有扫描 */
-  scanless?: boolean;
   /** 有值才出现铅笔——首条消息还没发的会话还没有记录可改 */
   onRename?: ((title: string) => void) | undefined;
   /** 消息列的滚动容器：跟随/跳底逻辑在 ChatView，骨架只交出节点 */
@@ -3015,49 +2929,29 @@ function Pane(props: {
           </IconButton>
         )}
         {/**
-          完成入口（第二处，与侧栏菜单同源）：open → Mark done（收尾仪式），非 open → Reopen。
-          降级矩阵在这里只做展示：扫描中转圈、在跑禁用、只读（无 pi 本子）在 tooltip
-          里说明是纯标记——真正的判定在 useChatSession.startClosingRitual。
+          完成入口（第二处，与侧栏菜单同源）：open → 标完成，非 open → Reopen；在跑时禁用。
         */}
         {props.completion !== null && props.onSetCompletion !== undefined && (
           <IconButton
             size="var(--titlebar-control)"
             label={
-              props.completion === "open"
-                ? props.closing === true
-                  ? t.chat.scanningLabel
-                  : t.chat.markTaskDone
-                : t.chat.reopenTask
+              props.completion === "open" ? t.chat.markTaskDone : t.chat.reopenTask
             }
             title={
               props.completion === "open"
-                ? props.closing === true
-                  ? t.chat.scanningTip
-                  : props.busy === true
-                    ? t.chat.waitBeforeDone
-                    : props.scanless === true
-                      ? t.chat.doneScanlessTip
-                      : t.chat.doneTip
+                ? props.busy === true
+                  ? t.chat.waitBeforeDone
+                  : t.chat.doneTip
                 : t.chat.reopenTip
             }
-            disabled={props.completion === "open" && (props.closing === true || props.busy === true)}
+            disabled={props.completion === "open" && props.busy === true}
             onClick={() =>
               props.completion === "open"
                 ? (props.onMarkDone ?? (() => props.onSetCompletion?.("done")))()
                 : props.onSetCompletion?.("open")
             }
           >
-            <Icon
-              name={
-                props.completion === "open"
-                  ? props.closing === true
-                    ? "loader-circle"
-                    : "check"
-                  : "rotate-ccw"
-              }
-              size={13}
-              spin={props.closing === true}
-            />
+            <Icon name={props.completion === "open" ? "check" : "rotate-ccw"} size={13} />
           </IconButton>
         )}
         <span
@@ -3738,7 +3632,6 @@ function EntryView(props: {
   /** 已中断的工具调用 id 集（interruptedToolCallIds）：成员行按「已中断」渲染 */
   interruptedCalls: ReadonlySet<string>;
   onOpenTask?: (sessionId: string) => void;
-  carryoverCards: ReadonlyMap<string, ScanAnswerCard>;
   /** 子会话 PR4a：channelMark / delegate / reply_subsession / report_to_parent 要用 */
   channel: ChannelViewContext;
   /** read SKILL.md 徽标的识别索引（透传自 ChatViewBody） */
@@ -3835,12 +3728,6 @@ function EntryView(props: {
     return null;
   }
   if (entry.kind === "text") {
-    const card = props.carryoverCards.get(entry.messageId);
-    if (card !== undefined) {
-      // 同一条消息的多个 text 块只渲染一张卡（第一个块的位置），其余已并进卡里
-      if (entry.key !== card.firstKey) return null;
-      return <CarryoverScanCard scan={card.scan} />;
-    }
     // 引用的来源标记：划选要落在单个块里才成引用，跳回原文也按它找。
     // streaming：正在流式的那条渲染成便宜的帧（不排公式、不高亮代码，见 stream-render.ts），
     // 落定后自动补渲
@@ -3904,7 +3791,6 @@ function TurnRollupLine(props: {
   toolResults: ToolResultIndex;
   turnFailed: boolean;
   onOpenTask?: (sessionId: string) => void;
-  carryoverCards: ReadonlyMap<string, ScanAnswerCard>;
   /** 子会话 PR4a：折叠展开后的成员行仍走 EntryView，需要同一份上下文原样转发 */
   channel: ChannelViewContext;
   /** 透传给成员 EntryView（read SKILL.md 徽标用） */
@@ -4001,7 +3887,6 @@ function TurnRollupLine(props: {
               turnActive={false}
               interruptedCalls={props.interruptedCalls}
               onOpenTask={props.onOpenTask}
-              carryoverCards={props.carryoverCards}
               channel={props.channel}
               skills={props.skills}
               cwd={props.cwd}

@@ -26,7 +26,7 @@
  * 只做 type import（无运行时依赖）：node --test 直接加载本文件，
  * `@shared` 别名只在构建期由 electron-vite 解析。
  */
-import type { Carryover, SessionMeta } from "@shared/session";
+import type { Carryover } from "@shared/session";
 
 /**
  * 方案 A 的种子：新会话的首条 user 消息。sourceTitle 为 null 表示来源会话
@@ -54,13 +54,4 @@ export function buildCarryoverFollowUp(item: Carryover): string {
   }
   const detail = item.detail === "" ? "" : `\n\n当时的上下文摘录：${item.detail}`;
   return `继续处理这件收尾时留下的遗留事项：\n\n${item.title}${detail}\n\n请接着把它做完。`;
-}
-
-/**
- * 方案 B 的可用性：来源会话存在**且有 pi 本子**（`piSessionFile !== null` 才能续跑；
- * 导入的只读会话没有本子，消息无处可发）。面板按它禁用右键入口。
- */
-export function canResumeInSource(item: Carryover, sessions: readonly SessionMeta[]): boolean {
-  const meta = sessions.find((entry) => entry.id === item.sourceSessionId);
-  return meta !== undefined && meta.piSessionFile !== null;
 }

@@ -76,7 +76,7 @@ const callModel: MemoryCallModel = async (system, prompt) => {
         maxTokens: 4096,
         timeoutMs: CALL_TIMEOUT_MS,
         signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
-        // 家务活模型可能是 OAuth Claude：车道改写随 options 带上（choreComplete 同款）
+        // 家务活模型可能是 OAuth Claude：车道改写随 options 带上（probeProvider 同款）
         onPayload: ccBillingPatch,
         ...(chore.provider.headers ? { headers: chore.provider.headers } : {}),
       },

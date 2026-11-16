@@ -62,7 +62,7 @@ describe("kernel-prompt：pi 基础系统提示两个内核逐字节相同", () 
       flags: turnToolFlags(turn),
       broker: new RequestBroker(() => undefined),
       mcpTools: [],
-      planOptions: { planFirst: false, branch: () => [], state: { stopping: false } },
+      planOptions: { branch: () => [], state: { stopping: false } },
       branch: () => [],
       attachedImages: () => [],
       memoryTurn: () => 1,

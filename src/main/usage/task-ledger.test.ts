@@ -239,7 +239,7 @@ describe("TaskLedger", () => {
   });
 });
 
-describe("收尾确认的做完的事（价格图的主会话任务）", () => {
+describe("旧收尾确认的做完的事（价格图的主会话任务，只读）", () => {
   const tokens = { input: 10, output: 1, cacheRead: 100, cacheWrite: 0 };
   const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   const wrapup = {
@@ -253,22 +253,7 @@ describe("收尾确认的做完的事（价格图的主会话任务）", () => {
     ],
   };
 
-  test("增量：recordWrapup 记一件、同一个收尾记录只记一次；不动按天的 token；重读盘还在", async () => {
-    const file = join(dir, "usage-tasks.json");
-    const ledger = new TaskLedger(file, { timeZone: TZ });
-    await ledger.load();
-    await ledger.backfill(source(logs, metas));
-    const before = JSON.stringify(ledger.tasks());
-    await ledger.recordWrapup("a", wrapup);
-    await ledger.recordWrapup("a", wrapup);
-    assert.equal(ledger.doneTasks().length, 1);
-    assert.equal(JSON.stringify(ledger.tasks()), before);
-    const again = new TaskLedger(file, { timeZone: TZ });
-    await again.load();
-    assert.deepEqual(again.doneTasks(), ledger.doneTasks());
-  });
-
-  test("回填：从各会话 meta.wrapups 补上，与增量记出同一份", async () => {
+  test("回填：从各会话 meta.wrapups 补上（收尾扫描删了以后只剩旧会话里有，只读）", async () => {
     const withWrapup = metas.map((m) => (m.id === "a" ? { ...m, wrapups: [wrapup] } : m));
     const ledger = new TaskLedger(join(dir, "x.json"), { timeZone: TZ });
     await ledger.load();
@@ -285,12 +270,14 @@ describe("收尾确认的做完的事（价格图的主会话任务）", () => {
     ]);
   });
 
-  test("价格图任务全集：没确认过的主会话不在里面；子会话整条一件", async () => {
+  test("价格图任务全集：没确认过的主会话不在里面；旧收尾的做完的事一件；子会话整条一件", async () => {
+    const plain = new TaskLedger(join(dir, "y0.json"), { timeZone: TZ });
+    await plain.load();
+    await plain.backfill(source(logs, metas));
+    assert.deepEqual(plain.chartTasks(new Set()), []);
     const ledger = new TaskLedger(join(dir, "y.json"), { timeZone: TZ });
     await ledger.load();
-    await ledger.backfill(source(logs, metas));
-    assert.deepEqual(ledger.chartTasks(new Set()), []);
-    await ledger.recordWrapup("a", wrapup);
+    await ledger.backfill(source(logs, metas.map((m) => (m.id === "a" ? { ...m, wrapups: [wrapup] } : m))));
     const tasks = ledger.chartTasks(new Set(["b"]));
     assert.deepEqual(tasks.map((t) => [t.modelId, t.level, t.totals.recordedCost]), [
       ["glm-5.3", "max", 0.3],

@@ -9,9 +9,7 @@ import type { SessionCompletion } from "@shared/session";
 
 export interface CapCompletionState {
   state: SessionCompletion;
-  closing: boolean;
   busy: boolean;
-  scanless: boolean;
   onMark: () => void;
   onSet: (next: "open" | "done") => void;
 }
@@ -196,12 +194,12 @@ export function CapSessionId(props: { shortId: string | null }) {
 
 /**
  * 完成键（open → 收工，非 open → Reopen），一直显示——它是会话的主要出口。
- * 降级矩阵（扫描中转圈、在跑禁用、只读在 tooltip 说明）与 ChatView 页头同口径。
+ * 在跑禁用，与 ChatView 页头同口径。
  */
 export function CapCompletion(props: { completion: CapCompletionState }) {
   const t = useT();
   const completion = props.completion;
-  const blocked = completion.state === "open" && (completion.closing || completion.busy);
+  const blocked = completion.state === "open" && completion.busy;
   return (
     <button
       type="button"
@@ -212,24 +210,14 @@ export function CapCompletion(props: { completion: CapCompletionState }) {
       aria-disabled={blocked}
       onClick={() => (completion.state === "open" ? completion.onMark() : completion.onSet("open"))}
     >
-      <Icon
-        name={completion.state === "open" ? (completion.closing ? "loader-circle" : "check") : "rotate-ccw"}
-        size={16}
-        strokeWidth={2}
-        spin={completion.closing}
-      />
+      <Icon name={completion.state === "open" ? "check" : "rotate-ccw"} size={16} strokeWidth={2} />
     </button>
   );
 }
 
-/** 收工键的悬停说明（同 ChatView 页头那套降级矩阵的文案口径） */
-function completionTitle(
-  completion: { state: SessionCompletion; closing: boolean; busy: boolean; scanless: boolean },
-  t: Messages,
-): string {
+/** 收工键的悬停说明（同 ChatView 页头的文案口径） */
+function completionTitle(completion: { state: SessionCompletion; busy: boolean }, t: Messages): string {
   if (completion.state !== "open") return t.chat.reopenTip;
-  if (completion.closing) return t.chat.scanningTip;
   if (completion.busy) return t.chat.waitBeforeDone;
-  if (completion.scanless) return t.chat.doneScanlessTip;
   return t.chat.doneTip;
 }

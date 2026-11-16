@@ -232,22 +232,6 @@ export class TaskLedger {
   }
 
   /**
-   * 记一次收尾确认（session:wrapup-confirm 落定后）：每件做完的事一个价格图任务。同一个收尾
-   * 记录 id 只记一次。不动按天的 token 账——那几轮的 token 早在落盘时记过了。
-   */
-  recordWrapup(sessionId: string, wrapup: SessionWrapup): Promise<void> {
-    return this.runSerialized(async () => {
-      if (this.dones.some((done) => done.wrapupId === wrapup.id)) return;
-      const added = storedDonesOf(sessionId, wrapup);
-      if (added.length === 0) return;
-      this.dones.push(...added);
-      this.changes += 1;
-      await this.persist();
-      this.emit();
-    });
-  }
-
-  /**
    * 第一次运行（或账本损坏重建）：扫全部非导入会话，按 createdAt 正序把 assistant 记录喂进账本，
    * 然后落 backfilled 标记——之后启动不再扫。与 record 同一条写入链：扫描期间新落盘的消息排在
    * 扫描后面，seen 表保证同一条只计一次。按 8ms 时间片让事件循环（读会话本身也是流式、按时间片

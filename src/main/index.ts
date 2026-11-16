@@ -69,7 +69,6 @@ import { KernelHost, kernelIdleRecycleMs, sessionsToResume } from "./agent/kerne
 import { kernelChildTag, reapKernelChildren } from "../agent/kernel-children.ts";
 import { kernelLibraryName } from "../shared/kernel.ts";
 import { moveSessions } from "./session/move.ts";
-import { registerWrapupIpc } from "./session/wrapup-ipc.ts";
 import { registerMcpIpc } from "./mcp/ipc.ts";
 import { McpStore } from "./mcp/store.ts";
 import { PluginAgentRequests } from "./plugin/agent-requests.ts";
@@ -1130,21 +1129,6 @@ void app.whenReady().then(async () => {
       ]);
     },
   );
-  // 收尾（session:wrapup-*）：扫描计划、按反馈改清单、确认落账
-  registerWrapupIpc({
-    sessions,
-    carryovers,
-    providers,
-    settings,
-    host: agentHost,
-    catalog: () => agentHost.listBuiltins(),
-    // 确认的做完的事记进任务账本（价格图的主会话任务）
-    onConfirmed: (sessionId, wrapup) => {
-      void taskLedger.recordWrapup(sessionId, wrapup).catch((error: unknown) => {
-        console.error("[task-ledger] 收尾记账失败（下次升级回填会从 meta 补上）", error);
-      });
-    },
-  });
   // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）
   /*
    * 中心存储与 global 集合先建出来：**空目录就是说明书**——用户打开 userData 看到

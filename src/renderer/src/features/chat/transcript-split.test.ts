@@ -151,7 +151,6 @@ describe("deriveHistorySegment：流式期间历史段对象身份不变", () =>
     assert.equal(cache2.segment.turnView, cache1.segment.turnView);
     assert.equal(cache2.segment.plan, cache1.segment.plan);
     assert.equal(cache2.segment.branchRows, cache1.segment.branchRows);
-    assert.equal(cache2.segment.carryoverCards, cache1.segment.carryoverCards);
     assert.equal(cache2.segment.interruptedCalls, cache1.segment.interruptedCalls);
   });
 

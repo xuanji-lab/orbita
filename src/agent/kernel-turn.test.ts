@@ -228,12 +228,12 @@ async function sharpLessPng(width: number, height: number): Promise<string> {
 }
 
 describe("kernel-turn：计划展示后这一轮其余调用被拦（新内核的 plan gate）", () => {
-  it("「先给我看计划」：同一批里 update_plan 之后的 read 不执行，结果是旧内核的那句拦截语；下一轮复位", async () => {
+  it("带 confirm 的计划：同一批里 update_plan 之后的 read 不执行，结果是旧内核的那句拦截语；下一轮复位", async () => {
     const cwd = await tempDir();
     await writeFile(join(cwd, "note.txt"), "secret\n");
     faux.setResponses([
       fauxAssistantMessage(
-        [fauxToolCall("update_plan", { items: [{ text: "读文件", status: "in_progress" }] }), fauxToolCall("read", { path: "note.txt" })],
+        [fauxToolCall("update_plan", { items: [{ text: "读文件", status: "in_progress" }], confirm: ["读哪个文件？"] }), fauxToolCall("read", { path: "note.txt" })],
         { stopReason: "toolUse" },
       ),
       fauxAssistantMessage("这是计划"),
@@ -242,12 +242,12 @@ describe("kernel-turn：计划展示后这一轮其余调用被拦（新内核�
     ]);
     const { harness, registry, conversation: target } = await conversation();
     const target2 = { registry, conversation: target, model: MODEL, providerSessionId: "p1" };
-    await runTurn(command(cwd, { planFirst: true }), runtime([]), target2, COMPACTION);
+    await runTurn(command(cwd), runtime([]), target2, COMPACTION);
     const first = new Map((await toolResults(target)).map((result) => [result.toolName, result]));
     assert.match(text(first.get("update_plan") as ToolResultMessage), /Plan updated/);
     assert.match(text(first.get("read") as ToolResultMessage), /^Not run: the plan is shown to the user/);
-    // 下一轮：计划已在（不再是新计划），read 照常执行
-    await runTurn(command(cwd, { planFirst: true, text: "go" }), runtime([]), target2, COMPACTION);
+    // 下一轮：闸门复位，read 照常执行
+    await runTurn(command(cwd, { text: "go" }), runtime([]), target2, COMPACTION);
     const reads = (await toolResults(target)).filter((result) => result.toolName === "read");
     assert.match(text(reads.at(-1) as ToolResultMessage), /secret/);
     await harness.close(BACKGROUND_CONTEXT);
@@ -255,12 +255,12 @@ describe("kernel-turn：计划展示后这一轮其余调用被拦（新内核�
 });
 
 describe("PlanRoundGate：计划闸门的判定不随钩子先后变", () => {
-  const plan = { items: [{ text: "a", status: "in_progress" }] };
+  const plan = { items: [{ text: "a", status: "in_progress" }], confirm: ["先确认一下？"] };
   const roundWith = (calls: [string, string, Record<string, unknown>][]) => [
     { type: "message", id: "e1", message: { role: "assistant", content: calls.map(([id, name, args]) => ({ type: "toolCall", id, name, arguments: args })) } },
   ];
   const gateFor = (state: { stopping: boolean }) =>
-    new PlanRoundGate(createPlanGate({ planFirst: true, branch: () => [], state }), state);
+    new PlanRoundGate(createPlanGate({ branch: () => [], state }), state);
 
   it("update_plan 在前：后面的调用被拦，不管谁的钩子先跑", () => {
     const branch = roundWith([["c1", "update_plan", plan], ["c2", "read", { path: "x" }]]);

@@ -37,7 +37,6 @@ function entries(on: Switches): Item[] {
     ...(on.plugins ? [item("plugins", "agent")] : []),
     ...(on.intent ? [item("intent", "agent")] : []),
     ...(on.automation ? [item("automation", "agent")] : []),
-    item("carryovers", "shelf", true),
     item("archived", "shelf", true),
     item("bell", "shelf", true),
     ...(on.plugins ? [item("board", "app")] : []),
@@ -56,7 +55,7 @@ describe("layoutRail", () => {
       ["session", ["context", "review", "files", "subsessions"]],
       ["agent", ["terminal", "browser", "plugins", "intent", "automation"]],
     ]);
-    assert.deepEqual(shape(layout.more), [["shelf", ["carryovers", "archived", "bell"]]]);
+    assert.deepEqual(shape(layout.more), [["shelf", ["archived", "bell"]]]);
     assert.deepEqual(ids(layout.dock), ["board", "settings"]);
   });
 
@@ -79,7 +78,7 @@ describe("layoutRail", () => {
         const agent = ids(layout.stack[1]?.items ?? []);
         assert.equal(agent.includes("intent"), intent);
         assert.equal(agent.includes("automation"), automation);
-        assert.deepEqual(ids(layout.more.flatMap((part) => part.items)), ["carryovers", "archived", "bell"]);
+        assert.deepEqual(ids(layout.more.flatMap((part) => part.items)), ["archived", "bell"]);
       }
     }
   });
@@ -131,9 +130,9 @@ describe("结构守卫", () => {
     assert.doesNotMatch(read("../experimental-features.ts"), /lean-rail/);
   });
 
-  it("「更多」里只有以后再做 / 归档 / 通知（记忆库已挪进设置的页签，不在右栏）", () => {
+  it("「更多」里只有归档 / 通知（以后再做的侧栏子视图 2026-11-16 删了）（记忆库已挪进设置的页签，不在右栏）", () => {
     const inMore = [...rail.matchAll(/id: "(\w+)", group: "shelf", inMore: true|fromApp\("(\w+)", \{ group: "shelf", inMore: true \}\)/g)].map((m) => m[1] ?? m[2]);
-    assert.deepEqual(inMore, ["carryovers", "archived", "bell"]);
+    assert.deepEqual(inMore, ["archived", "bell"]);
   });
 
   it("插件转正后条上没有「技能与 MCP」入口，插件与自动化常驻", () => {

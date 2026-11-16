@@ -159,10 +159,8 @@ export function Drawer(props: {
             realTab !== null && viewOpenId === realTab
               ? {
                   state: activeMeta?.completion ?? "open",
-                  closing: props.view.closingScan,
                   busy: props.view.phase !== "idle",
-                  scanless: activeMeta?.piSessionFile == null,
-                  onMark: props.view.startClosingRitual,
+                  onMark: props.view.markDone,
                   onSet: (next) => props.view.setCompletionSession(realTab, next),
                 }
               : null,

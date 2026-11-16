@@ -528,7 +528,8 @@ export interface SessionMeta {
   unread?: { at: number; failed: boolean } | null;
   /**
    * 完成状态：open = 还在跑；done = 干完了；done_with_todos = 干完了但留了
-   * 遗留事项。**可撤销**——重开 done 的会话继续干活就回 open。缺席即 open。
+   * 遗留事项（只出现在 2026-11-16 之前收尾过的旧会话里：收尾扫描删了以后没人再写它，界面上与 done 同画）。
+   * **可撤销**——重开 done 的会话继续干活就回 open。缺席即 open。
    */
   completion?: SessionCompletion;
   /**
@@ -537,15 +538,10 @@ export interface SessionMeta {
    */
   closedAt?: number | null;
   /**
-   * 收尾确认的记录（旧 → 新）：每次确认「做完的事」各一件，任务账本按它记账（价格 · 能力图的
-   * 实测任务只认这里与子会话）。下次收尾从最后一次的 throughTurn + 1 扫起。缺席即空。
+   * 收尾确认的记录（旧 → 新）：每次确认「做完的事」各一件，任务账本回填按它记账（价格 · 能力图的
+   * 实测任务认这里与子会话）。收尾扫描 2026-11-16 删了，只剩旧会话里有，只读。缺席即空。
    */
   wrapups?: SessionWrapup[];
-  /**
-   * 这条会话在接着做哪些遗留事项（carryover id）：从遗留清单「继续」开出的新会话、或在原会话
-   * 续跑时记下；这条会话收尾确认时，它们自动标为做完，然后清空。缺席即空。
-   */
-  resumedCarryovers?: string[];
   /**
    * 最近 3 条用户提问（新→旧，每条首行、截断规则同 title）。
    * 首页会话卡的三个提问槽吃它；**旧会话没有这个字段，显示空槽**。
@@ -876,7 +872,6 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     closedAt: num(value["closedAt"]),
     // 收尾记录与在做的遗留事项：缺席即空；坏条目逐条丢（一条坏账不连累整条会话）
     ...parseWrapupsField(value["wrapups"]),
-    ...parseResumedField(value["resumedCarryovers"]),
     // 未读标记：缺 at 整条丢（当已读）——见 parseSessionUnread 的纪律
     unread: parseSessionUnread(value["unread"]),
     // 缺 recentQueries 的是会话卡之前存的会话：空槽显示，不补算（读日志太贵）
@@ -972,12 +967,6 @@ function parseWrapupsField(raw: unknown): { wrapups?: SessionWrapup[] } {
   if (!Array.isArray(raw)) return {};
   const wrapups = raw.map(parseSessionWrapup).filter((w): w is SessionWrapup => w !== null);
   return wrapups.length === 0 ? {} : { wrapups };
-}
-
-function parseResumedField(raw: unknown): { resumedCarryovers?: string[] } {
-  if (!Array.isArray(raw)) return {};
-  const ids = [...new Set(raw.filter((id): id is string => typeof id === "string" && id !== ""))];
-  return ids.length === 0 ? {} : { resumedCarryovers: ids };
 }
 
 /**

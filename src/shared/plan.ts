@@ -55,8 +55,8 @@ export const PLAN_WAITING_MAX_CHARS = 40;
 
 /**
  * update_plan 的结果 details（随转录落盘，只给界面、不进模型上下文）。
- * awaiting = 这一次调用让这一轮先停下、等用户在聊天框里回答（带了 confirm 问题 / 「先给我看计划」；
- * 旧会话里还有当时 plan 档写完计划停下的）；问题由 agent 在正文里问，界面没有确认按钮，awaiting 只用来画「等你」的状态。
+ * awaiting = 这一次调用让这一轮先停下、等用户在聊天框里回答（带了 confirm 问题；
+ * 旧会话里还有当时 plan 档或「先给我看计划」停下的）；问题由 agent 在正文里问，界面没有确认按钮，awaiting 只用来画「等你」的状态。
  */
 export interface PlanToolDetails {
   plan: PlanItem[];

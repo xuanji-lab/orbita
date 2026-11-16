@@ -19,11 +19,10 @@ const planEntry = (id: string, list: PlanItem[]) => ({
   message: { role: "assistant", content: [{ type: "text", text: "x" }, { type: "toolCall", id, name: "update_plan", arguments: { items: list } }] },
 });
 
-function setup(over: Partial<Omit<PlanToolOptions, "branch">> & { branch?: unknown[] } = {}) {
+function setup(over: { branch?: unknown[] } = {}) {
   const state: PlanStopState = { stopping: false };
   const branch = over.branch ?? [];
   const options: PlanToolOptions = {
-    planFirst: over.planFirst ?? false,
     branch: () => branch,
     state,
   };
@@ -179,26 +178,17 @@ describe("previousPlanFrom：本子里上一张计划", () => {
 });
 
 describe("decidePlanStop：什么时候停下来等用户", () => {
-  const decide = (planFirst: boolean, prev: PlanItem[] | null, next: unknown) => {
-    const call = parsePlanCall(next);
-    return decidePlanStop({ planFirst, call, diff: diffPlans(prev, call.items), hadPlan: prev !== null });
-  };
+  const decide = (next: unknown) => decidePlanStop(parsePlanCall(next));
   const two = items(["看代码", "in_progress"], ["补测试", "pending"]);
 
   test("带 confirm：停", () => {
-    assert.equal(decide(false, null, { items: two, confirm: ["要兼容旧格式吗？"] }), "confirm");
+    assert.equal(decide({ items: two, confirm: ["要兼容旧格式吗？"] }), "confirm");
   });
 
-  test("默认不停：新计划、结构改了、只打勾都不停（没有权限档了）", () => {
-    assert.equal(decide(false, null, { items: two }), null);
-    assert.equal(decide(false, two, { items: [...two, { text: "写 README", status: "pending" }] }), null);
-    assert.equal(decide(false, two, { items: items(["看代码", "done"], ["补测试", "in_progress"]) }), null);
-  });
-
-  test("先给我看计划：只在第一张（或换了一张新计划）上停，之后改动不停", () => {
-    assert.equal(decide(true, null, { items: two }), "plan-first");
-    assert.equal(decide(true, two, { items: [...two, { text: "写 README", status: "pending" }] }), null);
-    assert.equal(decide(true, two, { items: items(["调研向量库", "in_progress"], ["写对比表", "pending"]) }), "plan-first");
+  test("不带 confirm 不停：新计划、结构改了、只打勾都不停（没有权限档、没有「先给我看计划」了）", () => {
+    assert.equal(decide({ items: two }), null);
+    assert.equal(decide({ items: [...two, { text: "写 README", status: "pending" }] }), null);
+    assert.equal(decide({ items: items(["看代码", "done"], ["补测试", "in_progress"]) }), null);
   });
 });
 
@@ -219,11 +209,6 @@ describe("停下来：先停、让 agent 用正文说话（没有 terminate、�
     assert.equal("confirm" in (out as { details: object }).details, false);
     assert.match(textOf(out), /ask the question\(s\) from `confirm` in plain prose/);
     assert.match(textOf(out), /no buttons/);
-  });
-
-  test("先给我看计划：回执要求一两句话 + 问题放正文", async () => {
-    const { run } = setup({ planFirst: true });
-    assert.match(textOf(await run("c1", { items: [{ text: "a", status: "in_progress" }] })), /before any work starts/);
   });
 
   test("闸门：update_plan 决定停之后，本轮其余工具调用被拦（block，不抛错、不带 terminate），让它回头用正文说话；之前的拦不住", () => {

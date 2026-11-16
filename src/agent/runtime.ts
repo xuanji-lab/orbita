@@ -8,7 +8,7 @@
  *   它们下一次开轮时由 kernel 按编辑后的本子迁；
  * - 没交给过 kernel 的会话换模型时的注册与校验（setModel：报 model 事件，主进程的 recorder 据此落 meta）；
  * - MCP 热重载的回执（mcpReload）；
- * - 专注小结、连接测试、收尾清单三种独立小调用（completeSimple）。
+ * - 专注小结、连接测试两种独立小调用（completeSimple）。
  * 这几件里有的还用着 pi-coding-agent（SessionManager、ModelRuntime）；两个进程合一留到去掉这个依赖的那一步。
  *
  * 为什么单独一个进程：这些活与 UI 抢事件循环（目录 JSON、本子解析）；崩了不带走窗口。**不碰 UI，不碰持久化路径策略。**
@@ -100,54 +100,6 @@ async function summarizeFocus(command: Extract<AgentHouseholdCommand, { type: "s
       return;
     }
     send({ type: "focusSummarized", requestId: command.requestId, bullets });
-  } catch (cause) {
-    fail(cause instanceof Error ? cause.message : String(cause));
-  }
-}
-
-/** 家务活小调用的硬上限（主进程那头 150 秒兜底，这里先放手） */
-const CHORE_TIMEOUT_MS = 120_000;
-
-/**
- * 家务活模型的一次独立小调用（收尾清单按用户反馈改写）：system + prompt 由主进程组好，
- * 这里只调模型、把回复的 text 块拼起来交回去——**不解析**：解析规则与 prompt 是同一份契约，
- * 都在 shared/wrapup-scan.ts，主进程收到原文后解析。失败回 null 带原因。
- */
-async function choreComplete(command: Extract<AgentHouseholdCommand, { type: "choreComplete" }>): Promise<void> {
-  const fail = (error: string): void => {
-    send({ type: "choreCompleted", requestId: command.requestId, text: null, error });
-  };
-  try {
-    const runtime = await createModelRuntime();
-    const model = registerAndResolveModel(runtime, command.provider, command.modelId);
-    if (model === undefined) {
-      fail(`unknown model "${command.provider.id}/${command.modelId}"`);
-      return;
-    }
-    const response = await completeSimple(
-      model,
-      {
-        systemPrompt: command.system,
-        messages: [{ role: "user", content: command.prompt, timestamp: Date.now() }],
-      },
-      {
-        apiKey: command.provider.apiKey,
-        maxTokens: 8192,
-        timeoutMs: CHORE_TIMEOUT_MS,
-        signal: AbortSignal.timeout(CHORE_TIMEOUT_MS),
-        onPayload: ccBillingPatch,
-        ...(command.provider.headers ? { headers: command.provider.headers } : {}),
-      },
-    );
-    if (response.stopReason === "error") {
-      fail(response.errorMessage ?? `${model.id} returned an error`);
-      return;
-    }
-    let output = "";
-    for (const block of response.content) {
-      if (block.type === "text") output += block.text;
-    }
-    send({ type: "choreCompleted", requestId: command.requestId, text: output });
   } catch (cause) {
     fail(cause instanceof Error ? cause.message : String(cause));
   }
@@ -297,11 +249,6 @@ async function handle(command: AgentHouseholdCommand): Promise<void> {
   if (command.type === "probeProvider") {
     // 同上：独立小调用，不挡后续命令
     void probeProvider(command);
-    return;
-  }
-  if (command.type === "choreComplete") {
-    // 同上：独立小调用，不挡后续命令
-    void choreComplete(command);
     return;
   }
   // 穷尽性检查：AgentHouseholdCommand 加了新分支而这里没接，编译期就报

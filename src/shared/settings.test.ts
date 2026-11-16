@@ -277,16 +277,9 @@ describe("parseSettings 的 gitAttribution", () => {
   });
 });
 
-describe("parseSettings 的 planFirst（先给我看计划）", () => {
-  it("缺席 = 关，不落键", () => {
-    deepStrictEqual(parseSettings({ theme: "graphite" }).planFirst, undefined);
-  });
-
-  it("布尔原样保留，非布尔丢掉", () => {
-    deepStrictEqual(parseSettings({ planFirst: true }).planFirst, true);
-    deepStrictEqual(parseSettings({ planFirst: false }).planFirst, false);
-    deepStrictEqual(parseSettings({ planFirst: "yes" }).planFirst, undefined);
-    deepStrictEqual(parseSettings({ planFirst: 1 }).planFirst, undefined);
+describe("parseSettings 的 planFirst（先给我看计划，2026-11-16 删了）", () => {
+  it("旧 settings.json 里存着的 planFirst 不再读进来", () => {
+    deepStrictEqual("planFirst" in parseSettings({ planFirst: true }), false);
   });
 });
 

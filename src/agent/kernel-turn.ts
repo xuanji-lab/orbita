@@ -376,7 +376,6 @@ export async function assembleTurn(
   const rounds = observer.rounds ?? new ToolRounds();
   const branch = observer.branch ?? new DurableBranch(target.conversation.id);
   const planOptions: PlanToolOptions = {
-    planFirst: command.planFirst === true,
     branch: () => branch.entries,
     state: { stopping: false },
   };

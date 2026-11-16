@@ -218,7 +218,7 @@ export interface MemoryInjectionRecord {
 /* ---------- 主进程 ↔ 记忆服务进程的消息协议 ---------- */
 
 /**
- * 家务活模型（切段分类与三类提取都用它）：主进程装配好的密钥面（choreComplete
+ * 家务活模型（切段分类与三类提取都用它）：主进程装配好的密钥面（probeProvider
  * 同款——agent / 记忆服务进程不碰 secrets 文件）。缺席 = 没配，不构建。
  */
 export interface MemoryChoreModel {

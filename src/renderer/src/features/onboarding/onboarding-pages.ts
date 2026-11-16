@@ -53,7 +53,6 @@ export const SHOT_IDS = [
   "board-week",
   "focus",
   "closing",
-  "carryovers",
 ] as const;
 export type ShotId = (typeof SHOT_IDS)[number];
 
@@ -445,15 +444,13 @@ export const GUIDE: readonly GuideChapter[] = [
       step("week", "board-week", { focus: box("board-week", "card"), pins: [pin(1, box("board-week", "card"), "tl")] }),
     ],
   },
-  // 第 13 章原型第 4 页「交给自动化消化」（让自动化把「以后再做」消化掉）是虚线待定：等实测结论再加，先不做
   {
     id: "focus",
     part: "tools",
     pages: [
       opener("focus"),
       step("focus", "focus", { focus: box("focus", "picker"), pins: [pin(1, box("focus", "key", 0.004), "b")] }),
-      step("wrap", "closing", { focus: box("closing", "card"), pins: [pin(1, box("closing", "tick", 0.004), "b")] }),
-      step("later", "carryovers", { focus: part(box("carryovers", "list", 0), { h: 0.55 }), pins: [pin(1, box("carryovers", "list", 0), "tr")] }),
+      step("wrap", "closing", { focus: box("closing", "tick", 0.004), pins: [pin(1, box("closing", "tick", 0.004), "b")] }),
     ],
   },
   { id: "faq", part: "appendix", pages: [faq("perms"), faq("data"), faq("twice"), faq("language"), faq("background"), faq("update")] },

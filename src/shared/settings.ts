@@ -103,7 +103,7 @@ export interface LastUsedIntent {
 }
 
 /**
- * 给家务活用的模型（起名、收尾扫描……）。这些是一次次的
+ * 给家务活用的模型（起名……）。这些是一次次的
  * 小调用，用不着主力模型——指一个小而快的，来得更快也更便宜，后面还会让它
  * 承担更多家务。两个 id 必须成对：光有 modelId 无法定位到哪家的密钥。
  */
@@ -260,14 +260,8 @@ export interface AppSettings {
    */
   gitAttribution?: boolean;
   /**
-   * 「先给我看计划」（2026-10-30）：agent 第一次写下一张新计划后先停下，等你点头再动手。
-   * **缺席 = 关**：默认不拦，只有 plan 档（计划就是它的产出）与 agent 带了具体问题（confirm）才停。
-   * 只认布尔，同 gitAttribution 的纪律。改动下一轮对话即生效（主进程每轮现读）。
-   */
-  planFirst?: boolean;
-  /**
-   * 家务活模型：给任务起名、收尾扫描、迁移的「跳过随手一句」检查这类小活的专用模型。
-   * **缺席 = 各自退回会话当时的模型**（起名 / 扫描）或置灰不可用（随手一句检查，
+   * 家务活模型：给任务起名、迁移的「跳过随手一句」检查这类小活的专用模型。
+   * **缺席 = 各自退回会话当时的模型**（起名）或置灰不可用（随手一句检查，
    * 状态行提醒去选）。主进程在发命令前把它解成带密钥的 provider 载荷；指的
    * provider 被删了不拦那件家务，退回会话模型。
    *
@@ -587,7 +581,6 @@ export function parseSettings(raw: unknown): AppSettings {
     onboardingSeen?: unknown;
     docPaper?: unknown;
     gitAttribution?: unknown;
-    planFirst?: unknown;
     choreModel?: unknown;
     /** 旧键（只管起名的时代）：choreModel 缺席时读它，选过的用户不用重选 */
     titleModel?: unknown;
@@ -664,7 +657,6 @@ export function parseSettings(raw: unknown): AppSettings {
       ? { gitAttribution: record.gitAttribution }
       : {}),
     // 同上：非布尔丢掉，缺席 = 关
-    ...(typeof record.planFirst === "boolean" ? { planFirst: record.planFirst } : {}),
     // 同 gitAttribution 的纪律：非布尔丢掉，缺席 = 折叠（现状）
     ...(typeof record.collapsePastedText === "boolean"
       ? { collapsePastedText: record.collapsePastedText }

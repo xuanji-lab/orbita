@@ -4,7 +4,7 @@
  * legacy-migrate.ts（纯模块，`node --test` 直接测），这里只管 parentPort 收发、模型目录与进程级单例。
  *
  * 主进程在第一次有会话要跑时拉起它，界面里的对话主循环（根会话、子会话、自动化开的轮）由它跑。
- * agent runtime（runtime.ts）只剩不跑轮的家务（内建目录与刷新、连接测试、小结与收尾清单、还没迁的旧会话的 pi 本子编辑）；
+ * agent runtime（runtime.ts）只剩不跑轮的家务（内建目录与刷新、连接测试、专注小结、还没迁的旧会话的 pi 本子编辑）；
  * 两个进程合一留到去掉 pi-coding-agent 依赖的那一步（家务里有几件还用着它）。
  *
  * 为什么是 utility 进程：SQLite 的同步调用（node:sqlite 是同步 API）与大会话迁移的 JSON 处理

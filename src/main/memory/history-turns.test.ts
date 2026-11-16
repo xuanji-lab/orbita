@@ -11,7 +11,7 @@ import { join } from "node:path";
 import type { TranscriptItem } from "../../shared/transcript.ts";
 import { SessionStore } from "../session/store.ts";
 import type { SessionMeta, SessionRecord } from "../../shared/session.ts";
-import { buildClosingScanPrompt } from "../../shared/wrapup-scan.ts";
+import { CLOSING_SCAN_HEAD } from "../../shared/wrapup-scan.ts";
 import { MEMORY_ASSISTANT_SNAPSHOT_CHARS } from "../../shared/memory.ts";
 import { estimateCalls, historyTurnsOf } from "./history-turns.ts";
 
@@ -87,7 +87,8 @@ test("子会话一轮都不出；收尾扫描与通道标记开的轮不进、�
       timestamp: 1500,
     },
     assistant("收到子会话回报后的回答", 1600),
-    user(buildClosingScanPrompt({ sinceTurn: 1, lastTurn: 1, turns: [] }), 2000),
+    user(`${CLOSING_SCAN_HEAD}
+这个会话已经完成了。`, 2000),
     assistant("扫描结果", 2100),
   ];
   // 子会话：哪怕是正常问答也一轮都不出（读记忆不写）

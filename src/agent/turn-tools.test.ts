@@ -33,7 +33,7 @@ function names(command: TurnInput): string[] {
     flags,
     broker: new RequestBroker(() => undefined),
     mcpTools: [],
-    planOptions: { planFirst: false, branch: () => [], state: { stopping: false } },
+    planOptions: { branch: () => [], state: { stopping: false } },
     branch: () => [],
     attachedImages: () => [],
     memoryTurn: () => 1,

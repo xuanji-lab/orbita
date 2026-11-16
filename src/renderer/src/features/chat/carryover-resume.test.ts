@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import {
   buildCarryoverFollowUp,
   buildCarryoverSeed,
-  canResumeInSource,
 } from "./carryover-resume.ts";
 // deriveSessionTitle 是运行时导出，而 @shared 别名只在构建期由 electron-vite 解析——
 // 测试里对运行时真源走相对路径（type 仍走别名，与 home-cards.test.ts 同款纪律）
@@ -98,21 +97,6 @@ describe("buildCarryoverFollowUp（方案 B：原会话内的用户消息）", (
   test("detail 为空：同样省略摘录行", () => {
     const text = buildCarryoverFollowUp(item({ detail: "" }));
     assert.ok(!text.includes("摘录"));
-  });
-});
-
-describe("canResumeInSource（方案 B 可用性）", () => {
-  test("来源存在且有 pi 本子 → 可续跑", () => {
-    assert.equal(canResumeInSource(item(), [meta("s1", "/x/session.jsonl")]), true);
-  });
-
-  test("来源存在但无本子（导入的只读会话）→ 不可", () => {
-    assert.equal(canResumeInSource(item(), [meta("s1", null)]), false);
-  });
-
-  test("来源已删 → 不可", () => {
-    assert.equal(canResumeInSource(item(), [meta("other", "/x.jsonl")]), false);
-    assert.equal(canResumeInSource(item(), []), false);
   });
 });
 

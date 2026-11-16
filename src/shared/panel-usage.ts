@@ -28,8 +28,6 @@ export const PANEL_USAGE_KEYS = [
   /** 记忆库（设置里的页签） */
   "memory",
   "intent",
-  /** 遗留事项（侧栏子视图） */
-  "carryovers",
   /** 已归档（侧栏子视图） */
   "archived",
   /** 通知清单（右栏「更多」里的通知） */

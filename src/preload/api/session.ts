@@ -12,7 +12,6 @@ import type {
   ModelAssignGroups,
   ModelAssignRunResult,
 } from "../../shared/model-assign.ts";
-import type { WrapupConfirmInput, WrapupPlan, WrapupReviseInput, WrapupReviseResult } from "../../shared/wrapup.ts";
 import type {
   Carryover,
   CarryoverStatus,
@@ -89,18 +88,9 @@ export const sessionApi = {
   /** 导出成 Markdown，走原生保存对话框；取消返回 null，否则返回落盘路径 */
   exportMarkdown: (id: string): Promise<string | null> =>
     ipcRenderer.invoke(ipcChannels.sessionExport, id),
-  // —— 遗留事项（收尾仪式）三通道 ——
-  /** 全部遗留事项，落盘顺序。角标与筛选按 sourceSessionId 在 renderer 现算 */
+  // —— 遗留事项（以后再做）两通道 ——
+  /** 全部遗留事项，落盘顺序。按 sourceSessionId 在 renderer 现算 */
   carryoverList: (): Promise<Carryover[]> => ipcRenderer.invoke(ipcChannels.carryoverList),
-  // —— 收尾（shared/wrapup.ts）三通道 ——
-  /** 这次要扫的轮次与各轮用量；会话不存在 / 没有新轮次 null */
-  wrapupPlan: (id: string): Promise<WrapupPlan | null> => ipcRenderer.invoke(ipcChannels.sessionWrapupPlan, id),
-  /** 按用户一句话改清单（家务活模型一次独立小调用，不进会话） */
-  wrapupRevise: (id: string, input: WrapupReviseInput): Promise<WrapupReviseResult> =>
-    ipcRenderer.invoke(ipcChannels.sessionWrapupRevise, id, input),
-  /** 确认：做完的事落账、留下的事进遗留清单、会话标完成、接着做的遗留事项标做完 */
-  wrapupConfirm: (id: string, input: WrapupConfirmInput): Promise<void> =>
-    ipcRenderer.invoke(ipcChannels.sessionWrapupConfirm, id, input),
   /** 翻转一条的状态：done 记 doneAt，回 open 清掉 */
   carryoverSetStatus: (id: string, status: CarryoverStatus): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.carryoverSetStatus, id, status),

@@ -17,7 +17,7 @@ import {
   type VirtualHistoryRow,
 } from "./virtual-history.ts";
 import type { ToolTranscriptItem } from "@shared/transcript";
-import type { ScanAnswerCard, ToolResultIndex, TurnViewEntry } from "./tool-results.ts";
+import type { ToolResultIndex, TurnViewEntry } from "./tool-results.ts";
 
 /** 测试用的最小条目工厂：只塞判定会读到的字段 */
 function user(key: string): TurnViewEntry {
@@ -84,11 +84,10 @@ function resultIndex(ids: string[]): ToolResultIndex {
   return new Map(ids.map((id) => [id, completeResult(id)]));
 }
 
-const NO_CARDS: ReadonlyMap<string, ScanAnswerCard> = new Map();
 const NO_BRANCHES: ReadonlyMap<number, string> = new Map();
 
-function rows(view: TurnViewEntry[], results: ToolResultIndex = resultIndex([]), cards = NO_CARDS, branches = NO_BRANCHES) {
-  return virtualHistoryRows(view, results, cards, "parent", branches);
+function rows(view: TurnViewEntry[], results: ToolResultIndex = resultIndex([]), branches = NO_BRANCHES) {
+  return virtualHistoryRows(view, results, "parent", branches);
 }
 
 describe("virtualHistoryRows", () => {
@@ -113,14 +112,12 @@ describe("virtualHistoryRows", () => {
     assert.deepEqual(rows(view, results).map((row) => row.entry.key), ["t:0", "t:3", "t:4"]);
   });
 
-  test("同一条消息的后续 text 块被扫描卡吸收，但带分支行时保留", () => {
+  test("同一条消息的多个 text 块各占一行（扫描回答卡 2026-11-16 删了，不再吸收）；被丢的行带分支行时保留", () => {
     const view = [text("a:0", "a"), text("a:1", "a"), text("a:2", "a")];
-    const cards = new Map<string, ScanAnswerCard>([
-      ["a", { firstKey: "a:0", scan: {} } as unknown as ScanAnswerCard],
-    ]);
-    assert.deepEqual(rows(view, resultIndex([]), cards).map((row) => row.entry.key), ["a:0"]);
-    const branches = new Map([[2, "anchor"]]);
-    assert.deepEqual(rows(view, resultIndex([]), cards, branches).map((row) => row.entry.key), ["a:0", "a:2"]);
+    assert.deepEqual(rows(view).map((row) => row.entry.key), ["a:0", "a:1", "a:2"]);
+    const progress = { kind: "channelMark", key: "p", mark: { peerId: "x", messageId: "m", from: "child", kind: "progress" }, timestamp: 0 } as TurnViewEntry;
+    assert.deepEqual(rows([progress]).map((row) => row.entry.key), []);
+    assert.deepEqual(rows([progress], resultIndex([]), new Map([[0, "anchor"]])).map((row) => row.entry.key), ["p"]);
   });
 
   test("通道标记：父看子非 progress 保留，父看子 progress 丢弃", () => {
@@ -134,7 +131,7 @@ describe("virtualHistoryRows", () => {
     const view: TurnViewEntry[] = [
       { kind: "channelMark", key: "k", mark: { peerId: "p", messageId: "m", from: "parent", kind: "task" }, timestamp: 0 } as TurnViewEntry,
     ];
-    const kept = virtualHistoryRows(view, resultIndex([]), NO_CARDS, "child", NO_BRANCHES);
+    const kept = virtualHistoryRows(view, resultIndex([]), "child", NO_BRANCHES);
     assert.equal(kept.length, 1);
   });
 });

@@ -398,7 +398,6 @@ export const en = {
   },
 
   app: {
-    carryoversEntry: (open: number) => `For later (${open})`,
     archivedEntry: (count: number) => `Archived (${count})`,
   },
 
@@ -1101,7 +1100,6 @@ export const en = {
   },
 
   sidebar: {
-    emptyHasTodos: "No task has open carryover items. Wrap one up to collect them here.",
     emptyDoneStarred: "No starred tasks done yet.",
     emptyDone: "No done tasks yet. Mark a task done from its menu to find it here.",
     emptyStarred: "No starred tasks yet. Hover a task and click its star to find it here.",
@@ -1117,8 +1115,6 @@ export const en = {
     filterDoneTip: "Completed tasks",
     filterStarred: "Starred",
     filterStarredTip: "Show starred tasks only",
-    filterTodos: "Has todos",
-    filterTodosTip: "Show tasks with open carryover items only",
     filterAge: "Time range",
     filterAgeTip: "Only tasks active within a recent period",
     filterAgeChip: (days: number) => `${days}d`,
@@ -1189,25 +1185,10 @@ export const en = {
     starredTip: "Starred · click to unstar",
     reopen: "Reopen this task",
     markDone: "Mark this task done",
-    doneWithTodos: (open: number) => `Done with ${plural(open, "open carryover item")} · click to reopen`,
     doneTip: "Done · click to reopen",
     idleSuggest: (days: number) => `Idle for ${days}+ days · mark done?`,
-    openTodosLeft: (open: number) => `${plural(open, "open carryover item")} left`,
     taskActions: "Task actions",
-    carryovers: "For later",
-    noCarryovers: "Nothing noted for later yet. Things the agent notices but won't do in a task are kept here.",
     noArchived: "Nothing archived. Archive a task from its menu to move it here without deleting it.",
-    sourceDeleted: "The source task was deleted",
-    openSource: "Open the source task",
-    deletedTask: "Deleted task",
-    reopenItem: "Reopen this item",
-    markItemDone: "Mark this item done",
-    continueWithContext: "Continue with context",
-    continueTipResumable:
-      "Put this item's context in the input box — pick a workspace, then press Enter · right-click to continue in the original task",
-    continueTip: "Put this item's context in the input box — pick a workspace, then press Enter",
-    jumpToSource: "Jump to the source task",
-    jumpToSourceTip: "Open the task this came from",
   },
 
   focus: {
@@ -1347,7 +1328,6 @@ export const en = {
         review: "Review",
         memory: "Memory",
         intent: "Intent",
-        carryovers: "Carryovers",
         archived: "Archive",
         bell: "Notifications",
         plugins: "Abilities",
@@ -1383,7 +1363,7 @@ export const en = {
     compactSummary: "folds into a summary",
     choreModel: "Chore model",
     choreModelInfo:
-      "Small housekeeping calls — naming tasks, revising the wrap-up list from what you say · a fast model is enough · more chores will move here over time",
+      "Small housekeeping calls — naming tasks and the like · a fast model is enough · more chores will move here over time",
     choreModelTip: "Chores use the model the task is running",
     sameAsSession: "Same as session",
     sameAsSessionHint: "Use whichever model the task is running",
@@ -1397,10 +1377,6 @@ export const en = {
     thinkingLevelFor: (modelId: string) => `Thinking level for ${modelId}`,
     defaultThinking: (label: string) => `Default · ${label}`,
     attribution: "Commit & PR attribution",
-    planFirst: "Show me the plan first",
-    planFirstAria: "Show me the plan first",
-    planFirstInfo:
-      "After the agent writes the first plan of a task, it stops and waits for your reply in the chat box before doing anything (no buttons). Off by default · Plan mode and questions from the agent always pause first",
     attributionAria: "Commit and PR attribution",
     attributionInfo:
       "Adds a trailer to commits the agent writes and a line to PR descriptions · never sets Co-Authored-By or changes the author",
@@ -1772,7 +1748,7 @@ export const en = {
       borrowNote:
         "Levels the board didn't rate borrow the model's top rated level's score (dotted). The board skipping a level means it wasn't worth testing on its own — for real tasks, prefer the levels the board rated.",
       explainer:
-        "A task is one thing you confirmed as done when wrapping up a session: its cost is those turns added up, counted toward the model and thinking level that used the most tokens in them. A sub-session that reports back counts as one task. Sessions never wrapped up are not measured.",
+        "A task is a sub-session that reports back, counted toward the model and thinking level it ran on. Things confirmed as done in wrap-ups before November 2026 are kept as tasks too (their cost is those turns added up, counted toward the model and thinking level that used the most tokens in them).",
       planNote: "Plans and subscriptions are converted at official prices.",
       source: (date: string, revision: string) =>
         `Scores: Arena (arena.ai) · lmarena-ai/leaderboard-dataset · CC BY 4.0 · board ${date} · revision ${revision} · subsets and columns selected by Orbita`,
@@ -1943,8 +1919,6 @@ export const en = {
     homeMark: (month: number, day: number) => `Neat. — ${MARK_MONTHS[month - 1] ?? month} ${day}`,
     placeholderNew: "Ask anything, or start a task",
     placeholderReply: "Reply, or steer the agent",
-    // 收尾扫描是会话里的一轮、不设超时（审核 S-4）：出口是输入卡的停止键，这里说出来
-    placeholderScanning: "Wrapping up this task — press Stop anytime to end the scan",
     providersFailed: (error: string) => `Providers failed to load: ${error} — open Settings to retry.`,
     // 阻塞提示 = 一句说清卡在哪 + 句尾一个出口（Notice 的 exit）；草稿不会丢，说出来
     noProvider: "No model to send with yet. Your draft stays here.",
@@ -1967,13 +1941,10 @@ export const en = {
     backToParent: (title: string) => `Back to "${title}"`,
     renameTask: "Rename task",
     scrollToBottom: "Scroll to bottom",
-    scanningLabel: "Scanning for leftover items…",
     markTaskDone: "Mark task done",
     reopenTask: "Reopen task",
-    scanningTip: "Scanning this task for leftover items…",
     waitBeforeDone: "Wait for this task to finish before marking it done",
-    doneScanlessTip: "Mark done without a leftover scan (this task has no agent session)",
-    doneTip: "Mark this task done — the agent scans for leftovers first, reopen anytime",
+    doneTip: "Mark this task done — reopen anytime",
     reopenTip: "Reopen this task — clears the done state",
     subSessionCount: (count: number) => plural(count, "sub-session"),
     subSessionWaiting: (waiting: number) => `${waiting} waiting`,
@@ -2355,49 +2326,6 @@ export const en = {
     stoppedHint: "Already stopped — speak as the parent in the channel to re-open.",
   },
 
-  carryover: {
-    wrapUp: "Wrap up this task",
-    intro: (done: number, left: number) =>
-      `The agent looked back over this task: ${plural(done, "thing")} done, ${plural(left, "item")} left. Fix it here directly, or tell it what's wrong.`,
-    clickToEdit: "Click to edit",
-    doneGroup: "Done",
-    doneGroupNote: (count: number) => `${count} · each one is a task on the price chart`,
-    leftGroup: "Left to do",
-    leftGroupNote: (count: number) => `${count} · goes to For later, pick up any time`,
-    turns: (from: number, to: number) => (from === to ? `Turn ${from}` : `Turns ${from}–${to}`),
-    noTurns: "No turns",
-    jumpToTurns: "Jump back to this part of the conversation",
-    addDone: "Add something done",
-    addLeft: "Add something left to do",
-    newItemPlaceholder: "One line…",
-    removeDone: "Don't count this",
-    removeLeft: "Remove",
-    moveToLeft: "Move to left to do",
-    moveToDone: "Move to done",
-    feedbackPlaceholder: "Something off? Tell the agent (e.g. \"1 and 2 are one thing\")",
-    feedbackSend: "Send to the agent",
-    youSaid: "You said",
-    revising: "The agent is revising the list as you said…",
-    reviseFailed: (error: string) => `Not revised: ${error} (the list is unchanged)`,
-    reviseUnreadable: "Couldn't read the agent's reply — the list is unchanged. Try saying it another way.",
-    revised: (summary: string) => `As you said: ${summary}`,
-    undoRevise: "Undo this revision",
-    expand: "Show the list",
-    change: {
-      merged: "Merged",
-      "moved-to-left": "Moved from done",
-      "moved-to-done": "Moved from left",
-      added: "New",
-      edited: "Edited",
-    },
-    confirm: (done: number, left: number) => `Confirm: ${done} done · ${left} left`,
-    discardAndDone: "Discard & mark done",
-    keepOpen: "Keep open",
-    scanResult: "Closing scan result",
-    doneCount: (count: number) => `${plural(count, "thing")} done`,
-    itemsToCarry: (count: number) => `${plural(count, "item")} to carry over`,
-    nothingToCarry: "Nothing to carry over",
-  },
 
   /** 会话引擎（useChatSession）报给界面的错误与收尾结果 */
   session: {
@@ -2405,15 +2333,6 @@ export const en = {
     pickModelFirst: "Pick a model first.",
     noWorkspaceFolder: "Choose a workspace folder first",
     noRunningToCompact: "No running task to compact",
-    scanUnreadable:
-      "Didn't get a wrap-up list it could read — marked done. Retry to scan again; if it keeps happening, try another model.",
-    queuedBeforeWrapUp: "There are queued messages in this task — send or withdraw them before wrapping up.",
-    noAgentSession: "This task cannot be scanned (no agent session) — marked done directly.",
-    nothingSaid: "Nothing was ever said in this task — marked done directly.",
-    scanNoNewTurns: "Nothing new since the last wrap-up — marked done directly.",
-    wrapupConfirmed: (done: number, left: number) =>
-      `Marked done: ${plural(done, "thing")} done, ${plural(left, "item")} left to do.`,
-    checklistDiscarded: "Marked done — the checklist was discarded.",
   },
 
   terminal: {
@@ -3225,7 +3144,7 @@ export const en = {
           roles: {
             name: "Who does what",
             title: "Three jobs, one model each",
-            body: "The **main** model is the one you pick in the message box and does the real work; **sub-sessions** use theirs for helpers it sends out; **chores** — naming tasks, wrap-up scans — go to a small fast model.",
+            body: "The **main** model is the one you pick in the message box and does the real work; **sub-sessions** use theirs for helpers it sends out; **chores** — naming tasks and the like — go to a small fast model.",
             notes: ["Chore model: Settings › General.", "Sub-session model: left alone, it follows the main one."],
           },
           sources: {
@@ -3583,10 +3502,10 @@ export const en = {
         },
       },
       focus: {
-        name: "Focus and wrap-up",
-        blurb: "Focus for a while, wrap up, keep what's unfinished for later.",
+        name: "Focus and finishing",
+        blurb: "Focus for a while, then tick the task done.",
         case: "Case: getting one thing done",
-        lead: "Focus for a stretch, then wrap up: it lists what's left undone and keeps it for later.",
+        lead: "Focus for a stretch; when the task is done, tick it.",
         pages: {
           focus: {
             name: "Focus mode",
@@ -3595,16 +3514,10 @@ export const en = {
             notes: ["Start focus here."],
           },
           wrap: {
-            name: "Tick to wrap up",
+            name: "Tick it done",
             title: "Done? Tick it",
-            body: "The **tick** next to the task title wraps it up: it scans the task first, lists what's still undone, and marks it done once you confirm. You can reopen it any time.",
-            notes: ["Wrap up this task."],
-          },
-          later: {
-            name: "For later",
-            title: "Unfinished work isn't lost",
-            body: "Leftovers you confirm at wrap-up go to More › **For later**; click one to start a new task with its context and pick up where you stopped.",
-            notes: ["Leftovers, grouped by the task they came from."],
+            body: "The **tick** next to the task title marks the task done. You can reopen it any time.",
+            notes: ["Mark this task done."],
           },
         },
       },

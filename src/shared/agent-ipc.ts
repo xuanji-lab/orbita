@@ -359,18 +359,6 @@ export const ipcChannels = {
   updaterState: "updater:state",
   /** 自动更新：最近几个版本的 Release 列表（`RecentReleasesResult`，主进程打 GitHub API 并缓存 10 分钟） */
   updaterRecentReleases: "updater:recentReleases",
-  /**
-   * 收尾（契约在 shared/wrapup.ts）：这次要扫的轮次与各轮用量。载荷 sessionId，回 `WrapupPlan | null`
-   * （会话不存在 / 没有新轮次时 null）。
-   */
-  sessionWrapupPlan: "session:wrapup-plan",
-  /** 收尾：按用户一句话改清单（家务活模型一次独立小调用，不进会话）。载荷 (sessionId, WrapupReviseInput)，回 `WrapupReviseResult` */
-  sessionWrapupRevise: "session:wrapup-revise",
-  /**
-   * 收尾确认：做完的事落进 meta.wrapups 并记进任务账本、留下的事落遗留清单、会话标完成、
-   * 这条会话在接着做的遗留事项（meta.resumedCarryovers）标为做完。载荷 (sessionId, WrapupConfirmInput)，回 void
-   */
-  sessionWrapupConfirm: "session:wrapup-confirm",
   /** 翻转一条的状态：done 记 doneAt，回 open 清掉 */
   carryoverSetStatus: "carryover:set-status",
   /** 会话回退：算计划（确认框列清单用），不执行 */
@@ -720,11 +708,6 @@ export interface SubmitAgentInput extends AgentTurnContext {
   files?: PromptFileRef[];
   /** 随消息发的粘贴文本块（全文、永不截断），按加入顺序；agent 进程组装进正文之后 */
   pasted?: string[];
-  /**
-   * 这一轮是在接着做某条遗留事项（遗留清单的「继续」）：主进程把它记进这条会话的
-   * meta.resumedCarryovers，会话收尾确认时那条遗留事项自动标为做完。
-   */
-  carryoverId?: string;
 }
 
 /** 接着跑上次被中断的那一轮（renderer → 主进程，新内核独有）：不带新消息，开工上下文照常全套 */
@@ -931,8 +914,6 @@ export type AgentCommand =
        * 并讲它的用法；缺席 = 关
        */
       pdfCitations?: boolean;
-      /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
-      planFirst?: boolean;
       /**
        * 插件工具的注册开关。用户开轮时主进程恒带 true（插件 2026-11-06 转正）；runtime 据此注册
        * install_plugin / list_plugins / preview_plugin（只给根会话）。缺席 = 不注册（不经 submitTurn 的开轮）
@@ -994,18 +975,6 @@ export type AgentCommand =
     }
   | {
       /**
-       * 家务活模型的一次独立小调用（收尾清单按用户反馈改写）：system + prompt 由主进程组好，
-       * 回复原文经 `choreCompleted` 事件按 requestId 回传。不开会话、不落盘（同 summarizeFocus）。
-       */
-      type: "choreComplete";
-      requestId: string;
-      provider: ProviderSecrets;
-      modelId: string;
-      system: string;
-      prompt: string;
-    }
-  | {
-      /**
        * 连接探测（设置 › 模型服务的 Test，OAuth 令牌专用路由）：主进程的裸 fetch
        * 补齐身份头后仍被 429（实测 2026-10），官方 SDK 客户端自带的遥测指纹补不了——
        * 干脆让探测走 agent 进程里 pi 的同一个客户端，与真会话完全同源。
@@ -1063,8 +1032,6 @@ export type AgentCommand =
       attributionLanguage?: Language;
       /** 实验功能「PDF 引用」的开关，语义同 submit */
       pdfCitations?: boolean;
-      /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
-      planFirst?: boolean;
       /** 插件工具的注册开关，语义同 submit */
       pluginTools?: boolean;
       /** 意图系统（实验），语义同 submit：开关开时主进程装配；缺席 = 走与 main 一致的路径 */
@@ -1133,8 +1100,6 @@ export type AgentCommand =
       attributionLanguage?: Language;
       /** 实验功能「PDF 引用」的开关，语义同 submit */
       pdfCitations?: boolean;
-      /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
-      planFirst?: boolean;
       /** 插件工具的注册开关，语义同 submit */
       pluginTools?: boolean;
     }
@@ -1294,8 +1259,7 @@ export type AgentHouseholdCommand = Extract<
       | "setModel"
       | "mcpReload"
       | "summarizeFocus"
-      | "probeProvider"
-      | "choreComplete";
+      | "probeProvider";
   }
 >;
 
@@ -1664,8 +1628,6 @@ export type AgentEvent =
    */
   | { type: "title"; sessionId: string; title: string }
   | { type: "focusSummarized"; requestId: string; bullets: string[] | null; error?: string }
-  /** `choreComplete` 的回执：text = 回复里全部 text 块拼接；null 时 error 说原因 */
-  | { type: "choreCompleted"; requestId: string; text: string | null; error?: string }
   /** `probeProvider` 的回执：ok = 真会话同源客户端拿到了模型响应；message 直接进 Test 的状态行 */
   | { type: "providerProbed"; requestId: string; ok: boolean; message: string }
   /**

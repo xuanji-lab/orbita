@@ -150,10 +150,10 @@ describe("parseSessionMeta", () => {
       resumedCarryovers: ["c1", "c1", 7, ""],
     });
     deepStrictEqual(parsed?.wrapups, [good]);
-    deepStrictEqual(parsed?.resumedCarryovers, ["c1"]);
+    // 旧 meta 里的 resumedCarryovers（遗留事项「继续」的记账）不再读：收尾确认删了，没人再用它
+    strictEqual(parsed !== null && "resumedCarryovers" in parsed, false);
     const empty = parseSessionMeta({ ...valid, wrapups: [{ id: "bad" }], resumedCarryovers: [] });
     strictEqual(empty !== null && "wrapups" in empty, false);
-    strictEqual(empty !== null && "resumedCarryovers" in empty, false);
   });
 
   // 少一条会话，比多一条指向空白的假会话好

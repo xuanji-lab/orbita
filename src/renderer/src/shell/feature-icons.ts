@@ -8,16 +8,14 @@
  * **换某功能的图标只改这张表**（新形状先在 Icon.tsx 登记 SVG 再改这里的值）；
  * `feature-icons.test.ts` 会拦下渲染层里新出现的字面量（撞通用义的少数名字有放行档，见该测试）。
  *
- * 键名跟功能走，不跟右栏条目的 id 走：task=这条任务（右栏 id 是 context）、
- * carryovers=以后再做。加新功能先在这里登记一行，再在表面里引用。
+ * 键名跟功能走，不跟右栏条目的 id 走：task=这条任务（右栏 id 是 context）。
+ * 加新功能先在这里登记一行，再在表面里引用。
  */
 import type { IconName } from "./Icon.tsx";
 
 export const FEATURE_ICON = {
   /** 这条任务：右栏面板、面板里的「进度」页签、聊天里的计划卡 */
   task: "clipboard-list",
-  /** 以后再做（遗留事项）：侧栏子视图、收尾扫描卡、收工卡 */
-  carryovers: "hourglass",
   /** 记忆库：右栏入口、「用到 N 条记忆」chip、审查面板的记忆页签与空态 */
   memory: "notebook-text",
   /** 自动化：面板标题与空态、聊天里建自动化的卡与唤醒行、周看板的排定运行 */
