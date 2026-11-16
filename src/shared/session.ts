@@ -510,6 +510,13 @@ export interface SessionMeta {
   stats: AgentStats | null;
   /** 住在新内核里（见 DurableMark）；缺席 = 旧内核的会话 */
   durable?: DurableMark;
+  /**
+   * 这条会话是它所在工作区的常驻主智能体（2026-11-17）。**缺席 = 普通会话**（缺席即否）。
+   * 真源是主进程的档案 `agents/main/<工作区 id>.json`（工作区 → 主会话），这个字段只是让列表渲染
+   * 不用查档案就能认出它；两者不一致时以档案为准（取档案时顺手修 meta）。
+   * 主智能体本身不进侧栏的会话行（点工作区那一行就是它），它派出的活是 parentId 指向它的子会话。
+   */
+  role?: "main";
   createdAt: number;
   updatedAt: number;
 }
@@ -800,6 +807,8 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
       : {}),
     // 新内核的标记：坏值当没有（旧内核的会话）
     ...(durable === null ? null : { durable }),
+    // 主智能体标记：只认 "main"，别的值当普通会话（老版本不认这个键，读到也只是忽略）
+    ...(value["role"] === "main" ? { role: "main" as const } : null),
     createdAt,
     updatedAt: typeof value["updatedAt"] === "number" ? value["updatedAt"] : createdAt,
   };

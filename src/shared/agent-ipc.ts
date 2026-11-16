@@ -388,6 +388,8 @@ export const ipcChannels = {
   /** 审查面板：拉一个文件的 diff 正文（unified diff，按需） */
   reviewDiff: "review:diff",
   /** 专注模式：一个工作区此刻的 U / M 改动（含增删行数与当前分支名，载荷形状在 shared/focus.ts）。git 只读，与审查面板同一套 git-source */
+  /** 常驻主智能体：取（没有就惰性建）某个工作区的主智能体档案（载荷形状在 shared/main-agent.ts）。只建档案、不建会话——会话在第一句话发出时才落盘 */
+  agentsMain: "agents:main",
   focusChanges: "focus:changes",
   /** 专注模式：时间到的系统通知（Electron Notification，点按聚焦窗口；载荷 FocusNotifyRequest） */
   focusNotifyDone: "focus:notify-done",
@@ -953,6 +955,11 @@ export type AgentCommand =
        */
       pluginTools?: boolean;
       /**
+       * 这条会话是它所在工作区的常驻主智能体（主进程按 `agents/main/<工作区>.json` 档案判定）。
+       * runtime 据此在系统提示词里加一段主智能体的身份与派活规矩；缺席 = 普通会话，提示词一字不差。
+       */
+      mainAgent?: boolean;
+      /**
        * 意图系统（实验功能 intent-system）：开关开且这是根会话的用户原话时主进程
        * 装配（intentTurnEnv 的纯推导）。缺席 = 不召回，runtime 走与 main 完全
        * 一致的路径（不调 recall、不发卡片事件）。
@@ -1069,6 +1076,8 @@ export type AgentCommand =
       pdfCitations?: boolean;
       /** 插件工具的注册开关，语义同 submit */
       pluginTools?: boolean;
+      /** 常驻主智能体，语义同 submit */
+      mainAgent?: boolean;
       /** 意图系统（实验），语义同 submit：开关开时主进程装配；缺席 = 走与 main 一致的路径 */
       intent?: IntentTurnContext;
       /** 待补记的 user 原话尾巴，语义同 submit */
@@ -1142,6 +1151,8 @@ export type AgentCommand =
       pdfCitations?: boolean;
       /** 插件工具的注册开关，语义同 submit */
       pluginTools?: boolean;
+      /** 常驻主智能体，语义同 submit */
+      mainAgent?: boolean;
     }
   | { type: "listBuiltins" }
   /**
