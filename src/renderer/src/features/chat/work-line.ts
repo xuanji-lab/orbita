@@ -8,7 +8,7 @@
  *   2. 计划里在做的那一步（在等的步带上在等谁）
  *   3. 书记员写的（接口留着，这次没有来源）
  *   4. 「正在跑命令」「正在读文件」这类不带参数的说法
- * 每一级先过 sanitizeWorkLine：**永远不露出命令、网址、路径、英文代号**；洗完不剩几个字的这一级作废，往下取。
+ * 每一级先过 sanitizeWorkLine：**永远不露出命令、网址、路径、英文代号**——一句里有任何这类东西就整句作废、往下取，不拼补。
  *
  * 「没动静」：同时满足「N 分钟没有新动作」和「正在跑的命令也没有新输出」才算——两者都会让会话收到 progress 事件
  * （新的条目 / 工具输出更新），所以按「最后一次收到 progress 的时间」算一个数就够；长命令持续有输出不算。
@@ -57,40 +57,29 @@ const SHELL_LINE = /&&|\|\||\s\|\s|^\s*\$\s|(?:^|\s)(?:sudo|rm|cd|git|bun|npm|no
 const MARKDOWN = /\*\*|__|^#+\s*|^\s*(?:[-*+]|\d+[.)])\s+|^>\s*/gm;
 
 /**
- * 洗一句话：去掉代码块、反引号内容、网址、带路径分隔符的片段、英文代号、markdown 记号；收拢空白与洗剩下的空括号、
- * 悬空标点。洗完剩的字太少（中文不到 5 个字、英文不到 8 个字母）= ""，调用方换下一级来源。
+ * 一句话能不能原样用：**只要里面有任何要洗掉的东西**（代码块、反引号内容、网址、带路径分隔符的片段、英文代号、全大写错误码、
+ * 中文句子里夹的小写英文词 / 全大写缩写、整句是命令）就整句不用、返回 ""，调用方落到下一级来源。不去拼补——洗掉一截留下的
+ * 残句（「我先读一下里的，看投递从哪进来。」）比不显示更糟（主会话 2026-11-17）。
+ * 原话干净时：只去掉 markdown 记号、收拢空白（不算改字），超长截断加省略号；剩的字太少（中文不到 5 个、英文不到 8 个字母；
+ * 计划步骤这类短标题门槛 2 / 3）同样作废。所以输出要么是原话（去掉 markdown 记号、可能截断），要么是 ""。
  */
 export function sanitizeWorkLine(text: string, minimum: { han: number; letters: number } = SENTENCE_MINIMUM): string {
-  // 整句是一条命令（管道、&&、提示符开头）：没有可留的
-  if (SHELL_LINE.test(text)) return "";
-  let out = text
-    .replace(FENCE, " ")
-    .replace(INLINE_CODE, " ")
-    .replace(URL, " ")
-    .replace(MARKDOWN, "")
-    .replace(PATHISH, " ")
-    .replace(CODENAME, " ");
-  // 中文句子里夹的英文小写词与全大写缩写（HEAD、worktree、push）几乎都是技术代号；首字母大写的专名（Windows）留着。
-  // 纯英文的句子（English 界面）不做这一步
-  // 全大写的长词（ETIMEDOUT、ENOENT）是错误码一类的代号，哪种语言里都去掉
-  out = out.replace(/(?<![\p{L}\p{N}])[A-Z]{4,}(?![\p{L}\p{N}])/gu, " ");
-  if (/\p{Script=Han}/u.test(out)) out = out.replace(/(?<![\p{L}\p{N}])(?:[a-z]+|[A-Z]{2,})(?![\p{L}\p{N}])/gu, " ");
-  out = out
-    .replace(/[(（「【\[]\s*[)）」】\]]/g, " ")
-    .replace(/\s+/g, " ")
-    .replace(/\s+([，。；：！？,.;:!?、）)」])/g, "$1")
-    .replace(/([（(「])\s+/g, "$1")
-    .replace(/^[\s，。；：、,.;:!?·|-]+/, "")
-    .replace(/[\s，；：、,;:·|-]+$/, "")
-    .trim();
-  // 洗掉代号留下的空格夹在两个汉字之间（「打开 看评论」）：收掉
-  out = out.replace(/(?<=\p{Script=Han})\s+(?=\p{Script=Han})/gu, "");
-  // 剩下的字太少（「在改里的」）= 这句只剩骨架，作废换下一级
+  const out = text.replace(MARKDOWN, "").replace(/\s+/g, " ").trim();
+  if (out === "" || hasCodeLike(text) || hasCodeLike(out)) return "";
   const han = out.replace(/[^\p{Script=Han}]/gu, "").length;
   const letters = out.replace(/[^\p{L}]/gu, "").length;
   if (han > 0 ? han < minimum.han : letters < minimum.letters) return "";
-  if (out.length > WORK_LINE_MAX) out = `${out.slice(0, WORK_LINE_MAX - 1).trimEnd()}…`;
-  return out;
+  return out.length > WORK_LINE_MAX ? `${out.slice(0, WORK_LINE_MAX - 1).trimEnd()}…` : out;
+}
+
+/** 有没有要洗掉的东西（search 不受 /g 的 lastIndex 影响） */
+function hasCodeLike(text: string): boolean {
+  if (SHELL_LINE.test(text)) return true;
+  for (const pattern of [FENCE, INLINE_CODE, URL, PATHISH, CODENAME]) if (text.search(pattern) !== -1) return true;
+  // 全大写的长词（ETIMEDOUT、ENOENT）是错误码一类的代号，哪种语言里都算
+  if (/(?<![\p{L}\p{N}])[A-Z]{4,}(?![\p{L}\p{N}])/u.test(text)) return true;
+  // 中文句子里夹的英文小写词与全大写缩写（HEAD、worktree、push）几乎都是技术代号；首字母大写的专名（Windows）不算。纯英文句子不看这条
+  return /\p{Script=Han}/u.test(text) && /(?<![\p{L}\p{N}])(?:[a-z]+|[A-Z]{2,})(?![\p{L}\p{N}])/u.test(text);
 }
 
 /** 一段话里「最后一段的第一句」：刚说的那句话（叙述在动手前说，最后一段最贴近现在） */

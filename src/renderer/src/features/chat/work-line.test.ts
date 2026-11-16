@@ -13,33 +13,43 @@ function assertClean(out: string): void {
   assert.doesNotMatch(out, /\b[A-Za-z]+\d|\d+[A-Za-z]|#\d+|\b[a-z]+[A-Z]|\b\w+[-_.]\w+/, `英文代号：${out}`);
 }
 
-// 真实样本：来自子会话的回报、进度笔记与 #488 验收时用户截图里露出来的那类句子
+// 真实样本：来自子会话的回报、进度笔记、#488 验收时用户截图里露出来的那类句子，以及实例 s5 截图里洗出残句的那句。
+// 期望值：null = 里面有要洗掉的东西，整句不用；字符串 = 原话干净、原样用（只去 markdown 记号）
 const SAMPLES: [string, string | null][] = [
-  ["`bun run test` 跑完了，7389 条里只红已知的 4 个", "跑完了，7389 条里只红已知的 4 个"],
-  ["打开 https://github.com/xuanji-lab/orbita/pull/488 看评论", "打开看评论"],
+  ["`bun run test` 跑完了，7389 条里只红已知的 4 个", null],
+  ["打开 https://github.com/xuanji-lab/orbita/pull/488 看评论", null],
   ["在改 src/main/channel/requests.ts 里的 applyChannelSend", null],
+  ["我先读一下 src/main/channel/requests.ts 里的 applyChannelSend，看投递从哪进来。", null],
   ["HEAD = 3da955ce，worktree 干净，未 push。", null],
-  ["第 6 组前半：自写基底提示 + 其余符号", "第 组前半：自写基底提示 + 其余符号"],
-  ["读 /Users/guanhongli/Library/Application Support/orbita/workbenches/x/progress.md 末尾几节", "读 Support 末尾几节"],
-  ["正在跑 kernel-e6 的对照台，等 39 个场景跑完", "正在跑的对照台，等 39 个场景跑完"],
+  ["第 6 组前半：自写基底提示 + 其余符号", "第 6 组前半：自写基底提示 + 其余符号"],
+  ["读 /Users/guanhongli/Library/Application Support/orbita/workbenches/x/progress.md 末尾几节", null],
+  ["正在跑 kernel-e6 的对照台，等 39 个场景跑完", null],
   ["rm -rf node_modules && bun install", null],
-  ["用 ~/Documents/repo/pi 里的上游源码对照 runTurn", "用里的上游源码对照"],
-  ["在 C:\\code\\orbita 起 Windows 实例验收 " + "#" + "488", "在起 Windows 实例验收"],
-  ["**换工具**：四件换成 pi-durable/tools", "换工具：四件换成"],
+  ["用 ~/Documents/repo/pi 里的上游源码对照 runTurn", null],
+  ["在 C:\\code\\orbita 起 Windows 实例验收 " + "#" + "488", null],
+  ["**换工具**：四件换成 pi-durable/tools", null],
+  ["**换工具**：四件都换完了，接着跑对照", "换工具：四件都换完了，接着跑对照"],
   ["```bash\nnode --test src/agent/kernel.test.ts\n```", null],
-  ["Reading the session store to see how marks are written.", "Reading the session store to see how marks are written."],
+  ["在 Windows 上起实例，等它启动完", "在 Windows 上起实例，等它启动完"],
+  ["Reading the session store first.", "Reading the session store first."],
+  ["下载超时 ETIMEDOUT，换镜像再试", null],
 ];
 
-describe("sanitizeWorkLine：永远不露出命令、网址、路径、英文代号", () => {
+/** 断口：洗掉一截后留下的残句记号 */
+const BROKEN = /里的[，。]|一下[，。]|^[，。：]|\s[，。]|（\s*）/;
+
+describe("sanitizeWorkLine：有任何要洗掉的东西就整句不用；干净的原样用", () => {
   for (const [input, expected] of SAMPLES) {
     it(input.slice(0, 30), () => {
       const out = sanitizeWorkLine(input);
-      if (expected === null) assert.equal(out, "", `应当整句作废：${out}`);
-      else assertClean(out);
-      if (expected !== null) assert.ok(out.length > 0);
+      assert.equal(out === "" ? null : out, expected);
+      if (out !== "") {
+        assertClean(out);
+        assert.doesNotMatch(out, BROKEN, `残句：${out}`);
+      }
     });
   }
-  it("超长截断加省略号", () => {
+  it("超长截断加省略号（截断不算改字）", () => {
     const out = sanitizeWorkLine("这是一句很长很长的话".repeat(10));
     assert.ok(out.length <= 40 && out.endsWith("…"));
   });
@@ -70,6 +80,24 @@ describe("workLine：来源顺序 刚说的话 → 计划在做的步 → 书记
     assert.deepEqual(workLine({ said: "https://example.com", planStep: { text: "src/a.ts", status: "in_progress" }, clerk: null, activity: "command" }, words), { text: "正在跑命令", source: "activity" });
     assert.equal(workLine({ said: null, planStep: null, clerk: null, activity: null }, words), null);
   });
+});
+
+describe("workLine 的输出要么是某个来源的原话，要么是固定说法之一（不拼补）", () => {
+  const fixed = new Set(Object.values(words.activity));
+  for (const [said] of SAMPLES) {
+    it(said.slice(0, 30), () => {
+      const plan = { text: "改投递逻辑", status: "in_progress" as const };
+      for (const planStep of [plan, null]) {
+        const line = workLine({ said, planStep, clerk: null, activity: "command" }, words);
+        assert.ok(line !== null);
+        const fromSaid = line.source === "said" && said.replace(/\*\*/g, "").replace(/\s+/g, " ").trim().startsWith(line.text.replace(/…$/, ""));
+        const fromPlan = line.source === "plan" && line.text === plan.text;
+        const fromFixed = line.source === "activity" && fixed.has(line.text);
+        assert.ok(fromSaid || fromPlan || fromFixed, JSON.stringify(line));
+        assert.doesNotMatch(line.text, BROKEN);
+      }
+    });
+  }
 });
 
 describe("workFacts / currentPlanStep / activityOfTool", () => {
