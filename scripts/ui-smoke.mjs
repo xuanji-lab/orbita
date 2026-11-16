@@ -43,6 +43,24 @@ const { evaluate, close } = await connectCdp({ cdpPort, devPort, watchdogMs: 60_
 step("检查 renderer 挂载");
 check("renderer 已挂载（#root 非空）", (await evaluate(`document.querySelector("#root")?.children.length > 0`)) === true);
 
+// 前置：先回到主列表。设置面开着、或左栏停在「以前的会话」/「已归档」子页时整栏换成那一页，「任务」组的「+」（新任务）不在——
+// 这是设计（2026-11-17：工作区里的活由主智能体派，子页里不给新开任务的入口），不是故障。只改前置步骤，下面的断言不放宽。
+step("回到主列表");
+// 设置面开着（上一次冒烟留下的）也盖住主列表：先关上
+if ((await evaluate(`/Theme|主题/.test(document.body.innerText)`)) === true) {
+  await evaluate(
+    `[...document.querySelectorAll("button")].find((b) => ["Settings", "设置"].some((s) => b.title === s || b.textContent.trim() === s || b.getAttribute("aria-label") === s))?.click()`,
+  );
+  await sleep(400);
+}
+for (let i = 0; i < 2; i += 1) {
+  const backed = await evaluate(
+    `(() => { const b = [...document.querySelectorAll("aside button")].find((e) => /^(返回任务|Back to tasks)$/.test(e.getAttribute("aria-label") ?? "") || /^(返回任务列表|Back to the task list)$/.test(e.title)); if (!b) return false; b.click(); return true; })()`,
+  );
+  if (backed !== true) break;
+  await sleep(400);
+}
+
 // 2. 主操作入口：New task / 新任务 按钮（accent 主操作，任何形态都在）。
 //    中英两种界面都认：开发版数据目录里语言设成中文时，只认英文会误报。
 //    形态两种都认：方案 B v2（2026-10-19）起它是工具栏左胶囊里的图标键，
