@@ -279,16 +279,16 @@ export function Sidebar(props: {
   const width = props.width;
   /** 高亮哪一条：盖着别的面时谁也不高亮；否则在看历史就是那条，不然是活着的那条 */
   const openId = props.overlay !== null ? null : (session.sessionId ?? session.opened?.id ?? null);
-  /**
-   * 打开的会话落在收着的工作区组里（工作区默认折叠：从首页卡片 / 引用跳转等入口打开时
-   * 常见），就把那组展开——不然左栏没有一行是高亮的，用户看不出自己在哪。
-   * 只在打开的会话（或它的归属）变的时候展开一次：之后用户再把它折上，尊重用户。
-   */
   const openWorkspaceId = session.sessions.find((m) => m.id === openId)?.workspaceId ?? null;
-  useEffect(() => {
-    if (openWorkspaceId === null) return;
-    setGroups((current) => unfoldGroup(current, foldKeyForWorkspace(openWorkspaceId)));
-  }, [openId, openWorkspaceId]);
+  /**
+   * 当前所在的工作区（满载结构，2026-11-17 设计 11-sidebar-full C）：**只有它展开**，换工作区自动换着展开，
+   * 不靠手动折叠——12 个工作区全展开约 80 行，一屏只看得到前两个。当前 = 正看着的会话（含主智能体与它派的活）
+   * 所在的工作区，或停在哪个工作区主智能体的空态；在「任务」组或首页时一个都不展开。
+   * 盖着设置页时也照这个算（不跟 overlay 清掉），关掉设置回来侧栏不跳。
+   */
+  const viewedId = session.sessionId ?? session.opened?.id ?? null;
+  const currentWorkspaceId =
+    session.mainPending?.workspaceId ?? session.sessions.find((m) => m.id === viewedId)?.workspaceId ?? null;
 
   /**
    * 不属于任何工作区的会话。**也包括归属指向已移除工作区的那些**——
@@ -401,8 +401,6 @@ export function Sidebar(props: {
   const openMain = (workspace: Workspace): void => {
     props.onOverlay(null);
     setEarlierFor(null);
-    // 进主智能体时把这一组展开：它名下没了结的活就在眼前（之后用户再折上，尊重用户）
-    setGroups((current) => unfoldGroup(current, foldKeyForWorkspace(workspace.id)));
     session.openMainAgent(workspace);
   };
   /** 这个工作区的主智能体此刻正打开着（盖着别的面时谁也不高亮） */
@@ -422,7 +420,7 @@ export function Sidebar(props: {
       : [
           ...(workspaceList.body === "list" ? workspaceMatches : []).flatMap((workspace) => {
             const key = foldKeyForWorkspace(workspace.id);
-            if (isGroupFolded(groups, key)) return [];
+            if (workspace.id !== currentWorkspaceId) return [];
             return visibleWithOpen(rowsOf.get(workspace.id)?.open ?? [], limitFor(key), openId).map((m) => m.id);
           }),
           ...(tasksFolded || sessionList.body !== "list" ? [] : looseVisible.map((m) => m.id)),
@@ -951,12 +949,7 @@ export function Sidebar(props: {
                         setEarlierQuery("");
                         setEarlierFor(workspace.id);
                       }}
-                      folded={isGroupFolded(groups, foldKeyForWorkspace(workspace.id))}
-                      onToggleFold={() =>
-                        setGroups((current) =>
-                          toggleGroupFold(current, foldKeyForWorkspace(workspace.id)),
-                        )
-                      }
+                      folded={workspace.id !== currentWorkspaceId}
                       limit={limitFor(foldKeyForWorkspace(workspace.id))}
                       expanded={groups.pages.has(foldKeyForWorkspace(workspace.id))}
                       onMore={() =>
@@ -1102,8 +1095,8 @@ function WorkspaceGroup(props: {
   onOpenMain: () => void;
   /** 最后一行「以前的会话 N」 */
   onOpenEarlier: () => void;
+  /** 收着：不是当前所在的工作区（只有当前那个展开，Sidebar 的 currentWorkspaceId） */
   folded: boolean;
-  onToggleFold: () => void;
   /** 眼下最多列几条（groupVisibleLimit；时间范围开着时是 Infinity）；expanded = 点过 Show more */
   limit: number;
   expanded: boolean;
@@ -1169,20 +1162,9 @@ function WorkspaceGroup(props: {
           cursor: "pointer",
         }}
       >
-        {/* 空组没有可折的东西，开关就不摆——一个点了什么都不发生的开关比没有更吵 */}
-        {props.sessions.length > 0 || props.earlierCount > 0 ? (
-          <IconButton
-            label={props.folded ? t.sidebar.expandGroup : t.sidebar.collapseGroup}
-            ariaExpanded={!props.folded}
-            size={20}
-            onClick={props.onToggleFold}
-            style={{ color: "var(--color-text-tertiary)" }}
-          >
-            <FoldChevron folded={props.folded} />
-          </IconButton>
-        ) : (
-          <span />
-        )}
+        {/* 原来的折叠箭头位：展开谁跟着「当前在哪」走，不再手动折（满载 12 个工作区时手动折叠没人管得过来）。
+            位子留着，名字与子行的缩进不动 */}
+        <span />
 
         <span
           onClick={props.onOpenMain}
