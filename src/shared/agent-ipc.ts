@@ -958,6 +958,12 @@ export type AgentCommand =
        */
       mainAgent?: boolean;
       /**
+       * 这件活的能力集（子会话 meta 的 capabilities，主进程已把 `plugin:<名>` 展开成它带的 `skill:` 与 `mcp:`）。
+       * runtime 按它跳过整组工具、技能与 MCP、对应的提示段（shared/capabilities.ts）。
+       * **缺席 = 全带**：普通会话与没定能力集的活不带这个键，命令形状与以前一字不差。
+       */
+      capabilities?: string[];
+      /**
        * 意图系统（实验功能 intent-system）：开关开且这是根会话的用户原话时主进程
        * 装配（intentTurnEnv 的纯推导）。缺席 = 不召回，runtime 走与 main 完全
        * 一致的路径（不调 recall、不发卡片事件）。
@@ -1076,6 +1082,8 @@ export type AgentCommand =
       pluginTools?: boolean;
       /** 常驻主智能体，语义同 submit */
       mainAgent?: boolean;
+      /** 能力集，语义同 submit */
+      capabilities?: string[];
       /** 意图系统（实验），语义同 submit：开关开时主进程装配；缺席 = 走与 main 一致的路径 */
       intent?: IntentTurnContext;
       /** 待补记的 user 原话尾巴，语义同 submit */
@@ -1151,6 +1159,8 @@ export type AgentCommand =
       pluginTools?: boolean;
       /** 常驻主智能体，语义同 submit */
       mainAgent?: boolean;
+      /** 能力集，语义同 submit */
+      capabilities?: string[];
     }
   | { type: "listBuiltins" }
   /**
@@ -1360,6 +1370,8 @@ export interface DelegateCard {
   thinkingLevel: ThinkingLevel;
   /** 子会话的工作台路径——从派出卡跳到子会话的产出目录 */
   workbench: string;
+  /** 这件活带的能力集（规范化后的，见 shared/capabilities.ts）；缺席 = 全带 */
+  capabilities?: string[];
 }
 
 /** delegateRequest 的回执载荷：childId / title 供 runtime 拼给模型看的正文，card 给 UI */
@@ -1581,6 +1593,11 @@ export type AgentEvent =
       modelId?: string;
       /** 可选的思考档；缺席时跟着解析出的模型走（见上方 delegateRequest 的说明） */
       thinkingLevel?: ThinkingLevel;
+      /**
+       * 可选的能力集（shared/capabilities.ts）：模块 id、`skill:` / `mcp:` / `plugin:`，或 `["none"]` 纯聊天。
+       * 缺席 = 全带。agent 进程只查形状（字符串列表），主进程 parseCapabilities 校验、规范化后落子会话 meta。
+       */
+      capabilities?: string[];
     }
   /**
    * 派发参考：agent 的 model_costs 工具请求。**数据在主进程**（任务账本 usage-tasks.json、

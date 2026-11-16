@@ -8,6 +8,7 @@
  *   sessions/<id>.meta.json   本文件的 SessionMeta，可变，原子写
  *   sessions/<id>.jsonl       只追加，一行一个 SessionRecord
  */
+import { capabilitiesField } from "./capabilities.ts";
 import type { TranscriptItem } from "./transcript.ts";
 import type { AgentStats } from "./agent-ipc.ts";
 import { parseAutomationRunLabel, type AutomationRunLabel } from "./automation.ts";
@@ -514,6 +515,11 @@ export interface SessionMeta {
    * 主智能体本身不进侧栏的会话行（点工作区那一行就是它），它派出的活是 parentId 指向它的子会话。
    */
   role?: "main";
+  /**
+   * 这件活带了哪些能力（2026-11-17，shared/capabilities.ts）：派它的人在 delegate 时定、之后不变。
+   * **缺席 = 全带**（这个字段之前的会话、普通会话、旧版回滚后读到的都是这一种）；`["none"]` = 纯聊天。
+   */
+  capabilities?: string[];
   createdAt: number;
   updatedAt: number;
 }
@@ -806,6 +812,8 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     ...(durable === null ? null : { durable }),
     // 主智能体标记：只认 "main"，别的值当普通会话（老版本不认这个键，读到也只是忽略）
     ...(value["role"] === "main" ? { role: "main" as const } : null),
+    // 能力集：只认合法清单，坏值当缺席（全带）
+    ...capabilitiesField(value["capabilities"]),
     createdAt,
     updatedAt: typeof value["updatedAt"] === "number" ? value["updatedAt"] : createdAt,
   };
