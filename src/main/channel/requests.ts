@@ -33,6 +33,7 @@ import {
   type ChannelMessage,
 } from "../../shared/channel.ts";
 import { parseCapabilities } from "../../shared/capabilities.ts";
+import type { MainAgentModel } from "../../shared/main-agent.ts";
 import { defaultThinkingLevel } from "../../shared/model-defaults.ts";
 import { isProviderEnabled, type ProviderDto } from "../../shared/provider.ts";
 import { deriveSessionTitle, type SessionMeta } from "../../shared/session.ts";
@@ -59,6 +60,8 @@ export interface ChannelDeps {
   /** 主进程按 phase 事件维护的活会话状态；用来判断目标此刻是不是空闲 */
   phases: Map<string, SessionPhase>;
   broadcast(event: ChannelEvent): void;
+  /** 工作区主智能体档案里定的型号与思考档（缺席 / 没定 = undefined）：主智能体派活不点名型号时沿用它 */
+  mainModel?: (workspaceId: string) => Promise<MainAgentModel | undefined>;
 }
 
 function errorMessage(cause: unknown): string {
@@ -176,10 +179,20 @@ export async function applyDelegate(
 
   const settings = await deps.settings.read();
   const providers = await deps.providers.list();
+  // 主智能体派活、没点名型号：沿用它自己的型号与思考档（档案里定的；没定就是它这条会话正在用的），
+  // 不走设置里的「子会话默认型号」——用户在顶栏定了主智能体用什么，派出去的活默认跟着它，不在背后换成别的
+  const mainDefault: MainAgentModel | undefined =
+    parent.role === "main" && event.modelId === undefined
+      ? ((parent.workspaceId === null ? undefined : await deps.mainModel?.(parent.workspaceId)) ?? {
+          providerId: parent.providerId,
+          modelId: parent.modelId,
+          thinkingLevel: parent.thinkingLevel,
+        })
+      : undefined;
   const resolved = resolveSubSessionModel({
     requested: event.modelId,
-    setting: settings.subSessionModel,
-    parent: { providerId: parent.providerId, modelId: parent.modelId },
+    setting: mainDefault === undefined ? settings.subSessionModel : undefined,
+    parent: mainDefault ?? { providerId: parent.providerId, modelId: parent.modelId },
     providers,
   });
   if (!resolved.ok) return resolved;
@@ -195,7 +208,7 @@ export async function applyDelegate(
       ? defaultThinkingLevel(resolved.modelId)
       : resolved.source === "setting"
         ? (settings.subSessionThinking ?? defaultThinkingLevel(resolved.modelId))
-        : parent.thinkingLevel);
+        : (mainDefault?.thinkingLevel ?? parent.thinkingLevel));
 
   const childId = randomUUID();
   const taskMessage: ChannelMessage = {

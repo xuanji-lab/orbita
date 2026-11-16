@@ -1327,6 +1327,7 @@ void app.whenReady().then(async () => {
     cancelBrowserHandoff: (sessionId) => browserSandbox.cancelSessionHandoff(sessionId),
     phases,
     broadcast: broadcastChannelEvent,
+    mainModel: async (workspaceId) => (await mainAgents.read(workspaceId).catch(() => null))?.model,
   };
   // deps 之后才能建（它要 applyChannelSend 的 deps）；onAgentEvent 只在事件到达时调，那时已定义（同 deps 的 TDZ 说明）
   chatHandback = new ChatHandback({

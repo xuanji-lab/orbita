@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { MainAgentStore, mainAgentOf } from "./main-agent.ts";
+import { MainAgentStore, mainAgentOf, withMainModel } from "./main-agent.ts";
 import type { SessionMeta } from "../../shared/session.ts";
 
 async function fresh(): Promise<{ dir: string; store: MainAgentStore; ids: string[] }> {
@@ -90,5 +90,23 @@ describe("MainAgentStore.addResume", () => {
     assert.equal(resumes.length, 20);
     assert.equal(resumes[19]?.at, 24);
     await rm(dir, { recursive: true, force: true });
+  });
+});
+
+describe("主智能体的型号与思考档", () => {
+  const model = { providerId: "zhipu", modelId: "glm-5.3", thinkingLevel: "high" as const };
+  test("setModel 写进档案（没档案先建），读回同一份；会话 id 不变", async () => {
+    const { dir, store } = await fresh();
+    const before = await store.ensure("w1");
+    const after = await store.setModel("w1", model);
+    assert.equal(after.sessionId, before.sessionId);
+    assert.deepEqual((await store.read("w1"))?.model, model);
+    assert.deepEqual((await store.setModel("w2", model)).model, model);
+    await rm(dir, { recursive: true, force: true });
+  });
+  test("withMainModel：档案定了就覆盖开轮三项；没定原样返回同一个对象", () => {
+    const input = { sessionId: "s", providerId: "deepseek", modelId: "flash", thinkingLevel: "off" as const, text: "hi" };
+    assert.equal(withMainModel(input, undefined), input);
+    assert.deepEqual(withMainModel(input, model), { ...input, providerId: "zhipu", modelId: "glm-5.3", thinkingLevel: "high" });
   });
 });

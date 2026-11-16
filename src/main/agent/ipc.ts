@@ -67,7 +67,7 @@ import type { TurnDirectories } from "../../shared/agent-ipc.ts";
 import { resolveTurnDirectories } from "./turn-directories.ts";
 import { turnFields } from "./turn-fields.ts";
 import { turnCapabilities } from "./turn-capabilities.ts";
-import type { MainAgentStore } from "../agents/main-agent.ts";
+import { withMainModel, type MainAgentStore } from "../agents/main-agent.ts";
 import { browserDownloadDir } from "../browser/download-dir.ts";
 import { AgentHost } from "./host.ts";
 
@@ -516,6 +516,12 @@ export function registerAgentIpc(
   /** 这条会话是不是它所在工作区的主智能体（以档案为准；首轮 meta 还没建时也认得出） */
   const isMainAgent = async (input: { sessionId: string; workspaceId: string | null }): Promise<boolean> =>
     mainAgents === undefined ? false : await mainAgents.isMain(input.sessionId, input.workspaceId).catch(() => false);
+  /** 主智能体那条会话：档案里定了型号与思考档就以档案为准（withMainModel）；普通会话原样 */
+  const mainModelOf = async <T extends { sessionId: string; workspaceId: string | null; providerId: string; modelId: string; thinkingLevel: ThinkingLevel }>(input: T): Promise<T> => {
+    if (mainAgents === undefined || input.workspaceId === null || !(await isMainAgent(input))) return input;
+    const profile = await mainAgents.read(input.workspaceId).catch(() => null);
+    return withMainModel(input, profile?.model);
+  };
   /** 首轮建 meta 要的主智能体身份（名字 = 工作区名）；普通会话 undefined */
   const mainIdentity = async (input: { sessionId: string; workspaceId: string | null }): Promise<{ title: string } | undefined> =>
     (await isMainAgent(input)) ? { title: (await workspaceNameOf(input.workspaceId)) ?? "" } : undefined;
@@ -525,7 +531,8 @@ export function registerAgentIpc(
    * 也要开同一种轮——`applyDelegate` / `deliverToChild`（channel/requests.ts）
    * 拿的就是这个函数，不重新拼一遍 turnFields/readDirectories 那一整套装配）。
    */
-  async function submitTurn(input: SubmitAgentInput): Promise<void> {
+  async function submitTurn(raw: SubmitAgentInput): Promise<void> {
+    const input = await mainModelOf(raw);
     const provider = await resolveForTurn(input.providerId);
     const text = await prependInvocationDirectives(input.text, input.workspaceId);
     // 意图系统（实验）：开关开着才装配（intent / backfill）与存档（ingest）。
@@ -583,7 +590,8 @@ export function registerAgentIpc(
     if (typeof input?.text !== "string" || input.text.trim() === "" || typeof input.id !== "string") throw new Error("steer needs an id and non-empty text");
     host.steerUser(input.sessionId, input.id, input.text);
   });
-  ipcMain.handle(ipcChannels.agentInterrupt, async (_e, input: SubmitAgentInput): Promise<void> => {
+  ipcMain.handle(ipcChannels.agentInterrupt, async (_e, raw: SubmitAgentInput): Promise<void> => {
+    const input = await mainModelOf(raw);
     const provider = await resolveForTurn(input.providerId);
     // interrupt 是排队消息的「立即发送」分支（会话还忙碌时）：与 submit 同一份组装，
     // 否则 /skill: 在这条路径以字面文本喂给模型
@@ -597,7 +605,8 @@ export function registerAgentIpc(
     const piSessionFile = await host.interrupt({ type: "interrupt", text, sessionMemory: true, ...(automationTools ? { automationTools: true } : {}), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...prefaceField(input), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, protectedFiles, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, capabilities: capabilities.capabilities, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), pluginTools: true, mainAgent: main !== undefined }) });
     await settleFirstTurn(input, piSessionFile, main);
   });
-  ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
+  ipcMain.handle(ipcChannels.agentCompact, async (_e, raw: CompactAgentInput): Promise<void> => {
+    const input = await mainModelOf(raw);
     const provider = await resolveForTurn(input.providerId);
     const capabilities = await readCapabilities(input);
     const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, protectedFiles, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, capabilities: capabilities.capabilities, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), pluginTools: true, mainAgent: await isMainAgent(input) }) });
@@ -606,7 +615,8 @@ export function registerAgentIpc(
 
   // 新内核：接着跑上次被中断的那一轮（不加新消息）。开轮装配与压缩同一份（没有正文要组装）；旧内核下 host 拒绝。
   // 也是应用重启后自动接着跑子会话的那条路（index.ts 用返回的 continueTurn）
-  async function continueTurn(input: ContinueAgentInput): Promise<void> {
+  async function continueTurn(raw: ContinueAgentInput): Promise<void> {
+    const input = await mainModelOf(raw);
     const provider = await resolveForTurn(input.providerId);
     const automationTools = await readAutomationTools(input.sessionId);
     const capabilities = await readCapabilities(input);

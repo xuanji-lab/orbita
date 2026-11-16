@@ -791,3 +791,35 @@ describe("applyDelegate · 能力集", () => {
     assert.equal((await sessions.list()).length, 1);
   });
 });
+
+describe("applyDelegate · 主智能体派活的默认型号", () => {
+  const settings = { ...DEFAULT_SETTINGS, subSessionModel: { providerId: "fast", modelId: "turbo" } };
+  const providers = [provider("zai", ["glm-5.3", "glm-5.3-flash"]), provider("fast", ["turbo"]), provider("ds", ["deepseek-flash"])];
+
+  test("没点名：沿用档案里的型号与思考档，不走设置里的子会话默认型号", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT, role: "main", workspaceId: "ws1", providerId: "ds", modelId: "deepseek-flash", thinkingLevel: "off" }));
+    const { deps, submitCalls } = fakeDeps({ providers, settings });
+    deps.mainModel = async () => ({ providerId: "zai", modelId: "glm-5.3", thinkingLevel: "high" });
+    const outcome = await applyDelegate(deps, delegateEvent());
+    assert.deepEqual(outcome.ok && [outcome.card.modelId, outcome.card.thinkingLevel], ["glm-5.3", "high"]);
+    assert.equal(submitCalls[0]?.providerId, "zai");
+  });
+
+  test("档案没定：沿用主智能体这条会话自己的型号与档；点名了就用点名的", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT, role: "main", workspaceId: "ws1", providerId: "zai", modelId: "glm-5.3", thinkingLevel: "low" }));
+    const { deps } = fakeDeps({ providers, settings });
+    deps.mainModel = async () => undefined;
+    const own = await applyDelegate(deps, delegateEvent());
+    assert.deepEqual(own.ok && [own.card.modelId, own.card.thinkingLevel], ["glm-5.3", "low"]);
+    const named = await applyDelegate(deps, delegateEvent({ modelId: "deepseek-flash" }));
+    assert.equal(named.ok && named.card.modelId, "deepseek-flash");
+  });
+
+  test("普通会话照旧：设置里的子会话默认型号优先于同父", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT, providerId: "zai", modelId: "glm-5.3" }));
+    const { deps } = fakeDeps({ providers, settings });
+    deps.mainModel = async () => ({ providerId: "zai", modelId: "glm-5.3", thinkingLevel: "high" });
+    const outcome = await applyDelegate(deps, delegateEvent());
+    assert.equal(outcome.ok && outcome.card.modelId, "turbo");
+  });
+});

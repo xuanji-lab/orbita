@@ -10,8 +10,9 @@ import { randomUUID } from "node:crypto";
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { writeJsonAtomic } from "../atomic-write.ts";
-import { MAIN_AGENT_RESUMES_KEPT, parseMainAgentProfile, type MainAgentProfile, type MainAgentResume } from "../../shared/main-agent.ts";
+import { MAIN_AGENT_RESUMES_KEPT, parseMainAgentProfile, type MainAgentModel, type MainAgentProfile, type MainAgentResume } from "../../shared/main-agent.ts";
 import type { SessionStore } from "../session/store.ts";
+import type { ThinkingLevel } from "../../shared/thinking.ts";
 
 /** 工作区 id 进文件名：只放行 uuid 一类的字符，挡住 `../` 之类越出目录的 id（IPC 入参不可信） */
 const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/;
@@ -69,6 +70,14 @@ export class MainAgentStore {
     await writeJsonAtomic(this.#path(workspaceId), { ...current, resumes });
   }
 
+  /** 定这个工作区的主智能体以后都用的型号与思考档（没有档案就先建一份） */
+  async setModel(workspaceId: string, model: MainAgentModel): Promise<MainAgentProfile> {
+    const current = await this.ensure(workspaceId);
+    const next: MainAgentProfile = { ...current, model };
+    await writeJsonAtomic(this.#path(workspaceId), next);
+    return next;
+  }
+
   /** 这条会话是不是这个工作区的主智能体（开轮装配身份提示词、首轮建 meta 打 role 用） */
   async isMain(sessionId: string, workspaceId: string | null): Promise<boolean> {
     if (workspaceId === null || !SAFE_ID.test(workspaceId)) return false;
@@ -95,4 +104,16 @@ export async function mainAgentOf(store: MainAgentStore, sessions: Pick<SessionS
   const meta = await sessions.readMeta(profile.sessionId);
   if (meta !== null && meta.role !== "main") await sessions.setRole(profile.sessionId, "main");
   return profile;
+}
+
+/**
+ * 主智能体那条会话的开轮型号：档案里定了就以档案为准（覆盖 renderer 送来的三项），没定照旧。
+ * 普通会话、没定型号的主智能体：原样返回同一个对象（命令与以前一字不差）。
+ */
+export function withMainModel<T extends { providerId: string; modelId: string; thinkingLevel: ThinkingLevel }>(
+  input: T,
+  model: MainAgentModel | undefined,
+): T {
+  if (model === undefined) return input;
+  return { ...input, providerId: model.providerId, modelId: model.modelId, thinkingLevel: model.thinkingLevel };
 }

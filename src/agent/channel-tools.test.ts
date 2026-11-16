@@ -56,6 +56,21 @@ describe("createChannelTools：按 role 注册的工具名单", () => {
   });
 });
 
+describe("主智能体的通道工具", () => {
+  test("不注册 model_costs；delegate 不催它查价，型号不点名就跟着它自己的；普通根会话照旧", () => {
+    const fake = new FakeMain();
+    const broker = new RequestBroker((event) => {
+      fake.sent.push(event);
+    });
+    const main = createChannelTools(broker, "s", "root", true);
+    assert.deepEqual(main.map((tool) => tool.name), ["delegate", "reply_subsession", "pause_subsession", "work_cards"]);
+    const delegate = toolByName(main, "delegate");
+    assert.doesNotMatch(delegate.description, /model_costs/);
+    assert.match(delegate.description, /Leave model and thinkingLevel out/);
+    assert.match(toolByName(setup("root").tools, "delegate").description, /Before delegating, call model_costs/);
+  });
+});
+
 describe("model_costs", () => {
   test("无参数：发 modelCostsRequest（带 sessionId）；回执 ok → 表文本原样进 content", async () => {
     const { tools, fake } = setup("root");

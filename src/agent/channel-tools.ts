@@ -26,12 +26,12 @@ export function createChannelTools(
   mainAgent = false,
 ): ToolDefinition[] {
   if (role === "child") return [reportToParentTool(broker, sessionId)];
-  return [
-    delegateTool(broker, sessionId),
-    replySubsessionTool(broker, sessionId),
-    modelCostsTool(broker, sessionId),
-    ...(mainAgent ? [pauseSubsessionTool(broker, sessionId), workCardsTool(broker, sessionId)] : []),
-  ];
+  // 主智能体不挑型号（用户在顶栏给它定了型号，派出去的活默认跟着它）：它的 delegate 不催它查价，也不注册 model_costs。
+  // 普通会话的两个工具一字不差
+  if (mainAgent) {
+    return [delegateTool(broker, sessionId, true), replySubsessionTool(broker, sessionId), pauseSubsessionTool(broker, sessionId), workCardsTool(broker, sessionId)];
+  }
+  return [delegateTool(broker, sessionId), replySubsessionTool(broker, sessionId), modelCostsTool(broker, sessionId)];
 }
 
 /** 必填字符串：trim 非空，否则抛带字段名的说明——不合法的参数不发请求。 */
@@ -76,7 +76,21 @@ function describeGiven(capabilities: readonly string[] | undefined): string {
     : `Besides the basic tools it has: ${capabilities.join(", ")}. `;
 }
 
-function delegateTool(broker: RequestBroker, sessionId: string): ToolDefinition {
+/** delegate 说明里催它查价挑型号的那一段（普通会话才有） */
+const DELEGATE_MODEL_ADVICE =
+  "Before delegating, call model_costs and choose the cheapest model and thinking tier that is good " +
+  "enough for the job, then pass it as model / thinkingLevel: routine implementation to a spec, " +
+  "running tests, research and data gathering rarely need a top-tier model; keep a mid tier at " +
+  "medium thinking for design trade-offs; reserve the most expensive model with max thinking for " +
+  "when the user names it or a cheaper tier has already failed. Project rules (AGENTS.md) that name " +
+  "a model for a kind of work take precedence.";
+
+/** 主智能体的版本：型号是用户定的，不点名就跟着它 */
+const DELEGATE_MODEL_MAIN =
+  "Leave model and thinkingLevel out: the work then runs on the model and thinking level the user set for you. " +
+  "Pass them only when the user asks for a specific model.";
+
+function delegateTool(broker: RequestBroker, sessionId: string, mainAgent = false): ToolDefinition {
   return {
     name: "delegate",
     label: "delegate",
@@ -92,12 +106,7 @@ function delegateTool(broker: RequestBroker, sessionId: string): ToolDefinition 
       "it asks something the user has not actually answered, do not guess on the user's behalf — end " +
       "this turn and ask the user first, then answer with reply_subsession once you know. Do not " +
       "delegate for small things. " +
-      "Before delegating, call model_costs and choose the cheapest model and thinking tier that is good " +
-      "enough for the job, then pass it as model / thinkingLevel: routine implementation to a spec, " +
-      "running tests, research and data gathering rarely need a top-tier model; keep a mid tier at " +
-      "medium thinking for design trade-offs; reserve the most expensive model with max thinking for " +
-      "when the user names it or a cheaper tier has already failed. Project rules (AGENTS.md) that name " +
-      "a model for a kind of work take precedence.",
+      (mainAgent ? DELEGATE_MODEL_MAIN : DELEGATE_MODEL_ADVICE),
     parameters: {
       type: "object",
       properties: {
@@ -113,9 +122,10 @@ function delegateTool(broker: RequestBroker, sessionId: string): ToolDefinition 
         },
         model: {
           type: "string",
-          description:
-            "Optional model id override, as listed by model_costs. Defaults to the sub-session model setting, " +
-            "then this session's model.",
+          description: mainAgent
+            ? "Optional model id, only when the user asks for a specific model. Defaults to your own model."
+            : "Optional model id override, as listed by model_costs. Defaults to the sub-session model setting, " +
+              "then this session's model.",
         },
         thinkingLevel: {
           type: "string",
