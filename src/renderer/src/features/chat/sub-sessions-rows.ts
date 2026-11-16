@@ -9,6 +9,9 @@
  */
 import type { ChannelMessage, ChannelStatus } from "@shared/channel";
 import type { Messages } from "../../messages-en.ts";
+import type { TranscriptItem } from "@shared/transcript";
+import { planTimeline } from "../context/plan-timeline.ts";
+import { currentPlanStep, isQuiet, latestSentence, sanitizeWorkLine, workFacts, workLine } from "./work-line.ts";
 
 /**
  * 一行的显示状态（字面对应设计裁决的颜色/图标分配）：
@@ -108,14 +111,13 @@ export function subSessionBarFill(status: SubSessionRowStatus): "running" | "wai
 }
 
 /**
- * 收件箱行的「最新一句」（2026-10-12 用户裁决：只需要看到沟通，不需要看到子会话
- * 在干嘛）：通道里**最新一条非 task 消息**的一句话概括——问：…/ 进度：…/ 完成 /
- * 失败 / 回复：…（最新的是父侧回信时）。done / failed 不带结论（结论由父会话的
- * 模型转述，我们不过多控制）。还没有非 task 消息时按状态说「在跑 · 还没说话」
- * （idle / stopped 只说「还没说话」——它没在跑）。
+ * 收件箱行的「最新一句」（2026-10-12 用户裁决：只需要看到沟通，不需要看到子会话在干嘛）：通道里**最新一条非 task
+ * 消息**的一句话——问：…/ 进度：…/ 完成：…/ 失败：…/ 回复：…（最新的是父侧回信时）。2026-11-17 起取第一个非空行的
+ * 第一句、先过 work-line 的 sanitizeWorkLine：**不露出命令、网址、路径、英文代号**（以前「进度：」后面
+ * 原样是子会话写的第一行，常是命令或路径；完成 / 失败只写两个字），洗空了就只说是哪种消息。
+ * 还没有非 task 消息时按状态说「在跑 · 还没说话」（idle / stopped 只说「还没说话」——它没在跑）。
  *
- * `messages` 为该子通道时间正序的全文（useParentChannels）；通道拉不到（undefined）
- * 与空列表同待遇——行不缺席，说「还没说话」。
+ * `messages` 为该子通道时间正序的全文（useParentChannels）；通道拉不到（undefined）与空列表同待遇。
  */
 export function latestChannelLine(
   messages: readonly ChannelMessage[] | undefined,
@@ -128,27 +130,58 @@ export function latestChannelLine(
       ? t.channel.notSpokenRunning
       : t.channel.notSpoken;
   }
+  // 第一句：回报的结论 / 问题写在最前（子会话的说明要求先写结论）
+  const said = sanitizeWorkLine(firstSentenceOf(spoken.text));
   switch (spoken.kind) {
     case "question":
-      return t.channel.latestQuestion(firstLineOf(spoken.text));
+      return said === "" ? t.channel.latestQuestionBare : t.channel.latestQuestion(said);
     case "progress":
-      return t.channel.latestProgress(firstLineOf(spoken.text));
+      return said === "" ? t.channel.latestProgressBare : t.channel.latestProgress(said);
     case "done":
-      return t.channel.latestDone;
+      return said === "" ? t.channel.latestDone : t.channel.latestDoneWith(said);
     case "failed":
-      return t.channel.latestFailed;
+      return said === "" ? t.channel.latestFailed : t.channel.latestFailedWith(said);
     case "reply":
-      return t.channel.latestReply(firstLineOf(spoken.text));
+      return said === "" ? t.channel.latestReplyBare : t.channel.latestReply(said);
     default:
       // stop：账本里可能有（旧数据），行上不渲染裁决细节——状态条已经说了 stopped
       return t.channel.notSpoken;
   }
 }
 
-/** 多行正文取第一个非空行并压掉首尾空白——收件箱行里只放得下一句话。 */
-function firstLineOf(text: string): string {
+/**
+ * 子会话面板一行的第二行（每件活一句话）。在跑的：按 work-line 的来源顺序（刚说的话 → 计划在做的那步 → 书记员 →
+ * 不带参数的动作）从这条子会话的转录里取，取不到才退回通道里最新一句；「没动静」（在跑、N 分钟没有任何 progress）时
+ * 后面带上几分钟。没在跑的：通道里最新一句（完成 / 失败 / 在问你的结论）。
+ *
+ * `items` = 这条子会话在 renderer 槽里的转录（窗口晚于它开起来时可能是空的，那时只能退回通道）。
+ */
+export function subSessionLine(
+  input: {
+    status: SubSessionRowStatus;
+    messages: readonly ChannelMessage[] | undefined;
+    items: readonly TranscriptItem[];
+    now: number;
+    lastActivityAt: number | null;
+  },
+  t: Messages,
+): string {
+  if (input.status !== "running") return latestChannelLine(input.messages, input.status, t);
+  const facts = workFacts(input.items, true);
+  const plan = planTimeline(input.items)?.current.items ?? null;
+  const line = workLine(
+    { said: facts.said, planStep: currentPlanStep(plan), clerk: null, activity: input.items.length === 0 ? null : facts.activity },
+    { activity: t.channel.activity, waiting: t.channel.waitingStep },
+  );
+  const text = line?.text ?? latestChannelLine(input.messages, input.status, t);
+  if (!isQuiet(input.now, true, input.lastActivityAt)) return text;
+  return t.channel.quietFor(text, Math.floor((input.now - (input.lastActivityAt ?? input.now)) / 60_000));
+}
+
+/** 第一个非空行的第一句（收件箱行里只放得下一句话） */
+function firstSentenceOf(text: string): string {
   const line = text.split("\n").find((candidate) => candidate.trim() !== "") ?? "";
-  return line.trim();
+  return latestSentence(line);
 }
 
 /**

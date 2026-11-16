@@ -13,7 +13,8 @@
  * `SubSessionControls`——用户裁决：这些权限归用户，不经过父模型）+ `ChatView`
  * （自带标题头 + transcript，`hideComposer` 关掉输入框与排队条）。
  */
-import { useContext, useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useContext, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { selectTranscript } from "../../../../shared/transcript-state.ts";
 import { createPortal } from "react-dom";
 import { childSessions, type SessionMeta } from "@shared/session";
 import type { ModelPair } from "@shared/settings";
@@ -33,7 +34,7 @@ import { modelChipParts, ModelPickerMenu } from "../settings/model-menu";
 import { useChannelSummaries } from "./useChannelSummaries";
 import { useParentChannels } from "./useChannelMessages";
 import {
-  latestChannelLine,
+  subSessionLine,
   sortSubSessionRows,
   subSessionBarFill,
   subSessionStatusOf,
@@ -68,6 +69,12 @@ const STATUS_ICON: Record<SubSessionRowStatus, IconName> = {
   idle: "circle-off",
 };
 
+/** 子会话在 renderer 槽里的转录（没有槽 = 空：窗口晚于它开起来、还没收到过它的事件） */
+function selectTranscriptOf(engine: SessionEngine, id: string) {
+  const entry = engine.entryOf(id);
+  return entry === undefined ? [] : selectTranscript(entry.transcript);
+}
+
 export function SubSessionsPanel(props: {
   parentId: string;
   parentTitle: string;
@@ -95,6 +102,12 @@ export function SubSessionsPanel(props: {
   // 通道全文（收件箱行的最新一句）：hook 必须在两层分支之前——列表层用它，会话层
   // 不用也不能少这一条（hook 数量不能随层切换变，同 ChatView 首页分支的纪律）
   const channels = useParentChannels(props.parentId, children.map((meta) => meta.id));
+  // 「没动静」要随时间变：列表层每 30 秒重画一次那一句（几分钟的粒度，不需要更密）
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
 
   if (props.nav.kind === "session") {
     const childId = props.nav.sessionId;
@@ -209,7 +222,16 @@ export function SubSessionsPanel(props: {
               key={row.meta.id}
               meta={row.meta}
               status={row.status}
-              latest={latestChannelLine(row.messages, row.status, t)}
+              latest={subSessionLine(
+                {
+                  status: row.status,
+                  messages: row.messages,
+                  items: selectTranscriptOf(props.engine, row.meta.id),
+                  now,
+                  lastActivityAt: props.engine.lastActivityOf(row.meta.id),
+                },
+                t,
+              )}
               lastAt={row.lastAt}
               asking={row.status === "waiting"}
               onClick={() => props.onOpenChild(row.meta.id)}

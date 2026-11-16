@@ -481,6 +481,11 @@ export interface SessionEngine {
    */
   isChannelTurn(id: string): boolean;
   /**
+   * 这条会话最后一次收到 progress 的时间（新的条目或正在跑的命令有了新输出都算）；本窗口还没收到过 = null。
+   * 「每件活一句话」判没动静用（work-line.ts 的 isQuiet）。
+   */
+  lastActivityOf(id: string): number | null;
+  /**
    * 用户空闲直发时：把排在这条会话队列里的子会话消息全部取出（出队）、组好信封，作为这一句的前置上下文一起发
    * （用户的话优先：子会话消息不各自先开一轮）。没有 = 空数组。
    */
@@ -881,6 +886,9 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
    */
   const channelTurns = useRef(new Set<string>());
   const isChannelTurn = useCallback((id: string) => channelTurns.current.has(id), []);
+  /** 每条会话最后一次收到 progress 的时间（不进状态：只在画子会话面板那一句时读，面板自己按节拍重画） */
+  const activityAt = useRef(new Map<string, number>());
+  const lastActivityOf = useCallback((id: string) => activityAt.current.get(id) ?? null, []);
 
   /** 一条子会话消息的信封全文：子标题从 sessionsRef 真值查；用户在收件箱里代父回复过的话拼在后面（父模型上下文里没有） */
   const envelopeOf = useCallback(
@@ -1072,6 +1080,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
         // **不按「正看着谁」过滤**：每个事件进自己会话的槽（分槽的根）
         // 流式帧进合帧器按节拍整批应用（见 effect 开头）；其余事件即时
         if (event.type === "progress") {
+          activityAt.current.set(event.sessionId, Date.now());
           coalescer.push(event);
           return;
         }
@@ -1352,6 +1361,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     applyStates,
     beginOptimisticTurn,
     isChannelTurn,
+    lastActivityOf,
     takeQueuedChannels,
     syncIntent,
     sessionIntent: sessionIntentRef,

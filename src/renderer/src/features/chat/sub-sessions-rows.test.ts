@@ -1,3 +1,4 @@
+import type { TranscriptItem } from "@shared/transcript";
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ChannelMessage } from "@shared/channel";
@@ -5,6 +6,7 @@ import type { Messages } from "../../messages-en.ts";
 import {
   delegateCardStatus,
   latestChannelLine,
+  subSessionLine,
   sortSubSessionRows,
   subSessionBarFill,
   subSessionRowStatus,
@@ -180,6 +182,11 @@ describe("latestChannelLine（收件箱行的最新一句）", () => {
       latestDone: "完成",
       latestFailed: "失败",
       latestReply: (text: string) => `回复：${text}`,
+      latestDoneWith: (text: string) => `完成：${text}`,
+      latestFailedWith: (text: string) => `失败：${text}`,
+      latestQuestionBare: "在问你",
+      latestProgressBare: "报了一次进度",
+      latestReplyBare: "收到了回复",
     },
   } as unknown as Messages;
 
@@ -195,20 +202,32 @@ describe("latestChannelLine（收件箱行的最新一句）", () => {
   it("多行正文只取第一个非空行并去空白", () => {
     const messages: ChannelMessage[] = [
       { id: "t", from: "parent", author: "model", kind: "task", text: "任务", delivery: "steer", createdAt: 1 },
-      { id: "p", from: "child", author: "model", kind: "progress", text: "\n\n  第一行  \n后面", delivery: "followUp", createdAt: 2 },
+      { id: "p", from: "child", author: "model", kind: "progress", text: "\n\n  第一行写完了一半  \n后面", delivery: "followUp", createdAt: 2 },
     ];
-    strictEqual(latestChannelLine(messages, "running", t), "进度：第一行");
+    strictEqual(latestChannelLine(messages, "running", t), "进度：第一行写完了一半");
   });
 
-  it("done / failed 只说结果不带结论（结论由父会话的模型转述）", () => {
+  it("done / failed 带上结论的第一句（2026-11-17：只写「完成」看不出做成了什么）；洗空了（只有命令 / 路径 / 代号）才只写两个字", () => {
     const done: ChannelMessage[] = [
-      { id: "d", from: "child", author: "model", kind: "done", text: "PR 210 已开", delivery: "followUp", createdAt: 2 },
+      { id: "d", from: "child", author: "model", kind: "done", text: "三件都做完了。细节见报告", delivery: "followUp", createdAt: 2 },
     ];
     const failed: ChannelMessage[] = [
-      { id: "f", from: "child", author: "model", kind: "failed", text: "下载超时", delivery: "followUp", createdAt: 2 },
+      { id: "f", from: "child", author: "model", kind: "failed", text: "`bun install` ETIMEDOUT", delivery: "followUp", createdAt: 2 },
     ];
-    strictEqual(latestChannelLine(done, "done", t), "完成");
+    strictEqual(latestChannelLine(done, "done", t), "完成：三件都做完了。");
     strictEqual(latestChannelLine(failed, "failed", t), "失败");
+  });
+
+  it("进度 / 问：命令、网址、路径不露出来；洗空了只说是哪种消息", () => {
+    const progress: ChannelMessage[] = [
+      { id: "p", from: "child", author: "model", kind: "progress", text: "跑 node --test src/agent/kernel.test.ts，打开 https://x.dev/a 对照", delivery: "followUp", createdAt: 2 },
+    ];
+    const line = latestChannelLine(progress, "running", t);
+    strictEqual(/[/`]|https?:|--/.test(line), false, line);
+    const question: ChannelMessage[] = [
+      { id: "q", from: "child", author: "model", kind: "question", text: "/Users/x/a.ts?", delivery: "followUp", createdAt: 2 },
+    ];
+    strictEqual(latestChannelLine(question, "waiting", t), "在问你");
   });
 
   it("最新的是父侧回信：回复：首行", () => {
@@ -252,5 +271,55 @@ describe("waitingSummary（父会话胶囊与右栏列表标题的「等你」�
     strictEqual(waitingSummary(3, 1, words), "1 个被打断 · 2 个等你");
     strictEqual(waitingSummary(2, 0, words), "2 个等你");
     strictEqual(waitingSummary(0, 0, words), "");
+  });
+});
+
+describe("subSessionLine（子会话面板第二行：每件活一句话）", () => {
+  const t = {
+    channel: {
+      notSpokenRunning: "在跑 · 还没说话",
+      notSpoken: "还没说话",
+      latestQuestion: (text: string) => `问：${text}`,
+      latestProgress: (text: string) => `进度：${text}`,
+      latestDone: "完成",
+      latestFailed: "失败",
+      latestReply: (text: string) => `回复：${text}`,
+      latestDoneWith: (text: string) => `完成：${text}`,
+      latestFailedWith: (text: string) => `失败：${text}`,
+      latestQuestionBare: "在问你",
+      latestProgressBare: "报了一次进度",
+      latestReplyBare: "收到了回复",
+      activity: { command: "正在跑命令", read: "正在读文件", edit: "正在改文件", web: "正在查网页", delegate: "正在派活", think: "正在想", work: "正在干活" },
+      waitingStep: (step: string, who: string) => `${step} · ${who}`,
+      quietFor: (text: string, minutes: number) => `${text} · ${minutes} 分钟没动静`,
+    },
+  } as unknown as Messages;
+  const plan = {
+    id: "tp",
+    role: "tool",
+    toolCallId: "cp",
+    toolName: "update_plan",
+    input: { items: [{ text: "读代码", status: "done" }, { text: "改投递逻辑", status: "in_progress" }] },
+    content: [],
+    status: "complete",
+    timestamp: 1,
+  } as unknown as TranscriptItem;
+  const say = (text: string): TranscriptItem => ({ id: `a${text}`, role: "assistant", content: [{ type: "text", text }], timestamp: 2, status: "complete", model: { provider: "p", id: "m" } }) as unknown as TranscriptItem;
+  const bash = { id: "tb", role: "tool", toolCallId: "cb", toolName: "bash", input: { command: "bun run test" }, content: [], status: "running", timestamp: 3 } as unknown as TranscriptItem;
+  const progress: ChannelMessage[] = [{ id: "p", from: "child", author: "model", kind: "progress", text: "cd /repo && bun run test", delivery: "followUp", createdAt: 2 }];
+
+  it("在跑：刚说的那句话（洗过）优先；只剩命令时退到计划在做的那步；都没有说「正在跑命令」，不露命令", () => {
+    const line = (items: TranscriptItem[]) => subSessionLine({ status: "running", messages: progress, items, now: 0, lastActivityAt: 0 }, t);
+    strictEqual(line([plan, say("我先把投递改成合并的。"), bash]), "我先把投递改成合并的。");
+    strictEqual(line([plan, say("`bun run test`"), bash]), "改投递逻辑");
+    strictEqual(line([bash]), "正在跑命令");
+  });
+  it("在跑但窗口里没有它的转录：退回通道里最新一句（同样洗过）", () => {
+    strictEqual(subSessionLine({ status: "running", messages: progress, items: [], now: 0, lastActivityAt: null }, t), "报了一次进度");
+  });
+  it("没动静：在跑、5 分钟以上没有任何 progress，带上几分钟；没在跑的照旧说通道里那句", () => {
+    strictEqual(subSessionLine({ status: "running", messages: progress, items: [bash], now: 7 * 60_000, lastActivityAt: 0 }, t), "正在跑命令 · 7 分钟没动静");
+    strictEqual(subSessionLine({ status: "running", messages: progress, items: [bash], now: 4 * 60_000, lastActivityAt: 0 }, t), "正在跑命令");
+    strictEqual(subSessionLine({ status: "done", messages: progress, items: [bash], now: 7 * 60_000, lastActivityAt: 0 }, t), "报了一次进度");
   });
 });

@@ -2277,6 +2277,23 @@ export const en = {
     latestDone: "Done",
     latestFailed: "Failed",
     latestReply: (text: string) => `Replied: ${text}`,
+    latestDoneWith: (text: string) => `Done: ${text}`,
+    latestFailedWith: (text: string) => `Failed: ${text}`,
+    latestQuestionBare: "has a question for you",
+    latestProgressBare: "sent an update",
+    latestReplyBare: "got a reply",
+    /** 在跑的活那一句的最后一级：不带参数的动作（work-line.ts） */
+    activity: {
+      command: "running a command",
+      read: "reading files",
+      edit: "editing files",
+      web: "browsing the web",
+      delegate: "handing off work",
+      think: "thinking",
+      work: "working",
+    },
+    waitingStep: (step: string, who: string) => `${step} · ${who}`,
+    quietFor: (text: string, minutes: number) => `${text} · quiet for ${minutes} min`,
   },
 
   queue: {

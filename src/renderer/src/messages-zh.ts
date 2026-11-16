@@ -2101,6 +2101,22 @@ export const zh: Messages = {
     latestDone: "完成",
     latestFailed: "失败",
     latestReply: (text) => `回复：${text}`,
+    latestDoneWith: (text) => `完成：${text}`,
+    latestFailedWith: (text) => `失败：${text}`,
+    latestQuestionBare: "在问你",
+    latestProgressBare: "报了一次进度",
+    latestReplyBare: "收到了回复",
+    activity: {
+      command: "正在跑命令",
+      read: "正在读文件",
+      edit: "正在改文件",
+      web: "正在查网页",
+      delegate: "正在派活",
+      think: "正在想",
+      work: "正在干活",
+    },
+    waitingStep: (step, who) => `${step} · ${who}`,
+    quietFor: (text, minutes) => `${text} · ${minutes} 分钟没动静`,
   },
 
   queue: {
