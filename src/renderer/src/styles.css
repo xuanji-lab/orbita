@@ -5265,6 +5265,22 @@ mark.intent-mark {
   min-width: 0;
 }
 .proc-head,
+/* 主智能体「断过」那一行：过程行的灰字与左缘（content-hem），不能点；长了换行不截断 */
+.proc-resume {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-height: var(--control-height-sm);
+  padding: var(--space-1) var(--content-hem);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+}
+.proc-resume > svg {
+  flex: none;
+  align-self: center;
+}
+
 .proc-head-row {
   display: flex;
   align-items: center;

@@ -1,14 +1,16 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { clock, pendingResume, resumeLine } from "./main-resume.ts";
+import { clock, placeResumes, resumeLine } from "./main-resume.ts";
 
 describe("主智能体「断过」那一行", () => {
   const r = (at: number) => ({ at, from: at - 1000, resumed: ["a", "b"], stopped: [] });
-  test("只画最近一次，且你回来后还没说过话", () => {
-    assert.equal(pendingResume(undefined, 0), null);
-    assert.equal(pendingResume([], 0), null);
-    assert.deepEqual(pendingResume([r(10), r(20)], 15), r(20));
-    assert.equal(pendingResume([r(10), r(20)], 25), null);
+  test("按时间插在之后的第一条用户消息前；之后没人说话的放末尾；都留着", () => {
+    assert.equal(placeResumes(undefined, []).atEnd.length, 0);
+    const users = [{ id: "u1", timestamp: 5 }, { id: "u2", timestamp: 15 }];
+    const placed = placeResumes([r(20), r(10), r(12)], users);
+    assert.deepEqual(placed.beforeUser.get("u2"), [r(10), r(12)]);
+    assert.equal(placed.beforeUser.has("u1"), false);
+    assert.deepEqual(placed.atEnd, [r(20)]);
   });
   test("同一天只写时刻，跨天带日期；文案拿到起止与件数", () => {
     const now = new Date(2026, 10, 17, 9, 0).getTime();
