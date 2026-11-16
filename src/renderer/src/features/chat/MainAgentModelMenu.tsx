@@ -2,7 +2,7 @@
  * 顶栏胶囊里的「主智能体」：点开定这个工作区的主智能体以后都用的型号与思考档（写进档案，agents:set-main-model）。
  * 主智能体的输入框里没有型号与思考档两个选择器（2026-11-17 用户定：型号在档案里定一次，不是每句话都改）。
  *
- * 不新造样式：触发键长得与原来的灰字一样（只多悬停 / 聚焦反馈）；弹层是 Menu，一行灰字说明（Menu 的组头行），
+ * 不新造样式：触发键长得与原来的灰字一样（只多悬停 / 聚焦反馈）；弹层是 Menu，一行灰字说明（Menu 空清单那一行），
  * 下面就是输入框里那两个芯片——同一个 ModelPickerMenu、同一个思考档 Menu。
  */
 import { useEffect, useState } from "react";
@@ -81,8 +81,9 @@ export function MainAgentModelMenu(props: {
 
   return (
     <Menu
-      // 一行灰字（组头行，不可选）说清这里定的是什么
-      items={[{ id: "main-model-note", label: t.chat.mainModelNote, header: true }]}
+      // 没有可选的行：清单区只放一行灰字（Menu 空清单那一行的样式：sm、三级墨），说清这里定的是什么
+      items={[]}
+      emptyText={() => t.chat.mainModelNote}
       panelMinWidth={300}
       footer={() => (
         <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", padding: "var(--space-1) var(--space-2)" }}>
