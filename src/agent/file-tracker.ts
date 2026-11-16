@@ -18,7 +18,7 @@
  */
 import { stat, readFile } from "node:fs/promises";
 import { structuredPatch } from "diff";
-import { resolveToCwd } from "@earendil-works/pi-coding-agent";
+import { toolTargetPath } from "./tool-paths.ts";
 import { SNAPSHOT_MAX_BYTES, type FileChangePayload, type SnapshotPayload } from "../shared/revert.ts";
 
 /** 一次读盘的结果：文件不在 / 在（带字节）。读失败（权限等）按「在但不可读」→ unrecoverable。 */
@@ -38,13 +38,13 @@ export const diskReader: PathReader = async (path) => {
 };
 
 /**
- * write / edit 工具落盘前解析路径用的就是 pi 的 resolveToCwd（见 pi core/tools/write.js、edit.js）。
- * tracker 必须与工具算出**同一个**绝对路径，因此这里不自己实现、直接用 pi 的实现——
- * 手抄一份曾漏掉 win32 的 MSYS/Git-bash 路径折算、`~\` 展开与 file:// URL 转换，
- * 造成工具写 A 文件、tracker 记 B 路径（两边都不存在 → absent==absent 判「没改动」），
- * 回退 / 撤销静默失效。resolveToCwd 经 patch 从包公开入口导出（见 patches/）。
+ * write / edit 工具落盘前的绝对路径：与工具包装层（durable-tools.ts）+ 新内核工具同一套规整（tool-paths.ts，
+ * 含 Windows 上 Git Bash 盘符写法的折算）。tracker 必须与工具算出**同一个**绝对路径——以前手抄一份漏了 MSYS 折算、
+ * `~\` 展开与 file:// URL，造成工具写 A 文件、tracker 记 B 路径，回退 / 撤销静默失效（tool-paths.test.ts 拿真工具比对）。
  */
-export const resolveToolPath = resolveToCwd;
+export function resolveToolPath(target: string, cwd: string): string {
+  return toolTargetPath(target, cwd);
+}
 
 /** 字节 → 快照：NUL / 超 1MB / 解不了 utf8 / 读不了 → unrecoverable；不在 → absent。 */
 function toSnapshot(outcome: ReadOutcome): SnapshotPayload {

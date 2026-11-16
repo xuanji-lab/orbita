@@ -37,7 +37,7 @@ import type { AgentEvent, ContextRulesInventory } from "../shared/agent-ipc.ts";
 import { buildRulesInventory } from "../shared/context-inventory.ts";
 import type { KernelContinueCommand, KernelTurnCommand } from "../shared/kernel.ts";
 import { composePromptText } from "../shared/prompt-attachments.ts";
-import { builtinToolDefinitions, toDurableTool } from "./durable-tools.ts";
+import { builtinTools, toDurableTool, type DurableToolScope } from "./durable-tools.ts";
 import { liftMessages, TurnWire } from "./kernel-wire.ts";
 import { loadoutOrder, loadPiResources, offeredOrder } from "./kernel-prompt.ts";
 import type { McpHub } from "./mcp.ts";
@@ -388,7 +388,6 @@ export async function assembleTurn(
 
   const resources = await loadPiResources({ cwd: command.cwd, skillsDirs: command.skillsDirs, resolveShellPath: runtime.resolveShellPath });
   const definitions = [
-    ...builtinToolDefinitions(command.cwd, { ...resources.builtinOptions, ...(runtime.tagCommand === undefined ? {} : { tagCommand: runtime.tagCommand }) }),
     ...createTurnTools({
       command,
       flags,
@@ -400,12 +399,7 @@ export async function assembleTurn(
       memoryTurn: () => memoryTurn,
     }),
   ];
-  const byName = new Map(definitions.map((definition) => [definition.name, definition]));
-  const activeNames = loadoutOrder(
-    previousTools.map((tool) => tool.name),
-    definitions.map((definition) => definition.name),
-  );
-  const scope = {
+  const scope: DurableToolScope = {
     cwd: command.cwd,
     autoResizeImages: resources.builtinOptions.autoResizeImages,
     model: () => target.model,
@@ -414,9 +408,19 @@ export async function assembleTurn(
     beforeExecute: (callId: string, signal: AbortSignal | undefined) => rounds.beforeExecute(callId, signal),
     ...(observer.toolUpdate === undefined ? {} : { onUpdate: observer.toolUpdate }),
   };
+  // 内建四件是新内核自带的实现（外面包一层 Orbita 的环境、路径折算与 PDF 指路）；其余是 Orbita 自己的工具，薄翻译一层
+  const registrations = [
+    ...builtinTools(command.cwd, { ...resources.builtinOptions, ...(runtime.tagCommand === undefined ? {} : { tagCommand: runtime.tagCommand }) }, scope),
+    ...definitions.map((definition) => toDurableTool(definition, scope)),
+  ];
+  const byName = new Map(registrations.map((tool) => [tool.name, tool]));
+  const activeNames = loadoutOrder(
+    previousTools.map((tool) => tool.name),
+    registrations.map((tool) => tool.name),
+  );
   const active = activeNames.flatMap((name) => {
-    const definition = byName.get(name);
-    return definition === undefined ? [] : [toDurableTool(definition, scope)];
+    const tool = byName.get(name);
+    return tool === undefined ? [] : [tool];
   });
   const toolNames = offeredOrder(previousTools, active.map((tool) => toToolDeclaration(tool)));
   const byTool = new Map(active.map((tool) => [tool.name, tool]));

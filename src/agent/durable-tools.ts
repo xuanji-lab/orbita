@@ -17,17 +17,14 @@
  */
 import type { JsonValue } from "@earendil-works/chord/json";
 import type { Model, Api } from "@earendil-works/pi-ai";
-import {
-  createBashToolDefinition,
-  createEditToolDefinition,
-  createReadToolDefinition,
-  createWriteToolDefinition,
-  normalizeToolResultImages,
-  type ExtensionToolContext,
-  type ToolDefinition,
-} from "@earendil-works/pi-coding-agent";
+import { open } from "node:fs/promises";
+import { normalizeToolResultImages, type ExtensionToolContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
+import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
+import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
+import { createBashTool, createEditTool, createReadTool, createWriteTool, type ImageProcessor } from "@earendil-works/pi-durable/tools";
 import { ENABLED_BUILTIN_TOOLS } from "./permission.ts";
+import { toolPathArgument, toolTargetPath } from "./tool-paths.ts";
 
 /**
  * 工具执行时要的那几样会话事实（旧内核里 pi 经 ExtensionToolContext 给）：
@@ -153,31 +150,150 @@ export function toDurableTool(definition: ToolDefinition, scope: DurableToolScop
   };
 }
 
-/** 内建工具的装配选项：旧内核里 pi 从它的设置读这三项（settingsManager），新内核从同一份设置读 */
+/** 内建工具的装配选项：从 pi 的设置读（commandPrefix / shellPath / 图片自动缩放），每轮现读 */
 export interface BuiltinToolOptions {
   autoResizeImages: boolean;
   commandPrefix: string | undefined;
   shellPath: string | undefined;
   /** 给 bash 命令打标签（kernel 进程的孤儿善后，kernel-children.ts 的 tagShellCommand）；缺席 = 不打 */
   tagCommand?: (command: string) => string;
+  /** 平台（测试注入）：只有 win32 才把 Git Bash / MSYS 的盘符路径折成 Windows 路径 */
+  platform?: NodeJS.Platform;
+}
+
+/** 读图的缩放 / 转格式：photon（WASM），进程里懒加载一次。不用 worker——打包后 worker 入口找不到，与旧内核同样在本进程里做 */
+let photon: Promise<ImageProcessor> | undefined;
+const lazyPhoton: ImageProcessor = {
+  async prepare(bytes, mimeType, limits) {
+    photon ??= createNodePhotonImages({ worker: false });
+    return (await photon).prepare(bytes, mimeType, limits);
+  },
+};
+
+/** bash 子进程里留给智能体自己查的会话事实（名字沿用旧内核，用户的技能与验收脚本靠 PI_SESSION_ID 认人） */
+const SESSION_ENV_KEYS = ["PI_SESSION_ID", "PI_SESSION_FILE", "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL", "PI_PACKAGE_DIR"] as const;
+
+/**
+ * bash 子进程的环境：本进程的环境去掉继承来的 PI_*（Orbita 自己可能是被别的智能体拉起来的，那些是别人的会话），
+ * 再写上这一轮的 PI_SESSION_ID / PI_PROVIDER / PI_MODEL / PI_REASONING_LEVEL。PI_SESSION_FILE、PI_PACKAGE_DIR 不给：
+ * 新内核没有会话 JSONL，pi 的包目录也随旧库删了。
+ */
+export function bashSessionEnv(base: NodeJS.ProcessEnv, scope: Pick<DurableToolScope, "model" | "thinkingLevel" | "providerSessionId">): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(base)) {
+    if (value !== undefined && !(SESSION_ENV_KEYS as readonly string[]).includes(key)) env[key] = value;
+  }
+  env["PI_SESSION_ID"] = scope.providerSessionId();
+  const model = scope.model();
+  if (model !== undefined) {
+    env["PI_PROVIDER"] = model.provider;
+    env["PI_MODEL"] = model.id;
+  }
+  const level = scope.thinkingLevel();
+  if (level !== "") env["PI_REASONING_LEVEL"] = level;
+  return env;
+}
+
+/** 二进制文档读成文本是乱码：read 碰到它们改回一句「用哪个工具读」（PDF 认文件头魔数，Word 按扩展名——PK 是通用 zip 魔数） */
+export const PDF_POINTER = "[This is a PDF document. Its binary content cannot be shown as text. Use the read_pdf tool to extract its text layer.]";
+export const DOCX_POINTER = "[This is a Word document (.docx). Its binary content cannot be shown as text. Use the read_docx tool to read it as structured markdown.]";
+export const DOC_POINTER = "[This is a legacy Word document (.doc). It is not supported directly — save it as .docx first, then use the read_docx tool.]";
+
+export async function binaryDocumentPointer(absolutePath: string): Promise<string | undefined> {
+  let head: Buffer;
+  try {
+    const handle = await open(absolutePath, "r");
+    try {
+      const buffer = Buffer.alloc(1024);
+      const { bytesRead } = await handle.read(buffer, 0, 1024, 0);
+      head = buffer.subarray(0, bytesRead);
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return undefined; // 不存在 / 是目录 / 读不了：交给 read 工具自己报
+  }
+  if (head.toString("latin1").includes("%PDF-")) return PDF_POINTER;
+  if (/\.docx$/i.test(absolutePath)) return DOCX_POINTER;
+  if (/\.doc$/i.test(absolutePath)) return DOC_POINTER;
+  return undefined;
+}
+
+/** 流式输出给界面的那份尾巴：与旧 bash 的 onUpdate 同量级（最后 2000 行 / 50KB） */
+const LIVE_TAIL_BYTES = 50 * 1024;
+const LIVE_TAIL_LINES = 2000;
+
+function liveTail(text: string): string {
+  let tail = text.length > LIVE_TAIL_BYTES ? text.slice(-LIVE_TAIL_BYTES) : text;
+  const lines = tail.split("\n");
+  if (lines.length > LIVE_TAIL_LINES) tail = lines.slice(-LIVE_TAIL_LINES).join("\n");
+  return tail;
 }
 
 /**
- * 内建四件（read / write / edit / bash），按 ENABLED_BUILTIN_TOOLS 的顺序。工厂与 pi 会话自己建内建工具用的是**同一组**
- * （agent-session 的 _buildRuntime → createAllToolDefinitions，它内部就是逐个调下面这些 create*ToolDefinition，
- * 只给 read 与 bash 传选项），所以与 pi 会话发出的工具声明逐字节相同（kernel-prompt.test.ts 守）。
- * createAllToolDefinitions 本身不在 pi 的公开入口里。
+ * 新内核自带的工具外面那一层 Orbita 包装：
+ * - 执行环境：本轮的 cwd 与 shell（NodeExecutionEnv），经 api.env 交给工具——工具只认 api.env；
+ * - 路径：Windows 上把 `/c/…`、`/cygdrive/c/…` 这类 Git Bash 写法折成盘符路径再交给工具（tool-paths.ts，文件账与闸门同一套）；
+ * - read 碰到 PDF / Word 改回指路；
+ * - 一批工具「全部准备完才一起执行」的节奏（beforeExecute）；
+ * - bash 的实时输出交给界面（onUpdate，partialResult 与旧内核同形）。
  */
-export function builtinToolDefinitions(cwd: string, options: BuiltinToolOptions): ToolDefinition[] {
-  const all: Record<(typeof ENABLED_BUILTIN_TOOLS)[number], ToolDefinition> = {
-    bash: createBashToolDefinition(cwd, {
-      commandPrefix: options.commandPrefix,
-      shellPath: options.shellPath,
-      ...(options.tagCommand === undefined ? {} : { spawnHook: (context) => ({ ...context, command: (options.tagCommand as (command: string) => string)(context.command) }) }),
-    }) as unknown as ToolDefinition,
-    edit: createEditToolDefinition(cwd) as unknown as ToolDefinition,
-    read: createReadToolDefinition(cwd, { autoResizeImages: options.autoResizeImages }) as unknown as ToolDefinition,
-    write: createWriteToolDefinition(cwd) as unknown as ToolDefinition,
+function wrapBuiltin(tool: ToolRegistration, env: NodeExecutionEnv, scope: DurableToolScope, cwd: string, platform: NodeJS.Platform): ToolRegistration {
+  const hasPath = tool.name === "read" || tool.name === "write" || tool.name === "edit";
+  return {
+    ...tool,
+    async execute(args, api, context) {
+      await scope.beforeExecute?.(api.callId, context.abortSignal);
+      let input = args as Record<string, unknown>;
+      if (hasPath && typeof input["path"] === "string") {
+        const path = toolPathArgument(input["path"], platform);
+        if (path !== input["path"]) input = { ...input, path };
+        if (tool.name === "read") {
+          const pointer = await binaryDocumentPointer(toolTargetPath(path, cwd, { platform }));
+          if (pointer !== undefined) return { output: [{ type: "text", text: pointer }] };
+        }
+      }
+      let streamed = "";
+      const onUpdate = scope.onUpdate;
+      const wrapped = new Proxy(api, {
+        get(target, property) {
+          if (property === "env") return env;
+          if (property === "output" && onUpdate !== undefined) {
+            return (chunk: string | Uint8Array, skipped?: Parameters<typeof target.output>[1]) => {
+              streamed = liveTail(streamed + (typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk)));
+              onUpdate(api.callId, tool.name, { content: [{ type: "text", text: streamed }] });
+              target.output(chunk, skipped);
+            };
+          }
+          const value: unknown = Reflect.get(target, property, target);
+          return typeof value === "function" ? (value as (...rest: unknown[]) => unknown).bind(target) : value;
+        },
+      });
+      return tool.execute(input as never, wrapped, context);
+    },
   };
-  return ENABLED_BUILTIN_TOOLS.map((name) => all[name]);
+}
+
+/**
+ * 内建四件（read / write / edit / bash，新内核自带的实现），按 ENABLED_BUILTIN_TOOLS 的顺序。
+ * 截断是工具与 durable 自己的事（bash 留尾、read 留头，各 2000 行 / 50KB），不另设上限。
+ */
+export function builtinTools(cwd: string, options: BuiltinToolOptions, scope: DurableToolScope): ToolRegistration[] {
+  const platform = options.platform ?? process.platform;
+  const env = new NodeExecutionEnv({ cwd, ...(options.shellPath === undefined ? {} : { shellPath: options.shellPath }) });
+  const tag = options.tagCommand;
+  const all: Record<(typeof ENABLED_BUILTIN_TOOLS)[number], ToolRegistration> = {
+    bash: createBashTool({
+      ...(options.commandPrefix === undefined || options.commandPrefix === "" ? {} : { commandPrefix: options.commandPrefix }),
+      prepare: (execution) => {
+        if (tag !== undefined) execution.command = tag(execution.command);
+        execution.inheritEnv = false;
+        execution.env = bashSessionEnv(process.env, scope);
+      },
+    }) as unknown as ToolRegistration,
+    edit: createEditTool() as unknown as ToolRegistration,
+    read: createReadTool(options.autoResizeImages ? { images: lazyPhoton } : {}) as unknown as ToolRegistration,
+    write: createWriteTool() as unknown as ToolRegistration,
+  };
+  return ENABLED_BUILTIN_TOOLS.map((name) => wrapBuiltin(all[name], env, scope, cwd, platform));
 }

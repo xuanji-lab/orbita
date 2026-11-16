@@ -12,7 +12,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { createReadToolDefinition, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { builtinTools } from "./durable-tools.ts";
 import {
   createPdfTools,
   PDF_IMAGE_HD_WIDTH,
@@ -23,6 +25,22 @@ import {
   PDF_MAX_PAGES_PER_CALL,
 } from "./pdf-tools.ts";
 import { citationsOfDetails } from "../shared/pdf-quote.ts";
+
+/** 新内核自带的 read（外面 Orbita 那层包装负责 PDF / Word 指路）：不经 Harness 直接调 */
+async function readViaBuiltin(cwd: string, path: string): Promise<string> {
+  const read = builtinTools(cwd, { autoResizeImages: false, commandPrefix: undefined, shellPath: undefined }, {
+    cwd,
+    autoResizeImages: false,
+    model: () => undefined,
+    thinkingLevel: () => "off",
+    providerSessionId: () => "p",
+  }).find((tool) => tool.name === "read");
+  assert.ok(read !== undefined);
+  const api = { callId: "c", agent: async () => ({}), models: { getModel: () => undefined }, diagnostic: () => undefined, output: () => undefined } as never;
+  const result = (await read.execute({ path } as never, api, BACKGROUND_CONTEXT)) as { output?: { type: string; text?: string }[] };
+  return (result.output ?? []).map((item) => item.text ?? "").join("");
+}
+
 
 /** 夹具里的每页正文要够长（阈值 PDF_NO_TEXT_LAYER_MIN_CHARS 以上），除非在测扫描件 */
 /**
@@ -459,16 +477,8 @@ describe("read_pdf", () => {
     await assert.rejects(run(join(dir, "missing.pdf")), /ENOENT/);
   });
 
-  test("pi 的 read 工具对 PDF 返回指路文案而非乱码（patch 守护）", async () => {
-    const readTool = createReadToolDefinition(dir);
-    const result = await readTool.execute(
-      "call-2",
-      { path: join(dir, "three-pages.pdf") },
-      undefined,
-      undefined,
-      undefined as never,
-    );
-    const text = result.content[0]!.type === "text" ? result.content[0]!.text : "";
+  test("read 对 PDF 返回指路文案而非乱码（工具包装层守护）", async () => {
+    const text = await readViaBuiltin(dir, join(dir, "three-pages.pdf"));
     assert.ok(text.includes("read_pdf"), text.slice(0, 120));
     assert.ok(!text.includes("%PDF-"), text.slice(0, 120));
   });

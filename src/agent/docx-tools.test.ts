@@ -5,8 +5,26 @@ import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import JSZip from "jszip";
 import * as ncanvas from "@napi-rs/canvas";
-import { createReadToolDefinition, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { builtinTools } from "./durable-tools.ts";
 import { createDocxTools } from "./docx-tools.ts";
+
+/** 新内核自带的 read（外面 Orbita 那层包装负责 PDF / Word 指路）：不经 Harness 直接调 */
+async function readViaBuiltin(cwd: string, path: string): Promise<string> {
+  const read = builtinTools(cwd, { autoResizeImages: false, commandPrefix: undefined, shellPath: undefined }, {
+    cwd,
+    autoResizeImages: false,
+    model: () => undefined,
+    thinkingLevel: () => "off",
+    providerSessionId: () => "p",
+  }).find((tool) => tool.name === "read");
+  assert.ok(read !== undefined);
+  const api = { callId: "c", agent: async () => ({}), models: { getModel: () => undefined }, diagnostic: () => undefined, output: () => undefined } as never;
+  const result = (await read.execute({ path } as never, api, BACKGROUND_CONTEXT)) as { output?: { type: string; text?: string }[] };
+  return (result.output ?? []).map((item) => item.text ?? "").join("");
+}
+
 
 /**
  * read_docx 的守护。夹具用 jszip 在内存造最小合法 docx（真实结构：
@@ -465,20 +483,16 @@ describe("read_docx", () => {
     assert.ok(blocks[0]!.text!.includes("[image 1: 深层图]"));
   });
 
-  // ─── pi read 的指路（patch 守护） ─────────────────────────────────────────
+  // ─── read 的指路（工具包装层守护） ─────────────────────────────────────────
 
-  test("pi 的 read 对 .docx 返回指路文案而非乱码（patch 守护）", async () => {
-    const readTool = createReadToolDefinition(dir);
-    const result = await readTool.execute("call-2", { path: join(dir, "full.docx") }, undefined, undefined, undefined as never);
-    const text = result.content[0]!.type === "text" ? result.content[0]!.text : "";
+  test("read 对 .docx 返回指路文案而非乱码（工具包装层守护）", async () => {
+    const text = await readViaBuiltin(dir, join(dir, "full.docx"));
     assert.ok(text.includes("read_docx"), text.slice(0, 120));
     assert.ok(!text.includes("[Content_Types]"), text.slice(0, 120));
   });
 
-  test("pi 的 read 对 .doc 返回转存提示（patch 守护）", async () => {
-    const readTool = createReadToolDefinition(dir);
-    const result = await readTool.execute("call-3", { path: join(dir, "legacy.doc") }, undefined, undefined, undefined as never);
-    const text = result.content[0]!.type === "text" ? result.content[0]!.text : "";
+  test("read 对 .doc 返回转存提示（工具包装层守护）", async () => {
+    const text = await readViaBuiltin(dir, join(dir, "legacy.doc"));
     assert.ok(text.includes("save it as .docx"), text.slice(0, 140));
   });
 });

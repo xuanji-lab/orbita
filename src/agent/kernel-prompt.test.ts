@@ -8,7 +8,6 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAgentSessionFromServices, createAgentSessionServices, SessionManager } from "@earendil-works/pi-coding-agent";
-import { builtinToolDefinitions } from "./durable-tools.ts";
 import { loadoutOrder, loadPiResources } from "./kernel-prompt.ts";
 import { ENABLED_BUILTIN_TOOLS } from "./permission.ts";
 import { RequestBroker } from "./request-broker.ts";
@@ -85,13 +84,19 @@ describe("kernel-prompt：pi 基础系统提示两个内核逐字节相同", () 
 
     // 新内核
     const resources = await loadPiResources({ cwd, skillsDirs: [skillsDir], resolveShellPath: () => undefined });
-    const definitions = [...builtinToolDefinitions(cwd, resources.builtinOptions), ...custom];
-    const order = loadoutOrder([], definitions.map((definition) => definition.name));
+    const order = loadoutOrder([], [...ENABLED_BUILTIN_TOOLS, ...custom.map((definition) => definition.name)]);
     assert.deepEqual(order, oldTools, "全新会话的工具顺序与 pi 的 active 顺序相同");
-    const newPrompt = resources.basePrompt(order, definitions);
-    assert.match(oldPrompt, /先跑测试再提交/);
-    assert.match(oldPrompt, /demo/);
-    assert.equal(newPrompt, oldPrompt);
+    // 内建四件换成新内核自带的实现（没有 promptSnippet / promptGuidelines）：基础提示里只剩 Orbita 自己工具的片段，
+    // 四件的工具行与它们的使用规则不再出现（Orbita 自写的基底补回，见 kernel-prompt 的后续改动）
+    const newPrompt = resources.basePrompt(order, custom);
+    assert.match(newPrompt, /先跑测试再提交/);
+    assert.match(newPrompt, /demo/);
+    assert.match(oldPrompt, /Use read to examine files/);
+    assert.doesNotMatch(newPrompt, /Use read to examine files|Use write only for new files/);
+    for (const line of oldPrompt.split("\n").filter((each) => /^- (read|write|edit|bash):|^- Use (read|write|edit) /.test(each) === false)) {
+      if (line.startsWith("- You can inspect PI_") || line.startsWith("- Each edits[]")) continue;
+      assert.ok(newPrompt.includes(line), `旧提示里这一行在新提示里没了：${line}`);
+    }
     // grep / find / ls 2026-11-16 删了：工具清单里没有它们；pi「有 bash、而三个搜索工具一个都不在」时
     // 下的那句「用 bash 干搜索」随之出现（搜索走 bash 里随包的 rg / fd）
     assert.ok(newPrompt.includes("Use bash for file operations"));

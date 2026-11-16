@@ -10,11 +10,11 @@
 import { gatedCommandTimeout } from "../shared/permission.ts";
 import { statSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
-import { resolveToCwd } from "@earendil-works/pi-coding-agent";
+import { toolTargetPath } from "./tool-paths.ts";
 import { dataDirRefusalMessage, defaultGuardEnv, protectedCommandRefusal, realpathLoose, stripFirmlinkPrefix, tildeHome, type CommandGuardEnv, type DataDirSubject } from "./protected-command.ts";
 
 /**
- * **本会话实际启用的内建工具集**：`durable-tools.ts` 按这份顺序建内建工具（builtinToolDefinitions），决定本会话
+ * **本会话实际启用的内建工具集**：`durable-tools.ts` 按这份顺序建内建工具（builtinTools），决定本会话
  * **内建工具的清单与顺序**。
  *
  * 2026-11-16 起只剩四件：grep / find / ls 三个搜索工具用户定「不要」——搜索走 bash（随包的 rg / fd 挂在
@@ -94,17 +94,18 @@ const COMMAND_TOOLS = new Set(["bash", "powershell"]);
 const PROTECTED_COMMAND_TOOLS = new Set([...COMMAND_TOOLS, "terminal_execute"]);
 
 /**
- * write / edit 的目标路径可能落到哪：闸门自己的字面解析，加上 **pi 落盘前实际用的那套规整**
- * （resolveToCwd：展开 `~`、去掉 `@` 前缀、把不间断空格等换成普通空格、认 `file://`）。
+ * write / edit 的目标路径可能落到哪：闸门自己的字面解析，加上 **工具落盘前实际用的那套规整**
+ * （tool-paths.ts 的 toolTargetPath：展开 `~`、去掉 `@` 前缀、把不间断空格等换成普通空格、认 `file://`、
+ * Windows 上折算 Git Bash 盘符写法——与工具包装层、文件账同一个函数）。
  * 只做字面解析时，`~/Library/…/sessions/x` 会被当成 cwd 下一个叫 `~` 的相对目录而放行，随后 pi 把它
  * 写进真实的会话目录（2026-11-15 独立验收在真实例里写成功）。两种解析都比，各自再跟一遍符号链接。
  */
 function resolvedForms(cwd: string, target: string): string[] {
   const resolved = [resolve(cwd, target)];
   try {
-    resolved.push(resolveToCwd(target, cwd));
+    resolved.push(toolTargetPath(target, cwd));
   } catch {
-    // 规整不了的输入（如畸形 file:// URL）pi 自己也会抛、写不成；字面解析那一份照比
+    // 规整不了的输入：字面解析那一份照比
   }
   // firmlink 前缀去掉的那一份也比：受保护目录还不存在时（stat 不到），按文件身份比认不出它
   // （2026-11-16 复验：开关开着时 pi-sessions/ 还没建，firmlink 前缀的 write 把它连同文件一起建了出来）
