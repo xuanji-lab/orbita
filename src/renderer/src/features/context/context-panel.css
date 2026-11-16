@@ -653,3 +653,21 @@ button.tp-editlog-src:hover {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
+/* 派出去的活末尾「做完 N 件 · 停着 M 件」：和子会话面板同一个规矩，点开才列 */
+.tp-jobs-fold {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--color-text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+.tp-jobs-fold .inbox-row-mark {
+  width: 14px;
+  height: auto;
+}

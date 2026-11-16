@@ -8,7 +8,6 @@ import {
   latestChannelLine,
   subSessionLine,
   sortSubSessionRows,
-  dispatchedRows,
   displaySubSessionTitle,
   jobElapsed,
   splitDoneRows,
@@ -379,11 +378,7 @@ describe("subSessionLine（子会话面板第二行：每件活一句话）", ()
   });
 });
 
-describe("dispatchedRows / jobElapsed（进度面板「派出去的活」）", () => {
-  it("只列在做的与要你出手的；做完、终止、还没开口的不列", () => {
-    const rows = ["running", "waiting", "interrupted", "failed", "done", "stopped", "idle"].map((status) => ({ status: status as SubSessionRowStatus }));
-    deepStrictEqual(dispatchedRows(rows).map((row) => row.status), ["running", "waiting", "interrupted", "failed"]);
-  });
+describe("jobElapsed（进度面板「派出去的活」用了多久）", () => {
   it("用了多久：不到 1 分钟 / N 分钟 / N 小时 M 分钟 / 十小时以上只说小时", () => {
     const words = {
       lessThanMinute: "不到 1 分钟",

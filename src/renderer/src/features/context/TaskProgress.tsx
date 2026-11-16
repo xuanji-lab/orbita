@@ -11,7 +11,7 @@ import { useChannelSummaries } from "../chat/useChannelSummaries";
 import { useParentChannels } from "../chat/useChannelMessages";
 import type { SessionEngine } from "../chat/useChatSession";
 import {
-  dispatchedRows,
+  splitDoneRows,
   displaySubSessionTitle,
   jobElapsed,
   sortSubSessionRows,
@@ -164,28 +164,32 @@ export function TaskProgress(props: {
         {clock !== null && <span className="tp-clock">{clock}</span>}
       </div>
 
-      {timeline !== null && plan !== null ? (
-        <PlanSection
-          timeline={timeline}
-          turns={turns}
-          activity={activity}
-          working={working}
-          awaiting={timeline.current.awaiting && planAwaitingIn(view.current)}
-          detail={working ? stepDetail : null}
-          turnActive={turnActive}
-          now={now}
-          inChat={inChat}
-          statusOf={statusOf}
-          callOf={callOf}
-          ledger={ledger}
-          logOpen={logOpen}
-          onToggleLog={() => setLogOpen((value) => !value)}
-        />
-      ) : (
-        turnActive && <p className="tp-hint">{t.taskPanel.noPlan}</p>
-      )}
-
-      <DispatchedSection parentId={props.sessionId} sessions={props.sessions} engine={props.engine} />
+      <TaskDetail
+        dispatchedOf={props.sessionId}
+        sessions={props.sessions}
+        engine={props.engine}
+        plan={
+          timeline !== null && plan !== null
+            ? {
+              timeline,
+              turns,
+              activity,
+              working,
+              awaiting: timeline.current.awaiting && planAwaitingIn(view.current),
+              detail: working ? stepDetail : null,
+              turnActive,
+              now,
+              inChat,
+              statusOf,
+              callOf,
+              ledger,
+              logOpen,
+              onToggleLog: () => setLogOpen((value) => !value),
+            }
+            : null
+        }
+        noPlanHint={turnActive}
+      />
 
       {plan !== null && turns.length > 0 && (
         <button
@@ -689,6 +693,30 @@ function StepTail(props: { act: StepActivity | undefined; clock: string | null }
 
 
 /**
+ * 一件事的详情：它的计划 + 它派出去的活（2026-11-17）。写成一个整块、不和面板最外层绑死：以后一个工作区同时有好几件大事时，
+ * 右栏分上下两段（main-agent-design 11-right-full 的 B：上段「事情」清单固定，下段是选中那件的详情），这一块就是下段，
+ * 由上段的选中项驱动——换一件事 = 换 dispatchedOf 与 plan。现在只有一件（当前会话），上段等数据来了再接。
+ */
+function TaskDetail(props: {
+  /** 谁派出去的活：这件事对应的那条会话 */
+  dispatchedOf: string;
+  sessions: readonly SessionMeta[];
+  engine: SessionEngine;
+  /** 这件事的计划；没写过计划 = null */
+  plan: Parameters<typeof PlanSection>[0] | null;
+  /** 没有计划时要不要说一句「还没列计划」（这件事正在跑时） */
+  noPlanHint: boolean;
+}) {
+  const t = useT();
+  return (
+    <>
+      {props.plan !== null ? <PlanSection {...props.plan} /> : props.noPlanHint && <p className="tp-hint">{t.taskPanel.noPlan}</p>}
+      <DispatchedSection parentId={props.dispatchedOf} sessions={props.sessions} engine={props.engine} />
+    </>
+  );
+}
+
+/**
  * 进度面板「派出去的活」（2026-11-17；设计 main-agent-design 的 decisions 第 3 件，选 B）：每件两行——名字与用了多久 / 那一句
  * （和子会话面板、状态位是同一句，sub-sessions-rows 的 subSessionLine）；第三行只在有变化时出（断过一次、按你的话改了口径），
  * 现在没有数据来源，接口留着不出。在做 = 灰点，要你出手 = 橙点；做完交回来的不在这里。没有派过活整节不出。
@@ -703,8 +731,8 @@ function DispatchedSection(props: { parentId: string; sessions: readonly Session
     const timer = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(timer);
   }, []);
-  const rows = dispatchedRows(
-    sortSubSessionRows(
+  const [showDone, setShowDone] = useState(false);
+  const all = sortSubSessionRows(
       children.map((meta) => {
         const messages = channels.get(meta.id);
         const last = messages?.[messages.length - 1];
@@ -715,14 +743,16 @@ function DispatchedSection(props: { parentId: string; sessions: readonly Session
           lastAt: last !== undefined ? last.createdAt : meta.createdAt,
         };
       }),
-    ),
   );
-  if (rows.length === 0) return null;
+  if (all.length === 0) return null;
+  // 只露在做的与要你出手的；做完的与停着的折成末尾一行（和子会话面板同一个规矩、同一段逻辑 splitDoneRows）
+  const { open: rows, done, parked } = splitDoneRows(all);
+  const folded = [...done, ...parked];
   const itemsOf = (id: string) => {
     const slot = props.engine.entryOf(id);
     return slot === undefined ? [] : selectTranscript(slot.transcript);
   };
-  const headline = subSessionHeadline(rows, {
+  const headline = subSessionHeadline(all, {
     interrupted: t.chat.subSessionInterruptedShort,
     waiting: t.subSessions.waitingCount,
     failed: t.subSessions.failedCount,
@@ -735,7 +765,7 @@ function DispatchedSection(props: { parentId: string; sessions: readonly Session
         <span className="tp-n">{headline}</span>
       </div>
       <ol className="tp-jobs">
-        {rows.map((row) => {
+        {[...rows, ...(showDone ? folded : [])].map((row) => {
           const mark = subSessionMark(row.status);
           const line = subSessionLine(
             {
@@ -765,6 +795,17 @@ function DispatchedSection(props: { parentId: string; sessions: readonly Session
           );
         })}
       </ol>
+      {folded.length > 0 && (
+        <button type="button" className="tp-jobs-fold" aria-expanded={showDone} onClick={() => setShowDone((value) => !value)}>
+          <span className="inbox-row-mark done" aria-hidden="true">
+            <Icon name="check" size={12} strokeWidth={2} />
+          </span>
+          <span className="tp-text">
+            {[...(done.length > 0 ? [t.subSessions.doneCount(done.length)] : []), ...(parked.length > 0 ? [t.subSessions.parkedCount(parked.length)] : [])].join(" · ")}
+          </span>
+          <Icon name={showDone ? "chevron-down" : "chevron-right"} size={12} strokeWidth={1.8} />
+        </button>
+      )}
     </section>
   );
 }

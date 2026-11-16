@@ -167,14 +167,6 @@ export function displaySubSessionTitle(title: string): string {
   return /[\u3400-\u9fff]/.test(rest) ? rest : title;
 }
 
-/**
- * 进度面板「派出去的活」列哪几件：在做的、要你出手的（在问你、被打断、没做成）；做完的交回来就不在这里了，
- * 终止的、还没开口的也不列。排序沿用收件箱（要你出手的在前）。
- */
-export function dispatchedRows<T extends { status: SubSessionRowStatus }>(rows: readonly T[]): T[] {
-  return rows.filter((row) => row.status === "running" || subSessionMark(row.status) === "ask");
-}
-
 /** 一件活用了多久（派出去到现在）：「不到 1 分钟」「21 分钟」「1 小时」「1 小时 5 分钟」 */
 export function jobElapsed(
   ms: number,
