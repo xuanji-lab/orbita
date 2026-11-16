@@ -1,3 +1,4 @@
+import { capabilitiesLine } from "@shared/capabilities";
 import { MainAgentModelMenu } from "./features/chat/MainAgentModelMenu";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTheme } from "./useTheme";
@@ -1305,7 +1306,14 @@ export function App() {
     ) : mainOpenId === "" && session.opened === null && mainAgentWorkspace === undefined ? null : (
       <SessionCapsule
         title={capsuleTitle}
-        tag={mainAgentWorkspace === undefined ? undefined : t.sidebar.mainAgent}
+        // 主智能体标「主智能体」；一件活（子会话）派出时收窄过能力集就标它带了什么（全带是默认，不标）
+        tag={
+          mainAgentWorkspace !== undefined
+            ? t.sidebar.mainAgent
+            : mainOpenMeta?.parentId !== undefined
+              ? (capabilitiesLine(mainOpenMeta.capabilities, t.subSessions.capabilities) ?? undefined)
+              : undefined
+        }
         // 点「主智能体」定这个工作区的主智能体以后都用的型号与思考档（输入框里没有这两个选择器）
         tagSlot={
           mainAgentWorkspace === undefined ? undefined : (

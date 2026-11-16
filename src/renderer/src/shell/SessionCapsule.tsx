@@ -15,7 +15,7 @@ import { useT } from "../locale.ts";
  */
 export function SessionCapsule(props: {
   title: string;
-  /** 标题后面的一个灰字身份（主智能体）；undefined = 不摆 */
+  /** 标题后面的一个灰字身份（主智能体），或一件活带了什么；undefined = 不摆 */
   tag?: string | undefined;
   /** 身份做成可点的（主智能体：点开定型号与思考档）时，整个换成调用方给的件；给了它 tag 只用来定标题居中 */
   tagSlot?: React.ReactNode;
@@ -76,7 +76,11 @@ export function SessionCapsule(props: {
         <CapTitle title={props.title} onRename={props.onRename} balance={props.tag === undefined} />
         {props.tag !== undefined && props.tagSlot !== undefined && props.tagSlot}
         {props.tag !== undefined && props.tagSlot === undefined && (
-          <span style={{ flex: "none", fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)", whiteSpace: "nowrap" }}>
+          // 身份短（「主智能体」）不会截；一件活带了什么可能长，挤了先让它省略、标题不让（完整的放悬停）
+          <span
+            title={props.tag}
+            style={{ flex: "0 1 auto", minWidth: 0, marginRight: "var(--space-3)", overflow: "hidden", textOverflow: "ellipsis", fontSize: "var(--font-size-sm)", color: "var(--color-text-tertiary)", whiteSpace: "nowrap" }}
+          >
             {props.tag}
           </span>
         )}
