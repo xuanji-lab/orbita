@@ -1128,8 +1128,9 @@ function WorkspaceGroup(props: {
   const [editing, setEditing] = useState<string | null>(null);
   // 只列前 limit 条，其余收进「Show N more」；每点一次多放一页。打开着的那条恒可见
   const visible = visibleWithOpen(props.sessions, props.limit, props.openId);
-  // 折叠时组头上的运行态汇总：组收起来就看不到行，这是「里面还有东西在干活 / 在等你」
-  // 的唯一信号（2026-10-30 用户点名）。展开时行自己说，组头不重复
+  // 收起时组头上的运行态汇总：组收起来就看不到行，这是「里面还有东西在干活 / 在等你」
+  // 的唯一信号（2026-10-30 用户点名）。现在只有当前工作区展开，其余每个只占这一行，行尾留着汇总；
+  // 名下有等你的事时那个数用橙色字（饼的颜色规矩不动）。展开时行自己说，组头不重复
   const agg = props.folded ? aggregateRunStates(props.sessions.map(props.rowState)) : [];
 
   const commit = () => {
@@ -1244,7 +1245,7 @@ function WorkspaceGroup(props: {
           {agg.length > 0 && (
             <span className="run-agg ws-agg" aria-label={agg.map((a) => `${runStateLabel(a.state, t)} ${a.count}`).join(" · ")}>
               {agg.map((a) => (
-                <span key={a.state} title={runStateLabel(a.state, t)}>
+                <span key={a.state} data-state={a.state} title={runStateLabel(a.state, t)}>
                   <StatusPie state={a.state} />
                   {a.count}
                 </span>

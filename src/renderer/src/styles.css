@@ -950,6 +950,10 @@
   align-items: center;
   gap: var(--space-0-5);
 }
+/* 收起的工作区名下有等你的事：那个数用橙色字（橙只做第二信号，饼与 aria-label 都在说「等你」） */
+.run-agg > [data-state="waiting"] {
+  color: var(--color-warning);
+}
 
 /*
  * 行右端带独立控件（今天的唯一消费者是模型卡片的星标）的行。
