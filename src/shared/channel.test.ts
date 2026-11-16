@@ -29,8 +29,8 @@ function message(overrides: Partial<ChannelMessage> = {}): ChannelMessage {
 }
 
 describe("allowedKinds", () => {
-  it("父只能发 task / reply / stop；子只能发 question / progress / done / failed", () => {
-    deepStrictEqual([...allowedKinds("parent")], ["task", "reply", "stop"]);
+  it("父只能发 task / reply / stop / pause；子只能发 question / progress / done / failed", () => {
+    deepStrictEqual([...allowedKinds("parent")], ["task", "reply", "stop", "pause"]);
     deepStrictEqual([...allowedKinds("child")], ["question", "progress", "done", "failed"]);
   });
 });

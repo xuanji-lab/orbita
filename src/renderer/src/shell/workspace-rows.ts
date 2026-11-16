@@ -18,12 +18,16 @@ export interface WorkspaceRows {
   earlier: SessionMeta[];
 }
 
-const URGENCY: Readonly<Record<Exclude<SessionRunState, null>, number>> = { waiting: 0, failed: 1, running: 2, done: 3 };
+const URGENCY: Readonly<Record<Exclude<SessionRunState, null>, number>> = { waiting: 0, failed: 1, running: 2, done: 4 };
+/** 暂停着的：在跑的之后、做完没看的之前 */
+const HELD_RANK = 3;
 
 export function workspaceRows(
   sessions: readonly SessionMeta[],
   workspaceId: string,
   stateOf: (meta: SessionMeta) => SessionRunState,
+  /** 主智能体暂停着的活：没有状态饼，但也没了结（设计 7-5：停着的不自己退场），排在在跑的后面 */
+  held: (meta: SessionMeta) => boolean = () => false,
 ): WorkspaceRows {
   const main = sessions.find((meta) => meta.role === "main" && meta.workspaceId === workspaceId && meta.parentId === undefined) ?? null;
   const candidates = sessions.filter((meta) => {
@@ -34,14 +38,15 @@ export function workspaceRows(
     // 根会话：用户以前自己开的；自动化开出的只在 promoted 之后才算（rootSessions 同口径）
     return meta.automationId === undefined || meta.promoted === true;
   });
-  const open: { meta: SessionMeta; state: Exclude<SessionRunState, null> }[] = [];
+  const open: { meta: SessionMeta; rank: number }[] = [];
   const earlier: SessionMeta[] = [];
   for (const meta of candidates) {
     const state = stateOf(meta);
-    if (state === null) earlier.push(meta);
-    else open.push({ meta, state });
+    if (state !== null) open.push({ meta, rank: URGENCY[state] });
+    else if (held(meta)) open.push({ meta, rank: HELD_RANK });
+    else earlier.push(meta);
   }
-  open.sort((a, b) => URGENCY[a.state] - URGENCY[b.state] || b.meta.updatedAt - a.meta.updatedAt);
+  open.sort((a, b) => a.rank - b.rank || b.meta.updatedAt - a.meta.updatedAt);
   earlier.sort((a, b) => b.updatedAt - a.updatedAt);
   return { main, open: open.map((item) => item.meta), earlier };
 }

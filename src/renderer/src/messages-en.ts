@@ -2252,6 +2252,7 @@ export const en = {
       task: "task",
       reply: "reply",
       stop: "stopped",
+      pause: "paused",
       question: "question",
       progress: "progress",
       done: "done",

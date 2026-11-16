@@ -53,6 +53,12 @@ describe("turn-tools：两个内核共用的一轮工具装配", () => {
     assert.equal(turnToolFlags(submit({ mainAgent: true, directories: CHILD })).mainAgent, false);
   });
 
+  it("pause_subsession 只给主智能体：普通根会话与子会话的工具清单不变", () => {
+    assert.ok(names(submit({ mainAgent: true })).includes("pause_subsession"));
+    assert.ok(!names(submit({})).includes("pause_subsession"));
+    assert.ok(!names(submit({ mainAgent: true, directories: CHILD })).includes("pause_subsession"));
+  });
+
   it("工具清单与顺序：根会话有 delegate 一组，子会话换成 report_to_parent；可选组接在最后", () => {
     const root = names(submit({ sessionMemory: true, automationTools: true, pluginTools: true }));
     const child = names(submit({ directories: CHILD }));

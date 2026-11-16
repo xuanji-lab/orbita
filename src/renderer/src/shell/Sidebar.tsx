@@ -368,10 +368,17 @@ export function Sidebar(props: {
   const mainIds = session.sessions.filter((meta) => meta.role === "main").map((meta) => meta.id);
   const channelStatus = useChannelStatuses(mainIds);
   /** 行的状态：主智能体派出的活在问问题时转录是空闲的，按通道状态画成「等你」，其余同状态饼 */
-  const rowState = (meta: SessionMeta): SessionRunState =>
-    meta.parentId !== undefined && channelStatus.get(meta.id) === "waiting" ? "waiting" : runStateOf(session, meta);
+  const rowState = (meta: SessionMeta): SessionRunState => {
+    if (meta.parentId === undefined) return runStateOf(session, meta);
+    const status = channelStatus.get(meta.id);
+    if (status === "waiting") return "waiting";
+    // 暂停着的不画饼（四色都不是它）：停着、不算等你；它仍列在没了结里（held）
+    if (status === "paused" && session.phaseOf(meta.id) === "idle") return null;
+    return runStateOf(session, meta);
+  };
+  const held = (meta: SessionMeta): boolean => meta.parentId !== undefined && channelStatus.get(meta.id) === "paused";
   const rowsOf = new Map(
-    session.workspaces.map((workspace) => [workspace.id, workspaceRows(session.sessions, workspace.id, rowState)]),
+    session.workspaces.map((workspace) => [workspace.id, workspaceRows(session.sessions, workspace.id, rowState, held)]),
   );
   /** 「以前的会话」子视图开在哪个工作区上；工作区被移除了按没开处理 */
   const earlierWs =

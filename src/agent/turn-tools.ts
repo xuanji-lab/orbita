@@ -148,7 +148,7 @@ export function createTurnTools(deps: TurnToolDeps): ToolDefinition[] {
       // 授权目录与开轮目录清单同源：prompt 里说「你可以去这些目录」，这里就认这些
       authorizedDirs: [command.cwd, ...(command.directories?.attached ?? [])],
     }),
-    ...createChannelTools(broker, command.sessionId, flags.role),
+    ...createChannelTools(broker, command.sessionId, flags.role, flags.mainAgent),
     ...(flags.memoryTools
       ? createMemoryTools(broker, command.sessionId, {
           scope: { workspaceId: command.workspaceId, cwd: command.cwd },

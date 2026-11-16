@@ -72,6 +72,16 @@ describe("workspaceRows —— 工作区下面只露没了结的", () => {
   });
 });
 
+describe("workspaceRows —— 暂停着的活", () => {
+  test("没有状态饼也留在没了结里，排在在跑之后、做完没看之前", () => {
+    const states: Record<string, SessionRunState> = { run: "running", unseen: "done" };
+    const list = [meta("main", { role: "main" }), meta("held", { parentId: "main" }), meta("run"), meta("unseen"), meta("old")];
+    const rows = workspaceRows(list, "w", (m) => states[m.id] ?? null, (m) => m.id === "held");
+    assert.deepEqual(rows.open.map((m) => m.id), ["run", "held", "unseen"]);
+    assert.deepEqual(rows.earlier.map((m) => m.id), ["old"]);
+  });
+});
+
 describe("matchesSessionQuery", () => {
   test("标题或最近提问里有就算，不分大小写，空查询全中", () => {
     const m = meta("a", { title: "复现 UrbanGPT", recentQueries: ["看看 ArXiv 那篇"] });

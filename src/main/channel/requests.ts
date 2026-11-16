@@ -338,13 +338,14 @@ export async function applyChannelSend(
   if (child === null || child.parentId !== sender.id) {
     return { ok: false, error: `Session ${event.to.childId} is not a sub-session of this session.` };
   }
-  if (event.kind !== "reply") {
+  if (event.kind !== "reply" && event.kind !== "pause") {
     return {
       ok: false,
-      error: `"${event.kind}" is not valid for a parent → sub-session message; only "reply" is allowed (a new task can only be created with delegate).`,
+      error: `"${event.kind}" is not valid for a parent → sub-session message; only "reply" or "pause" is allowed (a new task can only be created with delegate).`,
     };
   }
   const key: ChannelKey = { parentId: sender.id, childId: child.id };
+  if (event.kind === "pause") return applyPause(deps, key, child.id, text);
   // **核心语义（用户裁决）**：被用户终止的子会话，父模型的 reply 不能重开它——
   // 否则父会话通过回信绕过用户的决定。只有用户在通道里代父发言
   // （applySpeak，author user）能重开。错误文本写给模型看，把路指给用户。
@@ -374,6 +375,35 @@ export async function applyChannelSend(
       error: `The message was recorded in the channel, but delivery failed: ${errorMessage(cause)}`,
     };
   }
+  return { ok: true, messageId: message.id };
+}
+
+/**
+ * 父模型暂停它派出的活（pause_subsession，2026-11-17 主会话定的 S15）：停掉正在跑的那一轮（与用户点停止同一条路，
+ * 新内核里上下文与做到哪都在）、落一条 pause（作者 model，正文是理由），状态翻 paused。**不投递给子**——它已经停了；
+ * 之后父的任何 reply 就把它接着跑起来（applyChannelSend 的 reply 分支照常投递）。
+ * 与用户的「终止」分开：stopped 只有用户能重开；paused 父自己就能。删记录仍只有用户能做（没给模型删除的工具）。
+ * 只停在做 / 在问的活：已经做完、没做成、被用户终止、已经暂停的，暂停没有意义，回错误让模型知道。
+ */
+async function applyPause(deps: ChannelDeps, key: ChannelKey, childId: string, reason: string): Promise<ChannelSendOutcome> {
+  const status = channelStatus(await deps.channels.load(key));
+  if (status !== "running" && status !== "waiting") {
+    return { ok: false, error: `This sub-session is ${status}; there is nothing to pause.` };
+  }
+  const phase = deps.phases.get(childId);
+  if (phase !== undefined && phase !== "idle") await deps.abort(childId);
+  deps.cancelBrowserHandoff(childId);
+  const message: ChannelMessage = {
+    id: randomUUID(),
+    from: "parent",
+    author: "model",
+    kind: "pause",
+    text: reason,
+    delivery: "followUp",
+    createdAt: Date.now(),
+  };
+  await deps.channels.append(key, message);
+  await broadcastAfterAppend(deps, key, message);
   return { ok: true, messageId: message.id };
 }
 

@@ -72,6 +72,8 @@ are your tools, not separate conversations the user has to follow.
   plan) do it on your best guess and say what you assumed. If it is irreversible or costly (deleting,
   pushing or publishing, rerunning hours of work, spending money) and you are not sure, ask one short
   question first.
+- To hold a piece of work you delegated (the user says to stop or wait, or it rests on a misunderstanding),
+  use pause_subsession: it keeps everything done so far, and reply_subsession later lets it carry on.
 - Earlier sessions in this workspace are still there; read one with read_task when the user wants to
   continue it or asks about it.
 </orbita-main-agent>`;

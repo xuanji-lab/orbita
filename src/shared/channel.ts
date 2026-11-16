@@ -16,13 +16,15 @@ export type ChannelSide = "parent" | "child";
 /**
  * 消息类型。谁能发什么由 `allowedKinds` 定：
  *   parent → task（派出时的任务说明，通道的第一条）、reply（回信 / 追加指令）、
- *     stop（用户终止这个子会话——**只能由用户发起**，见 parseChannelMessage 的作者约束）
+ *     stop（用户终止这个子会话——**只能由用户发起**，见 parseChannelMessage 的作者约束）、
+ *     pause（主智能体暂停它派出的活：停下当前这一轮、保留现场，之后一句 reply 就接着做；2026-11-17）
  *   child  → question（等父答）、progress（报进度）、done（完成回报）、failed（无法完成）
  */
 export type ChannelMessageKind =
   | "task"
   | "reply"
   | "stop"
+  | "pause"
   | "question"
   | "progress"
   | "done"
@@ -32,6 +34,7 @@ export const CHANNEL_MESSAGE_KINDS: readonly ChannelMessageKind[] = [
   "task",
   "reply",
   "stop",
+  "pause",
   "question",
   "progress",
   "done",
@@ -39,7 +42,7 @@ export const CHANNEL_MESSAGE_KINDS: readonly ChannelMessageKind[] = [
 ];
 
 export function allowedKinds(from: ChannelSide): readonly ChannelMessageKind[] {
-  return from === "parent" ? ["task", "reply", "stop"] : ["question", "progress", "done", "failed"];
+  return from === "parent" ? ["task", "reply", "stop", "pause"] : ["question", "progress", "done", "failed"];
 }
 
 /**
@@ -83,7 +86,11 @@ export interface ChannelKey {
  *     发信侧的硬拦在 `applyChannelSend`（主进程），这里的派生只管如实反映账本
  *   running = 其余
  */
-export type ChannelStatus = "running" | "waiting" | "done" | "failed" | "stopped";
+/**
+ * paused = 父模型暂停了它（pause）：现场保留、不算「等你」、重启后不自动续跑；父的任何 reply 就重开。
+ * 与 stopped（用户终止，只有用户代父发言能重开）分开记。
+ */
+export type ChannelStatus = "running" | "waiting" | "done" | "failed" | "stopped" | "paused";
 
 /** 通道列表项：主进程按父会话现算，renderer 画通道列与右栏 Sub-sessions 面板的列表层 */
 export interface ChannelSummary extends ChannelKey {
@@ -171,6 +178,15 @@ export function channelStatus(messages: readonly ChannelMessage[]): ChannelStatu
     // 意图正是封死父模型 reopen 的口子）。
     if (message.kind === "stop") {
       status = "stopped";
+      continue;
+    }
+    // 父暂停：保留现场；暂停期间只有父的 reply（模型或用户都行）把它翻回 running，子的消息不改状态
+    if (message.kind === "pause") {
+      if (status === "running" || status === "waiting") status = "paused";
+      continue;
+    }
+    if (status === "paused") {
+      if (message.kind === "reply") status = "running";
       continue;
     }
     // reply 恒重开：不管此刻是不是 closed，父回信了就翻回 running。

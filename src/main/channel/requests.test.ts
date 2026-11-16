@@ -1,3 +1,4 @@
+import { channelStatus } from "../../shared/channel.ts";
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -603,6 +604,46 @@ async function seedStop(): Promise<void> {
     createdAt: 2,
   });
 }
+
+describe("父暂停自己派出的活（pause）", () => {
+  const pause = (text = "先停一下，等用户定口径") =>
+    channelSendEvent({ sessionId: PARENT, to: { childId: CHILD }, kind: "pause", text });
+
+  test("在跑的子：abort + 结交接 + 落一条 pause（作者 model、正文是理由），不投递、状态翻 paused", async () => {
+    await seedChannel();
+    const phases = new Map<string, SessionPhase>([[CHILD, "turn"]]);
+    const { deps, abortCalls, handoffCancels, submitCalls, steerCalls, broadcastCalls } = fakeDeps({ phases });
+    const outcome = await applyChannelSend(deps, pause());
+    assert.equal(outcome.ok, true);
+    assert.deepEqual(abortCalls, [CHILD]);
+    assert.deepEqual(handoffCancels, [CHILD]);
+    assert.equal(submitCalls.length + steerCalls.length, 0);
+    const last = (await channels.load({ parentId: PARENT, childId: CHILD })).at(-1);
+    assert.equal(last?.kind, "pause");
+    assert.equal(last?.author, "model");
+    assert.equal(last?.text, "先停一下，等用户定口径");
+    assert.ok(broadcastCalls.some((event) => event.type === "status" && event.status === "paused"));
+  });
+
+  test("父模型的 reply 能把 paused 接着跑起来（与用户终止不同）；已暂停的再暂停回错误", async () => {
+    await seedChannel();
+    const { deps, submitCalls } = fakeDeps();
+    assert.equal((await applyChannelSend(deps, pause())).ok, true);
+    assert.equal((await applyChannelSend(deps, pause())).ok, false);
+    const reply = await applyChannelSend(deps, channelSendEvent({ sessionId: PARENT, to: { childId: CHILD }, kind: "reply", text: "接着做" }));
+    assert.equal(reply.ok, true);
+    assert.equal(submitCalls.length, 1);
+    assert.equal(channelStatus(await channels.load({ parentId: PARENT, childId: CHILD })), "running");
+  });
+
+  test("用户终止过的不能暂停（stopped 只有用户能重开，暂停不绕它）", async () => {
+    await seedChannel();
+    await seedStop();
+    const { deps, abortCalls } = fakeDeps({ phases: new Map<string, SessionPhase>([[CHILD, "turn"]]) });
+    assert.equal((await applyChannelSend(deps, pause())).ok, false);
+    assert.deepEqual(abortCalls, []);
+  });
+});
 
 describe("applyStop", () => {
   test("在跑的子：abort + 结交接 + 账本落 stop，广播翻 stopped", async () => {

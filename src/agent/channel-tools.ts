@@ -12,7 +12,8 @@ import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from "../shared/
  * 全放行（协调而非动作）。
  *
  * `role` 决定注册哪些工具：
- * - "root"（普通会话，也是父）：delegate + reply_subsession + model_costs（派发前查价）。
+ * - "root"（普通会话，也是父）：delegate + reply_subsession + model_costs（派发前查价）；
+ *   工作区的主智能体再加 pause_subsession（暂停自己派出的活）。
  * - "child"：只有 report_to_parent——子会话不能再派出（主进程也会拒），
  *   子会话没有自己的子可回信。
  */
@@ -20,9 +21,16 @@ export function createChannelTools(
   broker: RequestBroker,
   sessionId: string,
   role: "root" | "child",
+  /** 工作区的常驻主智能体：多一个 pause_subsession（只给它——普通会话的工具清单不变，不打断它们的前缀缓存） */
+  mainAgent = false,
 ): ToolDefinition[] {
   if (role === "child") return [reportToParentTool(broker, sessionId)];
-  return [delegateTool(broker, sessionId), replySubsessionTool(broker, sessionId), modelCostsTool(broker, sessionId)];
+  return [
+    delegateTool(broker, sessionId),
+    replySubsessionTool(broker, sessionId),
+    modelCostsTool(broker, sessionId),
+    ...(mainAgent ? [pauseSubsessionTool(broker, sessionId)] : []),
+  ];
 }
 
 /** 必填字符串：trim 非空，否则抛带字段名的说明——不合法的参数不发请求。 */
@@ -215,6 +223,47 @@ function replySubsessionTool(broker: RequestBroker, sessionId: string): ToolDefi
         content: [{ type: "text", text: "Reply sent to the sub-session." }],
         // 落账那条通道消息的 id：renderer 的发送侧标记凭它点了能定位到这一条
         // （tool-results.ts 的 channelSendMessageId）；给模型看的正文不带
+        details: { messageId: result.messageId },
+      };
+    },
+  };
+}
+
+/**
+ * 暂停自己派出去的活（2026-11-17）：停下它当前这一轮、保留现场；之后用 reply_subsession 说一句它就接着做。
+ * 不需要用户确认（停是能撤回的）；删掉活的记录只有用户能做，这里不给。
+ */
+function pauseSubsessionTool(broker: RequestBroker, sessionId: string): ToolDefinition {
+  return {
+    name: "pause_subsession",
+    label: "pause_subsession",
+    description:
+      "Pause a sub-session you delegated: stop its current turn and keep everything it has done so far. " +
+      "Use it when the user asks to hold that work, or when the task turned out to be based on a " +
+      "misunderstanding. It is reversible and needs no confirmation: send reply_subsession later and it " +
+      "carries on from where it stopped. It does not delete anything.",
+    parameters: {
+      type: "object",
+      properties: {
+        childId: { type: "string", description: "The sub-session's id (from the delegate result or a channel block)." },
+        reason: { type: "string", description: "One short sentence: why it is paused (shown next to the work)." },
+      },
+      required: ["childId", "reason"],
+    } as never,
+    async execute(_toolCallId, params) {
+      const args = (params ?? {}) as Record<string, unknown>;
+      const childId = requireNonEmptyString(args["childId"], "childId");
+      const reason = requireNonEmptyString(args["reason"], "reason");
+      const result = await broker.request<ChannelSendOutcome>({
+        type: "channelSendRequest",
+        sessionId,
+        to: { childId },
+        kind: "pause",
+        text: reason,
+      });
+      if (!result.ok) throw new Error(result.error);
+      return {
+        content: [{ type: "text", text: "Paused. Send reply_subsession when it should carry on." }],
         details: { messageId: result.messageId },
       };
     },

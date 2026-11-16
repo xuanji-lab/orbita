@@ -2077,6 +2077,7 @@ export const zh: Messages = {
       task: "任务",
       reply: "回复",
       stop: "终止",
+      pause: "暂停",
       question: "提问",
       progress: "进展",
       done: "完成",
