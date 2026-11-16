@@ -23,25 +23,24 @@ const events: LedgerEvent[] = [
 ];
 
 describe("buildGoalSeed（带着目标开新会话的种子）", () => {
-  test("带目标原文、做完的 / 没做完的 todo、开着的以后再做、改动要点（中文）", () => {
+  test("带目标原文、做完的 / 没做完的 todo、改动要点（中文）；不再带以后再做", () => {
     const seed = buildGoalSeed(zh, {
       sourceTitle: "待办模块",
       ledger: buildGoalLedger(events),
-      later: [{ title: "nextId 是模块级可变量", detail: "不影响本次" }, { title: "addTask 不校验 priority", detail: "" }],
     });
     assert.ok(seed !== null);
     assert.match(seed, /^接着做任务「待办模块」的目标。/);
     assert.match(seed, /目标：把待办模块做完，含按到期日筛选/);
     assert.match(seed, /已经做完的：\n- 读代码/);
     assert.match(seed, /还没做完的：\n- 写排序\n- 写 README/);
-    assert.match(seed, /- nextId 是模块级可变量（不影响本次）\n- addTask 不校验 priority/);
+    assert.doesNotMatch(seed, /以后再做/);
     // 改动账要点：从什么变成什么、why、来源（用户哪句话）
     assert.match(seed, /目标「把待办模块做完」改成「把待办模块做完，含按到期日筛选」——用户补充了筛选（你 10-30 14:31 说：「还要按到期日筛选」）/);
     assert.match(seed, /请把上面的目标记成这个会话的目标（update_goal，保留我的原话；「已完成」「本次不做」这类进度说法不要写进目标）/);
   });
 
   test("英文：用英文文案，同样的结构", () => {
-    const seed = buildGoalSeed(en, { sourceTitle: null, ledger: buildGoalLedger(events), later: [] });
+    const seed = buildGoalSeed(en, { sourceTitle: null, ledger: buildGoalLedger(events) });
     assert.ok(seed !== null);
     assert.match(seed, /the task has been deleted/);
     assert.match(seed, /Goal：|Goal: /);
@@ -50,8 +49,8 @@ describe("buildGoalSeed（带着目标开新会话的种子）", () => {
   });
 
   test("没有目标 = null；没有以后再做 / 改动时不写那一段", () => {
-    assert.equal(buildGoalSeed(zh, { sourceTitle: "x", ledger: buildGoalLedger([user("u", 0, "hi")]), later: [] }), null);
-    const seed = buildGoalSeed(zh, { sourceTitle: "x", ledger: buildGoalLedger([user("u", 0, "a"), goal("g", 1, "只有目标")]), later: [] });
+    assert.equal(buildGoalSeed(zh, { sourceTitle: "x", ledger: buildGoalLedger([user("u", 0, "hi")]) }), null);
+    const seed = buildGoalSeed(zh, { sourceTitle: "x", ledger: buildGoalLedger([user("u", 0, "a"), goal("g", 1, "只有目标")]) });
     assert.ok(seed !== null);
     assert.doesNotMatch(seed, /已经做完的|还没做完的|以后再做|怎么改过来的\n/);
     assert.match(seed, /目标：只有目标/);
@@ -62,7 +61,7 @@ describe("buildGoalSeed（带着目标开新会话的种子）", () => {
   test("改动要点里目标过长只留开头，当前目标那一行仍是全文", () => {
     const long = "目标很长很长".repeat(40);
     const ledger = buildGoalLedger([user("u", 0, "a"), goal("g1", 1, long), goal("g2", 2, `${long}再加`)]);
-    const seed = buildGoalSeed(zh, { sourceTitle: "x", ledger, later: [] }) ?? "";
+    const seed = buildGoalSeed(zh, { sourceTitle: "x", ledger }) ?? "";
     assert.ok(seed.includes(`目标：${long}再加`));
     const changeLines = seed.split("\n").filter((line) => /^- \d\d-\d\d /.test(line));
     assert.equal(changeLines.length, 2);
@@ -74,9 +73,8 @@ describe("buildGoalSeed（带着目标开新会话的种子）", () => {
   test("条数上限：每段最多 12 条、改动要点最近 6 条", () => {
     const many: LedgerEvent[] = [user("u", 0, "a"), plan("p0", 1, Array.from({ length: 12 }, (_, i) => [`步骤${i}`, "done"] as [string, string]))];
     for (let i = 0; i < 10; i++) many.push(goal(`g${i}`, 10 + i, `目标${i}`));
-    const later = Array.from({ length: 20 }, (_, i) => ({ title: `以后${i}`, detail: "" }));
-    const seed = buildGoalSeed(zh, { sourceTitle: "x", ledger: buildGoalLedger(many), later }) ?? "";
-    assert.equal(seed.split("\n").filter((line) => line.startsWith("- 以后")).length, SEED_MAX_LIST);
+    const seed = buildGoalSeed(zh, { sourceTitle: "x", ledger: buildGoalLedger(many) }) ?? "";
+    assert.equal(seed.split("\n").filter((line) => line.startsWith("- 步骤")).length, SEED_MAX_LIST);
     assert.equal(seed.split("\n").filter((line) => /^- .*\d\d-\d\d \d\d:\d\d|^- \d\d-\d\d/.test(line)).length, SEED_MAX_CHANGES);
     assert.doesNotMatch(seed, /目标「目标0」/);
     assert.match(seed, /目标9/);

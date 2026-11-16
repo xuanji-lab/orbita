@@ -337,8 +337,6 @@ export const ipcChannels = {
   docOfmResolve: "doc:ofm-resolve",
   /** 插图：复制进附件目录，回要插入的 markdown */
   docInsertImage: "doc:insert-image",
-  /** 遗留事项（收尾仪式收割）：全部清单。侧栏面板、角标与「Has todos」筛选都吃它，按 sourceSessionId 现算 */
-  carryoverList: "carryover:list",
   /** 每日 token 用量：最近 7 天（含今天，旧的在前；载荷形状在 shared/usage.ts）。回 `UsageDayTotal[]`，回填还在跑时可能是全 0——跑完会经 usage:event 推一份真值 */
   usageWeek: "usage:week",
   /** 主进程 → renderer 推送：用量账本每次变化（模型调用落账 / 回填完成）推一份新的 7 天快照（`UsageWeekEvent`） */
@@ -359,8 +357,6 @@ export const ipcChannels = {
   updaterState: "updater:state",
   /** 自动更新：最近几个版本的 Release 列表（`RecentReleasesResult`，主进程打 GitHub API 并缓存 10 分钟） */
   updaterRecentReleases: "updater:recentReleases",
-  /** 翻转一条的状态：done 记 doneAt，回 open 清掉 */
-  carryoverSetStatus: "carryover:set-status",
   /** 会话回退：算计划（确认框列清单用），不执行 */
   sessionRevertPlan: "session:revert-plan",
   /** 会话回退：撤回目标消息及之后全部（对话 + pi 本子 + 文件快照） */
@@ -1559,11 +1555,6 @@ export type AgentEvent =
  * 没有 sessionId：归属是全局事实，不属于哪条会话（同 mcp 事件）。
  */
 | { type: "skillsChanged" }
-/**
- * 「以后再做」（carryovers.jsonl）有新增：agent 写 update_plan 时当场记下的事，由主进程在落盘那条
- * 记录时写进清单后广播。无载荷、无 sessionId——界面听到就重拉 carryoverList（skillsChanged 同款）。
- */
-| { type: "carryoversChanged" }
 /**
  * 记忆系统：记忆服务进程写盘后经主进程广播（提取落
  * 条目、事件段收尾 / 归档、记忆库写操作）。无载荷、无 sessionId——界面听到就

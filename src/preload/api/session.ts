@@ -13,8 +13,6 @@ import type {
   ModelAssignRunResult,
 } from "../../shared/model-assign.ts";
 import type {
-  Carryover,
-  CarryoverStatus,
   SessionCompletion,
   SessionMeta,
   SessionMoveResult,
@@ -88,12 +86,6 @@ export const sessionApi = {
   /** 导出成 Markdown，走原生保存对话框；取消返回 null，否则返回落盘路径 */
   exportMarkdown: (id: string): Promise<string | null> =>
     ipcRenderer.invoke(ipcChannels.sessionExport, id),
-  // —— 遗留事项（以后再做）两通道 ——
-  /** 全部遗留事项，落盘顺序。按 sourceSessionId 在 renderer 现算 */
-  carryoverList: (): Promise<Carryover[]> => ipcRenderer.invoke(ipcChannels.carryoverList),
-  /** 翻转一条的状态：done 记 doneAt，回 open 清掉 */
-  carryoverSetStatus: (id: string, status: CarryoverStatus): Promise<void> =>
-    ipcRenderer.invoke(ipcChannels.carryoverSetStatus, id, status),
   // —— 会话回退 / 单轮撤销（revert.ts）四通道 + 轮尾产物打开两通道 ——
   /** 回退计划（确认框列清单用）：目标消息及之后会被撤回什么 */
   revertPlan: (id: string, targetMessageId: string): Promise<RevertPlan> =>

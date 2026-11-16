@@ -5,7 +5,7 @@ import { ExperimentalFeaturesContext } from "./experimental.ts";
 import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
 import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type DocPaper, type ModelPair, type SettingsPatch } from "@shared/settings";
-import { childSessions, rootSessions, type Carryover } from "@shared/session";
+import { childSessions, rootSessions } from "@shared/session";
 import type { ChimeReason } from "@shared/notify";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { effectiveIntentSettings } from "@shared/settings";
@@ -385,24 +385,8 @@ export function App() {
     session.newTask();
   };
   /**
-   * 遗留事项带上下文开工（右栏「这条任务 › 留到以后」的「转成任务」）。
-   * 开工即回对话：退出整页盖层、展开侧栏；新会话落在来源会话的组里（cwd / 归属
-   * 跟随它，见 useChatSession.startCarryoverTask），那一组得展开——工作区组在新会话打开时由
-   * Sidebar 自己展开（「打开的会话落在收着的组里就展开」那条 effect），TASKS 组靠新任务信号。
-   */
-  const startCarryoverTask = (item: Carryover): void => {
-    setOverlay(null);
-    setSidebarCollapsed(false);
-    const source = session.sessions.find((meta) => meta.id === item.sourceSessionId);
-    if (source?.workspaceId == null) {
-      newTaskNonceRef.current += 1;
-      setNewTaskSignal(newTaskNonceRef.current);
-    }
-    session.startCarryoverTask(item);
-  };
-  /**
-   * 带着会话目标开新会话（右栏进度「目标」上的动作）：与转成任务同一条路——开工即回对话、侧栏展开、
-   * 新会话落在来源会话的组里。
+   * 带着会话目标开新会话（右栏进度「目标」上的动作）：开工即回对话、侧栏展开、
+   * 新会话落在来源会话的组里（工作区组在新会话打开时由 Sidebar 自己展开，TASKS 组靠新任务信号）。
    */
   const startGoalTask = (sourceSessionId: string, makeSeed: (sourceTitle: string | null) => string | null): void => {
     setOverlay(null);
@@ -1680,10 +1664,6 @@ export function App() {
                   {...(railPath.panel === "context" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
                   onSubChange={(sub) => reportRailPath({ panel: "context", ...(sub === undefined ? {} : { sub }) })}
                   runState={mainMeta === undefined ? null : runStateOf(session, mainMeta)}
-                  carryovers={session.carryovers.filter((item) => item.sourceSessionId === mainSessionId && item.status !== "done")}
-                  onSetCarryoverStatus={session.setCarryoverStatus}
-                  onStartCarryoverTask={startCarryoverTask}
-                  onDoCarryoverNow={session.continueCarryoverInSource}
                   onStartGoalTask={startGoalTask}
                 />
               ) : shownPanel === "plugins" ? (

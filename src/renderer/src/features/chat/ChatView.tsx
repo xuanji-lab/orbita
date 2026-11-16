@@ -1456,11 +1456,9 @@ function ChatViewBody(props: {
       );
     }
     // 首页会话卡（选卡与那一句的推导在 home-cards.ts 纯函数，测试覆盖；这里只接线）：
-    // 要你注意的（等你 > 出错 > 在跑）先占卡，再是有 open 遗留的、最近活跃的。卡上说「此刻在干
+    // 要你注意的（等你 > 出错 > 在跑）先占卡，再是最近活跃的。卡上说「此刻在干
     // 什么」：运行态 + 槽里这一轮的过程 + 计划现算，不另存。不用 useMemo——运行态每个事件都可能
     // 变，而这里只在首页这一支跑、O(n)（子会话表先建好，不按会话各扫一遍全表）。
-    // 没在跑的待办卡行位仍是遗留标题（最多 4 行）；遗留事项直接吃引擎缓存（PR-4 的
-    // carryoverList 通道，写操作自动刷新），卡不另建缓存、meta 不冗余计数。
     const childrenOf = new Map<string, SessionMeta[]>();
     for (const meta of session.sessions) {
       if (meta.parentId === undefined) continue;

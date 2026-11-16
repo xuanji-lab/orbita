@@ -9,7 +9,6 @@ import { ipcChannels } from "../../shared/agent-ipc.ts";
 import {
   parseSessionUnread,
   transcriptToMarkdown,
-  type CarryoverStatus,
   type SessionCompletion,
   type SessionMoveResult,
   type SessionOlderPage,
@@ -24,7 +23,6 @@ import {
   type ModelAssignRunResult,
 } from "../../shared/model-assign.ts";
 import type { AgentHost } from "../agent/host.ts";
-import type { CarryoverStore } from "./carryover-store.ts";
 import { executeRevert, executeUndo, fileTurnsIn, planRevert, planUndo, revertFromTurn } from "./revert.ts";
 import type { RevertFileOutcome } from "../../shared/revert.ts";
 import type { ArtifactOpenResult } from "../../shared/browser.ts";
@@ -36,7 +34,6 @@ export function registerSessionIpc(
   store: SessionStore,
   onSessionRemoved: ((id: string) => void | Promise<void>) | undefined,
   agentHost: AgentHost,
-  carryovers: CarryoverStore,
   /** 给导入的会话分配模型：执行前校验目标 provider / 模型仍存在（model-assign.ts） */
   providers: ProviderStore,
   /**
@@ -139,12 +136,6 @@ export function registerSessionIpc(
   ipcMain.handle(ipcChannels.sessionUnread, (_event, id: string, unread: unknown) =>
     // 载荷在入口就洗：坏形状当已读（null）写回，不裸存进 meta
     store.setUnread(id, parseSessionUnread(unread)),
-  );
-  // —— 遗留事项（收尾仪式）三通道。store 铸 id/status/时间戳，renderer 不猜 ——
-  ipcMain.handle(ipcChannels.carryoverList, () => carryovers.list());
-  ipcMain.handle(
-    ipcChannels.carryoverSetStatus,
-    (_event, id: string, status: CarryoverStatus) => carryovers.setStatus(id, status),
   );
   ipcMain.handle(ipcChannels.sessionArchive, (_event, id: string, archived: boolean) =>
     store.setArchived(id, archived),
