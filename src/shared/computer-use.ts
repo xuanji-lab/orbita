@@ -863,18 +863,22 @@ export type IsolationTier = "l1" | "l2" | "l2b";
  * 主进程该用哪个控制器起「隔离桌面」。
  *   wsb                   L2：Windows Sandbox（一份 VM、一个桌面，多 agent 共享）
  *   isolation-session     L2b：MXC IsolationSession（每个 agent 一个 OS 会话）
+ *   qemu                  L3：QEMU + WHPX 起一台真 Linux 桌面 VM（XFCE + Xvnc），
+ *                         宿主经 HTTP over hostfwd 让 agent 截屏与注入输入。
+ *                         **没有 UIA 控件树、没有按窗口截图、没接 CDP**——它自己会明说
+ *                         （见 main/computer-use/qemu.ts 的 QEMU_REFUSALS 与 capabilities）。
  *
- * 两端字符串必须一致（settings.json 里存的就是这两个字面值）。默认 wsb——P2 是
- * **可选升级**，不是默认路径：它没有真实指针，像素工具整组降级。
+ * 两端字符串必须一致（settings.json 里存的就是这些字面值）。默认 wsb——P2/P3 都是
+ * **可选后端**，不是默认路径：它们的输入设备与能力边界都不同。
  */
-export type ComputerUseBackend = "wsb" | "isolation-session";
+export type ComputerUseBackend = "wsb" | "isolation-session" | "qemu";
 
 export const COMPUTER_USE_DEFAULT_BACKEND: ComputerUseBackend = "wsb";
 
-export const COMPUTER_USE_BACKEND_CHOICES: readonly ComputerUseBackend[] = ["wsb", "isolation-session"];
+export const COMPUTER_USE_BACKEND_CHOICES: readonly ComputerUseBackend[] = ["wsb", "isolation-session", "qemu"];
 
 export function isComputerUseBackend(value: unknown): value is ComputerUseBackend {
-  return value === "wsb" || value === "isolation-session";
+  return value === "wsb" || value === "isolation-session" || value === "qemu";
 }
 
 /**
@@ -974,6 +978,13 @@ export type ComputerUseScreenshotResult =
   | {
       ok: true;
       jpegBase64: string;
+      /**
+       * 图的 MIME 类型。**缺省 = image/jpeg**（Windows 沙箱与 L2b 的桥都出 JPEG）。
+       * L3（Linux 桌面 VM）出的是 PNG：guest 里没有便宜的 JPEG 编码器（netpbm 装完要 6.9MiB，
+       * 镜像预算只剩 8MiB），而 scrot 直接写 PNG。回执必须说出真话——工具层给模型的
+       * mimeType 与设置页的 data URL 都取它，否则浏览器会拿 JPEG 的标签去解 PNG。
+       */
+      mime?: string;
       /** 回图尺寸（模型看到的像素） */
       width: number;
       height: number;
@@ -1017,6 +1028,8 @@ export type ComputerUseWindowShotResult =
   | {
       ok: true;
       jpegBase64: string;
+      /** 同 ComputerUseScreenshotResult.mime（缺省 = image/jpeg） */
+      mime?: string;
       width: number;
       height: number;
       nativeWidth: number;
@@ -1432,6 +1445,8 @@ export interface ComputerUseShot {
   nativeWidth: number;
   nativeHeight: number;
   data: string;
+  /** 图的 MIME（缺省 = image/jpeg；L3 的 Linux 桌面出 PNG，见 ComputerUseScreenshotResult.mime） */
+  mime?: string;
 }
 
 // ── 像素输入的交付语义（三档）─────────────────────────────────────────

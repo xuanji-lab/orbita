@@ -1,5 +1,6 @@
 /**
- * 隔离桌面的运行时门面 —— 在 WSB（L2）与 IsolationSession（L2b）之间按设置选一个。
+ * 隔离桌面的运行时门面 —— 在 WSB（L2）、IsolationSession（L2b）与 QEMU 的 Linux 桌面 VM（L3）
+ * 之间按设置选一个。
  *
  * 为什么需要它：两个控制器各有完整的生命周期与车道方法，但应用只认「当前那只隔离桌面」。
  * 让上层（ipc / agent-requests / dispatch / cdp）按设置各查一次后端，会有好几份「选谁」的
@@ -16,7 +17,8 @@
  *   2. **status 只报真话**：报「正在跑的那只」，两只都没跑就是 off。设置改了但没重启时，
  *      UI 上显示的还是真的在跑那只（设置页那一行常驻说明「下次启动生效」）。
  *   3. **桌面租约的粒度跟着后端变**：L2 是一块共享屏幕（全局独占键），L2b 是每会话一个桌面
- *      （`desktop:session:<id>`）。这里给出状态真值，dispatch 按它算键。
+ *      （`desktop:session:<id>`），L3 现在只有一台 VM 所以也是共享屏幕。这里给出状态真值，
+ *      dispatch 按它算键。
  */
 import {
   COMPUTER_USE_DESKTOP_KEY,
@@ -53,6 +55,8 @@ export interface ComputerUseRuntimeDeps {
   isolation: IsolationSessionController;
   /** 当前设置选的后端（每次 start 现读，改设置下一次启动生效） */
   backend: () => ComputerUseBackend | Promise<ComputerUseBackend>;
+  /** L3 的后端（QEMU）。不传就用默认配置自己造一个——单测与不关心镜像路径的调用方不必给 */
+  qemu?: SandboxProvider;
   /** 能力探测里的 L2b 依赖检查 */
   probeIsolation: () => Promise<IsolationSessionProbe>;
   log?: (message: string) => void;
@@ -85,7 +89,8 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
    * QEMU 也在这张表里（P3 的空位），它的 status() 恒为 off——注册在这里是为了让
    * 「谁在跑」这件事只有一处枚举，而不是每个方法各写一份 if。
    */
-  const providers: readonly SandboxProvider[] = [deps.isolation, deps.wsb, new QemuSandboxProvider()];
+  const qemu: SandboxProvider = deps.qemu ?? new QemuSandboxProvider();
+  const providers: readonly SandboxProvider[] = [deps.isolation, deps.wsb, qemu];
 
   /**
    * 「现在在跑的是谁」。**不缓存**：后端自己的状态机就是真值，缓存一份迟早与它分叉
@@ -93,15 +98,14 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
    */
   const runningProvider = (): SandboxProvider | null => providers.find((p) => p.status().state !== "off") ?? null;
 
-  /** 对外仍报 shared 的两个 id：设置里能选的只有这两个（QEMU 的开关在 P3-2） */
-  const running = (): ComputerUseBackend | null => {
-    const provider = runningProvider();
-    if (provider === null) return null;
-    return provider.id === "qemu" ? null : provider.id;
-  };
+  /** 对外仍报 backend id（三个都能在设置里选到）。 */
+  const running = (): ComputerUseBackend | null => runningProvider()?.id ?? null;
 
-  const controllerOf = (backend: ComputerUseBackend): SandboxProvider =>
-    backend === "wsb" ? deps.wsb : deps.isolation;
+  const controllerOf = (backend: ComputerUseBackend): SandboxProvider => {
+    if (backend === "wsb") return deps.wsb;
+    if (backend === "isolation-session") return deps.isolation;
+    return qemu;
+  };
 
   /**
    * 启动：先把另一个停掉。**停不掉就不启动**——两个隔离同时活着比「启动失败」更难解释，
@@ -109,12 +113,14 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
    */
   const start = async (): Promise<ComputerUseStartResult> => {
     const wanted = await deps.backend();
-    const other: ComputerUseBackend = wanted === "wsb" ? "isolation-session" : "wsb";
-    if (running() === other) {
-      log(`切换隔离后端：先停掉 ${other}`);
-      const stopped = await controllerOf(other).stop();
+    // 三个后端各自一份整机资源（WSB 的 VM / MXC 的 OS 会话 / QEMU 的 VM），同时起两只是
+    // 两份隔离同时在跑：设置页说不清现在用的是哪个，租约也说不对。所以先停别的。
+    const others = providers.filter((provider) => provider.id !== wanted && provider.status().state !== "off");
+    for (const other of others) {
+      log(`切换隔离后端：先停掉 ${other.id}`);
+      const stopped = await other.stop();
       if (stopped.ok === false) {
-        return { ok: false, error: `切换后端前停不掉 ${other}：${stopped.error}` };
+        return { ok: false, error: `切换后端前停不掉 ${other.id}：${stopped.error}` };
       }
     }
     return controllerOf(wanted).start();

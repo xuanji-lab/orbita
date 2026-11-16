@@ -1067,6 +1067,7 @@ export const zh: Messages = {
     backendLabels: {
       wsb: "Windows 沙箱（L2）",
       "isolation-session": "多会话隔离（L2b）",
+      qemu: "Linux 桌面（L3）",
     },
     isolationSessionRow: "多会话隔离依赖",
     isolationSessionInfo:

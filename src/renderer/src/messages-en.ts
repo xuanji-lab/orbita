@@ -1152,6 +1152,7 @@ export const en = {
     backendLabels: {
       wsb: "Windows Sandbox (L2)",
       "isolation-session": "Multi-session isolation (L2b)",
+      qemu: "Linux desktop VM (L3)",
     },
     isolationSessionRow: "Multi-session dependency",
     isolationSessionInfo:

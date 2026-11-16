@@ -241,7 +241,7 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       return {
         content: [
           { type: "text" as const, text: result.text },
-          { type: "image" as const, data: shot.data, mimeType: "image/jpeg" as const },
+          { type: "image" as const, data: shot.data, mimeType: (shot.mime ?? "image/jpeg") as "image/jpeg" },
         ],
         // 拍的哪个窗口也记下来（只记 maxWidth 的话，事后回看分不清是全屏还是某个窗口）
         details: {

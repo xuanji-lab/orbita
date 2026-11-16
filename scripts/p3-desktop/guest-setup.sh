@@ -70,7 +70,8 @@ apk add --no-cache \\
   adwaita-icon-theme hicolor-icon-theme \\
   font-noto-cjk font-dejavu \\
   tigervnc \\
-  chromium
+  chromium \\
+  xdotool scrot busybox-extras exo
 EOS
 chmod +x /target/tmp/install-desktop.sh
 chroot /target /bin/sh /tmp/install-desktop.sh || fail "chroot apk add desktop"
@@ -79,6 +80,7 @@ rm -f /target/tmp/install-desktop.sh
 log "配置：服务 / 网络 / 控制台 / 图形会话"
 cat >/target/tmp/configure.sh <<'EOS'
 #!/bin/sh
+# 第 1 个参数 = 宿主的 apk 镜像端口（构建期由 guest-setup.sh 传进来）
 set -e
 echo orbita > /etc/hostname
 # xauth 需要有 hostname 的解析，否则每条 xauth 命令都报 bad display name
@@ -126,6 +128,31 @@ chmod +x /etc/init.d/xvnc
 # 必须在 init 脚本就位之后再 rc-update，否则报 "service xvnc not found"，桌面永不起来
 rc-update add xvnc default 2>/dev/null || true
 
+# ── L3 的桌面服务：让宿主（agent）能截图 / 打字 / 按键 / 跑 shell ────────────
+# 指针（点击 / 滚轮）不走这里：它走 Xvnc 的 RFB 设备（宿主 src/main/computer-use/qemu-rfb.ts）。
+# 这里落的是**构建期**那一份；运行中的实例要修 / 重装就读 desk-service.sh（同一个 CGI）。
+mkdir -p /var/www/orbita/cgi-bin
+wget -qO /var/www/orbita/cgi-bin/desk "http://10.0.2.2:${1:-5420}/build/desk-cgi.sh" || echo "WARN: 取不到 desk-cgi.sh（宿主的 apk 镜像没在跑？）"
+chmod 0755 /var/www/orbita/cgi-bin/desk
+cat >/etc/init.d/orbita-desk <<'DESKSVC'
+#!/sbin/openrc-run
+description="Orbita desktop service (BusyBox httpd + CGI)"
+command=/usr/sbin/httpd
+command_args="-f -p 8080 -h /var/www/orbita"
+command_background=true
+pidfile="/run/orbita-desk.pid"
+respawn_delay=2
+respawn_max=0
+start_pre() {
+  TOKEN=$(sed -n 's/.*orbita_token=\([A-Za-z0-9]*\).*/\1/p' /proc/cmdline | head -n 1)
+  if [ -n "$TOKEN" ]; then printf '%s' "$TOKEN" >/run/orbita-desk.token; else rm -f /run/orbita-desk.token; fi
+  mkdir -p /tmp/orbita-desk
+}
+depend() { need net; }
+DESKSVC
+chmod 0755 /etc/init.d/orbita-desk
+rc-update add orbita-desk default 2>/dev/null || true
+
 # 根用户跑 chromium 必须 --no-sandbox（VM 自己就是沙箱）
 cat >/usr/local/bin/orbita-chromium <<'EOF'
 #!/bin/sh
@@ -138,7 +165,7 @@ printf '中文显示测试 OK —— Orbita P3\n' > /root/cjk.txt
 mkdir -p /var/log
 EOS
 chmod +x /target/tmp/configure.sh
-chroot /target /bin/sh /tmp/configure.sh || fail "configure"
+chroot /target /bin/sh /tmp/configure.sh "$PORT" || fail "configure"
 rm -f /target/tmp/configure.sh
 
 log "确认关键文件"

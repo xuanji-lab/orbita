@@ -12,6 +12,8 @@ import {
   COMPUTER_USE_DESKTOP_KEY,
   sessionDesktopKey,
   type ComputerUseProbeResult,
+  type ComputerUseStartResult,
+  type ComputerUseStopResult,
   type SandboxState,
   type SandboxStatus,
 } from "../../shared/computer-use.ts";
@@ -276,24 +278,73 @@ describe("provider 面（P3 的空位与能力声明）", () => {
     assert.equal(runtime.capabilities()?.sandboxFiles, true);
   });
 
-  it("QEMU 空位：状态恒 off、启动如实回「还没接上」，不抛异常也不假装成功", async () => {
-    const qemu = new QemuSandboxProvider();
+  it("QEMU：镜像不全时启动如实失败（带上缺哪个文件），不抛异常也不假装成功", async () => {
+    // 指到一个不存在的镜像目录：真的去 spawn 之前就该被 missingQemuVmFiles 拦住
+    const qemu = new QemuSandboxProvider({
+      paths: {
+        imageDir: "/nonexistent-orbita-p3",
+        qemuDir: "/nonexistent-orbita-p3/qemu",
+        qemu: "/nonexistent-orbita-p3/qemu/root/mingw64/bin/qemu-system-x86_64.exe",
+        disk: "/nonexistent-orbita-p3/desktop.qcow2",
+        kernel: "/nonexistent-orbita-p3/vmlinuz-virt",
+        initrd: "/nonexistent-orbita-p3/initramfs-orbita.cpio.gz",
+      },
+    });
     assert.deepEqual(qemu.status(), { state: "off" });
     const started = await qemu.start();
     assert.equal(started.ok, false);
-    assert.match(started.ok === false ? started.error : "", /还没接上/);
-    // 没起来过 → stop 是幂等的成功（语义是「让它别在跑」）
+    // 错误要能照着做：点名缺的那个文件
+    assert.match(started.ok === false ? started.error : "", /desktop\.qcow2/);
+    assert.equal(qemu.status().state, "error");
+    // 没起来过（或起失败了）→ stop 是幂等的成功（语义是「让它别在跑」）
     assert.deepEqual(await qemu.stop(), { ok: true });
-    // 目标能力是 P3-2 的验收清单：Linux 侧没有 UIA，但能快照
+    assert.deepEqual(qemu.status(), { state: "off" });
+    // 能力按**实现**声明：Linux 侧没有 UIA / 没有按窗口截图 / 快照还没接
     assert.equal(qemu.capabilities.uia, false);
-    assert.equal(qemu.capabilities.snapshot, "overlay");
-    assert.equal(qemu.desktopKey("A"), sessionDesktopKey("A"));
+    assert.equal(qemu.capabilities.windows, false);
+    assert.equal(qemu.capabilities.snapshot, "none");
+    // 一台 VM 一块屏幕：租约是全局独占键（per-session 要等 VM 池）
+    assert.equal(qemu.desktopKey("A"), COMPUTER_USE_DESKTOP_KEY);
+  });
+
+  it("选到 L3（qemu）时：先停掉正在跑的 WSB，再起 QEMU，runningBackend 报 qemu", async () => {
+    const wsb = fakeController("wsb", "running");
+    const iso = fakeController("iso");
+    const qemuCalls: string[] = [];
+    const qemu = {
+      ...fakeController("wsb").controller,
+      id: "qemu" as const,
+      capabilities: QEMU_CAPABILITIES,
+      status: () => ({ state: "off" }) as SandboxStatus,
+      start: async (): Promise<ComputerUseStartResult> => {
+        qemuCalls.push("start");
+        return { ok: true };
+      },
+      stop: async (): Promise<ComputerUseStopResult> => {
+        qemuCalls.push("stop");
+        return { ok: true };
+      },
+    };
+    const runtime = createComputerUseRuntime({
+      wsb: { ...wsb.controller, probe: async () => probeResult() },
+      isolation: iso.controller as unknown as IsolationSessionController,
+      qemu,
+      backend: () => "qemu",
+      probeIsolation: async () => ({ available: true, reason: null, nodeVersion: "24.21.0", nodeOk: true }),
+    });
+    assert.deepEqual(await runtime.start(), { ok: true });
+    // 两个隔离不能同时活着：WSB 先被停
+    assert.deepEqual(wsb.calls, ["stop"]);
+    assert.deepEqual(qemuCalls, ["start"]);
+    assert.deepEqual(iso.calls, []);
+    await runtime.dispose();
   });
 
   it("三个后端的租约粒度只在 provider 里定义一次（门面不再按 id 猜）", () => {
     assert.equal(WSB_CAPABILITIES.desktopScope, "shared");
     assert.equal(ISOLATION_SESSION_CAPABILITIES.desktopScope, "per-session");
-    assert.equal(QEMU_CAPABILITIES.desktopScope, "per-session");
+    // QEMU 现在一台 VM 一块屏幕（VM 池还没做），所以它和 L2 一样是 shared
+    assert.equal(QEMU_CAPABILITIES.desktopScope, "shared");
     // L2b 与 QEMU 都不能把宿主文件放进 guest 的映射目录；只有 L2 能
     assert.deepEqual(
       [WSB_CAPABILITIES, ISOLATION_SESSION_CAPABILITIES, QEMU_CAPABILITIES].map((c) => c.sandboxFiles),
