@@ -109,10 +109,37 @@ const CHECKS = [
   {
     name: "Sub-sessions·收件箱行：相对时间钉在右血线",
     row: ".inbox-row-main",
-    leading: ".status-pie",
+    // 2026-11-17 起行首是记号位（橙点 / 灰点 / 灰勾 / 空），不再是状态饼；记号位每行都在
+    leading: ".inbox-row-mark",
     trailing: ".inbox-row-ago",
-    // .inbox-row-main 的右内边距 var(--space-3)；stopped / idle 行没有竖条，跳过
+    // .inbox-row-main 的右内边距 var(--space-3)
     rightPad: 12,
+    skipNoTrailing: true,
+  },
+  {
+    name: "对话流·过程明细行：时刻钉在右血线",
+    row: ".proc-ev",
+    leading: ".proc-ev-verb",
+    trailing: ".proc-ev-time",
+    // .proc-ev 的左右内边距 var(--space-2)
+    rightPad: 8,
+    skipNoTrailing: true,
+  },
+  {
+    name: "对话流·轮尾文件行：尾巴钉在右血线（悬停动作出现时尾巴让位）",
+    row: ".ft-row",
+    leading: ".ft-icon",
+    trailing: ".ft-trail",
+    // 文件行不留右内边距（.ft-rows 的左右边距在外层）
+    rightPad: 0,
+    skipNoTrailing: true,
+  },
+  {
+    name: "进度面板·派出去的活：用时钉在右血线",
+    row: ".tp-job .tp-step-head",
+    leading: ".tp-text",
+    trailing: ".tp-tail",
+    rightPad: 0,
     skipNoTrailing: true,
   },
   {
