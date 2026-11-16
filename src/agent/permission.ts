@@ -11,7 +11,7 @@ import { gatedCommandTimeout } from "../shared/permission.ts";
 import { statSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { toolTargetPath } from "./tool-paths.ts";
-import { dataDirRefusalMessage, defaultGuardEnv, protectedCommandRefusal, realpathLoose, stripFirmlinkPrefix, tildeHome, type CommandGuardEnv, type DataDirSubject } from "./protected-command.ts";
+import { dataDirRefusalMessage, defaultGuardEnv, protectedCommandRefusal, realpathLoose, stripFirmlinkPrefix, tildeHome, windowsTextForms, type CommandGuardEnv, type DataDirSubject } from "./protected-command.ts";
 
 /**
  * **本会话实际启用的内建工具集**：`durable-tools.ts` 按这份顺序建内建工具（builtinTools），决定本会话
@@ -348,7 +348,10 @@ export function protectedPathRefusal(
     if (typeof command !== "string" || command === "") return null;
     // 先过命令串里不带完整路径的写法：文件名本身 / 变量 / 通配 / cd 进数据目录 / 对数据目录或其上级的破坏性命令
     const loose = protectedCommandRefusal(command, { files: protectedFiles, ownDirs: ownDataDirs(protectedPaths, protectedFiles) }, cwd, guard);
-    const haystack = loosenShellQuoting(foldPath(stripFirmlinkPrefix(expandTildeLiterals(command, guard))));
+    const folded = loosenShellQuoting(foldPath(stripFirmlinkPrefix(expandTildeLiterals(command, guard))));
+    // Windows：命令里的 `/c/…`、`/mnt/c/…`、`\\?\C:\…`、`\\localhost\c$\…` 折成 `c:/…` 再比完整路径（与白名单闸门同一个折算，
+    // 见 protected-command.ts 的 windowsPathForm）。2026-11-17 Windows 真机：`rm -f "/c/…/sessions/x.jsonl"` 两层都没对上，删成了
+    const haystack = (guard.platform ?? process.platform) === "win32" ? windowsTextForms(folded.replaceAll("\\", "/")).toLowerCase() : folded;
     if (loose !== null) {
       return loose.kind === "file" ? fileRefusalMessage(loose.file, "command") : dataDirRefusalMessage(loose, touchedSubject(haystack, protectedPaths, protectedFiles));
     }

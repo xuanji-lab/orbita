@@ -63,6 +63,7 @@ describe("Windows 上 Git Bash 盘符写法的折算（平台注入）", () => {
     assert.equal(msysDrivePath("/D/work"), "D:\\work");
     assert.equal(msysDrivePath("/mnt/c/Users/x"), "C:\\Users\\x");
     assert.equal(msysDrivePath("/cygdrive/e/data/f.txt"), "E:\\data\\f.txt");
+    assert.equal(msysDrivePath("/proc/cygdrive/c/Users/x"), "C:\\Users\\x");
     assert.equal(msysDrivePath("/c"), "C:\\");
   });
   test("msysDrivePath：不是盘符写法的原样（UNC、带反斜杠、多字母首段、相对路径）", () => {
