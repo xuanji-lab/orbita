@@ -305,7 +305,9 @@ describe("strictToolContext：工具只能读新内核提供的上下文字段",
     assert.equal(ctx.cwd, "/w");
     assert.equal(ctx.sessionManager.getSessionId(), "sid");
     assert.equal(ctx.sessionManager.getSessionFile(), undefined);
-    assert.throws(() => ctx.hasUI, /没有提供 hasUI（工具 bash 读了它）/);
-    assert.throws(() => ctx.sessionManager.getBranch(), /没有提供 sessionManager\.getBranch（工具 bash 读了它）/);
+    // 经 as 绕过类型去读没提供的字段（类型层已经拦了直接读）
+    const loose = ctx as unknown as { hasUI: unknown; sessionManager: { getBranch: () => unknown } };
+    assert.throws(() => loose.hasUI, /没有提供 hasUI（工具 bash 读了它）/);
+    assert.throws(() => loose.sessionManager.getBranch(), /没有提供 sessionManager\.getBranch（工具 bash 读了它）/);
   });
 });

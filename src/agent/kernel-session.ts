@@ -17,7 +17,6 @@
 import { randomUUID } from "node:crypto";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { AssistantMessage, Message, Usage } from "@earendil-works/pi-ai";
-import { calculateContextTokens, estimateTokens } from "@earendil-works/pi-coding-agent";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 import { getCurrentSystemMessage } from "@earendil-works/pi-ai/utils/transcript";
 import { ConversationIdle, LiveDoc, UsageDoc, type ContextView, type Conversation, type ConversationId, type EntryRecord, type Harness } from "@earendil-works/pi-durable";
@@ -34,6 +33,7 @@ import { SessionHistoryDoc, type KernelPool, type KernelTarget } from "./kernel.
 import { appendNotice, branchSession, revertSession, RUNNING_REFUSAL } from "./kernel-edit.ts";
 import { digestContext, DurableBranch, runTurn, ToolRounds, type ContextDigest, type KernelTurnRuntime, type TurnOutcome } from "./kernel-turn.ts";
 import { KernelView } from "./kernel-view.ts";
+import type { ContextMessage } from "./agent-shapes.ts";
 import { liftMessages, WireDoc } from "./kernel-wire.ts";
 import type { PiModel } from "./model-registration.ts";
 import { generateTitle } from "./session-title.ts";
@@ -144,6 +144,56 @@ export class KernelStats {
   }
 }
 
+/** 一次回答的 usage 折成上下文 token：有总数用总数，没有就四项相加 */
+export function calculateContextTokens(usage: Usage): number {
+  return usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+}
+
+/** 图按 4800 字符计（约 1200 token），与旧内核同口径 */
+const IMAGE_CHARS = 4800;
+
+function contentChars(content: string | readonly { type: string; text?: string }[]): number {
+  if (typeof content === "string") return content.length;
+  let chars = 0;
+  for (const block of content) {
+    if (block.type === "text" && typeof block.text === "string") chars += block.text.length;
+    else if (block.type === "image") chars += IMAGE_CHARS;
+  }
+  return chars;
+}
+
+/**
+ * 一条消息的 token 估算：字符数 / 4 向上取整（偏多估，宁早压缩不晚）。决定「上下文已用」的显示与压缩时机，
+ * 口径与旧内核相同——换了口径，同一条会话在新旧版本上会在不同的时刻压缩。
+ */
+export function estimateTokens(message: ContextMessage | Message): number {
+  let chars = 0;
+  switch (message.role) {
+    case "system":
+      chars = contentChars(message.content);
+      for (const section of Object.values(message.sections ?? {})) if (typeof section === "string") chars += section.length;
+      if (message.toolsAdded !== undefined) chars += JSON.stringify(message.toolsAdded).length;
+      break;
+    case "user":
+    case "toolResult":
+    case "custom":
+      chars = contentChars(message.content);
+      break;
+    case "assistant":
+      for (const block of message.content) {
+        if (block.type === "text") chars += block.text.length;
+        else if (block.type === "thinking") chars += block.thinking.length;
+        else if (block.type === "toolCall") chars += block.name.length + JSON.stringify(block.arguments).length;
+      }
+      break;
+    case "branchSummary":
+    case "compactionSummary":
+      chars = message.summary.length;
+      break;
+  }
+  return Math.ceil(chars / 4);
+}
+
 function validUsage(message: Message): Usage | undefined {
   if (message.role !== "assistant") return undefined;
   const assistant = message as AssistantMessage;
@@ -164,7 +214,7 @@ export function contextUsage(messages: readonly Message[], compacted: boolean, c
   }
   if (index === -1 && compacted) return { tokens: null, contextWindow: window, percent: null };
   let tokens = index === -1 ? 0 : calculateContextTokens(validUsage(messages[index] as Message) as Usage);
-  for (let at = index + 1; at < messages.length; at++) tokens += estimateTokens(messages[at] as Parameters<typeof estimateTokens>[0]);
+  for (let at = index + 1; at < messages.length; at++) tokens += estimateTokens(messages[at] as ContextMessage);
   return { tokens, contextWindow: window, percent: (tokens / window) * 100 };
 }
 
@@ -179,12 +229,12 @@ async function tokensAfterCompaction(conversation: Conversation, compaction: Ent
     const view = await conversation.context(BACKGROUND_CONTEXT);
     const messages = liftMessages(view.messages, new Set());
     let tokens = 0;
-    for (const message of messages) tokens += estimateTokens(message as Parameters<typeof estimateTokens>[0]);
+    for (const message of messages) tokens += estimateTokens(message);
     if (!messages.some((message) => (message as { role?: unknown }).role === "system")) {
       const previous = (await conversation.entries({ maxEntryId: (compaction.id - 1) as EntryRecord["id"], order: "descending" }, 1, undefined, BACKGROUND_CONTEXT)).items[0];
       const before = previous === undefined ? [] : (await conversation.context(BACKGROUND_CONTEXT, { at: previous.id })).messages;
       const system = getCurrentSystemMessage(before);
-      if (system !== undefined) tokens += estimateTokens(system as Parameters<typeof estimateTokens>[0]);
+      if (system !== undefined) tokens += estimateTokens(system);
     }
     return tokens;
   } catch {

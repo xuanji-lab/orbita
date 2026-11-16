@@ -1,6 +1,6 @@
 import { mkdir, readFile, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ToolDefinition } from "./agent-shapes.ts";
 import type { CommandCardData, OpenPanelHint } from "../shared/builtin-command.ts";
 import { readImageInfo } from "../shared/image-size.ts";
 import { isSlidesExportFormat, SLIDES_EXPORT_FORMATS, type SlidesAgentRequest, type SlidesOutcome } from "../shared/slides-export.ts";

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import JSZip from "jszip";
 import * as ncanvas from "@napi-rs/canvas";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ToolDefinition } from "./agent-shapes.ts";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { builtinTools } from "./durable-tools.ts";
 import { createDocxTools } from "./docx-tools.ts";

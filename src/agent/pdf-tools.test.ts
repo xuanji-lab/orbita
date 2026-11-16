@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ToolDefinition } from "./agent-shapes.ts";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { builtinTools } from "./durable-tools.ts";
 import {

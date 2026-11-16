@@ -1,4 +1,4 @@
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ToolDefinition } from "./agent-shapes.ts";
 import { RequestBroker } from "./request-broker.ts";
 import {
   memoryShortId,

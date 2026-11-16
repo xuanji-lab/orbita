@@ -20,7 +20,7 @@
  *
  * 纯模块：回执文案与停下的判定可被 node --test 直接测；计划的形状与校验在 shared/plan.ts。
  */
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ToolDefinition } from "./agent-shapes.ts";
 import { diffPlans } from "../shared/plan-diff.ts";
 import {
   parsePlanCall,

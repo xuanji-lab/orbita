@@ -1,7 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import * as ncanvas from "@napi-rs/canvas";
-import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ToolContext, ToolDefinition } from "./agent-shapes.ts";
 import { createIsomorphicCanvasFactory, extractText, getDocumentProxy, renderPageAsImage } from "unpdf";
 import {
   displayText,
@@ -79,7 +79,7 @@ const SPARSE_HINT_MAX = 10;
 const NON_VISION_NOTE = "[Current model does not support images. The image will be omitted from this request.]";
 
 /** 视觉判定：pi 的 Model.input 是 ["text"] 或 ["text","image"]（read 工具同口径） */
-function visionCapable(ctx: ExtensionContext | undefined): boolean {
+function visionCapable(ctx: ToolContext | undefined): boolean {
   return ctx?.model?.input.includes("image") ?? false;
 }
 

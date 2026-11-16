@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { basename, extname, isAbsolute, join } from "node:path";
 import JSZip from "jszip";
 import mammoth from "mammoth";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ToolDefinition } from "./agent-shapes.ts";
 import { imageMimeOf, shrinkIfNeeded } from "./image-tools.ts";
 
 /**

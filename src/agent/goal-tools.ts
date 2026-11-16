@@ -13,7 +13,7 @@
  *
  * 纯模块：不 import electron，回执文案与上一个目标的查找可被 node --test 直接测。
  */
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ToolDefinition } from "./agent-shapes.ts";
 import { GOAL_TOOL_NAME, parseGoalCall, parseGoalCallLoose, type GoalToolDetails } from "../shared/goal.ts";
 
 /**

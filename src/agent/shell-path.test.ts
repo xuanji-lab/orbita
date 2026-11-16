@@ -9,7 +9,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { createShellPathResolver } from "./shell-path.ts";
+import { createShellPathResolver, findBash } from "./shell-path.ts";
 
 describe("createShellPathResolver", () => {
   test("探到就缓存：pi 那套查找只跑一次（收益的全部）", () => {
@@ -64,7 +64,7 @@ describe("createShellPathResolver", () => {
     const resolve = createShellPathResolver(() => process.execPath);
     assert.equal(resolve(), process.execPath, "node 自己就是绝对且存在的");
 
-    // POSIX 的兜底那一档：裸名 `sh`。pi 的 getShellConfig("sh") 会 existsSync 失败并抛错
+    // 裸名 `sh` 交下去，执行环境找不到它
     const bare = createShellPathResolver(() => "sh");
     assert.equal(bare(), undefined, "裸名不能当 shellPath");
 
@@ -72,16 +72,35 @@ describe("createShellPathResolver", () => {
     assert.equal(missing(), undefined, "绝对但不存在也不行");
   });
 
-  /**
-   * 默认探测走 pi 自己的 getShellConfig()：它在**没装 Git Bash** 时是抛错的
-   * （错误信息是三条安装建议）。装了 / 没装都必须只是「探到」或「探不到」，
-   * 不许把异常抛出去把开轮打断。
-   */
+  /** 装了 / 没装都必须只是「探到」或「探不到」，不许把异常抛出去把开轮打断 */
   test("默认探测不抛：装了 Git Bash 给绝对路径，没装给 undefined", () => {
     const resolve = createShellPathResolver();
     const result = resolve();
     if (result !== undefined) {
       assert.ok(result.length > 0, "探到的必须是非空路径");
     }
+  });
+});
+
+describe("findBash 的查找顺序", () => {
+  const has = (paths: string[]) => (path: string) => paths.includes(path);
+
+  test("Windows：Program Files 的 Git Bash 先于 PATH", () => {
+    const env = { ProgramFiles: "C:\\Program Files", PATH: "D:\\scoop\\git\\bin" };
+    assert.equal(findBash("win32", env, has(["C:\\Program Files\\Git\\bin\\bash.exe", "D:\\scoop\\git\\bin\\bash.exe"])), "C:\\Program Files\\Git\\bin\\bash.exe");
+    assert.equal(findBash("win32", env, has(["D:\\scoop\\git\\bin\\bash.exe"])), "D:\\scoop\\git\\bin\\bash.exe");
+  });
+
+  test("Windows：跳过 System32 的旧式 WSL bash，接着找 PATH 后面的", () => {
+    const env = { SystemRoot: "C:\\Windows", PATH: "C:\\Windows\\System32;E:\\msys64\\usr\\bin" };
+    const files = ["C:\\Windows\\System32\\bash.exe", "E:\\msys64\\usr\\bin\\bash.exe"];
+    assert.equal(findBash("win32", env, has(files)), "E:\\msys64\\usr\\bin\\bash.exe");
+    assert.equal(findBash("win32", env, has([files[0] as string])), undefined);
+  });
+
+  test("其它平台：/bin/bash 先于 PATH，都没有给 undefined", () => {
+    assert.equal(findBash("darwin", { PATH: "/opt/homebrew/bin" }, has(["/bin/bash", "/opt/homebrew/bin/bash"])), "/bin/bash");
+    assert.equal(findBash("linux", { PATH: "/usr/local/bin:/usr/bin" }, has(["/usr/bin/bash"])), "/usr/bin/bash");
+    assert.equal(findBash("linux", { PATH: "/usr/bin" }, has([])), undefined);
   });
 });

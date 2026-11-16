@@ -7,7 +7,7 @@
  * `compactionSummary`、扩展消息是 `custom`、分支摘要是 `branchSummary`），convertToLlm 之后才变成 user 消息；
  * durable 的 beforeRequest 里已经全是 pi-ai 的 Message。那几个函数认角色（用户情境只给 `user` 加时间、
  * 目标账只挂在 `compactionSummary` 上），所以先把 durable 的消息**还原成旧内核那时的形状**（liftMessages），
- * 跑同一串变换，再用 pi 同一个 convertToLlm 落回去——两边经过的是同一条变换链。
+ * 跑同一串变换，再用 convertToLlm 落回去（摘要的前后缀与旧内核同文）——两边经过的是同一条变换链。
  *
  * 最后把系统消息折成一条（collapseSystem，pi-ai collapseSystemMessages 的同款）：旧内核的系统提示是 before_agent_start 强制给的整段，
  * pi 在请求前把会话里的系统消息全部折成一条打头（_installAgentForcedPromptProjection）；durable 对支持
@@ -19,7 +19,6 @@
 import type { Context } from "@earendil-works/chord/context";
 import type { Message, Tool } from "@earendil-works/pi-ai";
 import { getCurrentSystemMessage } from "@earendil-works/pi-ai/utils/transcript";
-import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { defineDoc, type Conversation, type JsonObject } from "@earendil-works/pi-durable";
 import { attachGoalLedger, type LedgerAttachCache } from "./goal-compaction.ts";
 import { applyImageBudget, hashImage, imageRefPath, jsonUtf8Length, type ContextMessage, type TurnImageBudget } from "./image-byte-budget.ts";
@@ -210,6 +209,25 @@ export class TurnWire {
     await Promise.all(writes);
     return collapseSystem(convertToLlm(current));
   }
+}
+
+/**
+ * 还原形状的消息落回模型消息：压缩 / 分支摘要包上与旧内核同文的前后缀成为一条用户消息，扩展消息成为用户消息，
+ * 其余原样。旧内核还有一种 bashExecution（用户在 TUI 里敲的 `!` 命令），璇玑从来不产生，liftMessages 也不还原它。
+ */
+export function convertToLlm(messages: readonly ContextMessage[]): Message[] {
+  return messages.map((message): Message => {
+    switch (message.role) {
+      case "compactionSummary":
+        return { role: "user", content: [{ type: "text", text: COMPACTION_PREFIX + message.summary + COMPACTION_SUFFIX }], timestamp: message.timestamp };
+      case "branchSummary":
+        return { role: "user", content: [{ type: "text", text: BRANCH_PREFIX + message.summary + BRANCH_SUFFIX }], timestamp: message.timestamp };
+      case "custom":
+        return { role: "user", content: typeof message.content === "string" ? [{ type: "text", text: message.content }] : message.content, timestamp: message.timestamp };
+      default:
+        return message;
+    }
+  });
 }
 
 /** 系统消息折成打头的一条（pi-ai collapseSystemMessages 的消息数组版；那个函数要一个带品牌的 TranscriptContext） */

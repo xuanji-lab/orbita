@@ -5,7 +5,7 @@
  *
  * 内建四件（read / write / edit / bash）不在这里：用 pi 建它们的同一个工厂（见 durable-tools.ts）。
  */
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ToolDefinition } from "./agent-shapes.ts";
 import type { AgentCommand } from "../shared/agent-ipc.ts";
 import { createAutomationTools } from "./automation-tools.ts";
 import { createBrowserTools } from "./browser-tools.ts";

@@ -1,12 +1,10 @@
 /**
- * 钉住「我们的目录布局」与「pi 的 skill 发现规则」对得上。
+ * 钉住「我们的目录布局」与「技能发现规则」（kernel-prompt.ts 的 loadSkills）对得上。
  *
- * 这一刀没有自己的加载代码——集合目录交给 pi，扫盘与拼 prompt 都是它做。
- * 那么唯一会坏的地方就是**约定漂移**：pi 换了发现规则，或者我们换了布局，
- * 而两边各自都还「正确」。这份测试就是那道对缝。
+ * 会坏的地方是**约定漂移**：发现规则改了，或者我们换了布局，而两边各自都还「正确」。这份测试就是那道对缝。
  *
  * 2-1 起布局是中心存储 + symlink 集合（见 main/skill/store.ts）：
- * 这里专门钉 pi 侧的三条假设——跟符号链接、断链跳过、同名会重复出现
+ * 这里专门钉发现规则的三条假设——跟符号链接、断链跳过、同名会重复出现
  * （互斥规则存在的理由）。
  */
 import { test, describe, beforeEach, afterEach } from "node:test";
@@ -14,7 +12,12 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { formatSkillsForPrompt, loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
+import { formatSkillsIndex, loadSkills } from "./kernel-prompt.ts";
+
+/** 扫一个集合目录（kernel-prompt.ts 每轮对每个集合目录做的事） */
+function loadSkillsFromDir(input: { dir: string }): { skills: ReturnType<typeof loadSkills> } {
+  return { skills: loadSkills([input.dir]) };
+}
 
 let dir = "";
 
@@ -53,7 +56,7 @@ describe("skills 目录布局（中心存储 + symlink 集合）", () => {
     const storeDir = join(dir, "skills");
     const global = join(dir, "skill-links", "global");
     await writeSet(storeDir, global, "pdf-report", "把季度数据渲染成 PDF");
-    const result = loadSkillsFromDir({ dir: global, source: "user" });
+    const result = loadSkillsFromDir({ dir: global });
     assert.deepEqual(result.skills.map((s) => s.name), ["pdf-report"]);
     assert.equal(result.skills[0]?.description, "把季度数据渲染成 PDF");
   });
@@ -63,7 +66,7 @@ describe("skills 目录布局（中心存储 + symlink 集合）", () => {
     await writeSkill(join(dir, "skills"), "unlinked", "存着但没链");
     const global = join(dir, "skill-links", "global");
     await mkdir(global, { recursive: true });
-    const result = loadSkillsFromDir({ dir: global, source: "user" });
+    const result = loadSkillsFromDir({ dir: global });
     assert.deepEqual(result.skills.map((s) => s.name), []);
   });
 
@@ -78,8 +81,8 @@ describe("skills 目录布局（中心存储 + symlink 集合）", () => {
       "junction",
     );
     const names = [
-      ...loadSkillsFromDir({ dir: join(dir, "skill-links", "global"), source: "user" }).skills,
-      ...loadSkillsFromDir({ dir: join(dir, "skill-links", "ws-1"), source: "user" }).skills,
+      ...loadSkillsFromDir({ dir: join(dir, "skill-links", "global") }).skills,
+      ...loadSkillsFromDir({ dir: join(dir, "skill-links", "ws-1") }).skills,
     ].map((s) => s.name);
     assert.deepEqual(names, ["both", "both"]);
   });
@@ -88,18 +91,18 @@ describe("skills 目录布局（中心存储 + symlink 集合）", () => {
     const global = join(dir, "skill-links", "global");
     await mkdir(global, { recursive: true });
     await symlink(join(dir, "skills", "gone"), join(global, "gone"), "junction");
-    const result = loadSkillsFromDir({ dir: global, source: "user" });
+    const result = loadSkillsFromDir({ dir: global });
     assert.deepEqual(result.skills, []);
   });
 
   test("目录不存在 = 一个都没装，不抛", () => {
-    assert.deepEqual(loadSkillsFromDir({ dir: join(dir, "skill-links", "global"), source: "user" }).skills, []);
+    assert.deepEqual(loadSkillsFromDir({ dir: join(dir, "skill-links", "global") }).skills, []);
   });
 
   test("空目录也是一个都没装", async () => {
     const global = join(dir, "skill-links", "global");
     await mkdir(global, { recursive: true });
-    assert.deepEqual(loadSkillsFromDir({ dir: global, source: "user" }).skills, []);
+    assert.deepEqual(loadSkillsFromDir({ dir: global }).skills, []);
   });
 
   /**
@@ -113,7 +116,7 @@ describe("skills 目录布局（中心存储 + symlink 集合）", () => {
     const storeDir = join(dir, "skills");
     const global = join(dir, "skill-links", "global");
     await writeSet(storeDir, global, "pdf-report", "把季度数据渲染成 PDF");
-    const prompt = formatSkillsForPrompt(loadSkillsFromDir({ dir: global, source: "user" }).skills);
+    const prompt = formatSkillsIndex(loadSkillsFromDir({ dir: global }).skills, "read");
     assert.match(prompt, /pdf-report/);
     assert.match(prompt, /把季度数据渲染成 PDF/);
     assert.match(prompt, /<location>.*SKILL\.md<\/location>/);
@@ -127,7 +130,7 @@ describe("skills 目录布局（中心存储 + symlink 集合）", () => {
     await writeSkill(storeDir, "broken", "坏的那个");
     await symlink(join(storeDir, "broken"), join(global, "broken"), "junction");
     await writeFile(join(storeDir, "broken", "SKILL.md"), "没有 frontmatter，只有正文", "utf8");
-    const result = loadSkillsFromDir({ dir: global, source: "user" });
+    const result = loadSkillsFromDir({ dir: global });
     assert.equal(result.skills.some((s) => s.name === "good"), true);
   });
 });

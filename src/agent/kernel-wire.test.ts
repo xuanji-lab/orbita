@@ -3,10 +3,9 @@ import assert from "node:assert/strict";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Message } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
-import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { createRegistry, Harness, MemoryStorage } from "@earendil-works/pi-durable";
 import type { ContextMessage } from "./image-byte-budget.ts";
-import { collapseSystem, liftMessages, messageSignature, TurnWire, WireDoc } from "./kernel-wire.ts";
+import { collapseSystem, convertToLlm, liftMessages, messageSignature, TurnWire, WireDoc } from "./kernel-wire.ts";
 import { attachMemoryBlocks } from "./memory-inject.ts";
 import { injectUserContext } from "./user-context.ts";
 

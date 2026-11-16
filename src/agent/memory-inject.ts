@@ -15,7 +15,7 @@
  *
  * 召回、打分、门控都在记忆服务进程（memory/retrieve.ts）；这里只做组装、兜底预算与挂载。
  */
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { BookEntry } from "./agent-shapes.ts";
 import { memoryShortId, type MemoryHit, type MemoryRecallOutcome } from "../shared/memory.ts";
 import type { RequestBroker } from "./request-broker.ts";
 import type { ContextMessage } from "./image-byte-budget.ts";
@@ -71,7 +71,7 @@ export function buildMemoryBlock(
  * 从本子（当前叶子路径）读回各轮的记忆附件：用户消息时间戳 → 块文本。
  * 坏 entry 跳过；同一时间戳出现两次以先落的为准（定格的那份才是发出去过的）。
  */
-export function memoryAttachments(branch: readonly SessionEntry[]): Map<number, string> {
+export function memoryAttachments(branch: readonly BookEntry[]): Map<number, string> {
   const attached = new Map<number, string>();
   for (const entry of branch) {
     if (entry.type !== "custom" || entry.customType !== MEMORY_ATTACH_ENTRY) continue;

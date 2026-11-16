@@ -4,7 +4,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { BookEntry } from "./agent-shapes.ts";
 import {
   attachMemoryBlocks,
   buildMemoryBlock,
@@ -125,7 +125,7 @@ test("memoryAttachments：从本子读回，坏 entry 跳过，同一时间戳�
     { type: "custom", customType: MEMORY_ATTACH_ENTRY, data: { at: "x", text: "坏" } },
     { type: "custom", customType: "other", data: { at: 2, text: "别家" } },
     { type: "custom", customType: MEMORY_ATTACH_ENTRY, data: { at: 3, text: "三" } },
-  ] as unknown as SessionEntry[];
+  ] as unknown as BookEntry[];
   assert.deepEqual([...memoryAttachments(entries)], [
     [1, "先"],
     [3, "三"],

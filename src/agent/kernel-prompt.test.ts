@@ -1,14 +1,13 @@
 /**
- * 新内核重建的 pi 基础系统提示 == 旧内核里 pi 会话自己算出来的那一份（逐字节）。
- * 两边都在一个空的 pi 配置目录下跑（PI_CODING_AGENT_DIR 指向临时目录），不读用户真实的 ~/.pi。
+ * 璇玑自写的基底系统提示与它读的资源（项目说明、技能、settings.json）。
+ * 在一个空的 pi 配置目录下跑（PI_CODING_AGENT_DIR 指向临时目录），不读用户真实的 ~/.pi。
  */
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createAgentSessionFromServices, createAgentSessionServices, SessionManager } from "@earendil-works/pi-coding-agent";
-import { loadoutOrder, loadPiResources } from "./kernel-prompt.ts";
+import { buildBasePrompt, loadoutOrder, loadPiResources, loadProjectContextFiles, readPiSettings } from "./kernel-prompt.ts";
 import { ENABLED_BUILTIN_TOOLS } from "./permission.ts";
 import { RequestBroker } from "./request-broker.ts";
 import { createTurnTools, turnToolFlags, type TurnInput } from "./turn-tools.ts";
@@ -47,14 +46,19 @@ function command(cwd: string, skillsDir: string): TurnInput {
   };
 }
 
-describe("kernel-prompt：pi 基础系统提示两个内核逐字节相同", () => {
-  it("同一组工具、同一份 AGENTS.md 与技能目录下，与 pi 会话的 systemPrompt 相等", async () => {
+describe("kernel-prompt：璇玑自写的基底", () => {
+  it("段的结构、四个内建工具的简介与规则、项目说明、技能索引、cwd", async () => {
     const cwd = join(root, "ws");
     const skillsDir = join(root, "skills");
     await mkdir(join(skillsDir, "demo"), { recursive: true });
-    await writeFile(join(skillsDir, "demo", "SKILL.md"), "---\nname: demo\ndescription: 演示技能，测提示词用\n---\n正文\n");
+    await writeFile(join(skillsDir, "demo", "SKILL.md"), "---\nname: demo\ndescription: >-\n  演示技能，\n  测提示词用\n---\n正文\n");
+    await mkdir(join(skillsDir, "hidden"), { recursive: true });
+    await writeFile(join(skillsDir, "hidden", "SKILL.md"), "---\nname: hidden\ndescription: 只能点名\ndisable-model-invocation: true\n---\n");
+    await mkdir(join(skillsDir, "nodesc"), { recursive: true });
+    await writeFile(join(skillsDir, "nodesc", "SKILL.md"), "---\nname: nodesc\n---\n");
     await mkdir(cwd, { recursive: true });
-    await writeFile(join(cwd, "AGENTS.md"), "# 项目说明\n先跑测试再提交。\n");
+    await writeFile(join(root, "AGENTS.md"), "外层说明\n");
+    await writeFile(join(cwd, "AGENTS.md"), "\ufeff# 项目说明\n先跑测试再提交。\n");
     const turn = command(cwd, skillsDir);
     const custom = createTurnTools({
       command: turn,
@@ -66,41 +70,74 @@ describe("kernel-prompt：pi 基础系统提示两个内核逐字节相同", () 
       attachedImages: () => [],
       memoryTurn: () => 1,
     });
-
-    // 旧内核：与 runtime.ts openTurn 同样的装配（noSkills + additionalSkillPaths、defaultTools 七件、customTools）
-    const services = await createAgentSessionServices({
-      cwd,
-      resourceLoaderOptions: { noSkills: true, additionalSkillPaths: [skillsDir], extensionFactories: [] },
-    });
-    services.settingsManager.applyOverrides({ defaultTools: [...ENABLED_BUILTIN_TOOLS] });
-    const { session } = await createAgentSessionFromServices({
-      services,
-      sessionManager: SessionManager.create(cwd, join(root, "pi-sessions")),
-      customTools: custom,
-    });
-    const oldPrompt = session.systemPrompt;
-    const oldTools = session.getActiveToolNames();
-    session.dispose();
-
-    // 新内核
     const resources = await loadPiResources({ cwd, skillsDirs: [skillsDir], resolveShellPath: () => undefined });
     const order = loadoutOrder([], [...ENABLED_BUILTIN_TOOLS, ...custom.map((definition) => definition.name)]);
-    assert.deepEqual(order, oldTools, "全新会话的工具顺序与 pi 的 active 顺序相同");
-    // 内建四件换成新内核自带的实现（没有 promptSnippet / promptGuidelines）：基础提示里只剩 Orbita 自己工具的片段，
-    // 四件的工具行与它们的使用规则不再出现（Orbita 自写的基底补回，见 kernel-prompt 的后续改动）
-    const newPrompt = resources.basePrompt(order, custom);
-    assert.match(newPrompt, /先跑测试再提交/);
-    assert.match(newPrompt, /demo/);
-    assert.match(oldPrompt, /Use read to examine files/);
-    assert.doesNotMatch(newPrompt, /Use read to examine files|Use write only for new files/);
-    for (const line of oldPrompt.split("\n").filter((each) => /^- (read|write|edit|bash):|^- Use (read|write|edit) /.test(each) === false)) {
-      if (line.startsWith("- You can inspect PI_") || line.startsWith("- Each edits[]")) continue;
-      assert.ok(newPrompt.includes(line), `旧提示里这一行在新提示里没了：${line}`);
-    }
-    // grep / find / ls 2026-11-16 删了：工具清单里没有它们；pi「有 bash、而三个搜索工具一个都不在」时
-    // 下的那句「用 bash 干搜索」随之出现（搜索走 bash 里随包的 rg / fd）
-    assert.ok(newPrompt.includes("Use bash for file operations"));
-    assert.ok(["grep", "find", "ls"].every((name) => !order.includes(name)));
+    const prompt = resources.basePrompt(order, custom);
+
+    const sections = [...prompt.matchAll(/^<([a-z_]+)>$/gm)].map((match) => match[1]);
+    assert.deepEqual(sections, ["tools", "rules", "project_context", "skills", "available_skills", "cwd"]);
+    assert.ok(prompt.startsWith("You are a coding assistant running inside Orbita"));
+    for (const name of ["bash", "read", "edit", "write"]) assert.match(prompt, new RegExp(`^- ${name}: `, "m"), `${name} 有一行简介`);
+    assert.match(prompt, /^- update_plan: /m, "璇玑自己工具的简介照旧");
+    assert.match(prompt, /not cat, head or sed/);
+    assert.match(prompt, /give all changes to one file in a single call/);
+    assert.match(prompt, /Use write only to create a new file or to rewrite a whole file/);
+    assert.match(prompt, /Do not run `grep -r` or `find` over a whole directory/);
+    assert.match(prompt, /PI_SESSION_ID, PI_PROVIDER, PI_MODEL and PI_REASONING_LEVEL/);
+    assert.match(prompt, /- Be concise in your final answers\./);
+    assert.doesNotMatch(prompt, /Pi documentation|<docs>|running inside pi/);
+    // 项目说明：外层在前、BOM 去掉
+    assert.ok(prompt.indexOf("外层说明") < prompt.indexOf("先跑测试再提交"));
+    assert.match(prompt, /<project_instructions path="[^"]+AGENTS\.md">\n# 项目说明/);
+    // 技能：多行 YAML 描述读得出；disable-model-invocation 不进索引；没有描述的不算技能
+    assert.match(prompt, /<description>演示技能， 测提示词用<\/description>/);
+    assert.doesNotMatch(prompt, /<name>hidden<\/name>|<name>nodesc<\/name>/);
+    assert.match(prompt, /read it with the read tool/);
+    assert.ok(prompt.endsWith(`<cwd>\n${cwd.replace(/\\/g, "/")}\n</cwd>`));
+    assert.deepEqual(resources.skills.map((skill) => skill.name), ["demo", "hidden"]);
+  });
+
+  it("没有 read 时技能用 bash 读；没有 bash 时不出搜索与环境变量两条规则", () => {
+    const base = { cwd: "/w", definitions: [], contextFiles: [], skills: [{ name: "s", description: "d", filePath: "/s/SKILL.md", hidden: false }] };
+    const bashOnly = buildBasePrompt({ ...base, selectedTools: ["bash"] });
+    assert.match(bashOnly, /read it with bash/);
+    assert.doesNotMatch(bashOnly, /not cat, head or sed/);
+    const readOnly = buildBasePrompt({ ...base, selectedTools: ["read"] });
+    assert.doesNotMatch(readOnly, /rg \(file contents\)|PI_SESSION_ID/);
+    const none = buildBasePrompt({ ...base, selectedTools: [] });
+    assert.doesNotMatch(none, /<skills>/);
+    assert.match(none, /<tools>\n\(none\)/);
+  });
+
+  it("嵌在主仓里的 worktree 不重复读主仓的 AGENTS.md；兄弟 worktree 照常向上找", async () => {
+    const main = join(root, "repo");
+    const wt = join(main, ".worktrees", "x");
+    await mkdir(join(main, ".git", "worktrees", "x"), { recursive: true });
+    await writeFile(join(main, ".git", "worktrees", "x", "commondir"), "../..\n");
+    await mkdir(wt, { recursive: true });
+    await writeFile(join(wt, ".git"), `gitdir: ${join(main, ".git", "worktrees", "x")}\n`);
+    await writeFile(join(main, "AGENTS.md"), "主仓说明\n");
+    await writeFile(join(wt, "AGENTS.md"), "worktree 说明\n");
+    const files = loadProjectContextFiles(wt).map((file) => file.content);
+    assert.ok(files.includes("worktree 说明\n"));
+    assert.ok(!files.includes("主仓说明\n"), "主仓那份被 worktree 自己那份遮住");
+    const plain = loadProjectContextFiles(join(main, "sub-not-worktree"));
+    assert.ok(plain.some((file) => file.content === "主仓说明\n"));
+  });
+
+  it("settings.json 只读用到的几项，坏文件按缺省", async () => {
+    const dir = join(root, "settings-agent");
+    await mkdir(dir, { recursive: true });
+    assert.equal(readPiSettings(dir).autoResizeImages, true, "没有文件：缺省");
+    await writeFile(join(dir, "settings.json"), "{ 坏");
+    assert.equal(readPiSettings(dir).retry.maxRetryDelayMs, 60_000);
+    await writeFile(join(dir, "settings.json"), JSON.stringify({ images: { autoResize: false }, shellCommandPrefix: "set -e", httpIdleTimeoutMs: "disabled", retry: { provider: { maxRetries: 2 } }, enableInstallTelemetry: false }));
+    const settings = readPiSettings(dir);
+    assert.equal(settings.autoResizeImages, false);
+    assert.equal(settings.shellCommandPrefix, "set -e");
+    assert.equal(settings.httpIdleTimeoutMs, 0);
+    assert.equal(settings.retry.maxRetries, 2);
+    assert.equal(settings.enableInstallTelemetry, false);
   });
 
   it("loadoutOrder：已在的保持原位，新出现的接在后面，消失的去掉", () => {

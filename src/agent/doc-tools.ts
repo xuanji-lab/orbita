@@ -1,6 +1,6 @@
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ToolDefinition } from "./agent-shapes.ts";
 import type { CommandCardData, OpenPanelHint } from "../shared/builtin-command.ts";
 import { DOC_EXPORT_EXT, docTitle, type DocExportDocFormat, type DocOutcome } from "../shared/doc.ts";
 import type { FileRoot } from "../shared/files.ts";

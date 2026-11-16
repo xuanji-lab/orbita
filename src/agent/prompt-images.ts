@@ -3,23 +3,23 @@
  *
  * **为什么要缩**：pi 只给工具结果里的图做归一化（`normalizeToolResultImages`），
  * `prompt(text, { images })` 的图原样上送——一张 5K 截图 base64 后十几 MB，
- * provider 会把整条对话拒掉，而不只是这一轮。缩放用 pi 导出的 `resizeImage`
+ * provider 会把整条对话拒掉，而不只是这一轮。缩放用 images.ts 的 `resizePromptImage`
  * （2000px / 4.5MB，read 工具读图同一套口径），不自己再定一套尺寸策略。
  *
- * **为什么在 agent 进程做**：缩放是 CPU 活（pi 把它放进 worker 线程），
+ * **为什么在 agent 进程做**：缩放是 CPU 活，
  * 主进程要留给窗口与 IPC；renderer 做的话缩放策略就得在浏览器里再实现一遍。
  *
  * 缩放后的图是转录里的那份（模型看到什么，记录就是什么）；原图主进程已存进会话目录，
  * `original` 引用原样带过来挂在图块上，看大图时按它读原图。
  */
-import { resizeImage } from "@earendil-works/pi-coding-agent";
+import { resizePromptImage } from "./images.ts";
 import { PROMPT_IMAGE_MIME_TYPES, type PromptImage, type SentImage } from "../shared/prompt-images.ts";
 
-export type ResizeImage = typeof resizeImage;
+export type ResizeImage = (bytes: Uint8Array, mimeType: string) => Promise<{ data: string; mimeType: string } | null>;
 
 export async function preparePromptImages(
   images: readonly SentImage[] | undefined,
-  resize: ResizeImage = resizeImage,
+  resize: ResizeImage = resizePromptImage,
 ): Promise<SentImage[]> {
   if (images === undefined || images.length === 0) return [];
   const prepared: SentImage[] = [];

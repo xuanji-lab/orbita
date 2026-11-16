@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
 import * as ncanvas from "@napi-rs/canvas";
-import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ToolContext, ToolDefinition } from "./agent-shapes.ts";
 
 /**
  * agent 的图片展示工具：show_image。

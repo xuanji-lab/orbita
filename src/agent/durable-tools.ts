@@ -1,5 +1,5 @@
 /**
- * 新内核（pi-durable）的工具注册：把旧内核用的**同一批** ToolDefinition（pi-coding-agent 的形状）
+ * 新内核（pi-durable）的工具注册：把璇玑自己的 ToolDefinition（agent-shapes.ts）
  * 包成 durable 的 ToolRegistration。只做形状翻译，工具逻辑一行不碰——实现只有一份（各 `*-tools.ts`
  * 与 pi 的内建工具工厂），旧内核注册是 pi 的 customTools / defaultTools，新内核注册是这里。
  *
@@ -8,8 +8,8 @@
  * - 结果：content 原样当 output；`isError` 原样；**抛错**按 pi-agent-core 的 createErrorToolResult 折成
  *   「一段文字 = error.message」的错误结果，而不是让 durable 记成 `<harness>[error] …</harness>` 诊断；
  * - 截断：工具自己截（pi 的内建工具都带截断与提示语），durable 不再截第二遍（outputLimits 放到最大）；
- * - 结果里的图：过 pi 同一道归一化（normalizeToolResultImages：按模型的图片上限缩放、附坐标换算提示），
- *   旧内核在 agent-session 的 _afterToolCall 里对每个工具结果做这一步。
+ * - 结果里的图：过一道归一化（images.ts 的 normalizeToolResultImages：按模型的图片上限缩放、附坐标换算提示），
+ *   旧内核在 agent-session 的 _afterToolCall 里对每个工具结果做同样的一步。
  *
  * - 流式进度：onUpdate 原样交给 scope.onUpdate（视图适配层翻成 tool_execution_update，与旧内核同一个回调）。
  *
@@ -18,16 +18,16 @@
 import type { JsonValue } from "@earendil-works/chord/json";
 import type { Model, Api } from "@earendil-works/pi-ai";
 import { open } from "node:fs/promises";
-import { normalizeToolResultImages, type ExtensionToolContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
-import { createNodePhotonImages } from "@earendil-works/pi-durable/images/node";
-import { createBashTool, createEditTool, createReadTool, createWriteTool, type ImageProcessor } from "@earendil-works/pi-durable/tools";
+import { createBashTool, createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
+import type { ToolContext, ToolDefinition } from "./agent-shapes.ts";
+import { imageProcessor, normalizeToolResultImages } from "./images.ts";
 import { ENABLED_BUILTIN_TOOLS } from "./permission.ts";
 import { toolPathArgument, toolTargetPath } from "./tool-paths.ts";
 
 /**
- * 工具执行时要的那几样会话事实（旧内核里 pi 经 ExtensionToolContext 给）：
+ * 工具执行时要的那几样会话事实（agent-shapes.ts 的 ToolContext）：
  * - cwd：内建工具把相对路径 resolve 到它（`ctx?.cwd || cwd`）；
  * - model：read / read_pdf / read_docx / show_image 判断模型看不看得见图；
  * - thinkingLevel、providerSessionId：bash 给子进程挂 PI_REASONING_LEVEL / PI_SESSION_ID（pi 的约定环境变量）。
@@ -49,26 +49,26 @@ export interface DurableToolScope {
 const NO_LIMIT = { maxBytes: Number.MAX_SAFE_INTEGER, maxLines: Number.MAX_SAFE_INTEGER } as const;
 
 /**
- * 新内核实际提供给工具的上下文字段（旧内核里 pi 给的是完整的 ExtensionToolContext）。各 `*-tools.ts` 与 pi 内建工具的
+ * 新内核实际提供给工具的上下文字段。各 `*-tools.ts` 与 pi 内建工具的
  * 执行路径只读这几项（逐一核过：内建工具读 cwd / model / thinkingLevel / sessionManager 的两个 getter，read_pdf /
  * read_docx / show_image 读 model）。会话文件（PI_SESSION_FILE）新内核没有——对话存在 SQLite 里，不给一个过期的 JSONL 路径。
  */
 export interface KernelToolContext {
-  readonly cwd: ExtensionToolContext["cwd"];
-  readonly model: ExtensionToolContext["model"];
-  readonly thinkingLevel: ExtensionToolContext["thinkingLevel"];
+  readonly cwd: ToolContext["cwd"];
+  readonly model: ToolContext["model"];
+  readonly thinkingLevel: ToolContext["thinkingLevel"];
   readonly sessionManager: {
-    getSessionId: ExtensionToolContext["sessionManager"]["getSessionId"];
+    getSessionId: ToolContext["sessionManager"]["getSessionId"];
     getSessionFile: () => undefined;
   };
 }
 
 /**
  * 只暴露 KernelToolContext 那几项的工具上下文：工具读了别的字段**当场报错**（哪个工具、哪个字段），而不是悄悄拿到
- * undefined 走进另一条分支。工具的 execute 签名要求完整的 ExtensionToolContext（pi 的类型），类型层拦不住，
- * 所以在运行时拦。`then` 与 symbol 键放行（await / 打印会探测它们，不是工具在读字段）。
+ * undefined 走进另一条分支。类型层已经只给这几项；这里再兜住经 `as` 绕过类型去读别的字段的情形，
+ * `then` 与 symbol 键放行（await / 打印会探测它们，不是工具在读字段）。
  */
-export function strictToolContext(toolName: string, provided: KernelToolContext): ExtensionToolContext {
+export function strictToolContext(toolName: string, provided: KernelToolContext): ToolContext {
   const guard = <T extends object>(target: T, path: string): T =>
     new Proxy(target, {
       get(object, property, receiver) {
@@ -79,17 +79,17 @@ export function strictToolContext(toolName: string, provided: KernelToolContext)
         return Reflect.get(object, property, receiver);
       },
     });
-  return guard({ ...provided, sessionManager: guard(provided.sessionManager, "sessionManager.") }, "") as unknown as ExtensionToolContext;
+  return guard({ ...provided, sessionManager: guard(provided.sessionManager, "sessionManager.") }, "");
 }
 
-function toolContext(toolName: string, scope: DurableToolScope): ExtensionToolContext {
+function toolContext(toolName: string, scope: DurableToolScope): ToolContext {
   return strictToolContext(toolName, {
     cwd: scope.cwd,
     get model() {
       return scope.model();
     },
     get thinkingLevel() {
-      return scope.thinkingLevel() as ExtensionToolContext["thinkingLevel"];
+      return scope.thinkingLevel() as ToolContext["thinkingLevel"];
     },
     sessionManager: {
       getSessionId: () => scope.providerSessionId(),
@@ -134,7 +134,7 @@ export function toDurableTool(definition: ToolDefinition, scope: DurableToolScop
         const resizeOptions = scope.model()?.inputLimits?.images?.resize;
         const content = await normalizeToolResultImages(result.content ?? [], {
           autoResizeImages: scope.autoResizeImages,
-          ...(resizeOptions === undefined ? {} : { resizeOptions }),
+          ...(resizeOptions === undefined ? {} : { limits: resizeOptions }),
         });
         return {
           output: content,
@@ -160,15 +160,6 @@ export interface BuiltinToolOptions {
   /** 平台（测试注入）：只有 win32 才把 Git Bash / MSYS 的盘符路径折成 Windows 路径 */
   platform?: NodeJS.Platform;
 }
-
-/** 读图的缩放 / 转格式：photon（WASM），进程里懒加载一次。不用 worker——打包后 worker 入口找不到，与旧内核同样在本进程里做 */
-let photon: Promise<ImageProcessor> | undefined;
-const lazyPhoton: ImageProcessor = {
-  async prepare(bytes, mimeType, limits) {
-    photon ??= createNodePhotonImages({ worker: false });
-    return (await photon).prepare(bytes, mimeType, limits);
-  },
-};
 
 /** bash 子进程里留给智能体自己查的会话事实（名字沿用旧内核，用户的技能与验收脚本靠 PI_SESSION_ID 认人） */
 const SESSION_ENV_KEYS = ["PI_SESSION_ID", "PI_SESSION_FILE", "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL", "PI_PACKAGE_DIR"] as const;
@@ -292,7 +283,7 @@ export function builtinTools(cwd: string, options: BuiltinToolOptions, scope: Du
       },
     }) as unknown as ToolRegistration,
     edit: createEditTool() as unknown as ToolRegistration,
-    read: createReadTool(options.autoResizeImages ? { images: lazyPhoton } : {}) as unknown as ToolRegistration,
+    read: createReadTool(options.autoResizeImages ? { images: imageProcessor } : {}) as unknown as ToolRegistration,
     write: createWriteTool() as unknown as ToolRegistration,
   };
   return ENABLED_BUILTIN_TOOLS.map((name) => wrapBuiltin(all[name], env, scope, cwd, platform));

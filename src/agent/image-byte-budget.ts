@@ -24,10 +24,10 @@
  */
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import type { ContextEvent, SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { BookEntry, ContextMessage } from "./agent-shapes.ts";
 
 /** context 事件给到的消息形状（AgentMessage 的结构化子集，经 pi 的 structuredClone 到手） */
-export type ContextMessage = ContextEvent["messages"][number];
+export type { ContextMessage };
 
 /** 触发线与目标线。触发 = 估算请求 > 24MB（Anthropic 32MB 上限留 8MB 给 system + tools +
  * JSON 结构）；换到 16MB 以下（给当前轮的新图与回复留余量）。 */
@@ -68,7 +68,7 @@ function coveredByWatermark(index: number, ts: number | null, mark: ImageBudgetM
  * 读本子（用 `getBranch()`：文件序会把废枝数进来，回退后必然错位）。
  * 水位取**最后一条**预算 entry；引用逐条合并（同 hash 后写覆盖先写——引用稳定，覆盖无害）。
  */
-export function readImageBudgetBook(branch: readonly SessionEntry[]): ImageBudgetBook {
+export function readImageBudgetBook(branch: readonly BookEntry[]): ImageBudgetBook {
   const book: ImageBudgetBook = { mark: null, refs: new Map() };
   for (const entry of branch) {
     if (entry.type !== "custom") continue;

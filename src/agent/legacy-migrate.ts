@@ -23,7 +23,7 @@
  */
 import type { Message, Tool, UserMessage } from "@earendil-works/pi-ai";
 import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { BookEntry } from "./agent-shapes.ts";
 import { createReadStream } from "node:fs";
 import { branchEntries, parsePiBook, PI_BOOK_VERSION, type PiBookEntry } from "../main/session/pi-book.ts";
 import { readImageBudgetBook } from "./image-byte-budget.ts";
@@ -285,8 +285,8 @@ class LegacyPlanner {
 
   /** 逐请求注入的跨轮账（旧内核开轮时读本子的同两个函数，同一条分支上的 custom 条目） */
   wire(legacyUsage: LegacyUsage): LegacyWireSeed {
-    // 本子 entry 与 pi 的 SessionEntry 同形（pi 写的 JSONL 行），旧内核读账的函数直接认
-    const branch = this.customs as unknown as SessionEntry[];
+    // 本子 entry 与 pi 的 BookEntry 同形（pi 写的 JSONL 行），旧内核读账的函数直接认
+    const branch = this.customs as unknown as BookEntry[];
     const budget = readImageBudgetBook(branch);
     return {
       imageMark: budget.mark === null ? null : { cut: budget.mark.cut, cutIndex: budget.mark.cutIndex },
