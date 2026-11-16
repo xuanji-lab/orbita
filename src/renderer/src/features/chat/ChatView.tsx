@@ -4653,7 +4653,7 @@ function ProcessEventList(props: {
                   toolCallSummaryForRow(first.toolName, first.input, props.skills) ??
                   "");
             const content = [
-              label + (event.calls.length > 1 ? ` ${r.more(event.calls.length)}` : ""),
+              (event.caption ?? label) + (event.calls.length > 1 ? ` ${r.more(event.calls.length)}` : ""),
               ...(event.failed > 0 ? [r.failed(event.failed)] : []),
             ]
               .filter((part) => part.trim() !== "")

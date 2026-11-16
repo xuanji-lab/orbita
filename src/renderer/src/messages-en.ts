@@ -2294,20 +2294,15 @@ export const en = {
     goAnswer: "Answer ›",
     childDone: (peer: string) => `${peer} finished`,
     childFailed: (peer: string) => `${peer} failed`,
-    notSpokenRunning: "running · hasn't spoken yet",
     /** 主智能体暂停了这件活：子会话面板与「派出去的活」的第二行 */
     pausedLine: "On hold — say the word and it picks up again",
-    notSpoken: "hasn't spoken yet",
     latestQuestion: (text: string) => `Q: ${text}`,
     latestProgress: (text: string) => `Progress: ${text}`,
     latestDone: "Done",
     latestFailed: "Failed",
-    latestReply: (text: string) => `Replied: ${text}`,
     latestDoneWith: (text: string) => `Done: ${text}`,
     latestFailedWith: (text: string) => `Failed: ${text}`,
     latestQuestionBare: "has a question for you",
-    latestProgressBare: "sent an update",
-    latestReplyBare: "got a reply",
     /** 在跑的活那一句的最后一级：不带参数的动作（work-line.ts） */
     activity: {
       command: "running a command",
@@ -2358,6 +2353,7 @@ export const en = {
     workingCount: (count: number) => `${count} working`,
     failedCount: (count: number) => `${count} not done`,
     doneCount: (count: number) => `${count} done`,
+    parkedCount: (count: number) => `${count} parked`,
     inboxFoot: "Click a row to see that sub-session's full exchange with the parent",
     openAsMainTip: "Switch the main pane to this sub-session",
     gone: "This sub-session is gone.",

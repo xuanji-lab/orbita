@@ -205,7 +205,8 @@ export function SubSessionsPanel(props: {
     failed: t.subSessions.failedCount,
     working: t.subSessions.workingCount,
   });
-  const { open, done } = splitDoneRows(rows);
+  const { open, done, parked } = splitDoneRows(rows);
+  const folded = [...done, ...parked];
   const renderRow = (row: (typeof rows)[number]) => (
     <SubSessionRow
       key={row.meta.id}
@@ -242,18 +243,20 @@ export function SubSessionsPanel(props: {
       ) : (
         <div className="inbox-rows">
           {open.map(renderRow)}
-          {done.length > 0 && (
+          {folded.length > 0 && (
             <button type="button" className="inbox-done-fold" aria-expanded={showDone} onClick={() => setShowDone((value) => !value)}>
               <span className="inbox-row-mark done">
                 <Icon name="check" size={12} strokeWidth={2} />
               </span>
-              <span className="inbox-done-label">{t.subSessions.doneCount(done.length)}</span>
+              <span className="inbox-done-label">
+                {[...(done.length > 0 ? [t.subSessions.doneCount(done.length)] : []), ...(parked.length > 0 ? [t.subSessions.parkedCount(parked.length)] : [])].join(" · ")}
+              </span>
               <span className="row-trailing inbox-done-chev" aria-hidden="true">
                 <Icon name={showDone ? "chevron-down" : "chevron-right"} size={12} strokeWidth={1.8} />
               </span>
             </button>
           )}
-          {showDone && done.map(renderRow)}
+          {showDone && folded.map(renderRow)}
           <p className="inbox-foot">{t.subSessions.inboxFoot}</p>
         </div>
       )}
@@ -287,12 +290,12 @@ function SubSessionRow(props: {
         </span>
         <span className="inbox-row-item">
           <span className="inbox-row-l1">
-            <b className={`inbox-row-title${mark === "done" ? " done" : ""}`}>
+            <b className={`inbox-row-title${mark === "done" || mark === null ? " done" : ""}`}>
               {props.meta.title === "" ? t.subSessions.untitled : displaySubSessionTitle(props.meta.title)}
             </b>
             <span className="inbox-row-ago row-trailing">{relativeTime(props.lastAt, t)}</span>
           </span>
-          <span className="inbox-row-l2">{props.latest}</span>
+          {props.latest !== "" && <span className="inbox-row-l2">{props.latest}</span>}
         </span>
       </button>
       {props.onContinue !== undefined && (

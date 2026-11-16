@@ -26,6 +26,11 @@ export type ProcessEvent =
       calls: ToolCallUnit[];
       /** 点开这一行时原样画的步（含紧挨着的思考），沿用现有的工具行展开 */
       steps: ProcessStep[];
+      /**
+       * 跑命令那一行默认显示的说明：紧挨在它前面「说」的那句（bash 工具没有自带的说明字段）；命令原文点开才看。
+       * 没有就 null，照旧显示命令。
+       */
+      caption?: string;
       failed: number;
       time: number;
     }
@@ -140,7 +145,25 @@ export function processEvents(steps: readonly ProcessStep[], src: EventSources):
   // 最后几段思考后面没有工具了：挂到上一行工具上，没有就不出行（思考不单独占一行）
   const tail = lastTools();
   if (pendingThinking.length > 0 && tail !== null) tail.steps.push(...pendingThinking);
-  return events;
+  return captionCommands(events);
+}
+
+/**
+ * 跑命令那一行默认说「为什么跑」，不说命令原文（2026-11-17 主会话看图：bash 那几行是整条命令带绝对路径）：
+ * 紧挨在它前面「说」的那句并进这一行当说明，那一行「说」不再单出；命令原文在点开之后。
+ */
+function captionCommands(events: ProcessEvent[]): ProcessEvent[] {
+  const out: ProcessEvent[] = [];
+  for (const event of events) {
+    const prev = out.at(-1);
+    if (event.kind === "tools" && COMMAND_KEYS.has(event.toolKey) && prev?.kind === "say") {
+      out.pop();
+      out.push({ ...event, caption: prev.text, time: prev.time });
+      continue;
+    }
+    out.push(event);
+  }
+  return out;
 }
 
 /** 按种类数出来的摘要的原料（只数发生了的） */

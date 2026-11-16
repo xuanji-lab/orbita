@@ -237,39 +237,30 @@
 .tp-plan li[data-active] .tp-text {
   font-weight: var(--weight-semibold);
 }
-/* 在等的步：行尾写等什么。等你 = 橙点 + 正文色字；等机器 / 等别的 = 灰字。不占「正在做」，不加粗 */
+/* 在等的步：标题下面独占一行写等什么，不截断，最多两行（2026-11-17 改：挤在标题右边会截断、还把标题挤成两行）。
+   等你 = 橙点 + 正文色字（浅色主题下橙字对比度不够）；等机器 / 等别的 = 灰字。不占「正在做」，不加粗 */
 .tp-wait {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1-5);
-  margin-left: auto;
-  flex: none;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
   font-size: var(--font-size-sm);
   line-height: var(--line-height-ui);
   color: var(--color-text-tertiary);
-}
-/* 等什么写长了也不挤标题：最多占一半宽，全文在悬停里 */
-.tp-wait {
-  max-width: 50%;
-  min-width: 0;
-}
-.tp-wait-text {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.tp-dot {
-  flex: none;
 }
 .tp-wait.you {
   color: var(--color-text-primary);
 }
 .tp-dot {
+  display: inline-block;
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--color-text-tertiary);
+}
+.tp-wait .tp-dot {
+  margin-right: var(--space-1-5);
+  vertical-align: middle;
 }
 .tp-dot.you {
   background: var(--color-warning);
