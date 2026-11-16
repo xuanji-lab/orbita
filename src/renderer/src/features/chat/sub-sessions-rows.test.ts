@@ -8,7 +8,10 @@ import {
   latestChannelLine,
   subSessionLine,
   sortSubSessionRows,
-  subSessionBarFill,
+  displaySubSessionTitle,
+  splitDoneRows,
+  subSessionHeadline,
+  subSessionMark,
   subSessionRowStatus,
   subSessionStatusOf,
   waitingSummary,
@@ -91,7 +94,7 @@ describe("subSessionStatusOf", () => {
     const crashed: SubSessionEngineSlots = { ...engine([]), interruptedOf: (id) => id === "c1" };
     strictEqual(subSessionStatusOf("c1", "running", crashed), "interrupted");
     strictEqual(subSessionStatusOf("c1", "stopped", crashed), "stopped");
-    strictEqual(subSessionBarFill("interrupted"), "waiting");
+    strictEqual(subSessionMark("interrupted"), "ask");
     const rows = sortSubSessionRows([
       { status: "running" as const, lastAt: 9 },
       { status: "interrupted" as const, lastAt: 1 },
@@ -153,21 +156,54 @@ describe("sortSubSessionRows", () => {
   });
 });
 
-describe("subSessionBarFill（行首状态饼亮几节）", () => {
-  it("running = 1/3 蓝（running）；waiting 与 interrupted 同为 2/3 橙（waiting）", () => {
-    strictEqual(subSessionBarFill("running"), "running");
-    strictEqual(subSessionBarFill("waiting"), "waiting");
-    strictEqual(subSessionBarFill("interrupted"), "waiting");
+describe("subSessionMark（行首记号，2026-11-17 减色）", () => {
+  it("只有要你出手的是橙点：在问你、被打断、没做成", () => {
+    strictEqual(subSessionMark("waiting"), "ask");
+    strictEqual(subSessionMark("interrupted"), "ask");
+    strictEqual(subSessionMark("failed"), "ask");
   });
 
-  it("done = 3/3 绿、failed = 3/3 红", () => {
-    strictEqual(subSessionBarFill("done"), "done");
-    strictEqual(subSessionBarFill("failed"), "failed");
+  it("在做 = 灰点，做完 = 灰勾，终止的 / 还没开口的不标", () => {
+    strictEqual(subSessionMark("running"), "work");
+    strictEqual(subSessionMark("done"), "done");
+    strictEqual(subSessionMark("stopped"), null);
+    strictEqual(subSessionMark("idle"), null);
   });
+});
 
-  it("stopped / idle 不亮（undefined = 不渲染状态饼）", () => {
-    strictEqual(subSessionBarFill("stopped"), undefined);
-    strictEqual(subSessionBarFill("idle"), undefined);
+describe("splitDoneRows / subSessionHeadline（做完的折起来，头上一句灰字）", () => {
+  const rows = sortSubSessionRows([
+    { status: "done" as const, lastAt: 9 },
+    { status: "running" as const, lastAt: 5 },
+    { status: "waiting" as const, lastAt: 1 },
+    { status: "failed" as const, lastAt: 3 },
+    { status: "done" as const, lastAt: 2 },
+  ]);
+  it("要你看的与在做的留着（排序不变），做完的另放", () => {
+    const { open, done } = splitDoneRows(rows);
+    deepStrictEqual(open.map((row) => row.status), ["waiting", "running", "failed"]);
+    deepStrictEqual(done.map((row) => row.lastAt), [9, 2]);
+  });
+  it("「2 件等你 · 1 件在做」：没做成也算等你；没有的种类不出", () => {
+    const words = { interrupted: (n: number) => `${n} 个被打断`, waiting: (n: number) => `${n} 件等你`, working: (n: number) => `${n} 件在做` };
+    strictEqual(subSessionHeadline(rows, words), "2 件等你 · 1 件在做");
+    strictEqual(subSessionHeadline([{ status: "done" }], words), "");
+  });
+});
+
+describe("displaySubSessionTitle（剥英文代号前缀，只当保险）", () => {
+  it("小写代号 + 空白 / 冒号 + 中文：剥掉代号", () => {
+    strictEqual(displaySubSessionTitle("ss-b-storybench 叙事类比数据集"), "叙事类比数据集");
+    strictEqual(displaySubSessionTitle("e6-accept：新内核验收"), "新内核验收");
+    strictEqual(displaySubSessionTitle("ss_a_acl 会议论文"), "会议论文");
+  });
+  it("真以英文开头的名字原样留着", () => {
+    strictEqual(displaySubSessionTitle("UrbanGPT 复现"), "UrbanGPT 复现");
+    strictEqual(displaySubSessionTitle("S1-S3 验收"), "S1-S3 验收");
+    strictEqual(displaySubSessionTitle("Windows 新旧对比"), "Windows 新旧对比");
+    strictEqual(displaySubSessionTitle("foo-bar baz"), "foo-bar baz");
+    strictEqual(displaySubSessionTitle("dsh-plugin"), "dsh-plugin");
+    strictEqual(displaySubSessionTitle("叙事类比数据集"), "叙事类比数据集");
   });
 });
 

@@ -89,25 +89,59 @@ export function sortSubSessionRows<T extends { status: SubSessionRowStatus; last
 }
 
 /**
- * 行首状态饼的档位（shell/StatusPie.tsx 的 `.status-pie`，与侧栏 / 铃铛清单同一个）：
- * running = 1/3 蓝、waiting / interrupted = 2/3 橙、done = 3/3 绿、failed = 3/3 红；
- * stopped / idle 不亮——「没什么要你做的」是整个东西退场，不是留一根灰杠。
- * stopped 是用户的裁决不是故障，与 idle 同槽。
+ * 行首记号（2026-11-17 减色，用户：「红蓝绿黄灯可以保留，在左侧栏是很直观的，但在子会话的 panel 里有点烦人」）：
+ * 只有要你出手的（在问你、被打断等你点继续、没做成）是橙点；在做 = 灰点；做完 = 灰勾；终止的 / 还没开口的不标。
+ * 侧栏的四色饼不动——这里不再用 StatusPie。
  */
-export function subSessionBarFill(status: SubSessionRowStatus): "running" | "waiting" | "done" | "failed" | undefined {
+export type SubSessionMark = "ask" | "work" | "done" | null;
+
+export function subSessionMark(status: SubSessionRowStatus): SubSessionMark {
   switch (status) {
-    case "running":
-      return "running";
     case "waiting":
     case "interrupted":
-      return "waiting";
+    case "failed":
+      return "ask";
+    case "running":
+      return "work";
     case "done":
       return "done";
-    case "failed":
-      return "failed";
     default:
-      return undefined;
+      return null;
   }
+}
+
+/**
+ * 默认只列要你看的和在做的；做完的折成末尾一行「做完 N 件」（点开才列）。没做成的留着，直到主会话处理过。
+ * 入参已按 sortSubSessionRows 排好，两段各自保持原顺序。
+ */
+export function splitDoneRows<T extends { status: SubSessionRowStatus }>(rows: readonly T[]): { open: T[]; done: T[] } {
+  const open: T[] = [];
+  const done: T[] = [];
+  for (const row of rows) (row.status === "done" ? done : open).push(row);
+  return { open, done };
+}
+
+/** 头上那句：「2 件等你 · 3 件在做」（灰字，不上色——行前的橙点已经够了） */
+export function subSessionHeadline(
+  rows: readonly { status: SubSessionRowStatus }[],
+  words: { interrupted: (count: number) => string; waiting: (count: number) => string; working: (count: number) => string },
+): string {
+  const waiting = rows.filter((row) => row.status === "waiting" || row.status === "interrupted" || row.status === "failed").length;
+  const interrupted = rows.filter((row) => row.status === "interrupted").length;
+  const working = rows.filter((row) => row.status === "running").length;
+  return [waitingSummary(waiting, interrupted, words), ...(working > 0 ? [words.working(working)] : [])].filter((part) => part !== "").join(" · ");
+}
+
+/**
+ * 子会话名字开头的英文代号前缀（「ss-b-storybench 叙事类比数据集」）显示时剥掉——只当保险：代号应在派活时
+ * 用中文起名解决（路线图 2026-11-16）。只剥「小写字母开头、带连字符或下划线的一个词 + 空白或冒号」，而且后面
+ * 得有中文；「UrbanGPT 复现」「S1-S3 验收」「Windows 新旧对比」「foo-bar baz」都原样留着。
+ */
+export function displaySubSessionTitle(title: string): string {
+  const match = /^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)+[\s:：·]+/.exec(title);
+  if (match === null) return title;
+  const rest = title.slice(match[0].length).trim();
+  return /[\u3400-\u9fff]/.test(rest) ? rest : title;
 }
 
 /**
