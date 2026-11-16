@@ -165,7 +165,7 @@ describe("orbitaSystemSegments —— 常驻主智能体一段", () => {
     assert.equal(joinSystemPrompt(orbitaSystemSegments(input({ mainAgent: false }))), joinSystemPrompt(plain));
     // 用户 11-17 的修正：能撤回的猜了就做，撤不回 / 花钱的拿不准才问；DynaFlow 三条
     const text = main[at]?.text ?? "";
-    for (const phrase of ["reversible", "irreversible or costly", "unverified conclusion", "do not tell it the answer", "upstream output itself", "read_task", "pass capabilities", "[\"none\"]", "first person and in plain words", "这件活", "do not quote status codes", "do not\n  name the model"]) {
+    for (const phrase of ["reversible", "irreversible or costly", "unverified conclusion", "do not tell it the answer", "upstream output itself", "read_task", "Pass capabilities", "pass exactly that", "[\"none\"]", "first person and in plain words", "这件活", "do not quote status codes", "do not\n  name the model"]) {
       assert.ok(text.includes(phrase), phrase);
     }
   });

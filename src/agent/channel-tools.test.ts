@@ -69,6 +69,13 @@ describe("主智能体的通道工具", () => {
     assert.match(delegate.description, /Leave model and thinkingLevel out/);
     assert.match(toolByName(setup("root").tools, "delegate").description, /Before delegating, call model_costs/);
   });
+  test("没给能力集：回执也明说它全带了（主智能体不能对用户说它缺了什么）", async () => {
+    const { tools, fake } = setup("root");
+    const pending = toolByName(tools, "delegate").execute("c", { title: "t", task: "d" }, undefined, undefined, undefined as never);
+    fake.answer(fake.requestIdAt(0), { ok: true, childId: "c", title: "t", card: { childId: "c", title: "t", modelId: "m", thinkingLevel: "high", workbench: "/w" } });
+    const result = await pending;
+    assert.match(result.content.map((part) => (part.type === "text" ? part.text : "")).join(""), /It has all of your tools \(no capabilities were given\)\./);
+  });
 });
 
 describe("model_costs", () => {

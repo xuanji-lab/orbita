@@ -69,7 +69,8 @@ const CAPABILITIES_PARAM_DESCRIPTION =
 
 /** delegate 回执里的一句：这件活带了什么（全带不说） */
 function describeGiven(capabilities: readonly string[] | undefined): string {
-  if (capabilities === undefined) return "";
+  // 全带也说一句：主智能体拿到回执就知道它没收窄（真型号下它没传 capabilities 却对用户说「没给它浏览器」）
+  if (capabilities === undefined) return "It has all of your tools (no capabilities were given). ";
   if (isChatOnly(capabilities)) return "It is chat only (no tools); its final answer comes back to you as done. ";
   return capabilities.length === 0
     ? "It has the basic tools only. "
@@ -88,7 +89,7 @@ const DELEGATE_MODEL_ADVICE =
 /** 主智能体的版本：型号是用户定的，不点名就跟着它 */
 const DELEGATE_MODEL_MAIN =
   "Leave model and thinkingLevel out: the work then runs on the model and thinking level the user set for you. " +
-  "Pass them only when the user asks for a specific model.";
+  "Pass them only when the user asks for a specific model. Do pass capabilities: without it the work gets everything you have.";
 
 function delegateTool(broker: RequestBroker, sessionId: string, mainAgent = false): ToolDefinition {
   return {
