@@ -892,7 +892,10 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
   /** 一条子会话消息的信封全文：子标题从 sessionsRef 真值查；用户在收件箱里代父回复过的话拼在后面（父模型上下文里没有） */
   const envelopeOf = useCallback(
     async (parentId: string, item: Extract<QueuedMessage, { kind: "channel" }>): Promise<string> => {
-      const childTitle = sessionsRef.current.find((meta) => meta.id === item.childId)?.title ?? "";
+      // 刚派出去就回话的活（纯聊天的活几秒就交回）此刻常不在会话列表里——列表要等下一次刷新。
+      // 查不到就去盘上读它的 meta（主进程派出时已经落盘，标题就在里面），否则信封标题会是 Untitled
+      const listed = sessionsRef.current.find((meta) => meta.id === item.childId)?.title;
+      const childTitle = listed ?? (await api.session.meta(item.childId).catch(() => null))?.title ?? "";
       // 子工作台随事件携带（主进程派生），每条回报都重新告知模型——就算 delegate 回执被压缩掉，路径也会随这条信封回来
       const envelope = composeChannelPrompt(item.message, { id: item.childId, title: childTitle, workbench: item.childWorkbench });
       // 读账本失败就照原样投递，不拦这一轮
