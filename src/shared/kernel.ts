@@ -45,7 +45,7 @@ export type KernelTurnCommand = Extract<AgentCommand, { type: "submit" }>;
  * 接着跑上次被中断的那一轮（durable 的 continue）：开轮装配要的字段与 submit 相同，只是没有新的用户消息。
  * 旧内核没有这件事（它的进程一死，在跑的轮就没了），所以只在这里、不进 AgentCommand。
  */
-export type KernelContinueCommand = Omit<KernelTurnCommand, "type" | "text" | "images" | "files" | "pasted" | "intent" | "backfill"> & {
+export type KernelContinueCommand = Omit<KernelTurnCommand, "type" | "text" | "images" | "files" | "pasted" | "intent" | "backfill" | "preface"> & {
   type: "continueRun";
 };
 

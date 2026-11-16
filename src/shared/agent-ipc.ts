@@ -57,6 +57,14 @@ export const ipcChannels = {
   agentAbort: "agent:abort",
   /** 把排队中的某一条**立即**发出：打断当前轮（含正在跑的工具调用），它成为新一轮 */
   agentInterrupt: "agent:interrupt",
+  /**
+   * 用户的话插进这条会话**正在跑**的一轮（durable 的 inbox steer：当前工具轮结束后、下一次请求前放进来，不停这一轮）。
+   * 载荷 `SteerAgentInput`，回 void。只给「子会话消息开的那一轮」用（用户的话优先、不等它跑完）。这句话同时留在 renderer
+   * 的队列里（排队条照常显示、「立即发送」照常可点：停掉重开，内核先撤回还没放进去的插话，不会发两遍）；结局走 agent:event
+   * 的 `userSteer`：placed = 已放进上下文（队列里摘掉，转录里出现这句话）；bounced = 到达时这一轮刚结束，没插进去
+   * （队列里那条退回普通排队，等空闲照常发）。
+   */
+  agentSteer: "agent:steer",
   /** 手动压缩上下文（输入框 `/compact`）。结果走 agent:event 的 compaction 链 */
   agentCompact: "agent:compact",
   /** 会话内改思考档：下一轮生效（同 setModel 的语义）。只落 meta，不经 agent 进程 */
@@ -250,6 +258,12 @@ export const ipcChannels = {
   channelStop: "channel:stop",
   /** 主进程 → renderer 推送（`ChannelEvent`）：新消息落账或通道状态变化 */
   channelEvent: "channel:event",
+  /**
+   * 还没投给父模型的子→父消息（完成 / 提问 / 失败；进度不投）：无载荷，回 `PendingChannelDelivery[]`（全部父会话）。
+   * 主进程落盘（channels/<父>/pending.json），父会话的转录落下这条消息的通道标记时出账——应用退出 / 崩溃 / 窗口重载时
+   * 排在 renderer 队列里的消息不丢，renderer 启动时拉一次重新入队。
+   */
+  channelPending: "channel:pending",
   /** 文件面板（契约在 `files.ts`）：这条会话的根清单（工作台 / 工作区 / 附加目录），主进程算 */
   fsRoots: "fs:roots",
   /** 列一层目录。root 必须是 fs:roots 回过的，dir 必须在 root 之内，否则拒绝——renderer 不是通用文件浏览器 */
@@ -704,6 +718,27 @@ export interface SubmitAgentInput extends AgentTurnContext {
   files?: PromptFileRef[];
   /** 随消息发的粘贴文本块（全文、永不截断），按加入顺序；agent 进程组装进正文之后 */
   pasted?: string[];
+  /**
+   * 排在这一句**前面**、同一轮一起交给模型的子会话信封（`composeChannelPrompt` 组好的全文，按到达顺序）。
+   * 每封各自是一条 user 消息（各落一条通道标记，「每条标记顶替一条 user 消息」的不变量不破），但只开一轮、只花一次模型调用：
+   * 几条子会话消息挨着到合成一轮；用户发话时排着的子会话消息作为这一轮的上下文一起带上。缺席 / 空 = 没有。
+   */
+  preface?: string[];
+}
+
+/** `agent:steer` 的载荷：用户的话插进正在跑的那一轮。id = renderer 队列里这条的 id（结局事件按它对回去） */
+export interface SteerAgentInput {
+  sessionId: string;
+  id: string;
+  text: string;
+}
+
+/** `channel:pending` 的一项：一条还没投给父模型的子→父消息（与 `ChannelEvent` 的 message 同形，renderer 照常入队） */
+export interface PendingChannelDelivery {
+  parentId: string;
+  childId: string;
+  childWorkbench: string;
+  message: ChannelMessage;
 }
 
 /** 接着跑上次被中断的那一轮（renderer → 主进程，新内核独有）：不带新消息，开工上下文照常全套 */
@@ -816,6 +851,8 @@ export type AgentCommand =
       files?: SentFileRef[];
       /** 随消息发的粘贴文本块，语义见 SubmitAgentInput.pasted */
       pasted?: string[];
+      /** 排在这一句前面、同一轮交给模型的子会话信封，语义见 SubmitAgentInput.preface */
+      preface?: string[];
       cwd: string;
       /**
        * 这条会话属于哪个工作区；null = 不属于任何工作区。
@@ -999,6 +1036,8 @@ export type AgentCommand =
       files?: SentFileRef[];
       /** 随消息发的粘贴文本块，语义同 submit */
       pasted?: string[];
+      /** 同 submit 的 preface（「立即发送」时排着的子会话信封一起带上） */
+      preface?: string[];
       cwd: string;
       /** 这条会话属于哪个工作区，语义同 submit（MCP 连接按它分片） */
       workspaceId: string | null;
@@ -1057,6 +1096,11 @@ export type AgentCommand =
       sessionId: string;
       text: string;
       delivery?: ChannelDelivery;
+      /**
+       * 用户在自己的会话里插话（agent:steer）时带：renderer 队列里那条的 id。缺席 = 父→子通道投递。
+       * 有它时结局回 `userSteer` 事件（放进去 / 退回），退回交给 renderer，不走通道的「补开一轮」。
+       */
+      userSteerId?: string;
     }
   /**
    * 手动压缩。**结果不当场返回**：压缩是一次真实的 LLM 调用，
@@ -1354,6 +1398,11 @@ export interface ContextRulesInventory {
 
 export type AgentEvent =
   | { type: "ready" }
+  /**
+   * 用户插话（agent:steer）的结局：placed = 已放进上下文；bounced = 到达时那一轮刚结束（或这一轮被停、插话被撤回），
+   * 没插进去——renderer 队列里那条退回普通排队，等空闲照常发（不丢、不重）。
+   */
+  | { type: "userSteer"; sessionId: string; id: string; outcome: "placed" | "bounced" }
   | { type: "builtins"; providers: BuiltinProvider[] }
   /**
    * 新内核：发消息前在把这条旧会话迁进库（running），迁完（done，成功失败都发）。只有新内核发；

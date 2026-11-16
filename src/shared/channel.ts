@@ -99,6 +99,15 @@ export interface ChannelSummary extends ChannelKey {
   hasExchange: boolean;
 }
 
+/**
+ * 子→父的这条消息要不要让父模型开口（2026-11-16 用户：「子会话是主会话的一个工具……我们需要的是工具的结果」）：
+ * 完成 / 提问 / 失败要（父得处理结果、回答问题、善后）；进度不要——只入账（通道账本 + 状态广播），
+ * 子会话面板与状态那一句从账本读，不进父模型的上下文、不花一次模型调用。
+ */
+export function channelOpensTurn(kind: ChannelMessageKind): boolean {
+  return kind === "done" || kind === "question" || kind === "failed";
+}
+
 export function isChannelSide(value: unknown): value is ChannelSide {
   return value === "parent" || value === "child";
 }
