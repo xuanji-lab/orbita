@@ -70,6 +70,8 @@ interface Rig {
   sessions: KernelSessions;
   events: AgentEvent[];
   settled: { sessionId: string; result: KernelTurnResult }[];
+  /** 轮末预先压缩前报的「这一轮答完」（deps.answered），记下当时事件流的长度 */
+  answered: { sessionId: string; at: number }[];
   storages: Map<string, MemoryStorage> | null;
   pool: KernelPool;
   /** 等到某个事件出现（最多 5 秒） */
@@ -84,6 +86,7 @@ async function rig(onEvent?: (event: AgentEvent, rig: Rig) => void, storages: Ma
   const dir = libraryDir ?? (await tempDir());
   const events: AgentEvent[] = [];
   const settled: Rig["settled"] = [];
+  const answered: Rig["answered"] = [];
   const waiters: { match: (event: AgentEvent) => boolean; resolve: (event: AgentEvent) => void }[] = [];
   let self: Rig | null = null;
   const send = (event: AgentEvent): void => {
@@ -129,12 +132,14 @@ async function rig(onEvent?: (event: AgentEvent, rig: Rig) => void, storages: Ma
     runtime,
     intentConfirm: new IntentConfirmWaiter(send),
     settled: (sessionId, result) => settled.push({ sessionId, result }),
+    answered: (sessionId) => answered.push({ sessionId, at: events.length }),
     resolveModel: async () => MODEL,
   });
   self = {
     sessions,
     events,
     settled,
+    answered,
     storages,
     pool,
     broker: runtime.broker,
@@ -1120,6 +1125,10 @@ describe("KernelSessions：轮末预先压缩（下一次发送不被压缩挡�
     await fill(r, cwd);
     await r.until((event) => r.events.filter(idle()).length >= 3 && idle()(event));
     assert.deepEqual(phaseEvents(r).slice(-3), ["turn", "compaction(bg)", "idle"]);
+    // 后台压缩之前先报「这一轮答完」（主进程据此清「在跑」标记：压缩期间崩溃，重开后不是「上次被中断」）
+    const bgAt = r.events.findIndex((event) => event.type === "phase" && event.background === true);
+    assert.equal(r.answered.length, 1);
+    assert.ok(r.answered[0] !== undefined && r.answered[0].sessionId === "s1" && r.answered[0].at <= bgAt);
     const record = await r.until((event) => event.type === "compaction");
     assert.ok(record.type === "compaction" && /预先压缩的摘要/.test(record.record.summary));
     const last = r.settled.at(-1)?.result;
@@ -1148,7 +1157,7 @@ describe("KernelSessions：轮末预先压缩（下一次发送不被压缩挡�
     await r.sessions.handle("s1", submit(cwd, { text: chunk("一") }));
     await r.until(idle());
     assert.deepEqual(phaseEvents(r), ["turn", "idle"]);
-    assert.equal(faux.state.callCount > 0, true);
+    assert.deepEqual(r.answered, [], "不预先压就不提前报答完（照常由 settled 清标记）");
   });
 
   it("派出去的活（子会话，库根是父）：越线也不预先压", async () => {

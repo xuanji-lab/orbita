@@ -116,6 +116,7 @@ async function init(dir: string): Promise<void> {
     runtime: turnRuntime,
     intentConfirm,
     settled: (sessionId, result) => post({ type: "turnSettled", sessionId, result }),
+    answered: (sessionId, result) => post({ type: "turnAnswered", sessionId, result }),
     bounceSteer: (sessionId, text, delivery) => post({ type: "steerBounced", sessionId, text, delivery }),
     ...(typeof exposedGc === "function" ? { collectGarbage: () => exposedGc?.() } : {}),
     // 换模型的校验与旧内核 setLedgerModel 同一条路径：一次性模型目录注册 + 解析

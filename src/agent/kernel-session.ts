@@ -89,6 +89,8 @@ export interface KernelSessionsDeps {
   intentConfirm: IntentConfirmWaiter;
   /** 一轮落定（phase idle 之前到）：主进程据此清「在跑」标记、记迁移失败 */
   settled: (sessionId: string, result: KernelTurnResult) => void;
+  /** 这一轮答完、要在轮末后台预先压缩（settled 要等压完才到）：主进程先清「在跑」标记（见 KernelMessage turnAnswered） */
+  answered?: (sessionId: string, result: KernelTurnResult) => void;
   /**
    * 父→子插话到达时子刚收尾（没有在跑的轮可插）：原文退回主进程，由它当「子空闲时的投递」开一轮（不丢消息）。
    * 缺席时按旧内核报 failed（测试夹具与第三步的形状）。
@@ -949,6 +951,8 @@ export class KernelSessions {
     });
     if (!due) return;
     const sessionId = command.sessionId;
+    // 先让主进程把这一轮记成答完：后台压缩期间崩溃，重开后不是「上次被中断」
+    this.deps.answered?.(sessionId, result);
     this.ahead.set(sessionId, { shown: false });
     this.send({ type: "phase", sessionId, phase: "compaction", background: true });
     try {
