@@ -137,7 +137,62 @@ export function buildReviewRows(
       });
     }
   }
-  return rows;
+  return mergeChainedRows(rows);
+}
+
+/**
+ * 两行是不是「同一处的连续两次改动」：后一行的旧文正好等于前一行的新文。
+ *
+ * 为什么必须合：同一句先 A→B 再 B→C 时，两条修订都还待裁决，用户看到的是
+ * 「A→B」「B→C」两条——可 B 这个中间态从没被接受过，两条并列在逻辑上是自相矛盾
+ * （评审 P2）。合起来才是用户心里那件事：把 A 改成 C。
+ */
+function chains(head: DocxChangeRow, next: DocxChangeRow): boolean {
+  return (
+    head.kind === "replace" &&
+    next.kind === "replace" &&
+    head.blockId !== null &&
+    head.blockId === next.blockId &&
+    head.author === next.author &&
+    head.after !== "" &&
+    next.before !== "" &&
+    head.after === next.before &&
+    // A→B→A 这种「又改回去」不并成 A→A（那样一行什么也没说，还挡着用户逐条撤）
+    head.before !== next.after
+  );
+}
+
+/**
+ * 链式合并：**裁决单位仍是 revisionIds**（这里只是把几组的 id 并起来），一行从最早的
+ * 旧文到最新的新文。
+ *
+ * 只并**连续相邻**的行：中间夹了别的改动（另一个块、另一处）就断开——那条链已经
+ * 不是「同一处改了两次」。已经裁决掉的那半条不会在这里：`buildReviewRows` 先按
+ * 「文档里还在的 id」过滤，接受过的组整行消失，剩下的那条自然不与他人相链。
+ *
+ * 合并后接受 = 整段落到最后的新文；拒绝 = 回到最早的旧文（中间态 B 的插入与删除
+ * 一起被撤，净效果就是 A）。
+ */
+export function mergeChainedRows(rows: readonly DocxChangeRow[]): DocxChangeRow[] {
+  const out: DocxChangeRow[] = [];
+  for (const row of rows) {
+    const head = out.length === 0 ? undefined : out[out.length - 1];
+    if (head === undefined || !chains(head, row)) {
+      out.push({ ...row, revisionIds: [...row.revisionIds] });
+      continue;
+    }
+    const revisionIds = [...head.revisionIds];
+    for (const id of row.revisionIds) if (!revisionIds.includes(id)) revisionIds.push(id);
+    out[out.length - 1] = {
+      ...head,
+      key: `${head.key}+${row.key}`,
+      revisionIds,
+      after: row.after,
+      ours: head.ours && row.ours,
+      reanchored: head.reanchored || row.reanchored,
+    };
+  }
+  return out;
 }
 
 /**

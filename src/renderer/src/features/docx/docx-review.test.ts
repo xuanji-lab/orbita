@@ -11,6 +11,8 @@ import assert from "node:assert/strict";
 import type { FolioReviewChange } from "@stll/folio-core/ai-edits";
 import type { DocxEditGroup } from "@shared/docx";
 import { buildReviewRows, describeRow, rowNeedsContext, type DocxChangeRow } from "./docx-review.ts";
+import { resolveRevisionGroup } from "./docx-apply.ts";
+import type { DocxEditorRef } from "@stll/folio-react";
 
 const change = (id: number, type: FolioReviewChange["type"], author: string, text: string, date = "2026-10-27T10:00:00Z"): FolioReviewChange => ({
   id,
@@ -133,5 +135,145 @@ describe("describeRow —— 文字太短时补上下文（验收 O3）", () => 
     assert.equal(rowNeedsContext(row("abc", "ab")), true);
     assert.equal(rowNeedsContext(row("abc", "abcd")), false);
     assert.equal(rowNeedsContext(row("本章报告", "本章汇报")), false);
+  });
+});
+
+describe("链式合并：同一处连续改两次（评审 P2）", () => {
+  const op = (id: string, ids: number[], before: string, after: string, blockId = "B1"): DocxEditGroup => ({
+    id,
+    blockId,
+    revisionIds: ids,
+    before,
+    after,
+    reanchored: false,
+  });
+
+  /** 两对 del/ins，作者与时刻都相同（引擎写出来的形状） */
+  const pairChanges = (): FolioReviewChange[] => [
+    { id: 1, type: "deletion", author: "张三", date: "2026-11-17T10:00:00Z", text: "旧A", blockId: "B1" },
+    { id: 2, type: "insertion", author: "张三", date: "2026-11-17T10:00:00Z", text: "新B", blockId: "B1" },
+    { id: 3, type: "deletion", author: "张三", date: "2026-11-17T10:00:01Z", text: "新B", blockId: "B1" },
+    { id: 4, type: "insertion", author: "张三", date: "2026-11-17T10:00:01Z", text: "新C", blockId: "B1" },
+  ];
+
+  it("A→B 与 B→C 合成一行 A→C，revisionIds 是并集", () => {
+    const rows = buildReviewRows([op("op1", [1, 2], "旧A", "新B"), op("op2", [3, 4], "新B", "新C")], pairChanges());
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]?.before, "旧A");
+    assert.equal(rows[0]?.after, "新C");
+    assert.deepEqual(rows[0]?.revisionIds, [1, 2, 3, 4]);
+    assert.equal(rows[0]?.kind, "replace");
+  });
+
+  it("合并后整组裁决：接受 / 拒绝都拿到全部 id（不会留半条）", () => {
+    const rows = buildReviewRows([op("op1", [1, 2], "旧A", "新B"), op("op2", [3, 4], "新B", "新C")], pairChanges());
+    const seen: number[][] = [];
+    const ref = {
+      acceptAIEditOperation: (ids: readonly number[]) => {
+        seen.push([...ids]);
+        return true;
+      },
+      rejectAIEditOperation: (ids: readonly number[]) => {
+        seen.push([...ids]);
+        return true;
+      },
+    } as unknown as DocxEditorRef;
+    resolveRevisionGroup(ref, rows[0]!.revisionIds, "accept");
+    resolveRevisionGroup(ref, rows[0]!.revisionIds, "reject");
+    assert.deepEqual(seen, [
+      [1, 2, 3, 4],
+      [1, 2, 3, 4],
+    ]);
+  });
+
+  it("三段链 A→B→C→D 合成一行 A→D", () => {
+    const changes: FolioReviewChange[] = [
+      { id: 1, type: "deletion", author: "张三", date: null, text: "A", blockId: "B1" },
+      { id: 2, type: "insertion", author: "张三", date: null, text: "B", blockId: "B1" },
+      { id: 3, type: "deletion", author: "张三", date: null, text: "B", blockId: "B1" },
+      { id: 4, type: "insertion", author: "张三", date: null, text: "C", blockId: "B1" },
+      { id: 5, type: "deletion", author: "张三", date: null, text: "C", blockId: "B1" },
+      { id: 6, type: "insertion", author: "张三", date: null, text: "D", blockId: "B1" },
+    ];
+    const rows = buildReviewRows(
+      [op("op1", [1, 2], "A", "B"), op("op2", [3, 4], "B", "C"), op("op3", [5, 6], "C", "D")],
+      changes,
+    );
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]?.before, "A");
+    assert.equal(rows[0]?.after, "D");
+    assert.deepEqual(rows[0]?.revisionIds, [1, 2, 3, 4, 5, 6]);
+  });
+
+  it("不连续（旧文对不上）不合并", () => {
+    const rows = buildReviewRows([op("op1", [1, 2], "旧A", "新B"), op("op2", [3, 4], "别处", "新C")], pairChanges());
+    assert.equal(rows.length, 2);
+  });
+
+  it("跨段不合并", () => {
+    const changes: FolioReviewChange[] = [
+      { id: 1, type: "deletion", author: "张三", date: null, text: "旧A", blockId: "B1" },
+      { id: 2, type: "insertion", author: "张三", date: null, text: "新B", blockId: "B1" },
+      { id: 3, type: "deletion", author: "张三", date: null, text: "新B", blockId: "B2" },
+      { id: 4, type: "insertion", author: "张三", date: null, text: "新C", blockId: "B2" },
+    ];
+    const rows = buildReviewRows([op("op1", [1, 2], "旧A", "新B", "B1"), op("op2", [3, 4], "新B", "新C", "B2")], changes);
+    assert.equal(rows.length, 2);
+  });
+
+  it("中间夹了别的块的改动：链断开，不合", () => {
+    const changes: FolioReviewChange[] = [
+      { id: 1, type: "deletion", author: "张三", date: null, text: "旧A", blockId: "B1" },
+      { id: 2, type: "insertion", author: "张三", date: null, text: "新B", blockId: "B1" },
+      { id: 5, type: "deletion", author: "张三", date: null, text: "X", blockId: "B9" },
+      { id: 6, type: "insertion", author: "张三", date: null, text: "Y", blockId: "B9" },
+      { id: 3, type: "deletion", author: "张三", date: null, text: "新B", blockId: "B1" },
+      { id: 4, type: "insertion", author: "张三", date: null, text: "新C", blockId: "B1" },
+    ];
+    const rows = buildReviewRows(
+      [op("op1", [1, 2], "旧A", "新B"), op("op3", [5, 6], "X", "Y", "B9"), op("op2", [3, 4], "新B", "新C")],
+      changes,
+    );
+    assert.equal(rows.length, 3);
+    assert.deepEqual(
+      rows.map((row) => [row.before, row.after]),
+      [
+        ["旧A", "新B"],
+        ["X", "Y"],
+        ["新B", "新C"],
+      ],
+    );
+  });
+
+  it("只合并未裁决的链：前一组已被接受（id 不在文档里）→ 只剩后一条，不合并", () => {
+    // 用户先改 A→B 并接受：1/2 已从文档里消失；之后才改 B→C
+    const changes: FolioReviewChange[] = [
+      { id: 3, type: "deletion", author: "张三", date: null, text: "新B", blockId: "B1" },
+      { id: 4, type: "insertion", author: "张三", date: null, text: "新C", blockId: "B1" },
+    ];
+    const rows = buildReviewRows([op("op1", [1, 2], "旧A", "新B"), op("op2", [3, 4], "新B", "新C")], changes);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]?.before, "新B");
+    assert.equal(rows[0]?.after, "新C");
+    assert.deepEqual(rows[0]?.revisionIds, [3, 4]);
+  });
+
+  it("A→B→A（又改回去）不并成 A→A", () => {
+    const changes: FolioReviewChange[] = [
+      { id: 1, type: "deletion", author: "张三", date: null, text: "A", blockId: "B1" },
+      { id: 2, type: "insertion", author: "张三", date: null, text: "B", blockId: "B1" },
+      { id: 3, type: "deletion", author: "张三", date: null, text: "B", blockId: "B1" },
+      { id: 4, type: "insertion", author: "张三", date: null, text: "A", blockId: "B1" },
+    ];
+    const rows = buildReviewRows([op("op1", [1, 2], "A", "B"), op("op2", [3, 4], "B", "A")], changes);
+    assert.equal(rows.length, 2);
+  });
+
+  it("重开文档后的启发式行同样按链合并（A→B + B→C → A→C）", () => {
+    const rows = buildReviewRows([], pairChanges());
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]?.before, "旧A");
+    assert.equal(rows[0]?.after, "新C");
+    assert.deepEqual(rows[0]?.revisionIds, [1, 2, 3, 4]);
   });
 });
