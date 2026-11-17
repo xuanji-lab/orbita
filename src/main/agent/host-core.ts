@@ -19,8 +19,9 @@ import type { AutomationToolOutcome } from "../../shared/automation.ts";
 import type { BrowserToolOutcome } from "../../shared/browser.ts";
 import type { DocOutcome } from "../../shared/doc.ts";
 import type { TerminalToolOutcome } from "../../shared/terminal.ts";
+import type { ComputerUseToolOutcome } from "../../shared/computer-use.ts";
 import type { SlidesOutcome } from "../../shared/slides-export.ts";
-import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
+import type { PermissionAnswer, ComputerUseRememberedEntry, PermissionMode } from "../../shared/permission.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPreviewOutcome } from "../../shared/plugin.ts";
 import type { PluginBoardOutcome } from "../../shared/plugin-board.ts";
@@ -534,6 +535,22 @@ export class AgentHostCore {
     this.post({ type: "setModel", sessionId, provider, modelId });
   }
 
+  /**
+   * 对齐 agent 账本里的电脑使用授权（照 disposeSession：**不 ensure**）。
+   * 进程没起的话下一轮开机本来就从 meta 播种，这里发不发都一样；为撤销去拉起一个进程是倒置。
+   */
+  setComputerUseGrant(sessionId: string, granted: boolean): void {
+    this.child?.postMessage({ type: "setComputerUseGrant", sessionId, granted } satisfies AgentCommand);
+  }
+
+  /**
+   * 对齐 agent 账本里的「这类动作不再问」（急停 / 撤销时清空）。同 setComputerUseGrant：
+   * **不 ensure**——进程没起时下一轮开机从 meta 播种，那时盘上已经是空的了。
+   */
+  setComputerUseRemembered(sessionId: string, remembered: ComputerUseRememberedEntry[]): void {
+    this.child?.postMessage({ type: "setComputerUseRemembered", sessionId, remembered } satisfies AgentCommand);
+  }
+
   /** 用户的审批回答。**不需要 ensure**：进程没了的话请求也早没了。 */
   answerPermission(requestId: string, answer: PermissionAnswer): void {
     this.child?.postMessage({ type: "permissionAnswer", requestId, answer } satisfies AgentCommand);
@@ -667,6 +684,20 @@ export class AgentHostCore {
     } satisfies AgentCommand);
   }
 
+  /**
+   * computer use：computerUseRequest 的回执。同 answerBrowser 的理由：不 ensure、发完即回。
+   * shot（截图才有）随成功一起上船：工具层靠它把模型随后给的图像坐标换算成物理像素。
+   */
+  answerComputerUse(requestId: string, outcome: ComputerUseToolOutcome): void {
+    this.child?.postMessage({
+      type: "computerUseResult",
+      requestId,
+      ...(outcome.ok
+        ? { ok: true as const, text: outcome.text, ...(outcome.shot === undefined ? {} : { shot: outcome.shot }) }
+        : { ok: false as const, error: outcome.error }),
+    } satisfies AgentCommand);
+  }
+
   /** 自动化：automationRequest 的回执（delegate 同款）：不 ensure、发完即回。 */
   answerAutomation(requestId: string, outcome: AutomationToolOutcome): void {
     this.child?.postMessage({
@@ -724,6 +755,15 @@ export class AgentHostCore {
   async abort(sessionId: string): Promise<void> {
     await this.ensure();
     this.post({ type: "abort", sessionId });
+  }
+
+  /**
+   * 只停已经在跑的轮，**不 ensure**（急停热键与「停止」按钮的区别就在这里）：
+   * 用户按急停是为了停下，不是为了把一个已经退出的 agent 进程重新拉起来。
+   * 进程没起 = 没有轮在跑，静默返回。
+   */
+  abortIfRunning(sessionId: string): void {
+    this.child?.postMessage({ type: "abort", sessionId } satisfies AgentCommand);
   }
 
   /** 手动压缩上下文。**发完即回**（续轮）：忙碌态与界碑走 compaction 事件链。首轮开机时等 created */

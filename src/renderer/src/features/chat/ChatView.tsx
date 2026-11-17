@@ -1414,6 +1414,8 @@ function ChatViewBody(props: {
         )
       )}
       {session.error !== null && <Notice tone="bad">{session.error}</Notice>}
+      {/* 急停（全局热键）：提示会自动收掉——它不是持续状态。授权芯片同一时刻复位。 */}
+      {session.estopAt !== null && <Notice tone="bad">{t.computerUse.emergencyStopped}</Notice>}
       {/*
         收尾仪式的降级 / 结果反馈：一句中性的话，不当错误报。
         读不懂扫描结果时这行带一个 Retry（重发同一条扫描消息）——失败不该只留一句
@@ -3169,6 +3171,8 @@ function ComposerBar(props: {
   // 命名新建工作区：scope 芯片**原位**换成输入框（InlineName）——就在用户点开的
   // 地方接着打字，视线不跳去侧栏；窄窗侧栏折成图标条时这里照样能用
   const [namingWorkspace, setNamingWorkspace] = useState(false);
+  // 电脑使用授权芯片：实验开关关着时工具根本没注册，挂个授权入口只会让人以为它能用
+  const computerUseFeature = useExperimentalFeature("computer-use");
 
   // pi 内建目录：模型项的 ctx 徽标要从这里查官方参数（与设置页同一套口径）。
   // 一个 app 一次 fetch——引擎已经拉过一份，这里不再自己起第二次
@@ -3362,6 +3366,20 @@ function ComposerBar(props: {
           </Chip>
         )}
       />
+      {/* 电脑使用授权（会话级同意书）：有会话才显示。**授权与撤销同一个入口**——
+          撤销之后还要能重新授予，否则 skip 档下用户只能等下一个进程重启。
+          active = 已授权；点击立即切换，当前轮的下一次 computer_* 就按新值判。 */}
+      {computerUseFeature && session.hasSession ? (
+        <Chip
+          icon="monitor"
+          active={session.computerUseGranted}
+          title={session.computerUseGranted ? t.computerUse.grantChipOn : t.computerUse.grantChipOff}
+          onClick={() => session.setComputerUseGrant(!session.computerUseGranted)}
+          className="chip-computer-use"
+        >
+          {t.computerUse.grantChip}
+        </Chip>
+      ) : null}
       {props.intentToggle !== null && (
         <Chip
           icon={FEATURE_ICON.intent}
@@ -4943,6 +4961,13 @@ const MARKDOWN_EXPANDED_BODY = {
 // ── 信息区文案（本模块全部用户可见字符串集中在此；英文先行，中文化等真实需求出现再抽字典） ──
 
 /** 工具的类型图标：图标只说「哪一类事」，具体哪个工具由旁边的名字说。 */
+/** computer_type 的入参文本：只认字符串（别的形状工具层会拒，界面上没有可展开的东西） */
+function typedTextOf(input: unknown): string | null {
+  if (typeof input !== "object" || input === null) return null;
+  const text = (input as Record<string, unknown>)["text"];
+  return typeof text === "string" ? text : null;
+}
+
 function toolIcon(toolName: string): IconName {
   switch (toolName) {
     case "bash":
@@ -4974,6 +4999,14 @@ function toolIcon(toolName: string): IconName {
     case "browser_type":
     case "browser_press":
       return "globe";
+    // 电脑使用：动作都落在沙箱那台「机器」上（monitor）；截图是看不是操作，单独的图形状
+    case "computer_screenshot":
+      return "image";
+    case "computer_click":
+    case "computer_type":
+    case "computer_key":
+    case "computer_scroll":
+      return "monitor";
     default:
       // 内置命令（builtin-commands.ts）：图标由注册表项给
       // MCP 工具（mcp__server__tool）：专属插头图标——外部能力，与内置工具一眼区分
@@ -5051,6 +5084,13 @@ function ToolLine(props: {
   sessionId?: string;
 }) {
   const t = useT();
+  /**
+   * computer_type 的入参文本**默认折叠**（它是模型打进去的原文，可能含用户输入的
+   * 隐私 / 凭据）：折叠行只报「输入了 N 个字符」，点「展开输入」才铺开。
+   * 转录与 JSONL 都保留明文（本地优先），这一点在设计里是有意的。
+   */
+  const typed = props.toolName === "computer_type" ? typedTextOf(props.input) : null;
+  const [typedOpen, setTypedOpen] = useState(false);
   const [open, setOpen] = useFoldState(`tool:${props.toolCallId}`);
   const { result } = props;
   const failed = result?.status === "error";
@@ -5168,7 +5208,8 @@ function ToolLine(props: {
       ? skillForReadPath((props.input as Record<string, unknown>)["path"] as string, props.skills)
       : null;
   const summary = mcp === null ? summarizeToolResult(result, t) : summarizeMcpResult(result, t);
-  const callSummary = toolCallSummary(props.toolName, props.input);
+  // 打字内容不落在折叠行的摘要里：只报字符数（全文在「展开输入」后面）
+  const callSummary = typed !== null ? t.chat.typedChars(typed.length) : toolCallSummary(props.toolName, props.input);
   const builtin = builtinCommand(props.toolName);
   // 落在文档文件上的 edit / write：药丸写「改文档 / 写文档」（其余照旧）
   const docEdit = docEditLabel(props.toolName, props.input);
@@ -5208,6 +5249,11 @@ function ToolLine(props: {
     result !== undefined && result.content.some((block) => block.type === "image")
       ? result.content.filter((block): block is Extract<(typeof result.content)[number], { type: "image" }> => block.type === "image")
       : [];
+  // computer_screenshot 的行内缩略图：结果里的第一张图。点它 = 展开（与行本身的折叠同义）
+  const shotThumb =
+    props.toolName === "computer_screenshot" && result !== undefined
+      ? (result.content.find((block) => block.type === "image") ?? null)
+      : null;
   const imagelessBody =
     needBody && toolImages.length > 0 && result !== undefined
       ? result.content.filter((block) => block.type === "text").map((block) => block.text).join("\n")
@@ -5360,6 +5406,41 @@ function ToolLine(props: {
             {callLabel}
           </span>
         )}
+        {/* 截图缩略：小图跟在动作行上，点开才看大图（大图在展开体的 PlainToolBody 里） */}
+        {shotThumb !== null && shotThumb.type === "image" && (
+          <img
+            src={imageSrc(shotThumb)}
+            alt={t.computerUse.shotAlt}
+            style={{
+              height: 30,
+              maxWidth: 64,
+              objectFit: "cover",
+              borderRadius: "var(--radius-sm)",
+              border: "1px solid var(--color-border-subtle)",
+              flex: "0 0 auto",
+            }}
+          />
+        )}
+        {/* 打字内容的展开开关：不是折叠行的开关（stopPropagation） */}
+        {typed !== null && (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              setTypedOpen(!typedOpen);
+            }}
+            style={{
+              border: "none",
+              background: "none",
+              padding: 0,
+              cursor: "pointer",
+              ...SLOT.status,
+              color: "var(--color-chat-link)",
+            }}
+          >
+            {typedOpen ? t.chat.hideInput : t.chat.showInput}
+          </button>
+        )}
         {/* 增删统计紧跟文件名（git stat 读法）；与展开后 DiffView 头重复，展开时藏起 */}
         {!open && stats !== null && (
           <span style={SLOT.status}>
@@ -5412,6 +5493,24 @@ function ToolLine(props: {
           </button>
         )}
       </CollapseRow>
+      {/* 打字的原文：默认折叠，展开时按等宽铺开（换行与制表符原样）；不进模型上下文以外的地方 */}
+      {typed !== null && typedOpen && (
+        <div
+          style={{
+            ...EXPANDED_FRAME,
+            padding: "var(--space-2) var(--space-3)",
+            background: "var(--color-chat-muted-bg)",
+            fontFamily: "var(--font-family-mono)",
+            fontSize: "var(--font-size-sm)",
+            lineHeight: "var(--line-height-code)",
+            color: "var(--color-text-primary)",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+          }}
+        >
+          {typed}
+        </div>
+      )}
       {/* 内置命令的完成卡（pinCard 的命令，如 slides_create）：折叠之外、点击在右栏打开 */}
       {builtin?.pinCard === true && finished && !failed && <CommandCard details={result?.details} />}
       {/* 活尾预览：跑着的 shell 有流式输出时，折叠行下贴几行末尾——「它在动」

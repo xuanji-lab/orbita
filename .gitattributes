@@ -1,3 +1,7 @@
 # patch 文件按 LF 存取：Windows 上 core.autocrlf=true 会把它转成 CRLF，上下文行带 \r 时 bun 打 patch 可能匹配不上，
 # 失败表现是补丁静默不生效（审核 2026-10-25，Windows 报告 N-1 / Mac 报告 F-10）
 patches/** text eol=lf
+
+# P3 桌面这台 VM 的 shell 脚本要在 Alpine 的 /bin/sh 里跑（CGI 还是被 httpd 直接 exec 的），
+# CRLF 会让 shebang 变成 "#!/bin/sh\r" 而直接执行失败。这两个目录下的脚本一律按 LF 存取。
+scripts/p3-desktop/*.sh text eol=lf

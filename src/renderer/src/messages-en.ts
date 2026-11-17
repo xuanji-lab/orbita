@@ -1122,6 +1122,120 @@ export const en = {
     handoffBarDone: "Done, hand back",
   },
 
+  /** 设置 › 电脑使用（computer-use-view.ts 是它的纯派生层） */
+  computerUse: {
+    capabilityGroup: "Capability check",
+    sandboxFeature: "Windows Sandbox",
+    sandboxFeatureInfo:
+      "Computer use works inside a Windows Sandbox — a throwaway copy of Windows the agent drives. Your desktop's keyboard, mouse and files are never touched, and everything inside the sandbox is discarded when it closes.",
+    probe: "Check",
+    probeIdle: "Not checked yet",
+    probing: "Checking…",
+    probeReady: "Sandbox available",
+    probeNotReady: "Not ready — see the steps below",
+    probeFailed: "Couldn't run the check",
+    /** 隔离档位（IsolationTier）：只回答「这台机器现在能到哪一档」，到不了更高的原因在 guidance */
+    isolationTier: "Isolation level",
+    isolationTierInfo:
+      "How far this machine can go. L1 Browser: web automation in the built-in browser — every platform has it. L2 Windows Sandbox: mouse, keyboard and the browser inside the sandbox — needs Windows Pro / Enterprise / Education with Windows Sandbox enabled and virtualisation on. L2b Multi-session isolation: one OS session per agent, invisible to each other (and to the host's EnumWindows) — but it has no real pointer or keyboard, so clicks and typing go through UIA / CDP instead; works on Windows Home too. The next level, a Linux microVM, is still on the roadmap.",
+    tierFallback: "Why it can't go higher is in the steps above",
+    tiers: {
+      l1: "L1 · Browser",
+      l2: "L2 · Windows Sandbox",
+      l2b: "L2b · Multi-session isolation",
+    },
+    backend: "Isolation backend",
+    backendInfo:
+      "Windows Sandbox: one sandbox, one desktop shared by every session (real mouse and keyboard work, but the sessions can see each other's windows). Multi-session isolation: one OS session per agent, invisible to the host and to each other (stronger isolation, but there is no real pointer — pixel clicks and typing are refused and actions go through UIA, CDP and screenshots).",
+    backendBelow: "Takes effect the next time it starts; a running session keeps the level it started with.",
+    backendAria: "Isolation backend",
+    backendLabels: {
+      wsb: "Windows Sandbox (L2)",
+      "isolation-session": "Multi-session isolation (L2b)",
+      qemu: "Linux desktop VM (L3)",
+    },
+    isolationSessionRow: "Multi-session dependency",
+    isolationSessionInfo:
+      "One OS session per agent comes from Microsoft's MXC (IsolationSession): it needs a Node runtime that can load native modules plus the IsoSession service that ships with Windows. When it is unavailable this row says what is missing.",
+    isolationSessionReady: "Available",
+    isolationSessionNode: (version: string, ok: boolean) =>
+      ok ? `Node ${version} (new enough)` : `Node ${version} (MXC needs 24.21 or newer)`,
+    isolationSessionNoPointer:
+      "This level has no real mouse or keyboard, so pixel clicks and typing are unavailable; use UIA (controls), CDP (browser) or screenshots instead.",
+    /** WSL2 只是能力信号：所有发行版共享同一个轻量虚拟机，不是一个隔离档 */
+    wsl2: "WSL2",
+    wsl2Info:
+      "A capability signal, not an isolation boundary: every WSL2 distro shares one lightweight VM, so it isn't walled off from your Windows the way the sandbox is. It doesn't count as a level and doesn't change the one above.",
+    wsl2States: {
+      available: "Available",
+      unavailable: "Not installed",
+      unknown: "Couldn't tell",
+    },
+    sandboxGroup: "Sandbox",
+    sandboxState: "State",
+    /** 沙箱出网开关（.wsb 的 Networking）。info 是可悬停的完整解释，below 是常驻的生效时机—— */
+    /** 「运行中改了就以为坏了」是这一行最大的误读风险，不能只靠 hover 提示说清 */
+    allowNetwork: "Allow network access",
+    allowNetworkInfo:
+      "Off keeps everything in the sandbox off the network — pages can't load, so web automation needs it on; local desktop automation still works.",
+    allowNetworkBelow:
+      "Takes effect the next time the sandbox starts; a running sandbox keeps the setting it started with.",
+    allowNetworkAria: "Sandbox network access",
+    browser: "Sandbox browser",
+    browserInfo:
+      "Which browser the agent drives inside the sandbox. Edge is the default because the sandbox image already has it: nothing extra to prepare, and it reaches CDP about a second faster than Chrome installed from the host.",
+    browserBelow:
+      "Chrome / Brave / Chromium are not part of the sandbox image — map or copy one into the sandbox first, otherwise this session falls back to Edge and the tool reply says so. Takes effect the next time a page is opened.",
+    browserAria: "Browser used inside the sandbox",
+    browserAuto: "Auto",
+    // "up to three minutes" mirrors BRIDGE_READY_TIMEOUT_MS in src/main/computer-use/sandbox.ts (180s);
+    // change one and the other follows
+    sandboxStateInfo:
+      "Starting waits for the sandbox to register itself (up to three minutes; the first start prepares the base image and takes noticeably longer — if it times out, just retry); stopping closes it and discards everything inside. After an error, Start retries and Stop resets.",
+    states: {
+      off: "Off",
+      starting: "Starting…",
+      running: "Running",
+      stopping: "Stopping…",
+      error: "Error",
+    },
+    // Stopping is a wrap-up, not a failure: the guest shuts itself down and the VM goes away
+    // (19s+ in real testing; closing right after start also waits for the sandbox to log in).
+    stoppingNote: "Wrapping up: up to 1–2 minutes. The sandbox is destroyed, its window closes by itself — no need to press Stop again.",
+    start: "Start",
+    stop: "Stop",
+    stopConfirm: "Close the sandbox?",
+    stopConfirmAction: "Stop anyway",
+    leaseRow: "Desktop in use",
+    leaseRowInfo:
+      "The sandbox desktop is shared app-wide: only one session can drive it at a time (pixel clicks, typing, keys, scrolling). New actions wait for the session ahead of them, so this shows the session that actually holds the desktop right now.",
+    leaseIdle: "Idle",
+    leaseBusy: (title: string, minutes: number, seconds: number) =>
+      `In use by “${title}” (${minutes} min ${seconds} s)`,
+    leaseUntitled: "Untitled task",
+    shotGroup: "Manual screenshot",
+    shotRow: "Sandbox desktop",
+    shotRowInfo: "Grabs a still of the sandbox desktop right now — only when you click, never on its own.",
+    shot: "Take a look",
+    shotBusy: "Capturing…",
+    shotNeedsRunning: "Start the sandbox to take a look",
+    shotNativeSize: "Native size",
+    shotAlt: "Sandbox desktop screenshot",
+    /* Composer-bar grant chip (session-level consent; click toggles grant / revoke) */
+    grantChip: "Computer use",
+    grantChipOn: "This session may drive the sandbox · click to revoke (takes effect in the current turn)",
+    grantChipOff: "This session is not authorized to drive the sandbox · click to allow (takes effect in the current turn)",
+    /* Emergency stop hotkey (Settings › Security group) and the stop notice */
+    emergencyGroup: "Safety",
+    emergencyHotkey: "Emergency stop hotkey",
+    emergencyHotkeyInfo:
+      "Works even when the sandbox window is in front. Pressing it stops the running turn, revokes this session's computer-use grant, and refuses every later computer_* call. **It does not close the sandbox** — the screen stays for you to look at. Re-authorize to use computer use again.",
+    emergencyRegistered: "Registered and available",
+    emergencyUnavailable: (error: string) => `Unavailable: ${error}. Close the app holding this shortcut and restart Orbita.`,
+    emergencyStopped:
+      "Emergency stop: this turn was stopped and this session's computer-use grant was revoked. The sandbox is still open.",
+  },
+
   drawer: {
     title: "Side chat",
     filter: "Filter tasks…",
@@ -1349,6 +1463,7 @@ export const en = {
       plugins: "Abilities",
       memory: "Memory",
       experimental: "Experimental",
+      "computer-use": "Computer use",
     },
     appearance: "Appearance",
     theme: "Theme",
@@ -2299,6 +2414,10 @@ export const en = {
     tools: (n: number) => `tools ${n}`,
     failedCount: (n: number) => `${n} failed`,
     toolInterrupted: "Interrupted · not run",
+    /* computer_type input is collapsed by default: it is the literal text the agent typed */
+    typedChars: (count: number) => `typed ${count} characters`,
+    showInput: "Show input",
+    hideInput: "Hide input",
     commandCardOpen: "Open in panel",
     interruptedCount: (n: number) => `${n} interrupted`,
     toolRead: "Read",
@@ -2478,6 +2597,20 @@ export const en = {
     deny: "Deny",
     stopEditing: "Stop editing",
     editInput: "Edit input",
+    /* Session grant card for computer use (not an ordinary approval: allow = the whole session) */
+    sessionTitle: "Let the agent drive the sandbox?",
+    sessionBody:
+      "It will see the sandbox screen and click, type and press keys inside it. The sandbox desktop is shared app-wide: there is only one screen, and other sessions can drive it too — you are allowing this session to act. Destructive actions (delete, format, close a window) still stop for confirmation: before this session is allowed the risk is written on this card, and after that they ask you separately.",
+    allowSession: "Allow for this session",
+    /* Destructive-action confirmation (D1/D2/D3): not a refusal — allowing it runs the step */
+    riskTitle: "This step may be hard to undo. Confirm?",
+    riskKeys: (detail: string) => `About to press ${detail}`,
+    riskCommand: (detail: string) => `About to type a destructive command: ${detail}`,
+    riskRepeat: (count: number) => `About to click the same spot for the ${count}. time (±4px)`,
+    riskHint: "Inputs that match a guard rule stop before they run; you can cancel or allow.",
+    allowRisk: "Run it anyway",
+    cancelRisk: "Cancel",
+    rememberClass: "In this task, do not ask again for this kind of action",
   },
 
   carryover: {

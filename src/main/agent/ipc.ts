@@ -22,7 +22,7 @@ import {
 } from "../../shared/invocation.ts";
 import { isSkillAvailable, matchSkillTarget } from "../../shared/skill.ts";
 import { withoutQuotes } from "../../shared/quote.ts";
-import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
+import type { ComputerUseRememberedEntry, PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import { endpointHintsOf, knownProviderOf } from "../../shared/known-providers.ts";
@@ -45,7 +45,7 @@ import { intentTurnEnv } from "./intent-env.ts";
 import { memoryBuildEligible } from "../memory/turn-tracker.ts";
 import { effectiveIntentSettings, type AppSettings } from "../../shared/settings.ts";
 import { INTENT_MODELS_BY_CHANNEL } from "../../shared/intent-lab.ts";
-import type { IntentTurnContext } from "../../shared/agent-ipc.ts";
+import type { ComputerUseTurnContext, IntentTurnContext } from "../../shared/agent-ipc.ts";
 import {
   mergeMcpConfigs,
   resolveServersForWorkspace,
@@ -57,7 +57,7 @@ import type { SentImage } from "../../shared/prompt-images.ts";
 import type { SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { TurnDirectories } from "../../shared/agent-ipc.ts";
 import { resolveTurnDirectories } from "./turn-directories.ts";
-import { turnFields } from "./turn-fields.ts";
+import { computerUseTurnContext, turnFields } from "./turn-fields.ts";
 import { applyModeCascade } from "./mode-cascade.ts";
 import { browserDownloadDir } from "../browser/download-dir.ts";
 import { AgentHost } from "./host.ts";
@@ -240,6 +240,31 @@ export function registerAgentIpc(
   const readPdfCitations = async (): Promise<boolean> =>
     (await settings.read()).experimentalFeatures?.["pdf-citations"] === true;
 
+  /**
+   * 电脑使用每轮现读：实验开关决定**工具组注册**（关着时沙箱工具根本不进会话），
+   * 出网开关决定**模型怎么理解网页打不开**（见 ComputerUseTurnContext）。两个事实
+   * 来自同一份设置、同一次 `settings.read()`：不另开一套读写，也不会两轮之间漂移。
+   * 映射本身在 turn-fields.ts 的纯函数里（那边可测；这里是唯一读设置的、要 electron 的地方）。
+   */
+  const readComputerUse = async (): Promise<ComputerUseTurnContext> =>
+    computerUseTurnContext(await settings.read());
+
+  /**
+   * 本会话的电脑使用授权时刻。**从 meta 读**（持久真源），每轮随开轮命令带给 agent 进程
+   * 当「首次见到这条会话」的种子；轮中的授予 / 撤销在 agent 账本里即时生效，不走这条路。
+   * meta 读不到（会话刚建 / 已删）= 未授权——宁可多问一次，不静默放行。
+   */
+  const readComputerUseGrant = async (sessionId: string): Promise<number | null> =>
+    (await sessions.readMeta(sessionId))?.computerUseGrantedAt ?? null;
+  /**
+   * 本会话记住了哪些「这类动作不再问」（manual 档）。与授权同一套播种规则：
+   * 每轮从 meta 装配，agent 只在首次见到这条会话时拿它当种子；轮中的记住 / 清除
+   * 以 agent 内存账本为准（meta 写盘是它发事件回来时的事）。
+   */
+  const readComputerUseRemembered = async (
+    sessionId: string,
+  ): Promise<ComputerUseRememberedEntry[]> =>
+    (await sessions.readMeta(sessionId))?.computerUseRemembered ?? [];
   /** 「先给我看计划」偏好同样每轮现读：改了下一轮即生效；缺席 = 关 */
   const readPlanFirst = async (): Promise<boolean> => (await settings.read()).planFirst === true;
 
@@ -526,6 +551,9 @@ export function registerAgentIpc(
         attributionLanguage: await readAttributionLanguage(),
         workspaceName: await workspaceNameOf(input.workspaceId),
         pdfCitations: await readPdfCitations(), planFirst: await readPlanFirst(), pluginTools: true,
+        computerUse: await readComputerUse(),
+        computerUseGrantedAt: await readComputerUseGrant(input.sessionId),
+        computerUseRemembered: await readComputerUseRemembered(input.sessionId),
       }),
     });
     await settleFirstTurn(input, piSessionFile);
@@ -565,13 +593,13 @@ export function registerAgentIpc(
     await beginMemoryTurn(input.sessionId, text);
     const automationTools = await readAutomationTools(input.sessionId);
     const capabilities = await readCapabilities(input.workspaceId);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text, sessionMemory: true, ...(automationTools ? { automationTools: true } : {}), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), planFirst: await readPlanFirst(), pluginTools: true }) });
+    const piSessionFile = await host.interrupt({ type: "interrupt", text, sessionMemory: true, ...(automationTools ? { automationTools: true } : {}), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), computerUse: await readComputerUse(), computerUseGrantedAt: await readComputerUseGrant(input.sessionId), computerUseRemembered: await readComputerUseRemembered(input.sessionId), planFirst: await readPlanFirst(), pluginTools: true }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
     const provider = await resolveForTurn(input.providerId);
     const capabilities = await readCapabilities(input.workspaceId);
-    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), planFirst: await readPlanFirst(), pluginTools: true }) });
+    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), pdfCitations: await readPdfCitations(), computerUse: await readComputerUse(), computerUseGrantedAt: await readComputerUseGrant(input.sessionId), computerUseRemembered: await readComputerUseRemembered(input.sessionId), planFirst: await readPlanFirst(), pluginTools: true }) });
     if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
   });
 
@@ -612,6 +640,28 @@ export function registerAgentIpc(
     },
   );
 
+  /**
+   * 电脑使用授权的撤销 / 授予（会话头入口、急停）。**主进程是持久真源、agent 进程是当前轮**：
+   *   1. 落 meta（下一轮开机的种子；应用重启后仍然记得用户撤回过什么）；
+   *   2. 推给 agent 进程（当前轮的下一次工具调用立即按新值判）；
+   *   3. 广播事件（其它窗口 / 其它视图的标识跟着变，不用重读盘）。
+   * 时间戳由这里铸：renderer 只知道「点了撤销」，不知道现在几点是「允许的时刻」。
+   */
+  ipcMain.handle(
+    ipcChannels.agentSetComputerUseGrant,
+    async (_e, sessionId: string, granted: boolean): Promise<void> => {
+      const at = granted ? Date.now() : null;
+      await sessions.setComputerUseGrant(sessionId, at);
+      host.setComputerUseGrant(sessionId, granted);
+      // 撤销同时清掉「这类动作不再问」：撤销说的是「停下、别再自作主张」，留着记忆会让
+      // 下一轮手动档的同类动作静默放行。授予不复原它——记忆是用户逐次勾出来的，不是授权的副产品。
+      if (!granted) {
+        await sessions.setComputerUseRemembered(sessionId, []);
+        host.setComputerUseRemembered(sessionId, []);
+      }
+      broadcastAgentEvent({ type: "computerUseGrant", sessionId, granted, at });
+    },
+  );
   // 用户对工具审批的回答，原样送回 agent 进程（按 requestId 对号）
   ipcMain.handle(
     ipcChannels.agentAnswerPermission,

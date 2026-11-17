@@ -138,7 +138,27 @@ describe("deriveSessionTitle", () => {
 
 describe("parseSessionMeta", () => {
   it("完整的一条原样解出来", () => {
-    deepStrictEqual(parseSessionMeta(valid), { ...valid, mode: "manual" });
+    deepStrictEqual(parseSessionMeta(valid), { ...valid, mode: "manual", computerUseGrantedAt: null });
+  });
+
+  it("电脑使用授权：毫秒时刻透传，坏值 / 缺席当未授权（宁可多问一次）", () => {
+    strictEqual(parseSessionMeta({ ...valid, computerUseGrantedAt: 1_700_000_000_000 })?.computerUseGrantedAt, 1_700_000_000_000);
+    strictEqual(parseSessionMeta({ ...valid, computerUseGrantedAt: null })?.computerUseGrantedAt, null);
+    strictEqual(parseSessionMeta({ ...valid, computerUseGrantedAt: undefined })?.computerUseGrantedAt, null);
+    strictEqual(parseSessionMeta({ ...valid, computerUseGrantedAt: "yesterday" })?.computerUseGrantedAt, null);
+  });
+
+  it("「这类动作不再问」：合法条目透传，坏条目逐条丢，空了就不落键", () => {
+    const entry = { class: "confined", toolName: "computer_click", at: 1_700_000_000_000 };
+    deepStrictEqual(parseSessionMeta({ ...valid, computerUseRemembered: [entry] })?.computerUseRemembered, [entry]);
+    const bad = parseSessionMeta({
+      ...valid,
+      computerUseRemembered: [entry, { class: "escaping", toolName: "sandbox_upload", at: 1 }, { class: "confined" }, 7],
+    });
+    deepStrictEqual(bad?.computerUseRemembered, [entry], "逸出件永远不能被记住，坏条目逐条丢");
+    const empty = parseSessionMeta({ ...valid, computerUseRemembered: [] });
+    strictEqual(empty !== null && "computerUseRemembered" in empty, false, "空数组不落键");
+    strictEqual(parseSessionMeta({ ...valid, computerUseRemembered: "x" })?.computerUseRemembered, undefined);
   });
 
   it("收尾记录与在做的遗留事项：好的留下，坏条目逐条丢，空了就缺席", () => {
@@ -193,6 +213,7 @@ describe("parseSessionMeta", () => {
     deepStrictEqual(parseSessionMeta({ ...valid, junk: 1, nested: { a: 1 } }), {
       ...valid,
       mode: "manual",
+      computerUseGrantedAt: null,
     });
   });
 

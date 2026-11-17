@@ -61,5 +61,9 @@ docs/
 !resources/builtin-plugins/*/skills/docs/
 UPDATE_NOTES.md
 CLAUDE.md
+
+# guest bridge 编译产物（guest-bridge/build.mjs 产出，沙箱只读映射用，不入库）
+guest-bridge/bin/
+
 # 本地打包输出到别名目录（dist-1106 等）
 dist-*/
