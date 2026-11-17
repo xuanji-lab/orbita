@@ -15,6 +15,7 @@ import {
   useOfficeChanged,
   useOfficeStatus,
 } from "../office/OfficePreview.tsx";
+import { bumpOfficeReload, OFFICE_RELOAD_INITIAL, type OfficeReloadState } from "../office/reload.ts";
 
 /**
  * `.pptx` 只读大纲（契约在 `shared/pptx.ts`）。
@@ -41,144 +42,110 @@ export function PptxView(props: {
   const office = useOfficeStatus();
   const canRender = office?.available === true;
   const [mode, setMode] = useState<"render" | "outline">("render");
-  const [renderReload, setRenderReload] = useState(0);
-  const [outlineReload, setOutlineReload] = useState(0);
+  /** 渲染与大纲各一个刷新令牌：编辑 / 回退 / 手动刷新都两边 +1（见 office/reload.ts） */
+  const [reload, setReload] = useState<OfficeReloadState>(OFFICE_RELOAD_INITIAL);
   const shownMode = canRender && mode === "render" ? "render" : "outline";
-  const state = usePptxPreview(request, props.reloadToken + outlineReload);
+  const state = usePptxPreview(request, props.reloadToken + reload.data);
   // agent 改了一份文件（edit_office / 回退）：大纲也重读（同 XlsxView）
-  useOfficeChanged(request.dir, () => setOutlineReload((value) => value + 1));
+  useOfficeChanged(request.dir, () => setReload(bumpOfficeReload));
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLElement | null>(null);
 
   // 换文件：回到第一页（页号对另一份演示文稿没有意义）
   useEffect(() => setActive(0), [request.root, request.dir]);
 
-  if (state.status === "loading") {
-    return (
-      <div className="file-preview-loading">
-        <Icon name="loader-circle" size={14} spin />
-        {t.common.loading}
-      </div>
-    );
-  }
-  if (state.status === "error") {
-    return (
-      <div className="file-preview-error">
-        <PanelLine danger>{state.message}</PanelLine>
-      </div>
-    );
-  }
-
-  const data = state.data;
-  if (data.kind === "too-large") {
-    return (
-      <div className="file-preview-empty">
-        <Icon name="presentation" size={24} style={{ color: "var(--color-text-tertiary)" }} />
-        <PanelLine>{t.files.tooLarge(formatSize(data.size), formatSize(data.limit))}</PanelLine>
-        <OpenDefaultButton onClick={props.onOpenDefault} />
-      </div>
-    );
-  }
-  if (data.kind === "unreadable") {
-    const message =
-      data.reason === "password"
-        ? t.files.pptxPassword
-        : data.reason === "timeout"
-          ? t.files.pptxTimeout
-          : data.reason === "complex"
-            ? t.files.pptxComplex
-            : t.files.pptxBroken;
-    return (
-      <div className="file-preview-empty">
-        <Icon name="presentation" size={24} style={{ color: "var(--color-text-tertiary)" }} />
-        <PanelLine>{message}</PanelLine>
-        {/* 技术副行：解压 / 解析失败的原文，读得懂的人据此判断是不是文件本身坏了 */}
-        <p className="pptx-detail" title={data.detail}>
-          {data.detail}
-        </p>
-        <OpenDefaultButton onClick={props.onOpenDefault} />
-      </div>
-    );
-  }
-  if (data.slides.length === 0) {
-    // 0 页有两种：真空演示文稿 / 第一页就超出解析成本（构造包）。
-    // 后者不能说「没有幻灯片」——文件里有页，只是大纲读不动。
-    const budgetBlocked = data.budgetLimited && data.slideCount > 0;
-    return (
-      <div className="file-preview-empty">
-        <Icon name="presentation" size={24} style={{ color: "var(--color-text-tertiary)" }} />
-        <PanelLine>
-          {budgetBlocked ? t.files.pptxBudgetLimited(0, data.slideCount) : t.files.pptxEmpty}
-        </PanelLine>
-        <OpenDefaultButton onClick={props.onOpenDefault} />
-      </div>
-    );
-  }
-
-  const index = Math.min(active, data.slides.length - 1);
-  const slide = data.slides[index];
-  if (slide === undefined) return null;
+  const deck = state.data?.kind === "deck" ? state.data : null;
+  const index = deck === null ? 0 : Math.min(active, deck.slides.length - 1);
+  const slide = deck?.slides[index];
 
   // roving tabindex：300 个分页键不该全在 Tab 序里。Tab 只停在当前页，
   // ↑↓ / Home / End 在列表内移动选中并带着焦点走（与常见 tablist 一致）
   const moveTo = (target: number): void => {
-    const next = Math.max(0, Math.min(data.slides.length - 1, target));
+    if (deck === null) return;
+    const next = Math.max(0, Math.min(deck.slides.length - 1, target));
     setActive(next);
     listRef.current?.querySelectorAll<HTMLButtonElement>(".pptx-slide-row")[next]?.focus();
   };
   const onSlideKey = (event: React.KeyboardEvent<HTMLButtonElement>, current: number): void => {
+    if (deck === null) return;
     const target =
       event.key === "ArrowDown" ? current + 1 :
       event.key === "ArrowUp" ? current - 1 :
       event.key === "Home" ? 0 :
-      event.key === "End" ? data.slides.length - 1 :
+      event.key === "End" ? deck.slides.length - 1 :
       null;
     if (target === null) return;
     event.preventDefault();
     moveTo(target);
   };
 
-  return (
-    <div className="pptx-view">
-      <div className="pptx-toolbar">
-        {canRender && (
-          <OfficeModeChips
-            mode={mode === "render" ? "render" : "data"}
-            onChange={(next) => setMode(next === "render" ? "render" : "outline")}
-            dataLabel={t.office.modeOutline}
-          />
-        )}
-        <span className="pptx-toolbar-title">
-          {t.files.pptxSlides}
-          <span className="pptx-count">{data.slideCount}</span>
-        </span>
-        <div className="pptx-toolbar-actions">
-          <PanelButton onClick={props.onOpenDefault}>
-            <Icon name="external-link" size={14} />
-            {t.files.openDefault}
-          </PanelButton>
+  /**
+   * 大纲视图（数据半边）。**不再 early-return 整个组件**：渲染视图由外层单独持有，
+   * 大纲读一次文件不该把正在显示的 iframe 一起卸载（2026-11-17 验收：回退后空白）。
+   */
+  const outline = (): React.ReactNode => {
+    if (state.error !== null) {
+      return (
+        <div className="file-preview-error">
+          <PanelLine danger>{state.error}</PanelLine>
         </div>
-      </div>
-      {canRender && (
-        <OfficeChangesPanel
-          request={request}
-          reloadToken={props.reloadToken + renderReload}
-          onReverted={() => {
-            setOutlineReload((value) => value + 1);
-            setRenderReload((value) => value + 1);
-            setMode("outline");
-          }}
-        />
-      )}
-      {shownMode === "render" ? (
-        <OfficePreview
-          request={request}
-          format="pptx"
-          reloadToken={props.reloadToken + renderReload}
-          onFallback={() => setMode("outline")}
-          {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
-        />
-      ) : (
+      );
+    }
+    const data = state.data;
+    if (data === null) {
+      return (
+        <div className="file-preview-loading">
+          <Icon name="loader-circle" size={14} spin />
+          {t.common.loading}
+        </div>
+      );
+    }
+    if (data.kind === "too-large") {
+      return (
+        <div className="file-preview-empty">
+          <Icon name="presentation" size={24} style={{ color: "var(--color-text-tertiary)" }} />
+          <PanelLine>{t.files.tooLarge(formatSize(data.size), formatSize(data.limit))}</PanelLine>
+          <OpenDefaultButton onClick={props.onOpenDefault} />
+        </div>
+      );
+    }
+    if (data.kind === "unreadable") {
+      const message =
+        data.reason === "password"
+          ? t.files.pptxPassword
+          : data.reason === "timeout"
+            ? t.files.pptxTimeout
+            : data.reason === "complex"
+              ? t.files.pptxComplex
+              : t.files.pptxBroken;
+      return (
+        <div className="file-preview-empty">
+          <Icon name="presentation" size={24} style={{ color: "var(--color-text-tertiary)" }} />
+          <PanelLine>{message}</PanelLine>
+          {/* 技术副行：解压 / 解析失败的原文，读得懂的人据此判断是不是文件本身坏了 */}
+          <p className="pptx-detail" title={data.detail}>
+            {data.detail}
+          </p>
+          <OpenDefaultButton onClick={props.onOpenDefault} />
+        </div>
+      );
+    }
+    if (data.slides.length === 0) {
+      // 0 页有两种：真空演示文稿 / 第一页就超出解析成本（构造包）。
+      // 后者不能说「没有幻灯片」——文件里有页，只是大纲读不动。
+      const budgetBlocked = data.budgetLimited && data.slideCount > 0;
+      return (
+        <div className="file-preview-empty">
+          <Icon name="presentation" size={24} style={{ color: "var(--color-text-tertiary)" }} />
+          <PanelLine>
+            {budgetBlocked ? t.files.pptxBudgetLimited(0, data.slideCount) : t.files.pptxEmpty}
+          </PanelLine>
+          <OpenDefaultButton onClick={props.onOpenDefault} />
+        </div>
+      );
+    }
+    if (slide === undefined) return null;
+    return (
       <div className="pptx-split">
         {/* 页列表：页码 + 版式名是定位用的坐标，标题是「这页在讲什么」 */}
         <nav className="pptx-slide-list" aria-label={t.files.pptxSlides} ref={listRef}>
@@ -219,17 +186,61 @@ export function PptxView(props: {
           )}
         </section>
       </div>
+    );
+  };
+
+  return (
+    <div className="pptx-view">
+      <div className="pptx-toolbar">
+        {canRender && (
+          <OfficeModeChips
+            mode={mode === "render" ? "render" : "data"}
+            onChange={(next) => setMode(next === "render" ? "render" : "outline")}
+            dataLabel={t.office.modeOutline}
+          />
+        )}
+        <span className="pptx-toolbar-title">
+          {t.files.pptxSlides}
+          {deck !== null && <span className="pptx-count">{deck.slideCount}</span>}
+        </span>
+        <div className="pptx-toolbar-actions">
+          <PanelButton onClick={props.onOpenDefault}>
+            <Icon name="external-link" size={14} />
+            {t.files.openDefault}
+          </PanelButton>
+        </div>
+      </div>
+      {canRender && (
+        <OfficeChangesPanel
+          request={request}
+          reloadToken={props.reloadToken + reload.render}
+          onReverted={() => {
+            // 回退 = 一次文件变化：两边令牌 +1，模式不动（正看着渲染视图就原地重渲染）
+            setReload(bumpOfficeReload);
+          }}
+        />
+      )}
+      {shownMode === "render" ? (
+        <OfficePreview
+          request={request}
+          format="pptx"
+          reloadToken={props.reloadToken + reload.render}
+          onFallback={() => setMode("outline")}
+          {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
+        />
+      ) : (
+        outline()
       )}
       <div className="pptx-footer">
         <span className="pptx-notice">
           <Icon name="lock" size={11} />
           {t.files.pptxReadOnly}
         </span>
-        {data.truncated && (
+        {deck !== null && deck.truncated && (
           <span className="pptx-notice">
-            {data.budgetLimited
-              ? t.files.pptxBudgetLimited(data.slides.length, data.slideCount)
-              : t.files.pptxDeckTruncated(data.slides.length, data.slideCount)}
+            {deck.budgetLimited
+              ? t.files.pptxBudgetLimited(deck.slides.length, deck.slideCount)
+              : t.files.pptxDeckTruncated(deck.slides.length, deck.slideCount)}
           </span>
         )}
       </div>
@@ -315,32 +326,38 @@ function BodyLine(props: { paragraph: PptxParagraph }) {
   );
 }
 
-type PptxState =
-  | { status: "loading" }
-  | { status: "error"; message: string }
-  | { status: "ready"; data: PptxPreview };
+type PptxState = {
+  /** 最近一次成功的回执：重拉期间**留着旧的**，不把整个视图换成「正在载入」 */
+  data: PptxPreview | null;
+  loading: boolean;
+  error: string | null;
+};
 
 const failMessage = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause));
 
 /**
  * 预览的数据半边：文件 / 刷新 token 变就重拉。竞态按 token 丢弃过期响应——切换两个
  * 文件时，先发的晚回也不会盖掉后发的结果。
+ *
+ * **旧数据不清空**：agent 改完 / 回退会让渲染视图与大纲同时重读；大纲这边一清空，
+ * PptxView 的古代码会整块换成「正在载入」，把正在显示的渲染 iframe 一起卸载
+ * （2026-11-17 验收：回退后渲染视图空白）。保留旧数据，只有第一次打开才是 loading。
  */
 function usePptxPreview(request: FileListRequest, reloadToken: number): PptxState {
-  const [state, setState] = useState<PptxState>({ status: "loading" });
+  const [state, setState] = useState<PptxState>({ data: null, loading: true, error: null });
   const token = useRef(0);
   const { sessionId, workspaceId, extraWorkspaceId, root, dir } = request;
   const extra = extraWorkspaceId ?? null;
   useEffect(() => {
     const id = ++token.current;
-    setState({ status: "loading" });
+    setState((prev) => ({ data: prev.data, loading: true, error: null }));
     api.files
       .readPptx({ sessionId, workspaceId, ...(extra === null ? {} : { extraWorkspaceId: extra }), root, dir })
       .then((data) => {
-        if (token.current === id) setState({ status: "ready", data });
+        if (token.current === id) setState({ data, loading: false, error: null });
       })
       .catch((cause: unknown) => {
-        if (token.current === id) setState({ status: "error", message: failMessage(cause) });
+        if (token.current === id) setState((prev) => ({ data: prev.data, loading: false, error: failMessage(cause) }));
       });
   }, [sessionId, workspaceId, extra, root, dir, reloadToken]);
   return state;

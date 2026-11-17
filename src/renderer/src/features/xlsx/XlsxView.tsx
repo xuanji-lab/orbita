@@ -17,6 +17,7 @@ import {
   useOfficeChanged,
   useOfficeStatus,
 } from "../office/OfficePreview.tsx";
+import { bumpOfficeReload, OFFICE_RELOAD_INITIAL, type OfficeReloadState } from "../office/reload.ts";
 
 /**
  * `.xlsx` 只读预览（契约在 `shared/xlsx.ts`）。
@@ -42,16 +43,18 @@ export function XlsxView(props: {
   const office = useOfficeStatus();
   const canRender = office?.available === true;
   const [mode, setMode] = useState<"render" | "data">("render");
-  const [renderReload, setRenderReload] = useState(0);
-  /** 回退之后网格也要重读（回退是整份文件还原，不只是渲染） */
-  const [gridReload, setGridReload] = useState(0);
+  /**
+   * 渲染与数据视图各一个刷新令牌（见 office/reload.ts）：编辑落盘、整批回退、
+   * 手动刷新都让**两边一起 +1**，回退不再把用户切到数据视图（2026-11-17 验收 BUG）。
+   */
+  const [reload, setReload] = useState<OfficeReloadState>(OFFICE_RELOAD_INITIAL);
   const shownMode = canRender ? mode : "data";
   // 换文件由 FilePreviewPane 的 key={path} 重挂载解决，这里不用再「重置表号」——
   // 否则旧文件那张表的号会先发一次请求，新文件再发一次，同一个工作簿白解析两遍
   const [sheet, setSheet] = useState(0);
-  const state = useXlsxPreview(props.request, sheet, props.reloadToken + gridReload);
-  // agent 改了一份文件（edit_office / 回退）：数据网格也重读，别让两种视图各说各话
-  useOfficeChanged(props.request.dir, () => setGridReload((value) => value + 1));
+  const state = useXlsxPreview(props.request, sheet, props.reloadToken + reload.data);
+  // agent 改了一份文件（edit_office / 回退）：两种视图一起重读，别让它们各说各话
+  useOfficeChanged(props.request.dir, () => setReload(bumpOfficeReload));
   const data = state.data;
 
   // 还没有任何数据（首次打开）：只能给一行「正在载入…」——此时没有标签可留
@@ -102,11 +105,10 @@ export function XlsxView(props: {
       {canRender && (
         <OfficeChangesPanel
           request={props.request}
-          reloadToken={props.reloadToken + renderReload}
+          reloadToken={props.reloadToken + reload.render}
           onReverted={() => {
-            setGridReload((value) => value + 1);
-            setRenderReload((value) => value + 1);
-            setMode("data");
+            // 回退 = 一次文件变化：两边令牌 +1，**模式不动**——正看着渲染视图就原地重渲染
+            setReload(bumpOfficeReload);
           }}
         />
       )}
@@ -114,7 +116,7 @@ export function XlsxView(props: {
         <OfficePreview
           request={props.request}
           format="xlsx"
-          reloadToken={props.reloadToken + renderReload}
+          reloadToken={props.reloadToken + reload.render}
           onFallback={() => setMode("data")}
           {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
         />
