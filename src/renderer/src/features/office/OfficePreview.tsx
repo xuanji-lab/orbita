@@ -43,15 +43,21 @@ export function OfficePreview(props: {
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const shellRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(720);
-  const [state, setState] = useState<{ status: "loading" } | { status: "error"; message: string } | { status: "ready"; data: Extract<OfficeRenderResult, { kind: "html" }> } | { status: "unavailable"; detail: string }>(
-    { status: "loading" },
-  );
+  /**
+   * 最近一次成功渲染的 HTML。重拉期间**留着旧的**——渲染是一次 officecli 子进程
+   * （0.3–5 s），把 iframe 清空再等，用户看到的是「内容变成 0」的白板（2026-11-17
+   * 验收 BUG）；留着旧的，新 HTML 回来再原地换掉。
+   */
+  const [html, setHtml] = useState<Extract<OfficeRenderResult, { kind: "html" }> | null>(null);
+  const [phase, setPhase] = useState<"loading" | "ready" | "error" | "unavailable">("loading");
+  /** error 的 message / unavailable 的 detail（按 phase 取用） */
+  const [failure, setFailure] = useState<string | null>(null);
   // cells：xlsx 的多格区间时是格数（chip 上显示「15 格」而不是终点格的值，B4）
   const [picked, setPicked] = useState<{ path: string; preview: string; cells: number | null } | null>(null);
   const [anchor, setAnchor] = useState<string | null>(null);
   const [captured, setCaptured] = useState<"idle" | "ok" | "fail">("idle");
-  /** agent 改完这份文件（office:changed）→ 自增，重拉 HTML 与改动清单 */
-  const [externalReload, setExternalReload] = useState(0);
+  /** 渲染失败时的「重试」按钮：只重拉这一个视图（外层令牌不动） */
+  const [retry, setRetry] = useState(0);
   const token = useRef(0);
 
   // 面板宽高变了要重算 pptx 的缩放：量外层容器，不量 iframe（iframe 宽度跟着容器走）
@@ -67,30 +73,38 @@ export function OfficePreview(props: {
   // 渲染数据：文件 / 刷新 token 变就重拉（竞态按 token 丢弃过期响应）
   useEffect(() => {
     const id = ++token.current;
-    setState({ status: "loading" });
-    setPicked(null);
-    setAnchor(null);
+    setPhase("loading");
+    setFailure(null);
     api.office
       .render(request)
       .then((result) => {
         if (token.current !== id) return;
-        setState(result.kind === "html" ? { status: "ready", data: result } : { status: "unavailable", detail: result.detail });
+        if (result.kind === "html") {
+          setHtml(result);
+          setPhase("ready");
+          // 换了一份内容：上一次的选点 / 区间锚点对新内容没有意义
+          setPicked(null);
+          setAnchor(null);
+        } else {
+          setHtml(null);
+          setFailure(result.detail);
+          setPhase("unavailable");
+        }
       })
       .catch((cause: unknown) => {
         if (token.current !== id) return;
-        setState({ status: "error", message: cause instanceof Error ? cause.message : String(cause) });
+        setHtml(null);
+        setFailure(cause instanceof Error ? cause.message : String(cause));
+        setPhase("error");
       });
     // request 是每次渲染新建的对象，按它的字段列依赖（同 XlsxView 的写法）
-  }, [request.sessionId, request.workspaceId, request.extraWorkspaceId, request.root, request.dir, props.reloadToken, externalReload]);
-
-  // agent 改了这份文件（主进程广播）：自动重渲染，用户不用手动点刷新
-  useOfficeChanged(request.dir, () => setExternalReload((value) => value + 1));
+  }, [request.sessionId, request.workspaceId, request.extraWorkspaceId, request.root, request.dir, props.reloadToken, retry]);
 
   const accent = useThemeColor("--color-accent", "currentColor");
   const documentHtml = useMemo(() => {
-    if (state.status !== "ready") return "";
-    return officeDocumentHtml({ html: state.data.html, format, width, accent });
-  }, [state, format, width, accent]);
+    if (html === null) return "";
+    return officeDocumentHtml({ html: html.html, format, width, accent });
+  }, [html, format, width, accent]);
 
   /** iframe 里的点击：标注 / 切工作表 / 阻止链接跳转 */
   const wire = useCallback(() => {
@@ -183,29 +197,29 @@ export function OfficePreview(props: {
 
   return (
     <div className="office-preview" ref={shellRef}>
-      {state.status === "loading" && (
+      {phase === "loading" && html === null && (
         <div className="file-preview-loading">
           <Icon name="loader-circle" size={14} spin />
           {t.common.loading}
         </div>
       )}
-      {state.status === "error" && (
+      {phase === "error" && (
         <div className="file-preview-error">
-          <PanelLine danger>{state.message}</PanelLine>
+          <PanelLine danger>{failure ?? ""}</PanelLine>
           {props.onFallback !== undefined && (
             <PanelButton onClick={props.onFallback}>{t.office.modeGrid}</PanelButton>
           )}
         </div>
       )}
-      {state.status === "unavailable" && (
+      {phase === "unavailable" && (
         <div className="file-preview-empty">
           <Icon name="file-spreadsheet" size={24} style={{ color: "var(--color-text-tertiary)" }} />
           <PanelLine>{t.office.renderUnavailable}</PanelLine>
-          <p className="office-detail" title={state.detail}>
-            {state.detail}
+          <p className="office-detail" title={failure ?? undefined}>
+            {failure ?? ""}
           </p>
           <div className="office-error-actions">
-            <PanelButton onClick={() => setExternalReload((value) => value + 1)}>
+            <PanelButton onClick={() => setRetry((value) => value + 1)}>
               <Icon name="rotate-ccw" size={14} />
               {t.office.retry}
             </PanelButton>
@@ -218,7 +232,7 @@ export function OfficePreview(props: {
           </div>
         </div>
       )}
-      {state.status === "ready" && (
+      {html !== null && (
         <>
           <iframe
             ref={frameRef}
