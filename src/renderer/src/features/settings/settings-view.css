@@ -797,6 +797,11 @@ a.exp-pr:hover {
 .cu-shot {
   margin: 0;
   overflow: hidden;
+  /* **必须压住 min-width**：它是 grid item，默认 min-width:auto 会让「内容最小宽度」
+     （这里是一张 2048px 宽的原始桌面截图）撑开 grid 列——设置页从 720 被撑到 1360，
+    右侧所有控制列被挤出视野（2026-11-18 真机验收撞到，切页签才恢复）。
+    min-width:0 让 item 服从列的宽度，图片再由 max-width 兜一层。 */
+  min-width: 0;
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-lg);
   background: var(--color-bg-panel);
@@ -805,6 +810,7 @@ a.exp-pr:hover {
 .cu-shot img {
   display: block;
   width: 100%;
+  max-width: 100%;
   height: auto;
 }
 
