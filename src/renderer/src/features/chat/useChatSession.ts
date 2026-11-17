@@ -13,7 +13,7 @@ import { splitEchoBlocks } from "../../../../shared/prompt-attachments.ts";
 import {
   EMPTY_ENTRY,
   dequeue,
-  holdQueueOnStop,
+  markCompactionStopped,
   releaseQueue,
   shownPhase,
   applyAgentEvent,
@@ -187,6 +187,8 @@ export interface ChatSession {
   phase: "idle" | "turn" | "compaction";
   /** 真实 phase 不是空闲（含没人在等的轮末预先压缩）：本子编辑（回退 / 撤销）这时会被 agent 拒绝 */
   busy: boolean;
+  /** 用户刚停下一次压缩：输入框上方一行中性提示（见 SessionEntry.compactionStopped） */
+  compactionStopped: "queued" | "turn" | null;
   /** 自动重试等待态：非 null 时重试行替换 Responding（或补在压缩行下） */
   retry: RetryStatus | null;
   /**
@@ -2282,12 +2284,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     // 停的是压缩（轮末预先压缩时用户发了话在等，或一轮里请求前的阻塞压缩）：上下文没变，判据仍成立——
     // 再发送时内核一定先压。说清后果；队里有话就先停住不自动投（不然停完立刻又发、又压，等于没停），
     // 用户再发一句或点「立即发送」时恢复。没人在等的轮末压缩（队列空）界面上没有停止键，不在这里交代
-    if (entry !== undefined && entry.phase === "compaction" && !(entry.compactionQuiet === true && entry.queued.length === 0)) {
-      const queuedText = entry.queued.length > 0;
-      engine.applyStates((prev) => holdQueueOnStop(prev, id));
-      const t = engine.messagesRef.current.session;
-      engine.setError(queuedText ? t.compactionStoppedQueued : t.compactionStoppedTurn);
-    }
+    if (entry !== undefined && entry.phase === "compaction") engine.applyStates((prev) => markCompactionStopped(prev, id));
     void api.agent.abort(id);
   }, [engine]);
 
@@ -3100,6 +3097,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     phase: shownPhase(entry),
     /** 真实 phase 不是空闲（含没人在等的轮末预先压缩）：这时 agent 拒绝回退 / 撤销等本子编辑 */
     busy: entry.phase !== "idle",
+    compactionStopped: entry.compactionStopped ?? null,
     retry: entry.retry,
     turnError: entry.turnError,
     stats: entry.stats,

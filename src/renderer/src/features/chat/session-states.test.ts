@@ -21,7 +21,7 @@ import {
   seedRunningPhases,
   setPendingEcho,
   nextDeliverable,
-  holdQueueOnStop,
+  markCompactionStopped,
   releaseQueue,
   shownPhase,
   planDelivery,
@@ -1457,20 +1457,36 @@ describe("轮末预先压缩：显示按空闲、投递按真实 phase、停止�
     assert.equal(shownPhase(states.get("s") as SessionEntry), "compaction");
   });
 
-  it("压缩时停止、队里有话：队列停住，idle 后不自动投；用户恢复后照常投；下一轮开跑清掉停住", () => {
-    let states = holdQueueOnStop(enqueue(quiet(), "s", text("a")), "s");
+  it("压缩时停止、队里有话：记「话还没发出去」的提示，队列停住，idle 后不自动投；用户恢复后照常投；下一轮开跑清掉两样", () => {
+    let states = markCompactionStopped(enqueue(quiet(), "s", text("a")), "s");
+    assert.equal((states.get("s") as SessionEntry).compactionStopped, "queued");
     states = phase(states, { phase: "idle" });
     assert.equal(nextDeliverable(states.get("s") as SessionEntry), null, "停了就不自动再发");
+    assert.equal((states.get("s") as SessionEntry).compactionStopped, "queued", "idle 不清提示");
     const released = releaseQueue(states, "s");
     assert.equal(nextDeliverable(released.get("s") as SessionEntry)?.id, "a");
     const restarted = phase(states, { phase: "turn" });
     assert.equal((restarted.get("s") as SessionEntry).queueHeld, false);
+    assert.equal((restarted.get("s") as SessionEntry).compactionStopped, null);
   });
 
-  it("不在压缩、或队列空时停止：不停住队列", () => {
+  it("一轮里请求前的阻塞压缩被停（话已进上下文、队列空）：记「还没回」的提示，不停住队列", () => {
+    const states = markCompactionStopped(phase(phase(createSessionStates(), { phase: "turn" }), { phase: "compaction" }), "s");
+    const entry = states.get("s") as SessionEntry;
+    assert.equal(entry.compactionStopped, "turn");
+    assert.notEqual(entry.queueHeld, true);
+  });
+
+  it("agent 随后报 failed（手动压缩被停的 Compaction cancelled）：中性提示让位", () => {
+    const stopped = markCompactionStopped(phase(createSessionStates(), { phase: "compaction" }), "s");
+    const after = applyAgentEvent(stopped, { type: "failed", sessionId: "s", message: "Compaction cancelled" } as AgentEvent);
+    assert.equal((after.get("s") as SessionEntry).compactionStopped, null);
+  });
+
+  it("不在压缩、或没人在等的轮末预先压缩：停止不记提示、不停住队列", () => {
     const turn = enqueue(phase(createSessionStates(), { phase: "turn" }), "s", text("a"));
-    assert.equal(holdQueueOnStop(turn, "s"), turn);
-    const empty = phase(createSessionStates(), { phase: "compaction" });
-    assert.equal(holdQueueOnStop(empty, "s"), empty);
+    assert.equal(markCompactionStopped(turn, "s"), turn);
+    const quietEmpty = quiet();
+    assert.equal(markCompactionStopped(quietEmpty, "s"), quietEmpty);
   });
 });
