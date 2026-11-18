@@ -20,6 +20,7 @@ import type { BrowserToolOutcome } from "../../shared/browser.ts";
 import type { DocOutcome } from "../../shared/doc.ts";
 import type { TerminalToolOutcome } from "../../shared/terminal.ts";
 import type { LatexRunOutcome } from "../../shared/latex.ts";
+import type { OfficeAgentOutcome } from "../../shared/office.ts";
 import type { SlidesOutcome } from "../../shared/slides-export.ts";
 import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
@@ -675,6 +676,14 @@ export class AgentHostCore {
       requestId,
       ...(outcome.ok ? { ok: true as const, result: outcome.result } : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);
+  }
+
+  /**
+   * Office：officeRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。
+   * 形状是 shared/office.ts 的 OfficeAgentOutcome（ok 双分支）。
+   */
+  answerOffice(requestId: string, outcome: OfficeAgentOutcome): void {
+    this.child?.postMessage({ type: "officeResult", requestId, ...outcome } satisfies AgentCommand);
   }
 
   /** 自动化：automationRequest 的回执（delegate 同款）：不 ensure、发完即回。 */

@@ -68,6 +68,12 @@ export type XlsxPreview =
       /** 请求的那张表（`sheet` 超范围时夹到第一张 / 最后一张），`active` 是它的下标 */
       sheet: XlsxSheet;
       active: number;
+      /**
+       * 这份工作簿是**按兼容模式**读出来的：解析失败后去掉 OOXML 的 `x:` 前缀重试成功
+       * （OfficeCLI 重写过的文件带前缀，ExcelJS 4.4.0 不认）。原文件一个字节没动。
+       * 界面据此标一句「由 Office 工具重写过，已按兼容模式读取」。
+       */
+      normalized?: true;
       size: number;
       modifiedAt: number;
     }

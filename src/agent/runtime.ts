@@ -92,6 +92,7 @@ import { createTaskTools } from "./task-tools.ts";
 import { createBrowserTools } from "./browser-tools.ts";
 import { createTerminalTools, TERMINAL_TOOL_NAMES } from "./terminal-tools.ts";
 import { createLatexTools, LATEX_TOOL_NAMES } from "./latex-tools.ts";
+import { createOfficeTools, OFFICE_TOOL_NAMES } from "./office-tools.ts";
 import {
   applyRecallEvent,
   composeAttachmentPrompt,
@@ -806,6 +807,7 @@ function extraToolNames(
     ...TERMINAL_TOOL_NAMES,
     // LaTeX 编译：同样逐档判——plan 档下编译（会写 build/）被拒，manual 档下要问
     ...LATEX_TOOL_NAMES,
+    ...OFFICE_TOOL_NAMES,
     ...(role === "root" ? ["delegate", "reply_subsession", "model_costs"] : ["report_to_parent"]),
     ...(memoryTools ? MEMORY_TOOL_NAMES : []),
     ...(automationTools ? AUTOMATION_TOOL_NAMES : []),
@@ -1432,6 +1434,9 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     // agent 的 LaTeX 工具（PR1）：compile_latex。latexmk 与 .log 解析在主进程
     // （main/latex/），这里只翻译参数；目录授权在主进程按会话名单硬校验
     ...createLatexTools(requestBroker, command.sessionId, { cwd: command.cwd }),
+    // Office（./office-tools.ts）：read_office / edit_office。OfficeCLI 子进程、备份与
+    // 改动清单在主进程（office/service.ts）；这一层只翻译参数
+    ...createOfficeTools(requestBroker, command.sessionId, { cwd: command.cwd }),
     ...createChannelTools(requestBroker, command.sessionId, role),
     ...(memoryTools
       ? createMemoryTools(requestBroker, command.sessionId, {
@@ -2350,8 +2355,8 @@ async function handle(command: AgentCommand): Promise<void> {
     requestBroker.resolve(command.requestId, command);
     return;
   }
-  if (command.type === "latexResult") {
-    // LaTeX 工具的回执（terminalResult 同款）：形状即契约，原样结掉在途 promise
+  if (command.type === "latexResult" || command.type === "officeResult") {
+    // LaTeX / Office 工具的回执（terminalResult 同款）：形状即契约，原样结掉在途 promise
     requestBroker.resolve(command.requestId, command);
     return;
   }

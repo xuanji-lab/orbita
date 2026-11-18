@@ -112,6 +112,9 @@ import { registerTerminalIpc } from "./terminal/ipc.ts";
 import { LatexRunner } from "./latex/run.ts";
 import { applyLatexRequest } from "./latex/agent-requests.ts";
 import { registerLatexIpc } from "./latex/ipc.ts";
+import { OFFICE_BACKUP_DIR, registerOfficeIpc } from "./office/ipc.ts";
+import { removeEmptyLegacyOfficeBackupDirs } from "./office/legacy-backups.ts";
+import { applyOfficeRequest } from "./office/agent.ts";
 import { registerCiteIpc } from "./cite/ipc.ts";
 import { registerReviewIpc } from "./review/ipc.ts";
 import { registerFocusIpc } from "./focus/ipc.ts";
@@ -712,6 +715,17 @@ void app.whenReady().then(async () => {
     }
     // LaTeX：agent 的 compile_latex——latexmk 进程与 .log 解析都在主进程（terminalRequest
     // 同一条边界）。同样任何路径都回执，否则那次工具调用会永远等下去
+    if (event.type === "officeRequest") {
+      void applyOfficeRequest(office, sessions, workspaces, event)
+        .then((outcome) => agentHost.answerOffice(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerOffice(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
     if (event.type === "latexRequest") {
       void applyLatexRequest(latex, sessions, workspaces, event)
         .then((outcome) => agentHost.answerLatex(event.requestId, outcome))
@@ -1268,6 +1282,17 @@ void app.whenReady().then(async () => {
     explicitPath: async () => (await settings.read()).latexmkPath,
   });
   registerLatexIpc(latex, workspaces, sessions, settings);
+  // Office「指哪打哪」：OfficeCLI 的定位 / 验活 / 渲染 / batch 与改动清单都在主进程
+  // （agent 的 read_office / edit_office 经 officeRequest 问答走同一份 service）
+  const office = registerOfficeIpc({
+    settings,
+    sessions,
+    workspaces,
+    // 备份放 userData（不进会话工作台：那是文件面板的第一个根，会被当成用户文件看到）
+    backupRoot: join(configDir, OFFICE_BACKUP_DIR),
+  });
+  // 旧版本留在会话工作台里的空 office-backups（只删空目录，非空的旧备份一个字节都不动）
+  void removeEmptyLegacyOfficeBackupDirs(join(configDir, "workbenches")).catch(() => undefined);
   // 引用补全：读项目里的 .bib（只读盘、与编译同一道白名单与同一个项目目录）
   registerCiteIpc(workspaces, sessions);
   const agentIpc = registerAgentIpc(

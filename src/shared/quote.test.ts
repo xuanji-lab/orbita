@@ -190,7 +190,31 @@ describe("文件引用 —— 文档面板里的划选（带行号 / 页号）",
   });
 
   it("系统提示词讲到了文件引用的每个属性", () => {
-    for (const attr of ["path", "lines", "slide"]) assert.match(QUOTE_GUIDELINE, new RegExp(`${attr}=`));
+    for (const attr of ["path", "lines", "slide", "office"]) assert.match(QUOTE_GUIDELINE, new RegExp(`${attr}=`));
+  });
+
+  it("Office 标注：格式 + DOM path 往返，进正文的 office 属性模型能直接拿来调 edit_office", () => {
+    const annotation: TextQuote = {
+      text: "1200",
+      messageId: "",
+      role: "user",
+      filePath: "/ws/2026Q4.xlsx",
+      office: { format: "xlsx", path: "/Sheet1/B2:D5" },
+    };
+    const message = composeQuotedMessage([annotation], "把这段合计改对");
+    assert.match(message, /office="xlsx \/Sheet1\/B2:D5"/);
+    assert.deepEqual(parseQuotedMessage(message).quotes, [annotation]);
+  });
+
+  it("Office 标注的格式不认（docx / 乱写）就当没有，不猜", () => {
+    const parsed = parseQuotedMessage('<quoted_file path="/a.xlsx" office="docx /body">\n字\n</quoted_file>\n\n话');
+    assert.equal(parsed.quotes[0]?.office, undefined);
+  });
+
+  it("同一文件不同节点的标注不是重复引用（同一节点才是）", () => {
+    const one: TextQuote = { text: "x", messageId: "", role: "user", filePath: "/a.xlsx", office: { format: "xlsx", path: "/Sheet1/B2" } };
+    assert.equal(acceptQuote([one], { ...one, office: { format: "xlsx", path: "/Sheet1/C3" } }).accepted, true);
+    assert.deepEqual(acceptQuote([one], { ...one }), { accepted: false, reason: "duplicate" });
   });
 });
 

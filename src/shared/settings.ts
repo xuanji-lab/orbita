@@ -331,6 +331,13 @@ export interface AppSettings {
    */
   latexmkPath?: string;
   /**
+   * 显式指定的 OfficeCLI 可执行文件（绝对路径）。**缺席 = 设置没指 → 环境变量
+   * ORBITA_OFFICECLI → 随包资源 → 开发态 build/bin → 常见安装目录**（顺序见
+   * main/office/cli.ts）。同 latexmkPath：只认绝对路径；验不过就继续往下找，不会让
+   * Office 渲染变成死路。设置页只有一个状态行与这个路径输入框。
+   */
+  officeCliPath?: string;
+  /**
    * 设置 › 模型服务这一页的界面记忆：卡片尺寸、「仅显示已添加」、价格 · 能力图停在哪个分类，
    * 放在一个对象里管（用户 2026-10-25）。缺席 = 全部默认。store 写入时按键合并一层（同 drawer），
    * 页面上每个开关只发自己那个键。
@@ -601,6 +608,7 @@ export function parseSettings(raw: unknown): AppSettings {
     lastUsed?: unknown;
     browserDownloadDir?: unknown;
     latexmkPath?: unknown;
+    officeCliPath?: unknown;
     starredModels?: unknown;
     usagePet?: unknown;
     providersPage?: unknown;
@@ -705,6 +713,12 @@ export function parseSettings(raw: unknown): AppSettings {
     record.latexmkPath.trim() !== "" &&
     isAbsolutePath(record.latexmkPath.trim())
       ? { latexmkPath: record.latexmkPath.trim() }
+      : {}),
+    // OfficeCLI 的显式路径：同一条纪律（绝对路径、非空）
+    ...(typeof record.officeCliPath === "string" &&
+    record.officeCliPath.trim() !== "" &&
+    isAbsolutePath(record.officeCliPath.trim())
+      ? { officeCliPath: record.officeCliPath.trim() }
       : {}),
     // 只认布尔（同 gitAttribution 的纪律）："yes" 这类手改值该被丢掉，而不是当成真；
     // 逐项开关下「全关」不落键（空表 undefined，同 starredModels 的纪律）

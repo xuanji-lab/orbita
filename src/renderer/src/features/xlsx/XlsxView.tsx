@@ -8,6 +8,16 @@ import { formatSize } from "../files/tree-view";
 import { xlsxColumnLabel, xlsxColumnWidths, xlsxGridRows, type XlsxGridSlot } from "./xlsx-grid.ts";
 import type { FileListRequest } from "@shared/files";
 import type { XlsxPreview, XlsxSheet } from "@shared/xlsx";
+import type { TextQuote } from "@shared/quote";
+import {
+  OfficeChangesPanel,
+  OfficeModeChips,
+  OfficePreview,
+  OfficeUnavailableNotice,
+  useOfficeChanged,
+  useOfficeStatus,
+} from "../office/OfficePreview.tsx";
+import { bumpOfficeReload, OFFICE_RELOAD_INITIAL, type OfficeReloadState } from "../office/reload.ts";
 
 /**
  * `.xlsx` 只读预览（契约在 `shared/xlsx.ts`）。
@@ -25,12 +35,26 @@ export function XlsxView(props: {
   reloadToken: number;
   /** 用系统默认应用打开（与空态那个按钮同一个动作，由 FilePreviewPane 给） */
   onOpenDefault: () => void;
+  /** 点单元格出的标注进输入框（Office 渲染视图里；缺席 = 只显示、不引用） */
+  onQuote?: (quote: TextQuote) => void;
 }) {
   const t = useT();
+  // Office 渲染（OfficeCLI）可用时就默认渲染视图；不可用 / 点了渲染却失败 → 数据网格
+  const office = useOfficeStatus();
+  const canRender = office?.available === true;
+  const [mode, setMode] = useState<"render" | "data">("render");
+  /**
+   * 渲染与数据视图各一个刷新令牌（见 office/reload.ts）：编辑落盘、整批回退、
+   * 手动刷新都让**两边一起 +1**，回退不再把用户切到数据视图（2026-11-17 验收 BUG）。
+   */
+  const [reload, setReload] = useState<OfficeReloadState>(OFFICE_RELOAD_INITIAL);
+  const shownMode = canRender ? mode : "data";
   // 换文件由 FilePreviewPane 的 key={path} 重挂载解决，这里不用再「重置表号」——
   // 否则旧文件那张表的号会先发一次请求，新文件再发一次，同一个工作簿白解析两遍
   const [sheet, setSheet] = useState(0);
-  const state = useXlsxPreview(props.request, sheet, props.reloadToken);
+  const state = useXlsxPreview(props.request, sheet, props.reloadToken + reload.data);
+  // agent 改了一份文件（edit_office / 回退）：两种视图一起重读，别让它们各说各话
+  useOfficeChanged(props.request.dir, () => setReload(bumpOfficeReload));
   const data = state.data;
 
   // 还没有任何数据（首次打开）：只能给一行「正在载入…」——此时没有标签可留
@@ -48,9 +72,15 @@ export function XlsxView(props: {
        * 也能接着点别的（后发的请求按 token 丢弃先回的）。首次打开没有标签可留，
        * 那种情况在上面的早返回里。
        */}
-      {workbook !== null && (
+      {/*
+       * 工具栏的「渲染 / 数据」芯片**不挂在 workbook 上**：结构解析失败（#341 读不动
+       * officecli 生成的 xlsx）时，数据视图仍然要能点进去看原因，不能整排消失（B3）。
+       * 表标签只在解析成功时才有。
+       */}
+      {data !== null && (
         <div className="xlsx-toolbar">
-          {workbook.sheets.length > 1 && (
+          {canRender && <OfficeModeChips mode={mode} onChange={setMode} dataLabel={t.office.modeGrid} />}
+          {shownMode === "data" && workbook !== null && workbook.sheets.length > 1 && (
             <div className="xlsx-sheets" role="group" aria-label={t.files.xlsxSheets}>
               {workbook.sheets.map((tab, index) => (
                 <Chip
@@ -72,7 +102,25 @@ export function XlsxView(props: {
           </div>
         </div>
       )}
-      {state.error !== null ? (
+      {canRender && (
+        <OfficeChangesPanel
+          request={props.request}
+          reloadToken={props.reloadToken + reload.render}
+          onReverted={() => {
+            // 回退 = 一次文件变化：两边令牌 +1，**模式不动**——正看着渲染视图就原地重渲染
+            setReload(bumpOfficeReload);
+          }}
+        />
+      )}
+      {canRender && shownMode === "render" ? (
+        <OfficePreview
+          request={props.request}
+          format="xlsx"
+          reloadToken={props.reloadToken + reload.render}
+          onFallback={() => setMode("data")}
+          {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
+        />
+      ) : state.error !== null ? (
         <XlsxError message={state.error} />
       ) : state.loading ? (
         // 加载落在网格区里：工具栏与标签保持原样，只是内容在等
@@ -86,19 +134,33 @@ export function XlsxView(props: {
       ) : data.kind === "unreadable" ? (
         <div className="file-preview-empty">
           <Icon name="file-spreadsheet" size={24} style={{ color: "var(--color-text-tertiary)" }} />
-          <PanelLine>{unreadableMessage(data.reason, t)}</PanelLine>
+          {/* corrupt + 渲染可用：先说「是解析器的问题、渲染视图仍可看」，不要先用
+              「可能已经损坏」把人吓回去（B3）。密码 / 全是隐藏表这些原因保持原话。 */}
+          <PanelLine>
+            {data.reason === "corrupt" && canRender
+              ? t.files.xlsxRenderStillViewable
+              : unreadableMessage(data.reason, t)}
+          </PanelLine>
           {/* 技术副行：解压 / 解析失败的原文，读得懂的人据此判断是不是文件本身坏了 */}
           <p className="xlsx-detail" title={data.detail}>
             {data.detail}
           </p>
+          {canRender && data.reason !== "corrupt" && <PanelLine>{t.files.xlsxRenderStillViewable}</PanelLine>}
+          {canRender && (
+            <PanelButton onClick={() => setMode("render")}>
+              <Icon name="file-spreadsheet" size={14} />
+              {t.office.modeRender}
+            </PanelButton>
+          )}
           <OpenDefaultButton onClick={props.onOpenDefault} />
         </div>
       ) : (
         <>
           <XlsxGrid sheet={data.sheet} />
-          <XlsxFooter sheet={data.sheet} />
+          <XlsxFooter sheet={data.sheet} normalized={data.normalized === true} />
         </>
       )}
+      {office !== null && !canRender && <OfficeUnavailableNotice status={office} fallback="grid" />}
     </div>
   );
 }
@@ -258,6 +320,7 @@ function SpacerRow(props: { rows: number; span: number }) {
 }
 
 function GridCell(props: { slot: XlsxGridSlot; firstRenderedRow: number }) {
+  const t = useT();
   const slot = props.slot;
   if (slot.kind === "covered") {
     // 锚点在本段里：整格不画，位置由锚点那格的 colSpan / rowSpan 占掉
@@ -267,6 +330,9 @@ function GridCell(props: { slot: XlsxGridSlot; firstRenderedRow: number }) {
   }
   if (slot.kind === "empty") return <td className="xlsx-cell" />;
   const cell = slot.cell;
+  // 有公式、没有缓存值（第三方工具重算后没写 <v>）：不能画成空白——给占位并说明
+  // 「渲染视图可看」，否则用户会以为这个格真的没数据（B9 的兜底层）
+  const uncached = cell.formula !== undefined && cell.text === "";
   return (
     <td
       className="xlsx-cell"
@@ -275,11 +341,18 @@ function GridCell(props: { slot: XlsxGridSlot; firstRenderedRow: number }) {
       data-error={cell.error === true ? "true" : undefined}
       // 公式原文走 tooltip：格子里显示的是缓存值，与 Excel 打开时一致
       data-formula={cell.formula === undefined ? undefined : "true"}
-      title={cell.formula === undefined ? cell.text : `=${cell.formula}`}
+      data-uncached={uncached ? "true" : undefined}
+      title={
+        cell.formula === undefined
+          ? cell.text
+          : uncached
+            ? `=${cell.formula} · ${t.files.xlsxFormulaUncached}`
+            : `=${cell.formula}`
+      }
       colSpan={slot.colSpan === 1 ? undefined : slot.colSpan}
       rowSpan={slot.rowSpan === 1 ? undefined : slot.rowSpan}
     >
-      <span className="xlsx-cell-text">{cell.text}</span>
+      <span className="xlsx-cell-text">{uncached ? "—" : cell.text}</span>
     </td>
   );
 }
@@ -289,7 +362,7 @@ function GridCell(props: { slot: XlsxGridSlot; firstRenderedRow: number }) {
  * 两件事都是「与你看到的原文件不一样」的地方，必须显式说出来——不说，用户会以为
  * 预览少读了数据 / 滚动不对劲。
  */
-function XlsxFooter(props: { sheet: XlsxSheet }) {
+function XlsxFooter(props: { sheet: XlsxSheet; /** 兼容模式读取（去前缀兜底成功） */ normalized: boolean }) {
   const t = useT();
   const shownRows = props.sheet.rows.length;
   const shownCols = props.sheet.rows[0]?.length ?? 0;
@@ -299,9 +372,15 @@ function XlsxFooter(props: { sheet: XlsxSheet }) {
   const frozenCols = Math.min(frozen.cols, shownCols);
   const hasFrozen = frozenRows > 0 || frozenCols > 0;
   // 没有要说的就不画这条：空 footer 会白占一行高（评审在 #341 指出的 17px）
-  if (!truncated && !hasFrozen) return null;
+  if (!truncated && !hasFrozen && !props.normalized) return null;
   return (
     <div className="xlsx-footer">
+      {props.normalized && (
+        <span className="xlsx-notice">
+          <Icon name="info" size={11} />
+          {t.files.xlsxNormalized}
+        </span>
+      )}
       {truncated && (
         <span className="xlsx-notice">
           {t.files.xlsxTruncated(shownRows, shownCols, props.sheet.rowCount, props.sheet.colCount)}

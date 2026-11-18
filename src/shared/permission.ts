@@ -105,6 +105,9 @@ export const READ_ONLY_TOOLS = [
   "show_image",
   // 演示文稿：读摘要，零副作用（./slides-tools.ts）
   "slides_read",
+  // Office：按文档路径读节点（officecli get），零副作用（./office-tools.ts）。
+  // 写侧的 edit_office 不在名单里：它改用户的文件，plan 档拒、manual 档问
+  "read_office",
   // 打开文档：在右栏打开 / 读大纲。create:true 只会新建一个空文件（绝不覆盖），plan 档由工具自己拒绝
   "doc_open",
   // 插件列表：读已装插件的名字与技能，不改任何东西

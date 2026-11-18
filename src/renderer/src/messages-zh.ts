@@ -1253,6 +1253,17 @@ export const zh: Messages = {
       memory: "记忆库",
       experimental: "实验功能",
     },
+    /** Office 渲染（OfficeCLI）：状态行 + 显式路径（绝对路径，留空走自动定位） */
+    office: {
+      title: "Office",
+      cliPath: "OfficeCLI 路径",
+      cliPathInfo: "留空 = 随包二进制 / 环境变量 ORBITA_OFFICECLI / 常见安装目录（按这个顺序找）。",
+      status: "状态",
+      ready: (version, source) => `OfficeCLI ${version} · ${source}`,
+      missing: "未找到：Office 文件退回数据网格 / 大纲",
+      checking: "检测中…",
+      recheck: "重新检测",
+    },
     appearance: "外观",
     theme: "主题",
     language: "语言",
@@ -2887,6 +2898,12 @@ export const zh: Messages = {
       `原文件冻结了${rows > 0 ? `前 ${rows} 行` : ""}${rows > 0 && cols > 0 ? "、" : ""}${cols > 0 ? `前 ${cols} 列` : ""}；这里的预览可以自由滚动`,
     xlsxEmpty: "这张表是空的",
     xlsxPassword: "这个工作簿有密码保护，或者不是真正的 .xlsx 文件。",
+    xlsxFormulaUncached:
+      "公式：缓存值缺失，渲染视图可看",
+    xlsxNormalized:
+      "该文件由 Office 工具重写过，数据视图按兼容模式读取（文件本身未改动）",
+    xlsxRenderStillViewable:
+      "数据网格解析不了这个工作簿（是解析器的问题，不是文件没内容）。切到上面的「渲染」仍可查看。",
     xlsxBroken: "这个工作簿读不开——可能已经损坏。",
     xlsxHiddenOnly: "这个工作簿的表全部被隐藏了。在 Excel 里右键工作表标签可以取消隐藏。",
     xlsUnsupported: "旧版 .xls 工作簿看不了预览，用默认应用打开。",
@@ -2920,6 +2937,26 @@ export const zh: Messages = {
   },
 
   /* ---------- 论文工作台的编译条 + 问题抽屉（LaTeX 项目） ---------- */
+  /**
+   * Office「指哪打哪」：xlsx / pptx 的渲染视图与点击标注（组件在 features/office/）。
+   */
+  office: {
+    modeRender: "渲染",
+    modeGrid: "数据",
+    modeOutline: "大纲",
+    pickCell: "点单元格标注（Shift 点第二格选区间）",
+    pickElement: "点形状、表格或图表来标注",
+    rangeCells: (n) => (n === 1 ? "1 格" : `${n} 格`),
+    quote: "引用到对话",
+    copyImage: "复制为图片",
+    copied: "已复制",
+    changes: (n) => `本轮改动 · ${n} 处`,
+    revert: "回退这批改动",
+    retry: "重试渲染",
+    renderUnavailable: "Office 渲染不可用",
+    noticeGrid: "未启用 Office 渲染，当前显示数据网格",
+    noticeOutline: "未启用 Office 渲染，当前显示大纲",
+  },
   latex: {
     aria: "LaTeX 编译",
     engineTip: "引擎：只列本机探测到的引擎；选中会写进项目里的 .orbita/latex.json",

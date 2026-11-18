@@ -1353,6 +1353,17 @@ export const en = {
       memory: "Memory",
       experimental: "Experimental",
     },
+    /** Office 渲染（OfficeCLI）：状态行 + 显式路径（绝对路径，留空走自动定位） */
+    office: {
+      title: "Office",
+      cliPath: "OfficeCLI path",
+      cliPathInfo: "Leave empty to use the bundled binary, the ORBITA_OFFICECLI environment variable, or a standard install location.",
+      status: "Status",
+      ready: (version: string, source: string) => `OfficeCLI ${version} · ${source}`,
+      missing: "Not found — Office files fall back to the data grid / outline",
+      checking: "Checking…",
+      recheck: "Check again",
+    },
     appearance: "Appearance",
     theme: "Theme",
     language: "Language",
@@ -3085,6 +3096,12 @@ export const en = {
       `The file freezes the first ${rows > 0 ? `${plural(rows, "row")}${cols > 0 ? " and " : ""}` : ""}${cols > 0 ? plural(cols, "column") : ""}; this preview scrolls freely`,
     xlsxEmpty: "This sheet is empty",
     xlsxPassword: "This workbook is password-protected, or it isn't a real .xlsx file.",
+    xlsxFormulaUncached:
+      "formula — no cached value yet; the rendered view can show it",
+    xlsxNormalized:
+      "This file was rewritten by the Office tool — read in compatibility mode (the file itself is unchanged).",
+    xlsxRenderStillViewable:
+      "The data grid could not parse this workbook (the parser, not the file's contents). Switch to Rendered above to view it.",
     xlsxBroken: "Couldn't read this workbook — it may be damaged.",
     xlsxHiddenOnly: "Every sheet in this workbook is hidden. Right-click a sheet tab in Excel to unhide one.",
     xlsUnsupported: "Old .xls workbooks can't be previewed — open it with the default app.",
@@ -3122,6 +3139,26 @@ export const en = {
   },
 
   /* ---------- 论文工作台的编译条 + 问题抽屉（LaTeX 项目） ---------- */
+  /**
+   * Office「指哪打哪」：xlsx / pptx 的渲染视图与点击标注（组件在 features/office/）。
+   */
+  office: {
+    modeRender: "Rendered",
+    modeGrid: "Data",
+    modeOutline: "Outline",
+    pickCell: "Click a cell to annotate it (Shift-click a second cell for a range)",
+    pickElement: "Click a shape, table or chart to annotate it",
+    rangeCells: (n: number) => (n === 1 ? "1 cell" : `${n} cells`),
+    quote: "Quote to chat",
+    copyImage: "Copy as image",
+    copied: "Copied",
+    changes: (n: number) => (n === 1 ? "1 change this round" : `${n} changes this round`),
+    revert: "Revert this batch",
+    retry: "Retry",
+    renderUnavailable: "Office rendering is unavailable",
+    noticeGrid: "Office rendering is off — showing the data grid",
+    noticeOutline: "Office rendering is off — showing the outline",
+  },
   latex: {
     aria: "LaTeX build",
     engineTip: "Engine — lists what this machine has; picking one writes .orbita/latex.json",

@@ -10,6 +10,7 @@ import { PanelButton } from "../../shell/RightPanel";
 import type { PluginDraftTarget } from "../plugins/plugin-draft.ts";
 import { MemoryLibraryView } from "../memory/MemoryLibraryView";
 import type { MemoryEntryView } from "@shared/memory";
+import type { OfficeStatus } from "@shared/office";
 import { PluginsView } from "../plugins/PluginsView.tsx";
 import type { SettingsTab } from "./settings-tabs.ts";
 import type { ProviderDto } from "@shared/provider";
@@ -579,6 +580,7 @@ function General(props: {
       <SettingGroup label={t.settings.data}>
         <DataDirectoryRow />
       </SettingGroup>
+      <OfficeCliSection settings={props.settings} onChange={props.onChange} />
       {/* 「软件更新」殿后（2026-10-18 原型定稿）：关于这份安装的事实性信息，看完其余设置才关心它 */}
       <UpdateCard />
     </div>
@@ -665,6 +667,70 @@ function PanelUsageSection() {
       </p>
       <p className="set-row-desc">{t.settings.panelUsageSince(since.getMonth() + 1, since.getDate())}</p>
     </section>
+  );
+}
+
+/**
+ * Office 渲染（OfficeCLI）的设置区：一行状态 + 一行显式路径。
+ *
+ * 为什么值得两行设置：这台机器上找不到 OfficeCLI 时，用户手里唯一的出路是「我把它装在
+ * 别处了」——没有这个输入框，他只能改 settings.json。状态行是**现探测**的（主进程验活
+ * 缓存 + 「重新检测」强制重探），不是静态说明。
+ */
+function OfficeCliSection(props: { settings: AppSettings; onChange: (patch: SettingsPatch) => void }) {
+  const t = useT();
+  const [status, setStatus] = useState<OfficeStatus | null>(null);
+  const [checking, setChecking] = useState(false);
+  const check = (force: boolean): void => {
+    setChecking(true);
+    void api.office
+      .status(force)
+      .then((next) => setStatus(next))
+      .catch(() => setStatus(null))
+      .finally(() => setChecking(false));
+  };
+  useEffect(() => {
+    check(false);
+    // 只在挂载时探一次；路径改动后由用户点「重新检测」（避免每敲一个字就 spawn 一次）
+  }, []);
+  return (
+    <SettingGroup label={t.settings.office.title}>
+      <SettingRow name={t.settings.office.cliPath} info={t.settings.office.cliPathInfo}>
+        <input
+          className="text-field voice-field"
+          style={{ width: "100%", maxWidth: 260, minWidth: 0 }}
+          value={props.settings.officeCliPath ?? ""}
+          placeholder="C:\Tools\officecli.exe"
+          spellCheck={false}
+          onChange={(event) => {
+            const value = event.target.value.trim();
+            props.onChange(value === "" ? { officeCliPath: "" } : { officeCliPath: value });
+          }}
+          onBlur={() => check(true)}
+        />
+      </SettingRow>
+      {/* 状态是「这次探测的结果」，不是说明：放在名字下面那一列（note），右列只留按钮。
+          放进右列的话，窄设置面板里一段长路径会把按钮挤成一列竖字（真机验收抓到） */}
+      <SettingRow
+        name={t.settings.office.status}
+        note={
+          <span className="set-row-desc" title={status?.bin ?? undefined}>
+            {checking
+              ? t.settings.office.checking
+              : status === null
+                ? t.settings.office.missing
+                : status.available
+                  ? `${t.settings.office.ready(status.version ?? "", status.source ?? "")}${status.bin === null ? "" : ` · ${status.bin}`}`
+                  : t.settings.office.missing}
+          </span>
+        }
+      >
+        <PanelButton onClick={() => check(true)}>
+          <Icon name="refresh-cw" size={13} spin={checking} />
+          {t.settings.office.recheck}
+        </PanelButton>
+      </SettingRow>
+    </SettingGroup>
   );
 }
 

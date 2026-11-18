@@ -438,6 +438,7 @@ export function FilePreviewPane(props: {
             request={{ sessionId, workspaceId, ...extra, root, dir: path }}
             reloadToken={xlsxReload}
             onOpenDefault={openDefault}
+            {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
           />
         ) : pptx ? (
           <PptxView
@@ -446,6 +447,7 @@ export function FilePreviewPane(props: {
             request={{ sessionId, workspaceId, ...extra, root, dir: path }}
             reloadToken={pptxReload}
             onOpenDefault={openDefault}
+            {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
           />
         ) : legacyPpt ? (
           <LegacyPptPreview onOpenDefault={openDefault} />

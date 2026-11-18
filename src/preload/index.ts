@@ -15,6 +15,7 @@ import { excerptApi } from "./api/excerpt.ts";
 import { filesApi } from "./api/files.ts";
 import { focusApi } from "./api/focus.ts";
 import { latexApi } from "./api/latex.ts";
+import { officeApi } from "./api/office.ts";
 import { importApi } from "./api/import.ts";
 import { intentApi } from "./api/intent.ts";
 import { notifyApi } from "./api/notify.ts";
@@ -58,6 +59,7 @@ const api = {
   notify: notifyApi,
   terminal: terminalApi,
   latex: latexApi,
+  office: officeApi,
   cite: citeApi,
   usage: usageApi,
   updater: updaterApi,
