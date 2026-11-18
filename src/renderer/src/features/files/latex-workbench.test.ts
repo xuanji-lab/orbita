@@ -7,6 +7,7 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { LatexIssue } from "../../../../shared/latex.ts";
 import {
+  compileErrorKind,
   engineLabel,
   formatDuration,
   formatElapsed,
@@ -238,5 +239,19 @@ describe("展示辅助", () => {
     assert.equal(issueLocation({ file: "main.tex", line: null }), "main.tex");
     assert.equal(issueLocation({ file: null, line: 7 }), "7");
     assert.equal(issueLocation({ file: null, line: null }), "");
+  });
+});
+
+describe("compileErrorKind", () => {
+  test("会话上下文丢失是能给人话的一类（现场 bug 的原文）", () => {
+    assert.equal(compileErrorKind('Error: invalid session id "undefined"'), "session");
+    assert.equal(compileErrorKind("invalid session id"), "session");
+    assert.equal(compileErrorKind("session not found"), "session");
+  });
+
+  test("其余原样转述（不猜原因）", () => {
+    assert.equal(compileErrorKind("spawn latexmk ENOENT"), "other");
+    assert.equal(compileErrorKind("写配置失败：EACCES"), "other");
+    assert.equal(compileErrorKind(""), "other");
   });
 });

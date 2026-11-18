@@ -43,12 +43,13 @@ import {
   pdfStale,
 } from "./latex-workbench.ts";
 import { useLatexWorkbench } from "./useLatexWorkbench.ts";
+import { latexContextOf } from "./latex-context.ts";
 import { useCiteLibrary } from "./useCiteLibrary.ts";
 import { useLatexIndex } from "./useLatexIndex.ts";
 import { useLatexLint } from "./useLatexLint.ts";
 import { issueAbsolutePath } from "./latex-diagnostics.ts";
 import type { CiteVerification } from "@shared/cite";
-import { closeDecision } from "./editor-state.ts";
+import { closeDecision, isEditableLatexFile } from "./editor-state.ts";
 import { useEditorCollab } from "./useEditorCollab.ts";
 import type { EditorHunk } from "./editor-collab.ts";
 import type { FlushOutcome, TexEditorHandle } from "./TexEditorPane.tsx";
@@ -308,16 +309,16 @@ export function FilesPanel(props: {
    * 授权上下文与 fs:read 同形（root + path），所以附图标签（path 是原图引用、
    * root 是空串）直接跳过——它不可能是 LaTeX 项目里的文件。
    */
-  const latexContext = useMemo<LatexFileContext | null>(() => {
-    if (activeTab === null || activeTab.name !== undefined) return null;
-    return {
-      sessionId,
-      workspaceId,
-      ...(focusWorkspaceId === null ? {} : { extraWorkspaceId: focusWorkspaceId }),
-      root: activeTab.root,
-      path: activeTab.path,
-    };
-  }, [activeTab, sessionId, workspaceId, focusWorkspaceId]);
+  const latexContext = useMemo<LatexFileContext | null>(
+    () =>
+      latexContextOf({
+        activeTab,
+        sessionId,
+        workspaceId,
+        focusWorkspaceId,
+      }),
+    [activeTab, sessionId, workspaceId, focusWorkspaceId],
+  );
   const latex = useLatexWorkbench(latexContext);
   /** 文献库：`\cite{` 的候选（编辑器）与坏 .bib 的 warning（问题抽屉）都读这一份 */
   const citeLibrary = useCiteLibrary(latexContext, latex.project);
@@ -613,9 +614,21 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
     stale: pdfStale(latex.project?.pdf?.modifiedAt ?? null, latex.project?.sourceModifiedAt ?? null),
     hasPdf: latex.project?.pdf !== null && latex.project !== undefined,
   });
+  /**
+   * 编译条 / 问题行只给**项目里的 LaTeX 文件**（.tex / .bib / .sty / .cls 与这份项目的
+   * PDF）。编译与错误都是**项目级**的，但这两块的位置是文件级（编辑器正上方 / 面板
+   * 底部）——挂在 docx / xlsx / pptx 上时，读者只能理解成「这是在说这张表」
+   * （2026-11-15 验收 P1-1）。
+   */
+  const latexBarVisible =
+    latex.project !== null &&
+    shownTab !== null &&
+    (isEditableLatexFile(shownTab.path) ||
+      (latex.project.pdf !== null && samePath(shownTab.path, latex.project.pdf.path)));
   useEffect(() => {
+    if (!latexBarVisible) return;
     if (latex.last !== null && isFailedStatus(latex.last.status)) setProblemsOpen(true);
-  }, [latex.last]);
+  }, [latex.last, latexBarVisible]);
 
   // 切文件 / 换项目：抽屉收起（上一份问题不属于新文件）
   useEffect(() => {
@@ -1613,12 +1626,13 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
       {/* 论文工作台：编译条（项目内才在）+ 文件内容 + 问题抽屉。三者同住一个
           纵向 flex，抽屉钉在面板底部；非 LaTeX 文件只多一层无副作用的包裹 */}
       <div className="files-workbench">
-        {latex.project !== null && (
+        {latexBarVisible && latex.project !== null && (
           <LatexBuildBar
             project={latex.project}
             probe={latex.probe}
             state={latexState}
             last={latex.last}
+            error={latex.error}
             startedAt={latex.startedAt}
             cleaning={latex.cleaning}
             onCompile={compileWithSave}
@@ -1631,7 +1645,7 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
         )}
         {/* 「这台机器没有 latexmk」引导卡：项目已识别、探测失败时才出现。
             它不遮不拦——用户仍可以看源码、问 agent，装完点「重新检测」即可 */}
-        {latex.project !== null && latex.probe !== null && !latex.probe.ok && (
+        {latexBarVisible && latex.probe !== null && !latex.probe.ok && (
           <LatexSetupCard
             probe={latex.probe}
             busy={latex.probeBusy}
@@ -1834,7 +1848,7 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
           )}
         </div>
       </div>
-        {latex.project !== null && (
+        {latexBarVisible && (
           <LatexProblems
             groups={latexGroups}
             open={problemsOpen}

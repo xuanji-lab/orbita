@@ -11,7 +11,7 @@
  * 没有改动时整块不渲染——空审阅条是噪音。
  */
 import type { DocxChangeRow } from "./docx-review.ts";
-import { describeRow } from "./docx-review.ts";
+import { describeRow, reviewLineText } from "./docx-review.ts";
 import { Icon } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
 
@@ -61,7 +61,17 @@ export function DocxReviewBar(props: {
               title={describeRow(row, ordinal)}
               onClick={() => props.onLocate(row)}
             >
-              <span className="docx-review-what">{describeRow(row, ordinal)}</span>
+              {/* 改前 / 改后各一行（2026-11-15 验收 P0-3）：单行 `A → B` 在 375 的
+                  面板里可用宽只有 221，省略号正好落在新文本的第一个字上——要判断的
+                  恰是那半句。旧文删除线 + 新文下划线，形状是第一信号 */}
+              {row.kind === "replace" ? (
+                <span className="docx-review-pair">
+                  <span className="docx-review-old">{reviewLineText(row.before)}</span>
+                  <span className="docx-review-new">{reviewLineText(row.after)}</span>
+                </span>
+              ) : (
+                <span className="docx-review-what">{describeRow(row, ordinal)}</span>
+              )}
               <span className="docx-review-meta">
                 {row.ours ? t.docx.reviewAgent : row.author === "" ? t.docx.reviewAgent : row.author}
                 {row.reanchored ? ` · ${t.docx.reviewReanchored}` : ""}

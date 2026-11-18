@@ -41,6 +41,26 @@ export function latexBarState(input: {
 }
 
 /**
+ * 「编译没能开始」的错误归类（2026-11-16 现场 bug）。
+ *
+ * IPC 抛回来的原文是机器话（`invalid session id "undefined"`）。只有一类我们能给出
+ * 用户看得懂、且知道他该做什么的：编译需要的会话 / 工作台上下文不在了
+ * （文件面板没绑会话、会话被关掉、专注个工作区被撤掉）。其余原样转述。
+ */
+export type CompileStartErrorKind = "session" | "other";
+
+/**
+ * `compile()` 在没有上下文时的回执（useLatexWorkbench 写进 error）：它和主进程回的
+ * 「会话不在了」是同一件事，界面说同一句话。
+ */
+export const COMPILE_NO_CONTEXT = "latex:no-context";
+
+export function compileErrorKind(message: string): CompileStartErrorKind {
+  if (message === COMPILE_NO_CONTEXT) return "session";
+  return /invalid session id|unknown session|session not found|no session/i.test(message) ? "session" : "other";
+}
+
+/**
  * PDF 是否过期：源码（主文件 / .tex / .bib / .cls / .sty）比 PDF 新，或压根没有 PDF。
  *
  * 比较的是 **mtime**，不是「这次编译写没写」——latexmk 在源码没改时说 "Nothing to

@@ -22,17 +22,10 @@ import type {
   LatexStatus,
 } from "@shared/latex";
 
-/** 一次编译的摘要（界面只需要这些；错误全文在日志里） */
-export interface LatexBuildSummary {
-  status: LatexStatus;
-  pages: number | null;
-  durationMs: number;
-  errors: LatexIssue[];
-  warnings: LatexIssue[];
-  /** 本次结果里的 PDF 绝对路径（失败时可能是上一版的） */
-  pdfPath: string | null;
-  finishedAt: number;
-}
+import { recallBuild, rememberBuild, type LatexBuildSummary } from "./latex-build-store.ts";
+import { COMPILE_NO_CONTEXT } from "./latex-workbench.ts";
+
+export type { LatexBuildSummary } from "./latex-build-store.ts";
 
 export interface LatexWorkbench {
   project: LatexProjectInfo | null;
@@ -90,6 +83,12 @@ function contextKey(context: LatexFileContext | null): string {
   return [context.sessionId ?? "", context.workspaceId ?? "", context.extraWorkspaceId ?? "", context.root, context.path].join("\u0000");
 }
 
+/**
+ * 编译结局**按项目目录**存（latex-build-store.ts，活过标签切换 / 面板卸载）。
+ * 切到 pptx / docx 再切回来时，编译条与问题抽屉要原样恢复上一轮的结果
+ * （2026-11-15 验收 P0-4）。
+ */
+
 export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbench {
   const key = contextKey(context);
   const contextRef = useRef(context);
@@ -110,6 +109,14 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
   const [running, setRunning] = useState(false);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [last, setLast] = useState<LatexBuildSummary | null>(null);
+  /** `last` 属于哪个项目目录：切换项目时据此从 BUILD_BY_PROJECT 取回那一份 */
+  const lastDirRef = useRef<string | null>(null);
+  /** 项目目录变了（或第一次加载）：把那一份编译结局拿回来；同目录不动 */
+  const restoreBuild = useCallback((dir: string | null): void => {
+    if (dir === null || dir === lastDirRef.current) return;
+    lastDirRef.current = dir;
+    setLast(recallBuild(dir));
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const [pdfReloadToken, setPdfReloadToken] = useState(0);
   const [cleaning, setCleaning] = useState(false);
@@ -141,12 +148,14 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
       if (id !== requestRef.current) return;
       const next = outcome.found ? outcome.project : null;
       setProject((current) => (sameProject(current, next) ? current : next));
+      // 项目事实回来才知道目录：同一项目内切标签不动摘要，换项目取那个项目的那一份
+      restoreBuild(next?.dir ?? null);
       if (!soft) setError(null);    } catch (cause) {
       if (id !== requestRef.current) return;
       setProject(null);
       if (!soft) setError(failMessage(cause));
     }
-  }, []);
+  }, [restoreBuild]);
 
   // 换文件 / 换会话：同一项目内切标签**不重置**（main.tex → main.pdf 时编译条不该
   // 闪一下、失败摘要更不能丢），只有跳出上一个项目目录才清掉这一轮的摘要。
@@ -162,11 +171,11 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
     const keep = ctx !== null && current !== null && pathWithin(current.dir, ctx.path);
     if (!keep) {
       setProject(null);
-      setLast(null);
+      // **不清 `last`**：切到 docx / pptx（ctx 为 null）再切回来时，编译结果要原样还在
+      // （P0-4）。换到另一个项目由 restoreBuild 换成那个项目的那一份。
     }
     if (key === "") {
       setProject(null);
-      setLast(null);
       return;
     }
     void loadProject(false);
@@ -204,7 +213,7 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
         return;
       }
       const result = outcome.result;
-      setLast({
+      const summary: LatexBuildSummary = {
         status: result.status,
         pages: result.pages,
         durationMs: result.durationMs,
@@ -212,7 +221,14 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
         warnings: result.warnings,
         pdfPath: result.pdf,
         finishedAt: Date.now(),
-      });
+      };
+      // 编译条只在项目内出现，这一拍 project 一定在；存进模块表，切走再回来还在
+      const dir = projectRef.current?.dir ?? null;
+      if (dir !== null) {
+        rememberBuild(dir, summary);
+        lastDirRef.current = dir;
+      }
+      setLast(summary);
       if (result.status === "ok" || result.status === "warning-only") {
         setPdfReloadToken((token) => token + 1);
       }
@@ -233,7 +249,11 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
   runCompileRef.current = runCompile;
 
   const compile = useCallback((): void => {
-    if (contextRef.current === null) return;
+    // 没有上下文（没绑会话 / 没有激活文件）：不能静默返回——那正是「点了没反应」
+    if (contextRef.current === null) {
+      setError(COMPILE_NO_CONTEXT);
+      return;
+    }
     if (runningRef.current) {
       queuedRef.current = true;
       return;

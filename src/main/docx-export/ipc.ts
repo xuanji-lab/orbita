@@ -20,6 +20,7 @@ import {
   type DocxTemplateInspectOutcome,
   type DocxTemplateInspectRequest,
   type DocxTemplatePickOutcome,
+  type DocxTemplateProblem,
   type DocxTemplateReport,
   type PandocLocateOutcome,
   type PandocProbeRequest,
@@ -62,8 +63,10 @@ export function registerDocxExportIpc(options: DocxExportIpcOptions): void {
             path: null,
             ok: false,
             verdict: "unusable",
-            summary: "No school template is selected yet.",
-            findings: [],
+            problem: { kind: "none-selected" },
+            summary: null,
+            note: null,
+            findings: [{ level: "warn", kind: "problem", problem: { kind: "none-selected" } }],
           };
         }
         return inspectFile(custom, "custom");
@@ -74,7 +77,9 @@ export function registerDocxExportIpc(options: DocxExportIpcOptions): void {
           path: null,
           ok: true,
           verdict: "ok",
-          summary: "Uses template.docx next to each source file; falls back to the built-in default when there is none.",
+          problem: null,
+          summary: null,
+          note: "project",
           findings: [],
         };
       }
@@ -148,19 +153,17 @@ async function inspectFile(path: string, requested: "custom" | "default" | "proj
     const bytes = await readFile(path);
     return await inspectDocxTemplate(bytes, { requested, path });
   } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    const problem: DocxTemplateProblem = { kind: "not-found", path, detail };
     return {
       requested,
       path,
       ok: false,
       verdict: "unusable",
-      summary: `Template not found or unreadable: ${path}`,
-      findings: [
-        {
-          level: "warn",
-          label: "Template not found or unreadable",
-          detail: cause instanceof Error ? cause.message : String(cause),
-        },
-      ],
+      problem,
+      summary: null,
+      note: null,
+      findings: [{ level: "warn", kind: "problem", problem }],
     };
   }
 }
@@ -169,13 +172,16 @@ async function inspectFile(path: string, requested: "custom" | "default" | "proj
 async function inspectDefault(options: DocxExportIpcOptions, pandocPath: string | undefined): Promise<DocxTemplateReport> {
   const probe = await options.probe.probe(pandocPath);
   if (!probe.ok || probe.path === null || probe.version === null) {
+    const problem: DocxTemplateProblem = { kind: "pandoc-missing", message: probe.message };
     return {
       requested: "default",
       path: null,
       ok: false,
       verdict: "unusable",
-      summary: "The built-in template needs pandoc. " + probe.message,
-      findings: [{ level: "warn", label: "pandoc is not available" }],
+      problem,
+      summary: null,
+      note: null,
+      findings: [{ level: "warn", kind: "problem", problem }],
     };
   }
   const made = await ensureDefaultTemplate({
@@ -185,13 +191,16 @@ async function inspectDefault(options: DocxExportIpcOptions, pandocPath: string 
     printReference: options.printReference,
   });
   if (made.path === null) {
+    const problem: DocxTemplateProblem = { kind: "builtin-unavailable", detail: made.error };
     return {
       requested: "default",
       path: null,
       ok: false,
       verdict: "unusable",
-      summary: `Could not prepare the built-in template: ${made.error ?? "unknown error"}`,
-      findings: [{ level: "warn", label: "Built-in template unavailable", ...(made.error === null ? {} : { detail: made.error }) }],
+      problem,
+      summary: null,
+      note: null,
+      findings: [{ level: "warn", kind: "problem", problem }],
     };
   }
   return inspectFile(made.path, "default");

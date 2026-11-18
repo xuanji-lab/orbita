@@ -26,8 +26,20 @@ const stylesXml = `<w:styles xmlns:w="w">
   <w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/></w:style>
 </w:styles>`;
 
-function findingsOf(report: Awaited<ReturnType<typeof inspectDocxTemplate>>, label: RegExp): boolean {
-  return report.findings.some((finding) => label.test(`${finding.label} ${finding.detail ?? ""}`));
+/** 这一份报告里有这个 kind 的结论（句子在渲染层拼，主进程只回 kind + 数字） */
+function hasFinding(
+  report: Awaited<ReturnType<typeof inspectDocxTemplate>>,
+  kind: string,
+): boolean {
+  return report.findings.some((finding) => finding.kind === kind);
+}
+
+function findingOf<K extends string>(
+  report: Awaited<ReturnType<typeof inspectDocxTemplate>>,
+  kind: K,
+): Extract<Awaited<ReturnType<typeof inspectDocxTemplate>>["findings"][number], { kind: K }> | null {
+  const hit = report.findings.find((finding) => finding.kind === kind);
+  return hit === undefined ? null : (hit as Extract<Awaited<ReturnType<typeof inspectDocxTemplate>>["findings"][number], { kind: K }>);
 }
 
 describe("模板体检", () => {
@@ -45,11 +57,16 @@ describe("模板体检", () => {
     assert.equal(report.ok, true);
     assert.equal(report.verdict, "ok");
     assert.equal(report.path, "C:\\x.docx");
-    assert.match(report.summary, /ready/);
-    assert.ok(findingsOf(report, /3 paragraph/));
-    assert.ok(findingsOf(report, /2 heading levels/));
-    assert.ok(findingsOf(report, /1 header\(s\), 1 footer\(s\)/));
-    assert.ok(findingsOf(report, /No VBA macros/));
+    assert.equal(report.problem, null);
+    assert.equal(report.summary?.warnings, 0);
+    assert.equal(report.summary?.styles, 3);
+    assert.equal(report.summary?.headerFooter, 2);
+    assert.equal(report.summary?.macros, false);
+    assert.equal(findingOf(report, "styles")?.styles, 3);
+    assert.equal(findingOf(report, "styles")?.headings, 2);
+    assert.equal(findingOf(report, "header-footer")?.headers, 1);
+    assert.equal(findingOf(report, "header-footer")?.footers, 1);
+    assert.equal(findingOf(report, "macros")?.present, false);
   });
 
   test("有宏 → ok:true + warning（不硬失败）", async () => {
@@ -62,8 +79,8 @@ describe("模板体检", () => {
     const report = await inspectDocxTemplate(bytes, { requested: "custom", path: "C:\\x.docx" });
     assert.equal(report.ok, true);
     assert.equal(report.verdict, "warning");
-    assert.ok(findingsOf(report, /VBA macros/));
-    assert.match(report.summary, /warning/);
+    assert.equal(findingOf(report, "macros")?.present, true);
+    assert.equal(report.summary?.warnings !== undefined && report.summary.warnings > 0, true);
   });
 
   test("缺 styles / 页眉页脚 → 各一条 warning，但仍然能当 reference-doc", async () => {
@@ -71,9 +88,9 @@ describe("模板体检", () => {
     const report = await inspectDocxTemplate(bytes, { requested: "project", path: "p.docx" });
     assert.equal(report.ok, true);
     assert.equal(report.verdict, "warning");
-    assert.ok(findingsOf(report, /No word\/styles.xml/));
-    assert.ok(findingsOf(report, /No headers or footers/));
-    assert.ok(findingsOf(report, /No numbering.xml/));
+    assert.ok(hasFinding(report, "styles-missing"));
+    assert.ok(hasFinding(report, "header-footer-missing"));
+    assert.ok(hasFinding(report, "numbering-missing"));
   });
 
   test("没有标题样式 → 提示目录与公式编号会退", async () => {
@@ -83,7 +100,7 @@ describe("模板体检", () => {
       "word/header1.xml": "<w:hdr/>",
     });
     const report = await inspectDocxTemplate(bytes, { requested: "custom", path: "x.docx" });
-    assert.ok(findingsOf(report, /No built-in heading styles/));
+    assert.ok(hasFinding(report, "headings-missing"));
   });
 
   test("已有目录域 → 报告里认出来", async () => {
@@ -97,7 +114,7 @@ describe("模板体检", () => {
       "word/header1.xml": "<w:hdr/>",
     });
     const report = await inspectDocxTemplate(bytes, { requested: "custom", path: "x.docx" });
-    assert.ok(findingsOf(report, /Existing table of contents/));
+    assert.equal(findingOf(report, "toc")?.present, true);
   });
 
   test("OLE2（加密包）→ unusable，给的是人话", async () => {
@@ -105,22 +122,24 @@ describe("模板体检", () => {
     const report = await inspectDocxTemplate(ole2, { requested: "custom", path: "x.docx" });
     assert.equal(report.ok, false);
     assert.equal(report.verdict, "unusable");
-    assert.match(report.summary, /password-protected/);
+    assert.equal(report.problem?.kind, "encrypted");
     assert.equal(report.findings.length, 1);
+    assert.equal(report.findings[0]?.kind, "problem");
   });
 
   test("不是 zip / 缺 document.xml / 空文件 → unusable", async () => {
     const notZip = await inspectDocxTemplate(new TextEncoder().encode("hello"), { requested: "custom" });
     assert.equal(notZip.verdict, "unusable");
-    assert.match(notZip.summary, /not a \.docx package/);
+    assert.equal(notZip.problem?.kind, "not-zip");
 
     const empty = await inspectDocxTemplate(new Uint8Array(), { requested: "custom" });
     assert.equal(empty.verdict, "unusable");
+    assert.equal(empty.problem?.kind, "empty");
 
     const noBody = await zipOf({ "word/styles.xml": stylesXml });
     const report = await inspectDocxTemplate(noBody, { requested: "custom" });
     assert.equal(report.verdict, "unusable");
-    assert.match(report.summary, /no word\/document\.xml/);
+    assert.equal(report.problem?.kind, "no-document");
   });
 
   test("超过体积上限 → unusable（不把论文本体当模板读进内存）", async () => {
@@ -129,7 +148,8 @@ describe("模板体检", () => {
     huge[1] = 0x4b;
     const report = await inspectDocxTemplate(huge, { requested: "custom" });
     assert.equal(report.verdict, "unusable");
-    assert.match(report.summary, /larger than/);
+    assert.equal(report.problem?.kind, "too-large");
+    assert.equal(report.problem?.kind === "too-large" ? report.problem.mb : 0, 80);
   });
 
   test("requested/path 原样回显（设置页据此说「哪一份」）", async () => {
