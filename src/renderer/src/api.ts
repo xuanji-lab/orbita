@@ -1,4 +1,6 @@
 import type { OrbitaApi } from "../../preload/index.ts";
+import { createPreviewApi } from "./preview/fixture-api.ts";
+import { isPreviewPath, parsePreviewOptions } from "./preview/scenes.ts";
 
 declare global {
   interface Window {
@@ -44,4 +46,17 @@ function bridgeless(): OrbitaApi {
 }
 
 /** renderer 侧统一入口：所有 IPC 走这里，组件不直接摸 window（旧仓 15 个文件各自直取过）。 */
-export const api: OrbitaApi = window.orbita ?? bridgeless();
+const previewOptions = isPreviewPath(window.location.pathname)
+  ? parsePreviewOptions(window.location.search)
+  : null;
+const previewApi = previewOptions === null
+  ? null
+  : createPreviewApi(previewOptions, window.orbita?.platform ?? "darwin");
+if (previewOptions !== null) {
+  // 自动化只认场景 id，不靠页面文案推断当前 fixture。
+  document.documentElement.dataset["previewScene"] = previewOptions.scene;
+  // 纯浏览器没有 preload，补上同名全局便于检查；Electron 里 App 仍只走下面的 previewApi，
+  // 不触碰 contextBridge 的真实 IPC，也不尝试覆盖宿主全局。
+  if (window.orbita === undefined && previewApi !== null) window.orbita = previewApi;
+}
+export const api: OrbitaApi = previewApi ?? window.orbita ?? bridgeless();
