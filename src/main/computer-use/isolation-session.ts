@@ -56,6 +56,7 @@ import {
   type ComputerUseUiaListResult,
   type ComputerUseWindowListResult,
   type ComputerUseWindowShotResult,
+  sessionDesktopKey,
   type GuestTcpChannel,
   type SandboxState,
   type SandboxStatus,
@@ -75,6 +76,7 @@ import {
   startGuestTcpProbe,
 } from "./bridge-client.ts";
 import { waitForBridgeInfo, type BridgeInfo } from "./bridge-ready.ts";
+import type { SandboxCapabilities, SandboxProviderId } from "./provider.ts";
 import type { GuestCommandReply, GuestShotReply, SandboxProcess } from "./sandbox.ts";
 import { clampMaxWidth } from "./sandbox.ts";
 
@@ -201,7 +203,29 @@ export function workspaceLayout(workspacePath: string): {
   };
 }
 
+/**
+ * L2b（MXC 独立会话）的能力声明 —— 全部取自 P2 真机验收的事实：
+ *   - 有图形桌面（会话桌面），但**没有真实指针**：RDP 会话里 `SendInput` 返回成功而光标不动，
+ *     所以 pixel 命令在这个控制器里一律不下发（见 start 附近的 noPointer 分支）；
+ *   - UIA / 截图 / 窗口 / CDP 都走桥，和 L2 同一条车道；
+ *   - 映射目录是**会话自己的工作区**（不是宿主的 out），所以浏览器上传/下载在这里做不到；
+ *   - 每会话一个桌面（租约键带 sessionId）；同样不能快照。
+ */
+export const ISOLATION_SESSION_CAPABILITIES: SandboxCapabilities = {
+  gui: true,
+  realPointer: false,
+  screenshot: true,
+  windows: true,
+  uia: true,
+  cdp: true,
+  sandboxFiles: false,
+  desktopScope: "per-session",
+  snapshot: "none",
+};
+
 export class IsolationSessionController {
+  readonly id: SandboxProviderId = "isolation-session";
+  readonly capabilities: SandboxCapabilities = ISOLATION_SESSION_CAPABILITIES;
   private readonly deps: IsolationSessionDeps;
   private state: SandboxState = "off";
   private errorMessage: string | null = null;
@@ -256,6 +280,11 @@ export class IsolationSessionController {
       case "error":
         return { state: "error", message: this.errorMessage ?? "启动失败", backend: "isolation-session" };
     }
+  }
+
+  /** 每会话一个桌面：租约键带 sessionId，两个会话各用各的、不互相排队 */
+  desktopKey(sessionId: string): string {
+    return sessionDesktopKey(sessionId);
   }
 
   /** 当前工作区（宿主侧 = 会话侧同一路径）。没在跑 / 已停时为 null */

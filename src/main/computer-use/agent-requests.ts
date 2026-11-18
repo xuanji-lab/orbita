@@ -135,6 +135,7 @@ export async function applyComputerUseRequest(
             nativeWidth: shot.nativeWidth,
             nativeHeight: shot.nativeHeight,
             data: shot.jpegBase64,
+            ...(shot.mime === undefined ? {} : { mime: shot.mime }),
           },
           ...(shot.capture === undefined ? {} : { capture: shot.capture }),
         };
@@ -318,6 +319,7 @@ async function windowShot(
       nativeWidth: shot.nativeWidth,
       nativeHeight: shot.nativeHeight,
       data: shot.jpegBase64,
+      ...(shot.mime === undefined ? {} : { mime: shot.mime }),
     },
     ...(shot.capture === undefined ? {} : { capture: shot.capture }),
   };

@@ -167,7 +167,7 @@ export function shotFromResult(result: ComputerUseScreenshotResult): ShotView {
   if (result.ok) {
     return {
       kind: "ok",
-      src: `data:image/jpeg;base64,${result.jpegBase64}`,
+      src: `data:${result.mime ?? "image/jpeg"};base64,${result.jpegBase64}`,
       width: result.nativeWidth,
       height: result.nativeHeight,
       takenAt: result.takenAt,
