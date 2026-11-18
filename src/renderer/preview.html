@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; frame-src orbita-panel:"
+    />
+    <title>ORBITA · production preview</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- 与生产 index.html 同一个入口；api.ts 只在 preview.html 选择内存 fixture。 -->
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
