@@ -1389,8 +1389,13 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     // read_pdf 不过 broker：附件副本与工作区 PDF 都在 agent read 边界内，直读（./pdf-tools.ts）
     // cite_pdf 挂在实验功能「PDF 引用」的开关后面（缺席 = 关）
     ...createPdfTools(command.cwd, { pdfCitations: command.pdfCitations === true }),
-    // read_docx 同样直读（./docx-tools.ts）：word 文档的结构化提取，块号轴分片
-    ...createDocxTools(command.cwd),
+    // read_docx 同样直读（./docx-tools.ts）：word 文档的结构化提取，块号轴分片。
+    // edit_docx 走 broker：写进 renderer 里活着的 docx 编辑器（agent 不碰磁盘）
+    ...createDocxTools(requestBroker, command.sessionId, command.cwd, {
+      writeRoots: [command.cwd, ...(command.directories?.attached ?? [])],
+      workspaceId: command.workspaceId,
+      mode: currentMode,
+    }),
     // show_image 同样直读展示（./image-tools.ts）：模型「把图给用户看」的显式动作
     ...createImageTools(command.cwd),
     // update_plan（./plan-tools.ts）：agent 写下计划、做一步勾一步；计划就在转录里，不另存
@@ -2339,8 +2344,8 @@ async function handle(command: AgentCommand): Promise<void> {
     );
     return;
   }
-  if (command.type === "slidesResult" || command.type === "docResult") {
-    // 演示文稿 / 文档导出的回执：形状即契约（ok 双分支），原样结掉在途 promise
+  if (command.type === "slidesResult" || command.type === "docResult" || command.type === "docxEditResult") {
+    // 演示文稿 / 文档导出 / docx 修订的回执：形状即契约（ok 双分支），原样结掉在途 promise
     requestBroker.resolve(command.requestId, command);
     return;
   }
