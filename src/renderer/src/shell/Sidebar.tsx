@@ -39,10 +39,9 @@ import { chipCompactAt, nextCompactLevel } from "./filter-row-compact.ts";
 import { ageCounts, filterByAge } from "./sidebar-age.ts";
 import { sessionAgeLabel } from "./relative-time.ts";
 import { useMinuteTick } from "./use-minute-tick.ts";
-import { matchesSessionQuery, openRowsLimit, workspaceRows } from "./workspace-rows.ts";
-import { ATTENTION_SHOWN, ATTENTION_WARMUP_MS, attentionItems, attentionLine, freshAttention, type AttentionItem } from "./attention.ts";
-import { displaySubSessionTitle } from "../features/chat/sub-sessions-rows.ts";
-import type { ChannelMessage } from "@shared/channel";
+import { matchesSessionQuery, openRowsLimit, workspaceRowCurrent, workspaceRowFocus, workspaceRows, type WorkspaceRowFocus } from "./workspace-rows.ts";
+import { OPEN_EARLIER_EVENT } from "../features/context/main-progress.ts";
+import { ATTENTION_WARMUP_MS, attentionItems, freshAttention } from "./attention.ts";
 import { useChannelStatuses } from "../features/chat/useChannelSummaries.ts";
 import { effectiveSidebarFilters } from "./sidebar-filters.ts";
 import {
@@ -162,8 +161,6 @@ export function Sidebar(props: {
   onStartFocusHere: (workspaceId: string) => void;
   /** 双击 / Enter 打开左栏文件预览（绝对路径 → App → 右栏文件面板） */
   onOpenFile: (absPath: string) => void;
-  /** 点「等你」的一行：跳到那个工作区的主对话并定位到那件活（App 管跳转与右栏定位） */
-  onOpenAttention: (item: AttentionItem) => void;
   /** 「等你」里新冒出了几件（每件只报一次）：App 响提示音 */
   onAttentionAppeared: (ids: readonly string[]) => void;
   /** 星云的常驻小气泡（专注：正在整理 / 要不要总结）；null = 无 */
@@ -369,6 +366,22 @@ export function Sidebar(props: {
     session.workspaces.map((workspace) => [workspace.id, workspaceRows(session.sessions, workspace.id, rowState, held)]),
   );
   /**
+   * 「以前的会话」那一页列什么（2026-11-21）：侧栏不再列工作区子行，这一页接住这个工作区里用户自己开的根会话
+   * （了结没了结都在，在跑 / 等你的行尾照样有饼）与做完看过的活。主智能体在做、等你的活在它的进度面板里，不在这里重列。
+   */
+  const earlierOf = (workspaceId: string): SessionMeta[] => {
+    const rows = rowsOf.get(workspaceId);
+    if (rows === undefined) return [];
+    return [...rows.open.filter((meta) => meta.parentId === undefined), ...rows.earlier].sort((a, b) => b.updatedAt - a.updatedAt);
+  };
+  /** 工作区行尾的状态汇总：主智能体自己 + 名下没了结的活与会话（与状态饼同一份推导） */
+  const workspaceStates = (workspaceId: string): SessionRunState[] => {
+    const rows = rowsOf.get(workspaceId);
+    if (rows === undefined) return [];
+    return [...(rows.main === null ? [] : [rowState(rows.main)]), ...rows.open.map(rowState)];
+  };
+
+  /**
    * 主智能体派出去、没做成的那件算不算已经处理了（2026-11-17 主会话定）：通道离开 failed 就是处理了——
    * 主智能体回了话（重开成 running）、暂停了、放弃了（stopped）；或者它重派了一件同名的新活。处理了就不在「等你」里，
    * 失败这个事实留在那件活自己的行上（饼红到你看过）。通道状态还没拉到时先当处理了（宁可晚出现一拍，不错叫）。
@@ -381,8 +394,9 @@ export function Sidebar(props: {
     );
   };
   /**
-   * 侧栏顶上的「等你」：跨工作区每件在等你的事（attention.ts）。数据就是上面这份行状态，不另存；
-   * 「任务」组里在等你的根会话也算（它们在任务组收起时同样看不到）。
+   * 跨工作区每件在等你的事（attention.ts）：只为下面的提示音记账，侧栏顶上不再列（2026-11-21，用户：看工作区行尾的
+   * 状态图标就知道哪个工作区要他，具体哪件在那个工作区主智能体的进度面板最前）。数据就是上面这份行状态，不另存；
+   * 「任务」组里在等你的根会话也算。
    */
   const attention = attentionItems(
     [
@@ -406,19 +420,28 @@ export function Sidebar(props: {
     for (const id of fresh) rungRef.current.add(id);
     if (fresh.length > 0 && Date.now() - mountedAtRef.current > ATTENTION_WARMUP_MS) onAttentionAppeared(fresh);
   }, [attentionKey, onAttentionAppeared]);
-  /** 「等你」的一行点下去：先退出子视图与设置，再交给 App 跳转 */
-  const openAttention = (item: AttentionItem): void => {
-    props.onOverlay(null);
-    props.onShowArchived(false);
-    setEarlierFor(null);
-    props.onOpenAttention(item);
-  };
+  /** 右栏进度面板「全部以前的会话」：开这一页（侧栏收着就先展开），设置 / 已归档盖着的先让开 */
+  const onCollapsedChange = props.onCollapsedChange;
+  const onOverlay = props.onOverlay;
+  const onShowArchived = props.onShowArchived;
+  useEffect(() => {
+    const onOpen = (event: Event): void => {
+      const workspaceId = (event as CustomEvent<string>).detail;
+      onOverlay(null);
+      onShowArchived(false);
+      onCollapsedChange(false);
+      setEarlierQuery("");
+      setEarlierFor(workspaceId);
+    };
+    window.addEventListener(OPEN_EARLIER_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_EARLIER_EVENT, onOpen);
+  }, [onCollapsedChange, onOverlay, onShowArchived]);
   /** 「以前的会话」子视图开在哪个工作区上；工作区被移除了按没开处理 */
   const earlierWs =
     earlierFor === null || overlayOpen || props.showArchived
       ? null
       : (session.workspaces.find((workspace) => workspace.id === earlierFor) ?? null);
-  const earlierBase = earlierWs === null ? [] : (rowsOf.get(earlierWs.id)?.earlier ?? []);
+  const earlierBase = earlierWs === null ? [] : earlierOf(earlierWs.id);
   /**
    * 筛选（已完成 / 星标 / 时间范围）与搜索只作用于「以前的会话」那一页：主列表现在只有没了结的活，
    * 几行而已，筛选无从谈起（筛选行跟着挪进子视图，设计稿 1-entry-after 的侧栏里没有筛选行）。
@@ -455,11 +478,10 @@ export function Sidebar(props: {
     setEarlierFor(null);
     session.openMainAgent(workspace);
   };
-  /** 这个工作区的主智能体此刻正打开着（盖着别的面时谁也不高亮） */
-  const mainActive = (workspaceId: string): boolean => {
-    if (props.overlay !== null) return false;
-    const main = rowsOf.get(workspaceId)?.main ?? null;
-    return (main !== null && main.id === openId) || session.mainPending?.workspaceId === workspaceId;
+  /** 这一行与主区的关系（workspace-rows.ts 的 workspaceRowFocus）；盖着别的面时谁也不亮 */
+  const mainFocus = (workspaceId: string): WorkspaceRowFocus => {
+    if (props.overlay !== null) return null;
+    return workspaceRowFocus(rowsOf.get(workspaceId)?.main ?? null, openId, session.sessions, session.mainPending?.workspaceId === workspaceId);
   };
 
   /**
@@ -470,12 +492,6 @@ export function Sidebar(props: {
     earlierWs !== null
       ? scoped.map((m) => m.id)
       : [
-          ...(workspaceList.body === "list" ? workspaceMatches : []).flatMap((workspace) => {
-            const key = foldKeyForWorkspace(workspace.id);
-            if (workspace.id !== currentWorkspaceId) return [];
-            const rows = rowsOf.get(workspace.id)?.open ?? [];
-            return visibleWithOpen(rows, openRowsLimit(rows, rowState, groups.pages.has(key)), openId).map((m) => m.id);
-          }),
           ...(tasksFolded || sessionList.body !== "list" ? [] : looseVisible.map((m) => m.id)),
         ];
   const batch = selectedInOrder(selection, visibleOrder);
@@ -515,7 +531,9 @@ export function Sidebar(props: {
     setSelection(EMPTY_SELECTION);
     setMoveNote(null);
     setCheckFor(workspaceId);
-    setGroups((current) => unfoldGroup(current, foldKeyForWorkspace(workspaceId)));
+    // 工作区下面不再列行：勾选在「以前的会话」那一页里做（那一页列着这个工作区的会话）
+    setEarlierQuery("");
+    setEarlierFor(workspaceId);
   };
   /**
    * 迁移（行菜单 / 多选条共用）：没迁动的留在多选里并把原因写在多选条下——
@@ -551,10 +569,14 @@ export function Sidebar(props: {
     return () => window.removeEventListener("keydown", onKey);
   }, [selecting]);
   // 勾选态那一组被搬空了（或工作区被移除）：勾选态自然结束，别留一个没有行的勾选态
-  const checkGroupSize = checkFor === null ? 0 : (rowsOf.get(checkFor)?.open.length ?? 0);
+  const checkGroupSize = checkFor === null ? 0 : earlierOf(checkFor).length;
   useEffect(() => {
     if (checkFor !== null && checkGroupSize === 0) setCheckFor(null);
   }, [checkFor, checkGroupSize]);
+  // 勾选在「以前的会话」那一页里做：离开那一页（返回、换到别的工作区）勾选态跟着结束
+  useEffect(() => {
+    if (checkFor !== null && earlierFor !== checkFor) setCheckFor(null);
+  }, [checkFor, earlierFor]);
 
   /**
    * 左栏的文件视图（浏览 / 专注）：设置页与 Archived 子视图盖着时
@@ -837,9 +859,6 @@ export function Sidebar(props: {
         </div>
       )}
 
-      {/* 钉在列表外：列表怎么滚它都在最上面；没有等你的事时整段不出现 */}
-      <AttentionSection items={attention} session={session} onOpen={openAttention} />
-
       <div
         className="scroll"
         style={{
@@ -907,6 +926,7 @@ export function Sidebar(props: {
                 key={meta.id}
                 meta={meta}
                 session={session}
+                checkbox={checkFor === earlierWs.id ? selection.ids.has(meta.id) : undefined}
                 active={rowActive(meta.id)}
                 onClick={(event) => clickRow(meta.id, event)}
                 moveIds={moveIdsFor(meta.id)}
@@ -994,41 +1014,20 @@ export function Sidebar(props: {
                     <WorkspaceGroup
                       key={workspace.id}
                       workspace={workspace}
-                      sessions={rowsOf.get(workspace.id)?.open ?? []}
-                      earlierCount={rowsOf.get(workspace.id)?.earlier.length ?? 0}
-                      rowState={rowState}
-                      session={session}
-                      openId={openId}
-                      mainActive={mainActive(workspace.id)}
+                      states={workspaceStates(workspace.id)}
+                      earlierCount={earlierOf(workspace.id).length}
+                      focus={mainFocus(workspace.id)}
                       onOpenMain={() => openMain(workspace)}
                       onOpenEarlier={() => {
                         setEarlierQuery("");
                         setEarlierFor(workspace.id);
                       }}
-                      folded={workspace.id !== currentWorkspaceId}
-                      limit={openRowsLimit(
-                        rowsOf.get(workspace.id)?.open ?? [],
-                        rowState,
-                        groups.pages.has(foldKeyForWorkspace(workspace.id)),
-                      )}
-                      expanded={groups.pages.has(foldKeyForWorkspace(workspace.id))}
-                      onMore={() =>
-                        setGroups((current) => showMoreInGroup(current, foldKeyForWorkspace(workspace.id)))
-                      }
-                      onLess={() =>
-                        setGroups((current) => showLessInGroup(current, foldKeyForWorkspace(workspace.id)))
-                      }
                       onRename={(name) => session.renameWorkspace(workspace.id, name)}
                       onRemove={() => session.removeWorkspace(workspace.id)}
                       onBrowse={() => props.onBrowseWorkspace(workspace.id)}
                       checking={checkFor === workspace.id}
                       onStartChecking={() => startChecking(workspace.id)}
                       onDoneChecking={clearSelection}
-                      isChecked={(id) => selection.ids.has(id)}
-                      rowActive={rowActive}
-                      onRowClick={clickRow}
-                      moveIdsFor={moveIdsFor}
-                      onMove={moveBatch}
                     />
                   ))
                 ) : null}
@@ -1129,11 +1128,8 @@ export function Sidebar(props: {
 }
 
 /**
- * 一个工作区，连同它自己的会话。
- *
- * **行首的 chevron 折叠这一组**：会话开得太多时，把不看的组收起来。开合只认
- * chevron（VS Code 同款纪律）——行身保持双击改名一条干净的路，两个手势不打架。
- * 折叠只藏会话行，工作区头永远在：归属关系不能跟着藏掉。
+ * 一个工作区 = 它的主智能体（2026-11-21 起侧栏只露这一行）。下面不再列各件活与旧会话：等你、各件活、以前的会话
+ * 都在主智能体右栏的进度面板里；行尾的状态汇总告诉你哪个工作区要你（用户 2026-11-17：看行尾图标即可知道）。
  *
  * 改名走**双击名字**：设计系统的纪律是克制，288px 的一行里再挂一个铅笔键
  * 就开始堆图标了；tooltip 负责把这句话讲出来（*Tooltips carry the second half
@@ -1141,52 +1137,32 @@ export function Sidebar(props: {
  */
 function WorkspaceGroup(props: {
   workspace: Workspace;
-  /** 工作区下面露的行：还没了结的活（workspace-rows.ts 的 open） */
-  sessions: SessionMeta[];
-  /** 收进「以前的会话」的条数；0 = 不画那一行 */
+  /** 主智能体自己与名下没了结的活 / 会话各自的运行态（Sidebar 的 workspaceStates），行尾汇总 */
+  states: readonly SessionRunState[];
+  /** 「以前的会话」那一页有几条；0 = 不出悬停的入口 */
   earlierCount: number;
-  /** 行的状态饼（在问问题的子会话画成「等你」，见 Sidebar 的 rowState） */
-  rowState: (meta: SessionMeta) => SessionRunState;
-  session: ChatSession;
-  openId: string | null;
-  /** 这个工作区的主智能体此刻正打开着：组头那一行高亮 */
-  mainActive: boolean;
+  /** 这一行与主区的关系：main / job 都高亮整行，读屏只在 main 时说当前页（workspaceRowCurrent） */
+  focus: WorkspaceRowFocus;
   /** 点组头那一行（名字或图标）= 跟它的主智能体说话 */
   onOpenMain: () => void;
-  /** 最后一行「以前的会话 N」 */
+  /** 悬停的「以前的会话」：开侧栏那一页 */
   onOpenEarlier: () => void;
-  /** 收着：不是当前所在的工作区（只有当前那个展开，Sidebar 的 currentWorkspaceId） */
-  folded: boolean;
-  /** 眼下最多列几件（workspace-rows 的 openRowsLimit：6 件，等你的全露）；expanded = 点过「还有 N 件」 */
-  limit: number;
-  expanded: boolean;
-  onMore: () => void;
-  onLess: () => void;
   onRename: (name: string) => void;
   onRemove: () => void;
   /** 悬停的「查看工作区文件」 */
   onBrowse: () => void;
-  /** 这一组正处在勾选态（悬停的「迁移任务…」进入；不弹窗，行首出勾选框） */
+  /** 这一组正处在勾选态（悬停的「迁移任务…」进入：开「以前的会话」那一页，行首出勾选框） */
   checking: boolean;
   onStartChecking: () => void;
   /** 组头的「完成」：退出勾选态、清掉多选 */
   onDoneChecking: () => void;
-  isChecked: (id: string) => boolean;
-  /** 多选：行高亮、点击、行菜单「移到…」的目标与执行（Sidebar 持有状态） */
-  rowActive: (id: string) => boolean;
-  onRowClick: (id: string, event: React.MouseEvent) => void;
-  moveIdsFor: (id: string) => readonly string[];
-  onMove: (ids: readonly string[], target: string | null) => void;
 }) {
   const t = useT();
   const [armed, setArmed] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
-  // 只列前 limit 条，其余收进「Show N more」；每点一次多放一页。打开着的那条恒可见
-  const visible = visibleWithOpen(props.sessions, props.limit, props.openId);
-  // 收起时组头上的运行态汇总：组收起来就看不到行，这是「里面还有东西在干活 / 在等你」
-  // 的唯一信号（2026-10-30 用户点名）。现在只有当前工作区展开，其余每个只占这一行，行尾留着汇总；
-  // 名下有等你的事时那个数用橙色字（饼的颜色规矩不动）。展开时行自己说，组头不重复
-  const agg = props.folded ? aggregateRunStates(props.sessions.map(props.rowState)) : [];
+  // 行尾的运行态汇总：工作区下面不列行，这是「里面还有东西在干活 / 在等你」的唯一信号（2026-10-30 用户点名，
+  // 2026-11-21 起每个工作区都只占这一行、都带汇总）。名下有等你的事时那个数用橙色字（饼的颜色规矩不动）
+  const agg = aggregateRunStates(props.states);
 
   const commit = () => {
     if (editing !== null) props.onRename(editing);
@@ -1208,7 +1184,7 @@ function WorkspaceGroup(props: {
       */}
       <div
         className="option-row"
-        data-active={props.mainActive || undefined}
+        data-active={props.focus !== null || undefined}
         onClick={(event) => {
           // 只认点在行身空白处；行里的按钮各管各的
           if (event.target === event.currentTarget) props.onOpenMain();
@@ -1245,7 +1221,7 @@ function WorkspaceGroup(props: {
           <button
             type="button"
             title={`${t.sidebar.openMainAgentTip(props.workspace.name)} · ${t.sidebar.workspacePathTip(props.workspace.path)}`}
-            aria-current={props.mainActive ? "page" : undefined}
+            aria-current={workspaceRowCurrent(props.focus)}
             onClick={props.onOpenMain}
             onDoubleClick={() => setEditing(props.workspace.name)}
             style={{
@@ -1317,7 +1293,7 @@ function WorkspaceGroup(props: {
               {t.sidebar.checkDone}
             </button>
           ) : (
-            props.sessions.length > 0 && (
+            props.earlierCount > 0 && (
               <IconButton
                 label={t.sidebar.moveTasks}
                 title={t.sidebar.moveTasks}
@@ -1329,6 +1305,18 @@ function WorkspaceGroup(props: {
                 <Icon name="folder-sync" size={14} strokeWidth={1.8} />
               </IconButton>
             )
+          )}
+          {props.earlierCount > 0 && (
+            <IconButton
+              label={t.sidebar.earlierSessions(props.earlierCount)}
+              title={t.sidebar.earlierSessionsTip}
+              size={20}
+              onClick={props.onOpenEarlier}
+              className="reveal workspace-group-act"
+              style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-tertiary)" }}
+            >
+              <Icon name="history" size={14} strokeWidth={1.8} />
+            </IconButton>
           )}
           <IconButton
             label={t.focus.browseFiles}
@@ -1363,150 +1351,7 @@ function WorkspaceGroup(props: {
 
       </div>
 
-      {!props.folded && (
-        // 子项缩进到父项名字下（styles.css 的 .tree-children）：侧栏是索引，层级只能靠缩进读
-        <div className="tree-children">
-          {visible.map((meta) => (
-            <SessionRow
-              key={meta.id}
-              meta={meta}
-              session={props.session}
-              bar={props.rowState(meta)}
-              active={props.rowActive(meta.id)}
-              onClick={(event) => props.onRowClick(meta.id, event)}
-              checkbox={props.checking ? props.isChecked(meta.id) : undefined}
-              moveIds={props.moveIdsFor(meta.id)}
-              onMove={props.onMove}
-            />
-          ))}
-          {/* 超出的折成「还有 N 件」（点开全露，再点收起）；口径是「件」不是「条」——列的是没了结的活 */}
-          {(visible.length < props.sessions.length || props.expanded) && (
-            <NavRow
-              icon={visible.length < props.sessions.length ? "chevron-down" : "chevron-up"}
-              label={
-                visible.length < props.sessions.length
-                  ? t.sidebar.moreJobs(props.sessions.length - visible.length)
-                  : t.sidebar.showLess
-              }
-              active={false}
-              tone="var(--color-text-tertiary)"
-              onClick={visible.length < props.sessions.length ? props.onMore : props.onLess}
-              style={{ color: "var(--color-text-secondary)", fontSize: "var(--font-size-sm)" }}
-            />
-          )}
-          {/* 做完看过的活与以前攒下的会话都在这一行后面：点开能看能搜，旧会话点开照旧是完整的会话 */}
-          {props.earlierCount > 0 && (
-            <NavRow
-              icon="history"
-              label={t.sidebar.earlierSessions(props.earlierCount)}
-              hint={t.sidebar.earlierSessionsTip}
-              active={false}
-              tone="var(--color-text-tertiary)"
-              onClick={props.onOpenEarlier}
-              style={{ color: "var(--color-text-secondary)", fontSize: "var(--font-size-sm)" }}
-            />
-          )}
-        </div>
-      )}
     </div>
-  );
-}
-
-/** 「等你」里子会话那几件的通道全文（取问题原话 / 没做成的原因）；有新消息就补上 */
-function useAttentionMessages(pairs: readonly { parentId: string; childId: string }[]): ReadonlyMap<string, readonly ChannelMessage[]> {
-  const key = pairs.map((pair) => `${pair.parentId}:${pair.childId}`).join(",");
-  const [byChild, setByChild] = useState<ReadonlyMap<string, readonly ChannelMessage[]>>(new Map());
-  useEffect(() => {
-    const wanted = key === "" ? [] : key.split(",").map((part) => {
-      const [parentId = "", childId = ""] = part.split(":");
-      return { parentId, childId };
-    });
-    let cancelled = false;
-    const load = (parentId: string, childId: string): void => {
-      void api.channel
-        .load({ parentId, childId })
-        .then((list) => {
-          if (!cancelled) setByChild((current) => new Map(current).set(childId, list));
-        })
-        // 读不到就只说是哪种事（attentionLine 的兜底），不挡侧栏
-        .catch((cause: unknown) => console.error("[attention] 通道读取失败", { parentId, childId }, cause));
-    };
-    wanted.forEach((pair) => load(pair.parentId, pair.childId));
-    const off = api.channel.onEvent((event) => {
-      if (event.type !== "message") return;
-      if (wanted.some((pair) => pair.childId === event.childId)) load(event.parentId, event.childId);
-    });
-    return () => {
-      cancelled = true;
-      off();
-    };
-  }, [key]);
-  return byChild;
-}
-
-/**
- * 侧栏最上面的「等你」（设计 11-sidebar-full C）：每件一行——橙点 + 事情名 + 属于哪个工作区，下面一行等什么的那一句
- * （288px 里「事情名：那一句」挤一行必然折成三行，工作区名还要占一截，所以分两行，名字左缘对齐）。
- * 一屏里只有这里点橙点；最多露 5 行，超出「还有 N 件」点开全露。没有等你的事时整段不出现，不留空标题。
- * 处理完的那一行自己消失（数据就是行状态）；没有「全部清除」——点一个只消一个。
- */
-function AttentionSection(props: { items: readonly AttentionItem[]; session: ChatSession; onOpen: (item: AttentionItem) => void }) {
-  const t = useT();
-  const [showAll, setShowAll] = useState(false);
-  const pairs = props.items.flatMap((item) =>
-    item.meta.parentId === undefined ? [] : [{ parentId: item.meta.parentId, childId: item.meta.id }],
-  );
-  const messages = useAttentionMessages(pairs);
-  if (props.items.length === 0) return null;
-  const shown = showAll ? props.items : props.items.slice(0, ATTENTION_SHOWN);
-  const hidden = props.items.length - shown.length;
-  const workspaceName = (id: string | null): string =>
-    id === null ? t.sidebar.tasks : (props.session.workspaces.find((workspace) => workspace.id === id)?.name ?? "");
-  return (
-    <section className="attention" aria-label={t.sidebar.attentionTitle}>
-      <div className="attention-head">
-        <NodeLabel>{t.sidebar.attentionTitle}</NodeLabel>
-        <span className="attention-count row-trailing">{props.items.length}</span>
-      </div>
-      {shown.map((item) => {
-        const title = item.meta.title === "" ? t.subSessions.untitled : displaySubSessionTitle(item.meta.title);
-        const line = attentionLine(
-          item,
-          messages.get(item.meta.id),
-          {
-            planAwaiting: props.session.planAwaitingOf(item.meta.id),
-            childInterrupted: childSessions(props.session.sessions, item.meta.id).some((child) => props.session.interruptedOf(child.id)),
-          },
-          t.sidebar.attention,
-        );
-        return (
-          <button
-            key={item.meta.id}
-            type="button"
-            className="option-row attention-row"
-            title={`${title}：${line}`}
-            onClick={() => props.onOpen(item)}
-          >
-            <span className="inbox-row-mark ask" aria-hidden="true">
-              <span className="inbox-row-dot" />
-            </span>
-            <span className="attention-text">
-              <span className="attention-l1">
-                <span className="attention-title">{title}</span>
-                <span className="attention-ws row-trailing">{workspaceName(item.workspaceId)}</span>
-              </span>
-              <span className="attention-line">{line}</span>
-            </span>
-          </button>
-        );
-      })}
-      {(hidden > 0 || showAll) && (
-        <button type="button" className="option-row attention-more" onClick={() => setShowAll((value) => !value)}>
-          <span className="inbox-row-mark" aria-hidden="true" />
-          {hidden > 0 ? t.sidebar.moreJobs(hidden) : t.sidebar.showLess}
-        </button>
-      )}
-    </section>
   );
 }
 

@@ -30,6 +30,7 @@ import type { ThinkingLevel } from "../../shared/thinking.ts";
 import { parseAutomationHeader } from "../../shared/automation.ts";
 import { isDurableBookRef } from "../../shared/kernel.ts";
 import { isClosingScanText } from "../../shared/wrapup-scan.ts";
+import { PLAN_TOOL_NAME, parsePlanItemsLoose, type PlanItem } from "../../shared/plan.ts";
 
 /** 收尾扫描的机器提问（用户消息形，但不是用户说的话） */
 function isMachinePrompt(record: SessionRecord): boolean {
@@ -1046,6 +1047,51 @@ export class SessionStore {
       return [];
     }
     return records;
+  }
+
+  /**
+   * 这条会话当前的计划（最后一次生效、执行完的 update_plan 的清单）；没写过 / 读不到 = null。
+   * 主智能体进度面板给每件活写「下一步」用（session:plan）。**流式按行读、按行首粗筛**（同 readUsageLog），
+   * 只解析用户消息、回退界碑与 update_plan 三种行——工具结果这类几 MB 的大行不解码不解析；
+   * 用户消息与界碑留着只为折叠回退（界碑的 targetMessageId 指向用户消息），所以结果与
+   * planTimeline(readLog) 的当前版本一致。
+   * 实测（合成 9 件 2/8/25 MB、共 105 MB）：比 loadWindow + 尾窗找计划少一个数量级的堆峰值，且尾窗找不到的计划这里找得到。
+   */
+  async latestPlan(id: string): Promise<PlanItem[] | null> {
+    const kept: SessionRecord[] = [];
+    try {
+      await scanJsonlLines(
+        this.logPath(id),
+        (head) => {
+          const role = headStringField(head, "role");
+          if (role === undefined) return true; // 行首看不到 role：保守地整行解析
+          if (role === "user" || role === "revert") return true;
+          return role === "tool" && (headStringField(head, "toolName") ?? PLAN_TOOL_NAME) === PLAN_TOOL_NAME;
+        },
+        (line) => {
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(line);
+          } catch {
+            return; // 半截行跳过
+          }
+          const record = parsed as { role?: unknown; toolName?: unknown } | null;
+          if (record?.role === "user" || (record?.role === "tool" && record.toolName === PLAN_TOOL_NAME) || isRevertRecord(parsed)) {
+            kept.push(parsed as SessionRecord);
+          }
+        },
+      );
+    } catch {
+      return null; // 不存在 / 读不了 / id 不合法：当没写过计划，进度面板照样从通道回报出摘要
+    }
+    const effective = this.foldReverts(kept);
+    for (let index = effective.length - 1; index >= 0; index -= 1) {
+      const record = effective[index];
+      if (record?.role !== "tool" || record.toolName !== PLAN_TOOL_NAME || record.status !== "complete") continue;
+      const items = parsePlanItemsLoose(record.input);
+      if (items.length > 0) return items;
+    }
+    return null;
   }
 
   /**

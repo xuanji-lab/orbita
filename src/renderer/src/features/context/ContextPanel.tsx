@@ -16,7 +16,7 @@ import { PanelHelp, RightPanelFrame } from "../../shell/RightPanel";
 import { PanelEmpty } from "../../shell/PanelEmpty";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { Chip } from "../../shell/Chip";
-import { TaskProgress } from "./TaskProgress";
+import { TaskProgress, type MainProgress } from "./TaskProgress";
 import { formatTokens } from "../../utils/format-tokens.ts";
 import type { SessionEntry } from "../chat/session-states.ts";
 import type { SessionRunState } from "../notify/completion-notice.ts";
@@ -72,6 +72,10 @@ export function ContextPanel(props: {
   /** 进度页签「派出去的活」：会话清单与引擎 */
   sessions: readonly SessionMeta[];
   engine: SessionEngine;
+  /** 进度页签里点一件活 / 一条以前的会话：在主区打开 */
+  onOpenSession: (id: string) => void;
+  /** 正在看的是主智能体：进度按问题组织（TaskProgress 的 MainProgress）；普通会话 = null */
+  main: MainProgress | null;
 }) {
   const t = useT();
   const [scope, setScope] = useState<ContextScope>(() => props.sub?.scope ?? "turn");
@@ -123,6 +127,8 @@ export function ContextPanel(props: {
           onOpenContext={() => props.onTab("context")}
           sessions={props.sessions}
           engine={props.engine}
+          onOpenSession={props.onOpenSession}
+          main={props.main}
         />
       ) : (
         <>

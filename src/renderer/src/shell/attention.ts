@@ -1,21 +1,15 @@
 /**
- * 侧栏最上面钉住的「等你」（设计 11-sidebar-full C、11-attention，2026-11-17）：跨工作区每件在等用户的事一行——
- * 在问的、没做成等他看的（主智能体派的活报了 failed 那一刻记一笔「没做成、没看」，见 App；你看过、或主智能体已处理就退场）。一屏只有这一处在叫人（橙点只在这里出现）；点一行跳过去，处理完那一行自己消失
- * （点一个只消一个，没有「全部清除」）。它替掉了右下角的铃铛与未读清单。
+ * 跨工作区每件在等用户的事（2026-11-17 起；2026-11-21 侧栏顶上不再列）：在问的、没做成等他看的
+ * （主智能体派的活报了 failed 那一刻记一笔「没做成、没看」，见 App；你看过、或主智能体已处理就退场）。
+ * 现在只用来给新冒出的那一件响一次提示音（Sidebar）；具体哪件、等什么写在主智能体进度面板最前的「等你」（job-brief.ts）。
  *
  * 数据不另存：每一件就是侧栏行状态（Sidebar 的 rowState：runStateOf + 子会话通道状态）里 waiting / failed 的那些，
- * 一句话从通道里那件活自己说的话来（问题原话 / 没做成的原因），先过 work-line 的洗句子，不露命令、路径、代号。
  * 「等他验的」现在没有数据来源（没有「待验收」状态），不算进来。
  *
  * 纯模块：不 import React，可被 node --test 直接加载。
  */
-import type { ChannelMessage } from "@shared/channel";
 import type { SessionMeta } from "@shared/session";
-import { latestSentence, sanitizeWorkLine } from "../../../shared/work-line.ts";
 import type { SessionRunState } from "../features/notify/completion-notice.ts";
-
-/** 「等你」最多露几行；超出的写「还有 N 件」 */
-export const ATTENTION_SHOWN = 5;
 
 /** 启动后多久之内冒出来的等你不响：那是读盘把已有的读出来（会话列表、各主智能体的通道状态陆续到），不是新事 */
 export const ATTENTION_WARMUP_MS = 8000;
@@ -52,47 +46,6 @@ export function attentionItems(
   return items.sort(
     (a, b) => (a.state === b.state ? 0 : a.state === "waiting" ? -1 : 1) || b.meta.updatedAt - a.meta.updatedAt,
   );
-}
-
-export interface AttentionWords {
-  /** 在问你、但问题原话洗不出干净的一句 */
-  asks: string;
-  /** 没做成：带原因 / 不带原因 */
-  failedWith: (reason: string) => string;
-  failed: string;
-  /** 根会话的「等你」：计划等你点头 / 派出去的活被打断等你说继续 / 其它 */
-  planAwaiting: string;
-  interrupted: string;
-  waiting: string;
-}
-
-/** 第一个非空行的第一句 */
-function firstSentence(text: string): string {
-  const line = text.split("\n").find((candidate) => candidate.trim() !== "") ?? "";
-  return latestSentence(line);
-}
-
-/**
- * 「等什么」那一句。子会话：在问的取最后一条提问的第一句，没做成的取最后一条失败消息的第一句；
- * 洗不出来就只说是哪种事。根会话：按它为什么在等说（计划 / 被打断 / 其它）。
- */
-export function attentionLine(
-  item: AttentionItem,
-  messages: readonly ChannelMessage[] | undefined,
-  why: { planAwaiting: boolean; childInterrupted: boolean },
-  words: AttentionWords,
-): string {
-  if (item.meta.parentId !== undefined) {
-    const kind = item.state === "waiting" ? "question" : "failed";
-    const last = [...(messages ?? [])].reverse().find((message) => message.kind === kind && message.from === "child");
-    const said = last === undefined ? "" : sanitizeWorkLine(firstSentence(last.text));
-    if (item.state === "waiting") return said === "" ? words.asks : said;
-    return said === "" ? words.failed : words.failedWith(said);
-  }
-  if (item.state === "failed") return words.failed;
-  if (why.planAwaiting) return words.planAwaiting;
-  if (why.childInterrupted) return words.interrupted;
-  return words.waiting;
 }
 
 /** 新冒出来的等你（提示音只为它们响一次）：这一拍有、以前从没响过的 id */

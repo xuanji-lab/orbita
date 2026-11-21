@@ -13,11 +13,11 @@ import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { effectiveIntentSettings } from "@shared/settings";
 import { IntentPanel } from "./features/intent/IntentPanel.tsx";
 import { ContextPanel, type TaskPanelTab } from "./features/context/ContextPanel.tsx";
+import { openEarlierSessions } from "./features/context/main-progress.ts";
 import { EMPTY_ENTRY } from "./features/chat/session-states.ts";
 import { ChatView } from "./features/chat/ChatView";
 import { useChannelSummaries } from "./features/chat/useChannelSummaries";
 import { subSessionStatusOf } from "./features/chat/sub-sessions-rows";
-import type { AttentionItem } from "./shell/attention.ts";
 import { SubSessionsPanel } from "./features/chat/SubSessionsPanel";
 import {
   SUB_SESSIONS_LIST,
@@ -678,7 +678,7 @@ export function App() {
   /**
    * 后台会话做完（用户 2026-10-10 起）：没在看它的话，把未读写进 meta（SessionMeta.unread，session:unread 落盘，
    * **重启后还在**），侧栏那一行亮 3/3 状态饼；点进去看过（主槽或辅助对话正显示它）即清未读。
-   * 2026-11-17 起做完**不响、不弹卡**，右下角铃铛与未读清单也去掉了：一屏只有侧栏顶上的「等你」在叫人，
+   * 2026-11-17 起做完**不响、不弹卡**，右下角铃铛与未读清单也去掉了：一屏只有工作区行尾的等你计数与主智能体进度面板最前的「等你」在叫人（2026-11-21 侧栏顶那一块拿掉），
    * 提示音只在新冒出一件等你的事时响一次（Sidebar 的 onAttentionAppeared）。
    * 只认根会话——子会话跑完由母会话的通道回报，不单独打扰人。
    */
@@ -1142,34 +1142,6 @@ export function App() {
     setRailCtx((current) => ({ owner: target, epoch: current.epoch + 1 }));
   }, [mainOpenId, rightPanel, taskTab]);
 
-  /**
-   * 侧栏「等你」点一行：主智能体派出去的活 → 打开那个工作区的主对话，再在右栏子会话面板里打开那件活
-   * （「定位到那件事」）；没做成的那件点开就算看过了，清掉未读，那一行随之消失（点一个只消一个）。
-   * 不属于主智能体的根会话 → 直接打开它。
-   * 定位要等主槽真的换成那条主会话：切主槽那一拍上面两个效果会把右栏恢复成那条会话记着的样子，
-   * 所以记一个待定位，等 mainOpenId 对上再开（本效果排在它们后面，同一拍里后写的生效）。
-   */
-  const [pendingLocate, setPendingLocate] = useState<{ parentId: string; childId: string } | null>(null);
-  const openAttention = (item: AttentionItem): void => {
-    const meta = item.meta;
-    if (meta.parentId === undefined) {
-      void session.openSession(meta.id);
-      return;
-    }
-    const workspace = session.workspaces.find((candidate) => candidate.id === item.workspaceId);
-    if (workspace === undefined) {
-      void session.openSession(meta.parentId);
-    } else {
-      session.openMainAgent(workspace);
-    }
-    setPendingLocate({ parentId: meta.parentId, childId: meta.id });
-    if (meta.unread != null) clearUnreadOf([meta.id]);
-  };
-  useEffect(() => {
-    if (pendingLocate === null || mainOpenId !== pendingLocate.parentId) return;
-    openSubSessionInPanel(pendingLocate.childId);
-    setPendingLocate(null);
-  }, [pendingLocate, mainOpenId, openSubSessionInPanel]);
 
   // 写穿：右栏路径一变就记进这条会话的记忆（不等切走那一拍——切会话时离开的会话已经是最新）
   const memoryLoadedRef = useRef(false);
@@ -1437,7 +1409,6 @@ export function App() {
           onExitBrowse={focus.exitBrowse}
           onStartFocusHere={focus.startAt}
           onOpenFile={focus.openFile}
-          onOpenAttention={openAttention}
           onAttentionAppeared={(ids) => {
             // 专注计时中静音（专注期间只记账，同原来的完成提醒）；设置里关了提示音也不响
             if (focus.quiet || settings.completionSound === false) return;
@@ -1633,6 +1604,19 @@ export function App() {
                   onStartGoalTask={startGoalTask}
                   sessions={session.sessions}
                   engine={engine}
+                  onOpenSession={(id) => {
+                    setOverlay(null);
+                    void session.openSession(id);
+                  }}
+                  main={
+                    mainAgentWorkspace === undefined
+                      ? null
+                      : {
+                          workspaceId: mainAgentWorkspace.id,
+                          stateOf: (meta) => runStateOf(session, meta),
+                          onOpenEarlier: () => openEarlierSessions(mainAgentWorkspace.id),
+                        }
+                  }
                 />
               ) : shownPanel === "plugins" ? (
                 <PluginsView

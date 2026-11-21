@@ -74,3 +74,28 @@ export function matchesSessionQuery(meta: SessionMeta, query: string): boolean {
   if (needle === "") return true;
   return [meta.title, ...meta.recentQueries].some((text) => text.toLowerCase().includes(needle));
 }
+
+/**
+ * 工作区那一行此刻与主区的关系（2026-11-21）：main = 正在跟它的主智能体说话（或主智能体还没说过话的空态）；
+ * job = 正看着它派出的一件活（侧栏不再列活的子行，这一行同样亮着，用户才看得出身在哪个工作区）；null = 都不是。
+ * 读屏只在 main 时说「当前页」（aria-current="page"）：看一件活时当前页是那件活，不是工作区。
+ */
+export type WorkspaceRowFocus = "main" | "job" | null;
+
+export function workspaceRowFocus(
+  main: SessionMeta | null,
+  openId: string | null,
+  sessions: readonly SessionMeta[],
+  pendingMain: boolean,
+): WorkspaceRowFocus {
+  if (main !== null && openId !== null) {
+    if (main.id === openId) return "main";
+    if (sessions.some((meta) => meta.id === openId && meta.parentId === main.id)) return "job";
+  }
+  return pendingMain ? "main" : null;
+}
+
+/** 工作区行名字按钮的 aria-current：只有在主智能体本身时才是当前页 */
+export function workspaceRowCurrent(focus: WorkspaceRowFocus): "page" | undefined {
+  return focus === "main" ? "page" : undefined;
+}

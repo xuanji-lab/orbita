@@ -57,6 +57,8 @@ export function registerSessionIpc(
   // 打开会话：**只回首屏尾窗**（主进程仍全量读 + 折叠，见 store.loadWindow 的注释）——
   // 25MB / 2948 条的会话一次过 IPC 是瓶颈所在，renderer 也无力一次渲染完
   ipcMain.handle(ipcChannels.sessionLoad, (_event, id: string) => store.loadWindow(id));
+  // 只取当前计划（进度面板每件活的「下一步」）：流式粗筛，不整份解析、不回转录，见 store.latestPlan
+  ipcMain.handle(ipcChannels.sessionPlan, (_event, id: string) => store.latestPlan(id));
   // 更早的一页：滚动触顶时 renderer 拿窗口第一条记录的 id 来拉（before 就是它）
   ipcMain.handle(
     ipcChannels.sessionLoadOlder,
