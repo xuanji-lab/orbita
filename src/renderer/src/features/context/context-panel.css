@@ -620,8 +620,23 @@ button.tp-editlog-src:hover {
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
-  padding: var(--space-1) 0;
+  /* 整行可点（2026-11-21）：悬停底向两侧外扩一格，字仍与节标题同一条左缘 */
+  width: calc(100% + 2 * var(--space-1));
+  margin: 0 calc(-1 * var(--space-1));
+  padding: var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  text-align: left;
   line-height: var(--line-height-ui);
+  cursor: pointer;
+}
+.tp-jobs > li {
+  min-width: 0;
+}
+/* 以前的会话是普通会话名：不加粗（加粗留给正在让你看的活） */
+.tp-earlier-name {
+  font-weight: var(--weight-regular);
 }
 .tp-job .inbox-row-mark {
   width: 14px;

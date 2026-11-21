@@ -6,6 +6,10 @@ import { InlineMarks } from "../../shell/InlineMarks";
 import { inlinePlain } from "../../shell/inline-marks.ts";
 import { RowHoverAction } from "../../shell/RowHoverAction";
 import { childSessions, type SessionMeta } from "@shared/session";
+import type { ChannelMessage } from "@shared/channel";
+import { StatusPie } from "../../shell/StatusPie";
+import { sessionAgeLabel } from "../../shell/relative-time.ts";
+import { mainAgentEarlier } from "./main-progress.ts";
 import { selectTranscript } from "../../../../shared/transcript-state.ts";
 import { useChannelSummaries } from "../chat/useChannelSummaries";
 import { useParentChannels } from "../chat/useChannelMessages";
@@ -19,6 +23,7 @@ import {
   subSessionLine,
   subSessionMark,
   subSessionStatusOf,
+  type SubSessionRowStatus,
 } from "../chat/sub-sessions-rows.ts";
 import { workFacts, workLine } from "../../../../shared/work-line.ts";
 import { formatTokens } from "../../utils/format-tokens.ts";
@@ -89,6 +94,10 @@ export function TaskProgress(props: {
   /** 「派出去的活」：会话清单（找这条会话的子会话）与引擎（在不在跑、那一句从哪来） */
   sessions: readonly SessionMeta[];
   engine: SessionEngine;
+  /** 点一件活 / 一条以前的会话：在主区打开它（子会话顶栏有回父的面包屑，App 的 session.openSession） */
+  onOpenSession: (id: string) => void;
+  /** 这条会话是某个工作区的主智能体：进度按「等你 → 目标 → 计划 → 各件活 → 以前的会话」组织；普通会话 = null */
+  main: MainProgress | null;
 }) {
   const t = useT();
   const { entry } = props;
@@ -134,8 +143,23 @@ export function TaskProgress(props: {
     return said === null ? null : (workLine({ said, planStep: null, clerk: null, activity: null }, { activity: t.channel.activity, waiting: t.channel.waitingStep })?.text ?? null);
   }, [entry.transcript, t]);
 
+  // 派出去的各件活：主智能体把要你出手的那几件提到最前（「等你」），其余留在「各件活」
+  const jobs = useJobRows(props.sessionId, props.sessions, props.engine);
+  const asks = props.main === null ? [] : jobs.all.filter((row) => subSessionMark(row.status) === "ask");
+
   return (
     <div className="tp-body">
+      {asks.length > 0 && (
+        <JobsSection
+          label={t.taskPanel.waitingOnYou}
+          count={String(asks.length)}
+          rows={asks}
+          folded={[]}
+          jobs={jobs}
+          engine={props.engine}
+          onOpen={props.onOpenSession}
+        />
+      )}
       {ledger.goal !== null && (
         <GoalSection
           ledger={ledger}
@@ -150,6 +174,8 @@ export function TaskProgress(props: {
           }
         />
       )}
+      {/* 主智能体：停着时这一行只是「空闲 · N 轮」，等你的事已在最前，不再占一行（降噪）；在跑才露 */}
+      {(props.main === null || headState === "running") && (
       <div className="tp-now">
         {/* 一个面上只留一个会动的记号：在做 = 灰色转圈；其余不标——要你出手的靠后面的字说（橙点只在侧栏顶「等你」，2026-11-17） */}
         <span className="tp-slot">
@@ -161,11 +187,13 @@ export function TaskProgress(props: {
         {turns.length > 0 && <span className="tp-sub">· {t.taskPanel.turns(turns.length)}</span>}
         {clock !== null && <span className="tp-clock">{clock}</span>}
       </div>
+      )}
 
       <TaskDetail
-        dispatchedOf={props.sessionId}
-        sessions={props.sessions}
+        jobs={jobs}
+        excludeAsks={props.main !== null}
         engine={props.engine}
+        onOpenSession={props.onOpenSession}
         plan={
           timeline !== null && plan !== null
             ? {
@@ -189,6 +217,10 @@ export function TaskProgress(props: {
         }
         noPlanHint={turnActive}
       />
+
+      {props.main !== null && (
+        <EarlierSection main={props.main} sessions={props.sessions} onOpen={props.onOpenSession} />
+      )}
 
       {plan !== null && turns.length > 0 && (
         <button
@@ -698,63 +730,24 @@ function StepTail(props: { act: StepActivity | undefined; clock: string | null }
 /**
  * 一件事的详情：它的计划 + 它派出去的活（2026-11-17）。写成一个整块、不和面板最外层绑死：以后一个工作区同时有好几件大事时，
  * 右栏分上下两段（main-agent-design 11-right-full 的 B：上段「事情」清单固定，下段是选中那件的详情），这一块就是下段，
- * 由上段的选中项驱动——换一件事 = 换 dispatchedOf 与 plan。现在只有一件（当前会话），上段等数据来了再接。
+ * 由上段的选中项驱动——换一件事 = 换 jobs 与 plan。现在只有一件（当前会话），上段等数据来了再接。
  */
 function TaskDetail(props: {
-  /** 谁派出去的活：这件事对应的那条会话 */
-  dispatchedOf: string;
-  sessions: readonly SessionMeta[];
+  /** 这件事派出去的活（useJobRows） */
+  jobs: JobRows;
+  /** 主智能体：要你出手的那几件已经排在面板最前的「等你」里，这里不再列一遍 */
+  excludeAsks: boolean;
   engine: SessionEngine;
+  onOpenSession: (id: string) => void;
   /** 这件事的计划；没写过计划 = null */
   plan: Parameters<typeof PlanSection>[0] | null;
   /** 没有计划时要不要说一句「还没列计划」（这件事正在跑时） */
   noPlanHint: boolean;
 }) {
   const t = useT();
-  return (
-    <>
-      {props.plan !== null ? <PlanSection {...props.plan} /> : props.noPlanHint && <p className="tp-hint">{t.taskPanel.noPlan}</p>}
-      <DispatchedSection parentId={props.dispatchedOf} sessions={props.sessions} engine={props.engine} />
-    </>
-  );
-}
-
-/**
- * 进度面板「派出去的活」（2026-11-17；设计 main-agent-design 的 decisions 第 3 件，选 B）：每件两行——名字与用了多久 / 那一句
- * （和子会话面板、状态位是同一句，sub-sessions-rows 的 subSessionLine）；第三行只在有变化时出（断过一次、按你的话改了口径），
- * 现在没有数据来源，接口留着不出。在做 = 灰点，要你出手 = 橙点；做完交回来的不在这里。没有派过活整节不出。
- */
-function DispatchedSection(props: { parentId: string; sessions: readonly SessionMeta[]; engine: SessionEngine }) {
-  const t = useT();
-  const children = childSessions([...props.sessions], props.parentId);
-  const summaries = useChannelSummaries(props.parentId);
-  const channels = useParentChannels(props.parentId, children.map((meta) => meta.id));
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(timer);
-  }, []);
-  const [showDone, setShowDone] = useState(false);
-  const all = sortSubSessionRows(
-      children.map((meta) => {
-        const messages = channels.get(meta.id);
-        const last = messages?.[messages.length - 1];
-        return {
-          meta,
-          messages,
-          status: subSessionStatusOf(meta.id, summaries.get(meta.id)?.status, props.engine),
-          lastAt: last !== undefined ? last.createdAt : meta.createdAt,
-        };
-      }),
-  );
-  if (all.length === 0) return null;
-  // 只露在做的与要你出手的；做完的与停着的折成末尾一行（和子会话面板同一个规矩、同一段逻辑 splitDoneRows）
-  const { open: rows, done, parked } = splitDoneRows(all);
-  const folded = [...done, ...parked];
-  const itemsOf = (id: string) => {
-    const slot = props.engine.entryOf(id);
-    return slot === undefined ? [] : selectTranscript(slot.transcript);
-  };
+  const all = props.excludeAsks ? props.jobs.all.filter((row) => subSessionMark(row.status) !== "ask") : props.jobs.all;
+  // 只露在做的；做完的与停着的折成末尾一行（和子会话面板同一个规矩、同一段逻辑 splitDoneRows）
+  const { open, done, parked } = splitDoneRows(all);
   const headline = subSessionHeadline(all, {
     interrupted: t.chat.subSessionInterruptedShort,
     waiting: t.subSessions.waitingCount,
@@ -762,53 +755,189 @@ function DispatchedSection(props: { parentId: string; sessions: readonly Session
     working: t.subSessions.workingCount,
   });
   return (
-    <section className="tp-sec" aria-label={t.taskPanel.dispatched}>
+    <>
+      {props.plan !== null ? <PlanSection {...props.plan} /> : props.noPlanHint && <p className="tp-hint">{t.taskPanel.noPlan}</p>}
+      {all.length > 0 && (
+        <JobsSection
+          label={props.excludeAsks ? t.taskPanel.jobs : t.taskPanel.dispatched}
+          count={headline}
+          rows={open}
+          folded={[...done, ...parked]}
+          foldLabel={[...(done.length > 0 ? [t.subSessions.doneCount(done.length)] : []), ...(parked.length > 0 ? [t.subSessions.parkedCount(parked.length)] : [])].join(" · ")}
+          jobs={props.jobs}
+          engine={props.engine}
+          onOpen={props.onOpenSession}
+        />
+      )}
+    </>
+  );
+}
+
+interface JobRow {
+  meta: SessionMeta;
+  messages: readonly ChannelMessage[] | undefined;
+  status: SubSessionRowStatus;
+  lastAt: number;
+}
+
+interface JobRows {
+  /** 全部派出去的活，按急的在前排好（sortSubSessionRows） */
+  all: JobRow[];
+  now: number;
+}
+
+/** 这条会话派出去的活与各自的通道往来（进度面板「等你」与「各件活」共用这一份，不各拉一遍） */
+function useJobRows(parentId: string, sessions: readonly SessionMeta[], engine: SessionEngine): JobRows {
+  const children = childSessions([...sessions], parentId);
+  const summaries = useChannelSummaries(parentId);
+  const channels = useParentChannels(parentId, children.map((meta) => meta.id));
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
+  const all = sortSubSessionRows(
+    children.map((meta) => {
+      const messages = channels.get(meta.id);
+      const last = messages?.[messages.length - 1];
+      return {
+        meta,
+        messages,
+        status: subSessionStatusOf(meta.id, summaries.get(meta.id)?.status, engine),
+        lastAt: last !== undefined ? last.createdAt : meta.createdAt,
+      };
+    }),
+  );
+  return { all, now };
+}
+
+/**
+ * 进度面板里的一段活（2026-11-21）：主智能体的「等你」与「各件活」、普通会话的「派出去的活」都是它。
+ * 每件一行，整行可点——在主区打开那件活（真的子会话，顶栏面包屑回父）；行首记号同子会话面板：在做灰点、要你出手不点色（靠位置与字）。
+ * 做完的与停着的折成末尾一行，点开才列。
+ */
+function JobsSection(props: {
+  label: string;
+  /** 标题后面的灰字计数 / 汇总；空串不写 */
+  count: string;
+  rows: readonly JobRow[];
+  folded: readonly JobRow[];
+  foldLabel?: string;
+  jobs: JobRows;
+  engine: SessionEngine;
+  onOpen: (id: string) => void;
+}) {
+  const t = useT();
+  const [showFolded, setShowFolded] = useState(false);
+  const itemsOf = (id: string) => {
+    const slot = props.engine.entryOf(id);
+    return slot === undefined ? [] : selectTranscript(slot.transcript);
+  };
+  return (
+    <section className="tp-sec" aria-label={props.label}>
       <div className="tp-gh">
-        {t.taskPanel.dispatched}
-        <span className="tp-n">{headline}</span>
+        {props.label}
+        {props.count !== "" && <span className="tp-n">{props.count}</span>}
       </div>
       <ol className="tp-jobs">
-        {[...rows, ...(showDone ? folded : [])].map((row) => {
+        {[...props.rows, ...(showFolded ? props.folded : [])].map((row) => {
           const mark = subSessionMark(row.status);
           const line = subSessionLine(
             {
               status: row.status,
               messages: row.messages,
               items: itemsOf(row.meta.id),
-              now,
+              now: props.jobs.now,
               lastActivityAt: props.engine.lastActivityOf(row.meta.id),
             },
             t,
           );
-          const note: string | null = null;
+          const name = row.meta.title === "" ? t.subSessions.untitled : displaySubSessionTitle(row.meta.title);
           return (
-            <li key={row.meta.id} className="tp-job">
-              <span className={`inbox-row-mark${mark === null ? "" : ` ${mark}`}`} aria-hidden="true">
-                {mark === "work" && <span className="inbox-row-dot" />}
-              </span>
-              <div className="tp-step">
-                <div className="tp-step-head">
-                  <span className="tp-text tp-job-name" title={row.meta.title}>{row.meta.title === "" ? t.subSessions.untitled : displaySubSessionTitle(row.meta.title)}</span>
-                  <span className="tp-tail row-trailing">{jobElapsed(now - row.meta.createdAt, t.taskPanel.elapsed)}</span>
-                </div>
-                {line !== "" && <div className={mark === "ask" ? "tp-job-line ask" : "tp-job-line"}>{line}</div>}
-                {note !== null && <div className="tp-note">{note}</div>}
-              </div>
+            <li key={row.meta.id}>
+              <button type="button" className="option-row tp-job" title={t.taskPanel.openJob(name)} onClick={() => props.onOpen(row.meta.id)}>
+                <span className={`inbox-row-mark${mark === null ? "" : ` ${mark}`}`} aria-hidden="true">
+                  {mark === "work" && <span className="inbox-row-dot" />}
+                </span>
+                <span className="tp-step">
+                  <span className="tp-step-head">
+                    <span className="tp-text tp-job-name">{name}</span>
+                    <span className="tp-tail row-trailing">{jobElapsed(props.jobs.now - row.meta.createdAt, t.taskPanel.elapsed)}</span>
+                  </span>
+                  {line !== "" && <span className={mark === "ask" ? "tp-job-line ask" : "tp-job-line"}>{line}</span>}
+                </span>
+              </button>
             </li>
           );
         })}
       </ol>
-      {folded.length > 0 && (
-        <button type="button" className="tp-jobs-fold" aria-expanded={showDone} onClick={() => setShowDone((value) => !value)}>
+      {props.folded.length > 0 && (
+        <button type="button" className="tp-jobs-fold" aria-expanded={showFolded} onClick={() => setShowFolded((value) => !value)}>
           <span className="inbox-row-mark done" aria-hidden="true">
             <Icon name="check" size={12} strokeWidth={2} />
           </span>
-          <span className="tp-text">
-            {[...(done.length > 0 ? [t.subSessions.doneCount(done.length)] : []), ...(parked.length > 0 ? [t.subSessions.parkedCount(parked.length)] : [])].join(" · ")}
-          </span>
-          <Icon name={showDone ? "chevron-down" : "chevron-right"} size={12} strokeWidth={1.8} />
+          <span className="tp-text">{props.foldLabel}</span>
+          <Icon name={showFolded ? "chevron-down" : "chevron-right"} size={12} strokeWidth={1.8} />
         </button>
       )}
+    </section>
+  );
+}
+
+/** 主智能体在进度面板里需要的、普通会话没有的东西 */
+export interface MainProgress {
+  workspaceId: string;
+  /** 行的状态饼（App 的 runStateOf，与侧栏同一个推导） */
+  stateOf: (meta: SessionMeta) => SessionRunState;
+  /** 「全部以前的会话」：打开侧栏里现有的那一页（能搜、能按星标 / 时间筛） */
+  onOpenEarlier: () => void;
+}
+
+/** 进度面板里最近几条以前的会话；更多的去侧栏那一页 */
+const EARLIER_SHOWN = 5;
+
+/**
+ * 「以前的会话」（2026-11-21）：这个工作区里用户以前自己开的会话（不是主智能体派的活）。侧栏工作区下面不再列子行，
+ * 旧会话从这里找回：最近几条直接点开，其余进侧栏「以前的会话」那一页（搜索与筛选都在那里）。没有就整节不出。
+ */
+function EarlierSection(props: { main: MainProgress; sessions: readonly SessionMeta[]; onOpen: (id: string) => void }) {
+  const t = useT();
+  const earlier = mainAgentEarlier(props.sessions, props.main.workspaceId);
+  if (earlier.length === 0) return null;
+  const now = Date.now();
+  return (
+    <section className="tp-sec" aria-label={t.sidebar.earlierTitle}>
+      <div className="tp-gh">
+        {t.sidebar.earlierTitle}
+        <span className="tp-n">{earlier.length}</span>
+      </div>
+      <ol className="tp-jobs">
+        {earlier.slice(0, EARLIER_SHOWN).map((meta) => {
+          const state = props.main.stateOf(meta);
+          return (
+            <li key={meta.id}>
+              <button type="button" className="option-row tp-job" title={meta.title} onClick={() => props.onOpen(meta.id)}>
+                <span className="inbox-row-mark" aria-hidden="true">
+                  {state !== null && <StatusPie state={state} />}
+                </span>
+                <span className="tp-step">
+                  <span className="tp-step-head">
+                    <span className="tp-text tp-job-name tp-earlier-name">{meta.title === "" ? t.subSessions.untitled : meta.title}</span>
+                    <span className="tp-tail row-trailing">{sessionAgeLabel(meta.updatedAt, now, t)}</span>
+                  </span>
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+      <button type="button" className="tp-jobs-fold" onClick={props.main.onOpenEarlier}>
+        <span className="inbox-row-mark" aria-hidden="true">
+          <Icon name="history" size={12} strokeWidth={1.8} />
+        </span>
+        <span className="tp-text">{t.taskPanel.allEarlier}</span>
+        <Icon name="chevron-right" size={12} strokeWidth={1.8} />
+      </button>
     </section>
   );
 }

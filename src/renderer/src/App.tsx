@@ -13,6 +13,7 @@ import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { effectiveIntentSettings } from "@shared/settings";
 import { IntentPanel } from "./features/intent/IntentPanel.tsx";
 import { ContextPanel, type TaskPanelTab } from "./features/context/ContextPanel.tsx";
+import { openEarlierSessions } from "./features/context/main-progress.ts";
 import { EMPTY_ENTRY } from "./features/chat/session-states.ts";
 import { ChatView } from "./features/chat/ChatView";
 import { useChannelSummaries } from "./features/chat/useChannelSummaries";
@@ -1633,6 +1634,19 @@ export function App() {
                   onStartGoalTask={startGoalTask}
                   sessions={session.sessions}
                   engine={engine}
+                  onOpenSession={(id) => {
+                    setOverlay(null);
+                    void session.openSession(id);
+                  }}
+                  main={
+                    mainAgentWorkspace === undefined
+                      ? null
+                      : {
+                          workspaceId: mainAgentWorkspace.id,
+                          stateOf: (meta) => runStateOf(session, meta),
+                          onOpenEarlier: () => openEarlierSessions(mainAgentWorkspace.id),
+                        }
+                  }
                 />
               ) : shownPanel === "plugins" ? (
                 <PluginsView

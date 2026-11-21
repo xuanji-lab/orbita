@@ -3013,6 +3013,10 @@ export const en = {
   taskPanel: {
     doneSteps: (n: number) => `${n} done`,
     dispatched: "Delegated work",
+    jobs: "Work items",
+    waitingOnYou: "Waiting on you",
+    openJob: (name: string) => `Open “${name}” (the breadcrumb at the top leads back)`,
+    allEarlier: "All earlier sessions",
     elapsed: {
       lessThanMinute: "under a minute",
       minutes: (n: number) => `${n} min`,

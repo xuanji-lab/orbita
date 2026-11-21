@@ -2803,6 +2803,10 @@ export const zh: Messages = {
   taskPanel: {
     doneSteps: (n) => `做完 ${n} 步`,
     dispatched: "派出去的活",
+    jobs: "各件活",
+    waitingOnYou: "等你",
+    openJob: (name) => `打开「${name}」（顶上的面包屑能回来）`,
+    allEarlier: "全部以前的会话",
     elapsed: {
       lessThanMinute: "不到 1 分钟",
       minutes: (n) => `${n} 分钟`,

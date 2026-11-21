@@ -40,6 +40,7 @@ import { ageCounts, filterByAge } from "./sidebar-age.ts";
 import { sessionAgeLabel } from "./relative-time.ts";
 import { useMinuteTick } from "./use-minute-tick.ts";
 import { matchesSessionQuery, openRowsLimit, workspaceRows } from "./workspace-rows.ts";
+import { OPEN_EARLIER_EVENT } from "../features/context/main-progress.ts";
 import { ATTENTION_SHOWN, ATTENTION_WARMUP_MS, attentionItems, attentionLine, freshAttention, type AttentionItem } from "./attention.ts";
 import { displaySubSessionTitle } from "../features/chat/sub-sessions-rows.ts";
 import type { ChannelMessage } from "@shared/channel";
@@ -413,6 +414,22 @@ export function Sidebar(props: {
     setEarlierFor(null);
     props.onOpenAttention(item);
   };
+  /** 右栏进度面板「全部以前的会话」：开这一页（侧栏收着就先展开），设置 / 已归档盖着的先让开 */
+  const onCollapsedChange = props.onCollapsedChange;
+  const onOverlay = props.onOverlay;
+  const onShowArchived = props.onShowArchived;
+  useEffect(() => {
+    const onOpen = (event: Event): void => {
+      const workspaceId = (event as CustomEvent<string>).detail;
+      onOverlay(null);
+      onShowArchived(false);
+      onCollapsedChange(false);
+      setEarlierQuery("");
+      setEarlierFor(workspaceId);
+    };
+    window.addEventListener(OPEN_EARLIER_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_EARLIER_EVENT, onOpen);
+  }, [onCollapsedChange, onOverlay, onShowArchived]);
   /** 「以前的会话」子视图开在哪个工作区上；工作区被移除了按没开处理 */
   const earlierWs =
     earlierFor === null || overlayOpen || props.showArchived
