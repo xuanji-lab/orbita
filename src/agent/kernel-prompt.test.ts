@@ -95,6 +95,8 @@ describe("kernel-prompt：璇玑自写的基底", () => {
     assert.match(prompt, /read it with the read tool/);
     assert.ok(prompt.endsWith(`<cwd>\n${cwd.replace(/\\/g, "/")}\n</cwd>`));
     assert.deepEqual(resources.skills.map((skill) => skill.name), ["demo", "hidden"]);
+    // 能力目录指向 skill 时按它过滤：只含技能索引里模型真看得到的（只能点名的不算）
+    assert.deepEqual(resources.indexedSkills, ["demo"]);
   });
 
   it("没有 read 时技能用 bash 读；没有 bash 时不出搜索与环境变量两条规则", () => {

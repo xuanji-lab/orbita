@@ -14,6 +14,7 @@ import { describeProtectedData } from "./permission.ts";
 import { describeDirectories } from "./directories-prompt.ts";
 import { CHAT_ONLY_GUIDELINE, describeChannelRole } from "./channel-tools.ts";
 import { hasModule, isChatOnly } from "../shared/capabilities.ts";
+import { formatCapabilityCatalog, type CatalogGroup } from "./capability-catalog.ts";
 import { storeToolsGuideline } from "./store-tools.ts";
 import { gitAttributionGuideline } from "./git-attribution.ts";
 import { REPLY_LANGUAGE_GUIDELINE } from "./prompt-narration.ts";
@@ -119,6 +120,11 @@ export interface SystemPromptInput {
    * 缺席 = 全带：段与以前逐字节相同。纯聊天只留身份与回复语言两段；别的按模块跳过对应段（store-tools、quote）。
    */
   capabilities?: { list: readonly string[]; missing: readonly string[] };
+  /**
+   * 能力目录的原料（turn-tools.ts 的 selectTurnTools 选出的非空分组）与这一轮技能索引里真有的技能名。
+   * 不给 / 没有分组 = 没有目录这一段（纯聊天在上面已提前返回，本来就不到这里）。
+   */
+  capabilityCatalog?: { groups: readonly CatalogGroup[]; skills: readonly string[] };
 }
 
 export interface PromptSegment {
@@ -146,6 +152,11 @@ export function orbitaSystemSegments(input: SystemPromptInput): PromptSegment[] 
     ...(input.memoryToolsGuideline ? [{ name: "memory-tools", text: MEMORY_TOOLS_GUIDELINE }] : []),
     // 讲 create_skill / add_mcp_server 的：没带 store 模块就没有这两个工具，这段也不讲
     ...(hasModule(list, "store") ? [{ name: "store-tools", text: storeToolsGuideline(input.workspace, input.cwd) }] : []),
+    // 能力目录放在身份 / 通道 / 主智能体 / 记忆 / store 各段之后、通用工具规矩之前：前面各段字节不动；
+    // 目录随这一轮的组集与 MCP 服务集变（同一件活相邻两轮不变），只会让它之后的段重新计缓存
+    ...(input.capabilityCatalog === undefined
+      ? []
+      : [{ name: "capability-catalog", text: formatCapabilityCatalog(input.capabilityCatalog.groups, input.capabilityCatalog.skills) }]),
     { name: "tool-guidelines", text: TOOL_GUIDELINES },
     { name: "expected-seconds", text: EXPECTED_SECONDS_GUIDELINE },
     ...(input.longTaskAutomationGuideline ? [{ name: "long-task-automation", text: LONG_TASK_AUTOMATION_GUIDELINE }] : []),

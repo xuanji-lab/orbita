@@ -33,6 +33,7 @@ import {
   AUTOMATION_TITLE_MAX,
 } from "../../shared/automation.ts";
 import { createAutomationTools } from "../../agent/automation-tools.ts";
+import { loadSkills } from "../../agent/kernel-prompt.ts";
 import { QUOTE_MIN_CHARS } from "../../shared/pdf-quote.ts";
 import {
   CITE_MAX_QUOTES,
@@ -82,6 +83,20 @@ describe("内置插件 plugin-creator", () => {
       assert.deepEqual(scanned.unsupported, [], `${name} 带了 Orbita 不运行的组件`);
       assert.equal(scanned.description !== "", true);
     }
+  });
+
+  test("每条内置技能都过 durable 的真实 YAML 加载器：界面扫描与模型索引看到同一份名字和描述", async () => {
+    for (const name of BUILTIN_PLUGIN_NAMES) {
+      const scanned = await scanPlugin(join(BUILTIN, name), name);
+      for (const skill of scanned.skills) {
+        const loaded = loadSkills([skill.file]);
+        assert.equal(loaded.length, 1, `${name}/${skill.slug} 被界面扫到，却被 durable 的 YAML 加载器丢掉`);
+        assert.equal(loaded[0]?.name, skill.name);
+        assert.equal(loaded[0]?.description, skill.description, `${name}/${skill.slug} 的描述被 YAML 截断`);
+      }
+    }
+    const automation = loadSkills([join(AUTOMATION, "skills", "automation", "SKILL.md")]);
+    assert.match(automation[0]?.description ?? "", /automation_create \/ list \/ cancel\): schedule format/);
   });
 
   test("三条技能都在、各有 description；workflow 每一步点名的技能都对得上（详情页不出现「找不到这个技能」）", async () => {

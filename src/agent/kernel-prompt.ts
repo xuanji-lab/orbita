@@ -30,6 +30,8 @@ export interface PiResources {
   skills: { name: string; description: string }[];
   /** 这一轮挑进来的技能的 slug（与 skills 同序）：能力集点名了却没装的，靠它与 skills 的名字一起认出来 */
   skillSlugs: string[];
+  /** 技能索引（<skills>）里模型真看得到的技能名：去掉只能点名的（hidden）。能力目录指向 skill 时按它过滤，不指索引里没有的 */
+  indexedSkills: string[];
   agentDir: string;
   /** 内建工具的装配选项：从 ~/.pi/agent/settings.json 读的三项 */
   builtinOptions: BuiltinToolOptions;
@@ -442,6 +444,7 @@ export async function loadPiResources(input: {
     agentsFiles: contextFiles.map((file) => ({ path: file.path, content: file.content })),
     skills: skills.map((skill) => ({ name: skill.name, description: skill.description })),
     skillSlugs: skills.map((skill) => skillSlug(skill)),
+    indexedSkills: skills.filter((skill) => !skill.hidden).map((skill) => skill.name),
     agentDir,
     builtinOptions: {
       autoResizeImages: settings.autoResizeImages,
