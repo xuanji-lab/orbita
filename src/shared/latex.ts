@@ -792,11 +792,18 @@ export interface LatexPackageNamesOutcome {
   truncated: boolean;
 }
 
-/** 名字上限：TeX Live 全量 macros 有数千个，6000 足够覆盖真实写作；再多不进入补全 */
-export const LATEX_MAX_PACKAGE_NAMES = 6000;
+/**
+ * 名字上限：TeX Live 2025 全量（texmf-dist 的 tex/latex 共 8 个搜索目录）在本机实测
+ * 5837 个 `.sty` 名字、扫完 450ms；12000 给多装了几套宏集的机器留一倍余量。
+ * 撞到上限只影响「补全少几个候选」，不会出错。
+ */
+export const LATEX_MAX_PACKAGE_NAMES = 12_000;
 
-/** 扫描文件数上限：扫到这么多还没扫完就停下并标 truncated，不拿一次补全换十秒主进程 */
-export const LATEX_MAX_PACKAGE_SCAN_FILES = 80_000;
+/**
+ * 扫描文件数上限：本机全量扫一次约 6 万个文件；40 万是异常目录树（整盘软链进来）
+ * 的刹车，撞上就标 truncated——不拿一次补全换十秒主进程。
+ */
+export const LATEX_MAX_PACKAGE_SCAN_FILES = 400_000;
 
 /**
  * chktex 行内检查的结局。
