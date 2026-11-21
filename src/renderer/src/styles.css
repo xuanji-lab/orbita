@@ -4309,6 +4309,18 @@ a.latex-setup-action {
   font-weight: 600;
   color: var(--color-text-secondary);
 }
+/* 聚合时标题右侧的根文件名：一眼看出「这是整篇，不是当前文件那一节」 */
+.tex-outline-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
 .tex-outline-close {
   display: inline-flex;
   align-items: center;
@@ -4360,6 +4372,23 @@ a.latex-setup-action {
 }
 .tex-outline-line {
   flex: 0 0 auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+/* 来源文件（跨文件聚合才出现）：机器事实走等宽 + xs 档，标题那一列仍占主位 */
+.tex-outline-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 55%;
+}
+.tex-outline-file {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }

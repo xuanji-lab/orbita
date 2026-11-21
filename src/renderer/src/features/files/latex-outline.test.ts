@@ -95,3 +95,145 @@ describe("parseOutline", () => {
     assert.equal(outlineIndexAt([], 3), -1);
   });
 });
+
+/* ---------- 跨文件聚合（2026-11 多文件导航） ---------- */
+
+import type { LatexNav } from "../../../../shared/latex.ts";
+import { aggregateOutline, outlineView, parseSections } from "./latex-outline.ts";
+
+/** 三份文件的导航载荷：main → ch1 → ch2，章节与 \input 交错在同一份源码里 */
+const nav: LatexNav = {
+  dir: "/proj",
+  root: "main.tex",
+  rootPath: "/proj/main.tex",
+  focusRoots: ["main.tex"],
+  truncated: false,
+  limits: [],
+  files: [
+    {
+      path: "/proj/main.tex",
+      display: "main.tex",
+      owners: [],
+      roots: ["main.tex"],
+      includes: [
+        { command: "input", raw: "sections/ch1", line: 4, argFrom: 7, argTo: 19, target: "/proj/sections/ch1.tex" },
+        { command: "input", raw: "sections/ch2", line: 5, argFrom: 7, argTo: 19, target: "/proj/sections/ch2.tex" },
+        { command: "input", raw: "sections/missing", line: 6, argFrom: 7, argTo: 23, target: null },
+      ],
+      sections: [
+        { command: "section", title: "Introduction", level: 2, line: 3 },
+        { command: "section", title: "Conclusion", level: 2, line: 7 },
+      ],
+    },
+    {
+      path: "/proj/sections/ch1.tex",
+      display: "sections/ch1.tex",
+      owners: ["/proj/main.tex"],
+      roots: ["main.tex"],
+      includes: [],
+      sections: [
+        { command: "section", title: "Method", level: 2, line: 1 },
+        { command: "subsection", title: "Detail", level: 3, line: 2 },
+      ],
+    },
+    {
+      path: "/proj/sections/ch2.tex",
+      display: "sections/ch2.tex",
+      owners: ["/proj/main.tex"],
+      roots: ["main.tex"],
+      includes: [],
+      sections: [{ command: "section", title: "Results", level: 2, line: 1 }],
+    },
+  ],
+};
+
+describe("aggregateOutline", () => {
+  test("顺序 = 展开后的文档顺序（章节与 \input 按行交错），每项带来源文件", () => {
+    assert.deepEqual(
+      aggregateOutline("/proj/main.tex", nav.files).map(
+        (entry) => `${entry.display}:${entry.line}:${entry.level}:${entry.title}`,
+      ),
+      [
+        "main.tex:3:0:Introduction",
+        "sections/ch1.tex:1:0:Method",
+        "sections/ch1.tex:2:1:Detail",
+        "sections/ch2.tex:1:0:Results",
+        "main.tex:7:0:Conclusion",
+      ],
+    );
+  });
+
+  test("unresolved 的 \input 不展开（也不吞掉后面的章节）", () => {
+    const sources = nav.files.map((file) => ({
+      path: file.path,
+      display: file.display,
+      sections: file.sections,
+      includes: file.includes,
+    }));
+    const titles = aggregateOutline("/proj/main.tex", sources).map((entry) => entry.title);
+    assert.equal(titles.includes("Conclusion"), true);
+    assert.equal(titles.length, 5);
+  });
+
+  test("环：同一个文件不会在自己的子树里再展开", () => {
+    const sources = [
+      {
+        path: "/p/a.tex",
+        display: "a.tex",
+        sections: [{ command: "section", title: "A", level: 2, line: 1 }],
+        includes: [{ line: 2, target: "/p/b.tex" }],
+      },
+      {
+        path: "/p/b.tex",
+        display: "b.tex",
+        sections: [{ command: "section", title: "B", level: 2, line: 1 }],
+        includes: [{ line: 2, target: "/p/a.tex" }],
+      },
+    ];
+    assert.deepEqual(aggregateOutline("/p/a.tex", sources).map((entry) => entry.title), ["A", "B"]);
+  });
+});
+
+describe("outlineView", () => {
+  test("当前文件的章节用编辑器里的活文本（刚改的标题不等轮询）", () => {
+    const live = "\\section{Method (edited)}\n\\subsection{Detail}\n";
+    const view = outlineView({ text: live, path: "/proj/sections/ch1.tex", nav });
+    assert.equal(view.rootLabel, "main.tex");
+    assert.deepEqual(view.entries.map((entry) => entry.title), [
+      "Introduction",
+      "Method (edited)",
+      "Detail",
+      "Results",
+      "Conclusion",
+    ]);
+  });
+
+  test("没有 root（或导航还没到）时退回只看当前文件", () => {
+    const text = "\section{Solo}\n\subsection{Sub}\n";
+    const fallback = outlineView({ text, path: "/proj/notes.tex", nav: null });
+    assert.equal(fallback.rootLabel, null);
+    assert.deepEqual(fallback.entries, parseOutline(text));
+    assert.equal(fallback.entries.some((entry) => entry.file !== undefined), false);
+
+    const noRoot = outlineView({ text, path: "/proj/notes.tex", nav: { ...nav, root: null, rootPath: null } });
+    assert.deepEqual(noRoot.entries, parseOutline(text));
+  });
+
+  test("outlineIndexAt 传当前文件：别的文件的同名行号不参与高亮", () => {
+    const entries = aggregateOutline("/proj/main.tex", nav.files);
+    assert.equal(outlineIndexAt(entries, 4, "/proj/main.tex"), 0);
+    assert.equal(outlineIndexAt(entries, 1, "/proj/sections/ch1.tex"), 1);
+    assert.equal(outlineIndexAt(entries, 2, "/proj/sections/ch1.tex"), 2);
+    // ch1 里没有超过第 2 行的条目：光标往下移不会跳到别的文件的节上
+    assert.equal(outlineIndexAt(entries, 99, "/proj/sections/ch1.tex"), 2);
+  });
+});
+
+describe("parseSections", () => {
+  test("绝对层级（part=0 … subparagraph=6）：跨文件归一交给调用方", () => {
+    assert.deepEqual(
+      parseSections("\\part{P}\n\\chapter{C}\n\\section{S}\n\\paragraph{P2}").map((entry) => entry.level),
+      [0, 1, 2, 5],
+    );
+  });
+});

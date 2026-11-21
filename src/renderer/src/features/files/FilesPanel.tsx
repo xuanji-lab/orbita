@@ -46,6 +46,7 @@ import { useLatexWorkbench } from "./useLatexWorkbench.ts";
 import { latexContextOf } from "./latex-context.ts";
 import { useCiteLibrary } from "./useCiteLibrary.ts";
 import { useLatexIndex } from "./useLatexIndex.ts";
+import { useLatexNav } from "./useLatexNav.ts";
 import { useLatexLint } from "./useLatexLint.ts";
 import { issueAbsolutePath } from "./latex-diagnostics.ts";
 import type { CiteVerification } from "@shared/cite";
@@ -324,11 +325,22 @@ export function FilesPanel(props: {
   const citeLibrary = useCiteLibrary(latexContext, latex.project);
   /** 项目符号索引：`\ref` / 自定义命令 / 路径补全的候选（与编译同一份项目目录） */
   const latexIndex = useLatexIndex(latexContext, latex.project);
+  /** 多文件导航：包含图（`\input` 跳转）+ 每个文件的章节（跨文件大纲） */
+  const latexNav = useLatexNav(latexContext, latex.project);
   /**
    * chktex 的行内检查（本机装了才有；没装时永远空数组）。只进行内标记、不进问题抽屉：
    * 抽屉是「这次编译说了什么」，chktex 是「风格检查」，两件事混在一起会让错误计数失真。
    */
   const lintIssues = useLatexLint(latexContext, latex.project);
+  /**
+   * 项目里可编译的 root（绝对路径）。文件树给它们加一个尾注（与 AGENTS.md 的
+   * `rules` 同一套语言、同一处位置）：`main.tex` / `appendix.tex` 一眼能看出是根，
+   * 其余 .tex 是片段。**只加标记，不动树的形状**。
+   */
+  const latexRootPaths = useMemo<string[]>(() => {
+    const project = latex.project;
+    return project === null ? [] : project.roots.map((root) => issueAbsolutePath(project.dir, root.path));
+  }, [latex.project]);
 
   /**
    * 源码编辑器的把手登记表（path → handle）。编辑器只在激活标签里挂载，关标签前
@@ -1195,6 +1207,30 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
   );
 
   /**
+   * 打开项目里的另一个源码文件（可带行号）。
+   *
+   * 三个调用方共用这一条：问题抽屉点行、跨文件大纲点条目、编辑器 Ctrl/Cmd+单击
+   * `\input{…}`。它走的就是本面板既有的「开标签 + reveal」链路（与 SyncTeX 反查同源），
+   * 不新开一条文件打开通道——否则分栏 / 窄屏 / 脏标签这些规矩会各写一份。
+   */
+  const openSourceAt = useCallback(
+    (path: string, line: number | null): void => {
+      const root = activeTab?.root ?? latexContext?.root ?? null;
+      if (root === null) return;
+      setEditorNotice(null);
+      const tabPath = resolveTabPath(path);
+      if (line !== null) {
+        syncTokenRef.current += 1;
+        setReveal({ path: tabPath, line, token: syncTokenRef.current });
+      }
+      setTabs((prev) => openTab(prev, root, tabPath));
+      switchTo(tabPath);
+      if (narrowRef.current) setTreeOn(false);
+    },
+    [activeTab, latexContext, narrowRef, resolveTabPath, switchTo],
+  );
+
+  /**
    * 点问题行 → 打开那个文件并跳到那一行（与 SyncTeX 反查共用 reveal 通道：滚到中间 +
    * 短暂高亮，用户能看见「跳到哪了」）。没有行号时只打开文件。
    *
@@ -1204,20 +1240,9 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
   const jumpToProblem = useCallback(
     (item: ProblemItem): void => {
       if (item.file === null || latex.project === null) return;
-      const root = activeTab?.root ?? null;
-      if (root === null) return;
-      setEditorNotice(null);
-      const absolute = issueAbsolutePath(latex.project.dir, item.file);
-      const tabPath = resolveTabPath(absolute);
-      if (item.line !== null) {
-        syncTokenRef.current += 1;
-        setReveal({ path: tabPath, line: item.line, token: syncTokenRef.current });
-      }
-      setTabs((prev) => openTab(prev, root, tabPath));
-      switchTo(tabPath);
-      if (narrowRef.current) setTreeOn(false);
+      openSourceAt(issueAbsolutePath(latex.project.dir, item.file), item.line);
     },
-    [activeTab, latex.project, narrowRef, resolveTabPath, switchTo],
+    [latex.project, openSourceAt],
   );
 
   /**
@@ -1397,6 +1422,7 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
             onToggle={() => tree.toggle(root.path, child)}
             onReveal={() => tree.reveal(root.path, child)}
             selected={!isDir && activePath === child}
+            latexRoot={latexRootPaths.some((rootPath) => samePath(rootPath, child))}
             onOpen={() => openFile(root, child)}
             onReference={() =>
               session.attachFileRef({
@@ -1846,6 +1872,9 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                     // 补全候选：项目文献库（IPC 还没回来时缺省，编辑器不重挂）
                     ...(citeLibrary === null ? {} : { cite: citeLibrary.entries }),
                     latexIndex,
+                    nav: latexNav,
+                    // 跨文件大纲 / `\input` 跳转：走 openSourceAt（与问题抽屉同一条链路）
+                    onOpenSource: openSourceAt,
                     diagnostics: editorDiagnostics,
                     reveal:
                       reveal !== null && samePath(reveal.path, leftPath ?? shownTab.path)
@@ -2013,6 +2042,8 @@ function TreeRow(props: {
   onReveal: () => void;
   /** 非目录行的选中态；目录行恒为 false，不参与选中（目录照旧单击展开收起） */
   selected: boolean;
+  /** 这一行是 LaTeX 项目的可编译 root（main.tex / appendix.tex）——行尾多一个「主文件」尾注 */
+  latexRoot?: boolean;
   /** 单击 / 双击 / Enter 非目录行：打开（或激活）这个文件的标签 */
   onOpen: () => void;
   /** 行尾 hover 的「添加文件引用」——引用是高频动作，升到与 Reveal 并排的一键入口 */
@@ -2028,14 +2059,16 @@ function TreeRow(props: {
   // 文档 / 演示 / 表格三族图标上色（fileIconTone），其余中性——名字文字仍正墨
   const tone = fileIconTone(props.name, props.kind);
   const hasMeta = props.size !== undefined;
+  const isLatexRoot = props.latexRoot === true;
   // hover 行尾把 size·mtime 缩成 `48 KB · 12m`，省略的完整信息（名字、完整时间戳）
   // 放回 title 里；symlink 没有 size，但契约里连目标路径都没有，title 只能如实说
   // 「这是一条符号链接」，不假装知道更多
-  const title = isSymlink
+  const baseTitle = isSymlink
     ? t.files.symlink
     : hasMeta
       ? `${props.name} · ${props.size !== undefined ? `${formatSize(props.size)} · ` : ""}${t.time.dateTime(props.modifiedAt)}`
       : undefined;
+  const title = !isLatexRoot ? baseTitle : baseTitle === undefined ? t.files.latexRootTip : `${baseTitle} · ${t.files.latexRootTip}`;
   return (
     <div className="file-hover-host" style={{ position: "relative" }}>
       <button
@@ -2120,8 +2153,9 @@ function TreeRow(props: {
         </span>
         {/* 行尾静止信息（size，AGENTS.md 再带一个 rules 尾注）：钉在行右血线上
             （.row-trailing），悬停时让位给绝对定位的引用 / Reveal 键（右栏统一） */}
-        {(props.size !== undefined || isRules) && (
+        {(props.size !== undefined || isRules || isLatexRoot) && (
           <span className="row-trailing file-row-meta">
+            {isLatexRoot && <span>{t.files.latexRoot}</span>}
             {isRules && <span>{t.files.rules}</span>}
             {props.size !== undefined && <span>{formatSize(props.size)}</span>}
           </span>

@@ -7,6 +7,10 @@
  * 抽屉是**并排**而不是浮层：右栏本来就窄，浮层会盖住正在读的源码；并排时大纲只有
  * 240px，正文自己让出位置，点一行就滚到位。层级靠缩进，不靠字号（设计系统：一张卡
  * 至多三档字号，层级先靠字重与颜色）。
+ *
+ * **跨文件**（2026-11）：条目可以来自别的文件——打开 `sections/ch1.tex` 时这里是
+ * `main.tex` 的整篇结构。每一条的尾部标出来源文件（相对项目目录），点它就先切到
+ * 那个文件再跳行；当前文件的那一条仍是光标所在节的高亮（旧样式，不另造一种视觉）。
  */
 import { useEffect, useRef } from "react";
 import { useT } from "../../locale.ts";
@@ -17,7 +21,11 @@ export function TexOutline(props: {
   entries: readonly OutlineEntry[];
   /** 光标所在条目的下标；-1 = 在第一节之前 */
   active: number;
-  onJump: (line: number) => void;
+  /** 聚合的根（相对项目目录）；null = 只看当前文件的旧视图 */
+  rootLabel: string | null;
+  /** 包含图撞到了上限：大纲可能不全（不报错，只在标题上标一句） */
+  truncated?: boolean;
+  onJump: (entry: OutlineEntry) => void;
   onClose: () => void;
 }) {
   const t = useT();
@@ -36,6 +44,12 @@ export function TexOutline(props: {
       <div className="tex-outline-head">
         <Icon name="list-tree" size={13} className="tex-outline-icon" />
         <span className="tex-outline-title">{t.editor.outline}</span>
+        {props.rootLabel !== null && (
+          <span className="tex-outline-scope" title={props.truncated === true ? t.editor.outlineTruncated : props.rootLabel}>
+            {props.truncated === true && <Icon name="triangle-alert" size={11} strokeWidth={2} />}
+            {props.rootLabel}
+          </span>
+        )}
         <span className="row-trailing">
           <button
             type="button"
@@ -55,16 +69,27 @@ export function TexOutline(props: {
           {props.entries.map((entry, index) => (
             <button
               type="button"
-              key={`${index}:${entry.line}`}
+              key={`${index}:${entry.file ?? ""}:${entry.line}`}
               data-index={index}
               data-active={index === props.active ? "true" : undefined}
               className="tex-outline-row"
               style={{ paddingLeft: `calc(var(--space-2) + ${String(entry.level)} * 0.85em)` }}
-              title={`${t.editor.outlineLine(entry.line)} · \\${entry.command}`}
-              onClick={() => props.onJump(entry.line)}
+              title={
+                entry.display === undefined
+                  ? `${t.editor.outlineLine(entry.line)} · \\${entry.command}`
+                  : `${entry.display} · ${t.editor.outlineLine(entry.line)} · \\${entry.command}`
+              }
+              onClick={() => props.onJump(entry)}
             >
               <span className="tex-outline-text">{entry.title}</span>
-              <span className="row-trailing tex-outline-line mono">{entry.line}</span>
+              <span className="row-trailing tex-outline-meta">
+                {entry.display !== undefined && (
+                  <span className="tex-outline-file" title={entry.display}>
+                    {entry.display}
+                  </span>
+                )}
+                <span className="tex-outline-line mono">{entry.line}</span>
+              </span>
             </button>
           ))}
         </div>

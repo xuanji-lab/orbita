@@ -3116,6 +3116,9 @@ export const en = {
     detach: "Detach",
     symlink: "Symbolic link",
     rules: "rules",
+    /** LaTeX 项目的可编译 root（main.tex / appendix.tex）在文件树里的尾注 */
+    latexRoot: "root",
+    latexRootTip: "Compilable LaTeX root — the document other files are \\input from",
     missingTip: "Directory not found — moved or renamed outside orbita",
     missing: "Directory not found — moved or renamed",
     attachments: "Attachments",
@@ -3461,6 +3464,10 @@ export const en = {
     outlineClose: "Close outline",
     outlineEmpty: "No sections in this file yet",
     outlineLine: (line: number) => `Line ${line}`,
+    /** 跨文件包含图撞到上限：大纲可能不全（不报错，只在标题上标一句） */
+    outlineTruncated: "The include graph hit its depth or size limit — this outline may be incomplete",
+    /** Ctrl/Cmd+单击一个解析不到的 \input / \include / \subfile 参数 */
+    includeMissing: (file: string) => `Can't find ${file} — check the path, or save if you just typed it`,
   },
 
   /* ---------- docx 轻量编辑（issue #273）：工具栏、保存状态、保真闸门 ---------- */
