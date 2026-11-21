@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "node:test";
+import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import { BUILTIN_PLUGIN_NAMES } from "../../shared/plugin.ts";
 import { RequestBroker } from "../../agent/request-broker.ts";
 import { createBrowserTools } from "../../agent/browser-tools.ts";
@@ -83,6 +84,23 @@ describe("内置插件 plugin-creator", () => {
       assert.deepEqual(scanned.unsupported, [], `${name} 带了 Orbita 不运行的组件`);
       assert.equal(scanned.description !== "", true);
     }
+  });
+
+  test("每个内置技能都过真实 pi 加载器：界面扫得到，不代表模型看得到", async () => {
+    let count = 0;
+    const diagnostics: string[] = [];
+    for (const name of BUILTIN_PLUGIN_NAMES) {
+      const dir = join(BUILTIN, name, "skills");
+      if (!(await exists(dir))) continue;
+      const loaded = loadSkillsFromDir({ dir, source: "builtin" });
+      count += loaded.skills.length;
+      for (const diagnostic of loaded.diagnostics) diagnostics.push(`${name}: ${diagnostic.message}`);
+    }
+    assert.deepEqual(diagnostics, [], "内置 SKILL.md 的 frontmatter 必须能被 pi 的 YAML 解析器完整读取");
+    assert.ok(count >= 10, `只加载到 ${count} 个内置技能，扫描路径可能失效`);
+    const automation = loadSkillsFromDir({ dir: join(AUTOMATION, "skills"), source: "builtin" }).skills;
+    assert.deepEqual(automation.map((skill) => skill.name), ["automation"]);
+    assert.match(automation[0]?.description ?? "", /automation_create \/ list \/ cancel \/ update\): schedule format/);
   });
 
   test("三条技能都在、各有 description；workflow 每一步点名的技能都对得上（详情页不出现「找不到这个技能」）", async () => {
