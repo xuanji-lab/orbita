@@ -2794,6 +2794,7 @@ export const zh: Messages = {
     dispatched: "派出去的活",
     jobs: "各件活",
     waitingOnYou: "等你",
+    moreWaiting: (n) => `还有 ${n} 件等你`,
     openJob: (name) => `打开「${name}」（顶上的面包屑能回来）`,
     allEarlier: "全部以前的会话",
     briefReached: "上次",

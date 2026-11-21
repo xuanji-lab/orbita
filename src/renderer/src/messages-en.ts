@@ -3004,6 +3004,7 @@ export const en = {
     dispatched: "Delegated work",
     jobs: "Work items",
     waitingOnYou: "Waiting on you",
+    moreWaiting: (n: number) => `${n} more waiting on you`,
     openJob: (name: string) => `Open “${name}” (the breadcrumb at the top leads back)`,
     allEarlier: "All earlier sessions",
     briefReached: "Last",

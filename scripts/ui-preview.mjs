@@ -119,8 +119,12 @@ try {
   await clickAria("This task");
   await waitFor(`document.querySelector(".tp-waiting") !== null`, "进度面板最前的「等你」");
   check(
-    "进度按 等你 → 各件活 的顺序",
-    (await evaluate(`(() => { const heads = [...document.querySelectorAll(".tp-sec > .tp-gh")].map((item) => item.firstChild?.textContent?.trim()); return heads.indexOf("Waiting on you") === 0 && heads.includes("Work items"); })()`)) === true,
+    "进度按 等你 → 目标 → 计划 → 各件活 → 以前的会话 的顺序",
+    (await evaluate(`(() => {
+      const heads = [...document.querySelectorAll(".tp-body > .tp-sec > .tp-gh, .tp-body > .tp-goal > .tp-gh")].map((item) => item.firstChild?.textContent?.trim());
+      const order = ["Waiting on you", "Goal", "Plan", "Work items", "Earlier sessions"].map((name) => heads.indexOf(name));
+      return order.every((index, at) => index === at);
+    })()`)) === true,
   );
   await shot("02b-typical-main-progress-light");
   await clickText("Compare session navigation", ".tp-waiting .tp-job-name");
@@ -132,8 +136,40 @@ try {
   check("回父恢复主智能体输入面", true);
   await waitFor(`document.querySelector(".tp-waiting") !== null`, "回父后进度面板按会话记忆恢复");
   check("回父后右栏进度照旧开着", true);
-  await clickAria("This task");
-  await waitFor(`document.querySelector(".right-panel-slot.open") === null`, "右栏关闭");
+  check(
+    "每件活带自含摘要（上次 / 在等 / 下一步）",
+    (await evaluate(`(() => { const row = document.querySelector(".tp-waiting .tp-job"); const keys = [...(row?.querySelectorAll(".tp-brief-k") ?? [])].map((item) => item.textContent); return keys.join("|") === "Last|Waiting|Next"; })()`)) === true,
+  );
+
+  step("以前的会话：进度面板 → 侧栏那一页");
+  await clickText("All earlier sessions", ".tp-jobs-fold .tp-text");
+  await waitFor(`document.querySelector(".sidebar")?.innerText.includes("Sketch the first sidebar layout") === true && document.querySelector(".sidebar input[aria-label]") !== null`, "侧栏「以前的会话」页");
+  check("旧会话从进度面板找回到侧栏那一页", true);
+  await shot("02c-typical-earlier-light");
+  await clickAria("Back to tasks");
+
+  step("Esc 关右栏");
+  await evaluate(`document.activeElement?.blur?.(), true`);
+  await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await waitFor(`document.querySelector(".right-panel-slot.open") === null`, "Esc 关闭右栏");
+  check("Esc 关闭右栏", true);
+
+  step("跨天：对主智能体说「接着上次」");
+  await evaluate(`(() => {
+    const input = document.querySelector("textarea.composer-input");
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(input, "Pick up where we left off");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.focus();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true, cancelable: true }));
+    return true;
+  })()`);
+  await waitFor(`document.querySelector(".pane-main")?.innerText.includes("You left this yesterday at") === true`, "恢复回答");
+  check(
+    "恢复回答五项齐全且标明不是模型记忆",
+    (await evaluate(`["Why", "Last time", "Already decided", "Waiting on you", "Next", "not the model's memory"].every((word) => document.querySelector(".pane-main")?.innerText.includes(word))`)) === true,
+  );
+  await shot("02d-typical-resume-light");
 
   step("普通 Session");
   await clickText("Refine the session navigation", ".sidebar button");

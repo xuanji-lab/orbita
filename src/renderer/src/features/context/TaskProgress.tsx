@@ -157,8 +157,9 @@ export function TaskProgress(props: {
           waiting
           label={t.taskPanel.waitingOnYou}
           count={String(asks.length)}
-          rows={asks}
-          folded={[]}
+          rows={asks.slice(0, WAITING_SHOWN)}
+          folded={asks.slice(WAITING_SHOWN)}
+          foldLabel={t.taskPanel.moreWaiting(asks.length - WAITING_SHOWN)}
           jobs={jobs}
           engine={props.engine}
           onOpen={props.onOpenSession}
@@ -894,8 +895,8 @@ function JobsSection(props: {
       </ol>
       {props.folded.length > 0 && (
         <button type="button" className="tp-jobs-fold" aria-expanded={showFolded} onClick={() => setShowFolded((value) => !value)}>
-          <span className="inbox-row-mark done" aria-hidden="true">
-            <Icon name="check" size={12} strokeWidth={2} />
+          <span className={props.waiting === true ? "inbox-row-mark" : "inbox-row-mark done"} aria-hidden="true">
+            {props.waiting !== true && <Icon name="check" size={12} strokeWidth={2} />}
           </span>
           <span className="tp-text">{props.foldLabel}</span>
           <Icon name={showFolded ? "chevron-down" : "chevron-right"} size={12} strokeWidth={1.8} />
@@ -942,6 +943,12 @@ function useJobPlans(rows: readonly JobRow[]): ReadonlyMap<string, PlanItem[] | 
   }, [key]);
   return plans;
 }
+
+/**
+ * 「等你」先露几件（每件带三行摘要，再多就把目标与计划挤出一屏）；其余折成「还有 N 件等你」，点开全露。
+ * 排序已是最急、最新的在前（sortSubSessionRows）。
+ */
+const WAITING_SHOWN = 3;
 
 /** 主智能体在进度面板里需要的、普通会话没有的东西 */
 export interface MainProgress {

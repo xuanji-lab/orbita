@@ -635,7 +635,7 @@ button.tp-editlog-src:hover {
   min-width: 0;
 }
 /* 以前的会话是普通会话名：不加粗（加粗留给正在让你看的活） */
-.tp-earlier-name {
+.tp-job-name.tp-earlier-name {
   font-weight: var(--weight-regular);
 }
 .tp-job .inbox-row-mark {
@@ -710,4 +710,15 @@ button.tp-editlog-src:hover {
 }
 span.tp-brief.missing:not(:has(.tp-brief-k)) {
   display: block;
+}
+
+/* 主智能体的进度（2026-11-21）从「等你」起头、停着时不出「空闲」那行：
+   面板第一节不画顶线（页头下面已是边界），目标下面紧跟一节时只留那一节的顶线，不画两道 */
+.tp-body > .tp-sec:first-child {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 0;
+}
+.tp-goal:has(+ .tp-sec) {
+  border-bottom: 0;
 }
