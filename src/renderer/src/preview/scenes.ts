@@ -12,7 +12,7 @@ import {
   type ThemePreference,
 } from "../../../shared/settings.ts";
 import type { SessionMeta, SessionRecord } from "../../../shared/session.ts";
-import type { TranscriptItem } from "../../../shared/transcript.ts";
+import type { JsonValue, TranscriptItem } from "../../../shared/transcript.ts";
 import { dateKeysBack } from "../../../shared/usage.ts";
 import type { UsageDayTotal } from "../../../shared/usage.ts";
 import type { Workspace } from "../../../shared/workspace.ts";
@@ -333,30 +333,132 @@ function usage(scene: PreviewSceneId, now: number): UsageDayTotal[] {
   });
 }
 
+/**
+ * 跨天场景的「上次离开」：今天零点往前 5 小时 20 分（本地时区的昨天 18:40）。
+ * typical 的主智能体停在这里，用户今天回来——验「接着上次」的恢复回答与每件活的自含摘要。
+ */
+export function yesterdayEvening(now: number): number {
+  const midnight = new Date(now);
+  midnight.setHours(0, 0, 0, 0);
+  return midnight.getTime() - 5 * HOUR - 20 * MINUTE;
+}
+
+/** 一次 update_goal / update_plan：助手消息里的调用块 + 落盘的工具结果（与真实转录同形，走生产归约器与账本） */
+function bookkeeping(
+  id: string,
+  at: number,
+  toolName: "update_goal" | "update_plan",
+  input: { [key: string]: JsonValue },
+  details: { [key: string]: JsonValue },
+): { call: { type: "toolCall"; toolCallId: string; toolName: string; input: JsonValue }; result: SessionRecord } {
+  return {
+    call: { type: "toolCall", toolCallId: id, toolName, input },
+    result: {
+      id: `${id}-result`,
+      role: "tool",
+      toolCallId: id,
+      toolName,
+      input,
+      content: [{ type: "text", text: toolName === "update_goal" ? "Goal recorded." : "Plan updated." }],
+      details,
+      status: "complete",
+      isError: false,
+      timestamp: at,
+    },
+  };
+}
+
+type PlanSeed = { [key: string]: JsonValue } & { text: string; status: string };
+
+function planRecords(id: string, ask: string, at: number, items: PlanSeed[], answer: string): SessionRecord[] {
+  const plan = bookkeeping(`${id}-plan-1`, at + 9_000, "update_plan", { items }, { plan: items });
+  return [
+    { id: `${id}-user-1`, role: "user", content: [{ type: "text", text: ask }], timestamp: at },
+    assistant(`${id}-assistant-1`, at + 8_000, [{ type: "text", text: "I’ll lay out the steps first." }, plan.call], "toolUse"),
+    plan.result,
+    assistant(`${id}-assistant-2`, at + 30 * MINUTE, [{ type: "text", text: answer }]),
+  ];
+}
+
+/**
+ * 主智能体昨天那一段：用户一句话 → 定目标、列计划、派两件活 → 傍晚改计划（证据收齐、导航方式等你定）→ 收尾那句。
+ * 全是结构化记录（update_goal / update_plan），恢复回答与进度面板都从这几条推，不另写一份摘要文本。
+ */
+function mainYesterday(id: string, start: number, leftAt: number): SessionRecord[] {
+  const goal = bookkeeping(`${id}-goal-1`, start + 22_000, "update_goal", {
+    goal: "Bring the session-navigation research into one place and decide how a child session opens",
+    by: "user",
+  }, { goal: "Bring the session-navigation research into one place and decide how a child session opens" });
+  const firstPlan: PlanSeed[] = [
+    { text: "Collect interface evidence", status: "in_progress" },
+    { text: "Decide how a child session opens", status: "pending" },
+    { text: "Write the navigation recommendation", status: "pending" },
+  ];
+  const plan1 = bookkeeping(`${id}-plan-1`, start + 23_000, "update_plan", { items: firstPlan }, { plan: firstPlan });
+  const lastPlan: PlanSeed[] = [
+    { text: "Collect interface evidence", status: "done" },
+    { text: "Decide how a child session opens", status: "waiting", waitingFor: "your call" },
+    { text: "Write the navigation recommendation", status: "pending" },
+  ];
+  const plan2 = bookkeeping(`${id}-plan-2`, leftAt - 2 * MINUTE, "update_plan", { items: lastPlan }, { plan: lastPlan });
+  return [
+    { id: `${id}-user-1`, role: "user", content: [{ type: "text", text: "Map the current work and bring the open questions into one place." }], timestamp: start },
+    assistant(`${id}-assistant-1`, start + 20_000, [{ type: "text", text: "I’ll set the goal and split the work into two focused sessions." }, goal.call, plan1.call], "toolUse"),
+    goal.result,
+    plan1.result,
+    assistant(`${id}-assistant-2`, leftAt - 3 * MINUTE, [{ type: "text", text: "The evidence is in. Updating the plan." }, plan2.call], "toolUse"),
+    plan2.result,
+    assistant(`${id}-assistant-3`, leftAt, [
+      {
+        type: "text",
+        text: "Evidence is collected for light and Onyx, empty and full. One navigation decision is waiting for you: whether a child session replaces the main conversation or opens beside it.\n\n- Evidence: done\n- Navigation: waiting on your call\n- Recommendation: after that decision",
+      },
+    ]),
+  ];
+}
+
+function msg(parentId: string, childId: string, step: string, from: "parent" | "child", kind: ChannelMessage["kind"], text: string, at: number, author: "model" | "user" = "model"): ChannelMessage {
+  return { id: `${parentId}:${childId}:${step}`, from, author, kind, text, delivery: from === "parent" ? "steer" : "followUp", createdAt: at };
+}
+
 function typicalData(now: number): Pick<PreviewFixture, "workspaces" | "sessions" | "transcripts" | "channels" | "profiles"> {
   const workspaces = [
     workspace("ws-research", "Research atlas", now),
     workspace("ws-orbita", "Orbita", now),
     workspace("ws-writing", "Writing", now),
   ];
-  const boss = meta({ id: "boss-research", title: "Research atlas", workspaceId: "ws-research", role: "main", createdAt: now - 40 * DAY, updatedAt: now - 12 * MINUTE });
-  const child = meta({ id: "session-research-map", title: "Compare session navigation", workspaceId: "ws-research", parentId: boss.id, createdAt: now - 2 * HOUR, updatedAt: now - 8 * MINUTE });
-  const done = meta({ id: "session-research-evidence", title: "Collect interface evidence", workspaceId: "ws-research", parentId: boss.id, createdAt: now - 5 * HOUR, updatedAt: now - 38 * MINUTE });
+  // 跨天：主智能体昨天 17:05 开工、18:40 离开，今天还没说过话
+  const leftAt = yesterdayEvening(now);
+  const start = leftAt - 95 * MINUTE;
+  const boss = meta({ id: "boss-research", title: "Research atlas", workspaceId: "ws-research", role: "main", createdAt: now - 40 * DAY, updatedAt: leftAt });
+  const child = meta({ id: "session-research-map", title: "Compare session navigation", workspaceId: "ws-research", parentId: boss.id, createdAt: start + 2 * MINUTE, updatedAt: leftAt - 10 * MINUTE });
+  const done = meta({ id: "session-research-evidence", title: "Collect interface evidence", workspaceId: "ws-research", parentId: boss.id, createdAt: start + 3 * MINUTE, updatedAt: start + 70 * MINUTE });
+  const sketch = meta({ id: "session-research-sketch", title: "Sketch the first sidebar layout", workspaceId: "ws-research", createdAt: now - 6 * DAY, updatedAt: now - 5 * DAY });
   const task = meta({ id: "task-sidebar", title: "Refine the session navigation", workspaceId: null, createdAt: now - 3 * DAY, updatedAt: now - 22 * MINUTE, pinned: true });
   const orbitaBoss = meta({ id: "boss-orbita", title: "Orbita", workspaceId: "ws-orbita", role: "main", createdAt: now - 21 * DAY, updatedAt: now - 3 * HOUR });
   const archived = meta({ id: "task-archived", title: "Weekly reading digest", workspaceId: null, archived: true, createdAt: now - 12 * DAY, updatedAt: now - 9 * DAY });
-  const sessions = [boss, child, done, task, orbitaBoss, archived];
+  const sessions = [boss, child, done, sketch, task, orbitaBoss, archived];
   const transcripts = new Map<string, SessionRecord[]>([
-    [boss.id, workTranscript(boss.id, "Map the current work and bring the open questions into one place.", "I split the comparison and evidence collection into focused sessions. One navigation decision is waiting for you.", now - 2 * HOUR)],
-    [child.id, workTranscript(child.id, "Compare session navigation", "Replacing the main conversation preserves context; the parent remains one breadcrumb away.", now - 2 * HOUR + MINUTE)],
-    [done.id, shortTranscript(done.id, "Collect interface evidence", "Collected representative light, dark, empty and populated states.", now - 5 * HOUR)],
+    [boss.id, mainYesterday(boss.id, start, leftAt)],
+    [child.id, planRecords(child.id, "Compare session navigation", start + 2 * MINUTE, [
+      { text: "Read the current navigation", status: "done" },
+      { text: "Compare replace and side-by-side", status: "done" },
+      { text: "Write the recommendation", status: "pending" },
+    ], "Replacing the main conversation preserves context; the parent remains one breadcrumb away. I need your call before writing the recommendation.")],
+    [done.id, shortTranscript(done.id, "Collect interface evidence", "Collected representative light, dark, empty and populated states.", start + 3 * MINUTE)],
+    [sketch.id, shortTranscript(sketch.id, "Sketch the first sidebar layout", "Drafted a sidebar with one row per workspace.", now - 6 * DAY)],
     [task.id, workTranscript(task.id, "Refine the session navigation without adding another panel.", "The existing parent and child conversation path is sufficient.", now - 3 * HOUR)],
     [orbitaBoss.id, shortTranscript(orbitaBoss.id, "Review the current shell", "The production shell is ready for a focused review.", now - 4 * HOUR)],
     [archived.id, shortTranscript(archived.id, "Weekly reading digest", "The digest is archived.", now - 12 * DAY)],
   ]);
-  const channels = [
-    ...channel(boss.id, child.id, now - 2 * HOUR, "question"),
-    ...channel(boss.id, done.id, now - 5 * HOUR, "done"),
+  const channels: ChannelMessage[] = [
+    msg(boss.id, child.id, "task", "parent", "task", "Compare two ways to open a child session: replace the main conversation, or open beside it. Recommend one.", start + 2 * MINUTE),
+    msg(boss.id, child.id, "progress", "child", "progress", "Read the current navigation; replacing keeps the parent one breadcrumb away.", start + 40 * MINUTE),
+    msg(boss.id, child.id, "question", "child", "question", "Should a child session replace the main conversation, or open beside it?", leftAt - 10 * MINUTE),
+    msg(boss.id, done.id, "task", "parent", "task", "Collect light, dark, empty and full screenshots of the shell.", start + 3 * MINUTE),
+    msg(boss.id, done.id, "question", "child", "question", "Should the evidence include the Onyx theme too?", start + 20 * MINUTE),
+    msg(boss.id, done.id, "reply", "parent", "reply", "Yes, cover light and Onyx, both empty and full.", start + 30 * MINUTE, "user"),
+    msg(boss.id, done.id, "done", "child", "done", "Collected light and Onyx shots for empty, typical and full.", start + 70 * MINUTE),
   ];
   const profiles = new Map<string, MainAgentProfile>([
     ["ws-research", { workspaceId: "ws-research", sessionId: boss.id, createdAt: boss.createdAt, model: { ...MODEL, thinkingLevel: "high" } }],

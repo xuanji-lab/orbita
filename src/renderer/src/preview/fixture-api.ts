@@ -13,6 +13,9 @@ import { parseSettings, type AppSettings, type SettingsPatch } from "../../../sh
 import type { TranscriptItem } from "../../../shared/transcript.ts";
 import type { Workspace } from "../../../shared/workspace.ts";
 import { buildPreviewFixture, fallbackTranscript, type PreviewFixture, type PreviewOptions } from "./scenes.ts";
+import { messagesOf } from "../locale.ts";
+import { planTimeline } from "../features/context/plan-timeline.ts";
+import { resumeAnswer, resumeBrief } from "../features/context/resume-brief.ts";
 
 type PreviewDomain = Exclude<keyof OrbitaApi, "platform" | "initialTheme" | "initialLanguage">;
 
@@ -134,6 +137,27 @@ export function createPreviewApi(options: PreviewOptions, platform: string = "da
   const channelIndex = indexChannels(fixture);
   const loadChannel = (key: ChannelKey): ChannelMessage[] => clone(channelIndex.get(channelKey(key)) ?? []);
 
+  /**
+   * 跨天场景：用户对主智能体说「接着上次」→ 用已落盘的结构化状态（目标、计划、各件活的通道往来）拼出恢复回答
+   * （features/context/resume-brief.ts），回答末尾标明不是模型记忆。这只是预览：真实运行时应把同一份状态交给模型自己回答，尚未接。
+   * 其余输入 / 普通会话 = null，走通用的确定性回答。
+   */
+  const resumeReply = (meta: SessionMeta, text: string, at: number): string | null => {
+    if (meta.role !== "main" || !RESUME_ASK.test(text)) return null;
+    const t = messagesOf(settings.language ?? "en");
+    const records = fixture.transcripts.get(meta.id) ?? [];
+    const jobs = fixture.sessions
+      .filter((item) => item.parentId === meta.id)
+      .map((item) => ({
+        title: item.title,
+        messages: channelIndex.get(channelKey({ parentId: meta.id, childId: item.id })) ?? [],
+        plan: planTimeline(fixture.transcripts.get(item.id) ?? [])?.current.items ?? null,
+      }));
+    const brief = resumeBrief({ records, jobs }, t.taskPanel.brief);
+    const when = brief.leftAt === null ? "" : leftWhen(brief.leftAt, at, t.taskPanel.resume);
+    return `${resumeAnswer(brief, when, t.taskPanel.resume)}\n\n${t.taskPanel.resume.fixtureNote}`;
+  };
+
   const submit: OrbitaApi["agent"]["submit"] = async (input) => {
     const at = tick();
     const existing = fixture.sessions.find((item) => item.id === input.sessionId);
@@ -186,7 +210,7 @@ export function createPreviewApi(options: PreviewOptions, platform: string = "da
     };
     const complete: Extract<TranscriptItem, { role: "assistant" }> = {
       ...streaming,
-      content: [{ type: "text", text: "This is a deterministic fixture response. No model request, host IPC, or file write occurred." }],
+      content: [{ type: "text", text: resumeReply(nextMeta, input.text, at) ?? "This is a deterministic fixture response. No model request, host IPC, or file write occurred." }],
       status: "complete",
       stopReason: "stop",
     };
@@ -451,6 +475,22 @@ export function createPreviewApi(options: PreviewOptions, platform: string = "da
       return unsupportedDomain(String(key));
     },
   }) as OrbitaApi;
+}
+
+/** 「接着上次」的几种说法（中英）；只在预览里用来挑出跨天恢复的那句 */
+const RESUME_ASK = /接着上次|继续上次|上次到哪|pick up where|where (did )?we (left|leave) off|continue from last time/i;
+
+/** 「昨天 18:40」「3 天前 18:40」「今天 09:12」：按本地日历天数算 */
+function leftWhen(leftAt: number, now: number, words: ReturnType<typeof messagesOf>["taskPanel"]["resume"]): string {
+  const day = (at: number): number => {
+    const date = new Date(at);
+    date.setHours(0, 0, 0, 0);
+    return date.getTime();
+  };
+  const date = new Date(leftAt);
+  const clock = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  const days = Math.round((day(now) - day(leftAt)) / 86_400_000);
+  return days <= 0 ? words.todayAt(clock) : days === 1 ? words.yesterdayAt(clock) : words.daysAgoAt(days, clock);
 }
 
 function channelKey(key: ChannelKey): string {

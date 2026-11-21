@@ -46,12 +46,17 @@ export interface JobBriefWords {
   nextInterrupted: string;
 }
 
-/** 第一个非空行的第一句，洗掉命令、路径、代号；洗空 = null */
-function said(text: string): string | null {
+/**
+ * 第一个非空行的第一句：夹着命令、路径、代号的整句不用（sanitizeWorkLine 的口径），= null。
+ * 干净的句子原样返回、不按状态行的 40 字截断——摘要一行放不下由界面截断，悬停与恢复回答要全句。
+ */
+export function cleanSentence(text: string): string | null {
   const line = text.split("\n").find((candidate) => candidate.trim() !== "") ?? "";
-  const clean = sanitizeWorkLine(latestSentence(line));
-  return clean === "" ? null : clean;
+  const sentence = latestSentence(line);
+  return sanitizeWorkLine(sentence) === "" ? null : sentence.replace(/\*\*|__/g, "").replace(/\s+/g, " ").trim();
 }
+
+const said = cleanSentence;
 
 function lastFrom(messages: readonly ChannelMessage[], from: ChannelMessage["from"], kinds: readonly ChannelMessage["kind"][]): ChannelMessage | null {
   for (let index = messages.length - 1; index >= 0; index -= 1) {

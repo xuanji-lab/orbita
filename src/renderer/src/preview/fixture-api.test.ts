@@ -75,7 +75,7 @@ test("full：12 个工作区、近两千条 meta 与 40 件子会话，重复创
   const second = createPreviewApi(options("full"));
   assert.equal((await first.workspace.list()).length, 12);
   const list = await first.session.list();
-  assert.equal(list.length, 1_973);
+  assert.equal(list.length, 1_974);
   assert.equal(list.filter((item) => item.parentId === "boss-research").length, 40);
   assert.deepEqual((await first.session.list()).slice(0, 8), (await second.session.list()).slice(0, 8));
   const archived = await first.session.load("archive-0001");
@@ -115,6 +115,29 @@ test("发送走生产 agent 事件序列并留下确定性回答，不触碰模�
   if (last?.role === "assistant") {
     assert.match(last.content[0]?.type === "text" ? last.content[0].text : "", /deterministic fixture response/);
   }
+});
+
+test("跨天：对主智能体说「接着上次」，回答由目标、计划、各件活拼出并标明不是模型记忆", async () => {
+  const api = createPreviewApi({ ...options(), language: "zh" });
+  await api.agent.submit({
+    sessionId: "boss-research",
+    text: "接着上次",
+    cwd: "/fixtures/ws-research",
+    workspaceId: "ws-research",
+    resume: { piSessionFile: "/fixtures/pi/boss-research.jsonl" },
+    providerId: "kimi-coding",
+    modelId: "k3.1-pro",
+    thinkingLevel: "high",
+  });
+  const detail = await api.session.load("boss-research");
+  const last = detail?.transcript.at(-1);
+  const text = last?.role === "assistant" && last.content[0]?.type === "text" ? last.content[0].text : "";
+  assert.match(text, /你上次是昨天 18:40 离开的/);
+  assert.match(text, /\*\*为什么做\*\*：Bring the session-navigation research/);
+  assert.match(text, /\*\*已经定了\*\*：Yes, cover light and Onyx/);
+  assert.match(text, /\*\*在等你\*\*：\n  - Compare session navigation — 你回答：Should a child session replace/);
+  assert.match(text, /\*\*下一步\*\*：Write the navigation recommendation/);
+  assert.match(text, /不是模型的记忆/);
 });
 
 test("未接后端明确拒绝；所有场景数据只含 fixture 路径与无效域名", async () => {
