@@ -2366,8 +2366,8 @@ async function handle(command: AgentCommand): Promise<void> {
     requestBroker.resolve(command.requestId, command);
     return;
   }
-  if (command.type === "latexResult" || command.type === "officeResult") {
-    // LaTeX / Office 工具的回执（terminalResult 同款）：形状即契约，原样结掉在途 promise
+  if (command.type === "latexResult" || command.type === "officeResult" || command.type === "latexPackageResult") {
+    // LaTeX / Office / 缺包反查的回执（terminalResult 同款）：形状即契约，原样结掉在途 promise
     requestBroker.resolve(command.requestId, command);
     return;
   }

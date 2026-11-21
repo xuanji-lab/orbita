@@ -119,6 +119,11 @@ export function parseChktexOutput(stdout: string, projectDir: string): LatexIssu
       line,
       kind: severity === "error" ? "error" : "warning",
       message: `chktex ${code}: ${text}`,
+      // chktex 是三个证据源里**唯一**给列号的；以前解析后丢掉了（match[3]）
+      column: Number.parseInt(match[3] ?? "", 10) || null,
+      source: "chktex",
+      code: "other",
+      step: "chktex",
     });
   }
   return issues;

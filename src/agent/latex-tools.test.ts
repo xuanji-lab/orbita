@@ -29,14 +29,19 @@ function fakeBroker(outcome: LatexRunOutcome): { broker: LatexToolBroker; seen: 
 }
 
 function baseResult(overrides: Partial<LatexResult>): LatexResult {
-  return {
+  const merged: LatexResult = {
     status: "ok",
     engine: "pdf",
+    engineSource: "auto",
     root: null,
+    command: null,
+    steps: [],
+    diagnostics: [],
+    omitted: { errors: 0, warnings: 0, layout: 0 },
     outputs: [],
     outputsTruncated: false,
     candidates: [],
-    logPath: null,
+    log: null,
     main: "main.tex",
     pdf: null,
     pdfFresh: false,
@@ -44,11 +49,20 @@ function baseResult(overrides: Partial<LatexResult>): LatexResult {
     durationMs: 1200,
     errors: [],
     warnings: [],
-    logStale: false,
     logTail: null,
     timeoutKind: null,
     ...overrides,
   };
+  // 生产里 diagnostics 是真源、errors/warnings 是镜像（run.ts 建）。测试只写镜像时
+  // 在这里补一份，免得每条用例都列两遍。
+  if (overrides.diagnostics === undefined) {
+    merged.diagnostics = [...merged.errors, ...merged.warnings];
+  }
+  return merged;
+}
+
+function tail(text: string): { text: string; fromLine: number; truncated: boolean } {
+  return { text, fromLine: 1, truncated: false };
 }
 
 /** pi 的 execute 还带 onUpdate / ExtensionContext；latex-tools 两个都不用，按三参调 */
@@ -163,11 +177,12 @@ describe("compile_latex —— 失败", () => {
         pdf: "/repo/paper/build/main.pdf",
         pdfFresh: false,
         errors: [{ file: "main.tex", line: 3, message: "! LaTeX Error: File `x.sty' not found.", kind: "error" }],
-        logTail: "! LaTeX Error: File `x.sty' not found.\n",
+        logTail: tail("! LaTeX Error: File `x.sty' not found.\n"),
       }),
     });
     assert.match(text, /failed: status "compile-error"/);
-    assert.match(text, /main\.tex:3 — ! LaTeX Error: File `x\.sty' not found\./);
+    assert.match(text, /main\.tex:3 /);
+    assert.match(text, /! LaTeX Error: File `x\.sty' not found\./);
     assert.match(text, /A PDF from an earlier build is still on disk/);
     assert.doesNotMatch(text, /A PDF from this run exists/);
     assert.match(text, /Log tail/);
@@ -181,7 +196,7 @@ describe("compile_latex —— 失败", () => {
         pdf: "/repo/paper/build/main.pdf",
         pdfFresh: true,
         errors: [{ file: "main.tex", line: 4, message: "Missing $ inserted.", kind: "error" }],
-        logTail: "log",
+        logTail: tail("log"),
       }),
     });
     assert.match(text, /A PDF from this run exists/);
@@ -193,10 +208,10 @@ describe("compile_latex —— 失败", () => {
       ok: true,
       result: baseResult({
         status: "compile-error",
-        logStale: true,
+        log: { path: "/repo/paper/build/main.log", bytes: 100, lines: 2, fresh: false, modifiedAt: 1, parseTruncated: false },
         pages: null,
         errors: [{ file: "main.tex", line: 4, message: "Missing $ inserted.", kind: "error" }],
-        logTail: "stale log",
+        logTail: tail("stale log"),
       }),
     });
     assert.match(text, /did not write a new \.log/);
@@ -272,5 +287,187 @@ describe("compile_latex —— 失败", () => {
       }),
     });
     assert.match(text, /latexmk is not installed/);
+  });
+});
+
+describe("compile_latex —— 回执 v2 的形状", () => {
+  const base = {
+    status: "compile-error" as const,
+    command: { executable: "latexmk", args: ["-xelatex", "-file-line-error", "main.tex"], source: "default" as const, cwd: "/repo/paper" },
+    steps: [
+      { rule: "xelatex", run: 1, startedAtMs: 0, durationMs: 800, end: "ran" as const },
+      { rule: "bibtex", run: 2, startedAtMs: 800, durationMs: 300, end: "ran" as const },
+      { rule: "xelatex", run: 3, startedAtMs: 1100, durationMs: 2000, end: "last" as const },
+    ],
+    log: { path: "/repo/paper/build/main.log", bytes: 319_488, lines: 5120, fresh: true, modifiedAt: 1_700_000_000_000, parseTruncated: false },
+  };
+
+  test("Command / Steps / Log 路径都在正文里", async () => {
+    const text = await runTool({
+      ok: true,
+      result: baseResult({
+        ...base,
+        errors: [
+          {
+            file: "main.tex",
+            line: 4,
+            kind: "error",
+            message: "Package fontspec Error: The font \"NoSuchFontAvailable\" cannot be found.",
+            code: "font-missing",
+            source: "log",
+            step: "xelatex",
+            raw: "l.4 \begin",
+          },
+        ],
+      }),
+    });
+    assert.match(text, /Command: latexmk -xelatex -file-line-error main\.tex {2}\[default recipe\] \(cwd \/repo\/paper\)/);
+    assert.match(text, /Steps: xelatex 0\.8s -> bibtex 0\.3s -> xelatex 2\.0s \(last\)/);
+    assert.match(text, /Log: \/repo\/paper\/build\/main\.log — 312\.0 KB, 5120 lines, written by this run/);
+    assert.match(text, /\[font-missing, log\/xelatex\]/);
+    assert.match(text, /raw: l\.4/);
+    assert.match(text, /The font "NoSuchFontAvailable" cannot be found/);
+  });
+
+  test("日志被解析器截断时明说（不许静默）", async () => {
+    const text = await runTool({
+      ok: true,
+      result: baseResult({
+        ...base,
+        log: { ...base.log, parseTruncated: true },
+        errors: [{ file: "main.tex", line: 1, kind: "error", message: "boom" }],
+      }),
+    });
+    assert.match(text, /only its last part was parsed/);
+  });
+
+  test(".blg 诊断与 log 诊断同列，来源可辨", async () => {
+    const text = await runTool({
+      ok: true,
+      result: baseResult({
+        ...base,
+        errors: [
+          {
+            file: "refs.bib",
+            line: 5,
+            kind: "error",
+            message: "Illegal end of database file---line 5 of file refs.bib",
+            code: "bib-error",
+            source: "blg",
+            step: "bibtex",
+            raw: "Illegal end of database file---line 5 of file refs.bib",
+          },
+        ],
+      }),
+    });
+    assert.match(text, /refs\.bib:5 {2}\[bib-error, blg\/bibtex\]/);
+    assert.match(text, /Illegal end of database file/);
+  });
+});
+
+describe("compile_latex —— token 预算", () => {
+  test("超长回执按固定顺序砍：尾巴 → raw → layout → 产物；状态行 / Command / Log / 首条 error 永不砍", async () => {
+    const errors = Array.from({ length: 20 }, (_, index) => ({
+      file: "main.tex",
+      line: index + 1,
+      kind: "error" as const,
+      message: `error ${String(index)} ${"x".repeat(200)}`,
+      code: "other" as const,
+      source: "log" as const,
+      raw: `l.${String(index + 1)} ${"y".repeat(400)}`,
+    }));
+    const text = await runTool({
+      ok: true,
+      result: baseResult({
+        status: "compile-error",
+        command: { executable: "latexmk", args: ["-pdf", "main.tex"], source: "default", cwd: "/repo/paper" },
+        log: { path: "/repo/paper/build/main.log", bytes: 400_000, lines: 9000, fresh: true, modifiedAt: 1, parseTruncated: false },
+        errors,
+        diagnostics: [
+          ...errors,
+          ...Array.from({ length: 40 }, (_, index) => ({
+            file: "main.tex",
+            line: 100 + index,
+            kind: "layout" as const,
+            message: `Overfull \hbox (1.0pt too wide) at lines ${String(100 + index)}--${String(101 + index)}`,
+          })),
+        ],
+        outputs: Array.from({ length: 10 }, (_, index) => ({
+          path: `/repo/paper/build/main-${String(index)}.pdf`,
+          kind: "pdf" as const,
+          primary: index === 0,
+          fresh: true,
+          pages: 12,
+          bytes: 1000,
+          modifiedAt: 1,
+          fromLog: null,
+        })),
+        logTail: { text: "z".repeat(40_000), fromLine: 4000, truncated: true },
+      }),
+    });
+    assert.ok(text.length <= 12_000, `正文 ${text.length} 字符，超过预算`);
+    // 永不砍的四件事
+    assert.match(text, /LaTeX build failed: status "compile-error"/);
+    assert.match(text, /Command: latexmk -pdf main\.tex/);
+    assert.match(text, /Log: \/repo\/paper\/build\/main\.log/);
+    assert.match(text, /error 0 /);
+    // 砍的顺序：尾巴 → raw（两条都超出预算，这两样必须已经不在）
+    assert.doesNotMatch(text, /Log tail/);
+    assert.doesNotMatch(text, /raw:/);
+  });
+});
+
+describe("latex_packages", () => {
+  test("描述文件 → 包名与安装命令；not-found 不猜命令", async () => {
+    const seen: Record<string, unknown>[] = [];
+    const broker: LatexToolBroker = {
+      request: async <T,>(event: Record<string, unknown>): Promise<T> => {
+        seen.push(event);
+        return {
+          ok: true,
+          resolved: [
+            {
+              missing: "ctexart.cls",
+              packageName: "ctex",
+              command: "tlmgr install ctex",
+              sudo: false,
+              installed: false,
+              distro: "texlive",
+              reason: null,
+            },
+            {
+              missing: "not-a-real-pkg.sty",
+              packageName: null,
+              command: null,
+              sudo: false,
+              installed: false,
+              distro: "texlive",
+              reason: "not-found",
+            },
+          ],
+        } as T;
+      },
+    };
+    const tools = createLatexTools(broker, "session-1", { cwd: "/repo/paper" });
+    const tool = tools.find((entry) => entry.name === "latex_packages");
+    assert.ok(tool !== undefined, "latex_packages 没有注册");
+    const out = await execute(tool, { missing: ["ctexart.cls", "not-a-real-pkg.sty"] });
+    const blocks = Array.isArray(out.content) ? out.content : [];
+    const body = (blocks[0] as { text?: string } | undefined)?.text ?? "";
+
+    assert.equal(seen[0]?.["type"], "latexPackageRequest");
+    assert.deepEqual(seen[0]?.["missing"], ["ctexart.cls", "not-a-real-pkg.sty"]);
+    assert.match(body, /ctexart\.cls -> ctex \(texlive, not installed\)/);
+    assert.match(body, /run: tlmgr install ctex/);
+    assert.match(body, /not-a-real-pkg\.sty -> unknown \(texlive, not-found\)/);
+    assert.doesNotMatch(body, /tlmgr install not-a-real-pkg/);
+  });
+
+  test("缺 missing 参数：当场拒绝，不发请求", async () => {
+    const { broker, seen } = fakeBroker({ ok: true, result: baseResult({}) });
+    const tool = createLatexTools(broker, "session-1", { cwd: "/repo/paper" }).find((entry) => entry.name === "latex_packages");
+    assert.ok(tool !== undefined);
+    await assert.rejects(() => execute(tool, { missing: [] }), /missing is required/);
+    assert.equal(seen.length, 0);
   });
 });

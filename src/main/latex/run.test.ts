@@ -12,7 +12,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { LatexProbe } from "./probe.ts";
-import { cleanArgv, cleanResult, LatexRunner } from "./run.ts";
+import { cleanArgv, cleanResult, LatexRunner, readLogFile, tailLines } from "./run.ts";
 import { latexMaxConcurrent, LATEX_IDLE_TIMEOUT_MS, LATEX_TOTAL_TIMEOUT_MS, type LatexResult, type LatexRunOutcome } from "../../shared/latex.ts";
 
 const roots: string[] = [];
@@ -340,7 +340,7 @@ describe("LatexRunner —— 产物定位（M2）", () => {
     assert.equal(result.pages, 2);
     assert.equal(result.pdf, join(resolve(dir), "main.pdf"));
     assert.equal(result.pdfFresh, true);
-    assert.equal(result.logStale, false);
+    assert.equal(result.log?.fresh, true);
     assert.equal(result.logTail, null);
   });
 });
@@ -574,7 +574,7 @@ describe("LatexRunner —— 陈旧日志与陈旧 PDF（M3/M4）", () => {
     const runner = new LatexRunner(probe());
     const first = resultOf(await runner.compile({ dir }));
     assert.equal(first.status, "compile-error");
-    assert.equal(first.logStale, false);
+    assert.equal(first.log?.fresh, true);
     assert.equal(first.errors[0]?.file, "main.tex");
     assert.equal(first.errors[0]?.line, 4);
     assert.equal(first.pages, 1, "本次写出的日志里的页数应当可用");
@@ -587,7 +587,7 @@ describe("LatexRunner —— 陈旧日志与陈旧 PDF（M3/M4）", () => {
     assert.equal(second.errors[0]?.line, 4);
     assert.match(second.errors[0]?.message ?? "", /Missing \$ inserted/);
     // 但页数与产物不是这一次的事实
-    assert.equal(second.logStale, true);
+    assert.equal(second.log?.fresh, false);
     assert.equal(second.pages, null);
     assert.equal(second.pdfFresh, false);
   });
@@ -604,7 +604,7 @@ describe("LatexRunner —— 陈旧日志与陈旧 PDF（M3/M4）", () => {
 
     const result = resultOf(await new LatexRunner(probe()).compile({ dir }));
     assert.equal(result.status, "compile-error");
-    assert.equal(result.logStale, true);
+    assert.equal(result.log?.fresh, false);
     assert.equal(result.pages, null, "陈旧日志里的 7 页不能当成这一次的");
     assert.ok(result.errors.some((issue) => issue.message.includes("Something from last time")));
     // 陈旧错误之外，本次的退出码也要说清楚（否则模型不知道这一次也失败了）
@@ -613,7 +613,7 @@ describe("LatexRunner —— 陈旧日志与陈旧 PDF（M3/M4）", () => {
     assert.equal(result.pdfFresh, false);
   });
 
-  test("成功但 latexmk 无事可做：status ok、logStale true、pages 不从旧日志取", async () => {
+  test("成功但 latexmk 无事可做：status ok、log.fresh false、pages 不从旧日志取", async () => {
     const dir = project({ "main.tex": "\\documentclass{article}" });
     // 假 latexmk：第一次写日志与 PDF 后回 0；第二次不写任何东西也回 0（Nothing to do）
     writeFileSync(
@@ -643,13 +643,13 @@ describe("LatexRunner —— 陈旧日志与陈旧 PDF（M3/M4）", () => {
     const runner = new LatexRunner(probe());
     const first = resultOf(await runner.compile({ dir }));
     assert.equal(first.status, "ok");
-    assert.equal(first.logStale, false);
+    assert.equal(first.log?.fresh, true);
     assert.equal(first.pages, 3);
     assert.equal(first.pdfFresh, true);
 
     const second = resultOf(await runner.compile({ dir }));
     assert.equal(second.status, "ok", "无事可做仍然是一次成功");
-    assert.equal(second.logStale, true);
+    assert.equal(second.log?.fresh, false);
     assert.equal(second.pages, null, "旧日志里的 3 页不能当成这一次的");
     assert.equal(second.pdfFresh, false);
     assert.ok(second.pdf !== null, "已存在的 PDF 仍然要告诉模型在哪");
@@ -668,7 +668,7 @@ describe("LatexRunner —— 陈旧日志与陈旧 PDF（M3/M4）", () => {
     assert.equal(result.status, "compile-error");
     assert.equal(result.pdf, join(resolve(dir), "build", "main.pdf"));
     assert.equal(result.pdfFresh, false);
-    assert.equal(result.logStale, false, "没有旧日志，就不该标 stale");
+    assert.equal(result.log, null, "没有旧日志，就不该有日志引用");
   });
 });
 
@@ -839,5 +839,130 @@ describe("LatexRunner —— 多产物与 jobname", () => {
     assert.equal(result.outputs.length, 20);
     assert.equal(result.outputsTruncated, true);
     assert.ok(result.outputs.some((output) => output.primary && output.path.endsWith("main.pdf")));
+  });
+});
+
+describe("LatexRunner —— 回执 v2（命令 / 步骤 / 日志引用 / .blg）", () => {
+  test("command / steps / log / diagnostics 都带着可追的证据", async () => {
+    const dir = project({ "main.tex": "\documentclass{article}\begin{document}hi\end{document}" });
+    mkdirSync(join(dir, "build"), { recursive: true });
+    // 日志与 .blg 事先写好：本次假编译器不重写它们（log.fresh = false 也要如实标）
+    writeFileSync(
+      join(dir, "build", "main.log"),
+      String.raw`./main.tex:4: Undefined control sequence.
+l.4 \foo
+`,
+      "utf8",
+    );
+    writeFileSync(join(dir, "build", "main.blg"), "Illegal end of database file---line 5 of file refs.bib\n", "utf8");
+    fakeCompiler(dir, [
+      'console.log("Run number 1 of rule \'pdflatex\'");',
+      'console.log("Run number 2 of rule \'bibtex\'");',
+      "process.exit(1);",
+    ]);
+
+    const result = resultOf(await new LatexRunner(probe()).compile({ dir }));
+
+    // 跑了什么命令：模型要能照着改配方
+    assert.ok(result.command !== null);
+    assert.equal(result.command.executable, nodeExe);
+    assert.equal(result.command.source, "config");
+    assert.equal(result.command.cwd, resolve(dir));
+    assert.ok(result.command.args.some((arg) => arg === resolve(dir)), "%DIR% 应当已展开成工作目录");
+
+    // 步骤时序：只记事实，不造 per-step 退出码
+    assert.deepEqual(
+      result.steps.map((step) => [step.rule, step.run]),
+      [["pdflatex", 1], ["bibtex", 2]],
+    );
+    assert.equal(result.steps[0]?.end, "ran");
+    assert.equal(result.steps[1]?.end, "last");
+    assert.ok((result.steps[1]?.durationMs ?? -1) >= 0);
+
+    // 日志：路径 / 大小 / 行数 / 新旧 / mtime
+    assert.ok(result.log !== null);
+    assert.equal(result.log.path, join(resolve(dir), "build", "main.log"));
+    assert.ok(result.log.bytes > 0);
+    assert.ok(result.log.lines >= 2);
+    assert.equal(result.log.fresh, false, "本次没有重写日志");
+    assert.ok((result.log.modifiedAt ?? 0) > 0);
+    assert.equal(result.log.parseTruncated, false);
+
+    // .blg 的诊断带上来源与文件名，和 .log 的合并在一起
+    const fromBlg = result.diagnostics.filter((issue) => issue.source === "blg");
+    assert.ok(fromBlg.some((issue) => issue.file === "refs.bib" && issue.line === 5));
+    assert.ok(result.diagnostics.some((issue) => issue.source === "log" && issue.file === "main.tex"));
+    assert.deepEqual(result.omitted, { errors: 0, warnings: 0, layout: 0 });
+  });
+
+  test("210 条 Overfull + 1 条 Citation：status 仍是 warning-only，citation 在 diagnostics 里", async () => {
+    const dir = project({ "main.tex": "\documentclass{article}\begin{document}hi\end{document}" });
+    const lines: string[] = [];
+    for (let index = 0; index < 210; index += 1) {
+      lines.push(String.raw`Overfull \hbox (1.0pt too wide) in paragraph at lines ${index + 1}--${index + 2}`);
+    }
+    lines.push("./main.tex:12: LaTeX Warning: Citation `levy2019' on page 1 undefined on input line 12.");
+    mkdirSync(join(dir, "build"), { recursive: true });
+    writeFileSync(join(dir, "build", "main.log"), lines.join("\n"), "utf8");
+    fakeCompiler(dir, [
+      'import { mkdirSync, writeFileSync } from "node:fs";',
+      'import { join } from "node:path";',
+      "const dir = process.argv[2];",
+      'mkdirSync(join(dir, "build"), { recursive: true });',
+      'writeFileSync(join(dir, "build", "main.pdf"), "%PDF-1.4 fake");',
+    ]);
+
+    const result = resultOf(await new LatexRunner(probe()).compile({ dir }));
+    assert.equal(result.status, "warning-only", "引用未定义被 210 条 Overfull 挤掉时状态会错成 ok");
+    assert.ok(
+      result.diagnostics.some((issue) => issue.code === "citation-undefined"),
+      "引用未定义必须留在诊断里",
+    );
+    assert.equal(result.omitted.layout, 160);
+    assert.ok(result.warnings.some((issue) => issue.kind === "warning"));
+  });
+});
+
+describe("日志读取与尾巴（行对齐 / 体积上限）", () => {
+  test("超过上限：只读尾部、丢掉半行、标 parseTruncated", () => {
+    const dir = project({});
+    const lines = Array.from({ length: 200 }, (_, index) => `line ${index} ${"x".repeat(20)}`);
+    const path = join(dir, "big.log");
+    writeFileSync(path, lines.join("\n"), "utf8");
+    const read = readLogFile(path, 500);
+    assert.equal(read.truncated, true);
+    assert.equal(read.bytes, Buffer.byteLength(lines.join("\n")));
+    assert.ok(read.text.startsWith("line "), `尾部从半行开始了：${read.text.slice(0, 20)}`);
+    assert.ok(read.lines > 1 && read.lines < lines.length);
+  });
+
+  test("尾巴从行首截，fromLine 能对回原文的那一行", () => {
+    const text = Array.from({ length: 100 }, (_, index) => `line ${index}`).join("\n");
+    const tail = tailLines(text, 40);
+    assert.ok(tail !== null);
+    assert.equal(tail.truncated, true);
+    assert.equal(tail.text.split("\n")[0], text.split("\n")[(tail.fromLine ?? 1) - 1]);
+    assert.ok(!/^ine /.test(tail.text), "不允许从半行开始");
+  });
+});
+
+describe("LatexRunner —— 日志诊断的来源步骤", () => {
+  test("本次写出日志时，log 诊断的 step 是最后一步引擎", async () => {
+    const dir = project({ "main.tex": "\documentclass{article}\begin{document}hi\end{document}" });
+    fakeCompiler(dir, [
+      'import { mkdirSync, writeFileSync } from "node:fs";',
+      'import { join } from "node:path";',
+      "const dir = process.argv[2];",
+      'console.log("Run number 1 of rule \'xelatex\'");',
+      'mkdirSync(join(dir, "build"), { recursive: true });',
+      'writeFileSync(join(dir, "build", "main.log"), ["./main.tex:4: Undefined control sequence.", "l.4 " + String.fromCharCode(92) + "foo"].join(String.fromCharCode(10)));',
+      "process.exit(1);",
+    ]);
+
+    const result = resultOf(await new LatexRunner(probe()).compile({ dir }));
+    assert.equal(result.steps.at(-1)?.rule, "xelatex");
+    const issue = result.diagnostics.find((entry) => entry.source === "log");
+    assert.ok(issue !== undefined);
+    assert.equal(issue.step, "xelatex");
   });
 });

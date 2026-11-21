@@ -113,7 +113,7 @@ import { resolveFileRoots } from "./files/roots.ts";
 import { TerminalService } from "./terminal/service.ts";
 import { registerTerminalIpc } from "./terminal/ipc.ts";
 import { LatexRunner } from "./latex/run.ts";
-import { applyLatexRequest } from "./latex/agent-requests.ts";
+import { applyLatexPackageRequest, applyLatexRequest } from "./latex/agent-requests.ts";
 import { registerLatexIpc } from "./latex/ipc.ts";
 import { OFFICE_BACKUP_DIR, registerOfficeIpc } from "./office/ipc.ts";
 import { removeEmptyLegacyOfficeBackupDirs } from "./office/legacy-backups.ts";
@@ -794,6 +794,17 @@ void app.whenReady().then(async () => {
         .then((outcome) => agentHost.answerLatex(event.requestId, outcome))
         .catch((cause: unknown) =>
           agentHost.answerLatex(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
+    if (event.type === "latexPackageRequest") {
+      void applyLatexPackageRequest(latex, sessions, workspaces, event)
+        .then((outcome) => agentHost.answerLatexPackage(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerLatexPackage(event.requestId, {
             ok: false,
             error: cause instanceof Error ? cause.message : String(cause),
           }),

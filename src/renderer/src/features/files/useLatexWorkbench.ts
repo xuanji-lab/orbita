@@ -259,7 +259,7 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
         rootPath: result.root?.path ?? null,
         outputs: result.outputs,
         outputsTruncated: result.outputsTruncated,
-        logPath: result.logPath,
+        logPath: result.log?.path ?? null,
         finishedAt: Date.now(),
       };
       // 编译条只在项目内出现，这一拍 project 一定在；存进模块表，切走再回来还在

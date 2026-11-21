@@ -103,14 +103,15 @@ describe("parseLatexLog —— 边界", () => {
     assert.equal(parseLatexLog(log).errors.length, 1);
   });
 
-  test("上限 200：坏日志（上千条 Overfull）不会撑爆结果", () => {
+  test("上限：layout 独立计数 50，超出的进 omitted（不再挤爆结果）", () => {
     const lines: string[] = [];
     for (let index = 0; index < 500; index += 1) {
       lines.push(`Overfull \\hbox (1.0pt too wide) in paragraph at lines ${index + 1}--${index + 2}`);
     }
     const parsed = parseLatexLog(lines.join("\n"));
-    assert.equal(parsed.warnings.length, 200);
-    assert.equal(parsed.warnings[199]?.line, 200);
+    assert.equal(parsed.warnings.length, 50);
+    assert.equal(parsed.warnings[49]?.line, 50);
+    assert.deepEqual(parsed.omitted, { errors: 0, warnings: 0, layout: 450 });
   });
 
   test("版式告警不算「值得停一下」的告警", () => {
@@ -124,14 +125,16 @@ describe("parseLatexLog —— 边界", () => {
   });
 
   test("空日志与纯噪声不报错", () => {
-    assert.deepEqual(parseLatexLog(""), { errors: [], warnings: [], outputs: [], pages: null, output: null });
-    assert.deepEqual(parseLatexLog("This is pdfTeX, Version 3.14\nentering extended mode\n"), {
-      errors: [],
-      warnings: [],
-      outputs: [],
-      pages: null,
-      output: null,
-    });
+    for (const log of ["", "This is pdfTeX, Version 3.14\nentering extended mode\n"]) {
+      const parsed = parseLatexLog(log);
+      assert.deepEqual(parsed.errors, []);
+      assert.deepEqual(parsed.warnings, []);
+      assert.deepEqual(parsed.diagnostics, []);
+      assert.deepEqual(parsed.omitted, { errors: 0, warnings: 0, layout: 0 });
+      assert.deepEqual(parsed.outputs, []);
+      assert.equal(parsed.pages, null);
+      assert.equal(parsed.output, null);
+    }
   });
 
   test("缺字体与 Missing character 算 warning，不算 layout", () => {
@@ -179,5 +182,79 @@ describe("parseLatexLog —— 多条 Output written（多产物）", () => {
   test("没有 bytes 的旧写法也算一条（bytes 为 null）", () => {
     const parsed = parseLatexLog("Output written on main.pdf (1 page).");
     assert.deepEqual(parsed.outputs, [{ path: "main.pdf", pages: 1, bytes: null }]);
+  });
+});
+
+describe("parseLatexLog —— 折行续行（真实字体 / 缺图日志）", () => {
+  test("fontspec 的两行错误拼回一句，code=font-missing，raw 带 l.N", () => {
+    const parsed = parseLatexLog(fixture("real-missing-font.log.txt"));
+    const first = parsed.errors[0];
+    assert.ok(first !== undefined, "字体错误被整条丢掉了");
+    // 旧解析器只吃单行：第一行是 `Package fontspec Error: `，消息于是变成空串
+    assert.match(first.message, /The font "NoSuchFontAvailable" cannot be found/);
+    assert.equal(first.code, "font-missing");
+    assert.match(first.raw ?? "", /l\.4/);
+    // 79 列硬折行也要拼回：`… at 1` + `0.0pt not loadable`
+    assert.ok(
+      parsed.errors.some((issue) => /at 10\.0pt not loadable/.test(issue.message)),
+      "79 列硬折行的半句没有拼回",
+    );
+  });
+
+  test("缺图：79 列折断的 `using draft setting.` 拼回整句", () => {
+    const parsed = parseLatexLog(fixture("real-missing-figure.log.txt"));
+    const issue = parsed.errors.find((entry) => /fig\.pdf/.test(entry.message));
+    assert.ok(issue !== undefined);
+    assert.match(issue.message, /using draft setting\.$/);
+    assert.equal(issue.code, "missing-file");
+  });
+});
+
+describe("parseLatexLog —— 上限按 kind 独立", () => {
+  test("210 条 Overfull + 1 条 Citation undefined：引用仍在，状态判据仍为 warning", () => {
+    const lines: string[] = [];
+    for (let index = 0; index < 210; index += 1) {
+      // String.raw：这里要的是 TeX 日志里的字面 \hbox，不能让它被模板字面量转义掉
+      lines.push(String.raw`Overfull \hbox (1.0pt too wide) in paragraph at lines ${index + 1}--${index + 2}`);
+    }
+    lines.push("./main.tex:12: LaTeX Warning: Citation `levy2019' on page 1 undefined on input line 12.");
+    const parsed = parseLatexLog(lines.join("\n"));
+
+    const citation = parsed.diagnostics.find((issue) => issue.code === "citation-undefined");
+    assert.ok(citation !== undefined, "210 条 Overfull 把「引用未定义」整条挤掉了");
+    assert.equal(citation.kind, "warning");
+    // 这条是 status 判据：layout 被截断不影响它
+    assert.equal(hasContentWarnings(parsed.warnings), true);
+    assert.equal(parsed.omitted.layout, 160);
+    assert.equal(parsed.omitted.warnings, 0);
+    assert.equal(parsed.errors.length, 0);
+  });
+
+  test("warning 与 layout 各有各的 200 / 50，互不挤占", () => {
+    const lines: string[] = [];
+    for (let index = 0; index < 60; index += 1) {
+      lines.push(String.raw`Overfull \hbox (1.0pt too wide) in paragraph at lines ${index + 1}--${index + 2}`);
+    }
+    for (let index = 0; index < 205; index += 1) {
+      lines.push(`./main.tex:${index + 1}: LaTeX Warning: Reference \`r${index}' on page 1 undefined on input line ${index + 1}.`);
+    }
+    const parsed = parseLatexLog(lines.join("\n"));
+    assert.equal(parsed.omitted.layout, 10);
+    assert.equal(parsed.omitted.warnings, 5);
+    assert.equal(parsed.warnings.filter((issue) => issue.kind === "layout").length, 50);
+    assert.equal(parsed.warnings.filter((issue) => issue.kind === "warning").length, 200);
+  });
+});
+
+describe("parseLatexLog —— raw 预算", () => {
+  test("raw 只给前 5 条 error", () => {
+    const lines: string[] = [];
+    for (let index = 0; index < 7; index += 1) {
+      lines.push(`./main.tex:${index + 1}: Undefined control sequence.`, `l.${index + 1} foo`);
+    }
+    const parsed = parseLatexLog(lines.join("\n"));
+    assert.equal(parsed.errors.length, 7);
+    assert.equal(parsed.errors.filter((issue) => issue.raw !== null).length, 5);
+    assert.equal(parsed.errors[5]?.raw, null);
   });
 });

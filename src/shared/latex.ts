@@ -66,13 +66,58 @@ export type LatexStatus =
  */
 export type LatexIssueKind = "error" | "warning" | "layout";
 
+/**
+ * 一条诊断的**类别**（给模型分支用；界面仍按 `kind` 分三组，不看它）。
+ * 解析器本来就用正则认这些形态，只是以前把结论丢掉了——模型只能靠 message 猜。
+ */
+export type LatexDiagnosticCode =
+  /** 缺命令 / 命令打错：`! Undefined control sequence.` */
+  | "undefined-control-sequence"
+  /** 缺包：`! LaTeX Error: File `x.sty' not found.` */
+  | "missing-package"
+  /** 缺图 / 缺 \input 目标：`Package … File `fig.pdf' not found` */
+  | "missing-file"
+  /** `LaTeX Warning: Citation `k' … undefined` */
+  | "citation-undefined"
+  /** `LaTeX Warning: Reference `x' … undefined`（label 真的不存在；「要重跑」由 latexmk 自己补） */
+  | "reference-undefined"
+  /** fontspec / xeCJK 的字体不存在、`Missing character`、`Font … not loadable` */
+  | "font-missing"
+  /** Overfull / Underfull \hbox|\vbox */
+  | "layout"
+  /** Emergency stop / Fatal error —— 通常是上面某一条的后果 */
+  | "emergency-stop"
+  /** latexmk 自己的失败行（Missing bbl file / runscript.tlu … failed） */
+  | "tool-failure"
+  /** .blg 里的 bibtex / biber 失败（`Illegal end of database file---line 5 of file refs.bib`） */
+  | "bib-error"
+  | "other";
+
+/** 这条诊断是哪一份证据写的：TeX 日志 / bibtex-biber 的 .blg / chktex */
+export type LatexDiagnosticSource = "log" | "blg" | "chktex";
+
 export interface LatexIssue {
   /** 相对项目目录的文件名（如 "main.tex" / "sections/intro.tex"）；归属不明时 null */
   file: string | null;
   /** 1 基行号；日志没给时 null（缺包一类的错常常只有文件没有行） */
   line: number | null;
+  /** 单行、去行首 `! `、**折行已拼回**（TeX 按 79 列折行，第 2 行起是 `(pkg)` 续行） */
   message: string;
+  /** 严重度。**不改名**：13 个文件、81 处引用都读它 */
   kind: LatexIssueKind;
+  /** 类别（见 LatexDiagnosticCode）。合成出来的诊断（超时 / 起不来）没有它 */
+  code?: LatexDiagnosticCode;
+  /** 1 基列号。**只有 chktex 有**（TeX 日志不给列），其余为 null */
+  column?: number | null;
+  /** 谁写的这一行；合成诊断没有它 */
+  source?: LatexDiagnosticSource;
+  /** 哪一步产生的（日志里的引擎名 / "bibtex" / "biber"）；认不出时 null */
+  step?: string | null;
+  /**
+   * 日志里的原始块：≤ 4 行、≤ 400 字符，**含 `l.N …` 那一行**（出错的 token 只在这里出现）。
+   * 只有前 LATEX_RAW_ERRORS 条 error 有，其余为 null（预算）。
+   */
+  raw?: string | null;
 }
 
 /**
@@ -144,22 +189,92 @@ export interface LatexOutput {
 }
 
 /**
+ * 一次构建里跑过的一步（latexmk stdout 的 `Run number N of rule 'x'`）。
+ * **只记时序事实，不判成败**：latexmk 不逐轮报退出码，写成 bool 会是编造的事实。
+ */
+export interface LatexBuildStep {
+  /** 规则名（`pdflatex` / `xelatex` / `bibtex` / `biber`）；自定义 recipe 只有它的第一条 */
+  rule: string;
+  /** latexmk 的轮次（同一条规则会跑多轮：pdflatex → bibtex → pdflatex） */
+  run: number | null;
+  /** 相对本次构建开始（ms） */
+  startedAtMs: number;
+  /** 下一步的开始 - 本步的开始；最后一步算到进程退出。未知为 null */
+  durationMs: number | null;
+  /** "last" = 构建在这一步之后结束（失败时它就是停下来那一步）；"ran" = 后面还有步骤 */
+  end: "ran" | "last";
+}
+
+/** 实际跑的命令。模型要能「照着改配方」，就必须看见现在这条 */
+export interface LatexCommand {
+  /** 绝对路径（探测到的 latexmk）或 recipe[0]（PATH 上的名字） */
+  executable: string;
+  args: string[];
+  /** default = 我们拼的 latexmk 链；config = `.orbita/latex.json` 的 recipe */
+  source: "default" | "config";
+  /** 子进程 cwd（= 主文件所在目录；magic root 会改写它） */
+  cwd: string;
+}
+
+/** 本次解析的日志。**取代 logPath / logStale**（不要两个真源） */
+export interface LatexLogRef {
+  /** 绝对路径 */
+  path: string;
+  /** 文件大小（字节） */
+  bytes: number;
+  /**
+   * 我们解析到的文本有多少行。`parseTruncated === false` 时这是整份文件；
+   * 为 true 时只是尾部的那一段（`read` 的 offset 要按尾部算）。
+   */
+  lines: number;
+  /** 本次构建写出的？false = 上一轮留下的（旧字段 logStale 的反面） */
+  fresh: boolean;
+  /** 文件 mtime（ms）——「这些错误是几点的」唯一直接证据 */
+  modifiedAt: number | null;
+  /** 日志超过 LATEX_MAX_LOG_BYTES，只解析了尾部：诊断可能不全（不许静默） */
+  parseTruncated: boolean;
+}
+
+/** 日志尾巴：从**行首**截起，并告诉模型它是从第几行开始的 */
+export interface LatexLogTail {
+  text: string;
+  /** text 第一行在**被解析文本**里的行号（1 基）；可以 `read offset=fromLine-200` 往前翻 */
+  fromLine: number;
+  /** text 只是日志的一部分 */
+  truncated: boolean;
+}
+
+/**
  * 一次编译结果。主进程组装，agent 工具直接消费。
  *
- * **字段顺序 = 读者顺序**：status → root（这一次编的哪份）→ outputs（写出来什么）。
+ * **字段顺序 = 读者顺序**：status → root（这一次编的哪份）→ 诊断 / 产物（写出来什么）。
+ * 诊断的唯一真源是 `diagnostics`；`errors` / `warnings` 是按 kind 的便捷镜像（保留一个 release）。
  */
 export interface LatexResult {
   status: LatexStatus;
   engine: LatexEngine;
+  /** 引擎是怎么定下来的（请求 / magic / 配置 / 自动）——正文要说「为什么是 xelatex」 */
+  engineSource: LatexEngineSource;
   /** 这一次编的根。status 是 no-main-file / root-outside-workspace 时为 null */
   root: LatexRootRef | null;
+  /** 实际跑的命令；no-main-file / not-installed 时为 null（那时没跑） */
+  command: LatexCommand | null;
+  /** 跑过的步骤（时序）；自定义 recipe 不打印进度行时为空数组 */
+  steps: LatexBuildStep[];
+  /**
+   * 全部诊断，**日志顺序**（= 因果顺序，模型从上往下修），.blg 的条目按其位置并入。
+   * 它是唯一真源；`errors` / `warnings` 只是按 kind 的镜像。
+   */
+  diagnostics: LatexIssue[];
+  /** 每种 kind 因上限没列出的条数（0 = 没截） */
+  omitted: { errors: number; warnings: number; layout: number };
   /** 本次构建认定的全部产物（≤ LATEX_MAX_OUTPUTS，多的置 outputsTruncated） */
   outputs: LatexOutput[];
   outputsTruncated: boolean;
   /** 没有 root 时的候选（`no-main-file` 的界面 / 模型出口） */
   candidates: string[];
-  /** 本次解析的 .log 绝对路径（「完整日志」入口）；一份都没有时 null */
-  logPath: string | null;
+  /** 本次解析的日志；一份都没有时 null */
+  log: LatexLogRef | null;
 
   /* ── 便捷镜像（保留一个 release，第三个消费者改完后删） ── */
   /** = 主文件名（相对 plan.dir ≈ 引擎工作目录，日志里的 file:line 也是这个基准）；没有 root 时 "" */
@@ -175,26 +290,21 @@ export interface LatexResult {
    */
   pdfFresh: boolean;
   /**
-   * primary 的页数，**只来自本次编译写出的 .log**。本次没写日志（logStale）时为
-   * null——上一轮的页数不是这一次的事实。
+   * primary 的页数，**只来自本次编译写出的 .log**。本次没写日志（`log.fresh === false`）
+   * 时为 null——上一轮的页数不是这一次的事实。
    */
   pages: number | null;
   durationMs: number;
+  /** 镜像：= diagnostics 里的 kind === "error"。旧消费者一个 release 后改读 diagnostics */
   errors: LatexIssue[];
+  /** 镜像：= diagnostics 里的非 error（含 layout）。旧消费者一个 release 后改读 diagnostics */
   warnings: LatexIssue[];
   /**
-   * 本次编译没有写出新的 .log，errors / warnings 来自上一轮留下的那份。
-   * 典型场景：同一份坏文档连编两次——latexmk 读 .fdb_latexmk 判定无事可做、
-   * 直接失败退出且不重写日志。错误照常返回（它多半就是失败原因），但模型要知道
-   * 证据的来源；pages 不会从陈旧日志里取。
-   */
-  logStale: boolean;
-  /**
-   * 编译失败时的日志尾巴（≤ 8 KB，见 LATEX_LOG_TAIL_LIMIT）。**只在
+   * 编译失败时的日志尾巴（≤ LATEX_LOG_TAIL_LIMIT，**按行首截**）。**只在
    * status === "compile-error" 时非 null**——成功时把几千行日志塞进模型上下文
    * 是纯浪费（warnings 已经足够）。
    */
-  logTail: string | null;
+  logTail: LatexLogTail | null;
   /**
    * 超时的具体原因，`status === "timeout"` 时非 null：
    * - "idle"：日志连续 LATEX_IDLE_TIMEOUT_MS 没有新的落盘变化 —— 可能是长时间
@@ -344,13 +454,35 @@ export const LATEX_TOTAL_TIMEOUT_MS = 10 * 60_000;
 export const LATEX_LOG_TAIL_LIMIT = 8 * 1024;
 
 /**
+ * 主进程愿意读进内存的日志体积上限。超了就只读尾部并置 `log.parseTruncated`
+ * （旧版把整份日志无上限读进来——一份失控的自定义 recipe 可以写出几百 MB）。
+ */
+export const LATEX_MAX_LOG_BYTES = 16 * 1024 * 1024;
+
+/**
+ * `compile_latex` 回执正文的字符上限（≈ 3k token）。
+ * 超了依次砍：日志尾巴 → raw → layout 明细 → 产物明细——**状态行 / Command / Log /
+ * 第一条 error 永不砍**（它们是模型判断「发生了什么」的最小集合）。
+ */
+export const LATEX_REPLY_MAX_CHARS = 12_000;
+
+/** 正文里带 `raw` 的 error 条数（前 N 条：修错是从上往下修的） */
+export const LATEX_RAW_ERRORS = 5;
+
+/**
+ * 日志解析的**分类上限**。三种 kind **各自独立计数**：版式告警不再挤出未定义引用
+ * （210 条 Overfull + 1 条 Citation undefined 曾让后者整条消失，status 还变成 ok）。
+ * 真实论文的 Overfull 可以上千条，所以 layout 的上限反而更紧。
+ */
+export const LATEX_MAX_ERRORS = 200;
+export const LATEX_MAX_WARNINGS = 200;
+export const LATEX_MAX_LAYOUT = 50;
+
+/**
  * `latexmk -c` 的时长上限。清理只是读 .fdb_latexmk 再删几份文件，正常是亚秒级；
  * 60 秒是给「磁盘很慢 / 杀毒软件逐个扫描」留的余量，超了就是真有问题（照样杀整棵进程树）。
  */
 export const LATEX_CLEAN_TIMEOUT_MS = 60_000;
-
-/** 日志解析的条目上限（errors / warnings 各自）。坏日志可以有上万条 Overfull */
-export const LATEX_MAX_ISSUES = 200;
 
 /**
  * 一次构建最多报几个产物。真实项目是 1–3 份（正文 + 附录 + 一张 standalone 图）；
@@ -873,6 +1005,15 @@ export interface LatexResolvedPackage {
  * 不会一次起一堆 Perl），超过的部分明确标成 `not-looked-up`，**不许界面一直转圈**。
  */
 export const LATEX_MAX_PACKAGE_LOOKUPS = 20;
+
+/**
+ * 缺包反查的对外结局。agent 通道（`latexPackageRequest`）与 `latex_packages` 工具
+ * 读它；`ok: false` 是「这次没查成」（授权 / 参数），不是「没找到包」——后者是
+ * `resolved[].reason`。
+ */
+export type LatexPackageOutcome =
+  | { ok: true; resolved: LatexResolvedPackage[] }
+  | { ok: false; error: string };
 
 /**
  * 「引擎在等用户确认安装」的日志行 —— MiKTeX 的按需装包 / 造字（mktexpk 家族）

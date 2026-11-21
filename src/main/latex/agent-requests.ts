@@ -19,7 +19,7 @@
  */
 import { realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
-import { isLatexEngine, type LatexCompileRequest, type LatexRunOutcome } from "../../shared/latex.ts";
+import { isLatexEngine, type LatexCompileRequest, type LatexPackageOutcome, type LatexRunOutcome } from "../../shared/latex.ts";
 import {
   sessionAuthorizedRoots,
   type SessionRootsSource,
@@ -92,6 +92,40 @@ function cleanMain(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed === "" ? undefined : trimmed;
+}
+
+/**
+ * agent 的缺包反查（`latex_packages`）。**授权与编译同一条**：不先确认这个会话有
+ * 授权目录，就不起 tlmgr / mpm——它们是外部进程，不该成为一条绕过会话根的旁路。
+ *
+ * 文件名来自编译日志（即用户的 .tex 内容），所以形状校验交给 packages.ts 的
+ * LOOKUPABLE 白名单；这里只去空、去重与限制数量（LATEX_MAX_PACKAGE_LOOKUPS 在
+ * resolve 内部生效，超出的逐条标 `not-looked-up`）。
+ */
+export async function applyLatexPackageRequest(
+  runner: Pick<LatexRunner, "lookupPackages">,
+  sessions: SessionRootsSource,
+  workspaces: WorkspaceRootsSource,
+  event: { sessionId: string; missing: unknown },
+): Promise<LatexPackageOutcome> {
+  try {
+    const roots = await sessionAuthorizedRoots(sessions, workspaces, event.sessionId);
+    if (roots.length === 0) {
+      return {
+        ok: false,
+        error: "This session has no authorized directory, so no package lookup was started.",
+      };
+    }
+    const names = (Array.isArray(event.missing) ? event.missing : []).filter(
+      (entry): entry is string => typeof entry === "string" && entry.trim() !== "",
+    );
+    if (names.length === 0) {
+      return { ok: false, error: "missing is required — pass the file names the build log said were not found." };
+    }
+    return { ok: true, resolved: await runner.lookupPackages(names) };
+  } catch (cause) {
+    return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
+  }
 }
 
 /**

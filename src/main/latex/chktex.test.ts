@@ -23,8 +23,22 @@ describe("parseChktexOutput", () => {
         line: 3,
         kind: "warning",
         message: "chktex 18: Use either `` or '' as an alternative to `\"'.",
+        // chktex 是三个证据源里唯一给列号的（match[3] 以前被丢掉）
+        column: 7,
+        source: "chktex",
+        code: "other",
+        step: "chktex",
       },
-      { file: "main.tex", line: 12, kind: "error", message: "chktex 1: Command terminated with space." },
+      {
+        file: "main.tex",
+        line: 12,
+        kind: "error",
+        message: "chktex 1: Command terminated with space.",
+        column: 1,
+        source: "chktex",
+        code: "other",
+        step: "chktex",
+      },
     ]);
   });
 
@@ -49,7 +63,16 @@ describe("parseChktexOutput", () => {
       "main.tex:6:2:1:Warning:9:same message",
     ].join("\n");
     assert.deepEqual(parseChktexOutput(stdout, projectDir), [
-      { file: "main.tex", line: 6, kind: "warning", message: "chktex 9: same message" },
+      {
+        file: "main.tex",
+        line: 6,
+        kind: "warning",
+        message: "chktex 9: same message",
+        column: 2,
+        source: "chktex",
+        code: "other",
+        step: "chktex",
+      },
     ]);
   });
 

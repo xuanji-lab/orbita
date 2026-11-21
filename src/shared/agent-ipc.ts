@@ -24,7 +24,7 @@ import type { SlidesAgentRequest, SlidesOutcome } from "./slides-export.ts";
 import type { DocAgentRequest, DocOutcome } from "./doc.ts";
 import type { DocxAgentEditRequest, DocxEditOutcome } from "./docx.ts";
 import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
-import type { LatexCompileRequest, LatexRunOutcome } from "./latex.ts";
+import type { LatexCompileRequest, LatexPackageOutcome, LatexRunOutcome } from "./latex.ts";
 import type { OfficeAgentOutcome, OfficeAgentRequest } from "./office.ts";
 import type { DocxExportOutcome, DocxExportRequest } from "./docx-export.ts";
 import type {
@@ -1255,6 +1255,8 @@ export type AgentCommand =
   | ({ type: "terminalResult"; requestId: string } & TerminalToolOutcome)
   /** LaTeX：主进程对 latexRequest 的回执（terminalResult 同款） */
   | ({ type: "latexResult"; requestId: string } & LatexRunOutcome)
+  /** LaTeX：主进程对 latexPackageRequest 的回执（缺包反查，ok 双分支） */
+  | ({ type: "latexPackageResult"; requestId: string } & LatexPackageOutcome)
   /** Office：主进程对 officeRequest 的回执（ok 双分支，形状见 shared/office.ts） */
   | ({ type: "officeResult"; requestId: string } & OfficeAgentOutcome)
   /** Word 导出：主进程对 docxExportRequest 的回执（ok 双分支，形状见 shared/docx-export.ts） */
@@ -1570,6 +1572,12 @@ export type AgentEvent =
    * 就是第二个真源。回 latexResult
    */
   | { type: "latexRequest"; requestId: string; sessionId: string; request: LatexCompileRequest }
+  /**
+   * LaTeX：agent 的 latex_packages 请求（缺的文件名 → 发行版包名 → 安装命令）。
+   * **反查在主进程**（latex/packages.ts，起 kpsewhich / tlmgr / mpm）：renderer 没有起
+   * 外部进程的授权，agent 进程也不该自己拼一条装包命令。回 latexPackageResult。
+   */
+  | { type: "latexPackageRequest"; requestId: string; sessionId: string; missing: string[] }
   /**
    * Office：agent 的 read_office / edit_office 请求（形状见 shared/office.ts 的
    * OfficeAgentRequest）。**OfficeCLI 子进程、备份与改动清单都在主进程**（terminalRequest

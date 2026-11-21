@@ -10,7 +10,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LatexCompileRequest, LatexEngine, LatexResult } from "../../shared/latex.ts";
-import { applyLatexRequest, mainInsideDir } from "./agent-requests.ts";
+import { applyLatexPackageRequest, applyLatexRequest, mainInsideDir } from "./agent-requests.ts";
 
 const roots: string[] = [];
 
@@ -27,11 +27,16 @@ after(() => {
 const OK_RESULT: LatexResult = {
   status: "ok",
   engine: "pdf",
+  engineSource: "auto",
   root: null,
+  command: null,
+  steps: [],
+  diagnostics: [],
+  omitted: { errors: 0, warnings: 0, layout: 0 },
   outputs: [],
   outputsTruncated: false,
   candidates: [],
-  logPath: null,
+  log: null,
   main: "main.tex",
   pdf: null,
   pdfFresh: false,
@@ -39,7 +44,6 @@ const OK_RESULT: LatexResult = {
   durationMs: 1,
   errors: [],
   warnings: [],
-  logStale: false,
   logTail: null,
   timeoutKind: null,
 };
@@ -157,5 +161,60 @@ describe("applyLatexRequest", () => {
     });
     assert.equal(runner.calls[0]?.dir, realpathSync(root));
     assert.equal(runner.calls[0]?.engine, undefined);
+  });
+});
+
+describe("applyLatexPackageRequest —— 缺包反查的边界", () => {
+  test("有授权目录：文件名原样交给 runner，结果原样回", async () => {
+    const root = tempDir();
+    const { sessions, workspaces } = sources(root);
+    const calls: string[][] = [];
+    const runner = {
+      lookupPackages: async (missing: readonly string[]) => {
+        calls.push([...missing]);
+        return [
+          {
+            missing: missing[0] ?? "",
+            packageName: "ctex",
+            command: "tlmgr install ctex",
+            sudo: false,
+            installed: false,
+            distro: "texlive" as const,
+            reason: null,
+          },
+        ];
+      },
+    };
+    const outcome = await applyLatexPackageRequest(runner, sessions, workspaces, {
+      sessionId: "s1",
+      missing: ["ctexart.cls", "", "  "],
+    });
+    assert.equal(outcome.ok, true);
+    assert.deepEqual(calls, [["ctexart.cls"]]);
+    assert.ok(outcome.ok && outcome.resolved[0]?.packageName === "ctex");
+  });
+
+  test("没有授权目录：不起 tlmgr，直接拒绝", async () => {
+    const runner = { lookupPackages: async () => [] };
+    const outcome = await applyLatexPackageRequest(
+      runner,
+      { readMeta: async () => null },
+      { attachedDirsOf: async () => [] },
+      { sessionId: "s1", missing: ["ctexart.cls"] },
+    );
+    assert.equal(outcome.ok, false);
+    assert.match(outcome.ok ? "" : outcome.error, /no authorized directory/);
+  });
+
+  test("missing 为空：拒绝，不查", async () => {
+    const root = tempDir();
+    const { sessions, workspaces } = sources(root);
+    const runner = { lookupPackages: async () => [] };
+    const outcome = await applyLatexPackageRequest(runner, sessions, workspaces, {
+      sessionId: "s1",
+      missing: [] as string[],
+    });
+    assert.equal(outcome.ok, false);
+    assert.match(outcome.ok ? "" : outcome.error, /missing is required/);
   });
 });

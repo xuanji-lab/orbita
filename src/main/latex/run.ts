@@ -34,7 +34,7 @@
  * bibtex 子进程；只杀 latexmk 会留下孤立的引擎进程继续占 CPU 与 .aux。
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
 import { totalmem } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import {
@@ -42,24 +42,33 @@ import {
   LATEX_CLEAN_TIMEOUT_MS,
   LATEX_IDLE_TIMEOUT_MS,
   LATEX_LOG_TAIL_LIMIT,
+  LATEX_MAX_LOG_BYTES,
   LATEX_TOTAL_TIMEOUT_MS,
   latexMaxConcurrent,
   type LatexBuildProgress,
+  type LatexBuildStep,
   type LatexCleanOutcome,
   type LatexCleanResult,
+  type LatexCommand,
   type LatexCompileRequest,
   type LatexEngine,
+  type LatexEngineSource,
   type LatexIssue,
+  type LatexLogRef,
+  type LatexLogTail,
   type LatexOutput,
   type LatexProbeRequest,
   type LatexProbeResult,
+  type LatexResolvedPackage,
   type LatexResult,
   type LatexRunOutcome,
   type LatexStatus,
   type LatexTimeoutKind,
 } from "../../shared/latex.ts";
 import { createLatexProbe, type LatexProbe } from "./probe.ts";
+import { parseBlg } from "./parse-blg.ts";
 import { hasContentWarnings, parseLatexLog, type LoggedOutputItem } from "./parse-log.ts";
+import { createLatexPackageLookup, type LatexPackageLookup } from "./packages.ts";
 import { resolveLatexPlan, type LatexPlan } from "./resolve.ts";
 
 /** 超时杀掉之后，等 close 事件的宽限。任务管理器杀不掉的进程不该让调用方永远等下去 */
@@ -135,6 +144,11 @@ export class LatexRunner {
   private running = 0;
   /** 编译中的进度（latexmk stdout 的 `Run number N of rule 'x'`）；key = 项目 */
   private readonly progress = new Map<string, { step: string | null; run: number | null }>();
+  /**
+   * 缺包反查（`latex_packages`）。**不碰编译路径**：一条反查要起 tlmgr（本机实测
+   * 3 个名字 5.2 秒），只有模型按需调用时才走到这里。缓存由 packages.ts 管。
+   */
+  private packageLookup: LatexPackageLookup | null = null;
 
   /** deps 只给测试与将来换探测实现留口；生产默认走真盘 + 真 execFile */
   constructor(probe: LatexProbe = createLatexProbe(), options: LatexRunnerOptions = {}) {
@@ -240,6 +254,17 @@ export class LatexRunner {
   }
 
   /**
+   * 缺的文件名 → 发行版包名与安装命令（`latex_packages` 工具与界面的
+   * `latex:packages` 通道同一份实现）。**按需调用**：每一条都要起 kpsewhich / tlmgr。
+   */
+  async lookupPackages(missing: readonly string[]): Promise<LatexResolvedPackage[]> {
+    if (this.packageLookup === null) {
+      this.packageLookup = createLatexPackageLookup(async () => (await this.probeEnvironment()).latexmk);
+    }
+    return this.packageLookup.resolve(missing);
+  }
+
+  /**
    * 现验一个候选路径是不是能跑的 latexmk（「指定位置」用）。
    * **只认它自己**：`probe(explicit)` 在验不活时会退回 PATH，那时可能回 ok——那说明
    * 「机器上有 latexmk」，但用户刚选的那个文件并不是，不能把它写进设置。
@@ -319,6 +344,8 @@ export class LatexRunner {
         plan.dir,
         key,
         [],
+        // 清理没有步骤可言（只跑一条 latexmk -c），也不收集时序
+        null,
         // 两道闸都设成 60 秒：没有日志可看时 idle 只会被 total 兑掉（见 spawnLatexmk 的说明）
         { idle: LATEX_CLEAN_TIMEOUT_MS, total: LATEX_CLEAN_TIMEOUT_MS },
       );
@@ -352,7 +379,14 @@ export class LatexRunner {
 
     const probe = await this.probeEnvironment();
     if (!probe.ok || probe.latexmk === null) {
-      return emptyResult("not-installed", requestedEngine ?? "pdf", started, [issue(probe.message)]);
+      return emptyResult(
+        "not-installed",
+        requestedEngine ?? "pdf",
+        started,
+        [issue(probe.message)],
+        [],
+        requestedEngine === undefined ? "auto" : "request",
+      );
     }
 
     const plan = resolveLatexPlan(dir, {
@@ -369,10 +403,13 @@ export class LatexRunner {
         started,
         [issue(`${plan.detail}${candidates}`)],
         plan.candidates,
+        requestedEngine === undefined ? "auto" : "request",
       );
     }
 
-    if (this.cancelled.has(key)) return cancelledResult(plan.root, plan.engine, started);
+    if (this.cancelled.has(key)) {
+      return cancelledResult(plan.root, plan.engine, started, requestedEngine === undefined ? "auto" : "request");
+    }
 
     /*
      * 日志与产物的位置不假定在 outDir：自定义 recipe 可以不带 -outdir，那时产物就
@@ -399,18 +436,47 @@ export class LatexRunner {
     const outputsBefore = snapshotOutputs(outDirs);
 
     const runStartedAt = Date.now();
+    const spawnStartedAt = this.now();
+    const rawSteps: RawStep[] = [];
     const outcome = await this.spawnLatexmk(
       plan.command ?? probe.latexmk,
       plan.argv,
       plan.dir,
       key,
       logCandidates,
+      rawSteps,
     );
+    // 步骤时序：startedAtMs 相对 spawn；最后一步的时长算到进程退出（不编造每步退出码）
+    const steps = finalizeSteps(rawSteps, Math.max(0, this.now() - spawnStartedAt));
 
     const picked = pickLog(logBefore);
-    const log = picked.path === null ? "" : readText(picked.path);
-    const parsed = parseLatexLog(log);
+    const logFile = picked.path === null ? null : readLogFile(picked.path);
+    const logText = logFile?.text ?? "";
+    const parsed = parseLatexLog(logText);
     const logStale = picked.stale;
+
+    /*
+     * .blg：bibtex / biber 的真根因只在里面（`Illegal end of database file---line 5 of
+     * file refs.bib`）。回执以前连这个文件的存在都不提，模型只能猜「是 .bib 写坏了还是
+     * 没跑 bibtex」。同目录多份产物目录时按 outDirs 顺序取第一份存在的——那与本轮
+     * 引擎的 -outdir 同序。
+     */
+    const blg = findBlg(outDirs, jobBase);
+    const merged = mergeDiagnostics(parsed.diagnostics, blg === null ? [] : parseBlg(readTextLimited(blg)));
+    /*
+     * 日志属于**最后一次引擎跑轮**（latexmk 每轮重写同一份 .log）：本次写出日志时，
+     * 把 log 诊断的 step 标成最后一步算子。陈旧日志不标：那几行是上一轮的事实，
+     * 拿本轮的步骤去安在它头上就是编造。
+     */
+    const engineStep = logStale ? null : lastEngineRule(steps);
+    const diagnostics =
+      engineStep === null
+        ? merged
+        : merged.map((entry) =>
+            entry.source === "log" && (entry.step === null || entry.step === undefined)
+              ? { ...entry, step: engineStep }
+              : entry,
+          );
 
     const collected = collectOutputs({
       // 陈旧日志里的 Output written 是上一轮的产物位置，不当本次证据
@@ -431,8 +497,17 @@ export class LatexRunner {
     const nonPdfOutput =
       pdfPath === null ? firstNonPdf(logStale ? [] : parsed.outputs, outDirs, plan.dir) : null;
     const upToDate = pdfIsCurrent(pdfPath, plan.mainPath);
-    const errors = [...parsed.errors];
-    const warnings = [...parsed.warnings];
+    const errors = diagnostics.filter((entry) => entry.kind === "error");
+    const warnings = diagnostics.filter((entry) => entry.kind !== "error");
+
+    /** 状态判定补上的合成诊断（超时 / 起不来 / 非零退出）；追加在真诊断之后 */
+    const synthetic: LatexIssue[] = [];
+    const add = (message: string): void => {
+      const entry = issue(message);
+      synthetic.push(entry);
+      if (entry.kind === "error") errors.push(entry);
+      else warnings.push(entry);
+    };
 
     let status: LatexStatus;
     let timeoutKind: LatexTimeoutKind | null = null;
@@ -442,24 +517,22 @@ export class LatexRunner {
       status = "timeout";
       timeoutKind = outcome.timeout.kind;
       // 静默超时与总时长封顶对模型的下一步不同，文案上就必须分开
-      errors.push(issue(timeoutMessage(outcome.timeout)));
+      add(timeoutMessage(outcome.timeout));
     } else if (outcome.spawnError !== null) {
       status = "compile-error";
-      errors.push(issue(`latexmk could not be started: ${outcome.spawnError}`));
+      add(`latexmk could not be started: ${outcome.spawnError}`);
     } else if (outcome.code !== 0) {
       status = "compile-error";
       // 陈旧错误不能代替「这一次也失败了」的事实：本次的非零退出码照样要说一遍
       if (errors.length === 0 || logStale) {
-        errors.push(issue(`latexmk exited with code ${String(outcome.code)}.${stderrTail(outcome.stderr)}`));
+        add(`latexmk exited with code ${String(outcome.code)}.${stderrTail(outcome.stderr)}`);
       }
     } else if (!upToDate) {
       status = "compile-error";
       if (pdfPath !== null) {
-        errors.push(
-          issue(`${pdfPath} was not regenerated (it is older than ${plan.mainName}), so this build produced nothing new.`),
-        );
+        add(`${pdfPath} was not regenerated (it is older than ${plan.mainName}), so this build produced nothing new.`);
       } else {
-        errors.push(issue(missingPdfMessage(nonPdfOutput, outDirs)));
+        add(missingPdfMessage(nonPdfOutput, outDirs));
       }
     } else if (errors.length > 0) {
       // nonstopmode 会带着错继续排版，latexmk 在部分发行版上仍回 0：log 里的错就是事实
@@ -471,11 +544,31 @@ export class LatexRunner {
     return {
       status,
       engine: plan.engine,
+      engineSource: plan.engineSource,
       root: plan.root,
+      command: {
+        executable: plan.command ?? probe.latexmk,
+        args: [...plan.argv],
+        source: plan.config.recipe === undefined ? "default" : "config",
+        cwd: plan.dir,
+      },
+      steps,
+      diagnostics: [...diagnostics, ...synthetic],
+      omitted: { ...parsed.omitted },
       outputs: collected.outputs,
       outputsTruncated: collected.truncated,
       candidates: [],
-      logPath: picked.path,
+      log:
+        picked.path === null || logFile === null
+          ? null
+          : {
+              path: picked.path,
+              bytes: logFile.bytes,
+              lines: logFile.lines,
+              fresh: !picked.stale,
+              modifiedAt: logFile.modifiedAt,
+              parseTruncated: logFile.truncated,
+            },
       main: plan.mainName,
       pdf: pdfPath,
       pdfFresh,
@@ -484,9 +577,8 @@ export class LatexRunner {
       durationMs: Date.now() - started,
       errors,
       warnings,
-      logStale,
       // 只有编译失败才带日志尾巴：成功时几千行日志进模型上下文是纯浪费
-      logTail: status === "compile-error" ? tail(log, LATEX_LOG_TAIL_LIMIT) : null,
+      logTail: status === "compile-error" ? tailLines(logText, LATEX_LOG_TAIL_LIMIT) : null,
       timeoutKind,
     };
   }
@@ -504,6 +596,8 @@ export class LatexRunner {
     cwd: string,
     key: string,
     logPaths: readonly string[],
+    /** 步骤时序的收集器（只记 `Run number N of rule 'x'`，不判成败）；清理时为 null */
+    steps: RawStep[] | null = null,
     /** 超时闸。默认实例级（300 秒静默 / 10 分钟总长）；清理用同一个 spawn 管线但不看日志 */
     timeouts: { idle: number; total: number } = { idle: this.idleTimeoutMs, total: this.totalTimeoutMs },
   ): Promise<ProcessOutcome> {
@@ -541,9 +635,17 @@ export class LatexRunner {
        * （格式随版本变，且一行 .log 已经够诊断）。
        */
       let stdoutTail = "";
+      /** 已经记过的最晚一轮（tail 会重复匹配同一条；轮次是 latexmk 的全局计数） */
+      let recordedRun: number | null = null;
       child.stdout?.on("data", (chunk: Buffer) => {
         stdoutTail = (stdoutTail + chunk.toString("utf8")).slice(-4096);
         const matches = [...stdoutTail.matchAll(/Run number (\d+) of rule '([^']+)'/g)];
+        for (const match of matches) {
+          const run = Number(match[1]);
+          if (steps === null || (recordedRun !== null && run <= recordedRun)) continue;
+          recordedRun = run;
+          steps.push({ rule: match[2] ?? "", run, startedAtMs: this.now() - spawnedAt });
+        }
         const last = matches[matches.length - 1];
         if (last === undefined) return;
         this.progress.set(key, { step: last[2] ?? null, run: Number(last[1]) });
@@ -981,9 +1083,154 @@ function readText(path: string): string {
   }
 }
 
-function tail(text: string, limit: number): string | null {
+/**
+ * 读一份文本，但**只读尾部 LATEX_MAX_LOG_BYTES**（.log / .blg 共用）。
+ * 旧版把整份 .log 无上限读进内存：一份失控的自定义 recipe 能写出几百 MB。
+ */
+function readTextLimited(path: string): string {
+  return readLogFile(path).text;
+}
+
+interface ReadLogFile {
+  text: string;
+  /** 文件大小（字节）；stat 失败时为 0 */
+  bytes: number;
+  /** 我们解析到的文本有多少行 */
+  lines: number;
+  modifiedAt: number | null;
+  /** true = 文件超过上限，只读了尾部 */
+  truncated: boolean;
+}
+
+/**
+ * 读一份日志 / .blg。超过 `LATEX_MAX_LOG_BYTES` 时只读尾部并置 truncated，
+ * 而且丢掉被切开的半行（从第一个换行之后开始）——否则解析器会把半行当成一条诊断。
+ */
+export function readLogFile(path: string, maxBytes: number = LATEX_MAX_LOG_BYTES): ReadLogFile {
+  let bytes = 0;
+  let modifiedAt: number | null = null;
+  try {
+    const stat = statSync(path);
+    bytes = stat.size;
+    modifiedAt = stat.mtimeMs;
+  } catch {
+    return { text: "", bytes: 0, lines: 0, modifiedAt: null, truncated: false };
+  }
+  if (bytes <= maxBytes) {
+    const text = readText(path);
+    return { text, bytes, lines: lineCount(text), modifiedAt, truncated: false };
+  }
+  const raw = readTailBytes(path, maxBytes);
+  const cut = raw.indexOf("\n");
+  const text = cut === -1 ? "" : raw.slice(cut + 1);
+  return { text, bytes, lines: lineCount(text), modifiedAt, truncated: true };
+}
+
+/** 读文件最后 maxBytes 字节（open/read 分块，不把整份文件映进内存） */
+function readTailBytes(path: string, maxBytes: number): string {
+  const handle = openSync(path, "r");
+  try {
+    const size = statSync(path).size;
+    const start = Math.max(0, size - maxBytes);
+    const buffer = Buffer.alloc(size - start);
+    let read = 0;
+    while (read < buffer.length) {
+      const chunk = readSync(handle, buffer, read, buffer.length - read, start + read);
+      if (chunk <= 0) break;
+      read += chunk;
+    }
+    return buffer.subarray(0, read).toString("utf8");
+  } catch {
+    return "";
+  } finally {
+    closeSync(handle);
+  }
+}
+
+/** 与 parseLatexLog 的 `split(/\r?\n/)` 同一口径，日志行号才对得上 */
+function lineCount(text: string): number {
+  return text === "" ? 0 : text.split(/\r?\n/).length;
+}
+
+/**
+ * 日志尾巴：**从行首截起**（旧版 `slice(-limit)` 会把第一行切成半句，模型看到
+ * `7 compressed objects within 1 object str` 会以为是日志的怪话），并给出 fromLine
+ * ——模型据此能 `read offset=fromLine-200` 往前翻。
+ */
+export function tailLines(text: string, limit: number): LatexLogTail | null {
   if (text === "") return null;
-  return text.length <= limit ? text : text.slice(text.length - limit);
+  if (text.length <= limit) return { text, fromLine: 1, truncated: false };
+  const cut = text.length - limit;
+  const newline = text.indexOf("\n", cut);
+  const start = newline === -1 ? cut : newline + 1;
+  const body = text.slice(start);
+  const total = lineCount(text);
+  const count = lineCount(body);
+  return { text: body, fromLine: Math.max(1, total - count + 1), truncated: true };
+}
+
+/** `.blg` 路径：按产物目录顺序取第一份存在的（与本轮 -outdir 同序） */
+function findBlg(outDirs: readonly string[], jobBase: string): string | null {
+  for (const dir of outDirs) {
+    const candidate = join(dir, `${jobBase}.blg`);
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
+ * 把 .blg 的诊断并进日志诊断：**按（文件，行）合并排序**，未知位置排最后。
+ * 同一键保持原来的日志顺序（稳定排序）——模型按位置从上往下修，而 refs.bib:5 与
+ * main.tex:3 是两份不同的文件，混在一起按日志文件顺序排反而看不出位置关系。
+ */
+function mergeDiagnostics(log: readonly LatexIssue[], blg: readonly LatexIssue[]): LatexIssue[] {
+  if (blg.length === 0) return [...log];
+  return [...log, ...blg]
+    .map((issue, index) => ({ issue, index }))
+    .sort((left, right) => comparePlace(left.issue, right.issue) || left.index - right.index)
+    .map((entry) => entry.issue);
+}
+
+function comparePlace(left: LatexIssue, right: LatexIssue): number {
+  const leftFile = left.file ?? "\uffff";
+  const rightFile = right.file ?? "\uffff";
+  if (leftFile !== rightFile) return leftFile < rightFile ? -1 : 1;
+  return (left.line ?? Number.MAX_SAFE_INTEGER) - (right.line ?? Number.MAX_SAFE_INTEGER);
+}
+
+/** 最后一步里跑引擎的那一轮（日志就是它写的）；没有进度行时为 null */
+function lastEngineRule(steps: readonly LatexBuildStep[]): string | null {
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    const rule = steps[index]?.rule ?? "";
+    if (/^(?:pdf|xe|lua)?latex$/i.test(rule)) return rule;
+  }
+  return null;
+}
+
+/** 一条还没定出时长的步骤（spawnLatexmk 收集，build 收尾时算时长） */
+export interface RawStep {
+  rule: string;
+  run: number | null;
+  startedAtMs: number;
+}
+
+/**
+ * 把时序事实补全：`durationMs` = 下一步的开始 - 本步的开始；最后一步算到进程退出。
+ * **不造 per-step 退出码**：latexmk 不逐轮报，写成 bool 会是一条编造的事实。
+ */
+export function finalizeSteps(raw: readonly RawStep[], elapsedMs: number): LatexBuildStep[] {
+  return raw.map((step, index) => {
+    const next = raw[index + 1];
+    const durationMs =
+      next === undefined ? Math.max(0, elapsedMs - step.startedAtMs) : Math.max(0, next.startedAtMs - step.startedAtMs);
+    return {
+      rule: step.rule,
+      run: step.run,
+      startedAtMs: step.startedAtMs,
+      durationMs,
+      end: next === undefined ? "last" : "ran",
+    };
+  });
 }
 
 function issue(message: string): LatexIssue {
@@ -995,9 +1242,14 @@ function stderrTail(stderr: string): string {
   return trimmed === "" ? "" : ` ${trimmed.slice(-STDERR_LIMIT)}`;
 }
 
-function cancelledResult(root: LatexResult["root"], engine: LatexEngine, started: number): LatexResult {
+function cancelledResult(
+  root: LatexResult["root"],
+  engine: LatexEngine,
+  started: number,
+  engineSource: LatexEngineSource = "auto",
+): LatexResult {
   return {
-    ...emptyResult("cancelled", engine, started, []),
+    ...emptyResult("cancelled", engine, started, [], [], engineSource),
     root,
     main: root?.path ?? "",
   };
@@ -1013,15 +1265,21 @@ function emptyResult(
   started: number,
   errors: LatexIssue[],
   candidates: string[] = [],
+  engineSource: LatexEngineSource = "auto",
 ): LatexResult {
   return {
     status,
     engine,
+    engineSource,
     root: null,
+    command: null,
+    steps: [],
+    diagnostics: [...errors],
+    omitted: { errors: 0, warnings: 0, layout: 0 },
     outputs: [],
     outputsTruncated: false,
     candidates,
-    logPath: null,
+    log: null,
     main: "",
     pdf: null,
     pdfFresh: false,
@@ -1029,7 +1287,6 @@ function emptyResult(
     durationMs: Date.now() - started,
     errors,
     warnings: [],
-    logStale: false,
     logTail: null,
     timeoutKind: null,
   };

@@ -20,7 +20,7 @@ import type { BrowserToolOutcome } from "../../shared/browser.ts";
 import type { DocOutcome } from "../../shared/doc.ts";
 import type { DocxEditOutcome } from "../../shared/docx.ts";
 import type { TerminalToolOutcome } from "../../shared/terminal.ts";
-import type { LatexRunOutcome } from "../../shared/latex.ts";
+import type { LatexPackageOutcome, LatexRunOutcome } from "../../shared/latex.ts";
 import type { OfficeAgentOutcome } from "../../shared/office.ts";
 import type { DocxExportOutcome } from "../../shared/docx-export.ts";
 import type { SlidesOutcome } from "../../shared/slides-export.ts";
@@ -682,6 +682,11 @@ export class AgentHostCore {
       requestId,
       ...(outcome.ok ? { ok: true as const, result: outcome.result } : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);
+  }
+
+  /** LaTeX：latexPackageRequest（缺包反查）的回执。形状即契约（ok 双分支），原样透传。 */
+  answerLatexPackage(requestId: string, outcome: LatexPackageOutcome): void {
+    this.child?.postMessage({ type: "latexPackageResult", requestId, ...outcome } satisfies AgentCommand);
   }
 
   /**
