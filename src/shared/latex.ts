@@ -566,6 +566,8 @@ export const latexChannels = {
   /** PDF 批注的读与写（项目目录 .orbita/annotations.json，原子写） */
   annotationsGet: "latex:annotations-get",
   annotationsPut: "latex:annotations-put",
+  /** 改动裁决：把当前项目 PDF 备份到 .orbita/pdf-backups/（改前对照用） */
+  pdfBackup: "latex:pdf-backup",
   /** 当前文件所属的 LaTeX 项目（找不到就是 found:false） */
   project: "latex:project",
   /** 编一次；结局是 LatexRunOutcome（并发被拒也走 ok:false） */

@@ -9,7 +9,7 @@
  * 编译本身仍是 PR1 的 `LatexRunner`：同一份并发记账、同一套 .log 解析，agent 的
  * `compile_latex` 与这里的按钮编的是同一个东西——「两边看到的是同一次编译」。
  */
-import { mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { BrowserWindow, dialog, ipcMain } from "electron";
@@ -197,6 +197,19 @@ export function registerLatexIpc(
     await writeFile(tmp, JSON.stringify(req.store, null, 2), "utf8");
     await rename(tmp, file);
     return { ok: true, path: file };
+  });
+
+  // 改动裁决：把当前项目 PDF 备份到 .orbita/pdf-backups/（改前对照用）
+  ipcMain.handle(latexChannels.pdfBackup, async (_event, req: LatexFileContext) => {
+    const located = await locateLatexProject(req, workspaces, sessions);
+    if (located === null) return { ok: false, error: "not-latex-project" };
+    const project = describeLatexProject(located.dir);
+    if (project.pdf === null) return { ok: false, error: "no-pdf" };
+    const dir = join(located.dir, ".orbita", "pdf-backups");
+    await mkdir(dir, { recursive: true });
+    const dest = join(dir, `${Date.now()}.pdf`);
+    await copyFile(project.pdf.path, dest);
+    return { ok: true, path: dest };
   });
 
   /**

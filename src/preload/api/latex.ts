@@ -40,6 +40,8 @@ export const latexApi = {
     ipcRenderer.invoke(latexChannels.annotationsGet, req),
   annotationsPut: (req: LatexFileContext & { store: PdfAnnotationStore }): Promise<{ ok: boolean; path?: string; error?: string }> =>
     ipcRenderer.invoke(latexChannels.annotationsPut, req),
+  pdfBackup: (req: LatexFileContext): Promise<{ ok: boolean; path?: string; error?: string }> =>
+    ipcRenderer.invoke(latexChannels.pdfBackup, req),
   /** 「指定位置」：系统文件选择器，现验通过才写进设置 */
   locate: (): Promise<LatexLocateOutcome> => ipcRenderer.invoke(latexChannels.locate),
   /** 当前文件所属的项目；不属于任何 LaTeX 项目时 found:false */

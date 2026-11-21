@@ -154,6 +154,10 @@ export function PdfView(props: {
   onQuote?: (text: string) => void;
   /** 批注存取的项目上下文（.orbita/annotations.json）；null = 不是 LaTeX 项目，不出批注栏 */
   annotationCtx?: LatexFileContext | null;
+  /** 搜索高亮的色调：red = 改前（删除）、green = 改后（新增）；缺省 accent */
+  highlightTone?: "red" | "green";
+  /** 打开时就带着的搜索词（改动对照：备份视图搜旧文本、当前视图搜新文本） */
+  initialQuery?: string;
 }) {
   const t = useT();
   const { request, jump } = props;
@@ -172,7 +176,7 @@ export function PdfView(props: {
   const pageRef = useRef(1);
   pageRef.current = page;
   const [findQuery, setFindQuery] = useState("");
-  const [find, setFind] = useState<FindState>(EMPTY_FIND);
+  const [find, setFind] = useState<FindState>(props.initialQuery != null ? { ...EMPTY_FIND, query: props.initialQuery } : EMPTY_FIND);
   /** 搜索语料（惰性建一次；换文件 / 重载时作废） */
   const corpusRef = useRef<PageTextIndex[] | null>(null);
   /** 当前命中的 token：rect 算完后按它精调滚动，旧 token 的回报丢掉 */
@@ -664,6 +668,7 @@ export function PdfView(props: {
                 findQuery={find.query}
                 findOrdinal={activeMatchOnPage}
                 findToken={findToken}
+                highlightTone={props.highlightTone}
                 onFindRect={(token, rect) => {
                   if (token !== findTokenRef.current || activeMatch === null) return;
                   const scroller = scrollRef.current;
@@ -773,6 +778,8 @@ function PdfPage(props: {
   findOrdinal: number | null;
   findToken: number;
   /** 当前命中的矩形算完（null = 本页文本层里找不到）；token 用来丢掉旧回报 */
+  /** 搜索高亮色调：red = 改前、green = 改后（见 PdfView） */
+  highlightTone?: "red" | "green";
   onFindRect: (token: number, rect: PageRect | null) => void;
   /** 高亮算完（null = 本页文本层里找不到这段） */
   onHighlight: (rects: { left: number; top: number; width: number; height: number }[] | null) => void;  /** SyncTeX 落点（本页才有值）：画一个短暂的框 */
@@ -924,6 +931,7 @@ function PdfPage(props: {
             <div
               key={`find-${i}`}
               className={`pdf-find-mark${mark.active ? " active" : ""}`}
+              data-tone={props.highlightTone ?? null}
               style={{
                 left: mark.rect.left,
                 top: mark.rect.top,
