@@ -18,6 +18,8 @@
  * 封顶 LATEX_REPLY_MAX_CHARS，砍的顺序固定：日志尾巴 → raw → layout → 产物；
  * 状态行 / Command / Log / 第一条 error 永不砍。
  */
+import { readFile } from "node:fs/promises";
+import { relative } from "node:path";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
   LATEX_IDLE_TIMEOUT_MS,
@@ -35,10 +37,14 @@ import {
   type LatexRootRef,
   type LatexRunOutcome,
 } from "../shared/latex.ts";
+import { writeTextAtomic } from "../main/atomic-write.ts";
+import { alignBib, sortBib, type BibSortBy } from "../main/cite/bib-edit.ts";
+import { isInside, realpathInside } from "../main/path-boundary.ts";
+import { resolveToolPath } from "./file-tracker.ts";
 import type { RequestBroker } from "./request-broker.ts";
 
 /** 本工具组的名字。权限档描述（describePermissionMode）与测试都认这一份 */
-export const LATEX_TOOL_NAMES = ["compile_latex", "latex_packages"] as const;
+export const LATEX_TOOL_NAMES = ["compile_latex", "latex_packages", "edit_bib"] as const;
 
 /** 回执正文里最多列几条：错列到 20（修完重编即可），内容告警只列头部——它们是次要信号 */
 const MAX_ERRORS_SHOWN = 20;
@@ -65,6 +71,8 @@ const PACKAGE_BROKER_TIMEOUT_MS = 150_000;
 export interface LatexToolContext {
   /** 会话 cwd：dir 相对路径的解析基准（主进程按同一基准解析并做授权） */
   cwd: string;
+  /** edit_bib 的可写根（工作区 + 附加目录）；缺席时只认 cwd */
+  writeRoots?: readonly string[];
 }
 
 /** 只要 broker 的 request——测试可以直接嗂一个固定回执的假货 */
@@ -239,7 +247,108 @@ export function createLatexTools(
     },
   };
 
-  return [compile, packages];
+  /**
+   * .bib 的「排序 / 等号对齐」。**只给 agent**：没有工具条按钮（用户已拍）。
+   *
+   * 写盘走 writeTextAtomic（agent 的 doc 工具同一套），并且工具名在
+   * TurnFileTracker 的跟踪名单里——轮尾改动卡、审查 diff、单轮撤销因此都看得见，
+   * 不另造一套变更记录。没有可改的内容时**一个字都不写**（不回一张空 diff 卡）。
+   */
+  const editBib: ToolDefinition = {
+    name: "edit_bib",
+    label: "edit_bib",
+    description:
+      "Tidy a BibTeX file without touching its content: action \"sort\" reorders entries (by key by default, or " +
+      "year then author then key with by:\"year\") and action \"align\" lines up the `=` of every field inside each " +
+      "entry. Header comments and @string / @comment blocks stay where they are. The file is written through the " +
+      "normal edit path, so the change appears in the turn's file card and can be undone. Both actions are " +
+      "idempotent: if nothing would change, nothing is written. Use it when the user asks to sort their .bib or " +
+      "make the fields line up; do not use it to add, remove or rewrite entries.",
+    promptSnippet:
+      "Sort or align a .bib file by key/year; writes through the normal edit path (undoable, no-op when already tidy).",
+    promptGuidelines: [
+      "Pass path: the .bib file you mean (absolute, or relative to the session working directory).",
+      "sort is stable; by:\"year\" orders by year, then author, then key. align only pads spaces before `=`.",
+      "It never deletes unused entries — do not claim it did; ask the user before removing anything.",
+      "A result saying \"nothing written\" means the file was already in that shape; do not retry.",
+    ],
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          description: 'What to do: "sort" (reorder entries) or "align" (line up the `=` signs inside each entry).',
+        },
+        path: {
+          type: "string",
+          description: "The .bib file, absolute or relative to the session working directory.",
+        },
+        by: {
+          type: "string",
+          description: 'For action "sort": "key" (default) or "year" (year, then author, then key).',
+        },
+      },
+      required: ["action", "path"],
+    } as never,
+    async execute(_toolCallId, params, signal) {
+      if (signal?.aborted === true) throw new Error("Stopped");
+      const args = (params ?? {}) as Record<string, unknown>;
+      const action = text(args["action"]);
+      if (action !== "sort" && action !== "align") {
+        throw new Error('action must be "sort" or "align".');
+      }
+      const byRaw = text(args["by"]);
+      if (byRaw !== undefined && byRaw !== "key" && byRaw !== "year") {
+        throw new Error('by must be "key" or "year".');
+      }
+      const rawPath = text(args["path"]);
+      if (rawPath === undefined) throw new Error("path is required — the .bib file to edit.");
+
+      const absolute = resolveToolPath(rawPath, context.cwd);
+      if (!/\.bib$/i.test(absolute)) throw new Error(`Not a .bib file: ${rawPath}`);
+      const roots = context.writeRoots !== undefined && context.writeRoots.length > 0 ? context.writeRoots : [context.cwd];
+      if (!roots.some((root) => isInside(root, absolute))) {
+        throw new Error(`That .bib file is outside the session's directories: ${rawPath}`);
+      }
+      // 存在性 + symlink 越界一起判（与 doc 工具同一道 realpathInside）。读写都用
+      // 解析后的真实路径：往 lexical 路径 rename 会把 symlink 换成一个普通文件。
+      const real = await realpathInside(absolute, roots);
+      if (real === null) {
+        throw new Error(`BibTeX file not found (or outside the session's directories): ${rawPath}`);
+      }
+
+      const source = await readFile(real, "utf8");
+      const by: BibSortBy = byRaw === "year" ? "year" : "key";
+      const result = action === "sort" ? sortBib(source, by) : alignBib(source);
+      const label = displayPath(context.cwd, absolute);
+      if (!result.changed) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text:
+                action === "sort"
+                  ? `${label} is already sorted by ${by}; nothing written.`
+                  : `${label} is already aligned; nothing written.`,
+            },
+          ],
+          details: undefined,
+        };
+      }
+      await writeTextAtomic(real, result.source);
+      const preview =
+        action === "sort"
+          ? `\nBefore: ${result.before.join(", ")}\nAfter:  ${result.after.join(", ")}`
+          : "";
+      const summary =
+        action === "sort"
+          ? `Sorted ${label} by ${by}: ${result.entries} entries, ${result.moved} moved.${preview}`
+          : `Aligned ${label}: ${result.entries} entries, ${result.moved} changed (equal signs line up inside each entry).`;
+      return { content: [{ type: "text" as const, text: summary }], details: undefined };
+    },
+  };
+
+  return [compile, packages, editBib];
 }
 
 /** 正文的可裁剪部分。砍的顺序固定（见文件头），状态行 / Command / Log / 首条 error 不在其中 */
@@ -589,4 +698,11 @@ function packageLine(entry: LatexResolvedPackage): string {
   }
   const sudo = entry.sudo ? " (needs sudo)" : "";
   return `${head} — run: ${entry.command}${sudo}`;
+}
+
+/** 给模型看的路径：在工作区里就写相对路径（正斜杠），否则写绝对路径 */
+function displayPath(cwd: string, absolute: string): string {
+  const rel = relative(cwd, absolute);
+  if (rel === "" || rel.startsWith("..")) return absolute.split("\\").join("/");
+  return rel.split("\\").join("/");
 }

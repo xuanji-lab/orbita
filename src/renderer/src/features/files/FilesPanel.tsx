@@ -349,7 +349,9 @@ export function FilesPanel(props: {
   );
   const latex = useLatexWorkbench(latexContext);
   /** 文献库：`\cite{` 的候选（编辑器）与坏 .bib 的 warning（问题抽屉）都读这一份 */
-  const citeLibrary = useCiteLibrary(latexContext, latex.project);
+  const citeState = useCiteLibrary(latexContext, latex.project);
+  const citeLibrary = citeState?.library ?? null;
+  const citeUnused = citeState?.unused ?? null;
   /** 项目符号索引：`\ref` / 自定义命令 / 路径补全的候选（与编译同一份项目目录） */
   const latexIndex = useLatexIndex(latexContext, latex.project);
   /** 多文件导航：包含图（`\input` 跳转）+ 每个文件的章节（跨文件大纲） */
@@ -2104,6 +2106,7 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
             onHandToAgent={handProblemToAgent}
             onJump={jumpToProblem}
             {...(citeLibrary === null ? {} : { verify: { ...verifyState, onRun: runVerify } })}
+            {...(citeUnused === null ? {} : { unused: citeUnused })}
             resolved={resolvedPackages}
             onInstall={installPackage}
           />

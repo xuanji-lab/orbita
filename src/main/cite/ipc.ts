@@ -7,6 +7,7 @@
  * 主进程去读一个根之外的 .bib。magic comment 改写项目根的情形也同一份事实——
  * 编译读的是哪个目录，补全读的就是哪个目录。
  */
+import { resolve } from "node:path";
 import { ipcMain } from "electron";
 import {
   citeChannels,
@@ -26,6 +27,7 @@ import { locateLatexProject } from "../latex/ipc.ts";
 import { collectCiteLibrary } from "./library.ts";
 import { searchCite } from "./search.ts";
 import { writeCiteEntry } from "./save.ts";
+import { scanUnusedCitations } from "./unused.ts";
 import { verifyCiteEntries } from "./verify.ts";
 
 export function registerCiteIpc(workspaces: WorkspaceStore, sessions: SessionStore): void {
@@ -37,10 +39,25 @@ export function registerCiteIpc(workspaces: WorkspaceStore, sessions: SessionSto
       // 编译真正用的目录（magic root 会改写它），不是「文件所在目录」。
       // 带上当前文件：子文件里的 `% !TEX root` 与编译走同一条解析。
       const project = describeLatexProject(located.dir, {
-      ...(/\.tex$/i.test(located.file) ? { file: located.file } : {}),
-      boundary: [located.boundary],
-    });
-      return { found: true, library: collectCiteLibrary(project.dir) };
+        ...(/\.tex$/i.test(located.file) ? { file: located.file } : {}),
+        boundary: [located.boundary],
+      });
+      const library = collectCiteLibrary(project.dir);
+      // 「未使用的文献」只读：扫当前 root 的包含闭包（与编译 / 过期判定同一张图），
+      // 不是整个项目——附录或另一篇论文的 .tex 不该让一条文献显得被引用过。
+      const rootRelative = project.activeRoot ?? project.main;
+      const unused =
+        rootRelative === null
+          ? {
+              entries: [],
+              nociteAll: false,
+              rootFound: false,
+              texFiles: 0,
+              bibFiles: library.files.length,
+              truncated: false,
+            }
+          : scanUnusedCitations(resolve(project.dir, rootRelative), library);
+      return { found: true, library, unused };
     },
   );
 

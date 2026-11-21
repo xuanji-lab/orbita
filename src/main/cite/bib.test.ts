@@ -8,7 +8,7 @@
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { cleanText, mergeBibEntries, parseBibtex } from "./bib.ts";
+import { bibBlocks, cleanText, mergeBibEntries, parseBibtex, stripBibComments } from "./bib.ts";
 
 describe("parseBibtex —— 基本字段", () => {
   test("article：key / 类型 / 标题 / 作者 / 年份", () => {
@@ -33,6 +33,7 @@ describe("parseBibtex —— 基本字段", () => {
       doi: "10.5555/3295222.3295349",
       eprint: null,
       file: "",
+      line: 2,
     });
   });
 
@@ -109,6 +110,63 @@ describe("parseBibtex —— 跳过的东西", () => {
   });
 });
 
+describe("parseBibtex —— 注释与行号", () => {
+  test("% 注释行里的假条目不算；注释不会让后面的行号漂移", () => {
+    const source = `% @article{ghost, title = {Not Real}}
+@book{real, title = {Real}, year = {2000}}
+`;
+    const { entries, bad } = parseBibtex(source);
+    assert.equal(bad, 0);
+    assert.deepEqual(entries.map((entry) => entry.key), ["real"]);
+    assert.equal(entries[0]?.line, 2);
+  });
+
+  test("条目外同一行尾的注释被抹掉；字段值里的 % 原样保留", () => {
+    const source = `@misc{a, note = {100% sure}, year = {2020}} % 这是注释 { 假括号 }
+@book{b, title={B}}`;
+    const { entries } = parseBibtex(source);
+    assert.deepEqual(entries.map((entry) => entry.key), ["a", "b"]);
+    assert.equal(entries[0]?.year, "2020");
+    assert.equal(stripBibComments("x % y\nz"), "x    \nz");
+  });
+
+  test("行号是条目 @ 所在行（跨 @string / @comment / 空行）", () => {
+    const source = `
+
+@string{acm = "ACM"}
+% comment
+@article{one, title={One}}
+
+@book{two, title={Two}}`;
+    const { entries } = parseBibtex(source);
+    assert.equal(entries[0]?.line, 5);
+    assert.equal(entries[1]?.line, 7);
+  });
+
+  test("bibBlocks 认条目与 @string / @comment，坏条目不会吞掉后面的", () => {
+    const source = `@string{x = "X"}
+@comment{ignore}
+@article{a, title={A}}
+@article{, title={bad}}
+@book{b, title={B}}`;
+    const blocks = bibBlocks(source);
+    assert.deepEqual(
+      blocks.map((block) => [block.kind, block.type, block.key]),
+      [
+        ["skip", "string", null],
+        ["skip", "comment", null],
+        ["entry", "article", "a"],
+        ["bad", "article", null],
+        ["entry", "book", "b"],
+      ],
+    );
+    // 下标切出来的原文就是那一块
+    const first = blocks[0];
+    assert.ok(first !== undefined);
+    assert.equal(source.slice(first.start, first.end), '@string{x = "X"}');
+  });
+});
+
 describe("parseBibtex —— 坏条目", () => {
   test("缺 key / 缺等号 / 括号不闭合：各记一条，后面的条目照常解析", () => {
     const source = `
@@ -147,6 +205,7 @@ describe("parseBibtex —— 坏条目", () => {
       doi: null,
       eprint: null,
       file: "",
+      line: 1,
     });
   });
 });
@@ -161,6 +220,7 @@ describe("mergeBibEntries —— 多文件合并", () => {
     doi: null,
     eprint: null,
     file: "",
+    line: 1,
   });
 
   test("同 key 先出现者为准，并标注它来自哪份文件", () => {

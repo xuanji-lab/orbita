@@ -704,7 +704,7 @@ export const zh: Messages = {
     userMessage: "你的消息",
     chars: (n) => `${n} 字`,
     truncated: (n) => `只引了前 ${n} 字`,
-    count: (n) => `${n} 段引用`,
+    count: (n: number) => `${n} 段引用`,
     missing: "原文已改",
     ambiguous: "待确认哪一处",
     tooLongTotal: (max) => `引用总字数最多 ${max} 字，先移除几条再引。`,
@@ -3178,6 +3178,19 @@ export const zh: Messages = {
     /* 上限 / 体积挡下的文件：补全可能不全，必须说出来 */
     skipped: (count) => `有 ${count} 份 .bib 没读（太大或太多），补全可能不全`,
     truncated: "项目文件超出扫描上限，可能还有 .bib 没读到，补全可能不全",
+  },
+
+  /* ---------- 未使用的文献（bib 里有、正文没引；只读，点一条跳到 .bib） ---------- */
+  citeUnused: {
+    title: "未引用的文献",
+    count: (n: number) => `${n} 条`,
+    scanned: (n: number) => `扫了 ${n} 份 .tex`,
+    none: "没有未使用的条目",
+    noBib: "没有找到 .bib",
+    noRoot: "认不出当前的主文件，暂时算不出未使用的条目",
+    nociteAll: "正文里有 \\nocite{*}，所有条目都算已引用",
+    truncated: "扫描撞上了上限，清单可能不全",
+    jumpTip: "跳到 .bib 的这一行",
   },
 
   /* ---------- 在线检索文献（右键「查找文献」的面板） ---------- */

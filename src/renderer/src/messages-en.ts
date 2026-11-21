@@ -3393,6 +3393,19 @@ export const en = {
     truncated: "The project has more files than the scan reads — some .bib entries may be missing from completions",
   },
 
+  /* ---------- 未使用的文献（bib 里有、正文没引；只读，点一条跳到 .bib） ---------- */
+  citeUnused: {
+    title: "Uncited entries",
+    count: (n: number) => `${n}`,
+    scanned: (n: number) => `${n} .tex files scanned`,
+    none: "Every entry is cited",
+    noBib: "No .bib file found",
+    noRoot: "Could not work out the current root, so uncited entries cannot be computed",
+    nociteAll: "The document has \\nocite{*}, so every entry counts as cited",
+    truncated: "The scan hit a limit; this list may be incomplete",
+    jumpTip: "Jump to this line in the .bib file",
+  },
+
   /* ---------- 在线检索文献（右键「查找文献」的面板） ---------- */
   citeSearch: {
     menu: "Find reference…",

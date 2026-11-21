@@ -33,6 +33,8 @@ const ALLOWED_LATIN = new Set([
   "SSE",
   "HTTP",
   "Markdown",
+  // LaTeX 命令名（bib 未使用清单里说明「正文有全部引用标记」时要照写）
+  "nocite",
   // Word 导出的转换引擎（产品名，设置页与工具文案都照写）
   "pandoc",
   // 文档面板的导出格式名

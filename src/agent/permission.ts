@@ -115,8 +115,8 @@ export interface ToolCallGateResult {
 
 export type PermissionAsk = (request: ToolCallLike) => Promise<PermissionAnswer>;
 
-/** 拦截面：按路径改文件的（write/edit 的 input.path）与跑命令的（bash/powershell 的 input.command）。 */
-const PATH_MUTATING_TOOLS = new Set(["write", "edit"]);
+/** 拦截面：按路径改文件的（write/edit/edit_bib 的 input.path）与跑命令的（bash/powershell 的 input.command）。 */
+const PATH_MUTATING_TOOLS = new Set(["write", "edit", "edit_bib"]);
 const COMMAND_TOOLS = new Set(["bash", "powershell"]);
 
 /**

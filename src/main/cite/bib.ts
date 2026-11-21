@@ -46,23 +46,126 @@ interface RawEntry {
 
 /** 一次条目扫描的结局：跳过 / 正常 / 坏；`next` 永远是下一次扫描的起点 */
 type Scan =
-  | { kind: "skip"; next: number }
-  | { kind: "bad"; next: number }
+  | { kind: "skip"; next: number; type: string }
+  | { kind: "bad"; next: number; type: string }
   | { kind: "entry"; next: number; entry: RawEntry };
+
+/** 扫描层看到的一块（原始下标，用于排序 / 对齐时**原地搬条目**） */
+export interface BibBlock {
+  /** `@` 的下标（清理注释后的文本与原文本等长，两边下标通用） */
+  start: number;
+  /** 这一块的结束下标（不含） */
+  end: number;
+  kind: "skip" | "bad" | "entry";
+  /** 小写的条目类型（article / book / string / comment …） */
+  type: string;
+  /** 真条目的引用键；skip / bad 为 null */
+  key: string | null;
+}
 
 /** 字段名：字母开头，允许数字、`_`、`-`（BibTeX 实际出现的写法） */
 const FIELD_NAME = /[A-Za-z][A-Za-z0-9_-]*/y;
 
 /**
- * 解析一份 .bib 的全文。坏条目不会中断扫描：从失败处之后找下一个 `@` 继续，
- * 这一条计入 `bad`。
+ * 去掉 BibTeX 注释：**条目外**（花括号嵌套深度 0、不在引号串里）的未转义 `%`
+ * 到行尾都算注释，替换成等长空格——换行与偏移量都不动，所以行号、块下标在清理
+ * 前后完全一致。条目里的 `100% effective` / `%` 开头的字段值不受影响（深度 > 0）。
+ *
+ * 真实 .bib 的注释写在行首（`% ---- 中文文献 ----`），这条规则同时认「条目收尾后
+ * 同一行跟一句注释」；不认「字段值后面裸的 %」是因为那在 BibTeX 里不是注释。
  */
-export function parseBibtex(source: string): ParsedBib {
+export function stripBibComments(source: string): string {
+  let out = "";
+  let depth = 0;
+  let quoted = false;
+  for (let i = 0; i < source.length; i += 1) {
+    const ch = source[i] ?? "";
+    if (ch === "\\") {
+      out += ch;
+      const next = source[i + 1];
+      if (next !== undefined) {
+        out += next;
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      quoted = !quoted;
+      out += ch;
+      continue;
+    }
+    if (!quoted && ch === "{") depth += 1;
+    else if (!quoted && ch === "}") depth = Math.max(0, depth - 1);
+    if (ch === "%" && !quoted && depth === 0) {
+      while (i < source.length && source[i] !== "\n" && source[i] !== "\r") {
+        out += " ";
+        i += 1;
+      }
+      if (i < source.length) {
+        out += source[i];
+        if (source[i] === "\r" && source[i + 1] === "\n") {
+          out += "\n";
+          i += 1;
+        }
+      }
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+/**
+ * 扫描一份 .bib 的全部块（条目 / @string / @comment / 坏条目），按下标顺序。
+ * 下标对**原文本**有效（注释已被等长空格替换）。排序与对齐靠它原地搬条目，
+ * 不去重新拼一份文件——文件头注释、`@string` 块、条目之间的空行都原样留着。
+ */
+export function bibBlocks(raw: string): BibBlock[] {
+  const source = stripBibComments(raw);
+  const blocks: BibBlock[] = [];
+  const macros = new Map<string, string>();
+  let i = 0;
+  while (i < source.length) {
+    const at = source.indexOf("@", i);
+    if (at < 0) break;
+    const scan = scanEntry(source, at, macros);
+    blocks.push({
+      start: at,
+      end: Math.max(scan.next, at + 1),
+      kind: scan.kind,
+      type: scan.kind === "entry" ? scan.entry.type : scan.type,
+      key: scan.kind === "entry" ? scan.entry.key : null,
+    });
+    i = Math.max(scan.next, at + 1);
+  }
+  return blocks;
+}
+
+/**
+ * 解析一份 .bib 的全文。坏条目不会中断扫描：从失败处之后找下一个 `@` 继续，
+ * 这一条计入 `bad`。注释先按 `stripBibComments` 抹掉（等长，所以行号不变）。
+ */
+export function parseBibtex(raw: string): ParsedBib {
+  const source = stripBibComments(raw);
   const entries: CiteEntry[] = [];
   /** @string 定义的宏（键小写）：`#` 拼接时用得上，其它场合不参与 */
   const macros = new Map<string, string>();
   let bad = 0;
   let i = 0;
+
+  // 行起点表 + 二分：每条的起始行号是 O(log 行数)，长文献库上不是 O(n²)
+  const lineStarts: number[] = [0];
+  for (let k = 0; k < source.length; k += 1) if (source[k] === "\n") lineStarts.push(k + 1);
+  const lineOf = (index: number): number => {
+    let low = 0;
+    let high = lineStarts.length - 1;
+    while (low < high) {
+      const mid = (low + high + 1) >> 1;
+      if ((lineStarts[mid] ?? 0) <= index) low = mid;
+      else high = mid - 1;
+    }
+    return low + 1;
+  };
 
   while (i < source.length) {
     const at = source.indexOf("@", i);
@@ -85,6 +188,8 @@ export function parseBibtex(source: string): ParsedBib {
         eprint: scan.entry.eprint,
         // file 由扫描层（library.ts）填：解析器不知道自己在哪个文件里
         file: "",
+        // 1 基行号：未使用清单要「点一条跳到 .bib 的那一行」
+        line: lineOf(at),
       });
     }
     i = Math.max(scan.next, at + 1);
@@ -100,28 +205,28 @@ export function parseBibtex(source: string): ParsedBib {
 function scanEntry(source: string, at: number, macros: Map<string, string>): Scan {
   let i = skipSpace(source, at + 1);
   const type = readTypeWord(source, i);
-  if (type === null) return { kind: "bad", next: at + 1 };
+  if (type === null) return { kind: "bad", next: at + 1, type: "" };
   i = skipSpace(source, i + type.length);
 
   const open = source[i];
   if (open !== "{" && open !== "(") {
     // `@comment` 允许不戴括号：BibTeX 把这一行的剩余部分当注释
-    if (type === "comment") return { kind: "skip", next: endOfLine(source, i) };
-    return { kind: "bad", next: at + 1 };
+    if (type === "comment") return { kind: "skip", next: endOfLine(source, i), type };
+    return { kind: "bad", next: at + 1, type };
   }
   const close = open === "{" ? "}" : ")";
   const bodyStart = i + 1;
 
   if (type === "comment" || type === "preamble") {
     const end = skipBalanced(source, i, open, close);
-    return end < 0 ? { kind: "bad", next: bodyStart } : { kind: "skip", next: end };
+    return end < 0 ? { kind: "bad", next: bodyStart, type } : { kind: "skip", next: end, type };
   }
   if (type === "string") {
     const end = skipBalanced(source, i, open, close);
-    if (end < 0) return { kind: "bad", next: bodyStart };
+    if (end < 0) return { kind: "bad", next: bodyStart, type };
     // @string 的内容当作一条「只有字段」的条目解析：`@string{acm = "ACM"}`
     readMacroDefinition(source.slice(bodyStart, end - 1), macros);
-    return { kind: "skip", next: end };
+    return { kind: "skip", next: end, type };
   }
 
   // 普通条目：key 到 `,` 或收尾括号为止。key 里可以有冒号、斜杠、点（`doe:2020/a`）
@@ -130,12 +235,12 @@ function scanEntry(source: string, at: number, macros: Map<string, string>): Sca
   while (i < source.length && source[i] !== "," && source[i] !== close) {
     const ch = source[i];
     if (ch === "{" || ch === "}" || ch === "=" || ch === "\n" || ch === "\r") {
-      return { kind: "bad", next: i };
+      return { kind: "bad", next: i, type };
     }
     i += 1;
   }
   const key = source.slice(keyStart, i).trim();
-  if (key === "") return { kind: "bad", next: i };
+  if (key === "") return { kind: "bad", next: i, type };
 
   const fields = new Map<string, string>();
   if (source[i] === close) {
@@ -150,19 +255,19 @@ function scanEntry(source: string, at: number, macros: Map<string, string>): Sca
 
   while (true) {
     i = skipSpaceAndCommas(source, i);
-    if (i >= source.length) return { kind: "bad", next: source.length };
+    if (i >= source.length) return { kind: "bad", next: source.length, type };
     if (source[i] === close) return { kind: "entry", next: i + 1, entry: toRaw(type, key, fields) };
 
     FIELD_NAME.lastIndex = i;
     const name = FIELD_NAME.exec(source)?.[0] ?? null;
     // 停在这里而不是 +1：下一个 `@` 可能就在这一格（一条坏条目紧接着下一条）
-    if (name === null) return { kind: "bad", next: i };
+    if (name === null) return { kind: "bad", next: i, type };
     i = skipSpace(source, i + name.length);
-    if (source[i] !== "=") return { kind: "bad", next: i };
+    if (source[i] !== "=") return { kind: "bad", next: i, type };
     i = skipSpace(source, i + 1);
 
     const value = readValue(source, i, close, macros);
-    if (value === null) return { kind: "bad", next: i };
+    if (value === null) return { kind: "bad", next: i, type };
     i = value.next;
     const field = name.toLowerCase();
     // 同一条目里重复字段：先出现的算（BibTeX 自己的行为也是「第一条胜」）

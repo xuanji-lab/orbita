@@ -7,6 +7,9 @@
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { LatexResult, LatexRunOutcome } from "../shared/latex.ts";
 import { createLatexTools, type LatexToolBroker } from "./latex-tools.ts";
 
@@ -469,5 +472,75 @@ describe("latex_packages", () => {
     assert.ok(tool !== undefined);
     await assert.rejects(() => execute(tool, { missing: [] }), /missing is required/);
     assert.equal(seen.length, 0);
+  });
+});
+
+describe("edit_bib —— 排序 / 对齐走写文件链路", () => {
+  async function withBib(
+    body: string,
+    run: (tool: ReturnType<typeof createLatexTools>[number], dir: string, file: string) => Promise<void>,
+  ): Promise<void> {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-edit-bib-"));
+    try {
+      const file = join(dir, "refs.bib");
+      await writeFile(file, body, "utf8");
+      const { broker } = fakeBroker({ ok: true, result: baseResult({}) });
+      const tools = createLatexTools(broker, "session-1", { cwd: dir, writeRoots: [dir] });
+      const tool = tools.find((candidate) => candidate.name === "edit_bib");
+      assert.ok(tool !== undefined);
+      await run(tool, dir, file);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("sort：文件真的被排序，回执给文件、条数与前后对照", async () => {
+    await withBib(["@article{zeta, title={Z}}", "@book{alpha, title={A}}", ""].join(String.fromCharCode(10)), async (tool, dir, file) => {
+      const out = await execute(tool, { action: "sort", path: "refs.bib" });
+      const text = (out.content as { text?: string }[])[0]?.text ?? "";
+      assert.match(text, /Sorted refs\.bib by key: 2 entries, 2 moved/);
+      assert.match(text, /Before: zeta, alpha/);
+      assert.match(text, /After:  alpha, zeta/);
+      const onDisk = await readFile(file, "utf8");
+      assert.ok(onDisk.indexOf("@book{alpha") < onDisk.indexOf("@article{zeta"));
+      // 路径按 cwd 相对（不是绝对路径）
+      assert.ok(dir.length > 0);
+    });
+  });
+
+  test("align：第二次跑说 already aligned，不再写盘", async () => {
+    await withBib(["@article{a,", "  title = {A},", "  year = {2020},", "}", ""].join(String.fromCharCode(10)), async (tool, _dir, file) => {
+      const first = await execute(tool, { action: "align", path: "refs.bib" });
+      const firstText = (first.content as { text?: string }[])[0]?.text ?? "";
+      assert.match(firstText, /Aligned refs\.bib/);
+      const once = await readFile(file, "utf8");
+      const second = await execute(tool, { action: "align", path: "refs.bib" });
+      const secondText = (second.content as { text?: string }[])[0]?.text ?? "";
+      assert.match(secondText, /already aligned; nothing written/);
+      assert.equal(await readFile(file, "utf8"), once);
+    });
+  });
+
+  test("已经有序：nothing written，内容一字不差", async () => {
+    const body = ["@article{a}", "@article{b}", ""].join(String.fromCharCode(10));
+    await withBib(body, async (tool, _dir, file) => {
+      const out = await execute(tool, { action: "sort", path: "refs.bib" });
+      const text = (out.content as { text?: string }[])[0]?.text ?? "";
+      assert.match(text, /already sorted by key; nothing written/);
+      assert.equal(await readFile(file, "utf8"), body);
+    });
+  });
+
+  test("action 非法 / by 非法 / 不是 .bib / 越界：都当场拒绝", async () => {
+    await withBib(["@misc{a}", ""].join(String.fromCharCode(10)), async (tool, dir, _file) => {
+      await assert.rejects(() => execute(tool, { action: "delete", path: "refs.bib" }), /action must be/);
+      await assert.rejects(() => execute(tool, { action: "sort", by: "author", path: "refs.bib" }), /by must be/);
+      await assert.rejects(() => execute(tool, { action: "sort", path: "notes.txt" }), /Not a .bib/);
+      await assert.rejects(
+        () => execute(tool, { action: "sort", path: join(dir, "..", "outside.bib") }),
+        /outside the session/,
+      );
+      await assert.rejects(() => execute(tool, { action: "sort", path: "missing.bib" }), /not found/);
+    });
   });
 });

@@ -35,6 +35,8 @@ export interface CiteEntry {
   eprint: string | null;
   /** 来源文件：相对项目目录的路径，**正斜杠**（Windows 上也一样，界面直接显示） */
   file: string;
+  /** 条目在来源文件里的起始行（1 基）：未使用清单点一条要跳到 .bib 的那一行 */
+  line: number;
 }
 
 /**
@@ -113,7 +115,47 @@ export type CiteFileContext = LatexFileContext;
  * 读库的结局。`found:false` 不是错误（这个文件不属于 LaTeX 项目是文件面板的日常），
  * 白名单 / 读盘失败才 reject，调用方 catch 成一行错误。
  */
-export type CiteLibraryOutcome = { found: false } | { found: true; library: CiteLibrary };
+export type CiteLibraryOutcome =
+  | { found: false }
+  | { found: true; library: CiteLibrary; unused: CiteUnusedReport };
+
+/* ------------------------------ 未使用的文献 ------------------------------ */
+
+/**
+ * 一条「bib 里有、正文没引」的条目。**只读事实**：这一层不提供删除，删除要人确认
+ * （这轮不做）。key / title / year 直接来自文献库解析；file + line 用于点一条跳到
+ * .bib 的那一行。
+ */
+export interface CiteUnusedEntry {
+  key: string;
+  type: string;
+  title: string | null;
+  year: string | null;
+  /** 相对项目目录，正斜杠 */
+  file: string;
+  /** 1 基行号 */
+  line: number;
+}
+
+/**
+ * 一次「未使用」扫描的结局。**空清单的原因要能分开说**：
+ * 没有 .bib、当前 root 解析不出来、正文里有 `
+ocite{*}`（全部算引用）、或者
+ * 确实一条不剩——四种都给同一句「没有未使用的条目」会让人以为扫描坏了。
+ */
+export interface CiteUnusedReport {
+  entries: CiteUnusedEntry[];
+  /** 正文里出现 `\nocite{*}`：BibTeX 的语义是「全部引用」，此时 entries 必为空 */
+  nociteAll: boolean;
+  /** 当前 root 的包含闭包算出来了（false 时清单为空，界面说「认不出当前 root」） */
+  rootFound: boolean;
+  /** 扫过的 .tex 文件数（闭包内） */
+  texFiles: number;
+  /** 项目里的 .bib 文件数（0 = 没有找到 .bib） */
+  bibFiles: number;
+  /** 闭包 / 读取撞上限：清单可能不全，不阻塞任何东西 */
+  truncated: boolean;
+}
 
 /** 补全列表最多给多少条：几百条文献的弹层滚不动，输入更多字自然会缩小范围 */
 export const CITE_MAX_SUGGESTIONS = 60;

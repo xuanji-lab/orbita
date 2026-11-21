@@ -14,7 +14,7 @@
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
 import type { LatexIssue, LatexResolvedPackage } from "@shared/latex";
-import type { CiteVerification } from "@shared/cite";
+import type { CiteUnusedReport, CiteVerification } from "@shared/cite";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import {
   issueLocation,
@@ -25,7 +25,7 @@ import {
 } from "./latex-workbench.ts";
 
 /** 交给 agent 时的分类：决定引用里的前缀文案 */
-export type ProblemLevel = "error" | "warning" | "layout" | "package" | "pending" | "verify" | "lint";
+export type ProblemLevel = "error" | "warning" | "layout" | "package" | "pending" | "verify" | "lint" | "unused";
 
 /**
  * 引文核验面板的数据（`cite:verify` 的结局）。**只在用户点「核验」时联网**，
@@ -65,6 +65,8 @@ export function LatexProblems(props: {
   onJump: (item: ProblemItem) => void;
   /** 引文核验（项目里没有 .bib 时缺席） */
   verify?: VerifyView;
+  /** 「bib 里有、正文没引」的只读清单（不在 LaTeX 项目里时缺席） */
+  unused?: CiteUnusedReport;
   /** 把安装命令填进可见终端（不按回车） */
   onInstall: (command: string) => void;
 }) {
@@ -80,7 +82,8 @@ export function LatexProblems(props: {
     lintIssues.length +
     verifyRows.length;
   /** 没有编译问题也允许打开抽屉：核验文献常常发生在「编译全绿」之后、投稿之前 */
-  const openable = total > 0 || props.verify !== undefined;
+  const unusedCount = props.unused?.entries.length ?? 0;
+  const openable = total > 0 || props.verify !== undefined || props.unused !== undefined;
   const rows: { item: ProblemItem; pkg?: MissingPackage }[] = [
     // 引擎在等用户确认：排在缺包前面——它不是「缺了什么」，是「编译正卡在这里」
     ...groups.pending.map((item) => ({ item: toItem(item, "pending") })),
@@ -141,6 +144,12 @@ export function LatexProblems(props: {
                   {t.citeVerify.unverifiedCount(verifyRows.length)}
                 </span>
               )}
+              {unusedCount > 0 && (
+                <span className="latex-count">
+                  <Icon name="book-open" size={12} style={{ color: "var(--color-text-tertiary)" }} />
+                  {t.citeUnused.count(unusedCount)}
+                </span>
+              )}
               <Icon name={props.open ? "chevron-down" : "chevron-up"} size={12} />
             </>
           )}
@@ -150,6 +159,9 @@ export function LatexProblems(props: {
         <div className="latex-problem-list">
           {props.verify !== undefined && (
             <VerifySection view={props.verify} onHandToAgent={props.onHandToAgent} />
+          )}
+          {props.unused !== undefined && (
+            <UnusedSection report={props.unused} onJump={props.onJump} />
           )}
           {rows.map(({ item, pkg }) => {
             const resolution = pkg === undefined ? undefined : props.resolved.get(pkg.missing);
@@ -258,7 +270,8 @@ function toItem(issue: LatexIssue | MissingPackage, level: ProblemLevel): Proble
 
 function iconOf(
   level: ProblemLevel,
-): "octagon-x" | "triangle-alert" | "download" | "clock" | "info" | "shield-check" | "pencil-line" {
+): "octagon-x" | "triangle-alert" | "download" | "clock" | "info" | "shield-check" | "pencil-line" | "book-open" {
+  if (level === "unused") return "book-open";
   if (level === "verify") return "shield-check";
   if (level === "lint") return "pencil-line";
   if (level === "package") return "download";
@@ -273,6 +286,60 @@ function tintOf(level: ProblemLevel): string {
   if (level === "lint") return "var(--color-text-tertiary)";
   if (level === "warning" || level === "layout" || level === "pending" || level === "verify") return "var(--color-warning)";
   return "var(--color-text-tertiary)";
+}
+
+/**
+ * 未使用的文献：**bib 里有、当前 root 的正文没引**。只读——点一条跳到 .bib 的那一行，
+ * 不提供删除（删除要人确认，这轮不做）。空清单的原因分开说（没有 .bib / 认不出主文件 /
+ * 正文有全部引用标记 / 真的一条不剩），否则四种情况看起来都像「扫描坏了」。
+ */
+function UnusedSection(props: { report: CiteUnusedReport; onJump: (item: ProblemItem) => void }) {
+  const t = useT();
+  const { report } = props;
+  const empty =
+    report.bibFiles === 0
+      ? t.citeUnused.noBib
+      : !report.rootFound
+        ? t.citeUnused.noRoot
+        : report.nociteAll
+          ? t.citeUnused.nociteAll
+          : report.entries.length === 0
+            ? t.citeUnused.none
+            : null;
+  return (
+    <div className="latex-verify">
+      <div className="latex-verify-head">
+        <Icon name="book-open" size={13} style={{ color: "var(--color-text-secondary)" }} />
+        <span className="latex-verify-title">{t.citeUnused.title}</span>
+        <span className="latex-verify-count mono">{t.citeUnused.count(report.entries.length)}</span>
+        <span className="row-trailing latex-verify-count mono">{t.citeUnused.scanned(report.texFiles)}</span>
+      </div>
+      {empty !== null && <p className="latex-problem-note">{empty}</p>}
+      {report.truncated && <p className="latex-problem-note">{t.citeUnused.truncated}</p>}
+      {report.entries.map((entry) => {
+        const meta = [entry.year ?? "", `${entry.file}:${entry.line}`].filter((part) => part !== "").join(" · ");
+        const message = entry.title === null ? entry.key : `${entry.key} · ${entry.title}`;
+        const item: ProblemItem = { level: "unused", file: entry.file, line: entry.line, message };
+        return (
+          <div key={`unused:${entry.file}:${entry.line}:${entry.key}`} className="latex-problem" data-level="unused">
+            <Icon name="book-open" size={13} style={{ color: tintOf("unused") }} />
+            <button
+              type="button"
+              className="latex-problem-main"
+              title={t.citeUnused.jumpTip}
+              onClick={() => props.onJump(item)}
+            >
+              <span className="latex-problem-loc mono">{entry.key}</span>
+              <span className="latex-problem-msg">
+                <span>{entry.title ?? ""}</span>
+                <span className="latex-problem-note">{meta}</span>
+              </span>
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 /**

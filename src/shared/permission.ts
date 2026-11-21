@@ -113,7 +113,8 @@ export const READ_ONLY_TOOLS = [
   // 插件列表：读已装插件的名字与技能，不改任何东西
   "list_plugins",
   // LaTeX 缺包反查：kpsewhich / tlmgr search 只读本地 tlpdb，不装任何东西
-  // （写侧的 compile_latex 不在名单里：它写 build/，plan 档拒、manual 档问）
+  // （写侧的 compile_latex 不在名单里：它写 build/，plan 档拒、manual 档问；
+  //   edit_bib 同理：它改用户的 .bib，属于写操作）
   "latex_packages",
 ] as const;
 

@@ -10,9 +10,11 @@
  * 落定时 finalize()：算 +N −M 行级统计，**before == after 的路径整个丢弃**
  * （没有发生过真实改动，不该出现在轮尾卡片或回退清单里）。
  *
- * 跟踪面只认 write / edit——bash 改的文件我们看不见，也不假装看得见（确认框里
- * 明说「shell 命令改过的文件不会回退」）。单文件超过 SNAPSHOT_MAX_BYTES 或非
- * utf8：不存正文、标 unrecoverable（无法回退，但卡片上照常计数）。
+ * 跟踪面只认会**自己声明改哪个文件**的写工具：pi 的 write / edit，以及我们的
+ * edit_bib（.bib 排序 / 对齐，输入同样是 input.path）。bash 改的文件我们看不见，
+ * 也不假装看得见（确认框里明说「shell 命令改过的文件不会回退」）。单文件超过
+ * SNAPSHOT_MAX_BYTES 或非 utf8：不存正文、标 unrecoverable（无法回退，但卡片上
+ * 照常计数）。
  *
  * 纯注入设计：读盘经 read 回调注入，node --test 可以喂假文件系统。
  */
@@ -45,6 +47,9 @@ export const diskReader: PathReader = async (path) => {
  * 回退 / 撤销静默失效。resolveToCwd 经 patch 从包公开入口导出（见 patches/）。
  */
 export const resolveToolPath = resolveToCwd;
+
+/** 自己声明 `input.path` 的写工具：轮尾卡 / 撤销 / 审查 diff 共用这一张名单 */
+const TRACKED_WRITE_TOOLS = new Set(["write", "edit", "edit_bib"]);
 
 /** 字节 → 快照：NUL / 超 1MB / 解不了 utf8 / 读不了 → unrecoverable；不在 → absent。 */
 function toSnapshot(outcome: ReadOutcome): SnapshotPayload {
@@ -114,7 +119,7 @@ export class TurnFileTracker {
    * 读到的才是「这一批动手前」的内容。
    */
   async noteAllowed(toolCallId: string, toolName: string, input: unknown): Promise<void> {
-    if (toolName !== "write" && toolName !== "edit") return;
+    if (!TRACKED_WRITE_TOOLS.has(toolName)) return;
     const target = typeof input === "object" && input !== null ? (input as Record<string, unknown>)["path"] : null;
     if (typeof target !== "string" || target === "") return;
     const path = resolveToolPath(target, this.cwd);
