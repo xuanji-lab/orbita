@@ -1472,6 +1472,95 @@ html[data-pointer-drag] iframe {
   transform: translateX(-50%);
 }
 
+/* ===== PDF 选区批注（论文工作台 C1） ===== */
+.pdf-view {
+  position: relative;
+}
+.pdf-annot-float {
+  position: absolute;
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-default);
+  border-radius: 8px;
+  box-shadow: var(--shadow-popover);
+  z-index: 8;
+  font-size: var(--font-size-sm);
+}
+.pdf-annot-draft {
+  position: absolute;
+  width: 260px;
+  padding: var(--space-2);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-default);
+  border-radius: 8px;
+  box-shadow: var(--shadow-popover);
+  z-index: 9;
+}
+.pdf-annot-draft textarea {
+  width: 100%;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  background: var(--color-bg-app);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-default);
+  border-radius: 6px;
+  padding: var(--space-2);
+  resize: vertical;
+}
+.annot-draft-quote {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  margin-bottom: var(--space-2);
+}
+.annot-draft-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.pdf-annot-rail {
+  width: 220px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-panel);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.pdf-annot-rail-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.annot-empty {
+  padding: var(--space-3);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.annot-card {
+  margin: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  background: var(--color-bg-app);
+  font-size: var(--font-size-xs);
+}
+.annot-comment {
+  color: var(--color-text-primary);
+}
+.annot-meta {
+  color: var(--color-text-tertiary);
+  margin-top: 4px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
 /* ===== 侧栏 ===== */
 
 /*

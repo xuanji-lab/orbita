@@ -406,6 +406,23 @@ export interface LatexEnvCheckResult {
   items: LatexEnvCheckItem[];
 }
 
+/** PDF 选区批注（论文工作台）：选中文字 + 页码 + 页内坐标 + 意见。
+ * 存在项目目录 .orbita/annotations.json（原子写）；锚点用 quote + 页内坐标定位，
+ * SyncTeX 反查是可选增强（本机 TinyTeX 缺 synctex 时降级为 quote + 页码）。 */
+export interface PdfAnnotation {
+  id: string;
+  quote: string;
+  page: number;
+  /** 选区在页面上的归一化矩形（0–1，相对页宽页高）；多行时多段 */
+  rects: Array<{ x: number; y: number; w: number; h: number }>;
+  comment: string;
+  createdAt: number;
+}
+export interface PdfAnnotationStore {
+  version: 1;
+  annotations: PdfAnnotation[];
+}
+
 /**
  * 「指定位置」的结局：系统文件选择器 → 现验 `--version` → 通过才写进设置。
  * `invalid` 只说事实（这个文件不是能跑的 latexmk），文案由界面用自己的语言说。
@@ -546,6 +563,9 @@ export const latexChannels = {
   probe: "latex:probe",
   /** 设置页 LaTeX 面板的环境自检（synctex / chktex / pandoc 聚合，latexmk 走 latex:probe） */
   envCheck: "latex:env-check",
+  /** PDF 批注的读与写（项目目录 .orbita/annotations.json，原子写） */
+  annotationsGet: "latex:annotations-get",
+  annotationsPut: "latex:annotations-put",
   /** 当前文件所属的 LaTeX 项目（找不到就是 found:false） */
   project: "latex:project",
   /** 编一次；结局是 LatexRunOutcome（并发被拒也走 ok:false） */

@@ -56,6 +56,8 @@ import {
   type SourceSpan,
 } from "../../../../shared/pdf-quote.ts";
 import type { FileListRequest } from "@shared/files";
+import type { LatexFileContext } from "@shared/latex";
+import { PdfAnnotations } from "./PdfAnnotations";
 import type { PdfCitation } from "@shared/pdf-quote";
 import type { LatexSyncRect } from "@shared/latex";
 
@@ -148,6 +150,10 @@ export function PdfView(props: {
    * 缺席 = 这份 PDF 不属于 LaTeX 项目（不接反查，双击保持选中文字的本意）。
    */
   onLocate?: (point: { page: number; x: number; y: number }) => void;
+  /** 选中文字引用到对话（复用会话的 quote chip） */
+  onQuote?: (text: string) => void;
+  /** 批注存取的项目上下文（.orbita/annotations.json）；null = 不是 LaTeX 项目，不出批注栏 */
+  annotationCtx?: LatexFileContext | null;
 }) {
   const t = useT();
   const { request, jump } = props;
@@ -689,6 +695,9 @@ export function PdfView(props: {
             );
           })}
         </div>
+        {props.annotationCtx != null && (
+          <PdfAnnotations containerRef={scrollRef} ctx={props.annotationCtx} onQuote={props.onQuote} />
+        )}
       </div>
     </div>
   );

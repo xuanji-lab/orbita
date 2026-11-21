@@ -12,6 +12,7 @@ import {
   type LatexConfigureOutcome,
   type LatexConfigureRequest,
   type LatexEnvCheckResult,
+  type PdfAnnotationStore,
   type LatexFileContext,
   type LatexForwardOutcome,
   type LatexForwardRequest,
@@ -35,6 +36,10 @@ export const latexApi = {
   probe: (req?: LatexProbeRequest): Promise<LatexProbeResult> =>
     ipcRenderer.invoke(latexChannels.probe, req ?? {}),
   envCheck: (): Promise<LatexEnvCheckResult> => ipcRenderer.invoke(latexChannels.envCheck),
+  annotationsGet: (req: LatexFileContext): Promise<PdfAnnotationStore> =>
+    ipcRenderer.invoke(latexChannels.annotationsGet, req),
+  annotationsPut: (req: LatexFileContext & { store: PdfAnnotationStore }): Promise<{ ok: boolean; path?: string; error?: string }> =>
+    ipcRenderer.invoke(latexChannels.annotationsPut, req),
   /** 「指定位置」：系统文件选择器，现验通过才写进设置 */
   locate: (): Promise<LatexLocateOutcome> => ipcRenderer.invoke(latexChannels.locate),
   /** 当前文件所属的项目；不属于任何 LaTeX 项目时 found:false */
