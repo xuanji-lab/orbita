@@ -255,6 +255,21 @@ describe("KernelSessions：一轮的事件与旧内核同形", () => {
     assert.equal(r.settled[0]?.result.ok, true);
   });
 
+  it("tool_search：投影成一条普通的工具卡（名字、参数、结果）；同一批里先搜后调的延迟工具拿到「还没加载」的回执，整批不卡住", async () => {
+    const cwd = await tempDir();
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("tool_search", { query: "navigate web page" }), fauxToolCall("browser_navigate", { url: "https://example.com" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("好"),
+    ]);
+    const r = await rig();
+    await r.sessions.handle("s1", submit(cwd, { text: "打开网页" }));
+    await r.until(idle());
+    const tools = r.transcript().filter((item): item is Extract<TranscriptItem, { role: "tool" }> => item.role === "tool");
+    assert.deepEqual(tools.map((item) => [item.toolName, item.status]), [["tool_search", "complete"], ["browser_navigate", "error"]]);
+    assert.match(JSON.stringify(tools[0]), /Loaded \d+ tools?[\s\S]*browser_navigate/);
+    assert.match(JSON.stringify(tools[1]), /is not loaded yet\. Call tool_search/);
+  });
+
   it("轮尾落盘的上下文占用与重读整份上下文算出的相同：正常答完（取最后那条回答）、停在工具中途（回答后面还有工具结果，照读）", async () => {
     const cwd = await tempDir();
     const finalUsage = async (r: Rig, sessionId: string) => {

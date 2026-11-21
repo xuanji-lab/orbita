@@ -28,6 +28,7 @@ import {
   type EventSources,
 } from "./turn-events.ts";
 import { splitAtLastUser } from "./transcript-split.ts";
+import { en } from "../../messages-en.ts";
 import { zh } from "../../messages-zh.ts";
 
 const user = (id: string, timestamp: number): TranscriptItem =>
@@ -372,6 +373,9 @@ describe("processVerb：过程明细左列不出现英文工具名", () => {
     assert.equal(processVerb("read", "skill", words).verb, "读技能");
     // 主智能体读小卡：不露 work_cards 这个工具名
     assert.deepEqual(processVerb("work_cards", "work_cards", words), { verb: "看了手上的活", raw: null });
+    // 加载暂未提供的工具：中英文都有动词，不露 tool_search 这个名字
+    assert.deepEqual(processVerb("tool_search", "tool_search", words), { verb: "找了工具", raw: null });
+    assert.deepEqual(processVerb("tool_search", "tool_search", en.chat.procVerb), { verb: "Looked up tools", raw: null });
   });
   test("外接工具写所属服务名 +「工具」，原名放悬停；对不上的归「用工具」", () => {
     assert.deepEqual(processVerb("mcp__qgis__render_map", "mcp", words), { verb: "qgis 工具", raw: "mcp__qgis__render_map" });

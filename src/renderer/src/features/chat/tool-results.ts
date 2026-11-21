@@ -1702,6 +1702,9 @@ export function toolCallSummary(toolName: string, input: unknown): string | null
       const names = value.filter((item): item is string => typeof item === "string" && item !== "");
       return names.length > 0 ? names.map((name) => name.split(/[\\/]/).pop() ?? name).join(" ") : null;
     }
+    // 加载暂未提供的工具：摘要就是它要找的那句话
+    case "tool_search":
+      return str("query");
     case "read_task":
     // 子会话：delegate 的入参同样有 task 字段——派出卡的任务预览复用这条摘要
     case "delegate":

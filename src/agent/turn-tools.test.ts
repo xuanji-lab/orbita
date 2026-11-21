@@ -176,6 +176,23 @@ describe("turn-tools：能力目录的原料（选择后的非空分组）", () 
     }
   });
 
+  it("延迟的组：只有浏览器 / 文档幻灯片 / 终端 / 自动化 / 插件 / store / MCP 七组；核心组（读写改跑命令之外的计划、通道、记忆、读任务、PDF / Word、看图）常驻", () => {
+    const picked = selection(submit({ ...ALL_ON }), [{ name: "mcp__zotero__search" }]);
+    assert.deepEqual(picked.groups.filter((group) => group.deferred === true).map((group) => group.id), ["mcp", "store", "plugins", "browser", "docs-slides", "terminal", "automation"]);
+    assert.deepEqual(picked.groups.filter((group) => group.deferred !== true).map((group) => group.id), ["pdf-docx", "image", "plan", "tasks", "channel", "memory"]);
+    // deferred 工具名集合 == 延迟组里被选中的全部工具，且是 tools 的子集
+    assert.deepEqual([...picked.deferred].sort(), picked.groups.filter((group) => group.deferred === true).flatMap((group) => group.tools).sort());
+    assert.ok([...picked.deferred].every((name) => picked.tools.some((tool) => tool.name === name)));
+    for (const name of ["update_plan", "update_goal", "delegate", "memory_search", "read_task", "read_pdf", "read_docx", "show_image"]) assert.ok(!picked.deferred.has(name), name);
+  });
+
+  it("能力集挑过之后才算延迟：['browser'] 只有浏览器；[] 与纯聊天没有延迟的工具（tool_search 也就不会装）", () => {
+    assert.deepEqual([...selection(submit({ directories: CHILD, capabilities: ["browser"] }), [{ name: "mcp__a__b" }]).deferred].every((name) => name.startsWith("browser_") || name === "request_user_action"), true);
+    assert.equal(selection(submit({ directories: CHILD, capabilities: [] }), [{ name: "mcp__a__b" }]).deferred.size, 0);
+    assert.equal(selection(submit({ directories: CHILD, capabilities: ["none"] }), [{ name: "mcp__a__b" }]).deferred.size, 0);
+    assert.equal(selection(submit({ directories: CHILD, capabilities: ["pdf-docx", "image", "tasks"] })).deferred.size, 0);
+  });
+
   it("根会话全开：base 里的计划 / 插件 / 通道 / 记忆 / 自动化各是一组，MCP 单独一组", () => {
     assert.deepEqual(ids(submit({ ...ALL_ON }), [{ name: "mcp__zotero__search" }]), [
       "mcp", "pdf-docx", "image", "plan", "store", "plugins", "tasks", "browser", "docs-slides", "terminal", "channel", "memory", "automation",
@@ -217,7 +234,7 @@ describe("turn-tools：能力目录的原料（选择后的非空分组）", () 
     assert.match(two, /servers: newserver, zotero\)/);
   });
 
-  it("最坏情形的真实目录（主智能体、全开、四十台名字很长的 MCP、skill 都在）不超 1500 字符，关键 Orbita 自有组一个不少", () => {
+  it("最坏情形的真实目录（主智能体、全开、四十台名字很长的 MCP、skill 都在）不超目录预算（1800 字符），关键 Orbita 自有组一个不少", () => {
     const mcp = Array.from({ length: 40 }, (_, i) => ({ name: `mcp__${"s".repeat(55)}${String(i).padStart(2, "0")}__t` }));
     const skills = ["reading", "browser", "docs", "slides", "terminal", "plugin-creator", "automation", "skill-creator"];
     const picked = selection(submit({ ...ALL_ON, mainAgent: true }), mcp);

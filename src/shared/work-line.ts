@@ -96,6 +96,8 @@ export function activityOfTool(name: string): WorkActivity {
   if (name === "bash" || name.startsWith("terminal_")) return "command";
   if (name === "read" || name === "read_pdf" || name === "read_docx" || name === "read_task") return "read";
   if (name === "edit" || name === "write" || name.startsWith("doc_") || name.startsWith("slides_")) return "edit";
+  // tool_search 是在找工具、不是上网搜索：别被下一行按名字里的 search 归成「在网上查」
+  if (name === "tool_search") return "work";
   if (name.startsWith("browser_") || name.includes("search")) return "web";
   if (name === "delegate" || name === "reply_subsession") return "delegate";
   return "work";

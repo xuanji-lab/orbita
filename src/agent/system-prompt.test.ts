@@ -8,6 +8,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { joinSystemPrompt, orbitaSystemSegments, type SystemPromptInput } from "./system-prompt.ts";
 import type { TurnDirectories } from "../shared/agent-ipc.ts";
+import type { CatalogGroup } from "./capability-catalog.ts";
 
 const dirs = (patch: Partial<TurnDirectories> = {}): TurnDirectories => ({
   attached: [],
@@ -224,6 +225,18 @@ describe("orbitaSystemSegments —— 能力目录段", () => {
       joinSystemPrompt(orbitaSystemSegments(input())),
     );
     assert.ok(!names({ role: "child", capabilities: { list: ["none"], missing: [] }, capabilityCatalog: catalog }).includes("capability-catalog"));
+  });
+
+  test("延迟的组进目录的「Not loaded yet」一段；自动化的长任务规矩仍在提示里，并讲明工具要先 tool_search 加载", () => {
+    const mixed: CatalogGroup[] = [
+      { id: "browser", when: "read web pages", skills: ["browser"], deferred: true, tools: ["browser_navigate", "browser_click"] },
+      { id: "plan", when: "keep a plan", tools: ["update_plan"] },
+    ];
+    const text = orbitaSystemSegments(input({ capabilityCatalog: { groups: mixed, skills: ["browser"] } })).find((segment) => segment.name === "capability-catalog")?.text ?? "";
+    assert.match(text, /^- plan \(update_plan\): keep a plan\nNot loaded yet:.*\n- browser \(browser_navigate \+1\): read web pages \(skill: browser\)\n<\/capability-catalog>$/m);
+    const long = orbitaSystemSegments(input({ longTaskAutomationGuideline: true })).find((segment) => segment.name === "long-task-automation")?.text ?? "";
+    assert.match(long, /load them with tool_search first/);
+    assert.match(long, /this_session automation/);
   });
 
   test("同样的输入相邻两次渲染逐字节相同", () => {

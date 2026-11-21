@@ -53,6 +53,27 @@ describe("capability-catalog：格式化", () => {
     assert.ok(many.length < few.length + 120, `${many.length} vs ${few.length}`);
   });
 
+  it("延迟的组单列在「Not loaded yet」之下，常驻的在上面；没有延迟的组时没有这一句，与以前逐字节相同", () => {
+    const groups = [
+      group("browser", ["browser_navigate", "browser_click"], { deferred: true, skills: ["browser"] }),
+      group("plan", ["update_plan"]),
+      group("mcp", ["mcp__a__x"], { deferred: true }),
+      group("memory", ["memory_search"]),
+    ];
+    const text = formatCapabilityCatalog(groups, ["browser"]);
+    const [ready, later] = text.split("Not loaded yet:");
+    assert.deepEqual(ready?.split("\n").filter((line) => line.startsWith("- ")), ["- plan (update_plan): when plan", "- memory (memory_search): when memory"]);
+    assert.deepEqual(later?.split("\n").filter((line) => line.startsWith("- ")), ["- browser (browser_navigate +1): when browser (skill: browser)", "- mcp (servers: a): when mcp"]);
+    assert.match(text, /call tool_search with a short description of the task or a tool name/);
+    assert.match(text, /It searches only these groups:/);
+    // 全是常驻：没有那一句，也不提 tool_search
+    const plain = formatCapabilityCatalog(groups.filter((entry) => entry.deferred !== true), []);
+    assert.doesNotMatch(plain, /tool_search|Not loaded yet/);
+    // 能力集收掉的组不在传进来的分组里，目录就不会提它（["browser"] 只有 browser 一组延迟）
+    const only = formatCapabilityCatalog([group("plan", ["update_plan"]), group("browser", ["browser_navigate"], { deferred: true })], []);
+    assert.doesNotMatch(only, /slides|terminal|mcp/);
+  });
+
   it("同样的输入逐字节相同", () => {
     const groups = [group("mcp", ["mcp__b__x", "mcp__a__y"]), group("plan", ["update_plan"])];
     assert.equal(formatCapabilityCatalog(groups, ["x"]), formatCapabilityCatalog(structuredClone(groups), ["x"]));
