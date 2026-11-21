@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { matchesSessionQuery, openRowsLimit, workspaceRows } from "./workspace-rows.ts";
+import { matchesSessionQuery, openRowsLimit, workspaceRowCurrent, workspaceRowFocus, workspaceRows } from "./workspace-rows.ts";
 import type { SessionMeta } from "../../../shared/session.ts";
 import type { SessionRunState } from "../features/notify/completion-notice.ts";
 
@@ -101,4 +101,28 @@ describe("openRowsLimit —— 展开的工作区最多露 6 行，等你的永�
   test("平常最多 6 行", () => assert.equal(openRowsLimit(list(2, 6), stateOf, false), 6));
   test("等你的多于 6 件就全露", () => assert.equal(openRowsLimit(list(8, 2), stateOf, false), 8));
   test("点过「还有 N 件」= 全露", () => assert.equal(openRowsLimit(list(2, 6), stateOf, true), 8));
+});
+
+describe("工作区行与主区的关系（高亮与读屏）", () => {
+  const main = meta("main", { role: "main" });
+  const job = meta("job", { parentId: "main" });
+  const other = meta("other");
+  const all = [main, job, other];
+
+  test("正跟主智能体说话：main，读屏说当前页", () => {
+    assert.equal(workspaceRowFocus(main, "main", all, false), "main");
+    assert.equal(workspaceRowCurrent("main"), "page");
+  });
+
+  test("正看它派出的一件活：行亮着（job），但不是当前页", () => {
+    assert.equal(workspaceRowFocus(main, "job", all, false), "job");
+    assert.equal(workspaceRowCurrent("job"), undefined);
+  });
+
+  test("看别的会话 / 首页：不亮；主智能体还没说过话的空态算 main", () => {
+    assert.equal(workspaceRowFocus(main, "other", all, false), null);
+    assert.equal(workspaceRowFocus(main, null, all, false), null);
+    assert.equal(workspaceRowFocus(null, null, all, true), "main");
+    assert.equal(workspaceRowCurrent(null), undefined);
+  });
 });

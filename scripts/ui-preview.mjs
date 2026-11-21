@@ -130,6 +130,10 @@ try {
   await clickText("Compare session navigation", ".tp-waiting .tp-job-name");
   await waitFor(`[...document.querySelectorAll(".cap-sess button")].some((item) => item.textContent?.trim() === "Research atlas")`, "父会话面包屑");
   check("子 Session 真实转录已加载", (await evaluate(`document.body.innerText.includes("Replacing the main conversation")`)) === true);
+  check(
+    "看一件活时所属工作区行亮着、但读屏不说当前页",
+    (await evaluate(`(() => { const name = [...document.querySelectorAll(".workspace-group button")].find((item) => item.textContent?.trim() === "Research atlas"); return name?.closest(".option-row")?.getAttribute("data-active") === "true" && !name.hasAttribute("aria-current"); })()`)) === true,
+  );
   await shot("03-typical-child-light");
   await clickText("Research atlas", ".cap-sess button");
   await waitFor(`document.querySelector("textarea.composer-input")?.placeholder.includes("Hand it something") === true`, "返回 Boss");

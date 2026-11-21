@@ -39,7 +39,7 @@ import { chipCompactAt, nextCompactLevel } from "./filter-row-compact.ts";
 import { ageCounts, filterByAge } from "./sidebar-age.ts";
 import { sessionAgeLabel } from "./relative-time.ts";
 import { useMinuteTick } from "./use-minute-tick.ts";
-import { matchesSessionQuery, openRowsLimit, workspaceRows } from "./workspace-rows.ts";
+import { matchesSessionQuery, openRowsLimit, workspaceRowCurrent, workspaceRowFocus, workspaceRows, type WorkspaceRowFocus } from "./workspace-rows.ts";
 import { OPEN_EARLIER_EVENT } from "../features/context/main-progress.ts";
 import { ATTENTION_WARMUP_MS, attentionItems, freshAttention } from "./attention.ts";
 import { useChannelStatuses } from "../features/chat/useChannelSummaries.ts";
@@ -478,15 +478,10 @@ export function Sidebar(props: {
     setEarlierFor(null);
     session.openMainAgent(workspace);
   };
-  /**
-   * 这个工作区的主智能体此刻正打开着（盖着别的面时谁也不高亮）。点进它派的一件活时也亮着这一行：
-   * 侧栏不再列活的子行（2026-11-21），不亮就看不出自己在哪个工作区里；回父走顶栏面包屑或点这一行。
-   */
-  const mainActive = (workspaceId: string): boolean => {
-    if (props.overlay !== null) return false;
-    const main = rowsOf.get(workspaceId)?.main ?? null;
-    if (main !== null && openId !== null && (main.id === openId || session.sessions.some((meta) => meta.id === openId && meta.parentId === main.id))) return true;
-    return session.mainPending?.workspaceId === workspaceId;
+  /** 这一行与主区的关系（workspace-rows.ts 的 workspaceRowFocus）；盖着别的面时谁也不亮 */
+  const mainFocus = (workspaceId: string): WorkspaceRowFocus => {
+    if (props.overlay !== null) return null;
+    return workspaceRowFocus(rowsOf.get(workspaceId)?.main ?? null, openId, session.sessions, session.mainPending?.workspaceId === workspaceId);
   };
 
   /**
@@ -1021,7 +1016,7 @@ export function Sidebar(props: {
                       workspace={workspace}
                       states={workspaceStates(workspace.id)}
                       earlierCount={earlierOf(workspace.id).length}
-                      mainActive={mainActive(workspace.id)}
+                      focus={mainFocus(workspace.id)}
                       onOpenMain={() => openMain(workspace)}
                       onOpenEarlier={() => {
                         setEarlierQuery("");
@@ -1146,8 +1141,8 @@ function WorkspaceGroup(props: {
   states: readonly SessionRunState[];
   /** 「以前的会话」那一页有几条；0 = 不出悬停的入口 */
   earlierCount: number;
-  /** 这个工作区的主智能体此刻正打开着：组头那一行高亮 */
-  mainActive: boolean;
+  /** 这一行与主区的关系：main / job 都高亮整行，读屏只在 main 时说当前页（workspaceRowCurrent） */
+  focus: WorkspaceRowFocus;
   /** 点组头那一行（名字或图标）= 跟它的主智能体说话 */
   onOpenMain: () => void;
   /** 悬停的「以前的会话」：开侧栏那一页 */
@@ -1189,7 +1184,7 @@ function WorkspaceGroup(props: {
       */}
       <div
         className="option-row"
-        data-active={props.mainActive || undefined}
+        data-active={props.focus !== null || undefined}
         onClick={(event) => {
           // 只认点在行身空白处；行里的按钮各管各的
           if (event.target === event.currentTarget) props.onOpenMain();
@@ -1226,7 +1221,7 @@ function WorkspaceGroup(props: {
           <button
             type="button"
             title={`${t.sidebar.openMainAgentTip(props.workspace.name)} · ${t.sidebar.workspacePathTip(props.workspace.path)}`}
-            aria-current={props.mainActive ? "page" : undefined}
+            aria-current={workspaceRowCurrent(props.focus)}
             onClick={props.onOpenMain}
             onDoubleClick={() => setEditing(props.workspace.name)}
             style={{
