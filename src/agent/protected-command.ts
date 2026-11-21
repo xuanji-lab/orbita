@@ -38,29 +38,68 @@
  */
 import { homedir } from "node:os";
 import { realpathSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, win32 } from "node:path";
+import { msysDrivePath } from "./tool-paths.ts";
 
 export interface CommandGuardEnv {
   home: string;
   env: Readonly<Record<string, string | undefined>>;
   /** 测试注入：路径的真实位置（默认跟符号链接走，不存在的部分接在最深的已存在父目录后） */
   realpath?: (path: string) => string;
+  /** 默认 process.platform；测试注入。只有 win32 才把 Git Bash / UNC / `\\?\` 等写法折成盘符路径再比（见 windowsPathForm） */
+  platform?: NodeJS.Platform;
 }
 
 export function defaultGuardEnv(): CommandGuardEnv {
-  return { home: homedir(), env: process.env };
+  return { home: homedir(), env: process.env, platform: process.platform };
+}
+
+/**
+ * Windows 上「同一个文件的别种写法」折成盘符写法 `c:/x`（输入是反斜杠已转成正斜杠的路径词）。只给闸门比对用。
+ *
+ * 根因（2026-11-17 Windows 真机验收）：闸门的比对只把反斜杠转正斜杠、小写，受保护目录是 `c:/…` 形式，
+ * Git Bash 里 `rm -f /c/…/sessions/x.jsonl` 的 `/c/…` 对不上——当成了根目录下一个叫 `c` 的目录，放行，文件被删。
+ * read / write / edit 那边早就用 tool-paths.ts 的 msysDrivePath 折算，这里用同一个函数，不再手抄。
+ *
+ * 折的写法：
+ * - `/c/x`、`/mnt/c/x`、`/cygdrive/c/x`、`/proc/cygdrive/c/x`（msysDrivePath）；
+ * - `//c/x`：MSYS 里是主机名为 `c` 的 UNC，不到 C 盘；仍当成 C 盘算（多拦一个单字母主机名的网络路径，安全向）；
+ * - `\\?\C:\x`、`\\.\C:\x`（及正斜杠版 `//?/C:/x`）：去掉设备前缀；
+ * - 管理共享 `\\<任意主机>\c$\x`（localhost、127.0.0.1、本机名……）与 `\\?\UNC\<主机>\c$\x`：折成 `c:/x`。
+ *   不认主机是不是本机——别的机器上同路径的文件也拦，安全向。
+ * 不折：裸的 `/c`（后面没有 `/`）——在 Windows 命令里它几乎总是开关（`cmd /c`、`dir /s`），折成 C 盘根会把每条
+ * `cmd /c …` 都当成「对数据目录的上级动手」拒掉。要指 C 盘根写 `/c/` 会折。
+ * 折不了（纯字符串做不到）：8.3 短文件名、`\\?\Volume{…}\`、`\\?\GLOBALROOT\Device\…`、subst / 映射盘 / 联接点——
+ * 已存在的路径靠 realpathLoose 在 Windows 上走 realpathSync.native（长名、跟联接点）。
+ */
+export function windowsPathForm(word: string): string {
+  let text = word.replace(/^\/\/[?.]\/unc\//i, "//").replace(/^\/\/[?.]\/(?=[a-z]:(?:\/|$))/i, "");
+  const share = /^\/\/[^/]+\/([a-z])\$(\/.*)?$/i.exec(text);
+  if (share !== null) return `${share[1] ?? ""}:${share[2] ?? "/"}`;
+  if (/^\/\/[a-z](?:\/|$)/i.test(text)) text = text.slice(1);
+  if (/^\/[a-z]$/i.test(text)) return text;
+  const native = msysDrivePath(text);
+  return native === text ? text : native.replaceAll("\\", "/");
+}
+
+/** 一段命令文本里以 `/` 开头的词逐个过 windowsPathForm（解释器代码、重定向、`of=/c/…` 这类不走逐词解析的位置） */
+export function windowsTextForms(text: string): string {
+  return text.replaceAll(/(^|[\s\u0000=,;&|()<>])(\/[^\s=,;&|()<>]*)/g, (_m: string, lead: string, path: string) => lead + windowsPathForm(path));
 }
 
 /**
  * 路径的真实位置：跟符号链接走；文件还不存在时，对「已存在的最深一级父目录」取真实路径再接上剩下的名字。
+ * Windows 上用 realpathSync.native（GetFinalPathNameByHandle）：JS 版只逐级 lstat，不把 8.3 短名（`ORBITA~1`）展开成长名，
+ * 闸门就认不出 `C:\Users\U\AppData\Roaming\ORBITA~1\sessions\x` 是受保护目录。posix 上照旧用 JS 版，行为不变。
  */
 export function realpathLoose(path: string): string {
   const start = resolve(path);
+  const realpathOf = process.platform === "win32" ? realpathSync.native : realpathSync;
   let current = start;
   const tail: string[] = [];
   for (;;) {
     try {
-      const real = realpathSync(current);
+      const real = realpathOf(current);
       return tail.length === 0 ? real : join(real, ...tail.reverse());
     } catch {
       const parent = dirname(current);
@@ -155,8 +194,11 @@ function expandTilde(text: string, guard: CommandGuardEnv): string {
  */
 export function tildeHome(user: string, guard: CommandGuardEnv): string {
   if (user === "") return guard.home;
-  const own = [basename(guard.home), guard.env["USER"], guard.env["LOGNAME"]];
-  return own.includes(user) ? guard.home : join(dirname(guard.home), user);
+  // Windows：家目录是 `C:\Users\<名>`，用户名在 USERNAME 里（Git Bash 的 `~<名>` 按它认本人）
+  const win = (guard.platform ?? process.platform) === "win32";
+  const own = [basename(guard.home), guard.env["USER"], guard.env["LOGNAME"], ...(win ? [win32.basename(guard.home), guard.env["USERNAME"]] : [])];
+  if (own.includes(user)) return guard.home;
+  return win ? win32.join(win32.dirname(guard.home), user) : join(dirname(guard.home), user);
 }
 
 /** 找第一个带逗号的 `{a,b}` 组（没有逗号的 `{}` 是字面量，跳过） */
@@ -285,14 +327,18 @@ function normalizeVariants(command: string, guard: CommandGuardEnv, knownSpacePa
   const assignedHome = vars.get("HOME");
   const homes = assignedHome !== undefined && assignedHome !== "" && assignedHome !== guard.home ? [guard.home, assignedHome] : [guard.home];
   const variants: Variant[] = [];
+  const win = (guard.platform ?? process.platform) === "win32";
+  const push = (text: string): void => {
+    variants.push({ text: win ? windowsTextForms(text) : text, literal });
+  };
   for (const home of homes) {
     const expanded = encodeQuotedSpaces(expandTilde(expandVars(decoded, vars, guard), { ...guard, home }), knownSpacePaths);
     const loosened = expanded.replaceAll(/["']/g, "");
     const hasBackslash = loosened.includes("\\");
     for (const brace of expandBraces(loosened)) {
       // 反斜杠的两种读法：Windows 路径分隔符（`orbita\automations.json`）与 posix 转义（`au\tomations`）
-      variants.push({ text: brace.replaceAll("\\", "/"), literal });
-      if (hasBackslash) variants.push({ text: brace.replaceAll("\\", ""), literal });
+      push(brace.replaceAll("\\", "/"));
+      if (hasBackslash) push(brace.replaceAll("\\", ""));
     }
   }
   return variants;
@@ -357,6 +403,8 @@ function ancestorsOf(path: string): string[] {
   let current = parentOf(path);
   while (current !== "") {
     out.push(current);
+    // 盘符根两种写法都算上级（`rm -rf C:/` 折叠后是 `c:/`，不是 `c:`）；posix 路径没有盘符，不受影响
+    if (/^[a-z]:$/.test(current)) out.push(`${current}/`);
     if (current === "/" || /^[a-z]:$/.test(current)) break;
     current = parentOf(current);
   }
@@ -813,9 +861,34 @@ class Judge {
     return { kind: "file", file: rel.file ?? this.scope.files[0] ?? "" };
   }
 
+  private get win(): boolean {
+    return (this.guard.platform ?? process.platform) === "win32";
+  }
+
+  /** win32：路径词的 Git Bash / UNC / `\\?\` 写法折成盘符写法（见 windowsPathForm）；其余平台原样 */
+  private pathForm(word: string): string {
+    return this.win ? windowsPathForm(word) : word;
+  }
+
+  /**
+   * 本机原生路径（cwd、家目录）换成闸门内部的正斜杠写法。win32 上 cwd 是 `C:\Users\u\proj`：不转的话 collapseDots
+   * 只认 `/`，`../..` 会把整段 `\Users\u\proj` 当成一级弹掉，得出 `C:../AppData/…` 这种对不上任何东西的相对路径（漏拦）。
+   * posix 上反斜杠是合法文件名字符，不动。
+   */
+  nativeDir(path: string): string {
+    return collapseDots(this.win ? windowsPathForm(path.replaceAll("\\", "/")) : path);
+  }
+
+  /** 去掉词尾的 `/`；win32 上盘符根 `C:/` 保留斜杠（去掉就成了「C 盘上的当前目录」`C:`，对不上盘符根） */
+  private trimSlash(word: string): string {
+    if (word.length <= 1) return word;
+    if (this.win && /^[A-Za-z]:\/+$/.test(word)) return `${word.slice(0, 2)}/`;
+    return word.replace(/\/+$/, "") || "/";
+  }
+
   /** 当前目录 + 一个词 → 绝对路径（保留大小写）；current 未知且词是相对的 = null */
   private absoluteOf(word: string, current: string | null): string | null {
-    const text = word.replaceAll("\u0000", " ");
+    const text = this.pathForm(word.replaceAll("\u0000", " "));
     if (ABSOLUTE.test(text)) return collapseDots(text);
     if (current === null) return null;
     return collapseDots(`${current}/${text}`);
@@ -823,15 +896,16 @@ class Judge {
 
   /** 非通配、无变量的词 → 绝对路径；其余 null */
   private plainAbsolute(rawWord: string, current: string | null): string | null {
-    const word = rawWord.replace(/^[A-Za-z_][A-Za-z0-9_]*=/, "").replaceAll("\u0000", " ");
+    const word = this.pathForm(rawWord.replace(/^[A-Za-z_][A-Za-z0-9_]*=/, "").replaceAll("\u0000", " "));
     if (word === "" || /[$`*?[]/.test(word)) return null;
-    return this.absoluteOf(word.length > 1 ? word.replace(/\/+$/, "") || "/" : word, current);
+    return this.absoluteOf(this.trimSlash(word), current);
   }
 
   relateWord(rawWord: string, current: string | null): Rel {
-    const word = rawWord.replace(/^[A-Za-z_][A-Za-z0-9_]*=/, "").replaceAll("\u0000", " ");
+    // 先折 Windows 写法：`//?/C:/x` 的 `?`、`//h/c$/x` 的 `$` 不是通配与变量
+    const word = this.pathForm(rawWord.replace(/^[A-Za-z_][A-Za-z0-9_]*=/, "").replaceAll("\u0000", " "));
     if (word === "" || /[$`]/.test(word)) return { kind: "unresolved" };
-    const cleaned = word.length > 1 ? word.replace(/\/+$/, "") || "/" : word;
+    const cleaned = this.trimSlash(word);
     const globAt = cleaned.search(/[*?[]/);
     if (globAt !== -1) {
       const slash = cleaned.lastIndexOf("/", globAt);
@@ -910,7 +984,7 @@ class Judge {
       : -1;
 
     // 第一遍：逐段分析（顺着 cd 更新当前目录）；第二遍：管道与命令替换里「把列出来的名字交给别的命令」
-    const state = { current: collapseDots(cwd) as string | null };
+    const state = { current: this.nativeDir(cwd) as string | null };
     const analyses: SegmentAnalysis[] = [];
     for (const [index, segment] of segments.entries()) {
       if (index === langIndex) {
@@ -991,7 +1065,7 @@ class Judge {
       const cdpathSet = /(?:^|[\s;&|(])(?:export\s+)?CDPATH=/.test(variant.text) || (this.guard.env["CDPATH"] ?? "") !== "";
       const targetWord = args.find((arg) => !arg.startsWith("-") && arg !== "/d");
       if (verb === "popd" || verb === "pop-location") state.current = null;
-      else if (targetWord === undefined) state.current = verb === "cd" || verb === "chdir" ? collapseDots(this.guard.home) : current;
+      else if (targetWord === undefined) state.current = verb === "cd" || verb === "chdir" ? this.nativeDir(this.guard.home) : current;
       else if (targetWord === "-" || /[$`]/.test(targetWord)) state.current = null;
       else if (cdpathSet && !ABSOLUTE.test(targetWord) && !/^\.{1,2}(?:\/|$)/.test(targetWord)) {
         // 设了 CDPATH 的相对 cd 会按 CDPATH 里的目录找，落到哪里我们模拟不了：不猜，按解析不出来拒

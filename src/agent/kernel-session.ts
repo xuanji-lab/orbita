@@ -25,7 +25,7 @@ import { composeIntentPrompt } from "../shared/intent-recall.ts";
 import { durableBookRef, kernelLibraryName, type KernelContinueCommand, type KernelSessionCommand, type KernelTurnResult } from "../shared/kernel.ts";
 import { attachmentBlocks, splitEchoBlocks } from "../shared/prompt-attachments.ts";
 import { COMPACTION_DEFAULT } from "../shared/settings.ts";
-import { compactionBoundaryTimestamp, compactionErrorText, type TurnTiming } from "./compaction-settings.ts";
+import { compactAheadDue, compactionBoundaryTimestamp, compactionErrorText, type TurnTiming } from "./compaction-settings.ts";
 import { TurnFileTracker } from "./file-tracker.ts";
 import type { IntentConfirmWaiter } from "./intent-confirm-wait.ts";
 import { runIntentGate } from "./intent-gate.ts";
@@ -89,6 +89,8 @@ export interface KernelSessionsDeps {
   intentConfirm: IntentConfirmWaiter;
   /** 一轮落定（phase idle 之前到）：主进程据此清「在跑」标记、记迁移失败 */
   settled: (sessionId: string, result: KernelTurnResult) => void;
+  /** 这一轮答完、要在轮末后台预先压缩（settled 要等压完才到）：主进程先清「在跑」标记（见 KernelMessage turnAnswered） */
+  answered?: (sessionId: string, result: KernelTurnResult) => void;
   /**
    * 父→子插话到达时子刚收尾（没有在跑的轮可插）：原文退回主进程，由它当「子空闲时的投递」开一轮（不丢消息）。
    * 缺席时按旧内核报 failed（测试夹具与第三步的形状）。
@@ -277,6 +279,11 @@ export class KernelSessions {
   private readonly libraryOf = new Map<string, string>();
   /** 会话 → 跨轮留着的瘦条目（plan / goal / 工具轮顺序读它；按会话号认，回退换了会话号就重拉） */
   private readonly branches = new Map<string, DurableBranch>();
+  /**
+   * 正在轮末预先压缩的会话（compactAhead）。shown = 已有开轮命令在等它压完、界面已改成可见的「正在压缩」。
+   * 这段时间会话的坑仍被这一轮占着（压缩跑在同一个 cycle 里），开轮命令不能撞 already running，也不该把压了一半的摘要扔掉。
+   */
+  private readonly ahead = new Map<string, { shown: boolean }>();
 
   constructor(deps: KernelSessionsDeps) {
     this.deps = deps;
@@ -327,8 +334,13 @@ export class KernelSessions {
   /** 一条会话的命令。root：这棵会话树的根会话 id（决定库） */
   async handle(root: string, command: KernelSessionCommand): Promise<void> {
     const library = kernelLibraryName(root);
+    // 轮末预先压缩还在跑：开轮命令（renderer 不会在这时投递，来的多是主进程给子会话的投递）等它压完再开——
+    // 它本来就是下一轮开头要做的那次压缩，打断了也只会在下一轮里重压一遍；等的时候界面改成可见的「正在压缩」
+    if (command.type === "submit" || command.type === "continueRun" || command.type === "interrupt" || command.type === "compact") {
+      await this.awaitAhead(command.sessionId);
+    }
     if (command.type === "submit" || command.type === "continueRun") {
-      await this.startTurn(library, command);
+      await this.startTurn(library, command, root !== command.sessionId);
       return;
     }
     if (command.type === "interrupt" || command.type === "compact") {
@@ -339,7 +351,7 @@ export class KernelSessions {
       this.deps.intentConfirm.settle(command.sessionId);
       await this.running.get(command.sessionId)?.lifecycle;
       try {
-        await this.startTurn(library, command);
+        await this.startTurn(library, command, root !== command.sessionId);
       } catch (cause) {
         this.send({ type: "phase", sessionId: command.sessionId, phase: "idle" });
         throw cause;
@@ -535,10 +547,31 @@ export class KernelSessions {
     }
   }
 
-  private startTurn(library: string, command: OpenCommand): Promise<void> {
+  /**
+   * 等这条会话的轮末预先压缩做完（没有就立即返回）。等的这一段不发 idle（preempted：中间没有「空闲」可投递），
+   * 改发一次不带 background 的 phase compaction——有人在等了，界面要说在等什么，停止键也要能停它。
+   */
+  private async awaitAhead(sessionId: string): Promise<void> {
+    const mark = this.ahead.get(sessionId);
+    const slot = this.running.get(sessionId);
+    if (mark === undefined || slot === undefined) return;
+    slot.preempted = true;
+    if (!mark.shown) {
+      mark.shown = true;
+      this.send({ type: "phase", sessionId, phase: "compaction" });
+    }
+    await slot.lifecycle.catch(() => undefined);
+  }
+
+  /**
+   * delegated：派出去的活（有 parentId 的子会话；主进程按 parentId 选库根，所以 root ≠ 自己即是）——轮末不预先压。
+   */
+  private startTurn(library: string, command: OpenCommand, delegated: boolean): Promise<void> {
     const id = command.sessionId;
     this.libraryOf.set(id, library);
     let settledResult: KernelTurnResult = { ok: false, reason: "turn did not start" };
+    /** 这一轮本身已经答完（之后可能还在轮末预先压缩）：这时退出不算「上次被中断」 */
+    let finished = false;
     return startCycle(
       this.running,
       id,
@@ -554,10 +587,13 @@ export class KernelSessions {
       },
       async (parts) => {
         settledResult = await this.run(parts, command);
+        finished = settledResult.ok && settledResult.status === "done";
+        await this.compactAhead(parts, command, settledResult, delegated);
       },
       () => {
-        // 应用退出时被停下的：报 interrupted，主进程留着「在跑」标记（下次打开是「上次被中断」）
-        if (this.shuttingDown) settledResult = { ok: false, reason: "shutdown", interrupted: true };
+        // 应用退出时被停下的：报 interrupted，主进程留着「在跑」标记（下次打开是「上次被中断」）。
+        // 轮本身已答完、退出时停下的只是轮末预先压缩：照实报这一轮的结果
+        if (this.shuttingDown && !finished) settledResult = { ok: false, reason: "shutdown", interrupted: true };
         // 落定先报主进程（清「在跑」标记），再发 idle：renderer 收到 idle 时主进程的账已经结了
         this.deps.settled(id, settledResult);
         this.send({ type: "phase", sessionId: id, phase: "idle" });
@@ -888,6 +924,46 @@ export class KernelSessions {
       return { status: "unanswered", reason: outcome.status };
     } finally {
       await conversation.configure({ thinkingLevel: command.thinkingLevel, compaction: target.compaction }, BACKGROUND_CONTEXT);
+    }
+  }
+
+  /**
+   * 轮末预先压缩（2026-11-17）：按这一轮最后的上下文占用，再来一轮就会触发内核的阻塞压缩时，现在就在后台把它做掉，
+   * 让下一次发送不被挡（旧内核就是轮末在后台压的；新内核只在下一次生成前判，压完才发请求，用户多等 16–53 秒）。
+   *
+   * 用的是内核现成的入口 `Conversation.compact()`（手动压缩走的同一个），参数**不改**：keepRecentTokens 与思考档都是会话
+   * 原值——与下一次发送前内核自己做的那次阻塞压缩同参，选出的切点、摘要格式一样，提示缓存也一样（压缩后第一次请求
+   * 都是一次未命中）。不用内核的 backgroundTokens：那只在下一次生成准备时触发，做不到轮末。
+   *
+   * 跑在这一轮的同一个 cycle 里（坑一直占着，压完才发 idle）：期间 renderer 把用户的话排进队列（「压缩完成后发出」），
+   * idle 一到照常投递；停止 = abortRun 连压缩一起停。失败（模型报错）不报红字：没人在等它，下一次发送前内核会再压。
+   */
+  private async compactAhead(parts: KernelParts, command: OpenCommand, result: KernelTurnResult, delegated: boolean): Promise<void> {
+    if (command.type === "compact" || !result.ok || result.status !== "done" || parts.aborted() || this.shuttingDown) return;
+    const { target } = parts;
+    const policy = target.compaction;
+    const due = compactAheadDue({
+      enabled: policy.enabled ?? true,
+      delegated,
+      contextTokens: parts.stats.lastContextTokens,
+      contextWindow: target.model.contextWindow ?? 0,
+      reserveTokens: policy.reserveTokens ?? 0,
+    });
+    if (!due) return;
+    const sessionId = command.sessionId;
+    // 先让主进程把这一轮记成答完：后台压缩期间崩溃，重开后不是「上次被中断」
+    this.deps.answered?.(sessionId, result);
+    this.ahead.set(sessionId, { shown: false });
+    this.send({ type: "phase", sessionId, phase: "compaction", background: true });
+    try {
+      const task = await target.conversation.compact(undefined, BACKGROUND_CONTEXT);
+      const outcome = (await target.harness.waitForTask(task, BACKGROUND_CONTEXT)).state.outcome;
+      if (outcome.status === "completed") await target.conversation.waitForIdle(BACKGROUND_CONTEXT);
+      else if (!parts.aborted()) console.error("[kernel] 轮末预先压缩没成", sessionId, outcome.status);
+    } catch (cause) {
+      if (!parts.aborted()) console.error("[kernel] 轮末预先压缩失败", sessionId, cause);
+    } finally {
+      this.ahead.delete(sessionId);
     }
   }
 

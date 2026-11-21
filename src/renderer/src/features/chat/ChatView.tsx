@@ -1437,6 +1437,10 @@ function ChatViewBody(props: {
         )
       )}
       {session.error !== null && <Notice tone="bad">{session.error}</Notice>}
+      {/* 用户自己点的停止，不是出错：中性小字一行、不带图标（颜色只留给「等你」） */}
+      {session.compactionStopped !== null && (
+        <Notice>{session.compactionStopped === "queued" ? t.session.compactionStoppedQueued : t.session.compactionStoppedTurn}</Notice>
+      )}
       {/*
         只能读不能续：pi 没有这条会话的本子。**说清楚，别让输入框看起来能打字**
         （guideline §四把这条代价写明了）。
@@ -1770,7 +1774,7 @@ function ChatViewBody(props: {
           cwd={session.cwd}
           onUndoTurn={session.undoTurn}
           onRevertTo={session.revertToMessage}
-          actionsBusy={session.phase !== "idle" || session.queued.length > 0 || revertPreview !== null}
+          actionsBusy={session.busy || session.queued.length > 0 || revertPreview !== null}
           readOnly={session.readOnly}
           onOpenReviewAt={props.onOpenReviewAt}
           onOpenIntentPanel={props.onOpenIntentPanel}

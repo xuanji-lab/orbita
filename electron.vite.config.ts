@@ -62,9 +62,10 @@ export default defineConfig({
     resolve: { alias: { "@shared": resolve(__dirname, "src/shared") } },
     build: {
       rollupOptions: {
-        // 两个页面入口：主窗口，与受管浏览器沙盒窗口的工具条（main/browser/sandbox.ts）
+        // 三个页面入口：主窗口、生产 renderer 的 fixture 预览、受管浏览器沙盒工具条。
         input: {
           index: resolve(__dirname, "src/renderer/index.html"),
+          preview: resolve(__dirname, "src/renderer/preview.html"),
           "browser-toolbar": resolve(__dirname, "src/renderer/browser-toolbar.html"),
         },
       },

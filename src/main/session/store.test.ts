@@ -1395,3 +1395,35 @@ describe("SessionStore · 窗口分页", () => {
     assert.equal(detail?.window.hasMore, true);
   });
 });
+
+describe("latestPlan：只取当前计划（session:plan）", () => {
+  const plan = (n: number, items: { text: string; status: string }[]): string =>
+    JSON.stringify({ id: `t-plan-${n}`, role: "tool", toolCallId: `p${n}`, toolName: "update_plan", input: { items }, content: [{ type: "text", text: "ok" }], status: "complete", isError: false, timestamp: n });
+  const user = (id: string): string => JSON.stringify({ id, role: "user", content: [{ type: "text", text: id }], timestamp: 1 });
+  const big = (n: number): string =>
+    JSON.stringify({ id: `t-${n}`, role: "tool", toolCallId: `c${n}`, toolName: "read", input: {}, content: [{ type: "text", text: "x".repeat(5000) }], status: "complete", isError: false, timestamp: n });
+  const write = async (lines: string[]): Promise<void> => {
+    await mkdir(join(dir, "sessions"), { recursive: true });
+    await writeFile(join(dir, "sessions", `${ID}.jsonl`), `${lines.join("\n")}\n`, "utf8");
+  };
+
+  test("计划写在首屏尾窗之外也取得到：最后一版生效", async () => {
+    const lines = [user("u0"), plan(1, [{ text: "读", status: "in_progress" }]), plan(2, [{ text: "读", status: "done" }, { text: "比", status: "in_progress" }])];
+    for (let index = 0; index < SESSION_INITIAL_RECORDS * 2; index += 1) lines.push(big(index));
+    await write(lines);
+    assert.deepEqual(await store.latestPlan(ID), [{ text: "读", status: "done" }, { text: "比", status: "in_progress" }]);
+  });
+
+  test("回退折掉的那一版不算：退回被回退那条用户消息之前的计划", async () => {
+    const revert = JSON.stringify({ id: "r1", role: "revert", targetMessageId: "u1", restored: [], timestamp: 9 });
+    await write([user("u0"), plan(1, [{ text: "旧", status: "pending" }]), user("u1"), plan(2, [{ text: "新", status: "pending" }]), revert]);
+    assert.deepEqual(await store.latestPlan(ID), [{ text: "旧", status: "pending" }]);
+  });
+
+  test("没写过计划、文件不存在、id 不合法 = null", async () => {
+    await write([user("u0"), big(1)]);
+    assert.equal(await store.latestPlan(ID), null);
+    assert.equal(await store.latestPlan("b7f3c1d2-4b8e-4f21-9c3a-0d1e2f3a4b5c"), null);
+    assert.equal(await store.latestPlan("../escape"), null);
+  });
+});

@@ -120,6 +120,12 @@ export type KernelMessage =
   | AgentEvent
   /** 一轮落定（phase idle 之前到）：主进程据此清 meta.durable.running、记迁移失败 */
   | { type: "turnSettled"; sessionId: string; result: KernelTurnResult }
+  /**
+   * 这一轮已经答完、接下来只是轮末在后台预先压缩（turnSettled 要等压完才到）：主进程现在就清 meta.durable.running——
+   * 后台压缩期间崩溃 / 被杀，重开后不该是「上次被中断」、也不该让人点继续（被打断的压缩当没发生过，下次自然再压）。
+   * 会话仍算 kernel 在跑（闲置回收等它）；kernel 进程这时没了只让它回到空闲，不标「被打断」。
+   */
+  | { type: "turnAnswered"; sessionId: string; result: KernelTurnResult }
   | { type: "dropped"; requestId: string; error?: string }
   /**
    * 父→子插话到达时子这一轮刚好收尾（没有在跑的轮可插）：原文退回主进程，由它当「子空闲时的投递」开一轮。

@@ -189,6 +189,12 @@ export const ipcChannels = {
   sessionLoad: "session:load",
   /** 拉更早的一页（滚动触顶）：载荷 (id, before 记录 id, limit)，回 SessionOlderPage */
   sessionLoadOlder: "session:load-older",
+  /**
+   * 只取一条会话当前的计划（最后一次生效的 update_plan）：载荷会话 id，回 `PlanItem[] | null`（没写过计划 / 会话不存在 = null）。
+   * 主智能体进度面板给每件活写「下一步」用。主进程流式逐行扫、只解析用户消息 / 回退界碑 / update_plan 三种行，
+   * 不整份解析、不回转录——session:load 的首屏尾窗多半不含计划（计划写在开头），而且每件活要搬约 1 MB 转录过 IPC。
+   */
+  sessionPlan: "session:plan",
   sessionRename: "session:rename",
   sessionPin: "session:pin",
   /** 星标：价值标记，不参与排序（排序只认 pinned）；消费者是侧栏标识与筛选 chip */
@@ -1733,7 +1739,12 @@ export type AgentEvent =
       level: PiThinkingLevel;
       supported: readonly PiThinkingLevel[];
     }
-  | { type: "phase"; sessionId: string; phase: SessionPhase }
+  /**
+   * background（只随 phase compaction）：轮末预先压缩——这一轮已经答完，压缩在后台把下一次发送要做的压缩提前做掉。
+   * 用户没在等它：renderer 在队列为空时按空闲显示（不出压缩行、不出停止键）；用户这时发话照常进排队条「压缩完成后发出」，
+   * 这才显示在等什么。缺席 = 阻塞式压缩（手动压缩、一轮里发请求前的压缩），照旧显示。
+   */
+  | { type: "phase"; sessionId: string; phase: SessionPhase; background?: true }
   /**
    * 一份会话用量快照（token 分项 / 花费 / 上下文余量）。推送粒度与 pi 的数据粒度对齐
    * ——usage 跟着每次 LLM 响应落地，所以每条 assistant 消息完成（message_end）推一次；

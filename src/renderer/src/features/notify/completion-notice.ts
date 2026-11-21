@@ -14,11 +14,14 @@ import type { Messages } from "../../messages-en.ts";
 import type { SessionMeta } from "@shared/session";
 // 值导入走相对路径带 .ts：本文件被 node --test 直接加载
 import { childSessions } from "../../../../shared/session.ts";
+import { shownPhase } from "../chat/session-states.ts";
 
 /** 判定只需要槽的这两个字段——不依赖整个 SessionEntry，测试不用造全量槽 */
 export interface PhaseSlot {
   phase: "idle" | "turn" | "compaction";
   queued: readonly unknown[];
+  /** 轮末预先压缩（用户没在等）：队列空时按空闲算——这一轮答完就算落定，不等压缩做完（session-states 的 shownPhase） */
+  compactionQuiet?: boolean;
 }
 
 /**
@@ -37,8 +40,8 @@ export function settledSessions(
   const settled: string[] = [];
   for (const [id, entry] of next) {
     const before = prev.get(id);
-    if (before === undefined || before.phase === "idle") continue;
-    if (entry.phase === "idle" && entry.queued.length === 0) settled.push(id);
+    if (before === undefined || shownPhase(before) === "idle") continue;
+    if (shownPhase(entry) === "idle" && entry.queued.length === 0) settled.push(id);
   }
   return settled;
 }
@@ -76,7 +79,7 @@ export function subtreeBusy(
     if (seen.has(next)) continue;
     seen.add(next);
     const slot = states.get(next);
-    if (slot !== undefined && (slot.phase !== "idle" || slot.queued.length > 0)) return true;
+    if (slot !== undefined && (shownPhase(slot) !== "idle" || slot.queued.length > 0)) return true;
     stack.push(...(children.get(next) ?? []));
   }
   return false;
@@ -116,7 +119,7 @@ export function treeNotices(input: {
   const candidates = [...new Set([...input.settled, ...input.held])];
   for (const id of candidates) {
     const slot = input.states.get(id);
-    if (slot === undefined || slot.phase !== "idle" || slot.queued.length > 0) continue;
+    if (slot === undefined || shownPhase(slot) !== "idle" || slot.queued.length > 0) continue;
     if (!input.failed(id) && subtreeBusy(id, input.sessions, input.states)) held.add(id);
     else notify.push(id);
   }

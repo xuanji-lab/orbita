@@ -620,8 +620,23 @@ button.tp-editlog-src:hover {
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
-  padding: var(--space-1) 0;
+  /* 整行可点（2026-11-21）：悬停底向两侧外扩一格，字仍与节标题同一条左缘 */
+  width: calc(100% + 2 * var(--space-1));
+  margin: 0 calc(-1 * var(--space-1));
+  padding: var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  text-align: left;
   line-height: var(--line-height-ui);
+  cursor: pointer;
+}
+.tp-jobs > li {
+  min-width: 0;
+}
+/* 以前的会话是普通会话名：不加粗（加粗留给正在让你看的活） */
+.tp-job-name.tp-earlier-name {
+  font-weight: var(--weight-regular);
 }
 .tp-job .inbox-row-mark {
   width: 14px;
@@ -664,4 +679,46 @@ button.tp-editlog-src:hover {
 /* 派出去的活里要你出手的那句：正文色（不点橙点，靠位置与字） */
 .tp-job-line.ask {
   color: var(--color-text-primary);
+}
+
+/* 一件活的自含摘要（2026-11-21）：上次 / 在等 / 下一步，每项一行——灰色短标签 + 一句（放不下截断，全文在悬停里）。
+   不加卡片、不加线：靠标签列对齐读成一张小表。等你的那句用正文色，信息不足的灰字 */
+.tp-brief {
+  display: grid;
+  grid-template-columns: 4.5em minmax(0, 1fr);
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+.tp-brief-k {
+  color: var(--color-text-tertiary);
+}
+.tp-brief-v {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tp-brief.you .tp-brief-v {
+  color: var(--color-text-primary);
+}
+.tp-brief.missing,
+.tp-brief.missing .tp-brief-v {
+  color: var(--color-text-tertiary);
+}
+span.tp-brief.missing:not(:has(.tp-brief-k)) {
+  display: block;
+}
+
+/* 主智能体的进度（2026-11-21）从「等你」起头、停着时不出「空闲」那行：
+   面板第一节不画顶线（页头下面已是边界），目标下面紧跟一节时只留那一节的顶线，不画两道 */
+.tp-body > .tp-sec:first-child {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 0;
+}
+.tp-goal:has(+ .tp-sec) {
+  border-bottom: 0;
 }

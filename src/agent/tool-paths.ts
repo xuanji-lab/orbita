@@ -36,12 +36,14 @@ export function normalizeToolPathText(path: string): string {
 }
 
 /**
- * Git Bash / MSYS / Cygwin / WSL 的盘符写法折成 Windows 原生路径（`/c/x`、`/mnt/c/x`、`/cygdrive/c/x` → `C:\x`）；
+ * Git Bash / MSYS / Cygwin / WSL 的盘符写法折成 Windows 原生路径（`/c/x`、`/mnt/c/x`、`/cygdrive/c/x`、
+ * `/proc/cygdrive/c/x`（MSYS2 与 Cygwin 都有这个指向盘符前缀的链接）→ `C:\x`）；
  * 不是这种写法原样返回。纯字符串变换，不看平台——调用方决定只在 win32 上用。
+ * 命令闸门（protected-command.ts 的 windowsPathForm）也用它：工具、文件账、命令闸门三处同一套折算。
  */
 export function msysDrivePath(path: string): string {
   if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\")) return path;
-  const match = /^\/(?:mnt\/|cygdrive\/)?([a-z])(?:\/(.*))?$/i.exec(path);
+  const match = /^\/(?:mnt\/|cygdrive\/|proc\/cygdrive\/)?([a-z])(?:\/(.*))?$/i.exec(path);
   if (match === null || match[1] === undefined) return path;
   return `${match[1].toUpperCase()}:\\${(match[2] ?? "").replaceAll("/", "\\")}`;
 }

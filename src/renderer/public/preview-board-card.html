@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Preview board card</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+      }
+      body {
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 10px 12px;
+        font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+        color: #1f2328;
+        background: transparent;
+      }
+      .card-title {
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .fixture-badge {
+        font-size: 10px;
+        opacity: 0.55;
+      }
+      ul {
+        margin: 0;
+        padding-left: 16px;
+        font-size: 12px;
+      }
+      li {
+        margin: 2px 0;
+      }
+      .empty {
+        font-size: 12px;
+        opacity: 0.6;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card-title" id="card-title">Fixture card</div>
+    <div class="fixture-badge">preview fixture card — template content is synthetic</div>
+    <div id="card-body" class="empty">Waiting for data…</div>
+    <script>
+      // 预览看板卡的同源模板：只认宿主发来的 orbita:data（BoardGrid 的生产握手），
+      // 把 fixture 数据照实画出来并回 orbita:ready。沙箱 iframe 来源不透明，脚本照常运行。
+      function render(message) {
+        if (message.theme && typeof message.theme.name === "string") {
+          document.documentElement.dataset.theme = message.theme.name;
+        }
+        var body = document.getElementById("card-body");
+        var data = message.state === "empty" || message.data == null ? null : message.data;
+        if (data === null) {
+          body.textContent = "No data yet (fixture sample / empty state).";
+          body.className = "empty";
+          return;
+        }
+        var items = Array.isArray(data) ? data : Array.isArray(data.items) ? data.items : null;
+        if (items === null) {
+          body.textContent = JSON.stringify(data);
+          body.className = "empty";
+          return;
+        }
+        var list = document.createElement("ul");
+        for (var index = 0; index < Math.min(items.length, 6); index += 1) {
+          var item = items[index];
+          var li = document.createElement("li");
+          li.textContent =
+            typeof item === "string"
+              ? item
+              : String(item && item.title ? item.title : "item") +
+                (item && item.note ? " — " + String(item.note) : "");
+          list.appendChild(li);
+        }
+        body.replaceChildren(list);
+        body.className = "";
+      }
+      window.addEventListener("message", function (event) {
+        var message = event.data;
+        if (message == null || message.type !== "orbita:data") return;
+        render(message);
+        if (event.source && typeof event.source.postMessage === "function") {
+          event.source.postMessage({ type: "orbita:ready", emptyState: true }, "*");
+        }
+      });
+    </script>
+  </body>
+</html>

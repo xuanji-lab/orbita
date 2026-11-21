@@ -809,6 +809,33 @@ describe("AgentHostCore：新内核那条道", () => {
     assert.ok(!r.events.some((event) => event.type === "failed" && event.sessionId === "b"));
   });
 
+  test("轮末后台预先压缩期间 kernel 进程没了：答完时就清了「在跑」标记，只让界面回到空闲，不标「被打断、可继续」、不交给善后", async () => {
+    const r = kernelRig();
+    const a = r.host.submit({ type: "submit", sessionId: "a", text: "hi", piSessionFile: "/a.jsonl", ...TURN_FIELDS });
+    await flush();
+    r.kernel.emit({ type: "ready" });
+    await a;
+    r.kernel.emit({ type: "turnAnswered", sessionId: "a", result: { ok: true, conversationId: 1, migration: "none", status: "done" } });
+    assert.deepEqual(r.settled, ["a"], "答完那一刻就清了「在跑」标记（重开后不是「上次被中断」）");
+    r.kernel.exitWith(137);
+    assert.deepEqual(r.exited, [[]], "不交给善后");
+    assert.ok(!r.events.some((event) => event.type === "failed"), "不标被打断");
+    assert.ok(r.events.some((event) => event.type === "phase" && event.sessionId === "a" && event.phase === "idle"), "界面回到空闲");
+  });
+
+  test("轮末压缩期间又开了一轮（等压完再跑）：这一轮是真在跑，进程没了照旧标「被打断、可继续」", async () => {
+    const r = kernelRig();
+    const a = r.host.submit({ type: "submit", sessionId: "a", text: "hi", piSessionFile: "/a.jsonl", ...TURN_FIELDS });
+    await flush();
+    r.kernel.emit({ type: "ready" });
+    await a;
+    r.kernel.emit({ type: "turnAnswered", sessionId: "a", result: { ok: true, conversationId: 1, migration: "none", status: "done" } });
+    await r.host.submit({ type: "submit", sessionId: "a", text: "again", piSessionFile: "/a.jsonl", ...TURN_FIELDS });
+    r.kernel.exitWith(137);
+    assert.deepEqual(r.exited, [["a"]]);
+    assert.ok(r.events.some((event) => event.type === "failed" && event.sessionId === "a" && event.continuable === true));
+  });
+
   test("本子编辑（回退 / 撤销）与分支交给 kernel：子会话带父的树根、分支是新树；回执结掉等待；kernel 退出时等待者被拒", async () => {
     const r = kernelRig({ child: "root" }, { legacyOne: "legacy" });
     const revert = r.host.editPiBook({ type: "revertPiBook", sessionId: "child", sourcePiSessionFile: "/p", cwd: "/", roles: ["user", "assistant"], targetMessageId: "m" });

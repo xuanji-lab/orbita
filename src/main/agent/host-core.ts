@@ -166,6 +166,8 @@ export class AgentHostCore {
   private readonly expectedMigrations = new Set<string>();
   /** kernel 里一轮没落定的会话（kernel 进程意外退出时它们是「被打断」） */
   private readonly kernelRunning = new Set<string>();
+  /** kernelRunning 里已经答完、只在轮末后台预先压缩的会话（turnAnswered 到 turnSettled 之间） */
+  private readonly kernelAnswered = new Set<string>();
   /** kernel 发出的请求 id（工具请求、意图确认）：回执要回到 kernel 进程 */
   private readonly kernelRequests = new Set<string>();
   private readonly pendingKernel = new Map<string, (error?: string) => void>();
@@ -206,6 +208,13 @@ export class AgentHostCore {
         }
         if (message.type === "turnSettled") {
           this.kernelRunning.delete(message.sessionId);
+          this.kernelAnswered.delete(message.sessionId);
+          lane.settled(message.sessionId, message.result);
+          return;
+        }
+        if (message.type === "turnAnswered") {
+          // 答完了、只剩轮末后台压缩：现在就清「在跑」标记；仍留在 kernelRunning（闲置回收等它、进程没了时让它回到空闲）
+          this.kernelAnswered.add(message.sessionId);
           lane.settled(message.sessionId, message.result);
           return;
         }
@@ -240,7 +249,11 @@ export class AgentHostCore {
         this.kernelReady = null;
         if (this.kernelIdleTimer !== null) clearTimeout(this.kernelIdleTimer);
         this.kernelIdleTimer = null;
-        const running = [...this.kernelRunning];
+        // 答完了、只是在轮末后台压缩的：被打断的压缩当没发生过——只让界面回到空闲，不标「被打断、可继续」，也不交给善后
+        const answered = new Set(this.kernelAnswered);
+        this.kernelAnswered.clear();
+        const running = [...this.kernelRunning].filter((sessionId) => !answered.has(sessionId));
+        for (const sessionId of this.kernelRunning) if (answered.has(sessionId)) this.onEvent({ type: "phase", sessionId, phase: "idle" });
         this.kernelRunning.clear();
         this.kernelRequests.clear();
         // 交给它还没回执的本子编辑 / 分支：等待者结掉（不然调用方要等满超时）
@@ -484,6 +497,8 @@ export class AgentHostCore {
     await this.ensureKernel();
     this.kernelSessions.set(command.sessionId, root);
     this.kernelRunning.add(command.sessionId);
+    // 新开的一轮是真在跑（哪怕 kernel 要先等轮末压缩做完）：这时进程没了，就是「被打断」
+    this.kernelAnswered.delete(command.sessionId);
     let created: Promise<string | null> | null = null;
     if (command.piSessionFile === undefined) {
       created = this.awaitCreated(command.sessionId, "kernel runtime did not confirm the session in time");
