@@ -1082,7 +1082,6 @@ export const en = {
     collapseTip: "Collapse to the icon rail",
     mainAgent: "Main agent",
     openMainAgentTip: (name: string) => `Talk to the main agent of ${name}`,
-    /** 侧栏最上面钉住的「等你」：跨工作区每件在等你的事 */
     earlierSessions: (n: number) => `Earlier sessions ${n}`,
     earlierSessionsTip: "Finished work you have seen, and sessions from before",
     earlierTitle: "Earlier sessions",
@@ -1367,7 +1366,7 @@ export const en = {
     completionSound: "Chime when something waits on you",
     completionSoundAria: "Chime when something waits on you",
     completionSoundInfo:
-      "Chimes once when something new is waiting on you (a question, or work that didn't make it); never for finished work · when off, the “Waiting on you” list at the top of the sidebar still shows",
+      "Chimes once when something new is waiting on you (a question, or work that didn't make it); never for finished work · when off, the workspace row still shows its waiting count and “Waiting on you” still leads that workspace’s progress panel",
     data: "Data",
     dataDirectory: "Data directory",
     dataDirectoryInfo: "Sessions, workspaces, skills and mcp.json live here as plain files",
@@ -3667,7 +3666,7 @@ export const en = {
           background: {
             name: "Long tasks in the background",
             title: "Can I walk away from a long task?",
-            body: "Yes. Switching to other tasks or starting new ones doesn't stop it; the small pie before each task says running, waiting for you, or finished. When something needs you, it shows up at the top of the sidebar under “Waiting on you” with one chime; finishing makes no sound.\nOn Windows, closing the window sends it to the tray and work goes on; on macOS it stays in the Dock. Sleep stops it — the Automations panel has “keep the computer awake while something runs”.",
+            body: "Yes. Switching to other tasks or starting new ones doesn't stop it; the small pie before each task says running, waiting for you, or finished. When something needs you, its workspace row shows a waiting count and the item heads “Waiting on you” in that workspace’s progress panel, with one chime; finishing makes no sound.\nOn Windows, closing the window sends it to the tray and work goes on; on macOS it stays in the Dock. Sleep stops it — the Automations panel has “keep the computer awake while something runs”.",
           },
           update: {
             name: "Updating",

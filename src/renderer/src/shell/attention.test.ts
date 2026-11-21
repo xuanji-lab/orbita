@@ -25,7 +25,7 @@ function meta(id: string, extra: Partial<SessionMeta> = {}): SessionMeta {
   };
 }
 
-describe("侧栏顶上的「等你」", () => {
+describe("跨工作区的「等你」（提示音的账）", () => {
   const states: Record<string, SessionRunState> = { ask1: "waiting", ask2: "waiting", bad: "failed", run: "running", done: "done" };
   const stateOf = (m: SessionMeta): SessionRunState => states[m.id] ?? null;
 

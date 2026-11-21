@@ -1000,7 +1000,6 @@ export const zh: Messages = {
     collapseTip: "收成图标栏",
     mainAgent: "主智能体",
     openMainAgentTip: (name) => `跟「${name}」的主智能体说话`,
-    /** 侧栏最上面钉住的「等你」：跨工作区每件在等你的事 */
     earlierSessions: (n) => `以前的会话 ${n}`,
     earlierSessionsTip: "做完看过的活，和以前攒下的会话",
     earlierTitle: "以前的会话",
@@ -1262,7 +1261,7 @@ export const zh: Messages = {
     processViewSteps: "逐步铺开",
     completionSound: "等你时的提示音",
     completionSoundAria: "等你时的提示音",
-    completionSoundInfo: "新冒出一件等你的事（在问你、没做成）时响一声，同一件事只响一次；做完不响 · 关掉后侧栏顶上的「等你」照常出现",
+    completionSoundInfo: "新冒出一件等你的事（在问你、没做成）时响一声，同一件事只响一次；做完不响 · 关掉后工作区行尾的等你计数、进度面板最前的「等你」照常出现",
     data: "数据",
     dataDirectory: "数据目录",
     dataDirectoryInfo: "会话、工作区、技能与 mcp.json 以普通文件存放在这里",
@@ -3431,7 +3430,7 @@ export const zh: Messages = {
           background: {
             name: "长任务放后台",
             title: "跑很久的任务，我能走开吗？",
-            body: "能。切去别的任务、开新任务都不影响它；左栏任务前的小饼告诉你在跑、等你还是跑完了。有事要你出手时，它出现在左栏最上面的「等你」里，响一声；做完不响。\nWindows 上关窗是收进托盘，任务照跑；macOS 关窗后程序还在程序坞里，任务照跑。电脑睡着了任务会停——自动化面板里有「有任务在跑时阻止系统睡眠」。",
+            body: "能。切去别的任务、开新任务都不影响它；左栏任务前的小饼告诉你在跑、等你还是跑完了。有事要你出手时，所在工作区那一行行尾亮出等你的计数，那件事排在这个工作区进度面板最前的「等你」里，响一声；做完不响。\nWindows 上关窗是收进托盘，任务照跑；macOS 关窗后程序还在程序坞里，任务照跑。电脑睡着了任务会停——自动化面板里有「有任务在跑时阻止系统睡眠」。",
           },
           update: {
             name: "怎么更新",
