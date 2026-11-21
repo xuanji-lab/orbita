@@ -13,6 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { pathWithin } from "../../../../shared/path.ts";
 import { api } from "../../api.ts";
 import type {
+  LatexBuildProgress,
   LatexCleanResult,
   LatexEngine,
   LatexFileContext,
@@ -33,6 +34,8 @@ export interface LatexWorkbench {
   running: boolean;
   /** 这一轮开始的时刻（编译中的计时器用）；没在跑时 null */
   startedAt: number | null;
+  /** 编译中的进度（latexmk 的 "Run number N of rule 'x'"）；没在跑时 null */
+  progress: LatexBuildProgress | null;
   last: LatexBuildSummary | null;
   /** IPC / 授权 / 写配置失败的一句话（面板里一行红字，不弹窗） */
   error: string | null;
@@ -47,6 +50,8 @@ export interface LatexWorkbench {
   /** 编译成功后自增：PDF 标签据此重载（失败不动，保留上一版） */
   pdfReloadToken: number;
   compile: () => void;
+  /** 切到另一个 root：写 activeRoot，然后立刻编它（显式 main，优先于文件里的 magic） */
+  selectRoot: (path: string) => void;
   cancel: () => void;
   clean: () => void;
   /** 保存即编译的总开关（项目级）；写失败落到 error 行 */
@@ -60,7 +65,6 @@ export interface LatexWorkbench {
   /** 系统文件选择器选 latexmk：现验通过才写设置，然后重新探测 */
   locateLatexmk: () => void;
   selectEngine: (engine: LatexEngine) => void;
-  selectMain: (main: string) => void;
   refresh: () => void;
 }
 
@@ -99,6 +103,8 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
    * 每一份中间稿都编一遍是纯浪费，而最后一次保存的内容一定会被那一轮带上。
    */
   const queuedRef = useRef(false);
+  /** 排队那一轮要编的 root（null = 按当前解析；undefined = 没排队） */
+  const queuedMainRef = useRef<string | null | undefined>(undefined);
   /** 请求代次：切文件后晚到的项目响应不许覆盖新文件的 */
   const requestRef = useRef(0);
 
@@ -108,6 +114,7 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
   const [probe, setProbe] = useState<LatexProbeResult | null>(null);
   const [running, setRunning] = useState(false);
   const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [progress, setProgress] = useState<LatexBuildProgress | null>(null);
   const [last, setLast] = useState<LatexBuildSummary | null>(null);
   /** `last` 属于哪个项目目录：切换项目时据此从 BUILD_BY_PROJECT 取回那一份 */
   const lastDirRef = useRef<string | null>(null);
@@ -185,6 +192,35 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
       .catch(() => setProbe(null));
   }, [key, loadProject]);
 
+  /**
+   * 编译中的进度：1 秒问一次主进程「跑到哪一轮了」。**只在 running 时轮询**——
+   * 它读的是 runner 内存里的一个字段（不读盘），但没在编时问它没有意义。
+   */
+  useEffect(() => {
+    if (!running || context === null) {
+      setProgress(null);
+      return;
+    }
+    let cancelled = false;
+    const tick = (): void => {
+      void api.latex
+        .progress(context)
+        .then((next) => {
+          if (!cancelled) setProgress(next);
+        })
+        .catch(() => {
+          // 进度是锦上添花：通道失败时退回「编译中…」，不写 error 行
+        });
+    };
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+    // context 的身份由 key 决定（context 对象每一帧都可能是新的）
+  }, [running, key]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // 轮询：只在窗口可见、且没在编译时跑（编译结束后会主动拉一次）
   useEffect(() => {
     if (key === "") return;
@@ -197,9 +233,9 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
   }, [key, loadProject]);
 
   /** 真正跑一轮。自引用（结束时补跑排队的那一轮）走 ref，不为递归加依赖 */
-  const runCompileRef = useRef<(() => Promise<void>) | null>(null);
+  const runCompileRef = useRef<((main?: string) => Promise<void>) | null>(null);
 
-  const runCompile = useCallback(async (): Promise<void> => {
+  const runCompile = useCallback(async (main?: string): Promise<void> => {
     const ctx = contextRef.current;
     if (ctx === null) return;
     runningRef.current = true;
@@ -207,7 +243,7 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
     setStartedAt(Date.now());
     setError(null);
     try {
-      const outcome = await api.latex.compile(ctx);
+      const outcome = await api.latex.compile({ ...ctx, ...(main === undefined ? {} : { main }) });
       if (!outcome.ok) {
         setError(outcome.error);
         return;
@@ -220,6 +256,10 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
         errors: result.errors,
         warnings: result.warnings,
         pdfPath: result.pdf,
+        rootPath: result.root?.path ?? null,
+        outputs: result.outputs,
+        outputsTruncated: result.outputsTruncated,
+        logPath: result.logPath,
         finishedAt: Date.now(),
       };
       // 编译条只在项目内出现，这一拍 project 一定在；存进模块表，切走再回来还在
@@ -242,7 +282,9 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
       // 排队的那一轮在「本轮收尾」之后才起：并发被拒（same-project）不是排队能解决的
       if (queuedRef.current) {
         queuedRef.current = false;
-        void runCompileRef.current?.();
+        const queuedMain = queuedMainRef.current ?? undefined;
+        queuedMainRef.current = undefined;
+        void runCompileRef.current?.(queuedMain);
       }
     }
   }, [loadProject]);
@@ -256,9 +298,52 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
     }
     if (runningRef.current) {
       queuedRef.current = true;
+      queuedMainRef.current = null;
       return;
     }
     void runCompileRef.current?.();
+  }, []);
+
+  /**
+   * 编指定的 root。**显式 main 是最高的优先级**：它就是「忽略这个文件的
+   * `% !TEX root`、编我点的那个」——不这样，子文件里那行 magic 会让 chip 的
+   * 选择看起来没生效。在编时排队（与保存即编译同一条队列）。
+   */
+  const compileRoot = useCallback((main: string): void => {
+    if (contextRef.current === null) {
+      setError(COMPILE_NO_CONTEXT);
+      return;
+    }
+    if (runningRef.current) {
+      queuedRef.current = true;
+      queuedMainRef.current = main;
+      return;
+    }
+    void runCompileRef.current?.(main);
+  }, []);
+
+  const compileRootRef = useRef(compileRoot);
+  compileRootRef.current = compileRoot;
+
+  /** 切 root：先写 activeRoot（下次打开项目也认它），再编它一次 */
+  const selectRoot = useCallback((path: string): void => {
+    const ctx = contextRef.current;
+    if (ctx === null) return;
+    void (async () => {
+      try {
+        const outcome = await api.latex.configure({ ...ctx, activate: path });
+        if (!outcome.ok) {
+          setError(outcome.error);
+          return;
+        }
+        requestRef.current += 1;
+        setProject(outcome.project);
+        setError(null);
+        compileRootRef.current(path);
+      } catch (cause) {
+        setError(failMessage(cause));
+      }
+    })();
   }, []);
 
   const cancel = useCallback((): void => {
@@ -386,12 +471,14 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
     probe,
     running,
     startedAt,
+    progress,
     last,
     error,
     cleaning,
     notice,
     pdfReloadToken,
     compile,
+    selectRoot,
     cancel,
     clean,
     setCompileOnSave,
@@ -400,7 +487,6 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
     refreshProbe,
     locateLatexmk,
     selectEngine: (engine) => configure({ engine }),
-    selectMain: (main) => configure({ main }),
     refresh: () => void loadProject(false),
   };
 }
@@ -419,6 +505,26 @@ function sameProject(a: LatexProjectInfo | null, b: LatexProjectInfo | null): bo
     a.detail === b.detail &&
     // 开关也是项目事实：不比它，轮询会把「用户刚关掉」的那个值永远留在界面上
     a.compileOnSave === b.compileOnSave &&
-    a.mains.join("\u0000") === b.mains.join("\u0000")
+    a.activeRoot === b.activeRoot &&
+    a.focusedRoot === b.focusedRoot &&
+    a.mains.join("\u0000") === b.mains.join("\u0000") &&
+    a.roots.length === b.roots.length &&
+    a.roots.every((root, index) => rootKey(root) === rootKey(b.roots[index]))
   );
+}
+
+/** 轮询去抖用的 root 指纹：只比会让界面变化的事实 */
+function rootKey(root: LatexProjectInfo["roots"][number] | undefined): string {
+  if (root === undefined) return "";
+  return [
+    root.path,
+    root.source,
+    root.engine,
+    root.outDirRelative,
+    root.jobname ?? "",
+    root.pdf?.path ?? "",
+    String(root.pdf?.modifiedAt ?? 0),
+    String(root.sourceModifiedAt ?? 0),
+    root.detail ?? "",
+  ].join("\u0001");
 }

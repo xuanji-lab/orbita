@@ -32,6 +32,11 @@ function baseResult(overrides: Partial<LatexResult>): LatexResult {
   return {
     status: "ok",
     engine: "pdf",
+    root: null,
+    outputs: [],
+    outputsTruncated: false,
+    candidates: [],
+    logPath: null,
     main: "main.tex",
     pdf: null,
     pdfFresh: false,
@@ -95,11 +100,41 @@ describe("compile_latex —— 成功", () => {
   test("摘要带状态、页数、PDF 路径；不带日志尾巴", async () => {
     const text = await runTool({
       ok: true,
-      result: baseResult({ status: "ok", pages: 3, pdf: "/repo/paper/build/main.pdf", pdfFresh: true, logTail: null }),
+      result: baseResult({
+        status: "ok",
+        pages: 3,
+        pdf: "/repo/paper/build/main.pdf",
+        pdfFresh: true,
+        logTail: null,
+        root: {
+          path: "main.tex",
+          source: "config",
+          declaredBy: null,
+          engine: "pdf",
+          engineSource: "config",
+          outDir: "/repo/paper/build",
+          outDirRelative: "build",
+          jobname: null,
+        },
+        outputs: [
+          {
+            path: "/repo/paper/build/main.pdf",
+            kind: "pdf",
+            primary: true,
+            fresh: true,
+            pages: 3,
+            bytes: 1234,
+            modifiedAt: 1,
+            fromLog: "build/main.pdf",
+          },
+        ],
+      }),
     });
     assert.match(text, /succeeded/);
+    assert.match(text, /root main\.tex \(from config \(main\)\)/);
     assert.match(text, /3 pages/);
-    assert.match(text, /PDF: \/repo\/paper\/build\/main\.pdf/);
+    assert.match(text, /Outputs \(1, primary first\)/);
+    assert.match(text, /\/repo\/paper\/build\/main\.pdf — primary, 3 pages/);
     assert.doesNotMatch(text, /Log tail/);
   });
 

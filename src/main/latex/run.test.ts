@@ -727,3 +727,117 @@ describe("清理的 argv 与差集（纯函数）", () => {
     assert.deepEqual(cleanResult("/b", ["main.pdf"], ["main.pdf"], 1).removed, []);
   });
 });
+
+describe("LatexRunner —— 多产物与 jobname", () => {
+  /** 写一个假编译器脚本 + 指向它的 .orbita/latex.json（内容由 lines 决定） */
+  function installCompiler(dir: string, lines: string[], config: Record<string, unknown> = {}): void {
+    const script = join(dir, "fake-multi.mjs");
+    writeFileSync(script, lines.join("\n"), "utf8");
+    mkdirSync(join(dir, ".orbita"), { recursive: true });
+    const recipe = [nodeExe, script, "%DIR%"];
+    // v2 的 recipe 是 per-root 的：有 roots 时放进第一条，没 roots 时走 v1 顶层字段
+    const roots = (config["roots"] as Record<string, unknown>[] | undefined) ?? [];
+    const withRecipe =
+      roots.length === 0
+        ? { ...config, recipe }
+        : { ...config, roots: roots.map((root, index) => (index === 0 ? { ...root, recipe } : root)) };
+    writeFileSync(join(dir, ".orbita", "latex.json"), JSON.stringify(withRecipe), "utf8");
+  }
+
+  test("一次构建写出两份：outputs 全收，primary 是 root 的主产物", async () => {
+    const dir = project({ "main.tex": "\\documentclass{article}" });
+    installCompiler(dir, [
+      'import { mkdirSync, writeFileSync } from "node:fs";',
+      'import { join } from "node:path";',
+      "const dir = process.argv[2];",
+      'const out = join(dir, "build");',
+      "mkdirSync(out, { recursive: true });",
+      'writeFileSync(join(out, "main.pdf"), "%PDF-1.4 main\\n");',
+      'writeFileSync(join(out, "appendix.pdf"), "%PDF-1.4 appendix\\n");',
+      'writeFileSync(join(out, "main.log"), "Output written on build/main.pdf (3 pages, 111 bytes).\\nOutput written on build/appendix.pdf (2 pages, 22 bytes).\\n");',
+    ]);
+
+    const result = resultOf(await new LatexRunner(probe()).compile({ dir }));
+    assert.equal(result.status, "ok", result.errors.map((item) => item.message).join(" | "));
+    assert.equal(result.root?.path, "main.tex");
+    assert.equal(result.main, "main.tex");
+    assert.equal(result.outputs.length, 2);
+    assert.equal(result.outputsTruncated, false);
+    const primary = result.outputs.filter((output) => output.primary);
+    assert.equal(primary.length, 1);
+    assert.equal(primary[0]?.path, join(resolve(dir), "build", "main.pdf"));
+    assert.equal(primary[0]?.pages, 3);
+    const appendix = result.outputs.find((output) => output.path.endsWith("appendix.pdf"));
+    assert.equal(appendix?.pages, 2);
+    assert.equal(appendix?.bytes, 22);
+    // 便捷镜像仍指向 primary
+    assert.equal(result.pdf, primary[0]?.path);
+    assert.equal(result.pdfFresh, true);
+  });
+
+  test("jobname：日志与产物都叫 review，产物定位不再假设 <main>.pdf", async () => {
+    const dir = project({ "main.tex": "\\documentclass{article}" });
+    installCompiler(
+      dir,
+      [
+        'import { mkdirSync, writeFileSync } from "node:fs";',
+        'import { join } from "node:path";',
+        "const dir = process.argv[2];",
+        'const out = join(dir, "build");',
+        "mkdirSync(out, { recursive: true });",
+        'writeFileSync(join(out, "review.pdf"), "%PDF-1.4 review\\n");',
+        'writeFileSync(join(out, "review.log"), "Output written on build/review.pdf (2 pages, 9 bytes).\\n");',
+      ],
+      { version: 2, activeRoot: "main.tex", roots: [{ path: "main.tex", jobname: "review" }] },
+    );
+
+    const result = resultOf(await new LatexRunner(probe()).compile({ dir }));
+    assert.equal(result.status, "ok", result.errors.map((item) => item.message).join(" | "));
+    assert.equal(result.root?.jobname, "review");
+    assert.equal(result.pdf, join(resolve(dir), "build", "review.pdf"));
+    assert.equal(result.pages, 2);
+  });
+
+  test("扫描兜底：日志没提到的产物也在 outputs 里（fresh、fromLog 为 null）", async () => {
+    const dir = project({ "main.tex": "\\documentclass{article}" });
+    installCompiler(dir, [
+      'import { mkdirSync, writeFileSync } from "node:fs";',
+      'import { join } from "node:path";',
+      "const dir = process.argv[2];",
+      'const out = join(dir, "build");',
+      "mkdirSync(out, { recursive: true });",
+      'writeFileSync(join(out, "main.pdf"), "%PDF-1.4 main\\n");',
+      'writeFileSync(join(out, "standalone.pdf"), "%PDF-1.4 standalone\\n");',
+      'writeFileSync(join(out, "main.log"), "Output written on build/main.pdf (1 page, 9 bytes).\\n");',
+    ]);
+
+    const result = resultOf(await new LatexRunner(probe()).compile({ dir }));
+    assert.equal(result.status, "ok", result.errors.map((item) => item.message).join(" | "));
+    const standalone = result.outputs.find((output) => output.path.endsWith("standalone.pdf"));
+    assert.ok(standalone !== undefined);
+    assert.equal(standalone.fromLog, null);
+    assert.equal(standalone.fresh, true);
+    assert.equal(standalone.primary, false);
+    assert.equal(result.pdf, join(resolve(dir), "build", "main.pdf"));
+  });
+
+  test("产物上限 20：多出来的置 outputsTruncated，primary 仍在列表里", async () => {
+    const dir = project({ "main.tex": "\\documentclass{article}" });
+    installCompiler(dir, [
+      'import { mkdirSync, writeFileSync } from "node:fs";',
+      'import { join } from "node:path";',
+      "const dir = process.argv[2];",
+      'const out = join(dir, "build");',
+      "mkdirSync(out, { recursive: true });",
+      'writeFileSync(join(out, "main.pdf"), "%PDF-1.4 main\\n");',
+      'writeFileSync(join(out, "main.log"), "Output written on build/main.pdf (1 page, 9 bytes).\\n");',
+      "for (let i = 0; i < 24; i += 1) writeFileSync(join(out, `extra-${String(i)}.pdf`), '%PDF-1.4 x');",
+    ]);
+
+    const result = resultOf(await new LatexRunner(probe()).compile({ dir }));
+    assert.equal(result.status, "ok", result.errors.map((item) => item.message).join(" | "));
+    assert.equal(result.outputs.length, 20);
+    assert.equal(result.outputsTruncated, true);
+    assert.ok(result.outputs.some((output) => output.primary && output.path.endsWith("main.pdf")));
+  });
+});

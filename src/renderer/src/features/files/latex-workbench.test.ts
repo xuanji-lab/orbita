@@ -54,7 +54,7 @@ describe("latexBarState", () => {
   });
 
   test("失败（含超时 / 没装 / 找不到主文件）→ error，即使源码也更新", () => {
-    for (const status of ["compile-error", "timeout", "not-installed", "no-main-file"] as const) {
+    for (const status of ["compile-error", "timeout", "not-installed", "no-main-file", "root-outside-workspace"] as const) {
       assert.equal(latexBarState({ ...base, lastStatus: status, stale: true }), "error");
       assert.equal(isFailedStatus(status), true);
     }

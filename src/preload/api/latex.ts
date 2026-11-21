@@ -6,6 +6,7 @@
 import { ipcRenderer } from "electron";
 import {
   latexChannels,
+  type LatexBuildProgress,
   type LatexCleanOutcome,
   type LatexCompileIpcRequest,
   type LatexConfigureOutcome,
@@ -38,6 +39,9 @@ export const latexApi = {
   /** 编一次（主文件 / 引擎读项目配置与 magic comment） */
   compile: (req: LatexCompileIpcRequest): Promise<LatexRunOutcome> =>
     ipcRenderer.invoke(latexChannels.compile, req),
+  /** 编译中的进度（当前跑到哪一轮引擎）；1 秒轮询一次 */
+  progress: (req: LatexFileContext): Promise<LatexBuildProgress> =>
+    ipcRenderer.invoke(latexChannels.progress, req),
   /** 取消这个项目在跑的编译；false = 已经没有在跑的 */
   cancel: (req: LatexFileContext): Promise<boolean> => ipcRenderer.invoke(latexChannels.cancel, req),
   /** 清理辅助文件（latexmk -c，保留 PDF）；removed / kept 是清理前后的差集 */

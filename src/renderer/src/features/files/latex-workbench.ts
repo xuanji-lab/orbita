@@ -22,7 +22,13 @@ export type LatexBarState = "idle" | "dirty" | "running" | "success" | "error";
 
 /** 编译结局里算「失败」的那几档。cancelled 不算失败（状态行另有说法） */
 export function isFailedStatus(status: LatexStatus): boolean {
-  return status === "compile-error" || status === "timeout" || status === "not-installed" || status === "no-main-file";
+  return (
+    status === "compile-error" ||
+    status === "timeout" ||
+    status === "not-installed" ||
+    status === "no-main-file" ||
+    status === "root-outside-workspace"
+  );
 }
 
 export function latexBarState(input: {

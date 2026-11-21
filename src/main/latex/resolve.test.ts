@@ -71,7 +71,7 @@ describe("parseProjectConfig / splitOptions", () => {
       args: ["-quiet", 7, ""],
       recipe: "not-an-array",
     });
-    assert.deepEqual(config, { main: "paper.tex", engine: "xelatex", args: ["-quiet"] });
+    assert.deepEqual(config, { roots: [], main: "paper.tex", engine: "xelatex", args: ["-quiet"] });
   });
 
   test("引号包住的片段算一个参数", () => {
@@ -206,8 +206,8 @@ describe("resolveLatexPlan —— magic root", () => {
       "main.tex": "\\documentclass{book}\\begin{document}\\input{sections/one}\\end{document}",
       "sections/one.tex": "% !TEX root = ../main.tex\nSome text.",
     });
-    // 从子文档目录起解析：显式给了子文件，root 指回主文件
-    const plan = resolveLatexPlan(join(dir, "sections"), { main: "one.tex" });
+    // 面板 / agent 报「我在编这个子文件」：它的 % !TEX root 指回主文件
+    const plan = resolveLatexPlan(join(dir, "sections"), { file: "one.tex", boundary: [dir] });
     assert.equal(plan.status, "ok");
     if (plan.status !== "ok") return;
     assert.equal(plan.mainPath, join(resolve(dir), "main.tex"));

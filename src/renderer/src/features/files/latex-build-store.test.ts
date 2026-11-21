@@ -17,6 +17,10 @@ const summary = (status: LatexBuildSummary["status"], errors: number): LatexBuil
   })),
   warnings: [],
   pdfPath: "/p/build/main.pdf",
+  rootPath: "main.tex",
+  outputs: [],
+  outputsTruncated: false,
+  logPath: "/p/build/main.log",
   finishedAt: 1,
 });
 

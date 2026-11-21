@@ -38,16 +38,19 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { totalmem } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import {
+  LATEX_MAX_OUTPUTS,
   LATEX_CLEAN_TIMEOUT_MS,
   LATEX_IDLE_TIMEOUT_MS,
   LATEX_LOG_TAIL_LIMIT,
   LATEX_TOTAL_TIMEOUT_MS,
   latexMaxConcurrent,
+  type LatexBuildProgress,
   type LatexCleanOutcome,
   type LatexCleanResult,
   type LatexCompileRequest,
   type LatexEngine,
   type LatexIssue,
+  type LatexOutput,
   type LatexProbeRequest,
   type LatexProbeResult,
   type LatexResult,
@@ -56,7 +59,7 @@ import {
   type LatexTimeoutKind,
 } from "../../shared/latex.ts";
 import { createLatexProbe, type LatexProbe } from "./probe.ts";
-import { hasContentWarnings, parseLatexLog } from "./parse-log.ts";
+import { hasContentWarnings, parseLatexLog, type LoggedOutputItem } from "./parse-log.ts";
 import { resolveLatexPlan, type LatexPlan } from "./resolve.ts";
 
 /** 超时杀掉之后，等 close 事件的宽限。任务管理器杀不掉的进程不该让调用方永远等下去 */
@@ -130,6 +133,8 @@ export class LatexRunner {
   private readonly children = new Map<string, ChildProcess>();
   private readonly cancelled = new Set<string>();
   private running = 0;
+  /** 编译中的进度（latexmk stdout 的 `Run number N of rule 'x'`）；key = 项目 */
+  private readonly progress = new Map<string, { step: string | null; run: number | null }>();
 
   /** deps 只给测试与将来换探测实现留口；生产默认走真盘 + 真 execFile */
   constructor(probe: LatexProbe = createLatexProbe(), options: LatexRunnerOptions = {}) {
@@ -177,13 +182,31 @@ export class LatexRunner {
     }
     this.active.add(key);
     this.running += 1;
+    this.progress.set(key, { step: null, run: null });
     try {
       return { ok: true, result: await this.build(request, dir, key, started) };
     } finally {
       this.active.delete(key);
       this.cancelled.delete(key);
+      this.progress.delete(key);
       this.running -= 1;
     }
+  }
+
+  /**
+   * 编译中的进度。**只报真观察到的信号**（latexmk stdout 每跑一轮引擎 / bibtex 打一行）；
+   * 没有信号（自定义 recipe 不打印）时 `step` 为 null，界面退回「编译中…」。
+   */
+  buildProgress(dirInput: string): LatexBuildProgress {
+    const dir = (dirInput ?? "").trim();
+    const key = projectKey(dir === "" ? process.cwd() : resolve(dir));
+    const running = this.active.has(key);
+    const entry = this.progress.get(key);
+    return {
+      running,
+      step: running ? (entry?.step ?? null) : null,
+      run: running ? (entry?.run ?? null) : null,
+    };
   }
 
   /** 应用退出：杀掉所有在跑的进程树。结果按 cancelled 回报给还在等的调用方 */
@@ -314,6 +337,7 @@ export class LatexRunner {
     } finally {
       this.active.delete(key);
       this.cancelled.delete(key);
+      this.progress.delete(key);
       this.running -= 1;
     }
   }
@@ -328,55 +352,36 @@ export class LatexRunner {
 
     const probe = await this.probeEnvironment();
     if (!probe.ok || probe.latexmk === null) {
-      return {
-        status: "not-installed",
-        engine: requestedEngine ?? "pdf",
-        main: "",
-        pdf: null,
-        pdfFresh: false,
-        pages: null,
-        durationMs: Date.now() - started,
-        errors: [issue(probe.message)],
-        warnings: [],
-        logStale: false,
-        logTail: null,
-        timeoutKind: null,
-      };
+      return emptyResult("not-installed", requestedEngine ?? "pdf", started, [issue(probe.message)]);
     }
 
     const plan = resolveLatexPlan(dir, {
       ...(request.main === undefined ? {} : { main: request.main }),
+      ...(request.file === undefined ? {} : { file: request.file }),
       ...(requestedEngine === undefined ? {} : { engine: requestedEngine }),
+      ...(request.boundary === undefined ? {} : { boundary: request.boundary }),
     });
-    if (plan.status === "no-main-file") {
+    if (plan.status !== "ok") {
       const candidates = plan.candidates.length === 0 ? "" : ` Candidates: ${plan.candidates.join(", ")}.`;
-      return {
-        status: "no-main-file",
-        engine: requestedEngine ?? "pdf",
-        main: "",
-        pdf: null,
-        pdfFresh: false,
-        pages: null,
-        durationMs: Date.now() - started,
-        errors: [issue(`${plan.detail}${candidates}`)],
-        warnings: [],
-        logStale: false,
-        logTail: null,
-        timeoutKind: null,
-      };
+      return emptyResult(
+        plan.status,
+        requestedEngine ?? "pdf",
+        started,
+        [issue(`${plan.detail}${candidates}`)],
+        plan.candidates,
+      );
     }
 
-    if (this.cancelled.has(key)) {
-      return cancelledResult(plan.mainName, plan.engine, started);
-    }
+    if (this.cancelled.has(key)) return cancelledResult(plan.root, plan.engine, started);
 
     /*
-     * 日志与 PDF 的位置不假定在 outDir：自定义 recipe 可以不带 -outdir，那时产物就
-     * 落在主文件旁边。候选顺序 = 项目 outDir → argv 里的 -outdir → 主文件目录。
+     * 日志与产物的位置不假定在 outDir：自定义 recipe 可以不带 -outdir，那时产物就
+     * 落在主文件旁边；-jobname 会把它们改名，所以日志名与产物名都用 jobBase。
+     * 候选顺序 = 项目 outDir → argv 里的 -outdir → 主文件目录。
      */
     const outDirs = outputDirs(plan);
-    const mainBase = basename(plan.mainName, extname(plan.mainName));
-    const logCandidates = outDirs.map((candidate) => join(candidate, `${mainBase}.log`));
+    const jobBase = plan.jobname ?? basename(plan.mainName, extname(plan.mainName));
+    const logCandidates = outDirs.map((candidate) => join(candidate, `${jobBase}.log`));
     /*
      * M3（二版）：**不删旧日志**。删掉它的那次修复引出了更糟的回归——同一份坏文档
      * 连编两次时，latexmk 读 .fdb_latexmk 判定无事可做、直接以非零码退出，**不会重写
@@ -386,8 +391,12 @@ export class LatexRunner {
      * 的那份作为本次日志（pages 只信它）；一份都不是本次的，则退回最近的一份并标记
      * 为 stale：errors / warnings 照常解析（它多半就是这次失败的原因），但 pages 与
      * 日志里的产物路径不用（那是上一轮的事实）。同项目互斥保证没有第二个写者。
+     *
+     * 产物快照与日志快照在同一时刻拍：**「新出现 / mtime 变了」比「mtime ≥ 本次
+     * spawn」更耐时钟偏移**（系统时间被校准时，新写的文件也可能早于 spawn 时刻）。
      */
     const logBefore = new Map<string, number | null>(logCandidates.map((path) => [path, mtimeOf(path)]));
+    const outputsBefore = snapshotOutputs(outDirs);
 
     const runStartedAt = Date.now();
     const outcome = await this.spawnLatexmk(
@@ -403,14 +412,24 @@ export class LatexRunner {
     const parsed = parseLatexLog(log);
     const logStale = picked.stale;
 
-    // 陈旧日志里的 Output written 是上一轮的产物位置，不当本次证据（目录候选照样试）
-    const logOutput = logStale ? null : parsed.output;
-    const pdfPath = locatePdf(logOutput, outDirs, mainBase, plan.dir, runStartedAt);
-    // 回 0 却没 PDF 时要知道「其实写出了中间格式」（dvi-only recipe 不是白编）
-    const nonPdfOutput = pdfPath === null ? findNonPdfOutput(logOutput, outDirs, plan.dir) : null;
-    // 「这一次写出来的」：mtime 不早于本次 spawn。与「比源码新」是两件事（评审 A1/M4）
-    const pdfWrittenAt = pdfPath === null ? null : mtimeOf(pdfPath);
-    const pdfFresh = pdfWrittenAt !== null && pdfWrittenAt >= runStartedAt;
+    const collected = collectOutputs({
+      // 陈旧日志里的 Output written 是上一轮的产物位置，不当本次证据
+      logged: logStale ? [] : parsed.outputs,
+      dirs: outDirs,
+      dir: plan.dir,
+      before: outputsBefore,
+      runStartedAt,
+      primaryName: jobBase,
+      outDir: plan.outDir,
+      mainDir: dirname(plan.mainPath),
+    });
+    const primary = collected.outputs.find((output) => output.primary) ?? null;
+    const pdfPath = primary !== null && primary.kind === "pdf" ? primary.path : null;
+    const pdfFresh = primary !== null && primary.kind === "pdf" && primary.fresh;
+    // 回 0 却没 PDF 时要知道「其实写出了中间格式」（dvi-only / 只有 .xdv 的 recipe 不是白编）：
+    // 这条只查日志给的路径，**不进 outputs**（.xdv / .dvi 不是给用户开的产物）
+    const nonPdfOutput =
+      pdfPath === null ? firstNonPdf(logStale ? [] : parsed.outputs, outDirs, plan.dir) : null;
     const upToDate = pdfIsCurrent(pdfPath, plan.mainPath);
     const errors = [...parsed.errors];
     const warnings = [...parsed.warnings];
@@ -452,11 +471,16 @@ export class LatexRunner {
     return {
       status,
       engine: plan.engine,
+      root: plan.root,
+      outputs: collected.outputs,
+      outputsTruncated: collected.truncated,
+      candidates: [],
+      logPath: picked.path,
       main: plan.mainName,
       pdf: pdfPath,
       pdfFresh,
       // 页数只信本次写出的日志：陈旧日志里的页数是上一轮的事实（评审 M3 二版）
-      pages: logStale ? null : parsed.pages,
+      pages: logStale ? null : (primary?.pages ?? null),
       durationMs: Date.now() - started,
       errors,
       warnings,
@@ -468,7 +492,7 @@ export class LatexRunner {
   }
 
   /**
-   * 起 latexmk 并等结果。stdout 不读内容（只排空管道，防子进程被背压卡住）。
+   * 起 latexmk 并等结果。stdout 只扫进度行（排空管道也防止子进程被背压卡住）。
    *
    * 超时判据是**候选日志的「大小 + mtime」有没有变**（见文件头第 5 条）：任何一份
    * 变了就算活跃；日志被删（轮换）或一份都还没生成时按进程存活处理——那种沉默
@@ -499,7 +523,8 @@ export class LatexRunner {
         windowsHide: true,
         // POSIX 上自成进程组：杀的时候一次带走 latexmk + 引擎 + bibtex
         detached: process.platform !== "win32",
-        stdio: ["ignore", "ignore", "pipe"],
+        // stdout 只用来读进度（latexmk 的 "Run number N of rule 'x'"），其余丢弃
+        stdio: ["ignore", "pipe", "pipe"],
       });
       this.children.set(key, child);
 
@@ -508,6 +533,20 @@ export class LatexRunner {
       let stderr = "";
       child.stderr?.on("data", (chunk: Buffer) => {
         if (stderr.length < STDERR_LIMIT) stderr += chunk.toString("utf8");
+      });
+      /*
+       * 进度只认 latexmk 每跑一轮打印的 `Run number N of rule 'xelatex'`（引擎与
+       * bibtex 各算一轮）。总轮数不可知，所以不编造分母；自定义 recipe 不打印时
+       * step 保持 null，界面退回「编译中…」。产物的 stdout 其余内容一律不读
+       * （格式随版本变，且一行 .log 已经够诊断）。
+       */
+      let stdoutTail = "";
+      child.stdout?.on("data", (chunk: Buffer) => {
+        stdoutTail = (stdoutTail + chunk.toString("utf8")).slice(-4096);
+        const matches = [...stdoutTail.matchAll(/Run number (\d+) of rule '([^']+)'/g)];
+        const last = matches[matches.length - 1];
+        if (last === undefined) return;
+        this.progress.set(key, { step: last[2] ?? null, run: Number(last[1]) });
       });
 
       const finish = (outcome: ProcessOutcome): void => {
@@ -596,7 +635,7 @@ function projectKey(dir: string): string {
  */
 function cleanDirOf(plan: LatexPlan): string {
   const hasOutdir = plan.argv.some((arg) => arg === "-outdir" || arg.startsWith("-outdir="));
-  return hasOutdir || plan.config.recipe === undefined ? plan.outDir : dirname(plan.mainPath);
+  return hasOutdir || plan.rootConfig.recipe === undefined ? plan.outDir : dirname(plan.mainPath);
 }
 
 /** `latexmk -c` 的 argv。`-outdir` 必须与编译时一致，否则它找不到那组 aux */
@@ -677,39 +716,203 @@ function outputDirs(plan: LatexPlan): string[] {
 }
 
 /**
- * PDF 在哪。日志里的 `Output written on <path>` 最权威——它记录的是引擎真正写的
- * 文件，可能不在我们猜的任何一个 outDir 下（评审 M2）。找不到再按候选目录找。
+ * 产物在哪 —— 日志 + 目录快照两条证据合并。
  *
- * **只认 `.pdf`**（大小写不敏感）。xelatex 的日志天生写
- * `Output written on build/main.xdv (1 page, 516 bytes).`——那是引擎的中间格式，
- * 随后由 xdvipdfmx 写出同目录同名的 `main.pdf`；把 `.xdv` 当产物交出去，调用方
- * 会拿它当 PDF 打开（xelatex 又是中文主路径，这条踩到的人最多）。所以日志给的
- * 不是 `.pdf` 时，按同目录同名的 `.pdf` 再试一次，再退到候选目录。
+ * 1. **日志**：`Output written on <path>` 最权威（引擎真正写的文件，可能不在我们
+ *    猜的任何一个 outDir 下，评审 M2）。**每一条都收**：一次构建写多份（\include-
+ *    standalone / TikZ externalize / 多 target 脚本）时，只认最后一条会把其余产物
+ *    藏起来。
+ * 2. **目录快照**：只看 outputDirs 的**直接子项**（不递归——递归会在 figures/ 里
+ *    捞到旧图，把「本次产物」说错）。它补上「日志里没写、但磁盘上确实变了」的产物
+ *    （自定义 recipe / 外部脚本），也让「上一次留下的那份」仍在列表里（fresh:false），
+ *    界面才有东西可预览。
+ * 3. **primary**：优先 `<outDir>/<jobname|basename>.pdf`（这个 root 的主产物），
+ *    否则第一条日志里的 PDF，否则最新 mtime 的 PDF。`-jobname` 编成功时主产物不叫
+ *    `<main>.pdf`，所以这里**不再假设文件名**。
  *
- * **本次新写的优先**（mtime ≥ 本次 spawn 的时刻）。lualatex 的日志写
- * `Output written on main.pdf`（名字不带 outdir 前缀），而项目根常有一份上一轮
- * 留下的 main.pdf；只按「谁存在」挑，就会把根目录那份旧文件当成产物，本次真正
- * 写出的 build/main.pdf 反被忽略。既然两者都匹配同一个名字，「谁新的」比「谁先被
- * 列到」可靠。没有新写的（latexmk 判定无事可做、PDF 根本没动）才退回第一个存在的。
+ * `.xdv` 不是产物：xelatex 的日志写 `Output written on … .xdv`，随后 xdvipdfmx 写出
+ * 同名 `.pdf`；把 xdv 交出去，调用方会拿它当 PDF 打开（xelatex 又是中文主路径）。
+ * dvi-only recipe 明确写出 `.dvi` 时给一条 `kind:"other"`，文案复用 missingPdfMessage。
  */
-function locatePdf(
-  output: string | null,
-  dirs: readonly string[],
-  mainBase: string,
-  dir: string,
-  runStartedAt: number,
-): string | null {
-  const candidates: string[] = [];
-  for (const fromLog of logOutputCandidates(output, dirs, dir)) {
-    candidates.push(fromLog, withPdfExtension(fromLog));
-  }
-  for (const candidate of dirs) candidates.push(join(candidate, `${mainBase}.pdf`));
-  const found = [...new Set(candidates)].filter(isPdfFile);
-  const fresh = found.find((path) => {
+interface CollectedOutputs {
+  outputs: LatexOutput[];
+  truncated: boolean;
+}
+
+interface CollectInput {
+  logged: readonly LoggedOutputItem[];
+  dirs: readonly string[];
+  dir: string;
+  /** spawn 前的 PDF 快照：path → mtime（null = 当时不存在） */
+  before: ReadonlyMap<string, number | null>;
+  runStartedAt: number;
+  /** 主产物的名字（jobname，缺省是主文件 basename） */
+  primaryName: string;
+  outDir: string;
+  mainDir: string;
+}
+
+function collectOutputs(input: CollectInput): CollectedOutputs {
+  const byKey = new Map<string, LatexOutput>();
+  const order: string[] = [];
+  const freshOf = (path: string): boolean => {
     const mtime = mtimeOf(path);
-    return mtime !== null && mtime >= runStartedAt;
+    if (mtime === null) return false;
+    const previous = input.before.get(outputKey(path));
+    // 「新出现 / mtime 变了」优先于「mtime ≥ spawn 时刻」：系统时钟被校准时，
+    // 刚写的文件也可能早于 spawn 时刻；反过来粗粒度文件系统上两者可能相等。
+    return (mtime >= input.runStartedAt) || (previous !== undefined && previous !== null && mtime > previous);
+  };
+
+  const put = (path: string, detail: { pages: number | null; bytes: number | null; fromLog: string | null }): void => {
+    const key = outputKey(path);
+    const existing = byKey.get(key);
+    if (existing !== undefined) {
+      // 日志比扫描更具体：页数 / 字节数 / 原始写法以日志为准（同一条日志重复写也只会一条）
+      if (detail.pages !== null) existing.pages = detail.pages;
+      if (detail.bytes !== null) existing.bytes = detail.bytes;
+      if (detail.fromLog !== null) existing.fromLog = detail.fromLog;
+      return;
+    }
+    byKey.set(key, {
+      path,
+      kind: extname(path).toLowerCase() === ".pdf" ? "pdf" : "other",
+      primary: false,
+      fresh: false,
+      pages: detail.pages,
+      bytes: detail.bytes,
+      modifiedAt: null,
+      fromLog: detail.fromLog,
+    });
+    order.push(key);
+  };
+
+  for (const item of input.logged) {
+    const resolved = resolveLoggedOutput(item.path, input.dirs, input.dir, freshOf);
+    if (resolved === null) continue;
+    put(resolved, { pages: item.pages, bytes: item.bytes, fromLog: item.path });
+  }
+  for (const dir of input.dirs) {
+    for (const path of listOutputPdfs(dir)) put(path, { pages: null, bytes: null, fromLog: null });
+  }
+
+  for (const output of byKey.values()) {
+    output.modifiedAt = mtimeOf(output.path);
+    output.fresh = freshOf(output.path);
+  }
+
+  const all = order.map((key) => byKey.get(key)).filter((item): item is LatexOutput => item !== undefined);
+  const primary = choosePrimary(all, input);
+  if (primary !== null) primary.primary = true;
+
+  const sorted = [...all].sort((a, b) => {
+    if (a.primary !== b.primary) return a.primary ? -1 : 1;
+    const am = a.modifiedAt ?? 0;
+    const bm = b.modifiedAt ?? 0;
+    if (am !== bm) return bm - am;
+    return a.path.localeCompare(b.path);
   });
-  return fresh ?? found[0] ?? null;
+  const truncated = sorted.length > LATEX_MAX_OUTPUTS;
+  return { outputs: sorted.slice(0, LATEX_MAX_OUTPUTS), truncated };
+}
+
+function choosePrimary(outputs: readonly LatexOutput[], input: CollectInput): LatexOutput | null {
+  const pdfs = outputs.filter((output) => output.kind === "pdf");
+  if (pdfs.length === 0) return null;
+  const byName = (dir: string): LatexOutput | undefined => {
+    const target = outputKey(join(dir, `${input.primaryName}.pdf`));
+    return pdfs.find((output) => outputKey(output.path) === target);
+  };
+  const freshByName = (dir: string): LatexOutput | undefined => {
+    const found = byName(dir);
+    return found?.fresh === true ? found : undefined;
+  };
+  /*
+   * 顺序的要点：**本次新写的优先于「名字对得上」**。lualatex 的日志写裸文件名
+   * `main.pdf`，而项目根常有一份上一轮留下的 main.pdf；只按 outDir 先到先得，
+   * 会把旧文件当主产物、本次真正写出的那份反被忽略（评审 M2 的同一类）。
+   */
+  const freshInOutDir = freshByName(input.outDir);
+  if (freshInOutDir !== undefined) return freshInOutDir;
+  const freshInMainDir = freshByName(input.mainDir);
+  if (freshInMainDir !== undefined) return freshInMainDir;
+  // 本次写出的日志里的 PDF —— 日志顺序就是引擎写出的顺序
+  const logged = pdfs.filter((output) => output.fromLog !== null);
+  const freshLogged = logged.filter((output) => output.fresh);
+  if (freshLogged[0] !== undefined) return freshLogged[0];
+  if (logged[0] !== undefined) return logged[0];
+  // 最新 mtime（这一轮真写出来的优先）
+  const fresh = pdfs.filter((output) => output.fresh).sort((a, b) => (b.modifiedAt ?? 0) - (a.modifiedAt ?? 0));
+  if (fresh[0] !== undefined) return fresh[0];
+  return byName(input.outDir) ?? byName(input.mainDir) ?? pdfs[0] ?? null;
+}
+
+/**
+ * 日志里的产物路径 → 磁盘上真实存在的那个。
+ *
+ * 绝对路径就它自己。相对路径分两种：带目录前缀（`build/main.pdf`，pdflatex / xelatex
+ * 带 -outdir 时的写法）按项目目录解析；**裸文件名**（`main.pdf`，lualatex 就这么写）
+ * 既可能在项目目录、也可能在 outdir，所以每个候选目录都试一遍。
+ *
+ * `.xdv` 跳过，改试同名的 `.pdf`（见 collectOutputs 的注释）。
+ */
+function resolveLoggedOutput(
+  raw: string,
+  dirs: readonly string[],
+  dir: string,
+  freshOf: (path: string) => boolean,
+): string | null {
+  const candidates = logOutputCandidates(raw, dirs, dir);
+  const options: string[] = [];
+  for (const candidate of candidates) {
+    // `.xdv` 本身不是产物，但它的同名 `.pdf` 是（xdvipdfmx 随后写出）
+    if (extname(candidate).toLowerCase() !== ".xdv" && existsSync(candidate)) options.push(candidate);
+    const pdf = withPdfExtension(candidate);
+    if (pdf !== candidate && existsSync(pdf)) options.push(pdf);
+  }
+  // 同名候选（build/main.pdf 与 main.pdf）都在时，本次新写的那个才算这次写出的产物
+  return options.find(freshOf) ?? options[0] ?? null;
+}
+
+/**
+ * 日志说「写出了 X」但 X 不是 PDF（dvi-only 的 `.dvi`、只剩中间格式的 `.xdv`）：
+ * 把它找出来，好让错误文案说清「编出了东西，只是本应用只收 PDF」。
+ */
+function firstNonPdf(logged: readonly LoggedOutputItem[], dirs: readonly string[], dir: string): string | null {
+  for (const item of logged) {
+    for (const candidate of logOutputCandidates(item.path, dirs, dir)) {
+      if (!existsSync(candidate)) continue;
+      if (extname(candidate).toLowerCase() !== ".pdf") return candidate;
+    }
+  }
+  return null;
+}
+
+/** spawn 前的 PDF 快照：outputDirs 的直接子项 → mtime */
+function snapshotOutputs(dirs: readonly string[]): Map<string, number | null> {
+  const snapshot = new Map<string, number | null>();
+  for (const dir of dirs) {
+    for (const path of listOutputPdfs(dir)) snapshot.set(outputKey(path), mtimeOf(path));
+  }
+  return snapshot;
+}
+
+/** 目录里的 PDF（直接子项、不递归）；目录不存在 / 读不了回空 */
+function listOutputPdfs(dir: string): string[] {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && extname(entry.name).toLowerCase() === ".pdf")
+      .map((entry) => join(dir, entry.name))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+/** 产物去重键：Windows 大小写不敏感 */
+function outputKey(path: string): string {
+  const resolved = resolve(path);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 /**
@@ -720,10 +923,9 @@ function locatePdf(
  * 既可能在项目目录、也可能在 outdir，所以每个候选目录都试一遍——dirs 里已经含
  * outDir、argv 里的 -outdir 与主文件目录。
  */
-function logOutputCandidates(output: string | null, dirs: readonly string[], dir: string): string[] {
-  if (output === null) return [];
+function logOutputCandidates(output: string, dirs: readonly string[], dir: string): string[] {
   if (isAbsolute(output)) return [output];
-  if (/[\\/]/.test(output)) return [resolve(dir, output)];
+  if (/[\/]/.test(output)) return [resolve(dir, output)];
   return dirs.map((candidate) => join(candidate, output));
 }
 
@@ -735,18 +937,6 @@ function withPdfExtension(path: string): string {
 }
 
 /**
- * 本次日志说引擎写出了非 PDF 文件（`Output written on main.dvi`，dvi-only recipe）：
- * 把它找出来，好让错误文案能说清「编出了东西，只是本应用只收 PDF」。
- */
-function findNonPdfOutput(output: string | null, dirs: readonly string[], dir: string): string | null {
-  for (const candidate of logOutputCandidates(output, dirs, dir)) {
-    if (!existsSync(candidate)) continue;
-    if (extname(candidate).toLowerCase() !== ".pdf") return candidate;
-  }
-  return null;
-}
-
-/**
  * 「回 0 却没有 PDF」到底该说什么。区别很重要：dvi-only 的 recipe 确实编出了东西，
  * 文案要让用户知道不是白编，而不是让他以为引擎什么都没干。
  */
@@ -755,11 +945,6 @@ function missingPdfMessage(nonPdfOutput: string | null, dirs: readonly string[])
     return `latexmk exited with code 0 but no PDF was found (looked in ${dirs.join(", ")}).`;
   }
   return `latexmk exited with code 0 and wrote ${nonPdfOutput}, which is not a PDF — only PDF output is returned (DVI / XDV are intermediate formats). Use pdflatex / xelatex / lualatex, or check the PDF conversion step.`;
-}
-
-/** 存在且扩展名是 .pdf（大小写不敏感）。`.xdv` / `.dvi` 是中间产物，不是给用户开的 PDF */
-function isPdfFile(path: string): boolean {
-  return existsSync(path) && extname(path).toLowerCase() === ".pdf";
 }
 
 interface PickedLog {
@@ -810,16 +995,39 @@ function stderrTail(stderr: string): string {
   return trimmed === "" ? "" : ` ${trimmed.slice(-STDERR_LIMIT)}`;
 }
 
-function cancelledResult(mainName: string, engine: LatexEngine, started: number): LatexResult {
+function cancelledResult(root: LatexResult["root"], engine: LatexEngine, started: number): LatexResult {
   return {
-    status: "cancelled",
+    ...emptyResult("cancelled", engine, started, []),
+    root,
+    main: root?.path ?? "",
+  };
+}
+
+/**
+ * 「连 latexmk 都没起来 / 没开始编」的结果骨架。root / outputs 留空——
+ * 这几个状态要回答的是「为什么没编」，不是「编出了什么」。
+ */
+function emptyResult(
+  status: LatexStatus,
+  engine: LatexEngine,
+  started: number,
+  errors: LatexIssue[],
+  candidates: string[] = [],
+): LatexResult {
+  return {
+    status,
     engine,
-    main: mainName,
+    root: null,
+    outputs: [],
+    outputsTruncated: false,
+    candidates,
+    logPath: null,
+    main: "",
     pdf: null,
     pdfFresh: false,
     pages: null,
     durationMs: Date.now() - started,
-    errors: [],
+    errors,
     warnings: [],
     logStale: false,
     logTail: null,

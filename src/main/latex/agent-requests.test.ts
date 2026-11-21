@@ -27,6 +27,11 @@ after(() => {
 const OK_RESULT: LatexResult = {
   status: "ok",
   engine: "pdf",
+  root: null,
+  outputs: [],
+  outputsTruncated: false,
+  candidates: [],
+  logPath: null,
   main: "main.tex",
   pdf: null,
   pdfFresh: false,
@@ -95,7 +100,12 @@ describe("applyLatexRequest", () => {
       request: { dir: root, main: "main.tex", engine: "xelatex" },
     });
     assert.equal(outcome.ok, true);
-    assert.deepEqual(runner.calls, [{ dir: realpathSync(root), main: "main.tex", engine: "xelatex" }]);
+    const call = runner.calls[0];
+    assert.equal(call?.dir, realpathSync(root));
+    assert.equal(call?.main, "main.tex");
+    assert.equal(call?.engine, "xelatex");
+    // 授权根透传给解析层：magic 的目标必须落在会话目录里
+    assert.ok(call?.boundary !== undefined && call.boundary.length > 0);
   });
 
   test("dir 缺席 = 会话 cwd", async () => {
@@ -103,7 +113,9 @@ describe("applyLatexRequest", () => {
     const runner = recordingRunner();
     const { sessions, workspaces } = sources(root);
     await applyLatexRequest(runner, sessions, workspaces, { sessionId: "s1", request: {} });
-    assert.deepEqual(runner.calls, [{ dir: realpathSync(root) }]);
+    assert.equal(runner.calls.length, 1);
+    assert.equal(runner.calls[0]?.dir, realpathSync(root));
+    assert.equal(runner.calls[0]?.main, undefined);
   });
 
   test("dir 越界：拒绝且不碰 runner", async () => {
@@ -143,6 +155,7 @@ describe("applyLatexRequest", () => {
       sessionId: "s1",
       request: { dir: root, engine: "pdflatex" as unknown as LatexEngine },
     });
-    assert.deepEqual(runner.calls, [{ dir: realpathSync(root) }]);
+    assert.equal(runner.calls[0]?.dir, realpathSync(root));
+    assert.equal(runner.calls[0]?.engine, undefined);
   });
 });

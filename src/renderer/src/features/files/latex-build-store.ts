@@ -10,7 +10,7 @@
  *
  * 纯 Map + 两个函数，`node --test` 直接可用（hook 里连着 React，测不了）。
  */
-import type { LatexIssue, LatexStatus } from "@shared/latex";
+import type { LatexIssue, LatexOutput, LatexStatus } from "@shared/latex";
 
 /** 一次编译的摘要（界面只需要这些；错误全文在日志里） */
 export interface LatexBuildSummary {
@@ -21,6 +21,13 @@ export interface LatexBuildSummary {
   warnings: LatexIssue[];
   /** 本次结果里的 PDF 绝对路径（失败时可能是上一版的） */
   pdfPath: string | null;
+  /** 这一次编的根（相对项目目录）；没选出来时为 null */
+  rootPath: string | null;
+  /** 本次构建认定的产物（primary 在前） */
+  outputs: LatexOutput[];
+  outputsTruncated: boolean;
+  /** 本次解析的 .log 绝对路径（「完整日志」入口）；没有时 null */
+  logPath: string | null;
   finishedAt: number;
 }
 

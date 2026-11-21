@@ -1220,6 +1220,43 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
     [activeTab, latex.project, narrowRef, resolveTabPath, switchTo],
   );
 
+  /**
+   * 「打开编译日志」：把这一次构建的 .log 当作普通文本标签打开（它在产物目录里，
+   * 通常不在文件树的可达层）。路径来自主进程（LatexResult.logPath），不是拼出来的。
+   */
+  const openLatexLog = useCallback(
+    (path: string): void => {
+      const root = activeTab?.root ?? null;
+      if (root === null) return;
+      const tabPath = resolveTabPath(path);
+      setTabs((prev) => openTab(prev, root, tabPath));
+      switchTo(tabPath);
+      if (narrowRef.current) setTreeOn(false);
+    },
+    [activeTab, narrowRef, resolveTabPath, switchTo],
+  );
+
+  /** 「打开产物目录」：走 fs:reveal（与文件树的行尾动作同一条通道，不新造 shell 调用） */
+  const revealLatexDir = useCallback(
+    (dir: string): void => {
+      const ctx = latexContext;
+      if (ctx === null) return;
+      void api.files
+        .reveal({
+          sessionId: ctx.sessionId,
+          workspaceId: ctx.workspaceId,
+          ...(ctx.extraWorkspaceId === undefined ? {} : { extraWorkspaceId: ctx.extraWorkspaceId }),
+          root: ctx.root,
+          dir,
+        })
+        .catch((cause: unknown) => {
+          setEditorNotice(cause instanceof Error ? cause.message : String(cause));
+        });
+    },
+    [latexContext],
+  );
+
+
   // 引用跳转（实验功能「PDF 引用」）：怎么处理一条请求由 cite-focus.ts 的纯函数
   // 裁决（含「请求属于别的会话 → 作废」——面板重挂后旧会话的请求不会拿新会话的
   // 根重判、报出无关的 citeOutside，2026-10-18 修），这里只按结论改 state；
@@ -1634,13 +1671,16 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
             last={latex.last}
             error={latex.error}
             startedAt={latex.startedAt}
+            progress={latex.progress}
             cleaning={latex.cleaning}
             onCompile={compileWithSave}
             onCancel={latex.cancel}
             onClean={latex.clean}
             onToggleCompileOnSave={latex.setCompileOnSave}
             onSelectEngine={latex.selectEngine}
-            onSelectMain={latex.selectMain}
+            onSelectRoot={latex.selectRoot}
+            onOpenLog={openLatexLog}
+            onRevealDir={revealLatexDir}
           />
         )}
         {/* 「这台机器没有 latexmk」引导卡：项目已识别、探测失败时才出现。

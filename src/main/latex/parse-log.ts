@@ -14,14 +14,23 @@ import { LATEX_MAX_ISSUES, miktexPendingOf, type LatexIssue, type LatexIssueKind
 export interface ParsedLatexLog {
   errors: LatexIssue[];
   warnings: LatexIssue[];
-  /** `Output written on … (N pages` 的 N */
+  /** `Output written on …` 的**每一条**（多 target / 多次写出时不会互相覆盖） */
+  outputs: LoggedOutputItem[];
+  /** 最后一条的页数（= outputs.at(-1).pages；旧消费者保留） */
   pages: number | null;
   /**
-   * `Output written on <path> (N pages` 里的 <path>。**产物不一定在 -outdir**：
-   * 自定义 recipe 可以不传 -outdir，PDF / log 就落在主文件旁边。run.ts 拿它
-   * 定位真实产物，找不到才回退到候选目录（评审 M2）。
+   * 最后一条 `Output written on <path>` 里的 <path>（镜像，与 outputs 末项同源）。
+   * **产物不一定在 -outdir**：自定义 recipe 可以不传 -outdir，PDF / log 就落在主文件旁边。
    */
   output: string | null;
+}
+
+/** 日志里的一条产物（`Output written on build/main.pdf (3 pages, 12345 bytes).`） */
+export interface LoggedOutputItem {
+  /** 日志里的原始写法（"build/main.pdf" / "main.pdf"） */
+  path: string;
+  pages: number;
+  bytes: number | null;
 }
 
 /** 夹带文件名的行：`./main.tex:5: …`、`C:\paper\main.tex:5: …`（贪婪匹配取最后一个 :数字: 对） */
@@ -164,6 +173,7 @@ export function parseLatexLog(log: string): ParsedLatexLog {
   const warnings: LatexIssue[] = [];
   const seen = new Set<string>();
   const fileStack: (string | null)[] = [];
+  const outputs: LoggedOutputItem[] = [];
   let pages: number | null = null;
   let output: string | null = null;
 
@@ -183,11 +193,15 @@ export function parseLatexLog(log: string): ParsedLatexLog {
 
     if (kind === "info") {
       // `Output written on build/main.pdf (3 pages, 12345 bytes).` / 带引号的含空格路径
-      const written = /^Output written on (.+?) \((\d+) pages?/.exec(message);
+      const written = /^Output written on (.+?) \((\d+) pages?(?:,\s*(\d+) bytes)?/.exec(message);
       if (written !== null) {
-        pages = Number(written[2]);
-        const path = (written[1] ?? "").trim();
-        output = path.replace(/^"(.*)"$/, "$1");
+        const path = (written[1] ?? "").trim().replace(/^"(.*)"$/, "$1");
+        const count = Number(written[2]);
+        const bytes = written[3] === undefined ? null : Number(written[3]);
+        outputs.push({ path, pages: count, bytes });
+        // 旧字段的镜像：最后一条（与改动前的“后者覆盖前者”行为一致）
+        pages = count;
+        output = path;
       }
       continue;
     }
@@ -206,7 +220,7 @@ export function parseLatexLog(log: string): ParsedLatexLog {
     else pushIssue(warnings, issue, seen);
   }
 
-  return { errors, warnings, pages, output };
+  return { errors, warnings, outputs, pages, output };
 }
 
 /**

@@ -124,10 +124,11 @@ describe("parseLatexLog —— 边界", () => {
   });
 
   test("空日志与纯噪声不报错", () => {
-    assert.deepEqual(parseLatexLog(""), { errors: [], warnings: [], pages: null, output: null });
+    assert.deepEqual(parseLatexLog(""), { errors: [], warnings: [], outputs: [], pages: null, output: null });
     assert.deepEqual(parseLatexLog("This is pdfTeX, Version 3.14\nentering extended mode\n"), {
       errors: [],
       warnings: [],
+      outputs: [],
       pages: null,
       output: null,
     });
@@ -156,5 +157,27 @@ describe("parseLatexLog —— 边界", () => {
     );
     assert.equal(parsed.errors.length, 1);
     assert.equal(parsed.warnings.length, 2);
+  });
+});
+
+describe("parseLatexLog —— 多条 Output written（多产物）", () => {
+  test("每一次写出都留一条；pages / output 镜像最后一条", () => {
+    const parsed = parseLatexLog(
+      [
+        "Output written on build/main.pdf (8 pages, 123456 bytes).",
+        "Output written on build/appendix.pdf (2 pages, 4000 bytes).",
+      ].join("\n"),
+    );
+    assert.deepEqual(parsed.outputs, [
+      { path: "build/main.pdf", pages: 8, bytes: 123456 },
+      { path: "build/appendix.pdf", pages: 2, bytes: 4000 },
+    ]);
+    assert.equal(parsed.pages, 2);
+    assert.equal(parsed.output, "build/appendix.pdf");
+  });
+
+  test("没有 bytes 的旧写法也算一条（bytes 为 null）", () => {
+    const parsed = parseLatexLog("Output written on main.pdf (1 page).");
+    assert.deepEqual(parsed.outputs, [{ path: "main.pdf", pages: 1, bytes: null }]);
   });
 });
