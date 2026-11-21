@@ -305,7 +305,9 @@ try {
   step("组1：切到工作区会话 → 工作区树 → 代码/图片/二进制/大日志");
   await clickText("Research atlas", ".sidebar button");
   await waitFor(`document.querySelector("textarea.composer-input")?.placeholder.includes("Hand it something") === true`, "Boss 会话");
-  await clickText("Compare session navigation", ".sidebar button");
+  if ((await evaluate(`document.querySelector(".tp-waiting") !== null`)) !== true) await clickAria("This task");
+  await waitFor(`document.querySelector(".tp-waiting") !== null`, "主智能体进度里的等你");
+  await clickText("Compare session navigation", ".tp-waiting .tp-job-name");
   await clickAria("Files");
   await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("pitch.slides.json") === true`, "工作区树渲染");
   await clickLeaf("src", ".right-panel-slot");
