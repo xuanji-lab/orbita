@@ -6,7 +6,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { LatexProjectIndex } from "../../../../shared/latex.ts";
-import { environmentInsertion, latexContextBefore, suggestLatex } from "./latex-suggest.ts";
+import { environmentInsertion, latexContextBefore, loadedPackageNames, suggestLatex } from "./latex-suggest.ts";
 
 const emptyIndex: LatexProjectIndex = {
   dir: "/paper",
@@ -153,5 +153,61 @@ describe("environmentInsertion", () => {
   test("begin 模式把环境名补上右括号再接 body 与 \\end", () => {
     assert.equal(environmentInsertion("begin", "figure", "\n\t${0}"), "figure}\n\t${0}\n\\end{figure}");
     assert.equal(environmentInsertion("end", "figure", "\n\t${0}"), "figure}");
+  });
+});
+
+describe("宏包补全（usepackage）", () => {
+  test("现场：不带选项、带选项、多个包名（替换区间跳过前面的名字）", () => {
+    assert.deepEqual(latexContextBefore(String.raw`\usepackage{ams`), { kind: "package", from: 12, query: "ams" });
+    assert.deepEqual(latexContextBefore(String.raw`\usepackage[utf8]{ams`), {
+      kind: "package",
+      from: 18,
+      query: "ams",
+    });
+    assert.deepEqual(latexContextBefore(String.raw`\usepackage{amsmath,geom`), {
+      kind: "package",
+      from: 20,
+      query: "geom",
+    });
+    assert.deepEqual(latexContextBefore(String.raw`\RequirePackage{x`), { kind: "package", from: 16, query: "x" });
+  });
+
+  test("注释里的 usepackage 不弹", () => {
+    assert.equal(latexContextBefore(String.raw`% \usepackage{ams`), null);
+  });
+
+  test("本机名单：前缀过滤、按名字序；已加载的排在前面并标注", () => {
+    const rows = suggestLatex({ kind: "package", from: 0, query: "am" }, emptyIndex, 60, {
+      installed: ["amsfonts", "amsmath", "booktabs"],
+      loaded: ["amsmath", "geometry"],
+    });
+    assert.deepEqual(rows.map((row) => row.label), ["amsmath", "amsfonts"]);
+    assert.equal(rows[0]?.detail, "已加载");
+    assert.equal(rows[1]?.detail, null);
+    assert.equal(rows[0]?.insert, "plain");
+    assert.equal(rows[0]?.text, "amsmath");
+  });
+
+  test("没有 TeX（installed 为空）时退回「只补已加载的」", () => {
+    const rows = suggestLatex({ kind: "package", from: 0, query: "" }, emptyIndex, 60, {
+      installed: [],
+      loaded: ["geometry", "hyperref"],
+    });
+    assert.deepEqual(rows.map((row) => row.label), ["geometry", "hyperref"]);
+    assert.deepEqual(
+      suggestLatex({ kind: "package", from: 0, query: "" }, emptyIndex, 60, { installed: [], loaded: [] }),
+      [],
+    );
+  });
+
+  test("loadedPackageNames：拆逗号、去重、跳过注释", () => {
+    const text = [
+      String.raw`\documentclass{article}`,
+      String.raw`\usepackage{amsmath,geometry}`,
+      String.raw`% \usepackage{comment}`,
+      String.raw`\usepackage[utf8]{inputenc}`,
+      String.raw`\usepackage{amsmath}`,
+    ].join("\n");
+    assert.deepEqual(loadedPackageNames(text), ["amsmath", "geometry", "inputenc"]);
   });
 });

@@ -25,7 +25,7 @@ import {
 } from "./latex-workbench.ts";
 
 /** 交给 agent 时的分类：决定引用里的前缀文案 */
-export type ProblemLevel = "error" | "warning" | "layout" | "package" | "pending" | "verify";
+export type ProblemLevel = "error" | "warning" | "layout" | "package" | "pending" | "verify" | "lint";
 
 /**
  * 引文核验面板的数据（`cite:verify` 的结局）。**只在用户点「核验」时联网**，
@@ -48,6 +48,11 @@ export type ProblemItem = { level: ProblemLevel; file: string | null; line: numb
 
 export function LatexProblems(props: {
   groups: LatexIssueGroups;
+  /**
+   * chktex 的风格检查（本机装了才有）。**与编译问题同一个抽屉、同一种行**，
+   * 但单独成组：图标是铅笔、计数单独一个 chip，不与编译错误 / 告警混在一个数里。
+   */
+  lintIssues?: readonly LatexIssue[];
   open: boolean;
   onToggle: () => void;
   onHandToAgent: (item: ProblemItem) => void;
@@ -65,9 +70,15 @@ export function LatexProblems(props: {
 }) {
   const t = useT();
   const { groups } = props;
+  const lintIssues = props.lintIssues ?? [];
   const verifyRows = props.verify?.rows ?? [];
   const total =
-    groups.errorCount + groups.warningCount + groups.layout.length + groups.pending.length + verifyRows.length;
+    groups.errorCount +
+    groups.warningCount +
+    groups.layout.length +
+    groups.pending.length +
+    lintIssues.length +
+    verifyRows.length;
   /** 没有编译问题也允许打开抽屉：核验文献常常发生在「编译全绿」之后、投稿之前 */
   const openable = total > 0 || props.verify !== undefined;
   const rows: { item: ProblemItem; pkg?: MissingPackage }[] = [
@@ -76,6 +87,8 @@ export function LatexProblems(props: {
     ...groups.packages.map((item) => ({ item: toItem(item, "package"), pkg: item })),
     ...groups.errors.map((item) => ({ item: toItem(item, "error") })),
     ...groups.warnings.map((item) => ({ item: toItem(item, "warning") })),
+    // 风格检查排在编译问题之后：它不影响 PDF 能不能出来
+    ...lintIssues.map((issue) => ({ item: toItem(issue, "lint") })),
     ...groups.layout.map((item) => ({ item: toItem(item, "layout") })),
   ];
 
@@ -114,6 +127,12 @@ export function LatexProblems(props: {
                 <span className="latex-count">
                   <Icon name="clock" size={12} style={{ color: "var(--color-warning)" }} />
                   {t.latex.pendingCount(groups.pending.length)}
+                </span>
+              )}
+              {lintIssues.length > 0 && (
+                <span className="latex-count">
+                  <Icon name="pencil-line" size={12} style={{ color: "var(--color-text-tertiary)" }} />
+                  {t.latex.lintCount(lintIssues.length)}
                 </span>
               )}
               {verifyRows.length > 0 && (
@@ -237,8 +256,11 @@ function toItem(issue: LatexIssue | MissingPackage, level: ProblemLevel): Proble
   return { level, file: issue.file, line: issue.line, message: issue.message };
 }
 
-function iconOf(level: ProblemLevel): "octagon-x" | "triangle-alert" | "download" | "clock" | "info" | "shield-check" {
+function iconOf(
+  level: ProblemLevel,
+): "octagon-x" | "triangle-alert" | "download" | "clock" | "info" | "shield-check" | "pencil-line" {
   if (level === "verify") return "shield-check";
+  if (level === "lint") return "pencil-line";
   if (level === "package") return "download";
   if (level === "pending") return "clock";
   if (level === "error") return "octagon-x";
@@ -248,6 +270,7 @@ function iconOf(level: ProblemLevel): "octagon-x" | "triangle-alert" | "download
 
 function tintOf(level: ProblemLevel): string {
   if (level === "package" || level === "error") return "var(--color-danger)";
+  if (level === "lint") return "var(--color-text-tertiary)";
   if (level === "warning" || level === "layout" || level === "pending" || level === "verify") return "var(--color-warning)";
   return "var(--color-text-tertiary)";
 }

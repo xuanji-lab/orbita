@@ -76,6 +76,7 @@ import {
 const NO_HUNKS: readonly EditorHunk[] = [];
 /** 文献库还没到（或不在项目里）时的同一份空库：常量身份，补全来源每次现读 */
 const NO_CITE: readonly CiteEntry[] = [];
+const NO_PACKAGE_NAMES: readonly string[] = [];
 /** 大纲抽屉关着时的空结果（常量身份：关着时不该每帧造新对象） */
 const NO_OUTLINE: { entries: readonly OutlineEntry[]; rootLabel: string | null } = {
   entries: [],
@@ -167,6 +168,11 @@ export function TexEditorPane(props: {
    */
   latexIndex?: LatexProjectIndex | null;
   /**
+   * 本机 TeX 树里的宏包名（`\usepackage{` 的候选）。空 / 缺席 = 没有 TeX：补全退回
+   * 「只补这份文档已加载的」——静默降级，不提示缺工具。
+   */
+  packageNames?: readonly string[];
+  /**
    * 多文件导航（包含图 + 每个文件的章节）。两个用处：Ctrl/Cmd+单击 `\input{…}`
    * 跳转，与大纲按 root 聚合。null / 缺席 = 不在 LaTeX 项目里 / 导航还没回来，
    * 两者都退回旧行为（不拦点击、大纲只看当前文件）。
@@ -201,6 +207,9 @@ export function TexEditorPane(props: {
   /** 同一条纪律：索引比编辑器晚到（IPC 在飞），补全来源每次现读这个 ref */
   const indexRef = useRef<LatexProjectIndex | null>(props.latexIndex ?? null);
   indexRef.current = props.latexIndex ?? null;
+  /** 宏包名表同样可能比编辑器晚到（主进程要扫一次 TeX 树） */
+  const packageNamesRef = useRef<readonly string[]>(NO_PACKAGE_NAMES);
+  packageNamesRef.current = props.packageNames ?? NO_PACKAGE_NAMES;
   /** Ctrl/Cmd+单击 `\input{…}` 的处理函数：编辑器挂载只一次，闭包每轮渲染换新 */
   const includeClickRef = useRef<((at: { line: number; column: number }) => boolean) | null>(null);
   /** 基线：最后一次从盘上读到 / 成功写下去的文本指纹（按磁盘格式） */
@@ -439,8 +448,17 @@ export function TexEditorPane(props: {
                 setCursor(pos);
               }
             }
-          }, { folding: isTexFile(path), language: languageForFile(path), onModClick: (at) => includeClickRef.current?.(at) ?? false }),
-          latexCompletion({ cite: () => citeRef.current, index: () => indexRef.current }),
+          }, {
+            folding: isTexFile(path),
+            mathHover: /\.tex$/i.test(path),
+            language: languageForFile(path),
+            onModClick: (at) => includeClickRef.current?.(at) ?? false,
+          }),
+          latexCompletion({
+            cite: () => citeRef.current,
+            index: () => indexRef.current,
+            packages: () => packageNamesRef.current,
+          }),
           EditorView.contentAttributes.of({ "aria-label": t.editor.aria, spellcheck: "false" }),
         ],
       }),

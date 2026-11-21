@@ -29,12 +29,13 @@ export type LatexContext =
   | { kind: "command"; from: number; query: string }
   | { kind: "environment"; from: number; query: string; mode: "begin" | "end" }
   | { kind: "reference"; from: number; query: string }
+  | { kind: "package"; from: number; query: string }
   | { kind: "path"; from: number; query: string; mode: "tex" | "graphics" | "bib" }
   | { kind: "snippet"; from: number; query: string };
 
 /** 候选：`text` 是插入内容（snippet 模板或纯文本），由接线层决定用哪种插入方式 */
 export interface LatexSuggestion {
-  kind: "command" | "environment" | "reference" | "path" | "snippet";
+  kind: "command" | "environment" | "reference" | "package" | "path" | "snippet";
   /** 候选行显示的名字（也是筛选匹配的对象） */
   label: string;
   /** 行右侧的一句话 */
@@ -47,7 +48,7 @@ export interface LatexSuggestion {
 }
 
 /** 一次最多给几条：弹层只渲染 24 行，再长就该多打两个字 */
-const LIMIT = 60;
+export const LATEX_SUGGEST_LIMIT = 60;
 
 /**
  * 会接 `{...}` 的引用命令（natbib / biblatex / hyperref / cleveref 的常见写法）。
@@ -84,6 +85,8 @@ const PATH_COMMANDS: readonly { name: string; mode: "tex" | "graphics" | "bib" }
 
 const ENV_BEGIN = /\\begin\s*\{([^{}]*)$/;
 const ENV_END = /\\end\s*\{([^{}]*)$/;
+/** `\usepackage[opts]{a,b` / `\RequirePackage{…`：只认还没闭合的那个花括号 */
+const PACKAGE = /\\(?:usepackage|RequirePackage)\s*(?:\[[^\]\n]*\][ \t]*)?\{([^{}]*)$/;
 const REFERENCE = new RegExp(
   `\\\\(?:${REFERENCE_COMMANDS.join("|")})\\*?[ \\t]*\\{([^{}]*)$`,
 );
@@ -111,6 +114,14 @@ export function latexContextBefore(text: string): LatexContext | null {
   const reference = REFERENCE.exec(text);
   if (reference !== null && !commentAt(text, reference)) {
     return { kind: "reference", from: (reference.index ?? 0) + reference[0].length - (reference[1] ?? "").length, query: reference[1] ?? "" };
+  }
+  const pkg = PACKAGE.exec(text);
+  if (pkg !== null && !commentAt(text, pkg)) {
+    // 参数里可能有逗号：`\usepackage{amsmath,ams` 的现场从最后一个逗号之后开始
+    const args = pkg[1] ?? "";
+    const comma = args.lastIndexOf(",");
+    const argsStart = (pkg.index ?? 0) + pkg[0].length - args.length;
+    return { kind: "package", from: argsStart + comma + 1, query: args.slice(comma + 1) };
   }
   const path = PATH.exec(text);
   if (path !== null && !commentAt(text, path)) {
@@ -203,7 +214,8 @@ const lower = (value: string): string => value.toLowerCase();
 export function suggestLatex(
   context: LatexContext,
   index: LatexProjectIndex | null,
-  limit: number = LIMIT,
+  limit: number = LATEX_SUGGEST_LIMIT,
+  packages: PackageCandidates = EMPTY_PACKAGES,
 ): LatexSuggestion[] {
   switch (context.kind) {
     case "command":
@@ -212,11 +224,65 @@ export function suggestLatex(
       return suggestEnvironments(context, index, limit);
     case "reference":
       return suggestReferences(context.query, index, limit);
+    case "package":
+      return suggestPackages(context.query, packages, limit);
     case "path":
       return suggestPaths(context.query, context.mode, index, limit);
     case "snippet":
       return suggestSnippets(context.query, limit);
   }
+}
+
+/**
+ * `\usepackage{` 的两层候选：
+ * - `installed`：本机 TeX 树里的包名（主进程扫出来，排序去重）；
+ * - `loaded`：这份文档里已经 `\usepackage` 过的名字（按出现顺序），**排在前面**——
+ *   写第二遍 / 挪位置时最想看到的就是它们。
+ *
+ * 没有 TeX（`installed` 为空）时只剩 `loaded`：补全安静地降级，不提示「缺少工具」。
+ */
+export interface PackageCandidates {
+  installed: readonly string[];
+  loaded: readonly string[];
+}
+
+const EMPTY_PACKAGES: PackageCandidates = { installed: [], loaded: [] };
+
+function suggestPackages(query: string, packages: PackageCandidates, limit: number): LatexSuggestion[] {
+  const needle = lower(query.trim());
+  const seen = new Set<string>();
+  const rows: LatexSuggestion[] = [];
+  const push = (name: string, detail: string | null): void => {
+    if (seen.has(name)) return;
+    if (needle !== "" && !lower(name).startsWith(needle)) return;
+    seen.add(name);
+    rows.push({ kind: "package", label: name, detail, info: null, insert: "plain", text: name });
+  };
+  for (const name of packages.loaded) push(name, "已加载");
+  for (const name of packages.installed) push(name, null);
+  return rows.slice(0, limit);
+}
+
+/**
+ * 光标前的窗口里已经 `\usepackage{…}` 过的名字（按出现顺序、去重）。
+ * 注释行不算；`\usepackage[a,b]{x,y}` 拆成两个名字。
+ */
+export function loadedPackageNames(text: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const pattern = /\\(?:usepackage|RequirePackage)\s*(?:\[[^\]\n]*\][ \t]*)?\{([^{}\n]*)\}/g;
+  for (const match of text.matchAll(pattern)) {
+    const at = match.index ?? 0;
+    const lineStart = text.lastIndexOf("\n", at) + 1;
+    if (inTexComment(text.slice(lineStart, at + match[0].length), at - lineStart)) continue;
+    for (const raw of (match[1] ?? "").split(",")) {
+      const name = raw.trim();
+      if (name === "" || seen.has(name)) continue;
+      seen.add(name);
+      out.push(name);
+    }
+  }
+  return out;
 }
 
 function suggestCommands(query: string, index: LatexProjectIndex | null, limit: number): LatexSuggestion[] {

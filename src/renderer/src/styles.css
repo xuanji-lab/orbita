@@ -4076,6 +4076,21 @@ a.latex-setup-action {
 .tex-editor-host .cm-editor {
   height: 100%;
 }
+/* 公式悬浮预览（latex-math-hover.ts）。浮层是唯一允许用阴影的地方（elevation.css）：
+   实底 panel + 发丝边 + popover 阴影，与补全弹层同一配方；深浅 / 纸面主题都只走变量。
+   底色与边框由 CodeMirror 的 .cm-tooltip 主题给，这里只管内容区的留白与宽度。 */
+.tex-math-hover {
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-ui);
+  max-width: min(560px, 92vw);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.tex-math-hover .katex-display {
+  margin: var(--space-1) 0;
+}
 .tex-editor-status {
   display: flex;
   align-items: center;
