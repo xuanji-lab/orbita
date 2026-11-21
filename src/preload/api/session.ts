@@ -6,6 +6,7 @@ import { ipcRenderer } from "electron";
 import { ipcChannels, type SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
 import type { ArtifactOpenResult } from "../../shared/browser.ts";
 import type { PromptImage } from "../../shared/prompt-images.ts";
+import type { PlanItem } from "../../shared/plan.ts";
 import type { RevertPlan, UndoPlan } from "../../shared/revert.ts";
 import type {
   ModelAssignEntry,
@@ -31,6 +32,8 @@ export const sessionApi = {
   /** 读一条会话的元数据与 transcript；不存在返回 null */
   load: (id: string): Promise<SessionWindowDetail | null> =>
     ipcRenderer.invoke(ipcChannels.sessionLoad, id),
+  /** 一条会话当前的计划（最后一次生效的 update_plan）；没写过 / 不存在 = null。进度面板「下一步」用，不搬转录 */
+  plan: (id: string): Promise<PlanItem[] | null> => ipcRenderer.invoke(ipcChannels.sessionPlan, id),
   /**
    * 已加载窗口之前的一页（滚动触顶时拉）。before = 窗口第一条记录的 id（缺了 / 对不上
    * 盘上的世界就回空页），limit = 想要的条数，主进程会夹在有效区间

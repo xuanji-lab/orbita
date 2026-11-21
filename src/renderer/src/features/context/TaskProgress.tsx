@@ -921,8 +921,9 @@ function BriefLine(props: { label: string; text: string; you?: boolean; missing?
 }
 
 /**
- * 摘要里「计划」那一项的来源：子会话自己写的 update_plan。转录槽里没有的（没打开过、没在跑）按需读一次它的会话尾窗，
- * 只读露出来的那几行；通道有新消息（lastAt 变了）再读。读不到就当没写计划（摘要照样从通道回报里出）。
+ * 摘要里「计划」那一项的来源：子会话自己写的 update_plan。转录槽里没有的（没打开过、没在跑）向主进程要一次它当前的计划
+ * （session:plan：流式粗筛，只回清单，不搬转录），只要露出来的那几行；通道有新消息（lastAt 变了）再要。
+ * 读不到就当没写计划（摘要照样从通道回报里出）。不用 session:load：首屏尾窗多半不含计划，且每件要搬约 1 MB 转录。
  */
 function useJobPlans(rows: readonly JobRow[]): ReadonlyMap<string, PlanItem[] | null> {
   const key = rows.map((row) => `${row.meta.id}@${row.lastAt}`).join(",");
@@ -933,11 +934,9 @@ function useJobPlans(rows: readonly JobRow[]): ReadonlyMap<string, PlanItem[] | 
     for (const part of key.split(",")) {
       const id = part.slice(0, part.lastIndexOf("@"));
       void api.session
-        .load(id)
-        .then((loaded) => {
-          if (cancelled || loaded === null) return;
-          const items = planTimeline(loaded.transcript)?.current.items ?? null;
-          setPlans((current) => new Map(current).set(id, items));
+        .plan(id)
+        .then((items) => {
+          if (!cancelled) setPlans((current) => new Map(current).set(id, items));
         })
         .catch((cause: unknown) => console.warn("[progress] 读一件活的计划失败", id, cause));
     }

@@ -316,6 +316,7 @@ export function createPreviewApi(options: PreviewOptions, platform: string = "da
         return { meta: clone(item), transcript: records, window: sessionWindow(records) };
       },
       loadOlder: async () => ({ records: [], hasMore: false }),
+      plan: async (id) => planTimeline(fixture.transcripts.get(id) ?? [])?.current.items.map(({ text, status, waitingFor }) => ({ text, status, ...(waitingFor === undefined ? {} : { waitingFor }) })) ?? null,
       rename: async (id, title) => {
         const item = fixture.sessions.find((candidate) => candidate.id === id);
         if (item !== undefined) patchSession(id, { title: title.trim() || item.title, titleSource: "user" });
