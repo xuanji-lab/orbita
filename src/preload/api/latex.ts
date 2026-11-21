@@ -17,6 +17,7 @@ import {
   type LatexIndexOutcome,
   type LatexLintOutcome,
   type LatexLocateOutcome,
+  type LatexNavOutcome,
   type LatexProbeRequest,
   type LatexProjectOutcome,
   type LatexProbeResult,
@@ -61,6 +62,9 @@ export const latexApi = {
   /** 项目符号索引（`\ref` / 自定义命令 / 路径补全读它）；不属于项目时 found:false */
   index: (req: LatexFileContext): Promise<LatexIndexOutcome> =>
     ipcRenderer.invoke(latexChannels.index, req),
+  /** 多文件导航（包含图 + 每个文件的章节）；不属于项目时 found:false */
+  nav: (req: LatexFileContext): Promise<LatexNavOutcome> =>
+    ipcRenderer.invoke(latexChannels.nav, req),
   /** chktex 行内检查；本机没装时 available:false（界面据此不显示） */
   lint: (req: LatexFileContext): Promise<LatexLintOutcome> =>
     ipcRenderer.invoke(latexChannels.lint, req),
