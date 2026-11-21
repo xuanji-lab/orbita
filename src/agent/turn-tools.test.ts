@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AgentCommand } from "../shared/agent-ipc.ts";
 import { RequestBroker } from "./request-broker.ts";
+import { CATALOG_BUDGET, formatCapabilityCatalog } from "./capability-catalog.ts";
 import { createTurnTools, selectTurnTools, turnToolFlags, withheldToolReceipt, type TurnInput } from "./turn-tools.ts";
 
 type Submit = Extract<AgentCommand, { type: "submit" }>;
@@ -151,5 +152,78 @@ describe("turn-tools：按能力集挑工具", () => {
   it("缺模块回执：说清这件活没带什么、要用找谁；纯聊天的回执让它在回答里说", () => {
     assert.match(withheldToolReceipt("browser_navigate", "the browser module: x", false), /handed out without the browser module.*report_to_parent \(kind "question"\).*do not report it as failed/);
     assert.match(withheldToolReceipt("read", "any tools (it is chat only)", true), /chat only.*say so in your answer/);
+  });
+});
+
+describe("turn-tools：能力目录的原料（选择后的非空分组）", () => {
+  const ALL_ON = { sessionMemory: true, automationTools: true, pluginTools: true } as const;
+  const ids = (command: TurnInput, mcp: { name: string }[] = []) => selection(command, mcp).groups.map((group) => group.id);
+
+  it("分组与 tools 是同一批工具的划分：每个被选中的工具恰在一组里，组序即 tools 先后；不论能力集怎么挑", () => {
+    const MCP = [{ name: "mcp__zotero__search" }, { name: "mcp__qgis__render" }];
+    for (const command of [
+      submit({ ...ALL_ON }),
+      submit({ ...ALL_ON, mainAgent: true }),
+      submit({ ...ALL_ON, directories: CHILD }),
+      submit({ directories: CHILD, capabilities: [] }),
+      submit({ directories: CHILD, capabilities: ["pdf-docx", "browser", "mcp:zotero"] }),
+      submit({ directories: CHILD, capabilities: ["none"] }),
+    ]) {
+      const picked = selection(command, MCP);
+      assert.deepEqual(picked.groups.flatMap((group) => group.tools), picked.tools.map((tool) => tool.name));
+      assert.ok(picked.groups.every((group) => group.tools.length > 0 && group.when !== ""), "没有空组、每组都有何时用");
+      assert.equal(new Set(picked.groups.map((group) => group.id)).size, picked.groups.length, "组 id 不重复");
+    }
+  });
+
+  it("根会话全开：base 里的计划 / 插件 / 通道 / 记忆 / 自动化各是一组，MCP 单独一组", () => {
+    assert.deepEqual(ids(submit({ ...ALL_ON }), [{ name: "mcp__zotero__search" }]), [
+      "mcp", "pdf-docx", "image", "plan", "store", "plugins", "tasks", "browser", "docs-slides", "terminal", "channel", "memory", "automation",
+    ]);
+  });
+
+  it("子会话不含没注册的插件 / 记忆 / 自动化；通道一组讲的是向上汇报", () => {
+    const child = selection(submit({ ...ALL_ON, directories: CHILD }));
+    const got = child.groups.map((group) => group.id);
+    for (const absent of ["plugins", "memory", "automation", "mcp"]) assert.ok(!got.includes(absent), absent);
+    const channel = child.groups.find((group) => group.id === "channel");
+    assert.deepEqual(channel?.tools, ["report_to_parent"]);
+    assert.match(channel?.when ?? "", /handed you this work/);
+  });
+
+  it("普通根会话与主智能体：通道一组的说法不同，主智能体多了查看 / 暂停的工具", () => {
+    const plain = selection(submit({})).groups.find((group) => group.id === "channel");
+    const main = selection(submit({ mainAgent: true })).groups.find((group) => group.id === "channel");
+    assert.ok(main !== undefined && plain !== undefined);
+    assert.ok(main.tools.includes("work_cards") && main.tools.includes("pause_subsession") && !plain.tools.includes("work_cards"));
+    assert.notEqual(main.when, plain.when);
+  });
+
+  it('["none"] 没有任何分组；[] 只有基础那几组；["browser"] 只有浏览器加基础，没有幻灯片 / 终端 / MCP', () => {
+    assert.deepEqual(ids(submit({ directories: CHILD, capabilities: ["none"] }), [{ name: "mcp__qgis__render" }]), []);
+    assert.deepEqual(ids(submit({ directories: CHILD, capabilities: [] }), [{ name: "mcp__qgis__render" }]), ["plan", "channel"]);
+    assert.deepEqual(ids(submit({ directories: CHILD, capabilities: ["browser"] }), [{ name: "mcp__qgis__render" }]), ["plan", "browser", "channel"]);
+  });
+
+  it("MCP 一组只含能力集点名的服务的工具", () => {
+    const picked = selection(submit({ directories: CHILD, capabilities: ["mcp:zotero"] }), [{ name: "mcp__zotero__search" }, { name: "mcp__qgis__render" }]);
+    assert.deepEqual(picked.groups.find((group) => group.id === "mcp")?.tools, ["mcp__zotero__search"]);
+  });
+
+  it("新增 MCP 服务 / 新工具自然出现在目录里，不用改名单", () => {
+    const one = formatCapabilityCatalog(selection(submit({}), [{ name: "mcp__zotero__search" }]).groups, []);
+    const two = formatCapabilityCatalog(selection(submit({}), [{ name: "mcp__zotero__search" }, { name: "mcp__newserver__go" }]).groups, []);
+    assert.match(one, /servers: zotero\)/);
+    assert.match(two, /servers: newserver, zotero\)/);
+  });
+
+  it("最坏情形的真实目录（主智能体、全开、四十台名字很长的 MCP、skill 都在）不超 1500 字符，关键 Orbita 自有组一个不少", () => {
+    const mcp = Array.from({ length: 40 }, (_, i) => ({ name: `mcp__${"s".repeat(55)}${String(i).padStart(2, "0")}__t` }));
+    const skills = ["reading", "browser", "docs", "slides", "terminal", "plugin-creator", "automation", "skill-creator"];
+    const picked = selection(submit({ ...ALL_ON, mainAgent: true }), mcp);
+    const text = formatCapabilityCatalog(picked.groups, skills);
+    assert.ok(text.length <= CATALOG_BUDGET, `${text.length}`);
+    assert.equal(text.split("\n").filter((line) => line.startsWith("- ")).length, picked.groups.length);
+    for (const id of ["plan", "plugins", "channel", "memory", "automation", "store"]) assert.ok(text.includes(`- ${id} (`), id);
   });
 });

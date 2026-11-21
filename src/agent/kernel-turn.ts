@@ -466,6 +466,8 @@ export async function assembleTurn(
     intentGuideline: command.intent !== undefined,
     memoryToolsGuideline: flags.memoryTools,
     longTaskAutomationGuideline: flags.automationTools,
+    // 能力目录：selectTurnTools 选出的分组原样交过去（同一份分组也决定了上面注册了哪些工具），不另拼一份清单
+    capabilityCatalog: { groups: selected.groups, skills: resources.indexedSkills },
     ...(capabilities === undefined ? {} : { capabilities: { list: capabilities, missing: missingInstalled(capabilities, resources, mcpTools) } }),
   });
   // 空段（Git 标识关了）不渲染：与 joinSystemPrompt 滤掉空串同效
