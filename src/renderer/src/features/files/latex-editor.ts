@@ -159,6 +159,14 @@ export interface LatexEditorOptions {
   folding?: boolean;
   /** 词法器；缺省是 LaTeX（stex）。`.bib` 传 BibTeX 那个（bibtex-language.ts） */
   language?: Extension;
+  /**
+   * Ctrl/Cmd+单击（`\input{…}` 跳转）。返回 true = 已处理：编辑器不再走默认的
+   * 鼠标行为（不挪光标、不选区）。行号 1 基、列 0 基，都是点击落点。
+   *
+   * 用 `mousedown` 而不是 `click`：CM 的 click 处理已经改过选区，早一步拦下来
+   * 才能让「点参数 = 跳转」与「点空白 = 放光标」各自干净。
+   */
+  onModClick?: (at: { line: number; column: number }) => boolean;
 }
 
 export function latexEditorExtensions(
@@ -189,6 +197,23 @@ export function latexEditorExtensions(
     // 这里的 lintGutter 给行号旁一个可悬停的记号——长行折行后波浪线可能在视口外
     lintGutter(),
     ...(options.folding === true ? [foldGutter(), ...latexFolding] : []),
+    ...(options.onModClick === undefined
+      ? []
+      : [
+          EditorView.domEventHandlers({
+            mousedown(event, view): boolean {
+              const onModClick = options.onModClick;
+              if (onModClick === undefined) return false;
+              if (event.button !== 0 || !(event.ctrlKey || event.metaKey)) return false;
+              const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+              if (pos === null) return false;
+              const line = view.state.doc.lineAt(pos);
+              if (!onModClick({ line: line.number, column: pos - line.from })) return false;
+              event.preventDefault();
+              return true;
+            },
+          }),
+        ]),
     keymap.of([
       ...completionKeymap,
       ...(options.folding === true ? foldKeymap : []),

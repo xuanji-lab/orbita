@@ -10,6 +10,7 @@
  * `compile_latex` 与这里的按钮编的是同一个东西——「两边看到的是同一次编译」。
  */
 import { realpath } from "node:fs/promises";
+import { resolve } from "node:path";
 import { BrowserWindow, dialog, ipcMain } from "electron";
 import type { FileListRequest } from "../../shared/files.ts";
 import {
@@ -26,6 +27,7 @@ import {
   type LatexIndexOutcome,
   type LatexLintOutcome,
   type LatexLocateOutcome,
+  type LatexNavOutcome,
   type LatexPackageQuery,
   type LatexProbeRequest,
   type LatexProjectOutcome,
@@ -41,6 +43,7 @@ import { resolveFileRoots } from "../files/roots.ts";
 import { whitelistedPath } from "../files/list.ts";
 import { describeLatexProject, findLatexProjectDir, writeLatexProjectConfig } from "./project.ts";
 import { buildLatexIndex } from "./index.ts";
+import { buildLatexNav } from "./nav.ts";
 import { lintWithChktex, probeChktex } from "./chktex.ts";
 import { forwardSearch, insideProject, reverseSearch } from "./synctex.ts";
 import { createLatexPackageLookup } from "./packages.ts";
@@ -144,6 +147,27 @@ export function registerLatexIpc(
   ipcMain.handle(latexChannels.index, async (_event, req: LatexFileContext): Promise<LatexIndexOutcome> => {
     const located = await locateLatexProject(req, workspaces, sessions);
     return located === null ? { found: false } : { found: true, index: buildLatexIndex(located.dir) };
+  });
+
+  /**
+   * 多文件导航（包含图 + 每个文件的章节）。
+   *
+   * root 列表与编译条 / 闭包读的是同一个结论（`describeLatexProject`）：导航里
+   * 「这个文件属于 main.tex」不能与「编译会编 main.tex」不一致。`file` 是当前打开的
+   * 文件，用来算它属于哪些 root；图本身覆盖全部 root（文件树标记也要用到）。
+   */
+  ipcMain.handle(latexChannels.nav, async (_event, req: LatexFileContext): Promise<LatexNavOutcome> => {
+    const located = await locateLatexProject(req, workspaces, sessions);
+    if (located === null) return { found: false };
+    const project = describeLatexProject(located.dir, {
+      ...(sourceFileOf(located.file) === null ? {} : { file: located.file }),
+      boundary: [located.boundary],
+    });
+    const roots = project.roots.map((root) => resolve(project.dir, root.path));
+    return {
+      found: true,
+      nav: buildLatexNav(project.dir, roots, { file: located.file }),
+    };
   });
 
   ipcMain.handle(latexChannels.cancel, async (_event, req: LatexFileContext): Promise<boolean> => {

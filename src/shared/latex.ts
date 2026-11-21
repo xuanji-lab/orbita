@@ -417,6 +417,11 @@ export const latexChannels = {
   packages: "latex:packages",
   /** 项目符号索引：\label / 自定义命令 / 环境 / 路径候选（补全与重复 label 提示读它） */
   index: "latex:index",
+  /**
+   * 多文件导航：包含图（`file → includes[]` + 反向 `owners[]`）与每个文件的章节。
+   * 编辑器 Ctrl/Cmd+单击 跳转与大纲跨文件聚合都读它（一份事实，不读两套）。
+   */
+  nav: "latex:nav",
   /** chktex 行内检查（本机装了才可用；没装时 available:false） */
   lint: "latex:lint",
   /** 清理辅助文件（`latexmk -c`）：删 .aux/.log 等，保留 PDF */
@@ -681,6 +686,87 @@ export interface LatexProjectIndex {
 }
 
 export type LatexIndexOutcome = { found: false } | { found: true; index: LatexProjectIndex };
+
+/**
+ * 多文件导航（`latex:nav`）—— 一份包含图 + 每个文件的章节。
+ *
+ * 两个读者共用一份事实：
+ * - **编辑器**（Ctrl/Cmd+单击 `\input{…}`）：要行号与参数的列区间、以及解析后的目标；
+ * - **大纲**（跨文件聚合）：要每个文件按出现顺序的章节，以及包含命令插在哪里。
+ *
+ * `target: null` 就是 unresolved（找不到文件）：**不瞎猜**，界面据此提示一句。
+ * `truncated` / `limits` 记录撞到的深度、文件数、环上限；有上限时大纲可能不全，
+ * 但图里已经有的边仍然可用。
+ */
+export interface LatexNavEdge {
+  /** 命令名，不带反斜杠（input / include / subfile / …） */
+  command: string;
+  /** 参数原文（`\input{sec/ch1}` 里的 `sec/ch1`） */
+  raw: string;
+  /** 1 基行号 */
+  line: number;
+  /** 参数区在行内的起始列（0 基，左闭） */
+  argFrom: number;
+  /** 参数区的结束列（0 基，右开） */
+  argTo: number;
+  /** 解析到的文件（绝对路径）；找不到为 null */
+  target: string | null;
+}
+
+/** 文件里的一条章节标题 */
+export interface LatexNavSection {
+  command: string;
+  title: string;
+  /** 绝对层级（part=0 … subparagraph=6）；跨文件归一由 renderer 拼完整篇后做 */
+  level: number;
+  /** 1 基行号 */
+  line: number;
+}
+
+/** 图里的一个文件 */
+export interface LatexNavFile {
+  /** 绝对路径（去重键） */
+  path: string;
+  /** 相对项目目录、正斜杠（界面显示用） */
+  display: string;
+  /** 谁包含它（绝对路径、按发现顺序） */
+  owners: string[];
+  /** 它落在哪些 root 的闭包里（相对项目目录） */
+  roots: string[];
+  /** 它包含谁（按出现顺序） */
+  includes: LatexNavEdge[];
+  /** 它的章节标题（按出现顺序） */
+  sections: LatexNavSection[];
+}
+
+/** 撞到的上限种类；`at` 是撞上的那个文件（绝对路径） */
+export interface LatexNavLimit {
+  kind: "depth" | "nodes" | "cycle";
+  at: string;
+}
+
+export interface LatexNav {
+  /** 项目目录绝对路径 */
+  dir: string;
+  /**
+   * 聚合用的根（相对项目目录）：当前文件落在的**第一个** root。
+   * 不属于任何 root 时为 null——界面退回「只看当前文件」的旧行为。
+   */
+  root: string | null;
+  /** 同上，绝对路径（大纲拼接从它开始走） */
+  rootPath: string | null;
+  /**
+   * 当前文件属于哪些 root（相对项目目录）。多个 root 都包含它时全部列出，
+   * `root` 取第一个：不展开了两棵树，但用户能从 chip 看出它在哪几本书里。
+   */
+  focusRoots: string[];
+  files: LatexNavFile[];
+  /** 有上限被撞到（深度 / 文件数 / 环）：大纲可能不全 */
+  truncated: boolean;
+  limits: LatexNavLimit[];
+}
+
+export type LatexNavOutcome = { found: false } | { found: true; nav: LatexNav };
 
 /**
  * chktex 行内检查的结局。

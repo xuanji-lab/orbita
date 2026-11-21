@@ -31,7 +31,8 @@ import { ContextMenu } from "../../shell/ContextMenu";
 import type { MenuItem } from "../../shell/Menu";
 import { contentHash, type FileListRequest } from "@shared/files";
 import type { CiteEntry } from "@shared/cite";
-import type { LatexFileContext, LatexIssue, LatexProjectIndex } from "@shared/latex";
+import type { LatexFileContext, LatexIssue, LatexNav, LatexProjectIndex } from "@shared/latex";
+import { samePath } from "@shared/path";
 import { setDiagnostics } from "@codemirror/lint";
 import { CiteSearchPanel } from "./CiteSearchPanel.tsx";
 import {
@@ -46,7 +47,7 @@ import {
 import { formatSize } from "./tree-view.ts";
 import { latexCompletion } from "./latex-completion.ts";
 import { inlineDiagnostics } from "./latex-diagnostics.ts";
-import { parseOutline, outlineIndexAt, type OutlineEntry } from "./latex-outline.ts";
+import { outlineIndexAt, outlineView, type OutlineEntry } from "./latex-outline.ts";
 import { TexOutline } from "./TexOutline.tsx";
 import { isTexFile } from "./editor-state.ts";
 import {
@@ -75,6 +76,11 @@ import {
 const NO_HUNKS: readonly EditorHunk[] = [];
 /** 文献库还没到（或不在项目里）时的同一份空库：常量身份，补全来源每次现读 */
 const NO_CITE: readonly CiteEntry[] = [];
+/** 大纲抽屉关着时的空结果（常量身份：关着时不该每帧造新对象） */
+const NO_OUTLINE: { entries: readonly OutlineEntry[]; rootLabel: string | null } = {
+  entries: [],
+  rootLabel: null,
+};
 
 /** 停手多久自动保存（设计稿的 1.5 s） */
 const AUTOSAVE_MS = 1500;
@@ -161,6 +167,17 @@ export function TexEditorPane(props: {
    */
   latexIndex?: LatexProjectIndex | null;
   /**
+   * 多文件导航（包含图 + 每个文件的章节）。两个用处：Ctrl/Cmd+单击 `\input{…}`
+   * 跳转，与大纲按 root 聚合。null / 缺席 = 不在 LaTeX 项目里 / 导航还没回来，
+   * 两者都退回旧行为（不拦点击、大纲只看当前文件）。
+   */
+  nav?: LatexNav | null;
+  /**
+   * 打开项目里的另一个源码文件（跨文件大纲 / `\input` 跳转共用）。
+   * `line` 为 null 时只打开、不定位。缺席 = 跳不出去（独立使用编辑器时）。
+   */
+  onOpenSource?: (path: string, line: number | null) => void;
+  /**
    * 这次编译的问题（行内波浪线）。映射规则在 latex-diagnostics.ts（有测试）：
    * 只画本文件、只画 error / warning、一行一条。
    *
@@ -184,6 +201,8 @@ export function TexEditorPane(props: {
   /** 同一条纪律：索引比编辑器晚到（IPC 在飞），补全来源每次现读这个 ref */
   const indexRef = useRef<LatexProjectIndex | null>(props.latexIndex ?? null);
   indexRef.current = props.latexIndex ?? null;
+  /** Ctrl/Cmd+单击 `\input{…}` 的处理函数：编辑器挂载只一次，闭包每轮渲染换新 */
+  const includeClickRef = useRef<((at: { line: number; column: number }) => boolean) | null>(null);
   /** 基线：最后一次从盘上读到 / 成功写下去的文本指纹（按磁盘格式） */
   const savedHashRef = useRef(contentHash(props.initialText));
   const eolRef = useRef<LineEnding>(detectLineEnding(props.initialText));
@@ -420,7 +439,7 @@ export function TexEditorPane(props: {
                 setCursor(pos);
               }
             }
-          }, { folding: isTexFile(path), language: languageForFile(path) }),
+          }, { folding: isTexFile(path), language: languageForFile(path), onModClick: (at) => includeClickRef.current?.(at) ?? false }),
           latexCompletion({ cite: () => citeRef.current, index: () => indexRef.current }),
           EditorView.contentAttributes.of({ "aria-label": t.editor.aria, spellcheck: "false" }),
         ],
@@ -496,13 +515,42 @@ export function TexEditorPane(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reveal?.token]);
 
-  // 大纲抽屉：文本变化才重算（几十条章节，开抽屉的时候重算很便宜）
+  // 大纲抽屉：文本 / 导航变化才重算（几十条章节，开抽屉的时候重算很便宜）。
+  // 项目里有 root 时是**整篇**（按包含图展开，当前文件那一段用活文本），
+  // 没有 root / 导航还没回来时退回只看当前文件的旧行为。
   const showOutline = isTexFile(path);
-  const outlineEntries = useMemo<readonly OutlineEntry[]>(
-    () => (outlineOpen ? parseOutline(outlineText) : []),
-    [outlineOpen, outlineText],
+  const nav = props.nav ?? null;
+  const outline = useMemo<{ entries: readonly OutlineEntry[]; rootLabel: string | null }>(
+    () => (outlineOpen ? outlineView({ text: outlineText, path, nav }) : NO_OUTLINE),
+    [outlineOpen, outlineText, nav, path],
   );
-  const outlineActive = outlineIndexAt(outlineEntries, cursor.line);
+  const outlineEntries = outline.entries;
+  const outlineActive = outlineIndexAt(outlineEntries, cursor.line, path);
+
+  /**
+   * Ctrl/Cmd+单击 落点 → 是否点到了一条包含参数。**只认主进程算好的边**（同一条
+   * 正则不在 renderer 再写一遍）：行号 + 参数的列区间。
+   *
+   * 导航是盘上的事实：刚敲、还没保存的 `\input` 下一次轮询（≤4 秒）后就能点——
+   * 比「按旧图猜一个不存在的文件」诚实。解析不到目标时给一条可见的提示，不静默。
+   */
+  includeClickRef.current = (at: { line: number; column: number }): boolean => {
+    const source = nav?.files.find((file) => samePath(file.path, path));
+    if (source === undefined) return false;
+    const edge = source.includes.find(
+      (item) => item.line === at.line && at.column >= item.argFrom && at.column <= item.argTo,
+    );
+    if (edge === undefined) return false;
+    if (edge.target === null) {
+      // 提示里写补齐后的名字（`\input{sec/ch1}` 找不到时说 sec/ch1.tex）
+      const tried = /\.tex$/i.test(edge.raw) ? edge.raw : `${edge.raw}.tex`;
+      props.onError?.(path, t.editor.includeMissing(tried));
+      return true;
+    }
+    if (props.onOpenSource === undefined) return false;
+    props.onOpenSource(edge.target, null);
+    return true;
+  };
 
   /** 跳到某一行（大纲点击 / PDF 反查共用）：整行选中、滚到中间、拿到焦点 */
   const jumpToLine = (line: number): void => {
@@ -514,6 +562,18 @@ export function TexEditorPane(props: {
       effects: EditorView.scrollIntoView(target.from, { y: "center" }),
     });
     view.focus();
+  };
+
+  /**
+   * 大纲点击：别的文件的条目先让外层切文件（再在那份文件里定位），当前文件的条目
+   * 本地跳行。**不是「在当前文件里找同名行」**——那会把用户带到错的地方。
+   */
+  const jumpToOutline = (entry: OutlineEntry): void => {
+    if (entry.file !== undefined && !samePath(entry.file, path)) {
+      props.onOpenSource?.(entry.file, entry.line);
+      return;
+    }
+    jumpToLine(entry.line);
   };
 
   const toggleOutline = (): void => {
@@ -1012,7 +1072,9 @@ export function TexEditorPane(props: {
           <TexOutline
             entries={outlineEntries}
             active={outlineActive}
-            onJump={(line) => jumpToLine(line)}
+            rootLabel={outline.rootLabel}
+            truncated={nav?.truncated === true}
+            onJump={jumpToOutline}
             onClose={() => setOutlineOpen(false)}
           />
         )}

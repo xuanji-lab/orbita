@@ -2916,6 +2916,9 @@ export const zh: Messages = {
     detach: "移除",
     symlink: "符号链接",
     rules: "规则",
+    /** LaTeX 项目的可编译 root（main.tex / appendix.tex）在文件树里的尾注 */
+    latexRoot: "主文件",
+    latexRootTip: "可编译的 LaTeX 根——其它文件都是由它引入的",
     missingTip: "找不到目录——在 orbita 之外被移动或改名了",
     missing: "找不到目录——被移动或改名了",
     attachments: "附件",
@@ -3244,6 +3247,10 @@ export const zh: Messages = {
     outlineClose: "收起大纲",
     outlineEmpty: "这份文件还没有章节",
     outlineLine: (line) => `第 ${line} 行`,
+    /** 跨文件包含图撞到上限：大纲可能不全（不报错，只在标题上标一句） */
+    outlineTruncated: "包含图到了深度或数量上限，这份大纲可能不全",
+    /** Ctrl/Cmd+单击一个解析不到的 \input / \include / \subfile 参数 */
+    includeMissing: (file) => `找不到 ${file}——检查路径；刚敲的内容要先保存一次`,
   },
 
   /* ---------- docx 轻量编辑（issue #273）：工具栏、保存状态、保真闸门 ---------- */

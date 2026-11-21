@@ -130,6 +130,105 @@ function toForwardSlashes(path: string): string {
   return path.replace(/\\/g, "/");
 }
 
+/* ---------- 章节：跨文件大纲的原料 ---------- */
+
+/**
+ * 章节命令 → 绝对层级（part 最浅，subparagraph 最深）。
+ *
+ * **绝对档位**是故意的：跨文件聚合时各文件的「最浅一级」不一样（一章的文件首条
+ * 可能是 `\section`，正文里首条是 `\chapter`），归一要在整篇拼完后才做——
+ * renderer 的 `latex-outline.ts` 负责那一步（它读的是未保存的活文本）。
+ */
+export const SECTION_LEVELS: Readonly<Record<string, number>> = {
+  part: 0,
+  chapter: 1,
+  section: 2,
+  subsection: 3,
+  subsubsection: 4,
+  paragraph: 5,
+  subparagraph: 6,
+};
+
+/** 标题命令；与 renderer 的 `latex-outline.ts` 同一套规则（那份读活文本） */
+const SECTION = /\\(part|chapter|section|subsection|subsubsection|paragraph|subparagraph)\*?[ \t]*(?:\[[^\]\n]*\])?[ \t]*\{/g;
+
+/** 一份 .tex 里的一条章节标题（行号 1 基） */
+export interface TexSectionRef {
+  command: string;
+  title: string;
+  /** 绝对层级（part=0 … subparagraph=6） */
+  level: number;
+  /** 1 基行号 */
+  line: number;
+}
+
+/** 从 `open` 位置的 `{` 开始配对（跨行标题继续读，不配对时读到末尾） */
+function readBraced(text: string, open: number): string {
+  let depth = 0;
+  for (let i = open; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === "\\") {
+      i += 1; // 跳过被转义的字符（\{ / \} / \\）
+      continue;
+    }
+    if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return text.slice(open + 1, i);
+    }
+  }
+  return text.slice(open + 1);
+}
+
+/** 标题的显示文本：去 label/index/footnote，去花括号，折叠空白 */
+function sectionTitle(raw: string): string {
+  return raw
+    .replace(/\\(?:label|index|footnote)\s*\{[^{}]*\}/g, "")
+    .replace(/\\[{}]/g, "")
+    .replace(/~/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * 一份 .tex 的章节标题（按出现顺序，注释里的不算）。
+ *
+ * 只服务于跨文件大纲（`nav.ts`）；当前文件的大纲由 renderer 用编辑器里的活文本
+ * 重算，两者规则一致但不共用代码：那边要「未保存的这一份」，这边要「盘上的那些」。
+ */
+export function extractSections(text: string): TexSectionRef[] {
+  const source = stripTexComments(text);
+  const sections: TexSectionRef[] = [];
+  if (!source.includes("\\")) return sections;
+
+  const lineStarts: number[] = [0];
+  for (let i = 0; i < source.length; i += 1) if (source[i] === "\n") lineStarts.push(i + 1);
+  const lineAt = (index: number): number => {
+    let low = 0;
+    let high = lineStarts.length - 1;
+    while (low < high) {
+      const mid = (low + high + 1) >> 1;
+      if ((lineStarts[mid] ?? 0) <= index) low = mid;
+      else high = mid - 1;
+    }
+    return low + 1;
+  };
+
+  for (const match of source.matchAll(SECTION)) {
+    const command = match[1] ?? "";
+    const at = match.index ?? 0;
+    const open = at + match[0].length - 1;
+    const title = sectionTitle(readBraced(source, open));
+    sections.push({
+      command,
+      title: title === "" ? `\\${command}` : title,
+      level: SECTION_LEVELS[command] ?? 0,
+      line: lineAt(at),
+    });
+  }
+  return sections;
+}
+
 /** 扫描结果：索引本体 + 有没有看不全 */
 interface ScanResult {
   labels: LatexLabelRef[];
