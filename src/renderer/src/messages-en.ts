@@ -3336,6 +3336,27 @@ export const en = {
     syncNotInstalled: "The synctex command was not found. Your TeX distribution may be missing a component.",
     syncFailed: (detail: string) => `SyncTeX failed: ${detail}`,
     actionsTip: "Project actions",
+    /* ---------- 配方 chip（9 条预设，见 shared/latex-recipes.ts） ---------- */
+    recipeTip: "Recipe — the command chain that builds this project; picking one writes .orbita/latex.json",
+    recipeGroups: {
+      recommended: "Recommended",
+      index: "Index",
+      glossary: "Glossary",
+      manual: "Manual chain",
+      debug: "Debug",
+      special: "Special",
+    },
+    recipeRecommended: "recommended",
+    recipeSingleHint: (engine: string) => `Runs ${engine} once — no index, glossary or bibliography step`,
+    cleanUnavailable: "This recipe does not use latexmk, so there is no latexmk -c to clean with",
+    /* ---------- PDF 标签（cap-tabs 里的普通标签） ---------- */
+    openPdf: "Show the PDF",
+    closePdf: "Hide the PDF",
+    pdfTabTip: (pages: number | null, time: string) =>
+      pages === null ? `Built ${time}` : `${pages} pages · built ${time}`,
+    pdfTabStale: "This PDF is older than the sources",
+    logStaleNote: "the log is from the previous build",
+    logStaleHint: (time: string) => `Log from the previous build (${time})`,
     compileOnSave: "Compile on save",
     compileOnSaveHint: "Compiles after the editor autosaves; kept in .orbita/latex.json for this project",
     /** 「没有 latexmk」引导卡：找过哪里 + 三个动作（不自动下载） */

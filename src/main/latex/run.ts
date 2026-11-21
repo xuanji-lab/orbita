@@ -34,7 +34,7 @@
  * bibtex 子进程；只杀 latexmk 会留下孤立的引擎进程继续占 CPU 与 .aux。
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
 import { totalmem } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import {
@@ -84,6 +84,13 @@ interface ProcessOutcome {
   cancelled: boolean;
   spawnError: string | null;
   stderr: string;
+}
+
+/** 多步链里真起过的一步（工具名 + 时序） */
+interface StepRun {
+  tool: string;
+  startedAtMs: number;
+  durationMs: number;
 }
 
 interface TimeoutInfo {
@@ -327,6 +334,13 @@ export class LatexRunner {
     if (!probe.ok || probe.latexmk === null) return { ok: false, error: probe.message };
     const plan = resolveLatexPlan(dir, {});
     if (plan.status !== "ok") return { ok: false, error: plan.detail };
+    // -c 是 latexmk 的功能：手写链 / 单次编译的配方下没有它可用（界面也会禁用这一项）
+    if (!plan.cleanable) {
+      return {
+        ok: false,
+        error: "This recipe does not use latexmk, so it has no `latexmk -c` to clean with. Pick a latexmk recipe to use Clean.",
+      };
+    }
 
     const target = cleanDirOf(plan);
     const before = listFiles(target);
@@ -435,19 +449,77 @@ export class LatexRunner {
     const logBefore = new Map<string, number | null>(logCandidates.map((path) => [path, mtimeOf(path)]));
     const outputsBefore = snapshotOutputs(outDirs);
 
+    /*
+     * 产物目录要先存在：latexmk 自己会 mkdir，**裸 pdflatex / xelatex / biber 不会**——
+     * 缺目录时 TeX 会把产物悄悄写回主文件旁边（-outdir 只对已存在的目录生效），
+     * 于是回执里的产物位置与 -outdir 对不上（真机实测：single-pass 的 PDF 落在项目根）。
+     */
+    if (plan.preset !== null) {
+      try {
+        mkdirSync(plan.outDir, { recursive: true });
+      } catch (cause) {
+        console.warn(`[latex] 建不了产物目录 ${plan.outDir}：`, cause);
+      }
+    }
+
     const runStartedAt = Date.now();
     const spawnStartedAt = this.now();
     const rawSteps: RawStep[] = [];
-    const outcome = await this.spawnLatexmk(
-      plan.command ?? probe.latexmk,
-      plan.argv,
-      plan.dir,
-      key,
-      logCandidates,
-      rawSteps,
-    );
-    // 步骤时序：startedAtMs 相对 spawn；最后一步的时长算到进程退出（不编造每步退出码）
-    const steps = finalizeSteps(rawSteps, Math.max(0, this.now() - spawnStartedAt));
+    /*
+     * 配方预设可能是**多步链**（latexmk → makeindex → latexmk / xelatex → biber → xelatex）。
+     * 顺序起，前一步非零 / 超时 / 起不来就停在那里——后面的步骤对着半份产物跑只会
+     * 制造更难读的错误。单步（默认链 / 自定义 recipe / 推荐的三条）走同一条路。
+     */
+    const chain: StepRun[] = [];
+    let outcome: ProcessOutcome | null = null;
+    for (const [index, step] of plan.steps.entries()) {
+      if (this.cancelled.has(key)) {
+        outcome = { code: null, timeout: null, cancelled: true, spawnError: null, stderr: "" };
+        break;
+      }
+      // 多步链的进度：报「正在跑哪个工具」，run 留空（latexmk 的轮次只对它自己有意义）
+      if (plan.steps.length > 1) this.progress.set(key, { step: step.tool, run: null });
+      const stepStartedAt = this.now() - spawnStartedAt;
+      const result = await this.spawnLatexmk(
+        step.command ?? probe.latexmk,
+        step.argv,
+        plan.dir,
+        key,
+        logCandidates,
+        // 多步链里每一趟 latexmk 的轮次都从 1 重新数，混在一起会拼出假的轮次
+        plan.steps.length === 1 ? rawSteps : null,
+      );
+      chain.push({
+        tool: step.tool,
+        startedAtMs: stepStartedAt,
+        durationMs: this.now() - spawnStartedAt - stepStartedAt,
+      });
+      outcome = result;
+      if (result.cancelled || result.timeout !== null || result.spawnError !== null || result.code !== 0) break;
+    }
+    if (outcome === null) {
+      return cancelledResult(plan.root, plan.engine, started, plan.engineSource);
+    }
+    /** 停下来的那一步（多步链的报错要说清是谁失败了，不能一律写 latexmk） */
+    const failedTool = chain[chain.length - 1]?.tool ?? "latexmk";
+    /** 实际起过的最后一步：回执的 command 只说真跑过的东西（plan.steps 至少一步） */
+    const ranStep = plan.steps[Math.max(0, chain.length - 1)] ?? plan.steps[0] ?? { tool: "latexmk", command: null, argv: plan.argv };
+    /*
+     * 步骤时序：单步（默认链 / 自定义 recipe / 推荐的三条）沿用旧口径——只认
+     * stdout 里 `Run number N of rule 'x'` 的真轮次（不打印时为空数组，与自定义
+     * recipe 的历史语义一致）。多步链的每一趟都会从 1 重新数，混在一起是假轮次，
+     * 所以改用我们真起过的步骤（工具 + 时长）。
+     */
+    const observedRuns = plan.steps.length === 1;
+    const steps = observedRuns
+      ? finalizeSteps(rawSteps, Math.max(0, this.now() - spawnStartedAt))
+      : chain.map((entry, index) => ({
+          rule: entry.tool,
+          run: null,
+          startedAtMs: entry.startedAtMs,
+          durationMs: entry.durationMs,
+          end: index === chain.length - 1 ? ("last" as const) : ("ran" as const),
+        }));
 
     const picked = pickLog(logBefore);
     const logFile = picked.path === null ? null : readLogFile(picked.path);
@@ -520,12 +592,12 @@ export class LatexRunner {
       add(timeoutMessage(outcome.timeout));
     } else if (outcome.spawnError !== null) {
       status = "compile-error";
-      add(`latexmk could not be started: ${outcome.spawnError}`);
+      add(`${failedTool} could not be started: ${outcome.spawnError}`);
     } else if (outcome.code !== 0) {
       status = "compile-error";
       // 陈旧错误不能代替「这一次也失败了」的事实：本次的非零退出码照样要说一遍
       if (errors.length === 0 || logStale) {
-        add(`latexmk exited with code ${String(outcome.code)}.${stderrTail(outcome.stderr)}`);
+        add(`${failedTool} exited with code ${String(outcome.code)}.${stderrTail(outcome.stderr)}`);
       }
     } else if (!upToDate) {
       status = "compile-error";
@@ -547,8 +619,8 @@ export class LatexRunner {
       engineSource: plan.engineSource,
       root: plan.root,
       command: {
-        executable: plan.command ?? probe.latexmk,
-        args: [...plan.argv],
+        executable: ranStep.command ?? probe.latexmk,
+        args: [...ranStep.argv],
         source: plan.config.recipe === undefined ? "default" : "config",
         cwd: plan.dir,
       },

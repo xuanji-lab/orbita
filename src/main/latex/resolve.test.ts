@@ -269,11 +269,109 @@ describe("argv 配方", () => {
     assert.deepEqual(plan.argv, ["-interaction=nonstopmode", "main.tex"]);
   });
 
+  test("recipeId 展开成多步链：索引配方 = latexmk → makeindex → latexmk", () => {
+    const dir = project({
+      "main.tex": ["% !TEX program = pdflatex", "\documentclass{article}"].join("\n"),
+      ".orbita/latex.json": JSON.stringify({
+        roots: [{ path: "main.tex", recipeId: "latexmk-makeindex", jobname: "paper" }],
+        activeRoot: "main.tex",
+      }),
+    });
+    const plan = resolveLatexPlan(dir, {});
+    assert.equal(plan.status, "ok");
+    if (plan.status !== "ok") return;
+    // 菜单明选的预设压过 magic：chip 上写着 xelatex，跑的就该是 xelatex
+    assert.equal(plan.engine, "xelatex");
+    assert.equal(plan.preset?.id, "latexmk-makeindex");
+    assert.equal(plan.cleanable, true);
+    assert.deepEqual(
+      plan.steps.map((step) => step.tool),
+      ["latexmk", "makeindex", "latexmk"],
+    );
+    // %OUTREL% 是相对主文件目录的产物目录（makeindex 拒绝绝对输出路径）；
+    // %JOB% 跟 jobname 走（.idx / .ind 都叫 paper.*）
+    assert.deepEqual(plan.steps[1]?.argv, ["-o", "build/paper.ind", "build/paper.idx"]);
+    assert.equal(plan.steps[0]?.argv[0], "-xelatex");
+    // 回执的 command 是最后一步（真正写 PDF 的那趟）
+    assert.equal(plan.command, null);
+    assert.deepEqual(plan.argv, plan.steps[2]?.argv);
+  });
+
+  test("手写链不可清理，且 biber 拿的是 jobname", () => {
+    const dir = project({
+      "main.tex": "\documentclass{article}",
+      ".orbita/latex.json": JSON.stringify({
+        roots: [{ path: "main.tex", recipeId: "manual-xelatex-biber", jobname: "thesis" }],
+        activeRoot: "main.tex",
+      }),
+    });
+    const plan = resolveLatexPlan(dir, {});
+    assert.equal(plan.status, "ok");
+    if (plan.status !== "ok") return;
+    assert.equal(plan.cleanable, false);
+    assert.deepEqual(
+      plan.steps.map((step) => step.tool),
+      ["xelatex", "biber", "xelatex", "xelatex"],
+    );
+    assert.deepEqual(plan.steps[1]?.argv, ["--output-directory=build", "thesis"]);
+    assert.equal(plan.command, "xelatex");
+  });
+
+  test("单次编译的 %ENGINE% 跟这次解析出的引擎（magic 说了 lualatex）", () => {
+    const dir = project({
+      "main.tex": ["% !TEX program = lualatex", "\documentclass{article}"].join("\n"),
+      ".orbita/latex.json": JSON.stringify({
+        roots: [{ path: "main.tex", recipeId: "single-pass" }],
+        activeRoot: "main.tex",
+      }),
+    });
+    const plan = resolveLatexPlan(dir, {});
+    assert.equal(plan.status, "ok");
+    if (plan.status !== "ok") return;
+    assert.equal(plan.engine, "lualatex");
+    assert.equal(plan.steps.length, 1);
+    assert.equal(plan.steps[0]?.tool, "lualatex");
+    assert.equal(plan.steps[0]?.command, "lualatex");
+    assert.equal(plan.cleanable, false);
+  });
+
+  test("未知 recipeId 按没有预设处理（不猜一条近似的链）", () => {
+    const dir = project({
+      "main.tex": "\documentclass{article}",
+      ".orbita/latex.json": JSON.stringify({
+        roots: [{ path: "main.tex", recipeId: "deleted-preset" }],
+        activeRoot: "main.tex",
+      }),
+    });
+    const plan = resolveLatexPlan(dir, {});
+    assert.equal(plan.status, "ok");
+    if (plan.status !== "ok") return;
+    assert.equal(plan.preset, null);
+    assert.equal(plan.steps.length, 1);
+    assert.equal(plan.steps[0]?.tool, "latexmk");
+    assert.equal(plan.cleanable, true);
+  });
+
   test("默认命令没有可执行文件覆盖（command = null，用探测到的 latexmk）", () => {
     const dir = project({ "main.tex": "\\documentclass{article}" });
     const plan = resolveLatexPlan(dir, {});
     assert.equal(plan.status, "ok");
     if (plan.status === "ok") assert.equal(plan.command, null);
+  });
+
+  test("%OUTREL% 是相对主文件目录的产物目录，%JOB% 缺省同 %DOC%", () => {
+    const dir = project({
+      ".orbita/latex.json": JSON.stringify({
+        roots: [{ path: "sub/main.tex", recipeId: "latexmk-makeindex", outDir: "out/build" }],
+        activeRoot: "sub/main.tex",
+      }),
+      "sub/main.tex": "\documentclass{article}",
+    });
+    const plan = resolveLatexPlan(dir, {});
+    assert.equal(plan.status, "ok");
+    if (plan.status !== "ok") return;
+    // 产物目录相对**主文件所在目录**（sub/），不是项目目录
+    assert.deepEqual(plan.steps[1]?.argv, ["-o", "out/build/main.ind", "out/build/main.idx"]);
   });
 
   test("占位符展开不认识的 %FOO% 原样保留", () => {

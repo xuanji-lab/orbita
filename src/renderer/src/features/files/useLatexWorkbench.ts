@@ -15,7 +15,6 @@ import { api } from "../../api.ts";
 import type {
   LatexBuildProgress,
   LatexCleanResult,
-  LatexEngine,
   LatexFileContext,
   LatexIssue,
   LatexProjectInfo,
@@ -64,7 +63,8 @@ export interface LatexWorkbench {
   refreshProbe: () => void;
   /** 系统文件选择器选 latexmk：现验通过才写设置，然后重新探测 */
   locateLatexmk: () => void;
-  selectEngine: (engine: LatexEngine) => void;
+  /** 选一条配方预设：写当前生效 root 的 recipeId（不顺手编译，编译仍由按钮触发） */
+  selectRecipe: (id: string) => void;
   refresh: () => void;
 }
 
@@ -260,6 +260,8 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
         outputs: result.outputs,
         outputsTruncated: result.outputsTruncated,
         logPath: result.log?.path ?? null,
+        logFresh: result.log === null ? null : result.log.fresh,
+        logModifiedAt: result.log?.modifiedAt ?? null,
         finishedAt: Date.now(),
       };
       // 编译条只在项目内出现，这一拍 project 一定在；存进模块表，切走再回来还在
@@ -382,7 +384,7 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
   }, [cleaning, loadProject]);
 
   const configure = useCallback(
-    (patch: { main?: string; engine?: LatexEngine }): void => {
+    (patch: { main?: string; activate?: string; upsertRoot?: { path: string; recipeId: string } }): void => {
       const ctx = contextRef.current;
       if (ctx === null) return;
       void (async () => {
@@ -486,7 +488,15 @@ export function useLatexWorkbench(context: LatexFileContext | null): LatexWorkbe
     locateInvalid,
     refreshProbe,
     locateLatexmk,
-    selectEngine: (engine) => configure({ engine }),
+    selectRecipe: (id) => {
+      const rootPath = projectRef.current?.activeRoot ?? projectRef.current?.main ?? null;
+      if (rootPath === null) {
+        setError("No compilable root is selected, so a recipe cannot be saved yet.");
+        return;
+      }
+      // activate 与 upsertRoot 同一份 root：配方属于 root，不是整个项目（多 root 各记各的）
+      configure({ activate: rootPath, upsertRoot: { path: rootPath, recipeId: id } });
+    },
     refresh: () => void loadProject(false),
   };
 }

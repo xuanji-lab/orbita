@@ -37,6 +37,7 @@ import {
   type LatexReverseRequest,
   type LatexRunOutcome,
 } from "../../shared/latex.ts";
+import { latexRecipePreset } from "../../shared/latex-recipes.ts";
 import type { SessionStore } from "../session/store.ts";
 import type { SettingsStore } from "../settings/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
@@ -208,6 +209,9 @@ export function registerLatexIpc(
       }
       if (req.upsertRoot !== undefined && req.upsertRoot.engine !== undefined && !isLatexEngine(req.upsertRoot.engine)) {
         return { ok: false, error: `Unknown engine: ${String(req.upsertRoot.engine)}` };
+      }
+      if (req.upsertRoot?.recipeId !== undefined && latexRecipePreset(req.upsertRoot.recipeId) === null) {
+        return { ok: false, error: `Unknown recipe preset: ${req.upsertRoot.recipeId}` };
       }
       const located = await locateLatexProject(req, workspaces, sessions);
       if (located === null) return { ok: false, error: "This file is not inside a LaTeX project." };

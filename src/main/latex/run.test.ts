@@ -689,6 +689,19 @@ describe("LatexRunner —— 清理辅助文件", () => {
     assert.equal(outcome.ok ? outcome.result.dir : "", join(resolve(dir), "build"));
   });
 
+  test("非 latexmk 配方（手写链）拒绝清理：-c 是 latexmk 的功能", async () => {
+    const dir = project({
+      "main.tex": "\documentclass{article}",
+      ".orbita/latex.json": JSON.stringify({
+        roots: [{ path: "main.tex", recipeId: "manual-xelatex-biber" }],
+        activeRoot: "main.tex",
+      }),
+    });
+    const outcome = await new LatexRunner(probe()).clean(dir);
+    assert.equal(outcome.ok, false);
+    assert.match(outcome.ok ? "" : outcome.error, /does not use latexmk/);
+  });
+
   test("正在编译时清理被拒（同一组 .aux 不能一边写一边删）", async () => {
     const dir = plainProject();
     // 这里要的是「编译还在跑」这个状态本身，所以脚本体必须真挂住。

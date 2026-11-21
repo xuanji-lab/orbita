@@ -38,6 +38,11 @@ import {
   type LatexRootSource,
 } from "../../shared/latex.ts";
 import { isInside } from "../path-boundary.ts";
+import {
+  latexEngineTool,
+  latexRecipePreset,
+  type LatexRecipePreset,
+} from "../../shared/latex-recipes.ts";
 
 /** 头部注释块里的 magic comment（TeXShop / TeXstudio + latexmk 的通行写法） */
 export interface LatexMagic {
@@ -76,6 +81,11 @@ export interface LatexProjectConfig {
   /** 追加在默认参数之后的额外 argv */
   args?: string[];
   /**
+   * 选中的配方预设（shared/latex-recipes.ts 的 id）。给了它就按那张表展开成
+   * **多步命令链**，优先级高于 `recipe` / 默认参数。
+   */
+  recipeId?: string;
+  /**
    * 自定义命令。**`recipe[0]` 是可执行文件，其余是它的参数**（不是「一整条 argv
    * 传给 latexmk」）——所以 `["latexmk", "-xelatex", …]` 与 `["-xelatex", …]`
    * 两种写法不会混淆。占位符只在参数里展开（可执行文件不展开）。
@@ -90,6 +100,7 @@ export interface EffectiveRootConfig {
   outDir?: string;
   jobname?: string;
   args?: string[];
+  recipeId?: string;
   recipe?: string[];
 }
 
@@ -129,8 +140,17 @@ export interface LatexPlan {
   engineSource: LatexEngineSource;
   /** 要起的可执行文件：recipe[0] 给了就用它（绝对或 PATH 上的名字）；null = 用探测到的 latexmk */
   command: string | null;
-  /** 不含可执行文件的完整参数表 */
+  /** 不含可执行文件的完整参数表（= steps 最后一步的 argv） */
   argv: string[];
+  /**
+   * 真正要顺序执行的命令链。单步时就是 `[{ command, argv }]`；选中的预设是多步
+   * （索引 / 术语表 / 手写链）时逐个跑，前一步失败即停（run.ts）。
+   */
+  steps: LatexPlanStep[];
+  /** 这次生效的配方预设；null = 默认链 / 自定义 recipe */
+  preset: LatexRecipePreset | null;
+  /** `latexmk -c` 能不能用（只有 latexmk 系）。手写链与单次编译为 false */
+  cleanable: boolean;
   magic: LatexMagic;
   config: LatexProjectConfig;
   /** 这个 root 生效的配置项（outDir / jobname / recipe 的迁移合并结果） */
@@ -143,6 +163,14 @@ export interface LatexPlanFailure {
   dir: string;
   candidates: string[];
   detail: string;
+}
+
+/** 计划里的一步：可执行文件 + 参数。command 为 null = 用探测到的 latexmk */
+export interface LatexPlanStep {
+  /** 工具名（界面 / 回执的步骤标签用）：latexmk / xelatex / biber / makeindex … */
+  tool: string;
+  command: string | null;
+  argv: string[];
 }
 
 export type LatexResolution = LatexPlan | LatexPlanFailure;
@@ -253,6 +281,8 @@ export function parseProjectConfig(raw: unknown): LatexProjectConfig {
   if (args !== undefined) config.args = args;
   const recipe = stringList(record["recipe"]);
   if (recipe !== undefined) config.recipe = recipe;
+  const recipeId = nonEmpty(record["recipeId"]);
+  if (recipeId !== undefined) config.recipeId = recipeId;
   const activeRoot = nonEmpty(record["activeRoot"]);
   if (activeRoot !== undefined) config.activeRoot = activeRoot;
   // 非布尔（"true" / 1）当作没写：开关状态显示与实际行为不能分家（同 settings 的纪律）
@@ -292,6 +322,8 @@ function parseRootConfig(value: unknown): LatexRootConfig | null {
   if (args !== undefined) root.args = args;
   const recipe = stringList(record["recipe"]);
   if (recipe !== undefined) root.recipe = recipe;
+  const recipeId = nonEmpty(record["recipeId"]);
+  if (recipeId !== undefined) root.recipeId = recipeId;
   return root;
 }
 
@@ -324,6 +356,7 @@ export function normalizeProjectConfig(raw: unknown, fallbackRoot?: string | nul
       ...(config.engine === undefined ? {} : { engine: config.engine }),
       ...(config.outDir === undefined ? {} : { outDir: config.outDir }),
       ...(config.args === undefined ? {} : { args: config.args }),
+      ...(config.recipeId === undefined ? {} : { recipeId: config.recipeId }),
       ...(config.recipe === undefined ? {} : { recipe: config.recipe }),
     };
     const index = roots.findIndex((root) => pathKey(root.path) === pathKey(config.main ?? ""));
@@ -333,6 +366,7 @@ export function normalizeProjectConfig(raw: unknown, fallbackRoot?: string | nul
         if (target.engine === undefined && legacy.engine !== undefined) target.engine = legacy.engine;
         if (target.outDir === undefined && legacy.outDir !== undefined) target.outDir = legacy.outDir;
         if (target.args === undefined && legacy.args !== undefined) target.args = legacy.args;
+        if (target.recipeId === undefined && legacy.recipeId !== undefined) target.recipeId = legacy.recipeId;
         if (target.recipe === undefined && legacy.recipe !== undefined) target.recipe = legacy.recipe;
       }
     } else {
@@ -344,6 +378,7 @@ export function normalizeProjectConfig(raw: unknown, fallbackRoot?: string | nul
     if (config.engine !== undefined) migrated.engine = config.engine;
     if (config.outDir !== undefined) migrated.outDir = config.outDir;
     if (config.args !== undefined) migrated.args = config.args;
+    if (config.recipeId !== undefined) migrated.recipeId = config.recipeId;
     if (config.recipe !== undefined) migrated.recipe = config.recipe;
     roots.push(migrated);
   }
@@ -479,9 +514,25 @@ export function resolveLatexPlan(
   const outDir = resolve(workDir, rootConfig.outDir ?? LATEX_DEFAULT_OUT_DIR);
   const jobname = rootConfig.jobname ?? null;
   const source = readText(deps, mainPath);
-  const picked = pickEngine(request.engine, magic.program, rootConfig.engine, source);
-  const built = buildArgv({
+  /*
+   * 配方预设的引擎优先级在 magic 之前：用户在菜单里点了「latexmk · xelatex」，
+   * 那是显式选择；文档头部的 `% !TEX program` 是文档的缺省声明，不该把菜单的
+   * 选择悄悄改回 pdflatex（chip 上明明写着 xelatex）。请求里的 engine 仍最高。
+   */
+  const preset = latexRecipePreset(rootConfig.recipeId);
+  if (rootConfig.recipeId !== undefined && preset === null) {
+    console.warn(`[latex] 未知的 recipeId ${rootConfig.recipeId}，按没有预设处理`);
+  }
+  const picked = pickEngine(
+    request.engine,
+    preset?.engine ?? null,
+    magic.program,
+    rootConfig.engine,
+    source,
+  );
+  const built = buildSteps({
     config: rootConfig,
+    preset,
     magic,
     mainName,
     dir: workDir,
@@ -511,6 +562,9 @@ export function resolveLatexPlan(
     engineSource: picked.source,
     command: built.command,
     argv: built.argv,
+    steps: built.steps,
+    preset,
+    cleanable: preset === null ? true : preset.cleanable,
     magic,
     config,
     rootConfig,
@@ -534,6 +588,8 @@ function rootConfigFor(config: LatexProjectConfig, rootPath: string): EffectiveR
   // args / recipe 相加没有意义（两条命令拼一起），条目自己的优先，其次才是 v1 的
   const args = entry?.args ?? (legacyApplies ? config.args : undefined);
   if (args !== undefined) merged.args = args;
+  const recipeId = entry?.recipeId ?? (legacyApplies ? config.recipeId : undefined);
+  if (recipeId !== undefined) merged.recipeId = recipeId;
   const recipe = entry?.recipe ?? (legacyApplies ? config.recipe : undefined);
   if (recipe !== undefined) merged.recipe = recipe;
   return merged;
@@ -921,11 +977,14 @@ function hasDocumentClass(deps: LatexResolveDeps, path: string): boolean {
 
 function pickEngine(
   requested: LatexEngine | undefined,
+  /** 配方预设自己写的引擎（菜单里明选的）；它压过 magic，但让位给显式请求 */
+  preset: LatexEngine | null,
   magic: LatexEngine | null,
   configured: LatexEngine | undefined,
   source: string,
 ): { engine: LatexEngine; source: LatexEngineSource } {
   if (requested !== undefined) return { engine: requested, source: "request" };
+  if (preset !== null) return { engine: preset, source: "config" };
   if (magic !== null) return { engine: magic, source: "magic" };
   if (configured !== undefined) return { engine: configured, source: "config" };
   return { engine: detectEngine(source), source: "auto" };
@@ -958,6 +1017,8 @@ function engineFlag(engine: LatexEngine): string {
 
 interface ArgvInput {
   config: EffectiveRootConfig;
+  /** 选中的配方预设；null = 自定义 recipe 或默认链 */
+  preset: LatexRecipePreset | null;
   magic: LatexMagic;
   /** 主文件名（相对 dir） */
   mainName: string;
@@ -967,10 +1028,11 @@ interface ArgvInput {
   engine: LatexEngine;
 }
 
-/** 可执行文件与参数分开给：recipe[0] 是命令，其余才是参数 */
-interface BuiltArgv {
+interface BuiltSteps {
+  /** 最后一步的命令与参数（回执的 command 字段只放一份；多步链要看 steps） */
   command: string | null;
   argv: string[];
+  steps: LatexPlanStep[];
 }
 
 /**
@@ -990,31 +1052,62 @@ interface BuiltArgv {
  * - `-jobname` 让产物不叫 `<main>.pdf`：面板与 agent 的产物定位**不再假设文件名**
  *   （run.ts 按日志 / 快照判定，project.ts 也认 jobname）。
  */
-function buildArgv(input: ArgvInput): BuiltArgv {
+function buildSteps(input: ArgvInput): BuiltSteps {
+  const doc = basename(input.mainName, extname(input.mainName));
   const context = {
-    doc: basename(input.mainName, extname(input.mainName)),
+    doc,
     docfile: input.mainName,
+    // %JOB%：latexmk -jobname 后的产物基名（.aux / .bcf / .idx 都按它命名）
+    job: input.jobname ?? doc,
     dir: input.dir,
     outdir: input.outDir,
+    // 产物目录相对主文件目录（makeindex / bibtex 不接受绝对输出路径）
+    outrel: relative(input.dir, input.outDir).replace(/\\/g, "/") || ".",
   };
+  /*
+   * 1. 配方预设：按 shared/latex-recipes.ts 那张表展开成多步链。
+   *    可执行文件不是 latexmk 的（xelatex / biber / makeindex …）直接按 PATH 上的
+   *    名字起进程——它们由 TeX 发行版提供，与 latexmk 同一个 bin 目录。
+   */
+  if (input.preset !== null) {
+    const steps: LatexPlanStep[] = input.preset.steps.map((step) => {
+      const tool = step.tool === "%ENGINE%" ? latexEngineTool(input.engine) : step.tool;
+      return {
+        tool,
+        command: tool === "latexmk" ? null : tool,
+        argv: expandRecipe(step.args, context),
+      };
+    });
+    const last = steps[steps.length - 1];
+    return {
+      command: last?.command ?? null,
+      argv: last?.argv ?? [],
+      steps,
+    };
+  }
+  // 2. 自定义 recipe：单步（recipe[0] 是可执行文件）
   if (input.config.recipe !== undefined) {
     const [command, ...args] = input.config.recipe;
-    return { command: command ?? null, argv: expandRecipe(args, context) };
+    const argv = expandRecipe(args, context);
+    return {
+      command: command ?? null,
+      argv,
+      steps: [{ tool: command ?? "", command: command ?? null, argv }],
+    };
   }
-  return {
-    command: null,
-    argv: [
-      engineFlag(input.engine),
-      "-interaction=nonstopmode",
-      "-file-line-error",
-      "-synctex=1",
-      `-outdir=${input.outDir}`,
-      ...(input.jobname === null ? [] : [`-jobname=${input.jobname}`]),
-      ...(input.config.args ?? []),
-      ...input.magic.options,
-      input.mainName,
-    ],
-  };
+  // 3. 默认链：latexmk + 引擎旗标（command = null，由 run.ts 用探测到的可执行文件）
+  const argv = [
+    engineFlag(input.engine),
+    "-interaction=nonstopmode",
+    "-file-line-error",
+    "-synctex=1",
+    `-outdir=${input.outDir}`,
+    ...(input.jobname === null ? [] : [`-jobname=${input.jobname}`]),
+    ...(input.config.args ?? []),
+    ...input.magic.options,
+    input.mainName,
+  ];
+  return { command: null, argv, steps: [{ tool: "latexmk", command: null, argv }] };
 }
 
 /**
@@ -1022,20 +1115,24 @@ function buildArgv(input: ArgvInput): BuiltArgv {
  *
  *   %DOC%     主文件名去掉 .tex（"main"）
  *   %DOCFILE% 主文件名（"main.tex" / "sub/paper.tex"）
+ *   %JOB%     产物基名（`-jobname` 有值时是它，否则同 %DOC%；.aux / .bcf / .idx 叫这个）
  *   %DIR%     工作目录（绝对）
  *   %OUTDIR%  产物目录（绝对）
+ *   %OUTREL%  产物目录（相对工作目录；makeindex / bibtex 只肯写相对路径）
  *
  * 未知的 `%FOO%` 原样保留：latexmk 自己也用 `%` 少，而静默删掉一个我们不认识的
  * 占位符会让用户对着一条少了参数的命令找半天。
  */
 export function expandRecipe(
   recipe: readonly string[],
-  context: { doc: string; docfile: string; dir: string; outdir: string },
+  context: { doc: string; docfile: string; job?: string; dir: string; outdir: string; outrel?: string },
 ): string[] {
   return recipe.map((token) =>
     token
       .replaceAll("%DOCFILE%", context.docfile)
       .replaceAll("%DOC%", context.doc)
+      .replaceAll("%JOB%", context.job ?? context.doc)
+      .replaceAll("%OUTREL%", context.outrel ?? context.outdir)
       .replaceAll("%OUTDIR%", context.outdir)
       .replaceAll("%DIR%", context.dir),
   );

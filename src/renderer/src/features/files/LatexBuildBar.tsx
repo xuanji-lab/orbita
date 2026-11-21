@@ -2,7 +2,7 @@
  * 论文工作台的编译条 —— 住在文件面板标签行下方，只在该文件属于 LaTeX 项目时出现。
  *
  * 一条横条放几件事（原型场景 1 / 3）：
- *   编译入口（root）· 引擎 · 编译（PDF 过期时才是 accent 主按钮）· 动作 · 状态行
+ *   编译入口（root）· 配方（9 条预设）· 编译（PDF 过期时才是 accent 主按钮）· 动作 · 状态行
  * 状态行的优先级：编译中 > 失败 > 脏 > 成功 > 安静。主操作一屏只有一个：
  * 只有 dirty 态用 `.btn-accent`；其余态是安静控件（状态优先用图标与文字，颜色第二信号）。
  *
@@ -21,13 +21,14 @@ import { Icon } from "../../shell/Icon";
 import { Menu, type MenuItem } from "../../shell/Menu";
 import type {
   LatexBuildProgress,
-  LatexEngine,
   LatexProjectInfo,
-  LatexProbeResult,
 } from "@shared/latex";
+import { LATEX_RECIPE_GROUPS, LATEX_RECIPE_PRESETS, latexRecipePreset } from "@shared/latex-recipes";
 import type { Messages } from "../../messages-en.ts";
 import {
   compileErrorKind,
+  currentRecipeId,
+  dirOfFile,
   engineLabel,
   formatDuration,
   formatElapsed,
@@ -38,7 +39,6 @@ import type { LatexBuildSummary } from "./useLatexWorkbench.ts";
 
 export function LatexBuildBar(props: {
   project: LatexProjectInfo;
-  probe: LatexProbeResult | null;
   state: LatexBarState;
   last: LatexBuildSummary | null;
   /**
@@ -52,11 +52,18 @@ export function LatexBuildBar(props: {
   progress: LatexBuildProgress | null;
   /** 清理辅助文件在跑（菜单项置灰，不让连点两次） */
   cleaning: boolean;
+  /** 这条配方能不能清理（latexmk 系才行；手写链 / 单次编译为 false） */
+  cleanable: boolean;
+  /** 有没有开着的 PDF 标签（决定动作菜单里是「打开 PDF」还是「收起 PDF」） */
+  pdfOpen: boolean;
   onCompile: () => void;
   onCancel: () => void;
   onClean: () => void;
   onToggleCompileOnSave: (on: boolean) => void;
-  onSelectEngine: (engine: LatexEngine) => void;
+  /** 选一条配方预设（写当前 root 的 recipeId） */
+  onSelectRecipe: (id: string) => void;
+  /** 打开 / 收起 PDF 标签（第二栏的开关） */
+  onTogglePdf: () => void;
   /** 切到另一个 root（写 activeRoot 并编它） */
   onSelectRoot: (path: string) => void;
   /** 在文件面板里打开这次构建的 .log（「完整日志」入口） */
@@ -65,7 +72,7 @@ export function LatexBuildBar(props: {
   onRevealDir: (dir: string) => void;
 }) {
   const t = useT();
-  const { project, probe, state, last } = props;
+  const { project, state, last } = props;
   const shortcut = shortcutLabel(api.platform);
   const running = state === "running";
 
@@ -78,15 +85,44 @@ export function LatexBuildBar(props: {
     return () => window.clearInterval(timer);
   }, [running, props.startedAt]);
 
-  const engines = probe?.ok === true ? probe.engines : [];
-  const engineItems: MenuItem[] = engines.map((engine) => ({
-    id: engine,
-    label: engineLabel(engine),
-    checked: engine === project.engine,
-    onSelect: () => props.onSelectEngine(engine),
-  }));
-  /** 自定义 recipe 时引擎 chip 不可点：真正跑的是用户的命令，换引擎不会让它变 */
+  /**
+   * 配方 chip（2026-11 用户裁决：引擎 chip 升级为配方 chip）。
+   *
+   * 显示的是**这一轮真正会跑的那条链**：选了预设就显示预设名（`latexmk · xelatex`），
+   * 手写了 recipe 就说「自定义配方」，都没写就说默认链 `latexmk · <引擎>`（它等价于
+   * 推荐组里同引擎那条，菜单里也据此打勾）。
+   */
   const recipe = project.configured.recipe;
+  const activeRecipeId = currentRecipeId({
+    recipeId: project.configured.recipeId,
+    recipe,
+    engine: project.engine,
+  });
+  const activePreset = latexRecipePreset(activeRecipeId);
+  const recipeLabel =
+    activePreset !== null ? activePreset.label : recipe !== undefined ? t.latex.customRecipe : `latexmk · ${engineLabel(project.engine)}`;
+
+  /** 9 条预设按分组排（组头不可选；推荐项带一个小字标记） */
+  const recipeItems: MenuItem[] = [];
+  for (const group of LATEX_RECIPE_GROUPS) {
+    const presets = LATEX_RECIPE_PRESETS.filter((preset) => preset.group === group);
+    if (presets.length === 0) continue;
+    recipeItems.push({ id: `head:${group}`, label: t.latex.recipeGroups[group], header: true });
+    for (const preset of presets) {
+      recipeItems.push({
+        id: preset.id,
+        label: preset.label,
+        checked: preset.id === activeRecipeId,
+        ...(preset.recommended === true
+          ? { badge: <span className="latex-recipe-badge">{t.latex.recipeRecommended}</span> }
+          : {}),
+        ...(preset.engine === null
+          ? { hint: t.latex.recipeSingleHint(engineLabel(project.engine)) }
+          : {}),
+        onSelect: () => props.onSelectRecipe(preset.id),
+      });
+    }
+  }
 
   const activeRoot = project.roots.find((root) => root.path === project.activeRoot) ?? null;
   const multiRoot = project.roots.length > 1;
@@ -118,7 +154,14 @@ export function LatexBuildBar(props: {
 
   /** 这一次构建写出的产物数（>1 才在状态区显示；单个是噪音） */
   const outputCount = last?.outputs.length ?? 0;
-  const outputDir = activeRoot?.outDir ?? null;
+  /**
+   * 产物目录：**回执 v2 的 outputs[] 是真源**（primary 在哪就是哪），配置里的
+   * outDir 只是没有产物时的兜底——自定义 recipe / 改过 jobname 时两者可能不同。
+   */
+  const outputDir =
+    dirOfFile(last?.outputs.find((output) => output.primary)?.path ?? last?.outputs[0]?.path ?? null) ??
+    activeRoot?.outDir ??
+    null;
 
   /**
    * 项目动作菜单。只放「不属于每一次编译、但属于这个项目」的动作：清理辅助文件
@@ -149,7 +192,13 @@ export function LatexBuildBar(props: {
     {
       id: "log",
       label: t.latex.openLog,
-      hint: last?.logPath === null || last?.logPath === undefined ? t.latex.openLogMissing : "",
+      // 日志是上一轮留下的就说出来——拿旧日志冒充这一次的事实比不显示更糟
+      hint:
+        last?.logPath === null || last?.logPath === undefined
+          ? t.latex.openLogMissing
+          : last.logFresh === false
+            ? t.latex.logStaleHint(t.time.dateTime(last.logModifiedAt ?? Date.now()))
+            : "",
       hintEllipsis: "head",
       icon: "file-text",
       disabled: last?.logPath === null || last?.logPath === undefined,
@@ -158,11 +207,24 @@ export function LatexBuildBar(props: {
       },
     },
     {
+      id: "pdf",
+      label: props.pdfOpen ? t.latex.closePdf : t.latex.openPdf,
+      hint: project.pdf === null ? t.latex.openLogMissing : "",
+      icon: "file-text",
+      checked: props.pdfOpen,
+      disabled: project.pdf === null,
+      onSelect: props.onTogglePdf,
+    },
+    {
       id: "clean",
       label: t.latex.clean,
-      hint: props.cleaning ? t.latex.cleaning : t.latex.cleanHint,
+      hint: !props.cleanable
+        ? t.latex.cleanUnavailable
+        : props.cleaning
+          ? t.latex.cleaning
+          : t.latex.cleanHint,
       icon: "trash-2",
-      disabled: running || props.cleaning,
+      disabled: running || props.cleaning || !props.cleanable,
       onSelect: props.onClean,
     },
   ];
@@ -185,27 +247,23 @@ export function LatexBuildBar(props: {
           {rootLabel}
         </Chip>
       )}
-      {recipe === undefined ? (
-        <Menu
-          items={engineItems}
-          panelMinWidth={150}
-          trigger={({ toggle }) => (
-            <Chip
-              icon="cpu"
-              chevron
-              onClick={toggle}
-              disabled={engineItems.length === 0}
-              title={probe?.ok === true ? t.latex.engineTip : (probe?.message ?? t.latex.engineTip)}
-            >
-              {engineLabel(project.engine)}
-            </Chip>
-          )}
-        />
-      ) : (
-        <Chip icon="terminal" title={recipe.join(" ")}>
-          {t.latex.customRecipe}
-        </Chip>
-      )}
+      {/* 配方 chip：9 条预设按分组（推荐 / 索引 / 术语表 / 手写链 / 调试 / 特殊）。
+          当前那条打勾；自定义 recipe 时 chip 说「自定义配方」，菜单仍可换回预设 */}
+      <Menu
+        items={recipeItems}
+        panelMinWidth={280}
+        panelMaxWidth={420}
+        trigger={({ toggle }) => (
+          <Chip
+            icon={recipe === undefined || activePreset !== null ? "list" : "terminal"}
+            chevron
+            onClick={toggle}
+            title={recipe !== undefined ? recipe.join(" ") : t.latex.recipeTip}
+          >
+            {recipeLabel}
+          </Chip>
+        )}
+      />
 
       {running ? (
         <button
@@ -351,6 +409,7 @@ function statusOf(input: {
             {t.latex.stalePdf(t.time.dateTime(project.pdf.modifiedAt))}
           </span>
         )}
+        {logStaleNote(last, t) !== null && <span className="latex-status-note">{" · "}{logStaleNote(last, t)}</span>}
       </>
     );
   }
@@ -377,6 +436,7 @@ function statusOf(input: {
         {last.pages === null
           ? t.latex.successNoPages(formatDuration(last.durationMs))
           : t.latex.success(last.pages, formatDuration(last.durationMs))}
+        {logStaleNote(last, t) !== null && <span className="latex-status-note">{" · "}{logStaleNote(last, t)}</span>}
       </>
     );
   }
@@ -395,6 +455,14 @@ function stepLabel(progress: LatexBuildProgress | null, t: Messages): string | n
   if (progress === null || progress.step === null) return null;
   const step = engineLabel(progress.step);
   return progress.run === null ? step : t.latex.stepRun(step, progress.run);
+}
+
+/**
+ * 「日志是上一轮留下的」那一句（回执 v2 的 log.fresh === false）；本次有日志且新鲜时 null。
+ * 没有日志时也不说——那时该说的是「还没有日志」，由日志入口负责。
+ */
+function logStaleNote(last: LatexBuildSummary, t: Messages): string | null {
+  return last.logPath !== null && last.logFresh === false ? t.latex.logStaleNote : null;
 }
 
 /** 失败摘要里的错误条数（含缺宏包；与问题抽屉的计数同口径） */

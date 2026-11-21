@@ -24,6 +24,7 @@ import {
   type LatexRootConfig,
   type LatexRootInfo,
 } from "../../shared/latex.ts";
+import { latexRecipePreset } from "../../shared/latex-recipes.ts";
 import { writeJsonAtomic } from "../atomic-write.ts";
 import { samePath } from "../../shared/path.ts";
 import {
@@ -279,8 +280,10 @@ export function describeLatexProject(
       ...(config.engine === undefined ? {} : { engine: config.engine }),
       ...(config.activeRoot === undefined ? {} : { activeRoot: config.activeRoot }),
       ...(rootConfig.outDir === undefined ? {} : { outDir: rootConfig.outDir }),
+      ...(rootConfig.recipeId === undefined ? {} : { recipeId: rootConfig.recipeId }),
       ...(rootConfig.recipe === undefined ? {} : { recipe: rootConfig.recipe }),
     },
+    cleanable: plan.status === "ok" ? plan.cleanable : true,
     pdf: active?.pdf === undefined || active.pdf === null ? null : { path: active.pdf.path, modifiedAt: active.pdf.modifiedAt },
     sourceModifiedAt: active?.sourceModifiedAt ?? null,
     detail: plan.status === "ok" ? null : plan.detail,
@@ -457,6 +460,11 @@ export async function writeLatexProjectConfig(
     if (patch.root.outDir !== undefined) target.outDir = requireRelativeDir(patch.root.outDir);
     if (patch.root.jobname !== undefined) target.jobname = requireJobName(patch.root.jobname);
     if (patch.root.args !== undefined) target.args = patch.root.args;
+    if (patch.root.recipeId !== undefined) {
+      // 写预设 = 换掉自定义命令：两条配方同时留在文件里，下次读的人无法判断哪条生效
+      target.recipeId = requireRecipeId(patch.root.recipeId);
+      delete target.recipe;
+    }
     if (patch.root.recipe !== undefined) target.recipe = patch.root.recipe;
   }
 
@@ -502,6 +510,12 @@ function requireRelativeDir(value: string): string {
     throw new Error("outDir must be relative to the root's directory (no absolute paths, no '..')");
   }
   return text.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+/** 预设 id 必须是表里认识的那条：写进配置的是契约，拼错的 id 只会在编译时静默退回默认链 */
+function requireRecipeId(value: string): string {
+  if (latexRecipePreset(value) === null) throw new Error(`Unknown recipe preset: ${value}`);
+  return value;
 }
 
 function requireJobName(value: string): string {

@@ -21,6 +21,8 @@ const summary = (status: LatexBuildSummary["status"], errors: number): LatexBuil
   outputs: [],
   outputsTruncated: false,
   logPath: "/p/build/main.log",
+  logFresh: true,
+  logModifiedAt: 990,
   finishedAt: 1,
 });
 

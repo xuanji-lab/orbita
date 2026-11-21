@@ -7,7 +7,10 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { LatexIssue } from "../../../../shared/latex.ts";
 import {
+  cleanAvailable,
   compileErrorKind,
+  currentRecipeId,
+  dirOfFile,
   engineLabel,
   formatDuration,
   formatElapsed,
@@ -253,5 +256,51 @@ describe("compileErrorKind", () => {
     assert.equal(compileErrorKind("spawn latexmk ENOENT"), "other");
     assert.equal(compileErrorKind("写配置失败：EACCES"), "other");
     assert.equal(compileErrorKind(""), "other");
+  });
+});
+
+describe("配方 chip 的当前项", () => {
+  test("配置里选的预设就是当前项", () => {
+    assert.equal(
+      currentRecipeId({ recipeId: "manual-xelatex-biber", engine: "pdf" }),
+      "manual-xelatex-biber",
+    );
+  });
+
+  test("没选预设 = 默认链，按引擎对上推荐组那一条（菜单里据此打勾）", () => {
+    assert.equal(currentRecipeId({ engine: "xelatex" }), "latexmk-xelatex");
+    assert.equal(currentRecipeId({ engine: "pdf" }), "latexmk-pdflatex");
+    assert.equal(currentRecipeId({ engine: "lualatex" }), "latexmk-lualatex");
+  });
+
+  test("自定义 recipe → null（界面说「自定义配方」，不冒充预设）", () => {
+    assert.equal(currentRecipeId({ recipe: ["xelatex", "%DOCFILE%"], engine: "xelatex" }), null);
+  });
+
+  test("未知 recipeId 不冒充任何预设：没有自定义命令时退回默认链", () => {
+    assert.equal(currentRecipeId({ recipeId: "deleted-preset", engine: "pdf" }), "latexmk-pdflatex");
+  });
+});
+
+describe("清理可用性跟配方走", () => {
+  test("latexmk 系（含索引 / 术语表）可清；手写链与单次编译不可", () => {
+    assert.equal(cleanAvailable({ recipeId: "latexmk-xelatex" }), true);
+    assert.equal(cleanAvailable({ recipeId: "latexmk-makeindex" }), true);
+    assert.equal(cleanAvailable({ recipeId: "manual-pdflatex-bibtex" }), false);
+    assert.equal(cleanAvailable({ recipeId: "single-pass" }), false);
+  });
+
+  test("没有预设（默认链 / 自定义 recipe）保持旧行为：可清", () => {
+    assert.equal(cleanAvailable({}), true);
+    assert.equal(cleanAvailable({ recipe: ["tectonic", "%DOCFILE%"] }), true);
+  });
+});
+
+describe("dirOfFile：从回执的产物路径推目录", () => {
+  test("两种分隔符都认；没有目录部分时 null", () => {
+    assert.equal(dirOfFile("/p/build/main.pdf"), "/p/build");
+    assert.equal(dirOfFile("C:\\p\\build\\main.pdf"), "C:\\p\\build");
+    assert.equal(dirOfFile("main.pdf"), null);
+    assert.equal(dirOfFile(null), null);
   });
 });

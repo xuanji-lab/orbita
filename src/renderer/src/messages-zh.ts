@@ -3125,6 +3125,26 @@ export const zh: Messages = {
     syncNotInstalled: "这台电脑上没有找到 synctex 命令，TeX 发行版可能缺组件。",
     syncFailed: (detail) => `SyncTeX 出错：${detail}`,
     actionsTip: "项目动作",
+    /* ---------- 配方 chip（9 条预设，见 shared/latex-recipes.ts） ---------- */
+    recipeTip: "配方：这个项目用哪条命令链编译；选中会写进 .orbita/latex.json",
+    recipeGroups: {
+      recommended: "推荐",
+      index: "索引",
+      glossary: "术语表",
+      manual: "手写链",
+      debug: "调试",
+      special: "特殊",
+    },
+    recipeRecommended: "推荐",
+    recipeSingleHint: (engine) => `用 ${engine} 跑一次——不含索引、术语表或文献步骤`,
+    cleanUnavailable: "这条配方不用 latexmk，没有可用的清理命令",
+    /* ---------- PDF 标签（cap-tabs 里的普通标签） ---------- */
+    openPdf: "打开 PDF",
+    closePdf: "收起 PDF",
+    pdfTabTip: (pages, time) => (pages === null ? `${time} 编译` : `${pages} 页 · ${time} 编译`),
+    pdfTabStale: "这份 PDF 比源码旧",
+    logStaleNote: "日志是上一轮留下的",
+    logStaleHint: (time) => `日志来自上一轮构建（${time}）`,
     compileOnSave: "保存即编译",
     compileOnSaveHint: "编辑器自动保存落定后自动编译；开关写进这个项目的 .orbita/latex.json",
     /** 「没有 latexmk」引导卡：找过哪里 + 三个动作（不自动下载） */

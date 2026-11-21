@@ -627,9 +627,16 @@ export interface LatexProjectInfo {
     activeRoot?: string;
     /** 相对这个 root 的目录（原样，未展开） */
     outDir?: string;
+    /** 选中的配方预设 id（`.orbita/latex.json` 的 roots[].recipeId）；没有时缺省 */
+    recipeId?: string;
     /** 自定义命令（原样）；没有时缺省 */
     recipe?: string[];
   };
+  /**
+   * 「清理辅助文件」现在可用（`latexmk -c` 是 latexmk 的功能）。
+   * 选中的预设不是 latexmk 系（手写链 / 单次编译）时为 false——界面据此禁用并说明。
+   */
+  cleanable: boolean;
   /** 磁盘上的 PDF；没有编译过就是 null。它可能是**上一次成功**的那份 */
   pdf: { path: string; modifiedAt: number } | null;
   /** 参与「过期」判定的最新源码 mtime（主文件 + .tex / .bib / .cls / .sty） */
@@ -681,7 +688,9 @@ export interface LatexRootConfig {
   /** latexmk 的 -jobname；省略 = 主文件 basename */
   jobname?: string;
   args?: string[];
-  /** recipe[0] 是可执行文件，其余是参数（见 resolve.ts 的 buildArgv） */
+  /** 选中的配方预设（shared/latex-recipes.ts 的 id）；未知 id 按「没选」处理 */
+  recipeId?: string;
+  /** recipe[0] 是可执行文件，其余是参数（见 resolve.ts 的 buildSteps） */
   recipe?: string[];
 }
 

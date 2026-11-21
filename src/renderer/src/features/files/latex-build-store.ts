@@ -28,6 +28,13 @@ export interface LatexBuildSummary {
   outputsTruncated: boolean;
   /** 本次解析的 .log 绝对路径（「完整日志」入口）；没有时 null */
   logPath: string | null;
+  /**
+   * 这份日志是不是本次构建写出的（回执 v2 的 `log.fresh`）。false = 上一轮留下的：
+   * 界面要说「日志是旧的」，不能拿它冒充这一次的事实。没有日志时为 null。
+   */
+  logFresh: boolean | null;
+  /** 日志 mtime（说「上一轮是哪一轮」用）；没有日志时 null */
+  logModifiedAt: number | null;
   finishedAt: number;
 }
 

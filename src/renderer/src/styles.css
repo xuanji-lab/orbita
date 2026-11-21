@@ -3769,6 +3769,12 @@ html[data-pointer-drag] iframe {
   color: var(--color-text-tertiary);
   font-size: var(--font-size-xs);
 }
+/* 配方菜单里的「推荐」小字：一行末尾的事实标签，不染色（推荐不是警告） */
+.latex-recipe-badge {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
 
 /* 抽屉：默认一行；展开后列表自己有上限，不把文件内容挤没 */
 .latex-problems {

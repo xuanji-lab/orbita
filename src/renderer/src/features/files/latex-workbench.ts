@@ -9,6 +9,7 @@ import type { LatexIssue, LatexResolvedPackage, LatexStatus } from "@shared/late
 // 值导入走相对路径（带 .ts）：`node --test` 不认 vite / tsconfig 的 @shared 别名，
 // 类型导入会被剥掉所以无所谓，函数导入会在加载时就找不到模块。
 import { miktexPendingOf } from "../../../../shared/latex.ts";
+import { LATEX_RECIPE_PRESETS, latexRecipePreset } from "../../../../shared/latex-recipes.ts";
 
 /**
  * 编译条的显示态（原型场景 1 / 3）：
@@ -204,6 +205,48 @@ export function formatElapsed(ms: number): string {
   const minutes = Math.floor(total / 60);
   const seconds = total % 60;
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+/**
+ * 当前生效的配方 id（chip 上的名字与菜单里的勾都认它）：
+ * - `configured.recipeId` 命中表 → 它；
+ * - 有自定义 `recipe` → null（界面显示「自定义配方」，不假装是某条预设）；
+ * - 都没有 → 按引擎对上推荐组那一条：默认链本来就是 `latexmk · <引擎>`。
+ */
+export function currentRecipeId(input: {
+  recipeId?: string | undefined;
+  recipe?: readonly string[] | undefined;
+  engine: string;
+}): string | null {
+  const preset = latexRecipePreset(input.recipeId);
+  if (preset !== null) return preset.id;
+  if (input.recipe !== undefined && input.recipe.length > 0) return null;
+  return (
+    LATEX_RECIPE_PRESETS.find((item) => item.group === "recommended" && item.engine === input.engine)?.id ?? null
+  );
+}
+
+/**
+ * 「清理辅助文件」现在可用吗：`-c` 是 latexmk 的功能，选中手写链 / 单次编译时不可用。
+ * 自定义 recipe 保持旧行为（那条命令可能自己就是 latexmk；以前一直能清，不收紧）。
+ */
+export function cleanAvailable(input: {
+  recipeId?: string | undefined;
+  recipe?: readonly string[] | undefined;
+}): boolean {
+  const preset = latexRecipePreset(input.recipeId);
+  if (preset !== null) return preset.cleanable;
+  return true;
+}
+
+/**
+ * 文件路径的目录（renderer 没有 node:path）：产物目录从回执的 outputs[] / log.path 推，
+ * 不假设它等于配置里的 outDir（自定义 recipe / 改过 jobname 时可能不是）。
+ */
+export function dirOfFile(path: string | null): string | null {
+  if (path === null) return null;
+  const index = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return index <= 0 ? null : path.slice(0, index);
 }
 
 /**
