@@ -77,3 +77,14 @@ describe("lintWithChktex（本机装了 chktex 才跑）", () => {
     }
   });
 });
+
+describe("chktex 不可用时的安静降级", () => {
+  test("二进制起不来：ok:false、无问题、不抛（界面据此不显示这条通道）", async () => {
+    const result = await lintWithChktex({
+      binary: "definitely-not-a-chktex-binary-xyz",
+      file: "main.tex",
+      projectDir,
+    });
+    assert.deepEqual(result, { ok: false, issues: [] });
+  });
+});

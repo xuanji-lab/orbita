@@ -23,7 +23,7 @@ import type { Extension } from "@codemirror/state";
 import type { CiteEntry } from "../../../../shared/cite.ts";
 import type { LatexProjectIndex } from "../../../../shared/latex.ts";
 import { citeArgumentBefore, citeDetail, citeInfo, citeInsertion, suggestCites } from "./cite-suggest.ts";
-import { latexContextBefore, suggestLatex, type LatexSuggestion } from "./latex-suggest.ts";
+import { latexContextBefore, loadedPackageNames, suggestLatex, LATEX_SUGGEST_LIMIT, type LatexSuggestion } from "./latex-suggest.ts";
 
 /**
  * 往回看多远找现场：一行长的引用列表（几十个 key）也在这个窗口里。
@@ -36,11 +36,17 @@ export interface LatexCompletionInput {
   cite: () => readonly CiteEntry[];
   /** 项目符号索引（`\ref` / 自定义命令 / 路径）；null = 不在 LaTeX 项目里 */
   index: () => LatexProjectIndex | null;
+  /**
+   * 本机 TeX 树里的宏包名（`\usepackage{` 的候选）。用取值函数而不是快照：名单在主进程
+   * 扫完（IPC 在飞）后才到，重建编辑会丢光标与撤销历史。空数组 = 没有 TeX，补全退回
+   * 「只补这份文档已加载的」。
+   */
+  packages?: () => readonly string[];
 }
 
 export function latexCompletion(input: LatexCompletionInput): Extension {
   return autocompletion({
-    override: [latexSource(input.index), citeSource(input.cite)],
+    override: [latexSource(input.index, input.packages ?? (() => [])), citeSource(input.cite)],
     // 图标用的是默认的彩色字母块，与设计系统「颜色各有职责」冲突；名字本身就是标识
     icons: false,
     // 弹层里同时渲染的行数：滚太长的列表不如多打两个字
@@ -48,14 +54,21 @@ export function latexCompletion(input: LatexCompletionInput): Extension {
   });
 }
 
-/** 命令 / 环境 / 引用 / 路径 / snippet 五个现场 */
-function latexSource(index: () => LatexProjectIndex | null): CompletionSource {
+/** 命令 / 环境 / 引用 / 宏包 / 路径 / snippet 六个现场 */
+function latexSource(
+  index: () => LatexProjectIndex | null,
+  packages: () => readonly string[],
+): CompletionSource {
   return (context: CompletionContext): CompletionResult | null => {
     const start = Math.max(0, context.pos - LOOKBEHIND);
     const text = context.state.doc.sliceString(start, context.pos);
     const live = latexContextBefore(text);
     if (live === null) return null;
-    const options: Completion[] = suggestLatex(live, index()).map(toCompletion);
+    // `\usepackage{` 的两层：本机已装（主进程扫）+ 这份文档已经加载过的（光标前的窗口里）
+    const options: Completion[] = suggestLatex(live, index(), LATEX_SUGGEST_LIMIT, {
+      installed: live.kind === "package" ? packages() : [],
+      loaded: live.kind === "package" ? loadedPackageNames(text) : [],
+    }).map(toCompletion);
     if (options.length === 0) return null;
     return { from: start + live.from, options, filter: false };
   };

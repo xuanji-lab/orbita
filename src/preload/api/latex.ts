@@ -22,6 +22,7 @@ import {
   type LatexProjectOutcome,
   type LatexProbeResult,
   type LatexPackageQuery,
+  type LatexPackageNamesOutcome,
   type LatexResolvedPackage,
   type LatexReverseOutcome,
   type LatexReverseRequest,
@@ -68,4 +69,7 @@ export const latexApi = {
   /** chktex 行内检查；本机没装时 available:false（界面据此不显示） */
   lint: (req: LatexFileContext): Promise<LatexLintOutcome> =>
     ipcRenderer.invoke(latexChannels.lint, req),
+  /** 本机 TeX 发行版里的宏包名（`\usepackage{` 的补全）；没有 TeX 时 available:false + 空名单 */
+  packageNames: (req: LatexFileContext): Promise<LatexPackageNamesOutcome> =>
+    ipcRenderer.invoke(latexChannels.packageNames, req),
 } as const;

@@ -29,6 +29,7 @@ import {
   type LatexLocateOutcome,
   type LatexNavOutcome,
   type LatexPackageQuery,
+  type LatexPackageNamesOutcome,
   type LatexProbeRequest,
   type LatexProjectOutcome,
   type LatexResolvedPackage,
@@ -47,6 +48,7 @@ import { buildLatexNav } from "./nav.ts";
 import { lintWithChktex, probeChktex } from "./chktex.ts";
 import { forwardSearch, insideProject, reverseSearch } from "./synctex.ts";
 import { createLatexPackageLookup } from "./packages.ts";
+import { createLatexPackageNameIndex } from "./package-names.ts";
 import type { LatexRunner } from "./run.ts";
 
 export function registerLatexIpc(
@@ -58,6 +60,8 @@ export function registerLatexIpc(
   // 反查只在渲染层点开问题抽屉时用到；它与具体项目无关（看的是本机 TeX 树），
   // 但入口照旧先过一遍白名单——不让这条通道变成「没有授权也能起外部命令」。
   const packages = createLatexPackageLookup(async () => (await runner.probeEnvironment()).latexmk);
+  // 宏包名表（`\usepackage` 的候选）：与本机 TeX 树有关，与项目无关；主进程扫一次、缓存
+  const packageNames = createLatexPackageNameIndex();
 
   ipcMain.handle(latexChannels.probe, (_event, req?: LatexProbeRequest) =>
     runner.probeEnvironment(req ?? {}),
@@ -115,6 +119,21 @@ export function registerLatexIpc(
     const result = await lintWithChktex({ binary, file: source.file, projectDir: located.dir });
     return { available: true, issues: result.issues };
   });
+
+  /**
+   * 本机 TeX 发行版里的宏包名（`\usepackage{` 的补全）。与 `lint` 同一条白名单入口：
+   * 不在 LaTeX 项目里就不给名单（补全只发生在项目里的 .tex / .sty）。
+   * 扫描与缓存在 `package-names.ts`；这里只负责把探测到的 latexmk 递过去。
+   */
+  ipcMain.handle(
+    latexChannels.packageNames,
+    async (_event, req: LatexFileContext): Promise<LatexPackageNamesOutcome> => {
+      const located = await locateLatexProject(req, workspaces, sessions);
+      if (located === null) return { available: false, names: [], truncated: false };
+      const probe = await runner.probeEnvironment();
+      return packageNames.list(probe.latexmk);
+    },
+  );
 
   /**
    * 编一次。**当前文件（`path`）参与解析**：子文件里的 `% !TEX root` 从这里生效

@@ -101,6 +101,8 @@ export function FilePreviewPane(props: {
     cite?: readonly CiteEntry[];
     /** 项目符号索引：`\\ref` / 自定义命令 / 路径补全的候选（不在项目里时缺席） */
     latexIndex?: LatexProjectIndex | null;
+    /** 本机 TeX 树里的宏包名（`\usepackage{` 的候选）；空 / 缺席 = 没有 TeX，只补已加载的 */
+    packageNames?: readonly string[];
     /** 多文件导航（包含图 + 章节）：Ctrl/Cmd+单击 跳转与跨文件大纲读它 */
     nav?: LatexNav | null;
     /** 打开项目里的另一个源码文件（可带行号）；\input 跳转与跨文件大纲共用 */
@@ -434,6 +436,7 @@ export function FilePreviewPane(props: {
             reveal={props.editor?.reveal ?? null}
             {...(props.editor?.cite === undefined ? {} : { cite: props.editor.cite })}
             latexIndex={props.editor?.latexIndex ?? null}
+            {...(props.editor?.packageNames === undefined ? {} : { packageNames: props.editor.packageNames })}
             nav={props.editor?.nav ?? null}
             {...(props.editor?.onOpenSource === undefined ? {} : { onOpenSource: props.editor.onOpenSource })}
             diagnostics={props.editor?.diagnostics ?? null}

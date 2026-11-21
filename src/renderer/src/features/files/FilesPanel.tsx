@@ -47,6 +47,7 @@ import { latexContextOf } from "./latex-context.ts";
 import { useCiteLibrary } from "./useCiteLibrary.ts";
 import { useLatexIndex } from "./useLatexIndex.ts";
 import { useLatexNav } from "./useLatexNav.ts";
+import { useLatexPackageNames } from "./useLatexPackageNames.ts";
 import { useLatexLint } from "./useLatexLint.ts";
 import { issueAbsolutePath } from "./latex-diagnostics.ts";
 import type { CiteVerification } from "@shared/cite";
@@ -327,11 +328,15 @@ export function FilesPanel(props: {
   const latexIndex = useLatexIndex(latexContext, latex.project);
   /** 多文件导航：包含图（`\input` 跳转）+ 每个文件的章节（跨文件大纲） */
   const latexNav = useLatexNav(latexContext, latex.project);
+  /** 本机宏包名表（`\usepackage{` 的候选）：主进程扫一次 TeX 树，这里只拿名字 */
+  const latexPackageNames = useLatexPackageNames(latexContext, latex.project);
   /**
-   * chktex 的行内检查（本机装了才有；没装时永远空数组）。只进行内标记、不进问题抽屉：
-   * 抽屉是「这次编译说了什么」，chktex 是「风格检查」，两件事混在一起会让错误计数失真。
+   * chktex 的风格检查（本机装了才有；没装时永远空数组）。**保存成功后触发**（`lintRevision`
+   * 每次真写盘加一，去抖 300ms），并进问题抽屉——它和编译错误在同一个位置、同一种行，
+   * 但单独成组（图标与文案区分：编译错 / chktex），错误计数不被它撑脏。
    */
-  const lintIssues = useLatexLint(latexContext, latex.project);
+  const [lintRevision, setLintRevision] = useState(0);
+  const lintIssues = useLatexLint(latexContext, latex.project, lintRevision);
   /**
    * 项目里可编译的 root（绝对路径）。文件树给它们加一个尾注（与 AGENTS.md 的
    * `rules` 同一套语言、同一处位置）：`main.tex` / `appendix.tex` 一眼能看出是根，
@@ -377,6 +382,9 @@ export function FilesPanel(props: {
   /** 保存成功的统一回调：清掉旧提示，并让编译条立刻看到「源码比 PDF 新」 */
   const handleEditorSaved = useCallback((): void => {
     setEditorNotice(null);
+    // 保存成功才跑 chktex（取消 / 文本未变不会走到这里）；去抖与「只跑最后一次」
+    // 在 useLatexLint 的调度器里
+    setLintRevision((revision) => revision + 1);
     latex.refresh();
     // 保存即编译（项目级开关，缺省关）：自动保存落定后触一发。
     // 显式编译前的那次 flush 也要走到这里，由 compileWithSave 的抑制标记挡掉，
@@ -747,7 +755,9 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
               ? t.latex.quoteLayout
               : item.level === "verify"
                 ? t.latex.quoteVerify
-                : t.latex.quoteMissingPackage;
+                : item.level === "lint"
+                  ? t.latex.quoteLint
+                  : t.latex.quoteMissingPackage;
     const loc = issueLocation(item);
     session.addQuote({
       text: `${prefix} · ${loc === "" ? item.message : `${loc} · ${item.message}`}`,
@@ -1872,6 +1882,7 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                     // 补全候选：项目文献库（IPC 还没回来时缺省，编辑器不重挂）
                     ...(citeLibrary === null ? {} : { cite: citeLibrary.entries }),
                     latexIndex,
+                    packageNames: latexPackageNames,
                     nav: latexNav,
                     // 跨文件大纲 / `\input` 跳转：走 openSourceAt（与问题抽屉同一条链路）
                     onOpenSource: openSourceAt,
@@ -1920,6 +1931,7 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
         {latexBarVisible && (
           <LatexProblems
             groups={latexGroups}
+            lintIssues={lintIssues}
             open={problemsOpen}
             onToggle={() => setProblemsOpen((open) => !open)}
             onHandToAgent={handProblemToAgent}

@@ -424,6 +424,11 @@ export const latexChannels = {
   nav: "latex:nav",
   /** chktex 行内检查（本机装了才可用；没装时 available:false） */
   lint: "latex:lint",
+  /**
+   * 本机 TeX 发行版里的宏包名（`\usepackage{` 的补全候选）。
+   * 在主进程扫一次 `kpsewhich --show-path=tex` 的目录、缓存；renderer 只拿名字。
+   */
+  packageNames: "latex:package-names",
   /** 清理辅助文件（`latexmk -c`）：删 .aux/.log 等，保留 PDF */
   clean: "latex:clean",
   /** 编译中的进度（当前跑到哪一步）；1 秒轮询一次，不进项目描述 */
@@ -767,6 +772,31 @@ export interface LatexNav {
 }
 
 export type LatexNavOutcome = { found: false } | { found: true; nav: LatexNav };
+
+/**
+ * 本机已安装的宏包名（`\usepackage{…}` 的补全候选）。
+ *
+ * **为什么在主进程算**：名单来自用户机器上的 TeX 树（`kpsewhich --show-path=tex` 给的
+ * 目录下面的 `*.sty`），renderer 既没有授权去扫盘，也不该为了一次补全自己走几万个文件。
+ * 扫一次的结果按 latexmk 路径缓存（= 同一套 TeX 树）；用户换了发行版 / 重装后重新探测
+ * 时会换缓存键，下一次打开面板自然重扫。
+ *
+ * `available: false` = 没有 TeX，或一台都扫不到：界面安静地退回「只补已加载的
+ * `\usepackage`」，不提示「缺少工具」——补全不是必须依赖 TeX 的功能。
+ */
+export interface LatexPackageNamesOutcome {
+  available: boolean;
+  /** 排序去重后的宏包名（不带 `.sty`）；超过上限时截断并在 truncated 里说明 */
+  names: string[];
+  /** 撞到名字 / 文件数上限：名单可能不全（界面不需要提示成错误） */
+  truncated: boolean;
+}
+
+/** 名字上限：TeX Live 全量 macros 有数千个，6000 足够覆盖真实写作；再多不进入补全 */
+export const LATEX_MAX_PACKAGE_NAMES = 6000;
+
+/** 扫描文件数上限：扫到这么多还没扫完就停下并标 truncated，不拿一次补全换十秒主进程 */
+export const LATEX_MAX_PACKAGE_SCAN_FILES = 80_000;
 
 /**
  * chktex 行内检查的结局。
