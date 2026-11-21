@@ -30,6 +30,10 @@ export function PdfAnnotations(props: {
   const [draftOpen, setDraftOpen] = useState(false);
   const [comment, setComment] = useState("");
   const rangeRef = useRef<Range | null>(null);
+  // 点「写意见 / 引用到对话」时选区会被浏览器清空：草稿打开期间不能跟着清 sel，
+  // 否则「写意见」永远打不开草稿（C1 验收实测踩到）。
+  const draftOpenRef = useRef(false);
+  draftOpenRef.current = draftOpen;
 
   // 加载本项目的批注
   useEffect(() => {
@@ -47,8 +51,10 @@ export function PdfAnnotations(props: {
       const container = props.containerRef.current;
       const selection = window.getSelection();
       if (!selection || selection.isCollapsed || selection.rangeCount === 0 || !container) {
-        setSel(null);
-        rangeRef.current = null;
+        if (!draftOpenRef.current) {
+          setSel(null);
+          rangeRef.current = null;
+        }
         return;
       }
       const range = selection.getRangeAt(0);

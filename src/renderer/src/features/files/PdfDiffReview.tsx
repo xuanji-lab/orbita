@@ -19,29 +19,43 @@ export function PdfDiffReview(props: {
   onComment: (text: string) => void;
 }) {
   const [backup, setBackup] = useState<string | null>(null);
+  const [pdfPath, setPdfPath] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    document.body.dataset.diffMount = "mounted";
     void (async () => {
-      const backup = await api.latex.pdfBackup(props.ctx);
-      if (cancelled) return;
-      if (!backup.ok || backup.path == null) {
-        setError(backup.error ?? "备份失败");
-        return;
+      try {
+        const backup = await api.latex.pdfBackup(props.ctx);
+        if (cancelled) return;
+        if (!backup.ok || backup.path == null) {
+          setError(backup.error ?? "备份失败");
+          return;
+        }
+        setBackup(backup.path);
+        document.body.dataset.diffStage = "backup-done";
+        const outcome = await api.latex.compile(props.ctx);
+        if (cancelled) return;
+        if (outcome.ok === false) {
+          setError(outcome.error ?? "重编失败");
+          return;
+        }
+        document.body.dataset.diffStage = "compile-done";
+        // 改后视图要开的是**编译产物 PDF**，不是 main.tex（.tex 当 PDF 开会一直 loading）
+        const project = await api.latex.project(props.ctx);
+        if (project.found && project.project.pdf !== null) setPdfPath(project.project.pdf.path);
+        setReady(true);
+      } catch (cause) {
+        if (!cancelled) setError(String(cause));
       }
-      setBackup(backup.path);
-      const outcome = await api.latex.compile(props.ctx);
-      if (cancelled) return;
-      if (outcome.ok === false) {
-        setError(outcome.error ?? "重编失败");
-        return;
-      }
-      setReady(true);
     })();
-    return () => { cancelled = true; };
-  }, [props.hunk.id, props.ctx]);
+    return () => {
+      cancelled = true;
+      document.body.dataset.diffMount = "unmounted";
+    };
+  }, [props.hunk.id, props.ctx.path]);
 
   const beforeSet = new Set(props.hunk.before);
   const afterSet = new Set(props.hunk.after);
@@ -81,9 +95,9 @@ export function PdfDiffReview(props: {
           </div>
           <div className="diff-pdf-col">
             <div className="diff-title">改后 PDF（绿）</div>
-            {ready && (
+            {ready && pdfPath !== null && (
               <PdfView
-                request={{ ...props.ctx, dir: props.ctx.path }}
+                request={{ ...props.ctx, dir: pdfPath }}
                 jump={null}
                 reloadToken={0}
                 initialQuery={newText}
