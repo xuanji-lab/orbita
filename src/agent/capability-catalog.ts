@@ -7,6 +7,8 @@
  * 纯聊天，都不会出现在这里，因为它们根本不在传进来的分组里。
  *
  * 每组至多一行；skill 只在这一轮技能索引里真有它时才指过去（能力集没带、用户停用、被设为只能点名的都不指）。
+ * 整组延迟的组（deferred：浏览器、文档 / 幻灯片、终端、自动化、插件、store、MCP）单列在后面，明说「还没加载，用前先 tool_search」；
+ * 这一段只有真有延迟的组才出现，且只列这一轮选中的组——能力集收掉的组不在里面，目录也就不会承诺 tool_search 搜得到它们。
  * MCP 不逐个列工具，按服务名归纳成一行。纯函数：同样的输入出同样的字（提示缓存对前缀逐字节敏感）。
  */
 import { parseQualifiedToolName } from "../shared/mcp.ts";
@@ -19,17 +21,23 @@ export interface CatalogGroup {
   when: string;
   /** 这一组有完整用法的 skill 名（技能索引里的名字）；不一定这一轮都在，格式化时按实际索引过滤 */
   skills?: readonly string[];
+  /** 整组先不发给模型，要先 tool_search 加载（turn-tools.ts 的 ToolGroup.deferred） */
+  deferred?: true;
   /** 这一轮这一组里实际被选中的工具名，按发给模型的顺序；调用方保证非空 */
   tools: readonly string[];
 }
 
 /** 目录全文（含标签）的字符预算：最坏情形（每组都在、技能都在、MCP 服务很多）也不超 */
-export const CATALOG_BUDGET = 1500;
+export const CATALOG_BUDGET = 1800;
 
 /** MCP 一行里服务名清单的字符上限：超出的归成「+N more」 */
 const MCP_SERVERS_BUDGET = 60;
 
 const HEADER = "Tool groups this turn besides read, write, edit, bash: group (first tool, +n more): when to use.";
+
+/** 只有真有延迟的组才讲：怎么加载。只提「下面这些组」，不提别的 */
+const DEFERRED_HINT =
+  "Not loaded yet: before first use, call tool_search with a short description of the task or a tool name, then call the tools it loads. It searches only these groups:";
 
 /** 只有至少一行指向了 skill 才讲这一句（没有 skill 可指时不占字） */
 const SKILL_HINT = "A named skill has the full how-to; read it before first use.";
@@ -72,7 +80,9 @@ export function formatCapabilityCatalog(groups: readonly CatalogGroup[], skillNa
   if (live.length === 0) return "";
   const available = new Set(skillNames);
   const pointers = live.map((group) => skillsOf(group, available));
-  const lines = live.map((group, index) => groupLine(group, pointers[index] ?? []));
+  const lineOf = (group: CatalogGroup): string => groupLine(group, pointers[live.indexOf(group)] ?? []);
+  const ready = live.filter((group) => group.deferred !== true).map(lineOf);
+  const later = live.filter((group) => group.deferred === true).map(lineOf);
   const hint = pointers.some((skills) => skills.length > 0) ? [SKILL_HINT] : [];
-  return ["<capability-catalog>", HEADER, ...hint, ...lines, "</capability-catalog>"].join("\n");
+  return ["<capability-catalog>", HEADER, ...hint, ...ready, ...(later.length > 0 ? [DEFERRED_HINT, ...later] : []), "</capability-catalog>"].join("\n");
 }

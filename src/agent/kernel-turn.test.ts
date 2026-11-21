@@ -350,8 +350,10 @@ describe("kernel-turn：按能力集装配一轮", () => {
     const chat = await assemble(child(cwd, "c1", ["none"]));
     assert.deepEqual(base.turn.toolNames, ["bash", "edit", "read", "write", "update_plan", "update_goal", "report_to_parent"]);
     assert.deepEqual(chat.turn.toolNames, []);
-    assert.ok(full.turn.toolNames.length > 40);
-    // 实测（这份夹具，无 MCP、无技能）：工具定义 35,582 → 8,452 → 2 字符
+    // 全带：常驻 + 延迟（tool_search 之外）共 40 多个；延迟的整组要先 tool_search，基础 / 纯聊天没有可延迟的组所以不装它
+    assert.ok(full.turn.toolNames.length + full.turn.deferredNames.length > 40);
+    assert.ok(full.turn.toolNames.includes("tool_search") && !base.turn.toolNames.includes("tool_search"));
+    // 实测（这份夹具，无 MCP、无技能；declarations 是全部已注册的工具，含延迟的）：工具定义 35,582 → 8,452 → 2 字符（全带时再加 tool_search 自己）
     assert.ok(base.declarations.length * 4 < full.declarations.length);
     // 只带基础：没有 store-tools、quote 两段；通道说明末尾讲带了什么、缺了找谁
     assert.doesNotMatch(base.turn.systemPrompt, /<orbita-store-tools>|<orbita-quotes>/);
@@ -444,13 +446,15 @@ describe("kernel-turn：能力目录接进系统提示", () => {
         command(cwd, { ...ROOT_ALL, skillsDirs: [await skillsIn(cwd)], mcpServers: { demo: { transport: "stdio", command: process.execPath, args: [FIXTURE] } } }),
         hub,
       );
-      const registered = [...new Set(turn.toolNames.flatMap((name) => ownerOf(name) ?? []))];
+      // 注册了的 = 常驻 + 延迟（延迟的整组要先 tool_search，但目录仍列出；tool_search 自己不属于任何组）
+      const registeredNames = [...turn.toolNames, ...turn.deferredNames];
+      const registered = [...new Set(registeredNames.flatMap((name) => ownerOf(name) ?? []))];
       assert.ok(registered.includes("mcp") && registered.includes("automation"), "夹具真的连上了、自动化真的注册了");
       assert.deepEqual([...catalogIds(turn.systemPrompt)].sort(), [...registered].sort());
       assert.match(turn.systemPrompt, /^- mcp \(servers: demo\): /m);
       assert.ok(!/^- mcp .*mcp__demo__echo/m.test(turn.systemPrompt), "不逐个列 MCP 工具名");
       for (const match of turn.systemPrompt.matchAll(/^- [a-z-]+ \(([a-z_]+)[ +\d)]/gm)) {
-        if (match[1] !== "servers") assert.ok(turn.toolNames.includes(match[1] ?? ""), `入口 ${match[1]} 是这一轮真注册的工具`);
+        if (match[1] !== "servers") assert.ok(registeredNames.includes(match[1] ?? ""), `入口 ${match[1]} 是这一轮真注册的工具`);
       }
       // 段位置：在通用工具规矩之前
       assert.ok(turn.systemPrompt.indexOf("<capability-catalog>") < turn.systemPrompt.indexOf("For commands that may take a while"));
@@ -474,7 +478,8 @@ describe("kernel-turn：能力目录接进系统提示", () => {
     const cwd = await tempDir();
     const skillsDirs = [await skillsIn(cwd)];
     const browserOnly = await assemble(command(cwd, { ...ROOT_ALL, skillsDirs, directories: PARENT_CHILD(cwd), capabilities: ["browser"] }));
-    assert.deepEqual(catalogIds(browserOnly.systemPrompt), ["plan", "browser", "channel"]);
+    // 常驻的组在前（plan、channel），延迟的在后（browser，在「Not loaded yet」之下）
+    assert.deepEqual(catalogIds(browserOnly.systemPrompt), ["plan", "channel", "browser"]);
     assert.doesNotMatch(browserOnly.systemPrompt, /slides_create|^- docs-slides|^- terminal/m);
     assert.doesNotMatch(browserOnly.systemPrompt, /\(skill: browser\)/, "能力集没点名 skill:browser，索引里没有它，目录就不指");
     const withSkill = await assemble(command(cwd, { ...ROOT_ALL, skillsDirs, directories: PARENT_CHILD(cwd), capabilities: ["browser", "skill:browser"] }));
@@ -502,6 +507,6 @@ describe("kernel-turn：能力目录接进系统提示", () => {
     assert.ok(grab(one.systemPrompt).length > 200);
     assert.equal(grab(one.systemPrompt), grab(two.systemPrompt));
     assert.equal(one.systemPrompt, two.systemPrompt);
-    assert.ok(grab(one.systemPrompt).length <= 1500, `${grab(one.systemPrompt).length}`);
+    assert.ok(grab(one.systemPrompt).length <= 1800, `${grab(one.systemPrompt).length}`);
   });
 });

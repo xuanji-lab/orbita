@@ -2039,6 +2039,7 @@ export const zh: Messages = {
       search: "搜索",
       readTask: "读任务",
       workCards: "看了手上的活",
+      toolSearch: "找了工具",
       terminal: "用终端",
       document: "读文档",
       image: "给你看图",

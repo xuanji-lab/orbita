@@ -9,6 +9,11 @@
  * - 工具：内建七件（pi 同一个工厂）+ turn-tools.ts 的同一份清单，经 durable-tools.ts 薄适配；顺序按
  *   旧内核同一套规则：激活顺序（loadoutOrder）定基础提示里的工具小节，发给模型的数组顺序用 pi-ai 同两个函数回放
  *   （offeredOrder）；「此前看到的」取会话自己的 pi.system，刚迁来的会话取迁移时从旧本子带来的那份。
+ *   整组延迟的组（turn-tools.ts 的 deferred）注册成 durable 的 deferred 工具：不发给模型、不进基础提示的工具小节，
+ *   同一个扩展里再装一个 tool_search（tool-search.ts）；它加载的工具由 durable 写进会话文档的 modelTools，
+ *   跨轮重装扩展、压缩、重开库都在——这里每轮重建扩展时不碰 modelTools（configure 不传它）。
+ *   工具被能力集 / MCP 连接收掉的那一轮没有注册，durable 不会发给模型（modelTools 只对已注册的延迟工具生效）；
+ *   之后同名工具重新注册，按 durable 原生语义重新发给模型。
  * - 闸门：`beforeTool` 调 createToolCallGate（permission.ts：抬超时、受保护路径）与 createPlanGate。拒绝语经 `afterTool` 还原成旧内核那样的一段原文，
  *   不让 durable 包成 `<harness>[error] Tool call blocked: …</harness>`（参数校验失败、工具不存在同理，见 unwrapHarnessError）。
  * - 系统提示：pi 基础提示（kernel-prompt.ts）→ adaptSystemPrompt → orbitaSystemSegments，每段一个不加标签的
@@ -38,6 +43,7 @@ import { buildRulesInventory } from "../shared/context-inventory.ts";
 import type { KernelContinueCommand, KernelTurnCommand } from "../shared/kernel.ts";
 import { composePromptText } from "../shared/prompt-attachments.ts";
 import { builtinTools, toDurableTool, type DurableToolScope } from "./durable-tools.ts";
+import { createOrbitaToolSearch, notLoadedReceipt } from "./tool-search.ts";
 import { liftMessages, TurnWire } from "./kernel-wire.ts";
 import { loadoutOrder, loadPiResources, offeredOrder } from "./kernel-prompt.ts";
 import type { McpHub } from "./mcp.ts";
@@ -358,9 +364,14 @@ export interface TurnObserver {
 /** 这一轮装进 durable 的东西（测试直接看它） */
 export interface AssembledTurn {
   extension: Extension;
-  /** 发给模型的工具名，按发出顺序 */
+  /**
+   * 常驻的工具名（含 tool_search），按发给模型的顺序。延迟的工具不在其中：它们由 tool_search 加载，加载状态在 durable 的
+   * modelTools 里，不由这一轮的装配决定——真实发给模型的清单看 conversation.agent() 的 tools。
+   */
   toolNames: string[];
-  /** 激活顺序（pi 基础提示里工具小节的顺序） */
+  /** 这一轮注册了的延迟工具名（还没加载就不发给模型），注册顺序；没有 = tool_search 也不注册 */
+  deferredNames: string[];
+  /** 激活顺序（pi 基础提示里工具小节的顺序）：只含常驻工具 */
   activeNames: string[];
   /** 发给模型的系统提示全文（各段按 `\n\n` 拼接后） */
   systemPrompt: string;
@@ -418,7 +429,6 @@ export async function assembleTurn(
       attachedImages: () => wire.attachedImages(),
       memoryTurn: () => memoryTurn,
   });
-  const definitions = selected.tools;
   const withheld = new Map(selected.withheld);
   // 纯聊天连内建四件也不带
   if (chatOnly) for (const name of ["read", "bash", "edit", "write"]) withheld.set(name, "any tools (it is chat only)");
@@ -431,10 +441,21 @@ export async function assembleTurn(
     beforeExecute: (callId: string, signal: AbortSignal | undefined) => rounds.beforeExecute(callId, signal),
     ...(observer.toolUpdate === undefined ? {} : { onUpdate: observer.toolUpdate }),
   };
-  // 内建四件是新内核自带的实现（外面包一层 Orbita 的环境、路径折算与 PDF 指路）；其余是 Orbita 自己的工具，薄翻译一层
+  // 常驻与延迟：延迟的整组先不发给模型（turn-tools.ts 的 deferred），要 tool_search 加载；基础提示只讲常驻的
+  const deferredNames = selected.deferred;
+  const eagerDefinitions = selected.tools.filter((definition) => !deferredNames.has(definition.name));
+  const deferredDefinitions = selected.tools.filter((definition) => deferredNames.has(definition.name));
+  const deferredRegistrations = deferredDefinitions.map((definition) => toDurableTool(definition, scope, { deferred: true }));
+  // 延迟工具的规矩（promptGuidelines）不进系统提示（提示不随加载变），改在 tool_search 加载那一刻交给模型
+  const deferredRules = new Map(
+    deferredDefinitions.flatMap((definition) => ((definition.promptGuidelines ?? []).length === 0 ? [] : [[definition.name, definition.promptGuidelines ?? []] as const])),
+  );
+  // 内建四件是新内核自带的实现（外面包一层 Orbita 的环境、路径折算与 PDF 指路）；其余是 Orbita 自己的工具，薄翻译一层；
+  // 没有任何延迟工具就不装 tool_search（模型没有可搜的东西，多一个工具只是噪音）
   const registrations = [
     ...(chatOnly ? [] : builtinTools(command.cwd, { ...resources.builtinOptions, ...(runtime.tagCommand === undefined ? {} : { tagCommand: runtime.tagCommand }) }, scope)),
-    ...definitions.map((definition) => toDurableTool(definition, scope)),
+    ...eagerDefinitions.map((definition) => toDurableTool(definition, scope)),
+    ...(deferredRegistrations.length === 0 ? [] : [createOrbitaToolSearch(deferredRules)]),
   ];
   const byName = new Map(registrations.map((tool) => [tool.name, tool]));
   const activeNames = loadoutOrder(
@@ -445,14 +466,19 @@ export async function assembleTurn(
     const tool = byName.get(name);
     return tool === undefined ? [] : [tool];
   });
+  // 此前看到的清单里若有已加载的延迟工具，这里按「没有」算：它们的位置与去留由 durable 的 modelTools 定，这一轮的常驻清单不受影响
   const toolNames = offeredOrder(previousTools, active.map((tool) => toToolDeclaration(tool)));
   const byTool = new Map(active.map((tool) => [tool.name, tool]));
-  const tools = toolNames.flatMap((name) => {
+  const eagerTools = toolNames.flatMap((name) => {
     const tool = byTool.get(name);
     return tool === undefined ? [] : [tool];
   });
+  // 延迟的接在常驻后面（durable 只把 modelTools 里点名的发出去，加载的按加载先后接在常驻之后）
+  const tools = [...eagerTools, ...deferredRegistrations];
+  // 一批工具里有没有顺序执行的：加载过的延迟工具也要算
+  const modeOf = new Map(tools.map((tool) => [tool.name, tool.executionMode]));
 
-  const piBase = resources.basePrompt(activeNames, definitions);
+  const piBase = resources.basePrompt(activeNames, eagerDefinitions);
   const segments = orbitaSystemSegments({
     piBase: adaptSystemPrompt(piBase),
     protectedFiles: command.protectedFiles,
@@ -485,7 +511,7 @@ export async function assembleTurn(
           if (round !== null) {
             rounds.noteRound(
               round.calls.map((each) => each.toolCallId),
-              round.calls.some((each) => byTool.get(each.toolName)?.executionMode === "sequential"),
+              round.calls.some((each) => modeOf.get(each.toolName) === "sequential"),
             );
           }
           // 按调用顺序准备（pi 的节奏）：前面的调用判完才轮到这一个；判完（放行 / 拒绝 / 抛错）都要放下一个
@@ -511,7 +537,9 @@ export async function assembleTurn(
             (runtime.quitting?.() === true ? interruptedResult("quit", result) : undefined) ??
             unwrapHarnessError(call, result, (name) => {
               const what = withheld.get(name);
-              return what === undefined ? undefined : withheldToolReceipt(name, what, chatOnly);
+              if (what !== undefined) return withheldToolReceipt(name, what, chatOnly);
+              // 调了还没加载的延迟工具（没先 tool_search，或与 tool_search 同一批）：告诉它怎么加载，而不是「not found」
+              return deferredNames.has(name) ? notLoadedReceipt(name) : undefined;
             });
           const final = replaced ?? result;
           // 计划提醒（plan-nudge.ts）：连续若干次工具调用没动计划，附在这次结果末尾（随结果落库，请求前缀不变）
@@ -536,7 +564,7 @@ export async function assembleTurn(
     segments: segments.filter((segment) => segment.name !== "pi-base").map((segment) => ({ id: segment.name, text: segment.text })),
     agentDir: resources.agentDir,
   });
-  return { extension, toolNames, activeNames, systemPrompt: segments.map((segment) => segment.text).filter((text) => text !== "").join("\n\n"), inventory };
+  return { extension, toolNames, deferredNames: deferredDefinitions.map((definition) => definition.name), activeNames, systemPrompt: segments.map((segment) => segment.text).filter((text) => text !== "").join("\n\n"), inventory };
 }
 
 /**

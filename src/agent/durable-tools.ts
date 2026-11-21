@@ -105,8 +105,12 @@ function jsonDetails(details: unknown): JsonValue | undefined {
   return text === undefined ? undefined : (JSON.parse(text) as JsonValue);
 }
 
-/** 一个 ToolDefinition → durable 的 ToolRegistration（同一个对象的 execute，薄包一层） */
-export function toDurableTool(definition: ToolDefinition, scope: DurableToolScope): ToolRegistration {
+/**
+ * 一个 ToolDefinition → durable 的 ToolRegistration（同一个对象的 execute，薄包一层）。
+ * `deferred`：这个工具先不发给模型，由 tool_search 按需加载（durable 的 `deferred: true`，加载状态由会话的 modelTools 持久化）；
+ * 不影响工具本身，只是注册时多一个标记。
+ */
+export function toDurableTool(definition: ToolDefinition, scope: DurableToolScope, options: { deferred?: boolean } = {}): ToolRegistration {
   const parameters = JSON.parse(JSON.stringify(definition.parameters)) as object;
   const prepare = definition.prepareArguments;
   return {
@@ -117,6 +121,7 @@ export function toDurableTool(definition: ToolDefinition, scope: DurableToolScop
       ? {}
       : { constrainedSampling: definition.constrainedSampling }),
     ...(definition.executionMode === undefined ? {} : { executionMode: definition.executionMode }),
+    ...(options.deferred === true ? { deferred: true as const } : {}),
     ...(prepare === undefined ? {} : { prepareArguments: (args: unknown) => prepare(args) as object }),
     outputLimits: NO_LIMIT,
     async execute(args, api, context): Promise<ToolExecutionResult> {

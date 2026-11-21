@@ -370,6 +370,8 @@ export interface ProcVerbWords {
   readTask: string;
   /** 主智能体读小卡（work_cards）：看手上派出去的活 */
   workCards: string;
+  /** 加载暂未提供的工具（tool_search） */
+  toolSearch: string;
   /** 可见终端（terminal_*） */
   terminal: string;
   document: string;
@@ -403,6 +405,7 @@ const VERB_OF_TOOL: Readonly<Record<string, keyof Omit<ProcVerbWords, "mcp">>> =
   grep: "search",
   read_task: "readTask",
   work_cards: "workCards",
+  tool_search: "toolSearch",
   terminal_open: "terminal",
   terminal_execute: "terminal",
   terminal_read: "terminal",

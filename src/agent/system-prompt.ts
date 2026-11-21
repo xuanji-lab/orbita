@@ -38,11 +38,12 @@ const EXPECTED_SECONDS_GUIDELINE =
 /**
  * 自动化工具（automation_create）已注册时的长任务指引：用户 2026-11-05 裁决——这类建议要写进系统提示词，
  * 不能只靠工具 description（模型想不起来就不会去读）。没注册自动化时不讲（讲了模型也做不了，只会干等）。
+ * 自动化工具是延迟工具（要先 tool_search 才发给模型）：这段规矩仍每轮在提示里，所以不会因为工具没加载就想不起来；括号里明说先加载。
  */
 const LONG_TASK_AUTOMATION_GUIDELINE =
   "When a command you are about to run will likely take more than about 10 minutes (a long training run, a large build, a full scan), " +
   "do not wait it out in a foreground bash call. Start it in the background with its output redirected to a log file, " +
-  "create a this_session automation (one-shot around the expected finish time, or a short interval) whose instruction tells you to read that log " +
+  "create a this_session automation (the automation tools are not loaded by default: load them with tool_search first; one-shot around the expected finish time, or a short interval) whose instruction tells you to read that log " +
   "and check whether the job finished (cancel the automation once it has), then end your turn. " +
   "Tell the user in one sentence what is running, where the log is, and that you will come back to it on your own.";
 
