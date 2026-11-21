@@ -666,6 +666,9 @@ export function TexEditorPane(props: {
       setErrorText(null);
       setPhaseBoth("saved");
       setCursor(cursorPosition(view.state.doc, 0));
+      // 文档被整体换成盘上那份：改动块的底色要在新文档上重算（与 syncFromDisk 同一条纪律）。
+      // 漏了这一步，冲突后点「重新加载」抽屉里还列着改动块，编辑器里却没有任何铺底
+      setDocEpoch((epoch) => epoch + 1);
     }
     props.onSaved?.();
   };
