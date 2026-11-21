@@ -478,11 +478,15 @@ export function Sidebar(props: {
     setEarlierFor(null);
     session.openMainAgent(workspace);
   };
-  /** 这个工作区的主智能体此刻正打开着（盖着别的面时谁也不高亮） */
+  /**
+   * 这个工作区的主智能体此刻正打开着（盖着别的面时谁也不高亮）。点进它派的一件活时也亮着这一行：
+   * 侧栏不再列活的子行（2026-11-21），不亮就看不出自己在哪个工作区里；回父走顶栏面包屑或点这一行。
+   */
   const mainActive = (workspaceId: string): boolean => {
     if (props.overlay !== null) return false;
     const main = rowsOf.get(workspaceId)?.main ?? null;
-    return (main !== null && main.id === openId) || session.mainPending?.workspaceId === workspaceId;
+    if (main !== null && openId !== null && (main.id === openId || session.sessions.some((meta) => meta.id === openId && meta.parentId === main.id))) return true;
+    return session.mainPending?.workspaceId === workspaceId;
   };
 
   /**
