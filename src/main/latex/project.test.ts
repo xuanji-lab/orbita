@@ -152,6 +152,47 @@ describe("writeLatexProjectConfig", () => {
     }
   });
 
+  test("选配方：写进当前 root 的 recipeId，并清掉同 root 的自定义 recipe", async () => {
+    const root = withProject((dir) => {
+      mkdirSync(join(dir, ".orbita"));
+      writeFileSync(
+        join(dir, ".orbita", "latex.json"),
+        JSON.stringify({
+          roots: [{ path: "main.tex", recipe: ["latexmk", "-xelatex"] }],
+          activeRoot: "main.tex",
+        }),
+      );
+      writeFileSync(join(dir, "main.tex"), "\\documentclass{article}\n");
+    });
+    try {
+      await writeLatexProjectConfig(root, {
+        activate: "main.tex",
+        root: { path: "main.tex", recipeId: "latexmk-makeindex" },
+      });
+      const saved = JSON.parse(readFileSync(join(root, ".orbita", "latex.json"), "utf8")) as {
+        roots: { path: string; recipeId?: string; recipe?: string[] }[];
+      };
+      // 两条配方同时留在文件里，下次读的人无法判断哪条生效——预设赢，自定义被清掉
+      assert.deepEqual(saved.roots, [{ path: "main.tex", recipeId: "latexmk-makeindex" }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("未知的配方 id 拒绝写入（拼错的 id 只会在编译时静默退回默认链）", async () => {
+    const root = withProject((dir) => {
+      writeFileSync(join(dir, "main.tex"), "\\documentclass{article}\n");
+    });
+    try {
+      await assert.rejects(
+        writeLatexProjectConfig(root, { root: { path: "main.tex", recipeId: "nope" } }),
+        /Unknown recipe preset/,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("拒绝绝对路径 / 带 .. / 非 .tex 的主文件", async () => {
     const root = withProject((dir) => {
       writeFileSync(join(dir, "main.tex"), "\\documentclass{article}\n");
