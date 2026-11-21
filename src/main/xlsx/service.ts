@@ -1,5 +1,5 @@
 /**
- * xlsx 解析线程的持有者（`fs:read-xlsx` 只经过它，不直接读文件）。
+ * xlsx 解析线程的持有者（`fs:read-xlsx` / `fs:write-xlsx` 都只经过它，不直接碰文件）。
  *
  * 一个常驻线程 + 按 id 对号在途请求：
  *   - 常驻：ExcelJS 与一份工作簿的解析都在这条线程里，反复起停反而更贵（切文件、
@@ -16,22 +16,22 @@
  */
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
-import type { XlsxPreview } from "../../shared/xlsx.ts";
+import type { XlsxCellEdit, XlsxFingerprint, XlsxPreview, XlsxWriteResult } from "../../shared/xlsx.ts";
 
-/** worker 的一条请求（`worker.ts` 收） */
-export interface XlsxWorkerRequest {
-  id: number;
-  path: string;
-  sheet: number;
-}
+/** worker 的一条请求：读一份工作簿，或把一批单元格改动写回去 */
+export type XlsxWorkerRequest =
+  | { id: number; kind: "read"; path: string; sheet: number }
+  | { id: number; kind: "edit"; path: string; edits: XlsxCellEdit[]; expected?: XlsxFingerprint };
 
-/** worker 的回执：成功带预览结果，失败带一句可读原因 */
+/** worker 的回执：成功带预览结果（读）或写回结论（写），失败带一句可读原因 */
 export type XlsxWorkerReply =
   | { id: number; ok: true; preview: XlsxPreview }
+  | { id: number; ok: true; result: XlsxWriteResult }
   | { id: number; ok: false; error: string };
 
 interface PendingRequest {
-  resolve: (preview: XlsxPreview) => void;
+  /** 回执到手：各自把它落到自己那个 promise 上（读与写的成功形状不同） */
+  settle: (reply: XlsxWorkerReply) => void;
   reject: (error: Error) => void;
   /** 总超时计时器（settle 时清掉，别让它在结果回来以后还挂着） */
   timer: ReturnType<typeof setTimeout>;
@@ -82,7 +82,7 @@ function ensureWorker(): Worker {
   created.on("message", (reply: XlsxWorkerReply) => {
     const request = settle(reply.id);
     if (request === undefined) return;
-    if (reply.ok) request.resolve(reply.preview);
+    if (reply.ok) request.settle(reply);
     else request.reject(new Error(reply.error));
   });
   // 线程死了：只有在它还是「当前线程」时才结账。error 之后 error 的那条已经让位给
@@ -112,17 +112,67 @@ export function readXlsxInWorker(
   sheet: number,
   timeoutMs: number = XLSX_PARSE_TIMEOUT_MS,
 ): Promise<XlsxPreview> {
+  return post(
+    (id) => ({ id, kind: "read", path, sheet }),
+    (reply) => ("preview" in reply ? reply.preview : undefined),
+    timeoutMs,
+    "解析",
+  );
+}
+
+/**
+ * 在同一个线程里把一批单元格改动写回去（见 `edit.ts`）。
+ *
+ * 走线程而不是主进程：写回要重新打包整份 zip（50 MB 的工作簿要几秒），在主进程里就是
+ * 窗口卡住；而且**同一条线程串行处理消息**，同一份文件的两次保存天然排队。
+ */
+export function writeXlsxInWorker(
+  path: string,
+  edits: readonly XlsxCellEdit[],
+  expected?: XlsxFingerprint,
+  timeoutMs: number = XLSX_PARSE_TIMEOUT_MS,
+): Promise<XlsxWriteResult> {
+  return post(
+    (id) => ({ id, kind: "edit", path, edits: [...edits], ...(expected === undefined ? {} : { expected }) }),
+    (reply) => ("result" in reply ? reply.result : undefined),
+    timeoutMs,
+    "保存",
+  );
+}
+
+/**
+ * 发一条请求、给它计时、按 id 对号。`pick` 从成功回执里取自己那一半（读带 `preview`、
+ * 写带 `result`）；取不到就按「回执对不上请求」拒掉，别让 promise 悬着。
+ */
+function post<T>(
+  request: (id: number) => XlsxWorkerRequest,
+  pick: (reply: Extract<XlsxWorkerReply, { ok: true }>) => T | undefined,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
   const target = ensureWorker();
   const id = nextId++;
-  return new Promise((resolve, reject) => {
+  return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
-      const request = settle(id);
-      if (request === undefined) return;
+      const pending = settle(id);
+      if (pending === undefined) return;
       discard(target);
       failPending(`xlsx worker timed out after ${Math.round(timeoutMs / 1000)}s`);
-      request.reject(new Error(`解析超时（${Math.round(timeoutMs / 1000)} 秒），这个工作簿可能太大了`));
+      reject(new Error(`${label}超时（${Math.round(timeoutMs / 1000)} 秒），这个工作簿可能太大了`));
     }, timeoutMs);
-    pending.set(id, { resolve, reject, timer });
-    target.postMessage({ id, path, sheet } satisfies XlsxWorkerRequest);
+    pending.set(id, {
+      settle: (reply) => {
+        if (!reply.ok) {
+          reject(new Error(reply.error));
+          return;
+        }
+        const value = pick(reply);
+        if (value === undefined) reject(new Error("xlsx worker 的回执与请求对不上（读 / 写混了）"));
+        else resolve(value);
+      },
+      reject,
+      timer,
+    });
+    target.postMessage(request(id));
   });
 }

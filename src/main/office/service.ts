@@ -35,6 +35,7 @@ import {
   type OfficeStatus,
 } from "../../shared/office.ts";
 import { fillMissingFormulaCaches, formulaCellKey, isNumericValue } from "./xlsx-cache.ts";
+import type { XlsxWriteResult } from "../../shared/xlsx.ts";
 import {
   getOfficeText,
   renderOfficeHtml,
@@ -217,6 +218,33 @@ export class OfficeService {
   /** agent 的一次批改（`edit_office`） */
   edit(sessionId: string, file: string, ops: readonly OfficeOp[]): Promise<OfficeAgentOutcome> {
     return this.queue(this.key(sessionId, file), () => this.applyEdits(sessionId, file, ops));
+  }
+
+  /**
+   * 人在网格里的一次保存（`fs:write-xlsx`）。**备份 → 写盘 → 记账** 都在同一份文件的
+   * 队列里：跟 agent 的 `edit_office` 互斥，而且备份一定代表「这次改动之前」的文件
+   * （回退能回得去）。写盘没成就把刚做的空备份删掉，清单也不记——没写成的改动不该
+   * 出现在清单里。
+   *
+   * `changes` 是面板算好的清单条目（含作者与「旧 → 新」文本，见 shared/office.ts）。
+   */
+  saveGridEdits(
+    sessionId: string,
+    file: string,
+    apply: () => Promise<XlsxWriteResult>,
+    changes: readonly OfficeChange[],
+  ): Promise<XlsxWriteResult> {
+    return this.queue(this.key(sessionId, file), async () => {
+      const batch = await this.ensureBackup(sessionId, file, this.now());
+      const result = await apply();
+      if (result.kind !== "ok") {
+        await this.discardEmptyBackup(batch);
+        return result;
+      }
+      await this.record(sessionId, file, batch, changes);
+      this.notify(file, changes.length);
+      return result;
+    });
   }
 
   /** 回退这一批（用备份还原整份文件） */

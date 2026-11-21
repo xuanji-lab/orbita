@@ -18,6 +18,7 @@
  * `edit_office`，不需要自己数格子。
  */
 import type { FileListRequest } from "./files.ts";
+import type { XlsxCellEdit } from "./xlsx.ts";
 
 export type OfficeFormat = "xlsx" | "pptx";
 
@@ -84,6 +85,12 @@ export interface OfficeChange {
   before: string | null;
   /** 改后的值（remove 恒为 null；add 是新建元素的中文描述） */
   after: string | null;
+  /**
+   * 谁改的：人的网格编辑（`fs:write-xlsx`）或 agent 的 `edit_office`。两者进**同一份
+   * 清单**（同一份文件的这一批改动，回退也是同一批），作者只影响面板上的标签。
+   * 省略 = 早于这个字段的旧清单（按 agent 显示）。
+   */
+  author?: "user" | "agent";
 }
 
 export interface OfficeChangeFailure {
@@ -414,6 +421,38 @@ export function parseOfficeBatchReport(stdout: string): OfficeBatchReport {
 }
 
 /**
+ * 人的网格编辑（`fs:write-xlsx` 的一批）→ 改动清单条目。写回是全有全无的，所以条目
+ * 就是请求里的那批改动。`path` 用 officecli 同一套写法（`/Sheet1/B2`）——面板上两种
+ * 来源的条目因此长得一模一样，点过去的定位逻辑也还是那一份。
+ */
+export function officeChangesFromCellEdits(edits: readonly XlsxCellEdit[], stamp: number): OfficeChange[] {
+  const items: OfficeChange[] = [];
+  const seen = new Set<string>();
+  edits.forEach((edit, index) => {
+    const key = `${edit.sheet}\u0000${edit.row}\u0000${edit.col}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const path = `/${edit.sheet}/${xlsxColumnLabel(edit.col - 1)}${edit.row}`;
+    const formula = typeof edit.formula === "string" ? edit.formula.trim().replace(/^=/, "") : "";
+    const after =
+      formula !== ""
+        ? `=${formula}`
+        : edit.value === null || edit.value === undefined
+          ? null
+          : String(edit.value);
+    items.push({
+      id: `grid:${stamp}:${index}`,
+      command: "set",
+      path,
+      before: edit.before ?? null,
+      after,
+      author: "user",
+    });
+  });
+  return items;
+}
+
+/**
  * batch 结果 + 编辑前的读数 → 改动清单。`reads` 与 `ops` 里的 set/remove 一一对应
  * （buildOfficeBatch 保序），所以按 op 自己的读写位置取旧值。
  */
@@ -440,11 +479,11 @@ export function officeChangesFromBatch(
       const props = officePropsOf(op.props) ?? {};
       const after =
         props["value"] ?? props["text"] ?? (Object.keys(props).length > 0 ? Object.entries(props).map(([k, v]) => `${k}=${v}`).join(", ") : "");
-      items.push({ id: `${stamp}:${index}`, command: "set", path, before, after });
+      items.push({ id: `${stamp}:${index}`, command: "set", path, before, after, author: "agent" });
       return;
     }
     if (op.op === "remove") {
-      items.push({ id: `${stamp}:${index}`, command: "remove", path, before, after: null });
+      items.push({ id: `${stamp}:${index}`, command: "remove", path, before, after: null, author: "agent" });
       return;
     }
     const added = result.addedPath ?? path;
@@ -454,6 +493,7 @@ export function officeChangesFromBatch(
       path: added,
       before: null,
       after: officePropsOf(op.props)?.["text"] ?? officePropsOf(op.props)?.["value"] ?? (op.type ?? ""),
+      author: "agent",
     });
   });
   return { items, failures };

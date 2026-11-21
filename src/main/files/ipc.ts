@@ -20,7 +20,13 @@ import {
   type FileWriteResult,
   type FsEntryFact,
 } from "../../shared/files.ts";
-import { isXlsxFile, type XlsxPreview, type XlsxReadRequest } from "../../shared/xlsx.ts";
+import {
+  isXlsxFile,
+  type XlsxPreview,
+  type XlsxReadRequest,
+  type XlsxWriteRequest,
+  type XlsxWriteResult,
+} from "../../shared/xlsx.ts";
 import { isPptxFile, type PptxPreview, type PptxReadRequest } from "../../shared/pptx.ts";
 import type { SessionStore } from "../session/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
@@ -28,7 +34,10 @@ import { resolveFileRoots } from "./roots.ts";
 import { listDirectory, whitelistedPath } from "./list.ts";
 import { buildLineIndex, readLines } from "./lines.ts";
 import { readPdfFile, readPreview } from "./read.ts";
-import { writeEditedFile } from "./write.ts";import { readXlsxInWorker } from "../xlsx/service.ts";
+import { officeChangesFromCellEdits } from "../../shared/office.ts";
+import type { OfficeService } from "../office/service.ts";
+import { writeEditedFile } from "./write.ts";
+import { readXlsxInWorker, writeXlsxInWorker } from "../xlsx/service.ts";
 import { readPptxInWorker } from "../pptx/service.ts";
 /**
  * @param openInBrowser 在内置浏览器「你的」tab 打开一个本地网页（BrowserSandbox.openLocalFile）。
@@ -43,6 +52,8 @@ export function registerFilesIpc(
   workspaces: WorkspaceStore,
   sessions: SessionStore,
   openInBrowser: (path: string, roots: readonly string[]) => Promise<void>,
+  /** 网格写回后把人的改动记进**与 agent 同一份**改动清单（office/service.ts） */
+  office?: OfficeService,
 ): void {
   ipcMain.handle(ipcChannels.fsRoots, (_event, req: FileRootsRequest) =>
     resolveFileRoots(workspaces, sessions, req),
@@ -150,6 +161,25 @@ export function registerFilesIpc(
     const path = await whitelistedPath(roots, req);
     if (!isXlsxFile(path)) throw new Error(`Not an .xlsx file: ${path}`);
     return readXlsxInWorker(path, req.sheet ?? 0);
+  });
+
+  /**
+   * 把一批单元格改动写回 .xlsx（同白名单，外加只认 .xlsx）。契约见 shared/xlsx.ts，
+   * 内核见 main/xlsx/edit.ts：只改目标格的 XML，原子写，带冲突闸与窗口闸。
+   *
+   * 写盘在同一个 worker 线程里（同一个文件天然串行）。人的改动是「这一批文档改动」的
+   * 一部分，所以写成功后记进 OfficeService 的同一份清单（作者「你」）——面板上人的改动
+   * 与 agent 的 `edit_office` 共用一份口径、同一个「回退这批改动」。
+   */
+  ipcMain.handle(ipcChannels.fsWriteXlsx, async (_event, req: XlsxWriteRequest): Promise<XlsxWriteResult> => {
+    const roots = await resolveFileRoots(workspaces, sessions, req);
+    const path = await whitelistedPath(roots, req);
+    if (!isXlsxFile(path)) throw new Error(`Not an .xlsx file: ${path}`);
+    const run = (): Promise<XlsxWriteResult> => writeXlsxInWorker(path, req.edits, req.expected);
+    if (office === undefined || req.sessionId === null) return run();
+    // 清单条目现在就算好（写回是全有全无，成功的条目就是这一批）；旧值由面板带上
+    const changes = officeChangesFromCellEdits(req.edits, Date.now());
+    return office.saveGridEdits(req.sessionId, path, run, changes);
   });
 
   /**

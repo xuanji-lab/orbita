@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OfficeRunResult } from "./cli.ts";
 import type { OfficeRunner } from "./cli.ts";
+import { officeChangesFromCellEdits } from "../../shared/office.ts";
 import { OfficeService } from "./service.ts";
 
 let dir = "";
@@ -240,6 +241,56 @@ describe("edit → 清单 → 回退", () => {
     const outcome = await office.edit("s1", file, [{ op: "set", path: "Sheet1/B2", props: { value: 1 } }]);
     assert.equal(outcome.ok, false);
     assert.equal(calls.filter((call) => call.argv[0] === "batch").length, 0);
+  });
+
+  /**
+   * 人的网格保存（`fs:write-xlsx` 走这条）：备份在写之前、清单只在写成功后记、
+   * 写失败就把空备份删掉。与 agent 的 edit_office 共用同一份清单与同一个回退。
+   */
+  test("网格保存：备份在写盘之前，成功后记进同一份清单（作者是你）", async () => {
+    const { run } = fakeRunner();
+    const office = service(run);
+    const seen: { backup: string | null } = { backup: null };
+    const applied = await office.saveGridEdits(
+      "s1",
+      file,
+      async () => {
+        // apply 回调里读备份目录：这时候备份必须已经在了（否则回退不回这次改动）
+        const names = await readdir(join(dir, "backups"));
+        seen.backup = names.find((name) => !name.endsWith(".json")) ?? null;
+        await writeFile(file, "AFTER-GRID");
+        return { kind: "ok", cells: 1, size: 10, modifiedAt: 99 };
+      },
+      officeChangesFromCellEdits(
+        [{ sheet: "Sheet1", row: 2, col: 2, value: 7, before: "42" }],
+        1_700_000_000_000,
+      ),
+    );
+    assert.equal(applied.kind, "ok");
+    assert.notEqual(seen.backup, null, "备份要在写盘之前做好");
+    assert.equal(await readFile(join(dir, "backups", String(seen.backup)), "utf8"), "ORIGINAL");
+    const changes = await office.changesOf("s1", file);
+    assert.equal(changes.items.length, 1);
+    assert.equal(changes.items[0]?.author, "user");
+    assert.equal(changes.items[0]?.path, "/Sheet1/B2");
+    // 回退仍然回到这次网格保存之前
+    const reverted = await office.revert("s1", file);
+    assert.equal(reverted.ok, true);
+    assert.equal(await readFile(file, "utf8"), "ORIGINAL");
+  });
+
+  test("网格保存失败（冲突 / 越界）：不记清单，空备份也删掉", async () => {
+    const { run } = fakeRunner();
+    const office = service(run);
+    const result = await office.saveGridEdits(
+      "s1",
+      file,
+      async () => ({ kind: "conflict", size: 8, modifiedAt: 5 }),
+      officeChangesFromCellEdits([{ sheet: "Sheet1", row: 1, col: 1, value: 1 }], 1),
+    );
+    assert.equal(result.kind, "conflict");
+    assert.equal((await office.changesOf("s1", file)).items.length, 0);
+    assert.deepEqual(await readdir(join(dir, "backups")), []);
   });
 
   test("同一份文件的两次编辑排队（不会交叉写）", async () => {

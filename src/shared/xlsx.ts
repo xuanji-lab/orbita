@@ -1,10 +1,14 @@
 /**
- * `.xlsx` 只读预览的契约 —— IPC 四层的第 1 层（契约与实做同一次提交）。
+ * `.xlsx` 的契约 —— IPC 四层的第 1 层（契约与实做同一次提交）。
  *
- * **只读，不做编辑**，也**不做应用内表格渲染**（HTML 表没有列宽 / 颜色 / 冻结窗格，
- * 照它画出来用户会以为原文件坏了）。这里只回答两件事：这张表里**有什么数据**
- * （裁剪到上限的二维值），以及**这份工作簿有哪些表**。真正的排版靠 Excel / WPS
- * ——「用默认应用打开」那个按钮。
+ * **读**：只回答两件事——这张表里**有什么数据**（裁剪到上限的二维值），以及**这份
+ * 工作簿有哪些表**。不做排版（HTML 表没有列宽 / 颜色 / 冻结窗格，照它画出来用户
+ * 会以为原文件坏了），排版靠 Excel / WPS——「用默认应用打开」那个按钮。
+ *
+ * **写**（2026-11-22 起）：只改**格子里的值 / 公式**，坐标 1-based（与 A1 写法一致），
+ * 一次调用是一批（一次保存 = 一批）。写回在内核里只动目标单元格的 XML，其它 zip 部件
+ * 一个字节不改（见 `main/xlsx/edit.ts` 顶注释），所以样式、合并区、列宽、冻结窗格、
+ * 条件格式、数据验证、图片都不在「可能被改坏」的范围里。
  *
  * 数值与文字分开：`text` 是显示值（公式取缓存值，与 Excel 打开时看到的一致），
  * `formula` 是公式原文（只在 tooltip 里出现），`numeric` 让渲染层右对齐 + 等宽数字。
@@ -100,9 +104,87 @@ export interface XlsxReadRequest extends FileListRequest {
 /** `.xlsx` 预览上限（50 MB）：再大的工作簿整份解压进内存会拖垮主进程 */
 export const XLSX_MAX_BYTES = 50 * 1024 * 1024;
 
-/** 面板一次最多显示的行 / 列数（见文件顶注释） */
+/** 面板一次最多显示的行 / 列数（见文件顶注释）。**也是可编辑窗口**：写回只认这块范围 */
 export const XLSX_PREVIEW_ROWS = 2000;
 export const XLSX_PREVIEW_COLS = 50;
+
+/**
+ * 一次写回里的一格改动。
+ *
+ * 坐标是 **1-based**（`row: 1, col: 1` 就是 A1）：写回要从 A1 写法反推格子，面板的
+ * 公式栏与行号列标也都在说 1-based，中间再换一次坐标系只会多一处 off-by-one。
+ * `sheet` 是**表名**（标签页上写的就是它），不是下标——下标会随表被删 / 藏而漂移。
+ */
+export interface XlsxCellEdit {
+  sheet: string;
+  row: number;
+  col: number;
+  /**
+   * 字面值：数字按数字写、字符串按内联字符串写、**null = 清空这格**（保留样式）。
+   * 给了 `formula` 就忽略它（公式优先）。
+   */
+  value?: string | number | null;
+  /** 公式原文（带不带前导 `=` 都行）。写进去的格**不会重算**：盘上没有缓存值 */
+  formula?: string;
+  /**
+   * 改动清单里「旧值」的显示文本（写回**不用它**，内核也不看它）。只有做这次改动的那
+   * 一侧知道用户当时看到的是什么，所以由面板带上来；省略 = 不知道旧值
+   */
+  before?: string | null;
+}
+
+/** 写前比对的文件指纹：预览回执里的 `modifiedAt` + `size`，原样交回来 */
+export interface XlsxFingerprint {
+  mtimeMs: number;
+  size: number;
+}
+
+/** `fs:write-xlsx` 的请求：白名单字段同 fs:read；`expected` 缺席 = 不比对指纹 */
+export interface XlsxWriteRequest extends FileListRequest {
+  /**
+   * 预览时看到的指纹。写前重新 stat，对不上就回 `conflict`、**一个字节都不写**——
+   * 这样 agent 的 `edit_office` 改过同一份文件时，人这边的未保存改动会被闸住。
+   */
+  expected?: XlsxFingerprint;
+  edits: XlsxCellEdit[];
+}
+
+/**
+ * 写回的回执。**每种拒绝都是结构化结论**而不是异常：界面要按它说人话（冲突给
+ * 「重新加载」、越界说清可编辑范围），异常只剩「这不是一个文件」这类调用方的错。
+ */
+export type XlsxWriteResult =
+  | {
+      kind: "ok";
+      /** 真正写进去的格数（同一格给了多次只算一次，后给的覆盖先给的） */
+      cells: number;
+      /** 写完之后的盘上指纹（下一次保存拿它当 expected） */
+      size: number;
+      modifiedAt: number;
+    }
+  /** 文件在外部被改过（mtime / size 变了）：没写盘，界面提示刷新 */
+  | { kind: "conflict"; size: number; modifiedAt: number }
+  /** 超出可编辑窗口（行列给的是 1-based；规则见 XLSX_PREVIEW_ROWS / COLS） */
+  | { kind: "out-of-window"; rows: number; cols: number; edits: XlsxCellEdit[] }
+  | { kind: "too-large"; limit: number; size: number }
+  /**
+   * 读不开：password（加密 / 旧版 .xls）、corrupt（不是 zip / XML 坏了）、
+   * sheet-missing（表被改名或删了——`sheets` 是现在的表名）
+   */
+  | {
+      kind: "unreadable";
+      reason: "password" | "corrupt" | "sheet-missing";
+      detail: string;
+      sheets?: string[];
+    }
+  /**
+   * 这格是**共享公式的组长**（`<f t="shared" ref="…">`），而这次要往它里面写值 / 清空：
+   * 组长一没了定义，整组引用它的成员格就全废了。写公式进去不受影响（组的定义还在）。
+   * 拒绝比悄悄改坏别处的公式好——界面上说清「先在 Excel 里改它」。
+   */
+  | { kind: "shared-formula"; sheet: string; row: number; col: number; detail: string }
+  /** 其它没料到的失败（临时文件写不了、rename 被占用 …）：原文件没动 */
+  | { kind: "failed"; error: string };
 
 /** 本面板认的表格格式。只认 .xlsx：.xls（旧二进制格式）、.xlsm、ods 都不进这条通道 */
 export function isXlsxFile(path: string): boolean {

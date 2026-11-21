@@ -3187,7 +3187,33 @@ export const en = {
     xlsxSheets: "Sheets",
     /** 裁剪提示：整表多大、面板给了多少 */
     xlsxTruncated: (rows: number, cols: number, totalRows: number, totalCols: number) =>
-      `Showing ${grouped(rows)} rows × ${grouped(cols)} columns of ${grouped(totalRows)} × ${grouped(totalCols)}`,
+      `Editable: first ${grouped(rows)} rows × ${grouped(cols)} columns of ${grouped(totalRows)} × ${grouped(totalCols)}`,
+    /* ---------- grid editing (values / formulas / save / undo) ---------- */
+    xlsxCellInput: "Cell contents",
+    xlsxCellInputPlaceholder: "A value, or a formula starting with =",
+    xlsxSelection: (cell: string) => `Cell ${cell}`,
+    xlsxUnsaved: (n: number) => `${n} unsaved`,
+    xlsxSaved: "Saved",
+    xlsxSave: "Save",
+    xlsxSaveAll: "Save changes",
+    xlsxSaveShortcut: "Ctrl+S",
+    xlsxUndoAll: "Undo",
+    xlsxUndoOne: "Undo this change",
+    xlsxPendingTitle: (n: number) => `Unsaved changes · ${n}`,
+    xlsxFormulaNotCalculated: "Formulas are not recalculated here — the value updates once Excel opens the file",
+    xlsxConflict: "The file changed outside this panel (maybe the agent just edited it), so the save was blocked. Reload, then make the change again.",
+    xlsxReload: "Reload",
+    xlsxReloadDiscard: (n: number) => `Click again to discard ${n} changes`,
+    xlsxOutOfWindow: (rows: number, cols: number) =>
+      `Outside the editable range (first ${grouped(rows)} rows × ${grouped(cols)} columns) — those cells were not written`,
+    xlsxSharedFormula: (cell: string) =>
+      `${cell} is the head of a shared formula; writing a value there would leave the whole group undefined. Change it in Excel first.`,
+    xlsxSaveFailed: (detail: string) => `Save failed: ${detail}`,
+    xlsxSheetMissing:
+      "The sheet these changes belong to no longer exists (renamed or removed) — reload to see the current sheets.",
+    xlsxUnsavedInGrid: "You have unsaved changes — save or undo them before switching to the rendered view.",
+    xlsxExternalChange: "The file changed outside this panel; a save will be blocked until you reload",
+    xlsxEditingHint: "Enter commits, Tab moves right, Esc cancels",
     /** 冻结窗格提示：原文件冻了，预览不冻 */
     xlsxFrozen: (rows: number, cols: number) =>
       `The file freezes the first ${rows > 0 ? `${plural(rows, "row")}${cols > 0 ? " and " : ""}` : ""}${cols > 0 ? plural(cols, "column") : ""}; this preview scrolls freely`,
@@ -3251,6 +3277,8 @@ export const en = {
     copied: "Copied",
     changes: (n: number) => (n === 1 ? "1 change this round" : `${n} changes this round`),
     revert: "Revert this batch",
+    authorYou: "You",
+    authorAgent: "Agent",
     retry: "Retry",
     renderUnavailable: "Office rendering is unavailable",
     noticeGrid: "Office rendering is off — showing the data grid",

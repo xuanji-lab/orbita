@@ -271,6 +271,14 @@ export const ipcChannels = {
    */
   fsReadXlsx: "fs:read-xlsx",
   /**
+   * 把一批单元格改动写回一份 `.xlsx`（同 root/dir 白名单，且 realpath 后须是 `.xlsx`）。
+   * 回 `XlsxWriteResult`（xlsx.ts）：ok / conflict / out-of-window / too-large / unreadable /
+   * shared-formula / failed——每种拒绝都是结构化结论，界面按它说人话。
+   * 只改目标格的 XML（其它 zip 部件一个字节不动），临时文件 + rename 原子写，写盘跑在同一个
+   * worker 线程里（main/xlsx/service.ts）。人的改动会落进与 `edit_office` 同一份改动清单。
+   */
+  fsWriteXlsx: "fs:write-xlsx",
+  /**
    * 读一份 `.pptx` 的只读大纲（同 root/dir 白名单，且 realpath 后须是 `.pptx`）。
    * 回 `PptxPreview`（pptx.ts）：页序、版式名、标题、正文层级、表格、备注——不渲染、
    * 不做缩略图。解析是 jszip 解包 + 自写 XML 读器，只读文本

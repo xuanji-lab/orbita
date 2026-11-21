@@ -16,6 +16,7 @@ import {
   sameOfficePath,
   xlsxRangeCellCount,
   officeChangesFromBatch,
+  officeChangesFromCellEdits,
   officeDisplayPath,
   officeFormatOf,
   officePropsOf,
@@ -225,5 +226,51 @@ describe("officeChangesFromBatch", () => {
     const { items, failures } = officeChangesFromBatch(ops, report, [], 5);
     assert.equal(items.length, 0);
     assert.deepEqual(failures, [{ path: "/slide[2]", error: "not found" }]);
+  });
+});
+
+describe("officeChangesFromCellEdits —— 人的网格编辑进同一份清单", () => {
+  test("坐标换成 officecli 的路径，作者是 user，旧值由面板带上来", () => {
+    const items = officeChangesFromCellEdits(
+      [{ sheet: "Sheet1", row: 2, col: 3, value: 42, before: "5" }],
+      7,
+    );
+    assert.equal(items.length, 1);
+    assert.deepEqual(items[0], {
+      id: "grid:7:0",
+      command: "set",
+      path: "/Sheet1/C2",
+      before: "5",
+      after: "42",
+      author: "user",
+    });
+  });
+
+  test("公式显示成 = 原文（带 =）；清空是 null；没给旧值的条目 before 是 null", () => {
+    const items = officeChangesFromCellEdits(
+      [
+        { sheet: "Data", row: 1, col: 1, formula: "SUM(A2:A3)" },
+        { sheet: "Data", row: 1, col: 2, value: null },
+      ],
+      1,
+    );
+    assert.equal(items[0]?.after, "=SUM(A2:A3)");
+    assert.equal(items[0]?.before, null);
+    assert.equal(items[1]?.after, null);
+  });
+
+  test("同一格给了两次只留一条（写回是全有全无，清单不该出现两行）", () => {
+    const items = officeChangesFromCellEdits(
+      [
+        { sheet: "S", row: 1, col: 1, value: 1 },
+        { sheet: "S", row: 1, col: 1, value: 2 },
+        { sheet: "S", row: 2, col: 1, value: 3 },
+      ],
+      2,
+    );
+    assert.deepEqual(
+      items.map((item) => `${item.path}=${item.after}`),
+      ["/S/A1=1", "/S/A2=3"],
+    );
   });
 });

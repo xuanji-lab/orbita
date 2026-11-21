@@ -127,3 +127,27 @@ describe("readXlsxInWorker", () => {
     await assert.rejects(promise, /坏了/);
   });
 });
+
+describe("writeXlsxInWorker", () => {
+  test("发出的是写请求（kind=edit），回执的 result 落到 promise 上", async () => {
+    const promise = service.writeXlsxInWorker(
+      "/tmp/a.xlsx",
+      [{ sheet: "Sheet1", row: 2, col: 2, value: 42, before: "5" }],
+      { mtimeMs: 1, size: 2 },
+    );
+    const worker = lastWorker();
+    const message = worker.sent.at(-1) as { id: number; kind: string } | undefined;
+    assert.equal(message?.kind, "edit");
+    assert.deepEqual((message as { expected?: unknown }).expected, { mtimeMs: 1, size: 2 });
+    const result = { kind: "ok", cells: 1, size: 9, modifiedAt: 8 } as const;
+    worker.emit("message", { id: lastRequestId(worker), ok: true, result });
+    assert.deepEqual(await promise, result);
+  });
+
+  test("回执对不上（给了读的回执）→ reject，不把 promise 悬着", async () => {
+    const promise = service.writeXlsxInWorker("/tmp/b.xlsx", [{ sheet: "S", row: 1, col: 1, value: 1 }]);
+    const worker = lastWorker();
+    worker.emit("message", { id: lastRequestId(worker), ok: true, preview });
+    await assert.rejects(promise, /对不上/);
+  });
+});

@@ -1317,8 +1317,6 @@ void app.whenReady().then(async () => {
     // 插件的「只在这些工作区」名单里摘掉它（摘空转停用）
     await plugins.removeWorkspace(id);
   });
-  // 文件面板（fs:roots / fs:list / fs:reveal）：根每次现算，不缓存
-  registerFilesIpc(workspaces, sessions, (path, roots) => browserSandbox.openLocalFile(path, roots));
   // docx 轻量编辑（docx:open / docx:save）：白名单同上，上一版备份放 userData 里
   registerDocxIpc(workspaces, sessions, join(configDir, "docx-backups"));
   // 文档 / 演示文稿面板（doc:*）：白名单同文件面板，写入比较后交换 + 原子写
@@ -1365,6 +1363,10 @@ void app.whenReady().then(async () => {
     // 备份放 userData（不进会话工作台：那是文件面板的第一个根，会被当成用户文件看到）
     backupRoot: join(configDir, OFFICE_BACKUP_DIR),
   });
+  // 文件面板（fs:roots / fs:list / fs:reveal / fs:write-xlsx）：根每次现算，不缓存。
+  // 网格写回要把人的改动记进 Office 的那份改动清单（与 edit_office 同一批），所以放在
+  // office 之后建——那一个是进程级单例，agent 的 read_office / edit_office 也用它。
+  registerFilesIpc(workspaces, sessions, (path, roots) => browserSandbox.openLocalFile(path, roots), office);
   // 旧版本留在会话工作台里的空 office-backups（只删空目录，非空的旧备份一个字节都不动）
   void removeEmptyLegacyOfficeBackupDirs(join(configDir, "workbenches")).catch(() => undefined);
   // Word 导出：pandoc 探测 / 模板体检 / 内置默认模板的 IPC 面（设置页的「Word 导出」组）。

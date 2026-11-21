@@ -5415,6 +5415,10 @@ a.latex-setup-action {
   min-height: 0;
   overflow: auto;
 }
+/* 容器自己不画焦点框：键盘焦点永远伴随一个选中格，可见的焦点态是那圈描边 */
+.xlsx-scroll:focus-visible {
+  outline: none;
+}
 /*
  * 行高与行号槽宽走变量：TSX 按 ROW_HEIGHT=24 算滚动窗口、用 colgroup 按数据给每列
  * 定宽（xlsxColumnWidths）。**行高两边必须一致**：XlsxView.tsx 的 ROW_HEIGHT 与这里
@@ -5444,6 +5448,98 @@ a.latex-setup-action {
   border-right: 1px solid var(--color-border-subtle);
   border-bottom: 1px solid var(--color-border-subtle);
 }
+/* 格子要放两个角标（未保存 / 未计算）：相对定位挂它们 */
+.xlsx-table td.xlsx-cell {
+  position: relative;
+  cursor: cell;
+}
+/* 公式栏：选区坐标 + 这一格的内容（公式带 =）。行高与网格同一档，贴在网格上方 */
+.xlsx-formula-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+/* 坐标（B17）：等宽、三级文字色——它是坐标系，不是内容 */
+.xlsx-formula-ref {
+  flex: 0 0 auto;
+  min-width: 5ch;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  text-align: right;
+}
+.xlsx-formula-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: var(--control-height-xs);
+  padding: 0 var(--space-2);
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+}
+.xlsx-formula-input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: var(--focus-ring);
+}
+.xlsx-formula-input:disabled {
+  color: var(--color-text-tertiary);
+}
+/* 选中格：中性墨洗 + 一圈描边（设计系统：选区是中性的，accent 只给主操作） */
+.xlsx-table td[data-selected="true"] {
+  background: var(--color-mode-active-bg);
+  box-shadow: inset 0 0 0 2px var(--color-border-strong);
+}
+/* 列标 / 行号跟着选区亮一格：50 列的表里光看一个描边圈容易跟不上 */
+.xlsx-table thead th[data-active="true"],
+.xlsx-table th.xlsx-gutter[data-active="true"] {
+  color: var(--color-text-primary);
+  background: var(--color-mode-active-bg);
+}
+/* 未保存的改动：右上角一个小三角（第二信号；第一信号是底部「未保存 · n 处」） */
+.xlsx-table td[data-edited="true"]::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  border-top: 5px solid var(--color-warning);
+  border-left: 5px solid transparent;
+  pointer-events: none;
+}
+/* 有公式、没有缓存值（我们不重算）：右上角一个点，文字本身已是公式原文 */
+.xlsx-table td[data-uncached="true"]::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--color-text-tertiary);
+  pointer-events: none;
+}
+/* 编辑中的格：输入框铺满格子，不再画角标（正在改的东西不需要「改过」的标记） */
+.xlsx-cell-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0 var(--space-2);
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  border: 0;
+  border-radius: 0;
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+}
 /* 占位行（没画的那几百行）：只负责高度，不画边框、不吃指针 */
 .xlsx-spacer td {
   height: auto;
@@ -5458,7 +5554,7 @@ a.latex-setup-action {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.xlsx-table td[data-num="true"] {
+.xlsx-table td[data-numeric="true"] {
   text-align: right;
 }
 /* 公式有缓存值缺失（第三方工具重算后没写 <v>）：占位符用三级文字色，不抢眼 */
@@ -5507,10 +5603,11 @@ a.latex-setup-action {
 /* 窗口化由 TSX 负责（只渲染可见的几十行 + 上下各 OVERSCAN 行，未渲染的行用占位行
    搅住高度）。这里**不再加 content-visibility**：在 10 万格的表上它比不用还慢（实测
    首帧 8.2s，去掉后 0.6s） */
-/* 底部提示条：裁剪与冻结是「与原文件不一样」的两处，必须说出来 */
+/* 底部提示条：裁剪 / 冻结 / 兼容模式 / 公式不重算 / 外部改过，都是「与原文件不一样」的地方 */
 .xlsx-footer {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-1) var(--space-4);
   flex: 0 0 auto;
   padding: var(--space-2) var(--space-3);
@@ -5518,11 +5615,138 @@ a.latex-setup-action {
   color: var(--color-text-tertiary);
   font-size: var(--font-size-xs);
 }
+/* 行尾动作：撤销 / 保存——右缘钉在面板的右内边距上 */
+.xlsx-footer-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+.xlsx-status {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+/* 未保存：是「你还没交代完」的状态，抬到正文色 + 加一点重量 */
+.xlsx-status[data-dirty="true"] {
+  color: var(--color-text-primary);
+  font-weight: var(--weight-medium);
+}
+/* 保存 = 主操作：颜色与禁用态都走通用 .btn-accent（accent 只给主操作），这里只管版式 */
+.xlsx-save {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--font-size-sm);
+}
+/* 保存失败 / 冲突：一条可见的提示，冲突时带「重新加载」 */
+.xlsx-notice-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  background: color-mix(in srgb, var(--color-warning) 7%, transparent);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xs);
+}
+.xlsx-notice-bar > svg {
+  flex: 0 0 auto;
+  color: var(--color-warning);
+}
+.xlsx-notice-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* 未保存改动清单：无卡底，一行一处，逐条撤回在行尾 */
+.xlsx-pending {
+  flex: 0 0 auto;
+  max-height: 30vh;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--color-border-subtle);
+}
+.xlsx-pending-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+}
+.xlsx-pending-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+.xlsx-pending-list {
+  margin: 0;
+  padding: 0 var(--space-3) var(--space-2);
+  list-style: none;
+  overflow-y: auto;
+}
+.xlsx-pending-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-0-5) 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+.xlsx-pending-ref {
+  flex: 0 0 auto;
+  color: var(--color-text-primary);
+}
+.xlsx-pending-values {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-tertiary);
+}
+/* 行尾的逐条撤回：悬停才显形，不占位（行尾血线：右缘钉在同一列） */
+.xlsx-pending-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+}
+.xlsx-pending-item:hover .xlsx-pending-remove,
+.xlsx-pending-remove:focus-visible {
+  opacity: 1;
+}
+.xlsx-pending-remove:hover {
+  color: var(--color-text-primary);
+  background: var(--color-mode-active-bg);
+}
 .xlsx-notice {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
   font-variant-numeric: tabular-nums;
+}
+/* 需要人动手的提示（公式不重算 / 外部改过）：图标与字走 warning，别混进一排灰字里 */
+.xlsx-notice[data-tone="warning"] {
+  color: var(--color-warning);
 }
 .xlsx-empty {
   display: flex;

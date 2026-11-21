@@ -389,6 +389,9 @@ export function OfficeChangesPanel(props: {
           <ul className="office-change-list">
             {items.map((item) => (
               <li key={item.id} className="office-change">
+                <span className="office-change-author" data-author={item.author ?? "agent"}>
+                  {item.author === "user" ? t.office.authorYou : t.office.authorAgent}
+                </span>
                 <span className="office-change-command">{item.command}</span>
                 <span className="office-change-path" title={item.path}>
                   {item.path}
