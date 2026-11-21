@@ -395,6 +395,17 @@ export interface LatexProbeRequest {
   refresh?: boolean;
 }
 
+/** 设置页 preflight 的一项环境检查（真实探测，不是写死的） */
+export interface LatexEnvCheckItem {
+  id: "synctex" | "chktex" | "pandoc";
+  ok: boolean;
+  /** 找到的路径 / 版本，或缺失时的一句话说明 */
+  detail: string;
+}
+export interface LatexEnvCheckResult {
+  items: LatexEnvCheckItem[];
+}
+
 /**
  * 「指定位置」的结局：系统文件选择器 → 现验 `--version` → 通过才写进设置。
  * `invalid` 只说事实（这个文件不是能跑的 latexmk），文案由界面用自己的语言说。
@@ -533,6 +544,8 @@ export const LATEX_CONFIG_PATH = ".orbita/latex.json";
 export const latexChannels = {
   /** 本机 latexmk 与引擎探测（缓存在主进程；界面点开引擎 chip 时现问） */
   probe: "latex:probe",
+  /** 设置页 LaTeX 面板的环境自检（synctex / chktex / pandoc 聚合，latexmk 走 latex:probe） */
+  envCheck: "latex:env-check",
   /** 当前文件所属的 LaTeX 项目（找不到就是 found:false） */
   project: "latex:project",
   /** 编一次；结局是 LatexRunOutcome（并发被拒也走 ok:false） */

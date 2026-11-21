@@ -10,6 +10,7 @@
  * `compile_latex` 与这里的按钮编的是同一个东西——「两边看到的是同一次编译」。
  */
 import { realpath } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { BrowserWindow, dialog, ipcMain } from "electron";
 import type { FileListRequest } from "../../shared/files.ts";
@@ -47,7 +48,10 @@ import { describeLatexProject, findLatexProjectDir, writeLatexProjectConfig } fr
 import { buildLatexIndex } from "./index.ts";
 import { buildLatexNav } from "./nav.ts";
 import { lintWithChktex, probeChktex } from "./chktex.ts";
-import { forwardSearch, insideProject, reverseSearch } from "./synctex.ts";
+import { forwardSearch, insideProject, reverseSearch, synctexCommand } from "./synctex.ts";
+import { createPandocProbe } from "../docx-export/probe.ts";
+import { formatPandocVersion } from "../../shared/docx-export.ts";
+import type { LatexEnvCheckItem, LatexEnvCheckResult } from "../../shared/latex.ts";
 import { createLatexPackageLookup } from "./packages.ts";
 import { createLatexPackageNameIndex } from "./package-names.ts";
 import type { LatexRunner } from "./run.ts";
@@ -67,6 +71,38 @@ export function registerLatexIpc(
   ipcMain.handle(latexChannels.probe, (_event, req?: LatexProbeRequest) =>
     runner.probeEnvironment(req ?? {}),
   );
+
+  // 设置页 preflight：synctex / chktex / pandoc 的真实探测（latexmk 走 latex:probe）
+  ipcMain.handle(latexChannels.envCheck, async (): Promise<LatexEnvCheckResult> => {
+    const probe = await runner.probeEnvironment();
+    const latexmk = probe.latexmk;
+    const items: LatexEnvCheckItem[] = [];
+    // synctex：latexmk 同目录的候选或 PATH 上的命令
+    const syncCandidate = synctexCommand(latexmk, process.platform, existsSync);
+    const syncOk = syncCandidate !== "synctex" && existsSync(syncCandidate);
+    items.push({
+      id: "synctex",
+      ok: syncOk,
+      detail: syncOk ? syncCandidate : "这台电脑上没有找到 synctex 命令（TeX 发行版可能缺组件）",
+    });
+    // chktex
+    const chktex = await probeChktex(latexmk);
+    items.push({
+      id: "chktex",
+      ok: chktex !== null,
+      detail: chktex ?? "未安装（行内检查可选）",
+    });
+    // pandoc（≥3.10.2 才支持公式编号 \\tag）
+    const pandoc = await createPandocProbe().probe();
+    items.push({
+      id: "pandoc",
+      ok: pandoc.supported,
+      detail: pandoc.supported
+        ? `${pandoc.version ? formatPandocVersion(pandoc.version) : "已安装"} · ${pandoc.path ?? "PATH"}`
+        : (pandoc.message ?? "需要 3.10.2 或更新"),
+    });
+    return { items };
+  });
 
   /**
    * 「指定位置」：系统文件选择器 → 现验 `--version` → 通过才写进设置。

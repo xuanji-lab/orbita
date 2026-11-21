@@ -1246,6 +1246,7 @@ export const zh: Messages = {
     tabs: {
       general: "通用",
       guide: "新手引导",
+      latex: "LaTeX 论文",
       providers: "模型服务",
       migration: "迁移",
       browser: "浏览器",

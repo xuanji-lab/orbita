@@ -1346,6 +1346,7 @@ export const en = {
     tabs: {
       general: "General",
       guide: "Guide",
+      latex: "LaTeX paper",
       providers: "Providers",
       migration: "Migration",
       browser: "Browser",

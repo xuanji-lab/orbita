@@ -1848,6 +1848,28 @@ export function App() {
                 }}
                 onJumpToMemorySource={jumpToMemorySource}
                 onCollapseRail={rightPanel === null ? null : () => setRightPanel(null)}
+                onRepairLatex={(item) => {
+                  // LaTeX 面板的「让 agent 装/修」：新建任务并把修复指令发给 agent。
+                  setOverlay(null);
+                  setSidebarCollapsed(false);
+                  session.newTask();
+                  window.setTimeout(() => {
+                    const id = session.sessionId ?? session.opened?.id ?? null;
+                    const model = session.model;
+                    if (id === null || model === null) return;
+                    void api.agent.submit({
+                      sessionId: id,
+                      cwd: session.cwd ?? "",
+                      workspaceId: session.workspaceId,
+                      resume: null,
+                      providerId: model.providerId,
+                      modelId: model.modelId,
+                      mode: session.mode,
+                      thinkingLevel: session.thinkingLevel,
+                      text: `帮我检查并修好 LaTeX 环境的 ${item}。先探测再修；要装任何东西（例如 MacTeX）之前先问我，写文件只写我确认的目录。`,
+                    });
+                  }, 400);
+                }}
               />
             ) : (
               <ChatView

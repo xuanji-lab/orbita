@@ -5,7 +5,7 @@
 import type { IconName } from "../../shell/Icon";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 
-export type SettingsTab = "general" | "guide" | "providers" | "migration" | "browser" | "voice" | "plugins" | "memory" | "experimental";
+export type SettingsTab = "general" | "guide" | "providers" | "migration" | "browser" | "voice" | "plugins" | "memory" | "experimental" | "latex";
 
 export interface SettingsTabDef {
   id: SettingsTab;
@@ -24,5 +24,7 @@ export const SETTINGS_TABS: readonly SettingsTabDef[] = [
   { id: "plugins", icon: FEATURE_ICON.plugins },
   // 记忆库（原右侧图标条的入口，2026-11-06 挪进设置）
   { id: "memory", icon: FEATURE_ICON.memory },
+  // LaTeX 论文：环境自检（preflight）面板
+  { id: "latex", icon: FEATURE_ICON.files },
   { id: "experimental", icon: "flask-conical" },
 ];
