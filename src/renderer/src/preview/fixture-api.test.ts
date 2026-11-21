@@ -4,12 +4,12 @@ import type { AgentEvent } from "../../../shared/agent-ipc.ts";
 import { selectTranscript } from "../../../shared/transcript-state.ts";
 import { applyAgentEvent, createSessionStates } from "../features/chat/session-states.ts";
 import { createPreviewApi } from "./fixture-api.ts";
-import { isPreviewPath, parsePreviewOptions } from "./scenes.ts";
+import { FIXTURE_TEMPLATE_HASH, isPreviewPath, parsePreviewOptions } from "./scenes.ts";
 
 const NOW = Date.parse("2026-11-19T06:30:00.000Z");
 
 function options(scene: "empty" | "typical" | "full" = "typical") {
-  return { scene, theme: "light" as const, language: "en" as const, now: NOW };
+  return { scene, theme: "light" as const, language: "en" as const, now: NOW, onboarding: false };
 }
 
 test("preview URL 只认独立入口与稳定场景；未知参数安全退回 typical", () => {
@@ -22,7 +22,9 @@ test("preview URL 只认独立入口与稳定场景；未知参数安全退回 t
     theme: "black",
     language: "zh",
     now: NOW,
+    onboarding: false,
   });
+  assert.deepEqual(parsePreviewOptions("?scene=typical&onboarding=1", NOW).onboarding, true);
   assert.deepEqual(parsePreviewOptions("?scene=unknown&theme=unknown&lang=unknown", NOW), options());
 });
 
@@ -138,6 +140,207 @@ test("跨天：对主智能体说「接着上次」，回答由目标、计划�
   assert.match(text, /\*\*在等你\*\*：\n  - Compare session navigation — 你回答：Should a child session replace/);
   assert.match(text, /\*\*下一步\*\*：Write the navigation recommendation/);
   assert.match(text, /不是模型的记忆/);
+});
+
+test("组1 文件树：根清单 / 列目录 / 四种预览态 / 大文本按行取窗并夹取", async () => {
+  const api = createPreviewApi(options());
+  const roots = await api.files.roots({ sessionId: "task-sidebar", workspaceId: null });
+  assert.deepEqual(roots.map((root) => root.kind), ["session", "workspace"]);
+  assert.ok(roots.every((root) => root.path.startsWith("/fixtures/")));
+  const home = roots.find((root) => root.kind === "workspace");
+  assert.ok(home !== undefined);
+  const listed = await api.files.list({ sessionId: "task-sidebar", workspaceId: null, root: home.path, dir: home.path });
+  assert.ok(listed.entries.some((entry) => entry.name === "todo.md" && entry.kind === "file"));
+
+  const ws = await api.files.roots({ sessionId: "boss-research", workspaceId: "ws-research" });
+  const wsRoot = ws.find((root) => root.kind === "workspace");
+  assert.ok(wsRoot !== undefined);
+  const text = await api.files.read({ sessionId: "boss-research", workspaceId: "ws-research", root: wsRoot.path, dir: `${wsRoot.path}/src/app.ts` });
+  assert.equal(text.kind, "text");
+  const image = await api.files.read({ sessionId: "boss-research", workspaceId: "ws-research", root: wsRoot.path, dir: `${wsRoot.path}/assets/logo.png` });
+  assert.equal(image.kind, "image");
+  const binary = await api.files.read({ sessionId: "boss-research", workspaceId: "ws-research", root: wsRoot.path, dir: `${wsRoot.path}/assets/archive.zip` });
+  assert.equal(binary.kind, "binary");
+
+  const log = await api.files.read({ sessionId: "boss-research", workspaceId: "ws-research", root: wsRoot.path, dir: `${wsRoot.path}/data/server.log` });
+  assert.equal(log.kind, "large-text");
+  const index = await api.files.lineIndex({ sessionId: "boss-research", workspaceId: "ws-research", root: wsRoot.path, dir: `${wsRoot.path}/data/server.log`, requestId: "r1" });
+  assert.equal(index.kind, "ok");
+  if (index.kind !== "ok") throw new Error("unreachable");
+  const first = await api.files.readLines({ indexId: index.indexId, startLine: 0, count: 10 });
+  assert.equal(first.kind, "text");
+  if (first.kind !== "text") throw new Error("unreachable");
+  assert.equal(first.lines.length, 10);
+  assert.match(first.lines[0] ?? "", /fixture log line 00001/);
+  const clamped = await api.files.readLines({ indexId: index.indexId, startLine: index.totalLines + 100, count: 10_000 });
+  assert.ok(clamped.kind === "text" && clamped.lines.length === 0 && clamped.startLine === index.totalLines);
+  await assert.rejects(
+    api.files.list({ sessionId: "boss-research", workspaceId: "ws-research", root: wsRoot.path, dir: "/outside" }),
+    /outside root/,
+  );
+  await assert.rejects(api.files.reveal({ sessionId: null, workspaceId: null, root: wsRoot.path, dir: wsRoot.path }), /not connected/);
+});
+
+test("组1 文档与演示文稿：列表 / 读写比较交换 / 冲突如实返回 / 新建进虚拟树", async () => {
+  const api = createPreviewApi(options());
+  const list = await api.docs.list({ sessionId: "boss-research", workspaceId: "ws-research" });
+  assert.ok(list.some((entry) => entry.name === "meeting-notes.md" && entry.kind === "doc"));
+  assert.ok(list.some((entry) => entry.name === "pitch.slides.json" && entry.kind === "slides"));
+  const target = list.find((entry) => entry.name === "meeting-notes.md");
+  assert.ok(target !== undefined);
+  const read = await api.docs.read({ sessionId: "boss-research", workspaceId: "ws-research", path: target.path });
+  const written = await api.docs.write({ sessionId: "boss-research", workspaceId: "ws-research", path: target.path, text: "# Edited in preview\n", expectedHash: read.hash });
+  assert.equal(written.ok, true);
+  const conflict = await api.docs.write({ sessionId: "boss-research", workspaceId: "ws-research", path: target.path, text: "stale", expectedHash: read.hash });
+  assert.equal(conflict.ok, false);
+  if (conflict.ok === false) assert.equal(conflict.reason, "conflict");
+  const created = await api.docs.create({ sessionId: "boss-research", workspaceId: "ws-research", kind: "slides" });
+  assert.match(created.path, /\.slides\.json$/u);
+  const deck = JSON.parse(created.text) as { slides: unknown[] };
+  assert.ok(Array.isArray(deck.slides) && deck.slides.length >= 1);
+  await assert.rejects(api.docs.export({ sessionId: null, workspaceId: null, path: target.path, format: "pdf", html: "", pages: 1 }), /not connected/);
+});
+
+test("组2 审查与摘抄与记忆：四来源 / diff 边界态 / 摘抄幂等 / 记忆写操作", async () => {
+  const api = createPreviewApi(options());
+  const task = await api.review.list("task-sidebar", "task");
+  assert.equal(task.kind, "ok");
+  if (task.kind !== "ok") throw new Error("unreachable");
+  assert.ok(task.entries.some((entry) => entry.binary));
+  assert.ok(task.entries.some((entry) => entry.restored === true));
+  assert.ok(task.entries.some((entry) => entry.symlink !== undefined));
+  const appDiff = await api.review.diff("task-sidebar", "task", task.entries[0]?.path ?? "");
+  assert.match(appDiff.diff ?? "", /@@[^@]*@@/);
+  const tooLarge = await api.review.diff("task-sidebar", "task", `${task.cwd}/scratch/rewrite.md`);
+  assert.equal(tooLarge.tooLarge?.exceeded, "lines");
+  const restored = await api.review.diff("task-sidebar", "task", `${task.cwd}/scratch/notes.md`);
+  assert.equal(restored.restored, true);
+  const unstaged = await api.review.list("task-sidebar", "unstaged");
+  assert.ok(unstaged.kind === "ok" && unstaged.entries.some((entry) => entry.lineCountUnknown));
+  const unknown = await api.review.diff("task-sidebar", "task", `${task.cwd}/nope.ts`);
+  assert.equal(unknown.error?.reason, "failed");
+
+  const excerptList = await api.excerpt.list();
+  assert.ok(excerptList.items.length >= 3);
+  const source = excerptList.items[0];
+  assert.ok(source !== undefined);
+  const again = await api.excerpt.add({ sessionId: source.excerpt.sessionId, turn: source.excerpt.turn, role: source.excerpt.role, text: source.excerpt.text });
+  assert.equal(again.duplicate, true);
+  const fresh = await api.excerpt.add({ sessionId: "task-sidebar", turn: 9, role: "user", text: "A new fixture excerpt." });
+  assert.equal(fresh.duplicate, false);
+  const removed = await api.excerpt.remove({ id: fresh.excerpt.id });
+  assert.equal(removed.removed, true);
+  assert.equal((await api.excerpt.remove({ id: fresh.excerpt.id })).removed, false);
+
+  const scopes = await api.memory.scopes();
+  assert.ok(scopes.some((scope) => scope.kind === "user"));
+  const entries = await api.memory.entries({ token: "all" });
+  assert.ok(entries.items.length >= 4);
+  const session = await api.memory.session("task-sidebar");
+  assert.ok(session.turns.length >= 1);
+  const muted = await api.memory.mutate({ op: "setStatus", token: "user", entryId: "mem-fixture-new", status: "muted" });
+  assert.equal(muted.ok, true);
+  const missing = await api.memory.mutate({ op: "edit", token: "user", entryId: "nope", text: "x" });
+  assert.equal(missing.ok, false);
+});
+
+test("组2 终端与自动化：终端走生产 spawn-failure 文案；自动化状态转移可点、运行明确拒绝", async () => {
+  const api = createPreviewApi(options());
+  assert.deepEqual(await api.terminal.list(), []);
+  await assert.rejects(api.terminal.create({ terminalId: "fixture-terminal-1", cols: 80, rows: 24 }), /no PTY/);
+  await api.terminal.kill("fixture-terminal-1");
+
+  const automations = await api.automation.list();
+  assert.equal(automations.length, 3);
+  const digest = automations.find((item) => item.id === "auto-fixture-digest");
+  assert.ok(digest !== undefined && digest.plugin?.name === "reading" && digest.runs.some((run) => run.status === "skipped"));
+  const paused = await api.automation.act("auto-fixture-digest", { type: "pause" });
+  assert.equal(paused.ok, true);
+  if (paused.ok) assert.equal(paused.automation?.status, "paused");
+  const runNow = await api.automation.act("auto-fixture-ci", { type: "runNow" });
+  assert.equal(runNow.ok, false);
+  const restart = await api.automation.act("auto-fixture-cleanup", { type: "restart" });
+  assert.equal(restart.ok, true);
+  if (restart.ok) assert.equal(restart.automation?.status, "active");
+  const deleted = await api.automation.act("auto-fixture-cleanup", { type: "delete" });
+  assert.equal(deleted.ok, true);
+  assert.equal((await api.automation.list()).length, 2);
+  const create = await api.automation.create({ workspaceId: null, title: "x", prompt: "y", schedule: { kind: "once", at: Date.now() + 60_000 } });
+  assert.equal(create.ok, false);
+});
+
+test("组3 插件与看板与专注：已装列表 / 范围切换 / 草稿 / 周看板平移 / 专注改动与小结", async () => {
+  const api = createPreviewApi(options());
+  const listed = await api.plugin.list();
+  assert.equal(listed.plugins.length, 4);
+  assert.ok(listed.plugins.some((item) => item.install?.source.kind === "builtin"));
+  await api.plugin.setScope("plugin:session-digest", { kind: "global" });
+  const after = (await api.plugin.list()).plugins.find((item) => item.id === "plugin:session-digest");
+  assert.deepEqual(after?.scope, { kind: "global" });
+  const drafts = await api.plugin.drafts();
+  assert.equal(drafts.length, 1);
+  const draft = await api.plugin.draftLoad({ path: drafts[0]?.path ?? "", workspaceId: "ws-research", stamp: null });
+  assert.equal(draft.kind, "ready");
+  const file = await api.plugin.skillFile("reading", "paper-explainer");
+  assert.match(file.content, /Fixture skill body/);
+  const action = await api.plugin.panelAction({ name: "reading", action: "open", payload: null });
+  assert.equal(action.ok, false);
+  const skillList = await api.skill.list();
+  assert.ok(skillList.some((item) => item.slug === "commit-notes"));
+  const mcp = await api.mcp.list();
+  assert.equal(mcp.servers.length, 1);
+  await api.mcp.setDisabled("fetch-server", true);
+  assert.equal((await api.mcp.list()).servers[0]?.disabled, true);
+
+  const week = await api.board.week({ weekStart: Date.now() });
+  assert.ok(week !== null);
+  if (week === null) throw new Error("unreachable");
+  assert.equal(week.days.length, 7);
+  const withCards = week.days.flatMap((day) => day.items).find((item) => item.cards.length > 0);
+  assert.ok(withCards !== undefined);
+  const nextWeek = await api.board.week({ weekStart: week.weekStart + 7 * 24 * 60 * 60 * 1000 });
+  assert.ok(nextWeek !== null && nextWeek.days.flatMap((day) => day.items).length >= 1);
+  const frame = await api.board.frame({ hash: "b".repeat(64) });
+  assert.equal(frame, null);
+  const frameOk = await api.board.frame({ hash: FIXTURE_TEMPLATE_HASH });
+  assert.deepEqual(frameOk, { frameUrl: "/preview-board-card.html" });
+
+  const changes = await api.focus.changes("ws-research");
+  assert.equal(changes.kind, "ok");
+  if (changes.kind !== "ok") throw new Error("unreachable");
+  assert.ok(changes.entries.some((entry) => entry.kind === "U" && entry.lineCountUnknown));
+  const summary = await api.focus.summarize({ startedAt: Date.now() - 3600_000, until: Date.now(), workspaceId: "ws-research" });
+  assert.equal(summary.kind, "ok");
+  if (summary.kind !== "ok") throw new Error("unreachable");
+  assert.match(summary.modelLabel, /preview-fixture/);
+  await api.focus.notifyDone({ title: "t", body: "b" });
+});
+
+test("组4 外部来源与语音与意图与引导：八来源可见 / 凭证掩码 / 测试如实失败 / intent 连不上", async () => {
+  const api = createPreviewApi(options());
+  const external = await api.externalSources.list();
+  assert.equal(external.sources.length, 8);
+  assert.ok(external.sources.some((source) => source.enabled === false));
+  assert.ok(external.sources.some((source) => source.problems.length > 0));
+  assert.equal(external.home, "/fixtures/home");
+
+  const selection = await api.voice.dictationSelection();
+  assert.equal(selection.configured, false);
+  await api.voice.doubaoSave({ appId: "app-fixture", resourceId: "res-fixture", accessToken: "secret-token-1234" });
+  const saved = await api.voice.doubaoGet();
+  assert.equal(saved.tokenMasked, "fix…1234");
+  assert.equal((await api.voice.dictationSelection()).configured, true);
+  const testResult = await api.voice.doubaoTest({ appId: "app-fixture", resourceId: "res-fixture" });
+  assert.deepEqual(testResult, { ok: false, reason: "network", detail: "Preview fixture: no network request was made." });
+  await assert.rejects(api.voice.dictationStart("task-sidebar"), /microphone/);
+
+  assert.equal(await api.intent.health(), null);
+  assert.equal(await api.intent.edges("task-sidebar", "t1"), null);
+
+  const guided = createPreviewApi({ ...options(), onboarding: true });
+  assert.equal((await guided.settings.get()).onboardingSeen, false);
+  const plain = createPreviewApi(options());
+  assert.equal((await plain.settings.get()).onboardingSeen, true);
 });
 
 test("未接后端明确拒绝；所有场景数据只含 fixture 路径与无效域名", async () => {

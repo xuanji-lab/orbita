@@ -9,7 +9,7 @@ const NOW = new Date(2026, 10, 21, 9, 30).getTime();
 
 /** 用 typical 的跨天场景（主智能体昨天 18:40 离开）喂一遍：五项都从结构化记录里来 */
 function typicalBrief() {
-  const fixture = buildPreviewFixture({ scene: "typical", theme: "light", language: "en", now: NOW });
+  const fixture = buildPreviewFixture({ scene: "typical", theme: "light", language: "en", now: NOW, onboarding: false });
   const main = "boss-research";
   const jobs = fixture.sessions
     .filter((item) => item.parentId === main)

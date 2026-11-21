@@ -16,6 +16,19 @@ import type { JsonValue, TranscriptItem } from "../../../shared/transcript.ts";
 import { dateKeysBack } from "../../../shared/usage.ts";
 import type { UsageDayTotal } from "../../../shared/usage.ts";
 import type { Workspace } from "../../../shared/workspace.ts";
+import type { Automation } from "../../../shared/automation.ts";
+import type { ExcerptItem } from "../../../shared/excerpt.ts";
+import { EXTERNAL_SOURCE_IDS } from "../../../shared/external-sources.ts";
+import type { ExternalSourcesResult, ExternalSourceInfo } from "../../../shared/external-sources.ts";
+import type { FocusChanges } from "../../../shared/focus.ts";
+import type { PluginView } from "../../../shared/plugin.ts";
+import type { BoardWeekResponse, BoardWeekDay } from "../../../shared/plugin-board.ts";
+import type { MemoryEntryView, MemoryEvolutionNode, MemoryScopeSummary, MemorySessionView, MemorySource, MemoryStatus } from "../../../shared/memory.ts";
+import type { ReviewDiff, ReviewList, ReviewSource } from "../../../shared/review.ts";
+import type { SkillMeta } from "../../../shared/skill.ts";
+import type { McpListResult } from "../../../shared/mcp.ts";
+import type { PluginDraftEntry } from "../../../shared/plugin.ts";
+import { localWeekStart, localDayStart } from "../../../shared/plugin-board.ts";
 
 /** 稳定场景 id：预览 URL 只认这三档，未知值退回 typical，不读本机数据。 */
 export const PREVIEW_SCENE_IDS = ["empty", "typical", "full"] as const;
@@ -27,6 +40,33 @@ export interface PreviewOptions {
   language: Language;
   /** 同一次加载里所有相对时间都从这个固定快照派生；测试可注入。 */
   now: number;
+  /** 为 true 时首启引导自动弹出（?onboarding=1），复用生产 shouldAutoOpenOnboarding 路径。 */
+  onboarding: boolean;
+}
+
+/** 虚拟文件树节点：text/image/binary/largeLog 四态覆盖文件面板全部预览路径。 */
+export type VfsNode =
+  | { kind: "dir"; children: Map<string, VfsNode> }
+  | { kind: "file"; text: string | null; image: boolean; binary: boolean; largeLog: boolean; modifiedAt: number };
+
+export interface PreviewReviewSet {
+  lists: Record<ReviewSource, ReviewList>;
+  /** key = `${source} ${path}`，diff 按需拉 */
+  diffs: Map<string, ReviewDiff>;
+}
+
+export interface PreviewMemorySet {
+  scopes: MemoryScopeSummary[];
+  views: MemoryEntryView[];
+  sessionViews: Map<string, MemorySessionView>;
+}
+
+export interface PreviewPluginsSet {
+  plugins: PluginView[];
+  skills: SkillMeta[];
+  mcp: McpListResult;
+  drafts: PluginDraftEntry[];
+  draftView: PluginView | null;
 }
 
 export interface PreviewFixture {
@@ -40,6 +80,16 @@ export interface PreviewFixture {
   providers: ProviderDto[];
   builtins: BuiltinProvider[];
   usage: UsageDayTotal[];
+  /** 绝对路径 → 节点；目录与文件都进表，fixture-api 直接查。 */
+  vfs: Map<string, VfsNode>;
+  review: PreviewReviewSet;
+  excerpts: ExcerptItem[];
+  memory: PreviewMemorySet;
+  automations: Automation[];
+  plugins: PreviewPluginsSet;
+  board: BoardWeekResponse;
+  focusChanges: FocusChanges;
+  externalSources: ExternalSourcesResult;
 }
 
 export function isPreviewPath(pathname: string): boolean {
@@ -60,7 +110,8 @@ export function parsePreviewOptions(search: string, now: number = Date.now()): P
   const language = (LANGUAGES as readonly string[]).includes(rawLanguage ?? "")
     ? (rawLanguage as Language)
     : "en";
-  return { scene, theme, language, now };
+  const rawOnboarding = query.get("onboarding");
+  return { scene, theme, language, now, onboarding: rawOnboarding === "1" || rawOnboarding === "true" };
 }
 
 const MINUTE = 60_000;
@@ -421,6 +472,617 @@ function msg(parentId: string, childId: string, step: string, from: "parent" | "
   return { id: `${parentId}:${childId}:${step}`, from, author, kind, text, delivery: from === "parent" ? "steer" : "followUp", createdAt: at };
 }
 
+/** 组1素材：虚拟文件树。字符串=文本文件；三个标记分别走图片/二进制/大文本分段预览。 */
+type TreeSpec = { [name: string]: TreeSpec | string | { image: true } | { binary: true } | { largeLog: true } };
+
+function addTree(vfs: Map<string, VfsNode>, base: string, spec: TreeSpec, now: number): void {
+  const existing = vfs.get(base);
+  const dir: VfsNode = existing ?? { kind: "dir", children: new Map() };
+  vfs.set(base, dir);
+  if (dir.kind !== "dir") return;
+  for (const [name, value] of Object.entries(spec)) {
+    const path = `${base}/${name}`;
+    const at = now - ((name.length * 37) % (9 * DAY));
+    if (typeof value === "string") {
+      vfs.set(path, { kind: "file", text: value, image: false, binary: false, largeLog: false, modifiedAt: at });
+    } else if ("image" in value) {
+      vfs.set(path, { kind: "file", text: null, image: true, binary: false, largeLog: false, modifiedAt: at });
+    } else if ("binary" in value) {
+      vfs.set(path, { kind: "file", text: null, image: false, binary: true, largeLog: false, modifiedAt: at });
+    } else if ("largeLog" in value) {
+      vfs.set(path, { kind: "file", text: null, image: false, binary: false, largeLog: true, modifiedAt: at });
+    } else {
+      addTree(vfs, path, value, now);
+    }
+  }
+}
+
+/** 工作区树：覆盖 md 预览 / 代码 / 图片 / 二进制 / 大日志分段 / 文档列表（.md 与 .slides.json）。 */
+function workspaceTree(): TreeSpec {
+  return {
+    "README.md": "# Research atlas\n\nFixture workspace for the deterministic preview.\n",
+    "meeting-notes.md": "# Meeting notes\n\n- Preview fixtures stay deterministic.\n- Paper themes ship with the design system.\n",
+    "pitch.slides.json": fixtureDeckText(),
+    src: {
+      "app.ts": "export function appFixture() {\n  // deterministic preview source\n  return \"fixture\";\n}\n",
+      "styles.css": ":root {\n  --fixture: 1;\n}\n",
+    },
+    docs: { "plan.md": "# Plan\n\n1. Open the preview.\n2. Click every surface once.\n" },
+    assets: { "logo.png": { image: true }, "archive.zip": { binary: true } },
+    data: { "dump.csv": "id,name\n1,fixture\n", "server.log": { largeLog: true } },
+    scratch: { "rewrite.md": "# Rewrite\n\nLong draft with too many lines to preview inline.\n", "notes.md": "# Notes\n\nRestored to the task baseline.\n" },
+  };
+}
+
+/** 演示文稿面板的 fixture deck：两页文本元素，走 SlidesView 的生产渲染管线。 */
+export function fixtureDeckText(): string {
+  const text = (id: string, x: number, y: number, w: number, h: number, html: string, fontSize: number, color: string) => ({
+    id, kind: "text", x, y, w, h, html, fontSize, color, align: "left", valign: "top",
+  });
+  return JSON.stringify({
+    version: 1,
+    title: "Fixture deck",
+    aspect: "16:9",
+    slides: [
+      { id: "s1", layout: "cover", elements: [
+        text("e1", 72, 96, 800, 72, "Fixture deck", 48, "var(--color-text-primary)"),
+        text("e2", 72, 190, 800, 60, "Deterministic slides preview — no host file was read", 22, "var(--color-text-secondary)"),
+      ] },
+      { id: "s2", layout: "bullets", elements: [
+        text("e1", 72, 80, 800, 56, "What the preview proves", 34, "var(--color-text-primary)"),
+        text("e2", 96, 170, 780, 300, "<ul><li>The slides canvas mounts from a fixture deck</li><li>Stage and filmstrip stay in sync</li><li>Export stays visibly unconnected</li></ul>", 22, "var(--color-text-primary)"),
+      ] },
+    ],
+  });
+}
+
+function buildVfs(scene: PreviewSceneId, now: number): Map<string, VfsNode> {
+  const vfs = new Map<string, VfsNode>();
+  vfs.set("/fixtures/Home", { kind: "dir", children: new Map() });
+  if (scene === "empty") return vfs;
+  addTree(vfs, "/fixtures/Home", { "todo.md": "# Home\n\n- [ ] Review the preview coverage report\n" }, now);
+  for (const id of ["ws-research", "ws-orbita", "ws-writing"]) {
+    addTree(vfs, `/fixtures/${id}`, workspaceTree(), now);
+  }
+  // 每个真实 fixture 会话一个工作台树（boss 与普通会话同模板，路径按会话 id 派生）。
+  for (const id of ["boss-research", "boss-orbita", "session-research-map", "session-research-evidence", "task-sidebar"]) {
+    addTree(vfs, `/fixtures/workbenches/${id}`, {
+      "notes.md": "# Session notes\n\nScratch space owned by this fixture session.\n",
+      output: { "diff-summary.txt": "2 files changed, 14 insertions(+), 3 deletions(-)\n" },
+    }, now);
+  }
+  return vfs;
+}
+
+/** 大日志 fixture 的行生成：确定性的 5,000 行，lineIndex/readLines 按窗取。 */
+export const FIXTURE_LOG_TOTAL_LINES = 5000;
+export function fixtureLogLine(index: number): string {
+  return `2026-11-${String(10 + (index % 9)).padStart(2, "0")}T${String(index % 24).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}:00Z fixture log line ${String(index + 1).padStart(5, "0")} — deterministic preview content`;
+}
+
+// ——————————— 组2素材：审查 / 摘抄 / 记忆 / 自动化 ———————————
+
+const APP_DIFF_TEXT = [
+  "--- a/src/app.ts",
+  "+++ b/src/app.ts",
+  "@@ -1,4 +1,6 @@",
+  " export function appFixture() {",
+  "-  return \"old\";",
+  "+  // deterministic preview source",
+  "+  const ready = true;",
+  "+  return ready ? \"fixture\" : \"old\";",
+  " }",
+].join("\n");
+
+const PLAN_DIFF_TEXT = [
+  "--- a/docs/plan.md",
+  "+++ b/docs/plan.md",
+  "@@ -1,3 +1,4 @@",
+  " # Plan",
+  " ",
+  " 1. Open the preview.",
+  "+2. Click every surface once.",
+].join("\n");
+
+function buildReview(scene: PreviewSceneId): PreviewReviewSet {
+  const cwd = "/fixtures/ws-research";
+  if (scene === "empty") {
+    return {
+      lists: {
+        task: { kind: "empty", reason: "no-changes", cwd },
+        unstaged: { kind: "empty", reason: "not-repo", cwd },
+        staged: { kind: "empty", reason: "not-repo", cwd },
+        branch: { kind: "empty", reason: "not-repo", cwd },
+      },
+      diffs: new Map(),
+    };
+  }
+  const task: ReviewList = {
+    kind: "ok",
+    cwd,
+    entries: [
+      { path: `${cwd}/src/app.ts`, added: 3, removed: 1, binary: false },
+      { path: `${cwd}/docs/plan.md`, added: 1, removed: 0, binary: false },
+      { path: `${cwd}/assets/logo.png`, added: 0, removed: 0, binary: true },
+      { path: `${cwd}/scratch/rewrite.md`, added: 18, removed: 6, binary: false },
+      { path: `${cwd}/scratch/notes.md`, added: 0, removed: 0, binary: false, restored: true },
+      { path: `${cwd}/link.md`, added: 0, removed: 0, binary: false, symlink: "meeting-notes.md" },
+    ],
+  };
+  const unstaged: ReviewList = {
+    kind: "ok",
+    cwd,
+    entries: [
+      { path: "src/app.ts", added: 3, removed: 1, binary: false },
+      { path: "README.md", added: 0, removed: 0, binary: false, lineCountUnknown: true },
+      { path: "dist/bundle.js", added: 0, removed: 0, binary: true },
+    ],
+  };
+  const staged: ReviewList = {
+    kind: "ok",
+    cwd,
+    entries: [{ path: "docs/plan.md", added: 1, removed: 0, binary: false }],
+  };
+  const branch: ReviewList = {
+    kind: "ok",
+    cwd,
+    upstream: "origin/main",
+    entries: [
+      { path: "src/app.ts", added: 3, removed: 1, binary: false },
+      { path: "src/legacy.ts", added: 0, removed: 20, binary: false },
+    ],
+  };
+  const diffs = new Map<string, ReviewDiff>([
+    [`task ${cwd}/src/app.ts`, { diff: APP_DIFF_TEXT, binary: false, restored: false }],
+    [`task ${cwd}/docs/plan.md`, { diff: PLAN_DIFF_TEXT, binary: false, restored: false }],
+    [`task ${cwd}/assets/logo.png`, { diff: null, binary: true, restored: false }],
+    [`task ${cwd}/scratch/rewrite.md`, { diff: null, binary: false, restored: false, tooLarge: { exceeded: "lines", message: "Fixture diff exceeds REVIEW_DIFF_MAX_LINES; no patch was generated." } }],
+    [`task ${cwd}/scratch/notes.md`, { diff: null, binary: false, restored: true }],
+    [`task ${cwd}/link.md`, { diff: null, binary: false, restored: false, symlink: "meeting-notes.md" }],
+    ["unstaged src/app.ts", { diff: APP_DIFF_TEXT, binary: false, restored: false }],
+    ["unstaged README.md", { diff: null, binary: false, restored: false, error: { reason: "failed", message: "Fixture: line count unknown, diff not generated." } }],
+    ["unstaged dist/bundle.js", { diff: null, binary: true, restored: false }],
+    ["staged docs/plan.md", { diff: PLAN_DIFF_TEXT, binary: false, restored: false }],
+    ["branch src/app.ts", { diff: APP_DIFF_TEXT, binary: false, restored: false }],
+    ["branch src/legacy.ts", { diff: null, binary: false, restored: false, error: { reason: "failed", message: "Fixture: baseline blob missing." } }],
+  ]);
+  return { lists: { task, unstaged, staged, branch }, diffs };
+}
+
+function buildExcerpts(now: number): ExcerptItem[] {
+  return [
+    {
+      excerpt: { id: "exc-fixture-1", text: "The existing parent and child conversation path is sufficient.", sessionId: "task-sidebar", turn: 1, role: "assistant", createdAt: now - 3 * DAY },
+      sessionTitle: "Refine the session navigation",
+    },
+    {
+      excerpt: { id: "exc-fixture-2", text: "Replacing the main conversation preserves context; the parent remains one breadcrumb away.", sessionId: "session-research-map", turn: 1, role: "assistant", createdAt: now - 2 * DAY },
+      sessionTitle: "Compare session navigation",
+    },
+    {
+      excerpt: { id: "exc-fixture-3", text: "Map the current work and bring the open questions into one place.", sessionId: "boss-research", turn: 1, role: "user", createdAt: now - 2 * DAY },
+      sessionTitle: "Research atlas",
+    },
+  ];
+}
+
+function buildMemory(scene: PreviewSceneId, now: number): PreviewMemorySet {
+  const scopes: MemoryScopeSummary[] = [
+    { token: "user", kind: "user", name: "All workspaces", count: scene === "empty" ? 0 : 2 },
+    { token: "ws-research", kind: "workspace", name: "Research atlas", count: scene === "empty" ? 0 : 2 },
+  ];
+  if (scene === "empty") return { scopes, views: [], sessionViews: new Map() };
+  const oldEntry = {
+    id: "mem-fixture-old", type: "preference" as const,
+    text: "The user likes summaries written in English with bullet points.",
+    keywords: ["summary", "english"], layer: "user" as const, sessionId: "task-sidebar", turns: [1], at: now - 20 * DAY,
+    episodeId: "ep-fixture-1", source: "chat" as const, status: "stale" as const,
+  };
+  const newEntry = {
+    id: "mem-fixture-new", type: "preference" as const,
+    text: "The user prefers concise Chinese summaries with evidence paths.",
+    reason: "User asked twice for 中文要点 with file references.",
+    keywords: ["summary", "chinese", "evidence"], layer: "user" as const, sessionId: "task-sidebar", turns: [2], at: now - 3 * DAY,
+    episodeId: "ep-fixture-2", source: "agent" as const, conflictWith: "mem-fixture-old",
+  };
+  const wsEntry = {
+    id: "mem-fixture-ws", type: "insight" as const,
+    text: "Session navigation comparisons should keep the parent one breadcrumb away.",
+    keywords: ["navigation", "parent"], layer: "workspace" as const, scopeId: "ws-research", sessionId: "session-research-map", turns: [1], at: now - 2 * DAY,
+    episodeId: "ep-fixture-3", source: "chat" as const,
+  };
+  const factEntry = {
+    id: "mem-fixture-fact", type: "fact" as const,
+    text: "The user reviews plugin boards every Friday afternoon.",
+    keywords: ["board", "friday"], layer: "user" as const, sessionId: "task-sidebar", turns: [3], at: now - DAY,
+    episodeId: "ep-fixture-4", source: "manual" as const,
+  };
+  const evolutionNode = (entry: { id: string; text: string; at: number; source: MemorySource; status?: MemoryStatus }): MemoryEvolutionNode => ({ id: entry.id, text: entry.text, at: entry.at, status: entry.status, source: entry.source });
+  const views: MemoryEntryView[] = [
+    { entry: newEntry, token: "user", sessionTitle: "Refine the session navigation", quote: "换成中文要点，带上文件出处", evolution: [evolutionNode(oldEntry), evolutionNode(newEntry)], usage: { count: 4, lastAt: now - 5 * HOUR } },
+    { entry: oldEntry, token: "user", sessionTitle: "Refine the session navigation", quote: "give me bullet points", evolution: [evolutionNode(oldEntry), evolutionNode(newEntry)], usage: { count: 0, lastAt: null } },
+    { entry: factEntry, token: "user", sessionTitle: null, quote: null, evolution: [], usage: { count: 1, lastAt: now - DAY } },
+    { entry: wsEntry, token: "ws-research", sessionTitle: "Compare session navigation", quote: "compare the navigation options", evolution: [], usage: { count: 2, lastAt: now - 8 * HOUR } },
+  ];
+  const turnView = (turn: number, at: number, used: MemorySessionView["turns"][number]["used"], remembered: MemoryEntryView[]): MemorySessionView["turns"][number] => ({ turn, at, used, remembered });
+  const sessionViews = new Map<string, MemorySessionView>([
+    ["task-sidebar", {
+      sessionId: "task-sidebar", token: "user",
+      turns: [
+        turnView(2, now - 3 * DAY, [{ id: "mem-fixture-new", text: newEntry.text, score: 0.82 }], [views[0] as MemoryEntryView]),
+        turnView(3, now - DAY, [], [views[2] as MemoryEntryView]),
+      ],
+    }],
+  ]);
+  return { scopes, views, sessionViews };
+}
+
+function buildAutomations(scene: PreviewSceneId, now: number): Automation[] {
+  if (scene === "empty") return [];
+  return [
+    {
+      id: "auto-fixture-digest",
+      title: "Daily literature digest",
+      prompt: "Check the literature watchlist and queue the four most reproducible papers.",
+      schedule: { kind: "daily", time: "09:00" },
+      target: { kind: "new_session", workspaceId: "ws-research" },
+      plugin: { name: "reading" },
+      status: "active",
+      createdBy: { kind: "user" },
+      nextRunAt: now + 4 * HOUR,
+      runs: [
+        { id: "run-digest-2", runAt: now - 26 * HOUR, trigger: "schedule", status: "success", sessionId: "auto-digest-2", durationMs: 95_000, tokens: 84_000, resultExcerpt: "4 papers queued; attention routing looks most reproducible.", boardSnapshotIds: ["call-digest-2a"] },
+        { id: "run-digest-1", runAt: now - 50 * HOUR, trigger: "schedule", status: "skipped", sessionId: null, durationMs: null, tokens: null, skipReason: "overlap", repeat: 2 },
+      ],
+      runCount: 6,
+      consecutiveFailures: 0,
+      lastResult: "4 papers queued; attention routing looks most reproducible.",
+      createdAt: now - 9 * DAY,
+      updatedAt: now - 26 * HOUR,
+    },
+    {
+      id: "auto-fixture-ci",
+      title: "Check CI status",
+      prompt: "Look at the latest CI run and report failures only.",
+      schedule: { kind: "interval", unit: "minute", every: 30 },
+      target: { kind: "new_session", workspaceId: null },
+      status: "paused",
+      createdBy: { kind: "agent", sessionId: "boss-orbita" },
+      nextRunAt: null,
+      runs: [
+        { id: "run-ci-1", runAt: now - 2 * DAY, trigger: "manual", status: "error", sessionId: "auto-ci-1", durationMs: 12_000, tokens: 4_000, error: "Fixture: the CI probe endpoint is not reachable from the preview." },
+      ],
+      runCount: 3,
+      consecutiveFailures: 1,
+      createdAt: now - 6 * DAY,
+      updatedAt: now - 2 * DAY,
+    },
+    {
+      id: "auto-fixture-cleanup",
+      title: "Nightly workbench cleanup",
+      prompt: "Tidy the session workbenches and list what was archived.",
+      schedule: { kind: "daily", time: "23:30", weekdays: [1, 2, 3, 4, 5] },
+      target: { kind: "this_session", sessionId: "task-sidebar", workspaceId: null },
+      status: "failed",
+      failureReason: "Fixture: bound session cwd is missing.",
+      createdBy: { kind: "agent", sessionId: "task-sidebar" },
+      nextRunAt: null,
+      runs: [
+        { id: "run-clean-3", runAt: now - 30 * HOUR, trigger: "schedule", status: "error", sessionId: "task-sidebar", durationMs: 8_000, tokens: 2_000, error: "Fixture: bound session cwd is missing." },
+        { id: "run-clean-2", runAt: now - 54 * HOUR, trigger: "schedule", status: "error", sessionId: "task-sidebar", durationMs: 9_000, tokens: 2_200, error: "Fixture: bound session cwd is missing." },
+        { id: "run-clean-1", runAt: now - 78 * HOUR, trigger: "schedule", status: "error", sessionId: "task-sidebar", durationMs: 8_500, tokens: 2_100, error: "Fixture: bound session cwd is missing." },
+      ],
+      runCount: 3,
+      consecutiveFailures: 3,
+      createdAt: now - 8 * DAY,
+      updatedAt: now - 30 * HOUR,
+    },
+  ];
+}
+
+// ——————————— 组3素材：插件 / 周看板 / 专注 ———————————
+
+/** 看板卡模板哈希：fixture 固定值，board.frame 据此换同源预览页地址。 */
+export const FIXTURE_TEMPLATE_HASH = "a3f1c2d4e5b60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0";
+
+function buildPlugins(scene: PreviewSceneId, now: number): PreviewPluginsSet {
+  const empty: PreviewPluginsSet = { plugins: [], skills: [], mcp: { servers: [], warnings: [], pluginServers: [] }, drafts: [], draftView: null };
+  if (scene === "empty") return empty;
+  const reading: PluginView = {
+    id: "plugin:reading",
+    origin: "plugin",
+    name: "reading",
+    description: "Distill papers into layered digests and keep a reading queue.",
+    author: "Orbita",
+    version: "1.4.0",
+    license: "MIT",
+    scope: { kind: "global" },
+    placement: { kind: "global" },
+    contents: { skills: 2, mcp: 0, scripts: false },
+    skills: [
+      { slug: "paper-explainer", name: "paper-explainer", description: "Distill a paper into a layered digest." },
+      { slug: "weread", name: "weread", description: "Search the WeRead shelf and pull highlights." },
+    ],
+    workflow: [],
+    io: {
+      reads: [{ path: "watchlist.md", note: "the user's paper queue", when: null }],
+      writes: [{ path: "reading/digest.md", note: "appended digest", when: "daily" }],
+    },
+    external: [],
+    board: {
+      title: "Reading week",
+      spec: null,
+      cards: [
+        { id: "digest", title: "Digest", size: "2x1", note: "Papers queued this week", template: FIXTURE_TEMPLATE_HASH, data: "data/digest.json", sample: "data/digest.sample.json", repeat: null },
+        { id: "queue", title: "Queue", size: "1x1", note: null, template: FIXTURE_TEMPLATE_HASH, data: "data/queue.json", sample: null, repeat: "items" },
+      ],
+    },
+    tuned: false,
+    mcp: [],
+    unsupported: [],
+    config: [],
+    conflicts: [],
+    problems: [],
+    install: { source: { kind: "builtin" }, root: "/fixtures/plugins/reading", dataDir: "/fixtures/plugin-data/reading", installedAt: now - 90 * DAY, updatedAt: now - DAY },
+    location: null,
+  };
+  const digest: PluginView = {
+    id: "plugin:session-digest",
+    origin: "plugin",
+    name: "session-digest",
+    description: "Collect the week's sessions into one digest board.",
+    author: "wafo",
+    version: "0.9.2",
+    license: null,
+    scope: { kind: "workspaces", ids: ["ws-research"] },
+    placement: { kind: "workspaces", ids: ["ws-research"] },
+    contents: { skills: 1, mcp: 1, scripts: true },
+    skills: [{ slug: "digest-collect", name: "digest-collect", description: "Gather raw session material for the digest." }],
+    workflow: [
+      { title: "Collect sessions", skill: "digest-collect", skillSlug: "digest-collect", detail: "Gathers the week's sessions", output: "data/raw.json", wait: null },
+      { title: "Draft the digest", skill: null, skillSlug: null, detail: null, output: "data/digest.json", wait: "board" },
+      { title: "Publish", skill: null, skillSlug: null, detail: null, output: null, wait: "chat" },
+    ],
+    io: {
+      reads: [{ path: "sessions/*.jsonl", note: "the week's transcripts", when: "weekly" }],
+      writes: [{ path: "data/digest.json", note: "the board's data file", when: "weekly" }],
+    },
+    external: [{ name: "OpenAlex", kind: "api", account: false, resident: false, note: "paper metadata only" }],
+    board: null,
+    tuned: true,
+    mcp: [{ name: "fetch", qualified: "plugin_session-digest_fetch", transport: "stdio", commandLine: "node /fixtures/plugins/session-digest/mcp/server.js", problem: null }],
+    unsupported: [],
+    config: [{
+      field: { key: "digestHour", type: "string", title: "Digest hour", description: "When the digest runs", required: false, sensitive: false, default: "09:00", options: ["09:00", "18:00"], multiple: false, min: null, max: null },
+      value: "09:00",
+      isSet: true,
+    }],
+    conflicts: [],
+    problems: [],
+    install: { source: { kind: "git", url: "https://fixture.invalid/session-digest.git", commit: "f00ba4" }, root: "/fixtures/plugins/session-digest", dataDir: "/fixtures/plugin-data/session-digest", installedAt: now - 30 * DAY, updatedAt: now - 2 * DAY },
+    location: null,
+  };
+  const userSkill: PluginView = {
+    id: "skill:commit-notes",
+    origin: "user-skill",
+    name: "commit-notes",
+    description: "Write commit notes in the user's tone.",
+    author: null,
+    version: null,
+    license: null,
+    scope: { kind: "global" },
+    placement: { kind: "global" },
+    contents: { skills: 1, mcp: 0, scripts: false },
+    skills: [{ slug: "commit-notes", name: "commit-notes", description: "Write commit notes in the user's tone." }],
+    workflow: [],
+    io: { reads: [], writes: [] },
+    external: [],
+    board: null,
+    tuned: false,
+    mcp: [],
+    unsupported: [],
+    config: [],
+    conflicts: [],
+    problems: [],
+    install: null,
+    location: "/fixtures/skills/commit-notes",
+  };
+  const userMcp: PluginView = {
+    id: "mcp:fetch-server",
+    origin: "user-mcp",
+    name: "fetch-server",
+    description: "Remote fetch MCP server.",
+    author: null,
+    version: null,
+    license: null,
+    scope: { kind: "global" },
+    placement: { kind: "global" },
+    contents: { skills: 0, mcp: 1, scripts: false },
+    skills: [],
+    workflow: [],
+    io: { reads: [], writes: [] },
+    external: [],
+    board: null,
+    tuned: false,
+    mcp: [{ name: "fetch-server", qualified: "fetch-server", transport: "http", commandLine: "https://fixture.invalid/mcp", problem: null }],
+    unsupported: [],
+    config: [],
+    conflicts: [],
+    problems: [],
+    install: null,
+    location: "npx -y @fixture/mcp-server",
+  };
+  const draftView: PluginView = {
+    ...digest,
+    id: "plugin:half-done",
+    name: "half-done",
+    description: "A draft the fixture pretends is still being written.",
+    scope: { kind: "off" },
+    placement: null,
+    install: null,
+    problems: [{ kind: "manifest-invalid", detail: "orbita.board.cards[1].size" }],
+    unsupported: [{ kind: "commands", items: ["digest.now"], count: 1 }],
+  };
+  const skills: SkillMeta[] = [
+    { slug: "paper-explainer", name: "paper-explainer", description: "Distill a paper into a layered digest.", global: true, workspaces: [], missing: false, linkedPath: null },
+    { slug: "weread", name: "weread", description: "Search the WeRead shelf and pull highlights.", global: true, workspaces: [], missing: false, linkedPath: null },
+    { slug: "digest-collect", name: "digest-collect", description: "Gather raw session material for the digest.", global: false, workspaces: ["ws-research"], missing: false, linkedPath: null },
+    { slug: "commit-notes", name: "commit-notes", description: "Write commit notes in the user's tone.", global: true, workspaces: [], missing: false, linkedPath: null },
+  ];
+  const mcp: McpListResult = {
+    servers: [{
+      name: "fetch-server",
+      detail: "https://fixture.invalid/mcp",
+      status: { kind: "ready", tools: ["search", "queue_add"] },
+      disabled: false,
+      scopedTo: [],
+      source: { global: true, workspaces: [] },
+      instances: [],
+    }],
+    warnings: [],
+    pluginServers: [{ name: "plugin_session-digest_fetch", status: { kind: "ready", tools: ["fetch"] }, instances: [] }],
+  };
+  const drafts: PluginDraftEntry[] = [{
+    workspaceId: "ws-research",
+    path: "/fixtures/ws-research/plugins/half-done",
+    name: "half-done",
+    displayName: "Half done digest",
+    description: "A draft the fixture pretends is still being written.",
+    updatedAt: now - 2 * DAY,
+    sessionId: "task-sidebar",
+    sessionTitle: "Refine the session navigation",
+    manifestProblem: null,
+  }];
+  return { plugins: [reading, digest, userSkill, userMcp], skills, mcp, drafts, draftView };
+}
+
+function buildBoard(scene: PreviewSceneId, now: number): BoardWeekResponse {
+  const weekStart = localWeekStart(now);
+  const dayStart = (index: number): number => localDayStart(weekStart, index);
+  const dayIndexOf = (at: number): number => Math.min(6, Math.max(0, Math.floor((at - dayStart(0)) / DAY)));
+  const days: BoardWeekDay[] = Array.from({ length: 7 }, (_, index) => ({ start: dayStart(index), end: dayStart(index + 1), items: [], planned: [] }));
+  if (scene !== "empty") {
+    const digestCards = [
+      { id: "digest", title: "Digest", size: "2x1" as const, index: 0, template: FIXTURE_TEMPLATE_HASH, data: { items: [{ title: "Attention routing", note: "4 papers" }, { title: "Copybook themes", note: "2 papers" }] }, state: "ready" as const, usingSample: false, updatedAt: now - 26 * HOUR },
+      { id: "queue", title: "Queue", size: "1x1" as const, index: 0, template: FIXTURE_TEMPLATE_HASH, data: null, state: "empty" as const, usingSample: true, updatedAt: null },
+    ];
+    days[dayIndexOf(dayStart(1) + 9 * HOUR + 12 * MINUTE)]?.items.push({
+      at: dayStart(1) + 9 * HOUR + 12 * MINUTE,
+      automationId: "auto-fixture-digest",
+      automationTitle: "Daily literature digest",
+      plugin: "reading",
+      pluginTitle: "Reading",
+      sessionId: "auto-digest-2",
+      cards: digestCards,
+      runId: "run-digest-2",
+      status: "success",
+      workspaceId: "ws-research",
+    });
+    days[dayIndexOf(dayStart(1) + 14 * HOUR + 40 * MINUTE)]?.items.push({
+      at: dayStart(1) + 14 * HOUR + 40 * MINUTE,
+      automationId: "auto-fixture-digest",
+      automationTitle: "Daily literature digest",
+      plugin: "reading",
+      pluginTitle: "Reading",
+      sessionId: "auto-news-1",
+      cards: [],
+      runId: "run-digest-3",
+      status: "success",
+      workspaceId: "ws-research",
+    });
+    days[dayIndexOf(dayStart(2) + 8 * HOUR + 15 * MINUTE)]?.items.push({
+      at: dayStart(2) + 8 * HOUR + 15 * MINUTE,
+      automationId: "auto-fixture-ci",
+      automationTitle: "Check CI status",
+      plugin: null,
+      pluginTitle: null,
+      sessionId: null,
+      cards: [],
+      runId: "run-ci-2",
+      status: "error",
+      workspaceId: null,
+    });
+    const plannedAt1 = now + 2 * HOUR;
+    const plannedAt2 = now + 26 * HOUR;
+    days[dayIndexOf(plannedAt1)]?.planned.push({ at: plannedAt1, automationId: "auto-fixture-digest", title: "Daily literature digest", plugin: "reading", workspaceId: "ws-research" });
+    days[dayIndexOf(plannedAt2)]?.planned.push({ at: plannedAt2, automationId: "auto-fixture-ci", title: "Check CI status", plugin: null, workspaceId: null });
+  }
+  return { weekStart, now, days };
+}
+
+function buildFocusChanges(scene: PreviewSceneId): FocusChanges {
+  if (scene === "empty") return { kind: "empty", reason: "not-repo" };
+  return {
+    kind: "ok",
+    branch: "main",
+    entries: [
+      { path: "src/new-feature.ts", kind: "U", added: 14, removed: 0, binary: false },
+      { path: "src/app.ts", kind: "M", added: 3, removed: 2, binary: false },
+      { path: "assets/logo.png", kind: "M", added: 0, removed: 0, binary: true },
+      { path: "data/dump.csv", kind: "U", added: 0, removed: 0, binary: false, lineCountUnknown: true },
+    ],
+  };
+}
+
+// ——————————— 组4素材：外部来源 ———————————
+
+function buildExternalSources(scene: PreviewSceneId): ExternalSourcesResult {
+  const base = (id: (typeof EXTERNAL_SOURCE_IDS)[number]): ExternalSourceInfo => ({
+    id,
+    roots: [],
+    expected: `/fixtures/home/.${id}`,
+    expectedExists: false,
+    sessions: 0,
+    enabled: true,
+    problems: [],
+  });
+  const sources = EXTERNAL_SOURCE_IDS.map(base);
+  if (scene !== "empty") {
+    const byId = new Map(sources.map((item) => [item.id, item]));
+    const claude = byId.get("claude-code");
+    if (claude !== undefined) {
+      claude.roots = [{ dir: "/fixtures/home/.claude/projects", custom: false, hasData: true }];
+      claude.expected = "/fixtures/home/.claude/projects";
+      claude.expectedExists = true;
+      claude.sessions = 12;
+    }
+    const codex = byId.get("codex");
+    if (codex !== undefined) {
+      codex.roots = [{ dir: "/fixtures/home/.codex", custom: false, hasData: true }];
+      codex.expected = "/fixtures/home/.codex";
+      codex.expectedExists = true;
+      codex.sessions = 4;
+    }
+    const kimiCode = byId.get("kimi-code");
+    if (kimiCode !== undefined) {
+      kimiCode.roots = [{ dir: "/fixtures/home/.kimi/sessions", custom: false, hasData: true }];
+      kimiCode.expected = "/fixtures/home/.kimi/sessions";
+      kimiCode.expectedExists = true;
+      kimiCode.sessions = 5;
+    }
+    const kimiWork = byId.get("kimi-work");
+    if (kimiWork !== undefined) kimiWork.problems = ["Fixture: store file is not readable."];
+    const zcode = byId.get("zcode");
+    if (zcode !== undefined) {
+      zcode.roots = [{ dir: "/fixtures/home/.zcode", custom: false, hasData: true }];
+      zcode.expected = "/fixtures/home/.zcode";
+      zcode.expectedExists = true;
+      zcode.sessions = 30;
+    }
+    const reasonix = byId.get("reasonix");
+    if (reasonix !== undefined) reasonix.sessions = 2;
+    const proma = byId.get("proma");
+    if (proma !== undefined) {
+      proma.roots = [{ dir: "/fixtures/home/.proma", custom: false, hasData: true }];
+      proma.expected = "/fixtures/home/.proma";
+      proma.expectedExists = true;
+      proma.sessions = 3;
+      proma.enabled = false;
+    }
+  }
+  return { home: "/fixtures/home", sources, customRoots: [] };
+}
+
 function typicalData(now: number): Pick<PreviewFixture, "workspaces" | "sessions" | "transcripts" | "channels" | "profiles"> {
   const workspaces = [
     workspace("ws-research", "Research atlas", now),
@@ -527,7 +1189,7 @@ export function buildPreviewFixture(options: PreviewOptions): PreviewFixture {
     ...DEFAULT_SETTINGS,
     theme: options.theme,
     language: options.language,
-    onboardingSeen: true,
+    onboardingSeen: !options.onboarding,
     completionSound: false,
     processView: "turn",
     ...(availableProviders.length === 0 ? {} : { lastUsed: MODEL }),
@@ -539,5 +1201,14 @@ export function buildPreviewFixture(options: PreviewOptions): PreviewFixture {
     providers: availableProviders,
     builtins: options.scene === "empty" ? [] : builtins(),
     usage: usage(options.scene, options.now),
+    vfs: buildVfs(options.scene, options.now),
+    review: buildReview(options.scene),
+    excerpts: options.scene === "empty" ? [] : buildExcerpts(options.now),
+    memory: buildMemory(options.scene, options.now),
+    automations: buildAutomations(options.scene, options.now),
+    plugins: buildPlugins(options.scene, options.now),
+    board: buildBoard(options.scene, options.now),
+    focusChanges: buildFocusChanges(options.scene),
+    externalSources: buildExternalSources(options.scene),
   };
 }

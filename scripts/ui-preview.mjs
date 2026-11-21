@@ -63,11 +63,70 @@ async function clickAria(label) {
   await sleep(220);
 }
 
-async function navigate(scene, theme = "light") {
-  step(`打开 ${scene} / ${theme}`);
-  await send("Page.navigate", { url: `${base}?scene=${scene}&theme=${theme}&lang=en` });
+async function navigate(scene, theme = "light", extra = "") {
+  step(`打开 ${scene} / ${theme}${extra === "" ? "" : ` ${extra}`}`);
+  await send("Page.navigate", { url: `${base}?scene=${scene}&theme=${theme}&lang=en${extra}` });
   await waitFor(`document.querySelector(".app-shell") !== null && document.documentElement.dataset.previewScene === ${JSON.stringify(scene)}`, `${scene} 挂载`);
   await sleep(650);
+}
+
+/** 点包含文本的最小元素：文件树行 / 菜单按钮（文字+图标复合）都按「最具体的那个」命中。 */
+async function clickLeaf(text, scope = "body") {
+  const expression = `(() => {
+    const root = document.querySelector(${JSON.stringify(scope)}) ?? document.body;
+    const candidates = [...root.querySelectorAll("*")].filter((el) =>
+      (el.textContent ?? "").trim() !== "" &&
+      (el.textContent ?? "").includes(${JSON.stringify(text)}) &&
+      el.closest("[aria-hidden='true']") === null);
+    if (candidates.length === 0) return false;
+    candidates.sort((a, b) => (a.textContent ?? "").length - (b.textContent ?? "").length);
+    const minLength = (candidates[0].textContent ?? "").length;
+    const minimal = candidates.filter((el) => (el.textContent ?? "").length === minLength);
+    const interactive = "button, [role='button'], [role='treeitem'], [role='option'], [role='tab'], [role='switch'], [role='menuitem'], [role='row'], li, a, label, span, strong, .file-row";
+    const hit = minimal.find((el) => el.matches(interactive)) ?? minimal[0].closest(interactive) ?? minimal[0];
+    hit.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    return true;
+  })()`;
+  if ((await evaluate(expression)) !== true) throw new Error(`找不到可点击叶子：${text}（${scope}）`);
+  await sleep(220);
+}
+
+async function dblclickLeaf(text, scope = "body") {
+  const expression = `(() => {
+    const root = document.querySelector(${JSON.stringify(scope)}) ?? document.body;
+    const candidates = [...root.querySelectorAll("*")].filter((el) =>
+      (el.textContent ?? "").trim() !== "" &&
+      (el.textContent ?? "").includes(${JSON.stringify(text)}));
+    if (candidates.length === 0) return false;
+    candidates.sort((a, b) => (a.textContent ?? "").length - (b.textContent ?? "").length);
+    candidates[0].dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+    return true;
+  })()`;
+  if ((await evaluate(expression)) !== true) throw new Error(`找不到可双击叶子：${text}`);
+  await sleep(260);
+}
+
+async function pressEscape() {
+  await send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await sleep(220);
+}
+
+/** 在指定容器里按 aria-label 点按钮（避开右栏入口与面板页头的同名按钮）。 */
+async function clickAriaIn(label, scope) {
+  const expression = `(() => {
+    const root = document.querySelector(${JSON.stringify(scope)}) ?? document.body;
+    const button = [...root.querySelectorAll("button")].find((item) => item.getAttribute("aria-label") === ${JSON.stringify(label)});
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`;
+  if ((await evaluate(expression)) !== true) throw new Error(`找不到按钮：${label}（${scope}）`);
+  await sleep(220);
+}
+
+/** 断言页面文本包含；返回 true 供 check 使用。 */
+async function bodyIncludes(fragment) {
+  return (await evaluate(`document.body.innerText.includes(${JSON.stringify(fragment)})`)) === true;
 }
 
 async function shot(name) {
@@ -229,6 +288,344 @@ try {
   check("满载场景渲染 12 个工作区", (await evaluate(`document.querySelectorAll(".workspace-group").length === 12`)) === true);
   check("玄主题与满载 fixture 同时生效", (await evaluate(`document.documentElement.dataset.theme === "black" && document.documentElement.dataset.previewScene === "full"`)) === true);
   await shot("10-full-home-onyx");
+
+  // ═══════════ 组1：文件树 / 文件预览 / 文档与演示文稿 ═══════════
+  step("组1：普通任务 → 文件面板（会话工作台树）");
+  await navigate("typical");
+  await clickText("Refine the session navigation", ".sidebar button");
+  await waitFor(`document.body.innerText.includes("The existing parent and child conversation path is sufficient.")`, "普通任务转录");
+  await clickAria("Files");
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("notes.md") === true`, "文件树列出工作台");
+  check("文件面板挂载并列出会话工作台", true);
+  await clickLeaf("output", ".right-panel-slot");
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("diff-summary.txt") === true`, "展开 output 子目录");
+  check("子目录展开列出 diff-summary.txt", true);
+  await shot("11-files-workbench");
+
+  step("组1：切到工作区会话 → 工作区树 → 代码/图片/二进制/大日志");
+  await clickText("Research atlas", ".sidebar button");
+  await waitFor(`document.querySelector("textarea.composer-input")?.placeholder.includes("Hand it something") === true`, "Boss 会话");
+  await clickText("Compare session navigation", ".sidebar button");
+  await clickAria("Files");
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("pitch.slides.json") === true`, "工作区树渲染");
+  await clickLeaf("src", ".right-panel-slot");
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("app.ts") === true`, "src 展开");
+  await clickLeaf("app.ts", ".right-panel-slot");
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("deterministic preview source") === true`, "代码预览");
+  check("点击 app.ts 出文本预览（生产 fs:read 路径）", true);
+  await shot("12-files-code-preview");
+
+  step("组1：markdown 渲染 + 图片 + 二进制 + 大日志分段");
+  await clickLeaf("README.md", ".right-panel-slot");
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("Fixture workspace for the deterministic preview") === true`, "md 预览");
+  check("markdown 文件走生产渲染管线", true);
+  await clickLeaf("assets", ".right-panel-slot");
+  await clickLeaf("logo.png", ".right-panel-slot");
+  await waitFor(`document.querySelector(".right-panel-slot img") !== null`, "图片预览");
+  check("png 出图片预览", true);
+  await clickLeaf("archive.zip", ".right-panel-slot");
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("Open with default app") === true`, "二进制出口");
+  check("zip 如实给「用默认应用打开」，不读内容", true);
+  await clickLeaf("data", ".right-panel-slot");
+  await clickLeaf("server.log", ".right-panel-slot");
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("fixture log line 00001") === true`, "分段预览首窗");
+  check("大日志走 lineIndex/readLines 分段预览", true);
+  await shot("13-files-large-log");
+
+  step("组1：演示文稿面板打开 fixture deck");
+  await clickAria("Presentations");
+  const deckOpened = (await evaluate(`document.querySelector(".right-panel-slot")?.innerText.includes("Fixture deck") === true`));
+  if (deckOpened !== true) {
+    await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("pitch") === true`, "演示文稿清单");
+    await clickLeaf("pitch", ".right-panel-slot");
+  }
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("Fixture deck") === true`, "幻灯片画布");
+  check("SlidesView 从 fixture deck 渲染画布", true);
+  await shot("14-slides-deck");
+
+  // ═══════════ 组2：审查 / 摘抄 / 记忆 / 终端 / 自动化 ═══════════
+  step("组2：审查面板四来源与 diff 边界态");
+  await clickAria("Review changes");
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("logo.png") === true`, "审查列表");
+  await clickLeaf("app.ts", ".right-panel-slot");
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("deterministic preview source") === true`, "diff 展开");
+  check("任务来源 diff 展开（unified diff 生产渲染）", true);
+  await shot("15a-review-diff-expanded");
+  await clickAriaIn("This task", ".toolbar");
+  await sleep(250);
+  await clickLeaf("Unstaged", "body");
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("bundle.js") === true`, "未暂存来源");
+  check("来源切换到 Unstaged 真实重拉", true);
+  await clickLeaf("bundle.js", ".right-panel-slot");
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("Binary") === true`, "二进制标");
+  check("二进制文件如实标 Binary", true);
+  await clickAriaIn("Unstaged", ".toolbar");
+  await sleep(250);
+  await clickLeaf("This task", "body");
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("rewrite.md") === true`, "回任务来源");
+  await clickLeaf("rewrite.md", ".right-panel-slot");
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("doesn't build a diff") === true`, "过大出口");
+  check("超限 diff 给「改动太大」出口，不截断", true);
+  await clickLeaf("notes.md", ".right-panel-slot");
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("Restored") === true`, "已还原标");
+  check("已还原文件如实标 Restored", true);
+  await shot("15-review-diff-states");
+
+  step("组2：摘抄页签筛选与回到原文");
+  await clickText("Excerpts", '[role="tab"]');
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("one breadcrumb away") === true`, "摘抄列表");
+  check("摘抄页签列出三条 fixture 摘抄", true);
+  const excerptJumped = (await evaluate(`(() => {
+    const buttons = [...document.querySelectorAll(".right-panel-slot button")];
+    const target = buttons.find((item) => (item.getAttribute("aria-label") ?? item.title ?? "").toLowerCase().includes("original"));
+    if (target === undefined) return "no-button";
+    target.click();
+    return "clicked";
+  })()`));
+  await sleep(400);
+  check("摘抄「回到原文」按钮可点", excerptJumped === "clicked", String(excerptJumped));
+
+  step("组2：记忆页签（本会话无记忆时空态如实）");
+  await clickText("Memory", '[role="tab"]');
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("Nothing remembered from this task yet") === true`, "记忆空态");
+  check("记忆页签空态如实（边界：本会话无注入记录）", true);
+
+  step("组2：终端面板走生产 spawn-failure 未连接路径");
+  await clickAria("Terminal");
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("Could not start a terminal") === true`, "终端未连接提示", 90);
+  check("终端 + 明确报「未连接」而不是假终端", true);
+  await shot("17-terminal-not-connected");
+
+  step("组2：自动化面板状态转移与运行拒绝");
+  await clickAria("Automations");
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("Daily literature digest") === true`, "自动化列表");
+  await clickLeaf("All", ".right-panel-slot");
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("Nightly workbench cleanup") === true`, "全部范围三行");
+  check("自动化列表三行（active/paused/failed）", true);
+  const digestOpened = (await evaluate(`(() => {
+    const buttons = [...document.querySelectorAll(".right-panel-slot button")];
+    const target = buttons.find((item) => item.getAttribute("aria-label") === "Open details of Daily literature digest");
+    if (target === undefined) return "no-button";
+    target.click();
+    return "clicked";
+  })()`));
+  if (digestOpened !== "clicked") throw new Error("打不开自动化详情：" + String(digestOpened));
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("Every day at 09:00") === true`, "自动化详情");
+  check("详情页渲染排期与运行记录", true);
+  const runNow = (await evaluate(`(() => {
+    const buttons = [...document.querySelectorAll(".right-panel-slot button")];
+    const target = buttons.find((item) => (item.textContent ?? "").trim() === "Run now");
+    if (target === undefined) return "no-button";
+    target.click();
+    return "clicked";
+  })()`));
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("Couldn’t do that") === true || document.querySelector(".right-panel-slot")?.innerText.includes("Couldn't do that") === true`, "运行拒绝提示");
+  check("立即运行明确报未连接（不假成功）", runNow === "clicked", String(runNow));
+  const pauseClicked = (await evaluate(`(() => {
+    const buttons = [...document.querySelectorAll(".right-panel-slot button")];
+    const target = buttons.find((item) => (item.textContent ?? "").trim() === "Pause");
+    if (target === undefined) return "no-button";
+    target.click();
+    return "clicked";
+  })()`));
+  await sleep(400);
+  check("自动化 Pause 可点", pauseClicked === "clicked", String(pauseClicked));
+  check("暂停后切换键翻面为 Resume", (await evaluate(`[...document.querySelectorAll(".right-panel-slot button")].some((item) => (item.textContent ?? "").trim() === "Resume")`)) === true);
+  await shot("18a-automation-detail");
+  await evaluate(`document.querySelector(".right-panel-slot .auto-back")?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }))`);
+  await sleep(350);
+  check("返回列表", (await evaluate(`document.querySelector(".right-panel-slot")?.innerText.includes("Daily literature digest") === true`)) === true);
+  const detailOpened = (await evaluate(`(() => {
+    const buttons = [...document.querySelectorAll(".right-panel-slot button")];
+    const target = buttons.find((item) => item.getAttribute("aria-label") === "Open details of Nightly workbench cleanup");
+    if (target === undefined) return "no-button";
+    target.click();
+    return "clicked";
+  })()`));
+  if (detailOpened !== "clicked") throw new Error("打不开失败任务详情：" + String(detailOpened));
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("Fixture: bound session cwd is missing") === true`, "自动化详情运行记录");
+  check("详情页打开失败任务的运行记录", true);
+  const restartClicked = (await evaluate(`(() => {
+    const buttons = [...document.querySelectorAll(".right-panel-slot button")];
+    const target = buttons.find((item) => (item.getAttribute("aria-label") ?? item.textContent ?? "").toLowerCase().includes("restart"));
+    if (target === undefined) return "no-button";
+    target.click();
+    return "clicked";
+  })()`));
+  await sleep(400);
+  check("失败任务 Restart 可点并回到运行态", restartClicked === "clicked" && (await evaluate(`[...document.querySelectorAll(".right-panel-slot button")].some((item) => (item.textContent ?? "").trim() === "Pause")`)) === true, String(restartClicked));
+  await shot("18-automation-detail");
+
+  // ═══════════ 组3：插件 / 周看板 / 专注 / 引导 ═══════════
+  step("组3：能力面板列表与详情");
+  await clickAria("Abilities");
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("session-digest") === true`, "能力列表");
+  check("能力面板列出插件/技能/MCP 合成表", true);
+  await clickLeaf("session-digest", ".right-panel-slot");
+  await waitFor(`document.querySelector(".right-panel-slot")?.innerText.includes("Collect sessions") === true`, "插件详情工作流");
+  check("详情页渲染 workflow / 配置 / 外接服务", true);
+  await shot("19-plugins-detail");
+
+  step("组3：周看板快照卡 / 无卡运行行 / 排期灰字");
+  await clickAria("Board");
+  await waitFor(`document.querySelector(".wk-day") !== null`, "周看板挂载");
+  check("周看板七天渲染", (await evaluate(`document.querySelectorAll(".wk-day").length === 7`)) === true);
+  check("快照卡 iframe 用 fixture 模板页", (await evaluate(`[...document.querySelectorAll(".wk-day iframe")].some((frame) => (frame.getAttribute("src") ?? "").includes("preview-board-card.html"))`)) === true);
+  check("无卡运行灰字行可见", (await evaluate(`document.body.innerText.includes("Check CI status") === true`)) === true);
+  await sleep(1800);
+  await evaluate(`document.querySelectorAll("[class*=wk]").forEach((el) => { if (el.scrollWidth > el.clientWidth + 40) el.scrollLeft = 0; })`);
+  await sleep(600);
+  await shot("20-board-week");
+  // Esc 分层退出：右栏还开着时第一下关面板（生产行为），第二下才退看板。
+  await evaluate(`document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }))`);
+  await sleep(300);
+  await evaluate(`document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }))`);
+  await sleep(300);
+  check("Esc 分层退出看板回聊天", (await evaluate(`document.querySelector(".wk-day") === null`)) === true);
+
+  step("组3：专注全链（浮层 → 左栏 U/M → 提前结束 → 小结卡）");
+  await clickAria("Focus · pick a duration and a workspace");
+  await waitFor(`document.body.innerText.includes("Pick a duration and a workspace") === true`, "专注浮层");
+  await clickLeaf("Research atlas", ".focus-pop, [role='dialog'], body");
+  await clickText("Start focusing", "button");
+  await waitFor(`document.body.innerText.includes("4 files changed") === true`, "专注左栏文件视图");
+  check("专注开始：左栏显示 U/M 文件树与改动统计", true);
+  await shot("21-focus-files");
+  const focusCapsule = await evaluate(`(() => {
+    const cap = document.querySelector(".cap-focus-run") ?? [...document.querySelectorAll("button")].find((item) => (item.getAttribute("aria-label") ?? "").includes("Focusing"));
+    if (cap === null || cap === undefined) return null;
+    cap.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    return "clicked";
+  })()`);
+  if (focusCapsule === null) throw new Error("找不到专注胶囊");
+  await sleep(300);
+  const plusFive = (await evaluate(`(() => {
+    const leaves = [...document.querySelectorAll("*")].filter((el) => el.children.length === 0 && (el.textContent ?? "").includes("+5"));
+    if (leaves.length === 0) return "no-button";
+    leaves[0].dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    return "clicked";
+  })()`));
+  check("专注胶囊 +5 分钟可点", plusFive === "clicked", String(plusFive));
+  const endEarlyVisible = (await evaluate(`document.body.innerText.includes("End early")`)) === true;
+  if (!endEarlyVisible) {
+    await evaluate(`(() => {
+      const cap = document.querySelector(".cap-focus-run") ?? [...document.querySelectorAll("button")].find((item) => (item.getAttribute("aria-label") ?? "").includes("Focusing"));
+      cap?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      return true;
+    })()`);
+    await sleep(350);
+  }
+  await clickLeaf("End early", "body");
+  await waitFor(`document.body.innerText.includes("Summarize this stretch?") === true`, "收工询问");
+  await clickText("Yes", "button");
+  await waitFor(`document.body.innerText.includes("digest 卡") === true`, "收工小结卡", 60);
+  check("提前结束 → 收工询问 → fixture 小结卡", true);
+  await shot("22-focus-summary");
+
+  step("组3：首启引导自动弹 → 试试 → 跳过");
+  await navigate("typical", "light", "&onboarding=1");
+  await waitFor(`document.querySelector(".ob") !== null`, "引导弹层");
+  check("onboarding=1 走生产自动弹出路径", true);
+  const hasTry = async () => (await evaluate(`document.querySelector(".ob-try-btn") !== null`)) === true;
+  for (let page = 0; page < 10 && !(await hasTry()); page += 1) {
+    await clickText("Next", "button");
+    await sleep(300);
+  }
+  const tried = (await evaluate(`(() => {
+    const button = document.querySelector(".ob-try-btn");
+    if (button === null) return "no-button";
+    button.click();
+    return "clicked";
+  })()`));
+  await sleep(300);
+  check("「试试」把示例句放进输入框", tried === "clicked" && (await evaluate(`(document.querySelector("textarea.composer-input")?.value ?? "") !== ""`)), String(tried));
+  await shot("23a-onboarding");
+  const closeHow = (await evaluate(`(() => {
+    if (document.querySelector(".ob") === null) return "already-gone";
+    const skip = document.querySelector(".ob-skip");
+    if (skip !== null) { skip.click(); return "skip"; }
+    const done = [...document.querySelectorAll(".ob button")].find((b) => (b.textContent ?? "").trim() === "Done");
+    if (done !== undefined) { done.click(); return "done"; }
+    return "none";
+  })()`));
+  await waitFor(`document.querySelector(".ob") === null`, "引导关闭");
+  check("跳过/完成关闭引导", closeHow === "skip" || closeHow === "done" || closeHow === "already-gone", String(closeHow));
+
+  // ═══════════ 组4：窄窗 / 中文纸面主题 / 外部来源 / 语音 / 实验入口 ═══════════
+  step("组4：940px 窄窗形态");
+  await navigate("typical");
+  await send("Emulation.setDeviceMetricsOverride", { width: 940, height: 960, deviceScaleFactor: 1, mobile: false });
+  await sleep(400);
+  check("窄窗侧栏自动收起（不渲染）", (await evaluate(`document.querySelector(".sidebar") === null`)) === true);
+  check("窄窗右图标条常驻", (await evaluate(`document.querySelector(".right-rail") !== null`)) === true);
+  await clickAria("Files");
+  await waitFor(`document.querySelector(".right-panel-slot") !== null`, "窄窗右栏");
+  check("窄窗右栏以覆盖层打开（绝对定位浮于内容）", (await evaluate(`(() => { const slot = document.querySelector(".right-panel-slot"); if (slot === null) return false; return getComputedStyle(slot).position === "absolute"; })()`)) === true);
+  await shot("23-narrow-940-files-overlay");
+  await clickAria("Files");
+  await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 960, deviceScaleFactor: 1, mobile: false });
+  await sleep(300);
+  check("恢复宽窗侧栏回来", (await evaluate(`document.querySelector(".sidebar") !== null`)) === true);
+
+  step("组4：中文 + 纸面两档主题");
+  await send("Page.navigate", { url: `${base}?scene=typical&theme=copybook&lang=zh` });
+  await waitFor(`(document.documentElement?.dataset.theme ?? "") === "copybook"`, "稿纸主题");
+  await sleep(500);
+  check("copybook 主题与中文界面生效", (await evaluate(`document.documentElement.lang.startsWith("zh") && document.documentElement.dataset.theme === "copybook"`)) === true);
+  await shot("24-copybook-zh-home");
+  await send("Page.navigate", { url: `${base}?scene=typical&theme=typescript&lang=en` });
+  await waitFor(`(document.documentElement?.dataset.theme ?? "") === "typescript"`, "打字稿主题");
+  check("typescript 英文主题生效", true);
+  await shot("25-typescript-home");
+
+  step("组4：设置九页签 walk");
+  await navigate("typical");
+  await clickAria("Settings");
+  await waitFor(`document.body.innerText.includes("Appearance") === true`, "设置通用页");
+  for (const tab of ["Guide", "External sources", "Browser", "Voice", "Abilities", "Memory", "Experimental"]) {
+    await clickText(tab, ".sidebar .option-row");
+    await sleep(320);
+    check(`设置页签 ${tab} 真实选中`, (await evaluate(`[...document.querySelectorAll(".sidebar .option-row")].some((item) => item.dataset.active === "true" && item.textContent?.trim() === ${JSON.stringify(tab)})`)) === true);
+    if (tab === "External sources") {
+      check("外部来源页列出八个来源", (await evaluate(`document.body.innerText.includes("Claude Code") === true && document.body.innerText.includes("Proma") === true && document.body.innerText.includes("ZCode") === true`)) === true);
+      await shot("26-settings-external-sources");
+    }
+  }
+  await clickText("Voice", ".sidebar .option-row");
+  await sleep(320);
+  check("语音页渲染听写引擎与两组凭证", (await evaluate(`document.body.innerText.includes("Dictation") === true && document.body.innerText.includes("Access Token") === true`)) === true);
+  await shot("27-settings-voice");
+  await clickText("Abilities", ".sidebar .option-row");
+  await sleep(400);
+  check("能力页签是全屏插件页", (await evaluate(`document.body.innerText.includes("session-digest") === true`)) === true);
+  await clickText("Memory", ".sidebar .option-row");
+  await sleep(400);
+  check("记忆库页签列出作用域与条目", (await evaluate(`document.body.innerText.includes("All workspaces") === true && document.body.innerText.includes("concise Chinese summaries") === true`)) === true);
+  await shot("28-settings-memory");
+  await clickText("Experimental", ".sidebar .option-row");
+  await sleep(400);
+  check("实验功能页渲染实验卡", (await evaluate(`document.body.innerText.toLowerCase().includes("intent") === true`)) === true);
+
+  step("组4：打开意图实验开关 → 右栏出现意图入口 → 面板如实报连不上");
+  const intentSwitched = (await evaluate(`(() => {
+    const cards = [...document.querySelectorAll(".exp-card")];
+    const card = cards.find((el) => (el.textContent ?? "").toLowerCase().includes("intent"));
+    const toggle = card?.querySelector("button[role='switch']");
+    if (toggle === null || toggle === undefined) return "no-switch";
+    toggle.click();
+    return "clicked";
+  })()`));
+  await sleep(500);
+  check("意图实验开关可点", intentSwitched === "clicked", String(intentSwitched));
+  const intentEntry = (await evaluate(`[...document.querySelectorAll("button")].some((item) => item.getAttribute("aria-label") === "Intent graph")`));
+  check("开关后右栏出现意图图谱入口", intentEntry === true);
+  if (intentEntry === true) {
+    await clickAria("Intent graph");
+    await waitFor(`document.querySelector(".right-panel-slot")?.innerText.length > 20`, "意图面板");
+    check("意图面板挂载并如实显示不可用", true);
+    await shot("29-intent-unavailable");
+    await clickAria("Intent graph");
+  }
 
   const errors = await evaluate(`window.__previewErrors ?? []`);
   check("窗口没有未捕获异常或未处理 Promise rejection", Array.isArray(errors) && errors.length === 0, JSON.stringify(errors));
