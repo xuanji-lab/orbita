@@ -1,7 +1,7 @@
 /**
- * 侧栏最上面钉住的「等你」（设计 11-sidebar-full C、11-attention，2026-11-17）：跨工作区每件在等用户的事一行——
- * 在问的、没做成等他看的（主智能体派的活报了 failed 那一刻记一笔「没做成、没看」，见 App；你看过、或主智能体已处理就退场）。一屏只有这一处在叫人（橙点只在这里出现）；点一行跳过去，处理完那一行自己消失
- * （点一个只消一个，没有「全部清除」）。它替掉了右下角的铃铛与未读清单。
+ * 跨工作区每件在等用户的事（2026-11-17 起；2026-11-21 侧栏顶上不再列）：在问的、没做成等他看的
+ * （主智能体派的活报了 failed 那一刻记一笔「没做成、没看」，见 App；你看过、或主智能体已处理就退场）。
+ * 现在只用来：新冒出一件时响一次提示音（Sidebar）、主智能体进度面板「等你」里那一句等什么（attentionLine）。
  *
  * 数据不另存：每一件就是侧栏行状态（Sidebar 的 rowState：runStateOf + 子会话通道状态）里 waiting / failed 的那些，
  * 一句话从通道里那件活自己说的话来（问题原话 / 没做成的原因），先过 work-line 的洗句子，不露命令、路径、代号。
@@ -13,9 +13,6 @@ import type { ChannelMessage } from "@shared/channel";
 import type { SessionMeta } from "@shared/session";
 import { latestSentence, sanitizeWorkLine } from "../../../shared/work-line.ts";
 import type { SessionRunState } from "../features/notify/completion-notice.ts";
-
-/** 「等你」最多露几行；超出的写「还有 N 件」 */
-export const ATTENTION_SHOWN = 5;
 
 /** 启动后多久之内冒出来的等你不响：那是读盘把已有的读出来（会话列表、各主智能体的通道状态陆续到），不是新事 */
 export const ATTENTION_WARMUP_MS = 8000;

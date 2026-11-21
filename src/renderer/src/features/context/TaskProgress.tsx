@@ -151,6 +151,7 @@ export function TaskProgress(props: {
     <div className="tp-body">
       {asks.length > 0 && (
         <JobsSection
+          waiting
           label={t.taskPanel.waitingOnYou}
           count={String(asks.length)}
           rows={asks}
@@ -817,6 +818,8 @@ function useJobRows(parentId: string, sessions: readonly SessionMeta[], engine: 
  * 做完的与停着的折成末尾一行，点开才列。
  */
 function JobsSection(props: {
+  /** 主智能体最前的「等你」：行首点橙点（全应用唯一点橙点的地方），整段排在面板最上面 */
+  waiting?: boolean;
   label: string;
   /** 标题后面的灰字计数 / 汇总；空串不写 */
   count: string;
@@ -834,7 +837,7 @@ function JobsSection(props: {
     return slot === undefined ? [] : selectTranscript(slot.transcript);
   };
   return (
-    <section className="tp-sec" aria-label={props.label}>
+    <section className={props.waiting === true ? "tp-sec tp-waiting" : "tp-sec"} aria-label={props.label}>
       <div className="tp-gh">
         {props.label}
         {props.count !== "" && <span className="tp-n">{props.count}</span>}
@@ -857,7 +860,7 @@ function JobsSection(props: {
             <li key={row.meta.id}>
               <button type="button" className="option-row tp-job" title={t.taskPanel.openJob(name)} onClick={() => props.onOpen(row.meta.id)}>
                 <span className={`inbox-row-mark${mark === null ? "" : ` ${mark}`}`} aria-hidden="true">
-                  {mark === "work" && <span className="inbox-row-dot" />}
+                  {(mark === "work" || (mark === "ask" && props.waiting === true)) && <span className="inbox-row-dot" />}
                 </span>
                 <span className="tp-step">
                   <span className="tp-step-head">

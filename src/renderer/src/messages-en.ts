@@ -1083,7 +1083,6 @@ export const en = {
     mainAgent: "Main agent",
     openMainAgentTip: (name: string) => `Talk to the main agent of ${name}`,
     /** 侧栏最上面钉住的「等你」：跨工作区每件在等你的事 */
-    attentionTitle: "Waiting on you",
     attention: {
       asks: "Has a question for you",
       failedWith: (reason: string) => `Didn't make it: ${reason}`,
@@ -1092,8 +1091,6 @@ export const en = {
       interrupted: "Got interrupted — say continue",
       waiting: "Waiting for your reply",
     },
-    /** 当前工作区里没了结的活超过 6 件时，末尾那一行 */
-    moreJobs: (n: number) => `${n} more`,
     earlierSessions: (n: number) => `Earlier sessions ${n}`,
     earlierSessionsTip: "Finished work you have seen, and sessions from before",
     earlierTitle: "Earlier sessions",

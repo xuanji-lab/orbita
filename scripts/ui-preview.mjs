@@ -109,14 +109,31 @@ try {
   check("Boss 真实转录已加载", (await evaluate(`document.body.innerText.includes("Map the current work")`)) === true);
   await shot("02-typical-boss-light");
 
-  step("Boss → 子 Session → 面包屑回父");
-  await clickText("Compare session navigation", ".workspace-group button");
+  step("主智能体左侧只露工作区：当前工作区下面没有子行，也没有侧栏顶的「等你」");
+  check(
+    "侧栏只露工作区行",
+    (await evaluate(`document.querySelectorAll(".workspace-group .tree-children").length === 0 && document.querySelector(".sidebar .attention") === null`)) === true,
+  );
+
+  step("主智能体 → 进度「等你」→ 子 Session → 面包屑回父");
+  await clickAria("This task");
+  await waitFor(`document.querySelector(".tp-waiting") !== null`, "进度面板最前的「等你」");
+  check(
+    "进度按 等你 → 各件活 的顺序",
+    (await evaluate(`(() => { const heads = [...document.querySelectorAll(".tp-sec > .tp-gh")].map((item) => item.firstChild?.textContent?.trim()); return heads.indexOf("Waiting on you") === 0 && heads.includes("Work items"); })()`)) === true,
+  );
+  await shot("02b-typical-main-progress-light");
+  await clickText("Compare session navigation", ".tp-waiting .tp-job-name");
   await waitFor(`[...document.querySelectorAll(".cap-sess button")].some((item) => item.textContent?.trim() === "Research atlas")`, "父会话面包屑");
   check("子 Session 真实转录已加载", (await evaluate(`document.body.innerText.includes("Replacing the main conversation")`)) === true);
   await shot("03-typical-child-light");
   await clickText("Research atlas", ".cap-sess button");
   await waitFor(`document.querySelector("textarea.composer-input")?.placeholder.includes("Hand it something") === true`, "返回 Boss");
   check("回父恢复主智能体输入面", true);
+  await waitFor(`document.querySelector(".tp-waiting") !== null`, "回父后进度面板按会话记忆恢复");
+  check("回父后右栏进度照旧开着", true);
+  await clickAria("This task");
+  await waitFor(`document.querySelector(".right-panel-slot.open") === null`, "右栏关闭");
 
   step("普通 Session");
   await clickText("Refine the session navigation", ".sidebar button");

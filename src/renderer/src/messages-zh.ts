@@ -1001,7 +1001,6 @@ export const zh: Messages = {
     mainAgent: "主智能体",
     openMainAgentTip: (name) => `跟「${name}」的主智能体说话`,
     /** 侧栏最上面钉住的「等你」：跨工作区每件在等你的事 */
-    attentionTitle: "等你",
     attention: {
       asks: "在问你一件事",
       failedWith: (reason) => `没做成：${reason}`,
@@ -1010,8 +1009,6 @@ export const zh: Messages = {
       interrupted: "被打断了，等你说继续",
       waiting: "等你回复",
     },
-    /** 当前工作区里没了结的活超过 6 件时，末尾那一行 */
-    moreJobs: (n) => `还有 ${n} 件`,
     earlierSessions: (n) => `以前的会话 ${n}`,
     earlierSessionsTip: "做完看过的活，和以前攒下的会话",
     earlierTitle: "以前的会话",
