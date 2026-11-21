@@ -1,12 +1,17 @@
 /**
  * 论文工作台的编译条 —— 住在文件面板标签行下方，只在该文件属于 LaTeX 项目时出现。
  *
- * 一条横条放四件事（原型场景 1 / 3）：
- *   引擎 chip · 主文件 chip · 编译（PDF 过期时才是 accent 主按钮）· 状态行
+ * 一条横条放几件事（原型场景 1 / 3）：
+ *   编译入口（root）· 引擎 · 编译（PDF 过期时才是 accent 主按钮）· 动作 · 状态行
  * 状态行的优先级：编译中 > 失败 > 脏 > 成功 > 安静。主操作一屏只有一个：
  * 只有 dirty 态用 `.btn-accent`；其余态是安静控件（状态优先用图标与文字，颜色第二信号）。
  *
- * 事实全由 useLatexWorkbench 给（项目、探测、上一次结局）；这里只画，不读盘。
+ * **编译入口 chip**（2026-11 多 root）：项目里只有一个 root 时它是静态文本（不画
+ * 成菜单）；多个时列出 `roots[]`，每项带它的产物目录，选中会写 activeRoot 并立刻
+ * 编那一份。magic 决定的那一份在文案里说清「由 ch1.tex:1 声明」——不然用户会以为
+ * 界面在瞎猜。
+ *
+ * 事实全由 useLatexWorkbench 给（项目、探测、上一次结局、编译中进度）；这里只画，不读盘。
  */
 import { useEffect, useState } from "react";
 import { api } from "../../api.ts";
@@ -14,7 +19,12 @@ import { useT } from "../../locale.ts";
 import { Chip } from "../../shell/Chip";
 import { Icon } from "../../shell/Icon";
 import { Menu, type MenuItem } from "../../shell/Menu";
-import type { LatexEngine, LatexProjectInfo, LatexProbeResult } from "@shared/latex";
+import type {
+  LatexBuildProgress,
+  LatexEngine,
+  LatexProjectInfo,
+  LatexProbeResult,
+} from "@shared/latex";
 import type { Messages } from "../../messages-en.ts";
 import {
   compileErrorKind,
@@ -38,6 +48,8 @@ export function LatexBuildBar(props: {
   error: string | null;
   /** 这一轮开始的时刻（编译中计时） */
   startedAt: number | null;
+  /** 编译中的进度（跑了哪一轮）；主进程没有信号时 step 为 null */
+  progress: LatexBuildProgress | null;
   /** 清理辅助文件在跑（菜单项置灰，不让连点两次） */
   cleaning: boolean;
   onCompile: () => void;
@@ -45,7 +57,12 @@ export function LatexBuildBar(props: {
   onClean: () => void;
   onToggleCompileOnSave: (on: boolean) => void;
   onSelectEngine: (engine: LatexEngine) => void;
-  onSelectMain: (main: string) => void;
+  /** 切到另一个 root（写 activeRoot 并编它） */
+  onSelectRoot: (path: string) => void;
+  /** 在文件面板里打开这次构建的 .log（「完整日志」入口） */
+  onOpenLog: (path: string) => void;
+  /** 在系统文件管理器里显示产物目录 */
+  onRevealDir: (dir: string) => void;
 }) {
   const t = useT();
   const { project, probe, state, last } = props;
@@ -68,15 +85,44 @@ export function LatexBuildBar(props: {
     checked: engine === project.engine,
     onSelect: () => props.onSelectEngine(engine),
   }));
-  const mainItems: MenuItem[] = project.mains.map((main) => ({
-    id: main,
-    label: main,
-    checked: main === project.main,
-    onSelect: () => props.onSelectMain(main),
+  /** 自定义 recipe 时引擎 chip 不可点：真正跑的是用户的命令，换引擎不会让它变 */
+  const recipe = project.configured.recipe;
+
+  const activeRoot = project.roots.find((root) => root.path === project.activeRoot) ?? null;
+  const multiRoot = project.roots.length > 1;
+  const rootItems: MenuItem[] = project.roots.map((root) => ({
+    id: root.path,
+    label: root.path,
+    hint:
+      root.declaredBy !== null
+        ? t.latex.declaredBy(root.declaredBy.file, root.declaredBy.line)
+        : root.outDirRelative,
+    hintEllipsis: "head",
+    checked: root.path === project.activeRoot,
+    onSelect: () => props.onSelectRoot(root.path),
   }));
+  // 标签用 activeRoot（相对项目目录）：root 在子目录时比裸文件名更能说清「编的是哪份」
+  const rootName = project.activeRoot ?? project.main;
+  const rootLabel =
+    rootName === null
+      ? t.latex.noMain
+      : activeRoot?.declaredBy !== null && activeRoot?.declaredBy !== undefined
+        ? `${rootName} · ${t.latex.declaredBy(activeRoot.declaredBy.file, activeRoot.declaredBy.line)}`
+        : rootName;
+  const rootTitle =
+    activeRoot === null
+      ? t.latex.noMainTip
+      : multiRoot
+        ? t.latex.rootTip(project.roots.length, activeRoot.outDirRelative)
+        : t.latex.rootOnlyOne;
+
+  /** 这一次构建写出的产物数（>1 才在状态区显示；单个是噪音） */
+  const outputCount = last?.outputs.length ?? 0;
+  const outputDir = activeRoot?.outDir ?? null;
+
   /**
    * 项目动作菜单。只放「不属于每一次编译、但属于这个项目」的动作：清理辅助文件
-   * （想马上一次干净重编）与保存即编译（一个长期开关）。
+   * （想马上一次干净重编）、打开产物目录 / 完整日志，以及保存即编译（一个长期开关）。
    * 在编时清理置灰：那组 .aux 正被 latexmk 读写，主进程也会 same-project 拒掉。
    */
   const actionItems: MenuItem[] = [
@@ -91,6 +137,27 @@ export function LatexBuildBar(props: {
       onSelect: () => props.onToggleCompileOnSave(!project.compileOnSave),
     },
     {
+      id: "outputs",
+      label: t.latex.openOutputs,
+      hint: activeRoot?.outDirRelative ?? "",
+      icon: "folder-open",
+      disabled: outputDir === null,
+      onSelect: () => {
+        if (outputDir !== null) props.onRevealDir(outputDir);
+      },
+    },
+    {
+      id: "log",
+      label: t.latex.openLog,
+      hint: last?.logPath === null || last?.logPath === undefined ? t.latex.openLogMissing : "",
+      hintEllipsis: "head",
+      icon: "file-text",
+      disabled: last?.logPath === null || last?.logPath === undefined,
+      onSelect: () => {
+        if (last?.logPath !== null && last?.logPath !== undefined) props.onOpenLog(last.logPath);
+      },
+    },
+    {
       id: "clean",
       label: t.latex.clean,
       hint: props.cleaning ? t.latex.cleaning : t.latex.cleanHint,
@@ -102,36 +169,43 @@ export function LatexBuildBar(props: {
 
   return (
     <div className="latex-bar" role="toolbar" aria-label={t.latex.aria}>
-      <Menu
-        items={engineItems}
-        panelMinWidth={150}
-        trigger={({ toggle }) => (
-          <Chip
-            icon="cpu"
-            chevron
-            onClick={toggle}
-            disabled={engineItems.length === 0}
-            title={probe?.ok === true ? t.latex.engineTip : (probe?.message ?? t.latex.engineTip)}
-          >
-            {engineLabel(project.engine)}
-          </Chip>
-        )}
-      />
-      <Menu
-        items={mainItems}
-        panelMinWidth={170}
-        trigger={({ toggle }) => (
-          <Chip
-            icon="file-code-2"
-            chevron
-            onClick={toggle}
-            disabled={mainItems.length === 0}
-            title={t.latex.mainTip}
-          >
-            {project.main ?? t.latex.noMain}
-          </Chip>
-        )}
-      />
+      {/* 编译入口：先「编什么」，再「怎么编」（与 LatexRootRef 的字段顺序一致） */}
+      {multiRoot ? (
+        <Menu
+          items={rootItems}
+          panelMinWidth={220}
+          trigger={({ toggle }) => (
+            <Chip icon="file-code-2" chevron onClick={toggle} title={rootTitle}>
+              {rootLabel}
+            </Chip>
+          )}
+        />
+      ) : (
+        <Chip icon="file-code-2" title={rootTitle}>
+          {rootLabel}
+        </Chip>
+      )}
+      {recipe === undefined ? (
+        <Menu
+          items={engineItems}
+          panelMinWidth={150}
+          trigger={({ toggle }) => (
+            <Chip
+              icon="cpu"
+              chevron
+              onClick={toggle}
+              disabled={engineItems.length === 0}
+              title={probe?.ok === true ? t.latex.engineTip : (probe?.message ?? t.latex.engineTip)}
+            >
+              {engineLabel(project.engine)}
+            </Chip>
+          )}
+        />
+      ) : (
+        <Chip icon="terminal" title={recipe.join(" ")}>
+          {t.latex.customRecipe}
+        </Chip>
+      )}
 
       {running ? (
         <button
@@ -158,7 +232,7 @@ export function LatexBuildBar(props: {
 
       <Menu
         items={actionItems}
-        panelMinWidth={210}
+        panelMinWidth={240}
         trigger={({ toggle }) => (
           <button
             type="button"
@@ -172,9 +246,33 @@ export function LatexBuildBar(props: {
         )}
       />
 
+      {/* 多个产物时才出现：一份 PDF 是常态，写「1 个产物」是噪音 */}
+      {outputCount > 1 && (
+        <button
+          type="button"
+          className="quiet-control latex-outputs"
+          title={t.latex.outputsTip}
+          onClick={() => {
+            if (outputDir !== null) props.onRevealDir(outputDir);
+          }}
+        >
+          <Icon name="layers" size={12} />
+          {t.latex.outputs(outputCount)}
+        </button>
+      )}
+
       {/* 行尾血线：状态行才是尾元素；动作菜单在它左边，不抢右缘 */}
       <span className="latex-status row-trailing">
-        {statusOf({ state, last, project, startedAt: props.startedAt, now, t, error: props.error })}
+        {statusOf({
+          state,
+          last,
+          project,
+          startedAt: props.startedAt,
+          now,
+          t,
+          error: props.error,
+          progress: props.progress,
+        })}
       </span>
     </div>
   );
@@ -189,6 +287,7 @@ function statusOf(input: {
   now: number;
   t: Messages;
   error: string | null;
+  progress: LatexBuildProgress | null;
 }): React.ReactNode {
   const { state, last, project, t } = input;
   // 编译没能开始（IPC 抛错 / 主进程回 ok=false）：**先说话**。这一支原先不存在，
@@ -206,10 +305,11 @@ function statusOf(input: {
   }
   if (state === "running") {
     const elapsed = input.startedAt === null ? "0:00" : formatElapsed(input.now - input.startedAt);
+    const step = stepLabel(input.progress, t);
     return (
       <>
         <Icon name="loader-circle" size={12} spin />
-        {t.latex.running(elapsed)}
+        {step === null ? t.latex.running(elapsed) : t.latex.runningStep(step, elapsed)}
       </>
     );
   }
@@ -227,6 +327,14 @@ function statusOf(input: {
         <>
           <Icon name="octagon-x" size={12} style={{ color: "var(--color-danger)" }} />
           {t.latex.noMainFile}
+        </>
+      );
+    }
+    if (last.status === "root-outside-workspace") {
+      return (
+        <>
+          <Icon name="octagon-x" size={12} style={{ color: "var(--color-danger)" }} />
+          {t.latex.rootOutside}
         </>
       );
     }
@@ -280,6 +388,13 @@ function statusOf(input: {
       {t.latex.idleUpToDate}
     </>
   );
+}
+
+/** `xelatex · 第 2 轮`；没有 run 时只报 step，没有信号时 null（退回「编译中…」） */
+function stepLabel(progress: LatexBuildProgress | null, t: Messages): string | null {
+  if (progress === null || progress.step === null) return null;
+  const step = engineLabel(progress.step);
+  return progress.run === null ? step : t.latex.stepRun(step, progress.run);
 }
 
 /** 失败摘要里的错误条数（含缺宏包；与问题抽屉的计数同口径） */

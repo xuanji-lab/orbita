@@ -17,6 +17,8 @@ import {
   latexChannels,
   type LatexCleanOutcome,
   type LatexConfigureOutcome,
+  type LatexBuildProgress,
+  type LatexCompileIpcRequest,
   type LatexConfigureRequest,
   type LatexFileContext,
   type LatexForwardOutcome,
@@ -82,7 +84,15 @@ export function registerLatexIpc(
     const located = await locateLatexProject(req, workspaces, sessions);
     return located === null
       ? { found: false }
-      : { found: true, project: describeLatexProject(located.dir) };
+      : {
+          found: true,
+          // 带上当前文件：它的 `% !TEX root` 决定 activeRoot，也用来算 focusedRoot。
+          // 编译条看到的「下一次会编哪份」必须就是编译时真正用的那一份。
+          project: describeLatexProject(located.dir, {
+            ...(sourceFileOf(located.file) === null ? {} : { file: located.file }),
+            boundary: [located.boundary],
+          }),
+        };
   });
 
   /**
@@ -103,10 +113,28 @@ export function registerLatexIpc(
     return { available: true, issues: result.issues };
   });
 
-  ipcMain.handle(latexChannels.compile, async (_event, req: LatexFileContext): Promise<LatexRunOutcome> => {
+  /**
+   * 编一次。**当前文件（`path`）参与解析**：子文件里的 `% !TEX root` 从这里生效
+   * （以前面板不传文件，那一行 magic 一个字都没被读）。`main` 只给「忽略 magic、
+   * 编我点的那个 root」用——它是本次请求的显式覆盖，优先级最高。
+   */
+  ipcMain.handle(latexChannels.compile, async (_event, req: LatexCompileIpcRequest): Promise<LatexRunOutcome> => {
     const located = await locateLatexProject(req, workspaces, sessions);
     if (located === null) return { ok: false, error: "This file is not inside a LaTeX project." };
-    return runner.compile({ dir: located.dir });
+    const source = sourceFileOf(located.file);
+    return runner.compile({
+      dir: located.dir,
+      ...(source === null ? {} : { file: source }),
+      boundary: [located.boundary],
+      ...(typeof req.main === "string" && req.main.trim() !== "" ? { main: req.main } : {}),
+    });
+  });
+
+  /** 编译中的进度（当前跑到哪一轮引擎）。1 秒轮询一次，不进项目描述（它是热路径） */
+  ipcMain.handle(latexChannels.progress, async (_event, req: LatexFileContext): Promise<LatexBuildProgress> => {
+    const located = await locateLatexProject(req, workspaces, sessions);
+    if (located === null) return { running: false, step: null, run: null };
+    return runner.buildProgress(located.dir);
   });
 
   /**
@@ -135,18 +163,30 @@ export function registerLatexIpc(
       if (req.engine !== undefined && !isLatexEngine(req.engine)) {
         return { ok: false, error: `Unknown engine: ${String(req.engine)}` };
       }
+      if (req.upsertRoot !== undefined && req.upsertRoot.engine !== undefined && !isLatexEngine(req.upsertRoot.engine)) {
+        return { ok: false, error: `Unknown engine: ${String(req.upsertRoot.engine)}` };
+      }
       const located = await locateLatexProject(req, workspaces, sessions);
       if (located === null) return { ok: false, error: "This file is not inside a LaTeX project." };
       try {
         await writeLatexProjectConfig(located.dir, {
           ...(req.main === undefined ? {} : { main: req.main }),
+          ...(req.activate === undefined ? {} : { activate: req.activate }),
+          ...(req.upsertRoot === undefined ? {} : { root: req.upsertRoot }),
+          ...(req.removeRoot === undefined ? {} : { removeRoot: req.removeRoot }),
           ...(req.engine === undefined ? {} : { engine: req.engine }),
           ...(req.compileOnSave === undefined ? {} : { compileOnSave: req.compileOnSave }),
         });
       } catch (cause) {
         return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
       }
-      return { ok: true, project: describeLatexProject(located.dir) };
+      return {
+        ok: true,
+        project: describeLatexProject(located.dir, {
+          ...(sourceFileOf(located.file) === null ? {} : { file: located.file }),
+          boundary: [located.boundary],
+        }),
+      };
     },
   );
 
@@ -175,7 +215,10 @@ export function registerLatexIpc(
       if (located === null) return { ok: false, reason: "outside-project", detail: req.path };
       const source = insideProject(located.dir, located.file);
       if (source === null) return { ok: false, reason: "outside-project", detail: located.file };
-      const project = describeLatexProject(located.dir);
+      const project = describeLatexProject(located.dir, {
+        ...(sourceFileOf(located.file) === null ? {} : { file: located.file }),
+        boundary: [located.boundary],
+      });
       if (project.pdf === null) return { ok: false, reason: "no-pdf", detail: project.dir };
       const probe = await runner.probeEnvironment();
       return forwardSearch({
@@ -209,6 +252,14 @@ export function registerLatexIpc(
 }
 
 /**
+ * 只有 .tex 才值得拿 magic（编译条也会在项目 PDF 上出现：拿 PDF 去 parseMagicComments
+ * 是在把二进制当文本读）。返回 null = 这次没有可用的当前文件。
+ */
+function sourceFileOf(file: string): string | null {
+  return /\.tex$/i.test(file) ? file : null;
+}
+
+/**
  * 请求 → 白名单内的真实文件路径 → 项目目录。找不到项目回 null（不是错误：
  * 「这个文件不属于 LaTeX 项目」是文件面板的日常，编译条不出现即可）。
  * 路径越界 / 根不对由 whitelistedPath 抛，renderer 的 catch 把它显示成一行错误。
@@ -220,7 +271,7 @@ export async function locateLatexProject(
   req: LatexFileContext,
   workspaces: WorkspaceStore,
   sessions: SessionStore,
-): Promise<{ dir: string; file: string } | null> {
+): Promise<{ dir: string; file: string; boundary: string } | null> {
   const roots = await resolveFileRoots(workspaces, sessions, req);
   const listReq: FileListRequest = {
     sessionId: req.sessionId,
@@ -237,5 +288,5 @@ export async function locateLatexProject(
     // 根不存在（工作台还没建）：findLatexProjectDir 也会走到同一个结论
   }
   const dir = findLatexProjectDir(file, boundary);
-  return dir === null ? null : { dir, file };
+  return dir === null ? null : { dir, file, boundary };
 }

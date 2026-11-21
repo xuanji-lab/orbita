@@ -25,6 +25,7 @@ import {
   type LatexEngine,
   type LatexIssue,
   type LatexResult,
+  type LatexRootRef,
   type LatexRunOutcome,
 } from "../shared/latex.ts";
 import type { RequestBroker } from "./request-broker.ts";
@@ -58,7 +59,7 @@ export function createLatexTools(
 ): ToolDefinition[] {
   /** 发请求并等回执；这一轮被停掉（abort）就立刻放手（terminal-tools.ts 同款） */
   const call = async (
-    request: { dir?: string; main?: string; engine?: LatexEngine },
+    request: { dir?: string; main?: string; file?: string; engine?: LatexEngine },
     signal: AbortSignal | undefined,
   ) => {
     if (signal?.aborted === true) throw new Error("Stopped");
@@ -98,11 +99,13 @@ export function createLatexTools(
     name: "compile_latex",
     label: "compile_latex",
     description:
-      "Compile a LaTeX project with latexmk and return a structured result: status, engine, page count, " +
-      "errors with file:line, and warnings. The PDF lands in <dir>/build/. Use it whenever the user wants " +
-      "their paper compiled, or after you edited .tex sources and need to know whether it still builds. " +
-      "dir defaults to the session working directory; main is only needed when the directory has several " +
-      ".tex files and no main.tex. Engine is detected from the document (CJK → xelatex) unless you pass one.",
+      "Compile a LaTeX project with latexmk and return a structured result: status, which root was built, " +
+      "the outputs it wrote, errors with file:line, and warnings. Products land in each root's own output " +
+      "directory (build/ by default) — the outputs in the result are authoritative, do not assume <main>.pdf. " +
+      "Use it whenever the user wants their paper compiled, or after you edited .tex sources and need to know " +
+      "whether it still builds. dir defaults to the session working directory; main picks a specific root; " +
+      "file is the .tex you just edited, so its \"% !TEX root\" line decides which document gets built. " +
+      "Engine is detected from the document (CJK → xelatex) unless you pass one.",
     promptSnippet:
       "Compile a LaTeX project with latexmk; returns status, pages, and errors with file:line (never raw logs on success).",
     promptGuidelines: [
@@ -123,7 +126,14 @@ export function createLatexTools(
         main: {
           type: "string",
           description:
-            "Main .tex file, relative to dir. Only needed when the directory has no main.tex and more than one .tex file.",
+            "Root .tex file to build, relative to dir. Overrides everything else; use it when the directory has " +
+            "several roots and no main.tex, or to build a root other than the one the current file belongs to.",
+        },
+        file: {
+          type: "string",
+          description:
+            "The .tex you just edited, relative to dir. Its leading \"% !TEX root = ...\" line is followed " +
+            "(max 2 hops) to find the document that includes it. Use it instead of guessing main for chapter files.",
         },
         engine: {
           type: "string",
@@ -136,6 +146,7 @@ export function createLatexTools(
       const args = (params ?? {}) as Record<string, unknown>;
       const dir = text(args["dir"]);
       const main = text(args["main"]);
+      const file = text(args["file"]);
       const engine = text(args["engine"]);
       if (engine !== undefined && !isLatexEngine(engine)) {
         throw new Error(`engine must be one of "pdf", "xelatex", "lualatex" (got "${engine}").`);
@@ -146,6 +157,7 @@ export function createLatexTools(
         {
           ...(dir === undefined ? {} : { dir }),
           ...(main === undefined ? {} : { main }),
+          ...(file === undefined ? {} : { file }),
           ...(picked === undefined ? {} : { engine: picked }),
         },
         signal,
@@ -160,24 +172,38 @@ export function createLatexTools(
 function describe(result: LatexResult): string {
   const seconds = (result.durationMs / 1000).toFixed(1);
   const lines: string[] = [];
+  const root = result.root === null ? null : rootSummary(result.root);
   if (result.status === "ok" || result.status === "warning-only") {
     lines.push(
       `LaTeX build succeeded: status "${result.status}", engine ${result.engine}, ` +
+        `${root === null ? "" : `root ${root}, `}` +
         `${result.pages === null ? "page count unknown" : `${result.pages} pages`} in ${seconds}s.`,
     );
-    if (result.main !== "") lines.push(`Main: ${result.main}`);
-    if (result.pdf !== null) lines.push(`PDF: ${result.pdf}`);
+    lines.push(...outputLines(result));
   } else if (result.status === "not-installed") {
     lines.push(
       "LaTeX could not run: latexmk is not installed on this machine. " +
         "Tell the user to install TeX Live (or MiKTeX on Windows / MacTeX on macOS) and retry.",
     );
   } else if (result.status === "no-main-file") {
-    lines.push(`LaTeX could not start: no main file was chosen (engine ${result.engine}).`);
+    lines.push(
+      `LaTeX could not start: no root was chosen (engine ${result.engine}). ` +
+        "Pass main (which root to build) or file (the .tex you edited, whose \"% !TEX root\" names its document).",
+    );
+    if (result.candidates.length > 0) {
+      lines.push(`Candidates (${result.candidates.length}):`);
+      for (const candidate of result.candidates.slice(0, MAX_ERRORS_SHOWN)) lines.push(`- ${candidate}`);
+    }
+  } else if (result.status === "root-outside-workspace") {
+    lines.push(
+      "LaTeX could not start: the \"% !TEX root\" line points outside the authorized workspace, so it was " +
+        "refused (the build directory would have landed outside too). Ask the user before touching files " +
+        "outside the session's directories.",
+    );
   } else if (result.status === "timeout") {
     // 静默与总时长封顶的下一步不同：前者要先判断是不是真的卡住，后者可以拆文档/等机器空闲。
     // 不写“死循环”：日志按 4 KiB 块落盘，合法但耗时的编译也会长时间没有新输出（见 shared 常量注释）。
-    const where = `${result.main === "" ? "" : `, main ${result.main}`}`;
+    const where = `${root === null ? "" : `, root ${root}`}`;
     const totalMinutes = String(LATEX_TOTAL_TIMEOUT_MS / 60_000);
     lines.push(
       result.timeoutKind === "total"
@@ -194,7 +220,7 @@ function describe(result: LatexResult): string {
   } else {
     lines.push(
       `LaTeX build failed: status "compile-error", engine ${result.engine}` +
-        `${result.main === "" ? "" : `, main ${result.main}`} in ${seconds}s.`,
+        `${root === null ? "" : `, root ${root}`} in ${seconds}s.`,
     );
     if (result.pdf !== null) {
       lines.push(
@@ -245,6 +271,53 @@ function describe(result: LatexResult): string {
     );
   }
   return lines.join("\n");
+}
+
+/** `main.tex (from config)` / `sections/ch1.tex (from "% !TEX root" in main.tex:1)` */
+function rootSummary(root: LatexRootRef): string {
+  return `${root.path} (${rootSourceWord(root)})`;
+}
+
+function rootSourceWord(root: LatexRootRef): string {
+  if (root.source === "magic") {
+    const where = root.declaredBy === null ? "a % !TEX root line" : `"% !TEX root" in ${root.declaredBy.file}:${String(root.declaredBy.line)}`;
+    return `from ${where}`;
+  }
+  switch (root.source) {
+    case "request":
+      return "requested";
+    case "active":
+      return "from config (activeRoot)";
+    case "config":
+      return "from config (main)";
+    case "convention":
+      return "from main.tex in the project";
+    case "unique":
+      return "the only .tex in the project";
+    case "focus":
+      return "the file you passed";
+    default:
+      return "the only document found in the project";
+  }
+}
+
+/**
+ * 产物清单。**primary 排第一、标出来**：模型下一步常常要读 / 引用这份 PDF，
+ * 而一次构建可能写出好几份（正文 + 附录 + standalone 图）。上限在共享契约里
+ * （LATEX_MAX_OUTPUTS），截断时明说，不让模型以为只写了这几份。
+ */
+function outputLines(result: LatexResult): string[] {
+  if (result.outputs.length === 0) return [];
+  const lines = [`Outputs (${result.outputs.length}${result.outputsTruncated ? ", truncated" : ""}, primary first):`];
+  for (const output of result.outputs.slice(0, MAX_WARNINGS_SHOWN)) {
+    const pages = output.pages === null ? "" : `, ${String(output.pages)} pages`;
+    const fresh = output.fresh ? "" : ", from an earlier build";
+    lines.push(`- ${output.path}${output.primary ? " — primary" : ""}${pages}${fresh}`);
+  }
+  if (result.outputs.length > MAX_WARNINGS_SHOWN) {
+    lines.push(`- …and ${String(result.outputs.length - MAX_WARNINGS_SHOWN)} more (see the build directory).`);
+  }
+  return lines;
 }
 
 /** `main.tex:4 — message`；缺文件/行时退化成只有消息 */

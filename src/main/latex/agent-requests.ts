@@ -69,11 +69,19 @@ export async function applyLatexRequest(
     if (main !== undefined && !mainInsideDir(resolved.cwd, main)) {
       return { ok: false, error: "main must be a relative path inside dir (no absolute paths, no '..')." };
     }
+    // `file` 与 main 同一道校验：它只是「让这个文件的 % !TEX root 生效」，不是第二条授权通道
+    const file = cleanMain(event.request.file);
+    if (file !== undefined && !mainInsideDir(resolved.cwd, file)) {
+      return { ok: false, error: "file must be a relative path inside dir (no absolute paths, no '..')." };
+    }
     const engine = isLatexEngine(event.request.engine) ? event.request.engine : undefined;
     return await runner.compile({
       dir: resolved.cwd,
       ...(main === undefined ? {} : { main }),
+      ...(file === undefined ? {} : { file }),
       ...(engine === undefined ? {} : { engine }),
+      // 授权根：magic 的目标必须落在会话授权目录里，否则编译会被拒（root-outside-workspace）
+      boundary: roots,
     });
   } catch (cause) {
     return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };

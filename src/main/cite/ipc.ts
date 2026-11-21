@@ -34,8 +34,12 @@ export function registerCiteIpc(workspaces: WorkspaceStore, sessions: SessionSto
     async (_event, req: CiteFileContext): Promise<CiteLibraryOutcome> => {
       const located = await locateLatexProject(req, workspaces, sessions);
       if (located === null) return { found: false };
-      // 编译真正用的目录（magic root 会改写它），不是「文件所在目录」
-      const project = describeLatexProject(located.dir);
+      // 编译真正用的目录（magic root 会改写它），不是「文件所在目录」。
+      // 带上当前文件：子文件里的 `% !TEX root` 与编译走同一条解析。
+      const project = describeLatexProject(located.dir, {
+      ...(/\.tex$/i.test(located.file) ? { file: located.file } : {}),
+      boundary: [located.boundary],
+    });
       return { found: true, library: collectCiteLibrary(project.dir) };
     },
   );
@@ -63,7 +67,10 @@ export function registerCiteIpc(workspaces: WorkspaceStore, sessions: SessionSto
   ipcMain.handle(citeChannels.verify, async (_event, req: CiteVerifyRequest): Promise<CiteVerifyOutcome> => {
     const located = await locateLatexProject(req, workspaces, sessions);
     if (located === null) return { ok: false, reason: "outside-project", detail: req.path };
-    const project = describeLatexProject(located.dir);
+    const project = describeLatexProject(located.dir, {
+      ...(/\.tex$/i.test(located.file) ? { file: located.file } : {}),
+      boundary: [located.boundary],
+    });
     try {
       const library = collectCiteLibrary(project.dir);
       const keys = Array.isArray(req.keys) ? req.keys.filter((key) => typeof key === "string") : null;
@@ -77,7 +84,10 @@ export function registerCiteIpc(workspaces: WorkspaceStore, sessions: SessionSto
   ipcMain.handle(citeChannels.save, async (_event, req: CiteSaveRequest): Promise<CiteSaveOutcome> => {
     const located = await locateLatexProject(req.context, workspaces, sessions);
     if (located === null) return { ok: false, reason: "outside-project", detail: req.context.path };
-    const project = describeLatexProject(located.dir);
+    const project = describeLatexProject(located.dir, {
+      ...(/\.tex$/i.test(located.file) ? { file: located.file } : {}),
+      boundary: [located.boundary],
+    });
     return writeCiteEntry(project.dir, project.main, req.candidate);
   });
 }

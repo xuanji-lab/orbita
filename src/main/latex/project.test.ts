@@ -5,7 +5,7 @@
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describeLatexProject, findLatexProjectDir, writeLatexProjectConfig } from "./project.ts";
@@ -141,7 +141,12 @@ describe("writeLatexProjectConfig", () => {
     try {
       await writeLatexProjectConfig(root, { engine: "xelatex" });
       const saved = JSON.parse(readFileSync(join(root, ".orbita", "latex.json"), "utf8")) as Record<string, unknown>;
-      assert.deepEqual(saved, { outDir: "out", args: ["-shell-escape"], engine: "xelatex" });
+      // v1 的项目级 outDir / args 迁到 roots[0]；写回只产出 v2（不再有顶层 main / outDir）
+      assert.deepEqual(saved, {
+        version: 2,
+        activeRoot: "main.tex",
+        roots: [{ path: "main.tex", outDir: "out", args: ["-shell-escape"], engine: "xelatex" }],
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -169,9 +174,14 @@ describe("writeLatexProjectConfig", () => {
     try {
       assert.equal(describeLatexProject(root).compileOnSave, false, "缺省关");
       await writeLatexProjectConfig(root, { compileOnSave: true });
-      const saved = JSON.parse(readFileSync(join(root, ".orbita", "latex.json"), "utf8")) as Record<string, unknown>;
-      assert.equal(saved["compileOnSave"], true);
-      assert.equal(saved["engine"], "xelatex", "合并写，不抹掉引擎选择");
+      const saved = JSON.parse(readFileSync(join(root, ".orbita", "latex.json"), "utf8")) as {
+        compileOnSave?: boolean;
+        engine?: unknown;
+        roots: { path: string; engine?: string }[];
+      };
+      assert.equal(saved.compileOnSave, true);
+      assert.equal(saved.engine, undefined, "v2 不再产出顶层 engine");
+      assert.equal(saved.roots[0]?.engine, "xelatex", "合并写，不抹掉引擎选择（迁到 roots[0]）");
       assert.equal(describeLatexProject(root).compileOnSave, true);
       await writeLatexProjectConfig(root, { compileOnSave: false });
       assert.equal(describeLatexProject(root).compileOnSave, false);
@@ -191,6 +201,126 @@ describe("writeLatexProjectConfig", () => {
       const project = describeLatexProject(root);
       assert.equal(project.main, "method.tex");
       assert.equal(project.detail, null);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("describeLatexProject —— 多 root", () => {
+  const OLD_TIME = new Date(2020, 0, 1);
+  const NEW_TIME = new Date(2021, 0, 1);
+
+  test("脏判定按 root 的 include 闭包：改附录不让正文变脏", () => {
+    const root = withProject((dir) => {
+      mkdirSync(join(dir, "sections"));
+      writeFileSync(join(dir, "main.tex"), "\\documentclass{article}\n\\input{sections/a}\n");
+      writeFileSync(join(dir, "sections", "a.tex"), "正文的一节\n");
+      writeFileSync(join(dir, "appendix.tex"), "\\documentclass{article}\n\\input{sections/b}\n");
+      writeFileSync(join(dir, "sections", "b.tex"), "附录的一节\n");
+    });
+    try {
+      utimesSync(join(root, "main.tex"), OLD_TIME, OLD_TIME);
+      utimesSync(join(root, "sections", "a.tex"), OLD_TIME, OLD_TIME);
+      utimesSync(join(root, "appendix.tex"), NEW_TIME, NEW_TIME);
+      utimesSync(join(root, "sections", "b.tex"), NEW_TIME, NEW_TIME);
+
+      const project = describeLatexProject(root);
+      assert.equal(project.activeRoot, "main.tex");
+      // 项目级最新源码是附录那份（2021）；正文的闭包里没有它 → 不该被它带脏
+      assert.ok(project.sourceModifiedAt !== null);
+      assert.ok(
+        project.sourceModifiedAt < NEW_TIME.getTime(),
+        `正文的 sourceModifiedAt 被附录带脏了：${String(project.sourceModifiedAt)}`,
+      );
+
+      // 反过来：改正文自己包含的那一节，正文就该变脏
+      utimesSync(join(root, "sections", "a.tex"), NEW_TIME, NEW_TIME);
+      const after = describeLatexProject(root);
+      assert.ok(
+        (after.sourceModifiedAt ?? 0) >= NEW_TIME.getTime(),
+        "改 sections/a.tex 之后正文没有变脏",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("focusedRoot：当前文件落在 main.tex 的闭包里", () => {
+    const root = withProject((dir) => {
+      mkdirSync(join(dir, "sections"));
+      writeFileSync(join(dir, "main.tex"), "\\documentclass{article}\n\\input{sections/ch1}\n");
+      writeFileSync(join(dir, "sections", "ch1.tex"), "Chapter one\n");
+    });
+    try {
+      const project = describeLatexProject(root, { file: join(root, "sections", "ch1.tex") });
+      assert.equal(project.activeRoot, "main.tex");
+      assert.equal(project.focusedRoot, "main.tex");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("roots[] 带每个 root 的产物目录与产物；jobname 编出的 PDF 也找得到", () => {
+    const root = withProject((dir) => {
+      mkdirSync(join(dir, ".orbita"));
+      writeFileSync(
+        join(dir, ".orbita", "latex.json"),
+        JSON.stringify({
+          version: 2,
+          activeRoot: "main.tex",
+          roots: [
+            { path: "main.tex", jobname: "review" },
+            { path: "appendix.tex", outDir: "out-appendix" },
+          ],
+        }),
+      );
+      writeFileSync(join(dir, "main.tex"), "\\documentclass{article}\n");
+      writeFileSync(join(dir, "appendix.tex"), "\\documentclass{article}\n");
+      mkdirSync(join(dir, "build"));
+      writeFileSync(join(dir, "build", "review.pdf"), "%PDF-1.4\n");
+    });
+    try {
+      const project = describeLatexProject(root);
+      assert.equal(project.roots.length, 2);
+      assert.equal(project.activeRoot, "main.tex");
+      assert.equal(project.configured.activeRoot, "main.tex");
+      // 面板的 PDF 事实不再拼 <main>.pdf：认 jobname
+      assert.equal(project.pdf?.path, join(root, "build", "review.pdf"));
+      const appendix = project.roots.find((item) => item.path === "appendix.tex");
+      assert.equal(appendix?.outDirRelative, "out-appendix");
+      assert.equal(appendix?.pdf, null);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("configure 写 per-root 的 engine / outDir，读回来在对应的 root 上", async () => {
+    const root = withProject((dir) => {
+      writeFileSync(join(dir, "intro.tex"), "\\documentclass{article}\n");
+      writeFileSync(join(dir, "method.tex"), "\\documentclass{article}\n");
+    });
+    try {
+      await writeLatexProjectConfig(root, { root: { path: "intro.tex", engine: "lualatex", outDir: "out" } });
+      await writeLatexProjectConfig(root, { activate: "method.tex" });
+
+      const saved = JSON.parse(readFileSync(join(root, ".orbita", "latex.json"), "utf8")) as {
+        version?: number;
+        activeRoot?: string;
+        roots: { path: string; engine?: string; outDir?: string }[];
+      };
+      assert.equal(saved.version, 2);
+      assert.equal(saved.activeRoot, "method.tex");
+      assert.deepEqual(saved.roots, [
+        { path: "intro.tex", engine: "lualatex", outDir: "out" },
+        { path: "method.tex" },
+      ]);
+
+      const project = describeLatexProject(root);
+      assert.equal(project.activeRoot, "method.tex");
+      const intro = project.roots.find((item) => item.path === "intro.tex");
+      assert.equal(intro?.engine, "lualatex");
+      assert.equal(intro?.outDirRelative, "out");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

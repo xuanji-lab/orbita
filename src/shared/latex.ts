@@ -46,7 +46,13 @@ export type LatexStatus =
   /** 本机没有 latexmk（探测失败） */
   | "not-installed"
   /** 找不到主文件，或候选不唯一 */
-  | "no-main-file";
+  | "no-main-file"
+  /**
+   * `% !TEX root` 指向的文件不在授权根（文件面板的白名单根 / 会话授权目录）里。
+   * **它不是一次编译失败**：我们拒绝把工作目录与产物目录指到根外（TeX 能 \input
+   * 任意文件，编一个根外的文档等于读那些文件），所以根本没起 latexmk。
+   */
+  | "root-outside-workspace";
 
 /**
  * 日志里的一条。`kind` 是**给界面/模型看的分类**，不改变它待在哪个数组里：
@@ -69,11 +75,94 @@ export interface LatexIssue {
   kind: LatexIssueKind;
 }
 
-/** 一次编译结果。主进程组装，agent 工具直接消费 */
+/**
+ * 一个编译根的来源。界面 chip 的副标题与 agent 回执都读它——
+ * 「为什么这一份被选中」是用户与模型都要能问的问题（静默猜错是最坏的一类 bug）。
+ */
+export type LatexRootSource =
+  /** 调用方显式给的 main（agent / chip 点选 / 「忽略 magic」） */
+  | "request"
+  /** 当前文件头部的 `% !TEX root`（declaredBy 说明写在哪） */
+  | "magic"
+  /** `.orbita/latex.json` 的 activeRoot */
+  | "active"
+  /** `.orbita/latex.json` 的旧字段 main（读时迁移） */
+  | "config"
+  /** 目录里约定俗成的 main.tex */
+  | "convention"
+  /** 顶层唯一 .tex */
+  | "unique"
+  /** 当前打开的文件自己就是一份 `\documentclass` 文档 */
+  | "focus"
+  /** 递归 ≤2 层里唯一带 `\documentclass` 的 .tex */
+  | "scan";
+
+/** 引擎是怎么定下来的（请求 > magic > 配置 > 自动，见 resolve.ts） */
+export type LatexEngineSource = "request" | "magic" | "config" | "auto";
+
+/**
+ * 一个可编译的根：一份主文件 + 它自己的产物目录 / jobname。
+ *
+ * **读者**：编译条的 root chip（path / source / declaredBy / outDir）、agent 回执、
+ * 产物定位。**写者**：resolve.ts（编译时）与 project.ts（描述时）。
+ */
+export interface LatexRootRef {
+  /** 相对项目目录（正斜杠），如 "paper/main.tex"；magic 指到项目外时可能是 "../x.tex" */
+  path: string;
+  source: LatexRootSource;
+  /** source === "magic" 时：声明写在哪（相对项目目录 + 1 基行号）；其它来源为 null */
+  declaredBy: { file: string; line: number } | null;
+  engine: LatexEngine;
+  engineSource: LatexEngineSource;
+  /** 产物目录绝对路径（= latexmk 的 -outdir） */
+  outDir: string;
+  /** 产物目录相对项目目录（正斜杠）——界面只显示这个，不显示机器路径 */
+  outDirRelative: string;
+  /** latexmk 的 -jobname；未配置为 null（= 主文件 basename） */
+  jobname: string | null;
+}
+
+/**
+ * 一份产物。真源是 `LatexResult.outputs`；`pdf` / `pages` 只是 primary 的镜像，
+ * 留一个 release 给现有调用点。
+ */
+export interface LatexOutput {
+  /** 绝对路径（去重键） */
+  path: string;
+  /** 目前只有 dvi-only / 自定义 recipe 明确写出的非 PDF 会是 "other" */
+  kind: "pdf" | "other";
+  /** 是不是这个 root 的主产物（至多一个 true） */
+  primary: boolean;
+  /** 本次写出（mtime ≥ spawn 时刻）。false = 磁盘上的旧产物 */
+  fresh: boolean;
+  /** 来自日志 `Output written on … (N pages`；扫描发现但没有日志行时为 null */
+  pages: number | null;
+  bytes: number | null;
+  modifiedAt: number | null;
+  /** 日志里的原始写法（"build/main.pdf" / "main.pdf"）；来自扫描为 null */
+  fromLog: string | null;
+}
+
+/**
+ * 一次编译结果。主进程组装，agent 工具直接消费。
+ *
+ * **字段顺序 = 读者顺序**：status → root（这一次编的哪份）→ outputs（写出来什么）。
+ */
 export interface LatexResult {
   status: LatexStatus;
   engine: LatexEngine;
-  /** 主文件名（相对项目目录），如 "main.tex" */
+  /** 这一次编的根。status 是 no-main-file / root-outside-workspace 时为 null */
+  root: LatexRootRef | null;
+  /** 本次构建认定的全部产物（≤ LATEX_MAX_OUTPUTS，多的置 outputsTruncated） */
+  outputs: LatexOutput[];
+  outputsTruncated: boolean;
+  /** 没有 root 时的候选（`no-main-file` 的界面 / 模型出口） */
+  candidates: string[];
+  /** 本次解析的 .log 绝对路径（「完整日志」入口）；一份都没有时 null */
+  logPath: string | null;
+
+  /* ── 便捷镜像（保留一个 release，第三个消费者改完后删） ── */
+  /** = 主文件名（相对 plan.dir ≈ 引擎工作目录，日志里的 file:line 也是这个基准）；没有 root 时 "" */
   main: string;
   /**
    * 磁盘上的 PDF **绝对路径**；根本没有时 null。它可能是**上一次编译**留下的——
@@ -86,8 +175,8 @@ export interface LatexResult {
    */
   pdfFresh: boolean;
   /**
-   * 日志里 `Output written on … (N pages` 的 N，**只来自本次编译写出的 .log**。
-   * 本次没写日志（logStale）时为 null——上一轮的页数不是这一次的事实。
+   * primary 的页数，**只来自本次编译写出的 .log**。本次没写日志（logStale）时为
+   * null——上一轮的页数不是这一次的事实。
    */
   pages: number | null;
   durationMs: number;
@@ -131,7 +220,17 @@ export type LatexTimeoutKind = "idle" | "total";
 export interface LatexCompileRequest {
   dir?: string;
   main?: string;
+  /**
+   * 刚编辑的那个 .tex（相对 dir 或绝对路径）。它头部连续 `%` 行里的 `% !TEX root`
+   * 会被采用——与面板编译走同一条解析（resolve.ts 一处实现），模型不必自己读 magic。
+   */
+  file?: string;
   engine?: LatexEngine;
+  /**
+   * 允许 root / magic 目标落在其中的目录（授权根）。缺席时用 dir 自己。
+   * 越界的目标让编译以 `root-outside-workspace` 失败，**绝不把 cwd / outDir 指到根外**。
+   */
+  boundary?: readonly string[];
 }
 
 /**
@@ -254,6 +353,13 @@ export const LATEX_CLEAN_TIMEOUT_MS = 60_000;
 export const LATEX_MAX_ISSUES = 200;
 
 /**
+ * 一次构建最多报几个产物。真实项目是 1–3 份（正文 + 附录 + 一张 standalone 图）；
+ * 一个把每章都 \includestandalone 的项目可能写出几十份——上限防「产物列表变成目录树」，
+ * 超出的部分置 `outputsTruncated`（不静默）。
+ */
+export const LATEX_MAX_OUTPUTS = 20;
+
+/**
  * 「低内存机」阈值：16 GiB。
  *
  * 单位换算写清（这里差一个数量级就是误判）：硬件标称的 16 GB 指 16 GiB =
@@ -315,6 +421,8 @@ export const latexChannels = {
   lint: "latex:lint",
   /** 清理辅助文件（`latexmk -c`）：删 .aux/.log 等，保留 PDF */
   clean: "latex:clean",
+  /** 编译中的进度（当前跑到哪一步）；1 秒轮询一次，不进项目描述 */
+  progress: "latex:progress",
   /** 「指定位置」：系统文件选择器选 latexmk，现验通过后写进设置 */
   locate: "latex:locate",
 } as const;
@@ -332,20 +440,54 @@ export interface LatexFileContext {
   path: string;
 }
 
+/** 一个 root 的项目级事实（`LatexRootRef` 加上磁盘状态） */
+export interface LatexRootInfo extends LatexRootRef {
+  /** 磁盘上的主产物（可能来自上一次成功构建）；没编过 / 找不到为 null */
+  pdf: { path: string; modifiedAt: number; pages: number | null } | null;
+  /** 与这个 root 有关的源码最新 mtime（include 闭包；闭包算不出来时退回项目级） */
+  sourceModifiedAt: number | null;
+  /** 解析 / 构建这一份的已知问题（magic 指向不存在的文件、越界…）；正常为 null */
+  detail: string | null;
+}
+
 /** 项目描述：编译条的 chip 与「PDF 是否过期」都只读这一份。 */
 export interface LatexProjectInfo {
   /** 项目目录绝对路径（主文件所在目录；magic root 会改写它） */
   dir: string;
+  /** 所有可编译的根（递归 ≤2 层、含 \documentclass 的 .tex；配置里显式写的也在内） */
+  roots: LatexRootInfo[];
+  /**
+   * 下一次编译会用的根（相对项目目录）；没有可编译 root 时 null。
+   * 它是 magic / activeRoot / 约定 / 扫描综合后的**结论**，不是配置里的原始值。
+   */
+  activeRoot: string | null;
+  /**
+   * 当前打开的文件落在哪个 root 的 include 闭包里（面板高亮用）；
+   * 解析不出（多个 root 都含它 / 都不含）时为 null。
+   */
+  focusedRoot: string | null;
   /** 编译时会用的引擎（请求以外的来源：magic > 配置 > 自动） */
   engine: LatexEngine;
   /** 引擎是怎么定下来的，界面据此说「自动」还是「项目设置」 */
-  engineSource: "magic" | "config" | "auto";
-  /** 主文件（相对 dir）；多 .tex 且没 main.tex 时为 null，界面让用户选 */
+  engineSource: LatexEngineSource;
+  /**
+   * 主文件名（相对 dir ≈ 引擎工作目录；与日志 file:line 同一基准）。
+   * 注意它不总是等于 activeRoot：activeRoot 相对**项目目录**，root 在子目录时是
+   * "book/main.tex"，而这里是 "main.tex"。界面拼绝对路径用这个。
+   */
   main: string | null;
-  /** 项目顶层的 .tex（主文件候选） */
+  /** 主文件候选（= roots[].path；没有一个 root 时退回顶层 .tex） */
   mains: string[];
-  /** `.orbita/latex.json` 里的显式选择（chip 的当前值） */
-  configured: { main?: string; engine?: LatexEngine };
+  /** `.orbita/latex.json` 里的显式选择（chip 的当前值；outDir / recipe 来自 active root） */
+  configured: {
+    main?: string;
+    engine?: LatexEngine;
+    activeRoot?: string;
+    /** 相对这个 root 的目录（原样，未展开） */
+    outDir?: string;
+    /** 自定义命令（原样）；没有时缺省 */
+    recipe?: string[];
+  };
   /** 磁盘上的 PDF；没有编译过就是 null。它可能是**上一次成功**的那份 */
   pdf: { path: string; modifiedAt: number } | null;
   /** 参与「过期」判定的最新源码 mtime（主文件 + .tex / .bib / .cls / .sty） */
@@ -361,11 +503,58 @@ export interface LatexProjectInfo {
 
 export type LatexProjectOutcome = { found: false } | { found: true; project: LatexProjectInfo };
 
-/** 编译条发起的编译：不给 dir——项目目录由主进程从 path 找，绕不过白名单 */
-export type LatexCompileIpcRequest = LatexFileContext;
+/**
+ * 编译中的进度。**只报我们真观察到的信号**：latexmk 的 stdout 里
+ * `Run number N of rule 'xelatex'` 那一行（每跑一轮引擎 / bibtex 就有一行）。
+ * 没有这个信号（自定义 recipe 不打印）时 `step` 为 null，界面退回「编译中…」。
+ * 总轮数不可知，所以不给 `3/4` 这种分母。
+ */
+export interface LatexBuildProgress {
+  running: boolean;
+  /** 当前这一轮的抓手（"xelatex" / "bibtex"），没有信号时 null */
+  step: string | null;
+  /** latexmk 报的轮次（1 基）；没有信号时 null */
+  run: number | null;
+}
 
-/** 引擎 / 主文件选择。`main` 是相对项目目录的 .tex；各项都可单独给 */
+/**
+ * 编译条发起的编译：不给 dir——项目目录由主进程从 path 找，绕不过白名单。
+ * `path` 就是当前打开的文件：它的 `% !TEX root` 会被采用（与 agent 的 file 参数同源）。
+ * `main` 只在「忽略这个文件的 magic、编我点的那个 root」时给。
+ */
+export interface LatexCompileIpcRequest extends LatexFileContext {
+  main?: string;
+}
+
+/** 一个 root 的配置项（写进 `.orbita/latex.json` 的 roots[]） */
+export interface LatexRootConfig {
+  /** 相对项目目录的 .tex；必须是 .tex、不许绝对路径 / 不许 ".." */
+  path: string;
+  engine?: LatexEngine;
+  /**
+   * 产物目录，**相对这个 root 所在的目录**（沿用 v1 `outDir` 相对主文件目录的语义，
+   * 迁移零风险）。不许绝对路径 / 不许 ".."。缺省 "build"。
+   */
+  outDir?: string;
+  /** latexmk 的 -jobname；省略 = 主文件 basename */
+  jobname?: string;
+  args?: string[];
+  /** recipe[0] 是可执行文件，其余是参数（见 resolve.ts 的 buildArgv） */
+  recipe?: string[];
+}
+
+/**
+ * 引擎 / root 选择。各项都可单独给：
+ * - `activate` 只改 activeRoot；
+ * - `upsertRoot` 新增或更新一条 root 配（字段名不叫 root：LatexFileContext.root 是白名单根）；
+ * - `removeRoot` 只删配置，不删文件；
+ * - `engine` 写到**当前生效的 root** 上（v2 是 per-root 的）；
+ * - 旧字段 `main` 等价于「activate + upsert 一条」（一个 release 的兼容期）。
+ */
 export interface LatexConfigureRequest extends LatexFileContext {
+  activate?: string;
+  upsertRoot?: { path: string } & Omit<Partial<LatexRootConfig>, "path">;
+  removeRoot?: string;
   main?: string;
   engine?: LatexEngine;
   compileOnSave?: boolean;
