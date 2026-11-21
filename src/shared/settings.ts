@@ -16,7 +16,7 @@ import { parseExternalSourceSwitches, type ExternalSourceSwitches } from "./exte
  *
  * 暗色两档（2026-09-30 换血，色值取自 DeepSeek Harness 与 ZCode 的安装包实测，
  * 层次与理由见 tokens/colors.css 头注释）：**"graphite"**（黛 Slate，蓝灰、收敛）与
- * **"black"**（玄 Onyx，纯灰、外壳亮堂）。**档位 id 沿用旧名不动**——它们是 settings/IPC
+ * **"black"**（玄 Onyx，夜空蓝黑、外壳亮堂）。**档位 id 沿用旧名不动**——它们是 settings/IPC
  * 契约，换的只是显示名（`themes` 在 messages-*.ts）。第三档 "dark"（Warm 微暖）
  * 2026-09-27 退役，存量设置迁移到 graphite（`parseTheme`）。
  *
