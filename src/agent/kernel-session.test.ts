@@ -260,6 +260,21 @@ describe("KernelSessions：一轮的事件与旧内核同形", () => {
     assert.equal(r.settled[0]?.result.ok, true);
   });
 
+  it("tool_search：投影成一条普通的工具卡（名字、参数、结果）；同一批里先搜后调的延迟工具拿到「还没加载」的回执，整批不卡住", async () => {
+    const cwd = await tempDir();
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("tool_search", { query: "navigate web page" }), fauxToolCall("browser_navigate", { url: "https://example.com" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("好"),
+    ]);
+    const r = await rig();
+    await r.sessions.handle("s1", submit(cwd, { text: "打开网页" }));
+    await r.until(idle());
+    const tools = r.transcript().filter((item): item is Extract<TranscriptItem, { role: "tool" }> => item.role === "tool");
+    assert.deepEqual(tools.map((item) => [item.toolName, item.status]), [["tool_search", "complete"], ["browser_navigate", "error"]]);
+    assert.match(JSON.stringify(tools[0]), /Loaded \d+ tools?[\s\S]*browser_navigate/);
+    assert.match(JSON.stringify(tools[1]), /is not loaded yet\. Call tool_search/);
+  });
+
   it("轮尾落盘的上下文占用与重读整份上下文算出的相同：正常答完（取最后那条回答）、停在工具中途（回答后面还有工具结果，照读）", async () => {
     const cwd = await tempDir();
     const finalUsage = async (r: Rig, sessionId: string) => {
@@ -1101,9 +1116,10 @@ describe("KernelSessions：子会话与父同库", () => {
 
 describe("KernelSessions：轮末预先压缩（下一次发送不被压缩挡住）", () => {
   // 100k 窗口、剩余 20%：内核阻塞线 80k；提前量 5k → 轮末占用 > 75k 就预先压。faux 的 usage = prompt 字符 / 4。
-  // 系统段约 14k token，前两句各约 29.5k、第三句 4k：第二轮答完约 73k（< 75k，不压）；内核准备第三轮时按 字符/3.5 估新消息，
-  // 约 77.7k（< 80k，不阻塞）；答完 faux 报的 usage（字符/4）约 77.1k（> 75k，轮末预先压）。切点在第二句（保留 ≥ 20k），摘要第一轮
-  const chunk = (tag: string): string => `${tag}${"a".repeat(tag === "三" ? 16_000 : 118_000)}`;
+  // 系统段与常驻工具合计约 9k token，前两句各约 29.5k、第三句 9k：第二轮答完约 66k（< 75k，不压）；内核准备第三轮时按 字符/3.5 估新消息，
+  // 约 76k（< 80k，不阻塞）；答完 faux 报的 usage（字符/4）约 75k（> 75k，轮末预先压）。切点在第二句（保留 ≥ 20k），摘要第一轮。
+  // 第三句从 4k 提到 9k 是因为 deferred 让常驻 schema 少了约 7k token；不补这一段，三条用例会全部变成「没到线、不压」，失去区分度。
+  const chunk = (tag: string): string => `${tag}${"a".repeat(tag === "三" ? 36_000 : 118_000)}`;
   const summary = (delayMs = 0) => async () => {
     if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
     return fauxAssistantMessage("## Goal\n预先压缩的摘要");

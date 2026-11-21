@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Api, Message, Model, Tool, ToolResultMessage } from "@earendil-works/pi-ai";
 import { toToolDeclaration } from "@earendil-works/pi-ai/utils/transcript";
@@ -349,8 +350,10 @@ describe("kernel-turn：按能力集装配一轮", () => {
     const chat = await assemble(child(cwd, "c1", ["none"]));
     assert.deepEqual(base.turn.toolNames, ["bash", "edit", "read", "write", "update_plan", "update_goal", "report_to_parent"]);
     assert.deepEqual(chat.turn.toolNames, []);
-    assert.ok(full.turn.toolNames.length > 40);
-    // 实测（这份夹具，无 MCP、无技能）：工具定义 35,582 → 8,452 → 2 字符
+    // 全带：常驻 + 延迟（tool_search 之外）共 40 多个；延迟的整组要先 tool_search，基础 / 纯聊天没有可延迟的组所以不装它
+    assert.ok(full.turn.toolNames.length + full.turn.deferredNames.length > 40);
+    assert.ok(full.turn.toolNames.includes("tool_search") && !base.turn.toolNames.includes("tool_search"));
+    // 实测（这份夹具，无 MCP、无技能；declarations 是全部已注册的工具，含延迟的）：工具定义 35,582 → 8,452 → 2 字符（全带时再加 tool_search 自己）
     assert.ok(base.declarations.length * 4 < full.declarations.length);
     // 只带基础：没有 store-tools、quote 两段；通道说明末尾讲带了什么、缺了找谁
     assert.doesNotMatch(base.turn.systemPrompt, /<orbita-store-tools>|<orbita-quotes>/);
@@ -382,5 +385,128 @@ describe("kernel-turn：按能力集装配一轮", () => {
     assert.match(text(result), /^Tool browser_navigate is not available: this piece of work was handed out without the browser module/);
     assert.match(text(result), /report_to_parent \(kind "question"\)/);
     await harness.close(BACKGROUND_CONTEXT);
+  });
+});
+
+describe("kernel-turn：能力目录接进系统提示", () => {
+  const FIXTURE = fileURLToPath(new URL("./mcp-fixture-server.ts", import.meta.url));
+  const ROOT_ALL = { sessionMemory: true, automationTools: true, pluginTools: true } as const;
+
+  async function skillsIn(root: string): Promise<string> {
+    const dir = join(root, "skills");
+    for (const [name, extra] of [["browser", ""], ["docs", ""], ["slides", ""], ["terminal", "disable-model-invocation: true\n"]] as const) {
+      await mkdir(join(dir, name), { recursive: true });
+      await writeFile(join(dir, name, "SKILL.md"), `---\nname: ${name}\ndescription: how to use ${name}\n${extra}---\nbody\n`);
+    }
+    return dir;
+  }
+
+  async function assemble(cmd: KernelTurnCommand, hub = new McpHub()) {
+    const { harness, registry, conversation: target } = await conversation();
+    const wire = await TurnWire.open(target, join(cmd.cwd, ".att", cmd.sessionId), BACKGROUND_CONTEXT);
+    const rt = { ...runtime([]), mcpHub: hub };
+    const turn = await assembleTurn(cmd, rt, { registry, conversation: target, model: MODEL, providerSessionId: "p1" }, [], wire, 1);
+    await harness.close(BACKGROUND_CONTEXT);
+    return turn;
+  }
+
+  /** 目录段里的组 id（每行 `- <id> (`） */
+  function catalogIds(systemPrompt: string): string[] {
+    const body = /<capability-catalog>\n([\s\S]*?)\n<\/capability-catalog>/.exec(systemPrompt)?.[1] ?? "";
+    return [...body.matchAll(/^- ([a-z-]+) \(/gm)].map((match) => match[1] ?? "");
+  }
+
+  /** 独立的口径：按工具名认它在哪一组（与被测代码无关，用来对账「目录组集合 == 实际注册的非空组」） */
+  function ownerOf(tool: string): string | null {
+    const table: [RegExp, string][] = [
+      [/^mcp__/, "mcp"],
+      [/^(read_pdf|cite_pdf|read_docx)$/, "pdf-docx"],
+      [/^show_image$/, "image"],
+      [/^(update_plan|update_goal)$/, "plan"],
+      [/^(create_skill|add_mcp_server)$/, "store"],
+      [/^(install_plugin|preview_plugin|list_plugins|show_plugin_board)$/, "plugins"],
+      [/^read_task$/, "tasks"],
+      [/^(browser_|request_user_action)/, "browser"],
+      [/^(slides_|doc_)/, "docs-slides"],
+      [/^terminal_/, "terminal"],
+      [/^(delegate|reply_subsession|model_costs|pause_subsession|work_cards|report_to_parent)$/, "channel"],
+      [/^memory_/, "memory"],
+      [/^automation_/, "automation"],
+    ];
+    return table.find(([pattern]) => pattern.test(tool))?.[1] ?? null;
+  }
+
+  const PARENT_CHILD = (cwd: string) => ({ workbench: join(cwd, "wb"), attached: [], related: [{ sessionId: "parent", relation: "parent" as const, label: "p", path: join(cwd, "wb-p") }] });
+
+  it("根会话全开 + 一台真 MCP：目录的组集合 == 这一轮实际注册的非空组；MCP 只出现服务名；入口都是真工具", async () => {
+    const cwd = await tempDir();
+    const hub = new McpHub();
+    try {
+      const turn = await assemble(
+        command(cwd, { ...ROOT_ALL, skillsDirs: [await skillsIn(cwd)], mcpServers: { demo: { transport: "stdio", command: process.execPath, args: [FIXTURE] } } }),
+        hub,
+      );
+      // 注册了的 = 常驻 + 延迟（延迟的整组要先 tool_search，但目录仍列出；tool_search 自己不属于任何组）
+      const registeredNames = [...turn.toolNames, ...turn.deferredNames];
+      const registered = [...new Set(registeredNames.flatMap((name) => ownerOf(name) ?? []))];
+      assert.ok(registered.includes("mcp") && registered.includes("automation"), "夹具真的连上了、自动化真的注册了");
+      assert.deepEqual([...catalogIds(turn.systemPrompt)].sort(), [...registered].sort());
+      assert.match(turn.systemPrompt, /^- mcp \(servers: demo\): /m);
+      assert.ok(!/^- mcp .*mcp__demo__echo/m.test(turn.systemPrompt), "不逐个列 MCP 工具名");
+      for (const match of turn.systemPrompt.matchAll(/^- [a-z-]+ \(([a-z_]+)[ +\d)]/gm)) {
+        if (match[1] !== "servers") assert.ok(registeredNames.includes(match[1] ?? ""), `入口 ${match[1]} 是这一轮真注册的工具`);
+      }
+      // 段位置：在通用工具规矩之前
+      assert.ok(turn.systemPrompt.indexOf("<capability-catalog>") < turn.systemPrompt.indexOf("For commands that may take a while"));
+    } finally {
+      await hub.dispose();
+    }
+  });
+
+  it("skill 指向与技能索引一致：索引里有的才指，只能点名的（hidden）不指", async () => {
+    const cwd = await tempDir();
+    const turn = await assemble(command(cwd, { ...ROOT_ALL, skillsDirs: [await skillsIn(cwd)] }));
+    assert.match(turn.systemPrompt, /^- browser \(browser_navigate \+\d+\): .*\(skill: browser\)$/m);
+    assert.match(turn.systemPrompt, /^- docs-slides \(slides_create \+\d+\): .*\(skills: docs, slides\)$/m);
+    assert.match(turn.systemPrompt, /^- terminal \(terminal_open \+\d+\): (?!.*skill)/m);
+    assert.doesNotMatch(turn.systemPrompt, /<name>terminal<\/name>/);
+    // 没装的技能（reading、plugin-creator……）一个都没被指
+    assert.doesNotMatch(turn.systemPrompt, /skill: (reading|plugin-creator|automation)/);
+  });
+
+  it("子会话 + 能力集：只有基础与点名的组，没有插件 / 记忆 / 自动化 / MCP；能力集没带 skill 就不指 skill", async () => {
+    const cwd = await tempDir();
+    const skillsDirs = [await skillsIn(cwd)];
+    const browserOnly = await assemble(command(cwd, { ...ROOT_ALL, skillsDirs, directories: PARENT_CHILD(cwd), capabilities: ["browser"] }));
+    // 常驻的组在前（plan、channel），延迟的在后（browser，在「Not loaded yet」之下）
+    assert.deepEqual(catalogIds(browserOnly.systemPrompt), ["plan", "channel", "browser"]);
+    assert.doesNotMatch(browserOnly.systemPrompt, /slides_create|^- docs-slides|^- terminal/m);
+    assert.doesNotMatch(browserOnly.systemPrompt, /\(skill: browser\)/, "能力集没点名 skill:browser，索引里没有它，目录就不指");
+    const withSkill = await assemble(command(cwd, { ...ROOT_ALL, skillsDirs, directories: PARENT_CHILD(cwd), capabilities: ["browser", "skill:browser"] }));
+    assert.match(withSkill.systemPrompt, /^- browser \(.*\(skill: browser\)$/m);
+    const base = await assemble(command(cwd, { ...ROOT_ALL, skillsDirs, directories: PARENT_CHILD(cwd), capabilities: [] }));
+    assert.deepEqual(catalogIds(base.systemPrompt), ["plan", "channel"]);
+  });
+
+  it("纯聊天没有目录，仍只有身份与回复语言；主智能体的通道一组说法不同于普通根会话", async () => {
+    const cwd = await tempDir();
+    const chat = await assemble(command(cwd, { ...ROOT_ALL, directories: PARENT_CHILD(cwd), capabilities: ["none"] }));
+    assert.doesNotMatch(chat.systemPrompt, /capability-catalog|Tool groups this turn/);
+    const plain = await assemble(command(cwd, { ...ROOT_ALL }));
+    const main = await assemble(command(cwd, { ...ROOT_ALL, mainAgent: true }));
+    assert.match(main.systemPrompt, /^- channel \(delegate \+3\): .*pause/m);
+    assert.match(plain.systemPrompt, /^- channel \(delegate \+2\): (?!.*pause)/m);
+  });
+
+  it("同一件活相邻两轮：目录逐字节相同，整份系统提示相同", async () => {
+    const cwd = await tempDir();
+    const skillsDirs = [await skillsIn(cwd)];
+    const one = await assemble(command(cwd, { ...ROOT_ALL, skillsDirs }));
+    const two = await assemble(command(cwd, { ...ROOT_ALL, skillsDirs }));
+    const grab = (prompt: string) => /<capability-catalog>[\s\S]*<\/capability-catalog>/.exec(prompt)?.[0] ?? "";
+    assert.ok(grab(one.systemPrompt).length > 200);
+    assert.equal(grab(one.systemPrompt), grab(two.systemPrompt));
+    assert.equal(one.systemPrompt, two.systemPrompt);
+    assert.ok(grab(one.systemPrompt).length <= 1800, `${grab(one.systemPrompt).length}`);
   });
 });

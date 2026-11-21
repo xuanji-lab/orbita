@@ -2199,6 +2199,7 @@ export const en = {
       search: "Searched",
       readTask: "Read task",
       workCards: "Checked the work in hand",
+      toolSearch: "Looked up tools",
       terminal: "Terminal",
       document: "Read a document",
       image: "Showed an image",

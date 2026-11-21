@@ -14,6 +14,7 @@ import { describeProtectedData } from "./permission.ts";
 import { describeDirectories } from "./directories-prompt.ts";
 import { CHAT_ONLY_GUIDELINE, describeChannelRole } from "./channel-tools.ts";
 import { hasModule, isChatOnly } from "../shared/capabilities.ts";
+import { formatCapabilityCatalog, type CatalogGroup } from "./capability-catalog.ts";
 import { storeToolsGuideline } from "./store-tools.ts";
 import { gitAttributionGuideline } from "./git-attribution.ts";
 import { REPLY_LANGUAGE_GUIDELINE } from "./prompt-narration.ts";
@@ -37,11 +38,12 @@ const EXPECTED_SECONDS_GUIDELINE =
 /**
  * 自动化工具（automation_create）已注册时的长任务指引：用户 2026-11-05 裁决——这类建议要写进系统提示词，
  * 不能只靠工具 description（模型想不起来就不会去读）。没注册自动化时不讲（讲了模型也做不了，只会干等）。
+ * 自动化工具是延迟工具（要先 tool_search 才发给模型）：这段规矩仍每轮在提示里，所以不会因为工具没加载就想不起来；括号里明说先加载。
  */
 const LONG_TASK_AUTOMATION_GUIDELINE =
   "When a command you are about to run will likely take more than about 10 minutes (a long training run, a large build, a full scan), " +
   "do not wait it out in a foreground bash call. Start it in the background with its output redirected to a log file, " +
-  "create a this_session automation (one-shot around the expected finish time, or a short interval) whose instruction tells you to read that log " +
+  "create a this_session automation (the automation tools are not loaded by default: load them with tool_search first; one-shot around the expected finish time, or a short interval) whose instruction tells you to read that log " +
   "and check whether the job finished (cancel the automation once it has), then end your turn. " +
   "Tell the user in one sentence what is running, where the log is, and that you will come back to it on your own.";
 
@@ -119,6 +121,11 @@ export interface SystemPromptInput {
    * 缺席 = 全带：段与以前逐字节相同。纯聊天只留身份与回复语言两段；别的按模块跳过对应段（store-tools、quote）。
    */
   capabilities?: { list: readonly string[]; missing: readonly string[] };
+  /**
+   * 能力目录的原料（turn-tools.ts 的 selectTurnTools 选出的非空分组）与这一轮技能索引里真有的技能名。
+   * 不给 / 没有分组 = 没有目录这一段（纯聊天在上面已提前返回，本来就不到这里）。
+   */
+  capabilityCatalog?: { groups: readonly CatalogGroup[]; skills: readonly string[] };
 }
 
 export interface PromptSegment {
@@ -146,6 +153,11 @@ export function orbitaSystemSegments(input: SystemPromptInput): PromptSegment[] 
     ...(input.memoryToolsGuideline ? [{ name: "memory-tools", text: MEMORY_TOOLS_GUIDELINE }] : []),
     // 讲 create_skill / add_mcp_server 的：没带 store 模块就没有这两个工具，这段也不讲
     ...(hasModule(list, "store") ? [{ name: "store-tools", text: storeToolsGuideline(input.workspace, input.cwd) }] : []),
+    // 能力目录放在身份 / 通道 / 主智能体 / 记忆 / store 各段之后、通用工具规矩之前：前面各段字节不动；
+    // 目录随这一轮的组集与 MCP 服务集变（同一件活相邻两轮不变），只会让它之后的段重新计缓存
+    ...(input.capabilityCatalog === undefined
+      ? []
+      : [{ name: "capability-catalog", text: formatCapabilityCatalog(input.capabilityCatalog.groups, input.capabilityCatalog.skills) }]),
     { name: "tool-guidelines", text: TOOL_GUIDELINES },
     { name: "expected-seconds", text: EXPECTED_SECONDS_GUIDELINE },
     ...(input.longTaskAutomationGuideline ? [{ name: "long-task-automation", text: LONG_TASK_AUTOMATION_GUIDELINE }] : []),

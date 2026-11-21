@@ -118,6 +118,8 @@ describe("workFacts / currentPlanStep / activityOfTool", () => {
     assert.equal(activityOfTool("bash"), "command");
     assert.equal(activityOfTool("read_pdf"), "read");
     assert.equal(activityOfTool("browser_navigate"), "web");
+    // tool_search 是找工具，不是上网搜索（名字里带 search 不能被归成「在网上查」）
+    assert.equal(activityOfTool("tool_search"), "work");
     assert.equal(activityOfTool("whatever"), "work");
   });
 });

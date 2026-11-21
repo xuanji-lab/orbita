@@ -8,6 +8,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { joinSystemPrompt, orbitaSystemSegments, type SystemPromptInput } from "./system-prompt.ts";
 import type { TurnDirectories } from "../shared/agent-ipc.ts";
+import type { CatalogGroup } from "./capability-catalog.ts";
 
 const dirs = (patch: Partial<TurnDirectories> = {}): TurnDirectories => ({
   attached: [],
@@ -190,5 +191,57 @@ describe("orbitaSystemSegments —— 能力集", () => {
   test("纯聊天：只有身份与回复语言两段", () => {
     const chat = orbitaSystemSegments(input({ role: "child", capabilities: { list: ["none"], missing: [] } }));
     assert.deepEqual(chat.map((segment) => segment.name), ["chat-only", "reply-language"]);
+  });
+});
+
+describe("orbitaSystemSegments —— 能力目录段", () => {
+  const groups = [
+    { id: "browser", when: "read web pages", skills: ["browser"], tools: ["browser_navigate", "browser_click"] },
+    { id: "plan", when: "keep a plan", tools: ["update_plan"] },
+  ];
+  const catalog = { groups, skills: ["browser"] };
+  const names = (patch: Partial<SystemPromptInput>) => orbitaSystemSegments(input(patch)).map((segment) => segment.name);
+
+  test("给了分组才有这一段；位置在 store-tools 之后、tool-guidelines 之前，别的段的字节与顺序不动", () => {
+    const without = orbitaSystemSegments(input({ memoryToolsGuideline: true }));
+    const withCatalog = orbitaSystemSegments(input({ memoryToolsGuideline: true, capabilityCatalog: catalog }));
+    assert.ok(!without.some((segment) => segment.name === "capability-catalog"));
+    const at = withCatalog.findIndex((segment) => segment.name === "capability-catalog");
+    assert.ok(at > withCatalog.findIndex((segment) => segment.name === "memory-tools"));
+    assert.equal(withCatalog[at + 1]?.name, "tool-guidelines");
+    // 去掉目录段之后与没有目录时逐字节相同：前缀没被打断
+    assert.deepEqual(withCatalog.filter((segment) => segment.name !== "capability-catalog"), without);
+    // 目录里是各组的一行，指向的 skill 只写名字
+    const text = withCatalog[at]?.text ?? "";
+    assert.match(text, /^- browser \(browser_navigate \+1\): read web pages \(skill: browser\)$/m);
+    assert.match(text, /^- plan \(update_plan\): keep a plan$/m);
+  });
+
+  test("没有分组（空数组）：段文本为空，joinSystemPrompt 不留空行；纯聊天提前返回，本来就没有目录", () => {
+    const empty = orbitaSystemSegments(input({ capabilityCatalog: { groups: [], skills: [] } })).find((segment) => segment.name === "capability-catalog");
+    assert.equal(empty?.text, "");
+    assert.equal(
+      joinSystemPrompt(orbitaSystemSegments(input({ capabilityCatalog: { groups: [], skills: [] } }))),
+      joinSystemPrompt(orbitaSystemSegments(input())),
+    );
+    assert.ok(!names({ role: "child", capabilities: { list: ["none"], missing: [] }, capabilityCatalog: catalog }).includes("capability-catalog"));
+  });
+
+  test("延迟的组进目录的「Not loaded yet」一段；自动化的长任务规矩仍在提示里，并讲明工具要先 tool_search 加载", () => {
+    const mixed: CatalogGroup[] = [
+      { id: "browser", when: "read web pages", skills: ["browser"], deferred: true, tools: ["browser_navigate", "browser_click"] },
+      { id: "plan", when: "keep a plan", tools: ["update_plan"] },
+    ];
+    const text = orbitaSystemSegments(input({ capabilityCatalog: { groups: mixed, skills: ["browser"] } })).find((segment) => segment.name === "capability-catalog")?.text ?? "";
+    assert.match(text, /^- plan \(update_plan\): keep a plan\nNot loaded yet:.*\n- browser \(browser_navigate \+1\): read web pages \(skill: browser\)\n<\/capability-catalog>$/m);
+    const long = orbitaSystemSegments(input({ longTaskAutomationGuideline: true })).find((segment) => segment.name === "long-task-automation")?.text ?? "";
+    assert.match(long, /load them with tool_search first/);
+    assert.match(long, /this_session automation/);
+  });
+
+  test("同样的输入相邻两次渲染逐字节相同", () => {
+    const a = joinSystemPrompt(orbitaSystemSegments(input({ capabilityCatalog: catalog })));
+    const b = joinSystemPrompt(orbitaSystemSegments(input({ capabilityCatalog: { groups: structuredClone(groups), skills: ["browser"] } })));
+    assert.equal(a, b);
   });
 });

@@ -23,6 +23,7 @@ import { createSlidesTools } from "./slides-tools.ts";
 import { createStoreTools } from "./store-tools.ts";
 import { createTaskTools } from "./task-tools.ts";
 import { createTerminalTools } from "./terminal-tools.ts";
+import type { CatalogGroup } from "./capability-catalog.ts";
 import { hasModule, isChatOnly, MODULE_SUMMARY, namedInstalled, type CapabilityModule } from "../shared/capabilities.ts";
 import { parseQualifiedToolName } from "../shared/mcp.ts";
 
@@ -104,22 +105,47 @@ export interface TurnToolDeps {
   memoryTurn: () => number;
 }
 
-/** 一组工具属于哪个模块：`base` 恒带（能力集只在纯聊天时拿掉它）；`mcp` 按服务名逐个挑 */
-type ToolGroup = { module: CapabilityModule | "base" | "mcp"; tools: ToolDefinition[] };
+/**
+ * 一组工具：`module` 管能力集怎么挑（`base` 恒带，能力集只在纯聊天时拿掉它；`mcp` 按服务名逐个挑）；
+ * `id` / `when` / `skills` 管能力目录（capability-catalog.ts）怎么讲它——base 里的计划 / 插件 / 通道 / 记忆 / 自动化
+ * 各有自己的 id，不能都当成「base」糊在一起。新加一组必须带这三项（类型要求），目录里就会自然多一行。
+ * `skills` 写技能索引里的名字，目录只在这一轮索引里真有它时才指过去。
+ */
+type ToolGroup = {
+  module: CapabilityModule | "base" | "mcp";
+  id: string;
+  when: string;
+  skills?: readonly string[];
+  /**
+   * 整组先不发给模型、由 tool_search 按需加载（durable 的 deferred 工具）。只给低频、体量大的组（浏览器、文档 / 幻灯片、终端、
+   * 自动化、插件、store、MCP）；读写改跑命令、计划 / 目标、通道、记忆、读任务、PDF / Word、给用户看图每轮都用或有每轮生效的规矩，保持常驻。
+   * 是否真有工具被延迟由 selectTurnTools 按能力集挑完后的结果定：被收掉的组不在其中，tool_search 搜不到它们。
+   */
+  deferred?: true;
+  tools: ToolDefinition[];
+};
 
 /** 这一轮的非内建工具，按模块分组，**组序与组内顺序即发给模型的顺序**（与能力集之前逐字节相同）。 */
 function turnToolGroups(deps: TurnToolDeps): ToolGroup[] {
   const { command, flags, broker } = deps;
   return [
-    { module: "mcp", tools: [...deps.mcpTools] },
+    { module: "mcp", id: "mcp", when: "their tools are named mcp__<server>__<tool>", deferred: true, tools: [...deps.mcpTools] },
     // read_pdf 不过 broker：附件副本与工作区 PDF 都在 agent read 边界内，直读（./pdf-tools.ts）
     // cite_pdf 挂在实验功能「PDF 引用」的开关后面（缺席 = 关）
     // read_docx 同样直读（./docx-tools.ts）：word 文档的结构化提取，块号轴分片
-    { module: "pdf-docx", tools: [...createPdfTools(command.cwd, { pdfCitations: command.pdfCitations === true }), ...createDocxTools(command.cwd)] },
+    {
+      module: "pdf-docx",
+      id: "pdf-docx",
+      when: "read PDF and Word files, with figures, tables and comments",
+      skills: ["reading"],
+      tools: [...createPdfTools(command.cwd, { pdfCitations: command.pdfCitations === true }), ...createDocxTools(command.cwd)],
+    },
     // show_image 同样直读展示（./image-tools.ts）：模型「把图给用户看」的显式动作
-    { module: "image", tools: createImageTools(command.cwd) },
+    { module: "image", id: "image", when: "show the user a picture file", tools: createImageTools(command.cwd) },
     {
       module: "base",
+      id: "plan",
+      when: "multi-step work: keep a plan and tick steps off; records the session goal",
       tools: [
         // update_plan（./plan-tools.ts）：agent 写下计划、做一步勾一步；计划就在转录里，不另存
         ...createPlanTools(deps.planOptions),
@@ -127,13 +153,38 @@ function turnToolGroups(deps: TurnToolDeps): ToolGroup[] {
         ...createGoalTools({ branch: deps.branch }),
       ],
     },
-    { module: "store", tools: createStoreTools(broker, command.sessionId) },
+    {
+      module: "store",
+      id: "store",
+      when: "write a skill or connect an MCP server for yourself",
+      skills: ["skill-creator"],
+      deferred: true,
+      tools: createStoreTools(broker, command.sessionId),
+    },
     // 插件工具只给根会话（子会话不装插件）；能力集只给子会话，两者不相交，归在 base 不改变任何一边
-    { module: "base", tools: flags.pluginTools ? createPluginTools(broker, command.sessionId) : [] },
-    { module: "tasks", tools: createTaskTools(broker, command.sessionId) },
-    { module: "browser", tools: createBrowserTools(broker, command.sessionId) },
+    {
+      module: "base",
+      id: "plugins",
+      when: "build, preview, install Orbita plugins; open their boards",
+      skills: ["plugin-creator"],
+      deferred: true,
+      tools: flags.pluginTools ? createPluginTools(broker, command.sessionId) : [],
+    },
+    { module: "tasks", id: "tasks", when: "read another session's transcript", tools: createTaskTools(broker, command.sessionId) },
+    {
+      module: "browser",
+      id: "browser",
+      when: "read or operate web pages, including logged-in ones",
+      skills: ["browser"],
+      deferred: true,
+      tools: createBrowserTools(broker, command.sessionId),
+    },
     {
       module: "docs-slides",
+      id: "docs-slides",
+      when: "write documents and slide decks in the side panel; export Word, PDF, PPT",
+      skills: ["docs", "slides"],
+      deferred: true,
       tools: [
         // 演示文稿（./slides-tools.ts）：slides_create / read / write / edit / insert_image / export。
         // 文件读写在本进程直做（路径限工作区 + 附加目录），只有导出过 broker 找主进程
@@ -160,15 +211,31 @@ function turnToolGroups(deps: TurnToolDeps): ToolGroup[] {
     // 「没有用户在场的来源不配拿可见终端」（它会悄悄扩大权限）
     {
       module: "terminal",
+      id: "terminal",
+      when: "run commands in a tab the user can watch: dev servers, long runs",
+      skills: ["terminal"],
+      deferred: true,
       tools: createTerminalTools(broker, command.sessionId, {
         cwd: command.cwd,
         // 授权目录与开轮目录清单同源：prompt 里说「你可以去这些目录」，这里就认这些
         authorizedDirs: [command.cwd, ...(command.directories?.attached ?? [])],
       }),
     },
-    { module: "base", tools: createChannelTools(broker, command.sessionId, flags.role, flags.mainAgent) },
     {
       module: "base",
+      id: "channel",
+      when:
+        flags.role === "child"
+          ? "send questions and the result to the session that handed you this work"
+          : flags.mainAgent
+            ? "hand larger work to sub-sessions, check on, answer or pause them"
+            : "hand larger work to sub-sessions and follow up on them",
+      tools: createChannelTools(broker, command.sessionId, flags.role, flags.mainAgent),
+    },
+    {
+      module: "base",
+      id: "memory",
+      when: "search and correct what you remember across sessions",
       tools: flags.memoryTools
         ? createMemoryTools(broker, command.sessionId, {
             scope: { workspaceId: command.workspaceId, cwd: command.cwd },
@@ -176,7 +243,14 @@ function turnToolGroups(deps: TurnToolDeps): ToolGroup[] {
           })
         : [],
     },
-    { module: "base", tools: flags.automationTools ? createAutomationTools(broker, command.sessionId) : [] },
+    {
+      module: "base",
+      id: "automation",
+      when: "schedule a task to run later or repeatedly",
+      skills: ["automation"],
+      deferred: true,
+      tools: flags.automationTools ? createAutomationTools(broker, command.sessionId) : [],
+    },
   ];
 }
 
@@ -185,6 +259,13 @@ export interface TurnToolSet {
   tools: ToolDefinition[];
   /** 被能力集收掉的工具：名字 → 给模型看的「它属于什么」（模块说明或 MCP 服务名）。全带时为空 */
   withheld: Map<string, string>;
+  /**
+   * 能力目录的原料：被选中且非空的分组，与 tools 是同一批工具的划分（每个被选中的工具恰好在一组里），
+   * 组序即 tools 里的先后。纯聊天为空；被能力集收掉的组、没注册的组不在里面。
+   */
+  groups: CatalogGroup[];
+  /** tools 里先不发给模型、要 tool_search 加载的那些工具名（整组延迟的组里被选中的全部工具）；没有 = 空集 */
+  deferred: Set<string>;
 }
 
 /** MCP 工具属于哪台服务（名字是 mcp__<服务>__<工具>）；认不出 = null */
@@ -199,22 +280,37 @@ function mcpServerOf(tool: ToolDefinition): string | null {
 export function selectTurnTools(deps: TurnToolDeps): TurnToolSet {
   const capabilities = deps.command.capabilities;
   const groups = turnToolGroups(deps);
-  if (capabilities === undefined) return { tools: groups.flatMap((group) => group.tools), withheld: new Map() };
   const chatOnly = isChatOnly(capabilities);
-  const servers = new Set(namedInstalled(capabilities, "mcp:"));
+  const servers = capabilities === undefined ? new Set<string>() : new Set(namedInstalled(capabilities, "mcp:"));
   const tools: ToolDefinition[] = [];
   const withheld = new Map<string, string>();
+  const catalog: CatalogGroup[] = [];
+  const deferred = new Set<string>();
   for (const group of groups) {
+    const kept: string[] = [];
     for (const tool of group.tools) {
-      const kept =
-        !chatOnly &&
-        (group.module === "base" ||
-          (group.module === "mcp" ? servers.has(mcpServerOf(tool) ?? "") : hasModule(capabilities, group.module)));
-      if (kept) tools.push(tool);
-      else withheld.set(tool.name, withheldWhat(group.module, tool, chatOnly));
+      const keep =
+        capabilities === undefined ||
+        (!chatOnly &&
+          (group.module === "base" ||
+            (group.module === "mcp" ? servers.has(mcpServerOf(tool) ?? "") : hasModule(capabilities, group.module))));
+      if (keep) {
+        tools.push(tool);
+        kept.push(tool.name);
+        if (group.deferred === true) deferred.add(tool.name);
+      } else withheld.set(tool.name, withheldWhat(group.module, tool, chatOnly));
+    }
+    if (kept.length > 0) {
+      catalog.push({
+        id: group.id,
+        when: group.when,
+        ...(group.skills === undefined ? {} : { skills: group.skills }),
+        ...(group.deferred === true ? { deferred: true as const } : {}),
+        tools: kept,
+      });
     }
   }
-  return { tools, withheld };
+  return { tools, withheld, groups: catalog, deferred };
 }
 
 function withheldWhat(module: ToolGroup["module"], tool: ToolDefinition, chatOnly: boolean): string {

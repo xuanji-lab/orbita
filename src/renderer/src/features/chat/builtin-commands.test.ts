@@ -42,6 +42,10 @@ describe("内置命令注册表", () => {
 });
 
 describe("参数摘要", () => {
+  it("tool_search：摘要就是它要找的那句话；缺了就没有摘要", () => {
+    assert.equal(toolCallSummary("tool_search", { query: "open a web page" }), "open a web page");
+    assert.equal(toolCallSummary("tool_search", {}), null);
+  });
   it("slides_create：标题 · 比例", () => {
     assert.equal(toolCallSummary("slides_create", { title: "花园城市新加坡", aspect: "16:9" }), "花园城市新加坡 · 16:9");
     // 没给画幅 = 默认的 16:9，摘要始终是「标题 · 画幅」，不带别的
