@@ -5,7 +5,7 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyDocxExportRequest, type DocxExportSettings } from "./agent-requests.ts";
@@ -63,7 +63,9 @@ const settings = (overrides: Partial<DocxExportSettings> = {}) => async (): Prom
 });
 
 async function roots(): Promise<{ root: string; other: string; cleanup: () => Promise<void> }> {
-  const base = await mkdtemp(join(tmpdir(), "orbita-docx-auth-"));
+  // macOS 的 tmpdir 是 /var/... 符号链接（真实路径 /private/var/...）：被测代码按设计传 realpath 给导出器，
+  // 夹具也得从 realpath 起，否则断言在 macOS 上全红（与实现无关）
+  const base = await realpath(await mkdtemp(join(tmpdir(), "orbita-docx-auth-")));
   const root = join(base, "work");
   const other = join(base, "outside");
   await mkdir(root, { recursive: true });
