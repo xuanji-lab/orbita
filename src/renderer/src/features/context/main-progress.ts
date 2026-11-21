@@ -31,3 +31,26 @@ export const OPEN_EARLIER_EVENT = "orbita:open-earlier-sessions";
 export function openEarlierSessions(workspaceId: string): void {
   window.dispatchEvent(new CustomEvent<string>(OPEN_EARLIER_EVENT, { detail: workspaceId }));
 }
+
+/**
+ * 「等你」先露几件（每件带三行摘要，再多就把目标与计划挤出一屏）；其余折成「还有 N 件等你」，点开全露。
+ * 排序已是最急、最新的在前（sortSubSessionRows），这里只切。
+ */
+export const WAITING_SHOWN = 3;
+
+export function splitWaiting<T>(asks: readonly T[], limit: number = WAITING_SHOWN): { rows: T[]; folded: T[] } {
+  return { rows: asks.slice(0, limit), folded: asks.slice(limit) };
+}
+
+/**
+ * 折叠行在收起 / 展开两态写什么：「等你」展开后不能还写「还有 N 件等你」（那几件已经露出来了），改写「收起」、箭头朝上；
+ * 没给展开态文案的（「做完 N 件 · 停着 M 件」这种组名）两态同一句，箭头朝下表示已展开。
+ */
+export function foldToggle(
+  open: boolean,
+  closedLabel: string,
+  openLabel: string | undefined,
+): { label: string; icon: "chevron-right" | "chevron-down" | "chevron-up" } {
+  if (!open) return { label: closedLabel, icon: "chevron-right" };
+  return openLabel === undefined ? { label: closedLabel, icon: "chevron-down" } : { label: openLabel, icon: "chevron-up" };
+}

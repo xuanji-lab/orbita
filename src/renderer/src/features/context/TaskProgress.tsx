@@ -9,7 +9,7 @@ import { childSessions, type SessionMeta } from "@shared/session";
 import type { ChannelMessage } from "@shared/channel";
 import { StatusPie } from "../../shell/StatusPie";
 import { sessionAgeLabel } from "../../shell/relative-time.ts";
-import { mainAgentEarlier } from "./main-progress.ts";
+import { foldToggle, mainAgentEarlier, splitWaiting } from "./main-progress.ts";
 import { jobBrief } from "./job-brief.ts";
 import { api } from "../../api";
 import type { PlanItem } from "../../../../shared/plan.ts";
@@ -157,9 +157,10 @@ export function TaskProgress(props: {
           waiting
           label={t.taskPanel.waitingOnYou}
           count={String(asks.length)}
-          rows={asks.slice(0, WAITING_SHOWN)}
-          folded={asks.slice(WAITING_SHOWN)}
-          foldLabel={t.taskPanel.moreWaiting(asks.length - WAITING_SHOWN)}
+          rows={splitWaiting(asks).rows}
+          folded={splitWaiting(asks).folded}
+          foldLabel={t.taskPanel.moreWaiting(splitWaiting(asks).folded.length)}
+          foldOpenLabel={t.sidebar.showLess}
           jobs={jobs}
           engine={props.engine}
           onOpen={props.onOpenSession}
@@ -830,6 +831,8 @@ function JobsSection(props: {
   rows: readonly JobRow[];
   folded: readonly JobRow[];
   foldLabel?: string;
+  /** 展开后折叠行改写的那句（「等你」：收起）；缺 = 两态同一句 */
+  foldOpenLabel?: string;
   jobs: JobRows;
   engine: SessionEngine;
   onOpen: (id: string) => void;
@@ -837,6 +840,7 @@ function JobsSection(props: {
   const t = useT();
   const [showFolded, setShowFolded] = useState(false);
   const shown = [...props.rows, ...(showFolded ? props.folded : [])];
+  const fold = foldToggle(showFolded, props.foldLabel ?? "", props.foldOpenLabel);
   const itemsOf = (id: string) => {
     const slot = props.engine.entryOf(id);
     return slot === undefined ? [] : selectTranscript(slot.transcript);
@@ -898,8 +902,8 @@ function JobsSection(props: {
           <span className={props.waiting === true ? "inbox-row-mark" : "inbox-row-mark done"} aria-hidden="true">
             {props.waiting !== true && <Icon name="check" size={12} strokeWidth={2} />}
           </span>
-          <span className="tp-text">{props.foldLabel}</span>
-          <Icon name={showFolded ? "chevron-down" : "chevron-right"} size={12} strokeWidth={1.8} />
+          <span className="tp-text">{fold.label}</span>
+          <Icon name={fold.icon} size={12} strokeWidth={1.8} />
         </button>
       )}
     </section>
@@ -943,12 +947,6 @@ function useJobPlans(rows: readonly JobRow[]): ReadonlyMap<string, PlanItem[] | 
   }, [key]);
   return plans;
 }
-
-/**
- * 「等你」先露几件（每件带三行摘要，再多就把目标与计划挤出一屏）；其余折成「还有 N 件等你」，点开全露。
- * 排序已是最急、最新的在前（sortSubSessionRows）。
- */
-const WAITING_SHOWN = 3;
 
 /** 主智能体在进度面板里需要的、普通会话没有的东西 */
 export interface MainProgress {
