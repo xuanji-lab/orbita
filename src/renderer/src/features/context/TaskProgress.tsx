@@ -10,6 +10,9 @@ import type { ChannelMessage } from "@shared/channel";
 import { StatusPie } from "../../shell/StatusPie";
 import { sessionAgeLabel } from "../../shell/relative-time.ts";
 import { mainAgentEarlier } from "./main-progress.ts";
+import { jobBrief } from "./job-brief.ts";
+import { api } from "../../api";
+import type { PlanItem } from "../../../../shared/plan.ts";
 import { selectTranscript } from "../../../../shared/transcript-state.ts";
 import { useChannelSummaries } from "../chat/useChannelSummaries";
 import { useParentChannels } from "../chat/useChannelMessages";
@@ -832,10 +835,12 @@ function JobsSection(props: {
 }) {
   const t = useT();
   const [showFolded, setShowFolded] = useState(false);
+  const shown = [...props.rows, ...(showFolded ? props.folded : [])];
   const itemsOf = (id: string) => {
     const slot = props.engine.entryOf(id);
     return slot === undefined ? [] : selectTranscript(slot.transcript);
   };
+  const plans = useJobPlans(shown);
   return (
     <section className={props.waiting === true ? "tp-sec tp-waiting" : "tp-sec"} aria-label={props.label}>
       <div className="tp-gh">
@@ -843,22 +848,27 @@ function JobsSection(props: {
         {props.count !== "" && <span className="tp-n">{props.count}</span>}
       </div>
       <ol className="tp-jobs">
-        {[...props.rows, ...(showFolded ? props.folded : [])].map((row) => {
+        {shown.map((row) => {
           const mark = subSessionMark(row.status);
-          const line = subSessionLine(
-            {
-              status: row.status,
-              messages: row.messages,
-              items: itemsOf(row.meta.id),
-              now: props.jobs.now,
-              lastActivityAt: props.engine.lastActivityOf(row.meta.id),
-            },
-            t,
-          );
+          const items = itemsOf(row.meta.id);
+          // 在跑的那件：「上次」先用它此刻在做的那句（转录槽里有才有），没有再用通道回报；其余只认回报与计划
+          const live =
+            row.status === "running"
+              ? subSessionLine({ status: row.status, messages: row.messages, items, now: props.jobs.now, lastActivityAt: props.engine.lastActivityOf(row.meta.id) }, t)
+              : "";
+          // 计划：转录槽里有（正开着 / 在跑）就用槽里最新的，否则用按需读来的那份
+          const plan = planTimeline(items)?.current.items ?? plans.get(row.meta.id) ?? null;
+          const brief = jobBrief({ status: row.status, messages: row.messages, plan }, t.taskPanel.brief);
+          const reached = live !== "" ? live : brief.reached;
           const name = row.meta.title === "" ? t.subSessions.untitled : displaySubSessionTitle(row.meta.title);
           return (
             <li key={row.meta.id}>
-              <button type="button" className="option-row tp-job" title={t.taskPanel.openJob(name)} onClick={() => props.onOpen(row.meta.id)}>
+              <button
+                type="button"
+                className="option-row tp-job"
+                title={[name, ...(brief.why === null ? [] : [brief.why]), t.taskPanel.openJob(name)].join("\n")}
+                onClick={() => props.onOpen(row.meta.id)}
+              >
                 <span className={`inbox-row-mark${mark === null ? "" : ` ${mark}`}`} aria-hidden="true">
                   {(mark === "work" || (mark === "ask" && props.waiting === true)) && <span className="inbox-row-dot" />}
                 </span>
@@ -867,7 +877,15 @@ function JobsSection(props: {
                     <span className="tp-text tp-job-name">{name}</span>
                     <span className="tp-tail row-trailing">{jobElapsed(props.jobs.now - row.meta.createdAt, t.taskPanel.elapsed)}</span>
                   </span>
-                  {line !== "" && <span className={mark === "ask" ? "tp-job-line ask" : "tp-job-line"}>{line}</span>}
+                  {reached === null && brief.next === null ? (
+                    <span className="tp-brief missing">{t.taskPanel.briefMissing}</span>
+                  ) : (
+                    <>
+                      <BriefLine label={t.taskPanel.briefReached} text={reached ?? t.taskPanel.briefMissing} missing={reached === null} />
+                      {brief.waiting !== null && <BriefLine label={t.taskPanel.briefWaiting} text={brief.waiting} you={brief.waitingOnYou} />}
+                      {brief.next !== null && <BriefLine label={t.taskPanel.briefNext} text={brief.next} />}
+                    </>
+                  )}
                 </span>
               </button>
             </li>
@@ -885,6 +903,44 @@ function JobsSection(props: {
       )}
     </section>
   );
+}
+
+/** 摘要的一行：灰色短标签 + 一句（一行放不下截断，全文在悬停里）；等你的那句用正文色 */
+function BriefLine(props: { label: string; text: string; you?: boolean; missing?: boolean }) {
+  return (
+    <span className={props.you === true ? "tp-brief you" : props.missing === true ? "tp-brief missing" : "tp-brief"} title={props.text}>
+      <span className="tp-brief-k">{props.label}</span>
+      <span className="tp-brief-v">{props.text}</span>
+    </span>
+  );
+}
+
+/**
+ * 摘要里「计划」那一项的来源：子会话自己写的 update_plan。转录槽里没有的（没打开过、没在跑）按需读一次它的会话尾窗，
+ * 只读露出来的那几行；通道有新消息（lastAt 变了）再读。读不到就当没写计划（摘要照样从通道回报里出）。
+ */
+function useJobPlans(rows: readonly JobRow[]): ReadonlyMap<string, PlanItem[] | null> {
+  const key = rows.map((row) => `${row.meta.id}@${row.lastAt}`).join(",");
+  const [plans, setPlans] = useState<ReadonlyMap<string, PlanItem[] | null>>(new Map());
+  useEffect(() => {
+    if (key === "") return;
+    let cancelled = false;
+    for (const part of key.split(",")) {
+      const id = part.slice(0, part.lastIndexOf("@"));
+      void api.session
+        .load(id)
+        .then((loaded) => {
+          if (cancelled || loaded === null) return;
+          const items = planTimeline(loaded.transcript)?.current.items ?? null;
+          setPlans((current) => new Map(current).set(id, items));
+        })
+        .catch((cause: unknown) => console.warn("[progress] 读一件活的计划失败", id, cause));
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [key]);
+  return plans;
 }
 
 /** 主智能体在进度面板里需要的、普通会话没有的东西 */

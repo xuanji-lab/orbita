@@ -680,3 +680,34 @@ button.tp-editlog-src:hover {
 .tp-job-line.ask {
   color: var(--color-text-primary);
 }
+
+/* 一件活的自含摘要（2026-11-21）：上次 / 在等 / 下一步，每项一行——灰色短标签 + 一句（放不下截断，全文在悬停里）。
+   不加卡片、不加线：靠标签列对齐读成一张小表。等你的那句用正文色，信息不足的灰字 */
+.tp-brief {
+  display: grid;
+  grid-template-columns: 4.5em minmax(0, 1fr);
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+.tp-brief-k {
+  color: var(--color-text-tertiary);
+}
+.tp-brief-v {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tp-brief.you .tp-brief-v {
+  color: var(--color-text-primary);
+}
+.tp-brief.missing,
+.tp-brief.missing .tp-brief-v {
+  color: var(--color-text-tertiary);
+}
+span.tp-brief.missing:not(:has(.tp-brief-k)) {
+  display: block;
+}
