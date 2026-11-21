@@ -179,8 +179,8 @@ opaque colours one step apart, not glass over the desktop (2026-11-07, direction
 one job: the accent is blue `#1d4ed8` on light and yellow `#d6c245` on dark, and it means the single primary
 action (the send button, "New task", "Start Agent") and a checked checkbox
 (native `accent-color`, settled 2026-09-24 on the migration page, which lists many) — nothing else; **selection
-is neutral** (below), the selected mode no longer reads blue or yellow; amber
-`#b7791f` means running; info blue `#2563eb` marks the thinking glyph; red `#b42318` is failure;
+is neutral** (below), the selected mode no longer reads blue or yellow; info blue `#2563eb` means running and
+marks the thinking glyph; amber `#b7791f` means waiting for your reply; red `#b42318` is failure;
 green `#1a7f37` (dark `#56d364`) is success — git additions, passed validation, editor badges.
 **A filled status surface carries its own foreground token** (`--color-danger-fg`, `--color-info-fg`,
 `--color-accent-fg`): the plain `--color-danger` / `--color-info` values are tuned to read as *text*
@@ -510,6 +510,8 @@ drops `**` markers (`shell/inline-marks.ts`).
 pick a **role**, never a pixel value — bare `px` / `rem` / numeric `font-size` in
 `src/renderer/src` fails `design-tokens.test.ts`. Steps are 2px apart on purpose: a 1px difference
 reads as misalignment, not hierarchy. Separate levels with **weight and colour first**, size last.
+`compact` is reserved for context compaction; a density variant is called `dense`, never `compact`, so a spacing
+conversation cannot be mistaken for shortening the conversation history.
 
 | Token | Formula | Default | Roles |
 | --- | --- | ---: | --- |
@@ -687,7 +689,7 @@ control starts from one of them, and a deviation is a local override written rig
 | `.glass-float` | `src/renderer/src/styles.css` | Modifier for floating glass (queue strip, approval bar, closing card, menu): lifts the shadow to `--shadow-popover`. The menu also takes `.menu-panel`, a solid `--color-bg-panel`. |
 | `.quiet-control` | `styles.css` | Transparent, secondary ink; hover lays `--option-hover-bg` and lifts ink to primary; `aria-pressed` / `aria-selected` take the mode wash (`--color-mode-active-bg` / `-fg`); disabled is solid tertiary. Chip, IconButton, RailButton, ModeChip. |
 | `.btn-accent` | `styles.css` | The primary action: accent fill, `--color-accent-fg`, hover `--color-accent-strong`; disabled drops to solid `--color-bg-muted` + tertiary (the glass rule, no opacity) and keeps its glyph — the composer's send key shows the stop square only while a turn can actually be stopped. |
-| `.option-row` | `styles.css` | Selection rows (sidebar sessions, settings tabs, menu items): hover `--option-hover-bg`; selected `--option-active-bg` + semibold and wins over hover; disabled solid tertiary. |
+| `.option-row` | `styles.css` | Selection rows (sidebar sessions, settings tabs, menu items): hover `--option-hover-bg`; selected `--option-active-bg` with regular weight and wins over hover; disabled solid tertiary. |
 | `.text-field` | `styles.css` | Inputs and textareas: panel fill, hairline border, `--radius-md`; focus is an accent border + `--focus-ring`. |
 | `.seg-control` | `styles.css` | Segmented control (`<Segmented>`): inset hairline frame, 2 + 24 + 2 = 28 (`--control-height-sm` around `-xs` segments); the pressed segment takes the selected-row look (`--option-active-bg`, primary ink, semibold), not the mode wash. Settings, the providers card size and access picker, migration's copy / link. |
 | `.switch-control` | `styles.css` | On / off switch (`<Switch role="switch">`): 24-high hit box, 28 × 16 track; off is a hairline slot with a tertiary knob, on is accent with an `--color-accent-fg` knob (the checkbox's accent meaning: chosen). |

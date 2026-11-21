@@ -778,8 +778,8 @@
  * |---|---|---|---|
  * | 未选中 | 透明 | primary | regular |
  * | hover / cursor | `--option-hover-bg` | primary | regular |
- * | 选中 | `--option-active-bg` | primary | **semibold** |
- * | 选中 + hover | 同「选中」 | primary | semibold |
+ * | 选中 | `--option-active-bg` | primary | regular（选中不改字重，避免文字变宽、列表抖动） |
+ * | 选中 + hover | 同「选中」 | primary | regular |
  * | 禁用 | 透明 | **tertiary（实色）** | regular |
  *
  * 两条取舍：
@@ -827,7 +827,7 @@
 .option-row[aria-selected="true"],
 .option-row[data-active="true"] {
   background: var(--option-active-bg);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-regular);
 }
 
 .option-row:disabled,
@@ -840,9 +840,8 @@
 /*
  * 模型卡片左栏的当前格：图标条当前项的配方（readme：`--color-mode-active-bg` / `-fg`
  * 「用于模式按钮与图标条当前项」）再加一圈 1px 光圈，同 ThemeCard 选中的细环。
- * 光圈的理由：左栏只有图标，`.option-row` 的选中靠「淡底 + semibold」，而 semibold
- * 对图标无效，只剩一层淡底——玄上 .08 的黄几乎看不出（2026-10-25 用户：「看不清是什么
- * provider - 没有光圈」）。inset：左栏 overflow 会裁掉外扩的环。
+ * 光圈的理由：左栏只有图标，`.option-row` 的选中靠淡底与主墨色，对纯图标来说一层淡底不够——玄上 .08 的黄几乎看不出
+ * （2026-10-25 用户：「看不清是什么 provider - 没有光圈」）。inset：左栏 overflow 会裁掉外扩的环。
  * 特异度 (0,3,0) 压过 `.option-row:hover`，选中格悬停时环不掉。
  */
 .option-row.model-rail-cell[aria-selected="true"] {
