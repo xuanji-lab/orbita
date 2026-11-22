@@ -217,14 +217,17 @@ export function outsideFailure(toolName: string, errorText: string, words: Outsi
 
 /** 一份产物：结尾那一处收的一行 */
 export interface TurnOutput {
-  /** 演示文稿 / 文档在右栏打开；网页在内置浏览器打开；导出的文件在文件面板预览 */
-  kind: "slides" | "doc" | "file" | "web";
+  /**
+   * 按**文件类型**分（2026-11-22 用户：「这个导出的文件是什么意思」）：演示文稿（含导出的 PowerPoint）、文档（含导出的 Word / Markdown）、
+   * PDF、网页。不再有「导出的文件」这一类。`format` 非 null = 这份是导出来的文件：预览在文件面板里开，不进演示文稿 / 文档编辑面板。
+   */
+  kind: "slides" | "doc" | "pdf" | "web";
   /** 绝对路径（去重键） */
   path: string;
   title: string;
   /** 演示文稿的页数（这一轮最后一次写 / 改之后的；量不到 null） */
   pages: number | null;
-  /** 导出的格式（PDF、Word…）；不是导出的 null */
+  /** 导出的格式名（PDF、PowerPoint、Word…，行尾类型字）；不是导出的 null */
   format: string | null;
   /** 导出文件的说明（「PDF · 3 页 · 171 KB」，工具结果卡上带的）；没有 null */
   detail: string | null;
@@ -236,15 +239,42 @@ const DECK_WRITERS = new Set(["slides_write", "slides_edit", "slides_insert_imag
 /** PNG 是 agent 自己看排版用的（一页一张）：留在过程里当缩略图，不算交给用户的产物 */
 const SELF_CHECK_EXPORT = new Set(["png"]);
 
+/** 导出格式的类型字（中文界面的英文词白名单里没有 PPTX，写 PowerPoint） */
 const FORMAT_NAME: Readonly<Record<string, string>> = {
   pdf: "PDF",
   html: "HTML",
-  pptx: "PPTX",
-  "pptx-basic": "PPTX",
+  pptx: "PowerPoint",
+  "pptx-basic": "PowerPoint",
   docx: "Word",
   md: "Markdown",
   "md-plain": "Markdown",
 };
+
+/** 导出的格式 → 归哪一类：PDF 自成一类，PowerPoint 并进演示文稿，Word / Markdown 并进文档，HTML 归网页 */
+const KIND_OF_FORMAT: Readonly<Record<string, TurnOutput["kind"]>> = {
+  pdf: "pdf",
+  pptx: "slides",
+  "pptx-basic": "slides",
+  docx: "doc",
+  md: "doc",
+  "md-plain": "doc",
+  html: "web",
+};
+
+function exportKind(format: string | null, path: string): { kind: TurnOutput["kind"]; format: string | null } {
+  if (format !== null) return { kind: KIND_OF_FORMAT[format] ?? "doc", format: FORMAT_NAME[format] ?? format };
+  // 入参没写格式：按扩展名认
+  const ext = /\.([a-z0-9]+)$/i.exec(path)?.[1]?.toLowerCase() ?? "";
+  const known = ext === "pptx" ? "pptx" : ext;
+  return { kind: KIND_OF_FORMAT[known] ?? "doc", format: FORMAT_NAME[known] ?? (ext === "" ? null : ext.toUpperCase()) };
+}
+
+/** 导出文件的说明：类型字 + 工具结果卡上带的其余部分（「3 页 · 171 KB」）；卡上第一段是工具自己的格式名（PPTX），换成类型字 */
+function exportDetail(format: string | null, subtitle: string | undefined): string | null {
+  if (format === null) return subtitle ?? null;
+  const rest = subtitle === undefined ? [] : subtitle.split(" · ").slice(1);
+  return [format, ...rest].join(" · ");
+}
 
 function inputPath(call: ToolCallUnit): string | null {
   const value = (call.input as Record<string, unknown> | null)?.["path"];
@@ -307,7 +337,8 @@ export function turnOutputs(calls: readonly ToolCallUnit[], results: ToolResultI
     if ((call.toolName === "slides_export" || call.toolName === "doc_export") && card !== null) {
       const format = str((call.input as Record<string, unknown> | null)?.["format"]);
       if (format !== null && SELF_CHECK_EXPORT.has(format)) continue;
-      put({ kind: "file", path: card.path, title: card.title, pages: null, format: format === null ? null : (FORMAT_NAME[format] ?? format), detail: card.subtitle ?? null });
+      const made = exportKind(format, card.path);
+      put({ kind: made.kind, path: card.path, title: card.title, pages: null, format: made.format, detail: exportDetail(made.format, card.subtitle) });
     }
   }
   return order.map((path) => byPath.get(path)).filter((output): output is TurnOutput => output !== undefined);
@@ -337,7 +368,7 @@ export function allOutputs(calls: readonly ToolCallUnit[], results: ToolResultIn
   const made = turnOutputs(calls, results);
   const seen = new Set(made.map((output) => norm(output.path)));
   const more = [...fileOutputs("doc", docs), ...fileOutputs("web", web)].filter((output) => !seen.has(norm(output.path)));
-  const order = (output: TurnOutput) => (output.kind === "slides" || output.kind === "doc" ? 0 : output.kind === "file" ? 1 : 2);
+  const order = (output: TurnOutput) => (output.kind === "slides" || output.kind === "doc" ? 0 : output.kind === "pdf" ? 1 : 2);
   return [...made, ...more].sort((a, b) => order(a) - order(b));
 }
 
@@ -433,9 +464,10 @@ export function processHeadline(
   // 改计划、定目标也算一步：展开后它们各占一行，段里写的步数也数它们，折叠行要对得上
   const calls = processCalls(steps);
   const outputs = turnOutputs(calls, results);
-  const decks = outputs.filter((output) => output.kind === "slides").length;
-  const docs = outputs.filter((output) => output.kind === "doc").length;
-  const exported = outputs.filter((output) => output.kind === "file").length;
+  // 导出来的（format 非 null）单算「导出 N 个」，不再混进做出的演示文稿 / 打开的文档里
+  const decks = outputs.filter((output) => output.kind === "slides" && output.format === null).length;
+  const docs = outputs.filter((output) => output.kind === "doc" && output.format === null).length;
+  const exported = outputs.filter((output) => output.format !== null).length;
   const delegated = calls.filter((call) => call.toolName === "delegate").length;
   const parts: string[] = [];
   let accounted = 0;
@@ -496,12 +528,12 @@ export function processRows(steps: readonly ProcessStep[]): ProcessRow[] {
 }
 
 /**
- * 结尾那一摞太长时按类收（2026-11-22 压力测试：一轮写了 12 个网页、4 份文档，结尾排了 20 张卡）：同一类（文档 / 导出的文件 / 网页）
+ * 结尾那一摞太长时按类收（2026-11-22 压力测试：一轮写了 12 个网页、4 份文档，结尾排了 20 张卡）：同一类（文档 / PDF / 网页）
  * 有 GROUP_MIN 份以上，收成一张「12 个网页」的卡，点开逐个列；演示文稿一份一张不收（通常只有一两份，又是这一轮的主产物）。
  */
 export const GROUP_MIN = 3;
 
-export type OutputSlot = { kind: "one"; output: TurnOutput } | { kind: "group"; type: "doc" | "file" | "web"; outputs: TurnOutput[] };
+export type OutputSlot = { kind: "one"; output: TurnOutput } | { kind: "group"; type: "doc" | "pdf" | "web"; outputs: TurnOutput[] };
 
 export function groupOutputs(outputs: readonly TurnOutput[]): OutputSlot[] {
   const count = new Map<string, number>();

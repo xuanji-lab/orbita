@@ -61,7 +61,7 @@ describe("turnOutputs：一轮交给用户的东西，一份一行", () => {
       done("f", "slides_export", { details: { card: { kind: "export", path: "/w/a.pdf", title: "a.pdf", subtitle: "PDF · 3 页" } } }),
       done("x", "doc_export", { status: "error", isError: true, details: card("export", "/w/a.docx", "a.docx") } as Partial<ToolTranscriptItem>),
     ]);
-    assert.deepEqual(turnOutputs(calls, results), [{ kind: "file", path: "/w/a.pdf", title: "a.pdf", pages: null, format: "PDF", detail: "PDF · 3 页" }]);
+    assert.deepEqual(turnOutputs(calls, results), [{ kind: "pdf", path: "/w/a.pdf", title: "a.pdf", pages: null, format: "PDF", detail: "PDF · 3 页" }]);
   });
 
   test("「the deck now has N slide(s)」两种写法都认", () => {
@@ -144,14 +144,14 @@ describe("allOutputs：结尾这一摞产物", () => {
     const outputs = allOutputs(calls, results, ["/w/周报.md", "/w/a.md"], ["/w/index.html"]);
     assert.deepEqual(
       outputs.map((output) => `${output.kind}:${output.title}`),
-      ["doc:周报", "doc:a.md", "file:周报.pdf", "web:index.html"],
+      ["doc:周报", "doc:a.md", "pdf:周报.pdf", "web:index.html"],
     );
   });
 });
 
 describe("groupOutputs：同一类三份以上收成一张", () => {
   test("12 个网页收成一组；演示文稿不收；两份文档不收", () => {
-    const o = (kind: "slides" | "doc" | "web", title: string) => ({ kind, path: `/w/${title}`, title, pages: null, format: null, detail: null });
+    const o = (kind: "slides" | "doc" | "pdf" | "web", title: string) => ({ kind, path: `/w/${title}`, title, pages: null, format: null, detail: null });
     const outputs = [o("slides", "演示"), o("doc", "a.md"), o("doc", "b.md"), ...Array.from({ length: 12 }, (_, i) => o("web", `p${i}.html`))];
     const slots = groupOutputs(outputs);
     assert.deepEqual(
@@ -186,5 +186,49 @@ describe("stepVerb：装插件 / 放插件看板有自己的动作词", () => {
     assert.equal(stepVerb("show_plugin_board", { plugin: "p" }, zh.chat.stepVerb).verb, "放插件看板");
     assert.equal(stepVerb("install_plugin", { path: "/p" }, zh.chat.stepVerb).verb, "装插件");
     assert.equal(stepVerb("show_plugin_board", { plugin: "p" }, en.chat.stepVerb).raw, null);
+  });
+});
+
+describe("导出的文件按文件类型分（不再有「导出的文件」一类）", () => {
+  const exportResult = (id: string, tool: string, path: string, subtitle: string) =>
+    done(id, tool, { details: { card: { kind: "export", path, title: path.split("/").pop() ?? path, subtitle } } });
+  const calls = [
+    call("a", "slides_export", { format: "pdf" }),
+    call("b", "slides_export", { format: "pptx" }),
+    call("c", "doc_export", { format: "docx" }),
+    call("d", "doc_export", { format: "md" }),
+  ];
+  const results: ToolResultIndex = new Map([
+    exportResult("a", "slides_export", "/w/d.pdf", "PDF · 3 页 · 261 KB"),
+    exportResult("b", "slides_export", "/w/d.pptx", "PPTX · 3 页 · 80 KB"),
+    exportResult("c", "doc_export", "/w/r.docx", "Word · 10.0 KB"),
+    exportResult("d", "doc_export", "/w/r.md", "Markdown · 2 KB"),
+  ]);
+  test("PDF 自成一类；PPTX 并进演示文稿（类型字 PowerPoint）；Word / Markdown 并进文档", () => {
+    const out = turnOutputs(calls, results);
+    assert.deepEqual(
+      out.map((o) => [o.kind, o.format, o.detail]),
+      [
+        ["pdf", "PDF", "PDF · 3 页 · 261 KB"],
+        ["slides", "PowerPoint", "PowerPoint · 3 页 · 80 KB"],
+        ["doc", "Word", "Word · 10.0 KB"],
+        ["doc", "Markdown", "Markdown · 2 KB"],
+      ],
+    );
+  });
+  test("入参没写格式时按扩展名认", () => {
+    const out = turnOutputs([call("x", "doc_export", {})], new Map([exportResult("x", "doc_export", "/w/z.docx", "Word · 1 KB")]));
+    assert.deepEqual(out.map((o) => [o.kind, o.format]), [["doc", "Word"]]);
+  });
+  test("三份 PDF 收成「3 个 PDF」；导出的 PowerPoint 与演示文稿一样一份一张不收", () => {
+    const pdf = (n: number) => ({ kind: "pdf" as const, path: `/w/${n}.pdf`, title: `${n}.pdf`, pages: null, format: "PDF", detail: null });
+    const slots = groupOutputs([pdf(1), pdf(2), pdf(3), { kind: "slides", path: "/w/a.pptx", title: "a.pptx", pages: null, format: "PowerPoint", detail: null }]);
+    assert.deepEqual(slots.map((s) => (s.kind === "one" ? s.output.title : `${s.type}×${s.outputs.length}`)), ["pdf×3", "a.pptx"]);
+    assert.equal(zh.chat.outputGroup("pdf", 3), "3 个 PDF");
+    assert.ok(!JSON.stringify(zh.chat).includes("导出的文件"));
+  });
+  test("折叠行一句话：导出来的单算「导出 N 个文件」，不算进做出的演示文稿 / 打开的文档", () => {
+    const text = processHeadline(calls, results, 0, zh.chat.headline);
+    assert.equal(text, "导出 4 个文件");
   });
 });

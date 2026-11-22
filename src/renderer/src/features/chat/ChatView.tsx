@@ -5228,7 +5228,7 @@ function OutputStack(props: { outputs: readonly TurnOutput[]; sessionId: string 
   );
 }
 
-function OutputGroupCard(props: { type: "doc" | "file" | "web"; outputs: readonly TurnOutput[]; sessionId: string }) {
+function OutputGroupCard(props: { type: "doc" | "pdf" | "web"; outputs: readonly TurnOutput[]; sessionId: string }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const first = props.outputs[0];
@@ -5339,17 +5339,18 @@ function TurnOutputCard(props: { output: TurnOutput; sessionId: string }) {
   const [refusal, setRefusal] = useState<string | null>(null);
   // 彩色文件图标，与文件面板同一个（FileTypeIcon）：同一个文件在哪儿都长一个样，不另垫灰底
   const name = output.path.split(/[\\/]/).pop() ?? output.path;
+  // 行尾类型字：导出来的（format 非 null）写「PowerPoint · 3 页 · 80 KB」「Word · 10 KB」「PDF · …」；自己的写演示文稿 / 文档 / 网页
   const sub =
-    output.kind === "slides"
-      ? t.chat.outputDeck(output.pages)
-      : output.kind === "doc"
-        ? t.chat.outputDoc
+    output.format !== null
+      ? (output.detail ?? output.format)
+      : output.kind === "slides"
+        ? t.chat.outputDeck(output.pages)
         : output.kind === "web"
           ? t.chat.outputWeb
-          : (output.detail ?? t.chat.outputFile(output.format));
+          : t.chat.outputDoc;
   const preview = () => {
     setRefusal(null);
-    if (output.kind === "web") {
+    if (output.kind === "web" && output.format === null) {
       // 网页在内置浏览器里预览（主进程按这条会话的文件账白名单放行）
       void api.session.openArtifactInBrowser(props.sessionId, output.path).then(
         (result) => {
@@ -5359,7 +5360,8 @@ function TurnOutputCard(props: { output: TurnOutput; sessionId: string }) {
       );
       return;
     }
-    requestOpenPanel({ kind: output.kind === "slides" ? "slides" : "files", path: output.path, force: true });
+    // 演示文稿在演示文稿面板里开；导出来的 PowerPoint / Word / PDF 不是可编辑的原件，在文件面板里预览
+    requestOpenPanel({ kind: output.kind === "slides" && output.format === null ? "slides" : "files", path: output.path, force: true });
   };
   const items: MenuItem[] = [
     { id: "open", label: t.chat.outputOpenDefault, icon: "external-link", onSelect: () => void (scope !== null && openChatFile(scope, output.path)) },

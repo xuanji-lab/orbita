@@ -2434,12 +2434,11 @@ export const en = {
     outputDeck: (pages: number | null) => (pages === null ? "Deck" : `Deck · ${plural(pages, "slide")}`),
     outputDoc: "Document",
     outputWeb: "Web page",
-    outputFile: (format: string | null) => format ?? "File",
     outputPreview: "Preview",
     // 本轮网页文件变动超过上限（像是批量操作）：不逐个列，结尾那摞里一张「N web pages · 批量」卡，没有预览按钮
     outputBatch: "Generated in bulk",
-    outputGroup: (type: "doc" | "file" | "web", n: number) =>
-      type === "doc" ? `${n} documents` : type === "web" ? `${n} web pages` : `${n} exported files`,
+    outputGroup: (type: "doc" | "pdf" | "web", n: number) =>
+      type === "doc" ? `${n} documents` : type === "web" ? `${n} web pages` : `${n} PDFs`,
     childReportKicker: "Sub-session",
     childReportDone: "Handed back",
     childReportOpen: "Open its session",
