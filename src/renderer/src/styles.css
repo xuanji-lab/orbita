@@ -68,37 +68,6 @@
   background: var(--color-bg-panel);
 }
 
-/*
- * SessionCard 不属于「浮层」——静止态就是 --shadow-card，hover 才抬到
- * --shadow-popover（设计系统 *Hover, press, disabled*：卡片 hover 只抬阴影，不挪位置、
- * 不变色），所以不用 `.glass-float`，单独一条 hover 规则。
- */
-.session-card:hover {
-  box-shadow: var(--shadow-popover);
-}
-
-/* 卡上那一句「此刻在干什么」：sm 次级灰，恒占两行（一排卡才齐得平），多了截断。
-   行内的 `代码` 等宽画（InlineMarks） */
-.session-card-line {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
-  min-height: 2lh;
-  font-size: var(--font-size-sm);
-  line-height: var(--line-height-ui);
-  color: var(--color-text-secondary);
-  overflow-wrap: anywhere;
-}
-/* 一行元信息：在哪 · 状态 · 多久前——纯文字、三级灰，不用等宽 */
-.session-card-meta {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: var(--font-size-sm);
-  line-height: var(--line-height-ui);
-  color: var(--color-text-tertiary);
-}
 /* 行内代码（章节标题、首页卡那一句里的 `代码`）：等宽，跟着所在那一行的字号走 */
 .inline-mark-code {
   font-family: var(--font-family-business);
@@ -5764,7 +5733,7 @@ mark.intent-mark {
  * |---|---|---|---|
  * | 索引边栏 | 给一列内容配一条索引：首页是状态组名（对话里是时间、设置里是节名，后续 commit） | 内容列左侧 `--gutter`；索引右对齐到子午线左侧 18px；列窄于 760px 时 gutter 收成 32，索引改落在组上方一行 | 文件预览的行号列（左窄栏放索引、右侧放内容） |
  * | 子午线 | 把「谁在等我 / 在跑 / 没状态」钉在一根轴上 | 1px 竖线，`--gutter - 20px` 处；状态饼圆心压线，没状态的是线上一个 5px 小点 | 无（新） |
- * | 记录行 | 首页的会话列表 | 32px 行：名字（13em）｜一句此刻在干什么（次级墨、单行省略）｜行尾时间 | 侧栏会话行 + 原会话卡的 `.session-card-line` |
+ * | 记录行 | 首页的会话列表 | 32px 行：名字（13em）｜一句此刻在干什么（次级墨、单行省略）｜行尾时间 | 侧栏会话行 |
  *
  * 只对非纸面主题生效（首页的 DOM 也只在那时渲染记录；纸面两档仍是三张卡，见 ChatView）。
  */
@@ -5888,11 +5857,6 @@ mark.intent-mark {
     color: var(--color-text-tertiary);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
-  }
-  .log-skel {
-    height: 10px;
-    border-radius: var(--radius-xs);
-    background: var(--color-bg-hover);
   }
 }
 
@@ -6086,7 +6050,6 @@ mark.intent-mark {
 html {
   caret-color: var(--color-accent);
 }
-.session-card-meta,
 .seg-control,
 .file-preview-meta,
 .row-trailing,
@@ -6097,7 +6060,6 @@ html {
 }
 .chat-md p,
 .chat-md li,
-.session-card-line,
 .set-row-desc,
 .log-line {
   text-wrap: pretty;
