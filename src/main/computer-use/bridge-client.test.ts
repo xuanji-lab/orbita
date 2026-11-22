@@ -1351,6 +1351,61 @@ describe("UIA 车道（uia-list / uia-act）", () => {
     }
   });
 
+  test("uia-act setValue 的读回：delivery + evidence 原样过桥，形状不对就当没发", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const good = { kind: "value", detail: '期望 "hi"，读回 "hi"（ValuePattern.Current.Value）' };
+    const bridge = startFakeBridge(dir, () => ({
+      resp: {
+        ok: true,
+        hwnd: 9,
+        action: "setValue",
+        usedPattern: "value",
+        name: "搜索",
+        controlType: "edit",
+        autoSetFocus: true,
+        elapsedMs: 8,
+        delivery: "confirmed",
+        readback: "value",
+        evidence: good,
+      },
+    }));
+    try {
+      const reply = await fetchGuestUiaAct(dir, { hwnd: 9, action: "setValue", name: "搜索", value: "hi" });
+      assert.equal(reply.delivery, "confirmed");
+      assert.deepEqual(reply.evidence, good);
+      // readback 只是排查用的旁注，不进契约（宿主不读它）
+      assert.equal("readback" in reply, false);
+    } finally {
+      bridge.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+
+    // 坏形状的证据 / 不认识的老值：当作「桥没说」，不抛错、也不编一个档位出来
+    const dir2 = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
+    const bridge2 = startFakeBridge(dir2, () => ({
+      resp: {
+        ok: true,
+        hwnd: 9,
+        action: "setValue",
+        usedPattern: "value",
+        name: "搜索",
+        controlType: "edit",
+        autoSetFocus: true,
+        elapsedMs: 8,
+        delivery: "possibly",
+        evidence: { kind: "bogus", detail: "x" },
+      },
+    }));
+    try {
+      const reply = await fetchGuestUiaAct(dir2, { hwnd: 9, action: "setValue", name: "搜索", value: "hi" });
+      assert.equal("delivery" in reply, false);
+      assert.equal("evidence" in reply, false);
+    } finally {
+      bridge2.stop();
+      await rm(dir2, { recursive: true, force: true });
+    }
+  });
+
   test("uia-act 回执缺字段 / 动作名不认识：报缺字段，不把 undefined 当动作", async () => {
     const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-client-"));
     const bridge = startFakeBridge(dir, () => ({ resp: { ok: true, hwnd: 1, action: "click" } }));

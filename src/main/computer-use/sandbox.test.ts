@@ -17,6 +17,7 @@ import {
   COMPUTER_USE_GUEST_APP_EXE,
   renderWsbXml,
   SandboxController,
+  WSB_CAPABILITIES,
   type SandboxDeps,
   type SandboxProcess,
 } from "./sandbox.ts";
@@ -1284,10 +1285,71 @@ describe("UIA 车道", () => {
         respond: (req) => (req.command === "ping" ? { resp: { ok: true } } : { resp: { ok: false, error: human } }),
       });
       await startPromise;
+      // 桥回了 ok:false = 确定的拒绝：没带 delivery 也要补 refused（老桥 / 自带拒绝），
+      // 否则模型会把「动作没发生」当成「说不定成了」，先白白截图一轮
       assert.deepEqual(await harness.controller.uiaAct({ hwnd: 1, ref: "g1:r3", perform: "invoke" }), {
         ok: false,
         error: human,
+        delivery: "refused",
       });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("uia-act 拒绝：桥自己给了档位就原样带出（不覆盖）", async () => {
+    const harness = await makeHarness();
+    try {
+      const startPromise = harness.controller.start();
+      harness.announceBridge({
+        respond: (req) =>
+          req.command === "ping"
+            ? { resp: { ok: true } }
+            : { resp: { ok: false, error: "参数不合法", delivery: "refused" } },
+      });
+      await startPromise;
+      assert.deepEqual(await harness.controller.uiaAct({ hwnd: 1, perform: "invoke" }), {
+        ok: false,
+        error: "参数不合法",
+        delivery: "refused",
+      });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("uia-act 超时：不带任何档位（那时不知道模式调用有没有落下）", async () => {
+    const harness = await makeHarness({ guestTimeoutMs: 150 });
+    try {
+      const startPromise = harness.controller.start();
+      // ping 正常答，uia-act 装死：现场与「桥卡在目标进程上」一致（req 留着不回）
+      harness.announceBridge({
+        respond: (req) => (req.command === "ping" ? { resp: { ok: true } } : null),
+      });
+      await startPromise;
+      const reply = await harness.controller.uiaAct({ hwnd: 1, perform: "invoke" });
+      assert.equal(reply.ok, false);
+      if (reply.ok) return;
+      assert.match(reply.error, /超时/);
+      assert.equal("delivery" in reply, false, "超时不能断言 refused：动作可能已经生效");
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("uia-act 响应畸形（桥说 ok 但缺字段）：也不带档位——那是「不知道」，不是拒绝", async () => {
+    const harness = await makeHarness();
+    try {
+      const startPromise = harness.controller.start();
+      harness.announceBridge({
+        respond: (req) => (req.command === "ping" ? { resp: { ok: true } } : { resp: { ok: true } }),
+      });
+      await startPromise;
+      const reply = await harness.controller.uiaAct({ hwnd: 1, perform: "invoke" });
+      assert.equal(reply.ok, false);
+      if (reply.ok) return;
+      assert.match(reply.error, /缺 hwnd/);
+      assert.equal("delivery" in reply, false);
     } finally {
       await harness.close();
     }
@@ -2047,7 +2109,7 @@ describe("guest 命令下发", () => {
     }
   });
 
-  test("桥明确拒绝时把回执的 delivery 带出去（failed = 确定没做成）", async () => {
+  test("桥明确拒绝时把回执的 delivery 带出去（老桥的 failed 归一为 refused = 确定没发出去）", async () => {
     const harness = await makeHarness();
     try {
       const startPromise = harness.controller.start();
@@ -2061,7 +2123,7 @@ describe("guest 命令下发", () => {
       assert.deepEqual(await harness.controller.guestCommand("click", { x: 1, y: 2 }), {
         ok: false,
         error: "click 需要整数 x 与 y（沙箱物理像素）",
-        delivery: "failed",
+        delivery: "refused",
       });
     } finally {
       await harness.close();
@@ -2137,5 +2199,20 @@ describe("guest 命令下发", () => {
     } finally {
       await harness.close();
     }
+  });
+});
+
+/**
+ * 能力声明里的 evidence（证据级别）——**必须与实现同源**。
+ * 这个后端有 UIA（uia-list / uia-act 就在用），所以它真的能读回控件值；
+ * 声明成别的（比如 window / none）会让工具层把本来能确认的动作降级、或反过来伪造确认。
+ */
+describe("能力声明：证据级别与实现同源（L2 / WSB）", () => {
+  test("有 UIA 控件树 ⇒ evidence 必须是 value", () => {
+    assert.equal(WSB_CAPABILITIES.uia, true, "WSB 有 UIA（uia-list / uia-act 在用）");
+    assert.equal(WSB_CAPABILITIES.evidence, "value");
+    // provider.ts 的一致性规则：uia ⇒ value；否则 windows ⇒ window；否则 none
+    const implied = WSB_CAPABILITIES.uia ? "value" : WSB_CAPABILITIES.windows ? "window" : "none";
+    assert.equal(WSB_CAPABILITIES.evidence, implied, "声明得比实现高就是伪造证据");
   });
 });

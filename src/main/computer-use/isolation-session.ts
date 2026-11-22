@@ -209,7 +209,10 @@ export function workspaceLayout(workspacePath: string): {
  *     所以 pixel 命令在这个控制器里一律不下发（见 start 附近的 noPointer 分支）；
  *   - UIA / 截图 / 窗口 / CDP 都走桥，和 L2 同一条车道；
  *   - 映射目录是**会话自己的工作区**（不是宿主的 out），所以浏览器上传/下载在这里做不到；
- *   - 每会话一个桌面（租约键带 sessionId）；同样不能快照。
+ *   - 每会话一个桌面（租约键带 sessionId）；同样不能快照；
+ *   - 证据级别 `value`：E2 实测跨进程 UIA 树可用（Invoke / SetValue 都走通了），能读控件值。
+ *     **没有真实指针不影响这一项**：像素命令在这里被拒（refused），根本到不了「要证据」那一步；
+ *     读回能力讲的是 UIA，与指针是两件事。
  */
 export const ISOLATION_SESSION_CAPABILITIES: SandboxCapabilities = {
   gui: true,
@@ -217,6 +220,7 @@ export const ISOLATION_SESSION_CAPABILITIES: SandboxCapabilities = {
   screenshot: true,
   windows: true,
   uia: true,
+  evidence: "value",
   cdp: true,
   sandboxFiles: false,
   desktopScope: "per-session",
@@ -626,11 +630,11 @@ export class IsolationSessionController {
   /**
    * 像素输入四命令在 L2b 里**不发**。判定放在最前面（连「有没有在跑」都排在它后面）：
    * 这条拒用的理由与运行状态无关，它由隔离档位本身决定，永远是同一句话。
-   * 回 `delivery: "failed"` 而不是裸 error：确定没做成，模型可以放心换车道。
+   * 回 `delivery: "refused"` 而不是裸 error：确定没发出去，模型可以放心换车道。
    */
   async guestCommand(command: ComputerUseGuestCommand, fields: Record<string, unknown>): Promise<GuestCommandReply> {
     if (isPixelInputCommand(command)) {
-      return { ok: false, error: computerUseIsolationErrors.noPointer, delivery: "failed" };
+      return { ok: false, error: computerUseIsolationErrors.noPointer, delivery: "refused" };
     }
     const gate = this.notRunning<{ ok: false; error: string }>("操作");
     if (gate !== null) return gate;
@@ -796,8 +800,19 @@ export class IsolationSessionController {
       const reply = await fetchGuestUiaAct(this.requireOutDir(), fields);
       return { ok: true, ...reply };
     } catch (cause: unknown) {
-      return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
+      return this.rejectedUiaAct(cause);
     }
+  }
+
+  /**
+   * uia-act 的失败回执：桥回了 `ok:false` = 明确拒绝 → `refused`（与 WSB 后端同一句理由，
+   * 见 sandbox.ts 的 rejectedUiaAct）；超时 / 响应畸形不带档位，那时不知道动作有没有落下。
+   */
+  private rejectedUiaAct(cause: unknown): { ok: false; error: string; delivery?: ComputerUseDelivery } {
+    if (cause instanceof GuestCommandRejected) {
+      return { ok: false, error: cause.message, delivery: cause.delivery ?? "refused" };
+    }
+    return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
   }
 
   /** 应用退出前的总清理：作废回执、杀桥、收会话。不广播（退出中没人听了）。 */

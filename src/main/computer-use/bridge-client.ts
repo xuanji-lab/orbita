@@ -32,6 +32,7 @@ import {
   GUEST_COMMAND_TIMEOUT_MS,
   parseComputerUseAdmission,
   parseComputerUseDelivery,
+  parseComputerUseEvidence,
   type ComputerUseCaptureInfo,
   type ComputerUseDelivery,
   type ComputerUseUiaActReply,
@@ -352,6 +353,12 @@ export async function fetchGuestUiaAct(
   // 应用级准入（桥 0.11.0 的观察模式）：老桥没这几个字段，parse 回 null，回执照常
   const admission = parseComputerUseAdmission(resp);
   if (admission !== null) reply.admission = admission;
+  // setValue 的读回（桥 0.15.0）：delivery + evidence 一起透传。缺 / 形状不对就当作
+  // 「桥没说」——老桥与其它动作本来就没有这两个字段，上层按没证据处理（会被降档）。
+  const delivery = parseComputerUseDelivery(resp.delivery);
+  if (delivery !== undefined) reply.delivery = delivery;
+  const readback = parseComputerUseEvidence(resp.evidence);
+  if (readback !== undefined) reply.evidence = readback;
   return reply;
 }
 
@@ -408,7 +415,7 @@ type Resp = Record<string, unknown>;
 /**
  * 桥**明确拒绝**了一条命令（回执 `ok:false`）。除了那句人话，把回执里的 `delivery` 带出来：
  * 「确定没做成」（参数非法 / SendInput 返回值不对）与「不知道成没成」（超时 / 桥没响应）对模型
- * 是两件事——前者可以放心重试，后者必须先看一眼屏幕（见 shared/computer-use.ts 的三档语义）。
+ * 是两件事——前者可以放心重试，后者必须先看一眼屏幕（见 shared/computer-use.ts 的五档语义）。
  *
  * 为什么用错误子类而不是把回执挂在 Error 上：调用方已经按「失败 = 一句人话」处理，
  * 多出来的这一档必须是**有类型**的，不能靠改对象形状。

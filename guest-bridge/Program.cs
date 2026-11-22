@@ -39,6 +39,12 @@
 //   属于红线。带这个参数就能把参数校验、错误文案、幂等分派全验一遍，而不碰 Edge。
 //   生产（.wsb 的 LogonCommand）不带它。
 //
+// 测试缝 3：桥启动时带 `--test-hooks` 时，像素命令认 "forceInsertCount": N——**真的只送
+//   前 N 个事件**（截数组后照常调 SendInput），于是 partial 分支（补发 UP + delivery:partial）
+//   能在真桌面上跑通。真机不放这条缝时 partial 几乎触发不了（SendInput 一般整批插完）。
+//   生产不带 --test-hooks，永远到不了那一段；验收脚本在沙箱里用它，可以用 GetKeyState
+//   之类的手段证明「卡住的 Ctrl 真的被松开了」。
+//
 // 就绪通告：启动完成后写 out/bridge.json（tmp+rename）——它出现即代表命令循环已上线。
 //
 // 编译：node build.mjs（用 Windows 自带的 .NET Framework 4.x csc.exe，零第三方依赖）。
@@ -117,7 +123,14 @@ internal static class Program
     //   stableId（RuntimeId 优先）；uia-act 的 ref 路径校验代次，旧代次**明确拒绝**并让它重新 list。
     //   uia-list 多一个可选 since：只回变化（新增 / 消失 / 改了 / unchanged），每个窗口只留最近 5 代。
     //   命令名、name 匹配路径、passwordFields / isPassword / admission 与像素工具一个字都没改。
-    private const string Version = "0.14.0";
+    // 0.15.0（证据）：两条路终于真的产出读回/部分档。① uia-act setValue 成功后读回该元素当前值
+    //   （ValuePattern.Current.Value → TextPattern.DocumentRange.GetText），相等回 confirmed、
+    //   不等回 suspected_noop，都带 evidence{kind:"value",detail}；读回拿不到回 unverifiable
+    //   （不猜）。密码框的证据只写「一致/不一致」，**绝不带值本身**。② SendInput 一次只插入部分
+    //   事件时回 partial，并把已插入的按下键/按钮按相反顺序补发 UP（不留卡住的修饰键）；
+    //   插入数为 0 或 Win32 报错仍是 refused。回执多 delivery / evidence / inserted /
+    //   requested / released 几个字段，老宿主不读也不会坏。
+    private const string Version = "0.15.0";
     private const string CmdDirName = "cmd";          // out 下的命令目录
     internal const string ReqSuffix = ".req.json";    // 宿主写：命令请求
     internal const string RespSuffix = ".resp.json";  // 桥写：执行结果
@@ -257,6 +270,9 @@ internal static class Program
             // 密码框遮罩的纯函数自测（平移 / 裁剪 / DPI 不换算 / 过期策略 / 缓存）。
             // **不碰桌面、不碰 Bitmap**：遮罩算法是纯整数运算，在宿主上就能验完。
             if (args[i] == "--selftest-mask") return Mask.RunSelfTest();
+            // 像素注入的 partial 规划自测（哪几个按下事件卡住了 / 补发顺序 / 文案条数上限）。
+            // **纯函数：不调 SendInput、不碰桌面**——在宿主上真注入是红线。
+            if (args[i] == "--selftest-input") return RunInputSelfTest();
         }
         if (!ParseArgs(args)) return 1;
         try { Console.OutputEncoding = Encoding.UTF8; } catch { } // 无控制台句柄时可能抛异常，忽略
@@ -1430,13 +1446,16 @@ internal static class Program
 
     // ---- 输入注入：click / type / key / scroll（SendInput）----
     //
-    // **交付语义（三档）**：SendInput 的返回值只说明事件**进了窗口队列**，不说明动作生效
-    // （窗口可能卡住、焦点可能被别人抢走、目标控件可能压根不接受输入）。所以回执这么写：
-    //   ok:true  + delivery:"dispatched"  已派发、未验证（本刀所有成功的像素输入都在这一档）
-    //   ok:false + delivery:"failed"      明确失败（参数非法 / SendInput 返回值不对）
-    //   delivery:"applied"                 有生效证据——本刀不产出，位置先留着
+    // **交付语义（三档 + 0.15.0 的 partial）**：SendInput 的返回值只说明事件**进了窗口队列**，
+    // 不说明动作生效（窗口可能卡住、焦点可能被别人抢走、目标控件可能压根不接受输入）。
+    // 所以回执这么写：
+    //   ok:true  + delivery:"dispatched"  已派发、未验证（整批事件都已插入）
+    //   ok:true  + delivery:"partial"     只插入了一部分：已补发松开那部分按下的键/按钮
+    //   ok:false + delivery:"failed"      明确失败（参数非法 / 一个事件都没插入）
+    //   delivery:"applied"                 有生效证据——像素车道不产出（读回只在 UIA setValue 那条路）
     // 宿主与模型的口径见 src/shared/computer-use.ts 的 ComputerUseDelivery；模型看到
-    // dispatched 时**不许重放同一个动作**，先截一张图看结果。
+    // dispatched 时**不许重放同一个动作**，先截一张图看结果。partial 同理，而且要先确认
+    // 补发松开有没有成功。
     //
     // dryRun（测试缝）不带 delivery：它什么都没派发，说成 dispatched 就是假话。
 
@@ -1484,7 +1503,25 @@ internal static class Program
                 inputs.Add(MouseInput(0, 0, down, 0));
                 inputs.Add(MouseInput(0, 0, up, 0));
             }
-            SendInputs(inputs.ToArray());
+            INPUT[] batch = inputs.ToArray();
+            // 测试缝（--test-hooks）：forceInsertCount 真截短这一批再送，让 partial 分支真的跑起来
+            string forceError;
+            int forceTake = TestForceInsertTake(raw, batch.Length, out forceError);
+            if (forceError != null)
+                return "{\"ok\":false,\"delivery\":\"failed\",\"error\":" + JsonQuote(forceError) + "}";
+            // 只送前 forceTake 个（0 = 整批），而比较始终对着**整批长度**——否则截短之后
+            // sent == batch.Length 就会把真实的 partial 吞成 dispatched
+            uint sent = SendInputsFirst(batch, forceTake);
+            if (sent < (uint)batch.Length)
+            {
+                // 插入数卡在中间：可能是一个只按下、没松开的鼠标键。先补发松开再回 partial。
+                ReleasePlan plan = PlanStuckReleases(batch, sent);
+                string releaseError;
+                bool released = ReleaseStuckInputs(plan, out releaseError);
+                Log("点击只插入 " + sent + "/" + batch.Length + " 个事件（补发松开 " + plan.Ups.Count + " 个）");
+                return PartialReceipt((uint)batch.Length, sent, plan, released, releaseError, gate.ReplySuffix,
+                    Admission.JsonFields(admit));
+            }
             Log("点击 (" + x + ", " + y + ") " + button + (dbl ? " ×2" : ""));
             return DispatchedReceipt(gate.ReplySuffix, admit);
         }
@@ -1514,6 +1551,17 @@ internal static class Program
             InputHook.GateResult gate = InputHook.GateForPixelAction("type");
             if (!gate.Allowed) return gate.GiveUpJson;
             int at = 0;
+            // 请求的事件数按**整条命令**算（每个字符一对 down/up）：分批只是发送方式，
+            // 不能因为只试了第一批就把「差几个事件」说小。
+            uint requestedTotal = (uint)(text.Length * 2);
+            uint insertedTotal = 0;
+            // 测试缝（--test-hooks）：批大小按**第一批**算——截到前 N 个就是「一个字符只按下了
+            // 没松开」或「几个字符进去了、后面全没进」，剩下的交给真实的 partial 分支。
+            // 只截第一批：截短就是为了让 sent < 本批事件数，第一批就必然命中。
+            string forceError;
+            int forceTake = TestForceInsertTake(raw, Math.Min(TYPE_CHUNK_CHARS, text.Length) * 2, out forceError);
+            if (forceError != null)
+                return "{\"ok\":false,\"delivery\":\"failed\",\"error\":" + JsonQuote(forceError) + "}";
             while (at < text.Length)
             {
                 int chunk = Math.Min(TYPE_CHUNK_CHARS, text.Length - at);
@@ -1524,7 +1572,20 @@ internal static class Program
                     inputs[j * 2] = KeyInput(0, scan, KEYEVENTF_UNICODE);
                     inputs[j * 2 + 1] = KeyInput(0, scan, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP);
                 }
-                SendInputs(inputs);
+                uint sent = SendInputsFirst(inputs, forceTake);
+                insertedTotal += sent;
+                if (sent < (uint)inputs.Length)
+                {
+                    // 只插入了一部分：把这一批里卡住的字符、以及本批内已插入的按下键松开。
+                    // 后面的批次不再送——桌面已经处于「半截输入」，继续送只会更难收拾。
+                    ReleasePlan plan = PlanStuckReleases(inputs, sent);
+                    string releaseError;
+                    bool released = ReleaseStuckInputs(plan, out releaseError);
+                    Log("输入只插入 " + insertedTotal + "/" + requestedTotal + " 个事件（补发松开 "
+                        + plan.Ups.Count + " 个）");
+                    return PartialReceipt(requestedTotal, insertedTotal, plan, released, releaseError,
+                        gate.ReplySuffix, null);
+                }
                 at += chunk;
             }
             Log("已输入 " + text.Length + " 个字符");
@@ -1585,7 +1646,25 @@ internal static class Program
             inputs.Add(KeyInput(main, 0, 0));
             inputs.Add(KeyInput(main, 0, KEYEVENTF_KEYUP));
             for (int i = vks.Count - 2; i >= 0; i--) inputs.Add(KeyInput(vks[i], 0, KEYEVENTF_KEYUP));
-            SendInputs(inputs.ToArray());
+            INPUT[] batch = inputs.ToArray();
+            // 测试缝（--test-hooks）：截到前 N 个——ctrl+a 只送 ctrl↓ 时，partial 分支会真的补发 ctrl↑
+            // （验收靠它证明「卡住的修饰键真的被松开了」，生产路径不带这个字段）
+            string forceError;
+            int forceTake = TestForceInsertTake(raw, batch.Length, out forceError);
+            if (forceError != null)
+                return "{\"ok\":false,\"delivery\":\"failed\",\"error\":" + JsonQuote(forceError) + "}";
+            // 只送前 forceTake 个（0 = 整批），比较对着**整批长度**（截短的一超靠 SendInputsFirst）
+            uint sent = SendInputsFirst(batch, forceTake);
+            if (sent < (uint)batch.Length)
+            {
+                // 组合键最危险：插入数卡在中间就是一个按住的 Ctrl / Alt / Shift。
+                // PlanStuckReleases 会把这些按下的修饰键按相反顺序松开。
+                ReleasePlan plan = PlanStuckReleases(batch, sent);
+                string releaseError;
+                bool released = ReleaseStuckInputs(plan, out releaseError);
+                Log("按键只插入 " + sent + "/" + batch.Length + " 个事件（补发松开 " + plan.Ups.Count + " 个）");
+                return PartialReceipt((uint)batch.Length, sent, plan, released, releaseError, gate.ReplySuffix, null);
+            }
             Log("按键 " + spec);
             return DispatchedReceipt(gate.ReplySuffix);
         }
@@ -1629,7 +1708,22 @@ internal static class Program
             INPUT[] inputs = new INPUT[2];
             inputs[0] = MoveInput(x, y);
             inputs[1] = MouseInput(0, 0, MOUSEEVENTF_WHEEL, wheelData);
-            SendInputs(inputs);
+            // 测试缝（--test-hooks）：与其它像素命令同一条缝（滚轮只有前面那次指针移动可截）
+            string forceError;
+            int forceTake = TestForceInsertTake(raw, inputs.Length, out forceError);
+            if (forceError != null)
+                return "{\"ok\":false,\"delivery\":\"failed\",\"error\":" + JsonQuote(forceError) + "}";
+            uint sent = SendInputsFirst(inputs, forceTake);
+            if (sent < (uint)inputs.Length)
+            {
+                // 滚轮没有「按着」的状态，实际能卡住的只有前面那次指针移动（没有）。
+                ReleasePlan plan = PlanStuckReleases(inputs, sent);
+                string releaseError;
+                bool released = ReleaseStuckInputs(plan, out releaseError);
+                Log("滚动只插入 " + sent + "/" + inputs.Length + " 个事件");
+                return PartialReceipt((uint)inputs.Length, sent, plan, released, releaseError, gate.ReplySuffix,
+                    Admission.JsonFields(admit));
+            }
             Log("滚动 (" + x + ", " + y + ") deltaY=" + deltaY);
             return DispatchedReceipt(gate.ReplySuffix, admit);
         }
@@ -1714,20 +1808,356 @@ internal static class Program
     }
 
     /**
-     * 送一批事件；没全送到就是失败（注入被拦 / 桌面不在交互态），不吞成成功。
+     * 送一批事件，返回**实际插入的事件数**（SendInput 的返回值就是这个含义）。
+     *
+     * 为什么不再把「少送几个」直接当失败抛掉（0.15.0）：以前 throw 之后调用点回 failed，
+     * 而那时**前面那几个事件已经真的注入了**——可能是一个只按下、没松开的 Ctrl。
+     * 宿主把 failed 读成「确定没做成」，模型于是重试，桌面就多了一个按着的修饰键。
+     * 现在 0 < sent < 请求数 交给调用点回 partial 并补发 UP；只有 sent == 0（一个都没进去）
+     * 才是确定没做成——那时 Win32 错误码才是真的有意义的那一个。
+     *
      * 错误码要翻成人话：2026-10-14 真机在垂死 / 未就绪的沙箱里拿到「只送达 0/4（错误码 5）」，
      * 模型只能看见一个裸数字，白试了两轮——错误码 5 = 系统拒绝注入，含义是会话没就绪或已失效，
      * 正确动作是先截图确认状态，不是反复重试。
      */
-    private static void SendInputs(INPUT[] inputs)
+    private static uint SendInputs(INPUT[] inputs)
     {
-        if (inputs.Length == 0) return;
+        if (inputs.Length == 0) return 0;
         // 先记注入时刻再送：SendInput 在同一次调用里同步经过钩子，两条路径都落得下这一笔
         InputHook.NoteInjected();
         uint sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT)));
-        if (sent != (uint)inputs.Length)
+        if (sent == 0)
             throw new InvalidOperationException("SendInput 只送达 " + sent + "/" + inputs.Length
                 + " 个事件（" + DescribeSendInputError((int)Marshal.GetLastWin32Error()) + "）");
+        return sent;
+    }
+
+    // ---- 测试缝：forceInsertCount（partial 的真机触发口）----------------------
+    //
+    // partial 的那条路（少插入 → 补发松开 → delivery:"partial"）在真桌面上几乎触发不了：
+    // SendInput 一般一次把整批事件插完（2026-11-22 真机：1260 字符的 2400 个事件全插入），
+    // 验收只能对着纯函数断言，「Ctrl 真的被松开了」永远证明不了。
+    //
+    // 这条缝让验收请求里多一个 "forceInsertCount": N（N < 本批事件数）：桥**真的只送前 N 个**
+    // （截数组之后照常调 SendInput），后面的 partial / 补发 UP 全走生产代码本身，回执里的
+    // inserted / released / releasedKeys 都是这一次真实注入的结果——不伪造任何字段。
+    //
+    // 三道约束：
+    //   ① 只有 --test-hooks 的桥认这个字段（TestForceInsertTake 第一个判断就是它）；
+    //      生产（.wsb 的 LogonCommand 只带 --out-dir）永远到不了这一段。
+    //   ② N 必须落在 1..(事件数-1)：0 等于「一个都没送进去」（那是 failed，不是 partial），
+    //      等于事件数则什么都没截到。参数不合法就报 failed，不让验收拿到一条假的 partial。
+    //   ③ 不改变任何生产语义：缝关掉时行为与改前逐字一致（batch 原样）。
+
+    /**
+     * 本次请求要不要截短（只读：raw 里的 forceInsertCount + 测试钩子开关）。
+     *
+     * 返回 0 = 不截；>0 = 只送前这么多个事件；error 非 null = 参数不合法（回执报 failed）。
+     * 纯解析在 ParseForceInsertCount 里（--selftest-input 直接验它，这里只多一层开关）。
+     */
+    private static int TestForceInsertTake(string raw, int totalEvents, out string error)
+    {
+        error = null;
+        if (!WorkerHost.TestHooks) return 0;
+        int take;
+        error = ParseForceInsertCount(raw, totalEvents, out take);
+        if (error != null) return 0;
+        if (take > 0) Log("测试缝 forceInsertCount：只送前 " + take + "/" + totalEvents + " 个事件");
+        return take;
+    }
+
+    /** forceInsertCount 的纯解析（不读开关、不改状态）：null = 合法或没这个字段，非 null = 不合法 */
+    private static string ParseForceInsertCount(string raw, int totalEvents, out int take)
+    {
+        take = 0;
+        string rawCount = ExtractNumber(raw, "forceInsertCount");
+        if (rawCount == null) return null;
+        int count;
+        if (!int.TryParse(rawCount, out count) || count < 1 || count >= totalEvents)
+            return "forceInsertCount 必须是 1.." + (totalEvents - 1) + "（只有 --test-hooks 的桥认这条缝），收到："
+                + rawCount;
+        take = count;
+        return null;
+    }
+
+    /** 本批事件只取前 take 个（纯函数：take 超界按全长，负数取空） */
+    private static INPUT[] SliceBatch(INPUT[] batch, int take)
+    {
+        if (take >= batch.Length) return batch;
+        if (take < 0) take = 0;
+        INPUT[] slice = new INPUT[take];
+        Array.Copy(batch, slice, take);
+        return slice;
+    }
+
+    /**
+     * 只送前 count 个事件（count <= 0 或 >= 全长 = 整批）。**测试缝的唯一出口**：
+     * 调用点传的是整批与要送的数量，比较 "sent < 整批长度" 就不会因为截短而失效
+     * （真机上踩过：先把 batch 换成切片再比 sent < batch.Length，partial 永远不触发）。
+     */
+    private static uint SendInputsFirst(INPUT[] inputs, int count)
+    {
+        if (count <= 0 || count >= inputs.Length) return SendInputs(inputs);
+        return SendInputs(SliceBatch(inputs, count));
+    }
+
+    // ---- 送不完整时补发松开（partial 的产出者）--------------------------------
+    //
+    // 为什么要补：SendInput 的数组是按下/松开交替的，插入数卡在中间就留下一个**真实按下**
+    // 的状态（Ctrl / Alt / Shift / 鼠标左键），而前端进程永远收不到后面的 UP——之后每一次
+    // 注入都被它污染，比一次没点中坏得多。
+    //
+    // 规划是纯函数（只读 INPUT 数组、不调 SendInput），--selftest-input 直接验；
+    // 真正补发在 ReleaseStuckInputs 里，失败只写进回执、不抛异常（不能让一次已经部分
+    // 生效的动作变成一条工具错误）。
+
+    /** 一次没送全的 SendInput 里还按着的事件 → 要补发的 UP 事件（纯数据） */
+    private sealed class ReleasePlan
+    {
+        /** 按**相反顺序**排好的 UP 事件（后按下的先松开） */
+        public List<INPUT> Ups = new List<INPUT>();
+        /** 人话名字（ctrl / enter / 左键 / 字符 U+4E2D），与 Ups 一一对应 */
+        public List<string> Names = new List<string>();
+    }
+
+    /** 看前 inserted 个事件里哪些还处于按下状态，按相反顺序给出 UP（纯函数） */
+    private static ReleasePlan PlanStuckReleases(INPUT[] inputs, uint inserted)
+    {
+        ReleasePlan plan = new ReleasePlan();
+        List<INPUT> pressed = new List<INPUT>();
+        int limit = (int)inserted;
+        if (limit > inputs.Length) limit = inputs.Length;
+        for (int i = 0; i < limit; i++)
+        {
+            INPUT e = inputs[i];
+            if (IsReleaseEvent(e))
+            {
+                int at = IndexOfPressOf(pressed, e);
+                if (at >= 0) pressed.RemoveAt(at);
+            }
+            else if (IsPressEvent(e))
+            {
+                pressed.Add(e);
+            }
+        }
+        for (int i = pressed.Count - 1; i >= 0; i--)
+        {
+            plan.Ups.Add(ReleaseOf(pressed[i]));
+            plan.Names.Add(LabelOf(pressed[i]));
+        }
+        return plan;
+    }
+
+    /** 这个事件是不是「按下」（键：没有 KEYUP；鼠标：LEFT / RIGHT / MIDDLEDOWN） */
+    private static bool IsPressEvent(INPUT e)
+    {
+        if (e.type == INPUT_KEYBOARD) return (e.u.ki.dwFlags & KEYEVENTF_KEYUP) == 0;
+        if (e.type == INPUT_MOUSE) return MouseButtonMask(e.u.mi.dwFlags) != 0;
+        return false;
+    }
+
+    private static bool IsReleaseEvent(INPUT e)
+    {
+        if (e.type == INPUT_KEYBOARD) return (e.u.ki.dwFlags & KEYEVENTF_KEYUP) != 0;
+        if (e.type == INPUT_MOUSE) return MouseReleaseMask(e.u.mi.dwFlags) != 0;
+        return false;
+    }
+
+    /** 鼠标事件的按钮身份（统一用「按下」的掩码编号）：左 0x0002 / 右 0x0008 / 中 0x0020 */
+    private static uint MouseButtonMask(uint flags)
+    {
+        if ((flags & MOUSEEVENTF_LEFTDOWN) != 0) return MOUSEEVENTF_LEFTDOWN;
+        if ((flags & MOUSEEVENTF_RIGHTDOWN) != 0) return MOUSEEVENTF_RIGHTDOWN;
+        if ((flags & MOUSEEVENTF_MIDDLEDOWN) != 0) return MOUSEEVENTF_MIDDLEDOWN;
+        return 0;
+    }
+
+    /** 鼠标松开事件的按钮身份（换算成与 MouseButtonMask 同一套编号） */
+    private static uint MouseReleaseMask(uint flags)
+    {
+        if ((flags & MOUSEEVENTF_LEFTUP) != 0) return MOUSEEVENTF_LEFTDOWN;
+        if ((flags & MOUSEEVENTF_RIGHTUP) != 0) return MOUSEEVENTF_RIGHTDOWN;
+        if ((flags & MOUSEEVENTF_MIDDLEUP) != 0) return MOUSEEVENTF_MIDDLEDOWN;
+        return 0;
+    }
+
+    /** 在「已按下」清单里找与这个松开事件同一身份的项（从后往前：后按的优先配对）；找不到回 -1 */
+    private static int IndexOfPressOf(List<INPUT> pressed, INPUT release)
+    {
+        for (int i = pressed.Count - 1; i >= 0; i--)
+        {
+            if (SamePressIdentity(pressed[i], release)) return i;
+        }
+        return -1;
+    }
+
+    /** 两个事件是不是同一个键 / 同一个按钮（键比 VK + 扫描码 + UNICODE 位，鼠标比按钮掩码） */
+    private static bool SamePressIdentity(INPUT press, INPUT release)
+    {
+        if (press.type != release.type) return false;
+        if (press.type == INPUT_MOUSE)
+            return MouseButtonMask(press.u.mi.dwFlags) != 0
+                && MouseButtonMask(press.u.mi.dwFlags) == MouseReleaseMask(release.u.mi.dwFlags);
+        if (press.type == INPUT_KEYBOARD)
+        {
+            if (press.u.ki.wVk != release.u.ki.wVk) return false;
+            if (press.u.ki.wScan != release.u.ki.wScan) return false;
+            return (press.u.ki.dwFlags & KEYEVENTF_UNICODE) == (release.u.ki.dwFlags & KEYEVENTF_UNICODE);
+        }
+        return false;
+    }
+
+    /** 一个按下事件的 UP 兄弟 */
+    private static INPUT ReleaseOf(INPUT press)
+    {
+        if (press.type == INPUT_MOUSE)
+        {
+            uint mask = MouseButtonMask(press.u.mi.dwFlags);
+            uint up = mask == MOUSEEVENTF_RIGHTDOWN ? MOUSEEVENTF_RIGHTUP
+                : mask == MOUSEEVENTF_MIDDLEDOWN ? MOUSEEVENTF_MIDDLEUP : MOUSEEVENTF_LEFTUP;
+            return MouseInput(0, 0, up, 0);
+        }
+        return KeyInput(press.u.ki.wVk, press.u.ki.wScan, press.u.ki.dwFlags | KEYEVENTF_KEYUP);
+    }
+
+    /** 补发 UP 时的一句话名字（模型与日志要能认出它按住了什么） */
+    private static string LabelOf(INPUT press)
+    {
+        if (press.type == INPUT_MOUSE)
+        {
+            uint mask = MouseButtonMask(press.u.mi.dwFlags);
+            return mask == MOUSEEVENTF_RIGHTDOWN ? "右键" : mask == MOUSEEVENTF_MIDDLEDOWN ? "中键" : "左键";
+        }
+        if ((press.u.ki.dwFlags & KEYEVENTF_UNICODE) != 0)
+            return "字符 U+" + press.u.ki.wScan.ToString("X4", System.Globalization.CultureInfo.InvariantCulture);
+        return KeyNameForVk(press.u.ki.wVk);
+    }
+
+    /** VK → 常见键名（只用于回执人话；认不出就写 VK 0x..，不猜） */
+    private static string KeyNameForVk(ushort vk)
+    {
+        if (vk >= 0x41 && vk <= 0x5A) return ((char)vk).ToString().ToLowerInvariant();
+        if (vk >= 0x30 && vk <= 0x39) return ((char)vk).ToString();
+        if (vk >= 0x70 && vk <= 0x87)
+            return "f" + (vk - 0x70 + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        switch (vk)
+        {
+            case 0x0D: return "enter";
+            case 0x09: return "tab";
+            case 0x1B: return "escape";
+            case 0x20: return "space";
+            case 0x08: return "backspace";
+            case 0x2E: return "delete";
+            case 0x2D: return "insert";
+            case 0x24: return "home";
+            case 0x23: return "end";
+            case 0x21: return "pageup";
+            case 0x22: return "pagedown";
+            case 0x26: return "up";
+            case 0x28: return "down";
+            case 0x25: return "left";
+            case 0x27: return "right";
+            case 0x11: return "ctrl";
+            case 0x12: return "alt";
+            case 0x10: return "shift";
+            case 0x5B: return "win";
+            case 0x14: return "capslock";
+        }
+        return "VK 0x" + vk.ToString("X2", System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    /**
+     * 把 plan 里的 UP 真送出去。**失败不抛**：一次已经部分生效的动作不能变成一条工具错误
+     * （那会让模型重试整条动作），但也不能假装成功——结果原样写进回执的 released。
+     */
+    private static bool ReleaseStuckInputs(ReleasePlan plan, out string error)
+    {
+        error = null;
+        if (plan.Ups.Count == 0) return true;
+        try
+        {
+            INPUT[] ups = plan.Ups.ToArray();
+            uint sent = SendInput((uint)ups.Length, ups, Marshal.SizeOf(typeof(INPUT)));
+            if (sent == (uint)ups.Length) return true;
+            error = "补发松开只送出 " + sent + "/" + ups.Length + " 个事件（"
+                + DescribeSendInputError((int)Marshal.GetLastWin32Error()) + "）";
+            return false;
+        }
+        catch (Exception ex)
+        {
+            error = "补发松开失败：" + ex.Message;
+            return false;
+        }
+    }
+
+    /**
+     * partial 回执的那句人话（纯函数，selftest 直接验）。
+     *
+     * 三件事必须都在：① 差几个事件；② 已经补松开了哪些（超过 5 个只报前 3 个 + 等 N 个，
+     * 不塞 20 个键名）；③ 下一步该干什么（先看一眼，不要原样重放）。
+     */
+    private static string PartialNote(uint requested, uint inserted, List<string> releasedNames, bool releasedOk,
+        string releaseError)
+    {
+        StringBuilder note = new StringBuilder();
+        uint missing = requested > inserted ? requested - inserted : 0;
+        note.Append("SendInput 只插入了 ").Append(inserted).Append("/").Append(requested)
+            .Append(" 个事件（差 ").Append(missing).Append(" 个），剩下的没有送出去");
+        if (releasedNames.Count == 0)
+        {
+            note.Append("（没有卡住的键需要松开）");
+        }
+        else if (!releasedOk)
+        {
+            note.Append("；补发松开失败（").Append(releaseError == null ? "原因未知" : releaseError)
+                .Append("）——").Append(DescribeReleased(releasedNames)).Append("可能还处于按下状态");
+        }
+        else
+        {
+            note.Append("；已补发松开").Append(DescribeReleased(releasedNames));
+        }
+        note.Append("——先截图确认现在的状态，再决定要不要重做（不要原样重放同一个动作）。");
+        return note.ToString();
+    }
+
+    /** 键名清单的人话：≤5 个全列，超过就只报前 3 个 + 「等 N 个」 */
+    private static string DescribeReleased(List<string> names)
+    {
+        int shown = names.Count <= 5 ? names.Count : 3;
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < shown; i++)
+        {
+            if (i > 0) text.Append("、");
+            text.Append(names[i]);
+        }
+        if (shown < names.Count) text.Append(" 等 ").Append(names.Count).Append(" 个");
+        return text.ToString();
+    }
+
+    /**
+     * 像素命令的 partial 回执：ok 仍是 true（命令走完了），delivery 说「只完成一部分」。
+     * released = 现在有没有卡住的键（true 包括「本来就没有卡住的键」）——不假装成功。
+     */
+    private static string PartialReceipt(uint requested, uint inserted, ReleasePlan plan, bool releasedOk,
+        string releaseError, string suffix, string admitJson)
+    {
+        StringBuilder json = new StringBuilder();
+        json.Append("{\"ok\":true,\"delivery\":\"partial\"")
+            .Append(",\"inserted\":").Append(inserted)
+            .Append(",\"requested\":").Append(requested)
+            .Append(",\"released\":").Append(releasedOk ? "true" : "false")
+            .Append(",\"releasedKeys\":[");
+        for (int i = 0; i < plan.Names.Count; i++)
+        {
+            if (i > 0) json.Append(",");
+            json.Append(JsonQuote(plan.Names[i]));
+        }
+        json.Append("]")
+            .Append(",\"note\":").Append(JsonQuote(PartialNote(requested, inserted, plan.Names, releasedOk, releaseError)))
+            .Append(admitJson == null ? "" : admitJson)
+            .Append(suffix)
+            .Append("}");
+        return json.ToString();
     }
 
     /** SendInput 失败的错误码 → 一句人话（模型看得到的就是它，别让它对着裸数字试） */
@@ -1737,6 +2167,138 @@ internal static class Program
             return "错误码 5 = 拒绝访问：系统拒绝了这次注入——沙箱会话可能还没就绪或已经失效，"
                 + "先截图确认沙箱状态，再决定重试还是重启沙箱";
         return "错误码 " + code;
+    }
+
+    /**
+     * 像素注入的 partial 规划自测（--selftest-input）：纯函数，**不调 SendInput、不碰桌面**。
+     *
+     * 验六件事：① 哪些按下事件卡住了（组合键卡在中间就是按住的 Ctrl）；② 补发顺序是反的；
+     * ③ mouse / unicode 事件的身份匹配也对；④ 回执的人话不塞超长键名清单；
+     * ⑤ VK → 键名反向映射；⑥ 测试缝 forceInsertCount 的解析与截短（边界：0 / 等于事件数算错）。
+     */
+    internal static int RunInputSelfTest()
+    {
+        List<string> failures = new List<string>();
+        int cases = 0;
+
+        // ① ctrl+a 的完整事件序列：ctrl↓ a↓ a↑ ctrl↑
+        INPUT[] ctrlA = new INPUT[]
+        {
+            KeyInput(0x11, 0, 0),
+            KeyInput(0x41, 0, 0),
+            KeyInput(0x41, 0, KEYEVENTF_KEYUP),
+            KeyInput(0x11, 0, KEYEVENTF_KEYUP),
+        };
+        CheckTrue(failures, ref cases, "全部插入 → 没有卡住的键",
+            PlanStuckReleases(ctrlA, 4).Ups.Count == 0);
+        ReleasePlan onlyCtrl = PlanStuckReleases(ctrlA, 1);
+        CheckTrue(failures, ref cases, "只插入了 ctrl↓ → 补一个 UP",
+            onlyCtrl.Ups.Count == 1 && onlyCtrl.Names.Count == 1 && onlyCtrl.Names[0] == "ctrl");
+        CheckTrue(failures, ref cases, "补的 UP 是同一个键 + KEYUP",
+            onlyCtrl.Ups[0].type == INPUT_KEYBOARD && onlyCtrl.Ups[0].u.ki.wVk == 0x11
+            && (onlyCtrl.Ups[0].u.ki.dwFlags & KEYEVENTF_KEYUP) != 0);
+        ReleasePlan ctrlAndA = PlanStuckReleases(ctrlA, 2);
+        CheckTrue(failures, ref cases, "ctrl↓ a↓ 都插入了 → 两个 UP，且反序（先松 a 再松 ctrl）",
+            ctrlAndA.Ups.Count == 2 && ctrlAndA.Names[0] == "a" && ctrlAndA.Names[1] == "ctrl");
+        CheckTrue(failures, ref cases, "a 的两半都插入了 → 只剩 ctrl 要松",
+            PlanStuckReleases(ctrlA, 3).Names.Count == 1 && PlanStuckReleases(ctrlA, 3).Names[0] == "ctrl");
+        CheckTrue(failures, ref cases, "插入数比请求数大也不越界（防御脏返回值）",
+            PlanStuckReleases(ctrlA, 99).Ups.Count == 0);
+
+        // ② 鼠标：move left↓ left↑ —— 卡在 left↓ 就得补 LEFTUP
+        INPUT[] click = new INPUT[]
+        {
+            MouseInput(0, 0, MOUSEEVENTF_MOVE, 0),
+            MouseInput(0, 0, MOUSEEVENTF_LEFTDOWN, 0),
+            MouseInput(0, 0, MOUSEEVENTF_LEFTUP, 0),
+        };
+        CheckTrue(failures, ref cases, "只插入了移动 → 没有卡住的按钮",
+            PlanStuckReleases(click, 1).Ups.Count == 0);
+        ReleasePlan stuckLeft = PlanStuckReleases(click, 2);
+        CheckTrue(failures, ref cases, "卡在左键按下 → 补一个 LEFTUP",
+            stuckLeft.Ups.Count == 1 && stuckLeft.Names[0] == "左键"
+            && (stuckLeft.Ups[0].u.mi.dwFlags & MOUSEEVENTF_LEFTUP) != 0);
+        CheckTrue(failures, ref cases, "左键的 UP 不是右键的 UP（身份不能串）",
+            (stuckLeft.Ups[0].u.mi.dwFlags & MOUSEEVENTF_RIGHTUP) == 0);
+        CheckTrue(failures, ref cases, "全部插入的点击 → 无补发",
+            PlanStuckReleases(click, 3).Ups.Count == 0);
+
+        // ③ type 的 unicode 事件：身份看 wScan + UNICODE 位
+        INPUT[] typed = new INPUT[]
+        {
+            KeyInput(0, (ushort)'中', KEYEVENTF_UNICODE),
+            KeyInput(0, (ushort)'中', KEYEVENTF_UNICODE | KEYEVENTF_KEYUP),
+        };
+        ReleasePlan halfChar = PlanStuckReleases(typed, 1);
+        CheckTrue(failures, ref cases, "半个 unicode 字符 → 补一个 UP（同一个扫描码）",
+            halfChar.Ups.Count == 1 && halfChar.Ups[0].u.ki.wScan == (ushort)'中'
+            && (halfChar.Ups[0].u.ki.dwFlags & KEYEVENTF_KEYUP) != 0
+            && (halfChar.Ups[0].u.ki.dwFlags & KEYEVENTF_UNICODE) != 0);
+        CheckTrue(failures, ref cases, "unicode 字符的名字带码位",
+            halfChar.Names[0] == "字符 U+" + ((ushort)'中').ToString("X4", System.Globalization.CultureInfo.InvariantCulture));
+        CheckTrue(failures, ref cases, "字符的 down 与 up 配成对 → 无补发",
+            PlanStuckReleases(typed, 2).Ups.Count == 0);
+
+        // ④ 人话：差几个 + 松开了哪些 + 不要列太长
+        List<string> two = new List<string>();
+        two.Add("a");
+        two.Add("ctrl");
+        string shortNote = PartialNote(9, 3, two, true, null);
+        CheckTrue(failures, ref cases, "partial 文案点名插入数/请求数",
+            shortNote.IndexOf("3/9", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "partial 文案说清差几个事件",
+            shortNote.IndexOf("差 6 个", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "partial 文案说清补松开了哪些",
+            shortNote.IndexOf("已补发松开a、ctrl", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "partial 文案给出下一步（先截图、不要重放）",
+            shortNote.IndexOf("截图", StringComparison.Ordinal) >= 0
+            && shortNote.IndexOf("不要原样重放", StringComparison.Ordinal) >= 0);
+        List<string> many = new List<string>();
+        for (int i = 0; i < 9; i++) many.Add("k" + i);
+        string longNote = PartialNote(40, 7, many, true, null);
+        CheckTrue(failures, ref cases, "超过 5 个键名只报前 3 个 + 「等 N 个」",
+            longNote.IndexOf("等 9 个", StringComparison.Ordinal) >= 0
+            && longNote.IndexOf("k4", StringComparison.Ordinal) < 0);
+        string noKeys = PartialNote(2, 1, new List<string>(), true, null);
+        CheckTrue(failures, ref cases, "没有卡住的键也要说清楚（不编造补发）",
+            noKeys.IndexOf("没有卡住的键需要松开", StringComparison.Ordinal) >= 0);
+        string failedRelease = PartialNote(9, 3, two, false, "错误码 5");
+        CheckTrue(failures, ref cases, "补发失败要写进回执（不假装成功）",
+            failedRelease.IndexOf("补发松开失败", StringComparison.Ordinal) >= 0
+            && failedRelease.IndexOf("错误码 5", StringComparison.Ordinal) >= 0
+            && failedRelease.IndexOf("可能还处于按下状态", StringComparison.Ordinal) >= 0);
+
+        // ⑤ 键名反向映射：只用于人话，认不出来就写 VK 码
+        CheckString(failures, ref cases, "0x11 → ctrl", "ctrl", KeyNameForVk(0x11));
+        CheckString(failures, ref cases, "0x41 → a", "a", KeyNameForVk(0x41));
+        CheckString(failures, ref cases, "0x70 → f1", "f1", KeyNameForVk(0x70));
+        CheckString(failures, ref cases, "认不出的 VK 写码，不猜名字", "VK 0xE8", KeyNameForVk(0xE8));
+
+        // ⑥ 测试缝 forceInsertCount：解析与截短（纯函数；真注入只能在沙箱里做）
+        //    边界就是验收能不能拿到一条**真的** partial：0 等于一个都没送（那是 failed），
+        //    等于事件数则什么也没截到——两者都必须报错，不能默默放行。
+        int take;
+        CheckTrue(failures, ref cases, "没有 forceInsertCount → 不截（take 保持 0）",
+            ParseForceInsertCount("{}", 8, out take) == null && take == 0);
+        CheckTrue(failures, ref cases, "forceInsertCount=3 / 8 个事件 → 截到前 3 个",
+            ParseForceInsertCount("{\"forceInsertCount\":3}", 8, out take) == null && take == 3);
+        CheckTrue(failures, ref cases, "forceInsertCount=0 → 报错（一个都没送是 failed，不是 partial）",
+            ParseForceInsertCount("{\"forceInsertCount\":0}", 8, out take) != null);
+        CheckTrue(failures, ref cases, "forceInsertCount=事件数 → 报错（什么都没截到，验收会白跑）",
+            ParseForceInsertCount("{\"forceInsertCount\":8}", 8, out take) != null);
+        CheckTrue(failures, ref cases, "forceInsertCount 不是整数 → 报错（不静默忽略）",
+            ParseForceInsertCount("{\"forceInsertCount\":3.5}", 8, out take) != null);
+        INPUT[] sliced = SliceBatch(ctrlA, 1);
+        CheckTrue(failures, ref cases, "截出来的批真的是前 N 个事件（ctrl↓）",
+            sliced.Length == 1 && sliced[0].u.ki.wVk == 0x11
+            && (sliced[0].u.ki.dwFlags & KEYEVENTF_KEYUP) == 0);
+        ReleasePlan forcedPlan = PlanStuckReleases(SliceBatch(ctrlA, 1), 1);
+        CheckTrue(failures, ref cases, "截短后的批走真实规划：只剩 ctrl 要松（partial 的 releasedKeys）",
+            forcedPlan.Names.Count == 1 && forcedPlan.Names[0] == "ctrl");
+        CheckTrue(failures, ref cases, "take 超界按全长（防御脏入参）", SliceBatch(ctrlA, 99).Length == 4);
+
+        Console.WriteLine(BuildSelfTestJson(failures, cases));
+        return failures.Count == 0 ? 0 : 1;
     }
 
     private static bool TryButtonFlags(string button, out uint down, out uint up)

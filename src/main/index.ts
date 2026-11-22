@@ -871,7 +871,13 @@ void app.whenReady().then(async () => {
       const meta = await sessions.readMeta(sessionId).catch(() => null);
       return meta?.title ?? "";
     },
-    runPixels: (sessionId, request) => applyComputerUseRequest(computerUse, sessionId, request),
+    /**
+     * 第四个参数是**当前在跑那个后端**的能力声明：agent-requests 按它的 evidence 门控交付档位
+     * （没有读回的后端——L3 的 Linux 桌面——永不出 confirmed / suspected_noop）。没在跑时
+     * capabilities() 为 null，闸门不拦也不猜（与改之前一致）。
+     */
+    runPixels: (sessionId, request) =>
+      applyComputerUseRequest(computerUse, sessionId, request, computerUse.capabilities()),
     /**
      * 浏览器通道。**L2b 里上传/下载目前不支持**：桥把映射目录写死在 `C:\orbita-out`，而
      * 独立会话里没有那个目录（它的映射目录是自己的工作区）。让它发下去会「成功」——

@@ -1228,6 +1228,16 @@ export interface ComputerUseUiaActReply {
   autoSetFocusWarning?: string;
   /** 应用级准入（桥的观察模式）：目标控件所在窗口的进程不一定是我们的。缺省 = 老桥没这一项 */
   admission?: ComputerUseAdmission;
+  /**
+   * setValue 的读回档位（桥 0.15.0）：设完之后桥读回控件当前值并与期望比较。
+   * 缺省 = 老桥 / 其它动作（invoke / selection）—— 不猜，上层按「桥没说」处理。
+   */
+  delivery?: ComputerUseDelivery;
+  /**
+   * 读回证据（只有 setValue 且读回成功时才有）：{kind:"value", detail}。
+   * 密码框的 detail 只有「一致 / 不一致」，**不带值本身**——密码不该因为一次确认进模型上下文。
+   */
+  evidence?: ComputerUseEvidence;
   elapsedMs: number;
 }
 
@@ -1236,10 +1246,18 @@ export type ComputerUseUiaListResult =
   | ({ ok: true } & ComputerUseUiaListReply)
   | { ok: false; error: string };
 
-/** uia-act 的完整回执（同上） */
+/**
+ * uia-act 的完整回执（同上）。
+ *
+ * 失败分支的 `delivery` 只在**桥明确拒绝**（回执 `ok:false`）时才有，而且只有 `refused`：
+ * 参数不合法 / 这个控件不支持该模式 / 窗口已经不在 / UIA 调用自己报 E_FAIL —— 这些都已
+ * 确定「动作没有发生」。缺省 = 超时或响应畸形：那时我们不知道模式调用有没有落下去
+ * （UIA 是跨进程调用，宿主的 45s 放弃线与 guest 的 5s 看门狗都可能切在一次真的调用之后），
+ * **不能替它断言**。这跟像素命令的 failedReply 是同一条纪律。
+ */
 export type ComputerUseUiaActResult =
   | ({ ok: true } & ComputerUseUiaActReply)
-  | { ok: false; error: string };
+  | { ok: false; error: string; delivery?: ComputerUseDelivery };
 
 /**
  * UIA 调用的看门狗上限（毫秒，桥的默认值；guest-bridge/Uia.cs 里有同一个数字）。
@@ -1449,41 +1467,144 @@ export interface ComputerUseShot {
   mime?: string;
 }
 
-// ── 像素输入的交付语义（三档）─────────────────────────────────────────
+// ── 像素输入的交付语义（五档）─────────────────────────────────────────
 //
 // 为什么要有这一层：`SendInput` 的返回值只说明**事件进了窗口队列**，不说明动作生效
 // （窗口可能卡住、焦点可能被别人抢走、目标控件可能压根不接受输入）。以前回执只有
 // `ok:true`，模型读成「我点到了 / 打进去了」就接着往下走，出了错也发现不了，甚至会
-// 重放同一个动作。三档把「已送出」与「已生效」分开：
-//   applied     有生效证据（本刀不产出，位置先留出来：以后可以读控件文本 / 比对截图）
-//   dispatched  已派发、未验证（SendInput 成功入队，但没有生效证据）——**不要再重放**
-//   failed      明确失败（SendInput 返回值不对 / 参数非法 / 窗口不存在）
+// 重放同一个动作。交付档位把「已送出」「已生效」与「有读回但值没变」分开。
 //
-// 同类系统（ZCode 的 CUA 车道）也是这套：`actionSent` / `possibly_sent ⇒ 绝不重放`。
+// 五档（2026-11 由三档扩成五档，对标 OpenAI cua driver 的回执口径）：
+//   confirmed        有读回证据（控件值 / 文档 URL / 窗口状态），可以继续
+//   partial          只完成了一部分（桥 0.15.0：SendInput 只插入部分事件，已补发松开按下键）
+//   unverifiable     已经发出去了，但没有生效证据——**先看一眼再决定，不要立刻重放**
+//   suspected_noop   有读回、但读回的值没变——大概率没生效，换做法
+//   refused          没有发出去（参数非法 / 发送失败 / 后端明确拒绝）——可以修参数重试
+//
+// 谁真的产出哪一档（2026-11 桥 0.15.0）：
+//   · UIA setValue → confirmed / suspected_noop（读回该元素当前值，带 evidence）
+//   · 像素输入 → partial（SendInput 插入数 < 请求数）；其余成功仍是 unverifiable
+//   · 任何后端 → refused（没发出去）
+//
+// **硬规矩：没有读回证据就不许说 confirmed。** 截图变了 / API 返回成功 / 事件被收到都
+// 不算证据：它们最多证明「有变化」，证明不了「你要的那一下生效了」。所以
+// settleComputerUseDelivery 把无证据的 confirmed 降回 unverifiable——不抛错、也不保留
+// 一个假的确认。
+//
+// 兼容老桥（三档时代只发 applied / dispatched / failed）：parseComputerUseDelivery 归一
+// 成新值，语义不变。老桥不说话（缺失 / 不认识）仍然是 undefined：不猜。
+
+/** 五档的**唯一顺序表**：文案拼接、测试与迭代都按它来，不要在别处再手写一份 */
+export const COMPUTER_USE_DELIVERIES = [
+  "confirmed",
+  "partial",
+  "unverifiable",
+  "suspected_noop",
+  "refused",
+] as const;
 
 /** 一条像素输入命令的交付档位（guest 桥写在回执的 `delivery` 上） */
-export type ComputerUseDelivery = "applied" | "dispatched" | "failed";
+export type ComputerUseDelivery = (typeof COMPUTER_USE_DELIVERIES)[number];
 
-/**
- * 回执里的 `delivery` → 契约值。不认识 / 缺失一律 `undefined`（老桥不说话，按「没说」处理，
- * 由调用方决定兜底档位），而不是猜一个——把失败记成成功比少一条信息坏得多。
- */
-export function parseComputerUseDelivery(raw: unknown): ComputerUseDelivery | undefined {
-  return raw === "applied" || raw === "dispatched" || raw === "failed" ? raw : undefined;
+/** 是不是五档之一（运行时收窄用；老值不算，归一交给 parseComputerUseDelivery） */
+function isComputerUseDelivery(raw: unknown): raw is ComputerUseDelivery {
+  return typeof raw === "string" && (COMPUTER_USE_DELIVERIES as readonly string[]).includes(raw);
 }
 
 /**
- * 给模型的口径：`dispatched` 之后该做什么。**一处文案、两个消费者**（工具描述与调用回执），
- * 免得模型从两处读到两种说法。
+ * 回执里的 `delivery` → 契约值。
  *
- * 为什么必须写「不要立刻重放」：模型看到「已送出」的自然反应就是接着下一步；而如果那一下
- * 其实已经生效（只是我们没证据），重放就是双击 / 双份文字。先看一眼屏幕再决定，代价是一张图，
- * 收益是不会有「同一动作做两遍」。
+ * 新值原样返回；**老桥的三个老值归一**：applied → confirmed、dispatched → unverifiable、
+ * failed → refused（只改名字，不改语义）。不认识 / 缺失一律 `undefined`——老桥不说话时
+ * 按「没说」处理，由调用方决定兜底档位，而不是猜一个：把失败记成成功比少一条信息坏得多。
  */
-export const COMPUTER_USE_DISPATCHED_HINT =
-  "dispatched = the input was sent but there is no evidence it took effect: do not replay the same " +
-  "action right away — take a computer_screenshot (or win-shot of that window) first and look at what " +
-  "actually happened.";
+export function parseComputerUseDelivery(raw: unknown): ComputerUseDelivery | undefined {
+  if (isComputerUseDelivery(raw)) return raw;
+  if (raw === "applied") return "confirmed";
+  if (raw === "dispatched") return "unverifiable";
+  if (raw === "failed") return "refused";
+  return undefined;
+}
+
+/**
+ * 一次动作之后**读回来**的东西。
+ *
+ * 只有精确读回才算证据：控件值（value）、文档 URL（url）、窗口状态（window）、
+ * 一段可对照的文本（text）。`detail` 是给人/模型看的具体内容（例如 `value="已提交"`）。
+ * 截图、API 的 ok、事件被收到**都不在这个类型里**——它们证明不了「你要的那一下生效了」。
+ */
+export type ComputerUseEvidence = { kind: "value" | "window" | "url" | "text"; detail: string };
+
+/**
+ * 回执里的 `evidence` → 契约值。**不认识 / 缺字段一律当作没有证据**（undefined），不抛错。
+ *
+ * 为什么这么严：resp 是 guest 进程写的内容，是协议里唯一的不可信输入。一份形状不对的证据
+ * 如果被原样当成证据，`settleComputerUseDelivery` 就会放行一个假的 confirmed——那是本轮
+ * 要消灭的那类谎报。反向也不行：为一个字段问题把整条回执写成工具错误，模型会重试一个
+ * 已经生效的动作。所以：「无效证据」与「没证据」同一个结果，都是降档。
+ */
+export function parseComputerUseEvidence(raw: unknown): ComputerUseEvidence | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const kind: unknown = (raw as { kind?: unknown }).kind;
+  const detail: unknown = (raw as { detail?: unknown }).detail;
+  if (typeof detail !== "string" || detail === "") return undefined;
+  if (kind !== "value" && kind !== "window" && kind !== "url" && kind !== "text") return undefined;
+  return { kind, detail };
+}
+
+/**
+ * 交付档位的**降级闸门**：`confirmed` 但没有读回证据 → `unverifiable`，其余原样返回。
+ *
+ * 为什么是降级而不是抛异常：调用点拿到一个「不能继续确认」的档位，模型会按 unverifiable
+ * 的口径先看一眼；抛异常会把一次已经发生的注入变成一条工具错误，模型反而可能重试。
+ * 为什么不改 `ok`：`ok` 讲的是「命令走完了没有」，与「生效了没有」是两件事，不能混。
+ */
+export function settleComputerUseDelivery(
+  delivery: ComputerUseDelivery,
+  evidence?: ComputerUseEvidence,
+): ComputerUseDelivery {
+  if (delivery === "confirmed" && evidence === undefined) return "unverifiable";
+  return delivery;
+}
+
+/**
+ * 五档各一句**给模型的口径**。**唯一来源**：工具描述（click / type / key / scroll /
+ * screenshot）与调用回执都从这里取，别在别处再写第二套说法——模型从两处读到两种说法时，
+ * 会挑那个更省事的信。
+ *
+ * 为什么 unverifiable 必须写「不要立刻重放」：模型看到「已送出」的自然反应就是接着下一步；
+ * 如果那一下其实已经生效（只是我们没证据），重放就是双击 / 双份文字。先看一眼屏幕再决定，
+ * 代价是一张图，收益是不会有「同一动作做两遍」。
+ * **必须点名 computer_screenshot**：只说「先截一张图」模型不知道调哪个工具（它看不到实现），
+ * 可能去用内置浏览器截图、或者干脆跳过；工具名是它唯一能执行的指令。
+ */
+export const COMPUTER_USE_DELIVERY_HINTS: Record<ComputerUseDelivery, string> = {
+  confirmed: "读回证据对上了，动作已经生效，可以继续下一步。",
+  // partial 从桥 0.15.0 起真的会出现了（SendInput 只插入一部分事件）。它的正文不能写
+  // 「把剩下的步骤补上」——那些事件根本没送出去，桌面上的真实状态是「半个动作」，盲目补
+  // 到底会重做前半段。所以这里说的是「先看一眼，再决定补哪几步」。
+  partial:
+    "只完成了一部分（剩下的输入事件没有送出去）：先截一张图（computer_screenshot）确认现在的状态，" +
+    "再决定补哪几步；不要原样重放整条动作（会重复前半段）。",
+  unverifiable:
+    "已经发出去了，但没拿到生效证据：先截一张图（computer_screenshot）看一眼再决定下一步，不要立刻重放同一个动作（会变成双击或双份文字）。",
+  suspected_noop:
+    "有读回，但读回的值没变：大概率没生效，换个做法（比如改用 UIA 命中或换坐标），不要原样重试。",
+  refused: "没有发出去（参数不合法、发送失败或后端明确拒绝）：可以修参数后重试。",
+};
+
+/**
+ * 后端声明 `evidence: "none"`（没有任何精确读回）时，追加在交付说明后面的一句。
+ * **唯一来源**：回执正文从这里取，不在 agent-requests.ts 里再写一份。
+ *
+ * 为什么要单独一句：unverifiable 那句讲的是「这一次没拿到证据」，而这类后端是**永远**
+ * 拿不到证据——模型如果只读前一句，会以为「再试一次也许就能确认」，于是反复重试同一个
+ * 动作。这一句把事实说死：别等了，确认只能靠你自己截图看。
+ * 为什么也点名 computer_screenshot：与上一句同一个理由（模型只认工具名）。
+ */
+export const COMPUTER_USE_NO_EVIDENCE_HINT =
+  " 这个后端拿不到任何读回（没有控件树，也没有按窗口截图），所以这个动作永远不会被自动确认：" +
+  "点完之后用 computer_screenshot 截图确认结果，再决定下一步。";
 
 /** computerUseRequest 的回执载荷：主进程组装，agent 进程翻成 pi 工具结果（browserResult 同款） */
 export type ComputerUseToolOutcome =
@@ -1495,7 +1616,7 @@ export type ComputerUseToolOutcome =
       shot?: ComputerUseShot;
       /**
        * 像素输入的交付档位（可选：截图 / UIA / sandbox_* 这些通道不说这一档，缺省即可）。
-       * 主进程从桥的回执里取；桥没说时按「已派发未验证」兜底（SendInput 成功入队就是这个含义）。
+       * 主进程从桥的回执里取；桥没说时按 `unverifiable` 兜底（SendInput 成功入队就是这个含义）。
        */
       delivery?: ComputerUseDelivery;
       /**
@@ -1508,7 +1629,7 @@ export type ComputerUseToolOutcome =
   | {
       ok: false;
       error: string;
-      /** 桥**明确拒绝**了这条命令时是 `failed`；超时 / 沙箱没在跑这类「不知道」的失败不带这一档 */
+      /** 桥**明确拒绝**了这条命令时是 `refused`；超时 / 沙箱没在跑这类「不知道」的失败不带这一档 */
       delivery?: ComputerUseDelivery;
     };
 

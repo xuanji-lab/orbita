@@ -50,6 +50,26 @@ export interface SandboxCapabilities {
   windows: boolean;
   /** UIAutomation 控件树（uia-list / uia-act） */
   uia: boolean;
+  /**
+   * 这个后端能提供什么级别的「动作生效证据」。
+   *
+   * 为什么要有这一项：像素动作的回执有五档（confirmed / partial / unverifiable /
+   * suspected_noop / refused，见 shared/computer-use.ts），其中 confirmed 与 suspected_noop
+   * **都要求有读回**。没有读回的后端（L3 的 Linux 桌面：没有 UIA、也没有按窗口截图）拿不到
+   * 任何读回，所以它**永远**不能出这两档——否则模型会等一个永远不来的确认，然后开始瞎试。
+   *
+   *   value    有控件树，能读控件值（UIA）→ confirmed 有可能
+   *   window   没有控件树，但有按窗口截图 / 窗口状态 → 读回最多到窗口一级
+   *   none     没有任何精确读回：confirmed 与 suspected_noop 永不出现，工具层降级成
+   *            unverifiable 并告诉模型「点完请截图确认」
+   *
+   * **一致性规则（单测逐后端校验，与实现同源）**：
+   *   uia === true  ⇒ 必须是 "value"
+   *   否则 windows === true ⇒ 必须是 "window"
+   *   否则 ⇒ 必须是 "none"
+   * 声明得比实现高（说了 value 却没有 UIA）就是「伪造证据」，比不说话更坏。
+   */
+  evidence: "value" | "window" | "none";
   /** guest 里 chromium 的调试口（cdp-* 车道） */
   cdp: boolean;
   /**
