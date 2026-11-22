@@ -2,7 +2,7 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { RequestBroker } from "./request-broker.ts";
 import type { PermissionMode } from "../shared/permission.ts";
 import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPreviewOutcome, PluginInstallRow } from "../shared/plugin.ts";
-import type { PluginBoardOutcome, PluginBoardResult } from "../shared/plugin-board.ts";
+import type { BoardSkippedCard, PluginBoardOutcome, PluginBoardResult } from "../shared/plugin-board.ts";
 
 /**
  * agent 的插件工具：install_plugin / preview_plugin / list_plugins / show_plugin_board。
@@ -52,6 +52,7 @@ const BOARD_DESCRIPTION =
   "into this conversation, so the cards keep looking like this even if the plugin changes later. " +
   "`plugin` is an installed plugin's name (enabled in this workspace), or the path of a plugin folder you are drafting inside the workspace " +
   "(a bare name also finds the draft at <workspace>/plugins/<name>/). `cards` optionally limits it to some card ids; default all cards. " +
+  "If no card can be drawn the call fails; if some cards fail (template or data cannot be read, or an unknown card id) the reply lists them and you must fix them and call again. " +
   "Returns immediately. The reply tells you how much to say afterwards (the plugin's `tuned` flag): follow it.";
 
 type Outcome = PluginAgentInstallOutcome | PluginAgentListOutcome | PluginAgentPreviewOutcome | PluginBoardOutcome;
@@ -163,6 +164,9 @@ export function createPluginTools(broker: RequestBroker, sessionId: string, getM
       const cards = rawCards === undefined || rawCards.length === 0 ? null : (rawCards as string[]);
       const result = await call<PluginBoardOutcome>({ type: "pluginBoardRequest", sessionId, plugin, cards }, signal);
       if (!result.ok) throw new Error(result.error);
+      // 一张卡都没画出来 = 工具没做成：抛错让模型看到 isError、自己去改模板 / 数据再调一次（不再「成功」返回一句「cards are shown」）
+      const failure = boardFailure(result.board);
+      if (failure !== null) throw new Error(failure);
       // 卡快照随工具结果落盘（details.pluginBoard），会话结果行与全局周看板都按它画
       return { content: [{ type: "text", text: describeBoard(result.board) }], details: { pluginBoard: result.board } };
     },
@@ -171,9 +175,34 @@ export function createPluginTools(broker: RequestBroker, sessionId: string, getM
   return [installPlugin, previewPlugin, listPlugins, showBoard];
 }
 
+/** 模型能自己修的没画出原因：模板读不出来 / 数据读不出来 / 卡 id 不在清单里。超上限（too-large / budget / repeat）不算，那是量的问题 */
+const FIXABLE_SKIPS: ReadonlySet<BoardSkippedCard["reason"]> = new Set(["unknown-card", "template", "data"]);
+
+function skipLines(skipped: readonly BoardSkippedCard[]): string {
+  return skipped.map((skip) => `${skip.id}: ${skip.reason}${skip.detail === "" ? "" : ` (${skip.detail})`}`).join("\n- ");
+}
+
+/**
+ * 一张卡都没画出来（cards.length === 0）→ 错误文本（工具抛错，模型看到 isError）；画出来了返回 null。
+ * 文本列出每张没画出的卡与原因（template / data 的 detail 原样带上），并写下一步。
+ */
+export function boardFailure(board: PluginBoardResult): string | null {
+  if (board.cards.length > 0) return null;
+  const head = `show_plugin_board drew no cards for "${board.displayName}" (${board.plugin}${board.source === "draft" ? ", draft" : ""}).`;
+  if (board.skipped.length === 0) {
+    return `${head} The plugin declares no board cards. Add cards under orbita.board.cards in its manifest (id, title, size, template, data), then call show_plugin_board again.`;
+  }
+  return (
+    `${head} Nothing could be drawn:\n- ${skipLines(board.skipped)}\n` +
+    "Fix the template or data file and call show_plugin_board again; if a card id is wrong, use the ids from the plugin's board manifest (orbita.board.cards[].id)."
+  );
+}
+
 /**
  * show_plugin_board 回给模型的话（纯函数，带测试）。话术按清单 tuned 分两种：
  * 没磨合好 → 一两句说做了什么、请用户挑错；磨合好了 → 不再解释，除非用户问。
+ * 画出了一部分、但有卡因 template / data / unknown-card 没画出：成功返回（画出来的照样给用户看），但不再说「The cards are shown」——
+ * 先说哪几张没画出来、为什么，再要求模型在结束这一轮前改好并重调。
  */
 export function describeBoard(board: PluginBoardResult): string {
   const lines: string[] = [];
@@ -183,8 +212,15 @@ export function describeBoard(board: PluginBoardResult): string {
   );
   const samples = [...new Set(board.cards.filter((card) => card.usingSample).map((card) => card.id))];
   if (samples.length > 0) lines.push(`Showing SAMPLE data (the data file is missing or empty): ${samples.join(", ")}.`);
-  if (board.skipped.length > 0) {
-    lines.push(`Not shown:\n- ${board.skipped.map((skip) => `${skip.id}: ${skip.reason}${skip.detail === "" ? "" : ` (${skip.detail})`}`).join("\n- ")}`);
+  if (board.skipped.length > 0) lines.push(`Not shown:\n- ${skipLines(board.skipped)}`);
+  const broken = board.skipped.filter((skip) => FIXABLE_SKIPS.has(skip.reason));
+  if (broken.length > 0) {
+    const ids = [...new Set(broken.map((skip) => skip.id))];
+    lines.push(
+      `These cards were NOT drawn and can be fixed: ${ids.join(", ")}. ` +
+        `Fix them (template file, data file, or the card id) and call show_plugin_board again for those cards (cards: ${JSON.stringify(ids)}) before you finish this turn.`,
+    );
+    return lines.join("\n");
   }
   lines.push(
     board.tuned
