@@ -8,13 +8,14 @@
  * 只看 nativeTheme 的深浅，空白页会和工具条、主窗口的壳对不上色。
  *
  * 主进程读不到 CSS 变量，所以这里抄一份色值；`page-background.test.ts` 逐档对照
- * tokens/colors.css 的 `--color-bg-app`，改了 token 忘了改这里会当场红。
+ * tokens/colors.css 的 `--color-bg-app`，改了 token 忘了改这里会当场红。主进程里其余要用
+ * 壳底色的地方（sandbox 的首帧垫底、Windows / Linux 窗口的 backgroundColor）都引用这张表，不另抄。
  */
 import type { ThemePreference } from "../../shared/settings.ts";
 import { resolveTheme } from "../../shared/theme-resolve.ts";
 
 export const PAGE_BACKGROUNDS: Record<Exclude<ThemePreference, "system">, string> = {
-  light: "#e7ebef",
+  light: "#f5f5f5",
   graphite: "#202021",
   black: "#1b1e23",
   copybook: "#e6e4dc",
