@@ -2180,6 +2180,8 @@ export const zh: Messages = {
     processEveryStep: "逐条看",
     processChapterSteps: "展开这一段的每一步",
     processWorked: (duration) => `工作了 ${duration}`,
+    // 跑着时点开后，现场块头一行改成「工作中」（正在做的那一步在列表最后一行）
+    processLiveWorking: "工作中",
     processInterrupted: "被你打断",
     // 过程里改了目标：展开时那一步的动作词；落定态那一句话里也带一个
     goalChangedStep: "改了目标",

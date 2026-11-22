@@ -2363,6 +2363,7 @@ export const en = {
     // 过程与产物（2026-11-22，process-rows.ts）
     processWorked: (duration: string) => `Worked ${duration}`,
     // 这一轮被用户打断（有工具调用永远等不到结果）：过程行的头一句换成它，不再写「工作了 X 秒」
+    processLiveWorking: "Working",
     processInterrupted: "Interrupted by you",
     // 过程里改了目标：展开时那一步的动作词；落定态那一句话里也带一个
     goalChangedStep: "Changed goal",

@@ -88,6 +88,7 @@ import {
   TAIL_AFTER_MS,
   processChapters,
   processCounts,
+  finishedSteps,
   processCalls,
   processInterrupted,
   processLive,
@@ -4710,25 +4711,60 @@ function TurnProcessLine(props: {
     const doing =
       current.kind === "tool" ? stepLabel(current.call, t, props.skills, props.plan, peerTitle) : t.chat.processThinking;
     const idea = snap.chapter?.title ?? (current.kind === "think" ? current.preview : null) ?? planStepNow;
-    return (
-      <div className="proc-live" aria-live="off">
-        <div className="proc-who">
-          <span className="proc-doing orbita-breath">
+    // 现场块整体可点（2026-11-22 用户：「跑着的时候也能点开，点开后实时往下长」）：点开后下面按当前排法列出已经做完的步骤，
+    // 正在做的那一步是最后一行（呼吸 + 走表 + 输出尾巴）；展开状态与落定后共用同一个 fold key（proc:…），live → 落定不合上、不重挂
+    const nowRow = (
+      <li className="proc-now" aria-live="off">
+        <div className="proc-row">
+          <span className="proc-row-icon">
+            <Icon name={current.kind === "tool" ? stepIcon(current.call.toolName, current.call.input, props.skills) : "lightbulb"} size={14} strokeWidth={1.8} />
+          </span>
+          <span className="proc-row-verb orbita-breath">
             <InlineMarks text={doing} />…
           </span>
-          {elapsed !== null && <span className="proc-time">{formatRunClock(elapsed)}</span>}
+          {runMs !== null && <span className="proc-time">{formatRunClock(runMs)}</span>}
         </div>
-        <div className="proc-idea">
-          {idea !== null && (
+        {(tail !== null || slow) && <div className={slow ? "proc-now-tail slow" : "proc-now-tail"}>{slow ? t.chat.processSlow : tail}</div>}
+      </li>
+    );
+    return (
+      <div className="proc-live-wrap">
+        <button type="button" className="proc-live" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+          <div className="proc-who">
+            <span className="proc-doing orbita-breath">
+              <InlineMarks text={open ? t.chat.processLiveWorking : doing} />…
+            </span>
+            {elapsed !== null && <span className="proc-time">{formatRunClock(elapsed)}</span>}
+            <Icon name={open ? "chevron-down" : "chevron-right"} size={13} strokeWidth={1.8} />
+          </div>
+          {!open && (
             <>
-              <Icon name="lightbulb" size={13} strokeWidth={1.8} />
-              <span>
-                <InlineMarks text={idea} />
-              </span>
+              <div className="proc-idea">
+                {idea !== null && (
+                  <>
+                    <Icon name="lightbulb" size={13} strokeWidth={1.8} />
+                    <span>
+                      <InlineMarks text={idea} />
+                    </span>
+                  </>
+                )}
+              </div>
+              <div className={slow ? "proc-foot slow" : "proc-foot"}>{slow ? t.chat.processSlow : (tail ?? goalNoticeLine ?? "")}</div>
             </>
           )}
-        </div>
-        <div className={slow ? "proc-foot slow" : "proc-foot"}>{slow ? t.chat.processSlow : (tail ?? goalNoticeLine ?? "")}</div>
+        </button>
+        {open && (
+          <GoalChangeContext.Provider value={goalChanges}>
+            <LiveExpanded
+              steps={unit.steps}
+              toolResults={props.toolResults}
+              interrupted={props.interruptedCalls}
+              skills={props.skills}
+              plan={props.plan}
+              tailRow={nowRow}
+            />
+          </GoalChangeContext.Provider>
+        )}
         {planHead}
       </div>
     );
@@ -4792,6 +4828,62 @@ function TurnProcessLine(props: {
   );
 }
 
+/**
+ * 跑着点开的列表每一帧流式 token 都会重建步骤对象（flattenRenderUnits），但已做完的步骤其实没变：
+ * 按**内容**比较（工具调用 id / 入参引用 / 结果引用 / 思考文字 / 图的 key），没变的行整行跳过重渲染，
+ * 只有最后一行（现场的呼吸 / 走表）与新长出来的步骤会动（2026-11-22 用户要求「流式 token 不该让整列重渲染」）。
+ */
+function sameStrings(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+function sameCall(a: ToolCallUnit, b: ToolCallUnit, ra: ToolResultIndex, rb: ToolResultIndex): boolean {
+  return a.toolCallId === b.toolCallId && a.input === b.input && ra.get(a.toolCallId) === rb.get(b.toolCallId);
+}
+
+const StepRow = memo(StepRowInner, (a, b) =>
+  sameCall(a.call, b.call, a.toolResults, b.toolResults) &&
+  sameStrings(a.thinking, b.thinking) &&
+  a.images.length === b.images.length &&
+  a.images.every((image, index) => image.key === b.images[index]?.key) &&
+  a.skills === b.skills &&
+  a.plan === b.plan,
+);
+
+function sameProcessStep(a: ProcessStep, b: ProcessStep, ra: ToolResultIndex, rb: ToolResultIndex): boolean {
+  if (a.kind !== b.kind || a.key !== b.key) return false;
+  if (a.kind === "text" || a.kind === "thinking") return a.text === (b as typeof a).text;
+  if (a.kind === "toolCall") return sameCall(a, b as ToolCallUnit, ra, rb);
+  if (a.kind === "toolGroup") {
+    const other = b as typeof a;
+    return a.calls.length === other.calls.length && a.calls.every((call, index) => sameCall(call, other.calls[index] as ToolCallUnit, ra, rb));
+  }
+  return false;
+}
+
+const ProcessChapterRow = memo(ProcessChapterRowInner, (a, b) =>
+  a.chapter.key === b.chapter.key &&
+  a.chapter.steps.length === b.chapter.steps.length &&
+  a.chapter.steps.every((step, index) => sameProcessStep(step, b.chapter.steps[index] as ProcessStep, a.toolResults, b.toolResults)) &&
+  processCalls(a.chapter.steps).every((call) => (a.imagesByCall.get(call.toolCallId)?.length ?? 0) === (b.imagesByCall.get(call.toolCallId)?.length ?? 0)) &&
+  a.skills === b.skills &&
+  a.plan === b.plan,
+);
+
+/** 跑着时点开的列表：只列已做完的步骤（finishedSteps），最后接「正在做」那一行；图按已做完的步骤挂 */
+function LiveExpanded(props: {
+  steps: readonly ProcessStep[];
+  toolResults: ToolResultIndex;
+  interrupted: ReadonlySet<string>;
+  skills: SkillMeta[];
+  plan: PlanTimeline | null;
+  tailRow: ReactNode;
+}) {
+  const done = finishedSteps(props.steps, props.toolResults, props.interrupted);
+  const imagesByCall = assignImages(done, props.toolResults);
+  return <ProcessExpanded steps={done} toolResults={props.toolResults} skills={props.skills} imagesByCall={imagesByCall} plan={props.plan} tailRow={props.tailRow} />;
+}
+
 /** 过程块里「改了目标」的那几次 update_goal：调用 id → 「旧」改成「新」——为什么（展开时那一步写它） */
 /** 子会话 id → 标题：过程里「回复了「标题」」那一步要写对面是谁（TranscriptColumn 之外的 StepRow 取不到 channel，走 context） */
 const PeerTitleContext = createContext<(childId: string) => string>(() => "");
@@ -4810,6 +4902,8 @@ function ProcessExpanded(props: {
   imagesByCall: ReadonlyMap<string, ProcessImage[]>;
   /** 计划的版本线：「改计划」那一步写成「完成 X / 开始 Y」，定计划 / 改结构的那一步原位画出清单或左右对照 */
   plan: PlanTimeline | null;
+  /** 跑着时点开：列表最后一行「正在做」（呼吸 + 走表 + 输出尾巴） */
+  tailRow?: ReactNode;
 }) {
   const t = useT();
   // 展开后怎么排（设置 › 过程显示：按块 = 按段，铺开 = 每步一行）；对话里不再放切换按钮，省垂直空间（2026-11-22 用户）
@@ -4821,6 +4915,7 @@ function ProcessExpanded(props: {
           {processChapters(props.steps).map((chapter) => (
             <ProcessChapterRow key={chapter.key} chapter={chapter} toolResults={props.toolResults} skills={props.skills} imagesByCall={props.imagesByCall} plan={props.plan} />
           ))}
+          {props.tailRow}
         </ol>
       ) : (
         <ol className="proc-rows">
@@ -4840,6 +4935,7 @@ function ProcessExpanded(props: {
               <StepRow key={row.key} call={row.call} thinking={row.thinking} toolResults={props.toolResults} skills={props.skills} images={props.imagesByCall.get(row.call.toolCallId) ?? []} plan={props.plan} />
             ),
           )}
+          {props.tailRow}
         </ol>
       )}
     </div>
@@ -4851,7 +4947,7 @@ function ProcessExpanded(props: {
  * 这段说的话整句显示、可以换行；下面一行是这段做了哪几步（同一种「动作 · 对象」，前几步 + 还有 N 步）；
  * 右边是步数、图的张数和缩略图。点开是这段的每一步。
  */
-function ProcessChapterRow(props: {
+function ProcessChapterRowInner(props: {
   chapter: ProcessChapter;
   toolResults: ToolResultIndex;
   skills: SkillMeta[];
@@ -4968,7 +5064,7 @@ function stepIcon(toolName: string, input: unknown, skills: SkillMeta[]): IconNa
 }
 
 /** 一步一行：图标 · 动作 · 对象 · 量 · 缩略图。点开是原样的输入输出（前面挂着它之前想的那段） */
-function StepRow(props: {
+function StepRowInner(props: {
   call: ToolCallUnit;
   thinking: readonly string[];
   toolResults: ToolResultIndex;

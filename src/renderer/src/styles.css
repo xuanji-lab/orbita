@@ -5577,10 +5577,56 @@ mark.intent-mark {
 
 /* ===== 「一轮一行」过程块（ChatView 的 TurnProcessLine；推导在 turn-process.ts / process-rows.ts） =====
  * 字在内线上（--content-hem），与正文首字同一根线。现场块定高：头行 + 在想什么 + 末行，只换字不加行。 */
+.proc-live-wrap {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+/* 现场块整体可点（跑着时点开，实时往下长）：重置成无框的整行按钮 */
 .proc-live {
   display: grid;
   gap: var(--space-0-5);
+  width: 100%;
   min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.proc-live:hover {
+  background: var(--color-bg-hover);
+}
+.proc-who > .orbita-icon {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+/* 跑着点开后列表的最后一行：正在做（呼吸 + 走表）；长命令的输出尾巴在下面一行 */
+.proc-now {
+  list-style: none;
+}
+.proc-now .proc-row-verb {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--color-text-primary);
+}
+.proc-now-tail {
+  padding: 0 var(--space-2) var(--space-1) calc(var(--space-2) + var(--proc-icon-w) + var(--space-2));
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.proc-now-tail.slow {
+  font-family: var(--font-family-base);
+  color: var(--color-warning);
 }
 .proc-head-row {
   display: flex;

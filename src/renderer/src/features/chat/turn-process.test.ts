@@ -19,7 +19,7 @@ import {
 import { goalChangesByCall } from "../context/plan-text.ts";
 import type { GoalLedger } from "../../../../shared/goal-ledger.ts";
 import { zh } from "../../messages-zh.ts";
-import { firstLine, processChapters, processCounts, processInterrupted, processLive, processOutcome } from "./turn-process.ts";
+import { finishedSteps, firstLine, processChapters, processCounts, processInterrupted, processLive, processOutcome } from "./turn-process.ts";
 
 const user = (id: string, timestamp: number): TranscriptItem =>
   ({ id, role: "user", content: [{ type: "text", text: "hi" }], timestamp }) as TranscriptItem;
@@ -431,5 +431,59 @@ describe("questionAnswered：问询答过没有", () => {
   test("读不到摘要（旧样张没有账本）：按还在等，不编造「已回答」", () => {
     assert.equal(questionAnswered(undefined, undefined), false);
     assert.equal(questionAnswered({ status: "waiting", lastAt: 5 }, undefined), false);
+  });
+});
+
+describe("跑着时点开：列表只列已做完的步骤，正在做的是最后一行", () => {
+  // 一轮：旁白 → 读（做完）→ bash（还在跑，没有结果帧）
+  const live = [
+    user("u1", 1000),
+    assistant("a1", 2000, [{ type: "text", text: "先读一下。" }, call("r1")]),
+    tool({ toolCallId: "r1", timestamp: 2100 }),
+    assistant("a2", 3000, [{ type: "thinking", thinking: "再跑" }, call("b1", "bash", { command: "sleep 60" })]),
+  ];
+  const [proc] = procOf(view(live, true));
+
+  test("还在跑的工具调用不在列表里；旁白、思考、做完的步骤照旧", () => {
+    assert.ok(proc !== undefined);
+    const done = finishedSteps(proc.steps, indexToolResults(live));
+    assert.deepEqual(done.map((step) => step.kind), ["text", "toolCall", "thinking"]);
+    assert.ok(done.every((step) => step.kind !== "toolCall" || step.toolCallId === "r1"));
+  });
+
+  test("新步骤出现就地追加：bash 落定后列表多出它，前面的步骤顺序与对象不变", () => {
+    const next = [...live, tool({ toolCallId: "b1", toolName: "bash", timestamp: 3500 })];
+    const [procNext] = procOf(view(next, true));
+    assert.ok(proc !== undefined && procNext !== undefined);
+    const before = finishedSteps(proc.steps, indexToolResults(live));
+    const after = finishedSteps(procNext.steps, indexToolResults(next));
+    assert.deepEqual(after.map((step) => step.kind), ["text", "toolCall", "thinking", "toolCall"]);
+    assert.deepEqual(after.slice(0, before.length).map((step) => step.key), before.map((step) => step.key));
+  });
+
+  test("已中断的调用不算还在跑（没有结果也不会来）：留在列表里", () => {
+    assert.ok(proc !== undefined);
+    const done = finishedSteps(proc.steps, indexToolResults(live), new Set(["b1"]));
+    assert.equal(done.filter((step) => step.kind === "toolCall").length, 2);
+  });
+
+  test("工具组里还在跑的成员剔掉，剔空的组整个不要", () => {
+    const grouped = [
+      user("u1", 1000),
+      assistant("a1", 2000, [call("r1"), call("r2")]),
+      tool({ toolCallId: "r1", timestamp: 2100 }),
+    ];
+    const [p] = procOf(view(grouped, true));
+    assert.ok(p !== undefined);
+    const done = finishedSteps(p.steps, indexToolResults(grouped));
+    const group = done.find((step) => step.kind === "toolGroup");
+    assert.ok(group !== undefined && group.kind === "toolGroup");
+    assert.deepEqual(group.calls.map((c) => c.toolCallId), ["r1"]);
+    assert.deepEqual(finishedSteps(p.steps, new Map()).filter((step) => step.kind === "toolGroup"), []);
+  });
+
+  test("展开状态跨 live → 落定保持：过程块 key 不变（TurnProcessLine 用同一个 fold key，不重挂）", () => {
+    const settled = [...live, tool({ toolCallId: "b1", toolName: "bash", timestamp: 3500 }), assistant("a3", 4000, [{ type: "text", text: "好了。" }])];
+    assert.equal(procOf(view(live, true))[0]?.key, procOf(view(settled, false))[0]?.key);
   });
 });
