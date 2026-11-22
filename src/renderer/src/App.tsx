@@ -10,6 +10,8 @@ import type { ChimeReason } from "@shared/notify";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { effectiveIntentSettings } from "@shared/settings";
 import { IntentPanel } from "./features/intent/IntentPanel.tsx";
+import { ChatStatus } from "./features/context/ChatStatus";
+import { useChatStatusFlag } from "./features/context/chat-status-flag.ts";
 import { ContextPanel, type TaskPanelTab } from "./features/context/ContextPanel.tsx";
 import { EMPTY_ENTRY } from "./features/chat/session-states.ts";
 import { ChatView } from "./features/chat/ChatView";
@@ -134,6 +136,7 @@ export function App() {
   const [providersError, setProvidersError] = useState<string | null>(null);
   /** 中卡盖着哪个面（聊天 / 设置）——与右侧面板是**两个独立状态**，不是一个枚举 */
   const [overlay, setOverlay] = useState<Overlay>(null);
+  const [chatStatusOn] = useChatStatusFlag();
   /** 右侧分屏面板开哪个；两个面板互斥，同一时刻至多一个 */
   const [rightPanel, setRightPanel] = useState<RightPanelKind | null>(null);
   /**
@@ -1619,6 +1622,20 @@ export function App() {
                 onOpenContextPanel={openContextPanel}
                 onOpenSideChat={openInSideChat}
                 intentOpenableIds={intentOpenableIds}
+              />
+            )}
+            {/* 「状态」卡（原型，设置 › 外观里的开关）：浮在对话区右上角 */}
+            {chatStatusOn && overlay === null && mainSessionId !== null && (
+              <ChatStatus
+                key={mainSessionId}
+                session={session}
+                engine={engine}
+                sessionId={mainSessionId}
+                entry={engine.states.get(mainSessionId) ?? EMPTY_ENTRY}
+                working={mainMeta !== undefined && (runStateOf(session, mainMeta) === "running" || runStateOf(session, mainMeta) === "waiting")}
+                onOpenSubSession={openSubSessionInPanel}
+                onOpenReviewAt={openReviewAt}
+                onOpenExcerpt={openExcerpt}
               />
             )}
           </div>

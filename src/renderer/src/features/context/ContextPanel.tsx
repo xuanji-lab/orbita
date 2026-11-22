@@ -145,7 +145,7 @@ export function ContextPanel(props: {
   );
 }
 
-function ContextBody(props: {
+export function ContextBody(props: {
   sessionId: string;
   entry: SessionEntry;
   cwd: string;
