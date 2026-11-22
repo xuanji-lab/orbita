@@ -26,6 +26,8 @@ import type { ChannelMarkTone } from "./tool-results";
 import { EXIT_CARD_KICKER, EXIT_CARD_STYLE, ExitCard } from "./ExitCard";
 import { MarkdownBlock } from "./MarkdownBlock";
 import type { SessionEntry } from "./session-states";
+import { ChildAvatar, ChildModelLabel } from "./TurnAvatar";
+import type { ChildIdentity } from "./child-badge.ts";
 import type { Messages } from "../../messages-en.ts";
 import { useT } from "../../locale.ts";
 
@@ -42,6 +44,8 @@ export interface ChannelViewContext {
   ownParentId: string | null;
   /** 会话 id → 标题，标记行 / 派出卡按 peerId / childId 查对面的名字 */
   titles: ReadonlyMap<string, string>;
+  /** 子会话 id → 它用的模型、在这条父会话下的序号（头像与角标用）；子侧视图为空 */
+  childIdentities: ReadonlyMap<string, ChildIdentity>;
   /** 派出卡状态优先读它（done/failed/waiting），来自 useChannelSummaries */
   channelSummaries: ReadonlyMap<string, ChannelSummary>;
   /** 派出卡状态的兜底——channelSummaries 没有终态时看子会话是否还在跑 */
@@ -259,6 +263,8 @@ export function DelegateCardView(props: {
   interrupted?: boolean;
   onClick?: () => void;
   lit?: boolean;
+  /** 子会话用的模型与序号：卡左边是它的模型头像 + 角标（同模型的几个子会话靠角标分开）；缺 = 退回机器人图标 */
+  child?: ChildIdentity;
 }) {
   const t = useT();
   if (props.card === null) {
@@ -309,6 +315,7 @@ export function DelegateCardView(props: {
     <ExitCard
       kicker={t.channel.delegated}
       icon="bot"
+      {...(props.child !== undefined ? { avatar: <ChildAvatar child={props.child} />, titleSuffix: <ChildModelLabel child={props.child} /> } : {})}
       title={card.title}
       status={{ text: t.channel.delegateStatus[status], color: delegateStatusColor(status), active: status === "running" }}
       preview={props.taskPreview}

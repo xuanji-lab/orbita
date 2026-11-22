@@ -2439,7 +2439,6 @@ export const en = {
     outputBatch: "Generated in bulk",
     outputGroup: (type: "doc" | "pdf" | "web", n: number) =>
       type === "doc" ? `${n} documents` : type === "web" ? `${n} web pages` : `${n} PDFs`,
-    childReportKicker: "Sub-session",
     childReportDone: "Handed back",
     childReportOpen: "Open its session",
     childReportEdited: (n: number) => `Also edited ${n} other file${n === 1 ? "" : "s"}`,
@@ -2479,6 +2478,7 @@ export const en = {
 
   /** 子会话通道：消息种类、标记行、通道列、派出卡 */
   channel: {
+    childOf: (title: string) => `Sub-session of "${title}"`,
     kinds: {
       task: "task",
       reply: "reply",

@@ -6078,6 +6078,134 @@ mark.intent-mark {
 }
 
 /*
+ * 头像槽（2026-11-22 用户对照 Kimi 桌面版）：agent 一侧的每一行（过程行、回答、结尾的卡）整体在头像槽右边左起对齐，
+ * 一轮 agent 的开头那一行左边画这一轮所用模型的头像（TurnAvatar）；用户气泡靠右，右缘 = agent 正文的右缘（两边都是消息列的右内缘）。
+ * 槽宽 = 头像（--control-height-sm，28）+ --space-3；头像圆形，顶对齐第一行。
+ */
+.chat-col {
+  --agent-avatar: calc(var(--space-8) + var(--space-1));
+  --agent-slot: calc(var(--agent-avatar) + var(--space-3));
+}
+.agent-side {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: inherit;
+  padding-left: var(--agent-slot);
+}
+.agent-side > .turn-avatar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: inline-flex;
+}
+.turn-pet {
+  position: relative;
+  width: var(--agent-avatar);
+  height: var(--control-height-sm);
+}
+/* 星云（80×48 的盒子，云心在 (40,24)）缩到 0.6，云心落在槽的正中 */
+.turn-pet-scale {
+  position: absolute;
+  left: calc(-1 * var(--space-1-5));
+  top: 0;
+  transform: scale(0.6);
+  transform-origin: 0 0;
+}
+/* 落定的星云静止：不呼吸、碎片停住（NebulaPet 的 orbit=false 已让碎片暂停；呼吸在这里关掉） */
+.turn-pet[data-still] .usage-orb {
+  animation: none;
+}
+.turn-avatar .model-avatar,
+.child-avatar .model-avatar {
+  border-radius: 50%;
+}
+.model-avatar.letter {
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+
+/* 子会话的头像：模型头像 + 右下角角标（同一个模型的几个子会话靠角标分开）。两种方案都渲染，
+   <html data-child-badge="initial|ring"> 选一种显示（缺省 initial）；选定后删掉另一种与这个开关。
+   ① initial：角标 = 子会话标题的首字；② ring：头像外一圈颜色环（按序号取色）+ 角标 = 序号 */
+.child-avatar {
+  --child-ring: var(--color-info);
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+.child-avatar[data-tone="success"] { --child-ring: var(--color-success); }
+.child-avatar[data-tone="accent"] { --child-ring: var(--color-accent); }
+.child-avatar[data-tone="text-secondary"] { --child-ring: var(--color-text-secondary); }
+.child-avatar-badge {
+  position: absolute;
+  right: calc(-1 * var(--space-1));
+  bottom: calc(-1 * var(--space-1));
+  display: grid;
+  place-items: center;
+  min-width: var(--space-4);
+  height: var(--space-4);
+  padding: 0 var(--space-0-5);
+  box-sizing: border-box;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-panel);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+  color: var(--color-text-primary);
+}
+.child-avatar-badge.ordinal,
+.child-avatar-bot,
+.child-model-label {
+  display: none;
+}
+[data-child-badge="ring"] .child-avatar-badge.initial {
+  display: none;
+}
+/* ③ label：不画位图头像与角标，卡左边是机器人图标，标题后面跟模型名小标签 */
+[data-child-badge="label"] .child-avatar .model-avatar,
+[data-child-badge="label"] .child-avatar-badge {
+  display: none;
+}
+[data-child-badge="label"] .child-avatar-bot {
+  display: inline-flex;
+  color: var(--color-text-tertiary);
+}
+[data-child-badge="label"] .child-model-label {
+  display: inline;
+  flex: none;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+[data-child-badge="ring"] .child-avatar-badge.ordinal {
+  display: grid;
+}
+[data-child-badge="ring"] .child-avatar .model-avatar {
+  box-shadow: 0 0 0 2px var(--color-bg-panel), 0 0 0 4px var(--child-ring);
+}
+.child-session-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--agent-avatar, var(--control-height-sm));
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.child-session-head .turn-avatar {
+  display: inline-flex;
+}
+.exit-card-avatar {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-height-sm);
+  color: var(--color-text-tertiary);
+}
+
+/*
  * ======================================================================
  * 浏览器表面（2026-11-07 方向 N）：浏览器自带、却没人逐个决定过的几处
  * ======================================================================
@@ -7153,12 +7281,6 @@ html {
   gap: var(--space-3);
   min-width: 0;
   padding: var(--space-2) var(--space-3);
-}
-.child-report-kicker {
-  flex: none;
-  font-size: var(--font-size-sm);
-  font-weight: var(--weight-semibold);
-  color: var(--color-text-tertiary);
 }
 .child-report-body {
   display: grid;

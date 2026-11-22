@@ -10,11 +10,13 @@ import {
   groupTurns,
   groupTurnsByTurn,
   branchAnchorEntries,
+  isTurnStart,
   indexToolResults,
   unreferencedShowImages,
   type TurnProcessUnit,
   type TurnViewEntry,
 } from "./tool-results.ts";
+import { badgeInitial, ringTone } from "./child-badge.ts";
 import { goalChangesByCall } from "../context/plan-text.ts";
 import type { GoalLedger } from "../../../../shared/goal-ledger.ts";
 import { zh } from "../../messages-zh.ts";
@@ -349,5 +351,47 @@ describe("改目标收进过程行", () => {
     assert.deepEqual([...changes.keys()], ["g2"]);
     assert.equal(changes.get("g2"), "「做 A」改成「做 B」——用户改主意");
     assert.equal(goalChangesByCall(zh, ledger, []).size, 0);
+  });
+});
+
+describe("每一轮 agent 开头的星云：认开头", () => {
+  const model = { provider: "p1", id: "kimi-k3.1" };
+  const assistantM = (id: string, ts: number, blocks: unknown[]) => ({ ...assistant(id, ts, blocks), model }) as TranscriptItem;
+  const records = [
+    user("u1", 1),
+    assistantM("a1", 2, [{ type: "text", text: "我先看看" }, call("r1")]),
+    tool({ toolCallId: "r1", timestamp: 3 }),
+    assistantM("a2", 4, [{ type: "text", text: "好了。" }]),
+    user("u2", 5),
+    assistantM("a3", 6, [{ type: "text", text: "直接答。" }]),
+  ];
+  const v = view(records, false);
+
+  test("只有 user 之后的第一个 agent 单元是开头；同一轮后面的不重复", () => {
+    // user, turnProcess, text, user, text
+    assert.deepEqual(v.map((e) => e.kind), ["user", "turnProcess", "text", "user", "text"]);
+    assert.deepEqual(v.map((_, i) => isTurnStart(v, i, null)), [false, true, false, false, true]);
+  });
+
+  test("意图召回卡夹在用户消息与回答之间：不算 agent 开口，头像给后面的回答", () => {
+    const withRecall = [...v.slice(0, 1), { kind: "intentRecall", key: "ir" } as unknown as TurnViewEntry, ...v.slice(1)];
+    assert.equal(isTurnStart(withRecall, 1, null), false);
+    assert.equal(isTurnStart(withRecall, 2, null), true);
+  });
+
+  test("尾段第一行：看历史段最后一行是不是开轮单元", () => {
+    assert.equal(isTurnStart(v.slice(1), 0, "user"), true);
+    assert.equal(isTurnStart(v.slice(1), 0, "text"), false);
+  });
+});
+
+describe("子会话头像的角标", () => {
+  test("首字取标题第一个字符（大写）；标题空退回序号", () => {
+    assert.equal(badgeInitial("  调研：三家产品", 2), "调");
+    assert.equal(badgeInitial("pomodoro", 1), "P");
+    assert.equal(badgeInitial("   ", 3), "3");
+  });
+  test("色环按序号循环取非语义的几档", () => {
+    assert.deepEqual([1, 2, 3, 4, 5].map(ringTone), ["info", "success", "accent", "text-secondary", "info"]);
   });
 });

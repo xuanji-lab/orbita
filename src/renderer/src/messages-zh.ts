@@ -2253,7 +2253,6 @@ export const zh: Messages = {
     outputPreview: "预览",
     outputBatch: "批量生成",
     outputGroup: (type, n) => (type === "doc" ? `${n} 份文档` : type === "web" ? `${n} 个网页` : `${n} 个 PDF`),
-    childReportKicker: "子会话",
     childReportDone: "交回了",
     childReportOpen: "看它的会话",
     childReportEdited: (n) => `还改了 ${n} 个别的文件`,
@@ -2292,6 +2291,7 @@ export const zh: Messages = {
   },
 
   channel: {
+    childOf: (title) => `「${title}」的子会话`,
     kinds: {
       task: "任务",
       reply: "回复",

@@ -93,6 +93,8 @@ import {
 } from "./turn-process.ts";
 import {
   branchAnchorEntries,
+  isAgentSide,
+  isTurnStart,
   branchAnchorIds,
   answerText,
   delegateCard,
@@ -214,6 +216,8 @@ import { collectCitations } from "./citation-markers.ts";
 import { CitationTableContext } from "./citation-context.ts";
 import { RevertPreviewContext, type RevertPreview } from "./revert-preview.ts";
 import { CarryoverScanCard } from "./CarryoverScanCard";
+import { ChildAvatar, ChildModelLabel, ModelIdentityContext, TurnAvatar, TurnPet, type ModelIdentity } from "./TurnAvatar";
+import type { ChildIdentity } from "./child-badge.ts";
 import { AutomationModeLine } from "../automation/AutomationModeLine";
 import { AutomationRunBar } from "../automation/AutomationRunBar";
 import { AutomationToolLine } from "../automation/AutomationToolLine";
@@ -270,7 +274,7 @@ import {
   type TranscriptRecord,
 } from "@shared/session";
 import type { FileTurnView, RevertRecord, UndoRecord } from "@shared/revert";
-import type { RetryStatus } from "@shared/agent-ipc";
+import type { DelegateCard, RetryStatus } from "@shared/agent-ipc";
 import type { ChatSession } from "./useChatSession";
 import type { ModelPair, ThemePreference } from "@shared/settings";
 import { useT } from "../../locale.ts";
@@ -338,6 +342,11 @@ export function ChatView(props: ChatViewProps) {
   const fileScope = useMemo<ChatFileScope>(
     () => ({ sessionId: session.sessionId, workspaceId: session.workspaceId, cwd: session.cwd }),
     [session.sessionId, session.workspaceId, session.cwd],
+  );
+  // 头像要从服务商清单认图（TurnAvatar）：模型身份随会话走
+  const modelIdentity = useMemo<ModelIdentity>(
+    () => ({ providers: session.usable, catalog: session.catalog, current: session.model }),
+    [session.usable, session.catalog, session.model],
   );
   // 引用跳转：原文在本转录里找得到才给得出（发出去的引用不带 id，按轮号 + 角色 + 原文找；
   // 迁移来的引用、被压缩掉的历史找不到就不可点）
@@ -437,7 +446,9 @@ export function ChatView(props: ChatViewProps) {
       <QuoteJumpContext.Provider value={jumpToQuote}>
         <CitationTableContext.Provider value={citations}>
           <ChatFileScopeContext.Provider value={fileScope}>
-            <ChatViewBody {...props} dropActive={dropActive} />
+            <ModelIdentityContext.Provider value={modelIdentity}>
+              <ChatViewBody {...props} dropActive={dropActive} />
+            </ModelIdentityContext.Provider>
           </ChatFileScopeContext.Provider>
         </CitationTableContext.Provider>
       </QuoteJumpContext.Provider>
@@ -1297,6 +1308,20 @@ function ChatViewBody(props: {
     () => new Map(session.sessions.map((meta) => [meta.id, meta.title])),
     [session.sessions],
   );
+  // 子会话的模型与序号（按创建先后，1 起）：主流里派出卡 / 交回卡的头像与角标用
+  const childIdentities = useMemo(() => {
+    const map = new Map<string, ChildIdentity>();
+    // 先给每条会话一份（子会话卡指到的不一定是这条会话名下的真子会话，例如样张），序号 1；真子会话再按创建先后改成 1、2、3…
+    for (const meta of session.sessions) {
+      map.set(meta.id, { providerId: meta.providerId, modelId: meta.modelId, ordinal: 1, title: meta.title });
+    }
+    if (ownSide === "parent" && openId !== "") {
+      childSessions(session.sessions, openId).forEach((meta, index) => {
+        map.set(meta.id, { providerId: meta.providerId, modelId: meta.modelId, ordinal: index + 1, title: meta.title });
+      });
+    }
+    return map;
+  }, [ownSide, openId, session.sessions]);
   const channelSummaries = useChannelSummaries(openId === "" ? null : openId);
   // 子会话 PR4c：派出卡 / 问询胶囊的点击入口——只有主槽的根会话视图接得上
   // （onOpenSubSession 由 App 给），辅助对话抽屉与面板内查看的子会话都接不上，
@@ -1332,6 +1357,7 @@ function ChatViewBody(props: {
       ownSide,
       ownParentId,
       titles,
+      childIdentities,
       channelSummaries,
       childPhaseOf: session.phaseOf,
       openSubSession,
@@ -1344,6 +1370,7 @@ function ChatViewBody(props: {
       ownSide,
       ownParentId,
       titles,
+      childIdentities,
       channelSummaries,
       session.phaseOf,
       openSubSession,
@@ -2052,6 +2079,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   const historyScope = useMemo<RowScope>(
     () => ({
       view: historySegment.turnView,
+      viewBefore: null,
       records: historySegment.records,
       toolResults: historySegment.toolResults,
       plan: historySegment.plan,
@@ -2105,6 +2133,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   const tailScope = useMemo<RowScope>(
     () => ({
       view: tailTurnView,
+      // 尾段第一行前面是历史段的最后一行（头像要认「这是不是一轮 agent 的开头」）
+      viewBefore: historySegment.turnView.at(-1)?.kind ?? null,
       records: tailRecords,
       toolResults: tailToolResults,
       // 现场块要读「现在在做哪一步」：用整段的计划线（写计划的那一轮可能在历史段）
@@ -2136,6 +2166,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       cutRef,
     }),
     [
+      historySegment.turnView,
       tailTurnView,
       tailRecords,
       tailToolResults,
@@ -2503,6 +2534,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
 
   return (
     <>
+      {/* 子会话本身的对话：顶上一行「XX 的子会话」+ 它自己的模型头像（知道这是谁在说话、替谁干活） */}
+      {props.channel.ownSide === "child" && <ChildSessionHead channel={props.channel} />}
       {/* 历史恢复在途：一行安静的加载指示，正文区不再是一片无解释的空白 */}
       {props.loadingHistory && !hasEntries && <StatusLine spin>{t.common.loading}</StatusLine>}
       {/* 触顶拉更早的一页：列首一行次级灰（设计系统的 caption 惯例）。import 耗尽了就不出现 */}
@@ -2580,6 +2613,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
          * （末条是半截 assistant）→ 居左。新一轮开跑自动清除（槽里清）。
          */
         <div
+          className={transcript.at(-1)?.role === "user" ? undefined : "agent-side"}
           style={{
             display: "flex",
             width: "100%",
@@ -2593,7 +2627,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
         (props.retry !== null ? (
           <Retrying status={props.retry} />
         ) : liveBlockShown ? null : (
-          <div className="revert-keep" data-kind="responding">
+          <div className="revert-keep agent-side" data-kind="responding">
             <Responding transcript={transcript} />
           </div>
         ))}
@@ -2611,6 +2645,19 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   );
 });
 
+/** 子会话视图顶上的一行：它自己的模型头像 +「「父会话标题」的子会话」 */
+function ChildSessionHead(props: { channel: ChannelViewContext }) {
+  const t = useT();
+  const { current } = useContext(ModelIdentityContext);
+  const parent = props.channel.ownParentId === null ? undefined : props.channel.titles.get(props.channel.ownParentId);
+  return (
+    <div className="child-session-head">
+      {current !== null && <TurnAvatar providerId={current.providerId} modelId={current.modelId} />}
+      <span className="child-session-head-text">{t.channel.childOf(parent === undefined || parent === "" ? t.channel.parentSession : parent)}</span>
+    </div>
+  );
+}
+
 /**
  * 一行渲染的输入：历史段 / 尾段各一份作用域。历史段的 scope 在流式期间引用不变，
  * 行组件的 memo 才会命中（因此所有回调字段都是稳定引用，见 useStableCallback）。
@@ -2618,6 +2665,8 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
 interface RowScope {
   /** 本段的大折叠视图（show_image 组要看前一个单元 / 向后扫画廊） */
   view: readonly TurnViewEntry[];
+  /** 本段第一行前面那一行的种类（历史段 null；尾段 = 历史段最后一行）：认一轮的开头用 */
+  viewBefore: TurnViewEntry["kind"] | null;
   /** 本段的记录（分支行的「复制回答」按整轮取文本） */
   records: readonly TranscriptRecord[];
   toolResults: ToolResultIndex;
@@ -2699,6 +2748,12 @@ const TranscriptRow = memo(function TranscriptRow(props: {
   const t = useT();
   const { entry, index, scope } = props;
   const branchAfter = props.branchAfter;
+  // agent 一侧让出左边的头像槽；一轮 agent 的开头那一行画这一轮所用模型的头像（同一轮后续内容不重复）
+  const agentSide = isAgentSide(entry.kind);
+  const turnStart = isTurnStart(scope.view, index, scope.viewBefore);
+  const sideClass = agentSide ? " agent-side" : "";
+  // 一轮开头：星云（落定静止；这一轮正在跑的过程块才动）
+  const avatar = turnStart && <TurnPet live={entry.kind === "turnProcess" && entry.live} />;
   // 复制与速度都按锚点所在的**整轮**取：轮内可能有多条 assistant 记录（每次 toolCall 切一条）
   const turnRecords = branchAfter !== undefined ? turnAssistantRecords(scope.records, branchAfter) : [];
   // 相邻 show_image 合并成一个画廊（2026-09-27 裁决）：首张渲染合并画廊，后续
@@ -2769,7 +2824,8 @@ const TranscriptRow = memo(function TranscriptRow(props: {
           {t.chat.previewCut}
         </div>
       )}
-      <div className={doomed ? "revert-doomed" : "revert-keep"} data-entry-key={entry.key} data-kind={entry.kind}>
+      <div className={`${doomed ? "revert-doomed" : "revert-keep"}${sideClass}`} data-entry-key={entry.key} data-kind={entry.kind}>
+      {avatar}
       {entry.kind === "turnOutputs" ? (
         <TurnOutputsBlock unit={entry} toolResults={scope.toolResults} sessionId={scope.sessionId} />
       ) : entry.kind === "turnProcess" ? (
@@ -5298,16 +5354,17 @@ function ChildReportCard(props: { mark: { peerId: string; messageId: string; kin
   const first = (message?.text ?? "").split("\n").find((line) => line.trim() !== "")?.trim() ?? "";
   const outputs = useChildOutputs(mark.peerId, mark.messageId);
   const open = channel.openSubSession;
+  const childIdentity = channel.childIdentities.get(mark.peerId);
   return (
     <div className="child-report">
       <div className="child-report-head">
-        <span className="exit-card-icon">
-          <Icon name="bot" size={18} strokeWidth={1.6} />
+        <span className="exit-card-avatar">
+          {childIdentity !== undefined ? <ChildAvatar child={childIdentity} /> : <Icon name="bot" size={18} strokeWidth={1.6} />}
         </span>
         <span className="exit-card-text">
           <span className="exit-card-title">
-            <span className="child-report-kicker">{t.chat.childReportKicker}</span>
             <span className="exit-card-name">{title}</span>
+            {childIdentity !== undefined && <ChildModelLabel child={childIdentity} />}
           </span>
           {first !== "" && <span className="exit-card-sub">{first}</span>}
         </span>
@@ -6222,8 +6279,15 @@ function DelegateToolLine(props: {
       taskPreview={taskPreview}
       onClick={openSubSession === null ? undefined : () => openSubSession(card.childId)}
       lit={props.channel.litSubSessionId === card.childId}
+      child={delegatedChild(props.channel.childIdentities.get(card.childId), card)}
     />
   );
+}
+
+/** 派出卡上的子会话头像身份：以派出时记下的模型为准（会话之后换了模型，卡上仍是当时派给谁的）；序号取它在父会话下的序号 */
+function delegatedChild(known: ChildIdentity | undefined, card: DelegateCard): ChildIdentity {
+  if (known !== undefined && known.modelId === card.modelId) return known;
+  return { providerId: null, modelId: card.modelId, ordinal: known?.ordinal ?? 1, title: card.title };
 }
 
 /**
