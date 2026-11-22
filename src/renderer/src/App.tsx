@@ -1736,6 +1736,7 @@ export function App() {
 
         <RightRail
           panel={rightPanel}
+          fuse={!narrow}
           onPanel={handlePanel}
           railEntries={railEntries}
           intentAvailable={settings.experimentalFeatures?.["intent-system"] === true}

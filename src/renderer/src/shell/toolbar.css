@@ -191,6 +191,52 @@
   background: var(--color-accent-strong);
 }
 
+/* —— 会话标签：与对话井相连（2026-11-22，用户：「我一直希望顶部的这个 Tab，它是跟我们主体是融合的」）——
+ * 浏览器「当前标签页」的做法：标签底色 = 井（--color-bg-panel，和 .pane 同一个值，所以同一张纸），上沿 --radius-xl
+ * 圆角，下沿落在井的上缘、往井里多压 1px（同色，盖住亚像素缝），**不画分隔线**；标签两侧底部各一个半径
+ * --tab-fillet 的反向圆角（伪元素 + radial-gradient：一个 f×f 的方块，只在贴着标签与井的那个角上填井色，
+ * 以对角为圆心挖掉一个半径 f 的圆），把它接到壳上。反向圆角要落在井上缘的直线段上，所以标签左缘离井左缘
+ * 至少 井圆角 + f（几何在 window-tools.ts 的 sessionCapsule）。标签以外的顶栏仍是壳。
+ * 画在会话胶囊里、内容之下（.has-tab 开 isolation，标签 z-index:-1 只沉到胶囊内容之下，不会沉到井之下）。
+ * 纸面两档（井是 0.92 的半透明纸）叠不出同一张纸，不画。 */
+.session-tab {
+  display: none;
+}
+:root:not([data-theme="copybook"], [data-theme="typescript"]) {
+  .toolbar-capsule.has-tab {
+    isolation: isolate;
+  }
+  .session-tab {
+    display: block;
+    position: absolute;
+    left: 0;
+    /* 标签上沿 = 胶囊行底 − 标签高；胶囊上沿是 --titlebar-capsule-top，所以相对胶囊要再减它 */
+    top: calc(var(--titlebar-row) - var(--tab-h) - var(--titlebar-capsule-top));
+    height: calc(var(--tab-h) + 1px);
+    min-width: 0;
+    z-index: -1;
+    background: var(--color-bg-panel);
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    pointer-events: none;
+  }
+  .session-tab::before,
+  .session-tab::after {
+    content: "";
+    position: absolute;
+    bottom: 1px;
+    width: var(--tab-fillet);
+    height: var(--tab-fillet);
+  }
+  .session-tab::before {
+    right: 100%;
+    background: radial-gradient(circle at 0 0, transparent var(--tab-fillet), var(--color-bg-panel) calc(var(--tab-fillet) + 0.5px));
+  }
+  .session-tab::after {
+    left: 100%;
+    background: radial-gradient(circle at 100% 0, transparent var(--tab-fillet), var(--color-bg-panel) calc(var(--tab-fillet) + 0.5px));
+  }
+}
+
 /* —— 会话胶囊（2026-11-22 改左对齐）：[父会话面包屑] [标题] [id] [复制]，成组靠左，和右栏面板标题同一条规矩 ——
  * 胶囊的左缘由工具栏几何给（window-tools.ts 的 sessionCapsule：对话列左缘 + 右栏同款内缩；侧栏收起时
  * 紧跟左胶囊的专注键）。这里管组内：间距统一一个 --space-1，标题是唯一能缩的（min-width: 0 + 省略号），

@@ -303,7 +303,9 @@ the UI.
 **Layout.** A fixed shell: a full-width top toolbar (52px, capsules only — see Implementation
 rules), below it left sidebar (288px; collapsing it removes it entirely — no icon rail, the toggle lives
 in the toolbar's left capsule, 2026-10-19), conversation pane,
-a 32px action rail for session actions, right drawer (320px, **closed by default**). The window's
+a 44px action rail for session actions (28px keys with `--space-2` either side; the rail sits flush against the
+well's right edge and ends `--space-1` short of the window — it was 32px between two 12px gaps, which read as a
+stretched neck), right drawer (320px, **closed by default**). The window's
 top is one 52px toolbar of capsules centred on the traffic-light line; cards carry no header rows of
 their own (see *The top toolbar is one regulated zone* under Implementation rules). Both sidebars
 are unbounded — no fill, no border, no dividers — so the pane's edges are the only structure. The
@@ -539,20 +541,37 @@ cells `--titlebar-control` (28), fields / tabs `--titlebar-field` (24), icons 16
 titles `--font-size-titlebar` (= base, semibold). Four capsules: the left one (sidebar toggle · New task ·
 Focus slot — the toggle never changes container, so its coordinates are identical collapsed or expanded),
 the session capsule (**left-aligned, 2026-11-22**, the same rule as the right-panel titles: its left edge is the
-conversation column's left edge plus the right-panel capsule's inset, 8; with the sidebar collapsed it
-follows the left capsule, so the title sits right after the Focus key; up to 480 wide, 12 clear of the
+conversation column's left edge plus the well's radius and the reverse corner, 16 — it is the well's tab, see *The
+well grows tabs*; with the sidebar collapsed it follows the left capsule, so the title sits right after the Focus key; up to 480 wide, 12 clear of the
 right-panel capsule; its content is one group from the left — [back-to-parent, only on a sub-session
 opened as main] [title] [id] [copy], gaps on one rhythm, the title the only thing that shrinks (ellipsis),
-the title text 12 from the capsule's left edge, where the right-panel title keys start their icon; the sub-session
+the title text 12 from the tab's left edge, where the right-panel title keys start their icon; the sub-session
 count and the done key are gone — the count lives in the right rail's sub-sessions entry), the right-panel capsule (left edge pinned to the panel divider, width =
 `--right-panel-w`; panel headers portal into it; below 300 the filter collapses to a search cell),
-and the right-panel toggle. Cards start at y=52 — conversation / settings cards have **no header row**
+and the right-panel toggle (centred in the 44px rail, on the same vertical line as the rail's keys). Cards start at y=52 — conversation / settings cards have **no header row**
 (session info lives in the session capsule; panel headers live in the right-panel capsule), and the
 sidebar has neither wordmark row nor big New-task button: the wordmark sits at the bottom of the usage
 column. Geometry is pure functions in `shell/window-tools.ts` (left capsule x 88 darwin / 12 otherwise;
-session capsule left-aligning and clamping) and `window-tools.test.ts` guards the chain: tokens ↔ main-process
+session tab left-aligning and clamping, rail width) and `window-tools.test.ts` guards the chain: tokens ↔ main-process
 lights ↔ capsule centre = 25, right-panel capsule pinned to the divider, left capsule x state-independent,
 and the toolbar's direct children are capsules.
+
+**The well grows tabs (2026-11-22, user: "the tab at the top should be one with the body; the lit right-hand item
+too").** Two things on the shell are drawn as the *same sheet of paper* as the well, the way a browser's active tab is
+the page: (1) the session title block in the toolbar (title · id · copy) and (2) the lit key on the right rail
+**while its panel is open**. Both are `--color-bg-panel` — the well's own value, no new colour — with `--radius-xl`
+on their free corners, **no line where they meet the well**, and a *reverse* corner of radius `--tab-fillet`
+(= `--radius-xl`, 8) on each side of the join, drawn as a pseudo-element with a `radial-gradient` that is the
+well colour except for a quarter-circle cut at the diagonal. A reverse corner must land on the well's straight
+edge, so a tab never starts closer than well radius + `--tab-fillet` to a well corner: the session tab's left edge is the
+column's left edge + 16 (with the sidebar collapsed it follows the left capsule instead, so the title sits right
+after the Focus key), and the rail keeps `--space-5` above its first key and below its last (well radius 8 + reverse
+corner 8 + tab padding 4) so the first and last keys can be lit too. The session tab is as wide as its contents
+(min 120, max the capsule's width, long titles ellipsise); its height is `--tab-h` (48) up from the well's top edge.
+A key is fused only when a *right-hand panel* is open and it is that panel's key — the sidebar sub-views
+(Archived), the settings page and the narrow-window overlay (which floats over the well and joins nothing)
+keep the ordinary pressed wash. The two paper themes (copybook / typescript) draw neither tab: their well is a 0.92 paper
+over a cast shadow, which cannot be the same sheet as a tab behind it.
 
 **Two lines, one column.** The content column has an outer line and an inner line. Surfaces —
 the user bubble, the composer, cards, code blocks, a row's hover fill — sit on the outer line;

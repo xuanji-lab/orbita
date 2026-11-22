@@ -28,8 +28,18 @@ export const CENTER_Y = TRAFFIC_LIGHT_Y + TRAFFIC_LIGHT_DOT / 2;
 
 /** `.layer` 的 padding（`--space-3`）：卡片与窗口边的留白 */
 export const LAYER_PAD = 12;
-/** 右图标条宽 */
-export const RAIL_W = 32;
+/** 右图标条宽（2026-11-22 由 32 + 两侧各 12 的空隙收窄）：图标 28 + 左右各 --space-2 = 44，与 --rail-w 对账 */
+export const RAIL_W = 44;
+/** 图标条右缘到窗口边（--rail-end = --space-1） */
+export const RAIL_END = 4;
+/** 工具栏右端「辅助对话」开关胶囊：28 的圆格 + 左右各 2 的胶囊内边距，居中在图标条里 */
+export const TOGGLE_CAP_W = 32;
+/** 与井相连的标签的反向圆角半径 / 井的面圆角：都是 --radius-xl（8），--tab-fillet 对账 */
+export const TAB_FILLET = 8;
+export const PANE_RADIUS = 8;
+/** 会话标签：最小宽（新任务 / 短标题也不缩成一个小方块）与内容右缘之外的右内边距 */
+export const TAB_MIN_W = 120;
+export const TAB_PAD_END = 8;
 /** 窗口窄于这条线自动收起侧栏（960 以下 288px 侧栏会把内容面挤得太瘦） */
 export const COLLAPSE_BREAKPOINT = 960;
 
@@ -71,8 +81,13 @@ export function conversationColumn(input: {
   panelWidth: number;
 }): { left: number; right: number } {
   const left = input.sidebarCollapsed ? LAYER_PAD : LAYER_PAD + input.sidebarWidth + LAYER_PAD;
-  const paneRight = input.windowWidth - LAYER_PAD - RAIL_W - LAYER_PAD;
+  const paneRight = input.windowWidth - RAIL_W - RAIL_END;
   return { left, right: paneRight - (input.panelOpen ? input.panelWidth : 0) };
+}
+
+/** 「辅助对话」开关胶囊的左缘：居中在图标条里（条左缘 = 井右缘） */
+export function toggleCapsuleLeft(windowWidth: number): number {
+  return windowWidth - RAIL_W - RAIL_END + (RAIL_W - TOGGLE_CAP_W) / 2;
 }
 
 /**
@@ -87,24 +102,29 @@ export function rightEdge(input: {
   panelOpen: boolean;
   panelWidth: number;
 }): number {
-  const paneRight = input.windowWidth - LAYER_PAD - RAIL_W - LAYER_PAD;
+  const paneRight = input.windowWidth - RAIL_W - RAIL_END;
   if (input.panelOpen) return paneRight - input.panelWidth;
-  return input.windowWidth - LAYER_PAD - RAIL_W;
+  return toggleCapsuleLeft(input.windowWidth);
 }
 
 /**
- * 会话胶囊几何（2026-11-22 改左对齐，用户：「右侧面板……顶部名字都是居左的，我们的名字也可以居左」）：
- * 标题与右栏面板标题同一条规矩——左缘 = 对话列左缘 + `PANEL_CAPSULE_INSET`（右栏胶囊 = 分隔线 + 同一个
- * 内缩）。左侧栏收起时对话列贴着窗口边，左缘退到左胶囊（侧栏开关 · 新任务 · 专注）的右缘：
- * 标题就紧跟在专注键右侧。宽度到右限（让开右栏胶囊 / 右栏开关，各留 `SESSION_GAP`）为止，封顶
- * `SESSION_W`；放不下就能拿多少拿多少，再窄由标题省略号兜底（不换行不溢出）。
+ * 会话胶囊 = 与对话井相连的标签（2026-11-22，用户：「顶部的这个 Tab，它是跟我们主体是融合的」）的几何。
+ * 标签居左（同日更早：右侧面板标题都居左，名字也居左）：左缘 = 对话列左缘 + 井圆角 + 反向圆角——标签两侧
+ * 底部各有一个半径 TAB_FILLET 的反向圆角接到井的上缘，它们必须落在井上缘的**直线段**上（井的左上角
+ * 圆弧之内接不上），所以最靠左也只能到 `colLeft + PANE_RADIUS + TAB_FILLET`。左侧栏收起时对话列贴着窗口边，
+ * 左缘退到左胶囊（侧栏开关 · 新任务 · 专注）右缘再让出左反向圆角与一格 `SESSION_GAP / 3`——标签紧跟专注键。
+ * 宽度到右限（让开右栏胶囊 / 右栏开关，各留 `SESSION_GAP`）为止，封顶 `SESSION_W`；标签本体的宽度随标题
+ * （Toolbar 量内容），这里只给它能长到的最大宽；放不下就能拿多少拿多少，再窄由标题省略号兜底。
  */
 export function sessionCapsule(input: {
   colLeft: number;
   leftCapRight: number;
   rightLimit: number;
 }): { x: number; width: number } {
-  const x = Math.max(input.colLeft + PANEL_CAPSULE_INSET, input.leftCapRight);
+  const x = Math.max(
+    input.colLeft + PANE_RADIUS + TAB_FILLET,
+    input.leftCapRight + TAB_FILLET + SESSION_GAP / 3,
+  );
   const width = Math.max(0, Math.min(SESSION_W, input.rightLimit - SESSION_GAP - x));
   return { x, width };
 }

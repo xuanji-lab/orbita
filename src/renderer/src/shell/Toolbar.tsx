@@ -1,4 +1,4 @@
-import { createContext, useEffect, useRef, useState } from "react";
+import { createContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { api } from "../api";
 import { useT } from "../locale.ts";
@@ -11,13 +11,15 @@ import {
    */
   LEFT_CAPSULE_W,
   PANEL_CAPSULE_INSET,
-  LAYER_PAD,
-  RAIL_W,
+  TOGGLE_CAP_W,
+  toggleCapsuleLeft,
   SESSION_GAP,
   conversationColumn,
   leftCapsuleX,
   rightEdge,
   sessionCapsule,
+  TAB_MIN_W,
+  TAB_PAD_END,
   type ToolbarPlatform,
 } from "./window-tools.ts";
 
@@ -83,9 +85,37 @@ export function Toolbar(props: {
     // 只挂一次：胶囊的三个格都是常驻 / 受控替换，量的是同一颗胶囊的内容
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  // 右栏开关胶囊：右缘与卡片右缘齐（Windows 时三键已上行，不再左让）
-  const toggleRight = props.windowWidth - LAYER_PAD;
-  const toggleLeft = toggleRight - RAIL_W;
+  /**
+   * 会话标签的宽：随内容（[面包屑] 标题 id 复制 这一组的右缘）+ 右内边距，夹在 [最小, 胶囊可用宽] 之间。
+   * 胶囊自己的宽是几何给的上限（sessionCapsule），标签只画到内容为止——标题短，标签就短。
+   * 量的是胶囊里 .cap-sess 各直接子元素的右缘：标题是组里唯一能缩的，长标题自然把组撑到上限。
+   */
+  const sessRef = useRef<HTMLDivElement | null>(null);
+  const [tabContentW, setTabContentW] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const host = sessRef.current;
+    if (host === null) {
+      setTabContentW(null);
+      return undefined;
+    }
+    const measure = (): void => {
+      const left = host.getBoundingClientRect().left;
+      let right = left;
+      host.querySelectorAll(".cap-sess > *").forEach((child) => {
+        const box = child.getBoundingClientRect();
+        if (box.width > 0) right = Math.max(right, box.right);
+      });
+      const next = Math.ceil(right - left);
+      setTabContentW((current) => (current === next ? current : next));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(host);
+    host.querySelectorAll(".cap-sess > *").forEach((child) => observer.observe(child));
+    return () => observer.disconnect();
+  });
+  // 右栏开关胶囊：居中在右图标条里，与条上的图标同一条竖线（Windows 时三键已上行，不再左让）
+  const toggleLeft = toggleCapsuleLeft(props.windowWidth);
   // 右栏胶囊：左缘 = 分隔线 + 内缩（与右栏内容左缘对齐），宽 = 右栏宽 − 两侧内缩；
   // 窄窗覆盖层锚右、默认宽（右缘同样让 8）
   const panelW =
@@ -114,6 +144,7 @@ export function Toolbar(props: {
     rightLimit: narrowLimit === null ? limit : Math.min(limit, narrowLimit),
   });
   const panelLeft = narrowPanelLeft ?? col.right + PANEL_CAPSULE_INSET;
+  const tabW = Math.min(sess.width, Math.max(TAB_MIN_W, (tabContentW ?? sess.width) + TAB_PAD_END));
 
   return (
     <div className="titlebar toolbar" data-platform={props.platform}>
@@ -170,7 +201,10 @@ export function Toolbar(props: {
 
       {/* 会话胶囊 / 设置标题：几何在这里（居中于对话列），内容 App 注入 */}
       {props.sessionSlot !== null && sess.width > 0 && (
-        <div className="toolbar-capsule" style={{ left: sess.x, width: sess.width }}>
+        <div ref={sessRef} className="toolbar-capsule has-tab" style={{ left: sess.x, width: sess.width }}>
+          {/* 与对话井相连的标签（非纸面主题；纸面两档 display:none）：底色 = 井，上沿圆角，下沿落在井的上缘无缝，
+              两侧底部反向圆角接到壳。画在胶囊里、内容之下（toolbar.css 的 .session-tab） */}
+          <span className="session-tab" style={{ width: tabW }} aria-hidden="true" />
           {props.sessionSlot}
         </div>
       )}
@@ -183,7 +217,7 @@ export function Toolbar(props: {
       )}
 
       {/* 右栏开关（辅助对话）：单格胶囊，点亮 = mode 色（右图标条选中同款） */}
-      <div className="toolbar-capsule" style={{ left: toggleLeft, width: RAIL_W }}>
+      <div className="toolbar-capsule" style={{ left: toggleLeft, width: TOGGLE_CAP_W }}>
         <button
           type="button"
           className="quiet-control cap-seg solo"

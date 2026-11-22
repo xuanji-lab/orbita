@@ -45,6 +45,14 @@
   --titlebar-capsule-top: 9px; /* 胶囊上沿 = 25 − 32/2 */
   --titlebar-control: 28px;  /* 胶囊内的圆格（quiet-control） */
   --titlebar-field: 24px;    /* 胶囊内嵌的筛选框 / 选择 / 页签 */
+  /* 与会话井相连的标签（顶栏标题 / 右栏点亮项，2026-11-22）：反向圆角半径取面圆角（--radius-xl），
+     井的圆角与标签的接缝因此是同一个半径；顶栏标签高 48（上沿离窗口顶 4，下沿落在井的上缘） */
+  --tab-fillet: var(--radius-xl);
+  --tab-h: 48px;
+  /* 右图标条（2026-11-22 收窄）：图标 28 左右各 --space-2 = 44；条右缘离窗口边 --space-1。
+     JS 几何镜像在 shell/window-tools.ts（RAIL_W / RAIL_END），测试对账 */
+  --rail-w: 44px;
+  --rail-end: var(--space-1);
 
   /* z 轴：只有四个全局层，组件内部的叠放（1–9）就地写整数，不进 token。
      10 及以上一律取这里的层——一个浮层该压过谁，先看它属于哪一层，不再自造数字。 */
