@@ -3625,6 +3625,15 @@ export const en = {
     stampNote: (n: number) => `Added paragraph ids to ${n} paragraph${n === 1 ? "" : "s"} (Word-compatible, body untouched) so edits can name the exact paragraph.`,
     stampFailed:
       "Couldn't add paragraph ids (the package may be signed): locating works for this session only — after saving and reopening you'll need to select again.",
+    /* toolbar (2026-11-22): paragraph style / alignment / lists — only what folio really supports */
+    paragraphStyleNamed: (name: string) => `Paragraph style: ${name}`,
+    alignLeft: "Align left",
+    alignCenter: "Center",
+    alignRight: "Align right",
+    paragraphMenu: "Alignment and lists",
+    bulletList: "Bulleted list",
+    numberedList: "Numbered list",
+    listMenu: "List",
   },
 
   /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */

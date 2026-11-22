@@ -5,7 +5,21 @@ import { DocxEditor, type DocxEditorRef } from "@stll/folio-react";
 import "@stll/folio-react/editor.css";
 import { IntlProvider } from "use-intl";
 import { CATALOGS } from "@stll/folio-core/i18n/messages/catalogs";
-import { isMarkActive, toggleBold, toggleItalic, toggleUnderline } from "@stll/folio-core/prosemirror";
+import {
+  TextSelection,
+  alignCenter,
+  alignLeft,
+  alignRight,
+  applyStyle,
+  getDocumentStyleResolver,
+  isMarkActive,
+  toggleBold,
+  toggleBulletList,
+  toggleItalic,
+  toggleNumberedList,
+  toggleUnderline,
+} from "@stll/folio-core/prosemirror";
+import { extractSelectionSnapshot } from "@stll/folio-core/prosemirror/selectionState";
 import type {
   DocxAgentEditRequest,
   DocxAnchor,
@@ -25,11 +39,29 @@ import { applyDocxEdit, resolveRevisionGroup } from "./docx-apply.ts";
 import { registerDocxEditHost } from "./docx-edit-host.ts";
 import { buildReviewRows, rowNeedsContext, type DocxChangeRow } from "./docx-review.ts";
 import { DocxReviewBar } from "./DocxReviewBar.tsx";
+import {
+  FALLBACK_STYLE_CHOICE,
+  alignmentIcon,
+  listIcon,
+  showsAlignmentButtons,
+  showsListButtons,
+  styleChoicesFrom,
+  styleLabel,
+  toolbarAlignment,
+  toolbarDensity,
+  toolbarList,
+  type StyleChoice,
+  type ToolbarAlignment,
+  type ToolbarDensity,
+  type ToolbarList,
+} from "./docx-toolbar.ts";
 import type { FileListRequest } from "@shared/files";
 import { api } from "../../api";
 import { LocaleContext } from "../../locale.ts";
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
+import type { IconName } from "../../shell/Icon";
+import { Menu, type MenuItem } from "../../shell/Menu";
 import { PanelButton, PanelLine } from "../../shell/RightPanel";
 import { docxFacts, docxRepackReasons, type DocxFactsNode, type DocxRepackReason } from "./docx-change.ts";
 import { registerDocxFlush, type DocxFlushOutcome } from "./docx-flush.ts";
@@ -47,7 +79,8 @@ import { applyTocHeal, collectTocFacts, layoutCoversDocument, planTocHeal, type 
  *     先提示并等确认；自动保存遇到这种情况不写盘，只把提示挂出来——静默重排会让用户
  *     看不见版式整体挪动。上一版由主进程在覆盖前备份进应用数据目录。
  *
- * 不做（留给后续 PR）：表格 / 图片 / 批注 / 修订 / 查找替换 / 页眉页脚 / 样式管理器 / 域编辑。
+ * 不做（留给后续 PR）：表格增删行 / 图片替换 / 页面设置 / 页眉页脚 / 样式管理器 / 域编辑。
+ * 2026-11-22 补了工具条（段落样式 / 对齐 / 列表），能力边界见 `docx-toolbar.ts` 顶注释。
  */
 type LoadState =
   | { status: "loading" }
@@ -207,7 +240,17 @@ type SaveState =
   | { kind: "saved"; at: number }
   | { kind: "failed"; message: string };
 
-type Marks = { bold: boolean; italic: boolean; underline: boolean };
+type MarkState = { bold: boolean; italic: boolean; underline: boolean };
+
+/**
+ * 工具条要跟手的那一格状态：字符格式 + 光标所在段落的样式 / 对齐 / 列表。
+ * 段落部分来自 folio 的 `extractSelectionSnapshot`，与引擎自己的工具栏同一份投影。
+ */
+type FormatState = MarkState & {
+  styleId: string;
+  alignment: ToolbarAlignment;
+  list: ToolbarList;
+};
 
 /**
  * 等版面跟上改动：总时长与轮询间隔。上界故意压得很短——保存不应该为了页码去等排版，
@@ -236,7 +279,14 @@ type TocHealNote = {
   noLayout: boolean;
 };
 
-const NO_MARKS: Marks = { bold: false, italic: false, underline: false };
+const NO_FORMAT: FormatState = {
+  bold: false,
+  italic: false,
+  underline: false,
+  styleId: FALLBACK_STYLE_CHOICE.id,
+  alignment: "left",
+  list: "none",
+};
 
 /** 不以单字符出现、但真的会改文档的键（其余编辑键 key.length === 1） */
 const EDIT_KEYS = new Set(["Backspace", "Delete", "Enter", "Tab"]);
@@ -247,7 +297,13 @@ const EDIT_KEYS = new Set(["Backspace", "Delete", "Enter", "Tab"]);
  */
 function DocxSurface(props: {
   request: FileListRequest;
-  opened: { data: Uint8Array; hash: string; size: number; modifiedAt: number; stamp: DocxParaIdStamp };
+  opened: {
+    data: Uint8Array;
+    hash: string;
+    size: number;
+    modifiedAt: number;
+    stamp: DocxParaIdStamp;
+  };
   onQuote?: (quote: TextQuote) => void;
   onReload: () => void;
 }) {
@@ -270,7 +326,11 @@ function DocxSurface(props: {
   const viewRef = useRef<EditorView | null>(null);
   const [pages, setPages] = useState(0);
   const [oversize, setOversize] = useState(false);
-  const [marks, setMarks] = useState<Marks>(NO_MARKS);
+  const [format, setFormat] = useState<FormatState>(NO_FORMAT);
+  /** 工具条形态：面板宽度量出来之后才从「宽」降到「窄」 */
+  const [density, setDensity] = useState<ToolbarDensity>("wide");
+  /** 文档自己定义的段落样式（folio 的 resolver）；没有就只给 Normal */
+  const [styleChoices, setStyleChoices] = useState<StyleChoice[]>([FALLBACK_STYLE_CHOICE]);
   const [saveState, setSaveState] = useState<SaveState>({ kind: "clean" });
   const [gate, setGate] = useState<DocxRepackReason[] | null>(null);
   const [conflict, setConflict] = useState<"changed" | "missing" | null>(null);
@@ -300,6 +360,8 @@ function DocxSurface(props: {
     const measure = (): void => {
       const width = el.getBoundingClientRect().width;
       setTooNarrow(width > 0 && width < DOCX_READABLE_WIDTH);
+      const next = toolbarDensity(width);
+      setDensity((prev) => (prev === next ? prev : next));
     };
     measure();
     const observer = new ResizeObserver(measure);
@@ -390,10 +452,10 @@ function DocxSurface(props: {
    * 回调，setState 一个新对象会让本组件每次重渲染，而重渲染又给引擎换一份回调身份，
    * 形成渲染循环（实测过一次白屏）。所以这里按值比较，稳定引用。
    */
-  const syncMarks = useCallback(() => {
+  const syncFormat = useCallback(() => {
     const view = getView();
     if (view === null) {
-      setMarks((prev) => (prev === NO_MARKS ? prev : NO_MARKS));
+      setFormat((prev) => (prev === NO_FORMAT ? prev : NO_FORMAT));
       return;
     }
     const { marks: markTypes } = view.state.schema;
@@ -401,12 +463,45 @@ function DocxSurface(props: {
     const italic = markTypes["italic"] !== undefined && isMarkActive(view.state, markTypes["italic"]);
     const underline =
       markTypes["underline"] !== undefined && isMarkActive(view.state, markTypes["underline"]);
-    setMarks((prev) =>
-      prev.bold === bold && prev.italic === italic && prev.underline === underline
+    // 段落样式 / 对齐 / 列表走引擎自己的 selection snapshot（与它的工具栏同一份投影）。
+    // 图片这类非段落选区没有这些字段，退回默认值；异常也不能带走字符格式的按下态。
+    let styleId = FALLBACK_STYLE_CHOICE.id;
+    let alignment: ToolbarAlignment = "left";
+    let list: ToolbarList = "none";
+    try {
+      const snapshot = extractSelectionSnapshot(view.state);
+      styleId = snapshot.styleId ?? FALLBACK_STYLE_CHOICE.id;
+      alignment = toolbarAlignment(snapshot.paragraphFormatting.alignment);
+      list = toolbarList(snapshot.listState.type);
+    } catch {
+      // 非段落选区（整张图片等）：保持默认值
+    }
+    setFormat((prev) =>
+      prev.bold === bold &&
+      prev.italic === italic &&
+      prev.underline === underline &&
+      prev.styleId === styleId &&
+      prev.alignment === alignment &&
+      prev.list === list
         ? prev
-        : { bold, italic, underline },
+        : { bold, italic, underline, styleId, alignment, list },
     );
   }, []);
+
+  /** 文档自己定义的段落样式。样式表在打开时就位；没有样式表的文档只给 Normal。 */
+  const readStyleChoices = useCallback(() => {
+    const view = getView();
+    if (view === null) return;
+    const resolver = getDocumentStyleResolver(view.state);
+    const next = styleChoicesFrom(resolver?.getParagraphStyles() ?? []);
+    setStyleChoices((prev) =>
+      prev.length === next.length &&
+      prev.every((choice, index) => choice.id === next[index]?.id && choice.label === next[index]?.label)
+        ? prev
+        : next,
+    );
+  }, []);
+
 
   // 分页数走引擎的布局事件；超过上限整份转只读（不再自动保存）——几百页的文档在
   // renderer 里编辑会让输入延迟肉眼可见，那不是这一刀要解决的问题
@@ -443,14 +538,21 @@ function DocxSurface(props: {
   // 引擎的可编辑视图是延迟创建的（性能取舍）：工具栏命令与「打开时的事实」都要它，
   // 所以挂载后主动要一份，但不抢焦点。ref 要等子组件的 ref 回调跑完才在，所以补一拍
   // （少了这一拍，用户没点过文档时 agent 的第一次 edit_docx 会一直等到超时）
+  // 段落样式表也要视图才读得到；慢文档解析更晚，多补一拍（1.2 s）。
   useEffect(() => {
-    const first = window.setTimeout(() => editorRef.current?.ensureEditorView({ focus: false }), 0);
-    const second = window.setTimeout(() => editorRef.current?.ensureEditorView({ focus: false }), 400);
+    const kick = (): void => {
+      editorRef.current?.ensureEditorView({ focus: false });
+      readStyleChoices();
+    };
+    const first = window.setTimeout(kick, 0);
+    const second = window.setTimeout(kick, 400);
+    const third = window.setTimeout(kick, 1200);
     return () => {
       window.clearTimeout(first);
       window.clearTimeout(second);
+      window.clearTimeout(third);
     };
-  }, []);
+  }, [readStyleChoices]);
 
   /**
    * 视图就绪 = 第一处「打开时的文档事实」。这个时机是确定的：用户只能通过这个视图
@@ -462,9 +564,10 @@ function DocxSurface(props: {
       if (view === null) return;
       viewRef.current = view;
       baselineRef.current = docxFacts(view.state.doc as unknown as DocxFactsNode);
-      syncMarks();
+      syncFormat();
+      readStyleChoices();
     },
-    [syncMarks],
+    [readStyleChoices, syncFormat],
   );
 
   /**
@@ -557,8 +660,8 @@ function DocxSurface(props: {
   );
 
   /**
-   * 引擎的选区回调：这里只记账 + 排一次防抖。`syncMarks` 照旧同步跑（工具栏按下态
-   * 要跟手），锚点则可以慢半拍——它是给 agent 用的坐标，不是给眼睛看的。
+   * 引擎的选区回调：这里只记账 + 排一次防抖。`syncFormat` 走 onSelectionChange
+   * 同步跑（工具栏按下态要跟手），锚点可以慢半拍——它是给 agent 用的坐标，不是给眼睛看的。
    */
   const onSelectionText = useCallback(
     (selection: { from: number; to: number }) => {
@@ -722,7 +825,7 @@ function DocxSurface(props: {
    * 交给引擎的三份回调必须身份稳定：它们是引擎 effect 的依赖，每次渲染换一份会
    * 让引擎重跑（并再次回调我们），轻则白重渲染、重则渲染循环。
    */
-  const onSelectionChange = useCallback(() => syncMarks(), [syncMarks]);
+  const onSelectionChange = useCallback(() => syncFormat(), [syncFormat]);
   const onChange = useCallback(() => {
     markDirty();
     refreshReviewLater();
@@ -1061,7 +1164,7 @@ function DocxSurface(props: {
     if (view === null) return;
     command(view.state, view.dispatch, view);
     view.focus();
-    syncMarks();
+    syncFormat();
   };
 
   const statusText =
@@ -1087,6 +1190,7 @@ function DocxSurface(props: {
     return parts.join(locale === "zh" ? "" : " ");
   })();
 
+
   const editor = (
       <DocxEditor
         documentBuffer={opened.data}
@@ -1109,30 +1213,136 @@ function DocxSurface(props: {
       />
   );
 
+  const wideTools = showsAlignmentButtons(density);
+  const alignmentItems: MenuItem[] = [
+    {
+      id: "align-left",
+      label: t.docx.alignLeft,
+      icon: "align-left",
+      checked: format.alignment === "left",
+      onSelect: () => runCommand(alignLeft),
+    },
+    {
+      id: "align-center",
+      label: t.docx.alignCenter,
+      icon: "align-center",
+      checked: format.alignment === "center",
+      onSelect: () => runCommand(alignCenter),
+    },
+    {
+      id: "align-right",
+      label: t.docx.alignRight,
+      icon: "align-right",
+      checked: format.alignment === "right",
+      onSelect: () => runCommand(alignRight),
+    },
+  ];
+  const listItems: MenuItem[] = [
+    {
+      id: "bullet",
+      label: t.docx.bulletList,
+      icon: "list",
+      checked: format.list === "bullet",
+      onSelect: () => runCommand(toggleBulletList),
+    },
+    {
+      id: "numbered",
+      label: t.docx.numberedList,
+      icon: "list-ordered",
+      checked: format.list === "numbered",
+      onSelect: () => runCommand(toggleNumberedList),
+    },
+  ];
+
   return (
     <div className="docx-view" ref={rootRef} data-oversize={oversize ? "" : undefined}>
       <div className="docx-bar">
+        <DocxStyleMenu
+          choices={styleChoices}
+          value={format.styleId}
+          compact={!wideTools}
+          disabled={oversize}
+          onChange={(styleId) => runCommand(applyStyle(styleId))}
+        />
+        <span className="docx-bar-sep" aria-hidden="true" />
         <DocxTool
           icon="bold"
           label={t.docx.bold}
-          pressed={marks.bold}
+          pressed={format.bold}
           disabled={oversize}
           onClick={() => runCommand(toggleBold)}
         />
         <DocxTool
           icon="italic"
           label={t.docx.italic}
-          pressed={marks.italic}
+          pressed={format.italic}
           disabled={oversize}
           onClick={() => runCommand(toggleItalic)}
         />
         <DocxTool
           icon="underline"
           label={t.docx.underline}
-          pressed={marks.underline}
+          pressed={format.underline}
           disabled={oversize}
           onClick={() => runCommand(toggleUnderline)}
         />
+        {wideTools ? (
+          <>
+            <DocxTool
+              icon="align-left"
+              label={t.docx.alignLeft}
+              pressed={format.alignment === "left"}
+              disabled={oversize}
+              onClick={() => runCommand(alignLeft)}
+            />
+            <DocxTool
+              icon="align-center"
+              label={t.docx.alignCenter}
+              pressed={format.alignment === "center"}
+              disabled={oversize}
+              onClick={() => runCommand(alignCenter)}
+            />
+            <DocxTool
+              icon="align-right"
+              label={t.docx.alignRight}
+              pressed={format.alignment === "right"}
+              disabled={oversize}
+              onClick={() => runCommand(alignRight)}
+            />
+          </>
+        ) : (
+          <DocxMenuTool
+            icon={alignmentIcon(format.alignment)}
+            label={t.docx.paragraphMenu}
+            disabled={oversize}
+            items={alignmentItems}
+          />
+        )}
+        {showsListButtons(density) ? (
+          <>
+            <DocxTool
+              icon="list"
+              label={t.docx.bulletList}
+              pressed={format.list === "bullet"}
+              disabled={oversize}
+              onClick={() => runCommand(toggleBulletList)}
+            />
+            <DocxTool
+              icon="list-ordered"
+              label={t.docx.numberedList}
+              pressed={format.list === "numbered"}
+              disabled={oversize}
+              onClick={() => runCommand(toggleNumberedList)}
+            />
+          </>
+        ) : (
+          <DocxMenuTool
+            icon={listIcon(format.list)}
+            label={t.docx.listMenu}
+            disabled={oversize}
+            items={listItems}
+          />
+        )}
         <span className="docx-bar-sep" aria-hidden="true" />
         <DocxTool
           icon="undo-2"
@@ -1140,7 +1350,7 @@ function DocxSurface(props: {
           disabled={oversize}
           onClick={() => {
             editorRef.current?.undo();
-            syncMarks();
+            syncFormat();
           }}
         />
         <DocxTool
@@ -1149,7 +1359,7 @@ function DocxSurface(props: {
           disabled={oversize}
           onClick={() => {
             editorRef.current?.redo();
-            syncMarks();
+            syncFormat();
           }}
         />
         <span
@@ -1392,7 +1602,18 @@ function DocxSurface(props: {
 }
 
 function DocxTool(props: {
-  icon: "bold" | "italic" | "underline" | "undo-2" | "redo-2" | "save";
+  icon:
+    | "bold"
+    | "italic"
+    | "underline"
+    | "undo-2"
+    | "redo-2"
+    | "save"
+    | "align-left"
+    | "align-center"
+    | "align-right"
+    | "list"
+    | "list-ordered";
   label: string;
   pressed?: boolean;
   disabled?: boolean;
@@ -1412,5 +1633,95 @@ function DocxTool(props: {
     >
       <Icon name={props.icon} size={14} strokeWidth={2} />
     </button>
+  );
+}
+
+/**
+ * 窄栏里的「一个按钮 + 一个下拉」：对齐三档 / 两种列表各自收成一个。
+ * 触发器同样要 `mousedown.preventDefault()`，不能因为打开菜单而丢掉文档里的选区。
+ */
+function DocxMenuTool(props: {
+  icon: IconName;
+  label: string;
+  disabled?: boolean;
+  items: MenuItem[];
+  align?: "start" | "end";
+}) {
+  return (
+    <Menu
+      items={props.items}
+      align={props.align ?? "start"}
+      panelMinWidth={160}
+      trigger={({ open, toggle }) => (
+        <button
+          type="button"
+          className="quiet-control docx-tool"
+          title={props.label}
+          aria-label={props.label}
+          aria-expanded={open}
+          disabled={props.disabled === true}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={toggle}
+        >
+          <Icon name={props.icon} size={14} strokeWidth={2} />
+        </button>
+      )}
+    />
+  );
+}
+
+/** 段落样式下拉：宽栏显示样式名，窄栏收成一个「文字样式」图标 */
+function DocxStyleMenu(props: {
+  choices: readonly StyleChoice[];
+  value: string;
+  compact: boolean;
+  disabled: boolean;
+  onChange: (styleId: string) => void;
+}) {
+  const t = useT();
+  const items: MenuItem[] = props.choices.map((choice) => ({
+    id: choice.id,
+    label: choice.label,
+    checked: choice.id === props.value,
+    onSelect: () => props.onChange(choice.id),
+  }));
+  return (
+    <Menu
+      items={items}
+      panelMinWidth={200}
+      trigger={({ open, toggle }) => {
+        if (props.compact) {
+          return (
+            <button
+              type="button"
+              className="quiet-control docx-tool"
+              title={styleLabel(props.choices, props.value)}
+              aria-label={t.docx.paragraphStyleNamed(styleLabel(props.choices, props.value))}
+              aria-expanded={open}
+              disabled={props.disabled}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={toggle}
+            >
+              <Icon name="type" size={14} strokeWidth={2} />
+            </button>
+          );
+        }
+        return (
+          <button
+            type="button"
+            className="select-control docx-style-select"
+            title={styleLabel(props.choices, props.value)}
+            aria-label={t.docx.paragraphStyleNamed(styleLabel(props.choices, props.value))}
+            aria-expanded={open}
+            disabled={props.disabled}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={toggle}
+          >
+            <span className="select-control-label">{styleLabel(props.choices, props.value)}</span>
+            <Icon name="chevron-down" size={12} strokeWidth={2} />
+          </button>
+        );
+      }}
+    />
   );
 }

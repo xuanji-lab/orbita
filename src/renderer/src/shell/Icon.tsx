@@ -99,6 +99,7 @@ import layoutDashboard from "../../../../design-system/assets/icons/lucide/layou
 import layoutGrid from "../../../../design-system/assets/icons/lucide/layout-grid.svg?raw";
 import layers from "../../../../design-system/assets/icons/lucide/layers.svg?raw";
 import list from "../../../../design-system/assets/icons/lucide/list.svg?raw";
+import listOrdered from "../../../../design-system/assets/icons/lucide/list-ordered.svg?raw";
 import filePlus from "../../../../design-system/assets/icons/lucide/file-plus.svg?raw";
 import heading from "../../../../design-system/assets/icons/lucide/heading.svg?raw";
 import bold from "../../../../design-system/assets/icons/lucide/bold.svg?raw";
@@ -245,6 +246,7 @@ const ICONS = {
   lightbulb,
   "loader-circle": loaderCircle,
   list,
+  "list-ordered": listOrdered,
   "layout-dashboard": layoutDashboard,
   "layout-grid": layoutGrid,
   layers,

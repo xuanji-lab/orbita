@@ -4903,10 +4903,13 @@ a.latex-setup-action {
 .docx-bar {
   display: flex;
   align-items: center;
+  flex-wrap: nowrap;
   gap: var(--space-0-5);
   flex: 0 0 auto;
   padding: var(--space-1) var(--space-2);
   border-bottom: 1px solid var(--color-border-subtle);
+  /* 窄面板也不换行、不溢出：真挤不下时由状态栏先缩到零宽（它有自己的省略号） */
+  overflow: hidden;
 }
 .docx-tool {
   display: inline-flex;
@@ -4923,6 +4926,16 @@ a.latex-setup-action {
   height: var(--space-3);
   margin: 0 var(--space-1);
   background: var(--color-border-subtle);
+}
+/* 段落样式下拉：宽栏用文字（84 够放下「标题 1」），窄栏是 .docx-tool 图标 */
+.docx-style-select {
+  flex: 0 1 84px;
+  min-width: 64px;
+  max-width: 84px;
+  padding-left: var(--space-2);
+}
+.docx-style-select > .orbita-icon {
+  flex: 0 0 auto;
 }
 /*
  * 保存状态贴在行的右血线上（.row-trailing 推到右缘），保存键在它之后。

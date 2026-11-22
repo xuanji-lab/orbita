@@ -3387,6 +3387,15 @@ export const zh: Messages = {
     agentAuthor: "Orbita",
     stampNote: (n) => `已为文档补齐 ${n} 个段落标识（Word 兼容，不影响正文），用于精确说明改哪一段。`,
     stampFailed: "这份文档的段落标识补不上（可能是签名文档）：本次打开内的定位可用，存盘重开后需要重新选中。",
+    /* 工具条补齐（2026-11-22）：段落样式 / 对齐 / 列表 —— 只放在 folio 真支持的按钮后面 */
+    paragraphStyleNamed: (name) => `段落样式：${name}`,
+    alignLeft: "左对齐",
+    alignCenter: "居中",
+    alignRight: "右对齐",
+    paragraphMenu: "对齐与列表",
+    bulletList: "项目符号",
+    numberedList: "编号列表",
+    listMenu: "列表",
   },
 
   /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */
