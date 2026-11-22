@@ -115,6 +115,27 @@ export async function pickFreePorts(): Promise<QemuVmPorts> {
 }
 
 /**
+ * 加速器串。本车道只有 WHPX（Windows）这一档，QEMU 二进制也是 x86_64 的（见 qemuVmPaths）。
+ *
+ * `kernel-irqchip=off` 只在 **x86_64 + WHPX** 时追加，别处一律原样返回：
+ *  - 来由：microsoft/quicksand 记录过「WHPX 内核态 irqchip + guest 的 noapic 会丢设备中断，
+ *    之后的 mount -t cifs 会卡死」。我们的内核命令行（见下面的 -append）**没有 noapic**，
+ *    所以那条不能照抄，只按本机实测取舍（2026-11-22，同一台机器各跑 2 次，产品路径 start()）：
+ *      · 不开：qemu stderr 每次启动 1 行 `whpx: injection failed, MSI (...) lost (c0350005)`，
+ *        start 8.3 s / 18.5 s（第一次含宿主文件缓存冷启动）；
+ *      · 开：该行 0 行（连 `WHPX: setting APIC emulation mode` 也不再打，因为 APIC 不再跑在
+ *        hypervisor 里），start 8.3 s / 7.8 s，截图均成（1280×800 PNG）；
+ *      · 且 start 里 waitForDesk 要经 virtio-net 回环 ping 通 8080，所以开这个参数后 guest
+ *        网络/virtio 中断仍然能用，不是「能开机但半死」。
+ *    噪声少了且桌面照常可用 ⇒ 保留（若哪天实测噪声不降或有副作用，就删掉这行并在本节写数字）。
+ *  - 其它 arch / accel（HVF、arm64 的 qemu-system-aarch64）没有同一套 irqchip 语义，
+ *    盲目加属性只会让命令行更难读、起不来时更难查。
+ */
+export function qemuAccelSpec(arch: string, accel: string): string {
+  return arch === "x64" && accel === "whpx" ? `${accel},kernel-irqchip=off` : accel;
+}
+
+/**
  * 起一台桌面 VM（detached：本进程退出后 VM 继续跑，靠 handle 里的 pid / monitor 端口收）。 */
 export function bootQemuVm(options: QemuVmOptions & { ports: QemuVmPorts }): QemuVmHandle {
   const { paths, ports } = options;
@@ -139,7 +160,7 @@ export function bootQemuVm(options: QemuVmOptions & { ports: QemuVmPorts }): Qem
     "-name",
     options.name ?? "orbita-l3",
     "-accel",
-    "whpx",
+    qemuAccelSpec(process.arch, "whpx"),
     "-m",
     mem,
     "-smp",
