@@ -1,5 +1,5 @@
 /**
- * 正文里的 PDF 引用标记 `[^c4k2]` → 可点的上标编号（实验功能「PDF 引用」）。
+ * 正文里的 PDF 引用标记 `[^c4k2]` → 可点的上标编号。
  *
  * 标记由 agent 的 cite_pdf 发出（shared/pdf-quote.ts 的 CITATION_MARKER）。remark-gfm
  * 只认有定义的脚注，没有定义的 `[^c4k2]` 原样留在文本节点里——这里把它切成 link

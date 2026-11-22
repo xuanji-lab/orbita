@@ -121,7 +121,6 @@ export interface ModelPair {
  */
 export const EXPERIMENTAL_FEATURE_IDS = [
   "paper-themes",
-  "pdf-citations",
   "intent-system",
 ] as const;
 export type ExperimentalFeatureId = (typeof EXPERIMENTAL_FEATURE_IDS)[number];
@@ -352,10 +351,7 @@ export interface AppSettings {
    * 开了就回来。
    *
    * 各项的语义：
-   * - `paper-themes`：主题选择卡是否列出纸面两档（`selectableThemes`）；
-   * - `pdf-citations`：PDF 引用——模型引 PDF 原文前先过 cite_pdf 核验，核验过的
-   *   才发 [^cXXX] 编号，点编号在文件面板里跳到原文并高亮；关着时编号退回
-   *   纯文本、PDF 不进预览（agent 侧不注册 cite_pdf）。
+   * - `paper-themes`：主题选择卡是否列出纸面两档（`selectableThemes`）。
    *
    * 旧键迁移（`parseSettings` 读这一层做，任何一次写入都把旧键从盘上带走）：
    * - 旧总开关 `experimental: true` 等价于 paper-themes 开（当年还挂着会话生命周期，已转正）。
@@ -365,8 +361,9 @@ export interface AppSettings {
    * `composer-blackhole` / `composer-tetris` 与更早的 `composerBlackhole` 不在表里，
    * 解析时直接丢，下一次写入从盘上带走。
    *
-   * 转正的项同理（2026-10-24 会话生命周期转正，入口常驻）：盘上残留的 `session-lifecycle`
-   * 不在表里，解析时丢掉，开着关着都不再有任何效果。
+   * 转正的项同理（2026-10-24 会话生命周期转正，入口常驻；2026-11-22 PDF 引用转正，
+   * cite_pdf 常注册、PDF 预览与引用编号常开）：盘上残留的 `session-lifecycle` /
+   * `pdf-citations` 不在表里，解析时丢掉，开着关着都不再有任何效果。
    */
   experimentalFeatures?: Partial<Record<ExperimentalFeatureId, boolean>>;
 }

@@ -1,5 +1,5 @@
 /**
- * PDF 原文引用的匹配与契约（实验功能「PDF 引用」）。**两个消费者**：agent 的
+ * PDF 原文引用的匹配与契约。**两个消费者**：agent 的
  * `cite_pdf` 在引用写进对话之前核验原文（agent/pdf-tools.ts），renderer 点引用时
  * 在文本层上把同一段找回来画高亮（features/files/PdfPreview.tsx）。两边必须用同一
  * 把尺子量——否则 agent 说「找到了」、界面却高亮不出来，信任反而被打穿。

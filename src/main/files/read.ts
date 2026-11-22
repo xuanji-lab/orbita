@@ -142,7 +142,7 @@ export async function readTextHead(path: string, limit: number = PREVIEW_TEXT_LI
 }
 
 /**
- * 读一个 PDF 的整份字节（`fs:read-pdf`，实验功能「PDF 引用」的预览面板）。调用方
+ * 读一个 PDF 的整份字节（`fs:read-pdf`的预览面板）。调用方
  * 已过白名单并确认扩展名；这里只管大小上限。`limit` 只为测试注入。
  * 回 Uint8Array 而不是 Buffer：Buffer 过 IPC 结构化克隆后也是 Uint8Array，契约上
  * 直接写成它，renderer 交给 pdf.js 不必再转。

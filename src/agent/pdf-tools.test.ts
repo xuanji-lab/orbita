@@ -475,21 +475,20 @@ describe("read_pdf", () => {
 });
 
 /**
- * cite_pdf 的账（实验功能「PDF 引用」）：只在实验开关开着时注册；跨行引文核验通过、
+ * cite_pdf 的账：与 read_pdf 同台常驻注册；跨行引文核验通过、
  * 编号与 details 一一对应；编造的引文不发编号、附最近处；扫描件直说不能引。
  * 匹配算法本身的边界在 shared/pdf-quote.test.ts，这里只验工具这一层的接线。
  */
 describe("cite_pdf", () => {
   const cite = async (path: string, quotes: unknown) => {
-    const citeTool = createPdfTools(dir, { pdfCitations: true }).find((t) => t.name === "cite_pdf")!;
+    const citeTool = createPdfTools(dir).find((t) => t.name === "cite_pdf")!;
     const result = await citeTool.execute("call-c", { path, quotes }, undefined, undefined, undefined as never);
     const text = result.content[0]!.type === "text" ? result.content[0]!.text : "";
     return { text, citations: citationsOfDetails(result.details) };
   };
 
-  test("实验开关关着不注册，开着才有", () => {
-    assert.deepEqual(createPdfTools(dir).map((t) => t.name), ["read_pdf"]);
-    assert.deepEqual(createPdfTools(dir, { pdfCitations: true }).map((t) => t.name), ["read_pdf", "cite_pdf"]);
+  test("两个工具常驻注册（PDF 引用已转正，不再有实验开关）", () => {
+    assert.deepEqual(createPdfTools(dir).map((t) => t.name), ["read_pdf", "cite_pdf"]);
   });
 
   test("跨行引文核验通过：编号写进正文提示，details 记 PDF 原文与页码", async () => {
@@ -545,7 +544,7 @@ describe("cite_pdf", () => {
  * 触发词是「模型愿不愿意主动调」的命根：read_pdf 要说「用它代替 read」，cite_pdf 要说「讲解依赖原文时用、给可点引用」。
  */
 describe("PDF 工具的描述", () => {
-  const tools = createPdfTools(tmpdir(), { pdfCitations: true });
+  const tools = createPdfTools(tmpdir());
   const byName = (name: string): ToolDefinition => tools.find((t) => t.name === name)!;
 
   test("read_pdf：保留「代替 read」「图表索引 → image_pages」的触发词，并指路 reading 技能", () => {

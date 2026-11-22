@@ -3474,7 +3474,7 @@ export const en = {
             name: "PDF citations",
             title: "Quoting the source, with a way back",
             body: "When it explains a PDF, every quoted line is checked against the original first and carries a number; click the number and the Files panel opens that page with the passage highlighted.",
-            notes: ["An experimental feature: turn on PDF citations under Settings › Experimental."],
+            notes: ["Click a number: the Files panel jumps to that page and highlights it."],
           },
           session: {
             name: "Refer to another task",

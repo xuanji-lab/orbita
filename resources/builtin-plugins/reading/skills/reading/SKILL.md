@@ -38,7 +38,7 @@ Text mode only sees characters. Charts, plots, diagrams and scanned pages are in
 
 ## cite_pdf — quote the original so the user can click through
 
-`cite_pdf` is an experimental feature ("PDF citations" in settings); when it is off the tool does not exist, so just quote the passage in your reply instead. When it is on, use it whenever you explain or summarise a PDF and a statement relies on specific wording in the document, or the user asks for the original text / the source of a claim.
+Use `cite_pdf` whenever you explain or summarise a PDF and a statement relies on specific wording in the document, or the user asks for the original text / the source of a claim.
 
 1. Read the PDF with `read_pdf` first, then call `cite_pdf` with `path` and `quotes: [{ text, page? }, …]` — up to 12 quotes per call, so batch everything one answer needs.
 2. `text` must be **the original wording copied from the `read_pdf` output**, a sentence or phrase of at least 4 letters/digits — not a paraphrase, not a translation, not text from memory. Line breaks, spacing, punctuation, hyphenation at line ends and ligatures do not matter. `page` is only a hint; the tool searches the whole document.

@@ -2,7 +2,7 @@ import { createContext } from "react";
 import type { PdfCitation } from "@shared/pdf-quote";
 
 /**
- * PDF 引用的两条横切通路（实验功能「PDF 引用」）。走 Context 而不是 props：消费者是
+ * PDF 引用的两条横切通路。走 Context 而不是 props：消费者是
  * MarkdownBlock 里的锚点，离 ChatView / App 隔着转录列、条目、轮折叠好几层；ChatView
  * 还在抽屉与子会话面板里复用——逐层传 props 要动每个中间签名（ExperimentalFeaturesContext 同理）。
  *

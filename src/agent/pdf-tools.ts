@@ -289,7 +289,7 @@ async function openPdf(data: Uint8Array): Promise<Awaited<ReturnType<typeof getD
   return getDocumentProxy(data, { CanvasFactory });
 }
 
-export function createPdfTools(cwd: string, options: { pdfCitations?: boolean } = {}): ToolDefinition[] {
+export function createPdfTools(cwd: string): ToolDefinition[] {
   const readPdf: ToolDefinition = {
     name: "read_pdf",
     label: "read_pdf",
@@ -490,8 +490,7 @@ export function createPdfTools(cwd: string, options: { pdfCitations?: boolean } 
       };
     },
   };
-  // cite_pdf 挂在实验开关后面（实验功能「PDF 引用」）：关着时模型看不到这个工具
-  return options.pdfCitations === true ? [readPdf, createCitePdfTool(cwd)] : [readPdf];
+  return [readPdf, createCitePdfTool(cwd)];
 }
 
 /** 连续页码列表（renderPages 的批转适配） */
@@ -562,7 +561,7 @@ function clip(text: string): string {
 }
 
 /**
- * cite_pdf：把要引用的原文**先核验再写进对话**（实验功能「PDF 引用」）。
+ * cite_pdf：把要引用的原文**先核验再写进对话**。
  *
  * 用户场景：拖进一个 PDF 让 agent 讲解，agent 讲到某处时挂一个引用，用户点开就跳到
  * PDF 里那段原文、已经高亮好。以前 agent 只能自己抄一段 callout——那段字用户从没
