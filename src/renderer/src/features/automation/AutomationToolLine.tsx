@@ -1,7 +1,6 @@
 import type { ToolTranscriptItem } from "@earendil-works/pi-protocol";
 import { useT } from "../../locale.ts";
 import { EXIT_CARD_KICKER, EXIT_CARD_STYLE, ExitCard } from "../chat/ExitCard";
-import { PanelButton } from "../../shell/RightPanel";
 import { Icon } from "../../shell/Icon";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { parseAutomationCard, type AutomationCardView } from "../../../../shared/automation.ts";
@@ -81,15 +80,14 @@ export function AutomationToolLine(props: { result: ToolTranscriptItem | undefin
       meta={meta}
       actions={
         <>
-          <PanelButton onClick={() => ui.openPanel(card.id)}>
-            <Icon name={FEATURE_ICON.automation} size={14} /> {a.card.openPanel}
-          </PanelButton>
           {canToggle && (
-            <PanelButton onClick={() => void ui.act(card.id, { type: live.status === "active" ? "pause" : "resume" })}>
-              <Icon name={live.status === "active" ? "pause" : "play"} size={14} />{" "}
+            <button type="button" className="card-btn" onClick={() => void ui.act(card.id, { type: live.status === "active" ? "pause" : "resume" })}>
               {live.status === "active" ? a.card.pause : a.card.resume}
-            </PanelButton>
+            </button>
           )}
+          <button type="button" className="card-btn" onClick={() => ui.openPanel(card.id)}>
+            {a.card.openPanel}
+          </button>
         </>
       }
     />

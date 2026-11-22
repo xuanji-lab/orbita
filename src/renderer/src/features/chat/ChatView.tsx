@@ -67,7 +67,6 @@ import { PluginBoardResultView } from "../board/PluginBoardResult.tsx";
 import { builtinCommand, type DetailRow, docEditLabel, docEditPath, docEditSection, docEditSummary, toolWord } from "./builtin-commands.ts";
 import { getOpenDocumentText } from "../doc-panel/open-document.ts";
 import { ExitCard } from "./ExitCard";
-import { PanelButton } from "../../shell/RightPanel";
 import { ProcessLayoutContext, ProcessViewContext } from "./process-view-context";
 import { sessionRunState, type SessionRunState } from "../notify/completion-notice.ts";
 import { REVEAL_ENTRY_EVENT } from "../context/task-progress.ts";
@@ -178,6 +177,7 @@ import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { NebulaPet } from "../../shell/UsageMeter";
+import { sessionOutputs, type SessionOutputs } from "./child-outputs.ts";
 import { ChatFileScopeContext, loadChatImage, openChatFile, revealChatFile, useChatFileScope, useChatImage, type ChatFileScope } from "./chat-file-scope.ts";
 import { requestOpenPanel } from "../../shell/open-panel.ts";
 import {
@@ -187,15 +187,15 @@ import {
   processRows,
   stepVerb,
   THUMBS_SHOWN,
-  turnOutputs,
-  webOutputs,
+  allOutputs,
+  groupOutputs,
   type ProcessImage,
   type ProcessRow,
   type StepVerb,
   type TurnOutput,
 } from "./process-rows.ts";
 import { fileManagerKind } from "../../file-manager.ts";
-import { fileIcon, fileIconTone, FILETYPE_TONE_COLOR } from "../files/tree-view.ts";
+import { FileTypeIcon } from "../../shell/FileTypeIcon";
 import { HomeHero } from "./HomeHero";
 import { HomeLog, type HomeLogRowView } from "./HomeLog";
 import { heroFace } from "./home-hero.ts";
@@ -242,7 +242,7 @@ import { pastedTextSize, splitUserTextBlocks } from "@shared/prompt-attachments"
 import { FileRefChip, PastedTextChip } from "../../shell/attachment-chips";
 import { findQuoteSource, locateQuote, nthUserMessageId, quoteFromSelection } from "./quote-select.ts";
 import type { PromptImage } from "@shared/prompt-images";
-import type { ChannelMessage } from "@shared/channel";
+import type { ChannelMessage, ChannelMessageKind } from "@shared/channel";
 import { modelDisplayName, modelThinkingLevels } from "@shared/model-defaults";
 import { declaredThinkingLevels, modelPreferenceById } from "../settings/providers-view-model.ts";
 import { estimateStreamingTokens, messageSpeed } from "@shared/message-speed";
@@ -3839,6 +3839,8 @@ function EntryView(props: {
     }
     // 父流里子发来的消息：问询 / 完成 / 失败胶囊（下一刀接上），进度不进父流。
     if (props.channel.ownSide === "parent" && entry.mark.from === "child" && entry.mark.kind !== "progress") {
+      // 交回来了：一张白卡，子会话这一路做出来的东西挂在卡里（2026-11-22 用户：「不需要进入子会话就可以看到子会话的产出」）
+      if (entry.mark.kind === "done") return <ChildReportCard mark={entry.mark} channel={props.channel} />;
       return <ChannelFromChildPill mark={entry.mark} channel={props.channel} />;
     }
     // 其余组合（父流里的 progress 标记、防御性兜底）：不渲染——进度是子会话自己的
@@ -4733,7 +4735,8 @@ function TurnProcessLine(props: {
             {counts.failed > 0 && <span className="proc-quiet">{t.chat.processQuietFailed(counts.failed)}</span>}
             <Icon name={open ? "chevron-down" : "chevron-right"} size={13} strokeWidth={1.8} />
           </span>
-          {images.length > 0 && <ProcessThumbs images={images} />}
+          {/* 展开了，图在下面一层露着：这一层不再重复（2026-11-22 用户：「重复显示了三次」） */}
+          {!open && images.length > 0 && <ProcessThumbs images={images} />}
         </span>
       </CollapseRow>
       {open && <ProcessExpanded steps={unit.steps} toolResults={props.toolResults} skills={props.skills} imagesByCall={imagesByCall} plan={props.plan} />}
@@ -4869,7 +4872,7 @@ function ProcessChapterRow(props: {
             {rows.length > 0 && t.chat.processSteps2(rows.length)}
             {failed > 0 && ` · ${t.chat.processQuietFailed(failed)}`}
           </span>
-          {images.length > 0 && <ProcessThumbs images={images} />}
+          {!open && images.length > 0 && <ProcessThumbs images={images} />}
         </span>
       </button>
       {open && rows.length > 0 && (
@@ -4982,14 +4985,14 @@ function StepRow(props: {
           {shellMs !== null && shellMs}
           {failed && t.chat.processStepFailed}
         </span>
-        {images.length > 0 && <ProcessThumbs images={images} />}
+        {!open && images.length > 0 && <ProcessThumbs images={images} />}
       </button>
       {planView !== null && planView.kind !== "ticks" && (
         <div className="proc-step-plan">
           <PlanCallBlock version={planView.version} base={planView.kind === "changed" ? planView.base : undefined} />
         </div>
       )}
-      {open && finished && result !== undefined && <StepBody call={call} result={result} thinking={props.thinking} />}
+      {open && finished && result !== undefined && <StepBody call={call} result={result} thinking={props.thinking} images={images} />}
     </li>
   );
 }
@@ -5012,7 +5015,7 @@ function stepLabel(call: ToolCallUnit, t: Messages, skills: SkillMeta[], plan: P
 }
 
 /** 一步展开后：它之前想的那段（如果有），然后是原样的输入输出——沿用工具行原来的展开体 */
-function StepBody(props: { call: ToolCallUnit; result: ToolTranscriptItem; thinking: readonly string[] }) {
+function StepBody(props: { call: ToolCallUnit; result: ToolTranscriptItem; thinking: readonly string[]; images: readonly ProcessImage[] }) {
   const t = useT();
   const { call, result } = props;
   const failed = result.status === "error";
@@ -5034,6 +5037,8 @@ function StepBody(props: { call: ToolCallUnit; result: ToolTranscriptItem; think
         </div>
       )}
       {command !== null && <pre className="proc-step-cmd">{command}</pre>}
+      {/* 导出到盘上的图（PNG 自检）：结果里没有图块，展开时在这里画出来；行尾的缩略图随之收起 */}
+      {props.images.some((image) => image.kind === "file") && <StepImages images={props.images.filter((image) => image.kind === "file")} />}
       {diff !== null ? (
         <DiffView diff={diff} />
       ) : fileView !== null ? (
@@ -5046,6 +5051,30 @@ function StepBody(props: { call: ToolCallUnit; result: ToolTranscriptItem; think
         <PlainToolBody toolName={call.toolName} text={text} failed={failed} live={false} images={images} />
       )}
     </div>
+  );
+}
+
+/** 一步展开后的图：中等大小一排，点开看大图 */
+function StepImages(props: { images: readonly ProcessImage[] }) {
+  const [viewing, setViewing] = useState<number | null>(null);
+  return (
+    <div className="proc-step-images">
+      {props.images.map((image, index) => (
+        <StepImage key={image.key} image={image} onOpen={() => setViewing(index)} />
+      ))}
+      {viewing !== null && <ProcessLightbox images={props.images} start={viewing} onClose={() => setViewing(null)} />}
+    </div>
+  );
+}
+
+function StepImage(props: { image: ProcessImage; onOpen: () => void }) {
+  const fileUrl = useChatImage(props.image.kind === "file" ? props.image.path : null);
+  const src = thumbSrc(props.image, fileUrl);
+  if (src === null) return null;
+  return (
+    <button type="button" className="proc-step-image" onClick={props.onOpen} title={props.image.name}>
+      <img src={src} alt={props.image.name} />
+    </button>
   );
 }
 
@@ -5152,13 +5181,130 @@ function ProcessLightbox(props: { images: readonly ProcessImage[]; start: number
  * （演示文稿进演示文稿面板，文档和导出的文件进文件面板），下拉是「用默认应用打开」「在访达中显示」。
  */
 function TurnOutputsBlock(props: { unit: TurnOutputsUnit; toolResults: ToolResultIndex; sessionId: string }) {
-  const outputs = [...turnOutputs(props.unit.calls, props.toolResults), ...webOutputs(props.unit.web)];
+  const outputs = allOutputs(props.unit.calls, props.toolResults, props.unit.docs, props.unit.web);
   if (outputs.length === 0) return null;
   return (
     <div className="turn-outputs">
-      {outputs.map((output) => (
-        <TurnOutputCard key={output.path} output={output} sessionId={props.sessionId} />
-      ))}
+      <OutputStack outputs={outputs} sessionId={props.sessionId} />
+    </div>
+  );
+}
+
+/** 一摞产物：一份一张；同一类三份以上收成一张（groupOutputs），点开逐个列 */
+function OutputStack(props: { outputs: readonly TurnOutput[]; sessionId: string }) {
+  return (
+    <>
+      {groupOutputs(props.outputs).map((slot) =>
+        slot.kind === "one" ? (
+          <TurnOutputCard key={slot.output.path} output={slot.output} sessionId={props.sessionId} />
+        ) : (
+          <OutputGroupCard key={`group:${slot.type}`} type={slot.type} outputs={slot.outputs} sessionId={props.sessionId} />
+        ),
+      )}
+    </>
+  );
+}
+
+function OutputGroupCard(props: { type: "doc" | "file" | "web"; outputs: readonly TurnOutput[]; sessionId: string }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const first = props.outputs[0];
+  const name = first?.path.split(/[\\/]/).pop() ?? "";
+  const names = props.outputs.slice(0, 3).map((output) => output.title).join("、") + (props.outputs.length > 3 ? "…" : "");
+  return (
+    <div className="turn-output-group">
+      <button type="button" className="turn-output group-head" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        <span className="turn-output-icon">
+          <FileTypeIcon name={name} size={24} />
+        </span>
+        <span className="turn-output-text">
+          <span className="turn-output-title">{t.chat.outputGroup(props.type, props.outputs.length)}</span>
+          <span className="turn-output-sub">{names}</span>
+        </span>
+        <span className="proc-row-chev" data-open={open || undefined}>
+          <Icon name="chevron-right" size={14} strokeWidth={1.8} />
+        </span>
+      </button>
+      {open && (
+        <div className="turn-output-group-list">
+          {props.outputs.map((output) => (
+            <TurnOutputCard key={output.path} output={output} sessionId={props.sessionId} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 子会话整条记录（交回卡算它的产出用）：按 id 读一次、缓存；读不到 = null */
+const childRecordsCache = new Map<string, Promise<readonly TranscriptRecord[] | null>>();
+
+function useChildOutputs(childId: string, messageId: string): SessionOutputs | null | undefined {
+  const [value, setValue] = useState<SessionOutputs | null | undefined>(undefined);
+  useEffect(() => {
+    let alive = true;
+    // 同一条交回消息只读一次；新的交回（子会话又做了事）换一个键重读
+    const key = `${childId}:${messageId}`;
+    let promise = childRecordsCache.get(key);
+    if (promise === undefined) {
+      promise = api.session
+        .load(childId)
+        .then((detail) => (detail === null ? null : (detail.transcript as readonly TranscriptRecord[])))
+        .catch(() => null);
+      childRecordsCache.set(key, promise);
+    }
+    void promise.then((records) => {
+      if (alive) setValue(records === null ? null : sessionOutputs(records));
+    });
+    return () => {
+      alive = false;
+    };
+  }, [childId, messageId]);
+  return value;
+}
+
+/**
+ * 子会话交回卡（2026-11-22）：机器人图标 ·「X 交回了」· 报告第一行 · 「看它的会话」；子会话做出来的东西一份一行挂在卡里
+ * （卡就是归属：卡里的都是这个子会话的，卡外结尾那一摞是主会话自己的），别的改过的文件只写个数。
+ */
+function ChildReportCard(props: { mark: { peerId: string; messageId: string; kind: ChannelMessageKind }; channel: ChannelViewContext }) {
+  const t = useT();
+  const { mark, channel } = props;
+  const title = peerTitleOf(channel, mark.peerId, t);
+  const message = channel.channelMessages.get(mark.messageId);
+  const first = (message?.text ?? "").split("\n").find((line) => line.trim() !== "")?.trim() ?? "";
+  const outputs = useChildOutputs(mark.peerId, mark.messageId);
+  const open = channel.openSubSession;
+  return (
+    <div className="child-report">
+      <div className="child-report-head">
+        <span className="exit-card-icon">
+          <Icon name="bot" size={18} strokeWidth={1.6} />
+        </span>
+        <span className="exit-card-text">
+          <span className="exit-card-title">
+            <span className="child-report-kicker">{t.chat.childReportKicker}</span>
+            <span className="exit-card-name">{title}</span>
+          </span>
+          {first !== "" && <span className="exit-card-sub">{first}</span>}
+        </span>
+        <span className="exit-card-side">
+          <span className="exit-card-status" style={{ color: "var(--color-success)" }}>
+            {t.chat.childReportDone}
+          </span>
+          {open !== null && (
+            <button type="button" className="card-btn" onClick={() => open(mark.peerId)}>
+              {t.chat.childReportOpen}
+            </button>
+          )}
+        </span>
+      </div>
+      {outputs !== undefined && outputs !== null && (outputs.outputs.length > 0 || outputs.edited.length > 0) && (
+        <div className="child-report-body">
+          <OutputStack outputs={outputs.outputs} sessionId={mark.peerId} />
+          {outputs.edited.length > 0 && <div className="child-report-edited">{t.chat.childReportEdited(outputs.edited.length)}</div>}
+        </div>
+      )}
     </div>
   );
 }
@@ -5168,9 +5314,8 @@ function TurnOutputCard(props: { output: TurnOutput; sessionId: string }) {
   const scope = useChatFileScope();
   const { output } = props;
   const [refusal, setRefusal] = useState<string | null>(null);
-  // 图标与文件面板同一个函数（fileIcon / fileIconTone）：同一个文件在两处长同一个样子、同一个颜色，不另垫灰底
+  // 彩色文件图标，与文件面板同一个（FileTypeIcon）：同一个文件在哪儿都长一个样，不另垫灰底
   const name = output.path.split(/[\\/]/).pop() ?? output.path;
-  const tone = fileIconTone(name, "file");
   const sub =
     output.kind === "slides"
       ? t.chat.outputDeck(output.pages)
@@ -5199,8 +5344,8 @@ function TurnOutputCard(props: { output: TurnOutput; sessionId: string }) {
   ];
   return (
     <div className="turn-output">
-      <span className="turn-output-icon" style={tone === null ? undefined : { color: FILETYPE_TONE_COLOR[tone] }}>
-        <Icon name={fileIcon(name, "file")} size={22} strokeWidth={1.5} />
+      <span className="turn-output-icon">
+        <FileTypeIcon name={name} size={24} />
       </span>
       <span className="turn-output-text" title={output.path}>
         <span className="turn-output-title">{output.title}</span>
@@ -5985,15 +6130,15 @@ function HandoffToolLine(props: {
         ? {
             actions: (
               <>
-                <PanelButton onClick={open}>
-                  <Icon name="arrow-up-right" size={13} /> {t.browser.handoffOpen}
-                </PanelButton>
-                <PanelButton onClick={() => void api.browser.resolveHandoff(props.toolCallId, "done")}>
-                  <Icon name="check" size={13} /> {t.browser.handoffDone}
-                </PanelButton>
-                <PanelButton onClick={() => void api.browser.resolveHandoff(props.toolCallId, "cancelled")}>
+                <button type="button" className="card-btn" onClick={open}>
+                  {t.browser.handoffOpen}
+                </button>
+                <button type="button" className="card-btn" onClick={() => void api.browser.resolveHandoff(props.toolCallId, "done")}>
+                  {t.browser.handoffDone}
+                </button>
+                <button type="button" className="card-btn" onClick={() => void api.browser.resolveHandoff(props.toolCallId, "cancelled")}>
                   {t.common.cancel}
-                </PanelButton>
+                </button>
               </>
             ),
           }

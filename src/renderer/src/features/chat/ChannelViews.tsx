@@ -308,6 +308,7 @@ export function DelegateCardView(props: {
   return (
     <ExitCard
       kicker={t.channel.delegated}
+      icon="bot"
       title={card.title}
       status={{ text: t.channel.delegateStatus[status], color: delegateStatusColor(status), active: status === "running" }}
       preview={props.taskPreview}

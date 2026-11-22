@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolTranscriptItem } from "@earendil-works/pi-protocol";
-import { assignImages, deckPagesFrom, imagesOf, processHeadline, processRows, stepVerb, turnOutputs } from "./process-rows.ts";
+import { allOutputs, assignImages, groupOutputs, deckPagesFrom, imagesOf, processHeadline, processRows, stepVerb, turnOutputs } from "./process-rows.ts";
 import type { ProcessStep, ToolCallUnit, ToolResultIndex } from "./tool-results.ts";
 import { en } from "../../messages-en.ts";
 import { zh } from "../../messages-zh.ts";
@@ -131,5 +131,32 @@ describe("assignImages：同一张图只挂在第一次出现的那一步，每�
       }),
     ]);
     assert.equal(assignImages(calls, results).get("d")?.length, 2);
+  });
+});
+
+describe("allOutputs：结尾这一摞产物", () => {
+  test("写的 md 出文档卡；doc_open 打开过又改过的只算一份；网页排最后", () => {
+    const calls = [call("o", "doc_open", { path: "周报.md" }), call("x", "doc_export", { format: "pdf" })];
+    const results: ToolResultIndex = new Map([
+      done("o", "doc_open", { details: card("doc", "/w/周报.md", "周报") }),
+      done("x", "doc_export", { details: card("export", "/w/周报.pdf", "周报.pdf") }),
+    ]);
+    const outputs = allOutputs(calls, results, ["/w/周报.md", "/w/a.md"], ["/w/index.html"]);
+    assert.deepEqual(
+      outputs.map((output) => `${output.kind}:${output.title}`),
+      ["doc:周报", "doc:a.md", "file:周报.pdf", "web:index.html"],
+    );
+  });
+});
+
+describe("groupOutputs：同一类三份以上收成一张", () => {
+  test("12 个网页收成一组；演示文稿不收；两份文档不收", () => {
+    const o = (kind: "slides" | "doc" | "web", title: string) => ({ kind, path: `/w/${title}`, title, pages: null, format: null, detail: null });
+    const outputs = [o("slides", "演示"), o("doc", "a.md"), o("doc", "b.md"), ...Array.from({ length: 12 }, (_, i) => o("web", `p${i}.html`))];
+    const slots = groupOutputs(outputs);
+    assert.deepEqual(
+      slots.map((slot) => (slot.kind === "one" ? slot.output.title : `${slot.type}×${slot.outputs.length}`)),
+      ["演示", "a.md", "b.md", "web×12"],
+    );
   });
 });

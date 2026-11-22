@@ -381,6 +381,9 @@ export interface TurnProcessUnit {
 /** 过程块的一步：思考 / 工具 / 工具组，或夹在中间的说明性正文（章节标题） */
 export type ProcessStep = TurnMemberEntry | Extract<RenderUnit, { kind: "text" }>;
 
+/** 文档文件（与 builtin-commands 的 docEditPath 同一口径） */
+const DOC_FILE = /\.(?:md|markdown|txt)$/i;
+
 /**
  * 一轮做出来、交给用户的东西（2026-11-22）：结尾一处收齐，一份一行（process-rows.ts 的 turnOutputs 从 calls 现算）。
  * calls 是这一轮全部工具调用：页数要看最后一次写演示文稿的结果。
@@ -391,6 +394,11 @@ export interface TurnOutputsUnit {
   calls: readonly ToolCallUnit[];
   /** 这一轮做出来的网页（文件账里改到的与旁路生成的），各占一张预览卡，不再挤在文件账卡里 */
   web: readonly string[];
+  /**
+   * 这一轮写 / 改的文档（.md / .markdown / .txt，文件账里的绝对路径）：和「文档」功能是同一种东西，
+   * 各占一张预览卡，点了在文档面板里看（2026-11-22 用户：a.md 只出现在编辑文件里，没有预览卡）
+   */
+  docs: readonly string[];
 }
 
 export type TurnViewEntry = RenderEntry | TurnGroupUnit | TurnProcessUnit | TurnOutputsUnit;
@@ -613,8 +621,11 @@ function foldSegment(
         ? [...entry.record.changes.map((change) => change.path).filter((path) => isWebArtifactFile(path)), ...(entry.record.webArtifacts ?? [])]
         : [],
     );
-    if (turnOutputs(calls, results).length > 0 || web.length > 0) {
-      view.push({ kind: "turnOutputs", key: `out:${calls[0]?.key ?? tailCards[0]?.key ?? ""}`, calls, web });
+    const docs = tailCards.flatMap((entry) =>
+      entry.kind === "fileTurn" ? entry.record.changes.map((change) => change.path).filter((path) => DOC_FILE.test(path)) : [],
+    );
+    if (turnOutputs(calls, results).length > 0 || web.length > 0 || docs.length > 0) {
+      view.push({ kind: "turnOutputs", key: `out:${calls[0]?.key ?? tailCards[0]?.key ?? ""}`, calls, web, docs });
     }
   }
   return view;

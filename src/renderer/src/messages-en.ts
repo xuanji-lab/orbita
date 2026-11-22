@@ -2413,6 +2413,12 @@ export const en = {
     outputWeb: "Web page",
     outputFile: (format: string | null) => format ?? "File",
     outputPreview: "Preview",
+    outputGroup: (type: "doc" | "file" | "web", n: number) =>
+      type === "doc" ? `${n} documents` : type === "web" ? `${n} web pages` : `${n} exported files`,
+    childReportKicker: "Sub-session",
+    childReportDone: "Handed back",
+    childReportOpen: "Open its session",
+    childReportEdited: (n: number) => `Also edited ${n} other file${n === 1 ? "" : "s"}`,
     planTurnNew: (n: number) => `Made a plan · ${plural(n, "step")}`,
     planTurnChanged: "Changed the plan",
     planTurnProgressed: "Moved the plan on",

@@ -289,19 +289,33 @@ export function turnOutputs(calls: readonly ToolCallUnit[], results: ToolResultI
 }
 
 /**
- * 这一轮做出来的网页（2026-11-22 用户：「这个东西就应该放在，就是单独一个卡片……而不是放在编辑了哪些文件的这个框框里面」）：
- * 文件账里改到的 .html / .htm / .svg 与旁路（脚本生成）的网页，去重、按出现顺序，接在其余产物后面。
+ * 这一轮写出来的文件（文件账里的绝对路径）→ 产物：网页（2026-11-22 用户：「这个东西就应该放在，就是单独一个卡片……
+ * 而不是放在编辑了哪些文件的这个框框里面」）与文档（「它们就是跟文档是同一个功能……应该有个预览的卡片」）。去重、按出现顺序。
  */
-export function webOutputs(paths: readonly string[]): TurnOutput[] {
+export function fileOutputs(kind: "web" | "doc", paths: readonly string[]): TurnOutput[] {
   const seen = new Set<string>();
   const out: TurnOutput[] = [];
   for (const path of paths) {
     if (seen.has(path)) continue;
     seen.add(path);
-    out.push({ kind: "web", path, title: basename(path), pages: null, format: null, detail: null });
+    out.push({ kind, path, title: basename(path), pages: null, format: null, detail: null });
   }
   return out;
 }
+
+/**
+ * 结尾这一摞产物：工具做出来的（演示文稿、文档、导出）+ 这一轮写的文档 + 网页，按路径去重（doc_open 打开过、
+ * 又被 edit 改过的文档只算一份）。顺序：演示文稿与文档在前，导出的文件，最后网页。
+ */
+export function allOutputs(calls: readonly ToolCallUnit[], results: ToolResultIndex, docs: readonly string[], web: readonly string[]): TurnOutput[] {
+  const norm = (path: string) => path.replace(/\\/g, "/");
+  const made = turnOutputs(calls, results);
+  const seen = new Set(made.map((output) => norm(output.path)));
+  const more = [...fileOutputs("doc", docs), ...fileOutputs("web", web)].filter((output) => !seen.has(norm(output.path)));
+  const order = (output: TurnOutput) => (output.kind === "slides" || output.kind === "doc" ? 0 : output.kind === "file" ? 1 : 2);
+  return [...made, ...more].sort((a, b) => order(a) - order(b));
+}
+
 
 // ───────────────────────── 缩略图 ─────────────────────────
 
@@ -454,4 +468,34 @@ export function processRows(steps: readonly ProcessStep[]): ProcessRow[] {
     }
   }
   return rows;
+}
+
+/**
+ * 结尾那一摞太长时按类收（2026-11-22 压力测试：一轮写了 12 个网页、4 份文档，结尾排了 20 张卡）：同一类（文档 / 导出的文件 / 网页）
+ * 有 GROUP_MIN 份以上，收成一张「12 个网页」的卡，点开逐个列；演示文稿一份一张不收（通常只有一两份，又是这一轮的主产物）。
+ */
+export const GROUP_MIN = 3;
+
+export type OutputSlot = { kind: "one"; output: TurnOutput } | { kind: "group"; type: "doc" | "file" | "web"; outputs: TurnOutput[] };
+
+export function groupOutputs(outputs: readonly TurnOutput[]): OutputSlot[] {
+  const count = new Map<string, number>();
+  for (const output of outputs) count.set(output.kind, (count.get(output.kind) ?? 0) + 1);
+  const slots: OutputSlot[] = [];
+  const groups = new Map<string, Extract<OutputSlot, { kind: "group" }>>();
+  for (const output of outputs) {
+    const kind = output.kind;
+    if (kind !== "slides" && (count.get(kind) ?? 0) >= GROUP_MIN) {
+      let group = groups.get(kind);
+      if (group === undefined) {
+        group = { kind: "group", type: kind, outputs: [] };
+        groups.set(kind, group);
+        slots.push(group);
+      }
+      group.outputs.push(output);
+    } else {
+      slots.push({ kind: "one", output });
+    }
+  }
+  return slots;
 }

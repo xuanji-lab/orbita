@@ -7207,3 +7207,178 @@ html {
 .plan-turn-card[data-awaiting] .plan-turn-title {
   color: var(--color-text-primary);
 }
+/* 一步展开后的图（导出的 PNG）：中等大小一排，点开看大图 */
+.proc-step-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.proc-step-image {
+  padding: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  cursor: zoom-in;
+  overflow: hidden;
+}
+.proc-step-image img {
+  display: block;
+  max-width: 320px;
+  max-height: 180px;
+  object-fit: contain;
+}
+
+/* 「要你点」的卡（ExitCard：派出、交接、自动化）与装插件行、自动化改权限行（.pl-line），2026-11-22 统一成白卡：
+   骨架同结尾的产物卡——白底淡边、左边图标、中间两行字、右边状态与描边小按钮 */
+.exit-card-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  color: var(--color-text-tertiary);
+}
+.exit-card-text {
+  display: grid;
+  flex: 1 1 auto;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+.exit-card-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.exit-card-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+.exit-card-sub {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+.exit-card-meta {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+.exit-card-side {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+}
+.exit-card-status {
+  font-size: var(--font-size-sm);
+}
+/* 卡上的按钮：同产物卡「预览」、改文件卡「撤销 / 审核」 */
+.card-btn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.card-btn:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.pl-line {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: none;
+  background: var(--color-bg-panel);
+}
+.pl-line-main {
+  gap: var(--space-3);
+}
+.pl-line-main > .pl-line-ic {
+  width: 28px;
+}
+.pl-line .pl-btn {
+  border-radius: var(--radius-sm);
+  box-shadow: inset 0 0 0 1px var(--color-border-subtle);
+}
+.pl-line .pl-btn.btn-accent {
+  box-shadow: none;
+}
+
+/* 子会话交回卡（ChatView 的 ChildReportCard）：白卡，头一行同「要你点」的卡；子会话做出来的东西挂在卡里，
+   一份一行（同结尾的产物卡，缩进到图标右边）——卡里的是子会话的，卡外结尾那一摞是主会话自己的 */
+.child-report,
+.turn-output-group {
+  /* 卡左边图标那一格的宽：卡里挂的子卡缩进到图标右边 */
+  --card-icon-w: 28px;
+}
+.child-report {
+  display: grid;
+  min-width: 0;
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+}
+.child-report-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+}
+.child-report-kicker {
+  flex: none;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-tertiary);
+}
+.child-report-body {
+  display: grid;
+  gap: var(--space-2);
+  padding: 0 var(--space-3) var(--space-3) calc(var(--space-3) + var(--card-icon-w) + var(--space-3));
+}
+.child-report-edited {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+/* 同一类三份以上收成的一张（OutputGroupCard）：头同产物卡，点开在卡里逐个列（缩进到图标右边） */
+.turn-output-group {
+  display: grid;
+  min-width: 0;
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+}
+.turn-output.group-head {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.turn-output.group-head:hover {
+  background: var(--color-bg-hover);
+}
+.turn-output-group-list {
+  display: grid;
+  gap: var(--space-2);
+  padding: 0 var(--space-3) var(--space-3) calc(var(--space-3) + var(--card-icon-w) + var(--space-3));
+}

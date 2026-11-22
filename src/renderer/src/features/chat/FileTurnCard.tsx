@@ -1,5 +1,6 @@
 import { useContext, useState } from "react";
 import { Icon } from "../../shell/Icon";
+import { FileTypeIcon } from "../../shell/FileTypeIcon";
 import { useT } from "../../locale.ts";
 import type { FileTurnView, RevertRecord } from "@shared/revert";
 import { pathParts } from "./path-parts.ts";
@@ -128,6 +129,7 @@ export function FileTurnCard(props: {
                   disabled={review === undefined}
                   onClick={() => review?.(change.path)}
                 >
+                  <FileTypeIcon name={parts.name} size={16} />
                   <span className="ftc-name">{parts.name}</span>
                   {parts.dir !== "" && <span className="ftc-dir">{parts.dir}</span>}
                   <span className="ftc-stats">
