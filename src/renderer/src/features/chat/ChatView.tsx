@@ -2638,7 +2638,7 @@ function ChildSessionHead(props: { channel: ChannelViewContext }) {
   const parent = props.channel.ownParentId === null ? undefined : props.channel.titles.get(props.channel.ownParentId);
   return (
     <div className="child-session-head">
-      <Icon name="bot" size={14} strokeWidth={1.8} />
+      <Icon name={FEATURE_ICON.subsessions} size={14} strokeWidth={1.8} />
       <span>{t.channel.childOf(parent === undefined || parent === "" ? t.channel.parentSession : parent)}</span>
       {props.channel.ownModelName !== null && <ModelNameLabel name={props.channel.ownModelName} />}
     </div>
@@ -4949,7 +4949,7 @@ function stepIcon(toolName: string, input: unknown, skills: SkillMeta[]): IconNa
       return "circle-dot";
     case "delegate":
     case "report_to_parent":
-      return "bot";
+      return FEATURE_ICON.subsessions;
     case "reply_subsession":
       return "message-circle";
     case "show_image":
@@ -5380,7 +5380,7 @@ function ChildReportCard(props: { mark: { peerId: string; messageId: string; kin
   // 一行：「「标题」交回了 · 型号名 · 报告第一行 ［看它的会话］」。它做出来的东西不再包在这里，摆进这一轮结尾的产物摞（TurnOutputsBlock）
   return (
     <ChildLineCard
-      icon="bot"
+      icon={FEATURE_ICON.subsessions}
       head={t.chat.childReportHead(title)}
       model={channel.modelNameOf(channel.childModelIds.get(mark.peerId) ?? "")}
       first={first}
