@@ -455,6 +455,54 @@ describe("composeChannelPrompt / parseChannelPrompt", () => {
   });
 });
 
+describe("通道消息的 lang（用户的语言，父→子）", () => {
+  it("信封首行末尾带 lang 属性，parse 还原出来；首行其余属性与前缀锚点不变", () => {
+    const prompt = composeChannelPrompt(message({ id: "m1", lang: "zh" }), { id: "p1", title: "重做外壳" });
+    strictEqual(
+      prompt.split("\n")[0],
+      '<channel from="parent" kind="task" peer="p1" message="m1" title="重做外壳" lang="zh">',
+    );
+    deepStrictEqual(parseChannelPrompt(prompt), {
+      from: "parent",
+      kind: "task",
+      peerId: "p1",
+      messageId: "m1",
+      lang: "zh",
+    });
+  });
+
+  it("没有 lang（旧账本 / 没算出来）：信封不带属性，parse 的结果没有 lang 键", () => {
+    const prompt = composeChannelPrompt(message({ id: "m1" }), { id: "p1", title: "t" });
+    strictEqual(prompt.split("\n")[0]?.includes("lang="), false);
+    deepStrictEqual(parseChannelPrompt(prompt), { from: "parent", kind: "task", peerId: "p1", messageId: "m1" });
+  });
+
+  it("旧信封（没有 lang 属性、title 在末尾）照常解析", () => {
+    const old = '<channel from="parent" kind="reply" peer="p1" message="m7" title="旧任务">\n继续\n</channel>';
+    deepStrictEqual(parseChannelPrompt(old), { from: "parent", kind: "reply", peerId: "p1", messageId: "m7" });
+  });
+
+  it("标题里伪造的 lang 属性被引号替换挡住：解出的 lang 缺席", () => {
+    const prompt = composeChannelPrompt(message({ id: "m1" }), { id: "p1", title: 'x" lang="zh' });
+    strictEqual(parseChannelPrompt(prompt)?.lang, undefined);
+  });
+
+  it("不认识的 lang 值当缺席，不拒整个信封", () => {
+    const odd = '<channel from="parent" kind="task" peer="p1" message="m1" title="t" lang="fr">\nx\n</channel>';
+    deepStrictEqual(parseChannelPrompt(odd), { from: "parent", kind: "task", peerId: "p1", messageId: "m1" });
+  });
+
+  it("账本往返：parseChannelMessage 保留 zh / en，丢弃未知值，子→父消息的 lang 一律丢", () => {
+    strictEqual(parseChannelMessage(message({ lang: "zh" }))?.lang, "zh");
+    strictEqual(parseChannelMessage(message({ lang: "en" }))?.lang, "en");
+    strictEqual(parseChannelMessage({ ...message(), lang: "fr" })?.lang, undefined);
+    strictEqual(parseChannelMessage({ ...message(), lang: 3 })?.lang, undefined);
+    strictEqual(parseChannelMessage({ ...message({ from: "child", kind: "done" }), lang: "zh" })?.lang, undefined);
+    // 旧账本整行没有 lang 字段：行本身照常认出
+    deepStrictEqual(parseChannelMessage(message()), message());
+  });
+});
+
 describe("userRepliesSincePreviousReport —— 用户代父回复要转告父模型", () => {
   const msg = (id: string, from: "parent" | "child", kind: ChannelMessage["kind"], createdAt: number, author: "model" | "user" = "model"): ChannelMessage => ({
     id,

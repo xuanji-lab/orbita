@@ -18,6 +18,7 @@ import type { CompactedRecord } from "./session.ts";
 import type { FileChangePayload, FileChangeView } from "./revert.ts";
 import type { PromptImage, SentImage } from "./prompt-images.ts";
 import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
+import type { ReplyLang } from "./reply-language.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
 import type { SlidesAgentRequest, SlidesOutcome } from "./slides-export.ts";
@@ -1514,6 +1515,11 @@ export type AgentEvent =
       modelId?: string;
       /** 可选的思考档；缺席时跟着解析出的模型走（见上方 delegateRequest 的说明） */
       thinkingLevel?: ThinkingLevel;
+      /**
+       * 此刻用户的语言（agent 按父会话历史里「用户亲手打的字」算好，shared/reply-language.ts）：
+       * 主进程写进 task 通道消息的 lang，子会话据此写可见文字与汇报。缺席 = 没算出来。
+       */
+      replyLang?: ReplyLang;
     }
   /**
    * 派发参考：agent 的 model_costs 工具请求。**数据在主进程**（任务账本 usage-tasks.json、
@@ -1547,6 +1553,8 @@ export type AgentEvent =
       kind: ChannelMessageKind;
       text: string;
       delivery?: ChannelDelivery;
+      /** 父→子 reply 才带：同 delegateRequest.replyLang，写进这条 reply 通道消息的 lang */
+      replyLang?: ReplyLang;
     }
 /**
  * 4-3：skills 磁盘状态变了（主进程写完广播）。Skills 面板开着就刷新——

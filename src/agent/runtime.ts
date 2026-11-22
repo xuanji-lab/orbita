@@ -127,8 +127,10 @@ import {
   hashImage,
   planImageBudget,
   readImageBudgetBook,
+  type ContextMessage,
   type ImageBudgetMark,
 } from "./image-byte-budget.ts";
+import { currentReplyLang } from "./reply-language.ts";
 
 // pi-ai 的模型调用与 main 同一个坑（同一台机器、同一个全局 fetch）
 preferIPv4();
@@ -1395,6 +1397,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   const mcpLabel = command.workspaceId === null ? "" : command.cwd;
   await mcpHub.ensure(mcpScope, command.mcpServers, mcpLabel);
   send({ type: "mcp", servers: mcpHub.describe() });
+  // 通道工具要读本会话的历史算用户的语言，而 session 在工具之后才创建：先留个槽，创建后填上
+  let sessionForLang: AgentSession | undefined;
   const customTools = [
     ...mcpHub.toolsFor(mcpScope),
     // read_pdf 不过 broker：附件副本与工作区 PDF 都在 agent read 边界内，直读（./pdf-tools.ts）
@@ -1440,7 +1444,11 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
       // 授权目录与开轮目录清单同源：prompt 里说「你可以去这些目录」，这里就认这些
       authorizedDirs: [command.cwd, ...(command.directories?.attached ?? [])],
     }),
-    ...createChannelTools(requestBroker, command.sessionId, role),
+    // 派发 / 回信时把此刻用户的语言交给主进程（写进通道消息的 lang）。session 在工具之后才创建，
+    // 所以用延迟读：工具被调用时 sessionForLang 已经就位
+    ...createChannelTools(requestBroker, command.sessionId, role, () =>
+      sessionForLang === undefined ? undefined : currentReplyLang(sessionForLang.messages as ContextMessage[]),
+    ),
     ...(memoryTools
       ? createMemoryTools(requestBroker, command.sessionId, {
           scope: { workspaceId: command.workspaceId, cwd: command.cwd },
@@ -1463,6 +1471,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   });
   // 订阅车道改写的落点补全（cc-billing-stream.ts）：压缩 / 分支摘要绕过主循环的
   // before_provider_request，包一层 streamFunction 把改写给到每一条出站请求
+  sessionForLang = session;
   applyBillingStreamPatch(session);
   // Claude 官方直连的主会话用 1 小时提示缓存，子会话与网关保持 pi 默认（cache-retention.ts）
   applyCacheRetentionPatch(session, role);
