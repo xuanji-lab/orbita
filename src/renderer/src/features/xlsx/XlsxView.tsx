@@ -47,8 +47,9 @@ import { bumpOfficeReload, OFFICE_RELOAD_INITIAL, type OfficeReloadState } from 
  * 工具栏那个「用默认应用打开」。
  *
  * **编辑只改值 / 公式**（2026-11-22）：单击选中、双击或直接键入进入编辑、公式栏与选区
- * 同步；回车提交并下移、Tab 提交并右移、Esc 取消。改过的格有角标，底部给「保存 / 撤销 /
- * 状态」。写回在 `main/xlsx/edit.ts`：只动目标格的 XML（样式、合并、条件格式、图片一个
+ * 同步；回车提交并下移、Tab 提交并右移、Esc 取消。改过的格有角标，底部给「状态 / 撤销 /
+ * 保存」——**保存只有那一个主操作位**，改动清单只负责「改了什么、能撤哪一条」。
+ * 写回在 `main/xlsx/edit.ts`：只动目标格的 XML（样式、合并、条件格式、图片一个
  * 字节不改），临时文件 + rename 原子写，保存前比对指纹（文件在外部被改过就拦下）。
  *
  * **公式不重算**：写进去的公式只有公式文本、没有缓存值，所以这类格显示公式原文并带
@@ -215,6 +216,16 @@ export function XlsxView(props: {
         setSaving(false);
       });
   }, [commitInto, props.request, setEdit, t]);
+
+  /**
+   * 撤销这一批未保存的改动（底栏与改动清单共用这一个动作——两处各写一份
+   * `applyEdit` + `clearPending` 就是在维护同一条规矩的两份拷贝）。
+   * 保存**只有底栏那一个按钮**：改动清单是「我改了什么、能撤哪一条」的地方，
+   * 不是第二个提交入口（2026-11-22 验收：Excel 底部出现两个保存）。
+   */
+  const undoAll = useCallback((): void => {
+    applyEdit(clearPending);
+  }, [applyEdit]);
 
   /** 重新加载：丢掉未保存的改动、重读文件（丢改动要二次点，见 xlsxReloadDiscard） */
   const reloadNow = useCallback(() => {
@@ -444,7 +455,7 @@ export function XlsxView(props: {
               sheetName={data.sheet.name}
               edits={edit.pending}
               onRemove={(row, col) => applyEdit((current) => removePending(current, row, col))}
-              onClearAll={() => applyEdit(clearPending)}
+              onClearAll={undoAll}
             />
           )}
           <XlsxFooter
@@ -457,7 +468,7 @@ export function XlsxView(props: {
             formulaNote={uncachedInSheet || edit.pending.some((item) => item.formula)}
             externallyChanged={externallyChanged}
             onSave={save}
-            onUndoAll={() => applyEdit(clearPending)}
+            onUndoAll={undoAll}
           />
         </>
       )}
@@ -960,7 +971,11 @@ function GridCell(props: {
   );
 }
 
-/** 未保存的改动清单：`表名!B2：旧 → 新`，逐条撤回 + 全部撤回（都在保存之前） */
+/**
+ * 未保存的改动清单：`表名!B2：旧 → 新`，逐条撤回 + 全部撤回。
+ * **这里没有保存**：保存只在底栏那一个主操作按钮（两处都放保存 = 同一件事两个入口，
+ * 还会各自绑一份 `save`）。清单负责「改了什么、能撤哪一条」。
+ */
 function XlsxPendingPanel(props: {
   sheetName: string;
   edits: readonly PendingCellEdit[];
