@@ -10,6 +10,7 @@ import { StatusPie } from "../../shell/StatusPie";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { requestOpenPanel, requestOpenPluginBoard } from "../../shell/open-panel.ts";
 import { Switch } from "../settings/SettingControls";
+import { InfoTip } from "../settings/InfoTip";
 import type { SessionEntry } from "../chat/session-states.ts";
 import type { ChatSession, SessionEngine } from "../chat/useChatSession";
 import { useTaskRecords } from "../chat/useTaskRecords.ts";
@@ -547,10 +548,17 @@ function ProgressSection(props: {
         只在有子会话时出现；原型未接上投递。
       */}
       {props.children.length > 0 && (
-        <div className="cs-report" title={t.chatStatus.dontWaitTip}>
+        <div className="cs-report">
+          {/* 说明交给名字旁的 info 图标（用户 22:36；复用设置页的 InfoTip：悬停 / 键盘聚焦出浮层，读屏经 aria-describedby 直接读到） */}
           <span className="cs-report-text">
             <span>{t.chatStatus.dontWait}</span>
-            <span className="cs-report-sub">{reportOn ? t.chatStatus.notWired : t.chatStatus.dontWaitSub}</span>
+            <InfoTip label={t.chatStatus.dontWaitAbout}>
+              <span className="cs-report-tip">
+                <span>{t.chatStatus.dontWaitOn}</span>
+                <span>{t.chatStatus.dontWaitOff}</span>
+              </span>
+            </InfoTip>
+            {reportOn && <span className="cs-report-sub">{t.chatStatus.notWired}</span>}
           </span>
           <Switch label={t.chatStatus.dontWait} checked={false} onChange={() => setReportOn(true)} />
         </div>

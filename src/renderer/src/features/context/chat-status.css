@@ -537,7 +537,18 @@
 .cs-report-text {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--space-1);
+}
+.cs-report-text > .cs-report-sub {
+  flex-basis: 100%;
+}
+/* info 浮层里的两行：开 / 关各一行 */
+.cs-report-tip {
   display: grid;
+  gap: var(--space-1);
 }
 .cs-report-sub {
   font-size: var(--font-size-sm);
