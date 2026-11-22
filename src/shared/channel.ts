@@ -11,6 +11,8 @@
  * progress 是子会话自己选择报的，不是系统每次工具调用记一笔。
  */
 
+import { isReplyLang, type ReplyLang } from "./reply-language.ts";
+
 export type ChannelSide = "parent" | "child";
 
 /**
@@ -63,6 +65,13 @@ export interface ChannelMessage {
   text: string;
   delivery: ChannelDelivery;
   createdAt: number;
+  /**
+   * 用户的语言（只有父→子的消息带）：派出 / 回信时由主会话那边按「用户亲手打的字」算好，
+   * 随信封送进子会话。子会话收到的每条消息都是信封，没有任何用户亲手打的字，
+   * 靠它才知道该用什么语言写可见文字与汇报（shared/reply-language.ts 的说明）。
+   * 缺席 = 没算出来 / 旧账本：信封不带属性，子会话退回规则段的默认行为。
+   */
+  lang?: ReplyLang;
 }
 
 /** 一条通道的键：属于那一对父子。fork 父会话不拷贝通道（新会话没有那个子）。 */
@@ -128,7 +137,9 @@ export function parseChannelMessage(raw: unknown): ChannelMessage | null {
   // 静默接受它等于允许账本伪造「用户终止过」。
   if (kind === "stop" && author !== "user") return null;
   const delivery = value["delivery"] === "steer" ? "steer" : "followUp";
-  return { id, from, author, kind, text, delivery, createdAt };
+  // lang 只有父→子的消息有意义；不认识的值（手改文件 / 将来的新语言）当缺席，不拒整行
+  const lang = from === "parent" && isReplyLang(value["lang"]) ? value["lang"] : undefined;
+  return { id, from, author, kind, text, delivery, createdAt, ...(lang === undefined ? {} : { lang }) };
 }
 
 /** 按时间正序（同一毫秒按账本顺序，sort 稳定）。通道是对话，不是活跃倒序。 */
@@ -236,8 +247,10 @@ export function composeChannelPrompt(
     message.from === "parent"
       ? "This message came from your parent session through the sub-session channel. Report back with report_to_parent (kind: question / progress / done / failed); text in your normal reply is not delivered to the parent."
       : `This message came from your sub-session "${title}" (id ${peer.id}) through its channel. To answer, call reply_subsession with that id; text in your normal reply is not delivered to the sub-session, so do not pretend to answer it here.`;
+  // lang 属性放在首行末尾：parseChannelPrompt 的前缀锚点不受影响，旧信封没有它照常解析
+  const lang = message.lang === undefined ? "" : ` lang="${message.lang}"`;
   return [
-    `<channel from="${message.from}" kind="${message.kind}" peer="${peer.id}" message="${message.id}" title="${title}">`,
+    `<channel from="${message.from}" kind="${message.kind}" peer="${peer.id}" message="${message.id}" title="${title}"${lang}>`,
     ...workbench,
     message.text,
     "</channel>",
@@ -283,6 +296,9 @@ export function userRepliesNote(replies: readonly ChannelMessage[]): string {
 const CHANNEL_PROMPT_HEADER =
   /^<channel from="(parent|child)" kind="([a-z]+)" peer="([^"]+)" message="([^"]+)"/;
 
+/** 首行末尾的 lang 属性；title 里的引号已被 cleanEnvelopeTitle 换掉，不会伪造出这一段 */
+const CHANNEL_PROMPT_LANG = / lang="([a-z]+)">$/;
+
 /**
  * 解出信封的首行属性。**只看首行**——正文（message.text）或首行之外的地方
  * 出现类似信封的文本都不算。kind 必须是 `isChannelMessageKind` 认识的值，
@@ -291,7 +307,7 @@ const CHANNEL_PROMPT_HEADER =
  */
 export function parseChannelPrompt(
   text: string,
-): { from: ChannelSide; kind: ChannelMessageKind; peerId: string; messageId: string } | null {
+): { from: ChannelSide; kind: ChannelMessageKind; peerId: string; messageId: string; lang?: ReplyLang } | null {
   const firstLine = text.split("\n")[0] ?? "";
   const match = CHANNEL_PROMPT_HEADER.exec(firstLine);
   if (match === null) return null;
@@ -299,5 +315,13 @@ export function parseChannelPrompt(
   if (from === undefined || peerId === undefined || messageId === undefined) return null;
   if (!isChannelMessageKind(kind)) return null;
   if (!allowedKinds(from as ChannelSide).includes(kind)) return null;
-  return { from: from as ChannelSide, kind, peerId, messageId };
+  const langMatch = CHANNEL_PROMPT_LANG.exec(firstLine);
+  const lang = langMatch?.[1];
+  return {
+    from: from as ChannelSide,
+    kind,
+    peerId,
+    messageId,
+    ...(isReplyLang(lang) ? { lang } : {}),
+  };
 }
