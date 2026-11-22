@@ -212,10 +212,12 @@ export function Sidebar(props: {
     const observer = new ResizeObserver(measure);
     observer.observe(row);
     return () => observer.disconnect();
-    // 筛选行可能整个不渲染（无会话 / Archived / Settings 视图），ref 空时不装观察者；
-    // 它回来时靠下面这几个依赖重跑一次。live 在后面才算，这里用 session.sessions.length 代替
+    // 筛选行可能整个不渲染（无会话 / Archived / Settings 视图 / 侧栏收起），ref 空时不装观察者；
+    // 它回来时靠下面这几个依赖重跑一次。live 在后面才算，这里用 session.sessions.length 代替。
+    // props.collapsed 必须在里面：收起时整个侧栏 return null，旧观察者盯着被摘掉的节点、回报宽 0，
+    // 把档位推到「全图标」；再展开时没有依赖变化就不重装观察者，筛选行会一直停在全图标
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterLevel, props.ageDays, t, session.sessions.length, overlayOpen, props.showArchived]);
+  }, [filterLevel, props.ageDays, t, session.sessions.length, overlayOpen, props.showArchived, props.collapsed]);
   /**
    * 「Starred」叠加开关的开合——星标是用户的价值标记（「值得回来翻」），与时间范围叠加生效。
    * **只作用于主浏览列表**（Workspaces + Tasks）：Archived 是存储位置视图、
