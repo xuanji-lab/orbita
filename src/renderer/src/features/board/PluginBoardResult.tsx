@@ -9,9 +9,11 @@
  * 算出（`gridHeight`，与真实排版一致），所以卸 / 挂都不会让对话滚动跳动；回到视口再挂、重新换一次性地址。
  * 与周看板挂载「可视 ± 1 天」同一思路。
  */
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PluginBoardResult as PluginBoardSnapshotResult } from "../../../../shared/plugin-board.ts";
 import { useT } from "../../locale.ts";
+import { Icon } from "../../shell/Icon";
+import { requestOpenPluginBoard } from "../../shell/open-panel.ts";
 import { BoardGrid } from "../plugins/BoardGrid.tsx";
 import { containerLayout, gridHeight } from "../plugins/board-layout.ts";
 import { skippedText } from "./board-text.ts";
@@ -22,6 +24,19 @@ import "./board.css";
 const NEAR_MARGIN = "100% 0px";
 /** 对话的滚动容器；找不到（别处复用）就按浏览器视口 */
 const SCROLL_ROOT = ".chat-transcript";
+/** 对话里看板结果的最高占窗口高度的几成：一张 2x2 的卡能占满一整屏，限到约半屏，完整的在右栏看 */
+export const BOARD_RESULT_MAX_VH = 0.5;
+
+/** 窗口高度（随窗口缩放更新）：算「限高后是否被裁」要用 */
+function useWindowHeight(): number {
+  const [height, setHeight] = useState(() => window.innerHeight);
+  useEffect(() => {
+    const onResize = () => setHeight(window.innerHeight);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return height;
+}
 
 export function PluginBoardResultView(props: { toolCallId: string; board: PluginBoardSnapshotResult }) {
   const t = useT().board;
@@ -55,13 +70,29 @@ export function PluginBoardResultView(props: { toolCallId: string; board: Plugin
   );
   const skipped = skippedText(t, board.skipped);
   const live = near && board.cards.length > 0;
+  // 限高约半屏：超出的裁掉，底部「展开」去右栏看完整的。占位与挂着的看板用同一个外框，卸 / 挂不让对话滚动跳动
+  const cap = Math.round(useWindowHeight() * BOARD_RESULT_MAX_VH);
+  const clipped = placeholderHeight > cap;
   return (
     <div className="board-result" data-source={board.source} data-live={live} ref={hostRef}>
-      {live ? (
-        <LiveBoard toolCallId={toolCallId} board={board} />
-      ) : (
-        board.cards.length > 0 && <div className="board-placeholder" style={{ height: placeholderHeight }} aria-hidden="true" />
-      )}
+      <div className="board-clip" data-clipped={clipped || undefined} style={{ maxHeight: cap }}>
+        {live ? (
+          <LiveBoard toolCallId={toolCallId} board={board} />
+        ) : (
+          board.cards.length > 0 && <div className="board-placeholder" style={{ height: placeholderHeight }} aria-hidden="true" />
+        )}
+        {clipped && (
+          <button
+            type="button"
+            className="board-more"
+            title={t.expandHint}
+            onClick={() => requestOpenPluginBoard({ plugin: board.plugin, draftPath: board.draftPath })}
+          >
+            <Icon name="panel-right" size={14} />
+            {t.expand}
+          </button>
+        )}
+      </div>
       {skipped !== null && <p className="board-result-note">{skipped}</p>}
     </div>
   );

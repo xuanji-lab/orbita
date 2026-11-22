@@ -83,7 +83,7 @@ import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { ReviewPanel } from "./features/review/ReviewPanel";
 import { DocsPanel } from "./features/doc-panel/DocsPanel";
 import { useAutoOpenPanel } from "./features/chat/auto-open-panel.ts";
-import { onOpenPanelRequest, onOpenProgressRequest, requestOpenPanel } from "./shell/open-panel.ts";
+import { onOpenPanelRequest, onOpenPluginBoardRequest, onOpenProgressRequest, requestOpenPanel } from "./shell/open-panel.ts";
 import type { ExcerptJump } from "./features/review/ExcerptsTab";
 import type { ExcerptJumpRequest } from "./features/chat/ChatView";
 import { BOARD_DAYS_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
@@ -1192,6 +1192,16 @@ export function App() {
       void session.openSession(sessionId);
     },
     [session, mainSessionId],
+  );
+  // 对话里看板结果的「展开」：已装的插件进右栏插件页的看板视图，草稿进草稿的长页
+  const sessionWorkspaceId = session.workspaceId;
+  useEffect(
+    () =>
+      onOpenPluginBoardRequest((request) => {
+        if (request.draftPath !== null) openPluginDraft({ path: request.draftPath, workspaceId: sessionWorkspaceId });
+        else openPlugin(request.plugin, true);
+      }),
+    [openPlugin, openPluginDraft, sessionWorkspaceId],
   );
   const sessionDraft = draftOf(pluginDrafts, mainSessionId);
   const shownDraft: PluginDraftTarget | null =

@@ -32,3 +32,27 @@ export function onOpenProgressRequest(handler: () => void): () => void {
   window.addEventListener(PROGRESS_EVENT, handler);
   return () => window.removeEventListener(PROGRESS_EVENT, handler);
 }
+
+/**
+ * 「在右栏看完整的插件看板」的请求（对话里看板结果底部的「展开」）：对话里的看板限高约半屏，
+ * 完整的在右栏的插件页里看。已装的插件进它的看板视图，草稿进草稿的长页。
+ */
+const PLUGIN_BOARD_EVENT = "orbita:open-plugin-board";
+
+export interface PluginBoardOpenRequest {
+  plugin: string;
+  /** 草稿的真实路径；已装的插件为 null */
+  draftPath: string | null;
+}
+
+export function requestOpenPluginBoard(request: PluginBoardOpenRequest): void {
+  window.dispatchEvent(new CustomEvent<PluginBoardOpenRequest>(PLUGIN_BOARD_EVENT, { detail: request }));
+}
+
+export function onOpenPluginBoardRequest(handler: (request: PluginBoardOpenRequest) => void): () => void {
+  const listener = (event: Event): void => {
+    handler((event as CustomEvent<PluginBoardOpenRequest>).detail);
+  };
+  window.addEventListener(PLUGIN_BOARD_EVENT, listener);
+  return () => window.removeEventListener(PLUGIN_BOARD_EVENT, listener);
+}

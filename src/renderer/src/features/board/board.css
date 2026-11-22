@@ -14,6 +14,35 @@
   margin: var(--space-2) 0;
 }
 
+/* 限高外框：超出约半屏的裁掉，底部一条渐隐的「展开」（去右栏看完整的）。卡里面的样式归插件，这里只管外框 */
+.board-clip {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.board-more {
+  position: absolute;
+  inset: auto 0 0 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: var(--space-1);
+  height: calc(var(--control-height-md) * 2);
+  padding: 0 0 var(--space-2);
+  border: 0;
+  background: linear-gradient(to bottom, transparent, var(--color-bg-panel) 70%);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.board-more:hover {
+  color: var(--color-text-primary);
+}
+
 /* 离开视口时的占位：只占高度（iframe 已卸），不画任何东西 */
 .board-placeholder {
   min-width: 0;

@@ -803,6 +803,9 @@ export const zh: Messages = {
     plannedTip: "排好的自动化，到点会跑",
     openSession: (caption: string) => `${caption}，打开这次运行的会话`,
     scrollHint: "按住 Shift 滚动滚轮，左右滑动看别的天",
+    /** 会话里的看板结果限高约半屏，底部「展开」去右栏看完整的 */
+    expand: "展开",
+    expandHint: "在右栏看完整的看板",
     /** 会话里的看板结果：被跳过的卡（每张一句原因） */
     skipped: (items: string) => `没有显示：${items}`,
     skipReason: {
