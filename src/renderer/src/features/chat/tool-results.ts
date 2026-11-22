@@ -220,11 +220,29 @@ const PLUGIN_INSTALL_TOOL_NAME = "install_plugin";
 // 下游 `entry.kind === "toolCall"` 判断就报「没有交集」。
 // 名字沿用 isChannelToolCall：通道工具与交接都是「独立成卡、不参与合并与折叠」的那一类。
 function isChannelToolCall(entry: RenderEntry, results?: ToolResultIndex): boolean {
+  if (entry.kind !== "toolCall") return false;
+  // 回复子会话 / 报告给主会话是过程（2026-11-22：收进过程行，和普通工具同一种行）；只有报错的才留在外面（红行，要让用户看见它没发出去）
+  if (PROCESS_CHANNEL_TOOLS.has(entry.toolName)) return results?.get(entry.toolCallId)?.status === "error";
   return (
-    entry.kind === "toolCall" &&
     (CHANNEL_TOOL_NAMES.has(entry.toolName) || entry.toolName === HANDOFF_TOOL_NAME || entry.toolName === PLUGIN_INSTALL_TOOL_NAME) &&
     hasOwnCard(entry, results)
   );
+}
+
+/** 主会话回复子会话、子会话报告给主会话：不是独立的卡，是过程里的一步（不并进工具组——各自一行写给谁、写了什么） */
+const PROCESS_CHANNEL_TOOLS: ReadonlySet<string> = new Set(["reply_subsession", "report_to_parent"]);
+
+/**
+ * 子会话的一条问询（channel-mark question）有没有被答过：通道摘要给的状态是 waiting 而且这条就是最后一条消息（createdAt = lastAt）
+ * 才是还在等；摘要里状态已不是 waiting（后来有了回复 / 终态）= 答过。读不到摘要（旧样张没有账本）按还在等——不编造「已回答」。
+ */
+export function questionAnswered(
+  summary: { status: string; lastAt: number } | undefined,
+  message: { createdAt: number } | undefined,
+): boolean {
+  if (summary === undefined) return false;
+  if (summary.status !== "waiting") return true;
+  return message !== undefined && message.createdAt !== summary.lastAt;
 }
 
 /**

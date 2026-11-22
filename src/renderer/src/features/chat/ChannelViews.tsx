@@ -8,21 +8,21 @@
  *     `report_to_parent` 的分流消费）——文案来自那次工具调用的入参/kind；接收侧
  *     的文案间或经 `channelMarkLabel`（tool-results.ts，QueueStrip 也在用）。
  *   - 接收侧（对话流里收到对面消息的位置）不走胶囊：子侧是带引子的虚线气泡
- *     （`ChannelFromParentBubble`），父侧是一行问询胶囊（`ChannelFromChildPill`）。
+ *     （`ChannelFromParentBubble`），父侧是一张白卡（`ChannelFromChildCard` / `ChildLineCard`，2026-11-22 收掉了胶囊）。
  *
  * 派出卡（`DelegateCardView`）是另一种语言：GlassCard 同款 1px 边框 + panel 底的
  * 小卡片，不是一行标记。
  *
  * 父子会话面板删除后（2026-10-12 用户裁决：它总是自己弹出，且把两边对话抽走、
  * 变成第三个又长又啰嗦的地方）：标记行不再有「点开面板」的去处——父流的
- * question / done / failed 标记换成 `ChannelFromChildPill`（点开 Sub-sessions 面板），
+ * question / done / failed 标记换成一行白卡 `ChildLineCard`（点开 Sub-sessions 面板），
  * 子流的父侧消息换成 `ChannelFromParentBubble`（正文直接进对话流），都在本文件。
  */
 import type { ChannelMessage, ChannelMessageKind, ChannelSummary } from "@shared/channel";
 import type { DelegateCard } from "@shared/agent-ipc";
 import { thinkingLevelLabel } from "@shared/thinking";
 import { Icon, type IconName } from "../../shell/Icon";
-import type { ChannelMarkTone } from "./tool-results";
+import { questionAnswered, type ChannelMarkTone } from "./tool-results";
 import { EXIT_CARD_KICKER, EXIT_CARD_STYLE, ExitCard } from "./ExitCard";
 import { MarkdownBlock } from "./MarkdownBlock";
 import type { SessionEntry } from "./session-states";
@@ -398,54 +398,81 @@ export function ChannelFromParentBubble(props: {
 }
 
 /**
- * 父会话对话流里的子会话问询胶囊（2026-10-12 用户裁决）：子发来的 question /
- * done / failed 各一行——问询带正文首行（截断）与「去回答 ›」尾签，完成 / 失败
- * 只报名字不转述结论（结论由父会话的模型自己转述，我们不多控制）。**progress
- * 不进父流**（调用方已过滤）：进度是子会话自己的事，父只关心要它拿主意的三种。
- *
- * 整行可点：打开右栏 Sub-sessions 面板并进入该子会话的会话层（`openSubSession`，
- * 与派出卡同一个入口）。辅助对话抽屉里接不上它——胶囊退化为不可点的静态行。
- * 颜色走状态色（warning / success / danger），只给行首图标——图标在说话，颜色是
- * 第二信号。
+ * 主流里子会话来往的白卡（2026-11-22：过程收进过程行、要用户看的做成白卡）：同交回卡的一行骨架——
+ * 机器人 / 警示图标 +「「标题」…」+ 型号名小字 + 第一行 + 右侧描边小按钮。红只给图标，不染底。
  */
-export function ChannelFromChildPill(props: {
+export function ChildLineCard(props: {
+  icon: IconName;
+  danger?: boolean;
+  head: string;
+  /** 子会话用的型号显示名（灰色小字）；空 = 不写 */
+  model: string;
+  /** 通道正文的第一行；读不到 / 空就不写（不显示「读取失败」） */
+  first: string;
+  action: { label: string; onClick: () => void } | null;
+  /** 卡下面补一行（交回卡的「还改了 N 个别的文件」） */
+  below?: React.ReactNode;
+}) {
+  return (
+    <div className="child-report">
+      <div className="child-report-head">
+        <span className="exit-card-icon" style={props.danger === true ? { color: "var(--color-danger)" } : undefined}>
+          <Icon name={props.icon} size={18} strokeWidth={1.6} />
+        </span>
+        <span className="child-report-line">
+          <span className="exit-card-name">{props.head}</span>
+          {props.model !== "" && <ModelNameLabel name={props.model} />}
+          {props.first !== "" && <span className="child-report-first">{props.first}</span>}
+        </span>
+        {props.action !== null && (
+          <button type="button" className="card-btn" onClick={props.action.onClick}>
+            {props.action.label}
+          </button>
+        )}
+      </div>
+      {props.below}
+    </div>
+  );
+}
+
+/**
+ * 父流里子会话发来的问询 / 失败（完成见 ChatView 的 ChildReportCard，它还要挂「改了别的文件」）。
+ * 问询：「「标题」在问你 · 问题第一行 · 型号名」+［去回答］（打开右栏子会话面板定位到回答框）；答过了（通道后面有了回复）
+ * 变成「「标题」问过你 · 已回答」，按钮去掉。失败：「「标题」失败了 · 原因第一行 · 型号名」+［看它的会话］。
+ * 通道正文读不到（旧样张没有账本）时第一行留空，只写「在问你」「失败了」。
+ */
+export function ChannelFromChildCard(props: {
   mark: { peerId: string; messageId: string; kind: ChannelMessageKind };
   channel: ChannelViewContext;
 }) {
   const t = useT();
   const { mark, channel } = props;
-  const childTitle = peerTitleOf(channel, mark.peerId, t);
+  const title = peerTitleOf(channel, mark.peerId, t);
   const message = channel.channelMessages.get(mark.messageId);
-  const openSubSession = channel.openSubSession;
-  const clickable = openSubSession !== null;
-  const common = {
-    className: "channel-from-child-pill",
-    onClick: clickable ? () => openSubSession(mark.peerId) : undefined,
-    title: clickable ? t.subSessions.openInPanel : undefined,
-  } satisfies React.ButtonHTMLAttributes<HTMLButtonElement>;
-  if (mark.kind === "question") {
-    return (
-      <button type="button" {...common} data-tone="question">
-        <Icon name="circle-help" size={13} strokeWidth={1.8} />
-        <span className="channel-from-child-name">{t.channel.asksYou(childTitle)}</span>
-        <span className="channel-from-child-text">{firstLineOf(message?.text ?? "")}</span>
-        <span className="channel-from-child-go">{t.channel.goAnswer}</span>
-      </button>
-    );
-  }
+  const first = firstLineOf(message?.text ?? "");
+  const model = channel.modelNameOf(channel.childModelIds.get(mark.peerId) ?? "");
+  const open = channel.openSubSession;
   if (mark.kind === "failed") {
     return (
-      <button type="button" {...common} data-tone="failed">
-        <Icon name="triangle-alert" size={13} strokeWidth={1.8} />
-        <span className="channel-from-child-name">{t.channel.childFailed(childTitle)}</span>
-      </button>
+      <ChildLineCard
+        icon="triangle-alert"
+        danger
+        head={t.channel.childFailedLine(title)}
+        model={model}
+        first={first}
+        action={open === null ? null : { label: t.chat.childReportOpen, onClick: () => open(mark.peerId) }}
+      />
     );
   }
+  const answered = questionAnswered(channel.channelSummaries.get(mark.peerId), message);
   return (
-    <button type="button" {...common} data-tone="done">
-      <Icon name="circle-check" size={13} strokeWidth={1.8} />
-      <span className="channel-from-child-name">{t.channel.childDone(childTitle)}</span>
-    </button>
+    <ChildLineCard
+      icon="circle-help"
+      head={answered ? t.channel.askedYouLine(title) : t.channel.asksYouLine(title)}
+      model={model}
+      first={answered ? t.channel.answered : first}
+      action={answered || open === null ? null : { label: t.channel.goAnswerShort, onClick: () => open(mark.peerId) }}
+    />
   );
 }
 

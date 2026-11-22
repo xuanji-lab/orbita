@@ -2091,68 +2091,6 @@ html[data-pointer-drag] iframe {
   color: var(--color-danger);
 }
 
-/*
- * 父会话对话流里的子会话问询胶囊（ChannelFromChildPill）：一行、muted 底、
- * 行首图标按状态色（warning / success / danger——颜色是第二信号），问询带正文
- * 首行（截断）与「去回答 ›」尾签。整行可点：打开 Sub-sessions 面板进入该子会话。
- */
-.channel-from-child-pill {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  width: fit-content;
-  max-width: 100%;
-  margin: var(--space-1) 0;
-  padding: 5px var(--space-2-5);
-  border: 0;
-  border-radius: var(--radius-md);
-  background: var(--color-bg-muted);
-  font: inherit;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-primary);
-  text-align: left;
-  cursor: pointer;
-}
-
-.channel-from-child-pill:hover {
-  background: var(--color-bg-hover);
-}
-
-.channel-from-child-pill[data-tone="question"] > .orbita-icon {
-  color: var(--color-warning);
-}
-
-.channel-from-child-pill[data-tone="done"] > .orbita-icon {
-  color: var(--color-success);
-}
-
-.channel-from-child-pill[data-tone="failed"] > .orbita-icon {
-  color: var(--color-danger);
-}
-
-/* 「谁在问」固定不变宽；正文吃掉剩余空间后截断，尾签不受挤 */
-.channel-from-child-name {
-  flex: 0 0 auto;
-  color: var(--color-text-primary);
-}
-
-.channel-from-child-text {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--color-text-secondary);
-}
-
-.channel-from-child-go {
-  margin-left: auto;
-  flex: 0 0 auto;
-  color: var(--color-accent);
-  font-size: var(--font-size-sm);
-  white-space: nowrap;
-}
-
 .drawer-body {
   flex: 1;
   min-height: 0;

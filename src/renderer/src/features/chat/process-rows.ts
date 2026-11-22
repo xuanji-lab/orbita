@@ -41,6 +41,11 @@ export interface StepVerbWords {
   report: string;
   delegate: string;
   reply: string;
+  /** 子会话报告给主会话：按 kind 说（done / question / failed / progress） */
+  reportDone: string;
+  reportQuestion: string;
+  reportFailed: string;
+  reportProgress: string;
   memorySearch: string;
   memoryEdit: string;
   automation: string;
@@ -112,8 +117,23 @@ export function stepVerb(
   input: unknown,
   words: StepVerbWords,
   skills: ReadonlyArray<{ slug: string; name: string }> = [],
+  /** 子会话 id → 标题（回复子会话那一步写「回复了「标题」」）；不给就不写对象 */
+  peerTitle?: (childId: string) => string,
 ): StepVerb {
   const record = typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
+  // 主会话回复子会话：「回复了「标题」」，展开看原文
+  if (toolName === "reply_subsession") {
+    const childId = str(record["childId"]);
+    const title = childId === null || peerTitle === undefined ? "" : peerTitle(childId);
+    return { verb: words.reply, object: title === "" ? null : `「${title}」`, raw: null };
+  }
+  // 子会话报告给主会话：「报告给主会话 / 问了主会话 / 报告失败」，对象是报告第一行
+  if (toolName === "report_to_parent") {
+    const kind = str(record["kind"]);
+    const verb = kind === "question" ? words.reportQuestion : kind === "failed" ? words.reportFailed : kind === "progress" ? words.reportProgress : words.reportDone;
+    const first = (str(record["text"]) ?? "").split("\n").find((line) => line.trim() !== "")?.trim() ?? null;
+    return { verb, object: first, raw: null };
+  }
   // 读某个技能的 SKILL.md = 在用这个技能
   if (toolName === "read" && typeof record["path"] === "string") {
     const skill = skillForReadPath(record["path"], skills);

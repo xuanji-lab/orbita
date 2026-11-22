@@ -12,6 +12,7 @@ import {
   branchAnchorEntries,
   indexToolResults,
   unreferencedShowImages,
+  questionAnswered,
   type TurnProcessUnit,
   type TurnViewEntry,
 } from "./tool-results.ts";
@@ -374,5 +375,61 @@ describe("子会话交回的那一轮：结尾产物摞里带上交回的子会�
   test("别的种类的通道标记（问询 / 失败）不带产物", () => {
     const question = { ...mark, kind: "question" } as unknown as TranscriptItem;
     assert.equal(view([user("u1", 1), question, assistant("a1", 3, [{ type: "text", text: "好" }])], false).some((e) => e.kind === "turnOutputs"), false);
+  });
+});
+
+describe("子会话来往：回复收进过程行，问询 / 失败是白卡", () => {
+  const replyCall = (id: string) => call(id, "reply_subsession", { childId: "c1", text: "只看桌面端" });
+  const records = (status: "complete" | "error") =>
+    [
+      user("u1", 1),
+      assistant("a1", 2, [call("r1"), replyCall("rp1")]),
+      tool({ toolCallId: "r1", timestamp: 3 }),
+      tool({ toolCallId: "rp1", toolName: "reply_subsession", timestamp: 4, status }),
+      assistant("a2", 5, [{ type: "text", text: "已回复。" }]),
+    ] as TranscriptItem[];
+  const inProcess = (v: readonly TurnViewEntry[]) =>
+    procOf(v).some((p) => p.steps.some((step) => step.kind === "toolCall" && step.toolCallId === "rp1"));
+
+  test("reply_subsession 成功：是过程里的一步，不再钉在折叠外", () => {
+    const v = view(records("complete"), false);
+    assert.equal(inProcess(v), true);
+    assert.deepEqual(v.map((e) => e.kind), ["user", "turnProcess", "text"]);
+  });
+
+  test("reply_subsession 报错：留在折叠外（红行）", () => {
+    const v = view(records("error"), false);
+    assert.equal(inProcess(v), false);
+    assert.ok(v.some((e) => e.kind === "toolCall" && e.toolName === "reply_subsession"));
+  });
+
+  test("report_to_parent 同样收进过程行", () => {
+    const rs = [
+      user("u1", 1),
+      assistant("a1", 2, [call("r1"), call("rp1", "report_to_parent", { kind: "done", text: "做完了" })]),
+      tool({ toolCallId: "r1", timestamp: 3 }),
+      tool({ toolCallId: "rp1", toolName: "report_to_parent", timestamp: 4 }),
+    ] as TranscriptItem[];
+    assert.equal(inProcess(view(rs, false)), true);
+  });
+
+  test("问询 / 失败标记是白卡单元（channelMark），不进折叠", () => {
+    const mark = (kind: string, id: string) => ({ role: "channel-mark", id, peerId: "c1", messageId: `m-${id}`, from: "child", kind, timestamp: 2 }) as unknown as TranscriptItem;
+    const v = view([user("u1", 1), mark("question", "q1"), mark("failed", "f1"), assistant("a1", 3, [{ type: "text", text: "好" }])], false);
+    assert.deepEqual(v.filter((e) => e.kind === "channelMark").length, 2);
+    assert.equal(procOf(v).length, 0);
+  });
+});
+
+describe("questionAnswered：问询答过没有", () => {
+  test("摘要状态还是 waiting 且这条就是最后一条：还在等；别的情况（后来有了回复 / 终态）：答过", () => {
+    assert.equal(questionAnswered({ status: "waiting", lastAt: 10 }, { createdAt: 10 }), false);
+    assert.equal(questionAnswered({ status: "waiting", lastAt: 20 }, { createdAt: 10 }), true);
+    assert.equal(questionAnswered({ status: "running", lastAt: 20 }, { createdAt: 10 }), true);
+    assert.equal(questionAnswered({ status: "done", lastAt: 20 }, undefined), true);
+  });
+  test("读不到摘要（旧样张没有账本）：按还在等，不编造「已回答」", () => {
+    assert.equal(questionAnswered(undefined, undefined), false);
+    assert.equal(questionAnswered({ status: "waiting", lastAt: 5 }, undefined), false);
   });
 });

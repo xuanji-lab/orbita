@@ -265,3 +265,14 @@ describe("mergeOutputs：子会话交回的产物与主会话自己的摆进同�
     assert.deepEqual(slot.outputs.map((x) => x.source?.title ?? null), [null, "调研", "调研"]);
   });
 });
+
+describe("stepVerb：子会话来往在过程行里的动作词", () => {
+  test("回复子会话：回复了「标题」；报告给主会话按 kind 说，对象是报告第一行", () => {
+    const peer = (id: string) => (id === "c1" ? "调研" : "");
+    assert.deepEqual(stepVerb("reply_subsession", { childId: "c1", text: "只看桌面端" }, zh.chat.stepVerb, [], peer), { verb: "回复了", object: "「调研」", raw: null });
+    assert.equal(stepVerb("reply_subsession", { childId: "x" }, zh.chat.stepVerb, [], peer).object, null);
+    assert.deepEqual(stepVerb("report_to_parent", { kind: "done", text: "\n做完了\n细节" }, zh.chat.stepVerb), { verb: "报告给主会话", object: "做完了", raw: null });
+    assert.equal(stepVerb("report_to_parent", { kind: "question", text: "范围？" }, zh.chat.stepVerb).verb, "问了主会话");
+    assert.equal(stepVerb("report_to_parent", { kind: "failed", text: "崩了" }, zh.chat.stepVerb).verb, "报告失败");
+  });
+});

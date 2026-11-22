@@ -2405,7 +2405,11 @@ export const en = {
       askUser: "Asked you",
       report: "Reported",
       delegate: "Handed off",
-      reply: "Replied",
+      reply: "Replied to",
+      reportDone: "Reported to parent",
+      reportQuestion: "Asked parent",
+      reportFailed: "Reported failure",
+      reportProgress: "Progress update",
       memorySearch: "Recalled",
       memoryEdit: "Memory",
       automation: "Automation",
@@ -2481,6 +2485,11 @@ export const en = {
 
   /** 子会话通道：消息种类、标记行、通道列、派出卡 */
   channel: {
+    asksYouLine: (peer: string) => `"${peer}" is asking you`,
+    askedYouLine: (peer: string) => `"${peer}" asked you`,
+    answered: "Answered",
+    goAnswerShort: "Answer",
+    childFailedLine: (peer: string) => `"${peer}" failed`,
     childOf: (title: string) => `Sub-session of "${title}"`,
     kinds: {
       task: "task",
@@ -2515,10 +2524,6 @@ export const en = {
     fromParentYouReply: "You (as the parent) replied",
     fromParentStop: "Stopped by the parent session",
     messageNotFound: "Message not found in the channel.",
-    asksYou: (peer: string) => `${peer} asks:`,
-    goAnswer: "Answer ›",
-    childDone: (peer: string) => `${peer} finished`,
-    childFailed: (peer: string) => `${peer} failed`,
     answerIt: "Answer it…",
     notSpokenRunning: "running · hasn't spoken yet",
     notSpoken: "hasn't spoken yet",

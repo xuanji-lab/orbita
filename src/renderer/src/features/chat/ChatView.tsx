@@ -8,7 +8,8 @@ import { ApprovalBar } from "./ApprovalBar";
 import { QueueStrip } from "./QueueStrip";
 import { compactionBoundaryStatus, mergeSideRecords } from "./session-states";
 import {
-  ChannelFromChildPill,
+  ChannelFromChildCard,
+  ChildLineCard,
   ChannelFromParentBubble,
   ChannelToolMarkLine,
   DelegateCardView,
@@ -342,6 +343,11 @@ export function ChatView(props: ChatViewProps) {
     () => ({ sessionId: session.sessionId, workspaceId: session.workspaceId, cwd: session.cwd }),
     [session.sessionId, session.workspaceId, session.cwd],
   );
+  // 过程里「回复了「标题」」要写对面是谁：子会话 id → 标题
+  const peerTitle = useMemo(() => {
+    const titles = new Map(session.sessions.map((meta) => [meta.id, meta.title]));
+    return (childId: string): string => titles.get(childId) ?? "";
+  }, [session.sessions]);
   // 引用跳转：原文在本转录里找得到才给得出（发出去的引用不带 id，按轮号 + 角色 + 原文找；
   // 迁移来的引用、被压缩掉的历史找不到就不可点）
   const jumpToQuote = useCallback(
@@ -440,7 +446,9 @@ export function ChatView(props: ChatViewProps) {
       <QuoteJumpContext.Provider value={jumpToQuote}>
         <CitationTableContext.Provider value={citations}>
           <ChatFileScopeContext.Provider value={fileScope}>
-            <ChatViewBody {...props} dropActive={dropActive} />
+            <PeerTitleContext.Provider value={peerTitle}>
+              <ChatViewBody {...props} dropActive={dropActive} />
+            </PeerTitleContext.Provider>
           </ChatFileScopeContext.Provider>
         </CitationTableContext.Provider>
       </QuoteJumpContext.Provider>
@@ -3877,7 +3885,7 @@ function EntryView(props: {
     if (props.channel.ownSide === "parent" && entry.mark.from === "child" && entry.mark.kind !== "progress") {
       // 交回来了：一张白卡，子会话这一路做出来的东西挂在卡里（2026-11-22 用户：「不需要进入子会话就可以看到子会话的产出」）
       if (entry.mark.kind === "done") return <ChildReportCard mark={entry.mark} channel={props.channel} />;
-      return <ChannelFromChildPill mark={entry.mark} channel={props.channel} />;
+      return <ChannelFromChildCard mark={entry.mark} channel={props.channel} />;
     }
     // 其余组合（父流里的 progress 标记、防御性兜底）：不渲染——进度是子会话自己的
     // 事，父流里它的落点就是没有落点
@@ -4680,6 +4688,7 @@ function TurnProcessLine(props: {
     .filter((call) => call.toolName === GOAL_TOOL_NAME)
     .map((call) => call.toolCallId);
   const goalChanges = goalChangesByCall(t, props.ledger, goalCallIds);
+  const peerTitle = useContext(PeerTitleContext);
   const planStepNow = props.plan?.current.items.find((item) => item.status === "in_progress")?.text ?? null;
 
 
@@ -4699,7 +4708,7 @@ function TurnProcessLine(props: {
     }
     const slow = current.kind === "think" && runMs !== null && runMs > SLOW_GAP_MS;
     const doing =
-      current.kind === "tool" ? stepLabel(current.call, t, props.skills, props.plan) : t.chat.processThinking;
+      current.kind === "tool" ? stepLabel(current.call, t, props.skills, props.plan, peerTitle) : t.chat.processThinking;
     const idea = snap.chapter?.title ?? (current.kind === "think" ? current.preview : null) ?? planStepNow;
     return (
       <div className="proc-live" aria-live="off">
@@ -4784,6 +4793,9 @@ function TurnProcessLine(props: {
 }
 
 /** 过程块里「改了目标」的那几次 update_goal：调用 id → 「旧」改成「新」——为什么（展开时那一步写它） */
+/** 子会话 id → 标题：过程里「回复了「标题」」那一步要写对面是谁（TranscriptColumn 之外的 StepRow 取不到 channel，走 context） */
+const PeerTitleContext = createContext<(childId: string) => string>(() => "");
+
 const GoalChangeContext = createContext<ReadonlyMap<string, string>>(new Map());
 
 /**
@@ -4861,9 +4873,10 @@ function ProcessChapterRow(props: {
   const failed = rows.filter((row) => props.toolResults.get(row.call.toolCallId)?.status === "error").length;
   const images = imagesOf(chapter.steps, props.imagesByCall);
   const goalChanges = useContext(GoalChangeContext);
+  const peerTitle = useContext(PeerTitleContext);
   const label = (call: ToolCallUnit) => {
     const change = goalChanges.get(call.toolCallId);
-    return change !== undefined ? `${t.chat.goalChangedStep} ${change}` : stepLabel(call, t, props.skills, props.plan);
+    return change !== undefined ? `${t.chat.goalChangedStep} ${change}` : stepLabel(call, t, props.skills, props.plan, peerTitle);
   };
   // 没有旁白也没有思考的段：按头一步起名（「读文件 handoff.txt」），不写「读取 3 次」这种统计
   const first = rows[0];
@@ -4982,11 +4995,12 @@ function StepRow(props: {
   // 只打勾的写成「完成 X / 开始 Y」（照 Claude 的 Completed task / Started task）
   const planView = call.toolName === PLAN_TOOL_NAME ? planCallView(props.plan, call.toolCallId) : null;
   const goalChange = useContext(GoalChangeContext).get(call.toolCallId);
+  const peerTitle = useContext(PeerTitleContext);
   const v: StepVerb =
     goalChange !== undefined
       ? { verb: t.chat.goalChangedStep, object: goalChange, raw: null }
       : planView === null
-        ? stepVerb(call.toolName, call.input, t.chat.stepVerb, props.skills)
+        ? stepVerb(call.toolName, call.input, t.chat.stepVerb, props.skills, peerTitle)
         : planStepVerb(planView, t);
   const stats = finished && !failed ? editDiffStats(result) : null;
   const lines = finished && !failed && call.toolName === "write" ? writeLineCount(call.input) : null;
@@ -5043,9 +5057,9 @@ function planStepVerb(view: PlanCallView, t: Messages): StepVerb {
 }
 
 /** 一步的「动作 对象」一句（现场块的「在干什么」、段里的小标签用） */
-function stepLabel(call: ToolCallUnit, t: Messages, skills: SkillMeta[], plan: PlanTimeline | null): string {
+function stepLabel(call: ToolCallUnit, t: Messages, skills: SkillMeta[], plan: PlanTimeline | null, peerTitle?: (childId: string) => string): string {
   const view = call.toolName === PLAN_TOOL_NAME ? planCallView(plan, call.toolCallId) : null;
-  const v = view === null ? stepVerb(call.toolName, call.input, t.chat.stepVerb, skills) : planStepVerb(view, t);
+  const v = view === null ? stepVerb(call.toolName, call.input, t.chat.stepVerb, skills, peerTitle) : planStepVerb(view, t);
   return v.object === null ? v.verb : `${v.verb} ${v.object}`;
 }
 
@@ -5365,24 +5379,14 @@ function ChildReportCard(props: { mark: { peerId: string; messageId: string; kin
   const edited = outputs === undefined || outputs === null ? 0 : outputs.edited.length;
   // 一行：「「标题」交回了 · 型号名 · 报告第一行 ［看它的会话］」。它做出来的东西不再包在这里，摆进这一轮结尾的产物摞（TurnOutputsBlock）
   return (
-    <div className="child-report">
-      <div className="child-report-head">
-        <span className="exit-card-icon">
-          <Icon name="bot" size={18} strokeWidth={1.6} />
-        </span>
-        <span className="child-report-line">
-          <span className="exit-card-name">{t.chat.childReportHead(title)}</span>
-          <ModelNameLabel name={channel.modelNameOf(channel.childModelIds.get(mark.peerId) ?? "")} />
-          {first !== "" && <span className="child-report-first">{first}</span>}
-        </span>
-        {open !== null && (
-          <button type="button" className="card-btn" onClick={() => open(mark.peerId)}>
-            {t.chat.childReportOpen}
-          </button>
-        )}
-      </div>
-      {edited > 0 && <div className="child-report-edited">{t.chat.childReportEdited(edited)}</div>}
-    </div>
+    <ChildLineCard
+      icon="bot"
+      head={t.chat.childReportHead(title)}
+      model={channel.modelNameOf(channel.childModelIds.get(mark.peerId) ?? "")}
+      first={first}
+      action={open === null ? null : { label: t.chat.childReportOpen, onClick: () => open(mark.peerId) }}
+      below={edited > 0 ? <div className="child-report-edited">{t.chat.childReportEdited(edited)}</div> : undefined}
+    />
   );
 }
 
