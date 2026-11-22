@@ -6,7 +6,7 @@ import { ImageThumb } from "./ImageThumb";
 import { useHoverTooltip } from "./useHoverTooltip.ts";
 import { imageSrc } from "./composer-images.ts";
 import { quoteNoteParts, quoteRowPreview } from "./quote-label.ts";
-import { fileIcon, fileIconTone, FILETYPE_TONE_COLOR } from "../features/files/tree-view.ts";
+import { FileTypeIcon } from "./FileTypeIcon";
 import { DirMarkName } from "./DirMarkName.tsx";
 import type { ComposerMaterial } from "./composer-materials.ts";
 import type { TextQuote } from "@shared/quote";
@@ -139,7 +139,7 @@ function ChipLayer(props: { chips: readonly Extract<ComposerMaterial, { kind: "f
  * 文件 / 目录引用的胶囊：图标 + 名字（省略号）+ 移除键。
  *
  * **目录一眼可辨**（2026-10 用户验收「文件夹的图标跟文件区分不开」）靠三个信号：
- * folder 图标**填实**（文件按扩展名分形状，与文件面板树同一个 fileIcon——形状先分，
+ * 图标是彩色文件图标（FileTypeIcon，与文件面板树同一个；2026-11-22 起取代按扩展名分形状的单色 lucide——
  * 颜色后跟）、图标升一档到 secondary、名字后跟一条 `/`（目录的约定俗成记号，
  * 与发给模型的清单块同一约定）。填实是 Icon 的 fill（描边与填实在同一个
  * currentColor 里，同星标的做法）。
@@ -161,14 +161,6 @@ function FileChip(props: {
   const t = useT();
   const isDir = props.kind === "dir";
   const tooltip = useHoverTooltip<HTMLSpanElement>(PATH_TOOLTIP_DELAY_MS, true);
-  // 文档 / 演示 / 表格三族上色（fileIconTone，与文件面板同一份），其余中性
-  const tone = isDir ? null : fileIconTone(props.name, "file");
-  const iconColor =
-    isDir
-      ? "var(--color-text-secondary)"
-      : tone === null
-        ? "var(--color-text-tertiary)"
-        : FILETYPE_TONE_COLOR[tone];
   return (
     <>
       <span
@@ -177,16 +169,8 @@ function FileChip(props: {
         onMouseEnter={tooltip.handlers.onMouseEnter}
         onMouseLeave={tooltip.handlers.onMouseLeave}
       >
-        <Icon
-          name={isDir ? "folder" : fileIcon(props.name, "file")}
-          size={13}
-          strokeWidth={1.8}
-          fill={isDir}
-          style={{
-            color: iconColor,
-            flex: "0 0 auto",
-          }}
-        />
+        {/* 彩色文件图标，与文件面板同一个（FileTypeIcon，2026-11-22） */}
+        <FileTypeIcon name={props.name} kind={isDir ? "directory" : "file"} size={14} />
         {/* 名字 + 目录尾 `/`：共用组件（胶囊 / 面板行 / 气泡三处同一段结构） */}
         <DirMarkName name={props.name} dir={isDir} wrapStyle={{ flex: "0 1 auto" }} nameClassName="material-chip-name" />
         {/* 超限未复制（发送时按原位置引用）：icon + 文字，warning 色只做第二信号 */}

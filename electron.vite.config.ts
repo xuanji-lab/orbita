@@ -97,6 +97,9 @@ export default defineConfig({
     root: resolve(__dirname, "src/renderer"),
     resolve: { alias: { "@shared": resolve(__dirname, "src/shared") } },
     build: {
+      // 彩色文件图标（material-icon-theme，一千多个小 svg）按文件出、按需加载：默认 4 KB 以下内联成 data URL，
+      // 会把整套图标塞进主包（shell/FileTypeIcon.tsx）
+      assetsInlineLimit: (file: string) => (file.includes("material-icon-theme") ? false : undefined),
       rollupOptions: {
         // 两个页面入口：主窗口，与受管浏览器沙盒窗口的工具条（main/browser/sandbox.ts）
         input: {

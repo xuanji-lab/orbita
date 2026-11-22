@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
 import { useT } from "../locale.ts";
 import { useHoverTooltip } from "./useHoverTooltip.ts";
-import { fileIcon, fileIconTone, FILETYPE_TONE_COLOR } from "../features/files/tree-view.ts";
+import { FileTypeIcon } from "./FileTypeIcon";
 import { DirMarkName } from "./DirMarkName.tsx";
 
 /**
@@ -17,7 +17,7 @@ const PATH_TOOLTIP_DELAY_MS = 200;
 
 /**
  * 一个文件引用：图标 + 名字（目录带尾 `/`）+（输入框里的）移除键。
- * 图标与颜色和文件面板、输入框胶囊**同一份** fileIcon / fileIconTone（2026-10
+ * 图标和文件面板、输入框胶囊**同一份** FileTypeIcon（彩色文件图标，2026-11-22；原 fileIcon / fileIconTone，2026-10
  * 验收 J：三处长同一种形状，扫读不换脑筋）；目录沿用填实 folder。完整路径走
  * useHoverTooltip 快速 tooltip（与输入框胶囊同 200ms），不再挂原生 title。
  */
@@ -29,7 +29,6 @@ export function FileRefChip(props: {
 }) {
   const t = useT();
   const isDir = props.kind === "dir";
-  const tone = isDir ? null : fileIconTone(props.name, "file");
   const tooltip = useHoverTooltip<HTMLDivElement>(PATH_TOOLTIP_DELAY_MS, true);
   return (
     <>
@@ -51,20 +50,7 @@ export function FileRefChip(props: {
           background: "var(--color-bg-muted)",
         }}
       >
-        <Icon
-          name={isDir ? "folder" : fileIcon(props.name, "file")}
-          size={13}
-          strokeWidth={1.8}
-          fill={isDir}
-          style={{
-            color: isDir
-              ? "var(--color-text-secondary)"
-              : tone === null
-                ? "var(--color-text-tertiary)"
-                : FILETYPE_TONE_COLOR[tone],
-            flex: "0 0 auto",
-          }}
-        />
+        <FileTypeIcon name={props.name} kind={isDir ? "directory" : "file"} size={14} />
         <DirMarkName
           name={props.name}
           dir={isDir}

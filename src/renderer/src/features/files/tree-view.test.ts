@@ -4,7 +4,6 @@ import {
   countLoadedEntries,
   countVisibleEntries,
   fileIcon,
-  fileIconTone,
   filterCountText,
   filterEntries,
   formatAge,
@@ -124,9 +123,8 @@ describe("hasAgentsMd", () => {
 });
 
 describe("fileIcon：Orbita 的演示文稿（.slides.json）按演示认，不按 json", () => {
-  it("形状与色调都是演示", () => {
+  it("形状是演示", () => {
     deepStrictEqual(fileIcon("汇报.slides.json", "file"), "presentation");
-    deepStrictEqual(fileIconTone("汇报.slides.json", "file"), "slides");
     deepStrictEqual(fileIcon("package.json", "file"), "file-json-2");
   });
 });
@@ -226,26 +224,6 @@ describe("fileIcon", () => {
     deepStrictEqual(fileIcon(".mystery", "file"), "file"); // 点文件但不在配置名单
   });
 
-  it("fileIconTone：文档 / 演示 / 表格三族有色，其余（含 pdf、目录、symlink）中性", () => {
-    deepStrictEqual(fileIconTone("论文.DOCX", "file"), "doc");
-    deepStrictEqual(fileIconTone("memo.rtf", "file"), "doc");
-    deepStrictEqual(fileIconTone("notes.odt", "file"), "doc");
-    deepStrictEqual(fileIconTone("slides.pptx", "file"), "slides");
-    deepStrictEqual(fileIconTone("demo.key", "file"), "slides");
-    deepStrictEqual(fileIconTone("budget.xlsx", "file"), "sheet");
-    deepStrictEqual(fileIconTone("data.CSV", "file"), "sheet");
-    deepStrictEqual(fileIconTone("sheet.numbers", "file"), "sheet");
-    deepStrictEqual(fileIconTone("ledger.ods", "file"), "sheet");
-    // pdf 用户点名不在内；代码 / 图片 / 文本 / 压缩包 / 音视频一律中性
-    deepStrictEqual(fileIconTone("paper.pdf", "file"), null);
-    deepStrictEqual(fileIconTone("index.ts", "file"), null);
-    deepStrictEqual(fileIconTone("notes.txt", "file"), null);
-    deepStrictEqual(fileIconTone("data.tsv", "file"), null); // tsv 不在用户点名的表格清单里
-    deepStrictEqual(fileIconTone("bundle.zip", "file"), null);
-    deepStrictEqual(fileIconTone("src", "directory"), null);
-    deepStrictEqual(fileIconTone("readme.md", "symlink"), null);
-    deepStrictEqual(fileIconTone("无扩展名", "file"), null);
-  });
 });
 
 describe("formatSize", () => {
