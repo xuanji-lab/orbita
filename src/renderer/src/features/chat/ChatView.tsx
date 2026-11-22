@@ -2342,7 +2342,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   viewRowIndexRef.current = historyRowByViewIndex;
 
   // 只虚拟化历史段；实时尾段继续按普通流渲染在虚拟占位之后。行仍是 `TurnViewEntry`
-  // 粗粒度行（user / 回合折叠 / 过程块 / 正文），保留 `.chat-col` 原有的子午线几何。
+  // 粗粒度行（user / 回合折叠 / 过程块 / 正文），保留 `.chat-col` 原有的行几何。
   const virtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
     // 滚动事件里同步 flushSync 渲染会把滚动管线本身拖慢（每个刻度一次同步
     // render+commit）；异步渲染由 React 合并到帧内，视口内容晚一帧但不再挡滚动。
@@ -2515,7 +2515,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
           <StatusLine>{t.chat.noMessages}</StatusLine>
         )}
       {/* 历史段：只挂视口 + overscan 内的行；尾段与状态行仍在虚拟占位块之后按普通流渲染。
-          虚拟行仍是 .revert-keep（data-kind 不变），子午线选择器在 styles.css 里同步认
+          虚拟行仍是 .revert-keep（data-kind 不变），.revert-keep 的 grid 规则在 styles.css 里同步认
           .chat-virtual-row 这层包裹。行距用行自身 padding-bottom；容器负 margin 抵消
           最后一行的那一段，使「历史段末尾 → 尾段首行」仍只有一个行列间距。 */}
       {historyVirtualRows.length > 0 && (
@@ -3948,8 +3948,6 @@ function TurnRollupLine(props: {
   const t = useT();
   const [open, setOpen] = useFoldState(`rollup:${props.group.key}`);
   const { group } = props;
-  // 「今天只写时分」的档位随日历日走：跨午夜翻档（today.ts 的 useToday）
-  const today = useToday();
   const stats = turnStats(group, props.toolResults, Date.now(), props.skills);
   // 统计段先收集再渲染：段与段之间插 · 分隔——纯 gap 挨在一起分不清边界；
   // 工具次数与它的失败数字是一个段，中间不插
@@ -3988,18 +3986,7 @@ function TurnRollupLine(props: {
   }
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
-      {/* 轮头时间（用户裁决 2026-10-12）：这轮开始流式回复的时刻，放在「用时」
-          那行上面——时长与起点摆在一起看。左缘对齐 CollapseRow 的文本起点（按钮
-          左内边距 = 血线 RAIL_X）。缺时间戳（诚实未知）不渲染 */}
-      {group.startedAt !== null && (
-        <div
-          className="turn-start-time"
-          style={{ ...TIME_LABEL, paddingLeft: RAIL_X }}
-          title={fullTimestamp(group.startedAt, t.chat.timeWeekdays)}
-        >
-          {formatMessageTime(group.startedAt, today)}
-        </div>
-      )}
+      {/* agent 这边不标时间（2026-11-22 用户：只在每条用户消息的右下角标时间） */}
       <CollapseRow dense open={open} onToggle={() => setOpen((value) => !value)}>
         {props.turnFailed && (
           <span style={{ color: "var(--color-danger)", flex: "0 0 auto" }}>
@@ -4629,7 +4616,6 @@ function TurnProcessLine(props: {
   renderStep: (step: ProcessStep) => ReactNode;
 }) {
   const t = useT();
-  const today = useToday();
   const { unit } = props;
   const [open, setOpen] = useFoldState(`proc:${unit.key}`);
   const live = unit.live && !unit.answering;
@@ -4669,11 +4655,7 @@ function TurnProcessLine(props: {
     .map((call) => call.toolCallId);
   const goalChanges = goalChangesByCall(t, props.ledger, goalCallIds);
   const planStepNow = props.plan?.current.items.find((item) => item.status === "in_progress")?.text ?? null;
-  const timeLabel = unit.startedAt !== null && (
-    <div className="turn-start-time" style={{ ...TIME_LABEL, paddingLeft: RAIL_X }} title={fullTimestamp(unit.startedAt, t.chat.timeWeekdays)}>
-      {formatMessageTime(unit.startedAt, today)}
-    </div>
-  );
+
 
   if (live) {
     // 跑着的时候（2026-11-22 用户：「我希望有活人感一些」）：星云在动，一句「在干什么」，一句「在想什么」
@@ -4695,7 +4677,6 @@ function TurnProcessLine(props: {
     const idea = snap.chapter?.title ?? (current.kind === "think" ? current.preview : null) ?? planStepNow;
     return (
       <div className="proc-live" aria-live="off">
-        {timeLabel}
         <div className="proc-who">
           <span className="proc-doing orbita-breath">
             <InlineMarks text={doing} />…
@@ -4731,7 +4712,6 @@ function TurnProcessLine(props: {
   const interrupted = processInterrupted(unit.steps, props.interruptedCalls);
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
-      {timeLabel}
       <CollapseRow dense open={open} onToggle={() => setOpen((value) => !value)}>
         <span className="proc-head-row">
           {props.turnFailed && (
