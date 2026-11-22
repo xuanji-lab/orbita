@@ -16,16 +16,14 @@ const RESET = { eval: "[...document.querySelectorAll('.right-rail button[aria-pr
 const BOTTOM = { eval: "document.querySelector('.chat-transcript').scrollTop = 1e7, 1" };
 const TOP = { eval: "document.querySelector('.chat-transcript').scrollTop = 0, 1" };
 
-const CARRYOVERS_OPEN = "!!document.querySelector(\"aside button[aria-label='返回任务']\")";
-const TOGGLE_CARRYOVERS = "(async () => { document.querySelector(\"button[aria-label='更多']\").click(); await new Promise((r) => setTimeout(r, 400)); [...document.querySelectorAll('.menu-panel [role=menuitem], .menu-panel button')].find((b) => b.textContent.includes('以后再做'))?.click(); return 1; })()";
-const OPEN_CARRYOVERS = `(${CARRYOVERS_OPEN}) ? 1 : ${TOGGLE_CARRYOVERS}`;
-const CLOSE_CARRYOVERS = `(${CARRYOVERS_OPEN}) ? ${TOGGLE_CARRYOVERS} : 1`;
+/** 侧栏子视图（已归档）开着就点标题旁的返回键退回任务列表 */
+const CLOSE_SUBVIEW = "(document.querySelector(\"aside button[aria-label='返回任务']\")?.click(), 1)";
 
 /** 侧栏里打开标题含 keyword 的任务（工作区折着先展开、藏在「再显示」里先放出来） */
 function openTask(keyword) {
   return [
     RESET,
-    { eval: CLOSE_CARRYOVERS },
+    { eval: CLOSE_SUBVIEW },
     { wait: 500 },
     { eval: "document.querySelectorAll('.workspace-group button[aria-expanded=false]').forEach((b) => b.click()), 1" },
     { wait: 500 },
@@ -40,7 +38,7 @@ const SETTINGS_OPEN = "document.querySelector(\"button[aria-label='设置'][aria
 /** 设置页是开关：已经开着就不再点 */
 function settingsTab(name) {
   // 先收右栏面板：上一个场景留下的面板会把设置页挤窄（记忆库页一窄就变成两列）
-  return [RESET, { wait: 300 }, { eval: CLOSE_CARRYOVERS }, { clickIf: [`!(${SETTINGS_OPEN})`, "button[aria-label='设置']"] }, { until: "[...document.querySelectorAll('aside .option-row')].some((b) => b.getBoundingClientRect().width > 0)", timeout: 8000 }, { clickText: ["aside .option-row, aside button", name] }, { wait: 1200 }];
+  return [RESET, { wait: 300 }, { eval: CLOSE_SUBVIEW }, { clickIf: [`!(${SETTINGS_OPEN})`, "button[aria-label='设置']"] }, { until: "[...document.querySelectorAll('aside .option-row')].some((b) => b.getBoundingClientRect().width > 0)", timeout: 8000 }, { clickText: ["aside .option-row, aside button", name] }, { wait: 1200 }];
 }
 const CLOSE_SETTINGS = { clickIf: [`!!(${SETTINGS_OPEN})`, "button[aria-label='设置']"] };
 /** 打开右栏某面板：每条任务会记住自己上次开着的面板，已经亮着就别再点（再点是收起） */
@@ -91,7 +89,7 @@ export const SCENES = [
   // 每次重拍都会多一条任务——不在老任务里重发：同一句话发到第 N 遍，它会开始讲「第 N 份副本」，露馅。
   // both：浅、玄两张取自同一帧（capture.mjs 里浅色这一遍直接切 data-theme 再拍玄），量的框才对得上两张图。
   { id: "working", both: true,
-    steps: [RESET, { eval: CLOSE_CARRYOVERS }, { wait: 500 }, { eval: "document.querySelectorAll('.workspace-group button[aria-expanded=false]').forEach((b) => b.click()), 1" }, { wait: 500 },
+    steps: [RESET, { eval: CLOSE_SUBVIEW }, { wait: 500 }, { eval: "document.querySelectorAll('.workspace-group button[aria-expanded=false]').forEach((b) => b.click()), 1" }, { wait: 500 },
       { click: "aside button[aria-label='在此工作区新建任务']" }, { wait: 1500 }, { click: "textarea.composer-input" },
       { type: () => `把论文 Table 1 里各模型在 NYC-taxi 上的 MAE 抄成一张 CSV 存到 data/mae_${stamp()}.csv，再用 matplotlib 画一张对比柱状图存到 figures/。先用 update_plan 列计划，用中文，命令里只写相对路径。` }, { key: "Enter" },
       { until: "document.querySelectorAll('.chat-transcript .bubble-md').length > 0 && !!document.querySelector('.btn-accent[data-tone=danger]')", timeout: 20000 }, { wait: 12000 }, BOTTOM, { wait: 300 }],
@@ -154,18 +152,6 @@ export const SCENES = [
     measure: { days: ["button", "7 天"], today: { js: "[...document.querySelectorAll('.wk *')].find((e) => e.children.length === 0 && e.textContent.trim() === '今天')" }, card: { js: "[...document.querySelectorAll('.wk iframe')].at(-1)?.parentElement" } } },
   { id: "focus", steps: [...openTask(READ), { click: "button[aria-label^='专注模式']" }, { wait: 1000 }], after: [{ key: "Escape" }],
     measure: { key: "button[aria-label^='专注模式']", picker: ".menu-panel, [role=dialog]" } },
-  // 收尾：点勾 → 等扫描结果卡（家务活模型现扫，一次十几秒到一分钟）→ 浅 / 玄都拍完才点「确认」（确认后卡就收起了）
-  // 可重跑：任务已收尾过就先重新打开，再补一轮对话（收尾只扫上次收尾之后的新对话，没新对话就不出卡）
-  { id: "closing", steps: [...openTask(BROWSE), { clickIf: ["!!document.querySelector(\".toolbar button[aria-label='重新打开任务']\")", ".toolbar button[aria-label='重新打开任务']"] }, { wait: 800 },
-      { click: "textarea.composer-input" }, { type: "在 notes/ 里给刚下载的这篇论文记一行：标题、会议、为什么和 UrbanGPT 最相关。" }, { key: "Enter" }, { wait: 5000 },
-      { until: "!document.querySelector('.btn-accent[data-tone=danger]')", timeout: 300000 }, { wait: 1500 },
-      { click: ".toolbar button[aria-label='标记任务完成']" }, { until: "!!document.querySelector('.glass-card button.btn-accent') && [...document.querySelectorAll('button')].some((b) => b.textContent.startsWith('确认：'))", timeout: 180000 }, { wait: 800 }],
-    after: [{ clickText: ["button", "确认："] }, { wait: 2500 }],
-    measure: { card: { js: "[...document.querySelectorAll('*')].find((e) => e.children.length === 0 && e.textContent.trim() === '收尾这个任务')?.closest('.glass-card')" }, tick: ".toolbar button[aria-label='标记任务完成'], .toolbar button[aria-label^='重新打开']", confirm: ["button", "确认："] } },
-  // 「以后再做」子视图是开关：已经开着就别再点（再点会关掉）
-  { id: "carryovers", steps: [RESET, { wait: 300 }, { eval: OPEN_CARRYOVERS }, { wait: 1200 }, { eval: "document.querySelectorAll(\"aside button[aria-label='展开分组']\").forEach((b) => b.click()), 1" }, { wait: 800 }],
-    after: [{ eval: CLOSE_CARRYOVERS }],
-    measure: { more: "button[aria-label='更多']", list: "aside" } },
   // —— 第 06 章：文档与演示（seed.mjs docs 先跑出两条任务：一份演示文稿、一份读书小记）——
   // 文档 / 演示文稿面板一开，面板宽度要 1–2 秒才落到视口里（窗口是 1200，拍图视口是 1440）：开了面板都多等一拍
   { id: "deck-make", steps: [...openTask(DECK), rail("演示文稿"), { wait: 2500 }, { eval: `${ROW_DECK}?.scrollIntoView({ block: "center" }), 1` }, { wait: 600 }],
@@ -180,7 +166,7 @@ export const SCENES = [
     measure: { panel: PANEL, views: `${PANEL} .dp-views`, props: `${PANEL} .ofm-properties`, mark: `${PANEL} .ofm-mark`, callout: `${PANEL} .callout`, exportBtn: `${PANEL} .dp-bar button:has(.lucide-download)` } },
   // 现跑的一轮：在工作区新开一条任务（旧任务里重拍会叠出好几轮同样的话）→ 开演示文稿面板 → 点第 3 页 → 引用这一页 → 说一句 → 等它改完。浅、玄取同一帧（both）
   { id: "deck-quote", both: true,
-    steps: [RESET, { eval: CLOSE_CARRYOVERS }, { wait: 500 }, { eval: "document.querySelectorAll('.workspace-group button[aria-expanded=false]').forEach((b) => b.click()), 1" }, { wait: 500 },
+    steps: [RESET, { eval: CLOSE_SUBVIEW }, { wait: 500 }, { eval: "document.querySelectorAll('.workspace-group button[aria-expanded=false]').forEach((b) => b.click()), 1" }, { wait: 500 },
       { click: "aside button[aria-label='在此工作区新建任务']" }, { wait: 1500 }, rail("演示文稿"), { wait: 2500 }, { click: "button[aria-label='第 3 页']" }, { wait: 800 }, { clickText: [".right-panel-slot button", "引用这一页"] }, { wait: 800 },
       { click: "textarea.composer-input" }, { type: DOC_SAY.quote }, { key: "Enter" }, { until: "!!document.querySelector('.btn-accent[data-tone=danger]')", timeout: 20000 }, { until: IDLE, timeout: 150000, soft: true }, { wait: 2500 }, BOTTOM, { wait: 600 }],
     measure: { panel: PANEL, quoteBtn: [`${PANEL} button`, "引用这一页"], bubble: { js: "[...document.querySelectorAll('.bubble-md')].at(-1)" },

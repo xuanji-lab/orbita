@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
-import type { Carryover, SessionMeta } from "@shared/session";
+import type { SessionMeta } from "@shared/session";
 import type { SessionRunState } from "../notify/completion-notice.ts";
 import {
   HOME_CARD_QUERY_ROWS,

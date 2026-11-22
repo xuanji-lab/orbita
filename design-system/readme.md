@@ -416,14 +416,13 @@ chapter timeline; a chapter opens into its own tool rows.
 The same chapters appear in the right panel's **This task** (2026-10-30). Its Progress tab lists
 the agent's plan (from `update_plan`: an empty ring for pending, a blue pie for the step in progress,
 a check for done), what was done (one row per turn, with the latest turn opened into its chapters;
-clicking a chapter scrolls the conversation to it), and the leftovers saved for later. Its Context tab
+clicking a chapter scrolls the conversation to it). Its Context tab
 is what the agent is holding. `update_plan` is bookkeeping, not a step: it never counts toward step
 totals. The panel only says what is happening: the blue pie and the step clock show only while the
 session is running or waiting for you; once it stops with steps left the head reads **Stopped** —
 words only, the pie keeps its four states — and the step it stopped on keeps its ring, in semibold.
 Earlier turns than the conversation has loaded come in on demand (one quiet "Load them" line, shared
-with the Context tab's whole-task fetch). A leftover becomes a new task through the row's hover action,
-the same action and glyph as the sidebar's carryover list.
+with the Context tab's whole-task fetch).
 Solid panels (dialogs, drawers, menus, popovers) are white with a hairline and a heavier shadow.
 
 **Shadows.** Five steps, all cool-grey and soft, **scaled to how high a surface floats, not to its
@@ -491,7 +490,7 @@ progress ("Re-check the status: the path was wrong, trying src"), else the tool 
 "Thinking"; waiting: what the pending approval wants to do; failed: the error's first line;
 finished unread: the answer's first line; idle: the last thing you asked (an idle task's own last
 line would mean reading its whole transcript). Tasks that want you take the first rows —
-waiting › failed › running — then the carryover and recency rules as before. A single line of
+waiting › failed › running — then recency as before. A single line of
 markdown taken as a title (chapters, this sentence) renders inline `code` in the mono face and
 drops `**` markers (`shell/inline-marks.ts`).
 
@@ -686,8 +685,8 @@ control starts from one of them, and a deviation is a local override written rig
 | `.select-control` | `styles.css` | A dropdown's trigger (`<SelectButton>`): the segmented frame, 28 high, `sm` primary ink, a 12px chevron; hover lays the hover wash, open lays the selected wash. |
 | `.panel-empty` | `styles.css` | The empty state (`<PanelEmpty>`): see *An empty state is the same sentence, standing alone*. |
 
-Checkboxes have no recipe: the three in use (Sidebar carryover list, CarryoverChecklist, the Providers
-model list) are native `<input type="checkbox">` tinted with `accent-color: var(--color-accent)`.
+Checkboxes have no recipe: the ones in use (the Providers model list, the migration pickers) are native
+`<input type="checkbox">` tinted with `accent-color: var(--color-accent)`.
 
 ## Iconography
 
