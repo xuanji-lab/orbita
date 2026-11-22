@@ -26,7 +26,9 @@
  *
  * 纯模块：不 import electron、不 import 进程相关的东西，可被 `node --test` 直接加载。
  */
+import { replyLanguageNote } from "../shared/reply-language.ts";
 import type { ContextMessage } from "./image-byte-budget.ts";
+import { replyLangsOf } from "./reply-language.ts";
 
 /** 一条用户消息发出时的情境。字段是加法：健康数据、位置等将来在这里加。 */
 export interface UserContext {
@@ -74,8 +76,15 @@ function formatSentAt(sentAt: number, timeZone: string): string {
 
 /**
  * wire 层注入：给 `messages` 里每条真实用户消息（`role === "user"`）的正文前面
- * 追加一段情境文本。工具结果（`role === "toolResult"`）、assistant、custom 等角色
+ * 追加一段情境文本，**末尾**再追加一行回复语言标记（`<reply_language>`，见下）。工具结果（`role === "toolResult"`）、assistant、custom 等角色
  * 原样放行——它们不是「用户发的话」。
+ *
+ * 回复语言标记放在末尾、与情境同属 wire 层：回复语言规则只在系统提示词里写了一次，长会话里
+ * 紧挨回复的是大量英文（子会话汇报、工具输出），离得近的压过离得远的；每条消息自带一行
+ * 「这条消息发出时用户的语言」就在模型眼皮底下。语言由代码按「用户亲手打的字」算
+ * （agent/reply-language.ts 的 replyLangsOf，因果、逐条，重放逐字节相同）；
+ * 子会话没有用户亲手打的字，用父会话写进信封的 `lang`。算不出（null）就不附。
+ * 被否决的方案：只在系统提示词里把规则再强调一遍——它离回复最远，已证明不够。
  *
  * 返回 `{ messages }` 让 pi 替换发往 provider 的那份；没有任何用户消息时返回
  * `undefined`（不替换，省一次数组拷贝）。**不改动入参**（pi 传进来的虽是克隆，
@@ -87,7 +96,8 @@ export function injectUserContext(
 ): { messages: ContextMessage[] } | undefined {
   let touched = false;
   const next: ContextMessage[] = [];
-  for (const message of messages) {
+  const langs = replyLangsOf(messages);
+  for (const [index, message] of messages.entries()) {
     const record = message as { role?: unknown; content?: unknown; timestamp?: unknown };
     if (
       record.role !== "user" ||
@@ -98,22 +108,27 @@ export function injectUserContext(
       continue;
     }
     const prefix = formatUserContext({ sentAt: record.timestamp, timeZone });
-    next.push(withPrefix(message, prefix));
+    const lang = langs[index] ?? null;
+    next.push(withNotes(message, prefix, lang === null ? null : replyLanguageNote(lang)));
     touched = true;
   }
   return touched ? { messages: next } : undefined;
 }
 
-/** 单条消息前面垫一段文本：块数组前插一个 text 块；字符串正文直接拼在前面。 */
-function withPrefix(message: ContextMessage, prefix: string): ContextMessage {
+/** 单条消息前面垫情境、末尾缀标记：块数组前插 / 后追一个 text 块；字符串正文直接拼接。 */
+function withNotes(message: ContextMessage, prefix: string, suffix: string | null): ContextMessage {
   const record = message as { content?: unknown };
   if (typeof record.content === "string") {
-    return { ...message, content: `${prefix}\n${record.content}` } as ContextMessage;
+    return { ...message, content: `${prefix}\n${record.content}${suffix === null ? "" : `\n${suffix}`}` } as ContextMessage;
   }
   if (Array.isArray(record.content)) {
     return {
       ...message,
-      content: [{ type: "text", text: prefix }, ...record.content],
+      content: [
+        { type: "text", text: prefix },
+        ...record.content,
+        ...(suffix === null ? [] : [{ type: "text", text: suffix }]),
+      ],
     } as ContextMessage;
   }
   // 形状不认识（上游契约变了）：原样放行，宁可少一段情境也不毁一条消息

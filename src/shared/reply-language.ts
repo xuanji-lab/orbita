@@ -23,6 +23,7 @@ export function isReplyLang(value: unknown): value is ReplyLang {
 const HAN = /\p{Script=Han}/gu;
 const KANA_OR_HANGUL = /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 const LATIN_WORD = /[A-Za-z]{2,}/g;
+const EN_MIN_WORDS = 3;
 
 /**
  * 识别一段「用户亲手打的字」的语言（入参已经剥过 Orbita 的包装，见 userTypedLang）。
@@ -31,7 +32,8 @@ const LATIN_WORD = /[A-Za-z]{2,}/g;
  * 再数汉字个数与拉丁单词数（≥2 个字母的连续串）——一个汉字约等于一个英文单词的信息量，
  * 所以直接比个数：**汉字数 ≥ 拉丁单词数 → zh，否则 en**。混排例：
  * 「帮我 review 一下这个 PR」汉字 7 > 单词 2 → zh；「Check why 子会话 is English」汉字 3 < 单词 4 → en。
- * 一个汉字都没有且没有拉丁单词（纯数字、符号、emoji、单字母）→ null；含假名 / 韩文 → null。
+ * 判 en 还要求至少 3 个拉丁单词（`ok` / `yes` / `ls` 这类单词太短，不足以说明用户换了语言）；
+ * 判不出（纯数字、符号、emoji、过短的英文）→ null，调用方沿用此前的语言；含假名 / 韩文 → null。
  */
 export function detectReplyLang(text: string): ReplyLang | null {
   if (KANA_OR_HANGUL.test(text)) return null;
@@ -43,8 +45,9 @@ export function detectReplyLang(text: string): ReplyLang | null {
     .replace(/\S*[/\\]\S*/g, " ");
   const han = prose.match(HAN)?.length ?? 0;
   const words = prose.match(LATIN_WORD)?.length ?? 0;
-  if (han === 0 && words === 0) return null;
-  return han >= words ? "zh" : "en";
+  if (han >= words) return han === 0 ? null : "zh";
+  // 英文要至少 3 个词才算数：中文用户常发 ok / yes / ls 这类单词，不该一句话把整段对话钉成英文
+  return words >= EN_MIN_WORDS ? "en" : null;
 }
 
 /** 给模型看的一行：标记 + 一句英文说明（模型读得懂，措辞固定——前缀缓存要逐字节稳定） */

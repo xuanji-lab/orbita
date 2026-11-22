@@ -15,6 +15,7 @@ describe("detectReplyLang", () => {
     strictEqual(detectReplyLang("Fix 这个 bug please"), "en");
     // 恰好相等：汉字 2 = 单词 2 → zh
     strictEqual(detectReplyLang("好的 ok yes"), "zh");
+    strictEqual(detectReplyLang("ok 谢谢"), "zh");
   });
 
   it("代码块、行内代码、URL 与路径不算英文：中文句子里夹一大段命令仍是 zh", () => {
@@ -35,6 +36,13 @@ describe("detectReplyLang", () => {
     strictEqual(detectReplyLang("123 + 456 = ?"), null);
     strictEqual(detectReplyLang("👍"), null);
     strictEqual(detectReplyLang("a"), null);
+  });
+
+  it("英文至少 3 个词才判 en：ok / yes / 「好 ok yes」这类过短的不改变语言", () => {
+    strictEqual(detectReplyLang("ok"), null);
+    strictEqual(detectReplyLang("yes please"), null);
+    strictEqual(detectReplyLang("好 ok yes"), null);
+    strictEqual(detectReplyLang("yes please do it"), "en");
   });
 
   it("含日文假名 / 韩文 → null（不把日语用户钉成英语）", () => {

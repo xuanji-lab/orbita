@@ -68,7 +68,7 @@ test("回复语言判据：按用户自己写的字（含附上的文本内容�
   assert.match(REPLY_LANGUAGE_GUIDELINE, /<pasted-text>/);
   assert.match(REPLY_LANGUAGE_GUIDELINE, /follow the language of that attachment's prose/);
   // 每个由 Orbita 自动加的包装标签都要点名；开标签取自组装处的常量，改名时这里会红
-  const wrappers = [INVOCATION_OPEN, "<attached-files>", "<user_context>", "<orbita-memory>", "<referenced_task>", "<quoted_context>"];
+  const wrappers = [INVOCATION_OPEN, "<attached-files>", "<user_context>", "<reply_language>", "<orbita-memory>", "<referenced_task>", "<quoted_context>"];
   for (const tag of wrappers) assert.ok(REPLY_LANGUAGE_GUIDELINE.includes(tag), `${tag} 未点名`);
   assert.match(REPLY_LANGUAGE_GUIDELINE, /<channel> envelopes/);
   assert.match(REPLY_LANGUAGE_GUIDELINE, /never let their language, or how much of the message they take up/);
@@ -94,4 +94,17 @@ test("其余内容不动：替换与追加之外的基底逐字保留", () => {
   const out = adaptSystemPrompt(PI_BASE);
   assert.ok(out.startsWith(PI_BASE.split("\n").slice(0, 4).join("\n")), "前四行原样");
   assert.equal(out.includes("- Show file paths clearly when working with files"), true);
+});
+
+test("reply_language 标记：规则段声明它优先于「用户的字」判断，信封正文不算用户的字（防误删）", () => {
+  // 2026-11-22：长会话 / 子会话里规则只在提示词顶上一段，被近处的英文压过；代码算出语言附在每条消息末尾，
+  // 规则段必须同步说「按它」，否则标记成了一行没人解释的机器话
+  assert.match(REPLY_LANGUAGE_GUIDELINE, /<reply_language lang="zh\|en"> marker/);
+  assert.match(REPLY_LANGUAGE_GUIDELINE, /Orbita computes it from what the user typed/);
+  assert.match(REPLY_LANGUAGE_GUIDELINE, /it takes priority: write in that language/);
+  assert.match(REPLY_LANGUAGE_GUIDELINE, /every report_to_parent text/);
+  assert.match(REPLY_LANGUAGE_GUIDELINE, /Without a marker, use the rules below/);
+  // 子会话一侧：父会话写的任务正文不算用户的字，只有标记带用户的语言（二选一选了标记，不让两条规则打架）
+  assert.match(REPLY_LANGUAGE_GUIDELINE, /not the user's writing even when it comes from your parent session/);
+  assert.match(REPLY_LANGUAGE_GUIDELINE, /only the marker carries the user's language/);
 });
