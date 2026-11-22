@@ -8,7 +8,7 @@ home screen. Multi-agent complexity is deliberately hidden inside the (not yet s
 
 The interface is **a colored shell and a flat paper well, layered by hairlines** (2026-11-07, direction N;
 before that it was translucent glass cards with a stacking alpha ladder). The whole app sits on one opaque shell
-— moon-white on light, a blue-black night sky on the dark tiers — and the conversation is a flat paper well set
+— a neutral light grey on light (2026-11-22; moon-white before), a blue-black night sky on the dark tiers — and the conversation is a flat paper well set
 into it, a step lighter or darker, with an even gap on all four sides; the well's left edge is what sets the
 sidebar's width and the sidebar itself has no surface. The input box is the ledge at the foot of the well, not a
 card floating over it. Depth is three written colours (shell → well → card face) and 1px hairlines, never
@@ -27,7 +27,7 @@ of colour and counters, every colour with exactly one job.
 > 其余——安静、简洁为默认、克制、密度、双栏、主工作面——原话沿用。2026-08-22 的原文留在 git 历史里
 > （`git log -p -- design-system/readme.md`），改写理由写在下面「为什么改」一段。
 
-**中文**：Orbita 的界面应该是一个**安静的、有品牌质感的编辑工作台**，而不是仪表盘或驾驶舱。核心视觉语言是"**有颜色的壳 + 平的纸面井，靠发丝线分层**"：整个应用坐在一块实色的壳上（明主题是月白，暗主题是带蓝的夜空），聊天面是嵌在壳里的一张平的纸面井，比壳浅（或深）一个台阶；输入框不是浮在井上的卡，是井底的台沿；层次由三个写明的色（壳 → 井 → 卡面）和 1px 的发丝线给出，不靠透明度叠加，也不靠阴影。对话不是聊天气泡，是**一本带时间轴的观测记录**：一根贯穿整页的**子午线**把"谁说的、做了什么、几点"钉在同一根轴上——用户消息是空心星，助手回合是实心星，每次工具调用是一道刻度，时间落在左侧的索引边栏；同一个边栏在首页放状态组名、在设置页放节名，是同一种语法。打开软件即进入 Agent 模式：品牌衬线体的 slogan「璇玑运转，诸事得序」左对齐、全屏最轻，下面是输入框，再下面是按「等你 / 进行中 / 最近」分组的记录——先写，再读别的活的进展；新建会话永远先落在这个页面，首条消息发出时 slogan 与记录淡出、输入框丝滑滑落到窗口底部成为聊天页的输入框——输入框宽度跨页面保持一致，动效只用来解释"东西去哪了"，绝不做装饰。信息呈现的总原则是**简洁为默认、细节可展开**：agent 的思考、工具调用、文件阅读都折叠成一行、点击才展开，用户需要的是"知道 agent 在干嘛"与可追溯，而不是被过程淹没。克制是这个界面的纪律：**不用 emoji、不堆彩色和计数器**（那是幼稚和噪音），颜色各有明确职责——accent 只给主操作与勾选，选中是中性的灰，状态优先用图标和文字；**行内代码：灰底药丸，字用链接蓝**（机器内容靠「等宽 + 底 + 蓝」三样分层，蓝字压灰底在三档里都 ≥4.5:1）；密度 balanced，不做 IDE 式拥挤。结构上左右双栏对称、可折叠成纯图标条；右侧永远默认收起，不自动弹出抢注意力。主工作面是单 agent 对话，多 agent 的复杂性要藏进编排模式而不是铺成驾驶舱。整体气质是**极简的 composer 首页 + 编辑器级的秩序感：安静、层次分明，让用户的注意力只落在"下一步要做什么"上**。
+**中文**：Orbita 的界面应该是一个**安静的、有品牌质感的编辑工作台**，而不是仪表盘或驾驶舱。核心视觉语言是"**有颜色的壳 + 平的纸面井，靠发丝线分层**"：整个应用坐在一块实色的壳上（明主题是中性浅灰——2026-11-22 前是月白，暗主题是带蓝的夜空），聊天面是嵌在壳里的一张平的纸面井，比壳浅（或深）一个台阶；输入框不是浮在井上的卡，是井底的台沿；层次由三个写明的色（壳 → 井 → 卡面）和 1px 的发丝线给出，不靠透明度叠加，也不靠阴影。对话不是聊天气泡，是**一本带时间轴的观测记录**：一根贯穿整页的**子午线**把"谁说的、做了什么、几点"钉在同一根轴上——用户消息是空心星，助手回合是实心星，每次工具调用是一道刻度，时间落在左侧的索引边栏；同一个边栏在首页放状态组名、在设置页放节名，是同一种语法。打开软件即进入 Agent 模式：品牌衬线体的 slogan「璇玑运转，诸事得序」左对齐、全屏最轻，下面是输入框，再下面是按「等你 / 进行中 / 最近」分组的记录——先写，再读别的活的进展；新建会话永远先落在这个页面，首条消息发出时 slogan 与记录淡出、输入框丝滑滑落到窗口底部成为聊天页的输入框——输入框宽度跨页面保持一致，动效只用来解释"东西去哪了"，绝不做装饰。信息呈现的总原则是**简洁为默认、细节可展开**：agent 的思考、工具调用、文件阅读都折叠成一行、点击才展开，用户需要的是"知道 agent 在干嘛"与可追溯，而不是被过程淹没。克制是这个界面的纪律：**不用 emoji、不堆彩色和计数器**（那是幼稚和噪音），颜色各有明确职责——accent 只给主操作与勾选，选中是中性的灰，状态优先用图标和文字；**行内代码：灰底药丸，字用链接蓝**（机器内容靠「等宽 + 底 + 蓝」三样分层，蓝字压灰底在三档里都 ≥4.5:1）；密度 balanced，不做 IDE 式拥挤。结构上左右双栏对称、可折叠成纯图标条；右侧永远默认收起，不自动弹出抢注意力。主工作面是单 agent 对话，多 agent 的复杂性要藏进编排模式而不是铺成驾驶舱。整体气质是**极简的 composer 首页 + 编辑器级的秩序感：安静、层次分明，让用户的注意力只落在"下一步要做什么"上**。
 
 **为什么改**（原文「毛玻璃卡片的透明度叠加」「slogan 居中、与输入框构成首页全部重心」两处）：
 一、这是一张要坐一整天的编辑台，不是演示——agent 长时间跑，用户要一眼看出"谁在等我"，三张等重的会话卡与居中的 slogan 做不到，按状态分组的记录行与一根子午线可以。
@@ -35,7 +35,7 @@ of colour and counters, every colour with exactly one job.
 三、玻璃是个人化的味道，纸是更安静的味道：靠发丝线而不是阴影分层，视线才不会被"浮起来的东西"拉走。
 **没改的**：纸面两档（小学作业 / 打字稿）仍是它们自己的世界，不套这段话；accent 的蓝 / 黄、品牌衬线 slogan、信息折叠的规矩原样。
 
-**English**: Orbita should feel like a **quiet, editorial workbench with brand-grade craft** — not a dashboard, not a cockpit. The core visual language is **a colored shell and a flat paper well, layered by hairlines**: the whole app sits on one opaque shell (moon-white on light, a blue-black night sky on dark); the chat surface is a flat paper well set into it, one step lighter (or darker); the input box is not a card floating over the well but the ledge at its foot; depth is three written colours (shell → well → card face) and 1px hairlines — never translucency stacking, never shadow. The conversation is not a chat of bubbles but **a log with a time axis**: one **meridian** line runs the whole page and pins who spoke, what was done and when to the same axis — your message is a hollow star, the agent's turn a filled one, every tool call a tick, the time sits in a left index gutter; the same gutter holds status group names on the home page and section names in settings, one grammar. Opening the app lands directly in Agent mode: the brand-serif slogan (left-aligned, the lightest thing on screen), then the input box, then a record grouped **Waiting for you / Running / Recent** — write first, then read how the other work is going. Every new session starts on this page; when the first message is sent, the slogan and the record fade away while the input box glides to the bottom of the window and becomes the chat composer — the input keeps the same width across pages, and **motion only ever explains where things went, never decorates**. Information follows one rule: **simple by default, expandable on demand** — thinking, tool calls, and file reads collapse to a single line until clicked; the user needs to know what the agent is doing and be able to trace it, not drown in process. **Restraint is the discipline of this interface**: no emoji, no piles of color and counters (that is noise and childishness). Every color has exactly one job — accent is reserved for the primary action and a checked box; selection is a neutral grey; status prefers icons and words over color; **inline code is a grey pill with link-blue type** (machine content is told apart by mono + fill + blue, and the blue clears 4.5:1 on the pill on all three tiers). Density is balanced, never IDE-crowded. Structurally, the left and right sidebars are symmetric and collapse into slim icon-only strips; the right side stays closed by default and never pops open to steal attention. The primary work surface is a single-agent conversation; the complexity of multi-agent work hides inside the orchestration mode instead of spreading into a cockpit. The overall character: **a minimalist composer-first home with editor-grade order — quiet, clearly layered — so the user's attention lands only on "what do I do next."**
+**English**: Orbita should feel like a **quiet, editorial workbench with brand-grade craft** — not a dashboard, not a cockpit. The core visual language is **a colored shell and a flat paper well, layered by hairlines**: the whole app sits on one opaque shell (a neutral light grey on light — moon-white until 2026-11-22 — a blue-black night sky on dark); the chat surface is a flat paper well set into it, one step lighter (or darker); the input box is not a card floating over the well but the ledge at its foot; depth is three written colours (shell → well → card face) and 1px hairlines — never translucency stacking, never shadow. The conversation is not a chat of bubbles but **a log with a time axis**: one **meridian** line runs the whole page and pins who spoke, what was done and when to the same axis — your message is a hollow star, the agent's turn a filled one, every tool call a tick, the time sits in a left index gutter; the same gutter holds status group names on the home page and section names in settings, one grammar. Opening the app lands directly in Agent mode: the brand-serif slogan (left-aligned, the lightest thing on screen), then the input box, then a record grouped **Waiting for you / Running / Recent** — write first, then read how the other work is going. Every new session starts on this page; when the first message is sent, the slogan and the record fade away while the input box glides to the bottom of the window and becomes the chat composer — the input keeps the same width across pages, and **motion only ever explains where things went, never decorates**. Information follows one rule: **simple by default, expandable on demand** — thinking, tool calls, and file reads collapse to a single line until clicked; the user needs to know what the agent is doing and be able to trace it, not drown in process. **Restraint is the discipline of this interface**: no emoji, no piles of color and counters (that is noise and childishness). Every color has exactly one job — accent is reserved for the primary action and a checked box; selection is a neutral grey; status prefers icons and words over color; **inline code is a grey pill with link-blue type** (machine content is told apart by mono + fill + blue, and the blue clears 4.5:1 on the pill on all three tiers). Density is balanced, never IDE-crowded. Structurally, the left and right sidebars are symmetric and collapse into slim icon-only strips; the right side stays closed by default and never pops open to steal attention. The primary work surface is a single-agent conversation; the complexity of multi-agent work hides inside the orchestration mode instead of spreading into a cockpit. The overall character: **a minimalist composer-first home with editor-grade order — quiet, clearly layered — so the user's attention lands only on "what do I do next."**
 
 **Why it changed** (the two phrases in the 2026-08-22 text: "frosted-glass cards with stacking translucency" and "the slogan and the input box are the whole weight of the home screen"): (1) this is a desk you sit at all day, not a demo — an agent runs for a long time and the user needs to see at a glance who is waiting on them; three equal cards and a centred slogan cannot say that, a record grouped by state and one meridian can. (2) A translucency ladder makes brightness drift with the wallpaper and with nesting depth — layers are *stacked*, not *written*; three written opaque colours read the same on any desktop and let contrast be pinned in a test (the tertiary ink clears 4.5:1 on every ground). (3) Glass is a personal taste, paper a quieter one: layering by hairline instead of shadow keeps the eye from being pulled toward whatever floats. **Unchanged:** the two paper themes are still their own worlds and do not follow this statement; the blue / yellow accent, the brand-serif slogan and the fold-by-default rule stand as written.
 
@@ -169,9 +169,18 @@ the English copy; the Chinese copy follows the same voice.
 ## Visual foundations
 
 **Colour.** Themes: **white + blue** (light), the two dark tiers **黛 Slate + yellow** and
-**玄 Onyx + yellow**, and the two paper faces (below). A cool **moon-white shell** (`#e7ebef`)
-with a near-white **paper well** (`#fbfcfd`), three text inks, three hairline greys — the two grounds are
-opaque colours one step apart, not glass over the desktop (2026-11-07, direction N). Every colour has exactly
+**玄 Onyx + yellow**, and the two paper faces (below). A **neutral light-grey shell** (`#f5f5f5`, OKLCH L97.0 C0)
+with a near-white **paper well** (`#fefefe`, L99.7), three neutral text inks, three neutral hairline greys — the two
+grounds are opaque colours one step apart (ΔL 2.7, 1.08:1), not glass over the desktop (2026-11-07, direction N).
+**Why neutral and this light (2026-11-22, the user's pick):** the user found the 2026-11-07 moon-white (`#e7ebef`,
+L93.8 C0.007 hue 248, ΔL 5.2 to the well) "not light" after long use. A five-way prototype (`proto/palette`: the old
+cool, the same hue lifted, neutral, a low-chroma warm grey, and two 璇玑 bronze / jade hues) showed the weight came
+mostly from **lightness**, not hue — the dark shell read as a frame around the page, and the blue tint compounded it.
+Reference apps, read from their shipped CSS / official theme files rather than screenshots (Kimi `#fbfaf9`, Proma
+`#fcfcfb`, Devin `#f8f8f8`, Obsidian `#f6f6f6`, Claude `#f5f4ed`), sit at L95–99 with a 0.9–3.0 step to the main
+area, and most of them are chroma-zero. The warm grey was what everyone does (and a return to the pre-11-07
+`#f3f4f1`); the bronze and jade the user liked are left for user-made UI mods, not built in. The dark tiers did not
+change. Every colour has exactly
 one job: the accent is blue `#1d4ed8` on light and yellow `#d6c245` on dark, and it means the single primary
 action (the send button, "New task", "Start Agent") and a checked checkbox
 (native `accent-color`, settled 2026-09-24 on the migration page, which lists many) — nothing else; **selection
@@ -189,19 +198,21 @@ its text and makes the list jitter). Selection is a **neutral ink wash** (ink 7%
 everywhere — never the accent hue: 2026-08-25 chose the accent wash (option A) and 2026-11-07 reversed it
 (a sidebar column showed the accent three times: New task, the mode tab and the selected row, which is the
 "blue everywhere" look this file forbids). **On the shell** (sidebar, right rail, toolbar) the selected row and
-the pressed key instead take the well's own paper colour — "laid on the table", the same material as the page
-that is open beside it (**on the two dark tiers the shell and the well are only one step apart — 1.10 / 1.12:1 — so
-there the pressed row takes a neutral white 10% wash over the shell instead, 1.36:1**); inside the well and in menus, which are paper already, the neutral wash stays
-(`:root … :is(.sidebar, .right-rail, .toolbar)` in `styles.css`). Max two background colours per screen.
+the pressed key take `--color-bg-active` — ink 10% on light (`#e0e0e0` over the shell, 1.21:1), white 10% on the dark
+tiers (1.36:1). From 2026-11-07 to 11-22 the light shell instead took the well's own paper colour ("laid on the
+table"); once the shell was lifted to `#f5f5f5` the paper sat at 1.08:1 on it and the selected row disappeared, so
+light joined the dark tiers' wash (`:root … :is(.sidebar, .right-rail, .toolbar)` in `styles.css`). On the shell
+the selected row and a hovered row are now the same strength; the hover also lifts the text, the selection does not. Max two background colours per screen.
 
 **Muted surface** (`--color-bg-muted`): the one neutral fill for anything that sits as a block on a
 panel — expandable detail cards (release notes, migration lists), chips and badges, a control's
-resting fill, image placeholders. On light it is a **cool grey `#eef1f4`, not a warm off-white**
-(settled 2026-10-18 as `#eef0f2`, one step cooler since 2026-11-07): the old `#f8f8f5` was 1.06:1 against
-white and vanished on the warm glass, so cards and chips read as bare text; the cool grey matches the text
-greys and the blue accent. The user message, inline `code` and code blocks sit on it (inline `code` is **link blue on
+resting fill, image placeholders. On light it is a **neutral grey `#f1f1f1`** (L95.8, 1.12:1 against the
+well; 2026-11-22, with the neutral shell — before that cool `#eef1f4` from 2026-11-07 and `#eef0f2` from 2026-10-18):
+the old warm `#f8f8f5` was 1.06:1 against white and vanished on the warm glass, so cards and chips read as bare text;
+what matters is the step against the well, which the neutral grey keeps (slightly larger than the cool one's 1.10).
+It sits a touch darker than the shell (L97.0), so a muted block on the shell reads one step down. The user message, inline `code` and code blocks sit on it (inline `code` is **link blue on
 this grey pill** — 2026-11-07 direction N briefly set it in ink, and the same day the user ruled the blue stays; the
-blue clears 4.5:1 on the pill on all three tiers: light 4.61, 黛 / 玄 ≈ 6.1). It is
+blue clears 4.5:1 on the pill on all three tiers: light 4.62, 黛 / 玄 ≈ 6.1). It is
 never the selection wash — `--color-bg-active` means *pressed*, and a release-notes card or a badge
 in that colour reads as pressed. The paper faces keep their own warm `#f4f4ef` (paper is warm on
 purpose); the dark tiers are unaffected.
@@ -435,7 +446,7 @@ on a 225px session card read as a small thing carrying a big shadow; N removes t
 on `:focus-visible`.
 
 **Hover, press, disabled.** Hover lays a translucent grey over whatever is underneath
-(`--color-bg-hover`: secondary ink at 12% on light — a cool grey that sits with the blue accent —
+(`--color-bg-hover`: secondary ink at 12% on light — a neutral grey —
 and 8% on dark) and lifts text from secondary to primary — never a colour change, never a transform.
 It is translucent on purpose: a solid "next grey up" was visible on white panels but vanished on the
 off-white shell behind the sidebar, so the same hover now reads equally on every ground. Cards lift their shadow from

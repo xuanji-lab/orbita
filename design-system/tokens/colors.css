@@ -7,17 +7,24 @@
 [data-theme-preview="light"] {
   color-scheme: light;
 
-  /* surfaces — 月白的壳 + 纸面的井（2026-11-07 方向 N）。壳带一点冷（#e7ebef），井是近白的纸
-     （#fbfcfd）；两者的台阶靠颜色、不靠阴影，静止的面不再透明（--glass-alpha 1，见 glass.css）。
-     旧值：壳 #f3f4f1 / 侧栏 #f7f7f3 / 井 #ffffff——壳与井只差 1.07:1 的暖米白，又靠 60% 玻璃
-     透出桌面，亮度随壁纸漂；换成实色壳以后，同一张纸在任何桌面上都是同一个色 */
-  --color-bg-app: #e7ebef;
-  --color-bg-sidebar: #e7ebef;
-  --color-bg-panel: #fbfcfd;
+  /* surfaces — 中性灰的壳 + 近白的井（2026-11-22 用户选定，替换 2026-11-07 方向 N 的冷月白）。
+     壳 #f5f5f5（OKLCH L97.0 C0）、井 #fefefe（L99.7 C0）：亮度差 2.7，彩度为零。
+     为什么改：用户说浅色「用久了不轻盈」。五套对比原型（proto/palette）量出来，主因是**亮度**而不是色相——
+     旧壳 #e7ebef 只有 L93.8、与井差 5.2，像镶了一圈深框；彩度 0.007、蓝色相 248 又把冷感放大。
+     参照（各自安装包 / 官方主题文件里的源码色值）：Kimi 侧栏 #fbfaf9、Proma #fcfcfb、Devin #f8f8f8、
+     Obsidian #f6f6f6、Claude bg-200 #f5f4ed，侧栏 L95–99、到主区差 0.9–3.0。
+     没选的：同色相只提亮（冷蓝仍在）、低彩暖灰（大家的做法，也等于回到 11-07 之前的 #f3f4f1）、璇玑青铜 / 玉青
+     （用户喜欢，但留给以后开放的界面 mods，不内置）。
+     更早的旧值：壳 #e7ebef / 井 #fbfcfd（11-07～11-22）；壳 #f3f4f1 / 侧栏 #f7f7f3 / 井 #ffffff（11-07 前，60% 玻璃）。
+     台阶靠颜色、不靠阴影，静止的面不透明（--glass-alpha 1，见 glass.css）。 */
+  --color-bg-app: #f5f5f5;
+  --color-bg-sidebar: #f5f5f5;
+  --color-bg-panel: #fefefe;
   /* muted 是井上成块的中性底（说明卡、胶囊、徽标、控件静止底、图片占位、用户消息、行内代码）。
-     冷灰，与壳同色系、比壳浅一档（2026-11-07 起 #eef1f4，原 #eef0f2 2026-10-18）。
+     中性灰 #f1f1f1（L95.8，2026-11-22；原冷灰 #eef1f4 2026-11-07、#eef0f2 2026-10-18）：与井差 1.12:1，
+     比旧值 1.10 还多一点，用户消息与代码块不会变淡。它比壳略深（壳 L97.0），压在壳上的 muted 块是「往下一档」。
      不用 accent-soft：那是「选中」的底 */
-  --color-bg-muted: #eef1f4;
+  --color-bg-muted: #f1f1f1;
   /* hover 是**半透明**的一层，不是一块实色（wafo 2026-09-23）：压暗的量与底色无关，
      壳与井一样清楚。取次级文字色 12% */
   --color-bg-hover: color-mix(in srgb, var(--color-text-secondary) 12%, transparent);
@@ -27,20 +34,22 @@
   --color-bg-active: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
 
   /* text */
-  /* 黛墨三档（2026-11-07）：在它会落的每一种地上都过线——井 16.0 / 8.8 / 5.6，壳 13.7 / 7.5 / 4.8。
+  /* 墨三档（2026-11-07 定亮度，2026-11-22 随底色去色、L 不变）：在它会落的每一种地上都过线——
+     井 16.3 / 8.9 / 5.7，壳 15.1 / 8.3 / 5.3，muted 14.6 / 8.0 / 5.1。
      原 #202124 / #5f6368 / #8b8f94 的三级在白井上 3.20:1、在壳上 2.95:1，而它承载的恰恰是
      「等你」「改了几个文件」「时间」这类关键信息；墨阶只能抬，不许再降到 4.5 以下 */
-  --color-text-primary: #18202a;
-  --color-text-secondary: #3f4a57;
-  --color-text-tertiary: #5d6774;
+  --color-text-primary: #1f1f1f;
+  --color-text-secondary: #494949;
+  --color-text-tertiary: #666666;
   --color-text-inverse: #ffffff;
   /* 永远压在深色地上的字（遮罩 / toast / 图片预览控件），不随主题翻转 */
   --color-text-on-dark: #ffffff;
 
   /* borders */
-  --color-border-subtle: #e3e7eb;
-  --color-border-default: #d5dbe1;
-  --color-border-strong: #c3cbd3;
+  /* 中性灰（2026-11-22），L 与旧冷灰 #e3e7eb / #d5dbe1 / #c3cbd3 相同（92.5 / 88.8 / 83.9），压在井上不变弱 */
+  --color-border-subtle: #e6e6e6;
+  --color-border-default: #dadada;
+  --color-border-strong: #cacaca;
 
   /* accent — reserved for the primary action and a checked box. Nothing else (selection is
      neutral since 2026-11-07).
@@ -71,9 +80,9 @@
   --color-success-soft: color-mix(in srgb, var(--color-success) 16%, transparent);
 
   /* chat surfaces */
-  --color-chat-card-bg: #eef1f4;
-  --color-chat-muted-bg: #eef1f4;
-  --color-chat-table-bg: #fbfcfd;
+  --color-chat-card-bg: #f1f1f1;
+  --color-chat-muted-bg: #f1f1f1;
+  --color-chat-table-bg: #fefefe;
   --color-chat-link: #2762ea;
 
   /* 类别色（2026-10 起，读法见 readme *Category colours*）：文档 / 演示 / 表格三族的
