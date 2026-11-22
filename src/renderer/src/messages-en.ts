@@ -2408,6 +2408,7 @@ export const en = {
     failedCount: (n: number) => `${n} failed`,
     toolInterrupted: "Interrupted · not run",
     commandCardOpen: "Open in panel",
+    commandCardOpenFile: "Open file",
     interruptedCount: (n: number) => `${n} interrupted`,
     toolRead: "Read",
     toolSearch: "Search",

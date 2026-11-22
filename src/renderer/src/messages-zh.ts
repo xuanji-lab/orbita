@@ -2225,6 +2225,7 @@ export const zh: Messages = {
     failedCount: (n) => `${n} 个失败`,
     toolInterrupted: "已中断 · 未执行",
     commandCardOpen: "在右栏打开",
+    commandCardOpenFile: "打开文件",
     interruptedCount: (n) => `${n} 个已中断`,
     toolRead: "读取",
     toolSearch: "搜索",
