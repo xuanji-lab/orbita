@@ -20,3 +20,15 @@ export function onOpenPanelRequest(handler: (hint: OpenPanelHint) => void): () =
   window.addEventListener(EVENT, listener);
   return () => window.removeEventListener(EVENT, listener);
 }
+
+/** 「在右栏看进度」的请求（对话里开头那张计划卡的按钮）：App 收到后切到「这条任务 › 进度」 */
+const PROGRESS_EVENT = "orbita:open-progress";
+
+export function requestOpenProgress(): void {
+  window.dispatchEvent(new Event(PROGRESS_EVENT));
+}
+
+export function onOpenProgressRequest(handler: () => void): () => void {
+  window.addEventListener(PROGRESS_EVENT, handler);
+  return () => window.removeEventListener(PROGRESS_EVENT, handler);
+}

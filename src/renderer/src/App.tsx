@@ -4,7 +4,7 @@ import { LocaleContext, messagesOf } from "./locale.ts";
 import { ExperimentalFeaturesContext } from "./experimental.ts";
 import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
-import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type DocPaper, type ModelPair, type SettingsPatch } from "@shared/settings";
+import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type DocPaper, type ModelPair, type ProcessLayout, type SettingsPatch } from "@shared/settings";
 import { childSessions, rootSessions, type Carryover } from "@shared/session";
 import type { ChimeReason } from "@shared/notify";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
@@ -64,7 +64,7 @@ import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shel
 import { FEATURE_ICON } from "./shell/feature-icons.ts";
 import { type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
 import { PastedTextCollapseContext } from "./shell/attachment-chips";
-import { ProcessViewContext } from "./features/chat/process-view-context";
+import { ProcessLayoutContext, ProcessViewContext } from "./features/chat/process-view-context";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
 import { isUnclaimedEscape } from "./shell/escape-key.ts";
 import { AutomationPanel } from "./features/automation/AutomationPanel";
@@ -83,7 +83,7 @@ import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { ReviewPanel } from "./features/review/ReviewPanel";
 import { DocsPanel } from "./features/doc-panel/DocsPanel";
 import { useAutoOpenPanel } from "./features/chat/auto-open-panel.ts";
-import { onOpenPanelRequest, requestOpenPanel } from "./shell/open-panel.ts";
+import { onOpenPanelRequest, onOpenProgressRequest, requestOpenPanel } from "./shell/open-panel.ts";
 import type { ExcerptJump } from "./features/review/ExcerptsTab";
 import type { ExcerptJumpRequest } from "./features/chat/ChatView";
 import { BOARD_DAYS_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
@@ -192,6 +192,12 @@ export function App() {
   const changeSettings = useCallback((patch: SettingsPatch) => {
     void api.settings.set(patch).then(setSettings);
   }, []);
+
+  /** 一轮一行展开之后的排法（按段 / 平铺），在对话里切，全局生效 */
+  const processLayout = useMemo(
+    () => ({ layout: settings.processLayout ?? "chapters", setLayout: (next: ProcessLayout) => changeSettings({ processLayout: next }) }),
+    [settings.processLayout, changeSettings],
+  );
 
   /** 文档面板的纸面：设置里的值按当前主题折算（纸面主题下回落 quiet 并锁住切换） */
   const docPaper = useMemo(() => {
@@ -934,6 +940,15 @@ export function App() {
   /** 输入框旁上下文环菜单的「查看上下文」：直达右栏上下文面板 */
   // 「这条任务」面板的页签：右侧图标条开它时保持上次的页签；输入框旁的用量环开它时直接落在「上下文」
   const [taskTab, setTaskTab] = useState<TaskPanelTab>("progress");
+  // 对话里开头那张计划卡的「在进度里看」：切到「这条任务 › 进度」
+  useEffect(
+    () =>
+      onOpenProgressRequest(() => {
+        setRightPanel("context");
+        setTaskTab("progress");
+      }),
+    [],
+  );
   const openContextPanel = useCallback(() => {
     setTaskTab("context");
     handlePanel("context");
@@ -1466,6 +1481,7 @@ export function App() {
     <DocPaperContext.Provider value={docPaper}>
     <ExperimentalFeaturesContext.Provider value={experimentalFeatures}>
     <ProcessViewContext.Provider value={settings.processView ?? "turn"}>
+    <ProcessLayoutContext.Provider value={processLayout}>
     <AutomationContext.Provider value={automationUi}>
     <AutomationRunSessionsContext.Provider value={runSessionIds}>
     <PastedTextCollapseContext.Provider value={settings.collapsePastedText ?? true}>
@@ -1798,6 +1814,7 @@ export function App() {
     </PastedTextCollapseContext.Provider>
     </AutomationRunSessionsContext.Provider>
     </AutomationContext.Provider>
+    </ProcessLayoutContext.Provider>
     </ProcessViewContext.Provider>
     </ExperimentalFeaturesContext.Provider>
     </DocPaperContext.Provider>

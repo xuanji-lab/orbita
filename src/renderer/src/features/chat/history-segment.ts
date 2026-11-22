@@ -16,7 +16,7 @@
 import type { TranscriptRecord } from "@shared/session";
 import type { ProcessView } from "@shared/settings";
 import type { PlanTimeline } from "../context/plan-timeline.ts";
-import { planTimeline } from "../context/plan-timeline.ts";
+import { planHistory } from "../context/plan-timeline.ts";
 import { PLAN_TOOL_NAME } from "../../../../shared/plan.ts";
 import { stablePrefix } from "./transcript-split.ts";
 import {
@@ -99,7 +99,7 @@ export function deriveHistorySegment(
     processView === "turn"
       ? groupTurnsByTurn(entries, false, toolResults)
       : groupTurns(entries, false, toolResults);
-  const plan = planTimeline(
+  const plan = planHistory(
     prefix.filter((record) => record.role === "tool" && record.toolName === PLAN_TOOL_NAME),
   );
   return {

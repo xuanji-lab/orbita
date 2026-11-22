@@ -108,6 +108,29 @@ function awaitingOf(record: Extract<TranscriptRecord, { role: "tool" }>): boolea
  * 只看 update_plan 记录；传整段转录或只传其中的 update_plan 记录结果一样。
  */
 export function planTimeline(records: readonly TranscriptRecord[]): PlanTimeline | null {
+  return planTimelines(records).at(-1) ?? null;
+}
+
+/**
+ * 对话里一轮一轮地画计划（开头那张计划卡、过程里「改计划」那一行）用的：**这条会话写过的每一张计划**的版本连成一串，
+ * current 仍是最后一张计划的最后一版。只认当前这张时，一写新计划，前面那些轮的「定了计划 / 计划改了」就全没了
+ * （2026-11-22 在博士论文那条会话里看到：第 25 轮写了新计划，之前十几轮的计划卡一张不剩）。
+ * 按 toolCallId 找版本时不会串：每一版都来自一次不同的调用；「第一版」看 n === 1（每张计划各自从 1 数）。
+ */
+export function planHistory(records: readonly TranscriptRecord[]): PlanTimeline | null {
+  const all = planTimelines(records);
+  const last = all.at(-1);
+  if (last === undefined) return null;
+  return { versions: all.flatMap((timeline) => timeline.versions), current: last.current, edits: last.edits };
+}
+
+/** 每一张计划各自的版本线，旧 → 新（一张新计划 = diffPlans 判 fresh） */
+function planTimelines(records: readonly TranscriptRecord[]): PlanTimeline[] {
+  const done: PlanTimeline[] = [];
+  const close = (list: PlanVersion[]) => {
+    const current = list.at(-1);
+    if (current !== undefined) done.push({ versions: list, current, edits: list.filter((version) => version.changes.length > 0).length });
+  };
   let versions: PlanVersion[] = [];
   let prevItems: PlanItem[] | null = null;
   let ids: string[] | null = null;
@@ -119,6 +142,7 @@ export function planTimeline(records: readonly TranscriptRecord[]): PlanTimeline
     const diff = diffPlans(prevItems, raw.items);
     // 一张新计划：上一张进历史，id 与版本号从头来
     if (diff.fresh) {
+      close(versions);
       versions = [];
       ids = null;
     }
@@ -170,9 +194,8 @@ export function planTimeline(records: readonly TranscriptRecord[]): PlanTimeline
     prevItems = raw.items;
     ids = stepIds;
   }
-  const current = versions.at(-1);
-  if (current === undefined) return null;
-  return { versions, current, edits: versions.filter((version) => version.changes.length > 0).length };
+  close(versions);
+  return done;
 }
 
 /** 进度面板头一行与计时用的最小形状（taskHeadState / stepClockFrom 只认这几个字段） */

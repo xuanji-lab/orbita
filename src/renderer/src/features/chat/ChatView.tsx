@@ -68,11 +68,13 @@ import { builtinCommand, type DetailRow, docEditLabel, docEditPath, docEditSecti
 import { getOpenDocumentText } from "../doc-panel/open-document.ts";
 import { ExitCard } from "./ExitCard";
 import { PanelButton } from "../../shell/RightPanel";
-import { ProcessViewContext } from "./process-view-context";
+import { ProcessLayoutContext, ProcessViewContext } from "./process-view-context";
 import { sessionRunState, type SessionRunState } from "../notify/completion-notice.ts";
 import { REVEAL_ENTRY_EVENT } from "../context/task-progress.ts";
-import { planAwaitingIn, planNoticeOf, planTimeline, type PlanTimeline, type PlanVersion } from "../context/plan-timeline.ts";
+import { planAwaitingIn, planHistory, planNoticeOf, type PlanTimeline, type PlanVersion } from "../context/plan-timeline.ts";
 import { PlanCard } from "./PlanCard";
+import { PlanTurnCard } from "./PlanTurnCard.tsx";
+import { planTurnState } from "./plan-turn.ts";
 import { goalNoticeText, planNoticeText } from "../context/plan-text.ts";
 import { useGoalLedger } from "../context/useGoalLedger.ts";
 import { GOAL_TOOL_NAME } from "../../../../shared/goal.ts";
@@ -1902,7 +1904,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   // 计划的版本线（对话里每个过程块的「计划改了：…」一行、现场块里「在做哪一步」都吃它）：
   // 只挑 update_plan 那几条算。实时尾段的现场块要读「现在在做哪一步」，所以按整段算。
   const plan = useMemo(
-    () => planTimeline(transcript.filter((item) => item.role === "tool" && item.toolName === PLAN_TOOL_NAME)),
+    () => planHistory(transcript.filter((item) => item.role === "tool" && item.toolName === PLAN_TOOL_NAME)),
     [transcript],
   );
   // 目标与计划的改动账：对话里「目标改了：…」那一行读它（按签名记忆，流式吐字不重算）
@@ -4628,7 +4630,12 @@ function TurnProcessLine(props: {
     .filter((call) => call.toolName === PLAN_TOOL_NAME)
     .map((call) => call.toolCallId);
   const planNotice = planNoticeOf(props.plan, planCallIds);
-  const planNoticeLine = planNotice === null ? null : planNoticeText(t, planNotice);
+  // 计划定了 / 改了：这一轮开头一张卡（PlanTurnCard），不再在过程行下面写一行「计划改了：…」。
+  // 停下来等你确认的那一版画原来的计划卡（同样放开头），两张不同时出
+  const awaitingHere = props.awaitingPlan !== null && planCallIds.includes(props.awaitingPlan.toolCallId) ? props.awaitingPlan : null;
+  const planState = awaitingHere === null ? planTurnState(props.plan, planNotice, planCallIds) : null;
+  const planHead =
+    awaitingHere !== null ? <PlanCard version={awaitingHere} /> : planState !== null ? <PlanTurnCard state={planState} cardKey={unit.key} /> : null;
   // 这个块里目标改了没有（第一次定目标不算改）
   const goalNoticeLine = goalNoticeText(
     t,
@@ -4670,6 +4677,7 @@ function TurnProcessLine(props: {
     return (
       <div className="proc-live" aria-live="off">
         {timeLabel}
+        {planHead}
         <div className="proc-who">
           <ChatPet live />
           <span className="proc-doing">
@@ -4687,7 +4695,7 @@ function TurnProcessLine(props: {
             </>
           )}
         </div>
-        <div className={slow ? "proc-foot slow" : "proc-foot"}>{slow ? t.chat.processSlow : (tail ?? goalNoticeLine ?? planNoticeLine ?? "")}</div>
+        <div className={slow ? "proc-foot slow" : "proc-foot"}>{slow ? t.chat.processSlow : (tail ?? goalNoticeLine ?? "")}</div>
       </div>
     );
   }
@@ -4705,6 +4713,7 @@ function TurnProcessLine(props: {
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
       {timeLabel}
+      {planHead}
       <CollapseRow dense open={open} onToggle={() => setOpen((value) => !value)}>
         <ChatPet />
         <span className="proc-head-row">
@@ -4727,10 +4736,6 @@ function TurnProcessLine(props: {
       </CollapseRow>
       {open && <ProcessExpanded steps={unit.steps} toolResults={props.toolResults} skills={props.skills} imagesByCall={imagesByCall} />}
       {goalNoticeLine !== null && <Notice icon="pencil-line">{goalNoticeLine}</Notice>}
-      {planNoticeLine !== null && <Notice icon="pencil-line">{planNoticeLine}</Notice>}
-      {props.awaitingPlan !== null && planCallIds.includes(props.awaitingPlan.toolCallId) && (
-        <PlanCard version={props.awaitingPlan} />
-      )}
     </div>
   );
 }
@@ -4749,38 +4754,6 @@ function ChatPet(props: { live?: boolean }) {
   );
 }
 
-/** 展开后怎么排（原型期的开关，定了就删）：按段 = 一句话一段、点开看这段的每一步；平铺 = 每件事一行 */
-type ProcessLayout = "chapters" | "flat";
-const PROCESS_LAYOUT_KEY = "orbita.proto.processLayout";
-const PROCESS_LAYOUT_EVENT = "orbita:process-layout";
-
-function readProcessLayout(): ProcessLayout {
-  try {
-    return window.localStorage.getItem(PROCESS_LAYOUT_KEY) === "flat" ? "flat" : "chapters";
-  } catch {
-    return "chapters";
-  }
-}
-
-function useProcessLayout(): [ProcessLayout, (next: ProcessLayout) => void] {
-  const [layout, setLayout] = useState<ProcessLayout>(readProcessLayout);
-  useEffect(() => {
-    const sync = () => setLayout(readProcessLayout());
-    window.addEventListener(PROCESS_LAYOUT_EVENT, sync);
-    return () => window.removeEventListener(PROCESS_LAYOUT_EVENT, sync);
-  }, []);
-  const update = useCallback((next: ProcessLayout) => {
-    try {
-      window.localStorage.setItem(PROCESS_LAYOUT_KEY, next);
-    } catch {
-      // 存不下就只改这一次
-    }
-    setLayout(next);
-    window.dispatchEvent(new Event(PROCESS_LAYOUT_EVENT));
-  }, []);
-  return [layout, update];
-}
-
 /**
  * 展开后的过程（2026-11-22）。两种排法都只有一种行：图标 · 动作 · 对象 · 量，行尾可带缩略图；
  * 技能、外接工具、内置命令、计划不再各长一种胶囊 / 药丸 / 卡。思考不单独占行，挂在它后面那一步上。
@@ -4793,7 +4766,8 @@ function ProcessExpanded(props: {
   imagesByCall: ReadonlyMap<string, ProcessImage[]>;
 }) {
   const t = useT();
-  const [layout, setLayout] = useProcessLayout();
+  // 两种排法都留（2026-11-22 用户）：切换存进设置（AppSettings.processLayout），全局生效
+  const { layout, setLayout } = useContext(ProcessLayoutContext);
   return (
     <div className="proc-expanded">
       <div className="proc-layout-toggle" role="group" aria-label={t.chat.processLayoutHint} title={t.chat.processLayoutHint}>

@@ -6439,8 +6439,15 @@ html {
   flex: none;
   margin-left: auto;
 }
+/* 窄的时候缩略图先让位（收缩权重大），「工作了 3 分 03 秒」那句后缩、不被切半个字 */
+.proc-head-row > .proc-thumbs {
+  flex: 0 100 auto;
+  min-width: 0;
+  overflow: hidden;
+}
 .proc-thumbs-count {
   margin-right: var(--space-0-5);
+  white-space: nowrap;
   font-family: var(--font-family-business);
   font-size: var(--font-size-xs);
   font-variant-numeric: tabular-nums;
@@ -6810,4 +6817,105 @@ html {
 .turn-output-btn:hover {
   background: var(--color-bg-hover);
   color: var(--color-text-primary);
+}
+
+/* 这一轮开头的计划卡（features/chat/PlanTurnCard.tsx）：计划定了 / 改了才出，只打勾不出。
+   骨架同结尾的卡（文件账、产物）：同底、同边、同圆角、同宽，一轮两头是同一种卡 */
+.plan-turn-card {
+  /* 第二行与清单的字对齐到标题：chevron 13 + 间距 + 图标 14 + 间距 */
+  --plan-turn-indent: calc(13px + var(--space-2) + 14px + var(--space-2));
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-chat-card-bg);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  /* 和下面的过程行隔开一点：卡是这一轮的开头，过程是它下面的事 */
+  margin-bottom: var(--space-1);
+}
+.plan-turn-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.plan-turn-toggle {
+  display: inline-flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--color-text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+.plan-turn-chevron {
+  display: inline-flex;
+  color: var(--color-text-tertiary);
+  transition: transform var(--duration-fast) var(--ease-out-quint);
+}
+.plan-turn-chevron[data-open] {
+  transform: rotate(90deg);
+}
+.plan-turn-title {
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+.plan-turn-progress {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.plan-turn-open {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.plan-turn-open:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.plan-turn-second {
+  padding-left: var(--plan-turn-indent);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--color-text-tertiary);
+}
+.plan-turn-steps,
+.plan-turn-changes {
+  display: grid;
+  gap: var(--space-0-5);
+  margin: var(--space-1) 0 0;
+  padding-left: calc(var(--plan-turn-indent) + var(--space-3));
+  line-height: var(--line-height-ui);
+  color: var(--color-text-primary);
+}
+.plan-turn-steps li[data-status="done"] {
+  color: var(--color-text-tertiary);
+  text-decoration: line-through;
+}
+.plan-turn-steps li[data-status="in_progress"] {
+  font-weight: var(--weight-medium);
+}
+.plan-turn-steps li::marker,
+.plan-turn-changes li::marker {
+  color: var(--color-text-tertiary);
 }
