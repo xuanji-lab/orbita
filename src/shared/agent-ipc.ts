@@ -10,7 +10,7 @@
  * 事后再补这个参数意味着每一处状态读写都要回头改。
  */
 import type { SessionPhase, ThinkingLevel as PiThinkingLevel, TranscriptProgress } from "@earendil-works/pi-protocol";
-import type { PermissionAnswer, PermissionMode } from "./permission.ts";
+import type { ComputerUseRememberedEntry, PermissionAnswer, PermissionMode } from "./permission.ts";
 import type { ThinkingLevel } from "./thinking.ts";
 import type { McpServer, McpStatus, McpStatusSnapshot } from "./mcp.ts";
 import type { ModelDecl } from "./provider.ts";
@@ -20,6 +20,9 @@ import type { PromptImage, SentImage } from "./prompt-images.ts";
 import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
+import type { ComputerUseToolOutcome, ComputerUseToolRequest } from "./computer-use.ts";
+import type { ComputerUseRisk } from "./computer-guard.ts";
+import type { EmergencyStopBroadcast } from "./computer-use.ts";
 import type { SlidesAgentRequest, SlidesOutcome } from "./slides-export.ts";
 import type { DocAgentRequest, DocOutcome } from "./doc.ts";
 import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
@@ -65,6 +68,12 @@ export const ipcChannels = {
   agentSetThinkingLevel: "agent:set-thinking-level",
   /** 会话内换模型（C-4）：下一轮生效。结果走 agent:event 的 model / failed 事件 */
   agentSetModel: "agent:set-model",
+  /**
+   * 会话级电脑使用授权的撤销 / 授予（用户点会话头的撤销，或急停）。**主进程落 meta 并转发
+   * 给 agent 进程**：meta 是持久真源（下一轮开机种子），agent 进程的账本是当前轮立即生效的那份。
+   * 授予的正常路径不在这里——闸门知道用户点了什么，经 `computerUseGrant` 事件回来。
+   */
+  agentSetComputerUseGrant: "agent:set-computer-use-grant",
   agentAnswerPermission: "agent:answer-permission",
   /** 意图确认卡的应答（实验功能 intent-system）：载荷 requestId + IntentConfirmDecision，回 void */
   agentAnswerIntentConfirm: "agent:answer-intent-confirm",
@@ -780,6 +789,27 @@ export interface ChannelSpeakInput {
 export type ChannelStopInput = ChannelKey;
 
 /**
+ * 电脑使用（computer use）的开轮现场（submit / interrupt / compact 共用）。**主进程从设置
+ * 现读装配**（同 pdfCitations 的纪律）：agent 进程不读设置文件，只收数据。
+ *
+ * 由原来的 `computerUse: boolean` 长成对象，是因为模型还需要知道**沙箱这次有没有出网**：
+ * 设置里关掉出网后任何网页都打不开，而模型只能从 Chromium 的
+ * `ERR_INTERNET_DISCONNECTED` 里猜原因，于是反复重试导航。这个事实只有主进程知道
+ * （settings.computerUse.allowNetwork，经 effectiveAllowNetwork 兑缺省），所以随开轮命令
+ * 带过来——**同一个设置、同一次读取**，不另开一套设置通道。
+ */
+export interface ComputerUseTurnContext {
+  /** 实验开关 settings.experimentalFeatures["computer-use"]：开着才注册沙箱工具组 */
+  enabled: boolean;
+  /**
+   * 沙箱是否允许出网（`effectiveAllowNetwork`，**缺席即允许**）。false = 宿主渲染的 .wsb
+   * 带 `<Networking>Disable</Networking>`，网页打不开是设置造成的，不是网站的问题。
+   * 只在 enabled 为 true 时有意义（开关关着时沙箱工具根本不注册）。
+   */
+  allowNetwork: boolean;
+}
+
+/**
  * 意图系统（实验功能 intent-system）的开轮装配（submit / interrupt 共用）。
  * **主进程装配**（同 skillsDirs / directories 的纪律）：开关状态、intent-lab 地址、
  * 渠道与模型选择、会话标题都从设置与 meta 现算，agent 进程只收数据。
@@ -932,6 +962,26 @@ export type AgentCommand =
        */
       backfill?: string[];
       /**
+       * 实验功能「电脑使用」的开关（settings.experimentalFeatures["computer-use"]）。
+       * **主进程从设置装配**（同 pdfCitations）。enabled 为 true 时 runtime 才注册沙箱工具组
+       * （computer_* / sandbox_*）；缺席 = 关——关着时模型根本看不到这些工具（不是执行时才拦）。
+       * allowNetwork 决定提示词里要不要讲「这次沙箱不能上网」。沙箱本身由用户在设置页启停。
+       */
+      computerUse?: ComputerUseTurnContext;
+      /**
+       * 本会话是否已被用户授权操作沙箱（SessionMeta.computerUseGrantedAt 的时刻；null / 缺席
+       * = 未授权）。**主进程每轮从 meta 装配**——agent 进程的账本只在首次见到这条会话时
+       * 拿它当种子，之后以内存账本为准（轮中授予 / 撤销要当场生效，不能被一次迟到的
+       * meta 读覆盖）。
+       */
+      computerUseGrantedAt?: number | null;
+      /**
+       * 本会话在 manual 档下记住的「这类动作不再问」（SessionMeta.computerUseRemembered）。
+       * 与授权同一套：**主进程每轮从 meta 装配**，agent 只在首次见到这条会话时播种；
+       * 轮中的记住 / 清除以 agent 内存账本为准。缺席 = 一类都没记住。
+       */
+      computerUseRemembered?: ComputerUseRememberedEntry[];
+      /**
        * 记忆系统的轮前召回开关。用户开轮时主进程恒带 true（记忆系统 2026-11-06 转正）——召回对根会话与子会话都生效
        * （子会话读不写，写入门禁在主进程的轮后路径）。缺席 = runtime 不问记忆。
        */
@@ -1062,6 +1112,17 @@ export type AgentCommand =
       intent?: IntentTurnContext;
       /** 待补记的 user 原话尾巴，语义同 submit */
       backfill?: string[];
+      /** 电脑使用：实验开关 + 沙箱出网，语义同 submit */
+      computerUse?: ComputerUseTurnContext;
+      /**
+       * 本会话是否已被用户授权操作沙箱（SessionMeta.computerUseGrantedAt 的时刻；null / 缺席
+       * = 未授权）。**主进程每轮从 meta 装配**——agent 进程的账本只在首次见到这条会话时
+       * 拿它当种子，之后以内存账本为准（轮中授予 / 撤销要当场生效，不能被一次迟到的
+       * meta 读覆盖）。
+       */
+      computerUseGrantedAt?: number | null;
+      /** 本会话记住的「这类不再问」，语义同 submit */
+      computerUseRemembered?: ComputerUseRememberedEntry[];
     }
   | {
       /**
@@ -1123,6 +1184,17 @@ export type AgentCommand =
       attributionLanguage?: Language;
       /** 实验功能「PDF 引用」的开关，语义同 submit */
       pdfCitations?: boolean;
+      /** 电脑使用：实验开关 + 沙箱出网，语义同 submit */
+      computerUse?: ComputerUseTurnContext;
+      /**
+       * 本会话是否已被用户授权操作沙箱（SessionMeta.computerUseGrantedAt 的时刻；null / 缺席
+       * = 未授权）。**主进程每轮从 meta 装配**——agent 进程的账本只在首次见到这条会话时
+       * 拿它当种子，之后以内存账本为准（轮中授予 / 撤销要当场生效，不能被一次迟到的
+       * meta 读覆盖）。
+       */
+      computerUseGrantedAt?: number | null;
+      /** 本会话记住的「这类不再问」，语义同 submit */
+      computerUseRemembered?: ComputerUseRememberedEntry[];
       /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
       planFirst?: boolean;
       /** 插件工具的注册开关，语义同 submit */
@@ -1192,6 +1264,8 @@ export type AgentCommand =
   | ({ type: "docResult"; requestId: string } & DocOutcome)
   /** 终端：主进程对 terminalRequest 的回执（browserResult 同款） */
   | ({ type: "terminalResult"; requestId: string } & TerminalToolOutcome)
+  /** computer use：主进程对 computerUseRequest 的回执（browserResult 同款） */
+  | ({ type: "computerUseResult"; requestId: string } & ComputerUseToolOutcome)
   /** 子会话：主进程对 delegateRequest 的回执（requestId 问答，readTaskResult 同款） */
   | ({ type: "delegateResult"; requestId: string } & DelegateOutcome)
   /** 派发参考：主进程对 modelCostsRequest 的回执（readTaskResult 同款 ok 双分支） */
@@ -1243,6 +1317,17 @@ export type AgentCommand =
       notice: string;
     }
   | { type: "setMode"; sessionId: string; mode: PermissionMode }
+  /**
+   * 撤销 / 授予本会话的电脑使用授权（用户点会话头的撤销、急停，或主进程在 meta 上改完
+   * 之后对齐 agent 账本）。**当前轮立即生效**：闸门每次调用现场读账本。
+   */
+  | { type: "setComputerUseGrant"; sessionId: string; granted: boolean }
+  /**
+   * 对齐本会话「这类不再问」的清单（主进程在 meta 上改完之后推给 agent）。
+   * **只有清空一个方向需要它**：记住是闸门自己的决定（先改账本、再发事件回主进程）；
+   * 撤销 / 急停时主进程直接落 meta，同时把这句推过来，避免会话空着时账本留着旧记忆。
+   */
+  | { type: "setComputerUseRemembered"; sessionId: string; remembered: ComputerUseRememberedEntry[] }
   /**
    * 会话内换模型（C-4）。provider 是主进程装配好的完整载荷（create 同款）。
    * **对正在跑的轮无效**：pi 在轮启动时快照模型，当前轮用旧模型跑完，
@@ -1483,6 +1568,14 @@ export type AgentEvent =
    */
   | { type: "browserRequest"; requestId: string; sessionId: string; request: BrowserToolRequest }
   /**
+   * computer use：agent 的沙箱像素工具请求（screenshot / click / type / key / scroll，
+   * 形状见 shared/computer-use.ts 的 ComputerUseToolRequest）。**沙箱在主进程**
+   * （SandboxController，browserRequest 同一条边界）：agent 进程只剩「工具定义 →
+   * requestId 问答」一层薄包装。沙箱是应用级一份（不按会话分），sessionId 只为信封一致。
+   * 回 computerUseResult。
+   */
+  | { type: "computerUseRequest"; requestId: string; sessionId: string; request: ComputerUseToolRequest }
+  /**
    * 演示文稿：agent 的 slides_export。PDF / PNG 要主进程开隐藏窗口，所以导出整体在主进程
    * （菜单点导出走同一个实现），agent 进程只剩工具定义 → requestId 问答。回 slidesResult。
    */
@@ -1705,6 +1798,24 @@ export type AgentEvent =
       requestId: string;
       toolName: string;
       input: unknown;
+      /**
+       * `"session"` = 会话授权卡（「本次会话允许 agent 操作沙箱？」），不是普通逐次审批；
+       * 缺席 / `"call"` = 普通审批（manual 档的逐次问，或破坏性动作的确认）。
+       * renderer 按它换卡面与按钮文案——「允许」在 session 卡上意味着整条会话放行。
+       */
+      scope?: "call" | "session";
+      /**
+       * D1/D2/D3 命中时的确认信息（B1 规则在 shared/computer-guard.ts）。有值时卡面必须
+       * 说清「将要按 alt+f4 / 将要输入 format d: / 同一坐标第 5 次」，否则用户只是在
+       * 盲点「允许」。命中不是拒绝：用户点头后照常执行。
+       */
+      risk?: ComputerUseRisk;
+      /**
+       * 这张卡上要不要摆「本会话内，这类动作不再问」的勾选项（manual 档的沙箱内写件）。
+       * **由闸门决定，不由 renderer 猜**：逸出件、破坏性确认（risk 非空）、已记住的类
+       * 都不摆——勾了也不会被采纳，摆出来就是骗人。
+       */
+      rememberable?: true;
     }
   /**
    * 回合级失败的标记（如重试耗尽）：true = 这一轮没跑成，renderer 把文案标注进
@@ -1712,6 +1823,27 @@ export type AgentEvent =
    * （建会话 / 压缩 / 分支对账拒绝），仍报在输入框上方的全局红字里。
    */
   | { type: "failed"; sessionId: string | null; message: string; turn?: true }
+  /**
+   * 电脑使用授权的变更（agent 闸门在用户点「本次会话允许」后发；主进程落 meta 并广播）。
+   * `at` = 允许的时刻，null = 撤销。renderer 用它更新会话头的授权标识。
+   */
+  | { type: "computerUseGrant"; sessionId: string; granted: boolean; at: number | null }
+  /**
+   * 「本会话内，这类动作不再问」的变更（闸门是唯一知道用户勾了什么的那一层）。
+   * 主进程据此落 meta（下一轮开机的种子）；`remembered` 是变更后的全量清单，
+   * **空数组 = 清空**（用户拒绝 / 撤销 / 急停）。事件也要广播，其它视图无需再读盘。
+   */
+  | {
+      type: "computerUseRemembered";
+      sessionId: string;
+      remembered: ComputerUseRememberedEntry[];
+    }
+  /**
+   * 急停（`Control+Alt+Shift+Escape`）：主进程广播，不是 agent 进程发的（`skillsChanged`
+   * 同款：主进程借同一条广播通道）。收到它就复位授权标识、给一条「已急停」提示。
+   * **沙箱不关**——现场留着给用户看。
+   */
+  | ({ type: "computerUseEmergencyStop" } & EmergencyStopBroadcast)
   /* ---------- 意图系统（实验功能 intent-system）的三条事件 ---------- */
   /**
    * /recall 流式事件的原样透传（心跳除外）：renderer 用 applyRecallEvent 归约成

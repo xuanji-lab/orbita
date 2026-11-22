@@ -23,7 +23,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { AgentCommand, AgentEvent, ProviderSecrets } from "../shared/agent-ipc.ts";
 import type { MemoryRecallOutcome } from "../shared/memory.ts";
-import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
+import type { ComputerUseRememberedEntry, PermissionAnswer, PermissionMode } from "../shared/permission.ts";
+import { noteRememberedClass } from "./computer-remember.ts";
+import { permissionEvent, type PermissionEvent } from "./permission-event.ts";
 import {
   registerAndResolveModel,
   toBuiltinProvider,
@@ -66,6 +68,8 @@ import {
   type WebScanResult,
 } from "./web-artifacts.ts";
 import { injectUserContext } from "./user-context.ts";
+import { gitAttributionGuideline } from "./git-attribution.ts";
+import { computerUseNetworkGuideline } from "./computer-network.ts";
 import { joinSystemPrompt, orbitaSystemSegments, type PromptSegment } from "./system-prompt.ts";
 import { diffFingerprints, promptFingerprints, stabilityLogLine } from "./prompt-stability.ts";
 import {
@@ -90,6 +94,8 @@ import { createStoreTools } from "./store-tools.ts";
 import { createMemoryTools, MEMORY_TOOL_NAMES } from "./memory-tools.ts";
 import { createTaskTools } from "./task-tools.ts";
 import { createBrowserTools } from "./browser-tools.ts";
+import { COMPUTER_USE_TOOL_NAMES, createComputerUseTools } from "./computer-tools.ts";
+import { createSandboxBrowserTools, SANDBOX_BROWSER_TOOL_NAMES } from "./sandbox-tools.ts";
 import { createTerminalTools, TERMINAL_TOOL_NAMES } from "./terminal-tools.ts";
 import {
   applyRecallEvent,
@@ -689,6 +695,21 @@ interface LedgerNote {
   echoed: Set<string>;
   /** 标题在途标记：连发两条消息也只生成一次，失败后下一条自然重试 */
   titleInFlight: boolean;
+  /**
+   * 电脑使用授权的本进程账本。**undefined = 还没从盘上播过种**（这条会话本进程首次开机），
+   * `"granted"` = 用户在会话卡 / 会话头里同意过，`"revoked"` = 撤销 / 急停过。
+   *
+   * 为什么不用布尔：gate 要区分「从未问过」（manual 档常态，每次问就行）与「被撤销」
+   * （必须直接拒，不再弹卡）。播种只在首次见到这条会话时做——轮中的授予 / 撤销要
+   * 当场生效，不能被一次迟到的 meta 读覆盖。
+   */
+  computerUseGrant?: "granted" | "denied" | "revoked";
+  /**
+   * 本会话在 manual 档下记住的「这类动作不再问」（会话级，落 SessionMeta）。
+   * **undefined = 还没从盘上播过种**（与授权同一个播种窗口）；空数组 = 明确忘光了。
+   * 只记「沙箱内写件」这一类（逸出件永远逐次问，见 shared/permission.ts）。
+   */
+  computerUseRemembered?: ComputerUseRememberedEntry[];
   /** 标题调用（C-3）的鉴权面——最近一次装配进来的 provider key 与自定义头 */
   apiKey: string;
   headers?: Record<string, string>;
@@ -796,6 +817,8 @@ function extraToolNames(
   memoryTools: boolean,
   automationTools: boolean,
   pluginTools: boolean,
+  /** 电脑使用开着：这几件工具只在开着时注册，所以也只在开着时列给模型 */
+  computerUse: boolean,
 ): string[] {
   return [
     ...mcpHub.toolsFor(workspaceId ?? "").map((tool) => tool.name),
@@ -807,6 +830,7 @@ function extraToolNames(
     ...(memoryTools ? MEMORY_TOOL_NAMES : []),
     ...(automationTools ? AUTOMATION_TOOL_NAMES : []),
     ...(pluginTools ? PLUGIN_TOOL_NAMES : []),
+    ...(computerUse ? [...COMPUTER_USE_TOOL_NAMES, ...SANDBOX_BROWSER_TOOL_NAMES] : []),
   ];
 }
 
@@ -838,17 +862,27 @@ function notePromptStability(
  * 否则那一轮永远不会收尾（interrupt 还会卡在 `await lifecycle` 上）。
  */
 function askPermission(sessionId: string) {
-  return (request: { toolCallId: string; toolName: string; input: unknown }) =>
+  // 入参就是闸门（src/agent/permission.ts）传来的那份：scope / risk 缺席 = 普通逐次审批。
+  // 类型直接取契约里那条事件，少抄一份字段定义，也让契约加字段时这里编译不过。
+  return (request: { toolCallId: string } & Omit<PermissionEvent, "type" | "sessionId" | "requestId">) =>
     new Promise<PermissionAnswer>((resolve) => {
       const requestId = `${sessionId}:${request.toolCallId}`;
       pendingPermissions.set(requestId, resolve);
-      send({
-        type: "permission",
-        sessionId,
-        requestId,
-        toolName: request.toolName,
-        input: request.input,
-      });
+      // 拼事件走 permissionEvent：scope / risk 从这里到 renderer 一路都不能丢
+      // （丢了 session 卡会退化成逐次卡，而它实际放行整条会话）
+      // 可选字段一个都不能漏（2026-11-13 真机验收：rememberable 半路丢了，卡上就没有勾选项）——
+      // 由 permissionEvent 统一挑字段，这里只把闸门给的那一份原样递过去。
+      send(
+        permissionEvent({
+          sessionId,
+          requestId,
+          toolName: request.toolName,
+          input: request.input,
+          scope: request.scope,
+          risk: request.risk,
+          rememberable: request.rememberable,
+        }),
+      );
     });
 }
 
@@ -949,6 +983,15 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   const provider = withOpencodeSession(command.provider, command.sessionId);
   const note = ledgerNote(command.sessionId);
   note.mode = command.mode;
+  // 电脑使用授权：**只在首次见到这条会话时**从盘上播种（进程重启后重建账本）。
+  // 轮中的授予 / 撤销已经写进账本，每轮拿 meta 覆盖会让撤销晚一轮生效。
+  if (note.computerUseGrant === undefined && command.computerUseGrantedAt != null) {
+    note.computerUseGrant = "granted";
+  }
+  // 「这类动作不再问」同样只在首次见到这条会话时播种（轮中的记住 / 清除以账本为准）。
+  if (note.computerUseRemembered === undefined && command.computerUseRemembered !== undefined) {
+    note.computerUseRemembered = [...command.computerUseRemembered];
+  }
   note.apiKey = provider.apiKey;
   if (provider.headers === undefined) delete note.headers;
   else note.headers = provider.headers;
@@ -989,11 +1032,70 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   // **模式读账本**：跨轮的 mode 在 ledger，不在 pi 对象上——对象这轮结束就销毁了。
   // **会话文件不可变**：protectedPaths 由主进程随每轮发，闸门在档位判定之前拦。
   const currentMode = () => ledgerNote(command.sessionId).mode;
+  /**
+   * 电脑使用护栏（PR4）的三个外部事实：
+   *   - 授权状态读账本（跨轮且轮中即时）；
+   *   - 用户允许后写账本 + 回主进程落 meta（`computerUseGrant` 事件）；
+   *   - 硬限中断走现成的 abort 链（与「停止」同一套：abortCycle + 结清挂起的审批）。
+   *     **不关沙箱**：保留现场是刻意的（关沙箱是另一个动作）。
+   */
+  const setComputerUseGrant = (granted: boolean): void => {
+    ledgerNote(command.sessionId).computerUseGrant = granted ? "granted" : "revoked";
+    send({
+      type: "computerUseGrant",
+      sessionId: command.sessionId,
+      granted,
+      at: granted ? Date.now() : null,
+    });
+  };
+  /**
+   * 记 / 忘「这类动作不再问」。**先改内存账本、再报主进程**：当前轮的下一次调用要
+   * 立刻按新值判；落盘失败不改变「这一轮已经记住了」的事实（与授权同一条顺序）。
+   * 事件带变更后的全量清单，主进程原样写进 meta——审计要看得出「记住了什么」。
+   */
+  const setComputerUseRemembered = (next: ComputerUseRememberedEntry[]): void => {
+    ledgerNote(command.sessionId).computerUseRemembered = next;
+    send({ type: "computerUseRemembered", sessionId: command.sessionId, remembered: next });
+  };
   const gate = createToolCallGate(
     currentMode,
     askPermission(command.sessionId),
     command.protectedPaths,
     command.cwd,
+    {
+      grantState: () => ledgerNote(command.sessionId).computerUseGrant ?? "none",
+      grant: () => setComputerUseGrant(true),
+      // 拒绝会话卡：只记本进程账本（不落 meta），同一会话后续不再弹同一张卡
+      deny: () => {
+        ledgerNote(command.sessionId).computerUseGrant = "denied";
+      },
+      abort: (reason: string) => {
+        abortCycle(running, command.sessionId);
+        settlePendingPermissions(command.sessionId);
+        settleIntentAsks(command.sessionId);
+        // 中断原因进日志：用户看到的是「轮突然停了」，得有一条能对上的记录
+        console.warn(`[computer-use] 预算硬限中断 ${command.sessionId}: ${reason}`);
+      },
+      // 「本会话内，这类动作不再问」（manual 档的勾选项）。三个回调都直接读写账本：
+      // gate 每轮重建，记忆必须跨轮——它属于会话，不属于这一轮。
+      rememberedClasses: () =>
+        (ledgerNote(command.sessionId).computerUseRemembered ?? []).map((entry) => entry.class),
+      remember: (cls, toolName) => {
+        // 让紧接着这一次执行的工具结果带上 rememberedClass（审计落点，见 computer-remember.ts）
+        noteRememberedClass(command.sessionId, cls);
+        const current = ledgerNote(command.sessionId).computerUseRemembered ?? [];
+        // 同一类只留最新一条（重复批准不会堆记录）；顺带把时间写进去，事后可查。
+        const next: ComputerUseRememberedEntry[] = [
+          ...current.filter((entry) => entry.class !== cls),
+          { class: cls, toolName, at: Date.now() },
+        ];
+        setComputerUseRemembered(next);
+      },
+      forgetRemembered: () => {
+        if ((ledgerNote(command.sessionId).computerUseRemembered ?? []).length === 0) return;
+        setComputerUseRemembered([]);
+      },
+    },
   );
   // 计划（update_plan）的「停下来对齐」：闸门里 update_plan 判定要停，本轮其余工具调用就被拦下，
   // 让 agent 回头用正文说话（plan-tools.ts 头注释）；下一轮开轮时复位
@@ -1091,7 +1193,14 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
               // 提示词逐字节相同」这类断言可以直接对着它测，指纹记账也吃同一份段名单。
               // 开轮目录清单同样逐轮重讲：工作区挂新目录、换工作区，下一轮就生效。
               // 父子会话行不进系统提示词（本 PR）：对方工作台由 delegate 回执与通道信封告知。
-              const extra = extraToolNames(role, command.workspaceId, memoryTools, automationTools, pluginTools);
+              const extra = extraToolNames(
+                role,
+                command.workspaceId,
+                memoryTools,
+                automationTools,
+                pluginTools,
+                command.computerUse?.enabled === true,
+              );
               const segments = orbitaSystemSegments({
                 piBase: adaptSystemPrompt(event.systemPrompt),
                 mode: currentMode(),
@@ -1107,6 +1216,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                 intentGuideline: "intent" in command && command.intent !== undefined,
                 memoryToolsGuideline: memoryTools,
                 longTaskAutomationGuideline: automationTools,
+                computerUse: command.computerUse,
               });
               notePromptStability(command.sessionId, segments, [...ENABLED_BUILTIN_TOOLS, ...extra]);
               // 上下文面板的「规则与说明」组：每轮推一次最新清单。pi 基底单独计（它的估算
@@ -1398,6 +1508,18 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     ...(pluginTools ? createPluginTools(requestBroker, command.sessionId, currentMode) : []),
     ...createTaskTools(requestBroker, command.sessionId),
     ...createBrowserTools(requestBroker, command.sessionId),
+    // computer use（PR2）：Windows 沙箱桌面上的像素工具组（截图 / 点击 / 打字 / 按键 /
+    // 滚动）。**挂在实验功能「电脑使用」开关后面**（缺席 = 关）：关着时工具根本不注册，
+    // 模型连它们的名字都看不到——比“执行时再拒绝”诚实（同 cite_pdf 的纪律）。
+    // 沙箱本身由用户在设置页启停，工具只经 computerUseRequest 下发。
+    ...(command.computerUse?.enabled === true ? createComputerUseTools(requestBroker, command.sessionId) : []),
+    // sandbox_*（PR3）：沙箱里那份 Edge 的 DOM 级工具（navigate / observe / click / type /
+    // extract / wait / screenshot / upload / download）。与像素组同一个实验开关——它们
+    // 操作的是同一个沙箱，分开两个开关只会让模型看到半套工具。写动作的 element 字段是
+    // 给 PR4 确认卡用的（审批卡上给用户看一句人话，而不是一个选择器）。
+    ...(command.computerUse?.enabled === true
+      ? createSandboxBrowserTools(requestBroker, command.sessionId, command.computerUse.allowNetwork)
+      : []),
     // 演示文稿（./slides-tools.ts）：slides_create / read / write / edit / insert_image / export。
     // 文件读写在本进程直做（路径限工作区 + 附加目录），只有导出过 broker 找主进程
     ...createSlidesTools(requestBroker, command.sessionId, {
@@ -2241,6 +2363,18 @@ async function handle(command: AgentCommand): Promise<void> {
     ledgerNote(command.sessionId).mode = command.mode;
     return;
   }
+  if (command.type === "setComputerUseGrant") {
+    // 会话头的撤销 / 重新授权、急停：主进程已经落了 meta，这里只对齐账本。
+    // **不 send 回主进程**（那会让主进程自己写自己），广播由主进程的 IPC handler 负责。
+    ledgerNote(command.sessionId).computerUseGrant = command.granted ? "granted" : "revoked";
+    return;
+  }
+  if (command.type === "setComputerUseRemembered") {
+    // 主进程在 meta 上改完「这类动作不再问」之后对齐账本（目前只有清空这一个方向）。
+    // 不 send：理由同 setComputerUseGrant。
+    ledgerNote(command.sessionId).computerUseRemembered = [...command.remembered];
+    return;
+  }
   if (command.type === "setModel") {
     // 会话内换模型（C-4）。fire-and-forget：成功经 `model` 事件、失败经 `failed`
     // 事件回传，主进程与 renderer 都靠事件对齐，这一跳不等结果。
@@ -2341,6 +2475,11 @@ async function handle(command: AgentCommand): Promise<void> {
   if (command.type === "terminalResult") {
     // 终端工具的回执：形状即契约（ok 双分支），原样结掉在途 promise。
     // 主进程那边任何路径都回执（agent-requests.ts），这里不做二次加工
+    requestBroker.resolve(command.requestId, command);
+    return;
+  }
+  if (command.type === "computerUseResult") {
+    // computer use 工具的回执：同 terminalResult，形状即契约（ok 双分支，截图多一个 shot）
     requestBroker.resolve(command.requestId, command);
     return;
   }

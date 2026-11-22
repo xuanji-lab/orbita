@@ -51,6 +51,15 @@ export class SettingsStore {
       patch.experimentalFeatures === undefined
         ? current.experimentalFeatures
         : { ...current.experimentalFeatures, ...patch.experimentalFeatures };
+    /**
+     * 电脑使用同款按键合并（2026-10 第二项 allowedApps 落地时补上；之前只有 allowNetwork
+     * 一项，整对象回写碰不到人）。现在设置页只发 {allowNetwork}，不合并的话手写的
+     * allowedApps 会被一次开关点击抹掉——与 drawer 的竞态是同一种错。
+     */
+    const computerUse =
+      patch.computerUse === undefined
+        ? current.computerUse
+        : { ...current.computerUse, ...patch.computerUse };
     // 模型服务页的界面记忆同款按键合并：切卡片尺寸只发 cardSize，不该把「仅显示已添加」抹掉
     const providersPage =
       patch.providersPage === undefined
@@ -67,6 +76,7 @@ export class SettingsStore {
       drawer,
       lastUsed,
       experimentalFeatures,
+      computerUse,
       providersPage,
       pluginsPage,
       vector,

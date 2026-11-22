@@ -9,6 +9,11 @@ import {
   COMPACTION_DEFAULT,
   COMPACTION_PERCENT,
   effectiveIntentSettings,
+  effectiveAllowNetwork,
+  effectiveGuestAllowExe,
+  effectiveGuestBrowser,
+  effectiveComputerUseBackend,
+  parseComputerUse,
   DEFAULT_SETTINGS,
   DRAWER_WIDTH,
   parseSettings,
@@ -17,6 +22,12 @@ import {
   SIDEBAR_WIDTH_MIN,
   THEME_PREFERENCES,
 } from "./settings.ts";
+import {
+  COMPUTER_USE_DEFAULT_ALLOW_NETWORK,
+  COMPUTER_USE_DEFAULT_BACKEND,
+  COMPUTER_USE_DEFAULT_BROWSER,
+  COMPUTER_USE_BROWSER_CHOICES,
+} from "./computer-use.ts";
 
 describe("parseSettings", () => {
   it("四档主题都认（含 black 手动档）", () => {
@@ -629,6 +640,11 @@ describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
         .experimentalFeatures,
       { "paper-themes": true, "pdf-citations": false },
     );
+    // computer-use（电脑使用页的开关，2026-10-12 挂进实验区）同表同规矩：布尔记账、缺席 = 关
+    deepStrictEqual(
+      parseSettings({ experimentalFeatures: { "computer-use": true } }).experimentalFeatures,
+      { "computer-use": true },
+    );
     deepStrictEqual(
       parseSettings({ experimentalFeatures: { "made-up": true } }).experimentalFeatures,
       undefined,
@@ -734,6 +750,130 @@ describe("parseSettings 的 intent（实验功能 intent-system）", () => {
   });
 });
 
+describe("parseSettings 的 computerUse（沙箱出网开关）", () => {
+  it("缺席 = 不落键（effectiveAllowNetwork 兜 shared 的缺省常量，老 settings.json 行为不变）", () => {
+    deepStrictEqual(parseSettings({}).computerUse, undefined);
+    deepStrictEqual(parseSettings({ theme: "graphite", computerUse: { other: 1 } }).computerUse, undefined);
+    // **不写字面 true**：缺省值只有 shared/computer-use.ts 一处来源（渲染层与主进程控制器同源），
+    // 改默认时这条断言跟着变，而不是在这里再硬编码一遍把漂移挡住
+    deepStrictEqual(effectiveAllowNetwork(undefined), COMPUTER_USE_DEFAULT_ALLOW_NETWORK);
+    deepStrictEqual(effectiveAllowNetwork({}), COMPUTER_USE_DEFAULT_ALLOW_NETWORK);
+  });
+
+  it("合法值原样保留，两个方向都认", () => {
+    deepStrictEqual(parseSettings({ computerUse: { allowNetwork: false } }).computerUse, { allowNetwork: false });
+    deepStrictEqual(parseSettings({ computerUse: { allowNetwork: true } }).computerUse, { allowNetwork: true });
+    deepStrictEqual(effectiveAllowNetwork({ computerUse: { allowNetwork: false } }), false);
+  });
+
+  it("类型不对当缺席：手改出的字符串 / 数字不能让沙箱悄悄断网", () => {
+    // "false" 在 JS 里是真值：当真值用会让「关掉」变成「开着」，当假值用会让手滑的字符串直接断网。
+    // 这条纪律与 gitAttribution 一样——只认布尔
+    deepStrictEqual(parseSettings({ computerUse: { allowNetwork: "false" } }).computerUse, undefined);
+    deepStrictEqual(parseSettings({ computerUse: { allowNetwork: 0 } }).computerUse, undefined);
+    deepStrictEqual(parseSettings({ computerUse: "off" }).computerUse, undefined);
+    deepStrictEqual(parseSettings({ computerUse: null }).computerUse, undefined);
+    deepStrictEqual(effectiveAllowNetwork({ computerUse: undefined }), COMPUTER_USE_DEFAULT_ALLOW_NETWORK);
+  });
+
+  it("只认识的键留下，同一个子对象里的未知字段丢掉", () => {
+    deepStrictEqual(parseComputerUse({ allowNetwork: true, proxy: "http://x" }), { allowNetwork: true });
+  });
+});
+
+describe("parseSettings 的 computerUse.allowedApps（应用级准入白名单）", () => {
+  const DEFAULTS = ["msedge.exe", "chrome.exe", "brave.exe", "chromium.exe"];
+
+  it("缺席 = 不落键；生效值只拿内置默认（四个浏览器 exe）", () => {
+    deepStrictEqual(parseSettings({}).computerUse, undefined);
+    deepStrictEqual(effectiveGuestAllowExe(undefined), DEFAULTS);
+    deepStrictEqual(effectiveGuestAllowExe({ computerUse: {} }), DEFAULTS);
+    deepStrictEqual(effectiveGuestAllowExe({ computerUse: { allowNetwork: false } }), DEFAULTS);
+  });
+
+  it("规范化：去空白、取路径末段、小写、去重；用户项追加在内置默认之后", () => {
+    deepStrictEqual(
+      parseSettings({ computerUse: { allowedApps: ["  NotePad.EXE ", "C:\\Windows\\System32\\calc.exe", "notepad.exe"] } })
+        .computerUse,
+      { allowedApps: ["notepad.exe", "calc.exe"] },
+    );
+    deepStrictEqual(
+      effectiveGuestAllowExe({ computerUse: { allowedApps: ["notepad.exe"] } }),
+      [...DEFAULTS, "notepad.exe"],
+    );
+  });
+
+  it("坏值丢掉：不带 .exe 的名字、非字符串、空表都不落键（空表 = 只用内置默认）", () => {
+    deepStrictEqual(parseSettings({ computerUse: { allowedApps: ["notepad", 42, "", null] } }).computerUse, undefined);
+    deepStrictEqual(parseSettings({ computerUse: { allowedApps: [] } }).computerUse, undefined);
+    deepStrictEqual(parseSettings({ computerUse: { allowedApps: "notepad.exe" } }).computerUse, undefined);
+    deepStrictEqual(parseSettings({ computerUse: { allowedApps: [".exe"] } }).computerUse, undefined);
+  });
+
+  it("两键可以只写一个：只写白名单时出网仍按缺省（允许），两处都不留谎", () => {
+    deepStrictEqual(parseComputerUse({ allowedApps: ["notepad.exe"] }), { allowedApps: ["notepad.exe"] });
+    deepStrictEqual(parseComputerUse({ allowNetwork: false }), { allowNetwork: false });
+    deepStrictEqual(effectiveAllowNetwork({ computerUse: { allowedApps: ["notepad.exe"] } }), COMPUTER_USE_DEFAULT_ALLOW_NETWORK);
+    deepStrictEqual(parseComputerUse({ allowedApps: ["notepad.exe"], proxy: "http://x" }), { allowedApps: ["notepad.exe"] });
+  });
+});
+
+describe("parseSettings 的 computerUse.browser（沙箱里用哪个浏览器）", () => {
+  it("缺席 = 不落键；生效值按缺省 edge（沙箱预装、零准备成本）", () => {
+    deepStrictEqual(COMPUTER_USE_DEFAULT_BROWSER, "edge");
+    deepStrictEqual(parseSettings({}).computerUse, undefined);
+    deepStrictEqual(effectiveGuestBrowser(undefined), "edge");
+    deepStrictEqual(effectiveGuestBrowser({ computerUse: {} }), "edge");
+    deepStrictEqual(effectiveGuestBrowser({ computerUse: { allowNetwork: false } }), "edge");
+  });
+
+  it("五个合法值原样保留（edge / chrome / brave / chromium / auto）", () => {
+    for (const browser of COMPUTER_USE_BROWSER_CHOICES) {
+      deepStrictEqual(parseSettings({ computerUse: { browser } }).computerUse, { browser });
+      deepStrictEqual(effectiveGuestBrowser({ computerUse: { browser } }), browser);
+    }
+  });
+
+  it("大小写 / 首尾空白宽容：手改成 \"Chrome\" 不该落回 Edge", () => {
+    deepStrictEqual(parseComputerUse({ browser: " Chrome " }), { browser: "chrome" });
+    deepStrictEqual(parseComputerUse({ browser: "AUTO" }), { browser: "auto" });
+  });
+
+  it("不认识的字符串落回 edge 并留一行日志（不能让一个拼错把整个功能挡死）", () => {
+    const warnings: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    };
+    try {
+      deepStrictEqual(parseComputerUse({ browser: "firefox" }), { browser: "edge" });
+      // 绝对路径也不认：自定义路径只在桥的探测里当后门，设置页只给五个选项
+      deepStrictEqual(parseComputerUse({ browser: "C:\\Program Files\\Google\\Chrome\\chrome.exe" }), { browser: "edge" });
+    } finally {
+      console.warn = original;
+    }
+    deepStrictEqual(warnings.length, 2);
+    ok(warnings[0]?.includes("firefox"), warnings[0]);
+    ok(warnings[0]?.includes("edge"), warnings[0]);
+  });
+
+  it("非字符串当缺席（数字 / 布尔 / null 都不落键）", () => {
+    deepStrictEqual(parseComputerUse({ browser: 1 }), undefined);
+    deepStrictEqual(parseComputerUse({ browser: true }), undefined);
+    deepStrictEqual(parseComputerUse({ browser: null }), undefined);
+    deepStrictEqual(parseComputerUse({ browser: ["chrome"] }), undefined);
+  });
+
+  it("三个键可以只写一个：写浏览器不冲掉别的键的解析（落盘层的合并在 store 里）", () => {
+    deepStrictEqual(parseComputerUse({ browser: "chrome" }), { browser: "chrome" });
+    deepStrictEqual(
+      parseComputerUse({ allowNetwork: false, allowedApps: ["notepad.exe"], browser: "brave", proxy: "x" }),
+      { allowNetwork: false, allowedApps: ["notepad.exe"], browser: "brave" },
+    );
+    deepStrictEqual(effectiveGuestBrowser({ computerUse: { allowedApps: ["notepad.exe"] } }), "edge");
+  });
+});
+
 describe("parseSettings 的 docPanelWidth", () => {
   it("≥ 地板的数收下，过小 / 非数丢掉", () => {
     deepStrictEqual(parseSettings({ docPanelWidth: 640.4 }).docPanelWidth, 640);
@@ -748,5 +888,30 @@ describe("parseSettings 的 docPaper", () => {
     deepStrictEqual(parseSettings({ docPaper: "neon" }).docPaper, undefined);
     deepStrictEqual(parseSettings({ docPaper: 3 }).docPaper, undefined);
     deepStrictEqual(parseSettings({}).docPaper, undefined);
+  });
+});
+
+describe("parseSettings 的 computerUse.backend（隔离后端）", () => {
+  it("两个合法值都认；缺席 = 不落键，effectiveComputerUseBackend 兜 shared 的缺省（wsb）", () => {
+    deepStrictEqual(parseSettings({ computerUse: { backend: "wsb" } }).computerUse, { backend: "wsb" });
+    deepStrictEqual(parseSettings({ computerUse: { backend: "isolation-session" } }).computerUse, {
+      backend: "isolation-session",
+    });
+    deepStrictEqual(parseComputerUse({}), undefined);
+    deepStrictEqual(effectiveComputerUseBackend(undefined), COMPUTER_USE_DEFAULT_BACKEND);
+    deepStrictEqual(effectiveComputerUseBackend({ computerUse: {} }), "wsb");
+  });
+
+  it("不认识的值当没设过（不猜成另一个档位：两个档位是不同的隔离边界）", () => {
+    deepStrictEqual(parseComputerUse({ backend: "l3" }), undefined);
+    deepStrictEqual(parseComputerUse({ backend: 1 }), undefined);
+    deepStrictEqual(effectiveComputerUseBackend({ computerUse: { backend: "l3" as never } }), "wsb");
+  });
+
+  it("与其它键同住一个子对象时各自独立（只发一个键的补丁不冲掉别的）", () => {
+    deepStrictEqual(parseComputerUse({ backend: "isolation-session", browser: "chrome" }), {
+      browser: "chrome",
+      backend: "isolation-session",
+    });
   });
 });

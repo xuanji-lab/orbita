@@ -20,6 +20,7 @@ import {
   type SidebarSelection,
 } from "./sidebar-selection.ts";
 import { api } from "../api";
+import { useExperimentalFeature } from "../experimental.ts";
 import type { ChatSession } from "../features/chat/useChatSession";
 import { childSessions, isSessionDone, rootSessions, type Carryover, type SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
@@ -196,6 +197,8 @@ export function Sidebar(props: {
 }) {
   const t = useT();
   const { session } = props;
+  // 电脑使用开关：关着时设置导航不列这一页（内容侧的门在 SettingsView 里，两处同源）
+  const computerUse = useExperimentalFeature("computer-use");
   // 每分钟重渲染一次：行尾「刚刚 / N 分钟」与时间范围都在渲染时按 Date.now() 现算（理由见 use-minute-tick.ts）
   useMinuteTick();
   const asideRef = useRef<HTMLElement | null>(null);
@@ -841,7 +844,7 @@ export function Sidebar(props: {
         ) : settingsOpen ? (
           <>
             <NodeLabel>{t.common.settings}</NodeLabel>
-            {SETTINGS_TABS.map((tab) => (
+            {SETTINGS_TABS.filter((tab) => tab.id !== "computer-use" || computerUse).map((tab) => (
               <NavRow
                 key={tab.id}
                 icon={tab.icon}

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PermissionAnswer } from "@shared/permission";
 import { Icon } from "../../shell/Icon";
+import { approvalCardShape } from "./approval-card.ts";
 import type { PendingApproval } from "./session-states.ts";
 import { useT } from "../../locale.ts";
 
@@ -21,23 +22,50 @@ export function ApprovalBar(props: {
   const t = useT();
   const [edited, setEdited] = useState(() => stringify(props.approval.input));
   const [editing, setEditing] = useState(false);
+  /**
+   * 「本会话内，这类动作不再问」的勾选（manual 档的沙箱内写件）。**默认不勾**——
+   * manual 的语义就是每次问，记住是用户主动多走一步，不是默认替他把这个决定做掉。
+   */
+  const [remember, setRemember] = useState(false);
   const allowRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     setEdited(stringify(props.approval.input));
     setEditing(false);
+    setRemember(false);
     allowRef.current?.focus();
   }, [props.approval.requestId, props.approval.input]);
 
   const answer = (value: PermissionAnswer) => props.onAnswer(props.approval.requestId, value);
 
+  /**
+   * 卡片的三种形态（2026-10 computer use PR4）：
+   *   - session：会话授权卡（允许 = 整条会话放行，不是这一次）
+   *   - risk：破坏性动作确认（D1 组合键 / D2 破坏词 / D3 同点连点）——保留入参预览，
+   *     「仍要执行」= 用户看过之后照常执行
+   *   - 其余：普通逐次审批（manual 档）
+   * 形态判定在 approval-card.ts（纯函数，带测试）——会话卡优先，且不摆「改参数」。
+   */
+  const shape = approvalCardShape(props.approval);
+  const risk = props.approval.risk;
+  const riskText =
+    risk === undefined
+      ? null
+      : risk.rule === "key"
+        ? t.approval.riskKeys(risk.detail)
+        : risk.rule === "command"
+          ? t.approval.riskCommand(risk.detail)
+          : t.approval.riskRepeat(Number(risk.detail));
+
   const allow = () => {
-    if (!editing) return answer({ behavior: "allow" });
+    // remember 只在这张卡真的摆了勾选项时才会被带上（闸门也会再判一次能不能采纳）
+    const rememberFlag = props.approval.rememberable === true && remember ? { remember: true as const } : {};
+    if (!editing) return answer({ behavior: "allow", ...rememberFlag });
     try {
-      answer({ behavior: "allow", input: JSON.parse(edited) as unknown });
+      answer({ behavior: "allow", input: JSON.parse(edited) as unknown, ...rememberFlag });
     } catch {
       // 改坏了就按原样放行，总比卡住强；解析失败时用户还能自己改回来
-      answer({ behavior: "allow" });
+      answer({ behavior: "allow", ...rememberFlag });
     }
   };
 
@@ -62,7 +90,11 @@ export function ApprovalBar(props: {
           <Icon name="shield-check" size={14} />
         </span>
         <strong style={{ fontSize: "var(--font-size-base)", fontWeight: 600 }}>
-          {t.approval.run(props.approval.toolName)}
+          {shape.kind === "session"
+            ? t.approval.sessionTitle
+            : riskText !== null
+              ? t.approval.riskTitle
+              : t.approval.run(props.approval.toolName)}
         </strong>
         <span
           style={{
@@ -75,6 +107,20 @@ export function ApprovalBar(props: {
           {t.approval.keys}
         </span>
       </div>
+
+      {shape.kind === "session" && (
+        <p style={{ margin: 0, fontSize: "var(--font-size-sm)", lineHeight: "var(--line-height-ui)", color: "var(--color-text-secondary)" }}>
+          {t.approval.sessionBody}
+        </p>
+      )}
+      {riskText !== null && (
+        <div style={{ display: "grid", gap: "var(--space-1)" }}>
+          <strong style={{ fontSize: "var(--font-size-sm)", fontWeight: 600, color: "var(--color-text-primary)" }}>
+            {riskText}
+          </strong>
+          <span style={{ fontSize: "var(--font-size-xs)", color: "var(--color-text-tertiary)" }}>{t.approval.riskHint}</span>
+        </div>
+      )}
 
       {editing ? (
         <textarea
@@ -93,20 +139,48 @@ export function ApprovalBar(props: {
         <pre style={{ ...codeStyle, margin: 0, overflowX: "auto" }}>{edited}</pre>
       )}
 
+      {/* 记住这一类：只在闸门说「能兑现」时出现（manual 档的沙箱内写件、无破坏性风险）。
+          逸出件与破坏性确认不摆——勾了也不会被采纳，摆出来就是骗人。 */}
+      {props.approval.rememberable === true && (
+        <label
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "var(--space-2)",
+            fontSize: "var(--font-size-sm)",
+            color: "var(--color-text-secondary)",
+            cursor: "pointer",
+            userSelect: "none",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={remember}
+            onChange={(event) => setRemember(event.target.checked)}
+            style={{ accentColor: "var(--color-accent)", width: 14, height: 14, margin: 0 }}
+          />
+          {t.approval.rememberClass}
+        </label>
+      )}
+
       <div style={{ display: "flex", gap: "var(--space-2)" }}>
         <button ref={allowRef} type="button" onClick={allow} style={{ ...buttonStyle, ...primaryStyle }}>
-          {t.approval.allow}
+          {shape.kind === "session" ? t.approval.allowSession : shape.kind === "risk" ? t.approval.allowRisk : t.approval.allow}
         </button>
         <button
           type="button"
           onClick={() => answer({ behavior: "deny", message: "Denied by the user." })}
           style={buttonStyle}
         >
-          {t.approval.deny}
+          {shape.kind === "risk" ? t.approval.cancelRisk : t.approval.deny}
         </button>
-        <button type="button" onClick={() => setEditing(!editing)} style={buttonStyle}>
-          {editing ? t.approval.stopEditing : t.approval.editInput}
-        </button>
+        {/* 会话授权卡不提供「改参数」：允许的是整条会话，改这一步的入参没有意义
+            （闸门也不会采纳这张卡上的编辑）。判定在 approval-card.ts 的 canEditArgs。 */}
+        {shape.canEditArgs && (
+          <button type="button" onClick={() => setEditing(!editing)} style={buttonStyle}>
+            {editing ? t.approval.stopEditing : t.approval.editInput}
+          </button>
+        )}
       </div>
     </section>
   );

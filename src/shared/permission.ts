@@ -213,6 +213,181 @@ export function isBrowserReadTool(toolName: string): boolean {
 }
 
 /**
+ * computer use 的只读件：`computer_screenshot`（沙箱桌面）+ `sandbox_observe` /
+ * `sandbox_extract` / `sandbox_screenshot`（沙箱里的网页）。三档一律放行。
+ *
+ * 它们只向沙箱要图 / 要文本，不往沙箱里送任何输入，也不碰用户的文件与 shell；plan 档下
+ * 「先看一眼屏幕再规划」本就是规划的一部分，manual 档下看一眼也弹审批只会让人烦。
+ * sandbox_wait 也在这里：它只是等某个选择器出现（或等一段时间），不改变页面、不注入
+ * 输入；plan 档下「等页面加载完再看」同样是只读规划的一部分。
+ *
+ * 其余写件**不在这里**，它们收在 COMPUTER_USE_WRITE_TOOLS（下面那只桶）里：
+ * 像素四件（computer_click / type / key / scroll）与网页五件（sandbox_navigate / click /
+ * type / upload / download）真往沙箱里注入鼠标键盘事件、改变页面状态或搬文件，能提交
+ * 表单、删文件、关窗口。三档判定仍是默认写闸门（plan 拒 / manual 问 / skip 放），
+ * 另外在 skip 档还要过一道本会话授权（见写桶的注释）。
+ */
+export const COMPUTER_USE_READ_TOOLS = [
+  "computer_screenshot",
+  "sandbox_observe",
+  "sandbox_extract",
+  "sandbox_screenshot",
+  "sandbox_wait",
+] as const;
+
+export function isComputerUseReadTool(toolName: string): boolean {
+  return (COMPUTER_USE_READ_TOOLS as readonly string[]).includes(toolName);
+}
+
+/**
+ * computer use 写件的**档**：按「副作用能不能逸出沙箱」分两档。
+ *
+ * 判据（一句话）：**扔进一次性 VM 就消失的副作用 = 沙箱内；把宿主的东西带进 / 带出这道
+ * 边界的 = 逸出。** 沙箱是一次性的完整 VM，VM 销毁之后沙箱里点过的按钮、打过的字、改过的
+ * 页面都不复存在；而 `sandbox_upload` 把用户宿主机的文件内容读进沙箱交给一个网页、
+ * `sandbox_download` 把沙箱里的下载物落进宿主的下载目录——这两件的结果跨过了边界，
+ * 不会随着 VM 消失。前者值得一次会话授权，后者每次都要当事人点头。
+ *
+ * 分档只改**确认的频率**，不改三档判定：两档都还是写操作（plan 拒 / manual 问 / skip 放），
+ * 也都还在同一份预算（60 / 90 次）与急停撤销的口径里。
+ *
+ * 新增写工具时必须归到这两档之一——`src/agent/computer-gate.test.ts` 用工具名真源
+ * （`COMPUTER_USE_TOOL_NAMES` + `SANDBOX_BROWSER_TOOL_NAMES`）表驱动核对，漏归类会当场红。
+ */
+export const COMPUTER_USE_WRITE_TIERS = {
+  /** 副作用留在一次性 VM 里：VM 一扔就没了，跳过档下一张会话授权卡就够 */
+  confined: [
+    "computer_click",
+    "computer_type",
+    "computer_key",
+    "computer_scroll",
+    "sandbox_navigate",
+    "sandbox_click",
+    "sandbox_type",
+    /**
+     * sandbox_tabs 是 list / switch 两个参数动作：list 只读、switch 换活动标签页（仍在 VM 里）。
+     * 与 computer_uia 同一条口径——**名单是工具级的、不含参数**，所以整体走写闸门。
+     * 它此前不在这两档里（名单是后加工具时漏的），于是同时绕过了会话授权、预算与急停撤销；
+     * 分类测试（computer-gate.test.ts）就是为了让下一次漏归类当场红。
+     */
+    "sandbox_tabs",
+    "computer_uia",
+  ],
+  /** 能把宿主的东西带进 / 带出沙箱：逐次确认，会话授权也覆盖不了它 */
+  escaping: ["sandbox_upload", "sandbox_download"],
+} as const;
+
+/** 沙箱内的写件（像素四件 + 网页导航 / 点击 / 打字 + UIA 动作） */
+export const COMPUTER_USE_CONFINED_WRITE_TOOLS = COMPUTER_USE_WRITE_TIERS.confined;
+
+/** 能逸出沙箱的写件：上传（宿主 → 沙箱）与下载（沙箱 → 宿主） */
+export const COMPUTER_USE_ESCAPING_WRITE_TOOLS = COMPUTER_USE_WRITE_TIERS.escaping;
+
+/**
+ * computer use 的写件：**凡能改变沙箱状态、往沙箱里送输入、或让文件进出的工具**都在这里。
+ * 名单按「有没有副作用」判，不按车道判——像素（computer_*）、网页 CDP（sandbox_*）、
+ * UIA（computer_uia）三条车道的写动作同一待遇；**内部再按能否逸出分两档**
+ * （COMPUTER_USE_WRITE_TIERS 的判据写在上面）。
+ *
+ * 这些**不在只读桶里**（三档判定仍走默认写闸门：plan 拒、manual 逐次问、skip 放），
+ * 单独立桶是因为 skip 档下沙箱内的写件还要过一道「本会话授权」：默认档是 skip，没有这道闸，
+ * agent 在用户什么都没同意的情况下就能操作沙箱（2026-10 终审裁决）。同一只桶同时是
+ * 预算（60 / 90 次）与急停撤销的判定口径——名单漏一个，那个工具就同时绕过三道闸。
+ *
+ * 分组与理由：
+ *   - 像素四件 computer_click / type / key / scroll：往唯一一块桌面注入鼠标键盘事件；
+ *   - 网页五件 sandbox_navigate / click / type / upload / download：换页面、点元素、往输入框
+ *     打字、把宿主机文件送进页面、把页面下载物落到宿主机。沙箱隔离不改变「它做了用户没
+ *     点头的事」这一点；其中 upload / download **跨过了沙箱边界**，见分档注释。
+ *     sandbox_tabs（list / switch）同在写桶里，理由见分档表里它的那条注释；
+ *   - computer_uia：按控件动作（invoke / setValue / selection），直接改窗口里的控件状态。
+ *     它的 `list` 只读控件树，**名单是工具级的、不含参数**，所以 list 也跟着走写闸门。
+ *     **这是刻意选保守的一侧**：按参数分档要把 args 穿进 `decidePermission`（三档语义的
+ *     唯一出处）、写闸门的三处判定与预算口径，并重新裁决「plan 档下 list 算不算只读」——
+ *     那是另一件事。多问一次（skip 档下仅会话第一张卡，授权后不再问）比把 invoke 漏成
+ *     免审批便宜得多。
+ * 授权与破坏性确认的判定在 `src/agent/permission.ts` 的闸门里，规则在
+ * `src/shared/computer-guard.ts`。
+ */
+export const COMPUTER_USE_WRITE_TOOLS = [
+  ...COMPUTER_USE_CONFINED_WRITE_TOOLS,
+  ...COMPUTER_USE_ESCAPING_WRITE_TOOLS,
+] as const;
+
+export function isComputerUseWriteTool(toolName: string): boolean {
+  return (COMPUTER_USE_WRITE_TOOLS as readonly string[]).includes(toolName);
+}
+
+/**
+ * 这件写工具能不能逸出沙箱。**逐次确认**的判定口径，只在这里认一次名字：
+ * 闸门（src/agent/permission.ts）与测试都调它，别在别处重新列一遍名单。
+ * 不是写件返回 false（读件与无关工具都不进逐次确认这条支路）。
+ */
+export function isComputerUseEscapingTool(toolName: string): boolean {
+  return (COMPUTER_USE_ESCAPING_WRITE_TOOLS as readonly string[]).includes(toolName);
+}
+
+/** 写件的档；不是 computer use 写件返回 null（调用方据此区分「不在写桶里」与「逸出档」） */
+export function computerUseWriteTier(toolName: string): "confined" | "escaping" | null {
+  if (isComputerUseEscapingTool(toolName)) return "escaping";
+  if ((COMPUTER_USE_CONFINED_WRITE_TOOLS as readonly string[]).includes(toolName)) return "confined";
+  return null;
+}
+
+/**
+ * 能在本会话内「记住不再问」的类（manual 档的审批卡勾选项）。
+ *
+ * **只有沙箱内那一档**：九件沙箱内写件（像素 / 网页 / UIA）的副作用都在一次性 VM 里，
+ * 用户勾一次「这类别再问」是同一个决定。逸出件（sandbox_upload / sandbox_download）
+ * 各自跨过沙箱边界，**永远逐次问**——它们没有可被记住的类名，`computerUseRememberableClass`
+ * 对它们返回 null（不是返回一个永远不会命中的类）。
+ *
+ * 这个类名是**数组**而不是单个字面量：以后若真有第二类可记住的动作，协议已经是列表形状，
+ * 会话里记住的是一组类。
+ */
+export const COMPUTER_USE_REMEMBERABLE_CLASSES = ["confined"] as const;
+export type ComputerUseRememberedClass = (typeof COMPUTER_USE_REMEMBERABLE_CLASSES)[number];
+
+/**
+ * 「这一件工具属于哪个可记住的类」；不属于任何一类返回 null。
+ * 读件、逸出件、非 computer use 工具一律 null——**闸门据此决定卡上要不要摆勾选项**。
+ */
+export function computerUseRememberableClass(toolName: string): ComputerUseRememberedClass | null {
+  return computerUseWriteTier(toolName) === "confined" ? "confined" : null;
+}
+
+/**
+ * 会话级「记住了」的一条记录：批准那一刻写进 SessionMeta（原子写），用户事后能查。
+ * `toolName` 是触发这次记住的那一件工具；`at` 是批准的时刻。
+ */
+export interface ComputerUseRememberedEntry {
+  class: ComputerUseRememberedClass;
+  toolName: string;
+  at: number;
+}
+
+/** 从任意值里认出合法的记录（meta 解析用：坏条目逐条丢，不坏整条会话）。会话里同一类只留最新一条。 */
+export function parseComputerUseRemembered(raw: unknown): ComputerUseRememberedEntry[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ComputerUseRememberedEntry[] = [];
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) continue;
+    const value = item as Record<string, unknown>;
+    const cls = value["class"];
+    const toolName = value["toolName"];
+    const at = value["at"];
+    if (typeof cls !== "string" || !(COMPUTER_USE_REMEMBERABLE_CLASSES as readonly string[]).includes(cls)) continue;
+    if (typeof toolName !== "string" || typeof at !== "number" || !Number.isFinite(at)) continue;
+    out.push({ class: cls as ComputerUseRememberedClass, toolName, at });
+  }
+  return out;
+}
+
+/** 工具组全体（读取 + 写入）：预算按这个口径计——截图也吃上下文，必须计入 */
+export function isComputerUseTool(toolName: string): boolean {
+  return isComputerUseReadTool(toolName) || isComputerUseWriteTool(toolName);
+}
+/**
  * 写计划（update_plan，2026-10-30）：三档一律放行。它只是把打算说出来，清单落在转录里，
  * 不碰用户的文件与 shell；plan 档尤其要用得上（规划本来就是 plan 档的事），manual 档问了
  * 也没意义——用户要看的是计划本身，不是「要不要允许它写计划」。
@@ -285,6 +460,8 @@ export function decidePermission(mode: PermissionMode, toolName: string): Permis
   if (isAutomationTool(toolName)) return { behavior: "allow" };
   // 浏览器只读工具与交接：三档一律放行，理由见 BROWSER_READ_TOOLS / USER_ACTION_TOOL 的注释
   if (isBrowserReadTool(toolName) || toolName === USER_ACTION_TOOL) return { behavior: "allow" };
+  // 沙箱截图：三档一律放行，理由见 COMPUTER_USE_READ_TOOLS 的注释
+  if (isComputerUseReadTool(toolName)) return { behavior: "allow" };
   // 写计划：三档一律放行，理由见 PLAN_TOOL 的注释
   if (toolName === PLAN_TOOL || toolName === GOAL_TOOL) return { behavior: "allow" };
   // 草稿预览：三档一律放行（理由见 PLUGIN_DRAFT_TOOL）
@@ -307,7 +484,14 @@ export function decidePermission(mode: PermissionMode, toolName: string): Permis
   return { behavior: "ask" };
 }
 
-/** 用户对一次询问的回答。改写入参是刻意保留的能力（把 rm -rf 改成别的路径再放行）。 */
+/**
+ * 用户对一次询问的回答。改写入参是刻意保留的能力（把 rm -rf 改成别的路径再放行）。
+ *
+ * `remember: true` 只出现在 manual 档的普通审批卡上，且只对可记住的电脑使用写件有效
+ * （见 `COMPUTER_USE_REMEMBERABLE_CLASSES`）：用户**主动勾选并批准**之后，本会话内
+ * 同一类动作不再弹卡。它不改变 manual 档的默认语义——不勾就还是逐次问；逸出件与
+ * 破坏性动作的卡上根本不摆这个勾选项（闸门也不会采纳）。
+ */
 export type PermissionAnswer =
-  | { behavior: "allow"; input?: unknown }
+  | { behavior: "allow"; input?: unknown; remember?: true }
   | { behavior: "deny"; message?: string };
