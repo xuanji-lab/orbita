@@ -5386,15 +5386,32 @@ function ChildReportCard(props: { mark: { peerId: string; messageId: string; kin
   );
 }
 
-/** 来自子会话的产物卡多一行灰色小字：「来自子会话「标题」· 型号名」；点它打开那个子会话（同派出卡的跳转） */
+/**
+ * 来自子会话的产物卡，类型字后面接一小段（不另占一行，卡高与主会话的产物卡完全一样）：「来自「标题」· 型号名」。
+ * 放不下时先省略子会话标题（尾部省略），型号名尽量保留；窄列再不够就只留「来自子会话」。悬停显示全文；点它打开那个子会话（同派出卡的跳转）。
+ */
 function OutputFrom(props: { source: OutputSource; openSession: ((childId: string) => void) | null }) {
   const t = useT();
-  const text = t.chat.outputFromChild(props.source.title, props.source.modelName);
-  if (props.openSession === null) return <span className="turn-output-from">{text}</span>;
+  const full = t.chat.outputFromChild(props.source.title, props.source.modelName);
+  const body = (
+    <>
+      <span className="from-short">{t.chat.outputFromChildShort}</span>
+      <span className="from-lead">{t.chat.outputFromLead}</span>
+      <span className="from-title">「{props.source.title}」</span>
+      {props.source.modelName !== "" && <span className="from-model">· {props.source.modelName}</span>}
+    </>
+  );
+  if (props.openSession === null) {
+    return (
+      <span className="turn-output-from" title={full}>
+        {body}
+      </span>
+    );
+  }
   const open = props.openSession;
   return (
-    <button type="button" className="turn-output-from link" title={t.chat.childReportOpen} onClick={() => open(props.source.sessionId)}>
-      {text}
+    <button type="button" className="turn-output-from link" title={`${full} — ${t.chat.childReportOpen}`} onClick={() => open(props.source.sessionId)}>
+      {body}
     </button>
   );
 }
@@ -5441,8 +5458,10 @@ function TurnOutputCard(props: { output: TurnOutput; sessionId: string; openSess
       </span>
       <span className="turn-output-text" title={output.path}>
         <span className="turn-output-title">{output.title}</span>
-        <span className="turn-output-sub">{refusal ?? sub}</span>
-        {output.source !== undefined && <OutputFrom source={output.source} openSession={props.openSession} />}
+        <span className="turn-output-sub">
+          <span className="turn-output-type">{refusal ?? sub}</span>
+          {output.source !== undefined && refusal === null && <OutputFrom source={output.source} openSession={props.openSession} />}
+        </span>
       </span>
       <span className="turn-output-split">
         <button type="button" className="turn-output-btn" onClick={preview}>

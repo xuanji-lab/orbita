@@ -6600,6 +6600,8 @@ html {
   display: grid;
   gap: var(--space-2);
   min-width: 0;
+  /* 窄会话列里卡上「来自子会话…」那段再不够就只留「来自子会话」（见 .turn-output-from） */
+  container: outputs / inline-size;
 }
 .turn-output {
   display: flex;
@@ -6635,11 +6637,19 @@ html {
   color: var(--color-text-primary);
 }
 .turn-output-sub {
+  display: flex;
+  gap: var(--space-1);
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
-  text-overflow: ellipsis;
   font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
+}
+.turn-output-type {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .turn-output-split {
   display: inline-flex;
@@ -7190,23 +7200,58 @@ html {
   font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
-/* 子会话交回的产物卡多一行小字「来自子会话「…」· 型号」（点它打开那个子会话） */
+/* 子会话交回的产物卡：类型字后面接「· 来自「标题」· 型号名」，不另占一行（卡高与主会话的产物卡一样）。
+   放不下时先省略标题、型号名尽量保留；窄列只留「来自子会话」；悬停看全文，点它打开那个子会话 */
 .turn-output-from {
+  display: inline-flex;
+  flex: 0 100 auto;
+  min-width: 0;
+  gap: var(--space-0-5);
   overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-button.turn-output-from {
   padding: 0;
   border: 0;
   background: none;
-  font-family: inherit;
+  font: inherit;
+  color: inherit;
   text-align: left;
+}
+.turn-output-from::before {
+  content: "·";
+  flex: none;
+  margin-right: var(--space-0-5);
+}
+.turn-output-from .from-lead {
+  flex: none;
+}
+.turn-output-from .from-title {
+  flex: 0 100 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.turn-output-from .from-model {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.turn-output-from .from-short {
+  display: none;
+}
+@container outputs (max-width: 360px) {
+  .turn-output-from .from-lead,
+  .turn-output-from .from-title,
+  .turn-output-from .from-model {
+    display: none;
+  }
+  .turn-output-from .from-short {
+    display: inline;
+  }
+}
+button.turn-output-from.link {
   cursor: pointer;
 }
-button.turn-output-from:hover {
+button.turn-output-from.link:hover {
   color: var(--color-text-secondary);
   text-decoration: underline;
 }

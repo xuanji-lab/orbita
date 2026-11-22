@@ -2440,6 +2440,8 @@ export const en = {
     outputGroup: (type: "doc" | "pdf" | "web", n: number) =>
       type === "doc" ? `${n} documents` : type === "web" ? `${n} web pages` : `${n} PDFs`,
     childReportHead: (title: string) => `"${title}" handed back`,
+    outputFromChildShort: "From sub-session",
+    outputFromLead: "From",
     outputFromChild: (title: string, model: string) => `From sub-session "${title}"${model === "" ? "" : ` · ${model}`}`,
     childReportOpen: "Open its session",
     childReportEdited: (n: number) => `Also edited ${n} other file${n === 1 ? "" : "s"}`,

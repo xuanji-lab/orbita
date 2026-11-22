@@ -2254,6 +2254,8 @@ export const zh: Messages = {
     outputBatch: "批量生成",
     outputGroup: (type, n) => (type === "doc" ? `${n} 份文档` : type === "web" ? `${n} 个网页` : `${n} 个 PDF`),
     childReportHead: (title) => `「${title}」交回了`,
+    outputFromChildShort: "来自子会话",
+    outputFromLead: "来自",
     outputFromChild: (title, model) => `来自子会话「${title}」${model === "" ? "" : ` · ${model}`}`,
     childReportOpen: "看它的会话",
     childReportEdited: (n) => `还改了 ${n} 个别的文件`,
