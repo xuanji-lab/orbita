@@ -433,6 +433,11 @@ export interface TurnOutputsUnit {
    * 各占一张预览卡，点了在文档面板里看（2026-11-22 用户：a.md 只出现在编辑文件里，没有预览卡）
    */
   docs: readonly string[];
+  /**
+   * 这一轮是被子会话交回开头的（channelMark done）：交回的子会话的产物也摆进这一摞里（渲染时异步读子会话记录），
+   * 不再套在交回卡的框里。没有 = 空。
+   */
+  children: readonly { peerId: string; messageId: string }[];
 }
 
 export type TurnViewEntry = RenderEntry | TurnGroupUnit | TurnProcessUnit | TurnOutputsUnit;
@@ -653,20 +658,26 @@ function foldSegment(
   // 结尾的卡（2026-11-22 照 Kimi：改了的文件在前、做出来的东西在后，同宽同色一摞）：先文件账，再这一轮交给
   // 用户的东西（演示文稿、文档、导出的文件）。还在跑的轮不出产物——跑的时候右栏已经自己打开在看着它写
   if (tailCards.length > 0) view.push(...tailCards);
-  if (mode !== "live" && results !== undefined) {
-    const calls = segment.flatMap((entry) => (entry.kind === "toolCall" ? [entry] : entry.kind === "toolGroup" ? [...entry.calls] : []));
-    const web = tailCards.flatMap((entry) =>
-      entry.kind === "fileTurn"
-        ? [...entry.record.changes.map((change) => change.path).filter((path) => isWebArtifactFile(path)), ...(entry.record.webArtifacts ?? [])]
-        : [],
-    );
-    const webBatch = tailCards.reduce((sum, entry) => sum + (entry.kind === "fileTurn" ? (entry.record.webArtifactsBatch ?? 0) : 0), 0);
-    const docs = tailCards.flatMap((entry) =>
-      entry.kind === "fileTurn" ? entry.record.changes.map((change) => change.path).filter((path) => DOC_FILE.test(path)) : [],
-    );
-    if (turnOutputs(calls, results).length > 0 || web.length > 0 || docs.length > 0 || webBatch > 0) {
-      view.push({ kind: "turnOutputs", key: `out:${calls[0]?.key ?? tailCards[0]?.key ?? ""}`, calls, web, webBatch, docs });
-    }
+  // 这一段是被子会话交回开头的：子会话的产物摆进这一轮结尾的产物摞（跑着的轮也要有——交回的产物不是还在写的东西）
+  const head = segment[0];
+  const children = head !== undefined && head.kind === "channelMark" && head.mark.kind === "done" ? [{ peerId: head.mark.peerId, messageId: head.mark.messageId }] : [];
+  const calls = segment.flatMap((entry) => (entry.kind === "toolCall" ? [entry] : entry.kind === "toolGroup" ? [...entry.calls] : []));
+  const settled = mode !== "live" && results !== undefined;
+  const web = !settled
+    ? []
+    : tailCards.flatMap((entry) =>
+        entry.kind === "fileTurn"
+          ? [...entry.record.changes.map((change) => change.path).filter((path) => isWebArtifactFile(path)), ...(entry.record.webArtifacts ?? [])]
+          : [],
+      );
+  const webBatch = !settled ? 0 : tailCards.reduce((sum, entry) => sum + (entry.kind === "fileTurn" ? (entry.record.webArtifactsBatch ?? 0) : 0), 0);
+  const docs = !settled
+    ? []
+    : tailCards.flatMap((entry) => (entry.kind === "fileTurn" ? entry.record.changes.map((change) => change.path).filter((path) => DOC_FILE.test(path)) : []));
+  const hasMain = settled && results !== undefined && (turnOutputs(calls, results).length > 0 || web.length > 0 || docs.length > 0 || webBatch > 0);
+  if (hasMain || children.length > 0) {
+    const key = children.length > 0 ? `out:child:${children[0]?.messageId ?? ""}` : `out:${calls[0]?.key ?? tailCards[0]?.key ?? ""}`;
+    view.push({ kind: "turnOutputs", key, calls: settled ? calls : [], web, webBatch, docs, children });
   }
   return view;
 }

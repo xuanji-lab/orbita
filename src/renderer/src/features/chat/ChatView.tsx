@@ -191,10 +191,12 @@ import {
   outsideFailure,
   THUMBS_SHOWN,
   allOutputs,
+  mergeOutputs,
   groupOutputs,
   type ProcessImage,
   type ProcessRow,
   type StepVerb,
+  type OutputSource,
   type TurnOutput,
 } from "./process-rows.ts";
 import { fileManagerKind } from "../../file-manager.ts";
@@ -2795,7 +2797,7 @@ const TranscriptRow = memo(function TranscriptRow(props: {
       )}
       <div className={doomed ? "revert-doomed" : "revert-keep"} data-entry-key={entry.key} data-kind={entry.kind}>
       {entry.kind === "turnOutputs" ? (
-        <TurnOutputsBlock unit={entry} toolResults={scope.toolResults} sessionId={scope.sessionId} />
+        <TurnOutputsBlock unit={entry} toolResults={scope.toolResults} sessionId={scope.sessionId} channel={scope.channel} />
       ) : entry.kind === "turnProcess" ? (
         <TurnProcessLine
           unit={entry}
@@ -5213,14 +5215,28 @@ function ProcessLightbox(props: { images: readonly ProcessImage[]; start: number
  * 照 Kimi：一份一张卡，和上面的「N 个文件已更改」同宽同色、左右对齐；右边「预览 ▾」——预览在软件里打开
  * （演示文稿进演示文稿面板，文档和导出的文件进文件面板），下拉是「用默认应用打开」「在访达中显示」。
  */
-function TurnOutputsBlock(props: { unit: TurnOutputsUnit; toolResults: ToolResultIndex; sessionId: string }) {
+function TurnOutputsBlock(props: { unit: TurnOutputsUnit; toolResults: ToolResultIndex; sessionId: string; channel: ChannelViewContext }) {
   const t = useT();
-  const outputs = allOutputs(props.unit.calls, props.toolResults, props.unit.docs, props.unit.web);
+  const { channel } = props;
+  const mine = allOutputs(props.unit.calls, props.toolResults, props.unit.docs, props.unit.web);
+  const childOutputs = useChildrenOutputs(props.unit.children);
+  // 子会话交回的产物和主会话自己的摆进同一摞：每张带上「来自子会话…」（标题 + 型号名）
+  const fromChildren = props.unit.children.flatMap((child) => {
+    const loaded = childOutputs.get(child.messageId);
+    if (loaded === undefined || loaded === null) return [];
+    const source: OutputSource = {
+      sessionId: child.peerId,
+      title: peerTitleOf(channel, child.peerId, t),
+      modelName: channel.modelNameOf(channel.childModelIds.get(child.peerId) ?? ""),
+    };
+    return loaded.outputs.map((output) => ({ ...output, source }));
+  });
+  const outputs = mergeOutputs(mine, fromChildren);
   const batch = props.unit.webBatch;
   if (outputs.length === 0 && batch === 0) return null;
   return (
     <div className="turn-outputs">
-      <OutputStack outputs={outputs} sessionId={props.sessionId} />
+      <OutputStack outputs={outputs} sessionId={props.sessionId} openSession={channel.openSubSession} />
       {batch > 0 && (
         // 批量网页变动（git checkout / 解压归档 / 批量导出）：和别的产物同一个骨架，但没有具体路径，所以没有预览按钮
         <div className="turn-output">
@@ -5238,21 +5254,21 @@ function TurnOutputsBlock(props: { unit: TurnOutputsUnit; toolResults: ToolResul
 }
 
 /** 一摞产物：一份一张；同一类三份以上收成一张（groupOutputs），点开逐个列 */
-function OutputStack(props: { outputs: readonly TurnOutput[]; sessionId: string }) {
+function OutputStack(props: { outputs: readonly TurnOutput[]; sessionId: string; openSession: ((childId: string) => void) | null }) {
   return (
     <>
       {groupOutputs(props.outputs).map((slot) =>
         slot.kind === "one" ? (
-          <TurnOutputCard key={slot.output.path} output={slot.output} sessionId={props.sessionId} />
+          <TurnOutputCard key={slot.output.path} output={slot.output} sessionId={props.sessionId} openSession={props.openSession} />
         ) : (
-          <OutputGroupCard key={`group:${slot.type}`} type={slot.type} outputs={slot.outputs} sessionId={props.sessionId} />
+          <OutputGroupCard key={`group:${slot.type}`} type={slot.type} outputs={slot.outputs} sessionId={props.sessionId} openSession={props.openSession} />
         ),
       )}
     </>
   );
 }
 
-function OutputGroupCard(props: { type: "doc" | "pdf" | "web"; outputs: readonly TurnOutput[]; sessionId: string }) {
+function OutputGroupCard(props: { type: "doc" | "pdf" | "web"; outputs: readonly TurnOutput[]; sessionId: string; openSession: ((childId: string) => void) | null }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const first = props.outputs[0];
@@ -5275,7 +5291,7 @@ function OutputGroupCard(props: { type: "doc" | "pdf" | "web"; outputs: readonly
       {open && (
         <div className="turn-output-group-list">
           {props.outputs.map((output) => (
-            <TurnOutputCard key={output.path} output={output} sessionId={props.sessionId} />
+            <TurnOutputCard key={output.path} output={output} sessionId={props.sessionId} openSession={props.openSession} />
           ))}
         </div>
       )}
@@ -5286,28 +5302,52 @@ function OutputGroupCard(props: { type: "doc" | "pdf" | "web"; outputs: readonly
 /** 子会话整条记录（交回卡算它的产出用）：按 id 读一次、缓存；读不到 = null */
 const childRecordsCache = new Map<string, Promise<readonly TranscriptRecord[] | null>>();
 
+/** 读一条交回消息对应的子会话产出（同一条只读一次；新的交回换一个键重读）；读不到 null */
+function loadChildOutputs(childId: string, messageId: string): Promise<SessionOutputs | null> {
+  const key = `${childId}:${messageId}`;
+  let promise = childRecordsCache.get(key);
+  if (promise === undefined) {
+    promise = api.session
+      .load(childId)
+      .then((detail) => (detail === null ? null : (detail.transcript as readonly TranscriptRecord[])))
+      .catch(() => null);
+    childRecordsCache.set(key, promise);
+  }
+  return promise.then((records) => (records === null ? null : sessionOutputs(records)));
+}
+
 function useChildOutputs(childId: string, messageId: string): SessionOutputs | null | undefined {
   const [value, setValue] = useState<SessionOutputs | null | undefined>(undefined);
   useEffect(() => {
     let alive = true;
-    // 同一条交回消息只读一次；新的交回（子会话又做了事）换一个键重读
-    const key = `${childId}:${messageId}`;
-    let promise = childRecordsCache.get(key);
-    if (promise === undefined) {
-      promise = api.session
-        .load(childId)
-        .then((detail) => (detail === null ? null : (detail.transcript as readonly TranscriptRecord[])))
-        .catch(() => null);
-      childRecordsCache.set(key, promise);
-    }
-    void promise.then((records) => {
-      if (alive) setValue(records === null ? null : sessionOutputs(records));
+    void loadChildOutputs(childId, messageId).then((outputs) => {
+      if (alive) setValue(outputs);
     });
     return () => {
       alive = false;
     };
   }, [childId, messageId]);
   return value;
+}
+
+/** 一轮里被交回的几个子会话的产出（按交回先后），读好一个出一个；键 = 交回消息 id */
+function useChildrenOutputs(children: readonly { peerId: string; messageId: string }[]): ReadonlyMap<string, SessionOutputs | null> {
+  const [loaded, setLoaded] = useState<ReadonlyMap<string, SessionOutputs | null>>(new Map());
+  const signature = children.map((child) => `${child.peerId}:${child.messageId}`).join("|");
+  useEffect(() => {
+    let alive = true;
+    for (const child of children) {
+      void loadChildOutputs(child.peerId, child.messageId).then((outputs) => {
+        if (alive) setLoaded((previous) => new Map(previous).set(child.messageId, outputs));
+      });
+    }
+    return () => {
+      alive = false;
+    };
+    // children 的内容由 signature 代表
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signature]);
+  return loaded;
 }
 
 /**
@@ -5322,41 +5362,44 @@ function ChildReportCard(props: { mark: { peerId: string; messageId: string; kin
   const first = (message?.text ?? "").split("\n").find((line) => line.trim() !== "")?.trim() ?? "";
   const outputs = useChildOutputs(mark.peerId, mark.messageId);
   const open = channel.openSubSession;
+  const edited = outputs === undefined || outputs === null ? 0 : outputs.edited.length;
+  // 一行：「「标题」交回了 · 型号名 · 报告第一行 ［看它的会话］」。它做出来的东西不再包在这里，摆进这一轮结尾的产物摞（TurnOutputsBlock）
   return (
     <div className="child-report">
       <div className="child-report-head">
         <span className="exit-card-icon">
           <Icon name="bot" size={18} strokeWidth={1.6} />
         </span>
-        <span className="exit-card-text">
-          <span className="exit-card-title">
-            <span className="exit-card-name">{title}</span>
-            <ModelNameLabel name={channel.modelNameOf(channel.childModelIds.get(mark.peerId) ?? "")} />
-          </span>
-          {first !== "" && <span className="exit-card-sub">{first}</span>}
+        <span className="child-report-line">
+          <span className="exit-card-name">{t.chat.childReportHead(title)}</span>
+          <ModelNameLabel name={channel.modelNameOf(channel.childModelIds.get(mark.peerId) ?? "")} />
+          {first !== "" && <span className="child-report-first">{first}</span>}
         </span>
-        <span className="exit-card-side">
-          <span className="exit-card-status" style={{ color: "var(--color-success)" }}>
-            {t.chat.childReportDone}
-          </span>
-          {open !== null && (
-            <button type="button" className="card-btn" onClick={() => open(mark.peerId)}>
-              {t.chat.childReportOpen}
-            </button>
-          )}
-        </span>
+        {open !== null && (
+          <button type="button" className="card-btn" onClick={() => open(mark.peerId)}>
+            {t.chat.childReportOpen}
+          </button>
+        )}
       </div>
-      {outputs !== undefined && outputs !== null && (outputs.outputs.length > 0 || outputs.edited.length > 0) && (
-        <div className="child-report-body">
-          <OutputStack outputs={outputs.outputs} sessionId={mark.peerId} />
-          {outputs.edited.length > 0 && <div className="child-report-edited">{t.chat.childReportEdited(outputs.edited.length)}</div>}
-        </div>
-      )}
+      {edited > 0 && <div className="child-report-edited">{t.chat.childReportEdited(edited)}</div>}
     </div>
   );
 }
 
-function TurnOutputCard(props: { output: TurnOutput; sessionId: string }) {
+/** 来自子会话的产物卡多一行灰色小字：「来自子会话「标题」· 型号名」；点它打开那个子会话（同派出卡的跳转） */
+function OutputFrom(props: { source: OutputSource; openSession: ((childId: string) => void) | null }) {
+  const t = useT();
+  const text = t.chat.outputFromChild(props.source.title, props.source.modelName);
+  if (props.openSession === null) return <span className="turn-output-from">{text}</span>;
+  const open = props.openSession;
+  return (
+    <button type="button" className="turn-output-from link" title={t.chat.childReportOpen} onClick={() => open(props.source.sessionId)}>
+      {text}
+    </button>
+  );
+}
+
+function TurnOutputCard(props: { output: TurnOutput; sessionId: string; openSession: ((childId: string) => void) | null }) {
   const t = useT();
   const scope = useChatFileScope();
   const { output } = props;
@@ -5376,7 +5419,7 @@ function TurnOutputCard(props: { output: TurnOutput; sessionId: string }) {
     setRefusal(null);
     if (output.kind === "web" && output.format === null) {
       // 网页在内置浏览器里预览（主进程按这条会话的文件账白名单放行）
-      void api.session.openArtifactInBrowser(props.sessionId, output.path).then(
+      void api.session.openArtifactInBrowser(output.source?.sessionId ?? props.sessionId, output.path).then(
         (result) => {
           if (!result.ok) setRefusal(t.chat.openInOrbitaRefused(result.reason));
         },
@@ -5399,6 +5442,7 @@ function TurnOutputCard(props: { output: TurnOutput; sessionId: string }) {
       <span className="turn-output-text" title={output.path}>
         <span className="turn-output-title">{output.title}</span>
         <span className="turn-output-sub">{refusal ?? sub}</span>
+        {output.source !== undefined && <OutputFrom source={output.source} openSession={props.openSession} />}
       </span>
       <span className="turn-output-split">
         <button type="button" className="turn-output-btn" onClick={preview}>

@@ -351,3 +351,28 @@ describe("改目标收进过程行", () => {
     assert.equal(goalChangesByCall(zh, ledger, []).size, 0);
   });
 });
+
+describe("子会话交回的那一轮：结尾产物摞里带上交回的子会话", () => {
+  const mark = { role: "channel-mark", id: "cm1", peerId: "child-1", messageId: "msg-1", from: "child", kind: "done", timestamp: 2 } as unknown as TranscriptItem;
+  const records = [user("u1", 1), mark, assistant("a1", 3, [{ type: "text", text: "子会话交回了。" }])];
+  const v = view(records, false);
+
+  test("channelMark done 开头的一轮：结尾有 turnOutputs 单元，children 指向交回消息（没有主会话产物也有）", () => {
+    const out = v.find((e) => e.kind === "turnOutputs");
+    assert.ok(out !== undefined && out.kind === "turnOutputs");
+    assert.deepEqual(out.children, [{ peerId: "child-1", messageId: "msg-1" }]);
+    assert.equal(out.key, "out:child:msg-1");
+    assert.deepEqual(v.map((e) => e.kind), ["user", "channelMark", "text", "turnOutputs"]);
+  });
+
+  test("跑着的轮也有（交回的产物不是还在写的东西），key 不变不重挂", () => {
+    const live = view(records, true).find((e) => e.kind === "turnOutputs");
+    assert.ok(live !== undefined);
+    assert.equal(live.key, "out:child:msg-1");
+  });
+
+  test("别的种类的通道标记（问询 / 失败）不带产物", () => {
+    const question = { ...mark, kind: "question" } as unknown as TranscriptItem;
+    assert.equal(view([user("u1", 1), question, assistant("a1", 3, [{ type: "text", text: "好" }])], false).some((e) => e.kind === "turnOutputs"), false);
+  });
+});

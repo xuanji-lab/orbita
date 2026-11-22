@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolTranscriptItem } from "@earendil-works/pi-protocol";
-import { outsideFailure, allOutputs, assignImages, groupOutputs, deckPagesFrom, imagesOf, processHeadline, processRows, stepVerb, turnOutputs } from "./process-rows.ts";
+import { mergeOutputs, outsideFailure, allOutputs, assignImages, groupOutputs, deckPagesFrom, imagesOf, processHeadline, processRows, stepVerb, turnOutputs } from "./process-rows.ts";
 import type { ProcessStep, ToolCallUnit, ToolResultIndex } from "./tool-results.ts";
 import { en } from "../../messages-en.ts";
 import { zh } from "../../messages-zh.ts";
@@ -230,5 +230,38 @@ describe("导出的文件按文件类型分（不再有「导出的文件」一�
   test("折叠行一句话：导出来的单算「导出 N 个文件」，不算进做出的演示文稿 / 打开的文档", () => {
     const text = processHeadline(calls, results, 0, zh.chat.headline);
     assert.equal(text, "导出 4 个文件");
+  });
+});
+
+describe("mergeOutputs：子会话交回的产物与主会话自己的摆进同一摞", () => {
+  const o = (kind: "slides" | "doc" | "pdf" | "web", name: string, source?: { sessionId: string; title: string; modelName: string }) => ({
+    kind,
+    path: `/w/${name}`,
+    title: name,
+    pages: null,
+    format: null,
+    detail: null,
+    ...(source === undefined ? {} : { source }),
+  });
+  const child = { sessionId: "c1", title: "调研", modelName: "GLM-5.3" };
+
+  test("主会话的在前、子会话的在后，再按类稳定排序（同一类相邻）", () => {
+    const out = mergeOutputs([o("doc", "a.md"), o("web", "i.html")], [o("doc", "b.md", child), o("pdf", "c.pdf", child)]);
+    assert.deepEqual(out.map((x) => x.title), ["a.md", "b.md", "c.pdf", "i.html"]);
+    assert.equal(out[0]?.source, undefined);
+    assert.equal(out[1]?.source?.title, "调研");
+  });
+
+  test("同一路径只留主会话的那份", () => {
+    const out = mergeOutputs([o("doc", "a.md")], [o("doc", "a.md", child), o("doc", "b.md", child)]);
+    assert.deepEqual(out.map((x) => [x.title, x.source === undefined]), [["a.md", true], ["b.md", false]]);
+  });
+
+  test("收组合计算：主会话 1 份 + 子会话 2 份文档 = 3 份，收成一张，展开的每行仍带 source", () => {
+    const slots = groupOutputs(mergeOutputs([o("doc", "a.md")], [o("doc", "b.md", child), o("doc", "c.md", child)]));
+    assert.equal(slots.length, 1);
+    const [slot] = slots;
+    assert.ok(slot !== undefined && slot.kind === "group");
+    assert.deepEqual(slot.outputs.map((x) => x.source?.title ?? null), [null, "调研", "调研"]);
   });
 });

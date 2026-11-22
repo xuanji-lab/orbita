@@ -231,6 +231,15 @@ export interface TurnOutput {
   format: string | null;
   /** 导出文件的说明（「PDF · 3 页 · 171 KB」，工具结果卡上带的）；没有 null */
   detail: string | null;
+  /** 这份是哪个子会话交回来的（和主会话自己的产物摆在同一摞里，卡上多一行「来自子会话…」）；主会话自己的没有 */
+  source?: OutputSource;
+}
+
+/** 来自哪个子会话：点那行小字打开它；模型名同子会话卡标题后的小字（modelDisplayName） */
+export interface OutputSource {
+  sessionId: string;
+  title: string;
+  modelName: string;
 }
 
 /** 写演示文稿的工具：结果里带「the deck now has N slide(s)」 */
@@ -363,13 +372,35 @@ export function fileOutputs(kind: "web" | "doc", paths: readonly string[]): Turn
  * 结尾这一摞产物：工具做出来的（演示文稿、文档、导出）+ 这一轮写的文档 + 网页，按路径去重（doc_open 打开过、
  * 又被 edit 改过的文档只算一份）。顺序：演示文稿与文档在前，导出的文件，最后网页。
  */
+/** 结尾那摞的顺序：演示文稿与文档在前，PDF，最后网页；同一类里保持原顺序（稳定排序） */
+export function sortOutputs(outputs: readonly TurnOutput[]): TurnOutput[] {
+  const order = (output: TurnOutput) => (output.kind === "slides" || output.kind === "doc" ? 0 : output.kind === "pdf" ? 1 : 2);
+  return [...outputs].sort((a, b) => order(a) - order(b));
+}
+
+/**
+ * 主会话自己的产物与子会话交回的产物合成同一摞（2026-11-22 用户：「让它跟主会话的产出摆在一起」）：主会话的在前、子会话的在后
+ * （主会话的是给用户的答案本身，子会话的是它派出去的活的产出；子会话之间按交回先后），再按类稳定排序，同一类相邻——
+ * 三份以上收组时主会话与子会话合计算。同一路径只留一份（主会话的）。
+ */
+export function mergeOutputs(main: readonly TurnOutput[], fromChildren: readonly TurnOutput[]): TurnOutput[] {
+  const norm = (path: string) => path.replace(/\\/g, "/");
+  const seen = new Set(main.map((output) => norm(output.path)));
+  const extra: TurnOutput[] = [];
+  for (const output of fromChildren) {
+    if (seen.has(norm(output.path))) continue;
+    seen.add(norm(output.path));
+    extra.push(output);
+  }
+  return sortOutputs([...main, ...extra]);
+}
+
 export function allOutputs(calls: readonly ToolCallUnit[], results: ToolResultIndex, docs: readonly string[], web: readonly string[]): TurnOutput[] {
   const norm = (path: string) => path.replace(/\\/g, "/");
   const made = turnOutputs(calls, results);
   const seen = new Set(made.map((output) => norm(output.path)));
   const more = [...fileOutputs("doc", docs), ...fileOutputs("web", web)].filter((output) => !seen.has(norm(output.path)));
-  const order = (output: TurnOutput) => (output.kind === "slides" || output.kind === "doc" ? 0 : output.kind === "pdf" ? 1 : 2);
-  return [...made, ...more].sort((a, b) => order(a) - order(b));
+  return sortOutputs([...made, ...more]);
 }
 
 

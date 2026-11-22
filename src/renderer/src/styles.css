@@ -7169,14 +7169,46 @@ html {
   min-width: 0;
   padding: var(--space-2) var(--space-3);
 }
-.child-report-body {
-  display: grid;
+.child-report-line {
+  display: flex;
+  align-items: baseline;
+  flex: 1 1 auto;
   gap: var(--space-2);
-  padding: 0 var(--space-3) var(--space-3) calc(var(--space-3) + var(--card-icon-w) + var(--space-3));
+  min-width: 0;
+}
+.child-report-first {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
 }
 .child-report-edited {
+  padding: 0 var(--space-3) var(--space-2) calc(var(--space-3) + var(--card-icon-w) + var(--space-3));
   font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
+}
+/* 子会话交回的产物卡多一行小字「来自子会话「…」· 型号」（点它打开那个子会话） */
+.turn-output-from {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+button.turn-output-from {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+button.turn-output-from:hover {
+  color: var(--color-text-secondary);
+  text-decoration: underline;
 }
 /* 同一类三份以上收成的一张（OutputGroupCard）：头同产物卡，点开在卡里逐个列（缩进到图标右边） */
 .turn-output-group {

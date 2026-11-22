@@ -2439,7 +2439,8 @@ export const en = {
     outputBatch: "Generated in bulk",
     outputGroup: (type: "doc" | "pdf" | "web", n: number) =>
       type === "doc" ? `${n} documents` : type === "web" ? `${n} web pages` : `${n} PDFs`,
-    childReportDone: "Handed back",
+    childReportHead: (title: string) => `"${title}" handed back`,
+    outputFromChild: (title: string, model: string) => `From sub-session "${title}"${model === "" ? "" : ` · ${model}`}`,
     childReportOpen: "Open its session",
     childReportEdited: (n: number) => `Also edited ${n} other file${n === 1 ? "" : "s"}`,
     planTurnNew: (n: number) => `Made a plan · ${plural(n, "step")}`,
