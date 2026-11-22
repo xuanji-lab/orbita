@@ -5,7 +5,7 @@ import type { ChannelMessage } from "@shared/channel";
 import { api } from "../../api";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
-import { Icon, type IconName } from "../../shell/Icon";
+import { Icon } from "../../shell/Icon";
 import { StatusPie } from "../../shell/StatusPie";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { requestOpenPanel, requestOpenPluginBoard } from "../../shell/open-panel.ts";
@@ -39,10 +39,8 @@ import {
   sortChildren,
   statusOutputs,
   toolCallLine,
-  usedInSession,
   type ChildActivity,
   type ChildState,
-  type OutputGroupKey,
   type StatusOutput,
 } from "./chat-status.ts";
 import "./context-panel.css";
@@ -57,7 +55,8 @@ import "./chat-status.css";
  * - 进度里母子一眼分得开：步骤是母节点（状态圆点），子会话从步骤「垂下来」（缩进到步骤文字线、一条竖引导线、小机器人图标、轻一档的字），
  *   折叠行（「还有 N 步」）不带状态圆点、用 chevron + 次级色；展开到底时收起键在最后一步下面；
  * - 产物按类型分行，每行一排大缩略图，横向滑（Shift + 滚轮 / 触控板横扫），点一下在右栏打开，悬停不弹东西；
- * - 「这次用到的」照 Claude 的 Used in this session：记忆 / 技能 / 网页 / 上传，每行行尾一句摘要；
+ * - 产物口径同每轮结尾的产物卡（sessionOutputs），多图片与看板；按文件类型分行（同日 20:58）；
+ * - 记忆一行接在产物后面（第二版的「这次用到的」只留它）；目标最多两行；卡第一次打开时进度只露在做的步；
  * - 删掉底部的上下文 / 改动 / 摘抄与临时预览浮层。
  *
  * 数据全部是现有的：进度与目标同右栏「这条任务」，子会话同子会话面板，产物同结尾产物卡，记忆同记忆页签。
@@ -163,11 +162,10 @@ export function ChatStatus(props: {
     return [...own, ...fromKids];
   }, [view.records, kids, tails]);
 
-  // ── 这次用到的 ──
+  // ── 记忆（第二版「这次用到的」只留这一行：用户 20:58「技能、网页、上传的文件可以不要掉」）──
   const memory = useMemorySession(sessionId);
   const remembered = memory.data?.turns.flatMap((turn) => turn.remembered) ?? [];
   const usedMemory = dedupeBy(memory.data?.turns.flatMap((turn) => turn.used) ?? [], (hit) => hit.id);
-  const used = useMemo(() => usedInSession(view.records), [view.records]);
 
   // ── 状态条（另一条线）点过来：打开卡、展开那个子会话所在的步骤 ──
   const [focusStep, setFocusStep] = useState<{ key: string; token: number } | null>(null);
@@ -274,15 +272,16 @@ export function ChatStatus(props: {
 
           {outputs.length > 0 && <OutputsSection outputs={outputs} scope={scope} onOpened={keepOpen} />}
 
-          <UsedSection
-            memory={{ read: usedMemory.length, remembered: remembered.length }}
-            used={used}
-            scope={scope}
-            onOpenMemory={props.onOpenMemory}
-            onOpenAbilities={props.onOpenAbilities}
-            onOpened={keepOpen}
-          />
-        </div>
+          {usedMemory.length + remembered.length > 0 && (
+            <MemoryRow
+              read={usedMemory.length}
+              remembered={remembered.length}
+              onOpen={() => {
+                keepOpen();
+                props.onOpenMemory();
+              }}
+            />
+          )}        </div>
       </div>
     </div>
   );
@@ -642,7 +641,7 @@ function KidRow(props: { row: ChildRow; now: number; onOpen: (childId: string) =
 // ───────────────────────── 产物 ─────────────────────────
 
 /**
- * 产物：按类型分行，每行一排大缩略图（宽约卡内宽的 80%，露出下一张的一角暗示能滑）；行内横向滚动——
+ * 产物：按文件类型分行（口径同每轮结尾的产物卡，多图片与看板），每行一排大缩略图（宽约卡内宽的 80%，露出下一张的一角暗示能滑）；行内横向滚动——
  * 触控板横扫原生就行，Shift + 滚轮在 mac 上鼠标会由系统转成横向，CDP / 部分鼠标不会，所以这里自己把
  * 「按着 Shift 的纵向滚动」换成横向。点一张 = 在右栏打开（演示文稿面板 / 文件面板 / 插件看板）；悬停不弹东西。
  */
@@ -679,7 +678,7 @@ function OutputsSection(props: { outputs: readonly StatusOutput[]; scope: ChatFi
                   <span className="cs-thumb-title">{output.title}</span>
                   {output.by !== null && <Icon name="bot" size={12} strokeWidth={1.8} className="cs-by" />}
                 </span>
-                <span className="cs-thumb-kind">{kindLine(t, output, group.key)}</span>
+                <span className="cs-thumb-kind">{kindLine(t, output)}</span>
               </button>
             ))}
           </ShiftScroll>
@@ -689,9 +688,9 @@ function OutputsSection(props: { outputs: readonly StatusOutput[]; scope: ChatFi
   );
 }
 
-/** 缩略图下的类型行：导出的文件写具体格式；子会话做的补一句是谁做的 */
-function kindLine(t: Messages, output: StatusOutput, group: OutputGroupKey): string {
-  const kind = group === "export" || output.pages === null ? t.chatStatus.kinds[output.kind] : `${t.chatStatus.kinds[output.kind]} · ${t.chatStatus.pages(output.pages)}`;
+/** 缩略图下的类型行：同一行里并进来的格式写具体（PPTX / Word）；演示文稿带页数；子会话做的补一句是谁做的 */
+function kindLine(t: Messages, output: StatusOutput): string {
+  const kind = output.pages === null ? t.chatStatus.kinds[output.kind] : `${t.chatStatus.kinds[output.kind]} · ${t.chatStatus.pages(output.pages)}`;
   return output.by === null ? kind : `${kind} · ${t.chatStatus.byChild(output.by)}`;
 }
 
@@ -725,65 +724,25 @@ function ShiftScroll(props: { className: string; single: boolean; children: Reac
   );
 }
 
-// ───────────────────────── 这次用到的 ─────────────────────────
+// ───────────────────────── 记忆 ─────────────────────────
 
 /**
- * 「这次用到的」（照 Claude 的 Used in this session）：每行 图标 · 类别 · 行尾一句摘要。没有内容的行不出，一行都没有整节不出。
- * 点一行在右栏打开对应的东西：记忆 → 审查 › 记忆；技能 → 能力面板；上传 → 文件面板；网页没有可开的面板，提示未接上。
+ * 记忆一行（第二版的「这次用到的」只剩它，节标题去掉，直接接在产物后面）：图标 · 记忆 · 行尾「读了 N 条 · 记住 N 条」· chevron。
+ * 点了开右栏 审查 › 记忆。技能 / 网页 / 上传删掉的理由（用户 20:58）：点技能开的是全部技能，看不出这个会话用了哪些；
+ * 网页与上传在右栏工具条、文件目录里本来就点得到。
  */
-function UsedSection(props: {
-  memory: { read: number; remembered: number };
-  used: ReturnType<typeof usedInSession>;
-  scope: ChatFileScope;
-  onOpenMemory: () => void;
-  onOpenAbilities: () => void;
-  onOpened: () => void;
-}) {
+function MemoryRow(props: { read: number; remembered: number; onOpen: () => void }) {
   const t = useT();
-  const [notWired, setNotWired] = useState<string | null>(null);
-  const { used } = props;
-  const name = (path: string) => path.split(/[\\/]/).pop() ?? path;
-  const rows: { key: string; icon: IconName; label: string; tail: string; open: () => void }[] = [];
-  if (props.memory.read + props.memory.remembered > 0) {
-    rows.push({ key: "memory", icon: FEATURE_ICON.memory, label: t.chatStatus.usedMemory, tail: t.chatStatus.usedMemoryTail(props.memory.read, props.memory.remembered), open: props.onOpenMemory });
-  }
-  if (used.skills.length > 0) rows.push({ key: "skills", icon: "book-open", label: t.chatStatus.usedSkills, tail: used.skills.join("、"), open: props.onOpenAbilities });
-  if (used.searches + used.hosts.length > 0) {
-    rows.push({
-      key: "web",
-      icon: "globe",
-      label: t.chatStatus.usedWeb,
-      tail: used.hosts.length > 0 ? used.hosts.join(" · ") : t.chatStatus.usedSearches(used.searches),
-      open: () => setNotWired("web"),
-    });
-  }
-  if (used.uploads.length > 0) {
-    const first = used.uploads[0] ?? "";
-    rows.push({ key: "uploads", icon: "paperclip", label: t.chatStatus.usedUploads, tail: used.uploads.map(name).join("、"), open: () => requestOpenPanel({ kind: "files", path: first, force: true }) });
-  }
-  if (rows.length === 0) return null;
   return (
-    <section className="cs-sec">
-      <div className="cs-head">
-        <span className="cs-head-label">{t.chatStatus.used}</span>
-      </div>
-      {rows.map((row) => (
-        <button
-          key={row.key}
-          type="button"
-          className="cs-row cs-btn cs-used"
-          onClick={() => {
-            if (row.key !== "web") props.onOpened();
-            row.open();
-          }}
-        >
-          <span className="cs-slot">
-            <Icon name={row.icon} size={14} strokeWidth={1.8} />
-          </span>
-          <span className="cs-used-label">{row.label}</span>
-          <span className="cs-used-tail">{notWired === row.key ? t.chatStatus.notWired : row.tail}</span>
-        </button>
-      ))}
+    <section className="cs-sec cs-mem-sec">
+      <button type="button" className="cs-row cs-btn cs-used" onClick={props.onOpen}>
+        <span className="cs-slot">
+          <Icon name={FEATURE_ICON.memory} size={14} strokeWidth={1.8} />
+        </span>
+        <span className="cs-used-label">{t.chatStatus.usedMemory}</span>
+        <span className="cs-used-tail">{t.chatStatus.usedMemoryTail(props.read, props.remembered)}</span>
+        <Icon name="chevron-right" size={12} strokeWidth={1.8} className="cs-step-chev" />
+      </button>
     </section>
   );
 }

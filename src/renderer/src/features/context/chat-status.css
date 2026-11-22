@@ -176,9 +176,12 @@
 .cs-goal-text {
   flex: 1;
   min-width: 0;
+  /* 目标最多两行（用户 20:58：不截成一行省略），再长省略、悬停看全文 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  text-wrap: pretty;
   font-weight: var(--weight-semibold);
   color: var(--color-text-primary);
 }
@@ -660,7 +663,7 @@
   color: var(--color-text-tertiary);
 }
 
-/* ── 这次用到的：图标 · 类别 · 行尾右对齐的摘要 ── */
+/* ── 记忆一行：图标 · 记忆 · 行尾右对齐的摘要 · chevron（第二版的「这次用到的」只剩它，不要节标题）── */
 .cs-used-label {
   flex: none;
 }

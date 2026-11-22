@@ -13,7 +13,6 @@ import { PLAN_TOOL_NAME } from "../../../../shared/plan.ts";
 import type { PlanStep, PlanTimeline } from "./plan-timeline.ts";
 import type { TurnOutput } from "../chat/process-rows.ts";
 import { sessionOutputs } from "../chat/child-outputs.ts";
-import { parseFilesBlock } from "../../../../shared/prompt-attachments.ts";
 
 // ───────────────────────── 子会话挂到哪一步 ─────────────────────────
 
@@ -163,9 +162,9 @@ export function sortChildren<T extends { state: ChildState; since: number }>(row
 export type PlanWindowRow = { kind: "step"; index: number } | { kind: "fold"; count: number; where: "before" | "between" | "after" };
 
 /**
- * 收着的计划：露「正在发生的」步——在做的、在等的、挂着在干活的子会话的——加上它们前面最近做完的一步、
- * 后面紧跟的一步待做；其余折成「N 个更早的步骤」/「N 步」/「还有 N 步」。四步以内全露（折了反而更长）。
- * 没有正在发生的步：露最后做完的一步和下一步。
+ * 收着的计划：只露「正在发生的」步——在做的、在等的、挂着在干活的子会话的；其余折成「N 个更早的步骤」/「N 个步骤」/「还有 N 步」。
+ * （第二版还多露前一步做完的、后一步待做的；2026-11-22 20:58 用户要让产物尽量进第一屏，收成只露在做的。）
+ * 四步以内全露（折了反而更长）。没有正在发生的步：露下一步待做的；全做完了露最后一步。
  */
 export function planWindow(items: readonly Pick<PlanStep, "id" | "status">[], live: ReadonlySet<string>): PlanWindowRow[] {
   if (items.length <= 4) return items.map((_, index) => ({ kind: "step", index }));
@@ -173,22 +172,10 @@ export function planWindow(items: readonly Pick<PlanStep, "id" | "status">[], li
     const item = items[index];
     return item !== undefined && (item.status === "in_progress" || item.status === "waiting" || live.has(item.id));
   };
-  const liveIdx = items.map((_, index) => index).filter(isLive);
-  const shown = new Set(liveIdx);
-  const first = liveIdx[0];
-  const lastLive = liveIdx.at(-1);
-  const lastDoneBefore = (limit: number): number => {
-    for (let index = limit - 1; index >= 0; index -= 1) if (items[index]?.status === "done") return index;
-    return -1;
-  };
-  if (first === undefined || lastLive === undefined) {
-    const done = lastDoneBefore(items.length);
-    if (done >= 0) shown.add(done);
-    if (done + 1 < items.length) shown.add(done + 1);
-  } else {
-    const done = lastDoneBefore(first);
-    if (done >= 0) shown.add(done);
-    if (lastLive + 1 < items.length) shown.add(lastLive + 1);
+  const shown = new Set(items.map((_, index) => index).filter(isLive));
+  if (shown.size === 0) {
+    const next = items.findIndex((item) => item.status !== "done");
+    shown.add(next >= 0 ? next : items.length - 1);
   }
   const rows: PlanWindowRow[] = [];
   let gap = 0;
@@ -252,8 +239,11 @@ export function pillSignal(states: readonly ChildState[], extraRunning: number):
 
 // ───────────────────────── 产物 ─────────────────────────
 
-/** 状态卡里的一份产物：结尾产物卡那套口径（allOutputs）+ 看板 + 按扩展名认出的视频 / 图片 / 画布 */
-export type StatusOutputKind = "slides" | "doc" | "web" | "pdf" | "word" | "pptx" | "sheet" | "board" | "canvas" | "video" | "image" | "file";
+/**
+ * 状态卡里一份产物的文件类型（2026-11-22 20:58 用户：分组按文件类型，不按「怎么产生的」——第二版的「导出的文件」
+ * 其实是「还没支持预览的文件」，去掉）。
+ */
+export type StatusOutputKind = "slides" | "pptx" | "doc" | "word" | "web" | "pdf" | "image" | "board" | "file";
 
 export interface StatusOutput {
   kind: StatusOutputKind;
@@ -273,32 +263,21 @@ const EXT_KIND: Readonly<Record<string, StatusOutputKind>> = {
   docx: "word",
   doc: "word",
   pptx: "pptx",
-  xlsx: "sheet",
-  csv: "sheet",
-  mp4: "video",
-  mov: "video",
-  webm: "video",
+  ppt: "pptx",
   png: "image",
   jpg: "image",
   jpeg: "image",
   svg: "image",
   gif: "image",
   webp: "image",
-  canvas: "canvas",
 };
 
-/** 结尾产物卡认的 → 状态卡的类型词 */
+/** 结尾产物卡认的 → 文件类型（结尾卡的 file 一类按扩展名再分：PDF / Word / PPTX / 图片 / 其他） */
 export function statusKindOf(output: TurnOutput): StatusOutputKind {
   if (output.kind === "slides") return "slides";
   if (output.kind === "doc") return "doc";
   if (output.kind === "web") return "web";
   return EXT_KIND[extOf(output.path)] ?? "file";
-}
-
-/** 文件账里写出的、结尾产物卡不收的东西里，哪些也算交给你的产物（视频、图片、画布、表格） */
-export function mediaKindOf(path: string): StatusOutputKind | null {
-  const kind = EXT_KIND[extOf(path)];
-  return kind === "video" || kind === "image" || kind === "canvas" || kind === "sheet" ? kind : null;
 }
 
 function extOf(path: string): string {
@@ -319,16 +298,18 @@ export function boardOf(details: unknown): { title: string; plugin: string | nul
 }
 
 /**
- * 一条会话做出来的全部产物（新的在前）：结尾产物卡同一套口径（sessionOutputs）+ 插件看板 + 文件账里写出的
- * 视频 / 图片 / 画布 / 表格。by = 子会话标题（主会话自己的 null）。
+ * 一条会话做出来的全部产物（新的在前）。口径 = 每轮结尾那摞产物卡（sessionOutputs，与 turnOutputs / child-outputs 同一套推导），
+ * 只多两类结尾卡里没有的（用户 20:58：「图片待在里面也没毛病。看板也肯定待在里面」）：
+ * - 图片：文件账（file-turn）里写出、结尾卡归进「改过的文件」的 png / jpg / svg / gif / webp（write、edit、bash 生成后被记账的都算）；
+ * - 看板：show_plugin_board 成功的结果（details.pluginBoard）。
+ * 结尾卡也不收的视频、画布、表格，这里同样不收。by = 子会话标题（主会话自己的 null）。
  */
 export function statusOutputs(records: readonly TranscriptRecord[], by: string | null): StatusOutput[] {
   const { outputs, edited } = sessionOutputs(records);
   const at = records.at(-1)?.timestamp ?? 0;
   const list: StatusOutput[] = outputs.map((output) => ({ kind: statusKindOf(output), path: output.path, title: output.title, pages: output.pages, by, at, plugin: null }));
   for (const path of edited) {
-    const kind = mediaKindOf(path);
-    if (kind !== null) list.push({ kind, path, title: path.split(/[\\/]/).pop() ?? path, pages: null, by, at, plugin: null });
+    if (EXT_KIND[extOf(path)] === "image") list.push({ kind: "image", path, title: path.split(/[\\/]/).pop() ?? path, pages: null, by, at, plugin: null });
   }
   for (const record of records) {
     if (record.role !== "tool" || record.toolName !== "show_plugin_board" || record.status !== "complete") continue;
@@ -341,28 +322,24 @@ export function statusOutputs(records: readonly TranscriptRecord[], by: string |
 }
 
 /**
- * 产物按类型分行（用户 2026-11-22：「同类型的产物是同一行……按住 Shift 那一行我就可以滑动」）。
- * 一行一类：演示文稿 · 文档 · 网页 · 图片 · 视频 · 导出的文件（PDF / Word / PPTX / 表格 / 其他）· 看板 · 画布。
- * 行的顺序固定（看得见画面的在前），不随新旧跳——找东西靠「它在哪一行」的记忆，行一跳位置记忆就废了。
- * 行内新的在前（输入已是新的在前）。没有产物的类型不出行。
+ * 产物按文件类型分行：演示文稿（含 PPTX）· 文档（含 Word）· 网页 · PDF · 图片 · 看板 · 其他文件。
+ * 行序固定（看得见画面的在前），不随新旧跳——找东西靠「它在哪一行」的记忆。行内新的在前，但并进来的格式（PPTX、Word：
+ * 只有图标卡）排在本行能渲染的之后——一行的第一张是大图，不是图标。没有的类型不出行。
  */
-export type OutputGroupKey = "slides" | "doc" | "web" | "image" | "video" | "export" | "board" | "canvas";
+export type OutputGroupKey = "slides" | "doc" | "web" | "pdf" | "image" | "board" | "file";
 
 const GROUP_OF: Readonly<Record<StatusOutputKind, OutputGroupKey>> = {
   slides: "slides",
+  pptx: "slides",
   doc: "doc",
+  word: "doc",
   web: "web",
+  pdf: "pdf",
   image: "image",
-  video: "video",
-  pdf: "export",
-  word: "export",
-  pptx: "export",
-  sheet: "export",
-  file: "export",
   board: "board",
-  canvas: "canvas",
+  file: "file",
 };
-const GROUP_ORDER: readonly OutputGroupKey[] = ["slides", "doc", "web", "image", "video", "export", "board", "canvas"];
+const GROUP_ORDER: readonly OutputGroupKey[] = ["slides", "doc", "web", "pdf", "image", "board", "file"];
 
 export function groupOutputs<T extends Pick<StatusOutput, "kind">>(outputs: readonly T[]): { key: OutputGroupKey; items: T[] }[] {
   const map = new Map<OutputGroupKey, T[]>();
@@ -370,62 +347,11 @@ export function groupOutputs<T extends Pick<StatusOutput, "kind">>(outputs: read
     const key = GROUP_OF[output.kind];
     map.set(key, [...(map.get(key) ?? []), output]);
   }
+  const merged = (item: T) => (item.kind === "pptx" || item.kind === "word" ? 1 : 0);
   return GROUP_ORDER.flatMap((key) => {
     const items = map.get(key);
-    return items === undefined ? [] : [{ key, items }];
+    return items === undefined ? [] : [{ key, items: [...items].sort((a, b) => merged(a) - merged(b)) }];
   });
-}
-
-// ───────────────────────── 这次用到的 ─────────────────────────
-
-export interface UsedInSession {
-  /** 读过 SKILL.md 的技能（目录名），按第一次用到排 */
-  skills: string[];
-  /** 网页搜索的次数（工具名含 web_search 的调用） */
-  searches: number;
-  /** 打开过的网页的站点（去重，按第一次打开排） */
-  hosts: string[];
-  /** 用户上传的文件（消息里 attached-files 块的路径，去重） */
-  uploads: string[];
-}
-
-/**
- * 「这次用到的」（照 Claude 的 Used in this session）：从转录推，不改契约。记忆不在这里（它有自己的账，useMemorySession）。
- * 技能 = 读了某个 `<名>/SKILL.md`；网页 = web_search 次数 + browser_navigate / web_fetch 打开的站点；上传 = 用户消息里的附件清单。
- */
-export function usedInSession(records: readonly TranscriptRecord[]): UsedInSession {
-  const skills: string[] = [];
-  const hosts: string[] = [];
-  const uploads: string[] = [];
-  let searches = 0;
-  const push = (list: string[], value: string) => {
-    if (!list.includes(value)) list.push(value);
-  };
-  for (const record of records) {
-    if (record.role === "user") {
-      for (const block of record.content) {
-        if (block.type !== "text") continue;
-        for (const file of parseFilesBlock(block.text) ?? []) if (file.kind === "file") push(uploads, file.path);
-      }
-      continue;
-    }
-    if (record.role !== "tool") continue;
-    const input = (record.input ?? {}) as Record<string, unknown>;
-    if (record.toolName === "read" && typeof input["path"] === "string") {
-      const hit = /([^\\/]+)[\\/]SKILL\.md$/i.exec(input["path"]);
-      if (hit?.[1] !== undefined) push(skills, hit[1]);
-      continue;
-    }
-    if (record.toolName.includes("web_search")) {
-      searches += 1;
-      continue;
-    }
-    if ((record.toolName === "browser_navigate" || record.toolName === "web_fetch") && typeof input["url"] === "string") {
-      const host = hostOf(input["url"]);
-      if (host !== input["url"]) push(hosts, host.replace(/^www\./, ""));
-    }
-  }
-  return { skills, searches, hosts, uploads };
 }
 
 // ───────────────────────── 面板宽度 ─────────────────────────
@@ -434,9 +360,9 @@ export function usedInSession(records: readonly TranscriptRecord[]): UsedInSessi
  * 状态卡可拖的宽度（用户 2026-11-22：「我就是想这个卡片能调整宽度」；进度啰嗦时要宽一点）。
  * 卡长得仍是浮卡（「悬浮挺好的，这样我还可以一边看到计划，一边写文稿」），但**挤对话列**（同日 20:25：「保持浮卡，但是要挤对话列！」）：
  * 卡打开时对话列右侧让出「卡宽 + 两侧间距」。所以上限同时受对话区宽度约束：最宽 560、对话区宽的 60%、
- * 给对话列留够 CHAT_MIN 之后剩下的，三者取小；最窄 280。连 280 都放不下（fitsPanel 为假）就默认收起。
+ * 给对话列留够 CHAT_MIN 之后剩下的，三者取小；最窄 340（20:58 由 280 提上来）。连 340 都放不下（fitsPanel 为假）就默认收起。
  */
-export const PANEL_MIN = 280;
+export const PANEL_MIN = 340;
 export const PANEL_MAX = 560;
 export const PANEL_DEFAULT = 380;
 export const PANE_SHARE = 0.6;
