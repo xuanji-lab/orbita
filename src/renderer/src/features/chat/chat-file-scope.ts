@@ -78,6 +78,18 @@ export async function openChatFile(scope: ChatFileScope, path: string): Promise<
   }
 }
 
+/** 在系统文件管理器里显示一个文件（同一道白名单）；打不开返回 false */
+export async function revealChatFile(scope: ChatFileScope, path: string): Promise<boolean> {
+  const root = rootOf(path, await rootsFor(scope));
+  if (root === null) return false;
+  try {
+    await api.files.reveal({ sessionId: scope.sessionId, workspaceId: scope.workspaceId, root: root.path, dir: path });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** 本地图的 data URL：undefined = 还在读，null = 读不到 */
 export function useChatImage(path: string | null): string | null | undefined {
   const scope = useChatFileScope();

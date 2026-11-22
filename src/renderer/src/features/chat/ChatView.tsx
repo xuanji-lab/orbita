@@ -1,5 +1,6 @@
 import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { QuoteToolbar, type QuoteCandidate } from "../../shell/QuoteToolbar";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
@@ -78,6 +79,7 @@ import { GOAL_TOOL_NAME } from "../../../../shared/goal.ts";
 import type { GoalLedger } from "../../../../shared/goal-ledger.ts";
 import { PLAN_TOOL_NAME } from "../../../../shared/plan.ts";
 import {
+  CHAPTER_STEPS_SHOWN,
   processOutcome,
   SLOW_GAP_MS,
   TAIL_AFTER_MS,
@@ -174,19 +176,21 @@ import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
 import { NebulaPet } from "../../shell/UsageMeter";
-import { ChatFileScopeContext, openChatFile, useChatFileScope, useChatImage, type ChatFileScope } from "./chat-file-scope.ts";
+import { ChatFileScopeContext, loadChatImage, openChatFile, revealChatFile, useChatFileScope, useChatImage, type ChatFileScope } from "./chat-file-scope.ts";
 import { requestOpenPanel } from "../../shell/open-panel.ts";
 import {
+  assignImages,
+  imagesOf,
   processHeadline,
-  processImages,
   processRows,
-  stepImages,
   stepVerb,
   THUMBS_SHOWN,
   turnOutputs,
   type ProcessImage,
   type ProcessRow,
+  type TurnOutput,
 } from "./process-rows.ts";
+import { fileManagerKind } from "../../file-manager.ts";
 import { HomeHero } from "./HomeHero";
 import { HomeLog, type HomeLogRowView } from "./HomeLog";
 import { heroFace } from "./home-hero.ts";
@@ -4696,7 +4700,8 @@ function TurnProcessLine(props: {
       : result.kind === "plan"
         ? t.chat.processPlanOnly
         : processHeadline(unit.steps, props.toolResults, result.files, t.chat.headline);
-  const images = processImages(unit.steps, props.toolResults);
+  const imagesByCall = assignImages(unit.steps, props.toolResults);
+  const images = imagesOf(unit.steps, imagesByCall);
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
       {timeLabel}
@@ -4720,7 +4725,7 @@ function TurnProcessLine(props: {
           {images.length > 0 && <ProcessThumbs images={images} />}
         </span>
       </CollapseRow>
-      {open && <ProcessExpanded steps={unit.steps} toolResults={props.toolResults} skills={props.skills} />}
+      {open && <ProcessExpanded steps={unit.steps} toolResults={props.toolResults} skills={props.skills} imagesByCall={imagesByCall} />}
       {goalNoticeLine !== null && <Notice icon="pencil-line">{goalNoticeLine}</Notice>}
       {planNoticeLine !== null && <Notice icon="pencil-line">{planNoticeLine}</Notice>}
       {props.awaitingPlan !== null && planCallIds.includes(props.awaitingPlan.toolCallId) && (
@@ -4780,7 +4785,13 @@ function useProcessLayout(): [ProcessLayout, (next: ProcessLayout) => void] {
  * 展开后的过程（2026-11-22）。两种排法都只有一种行：图标 · 动作 · 对象 · 量，行尾可带缩略图；
  * 技能、外接工具、内置命令、计划不再各长一种胶囊 / 药丸 / 卡。思考不单独占行，挂在它后面那一步上。
  */
-function ProcessExpanded(props: { steps: readonly ProcessStep[]; toolResults: ToolResultIndex; skills: SkillMeta[] }) {
+function ProcessExpanded(props: {
+  steps: readonly ProcessStep[];
+  toolResults: ToolResultIndex;
+  skills: SkillMeta[];
+  /** 每一步挂哪几张图（assignImages：同一张图只挂在第一次出现的那一步） */
+  imagesByCall: ReadonlyMap<string, ProcessImage[]>;
+}) {
   const t = useT();
   const [layout, setLayout] = useProcessLayout();
   return (
@@ -4796,7 +4807,7 @@ function ProcessExpanded(props: { steps: readonly ProcessStep[]; toolResults: To
       {layout === "chapters" ? (
         <ol className="proc-rows">
           {processChapters(props.steps).map((chapter) => (
-            <ProcessChapterRow key={chapter.key} chapter={chapter} toolResults={props.toolResults} skills={props.skills} />
+            <ProcessChapterRow key={chapter.key} chapter={chapter} toolResults={props.toolResults} skills={props.skills} imagesByCall={props.imagesByCall} />
           ))}
         </ol>
       ) : (
@@ -4814,7 +4825,7 @@ function ProcessExpanded(props: { steps: readonly ProcessStep[]; toolResults: To
                 </div>
               </li>
             ) : (
-              <StepRow key={row.key} call={row.call} thinking={row.thinking} toolResults={props.toolResults} skills={props.skills} />
+              <StepRow key={row.key} call={row.call} thinking={row.thinking} toolResults={props.toolResults} skills={props.skills} images={props.imagesByCall.get(row.call.toolCallId) ?? []} />
             ),
           )}
         </ol>
@@ -4823,44 +4834,72 @@ function ProcessExpanded(props: { steps: readonly ProcessStep[]; toolResults: To
   );
 }
 
-/** 按段排时的一段：图标（说的话 / 想的 / 只是干活）· 这段的名字 · 几步 · 缩略图；点开是这段的每一步 */
-function ProcessChapterRow(props: { chapter: ProcessChapter; toolResults: ToolResultIndex; skills: SkillMeta[] }) {
+/**
+ * 按段排时的一段（2026-11-22 用户：「每一句每一行都只有一句话，我就算点了也还是只有不完整的那一句话」——照原版）：
+ * 这段说的话整句显示、可以换行；下面一行是这段做了哪几步（同一种「动作 · 对象」，前几步 + 还有 N 步）；
+ * 右边是步数、图的张数和缩略图。点开是这段的每一步。
+ */
+function ProcessChapterRow(props: {
+  chapter: ProcessChapter;
+  toolResults: ToolResultIndex;
+  skills: SkillMeta[];
+  imagesByCall: ReadonlyMap<string, ProcessImage[]>;
+}) {
   const t = useT();
   const [open, setOpen] = useFoldState(`chapter:${props.chapter.key}`);
   const { chapter } = props;
   const rows = processRows(chapter.steps).filter((row): row is Extract<ProcessRow, { kind: "step" }> => row.kind === "step");
   const failed = rows.filter((row) => props.toolResults.get(row.call.toolCallId)?.status === "error").length;
-  const images = processImages(chapter.steps, props.toolResults);
+  const images = imagesOf(chapter.steps, props.imagesByCall);
+  const label = (call: ToolCallUnit) => {
+    const v = stepVerb(call.toolName, call.input, t.chat.stepVerb, props.skills);
+    return v.object === null ? v.verb : `${v.verb} ${v.object}`;
+  };
   // 没有旁白也没有思考的段：按头一步起名（「读文件 handoff.txt」），不写「读取 3 次」这种统计
   const first = rows[0];
-  const fallback =
-    first === undefined
-      ? ""
-      : (() => {
-          const v = stepVerb(first.call.toolName, first.call.input, t.chat.stepVerb, props.skills);
-          return v.object === null ? v.verb : `${v.verb} ${v.object}`;
-        })();
-  const title = chapter.title ?? fallback;
+  const title = chapter.title ?? (first === undefined ? "" : label(first.call));
+  const shown = rows.slice(0, CHAPTER_STEPS_SHOWN);
   const icon: IconName = chapter.source === "say" ? "message-square" : chapter.source === "think" ? "lightbulb" : first === undefined ? "list" : stepIcon(first.call.toolName, first.call.input, props.skills);
   return (
     <li className="proc-chap">
-      <button type="button" className="proc-row btn" aria-expanded={open} onClick={() => setOpen((value) => !value)} disabled={rows.length === 0}>
+      <button type="button" className="proc-chap-btn" aria-expanded={open} onClick={() => setOpen((value) => !value)} disabled={rows.length === 0}>
         <span className="proc-row-icon">
           <Icon name={icon} size={14} strokeWidth={1.8} />
         </span>
-        <span className={chapter.source === "say" ? "proc-row-title" : "proc-row-title quiet"}>
-          <InlineMarks text={title} />
+        <span className="proc-chap-main">
+          <span className={chapter.source === "say" ? "proc-chap-title" : "proc-chap-title quiet"}>
+            <InlineMarks text={title} />
+          </span>
+          {rows.length > 0 && (
+            <span className="proc-chap-steps">
+              {shown.map((row) => (
+                <span key={row.key} className={props.toolResults.get(row.call.toolCallId)?.status === "error" ? "bad" : undefined}>
+                  {label(row.call)}
+                </span>
+              ))}
+              {rows.length > shown.length && <span>{t.chat.processMore(rows.length - shown.length)}</span>}
+            </span>
+          )}
         </span>
-        <span className="proc-row-meta">
-          {rows.length > 0 && t.chat.processSteps2(rows.length)}
-          {failed > 0 && ` · ${t.chat.processQuietFailed(failed)}`}
+        <span className="proc-chap-aside">
+          <span className="proc-row-meta">
+            {rows.length > 0 && t.chat.processSteps2(rows.length)}
+            {failed > 0 && ` · ${t.chat.processQuietFailed(failed)}`}
+          </span>
+          {images.length > 0 && <ProcessThumbs images={images} />}
         </span>
-        {images.length > 0 && <ProcessThumbs images={images} />}
       </button>
       {open && rows.length > 0 && (
         <ol className="proc-rows nested">
           {rows.map((row) => (
-            <StepRow key={row.key} call={row.call} thinking={row.thinking} toolResults={props.toolResults} skills={props.skills} />
+            <StepRow
+              key={row.key}
+              call={row.call}
+              thinking={row.thinking}
+              toolResults={props.toolResults}
+              skills={props.skills}
+              images={props.imagesByCall.get(row.call.toolCallId) ?? []}
+            />
           ))}
         </ol>
       )}
@@ -4908,7 +4947,14 @@ function stepIcon(toolName: string, input: unknown, skills: SkillMeta[]): IconNa
 }
 
 /** 一步一行：图标 · 动作 · 对象 · 量 · 缩略图。点开是原样的输入输出（前面挂着它之前想的那段） */
-function StepRow(props: { call: ToolCallUnit; thinking: readonly string[]; toolResults: ToolResultIndex; skills: SkillMeta[] }) {
+function StepRow(props: {
+  call: ToolCallUnit;
+  thinking: readonly string[];
+  toolResults: ToolResultIndex;
+  skills: SkillMeta[];
+  /** 这一步挂的图（同一张图在这一轮里只挂一次，见 assignImages） */
+  images: readonly ProcessImage[];
+}) {
   const t = useT();
   const { call } = props;
   const [open, setOpen] = useFoldState(`step:${call.toolCallId}`);
@@ -4919,7 +4965,7 @@ function StepRow(props: { call: ToolCallUnit; thinking: readonly string[]; toolR
   const stats = finished && !failed ? editDiffStats(result) : null;
   const lines = finished && !failed && call.toolName === "write" ? writeLineCount(call.input) : null;
   const shellMs = call.toolName === "bash" || call.toolName === "powershell" ? toolDurationText(call.toolCallId, t) : null;
-  const images = stepImages(call, props.toolResults);
+  const images = props.images;
   return (
     <li className={failed ? "proc-step-li bad" : "proc-step-li"}>
       <button type="button" className="proc-row btn" aria-expanded={open} onClick={() => setOpen((value) => !value)} disabled={!finished}>
@@ -4988,64 +5034,159 @@ function StepBody(props: { call: ToolCallUnit; result: ToolTranscriptItem; think
   );
 }
 
-/** 过程里出现过的图：最多露三张，多的写「+N」（照 Claude 折叠行右边那一排） */
+/**
+ * 过程里出现过的图（2026-11-22 用户：「我又不知道它有多少张」「鼠标悬浮在这个缩略图上面，它可以放大一点点」）：
+ * 最多露三张；不止一张时前面写总张数（每一层的数是下一层的和，见 assignImages）。悬停放大，点了看大图。
+ * 缩略图在可点的行里面：点它只看图，不折叠 / 展开那一行。
+ */
 function ProcessThumbs(props: { images: readonly ProcessImage[] }) {
+  const t = useT();
+  const [viewing, setViewing] = useState<number | null>(null);
   const shown = props.images.slice(-THUMBS_SHOWN);
-  const rest = props.images.length - shown.length;
+  const offset = props.images.length - shown.length;
   return (
-    <span className="proc-thumbs" aria-hidden="true">
-      {rest > 0 && <span className="proc-thumbs-more">+{rest}</span>}
-      {shown.map((image) => (
-        <ProcessThumb key={image.key} image={image} />
+    <span className="proc-thumbs">
+      {props.images.length > 1 && <span className="proc-thumbs-count">{t.chat.images(props.images.length)}</span>}
+      {shown.map((image, index) => (
+        <ProcessThumb key={image.key} image={image} onOpen={() => setViewing(offset + index)} />
       ))}
+      {viewing !== null && <ProcessLightbox images={props.images} start={viewing} onClose={() => setViewing(null)} />}
     </span>
   );
 }
 
-function ProcessThumb(props: { image: ProcessImage }) {
+function thumbSrc(image: ProcessImage, fileUrl: string | null | undefined): string | null {
+  if (image.kind === "inline") return `data:${image.mimeType};base64,${image.data}`;
+  return fileUrl ?? null;
+}
+
+function ProcessThumb(props: { image: ProcessImage; onOpen: () => void }) {
   const { image } = props;
   const fileUrl = useChatImage(image.kind === "file" ? image.path : null);
-  const src = image.kind === "inline" ? `data:${image.mimeType};base64,${image.data}` : fileUrl;
-  if (src === undefined || src === null) return <span className="proc-thumb empty" title={image.name} />;
-  return <img className="proc-thumb" src={src} alt={image.name} title={image.name} />;
+  const src = thumbSrc(image, fileUrl);
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const [hover, setHover] = useState<DOMRect | null>(null);
+  if (src === null) return <span className="proc-thumb empty" title={image.name} />;
+  return (
+    <span
+      ref={ref}
+      className="proc-thumb-wrap"
+      role="button"
+      tabIndex={-1}
+      aria-label={image.name}
+      onMouseEnter={() => setHover(ref.current?.getBoundingClientRect() ?? null)}
+      onMouseLeave={() => setHover(null)}
+      onClick={(event) => {
+        // 在可点的行里：只看图，不让外层的行折叠 / 展开
+        event.stopPropagation();
+        event.preventDefault();
+        setHover(null);
+        props.onOpen();
+      }}
+    >
+      <img className="proc-thumb" src={src} alt={image.name} />
+      {hover !== null && <ThumbPeek src={src} name={image.name} anchor={hover} />}
+    </span>
+  );
+}
+
+/** 悬停放大：贴着缩略图浮一张中图（portal 到 body，过程行是 overflow:hidden，原地画会被裁） */
+const PEEK_W = 320;
+const PEEK_H = 220;
+function ThumbPeek(props: { src: string; name: string; anchor: DOMRect }) {
+  const gap = 8;
+  const left = Math.max(gap, Math.min(window.innerWidth - PEEK_W - gap, props.anchor.right - PEEK_W));
+  const below = props.anchor.bottom + gap + PEEK_H < window.innerHeight;
+  const top = below ? props.anchor.bottom + gap : Math.max(gap, props.anchor.top - gap - PEEK_H);
+  return createPortal(
+    <span className="proc-thumb-peek" style={{ left, top, width: PEEK_W, height: PEEK_H }} aria-hidden="true">
+      <img src={props.src} alt="" />
+      <span className="proc-thumb-peek-name">{props.name}</span>
+    </span>,
+    document.body,
+  );
+}
+
+/** 点缩略图看大图：盘上的图先读出来，读不到的跳过 */
+function ProcessLightbox(props: { images: readonly ProcessImage[]; start: number; onClose: () => void }) {
+  const scope = useChatFileScope();
+  const [loaded, setLoaded] = useState<{ type: "image"; data: string; mimeType: string }[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void Promise.all(
+      props.images.map(async (image) => {
+        const url = image.kind === "inline" ? `data:${image.mimeType};base64,${image.data}` : scope === null ? null : await loadChatImage(scope, image.path);
+        if (url === null) return null;
+        const comma = url.indexOf(",");
+        return { type: "image" as const, data: url.slice(comma + 1), mimeType: url.slice(5, url.indexOf(";")) };
+      }),
+    ).then((list) => {
+      if (alive) setLoaded(list.filter((item): item is { type: "image"; data: string; mimeType: string } => item !== null));
+    });
+    return () => {
+      alive = false;
+    };
+  }, [props.images, scope]);
+  if (loaded === null || loaded.length === 0) return null;
+  return <ImageLightbox images={loaded} startIndex={Math.min(props.start, loaded.length - 1)} onClose={props.onClose} />;
 }
 
 /**
- * 一轮做出来、交给用户的东西（2026-11-22 用户：「完全折叠以后，我们其实只考虑产出，产出的话，结果都放在底部」）：
- * 回答之后、文件账之前，一份一行。演示文稿 / 文档点了在右栏打开；导出的文件用系统默认应用打开。
+ * 一轮做出来、交给用户的东西（2026-11-22 用户：「完全折叠以后，我们其实只考虑产出，产出的话，结果都放在底部」）。
+ * 照 Kimi：一份一张卡，和上面的「N 个文件已更改」同宽同色、左右对齐；右边「预览 ▾」——预览在软件里打开
+ * （演示文稿进演示文稿面板，文档和导出的文件进文件面板），下拉是「用默认应用打开」「在访达中显示」。
  */
 function TurnOutputsBlock(props: { unit: TurnOutputsUnit; toolResults: ToolResultIndex }) {
-  const t = useT();
-  const scope = useChatFileScope();
   const outputs = turnOutputs(props.unit.calls, props.toolResults);
   if (outputs.length === 0) return null;
   return (
     <div className="turn-outputs">
-      {outputs.map((output) => {
-        const icon: IconName = output.kind === "slides" ? FEATURE_ICON.slides : output.kind === "doc" ? FEATURE_ICON.doc : "file";
-        const sub =
-          output.kind === "slides" ? t.chat.outputDeck(output.pages) : output.kind === "doc" ? t.chat.outputDoc : t.chat.outputFile(output.format);
-        const open = () => {
-          if (output.kind === "file") {
-            if (scope !== null) void openChatFile(scope, output.path);
-            return;
-          }
-          requestOpenPanel({ kind: output.kind === "slides" ? "slides" : "files", path: output.path, force: true });
-        };
-        return (
-          <button key={output.path} type="button" className="turn-output" onClick={open} title={output.path}>
-            <span className="turn-output-icon">
-              <Icon name={icon} size={16} strokeWidth={1.7} />
-            </span>
-            <span className="turn-output-title">{output.title}</span>
-            <span className="turn-output-sub">{sub}</span>
-            <span className="turn-output-open row-trailing">
-              {output.kind === "file" ? t.chat.outputOpenFile : t.chat.outputOpenPanel}
-              <Icon name={output.kind === "file" ? "external-link" : "panel-right"} size={13} strokeWidth={1.8} />
-            </span>
-          </button>
-        );
-      })}
+      {outputs.map((output) => (
+        <TurnOutputCard key={output.path} output={output} />
+      ))}
+    </div>
+  );
+}
+
+function TurnOutputCard(props: { output: TurnOutput }) {
+  const t = useT();
+  const scope = useChatFileScope();
+  const { output } = props;
+  const icon: IconName = output.kind === "slides" ? FEATURE_ICON.slides : output.kind === "doc" ? FEATURE_ICON.doc : "file";
+  const sub =
+    output.kind === "slides"
+      ? t.chat.outputDeck(output.pages)
+      : output.kind === "doc"
+        ? t.chat.outputDoc
+        : (output.detail ?? t.chat.outputFile(output.format));
+  const preview = () => requestOpenPanel({ kind: output.kind === "slides" ? "slides" : "files", path: output.path, force: true });
+  const items: MenuItem[] = [
+    { id: "open", label: t.chat.outputOpenDefault, icon: "external-link", onSelect: () => void (scope !== null && openChatFile(scope, output.path)) },
+    { id: "reveal", label: t.plugins.revealInManager(fileManagerKind(api.platform)), icon: "folder-open", onSelect: () => void (scope !== null && revealChatFile(scope, output.path)) },
+  ];
+  return (
+    <div className="turn-output">
+      <span className="turn-output-icon">
+        <Icon name={icon} size={18} strokeWidth={1.6} />
+      </span>
+      <span className="turn-output-text" title={output.path}>
+        <span className="turn-output-title">{output.title}</span>
+        <span className="turn-output-sub">{sub}</span>
+      </span>
+      <span className="turn-output-split">
+        <button type="button" className="turn-output-btn" onClick={preview}>
+          {t.chat.outputPreview}
+        </button>
+        <Menu
+          items={items}
+          align="end"
+          trigger={({ open, toggle }) => (
+            <button type="button" className="turn-output-btn more" aria-label={t.chat.outputMore} aria-expanded={open} onClick={toggle}>
+              <Icon name="chevron-down" size={13} strokeWidth={1.8} />
+            </button>
+          )}
+        />
+      </span>
     </div>
   );
 }

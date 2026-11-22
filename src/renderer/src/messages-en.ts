@@ -2408,8 +2408,9 @@ export const en = {
     outputDeck: (pages: number | null) => (pages === null ? "Deck" : `Deck · ${plural(pages, "slide")}`),
     outputDoc: "Document",
     outputFile: (format: string | null) => format ?? "File",
-    outputOpenPanel: "Open beside",
-    outputOpenFile: "Open",
+    outputPreview: "Preview",
+    outputMore: "More ways to open",
+    outputOpenDefault: "Open with default app",
   },
 
   stats: {

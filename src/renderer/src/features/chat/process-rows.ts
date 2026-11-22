@@ -157,8 +157,11 @@ function objectOf(toolName: string, record: Record<string, unknown>): string | n
     case "update_plan": {
       const items = record["items"];
       if (!Array.isArray(items)) return null;
-      const now = items.find((item) => typeof item === "object" && item !== null && (item as Record<string, unknown>)["status"] === "in_progress");
-      return now === undefined ? null : str((now as Record<string, unknown>)["text"]);
+      const rows = items.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null);
+      const now = rows.find((item) => item["status"] === "in_progress");
+      if (now !== undefined) return str(now["text"]);
+      // 没有在做的那一步（全做完了，或只是改了清单）：写进度，不留空
+      return rows.length === 0 ? null : `${rows.filter((item) => item["status"] === "done").length}/${rows.length}`;
     }
     case "update_goal":
       return str(record["goal"]);
@@ -198,6 +201,8 @@ export interface TurnOutput {
   pages: number | null;
   /** 导出的格式（PDF、Word…）；不是导出的 null */
   format: string | null;
+  /** 导出文件的说明（「PDF · 3 页 · 171 KB」，工具结果卡上带的）；没有 null */
+  detail: string | null;
 }
 
 /** 写演示文稿的工具：结果里带「the deck now has N slide(s)」 */
@@ -260,24 +265,24 @@ export function turnOutputs(calls: readonly ToolCallUnit[], results: ToolResultI
     const card = readCommandCard(result.details);
     if (call.toolName === "slides_create" && card !== null) {
       deckByName.set(basename(card.path), card.path);
-      put({ kind: "slides", path: card.path, title: card.title, pages: 0, format: null });
+      put({ kind: "slides", path: card.path, title: card.title, pages: 0, format: null, detail: null });
       continue;
     }
     if (DECK_WRITERS.has(call.toolName)) {
       const path = deckPath(inputPath(call));
       if (path === null) continue;
       const prev = byPath.get(path);
-      put({ kind: "slides", path, title: prev?.title ?? fileLabel(path), pages: deckPagesFrom(resultText(results, call)), format: null });
+      put({ kind: "slides", path, title: prev?.title ?? fileLabel(path), pages: deckPagesFrom(resultText(results, call)), format: null, detail: null });
       continue;
     }
     if (call.toolName === "doc_open" && card !== null) {
-      put({ kind: "doc", path: card.path, title: card.title, pages: null, format: null });
+      put({ kind: "doc", path: card.path, title: card.title, pages: null, format: null, detail: null });
       continue;
     }
     if ((call.toolName === "slides_export" || call.toolName === "doc_export") && card !== null) {
       const format = str((call.input as Record<string, unknown> | null)?.["format"]);
       if (format !== null && SELF_CHECK_EXPORT.has(format)) continue;
-      put({ kind: "file", path: card.path, title: card.title, pages: null, format: format === null ? null : (FORMAT_NAME[format] ?? format) });
+      put({ kind: "file", path: card.path, title: card.title, pages: null, format: format === null ? null : (FORMAT_NAME[format] ?? format), detail: card.subtitle ?? null });
     }
   }
   return order.map((path) => byPath.get(path)).filter((output): output is TurnOutput => output !== undefined);
@@ -285,39 +290,63 @@ export function turnOutputs(calls: readonly ToolCallUnit[], results: ToolResultI
 
 // ───────────────────────── 缩略图 ─────────────────────────
 
-/** 过程里出现过的图：工具结果里的图（读图、读 PDF 页图）或导出到盘上的图（PNG 自检） */
+/**
+ * 过程里出现过的图：工具结果里的图（读图、读 PDF 页图）或导出到盘上的图（PNG 自检）。
+ * `key` 是「这张图是哪张」：盘上的图按路径认，同一个文件先被导出、再被读回来看，是同一张。
+ */
 export type ProcessImage =
   | { kind: "inline"; key: string; data: string; mimeType: string; name: string }
   | { kind: "file"; key: string; path: string; name: string };
 
-/** 一段 / 一行最多露几张，多的写「+N」 */
+/** 一行最多露几张缩略图；多的不再画，旁边写总数 */
 export const THUMBS_SHOWN = 3;
 
+function pathKey(path: string): string {
+  return path.replace(/\\/g, "/");
+}
+
+/** 一步自己带出来的图（不管前面出现过没有） */
 export function stepImages(call: ToolCallUnit, results: ToolResultIndex): ProcessImage[] {
   const result = results.get(call.toolCallId);
   if (result === undefined || result.status !== "complete") return [];
   const images: ProcessImage[] = [];
   const path = inputPath(call);
-  result.content.forEach((block, index) => {
-    if (block.type !== "image") return;
-    images.push({ kind: "inline", key: `${call.toolCallId}:${index}`, data: block.data, mimeType: block.mimeType, name: path === null ? call.toolName : basename(path) });
+  const blocks = result.content.filter((block): block is Extract<(typeof result.content)[number], { type: "image" }> => block.type === "image");
+  blocks.forEach((block, index) => {
+    // 读一张图：就是那个文件；读 PDF 这类一次出几页：按页认
+    const key = path === null ? `${call.toolCallId}:${index}` : blocks.length === 1 ? pathKey(path) : `${pathKey(path)}#${index}`;
+    images.push({ kind: "inline", key, data: block.data, mimeType: block.mimeType, name: path === null ? call.toolName : basename(path) });
   });
   if (images.length > 0) return images;
   if (call.toolName === "slides_export") {
     const card = readCommandCard(result.details);
-    if (card !== null && /\.png$/i.test(card.path)) images.push({ kind: "file", key: call.toolCallId, path: card.path, name: basename(card.path) });
+    if (card !== null && /\.png$/i.test(card.path)) images.push({ kind: "file", key: pathKey(card.path), path: card.path, name: basename(card.path) });
   }
   return images;
 }
 
-/** 一段里的图：同一张图（导出的 PNG 随后又被读回来看）只算一次，留最后出现的那次 */
-export function processImages(steps: readonly ProcessStep[], results: ToolResultIndex): ProcessImage[] {
-  const byName = new Map<string, ProcessImage>();
-  for (const image of processCalls(steps).flatMap((call) => stepImages(call, results))) {
-    byName.delete(image.name);
-    byName.set(image.name, image);
+/**
+ * 一轮里每一步该挂哪几张图（2026-11-22 用户：「每一层折叠都是下一层的图片的总数」）：同一张图只挂在它**第一次出现**
+ * 的那一步上——导出第 1 页、再读回来看，图挂在导出那一步，读那一步不再重复。于是每一层的数都是下一层的和：
+ * 一段的张数 = 这段每一步的张数相加，一轮的张数 = 每段相加，不会出现「上面写 3 张、点开有 6 张」。
+ */
+export function assignImages(steps: readonly ProcessStep[], results: ToolResultIndex): ReadonlyMap<string, ProcessImage[]> {
+  const seen = new Set<string>();
+  const byCall = new Map<string, ProcessImage[]>();
+  for (const call of processCalls(steps)) {
+    const fresh = stepImages(call, results).filter((image) => {
+      if (seen.has(image.key)) return false;
+      seen.add(image.key);
+      return true;
+    });
+    if (fresh.length > 0) byCall.set(call.toolCallId, fresh);
   }
-  return [...byName.values()];
+  return byCall;
+}
+
+/** 一串步骤合起来的图（按 assignImages 的挂法，顺序同步骤） */
+export function imagesOf(steps: readonly ProcessStep[], byCall: ReadonlyMap<string, ProcessImage[]>): ProcessImage[] {
+  return processCalls(steps).flatMap((call) => byCall.get(call.toolCallId) ?? []);
 }
 
 // ───────────────────────── 折叠行那一句 ─────────────────────────
@@ -339,7 +368,7 @@ export interface HeadlineWords {
 
 /**
  * 折叠行那一句（照 Claude「Created 3 files, shared a file, and 107 more steps」）：先说做出来的东西，
- * 再说「还有 N 步」。步数只数工具调用，记账（改计划 / 改目标）不算；做出东西的那几步从「还有」里扣掉。
+ * 再说「还有 N 步」。步数是展开后的行数（改计划、定目标各一行，也算）；做出东西的那几步从「还有」里扣掉。
  */
 export function processHeadline(
   steps: readonly ProcessStep[],
@@ -347,7 +376,8 @@ export function processHeadline(
   files: number,
   words: HeadlineWords,
 ): string {
-  const calls = processCalls(steps).filter((call) => call.toolName !== "update_plan" && call.toolName !== "update_goal");
+  // 改计划、定目标也算一步：展开后它们各占一行，段里写的步数也数它们，折叠行要对得上
+  const calls = processCalls(steps);
   const outputs = turnOutputs(calls, results);
   const decks = outputs.filter((output) => output.kind === "slides").length;
   const docs = outputs.filter((output) => output.kind === "doc").length;

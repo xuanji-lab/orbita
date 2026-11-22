@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolTranscriptItem } from "@earendil-works/pi-protocol";
-import { deckPagesFrom, processHeadline, processImages, processRows, stepVerb, turnOutputs } from "./process-rows.ts";
+import { assignImages, deckPagesFrom, imagesOf, processHeadline, processRows, stepVerb, turnOutputs } from "./process-rows.ts";
 import type { ProcessStep, ToolCallUnit, ToolResultIndex } from "./tool-results.ts";
 import { en } from "../../messages-en.ts";
 import { zh } from "../../messages-zh.ts";
@@ -47,7 +47,7 @@ describe("turnOutputs：一轮交给用户的东西，一份一行", () => {
       done("w1", "slides_write", { content: [{ type: "text", text: "Wrote slide(s) 1, 2; the deck now has 2 slide(s)." }] }),
       done("w2", "slides_edit", { content: [{ type: "text", text: "Applied 1 change(s); the deck has 3 slide(s)." }] }),
     ]);
-    assert.deepEqual(turnOutputs(calls, results), [{ kind: "slides", path: "/w/新加坡.slides.json", title: "新加坡", pages: 3, format: null }]);
+    assert.deepEqual(turnOutputs(calls, results), [{ kind: "slides", path: "/w/新加坡.slides.json", title: "新加坡", pages: 3, format: null, detail: null }]);
   });
 
   test("PNG 是自检，不算产物；PDF 算；失败的不算", () => {
@@ -58,10 +58,10 @@ describe("turnOutputs：一轮交给用户的东西，一份一行", () => {
     ];
     const results: ToolResultIndex = new Map([
       done("p", "slides_export", { details: card("export", "/w/a.png", "a.png") }),
-      done("f", "slides_export", { details: card("export", "/w/a.pdf", "a.pdf") }),
+      done("f", "slides_export", { details: { card: { kind: "export", path: "/w/a.pdf", title: "a.pdf", subtitle: "PDF · 3 页" } } }),
       done("x", "doc_export", { status: "error", isError: true, details: card("export", "/w/a.docx", "a.docx") } as Partial<ToolTranscriptItem>),
     ]);
-    assert.deepEqual(turnOutputs(calls, results), [{ kind: "file", path: "/w/a.pdf", title: "a.pdf", pages: null, format: "PDF" }]);
+    assert.deepEqual(turnOutputs(calls, results), [{ kind: "file", path: "/w/a.pdf", title: "a.pdf", pages: null, format: "PDF", detail: "PDF · 3 页" }]);
   });
 
   test("「the deck now has N slide(s)」两种写法都认", () => {
@@ -79,9 +79,9 @@ describe("processHeadline：先说做出来的东西，再说还有几步", () =
     assert.equal(processHeadline(steps(calls), results, 1, zh.chat.headline), "写了 1 个文件、做了 1 份演示文稿，还有 2 步");
   });
 
-  test("什么都没做出来：只说步数；改计划不算一步", () => {
+  test("什么都没做出来：只说步数；改计划也算一步（展开后它占一行，段里的步数也数它）", () => {
     const calls = [call("r", "read"), call("p", "update_plan")];
-    assert.equal(processHeadline(steps(calls), new Map(), 0, zh.chat.headline), "1 步");
+    assert.equal(processHeadline(steps(calls), new Map(), 0, zh.chat.headline), "2 步");
   });
 });
 
@@ -101,17 +101,35 @@ describe("processRows：平铺时说的话一行、每一步一行，思考挂�
   });
 });
 
-describe("processImages：过程里出现过的图", () => {
-  test("读图的结果里的图块、导出到盘上的 PNG", () => {
-    const calls = [call("r", "read", { path: "/w/shot.png" }), call("p", "slides_export", { format: "png" })];
+describe("assignImages：同一张图只挂在第一次出现的那一步，每层的张数是下一层的和", () => {
+  test("导出第 1 页再读回来看：图挂在导出那一步，读那一步不重复；另读一张截图照挂", () => {
+    const calls = [
+      call("p", "slides_export", { format: "png" }),
+      call("r", "read", { path: "/w/p1.png" }),
+      call("s", "read", { path: "/w/shot.png" }),
+    ];
     const results: ToolResultIndex = new Map([
-      done("r", "read", { content: [{ type: "image", data: "AAA", mimeType: "image/png" }] }),
       done("p", "slides_export", { details: card("export", "/w/p1.png", "p1.png") }),
+      done("r", "read", { content: [{ type: "image", data: "AAA", mimeType: "image/png" }] }),
+      done("s", "read", { content: [{ type: "image", data: "BBB", mimeType: "image/png" }] }),
     ]);
-    const images = processImages(calls, results);
-    assert.deepEqual(
-      images.map((image) => (image.kind === "inline" ? `inline:${image.name}` : `file:${image.path}`)),
-      ["inline:shot.png", "file:/w/p1.png"],
-    );
+    const byCall = assignImages(calls, results);
+    assert.deepEqual([...byCall.keys()], ["p", "s"]);
+    // 一段（前两步）1 张、整轮 2 张 = 每一步的张数相加
+    assert.equal(imagesOf(calls.slice(0, 2), byCall).length, 1);
+    assert.equal(imagesOf(calls, byCall).length, 2);
+  });
+
+  test("一次读出几页（读 PDF）按页各算一张", () => {
+    const calls = [call("d", "read_pdf", { path: "/w/a.pdf" })];
+    const results: ToolResultIndex = new Map([
+      done("d", "read_pdf", {
+        content: [
+          { type: "image", data: "A", mimeType: "image/png" },
+          { type: "image", data: "B", mimeType: "image/png" },
+        ],
+      }),
+    ]);
+    assert.equal(assignImages(calls, results).get("d")?.length, 2);
   });
 });

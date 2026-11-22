@@ -2225,8 +2225,9 @@ export const zh: Messages = {
     outputDeck: (pages) => (pages === null ? "演示文稿" : `演示文稿 · ${pages} 页`),
     outputDoc: "文档",
     outputFile: (format) => format ?? "文件",
-    outputOpenPanel: "在右栏打开",
-    outputOpenFile: "打开",
+    outputPreview: "预览",
+    outputMore: "更多打开方式",
+    outputOpenDefault: "用默认应用打开",
   },
 
   stats: {

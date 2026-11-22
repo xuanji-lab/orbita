@@ -600,15 +600,15 @@ function foldSegment(
     while (insertAt > 0 && view[insertAt - 1]?.kind === "text") insertAt -= 1;
     view.splice(insertAt, 0, ...pinned);
   }
-  // 这一轮交给用户的东西（演示文稿、文档、导出的文件）收在结尾：回答之后、文件账之前。还在跑的轮不出——
-  // 跑的时候右栏已经自己打开在看着它写
+  // 结尾的卡（2026-11-22 照 Kimi：改了的文件在前、做出来的东西在后，同宽同色一摞）：先文件账，再这一轮交给
+  // 用户的东西（演示文稿、文档、导出的文件）。还在跑的轮不出产物——跑的时候右栏已经自己打开在看着它写
+  if (tailCards.length > 0) view.push(...tailCards);
   if (mode !== "live" && results !== undefined) {
     const calls = segment.flatMap((entry) => (entry.kind === "toolCall" ? [entry] : entry.kind === "toolGroup" ? [...entry.calls] : []));
     if (turnOutputs(calls, results).length > 0) {
       view.push({ kind: "turnOutputs", key: `out:${calls[0]?.key ?? ""}`, calls });
     }
   }
-  if (tailCards.length > 0) view.push(...tailCards);
   return view;
 }
 
@@ -1571,8 +1571,12 @@ export function branchAnchorEntries(
     }
   }
   const rows = new Map<number, string>();
-  // 回答后面紧跟着这一轮的产物（turnOutputs）：复制 / 分支那一行挪到产物之后，产物贴着回答
-  for (const [messageId, index] of lastOf) rows.set(entries[index + 1]?.kind === "turnOutputs" ? index + 1 : index, messageId);
+  // 回答后面紧跟着这一轮结尾的卡（文件账、产物）：复制 / 分支那一行挪到这摞卡之后，卡贴着回答（照 Kimi）
+  for (const [messageId, index] of lastOf) {
+    let at = index;
+    while (entries[at + 1]?.kind === "turnOutputs" || entries[at + 1]?.kind === "fileTurn") at += 1;
+    rows.set(at, messageId);
+  }
   return rows;
 }
 
