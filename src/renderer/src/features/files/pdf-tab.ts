@@ -2,9 +2,11 @@
  * PDF 标签的**纯视图逻辑**：产物事实 → 标签、开 / 关、并排裁决、按会话的记忆。
  *
  * 为什么要有这一层（2026-11 用户裁决）：PDF 不再是「有 LaTeX 项目就自己长出来的一块
- * 面板」，而是 cap-tabs 里的普通标签——能关、关掉第二栏就收、重新编译只刷新不重开。
- * 并排**只由有没有 PDF 标签决定**，不由布局（paperLayout）决定：Word / Excel / PPT
- * 没有 PDF 标签，因此也不会再被塞一块空白 PDF 面板。
+ * 面板」，而是 cap-tabs 里的普通标签——**有产物就有一个标签**（默认打开，窄窗也在）、
+ * 能关、关掉第二栏就收、重新编译只刷新不重开。点标签时：面板容得下并排就「源码 ｜
+ * PDF」，容不下就 PDF 单栏占满（源码标签点回去），**不会因为窄就当作没有 PDF**。
+ * 并排的触发只看有没有 PDF 标签 + 面板容不容得下，不由布局（paperLayout）决定：
+ * Word / Excel / PPT 不对着排版项目文件时不被塞一块 PDF 面板。
  *
  * 独立成模块的理由同 latex-workbench.ts / paper-layout.ts：FilesPanel 连着 React 与
  * IPC，`node --test` 加载不了；这里全是输入 → 输出。
@@ -55,8 +57,9 @@ export function pdfTabFacts(input: {
  * 事实变了之后，还开着哪些 PDF 标签。
  *
  * - 产物还在 → 只留下还存在的（重新编译换了 outDir / jobname 时，旧标签自然退场）；
- * - 一个都不剩、且**用户没关过**（collapsed=false）→ 自动打开全部产物：
- *   新项目 / 第一次编出 PDF 时 PDF 标签就该在场；
+ * - 一个都不剩、且**用户没关过**（collapsed=false）→ 打开全部产物：
+ *   新项目 / 第一次编出 PDF 时 PDF 标签就该在场。**默认就是打开**——与窗口宽、
+ *   布局无关（1200 宽的布局 A 也照样有标签，窄只影响点开时是并排还是单栏）；
  * - 用户关过 → 保持关着（哪怕又编了一版）：关掉是明确的意愿，不该被下一次编译推翻。
  */
 export function reconcilePdfTabs(input: {
@@ -101,12 +104,54 @@ export function pdfPanePathOf(input: {
 }
 
 /**
- * 要不要并排：**只看有没有 PDF 标签**（有 pane）与左栏有没有可显示的文件。
- * 布局（paperLayout）/ 窗口宽都不在这里——那两条以前会让 Word 也长出一块空白 PDF。
+ * 要不要并排：**有没有 PDF 标签**（有 pane）、左栏有没有可显示的文件，以及面板
+ * **容不容得下**（splitAllowed，由调用方按既有阈值算好：布局 B 与布局 A 的
+ * ≥1800 自动并排）。容不下时不是「没有 PDF」，而是改为单栏显示（见 pdfPaneModeOf）。
  */
-export function pdfSplitOf(input: { panePath: string | null; sourcePath: string | null }): boolean {
+export function pdfSplitOf(input: {
+  panePath: string | null;
+  sourcePath: string | null;
+  /** 面板宽 / 布局容不容得下并排（既有阈值，不在本模块里量宽度） */
+  splitAllowed: boolean;
+}): boolean {
+  if (!input.splitAllowed) return false;
   if (input.panePath === null || input.sourcePath === null) return false;
   return !samePath(input.panePath, input.sourcePath);
+}
+
+/**
+ * PDF 那一栏这一刻该怎么出现（2026-11 用户裁决：「PDF 应该是一个已经打开的标签页」）：
+ *
+ * - `none`：没开 PDF 标签，或用户此刻在看源码（窄窗单栏）；
+ * - `split`：面板宽到容得下（布局 B / 布局 A 大屏），源码与 PDF 并排；
+ * - `solo`：窄到容不下并排，但用户点了 PDF 标签——PDF 占满整个面板，
+ *   源码标签点回去。窄窗是**单栏切换**，不是「不显示」。
+ */
+export type PdfPaneMode =
+  | { kind: "none" }
+  | { kind: "split"; path: string }
+  | { kind: "solo"; path: string };
+
+export function pdfPaneModeOf(input: {
+  open: readonly string[];
+  facts: readonly PdfTabFact[];
+  activePdfPath: string | null;
+  /** 左栏此刻对应的文件（激活标签；激活标签本身就是 PDF 时是主文件） */
+  sourcePath: string | null;
+  /** 面板容不容得下并排（既有阈值：布局 B / 布局 A 的 ≥1800 自动并排） */
+  splitAllowed: boolean;
+  /** 用户点了 PDF 标签：窄窗单栏时该显示 PDF，而不是源码 */
+  pdfFocused: boolean;
+}): PdfPaneMode {
+  const path = pdfPanePathOf(input);
+  if (path === null) return { kind: "none" };
+  if (pdfSplitOf({ panePath: path, sourcePath: input.sourcePath, splitAllowed: input.splitAllowed })) {
+    return { kind: "split", path };
+  }
+  if (!input.pdfFocused) return { kind: "none" };
+  // 左栏本来就是这份 PDF（引用跳转把它当文件标签打开了）→ 不必再叠一块
+  if (input.sourcePath !== null && samePath(input.sourcePath, path)) return { kind: "none" };
+  return { kind: "solo", path };
 }
 
 /** 每个会话记住「用户关掉过 PDF 标签」：只存内存（与 paper-layout 的记忆同一条纪律） */

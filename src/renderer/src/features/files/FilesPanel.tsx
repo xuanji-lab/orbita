@@ -45,8 +45,8 @@ import {
 import { useLatexWorkbench } from "./useLatexWorkbench.ts";
 import {
   closePdfTab,
+  pdfPaneModeOf,
   pdfPanePathOf,
-  pdfSplitOf,
   pdfTabFacts,
   reconcilePdfTabs,
   recallPdfCollapsed,
@@ -216,6 +216,11 @@ export function FilesPanel(props: {
    */
   const [pdfOpen, setPdfOpen] = useState<readonly string[]>([]);
   const [activePdfPath, setActivePdfPath] = useState<string | null>(null);
+  /**
+   * 窄窗单栏时看的是 PDF 而不是源码（点了 PDF 标签）。点回文件标签即复位；
+   * 宽到容得下并排时这一位不影响任何东西。
+   */
+  const [pdfFocused, setPdfFocused] = useState(false);
   const pdfMemoryRef = useRef<Map<string, boolean>>(new Map());
   /** 刚新建的文档 / 演示文稿：对应标签一打开就进「编辑」模式（用户点标签 / 切走再回来则回到常规预览） */
   const [openInEdit, setOpenInEdit] = useState<ReadonlySet<string>>(new Set());
@@ -684,12 +689,13 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
   }, [latexContext?.path]);
 
   /**
-   * PDF 标签（pdf-tab.ts）：产物事实 → 标签。**并排（第二栏）只由「有没有开着的
-   * PDF 标签」决定**，不看布局：布局 B 里打开 Word / Excel / PPT 时 latexBarVisible
-   * 为 false，PDF 标签不出现，也就不会再被塞一块空白 PDF 面板（2026-11 用户裁决）。
+   * PDF 标签（pdf-tab.ts）：产物事实 → 标签。**有 PDF（项目 PDF 或本次产物）就有标签**，
+   * 默认打开——窄窗也一样，不需要先去动作菜单里点一次（2026-11-22 验收：1200 宽、布局 A
+   * 时标签条里根本没有 PDF）。
    *
-   * 自动打开的时机：只有布局 B / 大屏自动并排这两处「本来就想看 PDF」的形态；
-   * 窄栏的布局 A 不自动占掉半栏——想看在动作菜单里点「打开 PDF」。
+   * 标签条里有它不等于一定要分掉半栏：点它时容得下并排才并排（布局 B / 布局 A 大屏，
+   * 既有阈值），容不下就单栏占满（见下面的 pdfPaneModeOf）。
+   * 并排仍不看布局本身：Word / Excel / PPT 对着非项目文件时不并排，不会被塞一块 PDF。
    * 用户关过之后按会话记住（只存内存），重新编译不会推翻这个意愿。
    */
   const pdfFacts = useMemo(() => {
@@ -702,18 +708,16 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
     return pdfTabFacts({ projectPdf: latex.project?.pdf ?? null, outputs });
   }, [latex.project?.pdf?.path, latex.project?.pdf?.modifiedAt, latex.project?.activeRoot, latex.last]);
   const pdfFactsKey = pdfFacts.map((fact) => fact.path).join("\u0000");
-  const pdfAutoOpen = props.paperLayout === true || props.autoSplit === true;
   const pdfMemoryKey = sessionId ?? "";
   useEffect(() => {
-    // 没表过态时按当前布局决定默认；表过态（开 / 关）就按记忆，不被布局改回去
-    const collapsed = pdfMemoryRef.current.has(pdfMemoryKey)
-      ? recallPdfCollapsed(pdfMemoryRef.current, pdfMemoryKey)
-      : !pdfAutoOpen;
+    // 没关过 = 打开（默认值在 recallPdfCollapsed 里：没记过就是 false）。
+    // 关掉是明确的意愿，重新编译 / 换布局都不推翻它。
+    const collapsed = recallPdfCollapsed(pdfMemoryRef.current, pdfMemoryKey);
     setPdfOpen((prev) => {
       const next = reconcilePdfTabs({ open: prev, facts: pdfFacts, collapsed });
       return samePathList(prev, next) ? prev : next;
     });
-  }, [pdfFactsKey, pdfFacts, pdfMemoryKey, pdfAutoOpen]);
+  }, [pdfFactsKey, pdfFacts, pdfMemoryKey]);
 
   const closePdfTabAt = useCallback(
     (path: string): void => {
@@ -721,6 +725,7 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
       // 关掉最后一个 = 用户明确收起了第二栏：这个会话里不再自己长回来
       pdfMemoryRef.current = rememberPdfCollapsed(pdfMemoryRef.current, pdfMemoryKey, next.length === 0);
       setPdfOpen(next);
+      setPdfFocused(false);
       setActivePdfPath((current) => (current !== null && samePath(current, path) ? null : current));
     },
     [pdfOpen, pdfMemoryKey],
@@ -732,7 +737,9 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
       if (target === null) return;
       pdfMemoryRef.current = rememberPdfCollapsed(pdfMemoryRef.current, pdfMemoryKey, false);
       setPdfOpen((prev) => (prev.some((item) => samePath(item, target)) ? prev : [...prev, target]));
+      // 打开 = 要看它：窄窗单栏也直接亮出 PDF
       setActivePdfPath(target);
+      setPdfFocused(true);
     },
     [pdfFacts, pdfMemoryKey],
   );
@@ -741,6 +748,7 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
     pdfMemoryRef.current = rememberPdfCollapsed(pdfMemoryRef.current, pdfMemoryKey, true);
     setPdfOpen([]);
     setActivePdfPath(null);
+    setPdfFocused(false);
   }, [pdfMemoryKey]);
 
   const togglePdf = useCallback((): void => {
@@ -757,23 +765,39 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
     latex.project !== null && latex.project.main !== null
       ? `${latex.project.dir}${/[\\/]$/.test(latex.project.dir) ? "" : "/"}${latex.project.main}`
       : null;
-  /** 非 LaTeX 文件（docx / xlsx / pptx）不出现 PDF 标签 */
-  const pdfTabsVisible = latexBarVisible;
-  const pdfPanePath = pdfTabsVisible
-    ? pdfPanePathOf({ open: pdfOpen, facts: pdfFacts, activePdfPath })
-    : null;
+  /** 有产物就有 PDF 标签：连非项目文件（docx / xlsx / pptx）也看得见、点得开 */
+  const pdfTabsVisible = pdfFacts.length > 0;
+  /** 开着的 PDF 标签（多产物时 activePdfPath 优先）——null = 用户把标签关了 */
+  const pdfOpenPath = pdfPanePathOf({ open: pdfOpen, facts: pdfFacts, activePdfPath });
   const activeIsPdf =
     activeTab !== null && projectPdfPath !== null && samePath(activeTab.path, projectPdfPath);
   const splitLeftPath = activeIsPdf ? mainSourcePath : (activeTab?.path ?? null);
-  const splitOn = pdfSplitOf({ panePath: pdfPanePath, sourcePath: splitLeftPath });
+  /**
+   * 并排沿用既有阈值（布局 B / 布局 A 的 ≥1800 自动并排）；**但并排只给排版项目的文件**
+   * ——Word / Excel / PPT 不被塞一块 PDF（旧裁决保留）。容不下时点 PDF 标签 = 单栏占满。
+   */
+  const pdfSplitAllowed = (props.paperLayout === true || props.autoSplit === true) && latexBarVisible;
+  const pdfPane = pdfPaneModeOf({
+    open: pdfOpen,
+    facts: pdfFacts,
+    activePdfPath,
+    sourcePath: splitLeftPath,
+    splitAllowed: pdfSplitAllowed,
+    pdfFocused,
+  });
+  const splitOn = pdfPane.kind === "split";
+  /** 并排的右半 / 单栏占满的那一块（none = 不渲染 PDF 那一栏） */
+  const pdfSidePath = pdfPane.kind === "none" ? null : pdfPane.path;
+  const pdfSolo = pdfPane.kind === "solo";
   /** 左栏真正显示的文件：不并排时就是激活标签（含「激活标签是 PDF」那种单栏） */
   const leftPath = splitOn ? splitLeftPath : (activeTab?.path ?? null);
-  /** 左栏显示的是不是项目 PDF（决定它要不要走 PDF 预览与编译后重载） */
+  /** 左栏显示的是不是一份 PDF 产物（决定它要不要走 PDF 预览与编译后重载） */
+  const leftIsPdf = leftPath !== null && pdfFacts.some((fact) => samePath(fact.path, leftPath));
   const leftIsProjectPdf =
     leftPath !== null && projectPdfPath !== null && samePath(leftPath, projectPdfPath);
 
   // 项目里有 PDF 产物 = 并排有意义（App 据此决定 A 的自动并排与右栏宽度）。
-  // **不拿 pdfPanePath 当条件**：那是 App 自动并排的结果，用它会让两边互相等成死锁
+  // **不拿 pdfOpenPath 当条件**：那是「用户开着 PDF 标签」的事实，拿它跟并排互为条件就是死锁
   const paperReady = pdfFacts.length > 0;
   const reportPaperReady = props.onPaperReady;
   useEffect(() => {
@@ -921,6 +945,7 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
       setActivePath(null);
       setActivePdfPath(null);
       setPdfOpen([]);
+      setPdfFocused(false);
       setCollapsedGroups(new Set());
       setTreeOn(false);
       setActionError(null);
@@ -1089,6 +1114,8 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
    */
   const switchTo = useCallback(
     (next: string | null): void => {
+      // 切回文件标签 = 单栏回到源码（PDF 标签仍在标签条里，点它再切回来）
+      setPdfFocused(false);
       if (next === activePath) return;
       const current = activePath === null ? undefined : editorsRef.current.get(activePath);
       if (current === undefined || !current.isDirty()) {
@@ -1133,7 +1160,8 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
   const openFile = (root: FileRoot, path: string): void => {
     if (path === activePath) {
       // 再点已激活的文件 = 从浮层里挑完了：收起树（2026-10-11 的既有行为，
-      // 加切走闸门时一度被 `return` 吞掉——评审 R4）
+      // 加切走闸门时一度被 `return` 吞掉——评审 R4）；也是从单栏 PDF 点回源码
+      setPdfFocused(false);
       if (narrowRef.current) setTreeOn(false);
       return;
     }
@@ -1247,15 +1275,20 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
           }
           syncTokenRef.current += 1;
           setPdfSync({ rect: outcome.rect, token: syncTokenRef.current });
-          // 右栏已经显示这份 PDF（PDF 标签开着 / 左栏就是它）→ 只闪落点，不换标签
-          if (leftIsProjectPdf || pdfPanePath !== null) return;
+          // 左栏就是这份 PDF → 只闪落点；它已经作为标签开着 → 窄窗把 PDF 亮出来
+          if (leftIsProjectPdf) return;
+          if (pdfOpenPath !== null) {
+            setActivePdfPath(pdfPath);
+            setPdfFocused(true);
+            return;
+          }
           openPdfTab(pdfPath);
         })
         .catch((cause: unknown) => {
           setEditorNotice(syncFailureText({ ok: false, reason: "failed", detail: failMessage(cause) }));
         });
     },
-    [activeTab, focusWorkspaceId, latex.project, leftIsProjectPdf, readRequestFor, pdfPanePath, openPdfTab, sessionId, syncFailureText, t, workspaceId],
+    [activeTab, focusWorkspaceId, latex.project, leftIsProjectPdf, readRequestFor, pdfOpenPath, openPdfTab, sessionId, syncFailureText, t, workspaceId],
   );
 
   /**
@@ -1287,7 +1320,11 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
           const sourceTab = resolveTabPath(outcome.file);
           setReveal({ path: sourceTab, line: outcome.line, token: syncTokenRef.current });
           const showing = splitLeftPath ?? activeTab?.path ?? null;
-          if (showing !== null && samePath(showing, outcome.file)) return;
+          // 单栏在看 PDF 时，反查的目标如果就是待切回的那个文件 → 回到源码那一栏
+          if (showing !== null && samePath(showing, outcome.file)) {
+            setPdfFocused(false);
+            return;
+          }
           setTabs((prev) => openTab(prev, root, sourceTab));
           switchTo(sourceTab);
         })
@@ -1697,12 +1734,15 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                       className="cap-tab no-drag"
                       title={tab.path}
                       onClick={() => {
-                        if (!active) leaveActive(() => switchTo(tab.path));
+                        if (active) setPdfFocused(false);
+                        else leaveActive(() => switchTo(tab.path));
                       }}
                       onKeyDown={(event) => {
                         if (event.key !== "Enter") return;
                         event.preventDefault();
-                        if (!active) leaveActive(() => switchTo(tab.path));                      }}
+                        if (active) setPdfFocused(false);
+                        else leaveActive(() => switchTo(tab.path));
+                      }}
                     >
                       <Icon
                         name={fileIcon(name, "file")}
@@ -1736,9 +1776,9 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                     </div>
                   );
                 })}
-                {/* PDF 标签：项目产物的普通标签（同一个 cap-tabs）。非 LaTeX 文件
-                    不出现——Word / Excel / PPT 因此不再被塞一块空白 PDF 面板。
-                    点它 = 右栏显示这一份 PDF；✕ = 关掉（关掉最后一个第二栏就收）。
+                {/* PDF 标签：项目产物的普通标签（同一个 cap-tabs），**有 PDF 就在**。
+                    点它 = 看这份 PDF（容得下并排就右半；窄就单栏占满）；
+                    ✕ = 关掉（关掉最后一个第二栏就收，再编译也不自己重开）。
                     编译成功后同一个标签刷新（页数 / 时间跟着变），不重开新标签 */}
                 {pdfTabsVisible &&
                   pdfOpen.map((path) => {
@@ -1759,12 +1799,15 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                           fact.modifiedAt === null ? "" : t.time.dateTime(fact.modifiedAt),
                         )}`}
                         onClick={() => {
-                          if (!active) setActivePdfPath(path);
+                          // 点 PDF 标签 = 看它：宽到容得下就并排，窄就单栏占满
+                          setActivePdfPath(path);
+                          setPdfFocused(true);
                         }}
                         onKeyDown={(event) => {
                           if (event.key !== "Enter") return;
                           event.preventDefault();
                           setActivePdfPath(path);
+                          setPdfFocused(true);
                         }}
                       >
                         <Icon
@@ -1878,7 +1921,7 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
             onCancel={latex.cancel}
             onClean={latex.clean}
             onToggleCompileOnSave={latex.setCompileOnSave}
-            pdfOpen={pdfPanePath !== null}
+            pdfOpen={pdfOpenPath !== null}
             onTogglePdf={togglePdf}
             onSelectRecipe={latex.selectRecipe}
             onSelectRoot={latex.selectRoot}
@@ -1995,10 +2038,14 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
           <div className="files-panel-backdrop" aria-hidden="true" onClick={() => setTreeOn(false)} />
           {/* 稿件区：单标签，或并排的两块。左块在两种形态下是**同一个组件位置**
               （只外面多一层 flex 容器），切布局不会把编辑器重挂。
+              单栏看 PDF（pdf-solo）时左块只藏不卸——编辑器保住自身状态（未保存字 / 滚动），
+              点回文件标签立刻回到原处。
               C9：这一拍要收的标签（focusDrop）整块都不渲染——并排的两块请求的是
               同一个根的白名单，只挡左块等于让右块拿刚失效的根再读一次 */}
           {shownTab !== null && (
-            <div className={`files-panel-panes${splitOn ? " split" : ""}`}>
+            <div
+              className={`files-panel-panes${splitOn ? " split" : ""}${pdfSolo ? " pdf-solo" : ""}`}
+            >
               <div className="files-panel-pane">
                 <FilePreviewPane
                   key={`left:${leftPath ?? shownTab.path}`}
@@ -2015,12 +2062,12 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                     : {})}
                   // 跳转只跟着它那份 PDF：用户在树里换了文件，旧跳转不该落到新文件上；
                   // 并排时的左块若换成了主文件，旧跳转也不属于它
-                  jump={leftPath === shownTab.path && jump !== null && jump.citation.path === shownTab.path ? jump : null}
+                  jump={jump !== null && leftPath !== null && samePath(jump.citation.path, leftPath) ? jump : null}
                   // 论文工作台：项目里的 PDF 走预览（不受「PDF 引用」实验开关管——
                   // 刚编出来的 PDF 是编译条的直接产物）；编译成功后按 mtime 重载。
                   // 比路径要用 samePath：树里拼的是 `/`，主进程给的是 `\`
-                  pdfPreview={leftIsProjectPdf}
-                  pdfReloadToken={leftIsProjectPdf ? latex.pdfReloadToken : 0}
+                  pdfPreview={leftIsPdf}
+                  pdfReloadToken={leftIsPdf ? latex.pdfReloadToken : 0}
                   // SyncTeX：左半显示的就是项目 PDF 时，落点框与双击反查都给它
                   syncJump={leftIsProjectPdf ? pdfSync : null}
                   {...(leftIsProjectPdf
@@ -2070,17 +2117,18 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                   }}
                 />
               </div>
-              {splitOn && pdfPanePath !== null && (
+              {pdfSidePath !== null && (
                 <div className="files-panel-pane">
-                  {/* 右块：打开的 PDF 标签（多产物时是 activePdfPath 那一份）。
+                  {/* 右块：开着的那个 PDF 标签（多产物时是 activePdfPath 那一份）。
+                      宽到容得下并排时是右半（split），窄窗时是整块（pdf-solo）。
                       编译成功后按 pdfReloadToken 重载——同一块面板刷新，不重开标签 */}
                   <FilePreviewPane
-                    key={`pdf:${pdfPanePath}`}
+                    key={`pdf:${pdfSidePath}`}
                     sessionId={sessionId}
                     workspaceId={workspaceId}
                     extraWorkspaceId={focusWorkspaceId}
                     root={shownTab.root}
-                    path={pdfPanePath}
+                    path={pdfSidePath}
                     rootLabel={
                       tree.roots.find((r) => r.path === shownTab.root)?.label ?? pathTail(shownTab.root)
                     }
@@ -2088,8 +2136,8 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                     pdfReloadToken={latex.pdfReloadToken}
                     syncJump={pdfSync}
                     // 引用跳转只落到它那份 PDF 上（同一条引用连点也重放）
-                    jump={jump !== null && samePath(jump.citation.path, pdfPanePath) ? jump : null}
-                    onLocatePdf={(point: { page: number; x: number; y: number }) => locateSource(pdfPanePath, point)}
+                    jump={jump !== null && samePath(jump.citation.path, pdfSidePath) ? jump : null}
+                    onLocatePdf={(point: { page: number; x: number; y: number }) => locateSource(pdfSidePath, point)}
                   />
                 </div>
               )}

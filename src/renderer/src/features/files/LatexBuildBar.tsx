@@ -62,7 +62,7 @@ export function LatexBuildBar(props: {
   onToggleCompileOnSave: (on: boolean) => void;
   /** 选一条配方预设（写当前 root 的 recipeId） */
   onSelectRecipe: (id: string) => void;
-  /** 打开 / 收起 PDF 标签（第二栏的开关） */
+  /** 打开 / 收起 PDF 标签（与标签条里的 PDF 标签同一个开关：菜单只是键盘可达的入口） */
   onTogglePdf: () => void;
   /** 切到另一个 root（写 activeRoot 并编它） */
   onSelectRoot: (path: string) => void;

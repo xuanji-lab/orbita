@@ -3712,6 +3712,11 @@ html[data-pointer-drag] iframe {
 .files-panel-panes.split .files-panel-pane + .files-panel-pane {
   border-left: 1px solid var(--color-border-subtle);
 }
+/* 窄面板点 PDF 标签：不拆成两栏，PDF 占满整个面板。左块只藏不卸（display:none，
+ * 不是条件渲染）——编辑器保住未保存的字与滚动位置，点回文件标签立刻回到原处。 */
+.files-panel-panes.pdf-solo .files-panel-pane:first-child {
+  display: none;
+}
 
 /* ---------- 论文工作台：编译条 + 问题抽屉（LaTeX 项目） ----------
  * 面板内容变成「编译条 / 文件内容 / 问题抽屉」三段的纵向 flex：

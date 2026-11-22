@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import type { LatexOutput } from "../../../../shared/latex.ts";
 import {
   closePdfTab,
+  pdfPaneModeOf,
   pdfPanePathOf,
   pdfSplitOf,
   pdfTabFacts,
@@ -82,6 +83,20 @@ describe("reconcilePdfTabs —— 开 / 刷新 / 关", () => {
     assert.deepEqual(reconcilePdfTabs({ open: [], facts, collapsed: true }), []);
   });
 
+  test("有 PDF 就有标签：没表过态（新会话 / 窄窗）一律默认打开", () => {
+    // 默认只看记忆：没记过 = false（没关过）——与窗口宽 / 布局无关
+    const collapsed = recallPdfCollapsed(new Map(), "s-new");
+    assert.deepEqual(reconcilePdfTabs({ open: [], facts, collapsed }), ["/p/main.pdf"]);
+  });
+
+  test("关掉后再编译（产物换了 mtime）→ 仍然关着", () => {
+    const refreshed = pdfTabFacts({
+      projectPdf: { path: "/p/main.pdf", modifiedAt: 2_000 },
+      outputs: [output("/p/main.pdf", { primary: true, modifiedAt: 2_000 })],
+    });
+    assert.deepEqual(reconcilePdfTabs({ open: [], facts: refreshed, collapsed: true }), []);
+  });
+
   test("重新编译：路径没变 → 还是同一个标签（不重开、不换位）", () => {
     assert.deepEqual(reconcilePdfTabs({ open: ["/p/main.pdf"], facts, collapsed: false }), ["/p/main.pdf"]);
   });
@@ -129,17 +144,84 @@ describe("closePdfTab / pdfPanePathOf", () => {
   });
 });
 
-describe("pdfSplitOf —— 并排只由有没有 PDF 标签决定", () => {
-  test("有 PDF 标签 + 左栏有文件 → 并排", () => {
-    assert.equal(pdfSplitOf({ panePath: "/p/main.pdf", sourcePath: "/p/main.tex" }), true);
+describe("pdfSplitOf —— 并排只由有没有 PDF 标签 + 面板容不容得下决定", () => {
+  test("有 PDF 标签 + 左栏有文件 + 面板容得下 → 并排", () => {
+    assert.equal(
+      pdfSplitOf({ panePath: "/p/main.pdf", sourcePath: "/p/main.tex", splitAllowed: true }),
+      true,
+    );
   });
 
   test("没有 PDF 标签 → 不并排（Word / Excel / PPT 不再出现空白 PDF 栏）", () => {
-    assert.equal(pdfSplitOf({ panePath: null, sourcePath: "/p/report.docx" }), false);
+    assert.equal(
+      pdfSplitOf({ panePath: null, sourcePath: "/p/report.docx", splitAllowed: true }),
+      false,
+    );
+  });
+
+  test("面板窄到容不下 → 不硬挤成两栏", () => {
+    assert.equal(
+      pdfSplitOf({ panePath: "/p/main.pdf", sourcePath: "/p/main.tex", splitAllowed: false }),
+      false,
+    );
   });
 
   test("左栏就是那份 PDF → 不自己跟自己并排", () => {
-    assert.equal(pdfSplitOf({ panePath: "C:/p/main.pdf", sourcePath: "C:\\p\\main.pdf" }), false);
+    assert.equal(
+      pdfSplitOf({ panePath: "C:/p/main.pdf", sourcePath: "C:\\p\\main.pdf", splitAllowed: true }),
+      false,
+    );
+  });
+});
+
+describe("pdfPaneModeOf —— 容得下就并排，容不下就单栏显示 PDF", () => {
+  const facts = pdfTabFacts({
+    projectPdf: { path: "/p/main.pdf", modifiedAt: 1 },
+    outputs: [output("/p/main.pdf", { primary: true })],
+  });
+  const base = { open: ["/p/main.pdf"], facts, activePdfPath: null, sourcePath: "/p/main.tex" };
+
+  test("窄窗点了 PDF 标签 → 单栏占满，而不是「不显示」", () => {
+    assert.deepEqual(pdfPaneModeOf({ ...base, splitAllowed: false, pdfFocused: true }), {
+      kind: "solo",
+      path: "/p/main.pdf",
+    });
+  });
+
+  test("窄窗没点标签 → 只有源码那一栏（标签仍在标签条里）", () => {
+    assert.deepEqual(pdfPaneModeOf({ ...base, splitAllowed: false, pdfFocused: false }), {
+      kind: "none",
+    });
+  });
+
+  test("宽到容得下 → 并排，与点没点过无关", () => {
+    assert.deepEqual(pdfPaneModeOf({ ...base, splitAllowed: true, pdfFocused: false }), {
+      kind: "split",
+      path: "/p/main.pdf",
+    });
+    assert.deepEqual(pdfPaneModeOf({ ...base, splitAllowed: true, pdfFocused: true }), {
+      kind: "split",
+      path: "/p/main.pdf",
+    });
+  });
+
+  test("关掉标签（open 空）→ 回到单栏源码", () => {
+    assert.deepEqual(
+      pdfPaneModeOf({ ...base, open: [], splitAllowed: true, pdfFocused: true }),
+      { kind: "none" },
+    );
+  });
+
+  test("左栏就是这份 PDF → 不再叠一块", () => {
+    assert.deepEqual(
+      pdfPaneModeOf({
+        ...base,
+        sourcePath: "/p/main.pdf",
+        splitAllowed: false,
+        pdfFocused: true,
+      }),
+      { kind: "none" },
+    );
   });
 });
 
