@@ -625,11 +625,6 @@ export function App() {
     setSubSessionsNav(openSubSession(childId));
     setRightPanel("subsessions");
   }, []);
-  /** 头部「N sub-sessions」芯片：强制回列表层（不是「resume 到上次的位置」） */
-  const openSubSessionsList = useCallback(() => {
-    setSubSessionsNav(SUB_SESSIONS_LIST);
-    setRightPanel("subsessions");
-  }, []);
   /** Open as main：主槽换看这条子会话（2.1 裁决「面板关闭」在按会话记忆后泛化为
    * 「恢复这条会话自己记的面板」——没记过就是关着，首轮行为与裁决原文一致；
    * 这里不再显式关面板，否则会把离开的那条会话错记成「关着」） */
@@ -1390,8 +1385,6 @@ export function App() {
         title={capsuleTitle}
         shortId={capsuleShortId}
         onRename={mainOpenId === "" ? undefined : (title) => session.renameSession(mainOpenId, title)}
-        subChip={hasSubSessions ? { count: subSessionChildren.length, waiting: waitingOnYou } : null}
-        onOpenSubSessions={openSubSessionsList}
         crumb={
           capsuleParentId !== undefined
             ? {

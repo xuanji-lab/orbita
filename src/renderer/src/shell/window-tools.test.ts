@@ -20,7 +20,7 @@ import {
   LEFT_CAPSULE_W,
   LIGHTS_GAP,
   RAIL_W,
-  SESSION_GAP,
+  PANEL_CAPSULE_INSET,
   SESSION_W,
   TRAFFIC_LIGHT_GROUP_W,
   TRAFFIC_LIGHT_X,
@@ -77,25 +77,25 @@ test("对话列与右端边界（原型 v2 的 1440 窗实算：SBW 288 / RAIL 3
   assert.equal(rightEdge({ windowWidth: 960, panelOpen: false, panelWidth: 0 }), 916);
 });
 
-test("会话胶囊：优先居中于对话列（对称收缩），低于 280 才贴左", () => {
-  // 状态 1（1440，侧栏展开、无右栏）：对话列中心 848，对称可用远超 480 → 满宽居中
-  const a = sessionCapsule({ windowWidth: 1440, colLeft: 312, colRight: 1384, leftCapRight: 88 + LEFT_CAPSULE_W, rightLimit: 1364 });
+test("会话胶囊：标题居左——侧栏展开时左缘 = 对话列左缘 + 内缩，收起时紧跟左胶囊（专注键）右缘", () => {
+  // 状态 1（1440，侧栏展开 288、无右栏）：对话列左缘 312，胶囊左缘 = 312 + 8（与右栏胶囊 = 分隔线 + 8 同一个内缩）；宽封顶 480
+  const a = sessionCapsule({ colLeft: 312, leftCapRight: 88 + LEFT_CAPSULE_W, rightLimit: 1364 });
+  assert.equal(a.x, 312 + PANEL_CAPSULE_INSET);
   assert.equal(a.width, SESSION_W);
-  assert.equal(a.x, 608);
-  // 验收实例（1200 宽、侧栏展开、右栏开到分隔线 654）：中心 483，对称可用 2×159=318
-  // → 缩到 318 居中（x=324），不铺满左胶囊到右栏胶囊的整段
-  const m = sessionCapsule({ windowWidth: 1200, colLeft: 312, colRight: 654, leftCapRight: 88 + LEFT_CAPSULE_W, rightLimit: 654 });
-  assert.equal(m.width, 318);
-  assert.equal(m.x, 324);
-  assert.equal(m.x + m.width, 642);
-  // 对称凑不到 280：贴左（宽度取 280，左缘钉下限）
-  const b = sessionCapsule({ windowWidth: 620, colLeft: 12, colRight: 564, leftCapRight: 192, rightLimit: 560 });
-  assert.equal(b.width, 280);
-  assert.equal(b.x, 204);
-  // 连 280 都放不下：能拿多少拿多少
-  const c = sessionCapsule({ windowWidth: 480, colLeft: 12, colRight: 424, leftCapRight: 192, rightLimit: 460 });
-  assert.equal(c.width, 244);
-  assert.equal(c.x, 204);
+  // 侧栏收起（对话列贴窗口边 12）：左缘退到左胶囊右缘（88 + 112 = 200），标题紧跟专注键
+  const c = sessionCapsule({ colLeft: 12, leftCapRight: 88 + LEFT_CAPSULE_W, rightLimit: 1364 });
+  assert.equal(c.x, 88 + LEFT_CAPSULE_W);
+  // 专注中倒计时格把左胶囊撑宽：胶囊跟着右移，不压住它
+  const wide = sessionCapsule({ colLeft: 12, leftCapRight: 88 + LEFT_CAPSULE_W + 40, rightLimit: 1364 });
+  assert.equal(wide.x, 88 + LEFT_CAPSULE_W + 40);
+  // 验收实例（1200 宽、侧栏展开、右栏开到分隔线 654）：右限让开右栏胶囊再留 SESSION_GAP，宽 = 654 − 12 − 320 = 322
+  const m = sessionCapsule({ colLeft: 312, leftCapRight: 88 + LEFT_CAPSULE_W, rightLimit: 654 });
+  assert.equal(m.x, 320);
+  assert.equal(m.width, 654 - 12 - 320);
+  // 放不下：能拿多少拿多少，最窄 0（Toolbar 不渲染 0 宽胶囊）
+  const tight = sessionCapsule({ colLeft: 12, leftCapRight: 192, rightLimit: 230 });
+  assert.equal(tight.width, 230 - 12 - 192);
+  assert.equal(sessionCapsule({ colLeft: 12, leftCapRight: 192, rightLimit: 200 }).width, 0);
 });
 
 test("断点与侧栏开关的结构性不变量：左胶囊 x 与侧栏开合无关", () => {
@@ -267,7 +267,7 @@ test("胶囊页签头：有标题时三列 grid 让页签居中且标题不叠�
 });
 
 test("胶囊内带文字的键豁免兜底重置（页签曾被压到 44px、padding 被清零）", () => {
-  for (const cls of [".cap-tab", ".cap-sel", ".cap-subchip", ".cap-crumb", ".cap-pt"]) {
+  for (const cls of [".cap-tab", ".cap-sel", ".cap-crumb", ".cap-pt"]) {
     assert.match(
       toolbarCss,
       new RegExp(`\\.toolbar-capsule ${cls.replace(".", "\\.")}\\s*\\{[^}]*width:\\s*auto`),
@@ -303,12 +303,13 @@ test("工具栏右栏胶囊只认右栏实际渲染宽（夹过 1/3–2/3），�
   assert.match(slot, /onRenderedWidth\?\.\(renderedWidth\)/, "RightPanelSlot 要把夹过的宽度报出去");
 });
 
-test("会话胶囊窄时逐级让位、不重叠：中栏可缩、两侧保内容宽、标题能省略", () => {
+test("会话胶囊窄时逐级让位、不重叠：标题居左成组、只有标题能缩（省略号）、面包屑与 id 保内容宽", () => {
   const css = readFileSync(join(RENDERER_SRC, "shell/toolbar.css"), "utf8");
-  assert.match(css, /\.cap-sess \{[^}]*grid-template-columns:\s*1fr minmax\(0, max-content\) 1fr/s, "中栏要能缩（原先 auto 不缩，右端短 id 溢进标题）");
+  assert.match(css, /\.cap-sess \{[^}]*display:\s*flex[^}]*justify-content:\s*flex-start/s, "标题居左：flex 起点对齐，不再是三栏居中");
+  assert.doesNotMatch(css, /grid-template-columns:\s*1fr minmax\(0, max-content\) 1fr/, "居中三栏网格已删");
   assert.match(css, /\.cap-sess \{[^}]*container-type:\s*inline-size/s);
-  assert.match(css, /\.cap-sess \.cap-sl,\s*\.cap-sess \.cap-sr \{\s*min-width:\s*max-content/, "两侧轨道不许被压到内容以下");
-  assert.match(css, /\.cap-sess \.cap-sc \{[^}]*justify-self:\s*stretch/s, "中栏按内容定宽会溢出轨道");
+  assert.match(css, /\.cap-sess \.cap-sl \{[^}]*min-width:\s*max-content/s, "面包屑不许被压到内容以下");
+  assert.match(css, /\.cap-sess \.cap-sc \{[^}]*flex:\s*0 1 auto/s, "标题是组里唯一能缩的");
   assert.match(css, /\.cap-title \{[^}]*min-width:\s*0/s, "flex 子项不设 min-width:0 省略号不生效");
   assert.match(css, /@container \(max-width: 380px\) \{\s*\.cap-sess \.cap-sid \{\s*display:\s*none/, "第一档：短 id 先藏");
 });
@@ -337,22 +338,23 @@ test("窄窗右栏胶囊不与会话胶囊重叠：会话胶囊的右限要让�
   assert.match(toolbar, /const narrowPanelLeft\s*=/, "先算窄窗右栏胶囊左缘");
   assert.match(
     toolbar,
-    /colRight:\s*narrowLimit === null \? col\.right : Math\.min\(col\.right, narrowLimit\)/,
-    "对话列右缘要让开右栏胶囊",
-  );
-  assert.match(
-    toolbar,
     /rightLimit:\s*narrowLimit === null \? limit : Math\.min\(limit, narrowLimit\)/,
     "会话胶囊右限要让开右栏胶囊",
   );
   assert.doesNotMatch(toolbar, /panelLeft = props\.narrow\s*\?/, "panelLeft 不再单算一套窄窗分支");
 });
 
-test("会话胶囊容器显式铺满 + 标题钉中栏：设置页只有标题一个孩子也不塌、居中", () => {
+test("会话胶囊容器显式铺满：设置页只有标题一个孩子也不塌", () => {
   const css = readFileSync(join(RENDERER_SRC, "shell/toolbar.css"), "utf8");
   // container-type: inline-size 下元素宽不随内容撑开，没有显式宽就塌成 0
   assert.match(css, /\.cap-sess \{[^}]*container-type:\s*inline-size[^}]*width:\s*100%/s);
-  assert.match(css, /\.cap-sess \.cap-sc \{[^}]*grid-column:\s*2/s);
+});
+
+test("会话胶囊左缘与右栏胶囊同一条内缩：标题文字离胶囊左缘 12（右栏面板标题图标同样离 12）", () => {
+  const css = readFileSync(join(RENDERER_SRC, "shell/toolbar.css"), "utf8");
+  assert.match(css, /\.cap-sess \{[^}]*padding:\s*0 var\(--space-0-5\) 0 var\(--space-1-5\)/s);
+  assert.match(css, /\.toolbar-capsule \.cap-pt \{\s*padding:\s*0 var\(--space-2\) 0 var\(--space-2-5\)/, "右栏标题键的左内边距（2 + 10 = 12）");
+  assert.equal(PANEL_CAPSULE_INSET, 8);
 });
 
 test("会话胶囊豁免拖拽：拖拽区收不到悬停，铅笔 / 复制键只在指针压到隐形按钮上时才显形", () => {

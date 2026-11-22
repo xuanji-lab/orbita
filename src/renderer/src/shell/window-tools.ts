@@ -44,9 +44,8 @@ export function leftCapsuleX(platform: ToolbarPlatform): number {
 /** 左胶囊宽度：2px 内边距 + 侧栏开关 36 + 新任务 36 + 专注 36（计时态由专注功能自己加宽） */
 export const LEFT_CAPSULE_W = 2 + 36 + 36 + 36 + 2;
 
-/** 会话胶囊（排法甲 · 地址栏式）：首选宽 / 对称收缩的最小宽 / 两侧最小间距 */
+/** 会话胶囊：宽度上限 / 与右栏胶囊（右限）的最小间距 */
 export const SESSION_W = 480;
-export const SESSION_MIN = 280;
 export const SESSION_GAP = 12;
 
 /** 右栏胶囊：筛选框收成搜索格的断点 / 右栏最小宽（默认值，可推翻） */
@@ -61,7 +60,7 @@ export const PANEL_MIN_W = 260;
 export const PANEL_CAPSULE_INSET = 8;
 
 /**
- * 对话列（会话胶囊的居中基准 = 这一列）：左缘 = 侧栏右侧（收起 = 卡片内边距），
+ * 对话列（会话胶囊靠它的左缘排，右栏胶囊靠它的右缘排）：左缘 = 侧栏右侧（收起 = 卡片内边距），
  * 右缘 = 右栏分隔线（右栏没开 = 卡片右缘）。
  */
 export function conversationColumn(input: {
@@ -94,28 +93,18 @@ export function rightEdge(input: {
 }
 
 /**
- * 会话胶囊几何（排法甲，2026-10-19 验收修正）：**优先居中于对话列**——以对话列
- * 中心为中心、两侧都不越界（各留 `SESSION_GAP`）的前提下取最大宽度（首选 480，
- * 对称收缩）；对称可用宽低于 `SESSION_MIN` 才退而贴左（左缘钉下限、宽度取可用宽，
- * 再窄标题省略号兜底，不换行不溢出）。
+ * 会话胶囊几何（2026-11-22 改左对齐，用户：「右侧面板……顶部名字都是居左的，我们的名字也可以居左」）：
+ * 标题与右栏面板标题同一条规矩——左缘 = 对话列左缘 + `PANEL_CAPSULE_INSET`（右栏胶囊 = 分隔线 + 同一个
+ * 内缩）。左侧栏收起时对话列贴着窗口边，左缘退到左胶囊（侧栏开关 · 新任务 · 专注）的右缘：
+ * 标题就紧跟在专注键右侧。宽度到右限（让开右栏胶囊 / 右栏开关，各留 `SESSION_GAP`）为止，封顶
+ * `SESSION_W`；放不下就能拿多少拿多少，再窄由标题省略号兜底（不换行不溢出）。
  */
 export function sessionCapsule(input: {
-  windowWidth: number;
   colLeft: number;
-  colRight: number;
   leftCapRight: number;
   rightLimit: number;
 }): { x: number; width: number } {
-  const lo = input.leftCapRight + SESSION_GAP;
-  const hi = input.rightLimit - SESSION_GAP;
-  const center = (input.colLeft + input.colRight) / 2;
-  // 对称可用：中心到两侧上限里较短那段 × 2
-  const symmetric = 2 * Math.min(center - lo, hi - center);
-  if (symmetric >= SESSION_MIN) {
-    const width = Math.min(SESSION_W, symmetric);
-    return { x: Math.round(center - width / 2), width: Math.round(width) };
-  }
-  // 对称凑不到最小宽：贴左，能拿多少拿多少
-  const width = Math.max(0, Math.min(SESSION_MIN, hi - lo));
-  return { x: lo, width };
+  const x = Math.max(input.colLeft + PANEL_CAPSULE_INSET, input.leftCapRight);
+  const width = Math.max(0, Math.min(SESSION_W, input.rightLimit - SESSION_GAP - x));
+  return { x, width };
 }

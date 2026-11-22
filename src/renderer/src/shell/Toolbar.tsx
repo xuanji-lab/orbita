@@ -109,9 +109,7 @@ export function Toolbar(props: {
     panelWidth: props.panelWidth,
   });
   const sess = sessionCapsule({
-    windowWidth: props.windowWidth,
     colLeft: col.left,
-    colRight: narrowLimit === null ? col.right : Math.min(col.right, narrowLimit),
     leftCapRight: left + leftW,
     rightLimit: narrowLimit === null ? limit : Math.min(limit, narrowLimit),
   });

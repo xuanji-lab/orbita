@@ -29,7 +29,7 @@ test("标题信息仍可达：胶囊用主会话胶囊同一批组件（改名 /
   assert.match(cap, /<CapSessionId /, "DrawerCap 没摆短 id");
   assert.doesNotMatch(cap, /CapCompletion/, "完成键已删，DrawerCap 不该再摆");
   // 主会话胶囊是同一批组件的另一个消费者——不是复制粘贴
-  assert.match(session, /<CapTitle[\s\S]*?balance/, "SessionCapsule 没用 CapTitle");
+  assert.match(session, /<CapTitle /, "SessionCapsule 没用 CapTitle");
   assert.match(session, /<CapSessionId /, "SessionCapsule 没用 CapSessionId");
   assert.doesNotMatch(session, /CapCompletion/, "完成键已删，SessionCapsule 不该再摆");
   // Drawer 把改名接到抽屉槽上

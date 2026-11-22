@@ -538,17 +538,19 @@ ruling: move our chrome to the lights, never the lights). Inside capsules everyt
 cells `--titlebar-control` (28), fields / tabs `--titlebar-field` (24), icons 16 (the `Icon` size),
 titles `--font-size-titlebar` (= base, semibold). Four capsules: the left one (sidebar toggle · New task ·
 Focus slot — the toggle never changes container, so its coordinates are identical collapsed or expanded),
-the session capsule (address-bar layout, fixed 480 shrinking to fit, centred on the conversation column,
-min 12 from its neighbours; **on the non-paper themes its content is one group centred by content width** —
-[sub-session count / back-to-parent] [title] [id] [copy] | [done], gaps on one rhythm, the title the only thing
-that shrinks (ellipsis) — because with the capsule's fill gone, a fixed three-column grid left the title, the id and
-the count drifting apart on the shell; the paper themes keep the grid), the right-panel capsule (left edge pinned to the panel divider, width =
+the session capsule (**left-aligned, 2026-11-22**, the same rule as the right-panel titles: its left edge is the
+conversation column's left edge plus the right-panel capsule's inset, 8; with the sidebar collapsed it
+follows the left capsule, so the title sits right after the Focus key; up to 480 wide, 12 clear of the
+right-panel capsule; its content is one group from the left — [back-to-parent, only on a sub-session
+opened as main] [title] [id] [copy], gaps on one rhythm, the title the only thing that shrinks (ellipsis),
+the title text 12 from the capsule's left edge, where the right-panel title keys start their icon; the sub-session
+count and the done key are gone — the count lives in the right rail's sub-sessions entry), the right-panel capsule (left edge pinned to the panel divider, width =
 `--right-panel-w`; panel headers portal into it; below 300 the filter collapses to a search cell),
 and the right-panel toggle. Cards start at y=52 — conversation / settings cards have **no header row**
 (session info lives in the session capsule; panel headers live in the right-panel capsule), and the
 sidebar has neither wordmark row nor big New-task button: the wordmark sits at the bottom of the usage
-column. Geometry is pure functions in `shell/window-tools.ts` (left capsule x 80 darwin / 12 otherwise;
-session capsule centring and clamping) and `window-tools.test.ts` guards the chain: tokens ↔ main-process
+column. Geometry is pure functions in `shell/window-tools.ts` (left capsule x 88 darwin / 12 otherwise;
+session capsule left-aligning and clamping) and `window-tools.test.ts` guards the chain: tokens ↔ main-process
 lights ↔ capsule centre = 25, right-panel capsule pinned to the divider, left capsule x state-independent,
 and the toolbar's direct children are capsules.
 
