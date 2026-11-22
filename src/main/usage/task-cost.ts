@@ -442,9 +442,16 @@ function isPriced(cost: ModelCostDecl | undefined): cost is ModelCostDecl {
 }
 
 /**
- * 这个（服务商，型号）的**官方单价**：用户自填的（非全零）> 本家目录（与会话注册同一条查找，
- * 本家 > 同协议 > 其余 > Claude 家族）> 全目录里同 id 的非零单价（同协议先）> 型号白名单的
- * officialCost（只补目录全都缺价的 id，理由见 known-models 的字段注释）。都没有 → null。
+ * 这个（服务商，型号）的**官方单价**，按顺序找第一个非零的：
+ * 1. 用户自填的；
+ * 2. 目录里**同一个 id** 的单价：本家 > 同协议 > 其余；
+ * 3. 型号白名单的 officialCost（只补目录里没有这个 id 的价，理由见 known-models 的字段注释）；
+ * 4. Claude 家族兜底借来的同家族条目的价（与会话注册同一条查找）。
+ * 都没有 → null。
+ *
+ * 家族借价排在白名单之后：借来的是**别的型号**的价。参数（窗口、档位）同家族多半一致，
+ * 价格不一定——claude-fable-5-2 官方 $8 / $40，借到的 fable-5 是 $10 / $50（2026-11-12）。
+ * 以前家族借价排在白名单前面，白名单写了官方价也盖不过它。
  *
  * 全零不算数：套餐目录（zai-coding-cn、qwen-token-plan）的同一型号单价是 0，那是「包月不按量」，
  * 不是「这个型号不要钱」——图要的是官方按量价，往下找。
@@ -456,16 +463,20 @@ export function officialRates(
   declared: ModelCostDecl | undefined,
 ): ModelCostDecl | null {
   if (isPriced(declared)) return { ...declared };
-  const home = lookupCatalogModel(catalog, modelId, prefer)?.cost;
+  const exactCost = (provider: BuiltinProvider | undefined) => provider?.models.find((model) => model.id === modelId)?.cost;
+  const home = exactCost(prefer.catalogId === undefined ? undefined : catalog.find((p) => p.id === prefer.catalogId));
   if (isPriced(home)) return { ...home };
   const ordered = [...catalog].sort((a, b) => {
     const rank = (p: BuiltinProvider) => (prefer.api !== undefined && p.api === prefer.api ? 0 : 1);
     return rank(a) - rank(b);
   });
   for (const provider of ordered) {
-    const cost = provider.models.find((model) => model.id === modelId)?.cost;
+    const cost = exactCost(provider);
     if (isPriced(cost)) return { ...cost };
   }
   const listed = knownModelParams(modelId).officialCost;
-  return isPriced(listed) ? { ...listed } : null;
+  if (isPriced(listed)) return { ...listed };
+  // 走到这里目录里已经没有这个 id 的非零价，lookupCatalogModel 能给的只剩 Claude 家族借来的条目
+  const borrowed = lookupCatalogModel(catalog, modelId, prefer)?.cost;
+  return isPriced(borrowed) ? { ...borrowed } : null;
 }

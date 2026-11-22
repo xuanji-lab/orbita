@@ -47,6 +47,7 @@ import {
   parseSessionMeta,
   pushRecentQuery,
   recentQueriesFromRecords,
+  SESSION_INITIAL_RECORDS,
   SESSION_PAGE_RECORDS,
   sortSessions,
   UNASSIGNED_PROVIDER_ID,
@@ -86,6 +87,12 @@ export function isSessionId(id: string): boolean {
 }
 
 const META_SUFFIX = ".meta.json";
+
+/**
+ * `list()` 一批同时读几个 meta。16 是折中：libuv 的文件线程池默认 4，并发再大也
+ * 只能摊到 4 个线程上；批太大反而让 JSON.parse（同步、在主线程）与其它 IPC 抢时间。
+ */
+const META_READ_BATCH = 16;
 
 /**
  * 一次分支的全部预制件（C-2）。prepareBranch 只读不写；pi 那边把分支文件落了
@@ -883,7 +890,14 @@ export class SessionStore {
     });
   }
 
-  /** 会话列表：置顶在前，其余最近的在前。**坏掉的 meta 直接跳过**，不让一条坏记录挡住整张列表。 */
+  /**
+   * 会话列表：置顶在前，其余最近的在前。**坏掉的 meta 直接跳过**，不让一条坏记录挡住整张列表。
+   *
+   * meta 按 `META_READ_BATCH` 个一批 `Promise.all` 读：串行时一个会话一次
+   * `readFile` 往返，1432 条实测约 126ms；有上限并发把往返叠起来。批内顺序不影响
+   * 结果——最后统一走 `sortSessions`（只认 pinned / updatedAt），与串行逐条读到
+   * 的那份逐条一致（store.test.ts 有一条 >16 条的对照用例）。
+   */
   async list(): Promise<SessionMeta[]> {
     let names: string[];
     try {
@@ -894,11 +908,16 @@ export class SessionStore {
       if (isNotFound(cause)) return [];
       throw cause;
     }
+    const ids = names
+      .filter((name) => name.endsWith(META_SUFFIX))
+      .map((name) => name.slice(0, -META_SUFFIX.length));
     const metas: SessionMeta[] = [];
-    for (const name of names) {
-      if (!name.endsWith(META_SUFFIX)) continue;
-      const meta = await this.readMeta(name.slice(0, -META_SUFFIX.length)).catch(() => null);
-      if (meta !== null) metas.push(meta);
+    for (let start = 0; start < ids.length; start += META_READ_BATCH) {
+      const batch = ids.slice(start, start + META_READ_BATCH);
+      const read = await Promise.all(batch.map((id) => this.readMeta(id).catch(() => null)));
+      for (const meta of read) {
+        if (meta !== null) metas.push(meta);
+      }
     }
     return sortSessions(metas);
   }
@@ -910,7 +929,8 @@ export class SessionStore {
   }
 
   /**
-   * 打开一条会话的**尾窗**（IPC 的 session:load 走这条）。
+   * 打开一条会话的**首屏尾窗**（IPC 的 session:load 走这条），默认只取
+   * `SESSION_INITIAL_RECORDS` 条；更早的由 `loadOlder` 按 `SESSION_PAGE_RECORDS` 一页页补。
    *
    * **主进程仍然全量读盘 + `foldReverts`**（实测 25MB / 2948 条的会话读盘解析折叠
    * 约 120ms，可接受）——瓶颈是 IPC 传输量与 renderer 的渲染量，那两处才是分页的对象。
@@ -922,7 +942,7 @@ export class SessionStore {
    *
    * 要**全量**的消费者照旧走 `load`：导出、回退、intent 归档、read_task。
    */
-  async loadWindow(id: string, limit: number = SESSION_PAGE_RECORDS): Promise<SessionWindowDetail | null> {
+  async loadWindow(id: string, limit: number = SESSION_INITIAL_RECORDS): Promise<SessionWindowDetail | null> {
     const meta = await this.readMeta(id);
     if (meta === null) return null;
     const effective = await this.readLog(id);
@@ -1178,7 +1198,7 @@ export class SessionStore {
 /** IPC 进来的 limit 在这条线上夹住：它来自 renderer，不设上限就是给了一条自选的传输量 */
 const PAGE_RECORDS_MAX = 2000;
 
-/** 一页的条数：坏值 / 缺席退默认，再夹在 [1, PAGE_RECORDS_MAX] */
+/** 一页的条数：坏值 / 缺席退**翻页**默认值（不是首屏值），再夹在 [1, PAGE_RECORDS_MAX] */
 function pageRecords(limit: number): number {
   if (!Number.isFinite(limit)) return SESSION_PAGE_RECORDS;
   return Math.min(Math.max(1, Math.floor(limit)), PAGE_RECORDS_MAX);

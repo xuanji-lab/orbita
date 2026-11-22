@@ -28,6 +28,8 @@ import { parseAutomationModeRow, type AutomationModeRow } from "../../../../shar
 import { parsePluginBoardDetails, type PluginBoardResult } from "../../../../shared/plugin-board.ts";
 import { gatedCommandTimeout, PLUGIN_BOARD_TOOL } from "../../../../shared/permission.ts";
 import { builtinCommand, DOC_EDIT_KEY, DOC_WRITE_KEY, docEditPath, isBuiltinCommand, PINNED_CARD_COMMANDS } from "./builtin-commands.ts";
+// 收尾扫描回答卡（scanAnswerCards）只用它认消息形状；纯模块，node --test 可直接加载
+import { matchScanMessage, type ScanMessage } from "./carryover-parse.ts";
 // 值导入必须走相对路径带 .ts 后缀（同上一行的纪律：本文件被 node --test 直接加载）
 import { skillForReadPath } from "../../../../shared/skill.ts";
 import { parseQualifiedToolName } from "../../../../shared/mcp.ts";
@@ -37,10 +39,10 @@ import type { Messages } from "../../messages-en.ts";
 /** toolCallId → 那次调用的结果。同一个 id 出现多次时以最后一条为准（终态帧在增量帧之后）。 */
 export type ToolResultIndex = ReadonlyMap<string, ToolTranscriptItem>;
 
-export function indexToolResults(transcript: readonly TranscriptItem[]): ToolResultIndex {
+export function indexToolResults(records: readonly TranscriptRecord[]): ToolResultIndex {
   const index = new Map<string, ToolTranscriptItem>();
-  for (const item of transcript) {
-    if (item.role === "tool") index.set(item.toolCallId, item);
+  for (const record of records) {
+    if (record.role === "tool") index.set(record.toolCallId, record);
   }
   return index;
 }
@@ -957,6 +959,47 @@ export function streamingThinkingKey(
   const index = last.content.length - 1;
   const block = last.content[index];
   return block !== undefined && block.type === "thinking" ? `${last.id}:${index}` : null;
+}
+
+/** 流式中的 assistant 记录 id 集：这些消息的 text 块渲染时传 streaming（省公式排版与高亮）。 */
+export function streamingRecordIds(records: readonly TranscriptRecord[]): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const record of records) {
+    if (record.role === "assistant" && record.status === "streaming") ids.add(record.id);
+  }
+  return ids;
+}
+
+/** 收尾扫描回答卡：assistant 记录 id → 卡片与首个 text 单元的 key（只读展示卡替代整条 markdown） */
+export interface ScanAnswerCard {
+  scan: ScanMessage;
+  firstKey: string;
+}
+
+/**
+ * 把落定的 assistant 消息里**整条恰好是一个可解析 fenced json 块**的那些认成扫描回答卡。
+ * 判定按整条消息的全部 text 块拼接（与 collectScanAnswer 同口径：围栏可能被拆在多个
+ * text 块里）；命中后多个 text 单元只在第一个的位置渲染一次卡片，其余跳过。
+ * 纯函数：历史段 / 实时尾段各自在自己的记录上算，引用随记录稳定。
+ */
+export function scanAnswerCards(
+  records: readonly TranscriptRecord[],
+): ReadonlyMap<string, ScanAnswerCard> {
+  const cards = new Map<string, ScanAnswerCard>();
+  for (const record of records) {
+    if (record.role !== "assistant" || record.status === "streaming") continue;
+    let firstKey: string | null = null;
+    const parts: string[] = [];
+    record.content.forEach((block, index) => {
+      if (block.type !== "text") return;
+      if (firstKey === null) firstKey = `${record.id}:${index}`;
+      parts.push(block.text);
+    });
+    if (firstKey === null) continue;
+    const scan = matchScanMessage(parts.join(""));
+    if (scan !== null) cards.set(record.id, { scan, firstKey });
+  }
+  return cards;
 }
 
 /** 思考时长格式：不足 1 秒按 1 秒；满一分钟「1m 05s」（秒两位补零，与 formatToolDuration 同款）。 */
