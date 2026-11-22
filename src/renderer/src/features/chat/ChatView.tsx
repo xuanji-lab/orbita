@@ -74,7 +74,7 @@ import { planAwaitingIn, planHistory, planNoticeOf, type PlanTimeline, type Plan
 import { PlanCard } from "./PlanCard";
 import { PlanCallBlock, PlanTurnCard } from "./PlanTurnCard.tsx";
 import { planCallView, planTurnState, type PlanCallView, type PlanTick } from "./plan-turn.ts";
-import { goalNoticeText, planNoticeText } from "../context/plan-text.ts";
+import { goalChangesByCall, goalNoticeText } from "../context/plan-text.ts";
 import { useGoalLedger } from "../context/useGoalLedger.ts";
 import { GOAL_TOOL_NAME } from "../../../../shared/goal.ts";
 import type { GoalLedger } from "../../../../shared/goal-ledger.ts";
@@ -178,7 +178,6 @@ import { InlineName } from "../../shell/InlineName";
 import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
-import { NebulaPet } from "../../shell/UsageMeter";
 import { sessionOutputs, type SessionOutputs } from "./child-outputs.ts";
 import { ChatFileScopeContext, loadChatImage, openChatFile, revealChatFile, useChatFileScope, useChatImage, type ChatFileScope } from "./chat-file-scope.ts";
 import { requestOpenPanel } from "../../shell/open-panel.ts";
@@ -4665,6 +4664,10 @@ function TurnProcessLine(props: {
       .filter((call) => call.toolName === GOAL_TOOL_NAME)
       .map((call) => call.toolCallId),
   );
+  const goalCallIds = processCalls(unit.steps)
+    .filter((call) => call.toolName === GOAL_TOOL_NAME)
+    .map((call) => call.toolCallId);
+  const goalChanges = goalChangesByCall(t, props.ledger, goalCallIds);
   const planStepNow = props.plan?.current.items.find((item) => item.status === "in_progress")?.text ?? null;
   const timeLabel = unit.startedAt !== null && (
     <div className="turn-start-time" style={{ ...TIME_LABEL, paddingLeft: RAIL_X }} title={fullTimestamp(unit.startedAt, t.chat.timeWeekdays)}>
@@ -4694,8 +4697,7 @@ function TurnProcessLine(props: {
       <div className="proc-live" aria-live="off">
         {timeLabel}
         <div className="proc-who">
-          <ChatPet live />
-          <span className="proc-doing">
+          <span className="proc-doing orbita-breath">
             <InlineMarks text={doing} />…
           </span>
           {elapsed !== null && <span className="proc-time">{formatRunClock(elapsed)}</span>}
@@ -4731,7 +4733,6 @@ function TurnProcessLine(props: {
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
       {timeLabel}
       <CollapseRow dense open={open} onToggle={() => setOpen((value) => !value)}>
-        <ChatPet />
         <span className="proc-head-row">
           {props.turnFailed && (
             <span style={{ color: "var(--color-danger)", flex: "0 0 auto", display: "inline-flex" }}>
@@ -4757,6 +4758,7 @@ function TurnProcessLine(props: {
               </>
             )}
             <span className="proc-what">{headline}</span>
+            {goalChanges.size > 0 && <span className="proc-quiet">{t.chat.processGoalChanged}</span>}
             {counts.failed > 0 && <span className="proc-quiet">{t.chat.processQuietFailed(counts.failed)}</span>}
             <Icon name={open ? "chevron-down" : "chevron-right"} size={13} strokeWidth={1.8} />
           </span>
@@ -4764,27 +4766,19 @@ function TurnProcessLine(props: {
           {!open && images.length > 0 && <ProcessThumbs images={images} />}
         </span>
       </CollapseRow>
-      {open && <ProcessExpanded steps={unit.steps} toolResults={props.toolResults} skills={props.skills} imagesByCall={imagesByCall} plan={props.plan} />}
+      {open && (
+        <GoalChangeContext.Provider value={goalChanges}>
+          <ProcessExpanded steps={unit.steps} toolResults={props.toolResults} skills={props.skills} imagesByCall={imagesByCall} plan={props.plan} />
+        </GoalChangeContext.Provider>
+      )}
       {/* 计划卡在过程行下面：过程收着时只剩它；过程展开时它在步骤之后，像一张确认稿（2026-11-22 用户） */}
       {planHead}
-      {goalNoticeLine !== null && <Notice icon="pencil-line">{goalNoticeLine}</Notice>}
     </div>
   );
 }
 
-/**
- * 星云（侧栏底那只）缩小成对话里的「它」：跑着的时候在呼吸、碎片在转，落定后静止睁眼。
- * 2026-11-22 用户：折叠行「我希望有活人感一些」，参照 Kimi 每一轮前那只小头像。
- */
-function ChatPet(props: { live?: boolean }) {
-  return (
-    <span className="chat-pet" data-still={props.live === true ? undefined : true} aria-hidden="true">
-      <span className="chat-pet-scale">
-        <NebulaPet tier={3} orbit={props.live === true} fast={props.live === true} />
-      </span>
-    </span>
-  );
-}
+/** 过程块里「改了目标」的那几次 update_goal：调用 id → 「旧」改成「新」——为什么（展开时那一步写它） */
+const GoalChangeContext = createContext<ReadonlyMap<string, string>>(new Map());
 
 /**
  * 展开后的过程（2026-11-22）。两种排法都只有一种行：图标 · 动作 · 对象 · 量，行尾可带缩略图；
@@ -4860,7 +4854,11 @@ function ProcessChapterRow(props: {
   const rows = processRows(chapter.steps).filter((row): row is Extract<ProcessRow, { kind: "step" }> => row.kind === "step");
   const failed = rows.filter((row) => props.toolResults.get(row.call.toolCallId)?.status === "error").length;
   const images = imagesOf(chapter.steps, props.imagesByCall);
-  const label = (call: ToolCallUnit) => stepLabel(call, t, props.skills, props.plan);
+  const goalChanges = useContext(GoalChangeContext);
+  const label = (call: ToolCallUnit) => {
+    const change = goalChanges.get(call.toolCallId);
+    return change !== undefined ? `${t.chat.goalChangedStep} ${change}` : stepLabel(call, t, props.skills, props.plan);
+  };
   // 没有旁白也没有思考的段：按头一步起名（「读文件 handoff.txt」），不写「读取 3 次」这种统计
   const first = rows[0];
   const title = chapter.title ?? (first === undefined ? "" : label(first.call));
@@ -4977,7 +4975,13 @@ function StepRow(props: {
   // 改计划那一步：定计划 / 改结构的那一次，清单或左右对照原位画在这一行下面（「计划框框就是在这些的中间」）；
   // 只打勾的写成「完成 X / 开始 Y」（照 Claude 的 Completed task / Started task）
   const planView = call.toolName === PLAN_TOOL_NAME ? planCallView(props.plan, call.toolCallId) : null;
-  const v = planView === null ? stepVerb(call.toolName, call.input, t.chat.stepVerb, props.skills) : planStepVerb(planView, t);
+  const goalChange = useContext(GoalChangeContext).get(call.toolCallId);
+  const v: StepVerb =
+    goalChange !== undefined
+      ? { verb: t.chat.goalChangedStep, object: goalChange, raw: null }
+      : planView === null
+        ? stepVerb(call.toolName, call.input, t.chat.stepVerb, props.skills)
+        : planStepVerb(planView, t);
   const stats = finished && !failed ? editDiffStats(result) : null;
   const lines = finished && !failed && call.toolName === "write" ? writeLineCount(call.input) : null;
   const shellMs = call.toolName === "bash" || call.toolName === "powershell" ? toolDurationText(call.toolCallId, t) : null;

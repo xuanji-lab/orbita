@@ -34,6 +34,9 @@ export interface StepVerbWords {
   image: string;
   config: string;
   plugin: string;
+  /** 装插件 / 放插件看板：这两个工具各有动词，不笼统写「用插件」 */
+  installPlugin: string;
+  pluginBoard: string;
   askUser: string;
   report: string;
   delegate: string;
@@ -72,10 +75,10 @@ const VERB_OF_TOOL: Readonly<Record<string, keyof Omit<StepVerbWords, "mcp">>> =
   show_image: "image",
   create_skill: "config",
   add_mcp_server: "config",
-  install_plugin: "plugin",
+  install_plugin: "installPlugin",
   preview_plugin: "plugin",
   list_plugins: "plugin",
-  show_plugin_board: "plugin",
+  show_plugin_board: "pluginBoard",
   request_user_action: "askUser",
   report_to_parent: "report",
   delegate: "delegate",

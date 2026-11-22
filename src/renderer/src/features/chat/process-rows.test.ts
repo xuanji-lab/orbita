@@ -180,3 +180,11 @@ describe("outsideFailure：留在过程外的行失败时行首是中文动作�
     }
   });
 });
+
+describe("stepVerb：装插件 / 放插件看板有自己的动作词", () => {
+  test("收进过程行的 show_plugin_board / install_plugin 不露工具原名", () => {
+    assert.equal(stepVerb("show_plugin_board", { plugin: "p" }, zh.chat.stepVerb).verb, "放插件看板");
+    assert.equal(stepVerb("install_plugin", { path: "/p" }, zh.chat.stepVerb).verb, "装插件");
+    assert.equal(stepVerb("show_plugin_board", { plugin: "p" }, en.chat.stepVerb).raw, null);
+  });
+});

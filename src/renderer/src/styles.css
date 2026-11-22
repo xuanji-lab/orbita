@@ -5661,7 +5661,7 @@ mark.intent-mark {
 }
 .proc-foot {
   height: 18px;
-  padding: 0 var(--content-hem) 0 calc(var(--content-hem) + var(--chat-pet-w));
+  padding: 0 var(--content-hem);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -6327,34 +6327,11 @@ html {
 
 /* ===== 过程与产物（2026-11-22，ChatView 的 TurnProcessLine / ProcessExpanded / StepRow / TurnOutputsBlock；
    推导在 process-rows.ts）=====
- * 一轮只分两处：过程收成一行（星云 + 「工作了多久 · 做了什么」+ 缩略图），产物收在这一轮的结尾。
+ * 一轮只分两处：过程收成一行（「工作了多久 · 做了什么」+ 缩略图），产物收在这一轮的结尾。
  * 展开后只有一种行：图标 · 动作 · 对象 · 量 · 缩略图。 */
 
-/* 星云缩成对话里的「它」：80×48 的星云按 0.6 缩到 48×29；落定后不呼吸、碎片停住 */
-.proc-live,
-.chat-pet {
-  /* 星云缩小后的宽：在想那一行的字对齐到它右边 */
-  --chat-pet-w: 48px;
-}
 .proc-rows {
   --proc-icon-w: 14px;
-}
-.chat-pet {
-  position: relative;
-  flex: none;
-  width: var(--chat-pet-w);
-  height: 29px;
-  margin-left: calc(-1 * var(--space-3));
-}
-.chat-pet-scale {
-  position: absolute;
-  left: 0;
-  top: 0;
-  transform: scale(0.6);
-  transform-origin: 0 0;
-}
-.chat-pet[data-still] .usage-orb {
-  animation: none;
 }
 
 /* 跑着：一句在干什么（正文墨）、一句在想什么（灯泡 + 次级灰），末行是慢 / 输出尾巴 */
@@ -6382,7 +6359,7 @@ html {
   gap: var(--space-1-5);
   height: 20px;
   min-width: 0;
-  padding: 0 var(--content-hem) 0 calc(var(--content-hem) + var(--chat-pet-w));
+  padding: 0 var(--content-hem);
   overflow: hidden;
   white-space: nowrap;
   font-size: var(--font-size-sm);

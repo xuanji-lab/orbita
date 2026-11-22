@@ -219,11 +219,38 @@ const PLUGIN_INSTALL_TOOL_NAME = "install_plugin";
 // 那一部分该被排除，谓词的假分支会让 TS 把整个 "toolCall" kind 都窄掉，
 // 下游 `entry.kind === "toolCall"` 判断就报「没有交集」。
 // 名字沿用 isChannelToolCall：通道工具与交接都是「独立成卡、不参与合并与折叠」的那一类。
-function isChannelToolCall(entry: RenderEntry): boolean {
+function isChannelToolCall(entry: RenderEntry, results?: ToolResultIndex): boolean {
   return (
     entry.kind === "toolCall" &&
-    (CHANNEL_TOOL_NAMES.has(entry.toolName) || entry.toolName === HANDOFF_TOOL_NAME || entry.toolName === PLUGIN_INSTALL_TOOL_NAME)
+    (CHANNEL_TOOL_NAMES.has(entry.toolName) || entry.toolName === HANDOFF_TOOL_NAME || entry.toolName === PLUGIN_INSTALL_TOOL_NAME) &&
+    hasOwnCard(entry, results)
   );
+}
+
+/**
+ * 这些「钉在折叠外」的工具，落定后得**真有那张卡可画**才留在外面（2026-11-22 用户截图：show_plugin_board 的结果
+ * details.pluginBoard 解析不出——缺 source / at——退回通用工具行，一行英文名「show_plugin_board 12 字」就露在折叠外）。
+ * 解析不出的收进过程行（那里按动作词写「放插件看板」），不以通用行留在外面。
+ * - 还在跑 / 没有结果索引（离线推导、测试）：照旧留在外面——它即将成卡，位置不该先跳后回。
+ * - 报错：照旧留在外面（红行，行首是中文动作词，见 process-rows.ts outsideFailure），用户需要看见它失败了。
+ * - 落定但卡片数据解析不出：收进过程。
+ */
+function hasOwnCard(entry: Extract<RenderEntry, { kind: "toolCall" }>, results: ToolResultIndex | undefined): boolean {
+  if (results === undefined) return true;
+  const result = results.get(entry.toolCallId);
+  if (result === undefined || result.status !== "complete") return true;
+  switch (entry.toolName) {
+    case PLUGIN_BOARD_TOOL:
+      return pluginBoardOf(result) !== null;
+    case "show_image":
+      return showImageCard(result) !== null;
+    case PLUGIN_INSTALL_TOOL_NAME:
+      return pluginInstallRowOf(result) !== null;
+    case "automation_update":
+      return automationModeRowOf(result) !== null;
+    default:
+      return true;
+  }
 }
 
 /**
@@ -238,8 +265,8 @@ function isChannelToolCall(entry: RenderEntry): boolean {
  */
 const PINNED_TOOL_NAMES: ReadonlySet<string> = new Set(["show_image", PLUGIN_BOARD_TOOL]);
 
-function isPinnedToolCall(entry: RenderEntry): boolean {
-  return entry.kind === "toolCall" && PINNED_TOOL_NAMES.has(entry.toolName);
+function isPinnedToolCall(entry: RenderEntry, results?: ToolResultIndex): boolean {
+  return entry.kind === "toolCall" && PINNED_TOOL_NAMES.has(entry.toolName) && hasOwnCard(entry, results);
 }
 
 function isShowImageCall(entry: RenderEntry): boolean {
@@ -421,8 +448,8 @@ export type TurnMemberEntry = Extract<
  * 它们是父子间的通信，不是「工作过程」，不该被折叠吞掉（子会话 PR4b 显示缺陷修正）。
  * 它们也从不出现在 toolGroup 里（`groupToolUnits` 已挡），这里只需挡 toolCall 分支。
  */
-function isTurnMember(entry: RenderEntry): entry is TurnMemberEntry {
-  if (isChannelToolCall(entry) || isPinnedToolCall(entry)) return false;
+function isTurnMember(entry: RenderEntry, results?: ToolResultIndex): entry is TurnMemberEntry {
+  if (isChannelToolCall(entry, results) || isPinnedToolCall(entry, results)) return false;
   return entry.kind === "thinking" || entry.kind === "toolCall" || entry.kind === "toolGroup";
 }
 
@@ -589,7 +616,7 @@ function foldSegment(
     chunk = [];
   };
   for (const entry of segment) {
-    if (isPinnedToolCall(entry)) {
+    if (isPinnedToolCall(entry, results)) {
       pinned.push(entry);
       continue;
     }
@@ -600,7 +627,7 @@ function foldSegment(
       tailCards.push(entry);
       continue;
     }
-    if (isChannelToolCall(entry)) {
+    if (isChannelToolCall(entry, results)) {
       flushChunk(false);
       view.push(entry);
       continue;
@@ -669,7 +696,7 @@ function foldChunk(chunk: readonly RenderEntry[], results?: ToolResultIndex): Tu
     run = [];
   };
   for (const entry of chunk) {
-    if (isTurnMember(entry)) {
+    if (isTurnMember(entry, results)) {
       run.push(entry);
       continue;
     }
@@ -697,7 +724,7 @@ function foldChunkByTurn(
   let first = -1;
   let last = -1;
   kept.forEach((entry, index) => {
-    if (!isTurnMember(entry)) return;
+    if (!isTurnMember(entry, results)) return;
     if (first === -1) first = index;
     last = index;
   });
@@ -708,7 +735,7 @@ function foldChunkByTurn(
   const steps: ProcessStep[] = lead.filter((entry): entry is Extract<RenderUnit, { kind: "text" }> => entry.kind === "text");
   const aside: RenderEntry[] = [];
   for (const entry of kept.slice(first, last + 1)) {
-    if (isTurnMember(entry) || entry.kind === "text") steps.push(entry);
+    if (isTurnMember(entry, results) || entry.kind === "text") steps.push(entry);
     else aside.push(entry);
   }
   const after = kept.slice(last + 1);

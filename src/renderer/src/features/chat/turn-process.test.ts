@@ -15,6 +15,9 @@ import {
   type TurnProcessUnit,
   type TurnViewEntry,
 } from "./tool-results.ts";
+import { goalChangesByCall } from "../context/plan-text.ts";
+import type { GoalLedger } from "../../../../shared/goal-ledger.ts";
+import { zh } from "../../messages-zh.ts";
 import { firstLine, processChapters, processCounts, processInterrupted, processLive, processOutcome } from "./turn-process.ts";
 
 const user = (id: string, timestamp: number): TranscriptItem =>
@@ -243,7 +246,7 @@ describe("钉住的看板 / 画廊不随轮尾文件卡换位（2026-11-06：看
     assistant("a2", 3000, [call("b1", "bash", { command: "python run.py" })]),
     tool({ toolCallId: "b1", toolName: "bash", timestamp: 3100 }),
     assistant("a3", 4000, [call("sb", "show_plugin_board", { plugin: "lit" })]),
-    tool({ toolCallId: "sb", toolName: "show_plugin_board", timestamp: 4100 }),
+    tool({ toolCallId: "sb", toolName: "show_plugin_board", timestamp: 4100, details: { pluginBoard: { plugin: "lit", displayName: "Lit", title: "Lit", source: "installed", draftPath: null, at: 4100, tuned: false, cards: [], skipped: [] } } }),
     assistant("a4", 5000, [{ type: "text", text: "看板在上面。" }]),
   ];
   const fileTurn = { role: "file-turn", id: "ft1", timestamp: 5500, changes: [] } as unknown as TranscriptItem;
@@ -291,5 +294,60 @@ describe("批量网页变动并进结尾那摞（不再是文件账里的一句�
   test("没有批量时 webBatch 是 0，没有别的产物就不出这一摞", () => {
     const records = withBatch([]).slice(0, 4);
     assert.equal(view(records, false).some((e) => e.kind === "turnOutputs"), false);
+  });
+});
+
+describe("钉在折叠外的工具：落定后卡片数据解析不出的收进过程行（2026-11-22 用户截图：show_plugin_board 一行英文名露在折叠外）", () => {
+  const board = { plugin: "p", displayName: "P", title: "P", source: "installed", draftPath: null, at: 1, tuned: false, cards: [], skipped: [] };
+  const round = (toolName: string, input: unknown, details: unknown, status: "complete" | "error" | "running" = "complete") =>
+    [
+      user("u1", 1),
+      assistant("a1", 2, [call("r1"), call("x1", toolName, input)]),
+      tool({ toolCallId: "r1", timestamp: 3 }),
+      tool({ toolCallId: "x1", toolName, timestamp: 4, status, ...(details === undefined ? {} : { details: details as ToolTranscriptItem["details"] }) }),
+      assistant("a2", 5, [{ type: "text", text: "好了。" }]),
+    ] as TranscriptItem[];
+  const kinds = (records: TranscriptItem[]) => view(records, false).map((e) => e.kind);
+  const insideProcess = (records: TranscriptItem[], id: string) =>
+    procOf(view(records, false)).some((p) => p.steps.some((step) => step.kind === "toolCall" && step.toolCallId === id));
+
+  test("show_plugin_board：解析成功钉在折叠外；缺 source / at（解析不出）收进过程行", () => {
+    const ok = round("show_plugin_board", { plugin: "p" }, { pluginBoard: board });
+    assert.equal(insideProcess(ok, "x1"), false);
+    assert.ok(kinds(ok).includes("toolCall"));
+    const { source: _s, at: _a, ...broken } = board;
+    const bad = round("show_plugin_board", { plugin: "p" }, { pluginBoard: broken });
+    assert.equal(insideProcess(bad, "x1"), true);
+    assert.deepEqual(kinds(bad), ["user", "turnProcess", "text"]);
+  });
+
+  test("show_image / install_plugin / automation_update：同样，解析不出的收进过程行", () => {
+    assert.equal(insideProcess(round("show_image", { paths: ["/a.png"] }, { showImage: { images: [] } }), "x1"), true);
+    assert.equal(insideProcess(round("show_image", { paths: ["/a.png"] }, { showImage: { images: [{ data: "AAAA", mimeType: "image/png", name: "a.png" }] } }), "x1"), false);
+    assert.equal(insideProcess(round("install_plugin", { path: "/p" }, undefined), "x1"), true);
+    assert.equal(insideProcess(round("automation_update", { id: "a" }, undefined), "x1"), true);
+  });
+
+  test("还在跑 / 报错的照旧留在外面（报错的红行要让用户看见）；delegate / request_user_action 不受解析影响", () => {
+    assert.equal(insideProcess(round("show_plugin_board", { plugin: "p" }, undefined, "running"), "x1"), false);
+    assert.equal(insideProcess(round("show_plugin_board", { plugin: "p" }, undefined, "error"), "x1"), false);
+    assert.equal(insideProcess(round("install_plugin", { path: "/p" }, undefined, "error"), "x1"), false);
+    assert.equal(insideProcess(round("delegate", { title: "t" }, undefined), "x1"), false);
+    assert.equal(insideProcess(round("request_user_action", { reason: "r" }, undefined), "x1"), false);
+  });
+});
+
+describe("改目标收进过程行", () => {
+  test("goalChangesByCall：第二次 update_goal 才算改，第一次定目标不算", () => {
+    const ledger = {
+      entries: [
+        { kind: "goal", id: "g1", at: 1, from: null, to: "做 A", why: null, by: "user", source: null },
+        { kind: "goal", id: "g2", at: 2, from: "做 A", to: "做 B", why: "用户改主意", by: "user", source: null },
+      ],
+    } as unknown as GoalLedger;
+    const changes = goalChangesByCall(zh, ledger, ["g1", "g2"]);
+    assert.deepEqual([...changes.keys()], ["g2"]);
+    assert.equal(changes.get("g2"), "「做 A」改成「做 B」——用户改主意");
+    assert.equal(goalChangesByCall(zh, ledger, []).size, 0);
   });
 });

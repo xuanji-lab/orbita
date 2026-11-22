@@ -2363,6 +2363,9 @@ export const en = {
     processWorked: (duration: string) => `Worked ${duration}`,
     // 这一轮被用户打断（有工具调用永远等不到结果）：过程行的头一句换成它，不再写「工作了 X 秒」
     processInterrupted: "Interrupted by you",
+    // 过程里改了目标：展开时那一步的动作词；落定态那一句话里也带一个
+    goalChangedStep: "Changed goal",
+    processGoalChanged: "Goal changed",
     processStepFailed: "didn't work",
     processWorking: "Working",
     processQuietFailed: (n: number) => `${n} didn't work`,
@@ -2397,6 +2400,8 @@ export const en = {
       image: "Showed you",
       config: "Configured",
       plugin: "Plugin",
+      installPlugin: "Install plugin",
+      pluginBoard: "Show plugin board",
       askUser: "Asked you",
       report: "Reported",
       delegate: "Handed off",
@@ -3312,6 +3317,7 @@ export const en = {
     editsTitle: "What changed in the goal and the plan, why, and who asked",
     logOnly: "Log",
     /** 对话里的一行：目标从什么改成什么；why 空串 = 没写理由 */
+    changeObject: (from: string, to: string, why: string) => `"${from}" → "${to}"${why === "" ? "" : ` — ${why}`}`,
     notice: (from: string, to: string, why: string) => `Goal changed: "${from}" → "${to}"${why === "" ? "" : ` — ${why}`}`,
     /** 目标行上的动作：带着目标开新会话（不是确认，是一个去处） */
     carry: "Continue the goal in a new task",

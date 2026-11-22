@@ -362,7 +362,12 @@ describe("groupTurns", () => {
       ]),
       toolItem({ toolCallId: "r1", timestamp: 2500 }),
       assistantItem("a2", 3000, [{ type: "toolCall", toolCallId: "i1", toolName: "install_plugin", input: { path: "/w/plugins/lit" } }]),
-      toolItem({ toolCallId: "i1", toolName: "install_plugin", timestamp: 3500 }),
+      toolItem({
+        toolCallId: "i1",
+        toolName: "install_plugin",
+        timestamp: 3500,
+        details: { pluginInstall: { state: "pending", reason: "mcp", name: "lit", displayName: "Lit", path: "/w/plugins/lit", scope: "workspace", workspaceName: null, skills: [], commands: [], fingerprint: "f" } },
+      }),
       assistantItem("a3", 4000, [{ type: "text", text: "那一行在等你点安装。" }]),
     ];
     const view = turnView(records, false);
@@ -386,7 +391,7 @@ describe("groupTurns", () => {
       ]),
       toolItem({ toolCallId: "p1", toolName: "read_pdf", timestamp: 2500 }),
       assistantItem("a2", 3000, [{ type: "toolCall", toolCallId: "s1", toolName: "show_image", input: { paths: ["a.png"] } }]),
-      toolItem({ toolCallId: "s1", toolName: "show_image", timestamp: 3500 }),
+      toolItem({ toolCallId: "s1", toolName: "show_image", timestamp: 3500, details: { showImage: { images: [{ data: "AAAA", mimeType: "image/png", name: "a.png" }] } } }),
       assistantItem("a3", 4000, [
         { type: "thinking", thinking: "再看一眼" },
         { type: "toolCall", toolCallId: "r2", toolName: "read", input: { path: "b.ts" } },
@@ -419,7 +424,7 @@ describe("groupTurns", () => {
       toolItem({ toolCallId: "r1", timestamp: 2200 }),
       toolItem({ toolCallId: "w1", toolName: "write", timestamp: 2400 }),
       assistantItem("a2", 3000, [{ type: "toolCall", toolCallId: "b1", toolName: "show_plugin_board", input: {} }]),
-      toolItem({ toolCallId: "b1", toolName: "show_plugin_board", timestamp: 3500 }),
+      toolItem({ toolCallId: "b1", toolName: "show_plugin_board", timestamp: 3500, details: { pluginBoard: { plugin: "lit", displayName: "Lit", title: "Lit", source: "installed", draftPath: null, at: 3500, tuned: false, cards: [], skipped: [] } } }),
       assistantItem("a3", 9000, [{ type: "text", text: "卡已经放上来了" }]),
     ];
     const view = turnView(records, false);
