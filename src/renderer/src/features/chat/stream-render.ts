@@ -42,6 +42,8 @@ export function streamRenderPolicy(streaming: boolean): StreamRenderPolicy {
 const SANITIZE_SCHEMA = {
   ...defaultSchema,
   tagNames: [...(defaultSchema.tagNames ?? []), "details", "summary"],
+  // 回答里的本地图可以写成 file:// 地址（MarkdownBlock.ChatImage 走文件面板的白名单读，读不到就是占位）
+  protocols: { ...defaultSchema.protocols, src: [...(defaultSchema.protocols?.["src"] ?? []), "file"] },
 };
 
 /**

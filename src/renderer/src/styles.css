@@ -5633,15 +5633,13 @@ mark.intent-mark {
   font-size: inherit;
 }
 
-/* ===== 「一轮一行」过程块（ChatView 的 TurnProcessLine；推导在 turn-process.ts） =====
- * 字在内线上（--content-hem），与正文首字同一根线。现场块定高：头行 28 + 章节 20 +
- * 三步 3×20 + 当前一步 20 + 末行 18，只换字不加行。颜色只用三档灰 + 成功/失败/警示 token。 */
+/* ===== 「一轮一行」过程块（ChatView 的 TurnProcessLine；推导在 turn-process.ts / process-rows.ts） =====
+ * 字在内线上（--content-hem），与正文首字同一根线。现场块定高：头行 + 在想什么 + 末行，只换字不加行。 */
 .proc-live {
   display: grid;
   gap: var(--space-0-5);
   min-width: 0;
 }
-.proc-head,
 .proc-head-row {
   display: flex;
   align-items: center;
@@ -5652,33 +5650,6 @@ mark.intent-mark {
   font-weight: var(--weight-medium);
   color: var(--color-text-secondary);
 }
-.proc-head {
-  min-height: var(--control-height-sm);
-  padding: 0 var(--content-hem);
-}
-.proc-head > .orbita-icon {
-  color: var(--color-info);
-  flex: none;
-}
-.proc-strong {
-  flex: none;
-  color: var(--color-text-secondary);
-  /* 「第 3 步」「3 步」的数字会变，等宽不跳 */
-  font-variant-numeric: tabular-nums;
-}
-.proc-num {
-  display: inline-flex;
-  gap: var(--space-2);
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  font-family: var(--font-family-business);
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-tertiary);
-}
-.proc-bad {
-  color: var(--color-danger);
-}
 .proc-time {
   margin-left: auto;
   flex: none;
@@ -5686,83 +5657,9 @@ mark.intent-mark {
   font-variant-numeric: tabular-nums;
   color: var(--color-text-tertiary);
 }
-.proc-chapter {
-  height: 20px;
-  padding: 0 var(--content-hem);
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: var(--font-size-base);
-  line-height: var(--line-height-ui);
-  color: var(--color-text-primary);
-}
-.proc-chapter.think {
-  color: var(--color-text-secondary);
-}
-/* 计划里在做的那一步：半粗放在章节名前，「· 」隔开（计划就是这一轮的主线，章节是它下面的细节） */
-.proc-plan-step {
-  font-weight: var(--weight-semibold);
-}
-.proc-plan-step::after {
-  content: " · ";
-  font-weight: var(--weight-regular);
-  color: var(--color-text-tertiary);
-}
-.proc-trail {
-  display: grid;
-  grid-auto-rows: 20px;
-  padding: 0 var(--content-hem);
-}
-.proc-step {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-tertiary);
-}
-.proc-step.fade-3 { opacity: 0.45; }
-.proc-step.fade-2 { opacity: 0.7; }
-.proc-step code {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-family: var(--font-family-business);
-  font-size: var(--font-size-sm);
-}
-.proc-step.now,
-.proc-step.now code {
-  color: var(--color-text-primary);
-}
-.proc-step .proc-preview {
-  color: var(--color-text-secondary);
-  font-family: var(--font-family-base);
-}
-.proc-mark {
-  display: grid;
-  place-items: center;
-  flex: none;
-  width: 12px;
-}
-.proc-mark.ok { color: var(--color-success); }
-.proc-mark.bad { color: var(--color-danger); }
-.proc-step.now .proc-mark { color: var(--color-info); }
-.proc-verb {
-  flex: none;
-  min-width: 3em;
-}
-.proc-dur {
-  flex: none;
-  font-family: var(--font-family-business);
-  font-size: var(--font-size-xs);
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-tertiary);
-}
 .proc-foot {
   height: 18px;
-  padding: 0 var(--content-hem) 0 calc(var(--content-hem) + var(--space-3) + var(--space-2));
+  padding: 0 var(--content-hem) 0 calc(var(--content-hem) + var(--chat-pet-w));
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -5772,91 +5669,8 @@ mark.intent-mark {
   color: var(--color-text-tertiary);
 }
 .proc-foot.slow {
-  padding-left: var(--content-hem);
   font-family: var(--font-family-base);
   color: var(--color-warning);
-}
-
-/* 落定后展开的章节时间线：竖线挂在内线上，章节点压在线上 */
-.proc-chapters {
-  list-style: none;
-  margin: var(--space-1) 0 var(--space-2) var(--content-hem);
-  padding: 0 0 0 var(--space-3);
-  border-left: 1px solid var(--color-border-subtle);
-  display: grid;
-  gap: var(--space-1);
-}
-.proc-chapters > li {
-  position: relative;
-  display: grid;
-  gap: var(--space-1);
-  min-width: 0;
-}
-.proc-chapters > li::before {
-  content: "";
-  position: absolute;
-  left: calc(-1 * var(--space-3) - 3px);
-  top: 10.5px;
-  /* 实心小点，不是空心圆：子午线上的空心圆只留给「你」（返工 2026-11-07，同一列里空心圆有两个意思，
-     扫读时会把展开的步骤误认成用户消息）。5px、三级墨，比回合头的实心圆小一档。 */
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--color-text-tertiary);
-  box-sizing: border-box;
-}
-.proc-chapters > li.bad::before {
-  background: var(--color-danger);
-}
-.proc-chapter-btn {
-  display: grid;
-  gap: var(--space-0-5);
-  width: 100%;
-  min-width: 0;
-  padding: var(--space-1) var(--space-2);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-  transition: var(--transition-hover);
-}
-.proc-chapter-btn:hover {
-  background: var(--color-bg-hover);
-}
-.proc-ch-title {
-  font-size: var(--font-size-base);
-  line-height: var(--line-height-ui);
-  color: var(--color-text-primary);
-}
-.proc-ch-title.think {
-  color: var(--color-text-secondary);
-}
-.proc-ch-steps {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1) var(--space-1-5);
-  font-family: var(--font-family-business);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.proc-ch-steps > span {
-  max-width: 280px;
-  padding: 0 var(--space-1);
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  border-radius: var(--radius-xs);
-  background: var(--color-bg-muted);
-}
-.proc-ch-steps > span.bad {
-  color: var(--color-danger);
-}
-.proc-ch-body {
-  display: grid;
-  gap: var(--space-1);
-  /* 逐条的工具行字在内线上（RAIL_X）；挪到与章节标题同一根线（按钮左内边距 space-2） */
-  margin-left: calc(var(--space-2) - var(--content-hem));
 }
 
 /* 「这条任务 › 进度」点一章跳过来：被跳到的那块闪一下底色（一次，不循环） */
@@ -5946,72 +5760,6 @@ mark.intent-mark {
   margin-top: var(--space-0-5);
 }
 
-/* 内置命令的完成卡（features/chat/CommandCard.tsx）：图标 + 标题 + 副标题 + 「在右栏打开」。
-   骨架同 FileTurnCard（chat-card-bg + subtle 边 + radius-md）；accent 不用——它不是主操作。 */
-.command-card {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  width: 100%;
-  min-width: 0;
-  padding: var(--space-3);
-  background: var(--color-chat-card-bg);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
-  color: var(--color-text-primary);
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.command-card:disabled {
-  cursor: default;
-}
-.command-card:not(:disabled):hover {
-  border-color: var(--color-border-strong);
-}
-.command-card:focus-visible {
-  outline: 2px solid var(--color-border-strong);
-  outline-offset: 2px;
-}
-.command-card-icon {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: var(--radius-md);
-  background: var(--color-bg-muted);
-  color: var(--color-text-secondary);
-}
-.command-card-text {
-  display: grid;
-  flex: 1 1 auto;
-  gap: var(--space-1);
-  min-width: 0;
-}
-.command-card-title {
-  overflow: hidden;
-  font-size: var(--font-size-base);
-  font-weight: var(--weight-strong);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.command-card-sub {
-  overflow: hidden;
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.command-card-open {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: var(--space-1);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-}
 .command-pill {
   padding: 1px var(--space-2);
   border-radius: var(--radius-sm);
@@ -6546,4 +6294,395 @@ html {
   .orbita-icon svg * {
     vector-effect: non-scaling-stroke;
   }
+}
+
+/* 回答里的本地图（MarkdownBlock.ChatImage，2026-11-22）：一张图占一整行，下面紧跟的段落是它的解释。
+   边与圆角同 show_image 的单图；点开看大图。 */
+.chat-md .chat-img-local {
+  display: block;
+  margin: var(--space-2) 0 var(--space-1);
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+  max-width: 100%;
+}
+.chat-md .chat-img-local img {
+  display: block;
+  max-width: 100%;
+  max-height: 480px;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-panel);
+}
+.chat-md .chat-img-pending {
+  display: block;
+  height: 120px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+}
+
+/* ===== 过程与产物（2026-11-22，ChatView 的 TurnProcessLine / ProcessExpanded / StepRow / TurnOutputsBlock；
+   推导在 process-rows.ts）=====
+ * 一轮只分两处：过程收成一行（星云 + 「工作了多久 · 做了什么」+ 缩略图），产物收在这一轮的结尾。
+ * 展开后只有一种行：图标 · 动作 · 对象 · 量 · 缩略图。 */
+
+/* 星云缩成对话里的「它」：80×48 的星云按 0.6 缩到 48×29；落定后不呼吸、碎片停住 */
+.proc-live,
+.chat-pet {
+  /* 星云缩小后的宽：在想那一行的字对齐到它右边 */
+  --chat-pet-w: 48px;
+}
+.proc-rows {
+  --proc-icon-w: 14px;
+}
+.chat-pet {
+  position: relative;
+  flex: none;
+  width: var(--chat-pet-w);
+  height: 29px;
+  margin-left: calc(-1 * var(--space-3));
+}
+.chat-pet-scale {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: scale(0.6);
+  transform-origin: 0 0;
+}
+.chat-pet[data-still] .usage-orb {
+  animation: none;
+}
+
+/* 跑着：一句在干什么（正文墨）、一句在想什么（灯泡 + 次级灰），末行是慢 / 输出尾巴 */
+.proc-who {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-height-sm);
+  padding: 0 var(--content-hem);
+  min-width: 0;
+}
+.proc-doing {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-primary);
+}
+.proc-idea {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  height: 20px;
+  min-width: 0;
+  padding: 0 var(--content-hem) 0 calc(var(--content-hem) + var(--chat-pet-w));
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.proc-idea > .orbita-icon {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.proc-idea > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 落定的那一行：「工作了 19 分 06 秒 · 写了 1 个文件，还有 109 步 ›」 */
+.proc-say {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-regular);
+  color: var(--color-text-secondary);
+}
+.proc-say > .orbita-icon {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.proc-worked {
+  flex: none;
+}
+.proc-sep {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.proc-what {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.proc-quiet {
+  flex: none;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+/* 缩略图：最多三张，多的写 +N（Claude 折叠行右边那一排） */
+.proc-thumbs {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+  margin-left: auto;
+}
+.proc-thumbs-more {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.proc-thumb {
+  display: block;
+  width: 30px;
+  height: 22px;
+  object-fit: cover;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-panel);
+}
+.proc-thumb.empty {
+  background: var(--color-bg-muted);
+}
+
+/* 展开后：竖线挂在内线上，行压在线右边 */
+.proc-expanded {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-2) var(--content-hem);
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--color-border-subtle);
+  min-width: 0;
+}
+.proc-layout-toggle {
+  display: inline-flex;
+  justify-self: end;
+  gap: var(--space-0-5);
+  padding: var(--space-0-5);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-muted);
+}
+.proc-layout-toggle > button {
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  font-family: inherit;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+.proc-layout-toggle > button[aria-pressed="true"] {
+  background: var(--color-bg-panel);
+  color: var(--color-text-secondary);
+}
+.proc-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+.proc-rows.nested {
+  margin: var(--space-0-5) 0 var(--space-1) var(--space-3);
+  padding-left: var(--space-2);
+  border-left: 1px solid var(--color-border-subtle);
+}
+.proc-rows > li {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+/* 同一种行：图标 · 动作 · 对象 · 量 · 缩略图 */
+.proc-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 26px;
+  min-width: 0;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+  text-align: left;
+}
+.proc-row.btn {
+  width: 100%;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.proc-row.btn:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+.proc-row.btn:disabled {
+  cursor: default;
+}
+.proc-row.say {
+  align-items: flex-start;
+  padding-top: var(--space-0-5);
+  padding-bottom: var(--space-0-5);
+}
+.proc-row-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.proc-row.say .proc-row-icon {
+  padding-top: var(--space-0-5);
+}
+.proc-row-verb {
+  flex: none;
+  font-weight: var(--weight-medium);
+  color: var(--color-text-secondary);
+}
+.proc-row-obj {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--color-text-tertiary);
+}
+.proc-row-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-base);
+  color: var(--color-text-primary);
+}
+.proc-row-title.quiet {
+  color: var(--color-text-secondary);
+}
+.proc-row-say {
+  min-width: 0;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-base);
+}
+.proc-row-meta {
+  flex: none;
+  margin-left: auto;
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.proc-row-meta .add {
+  color: var(--color-success);
+}
+.proc-row-meta .del {
+  color: var(--color-danger);
+}
+.proc-row-meta + .proc-thumbs {
+  margin-left: 0;
+}
+.proc-step-li.bad .proc-row-verb {
+  color: var(--color-text-tertiary);
+}
+/* 一步展开：先是它之前想的那段，再是原样的输入输出 */
+.proc-step-body {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-1) calc(var(--space-2) + var(--proc-icon-w) + var(--space-2));
+  min-width: 0;
+}
+.proc-step-thought {
+  display: flex;
+  gap: var(--space-1-5);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow: auto;
+}
+.proc-step-thought > .orbita-icon {
+  flex: none;
+  margin-top: var(--space-0-5);
+  color: var(--color-text-tertiary);
+}
+.proc-step-cmd {
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 这一轮交给你的东西：回答之后、文件账之前，一份一行；骨架同轮尾文件账卡 */
+.turn-outputs {
+  display: grid;
+  gap: 0;
+  margin: 0 var(--content-hem);
+  padding: var(--space-1);
+  background: var(--color-chat-card-bg);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+}
+.turn-output {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: var(--control-height-md);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.turn-output:hover {
+  background: var(--color-bg-hover);
+}
+.turn-output-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--color-text-secondary);
+}
+.turn-output-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+.turn-output-sub {
+  flex: none;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+.turn-output-open {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+  margin-left: auto;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
 }

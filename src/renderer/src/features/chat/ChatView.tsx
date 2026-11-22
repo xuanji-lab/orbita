@@ -65,7 +65,6 @@ import { PluginInstallLine } from "../plugins/PluginInstallLine.tsx";
 import { PluginBoardResultView } from "../board/PluginBoardResult.tsx";
 import { builtinCommand, type DetailRow, docEditLabel, docEditPath, docEditSection, docEditSummary, toolWord } from "./builtin-commands.ts";
 import { getOpenDocumentText } from "../doc-panel/open-document.ts";
-import { CommandCard } from "./CommandCard.tsx";
 import { ExitCard } from "./ExitCard";
 import { PanelButton } from "../../shell/RightPanel";
 import { ProcessViewContext } from "./process-view-context";
@@ -79,7 +78,6 @@ import { GOAL_TOOL_NAME } from "../../../../shared/goal.ts";
 import type { GoalLedger } from "../../../../shared/goal-ledger.ts";
 import { PLAN_TOOL_NAME } from "../../../../shared/plan.ts";
 import {
-  CHAPTER_STEPS_SHOWN,
   processOutcome,
   SLOW_GAP_MS,
   TAIL_AFTER_MS,
@@ -155,6 +153,8 @@ import {
   type ToolGroupUnit,
   type ToolResultIndex,
   type TurnGroupUnit,
+  type TurnOutputsUnit,
+  type ToolCallUnit,
   type TurnViewEntry,
 } from "./tool-results";
 import { useToday } from "./today.ts";
@@ -173,6 +173,20 @@ import { InlineName } from "../../shell/InlineName";
 import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
+import { NebulaPet } from "../../shell/UsageMeter";
+import { ChatFileScopeContext, openChatFile, useChatFileScope, useChatImage, type ChatFileScope } from "./chat-file-scope.ts";
+import { requestOpenPanel } from "../../shell/open-panel.ts";
+import {
+  processHeadline,
+  processImages,
+  processRows,
+  stepImages,
+  stepVerb,
+  THUMBS_SHOWN,
+  turnOutputs,
+  type ProcessImage,
+  type ProcessRow,
+} from "./process-rows.ts";
 import { HomeHero } from "./HomeHero";
 import { HomeLog, type HomeLogRowView } from "./HomeLog";
 import { heroFace } from "./home-hero.ts";
@@ -309,6 +323,11 @@ export function ChatView(props: ChatViewProps) {
   const paneRef = useRef<HTMLDivElement | null>(null);
   const accepts = props.hideComposer !== true && session.usable.length > 0 && !session.readOnly;
   const carriesFiles = (event: React.DragEvent) => accepts && event.dataTransfer.types.includes("Files");
+  // 回答里的本地图、过程缩略图、结尾产物的「打开」按这条会话能看到的目录读（chat-file-scope.ts）
+  const fileScope = useMemo<ChatFileScope>(
+    () => ({ sessionId: session.sessionId, workspaceId: session.workspaceId, cwd: session.cwd }),
+    [session.sessionId, session.workspaceId, session.cwd],
+  );
   // 引用跳转：原文在本转录里找得到才给得出（发出去的引用不带 id，按轮号 + 角色 + 原文找；
   // 迁移来的引用、被压缩掉的历史找不到就不可点）
   const jumpToQuote = useCallback(
@@ -406,7 +425,9 @@ export function ChatView(props: ChatViewProps) {
     >
       <QuoteJumpContext.Provider value={jumpToQuote}>
         <CitationTableContext.Provider value={citations}>
-          <ChatViewBody {...props} dropActive={dropActive} />
+          <ChatFileScopeContext.Provider value={fileScope}>
+            <ChatViewBody {...props} dropActive={dropActive} />
+          </ChatFileScopeContext.Provider>
         </CitationTableContext.Provider>
       </QuoteJumpContext.Provider>
       {/* 复制与摘抄只读文字，只读（没有 pi 本子的旧会话）/ 没配模型的会话里也能用；引用要往输入框里放，
@@ -2730,7 +2751,9 @@ const TranscriptRow = memo(function TranscriptRow(props: {
         </div>
       )}
       <div className={doomed ? "revert-doomed" : "revert-keep"} data-entry-key={entry.key} data-kind={entry.kind}>
-      {entry.kind === "turnProcess" ? (
+      {entry.kind === "turnOutputs" ? (
+        <TurnOutputsBlock unit={entry} toolResults={scope.toolResults} />
+      ) : entry.kind === "turnProcess" ? (
         <TurnProcessLine
           unit={entry}
           plan={scope.plan}
@@ -4611,12 +4634,6 @@ function TurnProcessLine(props: {
       .map((call) => call.toolCallId),
   );
   const planStepNow = props.plan?.current.items.find((item) => item.status === "in_progress")?.text ?? null;
-  const toolChips = counts.byTool.slice(0, 4).map(({ key, count }) => (
-    <span key={key}>
-      {toolWord(t.chat.rollupTool, key)} {count}
-    </span>
-  ));
-  const failed = counts.failed > 0 && <span className="proc-bad">{t.chat.processFailed(counts.failed)}</span>;
   const timeLabel = unit.startedAt !== null && (
     <div className="turn-start-time" style={{ ...TIME_LABEL, paddingLeft: RAIL_X }} title={fullTimestamp(unit.startedAt, t.chat.timeWeekdays)}>
       {formatMessageTime(unit.startedAt, today)}
@@ -4624,6 +4641,7 @@ function TurnProcessLine(props: {
   );
 
   if (live) {
+    // 跑着的时候（2026-11-22 用户：「我希望有活人感一些」）：星云在动，一句「在干什么」，一句「在想什么」
     const snap = processLive(unit, props.toolResults, (call) => toolStartAt(call.toolCallId), props.interruptedCalls);
     const elapsed = unit.startedAt === null ? null : now - unit.startedAt;
     const current = snap.now;
@@ -4637,95 +4655,72 @@ function TurnProcessLine(props: {
       if (result !== undefined) tail = tailPreviewLines(toolResultText(result, t), 1, 200)[0] ?? null;
     }
     const slow = current.kind === "think" && runMs !== null && runMs > SLOW_GAP_MS;
-    const verb = (toolName: string, input: unknown) => toolWord(t.chat.rollupTool, rollupToolKey(toolName, input, props.skills), input);
+    const doing =
+      current.kind === "tool"
+        ? (() => {
+            const v = stepVerb(current.call.toolName, current.call.input, t.chat.stepVerb, props.skills);
+            return v.object === null ? v.verb : `${v.verb} ${v.object}`;
+          })()
+        : t.chat.processThinking;
+    const idea = snap.chapter?.title ?? (current.kind === "think" ? current.preview : null) ?? planStepNow;
     return (
       <div className="proc-live" aria-live="off">
         {timeLabel}
-        <div className="proc-head">
-          <Icon name="loader-circle" size={12} strokeWidth={1.8} spin />
-          <span className="proc-strong">{t.chat.processStepAt(Math.max(1, counts.steps))}</span>
-          <span className="proc-num">
-            {toolChips}
-            {failed}
+        <div className="proc-who">
+          <ChatPet live />
+          <span className="proc-doing">
+            <InlineMarks text={doing} />…
           </span>
           {elapsed !== null && <span className="proc-time">{formatRunClock(elapsed)}</span>}
         </div>
-        <div className={`proc-chapter${snap.chapter?.source === "think" ? " think" : ""}`}>
-          {planStepNow !== null && <span className="proc-plan-step">{planStepNow}</span>}
-          {snap.chapter !== null && <InlineMarks text={snap.chapter.title} />}
-        </div>
-        <div className="proc-trail">
-          {Array.from({ length: 3 - snap.trail.length }, (_, i) => (
-            <div key={`pad${i}`} className="proc-step" aria-hidden="true" />
-          ))}
-          {snap.trail.map((item, index) => (
-            <div key={item.call.toolCallId} className={`proc-step fade-${snap.trail.length - index}`}>
-              <span className={item.failed ? "proc-mark bad" : "proc-mark ok"}>
-                <Icon name={item.failed ? "x" : "check"} size={12} strokeWidth={2} />
+        <div className="proc-idea">
+          {idea !== null && (
+            <>
+              <Icon name="lightbulb" size={13} strokeWidth={1.8} />
+              <span>
+                <InlineMarks text={idea} />
               </span>
-              <span className="proc-verb">{verb(item.call.toolName, item.call.input)}</span>
-              <code>{toolCallSummaryForRow(item.call.toolName, item.call.input, props.skills) ?? ""}</code>
-              {/* 一秒内落定的不标时长：一排 0.0s 是噪音，慢的那几步才值得看 */}
-              {item.ms !== null && item.ms >= 1000 && <span className="proc-dur">{formatToolDuration(item.ms, t)}</span>}
-            </div>
-          ))}
-          <div className="proc-step now">
-            <span className="proc-mark">
-              <Icon name="loader-circle" size={12} strokeWidth={1.8} spin />
-            </span>
-            {current.kind === "tool" ? (
-              <>
-                <span className="proc-verb">{verb(current.call.toolName, current.call.input)}</span>
-                <code>{toolCallSummaryForRow(current.call.toolName, current.call.input, props.skills) ?? ""}</code>
-              </>
-            ) : (
-              <>
-                <span className="proc-verb orbita-breath">{t.chat.processThinking}</span>
-                {/* 章节行已经是这段思考时不重复；章节是旁白时，这里补「此刻在想什么」 */}
-                <code className="proc-preview">{snap.chapter?.source === "think" ? "" : (current.preview ?? "")}</code>
-              </>
-            )}
-            {runMs !== null && <span className="proc-dur">{formatRunClock(runMs)}</span>}
-          </div>
+            </>
+          )}
         </div>
         <div className={slow ? "proc-foot slow" : "proc-foot"}>{slow ? t.chat.processSlow : (tail ?? goalNoticeLine ?? planNoticeLine ?? "")}</div>
       </div>
     );
   }
 
-  // 一步工具都没跑的轮说它做了什么（想了想 / 更新了计划），不写「0 步」（processOutcome）
+  // 落定：星云 + 「工作了 多久」+ 一句做了什么（照 Claude「Created 3 files … and 107 more steps」）+ 右边几张缩略图
   const result = processOutcome(counts, unit.steps);
-  const outcome =
+  const headline =
     result.kind === "thought"
       ? t.chat.processThoughtOnly
       : result.kind === "plan"
         ? t.chat.processPlanOnly
-        : [...(result.files > 0 ? [t.chat.processWrote(result.files)] : []), t.chat.processSteps(result.steps)].join(" · ");
+        : processHeadline(unit.steps, props.toolResults, result.files, t.chat.headline);
+  const images = processImages(unit.steps, props.toolResults);
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
       {timeLabel}
       <CollapseRow dense open={open} onToggle={() => setOpen((value) => !value)}>
-        {props.turnFailed && (
-          <span style={{ color: "var(--color-danger)", flex: "0 0 auto" }}>
-            <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
-          </span>
-        )}
+        <ChatPet />
         <span className="proc-head-row">
-          <span className="proc-strong">{outcome}</span>
-          <span className="proc-num">
-            {toolChips}
-            {failed}
+          {props.turnFailed && (
+            <span style={{ color: "var(--color-danger)", flex: "0 0 auto", display: "inline-flex" }}>
+              <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
+            </span>
+          )}
+          <span className="proc-say">
+            {unit.durationMs !== null && (
+              <span className="proc-worked">{t.chat.processWorked(formatToolDuration(unit.durationMs, t))}</span>
+            )}
+            {unit.durationMs !== null && <span className="proc-sep">·</span>}
+            <span className="proc-what">{headline}</span>
+            {counts.failed > 0 && <span className="proc-quiet">{t.chat.processQuietFailed(counts.failed)}</span>}
+            <Icon name={open ? "chevron-down" : "chevron-right"} size={13} strokeWidth={1.8} />
           </span>
-          {unit.durationMs !== null && <span className="proc-time">{formatToolDuration(unit.durationMs, t)}</span>}
+          {images.length > 0 && <ProcessThumbs images={images} />}
         </span>
       </CollapseRow>
-      {open && (
-        <ol className="proc-chapters">
-          {processChapters(unit.steps).map((chapter) => (
-            <ProcessChapterItem key={chapter.key} chapter={chapter} {...props} />
-          ))}
-        </ol>
-      )}
+      {open && <ProcessExpanded steps={unit.steps} toolResults={props.toolResults} skills={props.skills} />}
       {goalNoticeLine !== null && <Notice icon="pencil-line">{goalNoticeLine}</Notice>}
       {planNoticeLine !== null && <Notice icon="pencil-line">{planNoticeLine}</Notice>}
       {props.awaitingPlan !== null && planCallIds.includes(props.awaitingPlan.toolCallId) && (
@@ -4735,7 +4730,326 @@ function TurnProcessLine(props: {
   );
 }
 
-/** 章节时间线的一章：标题 + 前几步的小标签；点开看这一章的每一步（原样的工具行） */
+/**
+ * 星云（侧栏底那只）缩小成对话里的「它」：跑着的时候在呼吸、碎片在转，落定后静止睁眼。
+ * 2026-11-22 用户：折叠行「我希望有活人感一些」，参照 Kimi 每一轮前那只小头像。
+ */
+function ChatPet(props: { live?: boolean }) {
+  return (
+    <span className="chat-pet" data-still={props.live === true ? undefined : true} aria-hidden="true">
+      <span className="chat-pet-scale">
+        <NebulaPet tier={3} orbit={props.live === true} fast={props.live === true} />
+      </span>
+    </span>
+  );
+}
+
+/** 展开后怎么排（原型期的开关，定了就删）：按段 = 一句话一段、点开看这段的每一步；平铺 = 每件事一行 */
+type ProcessLayout = "chapters" | "flat";
+const PROCESS_LAYOUT_KEY = "orbita.proto.processLayout";
+const PROCESS_LAYOUT_EVENT = "orbita:process-layout";
+
+function readProcessLayout(): ProcessLayout {
+  try {
+    return window.localStorage.getItem(PROCESS_LAYOUT_KEY) === "flat" ? "flat" : "chapters";
+  } catch {
+    return "chapters";
+  }
+}
+
+function useProcessLayout(): [ProcessLayout, (next: ProcessLayout) => void] {
+  const [layout, setLayout] = useState<ProcessLayout>(readProcessLayout);
+  useEffect(() => {
+    const sync = () => setLayout(readProcessLayout());
+    window.addEventListener(PROCESS_LAYOUT_EVENT, sync);
+    return () => window.removeEventListener(PROCESS_LAYOUT_EVENT, sync);
+  }, []);
+  const update = useCallback((next: ProcessLayout) => {
+    try {
+      window.localStorage.setItem(PROCESS_LAYOUT_KEY, next);
+    } catch {
+      // 存不下就只改这一次
+    }
+    setLayout(next);
+    window.dispatchEvent(new Event(PROCESS_LAYOUT_EVENT));
+  }, []);
+  return [layout, update];
+}
+
+/**
+ * 展开后的过程（2026-11-22）。两种排法都只有一种行：图标 · 动作 · 对象 · 量，行尾可带缩略图；
+ * 技能、外接工具、内置命令、计划不再各长一种胶囊 / 药丸 / 卡。思考不单独占行，挂在它后面那一步上。
+ */
+function ProcessExpanded(props: { steps: readonly ProcessStep[]; toolResults: ToolResultIndex; skills: SkillMeta[] }) {
+  const t = useT();
+  const [layout, setLayout] = useProcessLayout();
+  return (
+    <div className="proc-expanded">
+      <div className="proc-layout-toggle" role="group" aria-label={t.chat.processLayoutHint} title={t.chat.processLayoutHint}>
+        <button type="button" aria-pressed={layout === "chapters"} onClick={() => setLayout("chapters")}>
+          {t.chat.processLayoutChapters}
+        </button>
+        <button type="button" aria-pressed={layout === "flat"} onClick={() => setLayout("flat")}>
+          {t.chat.processLayoutFlat}
+        </button>
+      </div>
+      {layout === "chapters" ? (
+        <ol className="proc-rows">
+          {processChapters(props.steps).map((chapter) => (
+            <ProcessChapterRow key={chapter.key} chapter={chapter} toolResults={props.toolResults} skills={props.skills} />
+          ))}
+        </ol>
+      ) : (
+        <ol className="proc-rows">
+          {processRows(props.steps).map((row) =>
+            row.kind === "say" ? (
+              <li key={row.key}>
+                <div className="proc-row say">
+                  <span className="proc-row-icon">
+                    <Icon name="message-square" size={14} strokeWidth={1.8} />
+                  </span>
+                  <span className="proc-row-say">
+                    <InlineMarks text={row.text} />
+                  </span>
+                </div>
+              </li>
+            ) : (
+              <StepRow key={row.key} call={row.call} thinking={row.thinking} toolResults={props.toolResults} skills={props.skills} />
+            ),
+          )}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+/** 按段排时的一段：图标（说的话 / 想的 / 只是干活）· 这段的名字 · 几步 · 缩略图；点开是这段的每一步 */
+function ProcessChapterRow(props: { chapter: ProcessChapter; toolResults: ToolResultIndex; skills: SkillMeta[] }) {
+  const t = useT();
+  const [open, setOpen] = useFoldState(`chapter:${props.chapter.key}`);
+  const { chapter } = props;
+  const rows = processRows(chapter.steps).filter((row): row is Extract<ProcessRow, { kind: "step" }> => row.kind === "step");
+  const failed = rows.filter((row) => props.toolResults.get(row.call.toolCallId)?.status === "error").length;
+  const images = processImages(chapter.steps, props.toolResults);
+  // 没有旁白也没有思考的段：按头一步起名（「读文件 handoff.txt」），不写「读取 3 次」这种统计
+  const first = rows[0];
+  const fallback =
+    first === undefined
+      ? ""
+      : (() => {
+          const v = stepVerb(first.call.toolName, first.call.input, t.chat.stepVerb, props.skills);
+          return v.object === null ? v.verb : `${v.verb} ${v.object}`;
+        })();
+  const title = chapter.title ?? fallback;
+  const icon: IconName = chapter.source === "say" ? "message-square" : chapter.source === "think" ? "lightbulb" : first === undefined ? "list" : stepIcon(first.call.toolName, first.call.input, props.skills);
+  return (
+    <li className="proc-chap">
+      <button type="button" className="proc-row btn" aria-expanded={open} onClick={() => setOpen((value) => !value)} disabled={rows.length === 0}>
+        <span className="proc-row-icon">
+          <Icon name={icon} size={14} strokeWidth={1.8} />
+        </span>
+        <span className={chapter.source === "say" ? "proc-row-title" : "proc-row-title quiet"}>
+          <InlineMarks text={title} />
+        </span>
+        <span className="proc-row-meta">
+          {rows.length > 0 && t.chat.processSteps2(rows.length)}
+          {failed > 0 && ` · ${t.chat.processQuietFailed(failed)}`}
+        </span>
+        {images.length > 0 && <ProcessThumbs images={images} />}
+      </button>
+      {open && rows.length > 0 && (
+        <ol className="proc-rows nested">
+          {rows.map((row) => (
+            <StepRow key={row.key} call={row.call} thinking={row.thinking} toolResults={props.toolResults} skills={props.skills} />
+          ))}
+        </ol>
+      )}
+    </li>
+  );
+}
+
+/** 一步的图标：技能是书、外接工具是插头，其余跟工具走（toolIcon，内置命令由注册表给） */
+function stepIcon(toolName: string, input: unknown, skills: SkillMeta[]): IconName {
+  if (toolName === "read") {
+    const path = (input as Record<string, unknown> | null)?.["path"];
+    if (typeof path === "string" && skillForReadPath(path, skills) !== null) return "book-open";
+  }
+  switch (toolName) {
+    case "update_plan":
+      return "list-todo";
+    case "update_goal":
+      return "circle-dot";
+    case "delegate":
+    case "report_to_parent":
+      return "bot";
+    case "reply_subsession":
+      return "message-circle";
+    case "show_image":
+      return "image";
+    case "read_pdf":
+    case "read_docx":
+    case "cite_pdf":
+      return "file-text";
+    case "web_search":
+      return "search";
+    case "memory_search":
+    case "memory_revise":
+    case "memory_retire":
+      return "brain";
+    case "automation_create":
+    case "automation_list":
+    case "automation_cancel":
+    case "automation_update":
+      return FEATURE_ICON.automation;
+    default:
+      if (toolName.startsWith("terminal_")) return FEATURE_ICON.terminal;
+      return toolIcon(toolName);
+  }
+}
+
+/** 一步一行：图标 · 动作 · 对象 · 量 · 缩略图。点开是原样的输入输出（前面挂着它之前想的那段） */
+function StepRow(props: { call: ToolCallUnit; thinking: readonly string[]; toolResults: ToolResultIndex; skills: SkillMeta[] }) {
+  const t = useT();
+  const { call } = props;
+  const [open, setOpen] = useFoldState(`step:${call.toolCallId}`);
+  const result = props.toolResults.get(call.toolCallId);
+  const failed = result?.status === "error";
+  const finished = result !== undefined && result.status !== "running";
+  const v = stepVerb(call.toolName, call.input, t.chat.stepVerb, props.skills);
+  const stats = finished && !failed ? editDiffStats(result) : null;
+  const lines = finished && !failed && call.toolName === "write" ? writeLineCount(call.input) : null;
+  const shellMs = call.toolName === "bash" || call.toolName === "powershell" ? toolDurationText(call.toolCallId, t) : null;
+  const images = stepImages(call, props.toolResults);
+  return (
+    <li className={failed ? "proc-step-li bad" : "proc-step-li"}>
+      <button type="button" className="proc-row btn" aria-expanded={open} onClick={() => setOpen((value) => !value)} disabled={!finished}>
+        <span className="proc-row-icon">
+          <Icon name={stepIcon(call.toolName, call.input, props.skills)} size={14} strokeWidth={1.8} />
+        </span>
+        <span className="proc-row-verb">{v.verb}</span>
+        {v.object !== null && (
+          <span className="proc-row-obj" title={v.raw === null ? v.object : `${v.raw} · ${v.object}`}>
+            {v.object}
+          </span>
+        )}
+        <span className="proc-row-meta">
+          {stats !== null && (
+            <>
+              {stats.added > 0 && <span className="add">+{stats.added}</span>}
+              {stats.removed > 0 && <span className="del"> −{stats.removed}</span>}
+            </>
+          )}
+          {lines !== null && t.chat.lines(lines)}
+          {shellMs !== null && shellMs}
+          {failed && t.chat.processStepFailed}
+        </span>
+        {images.length > 0 && <ProcessThumbs images={images} />}
+      </button>
+      {open && finished && result !== undefined && <StepBody call={call} result={result} thinking={props.thinking} />}
+    </li>
+  );
+}
+
+/** 一步展开后：它之前想的那段（如果有），然后是原样的输入输出——沿用工具行原来的展开体 */
+function StepBody(props: { call: ToolCallUnit; result: ToolTranscriptItem; thinking: readonly string[] }) {
+  const t = useT();
+  const { call, result } = props;
+  const failed = result.status === "error";
+  const diff = failed ? null : editDiffText(result);
+  const fileView = failed ? null : fileViewFor(call.toolName, call.input, result);
+  const builtin = builtinCommand(call.toolName);
+  const builtinRows = builtin !== null && !failed ? (builtin.detail?.(call.input, result.details) ?? null) : null;
+  const mcp = parseQualifiedToolName(call.toolName);
+  const images = result.content.filter((block): block is Extract<(typeof result.content)[number], { type: "image" }> => block.type === "image");
+  const text =
+    images.length > 0 ? result.content.filter((block) => block.type === "text").map((block) => block.text).join("\n") : toolResultText(result, t);
+  const command = call.toolName === "bash" || call.toolName === "powershell" ? toolCallSummary(call.toolName, call.input) : null;
+  return (
+    <div className="proc-step-body">
+      {props.thinking.length > 0 && (
+        <div className="proc-step-thought">
+          <Icon name="lightbulb" size={13} strokeWidth={1.8} />
+          <div>{props.thinking.join("\n\n")}</div>
+        </div>
+      )}
+      {command !== null && <pre className="proc-step-cmd">{command}</pre>}
+      {diff !== null ? (
+        <DiffView diff={diff} />
+      ) : fileView !== null ? (
+        <FileContentView text={fileView.text} startLine={fileView.startLine} lang={langFromPath(toolCallSummary(call.toolName, call.input) ?? "")} />
+      ) : builtinRows !== null ? (
+        <BuiltinDetailBody rows={builtinRows} />
+      ) : mcp !== null ? (
+        <McpToolBody result={result} />
+      ) : (
+        <PlainToolBody toolName={call.toolName} text={text} failed={failed} live={false} images={images} />
+      )}
+    </div>
+  );
+}
+
+/** 过程里出现过的图：最多露三张，多的写「+N」（照 Claude 折叠行右边那一排） */
+function ProcessThumbs(props: { images: readonly ProcessImage[] }) {
+  const shown = props.images.slice(-THUMBS_SHOWN);
+  const rest = props.images.length - shown.length;
+  return (
+    <span className="proc-thumbs" aria-hidden="true">
+      {rest > 0 && <span className="proc-thumbs-more">+{rest}</span>}
+      {shown.map((image) => (
+        <ProcessThumb key={image.key} image={image} />
+      ))}
+    </span>
+  );
+}
+
+function ProcessThumb(props: { image: ProcessImage }) {
+  const { image } = props;
+  const fileUrl = useChatImage(image.kind === "file" ? image.path : null);
+  const src = image.kind === "inline" ? `data:${image.mimeType};base64,${image.data}` : fileUrl;
+  if (src === undefined || src === null) return <span className="proc-thumb empty" title={image.name} />;
+  return <img className="proc-thumb" src={src} alt={image.name} title={image.name} />;
+}
+
+/**
+ * 一轮做出来、交给用户的东西（2026-11-22 用户：「完全折叠以后，我们其实只考虑产出，产出的话，结果都放在底部」）：
+ * 回答之后、文件账之前，一份一行。演示文稿 / 文档点了在右栏打开；导出的文件用系统默认应用打开。
+ */
+function TurnOutputsBlock(props: { unit: TurnOutputsUnit; toolResults: ToolResultIndex }) {
+  const t = useT();
+  const scope = useChatFileScope();
+  const outputs = turnOutputs(props.unit.calls, props.toolResults);
+  if (outputs.length === 0) return null;
+  return (
+    <div className="turn-outputs">
+      {outputs.map((output) => {
+        const icon: IconName = output.kind === "slides" ? FEATURE_ICON.slides : output.kind === "doc" ? FEATURE_ICON.doc : "file";
+        const sub =
+          output.kind === "slides" ? t.chat.outputDeck(output.pages) : output.kind === "doc" ? t.chat.outputDoc : t.chat.outputFile(output.format);
+        const open = () => {
+          if (output.kind === "file") {
+            if (scope !== null) void openChatFile(scope, output.path);
+            return;
+          }
+          requestOpenPanel({ kind: output.kind === "slides" ? "slides" : "files", path: output.path, force: true });
+        };
+        return (
+          <button key={output.path} type="button" className="turn-output" onClick={open} title={output.path}>
+            <span className="turn-output-icon">
+              <Icon name={icon} size={16} strokeWidth={1.7} />
+            </span>
+            <span className="turn-output-title">{output.title}</span>
+            <span className="turn-output-sub">{sub}</span>
+            <span className="turn-output-open row-trailing">
+              {output.kind === "file" ? t.chat.outputOpenFile : t.chat.outputOpenPanel}
+              <Icon name={output.kind === "file" ? "external-link" : "panel-right"} size={13} strokeWidth={1.8} />
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 /**
  * 落在文档文件上的 edit / write 的摘要：「文件名 · 第几节」（节取自 edit 结果的 diff 上下文，退到此刻开着的文档全文）。
  * 不是文档上的 edit / write 返回 null，调用方用通用摘要。
@@ -4745,53 +5059,6 @@ function docEditCallLabel(toolName: string, input: unknown, result: ToolTranscri
   if (path === null) return null;
   const diff = toolName === "edit" && result !== undefined && result.status !== "running" ? editDiffText(result) : null;
   return docEditSummary(path, diff === null ? null : docEditSection(parseEditDiff(diff), getOpenDocumentText(path)));
-}
-
-function ProcessChapterItem(props: {
-  chapter: ProcessChapter;
-  toolResults: ToolResultIndex;
-  skills: SkillMeta[];
-  renderStep: (step: ProcessStep) => ReactNode;
-}) {
-  const t = useT();
-  const [open, setOpen] = useFoldState(`chapter:${props.chapter.key}`);
-  const { chapter } = props;
-  const failed = chapter.calls.some((call) => props.toolResults.get(call.toolCallId)?.status === "error");
-  const title =
-    chapter.title ??
-    t.chat.processToolsTitle(
-      processCounts(chapter.steps, props.toolResults, props.skills)
-        .byTool.map(({ key, count }) => t.chat.processToolPart(toolWord(t.chat.rollupTool, key), count))
-        .join(t.common.listSeparator),
-    );
-  const shown = chapter.calls.slice(0, CHAPTER_STEPS_SHOWN);
-  return (
-    <li className={failed ? "bad" : undefined}>
-      <button
-        type="button"
-        className="proc-chapter-btn"
-        aria-expanded={open}
-        title={t.chat.processChapterSteps}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <span className={chapter.source === "say" ? "proc-ch-title" : "proc-ch-title think"}>
-          <InlineMarks text={title} />
-        </span>
-        {chapter.calls.length > 0 && (
-          <span className="proc-ch-steps">
-            {shown.map((call) => (
-              <span key={call.toolCallId} className={props.toolResults.get(call.toolCallId)?.status === "error" ? "bad" : undefined}>
-                {toolWord(t.chat.rollupTool, rollupToolKey(call.toolName, call.input, props.skills), call.input)}{" "}
-                {docEditCallLabel(call.toolName, call.input, props.toolResults.get(call.toolCallId)) ?? toolCallSummaryForRow(call.toolName, call.input, props.skills) ?? ""}
-              </span>
-            ))}
-            {chapter.calls.length > shown.length && <span>{t.chat.processMore(chapter.calls.length - shown.length)}</span>}
-          </span>
-        )}
-      </button>
-      {open && <div className="proc-ch-body">{chapter.steps.filter((step) => step.kind !== "text").map((step) => props.renderStep(step))}</div>}
-    </li>
-  );
 }
 
 function CollapseRow(props: {
@@ -5412,8 +5679,6 @@ function ToolLine(props: {
           </button>
         )}
       </CollapseRow>
-      {/* 内置命令的完成卡（pinCard 的命令，如 slides_create）：折叠之外、点击在右栏打开 */}
-      {builtin?.pinCard === true && finished && !failed && <CommandCard details={result?.details} />}
       {/* 活尾预览：跑着的 shell 有流式输出时，折叠行下贴几行末尾——「它在动」
           不展开也看得见。与展开体同一个圆角虚线框（用户 2026-10-12：从开始显示
           活尾的那一刻起就该有框，无框的裸文本像渲染错误）；行也走展开体同一套

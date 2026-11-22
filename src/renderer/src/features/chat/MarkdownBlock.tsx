@@ -1,4 +1,4 @@
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 // CJK 加粗（2026-10-14 用户报的两例）：CommonMark 的定界规则下 `**标题： **`
 // 的收尾 ** 前是空白、`**说明：**后文` 的收尾 ** 前是中文标点且后是汉字，都算
@@ -11,7 +11,7 @@ import remarkBreaks from "remark-breaks";
 // katex 的 CSS 必须与 rehype-katex 实际用的渲染器同版——直装 katex 已锁 0.16.47 对齐
 import "katex/dist/katex.min.css";
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
-import { Component, memo, useMemo, useContext } from "react";
+import { Component, memo, useMemo, useContext, useState } from "react";
 import type { Components } from "react-markdown";
 import type { PluggableList } from "unified";
 import { MdPre } from "./CodeBlock";
@@ -30,6 +30,8 @@ import { useT } from "../../locale.ts";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { citationIdOfHref, citationTitle, remarkCitationMarkers } from "./citation-markers.ts";
 import { CitationOpenContext, CitationTableContext } from "./citation-context.ts";
+import { resolveChatPath, useChatFileScope, useChatImage } from "./chat-file-scope.ts";
+import { ImageLightbox } from "../../shell/ImageLightbox";
 
 /**
  * assistant 文本块的 markdown 渲染（设计系统 *AssistantText*：读起来像文档，不是聊天记录）。
@@ -50,8 +52,10 @@ import { CitationOpenContext, CitationTableContext } from "./citation-context.ts
  *   消息落定后 streaming 翻 false，尾块的那次补渲照旧。
  * - 链接全部拦给 `window.open`：主进程的 `setWindowOpenHandler` 把网页送进内置浏览器、
  *   mailto 交给系统（`src/main/index.ts` 的 openLink），外链绝不能在应用窗口内导航走。
- * - **图片永不加载**：远程 `<img>` 是隐私洞（模型给出图床 URL 就把用户的 IP 送出去），
- *   渲染成占位链接，点击才去内置浏览器看（ImagePlaceholder）。
+ * - **远程图片永不加载**：远程 `<img>` 是隐私洞（模型给出图床 URL 就把用户的 IP 送出去），
+ *   渲染成占位链接，点击才去内置浏览器看（ImagePlaceholder）。**本地图照常显示**（2026-11-22 用户：
+ *   图要和它的解释放在一起）：回答里写 `![](路径)`，按文件面板同一道白名单读（chat-file-scope.ts），
+ *   不在会话能看到的目录里就是占位。
  * - **raw HTML 只放行 `<details>`/`<summary>`**：rehype-raw 解析 + rehype-sanitize
  *   白名单剥离，其余标签仍是纯文本。白名单可审计，攻击面有界。
  * - 元素样式在 `styles.css` 的 `.chat-md` 作用域里，走设计系统 token。
@@ -71,6 +75,15 @@ const CITATION_MARKER_PRESENT = new RegExp(CITATION_MARKER.source);
  * memo（每次渲染都重跑 remark / rehype），只有把这层 memo 垫在前面，流式期间未变的
  * 块才会被跳过。其余 prop 由 MarkdownBlock 用 useMemo 维持稳定身份，比较即按 text。
  */
+/**
+ * 默认的 URL 清洗会把 `file:` 与 Windows 盘符路径（`C:\\…`）当成未知协议清空；图片的 src 放行这两种本地写法
+ * （读不读得到由 ChatImage 走白名单决定），其余照默认。
+ */
+function chatUrlTransform(url: string, key: string): string {
+  if (key === "src" && (/^file:/i.test(url) || /^[A-Za-z]:[\\/]/.test(url))) return url;
+  return defaultUrlTransform(url);
+}
+
 const MarkdownChunk = memo(function MarkdownChunk(props: {
   text: string;
   remarkPlugins: PluggableList;
@@ -85,6 +98,7 @@ const MarkdownChunk = memo(function MarkdownChunk(props: {
   return (
     <MermaidPendingContext.Provider value={props.fenceOpen}>
       <ReactMarkdown
+        urlTransform={chatUrlTransform}
         remarkPlugins={props.remarkPlugins}
         rehypePlugins={props.rehypePlugins}
         components={props.components}
@@ -128,7 +142,7 @@ export const MarkdownBlock = memo(function MarkdownBlock({
     [],
   );
   const baseComponents = useMemo(
-    () => ({ a: ExternalAnchor, img: ImagePlaceholder, span: ChipSpan }),
+    () => ({ a: ExternalAnchor, img: ChatImage, span: ChipSpan }),
     [],
   );
   const highlightComponents = useMemo(
@@ -280,6 +294,39 @@ function CitationAnchor(props: { id: string; label: ReactNode }) {
         {props.label}
       </a>
     </sup>
+  );
+}
+
+/**
+ * 回答里的图：http(s) 的远程图走占位（不加载）；其余当本地路径（绝对路径，或相对会话目录），
+ * 在会话能看到的目录里就读出来显示，一张图占一整行，下面紧跟的段落就是它的解释。
+ */
+function ChatImage(props: ImageProps) {
+  const src = typeof props.src === "string" ? props.src : "";
+  const scope = useChatFileScope();
+  const remote = /^[a-z][a-z0-9+.-]*:/i.test(src) && !/^file:/i.test(src) && !/^[A-Za-z]:[\\/]/.test(src);
+  const path = remote || src === "" ? null : resolveChatPath(src, scope?.cwd ?? null);
+  if (path === null) return <ImagePlaceholder {...props} />;
+  return <LocalChatImage path={path} alt={typeof props.alt === "string" ? props.alt : ""} fallback={props} />;
+}
+
+function LocalChatImage(props: { path: string; alt: string; fallback: ImageProps }) {
+  const t = useT();
+  const url = useChatImage(props.path);
+  const [viewing, setViewing] = useState(false);
+  if (url === undefined) return <span className="chat-img-pending" aria-hidden="true" />;
+  if (url === null) return <ImagePlaceholder {...props.fallback} />;
+  const comma = url.indexOf(",");
+  const mimeType = url.slice(5, url.indexOf(";"));
+  return (
+    <>
+      <button type="button" className="chat-img-local" aria-label={t.lightbox.open} onClick={() => setViewing(true)}>
+        <img src={url} alt={props.alt} />
+      </button>
+      {viewing && (
+        <ImageLightbox images={[{ type: "image", data: url.slice(comma + 1), mimeType }]} startIndex={0} onClose={() => setViewing(false)} />
+      )}
+    </>
   );
 }
 

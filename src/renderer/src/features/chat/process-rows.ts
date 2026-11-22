@@ -1,0 +1,412 @@
+/**
+ * 过程与产物怎么显示的纯推导（2026-11-22 用户讨论「最后一公里 · 文档与演示文稿」）。
+ *
+ * 用户原话：「本来设计这个卡片是为了最终产出的，但是它中间过程也会继承这个卡片」「更完整的工具调用的话，
+ * 我希望语义能更统一一些」「完全折叠以后，我们其实只考虑产出，产出的话，结果都放在底部」。
+ * 于是一轮只分两处：
+ * - **过程**：每一步都是同一种行——动作（中文动词）· 对象 · 量，行尾可带缩略图；不出卡、不分胶囊 / 药丸。
+ * - **产物**：这一轮做出来、交给用户的东西（演示文稿、文档、导出的文件），收在这一轮的结尾，一份一行。
+ *
+ * 纯模块：不 import React，可被 node --test 直接加载。
+ */
+import { readCommandCard } from "../../../../shared/builtin-command.ts";
+import { parseQualifiedToolName } from "../../../../shared/mcp.ts";
+import { skillForReadPath } from "../../../../shared/skill.ts";
+import { builtinCommand, docEditPath, docEditLabel, fileLabel } from "./builtin-commands.ts";
+import type { ProcessStep, ToolCallUnit, ToolResultIndex } from "./tool-results.ts";
+import { toolCallSummary } from "./tool-results.ts";
+import { processCalls } from "./turn-process.ts";
+
+/** 过程行的中文动词（界面文案表给，中英各一份） */
+export interface StepVerbWords {
+  command: string;
+  read: string;
+  write: string;
+  edit: string;
+  list: string;
+  find: string;
+  search: string;
+  readTask: string;
+  plan: string;
+  goal: string;
+  terminal: string;
+  document: string;
+  image: string;
+  config: string;
+  plugin: string;
+  askUser: string;
+  report: string;
+  delegate: string;
+  reply: string;
+  memorySearch: string;
+  memoryEdit: string;
+  automation: string;
+  web: string;
+  browse: string;
+  skill: string;
+  other: string;
+  mcp: (server: string) => string;
+}
+
+const VERB_OF_TOOL: Readonly<Record<string, keyof Omit<StepVerbWords, "mcp">>> = {
+  bash: "command",
+  powershell: "command",
+  read: "read",
+  write: "write",
+  edit: "edit",
+  ls: "list",
+  find: "find",
+  grep: "search",
+  read_task: "readTask",
+  update_plan: "plan",
+  update_goal: "goal",
+  terminal_open: "terminal",
+  terminal_execute: "terminal",
+  terminal_read: "terminal",
+  terminal_list: "terminal",
+  terminal_interrupt: "terminal",
+  terminal_close: "terminal",
+  read_pdf: "document",
+  cite_pdf: "document",
+  read_docx: "document",
+  show_image: "image",
+  create_skill: "config",
+  add_mcp_server: "config",
+  install_plugin: "plugin",
+  preview_plugin: "plugin",
+  list_plugins: "plugin",
+  show_plugin_board: "plugin",
+  request_user_action: "askUser",
+  report_to_parent: "report",
+  delegate: "delegate",
+  reply_subsession: "reply",
+  memory_search: "memorySearch",
+  memory_revise: "memoryEdit",
+  memory_retire: "memoryEdit",
+  automation_create: "automation",
+  automation_list: "automation",
+  automation_cancel: "automation",
+  automation_update: "automation",
+  web_search: "web",
+  web_fetch: "browse",
+};
+
+export interface StepVerb {
+  /** 行首的动作词：永远是中文（英文界面是英文），不露工具原名 */
+  verb: string;
+  /** 动作的对象：文件名、技能名、命令、页码……没有就 null */
+  object: string | null;
+  /** 工具原名：动词表里没有的工具落「用工具」，原名放悬停里，不藏起来 */
+  raw: string | null;
+}
+
+/**
+ * 一步工具调用 → 一行的「动作 · 对象」。技能、外接工具、内置命令、子会话、计划都走这里，
+ * 区别只在动作词（和视图层挑的图标），不再各长一种胶囊 / 药丸 / 卡。
+ */
+export function stepVerb(
+  toolName: string,
+  input: unknown,
+  words: StepVerbWords,
+  skills: ReadonlyArray<{ slug: string; name: string }> = [],
+): StepVerb {
+  const record = typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
+  // 读某个技能的 SKILL.md = 在用这个技能
+  if (toolName === "read" && typeof record["path"] === "string") {
+    const skill = skillForReadPath(record["path"], skills);
+    if (skill !== null) return { verb: words.skill, object: skill.name, raw: null };
+  }
+  const mcp = parseQualifiedToolName(toolName);
+  if (mcp !== null) return { verb: words.mcp(mcp.server), object: mcpBrief(mcp.tool, input), raw: null };
+  // 文档上的 edit / write：「改文档 / 写文档 · 文件名」
+  const docLabel = docEditLabel(toolName, input);
+  const docPath = docEditPath(toolName, input);
+  if (docLabel !== null && docPath !== null) return { verb: docLabel, object: fileLabel(docPath), raw: null };
+  const builtin = builtinCommand(toolName);
+  if (builtin !== null) return { verb: builtin.label, object: builtin.summary(input), raw: null };
+  if (toolName.startsWith("browser_")) return { verb: words.browse, object: str(record["url"]) ?? str(record["text"]) ?? null, raw: null };
+  const key = VERB_OF_TOOL[toolName];
+  const object = objectOf(toolName, record);
+  if (key !== undefined) return { verb: words[key], object, raw: null };
+  return { verb: words.other, object, raw: toolName };
+}
+
+function str(value: unknown): string | null {
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+}
+
+function basename(path: string): string {
+  return path.split(/[\\/]/).filter((part) => part !== "").pop() ?? path;
+}
+
+function objectOf(toolName: string, record: Record<string, unknown>): string | null {
+  switch (toolName) {
+    case "read":
+    case "write":
+    case "edit":
+    case "read_pdf":
+    case "read_docx":
+    case "cite_pdf": {
+      const path = str(record["path"]);
+      return path === null ? null : basename(path);
+    }
+    case "ls": {
+      const path = str(record["path"]);
+      return path === null ? null : basename(path);
+    }
+    case "update_plan": {
+      const items = record["items"];
+      if (!Array.isArray(items)) return null;
+      const now = items.find((item) => typeof item === "object" && item !== null && (item as Record<string, unknown>)["status"] === "in_progress");
+      return now === undefined ? null : str((now as Record<string, unknown>)["text"]);
+    }
+    case "update_goal":
+      return str(record["goal"]);
+    case "delegate":
+      return str(record["title"]);
+    case "show_image": {
+      const paths = record["paths"];
+      return Array.isArray(paths) ? paths.filter((p): p is string => typeof p === "string").map(basename).join("、") || null : null;
+    }
+    case "web_search":
+      return str(record["query"]) ?? str(record["search_query"]);
+    default:
+      return toolCallSummary(toolName, record);
+  }
+}
+
+/** 外接工具的对象：参数里第一个像话的字符串（查询词、URL、路径） */
+function mcpBrief(tool: string, input: unknown): string {
+  if (typeof input === "object" && input !== null) {
+    for (const value of Object.values(input as Record<string, unknown>)) {
+      if (typeof value === "string" && value.trim() !== "") return `${tool} · ${value.trim()}`;
+    }
+  }
+  return tool;
+}
+
+// ───────────────────────── 产物 ─────────────────────────
+
+/** 一份产物：结尾那一处收的一行 */
+export interface TurnOutput {
+  /** 演示文稿 / 文档在右栏打开；文件用系统默认应用打开 */
+  kind: "slides" | "doc" | "file";
+  /** 绝对路径（去重键） */
+  path: string;
+  title: string;
+  /** 演示文稿的页数（这一轮最后一次写 / 改之后的；量不到 null） */
+  pages: number | null;
+  /** 导出的格式（PDF、Word…）；不是导出的 null */
+  format: string | null;
+}
+
+/** 写演示文稿的工具：结果里带「the deck now has N slide(s)」 */
+const DECK_WRITERS = new Set(["slides_write", "slides_edit", "slides_insert_image"]);
+
+/** PNG 是 agent 自己看排版用的（一页一张）：留在过程里当缩略图，不算交给用户的产物 */
+const SELF_CHECK_EXPORT = new Set(["png"]);
+
+const FORMAT_NAME: Readonly<Record<string, string>> = {
+  pdf: "PDF",
+  html: "HTML",
+  pptx: "PPTX",
+  "pptx-basic": "PPTX",
+  docx: "Word",
+  md: "Markdown",
+  "md-plain": "Markdown",
+};
+
+function inputPath(call: ToolCallUnit): string | null {
+  const value = (call.input as Record<string, unknown> | null)?.["path"];
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+function resultText(results: ToolResultIndex, call: ToolCallUnit): string {
+  const result = results.get(call.toolCallId);
+  if (result === undefined) return "";
+  return result.content.map((block) => (block.type === "text" ? block.text : "")).join("\n");
+}
+
+/** 「the deck now has 3 slide(s)」「the deck has 3 slide(s)」→ 3 */
+export function deckPagesFrom(text: string): number | null {
+  const match = /the deck (?:now )?has (\d+) slide/.exec(text);
+  return match === null ? null : Number(match[1]);
+}
+
+/**
+ * 一轮里交给用户的产物，按第一次出现的顺序，一份一行。
+ * - 演示文稿：新建或写过的那份；页数取这一轮最后一次写 / 改的结果。
+ * - 文档：打开过（doc_open）的那份。
+ * - 导出：PDF / Word / PPTX / HTML 是交给用户的文件；PNG 是自检，留在过程里。
+ * 失败的调用不算；还在跑的不算。
+ */
+export function turnOutputs(calls: readonly ToolCallUnit[], results: ToolResultIndex): TurnOutput[] {
+  const byPath = new Map<string, TurnOutput>();
+  const order: string[] = [];
+  const put = (output: TurnOutput) => {
+    const prev = byPath.get(output.path);
+    if (prev === undefined) order.push(output.path);
+    byPath.set(output.path, { ...prev, ...output, pages: output.pages ?? prev?.pages ?? null });
+  };
+  // 演示文稿的路径：create 结果卡上的是真路径；模型之后传的 path 可能是相对的，按文件名对回去
+  const deckByName = new Map<string, string>();
+  const deckPath = (raw: string | null): string | null => {
+    if (raw === null) return null;
+    return deckByName.get(basename(raw)) ?? raw;
+  };
+  for (const call of calls) {
+    const result = results.get(call.toolCallId);
+    if (result === undefined || result.status !== "complete") continue;
+    const card = readCommandCard(result.details);
+    if (call.toolName === "slides_create" && card !== null) {
+      deckByName.set(basename(card.path), card.path);
+      put({ kind: "slides", path: card.path, title: card.title, pages: 0, format: null });
+      continue;
+    }
+    if (DECK_WRITERS.has(call.toolName)) {
+      const path = deckPath(inputPath(call));
+      if (path === null) continue;
+      const prev = byPath.get(path);
+      put({ kind: "slides", path, title: prev?.title ?? fileLabel(path), pages: deckPagesFrom(resultText(results, call)), format: null });
+      continue;
+    }
+    if (call.toolName === "doc_open" && card !== null) {
+      put({ kind: "doc", path: card.path, title: card.title, pages: null, format: null });
+      continue;
+    }
+    if ((call.toolName === "slides_export" || call.toolName === "doc_export") && card !== null) {
+      const format = str((call.input as Record<string, unknown> | null)?.["format"]);
+      if (format !== null && SELF_CHECK_EXPORT.has(format)) continue;
+      put({ kind: "file", path: card.path, title: card.title, pages: null, format: format === null ? null : (FORMAT_NAME[format] ?? format) });
+    }
+  }
+  return order.map((path) => byPath.get(path)).filter((output): output is TurnOutput => output !== undefined);
+}
+
+// ───────────────────────── 缩略图 ─────────────────────────
+
+/** 过程里出现过的图：工具结果里的图（读图、读 PDF 页图）或导出到盘上的图（PNG 自检） */
+export type ProcessImage =
+  | { kind: "inline"; key: string; data: string; mimeType: string; name: string }
+  | { kind: "file"; key: string; path: string; name: string };
+
+/** 一段 / 一行最多露几张，多的写「+N」 */
+export const THUMBS_SHOWN = 3;
+
+export function stepImages(call: ToolCallUnit, results: ToolResultIndex): ProcessImage[] {
+  const result = results.get(call.toolCallId);
+  if (result === undefined || result.status !== "complete") return [];
+  const images: ProcessImage[] = [];
+  const path = inputPath(call);
+  result.content.forEach((block, index) => {
+    if (block.type !== "image") return;
+    images.push({ kind: "inline", key: `${call.toolCallId}:${index}`, data: block.data, mimeType: block.mimeType, name: path === null ? call.toolName : basename(path) });
+  });
+  if (images.length > 0) return images;
+  if (call.toolName === "slides_export") {
+    const card = readCommandCard(result.details);
+    if (card !== null && /\.png$/i.test(card.path)) images.push({ kind: "file", key: call.toolCallId, path: card.path, name: basename(card.path) });
+  }
+  return images;
+}
+
+/** 一段里的图：同一张图（导出的 PNG 随后又被读回来看）只算一次，留最后出现的那次 */
+export function processImages(steps: readonly ProcessStep[], results: ToolResultIndex): ProcessImage[] {
+  const byName = new Map<string, ProcessImage>();
+  for (const image of processCalls(steps).flatMap((call) => stepImages(call, results))) {
+    byName.delete(image.name);
+    byName.set(image.name, image);
+  }
+  return [...byName.values()];
+}
+
+// ───────────────────────── 折叠行那一句 ─────────────────────────
+
+export interface HeadlineWords {
+  wroteFiles: (n: number) => string;
+  madeDecks: (n: number) => string;
+  openedDocs: (n: number) => string;
+  exported: (n: number) => string;
+  delegated: (n: number) => string;
+  /** 「还有 N 步」：前面有说法时 */
+  moreSteps: (n: number) => string;
+  /** 只有步数：前面什么都没说出来时 */
+  steps: (n: number) => string;
+  /** 说法之间的分隔（中文「、」英文「, 」）与说法和「还有 N 步」之间的连接 */
+  listSep: string;
+  restSep: string;
+}
+
+/**
+ * 折叠行那一句（照 Claude「Created 3 files, shared a file, and 107 more steps」）：先说做出来的东西，
+ * 再说「还有 N 步」。步数只数工具调用，记账（改计划 / 改目标）不算；做出东西的那几步从「还有」里扣掉。
+ */
+export function processHeadline(
+  steps: readonly ProcessStep[],
+  results: ToolResultIndex,
+  files: number,
+  words: HeadlineWords,
+): string {
+  const calls = processCalls(steps).filter((call) => call.toolName !== "update_plan" && call.toolName !== "update_goal");
+  const outputs = turnOutputs(calls, results);
+  const decks = outputs.filter((output) => output.kind === "slides").length;
+  const docs = outputs.filter((output) => output.kind === "doc").length;
+  const exported = outputs.filter((output) => output.kind === "file").length;
+  const delegated = calls.filter((call) => call.toolName === "delegate").length;
+  const parts: string[] = [];
+  let accounted = 0;
+  if (files > 0) {
+    parts.push(words.wroteFiles(files));
+    accounted += calls.filter((call) => call.toolName === "write" || call.toolName === "edit").length;
+  }
+  if (decks > 0) {
+    parts.push(words.madeDecks(decks));
+    accounted += calls.filter((call) => call.toolName === "slides_create" || DECK_WRITERS.has(call.toolName)).length;
+  }
+  if (docs > 0) {
+    parts.push(words.openedDocs(docs));
+    accounted += calls.filter((call) => call.toolName === "doc_open").length;
+  }
+  if (exported > 0) {
+    parts.push(words.exported(exported));
+    accounted += exported;
+  }
+  if (delegated > 0) {
+    parts.push(words.delegated(delegated));
+    accounted += delegated;
+  }
+  const rest = Math.max(0, calls.length - accounted);
+  if (parts.length === 0) return words.steps(calls.length);
+  return rest > 0 ? `${parts.join(words.listSep)}${words.restSep}${words.moreSteps(rest)}` : parts.join(words.listSep);
+}
+
+// ───────────────────────── 展开后的行 ─────────────────────────
+
+/**
+ * 「平铺」时的一行：说的话（旁白）一行，每一步工具一行。思考不单独占行（2026-11-22 用户：「一而再再而三的思考」），
+ * 挂在它后面那一步上，点开那一步才看到。
+ */
+export type ProcessRow =
+  | { kind: "say"; key: string; text: string }
+  | { kind: "step"; key: string; call: ToolCallUnit; thinking: string[] };
+
+export function processRows(steps: readonly ProcessStep[]): ProcessRow[] {
+  const rows: ProcessRow[] = [];
+  let thinking: string[] = [];
+  for (const step of steps) {
+    if (step.kind === "thinking") {
+      if (step.text.trim() !== "") thinking.push(step.text.trim());
+      continue;
+    }
+    if (step.kind === "text") {
+      if (step.text.trim() !== "") rows.push({ kind: "say", key: step.key, text: step.text.trim() });
+      continue;
+    }
+    const calls = step.kind === "toolCall" ? [step] : step.kind === "toolGroup" ? step.calls : [];
+    for (const call of calls) {
+      rows.push({ kind: "step", key: call.key, call, thinking });
+      thinking = [];
+    }
+  }
+  return rows;
+}

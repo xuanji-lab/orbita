@@ -27,7 +27,8 @@ import { parsePluginInstallRow } from "../../../../shared/plugin.ts";
 import { parseAutomationModeRow, type AutomationModeRow } from "../../../../shared/automation.ts";
 import { parsePluginBoardDetails, type PluginBoardResult } from "../../../../shared/plugin-board.ts";
 import { gatedCommandTimeout, PLUGIN_BOARD_TOOL } from "../../../../shared/permission.ts";
-import { builtinCommand, DOC_EDIT_KEY, DOC_WRITE_KEY, docEditPath, isBuiltinCommand, PINNED_CARD_COMMANDS } from "./builtin-commands.ts";
+import { builtinCommand, DOC_EDIT_KEY, DOC_WRITE_KEY, docEditPath, isBuiltinCommand } from "./builtin-commands.ts";
+import { turnOutputs } from "./process-rows.ts";
 // 收尾扫描回答卡（scanAnswerCards）只用它认消息形状；纯模块，node --test 可直接加载
 import { matchScanMessage, type ScanMessage } from "./carryover-parse.ts";
 // 值导入必须走相对路径带 .ts 后缀（同上一行的纪律：本文件被 node --test 直接加载）
@@ -233,21 +234,16 @@ function isChannelToolCall(entry: RenderEntry): boolean {
  * 面向用户的输出。常见节奏（show 完就给结尾回复）下，豁免让画廊正好钉在
  * 折叠行之后、回复之前——「正文前面见图」不需要上浮收集就自然成立。
  */
-const PINNED_TOOL_NAMES: ReadonlySet<string> = new Set(["show_image", PLUGIN_BOARD_TOOL, ...PINNED_CARD_COMMANDS]);
+const PINNED_TOOL_NAMES: ReadonlySet<string> = new Set(["show_image", PLUGIN_BOARD_TOOL]);
 
 function isPinnedToolCall(entry: RenderEntry): boolean {
   return entry.kind === "toolCall" && PINNED_TOOL_NAMES.has(entry.toolName);
 }
 
 /**
- * 内置命令里要出完成卡的那几个（新建演示文稿 / 打开文档 / 导出 …）：不挂轮尾，**留在它被调用的位置**。
- * 过程行是时间线——先「新建演示文稿」、后「写幻灯片」就该按这个顺序读；挂到轮尾会让它排到后面的写幻灯片折叠之下
- * （验收 S1：新建画在写幻灯片那组下面）。做法同通道工具：在这里把块切开，卡原位放进视图，前后各自成折叠。
- * show_image / 插件看板仍是挂轮尾（给用户看的成品，贴在回复之前）。
+ * 内置命令（新建演示文稿 / 打开文档 / 导出 …）不再在过程里出卡（2026-11-22 用户：「本来设计这个卡片是为了最终产出的，
+ * 但是它中间过程也会继承这个卡片」）：它们是普通的过程步，收进过程行；做出来的东西收在这一轮的结尾（TurnOutputsUnit）。
  */
-function isInPlaceCardCall(entry: RenderEntry): boolean {
-  return entry.kind === "toolCall" && PINNED_CARD_COMMANDS.has(entry.toolName);
-}
 
 /** 这条 toolCall 是不是在 read 某条已知 skill 的 SKILL.md（分组排除用，同 ToolLine 的判定） */
 function isSkillRead(
@@ -384,7 +380,17 @@ export interface TurnProcessUnit {
 /** 过程块的一步：思考 / 工具 / 工具组，或夹在中间的说明性正文（章节标题） */
 export type ProcessStep = TurnMemberEntry | Extract<RenderUnit, { kind: "text" }>;
 
-export type TurnViewEntry = RenderEntry | TurnGroupUnit | TurnProcessUnit;
+/**
+ * 一轮做出来、交给用户的东西（2026-11-22）：结尾一处收齐，一份一行（process-rows.ts 的 turnOutputs 从 calls 现算）。
+ * calls 是这一轮全部工具调用：页数要看最后一次写演示文稿的结果。
+ */
+export interface TurnOutputsUnit {
+  kind: "turnOutputs";
+  key: string;
+  calls: readonly ToolCallUnit[];
+}
+
+export type TurnViewEntry = RenderEntry | TurnGroupUnit | TurnProcessUnit | TurnOutputsUnit;
 
 /** 折叠成员：思考、单行工具调用、工具组。正文永不进折叠（2026-10-18 裁决），不在联合里。 */
 export type TurnMemberEntry = Extract<
@@ -565,11 +571,6 @@ function foldSegment(
     chunk = [];
   };
   for (const entry of segment) {
-    if (isInPlaceCardCall(entry)) {
-      flushChunk(false);
-      view.push(entry);
-      continue;
-    }
     if (isPinnedToolCall(entry)) {
       pinned.push(entry);
       continue;
@@ -598,6 +599,14 @@ function foldSegment(
     let insertAt = view.length;
     while (insertAt > 0 && view[insertAt - 1]?.kind === "text") insertAt -= 1;
     view.splice(insertAt, 0, ...pinned);
+  }
+  // 这一轮交给用户的东西（演示文稿、文档、导出的文件）收在结尾：回答之后、文件账之前。还在跑的轮不出——
+  // 跑的时候右栏已经自己打开在看着它写
+  if (mode !== "live" && results !== undefined) {
+    const calls = segment.flatMap((entry) => (entry.kind === "toolCall" ? [entry] : entry.kind === "toolGroup" ? [...entry.calls] : []));
+    if (turnOutputs(calls, results).length > 0) {
+      view.push({ kind: "turnOutputs", key: `out:${calls[0]?.key ?? ""}`, calls });
+    }
   }
   if (tailCards.length > 0) view.push(...tailCards);
   return view;
@@ -1562,7 +1571,8 @@ export function branchAnchorEntries(
     }
   }
   const rows = new Map<number, string>();
-  for (const [messageId, index] of lastOf) rows.set(index, messageId);
+  // 回答后面紧跟着这一轮的产物（turnOutputs）：复制 / 分支那一行挪到产物之后，产物贴着回答
+  for (const [messageId, index] of lastOf) rows.set(entries[index + 1]?.kind === "turnOutputs" ? index + 1 : index, messageId);
   return rows;
 }
 
