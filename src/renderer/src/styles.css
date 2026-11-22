@@ -2746,7 +2746,8 @@ html[data-pointer-drag] iframe {
  * ——graphite / black 同为暗地，共用同一套双主题翻色，不生成第三套语法色。
  */
 .chat-md pre.shiki {
-  background-color: var(--color-chat-muted-bg) !important;
+  /* 白底淡边，同未高亮的代码块（2026-11-22：对话里只有用户的消息是灰的） */
+  background-color: var(--color-bg-panel) !important;
 }
 
 :root[data-theme="graphite"] .chat-md pre.shiki,
@@ -7198,4 +7199,11 @@ html {
 }
 .file-turn-card > .web-batch-row {
   padding: var(--space-2) var(--space-3);
+}
+/* 等你确认的计划卡：边加重一档，标题用正文墨（它在等你，不是过去时） */
+.plan-turn-card[data-awaiting] {
+  border-color: var(--color-border-strong);
+}
+.plan-turn-card[data-awaiting] .plan-turn-title {
+  color: var(--color-text-primary);
 }

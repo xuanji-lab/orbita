@@ -17,16 +17,18 @@ import { planDiffLines, planDiffRows, planDiffStats, type PlanDiffLine, type Pla
  * - 推进了计划（只打勾）：整张清单，头上写从几步到几步。
  * 骨架同结尾那几张（白底、淡边、同圆角、同宽）。右边「进度」打开右栏「这条任务 › 进度」。
  */
-export function PlanTurnCard(props: { state: PlanTurnState; cardKey: string }) {
+export function PlanTurnCard(props: { state: PlanTurnState; cardKey: string; awaiting?: boolean }) {
   const t = useT();
   const [open, setOpen] = useState(true);
   const { state } = props;
   const items = state.version.items;
   const done = items.filter((item) => item.status === "done").length;
-  const lines = state.kind === "changed" ? planDiffLines(state.base.items, items) : null;
+  const diff = state.kind === "changed" ? planDiffLines(state.base.items, items) : null;
+  // 只是某步卡在等（waiting，不加不减不改说法）：没有可对照的行，画清单，等什么写在那一步的黄签上
+  const lines = diff !== null && diff.some((line) => line.kind !== "same") ? diff : null;
   const stats = lines === null ? null : planDiffStats(lines);
-  const title =
-    state.kind === "changed"
+  // 停下来等你确认的那一版：同一张卡，标题换成「计划等你确认」（问题在回答里用自然语言问，卡上没有按钮）
+  const title = props.awaiting === true ? t.chat.planCardTitle : state.kind === "changed"
       ? t.chat.planTurnChanged
       : state.kind === "progress"
         ? t.chat.planTurnProgressed
@@ -39,7 +41,7 @@ export function PlanTurnCard(props: { state: PlanTurnState; cardKey: string }) {
       : t.chat.planTurnProgress(done, items.length);
   const why = state.kind === "changed" ? state.notice.why : null;
   return (
-    <section className="plan-turn-card" aria-label={title} data-key={props.cardKey}>
+    <section className="plan-turn-card" aria-label={title} data-key={props.cardKey} data-awaiting={props.awaiting === true || undefined}>
       <div className="plan-turn-head">
         <button type="button" className="plan-turn-toggle" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
           <Icon name={FEATURE_ICON.task} size={14} strokeWidth={1.8} />

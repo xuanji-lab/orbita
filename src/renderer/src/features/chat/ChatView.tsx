@@ -4636,9 +4636,14 @@ function TurnProcessLine(props: {
   // 计划定了 / 改了：这一轮开头一张卡（PlanTurnCard），不再在过程行下面写一行「计划改了：…」。
   // 停下来等你确认的那一版画原来的计划卡（同样放开头），两张不同时出
   const awaitingHere = props.awaitingPlan !== null && planCallIds.includes(props.awaitingPlan.toolCallId) ? props.awaitingPlan : null;
-  const planState = awaitingHere === null ? planTurnState(props.plan, planNotice, planCallIds) : null;
+  const planState = planTurnState(props.plan, planNotice, planCallIds);
+  // 等你确认的那一版也是同一张计划卡（标题换掉）；推不出卡（理论上不会）才退回旧的计划卡
   const planHead =
-    awaitingHere !== null ? <PlanCard version={awaitingHere} /> : planState !== null ? <PlanTurnCard state={planState} cardKey={unit.key} /> : null;
+    planState !== null ? (
+      <PlanTurnCard state={planState} cardKey={unit.key} awaiting={awaitingHere !== null} />
+    ) : awaitingHere !== null ? (
+      <PlanCard version={awaitingHere} />
+    ) : null;
   // 这个块里目标改了没有（第一次定目标不算改）
   const goalNoticeLine = goalNoticeText(
     t,
