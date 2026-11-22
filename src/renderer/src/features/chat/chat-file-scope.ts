@@ -77,6 +77,18 @@ export async function readChatFile(scope: ChatFileScope, path: string): Promise<
   }
 }
 
+/** 读一份 PDF 的字节给缩略图画首页（状态面板的产物行）：同一道白名单；不在根里 / 太大 / 读失败 = null */
+export async function readChatPdf(scope: ChatFileScope, path: string): Promise<Uint8Array | null> {
+  const root = rootOf(path, await rootsFor(scope));
+  if (root === null) return null;
+  try {
+    const file = await api.files.readPdf({ sessionId: scope.sessionId, workspaceId: scope.workspaceId, root: root.path, dir: path });
+    return file.kind === "pdf" ? file.data : null;
+  } catch {
+    return null;
+  }
+}
+
 /** 用系统默认应用打开一个文件（同一道白名单）；打不开返回 false */
 export async function openChatFile(scope: ChatFileScope, path: string): Promise<boolean> {
   const root = rootOf(path, await rootsFor(scope));

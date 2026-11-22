@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { TranscriptRecord } from "@shared/session";
-import { childActivityOf, childStateOf, nextTickIn, pillSignal, planWindow, STUCK_MS, toolCallLine } from "./chat-status.ts";
+import { boardOf, childActivityOf, childStateOf, clampPanelWidth, fitsPanel, groupOutputs, nextTickIn, pillSignal, planWindow, STUCK_MS, toolCallLine, usedInSession } from "./chat-status.ts";
 
 describe("状态卡：计划收着露哪几步", () => {
   const steps = (statuses: string[]) => statuses.map((status, i) => ({ id: `s${i}`, status: status as "done" }));
@@ -59,5 +59,59 @@ describe("状态卡：走表与小钮", () => {
     assert.deepEqual(pillSignal(["running", "stuck"], 0), { kind: "stuck", count: 1 });
     assert.deepEqual(pillSignal(["done"], 1), { kind: "running", count: 1 });
     assert.equal(pillSignal(["done"], 0), null);
+  });
+});
+
+describe("状态面板：产物按类型分行", () => {
+  it("一类一行、行序固定（演示文稿在前）；PDF / Word / PPTX 并进「导出的文件」；没有的类型不出行", () => {
+    const outs = [
+      { kind: "pdf" as const, id: 1 },
+      { kind: "web" as const, id: 2 },
+      { kind: "slides" as const, id: 3 },
+      { kind: "word" as const, id: 4 },
+      { kind: "slides" as const, id: 5 },
+      { kind: "board" as const, id: 6 },
+    ];
+    const groups = groupOutputs(outs);
+    assert.deepEqual(groups.map((group) => group.key), ["slides", "web", "export", "board"]);
+    assert.deepEqual(groups[0]?.items.map((item) => item.id), [3, 5]);
+    assert.deepEqual(groups[2]?.items.map((item) => item.id), [1, 4]);
+  });
+  it("看板结果认出插件名（右栏打开它的看板要用）", () => {
+    assert.deepEqual(boardOf({ pluginBoard: { plugin: "kw-engine", title: "解法库" } }), { title: "解法库", plugin: "kw-engine" });
+    assert.deepEqual(boardOf({ pluginBoard: { plugin: "orbita-atlas" } }), { title: "orbita-atlas", plugin: "orbita-atlas" });
+    assert.equal(boardOf({ other: 1 }), null);
+  });
+});
+
+describe("状态面板：这次用到的", () => {
+  const tool = (toolName: string, input: unknown) => ({ role: "tool", toolName, input, toolCallId: toolName, status: "complete", content: [], timestamp: 1 }) as unknown as TranscriptRecord;
+  it("技能 = 读了 <名>/SKILL.md；网页 = 搜索次数 + 打开过的站点（去 www、去重）；上传 = 附件清单里的文件", () => {
+    const records = [
+      { role: "user", content: [{ type: "text", text: "看图" }, { type: "text", text: "<attached-files>\nThe user attached these files.\n- /a/截图.png\n- /a/目录/\n</attached-files>" }], timestamp: 0 } as unknown as TranscriptRecord,
+      tool("read", { path: "/x/skills/orbita-ui-task-brief/SKILL.md" }),
+      tool("read", { path: "/x/skills/orbita-ui-task-brief/SKILL.md" }),
+      tool("read", { path: "/x/src/App.tsx" }),
+      tool("web_search", { query: "a" }),
+      tool("mcp__web-search-prime__web_search_prime", { search_query: "b" }),
+      tool("browser_navigate", { url: "https://www.example.com/a" }),
+      tool("browser_navigate", { url: "https://example.com/b" }),
+      tool("browser_navigate", { url: "not a url" }),
+    ];
+    assert.deepEqual(usedInSession(records), { skills: ["orbita-ui-task-brief"], searches: 2, hosts: ["example.com"], uploads: ["/a/截图.png"] });
+  });
+});
+
+describe("状态卡：拖宽的范围（挤对话列）", () => {
+  it("280 起；上限取 560、对话区 60%、给对话列留 480 + 间距后剩下的，三者最小；读不出的值回到默认 380", () => {
+    assert.equal(clampPanelWidth(200, 2000), 280);
+    assert.equal(clampPanelWidth(900, 2000), 560);
+    assert.equal(clampPanelWidth(900, 1000), 496);
+    assert.equal(clampPanelWidth(380, 800), 296);
+    assert.equal(clampPanelWidth(Number.NaN, 2000), 380);
+  });
+  it("对话区放不下最窄的卡 + 480 的对话列就默认收起", () => {
+    assert.equal(fitsPanel(784), true);
+    assert.equal(fitsPanel(783), false);
   });
 });

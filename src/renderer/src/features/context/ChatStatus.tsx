@@ -1,50 +1,48 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { childSessions, type SessionMeta, type TranscriptRecord } from "@shared/session";
 import type { Automation } from "@shared/automation";
 import type { ChannelMessage } from "@shared/channel";
-import type { FilePreview } from "@shared/files";
-import type { Excerpt } from "@shared/excerpt";
-import type { ContextGroupKey } from "./context-panel-view.ts";
 import { api } from "../../api";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
-import { Icon } from "../../shell/Icon";
+import { Icon, type IconName } from "../../shell/Icon";
 import { StatusPie } from "../../shell/StatusPie";
-import { FileTypeIcon } from "../../shell/FileTypeIcon";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
-import { requestOpenPanel } from "../../shell/open-panel.ts";
+import { requestOpenPanel, requestOpenPluginBoard } from "../../shell/open-panel.ts";
 import { Switch } from "../settings/SettingControls";
-import { MarkdownBlock } from "../chat/MarkdownBlock";
 import type { SessionEntry } from "../chat/session-states.ts";
 import type { ChatSession, SessionEngine } from "../chat/useChatSession";
 import { useTaskRecords } from "../chat/useTaskRecords.ts";
 import { useChannelSummaries } from "../chat/useChannelSummaries";
 import { useParentChannels } from "../chat/useChannelMessages";
-import { openChatFile, readChatFile, type ChatFileScope } from "../chat/chat-file-scope.ts";
+import type { ChatFileScope } from "../chat/chat-file-scope.ts";
 import { useMemorySession } from "../memory/useMemory.ts";
-import type { ExcerptJump } from "../review/ExcerptsTab";
-import { SlideStatic } from "../slides-editor/ElementView";
-import { parseDeckSafe } from "../slides-editor/use-deck-editor.ts";
-import { DEFAULT_COLLAPSED } from "../../shell/right-panel-memory.ts";
 import { useProgressDigest } from "./TaskProgress";
-import { ContextBody } from "./ContextPanel";
 import { useGoalLedger } from "./useGoalLedger.ts";
 import type { PlanStep } from "./plan-timeline.ts";
 import { STATUS_FOCUS_EVENT, type StatusFocusDetail } from "./chat-status-flag.ts";
+import { OutputThumb, SlideStyles } from "./StatusThumb";
 import {
   childActivityOf,
   childStateOf,
+  clampPanelWidth,
   delegationSteps,
+  fitsPanel,
   elapsedParts,
+  groupOutputs,
   isWorking,
   nextTickIn,
+  PANEL_DEFAULT,
+  PANEL_GAP,
   pillSignal,
   planWindow,
   sortChildren,
   statusOutputs,
   toolCallLine,
+  usedInSession,
   type ChildActivity,
   type ChildState,
+  type OutputGroupKey,
   type StatusOutput,
 } from "./chat-status.ts";
 import "./context-panel.css";
@@ -54,15 +52,16 @@ import "./chat-status.css";
  * 对话区右上角的「状态」卡（原型，2026-11-22；开关 localStorage orbita.proto.chatStatus）。
  *
  * 用户：「我看进度为了知道进度到哪了。我看产物为了知道我产出了些什么。我看子会话只是想知道他们是否还在工作。」
- * 它跨轮常驻，所以浮在对话区右上角，不进对话流、不挤对话列；可收起成一枚小钮（小钮上看得出有东西在跑）。
+ * 第二版（同日 20:15 / 20:23 的意见）：
+ * - 仍浮在对话区右上角（「悬浮挺好的，这样我还可以一边看到计划，一边写文稿」），左缘可拖改宽（280 – min(560, 对话区 60%)，存 localStorage）；
+ * - 进度里母子一眼分得开：步骤是母节点（状态圆点），子会话从步骤「垂下来」（缩进到步骤文字线、一条竖引导线、小机器人图标、轻一档的字），
+ *   折叠行（「还有 N 步」）不带状态圆点、用 chevron + 次级色；展开到底时收起键在最后一步下面；
+ * - 产物按类型分行，每行一排大缩略图，横向滑（Shift + 滚轮 / 触控板横扫），点一下在右栏打开，悬停不弹东西；
+ * - 「这次用到的」照 Claude 的 Used in this session：记忆 / 技能 / 网页 / 上传，每行行尾一句摘要；
+ * - 删掉底部的上下文 / 改动 / 摘抄与临时预览浮层。
  *
- * 第一屏（每一节有内容才出现）：目标（一行 + 第几版，点开看以前各版）· 进度（计划；子会话挂在派出它时在做的那一步上，
- * 行尾一排机器人，点开逐个看它在跑什么、跑了多久）· 在跑的（常驻终端、自动化）· 产物（一份一行，行尾写类型）·
- * 记忆（一行）。底部一行：上下文 / 改动 / 摘抄，点了才在卡里展开。记忆与产物点了不跳右栏：就地弹临时预览，点外面关。
- *
- * 数据全部是现有的：进度与目标同右栏「这条任务」（useProgressDigest、useGoalLedger），子会话同子会话面板
- * （childSessions、通道账本），产物同结尾产物卡（sessionOutputs），记忆同记忆页签（useMemorySession），上下文直接是
- * 右栏上下文页签的 ContextBody。不改主进程、不改 src/shared 契约。
+ * 数据全部是现有的：进度与目标同右栏「这条任务」，子会话同子会话面板，产物同结尾产物卡，记忆同记忆页签。
+ * 不改主进程、不改 src/shared 契约。
  */
 export function ChatStatus(props: {
   session: ChatSession;
@@ -72,19 +71,23 @@ export function ChatStatus(props: {
   /** 主会话自己在跑 / 等你（侧栏状态饼同一个推导）：在做的那步画不画在跑饼 */
   working: boolean;
   onOpenSubSession: (childId: string) => void;
-  onOpenReviewAt: (path: string) => void;
-  onOpenExcerpt: (jump: ExcerptJump) => void;
+  onOpenTerminal: (terminalId: string) => void;
+  onOpenAutomation: (automationId: string) => void;
+  onOpenMemory: () => void;
+  onOpenAbilities: () => void;
 }) {
   const t = useT();
   const { entry, sessionId, session } = props;
   const turnActive = entry.phase === "turn";
-  // 窄（对话区不到 NARROW_PANE 宽：小窗、或右栏开着）时卡默认收成小钮，免得一打开会话就盖住正文；
-  // 在窄的时候点开算这一次的，不改宽时记住的开 / 收
+  // 窄（放下最窄的卡后对话列不到 480，见 fitsPanel）时卡默认收成小钮；在窄的时候点开算这一次的，不改宽时记住的开 / 收
   const hostRef = useRef<HTMLDivElement | null>(null);
-  const narrow = useNarrowPane(hostRef);
+  const paneWidth = usePaneWidth(hostRef);
+  const narrow = paneWidth > 0 && !fitsPanel(paneWidth);
   const [openWide, setOpenWide] = useState(() => readOpen());
   const [openNarrow, setOpenNarrow] = useState(false);
   const open = narrow ? openNarrow : openWide;
+  // 从卡里点开右栏（产物、在跑的、这次用到的）：右栏一开对话区就窄了，但这是在卡里操作的——卡留着，不收成小钮
+  const keepOpen = () => setOpenNarrow(true);
   const toggleOpen = (next: boolean) => {
     if (narrow) {
       setOpenNarrow(next);
@@ -93,6 +96,21 @@ export function ChatStatus(props: {
     setOpenWide(next);
     writeOpen(next);
   };
+  // 宽度：存的是用户拖到的值；显示时再按对话区宽度夹一次（窗口变窄时卡跟着让）
+  const [wantWidth, setWantWidth] = useState(() => readWidth());
+  const width = clampPanelWidth(wantWidth, paneWidth > 0 ? paneWidth : 1440);
+  // 挤对话列：卡开着时对话列右侧让出「卡宽 + 两侧间距」（chat-status.css 的 .pane-main .chat-pane 读这个变量）；收起 / 卸载就还回去。
+  // 放不下（窄，但用户在卡里点开了右栏、或自己点开了小钮）时不挤——挤了对话列只剩两百来宽、一行三个字，改成像第一版那样浮在上面
+  const squeeze = open && !narrow;
+  useLayoutEffect(() => {
+    const pane = hostRef.current?.parentElement ?? null;
+    if (pane === null) return undefined;
+    pane.style.setProperty("--cs-reserve", squeeze ? `${width + PANEL_GAP}px` : "0px");
+    return () => {
+      pane.style.removeProperty("--cs-reserve");
+    };
+  }, [squeeze, width]);
+
   const view = useTaskRecords(sessionId, entry, true);
   const { plan, timeline } = useProgressDigest(view, turnActive);
   const ledger = useGoalLedger(view.records);
@@ -145,39 +163,11 @@ export function ChatStatus(props: {
     return [...own, ...fromKids];
   }, [view.records, kids, tails]);
 
-  // ── 记忆 ──
+  // ── 这次用到的 ──
   const memory = useMemorySession(sessionId);
   const remembered = memory.data?.turns.flatMap((turn) => turn.remembered) ?? [];
-  const used = dedupeBy(memory.data?.turns.flatMap((turn) => turn.used) ?? [], (hit) => hit.id);
-
-  // ── 临时预览（点外面关）──
-  const [preview, setPreview] = useState<{ kind: "output"; output: StatusOutput; at: Anchor } | { kind: "memory"; at: Anchor } | null>(null);
-  const cardRef = useRef<HTMLDivElement | null>(null);
-  const popRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (preview === null) return undefined;
-    const down = (event: PointerEvent) => {
-      const target = event.target as Node | null;
-      if (target !== null && (popRef.current?.contains(target) || (event.target as HTMLElement).closest?.("[data-preview-anchor]"))) return;
-      setPreview(null);
-    };
-    const key = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setPreview(null);
-    };
-    window.addEventListener("pointerdown", down, true);
-    window.addEventListener("keydown", key);
-    return () => {
-      window.removeEventListener("pointerdown", down, true);
-      window.removeEventListener("keydown", key);
-    };
-  }, [preview]);
-  const anchorOf = (element: HTMLElement): Anchor => {
-    const card = cardRef.current;
-    if (card === null) return { top: 0, bottom: 0, cardHeight: 0, room: 0 };
-    const box = card.getBoundingClientRect();
-    const row = element.getBoundingClientRect();
-    return { top: row.top - box.top, bottom: row.bottom - box.top, cardHeight: box.height, room: window.innerHeight - box.top };
-  };
+  const usedMemory = dedupeBy(memory.data?.turns.flatMap((turn) => turn.used) ?? [], (hit) => hit.id);
+  const used = useMemo(() => usedInSession(view.records), [view.records]);
 
   // ── 状态条（另一条线）点过来：打开卡、展开那个子会话所在的步骤 ──
   const [focusStep, setFocusStep] = useState<{ key: string; token: number } | null>(null);
@@ -193,11 +183,9 @@ export function ChatStatus(props: {
     return () => window.removeEventListener(STATUS_FOCUS_EVENT, onFocus);
   }, [assign]);
 
-  const [secondary, setSecondary] = useState<"context" | "changes" | "excerpts" | null>(null);
-  const [notWired, setNotWired] = useState(false);
-
   const states = children.map((row) => row.state);
   const signal = pillSignal(states, (turnActive ? 1 : 0) + terminals.length);
+  const scope: ChatFileScope = { sessionId, workspaceId: session.workspaceId, cwd: session.cwd };
 
   if (!open) {
     const label = signal === null ? t.chatStatus.pill.quiet : t.chatStatus.pill[signal.kind](signal.count);
@@ -207,16 +195,16 @@ export function ChatStatus(props: {
           type="button"
           className="cs-pill"
           data-signal={signal?.kind}
-          aria-label={`${t.chatStatus.name} · ${label}`}
+          aria-label={t.chatStatus.name}
           title={`${t.chatStatus.name} · ${label}`}
           onClick={() => toggleOpen(true)}
         >
           {signal === null ? (
             <Icon name={FEATURE_ICON.task} size={14} strokeWidth={1.8} />
           ) : (
-            <StatusPie state={signal.kind === "waiting" ? "waiting" : signal.kind === "failed" ? "failed" : "running"} />
+            <StatusPie state={signal.kind === "waiting" || signal.kind === "stuck" ? "waiting" : signal.kind === "failed" ? "failed" : "running"} />
           )}
-          {signal !== null && <span className="cs-pill-n">{signal.count}</span>}
+          {signal !== null && <span className="cs-pill-n">{label}</span>}
         </button>
       </div>
     );
@@ -224,9 +212,15 @@ export function ChatStatus(props: {
 
   const goalVersions = ledger.entries.filter((item) => item.kind === "goal");
   const working = props.working || turnActive;
+  const hasPlan = timeline !== null && plan !== null;
   return (
     <div className="cs-host" ref={hostRef}>
-      <div className="cs-card" ref={cardRef} role="complementary" aria-label={t.chatStatus.name}>
+      <div className="cs-card" role="complementary" aria-label={t.chatStatus.name} data-over={!squeeze || undefined} style={{ width }}>
+        <Resizer
+          width={width}
+          onChange={(next) => setWantWidth(clampPanelWidth(next, paneWidth))}
+          onCommit={(next) => writeWidth(clampPanelWidth(next, paneWidth))}
+        />
         {/* 头：目标常驻（往下滚也看得见在为什么干活）+ 收起键；没有目标时只剩收起键 */}
         <div className="cs-top">
           {ledger.goal !== null ? <GoalRow text={ledger.goal.text} versions={goalVersions.map((item) => (item.kind === "goal" ? item.to : ""))} /> : <span className="cs-top-fill" />}
@@ -235,19 +229,15 @@ export function ChatStatus(props: {
           </button>
         </div>
         <div className="cs-scroll">
-
-          {timeline !== null && plan !== null && (
+          {(hasPlan || children.length > 0) && (
             <ProgressSection
-              items={timeline.current.items}
+              items={hasPlan ? (timeline?.current.items ?? []) : []}
               children={children}
               working={working}
               now={now}
               focus={focusStep}
               onOpenChild={props.onOpenSubSession}
             />
-          )}
-          {(timeline === null || plan === null) && children.length > 0 && (
-            <ProgressSection items={[]} children={children} working={working} now={now} focus={focusStep} onOpenChild={props.onOpenSubSession} />
           )}
 
           {(terminals.length > 0 || automations.length > 0) && (
@@ -256,150 +246,64 @@ export function ChatStatus(props: {
                 <span className="cs-head-label">{t.chatStatus.running}</span>
               </div>
               {terminals.map((row) => (
-                <div key={row.id} className="cs-row" title={row.command}>
+                <button key={row.id} type="button" className="cs-row cs-btn" title={row.command} onClick={() => {
+                    keepOpen();
+                    props.onOpenTerminal(row.id);
+                  }}>
                   <span className="cs-slot">
                     <Icon name={FEATURE_ICON.terminal} size={14} strokeWidth={1.8} />
                   </span>
                   <span className="cs-text mono">{row.command}</span>
                   <span className="cs-tail">{elapsedText(t, now - row.since)}</span>
-                </div>
+                </button>
               ))}
               {automations.map((item) => (
-                <div key={item.id} className="cs-row" title={item.prompt}>
+                <button key={item.id} type="button" className="cs-row cs-btn" title={item.prompt} onClick={() => {
+                    keepOpen();
+                    props.onOpenAutomation(item.id);
+                  }}>
                   <span className="cs-slot">
                     <Icon name={FEATURE_ICON.automation} size={14} strokeWidth={1.8} />
                   </span>
                   <span className="cs-text">{item.title}</span>
                   <span className="cs-tail">{item.nextRunAt === null ? "" : nextRunText(t, item.nextRunAt, now)}</span>
-                </div>
+                </button>
               ))}
             </section>
           )}
 
-          {outputs.length > 0 && (
-            <OutputsSection
-              outputs={outputs}
-              active={preview?.kind === "output" ? preview.output.path : null}
-              onPick={(output, element) =>
-                setPreview((prev) => (prev?.kind === "output" && prev.output.path === output.path ? null : { kind: "output", output, at: anchorOf(element) }))
-              }
-            />
-          )}
+          {outputs.length > 0 && <OutputsSection outputs={outputs} scope={scope} onOpened={keepOpen} />}
 
-          {(remembered.length > 0 || used.length > 0) && (
-            <section className="cs-sec">
-              <button
-                type="button"
-                className="cs-row cs-btn"
-                data-preview-anchor
-                aria-expanded={preview?.kind === "memory"}
-                onClick={(event) => {
-                  const element = event.currentTarget;
-                  setPreview((prev) => (prev?.kind === "memory" ? null : { kind: "memory", at: anchorOf(element) }));
-                }}
-              >
-                <span className="cs-slot">
-                  <Icon name={FEATURE_ICON.memory} size={14} strokeWidth={1.8} />
-                </span>
-                <span className="cs-text">{t.chatStatus.memory(remembered.length, used.length)}</span>
-                <span className="cs-tail">
-                  <Icon name="chevron-left" size={12} strokeWidth={1.8} />
-                </span>
-              </button>
-            </section>
-          )}
-
-          {secondary !== null && (
-            <section className="cs-sec cs-second">
-              <div className="cs-head">
-                <span className="cs-head-label">{t.chatStatus[secondary]}</span>
-              </div>
-              {secondary === "context" ? (
-                <ContextBody
-                  sessionId={sessionId}
-                  entry={entry}
-                  cwd={session.cwd ?? ""}
-                  scope="task"
-                  collapsed={CONTEXT_COLLAPSED}
-                  onToggleGroup={() => undefined}
-                />
-              ) : secondary === "changes" ? (
-                <ChangesList records={view.records} onOpen={props.onOpenReviewAt} />
-              ) : (
-                <ExcerptsList sessionId={sessionId} onOpen={props.onOpenExcerpt} />
-              )}
-            </section>
-          )}
+          <UsedSection
+            memory={{ read: usedMemory.length, remembered: remembered.length }}
+            used={used}
+            scope={scope}
+            onOpenMemory={props.onOpenMemory}
+            onOpenAbilities={props.onOpenAbilities}
+            onOpened={keepOpen}
+          />
         </div>
-        <div className="cs-foot" role="tablist">
-          {(["context", "changes", "excerpts"] as const).map((key) => (
-            <button
-              key={key}
-              type="button"
-              role="tab"
-              className="cs-foot-tab"
-              aria-selected={secondary === key}
-              onClick={() => setSecondary((prev) => (prev === key ? null : key))}
-            >
-              <Icon name={key === "context" ? "layers" : key === "changes" ? FEATURE_ICON.review : "quote"} size={12} strokeWidth={1.8} />
-              {t.chatStatus[key]}
-            </button>
-          ))}
-          {/* 允许直接打岔（与输入框上方状态条那条线配套；原型未接上）：放在底部一行，不占进度节的高度 */}
-          {children.length > 0 && (
-          <span className="cs-foot-switch" title={t.chatStatus.interrupt}>
-            <span>{notWired ? t.chatStatus.notWired : t.chatStatus.interruptShort}</span>
-            <Switch label={t.chatStatus.interrupt} checked={false} onChange={() => setNotWired(true)} />
-          </span>
-          )}
-        </div>
-        {preview !== null && (
-          <div className="cs-pop" ref={popRef} style={popStyle(preview.at)}>
-            {preview.kind === "output" ? (
-              <OutputPreview output={preview.output} scope={{ sessionId, workspaceId: session.workspaceId, cwd: session.cwd }} />
-            ) : (
-              <MemoryPreview remembered={remembered.map((view_) => view_.entry.text)} used={used.map((hit) => hit.text)} />
-            )}
-          </div>
-        )}
       </div>
     </div>
   );
 }
 
 const UNASSIGNED = "__unassigned";
-
-/** 临时预览挂在哪一行旁边：行在卡的上半截就从行顶往下长，在下半截就让预览的底对齐行底往上长（不出窗口） */
-interface Anchor {
-  top: number;
-  bottom: number;
-  cardHeight: number;
-  /** 卡顶到窗口底还有多高 */
-  room: number;
-}
-function popStyle(at: Anchor): React.CSSProperties {
-  const gap = 8;
-  if (at.top > at.cardHeight * 0.45) return { bottom: Math.max(0, at.cardHeight - at.bottom - gap), maxHeight: at.bottom + gap };
-  return { top: Math.max(0, at.top - gap), maxHeight: Math.max(160, at.room - at.top - 24) };
-}
-/** 卡里的上下文：规则组照右栏默认收着，其余展开 */
-const CONTEXT_COLLAPSED: ReadonlySet<ContextGroupKey> = new Set(DEFAULT_COLLAPSED);
 const OPEN_KEY = "orbita.proto.chatStatus.open";
-/** 对话区比这窄就默认收起：900 的正文列两侧各剩不到 50px，304 宽的卡会盖住正文的右三分之一 */
-const NARROW_PANE = 1000;
+const WIDTH_KEY = "orbita.proto.chatStatus.width";
 
-function useNarrowPane(hostRef: React.RefObject<HTMLDivElement | null>): boolean {
-  const [narrow, setNarrow] = useState(false);
+function usePaneWidth(hostRef: React.RefObject<HTMLDivElement | null>): number {
+  const [width, setWidth] = useState(0);
   useLayoutEffect(() => {
     const pane = hostRef.current?.parentElement ?? null;
     if (pane === null) return undefined;
-    const measure = () => setNarrow(pane.clientWidth < NARROW_PANE);
+    const measure = () => setWidth(pane.clientWidth);
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(pane);
     return () => observer.disconnect();
   }, []);
-  return narrow;
+  return width;
 }
 
 function readOpen(): boolean {
@@ -416,6 +320,475 @@ function writeOpen(open: boolean): void {
     // 存不下就只在这次生效
   }
 }
+function readWidth(): number {
+  try {
+    const raw = Number(localStorage.getItem(WIDTH_KEY));
+    return raw > 0 ? raw : PANEL_DEFAULT;
+  } catch {
+    return PANEL_DEFAULT;
+  }
+}
+function writeWidth(width: number): void {
+  try {
+    localStorage.setItem(WIDTH_KEY, String(width));
+  } catch {
+    // 存不下就只在这次生效
+  }
+}
+
+/** 卡左缘的拖柄：拖动改宽（往左拉变宽），键盘左右键每次 16px；拖的时候整页 col-resize 光标 */
+function Resizer(props: { width: number; onChange: (width: number) => void; onCommit: (width: number) => void }) {
+  const t = useT();
+  const drag = useRef<{ x: number; width: number; last: number } | null>(null);
+  const [active, setActive] = useState(false);
+  return (
+    <div
+      className="cs-resize"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={t.chatStatus.resize}
+      aria-valuenow={props.width}
+      tabIndex={0}
+      data-active={active || undefined}
+      onPointerDown={(event) => {
+        event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        drag.current = { x: event.clientX, width: props.width, last: props.width };
+        setActive(true);
+        document.documentElement.classList.add("cs-resizing");
+      }}
+      onPointerMove={(event) => {
+        const start = drag.current;
+        if (start === null) return;
+        start.last = start.width + (start.x - event.clientX);
+        props.onChange(start.last);
+      }}
+      onPointerUp={() => {
+        const start = drag.current;
+        drag.current = null;
+        setActive(false);
+        document.documentElement.classList.remove("cs-resizing");
+        if (start !== null) props.onCommit(start.last);
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        event.preventDefault();
+        const next = props.width + (event.key === "ArrowLeft" ? 16 : -16);
+        props.onChange(next);
+        props.onCommit(next);
+      }}
+    />
+  );
+}
+
+// ───────────────────────── 进度 ─────────────────────────
+
+/** 一步下面先露几个子会话（多的收成「还有 N 个」；已交回的收成「N 个已交回」） */
+const KIDS_SHOWN = 5;
+/** 行尾最多画几个机器人 */
+const ROBOTS_SHOWN = 3;
+
+/**
+ * 进度：母节点是计划步骤（状态圆点、正文字），子节点是挂在步骤上的子会话——从步骤「垂下来」：缩进到步骤文字线，
+ * 左边一条竖引导线连回母步骤，图标是小机器人，字轻一档。折叠行（「N 个更早的步骤 / 还有 N 步」）不带状态圆点，
+ * 用 chevron + 次级色。一次只展开一步；展开到底，「收起」就在最后一行下面（不用回顶上找）。
+ */
+function ProgressSection(props: {
+  items: readonly PlanStep[];
+  children: readonly ChildRow[];
+  working: boolean;
+  now: number;
+  focus: { key: string; token: number } | null;
+  onOpenChild: (childId: string) => void;
+}) {
+  const t = useT();
+  const { items } = props;
+  const byStep = useMemo(() => {
+    const map = new Map<string, ChildRow[]>();
+    for (const row of props.children) {
+      const key = row.stepId !== null && items.some((item) => item.id === row.stepId) ? row.stepId : UNASSIGNED;
+      map.set(key, [...(map.get(key) ?? []), row]);
+    }
+    return map;
+  }, [props.children, items]);
+  const live = useMemo(
+    () => new Set([...byStep.entries()].filter(([, rows]) => rows.some((row) => isWorking(row.state))).map(([key]) => key)),
+    [byStep],
+  );
+  const [all, setAll] = useState(false);
+  const [openStep, setOpenStep] = useState<string | null>(null);
+  const [reportOn, setReportOn] = useState(false);
+  const sectionRef = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    if (props.focus === null) return;
+    setOpenStep(props.focus.key);
+    if (props.focus.key !== UNASSIGNED) setAll(true);
+    requestAnimationFrame(() => sectionRef.current?.querySelector(`[data-step="${props.focus?.key}"]`)?.scrollIntoView({ block: "nearest" }));
+  }, [props.focus?.token]);
+  const done = items.filter((item) => item.status === "done").length;
+  const rows = all ? items.map((_, index) => ({ kind: "step" as const, index })) : planWindow(items, live);
+  const unassigned = byStep.get(UNASSIGNED) ?? [];
+  const keepHeadInView = () => requestAnimationFrame(() => sectionRef.current?.scrollIntoView({ block: "nearest" }));
+  const toggleStep = (key: string) => setOpenStep((prev) => (prev === key ? null : key));
+  const closeStep = (key: string) => {
+    setOpenStep(null);
+    requestAnimationFrame(() => sectionRef.current?.querySelector(`[data-step="${key}"]`)?.scrollIntoView({ block: "nearest" }));
+  };
+
+  const stepRow = (item: PlanStep) => {
+    const kids = byStep.get(item.id) ?? [];
+    const workingKids = kids.filter((row) => isWorking(row.state));
+    const byKids = workingKids.length > 0 && item.status !== "done";
+    const status = byKids ? "in_progress" : item.status;
+    const activeMark = (item.status === "in_progress" && props.working) || byKids;
+    const shown = openStep === item.id;
+    const head = (
+      <>
+        <span className="cs-slot cs-mark">
+          {item.status === "done" ? (
+            <Icon name="check" size={12} strokeWidth={2} />
+          ) : activeMark ? (
+            <StatusPie state="running" />
+          ) : item.status === "waiting" ? (
+            <Icon name="hourglass" size={12} strokeWidth={1.8} />
+          ) : (
+            <span className="tp-ring" />
+          )}
+        </span>
+        {/* 步骤名最多两行，其余省略；悬停看全文（状态卡里唯一允许悬停出提示的地方） */}
+        <span className="cs-step-text" title={item.text}>
+          {item.text}
+        </span>
+        {kids.length > 0 && (
+          <span className="cs-tail cs-step-tail">
+            <Robots rows={kids} />
+            <Icon name={shown ? "chevron-up" : "chevron-down"} size={12} strokeWidth={1.8} className="cs-step-chev" />
+          </span>
+        )}
+      </>
+    );
+    return (
+      <li key={item.id} data-step={item.id} data-status={status} data-open={shown || undefined}>
+        {kids.length > 0 ? (
+          <button type="button" className="cs-row cs-btn cs-step" aria-expanded={shown} onClick={() => toggleStep(item.id)}>
+            {head}
+          </button>
+        ) : (
+          <div className="cs-row cs-step">{head}</div>
+        )}
+        {shown && <KidList rows={kids} now={props.now} onOpen={props.onOpenChild} onClose={() => closeStep(item.id)} />}
+      </li>
+    );
+  };
+
+  return (
+    <section className="cs-sec" ref={sectionRef}>
+      <div className="cs-head">
+        <span className="cs-head-label">{t.chatStatus.progress}</span>
+        {items.length > 0 && <span className="cs-n">{t.chatStatus.planCount(done, items.length)}</span>}
+      </div>
+      <ol className="cs-plan">
+        {rows.map((row, index) => {
+          if (row.kind === "fold") {
+            const label = row.where === "before" ? t.chatStatus.foldBefore(row.count) : row.where === "after" ? t.chatStatus.foldAfter(row.count) : t.chatStatus.foldBetween(row.count);
+            return (
+              <li key={`fold-${index}`} data-status="fold">
+                <button type="button" className="cs-row cs-btn cs-fold" onClick={() => setAll(true)}>
+                  <span className="cs-slot">
+                    <Icon name="chevron-down" size={12} strokeWidth={1.8} />
+                  </span>
+                  <span className="cs-text">{label}</span>
+                </button>
+              </li>
+            );
+          }
+          const item = items[row.index];
+          return item === undefined ? null : stepRow(item);
+        })}
+        {all && (
+          <li data-status="fold">
+            <button
+              type="button"
+              className="cs-row cs-btn cs-fold"
+              onClick={() => {
+                setAll(false);
+                keepHeadInView();
+              }}
+            >
+              <span className="cs-slot">
+                <Icon name="chevron-up" size={12} strokeWidth={1.8} />
+              </span>
+              <span className="cs-text">{t.chatStatus.foldLess}</span>
+            </button>
+          </li>
+        )}
+        {unassigned.length > 0 && (
+          <li data-step={UNASSIGNED} data-status="pseudo" data-open={openStep === UNASSIGNED || undefined}>
+            <button type="button" className="cs-row cs-btn cs-step" aria-expanded={openStep === UNASSIGNED} title={t.chatStatus.unassignedTip} onClick={() => toggleStep(UNASSIGNED)}>
+              <span className="cs-slot cs-mark">
+                <Icon name="git-fork" size={12} strokeWidth={1.8} />
+              </span>
+              <span className="cs-step-text">
+                {t.chatStatus.unassigned}
+                <span className="cs-n"> {unassigned.length}</span>
+              </span>
+              <span className="cs-tail cs-step-tail">
+                <Robots rows={unassigned} />
+                <Icon name={openStep === UNASSIGNED ? "chevron-up" : "chevron-down"} size={12} strokeWidth={1.8} className="cs-step-chev" />
+              </span>
+            </button>
+            {openStep === UNASSIGNED && <KidList rows={unassigned} now={props.now} onOpen={props.onOpenChild} onClose={() => closeStep(UNASSIGNED)} />}
+          </li>
+        )}
+      </ol>
+      {/* 收齐就汇报（原「直接打岔」，用户嫌不好听）：只在有子会话时出现，原型未接上 */}
+      {props.children.length > 0 && (
+        <div className="cs-report">
+          <span className="cs-report-text">
+            <span>{t.chatStatus.reportWhenAll}</span>
+            <span className="cs-report-sub">{reportOn ? t.chatStatus.notWired : t.chatStatus.reportWhenAllSub}</span>
+          </span>
+          <Switch label={t.chatStatus.reportWhenAll} checked={false} onChange={() => setReportOn(true)} />
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** 一步下面的子会话（从步骤垂下来的那一层）：要你的在前；已交回的收成一行；超过五个收成「还有 N 个」；底部「收起」 */
+function KidList(props: { rows: readonly ChildRow[]; now: number; onOpen: (childId: string) => void; onClose: () => void }) {
+  const t = useT();
+  const [more, setMore] = useState(false);
+  const [doneOpen, setDoneOpen] = useState(false);
+  const sorted = sortChildren(props.rows);
+  const active = sorted.filter((row) => row.state !== "done");
+  const done = sorted.filter((row) => row.state === "done");
+  const shown = more ? active : active.slice(0, KIDS_SHOWN);
+  return (
+    <ul className="cs-kids">
+      {shown.map((row) => (
+        <KidRow key={row.meta.id} row={row} now={props.now} onOpen={props.onOpen} />
+      ))}
+      {active.length > shown.length && (
+        <li>
+          <button type="button" className="cs-kid-more" onClick={() => setMore(true)}>
+            <Icon name="chevron-down" size={12} strokeWidth={1.8} />
+            {t.chatStatus.showAll(active.length - shown.length)}
+          </button>
+        </li>
+      )}
+      {done.length > 0 && (
+        <li>
+          <button type="button" className="cs-kid-more" aria-expanded={doneOpen} onClick={() => setDoneOpen((value) => !value)}>
+            <Icon name={doneOpen ? "chevron-up" : "chevron-down"} size={12} strokeWidth={1.8} />
+            {t.chatStatus.handedBack(done.length)}
+          </button>
+        </li>
+      )}
+      {doneOpen && done.map((row) => <KidRow key={row.meta.id} row={row} now={props.now} onOpen={props.onOpen} />)}
+      <li>
+        <button type="button" className="cs-kid-more cs-kid-close" onClick={props.onClose}>
+          <Icon name="chevron-up" size={12} strokeWidth={1.8} />
+          {t.chatStatus.foldKids}
+        </button>
+      </li>
+    </ul>
+  );
+}
+
+function KidRow(props: { row: ChildRow; now: number; onOpen: (childId: string) => void }) {
+  const t = useT();
+  const { row } = props;
+  const running = row.state === "running" || row.state === "stuck";
+  const question = row.state === "waiting" ? [...(row.messages ?? [])].reverse().find((message) => message.kind === "question")?.text : undefined;
+  const failed = row.state === "failed" ? [...(row.messages ?? [])].reverse().find((message) => message.kind === "failed")?.text : undefined;
+  const handed = row.state === "done" ? [...(row.messages ?? [])].reverse().find((message) => message.kind === "done")?.text.split("\n")[0] : undefined;
+  const line =
+    running && row.activity !== null
+      ? toolCallLine(row.activity.toolName, row.activity.input)
+      : running
+        ? t.chatStatus.thinking
+        : (question ?? failed ?? handed ?? t.chatStatus.state[row.state]);
+  const elapsed = running && row.activity !== null ? props.now - row.activity.since : null;
+  const stuckMin = row.state === "stuck" && elapsed !== null ? Math.floor(elapsed / 60_000) : null;
+  return (
+    <li>
+      <button type="button" className="cs-kid" data-state={row.state} onClick={() => props.onOpen(row.meta.id)}>
+        <span className="cs-kid-bot">
+          <Icon name="bot" size={12} strokeWidth={1.8} />
+        </span>
+        <span className="cs-kid-body">
+          <span className="cs-kid-title">
+            <span className="cs-kid-name">{row.meta.title}</span>
+            <span className="cs-kid-state">
+              {row.state === "stuck" && <Icon name="triangle-alert" size={12} strokeWidth={1.8} />}
+              {t.chatStatus.state[row.state]}
+            </span>
+          </span>
+          <span className="cs-kid-line">
+            <span className={running && row.activity !== null ? "cs-kid-call mono" : "cs-kid-call"}>{line}</span>
+            {elapsed !== null && (
+              <span className="cs-kid-time" aria-label={stuckMin !== null ? t.chatStatus.stuckTip(stuckMin) : undefined}>
+                {elapsedText(t, elapsed)}
+              </span>
+            )}
+          </span>
+        </span>
+      </button>
+    </li>
+  );
+}
+
+// ───────────────────────── 产物 ─────────────────────────
+
+/**
+ * 产物：按类型分行，每行一排大缩略图（宽约卡内宽的 80%，露出下一张的一角暗示能滑）；行内横向滚动——
+ * 触控板横扫原生就行，Shift + 滚轮在 mac 上鼠标会由系统转成横向，CDP / 部分鼠标不会，所以这里自己把
+ * 「按着 Shift 的纵向滚动」换成横向。点一张 = 在右栏打开（演示文稿面板 / 文件面板 / 插件看板）；悬停不弹东西。
+ */
+function OutputsSection(props: { outputs: readonly StatusOutput[]; scope: ChatFileScope; onOpened: () => void }) {
+  const t = useT();
+  const groups = useMemo(() => groupOutputs(props.outputs), [props.outputs]);
+  return (
+    <section className="cs-sec">
+      <div className="cs-head">
+        <span className="cs-head-label">{t.chatStatus.outputs}</span>
+        <span className="cs-n">{props.outputs.length}</span>
+      </div>
+      {groups.some((group) => group.key === "slides") && <SlideStyles />}
+      {groups.map((group) => (
+        <div key={group.key} className="cs-og">
+          <div className="cs-og-head">
+            <span>{t.chatStatus.groups[group.key]}</span>
+            <span className="cs-n">{group.items.length}</span>
+          </div>
+          <ShiftScroll className="cs-strip" single={group.items.length === 1}>
+            {group.items.map((output) => (
+              <button
+                key={output.path}
+                type="button"
+                className="cs-thumb"
+                aria-label={`${output.title} · ${t.chatStatus.kinds[output.kind]}`}
+                onClick={() => {
+                  props.onOpened();
+                  openOutput(output);
+                }}
+              >
+                <OutputThumb output={output} scope={props.scope} />
+                <span className="cs-thumb-name">
+                  <span className="cs-thumb-title">{output.title}</span>
+                  {output.by !== null && <Icon name="bot" size={12} strokeWidth={1.8} className="cs-by" />}
+                </span>
+                <span className="cs-thumb-kind">{kindLine(t, output, group.key)}</span>
+              </button>
+            ))}
+          </ShiftScroll>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+/** 缩略图下的类型行：导出的文件写具体格式；子会话做的补一句是谁做的 */
+function kindLine(t: Messages, output: StatusOutput, group: OutputGroupKey): string {
+  const kind = group === "export" || output.pages === null ? t.chatStatus.kinds[output.kind] : `${t.chatStatus.kinds[output.kind]} · ${t.chatStatus.pages(output.pages)}`;
+  return output.by === null ? kind : `${kind} · ${t.chatStatus.byChild(output.by)}`;
+}
+
+function openOutput(output: StatusOutput): void {
+  if (output.kind === "board") {
+    if (output.plugin !== null) requestOpenPluginBoard({ plugin: output.plugin, draftPath: null });
+    return;
+  }
+  requestOpenPanel({ kind: output.kind === "slides" ? "slides" : "files", path: output.path, force: true });
+}
+
+/** 横向滚动的一行：Shift + 纵向滚轮换成横向（passive: false 才能拦住纵向滚动） */
+function ShiftScroll(props: { className: string; single: boolean; children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const node = ref.current;
+    if (node === null) return undefined;
+    const onWheel = (event: WheelEvent) => {
+      if (!event.shiftKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
+      if (node.scrollWidth <= node.clientWidth) return;
+      event.preventDefault();
+      node.scrollLeft += event.deltaY;
+    };
+    node.addEventListener("wheel", onWheel, { passive: false });
+    return () => node.removeEventListener("wheel", onWheel);
+  }, []);
+  return (
+    <div ref={ref} className={props.className} data-single={props.single || undefined}>
+      {props.children}
+    </div>
+  );
+}
+
+// ───────────────────────── 这次用到的 ─────────────────────────
+
+/**
+ * 「这次用到的」（照 Claude 的 Used in this session）：每行 图标 · 类别 · 行尾一句摘要。没有内容的行不出，一行都没有整节不出。
+ * 点一行在右栏打开对应的东西：记忆 → 审查 › 记忆；技能 → 能力面板；上传 → 文件面板；网页没有可开的面板，提示未接上。
+ */
+function UsedSection(props: {
+  memory: { read: number; remembered: number };
+  used: ReturnType<typeof usedInSession>;
+  scope: ChatFileScope;
+  onOpenMemory: () => void;
+  onOpenAbilities: () => void;
+  onOpened: () => void;
+}) {
+  const t = useT();
+  const [notWired, setNotWired] = useState<string | null>(null);
+  const { used } = props;
+  const name = (path: string) => path.split(/[\\/]/).pop() ?? path;
+  const rows: { key: string; icon: IconName; label: string; tail: string; open: () => void }[] = [];
+  if (props.memory.read + props.memory.remembered > 0) {
+    rows.push({ key: "memory", icon: FEATURE_ICON.memory, label: t.chatStatus.usedMemory, tail: t.chatStatus.usedMemoryTail(props.memory.read, props.memory.remembered), open: props.onOpenMemory });
+  }
+  if (used.skills.length > 0) rows.push({ key: "skills", icon: "book-open", label: t.chatStatus.usedSkills, tail: used.skills.join("、"), open: props.onOpenAbilities });
+  if (used.searches + used.hosts.length > 0) {
+    rows.push({
+      key: "web",
+      icon: "globe",
+      label: t.chatStatus.usedWeb,
+      tail: used.hosts.length > 0 ? used.hosts.join(" · ") : t.chatStatus.usedSearches(used.searches),
+      open: () => setNotWired("web"),
+    });
+  }
+  if (used.uploads.length > 0) {
+    const first = used.uploads[0] ?? "";
+    rows.push({ key: "uploads", icon: "paperclip", label: t.chatStatus.usedUploads, tail: used.uploads.map(name).join("、"), open: () => requestOpenPanel({ kind: "files", path: first, force: true }) });
+  }
+  if (rows.length === 0) return null;
+  return (
+    <section className="cs-sec">
+      <div className="cs-head">
+        <span className="cs-head-label">{t.chatStatus.used}</span>
+      </div>
+      {rows.map((row) => (
+        <button
+          key={row.key}
+          type="button"
+          className="cs-row cs-btn cs-used"
+          onClick={() => {
+            if (row.key !== "web") props.onOpened();
+            row.open();
+          }}
+        >
+          <span className="cs-slot">
+            <Icon name={row.icon} size={14} strokeWidth={1.8} />
+          </span>
+          <span className="cs-used-label">{row.label}</span>
+          <span className="cs-used-tail">{notWired === row.key ? t.chatStatus.notWired : row.tail}</span>
+        </button>
+      ))}
+    </section>
+  );
+}
+
+// ───────────────────────── 杂项 ─────────────────────────
 
 function dedupeBy<T>(items: readonly T[], key: (item: T) => string): T[] {
   const seen = new Set<string>();
@@ -591,8 +964,6 @@ function GoalRow(props: { text: string; versions: readonly string[] }) {
   );
 }
 
-// ───────────────────────── 进度 ─────────────────────────
-
 interface ChildRow {
   meta: SessionMeta;
   activity: ChildActivity | null;
@@ -602,451 +973,45 @@ interface ChildRow {
   messages: readonly ChannelMessage[] | undefined;
 }
 
-/** 一步下面露几个子会话（多的收成「还有 N 个」；已交回的收成「N 个已交回」） */
-const KIDS_SHOWN = 5;
-/** 行尾最多画几个机器人 */
-const ROBOTS_SHOWN = 3;
 
-function ProgressSection(props: {
-  items: readonly PlanStep[];
-  children: readonly ChildRow[];
-  working: boolean;
-  now: number;
-  focus: { key: string; token: number } | null;
-  onOpenChild: (childId: string) => void;
-}) {
-  const t = useT();
-  const { items } = props;
-  const byStep = useMemo(() => {
-    const map = new Map<string, ChildRow[]>();
-    for (const row of props.children) {
-      const key = row.stepId !== null && items.some((item) => item.id === row.stepId) ? row.stepId : UNASSIGNED;
-      map.set(key, [...(map.get(key) ?? []), row]);
-    }
-    return map;
-  }, [props.children, items]);
-  const live = useMemo(
-    () => new Set([...byStep.entries()].filter(([, rows]) => rows.some((row) => isWorking(row.state))).map(([key]) => key)),
-    [byStep],
-  );
-  const [all, setAll] = useState(false);
-  const [openStep, setOpenStep] = useState<Record<string, boolean>>({});
-  const listRef = useRef<HTMLOListElement | null>(null);
-  useLayoutEffect(() => {
-    if (props.focus === null) return;
-    setOpenStep((prev) => ({ ...prev, [props.focus?.key ?? ""]: true }));
-    setAll(true);
-    requestAnimationFrame(() => listRef.current?.querySelector(`[data-step="${props.focus?.key}"]`)?.scrollIntoView({ block: "nearest" }));
-  }, [props.focus?.token]);
-  const done = items.filter((item) => item.status === "done").length;
-  const rows = all ? items.map((_, index) => ({ kind: "step" as const, index })) : planWindow(items, live);
-  const unassigned = byStep.get(UNASSIGNED) ?? [];
-
-  const stepRow = (item: PlanStep) => {
-    const kids = byStep.get(item.id) ?? [];
-    const workingKids = kids.filter((row) => isWorking(row.state));
-    const byKids = workingKids.length > 0 && item.status !== "done";
-    const status = byKids ? "in_progress" : item.status;
-    const activeMark = (item.status === "in_progress" && props.working) || byKids;
-    const shown = openStep[item.id] ?? false;
-    const head = (
-      <>
-        <span className="cs-slot">
-          {item.status === "done" ? (
-            <Icon name="check" size={12} strokeWidth={2} />
-          ) : activeMark ? (
-            <StatusPie state="running" />
-          ) : item.status === "waiting" ? (
-            <Icon name="hourglass" size={12} strokeWidth={1.8} />
-          ) : (
-            <span className="tp-ring" />
-          )}
-        </span>
-        <span className="cs-text" title={item.text}>
-          {item.text}
-        </span>
-        <span className="cs-tail">{kids.length > 0 ? <Robots rows={kids} /> : null}</span>
-      </>
-    );
-    return (
-      <li key={item.id} data-step={item.id} data-status={status}>
-        {kids.length > 0 ? (
-          <button type="button" className="cs-row cs-btn" aria-expanded={shown} title={t.chatStatus.robots(workingKids.length)} onClick={() => setOpenStep((prev) => ({ ...prev, [item.id]: !shown }))}>
-            {head}
-          </button>
-        ) : (
-          <div className="cs-row">{head}</div>
-        )}
-        {shown && <KidList rows={kids} now={props.now} onOpen={props.onOpenChild} />}
-      </li>
-    );
-  };
-
-  return (
-    <section className="cs-sec">
-      {items.length > 0 && (
-        <div className="cs-head">
-          <span className="cs-head-label">{t.chatStatus.progress}</span>
-          <span className="cs-n">{t.chatStatus.planCount(done, items.length)}</span>
-          {all && (
-            <button type="button" className="cs-head-act" onClick={() => setAll(false)}>
-              {t.chatStatus.foldLess}
-            </button>
-          )}
-        </div>
-      )}
-      <ol className="cs-plan" ref={listRef}>
-        {rows.map((row, index) => {
-          if (row.kind === "fold") {
-            const label = row.where === "before" ? t.chatStatus.foldBefore(row.count) : row.where === "after" ? t.chatStatus.foldAfter(row.count) : t.chatStatus.foldBetween(row.count);
-            return (
-              <li key={`fold-${index}`} data-status="fold">
-                <button type="button" className="cs-row cs-btn cs-fold" onClick={() => setAll(true)}>
-                  <span className="cs-slot">
-                    <Icon name="chevron-right" size={12} strokeWidth={1.8} />
-                  </span>
-                  <span className="cs-text">{label}</span>
-                </button>
-              </li>
-            );
-          }
-          const item = items[row.index];
-          return item === undefined ? null : stepRow(item);
-        })}
-        {unassigned.length > 0 && (
-          <li data-step={UNASSIGNED} data-status="pseudo">
-            <button
-              type="button"
-              className="cs-row cs-btn"
-              aria-expanded={openStep[UNASSIGNED] ?? false}
-              title={t.chatStatus.unassignedTip}
-              onClick={() => setOpenStep((prev) => ({ ...prev, [UNASSIGNED]: !(prev[UNASSIGNED] ?? false) }))}
-            >
-              <span className="cs-slot">
-                <Icon name="bot" size={12} strokeWidth={1.8} />
-              </span>
-              <span className="cs-text">
-                {t.chatStatus.unassigned}
-                <span className="cs-n"> {unassigned.length}</span>
-              </span>
-              <span className="cs-tail">
-                <Robots rows={unassigned} />
-              </span>
-            </button>
-            {(openStep[UNASSIGNED] ?? false) && <KidList rows={unassigned} now={props.now} onOpen={props.onOpenChild} />}
-          </li>
-        )}
-      </ol>
-    </section>
-  );
-}
-
-/** 行尾一排机器人：在干活的几个画几个（多了 +N）；要你的（在问 / 卡住）黄、失败红；没有在干活的只写「N 个已交回」 */
+/**
+ * 行尾一排机器人：在干活的几个画几个（多了 +N）；要你的（在问 / 卡住）黄、失败红；没有在干活的只写「N 个已交回」。
+ * 卡窄（< 340，见 chat-status.css 的容器查询）时收成一个机器人 + 个数（「N 个已交回」收成 ✓ N），把宽度让给两行的步骤名——
+ * 啰嗦进度在 280 宽时先坏的就是这里：三个头像 + chevron 吃掉近一半行宽，步骤名一行只剩七个字。
+ */
 function Robots(props: { rows: readonly ChildRow[] }) {
   const t = useT();
   const working = sortChildren(props.rows.filter((row) => isWorking(row.state) || row.state === "failed"));
   if (working.length === 0) {
     const done = props.rows.filter((row) => row.state === "done").length;
-    return done > 0 ? <span className="cs-meta">{t.chatStatus.handedBack(done)}</span> : null;
+    if (done === 0) return null;
+    return (
+      <>
+        <span className="cs-meta cs-wide">{t.chatStatus.handedBack(done)}</span>
+        <span className="cs-meta cs-compact" aria-label={t.chatStatus.handedBack(done)}>
+          <Icon name="check" size={12} strokeWidth={2} />
+          {done}
+        </span>
+      </>
+    );
   }
+  const first = working[0];
   return (
-    <span className="cs-robots" aria-label={t.chatStatus.robots(working.length)}>
-      {working.slice(0, ROBOTS_SHOWN).map((row) => (
-        <span key={row.meta.id} className="cs-robot" data-state={row.state}>
+    <>
+      <span className="cs-robots cs-wide" aria-label={t.chatStatus.robots(working.length)}>
+        {working.slice(0, ROBOTS_SHOWN).map((row) => (
+          <span key={row.meta.id} className="cs-robot" data-state={row.state}>
+            <Icon name="bot" size={12} strokeWidth={1.8} />
+          </span>
+        ))}
+        {working.length > ROBOTS_SHOWN && <span className="cs-robot-more">+{working.length - ROBOTS_SHOWN}</span>}
+      </span>
+      <span className="cs-robots cs-compact" aria-label={t.chatStatus.robots(working.length)}>
+        <span className="cs-robot" data-state={first?.state}>
           <Icon name="bot" size={12} strokeWidth={1.8} />
         </span>
-      ))}
-      {working.length > ROBOTS_SHOWN && <span className="cs-robot-more">+{working.length - ROBOTS_SHOWN}</span>}
-    </span>
-  );
-}
-
-/** 一步下面的子会话：要你的在前；已交回的收成一行；超过五个收成「还有 N 个」 */
-function KidList(props: { rows: readonly ChildRow[]; now: number; onOpen: (childId: string) => void }) {
-  const t = useT();
-  const [more, setMore] = useState(false);
-  const [doneOpen, setDoneOpen] = useState(false);
-  const sorted = sortChildren(props.rows);
-  const active = sorted.filter((row) => row.state !== "done");
-  const done = sorted.filter((row) => row.state === "done");
-  const shown = more ? active : active.slice(0, KIDS_SHOWN);
-  return (
-    <ul className="cs-kids">
-      {shown.map((row) => (
-        <KidRow key={row.meta.id} row={row} now={props.now} onOpen={props.onOpen} />
-      ))}
-      {active.length > shown.length && (
-        <li>
-          <button type="button" className="cs-kid-more" onClick={() => setMore(true)}>
-            {t.chatStatus.showAll(active.length - shown.length)}
-          </button>
-        </li>
-      )}
-      {done.length > 0 && (
-        <li>
-          <button type="button" className="cs-kid-more" aria-expanded={doneOpen} onClick={() => setDoneOpen((value) => !value)}>
-            <Icon name={doneOpen ? "chevron-down" : "chevron-right"} size={12} strokeWidth={1.8} />
-            {t.chatStatus.handedBack(done.length)}
-          </button>
-        </li>
-      )}
-      {doneOpen && done.map((row) => <KidRow key={row.meta.id} row={row} now={props.now} onOpen={props.onOpen} />)}
-    </ul>
-  );
-}
-
-function KidRow(props: { row: ChildRow; now: number; onOpen: (childId: string) => void }) {
-  const t = useT();
-  const { row } = props;
-  const running = row.state === "running" || row.state === "stuck";
-  const question = row.state === "waiting" ? [...(row.messages ?? [])].reverse().find((message) => message.kind === "question")?.text : undefined;
-  const failed = row.state === "failed" ? [...(row.messages ?? [])].reverse().find((message) => message.kind === "failed")?.text : undefined;
-  // 交回的：它交回的那句话（第一行），不再写一遍「已交回」
-  const handed = row.state === "done" ? [...(row.messages ?? [])].reverse().find((message) => message.kind === "done")?.text.split("\n")[0] : undefined;
-  const line =
-    running && row.activity !== null
-      ? toolCallLine(row.activity.toolName, row.activity.input)
-      : running
-        ? t.chatStatus.thinking
-        : (question ?? failed ?? handed ?? t.chatStatus.state[row.state]);
-  const elapsed = running && row.activity !== null ? props.now - row.activity.since : null;
-  const stuckMin = row.state === "stuck" && elapsed !== null ? Math.floor(elapsed / 60_000) : null;
-  return (
-    <li>
-      <button type="button" className="cs-kid" data-state={row.state} onClick={() => props.onOpen(row.meta.id)}>
-        <span className="cs-kid-title">
-          <span className="cs-kid-name" title={row.meta.title}>
-            {row.meta.title}
-          </span>
-          <span className="cs-kid-state">
-            {row.state === "stuck" && <Icon name="triangle-alert" size={12} strokeWidth={1.8} />}
-            {t.chatStatus.state[row.state]}
-          </span>
-        </span>
-        <span className="cs-kid-line">
-          <span className={running && row.activity !== null ? "cs-kid-call mono" : "cs-kid-call"} title={line}>
-            {line}
-          </span>
-          {elapsed !== null && (
-            <span className="cs-kid-time" title={stuckMin !== null ? t.chatStatus.stuckTip(stuckMin) : undefined}>
-              {elapsedText(t, elapsed)}
-            </span>
-          )}
-        </span>
-      </button>
-    </li>
-  );
-}
-
-// ───────────────────────── 产物 ─────────────────────────
-
-const OUTPUTS_SHOWN = 4;
-
-function OutputsSection(props: { outputs: readonly StatusOutput[]; active: string | null; onPick: (output: StatusOutput, element: HTMLElement) => void }) {
-  const t = useT();
-  const [all, setAll] = useState(false);
-  const shown = all ? props.outputs : props.outputs.slice(0, OUTPUTS_SHOWN);
-  return (
-    <section className="cs-sec">
-      <div className="cs-head">
-        <span className="cs-head-label">{t.chatStatus.outputs}</span>
-        <span className="cs-n">{props.outputs.length}</span>
-      </div>
-      {shown.map((output) => (
-        <button
-          key={output.path}
-          type="button"
-          className="cs-row cs-btn"
-          data-preview-anchor
-          aria-pressed={props.active === output.path}
-          title={output.by === null ? output.path : `${output.path}\n${t.chatStatus.byChild(output.by)}`}
-          onClick={(event) => props.onPick(output, event.currentTarget)}
-        >
-          <span className="cs-slot cs-file">
-            {output.kind === "board" ? <Icon name={FEATURE_ICON.board} size={14} strokeWidth={1.8} /> : <FileTypeIcon name={output.path.split(/[\\/]/).pop() ?? ""} size={16} />}
-          </span>
-          <span className="cs-text">
-            {output.title}
-            {output.by !== null && <Icon name="bot" size={12} strokeWidth={1.8} className="cs-by" />}
-          </span>
-          <span className="cs-tail">{t.chatStatus.kinds[output.kind]}</span>
-        </button>
-      ))}
-      {props.outputs.length > shown.length && (
-        <button type="button" className="cs-row cs-btn cs-fold" onClick={() => setAll(true)}>
-          <span className="cs-slot">
-            <Icon name="chevron-right" size={12} strokeWidth={1.8} />
-          </span>
-          <span className="cs-text">{t.chatStatus.outputsMore(props.outputs.length - shown.length)}</span>
-        </button>
-      )}
-    </section>
-  );
-}
-
-/** 产物的临时预览：文档渲染正文、图片原图、演示文稿第一页；看不了的写一句，给「在右栏打开」与「用默认应用打开」 */
-function OutputPreview(props: { output: StatusOutput; scope: ChatFileScope }) {
-  const t = useT();
-  const { output } = props;
-  const [data, setData] = useState<FilePreview | null | undefined>(undefined);
-  useEffect(() => {
-    if (output.kind === "board") {
-      setData(null);
-      return undefined;
-    }
-    let alive = true;
-    setData(undefined);
-    void readChatFile(props.scope, output.path).then((value) => {
-      if (alive) setData(value);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [output.path]);
-  const openPanel = () => {
-    if (output.kind === "board") return;
-    requestOpenPanel({ kind: output.kind === "slides" ? "slides" : "files", path: output.path, force: true });
-  };
-  let body: React.ReactNode;
-  if (data === undefined) body = <p className="cs-pop-hint">{t.chatStatus.previewLoading}</p>;
-  else if (data !== null && data.kind === "image") body = <img className="cs-pop-img" alt={output.title} src={`data:${data.mime};base64,${data.base64}`} />;
-  else if (data !== null && data.kind === "text" && output.kind === "slides") body = <DeckThumb text={data.text} />;
-  else if (data !== null && data.kind === "text" && output.kind === "doc") body = <div className="cs-pop-doc"><MarkdownBlock text={data.text} /></div>;
-  else if (data !== null && data.kind === "text") body = <pre className="cs-pop-pre">{data.text.slice(0, 1200)}</pre>;
-  else body = <p className="cs-pop-hint">{t.chatStatus.noPreview}</p>;
-  return (
-    <>
-      <div className="cs-pop-head">
-        <span className="cs-slot cs-file">
-          {output.kind === "board" ? <Icon name={FEATURE_ICON.board} size={14} strokeWidth={1.8} /> : <FileTypeIcon name={output.path.split(/[\\/]/).pop() ?? ""} size={16} />}
-        </span>
-        <span className="cs-pop-title" title={output.path}>
-          {output.title}
-        </span>
-        <span className="cs-tail">{t.chatStatus.kinds[output.kind]}</span>
-      </div>
-      {output.by !== null && <div className="cs-pop-by">{t.chatStatus.byChild(output.by)}</div>}
-      <div className="cs-pop-body">{body}</div>
-      {output.kind !== "board" && (
-        <div className="cs-pop-acts">
-          <button type="button" className="cs-pop-btn" onClick={openPanel}>
-            <Icon name="panel-right" size={12} strokeWidth={1.8} />
-            {t.chatStatus.openInPanel}
-          </button>
-          <button type="button" className="cs-pop-btn" onClick={() => void openChatFile(props.scope, output.path)}>
-            <Icon name="external-link" size={12} strokeWidth={1.8} />
-            {t.chatStatus.openDefault}
-          </button>
-        </div>
-      )}
+        <span className="cs-robot-more">{working.length}</span>
+      </span>
     </>
   );
 }
-
-function DeckThumb(props: { text: string }) {
-  const t = useT();
-  const deck = useMemo(() => parseDeckSafe(props.text).deck, [props.text]);
-  const first = deck.slides[0];
-  if (first === undefined) return <p className="cs-pop-hint">{t.chatStatus.noPreview}</p>;
-  return (
-    <div className="cs-pop-deck">
-      <SlideStatic slide={first} aspect={deck.aspect} ctx={{ deck, imageUrl: () => null }} width={268} index={0} />
-      <span className="cs-meta">{t.chatStatus.pages(deck.slides.length)}</span>
-    </div>
-  );
-}
-
-function MemoryPreview(props: { remembered: readonly string[]; used: readonly string[] }) {
-  const t = useT();
-  return (
-    <div className="cs-mem">
-      {props.remembered.length > 0 && (
-        <>
-          <div className="cs-pop-label">{t.chatStatus.memRemembered}</div>
-          <ul>
-            {props.remembered.map((text) => (
-              <li key={text}>{text}</li>
-            ))}
-          </ul>
-        </>
-      )}
-      {props.used.length > 0 && (
-        <>
-          <div className="cs-pop-label">{t.chatStatus.memUsed}</div>
-          <ul>
-            {props.used.map((text) => (
-              <li key={text}>{text}</li>
-            ))}
-          </ul>
-        </>
-      )}
-    </div>
-  );
-}
-
-// ───────────────────────── 二级：改动 / 摘抄 ─────────────────────────
-
-function ChangesList(props: { records: readonly TranscriptRecord[]; onOpen: (path: string) => void }) {
-  const t = useT();
-  const files = useMemo(() => {
-    const map = new Map<string, { path: string; added: number; removed: number }>();
-    for (const record of props.records) {
-      if (record.role !== "file-turn") continue;
-      for (const change of record.changes) {
-        const prev = map.get(change.path);
-        map.set(change.path, { path: change.path, added: (prev?.added ?? 0) + change.added, removed: (prev?.removed ?? 0) + change.removed });
-      }
-    }
-    return [...map.values()].reverse();
-  }, [props.records]);
-  if (files.length === 0) return <p className="cs-pop-hint">{t.chatStatus.noChanges}</p>;
-  return (
-    <>
-      {files.map((file) => (
-        <button key={file.path} type="button" className="cs-row cs-btn" title={file.path} onClick={() => props.onOpen(file.path)}>
-          <span className="cs-slot cs-file">
-            <FileTypeIcon name={file.path.split(/[\\/]/).pop() ?? ""} size={16} />
-          </span>
-          <span className="cs-text">{file.path.split(/[\\/]/).pop()}</span>
-          <span className="cs-tail mono">
-            {file.added + file.removed > 0 ? `+${file.added} −${file.removed}` : ""}
-          </span>
-        </button>
-      ))}
-    </>
-  );
-}
-
-function ExcerptsList(props: { sessionId: string; onOpen: (jump: ExcerptJump) => void }) {
-  const t = useT();
-  const [items, setItems] = useState<Excerpt[] | null>(null);
-  useEffect(() => {
-    let alive = true;
-    void api.excerpt.list().then((response) => {
-      if (alive) setItems(response.items.map((item) => item.excerpt).filter((excerpt) => excerpt.sessionId === props.sessionId));
-    });
-    return () => {
-      alive = false;
-    };
-  }, [props.sessionId]);
-  const open = useCallback(
-    (excerpt: Excerpt) =>
-      props.onOpen({ sessionId: excerpt.sessionId, role: excerpt.role, text: excerpt.text, ...(excerpt.turn === undefined ? {} : { turn: excerpt.turn }) }),
-    [props.onOpen],
-  );
-  if (items === null) return <p className="cs-pop-hint">{t.chatStatus.previewLoading}</p>;
-  if (items.length === 0) return <p className="cs-pop-hint">{t.chatStatus.noExcerpts}</p>;
-  return (
-    <>
-      {items.map((excerpt) => (
-        <button key={excerpt.id} type="button" className="cs-row cs-btn cs-excerpt" onClick={() => open(excerpt)}>
-          <span className="cs-slot">
-            <Icon name="quote" size={12} strokeWidth={1.8} />
-          </span>
-          <span className="cs-text">{excerpt.text}</span>
-        </button>
-      ))}
-    </>
-  );
-}
-

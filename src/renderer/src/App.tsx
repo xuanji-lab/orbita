@@ -1634,8 +1634,13 @@ export function App() {
                 entry={engine.states.get(mainSessionId) ?? EMPTY_ENTRY}
                 working={mainMeta !== undefined && (runStateOf(session, mainMeta) === "running" || runStateOf(session, mainMeta) === "waiting")}
                 onOpenSubSession={openSubSessionInPanel}
-                onOpenReviewAt={openReviewAt}
-                onOpenExcerpt={openExcerpt}
+                onOpenTerminal={(terminalId) => {
+                  setPendingTerminal(terminalId);
+                  setRightPanel("terminal");
+                }}
+                onOpenAutomation={openAutomationPanel}
+                onOpenMemory={openMemoryReview}
+                onOpenAbilities={() => setRightPanel("plugins")}
               />
             )}
           </div>
