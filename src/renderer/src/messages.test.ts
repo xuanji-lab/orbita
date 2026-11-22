@@ -274,17 +274,18 @@ describe("读技能的过程行用词", () => {
   });
 });
 
-describe("「和智能体一起做一个」的预填首句", () => {
-  test("点名内置技能，后面是**完整的一句话**，不以冒号（半句话）收尾——用户看到的、智能体读到的都是一句完整的话", () => {
+describe("「+ 自定义能力」的预填首句", () => {
+  test("点名内置技能，后面是一句停在冒号的话——光标落在冒号后让用户接着写需求或来源（2026-11-22 用户定，不自动发送）", () => {
     for (const draft of [zh.plugins.makeWithAgentDraft, en.plugins.makeWithAgentDraft]) {
       ok(draft.startsWith("/skill:plugin-creator "), draft);
-      const sentence = draft.slice("/skill:plugin-creator ".length).trim();
-      ok(sentence.length >= 8, `句子太短：${sentence}`);
-      doesNotMatch(sentence, /[:：]$/, `不能以冒号结尾：${sentence}`);
-      match(sentence, /[.。!！?？]$/, `要以句号一类的标点收尾：${sentence}`);
+      const sentence = draft.slice("/skill:plugin-creator ".length);
+      ok(sentence.trim().length >= 8, `句子太短：${sentence}`);
+      // 以冒号收尾，且冒号后留着输入位置：中文全角冒号后不留空格，英文半角冒号后留一个空格
+      match(sentence, /(：|: )$/, `要停在冒号后面：${sentence}`);
     }
     // 中文界面预填中文、英文界面预填英文（语言信号跟着用户走，不是整条英文包装）
     match(zh.plugins.makeWithAgentDraft, /[\u4e00-\u9fff]/);
     doesNotMatch(en.plugins.makeWithAgentDraft, /[\u4e00-\u9fff]/);
   });
 });
+

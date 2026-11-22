@@ -1078,6 +1078,19 @@ export function App() {
       // 只带这一次；之后切会话照会话记忆（用户定：插件页不做应用级例外）
       carryPanelRef.current = { panel: "plugins", sessionId: null };
       session.startTaskWithDraft(workspace, draft);
+      // 光标落在预填那句话的末尾（「……需求或来源：」之后），用户直接接着写。草稿经存储回到输入框要隔几帧：
+      // 轮询到输入框里真的是这句话再落光标，最多等 ~1 秒；不自动发送
+      let tries = 0;
+      const land = (): void => {
+        const input = document.querySelector<HTMLTextAreaElement>(".pane-main textarea.composer-input");
+        if (input !== null && input.value === draft) {
+          input.focus({ preventScroll: true });
+          input.setSelectionRange(draft.length, draft.length);
+        } else if (tries++ < 60) {
+          requestAnimationFrame(land);
+        }
+      };
+      requestAnimationFrame(land);
     },
     [session],
   );

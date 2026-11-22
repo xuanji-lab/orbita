@@ -3,9 +3,11 @@
  * 单独成文件只为可测——`node --test` 只加载 .ts，这些判定写在 .tsx 里就没法直接跑。
  */
 import type { PluginArchiveEntry, PluginPlacement, PluginScope, PluginView } from "@shared/plugin";
+import { parsePluginViewId } from "../../../../shared/plugin.ts";
 import type { SkillArchiveEntry } from "@shared/skill";
 import type { Workspace } from "@shared/workspace";
 import type { WsFilter } from "../../shell/workspace-filter.ts";
+import { connectorOf } from "./ability-icon.ts";
 
 export type PluginGroup =
   | { kind: "global"; items: PluginView[] }
@@ -44,14 +46,21 @@ function compareViews(a: PluginView, b: PluginView): number {
   return byName !== 0 ? byName : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
-/** 筛选：名字、描述、里面的技能名与服务名任一包含查询词（不分大小写）。空词不筛。 */
+/**
+ * 筛选：显示名、描述、标识（技能目录名 / MCP 服务名 / 插件标识）、里面的技能名与目录名、服务名任一包含查询词（不分大小写）。
+ * 显示名是中文、目录名是英文的技能，输中文或英文都找得到（「/ + 空格」同用这一个）。空词不筛。
+ */
 export function filterPlugins(views: readonly PluginView[], query: string): PluginView[] {
   const needle = query.trim().toLowerCase();
   if (needle === "") return [...views];
   return views.filter((view) =>
-    [view.name, view.description, ...view.skills.map((skill) => skill.name), ...view.mcp.map((server) => server.name)].some(
-      (text) => text.toLowerCase().includes(needle),
-    ),
+    [
+      view.name,
+      view.description,
+      parsePluginViewId(view.id)?.key ?? "",
+      ...view.skills.flatMap((skill) => [skill.name, skill.slug]),
+      ...view.mcp.map((server) => server.name),
+    ].some((text) => text.toLowerCase().includes(needle)),
   );
 }
 
@@ -101,12 +110,33 @@ export function canRemoveMcpView(view: Pick<PluginView, "origin">): boolean {
 }
 
 /** 列表行右侧小字标的种类：插件 / 内置 / 技能 / MCP（面板叫「能力」，每一项仍按它自己的种类叫）。 */
-export type RowKind = "plugin" | "builtin" | "skill" | "mcp";
+export type RowKind = "plugin" | "builtin" | "skill" | "mcp" | "connector";
 
-export function rowKind(view: Pick<PluginView, "origin" | "install">): RowKind {
+/**
+ * 行的种类：插件 / 内置 / 技能 / MCP / 连接器。MCP 的服务名等于连接目录里的名字（github / notion / tencent-docs……）
+ * 就是连接器——同一个叫法，不另起名字；要认得出它得给视图 id。
+ */
+export function rowKind(view: Pick<PluginView, "origin" | "install"> & Partial<Pick<PluginView, "id" | "name">>): RowKind {
   if (view.origin === "user-skill") return "skill";
-  if (view.origin === "user-mcp") return "mcp";
+  if (view.origin === "user-mcp") {
+    const key = view.id === undefined ? "" : (parsePluginViewId(view.id)?.key ?? "");
+    return connectorOf({ origin: view.origin, key, name: view.name ?? key }) !== undefined ? "connector" : "mcp";
+  }
   return view.install?.source.kind === "builtin" ? "builtin" : "plugin";
+}
+
+/** 行尾小标的种类：「内置」是来源不是种类（住进 ⋯ 菜单），行尾它仍是一个插件。 */
+export function tailKind(view: Parameters<typeof rowKind>[0]): Exclude<RowKind, "builtin"> {
+  const kind = rowKind(view);
+  return kind === "builtin" ? "plugin" : kind;
+}
+
+/**
+ * 行尾那一串灰字：开着只写种类（开着是常态，不用说）；关着在前面写「已关」——例外才出声。
+ * 没有开关了：行尾要么是种类、要么是「已关 · 种类」，从来不是两样东西并排。
+ */
+export function rowTailText(kind: Exclude<RowKind, "builtin">, off: boolean, labels: { kinds: Record<RowKind, string>; off: string }): string {
+  return off ? `${labels.off} · ${labels.kinds[kind]}` : labels.kinds[kind];
 }
 
 /** 断链的旧技能：链接还在、真身目录没了。它只能被清理，不能开关、不能点名（选取态也不列）。 */

@@ -2427,7 +2427,7 @@ export const zh: Messages = {
   },
   /** 能力页「连接」页签：待配置的品牌入口（目录事实在 shared/connectors.ts，这里只有界面文案） */
   connectors: {
-    tab: "连接",
+    tab: "连接器",
     intro: "点「配置」，让智能体带你接好；标着 OAuth 的点「连接」。",
     recheck: "重新检测",
     recheckTip: "把每一项重新实测一遍",
@@ -2521,13 +2521,22 @@ export const zh: Messages = {
     tabFind: "发现",
     tabFindTip: "计划中 · 插件市场还没做",
     tabInstalled: "已装",
-    connectLocal: "接入本地插件",
-    makeWithAgent: "和智能体一起做一个",
-    makeWithAgentTip: "在当前工作区新开一个任务，让智能体和你从头做一个插件",
+    connectLocal: "接入本地插件…",
+    makeWithAgent: "自定义能力",
+    makeWithAgentTip: "在当前工作区新开一个任务：说出你希望智能体拥有什么能力，和它一起做出来",
+    createMore: "更多添加方式",
     makeWithAgentOffTip: "「做插件」这个内置插件被停用了——先在列表里把它打开",
     // 预填输入框的一句引导：**完整的一句话**，不以冒号结尾（以前半句「希望它做到：」会让用户以为后面必须接着写，也让智能体拿到的只有一句英文包装 + 半句话）；
-    // 开头的 /skill:plugin-creator 点名内置的做插件技能
-    makeWithAgentDraft: "/skill:plugin-creator 我想和你一起做一个插件。",
+    // 预填输入框的一句引导，停在冒号后面等用户接着写（不自动发送）；开头的 /skill:plugin-creator 点名内置的做插件技能
+    makeWithAgentDraft: "/skill:plugin-creator 帮我做一个新能力，需求或来源：",
+    // 行尾 ⋯ 菜单：内置标记与开关都挪到这里；行尾只留种类（关着写「已关」）
+    menuTurnOn: "启用",
+    menuTurnOff: "停用",
+    menuOpen: "查看详情",
+    menuBuiltin: "内置 · 随应用提供",
+    menuMore: (name: string) => `更多操作：${name}`,
+    menuMoreTip: "更多",
+    rowOff: "已关",
     planned: "计划中",
     filterPlaceholder: "筛选",
     filterAria: "筛选能力",
@@ -2713,7 +2722,7 @@ export const zh: Messages = {
     legacySkillNote: (path, kind) =>
       `这是你自己的技能，放在 ${path}。要删除，点「${zhRevealLabel(kind)}」，把它的文件夹挪走即可。`,
     // 行尾小字标：面板叫「能力」，每一项仍按自己的种类叫
-    rowKind: { plugin: "插件", builtin: "内置", skill: "技能", mcp: "MCP" },
+    rowKind: { plugin: "插件", builtin: "内置", skill: "技能", mcp: "MCP", connector: "连接器" },
     // 零散技能详情：内容三格 + 在哪儿可用
     contentTitle: "内容",
     contentHint: "改完离开输入框就保存",

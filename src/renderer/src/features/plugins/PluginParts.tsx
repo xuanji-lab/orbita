@@ -1,21 +1,42 @@
 /**
  * 插件页里列表与详情共用的小件：头像、开关、能力行。
  */
-import { FEATURE_ICON } from "../../shell/feature-icons.ts";
-import type { PluginMcpInfo, PluginSkillInfo, PluginUnsupported, PluginView } from "@shared/plugin";
+import { parsePluginViewId, type PluginMcpInfo, type PluginSkillInfo, type PluginUnsupported, type PluginView } from "@shared/plugin";
 import type { PluginExternal } from "@shared/plugin-board";
 import { Icon } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
+import { ConnectorLogo } from "../connectors/ConnectorLogo.tsx";
+import { VendorMark } from "./AbilityMark.tsx";
+import { abilityIconOf } from "./ability-icon.ts";
 import { mcpProblemText } from "./plugin-text.ts";
 
-/** 头像按种类取类别色 + 图标：技能是绿书、MCP 是蓝插头、插件（含草稿）是橙积木。 */
-export function PluginAvatar(props: { view: Pick<PluginView, "origin">; big?: boolean }) {
+/** 头像要看的：来源、显示名、描述、视图 id（标识在里面）。拿不全就给 origin + name，其余按空串。 */
+export type AvatarSubject = { origin: PluginView["origin"]; name?: string; description?: string; id?: string };
+
+/**
+ * 能力的头像：按能力自己取，不按种类取（取法见 ability-icon.ts）。认得出的连接器 / 厂商用品牌标，
+ * 其余是淡底方块里的一枚 lucide，淡底色按名字稳定取；列表行、卡片、详情头与「/ + 空格」共用这一个。
+ */
+export function PluginAvatar(props: { view: AvatarSubject; big?: boolean }) {
   const { view } = props;
-  const size = props.big === true ? 20 : 13;
-  const kind = view.origin === "user-skill" ? "skill" : view.origin === "user-mcp" ? "mcp" : "plugin";
+  const big = props.big === true;
+  const spec = abilityIconOf({
+    origin: view.origin,
+    name: view.name ?? "",
+    description: view.description ?? "",
+    key: view.id === undefined ? "" : (parsePluginViewId(view.id)?.key ?? ""),
+  });
+  if (spec.kind === "connector") return <ConnectorLogo entry={spec.entry} size={big ? "big" : "row"} />;
+  if (spec.kind === "vendor") {
+    return (
+      <span className={`pl-av pl-av-vendor${big ? " big" : ""}`} aria-hidden="true">
+        <VendorMark vendor={spec.vendor} />
+      </span>
+    );
+  }
   return (
-    <span className={`pl-av${props.big === true ? " big" : ""}`} data-kind={kind} aria-hidden="true">
-      <Icon name={kind === "skill" ? "book-open" : kind === "mcp" ? "plug" : FEATURE_ICON.plugins} size={size} strokeWidth={1.8} />
+    <span className={`pl-av${big ? " big" : ""}`} data-tone={spec.tone} aria-hidden="true">
+      <Icon name={spec.icon} size={big ? 20 : 14} strokeWidth={1.8} />
     </span>
   );
 }

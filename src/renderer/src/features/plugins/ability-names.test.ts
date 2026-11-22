@@ -13,13 +13,18 @@ describe("面板改名：插件面板对用户叫「能力」（只改面板名�
     }
   });
 
-  test("列表行右侧的种类小标仍是 插件 / 内置 / 技能 / MCP；「和智能体一起做一个插件」这类插件自己的文案不变", () => {
-    assert.deepEqual(zh.plugins.rowKind, { plugin: "插件", builtin: "内置", skill: "技能", mcp: "MCP" });
-    assert.deepEqual(en.plugins.rowKind, { plugin: "Plugin", builtin: "Built-in", skill: "Skill", mcp: "MCP" });
-    assert.match(zh.plugins.makeWithAgentTip, /插件/);
-    assert.match(zh.plugins.makeWithAgentDraft, /插件/);
+  test("列表行右侧的种类小标是 插件 / 技能 / MCP / 连接器（内置住进 ⋯ 菜单，仍留在种类表里）；「自定义能力」按钮说能力、不再说插件", () => {
+    assert.deepEqual(zh.plugins.rowKind, { plugin: "插件", builtin: "内置", skill: "技能", mcp: "MCP", connector: "连接器" });
+    assert.deepEqual(en.plugins.rowKind, { plugin: "Plugin", builtin: "Built-in", skill: "Skill", mcp: "MCP", connector: "Connector" });
+    // 2026-11-22：两个入口合成一个「+ 自定义能力」，智能体再建议做成技能 / MCP / 插件，所以文案不替用户先选种类
+    assert.equal(zh.plugins.makeWithAgent, "自定义能力");
+    assert.match(zh.plugins.makeWithAgentTip, /能力/);
+    assert.match(zh.plugins.makeWithAgentDraft, /能力/);
     assert.match(zh.plugins.uninstallHint, /插件/);
-    assert.match(en.plugins.makeWithAgentTip, /plugin/);
+    assert.match(en.plugins.makeWithAgentTip, /ability/);
+    // 连接器页签沿用连接器分支的叫法「连接器」，不另起名字
+    assert.equal(zh.connectors.tab, "连接器");
+    assert.equal(en.connectors.tab, "Connectors");
   });
 
   test("两种语言的新文案都有（零散技能 / MCP 详情）", () => {

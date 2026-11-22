@@ -28,6 +28,7 @@ import type { CardSize, PluginsPageSettings } from "@shared/settings";
 import { LocaleContext, useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 import { Icon } from "../../shell/Icon";
+import { Menu, type MenuItem } from "../../shell/Menu";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { PanelFilter, PanelIconButton, PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
 import { relativeTime } from "../../shell/relative-time";
@@ -54,7 +55,7 @@ import { PluginPickerBar, PluginPickerGroup } from "./PluginPicker.tsx";
 import { activateRow, buildPicker, clampPick, collapseRow, expandRow, indexOfPlugin, movePick, type PickerOutcome } from "./plugin-picker.ts";
 import { filterDrafts, groupDrafts, type PluginDraftTarget } from "./plugin-draft.ts";
 import { useDraftList } from "./useDraftList.ts";
-import { contentsParts, creatorAvailable, filterEnabled, filterPlugins, groupUsable, isMissingSkillView, legacyCounts, pluginFilterCounts, rangeOf, sourceKey, toggleTarget, isActive, type PluginGroup, type RangeLabel } from "./plugin-view.ts";
+import { contentsParts, creatorAvailable, filterEnabled, filterPlugins, groupUsable, isMissingSkillView, legacyCounts, pluginFilterCounts, rangeOf, rowKind, sourceKey, toggleTarget, isActive, type PluginGroup, type RangeLabel } from "./plugin-view.ts";
 import { usePlugins } from "./usePlugins.ts";
 import "./plugins.css";
 
@@ -359,24 +360,32 @@ export function PluginsView(props: {
     }
   };
 
-  // 「接入本地插件」「和智能体一起做一个」：两种外壳同一对按钮，只是摆的位置不同（右栏在列表顶上，全屏在页头右侧）
+  // 「+ 自定义能力」：一个醒目的主按钮（新开任务、预填一句「帮我做一个新能力，需求或来源：」让用户接着写，不自动发送），
+  // 旁边贴一个小下拉放「接入本地插件」（已有的插件文件夹，用得少，不配与主按钮并排）。
+  // 两种外壳同一组，只是摆的位置不同（右栏在列表顶上，全屏在页头右侧）
+  const connectLocalItems: MenuItem[] = [{ id: "local", label: t.connectLocal, icon: "folder-open", onSelect: () => setInstalling(true) }];
   const actions = (
-    <>
-      <button type="button" className="pl-btn" onClick={() => setInstalling(true)}>
-        <Icon name="folder-open" size={13} strokeWidth={1.8} />
-        {t.connectLocal}
-      </button>
+    <span className="pl-create">
       <button
         type="button"
-        className="pl-btn"
+        className="pl-btn btn-accent pl-create-main"
         disabled={!makeAvailable}
         title={makeAvailable ? t.makeWithAgentTip : t.makeWithAgentOffTip}
         onClick={props.onMakeWithAgent}
       >
-        <Icon name="bot" size={13} strokeWidth={1.8} />
+        <Icon name="plus" size={13} strokeWidth={2} />
         {t.makeWithAgent}
       </button>
-    </>
+      <Menu
+        align="end"
+        items={connectLocalItems}
+        trigger={({ open, toggle }) => (
+          <button type="button" className="pl-btn btn-accent pl-create-more" aria-label={t.createMore} title={t.createMore} aria-expanded={open} onClick={toggle}>
+            <Icon name="chevron-down" size={13} strokeWidth={2} />
+          </button>
+        )}
+      />
+    </span>
   );
 
   const connectBody = (
@@ -877,9 +886,17 @@ function PluginRow(props: { view: PluginView; range: RangeLabel | null; onOpen: 
   const { view } = props;
   const active = isActive(view);
   const { kindsLine, sourceLabel } = describePlugin(t, view);
+  // 断链的技能没有东西可开关：菜单里的开关停着，点进去清理
+  const missing = isMissingSkillView(view);
+  // 「内置」与开关不占行尾：一行只留 图标 · 名字 · 一行描述 · 种类（关着写「已关」），其余进 ⋯
+  const items: MenuItem[] = [
+    ...(rowKind(view) === "builtin" ? [{ id: "builtin", label: t.menuBuiltin, icon: "info" as const, fact: true }] : []),
+    { id: "toggle", label: active ? t.menuTurnOff : t.menuTurnOn, icon: "power", disabled: missing, onSelect: props.onToggle },
+    { id: "open", label: t.menuOpen, icon: "eye", onSelect: props.onOpen },
+  ];
   return (
     <div className="pl-row" data-active={active}>
-      {/* 窄了行里收起「里面有什么 / 来源」（plugins.css），悬停时仍能读到 */}
+      {/* 里面有什么 / 来源 / 范围退进悬停说明（以前在行尾占两列，窄了又藏起来） */}
       <button type="button" className="pl-row-main" title={`${kindsLine} · ${sourceLabel}`} onClick={props.onOpen}>
         <PluginAvatar view={view} />
         <span className="pl-name">
@@ -888,13 +905,20 @@ function PluginRow(props: { view: PluginView; range: RangeLabel | null; onOpen: 
             {props.range === null ? view.description : [rangeText(t, props.range), view.description].filter((part) => part !== "").join(" · ")}
           </small>
         </span>
-        <span className="pl-kinds">{kindsLine}</span>
-        <span className="pl-from">{sourceLabel}</span>
-        <KindTag view={view} />
+        <KindTag view={view} off={!active} />
       </button>
       <McpLoginButton view={view} />
-      {/* 断链的技能没有东西可开关：开关停着，点进去清理 */}
-      <PluginSwitch checked={active} label={active ? t.toggleOff(view.name) : t.toggleOn(view.name)} disabled={isMissingSkillView(view)} onChange={props.onToggle} />
+      <span className="pl-more">
+        <Menu
+          align="end"
+          items={items}
+          trigger={({ open, toggle }) => (
+            <button type="button" className="pl-more-btn" aria-label={t.menuMore(view.name)} title={t.menuMoreTip} aria-expanded={open} onClick={toggle}>
+              <Icon name="ellipsis" size={14} strokeWidth={2} />
+            </button>
+          )}
+        />
+      </span>
     </div>
   );
 }
@@ -947,7 +971,7 @@ function DraftRow(props: { entry: PluginDraftEntry; onOpen: (draft: PluginDraftT
         title={entry.manifestProblem === null ? meta : `${t.draftManifestProblem}: ${entry.manifestProblem}`}
         onClick={() => props.onOpen({ path: entry.path, workspaceId: entry.workspaceId })}
       >
-        <PluginAvatar view={{ origin: "plugin" }} />
+        <PluginAvatar view={{ origin: "plugin", name: entry.displayName, description: entry.description }} />
         <span className="pl-name">
           <span className="pl-draft-head">
             <b>{entry.displayName}</b>
@@ -959,7 +983,6 @@ function DraftRow(props: { entry: PluginDraftEntry; onOpen: (draft: PluginDraftT
             )}
           </span>
           <small>{entry.description === "" ? t.notChatted : entry.description}</small>
-          <small className="pl-draft-meta">{meta}</small>
         </span>
       </button>
       {sessionId !== null && (

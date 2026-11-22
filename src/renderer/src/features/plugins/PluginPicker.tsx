@@ -3,6 +3,7 @@
  * ↵ 提示、→ 展开的技能子行，以及底部那一条按键提示。排行与按键语义在 plugin-picker.ts（纯函数），
  * 这里只管画；键盘由 PluginsView 页头的搜索框接（焦点一直在那里，行不抢焦点）。
  */
+import { pluginViewId } from "@shared/plugin";
 import { Icon } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
 import { KindTag } from "./AbilitySections.tsx";
@@ -65,7 +66,7 @@ function PluginPickRow(props: {
   const hint = row.expandable && !row.expanded && active;
   return (
     <>
-      <div className="pl-row pl-pick-row" role="option" aria-selected={active} data-pick-active={active} data-usable={row.usable}>
+      <div className="pl-row pl-pick-row" role="option" aria-selected={active} data-pick-active={active} data-usable={row.usable} title={row.token}>
         {/* 点行 = ↵；mousedown 不夺焦点（键盘还要接着 ↑↓） */}
         <button type="button" className="pl-row-main" onMouseDown={(event) => event.preventDefault()} onClick={() => props.onActivate(row)}>
           <PluginAvatar view={view} />
@@ -101,9 +102,10 @@ function SkillPickRow(props: { row: Extract<PickerRow, { kind: "skill" }>; activ
   return (
     <div className="pl-row pl-pick-row pl-pick-sub" role="option" aria-selected={active} data-pick-active={active} data-usable="true" title={t.pickSkillRow(row.skill.slug)}>
       <button type="button" className="pl-row-main" onMouseDown={(event) => event.preventDefault()} onClick={() => props.onActivate(row)}>
-        <PluginAvatar view={{ origin: "user-skill" }} />
+        <PluginAvatar view={{ origin: "user-skill", name: row.skill.name, description: row.skill.description, id: pluginViewId("user-skill", row.skill.slug) }} />
         <span className="pl-name">
-          <b>{row.skill.slug}</b>
+          {/* 好懂的名字为主；目录名（/skill: 点名用的）进悬停说明 */}
+          <b>{row.skill.name === "" ? row.skill.slug : row.skill.name}</b>
           <small>{row.skill.description}</small>
         </span>
         {active && <EnterHint />}

@@ -6,7 +6,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { McpInstanceInfo, McpServerInfo, McpStatus } from "@shared/mcp";
-import type { PluginArchiveEntry, PluginScope, PluginView } from "@shared/plugin";
+import { pluginViewId, type PluginArchiveEntry, type PluginScope, type PluginView } from "@shared/plugin";
 import type { SkillArchiveEntry, SkillContent } from "@shared/skill";
 import type { Workspace } from "@shared/workspace";
 import { api } from "../../api";
@@ -19,12 +19,15 @@ import { statusNeedsLogin } from "./mcp-login.ts";
 import { mcpErrors, readyWorkspaces } from "./mcp-row-display.ts";
 import { TOOL_CHIP_LIMIT, shortToolName, visibleTools } from "./mcp-tool-chips.ts";
 import type { WsFilter } from "../../shell/workspace-filter.ts";
-import { archivedRange, archivedUsableIn, availabilityScopeOf, mergeArchived, nextAvailability, rowKind, type ArchivedRow, type AvailabilityChip } from "./plugin-view.ts";
+import { archivedRange, archivedUsableIn, availabilityScopeOf, mergeArchived, nextAvailability, rowTailText, tailKind, type ArchivedRow, type AvailabilityChip } from "./plugin-view.ts";
 
-/** 列表行 / 选取行右侧的小字种类标：插件 / 内置 / 技能 / MCP。 */
-export function KindTag(props: { view: Pick<PluginView, "origin" | "install"> }) {
+/**
+ * 列表行 / 选取行右侧的小字种类标：插件 / 技能 / MCP / 连接器，行关着时前面带「已关」（rowTailText）。
+ * 名字与图标是主角，种类退成这一行灰字（2026-11-22 用户：「icon 和能力的名字最吸引人，描述次之」）。
+ */
+export function KindTag(props: { view: Pick<PluginView, "origin" | "install" | "id" | "name">; off?: boolean }) {
   const t = useT().plugins;
-  return <span className="pl-kind-tag">{t.rowKind[rowKind(props.view)]}</span>;
+  return <span className="pl-kind-tag">{rowTailText(tailKind(props.view), props.off === true, { kinds: t.rowKind, off: t.rowOff })}</span>;
 }
 
 // ---------- 技能：内容三格 ----------
@@ -352,7 +355,7 @@ export function ArchivedAbilities(props: { refreshKey: unknown; workspaces: read
           return (
             <div key={`${row.kind}:${row.id}`} className="pl-row pl-archived-row">
               <span className="pl-row-main pl-archived-main">
-                <PluginAvatar view={{ origin: row.kind === "skill" ? "user-skill" : "plugin" }} />
+                <PluginAvatar view={{ origin: row.kind === "skill" ? "user-skill" : "plugin", name: row.name, id: pluginViewId(row.kind === "skill" ? "user-skill" : "plugin", row.slug ?? row.name) }} />
                 <span className="pl-name">
                   <b>{row.name}</b>
                   <small>{parts.filter((part) => part !== "").join(" · ")}</small>

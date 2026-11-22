@@ -47,11 +47,12 @@ describe("plugins.css：容器查询", () => {
     ok(!/@media/.test(css), "插件页不按视口宽度排版");
   });
 
-  it("窄档里：详情叠成单列、列表行的次要列收起", () => {
+  it("窄档里：详情叠成单列、列表行的行尾内边距收窄（行里已没有次要列：里面有什么 / 来源进了悬停说明）", () => {
     const narrow = containerBlocks(css)[0]?.body ?? "";
     // 两列容器与列退成 display: contents，各节成为 .pl-detail 的直接子项、按 order 重排
     match(narrow, /\.pl-cols,\s*\.pl-col\s*\{[^}]*display:\s*contents/);
-    match(narrow, /\.pl-kinds,\s*\.pl-from\s*\{[^}]*display:\s*none/);
+    match(narrow, /\.pl-row\s*\{[^}]*--pl-row-end:\s*var\(--space-2\)/);
+    ok(!/\.pl-kinds|\.pl-from/.test(css), "行里不再有「里面有什么 / 来源」两列");
   });
 
   it("窄档的节序：能做什么 → 输入与输出 → 工作流 → 看板样式 → 要你填的 → 装在哪 → 来源与版本", () => {

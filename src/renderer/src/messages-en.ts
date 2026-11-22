@@ -2619,7 +2619,7 @@ export const en = {
   },
   /** 能力页「连接」页签：待配置的品牌入口（目录事实在 shared/connectors.ts，这里只有界面文案） */
   connectors: {
-    tab: "Connections",
+    tab: "Connectors",
     intro: "Click \"Set up\" and the agent walks you through it. For ones marked OAuth, click \"Connect\".",
     recheck: "Check again",
     recheckTip: "Test every connection again",
@@ -2714,12 +2714,21 @@ export const en = {
     tabFind: "Discover",
     tabFindTip: "Planned · the plugin market is not built yet",
     tabInstalled: "Installed",
-    connectLocal: "Connect a local plugin",
-    makeWithAgent: "Make one with the agent",
-    makeWithAgentTip: "Open a new task in this workspace where the agent builds a plugin with you from scratch",
+    connectLocal: "Connect a local plugin…",
+    makeWithAgent: "Custom ability",
+    makeWithAgentTip: "Open a new task in this workspace: say what ability you want the agent to have and build it together",
+    createMore: "More ways to add",
     makeWithAgentOffTip: "The plugin-creator plugin is turned off — switch it on in the list first",
-    // 预填输入框的一句引导：完整的一句话，不以冒号结尾；开头的 /skill:plugin-creator 点名内置的做插件技能
-    makeWithAgentDraft: "/skill:plugin-creator I want to make a plugin with you. ",
+    // 预填输入框的一句引导，停在冒号后面等用户接着写（不自动发送）；开头的 /skill:plugin-creator 点名内置的做插件技能
+    makeWithAgentDraft: "/skill:plugin-creator Help me make a new ability. What I need, or where it comes from: ",
+    // 行尾 ⋯ 菜单：内置标记与开关都挪到这里；行尾只留种类（关着写「已关」）
+    menuTurnOn: "Turn on",
+    menuTurnOff: "Turn off",
+    menuOpen: "View details",
+    menuBuiltin: "Built in · ships with the app",
+    menuMore: (name: string) => `More actions for ${name}`,
+    menuMoreTip: "More",
+    rowOff: "Off",
     planned: "Planned",
     filterPlaceholder: "Filter",
     filterAria: "Filter abilities",
@@ -2907,7 +2916,7 @@ export const en = {
     legacySkillNote: (path: string, kind: FileManagerKind) =>
       `This is one of your own skills, stored at ${path}. To delete it, choose "${enRevealLabel(kind)}" and move its folder away.`,
     // 行尾小字标：面板叫「能力」，每一项仍按自己的种类叫
-    rowKind: { plugin: "Plugin", builtin: "Built-in", skill: "Skill", mcp: "MCP" },
+    rowKind: { plugin: "Plugin", builtin: "Built-in", skill: "Skill", mcp: "MCP", connector: "Connector" },
     // 零散技能详情：内容三格 + 在哪儿可用
     contentTitle: "Content",
     contentHint: "Saved when you leave the box",
