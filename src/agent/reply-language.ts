@@ -10,7 +10,7 @@ import { stripInvocationBlock } from "../shared/invocation.ts";
 import { splitUserTextBlocks } from "../shared/prompt-attachments.ts";
 import { withoutQuotes } from "../shared/quote.ts";
 import { detectReplyLang, type ReplyLang } from "../shared/reply-language.ts";
-import { isClosingScanText } from "../shared/wrapup-scan.ts";
+import { isClosingScanText } from "../shared/legacy-closing-scan.ts";
 import type { ContextMessage } from "./image-byte-budget.ts";
 
 /** Orbita 自己加在用户消息上的成对标签：先整块抹掉，再按各自的规则剥附件 / 指令 / 引用 */

@@ -11,8 +11,8 @@ import {
    */
   LEFT_CAPSULE_W,
   PANEL_CAPSULE_INSET,
-  LAYER_PAD,
-  RAIL_W,
+  TOGGLE_CAP_W,
+  toggleCapsuleLeft,
   SESSION_GAP,
   conversationColumn,
   leftCapsuleX,
@@ -83,9 +83,8 @@ export function Toolbar(props: {
     // 只挂一次：胶囊的三个格都是常驻 / 受控替换，量的是同一颗胶囊的内容
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  // 右栏开关胶囊：右缘与卡片右缘齐（Windows 时三键已上行，不再左让）
-  const toggleRight = props.windowWidth - LAYER_PAD;
-  const toggleLeft = toggleRight - RAIL_W;
+  // 右栏开关胶囊：居中在右图标条里，与条上的图标同一条竖线（Windows 时三键已上行，不再左让）
+  const toggleLeft = toggleCapsuleLeft(props.windowWidth);
   // 右栏胶囊：左缘 = 分隔线 + 内缩（与右栏内容左缘对齐），宽 = 右栏宽 − 两侧内缩；
   // 窄窗覆盖层锚右、默认宽（右缘同样让 8）
   const panelW =
@@ -109,9 +108,7 @@ export function Toolbar(props: {
     panelWidth: props.panelWidth,
   });
   const sess = sessionCapsule({
-    windowWidth: props.windowWidth,
     colLeft: col.left,
-    colRight: narrowLimit === null ? col.right : Math.min(col.right, narrowLimit),
     leftCapRight: left + leftW,
     rightLimit: narrowLimit === null ? limit : Math.min(limit, narrowLimit),
   });
@@ -185,7 +182,7 @@ export function Toolbar(props: {
       )}
 
       {/* 右栏开关（辅助对话）：单格胶囊，点亮 = mode 色（右图标条选中同款） */}
-      <div className="toolbar-capsule" style={{ left: toggleLeft, width: RAIL_W }}>
+      <div className="toolbar-capsule" style={{ left: toggleLeft, width: TOGGLE_CAP_W }}>
         <button
           type="button"
           className="quiet-control cap-seg solo"

@@ -87,7 +87,7 @@ describe("planTimeline", () => {
     assert.equal(planNoticeOf(planTimeline(records), ["p2"]), null);
   });
 
-  test("被拒的不算；还在跑的过严格校验；later / awaiting 带出来", () => {
+  test("被拒的不算；还在跑的过严格校验；awaiting 带出来；旧入参里的 later 读时忽略", () => {
     const t = planTimeline([
       plan("p1", 10, steps(["读", "in_progress"])),
       plan("bad", 15, steps(["x", "in_progress"], ["y", "in_progress"]), { status: "running" }),
@@ -96,7 +96,7 @@ describe("planTimeline", () => {
     ]);
     assert.ok(t !== null);
     assert.equal(t.versions.length, 2);
-    assert.deepEqual(t.current.later, [{ text: "日期解析不一致" }]);
+    assert.equal("later" in t.current, false);
     assert.equal(t.current.awaiting, true);
   });
 });

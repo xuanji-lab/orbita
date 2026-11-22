@@ -147,7 +147,6 @@ export function Drawer(props: {
   // 换过来的那一帧不摆完成键，免得把「完成」点到上一条会话头上
   const realTab = activeTab !== null && activeTab !== NEW_TASK_TAB ? activeTab : null;
   const activeMeta = realTab === null ? null : findMeta(props.engine, realTab);
-  const viewOpenId = props.view.sessionId ?? props.view.opened?.id ?? null;
   const cap =
     activeTab === null || showPicker ? null : (
       <DrawerCap
@@ -155,17 +154,6 @@ export function Drawer(props: {
           title: tabLabel(activeTab, activeMeta?.title ?? null, t.common.newTask),
           shortId: tabShortId(activeTab),
           onRename: realTab === null ? undefined : (title) => props.view.renameSession(realTab, title),
-          completion:
-            realTab !== null && viewOpenId === realTab
-              ? {
-                  state: activeMeta?.completion ?? "open",
-                  closing: props.view.closingScan,
-                  busy: props.view.phase !== "idle",
-                  scanless: activeMeta?.piSessionFile == null,
-                  onMark: props.view.startClosingRitual,
-                  onSet: (next) => props.view.setCompletionSession(realTab, next),
-                }
-              : null,
         }}
         others={otherTabs(props.docked, activeTab).map((tab) => ({
           tab,

@@ -8,7 +8,6 @@ import { InlineName } from "./InlineName";
 import { Menu, type MenuItem } from "./Menu";
 import { UsageMeter } from "./UsageMeter";
 import { WorkspaceFilterBar, useScrolledEdge, useWorkspaceFilter } from "./WorkspaceFilterBar.tsx";
-import { carryoverCounts, groupCarryoversByWorkspace, type CarryoverWorkspaceGroup } from "./carryover-groups.ts";
 import { bucketCounts, buildOptions, defaultFilter, groupByWorkspace, type WsAllow, type WsFilter } from "./workspace-filter.ts";
 import { WorkspaceFiles } from "./focus/WorkspaceFiles.tsx";
 import {
@@ -21,7 +20,7 @@ import {
 } from "./sidebar-selection.ts";
 import { api } from "../api";
 import type { ChatSession } from "../features/chat/useChatSession";
-import { childSessions, isSessionDone, rootSessions, type Carryover, type SessionMeta } from "@shared/session";
+import { childSessions, rootSessions, type SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 import {
   SIDEBAR_AGE_CHOICES,
@@ -33,7 +32,6 @@ import {
 } from "@shared/settings";
 import { SETTINGS_TABS, type SettingsTab } from "../features/settings/settings-tabs.ts";
 import { describeList } from "../features/chat/load-state.ts";
-import { nextCompletion } from "./completion-mark.ts";
 import { rowStatusIcon } from "./row-status.ts";
 import { aggregateRunStates, runStateLabel, runStateOf } from "../features/notify/completion-notice.ts";
 import { StatusPie } from "./StatusPie";
@@ -41,11 +39,7 @@ import { chipCompactAt, nextCompactLevel } from "./filter-row-compact.ts";
 import { ageCounts, filterByAge } from "./sidebar-age.ts";
 import { sessionAgeLabel } from "./relative-time.ts";
 import { useMinuteTick } from "./use-minute-tick.ts";
-import { canResumeInSource } from "../features/chat/carryover-resume.ts";
-import {
-  effectiveSidebarFilters,
-  type StatusFilter,
-} from "./sidebar-filters.ts";
+import { effectiveSidebarFilters } from "./sidebar-filters.ts";
 import {
   TASKS_FOLD_KEY,
   foldKeyForWorkspace,
@@ -70,23 +64,6 @@ import type { Messages } from "../messages-en.ts";
 export type Overlay = "settings" | "board" | null;
 
 /**
- * 闲置建议线：open 且未归档、最后一次活动超过这个天数的会话，行内轻提示
- * 「Mark done?」。**纯派生不落盘**——建议只是当下的一句提醒，不是会话状态；
- * 每次渲染按 updatedAt 现算，不弹通知、不加角标，hover 才出现。
- */
-const IDLE_SUGGEST_DAYS = 7;
-const IDLE_SUGGEST_MS = IDLE_SUGGEST_DAYS * 24 * 60 * 60 * 1000;
-
-/**
- * 会话的未办遗留数（角标、Has todos 筛选共一口径）：按 sourceSessionId 现算。
- * 抽出来是因为两个消费者（行内角标 / 筛选管线）用同一个「还有几件没办」的判定，
- * 各写一份迟早漂移。
- */
-function openTodoCount(carryovers: readonly Carryover[], sessionId: string): number {
-  return carryovers.filter((item) => item.sourceSessionId === sessionId && item.status === "open").length;
-}
-
-/**
  * 状态饼的 tooltip：见 completion-notice.ts 的 runStateLabel（侧栏行与铃铛清单
  * 同一套句子）。包一层是让调用点读起来像个本地词。
  */
@@ -94,7 +71,7 @@ function barLabel(state: "running" | "waiting" | "done" | "failed", t: Messages)
   return runStateLabel(state, t);
 }
 
-/** 已归档 / 以后再做的选择条：有「任务」档，没有「全局」档 */
+/** 已归档的选择条：有「任务」档，没有「全局」档 */
 const SESSION_FILTER_ALLOW: WsAllow = { tasks: true, global: false };
 
 /**
@@ -102,16 +79,11 @@ const SESSION_FILTER_ALLOW: WsAllow = { tasks: true, global: false };
  * 不给一条对不上当前筛选的提示。
  */
 function filterEmptyText(
-  status: StatusFilter,
-  starredOnly: boolean,
-  hasTodosOnly: boolean,
   /** 非 null = 时间范围开着，且去掉它之后本来是有会话的（范围才是「扑空」的原因） */
   emptiedByAge: SidebarAgeDays | null,
   t: Messages,
 ): string {
   if (emptiedByAge !== null) return t.sidebar.emptyInRange(emptiedByAge);
-  if (hasTodosOnly) return t.sidebar.emptyHasTodos;
-  if (status === "done") return starredOnly ? t.sidebar.emptyDoneStarred : t.sidebar.emptyDone;
   return t.sidebar.emptyStarred;
 }
 
@@ -138,14 +110,12 @@ export function Sidebar(props: {
   onSettingsTab: (tab: SettingsTab) => void;
   onOverlay: (next: Overlay) => void;
   /**
-   * Archived / Carryovers 两个子视图的开关由 App 持有（2026-09-22：入口迁到右栏
+   * Archived 子视图的开关由 App 持有（2026-09-22：入口迁到右栏
    * 底部，状态跟着入口走，侧栏只剩受控渲染）。**子视图本体仍在侧栏**：换掉
    * 主列表区，不弹窗。
    */
   showArchived: boolean;
-  showCarryovers: boolean;
   onShowArchived: (next: boolean) => void;
-  onShowCarryovers: (next: boolean) => void;
   /** 当前宽度（px）。拖动中由调用方只改本地 state，松手才落 settings */
   width: number;
   /** 未读（后台完成没看过的）会话 id 集：工作区组与 TASKS 行画未读点 */
@@ -165,15 +135,10 @@ export function Sidebar(props: {
   collapsed: boolean;
   onCollapsedChange: (next: boolean) => void;
   /**
-   * 收起态页头「新任务」与遗留事项「转成任务」的信号（nonce 递增）：Sidebar 展开列表后把
+   * 收起态页头「新任务」的信号（nonce 递增）：Sidebar 展开列表后把
    * TASKS 组跟着展开——新任务不能落进一个收着的组里无声无息。0 = 从未发过。
    */
   newTaskSignal: number;
-  /**
-   * 遗留事项带上下文开工（遗留面板的「带上下文继续」）：App 持有这条路，右栏「这条任务 ›
-   * 留到以后」的「转成任务」走的是同一个函数——退出遗留面板与盖层、展开侧栏、开新会话。
-   */
-  onStartCarryoverTask: (item: Carryover) => void;
   /**
    * 左栏此刻换成哪个工作区的文件视图：browse = 不计时地看一眼（工作区行悬停的
    * 「查看工作区文件」进的），focus = 专注中。null = 正常的会话列表。
@@ -212,7 +177,7 @@ export function Sidebar(props: {
    */
   const filterRowRef = useRef<HTMLDivElement | null>(null);
   const [filterLevel, setFilterLevel] = useState(0);
-  const chipFullWidths = useRef<(number | null)[]>([null, null, null, null, null]);
+  const chipFullWidths = useRef<(number | null)[]>([null, null, null]);
   const chipWidthKey = useRef<{ t: Messages; aged: boolean } | null>(null);
   useLayoutEffect(() => {
     const row = filterRowRef.current;
@@ -220,7 +185,7 @@ export function Sidebar(props: {
     const aged = props.ageDays !== null;
     if (chipWidthKey.current === null || chipWidthKey.current.t !== t || chipWidthKey.current.aged !== aged) {
       chipWidthKey.current = { t, aged };
-      chipFullWidths.current = [null, null, null, null, null];
+      chipFullWidths.current = [null, null, null];
       if (filterLevel !== 0) {
         // 完整态才量得到完整宽度：先回 0 档，下一轮（依赖 filterLevel 变）再量
         setFilterLevel(0);
@@ -247,28 +212,18 @@ export function Sidebar(props: {
     const observer = new ResizeObserver(measure);
     observer.observe(row);
     return () => observer.disconnect();
-    // 筛选行可能整个不渲染（无会话 / Archived / Settings 视图），ref 空时不装观察者；
-    // 它回来时靠下面这几个依赖重跑一次。live 在后面才算，这里用 session.sessions.length 代替
+    // 筛选行可能整个不渲染（无会话 / Archived / Settings 视图 / 侧栏收起），ref 空时不装观察者；
+    // 它回来时靠下面这几个依赖重跑一次。live 在后面才算，这里用 session.sessions.length 代替。
+    // props.collapsed 必须在里面：收起时整个侧栏 return null，旧观察者盯着被摘掉的节点、回报宽 0，
+    // 把档位推到「全图标」；再展开时没有依赖变化就不重装观察者，筛选行会一直停在全图标
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterLevel, props.ageDays, t, session.sessions.length, overlayOpen, props.showArchived, props.showCarryovers]);
+  }, [filterLevel, props.ageDays, t, session.sessions.length, overlayOpen, props.showArchived, props.collapsed]);
   /**
-   * 「Starred」叠加开关的开合，与状态筛选正交——星标是价值标记，与任务
-   * 做没做完是两个问题，组合起来（如 Active + Starred）是合法且有意义的视图。
+   * 「Starred」叠加开关的开合——星标是用户的价值标记（「值得回来翻」），与时间范围叠加生效。
    * **只作用于主浏览列表**（Workspaces + Tasks）：Archived 是存储位置视图、
    * Settings 是另一块列表，都不受（也不该隐形地受）筛选。
    */
   const [starredOnly, setStarredOnly] = useState(false);
-  /**
-   * 完成状态筛选：单选组（All / Done 互斥，点一个顶掉另一个）。
-   * 默认 All = 无过滤；与 Starred 是两条独立的开关，叠加生效。
-   */
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  /**
-   * 「Has todos」叠加开关（收尾仪式的数据源落地后启用）：筛出**还有未办遗留**
-   * 的会话——口径与角标同一份（open 数 > 0），事项全部办完的会话不再出现在
-   * 这个视图里（它已经没有要办的事了，找它去 Done）。
-   */
-  const [hasTodosOnly, setHasTodosOnly] = useState(false);
   /**
    * 命名新建工作区：Workspaces 列表顶部那行就地编辑（InlineName）开没开着。
    * 「+」菜单里选「New workspace…」置 true；Enter / Esc / 点别处（失焦提交，
@@ -337,10 +292,9 @@ export function Sidebar(props: {
   /** 归档的从主列表里移走——**不是删除**，它们收在底部那一行后面 */
   const live = roots.filter((m) => !m.archived);
   const archived = roots.filter((m) => m.archived);
-  // 已归档 / 以后再做各记一份「上次选的工作区」（没选过时默认当前会话所在的工作区）
+  // 已归档记一份「上次选的工作区」（没选过时默认当前会话所在的工作区）
   const subviewFallback = defaultFilter(openWorkspaceId, session.workspaces);
   const [archivedFilter, setArchivedFilter] = useWorkspaceFilter("archived", subviewFallback, session.workspaces, SESSION_FILTER_ALLOW);
-  const [carryoverFilter, setCarryoverFilter] = useWorkspaceFilter("carryovers", subviewFallback, session.workspaces, SESSION_FILTER_ALLOW);
   // 组内按归档时间新→旧：meta 没存归档时刻，以最后活动时间代之（归档的多是做完不再动的会话，两者基本一致）
   const archivedGroups = groupByWorkspace(
     [...archived].sort((a, b) => b.updatedAt - a.updatedAt),
@@ -358,20 +312,8 @@ export function Sidebar(props: {
     selected: archivedFilter,
     hideEmpty: true,
   });
-  const carryCounts = carryoverCounts(session.carryovers, session.sessions, session.workspaces);
-  const carryoverOptions = buildOptions({
-    workspaces: session.workspaces,
-    total: carryCounts.total,
-    perWorkspace: carryCounts.perWorkspace,
-    tasks: carryCounts.tasks,
-    global: null,
-    selected: carryoverFilter,
-    hideEmpty: true,
-    present: carryCounts.listed,
-  });
   // 子视图的标题 + 选择条钉在列表外：列表滚起来时在它们下面画发丝线（内容被滚动区上缘裁掉时不至于像被盖住）
-  const subviewEdge = useScrolledEdge(props.showArchived ? "archived" : "carryovers");
-  const carryoverGroups = groupCarryoversByWorkspace(session.carryovers, session.sessions, session.workspaces, carryoverFilter);
+  const subviewEdge = useScrolledEdge("archived");
   /** 选了某档却没有东西时空态里写的名字 */
   const filterName = (filter: WsFilter): string =>
     filter.kind === "workspace"
@@ -383,28 +325,16 @@ export function Sidebar(props: {
   // （只列根会话，子会话 PR4c 2.3），两个数字不一致会出现「读到 0 条」误报或反之
   const sessionList = describeList(session.loads.sessions, roots.length);
   /**
-   * 主列表的筛选管线（筛选区 chips）。状态（All/Done，单选组）、星标与
-   * Has todos（两个叠加开关）三条正交条件串在同一个 filter 里。**只作用于主浏览
-   * 列表**——Archived / Carryovers 是存储与事项视图，不受（也不该隐形地受）筛选。
+   * 主列表的筛选管线（筛选区 chips）。星标（叠加开关）与时间范围两条正交条件串在同一个
+   * filter 里。**只作用于主浏览列表**——Archived 是存储视图，不受（也不该隐形地受）筛选。
    * 有效值过 effectiveSidebarFilters（全是默认值时 null = 不过滤），见 sidebar-filters.ts。
    */
   const ageDays = props.ageDays;
-  const filters = effectiveSidebarFilters({
-    status: statusFilter,
-    starredOnly,
-    hasTodosOnly,
-    ageDays,
-  });
+  const filters = effectiveSidebarFilters({ starredOnly, ageDays });
   const filtered = filters !== null;
   const now = Date.now();
-  // 先过前三项；时间范围下拉每一档的命中条数以它为底（「选这一档我会看到几条」，与其它筛选叠加后的数）
-  const beforeAge = live.filter((m) => {
-    if (filters === null) return true;
-    if (filters.status === "done" && !isSessionDone(m)) return false;
-    if (filters.starredOnly && m.starred !== true) return false;
-    if (filters.hasTodosOnly && openTodoCount(session.carryovers, m.id) === 0) return false;
-    return true;
-  });
+  // 先过星标；时间范围下拉每一档的命中条数以它为底（「选这一档我会看到几条」，与星标叠加后的数）
+  const beforeAge = live.filter((m) => filters === null || !filters.starredOnly || m.starred === true);
   const ageCountsNow = ageCounts(beforeAge, now);
   // 再过时间范围；正在看的那条出了窗口也留着（同 visibleWithOpen 的思路）
   const scoped = filterByAge(beforeAge, now, ageDays, openId);
@@ -441,7 +371,7 @@ export function Sidebar(props: {
     ...(tasksFolded || sessionList.body !== "list" ? [] : looseVisible.map((m) => m.id)),
   ];
   const batch = selectedInOrder(selection, visibleOrder);
-  const listView = !overlayOpen && !props.showArchived && !props.showCarryovers;
+  const listView = !overlayOpen && !props.showArchived;
   /** 行的高亮：多选进行中只亮选中的那几行（Finder 同款），否则亮正打开的那条 */
   const rowActive = (id: string): boolean => (batch.length > 0 ? selection.ids.has(id) : id === openId);
   /** 某一行菜单里「移到…」要搬哪些：它在多选里就搬整批，否则只搬它自己 */
@@ -519,11 +449,11 @@ export function Sidebar(props: {
   }, [checkFor, checkGroupSize]);
 
   /**
-   * 左栏的文件视图（浏览 / 专注）：设置页与 Archived / Carryovers 子视图盖着时
+   * 左栏的文件视图（浏览 / 专注）：设置页与 Archived 子视图盖着时
    * 优先让位给它们（那些入口在右栏，不受专注影响）；工作区被移除则回会话列表。
    */
   const filesViewWs =
-    props.filesView !== null && !overlayOpen && !props.showArchived && !props.showCarryovers
+    props.filesView !== null && !overlayOpen && !props.showArchived
       ? (session.workspaces.find((item) => item.id === props.filesView?.workspaceId) ?? null)
       : null;
   const filesBody =
@@ -570,7 +500,7 @@ export function Sidebar(props: {
 
   // —— 收起态：什么都不渲染，主区域向左铺满。侧栏开关与新任务住工具栏左胶囊
   // （shell/Toolbar.tsx），开合不换容器；折叠期间列表不可达，要切会话先展开。
-  // Archived / Carryovers / Settings 的入口本来就只在右栏底部（2026-09-22 裁决），
+  // Archived / Settings 的入口本来就只在右栏底部（2026-09-22 裁决），
   // 右栏不折叠。
   if (props.collapsed) {
     return null;
@@ -615,12 +545,12 @@ export function Sidebar(props: {
       </div>
 
       {/**
-        筛选区：会话浏览的过滤 chips。状态是单选组（All / Done 互斥，
-        点一个顶掉另一个），Starred 是叠加开关——两者正交，可组合出
-        「已完成且星标」这样的视图。**只在主列表视图显示**，且没有任何会话时
-        筛选无从谈起，不摆。「进行中」2026-10-24 去掉（用户：「似乎完全没用」）。
+        筛选区：会话浏览的过滤 chips。「全部」= 没开任何筛选（点一下清掉星标与时间范围），
+        Starred 是叠加开关，时间范围是下拉——两者正交。「已完成」与「有待办」两个筛选已随会话
+        「完成」与遗留事项一起删除（2026-11-22）。**只在主列表视图显示**，且没有任何会话时
+        筛选无从谈起，不摆。
       */}
-      {live.length > 0 && !overlayOpen && !props.showArchived && !props.showCarryovers && (
+      {live.length > 0 && !overlayOpen && !props.showArchived && (
         <div
           ref={filterRowRef}
           style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, overflow: "hidden" }}
@@ -628,43 +558,26 @@ export function Sidebar(props: {
           <Chip
             icon="list"
             compact={chipCompactAt(filterLevel, 0)}
-            active={statusFilter === "all"}
+            active={!filtered}
             title={t.sidebar.filterAllTip}
-            onClick={() => setStatusFilter("all")}
+            onClick={() => {
+              setStarredOnly(false);
+              if (ageDays !== null) props.onAgeDaysChange(null);
+            }}
           >
             {t.sidebar.filterAll}
           </Chip>
           <Chip
-            icon="check"
-            compact={chipCompactAt(filterLevel, 1)}
-            active={statusFilter === "done"}
-            title={t.sidebar.filterDoneTip}
-            onClick={() => setStatusFilter("done")}
-          >
-            {t.sidebar.filterDone}
-          </Chip>
-          <Chip
             icon="star"
-            compact={chipCompactAt(filterLevel, 2)}
+            compact={chipCompactAt(filterLevel, 1)}
             active={starredOnly}
             title={t.sidebar.filterStarredTip}
             onClick={() => setStarredOnly((value) => !value)}
           >
             {t.sidebar.filterStarred}
           </Chip>
-          {/* 灯泡 = 「这条会话还留着 idea / 没办完的事」（wafo 2026-09-22 裁决） */}
-          <Chip
-            icon="lightbulb"
-            compact={chipCompactAt(filterLevel, 3)}
-            active={hasTodosOnly}
-            title={t.sidebar.filterTodosTip}
-            onClick={() => setHasTodosOnly((value) => !value)}
-          >
-            {t.sidebar.filterTodos}
-          </Chip>
           {/*
-            时间范围（2026-11-07）：只列最近 N 天动过的。不限时只画「时钟 + ˅」不带字——第五个带字的
-            chip 会把 288px 的筛选行挤进紧凑态；选了某档才露出「3 天」，一眼看出范围开着。
+            时间范围（2026-11-07）：只列最近 N 天动过的。不限时只画「时钟 + ˅」不带字；选了某档才露出「3 天」，一眼看出范围开着。
             菜单每档后面写命中条数（在其它筛选之上算的）。选择落盘（settings.sidebarAgeDays）。
           */}
           <Menu
@@ -692,8 +605,8 @@ export function Sidebar(props: {
             trigger={({ toggle }) => (
               <Chip
                 icon="clock"
-                compact={chipCompactAt(filterLevel, 4)}
-                chevron={!chipCompactAt(filterLevel, 4)}
+                compact={chipCompactAt(filterLevel, 2)}
+                chevron={!chipCompactAt(filterLevel, 2)}
                 active={ageDays !== null}
                 title={ageDays === null ? t.sidebar.filterAgeTip : t.sidebar.filterAgeChoice(ageDays)}
                 onClick={toggle}
@@ -755,7 +668,7 @@ export function Sidebar(props: {
         而它既不像一个「返回」，又会在归档空了时禁用。这是一个子视图，子视图就该在它自己的
         标题旁边带着回去的路。标题与工作区选择条**钉在列表外面**：列表滚下去了，一排工作区还在手边。
       */}
-      {(props.showArchived || props.showCarryovers) && !overlayOpen && (
+      {props.showArchived && !overlayOpen && (
         // minmax(0,1fr)：不加的话 grid 的 auto 列按选择条的内容宽撑开，横向滚动永远触发不了
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr)", gap: "var(--space-1)", paddingBottom: "var(--space-1)", ...subviewEdge.edgeStyle }}>
           <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
@@ -763,18 +676,18 @@ export function Sidebar(props: {
               label={t.sidebar.backToTasks}
               title={t.sidebar.backToTasksTip}
               size={20}
-              onClick={() => (props.showArchived ? props.onShowArchived(false) : props.onShowCarryovers(false))}
+              onClick={() => props.onShowArchived(false)}
               style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-secondary)" }}
             >
               <Icon name="chevron-left" size={13} strokeWidth={1.8} />
             </IconButton>
-            <NodeLabel>{props.showArchived ? t.sidebar.archived : t.sidebar.carryovers}</NodeLabel>
+            <NodeLabel>{t.sidebar.archived}</NodeLabel>
           </div>
           <WorkspaceFilterBar
-            options={props.showArchived ? archivedOptions : carryoverOptions}
+            options={archivedOptions}
             workspaces={session.workspaces}
-            selected={props.showArchived ? archivedFilter : carryoverFilter}
-            onSelect={props.showArchived ? setArchivedFilter : setCarryoverFilter}
+            selected={archivedFilter}
+            onSelect={setArchivedFilter}
           />
         </div>
       )}
@@ -794,7 +707,7 @@ export function Sidebar(props: {
             {/*
               空了也停在这里、显示空态（2026-09-27 wafo：空的时候自动弹回主列表，点入口像按钮坏了）。
               以前会自动退回，是因为出口只有底部那条会在 0 条时禁用的入口——现在标题旁有返回键、
-              入口常驻右栏，死胡同已不存在。与遗留事项面板（09-25 起 0 条也能进）同一口径。
+              入口常驻右栏，死胡同已不存在。
             */}
             {archived.length === 0 && <Empty icon={FEATURE_ICON.archived}>{t.sidebar.noArchived}</Empty>}
             {archived.length > 0 && archivedGroups.length === 0 && (
@@ -817,27 +730,6 @@ export function Sidebar(props: {
               </div>
             ))}
           </>
-        ) : props.showCarryovers && !overlayOpen ? (
-          <CarryoverPanel
-            workspaceGroups={carryoverGroups}
-            emptyForFilter={carryCounts.listed.total > 0 ? filterName(carryoverFilter) : null}
-            sessions={session.sessions}
-            onSetStatus={session.setCarryoverStatus}
-            // 开工即回对话：退出面板、新会话落在来源会话的组里并展开那一组——App 的
-            // startCarryoverTask，右栏「这条任务 › 留到以后」的「转成任务」走同一条路
-            onResumeNew={props.onStartCarryoverTask}
-            onResumeInSource={(item) => {
-              // 右键备选：续跑原会话——跳回去看它接着干（同 onOpenTask 的退场）
-              props.onShowCarryovers(false);
-              props.onOverlay(null);
-              session.continueCarryoverInSource(item);
-            }}
-            onOpenTask={(id) => {
-              // 看完事项跳回对话：退出面板、切到那条会话（面板下次进重新开）
-              props.onShowCarryovers(false);
-              open(id);
-            }}
-          />
         ) : settingsOpen ? (
           <>
             <NodeLabel>{t.common.settings}</NodeLabel>
@@ -854,7 +746,7 @@ export function Sidebar(props: {
         ) : filtered && scoped.length === 0 ? (
           /* 筛选扑空：一条空态说清「为什么什么都没有、怎么才有」，而非留白两节空头 */
           <Empty icon="list-filter">
-            {filterEmptyText(statusFilter, starredOnly, hasTodosOnly, ageDays !== null && beforeAge.length > 0 ? ageDays : null, t)}
+            {filterEmptyText(ageDays !== null && beforeAge.length > 0 ? ageDays : null, t)}
           </Empty>
         ) : (
           <>
@@ -1654,9 +1546,7 @@ function SessionRow(props: {
   const t = useT();
   const { meta, session } = props;
   const [editing, setEditing] = useState(false);
-  const [step, setStep] = useState<"main" | "move" | "delete" | "archive" | "archive-done">(
-    "main",
-  );
+  const [step, setStep] = useState<"main" | "move" | "delete" | "archive">("main");
   /**
    * 删除确认步要说的「工作台里有几个文件」。删会话连带删工作台，确认项先把
    * 后果说出来（提示后删，Proma 是不提示直接删，我们多这一句）。null = 没拉到
@@ -1669,7 +1559,6 @@ function SessionRow(props: {
   const children = childSessions(session.sessions, meta.id);
   // 状态饼（sessionRunState，与右下角铃铛清单同一份真源）
   const bar = runStateOf(session, meta);
-  const done = isSessionDone(meta);
   /**
    * 行首状态槽：subRunning > pinned > 空。运行 / 未读 / 失败已归状态饼，槽里只剩
    * 静态标记。优先级与理由在 `row-status.ts`（纯函数 + 测试）。`null` = 这一
@@ -1684,19 +1573,6 @@ function SessionRow(props: {
     },
     t,
   );
-  // 这条会话的未办遗留数（行尾角标，与筛选同口径）
-  const openTodos = openTodoCount(session.carryovers, meta.id);
-  // 批量归档的目标数（清理入口随处可点，但只收已完成且未归档的）。子会话不参与
-  // 归档（session.ts 的契约），`archiveDoneSessions` 的目标同样已过 rootSessions
-  // 过滤——这里的显示数必须与它的实际目标数一致，否则按钮上写的数比真做的多
-  const doneCount = rootSessions(session.sessions).filter(
-    (m) => isSessionDone(m) && !m.archived,
-  ).length;
-  /**
-   * 闲置建议：open 且未归档、最后一次活动超过 7 天——纯派生（每次渲染按
-   * updatedAt 现算，不落盘），hover 才出现的一个轻提示，不弹通知不加角标。
-   */
-  const idleSuggested = !done && !meta.archived && Date.now() - meta.updatedAt > IDLE_SUGGEST_MS;
   // 行尾常显的「多久没动了」（按最后活动 updatedAt，格式见 sessionAgeLabel）；每分钟随 Sidebar 重渲染刷新
   const ageLabel = sessionAgeLabel(meta.updatedAt, Date.now(), t);
   // 删父连带删子（session.ts 的级联契约）：删除确认要把这个后果说出来，不能只
@@ -1767,17 +1643,7 @@ function SessionRow(props: {
               onSelect: () => session.archiveSession(meta.id, true),
             },
           ]
-      : step === "archive-done"
-        ? [
-            { id: "cancel", label: t.common.cancel, icon: "x", keepOpen: true, onSelect: () => setStep("main") },
-            {
-              id: "confirm",
-              label: t.sidebar.archiveDoneTasks(doneCount),
-              icon: "archive",
-              onSelect: () => session.archiveDoneSessions(),
-            },
-          ]
-        : step === "move"
+      : step === "move"
         ? moveTargetItems(
             t,
             session.workspaces,
@@ -1825,19 +1691,6 @@ function SessionRow(props: {
                   keepOpen: true,
                   onSelect: () => setStep("archive"),
                 },
-            // 批量清理：收走全部已完成的会话。入口随处可点（清理不挑入口），但
-            // 数量与后果写在文案里，且与删除一样走两段式——批量动作先讲清楚再动。
-            ...(doneCount > 0
-              ? [
-                  {
-                    id: "archive-done",
-                    label: t.sidebar.archiveAllDone(doneCount),
-                    icon: "archive" as const,
-                    keepOpen: true,
-                    onSelect: () => setStep("archive-done"),
-                  },
-                ]
-              : []),
             {
               id: "delete",
               label: t.sidebar.deleteTask,
@@ -1888,12 +1741,12 @@ function SessionRow(props: {
       )}
       {/**
         行尾是**叠在同一格里的两层**（2026-11-07 用户：「不 hover 的时候看不出会话是几天前的」）：
-        - 静止层 `.task-row-rest`：已星标 / 已完成 / 遗留角标（常显的标记，accent）+ 「多久没动了」。
+        - 静止层 `.task-row-rest`：已星标（常显的标记，accent）+ 「多久没动了」。
           纯视觉（aria-hidden、不接指针）——要点任何东西必须先把指针移上这一行，那时已换成悬停层。
-        - 悬停层 `.task-row-acts`：星标 / 完成 / 角标 / 更多四个真按钮，静止全透明（含已标记的，它们的
+        - 悬停层 `.task-row-acts`：星标 / 更多两个真按钮，静止全透明（含已标记的，它们的
           常显改由静止层画），悬停 / 键盘聚焦 / 菜单开着时浮出，同时静止层淡出。
-        两层同格重叠、格宽取两者较宽的，所以悬停时行高与标题截断位置都不跳；常见情形（至多一枚标记 +
-        不超过 4 个字的时间）静止层不比悬停层宽，罕见的「星标 + 完成 + 角标」才会把这一行的格撑宽一点。
+        两层同格重叠、格宽取两者较宽的，所以悬停时行高与标题截断位置都不跳；静止层（至多一枚星标 +
+        不超过 4 个字的时间）不比悬停层宽。
         分层规则与淡出信号在 styles.css 的 `.task-row-tail`。
       */}
       <span className="task-row-tail">
@@ -1903,12 +1756,6 @@ function SessionRow(props: {
               <Icon name="star" size={13} strokeWidth={1.8} fill />
             </span>
           )}
-          {done && (
-            <span className="task-row-mark" style={{ color: "var(--color-accent)" }}>
-              <Icon name="check" size={13} strokeWidth={3} />
-            </span>
-          )}
-          {done && openTodos > 0 && <TodoBadge n={openTodos} t={t} />}
           <span className="task-row-age">{ageLabel}</span>
         </span>
         <span className="task-row-acts">
@@ -1933,44 +1780,6 @@ function SessionRow(props: {
           >
             <Icon name="star" size={13} strokeWidth={1.8} fill={meta.starred === true} />
           </IconButton>
-          {/**
-            完成标记：**与星标同一条行内标记规则**（wafo 2026-09-22，「之后的标也沿用这个逻辑」）：
-            hover / 键盘聚焦时浮出描边勾（tertiary），点一下即落定；落定后静止层常显、accent；再点 = Reopen。
-            图标是单纯的 `check`，不是圈勾——行首状态槽不再画完成，勾只在这里出现一次。
-            tooltip 兼任闲置建议：超过 7 天没动静的任务，建议写在这个开关的 tooltip 里，
-            不另摆一个建议按钮。done_with_todos 不换这里的图标——完成就是完成，
-            「还差几件」由右边那个灯泡角标单独说。
-          */}
-          <IconButton
-            label={done ? t.sidebar.reopen : t.sidebar.markDone}
-            title={
-              done
-                ? openTodos > 0
-                  ? t.sidebar.doneWithTodos(openTodos)
-                  : t.sidebar.doneTip
-                : idleSuggested
-                  ? t.sidebar.idleSuggest(IDLE_SUGGEST_DAYS)
-                  : t.sidebar.markDone
-            }
-            size={20}
-            onClick={() =>
-              session.setCompletionSession(meta.id, nextCompletion(meta.completion ?? "open"))
-            }
-            className="reveal"
-            style={{
-              borderRadius: "var(--radius-xs)",
-              color: done ? "var(--color-accent)" : "var(--color-text-tertiary)",
-            }}
-          >
-            <Icon name="check" size={13} strokeWidth={done ? 3 : 1.8} />
-          </IconButton>
-          {/**
-            遗留角标：完成标记右边的一个数字——收尾时扫出来、这条会话还没办的事项数
-            （按 sourceSessionId 现算，与 Has todos 筛选同口径），办完就消失。
-            **不再画第二个 circle-check**：完成这件事左边那个标记已经说了，
-            角标只补「还差几件」这一句。槽序：星 → 完成 → 角标。
-          */}
-          {done && openTodos > 0 && <TodoBadge n={openTodos} t={t} className="reveal" />}
           <Menu
             items={items}
             align="end"
@@ -2009,178 +1818,8 @@ function SessionRow(props: {
   );
 }
 
-/** 遗留角标（灯泡 + 数字）：静止层与悬停层各画一份，悬停层的那份带 reveal 淡入 */
-function TodoBadge(props: { n: number; t: Messages; className?: string }) {
-  return (
-    <span
-      className={props.className}
-      title={props.t.sidebar.openTodosLeft(props.n)}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 2,
-        flex: "0 0 auto",
-        fontFamily: "var(--font-family-business)",
-        fontSize: "var(--font-size-xs)",
-        fontWeight: "var(--weight-semibold)",
-        lineHeight: 1,
-        color: "var(--color-text-secondary)",
-      }}
-    >
-      {/* 灯泡与「Has todos」筛选同一个符号：光看数字读不出它数的是什么 */}
-      <Icon name="lightbulb" size={12} strokeWidth={1.8} />
-      {props.n}
-    </span>
-  );
-}
-
 /**
- * 以后再做面板（侧栏的 Carryovers 视图，2026-10-30 起是跨任务的**折叠索引**：每个来源任务一行、
- * 只写还有几项没做，点开才列各项）——当场记下的与收尾确认的是同一种东西，主战场在那条任务的进度面板。
- * 按来源会话分组，每条可勾办结、
- * 可跳回来源会话、可带上下文开工（左键新开一单 / 右键续跑原会话）。
- * **勾选即写盘**（carryoverSetStatus），角标与筛选跟着引擎缓存自动刷新；
- * 跳回原文今天只到「跳到那条会话」——滚动定位到 sourceMessageRange 首条
- * 需要消息序号 → DOM 的定位基建，还没有第二处消费者，先不做（TODO：
- * 「跳回原文」的滚动定位，等定位基建立项后接 sourceMessageRange[0]）。
- */
-function CarryoverPanel(props: {
-  /** 已按选择条分好的两层：工作区 → 来源会话 → 事项 */
-  workspaceGroups: readonly CarryoverWorkspaceGroup[];
-  /** 选了某档却没有东西时那一档的名字；null = 整个面板就是空的（还没记过任何事项） */
-  emptyForFilter: string | null;
-  sessions: readonly SessionMeta[];
-  onSetStatus: (id: string, status: Carryover["status"]) => void;
-  /** 方案 A：新开一单带上下文开工（面板主入口） */
-  onResumeNew: (item: Carryover) => void;
-  /** 方案 B：以遗留事项为用户消息续跑原会话（同一按钮的右键备选） */
-  onResumeInSource: (item: Carryover) => void;
-  onOpenTask: (sessionId: string) => void;
-}) {
-  const t = useT();
-  // 默认全折叠：一眼只看到「哪几个任务还有几项」，不是一整面待办墙
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const toggle = (key: string): void =>
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  if (props.workspaceGroups.length === 0) {
-    return (
-      <Empty icon={FEATURE_ICON.carryovers}>
-        {props.emptyForFilter === null ? t.sidebar.noCarryovers : t.sidebar.wsFilterNoneIn(props.emptyForFilter)}
-      </Empty>
-    );
-  }
-  return (
-    <>
-      {props.workspaceGroups.map((workspaceGroup) => (
-        <div key={workspaceGroup.workspace?.id ?? "tasks"} style={{ marginBottom: "var(--space-2)" }}>
-          <WsGroupHead workspace={workspaceGroup.workspace} count={workspaceGroup.count} />
-          {workspaceGroup.groups.map((group) => {
-        const groupKey = group.session?.id ?? group.items[0]?.sourceSessionId ?? "";
-        const isOpen = expanded.has(groupKey);
-        const openCount = group.items.filter((item) => item.status === "open").length;
-        return (
-        <div
-          key={groupKey}
-          style={{ marginBottom: "var(--space-3)" }}
-        >
-          {/**
-            组头就是来源会话：标题可点（跳回原文），来源已删的组换占位标题、
-            不可点。全组办结的组仍列出（办结的是历史，不是消失）。
-          */}
-          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
-          <IconButton
-            label={isOpen ? t.sidebar.collapseGroup : t.sidebar.expandGroup}
-            size={20}
-            onClick={() => toggle(groupKey)}
-            style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-tertiary)", flex: "none" }}
-          >
-            <Icon name={isOpen ? "chevron-down" : "chevron-right"} size={13} strokeWidth={1.8} />
-          </IconButton>
-          <button
-            type="button"
-            disabled={group.session === null}
-            onClick={() => {
-              if (group.session !== null) props.onOpenTask(group.session.id);
-            }}
-            title={group.session === null ? t.sidebar.sourceDeleted : t.sidebar.openSource}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "var(--space-1)",
-              flex: "1 1 auto",
-              minWidth: 0,
-              minHeight: 28,
-              padding: 0,
-              border: 0,
-              background: "transparent",
-              textAlign: "left",
-              cursor: group.session === null ? "default" : "pointer",
-              fontFamily: "var(--font-family-base)",
-              fontSize: "var(--font-size-base)",
-              fontWeight: "var(--weight-semibold)",
-              color:
-                group.session === null
-                  ? "var(--color-text-tertiary)"
-                  : "var(--color-text-primary)",
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-            }}
-          >
-            {group.session === null ? (
-              <Icon name="circle-off" size={13} strokeWidth={1.8} />
-            ) : (
-              <Icon name="message-square" size={13} strokeWidth={1.8} />
-            )}
-            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
-              {group.session === null
-                ? t.sidebar.deletedTask
-                : group.session.title === ""
-                  ? t.common.newTask
-                  : group.session.title}
-            </span>
-          </button>
-          <span
-            style={{
-              flex: "none",
-              fontSize: "var(--font-size-sm)",
-              fontVariantNumeric: "tabular-nums",
-              color: "var(--color-text-tertiary)",
-            }}
-          >
-            {openCount}
-          </span>
-          </div>
-          {isOpen && group.items.map((item) => (
-            <CarryoverRow
-              key={item.id}
-              item={item}
-              canJump={group.session !== null}
-              canResume={canResumeInSource(item, props.sessions)}
-              onSetStatus={props.onSetStatus}
-              onResumeNew={() => props.onResumeNew(item)}
-              onResumeInSource={() => props.onResumeInSource(item)}
-              onJump={() => {
-                if (group.session !== null) props.onOpenTask(group.session.id);
-              }}
-            />
-          ))}
-        </div>
-        );
-          })}
-        </div>
-      ))}
-    </>
-  );
-}
-
-/**
- * 已归档 / 以后再做里的工作区组头：folder 图标（与侧栏工作区组头同一枚）+ 名字 + 条数，条数钉在行右。
+ * 已归档里的工作区组头：folder 图标（与侧栏工作区组头同一枚）+ 名字 + 条数，条数钉在行右。
  * 「任务」组（没有工作区的）不画图标，与侧栏 TASKS 节点一样只有名字。
  */
 function WsGroupHead(props: { workspace: Workspace | null; count: number }) {
@@ -2216,118 +1855,6 @@ function WsGroupHead(props: { workspace: Workspace | null; count: number }) {
         }}
       >
         {props.count}
-      </span>
-    </div>
-  );
-}
-
-/** 面板里的一条遗留事项：勾选办结 / 标题 / 摘录 / 带上下文开工 / 跳回原文。 */
-function CarryoverRow(props: {
-  item: Carryover;
-  canJump: boolean;
-  /** 方案 B 可用：来源会话在且有 pi 本子（导入的只读会话没有，右键不拦截） */
-  canResume: boolean;
-  onSetStatus: (id: string, status: Carryover["status"]) => void;
-  onResumeNew: () => void;
-  onResumeInSource: () => void;
-  onJump: () => void;
-}) {
-  const t = useT();
-  const { item } = props;
-  const done = item.status === "done";
-  return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "auto minmax(0,1fr) auto",
-        gap: "var(--space-2)",
-        alignItems: "start",
-        padding: "var(--space-1) var(--space-2) var(--space-1) var(--space-1)",
-        borderRadius: "var(--radius-sm)",
-        minHeight: "var(--control-height-md)",
-      }}
-    >
-      <input
-        type="checkbox"
-        checked={done}
-        aria-label={item.title}
-        title={done ? t.sidebar.reopenItem : t.sidebar.markItemDone}
-        onChange={(event) => props.onSetStatus(item.id, event.target.checked ? "done" : "open")}
-        style={{ marginTop: 3, accentColor: "var(--color-accent)" }}
-      />
-      <div style={{ minWidth: 0 }}>
-        <span
-          style={{
-            display: "block",
-            fontSize: "var(--font-size-base)",
-            color: done ? "var(--color-text-tertiary)" : "var(--color-text-primary)",
-            textDecoration: done ? "line-through" : "none",
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-          }}
-        >
-          {item.title}
-        </span>
-        {item.detail !== "" && (
-          <span
-            title={item.detail}
-            style={{
-              display: "block",
-              fontSize: "var(--font-size-xs)",
-              lineHeight: "var(--line-height-ui)",
-              color: "var(--color-text-tertiary)",
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-            }}
-          >
-            {item.detail}
-          </span>
-        )}
-      </div>
-      {/**
-        带上下文开工：左键新开一单（主入口，键盘可达），右键续跑原会话（备选，
-        不可用时右键不拦截——原生菜单出来，诚实）。办结的行也能开工：勾了又想
-        跟进是合法场景。tooltip 把右键那半句讲出来（设计系统：tooltip 讲完句子
-        的另一半）。
-      */}
-      <span style={{ display: "inline-flex", alignItems: "center" }}>
-        <IconButton
-          label={t.sidebar.continueWithContext}
-          title={
-            props.canResume
-              ? t.sidebar.continueTipResumable
-              : t.sidebar.continueTip
-          }
-          size={20}
-          onClick={props.onResumeNew}
-          onContextMenu={
-            props.canResume
-              ? (event) => {
-                  event.preventDefault();
-                  props.onResumeInSource();
-                }
-              : undefined
-          }
-          style={{ color: "var(--color-text-secondary)" }}
-        >
-          <Icon name="corner-up-right" size={11} strokeWidth={1.8} />
-        </IconButton>
-        {/**
-          跳回原文：今天只到「跳到那条会话」——滚动定位到 sourceMessageRange 首条
-          需要消息序号→DOM 的定位基建，还没有第二处消费者（TODO，见 CarryoverPanel）。
-        */}
-        <IconButton
-          label={t.sidebar.jumpToSource}
-          title={props.canJump ? t.sidebar.jumpToSourceTip : t.sidebar.sourceDeleted}
-          size={20}
-          disabled={!props.canJump}
-          onClick={props.onJump}
-          style={{ color: "var(--color-text-tertiary)" }}
-        >
-          <Icon name="corner-down-left" size={11} strokeWidth={1.8} />
-        </IconButton>
       </span>
     </div>
   );

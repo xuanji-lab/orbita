@@ -6,7 +6,7 @@ import { planCallView, planDiffLines, planDiffRows, planDiffStats, planTicks, pl
 const step = (text: string, status: PlanStep["status"] = "pending"): PlanStep => ({ id: text, text, status, note: null });
 
 function version(n: number, toolCallId: string, items: PlanStep[]): PlanVersion {
-  return { n, recordId: `r-${toolCallId}`, toolCallId, at: n, items, why: null, later: [], changes: [], waits: [], removed: [], awaiting: false };
+  return { n, recordId: `r-${toolCallId}`, toolCallId, at: n, items, why: null, changes: [], waits: [], removed: [], awaiting: false };
 }
 
 const v1 = version(1, "p1", [step("读代码", "in_progress"), step("改代码")]);

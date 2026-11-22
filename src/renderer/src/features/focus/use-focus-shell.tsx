@@ -11,7 +11,7 @@
  *
  * App 需要给的事实都是参数：工作区与会话（工作区名、清单里的会话数）、设置里的
  * 提示音开关、文案表，再加四个出口——退掉设置页与子视图、展开侧栏、开文件面板、
- * 响提示音。App 自己那三份 state（overlay / archived / carryovers）不搬进来：
+ * 响提示音。App 自己那三份 state（overlay / archived）不搬进来：
  * 它们也属于别处的入口，搬走就要为「谁持有」再造一层。
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";

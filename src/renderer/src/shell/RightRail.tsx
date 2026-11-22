@@ -25,7 +25,7 @@ import { BellCard, useBellDismiss, type NoticeRow } from "../features/notify/Bel
  * 天然与面板融合，不需要手调第二层值（规格 §1.1）。32px 条里 26px 的方块用
  * `--radius-sm`（md 太圆）。点亮与开关由 App 按模式算好传入。
  *
- * 应用入口（Archived / Carryovers / Memory / Settings / 浏览器）由 App 组装成 `railEntries`
+ * 应用入口（Archived / Settings / 浏览器）由 App 组装成 `railEntries`
  * 传入，**首页常驻**——它们是应用入口不是会话动作，不随会话消失（wafo 2026-09-22 裁决，
  * 覆盖 2026-09-12「底部只放会话动作」：复制转录已并入会话行的「导出」，右栏不再挂会话动作）。
  *
@@ -56,7 +56,7 @@ export type RightPanelKind =
  * 它们在条上的分组与精简态去留不由调用方定，由 RightRail 按 id 登记（见本文件的 `items`）。
  */
 export interface RailEntry {
-  id: "carryovers" | "archived" | "browser" | "board" | "settings";
+  id: "archived" | "browser" | "board" | "settings";
   icon: IconName;
   /** tooltip 与读屏共用这一句 */
   label: string;
@@ -199,7 +199,6 @@ export function RightRail(props: {
       badge: props.automation.running,
     },
     // 收起来以后再看的：全部在「更多」菜单里（记忆库在设置里，不在右栏）
-    ...fromApp("carryovers", { group: "shelf", inMore: true }),
     ...fromApp("archived", { group: "shelf", inMore: true }),
     // 应用级：看板、设置，钉右下。通知收进「更多」，未读数写在菜单项上
     ...fromApp("board", { group: "app" }),

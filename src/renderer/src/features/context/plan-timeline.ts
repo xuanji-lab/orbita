@@ -20,7 +20,6 @@ import {
   parsePlanNotes,
   PLAN_TOOL_NAME,
   type PlanItem,
-  type PlanLater,
   type PlanToolDetails,
 } from "../../../../shared/plan.ts";
 import { assignStepIds, diffPlans, type PlanChange } from "../../../../shared/plan-diff.ts";
@@ -51,7 +50,6 @@ export interface PlanVersion {
   at: number;
   items: PlanStep[];
   why: string | null;
-  later: PlanLater[];
   /** 相对上一版的改动；只打勾 / 第一版 = 空 */
   changes: PlanChange[];
   /** 这一版新变成 waiting 的步（不算「改动」：不进 changes、不计入 edits，只给对话里的提示行用） */
@@ -78,7 +76,6 @@ interface RawVersion {
   record: Extract<TranscriptRecord, { role: "tool" }>;
   items: PlanItem[];
   why: string | null;
-  later: PlanLater[];
 }
 
 /** 一条 update_plan 记录里的计划：被拒的不算；还在跑的过工具同一套校验；执行完的宽松读 */
@@ -87,12 +84,12 @@ function rawVersion(record: TranscriptRecord): RawVersion | null {
   if (record.status === "complete") {
     const items = parsePlanItemsLoose(record.input);
     if (items.length === 0) return null;
-    const { why, later } = parsePlanNotes(record.input);
-    return { record, items, why, later };
+    const { why } = parsePlanNotes(record.input);
+    return { record, items, why };
   }
   try {
     const call = parsePlanCall(record.input);
-    return { record, items: call.items, why: call.why, later: call.later };
+    return { record, items: call.items, why: call.why };
   } catch {
     return null;
   }
@@ -185,7 +182,6 @@ function planTimelines(records: readonly TranscriptRecord[]): PlanTimeline[] {
       at: raw.record.timestamp,
       items,
       why: raw.why,
-      later: raw.later,
       changes: diff.fresh ? [] : diff.changes,
       waits: diff.fresh ? [] : diff.waits,
       removed,

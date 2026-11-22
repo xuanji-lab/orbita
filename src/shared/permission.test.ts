@@ -168,22 +168,6 @@ describe("交接（USER_ACTION_TOOL）", () => {
   });
 });
 
-describe("atMostManual（收尾扫描轮与遗留事项开出的新会话首轮，审核 F-4）", () => {
-  test("放行压成询问；询问、计划原样（计划更严，不放宽）", () => {
-    assert.equal(atMostManual("skip"), "manual");
-    assert.equal(atMostManual("manual"), "manual");
-    assert.equal(atMostManual("plan"), "plan");
-  });
-
-  test("压过之后写类工具一律不再直接放行：要么问、要么拒", () => {
-    for (const mode of PERMISSION_MODES) {
-      for (const tool of MUTATING) {
-        assert.notDeepEqual(decidePermission(atMostManual(mode), tool), { behavior: "allow" }, `${mode} / ${tool}`);
-      }
-    }
-  });
-});
-
 describe("update_goal（会话级目标）", () => {
   test("三档一律放行：它只是把目标记在转录里，plan 档也要能定目标", () => {
     for (const mode of PERMISSION_MODES) {
@@ -232,5 +216,21 @@ describe("插件工具", () => {
     assert.equal(isReadOnlyTool("install_plugin"), false);
     assert.equal(decidePermission("manual", "create_skill").behavior, "ask");
     assert.equal(decidePermission("manual", "add_mcp_server").behavior, "ask");
+  });
+});
+
+describe("atMostManual（带着目标开出的新会话首轮，审核 F-4）", () => {
+  test("放行压成询问；询问、计划原样（计划更严，不放宽）", () => {
+    assert.equal(atMostManual("skip"), "manual");
+    assert.equal(atMostManual("manual"), "manual");
+    assert.equal(atMostManual("plan"), "plan");
+  });
+
+  test("压过之后写类工具一律不再直接放行：要么问、要么拒", () => {
+    for (const mode of PERMISSION_MODES) {
+      for (const tool of MUTATING) {
+        assert.notDeepEqual(decidePermission(atMostManual(mode), tool), { behavior: "allow" }, `${mode} / ${tool}`);
+      }
+    }
   });
 });
