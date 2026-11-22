@@ -10,6 +10,7 @@ import type { LatexIssue, LatexResolvedPackage, LatexStatus } from "@shared/late
 // 类型导入会被剥掉所以无所谓，函数导入会在加载时就找不到模块。
 import { miktexPendingOf } from "../../../../shared/latex.ts";
 import { LATEX_RECIPE_PRESETS, latexRecipePreset } from "../../../../shared/latex-recipes.ts";
+import type { LatexBuildSummary } from "./latex-build-store.ts";
 
 /**
  * 编译条的显示态（原型场景 1 / 3）：
@@ -197,6 +198,34 @@ export function groupLatexIssues(
 /** `3.9 s`：一位小数，与原型一致 */
 export function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(1)} s`;
+}
+
+/** 「编译成功」状态行用得上的三条文案（结构类型：不把整个 Messages 拖进纯逻辑） */
+export interface SuccessStatusMessages {
+  success: (pages: number, duration: string) => string;
+  successNoPages: (duration: string) => string;
+  logStaleNote: string;
+}
+
+/**
+ * 编译成功的状态行：主句 + 附注**分两段**给（附注要小一号、次要色）。
+ *
+ * 页数缺失时主句只有 `成功 · 0.4 s`——不能把页数当成空串拼进去；附注为空
+ * （没有日志 / 日志是新鲜的）时返回 null，渲染方不拼分隔符。2026-11-22 冒烟
+ * 实测：外部 `latexmk -g` 重建后状态行是 `成功 · 0.4   · 日志是上一轮留下的`
+ * （duration 与分隔符之间多出两三个空格）。
+ */
+export function successStatus(
+  last: Pick<LatexBuildSummary, "pages" | "durationMs" | "logPath" | "logFresh">,
+  t: SuccessStatusMessages,
+): { text: string; note: string | null } {
+  const duration = formatDuration(last.durationMs);
+  const text = last.pages === null ? t.successNoPages(duration) : t.success(last.pages, duration);
+  const note = last.logPath !== null && last.logFresh === false ? t.logStaleNote : null;
+  return {
+    text: text.trim(),
+    note: note === null || note.trim() === "" ? null : note.trim(),
+  };
 }
 
 /** 编译中的计时：`0:03` / `1:12`（分钟不进位成小时——一次编译封顶十分钟） */

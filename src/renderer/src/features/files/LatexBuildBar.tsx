@@ -33,6 +33,7 @@ import {
   formatDuration,
   formatElapsed,
   shortcutLabel,
+  successStatus,
   type LatexBarState,
 } from "./latex-workbench.ts";
 import type { LatexBuildSummary } from "./useLatexWorkbench.ts";
@@ -430,13 +431,22 @@ function statusOf(input: {
     );
   }
   if (state === "success" && last !== null) {
+    const status = successStatus(last, t.latex);
     return (
       <>
         <Icon name="circle-check" size={12} style={{ color: "var(--color-success)" }} />
-        {last.pages === null
-          ? t.latex.successNoPages(formatDuration(last.durationMs))
-          : t.latex.success(last.pages, formatDuration(last.durationMs))}
-        {logStaleNote(last, t) !== null && <span className="latex-status-note">{" · "}{logStaleNote(last, t)}</span>}
+        {/* 主句与附注包在同一个 flex 项里：`.latex-status` 的 gap 只隔图标与句子，
+            不插到句子中间——各是一个 flex 项时 `0.4 s` 与 ` · 日志…` 之间会多出
+            约两个空格（冒烟实测三个空格，像多了一个空段） */}
+        <span>
+          {status.text}
+          {status.note !== null && (
+            <span className="latex-status-note">
+              {" · "}
+              {status.note}
+            </span>
+          )}
+        </span>
       </>
     );
   }

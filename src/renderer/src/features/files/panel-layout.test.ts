@@ -11,6 +11,7 @@ import {
   openTab,
   panelLayoutAttrs,
   shouldCollapseOnNarrow,
+  tabRevealTarget,
   tabScrollTarget,
   toggleGroupCollapsed,
   TREE_BREAKPOINT,
@@ -497,5 +498,37 @@ describe("tabScrollTarget", () => {
 
   it("标签比栏还宽：贴右（保 ✕ 可见，名字有省略号兑底）", () => {
     strictEqual(tabScrollTarget({ scrollLeft: 0, clientWidth: 200 }, { offsetLeft: 50, offsetWidth: 300 }), 150);
+  });
+});
+
+describe("tabRevealTarget", () => {
+  it("刚出现的标签优先（PDF 标签在条尾，溢出时整条在视口外）", () => {
+    strictEqual(
+      tabRevealTarget({ active: null, open: ["/p/main.tex", "/p/main.pdf"], previous: ["/p/main.tex"] }),
+      "/p/main.pdf",
+    );
+  });
+
+  it("没有新标签时滚到激活的那个（点标签 / 引用跳转）", () => {
+    strictEqual(
+      tabRevealTarget({ active: "/p/refs.tex", open: ["/p/main.tex", "/p/refs.tex"], previous: ["/p/main.tex", "/p/refs.tex"] }),
+      "/p/refs.tex",
+    );
+  });
+
+  it("没有新标签时仍回激活那个（滚不滚由 tabScrollTarget 量了再说）", () => {
+    strictEqual(tabRevealTarget({ active: "/p/main.tex", open: ["/p/main.tex"], previous: ["/p/main.tex"] }), "/p/main.tex");
+    strictEqual(tabRevealTarget({ active: "/p/gone.tex", open: ["/p/main.tex"], previous: ["/p/main.tex"] }), null);
+  });
+
+  it("Windows 两种分隔符是同一个标签（不把已有标签当成新出现）", () => {
+    strictEqual(
+      tabRevealTarget({
+        active: null,
+        open: ["C:\\p\\main.tex"],
+        previous: ["C:/p/main.tex"],
+      }),
+      null,
+    );
   });
 });

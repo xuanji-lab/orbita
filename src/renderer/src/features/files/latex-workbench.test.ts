@@ -23,7 +23,10 @@ import {
   packageNoteKind,
   pdfStale,
   shortcutLabel,
+  successStatus,
 } from "./latex-workbench.ts";
+import { zh } from "../../messages-zh.ts";
+import { en } from "../../messages-en.ts";
 
 const issue = (kind: LatexIssue["kind"], file: string | null, line: number | null, message: string): LatexIssue => ({
   kind,
@@ -293,6 +296,43 @@ describe("清理可用性跟配方走", () => {
   test("没有预设（默认链 / 自定义 recipe）保持旧行为：可清", () => {
     assert.equal(cleanAvailable({}), true);
     assert.equal(cleanAvailable({ recipe: ["tectonic", "%DOCFILE%"] }), true);
+  });
+});
+
+describe("successStatus：编译成功的状态行", () => {
+  const last = {
+    pages: null as number | null,
+    durationMs: 400,
+    logPath: "/p/build/main.log" as string | null,
+    logFresh: false as boolean | null,
+  };
+
+  test("无页数：主句只有「成功 · 0.4 s」，不拼空页数、不连分隔符", () => {
+    // 2026-11-22 冒烟：外部 latexmk -g 重建后 logFresh=false → 页数为 null，
+    // 状态行多出一段空白（`成功 · 0.4   · 日志是上一轮留下的`）。
+    const status = successStatus(last, zh.latex);
+    assert.equal(status.text, "成功 · 0.4 s");
+    assert.equal(status.note, "日志是上一轮留下的");
+    // 渲染方把两段接起来只加一个分隔符
+    const line = status.note === null ? status.text : `${status.text} · ${status.note}`;
+    assert.equal(line, "成功 · 0.4 s · 日志是上一轮留下的");
+    assert.equal(/ {2,}/.test(line), false);
+  });
+
+  test("有页数：文案不变（成功 · 3 页 · 2.0 s），日志新鲜时不多一段", () => {
+    const status = successStatus({ pages: 3, durationMs: 2_000, logPath: "/p/build/main.log", logFresh: true }, zh.latex);
+    assert.equal(status.text, "成功 · 3 页 · 2.0 s");
+    assert.equal(status.note, null);
+  });
+
+  test("没有日志：附注为 null（不补占位符）；英文表同一形状", () => {
+    const status = successStatus({ ...last, logPath: null, logFresh: null }, zh.latex);
+    assert.equal(status.text, "成功 · 0.4 s");
+    assert.equal(status.note, null);
+
+    const english = successStatus(last, en.latex);
+    assert.equal(english.text, "Succeeded · 0.4 s");
+    assert.equal(english.note, "the log is from the previous build");
   });
 });
 

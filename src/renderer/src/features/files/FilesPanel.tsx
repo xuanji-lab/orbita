@@ -72,6 +72,7 @@ import {
   openTab,
   panelLayoutAttrs,
   shouldCollapseOnNarrow,
+  tabRevealTarget,
   tabScrollTarget,
   toggleGroupCollapsed,
   TREE_BREAKPOINT,
@@ -237,6 +238,8 @@ export function FilesPanel(props: {
   // effect）——标签多了以后新开的被截在右沿、连 ✕ 都看不到，是验收实测问题
   const tabsBarRef = useRef<HTMLDivElement | null>(null);
   const activeTabRef = useRef<HTMLDivElement | null>(null);
+  /** PDF 标签的 DOM（按路径取）：刚出现的 / 激活的 PDF 标签同样要滚进可视区 */
+  const pdfTabRefs = useRef(new Map<string, HTMLDivElement>());
   /** 右键菜单：打开位置 + 被右键的根（目前只有 Session 根接了右键，
    * 只有「添加文件引用」一项——把工作台目录整个递给模型）。条目行不接右键：
    * 行尾 hover 按钮已覆盖引用，打开/复制路径类动作频率不足以撑一张菜单 */
@@ -1085,26 +1088,32 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
   };
 
   /**
-   * 把当前激活标签滚进可视区。正常切换 / 新开由下面的 effect 管；**被拦下的切换**
-   * 不经过 effect（activePath 与 tabs.length 都没变），而浏览器点击已把被点的标签
-   * 滚进了视口——必须手动滚回去，否则用户眼前是那个并没切过去的标签，会以为切换成功了。
+   * 把某个标签滚进标签条可视区（几何由纯函数 tabScrollTarget 裁决）。
+   * 用视口矩形换算成「滚动内容坐标」：标签的 offsetParent 不一定是滚动容器
+   * （.cap-tabs 没有 position），offsetLeft 是相对 toolbar 的，直接喂给
+   * tabScrollTarget 会把它当成已可见（实测：真正左溢出 91px 时 offsetLeft
+   * 恰好等于 scrollLeft，target 被判成 null）。
    */
-  const scrollActiveTabIntoView = useCallback((): void => {
+  const scrollTabIntoView = useCallback((node: HTMLDivElement | null): void => {
     const bar = tabsBarRef.current;
-    const tab = activeTabRef.current;
-    if (bar === null || tab === null) return;
-    // 用视口矩形换算成「滚动内容坐标」：标签的 offsetParent 不一定是滚动容器
-    // （.cap-tabs 没有 position），offsetLeft 是相对 toolbar 的，直接喂给
-    // tabScrollTarget 会把它当成已可见（实测：真正左溢出 91px 时 offsetLeft
-    // 恰好等于 scrollLeft，target 被判成 null）。
+    if (bar === null || node === null) return;
     const barRect = bar.getBoundingClientRect();
-    const tabRect = tab.getBoundingClientRect();
+    const tabRect = node.getBoundingClientRect();
     const target = tabScrollTarget(
       { scrollLeft: bar.scrollLeft, clientWidth: bar.clientWidth },
       { offsetLeft: tabRect.left - barRect.left + bar.scrollLeft, offsetWidth: tabRect.width },
     );
     if (target !== null) bar.scrollTo({ left: target });
   }, []);
+
+  /**
+   * 把当前激活标签滚进可视区。正常切换 / 新开由下面的 effect 管；**被拦下的切换**
+   * 不经过 effect（activePath 与 tabs.length 都没变），而浏览器点击已把被点的标签
+   * 滚进了视口——必须手动滚回去，否则用户眼前是那个并没切过去的标签，会以为切换成功了。
+   */
+  const scrollActiveTabIntoView = useCallback((): void => {
+    scrollTabIntoView(activeTabRef.current);
+  }, [scrollTabIntoView]);
 
   /**
    * 切换激活标签前的保存闸：当前编辑器脏就先 flush，**冲突 / 写盘失败时不切走**。
@@ -1501,6 +1510,20 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
     scrollActiveTabIntoView();
   }, [activePath, tabs.length, scrollActiveTabIntoView]);
 
+  // PDF 标签长在标签条末尾：溢出时整条被推出视口（1200 宽 + 3 个标签，main.pdf
+  // 只剩 14px，要先横滚才点得到）。刚出现的那个优先，其次才是激活的那个——
+  // 引用跳转 / 点标签会把本来在视口外的标签设为激活。哪一个由纯函数
+  // tabRevealTarget 裁决；这里只负责量尺寸与滚。
+  const revealedPdfRef = useRef<readonly string[]>([]);
+  useEffect(() => {
+    const previous = revealedPdfRef.current;
+    revealedPdfRef.current = pdfOpen;
+    const target = tabRevealTarget({ active: activePdfPath, open: pdfOpen, previous });
+    if (target === null) return;
+    const node = [...pdfTabRefs.current].find(([path]) => samePath(path, target))?.[1] ?? null;
+    scrollTabIntoView(node);
+  }, [pdfOpen, activePdfPath, scrollTabIntoView]);
+
   /**
    * 挂目录。成功后 reloadWorkspaces——workspaces 引用一变，useFileTree 的 roots
    * 跟着重拉，新根自然出现，不在这里手拉第二份。Home（workspaceId null）同一条路：
@@ -1790,6 +1813,11 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                     return (
                       <div
                         key={`pdf:${path}`}
+                        ref={(node) => {
+                          // 回调式 ref：挂上时记进表（按路径取），卸载时删掉
+                          if (node === null) pdfTabRefs.current.delete(path);
+                          else pdfTabRefs.current.set(path, node);
+                        }}
                         role="tab"
                         tabIndex={0}
                         aria-selected={active}

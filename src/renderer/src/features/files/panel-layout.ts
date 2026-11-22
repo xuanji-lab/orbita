@@ -1,4 +1,4 @@
-import { pathTail, looksLikeWindowsPath } from "../../../../shared/path.ts";
+import { pathTail, looksLikeWindowsPath, samePath } from "../../../../shared/path.ts";
 
 /**
  * 文件面板「标签页 + 文件树开关」的**布局裁决纯函数**（HTML 原型
@@ -264,6 +264,26 @@ export function tabScrollTarget(
   const right = left + tab.offsetWidth;
   if (left < bar.scrollLeft) return left;
   if (right > bar.scrollLeft + bar.clientWidth) return right - bar.clientWidth;
+  return null;
+}
+
+/**
+ * 标签条这一次该把哪一个标签滚进可视区；null = 不用滚。
+ *
+ * 刚出现的那个优先：PDF 标签长在条尾，编译成功新冒出来时整条在视口外
+ * （1200 宽 + 3 个标签，main.pdf 只剩 14px）。其次才是激活的那个——点标签 /
+ * 引用跳转把本来在视口外的那条设为激活，同样要滚进来。
+ * `open` 按条上的顺序；`previous` 是上一次渲染时的同一列表。
+ */
+export function tabRevealTarget(input: {
+  active: string | null;
+  open: readonly string[];
+  previous: readonly string[];
+}): string | null {
+  const added = input.open.find((item) => !input.previous.some((seen) => samePath(seen, item)));
+  if (added !== undefined) return added;
+  const active = input.active;
+  if (active !== null && input.open.some((item) => samePath(item, active))) return active;
   return null;
 }
 
