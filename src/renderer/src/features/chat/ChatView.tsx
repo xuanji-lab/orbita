@@ -18,7 +18,7 @@ import {
 } from "./ChannelViews";
 import { useChannelMessages, useParentChannels } from "./useChannelMessages";
 import { useChannelSummaries } from "./useChannelSummaries";
-import { HOME_CARD_QUERY_ROWS, homeCardLine, selectHomeCards, selectHomeLog, type HomeCardLineText } from "./home-cards";
+import { homeCardLine, selectHomeLog, type HomeCardLineText } from "./home-cards";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
 import { relativeTime } from "../../shell/relative-time.ts";
 import { InlineMarks } from "../../shell/InlineMarks";
@@ -170,7 +170,6 @@ import {
   insertToken,
   type TokenPickResult,
 } from "../../shell/panel-token.ts";
-import { SessionCard } from "../../shell/SessionCard";
 import { Chip } from "../../shell/Chip";
 import { Menu, menuFooterRowStyle, type MenuItem } from "../../shell/Menu";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
@@ -1498,12 +1497,9 @@ function ChatViewBody(props: {
         </div>
       );
     }
-    // 首页会话卡（选卡与那一句的推导在 home-cards.ts 纯函数，测试覆盖；这里只接线）：
-    // 要你注意的（等你 > 出错 > 在跑）先占卡，再是有 open 遗留的、最近活跃的。卡上说「此刻在干
-    // 什么」：运行态 + 槽里这一轮的过程 + 计划现算，不另存。不用 useMemo——运行态每个事件都可能
-    // 变，而这里只在首页这一支跑、O(n)（子会话表先建好，不按会话各扫一遍全表）。
-    // 没在跑的待办卡行位仍是遗留标题（最多 4 行）；遗留事项直接吃引擎缓存（PR-4 的
-    // carryoverList 通道，写操作自动刷新），卡不另建缓存、meta 不冗余计数。
+    // 首页记录（选行与那一句的推导在 home-cards.ts 纯函数，测试覆盖；这里只接线）：只列等你 / 进行中，
+    // 行上说「此刻在干什么」：运行态 + 槽里这一轮的过程 + 计划现算，不另存。不用 useMemo——运行态
+    // 每个事件都可能变，而这里只在首页这一支跑、O(n)（子会话表先建好，不按会话各扫一遍全表）。
     const childrenOf = new Map<string, SessionMeta[]>();
     for (const meta of session.sessions) {
       if (meta.parentId === undefined) continue;
@@ -1525,9 +1521,8 @@ function ChatViewBody(props: {
         })),
         unread: meta.unread ?? null,
       });
-    const homeCards = selectHomeCards(session.sessions, stateOf);
-    // 纸面两档（小学作业 / 打字稿）首页仍是三张卡：它们的版式是田字格 / 横线的整套，不套方向 N；
-    // 别的主题是按状态分组的记录行（2026-11-07）。两条路读同一份运行态推导，只是形状不同。
+    // 纸面两档（小学作业 / 打字稿）不套方向 N，首页只有 slogan 与输入框（原来的一排最近会话卡
+    // 2026-11-22 删掉）；别的主题在输入框下面列等你 / 进行中，没有就留白。
     const logMode = heroFace(props.theme) === "plain";
     const lineText: HomeCardLineText = {
       thinking: t.homeCard.thinking,
@@ -1604,44 +1599,10 @@ function ChatViewBody(props: {
         }}
       >
         <div ref={stageRef} className="home-col" data-mode={logMode ? "log" : "cards"}>
-          {/* 淡出组：slogan（与纸面档的会话卡）一起向上走（--transition-layer，220ms） */}
+          {/* 淡出组：slogan 向上走（--transition-layer，220ms） */}
           <div className="home-fade home-fade-head">
             {/* 门面：slogan（纸面两档再加红笔批语），样子与理由在 HomeHero.tsx */}
             <HomeHero theme={props.theme} />
-            {/* 纸面档：一排最近会话卡（SessionCard 规格：恒三槽、等高、hover 只抬阴影） */}
-            {!logMode &&
-              (!session.sessionsLoaded ? (
-                <div style={{ width: "100%", display: "flex", gap: "var(--space-3)" }}>
-                  {[0, 1, 2].map((index) => (
-                    <SessionCard key={index} name="" loading />
-                  ))}
-                </div>
-              ) : (
-                homeCards.length > 0 && (
-                  <div style={{ width: "100%", display: "flex", gap: "var(--space-3)" }}>
-                    {homeCards.map((card) => {
-                      const facts = homeFacts(card.sessionId);
-                      const metaLine = [
-                        facts.where,
-                        ...(facts.state === null ? [] : [t.homeCard.state[facts.state]]),
-                        ...(facts.time === null ? [] : [facts.time]),
-                      ].join(" · ");
-                      return (
-                        <SessionCard
-                          key={card.sessionId}
-                          name={card.title}
-                          items={card.rows.map((row) => ({ text: row.text }))}
-                          slots={HOME_CARD_QUERY_ROWS}
-                          line={facts.line}
-                          meta={metaLine}
-                          state={facts.state}
-                          onClick={() => openFromHome(card.sessionId)}
-                        />
-                      );
-                    })}
-                  </div>
-                )
-              ))}
           </div>
           {/* 滑落组：notices 与 composer 一起滑向窗口底部（--transition-composer-exit，240ms） */}
           <div
@@ -1652,10 +1613,11 @@ function ChatViewBody(props: {
             {notices}
             {composer}
           </div>
-          {/* 记录组：在输入框下面（先写，再读别的活的进展），随 slogan 一起淡出 */}
-          {logMode && (
+          {/* 记录组：在输入框下面（先写，再读别的活的进展），随 slogan 一起淡出。没有等你 / 进行中的
+              活就整组不渲染——输入框下面留白，不留组名、子午线或空容器（2026-11-22 删掉「最近」组后的常态） */}
+          {logMode && logGroups.length > 0 && (
             <div className="home-fade home-fade-log">
-              <HomeLog groups={logGroups} loading={!session.sessionsLoaded} onOpen={openFromHome} />
+              <HomeLog groups={logGroups} onOpen={openFromHome} />
             </div>
           )}
         </div>

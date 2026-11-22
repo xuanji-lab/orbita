@@ -19,7 +19,7 @@ export interface HomeLogRowView {
 }
 
 /**
- * 首页的「记录」（2026-11-07 方向 N，取代三张等重的会话卡）：按「等你 / 进行中 / 最近」分组的
+ * 首页的「记录」（2026-11-07 方向 N，取代三张等重的会话卡）：按「等你 / 进行中」分组的
  * 一行一条的会话列表。版式叫**记录行**：名字（13em）｜一句此刻在干什么（次级墨、单行省略）｜行尾时间；
  * 组名落在左侧的**索引边栏**里，状态饼落在**子午线**上（圆心压线），没有状态的会话是线上的一个小点。
  * 版式登记、几何与理由见 styles.css 的「索引边栏 / 子午线 / 记录行」节。
@@ -29,24 +29,9 @@ export interface HomeLogRowView {
  */
 export function HomeLog(props: {
   groups: readonly { group: HomeLogGroupId; rows: readonly HomeLogRowView[] }[];
-  loading: boolean;
   onOpen: (sessionId: string) => void;
 }) {
   const t = useT();
-  if (props.loading) {
-    // 列表还在读：三行骨架（安静的灰块，不闪），形状与真行一致，读完不跳
-    return (
-      <div className="home-log" aria-hidden="true">
-        {[0, 1, 2].map((index) => (
-          <div key={index} className="log-row log-row-skeleton">
-            <span className="log-skel" style={{ width: "62%" }} />
-            <span className="log-skel" style={{ width: "88%" }} />
-            <span />
-          </div>
-        ))}
-      </div>
-    );
-  }
   if (props.groups.length === 0) return null;
   return (
     <div className="home-log">
