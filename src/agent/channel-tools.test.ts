@@ -434,4 +434,33 @@ describe("用户的语言随请求交给主进程", () => {
     assert.match(describeChannelRole("child"), /every report_to_parent text — in the\nlanguage of the <reply_language> marker/);
     assert.match(toolByName(setup("root").tools, "delegate").description, /language of the <reply_language> marker/);
   });
+
+  test("工具结果末尾带语言提示（delegate / reply_subsession / report_to_parent），算不出语言时一个字都不加", async () => {
+    const zh = setup("root", () => "zh");
+    const p1 = toolByName(zh.tools, "delegate").execute("d1", { title: "t", task: "x" }, undefined, undefined, undefined as never);
+    zh.fake.answer(zh.fake.requestIdAt(0), {
+      ok: true,
+      childId: "c",
+      title: "t",
+      card: { childId: "c", title: "t", modelId: "m", thinkingLevel: "medium", workbench: "/wb" },
+    });
+    const delegated = await p1;
+    assert.match((delegated.content[0] as { text: string }).text, /Any text you write next must be in Chinese \(the user's language\)\.$/);
+    const p2 = toolByName(zh.tools, "reply_subsession").execute("r1", { childId: "c", text: "继续" }, undefined, undefined, undefined as never);
+    zh.fake.answer(zh.fake.requestIdAt(1), { ok: true, messageId: "m1" });
+    assert.equal(
+      (await p2).content[0] && ((await p2).content[0] as { text: string }).text,
+      "Reply sent to the sub-session. Any text you write next must be in Chinese (the user's language).",
+    );
+
+    const child = setup("child", () => "en");
+    const p3 = toolByName(child.tools, "report_to_parent").execute("p1", { kind: "done", text: "ok" }, undefined, undefined, undefined as never);
+    child.fake.answer(child.fake.requestIdAt(0), { ok: true, messageId: "m2" });
+    assert.match(((await p3).content[0] as { text: string }).text, /Task handed back — end this turn\. Any text you write next must be in English/);
+
+    const none = setup("child");
+    const p4 = toolByName(none.tools, "report_to_parent").execute("p2", { kind: "progress", text: "half" }, undefined, undefined, undefined as never);
+    none.fake.answer(none.fake.requestIdAt(0), { ok: true, messageId: "m3" });
+    assert.equal(((await p4).content[0] as { text: string }).text, "Reported to parent.");
+  });
 });

@@ -27,12 +27,23 @@ export function createChannelTools(
    */
   replyLang: () => ReplyLang | undefined = () => undefined,
 ): ToolDefinition[] {
-  if (role === "child") return [reportToParentTool(broker, sessionId)];
+  if (role === "child") return [reportToParentTool(broker, sessionId, replyLang)];
   return [
     delegateTool(broker, sessionId, replyLang),
     replySubsessionTool(broker, sessionId, replyLang),
     modelCostsTool(broker, sessionId),
   ];
+}
+
+/**
+ * 工具结果末尾的一句语言提示。每条用户消息末尾的 <reply_language> 标记管不到「工具结果之后」的那段文字：
+ * report_to_parent 之后子会话收尾的一句话、delegate 之后主会话对用户说的话，前面紧挨着的是英文工具结果，
+ * 实测（2026-11-22，改后真模型）子会话汇报是中文、收尾那句却写成英文。这句提示由工具执行时按当时的语言生成、
+ * 随工具结果落进历史（之后每轮逐字节重放，不破前缀缓存）。算不出语言时没有这句。
+ */
+function languageHint(lang: ReplyLang | undefined): string {
+  if (lang === undefined) return "";
+  return ` Any text you write next must be in ${lang === "zh" ? "Chinese" : "English"} (the user's language).`;
 }
 
 /** 必填字符串：trim 非空，否则抛带字段名的说明——不合法的参数不发请求。 */
@@ -138,7 +149,7 @@ function delegateTool(broker: RequestBroker, sessionId: string, replyLang: () =>
         `Sub-session "${result.title}" (id ${result.childId}) started, running on ${card.modelId} ` +
         `(thinking: ${card.thinkingLevel}). Its private scratch workbench is ${card.workbench}. It is now working; its messages will arrive as <channel> ` +
         "blocks in a later turn. Unless you have unrelated work to do right now, end this turn — do " +
-        "not poll or wait for it.";
+        `not poll or wait for it.${languageHint(lang)}`;
       return {
         content: [{ type: "text", text }],
         details: { delegate: card satisfies DelegateCard },
@@ -232,7 +243,7 @@ function replySubsessionTool(
       });
       if (!result.ok) throw new Error(result.error);
       return {
-        content: [{ type: "text", text: "Reply sent to the sub-session." }],
+        content: [{ type: "text", text: `Reply sent to the sub-session.${languageHint(lang)}` }],
         // 落账那条通道消息的 id：renderer 的发送侧标记凭它点了能定位到这一条
         // （tool-results.ts 的 channelSendMessageId）；给模型看的正文不带
         details: { messageId: result.messageId },
@@ -241,7 +252,11 @@ function replySubsessionTool(
   };
 }
 
-function reportToParentTool(broker: RequestBroker, sessionId: string): ToolDefinition {
+function reportToParentTool(
+  broker: RequestBroker,
+  sessionId: string,
+  replyLang: () => ReplyLang | undefined,
+): ToolDefinition {
   return {
     name: "report_to_parent",
     label: "report_to_parent",
@@ -286,7 +301,7 @@ function reportToParentTool(broker: RequestBroker, sessionId: string): ToolDefin
       if (!result.ok) throw new Error(result.error);
       const suffix = kindRaw === "done" || kindRaw === "failed" ? " Task handed back — end this turn." : "";
       return {
-        content: [{ type: "text", text: `Reported to parent.${suffix}` }],
+        content: [{ type: "text", text: `Reported to parent.${suffix}${languageHint(replyLang())}` }],
         // 同 reply_subsession：子会话工作记录里的标记凭它定位到父子会话面板里的这一条
         details: { messageId: result.messageId },
       };
