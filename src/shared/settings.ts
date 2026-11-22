@@ -180,6 +180,9 @@ export interface UsagePetPref {
 /** 过程显示的两种形态，见 AppSettings.processView */
 export type ProcessView = "turn" | "steps";
 
+/** 一轮一行展开之后的两种排法，见 AppSettings.processLayout */
+export type ProcessLayout = "chapters" | "flat";
+
 export interface AppSettings {
   theme: ThemePreference;
   /**
@@ -235,6 +238,13 @@ export interface AppSettings {
    * 其余值丢掉。
    */
   processView?: ProcessView;
+  /**
+   * 一轮一行展开之后怎么排（2026-11-22 用户：「两个都留」）。**缺席 = "chapters"**：
+   * - "chapters"：按段——一句旁白一段（整句），下面一行列这段的前几步，点开是每一步；
+   * - "flat"：平铺——旁白一行、每一步一行。
+   * 在展开处右上角切换，切了全局生效（features/chat/ChatView.tsx 的 ProcessExpanded）。其余值丢掉。
+   */
+  processLayout?: ProcessLayout;
   /**
    * 自动化：**有任务在跑时阻止系统睡眠**。缺席 = 关。开着时主进程只在
    * 有自动化运行**正在执行**期间用 Electron 的 powerSaveBlocker（`prevent-app-suspension`）
@@ -579,6 +589,7 @@ export function parseSettings(raw: unknown): AppSettings {
     collapsePastedText?: unknown;
     completionSound?: unknown;
     processView?: unknown;
+    processLayout?: unknown;
     automationKeepAwake?: unknown;
     onboardingSeen?: unknown;
     docPaper?: unknown;
@@ -664,6 +675,9 @@ export function parseSettings(raw: unknown): AppSettings {
       : {}),
     ...(record.processView === "turn" || record.processView === "steps"
       ? { processView: record.processView }
+      : {}),
+    ...(record.processLayout === "chapters" || record.processLayout === "flat"
+      ? { processLayout: record.processLayout }
       : {}),
     // 同上：非布尔丢掉，缺席 = 响
     ...(typeof record.completionSound === "boolean"

@@ -750,3 +750,12 @@ describe("parseSettings 的 docPaper", () => {
     deepStrictEqual(parseSettings({}).docPaper, undefined);
   });
 });
+
+describe("parseSettings 的 processLayout（一轮一行展开之后按段 / 平铺）", () => {
+  it("两个合法值原样保留；缺席与其余值丢掉（缺席 = 按段）", () => {
+    deepStrictEqual(parseSettings({ processLayout: "chapters" }).processLayout, "chapters");
+    deepStrictEqual(parseSettings({ processLayout: "flat" }).processLayout, "flat");
+    deepStrictEqual(parseSettings({}).processLayout, undefined);
+    deepStrictEqual(parseSettings({ processLayout: "steps" }).processLayout, undefined);
+  });
+});
