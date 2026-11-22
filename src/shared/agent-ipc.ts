@@ -183,8 +183,6 @@ export const ipcChannels = {
   sessionPin: "session:pin",
   /** 星标：价值标记，不参与排序（排序只认 pinned）；消费者是侧栏标识与筛选 chip */
   sessionStar: "session:star",
-  /** 完成状态：open → done/done_with_todos 记关闭时刻，reopen 清空；消费者是侧栏菜单/标识、会话头部按钮与筛选 chip */
-  sessionSetCompletion: "session:set-completion",
   /**
    * 意图召回的会话级开关（实验功能 intent-system）：载荷 (sessionId, boolean)，回 void。
    * 只落 meta（intentEnabled），下一轮开轮时主进程现读现装配；输入框旁的小开关用。
@@ -335,8 +333,6 @@ export const ipcChannels = {
   docOfmResolve: "doc:ofm-resolve",
   /** 插图：复制进附件目录，回要插入的 markdown */
   docInsertImage: "doc:insert-image",
-  /** 遗留事项（收尾仪式收割）：全部清单。侧栏面板、角标与「Has todos」筛选都吃它，按 sourceSessionId 现算 */
-  carryoverList: "carryover:list",
   /** 每日 token 用量：最近 7 天（含今天，旧的在前；载荷形状在 shared/usage.ts）。回 `UsageDayTotal[]`，回填还在跑时可能是全 0——跑完会经 usage:event 推一份真值 */
   usageWeek: "usage:week",
   /** 主进程 → renderer 推送：用量账本每次变化（模型调用落账 / 回填完成）推一份新的 7 天快照（`UsageWeekEvent`） */
@@ -357,20 +353,6 @@ export const ipcChannels = {
   updaterState: "updater:state",
   /** 自动更新：最近几个版本的 Release 列表（`RecentReleasesResult`，主进程打 GitHub API 并缓存 10 分钟） */
   updaterRecentReleases: "updater:recentReleases",
-  /**
-   * 收尾（契约在 shared/wrapup.ts）：这次要扫的轮次与各轮用量。载荷 sessionId，回 `WrapupPlan | null`
-   * （会话不存在 / 没有新轮次时 null）。
-   */
-  sessionWrapupPlan: "session:wrapup-plan",
-  /** 收尾：按用户一句话改清单（家务活模型一次独立小调用，不进会话）。载荷 (sessionId, WrapupReviseInput)，回 `WrapupReviseResult` */
-  sessionWrapupRevise: "session:wrapup-revise",
-  /**
-   * 收尾确认：做完的事落进 meta.wrapups 并记进任务账本、留下的事落遗留清单、会话标完成、
-   * 这条会话在接着做的遗留事项（meta.resumedCarryovers）标为做完。载荷 (sessionId, WrapupConfirmInput)，回 void
-   */
-  sessionWrapupConfirm: "session:wrapup-confirm",
-  /** 翻转一条的状态：done 记 doneAt，回 open 清掉 */
-  carryoverSetStatus: "carryover:set-status",
   /** 会话回退：算计划（确认框列清单用），不执行 */
   sessionRevertPlan: "session:revert-plan",
   /** 会话回退：撤回目标消息及之后全部（对话 + pi 本子 + 文件快照） */
@@ -719,11 +701,6 @@ export interface SubmitAgentInput extends AgentTurnContext {
   files?: PromptFileRef[];
   /** 随消息发的粘贴文本块（全文、永不截断），按加入顺序；agent 进程组装进正文之后 */
   pasted?: string[];
-  /**
-   * 这一轮是在接着做某条遗留事项（遗留清单的「继续」）：主进程把它记进这条会话的
-   * meta.resumedCarryovers，会话收尾确认时那条遗留事项自动标为做完。
-   */
-  carryoverId?: string;
 }
 
 /** 手动压缩（renderer → 主进程）。压缩是一次真实的 LLM 调用，同样要带全套开工上下文 */
@@ -982,18 +959,6 @@ export type AgentCommand =
       requestId: string;
       provider: ProviderSecrets;
       modelId: string;
-      prompt: string;
-    }
-  | {
-      /**
-       * 家务活模型的一次独立小调用（收尾清单按用户反馈改写）：system + prompt 由主进程组好，
-       * 回复原文经 `choreCompleted` 事件按 requestId 回传。不开会话、不落盘（同 summarizeFocus）。
-       */
-      type: "choreComplete";
-      requestId: string;
-      provider: ProviderSecrets;
-      modelId: string;
-      system: string;
       prompt: string;
     }
   | {
@@ -1564,11 +1529,6 @@ export type AgentEvent =
  */
 | { type: "skillsChanged" }
 /**
- * 「以后再做」（carryovers.jsonl）有新增：agent 写 update_plan 时当场记下的事，由主进程在落盘那条
- * 记录时写进清单后广播。无载荷、无 sessionId——界面听到就重拉 carryoverList（skillsChanged 同款）。
- */
-| { type: "carryoversChanged" }
-/**
  * 记忆系统：记忆服务进程写盘后经主进程广播（提取落
  * 条目、事件段收尾 / 归档、记忆库写操作）。无载荷、无 sessionId——界面听到就
  * 重拉（skillsChanged 同款）；谁变了由拉取方自己看。
@@ -1637,8 +1597,6 @@ export type AgentEvent =
    */
   | { type: "greetingsClassified"; requestId: string; throwaway: number[] | null; error?: string }
   | { type: "focusSummarized"; requestId: string; bullets: string[] | null; error?: string }
-  /** `choreComplete` 的回执：text = 回复里全部 text 块拼接；null 时 error 说原因 */
-  | { type: "choreCompleted"; requestId: string; text: string | null; error?: string }
   /** `probeProvider` 的回执：ok = 真会话同源客户端拿到了模型响应；message 直接进 Test 的状态行 */
   | { type: "providerProbed"; requestId: string; ok: boolean; message: string }
   /**

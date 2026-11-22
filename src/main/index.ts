@@ -63,7 +63,6 @@ import { ChannelStore } from "./channel/store.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
 import { moveSessions } from "./session/move.ts";
-import { registerWrapupIpc } from "./session/wrapup-ipc.ts";
 import { registerMcpIpc } from "./mcp/ipc.ts";
 import { McpStore } from "./mcp/store.ts";
 import { PluginAgentRequests } from "./plugin/agent-requests.ts";
@@ -83,7 +82,6 @@ import { SkillStore } from "./skill/store.ts";
 import { createSessionRecorder } from "./session/recorder.ts";
 import { SessionStore } from "./session/store.ts";
 import { ExcerptStore } from "./excerpt/store.ts";
-import { CarryoverStore } from "./session/carryover-store.ts";
 import { priceChartSourceOf, registerPriceChartIpc, registerUsageIpc, startTaskLedger } from "./usage/ipc.ts";
 import { applyModelCosts } from "./usage/model-costs.ts";
 import { readPiThinkingTimeline, TaskLedger } from "./usage/task-ledger.ts";
@@ -436,15 +434,7 @@ void app.whenReady().then(async () => {
   // 路径上按「会话 × 型号 × 档的连续一段」增量记账，意图召回另记按天的一份；升级后第一次启动回填
   // 一次，注册即异步装载 + 回填，不阻塞启动。取代原来的日账本 usage-daily.json（不再读写，留在盘上无害）
   const taskLedger = new TaskLedger(join(configDir, "usage-tasks.json"));
-  const record = createSessionRecorder(sessions, taskLedger, (sessionId, drafts) => {
-    // 「以后再做」：agent 写 update_plan 时当场记下的事。有新增才广播，界面听到就重拉清单
-    void carryovers
-      .appendNoticed(sessionId, drafts)
-      .then((created) => {
-        if (created.length > 0) broadcastAgentEvent({ type: "carryoversChanged" });
-      })
-      .catch((error: unknown) => console.error("[carryover] 以后再做没记上（不影响对话）", sessionId, error));
-  });
+  const record = createSessionRecorder(sessions, taskLedger);
   startTaskLedger(taskLedger, {
     list: () => sessions.list(),
     readUsageLog: (id) => sessions.readUsageLog(id),
@@ -802,8 +792,6 @@ void app.whenReady().then(async () => {
   const mcpIpc = registerMcpIpc(mcp, workspaces, () => agentHost.mcpReload());
   // 删除会话时把 runtime 里那条 pi 会话也放掉——不然每开一条任务就多一份驻留，
   // 活到退出应用（刀 0-4 债务 A）。会话分支（session:branch）也要走 agent 进程裁 pi 本子
-  // 遗留事项（收尾仪式）全局一份；与 sessions/ 目录平级，一眼看得出哪份归谁
-  const carryovers = new CarryoverStore(join(configDir, "carryovers.jsonl"));
   /*
    * 意图系统（实验功能 intent-system）的主进程三件套：
    * 1. 存档跟踪器（/ingest）：submit 判定要存档时 begin，事件泵喂 onEvent；
@@ -1059,7 +1047,6 @@ void app.whenReady().then(async () => {
       memoryTurns.forget(id);
     },
     agentHost,
-    carryovers,
     providers,
     (sessionId, path) => browserSandbox.openSessionArtifact(sessionId, path),
     (ids, workspaceId) =>
@@ -1083,21 +1070,6 @@ void app.whenReady().then(async () => {
       ]);
     },
   );
-  // 收尾（session:wrapup-*）：扫描计划、按反馈改清单、确认落账
-  registerWrapupIpc({
-    sessions,
-    carryovers,
-    providers,
-    settings,
-    host: agentHost,
-    catalog: () => agentHost.listBuiltins(),
-    // 确认的做完的事记进任务账本（价格图的主会话任务）
-    onConfirmed: (sessionId, wrapup) => {
-      void taskLedger.recordWrapup(sessionId, wrapup).catch((error: unknown) => {
-        console.error("[task-ledger] 收尾记账失败（下次升级回填会从 meta 补上）", error);
-      });
-    },
-  });
   // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）
   /*
    * 中心存储与 global 集合先建出来：**空目录就是说明书**——用户打开 userData 看到

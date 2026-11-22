@@ -48,7 +48,7 @@
  * 旁写明为什么。用户的正式数据 3GB 级，整本重扫一次就是一次几秒的启动开销。
  * - 1 → 2（加 intent，意图召回按天）：要从会话里重扫 intent-recall 记录，不迁移，重建。
  *   （1、2 都没发给用户过。）
- * - 2 → 3（加 done）：done 只来自会话 meta.wrapups，不用读会话正文。迁移把 done 置空并标
+ * - 2 → 3（加 done）：done 只来自会话 meta.wrapups（旧版收尾确认，已不再产生新的），不用读会话正文。迁移把 done 置空并标
  *   donePending，下一次 backfill 只扫会话清单补上（见 fillPendingDones）。
  *
  * **纯模块**：不 import electron，可被 `node --test` 直接测。
@@ -226,22 +226,6 @@ export class TaskLedger {
       this.addIntent(item.timestamp, item.tokens);
       this.changes += 1;
       this.pruneSeen();
-      await this.persist();
-      this.emit();
-    });
-  }
-
-  /**
-   * 记一次收尾确认（session:wrapup-confirm 落定后）：每件做完的事一个价格图任务。同一个收尾
-   * 记录 id 只记一次。不动按天的 token 账——那几轮的 token 早在落盘时记过了。
-   */
-  recordWrapup(sessionId: string, wrapup: SessionWrapup): Promise<void> {
-    return this.runSerialized(async () => {
-      if (this.dones.some((done) => done.wrapupId === wrapup.id)) return;
-      const added = storedDonesOf(sessionId, wrapup);
-      if (added.length === 0) return;
-      this.dones.push(...added);
-      this.changes += 1;
       await this.persist();
       this.emit();
     });

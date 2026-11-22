@@ -1,5 +1,5 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
-import { buildClosingScanPrompt } from "../../shared/wrapup-scan.ts";
+import { CLOSING_SCAN_HEAD } from "../../shared/legacy-closing-scan.ts";
 import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -199,7 +199,7 @@ describe("SessionStore", () => {
   test("收尾扫描的机器提问不进 recentQueries", async () => {
     await store.ensureSession(meta());
     await store.record(ID, userItem("真问题"));
-    await store.record(ID, userItem(buildClosingScanPrompt({ sinceTurn: 1, lastTurn: 1, turns: [] }), 4000));
+    await store.record(ID, userItem(`${CLOSING_SCAN_HEAD}\n回看这几轮……`, 4000));
     assert.deepEqual((await store.load(ID))?.meta.recentQueries, ["真问题"]);
   });
 
@@ -207,7 +207,7 @@ describe("SessionStore", () => {
     // 扫描轮在已有会话上 submit：主进程走 settleFirstTurn → ensureSession（带着压成 manual 的档）+ 落扫描提问
     await store.ensureSession(meta({ mode: "skip", piSessionFile: "/pi/a.jsonl" }));
     await store.ensureSession(meta({ mode: "manual", piSessionFile: "/pi/a.jsonl" }));
-    await store.record(ID, userItem(buildClosingScanPrompt({ sinceTurn: 1, lastTurn: 1, turns: [] }), 4000));
+    await store.record(ID, userItem(`${CLOSING_SCAN_HEAD}\n回看这几轮……`, 4000));
     assert.equal((await store.load(ID))?.meta.mode, "skip");
   });
 
@@ -310,67 +310,27 @@ describe("SessionStore", () => {
     assert.equal(after?.unread, null);
   });
 
-  // 完成状态机：翻到 done 的那一刻记下关闭时刻；reopen（回 open）清空——
-  // closedAt 与 completion 同进退，不留「open 却带着关闭时刻」的半态
-  test("setCompletion：done 记关闭时刻，reopen 清空，done_with_todos 也可写", async () => {
-    await store.ensureSession(meta({ pinned: true }));
-    await store.setStarred(ID, true);
-    await store.setCompletion(ID, "done");
-    let after = (await store.list()).find((m) => m.id === ID);
-    assert.equal(after?.completion, "done");
-    assert.ok(typeof after?.closedAt === "number" && after.closedAt > 0);
-    // 完成只动自己这对字段：置顶/星标/归档原样
-    assert.equal(after?.pinned, true);
-    assert.equal(after?.starred, true);
-    assert.equal(after?.archived, false);
-
-    await store.setCompletion(ID, "open"); // reopen
-    after = (await store.list()).find((m) => m.id === ID);
-    assert.equal(after?.completion, "open");
-    assert.equal(after?.closedAt, null);
-
-    await store.setCompletion(ID, "done_with_todos");
-    after = (await store.list()).find((m) => m.id === ID);
-    assert.equal(after?.completion, "done_with_todos");
-    assert.ok(typeof after?.closedAt === "number" && after.closedAt > 0);
-  });
-
-  // 重复 Mark done 不该刷新关闭时刻——「什么时候干完的」是历史事实，不是最后一次点击
-  test("setCompletion 同态幂等：done 再 done 不改关闭时刻", async () => {
-    await store.ensureSession(meta());
-    await store.setCompletion(ID, "done");
-    const first = (await store.load(ID))?.meta.closedAt;
-    // 隔开毫秒：非幂等实现会在这里刷新出新的 Date.now()
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    await store.setCompletion(ID, "done");
-    assert.equal((await store.load(ID))?.meta.closedAt, first);
-  });
-
-  // 遗留事项闭环：继续开出的会话记下它接的是哪条；收尾确认时取走（交给调用方标做完）并清空
-  test("addResumedCarryover 去重；confirmWrapup 追加收尾记录、翻完成状态、取走在做的遗留事项", async () => {
+  // 「完成」与遗留事项已删：盘上旧会话的 meta 还带着 completion / closedAt / resumedCarryovers / 收尾记录，
+  // 读照常读（星标等保留），旧字段忽略；下一次写 meta 时不再带这三个键，收尾记录留着（任务账本重建要读）
+  test("旧版 meta 带着 completion / closedAt / resumedCarryovers：照常打开，改别的字段后这三个键消失，wrapups 与星标保留", async () => {
     await store.ensureSession(meta({ starred: true }));
-    await store.addResumedCarryover(ID, "c1");
-    await store.addResumedCarryover(ID, "c1");
-    await store.addResumedCarryover(ID, "c2");
-    assert.deepEqual((await store.load(ID))?.meta.resumedCarryovers, ["c1", "c2"]);
+    const path = join(dir, "sessions", `${ID}.meta.json`);
+    const onDisk = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
     const wrapup = { id: "w1", at: 5, throughTurn: 3, items: [] };
-    assert.deepEqual(await store.confirmWrapup(ID, wrapup, "done_with_todos"), { resumed: ["c1", "c2"] });
-    const after = (await store.load(ID))?.meta;
-    assert.equal(after?.resumedCarryovers, undefined);
-    assert.deepEqual(after?.wrapups, [wrapup]);
-    assert.equal(after?.completion, "done_with_todos");
-    assert.equal(after?.starred, true);
-    // 重开后再确认：收尾记录累加，在做的已清空
-    await store.setCompletion(ID, "open");
-    assert.deepEqual(await store.confirmWrapup(ID, { ...wrapup, id: "w2", throughTurn: 5 }, "done"), { resumed: [] });
-    assert.deepEqual((await store.load(ID))?.meta.wrapups?.map((w) => w.id), ["w1", "w2"]);
-    assert.equal(await store.confirmWrapup("00000000-0000-4000-8000-000000000000", wrapup, "done"), null);
-  });
-
-  // 与 setStarred 同一条语义：meta 不在就悄悄不做
-  test("setCompletion 对不存在的会话悄悄不做", async () => {
-    await store.setCompletion(ID, "done");
-    assert.deepEqual(await store.list(), []);
+    await writeFile(
+      path,
+      JSON.stringify({ ...onDisk, completion: "done_with_todos", closedAt: 1700000000000, resumedCarryovers: ["c1"], wrapups: [wrapup] }),
+      "utf8",
+    );
+    const read = (await store.list()).find((m) => m.id === ID);
+    assert.equal(read?.starred, true);
+    assert.equal(read !== undefined && "completion" in read, false);
+    await store.setPinned(ID, true);
+    const rewritten = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    for (const key of ["completion", "closedAt", "resumedCarryovers"]) assert.equal(key in rewritten, false, key);
+    assert.equal(rewritten["pinned"], true);
+    assert.equal(rewritten["starred"], true);
+    assert.deepEqual(rewritten["wrapups"], [wrapup]);
   });
 
   // id 从 renderer 经 IPC 进来，直接拼路径的话一个 ../../ 就能写到别处

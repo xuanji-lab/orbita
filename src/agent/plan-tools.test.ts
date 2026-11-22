@@ -134,12 +134,12 @@ describe("update_plan", () => {
     assert.equal((out as { details: { awaiting?: boolean } }).details.awaiting, undefined);
   });
 
-  test("schema v4：why / later / confirm 都是可选字段，说明里讲了怎么用", () => {
+  test("schema：why / confirm 是可选字段（later 已删），说明里讲了怎么用", () => {
     const { tool } = setup();
     const schema = tool.parameters as unknown as { properties: Record<string, unknown>; required: string[] };
-    assert.deepEqual(Object.keys(schema.properties), ["items", "why", "later", "confirm"]);
+    assert.deepEqual(Object.keys(schema.properties), ["items", "why", "confirm"]);
     assert.deepEqual(schema.required, ["items"]);
-    for (const word of ["`why`", "`later`", "`confirm`", "same batch as the next step's first tool call"]) {
+    for (const word of ["`why`", "`confirm`", "same batch as the next step's first tool call"]) {
       assert.ok(tool.description.includes(word), word);
     }
   });
@@ -152,24 +152,25 @@ describe("update_plan", () => {
     assert.match(guidelines, /keeps running alongside/);
   });
 
-  test("计划外的活要先加步骤、顺手看到的写 later：规则在 promptGuidelines（随工具启用、整会话不变），不只在说明里", () => {
+  test("计划外的活要先加步骤：规则在 promptGuidelines（随工具启用、整会话不变），不只在说明里", () => {
     const { tool } = setup();
     const guidelines = (tool.promptGuidelines ?? []).join("\n");
     assert.match(guidelines, /BEFORE you do it/);
-    assert.match(guidelines, /`later`/);
+    assert.doesNotMatch(guidelines, /`later`/, "「以后再做」已删，提示词里不再提 later");
+    assert.doesNotMatch(String(tool.description), /`later`/);
     assert.ok(tool.promptSnippet !== undefined && tool.promptSnippet !== "");
   });
 
-  test("结构改了没写 why：回执里提醒，不拒；写了就不提醒；第一张不提醒；later 回执记一笔", async () => {
+  test("结构改了没写 why：回执里提醒，不拒；写了就不提醒；第一张不提醒；旧入参里的 later 读时忽略、回执里不再记一笔", async () => {
     const before = [planEntry("p1", items(["看代码", "in_progress"], ["补测试", "pending"])), planEntry("p2", items(["看代码", "in_progress"], ["补测试", "pending"]))];
     const added = { items: [{ text: "看代码", status: "done" }, { text: "修时区", status: "in_progress" }, { text: "补测试", status: "pending" }] };
     const { run } = setup({ branch: before });
     const noWhy = await run("p2", added);
     assert.match((noWhy as { content: { text: string }[] }).content[0]?.text ?? "", /pass `why`/);
-    const withWhy = await run("p2", { ...added, why: "测试发现差一天", later: ["日期解析不一致"] });
+    const withWhy = await run("p2", { ...added, why: "测试发现差一天", later: ["日期解析不一致"] }); // 旧模型 / 旧记录仍可能带 later：忽略
     const text = (withWhy as { content: { text: string }[] }).content[0]?.text ?? "";
     assert.doesNotMatch(text, /pass `why`/);
-    assert.match(text, /Noted 1 for later/);
+    assert.doesNotMatch(text, /for later/);
     const first = await setup().run("p1", { items: [{ text: "a", status: "in_progress" }] });
     assert.doesNotMatch((first as { content: { text: string }[] }).content[0]?.text ?? "", /pass `why`/);
   });

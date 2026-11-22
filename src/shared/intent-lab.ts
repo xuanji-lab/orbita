@@ -10,7 +10,7 @@
  */
 import { composePromptText, splitUserTextBlocks } from "./prompt-attachments.ts";
 import { parseChannelPrompt } from "./channel.ts";
-import { isClosingScanText } from "./wrapup-scan.ts";
+import { isClosingScanText } from "./legacy-closing-scan.ts";
 import type { SessionRecord } from "./session.ts";
 
 /**
