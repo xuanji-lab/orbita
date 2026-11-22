@@ -751,11 +751,23 @@ describe("parseSettings 的 docPaper", () => {
   });
 });
 
-describe("parseSettings 的 processLayout（一轮一行展开之后按段 / 平铺）", () => {
-  it("两个合法值原样保留；缺席与其余值丢掉（缺席 = 按段）", () => {
-    deepStrictEqual(parseSettings({ processLayout: "chapters" }).processLayout, "chapters");
-    deepStrictEqual(parseSettings({ processLayout: "flat" }).processLayout, "flat");
-    deepStrictEqual(parseSettings({}).processLayout, undefined);
-    deepStrictEqual(parseSettings({ processLayout: "steps" }).processLayout, undefined);
+describe("parseSettings 的 processView（三档：按块 / 铺开 / 逐步铺开；旧值读时兼容）", () => {
+  it("新三档原样", () => {
+    for (const view of ["chapters", "flat", "steps"] as const) deepStrictEqual(parseSettings({ processView: view }).processView, view);
+  });
+  it("旧 turn 配旧 processLayout：缺席 / chapters → chapters，flat → flat", () => {
+    deepStrictEqual(parseSettings({ processView: "turn" }).processView, "chapters");
+    deepStrictEqual(parseSettings({ processView: "turn", processLayout: "chapters" }).processView, "chapters");
+    deepStrictEqual(parseSettings({ processView: "turn", processLayout: "flat" }).processView, "flat");
+  });
+  it("旧 steps 原样（不管 processLayout）；只有旧 processLayout flat 也认；坏值丢掉；缺席不写", () => {
+    deepStrictEqual(parseSettings({ processView: "steps", processLayout: "flat" }).processView, "steps");
+    deepStrictEqual(parseSettings({ processLayout: "flat" }).processView, "flat");
+    deepStrictEqual(parseSettings({ processLayout: "chapters" }).processView, undefined);
+    deepStrictEqual(parseSettings({ processView: "wat" }).processView, undefined);
+    deepStrictEqual(parseSettings({}).processView, undefined);
+  });
+  it("processLayout 不再写回：解析结果里没有这个字段", () => {
+    ok(!("processLayout" in parseSettings({ processView: "turn", processLayout: "flat" })));
   });
 });

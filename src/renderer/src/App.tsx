@@ -4,7 +4,7 @@ import { LocaleContext, messagesOf } from "./locale.ts";
 import { ExperimentalFeaturesContext } from "./experimental.ts";
 import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
-import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type DocPaper, type ModelPair, type ProcessLayout, type SettingsPatch } from "@shared/settings";
+import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type DocPaper, type ModelPair, type SettingsPatch } from "@shared/settings";
 import { childSessions, rootSessions, type Carryover } from "@shared/session";
 import type { ChimeReason } from "@shared/notify";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
@@ -64,7 +64,7 @@ import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shel
 import { FEATURE_ICON } from "./shell/feature-icons.ts";
 import { type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
 import { PastedTextCollapseContext } from "./shell/attachment-chips";
-import { ProcessLayoutContext, ProcessViewContext } from "./features/chat/process-view-context";
+import { ProcessViewContext } from "./features/chat/process-view-context";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
 import { isUnclaimedEscape } from "./shell/escape-key.ts";
 import { AutomationPanel } from "./features/automation/AutomationPanel";
@@ -192,12 +192,6 @@ export function App() {
   const changeSettings = useCallback((patch: SettingsPatch) => {
     void api.settings.set(patch).then(setSettings);
   }, []);
-
-  /** 一轮一行展开之后的排法（按段 / 平铺），在对话里切，全局生效 */
-  const processLayout = useMemo(
-    () => ({ layout: settings.processLayout ?? "chapters", setLayout: (next: ProcessLayout) => changeSettings({ processLayout: next }) }),
-    [settings.processLayout, changeSettings],
-  );
 
   /** 文档面板的纸面：设置里的值按当前主题折算（纸面主题下回落 quiet 并锁住切换） */
   const docPaper = useMemo(() => {
@@ -1490,8 +1484,7 @@ export function App() {
     <LocaleContext.Provider value={locale}>
     <DocPaperContext.Provider value={docPaper}>
     <ExperimentalFeaturesContext.Provider value={experimentalFeatures}>
-    <ProcessViewContext.Provider value={settings.processView ?? "turn"}>
-    <ProcessLayoutContext.Provider value={processLayout}>
+    <ProcessViewContext.Provider value={settings.processView ?? "chapters"}>
     <AutomationContext.Provider value={automationUi}>
     <AutomationRunSessionsContext.Provider value={runSessionIds}>
     <PastedTextCollapseContext.Provider value={settings.collapsePastedText ?? true}>
@@ -1824,7 +1817,6 @@ export function App() {
     </PastedTextCollapseContext.Provider>
     </AutomationRunSessionsContext.Provider>
     </AutomationContext.Provider>
-    </ProcessLayoutContext.Provider>
     </ProcessViewContext.Provider>
     </ExperimentalFeaturesContext.Provider>
     </DocPaperContext.Provider>

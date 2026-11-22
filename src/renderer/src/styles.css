@@ -6295,29 +6295,6 @@ html {
 .proc-step-plan {
   padding: 0 var(--space-3) var(--space-2) calc(var(--space-3) + var(--proc-icon-w) + var(--space-2));
 }
-.proc-layout-toggle {
-  display: inline-flex;
-  justify-self: end;
-  gap: var(--space-0-5);
-  padding: var(--space-0-5);
-  border-radius: var(--radius-sm);
-  background: var(--color-bg-muted);
-}
-.proc-layout-toggle > button {
-  padding: 0 var(--space-2);
-  border: 0;
-  border-radius: var(--radius-xs);
-  background: transparent;
-  font-family: inherit;
-  font-size: var(--font-size-xs);
-  line-height: var(--line-height-ui);
-  color: var(--color-text-tertiary);
-  cursor: pointer;
-}
-.proc-layout-toggle > button[aria-pressed="true"] {
-  background: var(--color-bg-panel);
-  color: var(--color-text-secondary);
-}
 .proc-rows {
   list-style: none;
   margin: 0;

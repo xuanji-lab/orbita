@@ -298,7 +298,7 @@ function General(props: {
   // 完成提示音：缺席 = 响（这个提醒的价值在人不在跟前时也成立；只管声音，卡片与未读不受它影响）
   const completionSound = props.settings.completionSound ?? true;
   // 过程显示：缺席 = 一轮一行（2026-10-30）
-  const processView = props.settings.processView ?? "turn";
+  const processView = props.settings.processView ?? "chapters";
 
   const catalog = useBuiltinCatalog();
   const usable = usableProviders(props.providers);
@@ -548,7 +548,8 @@ function General(props: {
             label={t.settings.processViewAria}
             value={processView}
             options={[
-              { value: "turn" as const, label: t.settings.processViewTurn },
+              { value: "chapters" as const, label: t.settings.processViewChapters },
+              { value: "flat" as const, label: t.settings.processViewFlat },
               { value: "steps" as const, label: t.settings.processViewSteps },
             ]}
             onChange={(next) => props.onChange({ processView: next })}

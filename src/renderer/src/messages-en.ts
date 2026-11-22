@@ -1448,8 +1448,9 @@ export const en = {
     processView: "Agent's work",
     processViewAria: "How the agent's thinking and tool calls show",
     processViewInfo:
-      "One line per turn: while it works, a fixed-height block ticks with the current step; when it's done, one line you can open into parts · Every step: each thought and tool call on its own row",
-    processViewTurn: "One line per turn",
+      "By part: one line per turn, open it while it works and it grows live; opened after it's done it groups into parts · Flat: one line per turn, opened it lists every step · Every step: each thought and tool call on its own row",
+    processViewChapters: "By part",
+    processViewFlat: "Flat",
     processViewSteps: "Every step",
     completionSound: "Completion sound",
     completionSoundAria: "Completion sound",
@@ -2370,9 +2371,6 @@ export const en = {
     processWorking: "Working",
     processQuietFailed: (n: number) => `${n} didn't work`,
     processSteps2: (n: number) => plural(n, "step"),
-    processLayoutChapters: "By part",
-    processLayoutFlat: "Every step",
-    processLayoutHint: "How the expanded process is laid out",
     headline: {
       wroteFiles: (n: number) => `wrote ${plural(n, "file")}`,
       madeDecks: (n: number) => (n === 1 ? "made a deck" : `made ${n} decks`),

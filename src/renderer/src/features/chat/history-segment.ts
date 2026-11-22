@@ -96,7 +96,7 @@ export function deriveHistorySegment(
   const units = flattenRenderUnits(prefix);
   const entries = groupToolUnits(units, skills);
   const turnView =
-    processView === "turn"
+    processView !== "steps"
       ? groupTurnsByTurn(entries, false, toolResults)
       : groupTurns(entries, false, toolResults);
   const plan = planHistory(

@@ -69,7 +69,7 @@ import { PluginBoardResultView } from "../board/PluginBoardResult.tsx";
 import { builtinCommand, type DetailRow, docEditLabel, docEditPath, docEditSection, docEditSummary, toolWord } from "./builtin-commands.ts";
 import { getOpenDocumentText } from "../doc-panel/open-document.ts";
 import { ExitCard } from "./ExitCard";
-import { ProcessLayoutContext, ProcessViewContext } from "./process-view-context";
+import { ProcessViewContext } from "./process-view-context";
 import { sessionRunState, type SessionRunState } from "../notify/completion-notice.ts";
 import { REVEAL_ENTRY_EVENT } from "../context/task-progress.ts";
 import { planAwaitingIn, planHistory, planNoticeOf, type PlanTimeline, type PlanVersion } from "../context/plan-timeline.ts";
@@ -1961,7 +1961,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   );
   // 组行的展开是时间态：活跃轮里铺开，整轮落定一次性收纳（见 ToolGroupLine）
   const turnActive = props.phase === "turn";
-  // 过程显示（设置 › 过程显示）：一轮一行 = groupTurnsByTurn（旁白收进块、活跃轮成现场块）；
+  // 过程显示（设置 › 过程显示）：按块 / 铺开 = 一轮一行 = groupTurnsByTurn（旁白收进块、活跃轮成现场块）；
   // 逐步铺开 = groupTurns（落定轮按旁白收成几条 Worked，活跃轮原样铺开）
   const processView = useContext(ProcessViewContext);
 
@@ -1989,7 +1989,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   const tailEntries = useMemo(() => groupToolUnits(tailUnits, props.skills), [tailUnits, props.skills]);
   const tailTurnView = useMemo(
     () =>
-      processView === "turn"
+      processView !== "steps"
         ? groupTurnsByTurn(tailEntries, turnActive, tailToolResults)
         : groupTurns(tailEntries, turnActive, tailToolResults),
     [tailEntries, turnActive, tailToolResults, processView],
@@ -4812,18 +4812,10 @@ function ProcessExpanded(props: {
   plan: PlanTimeline | null;
 }) {
   const t = useT();
-  // 两种排法都留（2026-11-22 用户）：切换存进设置（AppSettings.processLayout），全局生效
-  const { layout, setLayout } = useContext(ProcessLayoutContext);
+  // 展开后怎么排（设置 › 过程显示：按块 = 按段，铺开 = 每步一行）；对话里不再放切换按钮，省垂直空间（2026-11-22 用户）
+  const layout = useContext(ProcessViewContext) === "flat" ? "flat" : "chapters";
   return (
     <div className="proc-expanded">
-      <div className="proc-layout-toggle" role="group" aria-label={t.chat.processLayoutHint} title={t.chat.processLayoutHint}>
-        <button type="button" aria-pressed={layout === "chapters"} onClick={() => setLayout("chapters")}>
-          {t.chat.processLayoutChapters}
-        </button>
-        <button type="button" aria-pressed={layout === "flat"} onClick={() => setLayout("flat")}>
-          {t.chat.processLayoutFlat}
-        </button>
-      </div>
       {layout === "chapters" ? (
         <ol className="proc-rows">
           {processChapters(props.steps).map((chapter) => (
