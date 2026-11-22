@@ -19,7 +19,9 @@ import {
   toggleNumberedList,
   toggleUnderline,
 } from "@stll/folio-core/prosemirror";
+import { addCommentMark } from "@stll/folio-core/prosemirror/commands/comments";
 import { extractSelectionSnapshot } from "@stll/folio-core/prosemirror/selectionState";
+import type { Comment } from "@stll/folio-core/types/document";
 import type {
   DocxAgentEditRequest,
   DocxAnchor,
@@ -39,6 +41,18 @@ import { applyDocxEdit, resolveRevisionGroup } from "./docx-apply.ts";
 import { registerDocxEditHost } from "./docx-edit-host.ts";
 import { buildReviewRows, rowNeedsContext, type DocxChangeRow } from "./docx-review.ts";
 import { DocxReviewBar } from "./DocxReviewBar.tsx";
+import { DocxCommentsBar } from "./DocxCommentsBar.tsx";
+import {
+  commentDraftToComment,
+  commentRows,
+  nextCommentId,
+  sameCommentAnchors,
+  sameCommentQuote,
+  sameComments,
+  type CommentAnchorLike,
+  type CommentDraftRange,
+  type CommentRow,
+} from "./docx-comments.ts";
 import {
   FALLBACK_STYLE_CHOICE,
   alignmentIcon,
@@ -80,7 +94,8 @@ import { applyTocHeal, collectTocFacts, layoutCoversDocument, planTocHeal, type 
  *     看不见版式整体挪动。上一版由主进程在覆盖前备份进应用数据目录。
  *
  * 不做（留给后续 PR）：表格增删行 / 图片替换 / 页面设置 / 页眉页脚 / 样式管理器 / 域编辑。
- * 2026-11-22 补了工具条（段落样式 / 对齐 / 列表），能力边界见 `docx-toolbar.ts` 顶注释。
+ * 2026-11-22 补了工具条（段落样式 / 对齐 / 列表）与批注（列表 + 新建），能力边界见
+ * `docx-toolbar.ts` / `docx-comments.ts` 顶注释。
  */
 type LoadState =
   | { status: "loading" }
@@ -95,6 +110,8 @@ type LoadState =
       modifiedAt: number;
       stats: DocxPackageStats;
       stamp: DocxParaIdStamp;
+      /** 批注 / 修订的署名（主进程给）；空串由引擎退回默认名 */
+      author: string;
     };
 
 /** 读盘 + 分派空态。换文件或刷新时代整份重来（引擎按 hash 重新挂载） */
@@ -128,6 +145,7 @@ export function DocxView(props: {
             modifiedAt: result.modifiedAt,
             stats: result.stats,
             stamp: result.stamp,
+            author: result.author,
           });
         } else if (result.kind === "too-large") {
           setState({ status: "too-large", limit: result.limit, size: result.size });
@@ -303,6 +321,7 @@ function DocxSurface(props: {
     size: number;
     modifiedAt: number;
     stamp: DocxParaIdStamp;
+    author: string;
   };
   onQuote?: (quote: TextQuote) => void;
   onReload: () => void;
@@ -331,6 +350,21 @@ function DocxSurface(props: {
   const [density, setDensity] = useState<ToolbarDensity>("wide");
   /** 文档自己定义的段落样式（folio 的 resolver）；没有就只给 Normal */
   const [styleChoices, setStyleChoices] = useState<StyleChoice[]>([FALLBACK_STYLE_CHOICE]);
+  /** 当前选区是否有可批注的文字（工具栏的批注键据此启用） */
+  const [hasSelection, setHasSelection] = useState(false);
+  /**
+   * 批注显示用的一份。**开始是非受控的**：文档里已有的批注由引擎自己加载并回给我们
+   * （`onCommentsChange` 在加载完成后会发一次），我们不抢所有权——受控数组一旦出错
+   * 会在存盘时把文件里的批注元数据覆盖掉。
+   * 只有用户**自己新建**一条时，才带着一份完整的数组切到受控（见 submitComment）。
+   */
+  const [comments, setComments] = useState<Comment[]>([]);
+  /** 是否已切到受控 comments（用户本会话里加过批注） */
+  const [controlComments, setControlComments] = useState(false);
+  const [commentAnchors, setCommentAnchors] = useState<CommentAnchorLike[]>([]);
+  const [commentDraft, setCommentDraft] = useState<CommentDraftRange | null>(null);
+  const [commentText, setCommentText] = useState("");
+  const [commentNote, setCommentNote] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>({ kind: "clean" });
   const [gate, setGate] = useState<DocxRepackReason[] | null>(null);
   const [conflict, setConflict] = useState<"changed" | "missing" | null>(null);
@@ -456,6 +490,7 @@ function DocxSurface(props: {
     const view = getView();
     if (view === null) {
       setFormat((prev) => (prev === NO_FORMAT ? prev : NO_FORMAT));
+      setHasSelection((prev) => (prev ? false : prev));
       return;
     }
     const { marks: markTypes } = view.state.schema;
@@ -463,6 +498,9 @@ function DocxSurface(props: {
     const italic = markTypes["italic"] !== undefined && isMarkActive(view.state, markTypes["italic"]);
     const underline =
       markTypes["underline"] !== undefined && isMarkActive(view.state, markTypes["underline"]);
+    // 批注键的可用性也在这里跟手：折叠光标 = 没有可批注的文字
+    const selected = view.state.selection.to > view.state.selection.from;
+    setHasSelection((prev) => (prev === selected ? prev : selected));
     // 段落样式 / 对齐 / 列表走引擎自己的 selection snapshot（与它的工具栏同一份投影）。
     // 图片这类非段落选区没有这些字段，退回默认值；异常也不能带走字符格式的按下态。
     let styleId = FALLBACK_STYLE_CHOICE.id;
@@ -502,6 +540,13 @@ function DocxSurface(props: {
     );
   }, []);
 
+  /** 批注锚点（引擎按 comment mark 读）：文档一变就重算，供列表定位 */
+  const refreshCommentAnchors = useCallback(() => {
+    const ref = editorRef.current;
+    if (ref === null) return;
+    const next = ref.getCommentAnchors();
+    setCommentAnchors((prev) => (sameCommentAnchors(prev, next) ? prev : next));
+  }, []);
 
   // 分页数走引擎的布局事件；超过上限整份转只读（不再自动保存）——几百页的文档在
   // renderer 里编辑会让输入延迟肉眼可见，那不是这一刀要解决的问题
@@ -538,7 +583,7 @@ function DocxSurface(props: {
   // 引擎的可编辑视图是延迟创建的（性能取舍）：工具栏命令与「打开时的事实」都要它，
   // 所以挂载后主动要一份，但不抢焦点。ref 要等子组件的 ref 回调跑完才在，所以补一拍
   // （少了这一拍，用户没点过文档时 agent 的第一次 edit_docx 会一直等到超时）
-  // 段落样式表也要视图才读得到；慢文档解析更晚，多补一拍（1.2 s）。
+  // 批注元数据 / 段落样式也要视图才读得到；慢文档解析更晚，多补一拍（1.2 s）。
   useEffect(() => {
     const kick = (): void => {
       editorRef.current?.ensureEditorView({ focus: false });
@@ -566,8 +611,9 @@ function DocxSurface(props: {
       baselineRef.current = docxFacts(view.state.doc as unknown as DocxFactsNode);
       syncFormat();
       readStyleChoices();
+      refreshCommentAnchors();
     },
-    [readStyleChoices, syncFormat],
+    [readStyleChoices, refreshCommentAnchors, syncFormat],
   );
 
   /**
@@ -606,8 +652,9 @@ function DocxSurface(props: {
     reviewTimerRef.current = window.setTimeout(() => {
       reviewTimerRef.current = null;
       refreshReview();
+      refreshCommentAnchors();
     }, 300);
-  }, [refreshReview]);
+  }, [refreshCommentAnchors, refreshReview]);
 
   /** 选区 → 锚点（防抖：拖选一次会连发几十个事件，每个都做全文档遍历会卡） */
   const buildAnchor = useCallback(() => {
@@ -666,6 +713,8 @@ function DocxSurface(props: {
   const onSelectionText = useCallback(
     (selection: { from: number; to: number }) => {
       queueAnchor({ from: selection.from, to: selection.to });
+      const next = selection.to > selection.from;
+      setHasSelection((prev) => (prev === next ? prev : next));
     },
     [queueAnchor],
   );
@@ -826,6 +875,10 @@ function DocxSurface(props: {
    * 让引擎重跑（并再次回调我们），轻则白重渲染、重则渲染循环。
    */
   const onSelectionChange = useCallback(() => syncFormat(), [syncFormat]);
+  /**
+   * 文档变了一次。**非受控时**引擎会在加载完成后把文档里的批注数组回给我们
+   * （`onCommentsChange`），列表靠它显示；我们不自作主张播种。
+   */
   const onChange = useCallback(() => {
     markDirty();
     refreshReviewLater();
@@ -1190,6 +1243,18 @@ function DocxSurface(props: {
     return parts.join(locale === "zh" ? "" : " ");
   })();
 
+  const docxAuthor = opened.author === "" ? t.docx.commentAuthor : opened.author;
+  /**
+   * 引擎回报的批注数组 → 列表用的那一份。值不变就保住引用，否则文档每改一次
+   * 都会用一份内容相同的新数组让本组件重渲染一轮。
+   */
+  const onCommentsChange = useCallback((next: Comment[]) => {
+    setComments((prev) => (sameComments(prev, next) ? prev : next));
+  }, []);
+  const commentRowsView = useMemo(
+    () => commentRows(comments, commentAnchors, locale),
+    [comments, commentAnchors, locale],
+  );
 
   const editor = (
       <DocxEditor
@@ -1201,6 +1266,9 @@ function DocxSurface(props: {
          * 并发打字的防护换在写入那一刻：锚点按偏移 + 引文重新校验，命中不了就拒绝写入。
          */
         readOnly={oversize}
+        author={docxAuthor}
+        comments={controlComments ? comments : undefined}
+        onCommentsChange={onCommentsChange}
         showToolbar={false}
         showReviewControls={false}
         showHeaderFooterEditing={false}
@@ -1253,6 +1321,78 @@ function DocxSurface(props: {
       onSelect: () => runCommand(toggleNumberedList),
     },
   ];
+
+  /** 新建批注：先把当前选区收成草稿；文字变过就拒绝提交（submitComment 里复核） */
+  const startComment = (): void => {
+    const view = getView();
+    if (view === null) {
+      setCommentNote(t.docx.commentWriteFailed);
+      return;
+    }
+    const { from, to } = view.state.selection;
+    if (to <= from) return;
+    setCommentDraft({ from, to, quote: view.state.doc.textBetween(from, to, "\n") });
+    setCommentText("");
+    setCommentNote(null);
+  };
+
+  const cancelComment = (): void => {
+    setCommentDraft(null);
+    setCommentText("");
+    setCommentNote(null);
+  };
+
+  /**
+   * 提交批注：校验选区仍指向同一段文字 → 把 mark 写进活文档 → 追加同 id 的元数据。
+   * 两步必须同 id：mark 是锚点，元数据是作者 / 时间 / 正文（见 docx-comments.ts 顶注释）。
+   */
+  const submitComment = (): void => {
+    if (commentDraft === null) return;
+    const view = getView();
+    const body = commentText.trim();
+    if (view === null || body === "") {
+      setCommentNote(t.docx.commentWriteFailed);
+      return;
+    }
+    const current = view.state.doc.textBetween(commentDraft.from, commentDraft.to, "\n");
+    if (!sameCommentQuote(current, commentDraft.quote)) {
+      setCommentNote(t.docx.commentStaleSelection);
+      return;
+    }
+    // 新建这条要连元数据一起落进去：切到受控 comments，数组必须**完整**（含文档里
+    // 已有的那几条）。以 controller 的文档为准——它是引擎此刻真正拥有的全量。
+    const owned = editorRef.current?.getEditor()?.getDocument()?.package.document.comments ?? comments;
+    const id = nextCommentId(owned);
+    try {
+      view.dispatch(
+        view.state.tr.setSelection(TextSelection.create(view.state.doc, commentDraft.from, commentDraft.to)),
+      );
+    } catch {
+      setCommentNote(t.docx.commentStaleSelection);
+      return;
+    }
+    if (!addCommentMark(id)(view.state, view.dispatch)) {
+      setCommentNote(t.docx.commentWriteFailed);
+      return;
+    }
+    setComments([...owned, commentDraftToComment(body, docxAuthor, id, new Date().toISOString())]);
+    setControlComments(true);
+    setCommentDraft(null);
+    setCommentText("");
+    setCommentNote(t.docx.commentAdded);
+    refreshCommentAnchors();
+    view.focus();
+  };
+
+  /** 点批注行：用引擎的 passage 高亮跳到锚点；锚点没了就明说，不假装跳了 */
+  const locateComment = (row: CommentRow): void => {
+    if (row.blockId === null) {
+      setCommentNote(t.docx.commentAnchorMissing);
+      return;
+    }
+    const outcome = editorRef.current?.highlightPassage({ blockId: row.blockId, text: row.quote });
+    setCommentNote(outcome === undefined || outcome === "none" ? t.docx.commentAnchorMissing : null);
+  };
 
   return (
     <div className="docx-view" ref={rootRef} data-oversize={oversize ? "" : undefined}>
@@ -1343,6 +1483,13 @@ function DocxSurface(props: {
             items={listItems}
           />
         )}
+        <DocxTool
+          icon="message-square"
+          label={t.docx.commentAdd}
+          pressed={commentDraft !== null}
+          disabled={oversize || !hasSelection}
+          onClick={startComment}
+        />
         <span className="docx-bar-sep" aria-hidden="true" />
         <DocxTool
           icon="undo-2"
@@ -1376,6 +1523,53 @@ function DocxSurface(props: {
           onClick={() => saveRef.current("manual")}
         />
       </div>
+
+      {commentDraft !== null && (
+        <div className="docx-comment-compose">
+          <div className="docx-comment-quote" title={commentDraft.quote}>
+            <Icon name="message-square" size={12} />
+            <span>{commentDraft.quote}</span>
+          </div>
+          <textarea
+            className="docx-comment-input"
+            value={commentText}
+            placeholder={t.docx.commentPlaceholder}
+            rows={2}
+            autoFocus
+            onChange={(event) => setCommentText(event.target.value)}
+            onKeyDown={(event) => {
+              // Ctrl/Cmd+Enter 提交；Esc 取消（批量改稿时不想为一条批注去摸鼠标）
+              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault();
+                submitComment();
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                cancelComment();
+              }
+            }}
+          />
+          <div className="docx-comment-actions">
+            <button
+              type="button"
+              className="quiet-control docx-note-button"
+              disabled={commentText.trim() === ""}
+              onClick={submitComment}
+            >
+              {t.docx.commentSubmit}
+            </button>
+            <button type="button" className="quiet-control docx-note-button" onClick={cancelComment}>
+              {t.docx.commentCancel}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {commentNote !== null && (
+        <div className="docx-note" data-tone="info" role="status">
+          <Icon name="message-square" size={14} />
+          <span>{commentNote}</span>
+        </div>
+      )}
 
       {oversize && (
         <div className="docx-note" role="status">
@@ -1572,6 +1766,9 @@ function DocxSurface(props: {
         onLocate={locateRow}
       />
 
+      {/* 批注条（2026-11-22）：与审阅条同一块区域，点一行跳到锚点 */}
+      <DocxCommentsBar rows={commentRowsView} onLocate={locateComment} />
+
       {editBusy && (
         <div className="docx-note" data-tone="info" role="status">
           <Icon name="loader-circle" size={14} spin />
@@ -1613,7 +1810,8 @@ function DocxTool(props: {
     | "align-center"
     | "align-right"
     | "list"
-    | "list-ordered";
+    | "list-ordered"
+    | "message-square";
   label: string;
   pressed?: boolean;
   disabled?: boolean;

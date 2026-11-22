@@ -16,6 +16,7 @@ import {
   type DocxOpenResult,
   type DocxPackageStats,
 } from "../../shared/docx.ts";
+import { systemUserName } from "./metadata.ts";
 
 /** Word 加密保存的 .docx 整包是 OLE2 容器（D0 CF 11 E0），与老的 .doc 同魔数 */
 function isOle2(bytes: Uint8Array): boolean {
@@ -98,6 +99,9 @@ export async function readDocxFile(path: string, limit: number = DOCX_MAX_BYTES)
     size,
     modifiedAt,
     hash: sha256Hex(bytes),
+    // 批注 / 修订的署名：与保存时的作者戳同一个来源（main/docx/metadata.ts），
+    // 不在这里再算一套。取不到时为空串，引擎会退回自己的默认名。
+    author: systemUserName(),
     // 这一层不盖章（它是纯读模块，盖章要线程，见 stamp.ts）：先按「不需要盖章」回，
     // 由 ipc.ts 在交给 renderer 之前换成真实结论（paraId 覆盖率不够就进线程盖）
     stamp: { ok: true, assigned: 0, deduplicated: 0, reason: null },

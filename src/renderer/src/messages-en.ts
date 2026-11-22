@@ -3634,6 +3634,19 @@ export const en = {
     bulletList: "Bulleted list",
     numberedList: "Numbered list",
     listMenu: "List",
+    /* comments (2026-11-22): list + new comment */
+    commentsTitle: (n: number) => `${n} comment${n === 1 ? "" : "s"}`,
+    commentAdd: "Comment",
+    commentPlaceholder: "Write this comment…",
+    commentSubmit: "Add comment",
+    commentCancel: "Cancel",
+    commentLocate: "Jump to text",
+    commentAnchorMissing: "Original text is gone",
+    commentReplies: (n: number) => `${n} repl${n === 1 ? "y" : "ies"}`,
+    commentAdded: "Comment added.",
+    commentStaleSelection: "The selected text changed — select the sentence you want to annotate again.",
+    commentWriteFailed: "This comment wasn't written (the editor is still loading).",
+    commentAuthor: "Me",
   },
 
   /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */

@@ -39,6 +39,8 @@ describe("readDocxFile", () => {
     assert.equal(result.size, bytes.byteLength);
     assert.equal(typeof result.modifiedAt, "number");
     assert.match(result.hash, /^[0-9a-f]{64}$/);
+    // 批注 / 修订的署名与保存时的作者戳同源；取不到系统用户名时是空串
+    assert.equal(typeof result.author, "string");
   });
 
   test("同一个文件读两次 hash 相同，改一个字节 hash 变", async () => {

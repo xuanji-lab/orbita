@@ -3396,6 +3396,19 @@ export const zh: Messages = {
     bulletList: "项目符号",
     numberedList: "编号列表",
     listMenu: "列表",
+    /* 批注（2026-11-22）：读清单 + 新建 */
+    commentsTitle: (n) => `批注 ${n} 条`,
+    commentAdd: "批注",
+    commentPlaceholder: "写这条批注…",
+    commentSubmit: "添加批注",
+    commentCancel: "取消",
+    commentLocate: "跳到原文",
+    commentAnchorMissing: "原文不在了",
+    commentReplies: (n) => `${n} 条回复`,
+    commentAdded: "批注已添加。",
+    commentStaleSelection: "选中的文字已经变了——请重新选要批注的那一句。",
+    commentWriteFailed: "这条批注没有写进去（编辑器还在加载）。",
+    commentAuthor: "我",
   },
 
   /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */

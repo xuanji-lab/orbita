@@ -4927,7 +4927,7 @@ a.latex-setup-action {
   margin: 0 var(--space-1);
   background: var(--color-border-subtle);
 }
-/* 段落样式下拉：宽栏用文字（84 够放下「标题 1」），窄栏是 .docx-tool 图标 */
+/* 段落样式下拉：宽栏用文字（96 够放下「标题 1」「Heading 1」），窄栏是 .docx-tool 图标 */
 .docx-style-select {
   flex: 0 1 84px;
   min-width: 64px;
@@ -4936,6 +4936,64 @@ a.latex-setup-action {
 }
 .docx-style-select > .orbita-icon {
   flex: 0 0 auto;
+}
+/*
+ * 批注输入条：选中文字后从工具栏点「批注」落在这里。形状与 .docx-note 同一套
+ * （面板底 + 发丝边），输入框不再套第二层卡。
+ */
+.docx-comment-compose {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  margin: var(--space-2) var(--space-2) 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-border);
+}
+.docx-comment-quote {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.docx-comment-quote > .orbita-icon {
+  flex: 0 0 auto;
+}
+.docx-comment-quote > span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.docx-comment-input {
+  width: 100%;
+  min-height: 0;
+  resize: vertical;
+  padding: var(--space-1-5) var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+}
+.docx-comment-input:focus {
+  outline: none;
+  border-color: var(--color-border-strong);
+}
+.docx-comment-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+/* 批注条与审阅条同住一块区域：两条都在时各自矮一点，别把页面挤没了 */
+.docx-comments {
+  max-height: 24%;
 }
 /*
  * 保存状态贴在行的右血线上（.row-trailing 推到右缘），保存键在它之后。
