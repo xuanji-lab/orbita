@@ -11,6 +11,10 @@
  * 输出格式固定为 `-f%f:%l:%c:%d:%k:%n:%m\n`（与 LaTeX-Workshop 一致）：
  *   `file:line:col:length:Warning|Error:code:message`
  * 列号不做字节 / Tab 换算（那是 chktex 的已知坑，而我们只画到行）；长度也不用。
+ *
+ * **进程的 cwd 必须设成项目目录**（见 `chktexCwd`）：chktex 按 cwd 解析 `\input`，
+ * 在别处跑会把每个 `\input{...}` 报成 27 假警告，并因此不再跟随子文件——子文件里的
+ * 真警告被这层噪音顶掉。
  */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -40,13 +44,15 @@ function candidates(latexmk: string | null): string[] {
   return out;
 }
 
+type RunResult = { stdout: string; timedOut: boolean; failed: boolean };
+
 /** 起一次子进程，返回 stdout / 是否超时。**不抛**：探测失败就是「没有」 */
-function run(binary: string, args: string[], timeoutMs: number): Promise<{ stdout: string; timedOut: boolean; failed: boolean }> {
+function run(binary: string, args: string[], timeoutMs: number, cwd?: string): Promise<RunResult> {
   return new Promise((done) => {
     let stdout = "";
     let timedOut = false;
     let settled = false;
-    const child = spawn(binary, args, { windowsHide: true });
+    const child = spawn(binary, args, { windowsHide: true, ...(cwd === undefined ? {} : { cwd }) });
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill();
@@ -84,6 +90,25 @@ export async function probeChktex(latexmk: string | null): Promise<string | null
   }
   probed.set(key, null);
   return null;
+}
+
+/**
+ * chktex 该在哪个目录里跑：**项目目录**（编译时的 cwd，见 run.ts 的 `cwd: plan.dir`）。
+ *
+ * 不能图省事传 `dirname(file)`：chktex 对 `\input{a/b}` 一律按 **cwd** 找文件（chktex 1.7.9
+ * 实测：cwd=项目根、参数 `sub/part.tex` 时，它对同目录下确实存在的 `\input{leaf}` 报 27）。
+ * 子文件里的 `\input` 按 LaTeX 的规矩是相对**编译目录**写的，所以 cwd 必须与编译一致——
+ * 否则 `sections/*.tex` 里那些 root 相对的 `\input` 会立刻变回假 27。
+ * 顺带：被 `\input` 进来的文件在输出里是 **cwd 相对**路径，cwd 与 projectDir 同源时，
+ * parseChktexOutput 的「项目相对」归一才对得上（别的文件的警告不会记到当前文件头上）。
+ *
+ * 文件根本不在项目目录里（IPC 已拦，理论上到不了）：退回它自己的目录，别拿别人的项目当基准。
+ */
+export function chktexCwd(file: string, projectDir: string): string {
+  const root = resolve(projectDir);
+  const target = resolve(file);
+  const rel = relative(root, target);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel)) ? root : dirname(target);
 }
 
 /** 日志里的文件名 → 相对项目目录、正斜杠（与 LatexIssue.file 同一口径） */
@@ -138,8 +163,12 @@ export async function lintWithChktex(input: {
   binary: string;
   file: string;
   projectDir: string;
+  /** 测试注入（断言 cwd 一路传到 spawn）；生产走真进程 */
+  run?: (binary: string, args: string[], timeoutMs: number, cwd: string) => Promise<RunResult>;
 }): Promise<{ ok: boolean; issues: LatexIssue[] }> {
-  const result = await run(input.binary, [CHKTEX_FORMAT, "-q", input.file], CHKTEX_TIMEOUT_MS);
+  const cwd = chktexCwd(input.file, input.projectDir);
+  const runner = input.run ?? run;
+  const result = await runner(input.binary, [CHKTEX_FORMAT, "-q", input.file], CHKTEX_TIMEOUT_MS, cwd);
   if (result.failed || result.timedOut) return { ok: false, issues: [] };
   return { ok: true, issues: parseChktexOutput(result.stdout, input.projectDir) };
 }

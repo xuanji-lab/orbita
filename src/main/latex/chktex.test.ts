@@ -5,9 +5,9 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { join, resolve } from "node:path";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { lintWithChktex, parseChktexOutput, probeChktex } from "./chktex.ts";
+import { lintWithChktex, chktexCwd, parseChktexOutput, probeChktex } from "./chktex.ts";
 
 const projectDir = resolve("C:/paper");
 
@@ -81,6 +81,42 @@ describe("parseChktexOutput", () => {
   });
 });
 
+describe("chktexCwd（chktex 的进程 cwd）", () => {
+  test("项目内的文件 → 项目目录（子文件也一样，不用它自己的目录）", () => {
+    assert.equal(chktexCwd(join(projectDir, "main.tex"), projectDir), projectDir);
+    // chktex 按 cwd 解析 `\input`，子文件里 root 相对的路径只有在项目根才找得到
+    assert.equal(chktexCwd(join(projectDir, "sections", "results.tex"), projectDir), projectDir);
+  });
+
+  test("项目外的文件 → 它自己的目录（不拿别的项目当基准）", () => {
+    const outside = resolve("C:/other/x.tex");
+    assert.equal(chktexCwd(outside, projectDir), resolve("C:/other"));
+  });
+});
+
+describe("lintWithChktex（cwd 一路传到 spawn）", () => {
+  test("注入的 runner 收到项目目录作 cwd，输出照常解析", async () => {
+    const file = join(projectDir, "sections", "results.tex");
+    const calls: { args: string[]; cwd: string }[] = [];
+    const result = await lintWithChktex({
+      binary: "fake-chktex",
+      file,
+      projectDir,
+      run: async (_binary, args, _timeout, cwd) => {
+        calls.push({ args, cwd });
+        return { stdout: "sections/results.tex:7:5:6:Warning:44:User Regex: -2:booktabs.\n", timedOut: false, failed: false };
+      },
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.cwd, projectDir);
+    assert.deepEqual(calls[0]?.args.slice(1), ["-q", file]);
+    assert.equal(result.ok, true);
+    // cwd 相对路径经 parseChktexOutput 归一成项目相对；不会错记到被检查的那个文件头上
+    assert.equal(result.issues[0]?.file, "sections/results.tex");
+    assert.equal(result.issues[0]?.message, "chktex 44: User Regex: -2:booktabs.");
+  });
+});
+
 describe("lintWithChktex（本机装了 chktex 才跑）", () => {
   test("真文件里的一句直引号会被查出来", async () => {
     const binary = await probeChktex(null);
@@ -95,6 +131,26 @@ describe("lintWithChktex（本机装了 chktex 才跑）", () => {
       const result = await lintWithChktex({ binary, file, projectDir: dir });
       assert.equal(result.ok, true);
       assert.ok(result.issues.some((issue) => issue.file === "main.tex" && issue.line === 3));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("`\\input` 跟着进子文件：没有 27 假警告，子文件的真警告归它自己", async () => {
+    const binary = await probeChktex(null);
+    if (binary === null) return;
+    const dir = mkdtempSync(join(tmpdir(), "orbita-chktex-input-"));
+    try {
+      mkdirSync(join(dir, "sections"));
+      const main = join(dir, "main.tex");
+      writeFileSync(main, "\\documentclass{article}\n\\begin{document}\n\\input{sections/results}\n\\end{document}\n");
+      // 子文件里的直引号：cwd 不对时 chktex 打不开它，只会报 27 并把这条真警告吞掉
+      writeFileSync(join(dir, "sections", "results.tex"), "He said \"hello\" there.\n");
+      const result = await lintWithChktex({ binary, file: main, projectDir: dir });
+      assert.equal(result.ok, true);
+      assert.equal(result.issues.filter((issue) => issue.message.includes("chktex 27")).length, 0);
+      assert.ok(result.issues.some((issue) => issue.file === "sections/results.tex" && issue.line === 1));
+      assert.ok(!result.issues.some((issue) => issue.file === "main.tex"));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
