@@ -625,9 +625,19 @@ describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
 
   it("逐项只认布尔；不在 EXPERIMENTAL_FEATURE_IDS 里的 id 直接丢", () => {
     deepStrictEqual(
-      parseSettings({ experimentalFeatures: { "paper-themes": true, "pdf-citations": false } })
+      parseSettings({ experimentalFeatures: { "paper-themes": true, "intent-system": false } })
         .experimentalFeatures,
-      { "paper-themes": true, "pdf-citations": false },
+      { "paper-themes": true, "intent-system": false },
+    );
+    // 转正的项（PDF 引用，2026-11-22）：盘上残留的旧键解析时丢掉、不报错
+    deepStrictEqual(
+      parseSettings({ experimentalFeatures: { "paper-themes": true, "pdf-citations": true } })
+        .experimentalFeatures,
+      { "paper-themes": true },
+    );
+    deepStrictEqual(
+      parseSettings({ experimentalFeatures: { "pdf-citations": true } }).experimentalFeatures,
+      undefined,
     );
     deepStrictEqual(
       parseSettings({ experimentalFeatures: { "made-up": true } }).experimentalFeatures,

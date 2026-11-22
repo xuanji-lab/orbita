@@ -97,7 +97,6 @@ function seedFiles() {
     rightPanelWidth: 560,
     choreModel: { providerId: "zhipu-coding", modelId: "glm-5.3-flash" },
     lastUsed: { providerId: "zhipu-coding", modelId: "glm-5.3", mode: "auto" },
-    experimentalFeatures: { "pdf-citations": true },
   });
   // 服务商：只要 api_key 的；oauth（例如 Claude 订阅登录）连条目带密钥一起丢，绝不带进演示实例
   const source = join(APP, opt["providers-from"]);

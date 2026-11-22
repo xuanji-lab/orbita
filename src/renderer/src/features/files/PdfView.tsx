@@ -33,7 +33,7 @@ type DocState =
   | { status: "ready"; doc: PDFDocumentProxy; sizes: { width: number; height: number }[] };
 
 /**
- * PDF 预览（实验功能「PDF 引用」）：逐页 canvas + pdf.js 文本层，适宽排版，只渲染
+ * PDF 预览：逐页 canvas + pdf.js 文本层，适宽排版，只渲染
  * 视口附近的页（离开视口即释放 canvas——几百页的文档全渲出来会吃掉上 GB 内存）。
  *
  * 不用 pdfjs-dist 自带的 PDFViewer：它把文本层的条目↔DOM 映射（TextLayer.textDivs）

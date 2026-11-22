@@ -2506,7 +2506,7 @@ html[data-pointer-drag] iframe {
   text-decoration: underline;
 }
 
-/* PDF 引用编号（实验功能「PDF 引用」）：上标、mono 数字，一圈发丝描边让它读作「可点的标记」
+/* PDF 引用编号：上标、mono 数字，一圈发丝描边让它读作「可点的标记」
    而不是正文里的数字；不用 accent（主操作专用），颜色同链接 */
 .chat-md sup.chat-cite {
   margin: 0 1px;
@@ -3761,7 +3761,7 @@ html[data-pointer-drag] iframe {
 }
 
 /*
- * PDF 预览（实验功能「PDF 引用」，PdfView.tsx）：预览体让出滚动，滚动层是 .pdf-view
+ * PDF 预览（PdfView.tsx）：预览体让出滚动，滚动层是 .pdf-view
  * 自己——页的懒渲染（IntersectionObserver）与跳转滚动都以它为根。页与页之间、页与
  * 面板边缘之间的间隙由 PDF_PAGE_GAP（12px）在 TS 侧统一算，这里不另加左右内边距。
  */

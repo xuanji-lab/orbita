@@ -19,7 +19,6 @@ import { PdfView, type PdfJump } from "./PdfView";
 import { DocEditPane } from "../doc-panel/DocEditPane";
 import { watchDocMeta } from "./doc-meta-refresh.ts";
 import type { TextQuote } from "@shared/quote";
-import { useExperimentalFeature } from "../../experimental.ts";
 import { useT } from "../../locale.ts";
 
 /** 用文档视图（阅读 / 编辑 / 源码）打开的文件：md / markdown / txt；.slides.json 由 DocEditPane 路由到演示文稿编辑器 */
@@ -67,10 +66,8 @@ export function FilePreviewPane(props: {
   const extraWorkspaceId = props.extraWorkspaceId ?? null;
   const extra = extraWorkspaceId === null ? {} : { extraWorkspaceId };
   const sentImage = props.sentImage;
-  // PDF 预览挂在自己的实验开关后面（实验功能「PDF 引用」）：关着时 PDF 照旧读不出
-  // 内容（fs:read 只回二进制占位）。附图走 session.attachment，不会是 PDF
-  const pdfCitations = useExperimentalFeature("pdf-citations");
-  const pdf = sentImage === undefined && pdfCitations && isPdfFile(path);
+  // 附图走 session.attachment，不会是 PDF
+  const pdf = sentImage === undefined && isPdfFile(path);
   const [pdfReload, setPdfReload] = useState(0);
   const name = sentImage?.name ?? fileTabName(path);
   // 面包屑从所在的根开始（绝对路径放不下时截掉的总是末尾的文件名）；完整路径进 tooltip
