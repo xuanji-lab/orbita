@@ -73,8 +73,8 @@ import { sessionRunState, type SessionRunState } from "../notify/completion-noti
 import { REVEAL_ENTRY_EVENT } from "../context/task-progress.ts";
 import { planAwaitingIn, planHistory, planNoticeOf, type PlanTimeline, type PlanVersion } from "../context/plan-timeline.ts";
 import { PlanCard } from "./PlanCard";
-import { PlanTurnCard } from "./PlanTurnCard.tsx";
-import { planTurnState } from "./plan-turn.ts";
+import { PlanCallBlock, PlanTurnCard } from "./PlanTurnCard.tsx";
+import { planCallView, planTurnState, type PlanCallView, type PlanTick } from "./plan-turn.ts";
 import { goalNoticeText, planNoticeText } from "../context/plan-text.ts";
 import { useGoalLedger } from "../context/useGoalLedger.ts";
 import { GOAL_TOOL_NAME } from "../../../../shared/goal.ts";
@@ -188,11 +188,14 @@ import {
   stepVerb,
   THUMBS_SHOWN,
   turnOutputs,
+  webOutputs,
   type ProcessImage,
   type ProcessRow,
+  type StepVerb,
   type TurnOutput,
 } from "./process-rows.ts";
 import { fileManagerKind } from "../../file-manager.ts";
+import { fileIcon, fileIconTone, FILETYPE_TONE_COLOR } from "../files/tree-view.ts";
 import { HomeHero } from "./HomeHero";
 import { HomeLog, type HomeLogRowView } from "./HomeLog";
 import { heroFace } from "./home-hero.ts";
@@ -2758,7 +2761,7 @@ const TranscriptRow = memo(function TranscriptRow(props: {
       )}
       <div className={doomed ? "revert-doomed" : "revert-keep"} data-entry-key={entry.key} data-kind={entry.kind}>
       {entry.kind === "turnOutputs" ? (
-        <TurnOutputsBlock unit={entry} toolResults={scope.toolResults} />
+        <TurnOutputsBlock unit={entry} toolResults={scope.toolResults} sessionId={scope.sessionId} />
       ) : entry.kind === "turnProcess" ? (
         <TurnProcessLine
           unit={entry}
@@ -4667,17 +4670,11 @@ function TurnProcessLine(props: {
     }
     const slow = current.kind === "think" && runMs !== null && runMs > SLOW_GAP_MS;
     const doing =
-      current.kind === "tool"
-        ? (() => {
-            const v = stepVerb(current.call.toolName, current.call.input, t.chat.stepVerb, props.skills);
-            return v.object === null ? v.verb : `${v.verb} ${v.object}`;
-          })()
-        : t.chat.processThinking;
+      current.kind === "tool" ? stepLabel(current.call, t, props.skills, props.plan) : t.chat.processThinking;
     const idea = snap.chapter?.title ?? (current.kind === "think" ? current.preview : null) ?? planStepNow;
     return (
       <div className="proc-live" aria-live="off">
         {timeLabel}
-        {planHead}
         <div className="proc-who">
           <ChatPet live />
           <span className="proc-doing">
@@ -4696,6 +4693,7 @@ function TurnProcessLine(props: {
           )}
         </div>
         <div className={slow ? "proc-foot slow" : "proc-foot"}>{slow ? t.chat.processSlow : (tail ?? goalNoticeLine ?? "")}</div>
+        {planHead}
       </div>
     );
   }
@@ -4713,7 +4711,6 @@ function TurnProcessLine(props: {
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
       {timeLabel}
-      {planHead}
       <CollapseRow dense open={open} onToggle={() => setOpen((value) => !value)}>
         <ChatPet />
         <span className="proc-head-row">
@@ -4734,7 +4731,9 @@ function TurnProcessLine(props: {
           {images.length > 0 && <ProcessThumbs images={images} />}
         </span>
       </CollapseRow>
-      {open && <ProcessExpanded steps={unit.steps} toolResults={props.toolResults} skills={props.skills} imagesByCall={imagesByCall} />}
+      {open && <ProcessExpanded steps={unit.steps} toolResults={props.toolResults} skills={props.skills} imagesByCall={imagesByCall} plan={props.plan} />}
+      {/* 计划卡在过程行下面：过程收着时只剩它；过程展开时它在步骤之后，像一张确认稿（2026-11-22 用户） */}
+      {planHead}
       {goalNoticeLine !== null && <Notice icon="pencil-line">{goalNoticeLine}</Notice>}
     </div>
   );
@@ -4764,6 +4763,8 @@ function ProcessExpanded(props: {
   skills: SkillMeta[];
   /** 每一步挂哪几张图（assignImages：同一张图只挂在第一次出现的那一步） */
   imagesByCall: ReadonlyMap<string, ProcessImage[]>;
+  /** 计划的版本线：「改计划」那一步写成「完成 X / 开始 Y」，定计划 / 改结构的那一步原位画出清单或左右对照 */
+  plan: PlanTimeline | null;
 }) {
   const t = useT();
   // 两种排法都留（2026-11-22 用户）：切换存进设置（AppSettings.processLayout），全局生效
@@ -4781,7 +4782,7 @@ function ProcessExpanded(props: {
       {layout === "chapters" ? (
         <ol className="proc-rows">
           {processChapters(props.steps).map((chapter) => (
-            <ProcessChapterRow key={chapter.key} chapter={chapter} toolResults={props.toolResults} skills={props.skills} imagesByCall={props.imagesByCall} />
+            <ProcessChapterRow key={chapter.key} chapter={chapter} toolResults={props.toolResults} skills={props.skills} imagesByCall={props.imagesByCall} plan={props.plan} />
           ))}
         </ol>
       ) : (
@@ -4799,7 +4800,7 @@ function ProcessExpanded(props: {
                 </div>
               </li>
             ) : (
-              <StepRow key={row.key} call={row.call} thinking={row.thinking} toolResults={props.toolResults} skills={props.skills} images={props.imagesByCall.get(row.call.toolCallId) ?? []} />
+              <StepRow key={row.key} call={row.call} thinking={row.thinking} toolResults={props.toolResults} skills={props.skills} images={props.imagesByCall.get(row.call.toolCallId) ?? []} plan={props.plan} />
             ),
           )}
         </ol>
@@ -4818,6 +4819,7 @@ function ProcessChapterRow(props: {
   toolResults: ToolResultIndex;
   skills: SkillMeta[];
   imagesByCall: ReadonlyMap<string, ProcessImage[]>;
+  plan: PlanTimeline | null;
 }) {
   const t = useT();
   const [open, setOpen] = useFoldState(`chapter:${props.chapter.key}`);
@@ -4825,10 +4827,7 @@ function ProcessChapterRow(props: {
   const rows = processRows(chapter.steps).filter((row): row is Extract<ProcessRow, { kind: "step" }> => row.kind === "step");
   const failed = rows.filter((row) => props.toolResults.get(row.call.toolCallId)?.status === "error").length;
   const images = imagesOf(chapter.steps, props.imagesByCall);
-  const label = (call: ToolCallUnit) => {
-    const v = stepVerb(call.toolName, call.input, t.chat.stepVerb, props.skills);
-    return v.object === null ? v.verb : `${v.verb} ${v.object}`;
-  };
+  const label = (call: ToolCallUnit) => stepLabel(call, t, props.skills, props.plan);
   // 没有旁白也没有思考的段：按头一步起名（「读文件 handoff.txt」），不写「读取 3 次」这种统计
   const first = rows[0];
   const title = chapter.title ?? (first === undefined ? "" : label(first.call));
@@ -4843,6 +4842,11 @@ function ProcessChapterRow(props: {
         <span className="proc-chap-main">
           <span className={chapter.source === "say" ? "proc-chap-title" : "proc-chap-title quiet"}>
             <InlineMarks text={title} />
+            {rows.length > 0 && (
+              <span className="proc-row-chev" data-open={open || undefined}>
+                <Icon name="chevron-right" size={13} strokeWidth={1.8} />
+              </span>
+            )}
           </span>
           {rows.length > 0 && (
             <span className="proc-chap-steps">
@@ -4873,6 +4877,7 @@ function ProcessChapterRow(props: {
               toolResults={props.toolResults}
               skills={props.skills}
               images={props.imagesByCall.get(row.call.toolCallId) ?? []}
+              plan={props.plan}
             />
           ))}
         </ol>
@@ -4928,6 +4933,7 @@ function StepRow(props: {
   skills: SkillMeta[];
   /** 这一步挂的图（同一张图在这一轮里只挂一次，见 assignImages） */
   images: readonly ProcessImage[];
+  plan: PlanTimeline | null;
 }) {
   const t = useT();
   const { call } = props;
@@ -4935,7 +4941,10 @@ function StepRow(props: {
   const result = props.toolResults.get(call.toolCallId);
   const failed = result?.status === "error";
   const finished = result !== undefined && result.status !== "running";
-  const v = stepVerb(call.toolName, call.input, t.chat.stepVerb, props.skills);
+  // 改计划那一步：定计划 / 改结构的那一次，清单或左右对照原位画在这一行下面（「计划框框就是在这些的中间」）；
+  // 只打勾的写成「完成 X / 开始 Y」（照 Claude 的 Completed task / Started task）
+  const planView = call.toolName === PLAN_TOOL_NAME ? planCallView(props.plan, call.toolCallId) : null;
+  const v = planView === null ? stepVerb(call.toolName, call.input, t.chat.stepVerb, props.skills) : planStepVerb(planView, t);
   const stats = finished && !failed ? editDiffStats(result) : null;
   const lines = finished && !failed && call.toolName === "write" ? writeLineCount(call.input) : null;
   const shellMs = call.toolName === "bash" || call.toolName === "powershell" ? toolDurationText(call.toolCallId, t) : null;
@@ -4952,6 +4961,11 @@ function StepRow(props: {
             {v.object}
           </span>
         )}
+        {finished && (
+          <span className="proc-row-chev" data-open={open || undefined}>
+            <Icon name="chevron-right" size={13} strokeWidth={1.8} />
+          </span>
+        )}
         <span className="proc-row-meta">
           {stats !== null && (
             <>
@@ -4965,9 +4979,31 @@ function StepRow(props: {
         </span>
         {images.length > 0 && <ProcessThumbs images={images} />}
       </button>
+      {planView !== null && planView.kind !== "ticks" && (
+        <div className="proc-step-plan">
+          <PlanCallBlock version={planView.version} base={planView.kind === "changed" ? planView.base : undefined} />
+        </div>
+      )}
       {open && finished && result !== undefined && <StepBody call={call} result={result} thinking={props.thinking} />}
     </li>
   );
+}
+
+/** 「改计划」那一步的动作与对象（行首与段里的小标签共用） */
+function planStepVerb(view: PlanCallView, t: Messages): StepVerb {
+  if (view.kind === "fresh") return { verb: t.chat.planStepFresh, object: t.chat.processSteps2(view.version.items.length), raw: null };
+  if (view.kind === "changed") return { verb: t.chat.planStepChanged, object: null, raw: null };
+  const first = view.ticks[0];
+  if (first === undefined) return { verb: t.chat.stepVerb.plan, object: t.chat.planTurnProgress(view.version.items.filter((item) => item.status === "done").length, view.version.items.length), raw: null };
+  const word = (kind: PlanTick["kind"]) => (kind === "done" ? t.chat.planTickDone : kind === "start" ? t.chat.planTickStart : t.chat.planTickWait);
+  return { verb: word(first.kind), object: view.ticks.map((tick, index) => (index === 0 ? tick.text : `${word(tick.kind)} ${tick.text}`)).join("，"), raw: null };
+}
+
+/** 一步的「动作 对象」一句（现场块的「在干什么」、段里的小标签用） */
+function stepLabel(call: ToolCallUnit, t: Messages, skills: SkillMeta[], plan: PlanTimeline | null): string {
+  const view = call.toolName === PLAN_TOOL_NAME ? planCallView(plan, call.toolCallId) : null;
+  const v = view === null ? stepVerb(call.toolName, call.input, t.chat.stepVerb, skills) : planStepVerb(view, t);
+  return v.object === null ? v.verb : `${v.verb} ${v.object}`;
 }
 
 /** 一步展开后：它之前想的那段（如果有），然后是原样的输入输出——沿用工具行原来的展开体 */
@@ -5110,42 +5146,60 @@ function ProcessLightbox(props: { images: readonly ProcessImage[]; start: number
  * 照 Kimi：一份一张卡，和上面的「N 个文件已更改」同宽同色、左右对齐；右边「预览 ▾」——预览在软件里打开
  * （演示文稿进演示文稿面板，文档和导出的文件进文件面板），下拉是「用默认应用打开」「在访达中显示」。
  */
-function TurnOutputsBlock(props: { unit: TurnOutputsUnit; toolResults: ToolResultIndex }) {
-  const outputs = turnOutputs(props.unit.calls, props.toolResults);
+function TurnOutputsBlock(props: { unit: TurnOutputsUnit; toolResults: ToolResultIndex; sessionId: string }) {
+  const outputs = [...turnOutputs(props.unit.calls, props.toolResults), ...webOutputs(props.unit.web)];
   if (outputs.length === 0) return null;
   return (
     <div className="turn-outputs">
       {outputs.map((output) => (
-        <TurnOutputCard key={output.path} output={output} />
+        <TurnOutputCard key={output.path} output={output} sessionId={props.sessionId} />
       ))}
     </div>
   );
 }
 
-function TurnOutputCard(props: { output: TurnOutput }) {
+function TurnOutputCard(props: { output: TurnOutput; sessionId: string }) {
   const t = useT();
   const scope = useChatFileScope();
   const { output } = props;
-  const icon: IconName = output.kind === "slides" ? FEATURE_ICON.slides : output.kind === "doc" ? FEATURE_ICON.doc : "file";
+  const [refusal, setRefusal] = useState<string | null>(null);
+  // 图标与文件面板同一个函数（fileIcon / fileIconTone）：同一个文件在两处长同一个样子、同一个颜色，不另垫灰底
+  const name = output.path.split(/[\\/]/).pop() ?? output.path;
+  const tone = fileIconTone(name, "file");
   const sub =
     output.kind === "slides"
       ? t.chat.outputDeck(output.pages)
       : output.kind === "doc"
         ? t.chat.outputDoc
-        : (output.detail ?? t.chat.outputFile(output.format));
-  const preview = () => requestOpenPanel({ kind: output.kind === "slides" ? "slides" : "files", path: output.path, force: true });
+        : output.kind === "web"
+          ? t.chat.outputWeb
+          : (output.detail ?? t.chat.outputFile(output.format));
+  const preview = () => {
+    setRefusal(null);
+    if (output.kind === "web") {
+      // 网页在内置浏览器里预览（主进程按这条会话的文件账白名单放行）
+      void api.session.openArtifactInBrowser(props.sessionId, output.path).then(
+        (result) => {
+          if (!result.ok) setRefusal(t.chat.openInOrbitaRefused(result.reason));
+        },
+        () => setRefusal(t.chat.openInOrbitaFailed),
+      );
+      return;
+    }
+    requestOpenPanel({ kind: output.kind === "slides" ? "slides" : "files", path: output.path, force: true });
+  };
   const items: MenuItem[] = [
     { id: "open", label: t.chat.outputOpenDefault, icon: "external-link", onSelect: () => void (scope !== null && openChatFile(scope, output.path)) },
     { id: "reveal", label: t.plugins.revealInManager(fileManagerKind(api.platform)), icon: "folder-open", onSelect: () => void (scope !== null && revealChatFile(scope, output.path)) },
   ];
   return (
     <div className="turn-output">
-      <span className="turn-output-icon">
-        <Icon name={icon} size={18} strokeWidth={1.6} />
+      <span className="turn-output-icon" style={tone === null ? undefined : { color: FILETYPE_TONE_COLOR[tone] }}>
+        <Icon name={fileIcon(name, "file")} size={22} strokeWidth={1.5} />
       </span>
       <span className="turn-output-text" title={output.path}>
         <span className="turn-output-title">{output.title}</span>
-        <span className="turn-output-sub">{sub}</span>
+        <span className="turn-output-sub">{refusal ?? sub}</span>
       </span>
       <span className="turn-output-split">
         <button type="button" className="turn-output-btn" onClick={preview}>

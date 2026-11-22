@@ -6502,14 +6502,45 @@ html {
   color: var(--color-text-tertiary);
 }
 
-/* 展开后：竖线挂在内线上，行压在线右边 */
+/* 展开后（照 Claude，2026-11-22 用户：「非常的条条框框，然后整洁」）：步骤收在一个白底淡边的框里，行与行之间一条细线，
+   每一行都能点开；左缘对齐正文 */
 .proc-expanded {
   display: grid;
   gap: var(--space-1);
-  margin: 0 0 var(--space-2) var(--content-hem);
-  padding-left: var(--space-3);
-  border-left: 1px solid var(--color-border-subtle);
+  margin: 0 0 var(--space-1);
   min-width: 0;
+}
+.proc-expanded > .proc-rows {
+  gap: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  overflow: hidden;
+}
+.proc-expanded > .proc-rows > li + li {
+  border-top: 1px solid var(--color-border-subtle);
+}
+.proc-expanded > .proc-rows > li > .proc-row,
+.proc-expanded > .proc-rows > li > .proc-chap-btn {
+  min-height: var(--control-height-lg);
+  padding-left: var(--space-3);
+  padding-right: var(--space-3);
+  border-radius: 0;
+}
+.proc-row-chev {
+  display: inline-flex;
+  flex: none;
+  vertical-align: middle;
+  margin-left: var(--space-1);
+  color: var(--color-text-tertiary);
+  transition: transform var(--duration-fast) var(--ease-out-quint);
+}
+.proc-row-chev[data-open] {
+  transform: rotate(90deg);
+}
+/* 定计划 / 改结构的那一步：清单或左右对照原位画在这一行下面 */
+.proc-step-plan {
+  padding: 0 var(--space-3) var(--space-2) calc(var(--space-3) + var(--proc-icon-w) + var(--space-2));
 }
 .proc-layout-toggle {
   display: inline-flex;
@@ -6542,10 +6573,17 @@ html {
   gap: var(--space-0-5);
   min-width: 0;
 }
+/* 一段点开：这段的每一步，缩进到段名下面，行间同样一条细线 */
 .proc-rows.nested {
-  margin: var(--space-0-5) 0 var(--space-1) var(--space-3);
-  padding-left: var(--space-2);
-  border-left: 1px solid var(--color-border-subtle);
+  gap: 0;
+  margin: 0 0 var(--space-1) calc(var(--space-3) + var(--proc-icon-w));
+  border-top: 1px solid var(--color-border-subtle);
+}
+.proc-rows.nested > li + li {
+  border-top: 1px solid var(--color-border-subtle);
+}
+.proc-rows.nested .proc-row {
+  border-radius: 0;
 }
 .proc-rows > li {
   display: grid;
@@ -6758,16 +6796,14 @@ html {
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
 }
+/* 图标同文件面板（形状与类别色），不垫灰底 */
 .turn-output-icon {
   display: inline-flex;
   flex: none;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: var(--radius-sm);
-  background: var(--color-bg-muted);
-  color: var(--color-text-secondary);
+  width: 28px;
+  color: var(--color-text-tertiary);
 }
 .turn-output-text {
   display: grid;
@@ -6820,11 +6856,11 @@ html {
   color: var(--color-text-primary);
 }
 
-/* 这一轮开头的计划卡（features/chat/PlanTurnCard.tsx）：计划定了 / 改了才出，只打勾不出。
-   骨架同结尾的卡（文件账、产物）：同底、同边、同圆角、同宽，一轮两头是同一种卡 */
+/* 这一轮的计划卡（features/chat/PlanTurnCard.tsx）：在过程行下面，默认展开、跟着执行实时打勾。
+   骨架同结尾的卡（文件账、产物）：白底、淡边、同圆角、同宽 */
 .plan-turn-card {
-  /* 第二行与清单的字对齐到标题：chevron 13 + 间距 + 图标 14 + 间距 */
-  --plan-turn-indent: calc(13px + var(--space-2) + 14px + var(--space-2));
+  /* 清单的字对齐到标题：图标 14 + 间距 */
+  --plan-turn-indent: calc(14px + var(--space-2));
   display: grid;
   gap: var(--space-1);
   min-width: 0;
@@ -6833,8 +6869,6 @@ html {
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
   font-size: var(--font-size-sm);
-  /* 和下面的过程行隔开一点：卡是这一轮的开头，过程是它下面的事 */
-  margin-bottom: var(--space-1);
 }
 .plan-turn-head {
   display: flex;
@@ -6900,52 +6934,77 @@ html {
   text-overflow: ellipsis;
   color: var(--color-text-tertiary);
 }
-/* 点开：定了计划是一张带状态的清单；改了计划是上一版 → 这一版的红绿 diff（+ 绿底、− 红底，没动的照常列出）。
-   状态记号同右栏进度：勾（绿）/ 在做（实心点）/ 沙漏（黄）/ 空圈。不用删除线——删除线读起来像被删掉了 */
+/* 清单：每步前面是状态记号，同右栏进度：勾（绿）/ 在做（实心点）/ 沙漏（黄）/ 空圈。不划线 */
 .plan-turn-lines {
   list-style: none;
   display: grid;
   gap: 1px;
-  margin: var(--space-1) 0 0;
+  margin: 0;
   padding: 0 0 0 var(--plan-turn-indent);
   line-height: var(--line-height-ui);
 }
-.plan-turn-lines[data-diff] {
-  /* diff 行左边多一列 + / −，整体往左让出这一列，记号与上面的标题对齐 */
-  padding-left: calc(var(--plan-turn-indent) - var(--space-4));
+.plan-turn-lines.compact {
+  padding-left: 0;
 }
-.plan-turn-lines > li {
+.plan-line {
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
-  padding: var(--space-0-5) var(--space-2) var(--space-0-5) 0;
+  padding: var(--space-0-5) var(--space-1);
   border-radius: var(--radius-xs);
   color: var(--color-text-primary);
 }
-.plan-turn-lines > li[data-kind="add"] {
-  background: var(--color-success-soft);
-}
-.plan-turn-lines > li[data-kind="del"] {
-  background: var(--color-danger-soft);
-  color: var(--color-text-secondary);
-}
-.plan-turn-lines > li[data-kind="same"][data-status="done"] {
+.plan-line[data-status="done"] {
   color: var(--color-text-tertiary);
 }
-.plan-turn-lines > li[data-status="in_progress"] .plan-turn-text {
+.plan-line[data-status="in_progress"] .plan-turn-text {
   font-weight: var(--weight-medium);
+}
+/* 左右对照：没动的步整行只列一次；改动的地方左边原来（红底）、右边现在（绿底），一行对一行 */
+.plan-sbs {
+  display: grid;
+  gap: 1px;
+  padding-left: var(--plan-turn-indent);
+  line-height: var(--line-height-ui);
+}
+.plan-sbs.compact {
+  padding-left: 0;
+}
+.plan-sbs-head,
+.plan-sbs-change {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-1);
+}
+.plan-sbs-head {
+  padding: 0 var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.plan-sbs-cell {
+  min-width: 0;
+  border-radius: var(--radius-xs);
+}
+.plan-sbs-cell[data-kind="del"] {
+  background: var(--color-danger-soft);
+}
+.plan-sbs-cell[data-kind="del"] .plan-line {
+  color: var(--color-text-secondary);
+}
+.plan-sbs-cell[data-kind="add"] {
+  background: var(--color-success-soft);
 }
 .plan-turn-sign {
   flex: none;
-  width: var(--space-4);
+  width: var(--space-3);
   text-align: center;
   font-family: var(--font-family-mono);
   font-weight: var(--weight-semibold);
 }
-li[data-kind="add"] > .plan-turn-sign {
+[data-kind="add"] .plan-turn-sign {
   color: var(--color-success);
 }
-li[data-kind="del"] > .plan-turn-sign {
+[data-kind="del"] .plan-turn-sign {
   color: var(--color-danger);
 }
 .plan-turn-mark {
@@ -6957,10 +7016,10 @@ li[data-kind="del"] > .plan-turn-sign {
   height: calc(var(--font-size-sm) * 1.5);
   color: var(--color-text-tertiary);
 }
-li[data-status="done"] > .plan-turn-mark {
+.plan-line[data-status="done"] > .plan-turn-mark {
   color: var(--color-success);
 }
-li[data-status="waiting"] > .plan-turn-mark {
+.plan-line[data-status="waiting"] > .plan-turn-mark {
   color: var(--color-warning);
 }
 .plan-turn-ring,
@@ -6988,4 +7047,155 @@ li[data-status="waiting"] > .plan-turn-mark {
   font-weight: var(--weight-semibold);
   color: var(--color-warning);
   background: color-mix(in srgb, var(--color-warning) 14%, transparent);
+}
+
+/* 轮尾文件账卡（FileTurnCard，2026-11-22 照 Kimi）：笔｜已编辑 N 个文件 +x −y｜撤销｜审核；展开逐文件一行，底下「收起」。
+   白底淡边，与产物卡同宽同骨架 */
+.file-turn-card {
+  display: grid;
+  min-width: 0;
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  overflow: hidden;
+}
+.file-turn-card[data-previewing] {
+  border-color: var(--color-border-strong);
+  box-shadow: 0 0 0 1px var(--color-border-strong);
+}
+.ftc-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+}
+.ftc-toggle {
+  display: inline-flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ftc-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  color: var(--color-text-tertiary);
+}
+.ftc-title {
+  display: grid;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+.ftc-label {
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+.ftc-btn,
+.ftc-undone {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  color: var(--color-text-secondary);
+}
+.ftc-btn {
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.ftc-btn:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.ftc-btn:disabled {
+  color: var(--color-text-tertiary);
+  cursor: default;
+}
+.ftc-undone {
+  border-color: transparent;
+  background: var(--color-bg-muted);
+  color: var(--color-text-tertiary);
+}
+.ftc-list {
+  display: grid;
+  border-top: 1px solid var(--color-border-subtle);
+}
+.ftc-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: var(--control-height-md);
+  padding: 0 var(--space-3);
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.ftc-row:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+.ftc-row:disabled {
+  cursor: default;
+}
+.ftc-name {
+  flex: none;
+  max-width: 60%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--font-family-mono);
+  color: var(--color-text-secondary);
+}
+.ftc-dir {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  color: var(--color-text-tertiary);
+}
+.ftc-stats {
+  flex: none;
+  margin-left: auto;
+  font-family: var(--font-family-business);
+  font-variant-numeric: tabular-nums;
+}
+.ftc-fold {
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-top: 1px solid var(--color-border-subtle);
+  background: transparent;
+  font: inherit;
+  color: var(--color-text-tertiary);
+  text-align: left;
+  cursor: pointer;
+}
+.ftc-fold:hover {
+  color: var(--color-text-secondary);
+}
+.file-turn-card > .web-batch-row {
+  padding: var(--space-2) var(--space-3);
 }

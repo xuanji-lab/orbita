@@ -29,6 +29,7 @@ import { parsePluginBoardDetails, type PluginBoardResult } from "../../../../sha
 import { gatedCommandTimeout, PLUGIN_BOARD_TOOL } from "../../../../shared/permission.ts";
 import { builtinCommand, DOC_EDIT_KEY, DOC_WRITE_KEY, docEditPath, isBuiltinCommand } from "./builtin-commands.ts";
 import { turnOutputs } from "./process-rows.ts";
+import { isWebArtifactFile } from "../../../../shared/files.ts";
 // 收尾扫描回答卡（scanAnswerCards）只用它认消息形状；纯模块，node --test 可直接加载
 import { matchScanMessage, type ScanMessage } from "./carryover-parse.ts";
 // 值导入必须走相对路径带 .ts 后缀（同上一行的纪律：本文件被 node --test 直接加载）
@@ -388,6 +389,8 @@ export interface TurnOutputsUnit {
   kind: "turnOutputs";
   key: string;
   calls: readonly ToolCallUnit[];
+  /** 这一轮做出来的网页（文件账里改到的与旁路生成的），各占一张预览卡，不再挤在文件账卡里 */
+  web: readonly string[];
 }
 
 export type TurnViewEntry = RenderEntry | TurnGroupUnit | TurnProcessUnit | TurnOutputsUnit;
@@ -605,8 +608,13 @@ function foldSegment(
   if (tailCards.length > 0) view.push(...tailCards);
   if (mode !== "live" && results !== undefined) {
     const calls = segment.flatMap((entry) => (entry.kind === "toolCall" ? [entry] : entry.kind === "toolGroup" ? [...entry.calls] : []));
-    if (turnOutputs(calls, results).length > 0) {
-      view.push({ kind: "turnOutputs", key: `out:${calls[0]?.key ?? ""}`, calls });
+    const web = tailCards.flatMap((entry) =>
+      entry.kind === "fileTurn"
+        ? [...entry.record.changes.map((change) => change.path).filter((path) => isWebArtifactFile(path)), ...(entry.record.webArtifacts ?? [])]
+        : [],
+    );
+    if (turnOutputs(calls, results).length > 0 || web.length > 0) {
+      view.push({ kind: "turnOutputs", key: `out:${calls[0]?.key ?? tailCards[0]?.key ?? ""}`, calls, web });
     }
   }
   return view;

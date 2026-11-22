@@ -183,6 +183,8 @@ export function fileIcon(name: string, kind: FileEntryKind, open = false): IconN
   if (kind === "symlink") return "file";
   const lower = name.toLowerCase();
   if (isConfigDotfile(lower)) return "file-json-2";
+  // Orbita 的演示文稿（<名字>.slides.json）是演示，不是配置：对话结尾的产物卡与文件面板同一个形状（2026-11-22）
+  if (lower.endsWith(".slides.json")) return "presentation";
   const ext = extOf(name);
   if (CODE_EXTS.has(ext)) return "file-code-2";
   if (CONFIG_EXTS.has(ext)) return "file-json-2";
@@ -207,6 +209,7 @@ export function fileIcon(name: string, kind: FileEntryKind, open = false): IconN
  */
 export function fileIconTone(name: string, kind: FileEntryKind): FileIconTone | null {
   if (kind !== "file") return null;
+  if (name.toLowerCase().endsWith(".slides.json")) return "slides";
   const ext = extOf(name);
   if (DOC_TONE_EXTS.has(ext)) return "doc";
   if (SLIDE_TONE_EXTS.has(ext)) return "slides";

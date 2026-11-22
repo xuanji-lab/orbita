@@ -123,6 +123,14 @@ describe("hasAgentsMd", () => {
   });
 });
 
+describe("fileIcon：Orbita 的演示文稿（.slides.json）按演示认，不按 json", () => {
+  it("形状与色调都是演示", () => {
+    deepStrictEqual(fileIcon("汇报.slides.json", "file"), "presentation");
+    deepStrictEqual(fileIconTone("汇报.slides.json", "file"), "slides");
+    deepStrictEqual(fileIcon("package.json", "file"), "file-json-2");
+  });
+});
+
 describe("fileIcon", () => {
   it("目录按展开态选 folder / folder-open，忽略名字", () => {
     deepStrictEqual(fileIcon("src", "directory", false), "folder");

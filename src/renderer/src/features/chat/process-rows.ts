@@ -192,8 +192,8 @@ function mcpBrief(tool: string, input: unknown): string {
 
 /** 一份产物：结尾那一处收的一行 */
 export interface TurnOutput {
-  /** 演示文稿 / 文档在右栏打开；文件用系统默认应用打开 */
-  kind: "slides" | "doc" | "file";
+  /** 演示文稿 / 文档在右栏打开；网页在内置浏览器打开；导出的文件在文件面板预览 */
+  kind: "slides" | "doc" | "file" | "web";
   /** 绝对路径（去重键） */
   path: string;
   title: string;
@@ -286,6 +286,21 @@ export function turnOutputs(calls: readonly ToolCallUnit[], results: ToolResultI
     }
   }
   return order.map((path) => byPath.get(path)).filter((output): output is TurnOutput => output !== undefined);
+}
+
+/**
+ * 这一轮做出来的网页（2026-11-22 用户：「这个东西就应该放在，就是单独一个卡片……而不是放在编辑了哪些文件的这个框框里面」）：
+ * 文件账里改到的 .html / .htm / .svg 与旁路（脚本生成）的网页，去重、按出现顺序，接在其余产物后面。
+ */
+export function webOutputs(paths: readonly string[]): TurnOutput[] {
+  const seen = new Set<string>();
+  const out: TurnOutput[] = [];
+  for (const path of paths) {
+    if (seen.has(path)) continue;
+    seen.add(path);
+    out.push({ kind: "web", path, title: basename(path), pages: null, format: null, detail: null });
+  }
+  return out;
 }
 
 // ───────────────────────── 缩略图 ─────────────────────────
