@@ -2665,10 +2665,11 @@ html[data-pointer-drag] iframe {
   color: var(--color-chat-link);
 }
 
+/* 代码块白底淡边（2026-11-22 用户：对话里除了你的消息是灰的，其余都改白——灰块读起来像你的话） */
 .chat-md pre {
   margin: var(--space-2) 0;
   padding: var(--space-3);
-  background: var(--color-chat-muted-bg);
+  background: var(--color-bg-panel);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
   overflow-x: auto;
@@ -6753,7 +6754,7 @@ html {
   gap: var(--space-3);
   min-width: 0;
   padding: var(--space-2) var(--space-3);
-  background: var(--color-chat-card-bg);
+  background: var(--color-bg-panel);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
 }
@@ -6828,7 +6829,7 @@ html {
   gap: var(--space-1);
   min-width: 0;
   padding: var(--space-2) var(--space-3);
-  background: var(--color-chat-card-bg);
+  background: var(--color-bg-panel);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
   font-size: var(--font-size-sm);
@@ -6899,23 +6900,92 @@ html {
   text-overflow: ellipsis;
   color: var(--color-text-tertiary);
 }
-.plan-turn-steps,
-.plan-turn-changes {
+/* 点开：定了计划是一张带状态的清单；改了计划是上一版 → 这一版的红绿 diff（+ 绿底、− 红底，没动的照常列出）。
+   状态记号同右栏进度：勾（绿）/ 在做（实心点）/ 沙漏（黄）/ 空圈。不用删除线——删除线读起来像被删掉了 */
+.plan-turn-lines {
+  list-style: none;
   display: grid;
-  gap: var(--space-0-5);
+  gap: 1px;
   margin: var(--space-1) 0 0;
-  padding-left: calc(var(--plan-turn-indent) + var(--space-3));
+  padding: 0 0 0 var(--plan-turn-indent);
   line-height: var(--line-height-ui);
+}
+.plan-turn-lines[data-diff] {
+  /* diff 行左边多一列 + / −，整体往左让出这一列，记号与上面的标题对齐 */
+  padding-left: calc(var(--plan-turn-indent) - var(--space-4));
+}
+.plan-turn-lines > li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-0-5) var(--space-2) var(--space-0-5) 0;
+  border-radius: var(--radius-xs);
   color: var(--color-text-primary);
 }
-.plan-turn-steps li[data-status="done"] {
-  color: var(--color-text-tertiary);
-  text-decoration: line-through;
+.plan-turn-lines > li[data-kind="add"] {
+  background: var(--color-success-soft);
 }
-.plan-turn-steps li[data-status="in_progress"] {
+.plan-turn-lines > li[data-kind="del"] {
+  background: var(--color-danger-soft);
+  color: var(--color-text-secondary);
+}
+.plan-turn-lines > li[data-kind="same"][data-status="done"] {
+  color: var(--color-text-tertiary);
+}
+.plan-turn-lines > li[data-status="in_progress"] .plan-turn-text {
   font-weight: var(--weight-medium);
 }
-.plan-turn-steps li::marker,
-.plan-turn-changes li::marker {
+.plan-turn-sign {
+  flex: none;
+  width: var(--space-4);
+  text-align: center;
+  font-family: var(--font-family-mono);
+  font-weight: var(--weight-semibold);
+}
+li[data-kind="add"] > .plan-turn-sign {
+  color: var(--color-success);
+}
+li[data-kind="del"] > .plan-turn-sign {
+  color: var(--color-danger);
+}
+.plan-turn-mark {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: calc(var(--font-size-sm) * 1.5);
   color: var(--color-text-tertiary);
+}
+li[data-status="done"] > .plan-turn-mark {
+  color: var(--color-success);
+}
+li[data-status="waiting"] > .plan-turn-mark {
+  color: var(--color-warning);
+}
+.plan-turn-ring,
+.plan-turn-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--color-text-tertiary);
+}
+.plan-turn-dot {
+  box-shadow: inset 0 0 0 1.5px var(--color-info);
+  background: radial-gradient(circle, var(--color-info) 0 35%, transparent 40%);
+}
+.plan-turn-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.plan-turn-wait {
+  display: inline-block;
+  margin-left: var(--space-1-5);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 14%, transparent);
 }

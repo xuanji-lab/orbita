@@ -26,7 +26,7 @@ export function CarryoverScanCard(props: { scan: ScanMessage }) {
         display: "grid",
         gap: "var(--space-3)",
         padding: "var(--space-4)",
-        background: "var(--color-chat-card-bg)",
+        background: "var(--color-bg-panel)",
         border: "1px solid var(--color-border-subtle)",
         borderRadius: "var(--radius-lg)",
       }}

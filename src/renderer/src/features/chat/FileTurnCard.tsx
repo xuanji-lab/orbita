@@ -42,6 +42,7 @@ const SLOT_DIR: React.CSSProperties = {
 
 /**
  * 轮尾文件账卡。头：chevron｜「N 个文件已更改」（· 生成了 M 个网页）｜+x −y｜撤销。
+ * 白底淡边（2026-11-22 用户：对话里只有用户的消息是灰的，智能体这边的卡一律白底——灰卡读起来像用户的话）。
  * **收起态也直接露出网页行**（文件账里的与旁路的都算）——网页产物是这一轮最
  * 常被点开的东西，不该藏在展开里；其余文件行仍要展开才见。已撤销的轮：数字
  * 列表保留、加「已撤销」徽标、撤销按钮禁用（不做重新应用——重新应用等于重跑
@@ -113,7 +114,7 @@ export function FileTurnCard(props: {
         display: "grid",
         gap: shown || hasWeb ? "var(--space-1)" : 0,
         padding: "var(--space-2) var(--space-3)",
-        background: "var(--color-chat-card-bg)",
+        background: "var(--color-bg-panel)",
         border: `1px solid ${previewing ? "var(--color-border-strong)" : "var(--color-border-subtle)"}`,
         boxShadow: previewing ? "0 0 0 1px var(--color-border-strong)" : "none",
         borderRadius: "var(--radius-md)",
@@ -433,7 +434,7 @@ export function RevertMarkView(props: {
             display: "grid",
             gap: open ? "var(--space-1)" : 0,
             padding: "var(--space-2) var(--space-3)",
-            background: "var(--color-chat-card-bg)",
+            background: "var(--color-bg-panel)",
             border: "1px solid var(--color-border-subtle)",
             borderRadius: "var(--radius-md)",
             fontSize: "var(--font-size-sm)",
