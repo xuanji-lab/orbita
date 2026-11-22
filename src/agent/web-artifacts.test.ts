@@ -2,7 +2,12 @@ import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   foldWebArtifacts,
+  isScriptTool,
+  makeWebAccept,
+  noteSessionWrite,
+  resetOtherWrites,
   scanWebArtifacts,
+  ToolWindows,
   webScanRoots,
   SCAN_MAX_ENTRIES,
   WEB_ARTIFACT_BATCH_LIMIT,
@@ -253,5 +258,89 @@ describe("webScanRoots —— 只扫 cwd 与工作台，不扫附加目录", () 
     deepStrictEqual(webScanRoots("/w", { attached: ["/x"], workbench: "" }), [
       { root: "/w", maxEntries: SCAN_MAX_ENTRIES },
     ]);
+  });
+});
+
+describe("旁路网页只算这一条会话这一轮自己产生的（2026-11-22 另一条会话 edit 的网页被算进来）", () => {
+  const T0 = 1_000_000; // 开轮时刻
+  const fsOf = (mtimes: Record<string, number>) =>
+    fakeFs(
+      { "/w": Object.keys(mtimes).map((path) => ({ name: path.slice(3), isDir: false })) },
+      mtimes,
+    );
+
+  it("isScriptTool：只有 shell / 终端执行 / 外接工具可能在文件账外生成网页", () => {
+    for (const name of ["bash", "powershell", "terminal_execute", "mcp__qgis__execute_code"]) strictEqual(isScriptTool(name), true, name);
+    for (const name of ["write", "edit", "read", "grep", "show_image", "slides_export", "terminal_read"]) strictEqual(isScriptTool(name), false, name);
+  });
+
+  it("ToolWindows：只记脚本类工具；没落定的（被中断）按轮尾时刻封口", () => {
+    const windows = new ToolWindows();
+    windows.begin("a", "write", T0 + 1);
+    windows.finish("a", T0 + 2);
+    windows.begin("b", "bash", T0 + 10);
+    windows.finish("b", T0 + 20);
+    windows.begin("c", "bash", T0 + 30); // 没有 finish
+    deepStrictEqual(windows.snapshot(T0 + 99), [
+      { start: T0 + 10, end: T0 + 20 },
+      { start: T0 + 30, end: T0 + 99 },
+    ]);
+  });
+
+  it("脚本生成的网页（mtime 落在本轮 bash 窗口里）照常收进来——样张「脚本生成两张图表」那一类", async () => {
+    resetOtherWrites();
+    const windows = new ToolWindows();
+    windows.begin("b", "bash", T0 + 5_000);
+    windows.finish("b", T0 + 9_000);
+    const accept = makeWebAccept("s1", windows.snapshot(T0 + 20_000), T0);
+    const result = await scanWebArtifacts(oneRoot("/w"), T0 - 2000, fsOf({ "/w/chart.html": T0 + 8_000, "/w/chart.svg": T0 + 8_500 }), { accept });
+    deepStrictEqual(result.paths.map(normPosix), ["/w/chart.html", "/w/chart.svg"]);
+  });
+
+  it("窗口之外的空档（模型想事情的时候别的会话写的）不算：mtime 在两次 bash 之间", async () => {
+    resetOtherWrites();
+    const windows = new ToolWindows();
+    windows.begin("b1", "bash", T0 + 1_000);
+    windows.finish("b1", T0 + 2_000);
+    windows.begin("b2", "bash", T0 + 30_000);
+    windows.finish("b2", T0 + 31_000);
+    const accept = makeWebAccept("s1", windows.snapshot(T0 + 40_000), T0);
+    const result = await scanWebArtifacts(oneRoot("/w"), T0 - 2000, fsOf({ "/w/gap.html": T0 + 15_000 }), { accept });
+    deepStrictEqual(result.paths, []);
+  });
+
+  it("本轮没跑过脚本类工具：没有窗口，什么 mtime 都不收", async () => {
+    resetOtherWrites();
+    const accept = makeWebAccept("s1", new ToolWindows().snapshot(T0 + 40_000), T0);
+    const result = await scanWebArtifacts(oneRoot("/w"), T0 - 2000, fsOf({ "/w/other.html": T0 + 100 }), { accept });
+    deepStrictEqual(result.paths, []);
+  });
+
+  it("别的会话在本轮期间 write / edit 过的路径扣掉，哪怕 mtime 恰好落在本会话的 bash 窗口里", async () => {
+    resetOtherWrites();
+    noteSessionWrite("s2", "/w/index.html", T0 + 8_000);
+    const windows = new ToolWindows();
+    windows.begin("b", "bash", T0 + 7_000);
+    windows.finish("b", T0 + 9_000);
+    const accept = makeWebAccept("s1", windows.snapshot(T0 + 20_000), T0);
+    const result = await scanWebArtifacts(
+      oneRoot("/w"),
+      T0 - 2000,
+      fsOf({ "/w/index.html": T0 + 8_000, "/w/mine.html": T0 + 8_100 }),
+      { accept },
+    );
+    deepStrictEqual(result.paths.map(normPosix), ["/w/mine.html"]);
+  });
+
+  it("别人很早以前（本轮开始前）写过的不连坐；本会话自己写的也不算「别人」", async () => {
+    resetOtherWrites();
+    noteSessionWrite("s2", "/w/old.html", T0 - 600_000);
+    noteSessionWrite("s1", "/w/self.html", T0 + 8_000);
+    const windows = new ToolWindows();
+    windows.begin("b", "bash", T0 + 7_000);
+    windows.finish("b", T0 + 9_000);
+    const accept = makeWebAccept("s1", windows.snapshot(T0 + 20_000), T0);
+    const result = await scanWebArtifacts(oneRoot("/w"), T0 - 2000, fsOf({ "/w/old.html": T0 + 8_000, "/w/self.html": T0 + 8_000 }), { accept });
+    deepStrictEqual(result.paths.map(normPosix), ["/w/old.html", "/w/self.html"]);
   });
 });
