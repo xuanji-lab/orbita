@@ -67,11 +67,6 @@ export interface RailEntry {
 
 export function RightRail(props: {
   panel: RightPanelKind | null;
-  /**
-   * 被点亮且右栏面板开着的那一项做成与面板相连的标签（.rail-tab）。窄窗里面板是浮在井上的覆盖层，
-   * 不与图标条相接，传 false。
-   */
-  fuse: boolean;
   onPanel: (next: RightPanelKind | null) => void;
   /** 应用级入口（遗留 / 归档 / 浏览器 / 记忆 / 看板 / 设置），调用方组装；条上的组与顺序由 RightRail 定，与数组顺序无关 */
   railEntries: RailEntry[];
@@ -219,7 +214,6 @@ export function RightRail(props: {
         {...(item.glyph === undefined ? {} : { glyph: item.glyph })}
         label={item.label}
         lit={item.lit}
-        fused={props.fuse && props.panel !== null && item.id === props.panel}
         onClick={item.onSelect}
         badge={item.badge}
       />
@@ -307,8 +301,6 @@ function RailEntryButton(props: {
   icon: IconName;
   label: string;
   lit: boolean;
-  /** 这一项的面板正开着：画成与面板相连的标签（点亮底让给标签） */
-  fused?: boolean;
   onClick: () => void;
   /** 未读角标；缺席或 0 不渲染 */
   badge?: number;
@@ -320,7 +312,6 @@ function RailEntryButton(props: {
       title={props.label}
       aria-label={props.label}
       aria-pressed={props.lit}
-      data-fused={props.fused === true ? "true" : undefined}
       onClick={props.onClick}
       style={{
         width: 28, // 控件台阶 24·28·32（control-scale.ts）
@@ -331,12 +322,10 @@ function RailEntryButton(props: {
         padding: 0,
         cursor: "pointer",
         borderRadius: "var(--radius-sm)",
-        // 角标与标签的定位基准；isolation 让标签（z-index:-1）沉到图标之下、不沉到井之下
+        // 角标的定位基准
         position: "relative",
-        isolation: "isolate",
       }}
     >
-      {props.fused === true && <span className="rail-tab" aria-hidden="true" />}
       <Icon name={props.icon} size={16} />
       {props.badge !== undefined && props.badge > 0 && (
         <span className="rail-badge" aria-hidden="true">

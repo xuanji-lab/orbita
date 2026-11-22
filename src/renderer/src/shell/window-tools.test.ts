@@ -21,8 +21,6 @@ import {
   LIGHTS_GAP,
   RAIL_END,
   RAIL_W,
-  PANE_RADIUS,
-  TAB_FILLET,
   TOGGLE_CAP_W,
   toggleCapsuleLeft,
   PANEL_CAPSULE_INSET,
@@ -83,54 +81,37 @@ test("对话列与右端边界（1440 窗实算：SBW 288 / 图标条 44 + 右�
   assert.equal(rightEdge({ windowWidth: 960, panelOpen: false, panelWidth: 0 }), 918);
 });
 
-test("会话标签：居左——侧栏展开时左缘 = 对话列左缘 + 井圆角 + 反向圆角，收起时紧跟左胶囊（专注键）", () => {
-  // 反向圆角要落在井上缘的直线段上：最靠左 = 井左缘 + 井圆角 8 + 反向圆角 8
+test("会话胶囊：居左——侧栏展开时左缘 = 对话列左缘 + 内缩，收起时紧跟左胶囊（专注键）右缘", () => {
+  // 状态 1（1440，侧栏展开 288、无右栏）：对话列左缘 312，胶囊左缘 = 312 + 8（与右栏胶囊 = 分隔线 + 8 同一个内缩）；宽封顶 480
   const a = sessionCapsule({ colLeft: 312, leftCapRight: 88 + LEFT_CAPSULE_W, rightLimit: 1364 });
-  assert.equal(a.x, 312 + PANE_RADIUS + TAB_FILLET);
+  assert.equal(a.x, 312 + PANEL_CAPSULE_INSET);
   assert.equal(a.width, SESSION_W);
-  // 侧栏收起（对话列贴窗口边 12）：左缘退到左胶囊右缘（88 + 112 = 200）再让出左反向圆角与一小格，标签紧跟专注键
+  // 侧栏收起（对话列贴窗口边 12）：左缘退到左胶囊右缘（88 + 112 = 200），标题紧跟专注键
   const c = sessionCapsule({ colLeft: 12, leftCapRight: 88 + LEFT_CAPSULE_W, rightLimit: 1364 });
-  assert.equal(c.x, 88 + LEFT_CAPSULE_W + TAB_FILLET + SESSION_GAP / 3);
-  // 专注中倒计时格把左胶囊撑宽：标签跟着右移，不压住它
+  assert.equal(c.x, 88 + LEFT_CAPSULE_W);
+  // 专注中倒计时格把左胶囊撑宽：胶囊跟着右移，不压住它
   const wide = sessionCapsule({ colLeft: 12, leftCapRight: 88 + LEFT_CAPSULE_W + 40, rightLimit: 1364 });
   assert.equal(wide.x, c.x + 40);
   // 验收实例（1200 宽、侧栏展开、右栏开到分隔线 654）：右限让开右栏胶囊再留 SESSION_GAP
   const m = sessionCapsule({ colLeft: 312, leftCapRight: 88 + LEFT_CAPSULE_W, rightLimit: 654 });
-  assert.equal(m.x, 328);
-  assert.equal(m.width, 654 - 12 - 328);
+  assert.equal(m.x, 320);
+  assert.equal(m.width, 654 - SESSION_GAP - 320);
   // 放不下：能拿多少拿多少，最窄 0（Toolbar 不渲染 0 宽胶囊）
-  const tight = sessionCapsule({ colLeft: 12, leftCapRight: 192, rightLimit: 260 });
-  assert.equal(tight.width, 260 - 12 - tight.x);
+  const tight = sessionCapsule({ colLeft: 12, leftCapRight: 192, rightLimit: 230 });
+  assert.equal(tight.width, 230 - SESSION_GAP - 192);
   assert.equal(sessionCapsule({ colLeft: 12, leftCapRight: 192, rightLimit: 200 }).width, 0);
 });
 
-test("与井相连的标签 / 窄图标条：尺寸 token 与 JS 几何对账", () => {
-  assert.match(spacingCss, /--tab-fillet:\s*var\(--radius-xl\)/, "反向圆角半径 = 面圆角 token");
-  assert.match(spacingCss, /--radius-xl:\s*var\(--radius\);?/, "面圆角 = --radius = 8（方向 N）");
-  assert.match(spacingCss, /--radius:\s*0\.5rem/);
-  assert.equal(TAB_FILLET, 8);
-  assert.equal(PANE_RADIUS, 8);
+test("窄图标条：尺寸 token 与 JS 几何对账（2026-11-22 收窄）", () => {
   assert.match(spacingCss, /--rail-w:\s*44px/);
   assert.equal(RAIL_W, 44, "图标条宽 = 图标 28 + 左右各 --space-2");
   assert.match(spacingCss, /--rail-end:\s*var\(--space-1\)/);
   assert.equal(RAIL_END, 4);
-  assert.match(spacingCss, /--tab-h:\s*48px/);
+  assert.doesNotMatch(spacingCss, /--tab-fillet|--tab-h/, "试过标签融合，用户否决，token 已删");
+  assert.doesNotMatch(stylesCss, /\.rail-tab/);
   // 井的右缘离窗口边 = 条宽 + 条右缘留白；开关胶囊（32）居中在 44 的条里，与条上 28 的图标同一条竖线
   assert.equal(toggleCapsuleLeft(1440), 1440 - RAIL_W - RAIL_END + (RAIL_W - TOGGLE_CAP_W) / 2);
   assert.equal(toggleCapsuleLeft(1440) + 2, 1440 - RAIL_W - RAIL_END + 8, "胶囊内的 28 圆格左缘 = 条左缘 + 8");
-});
-
-test("井上的两个标签只在非纸面主题画；条上被点亮项的标签只在面板开着时画", () => {
-  const toolbarCssSrc = readSource(join(RENDERER_SRC, "shell/toolbar.css"));
-  const railTsx = readSource(join(RENDERER_SRC, "shell/RightRail.tsx"));
-  assert.match(toolbarCssSrc, /\.session-tab \{\s*display:\s*none;/, "纸面两档默认不画标签");
-  assert.match(toolbarCssSrc, /:root:not\(\[data-theme="copybook"\], \[data-theme="typescript"\]\) \{[\s\S]*?\.session-tab \{\s*display:\s*block/);
-  assert.match(toolbarCssSrc, /\.session-tab \{[^}]*background:\s*var\(--color-bg-panel\)/, "标签底色 = 井（--color-bg-panel，与 .pane 同值）");
-  assert.match(stylesCss, /:root:not\(\[data-theme="copybook"\], \[data-theme="typescript"\]\) \.pane \{\s*background:\s*var\(--color-bg-panel\)/, "井的底色是 --color-bg-panel");
-  assert.match(stylesCss, /:root:not\(\[data-theme="copybook"\], \[data-theme="typescript"\]\) \.rail-tab \{[^}]*background:\s*var\(--color-bg-panel\)/, "条上标签底色 = 井");
-  // 只有面板真开着（props.panel 非空且就是这一项）、且不在窄窗覆盖层里才融合；archived / 设置这类子视图的点亮不算
-  assert.match(railTsx, /fused=\{props\.fuse && props\.panel !== null && item\.id === props\.panel\}/);
-  assert.match(appTsx, /fuse=\{!narrow\}/);
 });
 
 test("断点与侧栏开关的结构性不变量：左胶囊 x 与侧栏开合无关", () => {
@@ -185,7 +166,7 @@ test("工具栏的直接子元素只有胶囊（Windows brand row 是唯一例�
   // 四颗胶囊都在场（会话 / 右栏两颗住在条件包裹里，按文本确认）
   const markers = [
     "toolbar-capsule\" style={{ left, width: leftW }}",
-    "toolbar-capsule has-tab\" style={{ left: sess.x, width: sess.width }}",
+    "toolbar-capsule\" style={{ left: sess.x, width: sess.width }}",
     "toolbar-capsule cap-panel\" style={{ left: panelLeft, width: panelW }}",
     "toolbar-capsule\" style={{ left: toggleLeft, width: TOGGLE_CAP_W }}",
   ];

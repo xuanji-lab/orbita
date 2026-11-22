@@ -2812,8 +2812,8 @@ html[data-pointer-drag] iframe {
    顶部没有行级对齐了（右栏开关住工具栏胶囊），rail 从工具栏下开始。常规与精简（实验功能 lean-rail）两种排法共用这一条。
    2026-11-22 收窄：条宽 --rail-w = 44（图标 28 左右各 --space-2），原先是 32 的条夹在井与窗口边各 12 的空隙里
    （图标离井 14、离窗口边 14，「像伸长脖子」）；现在条紧贴井的右缘（负的 margin-left 吃掉 .layer 的 gap），
-   条右缘离窗口边 --rail-end（= --space-1）。上下各留 --space-5 = 井圆角 8 + 反向圆角 8 + 标签内边距 4：被点亮的那一项做成与
-   右栏面板相连的标签（.rail-tab），它的上下反向圆角要落在井右缘的直线段上。 */
+   条右缘离窗口边 --rail-end（= --space-1）。试过把被点亮的那一项与右栏面板「融合」成标签，用户看过否决（不好看），
+   点亮仍是普通的按下底。 */
 .right-rail {
   flex: 0 0 auto;
   width: var(--rail-w);
@@ -2825,50 +2825,9 @@ html[data-pointer-drag] iframe {
   align-items: center;
   /* 间距全由下面的组承担：组内 space-1、组间一条细线（rail-sep）、上下两段之间弹性留白 */
   gap: 0;
-  padding: 0 0 var(--space-5);
+  padding: var(--space-1) 0 var(--space-2);
   background: transparent;
   overflow: hidden;
-}
-
-/* 面板相连的那一项：点亮底让给标签（标签就是它的「选中」），hover 底也不再叠一层 */
-.right-rail button[data-fused="true"],
-.right-rail button[data-fused="true"]:hover {
-  background: transparent;
-}
-
-/* 与右栏面板相连的点亮标签（RightRail 给被点亮且面板开着的那一项加 .rail-tab，非纸面主题；纸面两档不画）：
-   底色 = 井（右栏面板没有自己的底，坐在井上），左缘 = 井右缘（往左多压到按钮外 --space-2），右侧圆角 --radius-xl，
-   上下各 --space-1 的内边距；上下两个反向圆角（半径 --tab-fillet）把它接到壳上，接缝处不画线。 */
-.rail-tab {
-  display: none;
-}
-:root:not([data-theme="copybook"], [data-theme="typescript"]) .rail-tab {
-  display: block;
-  position: absolute;
-  z-index: -1;
-  left: calc(-1 * var(--space-2));
-  width: var(--rail-w);
-  top: calc(-1 * var(--space-1));
-  bottom: calc(-1 * var(--space-1));
-  background: var(--color-bg-panel);
-  border-radius: 0 var(--radius-xl) var(--radius-xl) 0;
-  pointer-events: none;
-}
-:root:not([data-theme="copybook"], [data-theme="typescript"]) .rail-tab::before,
-:root:not([data-theme="copybook"], [data-theme="typescript"]) .rail-tab::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  width: var(--tab-fillet);
-  height: var(--tab-fillet);
-}
-:root:not([data-theme="copybook"], [data-theme="typescript"]) .rail-tab::before {
-  bottom: 100%;
-  background: radial-gradient(circle at 100% 0, transparent var(--tab-fillet), var(--color-bg-panel) calc(var(--tab-fillet) + 0.5px));
-}
-:root:not([data-theme="copybook"], [data-theme="typescript"]) .rail-tab::after {
-  top: 100%;
-  background: radial-gradient(circle at 100% 100%, transparent var(--tab-fillet), var(--color-bg-panel) calc(var(--tab-fillet) + 0.5px));
 }
 
 /*
@@ -2879,8 +2838,6 @@ html[data-pointer-drag] iframe {
  * 上段（会话 / 工作面 / 智能体 / 收纳）全在右上，右下只剩「应用」组（设置、通知）。
  */
 .rail-stack {
-  /* 上方留 --space-5：第一项被点亮时它的上反向圆角要落在井右缘的直线段上（井圆角 8 + 反向圆角 8 + 标签内边距 4） */
-  padding-top: var(--space-5);
   /* 窗口矮到放不下时，上段自己滚（隐藏滚动条）：下段永远在视野里，Tab 聚焦会把入口带进视野 */
   flex: 0 1 auto;
   min-height: 0;
