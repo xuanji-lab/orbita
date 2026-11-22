@@ -581,6 +581,9 @@ export function createCitePdfTool(cwd: string): ToolDefinition {
       "PDF and a statement relies on specific wording in it, or the user asks for the original text: pass the " +
       "exact original text copied from read_pdf output. Each verified quote returns a marker like [^c4k2] — put " +
       "it right after the sentence it supports; the user clicks it to open the PDF at that passage, highlighted. " +
+      "These markers are not footnotes: write them verbatim, never renumber them ([^1]), never add a [^…]: " +
+      "definition or a sources list, never merge them with another source's [^n] numbering (notes and PDFs " +
+      "each keep their own format in one answer). " +
       "Quotes that cannot be found come back as errors — never cite from memory. Details: the `reading` skill.",
     promptSnippet: "cite_pdf: verify quotes from a PDF and get clickable citation markers for your reply",
     parameters: {
@@ -689,7 +692,9 @@ export function createCitePdfTool(cwd: string): ToolDefinition {
         citations.length > 0
           ? `Put each marker right after the sentence it supports, e.g. "…uses double buffering[^${firstId}]." ` +
             "Write markers exactly as shown, inline only — do not add footnote definitions " +
-            `(\`[^${firstId}]: …\`) or a sources list at the end; that breaks the click-through.`
+            `(\`[^${firstId}]: …\`) or a sources list at the end; that breaks the click-through. ` +
+            "Do not renumber them (no [^1], [^2]) or merge them with the numbering of notes cited from a search tool: " +
+            "those markers stay in their own format, PDF markers stay as shown."
           : "";
       return {
         content: [{ type: "text", text: [header, ...lines, footer].filter((part) => part !== "").join("\n") }],
