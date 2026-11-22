@@ -33,6 +33,15 @@ export function processCalls(steps: readonly ProcessStep[]): ToolCallUnit[] {
   return calls;
 }
 
+/**
+ * 这一轮被打断过吗：有工具调用的结果永远不会来（interruptedToolCallIds 判的：所在消息 aborted / error 收场且没有结果帧）。
+ * 过程行据此写「被你打断 · N 步」，而不是看起来像正常做完的「工作了 4.7 秒 · 2 步」。
+ */
+export function processInterrupted(steps: readonly ProcessStep[], interrupted: ReadonlySet<string>): boolean {
+  if (interrupted.size === 0) return false;
+  return processCalls(steps).some((call) => interrupted.has(call.toolCallId));
+}
+
 export function callFailed(call: ToolCallUnit, results: ToolResultIndex): boolean {
   return results.get(call.toolCallId)?.status === "error";
 }

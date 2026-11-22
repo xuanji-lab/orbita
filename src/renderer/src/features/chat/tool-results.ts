@@ -399,6 +399,8 @@ export interface TurnOutputsUnit {
   calls: readonly ToolCallUnit[];
   /** 这一轮做出来的网页（文件账里改到的与旁路生成的），各占一张预览卡，不再挤在文件账卡里 */
   web: readonly string[];
+  /** 本轮网页文件变动超过上限（像是批量操作）时的个数；不逐个列，结尾那摞里是一张没有预览按钮的卡。没有 = 0 */
+  webBatch: number;
   /**
    * 这一轮写 / 改的文档（.md / .markdown / .txt，文件账里的绝对路径）：和「文档」功能是同一种东西，
    * 各占一张预览卡，点了在文档面板里看（2026-11-22 用户：a.md 只出现在编辑文件里，没有预览卡）
@@ -631,11 +633,12 @@ function foldSegment(
         ? [...entry.record.changes.map((change) => change.path).filter((path) => isWebArtifactFile(path)), ...(entry.record.webArtifacts ?? [])]
         : [],
     );
+    const webBatch = tailCards.reduce((sum, entry) => sum + (entry.kind === "fileTurn" ? (entry.record.webArtifactsBatch ?? 0) : 0), 0);
     const docs = tailCards.flatMap((entry) =>
       entry.kind === "fileTurn" ? entry.record.changes.map((change) => change.path).filter((path) => DOC_FILE.test(path)) : [],
     );
-    if (turnOutputs(calls, results).length > 0 || web.length > 0 || docs.length > 0) {
-      view.push({ kind: "turnOutputs", key: `out:${calls[0]?.key ?? tailCards[0]?.key ?? ""}`, calls, web, docs });
+    if (turnOutputs(calls, results).length > 0 || web.length > 0 || docs.length > 0 || webBatch > 0) {
+      view.push({ kind: "turnOutputs", key: `out:${calls[0]?.key ?? tailCards[0]?.key ?? ""}`, calls, web, webBatch, docs });
     }
   }
   return view;

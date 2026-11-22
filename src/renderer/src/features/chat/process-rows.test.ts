@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolTranscriptItem } from "@earendil-works/pi-protocol";
-import { allOutputs, assignImages, groupOutputs, deckPagesFrom, imagesOf, processHeadline, processRows, stepVerb, turnOutputs } from "./process-rows.ts";
+import { outsideFailure, allOutputs, assignImages, groupOutputs, deckPagesFrom, imagesOf, processHeadline, processRows, stepVerb, turnOutputs } from "./process-rows.ts";
 import type { ProcessStep, ToolCallUnit, ToolResultIndex } from "./tool-results.ts";
 import { en } from "../../messages-en.ts";
 import { zh } from "../../messages-zh.ts";
@@ -158,5 +158,25 @@ describe("groupOutputs：同一类三份以上收成一张", () => {
       slots.map((slot) => (slot.kind === "one" ? slot.output.title : `${slot.type}×${slot.outputs.length}`)),
       ["演示", "a.md", "b.md", "web×12"],
     );
+  });
+});
+
+describe("outsideFailure：留在过程外的行失败时行首是中文动作，不露工具原名", () => {
+  test("装插件失败 · 路径不存在（找不到类的英文错误换成一句中文）", () => {
+    assert.deepEqual(outsideFailure("install_plugin", "Plugin folder not found: /a/不存在", zh.chat.outsideFail), { head: "装插件失败", reason: "路径不存在" });
+  });
+  test("其它错误取第一行（截断），英文界面是英文动作", () => {
+    assert.deepEqual(outsideFailure("delegate", "\n  title is required\nmore", zh.chat.outsideFail), { head: "派活失败", reason: "title is required" });
+    assert.equal(outsideFailure("install_plugin", "x".repeat(200), en.chat.outsideFail)?.reason?.length, 81);
+    assert.equal(outsideFailure("automation_update", "boom", en.chat.outsideFail)?.head, "Update automation failed");
+  });
+  test("空错误文本没有原因；不在表里的工具返回 null（照旧走通用行）", () => {
+    assert.deepEqual(outsideFailure("show_plugin_board", "", zh.chat.outsideFail), { head: "放插件看板失败", reason: null });
+    assert.equal(outsideFailure("bash", "exit 1", zh.chat.outsideFail), null);
+  });
+  test("每个留在过程外的工具都有中文与英文动作词", () => {
+    for (const name of ["install_plugin", "show_plugin_board", "show_image", "delegate", "reply_subsession", "report_to_parent", "automation_create", "automation_update", "request_user_action"]) {
+      assert.ok(zh.chat.outsideFail.actions[name] !== undefined && en.chat.outsideFail.actions[name] !== undefined, name);
+    }
   });
 });

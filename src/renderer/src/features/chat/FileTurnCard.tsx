@@ -46,7 +46,7 @@ const SLOT_DIR: React.CSSProperties = {
  * 头：笔 ｜「已编辑 N 个文件」+x −y ｜ 撤销 ｜ 审核（打开审查面板看 diff）。点头部展开逐文件一行（名字 · 目录 · 增删），
  * 点一行在审查面板定位到它；展开后底下一行「收起」。白底淡边，与产物卡同宽同骨架。
  * 已撤销的轮：数字保留、加「已撤销」徽标、撤销按钮换掉（不做重新应用——那等于重跑那轮，交给回退后重发）。
- * 只有网页产物、没有文件改动的轮不出这张卡（网页去产物卡）；批量网页变动只剩一句说明。
+ * 只有网页产物、没有文件改动的轮不出这张卡（网页去产物卡，批量网页变动也并进产物那摞）。
  */
 export function FileTurnCard(props: {
   record: FileTurnView;
@@ -67,14 +67,8 @@ export function FileTurnCard(props: {
   const changes = props.record.changes;
   const added = changes.reduce((sum, change) => sum + change.added, 0);
   const removed = changes.reduce((sum, change) => sum + change.removed, 0);
-  const batch = props.record.webArtifactsBatch;
-  if (changes.length === 0) {
-    return batch === undefined ? null : (
-      <div className="file-turn-card" data-previewing={previewing || undefined}>
-        <WebBatchRow count={batch} />
-      </div>
-    );
-  }
+  // 只有批量网页变动、没有文件改动的轮不出这张卡：批量网页变动并进结尾那摞（TurnOutputsBlock 的「N 个网页 · 批量生成」）
+  if (changes.length === 0) return null;
   const review = props.onOpenFile;
   return (
     <div className="file-turn-card" data-previewing={previewing || undefined}>
@@ -138,33 +132,12 @@ export function FileTurnCard(props: {
                 </button>
               );
             })}
-            {batch !== undefined && <WebBatchRow count={batch} />}
           </div>
           <button type="button" className="ftc-fold" onClick={() => setOpen(false)}>
             {t.chat.fileCardFold}
           </button>
         </>
       )}
-    </div>
-  );
-}
-
-/**
- * 批量折叠行：本轮网页文件变动超过上限（git checkout / 解压归档这类批量操作）
- * 时不逐个列，只报一行计数。行风格是左图标 + 说明，但
- * **不带任何按钮**——没有具体路径可打开，给了按钮就是空承诺。
- */
-function WebBatchRow(props: { count: number }) {
-  const t = useT();
-  return (
-    <div
-      className="web-batch-row"
-      style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", minWidth: 0, padding: "2px 0" }}
-    >
-      <span style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto", display: "inline-flex" }}>
-        <Icon name="layers" size={12} strokeWidth={1.8} />
-      </span>
-      <span style={{ minWidth: 0, color: "var(--color-text-secondary)" }}>{t.chat.fileCardWebBatch(props.count)}</span>
     </div>
   );
 }

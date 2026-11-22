@@ -87,6 +87,7 @@ import {
   processChapters,
   processCounts,
   processCalls,
+  processInterrupted,
   processLive,
   type ProcessChapter,
 } from "./turn-process.ts";
@@ -187,6 +188,7 @@ import {
   processHeadline,
   processRows,
   stepVerb,
+  outsideFailure,
   THUMBS_SHOWN,
   allOutputs,
   groupOutputs,
@@ -4724,6 +4726,7 @@ function TurnProcessLine(props: {
         : processHeadline(unit.steps, props.toolResults, result.files, t.chat.headline);
   const imagesByCall = assignImages(unit.steps, props.toolResults);
   const images = imagesOf(unit.steps, imagesByCall);
+  const interrupted = processInterrupted(unit.steps, props.interruptedCalls);
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
       {timeLabel}
@@ -4736,10 +4739,23 @@ function TurnProcessLine(props: {
             </span>
           )}
           <span className="proc-say">
-            {unit.durationMs !== null && (
-              <span className="proc-worked">{t.chat.processWorked(formatToolDuration(unit.durationMs, t))}</span>
+            {interrupted ? (
+              // 被用户打断的一轮：头一句直说「被你打断」，不写「工作了 X 秒」（看起来像正常做完）
+              <>
+                <span className="proc-interrupted">
+                  <Icon name="circle-off" size={13} strokeWidth={1.8} />
+                  {t.chat.processInterrupted}
+                </span>
+                <span className="proc-sep">·</span>
+              </>
+            ) : (
+              <>
+                {unit.durationMs !== null && (
+                  <span className="proc-worked">{t.chat.processWorked(formatToolDuration(unit.durationMs, t))}</span>
+                )}
+                {unit.durationMs !== null && <span className="proc-sep">·</span>}
+              </>
             )}
-            {unit.durationMs !== null && <span className="proc-sep">·</span>}
             <span className="proc-what">{headline}</span>
             {counts.failed > 0 && <span className="proc-quiet">{t.chat.processQuietFailed(counts.failed)}</span>}
             <Icon name={open ? "chevron-down" : "chevron-right"} size={13} strokeWidth={1.8} />
@@ -5190,11 +5206,25 @@ function ProcessLightbox(props: { images: readonly ProcessImage[]; start: number
  * （演示文稿进演示文稿面板，文档和导出的文件进文件面板），下拉是「用默认应用打开」「在访达中显示」。
  */
 function TurnOutputsBlock(props: { unit: TurnOutputsUnit; toolResults: ToolResultIndex; sessionId: string }) {
+  const t = useT();
   const outputs = allOutputs(props.unit.calls, props.toolResults, props.unit.docs, props.unit.web);
-  if (outputs.length === 0) return null;
+  const batch = props.unit.webBatch;
+  if (outputs.length === 0 && batch === 0) return null;
   return (
     <div className="turn-outputs">
       <OutputStack outputs={outputs} sessionId={props.sessionId} />
+      {batch > 0 && (
+        // 批量网页变动（git checkout / 解压归档 / 批量导出）：和别的产物同一个骨架，但没有具体路径，所以没有预览按钮
+        <div className="turn-output">
+          <span className="turn-output-icon">
+            <FileTypeIcon name="batch.html" size={24} />
+          </span>
+          <span className="turn-output-text">
+            <span className="turn-output-title">{t.chat.outputGroup("web", batch)}</span>
+            <span className="turn-output-sub">{t.chat.outputBatch}</span>
+          </span>
+        </div>
+      )}
     </div>
   );
 }
@@ -5765,6 +5795,9 @@ function ToolLine(props: {
   const summary = mcp === null ? summarizeToolResult(result, t) : summarizeMcpResult(result, t);
   const callSummary = toolCallSummary(props.toolName, props.input);
   const builtin = builtinCommand(props.toolName);
+  // 留在过程外的行失败：行首说动作（「装插件失败 · 路径不存在」），不露英文工具名
+  const outsideFail =
+    failed && result !== undefined ? outsideFailure(props.toolName, toolResultText(result, t), t.chat.outsideFail) : null;
   // 落在文档文件上的 edit / write：药丸写「改文档 / 写文档」（其余照旧）
   const docEdit = docEditLabel(props.toolName, props.input);
   // 路径类工具的摘要只显示文件名——Windows 上模型几乎总传绝对路径，整条 C:\... 是噪音；
@@ -5944,10 +5977,11 @@ function ToolLine(props: {
               {builtin?.label ?? docEdit}
             </span>
           ) : (
-            <span style={headLabel(active)}>{props.toolName}</span>
+            <span style={headLabel(active)}>{outsideFail?.head ?? props.toolName}</span>
           )}
         </span>
-        {callLabel !== null && (
+        {outsideFail !== null && outsideFail.reason !== null && <span style={SLOT.sub}>· {outsideFail.reason}</span>}
+        {outsideFail === null && callLabel !== null && (
           <span
             title={callSummary !== callLabel ? (callSummary ?? undefined) : undefined}
             style={pathTool ? { ...SLOT.sub, color: "var(--color-chat-link)" } : SLOT.sub}
@@ -5967,7 +6001,7 @@ function ToolLine(props: {
           <span style={SLOT.status}>{t.chat.lines(writeLines)}</span>
         )}
         {/* 有统计时「N lines」是同一量级的第二遍，让位 */}
-        {summary !== null && !active && stats === null && writeLines === null && builtin === null && (
+        {summary !== null && !active && stats === null && writeLines === null && builtin === null && outsideFail === null && (
           <span
             style={failed ? { ...SLOT.status, color: "var(--color-danger)" } : SLOT.status}
           >

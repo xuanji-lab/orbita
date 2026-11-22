@@ -2263,9 +2263,6 @@ export const en = {
     fileCardFold: "Collapse",
     fileCardWebMade: (n: number) => `${n} web page${n === 1 ? "" : "s"} generated`,
     fileCardScripted: "Script-generated · open only",
-    fileCardWebBatchShort: "Web files changed in bulk",
-    fileCardWebBatch: (n: number) =>
-      `${n} web file${n === 1 ? "" : "s"} changed this turn (looks like a bulk operation, not listed)`,
     fileCardExpand: "Show changed files",
     fileCardCollapse: "Hide changed files",
     fileCardUndo: "Undo",
@@ -2364,6 +2361,8 @@ export const en = {
     processChapterSteps: "Show the steps in this part",
     // 过程与产物（2026-11-22，process-rows.ts）
     processWorked: (duration: string) => `Worked ${duration}`,
+    // 这一轮被用户打断（有工具调用永远等不到结果）：过程行的头一句换成它，不再写「工作了 X 秒」
+    processInterrupted: "Interrupted by you",
     processStepFailed: "didn't work",
     processWorking: "Working",
     processQuietFailed: (n: number) => `${n} didn't work`,
@@ -2411,11 +2410,29 @@ export const en = {
       other: "Tool",
       mcp: (server: string) => server,
     },
+    // 留在过程外的那些行（装插件、派活、交回、定时任务、放看板……）失败时的行首：用动作词，不露工具原名
+    outsideFail: {
+      actions: {
+        install_plugin: "Install plugin",
+        show_plugin_board: "Show plugin board",
+        show_image: "Show image",
+        delegate: "Hand off",
+        reply_subsession: "Reply to sub-session",
+        report_to_parent: "Report back",
+        automation_create: "Create automation",
+        automation_update: "Update automation",
+        request_user_action: "Ask you to act",
+      } as Record<string, string>,
+      failed: (action: string) => `${action} failed`,
+      notFound: "path not found",
+    },
     outputDeck: (pages: number | null) => (pages === null ? "Deck" : `Deck · ${plural(pages, "slide")}`),
     outputDoc: "Document",
     outputWeb: "Web page",
     outputFile: (format: string | null) => format ?? "File",
     outputPreview: "Preview",
+    // 本轮网页文件变动超过上限（像是批量操作）：不逐个列，结尾那摞里一张「N web pages · 批量」卡，没有预览按钮
+    outputBatch: "Generated in bulk",
     outputGroup: (type: "doc" | "file" | "web", n: number) =>
       type === "doc" ? `${n} documents` : type === "web" ? `${n} web pages` : `${n} exported files`,
     childReportKicker: "Sub-session",

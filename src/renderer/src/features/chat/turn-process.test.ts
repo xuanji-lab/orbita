@@ -15,7 +15,7 @@ import {
   type TurnProcessUnit,
   type TurnViewEntry,
 } from "./tool-results.ts";
-import { firstLine, processChapters, processCounts, processLive, processOutcome } from "./turn-process.ts";
+import { firstLine, processChapters, processCounts, processInterrupted, processLive, processOutcome } from "./turn-process.ts";
 
 const user = (id: string, timestamp: number): TranscriptItem =>
   ({ id, role: "user", content: [{ type: "text", text: "hi" }], timestamp }) as TranscriptItem;
@@ -181,7 +181,7 @@ describe("processOutcome —— 落定那一行开头说什么（不写「0 步�
 });
 
 describe("show_image 的图归回答（不再钉在回答前面）", () => {
-  const shown = (extra: unknown[] = []) => [
+  const shown = (extra: TranscriptItem[] = []): TranscriptItem[] => [
     user("u1", 1000),
     assistant("a1", 2000, [{ type: "text", text: "我看看图。" }, call("r1")]),
     tool({ toolCallId: "r1", timestamp: 2100 }),
@@ -260,4 +260,36 @@ describe("钉住的看板 / 画廊不随轮尾文件卡换位（2026-11-06：看
       assert.deepEqual(after.slice(0, -1), before);
     });
   }
+});
+
+describe("被打断的一轮（过程行写「被你打断」）", () => {
+  test("有工具调用在被打断集合里 = 这一轮被打断；没有 = 正常", () => {
+    const proc = procOf(view(turn, false))[0];
+    assert.ok(proc !== undefined);
+    assert.equal(processInterrupted(proc.steps, new Set()), false);
+    assert.equal(processInterrupted(proc.steps, new Set(["w1"])), true);
+    assert.equal(processInterrupted(proc.steps, new Set(["别的轮的调用"])), false);
+  });
+});
+
+describe("批量网页变动并进结尾那摞（不再是文件账里的一句说明）", () => {
+  const withBatch = (changes: unknown[]) =>
+    [
+      user("u1", 1),
+      assistant("a1", 2, [call("b1", "bash", { command: "python export.py" })]),
+      tool({ toolCallId: "b1", toolName: "bash", timestamp: 3 }),
+      assistant("a2", 4, [{ type: "text", text: "导完了。" }]),
+      { role: "file-turn", id: "ft1", timestamp: 5, changes, webArtifactsBatch: 37 } as unknown as TranscriptItem,
+    ] as TranscriptItem[];
+  test("只有批量网页变动、没有文件改动：出产物那摞，带个数", () => {
+    const v = view(withBatch([]), false);
+    const out = v.find((e) => e.kind === "turnOutputs");
+    assert.ok(out !== undefined && out.kind === "turnOutputs");
+    assert.equal(out.webBatch, 37);
+    assert.deepEqual(out.web, []);
+  });
+  test("没有批量时 webBatch 是 0，没有别的产物就不出这一摞", () => {
+    const records = withBatch([]).slice(0, 4);
+    assert.equal(view(records, false).some((e) => e.kind === "turnOutputs"), false);
+  });
 });

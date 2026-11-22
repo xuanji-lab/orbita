@@ -188,6 +188,28 @@ function mcpBrief(tool: string, input: unknown): string {
   return tool;
 }
 
+// ───────────────────────── 留在过程外的行失败时 ─────────────────────────
+
+export interface OutsideFailWords {
+  actions: Readonly<Record<string, string>>;
+  failed: (action: string) => string;
+  notFound: string;
+}
+
+/**
+ * 留在过程外的那些行（装插件、派活、交回、定时任务、放看板、给你看图、请你操作）成功时各有自己的卡，
+ * 失败时走通用红行——行首以前是英文工具名（`install_plugin 失败`）。这里给它中文动作词：「装插件失败 · 路径不存在」。
+ * 原因取错误文本第一行（截断），已知的「找不到」类换成一句中文；展开仍看错误原文。不认识的工具返回 null（照旧）。
+ */
+export function outsideFailure(toolName: string, errorText: string, words: OutsideFailWords): { head: string; reason: string | null } | null {
+  const action = words.actions[toolName];
+  if (action === undefined) return null;
+  const first = errorText.split("\n").map((line) => line.trim()).find((line) => line !== "") ?? "";
+  let reason: string | null = first === "" ? null : first.length > 80 ? `${first.slice(0, 80)}…` : first;
+  if (/not found|ENOENT|no such file|does not exist/i.test(first)) reason = words.notFound;
+  return { head: words.failed(action), reason };
+}
+
 // ───────────────────────── 产物 ─────────────────────────
 
 /** 一份产物：结尾那一处收的一行 */
