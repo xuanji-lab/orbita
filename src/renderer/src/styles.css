@@ -46,6 +46,8 @@
  */
 .composer-card {
   box-shadow: var(--shadow-composer);
+  /* 输入框是一张白底淡边的大圆角框（2026-11-22 回到框式，与右上角状态卡同一语言）：圆角取 --radius-bubble（14），比别的卡大一档 */
+  border-radius: var(--radius-bubble);
 }
 
 .glass-float {
@@ -6070,18 +6072,6 @@ mark.intent-mark {
     pointer-events: auto;
   }
 
-  /* 输入框贴井底成台沿：顶一条发丝线，卡自己只剩底、不描边、不浮起 */
-  .chat-footer {
-    border-top: 1px solid var(--color-border-subtle);
-    padding-top: var(--space-3);
-  }
-  /* 输入卡只留描边、不填底（容器一种语言）：首页它是一个细描边框；页脚里连描边也去掉，成为台沿 */
-  .composer-card {
-    background: transparent;
-  }
-  .chat-footer .composer-card {
-    border-color: transparent;
-  }
   .chat-transcript {
     padding-bottom: var(--space-3);
   }
