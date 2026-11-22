@@ -377,7 +377,7 @@ describe("groupTurns", () => {
     assert.equal(line.kind === "toolCall" ? line.toolName : "", "install_plugin");
   });
 
-  test("show_image 夹在轮中间（图后还有思考+工具）也挂轮尾：单一折叠 + 画廊贴正文前，不产生两折叠夹画廊（2026-09-27 裁决 Y′）", () => {
+  test("show_image 夹在轮中间（图后还有思考+工具）也挂轮尾：单一折叠 + 图挂在回答之后，不产生两折叠夹画廊（2026-09-27 裁决 Y′；2026-11-22 图归回答，位置从正文前改到正文后）", () => {
     const records = [
       userItem("u1", 1000),
       assistantItem("a1", 2000, [
@@ -395,16 +395,16 @@ describe("groupTurns", () => {
       assistantItem("a4", 9000, [{ type: "text", text: "结论在此" }]),
     ];
     const view = turnView(records, false);
-    // 单一折叠收进全部思考与工具（含 show 前后的），画廊钉在折叠后、正文前
+    // 单一折叠收进全部思考与工具（含 show 前后的），图挂在回答正文之后
     assert.deepEqual(
       view.map((entry) => entry.kind),
-      ["user", "turnGroup", "toolCall", "text"],
+      ["user", "turnGroup", "text", "toolCall"],
     );
     const fold = foldUnits(view)[0];
     assert.ok(fold !== undefined);
     // show_image 不进 members——画廊行在折叠外
     assert.ok(fold.members.every((member) => !(member.kind === "toolCall" && member.toolName === "show_image")));
-    const gallery = view[2];
+    const gallery = view[3];
     assert.ok(gallery !== undefined && gallery.kind === "toolCall");
     assert.equal(gallery.kind === "toolCall" ? gallery.toolName : "", "show_image");
   });

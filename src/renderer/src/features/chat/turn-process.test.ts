@@ -9,7 +9,9 @@ import {
   groupToolUnits,
   groupTurns,
   groupTurnsByTurn,
+  branchAnchorEntries,
   indexToolResults,
+  unreferencedShowImages,
   type TurnProcessUnit,
   type TurnViewEntry,
 } from "./tool-results.ts";
@@ -43,12 +45,12 @@ const turn = [
 describe("groupTurnsByTurn", () => {
   test("落定轮：旁白收进块当章节，一轮一个块，结尾回答留在外面", () => {
     const v = view(turn, false);
-    assert.deepEqual(v.map((e) => e.kind), ["user", "text", "turnProcess", "text"]);
+    assert.deepEqual(v.map((e) => e.kind), ["user", "turnProcess", "text"]);
     const [proc] = procOf(v);
     assert.ok(proc !== undefined);
     assert.equal(proc.live, false);
-    // 第一个工具之前的旁白在块外（它在第一个过程成员之前）；第二句旁白在块里
-    assert.deepEqual(proc.steps.map((s) => s.kind), ["toolCall", "thinking", "text", "toolCall", "toolCall"]);
+    // 第一个工具之前的旁白也收进块（当第一段的段名），不再露在过程行上面
+    assert.deepEqual(proc.steps.map((s) => s.kind), ["text", "toolCall", "thinking", "text", "toolCall", "toolCall"]);
     assert.equal(proc.durationMs, 4100 - 2000);
   });
 
@@ -59,6 +61,24 @@ describe("groupTurnsByTurn", () => {
     assert.equal(proc?.answering, false);
     const [answering] = procOf(view(turn, true));
     assert.equal(answering?.answering, true);
+  });
+
+  test("旁白在思考之后、第一个工具之前：照样收进块，思考跟着它走", () => {
+    const records = [
+      user("u1", 1),
+      assistant("a1", 2, [{ type: "thinking", thinking: "想想" }, { type: "text", text: "开始跑完整测试。" }, call("b1", "bash", { command: "bun test" })]),
+      tool({ toolCallId: "b1", toolName: "bash", timestamp: 3 }),
+      assistant("a2", 4, [{ type: "text", text: "跑完了。" }]),
+    ];
+    const v = view(records, false);
+    assert.deepEqual(v.map((e) => e.kind), ["user", "turnProcess", "text"]);
+    const chapters = processChapters(procOf(v)[0]?.steps ?? []);
+    assert.deepEqual(chapters.map((c) => [c.source, c.title]), [["say", "开始跑完整测试。"]]);
+  });
+
+  test("没有工具的轮：开头的正文就是回答，不收（没有过程块）", () => {
+    const v = view([user("u1", 1), assistant("a1", 2, [{ type: "text", text: "直接答。" }])], false);
+    assert.deepEqual(v.map((e) => e.kind), ["user", "text"]);
   });
 
   test("还没调工具的活跃轮没有块（只有正文在流）", () => {
@@ -76,12 +96,12 @@ describe("章节与计数", () => {
   const proc = procOf(view(turn, false))[0];
   assert.ok(proc !== undefined);
 
-  test("按说的话切章；没有旁白的开头一章按工具归类（标题 null）", () => {
+  test("按说的话切章；第一个工具之前的旁白就是第一段的段名", () => {
     const chapters = processChapters(proc.steps);
     assert.deepEqual(
       chapters.map((c) => [c.source, c.title, c.calls.map((x) => x.toolCallId)]),
       [
-        ["tools", null, ["r1"]],
+        ["say", "我先读一下代码。", ["r1"]],
         ["say", "接下来跑一遍检查。", ["b1", "w1"]],
       ],
     );
@@ -157,6 +177,59 @@ describe("processOutcome —— 落定那一行开头说什么（不写「0 步�
     const proc = procOf(view(turn, false))[0];
     assert.ok(proc !== undefined);
     assert.deepEqual(processOutcome(processCounts(proc.steps, results), proc.steps), { kind: "work", steps: 3, files: 1 });
+  });
+});
+
+describe("show_image 的图归回答（不再钉在回答前面）", () => {
+  const shown = (extra: unknown[] = []) => [
+    user("u1", 1000),
+    assistant("a1", 2000, [{ type: "text", text: "我看看图。" }, call("r1")]),
+    tool({ toolCallId: "r1", timestamp: 2100 }),
+    assistant("a2", 3000, [call("si", "show_image", { paths: ["/w/a.png"] })]),
+    tool({ toolCallId: "si", toolName: "show_image", timestamp: 3100, details: { showImage: { images: [{ data: "AAAA", mimeType: "image/png", name: "a.png" }] } } }),
+    assistant("a3", 4000, [{ type: "text", text: "这是结果。" }]),
+    ...extra,
+  ];
+  test("图挂在回答正文之后；文件卡仍殿后", () => {
+    const fileTurn = { role: "file-turn", id: "ft1", timestamp: 5500, changes: [] } as unknown as TranscriptItem;
+    const v = view(shown([fileTurn]), false);
+    assert.deepEqual(v.map((e) => e.kind), ["user", "turnProcess", "text", "toolCall", "fileTurn"]);
+    assert.equal((v[3] as { toolName?: string }).toolName, "show_image");
+  });
+
+  test("复制 / 分支那一行排在图之后", () => {
+    const records = shown();
+    const v = view(records, false);
+    const anchors = branchAnchorEntries(new Set(["a3"]), v);
+    // 回答（a3 的正文）下标 2，图在 3：按钮行挂到图之后
+    assert.deepEqual([...anchors.entries()], [[3, "a3"]]);
+  });
+
+  const result = (names: string[]): ToolTranscriptItem =>
+    ({ id: "x", role: "tool", toolCallId: "si", toolName: "show_image", input: {}, content: [], timestamp: 1, status: "complete", isError: false, details: { showImage: { images: names.map((name) => ({ data: "AAAA", mimeType: "image/png", name })) } } }) as ToolTranscriptItem;
+
+  test("回答里引用了同一路径的图不重复画；没引用的留下", () => {
+    const calls = [{ input: { paths: ["/w/a.png", "/w/b.png"] }, result: result(["a.png", "b.png"]) }];
+    const left = unreferencedShowImages(calls, ["看这张：\n\n![甲](</w/a.png>)\n\n它是甲。"], "/w");
+    assert.deepEqual(left.map((entry) => entry.image.name), ["b.png"]);
+  });
+
+  test("相对路径、含空格 / 中文的路径、file:// 都能对上", () => {
+    const calls = [{ input: { paths: ["shots/一 二.png"] }, result: result(["一 二.png"]) }];
+    assert.equal(unreferencedShowImages(calls, ["![x](<shots/一 二.png>)"], "/w").length, 0);
+    assert.equal(unreferencedShowImages(calls, ["![x](file:///w/shots/%E4%B8%80%20%E4%BA%8C.png)"], "/w").length, 0);
+  });
+
+  test("路径对不上 / 没引用 / 远程图：当没画，宁可多画一张", () => {
+    const calls = [{ input: { paths: ["/w/a.png"] }, result: result(["a.png"]) }];
+    assert.equal(unreferencedShowImages(calls, ["没有图"], "/w").length, 1);
+    assert.equal(unreferencedShowImages(calls, ["![x](/other/a.png)"], "/w").length, 1);
+    assert.equal(unreferencedShowImages(calls, ["![x](https://e.com/w/a.png)"], "/w").length, 1);
+  });
+
+  test("失败 / 还在跑的 show_image 没有图", () => {
+    const running = { ...result(["a.png"]), status: "running" } as ToolTranscriptItem;
+    assert.equal(unreferencedShowImages([{ input: { paths: ["/w/a.png"] }, result: running }], [], "/w").length, 0);
   });
 });
 

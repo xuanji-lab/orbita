@@ -63,6 +63,13 @@ describe("show_image", () => {
     assert.equal(details.images.length, 1);
   });
 
+  test("返回的文字教模型在回答里放图：每张给绝对路径的 markdown 写法，要求每张一句解释", async () => {
+    const result = await run(["a.png"], VISION_CTX);
+    const text = (result.content[0] as { text: string }).text;
+    assert.match(text, /!\[a\.png\]\(<[^>]*a\.png>\)/);
+    assert.match(text, /one-sentence explanation/);
+  });
+
   test("上限：0 张与超过 6 张都报错带数量", async () => {
     await assert.rejects(run([]), /requires "paths"/);
     const many = Array.from({ length: SHOW_IMAGE_MAX_COUNT + 1 }, (_, i) => `${i}.png`);

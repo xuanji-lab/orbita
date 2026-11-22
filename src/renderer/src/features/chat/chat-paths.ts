@@ -40,3 +40,26 @@ export function rootOf(path: string, roots: readonly FileRoot[]): FileRoot | nul
   return best;
 }
 
+
+/** 统一成正斜杠、去尾斜杠，比较两条路径是不是同一个 */
+export function samePathKey(path: string): string {
+  return path.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+/**
+ * 回答 markdown 里引用的图片路径（`![说明](路径)` / `![说明](<含空格的路径>)`），已解成绝对路径并归一。
+ * show_image 给的图据此判断「回答里已经画了」——画了的不再在回答后面重复画一遍。
+ * 远程图（http 等）不是本地路径，不算。
+ */
+export function markdownImagePaths(text: string, cwd: string | null): Set<string> {
+  const found = new Set<string>();
+  const pattern = /!\[[^\]]*\]\(\s*(?:<([^>]*)>|([^)\s]+))(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/g;
+  for (const match of text.matchAll(pattern)) {
+    const ref = (match[1] ?? match[2] ?? "").trim();
+    if (ref === "") continue;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(ref) && !/^file:/i.test(ref) && !/^[A-Za-z]:[\\/]/.test(ref)) continue;
+    const path = resolveChatPath(ref, cwd);
+    if (path !== null) found.add(samePathKey(path));
+  }
+  return found;
+}

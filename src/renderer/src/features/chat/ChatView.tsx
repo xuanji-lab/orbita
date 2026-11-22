@@ -115,7 +115,8 @@ import {
   mcpInputSummary,
   readTaskCard,
   showImageCard,
-  type ShowImageCardView,
+  unreferencedShowImages,
+  type ShowImageEntry,
   summarizeMcpResult,
   liveTailLines,
   expectedSecondsOf,
@@ -2712,7 +2713,7 @@ const TranscriptRow = memo(function TranscriptRow(props: {
     scope.toolResults.get(prevEntry.toolCallId)?.status !== "error";
   if (isShowCall) {
     if (prevIsShowCall) return null; // 已被前面的组吸收
-    const cards: ShowImageCardView[] = [];
+    const calls: { input: unknown; result: ToolTranscriptItem | undefined }[] = [];
     for (let scan = index; scan < scope.view.length; scan++) {
       const candidate = scope.view[scan];
       if (
@@ -2722,10 +2723,18 @@ const TranscriptRow = memo(function TranscriptRow(props: {
       ) {
         break;
       }
-      const card = showImageCard(scope.toolResults.get(candidate.toolCallId));
-      if (card === null) break;
-      cards.push(card);
+      const result = scope.toolResults.get(candidate.toolCallId);
+      if (showImageCard(result) === null) break;
+      calls.push({ input: candidate.input, result });
     }
+    // 图归回答（2026-11-22）：紧挨在前面的回答正文里已经用 `![说明](路径)` 画出来的不重复画，其余画在回答之后
+    const answerTexts: string[] = [];
+    for (let scan = index - 1; scan >= 0; scan--) {
+      const before = scope.view[scan];
+      if (before === undefined || before.kind !== "text") break;
+      answerTexts.push(before.text);
+    }
+    const shown = unreferencedShowImages(calls, answerTexts, scope.cwd);
     return (
       <Fragment>
         {props.isCut && (
@@ -2735,7 +2744,7 @@ const TranscriptRow = memo(function TranscriptRow(props: {
           </div>
         )}
         <div className={props.doomed ? "revert-doomed" : "revert-keep"} data-kind="toolCall">
-        <ShowImageGalleryGroup cards={cards} />
+        {shown.length > 0 && <ShowImageGalleryGroup images={shown} />}
         {branchAfter !== undefined && (
           <BranchRow
             /* 挂点照常渲染：被吸收的 entry 只把主行换 null，分支行各归各 */
@@ -6542,68 +6551,43 @@ function McpToolBody(props: { result: ToolTranscriptItem | undefined }) {
   );
 }
 /**
- * show_image 的合并画廊（2026-09-27 裁决：正文前多个图片收进**一个**画廊窗口水平
- * 滑动）。相邻的非失败 show_image 由渲染循环收集成组交给这里；组内各卡的图片拼成
- * 一条横滑带，行标识报总张数，点开 Lightbox；组内单图退化大图形态。跑动中卡片
- * 未落（details 随终态帧来）时行标识以省略号占位。
+ * show_image 画在回答里（2026-11-22 用户拍板，取代 2026-09-27 钉在回答前面、带「N 张图片」标签头的画廊）：
+ * 回答 markdown 里引用了同一路径的图已经画在引用处（MarkdownBlock.ChatImage），这里只画**没被引用**的，
+ * 挂在回答正文之后、结尾那摞卡之前。没有标签头；一张是大图，多张是一条横滑缩略图带，点开 Lightbox。
  */
 const GALLERY_THUMB_SIZE = 120;
 
-function ShowImageGalleryGroup(props: { cards: ShowImageCardView[] }) {
+function ShowImageGalleryGroup(props: { images: ShowImageEntry[] }) {
   const t = useT();
   const [viewing, setViewing] = useState<number | null>(null);
-  const images = props.cards.flatMap((card) => card.images);
+  const images = props.images.map((entry) => entry.image);
   const total = images.length;
   const lightboxImages = images.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
   return (
     <div style={{ display: "grid", gap: "var(--space-2)", minWidth: 0 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-        <Icon name="image" size={13} strokeWidth={1.8} style={{ flex: "0 0 auto" }} />
-        <span
-          style={{
-            fontSize: "var(--font-size-sm)",
-            fontFamily: "var(--font-family-mono)",
-            color: "var(--color-text-secondary)",
-          }}
-        >
-          {/* 组首自己还在跑（卡片未落）时组是空的——省略号占位，别显示「0 张图片」 */}
-          {props.cards.length === 0 ? "…" : t.chat.images(total)}
-        </span>
-      </div>
       {total === 1 ? (
         images.map((img, i) => (
-          <figure key={`show-${i}`} style={{ margin: 0, display: "grid", gap: 2, minWidth: 0 }}>
-            <button
-              type="button"
-              aria-label={t.lightbox.open}
-              onClick={() => setViewing(i)}
-              style={{ ...ZOOM_BUTTON_STYLE, justifySelf: "start" }}
-            >
-              <img
-                src={imageSrc({ type: "image", data: img.data, mimeType: img.mimeType })}
-                alt={img.name}
-                style={{
-                  display: "block",
-                  maxWidth: "100%",
-                  maxHeight: 320,
-                  objectFit: "contain",
-                  borderRadius: "var(--radius-md)",
-                  border: "1px solid var(--color-border-subtle)",
-                  background: "var(--color-bg-panel)",
-                }}
-              />
-            </button>
-            <figcaption
+          <button
+            key={`show-${i}`}
+            type="button"
+            aria-label={t.lightbox.open}
+            onClick={() => setViewing(i)}
+            style={{ ...ZOOM_BUTTON_STYLE, justifySelf: "start" }}
+          >
+            <img
+              src={imageSrc({ type: "image", data: img.data, mimeType: img.mimeType })}
+              alt={img.name}
               style={{
-                fontSize: "var(--font-size-xs)",
-                color: "var(--color-text-tertiary)",
-                fontFamily: "var(--font-family-mono)",
-                overflowWrap: "anywhere",
+                display: "block",
+                maxWidth: "100%",
+                maxHeight: 320,
+                objectFit: "contain",
+                borderRadius: "var(--radius-md)",
+                border: "1px solid var(--color-border-subtle)",
+                background: "var(--color-bg-panel)",
               }}
-            >
-              {img.name}
-            </figcaption>
-          </figure>
+            />
+          </button>
         ))
       ) : (
         // 多图：与 composer 附图同一张卡（方形裁切 + 单行文件名），顶端对齐，横向滑动

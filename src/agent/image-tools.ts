@@ -86,13 +86,15 @@ export function createImageTools(cwd: string): ToolDefinition[] {
     name: "show_image",
     label: "show_image",
     description:
-      "Show images to the user in the conversation — for figures you cropped from a PDF, pictures in a " +
-      "folder, generated files, anything the user should look at with their own eyes. Pass 1-6 image file " +
-      "paths; they render as a gallery card in the chat. You also receive the images yourself (on vision " +
-      "models), so you can keep talking about them. Reading an image for yourself only (user does not " +
-      "need to see it) is the read tool's job — do not call show_image for that. " +
-      "When you explain a picture in your reply, embed it in your final answer instead (a markdown image on its own line, " +
-      "then the paragraph about it), so the picture sits next to its explanation; use show_image when the pictures have nothing to go with them.",
+      "Show images to the user — for figures you cropped from a PDF, pictures in a folder, generated files, " +
+      "anything the user should look at with their own eyes. Pass 1-6 image file paths. You also receive the " +
+      "images yourself (on vision models), so you can keep talking about them. Reading an image for yourself " +
+      "only (user does not need to see it) is the read tool's job — do not call show_image for that. " +
+      "The images are drawn inside your final answer, not before it: for each image write one sentence that " +
+      "explains it and place it with a markdown image on its own line, using the absolute path in angle brackets " +
+      "(`![short caption](</absolute/path/to/image.png>)`), then the sentence about it. An image you do not " +
+      "embed that way is shown after your answer with no explanation, so always embed and explain. " +
+      "Never refer to an image as \"the one above\" — the user sees it where you place it.",
     parameters: {
       type: "object",
       properties: {
@@ -114,6 +116,7 @@ export function createImageTools(cwd: string): ToolDefinition[] {
       }
 
       const images: { data: string; mimeType: string; name: string }[] = [];
+      const absolutes: string[] = [];
       for (const path of paths) {
         const absolute = isAbsolute(path) ? path : join(cwd, path);
         const buffer = await readFile(absolute);
@@ -127,14 +130,20 @@ export function createImageTools(cwd: string): ToolDefinition[] {
         // 缩到转录友好的尺寸；content 与 details 共用这一份 base64（不再双存原图）
         const shrunk = await shrinkIfNeeded(buffer, mimeType);
         images.push({ data: shrunk.data, mimeType: shrunk.mimeType, name: basename(path) });
+        absolutes.push(absolute);
       }
 
       // 模型视野：视觉模型带 image 块（一跳两得）；非视觉省略 + read 同款 note。
       // details 永远带全量图片给 UI（用户的画廊不随模型视力消失）
       const canSee = ctx?.model?.input.includes("image") ?? false;
+      // 回答里怎么放图（renderer 的 MarkdownBlock 认这个写法）：路径用尖括号包，含空格 / 中文也安全
+      const embed =
+        "Place each one in your final answer with a one-sentence explanation: " +
+        absolutes.map((path, i) => `![${images[i]?.name ?? ""}](<${path}>)`).join(" ") +
+        " — images you do not embed are shown after your answer without explanation.";
       const shown = `Showing ${images.length} image${images.length > 1 ? "s" : ""} to the user: ${images
         .map((img) => img.name)
-        .join(", ")}.`;
+        .join(", ")}. ${embed}`;
       const modelContent: (
         | { type: "text"; text: string }
         | { type: "image"; data: string; mimeType: string }
