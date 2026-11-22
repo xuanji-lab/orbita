@@ -2178,31 +2178,3 @@ export function answerText(records: readonly TurnRecordLike[]): string {
     .filter((text) => text.trim() !== "")
     .join("\n\n");
 }
-
-
-// ───────────────────────── 每一轮 agent 开头 ─────────────────────────
-
-/** 开一轮（或开一段）的单元：这些之后的第一个 agent 单元就是「这一轮 agent 的开头」 */
-const TURN_OPENERS: ReadonlySet<TurnViewEntry["kind"]> = new Set(["user", "channelMark", "compacted", "revertMark"]);
-/** agent 一侧的单元（头像槽里的缩进归它们；用户消息、压缩界碑、回退界碑不缩进） */
-const NOT_AGENT_SIDE: ReadonlySet<TurnViewEntry["kind"]> = new Set(["user", "compacted", "revertMark"]);
-
-export function isAgentSide(kind: TurnViewEntry["kind"]): boolean {
-  return !NOT_AGENT_SIDE.has(kind);
-}
-
-/**
- * 这一行是不是「这一轮 agent 的开头」：上一个单元（跳过意图召回卡——它夹在用户消息与回答之间，不算 agent 开口）是开轮单元。
- * 头像只在这一行出；同一轮后续内容不重复。`prevKind` 是视图里它前面那个单元的种类（本段第一行时由调用方给上一段最后一个）。
- */
-export function isTurnStart(view: readonly TurnViewEntry[], index: number, before: TurnViewEntry["kind"] | null): boolean {
-  const entry = view[index];
-  if (entry === undefined || !isAgentSide(entry.kind) || TURN_OPENERS.has(entry.kind) || entry.kind === "intentRecall") return false;
-  for (let i = index - 1; i >= 0; i -= 1) {
-    const prev = view[i];
-    if (prev === undefined) break;
-    if (prev.kind === "intentRecall") continue;
-    return TURN_OPENERS.has(prev.kind);
-  }
-  return before === null || TURN_OPENERS.has(before);
-}

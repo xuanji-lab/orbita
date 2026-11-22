@@ -13,7 +13,6 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import type { BuiltinProvider } from "@shared/agent-ipc";
 import { modelDisplayName, resolveModelDefaults } from "@shared/model-defaults";
-import { modelAvatarOf } from "@shared/known-models";
 import type { ProviderDto } from "@shared/provider";
 import type { ModelDecl } from "@shared/provider";
 import { api } from "../../api";
@@ -95,31 +94,6 @@ export function selectedModelAcceptsImage(
   const declared = provider?.models.declared.find((m) => m.id === selected.modelId);
   if (provider === undefined || declared === undefined) return true;
   return modelAcceptsImage(declared, defaultsFor(provider, catalog, declared.id));
-}
-
-/**
- * 一枚型号头像（对话里每一轮 agent 开头的头像、子会话卡上的头像用它）。provider 先按服务商实例 id 找，找不到（那条会话
- * 用的服务商后来删了）就按型号 id 在现有服务商里找一家声明了它的；都没有就只认型号（专属头像 / 家族图标仍然有），
- * 再没有退成型号名首字母的圆。同 modelChipParts 的头像口径。
- */
-export function modelAvatarFor(
-  providers: readonly ProviderDto[],
-  providerId: string | null,
-  modelId: string,
-  size: number,
-): React.ReactNode {
-  const provider =
-    (providerId === null ? undefined : providers.find((p) => p.id === providerId)) ??
-    providers.find((p) => p.models.declared.some((m) => m.id === modelId));
-  if (provider === undefined && modelAvatarOf(modelId) === null) {
-    return (
-      <span className="model-avatar letter" aria-hidden="true" style={{ width: size, height: size }}>
-        {modelId.slice(0, 1).toUpperCase()}
-      </span>
-    );
-  }
-  const cell = provider === undefined ? { kindId: providerId ?? modelId, label: modelId } : railVendorCell(provider);
-  return <ModelAvatar modelId={modelId} provider={cell} size={size} />;
 }
 
 /**

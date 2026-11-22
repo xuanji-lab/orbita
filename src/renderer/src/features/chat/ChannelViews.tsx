@@ -26,8 +26,6 @@ import type { ChannelMarkTone } from "./tool-results";
 import { EXIT_CARD_KICKER, EXIT_CARD_STYLE, ExitCard } from "./ExitCard";
 import { MarkdownBlock } from "./MarkdownBlock";
 import type { SessionEntry } from "./session-states";
-import { ChildAvatar, ChildModelLabel } from "./TurnAvatar";
-import type { ChildIdentity } from "./child-badge.ts";
 import type { Messages } from "../../messages-en.ts";
 import { useT } from "../../locale.ts";
 
@@ -44,8 +42,12 @@ export interface ChannelViewContext {
   ownParentId: string | null;
   /** 会话 id → 标题，标记行 / 派出卡按 peerId / childId 查对面的名字 */
   titles: ReadonlyMap<string, string>;
-  /** 子会话 id → 它用的模型、在这条父会话下的序号（头像与角标用）；子侧视图为空 */
-  childIdentities: ReadonlyMap<string, ChildIdentity>;
+  /** 子会话 id → 它用的型号 id（交回卡左边的模型名标签用）；没有的退回派出卡上记的型号 */
+  childModelIds: ReadonlyMap<string, string>;
+  /** 型号 id → 显示名（声明名 > 白名单 > 目录名 > id，与模型菜单同一套） */
+  modelNameOf: (modelId: string) => string;
+  /** 被查看的这条会话自己的型号显示名（子会话视图顶行用）；还没选型号 null */
+  ownModelName: string | null;
   /** 派出卡状态优先读它（done/failed/waiting），来自 useChannelSummaries */
   channelSummaries: ReadonlyMap<string, ChannelSummary>;
   /** 派出卡状态的兜底——channelSummaries 没有终态时看子会话是否还在跑 */
@@ -263,8 +265,8 @@ export function DelegateCardView(props: {
   interrupted?: boolean;
   onClick?: () => void;
   lit?: boolean;
-  /** 子会话用的模型与序号：卡左边是它的模型头像 + 角标（同模型的几个子会话靠角标分开）；缺 = 退回机器人图标 */
-  child?: ChildIdentity;
+  /** 子会话用的型号显示名：写在标题后面的灰色小字（「GLM-5.3」），同型号的子会话靠标题分开；缺 = 不写 */
+  modelName?: string;
 }) {
   const t = useT();
   if (props.card === null) {
@@ -315,8 +317,8 @@ export function DelegateCardView(props: {
     <ExitCard
       kicker={t.channel.delegated}
       icon="bot"
-      {...(props.child !== undefined ? { avatar: <ChildAvatar child={props.child} />, titleSuffix: <ChildModelLabel child={props.child} /> } : {})}
       title={card.title}
+      {...(props.modelName !== undefined ? { titleSuffix: <ModelNameLabel name={props.modelName} /> } : {})}
       status={{ text: t.channel.delegateStatus[status], color: delegateStatusColor(status), active: status === "running" }}
       preview={props.taskPreview}
       meta={`${card.modelId} · ${thinkingLevelLabel(card.thinkingLevel, card.modelId)}`}
@@ -324,6 +326,11 @@ export function DelegateCardView(props: {
       {...(props.lit !== undefined ? { lit: props.lit } : {})}
     />
   );
+}
+
+/** 子会话卡标题后面的型号名：灰色小字（不用位图头像——小尺寸下发灰辨认不清，2026-11-22 用户看过选文字标签） */
+export function ModelNameLabel(props: { name: string }) {
+  return <span className="model-name-label">{props.name}</span>;
 }
 
 const TASK_CARD_TOGGLE_STYLE = {

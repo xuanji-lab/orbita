@@ -39,11 +39,9 @@ export function ExitCard(props: {
   kicker: string;
   /** 左边的图标（派出卡 bot、交接卡 user、自动化闹钟） */
   icon?: IconName;
-  /** 换掉图标的头像（子会话的模型头像 + 角标）；给了就不画 icon */
-  avatar?: React.ReactNode;
-  /** 标题后面的小标签（子会话的模型名，方案 ③） */
-  titleSuffix?: React.ReactNode;
   title: string;
+  /** 标题后面的小标签（子会话的型号名） */
+  titleSuffix?: React.ReactNode;
   /** 右侧状态：文字说话，颜色是第二信号；active 时呼吸 */
   status?: { text: string; color: string; active: boolean };
   preview?: string;
@@ -63,13 +61,9 @@ export function ExitCard(props: {
   const sub = [props.preview ?? ""].filter((part) => part !== "");
   const content = (
     <>
-      {props.avatar !== undefined ? (
-        <span className="exit-card-avatar">{props.avatar}</span>
-      ) : (
-        <span className="exit-card-icon">
-          <Icon name={props.icon ?? "arrow-up-right"} size={18} strokeWidth={1.6} />
-        </span>
-      )}
+      <span className="exit-card-icon">
+        <Icon name={props.icon ?? "arrow-up-right"} size={18} strokeWidth={1.6} />
+      </span>
       <span className="exit-card-text">
         <span className="exit-card-title">
           <span style={EXIT_CARD_KICKER}>{props.kicker}</span>
