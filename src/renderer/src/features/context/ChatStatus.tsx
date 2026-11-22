@@ -540,14 +540,19 @@ function ProgressSection(props: {
           </li>
         )}
       </ol>
-      {/* 收齐就汇报（原「直接打岔」，用户嫌不好听）：只在有子会话时出现，原型未接上 */}
+      {/*
+        「不用等我」（2026-11-22 22:34 用户定；先叫「直接打岔」、再叫「收齐就汇报」）：子会话的汇报什么时候交给主会话。
+        关（默认，「你在」）= 等同一批子会话全部收工、并且等你聊完，合成一轮汇报；只做完一部分时可以点「先汇报这几个」提前拿。
+        开（「你不在」）= 完成一个汇报一个，主会话立刻接着处理，不等同批其它子会话、也不等你（即 main 现在的做法）。
+        只在有子会话时出现；原型未接上投递。
+      */}
       {props.children.length > 0 && (
-        <div className="cs-report">
+        <div className="cs-report" title={t.chatStatus.dontWaitTip}>
           <span className="cs-report-text">
-            <span>{t.chatStatus.reportWhenAll}</span>
-            <span className="cs-report-sub">{reportOn ? t.chatStatus.notWired : t.chatStatus.reportWhenAllSub}</span>
+            <span>{t.chatStatus.dontWait}</span>
+            <span className="cs-report-sub">{reportOn ? t.chatStatus.notWired : t.chatStatus.dontWaitSub}</span>
           </span>
-          <Switch label={t.chatStatus.reportWhenAll} checked={false} onChange={() => setReportOn(true)} />
+          <Switch label={t.chatStatus.dontWait} checked={false} onChange={() => setReportOn(true)} />
         </div>
       )}
     </section>

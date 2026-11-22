@@ -526,7 +526,7 @@
   color: var(--color-text-primary);
 }
 
-/* 收齐就汇报：进度节底部，只在有子会话时出现 */
+/* 不用等我（子会话汇报时机的开关）：进度节底部，只在有子会话时出现 */
 .cs-report {
   display: flex;
   align-items: center;
