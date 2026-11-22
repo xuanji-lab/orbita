@@ -1531,101 +1531,232 @@ html[data-pointer-drag] iframe {
   padding-left: calc(var(--tree-name-x) - var(--row-glyph-x));
 }
 
-/* ===== Sub-sessions 收件箱（2026-10-12：列表层改为收件箱） =====
- * 一个子会话一行：行首状态饼（.status-pie，与侧栏 / 铃铛清单同一个）+ 名字 +
- * 最新一句 + 相对时间（行尾，钉在行的右内边距上）。「在问你」的行展开回答框
- * （.channel-reply-box）并给一抹 warning 底，其余行单行收着。行按钮与回答框是
- * 兄弟（button 不能嵌 button），整行 hover 由外层 .inbox-row 统一画。 */
-.inbox-rows {
+/* ===== 子会话面板列表层（2026-11-22 重做；2026-10-12 起是收件箱） =====
+ * 四组：等你 → 在跑 → 已交回 → 已停止；后两组默认收成一行（.ssp-fold）。组名是安静的组标签（sm、半粗、次级墨，
+ * 不加底线）；一组的行装在一张白卡里——与对话流里子会话交回 / 问询卡（.child-report）同一种语言：panel 底、
+ * 1px 淡边、--radius-md，行与行之间只靠内边距。每行：机器人（状态色是第二信号）+ 标题（常规字重，一行省略）+
+ * 型号名（.model-name-label，对话流同一个）+ 行尾时间；第二行是这一状态有用的那句话，在跑的行尾走表。
+ * 字号三档：标题 base、第二行与组名 sm、型号名与时间 xs。 */
+.ssp-list {
+  /* 行首机器人一格的宽（Icon 14）：［去回答］与回答框缩到文字起线用 */
+  --ssp-glyph-w: 14px;
   display: grid;
-  padding: 0 0 var(--space-2);
+  gap: var(--space-4);
+  padding: var(--space-1) var(--space-3) var(--space-4);
 }
 
-.inbox-row {
-  border-top: 1px solid var(--color-border-subtle);
+.ssp-group {
+  display: grid;
+  gap: var(--space-1-5);
+  min-width: 0;
 }
 
-/* 第一行紧贴标题行：标题行自带底线，第一行再画顶线、中间再隔 4px，就成了两条线夹一道缝 */
-.inbox-row:first-child {
-  border-top: 0;
+.ssp-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-height: var(--control-height-xs);
+  padding: 0 var(--space-1);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
 }
 
-/* 在问你：一抹 warning 底（color-mix 7%，同铃铛清单选中项的调制），回答框在行下 */
-.inbox-row.asking {
-  background: color-mix(in srgb, var(--color-warning) 7%, transparent);
+.ssp-group-n {
+  font-weight: var(--weight-regular);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
 }
 
-.inbox-row:hover {
+.ssp-group-fold {
+  display: inline-grid;
+  place-items: center;
+  width: var(--control-height-xs);
+  height: var(--control-height-xs);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+
+.ssp-group-fold:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.ssp-card {
+  display: grid;
+  min-width: 0;
+  padding: var(--space-1);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.ssp-row {
+  display: grid;
+  min-width: 0;
+  border-radius: var(--radius-sm);
+}
+
+.ssp-row:hover {
   background: var(--color-bg-hover);
 }
 
-.inbox-row.asking:hover {
-  background: color-mix(in srgb, var(--color-warning) 11%, transparent);
-}
-
-.inbox-row-main {
+.ssp-row-main {
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
   width: 100%;
-  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-2);
+  min-width: 0;
+  padding: var(--space-2);
   border: 0;
+  background: transparent;
   font: inherit;
   text-align: left;
+  color: var(--color-text-primary);
   cursor: pointer;
-  background: transparent;
 }
 
-/* 行首状态饼：与标题行第一行同高居中（收件箱行是两行高，贴首行读得更清楚） */
-.inbox-row-pie {
-  margin-top: var(--space-1);
+/* 机器人与标题首行同高居中；颜色是第二信号（组名与第二行已经用字说了状态） */
+.ssp-bot {
+  flex: none;
+  display: grid;
+  place-items: center;
+  height: calc(var(--font-size-base) * var(--line-height-ui));
+  color: var(--color-text-tertiary);
 }
 
-.inbox-row-item {
+.ssp-row[data-state="running"] .ssp-bot {
+  color: var(--color-info);
+}
+
+.ssp-row:is([data-state="waiting"], [data-state="approval"], [data-state="stuck"]) .ssp-bot {
+  color: var(--color-warning);
+}
+
+.ssp-row[data-state="failed"] .ssp-bot {
+  color: var(--color-danger);
+}
+
+.ssp-body {
   flex: 1;
   min-width: 0;
   display: grid;
   gap: var(--space-0-5);
 }
 
-.inbox-row-l1 {
+.ssp-l1,
+.ssp-l2 {
   display: flex;
   align-items: baseline;
   gap: var(--space-2);
   min-width: 0;
 }
 
-.inbox-row-title {
-  flex: 1;
+.ssp-title {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: var(--weight-strong);
+  text-overflow: ellipsis;
   font-size: var(--font-size-base);
-  color: var(--color-text-primary);
+  font-weight: var(--weight-regular);
+  line-height: var(--line-height-ui);
 }
 
-.inbox-row-ago {
-  flex: 0 0 auto;
+/* 型号名先让位：窄栏里标题比型号名要紧，型号名先缩、省略（悬停整行看标题全文） */
+.ssp-l1 .model-name-label {
+  flex: 0 100 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ssp-time,
+.ssp-elapsed {
   font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
   color: var(--color-text-tertiary);
 }
 
-.inbox-row-l2 {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.ssp-l2 {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
 
-/* 列表尾的一句用法说明：最新一句是概括，完整往来进会话层看 */
-.inbox-foot {
-  margin: 0;
-  padding: var(--space-2) var(--space-3) 0;
-  border-top: 1px solid var(--color-border-subtle);
-  font-size: var(--font-size-xs);
+.ssp-line {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ssp-line.mono {
+  font-family: var(--font-family-mono);
+}
+
+.ssp-l2[data-tone="quiet"] {
+  color: var(--color-text-tertiary);
+}
+
+.ssp-l2[data-tone="warning"],
+.ssp-l2[data-tone="warning"] .ssp-elapsed {
+  color: var(--color-warning);
+}
+
+.ssp-l2[data-tone="danger"] {
+  color: var(--color-danger);
+}
+
+.ssp-stuck {
+  flex: none;
+  align-self: center;
+}
+
+.ssp-lead {
+  flex: none;
+  font-weight: var(--weight-medium);
+}
+
+/* 在问你：［去回答］与回答框都缩到文字起线（行内边距 + 机器人 14 + 间距） */
+.ssp-answer {
+  padding: 0 var(--space-2) var(--space-2) calc(var(--space-2) + var(--ssp-glyph-w) + var(--space-2));
+}
+
+.ssp-answer .channel-reply-box {
+  padding: 0;
+}
+
+/* 收起的组：一行「15 个已交回 ›」，与组卡同一张白卡的语言，点开展开成组 */
+.ssp-fold {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--control-height-md);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ssp-fold:hover {
+  background: linear-gradient(var(--color-bg-hover), var(--color-bg-hover)), var(--color-bg-panel);
+  color: var(--color-text-primary);
+}
+
+.ssp-fold-glyph {
   color: var(--color-text-tertiary);
 }
 

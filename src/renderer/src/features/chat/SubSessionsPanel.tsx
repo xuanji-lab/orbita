@@ -13,14 +13,16 @@
  * `SubSessionControls`——用户裁决：这些权限归用户，不经过父模型）+ `ChatView`
  * （自带标题头 + transcript + 审批条，`hideComposer` 关掉输入框与排队条）。
  */
-import { useContext, useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useContext, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
 import { createPortal } from "react-dom";
-import { childSessions, type SessionMeta } from "@shared/session";
+import { childSessions, type SessionMeta, type TranscriptRecord } from "@shared/session";
+import type { ChannelMessage, ChannelSummary } from "@shared/channel";
+import { modelDisplayName } from "@shared/model-defaults";
 import type { ModelPair } from "@shared/settings";
 import { PERMISSION_MODES } from "@shared/permission";
 import { Icon, type IconName } from "../../shell/Icon";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
-import { StatusPie } from "../../shell/StatusPie";
 import { isSubmitKey } from "../../shell/composer-keys.ts";
 import { composerBoxHeight } from "../../shell/composer-height.ts";
 import { relativeTime } from "../../shell/relative-time.ts";
@@ -34,15 +36,26 @@ import { modelChipParts, ModelPickerMenu } from "../settings/model-menu";
 import { useChannelSummaries } from "./useChannelSummaries";
 import { useParentChannels } from "./useChannelMessages";
 import {
-  latestChannelLine,
-  sortSubSessionRows,
-  subSessionBarFill,
+  childActivityOf,
+  elapsedText,
+  FOLDED_GROUPS,
+  groupPanelRows,
+  nextTickIn,
+  panelRowState,
+  panelSecondLine,
   subSessionStatusOf,
+  type PanelGroup,
+  type PanelRowState,
+  type PanelSecondLine,
   type SubSessionRowStatus,
 } from "./sub-sessions-rows";
 import type { SubSessionsView } from "./sub-sessions-state";
 import { ChatView } from "./ChatView";
 import type { ChatSession, SessionEngine } from "./useChatSession";
+import type { PendingApproval } from "./session-states.ts";
+import { planTimeline } from "../context/plan-timeline.ts";
+import { toolWord } from "./builtin-commands.ts";
+import { rollupToolKey, toolCallSummary } from "./tool-results.ts";
 import { useT } from "../../locale.ts";
 
 
@@ -170,92 +183,341 @@ export function SubSessionsPanel(props: {
     );
   }
 
-  // 列表层 = 收件箱（2026-10-12 用户裁决）：每个子会话一行——等你（question / 审批）
-  // 最前，其次 running、failed、done（2026-11-06 起在跑的提前），同组新的在前（sub-sessions-rows.ts）。
-  // 最新一句来自通道账本（useParentChannels，上面已拉）。
-  const rows = sortSubSessionRows(
-    children.map((meta) => {
-      const status = subSessionStatusOf(meta.id, summaries.get(meta.id)?.status, props.engine);
-      const messages = channels.get(meta.id);
-      const last = messages?.[messages.length - 1];
-      const lastAt = last !== undefined ? last.createdAt : meta.createdAt;
-      return { meta, status, lastAt, messages };
-    }),
-  );
-  const waitingCount = rows.filter((row) => row.status === "waiting" || row.status === "approval").length;
-
+  // 列表层（2026-11-22 重做）：四组——等你（在问你 / 待批 / 失败）→ 在跑（卡住的在前）→ 已交回 → 已停止，
+  // 后两组默认收成一行。每行：机器人（状态色是第二信号）+ 标题 + 型号名 + 时间；第二行按状态说有用的话，
+  // 在跑的写正在执行的调用与已跑多久（sub-sessions-rows.ts 的 panelRowState / groupPanelRows / panelSecondLine）。
   return (
     <RightPanelFrame
       header={
         <>
           <PanelTitle icon={FEATURE_ICON.subsessions} title={t.rail.subSessions(children.length)} tip={t.subSessions.of(props.parentTitle)} />
-          {waitingCount > 0 && (
-            <span className="inbox-waiting-count" style={{ color: "var(--color-warning)" }}>
-              {t.subSessions.waitingCount(waitingCount)}
-            </span>
-          )}
+          <ListWaitingCount children={children} summaries={summaries} engine={props.engine} />
         </>
       }
       contentKey="list"
     >
-      {rows.length === 0 ? (
+      {children.length === 0 ? (
         <PanelEmpty icon={FEATURE_ICON.subsessions}>{t.subSessions.none}</PanelEmpty>
       ) : (
-        <div className="inbox-rows">
-          {rows.map((row) => (
-            <SubSessionRow
-              key={row.meta.id}
-              meta={row.meta}
-              status={row.status}
-              latest={latestChannelLine(row.messages, row.status, t)}
-              lastAt={row.lastAt}
-              asking={row.status === "waiting"}
-              onClick={() => props.onOpenChild(row.meta.id)}
-            />
-          ))}
-          <p className="inbox-foot">{t.subSessions.inboxFoot}</p>
-        </div>
+        <SubSessionList
+          key={props.parentId}
+          children={children}
+          summaries={summaries}
+          channels={channels}
+          engine={props.engine}
+          session={props.session}
+          onOpenChild={props.onOpenChild}
+        />
       )}
     </RightPanelFrame>
   );
 }
 
-/**
- * 收件箱的一行（2026-10-12）：行首状态饼（与侧栏 / 铃铛清单同一个 `StatusPie`，
- * `subSessionBarFill` 定亮几节）+ 名字 + 最新一句 + 相对时间（行尾，钉在行的右内
- * 边距上）。**只有「在问你」的行展开回答框**（ChannelReplyBox）——其余行单行收着，
- * 点击进会话层看完整往来。行按钮与回答框是兄弟（button 不能嵌 button），整行 hover
- * 由外层 `.inbox-row` 统一画。
- */
-function SubSessionRow(props: {
-  meta: SessionMeta;
-  status: SubSessionRowStatus;
-  latest: string;
-  lastAt: number;
-  /** waiting：行下展开「回答它」输入框（代父回信，同一个 send 路径） */
-  asking: boolean;
-  onClick: () => void;
+/** 页头「N 个在等你」：在问你 / 待批（与右栏图标条的角标、顶栏胶囊同一口径；失败在「要你看」组里，不算「在等你」） */
+function ListWaitingCount(props: {
+  children: readonly SessionMeta[];
+  summaries: ReadonlyMap<string, ChannelSummary>;
+  engine: SessionEngine;
 }) {
   const t = useT();
-  const status = props.status;
-  const bar = subSessionBarFill(status);
+  const count = props.children.filter((meta) => {
+    const status = subSessionStatusOf(meta.id, props.summaries.get(meta.id)?.status, props.engine);
+    return status === "waiting" || status === "approval";
+  }).length;
+  if (count === 0) return null;
   return (
-    <div className={`inbox-row${props.asking ? " asking" : ""}`}>
-      <button type="button" className="inbox-row-main" onClick={props.onClick}>
-        {bar !== undefined && (
-          <StatusPie state={bar} title={t.subSessions.rowStatus[status]} className="inbox-row-pie" />
-        )}
-        <span className="inbox-row-item">
-          <span className="inbox-row-l1">
-            <b className="inbox-row-title">{props.meta.title === "" ? t.subSessions.untitled : props.meta.title}</b>
-            <span className="inbox-row-ago row-trailing">{relativeTime(props.lastAt, t)}</span>
-          </span>
-          <span className="inbox-row-l2">{props.latest}</span>
-        </span>
-      </button>
-      {props.asking && <ChannelReplyBox parentId={props.meta.parentId ?? ""} childId={props.meta.id} />}
+    <span className="inbox-waiting-count" style={{ color: "var(--color-warning)" }}>
+      {t.subSessions.waitingCount(count)}
+    </span>
+  );
+}
+
+interface PanelRow {
+  meta: SessionMeta;
+  state: PanelRowState;
+  line: PanelSecondLine;
+  /** 通道最后一条消息的时间（没有往来 = 建立时间）：行尾「N 分钟前」与组内排序 */
+  lastAt: number;
+  /** 正在跑的那次调用开始的时刻；没在跑工具 = null */
+  since: number | null;
+  model: string;
+}
+
+function SubSessionList(props: {
+  children: readonly SessionMeta[];
+  summaries: ReadonlyMap<string, ChannelSummary>;
+  channels: ReadonlyMap<string, readonly ChannelMessage[]>;
+  engine: SessionEngine;
+  session: ChatSession;
+  onOpenChild: (childId: string) => void;
+}) {
+  const t = useT();
+  const { children, summaries, channels, engine, session } = props;
+  // 转录尾巴只给「通道还开着」的读（在跑什么、计划在做哪步）；交回 / 失败 / 停止的不读，四十个里只读在跑的那十几个
+  const openIds = useMemo(
+    () =>
+      children
+        .filter((meta) => {
+          const status = summaries.get(meta.id)?.status;
+          return status === undefined || status === "running";
+        })
+        .map((meta) => meta.id),
+    [children, summaries],
+  );
+  const tails = useChildTails(children, openIds, engine);
+  const [now, setNow] = useState(() => Date.now());
+  const callLine = useCallback(
+    (toolName: string, input: unknown): string => {
+      // 下划线 id（web_search、terminal_read……）不露给用户：给它一个词，认不得的写「工具」（同 #488 的 bgToolLabel）
+      const word = toolWord(t.chat.rollupTool, rollupToolKey(toolName, input), input);
+      const verb = word.includes("_") ? t.subSessions.toolLabel(word) : word;
+      const summary = toolCallSummary(toolName, input);
+      return summary === null || summary === "" ? verb : `${verb} · ${firstLine(summary)}`;
+    },
+    [t],
+  );
+  const modelName = useCallback(
+    (modelId: string | undefined): string => {
+      if (modelId === undefined || modelId === "") return "";
+      const declared = session.usable.flatMap((provider) => provider.models.declared).find((model) => model.id === modelId);
+      return modelDisplayName(session.catalog, modelId, {}, declared?.name);
+    },
+    [session.usable, session.catalog],
+  );
+
+  const rows: PanelRow[] = children.map((meta) => {
+    const records = tails.get(meta.id) ?? null;
+    const activity = records === null ? null : childActivityOf(records);
+    const channelStatus = summaries.get(meta.id)?.status;
+    const approvals = engine.states.get(meta.id)?.approvals ?? [];
+    const state = panelRowState({
+      channelStatus,
+      needsApproval: approvals.length > 0,
+      enginePhaseRunning: engine.phaseOf(meta.id) !== "idle",
+      activity,
+      now,
+    });
+    const messages = channels.get(meta.id);
+    const last = messages?.[messages.length - 1];
+    const first = approvals[0] as PendingApproval | undefined;
+    const planStep =
+      records === null
+        ? null
+        : (planTimeline(records)?.current.items.find((item) => item.status === "in_progress")?.text ?? null);
+    const line = panelSecondLine(
+      { state, activity, planStep, messages, approval: first === undefined ? null : { toolName: first.toolName, input: first.input } },
+      callLine,
+      t,
+    );
+    return {
+      meta,
+      state,
+      line,
+      lastAt: last !== undefined ? last.createdAt : meta.createdAt,
+      since: line.since,
+      model: modelName(meta.modelId),
+    };
+  });
+  const groups = groupPanelRows(rows);
+  // 走表：只有在跑工具的行才走；窗口不在前台停；不到一分钟按秒、否则按分钟跳（nextTickIn）
+  useTicker(
+    rows.flatMap((row) => (row.since === null ? [] : [row.since])),
+    setNow,
+  );
+  const [unfolded, setUnfolded] = useState<ReadonlySet<PanelGroup>>(() => new Set());
+  const toggle = (group: PanelGroup): void =>
+    setUnfolded((prev) => {
+      const next = new Set(prev);
+      if (next.has(group)) next.delete(group);
+      else next.add(group);
+      return next;
+    });
+
+  return (
+    <div className="ssp-list">
+      {groups.map(({ group, rows: list }) => {
+        const folded = FOLDED_GROUPS.has(group) && !unfolded.has(group);
+        if (folded) {
+          return (
+            <button key={group} type="button" className="ssp-fold" aria-expanded={false} onClick={() => toggle(group)}>
+              <Icon name={FEATURE_ICON.subsessions} size={14} strokeWidth={1.8} className="ssp-fold-glyph" />
+              <span>{t.subSessions.folded(group === "handed" ? "handed" : "stopped", list.length)}</span>
+              <Icon name="chevron-right" size={14} strokeWidth={1.8} className="row-trailing" />
+            </button>
+          );
+        }
+        return (
+          <section key={group} className="ssp-group" aria-label={t.subSessions.groups[group]}>
+            <header className="ssp-group-head">
+              <span>{t.subSessions.groups[group]}</span>
+              <span className="ssp-group-n">{list.length}</span>
+              {FOLDED_GROUPS.has(group) && (
+                <button
+                  type="button"
+                  className="ssp-group-fold row-trailing"
+                  aria-expanded
+                  title={t.subSessions.foldTip}
+                  aria-label={t.subSessions.foldTip}
+                  onClick={() => toggle(group)}
+                >
+                  <Icon name="chevron-up" size={12} strokeWidth={1.8} />
+                </button>
+              )}
+            </header>
+            <div className="ssp-card">
+              {list.map((row) => (
+                <SubSessionRow key={row.meta.id} row={row} now={now} onClick={() => props.onOpenChild(row.meta.id)} />
+              ))}
+            </div>
+          </section>
+        );
+      })}
     </div>
   );
+}
+
+/**
+ * 列表的一行：机器人（状态色是第二信号，文字在组名与第二行里）+ 标题（常规字重，一行省略，悬停全文）+ 型号名 + 时间；
+ * 第二行是这一状态下有用的那句话，在跑的行尾走表。「在问你」的行多一个［去回答］，点开回答框（ChannelReplyBox）。
+ * 行按钮与回答框 / 去回答是兄弟（button 不能嵌 button）。
+ */
+function SubSessionRow(props: { row: PanelRow; now: number; onClick: () => void }) {
+  const t = useT();
+  const { row } = props;
+  const [answering, setAnswering] = useState(false);
+  const title = row.meta.title === "" ? t.subSessions.untitled : row.meta.title;
+  const running = row.state === "running" || row.state === "stuck";
+  const elapsed = row.since === null ? null : props.now - row.since;
+  return (
+    <div className="ssp-row" data-state={row.state}>
+      <button type="button" className="ssp-row-main" onClick={props.onClick} title={title}>
+        <span className="ssp-bot" title={t.subSessions.rowStatus[row.state === "stuck" ? "running" : row.state]}>
+          <Icon name={FEATURE_ICON.subsessions} size={14} strokeWidth={1.8} />
+        </span>
+        <span className="ssp-body">
+          <span className="ssp-l1">
+            <span className="ssp-title">{title}</span>
+            {row.model !== "" && <span className="model-name-label">{row.model}</span>}
+            {!running && <span className="ssp-time row-trailing">{relativeTime(row.lastAt, t)}</span>}
+          </span>
+          <span className="ssp-l2" data-tone={row.line.tone}>
+            {row.state === "stuck" && <Icon name="triangle-alert" size={12} strokeWidth={1.8} className="ssp-stuck" />}
+            {row.line.lead !== null && <span className="ssp-lead">{row.line.lead}</span>}
+            <span className={row.line.mono ? "ssp-line mono" : "ssp-line"}>{row.line.text}</span>
+            {elapsed !== null && (
+              <span
+                className="ssp-elapsed row-trailing"
+                {...(row.state === "stuck" ? { title: t.subSessions.stuckTip(Math.floor(elapsed / 60_000)) } : {})}
+              >
+                {elapsedText(elapsed, t)}
+              </span>
+            )}
+          </span>
+        </span>
+      </button>
+      {row.state === "waiting" && (
+        <div className="ssp-answer">
+          {answering ? (
+            <ChannelReplyBox parentId={row.meta.parentId ?? ""} childId={row.meta.id} autoFocus onCancel={() => setAnswering(false)} />
+          ) : (
+            <button type="button" className="card-btn" onClick={() => setAnswering(true)}>
+              {t.subSessions.answer}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 多行文字取第一行（命令里常带换行） */
+function firstLine(text: string): string {
+  return text.split("\n").find((line) => line.trim() !== "")?.trim() ?? text;
+}
+
+/**
+ * 走表（照搬 proto/chat-workbench ChatStatus.tsx 的 useTicker）：since 列表空就不走；窗口失焦 / 隐藏就停，
+ * 回到前台立刻补一次；不到一分钟按秒、否则对齐到分钟边界跳（nextTickIn）。
+ */
+function useTicker(sinces: readonly number[], setNow: (now: number) => void): void {
+  const key = sinces.join(",");
+  useEffect(() => {
+    if (sinces.length === 0) return undefined;
+    let timer: number | undefined;
+    const active = (): boolean => document.visibilityState === "visible" && document.hasFocus();
+    const schedule = (): void => {
+      window.clearTimeout(timer);
+      if (!active()) return;
+      const wait = nextTickIn(sinces, Date.now());
+      if (wait === null) return;
+      timer = window.setTimeout(() => {
+        setNow(Date.now());
+        schedule();
+      }, wait);
+    };
+    const wake = (): void => {
+      setNow(Date.now());
+      schedule();
+    };
+    schedule();
+    window.addEventListener("focus", wake);
+    window.addEventListener("blur", schedule);
+    document.addEventListener("visibilitychange", wake);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("focus", wake);
+      window.removeEventListener("blur", schedule);
+      document.removeEventListener("visibilitychange", wake);
+    };
+    // sinces 的内容由 key 代表
+  }, [key]);
+}
+
+/**
+ * 子会话的转录尾巴：引擎槽里载着的（正在面板 / 主槽看着、或真在跑的）用槽里的实时记录；没载过的读一次尾窗
+ * （api.session.load 的首屏窗口，与状态卡原型 useChildTails 同一做法），meta 的 updatedAt 变了重读。
+ * 只读 `ids` 里的（通道还开着的）——交回 / 失败 / 停止的行不需要「在跑什么」。
+ * 真做时这一段应由主进程推一行「在跑什么」（见报告：要不要改契约）。
+ */
+function useChildTails(
+  children: readonly SessionMeta[],
+  ids: readonly string[],
+  engine: SessionEngine,
+): ReadonlyMap<string, readonly TranscriptRecord[]> {
+  const [loaded, setLoaded] = useState<ReadonlyMap<string, readonly TranscriptRecord[]>>(new Map());
+  const wanted = useMemo(() => new Set(ids), [ids]);
+  const key = children
+    .filter((meta) => wanted.has(meta.id) && engine.states.get(meta.id) === undefined)
+    .map((meta) => `${meta.id}:${meta.updatedAt}`)
+    .join(",");
+  useEffect(() => {
+    let alive = true;
+    const queue = key === "" ? [] : key.split(",").map((part) => part.split(":")[0] ?? "");
+    void (async () => {
+      const next = new Map<string, readonly TranscriptRecord[]>();
+      const worker = async (): Promise<void> => {
+        for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
+          const detail = await api.session.load(id).catch(() => null);
+          next.set(id, (detail?.transcript ?? []) as readonly TranscriptRecord[]);
+        }
+      };
+      await Promise.all([worker(), worker(), worker(), worker()]);
+      if (alive) setLoaded(next);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [key]);
+  const out = new Map<string, readonly TranscriptRecord[]>();
+  for (const id of ids) {
+    const entry = engine.states.get(id);
+    if (entry !== undefined) out.set(id, selectTranscript(entry.transcript) as readonly TranscriptRecord[]);
+    else {
+      const tail = loaded.get(id);
+      if (tail !== undefined) out.set(id, tail);
+    }
+  }
+  return out;
 }
 
 /**
@@ -265,7 +527,7 @@ function SubSessionRow(props: {
  * 原 ChannelColumn 的 composer（随面板删除）搬来：按内容定高（1–6 行）、Enter 发送
  * Shift+Enter 换行、失败就地亮错不吞。
  */
-function ChannelReplyBox(props: { parentId: string; childId: string }) {
+function ChannelReplyBox(props: { parentId: string; childId: string; autoFocus?: boolean; onCancel?: () => void }) {
   const t = useT();
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -291,6 +553,10 @@ function ChannelReplyBox(props: { parentId: string; childId: string }) {
     el.style.overflowY = scrollable ? "auto" : "hidden";
   }, []);
   useLayoutEffect(fitHeight, [text, fitHeight]);
+  // 点［去回答］展开时直接落焦点：用户要做的下一件事就是打字
+  useEffect(() => {
+    if (props.autoFocus === true) textareaRef.current?.focus();
+  }, [props.autoFocus]);
 
   const send = (): void => {
     const value = text.trim();
@@ -321,6 +587,13 @@ function ChannelReplyBox(props: { parentId: string; childId: string }) {
           disabled={sending}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
+            // Esc 收起回答框（草稿是空的才收，写了一半的不丢）
+            if (event.key === "Escape" && props.onCancel !== undefined && text.trim() === "") {
+              event.preventDefault();
+              event.stopPropagation();
+              props.onCancel();
+              return;
+            }
             if (
               !isSubmitKey({
                 key: event.key,
