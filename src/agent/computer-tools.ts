@@ -20,7 +20,8 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { RequestBroker } from "./request-broker.ts";
 import { takeRememberedClass } from "./computer-remember.ts";
 import {
-  COMPUTER_USE_DISPATCHED_HINT,
+  COMPUTER_USE_DELIVERIES,
+  COMPUTER_USE_DELIVERY_HINTS,
   COMPUTER_USE_SHOT_MAX_WIDTH,
   computerUseAudit,
   GUEST_COMMAND_TIMEOUT_MS,
@@ -55,6 +56,19 @@ const CONSEQUENCES =
 const HANDOFF_HINT =
   "The sandbox is isolated: it has no sign-in state of the user's and you cannot solve a CAPTCHA in it. " +
   "If a page needs either, stop and tell the user what to do — do not guess credentials.";
+
+/**
+ * 交付五档的口径：**只从 shared 的 COMPUTER_USE_DELIVERY_HINTS 取**，工具层不写第二套。
+ * 模型只读工具描述与回执正文，两处同源才不会从两处读到两种说法。
+ */
+const DELIVERY_TIERS =
+  "Every pixel action reports one delivery tier: " +
+  COMPUTER_USE_DELIVERIES.map((tier) => `${tier} = ${COMPUTER_USE_DELIVERY_HINTS[tier]}`).join(" ") +
+  " A changed screenshot, an API returning ok, or an event being received is not evidence; " +
+  "only an exact read-back (a control value, a document URL, a window state) is.";
+
+/** 截图是「没拿到证据」之后的核验入口，口径同源（它就是 unverifiable 那句里的「先截一张图」） */
+const DELIVERY_VERIFY_HINT = `This tool is how you check: ${COMPUTER_USE_DELIVERY_HINTS.unverifiable}`;
 
 /**
  * 分工与抢占：这两句进**每个** computer_* 的描述，因为模型看不到 UI、也想不到「另一个会话
@@ -207,7 +221,8 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       "the image is NOT masked, that is normal unless you listed the window first. " +
       "The sandbox starts empty: no user data, no sign-in state, and its image is a bare Windows — notepad is " +
       "not installed (cmd.exe and msedge are). If the result says the sandbox is not running, tell the user to " +
-      "start it in Settings › Experimental features › Computer use; do not retry.",
+      "start it in Settings › Experimental features › Computer use; do not retry. " +
+      DELIVERY_VERIFY_HINT,
     parameters: {
       type: "object",
       properties: {
@@ -263,7 +278,7 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       "Click a point on the sandbox desktop, by x, y pixels of your latest computer_screenshot. It moves the " +
       "pointer there and presses — whatever is under that point receives it, so take a screenshot first and " +
       "click on what you actually see. " +
-      COMPUTER_USE_DISPATCHED_HINT +
+      DELIVERY_TIERS +
       " " +
       CONSEQUENCES +
       " " +
@@ -321,7 +336,7 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       "retrying the same box: the win+r Run box in this sandbox swallows them (its Cancel button does not " +
       "respond either) — press escape and use the taskbar search box instead (click it, type the name, enter). " +
       "Keys that are not text (Enter, Tab, arrows, shortcuts) go through computer_key instead. " +
-      COMPUTER_USE_DISPATCHED_HINT +
+      DELIVERY_TIERS +
       " Never type passwords, one-time " +
       "codes or other credentials — ask the user instead. " +
       CONSEQUENCES,
@@ -351,7 +366,7 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       "Press a key or a key combination on the sandbox desktop: enter, tab, escape, backspace, delete, home, " +
       "end, pageup, pagedown, up / down / left / right, f1–f12, ctrl+a, alt+f4, ctrl+shift+s… " +
       "It goes to the focused window — click the window first. " +
-      COMPUTER_USE_DISPATCHED_HINT +
+      DELIVERY_TIERS +
       " This is how you open things from the desktop itself. **Prefer the taskbar search box**: click it, type " +
       "the program name (cmd, msedge — the image is a bare Windows and notepad is not installed), press " +
       "enter. **Do not use the win+r Run box**: in this sandbox click reaches it but typed characters do not " +
@@ -386,7 +401,7 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       "decides which pane scrolls — pass the x, y of the list or page you mean (omitted = the middle of the " +
       "screen). deltaY is a number of wheel notches: positive scrolls down, negative up (3 is about nine " +
       "lines). " +
-      COMPUTER_USE_DISPATCHED_HINT,
+      DELIVERY_TIERS,
     parameters: {
       type: "object",
       properties: {

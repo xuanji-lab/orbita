@@ -57,6 +57,12 @@
 //   「ControlType + ClassName + Name + AutomationId」的哈希（本代内重名再补 #2 / #3）。diff 只按它比。
 //   每个窗口只留最近 5 代（UiaHistoryStore.Retain），更早的 since 回全量并说明记不住了。
 //
+// 0.15.0 起 setValue **自己带证据**：设完之后读回该元素的当前值（ValuePattern.Current.Value
+//   → TextPattern.DocumentRange.GetText），相等回 confirmed、不等回 suspected_noop，两者都带
+//   evidence{kind:"value",detail}；读回拿不到回 unverifiable（不猜成任何一档）。
+//   为什么：以前桥从不发证据，宿主那道「没证据不许 confirmed」的闸门把每一条 setValue 都降成
+//   unverifiable，模型永远等不到确认。密码框的 evidence 只写「一致 / 不一致」，**绝不带值本身**。
+//
 // 注意：csc.exe v4.0.30319 是 C# 5 编译器，禁止字符串插值 / ?. / out var / using 声明。
 // COM 的 vtable 槽位号全部来自 Windows SDK 的 UIAutomationClient.h（槽 0 基，IUnknown 占 0..2），
 // 每个常量旁边都写了它对应第几个方法，改的时候对着头文件数一遍。
@@ -989,10 +995,93 @@ internal static class Uia
     private const int SlotInvoke = 3 + 1 - 1;
     /** IUIAutomationValuePattern 第 1 个方法 SetValue(BSTR) */
     private const int SlotSetValue = 3 + 1 - 1;
+    /** IUIAutomationValuePattern 第 2 个方法 get_CurrentValue(BSTR*) —— setValue 读回的主路径 */
+    private const int SlotValueCurrentValue = 3 + 2 - 1;
     /** IUIAutomationValuePattern 第 3 个方法 get_CurrentIsReadOnly */
     private const int SlotValueIsReadOnly = 3 + 3 - 1;
+    /** UIA_TextPatternId = 10014（UIAutomationClient.h）；读回的退路 */
+    private const int TextPatternId = 10014;
+    /**
+     * IUIAutomationTextPattern 第 5 个方法 get_DocumentRange(IUIAutomationTextRange**)。
+     * 槽号依据（UIAutomationClient.h 10.0.26100.0，IUIAutomationTextPatternVtbl 的方法次序）：
+     *   1 RangeFromPoint                      → IUIAutomationTextRange**
+     *   2 RangeFromChild                      → IUIAutomationTextRange**
+     *   3 GetSelection                        → IUIAutomationTextRangeArray**
+     *   4 GetVisibleRanges                    → IUIAutomationTextRangeArray**（**跳过**：返回的是
+     *                                           数组不是单个 TextRange，本车道读整篇文本用不到它；
+     *                                           但它占一个槽，数槽时不能漏）
+     *   5 **get_DocumentRange**               → IUIAutomationTextRange**
+     *   6 get_SupportedTextSelection          → SupportedTextSelection*
+     * 曾经写成 3 + 4 - 1 = 6：漏掉第 4 个 GetVisibleRanges，于是实际调到它，把返回的数组指针
+     * 当 TextRange 用、再对它调槽 12（GetText）——vtable 越界。下面的 TextPatternMethods 表与
+     * selftest 的「槽号 → 方法名」断言会把这种漏项钉红。
+     */
+    private const int SlotTextDocumentRange = 3 + 5 - 1;
+    /**
+     * IUIAutomationTextRange 第 10 个方法 GetText(int maxLength, BSTR*)。
+     * 槽号依据（IUIAutomationTextRange 的方法表）：1 Clone → 2 Compare → 3 CompareEndpoints
+     * → 4 ExpandToEnclosingUnit → 5 FindAttribute → 6 FindText → 7 GetAttributeValue
+     * → 8 GetBoundingRectangles → 9 GetEnclosingElement → **10 GetText**。
+     */
+    private const int SlotTextRangeGetText = 3 + 10 - 1;
+    /** evidence.detail 的硬上限（给模型看的证据，不该把回执撑爆）；超了截断并注明 */
+    private const int EvidenceDetailMax = 200;
+    /** detail 里每个值的展示上限（先各自截短，再受 EvidenceDetailMax 总长限制） */
+    private const int EvidenceValueMax = 80;
     /** IUIAutomationSelectionItemPattern 第 1 个方法 Select() */
     private const int SlotSelect = 3 + 1 - 1;
+
+    // ---- 槽号的机器可核对表 ----
+    //
+    // 为什么需要它：上面每个常量都是「3 + 序号 - 1」的手工内插，注释里数错一个方法，常量与注释
+    // 仍然「自洽」——selftest 只比对字面值 6 时照样绿（TextPattern 漏 GetVisibleRanges 就是这么
+    // 溜过去的）。所以把每个接口的 vtable 方法次序逐字抄成表，selftest 断言「槽号解析出的方法名
+    // == 这个常量想调的方法」，并对整张表做逐字比对（有人删掉一项让数字对上，表本身会先红）。
+    // 下标 i（0 基）对应槽号 3 + (i + 1)。
+
+    /** IUIAutomationTextPattern 的 6 个方法（UIAutomationClient.h:8100–8121） */
+    private static readonly string[] TextPatternMethods =
+    {
+        "RangeFromPoint",
+        "RangeFromChild",
+        "GetSelection",
+        "GetVisibleRanges",
+        "get_DocumentRange",
+        "get_SupportedTextSelection",
+    };
+
+    /** IUIAutomationValuePattern 的 5 个方法（UIAutomationClient.h:6808–6823） */
+    private static readonly string[] ValuePatternMethods =
+    {
+        "SetValue",
+        "get_CurrentValue",
+        "get_CurrentIsReadOnly",
+        "get_CachedValue",
+        "get_CachedIsReadOnly",
+    };
+
+    /** IUIAutomationTextRange 的 18 个方法（UIAutomationClient.h:7174 起） */
+    private static readonly string[] TextRangeMethods =
+    {
+        "Clone",
+        "Compare",
+        "CompareEndpoints",
+        "ExpandToEnclosingUnit",
+        "FindAttribute",
+        "FindText",
+        "GetAttributeValue",
+        "GetBoundingRectangles",
+        "GetEnclosingElement",
+        "GetText",
+        "Move",
+        "MoveEndpointByUnit",
+        "MoveEndpointByRange",
+        "Select",
+        "AddToSelection",
+        "RemoveFromSelection",
+        "ScrollIntoView",
+        "GetChildren",
+    };
 
     [DllImport("oleaut32.dll")]
     private static extern int SafeArrayGetDim(IntPtr psa);
@@ -1077,8 +1166,29 @@ internal static class Uia
     private delegate int InvokeFn(IntPtr self);
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate int SetValueFn(IntPtr self, IntPtr value);
+    /** get_DocumentRange(TextRange**)：与 GetConditionFn 同形，但语义不同，单列一个以防混用 */
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate int GetDocumentRangeFn(IntPtr self, out IntPtr range);
+    /** IUIAutomationTextRange::GetText(int maxLength, BSTR**)：maxLength = -1 表示全部 */
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate int GetTextFn(IntPtr self, int maxLength, out IntPtr text);
 
     /** 读槽位并包成委托（每次调用重读一次 vtable：对象换了也不会拿到旧函数指针） */
+    /**
+     * 槽号 → 方法名：槽号 = 3 + 序号 - 1，所以序号 = 槽号 - 3 + 1。
+     * 越界时不抛，返回带序号的占位串——让 selftest 的断言把真实错位打印出来。
+     * 只给 selftest 用（不碰 COM）。
+     */
+    private static string MethodNameAt(string[] methods, int slot)
+    {
+        int ordinal = slot - 3 + 1;
+        if (ordinal < 1 || ordinal > methods.Length)
+        {
+            return "<越界:" + ordinal.ToString(CultureInfo.InvariantCulture) + ">";
+        }
+        return methods[ordinal - 1];
+    }
+
     private static T Slot<T>(IntPtr instance, int slot) where T : class
     {
         IntPtr vtable = Marshal.ReadIntPtr(instance);
@@ -1411,6 +1521,173 @@ internal static class Uia
         if (hr < 0 || pattern == IntPtr.Zero)
             throw new InvalidOperationException(UnsupportedMessage(action, controlType, patterns));
         return pattern;
+    }
+
+    // ---- setValue 的读回证据（0.15.0）-----------------------------------------
+    //
+    // 为什么要有这一段：宿主那道「没有读回证据就不许 confirmed」的闸门（settleComputerUseDelivery）
+    // 本身是对的，但桥以前从来不**发**证据，于是每一条 setValue 都被降成 unverifiable——模型
+    // 永远等不到确认，一个「设值没生效」的 bug 也没人发现。读回是这条车道上唯一算数的证据。
+
+    /** 一次 setValue 之后读回判定的结果（纯数据；--selftest-uia 直接验） */
+    internal sealed class ReadbackVerdict
+    {
+        /** confirmed / suspected_noop / unverifiable —— 与宿主 contract 同一套名字 */
+        public string Delivery = "unverifiable";
+        /** evidence.detail；null = 没有证据（unverifiable 不许发一份空证据） */
+        public string Detail;
+        /** 读回走的哪条路：value / text / none（写进回执便于真机排查） */
+        public string Source = "none";
+    }
+
+    /**
+     * 读回一个控件「现在真实的值」。
+     *
+     * 顺序按可用性：ValuePattern.Current.Value → TextPattern.DocumentRange.GetText(-1)。
+     * 都没有 / 都读失败 → null（source = "none"），调用方回 unverifiable，**不猜**。
+     * 为什么 TextPattern 只当退路：它给的是文档文本，边界比 ValuePattern 宽（可能带段落符），
+     * 比较时要容忍尾部换行；ValuePattern 给的就是控件自己的值，能逐字比。
+     */
+    private static string ReadCurrentValue(IntPtr element, out string source)
+    {
+        source = "none";
+        IntPtr pattern;
+        int hr = Slot<GetCurrentPatternFn>(element, SlotGetCurrentPattern)(element, ValuePatternId, out pattern);
+        if (hr >= 0 && pattern != IntPtr.Zero)
+        {
+            try
+            {
+                IntPtr bstr;
+                int readHr = Slot<GetStringFn>(pattern, SlotValueCurrentValue)(pattern, out bstr);
+                if (readHr >= 0 && bstr != IntPtr.Zero)
+                {
+                    try
+                    {
+                        string value = Marshal.PtrToStringBSTR(bstr);
+                        if (value != null)
+                        {
+                            source = "value";
+                            return value;
+                        }
+                    }
+                    finally { Marshal.FreeBSTR(bstr); }
+                }
+            }
+            finally { Release(pattern); }
+        }
+
+        hr = Slot<GetCurrentPatternFn>(element, SlotGetCurrentPattern)(element, TextPatternId, out pattern);
+        if (hr >= 0 && pattern != IntPtr.Zero)
+        {
+            try
+            {
+                IntPtr range;
+                int rangeHr = Slot<GetDocumentRangeFn>(pattern, SlotTextDocumentRange)(pattern, out range);
+                if (rangeHr >= 0 && range != IntPtr.Zero)
+                {
+                    try
+                    {
+                        IntPtr bstr;
+                        int textHr = Slot<GetTextFn>(range, SlotTextRangeGetText)(range, -1, out bstr);
+                        if (textHr >= 0 && bstr != IntPtr.Zero)
+                        {
+                            try
+                            {
+                                string text = Marshal.PtrToStringBSTR(bstr);
+                                if (text != null)
+                                {
+                                    source = "text";
+                                    return text;
+                                }
+                            }
+                            finally { Marshal.FreeBSTR(bstr); }
+                        }
+                    }
+                    finally { Release(range); }
+                }
+            }
+            finally { Release(pattern); }
+        }
+        return null;
+    }
+
+    /**
+     * setValue 读回的判定（纯函数，--selftest-uia 直接验）。三档：
+     *   读回 == 期望 → confirmed（带 evidence）
+     *   读回 != 期望 → suspected_noop（带 evidence）——值真的没变成我们要的
+     *   拿不到读回   → unverifiable（**没有** evidence）——不猜成任何一档
+     *
+     * 密码框：detail 只写「一致 / 不一致」，绝不带值本身——密码不该因为一次确认就进模型上下文。
+     */
+    internal static ReadbackVerdict JudgeSetValueReadback(string expected, string actual, string source,
+        bool isPassword)
+    {
+        ReadbackVerdict verdict = new ReadbackVerdict();
+        verdict.Source = source == "value" || source == "text" ? source : "none";
+        if (verdict.Source == "none")
+        {
+            // 没有读回就没有证据：unverifiable 是「已经做了但证明不了」，不是失败
+            verdict.Delivery = "unverifiable";
+            verdict.Detail = null;
+            return verdict;
+        }
+        bool same = ReadbackMatches(expected, actual, verdict.Source);
+        verdict.Delivery = same ? "confirmed" : "suspected_noop";
+        if (isPassword)
+        {
+            verdict.Detail = same ? "密码框：读回值与期望一致" : "密码框：读回值与期望不一致";
+            return verdict;
+        }
+        string where = verdict.Source == "value"
+            ? "ValuePattern.Current.Value"
+            : "TextPattern.DocumentRange.GetText";
+        verdict.Detail = ClipDetail("期望 " + QuoteForDetail(expected) + "，读回 " + QuoteForDetail(actual)
+            + "（" + where + "）");
+        return verdict;
+    }
+
+    /**
+     * 读回值与期望值算不算同一个。ValuePattern 逐字比；TextPattern 给的文档文本常常在末尾多
+     * 一个段落符（\r / \n / \r\n），那是**读回通道的固有噪声**，不是「值没设进去」——
+     * 为了不把它误判成 suspected_noop（一条新的谎报），只在 text 通道上容忍尾部换行。
+     */
+    private static bool ReadbackMatches(string expected, string actual, string source)
+    {
+        if (actual == null) return false;
+        if (string.Equals(expected, actual, StringComparison.Ordinal)) return true;
+        if (source != "text") return false;
+        int end = actual.Length;
+        while (end > 0 && (actual[end - 1] == '\r' || actual[end - 1] == '\n')) end--;
+        return string.Equals(expected, actual.Substring(0, end), StringComparison.Ordinal);
+    }
+
+    /** detail 里的值：引号包起来，换行/制表改成可见的转义（一条单行证据），单值先截短 */
+    private static string QuoteForDetail(string value)
+    {
+        if (value == null) return "（读回失败）";
+        string clipped = value.Length <= EvidenceValueMax ? value : value.Substring(0, EvidenceValueMax) + "…";
+        StringBuilder text = new StringBuilder();
+        text.Append('"');
+        for (int i = 0; i < clipped.Length; i++)
+        {
+            char c = clipped[i];
+            if (c == '\r') text.Append("\\r");
+            else if (c == '\n') text.Append("\\n");
+            else if (c == '\t') text.Append("\\t");
+            else text.Append(c);
+        }
+        text.Append('"');
+        return text.ToString();
+    }
+
+    /** evidence.detail 总长硬上限：超了截断并注明（不塞超长文本，理由见 A 的规格） */
+    private static string ClipDetail(string detail)
+    {
+        if (detail.Length <= EvidenceDetailMax) return detail;
+        string note = "…（已截断）";
+        int keep = EvidenceDetailMax - note.Length;
+        if (keep < 0) keep = 0;
+        return detail.Substring(0, keep) + note;
     }
 
     // ---- 窗口解析（标题 → hwnd）-----------------------------------------------
@@ -2092,6 +2369,38 @@ internal static class Uia
             if (hr < 0) throw new InvalidOperationException(DescribeHresult(hr, "UIA 动作 " + action + " "));
 
             string warning = _autoSetFocusWarning;
+            // setValue 的证据（0.15.0）：设完再读一次，**读回本身失败不抛异常**——动作已经做了，
+            // 读不到只说明证明不了（unverifiable），不该把一次真实写操作变成工具错误。
+            string readbackJson = "";
+            if (action == "setValue")
+            {
+                // 读回**不能**把一次已成功的 SetValue 变成错误（元素可能在设完值后消失，
+                // COM 也可能在那一刻失效）：读不到就是读不到，回 unverifiable。
+                string readbackSource = "none";
+                string readback = null;
+                bool isPassword = false;
+                try
+                {
+                    readback = ReadCurrentValue(target, out readbackSource);
+                    isPassword = ReadIsPassword(target);
+                }
+                catch (Exception readbackError)
+                {
+                    Program.Log("uia-act setValue 读回失败（按拿不到证据处理）：" + readbackError.Message);
+                    readbackSource = "none";
+                    readback = null;
+                    isPassword = false;
+                }
+                ReadbackVerdict verdict = JudgeSetValueReadback(value, readback, readbackSource, isPassword);
+                readbackJson = ",\"delivery\":" + Program.JsonQuote(verdict.Delivery)
+                    + ",\"readback\":" + Program.JsonQuote(verdict.Source);
+                if (verdict.Detail != null)
+                    readbackJson += ",\"evidence\":{\"kind\":\"value\",\"detail\":"
+                        + Program.JsonQuote(verdict.Detail) + "}";
+                // 日志只说读回走的哪条路与结论；密码框**不记录值**（这里本来也没输出过值）
+                Program.Log("uia-act setValue 读回（" + verdict.Source + "）→ " + verdict.Delivery
+                    + (isPassword ? "（密码框）" : ""));
+            }
             StringBuilder json = new StringBuilder();
             json.Append("{\"ok\":true,\"hwnd\":").Append(hwnd.ToInt64())
                 .Append(",\"action\":").Append(Program.JsonQuote(action))
@@ -2100,6 +2409,7 @@ internal static class Uia
                 .Append(",\"controlType\":").Append(Program.JsonQuote(controlType))
                 .Append(",\"autoSetFocus\":").Append(warning == null ? "true" : "false")
                 .Append(",\"elapsedMs\":").Append(clock.ElapsedMilliseconds)
+                .Append(readbackJson)
                 .Append(admitJson);
             if (warning != null) json.Append(",\"autoSetFocusWarning\":").Append(Program.JsonQuote(warning));
             json.Append("}");
@@ -2668,6 +2978,88 @@ internal static class Uia
         CheckTrue(failures, ref cases, "diff 项的 ref 仍是本代 token",
             diffJson.IndexOf("\"ref\":\"g7:r1\"", StringComparison.Ordinal) >= 0
             && plainJson.IndexOf("\"change\"", StringComparison.Ordinal) < 0);
+
+        // ⑧ setValue 的读回证据（0.15.0）：三档 + 密码框不带值 + detail 不超长
+        ReadbackVerdict same = JudgeSetValueReadback("新建文本.txt", "新建文本.txt", "value", false);
+        CheckString(failures, ref cases, "读回与期望一致 → confirmed", "confirmed", same.Delivery);
+        CheckTrue(failures, ref cases, "一致时带 evidence（kind=value，detail 写清期望与读回）",
+            same.Detail != null && same.Detail.IndexOf("新建文本.txt", StringComparison.Ordinal) >= 0
+            && same.Detail.IndexOf("ValuePattern.Current.Value", StringComparison.Ordinal) >= 0);
+        CheckString(failures, ref cases, "读回的来源原样写进回执", "value", same.Source);
+
+        ReadbackVerdict changed = JudgeSetValueReadback("hello", "hello world", "value", false);
+        CheckString(failures, ref cases, "读回与期望不一致 → suspected_noop", "suspected_noop", changed.Delivery);
+        CheckTrue(failures, ref cases, "不一致时 evidence 同时写出期望与读回",
+            changed.Detail != null && changed.Detail.IndexOf("\"hello\"", StringComparison.Ordinal) >= 0
+            && changed.Detail.IndexOf("\"hello world\"", StringComparison.Ordinal) >= 0);
+
+        ReadbackVerdict missing = JudgeSetValueReadback("x", null, "none", false);
+        CheckString(failures, ref cases, "拿不到读回 → unverifiable（不猜 confirmed）", "unverifiable", missing.Delivery);
+        CheckTrue(failures, ref cases, "拿不到读回时**不发**空证据（没证据就是没证据）", missing.Detail == null);
+        CheckString(failures, ref cases, "拿不到读回时 source = none", "none", missing.Source);
+
+        ReadbackVerdict secretOk = JudgeSetValueReadback("hunter2", "hunter2", "value", true);
+        CheckString(failures, ref cases, "密码框一致 → confirmed", "confirmed", secretOk.Delivery);
+        CheckString(failures, ref cases, "密码框的 evidence 只写「一致」，不带值",
+            "密码框：读回值与期望一致", secretOk.Detail);
+        ReadbackVerdict secretBad = JudgeSetValueReadback("hunter2", "hunter3", "value", true);
+        CheckString(failures, ref cases, "密码框不一致 → suspected_noop", "suspected_noop", secretBad.Delivery);
+        CheckTrue(failures, ref cases, "密码框不一致的证据不带值（两个值都不许出现）",
+            secretBad.Detail != null && secretBad.Detail.IndexOf("hunter2", StringComparison.Ordinal) < 0
+            && secretBad.Detail.IndexOf("hunter3", StringComparison.Ordinal) < 0
+            && secretBad.Detail.IndexOf("不一致", StringComparison.Ordinal) >= 0);
+
+        ReadbackVerdict textTail = JudgeSetValueReadback("abc", "abc\r\n", "text", false);
+        CheckString(failures, ref cases, "TextPattern 尾部的段落符不算「没设进去」", "confirmed", textTail.Delivery);
+        ReadbackVerdict valueTail = JudgeSetValueReadback("abc", "abc\r\n", "value", false);
+        CheckString(failures, ref cases, "ValuePattern 是逐字比（尾部换行也算不一致）", "suspected_noop",
+            valueTail.Delivery);
+
+        StringBuilder longValue = new StringBuilder();
+        for (int i = 0; i < 400; i++) longValue.Append('x');
+        ReadbackVerdict clipped = JudgeSetValueReadback(longValue.ToString(), longValue.ToString(), "value", false);
+        CheckTrue(failures, ref cases, "超长值截断到 200 字符并注明",
+            clipped.Detail.Length <= EvidenceDetailMax
+            && clipped.Detail.IndexOf("已截断", StringComparison.Ordinal) >= 0);
+        ReadbackVerdict multiline = JudgeSetValueReadback("a\nb", "a\nb", "value", false);
+        CheckTrue(failures, ref cases, "detail 是单行（换行转义成 \\n，不把回执弄成两行）",
+            multiline.Detail.IndexOf('\n') < 0 && multiline.Detail.IndexOf("\\n", StringComparison.Ordinal) >= 0);
+
+        // 槽号是内插出来的：三个新槽必须**夹在已知邻居之间**，数错一格就是调错函数
+        CheckNumber(failures, ref cases, "ValuePattern get_CurrentValue 槽号 = 3 + 2 - 1", "4",
+            SlotValueCurrentValue.ToString(CultureInfo.InvariantCulture));
+        CheckTrue(failures, ref cases, "ValuePattern 三个槽的顺序（SetValue < CurrentValue < IsReadOnly）",
+            SlotSetValue < SlotValueCurrentValue && SlotValueCurrentValue < SlotValueIsReadOnly);
+        CheckNumber(failures, ref cases, "TextPattern get_DocumentRange 槽号 = 3 + 5 - 1", "7",
+            SlotTextDocumentRange.ToString(CultureInfo.InvariantCulture));
+        CheckNumber(failures, ref cases, "TextRange GetText 槽号 = 3 + 10 - 1", "12",
+            SlotTextRangeGetText.ToString(CultureInfo.InvariantCulture));
+        CheckNumber(failures, ref cases, "UIA_TextPatternId = 10014", "10014",
+            TextPatternId.ToString(CultureInfo.InvariantCulture));
+
+        // 槽号 → 方法名：只比字面值 6 会跟错的注释一起自洽，所以按头文件次序写成表再对名。
+        // TextPattern 曾经漏掉 GetVisibleRanges（数组返回），槽 6 于是落到它身上、把数组当 TextRange 用。
+        CheckString(failures, ref cases, "IUIAutomationTextPattern 方法次序与头文件一致",
+            "RangeFromPoint|RangeFromChild|GetSelection|GetVisibleRanges|get_DocumentRange|get_SupportedTextSelection",
+            string.Join("|", TextPatternMethods));
+        CheckString(failures, ref cases, "SlotTextDocumentRange 解析出 get_DocumentRange（不是 GetVisibleRanges）",
+            "get_DocumentRange", MethodNameAt(TextPatternMethods, SlotTextDocumentRange));
+        CheckString(failures, ref cases, "SlotTextDocumentRange 的邻居是 GetVisibleRanges（漏一项就会错位到这里）",
+            "GetVisibleRanges", MethodNameAt(TextPatternMethods, SlotTextDocumentRange - 1));
+        CheckString(failures, ref cases, "IUIAutomationValuePattern 方法次序与头文件一致",
+            "SetValue|get_CurrentValue|get_CurrentIsReadOnly|get_CachedValue|get_CachedIsReadOnly",
+            string.Join("|", ValuePatternMethods));
+        CheckString(failures, ref cases, "SlotValueCurrentValue 解析出 get_CurrentValue",
+            "get_CurrentValue", MethodNameAt(ValuePatternMethods, SlotValueCurrentValue));
+        CheckString(failures, ref cases, "SlotValueIsReadOnly 解析出 get_CurrentIsReadOnly",
+            "get_CurrentIsReadOnly", MethodNameAt(ValuePatternMethods, SlotValueIsReadOnly));
+        CheckString(failures, ref cases, "IUIAutomationTextRange 方法次序与头文件一致",
+            "Clone|Compare|CompareEndpoints|ExpandToEnclosingUnit|FindAttribute|FindText|GetAttributeValue"
+            + "|GetBoundingRectangles|GetEnclosingElement|GetText|Move|MoveEndpointByUnit|MoveEndpointByRange"
+            + "|Select|AddToSelection|RemoveFromSelection|ScrollIntoView|GetChildren",
+            string.Join("|", TextRangeMethods));
+        CheckString(failures, ref cases, "SlotTextRangeGetText 解析出 GetText（不是 GetEnclosingElement）",
+            "GetText", MethodNameAt(TextRangeMethods, SlotTextRangeGetText));
 
         Console.WriteLine(Program.BuildSelfTestJson(failures, cases));
         return failures.Count == 0 ? 0 : 1;

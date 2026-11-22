@@ -25,10 +25,13 @@
  * 遮了比不遮更坏（它会放心地读图）。
  */
 import {
-  COMPUTER_USE_DISPATCHED_HINT,
+  COMPUTER_USE_DELIVERY_HINTS,
+  COMPUTER_USE_NO_EVIDENCE_HINT,
   captureNote,
   computerUseGuestCommands,
   parseComputerUseDelivery,
+  parseComputerUseEvidence,
+  settleComputerUseDelivery,
   type ComputerUseAdmission,
   type ComputerUseDelivery,
   type ComputerUseGuestCommand,
@@ -42,6 +45,7 @@ import {
   type ComputerUseWindowShotResult,
 } from "../../shared/computer-use.ts";
 import type { GuestCommandReply } from "./sandbox.ts";
+import type { SandboxCapabilities } from "./provider.ts";
 
 /**
  * 这一层真正要的那几个能力。**收窄成接口而不是直接吃 SandboxController**：
@@ -51,8 +55,8 @@ import type { GuestCommandReply } from "./sandbox.ts";
 export interface ComputerUseGuest {
   screenshot(maxWidth?: number): Promise<ComputerUseScreenshotResult>;
   /**
-   * 像素命令的下发（click / type / key / scroll）。成功时**带 resp**：交付档位（applied /
-   * dispatched / failed）就在里面，这一层不替桥猜。
+   * 像素命令的下发（click / type / key / scroll）。成功时**带 resp**：交付档位（confirmed /
+   * unverifiable / refused …）就在里面，这一层不替桥猜。
    */
   guestCommand(command: ComputerUseGuestCommand, fields: Record<string, unknown>): Promise<GuestCommandReply>;
   /**
@@ -112,7 +116,18 @@ export async function applyComputerUseRequest(
    */
   sessionId: string,
   request: ComputerUseToolRequest,
+  /**
+   * 正在跑的那个后端的**能力声明**（index.ts 传 `computerUse.capabilities()`）。
+   * 它的 `evidence` 决定这一层能不能出 `confirmed` / `suspected_noop`（见 gateForBackend）。
+   *
+   * **拿不到就传 null（或省略）——不等于「没有证据能力」**：沙箱没在跑、能力声明还没就绪，
+   * 与「这个后端没有读回」是两件不同的事。拿不到时档位与正文都不动（旧行为），
+   * 不猜一个更坏的档位塞给模型。
+   */
+  capabilities: SandboxCapabilities | null = null,
 ): Promise<ComputerUseToolOutcome> {
+  // 证据级别：优先用调用方给的当前后端能力，没给时退一步读控制器自己声明的 `capabilities`
+  const evidence = evidenceOf(controller, capabilities);
   console.log(`[computer-use] ${sessionId} → ${request.action}`);
   try {
     switch (request.action) {
@@ -148,39 +163,41 @@ export async function applyComputerUseRequest(
           button,
           double: request.double === true,
         });
-        if (!reply.ok) return failedReply(reply);
-        const delivery = deliveryOf(reply.resp);
+        if (!reply.ok) return failedReply(reply, evidence);
+        const delivery = deliveryOf(reply.resp, evidence);
         const kind = `${request.double === true ? "double " : ""}${button} click`;
         return {
           ok: true,
           delivery,
           text:
             `Sent a ${kind} at (${request.x}, ${request.y}) on the sandbox desktop. ` +
-            deliveryNote(delivery) +
+            deliveryNote(delivery, evidence) +
+            guestNote(reply.resp) +
             admissionNote(reply.admission, sessionId) +
             deferredNote(reply),
         };
       }
       case "type": {
         const reply = await controller.guestCommand(computerUseGuestCommands.type, { text: request.text });
-        if (!reply.ok) return failedReply(reply);
-        const delivery = deliveryOf(reply.resp);
+        if (!reply.ok) return failedReply(reply, evidence);
+        const delivery = deliveryOf(reply.resp, evidence);
         return {
           ok: true,
           delivery,
           text:
             `Typed ${request.text.length} characters into the focused window on the sandbox desktop. ` +
-            deliveryNote(delivery) + deferredNote(reply),
+            deliveryNote(delivery, evidence) + guestNote(reply.resp) + deferredNote(reply),
         };
       }
       case "key": {
         const reply = await controller.guestCommand(computerUseGuestCommands.key, { key: request.key });
-        if (!reply.ok) return failedReply(reply);
-        const delivery = deliveryOf(reply.resp);
+        if (!reply.ok) return failedReply(reply, evidence);
+        const delivery = deliveryOf(reply.resp, evidence);
         return {
           ok: true,
           delivery,
-          text: `Pressed ${request.key} on the sandbox desktop. ` + deliveryNote(delivery) + deferredNote(reply),
+          text: `Pressed ${request.key} on the sandbox desktop. ` + deliveryNote(delivery, evidence) +
+            guestNote(reply.resp) + deferredNote(reply),
         };
       }
       case "scroll": {
@@ -189,14 +206,14 @@ export async function applyComputerUseRequest(
           y: request.y,
           deltaY: request.deltaY,
         });
-        if (!reply.ok) return failedReply(reply);
-        const delivery = deliveryOf(reply.resp);
+        if (!reply.ok) return failedReply(reply, evidence);
+        const delivery = deliveryOf(reply.resp, evidence);
         return {
           ok: true,
           delivery,
           text:
             `Scrolled by ${request.deltaY} wheel notch(es) at (${request.x}, ${request.y}) on the sandbox desktop ` +
-            `(positive = down). ${deliveryNote(delivery)}` +
+            `(positive = down). ${deliveryNote(delivery, evidence)}` + guestNote(reply.resp) +
             admissionNote(reply.admission, sessionId) +
             deferredNote(reply),
         };
@@ -219,8 +236,23 @@ export async function applyComputerUseRequest(
           ...(request.value === undefined ? {} : { value: request.value }),
           ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
         });
-        if (!reply.ok) return { ok: false, error: reply.error };
-        return { ok: true, text: uiaActText(reply) };
+        // 失败也走 failedReply：桥明确拒绝时它已经带 `delivery:"refused"`（控制器层在
+        // GuestCommandRejected 那里补的——那里才知道「桥回了 ok:false」与「超时没回应」的分别，
+        // 见 sandbox.ts / isolation-session.ts 的 rejectedUiaAct）。这一层只负责过后端闸门，
+        // 不替它猜档位：超时那条绝不能被补成 refused。
+        if (!reply.ok) return failedReply(reply, evidence);
+        // setValue（桥 0.15.0）自带读回：桥发 delivery + evidence，这一层不再自己猜。
+        // 两道闸门与像素命令同一套：没证据的 confirmed 降回 unverifiable（settle），
+        // 声明「拿不到读回」的后端不出确认档（gateForBackend）。
+        const delivery =
+          reply.delivery === undefined
+            ? undefined
+            : gateForBackend(settleComputerUseDelivery(reply.delivery, reply.evidence), evidence);
+        return {
+          ok: true,
+          text: uiaActText(reply, delivery, evidence),
+          ...(delivery === undefined ? {} : { delivery }),
+        };
       }
       // sandbox_* 动作走 CDP 通道（main/computer-use/cdp.ts），不经过这一层：
       // 它们要一条常驻的 CdpSession（socket / 标签页 / 自动起 Edge），而这里只认沙箱状态机。
@@ -237,28 +269,104 @@ export async function applyComputerUseRequest(
 }
 
 /**
- * 回执里的 delivery → 契约档位。桥没说（老桥 / 非像素命令）时兜底 `dispatched`：
- * 像素命令能走到「有回执且 ok」这一步，本来就只能是「已派发、未验证」——这正是 SendInput
- * 返回值的真实含义。以前它只写在实现里、模型读不到，现在显式进回执与正文。
+ * 能力声明里的「证据级别」。null = 不知道（后端没在跑 / 调用方没给），与 "none" 不是一回事：
+ * "none" 是「这个后端确实没有读回」，null 是「我还不知道它有没有」——后者不能拿来降档。
  */
-function deliveryOf(resp: Record<string, unknown>): ComputerUseDelivery {
-  return parseComputerUseDelivery(resp["delivery"]) ?? "dispatched";
+type EvidenceLevel = SandboxCapabilities["evidence"];
+
+/**
+ * 这一层用的证据级别：**优先用调用方传的当前后端能力**（index.ts 传 `computerUse.capabilities()`，
+ * 那是门面回答的「现在在跑谁」），没有时**退一步读控制器自己声明的 `capabilities`**
+ * （`SandboxProvider` 上就是一个只读属性）。
+ *
+ * 为什么要有退路：直接把后端控制器交给这一层（单测、将来别的入口）时，它也必须按自己
+ * 声明的证据级别被门控——否则同一个后端换一个入口就能把 `confirmed` / `suspected_noop`
+ * 漏给模型，写在 `QEMU_CAPABILITIES` 里的 "none" 就成了摆设。
+ * 这里是**运行时校验**而不是直接强转：读到一个不认识的 `evidence` 就当不知道（null），
+ * 不猜一个档位（猜「有证据」会伪造确认，猜「没证据」会把能确认的后端误降级）。
+ */
+function evidenceOf(controller: ComputerUseGuest, capabilities: SandboxCapabilities | null): EvidenceLevel | null {
+  if (capabilities !== null) return capabilities.evidence;
+  const declared: unknown = (controller as { capabilities?: unknown }).capabilities;
+  if (typeof declared !== "object" || declared === null) return null;
+  const level: unknown = (declared as { evidence?: unknown }).evidence;
+  return level === "value" || level === "window" || level === "none" ? level : null;
 }
 
 /**
- * 成功回执后面跟的那句交付说明。`applied` 本刀不产出（还不知道怎么证明生效），
- * 位置先留着；`dispatched` 是默认档，口径见 shared 的 COMPUTER_USE_DISPATCHED_HINT。
+ * 后端声明的证据级别 → 这一层能不能出这个档位。**拿不到任何读回的后端
+ * （`evidence: "none"`）永远不出 `confirmed` / `suspected_noop`**，一律降成 `unverifiable`。
+ *
+ * 为什么不仅靠「这次没有证据」那一条闸门（settleComputerUseDelivery）：那道闸门只能拦
+ * `confirmed`，拦不住 `suspected_noop`，也拦不住将来某条路径伪造出一份证据对象。
+ * 声明是后端自己的事实——它说没有读回，那这一层就不能把「有读回」的话交给模型。
+ * 为什么 `unknown`（null）原样返回：拿不到能力不等于没有证据能力（沙箱可能正在启动），
+ * 替它降档会让本来能确认的后端也变成「永远确认不了」。
  */
-function deliveryNote(delivery: ComputerUseDelivery): string {
-  return delivery === "applied" ? "It has been confirmed to have taken effect." : COMPUTER_USE_DISPATCHED_HINT;
+function gateForBackend(delivery: ComputerUseDelivery, evidence: EvidenceLevel | null): ComputerUseDelivery {
+  if (evidence !== "none") return delivery;
+  return delivery === "confirmed" || delivery === "suspected_noop" ? "unverifiable" : delivery;
 }
 
 /**
- * 下发失败 → 回执。桥明确说的 `delivery:"failed"` 原样带出（「确定没做成」）；
+ * 回执里的 delivery → 契约档位，并**当场过两道闸门**：先「没证据不许 confirmed」
+ * （settleComputerUseDelivery），再「这个后端拿不到读回就永不出确认档」（gateForBackend）。
+ *
+ * 桥没说（老桥 / 非像素命令）时兜底 `unverifiable`：像素命令能走到「有回执且 ok」这一步，
+ * 本来就只能是「已发出、未验证」——这正是 SendInput 返回值的真实含义。
+ *
+ * 为什么降级必须在这里做、不能只做成 shared 里的一个工具函数：工具回执是模型唯一读得到的
+ * 地方。老桥发 `applied` 会被归一成 `confirmed`，但那一跳**没有任何读回证据**；如果让它
+ * 原样流出去，模型就会看到一句「已确认生效」——正是这次要消灭的谎报。
+ */
+function deliveryOf(resp: Record<string, unknown>, evidence: EvidenceLevel | null): ComputerUseDelivery {
+  // 桥发了读回证据就带上（桥 0.15.0 起 setValue / 将来的像素读回）；形状不对等于没发
+  // （parseComputerUseEvidence 不抛错）。少了这一跳，桥发来的证据就是白发的——上一轮验收
+  // 指出的 gap 正是这里。
+  const readback = parseComputerUseEvidence(resp["evidence"]);
+  const settled = settleComputerUseDelivery(parseComputerUseDelivery(resp["delivery"]) ?? "unverifiable", readback);
+  return gateForBackend(settled, evidence);
+}
+
+/**
+ * 桥在**成功回执**里给的一句补充（0.15.0 的 partial 用它说「差几个事件、补松开了哪些」）。
+ *
+ * 为什么要在宿主这里再拼一次：正文是这一层拼的，桥的 note 不会自己跑到模型眼前；
+ * 不拼的话 partial 的原因、补松开的键名都只活在回执的 JSON 里，模型只看得到一句
+ * 「只完成了一部分」。没 note 就一个字都不加——不凭空编一句。
+ */
+function guestNote(resp: Record<string, unknown>): string {
+  const note = resp["note"];
+  return typeof note === "string" && note !== "" ? ` ${note}` : "";
+}
+
+/**
+ * 成功回执后面跟的那句交付说明。文案**只从 shared 的 COMPUTER_USE_DELIVERY_HINTS 取**：
+ * 工具描述与回执正文同源，模型不会从两处读到两种说法。
+ *
+ * `evidence: "none"` 的后端再追加 COMPUTER_USE_NO_EVIDENCE_HINT（单一来源也在 shared）：
+ * 五档那句话讲的是「这一次」，而这类后端是**永远**拿不到读回——不说死，模型会一直等一个
+ * 不会来的确认，或者以为「再点一次也许就能确认」。
+ */
+function deliveryNote(delivery: ComputerUseDelivery, evidence: EvidenceLevel | null): string {
+  return COMPUTER_USE_DELIVERY_HINTS[delivery] + (evidence === "none" ? COMPUTER_USE_NO_EVIDENCE_HINT : "");
+}
+
+/**
+ * 下发失败 → 回执。桥明确说的 `delivery:"refused"` 原样带出（「确定没做成」）；
  * 超时 / 沙箱没在跑这类没有那一档——那时我们不知道那一下有没有生效，不能替它断言。
+ * 同样过后端闸门：失败回执里出现一个无证据后端的 `confirmed` 是矛盾，不能原样交给模型。
+ * 这里不追加 NO_EVIDENCE 那句话：正文是桥的错误原话，失败时该做的是看错误、不是去截图。
  */
-function failedReply(reply: { ok: false; error: string; delivery?: ComputerUseDelivery }): ComputerUseToolOutcome {
-  return { ok: false, error: reply.error, ...(reply.delivery === undefined ? {} : { delivery: reply.delivery }) };
+function failedReply(
+  reply: { ok: false; error: string; delivery?: ComputerUseDelivery },
+  evidence: EvidenceLevel | null,
+): ComputerUseToolOutcome {
+  const delivery =
+    reply.delivery === undefined
+      ? undefined
+      : gateForBackend(settleComputerUseDelivery(reply.delivery), evidence);
+  return { ok: false, error: reply.error, ...(delivery === undefined ? {} : { delivery }) };
 }
 
 /**
@@ -532,18 +640,22 @@ function admissionNote(admission: ComputerUseAdmission | undefined, sessionId: s
   return ` Admission (guest-side): "admission":"${admission.admission}","targetExe":"${target}" — ${tail}.`;
 }
 
-/** uia-act 成功回执 → 给模型读的文本（含 AutoSetFocus 降级时的抢焦点警告） */
-function uiaActText(reply: {
-  hwnd: number;
-  action: string;
-  usedPattern: string;
-  name: string;
-  controlType: string;
-  autoSetFocus: boolean;
-  autoSetFocusWarning?: string;
-  admission?: ComputerUseAdmission;
-  elapsedMs: number;
-}): string {
+/** uia-act 成功回执 → 给模型读的文本（含 AutoSetFocus 降级时的抢焦点警告与读回档位） */
+function uiaActText(
+  reply: {
+    hwnd: number;
+    action: string;
+    usedPattern: string;
+    name: string;
+    controlType: string;
+    autoSetFocus: boolean;
+    autoSetFocusWarning?: string;
+    admission?: ComputerUseAdmission;
+    elapsedMs: number;
+  },
+  delivery: ComputerUseDelivery | undefined = undefined,
+  evidence: EvidenceLevel | null = null,
+): string {
   const name = reply.name === "" ? "(unnamed control)" : `"${reply.name}"`;
   const verb =
     reply.action === "setValue" ? "Set the text of" : reply.action === "selection" ? "Selected" : "Invoked";
@@ -555,6 +667,8 @@ function uiaActText(reply: {
     "Take a computer_screenshot (window " +
     reply.hwnd +
     ") to see what changed." +
+    // setValue 的读回档位（桥 0.15.0）：桥没说就一个字都不加（老桥 / invoke / selection）
+    (delivery === undefined ? "" : ` ${deliveryNote(delivery, evidence)}`) +
     admissionNote(reply.admission, "uia-act");
   if (reply.autoSetFocus) return head;
   const warning =

@@ -67,7 +67,12 @@ import type { GuestCommandReply, GuestShotReply } from "./sandbox.ts";
  *   cdp               **没接**：guest 里有 chromium，但调试口与 sandbox_* 的接线还没做；
  *   sandboxFiles      没有：QEMU on Windows 没有 9p/virtfs，宿主目录映射不进来；
  *   desktopScope      shared：现在只有一台 VM、一块屏幕（VM 池是下一刀）；
- *   snapshot          none：qcow2 overlay 快照还没接（live savevm 在 WHPX 下不可用）。
+ *   snapshot          none：qcow2 overlay 快照还没接（live savevm 在 WHPX 下不可用）；
+ *   evidence          **none**：没有 UIA（读不到控件值），也没有按窗口截图（只有整屏像素）。
+ *                     像素动作之后我们没有任何精确读回，`confirmed` / `suspected_noop`
+ *                     在这里永远不可能为真——工具层据此降级成 unverifiable，并让模型点完
+ *                     自己用 computer_screenshot 看一眼。**不要为了好看改成 window**：
+ *                     声明得比实现高就是伪造证据。
  */
 export const QEMU_CAPABILITIES: SandboxCapabilities = {
   gui: true,
@@ -75,6 +80,7 @@ export const QEMU_CAPABILITIES: SandboxCapabilities = {
   screenshot: true,
   windows: false,
   uia: false,
+  evidence: "none",
   cdp: false,
   sandboxFiles: false,
   desktopScope: "shared",

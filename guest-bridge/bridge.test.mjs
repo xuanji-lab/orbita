@@ -139,7 +139,7 @@ test(
       const infoPath = path.join(outDir, "bridge.json");
       assert.ok(await waitForFile(infoPath), `桥应在超时前写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      assert.equal(info.version, "0.14.0");
+      assert.equal(info.version, "0.15.0");
       assert.ok(Number.isInteger(info.pid) && info.pid > 0, "bridge.json 应带 pid");
       // 0.8.0 起通告 TCP 通道（宿主优先走它）：端口由系统分配、令牌 32 位十六进制
       assert.ok(Number.isInteger(info.port) && info.port > 0, "bridge.json 应带 TCP 端口");
@@ -818,6 +818,82 @@ test("像素输入回执：成功=dispatched、失败=failed，且 ok 保留（�
   }
   const failedReceipts = src.match(/\\"delivery\\":\\"failed\\"/g) ?? [];
   assert.ok(failedReceipts.length >= 8, `明确失败都要报 failed，实际只有 ${failedReceipts.length} 处`);
+});
+
+// ── 注入证据（0.15.0）：setValue 读回 + SendInput partial ──────────────────
+//
+// 这两条都需要真桌面才能端到端验（一个要 UIA 读回，一个要 SendInput 真的只插一半），
+// 在宿主上注入是红线。所以能在这里钉住的是：规划/判定这些纯函数（--selftest-input /
+// --selftest-uia）、以及「源码里真的接上了」这几条结构断言。
+
+test(
+  "像素注入 partial 规划 selftest：卡住的键 / 按钮、反序补发、文案上限（不注入、不碰桌面）",
+  { skip: !isWindows && "仅在 Windows 上运行", timeout: 60_000 },
+  () => {
+    const r = spawnSync(exePath, ["--selftest-input"], { encoding: "utf8", windowsHide: true, timeout: 45_000 });
+    assert.equal(r.status, 0, `selftest 应成功退出\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    const parsed = JSON.parse((r.stdout ?? "").trim().split(/\r?\n/).filter((line) => line.length > 0).pop());
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    assert.ok(parsed.cases >= 20, `规划用例应成规模，实际 ${parsed.cases}`);
+  },
+);
+
+test("partial 的产出路径在源码里真的接上了（SendInput 少送几个 → 补发松开 + partial 回执）", () => {
+  const src = fs.readFileSync(path.join(scriptDir, "Program.cs"), "utf8");
+  // 少了几个不再直接抛失败：只有「一个都没插入」才是 refuse
+  assert.match(src, /if \(sent == 0\)/, "只有插入数 0 才当失败");
+  assert.doesNotMatch(src, /sent != \(uint\)inputs\.Length/, "少送几个不能再直接抛成 failed");
+  // 补发松开的规划与发送都是真调用（不是只定义了函数）
+  const plans = src.match(/PlanStuckReleases\(/g) ?? [];
+  assert.ok(plans.length >= 5, `四条命令 + 定义本身都要走规划，实际 ${plans.length} 处`);
+  const releases = src.match(/ReleaseStuckInputs\(/g) ?? [];
+  assert.ok(releases.length >= 5, `四条命令都要真补发松开，实际 ${releases.length} 处`);
+  // partial 回执带人话与 released（补发失败不假装成功）
+  assert.ok(src.includes('\\"delivery\\":\\"partial\\"'), "partial 要作为回执字面量出现");
+  assert.ok(src.includes('\\"released\\":'), "回执要说清补发松开成没成");
+  assert.match(src, /PartialNote\(/, "差几个事件 / 补松开了哪些要有一句人话");
+  assert.ok(src.includes(" 等 ") && src.includes(" 个"), "超过 5 个键名只报数量");
+  // 测试缝 forceInsertCount：四条像素命令都只经 SendInputsFirst 截短，且**不重写 batch**——
+  // 重写过一次（真机 2026-11-22：key 先把 batch 换成切片再比 sent < batch.Length，
+  // partial 永远不触发），这里把它钉住：比较必须对着请求的那一批。
+  const forced = src.match(/SendInputsFirst\(/g) ?? [];
+  assert.ok(forced.length >= 5, `四道命令 + 定义本身都要走 SendInputsFirst，实际 ${forced.length} 处`);
+  assert.doesNotMatch(src, /batch = SliceBatch\(/, "截短不能重写 batch（否则 partial 的比较失效）");
+  // 只有 --test-hooks 的桥认这个字段
+  assert.match(src, /if \(!WorkerHost\.TestHooks\) return 0;/, "测试缝必须先判 --test-hooks");
+});
+
+test("uia-act setValue 的读回证据在源码里真的接上了（两种读回 + 密码框不带值）", () => {
+  const uia = fs.readFileSync(path.join(scriptDir, "Uia.cs"), "utf8");
+  // 两条读回通道都在，且有先后（ValuePattern 优先）
+  assert.match(uia, /SlotValueCurrentValue/, "ValuePattern.Current.Value 是主路径");
+  assert.ok(
+    uia.indexOf("SlotValueCurrentValue") < uia.indexOf("SlotTextRangeGetText"),
+    "ValuePattern 先试，TextPattern 是退路",
+  );
+  assert.match(uia, /TextPatternId = 10014/);
+  // 判定必须在 setValue 分支里、且把 evidence 写进回执
+  assert.ok(uia.indexOf('if (action == "setValue")') < uia.indexOf("ReadCurrentValue(target"), "读回发生在 setValue 之后");
+  assert.ok(uia.includes('\\"evidence\\":{\\"kind\\":\\"value\\"'), "回执里的 evidence 形状与宿主契约对齐");
+  // 三档都接：confirmed / suspected_noop / unverifiable
+  assert.match(uia, /\"confirmed\"/);
+  assert.match(uia, /\"suspected_noop\"/);
+  assert.match(uia, /\"unverifiable\"/);
+  // 密码框只写一致/不一致，值本身绝不进证据
+  assert.match(uia, /密码框：读回值与期望一致/);
+  assert.match(uia, /密码框：读回值与期望不一致/);
+  const verdict = uia.slice(
+    uia.indexOf("internal static ReadbackVerdict JudgeSetValueReadback"),
+    uia.indexOf("private static bool ReadbackMatches"),
+  );
+  // 密码框分支必须**在拼 detail 之前返回**，且那里一个值都不引用（只写一致/不一致）
+  const secretBranch = verdict.slice(verdict.indexOf("if (isPassword)"), verdict.indexOf("string where ="));
+  assert.ok(secretBranch.length > 0, "密码框分支要单独一段");
+  assert.ok(secretBranch.indexOf("QuoteForDetail") < 0, "密码框分支里不能拼值（会写进 evidence）");
+  assert.ok(secretBranch.indexOf("actual") < 0, "密码框分支里不能碰读回值");
+  // detail 不塞超长文本
+  assert.match(uia, /EvidenceDetailMax = 200/);
+  assert.match(uia, /已截断/);
 });
 
 // ── launch 路径闸门的纯函数自测（--selftest-launch）────────────────────────────

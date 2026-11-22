@@ -15,6 +15,7 @@ import { deflateSync } from "node:zlib";
 import { computerUseGuestCommands, COMPUTER_USE_DESKTOP_KEY } from "../../shared/computer-use.ts";
 import { SANDBOX_NOT_RUNNING } from "./provider.ts";
 import { QEMU_CAPABILITIES, QEMU_REFUSALS, QemuSandboxProvider } from "./qemu.ts";
+import { qemuAccelSpec } from "./qemu-vm.ts";
 import type { QemuVmHandle, QemuVmOptions, QemuVmPorts } from "./qemu-vm.ts";
 
 const CRC_TABLE = (() => {
@@ -304,5 +305,41 @@ describe("QemuSandboxProvider：L3 的命令映射与能力降级", () => {
     assert.equal(provider.desktopKey("session-a"), COMPUTER_USE_DESKTOP_KEY);
     assert.equal(provider.desktopKey("session-b"), COMPUTER_USE_DESKTOP_KEY);
     assert.equal(provider.capabilities.desktopScope, "shared");
+  });
+});
+
+/**
+ * 能力声明里的 evidence（证据级别）——**必须与实现同源**。
+ * L3 的 Linux 桌面没有 UIA（读不到控件值）、也没有按窗口截图（只有整屏像素），
+ * 所以像素动作之后我们没有任何精确读回：evidence 必须是 none。
+ * 工具层据此永不出 confirmed / suspected_noop，并让模型点完自己截图确认。
+ * 这个值是 P0-4 的前提，**不要为了好看改成 window**。
+ */
+describe("能力声明：证据级别与实现同源（L3 / QEMU Linux 桌面）", () => {
+  it("没有 UIA、没有按窗口截图 ⇒ evidence 必须是 none", () => {
+    assert.equal(QEMU_CAPABILITIES.uia, false);
+    assert.equal(QEMU_CAPABILITIES.windows, false);
+    assert.equal(QEMU_CAPABILITIES.evidence, "none");
+    // provider.ts 的一致性规则：uia ⇒ value；否则 windows ⇒ window；否则 none
+    const implied = QEMU_CAPABILITIES.uia ? "value" : QEMU_CAPABILITIES.windows ? "window" : "none";
+    assert.equal(QEMU_CAPABILITIES.evidence, implied, "声明得比实现高就是伪造证据");
+  });
+});
+
+/**
+ * 起 VM 的加速器串：`kernel-irqchip=off` 是**实测**换来的（x86_64 + WHPX 上 MSI 注入失败
+ * 从 1 行降到 0 行、桌面照常可用），所以钉死具体字符串——顺手改成 `-cpu` 属性、或把属性
+ * 写到别的 accel 上，都会在真机上悄悄失效而测试不一定看得出来。
+ * 同时钉住「其它 arch / accel 不加」：加宽条件会改变别人的命令行语义。
+ */
+describe("QEMU 加速器参数：只给 x86_64 + WHPX 关内核 irqchip", () => {
+  it("x86_64 + whpx ⇒ kernel-irqchip=off", () => {
+    assert.equal(qemuAccelSpec("x64", "whpx"), "whpx,kernel-irqchip=off");
+  });
+
+  it("其它架构 / 其它加速器一律保持原样", () => {
+    assert.equal(qemuAccelSpec("arm64", "whpx"), "whpx");
+    assert.equal(qemuAccelSpec("x64", "hvf"), "hvf");
+    assert.equal(qemuAccelSpec("ia32", "whpx"), "whpx");
   });
 });

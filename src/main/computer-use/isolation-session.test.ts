@@ -17,6 +17,7 @@ import {
   computerUseIsolationErrors,
 } from "../../shared/computer-use.ts";
 import {
+  ISOLATION_SESSION_CAPABILITIES,
   IsolationSessionController,
   renderLauncherCmd,
   workspaceLayout,
@@ -367,7 +368,7 @@ describe("IsolationSessionController", () => {
     assert.equal(harness.controller.status().state, "error");
   });
 
-  it("像素输入四命令一律拒，且带 failed（不静默成功）", async () => {
+  it("像素输入四命令一律拒，且带 refused（不静默成功）", async () => {
     const harness = await makeHarness();
     // 没在跑也要拒：这条结论由档位决定，与运行状态无关
     for (const command of [
@@ -379,7 +380,7 @@ describe("IsolationSessionController", () => {
       const reply = await harness.controller.guestCommand(command, { x: 1, y: 1, text: "a" });
       assert.equal(reply.ok, false);
       assert.equal(reply.ok === false ? reply.error : "", computerUseIsolationErrors.noPointer);
-      assert.equal(reply.ok === false ? reply.delivery : null, "failed");
+      assert.equal(reply.ok === false ? reply.delivery : null, "refused");
     }
     // 一条都没发到桥上（真发出去在 RDP 会话里会「成功」而光标不动）
     assert.deepEqual(harness.bridge.commands, []);
@@ -436,5 +437,26 @@ describe("IsolationSessionController", () => {
     assert.equal(info.port, harness.bridge.port);
     // 启动链里我们自己写的 launcher 内容可复核（MXC 只看到文件名，内容全在这里）
     assert.match(readFileSync(layout.launcher, "utf8"), /--out-dir/);
+  });
+});
+
+/**
+ * 能力声明里的 evidence（证据级别）——**必须与实现同源**。
+ * L2b 没有真实指针，但 E2 实测跨进程 UIA 树可用（Invoke / SetValue 都走通了），
+ * 所以它确实能读回控件值：evidence 是 value，不是 none。两件事别混：
+ * 「指针能不能落桌面」讲的是输入，`evidence` 讲的是读回。
+ */
+describe("能力声明：证据级别与实现同源（L2b / MXC 隔离会话）", () => {
+  it("有 UIA 控件树 ⇒ evidence 必须是 value（没有真实指针不影响这一项）", () => {
+    assert.equal(ISOLATION_SESSION_CAPABILITIES.uia, true);
+    assert.equal(ISOLATION_SESSION_CAPABILITIES.realPointer, false);
+    assert.equal(ISOLATION_SESSION_CAPABILITIES.evidence, "value");
+    // provider.ts 的一致性规则：uia ⇒ value；否则 windows ⇒ window；否则 none
+    const implied = ISOLATION_SESSION_CAPABILITIES.uia
+      ? "value"
+      : ISOLATION_SESSION_CAPABILITIES.windows
+        ? "window"
+        : "none";
+    assert.equal(ISOLATION_SESSION_CAPABILITIES.evidence, implied, "声明得比实现高就是伪造证据");
   });
 });

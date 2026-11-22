@@ -11,9 +11,11 @@ import assert from "node:assert/strict";
 import {
   COMPUTER_USE_ADMISSION_VERDICTS,
   COMPUTER_USE_DEFAULT_ALLOWED_APPS,
-  COMPUTER_USE_DISPATCHED_HINT,
+  COMPUTER_USE_DELIVERIES,
+  COMPUTER_USE_DELIVERY_HINTS,
   COMPUTER_USE_MASK_CACHE_MAX_AGE_MS,
   COMPUTER_USE_SHOT_MAX_WIDTH,
+  COMPUTER_USE_NO_EVIDENCE_HINT,
   COMPUTER_USE_UIA_TIMEOUT_MS,
   captureNote,
   computerUseAudit,
@@ -26,7 +28,10 @@ import {
   normalizeGuestAppName,
   parseComputerUseAdmission,
   parseComputerUseDelivery,
+  parseComputerUseEvidence,
   screenshotPointToNative,
+  settleComputerUseDelivery,
+  type ComputerUseEvidence,
   type ComputerUseToolRequest,
   type ComputerUseCaptureInfo,
 } from "./computer-use.ts";
@@ -161,26 +166,153 @@ describe("computerUseChannels（IPC 契约真源）", () => {
   });
 });
 
-// ── 像素输入的交付语义（三档）─────────────────────────────────────────
+// ── 像素输入的交付语义（五档）─────────────────────────────────────────
 
 describe("parseComputerUseDelivery", () => {
-  test("三档各自认对：applied / dispatched / failed 原样返回", () => {
-    assert.equal(parseComputerUseDelivery("applied"), "applied");
-    assert.equal(parseComputerUseDelivery("dispatched"), "dispatched");
-    assert.equal(parseComputerUseDelivery("failed"), "failed");
-  });
-
-  test("缺字段 / 不认识的档位 / 非字符串一律 undefined（不猜，不当成成功）", () => {
-    for (const raw of [undefined, null, "", "Applied", "ok", 1, true, {}, []]) {
-      assert.equal(parseComputerUseDelivery(raw), undefined, String(raw));
+  test("五档各自认对：原样返回", () => {
+    for (const delivery of COMPUTER_USE_DELIVERIES) {
+      assert.equal(parseComputerUseDelivery(delivery), delivery);
     }
   });
 
-  test("dispatched 的口径说清楚了两件事：无法确认生效 + 不要立刻重放（先截图）", () => {
-    assert.match(COMPUTER_USE_DISPATCHED_HINT, /dispatched/);
-    assert.match(COMPUTER_USE_DISPATCHED_HINT, /no evidence it took effect/);
-    assert.match(COMPUTER_USE_DISPATCHED_HINT, /do not replay/);
-    assert.match(COMPUTER_USE_DISPATCHED_HINT, /computer_screenshot/);
+  test("老桥的三个老值归一：applied→confirmed、dispatched→unverifiable、failed→refused", () => {
+    assert.equal(parseComputerUseDelivery("applied"), "confirmed");
+    assert.equal(parseComputerUseDelivery("dispatched"), "unverifiable");
+    assert.equal(parseComputerUseDelivery("failed"), "refused");
+  });
+
+  test("缺字段 / 不认识的档位 / 非字符串一律 undefined（不猜，不当成成功）", () => {
+    for (const raw of [undefined, null, "", "Applied", "Dispatched", "ok", "possibly", 1, true, {}, []]) {
+      assert.equal(parseComputerUseDelivery(raw), undefined, String(raw));
+    }
+  });
+});
+
+describe("settleComputerUseDelivery（没有读回证据就不许说 confirmed）", () => {
+  test("confirmed 无证据 → 降级为 unverifiable（不抛错、不保留 confirmed）", () => {
+    assert.equal(settleComputerUseDelivery("confirmed"), "unverifiable");
+    assert.equal(settleComputerUseDelivery("confirmed", undefined), "unverifiable");
+  });
+
+  test("confirmed 有证据 → 保持 confirmed（四种读回都算证据）", () => {
+    const evidences: ComputerUseEvidence[] = [
+      { kind: "value", detail: 'value="已提交"' },
+      { kind: "window", detail: "title=已保存" },
+      { kind: "url", detail: "https://example.test/done" },
+      { kind: "text", detail: "保存成功" },
+    ];
+    for (const evidence of evidences) {
+      assert.equal(settleComputerUseDelivery("confirmed", evidence), "confirmed", evidence.kind);
+    }
+  });
+
+  test("其余四档原样返回（降级只针对 confirmed 这一个谎报口子）", () => {
+    for (const delivery of COMPUTER_USE_DELIVERIES) {
+      if (delivery === "confirmed") continue;
+      assert.equal(settleComputerUseDelivery(delivery), delivery);
+      assert.equal(settleComputerUseDelivery(delivery, { kind: "text", detail: "x" }), delivery);
+    }
+  });
+  test("settleComputerUseDelivery 与 evidence 是两件事：有证据也要有那一档才会放行", () => {
+    // 反方向：拿得到证据但桥说的是 unverifiable → 不得被升级成 confirmed。
+    // 这一条防的是「把『没读回』猜成『确认』」的第二种写法。
+    assert.equal(settleComputerUseDelivery("unverifiable", { kind: "value", detail: "x" }), "unverifiable");
+  });
+});
+
+describe("parseComputerUseEvidence（桥发来的证据只有四种有效形状）", () => {
+  test("四种 kind 原样收下", () => {
+    const evidences: ComputerUseEvidence[] = [
+      { kind: "value", detail: 'value="已提交"' },
+      { kind: "window", detail: "title=已保存" },
+      { kind: "url", detail: "https://example.test/done" },
+      { kind: "text", detail: "保存成功" },
+    ];
+    for (const evidence of evidences) {
+      assert.deepEqual(parseComputerUseEvidence(evidence), evidence, evidence.kind);
+    }
+  });
+
+  test("缺字段 / 不认识的 kind / 空 detail / 非对象 → undefined（当作没证据，不抛错）", () => {
+    const bad: unknown[] = [
+      undefined,
+      null,
+      "value",
+      1,
+      true,
+      [],
+      {},
+      { kind: "value" },
+      { detail: "x" },
+      { kind: "bogus", detail: "x" },
+      { kind: "value", detail: "" },
+      { kind: "value", detail: 123 },
+      { kind: "value", detail: null },
+    ];
+    for (const raw of bad) {
+      assert.equal(parseComputerUseEvidence(raw), undefined, JSON.stringify(raw));
+    }
+  });
+
+  test("不认识的额外字段不影响（桥以后加字段不用先改宿主）", () => {
+    assert.deepEqual(parseComputerUseEvidence({ kind: "value", detail: "x", extra: 1, at: 2 }), {
+      kind: "value",
+      detail: "x",
+    });
+  });
+});
+
+describe("COMPUTER_USE_DELIVERY_HINTS（五档唯一口径）", () => {
+  test("恰好五档、顺序与 COMPUTER_USE_DELIVERIES 一致、每档一句非空的话", () => {
+    assert.deepEqual(Object.keys(COMPUTER_USE_DELIVERY_HINTS), [...COMPUTER_USE_DELIVERIES]);
+    for (const delivery of COMPUTER_USE_DELIVERIES) {
+      assert.ok(COMPUTER_USE_DELIVERY_HINTS[delivery].trim().length > 0, delivery);
+    }
+  });
+
+  test("unverifiable 的口径说清两件事：先看一眼 + 不要立刻重放", () => {
+    assert.match(COMPUTER_USE_DELIVERY_HINTS.unverifiable, /先截一张图|先看一眼/);
+    assert.match(COMPUTER_USE_DELIVERY_HINTS.unverifiable, /不要立刻重放/);
+  });
+
+  test("suspected_noop 要求换做法、不原样重试；refused 允许修参数重试", () => {
+    assert.match(COMPUTER_USE_DELIVERY_HINTS.suspected_noop, /换个做法/);
+    assert.match(COMPUTER_USE_DELIVERY_HINTS.suspected_noop, /不要原样重试/);
+    assert.match(COMPUTER_USE_DELIVERY_HINTS.refused, /可以修参数后重试/);
+  });
+
+  test("不再存在「applied 这一档本刀不产出」这类与实现矛盾的说法", () => {
+    for (const delivery of COMPUTER_USE_DELIVERIES) {
+      assert.doesNotMatch(COMPUTER_USE_DELIVERY_HINTS[delivery], /本刀不产出|位置先留/);
+    }
+  });
+
+  // P1-8：上一轮这两句模型读不懂——「先截一张图」没点名工具（它不知道调哪个），
+  // 「还差什么看 evidence.detail」指向一个**模型看不见**的字段（它不在正文里）。
+  test("unverifiable 点名 computer_screenshot（只说「截一张图」模型不知道该调哪个工具）", () => {
+    assert.match(COMPUTER_USE_DELIVERY_HINTS.unverifiable, /computer_screenshot/);
+    // 工具名是它唯一能执行的指令：必须与「先看一眼」「不要立刻重放」在同一句里
+    assert.match(COMPUTER_USE_DELIVERY_HINTS.unverifiable, /先截一张图（computer_screenshot）/);
+  });
+
+  // partial 现在有真实产出路径（SendInput 只插入部分事件）。正文仍然不能引用
+  // evidence.detail（模型看不见那个字段），但必须点名 computer_screenshot 与「不要原样重放」。
+  test("partial 不说 evidence.detail，且给出下一步（先截图、别原样整条重放）", () => {
+    assert.doesNotMatch(COMPUTER_USE_DELIVERY_HINTS.partial, /evidence/);
+    assert.match(COMPUTER_USE_DELIVERY_HINTS.partial, /剩下的/);
+    assert.match(COMPUTER_USE_DELIVERY_HINTS.partial, /computer_screenshot/);
+    assert.match(COMPUTER_USE_DELIVERY_HINTS.partial, /不要原样重放/);
+  });
+
+  test("COMPUTER_USE_NO_EVIDENCE_HINT：说清「这个后端拿不到读回」且点名 computer_screenshot", () => {
+    assert.ok(COMPUTER_USE_NO_EVIDENCE_HINT.trim().length > 0);
+    assert.match(COMPUTER_USE_NO_EVIDENCE_HINT, /拿不到任何读回/);
+    assert.match(COMPUTER_USE_NO_EVIDENCE_HINT, /computer_screenshot/);
+    // 它不是五档之一：别把它塞进 COMPUTER_USE_DELIVERY_HINTS（那是**按档位**的一句话）
+    assert.equal(
+      Object.values(COMPUTER_USE_DELIVERY_HINTS).includes(COMPUTER_USE_NO_EVIDENCE_HINT.trim()),
+      false,
+    );
   });
 });
 

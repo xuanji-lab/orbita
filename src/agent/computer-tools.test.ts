@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { RequestBroker } from "./request-broker.ts";
 import { COMPUTER_USE_TOOL_NAMES, createComputerUseTools } from "./computer-tools.ts";
 import { COMPUTER_USE_READ_TOOLS } from "../shared/permission.ts";
-import { GUEST_COMMAND_TIMEOUT_MS, type ComputerUseShot, type ComputerUseToolOutcome } from "../shared/computer-use.ts";
+import { GUEST_COMMAND_TIMEOUT_MS, COMPUTER_USE_DELIVERIES, COMPUTER_USE_DELIVERY_HINTS, type ComputerUseShot, type ComputerUseToolOutcome } from "../shared/computer-use.ts";
 
 const setup = () => {
   const sent: Record<string, unknown>[] = [];
@@ -382,22 +382,39 @@ describe("computer_* 的审计载荷（details.computerUse）", () => {
 });
 
 describe("computer_* 的工具描述：交付口径写进模型读得到的地方", () => {
-  // 模型只读工具描述，不读源码、也不看 UI。`dispatched` 若不在描述里说清，它读到
-  // ok:true 就会当成「我点到了」接着往下走，或者在出错后重放同一个动作（双击 / 双份文字）。
-  test("四个像素工具都写了「已派发、无法确认生效、不要立刻重放、先截图看」", () => {
+  // 模型只读工具描述，不读源码、也不看 UI。若五档不在描述里说清，它读到 ok:true 就会当成
+  // 「我点到了」接着往下走，或者在出错后重放同一个动作（双击 / 双份文字）。
+  test("四个像素工具都从 COMPUTER_USE_DELIVERY_HINTS 取齐五档（同一句话，不是另写一套）", () => {
     const { tools } = setup();
     for (const name of ["computer_click", "computer_type", "computer_key", "computer_scroll"]) {
       const description = tools.get(name)?.description ?? "";
-      assert.match(description, /dispatched/, `${name} 应说明 dispatched 这一档`);
-      assert.match(description, /no evidence it took effect/, `${name} 应说明无法确认生效`);
-      assert.match(description, /do not replay the same action/, `${name} 应明确不要重放`);
-      assert.match(description, /computer_screenshot/, `${name} 应给出下一步：先截图`);
+      for (const tier of COMPUTER_USE_DELIVERIES) {
+        assert.ok(
+          description.includes(`${tier} = ${COMPUTER_USE_DELIVERY_HINTS[tier]}`),
+          `${name} 的 ${tier} 一档应逐字来自 shared 的 COMPUTER_USE_DELIVERY_HINTS`,
+        );
+      }
+      // 证据边界也写在描述里：截图变了 / API 成功 / 事件收到都不算证据
+      assert.match(description, /only an exact read-back/);
     }
   });
 
-  test("UIA 通道（不走 SendInput）不背这句：它的失败文案自己点名路", () => {
+  test("unverifiable 明确说「先看一眼再决定、不要立刻重放」，截图工具是核验入口", () => {
     const { tools } = setup();
-    assert.doesNotMatch(tools.get("computer_uia")?.description ?? "", /do not replay the same action/);
+    assert.match(COMPUTER_USE_DELIVERY_HINTS.unverifiable, /先截一张图/);
+    assert.match(COMPUTER_USE_DELIVERY_HINTS.unverifiable, /不要立刻重放/);
+    const screenshot = tools.get("computer_screenshot")?.description ?? "";
+    // 关系断言：截图描述里的那句话就是单一来源里那一句（不是复述）
+    assert.ok(screenshot.includes(COMPUTER_USE_DELIVERY_HINTS.unverifiable));
+    assert.match(screenshot, /This tool is how you check/);
+  });
+
+  test("UIA 通道（不走 SendInput）不背这套：它的失败文案自己点名路", () => {
+    const { tools } = setup();
+    const description = tools.get("computer_uia")?.description ?? "";
+    for (const tier of COMPUTER_USE_DELIVERIES) {
+      assert.equal(description.includes(COMPUTER_USE_DELIVERY_HINTS[tier]), false, tier);
+    }
   });
 });
 

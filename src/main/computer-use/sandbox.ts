@@ -105,7 +105,9 @@ export const COMPUTER_USE_GUEST_APP_EXE = `${GUEST_APP_SANDBOX_FOLDER}\\orbita.e
  * L2（WSB）的能力声明 —— 全部取自这个后端已经在做的事，不是计划：
  *   - 真桌面 + 真指针：WSB 是一个 RDP 形态的完整桌面，`SendInput` 落得下去（P1 起就在用）；
  *   - 上传/下载能走：`out` 目录是双向映射的，宿主与 guest 看到同一份文件；
- *   - 不能快照：实例是「杀掉即销毁」，没有可回滚的中间态（重新起 = 冷启动 20–105 秒）。
+ *   - 不能快照：实例是「杀掉即销毁」，没有可回滚的中间态（重新起 = 冷启动 20–105 秒）；
+ *   - 证据级别 `value`：桥跑在 guest 里，UIA 能读控件值（uia-list / uia-act 就在用它），
+ *     所以 `confirmed` 在这里是真能拿到的，不是理论值。
  */
 export const WSB_CAPABILITIES: SandboxCapabilities = {
   gui: true,
@@ -113,6 +115,7 @@ export const WSB_CAPABILITIES: SandboxCapabilities = {
   screenshot: true,
   windows: true,
   uia: true,
+  evidence: "value",
   cdp: true,
   sandboxFiles: true,
   desktopScope: "shared",
@@ -885,11 +888,27 @@ export class SandboxController {
     // UIA 直接对控件动作（不按坐标），但目标窗口是同一个问题：它属于谁？同样的准入素材。
     fields["allowExe"] = await this.guestAllowExe();
     try {
-      const reply = await fetchGuestUiaAct(this.outDir(), fields);
+      const reply = await fetchGuestUiaAct(this.outDir(), fields, this.deps.guestTimeoutMs);
       return { ok: true, ...reply };
     } catch (cause: unknown) {
-      return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
+      return this.rejectedUiaAct(cause);
     }
+  }
+
+  /**
+   * uia-act 的失败回执。**桥回了 `ok:false` 就能断定是 `refused`**：那一下是桥自己说的
+   * 「这次没做成」（参数不合法 / 控件没有这个模式 / 窗口已经不在了 / 模式调用报 E_FAIL），
+   * 不是「不知道」——所以桥没带 `delivery` 时补 `refused`，否则模型会把「确定没发生」
+   * 当成「可能已经发生」，白白先截图一轮（2026-11-22 真机：三条拒绝都是裸错误）。
+   *
+   * 超时 / 响应畸形（`GuestCommandRejected` 之外）**不带档位**：跨进程 UIA 调用可能已经
+   * 落下去，只是回执没回来，断言 `refused` 会让模型放心重试一个其实已经生效的动作。
+   */
+  private rejectedUiaAct(cause: unknown): { ok: false; error: string; delivery?: ComputerUseDelivery } {
+    if (cause instanceof GuestCommandRejected) {
+      return { ok: false, error: cause.message, delivery: cause.delivery ?? "refused" };
+    }
+    return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
   }
 
   /**
@@ -897,7 +916,7 @@ export class SandboxController {
    * 闸门与 screenshot 同一处：只有 running 才发得出去——没在跑时命令会石沉大海（上一局的
    * out/cmd 已被清空），等 45 秒超时再报错对模型毫无信息量。
    *
-   * **回执载荷要带上**：像素输入的成功只意味着「事件已入队」（delivery=dispatched），
+   * **回执载荷要带上**：像素输入的成功只意味着「事件已入队」（`unverifiable`），
    * 不是「已生效」——那一档由桥写在 resp.delivery 里，这一层不能替它猜（见
    * shared/computer-use.ts 的 ComputerUseDelivery）。
    * 回执只有成/败：这些命令的语义就是「事件已送出」，屏幕变成什么样要看下一张截图。
@@ -959,9 +978,9 @@ export class SandboxController {
   }
 
   /**
-   * 下发失败 → 回执。桥说了 `delivery` 就原样带出（`failed` = 确定没做成）：
+   * 下发失败 → 回执。桥说了 `delivery` 就原样带出（`refused` = 确定没发出去）：
    * 超时 / 桥没响应时不带那一档——那时我们真的不知道那一下有没有生效，
-   * 说成 `failed` 会让模型放心重试，而它可能已经点下去了。
+   * 说成 `refused` 会让模型放心重试，而它可能已经点下去了。
    */
   private rejected(cause: unknown): { ok: false; error: string; delivery?: ComputerUseDelivery } {
     const delivery = cause instanceof GuestCommandRejected ? cause.delivery : undefined;

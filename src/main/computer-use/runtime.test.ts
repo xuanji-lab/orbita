@@ -45,6 +45,8 @@ function fakeController(name: "wsb" | "iso", state: SandboxState = "off") {
       screenshot: true,
       windows: true,
       uia: true,
+      // uia: true ⇒ evidence 必须是 "value"（provider.ts 的一致性规则，真值在三个后端里）
+      evidence: "value",
       cdp: true,
       sandboxFiles: name === "wsb",
       desktopScope: name === "wsb" ? "shared" : "per-session",

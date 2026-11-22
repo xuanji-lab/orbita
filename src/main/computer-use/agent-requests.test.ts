@@ -9,6 +9,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { applyComputerUseRequest, type ComputerUseGuest } from "./agent-requests.ts";
+import { COMPUTER_USE_DELIVERY_HINTS, COMPUTER_USE_NO_EVIDENCE_HINT } from "../../shared/computer-use.ts";
 import type {
   ComputerUseGuestCommand,
   ComputerUseScreenshotResult,
@@ -19,6 +20,8 @@ import type {
   ComputerUseWindowShotResult,
 } from "../../shared/computer-use.ts";
 import type { GuestCommandReply } from "./sandbox.ts";
+import type { SandboxCapabilities } from "./provider.ts";
+import { QEMU_CAPABILITIES } from "./qemu.ts";
 
 interface WindowShotFields {
   hwnd?: number;
@@ -82,7 +85,7 @@ function fakeGuest(options: {
     async guestCommand(command, fields): Promise<GuestCommandReply> {
       if (options.throwOn === "command") throw new Error("文件协议炸了");
       calls.commands.push({ command, fields });
-      return options.commandResult ?? { ok: true, resp: { ok: true, delivery: "dispatched" } };
+      return options.commandResult ?? { ok: true, resp: { ok: true, delivery: "unverifiable" } };
     },
     async windowShot(fields): Promise<ComputerUseWindowShotResult> {
       calls.windowShots.push(fields);
@@ -261,7 +264,7 @@ describe("applyComputerUseRequest", () => {
       assert.match(outcome.text, /"admission":"bypassed","targetExe":"notepad.exe"/);
       assert.match(outcome.text, /only observes and logs it/);
       // 原有那句不能丢：模型仍要知道「去看一张图」
-      assert.match(outcome.text, /computer_screenshot/);
+      assert.ok(outcome.text.includes(COMPUTER_USE_DELIVERY_HINTS.unverifiable));
     }
 
     const owned = fakeGuest({
@@ -284,45 +287,64 @@ describe("applyComputerUseRequest", () => {
     assert.deepEqual(outcome, { ok: false, error: "不认识的按键名：hyper" });
   });
 
-  test("交付三档：dispatched 带「不要重放」，applied 带生效证据，failed 原样带出", async () => {
-    // dispatched：SendInput 成功入队但无法确认生效——**模型不许重放**
+  test("交付五档：老桥 dispatched→unverifiable，applied 无证据被降级，failed→refused", async () => {
+    // 老桥 dispatched：归一成 unverifiable——**模型不许重放**
     const dispatched = fakeGuest({ commandResult: { ok: true, resp: { ok: true, delivery: "dispatched" } } });
     const dispatchedOutcome = await run(dispatched.guest, { action: "click", x: 10, y: 20 });
-    assert.equal(dispatchedOutcome.ok && dispatchedOutcome.delivery, "dispatched");
+    assert.equal(dispatchedOutcome.ok && dispatchedOutcome.delivery, "unverifiable");
     if (dispatchedOutcome.ok) {
-      assert.match(dispatchedOutcome.text, /do not replay the same action/);
-      assert.match(dispatchedOutcome.text, /computer_screenshot/);
+      // 关系断言：回执正文里那句话 === 单一来源里的那一句
+      assert.ok(dispatchedOutcome.text.includes(COMPUTER_USE_DELIVERY_HINTS.unverifiable));
+      assert.match(dispatchedOutcome.text, /先截一张图/);
+      assert.match(dispatchedOutcome.text, /不要立刻重放/);
     }
 
-    // applied：有生效证据，就不该再说「无法确认」
+    // 新值 unverifiable：与老值落同一档，回执逐字一致
+    const current = fakeGuest({ commandResult: { ok: true, resp: { ok: true, delivery: "unverifiable" } } });
+    const currentOutcome = await run(current.guest, { action: "click", x: 10, y: 20 });
+    assert.equal(currentOutcome.ok && currentOutcome.delivery, "unverifiable");
+    if (dispatchedOutcome.ok && currentOutcome.ok) {
+      assert.equal(currentOutcome.text, dispatchedOutcome.text);
+    }
+
+    // 老桥 applied：parse 归一成 confirmed，但回执里**没有读回证据** → 工具层必须降级为
+    // unverifiable。这正是这次要消灭的谎报：不许凭桥的一句话对模型说「已确认生效」。
     const applied = fakeGuest({ commandResult: { ok: true, resp: { ok: true, delivery: "applied" } } });
     const appliedOutcome = await run(applied.guest, { action: "type", text: "x" });
-    assert.equal(appliedOutcome.ok && appliedOutcome.delivery, "applied");
+    assert.equal(appliedOutcome.ok && appliedOutcome.delivery, "unverifiable");
     if (appliedOutcome.ok) {
-      assert.match(appliedOutcome.text, /confirmed to have taken effect/);
-      assert.doesNotMatch(appliedOutcome.text, /do not replay/);
+      assert.ok(appliedOutcome.text.includes(COMPUTER_USE_DELIVERY_HINTS.unverifiable));
+      assert.doesNotMatch(appliedOutcome.text, /动作已经生效/);
     }
 
-    // 老桥 / 桥没说 / 不认识的档位：一律按「已派发、未验证」——像素命令拿到 ok 回执
+    // 老桥 / 桥没说 / 不认识的档位：一律按「已发出、未验证」——像素命令拿到 ok 回执
     // 本来就只能说明事件入了队（不能凭缺失就把「未验证」升级成「已生效」）
     for (const resp of [{ ok: true }, { ok: true, delivery: "possibly" }]) {
       const silent = fakeGuest({ commandResult: { ok: true, resp } });
       const outcome = await run(silent.guest, { action: "key", key: "enter" });
-      assert.equal(outcome.ok && outcome.delivery, "dispatched");
+      assert.equal(outcome.ok && outcome.delivery, "unverifiable");
     }
 
-    // failed：桥明确拒绝（「确定没做成」，可以放心重试）
-    const failed = fakeGuest({
-      commandResult: { ok: false, error: "button 只能是 left / right / middle，收到：wheel", delivery: "failed" },
+    // failed：桥明确拒绝（refused = 确定没发出去，可以放心修参数重试）。
+    // 老桥发的 "failed" 在 bridge-client 就归一成 refused 了（sandbox.test.ts 验那一跳），
+    // GuestCommandReply.delivery 上永远不会出现老值。
+    const refusedFirst = fakeGuest({
+      commandResult: { ok: false, error: "button 只能是 left / right / middle，收到：wheel", delivery: "refused" },
     });
-    const failedOutcome = await run(failed.guest, { action: "click", x: 1, y: 2 });
-    assert.deepEqual(failedOutcome, {
+    const refusedOutcome = await run(refusedFirst.guest, { action: "click", x: 1, y: 2 });
+    assert.deepEqual(refusedOutcome, {
       ok: false,
       error: "button 只能是 left / right / middle，收到：wheel",
-      delivery: "failed",
+      delivery: "refused",
     });
 
-    // 超时 / 沙箱没在跑：没有那一档——「不知道成没成」不能写成 failed（会鼓励重放）
+    // 同一档再跑一次：回执逐字一致（这一层没有随调用累积的隐藏状态）
+    const refused = fakeGuest({
+      commandResult: { ok: false, error: "button 只能是 left / right / middle，收到：wheel", delivery: "refused" },
+    });
+    assert.deepEqual(await run(refused.guest, { action: "click", x: 1, y: 2 }), refusedOutcome);
+
+    // 超时 / 沙箱没在跑：没有那一档——「不知道成没成」不能写成 refused（会鼓励重放）
     const unknown = fakeGuest({ commandResult: { ok: false, error: "沙箱里的桌面没有响应（click 超时 45s）" } });
     const unknownOutcome = await run(unknown.guest, { action: "click", x: 3, y: 4 });
     assert.equal(unknownOutcome.ok, false);
@@ -694,10 +716,63 @@ describe("applyComputerUseRequest：UIA 车道（uia-list / uia-act，桥 0.10.0
 
   test("uia-act 失败：不支持模式的文案（点名支持什么 + 像素退路）原话带出", async () => {
     const human = "这个控件不支持 invoke（edit，它支持：value）。改用 computer_click / computer_type 的像素路径";
-    const { guest } = fakeGuest({ uiaAct: { ok: false, error: human } });
+    const { guest } = fakeGuest({ uiaAct: { ok: false, error: human, delivery: "refused" } });
     assert.deepEqual(await run(guest, { action: "uia-act", window: 1, ref: "g1:r3", perform: "invoke" }), {
       ok: false,
       error: human,
+      delivery: "refused",
+    });
+  });
+
+  // 桥回了 ok:false = 确定的拒绝（参数不合法 / 控件没有这个模式 / 窗口不在 / E_FAIL），
+  // 都是「动作没有发生」。控制器层已经在 GuestCommandRejected 那里补上了 refused
+  // （sandbox.ts 的 rejectedUiaAct）；这一层只负责把它交给模型并过后端闸门。
+  // 超时那条**没有档位**：那时我们不知道跨进程的 UIA 调用有没有落下，不能替它断言。
+  describe("uia-act 的明确拒绝（refused）与超时（不猜档位）", () => {
+    const rejections: readonly { what: string; error: string }[] = [
+      {
+        what: "控件不支持这个模式",
+        error:
+          "这个控件不支持 setValue（text，它支持：没有任何本车道可用的模式）。" +
+          "改用 computer_click / computer_type 的像素路径，或者先用 computer_screenshot 看一眼它现在的位置。",
+      },
+      {
+        what: "UIA 调用自己报 E_FAIL",
+        error: "UIA 动作 setValue 失败（HRESULT 0x80004005）——先用 computer_screenshot 看一眼，必要时改用像素路径。",
+      },
+      { what: "窗口已经不在了", error: "这个窗口已经不在了（hwnd 196974）——先用 win-list 看现在有哪些窗口" },
+    ];
+
+    for (const { what, error } of rejections) {
+      test(`${what} → delivery:"refused"，桥的人话一个字不改`, async () => {
+        const { guest } = fakeGuest({ uiaAct: { ok: false, error, delivery: "refused" } });
+        assert.deepEqual(await run(guest, { action: "uia-act", window: 1, ref: "g1:r1", perform: "setValue" }), {
+          ok: false,
+          error,
+          delivery: "refused",
+        });
+      });
+    }
+
+    test("超时（控制器层没有档位）→ 回执里没有 delivery，绝不补成 refused", async () => {
+      // 生产里这一条来自 sandbox.ts 的普通 catch：命令没回应，谁也不知道模式调用有没有落下去。
+      const timeout = "沙箱里的桌面没有响应（uia-act 超时 45s）——也许是沙箱卡住了或正在重置";
+      const { guest } = fakeGuest({ uiaAct: { ok: false, error: timeout } });
+      assert.deepEqual(await run(guest, { action: "uia-act", window: 1, ref: "g1:r1", perform: "invoke" }), {
+        ok: false,
+        error: timeout,
+      });
+    });
+
+    test("后端声明拿不到读回也不动 refused（它是「确定没做」，不是证据档）", async () => {
+      const { guest } = fakeGuest({ uiaAct: { ok: false, error: "这个窗口已经不在了", delivery: "refused" } });
+      const outcome = await applyComputerUseRequest(
+        guest,
+        "s1",
+        { action: "uia-act", window: 1, ref: "g1:r1", perform: "invoke" },
+        { ...QEMU_CAPABILITIES, evidence: "none" },
+      );
+      assert.deepEqual(outcome, { ok: false, error: "这个窗口已经不在了", delivery: "refused" });
     });
   });
 });
@@ -894,5 +969,361 @@ describe("applyComputerUseRequest：密码框遮罩（桥 0.12.0）", () => {
     assert.match(outcome.text, /1 input field\(s\) but no password field was recognised/);
     assert.match(outcome.text, /control tree may still be growing/);
     assert.doesNotMatch(outcome.text, /password field\(s\) are in this window/);
+  });
+});
+
+/**
+ * 后端能力 → 交付档位的门控（P0-4）。
+ *
+ * 为什么必须有这一层：`evidence: "none"` 的后端（L3 的 Linux 桌面）没有任何精确读回，
+ * 所以 `confirmed` / `suspected_noop` 在它上面**永远不可能为真**。桥要是（现在或将来的某条
+ * 路径）说了这两档，交给模型就是谎报：它会等一个不会来的确认，或者相信「值没变」，
+ * 然后开始瞎试。松的那道闸门（settleComputerUseDelivery）只拦得住无证据的 confirmed，
+ * 拦不住 suspected_noop，也拦不住伪造出来的证据对象——所以这里按**声明**再拦一次。
+ */
+describe("applyComputerUseRequest：按后端声明的证据级别门控档位", () => {
+  // 拿真后端的能力声明当夹具：验的是「qemu 声明成什么样，工具层就怎么对待它」
+  const withEvidence = (evidence: SandboxCapabilities["evidence"]): SandboxCapabilities => ({
+    ...QEMU_CAPABILITIES,
+    evidence,
+  });
+
+  /** 带上能力声明跑一次（4 个参数那一条路） */
+  const runWith = (guest: ComputerUseGuest, request: ComputerUseToolRequest, capabilities: SandboxCapabilities | null) =>
+    applyComputerUseRequest(guest, "s1", request, capabilities);
+
+  test("evidence: none → confirmed 也降成 unverifiable，并追加「拿不到读回、点完请截图确认」", async () => {
+    const { guest } = fakeGuest({ commandResult: { ok: true, resp: { ok: true, delivery: "confirmed" } } });
+    const outcome = await runWith(guest, { action: "click", x: 10, y: 20 }, withEvidence("none"));
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.equal(outcome.delivery, "unverifiable");
+    // 单一来源：正文里那句话 === shared 的 COMPUTER_USE_NO_EVIDENCE_HINT
+    assert.ok(outcome.text.includes(COMPUTER_USE_NO_EVIDENCE_HINT));
+    assert.match(outcome.text, /拿不到任何读回/);
+    assert.match(outcome.text, /computer_screenshot/);
+    // 五档那句也在（模型仍然要知道「不要立刻重放」）
+    assert.ok(outcome.text.includes(COMPUTER_USE_DELIVERY_HINTS.unverifiable));
+    // 绝不能出现「已确认生效」
+    assert.doesNotMatch(outcome.text, /动作已经生效/);
+  });
+
+  test("evidence: none → suspected_noop 也降成 unverifiable（只靠「这次没证据」拦不住这一档）", async () => {
+    const { guest } = fakeGuest({ commandResult: { ok: true, resp: { ok: true, delivery: "suspected_noop" } } });
+    const outcome = await runWith(guest, { action: "type", text: "hi" }, withEvidence("none"));
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.equal(outcome.delivery, "unverifiable");
+    assert.ok(outcome.text.includes(COMPUTER_USE_NO_EVIDENCE_HINT));
+    assert.doesNotMatch(outcome.text, /读回的值没变/);
+  });
+
+  test("evidence: none → 其余三档不动（unverifiable 仍是 unverifiable，refused 仍是 refused）", async () => {
+    const loose = fakeGuest({ commandResult: { ok: true, resp: { ok: true, delivery: "unverifiable" } } });
+    const unverifiable = await runWith(loose.guest, { action: "key", key: "enter" }, withEvidence("none"));
+    assert.equal(unverifiable.ok, true);
+    if (unverifiable.ok) {
+      assert.equal(unverifiable.delivery, "unverifiable");
+      // refused/unverifiable 不重复追加（那句话只在能确认的档位被降级后才有信息量）——
+      // 但 unverifiable 本身也要那句：这类后端永远拿不到读回，模型不能等。
+      assert.ok(unverifiable.text.includes(COMPUTER_USE_NO_EVIDENCE_HINT));
+    }
+
+    const refused = fakeGuest({
+      commandResult: { ok: false, error: "button 只能是 left / right / middle，收到：wheel", delivery: "refused" },
+    });
+    const failed = await runWith(refused.guest, { action: "click", x: 1, y: 2 }, withEvidence("none"));
+    // 失败回执是桥的错误原话，不被这段门控改写、也不追加截图提示
+    assert.deepEqual(failed, {
+      ok: false,
+      error: "button 只能是 left / right / middle，收到：wheel",
+      delivery: "refused",
+    });
+  });
+
+  test("拿不到后端能力（null / 省略）→ 档位不变、也不追加那句话（不猜）", async () => {
+    // suspected_noop 是这里唯一能区分「降档」与「不降档」的档位：
+    // confirmed 无论有没有能力都会被「没证据」那道闸门降掉，看不出差别。
+    for (const capabilities of [null, undefined]) {
+      const { guest } = fakeGuest({ commandResult: { ok: true, resp: { ok: true, delivery: "suspected_noop" } } });
+      const outcome =
+        capabilities === undefined
+          ? await run(guest, { action: "click", x: 5, y: 6 })
+          : await runWith(guest, { action: "click", x: 5, y: 6 }, capabilities);
+      assert.equal(outcome.ok, true);
+      if (!outcome.ok) continue;
+      assert.equal(outcome.delivery, "suspected_noop", "拿不到能力不等于没有证据能力");
+      assert.equal(outcome.text.includes(COMPUTER_USE_NO_EVIDENCE_HINT), false);
+    }
+  });
+
+  test("evidence: value / window → 不降档、不追加（能读回的后端照旧）", async () => {
+    for (const evidence of ["value", "window"] as const) {
+      const { guest } = fakeGuest({ commandResult: { ok: true, resp: { ok: true, delivery: "suspected_noop" } } });
+      const outcome = await runWith(guest, { action: "scroll", x: 1, y: 2, deltaY: 1 }, withEvidence(evidence));
+      assert.equal(outcome.ok, true);
+      if (!outcome.ok) continue;
+      assert.equal(outcome.delivery, "suspected_noop", evidence);
+      assert.equal(outcome.text.includes(COMPUTER_USE_NO_EVIDENCE_HINT), false, evidence);
+    }
+  });
+
+  test("evidence: none 时失败回执里的 confirmed 也降档（失败 + 已确认生效是矛盾）", async () => {
+    const { guest } = fakeGuest({ commandResult: { ok: false, error: "桥说成功了但整体失败", delivery: "confirmed" } });
+    const outcome = await runWith(guest, { action: "click", x: 3, y: 4 }, withEvidence("none"));
+    assert.deepEqual(outcome, { ok: false, error: "桥说成功了但整体失败", delivery: "unverifiable" });
+  });
+
+  test("直接传后端控制器（不经过门面）也按它自己声明的 capabilities 门控", async () => {
+    // 后端控制器上 `capabilities` 是个属性（SandboxProvider），不是门面那个方法。
+    // 这条退路要真的通：否则换个入口就能把 suspected_noop 漏给模型
+    const { guest } = fakeGuest({ commandResult: { ok: true, resp: { ok: true, delivery: "suspected_noop" } } });
+    const declaring: ComputerUseGuest & { capabilities: SandboxCapabilities } = {
+      ...guest,
+      capabilities: QEMU_CAPABILITIES,
+    };
+    const outcome = await run(declaring, { action: "click", x: 7, y: 8 });
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.equal(outcome.delivery, "unverifiable");
+    assert.ok(outcome.text.includes(COMPUTER_USE_NO_EVIDENCE_HINT));
+  });
+});
+
+/**
+ * 回执里的 evidence → 降级闸门（上一轮验收指出的 gap）。
+ *
+ * 为什么值得单独测：桥（0.15.0）开始发证据了，但这一层以前调 settleComputerUseDelivery 时
+ * **不传 evidence**——于是每一条 confirmed 都被降成 unverifiable，桥发来的证据等于白费。
+ * 这条链路断开不会报错，只会让模型永远等不到确认。
+ */
+describe("applyComputerUseRequest：把桥的 evidence 传进降级闸门", () => {
+  const withEvidence = (level: SandboxCapabilities["evidence"]): SandboxCapabilities => ({
+    ...QEMU_CAPABILITIES,
+    evidence: level,
+  });
+
+  test("有证据 + 后端能读回 → confirmed 保留（以前这里永远是 unverifiable）", async () => {
+    const evidence = { kind: "value", detail: '期望 "hi"，读回 "hi"' };
+    const { guest } = fakeGuest({
+      commandResult: { ok: true, resp: { ok: true, delivery: "confirmed", evidence } },
+    });
+    const outcome = await applyComputerUseRequest(guest, "s1", { action: "type", text: "hi" }, withEvidence("value"));
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.equal(outcome.delivery, "confirmed");
+    assert.ok(outcome.text.includes(COMPUTER_USE_DELIVERY_HINTS.confirmed));
+  });
+
+  test("证据形状不对 / 缺字段 → 当作没有证据（confirmed 降档，但不抛错）", async () => {
+    const bad: unknown[] = [
+      undefined,
+      null,
+      "value",
+      {},
+      { kind: "value" },
+      { kind: "bogus", detail: "x" },
+      { kind: "value", detail: "" },
+      { kind: "value", detail: 42 },
+    ];
+    for (const evidence of bad) {
+      const { guest } = fakeGuest({
+        commandResult: { ok: true, resp: { ok: true, delivery: "confirmed", evidence } },
+      });
+      const outcome = await applyComputerUseRequest(
+        guest,
+        "s1",
+        { action: "click", x: 1, y: 2 },
+        withEvidence("value"),
+      );
+      assert.equal(outcome.ok, true, JSON.stringify(evidence));
+      if (!outcome.ok) continue;
+      assert.equal(outcome.delivery, "unverifiable", JSON.stringify(evidence));
+      assert.doesNotMatch(outcome.text, /动作已经生效/);
+    }
+  });
+
+  test("有证据但后端声明拿不到读回 → 仍降成 unverifiable（声明优先于证据）", async () => {
+    const evidence = { kind: "window", detail: "title=已保存" };
+    const { guest } = fakeGuest({
+      commandResult: { ok: true, resp: { ok: true, delivery: "confirmed", evidence } },
+    });
+    const outcome = await applyComputerUseRequest(guest, "s1", { action: "click", x: 1, y: 2 }, withEvidence("none"));
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.equal(outcome.delivery, "unverifiable");
+    assert.ok(outcome.text.includes(COMPUTER_USE_NO_EVIDENCE_HINT));
+  });
+});
+
+/**
+ * partial 的产出者（P1-7 的宿主一半）。
+ *
+ * 桥 0.15.0 在 SendInput 只插入部分事件时回 partial + 一句 note（差几个事件、补松开了哪些）。
+ * 这一层要做两件事：不把 partial 当成「没证据的 confirmed」（它是完成度档，不是确认档），
+ * 以及把桥那句 note 拼进模型读得到的正文——否则模型只知道「只完成了一部分」，不知道为什么。
+ */
+describe("applyComputerUseRequest：partial（桥 0.15.0 真的会发）", () => {
+  const note =
+    "SendInput 只插入了 3/9 个事件，剩下的没有送出去；已补发松开ctrl——先截图确认现在的状态，" +
+    "再决定要不要重做（不要原样重放同一个动作）。";
+
+  test("partial 原样交给模型，正文带桥的人话（差几个事件 / 补松开了谁）", async () => {
+    const { guest } = fakeGuest({
+      commandResult: {
+        ok: true,
+        resp: { ok: true, delivery: "partial", inserted: 3, requested: 9, released: true, note },
+      },
+    });
+    const outcome = await run(guest, { action: "key", key: "ctrl+a" });
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.equal(outcome.delivery, "partial");
+    assert.ok(outcome.text.includes(COMPUTER_USE_DELIVERY_HINTS.partial));
+    assert.ok(outcome.text.includes(note), "桥的 note 必须进正文（否则 partial 的原因模型看不见）");
+  });
+
+  test("partial 不被「没证据」那道闸门降档（它不是确认档）", async () => {
+    for (const resp of [
+      { ok: true, delivery: "partial" },
+      { ok: true, delivery: "partial", note },
+    ]) {
+      const { guest } = fakeGuest({ commandResult: { ok: true, resp } });
+      const outcome = await run(guest, { action: "type", text: "hi" });
+      assert.equal(outcome.ok, true);
+      if (outcome.ok) assert.equal(outcome.delivery, "partial");
+    }
+  });
+
+  test("声明拿不到读回的后端也不动 partial（它是完成度，不是证据档）", async () => {
+    const { guest } = fakeGuest({ commandResult: { ok: true, resp: { ok: true, delivery: "partial", note } } });
+    const outcome = await applyComputerUseRequest(guest, "s1", { action: "scroll", x: 1, y: 2, deltaY: 1 }, {
+      ...QEMU_CAPABILITIES,
+      evidence: "none",
+    });
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.equal(outcome.delivery, "partial");
+    assert.ok(outcome.text.includes(note));
+  });
+
+  test("没有 note 就一个字都不加（不凭空编「补松开了什么」）", async () => {
+    const { guest } = fakeGuest({ commandResult: { ok: true, resp: { ok: true, delivery: "partial" } } });
+    const outcome = await run(guest, { action: "click", x: 1, y: 2 });
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.equal(outcome.delivery, "partial");
+    assert.doesNotMatch(outcome.text, /补发/);
+    assert.doesNotMatch(outcome.text, /个事件/);
+  });
+});
+
+/**
+ * uia-act setValue 的读回证据（P0-5 的 UIA 一半）。
+ *
+ * 桥 0.15.0 在 setValue 之后读回控件当前值：相等 confirmed、不等 suspected_noop（都带
+ * evidence{kind:"value"}）；读回拿不到就 unverifiable 且**不发证据**。这一层的工作是：
+ * 把 reply 里的 delivery + evidence 过同一套闸门后交给模型，别自己发明档位。
+ */
+describe("applyComputerUseRequest：uia-act setValue 的读回档位（桥 0.15.0）", () => {
+  const setValueReply = (extra: Record<string, unknown>): ComputerUseUiaActResult => ({
+    ok: true,
+    hwnd: 9,
+    action: "setValue",
+    usedPattern: "value",
+    name: "Text editor",
+    controlType: "edit",
+    autoSetFocus: true,
+    elapsedMs: 5,
+    ...extra,
+  });
+
+  test("读回 == 期望：confirmed + 正文带「读回证据对上了」", async () => {
+    const evidence = { kind: "value" as const, detail: '期望 "hi"，读回 "hi"（ValuePattern.Current.Value）' };
+    const { guest } = fakeGuest({ uiaAct: setValueReply({ delivery: "confirmed", evidence }) });
+    const outcome = await run(guest, {
+      action: "uia-act",
+      window: 9,
+      name: "Text editor",
+      perform: "setValue",
+      value: "hi",
+    });
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.equal(outcome.delivery, "confirmed");
+    assert.ok(outcome.text.includes(COMPUTER_USE_DELIVERY_HINTS.confirmed));
+  });
+
+  test("读回 != 期望：suspected_noop 原样交给模型（换做法，不原样重试）", async () => {
+    const evidence = { kind: "value" as const, detail: '期望 "hi"，读回 "hi old"' };
+    const { guest } = fakeGuest({ uiaAct: setValueReply({ delivery: "suspected_noop", evidence }) });
+    const outcome = await run(guest, {
+      action: "uia-act",
+      window: 9,
+      name: "Text editor",
+      perform: "setValue",
+      value: "hi",
+    });
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.equal(outcome.delivery, "suspected_noop");
+    assert.ok(outcome.text.includes(COMPUTER_USE_DELIVERY_HINTS.suspected_noop));
+  });
+
+  test("桥说 confirmed 但没发证据 → 降成 unverifiable（老桥 / 伪造证据都过不去）", async () => {
+    const { guest } = fakeGuest({ uiaAct: setValueReply({ delivery: "confirmed" }) });
+    const outcome = await run(guest, {
+      action: "uia-act",
+      window: 9,
+      name: "Text editor",
+      perform: "setValue",
+      value: "hi",
+    });
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.equal(outcome.delivery, "unverifiable");
+    assert.doesNotMatch(outcome.text, /动作已经生效/);
+  });
+
+  test("读回拿不到：unverifiable、不发证据、也不猜成 suspected_noop", async () => {
+    const { guest } = fakeGuest({ uiaAct: setValueReply({ delivery: "unverifiable" }) });
+    const outcome = await run(guest, {
+      action: "uia-act",
+      window: 9,
+      name: "Text editor",
+      perform: "setValue",
+      value: "hi",
+    });
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.equal(outcome.delivery, "unverifiable");
+    assert.doesNotMatch(outcome.text, /读回的值没变/);
+  });
+
+  test("声明拿不到读回的后端：confirmed / suspected_noop 都降成 unverifiable", async () => {
+    const evidence = { kind: "value" as const, detail: '期望 "hi"，读回 "hi"' };
+    for (const delivery of ["confirmed", "suspected_noop"] as const) {
+      const { guest } = fakeGuest({ uiaAct: setValueReply({ delivery, evidence }) });
+      const outcome = await applyComputerUseRequest(
+        guest,
+        "s1",
+        { action: "uia-act", window: 9, name: "Text editor", perform: "setValue", value: "hi" },
+        QEMU_CAPABILITIES,
+      );
+      assert.equal(outcome.ok, true, delivery);
+      if (!outcome.ok) continue;
+      assert.equal(outcome.delivery, "unverifiable", delivery);
+      assert.ok(outcome.text.includes(COMPUTER_USE_NO_EVIDENCE_HINT), delivery);
+    }
+  });
+
+  test("invoke / selection 不带这一档：outcome 里没有 delivery，正文一个字都不变", async () => {
+    const { guest } = fakeGuest({});
+    const outcome = await run(guest, { action: "uia-act", window: 4321, ref: "g4:r2", perform: "invoke" });
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    assert.equal("delivery" in outcome, false);
+    assert.match(outcome.text, /^Invoked "Close"/);
+    assert.doesNotMatch(outcome.text, /读回/);
   });
 });
