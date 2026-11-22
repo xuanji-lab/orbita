@@ -32,6 +32,8 @@ import { citationIdOfHref, citationTitle, remarkCitationMarkers } from "./citati
 import { CitationOpenContext, CitationTableContext } from "./citation-context.ts";
 import { resolveChatPath, useChatFileScope, useChatImage } from "./chat-file-scope.ts";
 import { ImageLightbox } from "../../shell/ImageLightbox";
+// 提醒框（`> [!note]`）的样式 = 文档面板阅读视图那一份（`.chat-md .callout`），回答里与文档里长一个样
+import "../doc-panel/doc-panel.css";
 
 /**
  * assistant 文本块的 markdown 渲染（设计系统 *AssistantText*：读起来像文档，不是聊天记录）。
