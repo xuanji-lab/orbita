@@ -90,7 +90,9 @@ export function createImageTools(cwd: string): ToolDefinition[] {
       "folder, generated files, anything the user should look at with their own eyes. Pass 1-6 image file " +
       "paths; they render as a gallery card in the chat. You also receive the images yourself (on vision " +
       "models), so you can keep talking about them. Reading an image for yourself only (user does not " +
-      "need to see it) is the read tool's job — do not call show_image for that.",
+      "need to see it) is the read tool's job — do not call show_image for that. " +
+      "When you explain a picture in your reply, embed it in your final answer instead (a markdown image on its own line, " +
+      "then the paragraph about it), so the picture sits next to its explanation; use show_image when the pictures have nothing to go with them.",
     parameters: {
       type: "object",
       properties: {

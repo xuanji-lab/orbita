@@ -25,16 +25,29 @@ const CONCISE_LINE = "- Be concise in your responses";
 const CONCISE_LINE_REPLACEMENT = "- Be concise in your final answers.";
 
 /**
- * 进度说明段 + 回复语言（2026-10-12 用户裁决：正文跟随用户当前使用的语言）。
+ * 进度说明段（2026-10-12 起；2026-11-22 改写）。**用英文写**：段落语言会把模型往那门语言带，
+ * 回复语言另由 REPLY_LANGUAGE_GUIDELINE 管。prompt-narration.test.ts 锚定全文。
  *
- * **用英文写**：上一版是中文段落，提示词本身的语言会把模型往中文带——英文提问也回中文。
- * 段落语言中立化后，再明说「跟随用户最近一条消息的语言」，进度说明与最终答复都算。
- * prompt-narration.test.ts 锚定全文。
+ * 2026-11-22 改写的缘由（用户讨论「最后一公里 · 文档与演示文稿」）：
+ * - 界面变了：一轮只分「过程」和「产物」两处。中途写的话会收进那一行过程里，当这一段的名字；
+ *   用户看得到的是结尾回答、回答里的图、回答下面的产物卡。
+ * - 用户：「我真的不会去看这么多解释，而且工具调用夹在解释里面，显得工具调用非常的不重要一样」——
+ *   过程走「效率模式」：中途只写一行段名，不写段落；结论、要用户知道的决定放结尾。
+ *   旧版「每组工具调用前说一句要做什么」产出的是「我先读一下使用说明」这类流水账。
+ * - 用户：图片「没有跟文字放在一起」——给用户看的图写进结尾回答，图下面紧跟它那段解释。
+ * - 用户：「要是你每次写了啥，我能直接点开就好了」——文稿、演示文稿、导出的文件自动列在回答下面，
+ *   回答里不再贴长路径。
+ * 不做 Proma 那样的会话级「效率 / 解释」开关：旁白约占输出 token 的 1%，关掉它省不了什么；
+ * 要改的是旁白写什么。
  */
 export const PROGRESS_NARRATION_GUIDELINE =
-  "Tool calls and thinking are collapsed by default in the UI; the user only sees the text you write.\n" +
-  "Before a group of tool calls, say in one sentence what you are about to do; after each stage (research done, cause found, change made, verification done), state the outcome in one or two sentences.\n" +
-  "Do not narrate every tool call, and do not paste your thinking into the reply.\n";
+  "Your tool calls, thinking and mid-turn text are folded into one collapsed line in the UI; the user reliably sees only your final answer and the outputs listed under it.\n" +
+  "When you start a new stage of work, write one short line naming it (a few words, no paragraph), e.g. \"Checking how the cards are grouped\"; it becomes that stage's title in the folded process. " +
+  "Do not announce routine steps such as reading a file or a skill, and do not paste your thinking.\n" +
+  "Put conclusions, decisions the user should know about, and anything they must act on in the final answer.\n" +
+  "Decks, documents and exported files you made in this turn are listed as clickable cards under your answer: refer to them by name, do not paste their full paths.\n" +
+  "To show the user a picture, embed it in your final answer where you discuss it: ![short caption](</absolute/path/to/image.png>) on its own line, followed by the paragraph that explains it. " +
+  "The file must be inside the workspace, an attached directory or the session workbench.\n";
 
 /**
  * 回复语言（2026-10-12 用户裁决：正文跟随用户当前使用的语言）。单独成段、由 runtime
