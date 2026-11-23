@@ -417,3 +417,23 @@
     justify-self: start;
   }
 }
+
+/* 「星际空间」头像：一小撮碎石，墨色两档（与星系里的星屑同一种颜色语言） */
+.gd-dust {
+  display: block;
+  flex: none;
+}
+.gd-dust-rock {
+  fill: var(--color-text-tertiary);
+}
+.gd-dust-rock[data-tone="b"] {
+  fill: color-mix(in srgb, var(--color-text-tertiary) 60%, var(--color-bg-panel));
+}
+
+/* 「这一页画的是谁」：组名下一行说明，sm、三级墨（与设置行的说明同一种） */
+.gd-who {
+  margin: 0;
+  padding: 0 var(--space-3) var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}

@@ -1,4 +1,5 @@
 import type { Messages } from "./messages-en.ts";
+import { INTERSTELLAR_NAME } from "./features/chat/scope-names.ts";
 import { zhRevealLabel, zhTrashName } from "./file-manager.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import type { AutomationIntervalUnit } from "../../shared/automation.ts";
@@ -1900,6 +1901,8 @@ export const zh: Messages = {
     providersFailed: (error) => `服务商载入失败：${error}——打开设置重试。`,
     noProvider: "还没有能发消息的模型，草稿会留在这里。",
     noProviderExit: "添加服务商",
+    notSent: "这句没发出去：智能体进程在它落账前停了，已放回输入框。",
+    notSentRecovered: (n) => `上次有 ${n} 句话没发出去，已放回它出发的输入框。`,
     readOnlyTask: "这个任务记录于支持续聊之前，只能读、不能接着聊。新开一个任务继续吧。",
     noMessages: "还没有消息。发出第一条就开始了。",
     loadingOlder: "正在加载更早的消息…",
@@ -3571,7 +3574,11 @@ export const zh: Messages = {
   /** 编排形态：侧栏里的智能体行、工作区自己的 New Task 页页头 */
   agents: {
     header: "智能体",
-    home: "主目录",
+    home: INTERSTELLAR_NAME.zh,
+    homeLine: "不属于任何工作区",
+    homeAvatar: "漂着的碎石：不属于任何工作区的会话",
+    homeGalaxy: "星际空间：每颗碎石是一条会话",
+    homeEmpty: "这里还没有会话，在下面写一件事",
     /** 状态词表：侧栏智能体行与工作区页页头胶囊共用这三个词 */
     status: { running: "在跑", waiting: "等你", idle: "空闲" },
     /** 「空闲」之后接最近一件事时的前缀 */
@@ -3591,22 +3598,19 @@ export const zh: Messages = {
   },
 
   orchestra: {
-    today: "今天",
-    yesterday: "昨天",
     panelTitle: "编排",
     railLabel: "编排",
     viewLabel: "视图",
     views: { tree: "树状图", galaxy: "星系图", graph: "协作图" },
     mainRole: "主智能体",
     mainRoleLine: "接你的话、派活、收结果",
-    jobsGroup: (n) => `派出去的活 · ${n}`,
-    sessionsGroup: (n) => `这个工作区的会话 · ${n}`,
-    older: (n) => `另有 ${n} 条更早的会话没列出。`,
+    sessionsGroup: (n) => `最近的会话 · ${n}`,
     moreChildren: (n) => `另有 ${n} 条子会话`,
-    noMain: "还没有主对话。",
-    noMainHint: "在这个工作区的页面发第一句，它就开始。",
-    noJobs: "主智能体还没派出活。",
-    standIn: "顶替：持久子智能体接入之前，这一层由主对话派出去的活充当。",
+    noSessions: "这里还没有会话。",
+    noSessionsHint: "在这个页面发出的每一句都会开一条。",
+    olderGroup: (n) => `更早 · ${n}`,
+    olderFold: "收起更早的会话",
+    homeNote: "星际空间没有主智能体：这里的会话不属于任何工作区。",
     galaxyNarrow: "面板太窄，星系看不清。",
     galaxyNarrowHint: (min) => `至少要 ${min} 像素宽：切到树状图，或把面板拖宽。`,
     widen: "加宽面板",
@@ -3622,22 +3626,14 @@ export const zh: Messages = {
       noBrief: "没有任务说明记录",
       files: (n, exts) => (n === 0 ? "没有文件记录" : `${n} 个文件 · ${exts}`),
       peerPending: "子智能体之间的交接：等内核那条线接入后出现。",
-      notDispatched: (n) => `另有 ${n} 条会话不是主智能体派的，没有交接，在树状图里看。`,
+      hidden: (n) => `另有 ${n} 条会话与子会话在树状图里。`,
+      output: "产出",
       loading: "正在读交接记录…",
       demo: "看演示",
       demoOff: "收起演示",
       demoNote: "演示：编出来的交接，只为看清满载、带环的图怎么读，不是这个工作区的数据。",
       figure: (name) => `${name} 的协作图`,
     },
-    dayMenu: {
-      main: "主对话",
-      openMain: "打开主对话",
-      earlier: "更早的日子：往上翻会加载",
-      count: (n) => `${n} 句`,
-      none: "还没有主对话",
-    },
-    notMain: (title) => `你在看「${title}」，不是主对话。`,
-    backToMain: "回到主对话",
   },
 
   galaxyDesigner: {
@@ -3652,7 +3648,11 @@ export const zh: Messages = {
     elementsGroup: "元素",
     previewGroup: "预览",
     kind: "天体类型",
-    kindDesc: "主星是这座星系的主智能体，行星是绕着它转的子智能体。",
+    kindDesc: "主星就是这个工作区的主智能体本人。行星 = 子智能体，永远在绕主星的轨道上。",
+    starWho: (name) => `主星 · ${name}`,
+    starWhoLine: "这个工作区的主智能体。中心只站主星。",
+    planetWho: "行星 = 子智能体",
+    planetWhoLine: "绕着主星转，永远不站在中心；没有主星就没有行星。",
     star: "主星",
     planet: "行星",
     name: "名称",

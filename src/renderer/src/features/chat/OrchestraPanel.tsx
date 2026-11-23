@@ -1,5 +1,6 @@
 import { useContext, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import type { SessionMeta } from "@shared/session";
+import { sortChannelMessages, type ChannelKey, type ChannelMessage } from "@shared/channel";
 import type { OrchestraView } from "@shared/settings";
 import type { ArtifactSummary } from "@shared/revert";
 import { api } from "../../api";
@@ -21,7 +22,6 @@ import { starRadius } from "./galaxy.ts";
 import { scopeGalaxy, scopeSummary, stateIndexOf } from "./galaxy-data.ts";
 import { orchestraTree, type TreeNode } from "./orchestra-data.ts";
 import { collabGraph, demoCollab, layoutCollab, type CollabEdge, type CollabGraph, type CollabNode } from "./collab-graph.ts";
-import { useParentChannels } from "./useChannelMessages.ts";
 import type { ChatSession } from "./useChatSession.ts";
 import "./orchestra-panel.css";
 
@@ -45,7 +45,6 @@ export function OrchestraPanel(props: {
   session: ChatSession;
   workspaceId: string | null;
   workspaceName: string;
-  main: SessionMeta | null;
   view: OrchestraView;
   onView: (view: OrchestraView) => void;
   onOpenSession: (id: string) => void;
@@ -58,13 +57,7 @@ export function OrchestraPanel(props: {
   const to = t.orchestra;
   const states = stateIndexOf(props.session);
   const now = Date.now();
-  const tree = orchestraTree({
-    sessions: props.session.sessions,
-    workspaceId: props.workspaceId,
-    mainId: props.main?.id ?? null,
-    stateOf: states.state,
-    now,
-  });
+  const tree = orchestraTree({ sessions: props.session.sessions, workspaceId: props.workspaceId, stateOf: states.state, now });
   const summary = scopeSummary(props.session.sessions, props.workspaceId, states.state);
   return (
     <RightPanelFrame
@@ -108,9 +101,8 @@ export function OrchestraPanel(props: {
         />
       ) : (
         <GraphView
-          main={props.main}
-          jobs={tree.jobs.map((node) => node.meta)}
-          otherSessions={tree.sessions.length + tree.older}
+          session={props.session}
+          roots={[...tree.recent, ...tree.older].map((node) => node.meta)}
           name={props.workspaceName}
           workspaceId={props.workspaceId}
           stateOf={states.state}
@@ -165,43 +157,61 @@ function TreeView(props: {
   const t = useT();
   const to = t.orchestra;
   const { tree } = props;
+  const [olderOpen, setOlderOpen] = useState(false);
+  const home = props.workspaceId === null;
+  const body = (
+    <>
+      <section className="ssp-group" aria-label={to.sessionsGroup(tree.recent.length)}>
+        <header className="ssp-group-head">{to.sessionsGroup(tree.recent.length)}</header>
+        {tree.total === 0 ? (
+          <PanelEmpty icon="message-square" hint={to.noSessionsHint}>
+            {to.noSessions}
+          </PanelEmpty>
+        ) : tree.recent.length > 0 ? (
+          <div className="ssp-card">
+            {tree.recent.map((node) => (
+              <TreeRow key={node.meta.id} node={node} now={props.now} onOpen={props.onOpen} />
+            ))}
+          </div>
+        ) : null}
+      </section>
+      {tree.older.length > 0 &&
+        (olderOpen ? (
+          <section className="ssp-group" aria-label={to.olderGroup(tree.older.length)}>
+            <header className="ssp-group-head">
+              {to.olderGroup(tree.older.length)}
+              <button type="button" className="ssp-group-fold row-trailing" aria-expanded={true} aria-label={to.olderFold} title={to.olderFold} onClick={() => setOlderOpen(false)}>
+                <Icon name="chevron-up" size={14} strokeWidth={1.8} />
+              </button>
+            </header>
+            <div className="ssp-card">
+              {tree.older.map((node) => (
+                <TreeRow key={node.meta.id} node={node} now={props.now} onOpen={props.onOpen} />
+              ))}
+            </div>
+          </section>
+        ) : (
+          <button type="button" className="ssp-fold" aria-expanded={false} onClick={() => setOlderOpen(true)}>
+            <Icon name="archive" size={14} strokeWidth={1.8} className="ssp-fold-glyph" />
+            <span>{to.olderGroup(tree.older.length)}</span>
+            <Icon name="chevron-right" size={14} strokeWidth={1.8} className="row-trailing" />
+          </button>
+        ))}
+    </>
+  );
+  // 星际空间没有主智能体：没有根节点，会话直接是第一层
+  if (home) {
+    return (
+      <div className="ssp-list orch-tree" data-view="tree" data-home="true">
+        <p className="orch-note">{to.homeNote}</p>
+        {body}
+      </div>
+    );
+  }
   return (
     <div className="ssp-list orch-tree" data-view="tree">
       <MainCard workspaceId={props.workspaceId} name={props.name} status={props.status} />
-      <div className="orch-branch">
-        <section className="ssp-group" aria-label={to.jobsGroup(tree.jobs.length)}>
-          <header className="ssp-group-head">{to.jobsGroup(tree.jobs.length)}</header>
-          {tree.main === null ? (
-            <PanelEmpty icon="message-square" hint={to.noMainHint}>
-              {to.noMain}
-            </PanelEmpty>
-          ) : tree.jobs.length === 0 ? (
-            <PanelEmpty icon={FEATURE_ICON.subsessions}>{to.noJobs}</PanelEmpty>
-          ) : (
-            <div className="ssp-card">
-              {tree.jobs.map((node) => (
-                <TreeRow key={node.meta.id} node={node} now={props.now} onOpen={props.onOpen} />
-              ))}
-            </div>
-          )}
-          <p className="orch-note">{to.standIn}</p>
-        </section>
-        <section className="ssp-group" aria-label={to.sessionsGroup(tree.sessions.length)}>
-          <header className="ssp-group-head">{to.sessionsGroup(tree.sessions.length)}</header>
-          {tree.sessions.length > 0 && (
-            <div className="ssp-card">
-              {tree.sessions.map((node) => (
-                <TreeRow key={node.meta.id} node={node} now={props.now} onOpen={props.onOpen} />
-              ))}
-            </div>
-          )}
-          {tree.older > 0 && (
-            <PanelEmpty icon="archive" exit={{ label: t.agents.sessionsAll, onClick: props.onSeeAll }}>
-              {to.older(tree.older)}
-            </PanelEmpty>
-          )}
-        </section>
-      </div>
+      <div className="orch-branch">{body}</div>
     </div>
   );
 }
@@ -218,13 +228,13 @@ function TreeRow(props: { node: TreeNode; now: number; onOpen: (id: string) => v
   const { node } = props;
   const [open, setOpen] = useState(node.activeBelow);
   const title = node.meta.title.trim() === "" ? t.common.newTask : node.meta.title;
-  const kids = node.children.length + node.hiddenChildren;
+  const kids = node.children.length;
   const word = stateWord(t, node.state);
   return (
     <>
       <div className="ssp-row orch-row" data-state={node.state ?? undefined} data-depth={props.depth ?? 0}>
         <span className="orch-twisty-slot">
-          {kids > 0 && (props.depth ?? 0) === 0 && (
+          {kids > 0 && (
             <button
               type="button"
               className="orch-twisty"
@@ -252,9 +262,8 @@ function TreeRow(props: { node: TreeNode; now: number; onOpen: (id: string) => v
       {open && kids > 0 && (
         <div className="orch-kids">
           {node.children.map((child) => (
-            <TreeRow key={child.meta.id} node={child} now={props.now} onOpen={props.onOpen} depth={1} />
+            <TreeRow key={child.meta.id} node={child} now={props.now} onOpen={props.onOpen} depth={(props.depth ?? 0) + 1} />
           ))}
-          {node.hiddenChildren > 0 && (props.depth ?? 0) === 0 && <p className="orch-more">{t.orchestra.moreChildren(node.hiddenChildren)}</p>}
         </div>
       )}
     </>
@@ -336,10 +345,52 @@ function useBoxWidth(ref: RefObject<HTMLElement | null>): number | null {
   return width;
 }
 
+/**
+ * 多个父会话下的通道账本（协作图的 session ↔ 子会话边）：逐条读、先到先画；通道有新消息（事件）就补进去。
+ * 键 = 子会话 id（一个子会话只有一个父）。
+ */
+function useChannelsOf(pairs: readonly ChannelKey[]): ReadonlyMap<string, readonly ChannelMessage[]> {
+  const key = pairs.map((pair) => `${pair.parentId}>${pair.childId}`).join(",");
+  const [channels, setChannels] = useState<ReadonlyMap<string, readonly ChannelMessage[]>>(new Map());
+  useEffect(() => {
+    if (key === "") {
+      setChannels(new Map());
+      return;
+    }
+    let cancelled = false;
+    const wanted = key.split(",").map((part) => {
+      const [parentId = "", childId = ""] = part.split(">");
+      return { parentId, childId };
+    });
+    const parents = new Set(wanted.map((pair) => pair.parentId));
+    for (const pair of wanted) {
+      api.channel
+        .load(pair)
+        .then((list) => {
+          if (!cancelled) setChannels((prev) => new Map(prev).set(pair.childId, sortChannelMessages(list)));
+        })
+        .catch((cause: unknown) => console.error("[orchestra] 通道读取失败", pair, cause));
+    }
+    const off = api.channel.onEvent((event) => {
+      if (event.type !== "message" || !parents.has(event.parentId)) return;
+      setChannels((prev) => {
+        const current = prev.get(event.childId) ?? [];
+        if (current.some((m) => m.id === event.message.id)) return prev;
+        return new Map(prev).set(event.childId, sortChannelMessages([...current, event.message]));
+      });
+    });
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, [key]);
+  return channels;
+}
+
 function GraphView(props: {
-  main: SessionMeta | null;
-  jobs: readonly SessionMeta[];
-  otherSessions: number;
+  session: ChatSession;
+  /** 这个工作区的根会话（全部） */
+  roots: readonly SessionMeta[];
   name: string;
   workspaceId: string | null;
   stateOf: (meta: SessionMeta) => SessionRunState;
@@ -349,32 +400,27 @@ function GraphView(props: {
   const to = t.orchestra;
   const lang = useContext(LocaleContext);
   const [demo, setDemo] = useState(false);
-  const channels = useParentChannels(props.main?.id ?? null, props.jobs.map((meta) => meta.id));
-  const artifacts = useArtifactSummaries(props.jobs);
+  const now = Date.now();
+  // 星际空间没有主智能体：没有根节点
+  const root = props.workspaceId === null ? null : { id: `agent:${props.workspaceId}`, name: props.name, role: to.mainRoleLine };
+  const base = collabGraph({
+    root,
+    sessions: props.roots,
+    all: props.session.sessions,
+    stateOf: props.stateOf,
+    now,
+    channels: new Map(),
+    artifacts: {},
+  });
+  const pairs = base.nodes.filter((node) => node.kind === "child" && node.parent !== null).map((node) => ({ parentId: node.parent ?? "", childId: node.id }));
+  const channels = useChannelsOf(pairs);
+  const artifacts = useArtifactSummaries(props.session.sessions.filter((meta) => base.nodes.some((node) => node.id === meta.id)));
   const ref = useRef<HTMLDivElement | null>(null);
   const width = useBoxWidth(ref);
-  const graph: CollabGraph | null = useMemo(() => {
-    if (props.main === null) return null;
-    if (demo) return demoCollab(props.main.id, props.name, to.mainRoleLine, lang === "zh");
-    return collabGraph({
-      main: props.main,
-      mainName: props.name,
-      mainRole: to.mainRoleLine,
-      jobs: props.jobs,
-      stateOf: props.stateOf,
-      channels,
-      artifacts,
-    });
-  }, [props.main, props.name, props.jobs, props.stateOf, channels, artifacts, demo, lang, to.mainRoleLine]);
-  if (props.main === null || graph === null) {
-    return (
-      <div className="orch-pad">
-        <PanelEmpty icon="message-square" hint={to.noMainHint}>
-          {to.noMain}
-        </PanelEmpty>
-      </div>
-    );
-  }
+  const graph: CollabGraph = demo
+    ? demoCollab(root, lang === "zh")
+    : collabGraph({ root, sessions: props.roots, all: props.session.sessions, stateOf: props.stateOf, now, channels, artifacts });
+  const sessionCount = graph.nodes.filter((node) => node.kind === "session").length;
   return (
     <div className="orch-graph-wrap" data-view="graph" data-demo={graph.demo || undefined}>
       <div className="orch-graph-notes">
@@ -383,14 +429,18 @@ function GraphView(props: {
           {demo ? to.graph.demoOff : to.graph.demo}
         </button>
       </div>
-      <div ref={ref} className="orch-graph-host">
-        {width !== null && width > 0 && (
-          <CollabCanvas graph={graph} width={width} workspaceId={props.workspaceId} name={props.name} onOpen={graph.demo ? null : props.onOpen} />
-        )}
-      </div>
-      {!graph.demo && graph.nodes.length === 1 && <PanelEmpty icon={FEATURE_ICON.subsessions}>{to.noJobs}</PanelEmpty>}
-      {!graph.demo && graph.hidden > 0 && <p className="orch-more">{to.moreChildren(graph.hidden)}</p>}
-      {!graph.demo && props.otherSessions > 0 && <p className="orch-note">{to.graph.notDispatched(props.otherSessions)}</p>}
+      {!graph.demo && sessionCount === 0 ? (
+        <PanelEmpty icon="message-square" hint={to.noSessionsHint}>
+          {to.noSessions}
+        </PanelEmpty>
+      ) : (
+        <div ref={ref} className="orch-graph-host">
+          {width !== null && width > 0 && (
+            <CollabCanvas graph={graph} width={width} workspaceId={props.workspaceId} name={props.name} onOpen={graph.demo ? null : props.onOpen} />
+          )}
+        </div>
+      )}
+      {!graph.demo && graph.hidden > 0 && <p className="orch-note">{to.graph.hidden(graph.hidden)}</p>}
     </div>
   );
 }
@@ -404,13 +454,16 @@ function arrowHead(x: number, y: number, dir: "down" | "left" | "right" | "up"):
   return `M${f(x - s * 1.4)} ${f(y - s)}L${f(x)} ${f(y)}L${f(x - s * 1.4)} ${f(y + s)}Z`;
 }
 
-function edgeText(t: ReturnType<typeof useT>, edge: CollabEdge): { lead: string; body: string } {
+function edgeText(t: ReturnType<typeof useT>, edge: CollabEdge, toMain: boolean): { lead: string; body: string } {
   const g = t.orchestra.graph;
   const files = edge.files === null ? null : g.files(edge.files.files, edge.files.exts.join(" "));
   if (edge.kind === "task") return { lead: g.sent, body: edge.text ?? g.noBrief };
   if (edge.kind === "report") {
-    const result = edge.pending ? g.notBack : (edge.text ?? g.noReport);
-    return { lead: g.returned, body: files === null || edge.pending ? result : `${result} · ${files}` };
+    if (edge.pending) return { lead: g.returned, body: g.notBack };
+    // session → 主智能体：没有「结果」这回事，只说产出（文件账）；子会话 → session：结果第一行 + 产出
+    if (toMain && files !== null) return { lead: g.output, body: files };
+    const result = edge.text ?? g.noReport;
+    return { lead: g.returned, body: files === null ? result : `${result} · ${files}` };
   }
   return { lead: "", body: files === null ? (edge.text ?? "") : `${edge.text ?? ""} · ${files}` };
 }
@@ -429,7 +482,8 @@ function CollabCanvas(props: {
   const t = useT();
   const [hot, setHot] = useState<string | null>(null);
   const layout = useMemo(() => layoutCollab(props.graph, props.width), [props.graph, props.width]);
-  const mainNode = props.graph.nodes[0];
+  const mainNode = props.graph.nodes.find((node) => node.kind === "main");
+  const mainBox = mainNode === undefined ? undefined : layout.cards.get(mainNode.id);
   const isHot = (edge: CollabEdge): boolean => hot !== null && (edge.from === hot || edge.to === hot);
   return (
     <div className="orch-graph" style={{ height: layout.height }} data-hot={hot ?? undefined}>
@@ -445,12 +499,12 @@ function CollabCanvas(props: {
           );
         })}
       </svg>
-      {mainNode !== undefined && (
-        <div className="orch-node orch-node-main" style={boxStyle(layout.main)}>
+      {mainNode !== undefined && mainBox !== undefined && (
+        <div className="orch-node orch-node-main" style={boxStyle(mainBox)}>
           <MainCardInGraph node={mainNode} workspaceId={props.workspaceId} name={props.name} />
         </div>
       )}
-      {props.graph.nodes.slice(1).map((node) => {
+      {props.graph.nodes.filter((node) => node.kind !== "main").map((node) => {
         const box = layout.cards.get(node.id);
         if (box === undefined) return null;
         return (
@@ -467,7 +521,7 @@ function CollabCanvas(props: {
       {props.graph.edges.map((edge) => {
         const geo = layout.edges.get(edge.id);
         if (geo === undefined) return null;
-        const text = edgeText(t, edge);
+        const text = edgeText(t, edge, edge.to === mainNode?.id);
         return (
           <span
             key={`label-${edge.id}`}

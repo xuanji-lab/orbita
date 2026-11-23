@@ -61,9 +61,6 @@ export class SettingsStore {
       patch.pluginsPage === undefined ? current.pluginsPage : { ...current.pluginsPage, ...patch.pluginsPage };
     // 向量设置也是 patch：只改 mode 不该把模型 / 卸载分钟 / 电池偏好冲回默认
     const vector = patch.vector === undefined ? current.vector : { ...current.vector, ...patch.vector };
-    // 编排主对话指针同款按键合并：一个工作区记下自己的主对话，不该把别的工作区的抹掉
-    const orchestraMain =
-      patch.orchestraMain === undefined ? current.orchestraMain : { ...current.orchestraMain, ...patch.orchestraMain };
     const next = parseSettings({
       ...current,
       ...patch,
@@ -73,7 +70,6 @@ export class SettingsStore {
       providersPage,
       pluginsPage,
       vector,
-      orchestraMain,
     });
     await writeJsonAtomic(this.filePath, next);
     this.cache = next;

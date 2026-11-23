@@ -368,6 +368,10 @@ export const ipcChannels = {
   sessionRevealArtifact: "session:reveal-artifact",
   /** 编排面板协作图：一批会话的产物摘要（文件账里的文件数与扩展名），id → ArtifactSummary；读不到的 id 不在回执里 */
   sessionArtifactSummary: "session:artifact-summary",
+  /** 发件箱（shared/outbox.ts）：发送前落盘、落账后删、启动时列出没落账的 */
+  outboxPut: "outbox:put",
+  outboxRemove: "outbox:remove",
+  outboxList: "outbox:list",
   /** 审查面板：列一个来源的全部改动（task / unstaged / staged / branch） */
   reviewList: "review:list",
   /** 审查面板：拉一个文件的 diff 正文（unified diff，按需） */

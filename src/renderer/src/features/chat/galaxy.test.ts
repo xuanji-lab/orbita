@@ -4,7 +4,6 @@ import {
   advanceClock,
   angularSpeed,
   CAMERA_ELEVATION_DEG,
-  elevationFor,
   ELEVATION_MAX,
   DENSITY,
   drawFrame,
@@ -22,8 +21,6 @@ import {
   frameViewport,
   GALAXY_MARGIN,
   GALAXY_MAX,
-  GALAXY_MAX_FILL,
-  galaxyBox,
   galaxyFixtureOf,
   galaxySpecOf,
   layoutGalaxy,
@@ -43,7 +40,15 @@ import {
   type DrawItem,
   type GalaxySpec,
   type PlanetSpec,
+  readablePlanetPx,
+  PLANET_READABLE_MAX,
+  PLANET_READABLE_MIN,
+  PLANET_READABLE_GAP,
+  galaxyBox,
+  elevationFor,
+  GALAXY_MAX_FILL,
 } from "./galaxy.ts";
+import { ORBIT_STEP } from "./galaxy-data.ts";
 
 function planet(id: string, orbitRadius: number, extra: Partial<PlanetSpec> = {}): PlanetSpec {
   return { id, mass: 4, composition: "rock", orbitRadius, inclinationDeg: 0, nodeDeg: 0, phaseDeg: 0, ...extra };
@@ -389,6 +394,45 @@ describe("等你的行星：前置、放大；名字、碎石与「+N」", () =>
     assert.equal(truncateLabel("短名"), "短名");
     assert.equal([...truncateLabel("一二三四五六七八九十一二三四五六七八")].length, 14);
     assert.ok(truncateLabel("一二三四五六七八九十一二三四五六七八").endsWith("…"));
+  });
+});
+
+describe("行星表情可读（星系规则：大小差距缩小到行星表情可读，同时主星明显最大）", () => {
+  // 与 HomeGalaxy 的工作区页同一套取景：画框按画布形状抬俯角
+  const scene = (w: number, h: number) => {
+    const box = galaxyBox(w, h, GALAXY_MAX_FILL);
+    const camera = makeCamera(FRAME_EXTENT, elevationFor(box));
+    return { camera, vp: frameViewport(camera, w, h, box) };
+  };
+  test("最小可读半径夹在 [MIN, MAX]，且不超过相邻轨道间距的 GAP 倍（窄右栏里放大的行星不压隔壁轨道）", () => {
+    for (const [w, h] of [[300, 360], [360, 480], [440, 560], [1000, 600], [1400, 720]] as const) {
+      const { camera, vp } = scene(w, h);
+      const px = readablePlanetPx(camera, vp, ORBIT_STEP);
+      const stepPx = (vp.focal * ORBIT_STEP) / project({ x: 0, y: 0, z: 0 }, camera).depth;
+      assert.ok(px >= PLANET_READABLE_MIN && px <= PLANET_READABLE_MAX, `${w}×${h}: ${px}`);
+      assert.ok(px <= Math.max(PLANET_READABLE_MIN, PLANET_READABLE_GAP * stepPx) + 1e-9);
+    }
+  });
+  test("三档（空 / 平常 / 满载）、宽窄画布：行星都放大到可读半径以上，主星仍是最大的那颗（≥ 最大行星 1.5 倍，等你放大后也是）", () => {
+    for (const fixture of ["empty", "typical", "full"] as const) {
+      for (const [w, h] of [[360, 480], [1000, 600]] as const) {
+        const { camera, vp } = scene(w, h);
+        const layout = layoutGalaxy({ ...galaxySpecOf(fixture), planets: galaxySpecOf(fixture).planets.map((p, i) => (i === 0 ? { ...p, state: "waiting" as const } : p)) });
+        const min = readablePlanetPx(camera, vp, ORBIT_STEP);
+        const items = drawFrame(layout, camera, vp, orbitArcs(layout, camera, vp), 3.2, min);
+        const star = items.find((item) => item.kind === "star");
+        const planets = items.filter((item) => item.kind === "planet");
+        for (const planet of planets) assert.ok(planet.r >= min - 1e-9);
+        const biggest = Math.max(0, ...planets.map((planet) => planet.r));
+        assert.ok(star !== undefined && star.r >= biggest * 1.5, `${fixture} ${w}×${h}: 主星 ${star?.r} 行星 ${biggest}`);
+      }
+    }
+  });
+  test("不给下限（单智能体首页）时行星照物理半径画，一个像素都不变", () => {
+    const { camera, vp } = scene(1000, 600);
+    const layout = layoutGalaxy(galaxySpecOf("typical"));
+    const arcs = orbitArcs(layout, camera, vp);
+    assert.deepEqual(drawFrame(layout, camera, vp, arcs, 1.5), drawFrame(layout, camera, vp, arcs, 1.5, 0));
   });
 });
 

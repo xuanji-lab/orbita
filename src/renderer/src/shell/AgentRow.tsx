@@ -4,7 +4,7 @@ import { Icon } from "./Icon";
 import { IconButton } from "./IconButton";
 import { StatusPie } from "./StatusPie";
 import { sessionAgeLabel } from "./relative-time.ts";
-import { StarFigure } from "../features/galaxy-designer/StarFigure.tsx";
+import { DustFigure, StarFigure } from "../features/galaxy-designer/StarFigure.tsx";
 import { useAvatarBySize, useGalaxyDesign } from "../features/galaxy-designer/useGalaxyDesign.ts";
 import { agentLineOf, type AgentLine } from "../features/chat/agent-status.ts";
 import type { ScopeSummary } from "../features/chat/galaxy-data.ts";
@@ -64,7 +64,11 @@ export function AgentRow(props: {
         onClick={props.onOpen}
       >
         <span className="agent-avatar">
-          <StarFigure bySize={bySize} design={design} size={28} label={t.agents.avatar(name)} />
+          {workspace === null ? (
+            <DustFigure size={28} label={t.agents.homeAvatar} />
+          ) : (
+            <StarFigure bySize={bySize} design={design} size={28} label={t.agents.avatar(name)} />
+          )}
         </span>
         <span className="agent-body">
           <span className="agent-line">
@@ -98,7 +102,7 @@ export function AgentRow(props: {
             )}
           </span>
           <span className="agent-line agent-status">
-            <StatusLine line={line} />
+            <StatusLine line={line} home={workspace === null} />
             {props.summary.attention > 0 && (
               <span className="agent-dot row-trailing" data-kind={props.summary.waiting > 0 ? "waiting" : "unread"} role="img" aria-label={props.summary.waiting > 0 ? t.agents.status.waiting : t.agents.unread} />
             )}
@@ -141,10 +145,12 @@ export function AgentRow(props: {
 }
 
 /** 第二行：先说状态词（等你 / 在跑带件数与状态饼，空闲只一个词）；空闲时再补一个更浅的「最近：标题」 */
-function StatusLine(props: { line: AgentLine }) {
+function StatusLine(props: { line: AgentLine; home: boolean }) {
   const t = useT();
   const { line } = props;
   const word = t.agents.status[line.status];
+  // 星际空间空闲时第二行只说它是什么（不属于任何工作区），不说「空闲 · 最近：…」；等你 / 在跑时照样先说状态
+  if (props.home && line.status === "idle") return <span className="agent-status-word">{t.agents.homeLine}</span>;
   return (
     <>
       {line.status === "running" && <StatusPie state="running" />}

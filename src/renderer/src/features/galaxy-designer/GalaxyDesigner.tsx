@@ -160,7 +160,11 @@ function Designer(props: { workspace: Workspace }) {
       }
     >
       <div className="gd" data-workspace={id}>
-        <PanelGroupHead label={tg.bodyGroup} />
+        {/* 这一页画的是谁：主星页写「主星 · 工作区名」（它就是这个工作区的主智能体本人），行星页写「行星 = 子智能体」 */}
+        <PanelGroupHead label={kind === "star" ? tg.starWho(props.workspace.name) : tg.planetWho} />
+        <p className="gd-who" data-kind={kind}>
+          {kind === "star" ? tg.starWhoLine : tg.planetWhoLine}
+        </p>
         <Row name={tg.kind} desc={tg.kindDesc}>
           <Segmented<BodyKind>
             label={tg.kind}

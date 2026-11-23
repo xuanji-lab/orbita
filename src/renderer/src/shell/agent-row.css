@@ -195,6 +195,24 @@
   border-radius: var(--radius-pill);
   background: var(--color-text-tertiary);
 }
+/* 对话页的次级会话标题：› + 标题（sm、次级墨、常规字重），名字与状态之后；最先省略 */
+.cap-task {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  color: var(--color-text-tertiary);
+}
+.cap-task .cap-title {
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-regular);
+  color: var(--color-text-secondary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* 窄到放不下时先让状态胶囊让位，名字最后才省略（同会话胶囊的让位顺序） */
 @container (max-width: 300px) {
   .cap-sess .cap-status {

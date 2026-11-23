@@ -545,7 +545,30 @@ function dustPath(points: { x: number; y: number; r: number }[]): string {
  * 行星压在自己的轨道线上：与它相邻的三段自家轨道弧的排序深度不小于行星，先画；
  * 否则一段「更近」的弧会从行星中间划过去。
  */
-export function drawFrame(layout: GalaxyLayout, camera: Camera, vp: Viewport, arcs: readonly OrbitArc[], t: number): DrawItem[] {
+/**
+ * 行星在屏幕上的最小可读半径（px）：星系规则「主星与行星的大小差距应缩小到行星表情可读的程度」——
+ * 小于这个半径，两只竖胶囊眼睛就糊成一个点。上限 PLANET_READABLE_MAX；但不超过「相邻两圈轨道间距」的 PLANET_READABLE_GAP 倍，
+ * 窄画布（右栏）里放大的行星不会压到隔壁轨道上的那颗（轨道等距排，间距是 orbitStep 个世界单位）。
+ * 只在工作区页 / 右栏星系图用（drawFrame 的 minPlanetPx）；单智能体首页的 fixture 星系不动。
+ */
+export const PLANET_READABLE_MAX = 11;
+export const PLANET_READABLE_MIN = 5;
+export const PLANET_READABLE_GAP = 0.36;
+
+export function readablePlanetPx(camera: Camera, vp: Viewport, orbitStep: number): number {
+  const pxPerUnit = vp.focal / project({ x: 0, y: 0, z: 0 }, camera).depth;
+  return clamp(PLANET_READABLE_GAP * orbitStep * pxPerUnit, PLANET_READABLE_MIN, PLANET_READABLE_MAX);
+}
+
+export function drawFrame(
+  layout: GalaxyLayout,
+  camera: Camera,
+  vp: Viewport,
+  arcs: readonly OrbitArc[],
+  t: number,
+  /** 行星屏幕半径的下限（px）：0 = 照物理半径画（单智能体首页） */
+  minPlanetPx = 0,
+): DrawItem[] {
   const starP = project({ x: 0, y: 0, z: 0 }, camera);
   const starS = toScreen(starP, vp);
   const items: DrawItem[] = [
@@ -578,7 +601,7 @@ export function drawFrame(layout: GalaxyLayout, camera: Camera, vp: Viewport, ar
       depth: waiting ? Math.min(p.depth, starP.depth - 1e-3) : p.depth,
       x: s.x,
       y: s.y,
-      r: ((vp.focal * planet.radius) / p.depth) * (waiting ? WAITING_SCALE : 1),
+      r: Math.max((vp.focal * planet.radius) / p.depth, minPlanetPx) * (waiting ? WAITING_SCALE : 1),
       fx: 0.5 + (0.32 * dx) / dl,
       fy: 0.5 + (0.32 * dy) / dl,
       lit: (1 + cosPhase) / 2,

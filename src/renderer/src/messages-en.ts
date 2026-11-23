@@ -7,6 +7,7 @@ import type { PanelUsageKey } from "../../shared/panel-usage.ts";
 import { REVIEW_DIFF_MAX_BYTES, REVIEW_DIFF_MAX_LINES } from "../../shared/review.ts";
 import type { AutomationIntervalUnit } from "../../shared/automation.ts";
 import { enRevealLabel, enTrashName, type FileManagerKind } from "./file-manager.ts";
+import { INTERSTELLAR_NAME } from "./features/chat/scope-names.ts";
 /**
  * 界面文案表——英文，**真源**。`messages-zh.ts` 的类型由这里推出（`Messages`），
  * 少一个键、参数签名不一致，typecheck 就不过。
@@ -2067,6 +2068,8 @@ export const en = {
     // 阻塞提示 = 一句说清卡在哪 + 句尾一个出口（Notice 的 exit）；草稿不会丢，说出来
     noProvider: "No model to send with yet. Your draft stays here.",
     noProviderExit: "Add a provider",
+    notSent: "That message was not sent: the agent process stopped before it was recorded. It is back in the input box.",
+    notSentRecovered: (n: number) => `${n} message${n === 1 ? " was" : "s were"} not sent last time and ${n === 1 ? "is" : "are"} back in ${n === 1 ? "its" : "their"} input box.`,
     readOnlyTask:
       "This task was recorded before tasks could be resumed, so it can be read but not continued. Start a new task to keep working.",
     noMessages: "No messages yet. Send the first one to start.",
@@ -3802,7 +3805,13 @@ export const en = {
   /** 编排形态：侧栏里的智能体行、工作区自己的 New Task 页页头 */
   agents: {
     header: "Agents",
-    home: "Home",
+    /** 不属于任何工作区的那一行（名字在 scope-names.ts，改名只改那里） */
+    home: INTERSTELLAR_NAME.en as string,
+    /** 那一行的第二行（空闲时）：说清它是什么 */
+    homeLine: "Not in any workspace",
+    homeAvatar: "Drifting debris: sessions not in any workspace",
+    homeGalaxy: "Interstellar space: each fragment is a session",
+    homeEmpty: "No sessions out here yet. Write one below.",
     /** 状态词表：侧栏智能体行与工作区页页头胶囊共用这三个词 */
     status: { running: "Running", waiting: "Waiting", idle: "Idle" },
     /** 「空闲」之后接最近一件事时的前缀 */
@@ -3823,22 +3832,19 @@ export const en = {
 
   /** 编排：主对话按天、右栏「编排」面板（树状图 / 星系图 / 协作图） */
   orchestra: {
-    today: "Today",
-    yesterday: "Yesterday",
     panelTitle: "Orchestration",
     railLabel: "Orchestration",
     viewLabel: "View",
     views: { tree: "Tree", galaxy: "Galaxy", graph: "Handoffs" },
     mainRole: "Main agent",
     mainRoleLine: "Takes your requests, sends work out, collects results",
-    jobsGroup: (n: number) => `Sent out · ${n}`,
-    sessionsGroup: (n: number) => `Sessions here · ${n}`,
-    older: (n: number) => `${n} older sessions not listed.`,
+    sessionsGroup: (n: number) => `Recent sessions · ${n}`,
     moreChildren: (n: number) => `${n} more sub-sessions`,
-    noMain: "No main conversation yet.",
-    noMainHint: "Send the first message from this workspace's page and it starts.",
-    noJobs: "Nothing sent out yet.",
-    standIn: "Stand-in: until the kernel adds persistent sub-agents, the tasks the main conversation sent out fill this layer.",
+    noSessions: "No sessions here yet.",
+    noSessionsHint: "Each message sent from this page starts one.",
+    olderGroup: (n: number) => `Older · ${n}`,
+    olderFold: "Fold older sessions",
+    homeNote: "Interstellar has no main agent: sessions here belong to no workspace.",
     galaxyNarrow: "Too narrow to read the galaxy.",
     galaxyNarrowHint: (min: number) => `It needs ${min}px. Switch to the tree, or widen the panel.`,
     widen: "Widen panel",
@@ -3854,22 +3860,14 @@ export const en = {
       noBrief: "no task note on record",
       files: (n: number, exts: string) => (n === 0 ? "no files on record" : `${n} file${n === 1 ? "" : "s"} · ${exts}`),
       peerPending: "Handoffs between sub-agents appear once the kernel line is connected.",
-      notDispatched: (n: number) => `${n} sessions here were not sent out by the main agent, so they have no handoffs. They are in the tree.`,
+      hidden: (n: number) => `${n} more sessions and sub-sessions are in the tree.`,
+      output: "Output",
       loading: "Reading handoffs…",
       demo: "Show demo",
       demoOff: "Hide demo",
       demoNote: "Demo: made-up handoffs showing how a full graph reads, cycles included. Not this workspace's data.",
       figure: (name: string) => `Handoffs in ${name}`,
     },
-    dayMenu: {
-      main: "Main conversation",
-      openMain: "Open the main conversation",
-      earlier: "Earlier days load as you scroll up",
-      count: (n: number) => `${n} message${n === 1 ? "" : "s"}`,
-      none: "No main conversation yet",
-    },
-    notMain: (title: string) => `Viewing “${title}”, not the main conversation.`,
-    backToMain: "Back to main conversation",
   },
 
   galaxyDesigner: {
@@ -3884,7 +3882,11 @@ export const en = {
     elementsGroup: "Elements",
     previewGroup: "Preview",
     kind: "Type",
-    kindDesc: "The star is this galaxy's main agent; a planet is a sub-agent orbiting it.",
+    kindDesc: "The star is this workspace's main agent itself. Planet = sub-agent, always on an orbit round the star.",
+    starWho: (name: string) => `Star · ${name}`,
+    starWhoLine: "The main agent of this workspace. Only the star stands at the centre.",
+    planetWho: "Planet = sub-agent",
+    planetWhoLine: "It orbits the star and never takes the centre; without a star there is no planet.",
     star: "Star",
     planet: "Planet",
     name: "Name",

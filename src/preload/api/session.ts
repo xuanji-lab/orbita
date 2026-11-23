@@ -7,6 +7,7 @@ import { ipcChannels, type SessionWorkbenchStat } from "../../shared/agent-ipc.t
 import type { ArtifactOpenResult } from "../../shared/browser.ts";
 import type { PromptImage } from "../../shared/prompt-images.ts";
 import type { ArtifactSummary, RevertPlan, UndoPlan } from "../../shared/revert.ts";
+import type { OutboxEntry } from "../../shared/outbox.ts";
 import type {
   ModelAssignEntry,
   ModelAssignGroups,
@@ -107,4 +108,8 @@ export const sessionApi = {
   /** 编排面板协作图：一批会话的产物摘要（文件账里的文件数与扩展名）；读不到的 id 不在回执里 */
   artifactSummary: (ids: readonly string[]): Promise<Record<string, ArtifactSummary>> =>
     ipcRenderer.invoke(ipcChannels.sessionArtifactSummary, ids),
+  /** 发件箱：发送前落盘（等写完才回）、落账后删、启动时列出 */
+  outboxPut: (entry: OutboxEntry): Promise<void> => ipcRenderer.invoke(ipcChannels.outboxPut, entry),
+  outboxRemove: (id: string): Promise<void> => ipcRenderer.invoke(ipcChannels.outboxRemove, id),
+  outboxList: (): Promise<OutboxEntry[]> => ipcRenderer.invoke(ipcChannels.outboxList),
 };

@@ -2732,7 +2732,8 @@ button.ws-fold {
   vector-effect: non-scaling-stroke;
 }
 /* 星系里的主星画成面板里设计的那颗（StarFigure 同一套形象）：覆盖 .gd-figure 的 display，它在这里是一个 <g> */
-.galaxy-star-figure {
+.galaxy-star-figure,
+.galaxy-planet-figure {
   display: inline;
 }
 

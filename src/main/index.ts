@@ -2,6 +2,8 @@
  * 主进程入口。职责边界（AGENTS.md「架构边界」）：只负责窗口、IPC 与持久化。
  * agent runtime 将跑在独立 utility 进程，不在这里 —— 见 docs/single-agent-guideline.md §二。
  */
+import { OutboxStore } from "./session/outbox.ts";
+import { registerOutboxIpc } from "./session/outbox-ipc.ts";
 import { preferIPv4 } from "../shared/dial-v4.ts";
 import { CATALOG_CACHE_ENV } from "../shared/agent-ipc.ts";
 import { catalogIdsOfProviders } from "../shared/known-providers.ts";
@@ -1037,6 +1039,8 @@ void app.whenReady().then(async () => {
       },
     },
   });
+  // 发件箱：点了发送的话先落盘再开跑，下次启动核对没落账的（session/outbox.ts）
+  registerOutboxIpc(new OutboxStore(configDir));
   registerSessionIpc(
     sessions,
     (id) => {

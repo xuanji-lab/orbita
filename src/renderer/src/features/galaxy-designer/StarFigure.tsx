@@ -42,6 +42,37 @@ export function StarFigure(props: { design: GalaxyDesign; size: number; label: s
 
 
 /**
+ * 「星际空间」（不属于任何工作区）的头像：没有工作区就没有主智能体、也没有主星，所以不画带眼睛的球，
+ * 画一小撮碎石——七颗大小不一的石子，取墨色的两档深浅，位置写死（同一张图永远一样）。代码画，不用图片。
+ */
+const DEBRIS: readonly { x: number; y: number; r: number; tone: "a" | "b" }[] = [
+  { x: -4.6, y: -3.2, r: 2.6, tone: "a" },
+  { x: 2.4, y: -5.4, r: 1.6, tone: "b" },
+  { x: 5.2, y: 0.6, r: 2.2, tone: "a" },
+  { x: -0.6, y: 2.2, r: 1.9, tone: "b" },
+  { x: -6.2, y: 3.6, r: 1.2, tone: "b" },
+  { x: 3, y: 5.6, r: 1.3, tone: "a" },
+  { x: 0.4, y: -1.4, r: 0.9, tone: "a" },
+];
+
+export function DustFigure(props: { size: number; label: string; className?: string }) {
+  return (
+    <svg
+      className={props.className === undefined ? "gd-dust" : `gd-dust ${props.className}`}
+      width={props.size}
+      height={props.size}
+      viewBox="-10 -10 20 20"
+      role="img"
+      aria-label={props.label}
+    >
+      {DEBRIS.map((rock) => (
+        <circle key={`${rock.x}:${rock.y}`} className="gd-dust-rock" data-tone={rock.tone} cx={rock.x} cy={rock.y} r={rock.r} />
+      ))}
+    </svg>
+  );
+}
+
+/**
  * 星系画布里的主星（一个 <g>，以 (x, y) 为心、半径 r 画）：与头像同一个形象。还没有主星的设计稿取默认主星画。
  */
 export function StarBody(props: { design: GalaxyDesign; x: number; y: number; r: number; uid: string }) {

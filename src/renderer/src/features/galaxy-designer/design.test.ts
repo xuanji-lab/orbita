@@ -470,6 +470,14 @@ describe("设计稿仓库：侧栏头像与页面星系跟着面板变", () => {
   });
 });
 
+describe("打开面板默认是主星（主智能体本人）", () => {
+  test("三档默认稿、种子稿都停在主星页；只有 addPlanet 才把页切到行星", () => {
+    for (const level of ["default", "bare", "full"] as const) assert.equal(defaultDesign(WS_A, level).editing, "star");
+    assert.equal(seededDesign(WS_B).editing, "star");
+    assert.equal(createDesignStore("default").get(WS_A).editing, "star");
+  });
+});
+
 describe("行星依赖主星（数据层不变量）", () => {
   test("nostar 档：没有主星也没有行星，停在主星页；没有任何参数错误", () => {
     const empty = fixtureDesign(WS_A, "nostar");
@@ -511,8 +519,8 @@ describe("行星依赖主星（数据层不变量）", () => {
   test("主星页 / 行星页两态：有主星时主星页画网格 + 主星，行星页同时有大头像与轨道；有主星没行星时只有轨道场景", () => {
     const design = legal();
     assert.deepEqual(previewPlan({ ...design, editing: "star" }), ["well", "star"]);
-    assert.deepEqual(previewPlan(design), ["avatar", "orbit-scene", "orbit"]);
-    assert.deepEqual(previewPlan({ ...design, planet: null }), ["orbit-scene"]);
+    assert.deepEqual(previewPlan({ ...design, editing: "planet" }), ["avatar", "orbit-scene", "orbit"]);
+    assert.deepEqual(previewPlan({ ...design, editing: "planet", planet: null }), ["orbit-scene"]);
     assert.equal(orbitStage({ ...design, star: null, planet: null }), null);
   });
 

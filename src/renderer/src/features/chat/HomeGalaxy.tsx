@@ -19,13 +19,15 @@ import {
   emptyHintAt,
   motionAllowed,
   orbitArcs,
+  readablePlanetPx,
   type DrawItem,
   type GalaxySpec,
   type MotionInputs,
 } from "./galaxy.ts";
 import { useT } from "../../locale.ts";
-import { StarBody } from "../galaxy-designer/StarFigure.tsx";
-import { starExtentRatio, type GalaxyDesign } from "../galaxy-designer/design.ts";
+import { BodyFigure, StarBody } from "../galaxy-designer/StarFigure.tsx";
+import { bodyArt, planetFaceDesign, starExtentRatio, type GalaxyDesign } from "../galaxy-designer/design.ts";
+import { ORBIT_STEP } from "./galaxy-data.ts";
 import { GalaxyCallouts } from "./GalaxyCallouts.tsx";
 import type { PlanetItem } from "./galaxy.ts";
 
@@ -147,7 +149,18 @@ function useGalaxyClock(target: RefObject<SVGSVGElement | null>): number {
  * starDesign：这座星系的主星设计稿（星系设计面板）。给了就把主星画成面板里那颗（眼睛、星环、日冕），
  * 与侧栏头像同一个形象；不给是一颗素球。
  */
-export function HomeGalaxy(props: { spec: GalaxySpec; label: string; starDesign?: GalaxyDesign; fill?: boolean; emptyHint?: string }) {
+export function HomeGalaxy(props: {
+  spec: GalaxySpec;
+  label: string;
+  starDesign?: GalaxyDesign;
+  fill?: boolean;
+  emptyHint?: string;
+  /**
+   * 没有主星的「星际空间」（不属于任何工作区）：没有工作区就没有主智能体，也就没有主星与行星——
+   * 只画缓慢漂移的碎石，每颗是一条会话（量大了也只是更浓，余数折成「+N」）。
+   */
+  starless?: boolean;
+}) {
   const t = useT();
   const uid = useId().replace(/:/g, "");
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -169,7 +182,11 @@ export function HomeGalaxy(props: { spec: GalaxySpec; label: string; starDesign?
     const viewport = frameViewport(camera, size.width, size.height, box);
     return { camera, viewport, arcs: orbitArcs(layout, camera, viewport) };
   }, [layout, size, props.fill]);
-  const items = scene === null ? [] : drawFrame(layout, scene.camera, scene.viewport, scene.arcs, seconds);
+  // 工作区页 / 右栏：行星至少画到表情可读的大小（两只眼看得见），但不压到隔壁轨道（readablePlanetPx）
+  const minPlanetPx = scene === null || props.fill !== true ? 0 : readablePlanetPx(scene.camera, scene.viewport, ORBIT_STEP);
+  const drawn = scene === null ? [] : drawFrame(layout, scene.camera, scene.viewport, scene.arcs, seconds, minPlanetPx);
+  // 星际空间：不画主星、轨道与行星，只留碎石
+  const items = props.starless === true ? drawn.filter((item) => item.kind === "dust") : drawn;
   // 工作区页（fill）：在做工的行星画锁定框，最要紧的几颗升起引线写任务名（GalaxyCallouts，与右栏星系图共用）
   const rankOf = useMemo(() => new Map(layout.planets.map((planet, index) => [planet.id, index])), [layout]);
   const planetItems = items.filter((item): item is PlanetItem => item.kind === "planet");
@@ -192,10 +209,26 @@ export function HomeGalaxy(props: { spec: GalaxySpec; label: string; starDesign?
       return <circle key={item.key} cx={item.x} cy={item.y} r={item.r} fill={`url(#${starGradient})`} />;
     }
     const lightId = `${uid}-${item.planetId}`;
+    if (props.fill === true) {
+      // 工作区页：每颗行星都是一个带两只竖胶囊眼的小天体（与设计面板同一个 BodyFigure），不再是素圆点
+      return (
+        <g
+          key={item.key}
+          className="gd-figure galaxy-planet-figure"
+          data-planet={item.planetId}
+          data-composition={item.composition}
+          data-state={item.state ?? undefined}
+          data-r={item.r.toFixed(1)}
+          transform={`translate(${item.x} ${item.y})`}
+        >
+          <BodyFigure art={bodyArt(planetFaceDesign(item.composition), "planet", item.r)} uid={`${lightId}-f`} />
+        </g>
+      );
+    }
     return (
       <g key={item.key}>
         {/* 等你的细环只留给单智能体首页的 fixture 星系；工作区页改由锁定框说（见 GalaxyCallouts） */}
-        {item.state === "waiting" && props.fill !== true && <circle className="galaxy-planet-waiting" cx={item.x} cy={item.y} r={item.r + 3} />}
+        {item.state === "waiting" && <circle className="galaxy-planet-waiting" cx={item.x} cy={item.y} r={item.r + 3} />}
         <circle
           className="galaxy-planet"
           data-planet={item.planetId}
@@ -216,7 +249,9 @@ export function HomeGalaxy(props: { spec: GalaxySpec; label: string; starDesign?
       viewBox={size === null ? undefined : `0 0 ${size.width} ${size.height}`}
       role="img"
       aria-label={props.label}
-      data-planets={layout.planets.length}
+      data-planets={props.starless === true ? 0 : layout.planets.length}
+      data-starless={props.starless === true || undefined}
+      data-min-planet={minPlanetPx > 0 ? minPlanetPx.toFixed(1) : undefined}
       data-hidden={layout.hidden}
       data-sessions={layout.belt?.count ?? 0}
     >
@@ -236,7 +271,7 @@ export function HomeGalaxy(props: { spec: GalaxySpec; label: string; starDesign?
       </defs>
       {items.map(render)}
       {/* 锁定框、引线与悬停名字画在最上层；碎石折掉的会话数收成一个「+N」 */}
-      {props.fill === true && scene !== null && (
+      {props.fill === true && scene !== null && props.starless !== true && (
         <GalaxyCallouts
           planets={planetItems}
           rankOf={rankOf}

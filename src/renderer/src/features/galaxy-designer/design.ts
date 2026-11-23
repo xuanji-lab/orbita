@@ -404,7 +404,8 @@ function defaultPlanet(workspaceId: string): PlanetDesign {
 
 export function defaultDesign(workspaceId: string, level: Exclude<DesignLevel, "nostar">): CompleteDesign {
   const base: CompleteDesign = {
-    editing: "planet",
+    // 打开面板默认停在主星：它就是这个工作区的主智能体本人（2026-11-24 用户：主智能体只能是主星，不是行星）
+    editing: "star",
     star: defaultStar(),
     planet: defaultPlanet(workspaceId),
     backdrop: "muted",
@@ -421,6 +422,20 @@ export function defaultDesign(workspaceId: string, level: Exclude<DesignLevel, "
     };
   }
   return base;
+}
+
+/**
+ * 页面星系里一颗行星的「脸」：只开眼睛的行星设计稿（成分跟着这件活走，质量与轨道只是占位，画图不读）。
+ * 星系规则「主星与行星的大小差距应缩小到行星表情可读的程度」——页面上每颗行星都画成带两只竖胶囊眼的小天体，
+ * 不再是一个素圆点；星环、云带、卫星在十来个像素上只会糊，不开。
+ */
+export function planetFaceDesign(composition: Composition): CompleteDesign {
+  return {
+    editing: "planet",
+    star: defaultStar(),
+    planet: { name: "", mass: 6, composition, orbitRadius: 22, zoom: ZOOM_DEFAULT.planet, elements: { ...ALL_OFF, eyes: true } },
+    backdrop: "muted",
+  };
 }
 
 /** 主星（还没有主星时取默认主星）：头像、页面星系这些「总得画出一颗主星」的地方用它，不改设计稿本身 */

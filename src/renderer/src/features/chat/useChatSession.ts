@@ -43,6 +43,7 @@ import {
   sessionRefreshNeed,
 } from "./session-list-refresh.ts";
 import { appendWithdrawn } from "./withdraw-draft.ts";
+import { outboxLanded, type OutboxEntry } from "../../../../shared/outbox.ts";
 import { admitImages, promptImagesBytes, readAsPromptImage, rejectionText, type ComposerImage } from "../../shell/composer-images.ts";
 import { PROMPT_IMAGE_MIME_TYPES, PROMPT_IMAGE_MAX_COUNT, type PromptImage } from "../../../../shared/prompt-images.ts";
 import { insertImageRefs, removeImageRef } from "../../../../shared/prompt-image-refs.ts";
@@ -134,12 +135,6 @@ export interface UndoDialogState {
   sessionId: string;
   turnId: string;
   plan: UndoPlan;
-}
-
-/** sendInto 的目标：id = 发进这条已有会话；null = 开新会话，onCreated 拿新 id */
-export interface SendInto {
-  id: string | null;
-  onCreated?: (id: string) => void;
 }
 
 export interface ChatSession {
@@ -367,12 +362,6 @@ export interface ChatSession {
   confirmUndo: () => void;
   cancelUndo: () => void;
   send: () => void;
-  /**
-   * 把输入框里这句发进指定的会话（编排：工作区 New Task 页发的每一句都进这个工作区的主对话）。
-   * id 给了：先打开那条（种好历史），它在跑就排进它的队列，闲就直发；草稿从当前槽（New Task 页）清掉。
-   * id 为 null：照常开一条新会话，onCreated 在发出前拿到新会话的 id（调用方据此记主对话指针）。
-   */
-  sendInto: (target: SendInto) => void;
   /** 打断当前这一轮。pi 的 abort 走的是与工具审批不同的一条路，不需要等审批答复 */
   stop: () => void;
   /** 排队队列（当前槽），按显示顺序。唯一真源，操作一律按 id */
@@ -1818,8 +1807,15 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     files: readonly ComposerFileRef[];
     /** 草稿当时的粘贴块（区间指向 text——快照存的就是那份原文） */
     pasted: readonly ComposerPasteBlock[];
+    /** 发件箱里这一条的 id（落账或放回输入框时删掉） */
+    outboxId?: string;
   }
   const restoreRef = useRef<SentSnapshot | null>(null);
+  /** 发件箱：落账 / 放回之后这一条就不用留着了（失败只记日志——它是兜底，不打扰发送） */
+  const dropOutbox = useCallback((snap: SentSnapshot | null) => {
+    if (snap?.outboxId === undefined) return;
+    void api.session.outboxRemove(snap.outboxId).catch((cause: unknown) => console.error("[outbox] 删除失败", cause));
+  }, []);
   const restoreSent = useCallback(
     (snap: SentSnapshot) => {
       if (snap.text !== "") {
@@ -1893,17 +1889,70 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     },
     [writeQuotes, writeAttachments, writeFiles],
   );
+  /**
+   * 启动（或 renderer 重载）后核对发件箱（只在主槽做一次）：还留着的每一句，去它的会话里看落没落账——
+   * 落了就删；没落、会话也没在跑的，放回它出发的输入框（接在现草稿后面），并说一声上次没发出去。
+   * 会话还在跑的先不动：回显可能还在路上，落账后由下一次核对删掉。
+   */
+  const outboxCheckedRef = useRef(false);
+  useEffect(() => {
+    if (key !== "main" || outboxCheckedRef.current || engine.loads.sessions.kind !== "ready") return;
+    outboxCheckedRef.current = true;
+    void (async () => {
+      const entries = await api.session.outboxList().catch(() => [] as OutboxEntry[]);
+      const lost: OutboxEntry[] = [];
+      for (const entry of entries) {
+        if ((engine.statesRef.current.get(entry.sessionId)?.phase ?? "idle") !== "idle") continue;
+        const detail = await api.session.load(entry.sessionId).catch(() => null);
+        const records = (detail?.transcript ?? []).map((record) => ({
+          role: record.role,
+          timestamp: "timestamp" in record && typeof record.timestamp === "number" ? record.timestamp : 0,
+          text:
+            "content" in record && Array.isArray(record.content)
+              ? record.content.map((block: { type: string; text?: string }) => (block.type === "text" ? (block.text ?? "") : "")).join("\n")
+              : "",
+        }));
+        if (detail !== null && outboxLanded(entry, records)) {
+          void api.session.outboxRemove(entry.id).catch(() => undefined);
+          continue;
+        }
+        lost.push(entry);
+      }
+      if (lost.length === 0) return;
+      setDrafts((prev) => {
+        const map = new Map(prev);
+        for (const entry of lost) {
+          const current = map.get(entry.draftKey);
+          map.set(entry.draftKey, { text: appendWithdrawn(current?.text ?? "", entry.text), pasted: current?.pasted ?? NO_PASTED });
+        }
+        return map;
+      });
+      for (const entry of lost) void api.session.outboxRemove(entry.id).catch(() => undefined);
+      engine.setError(engine.messagesRef.current.chat.notSentRecovered(lost.length));
+    })();
+  }, [key, engine]);
+
   useEffect(
     () =>
       api.agent.onEvent((event) => {
         const snap = restoreRef.current;
         if (snap === null) return;
         if (event.type !== "progress" && event.type !== "failed" && event.type !== "phase") return;
+        // agent 进程退出（sessionId 为 null 的 failed）：还没回显的这一句没落账——放回输入框并说没发出去，
+        // 不能静默消失（2026-11-24 用户）。以前这里只认本会话的事件，进程退出那条带 null，快照就一直悬着
+        if (event.type === "failed" && event.sessionId === null) {
+          restoreRef.current = null;
+          dropOutbox(snap);
+          restoreSent(snap);
+          engine.setError(engine.messagesRef.current.chat.notSent);
+          return;
+        }
         if (event.sessionId !== snap.sessionId) return;
         // 本会话出现用户条目回显 = 我们这条落账了；之后的失败属于「发出去了没答上」，
         // 不是「没发出去」，不回填（消息已在转录里，回填等于重发一份）
         if (event.type === "progress" && event.progress.type === "item_started" && event.progress.item.role === "user") {
           restoreRef.current = null;
+          dropOutbox(snap);
           return;
         }
         // 回合级失败（turn: true）一定出自一轮已经回显过用户消息的轮——快照那条还没回显，
@@ -1912,10 +1961,11 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         if (event.type === "failed" && event.turn === true) return;
         if (event.type === "failed" || (event.type === "phase" && event.phase === "idle")) {
           restoreRef.current = null;
+          dropOutbox(snap);
           restoreSent(snap);
         }
       }),
-    [restoreSent],
+    [restoreSent, dropOutbox, engine],
   );
 
   /**
@@ -1978,18 +2028,17 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         if (restoreRef.current?.sessionId === id) {
           const snap = restoreRef.current;
           restoreRef.current = null;
+          dropOutbox(snap);
           restoreSent(snap);
         }
         // 归位带防踩：撞 already running 时真在跑的那一轮已报过 phase，不能把它标成空闲
         revertTurn();
       }
     },
-    [engine, model, mode, thinkingLevel, restoreSent],
+    [engine, model, mode, thinkingLevel, restoreSent, dropOutbox],
   );
 
-  /** send 在 openSession 之前定义：经 ref 取（发进主对话要先打开它） */
-  const openSessionRef = useRef<(id: string) => Promise<void>>(() => Promise.resolve());
-  const send = useCallback(async (into?: SendInto) => {
+  const send = useCallback(async () => {
     const own = draft.trim();
     const images = attachments.map((item) => item.image);
     // 有主的粘贴（句中胶囊或展开区间）也算「有内容」——纯粘贴一条也能发
@@ -2014,9 +2063,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     // 「摘要」贴进对话，而什么都没压缩（真实发生过的事故）。
     // 手工输入时带附件（图 / 文件 / 粘贴块）不认压缩指令：压缩吃不了附件，当命令
     // 拦下会把附件悉数丢掉——按普通消息发。
-    // 发进主对话（into）时不认压缩指令：New Task 页没有「这条会话」可压，按普通消息发
     const compact =
-      into === undefined && images.length === 0 && quotes.length === 0 && files.length === 0 && !pasteActive
+      images.length === 0 && quotes.length === 0 && files.length === 0 && !pasteActive
         ? parseCompactCommand(text)
         : null;
     if (compact !== null) {
@@ -2068,24 +2116,11 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       });
       return;
     }
-    // 「本槽当前看哪条」：挂着的活会话，或从盘上打开的那条；首页两者皆无 → 开新的。
-    // 指定了目标会话（编排的主对话）：先把它打开进本槽（种好历史），再按它算忙闲——「先打开、再接着发」要等打开落定
-    let id: string | null = into === undefined ? (sessionId ?? opened?.id ?? null) : into.id;
-    if (into !== undefined && into.id !== null) {
-      const draftOf = draftKey;
-      writeDraft(draftOf, "");
-      writeAttachments(draftOf, () => []);
-      writeFiles(draftOf, () => []);
-      writeBlocks(draftOf, () => []);
-      writeQuotes(draftOf, () => []);
-      await openSessionRef.current(into.id);
-    }
+    // 「本槽当前看哪条」：挂着的活会话，或从盘上打开的那条；首页两者皆无 → 开新的
+    let id: string | null = sessionId ?? opened?.id ?? null;
     // **忙就排队，闲才直发**：这是队列归我们之后的核心分流。不再把消息推进 pi 的
     // steering/followUp——那边只有裸字符串、没有 id，正是一整晚竞态的来源。
-    // 发进主对话时：槽没种上（读盘失败）就当闲，不往一个不存在的槽里排队
-    const busy =
-      id !== null &&
-      (into === undefined ? engine.statesRef.current.get(id)?.phase : (engine.statesRef.current.get(id)?.phase ?? "idle")) !== "idle";
+    const busy = id !== null && engine.statesRef.current.get(id)?.phase !== "idle";
     if (id !== null && busy) {
       const queuedId = crypto.randomUUID();
       engine.applyStates((prev) =>
@@ -2116,10 +2151,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       const target = meta?.cwd ?? cwd ?? engine.defaultCwd;
       if (target === "") throw new Error(engine.messagesRef.current.session.noWorkspaceFolder);
       const workspace = meta?.workspaceId ?? workspaceId ?? null;
-      if (id === null) {
-        id = crypto.randomUUID();
-        into?.onCreated?.(id);
-      }
+      if (id === null) id = crypto.randomUUID();
       // 留回填快照：这条没落账就失败（provider 装配、图片解码……）时内容放回输入框。
       // 落账（用户条目回显）由事件订阅作废它；submitTurn 的 catch 兜底 IPC 直接失败的那类
       restoreRef.current = {
@@ -2139,12 +2171,20 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       writeFiles(draftKey, () => []);
       writeBlocks(draftKey, () => []);
       writeQuotes(draftKey, () => []);
+      // 先落盘再开跑：这句话先写进发件箱（主进程原子写完才回），落账后删；进程中途没了，下次启动还找得回来
+      const outboxId = crypto.randomUUID();
+      const sentAt = Date.now();
+      try {
+        await api.session.outboxPut({ id: outboxId, sessionId: id, draftKey, text: draft, at: sentAt });
+        if (restoreRef.current?.sessionId === id) restoreRef.current = { ...restoreRef.current, outboxId };
+      } catch (cause) {
+        console.error("[outbox] 落盘失败，照常发送", cause);
+      }
       await submitTurn(id, text, target, workspace, resume, images, { files });
     } catch (cause) {
       engine.setError(cause instanceof Error ? cause.message : String(cause));
     }
   }, [engine, draft, attachments, quotes, files, pasted, sessionId, model, mode, cwd, workspaceId, opened, draftKey, writeDraft, writeAttachments, writeFiles, writeBlocks, writeQuotes, submitTurn]);
-  const sendInto = useCallback((target: SendInto) => void send(target), [send]);
 
   const stop = useCallback(() => {
     // 只停本槽当前轮。排队不动：pi 队列滞留给下次发送自动带上；压缩缓冲在压缩结束
@@ -2245,7 +2285,6 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     },
     [engine],
   );
-  openSessionRef.current = openSession;
 
   /**
    * 带着会话目标从来源会话新开一单带着种子开工（startGoalTask）：
@@ -3048,7 +3087,6 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     confirmUndo,
     cancelUndo,
     send: () => void send(),
-    sendInto,
     stop,
     queued: entry.queued,
     sendQueuedNow,
