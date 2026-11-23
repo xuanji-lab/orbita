@@ -199,7 +199,7 @@ export function ChatStatus(props: {
           onClick={() => toggleOpen(true)}
         >
           {signal === null ? (
-            <Icon name={FEATURE_ICON.task} size={14} strokeWidth={1.8} />
+            <Icon name={FEATURE_ICON.status} size={14} strokeWidth={1.8} />
           ) : (
             <StatusPie state={signal.kind === "waiting" || signal.kind === "stuck" ? "waiting" : signal.kind === "failed" ? "failed" : "running"} />
           )}

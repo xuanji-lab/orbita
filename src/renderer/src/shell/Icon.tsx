@@ -75,6 +75,7 @@ import foldVertical from "../../../../design-system/assets/icons/lucide/fold-ver
 import flaskConical from "../../../../design-system/assets/icons/lucide/flask-conical.svg?raw";
 import folder from "../../../../design-system/assets/icons/lucide/folder.svg?raw";
 import folderOpen from "../../../../design-system/assets/icons/lucide/folder-open.svg?raw";
+import gauge from "../../../../design-system/assets/icons/lucide/gauge.svg?raw";
 import folderPlus from "../../../../design-system/assets/icons/lucide/folder-plus.svg?raw";
 import folderSync from "../../../../design-system/assets/icons/lucide/folder-sync.svg?raw";
 import gitBranch from "../../../../design-system/assets/icons/lucide/git-branch.svg?raw";
@@ -221,6 +222,7 @@ const ICONS = {
   "flask-conical": flaskConical,
   folder,
   "folder-open": folderOpen,
+  "gauge": gauge,
   "folder-plus": folderPlus,
   "folder-sync": folderSync,
   "git-branch": gitBranch,
