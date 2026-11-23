@@ -393,7 +393,7 @@ export function fileOutputs(kind: "web" | "doc", paths: readonly string[]): Turn
 }
 
 /**
- * 回答里点了名的音视频 → 产物行（类型由扩展名定，量得到时长就带上）。调用方已按点名过滤（media-outputs.ts）。
+ * 回答里点了名的音视频 → 产物行（类型由扩展名定，量得到时长就带上）。调用方已按点名过滤（named-outputs.ts）。
  */
 export function mediaOutputs(media: readonly MediaArtifact[]): TurnOutput[] {
   const out: TurnOutput[] = [];

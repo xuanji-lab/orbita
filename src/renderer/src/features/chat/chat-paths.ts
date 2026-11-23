@@ -41,6 +41,18 @@ export function rootOf(path: string, roots: readonly FileRoot[]): FileRoot | nul
 }
 
 
+/**
+ * 产物卡要不要出：路径落在这条会话可读的根里（`fs:roots` 回的清单，与文件面板 `fs:read` 同一套）且那个根还在盘上。
+ * 不在任何根里的文件点了也打不开（面板与「用默认应用打开」都过同一道白名单），不如不出卡。
+ * 只做字面前缀判定，不解符号链接（那一道留给主进程读盘时的 realpath）。
+ * roots 为 null = 根清单还没取回来：先放行，取回后再筛，免得卡片闪一下才出。
+ */
+export function isReadablePath(path: string, roots: readonly FileRoot[] | null): boolean {
+  if (roots === null) return true;
+  const root = rootOf(path, roots);
+  return root !== null && root.exists;
+}
+
 /** 统一成正斜杠、去尾斜杠，比较两条路径是不是同一个 */
 export function samePathKey(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+$/, "");
