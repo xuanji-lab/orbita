@@ -158,9 +158,11 @@ export function createSessionRecorder(
  * 仍是一条记录顶替一条 user 消息。
  */
 function channelMarkOf(item: Extract<TranscriptItem, { role: "user" }>): ChannelMarkRecord | null {
-  const text = item.content.find((block) => block.type === "text");
-  if (text === undefined || text.type !== "text") return null;
-  const [parsed, ...rest] = parseChannelBatch(text.text);
+  // runtime 回显把正文按空行拆成多个 text 块（splitEchoBlocks），合并信封的各条信封落在不同的块里：
+  // 判定要看**拼回去**的全文（reply-language.ts 同款），只看首块会漏掉第二条起的信封
+  const joined = item.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n\n");
+  if (joined === "") return null;
+  const [parsed, ...rest] = parseChannelBatch(joined);
   if (parsed === undefined) return null;
   return {
     role: "channel-mark",

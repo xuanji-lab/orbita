@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
 import { composeChannelBatchPrompt, composeChannelPrompt } from "../../shared/channel.ts";
+import { splitEchoBlocks } from "../../shared/prompt-attachments.ts";
 import { createSessionRecorder } from "./recorder.ts";
 import { SessionStore } from "./store.ts";
 
@@ -313,7 +314,13 @@ describe("recorder 的通道标记识别（子会话 2026-09-23：信封自描�
       { message: child("m1", "done"), peer: { id: "c1", title: "甲" } },
       { message: child("m2", "question"), peer: { id: "c2", title: "乙" } },
     ]);
-    record(progress({ type: "item_started", item: envelopeUser(prompt) }));
+    // 真实的 user item 正文是按空行拆开的多个 text 块（runtime 回显的切法），不是一整段
+    record(
+      progress({
+        type: "item_started",
+        item: { ...envelopeUser(prompt), content: splitEchoBlocks(prompt).map((text) => ({ type: "text" as const, text })) },
+      }),
+    );
     await settleUntil(transcriptLanded(1));
     const detail = await store.load(ID);
     assert.equal(detail?.transcript.length, 1);
