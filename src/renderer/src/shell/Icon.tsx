@@ -19,6 +19,7 @@ import bookOpen from "../../../../design-system/assets/icons/lucide/book-open.sv
 import bot from "../../../../design-system/assets/icons/lucide/bot.svg?raw";
 import brain from "../../../../design-system/assets/icons/lucide/brain.svg?raw";
 import alarmClock from "../../../../design-system/assets/icons/lucide/alarm-clock.svg?raw";
+import clipboard from "../../../../design-system/assets/icons/lucide/clipboard.svg?raw";
 import clipboardList from "../../../../design-system/assets/icons/lucide/clipboard-list.svg?raw";
 import hourglass from "../../../../design-system/assets/icons/lucide/hourglass.svg?raw";
 import notebookText from "../../../../design-system/assets/icons/lucide/notebook-text.svg?raw";
@@ -182,6 +183,7 @@ const ICONS = {
   bot,
   brain,
   "alarm-clock": alarmClock,
+  clipboard,
   "clipboard-list": clipboardList,
   hourglass,
   "notebook-text": notebookText,
