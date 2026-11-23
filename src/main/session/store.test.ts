@@ -90,7 +90,9 @@ describe("SessionStore", () => {
     const sessions = join(dir, "sessions");
     await chmod(sessions, 0o000);
     try {
-      await assert.rejects(store.list(), /EACCES/);
+      // 已建好的索引不再读目录；模拟重启，让新 Store 的启动扫描真正撞上 EACCES
+      const reopened = new SessionStore(sessions);
+      await assert.rejects(reopened.list(), /EACCES/);
     } finally {
       await chmod(sessions, 0o700); // 不恢复的话 afterEach 的 rm 也删不掉
     }
@@ -103,8 +105,8 @@ describe("SessionStore", () => {
     assert.deepEqual((await store.load(ID))?.transcript, []);
   });
 
-  // list() 按 16 条一批并发读 meta：批边界前后顺序、坏 meta 跳过都必须与逐条读一致
-  test("list() 分批并发：>16 条仍按 sortSessions 排，坏 meta 照旧跳过", async () => {
+  // 启动索引按 16 条一批并发读 meta：批边界前后顺序、坏 meta 跳过都必须与逐条读一致
+  test("list() 启动索引分批并发：>16 条仍按 sortSessions 排，坏 meta 照旧跳过", async () => {
     const ids: string[] = [];
     for (let i = 0; i < 40; i += 1) {
       const id = `c0ffee00-0000-4000-8000-${i.toString(16).padStart(12, "0")}`;
@@ -450,6 +452,91 @@ describe("SessionStore", () => {
     const detail = await store.load(ID);
     assert.equal(detail?.meta.title, "第一句");
     assert.equal(detail?.meta.titleSource, "user");
+  });
+});
+
+// ── meta 索引：启动读一次，之后随写入增量更新（2026-11-23）──
+
+describe("SessionStore meta 索引", () => {
+  test("list / descendants 建过索引后不再逐条 readMeta", async () => {
+    await store.ensureSession(meta({ id: ID }));
+    await store.ensureSession(meta({ id: OTHER, parentId: ID }));
+    await store.list();
+
+    // 旧实现每次 list 都走 readMeta；把它直接炸掉后，旧 list 会吞错并回 []，这条就会红
+    store.readMeta = async () => {
+      throw new Error("索引建好后不该再读单条 meta");
+    };
+    assert.deepEqual((await store.list()).map((entry) => entry.id), [OTHER, ID].sort((a, b) => a.localeCompare(b)));
+    assert.deepEqual(await store.descendants(ID), [OTHER]);
+  });
+
+  test("通用 update、assignModel 写完，list 立即拿到同一份新值", async () => {
+    await store.ensureSession(meta({ providerId: UNASSIGNED_PROVIDER_ID, importedModel: "old" }));
+    await store.rename(ID, "索引里的新标题");
+    assert.equal((await store.list()).find((entry) => entry.id === ID)?.title, "索引里的新标题");
+
+    assert.equal(await store.assignModel(ID, "zai", "glm-5.4"), true);
+    assert.equal((await store.list()).find((entry) => entry.id === ID)?.providerId, "zai");
+  });
+
+  test("导入新会话与再次导入更新都进索引；删除后立即出索引", async () => {
+    await store.commitImported(meta({ id: OTHER, title: "导入", updatedAt: 2000 }), [userItem("你好")]);
+    assert.equal((await store.list()).find((entry) => entry.id === OTHER)?.title, "导入");
+
+    await store.commitImportUpdate(OTHER, [userItem("你好"), assistantItem("回答")], {
+      recentQueries: ["新的最近提问"],
+      stats: null,
+      updatedAt: 9000,
+    });
+    const updated = (await store.list()).find((entry) => entry.id === OTHER);
+    assert.equal(updated?.updatedAt, 9000);
+    assert.deepEqual(updated?.recentQueries, ["新的最近提问"]);
+
+    await store.remove(OTHER);
+    assert.equal((await store.list()).some((entry) => entry.id === OTHER), false);
+  });
+
+  test("commitBranch 写完新 meta 就进索引", async () => {
+    await store.ensureSession(meta({ piSessionFile: "C:/pi-sessions/source.jsonl" }));
+    await store.record(ID, userItem("问"));
+    await store.record(ID, assistantItem("答"));
+    const plan = await store.prepareBranch(ID, "a1");
+    await store.commitBranch(plan, "C:/pi-sessions/branch.jsonl");
+    const branch = (await store.list()).find((entry) => entry.id === plan.newId);
+    assert.equal(branch?.piSessionFile, "C:/pi-sessions/branch.jsonl");
+  });
+
+  test("进程外新增 / 改文件：list 保留启动快照不抛，readMeta 看新值，重启后对齐", async () => {
+    await store.ensureSession(meta({ title: "索引里的旧标题" }));
+    await store.list();
+    await writeFile(
+      join(dir, "sessions", `${ID}.meta.json`),
+      JSON.stringify(meta({ title: "进程外改的新标题", updatedAt: 8000 })),
+      "utf8",
+    );
+    await writeFile(
+      join(dir, "sessions", `${OTHER}.meta.json`),
+      JSON.stringify(meta({ id: OTHER, title: "进程外新增", updatedAt: 9000 })),
+      "utf8",
+    );
+
+    assert.equal((await store.list()).find((entry) => entry.id === ID)?.title, "索引里的旧标题");
+    assert.equal((await store.list()).some((entry) => entry.id === OTHER), false);
+    assert.equal((await store.readMeta(ID))?.title, "进程外改的新标题");
+    assert.equal((await store.readMeta(OTHER))?.title, "进程外新增");
+    const reopened = new SessionStore(join(dir, "sessions"));
+    assert.equal((await reopened.list()).find((entry) => entry.id === ID)?.title, "进程外改的新标题");
+    assert.equal((await reopened.list()).some((entry) => entry.id === OTHER), true);
+  });
+
+  test("进程外已删掉 meta：旧快照可列出，remove 仍安全并清掉索引", async () => {
+    await store.ensureSession(meta());
+    await store.list();
+    await rm(join(dir, "sessions", `${ID}.meta.json`), { force: true });
+    assert.equal((await store.list()).length, 1);
+    await store.remove(ID);
+    assert.deepEqual(await store.list(), []);
   });
 });
 
