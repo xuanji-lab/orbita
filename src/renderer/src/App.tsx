@@ -1414,7 +1414,9 @@ export function App() {
       // 正文与页头同一个判定（inSession）：New Task 页才有星系，对话页没有——不会出现「页头在对话里、正文是星系」的混合态
       (() => {
         const inSession = !(mainOpenId === "" && session.opened === null);
-        const wsId = inSession ? (mainOpenMeta?.workspaceId ?? null) : session.workspaceId;
+        // 刚发出、meta 还没落盘的新会话：找不到 meta 时用本槽的工作区（发送就是按它发的），不能退成「星际空间」——
+        // 那会让页头在一瞬间说错这是谁（2026-11-24 CDP 取证抓到：agent 卡住时页头显示「星际空间 › 新任务」）
+        const wsId = inSession ? (mainOpenMeta?.workspaceId ?? session.workspaceId) : session.workspaceId;
         const state = orchestrateStates.state;
         return (
           <WorkspaceCapsule

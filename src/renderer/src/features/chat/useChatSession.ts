@@ -2024,12 +2024,14 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       } catch (cause) {
         engine.setError(ipcErrorText(cause));
         // 提交没送出去本轮就没跑起来；真跑起来的失败由 failed 事件归位。
-        // IPC 直接失败（provider 装配等）不发事件，快照在这里兑底放回输入框
+        // IPC 直接失败（provider 装配、agent 进程中途退出等）不发事件，快照在这里兑底放回输入框，
+        // 并且说清是「没发出去、已放回」，不只甩一句底层原因
         if (restoreRef.current?.sessionId === id) {
           const snap = restoreRef.current;
           restoreRef.current = null;
           dropOutbox(snap);
           restoreSent(snap);
+          engine.setError(engine.messagesRef.current.chat.notSentBecause(ipcErrorText(cause)));
         }
         // 归位带防踩：撞 already running 时真在跑的那一轮已报过 phase，不能把它标成空闲
         revertTurn();

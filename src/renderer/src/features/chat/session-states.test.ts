@@ -262,6 +262,15 @@ describe("applyAgentEvent —— 每会话一槽", () => {
     assert.equal(markAllIdle(states), states);
   });
 
+  test("failed(null) 也清掉乐观回显：runtime 没了，真回显不会再来，那句话已放回输入框，对话里不留鬼影气泡", () => {
+    let states = setPendingEcho(new Map(), "A", ["没发出去的那句"]);
+    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "turn" });
+    assert.deepEqual(states.get("A")?.pendingEcho?.blocks, ["没发出去的那句"]);
+    states = applyAgentEvent(states, { type: "failed", sessionId: null, message: "agent runtime exited with code 9" });
+    assert.equal(states.get("A")?.pendingEcho, null);
+    assert.equal(states.get("A")?.phase, "idle");
+  });
+
   test("ready / created 等与槽无关的事件原样穿过", () => {
     const states = new Map();
     assert.equal(

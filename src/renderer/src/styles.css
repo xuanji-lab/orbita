@@ -2758,6 +2758,10 @@ button.ws-fold {
   padding: 0;
 }
 .ws-home-sky.home-fade {
+  /* 与聊天页的滚动段同样留出滚动条位（.chat-transcript 的 scrollbar-gutter），页脚右内边距补同样多（--transcript-scrollbar，
+     ChatView 量了写在 .ws-home 上）：New Task 页与对话页的输入卡左右缘逐像素一致，发出第一句时不横跳半个滚动条 */
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
   display: flex;
   flex-direction: column;
   align-items: stretch;

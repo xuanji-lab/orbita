@@ -1902,6 +1902,7 @@ export const zh: Messages = {
     noProvider: "还没有能发消息的模型，草稿会留在这里。",
     noProviderExit: "添加服务商",
     notSent: "这句没发出去：智能体进程在它落账前停了，已放回输入框。",
+    notSentBecause: (reason) => `这句没发出去，已放回输入框。原因：${reason}`,
     notSentRecovered: (n) => `上次有 ${n} 句话没发出去，已放回它出发的输入框。`,
     readOnlyTask: "这个任务记录于支持续聊之前，只能读、不能接着聊。新开一个任务继续吧。",
     noMessages: "还没有消息。发出第一条就开始了。",

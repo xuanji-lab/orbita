@@ -2069,6 +2069,7 @@ export const en = {
     noProvider: "No model to send with yet. Your draft stays here.",
     noProviderExit: "Add a provider",
     notSent: "That message was not sent: the agent process stopped before it was recorded. It is back in the input box.",
+    notSentBecause: (reason: string) => `That message was not sent and is back in the input box. ${reason}`,
     notSentRecovered: (n: number) => `${n} message${n === 1 ? " was" : "s were"} not sent last time and ${n === 1 ? "is" : "are"} back in ${n === 1 ? "its" : "their"} input box.`,
     readOnlyTask:
       "This task was recorded before tasks could be resumed, so it can be read but not continued. Start a new task to keep working.",

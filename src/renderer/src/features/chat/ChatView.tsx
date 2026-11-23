@@ -1468,6 +1468,20 @@ function ChatViewBody(props: {
    * 单智能体形态原样不动：版式仍是「标题与输入框在上、星系在下」，星系仍是写死的 fixture（PROTO_GALAXY_SPEC）。
    */
   const scopedHome = galaxyHome && props.orchestrate === true;
+  // 工作区 New Task 页：量星空那一块留出的滚动条位，写进 --transcript-scrollbar（与聊天页 Pane 同一个量法），
+  // 页脚右内边距补同样多——输入卡与对话页的逐像素对齐，发出第一句时不横跳（2026-11-24 实测横跳 5.5px）
+  useLayoutEffect(() => {
+    const stage = stageRef.current;
+    const sky = stage?.querySelector<HTMLElement>(".ws-home-sky");
+    if (!scopedHome || stage === null || stage === undefined || sky === null || sky === undefined) return;
+    const sync = (): void => {
+      stage.style.setProperty("--transcript-scrollbar", `${Math.max(0, sky.offsetWidth - sky.clientWidth)}px`);
+    };
+    sync();
+    const observer = new ResizeObserver(sync);
+    observer.observe(sky);
+    return () => observer.disconnect();
+  }, [scopedHome]);
   const protoVariants = useProtoVariants();
   // 编排的新任务固定放行（用户 2026-11-16 定「只留放行」，不再向用户暴露档位）：首页槽的档位钉成 skip，
   // 但不写 settings.lastUsed——单智能体记住的那一档不被顺手改掉。已落盘的老会话保持它自己的档（本刀不动）
