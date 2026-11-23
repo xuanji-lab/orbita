@@ -159,6 +159,18 @@ const devDirs = devDataDirs({
 if (devDirs !== null && !app.commandLine.hasSwitch("user-data-dir")) app.setPath("userData", devDirs.userData);
 
 /*
+ * 假麦克风（只给开发版的无人验收用）：夜里没人点系统的麦克风授权框，也不许替用户改系统设置，
+ * 于是让 Chromium 用一段 wav 当麦克风、免掉页内授权。**只在开发版 + 显式环境变量下生效**：
+ * ORBITA_FAKE_MIC_WAV=<wav 绝对路径>（播完即静音，不循环）。打包版不认这个变量。
+ */
+const fakeMicWav = app.isPackaged ? undefined : process.env["ORBITA_FAKE_MIC_WAV"];
+if (fakeMicWav !== undefined && fakeMicWav !== "") {
+  app.commandLine.appendSwitch("use-fake-ui-for-media-stream");
+  app.commandLine.appendSwitch("use-fake-device-for-media-stream");
+  app.commandLine.appendSwitch("use-file-for-fake-audio-capture", `${fakeMicWav}%noloop`);
+}
+
+/*
  * 单实例锁。「关窗 = 收进托盘」之后，双击桌面图标必须回到原进程——否则两个进程
  * 同时写同一份会话 JSONL / settings（「读全量 → 改写 → rename」的原子写挡不住
  * 两个写入者，会互相覆盖丢更新）。锁按 userData 目录划分，dev 与打包版、显式
@@ -400,10 +412,6 @@ void app.whenReady().then(async () => {
   // 一个 secrets.json 一个实例：provider 的 API key 与语音厂商的密钥共用，读改写不互相踩
   const secrets = new SafeStorageSecrets(configDir);
   const providers = new ProviderStore(configDir, secrets);
-  registerVoiceIpc(
-    new VoiceStore(configDir, secrets),
-    new DictationSessions({ openSocket: openUndiciSocket, diagnose: diagnoseOverHttps }),
-  );
   // workspace 的 IPC 在下面注册（要一并注入 skills 的连带清理，见 registerWorkspaceIpc）
 
   /*
@@ -430,6 +438,12 @@ void app.whenReady().then(async () => {
   // 通道账本（子会话 2026-09-23）先于 SessionStore 建：SessionStore 的级联删要用它
   const channels = new ChannelStore(join(configDir, "channels"));
   const sessions = new SessionStore(join(configDir, "sessions"), join(configDir, "workbenches"), channels);
+  // 语音：听写 + 通话的合成与录音（录音写进会话工作台，所以排在 SessionStore 之后）
+  registerVoiceIpc(
+    new VoiceStore(configDir, secrets),
+    new DictationSessions({ openSocket: openUndiciSocket, diagnose: diagnoseOverHttps }),
+    { workbenchPath: (sessionId) => sessions.workbenchPath(sessionId) },
+  );
   // 任务账本（侧栏用量格 usage:week / usage:event 与价格 · 能力图共用）：assistant 记录落盘的同一条
   // 路径上按「会话 × 型号 × 档的连续一段」增量记账，意图召回另记按天的一份；升级后第一次启动回填
   // 一次，注册即异步装载 + 回填，不阻塞启动。取代原来的日账本 usage-daily.json（不再读写，留在盘上无害）
