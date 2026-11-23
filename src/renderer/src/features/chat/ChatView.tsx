@@ -334,8 +334,11 @@ export function ChatView(props: ChatViewProps) {
   const carriesFiles = (event: React.DragEvent) => accepts && event.dataTransfer.types.includes("Files");
   // 回答里的本地图、过程缩略图、结尾产物的「打开」按这条会话能看到的目录读（chat-file-scope.ts）
   const fileScope = useMemo<ChatFileScope>(
-    () => ({ sessionId: session.sessionId, workspaceId: session.workspaceId, cwd: session.cwd }),
-    [session.sessionId, session.workspaceId, session.cwd],
+    // 会话 id 取「正在看的那条」：只认 session.sessionId 的话，从侧栏点开 / 重启后看的旧会话是 null，
+    // 白名单里少了这条会话的工作台，工作台里的图一律读不到（2026-11-23 用户：回复里的图要再发一条消息才画出来——
+    // 发了消息会话变「活的」，sessionId 才有值）。与 viewedId、文件面板同一个口径
+    () => ({ sessionId: session.sessionId ?? session.opened?.id ?? null, workspaceId: session.workspaceId, cwd: session.cwd }),
+    [session.sessionId, session.opened?.id, session.workspaceId, session.cwd],
   );
   // 过程里「回复了「标题」」要写对面是谁：子会话 id → 标题
   const peerTitle = useMemo(() => {
