@@ -799,6 +799,10 @@ export const en = {
     open: "View larger",
     prev: "Previous image",
     next: "Next image",
+    openInFiles: "Preview in the files panel · right-click for size",
+    imageRef: (name: string) => `Image · ${name}`,
+    sizeLarge: "Large",
+    sizeSmall: "Small",
   },
 
   rowStatus: {

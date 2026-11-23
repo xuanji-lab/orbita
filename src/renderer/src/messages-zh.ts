@@ -717,6 +717,10 @@ export const zh: Messages = {
     open: "查看大图",
     prev: "上一张",
     next: "下一张",
+    openInFiles: "在右栏文件面板里预览 · 右键选大图 / 小图",
+    imageRef: (name) => `图片 · ${name}`,
+    sizeLarge: "大图",
+    sizeSmall: "小图",
   },
 
   rowStatus: {

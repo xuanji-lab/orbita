@@ -64,6 +64,7 @@ import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shel
 import { FEATURE_ICON } from "./shell/feature-icons.ts";
 import { type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
 import { PastedTextCollapseContext } from "./shell/attachment-chips";
+import { ChatImageSizeContext } from "./features/chat/chat-file-scope.ts";
 import { ProcessViewContext } from "./features/chat/process-view-context";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
 import { isUnclaimedEscape } from "./shell/escape-key.ts";
@@ -192,6 +193,15 @@ export function App() {
   const changeSettings = useCallback((patch: SettingsPatch) => {
     void api.settings.set(patch).then(setSettings);
   }, []);
+
+  /** 回答里本地图的默认尺寸（右键一张图选的那次记下来，之后新图按它画；见 ChatImageSizeContext） */
+  const chatImageSize = useMemo(
+    () => ({
+      size: settings.chatImageSize ?? ("large" as const),
+      setSize: (next: "large" | "small") => changeSettings({ chatImageSize: next }),
+    }),
+    [settings.chatImageSize, changeSettings],
+  );
 
   /** 文档面板的纸面：设置里的值按当前主题折算（纸面主题下回落 quiet 并锁住切换） */
   const docPaper = useMemo(() => {
@@ -1485,6 +1495,7 @@ export function App() {
     <DocPaperContext.Provider value={docPaper}>
     <ExperimentalFeaturesContext.Provider value={experimentalFeatures}>
     <ProcessViewContext.Provider value={settings.processView ?? "chapters"}>
+    <ChatImageSizeContext.Provider value={chatImageSize}>
     <AutomationContext.Provider value={automationUi}>
     <AutomationRunSessionsContext.Provider value={runSessionIds}>
     <PastedTextCollapseContext.Provider value={settings.collapsePastedText ?? true}>
@@ -1817,6 +1828,7 @@ export function App() {
     </PastedTextCollapseContext.Provider>
     </AutomationRunSessionsContext.Provider>
     </AutomationContext.Provider>
+    </ChatImageSizeContext.Provider>
     </ProcessViewContext.Provider>
     </ExperimentalFeaturesContext.Provider>
     </DocPaperContext.Provider>

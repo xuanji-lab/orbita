@@ -30,8 +30,9 @@ import { useT } from "../../locale.ts";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { citationIdOfHref, citationTitle, remarkCitationMarkers } from "./citation-markers.ts";
 import { CitationOpenContext, CitationTableContext } from "./citation-context.ts";
-import { resolveChatPath, useChatFileScope, useChatImage } from "./chat-file-scope.ts";
-import { ImageLightbox } from "../../shell/ImageLightbox";
+import { ChatImageSizeContext, resolveChatPath, useChatFileScope, useChatImage } from "./chat-file-scope.ts";
+import { ContextMenu } from "../../shell/ContextMenu";
+import { requestOpenPanel } from "../../shell/open-panel.ts";
 // 提醒框（`> [!note]`）的样式 = 文档面板阅读视图那一份（`.chat-md .callout`），回答里与文档里长一个样
 import "../doc-panel/doc-panel.css";
 
@@ -143,9 +144,12 @@ export const MarkdownBlock = memo(function MarkdownBlock({
     () => (preProps: { children?: ReactNode }) => <MdPre {...preProps} highlight={false} />,
     [],
   );
+  // 用户气泡里的 `![](路径)` 不画成图（2026-11-23 用户：「为什么会有图出现在 user message 里」）：
+  // 用户打进去的是一段文字，模型收到的也只是这段文字、不是这张图——画成图会让人以为 agent 看到了它。
+  // 画成一颗「图片 · 文件名」小签，点了在右栏文件面板看
   const baseComponents = useMemo(
-    () => ({ a: ExternalAnchor, img: ChatImage, span: ChipSpan }),
-    [],
+    () => ({ a: ExternalAnchor, img: bubble ? BubbleImageRef : ChatImage, span: ChipSpan }),
+    [bubble],
   );
   const highlightComponents = useMemo(
     () => ({ ...baseComponents, pre: preHighlight }),
@@ -315,20 +319,67 @@ function ChatImage(props: ImageProps) {
 function LocalChatImage(props: { path: string; alt: string; fallback: ImageProps }) {
   const t = useT();
   const url = useChatImage(props.path);
-  const [viewing, setViewing] = useState(false);
-  if (url === undefined) return <span className="chat-img-pending" aria-hidden="true" />;
+  const pref = useContext(ChatImageSizeContext);
+  // 挂载时读一次偏好当初值：之后别处改了偏好，已经画好的这张不跟着跳
+  const [size, setSize] = useState(pref.size);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  if (url === undefined) return <span className="chat-img-pending" data-size={size} aria-hidden="true" />;
   if (url === null) return <ImagePlaceholder {...props.fallback} />;
-  const comma = url.indexOf(",");
-  const mimeType = url.slice(5, url.indexOf(";"));
+  const pick = (next: "large" | "small"): void => {
+    setSize(next);
+    pref.setSize(next);
+  };
   return (
     <>
-      <button type="button" className="chat-img-local" aria-label={t.lightbox.open} onClick={() => setViewing(true)}>
+      {/*
+        左键在右栏文件面板里预览（2026-11-23 用户：以前的大图浮层挡住文字）；右键选大图 / 小图。
+        图居中，大图最高 480、小图最高 160。
+      */}
+      <button
+        type="button"
+        className="chat-img-local"
+        data-size={size}
+        title={t.lightbox.openInFiles}
+        aria-label={t.lightbox.openInFiles}
+        onClick={() => requestOpenPanel({ kind: "files", path: props.path, force: true })}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          setMenu({ x: event.clientX, y: event.clientY });
+        }}
+      >
         <img src={url} alt={props.alt} />
       </button>
-      {viewing && (
-        <ImageLightbox images={[{ type: "image", data: url.slice(comma + 1), mimeType }]} startIndex={0} onClose={() => setViewing(false)} />
-      )}
+      <ContextMenu
+        position={menu}
+        onClose={() => setMenu(null)}
+        items={[
+          { id: "large", label: t.lightbox.sizeLarge, checked: size === "large", onSelect: () => pick("large") },
+          { id: "small", label: t.lightbox.sizeSmall, checked: size === "small", onSelect: () => pick("small") },
+        ]}
+      />
     </>
+  );
+}
+
+/** 用户气泡里的图片语法：一颗小签（文件名），不读图。本地路径点了在右栏文件面板看，远程地址照占位的规矩 */
+function BubbleImageRef(props: ImageProps) {
+  const t = useT();
+  const src = typeof props.src === "string" ? props.src : "";
+  const scope = useChatFileScope();
+  const remote = /^[a-z][a-z0-9+.-]*:/i.test(src) && !/^file:/i.test(src) && !/^[A-Za-z]:[\\/]/.test(src);
+  const path = remote || src === "" ? null : resolveChatPath(src, scope?.cwd ?? null);
+  if (path === null) return <ImagePlaceholder {...props} />;
+  const name = path.split(/[\\/]/).pop() ?? path;
+  return (
+    <button
+      type="button"
+      className="chat-img-ref"
+      title={path}
+      onClick={() => requestOpenPanel({ kind: "files", path, force: true })}
+    >
+      <Icon name="image" size={12} strokeWidth={1.8} />
+      {t.lightbox.imageRef(name)}
+    </button>
   );
 }
 

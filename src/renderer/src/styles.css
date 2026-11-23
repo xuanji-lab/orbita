@@ -6113,14 +6113,16 @@ html {
 
 /* 回答里的本地图（MarkdownBlock.ChatImage，2026-11-22）：一张图占一整行，下面紧跟的段落是它的解释。
    边与圆角同 show_image 的单图；点开看大图。 */
+/* 回答里的本地图：居中，一张占一行；大图最高 480、小图最高 160（右键切，2026-11-23）。左键在右栏文件面板预览 */
 .chat-md .chat-img-local {
   display: block;
-  margin: var(--space-2) 0 var(--space-1);
+  width: fit-content;
+  max-width: 100%;
+  margin: var(--space-2) auto var(--space-1);
   padding: 0;
   border: 0;
   background: none;
-  cursor: zoom-in;
-  max-width: 100%;
+  cursor: pointer;
 }
 .chat-md .chat-img-local img {
   display: block;
@@ -6131,11 +6133,35 @@ html {
   border: 1px solid var(--color-border-subtle);
   background: var(--color-bg-panel);
 }
+.chat-md .chat-img-local[data-size="small"] img {
+  max-height: 160px;
+}
+/* 用户气泡里的图片语法：一颗小签（见 MarkdownBlock 的 BubbleImageRef），与附件芯片同一副骨架 */
+.chat-md .chat-img-ref {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  padding: 1px var(--space-1-5);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.chat-md .chat-img-ref:hover {
+  color: var(--color-text-primary);
+}
 .chat-md .chat-img-pending {
   display: block;
   height: 120px;
   border-radius: var(--radius-md);
   background: var(--color-bg-muted);
+}
+.chat-md .chat-img-pending[data-size="small"] {
+  height: 80px;
 }
 
 /* ===== 过程与产物（2026-11-22，ChatView 的 TurnProcessLine / ProcessExpanded / StepRow / TurnOutputsBlock；
