@@ -381,3 +381,15 @@ export function clampPanelWidth(width: number, paneWidth: number): number {
 export function fitsPanel(paneWidth: number): boolean {
   return paneWidth - PANEL_MIN - PANEL_GAP >= CHAT_MIN;
 }
+
+/**
+ * 目标的短标题：第一个冒号前那一句（「补上璇玑的『最后一公里』：先把……」→「补上璇玑的『最后一公里』」），
+ * 4–40 字才算；没有冒号或太短太长就用全文（卡头照旧最多两行）。目标照用户原话写，常常一长串，
+ * 卡头只要认得出是哪件事（2026-11-23 用户：「goal 都写的好长，这个怎么优化一些」）。纯函数，测试在 chat-status.test.ts。
+ */
+export function goalHeadline(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  const cut = flat.search(/[：:]/);
+  if (cut >= 4 && cut <= 40) return flat.slice(0, cut);
+  return flat;
+}
