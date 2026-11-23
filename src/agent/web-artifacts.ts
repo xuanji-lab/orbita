@@ -36,7 +36,7 @@
  *
  * 纯注入设计：读盘经 ScanFs 注入，node --test 喂假目录树。
  */
-import { readdir, stat } from "node:fs/promises";
+import { open, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { TurnDirectories } from "../shared/agent-ipc.ts";
 import { isWebArtifactFile } from "../shared/files.ts";
@@ -170,6 +170,19 @@ export function isScriptTool(toolName: string): boolean {
   return toolName === "bash" || toolName === "powershell" || toolName === "terminal_execute" || toolName.startsWith("mcp__");
 }
 
+/**
+ * 下载类命令：curl / wget / Invoke-WebRequest 把别人的网页存成 .html，git clone 拉下整仓。它们落盘的网页是「搬来的原料」，
+ * 不是本轮做出来的东西（2026-11-23 会话 2defbe：调研时 curl 了五个官网页面去 grep，轮尾卡片把它们算成「5 个网页」）。
+ * 这类命令不开窗口。代价：同一条命令里既下载又用脚本生成网页时，生成的那份漏报——宁可漏报，不替用户没做过的事背书。
+ */
+const DOWNLOAD_COMMAND = /\b(?:curl|wget|Invoke-WebRequest|iwr)\b|\bgit\s+clone\b|\bgh\s+repo\s+clone\b/i;
+
+export function isDownloadCommand(args: unknown): boolean {
+  if (typeof args !== "object" || args === null || !("command" in args)) return false;
+  const command = args.command;
+  return typeof command === "string" && DOWNLOAD_COMMAND.test(command);
+}
+
 /** 一个工具执行窗口：开跑 → 落定（毫秒时间戳）。 */
 export interface ToolWindow {
   start: number;
@@ -181,8 +194,8 @@ export class ToolWindows {
   private readonly open = new Map<string, number>();
   private readonly closed: ToolWindow[] = [];
 
-  begin(toolCallId: string, toolName: string, at: number): void {
-    if (isScriptTool(toolName)) this.open.set(toolCallId, at);
+  begin(toolCallId: string, toolName: string, at: number, args?: unknown): void {
+    if (isScriptTool(toolName) && !isDownloadCommand(args)) this.open.set(toolCallId, at);
   }
 
   finish(toolCallId: string, at: number): void {
@@ -242,6 +255,55 @@ export function makeWebAccept(
     if (!inWindow) return false;
     return !writtenByOtherSession(sessionId, path, startedAt - WEB_ARTIFACT_MTIME_SLACK_MS);
   };
+}
+
+/**
+ * 从网上存下来的页面：头部带指向 http(s) 的 canonical / og:url，或浏览器「另存为」留下的 `saved from url` 注释。
+ * 下载命令那道拦不住的（node / python 脚本里 fetch 再写盘、playwright 的 page.content()）靠这道兜。
+ * 只看文件头 64 KB：这些标记都在 <head> 里，实测五个官网页面最晚出现在第 18 KB。
+ * 代价：agent 给用户做的、写了真实域名 canonical 的站点页会被漏报（少见）。
+ */
+const SAVED_PAGE_MARKERS = [
+  /<link\b(?=[^>]*\bcanonical\b)(?=[^>]*https?:\/\/)[^>]*>/i,
+  /<meta\b(?=[^>]*\bog:url\b)(?=[^>]*https?:\/\/)[^>]*>/i,
+  /<!--\s*saved from url=/i,
+];
+export const SAVED_PAGE_HEAD_BYTES = 64 * 1024;
+
+export function looksSavedFromWeb(head: string): boolean {
+  return SAVED_PAGE_MARKERS.some((marker) => marker.test(head));
+}
+
+/** 读文件头（失败 = 空串，按不是存下来的页面处理）。 */
+export async function readFileHead(path: string, bytes: number = SAVED_PAGE_HEAD_BYTES): Promise<string> {
+  try {
+    const handle = await open(path, "r");
+    try {
+      const buffer = Buffer.alloc(bytes);
+      const { bytesRead } = await handle.read(buffer, 0, bytes, 0);
+      return buffer.subarray(0, bytesRead).toString("utf8");
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * 扣掉从网上存下来的 .html / .htm（svg 不查）。命中数远超批量上限时不逐个读——反正要折叠成计数，读了白读。
+ */
+export async function dropSavedPages(
+  paths: readonly string[],
+  readHead: (path: string) => Promise<string> = readFileHead,
+): Promise<string[]> {
+  if (paths.length > WEB_ARTIFACT_BATCH_LIMIT * 5) return [...paths];
+  const kept: string[] = [];
+  for (const path of paths) {
+    if (/\.html?$/i.test(path) && looksSavedFromWeb(await readHead(path))) continue;
+    kept.push(path);
+  }
+  return kept;
 }
 
 /**

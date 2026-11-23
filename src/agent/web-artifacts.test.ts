@@ -1,7 +1,10 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  dropSavedPages,
   foldWebArtifacts,
+  isDownloadCommand,
+  looksSavedFromWeb,
   isScriptTool,
   makeWebAccept,
   noteSessionWrite,
@@ -272,6 +275,41 @@ describe("旁路网页只算这一条会话这一轮自己产生的（2026-11-22
   it("isScriptTool：只有 shell / 终端执行 / 外接工具可能在文件账外生成网页", () => {
     for (const name of ["bash", "powershell", "terminal_execute", "mcp__qgis__execute_code"]) strictEqual(isScriptTool(name), true, name);
     for (const name of ["write", "edit", "read", "grep", "show_image", "slides_export", "terminal_read"]) strictEqual(isScriptTool(name), false, name);
+  });
+
+  it("下载命令（curl / wget / git clone）不开窗口：搬来的网页不是本轮产物——会话 2defbe 调研时 curl 的五个官网页面", () => {
+    for (const command of [
+      'curl -sS -L -m 25 -o liveblocks-agentic.html https://liveblocks.io/docs',
+      'for u in a b; do f=page_$(echo $u | md5).html; code=$(curl -sS -o $f "$u"); done',
+      "wget -O x.html https://example.com",
+      "git clone https://github.com/a/b research/b",
+      "Invoke-WebRequest https://example.com -OutFile x.html",
+    ]) strictEqual(isDownloadCommand({ command }), true, command);
+    for (const args of [{ command: "python3 make_chart.py > chart.html" }, { command: "node build.mjs" }, {}, null, undefined, "curl"]) {
+      strictEqual(isDownloadCommand(args), false, JSON.stringify(args));
+    }
+    const windows = new ToolWindows();
+    windows.begin("dl", "bash", T0 + 1, { command: "curl -o a.html https://x.y" });
+    windows.finish("dl", T0 + 2);
+    windows.begin("gen", "bash", T0 + 10, { command: "python3 gen.py" });
+    windows.finish("gen", T0 + 20);
+    deepStrictEqual(windows.snapshot(T0 + 99), [{ start: T0 + 10, end: T0 + 20 }]);
+  });
+
+  it("从网上存下来的页面（canonical / og:url 指向 http、saved from url）扣掉，自己生成的网页和 svg 照留", async () => {
+    strictEqual(looksSavedFromWeb('<head><link rel="canonical" href="https://liveblocks.io/docs/use-cases/agentic-users"/></head>'), true);
+    strictEqual(looksSavedFromWeb('<link href="https://openai.com/index/x/" rel="canonical">'), true);
+    strictEqual(looksSavedFromWeb('<meta property="og:url" content="https://www.kimi.ai/blog/"/>'), true);
+    strictEqual(looksSavedFromWeb("<!-- saved from url=(0014)about:internet -->"), true);
+    strictEqual(looksSavedFromWeb('<html><head><title>周报图表</title><link rel="stylesheet" href="style.css"></head>'), false);
+    strictEqual(looksSavedFromWeb('<p>canonical 形式：见 https://example.com</p>'), false);
+    const heads: Record<string, string> = {
+      "/w/src/page_5c842764.html": '<!DOCTYPE html><html><head><link rel="canonical" href="https://claude.com/x"/>',
+      "/w/chart.html": "<!DOCTYPE html><html><head><title>chart</title>",
+      "/w/icon.svg": '<svg><a href="https://x.y" rel="canonical"/></svg>',
+    };
+    const kept = await dropSavedPages(Object.keys(heads), async (path) => heads[path] ?? "");
+    deepStrictEqual(kept, ["/w/chart.html", "/w/icon.svg"]);
   });
 
   it("ToolWindows：只记脚本类工具；没落定的（被中断）按轮尾时刻封口", () => {

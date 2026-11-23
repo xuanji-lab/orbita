@@ -59,6 +59,7 @@ import { movePiBook, revertPiBook, undoPiBook } from "./pi-book-edit.ts";
 import { TurnFileTracker } from "./file-tracker.ts";
 import {
   foldWebArtifacts,
+  dropSavedPages,
   makeWebAccept,
   noteSessionWrite,
   scanWebArtifacts,
@@ -254,6 +255,8 @@ async function scanWebArtifactsLogged(watch: WebArtifactWatch): Promise<WebScanR
     const result = await scanWebArtifacts(roots, startedAt - WEB_ARTIFACT_MTIME_SLACK_MS, undefined, {
       accept: makeWebAccept(watch.sessionId, windows, startedAt),
     });
+    // 从网上存下来的页面（canonical / og:url 指向 http）是原料，不是本轮产物
+    const paths = await dropSavedPages(result.paths);
     if (result.truncated) {
       console.warn(
         `[web-artifacts] 扫描撞条目上限被截断（本轮网页产物可能漏报）roots=${roots
@@ -261,7 +264,7 @@ async function scanWebArtifactsLogged(watch: WebArtifactWatch): Promise<WebScanR
           .join(" | ")}`,
       );
     }
-    return result;
+    return { ...result, paths };
   } catch (cause) {
     console.error("[web-artifacts] 扫描失败，本轮按没有旁路网页产物处理", cause);
     return { paths: [], truncated: false };
@@ -1501,7 +1504,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     // 文件快照的 after：工具落定即读盘。不 await（读盘是毫秒级，不该卡事件流），
     // finalize 自己等在途读全部落定
     if (event.type === "tool_execution_start") {
-      webWatch.windows.begin(event.toolCallId, event.toolName, Date.now());
+      webWatch.windows.begin(event.toolCallId, event.toolName, Date.now(), event.args);
     }
     if (event.type === "tool_execution_end") {
       void tracker.noteExecutionEnd(event.toolCallId);
