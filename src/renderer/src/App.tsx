@@ -653,7 +653,7 @@ export function App() {
     setSubSessionsNav(openSubSession(childId));
     setRightPanel("subsessions");
   }, []);
-  /** 头部「N sub-sessions」芯片：强制回列表层（不是「resume 到上次的位置」） */
+  /** 头部「N sub-sessions」与交回提示的「在面板里看」：强制回列表层（待讨论组在最上面） */
   const openSubSessionsList = useCallback(() => {
     setSubSessionsNav(SUB_SESSIONS_LIST);
     setRightPanel("subsessions");
@@ -1611,6 +1611,7 @@ export function App() {
                 excerptJump={excerptJump}
                 onExcerptSaved={bumpExcerpts}
                 onOpenSubSession={openSubSessionInPanel}
+                onOpenSubSessionsList={openSubSessionsList}
                 litSubSessionId={litSubSessionId}
                 theme={resolvedTheme}
                 starredModels={settings.starredModels ?? []}

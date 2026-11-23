@@ -745,6 +745,8 @@ function ChatViewBody(props: {
    * 也符合「UI 只做一层」：面板里查看的子会话不再嵌一层它自己的 Sub-sessions 入口。
    */
   onOpenSubSession?: (childId: string) => void;
+  /** 右栏「子会话」面板的列表层（收件箱）：对话流里的「N 个子会话交回了」提示行的「在面板里看」。不给就不显示该按钮 */
+  onOpenSubSessionsList?: () => void;
   /**
    * 解析后的主题：只给首页门面用（纸面两档的 slogan 与批语，HomeHero.tsx）。
    * 只有主槽的 ChatView 拿到它；辅助对话是 homeBare，本来就不出门面。
@@ -1798,7 +1800,7 @@ function ChatViewBody(props: {
             {hideComposer !== true && (
               <>
                 {/* 子会话交回了 N 件：先攒在这里、不替用户开一轮（channel-hold.ts）；与排队条同一层 */}
-                {session.sessionId !== null && <ChannelHoldBar sessionId={session.sessionId} titles={channel.titles} />}
+                {openId !== "" && <ChannelHoldBar sessionId={openId} onOpenPanel={props.onOpenSubSessionsList} />}
                 {/* 排队卡片：比 composer 高一层（等待发出的事），比审批低一层（审批要求回答才继续） */}
                 <QueueStrip
                   items={session.queued}

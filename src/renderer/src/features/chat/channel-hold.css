@@ -1,35 +1,14 @@
 /*
- * 「N 个子会话交回了」提示条（ChannelHoldBar）。外壳同排队条（glass-card glass-float），
- * 字号三档：base（标题 / 子会话名）、sm（摘要）、xs（行尾类别）。accent 不出现——
- * 它是一件等着送出去的事，不是主操作；question 的提示用 warning 色的字与一枚小点，
- * 颜色是第二信号，第一信号是「在等你回答」这几个字。
+ * 「N 个子会话交回了」提示行（ChannelHoldBar）：对话流里只留一行。外壳同排队条（glass-card glass-float），
+ * 字号两档：base（标题）、sm（半句说明与按钮）。accent 不出现——它是一件等着送出去的事，不是主操作；
+ * 有子会话在等回答时图标上挂一枚 danger 小点，颜色是第二信号，第一信号是「在等你回答」这几个字。
  */
 .ch-bar {
-  /* 行首图标列宽（14px 图标档）：摘要行与「还有 N 个」对齐到它之后 */
-  --ch-glyph: 14px;
-  display: grid;
-  gap: var(--space-1);
-  padding: var(--space-3);
-}
-.ch-head {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
-}
-.ch-fold {
-  display: flex;
-  flex: 1 1 auto;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--color-text-primary);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
+  padding: var(--space-2) var(--space-3);
 }
 .ch-lead {
   position: relative;
@@ -51,13 +30,16 @@
   font-size: var(--font-size-base);
   color: var(--color-text-primary);
 }
-.ch-reason {
+.ch-note {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
+}
+.ch-bar[data-question] .ch-note {
+  color: var(--color-text-secondary);
 }
 .ch-actions {
   display: inline-flex;
@@ -84,62 +66,4 @@
 .ch-btn[data-primary="true"] {
   color: var(--color-text-primary);
   font-weight: var(--weight-semibold);
-}
-.ch-ask {
-  margin: 0;
-  padding-left: calc(var(--ch-glyph) + var(--space-2));
-  font-size: var(--font-size-sm);
-  color: var(--color-warning);
-}
-.ch-list {
-  display: grid;
-  gap: var(--space-1);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.ch-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-}
-.ch-row-icon {
-  display: inline-flex;
-  flex: 0 0 auto;
-  width: var(--ch-glyph);
-  justify-content: center;
-  color: var(--color-text-secondary);
-}
-.ch-row-title {
-  flex: 0 1 auto;
-  max-width: 40%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--font-size-base);
-  color: var(--color-text-primary);
-}
-.ch-row-summary {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-tertiary);
-}
-.ch-row-kind {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-}
-.ch-row[data-kind="question"] .ch-row-icon,
-.ch-row[data-kind="question"] .ch-row-kind {
-  color: var(--color-warning);
-}
-.ch-more {
-  padding-left: calc(var(--ch-glyph) + var(--space-2));
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
 }

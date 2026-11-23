@@ -36,6 +36,8 @@ import { api } from "../../api";
 import { modelChipParts, ModelPickerMenu } from "../settings/model-menu";
 import { useChannelSummaries } from "./useChannelSummaries";
 import { useParentChannels } from "./useChannelMessages";
+import { channelHold, useChannelHold } from "./channel-hold-store.ts";
+import "./channel-hold.css";
 import {
   childActivityOf,
   elapsedText,
@@ -338,7 +340,14 @@ function SubSessionList(props: {
       model: modelName(meta.modelId),
     };
   });
-  const groups = groupPanelRows(rows);
+  // 「待讨论」：交回了、主会话还没看到的（不打岔攒着的）单列一组放最上面——内容在这里看、在这里回复，
+  // 不进主会话的对话流；点「现在讨论」才合成一条交给主会话。其余行照旧分组。
+  const hold = useChannelHold(props.parentId);
+  const heldChildIds = new Set(hold?.held.map((item) => item.childId));
+  const heldRows = rows
+    .filter((row) => heldChildIds.has(row.meta.id))
+    .sort((a, b) => Number(b.state === "waiting") - Number(a.state === "waiting") || b.lastAt - a.lastAt);
+  const groups = groupPanelRows(rows.filter((row) => !heldChildIds.has(row.meta.id)));
   // 走表：只有在跑工具的行才走；窗口不在前台停；不到一分钟按秒、否则按分钟跳（nextTickIn）
   useTicker(
     rows.flatMap((row) => (row.since === null ? [] : [row.since])),
@@ -355,6 +364,28 @@ function SubSessionList(props: {
 
   return (
     <div className="ssp-list">
+      {heldRows.length > 0 && (
+        <section className="ssp-group" aria-label={t.channelHold.panelGroup}>
+          <header className="ssp-group-head" title={t.channelHold.panelGroupTip}>
+            <span>{t.channelHold.panelGroup}</span>
+            <span className="ssp-group-n">{heldRows.length}</span>
+            <button
+              type="button"
+              className="ch-btn row-trailing"
+              data-primary="true"
+              title={t.channelHold.discussTitle}
+              onClick={() => channelHold.release(props.parentId)}
+            >
+              {t.channelHold.discuss}
+            </button>
+          </header>
+          <div className="ssp-card">
+            {heldRows.map((row) => (
+              <SubSessionRow key={row.meta.id} row={row} now={now} held onClick={() => props.onOpenChild(row.meta.id)} />
+            ))}
+          </div>
+        </section>
+      )}
       {groups.map(({ group, rows: list }) => {
         const folded = FOLDED_GROUPS.has(group) && !unfolded.has(group);
         if (folded) {
@@ -398,7 +429,7 @@ function SubSessionList(props: {
  * 第二行是这一状态下有用的那句话，在跑的行尾走表。「在问你」的行多一个［去回答］，点开回答框（ChannelReplyBox）。
  * 行按钮与回答框 / 去回答是兄弟（button 不能嵌 button）。
  */
-function SubSessionRow(props: { row: PanelRow; now: number; onClick: () => void }) {
+function SubSessionRow(props: { row: PanelRow; now: number; onClick: () => void; held?: boolean }) {
   const t = useT();
   const { row } = props;
   const [answering, setAnswering] = useState(false);
@@ -432,13 +463,14 @@ function SubSessionRow(props: { row: PanelRow; now: number; onClick: () => void 
           </span>
         </span>
       </button>
-      {row.state === "waiting" && (
+      {/* 在问你的行：去回答；「待讨论」组里交回的行：回复（直接对子会话说话，不经主会话） */}
+      {(row.state === "waiting" || props.held === true) && (
         <div className="ssp-answer">
           {answering ? (
             <ChannelReplyBox parentId={row.meta.parentId ?? ""} childId={row.meta.id} autoFocus onCancel={() => setAnswering(false)} />
           ) : (
             <button type="button" className="card-btn" onClick={() => setAnswering(true)}>
-              {t.subSessions.answer}
+              {row.state === "waiting" ? t.subSessions.answer : t.channelHold.reply}
             </button>
           )}
         </div>
