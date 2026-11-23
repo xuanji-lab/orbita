@@ -13,6 +13,8 @@
  * 与 quote 同一个先例：块标签是给模型与转录的共同语言，显示层负责拆回来。
  */
 
+import { imageOrderNote } from "./prompt-image-refs.ts";
+
 /**
  * 发送载荷里的文件引用（renderer → 主进程）。`origin` 决定主进程要不要落盘复制：
  * workspace = 文件面板引用的、本来就在根里，原位置引用；external = 按钮 / 拖拽 /
@@ -104,14 +106,16 @@ export function filesBlockOf(files: readonly { path: string; kind: "file" | "dir
 
 /**
  * 正文 + 粘贴块 + 文件清单 → 发给模型的一整段文字。正文在前（quote 的编号块也已在
- * 其中），粘贴块按加入顺序、文件清单殿后；空段跳过——纯图消息与以前一字不差。
+ * 其中），附图顺序说明紧跟正文，粘贴块按加入顺序、文件清单殿后；空段跳过——纯图消息与以前一字不差。
  */
 export function composePromptText(
   text: string,
   pasted: readonly string[],
   files: readonly { path: string; kind: "file" | "dir" }[],
+  /** 附图张数：有图时正文后跟一行顺序说明（prompt-image-refs.ts），模型据此把「图 N」对上图 */
+  imageCount = 0,
 ): string {
-  return [text, ...pasted.map(pastedBlockOf), ...(files.length > 0 ? [filesBlockOf(files)] : [])]
+  return [text, imageOrderNote(imageCount), ...pasted.map(pastedBlockOf), ...(files.length > 0 ? [filesBlockOf(files)] : [])]
     .filter((part) => part !== "")
     .join("\n\n");
 }

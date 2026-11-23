@@ -354,6 +354,10 @@
 .bubble-chip-mcp {
   --chip-hue: var(--color-filetype-doc);
 }
+/* 图 N 小签 = 中性灰（附图引用，不是调用；与缩略图角标同一个「图 N」） */
+.bubble-chip-image {
+  --chip-hue: var(--color-text-secondary);
+}
 /* 插件 = 橙（与插件页头像同一档类别色） */
 .composer-chip[data-kind="plugin"],
 .bubble-chip-plugin {

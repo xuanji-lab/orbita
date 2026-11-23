@@ -2048,7 +2048,7 @@ async function echoAndPrompt(
           !isChildSession(command),
         )
       : null;
-  const promptText = composePromptText(command.text, pasted, files);
+  const promptText = composePromptText(command.text, pasted, files, images.length);
   // 本回显 user item 的 id（意图召回的 turnId 与 /ingest 的去重键都用它）；
   // 纯图片等极端情况下没有文字 item，退回临时 id（recall 卡片照常，只是与转录对不上）
   let turnId = "";
