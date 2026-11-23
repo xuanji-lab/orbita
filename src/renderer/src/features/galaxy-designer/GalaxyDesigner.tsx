@@ -451,12 +451,12 @@ function BodyFigure(props: { art: BodyArt; uid: string }) {
         ))}
         <circle r={art.r} fill={`url(#${light})`} />
       </g>
-      {art.face !== null && (
-        <g className="gd-face">
-          {art.face.eyes.map((eye) => (
-            <circle key={eye.x} cx={eye.x} cy={eye.y} r={eye.r} />
+      {/* 只有一双竖胶囊眼：不画嘴、鼻子、腮红、眉毛、瞳孔、高光 */}
+      {art.eyes !== null && (
+        <g className="gd-eyes" transform={`rotate(${art.eyesTilt})`}>
+          {art.eyes.map((eye) => (
+            <rect key={eye.x} className="gd-eye" x={eye.x - eye.w / 2} y={eye.y - eye.h / 2} width={eye.w} height={eye.h} rx={eye.w / 2} />
           ))}
-          <path d={art.face.mouth} strokeWidth={art.face.stroke} />
         </g>
       )}
       {art.ring !== null && (

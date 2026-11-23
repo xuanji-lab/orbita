@@ -21,19 +21,19 @@ import type { RightPanelKind } from "../../shell/RightRail.tsx";
  * - 主星与行星的质量区间互不重叠（STAR_MASS / PLANET_MASS，同 galaxy.ts）；
  * - 轨道不得让天体相撞，并留出 MIN_CLEARANCE 的间距；
  * - 成分只影响密度、纹理、颜色深浅与同质量下的半径，不决定职责；
- * - 行星是面向用户的 2D 形象：脸永远画在正面，纹理与星环是各自独立的层，不把脸转到背后；
- * - 主星明显最大，但行星的表情要读得出来：显示半径按 r^DISPLAY_GAMMA 压缩差距（displayRadius）。
+ * - 行星是面向用户的 2D 形象：眼睛永远画在正面（只有一双竖胶囊眼，不画嘴），纹理与星环是各自独立的层，不把眼睛转到背后；
+ * - 主星明显最大，但行星的眼睛要读得出来：显示半径按 r^DISPLAY_GAMMA 压缩差距（displayRadius）。
  */
 
 export type BodyKind = "star" | "planet";
 
-/** 元素：表情、星环、云带、卫星（行星）、日冕（主星）。一律是开 / 关，不随机 */
-export type ElementKey = "face" | "ring" | "clouds" | "moons" | "corona";
+/** 元素：眼睛、星环、云带、卫星（行星）、日冕（主星）。一律是开 / 关，不随机 */
+export type ElementKey = "eyes" | "ring" | "clouds" | "moons" | "corona";
 
 /** 每种天体能开哪些元素（主星没有卫星与云带；行星没有日冕） */
 export const ELEMENTS_OF: Readonly<Record<BodyKind, readonly ElementKey[]>> = {
-  star: ["face", "ring", "corona"],
-  planet: ["face", "ring", "clouds", "moons"],
+  star: ["eyes", "ring", "corona"],
+  planet: ["eyes", "ring", "clouds", "moons"],
 };
 
 /** 预览背景：四档都是中性的纸 / 壳 / 衬底色（「深衬底」= 衬底混一点主墨），不借有职责的颜色（nebula 只给用量） */
@@ -150,7 +150,7 @@ export function errorsAt(errors: readonly DesignError[], body: BodyKind, field: 
 /** 显示半径 = K · r^γ（px，预览缩放 100% 时）。γ < 1 把差距压小，单调不变：质量大的永远画得大 */
 export const DISPLAY_K = 27;
 export const DISPLAY_GAMMA = 0.5;
-/** 表情的眼睛至少这么大（px），否则小行星的脸读不出来 */
+/** 眼睛（竖胶囊）的宽至少这么大（px），否则小行星的眼睛读不出来 */
 export const EYE_MIN = 1.6;
 
 export function displayRadius(radius: number): number {
@@ -158,6 +158,14 @@ export function displayRadius(radius: number): number {
 }
 
 // ── 2D 形象的几何（以天体中心为原点、单位 px） ────────────────────────
+
+/** 竖向圆角胶囊：中心 (x, y)，宽 w、高 h，圆角 = w / 2 */
+export interface Capsule {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 
 export interface Circle {
   x: number;
@@ -170,7 +178,7 @@ export interface BodyArt {
   /** star | rock | ice | gas：决定底色与纹理 */
   surface: "star" | Composition;
   corona: { r: number; halo: number } | null;
-  /** 星环：同一个椭圆拆成后半（画在天体前面之前）与前半（画在脸之后） */
+  /** 星环：同一个椭圆拆成后半（画在天体前面之前）与前半（画在眼睛之后） */
   ring: { back: string; front: string; width: number; tilt: number } | null;
   /** 成分自带的纹理（裁在圆内）：岩石的坑、冰质的极冠与裂纹、气态的纬向带 */
   craters: Circle[];
@@ -179,7 +187,15 @@ export interface BodyArt {
   bands: { y: number; h: number }[];
   /** 云带元素：两道横向的浅色条 */
   clouds: { x: number; y: number; w: number; h: number }[];
-  face: { eyes: [Circle, Circle]; mouth: string; stroke: number } | null;
+  /**
+   * 眼睛：两只近乎纯黑的竖向圆角胶囊（高 ≈ 宽 × 2.5），大小相同。坐标是「没歪头」时的（左右对称、同高），
+   * 整双眼睛再绕天体中心顺时针转 eyesTilt 度——左眼因此略高，像在歪头注视镜头
+   * （orbita-notes/orbita-planet-avatar-prompt.md 第 1 节：整体顺时针倾斜约 12 度、其中一只略高）。
+   * 只有这一双眼睛——不画嘴、鼻子、腮红、眉毛、瞳孔、高光；生命感来自注视、歪头和地表。
+   */
+  eyes: [Capsule, Capsule] | null;
+  /** 双眼绕天体中心顺时针转的角度（度） */
+  eyesTilt: number;
   /** 卫星：behind 的先于天体画（被挡住一部分） */
   moons: (Circle & { behind: boolean })[];
   /** 整个形象的外框（含星环、卫星、日冕），预览用它判断会不会出框 */
@@ -187,8 +203,11 @@ export interface BodyArt {
 }
 
 export const RING = { rx: 1.7, ry: 0.3, tiltDeg: -8, width: 0.07 } as const;
-/** 脸在圆心略上：星环前半从脸下面绕过去（见 bodyArt 的测试） */
-export const FACE = { eyeX: 0.21, eyeY: -0.12, eyeR: 0.1, mouthX: 0.14, mouthY: 0.07, mouthDip: 0.12, stroke: 0.055 } as const;
+/**
+ * 眼睛的几何（单位 = 天体半径）：两眼中心横向 ±x，纵向 y（圆心略上）；宽 w、高 = w × aspect；
+ * tiltDeg 是整双眼睛绕天体中心顺时针转的角度（提示词文档：约 12 度的歪头）。星环前半从两眼下面绕过去（见测试）。
+ */
+export const EYES = { x: 0.2, y: -0.1, w: 0.11, aspect: 2.5, tiltDeg: 12 } as const;
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
@@ -212,15 +231,13 @@ export function bodyArt(design: GalaxyDesign, kind: BodyKind, r: number): BodyAr
         tilt: RING.tiltDeg,
       }
     : null;
-  const face = on("face")
-    ? {
-        eyes: [
-          { x: -FACE.eyeX * r, y: FACE.eyeY * r, r: Math.max(FACE.eyeR * r, EYE_MIN) },
-          { x: FACE.eyeX * r, y: FACE.eyeY * r, r: Math.max(FACE.eyeR * r, EYE_MIN) },
-        ] as [Circle, Circle],
-        mouth: `M${round2(-FACE.mouthX * r)} ${round2(FACE.mouthY * r)}Q0 ${round2((FACE.mouthY + FACE.mouthDip) * r)} ${round2(FACE.mouthX * r)} ${round2(FACE.mouthY * r)}`,
-        stroke: Math.max(FACE.stroke * r, 1.2),
-      }
+  const eyeW = Math.max(EYES.w * r, EYE_MIN);
+  const eyeH = eyeW * EYES.aspect;
+  const eyes: [Capsule, Capsule] | null = on("eyes")
+    ? [
+        { x: -EYES.x * r, y: EYES.y * r, w: eyeW, h: eyeH },
+        { x: EYES.x * r, y: EYES.y * r, w: eyeW, h: eyeH },
+      ]
     : null;
   const moons = on("moons")
     ? [
@@ -271,7 +288,7 @@ export function bodyArt(design: GalaxyDesign, kind: BodyKind, r: number): BodyAr
     ex = Math.max(ex, Math.abs(moon.x) + moon.r);
     ey = Math.max(ey, Math.abs(moon.y) + moon.r);
   }
-  return { r, surface, corona, ring, craters, cap, cracks, bands, clouds, face, moons, extent: { x: ex, y: ey } };
+  return { r, surface, corona, ring, craters, cap, cracks, bands, clouds, eyes, eyesTilt: EYES.tiltDeg, moons, extent: { x: ex, y: ey } };
 }
 
 /**
@@ -286,7 +303,13 @@ export function previewFrame(art: Pick<BodyArt, "extent">): { halfW: number; hal
   return { halfW: PREVIEW_FRAME.halfW * scale, halfH: PREVIEW_FRAME.halfH * scale, scale };
 }
 
-/** 星环前半上的采样点（已按 tilt 旋转）：测试用它证明星环从脸下面绕过去 */
+/** 一只眼睛歪头之后的中心（屏幕坐标，绕天体中心顺时针转 tiltDeg） */
+export function tiltedCenter(eye: Pick<Capsule, "x" | "y">, tiltDeg: number): { x: number; y: number } {
+  const t = (tiltDeg * Math.PI) / 180;
+  return { x: eye.x * Math.cos(t) - eye.y * Math.sin(t), y: eye.x * Math.sin(t) + eye.y * Math.cos(t) };
+}
+
+/** 星环前半上的采样点（已按 tilt 旋转）：测试用它证明星环从两眼下面绕过去 */
 export function ringFrontPoints(r: number, samples = 48): { x: number; y: number }[] {
   const tilt = (RING.tiltDeg * Math.PI) / 180;
   const points: { x: number; y: number }[] = [];
@@ -309,8 +332,8 @@ export function designLevelOf(search: string): DesignLevel {
   return value === "bare" || value === "full" ? value : "default";
 }
 
-const ALL_OFF: Readonly<Record<ElementKey, boolean>> = { face: false, ring: false, clouds: false, moons: false, corona: false };
-const ALL_ON: Readonly<Record<ElementKey, boolean>> = { face: true, ring: true, clouds: true, moons: true, corona: true };
+const ALL_OFF: Readonly<Record<ElementKey, boolean>> = { eyes: false, ring: false, clouds: false, moons: false, corona: false };
+const ALL_ON: Readonly<Record<ElementKey, boolean>> = { eyes: true, ring: true, clouds: true, moons: true, corona: true };
 
 /** 三个行星预设：工作区 id 的哈希挑一个。不同工作区一眼不一样，同一个工作区每次一样 */
 const PLANET_PRESETS: readonly Omit<PlanetDesign, "name" | "elements" | "zoom">[] = [
@@ -319,9 +342,9 @@ const PLANET_PRESETS: readonly Omit<PlanetDesign, "name" | "elements" | "zoom">[
   { mass: 3, composition: "ice", orbitRadius: 18 },
 ];
 const ELEMENT_PRESETS: readonly Readonly<Record<ElementKey, boolean>>[] = [
-  { ...ALL_OFF, face: true, clouds: true },
-  { ...ALL_OFF, face: true, ring: true },
-  { ...ALL_OFF, face: true, moons: true },
+  { ...ALL_OFF, eyes: true, clouds: true },
+  { ...ALL_OFF, eyes: true, ring: true },
+  { ...ALL_OFF, eyes: true, moons: true },
 ];
 
 export function workspaceHash(id: string): number {
@@ -342,7 +365,7 @@ export function defaultDesign(workspaceId: string, level: DesignLevel): GalaxyDe
   const elements = ELEMENT_PRESETS[pick] ?? ALL_OFF;
   const base: GalaxyDesign = {
     editing: "planet",
-    star: { name: "", mass: 620, elements: { ...ALL_OFF, face: true }, zoom: ZOOM_DEFAULT.star },
+    star: { name: "", mass: 620, elements: { ...ALL_OFF, eyes: true }, zoom: ZOOM_DEFAULT.star },
     planet: { name: "", elements, mass: 6, composition: "rock", orbitRadius: 22, zoom: ZOOM_DEFAULT.planet, ...preset },
     backdrop: "muted",
   };

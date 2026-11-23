@@ -3593,10 +3593,10 @@ export const zh: Messages = {
     starComposition: "主星是等离子，密度 1.4，只能调质量。",
     orbit: "轨道半径",
     orbitDesc: (min, max) => `与天体半径分开指定，可设 ${min} 到 ${max}。`,
-    elements: { face: "表情", ring: "星环", clouds: "云带", moons: "卫星", corona: "日冕" },
+    elements: { eyes: "眼睛", ring: "星环", clouds: "云带", moons: "卫星", corona: "日冕" },
     elementDesc: {
-      face: "脸永远朝向你。",
-      ring: "从脸下面绕过去。",
+      eyes: "两只竖向的黑色长条眼，永远朝向你。",
+      ring: "从两眼下面绕过去。",
       clouds: "表面两道浅色云。",
       moons: "两颗小卫星。",
       corona: "主星外的一圈薄光。",

@@ -14,7 +14,8 @@ import {
   ELEMENTS_OF,
   errorsAt,
   EYE_MIN,
-  FACE,
+  EYES,
+  tiltedCenter,
   keepDesignerAcrossSessions,
   LONG_NAME,
   minOrbit,
@@ -134,7 +135,7 @@ describe("半径计算", () => {
     assert.equal(radiusOf(far, "planet"), radiusOf(design, "planet"));
   });
 
-  test("显示半径：单调、主星最小也明显大于行星最大（半径 ≥1.35 倍，面积近 2 倍）、最小的行星脸读得出", () => {
+  test("显示半径：单调、主星最小也明显大于行星最大（半径 ≥1.35 倍，面积近 2 倍）、最小的行星眼睛读得出", () => {
     const starMin = displayRadius(bodyRadius(STAR_MASS.min, STAR_DENSITY));
     const planetMax = displayRadius(bodyRadius(PLANET_MASS.max, DENSITY.gas));
     const planetMin = displayRadius(bodyRadius(PLANET_MASS.min, DENSITY.rock));
@@ -148,7 +149,7 @@ describe("半径计算", () => {
 
 describe("元素组合与 2D 形象", () => {
   test("主星没有卫星与云带，行星没有日冕：开关打开也不画", () => {
-    assert.deepEqual([...ELEMENTS_OF.star], ["face", "ring", "corona"]);
+    assert.deepEqual([...ELEMENTS_OF.star], ["eyes", "ring", "corona"]);
     const full = defaultDesign(WS_A, "full");
     const star = bodyArt({ ...full, editing: "star" }, "star", 60);
     assert.equal(star.moons.length, 0);
@@ -164,7 +165,7 @@ describe("元素组合与 2D 形象", () => {
     const bare = defaultDesign(WS_A, "bare");
     for (const composition of ["rock", "ice", "gas"] as const) {
       const art = bodyArt({ ...bare, planet: { ...bare.planet, composition } }, "planet", 40);
-      assert.equal(art.face, null);
+      assert.equal(art.eyes, null);
       assert.equal(art.ring, null);
       assert.equal(art.clouds.length, 0);
       assert.equal(art.moons.length, 0);
@@ -179,9 +180,9 @@ describe("元素组合与 2D 形象", () => {
   test("任意元素组合：开哪个画哪个，互不牵连（2^4 种行星组合）", () => {
     const base = defaultDesign(WS_A, "bare");
     for (let mask = 0; mask < 16; mask++) {
-      const elements = { face: (mask & 1) > 0, ring: (mask & 2) > 0, clouds: (mask & 4) > 0, moons: (mask & 8) > 0, corona: true };
+      const elements = { eyes: (mask & 1) > 0, ring: (mask & 2) > 0, clouds: (mask & 4) > 0, moons: (mask & 8) > 0, corona: true };
       const art = bodyArt({ ...base, planet: { ...base.planet, elements } }, "planet", 30);
-      assert.equal(art.face !== null, elements.face);
+      assert.equal(art.eyes !== null, elements.eyes);
       assert.equal(art.ring !== null, elements.ring);
       assert.equal(art.clouds.length > 0, elements.clouds);
       assert.equal(art.moons.length > 0, elements.moons);
@@ -189,32 +190,128 @@ describe("元素组合与 2D 形象", () => {
     }
   });
 
-  test("星环前半从脸下面绕过去：嘴的横向范围内，星环比嘴低", () => {
-    for (const r of [16, 30, 80]) {
-      const mouthBottom = (FACE.mouthY + FACE.mouthDip / 2) * r;
-      const front = ringFrontPoints(r).filter((p) => Math.abs(p.x) <= (FACE.mouthX + 0.1) * r);
-      assert.ok(front.length > 0);
-      for (const p of front) assert.ok(p.y > mouthBottom + 0.05 * r, `r=${r} 环 ${p.y} 嘴 ${mouthBottom}`);
+  test("眼睛是两只竖向圆角胶囊：高 ≈ 宽 × 2.5（2.2–2.8）、两只一样大、整双顺时针歪约 12 度（左眼略高）、都在天体里面", () => {
+    const design = legal();
+    for (const r of [8, 16, 30, 80]) {
+      const art = bodyArt(design, "planet", r);
+      assert.ok(art.eyes !== null);
+      const [left, right] = art.eyes;
+      for (const eye of art.eyes) {
+        const aspect = eye.h / eye.w;
+        assert.ok(aspect >= 2.2 && aspect <= 2.8, `r=${r} 纵横比 ${aspect}`);
+        assert.ok(eye.w >= EYE_MIN);
+        const c = tiltedCenter(eye, art.eyesTilt);
+        assert.ok(Math.hypot(c.x, c.y) + eye.h / 2 < r, `r=${r} 眼睛出了天体`);
+      }
+      assert.equal(left.w, right.w);
+      assert.equal(left.h, right.h);
+      assert.equal(left.x, -right.x, "没歪头时左右对称");
+      assert.ok(art.eyesTilt >= 8 && art.eyesTilt <= 16, `歪头 ${art.eyesTilt} 度`);
+      const lift = tiltedCenter(right, art.eyesTilt).y - tiltedCenter(left, art.eyesTilt).y;
+      assert.ok(lift > 0 && lift <= 0.12 * r, `r=${r} 左眼比右眼高 ${lift}`);
     }
   });
 
-  test("纹理、云带、卫星都不压在脸上；小行星的眼睛也不小于 EYE_MIN", () => {
+  test("任何天体、成分、元素组合都没有嘴：形象里只有眼睛，没有 mouth / nose / blush / 四肢之类的图形", () => {
+    const allowed = ["r", "surface", "corona", "ring", "craters", "cap", "cracks", "bands", "clouds", "eyes", "eyesTilt", "moons", "extent"].sort();
+    const base = defaultDesign(WS_A, "bare");
+    for (let mask = 0; mask < 32; mask++) {
+      const elements = { eyes: (mask & 1) > 0, ring: (mask & 2) > 0, clouds: (mask & 4) > 0, moons: (mask & 8) > 0, corona: (mask & 16) > 0 };
+      for (const composition of ["rock", "ice", "gas"] as const) {
+        const design = { ...base, star: { ...base.star, elements }, planet: { ...base.planet, composition, elements } };
+        for (const kind of ["star", "planet"] as const) {
+          const art = bodyArt(design, kind, 40);
+          assert.deepEqual(Object.keys(art).sort(), allowed, `${kind} ${composition} ${mask}`);
+          if (art.eyes !== null) {
+            assert.equal(art.eyes.length, 2);
+            for (const eye of art.eyes) assert.deepEqual(Object.keys(eye).sort(), ["h", "w", "x", "y"]);
+          }
+        }
+      }
+    }
+  });
+
+  test("画形象的组件与样式里也没有嘴：眼睛组只画 rect，源码里没有嘴 / 鼻 / 腮红 / 眉毛 / 瞳孔 / 四肢", () => {
+    // 注释里写着「不画嘴」之类的说明，先剥掉注释，只查真正会渲染的代码与样式
+    const stripComments = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    const tsx = stripComments(readFileSync(new URL("./GalaxyDesigner.tsx", import.meta.url), "utf8"));
+    const css = stripComments(readFileSync(new URL("./galaxy-designer.css", import.meta.url), "utf8"));
+    const forbidden = /\b(mouth|smile|nose|blush|cheeks?|eyebrows?|brows?|pupils?|lashes|limbs?|arms?|legs?|antennae?)\b|嘴|鼻|腮|眉|瞳/i;
+    assert.doesNotMatch(tsx, forbidden);
+    assert.doesNotMatch(css, forbidden);
+    const group = /className="gd-eyes"[^>]*>([\s\S]*?)<\/g>/.exec(tsx);
+    assert.ok(group !== null, "找不到眼睛组");
+    const inner = group[1] ?? "";
+    assert.match(inner, /<rect /);
+    assert.doesNotMatch(inner, /<(path|circle|ellipse|line|polyline|polygon|text)\b/);
+  });
+
+  test("眼睛近乎纯黑：明主题取主墨、两档暗主题取井色，相对亮度都 < 0.02", () => {
+    const css = readFileSync(new URL("./galaxy-designer.css", import.meta.url), "utf8");
+    assert.match(css, /\.gd-eye\s*\{\s*fill:\s*var\(--gd-eye\);/);
+    assert.match(css, /\.gd \{[^}]*--gd-eye:\s*var\(--color-text-primary\);/);
+    assert.match(css, /\[data-theme="black"\]\) \.gd \{[^}]*--gd-eye:\s*var\(--color-bg-panel\);/);
+    const colors = readFileSync(new URL("../../../../../design-system/tokens/colors.css", import.meta.url), "utf8");
+    const block = (selector: string): string => {
+      const at = colors.indexOf(selector);
+      assert.ok(at >= 0, selector);
+      return colors.slice(at, colors.indexOf("}", at));
+    };
+    const hex = (text: string, token: string): string => {
+      const m = new RegExp(`${token}:\\s*(#[0-9a-fA-F]{6})`).exec(text);
+      assert.ok(m !== null, token);
+      return m[1] ?? "";
+    };
+    const luminance = (value: string): number => {
+      const channel = (i: number): number => {
+        const c = parseInt(value.slice(1 + i * 2, 3 + i * 2), 16) / 255;
+        return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+      };
+      return 0.2126 * channel(0) + 0.7152 * channel(1) + 0.0722 * channel(2);
+    };
+    const light = hex(colors, "--color-text-primary");
+    const graphite = hex(block('[data-theme="graphite"]'), "--color-bg-panel");
+    const black = hex(block('[data-theme="black"]'), "--color-bg-panel");
+    for (const value of [light, graphite, black]) assert.ok(luminance(value) < 0.02, `${value} 亮度 ${luminance(value)}`);
+  });
+
+  test("星环前半从两眼下面绕过去：两眼横向范围内，星环比眼睛低", () => {
+    for (const r of [16, 30, 80]) {
+      const art = bodyArt(legal(), "planet", r);
+      assert.ok(art.eyes !== null);
+      const eyesBottom = Math.max(...art.eyes.map((eye) => tiltedCenter(eye, art.eyesTilt).y + eye.h / 2));
+      const front = ringFrontPoints(r).filter((p) => Math.abs(p.x) <= (EYES.x + EYES.w) * r * 1.1);
+      assert.ok(front.length > 0);
+      for (const p of front) assert.ok(p.y > eyesBottom + 0.05 * r, `r=${r} 环 ${p.y} 眼 ${eyesBottom}`);
+    }
+  });
+
+  test("纹理、云带、卫星都不压在眼睛上；小行星的眼睛也不小于 EYE_MIN", () => {
     const full = defaultDesign(WS_A, "full");
     const r = displayRadius(bodyRadius(PLANET_MASS.min, DENSITY.rock));
     for (const composition of ["rock", "ice", "gas"] as const) {
       const art = bodyArt({ ...full, planet: { ...full.planet, composition, mass: PLANET_MASS.min } }, "planet", r);
-      assert.ok(art.face !== null);
-      for (const eye of art.face.eyes) assert.ok(eye.r >= EYE_MIN);
-      const faceTop = (FACE.eyeY - FACE.eyeR) * r - 1;
-      const faceBottom = (FACE.mouthY + FACE.mouthDip) * r + 1;
-      const faceX = (FACE.eyeX + FACE.eyeR) * r;
-      for (const c of art.craters) {
-        const overlapX = Math.abs(c.x) - c.r < faceX;
-        const overlapY = c.y + c.r > faceTop && c.y - c.r < faceBottom;
-        assert.ok(!(overlapX && overlapY), `crater ${JSON.stringify(c)}`);
-      }
-      for (const band of art.bands) assert.ok(band.y + band.h < faceTop || band.y > faceBottom, `band ${band.y}`);
-      for (const cloud of art.clouds) assert.ok(cloud.y + cloud.h < faceTop || cloud.y > faceBottom, `cloud ${cloud.y}`);
+      assert.ok(art.eyes !== null);
+      // 每只眼睛 = 一条线段（胶囊的中轴，歪头后）加半宽 w/2；纹理离中轴的距离都要大于它自己的半径 + w/2
+      const t = (art.eyesTilt * Math.PI) / 180;
+      const segments = art.eyes.map((eye) => {
+        const c = tiltedCenter(eye, art.eyesTilt);
+        const half = eye.h / 2 - eye.w / 2;
+        const dx = -Math.sin(t) * half;
+        const dy = Math.cos(t) * half;
+        return { a: { x: c.x - dx, y: c.y - dy }, b: { x: c.x + dx, y: c.y + dy }, pad: eye.w / 2 };
+      });
+      const distance = (p: { x: number; y: number }, seg: (typeof segments)[number]): number => {
+        const vx = seg.b.x - seg.a.x;
+        const vy = seg.b.y - seg.a.y;
+        const k = Math.max(0, Math.min(1, ((p.x - seg.a.x) * vx + (p.y - seg.a.y) * vy) / (vx * vx + vy * vy)));
+        return Math.hypot(p.x - seg.a.x - k * vx, p.y - seg.a.y - k * vy);
+      };
+      for (const c of art.craters) for (const seg of segments) assert.ok(distance(c, seg) > c.r + seg.pad, `crater ${JSON.stringify(c)}`);
+      const top = Math.min(...segments.flatMap((seg) => [seg.a.y, seg.b.y].map((y) => y - seg.pad))) - 1;
+      const bottom = Math.max(...segments.flatMap((seg) => [seg.a.y, seg.b.y].map((y) => y + seg.pad))) + 1;
+      for (const band of art.bands) assert.ok(band.y + band.h < top || band.y > bottom, `band ${band.y}`);
+      for (const cloud of art.clouds) assert.ok(cloud.y + cloud.h < top || cloud.y > bottom, `cloud ${cloud.y}`);
       for (const moon of art.moons) assert.ok(Math.hypot(moon.x, moon.y) - moon.r > r, "卫星在天体外");
     }
   });
@@ -267,8 +364,8 @@ describe("默认预览缩放", () => {
   test("默认缩放后最小的行星眼睛也够大（屏上 ≥ 2.5 个单位）；缩放不改半径读数", () => {
     const design = { ...legal(), planet: { ...legal().planet, mass: PLANET_MASS.min, composition: "rock" as const } };
     const art = bodyArt(design, "planet", displayRadius(radiusOf(design, "planet")));
-    assert.ok(art.face !== null);
-    assert.ok(art.face.eyes[0].r * (ZOOM_DEFAULT.planet / 100) >= 2.5);
+    assert.ok(art.eyes !== null);
+    assert.ok(art.eyes[0].w * (ZOOM_DEFAULT.planet / 100) >= 2.5);
     const zoomed = { ...design, planet: { ...design.planet, zoom: 200 } };
     assert.equal(radiusOf(zoomed, "planet"), radiusOf(design, "planet"));
   });

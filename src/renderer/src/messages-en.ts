@@ -3824,10 +3824,10 @@ export const en = {
     starComposition: "A star is plasma, density 1.4. Only its mass can change.",
     orbit: "Orbit radius",
     orbitDesc: (min: string, max: string) => `Set apart from the body's radius. Between ${min} and ${max}.`,
-    elements: { face: "Face", ring: "Ring", clouds: "Cloud bands", moons: "Moons", corona: "Corona" },
+    elements: { eyes: "Eyes", ring: "Ring", clouds: "Cloud bands", moons: "Moons", corona: "Corona" },
     elementDesc: {
-      face: "Always faces you.",
-      ring: "Passes below the face.",
+      eyes: "Two upright black bar eyes, always facing you.",
+      ring: "Passes below the eyes.",
       clouds: "Two light streaks over the surface.",
       moons: "Two small moons.",
       corona: "A thin halo round the star.",

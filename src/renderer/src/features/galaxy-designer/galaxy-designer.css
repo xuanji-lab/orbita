@@ -8,6 +8,7 @@
 .gd {
   --gd-light: var(--color-bg-panel);
   --gd-shade: var(--color-text-primary);
+  --gd-eye: var(--color-text-primary);
   container-type: inline-size;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -17,6 +18,7 @@
 :root:is([data-theme="graphite"], [data-theme="black"]) .gd {
   --gd-light: var(--color-text-primary);
   --gd-shade: var(--color-bg-panel);
+  --gd-eye: var(--color-bg-panel);
 }
 
 /* 钉在滚动区上方的预览块：下面的参数怎么滚，预览都看得见 */
@@ -89,22 +91,18 @@
   text-overflow: ellipsis;
 }
 
-/* 天体底色与脸色：脸永远压在底色上读得出（暗底色配纸色的脸、浅底色配墨色的脸） */
+/* 天体底色 */
 .gd-body {
   --gd-surface: var(--color-text-tertiary);
-  --gd-face: var(--color-bg-panel);
 }
 .gd-body[data-surface="star"] {
   --gd-surface: color-mix(in srgb, var(--color-text-tertiary) 50%, var(--color-bg-panel));
-  --gd-face: var(--color-text-primary);
 }
 :root:is([data-theme="graphite"], [data-theme="black"]) .gd-body[data-surface="star"] {
   --gd-surface: color-mix(in srgb, var(--color-text-secondary) 78%, var(--color-bg-panel));
-  --gd-face: var(--color-bg-panel);
 }
 .gd-body[data-surface="ice"] {
   --gd-surface: color-mix(in srgb, var(--color-text-tertiary) 70%, var(--color-bg-panel));
-  --gd-face: var(--color-text-primary);
 }
 .gd-body[data-surface="gas"] {
   --gd-surface: color-mix(in srgb, var(--color-text-secondary) 60%, var(--color-text-tertiary));
@@ -136,13 +134,10 @@
 .gd-halo {
   stop-color: var(--gd-surface);
 }
-.gd-face circle {
-  fill: var(--gd-face);
-}
-.gd-face path {
-  fill: none;
-  stroke: var(--gd-face);
-  stroke-linecap: round;
+/* 眼睛：近乎纯黑的竖胶囊。明主题取主墨（#1f1f1f），暗档取井色（#121418 / #151517）——两档都接近纯黑；
+   不随天体底色换浅色，深色地表上照样是黑眼睛（用户给的案例就是这样） */
+.gd-eye {
+  fill: var(--gd-eye);
 }
 .gd-ring {
   fill: none;
