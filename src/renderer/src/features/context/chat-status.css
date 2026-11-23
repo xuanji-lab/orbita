@@ -149,57 +149,62 @@
   color: var(--color-text-tertiary);
   cursor: pointer;
 }
-/* 不打岔开关：与收起键同尺寸并排；开着时图标取主墨并垫一层底，关着是三级墨。
-   待回答的 question 在它右上角挂一枚小点 */
-.cs-hold {
+/* 不打岔：卡头下面一行（名字 base + 一句说明 sm + 开关），收起时是小钮下面一枚带字的小胶囊。
+   待回答的 question 在图标右上角挂一枚小点；攒着的个数写在开关前面 */
+.cs-hold-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.cs-hold-lead {
   position: relative;
+  display: inline-flex;
   flex: none;
-  margin-top: var(--space-1-5);
-  display: grid;
-  place-items: center;
-  width: var(--control-height-xs);
-  height: var(--control-height-xs);
-  border: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--color-text-tertiary);
-  cursor: pointer;
-}
-.cs-hold:hover {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
-}
-.cs-hold[data-on] {
-  background: var(--color-bg-muted);
-  color: var(--color-text-primary);
+  color: var(--color-text-secondary);
 }
 .cs-hold-dot {
   position: absolute;
-  top: 3px;
-  right: 3px;
+  top: -2px;
+  right: -3px;
   width: 8px;
   height: 8px;
   border-radius: var(--radius-pill);
   background: var(--color-danger);
 }
-/* 收起小钮旁边的一排：开关 +「N 个已攒」 */
-.cs-pill-hold {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  margin-top: var(--space-1);
+.cs-hold-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
 }
-.cs-pill-hold .cs-hold {
-  margin-top: 0;
-  background: var(--glass-bg);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-pill);
-  box-shadow: var(--shadow-popover);
+.cs-hold-name {
+  font-size: var(--font-size-base);
+  color: var(--color-text-primary);
 }
-.cs-pill-hold .cs-hold[data-on] {
-  background: var(--color-bg-muted);
+.cs-hold-desc {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
 }
 .cs-hold-n {
+  flex: none;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.cs-hold-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin-top: var(--space-1);
+  height: var(--control-height-sm);
+  padding: 0 var(--space-1) 0 var(--space-2-5);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg);
+  box-shadow: var(--shadow-popover);
+}
+.cs-hold-pill .cs-hold-name {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }

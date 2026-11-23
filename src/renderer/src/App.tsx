@@ -625,6 +625,11 @@ export function App() {
     setSubSessionsNav(openSubSession(childId));
     setRightPanel("subsessions");
   }, []);
+  /** 对话流里「N 个子会话交回了」的「在面板里看」：打开右栏子会话面板的列表层（收件箱，待讨论组在最上面） */
+  const openSubSessionsList = useCallback(() => {
+    setSubSessionsNav(SUB_SESSIONS_LIST);
+    setRightPanel("subsessions");
+  }, []);
   /** Open as main：主槽换看这条子会话（2.1 裁决「面板关闭」在按会话记忆后泛化为
    * 「恢复这条会话自己记的面板」——没记过就是关着，首轮行为与裁决原文一致；
    * 这里不再显式关面板，否则会把离开的那条会话错记成「关着」） */
@@ -1522,6 +1527,7 @@ export function App() {
                 excerptJump={excerptJump}
                 onExcerptSaved={bumpExcerpts}
                 onOpenSubSession={openSubSessionInPanel}
+                onOpenSubSessionsList={openSubSessionsList}
                 litSubSessionId={litSubSessionId}
                 theme={resolvedTheme}
                 starredModels={settings.starredModels ?? []}

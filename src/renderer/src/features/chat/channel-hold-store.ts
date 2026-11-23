@@ -7,7 +7,7 @@
  * 判定本身是纯函数（channel-hold.ts），这里只管存、通知与计时。
  *
  * 落盘（localStorage，与状态卡的开合同一档）：
- * - 开关：开着的会话 id 列表。
+ * - 开关：关着的会话 id 列表（默认开，见 HOLD_OFF_KEY）。
  * - 待投回报：{谁, 哪条}的引用（正文在通道账本里，恢复时回读），到达时记、投递 / 撤回 / 被回答时抹。
  *   这同时补上了此前的缺口：排队队列纯内存，重启 / 刷新就丢子会话的回报。
  */
@@ -31,7 +31,11 @@ import {
   type ReadingSignals,
 } from "./channel-hold.ts";
 
-export const HOLD_ON_KEY = "orbita.channelHold.on";
+/**
+ * 「不打岔」默认开（2026-11-23 用户：开关给他掌控感，攒着、由他决定什么时候讨论）。
+ * 所以落盘的是**关着的会话** id：没记录 = 开。旧的 `.on` 键（上一版默认关时记开着的）不再读。
+ */
+export const HOLD_OFF_KEY = "orbita.channelHold.off";
 export const HOLD_PENDING_KEY = "orbita.channelHold.pending";
 
 export interface HoldStorage {
@@ -54,8 +58,6 @@ export interface HoldView {
   summary: HeldSummary;
   /** 此刻为什么先没投（开关关着时才有意义）；null = 没在读 */
   reading: ReadingReason | null;
-  /** 用户点了「稍后」：提示条收成一行（有 question 时仍醒目） */
-  collapsed: boolean;
 }
 
 const EMPTY_SUMMARY = summarizeHeld([]);
@@ -70,20 +72,19 @@ export function createChannelHoldStore(options: {
   const { storage, now } = options;
   const startTimer = options.startTimer !== false;
 
-  const readOn = (): Set<string> => {
+  const readOff = (): Set<string> => {
     try {
-      const raw = storage?.getItem(HOLD_ON_KEY) ?? null;
+      const raw = storage?.getItem(HOLD_OFF_KEY) ?? null;
       const parsed: unknown = raw === null ? [] : JSON.parse(raw);
       return new Set(Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : []);
     } catch {
       return new Set();
     }
   };
-  const on = readOn();
+  const off = readOff();
   const pending = new Map<string, PendingRef[]>();
   for (const [parentId, refs] of decodePending(safeGet(storage, HOLD_PENDING_KEY))) pending.set(parentId, [...refs]);
   const held = new Map<string, readonly HeldReport[]>();
-  const collapsed = new Set<string>();
   const lastReading = new Map<string, ReadingReason | null>();
 
   // 阅读信号
@@ -109,9 +110,9 @@ export function createChannelHoldStore(options: {
       return null;
     }
   }
-  const writeOn = (): void => {
+  const writeOff = (): void => {
     try {
-      storage?.setItem(HOLD_ON_KEY, JSON.stringify([...on]));
+      storage?.setItem(HOLD_OFF_KEY, JSON.stringify([...off]));
     } catch {
       // 存不下就只在这次运行里生效
     }
@@ -152,7 +153,6 @@ export function createChannelHoldStore(options: {
     const items = held.get(parentId) ?? EMPTY_HELD;
     if (items.length === 0 || host === null) return;
     held.delete(parentId);
-    collapsed.delete(parentId);
     lastReading.delete(parentId);
     emit();
     stopTimerIfIdle();
@@ -170,7 +170,7 @@ export function createChannelHoldStore(options: {
         dirty = true;
       }
       const phase = host?.phaseOf(parentId) ?? "turn";
-      if (shouldAutoRelease({ holdOn: on.has(parentId), phase, reading, held: list })) {
+      if (shouldAutoRelease({ holdOn: !off.has(parentId), phase, reading, held: list })) {
         release(parentId);
         dirty = false; // release 已经通知过
       }
@@ -191,26 +191,25 @@ export function createChannelHoldStore(options: {
       if (cached !== undefined) return cached;
       const list = held.get(parentId) ?? EMPTY_HELD;
       const view: HoldView = {
-        holdOn: on.has(parentId),
+        holdOn: !off.has(parentId),
         held: list,
         summary: list.length === 0 ? EMPTY_SUMMARY : summarizeHeld(list),
         reading: list.length === 0 ? null : readingOf(parentId, now()),
-        collapsed: collapsed.has(parentId),
       };
       views.set(parentId, view);
       return view;
     },
 
-    isHoldOn: (parentId: string): boolean => on.has(parentId),
+    isHoldOn: (parentId: string): boolean => !off.has(parentId),
 
     /** 此刻用户在读 / 在写吗（读真实信号；与攒着的东西有没有无关） */
     reading: (parentId: string): ReadingReason | null => readingOf(parentId, now()),
 
     setHoldOn(parentId: string, next: boolean): void {
-      if (on.has(parentId) === next) return;
-      if (next) on.add(parentId);
-      else on.delete(parentId);
-      writeOn();
+      if (!off.has(parentId) === next) return;
+      if (next) off.delete(parentId);
+      else off.add(parentId);
+      writeOff();
       // 打开的那一刻，排队里还没发的子回报也一并改成攒着，否则它们会在这一轮结束时照旧投出去
       if (next && host !== null) {
         const pulled = host.pullQueued(parentId);
@@ -254,13 +253,12 @@ export function createChannelHoldStore(options: {
       }
     },
 
-    /** 先攒着。question 来了就把「稍后」收起的提示条重新展开——它在等人 */
+    /** 先攒着 */
     hold(parentId: string, items: readonly HeldReport[]): void {
       if (items.length === 0) return;
       let list = held.get(parentId) ?? EMPTY_HELD;
       for (const item of items) list = addHeld(list, item);
       held.set(parentId, list);
-      if (items.some((item) => item.message.kind === "question")) collapsed.delete(parentId);
       lastReading.set(parentId, readingOf(parentId, now()));
       emit();
       ensureTimer();
@@ -278,14 +276,6 @@ export function createChannelHoldStore(options: {
 
     /** 「现在讨论」：攒着的全部强制投给父会话 */
     release,
-
-    /** 「稍后」：收起提示条（攒着的与小红点都还在）；再点一次展开 */
-    setCollapsed(parentId: string, next: boolean): void {
-      if (collapsed.has(parentId) === next) return;
-      if (next) collapsed.add(parentId);
-      else collapsed.delete(parentId);
-      emit();
-    },
 
     tick,
 
