@@ -36,7 +36,18 @@ export interface QuotaCredits {
  * 窗口的语义类别。`mcp` 与 `monthly` **不是同一种额度**：前者是 MCP 工具的每月调用额度，
  * 后者是账号的每月 token / 信用额度——现界面上都写成「每月」就会把两件事说成一件。
  */
-export type QuotaWindowKind = "5h" | "weekly" | "monthly" | "mcp" | "custom";
+export type QuotaWindowKind =
+  | "5h"
+  | "weekly"
+  /**
+   * Claude 订阅里「只算某一个型号」的周窗（Opus / Sonnet / Fable…）：与总周窗是**两个**窗口，
+   * 不能并成一个「每周」。型号名由厂商给（`limits[].scope.model.display_name`），放在 `label`，
+   * 渲染层拼成「每周 · <型号>」——型号名是专有名词，不翻译。
+   */
+  | "weekly-model"
+  | "monthly"
+  | "mcp"
+  | "custom";
 
 export interface QuotaWindow {
   /** 厂商侧窗口 id（如 `tokens_limit:3:5`、`usage`），稳定、可作 React key */

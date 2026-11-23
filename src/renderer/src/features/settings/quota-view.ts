@@ -41,6 +41,8 @@ export function windowLabel(window: QuotaWindow, t: Messages): string {
  */
 export function kindLabel(kind: QuotaWindowKind | undefined, label: string, t: Messages): string {
   if (kind === undefined || kind === "custom") return label;
+  // 型号周窗：「每周 · Opus」。型号名是厂商给的专有名词，原样接在后面
+  if (kind === "weekly-model") return `${t.quota.windowKind[kind]} · ${label}`;
   return t.quota.windowKind[kind];
 }
 
@@ -156,8 +158,12 @@ export function creditsBreakdownText(credits: QuotaCredits, t: Messages): string
  * 鉴权失败分两句：盘上有钥匙 = 厂商拒了它（改钥匙），没钥匙 = 先填一把。
  * 两者都不是「额度为 0」。
  */
-export function quotaProblemText(failure: QuotaFailure, t: Messages, hasKey?: boolean): string {
-  if (failure === "auth") return hasKey === false ? t.quota.authMissing : t.quota.authRejected;
+export function quotaProblemText(failure: QuotaFailure, t: Messages, hasKey?: boolean, oauth?: boolean): string {
+  if (failure === "auth") {
+    // 浏览器登录的订阅：改的是登录态，不是密钥——文案不能让用户去找一个不存在的输入框
+    if (oauth === true) return hasKey === false ? t.quota.loginMissing : t.quota.loginRejected;
+    return hasKey === false ? t.quota.authMissing : t.quota.authRejected;
+  }
   if (failure === "unsupported") return t.quota.teamUnsupported;
   if (failure === "console-only") return t.quota.consoleOnly;
   if (failure === "empty") return t.quota.emptyUsage;
@@ -190,6 +196,7 @@ export function quotaMenuItems(
   t: Messages,
   providerName: string | undefined,
   onCheckNow: () => void,
+  oauth?: boolean,
 ): MenuItem[] {
   if (probe === "none") return [];
   const now = Date.now();
@@ -208,7 +215,7 @@ export function quotaMenuItems(
   if (snapshot === null) {
     items.push({
       id: "quota-problem",
-      label: failure === null ? t.quota.notCheckedYet : quotaProblemText(failure, t),
+      label: failure === null ? t.quota.notCheckedYet : quotaProblemText(failure, t, undefined, oauth),
       fact: true,
     });
     /*

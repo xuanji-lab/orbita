@@ -2398,6 +2398,8 @@ export const en = {
     windowKind: {
       "5h": "5-hour window",
       weekly: "Weekly",
+      // 型号周窗（Claude）：窗口名 = 「每周」+ 厂商给的型号名，拼装见 `kindLabel`；这里只是前半段
+      "weekly-model": "Weekly",
       monthly: "Monthly",
       // MCP 工具的每月额度，与 token 窗口不是同一种额度
       mcp: "MCP monthly",
@@ -2427,6 +2429,9 @@ export const en = {
     unlimited: "Unlimited",
     authMissing: "Add an API key above to see the balance.",
     authRejected: "The provider rejected this API key (401). Update it above, then try again.",
+    // 浏览器登录的订阅没有「密钥」可改：说的是登录态
+    loginMissing: "Sign in above to see the plan quota.",
+    loginRejected: "The sign-in has expired or was rejected (401). Sign in again above, then try again.",
     teamUnsupported: "Quota can't be read for this account — team accounts aren't supported, or this provider hasn't been wired up.",
     noPlan: "This account has no subscription.",
     consoleOnly: "Balance is only available in this gateway's web console.",

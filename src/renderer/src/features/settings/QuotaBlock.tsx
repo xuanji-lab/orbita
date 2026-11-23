@@ -34,6 +34,8 @@ export function QuotaBlock(props: {
   probe: QuotaProbe;
   /** 盘上有密钥吗：没有时鉴权失败要说「先填密钥」，而不是「厂商拒绝了」 */
   hasKey?: boolean;
+  /** 浏览器登录的订阅：鉴权失败要说「重新登录」，不是「更新密钥」 */
+  oauth?: boolean;
 }) {
   const t = useT();
   const [result, setResult] = useState<QuotaResult | null>(null);
@@ -92,7 +94,7 @@ export function QuotaBlock(props: {
         <Icon name={failure === "unsupported" || failure === "no-plan" || failure === "console-only" || failure === "empty"
           ? "info"
           : "triangle-alert"} size={14} />
-        <span>{quotaProblemText(failure, t, props.hasKey)}</span>
+        <span>{quotaProblemText(failure, t, props.hasKey, props.oauth)}</span>
         {failure === "auth" || failure === "unsupported" || failure === "no-plan" || failure === "console-only" ? null : (
           <button type="button" className="q-retry" disabled={busy} onClick={() => void load(true)}>
             {t.quota.checkNow}

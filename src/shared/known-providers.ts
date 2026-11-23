@@ -434,6 +434,9 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     catalogId: "anthropic",
     billing: "plan",
     auth: "oauth",
+    // 5 小时 / 每周窗口：Claude Code 自己 `/usage` 读的那个接口（`GET /api/oauth/usage`，OAuth Bearer）。
+    // 与智谱 / Kimi 一样是**未文档化**的内部接口，失败要整块藏起来，不显示 0
+    quota: "plan-windows",
     // claude 各型号的档位 / 默认档在型号白名单里（known-models.ts，按 id 生效），这里不用声明
     note: "Claude Pro / Max 订阅，令牌自动续期",
   },

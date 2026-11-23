@@ -208,6 +208,7 @@ import {
   type RingLayers,
 } from "./stats-format";
 import { isPlanBilling, knownProviderQuota } from "@shared/known-providers";
+import { isProviderEnabled } from "@shared/provider";
 import type { QuotaResult } from "@shared/quota";
 import { quotaMenuItems, quotaExhaustedText } from "../settings/quota-view.ts";
 import { deriveWorkspaceName } from "@shared/workspace";
@@ -3506,7 +3507,9 @@ function UsageRing(props: {
    * **悬停即开的菜单里不许有 loading**（`Menu.tsx:119`）：值只来自主进程缓存，
    * 刷新在背后发生；首帧没有缓存时给「立即查询」，点了才打。
    */
-  const quotaProbe = provider === undefined ? "none" : knownProviderQuota(provider);
+  // 关着的服务商（单独开关）不查也不显示：这条会话的型号还指着它，也不去打探它的额度
+  const quotaProbe =
+    provider === undefined || !isProviderEnabled(provider) ? "none" : knownProviderQuota(provider);
   const providerId = session.model?.providerId ?? null;
   const [quota, setQuota] = useState<QuotaResult | null>(null);
   const [quotaBusy, setQuotaBusy] = useState(false);
@@ -3616,7 +3619,15 @@ function UsageRing(props: {
         ]
       : []),
     // 账号额度（缓存优先，悬停菜单里不画 loading）
-    ...quotaMenuItems(quota, quotaProbe, quotaBusy, t, provider?.displayName, () => void loadQuota(true)),
+    ...quotaMenuItems(
+      quota,
+      quotaProbe,
+      quotaBusy,
+      t,
+      provider?.displayName,
+      () => void loadQuota(true),
+      provider?.auth.scheme === "oauth",
+    ),
     ...(confirming
       ? [
           {

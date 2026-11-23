@@ -5,12 +5,13 @@
 import { ipcMain, shell } from "electron";
 import { ipcChannels, type OauthDeviceCode, type OauthLoginInput } from "../../shared/agent-ipc.ts";
 import { KNOWN_PROVIDERS, knownProviderOf, knownProviderQuota, knownQuotaSourceOf } from "../../shared/known-providers.ts";
-import type {
-  OauthCredential,
-  ProviderDto,
-  ProviderSetDisabledInput,
-  ProviderUpsertInput,
-  ValidationIssue,
+import {
+  isProviderEnabled,
+  type OauthCredential,
+  type ProviderDto,
+  type ProviderSetDisabledInput,
+  type ProviderUpsertInput,
+  type ValidationIssue,
 } from "../../shared/provider.ts";
 import { quotaIsStale, type QuotaFailure, type QuotaQuery, type QuotaResult } from "../../shared/quota.ts";
 import { resolveProviderSecrets } from "../agent/ipc.ts";
@@ -196,6 +197,9 @@ export function registerProviderIpc(
     const provider = (await store.list()).find((item) => item.id === query.providerId);
     if (provider === undefined) return { status: "none" };
 
+    // 「单独开关」关着的服务商：不查也不返回（旧缓存也不给）——关着就是不用它，
+    // 界面那边已经不画额度块，这里再拦一道，免得别的调用点（环菜单、将来的入口）绕过去打探它
+    if (!isProviderEnabled(provider)) return { status: "none" };
     const probe = knownProviderQuota(provider);
     if (probe === "none") return { status: "none" };
 
