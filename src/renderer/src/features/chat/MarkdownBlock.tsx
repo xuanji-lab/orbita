@@ -22,6 +22,8 @@ import { rehypePluginsFor, streamRenderPolicy } from "./stream-render.ts";
 import { splitMarkdownBlocks } from "./markdown-blocks.ts";
 import { CITATION_MARKER } from "../../../../shared/pdf-quote.ts";
 import { Icon } from "../../shell/Icon";
+import { parseTaskTokens } from "@shared/task-ref";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { chipIconName, type ChipKind } from "../../shell/composer-chips.ts";
 import { pluginChipName } from "../plugins/plugin-names.ts";
 import { usePluginNames } from "../plugins/usePluginNames.ts";
@@ -441,6 +443,24 @@ function ImageRefChip(props: { token: string; classes: string[] }) {
   );
 }
 
+/** 这条用户消息里每个 [任务 xxxxxxxx] 指的会话标题（前缀 → 标题，取自消息里的 <referenced_task> 标签）。默认空 = 不画 */
+export const TaskTitlesContext = createContext<ReadonlyMap<string, string>>(new Map());
+
+/** 气泡里的任务胶囊：任务图标 + 会话标题（长标题省略），与技能 chip 同一个长相（中性色）；对不上标签的退回原文 */
+function TaskRefChip(props: { token: string; classes: string[] }) {
+  const t = useT();
+  const titles = useContext(TaskTitlesContext);
+  const prefix = parseTaskTokens(props.token)[0]?.prefix ?? "";
+  const title = titles.get(prefix);
+  if (title === undefined) return <>{props.token}</>;
+  return (
+    <span className={props.classes.join(" ")} title={title}>
+      <Icon name={FEATURE_ICON.task} size={12} strokeWidth={1.8} className="bubble-chip-icon" />
+      <span className="bubble-chip-target">{title === "" ? t.common.newTask : title}</span>
+    </span>
+  );
+}
+
 function ChipSpan(props: ComponentPropsWithoutRef<"span"> & { node?: unknown }) {
   const { className, children, node: _node, ...rest } = props;
   const classes = Array.isArray(className) ? className : typeof className === "string" ? className.split(/\s+/).filter(Boolean) : [];
@@ -455,6 +475,7 @@ function ChipSpan(props: ComponentPropsWithoutRef<"span"> & { node?: unknown }) 
   }
   const token = String(children);
   if (classes.includes("bubble-chip-image")) return <ImageRefChip token={token} classes={classes} />;
+  if (classes.includes("bubble-chip-task")) return <TaskRefChip token={token} classes={classes} />;
   const kind: ChipKind = token.startsWith("/mcp:") ? "mcp" : token.startsWith("/plugin:") ? "plugin" : "skill";
   const target = token.replace(/^\/(?:skill|mcp|plugin):/, "");
   return (

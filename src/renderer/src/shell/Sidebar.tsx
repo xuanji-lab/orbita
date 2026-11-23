@@ -23,6 +23,7 @@ import { api } from "../api";
 import type { ChatSession } from "../features/chat/useChatSession";
 import { childSessions, isSessionDone, rootSessions, type Carryover, type SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
+import { TASK_REF_MIME, taskRefPayload } from "@shared/task-ref";
 import {
   SIDEBAR_AGE_CHOICES,
   SIDEBAR_WIDTH_DEFAULT,
@@ -1566,6 +1567,8 @@ function NavRow(props: {
   bar?: "running" | "waiting" | "done" | "failed" | undefined;
   /** 状态饼的悬停说明（状态的可读名字） */
   barTitle?: string;
+  /** 给了就整行可拖（会话行拖进输入框 = 任务引用）；由它往 dataTransfer 里写数据 */
+  onDragStart?: ((event: React.DragEvent<HTMLButtonElement>) => void) | undefined;
   style?: React.CSSProperties;
 }) {
   const disabled = props.disabled === true;
@@ -1581,6 +1584,8 @@ function NavRow(props: {
       // 不看 clickable）；aria-pressed 只在可点时才挂——两者分开，样式只认 data-active
       data-active={props.active || undefined}
       onClick={props.onClick}
+      draggable={props.onDragStart !== undefined || undefined}
+      onDragStart={props.onDragStart}
       style={{
         display: "flex",
         alignItems: "center",
@@ -1883,6 +1888,18 @@ function SessionRow(props: {
           bar={bar ?? undefined}
           barTitle={bar === null ? undefined : barLabel(bar, t)}
           onClick={props.onClick}
+          // 拖进输入框 = 在松手处插一颗任务胶囊（shared/task-ref.ts）。勾选态不拖（那是在批量选）
+          onDragStart={
+            props.checkbox !== undefined
+              ? undefined
+              : (event) => {
+                  event.dataTransfer.setData(
+                    TASK_REF_MIME,
+                    taskRefPayload({ id: meta.id, title: meta.title }),
+                  );
+                  event.dataTransfer.effectAllowed = "copy";
+                }
+          }
           style={{ flex: 1, minWidth: 0 }}
         />
       )}

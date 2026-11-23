@@ -386,7 +386,9 @@
 /* 粘贴的长文本、附图「图 N」= 中性灰（不是调用，是材料） */
 .composer-chip[data-kind="paste"],
 .composer-chip[data-kind="image"],
-.bubble-chip-image {
+.composer-chip[data-kind="task"],
+.bubble-chip-image,
+.bubble-chip-task {
   --chip-hue: var(--color-text-secondary);
 }
 /* 插件 = 橙（与插件页头像同一档类别色） */
@@ -430,6 +432,26 @@
 .composer-chip[data-kind="paste"] > .composer-chip-face,
 .composer-chip[data-kind="image"] > .composer-chip-face {
   padding: 0 var(--space-0-5);
+}
+
+/* 拖进来的东西会落在哪：一根细竖线（输入框内，跟着指针走；离开就消失）。不染 accent——accent 只给主操作，
+   用正文墨色；不接指针，免得挡住命中测试 */
+.composer-field > .composer-drop-caret {
+  grid-area: auto;
+  position: absolute;
+  z-index: 1;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--color-text-primary);
+  pointer-events: none;
+}
+
+/* 气泡里的任务胶囊：标题可能很长，省略号截断，别把一行撑破 */
+.bubble-chip-task > .bubble-chip-target {
+  max-width: 16em;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 名字放不下（比原文宽）就省略号截断，胶囊不超出原文的格子 */

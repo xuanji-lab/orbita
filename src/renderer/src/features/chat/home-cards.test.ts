@@ -301,6 +301,8 @@ describe("visibleAsk / 首页记录行的「此刻」一格不露系统提示", 
     );
     assert.equal(visibleAsk('<referenced_task id="x" title="y" />继续做这个'), "继续做这个");
     assert.equal(visibleAsk("普通的一句话"), "普通的一句话");
+    // 句中展开的任务引用被截断在标签中间（最近提问只存前若干字）：残片不外露
+    assert.equal(visibleAsk('请看， <referenced_task id="1b4f3bdb-473f-4894-a2b2-91b7'), "请看，");
   });
 
   test("HTML 注释剥掉；没闭合的注释吞到结尾（它之后全是系统文字）", () => {
