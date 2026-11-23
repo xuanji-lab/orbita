@@ -1,0 +1,122 @@
+/*
+ * 通话条（CallBar.tsx）。外层是 glass-card glass-float（与排队条、审批条同一配方），这里只管行内排布。
+ * 一种容器一种语言：卡本身有底色与发丝，行内不再加框、不加线。
+ */
+.call-bar {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+}
+
+.call-row,
+.call-problem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: var(--control-height-md);
+}
+
+.call-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  color: var(--color-text-primary);
+}
+
+.call-state-label {
+  font-size: var(--font-size-base);
+  font-weight: 500;
+  /* 状态词两到三个字（在听 / 已静音）：占住最宽那档，切换时后面的电平与时长不跳 */
+  min-width: 3em;
+}
+
+/* 麦克风电平：四根细竖条，亮几根看声音多大；只有「在听」时亮，别的阶段整排淡掉 */
+.call-meter {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: var(--space-0-5);
+  height: 12px;
+  flex: 0 0 auto;
+}
+
+.call-meter-bar {
+  width: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--color-border-strong);
+  transition: background-color 80ms linear;
+}
+
+.call-meter-bar:nth-child(1) { height: 4px; }
+.call-meter-bar:nth-child(2) { height: 7px; }
+.call-meter-bar:nth-child(3) { height: 10px; }
+.call-meter-bar:nth-child(4) { height: 12px; }
+
+.call-meter-bar[data-on="true"] {
+  background: var(--color-text-secondary);
+}
+
+.call-clock {
+  flex: 0 0 auto;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.call-heard,
+.call-problem-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.call-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* 挂断：危险红字，hover 铺 danger-soft（设计系统「危险红字、hover --color-danger-soft」）。
+   前面加 .call-bar 抬一级特异性：.quiet-control 的字色在 styles.css 里，加载顺序在后会盖掉红字（实测） */
+.call-bar .call-hangup {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-height-sm);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-danger);
+}
+
+.call-bar .call-hangup:hover {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.call-problem {
+  color: var(--color-danger);
+}
+
+.call-problem-text {
+  color: var(--color-danger);
+  white-space: normal;
+  /* 提示行只有这一句话：与行尾「去语音设置」同一档，不比按钮字小 */
+  font-size: var(--font-size-base);
+}
+
+.call-problem-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}

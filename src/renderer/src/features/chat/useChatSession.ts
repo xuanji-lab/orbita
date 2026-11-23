@@ -362,6 +362,11 @@ export interface ChatSession {
   confirmUndo: () => void;
   cancelUndo: () => void;
   send: () => void;
+  /**
+   * 发一句不经过输入框的话（通话：听写出来的一句直接发成用户消息）。同 send 的分流——忙就排队、
+   * 闲才直发，发到「本槽当前看的这条」；**不碰草稿与附件**：通话中输入框里写了一半的字原样留着。
+   */
+  sendText: (text: string) => void;
   /** 打断当前这一轮。pi 的 abort 走的是与工具审批不同的一条路，不需要等审批答复 */
   stop: () => void;
   /** 排队队列（当前槽），按显示顺序。唯一真源，操作一律按 id */
@@ -2188,6 +2193,36 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     }
   }, [engine, draft, attachments, quotes, files, pasted, sessionId, model, mode, cwd, workspaceId, opened, draftKey, writeDraft, writeAttachments, writeFiles, writeBlocks, writeQuotes, submitTurn]);
 
+  const sendText = useCallback(
+    (raw: string) => {
+      const text = raw.trim();
+      if (text === "") return;
+      engine.setError(null);
+      let id: string | null = sessionId ?? opened?.id ?? null;
+      const busy = id !== null && engine.statesRef.current.get(id)?.phase !== "idle";
+      if (id !== null && busy) {
+        const target = id;
+        engine.applyStates((prev) => enqueue(prev, target, { id: crypto.randomUUID(), kind: "text", text }));
+        return;
+      }
+      if (model === null) {
+        engine.setError(engine.modelMissingText());
+        return;
+      }
+      const meta = id !== null ? engine.sessions.find((entry) => entry.id === id) ?? null : null;
+      const resume = meta?.piSessionFile != null ? { piSessionFile: meta.piSessionFile } : null;
+      const target = meta?.cwd ?? cwd ?? engine.defaultCwd;
+      if (target === "") {
+        engine.setError(engine.messagesRef.current.session.noWorkspaceFolder);
+        return;
+      }
+      const workspace = meta?.workspaceId ?? workspaceId ?? null;
+      if (id === null) id = crypto.randomUUID();
+      void submitTurn(id, text, target, workspace, resume);
+    },
+    [engine, sessionId, opened, model, cwd, workspaceId, submitTurn],
+  );
+
   const stop = useCallback(() => {
     // 只停本槽当前轮。排队不动：pi 队列滞留给下次发送自动带上；压缩缓冲在压缩结束
     // （含被停止的压缩）的 phase 事件里自动发出——停止不替用户放弃任何已说的话
@@ -3089,6 +3124,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     confirmUndo,
     cancelUndo,
     send: () => void send(),
+    sendText,
     stop,
     queued: entry.queued,
     sendQueuedNow,

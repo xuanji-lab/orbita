@@ -6,6 +6,8 @@ import { QuoteToolbar, type QuoteCandidate } from "../../shell/QuoteToolbar";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
 import { QueueStrip } from "./QueueStrip";
+import { CallBar } from "../voice/CallBar.tsx";
+import { useVoiceCall } from "../voice/useVoiceCall.ts";
 import { compactionBoundaryStatus, mergeSideRecords } from "./session-states";
 import {
   ChannelFromChildCard,
@@ -742,6 +744,8 @@ function ChatViewBody(props: {
    * 点了只是把卡片关上——比给一个点了没反应的东西好。
    */
   onOpenProviders?: () => void;
+  /** 通话缺配置时「去语音设置」的去处（设置 › 语音）。不传就不给这个出口 */
+  onOpenVoiceSettings?: () => void;
   /**
    * 点主流里的派出卡 / 子会话问询胶囊 → 打开右栏 Sub-sessions 面板并直接进入这条
    * 子会话的会话层（子会话 PR4c）。只有主槽的 ChatView 拿到它——辅助对话抽屉与
@@ -1483,6 +1487,14 @@ function ChatViewBody(props: {
     return () => observer.disconnect();
   }, [scopedHome]);
   const protoVariants = useProtoVariants();
+  // 语音通话（编排形态的对话页）：绑定当前打开的这条对话；首页、单智能体、只读会话都没有通话
+  const callable = props.orchestrate === true && !homeActive && !session.readOnly && hideComposer !== true && openId !== "";
+  const call = useVoiceCall({
+    sessionId: callable ? openId : null,
+    transcript: session.transcript,
+    turnPhase: session.phase,
+    sendText: session.sendText,
+  });
   // 编排的新任务固定放行（用户 2026-11-16 定「只留放行」，不再向用户暴露档位）：首页槽的档位钉成 skip，
   // 但不写 settings.lastUsed——单智能体记住的那一档不被顺手改掉。已落盘的老会话保持它自己的档（本刀不动）
   const orchestrateHome = props.orchestrate === true && homeActive;
@@ -1570,6 +1582,20 @@ function ChatViewBody(props: {
       onCollapsePaste={session.collapsePaste}
       imageUnsupported={!selectedModelAcceptsImage(session.usable, session.catalog, session.model)}
       onSlashSpace={props.onSlashSpace}
+      callSlot={
+        callable ? (
+          <IconButton
+            label={call.phase === null ? t.voice.call.start : t.voice.call.hangUp}
+            title={call.phase === null ? t.voice.call.startTitle : t.voice.call.hangUp}
+            size={28}
+            active={call.phase !== null}
+            disabled={session.usable.length === 0}
+            onClick={call.phase === null ? call.start : call.hangUp}
+          >
+            <Icon name="phone" size={15} strokeWidth={1.8} />
+          </IconButton>
+        ) : undefined
+      }
     />
   );
 
@@ -1938,6 +1964,8 @@ function ChatViewBody(props: {
             */}
             {hideComposer !== true && (
               <>
+                {/* 通话条：输入框正上方，与排队条同一配方；不在通话也没问题要说时不占位 */}
+                {callable && <CallBar call={call} onOpenSettings={props.onOpenVoiceSettings ?? null} />}
                 {/* 排队卡片：比 composer 高一层（等待发出的事），比审批低一层（审批要求回答才继续） */}
                 <QueueStrip
                   items={session.queued}
