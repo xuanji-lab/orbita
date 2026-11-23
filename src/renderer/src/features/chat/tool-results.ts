@@ -193,9 +193,10 @@ export function flattenRenderUnits(records: readonly TranscriptRecord[]): Render
 function channelEnvelopesOf(
   item: Extract<TranscriptItem, { role: "user" }>,
 ): { peerId: string; messageId: string; from: "parent" | "child"; kind: ChannelMessageKind }[] {
-  const text = item.content.find((block) => block.type === "text");
-  if (text === undefined || text.type !== "text") return [];
-  return parseChannelBatch(text.text).map((parsed) => ({
+  // 回显的正文按空行拆成多个 text 块：合并信封的各条信封落在不同的块里，要拼回全文再认
+  const joined = item.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n\n");
+  if (joined === "") return [];
+  return parseChannelBatch(joined).map((parsed) => ({
     peerId: parsed.peerId,
     messageId: parsed.messageId,
     from: parsed.from,

@@ -4,6 +4,7 @@ import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-prot
 import type { CompactedRecord, SessionRecord } from "@shared/session";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载（同 tool-results.ts 本身的纪律）
 import { composeChannelBatchPrompt, composeChannelPrompt } from "../../../../shared/channel.ts";
+import { splitEchoBlocks } from "../../../../shared/prompt-attachments.ts";
 import { COMMAND_TIMEOUT_DEFAULT_SECONDS, COMMAND_TIMEOUT_FLOOR_SECONDS } from "../../../../shared/permission.ts";
 import {
   answerText,
@@ -190,7 +191,10 @@ describe("flattenRenderUnits", () => {
       { message: { id: "m1", from: "child", author: "model", kind: "question", text: "问", delivery: "followUp", createdAt: 6 }, peer: { id: "c1", title: "甲" } },
       { message: { id: "m2", from: "child", author: "model", kind: "done", text: "好", delivery: "followUp", createdAt: 7 }, peer: { id: "c2", title: "乙" } },
     ]);
-    const live = flattenRenderUnits([{ id: "k1", role: "user", content: [{ type: "text", text }], timestamp: 6 }]);
+    // 真实的 user item 正文按空行拆成多个 text 块（runtime 回显的切法）
+    const live = flattenRenderUnits([
+      { id: "k1", role: "user", content: splitEchoBlocks(text).map((part) => ({ type: "text" as const, text: part })), timestamp: 6 },
+    ]);
     assert.deepEqual(
       live.map((unit) => [unit.key, unit.kind === "channelMark" ? unit.mark.messageId : null]),
       [
