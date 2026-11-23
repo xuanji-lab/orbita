@@ -169,6 +169,40 @@ export const KNOWN_MODELS: Readonly<Record<string, ModelParams>> = {
   "deepseek-v4-pro": { defaultThinkingLevel: "high" },
 
   // ── 智谱 ──
+  /*
+   * GLM-5.4（2026-11-23 上线，目前只在 GLM Coding Plan 里开放；API 等安全评估后才开，定价页还没有它，
+   * 所以不写单价）。源：docs.bigmodel.cn/cn/coding-plan/latest-model.md「如何切换模型」与
+   * overview.md「可用模型」（2026-11-23 核对；docs.z.ai/devpack/latest-model.md 同口径）：
+   * - 型号 id glm-5.4；1M 上下文（Claude Code 里写 glm-5.4[1m]，Cline 里 Context Window 填 1000000）。
+   * - 思考关不掉：thinking 关掉会折成 low「仍会轻量思考」；档位只有 low / high / max
+   *   （minimal / light / low → low，medium / high → high，xhigh / max / ultra → max），省略时默认 max。
+   * - 收图：官方写明「GLM-5.4 与 GLM-5.3-Flash 均为多模态模型」（GLM-5.3 本体只收文本）；
+   *   不写 input（兜底本来带 image）。
+   * 目录（pi 0.84.3 快照与 pi.dev 的 zai-coding-cn / zai 都到 glm-5.3）没收录，全靠这一条：
+   * 不写就落 128k / 8192 兜底，且被当成不能思考。目录收录且数值正确之后，参数字段可删。
+   */
+  "glm-5.4": {
+    contextWindow: 1_000_000,
+    /*
+     * 输出上限官方文档没写（API 还没开，没有型号页）。实测（2026-11-23，Coding Plan 的 Anthropic 端点，
+     * POST open.bigmodel.cn/api/anthropic/v1/messages）：max_tokens 传 131072 返回 200，传 131073 与
+     * 200000 都 400「[1210] max_tokens参数非法：限制数值范围[1,131072]」——上限就是 131072，与 5.3 系相同。
+     * 不写会落 8192 兜底，pi 原样发出去，长思考在 8 千 token 处被截断。
+     */
+    maxTokens: 131_072,
+    reasoning: true,
+    thinkingLevels: ["low", "high", "max"],
+    defaultThinkingLevel: "max",
+    /*
+     * Anthropic 兼容端点只读 output_config.effort（官方：「Claude Code 使用 thinking.type、
+     * output_config.effort」；按官方的换算表，只传 thinking.type 不传档位就落默认 max）。
+     * 不声明的话 pi 按老规矩发 budget_tokens，选的档到不了端点——与 Kimi K3.1 Pro 同一个坑
+     * （那一条实测过，这一条是照官方表推的，没单独实测）。
+     * 实测（2026-11-23）：声明后 low / high / max 三档经这个端点各真发一条，都正常收尾
+     * （上线当天偶发 529「访问量过大」，pi 自动重试后成功）。
+     */
+    adaptiveThinking: true,
+  },
   /**
    * pi 的 `zai-coding-cn` 目录里没有 flash（只到 glm-5.3），而官方 `/models` 接口
    * fetch 得到。参数向 glm-5.3 看齐：同代同系，官方口径都是 1M 上下文。
@@ -408,6 +442,8 @@ const MODEL_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   // pi 0.84.3 快照与 pi.dev 都没收录（家族兜底借得到参数、借不到名字），不写就显示成小写 id；
   // 名字取官方型号总览（2026-11-12）。目录收录后可删
   "claude-fable-5-2": "Claude Fable 5.2",
+  // 同上：GLM 没有家族兜底，目录没收就只剩小写 id；名字取 Coding Plan 文档的写法（2026-11-23）。目录收录后可删
+  "glm-5.4": "GLM-5.4",
 };
 
 /** 这个型号 id 在白名单里的显示名；没写返回 undefined（调用方接着查目录） */
@@ -423,6 +459,7 @@ export function knownDisplayName(modelId: string): string | undefined {
 export type ModelAvatarKey =
   | "kimi-k3.1"
   | "kimi-k3"
+  | "glm-5.4"
   | "glm-5.3"
   | "glm-5.3-flash"
   | "deepseek-v4-pro"
@@ -452,6 +489,7 @@ const MODEL_AVATAR_IDS: Readonly<Record<string, ModelAvatarKey>> = {
   k3: "kimi-k3",
   "k3-256k": "kimi-k3",
   "kimi-k3": "kimi-k3",
+  "glm-5.4": "glm-5.4",
   "glm-5.3": "glm-5.3",
   "glm-5.3-flash": "glm-5.3-flash",
   "deepseek-v4-pro": "deepseek-v4-pro",
