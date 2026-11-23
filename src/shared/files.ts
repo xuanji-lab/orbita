@@ -237,6 +237,23 @@ export function isWebArtifactFile(path: string): boolean {
 }
 
 /**
+ * 轮尾「音视频产物」判定：agent 的轮内 mtime 扫描（web-artifacts.ts）与卡片的音频 / 视频行用同一张表。
+ * 与文件面板播放器能播的格式一致（点开就能播），不收 Chromium 播不了的容器（mkv / avi / wma）。
+ */
+const AUDIO_ARTIFACT_EXTENSIONS = /\.(?:mp3|wav|m4a|aac|flac|ogg|opus)$/i;
+const VIDEO_ARTIFACT_EXTENSIONS = /\.(?:mp4|mov|webm|m4v)$/i;
+
+export function mediaArtifactKind(path: string): "audio" | "video" | null {
+  if (AUDIO_ARTIFACT_EXTENSIONS.test(path)) return "audio";
+  if (VIDEO_ARTIFACT_EXTENSIONS.test(path)) return "video";
+  return null;
+}
+
+export function isMediaArtifactFile(path: string): boolean {
+  return mediaArtifactKind(path) !== null;
+}
+
+/**
  * 盘上一条路径的类型（`fs:stat-kind` 的回执字段）。与 `PromptFileRef` / `SentFileRef`
  * （prompt-attachments.ts）的 `kind` 同一套词汇，不与面板的 `FileEntryKind`
  * （还有 symlink / other）混用：这边只回答输入框附件分拣要问的那一问——
