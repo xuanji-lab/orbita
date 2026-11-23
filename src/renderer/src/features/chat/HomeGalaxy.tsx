@@ -32,7 +32,7 @@ import { BodyFigure, StarBody } from "../galaxy-designer/StarFigure.tsx";
 import { bodyArt, planetFaceDesign, starExtentRatio, type GalaxyDesign, type PlanetDesign } from "../galaxy-designer/design.ts";
 import { fitScreenSafe } from "./screen-safe.ts";
 import { GalaxyCallouts } from "./GalaxyCallouts.tsx";
-import { placeNameTags } from "./callouts.ts";
+import { placeNameTags, textWidth } from "./callouts.ts";
 import type { PlanetItem, RockItem } from "./galaxy.ts";
 
 /** 碎石块的轮廓：七个顶点、半径按 id 抖一点（同一条会话永远同一块石头），不是圆点——它是会话，不是天体 */
@@ -348,7 +348,11 @@ export function HomeGalaxy(props: {
       {props.fill === true && scene !== null && props.starless !== true && (
         <GalaxyCallouts
           planets={calloutBodies}
-          reserved={nameTags.map((tag) => tag.box)}
+          reserved={[
+            ...nameTags.map((tag) => tag.box),
+            // 「+N」也占一块：引线标签不压它（满载右栏里两者曾叠在一起）
+            ...(folded === null || layout.belt === null ? [] : [{ x0: folded.x, y0: folded.y - glyphPx, x1: folded.x + textWidth(t.agents.more(layout.belt.folded), glyphPx), y1: folded.y + glyphPx }]),
+          ]}
           rankOf={rankOf}
           star={starItem === undefined ? null : { x: starItem.x, y: starItem.y, r: starItem.r * starExtent }}
           width={scene.viewport.width}
