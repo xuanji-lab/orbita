@@ -799,10 +799,10 @@ export const en = {
     open: "View larger",
     prev: "Previous image",
     next: "Next image",
-    openInFiles: "Preview in the files panel · right-click for size",
+    openInFiles: "Preview in the files panel",
     imageRef: (name: string) => `Image · ${name}`,
-    sizeLarge: "Large",
-    sizeSmall: "Small",
+    sizeLarge: "Enlarge",
+    sizeSmall: "Shrink",
   },
 
   rowStatus: {
@@ -2443,7 +2443,6 @@ export const en = {
     outputWeb: "Web page",
     outputPreview: "Preview",
     // 本轮网页文件变动超过上限（像是批量操作）：不逐个列，结尾那摞里一张「N web pages · 批量」卡，没有预览按钮
-    outputBatch: "Generated in bulk",
     outputGroup: (type: "doc" | "pdf" | "web", n: number) =>
       type === "doc" ? `${n} documents` : type === "web" ? `${n} web pages` : `${n} PDFs`,
     childReportHead: (title: string) => `"${title}" handed back`,

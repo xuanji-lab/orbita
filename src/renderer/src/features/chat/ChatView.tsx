@@ -5337,23 +5337,10 @@ function TurnOutputsBlock(props: { unit: TurnOutputsUnit; toolResults: ToolResul
     return loaded.outputs.map((output) => ({ ...output, source }));
   });
   const outputs = mergeOutputs(mine, fromChildren);
-  const batch = props.unit.webBatch;
-  if (outputs.length === 0 && batch === 0) return null;
+  if (outputs.length === 0) return null;
   return (
     <div className="turn-outputs">
       <OutputStack outputs={outputs} sessionId={props.sessionId} openSession={channel.openSubSession} />
-      {batch > 0 && (
-        // 批量网页变动（git checkout / 解压归档 / 批量导出）：和别的产物同一个骨架，但没有具体路径，所以没有预览按钮
-        <div className="turn-output">
-          <span className="turn-output-icon">
-            <FileTypeIcon name="batch.html" size={24} />
-          </span>
-          <span className="turn-output-text">
-            <span className="turn-output-title">{t.chat.outputGroup("web", batch)}</span>
-            <span className="turn-output-sub">{t.chat.outputBatch}</span>
-          </span>
-        </div>
-      )}
     </div>
   );
 }

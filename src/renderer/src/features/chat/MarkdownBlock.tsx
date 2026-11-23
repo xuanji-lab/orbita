@@ -31,7 +31,6 @@ import { useExperimentalFeature } from "../../experimental.ts";
 import { citationIdOfHref, citationTitle, remarkCitationMarkers } from "./citation-markers.ts";
 import { CitationOpenContext, CitationTableContext } from "./citation-context.ts";
 import { ChatImageSizeContext, resolveChatPath, useChatFileScope, useChatImage } from "./chat-file-scope.ts";
-import { ContextMenu } from "../../shell/ContextMenu";
 import { requestOpenPanel } from "../../shell/open-panel.ts";
 // 提醒框（`> [!note]`）的样式 = 文档面板阅读视图那一份（`.chat-md .callout`），回答里与文档里长一个样
 import "../doc-panel/doc-panel.css";
@@ -322,42 +321,37 @@ function LocalChatImage(props: { path: string; alt: string; fallback: ImageProps
   const pref = useContext(ChatImageSizeContext);
   // 挂载时读一次偏好当初值：之后别处改了偏好，已经画好的这张不跟着跳
   const [size, setSize] = useState(pref.size);
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   if (url === undefined) return <span className="chat-img-pending" data-size={size} aria-hidden="true" />;
   if (url === null) return <ImagePlaceholder {...props.fallback} />;
-  const pick = (next: "large" | "small"): void => {
-    setSize(next);
-    pref.setSize(next);
-  };
+  const next = size === "large" ? "small" : "large";
   return (
-    <>
-      {/*
-        左键在右栏文件面板里预览（2026-11-23 用户：以前的大图浮层挡住文字）；右键选大图 / 小图。
-        图居中，大图最高 480、小图最高 160。
-      */}
+    // 悬停图片右上角出一颗小工具条（与划选文字的「复制 / 引用」同一副样子）：大图时「缩小」、小图时「放大」，
+    // 斜对角箭头朝外 = 放大、朝里 = 缩小（2026-11-23 用户）。点了改这一张，并记成之后新图的默认。
+    // 左键图片本身在右栏文件面板里预览。图居中，大图最高 480、小图最高 160
+    <span className="chat-img-frame" data-size={size}>
       <button
         type="button"
         className="chat-img-local"
-        data-size={size}
         title={t.lightbox.openInFiles}
         aria-label={t.lightbox.openInFiles}
         onClick={() => requestOpenPanel({ kind: "files", path: props.path, force: true })}
-        onContextMenu={(event) => {
-          event.preventDefault();
-          setMenu({ x: event.clientX, y: event.clientY });
-        }}
       >
         <img src={url} alt={props.alt} />
       </button>
-      <ContextMenu
-        position={menu}
-        onClose={() => setMenu(null)}
-        items={[
-          { id: "large", label: t.lightbox.sizeLarge, checked: size === "large", onSelect: () => pick("large") },
-          { id: "small", label: t.lightbox.sizeSmall, checked: size === "small", onSelect: () => pick("small") },
-        ]}
-      />
-    </>
+      <span className="chat-img-tools quote-toolbar" role="toolbar">
+        <button
+          type="button"
+          title={next === "large" ? t.lightbox.sizeLarge : t.lightbox.sizeSmall}
+          onClick={() => {
+            setSize(next);
+            pref.setSize(next);
+          }}
+        >
+          <Icon name={next === "large" ? "maximize-2" : "minimize-2"} size={13} strokeWidth={1.8} />
+          {next === "large" ? t.lightbox.sizeLarge : t.lightbox.sizeSmall}
+        </button>
+      </span>
+    </span>
   );
 }
 
