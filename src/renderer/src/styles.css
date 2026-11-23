@@ -1346,8 +1346,13 @@ html[data-pointer-drag] iframe {
 .ws-head:hover .ws-head-acts,
 .ws-head:has(:focus-visible) .ws-head-acts,
 .ws-head:has([aria-expanded="true"]:not(.ws-fold)) .ws-head-acts,
-.ws-head-acts[data-armed] {
+.ws-head-acts[data-armed],
+.ws-head-acts[data-designing] {
   display: inline-flex;
+}
+/* 星系设计面板开着这个工作区（原型）：不悬停时只留画笔键（点亮），告诉你右栏在设计哪座星系；其余动作键照旧悬停才出 */
+.ws-head:not(:hover):not(:has(:focus-visible)) .ws-head-acts[data-designing]:not([data-armed]) > :not(.ws-diy) {
+  display: none;
 }
 .ws-head:hover .ws-agg,
 .ws-head:has(:focus-visible) .ws-agg {

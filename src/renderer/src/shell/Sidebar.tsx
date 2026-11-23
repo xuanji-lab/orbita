@@ -148,6 +148,10 @@ export function Sidebar(props: {
   filesView: { mode: "browse" | "focus"; workspaceId: string } | null;
   /** 工作区行悬停的「查看工作区文件」 */
   onBrowseWorkspace: (id: string) => void;
+  /** 工作区行悬停的画笔键：打开 / 收起这个工作区的星系设计面板（原型） */
+  onDesignGalaxy: (id: string) => void;
+  /** 星系设计面板正开着哪个工作区；null = 没开。那一行的画笔键常显、点亮 */
+  designingWorkspaceId: string | null;
   /** 浏览态的「返回会话列表」 */
   onExitBrowse: () => void;
   /** 浏览态的「以此开始专注」：开专注浮层并预选这个工作区 */
@@ -774,6 +778,8 @@ export function Sidebar(props: {
                       onRename={(name) => session.renameWorkspace(workspace.id, name)}
                       onRemove={() => session.removeWorkspace(workspace.id)}
                       onBrowse={() => props.onBrowseWorkspace(workspace.id)}
+                      onDesign={() => props.onDesignGalaxy(workspace.id)}
+                      designing={props.designingWorkspaceId === workspace.id}
                       checking={checkFor === workspace.id}
                       onStartChecking={() => startChecking(workspace.id)}
                       onDoneChecking={clearSelection}
@@ -914,6 +920,10 @@ function WorkspaceGroup(props: {
   onRemove: () => void;
   /** 悬停的「查看工作区文件」 */
   onBrowse: () => void;
+  /** 悬停的画笔键：星系设计面板（原型）；整行点击只管开合，不碰它 */
+  onDesign: () => void;
+  /** 星系设计面板正开着这个工作区 */
+  designing: boolean;
   /** 这一组正处在勾选态（悬停的「迁移任务…」进入；不弹窗，行首出勾选框） */
   checking: boolean;
   onStartChecking: () => void;
@@ -1059,7 +1069,18 @@ function WorkspaceGroup(props: {
               {t.sidebar.checkDone}
             </button>
           )}
-          <span className="ws-head-acts" data-armed={armed || undefined}>
+          <span className="ws-head-acts" data-armed={armed || undefined} data-designing={props.designing || undefined}>
+            <IconButton
+              label={props.designing ? t.galaxyDesigner.diyOpen : t.galaxyDesigner.diy}
+              title={props.designing ? t.galaxyDesigner.diyOpen : t.galaxyDesigner.diy}
+              size={20}
+              active={props.designing}
+              className="ws-diy"
+              onClick={props.onDesign}
+              style={{ borderRadius: "var(--radius-xs)", color: props.designing ? "var(--color-text-primary)" : "var(--color-text-tertiary)" }}
+            >
+              <Icon name="paintbrush" size={14} strokeWidth={1.8} />
+            </IconButton>
             {!props.checking && props.sessions.length > 0 && (
               <IconButton
                 label={t.sidebar.moveTasks}

@@ -10,6 +10,8 @@ import type { ChimeReason } from "@shared/notify";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { effectiveIntentSettings } from "@shared/settings";
 import { IntentPanel } from "./features/intent/IntentPanel.tsx";
+import { GalaxyDesigner } from "./features/galaxy-designer/GalaxyDesigner.tsx";
+import { designerClick, designerFollow, keepDesignerAcrossSessions } from "./features/galaxy-designer/design.ts";
 import { ContextPanel, type TaskPanelTab } from "./features/context/ContextPanel.tsx";
 import { EMPTY_ENTRY } from "./features/chat/session-states.ts";
 import { ChatView } from "./features/chat/ChatView";
@@ -133,6 +135,8 @@ export function App() {
   const [overlay, setOverlay] = useState<Overlay>(null);
   /** 右侧分屏面板开哪个；两个面板互斥，同一时刻至多一个 */
   const [rightPanel, setRightPanel] = useState<RightPanelKind | null>(null);
+  /** 星系设计面板（原型）在设计哪个工作区：DIY 键定它，主槽换工作区时跟过去（design.ts 的 designerFollow） */
+  const [galaxyTarget, setGalaxyTarget] = useState<string | null>(null);
   /**
    * Archived 子视图的开关（入口在右栏底部，2026-09-22 裁决）。
    * 状态跟着入口住在 App，Sidebar 受控渲染子视图本体。
@@ -884,6 +888,22 @@ export function App() {
    *  "drawer" 即辅助对话——三个菜单在同一个壳里只是三种内容。
    *  「文档」「演示文稿」各是一个面板（同一套挑选 / 新建画面，见 DocsPanel）：点一下只是把它亮起来，不替用户开文件、不新建文件。 */
   const handlePanel = useCallback((next: RightPanelKind | null) => setRightPanel(next), []);
+  /** 侧栏工作区行的画笔键：开 / 收星系设计面板，或换成另一个工作区（规则在 design.ts，带测试） */
+  const toggleGalaxyDesigner = useCallback(
+    (workspaceId: string) => {
+      const next = designerClick({ panel: rightPanel, target: galaxyTarget }, workspaceId);
+      setGalaxyTarget(next.target);
+      setRightPanel(next.panel);
+    },
+    [rightPanel, galaxyTarget],
+  );
+  // 主槽换了工作区：设计面板开着就跟过去（只看工作区变没变，不看面板何时打开——点 DIY 不会把目标拉回当前工作区）
+  const designerStateRef = useRef({ panel: rightPanel, target: galaxyTarget });
+  designerStateRef.current = { panel: rightPanel, target: galaxyTarget };
+  useEffect(() => {
+    const next = designerFollow(designerStateRef.current, session.workspaceId);
+    if (next.target !== designerStateRef.current.target) setGalaxyTarget(next.target);
+  }, [session.workspaceId]);
   /** 召回终态卡的「在右栏看图谱」（2026-10-14 终态卡重写）：直达右栏意图面板。引用稳定（TranscriptColumn 是 memo） */
   const openIntentPanel = useCallback(() => handlePanel("intent"), [handlePanel]);
   /** 输入框旁上下文环菜单的「查看上下文」：直达右栏上下文面板 */
@@ -1203,11 +1223,13 @@ export function App() {
       recalled = recalled.taskTab === undefined ? bare : { ...bare, taskTab: recalled.taskTab };
     }
     const nextTab = taskTabOf(recalled);
+    // 星系设计是工作区级的面板、不进会话记忆：开着时目标会话没记过别的面板，就留着它（跟到新工作区由下面的效果做）
+    const nextPanel = keepDesignerAcrossSessions(rightPanel, recalled.panel);
     // 恢复出来的面板不是用户打开的：面板打开次数不记它（见下方 countPanel 的效果）
-    if (recalled.panel !== rightPanel || nextTab !== taskTab) panelRestoredRef.current = true;
+    if (nextPanel !== rightPanel || nextTab !== taskTab) panelRestoredRef.current = true;
     const children = new Set(target === null ? [] : childSessions(sessionsRef.current, target).map((meta) => meta.id));
     const nav = recalled.panel === "subsessions" ? resolveSubSessionsSub(recalled.sub, children) : undefined;
-    setRightPanel(recalled.panel);
+    setRightPanel(nextPanel);
     setTaskTab(nextTab);
     setRailPath(parsePath(recalled) ?? CLOSED_ENTRY);
     setOpenedDraft(recalled.panel === "plugins" ? (recalled.sub?.draft ?? null) : null);
@@ -1458,6 +1480,8 @@ export function App() {
           newTaskSignal={newTaskSignal}
           filesView={focus.filesView}
           onBrowseWorkspace={focus.browseWorkspace}
+          onDesignGalaxy={toggleGalaxyDesigner}
+          designingWorkspaceId={rightPanel === "galaxy" ? galaxyTarget : null}
           onExitBrowse={focus.exitBrowse}
           onStartFocusHere={focus.startAt}
           onOpenFile={focus.openFile}
@@ -1671,6 +1695,8 @@ export function App() {
                   {...(railPath.panel === "plugins" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
                   onSubChange={(sub) => reportRailPath({ panel: "plugins", ...(sub === undefined ? {} : { sub }) })}
                 />
+              ) : shownPanel === "galaxy" ? (
+                <GalaxyDesigner workspace={session.workspaces.find((workspace) => workspace.id === galaxyTarget) ?? null} />
               ) : shownPanel === "intent" ? (
                 <IntentPanel
                   sessionId={session.sessionId ?? session.opened?.id ?? null}

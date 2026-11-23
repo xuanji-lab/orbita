@@ -42,7 +42,8 @@ export interface GalaxySpec {
 /** 主星与行星的质量区间互不重叠，且行星上限远低于主星下限 */
 export const STAR_MASS = { min: 300, max: 1000 } as const;
 export const PLANET_MASS = { min: 1, max: 40 } as const;
-const STAR_DENSITY = 1.4;
+/** 主星的密度：主星成分固定（等离子），只有质量能调。星系设计面板也用它算主星半径 */
+export const STAR_DENSITY = 1.4;
 export const DENSITY: Readonly<Record<Composition, number>> = { rock: 5.5, ice: 2, gas: 1.3 };
 /**
  * 一座星系最多画几圈轨道（几颗行星）。超出的计进 hidden，不画、不滚动、不缩放：9 圈以上的

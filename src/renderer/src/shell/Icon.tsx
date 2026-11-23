@@ -128,6 +128,7 @@ import messagesSquare from "../../../../design-system/assets/icons/lucide/messag
 import notebookPen from "../../../../design-system/assets/icons/lucide/notebook-pen.svg?raw";
 import octagonX from "../../../../design-system/assets/icons/lucide/octagon-x.svg?raw";
 import orbit from "../../../../design-system/assets/icons/lucide/orbit.svg?raw";
+import paintbrush from "../../../../design-system/assets/icons/lucide/paintbrush.svg?raw";
 import plus from "../../../../design-system/assets/icons/lucide/plus.svg?raw";
 import refreshCw from "../../../../design-system/assets/icons/lucide/refresh-cw.svg?raw";
 import rotateCcw from "../../../../design-system/assets/icons/lucide/rotate-ccw.svg?raw";
@@ -266,6 +267,7 @@ const ICONS = {
   minus,
   "octagon-x": octagonX,
   orbit,
+  paintbrush,
   "panel-left": panelLeft,
   "panel-right": panelRight,
   "pencil-line": pencilLine,

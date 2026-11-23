@@ -49,7 +49,12 @@ export type RightPanelKind =
   | "context"
   | "automation"
   /** 插件页的右栏单列版；全屏版是设置页的「插件」页签 */
-  | "plugins";
+  | "plugins"
+  /**
+   * 星系设计（原型 proto/planet-designer）：不在右图标条上，入口是侧栏工作区行悬停出现的画笔键；
+   * 工作区级的面板，不进按会话的右栏记忆
+   */
+  | "galaxy";
 
 /**
  * App 传给右栏的应用级入口（右栏上其余入口由面板状态推出，不走这里）。
