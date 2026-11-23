@@ -180,7 +180,7 @@
   vector-effect: non-scaling-stroke;
 }
 
-/* ── 读数与比例条 ── */
+/* ── 读数 ── */
 .gd-readout {
   display: flex;
   flex-wrap: wrap;
@@ -197,47 +197,91 @@
   font-variant-numeric: tabular-nums;
   color: var(--color-text-primary);
 }
-.gd-strip {
-  display: grid;
-  gap: var(--space-0-5);
-  margin: 0;
+/* ── 引力网格（well.ts）：三级墨的发丝线，往远处渐隐；坑越深，线越往下弯 ── */
+.gd-grid-line {
+  fill: none;
+  stroke-width: 1;
+  stroke-opacity: 0.55;
+  vector-effect: non-scaling-stroke;
 }
-.gd-strip svg {
+.gd-grid-stop {
+  stop-color: var(--color-text-tertiary);
+}
+.gd-placeholder {
+  fill: none;
+  stroke: var(--color-text-tertiary);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+  vector-effect: non-scaling-stroke;
+}
+.gd-well,
+.gd-orbit {
   display: block;
   width: 100%;
   height: auto;
 }
-.gd-strip {
-  position: relative;
+.gd-well {
+  aspect-ratio: 260 / 180;
+  max-height: 24vh;
+  margin: 0 auto;
 }
-/* 说明压在比例条右上角（条的右半通常是空的轨道线），不另占一行 */
-.gd-strip figcaption {
-  position: absolute;
-  top: 0;
-  right: 0;
+.gd-orbit {
+  aspect-ratio: 260 / 140;
+  max-height: 20vh;
+  margin: 0 auto;
+}
+.gd-orbit-path {
+  fill: none;
+  stroke: var(--color-text-secondary);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+.gd-orbit-path[data-collide] {
+  stroke: var(--color-danger);
+}
+.gd-orbit-nearest {
+  fill: none;
+  stroke: var(--color-text-tertiary);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+  vector-effect: non-scaling-stroke;
+}
+.gd-orbit-planet[data-collide] .gd-surface {
+  stroke: var(--color-danger);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+.gd-well-note {
+  margin: 0;
   font-size: var(--font-size-xs);
   line-height: var(--line-height-ui);
   color: var(--color-text-tertiary);
 }
-.gd-strip-axis {
-  stroke: var(--color-border-default);
-  stroke-width: 1;
-  vector-effect: non-scaling-stroke;
+/* 行星页：头像与轨道场景。宽面板左右并排（头像左、场景右），窄面板上下叠 */
+.gd-stage[data-body="planet"] {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
 }
-.gd-strip-near {
-  stroke: var(--color-text-tertiary);
-  stroke-width: 1;
-  stroke-dasharray: 2 3;
-  vector-effect: non-scaling-stroke;
+.gd-stage[data-body="planet"] .gd-preview {
+  max-height: 22vh;
 }
-.gd-strip-star {
-  fill: color-mix(in srgb, var(--color-text-tertiary) 32%, var(--color-bg-panel));
+.gd-stage-name {
+  grid-column: 1 / -1;
 }
-.gd-strip-planet {
-  fill: var(--color-text-secondary);
+@container (min-width: 420px) {
+  .gd-stage[data-body="planet"]:not([data-empty]) {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .gd-stage[data-body="planet"]:not([data-empty]) .gd-preview,
+  .gd-stage[data-body="planet"]:not([data-empty]) .gd-orbit {
+    max-height: 26vh;
+  }
 }
-.gd-strip-planet[data-collide] {
-  fill: var(--color-danger);
+.gd-empty {
+  padding: var(--space-1) 0;
+}
+.gd-empty .panel-empty {
+  padding-inline: 0;
 }
 
 /* ── 行 ── */

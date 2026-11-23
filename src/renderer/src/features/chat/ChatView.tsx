@@ -73,7 +73,7 @@ import { ProcessViewContext } from "./process-view-context";
 import { sessionRunState, type SessionRunState } from "../notify/completion-notice.ts";
 import { scopeGalaxy, stateIndexOf } from "./galaxy-data.ts";
 import { useGalaxyDesign } from "../galaxy-designer/useGalaxyDesign.ts";
-import { starExtentRatio } from "../galaxy-designer/design.ts";
+import { starExtentRatio, starOf } from "../galaxy-designer/design.ts";
 import { starRadius } from "./galaxy.ts";
 import { REVEAL_ENTRY_EVENT } from "../context/task-progress.ts";
 import { planAwaitingIn, planHistory, planNoticeOf, type PlanTimeline, type PlanVersion } from "../context/plan-timeline.ts";
@@ -1486,11 +1486,12 @@ function ChatViewBody(props: {
           stateOf: galaxyStates.state,
           ownStateOf: galaxyStates.own,
           now: Date.now(),
-          starMass: galaxyDesign.design.star.mass,
-          starExtent: starRadius(galaxyDesign.design.star.mass) * starExtentRatio(galaxyDesign.design),
-          designedPlanet: galaxyDesign.edited
-            ? { mass: galaxyDesign.design.planet.mass, composition: galaxyDesign.design.planet.composition }
-            : null,
+          starMass: starOf(galaxyDesign.design).mass,
+          starExtent: starRadius(starOf(galaxyDesign.design).mass) * starExtentRatio(galaxyDesign.design),
+          designedPlanet:
+            galaxyDesign.edited && galaxyDesign.design.planet !== null
+              ? { mass: galaxyDesign.design.planet.mass, composition: galaxyDesign.design.planet.composition }
+              : null,
         })
       : null;
 
