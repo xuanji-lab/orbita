@@ -7,8 +7,9 @@
  *
  * 1. **用户在读 / 在写吗**（`readingReason`）：输入框有未发送的字、对话列没在底部、
  *    最近几秒内有滚动 / 选字 / 键盘输入、窗口不在前台——任一条成立就先攒着。
- * 2. **开关**（`holdOn`，按会话记）：开着时 done / failed / progress 一律不自动开轮，
- *    只有用户点「现在讨论」才投；question 同样不自动投，但要给明显的提示（见 summarizeHeld）。
+ * 2. **开关**（`holdOn`，按会话记，**默认开**——2026-11-23 用户：开关给他掌控感，由他决定什么时候讨论）：
+ *    开着时 done / failed / progress 一律不自动开轮，只有用户点「现在讨论」才投；question 同样不自动投，
+ *    但要给明显的提示（见 summarizeHeld）。关掉以后才轮到第 1 条的读写判定当兜底。
  *
  * 攒着的东西叫 `HeldReport`；投递时合成一条信封（shared/channel.ts 的 composeChannelBatchPrompt）。
  */
