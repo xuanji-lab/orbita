@@ -2498,6 +2498,36 @@ export const en = {
     answerIt: "Answer it…",
   },
 
+  /** 子会话回报的「不打岔」：提示条与状态卡上的开关 */
+  channelHold: {
+    header: (n: number) => `${n} sub-session${n === 1 ? "" : "s"} reported back`,
+    discuss: "Discuss now",
+    discussTitle: "Hand all of these to the main agent in one turn",
+    later: "Later",
+    laterTitle: "Fold this away; it stays until you discuss it",
+    expand: "Show the list",
+    collapse: "Fold the list",
+    more: (n: number) => `${n} more`,
+    count: (n: number) => `×${n}`,
+    untitled: "Sub-session",
+    kinds: { question: "Asking you", done: "Done", failed: "Failed", progress: "Progress", other: "Message" },
+    reasons: {
+      switch: "Do not disturb is on",
+      draft: "You have unsent text — held back",
+      "scrolled-up": "You're reading above — held back",
+      active: "You just moved — held back",
+      background: "Window is in the background — held back",
+      recovered: "Left over from before the restart",
+    },
+    questionBadge: (n: number) => (n === 1 ? "1 sub-session is waiting for your answer" : `${n} sub-sessions are waiting for your answer`),
+    toggleName: "Do not disturb",
+    toggleOn: "Do not disturb: on. Sub-session reports wait here and never start a turn by themselves.",
+    toggleOff: "Do not disturb: off. Reports come in when you aren't reading or typing; turn on to hold them all.",
+    toggleTurnOn: "Turn on Do not disturb for this session",
+    toggleTurnOff: "Turn off Do not disturb",
+    pillHeld: (n: number) => `${n} held`,
+  },
+
   queue: {
     queued: "Queued messages",
     haltedNote: "Sends with your next message",

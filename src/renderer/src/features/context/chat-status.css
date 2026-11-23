@@ -149,6 +149,61 @@
   color: var(--color-text-tertiary);
   cursor: pointer;
 }
+/* 不打岔开关：与收起键同尺寸并排；开着时图标取主墨并垫一层底，关着是三级墨。
+   待回答的 question 在它右上角挂一枚小点 */
+.cs-hold {
+  position: relative;
+  flex: none;
+  margin-top: var(--space-1-5);
+  display: grid;
+  place-items: center;
+  width: var(--control-height-xs);
+  height: var(--control-height-xs);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+.cs-hold:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.cs-hold[data-on] {
+  background: var(--color-bg-muted);
+  color: var(--color-text-primary);
+}
+.cs-hold-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-danger);
+}
+/* 收起小钮旁边的一排：开关 +「N 个已攒」 */
+.cs-pill-hold {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+.cs-pill-hold .cs-hold {
+  margin-top: 0;
+  background: var(--glass-bg);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-popover);
+}
+.cs-pill-hold .cs-hold[data-on] {
+  background: var(--color-bg-muted);
+}
+.cs-hold-n {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
 .cs-close:hover {
   background: var(--color-bg-hover);
   color: var(--color-text-primary);

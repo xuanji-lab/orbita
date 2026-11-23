@@ -67,7 +67,18 @@ export type QueuedMessage =
       files?: readonly ComposerFileRef[];
     }
   | { id: string; kind: "compact"; instructions?: string }
-  | { id: string; kind: "channel"; childId: string; childWorkbench: string; message: ChannelMessage };
+  | {
+      id: string;
+      kind: "channel";
+      childId: string;
+      childWorkbench: string;
+      message: ChannelMessage;
+      /**
+       * 用户明确说了「现在讨论」（提示条 / 排队条的立即发送）：投递时不再过「用户在读吗」的
+       * 判定。父会话在跑时它先在这里排着，轮结束照投，不会又被攒回提示条里。
+       */
+      forced?: true;
+    };
 
 /**
  * 输入框里的手动压缩指令：`/compact` 直接压缩，`/compact <要求>` 带自定义要求。

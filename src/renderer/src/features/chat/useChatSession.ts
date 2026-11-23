@@ -7,6 +7,8 @@ import type { IntentRecallRecord } from "@shared/session";
 import type { RecallCardState } from "@shared/intent-recall";
 import type { IntentConfirmDecision } from "@shared/intent-confirm";
 import { splitEchoBlocks } from "../../../../shared/prompt-attachments.ts";
+import { orderForDelivery, type HeldReport } from "./channel-hold.ts";
+import { channelHold, holdNow, installReadingListeners } from "./channel-hold-store.ts";
 import {
   EMPTY_ENTRY,
   dequeue,
@@ -74,7 +76,7 @@ import type { ThinkingLevel as PiThinkingLevel } from "@earendil-works/pi-protoc
 import { isThinkingLevel, type ThinkingLevel } from "@shared/thinking";
 import { modelThinkingLevels } from "@shared/model-defaults";
 import type { AgentEvent, AgentStats, BuiltinProvider, RetryStatus, SubmitAgentInput } from "@shared/agent-ipc";
-import { composeChannelPrompt, userRepliesNote, userRepliesSincePreviousReport } from "@shared/channel";
+import { composeChannelBatchPrompt, composeChannelPrompt, userRepliesNote, userRepliesSincePreviousReport } from "@shared/channel";
 import type { ProviderDto } from "@shared/provider";
 import { useBuiltinCatalog, usableProviders } from "../settings/model-menu";
 import { isProviderEnabled } from "../../../../shared/provider.ts";
@@ -393,6 +395,11 @@ export interface ChatSession {
   setIntentEnabled: (next: boolean) => void;
   /** 乐观回显：发出即画的用户气泡（真回显事件一到即清）。ephemeral */
   pendingEcho: { blocks: readonly string[] } | null;
+}
+
+/** 排队里的 channel 项 → 攒着的一条（forced 的不会走到这里，见 deliverNext） */
+function heldFromQueued(item: Extract<QueuedMessage, { kind: "channel" }>): HeldReport {
+  return { id: item.id, childId: item.childId, childWorkbench: item.childWorkbench, message: item.message, recovered: false };
 }
 
 /** 查看槽回踩引擎用的窄接口——避免引擎与视图互相持有完整类型 */
@@ -860,7 +867,8 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
       if (entry === undefined) return;
       const head = nextDeliverable(entry);
       if (head === null) return;
-      applyStates((prev) => dequeue(prev, id, head.id));
+      // channel 项自己在分支里按「一串」出队（合并投递 / 攒着）；其它一条一条出
+      if (head.kind !== "channel") applyStates((prev) => dequeue(prev, id, head.id));
       const dispatch = (request: () => Promise<void>): void => {
         const revert = beginOptimisticTurn(id);
         request().catch((cause: unknown) => {
@@ -883,22 +891,55 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
         // （查不到用 ""，composeChannelPrompt 自己会写 Untitled，不是哨兵值）。
         // buildTurn 已支持从 meta 装配从没在本窗口打开过的会话（新会话/新槽由
         // dequeue/enqueue 就地建），父会话不必先被用户点开过才能收到子的消息。
-        const childTitle = sessionsRef.current.find((meta) => meta.id === head.childId)?.title ?? "";
-        const envelope = composeChannelPrompt(head.message, {
-          id: head.childId,
-          title: childTitle,
-          // 子工作台随事件携带（主进程派生），每条回报都重新告知模型——就算 delegate
-          // 回执被压缩掉，路径也会随这条信封回来
-          workbench: head.childWorkbench,
-        });
+        //
+        // 队首起连续的 channel 项合成**一条**信封投（积压合并：三个子会话交回就是一轮，
+        // 不是三轮）。投之前再判一次「用户在读 / 在写吗」（一轮结束那一拍也是）：
+        // 在读就把这一串移进提示条攒着，等用户回来；forced（用户点过「现在讨论」）不判。
+        const run: Extract<QueuedMessage, { kind: "channel" }>[] = [];
+        for (const item of entry.queued) {
+          if (item.kind !== "channel") break;
+          run.push(item);
+        }
+        const forced = run.some((item) => item.forced === true);
+        if (!forced && holdNow(channelHold, id, false)) {
+          const ids = new Set(run.map((item) => item.id));
+          applyStates((prev) => run.reduce((acc, item) => dequeue(acc, id, item.id), prev));
+          channelHold.hold(id, run.map(heldFromQueued));
+          // 队里排在这串后面的普通消息不该被这串连累：再取一次队首
+          if (entry.queued.some((item) => !ids.has(item.id))) deliverNext(id);
+          return;
+        }
+        applyStates((prev) => run.reduce((acc, item) => dequeue(acc, id, item.id), prev));
         const turn = buildTurn(id);
         if (turn === null) return;
-        // 用户在收件箱里代父回复过的话，父模型上下文里没有：投递前从账本取出，拼在信封后
+        // 投出去了：抹掉落盘引用（重启后不再当「没投过」恢复）
+        channelHold.untrack(id, run.map((item) => item.id));
+        const peers = run.map((item) => ({
+          item,
+          peer: {
+            id: item.childId,
+            title: sessionsRef.current.find((meta) => meta.id === item.childId)?.title ?? "",
+            // 子工作台随事件携带（主进程派生），每条回报都重新告知模型——就算 delegate
+            // 回执被压缩掉，路径也会随这条信封回来
+            workbench: item.childWorkbench,
+          },
+        }));
+        // 用户在收件箱里代父回复过的话，父模型上下文里没有：投递前从账本取出，拼在各自那条信封后
         // （userRepliesSincePreviousReport 的注释）。读账本失败就照原样投递，不拦这一轮。
         dispatch(async () => {
-          const ledger = await api.channel.load({ parentId: id, childId: head.childId }).catch(() => []);
-          const note = userRepliesNote(userRepliesSincePreviousReport(ledger, head.message.id));
-          const text = note === "" ? envelope : `${envelope}\n${note}`;
+          const ledgers = new Map<string, Awaited<ReturnType<typeof api.channel.load>>>();
+          await Promise.all(
+            [...new Set(run.map((item) => item.childId))].map(async (childId) => {
+              ledgers.set(childId, await api.channel.load({ parentId: id, childId }).catch(() => []));
+            }),
+          );
+          const text = composeChannelBatchPrompt(
+            peers.map(({ item, peer }) => ({
+              message: item.message,
+              peer,
+              note: userRepliesNote(userRepliesSincePreviousReport(ledgers.get(item.childId) ?? [], item.message.id)),
+            })),
+          );
           await api.agent.submit({ sessionId: id, text, ...turn });
         });
       } else {
@@ -1017,24 +1058,91 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
    */
   useEffect(() => {
     const off = api.channel.onEvent((event) => {
-      if (event.type !== "message" || event.message.from !== "child") return;
+      if (event.type !== "message") return;
+      // 用户在收件箱里直接回答了子会话：它早先攒着的 question 不必再留着
+      if (event.message.from === "parent") {
+        if (event.message.kind === "reply" && event.message.author === "user") {
+          channelHold.settleAnswered(event.parentId, event.childId, event.message.createdAt);
+        }
+        return;
+      }
+      const message = event.message;
+      const item: HeldReport = {
+        id: message.id,
+        childId: event.childId,
+        childWorkbench: event.childWorkbench,
+        message,
+        recovered: false,
+      };
+      // 先记账（落盘引用）：到这里起重启也不会丢；投出 / 撤回时再抹。
+      channelHold.track(event.parentId, item);
+      // **不打岔**：开关开着，或用户正在读 / 在写——先攒进提示条，不开轮。
+      // 判定读真实信号（channel-hold.ts）；重复到达的同一条事件由攒着 / 入队两处各自按 id 去重。
+      if (holdNow(channelHold, event.parentId, false)) {
+        channelHold.hold(event.parentId, [item]);
+        return;
+      }
       // enqueueChannelMessage 内建按 message.id 去重：订阅重连等场景同一条事件
       // 重复到达不会让队列里出现两条一样的话。
       applyStates((prev) =>
         enqueueChannelMessage(prev, event.parentId, {
-          id: event.message.id,
+          id: message.id,
           kind: "channel",
           childId: event.childId,
           childWorkbench: event.childWorkbench,
-          message: event.message,
+          message,
         }),
       );
-      // 父此刻空闲就立即投；在跑的话 nextDeliverable 在这里会拿到 null，
-      // 是安全的 no-op——真正的投递等这一轮 phase 回 idle 时上面那个
-      // agent.onEvent 效果里的 deliverNext 调用点接手。
+      // 父此刻空闲就立即投（投之前 deliverNext 会再判一次读 / 写）；在跑的话
+      // nextDeliverable 在这里会拿到 null，是安全的 no-op——真正的投递等这一轮
+      // phase 回 idle 时上面那个 agent.onEvent 效果里的 deliverNext 调用点接手。
       deliverNext(event.parentId);
     });
     return off;
+  }, [applyStates, deliverNext]);
+
+  /**
+   * 不打岔的宿主接线：攒着的东西由 channel-hold-store 管，它要知道父会话在不在跑、
+   * 并能把「现在讨论 / 静止后自动投」落到本引擎的队列上；启动时把上次没投出去的恢复回来。
+   */
+  useEffect(() => {
+    const rank = (childId: string): number =>
+      sessionsRef.current.find((meta) => meta.id === childId)?.createdAt ?? Number.POSITIVE_INFINITY;
+    const detach = channelHold.attachHost({
+      phaseOf: (parentId) => statesRef.current.get(parentId)?.phase ?? "idle",
+      deliver: (parentId, items) => {
+        // 按子会话顺序排好、标 forced 入队（父在跑时就排着，轮结束照投，不会又被攒回去），再取队首
+        applyStates((prev) =>
+          orderForDelivery(items, rank).reduce(
+            (acc, entry) =>
+              enqueueChannelMessage(acc, parentId, {
+                id: entry.id,
+                kind: "channel",
+                childId: entry.childId,
+                childWorkbench: entry.childWorkbench,
+                message: entry.message,
+                forced: true,
+              }),
+            prev,
+          ),
+        );
+        deliverNext(parentId);
+      },
+      pullQueued: (parentId) => {
+        const queued = statesRef.current.get(parentId)?.queued ?? [];
+        const pulled = queued.filter(
+          (item): item is Extract<QueuedMessage, { kind: "channel" }> => item.kind === "channel" && item.forced !== true,
+        );
+        if (pulled.length > 0) applyStates((prev) => pulled.reduce((acc, item) => dequeue(acc, parentId, item.id), prev));
+        return pulled.map(heldFromQueued);
+      },
+    });
+    const stopListening = installReadingListeners(channelHold);
+    void channelHold.restore((parentId, childId) => api.channel.load({ parentId, childId }));
+    return () => {
+      detach();
+      stopListening();
+    };
   }, [applyStates, deliverNext]);
 
   /** 「配置好」的标准与设置面的命名模型菜单同源（model-menu），不各写一份 */
@@ -1558,6 +1666,14 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   const files = fileMap.get(draftKey) ?? NO_FILES;
   const pasted = drafts.get(draftKey)?.pasted ?? NO_PASTED;
   const quotes = quoteMap.get(draftKey) ?? NO_QUOTES;
+
+  // 「用户在写」的信号：输入框里有没发出去的字 / 图 / 文件 / 引用。子会话回报到的时候，
+  // 有这个信号就先攒着、不开轮（channel-hold.ts）。键 = 草稿键，换会话时抹掉旧键的信号。
+  const hasDraft = draft.trim() !== "" || attachments.length > 0 || files.length > 0 || quotes.length > 0;
+  useEffect(() => {
+    channelHold.setDraft(draftKey, hasDraft);
+    return () => channelHold.setDraft(draftKey, false);
+  }, [draftKey, hasDraft]);
 
   const addQuote = useCallback(
     (quote: TextQuote) => {
@@ -2785,6 +2901,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       // channel 项同样不进草稿（子会话 PR4a）：它不是用户自己的话，是子会话
       // 发来的消息——撤回只是不再投给父模型，消息仍在通道账本里，不提供编辑。
       if (item.kind === "text") restoreToDraft(item.text, item.images, item.files);
+      // 撤回的 channel 项不再投：落盘引用一并抹掉，重启后不会又冒出来
+      if (item.kind === "channel") channelHold.untrack(id, [item.id]);
     },
     [engine, restoreToDraft],
   );
@@ -2812,6 +2930,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       const item = entry?.queued.find((queued) => queued.id === queuedId);
       if (entry === undefined || item === undefined) return;
       engine.applyStates((prev) => dequeue(prev, id, queuedId));
+      // 立即发送的 channel 项马上就投：落盘引用同步抹掉
+      if (item.kind === "channel") channelHold.untrack(id, [item.id]);
       const fail = (cause: unknown): void => {
         engine.setError(ipcErrorText(cause));
         // IPC 直接失败（provider 装配等）不发 agent 事件，回填

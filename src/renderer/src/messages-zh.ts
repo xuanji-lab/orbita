@@ -2313,6 +2313,36 @@ export const zh: Messages = {
     answerIt: "回答它…",
   },
 
+  /** 子会话回报的「不打岔」：提示条与状态卡上的开关 */
+  channelHold: {
+    header: (n: number) => `${n} 个子会话交回了`,
+    discuss: "现在讨论",
+    discussTitle: "把这些一起交给主会话，开一轮",
+    later: "稍后",
+    laterTitle: "先收起来；它们一直留着，等你说讨论",
+    expand: "展开列表",
+    collapse: "收起列表",
+    more: (n: number) => `还有 ${n} 个`,
+    count: (n: number) => `${n} 条`,
+    untitled: "子会话",
+    kinds: { question: "在等你回答", done: "已完成", failed: "失败了", progress: "报进度", other: "有消息" },
+    reasons: {
+      switch: "「不打岔」开着",
+      draft: "你在输入，先没打扰",
+      "scrolled-up": "你在往上翻着读，先没打扰",
+      active: "你刚在操作，先没打扰",
+      background: "窗口不在前台，先没打扰",
+      recovered: "上次没投出去的",
+    },
+    questionBadge: (n: number) => `${n} 个子会话在等你回答`,
+    toggleName: "不打岔",
+    toggleOn: "不打岔：开。子会话交回的东西先攒在这里，不会自己开一轮。",
+    toggleOff: "不打岔：关。你没在读、没在输入时才会送进来；打开后全部先攒着。",
+    toggleTurnOn: "给这条会话打开「不打岔」",
+    toggleTurnOff: "关掉「不打岔」",
+    pillHeld: (n: number) => `${n} 个已攒`,
+  },
+
   queue: {
     queued: "排队的消息",
     haltedNote: "随你的下一条消息发出",

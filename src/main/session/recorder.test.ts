@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
-import { composeChannelPrompt } from "../../shared/channel.ts";
+import { composeChannelBatchPrompt, composeChannelPrompt } from "../../shared/channel.ts";
 import { createSessionRecorder } from "./recorder.ts";
 import { SessionStore } from "./store.ts";
 
@@ -296,6 +296,36 @@ describe("recorder 的通道标记识别（子会话 2026-09-23：信封自描�
       from: "parent",
       kind: "task",
       timestamp: 5000,
+    });
+  });
+
+  test("合并信封（几个子会话回报一条消息）→ 仍落一条标记，首条在主字段、其余在 also", async () => {
+    const child = (id: string, kind: "done" | "question") => ({
+      id,
+      from: "child" as const,
+      author: "model" as const,
+      kind,
+      text: id,
+      delivery: "followUp" as const,
+      createdAt: 1,
+    });
+    const prompt = composeChannelBatchPrompt([
+      { message: child("m1", "done"), peer: { id: "c1", title: "甲" } },
+      { message: child("m2", "question"), peer: { id: "c2", title: "乙" } },
+    ]);
+    record(progress({ type: "item_started", item: envelopeUser(prompt) }));
+    await settleUntil(transcriptLanded(1));
+    const detail = await store.load(ID);
+    assert.equal(detail?.transcript.length, 1);
+    assert.deepEqual(detail?.transcript[0], {
+      role: "channel-mark",
+      id: "u-env",
+      peerId: "c1",
+      messageId: "m1",
+      from: "child",
+      kind: "done",
+      timestamp: 5000,
+      also: [{ peerId: "c2", messageId: "m2", from: "child", kind: "question" }],
     });
   });
 
