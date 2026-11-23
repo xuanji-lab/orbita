@@ -105,6 +105,18 @@ export function messageRowIndex(rows: readonly VirtualHistoryRow[]): Map<string,
   return map;
 }
 
+/**
+ * 工具调用 id → 虚拟行下标：只认顶层的 toolCall 条目（show_plugin_board 是钉住工具，永远单独成行，不进工具组 / 折叠）。
+ * 状态卡里点看板缩略图时，按它找对话里那次结果所在的行；没有 = 那一轮不在已加载的窗口里。
+ */
+export function toolCallRowIndex(rows: readonly VirtualHistoryRow[]): Map<string, number> {
+  const map = new Map<string, number>();
+  rows.forEach((row, index) => {
+    if (row.entry.kind === "toolCall") map.set(row.entry.toolCallId, index);
+  });
+  return map;
+}
+
 /** 历史段视图下标 → 虚拟行下标（回退预演切点按视图下标算） */
 export function viewRowIndex(rows: readonly VirtualHistoryRow[]): Map<number, number> {
   const map = new Map<number, number>();

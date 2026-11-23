@@ -12,6 +12,7 @@ import {
   messageRowIndex,
   prependAnchorTarget,
   rowIndexByKey,
+  toolCallRowIndex,
   viewRowIndex,
   virtualHistoryRows,
   type VirtualHistoryRow,
@@ -161,6 +162,18 @@ describe("行下标映射", () => {
     assert.equal(map.get("a"), 1);
     assert.equal(map.get("b"), 2);
     assert.equal(map.get("c"), 2);
+  });
+
+  test("工具调用 id → 虚拟行下标：只认顶层 toolCall（show_plugin_board 钉住单独成行），折叠里的与不存在的找不到", () => {
+    const withBoard = rows([
+      user("u1"),
+      toolCall("m:1", "board-call", "show_plugin_board", "m"),
+      turnGroup("turn:a:0", [toolCall("a:0", "t1", "read", "a")]),
+    ]);
+    const map = toolCallRowIndex(withBoard);
+    assert.equal(map.get("board-call"), 1);
+    assert.equal(map.get("t1"), undefined);
+    assert.equal(map.get("nope"), undefined);
   });
 
   test("同一条消息占多行时取最后一行", () => {

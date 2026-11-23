@@ -8,7 +8,7 @@ import type { Messages } from "../../messages-en.ts";
 import { Icon } from "../../shell/Icon";
 import { StatusPie } from "../../shell/StatusPie";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
-import { requestOpenPanel, requestOpenPluginBoard } from "../../shell/open-panel.ts";
+import { requestOpenPanel, requestOpenPluginBoard, requestRevealBoard } from "../../shell/open-panel.ts";
 import type { SessionEntry } from "../chat/session-states.ts";
 import type { ChatSession, SessionEngine } from "../chat/useChatSession";
 import { useTaskRecords } from "../chat/useTaskRecords.ts";
@@ -28,6 +28,7 @@ import {
   clampPanelWidth,
   delegationSteps,
   fitsPanel,
+  boardClickAction,
   elapsedParts,
   groupOutputs,
   isWorking,
@@ -660,7 +661,7 @@ function OutputsSection(props: { outputs: readonly StatusOutput[]; scope: ChatFi
                 aria-label={`${output.title} · ${t.chatStatus.kinds[output.kind]}`}
                 onClick={() => {
                   props.onOpened();
-                  openOutput(output);
+                  openOutput(output, props.scope.sessionId);
                 }}
               >
                 <OutputThumb output={output} scope={props.scope} />
@@ -684,9 +685,17 @@ function kindLine(t: Messages, output: StatusOutput): string {
   return output.by === null ? kind : `${kind} · ${t.chatStatus.byChild(output.by)}`;
 }
 
-function openOutput(output: StatusOutput): void {
+function openOutput(output: StatusOutput, sessionId: string | null): void {
   if (output.kind === "board") {
-    if (output.plugin !== null) requestOpenPluginBoard({ plugin: output.plugin, draftPath: null });
+    if (output.plugin === null) return;
+    const draftPath = output.boardCall?.result.draftPath ?? null;
+    // 主会话自己的看板：滚回对话里那次结果并原地展开（那一轮不在已加载的窗口里时，对话那头会退回打开插件页）；
+    // 子会话做的、快照读不出来的：直接开右栏插件页
+    if (sessionId !== null && output.boardCall !== null && boardClickAction(output) === "reveal") {
+      requestRevealBoard({ sessionId, toolCallId: output.boardCall.toolCallId, plugin: output.plugin, draftPath });
+    } else {
+      requestOpenPluginBoard({ plugin: output.plugin, draftPath });
+    }
     return;
   }
   requestOpenPanel({ kind: output.kind === "slides" ? "slides" : "files", path: output.path, force: true });

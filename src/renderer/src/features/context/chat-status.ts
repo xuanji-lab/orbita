@@ -10,6 +10,7 @@
 import type { TranscriptRecord } from "@shared/session";
 import type { ChannelStatus } from "@shared/channel";
 import { PLAN_TOOL_NAME } from "../../../../shared/plan.ts";
+import { parsePluginBoardDetails, type PluginBoardResult } from "../../../../shared/plugin-board.ts";
 import type { PlanStep, PlanTimeline } from "./plan-timeline.ts";
 import type { TurnOutput } from "../chat/process-rows.ts";
 import { sessionOutputs } from "../chat/child-outputs.ts";
@@ -256,6 +257,14 @@ export interface StatusOutput {
   at: number;
   /** 看板：插件名（在右栏打开它的看板用）；别的类型 = null */
   plugin: string | null;
+  /** 看板：这次（同名看板里最后一次成功的）show_plugin_board 的调用 id 与快照——缩略图画它的第一张卡、点击滚回那次结果；别的类型 = null */
+  boardCall: BoardCall | null;
+}
+
+/** 一次成功的 show_plugin_board：调用 id（对话里那条结果的定位）+ 当时的快照 */
+export interface BoardCall {
+  toolCallId: string;
+  result: PluginBoardResult;
 }
 
 const EXT_KIND: Readonly<Record<string, StatusOutputKind>> = {
@@ -297,6 +306,26 @@ export function boardOf(details: unknown): { title: string; plugin: string | nul
   return title === null ? null : { title, plugin };
 }
 
+/** 一次 show_plugin_board 结果 → 调用 id + 快照；快照读不出来（形状不对）= null（缩略图退回图标） */
+export function boardCallOf(toolCallId: string, details: unknown): BoardCall | null {
+  const result = parsePluginBoardDetails(details);
+  return result === null ? null : { toolCallId, result };
+}
+
+/**
+ * 点状态卡里的看板产物：怎么走。
+ * - `reveal`：主会话自己的看板、有快照 → 滚回对话里那次结果并原地展开（对话那头找不到那一行时再退回打开插件页，见 ChatView）；
+ * - `open-plugin`：子会话做的（调用不在这条会话的转录里，滚不到）、或快照读不出来 → 直接打开右栏插件页。
+ */
+export function boardClickAction(output: Pick<StatusOutput, "by" | "plugin" | "boardCall">): "reveal" | "open-plugin" {
+  return output.by === null && output.boardCall !== null ? "reveal" : "open-plugin";
+}
+
+/** 缩略图画哪一张卡：这次快照的第一张；没有卡（全被跳过）= null（退回图标） */
+export function thumbCardOf(result: PluginBoardResult): PluginBoardResult["cards"][number] | null {
+  return result.cards[0] ?? null;
+}
+
 /**
  * 一条会话做出来的全部产物（新的在前）。口径 = 每轮结尾那摞产物卡（sessionOutputs，与 turnOutputs / child-outputs 同一套推导），
  * 只多两类结尾卡里没有的（用户 20:58：「图片待在里面也没毛病。看板也肯定待在里面」）：
@@ -307,16 +336,28 @@ export function boardOf(details: unknown): { title: string; plugin: string | nul
 export function statusOutputs(records: readonly TranscriptRecord[], by: string | null): StatusOutput[] {
   const { outputs, edited } = sessionOutputs(records);
   const at = records.at(-1)?.timestamp ?? 0;
-  const list: StatusOutput[] = outputs.map((output) => ({ kind: statusKindOf(output), path: output.path, title: output.title, pages: output.pages, by, at, plugin: null }));
+  const list: StatusOutput[] = outputs.map((output) => ({ kind: statusKindOf(output), path: output.path, title: output.title, pages: output.pages, by, at, plugin: null, boardCall: null }));
   for (const path of edited) {
-    if (EXT_KIND[extOf(path)] === "image") list.push({ kind: "image", path, title: path.split(/[\\/]/).pop() ?? path, pages: null, by, at, plugin: null });
+    if (EXT_KIND[extOf(path)] === "image") list.push({ kind: "image", path, title: path.split(/[\\/]/).pop() ?? path, pages: null, by, at, plugin: null, boardCall: null });
   }
+  // 同名看板只留一条，取**最后一次**成功的那次（缩略图要的是最新的快照）；位置也跟着挪到最后（= 反转后排最前）
   for (const record of records) {
     if (record.role !== "tool" || record.toolName !== "show_plugin_board" || record.status !== "complete") continue;
     const board = boardOf(record.details);
-    if (board !== null && !list.some((item) => item.path === `board:${board.title}`)) {
-      list.push({ kind: "board", path: `board:${board.title}`, title: board.title, pages: null, by, at: record.timestamp, plugin: board.plugin });
-    }
+    if (board === null) continue;
+    const path = `board:${board.title}`;
+    const index = list.findIndex((item) => item.path === path);
+    if (index >= 0) list.splice(index, 1);
+    list.push({
+      kind: "board",
+      path,
+      title: board.title,
+      pages: null,
+      by,
+      at: record.timestamp,
+      plugin: board.plugin,
+      boardCall: boardCallOf(record.toolCallId, record.details),
+    });
   }
   return list.reverse();
 }

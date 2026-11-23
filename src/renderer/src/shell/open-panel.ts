@@ -34,8 +34,8 @@ export function onOpenProgressRequest(handler: () => void): () => void {
 }
 
 /**
- * 「在右栏看完整的插件看板」的请求（对话里看板结果底部的「展开」）：对话里的看板限高约半屏，
- * 完整的在右栏的插件页里看。已装的插件进它的看板视图，草稿进草稿的长页。
+ * 「在右栏打开插件的看板」的请求（对话里看板结果右上角的「在插件里打开」、状态卡里点子会话做的看板）：
+ * 右栏插件页画的是插件**现在**的数据，不是对话里那次的快照。已装的插件进它的看板视图，草稿进草稿的长页。
  */
 const PLUGIN_BOARD_EVENT = "orbita:open-plugin-board";
 
@@ -55,4 +55,30 @@ export function onOpenPluginBoardRequest(handler: (request: PluginBoardOpenReque
   };
   window.addEventListener(PLUGIN_BOARD_EVENT, listener);
   return () => window.removeEventListener(PLUGIN_BOARD_EVENT, listener);
+}
+
+/**
+ * 「滚回对话里那次看板结果并原地展开」的请求（状态卡里的看板缩略图点击）：对话里每次 show_plugin_board 的结果
+ * 是一条带 toolCallId 的行，状态卡与对话隔着整棵树，同样走 window 事件。
+ *
+ * 处理方是对应会话的对话列（`sessionId` 对得上才接，右栏辅助对话不会误接）：行在已加载的窗口里（虚拟化卸下的也算）
+ * 就滚过去、展开；不在（会话分页，更早的轮次还没翻出来）就由它退回 `requestOpenPluginBoard`，所以请求里带上插件名与草稿路径。
+ */
+const REVEAL_BOARD_EVENT = "orbita:reveal-board";
+
+export interface RevealBoardRequest extends PluginBoardOpenRequest {
+  sessionId: string;
+  toolCallId: string;
+}
+
+export function requestRevealBoard(request: RevealBoardRequest): void {
+  window.dispatchEvent(new CustomEvent<RevealBoardRequest>(REVEAL_BOARD_EVENT, { detail: request }));
+}
+
+export function onRevealBoardRequest(handler: (request: RevealBoardRequest) => void): () => void {
+  const listener = (event: Event): void => {
+    handler((event as CustomEvent<RevealBoardRequest>).detail);
+  };
+  window.addEventListener(REVEAL_BOARD_EVENT, listener);
+  return () => window.removeEventListener(REVEAL_BOARD_EVENT, listener);
 }

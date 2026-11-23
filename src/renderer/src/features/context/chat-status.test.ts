@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { TranscriptRecord } from "@shared/session";
-import { boardOf, childActivityOf, childStateOf, clampPanelWidth, fitsPanel, goalHeadline, groupOutputs, nextTickIn, pillSignal, planWindow, STUCK_MS, toolCallLine } from "./chat-status.ts";
+import { boardCallOf, boardClickAction, boardOf, childActivityOf, childStateOf, clampPanelWidth, fitsPanel, goalHeadline, groupOutputs, nextTickIn, pillSignal, planWindow, statusOutputs, STUCK_MS, thumbCardOf, toolCallLine } from "./chat-status.ts";
 
 describe("状态卡：计划收着露哪几步", () => {
   const steps = (statuses: string[]) => statuses.map((status, i) => ({ id: `s${i}`, status: status as "done" }));
@@ -108,5 +108,46 @@ describe("goalHeadline：卡头目标的短标题", () => {
     assert.equal(goalHeadline("改：左栏"), "改：左栏");
     const long = "一".repeat(50) + "：二";
     assert.equal(goalHeadline(long), long);
+  });
+});
+
+describe("状态卡：看板产物的缩略图与点击", () => {
+  const HASH = "a".repeat(64);
+  const card = (id: string) => ({ id, title: id, size: "2x2", index: 0, template: HASH, data: { n: id }, state: "ready", usingSample: false, updatedAt: 1 });
+  const details = (title: string, cardIds: string[], at: number) => ({
+    pluginBoard: { plugin: "planet-forge", displayName: "行星造物", title, source: "installed", draftPath: null, at, tuned: false, cards: cardIds.map(card), skipped: [] },
+  });
+  const boardRecord = (toolCallId: string, timestamp: number, body: unknown, status: "complete" | "error" = "complete"): TranscriptRecord =>
+    ({ id: `r-${toolCallId}`, role: "tool", toolCallId, toolName: "show_plugin_board", input: {}, content: [], timestamp, status, isError: status === "error", details: body }) as unknown as TranscriptRecord;
+
+  it("同名看板展示过几次，缩略图取最后一次成功的那份快照（失败的不算）", () => {
+    const records = [
+      boardRecord("c1", 10, details("行星", ["old"], 10)),
+      boardRecord("c2", 20, details("行星", ["new"], 20)),
+      boardRecord("c3", 30, details("行星", ["bad"], 30), "error"),
+    ];
+    const boards = statusOutputs(records, null).filter((item) => item.kind === "board");
+    assert.equal(boards.length, 1);
+    assert.equal(boards[0]?.boardCall?.toolCallId, "c2");
+    assert.equal(boards[0]?.at, 20);
+    assert.equal(thumbCardOf(boards[0]?.boardCall?.result ?? (undefined as never))?.id, "new");
+  });
+  it("不同标题各自一条，后展示的排前面", () => {
+    const records = [boardRecord("c1", 10, details("甲", ["a"], 10)), boardRecord("c2", 20, details("乙", ["b"], 20)), boardRecord("c3", 30, details("甲", ["c"], 30))];
+    const boards = statusOutputs(records, null).filter((item) => item.kind === "board");
+    assert.deepEqual(boards.map((item) => [item.title, item.boardCall?.toolCallId]), [["甲", "c3"], ["乙", "c2"]]);
+  });
+  it("缩略图画第一张卡；一张卡都没有（全被跳过）退回图标", () => {
+    const withCards = boardCallOf("c1", details("甲", ["first", "second"], 1));
+    assert.equal(thumbCardOf(withCards?.result ?? (undefined as never))?.id, "first");
+    const empty = boardCallOf("c2", details("乙", [], 1));
+    assert.equal(thumbCardOf(empty?.result ?? (undefined as never)), null);
+    assert.equal(boardCallOf("c3", { pluginBoard: { plugin: "" } }), null);
+  });
+  it("点击：主会话自己的看板滚回对话；子会话做的、快照读不出来的直接开插件页", () => {
+    const call = boardCallOf("c1", details("甲", ["a"], 1));
+    assert.equal(boardClickAction({ by: null, plugin: "planet-forge", boardCall: call }), "reveal");
+    assert.equal(boardClickAction({ by: "子会话甲", plugin: "planet-forge", boardCall: call }), "open-plugin");
+    assert.equal(boardClickAction({ by: null, plugin: "planet-forge", boardCall: null }), "open-plugin");
   });
 });

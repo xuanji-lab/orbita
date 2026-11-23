@@ -52,6 +52,7 @@ import {
   messageRowIndex,
   prependAnchorTarget,
   rowIndexByKey,
+  toolCallRowIndex,
   viewRowIndex,
   virtualHistoryRows,
   type HeightCache,
@@ -64,6 +65,7 @@ import { clampToolBody } from "./tool-body-clamp.ts";
 import { noticeIconBoxStyle, noticeParagraphStyle, noticeTextStyle } from "./notice.ts";
 import { PluginInstallLine } from "../plugins/PluginInstallLine.tsx";
 import { PluginBoardResultView } from "../board/PluginBoardResult.tsx";
+import { boardExpandStore } from "../board/board-expand.ts";
 import { builtinCommand, type DetailRow, docEditLabel, docEditPath, docEditSection, docEditSummary, toolWord } from "./builtin-commands.ts";
 import { getOpenDocumentText } from "../doc-panel/open-document.ts";
 import { ExitCard } from "./ExitCard";
@@ -181,7 +183,7 @@ import { MarkdownBlock } from "./MarkdownBlock";
 import { NebulaPet } from "../../shell/UsageMeter";
 import { sessionOutputs, type SessionOutputs } from "./child-outputs.ts";
 import { ChatFileScopeContext, loadChatImage, openChatFile, revealChatFile, useChatFileScope, useChatImage, type ChatFileScope } from "./chat-file-scope.ts";
-import { requestOpenPanel } from "../../shell/open-panel.ts";
+import { onRevealBoardRequest, requestOpenPanel, requestOpenPluginBoard } from "../../shell/open-panel.ts";
 import {
   assignImages,
   imagesOf,
@@ -2180,6 +2182,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   const virtualRowsRef = useRef<readonly VirtualHistoryRow[]>([]);
   const rowIndexByKeyRef = useRef<ReadonlyMap<string, number>>(new Map());
   const messageRowIndexRef = useRef<ReadonlyMap<string, number>>(new Map());
+  const toolCallRowIndexRef = useRef<ReadonlyMap<string, number>>(new Map());
   const viewRowIndexRef = useRef<ReadonlyMap<number, number>>(new Map());
   const heightCacheRef = useRef<HeightCache | null>(null);
   if (heightCacheRef.current === null) heightCacheRef.current = createHeightCache(4000);
@@ -2337,10 +2340,12 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   const historyRowByKey = useMemo(() => rowIndexByKey(historyVirtualRows), [historyVirtualRows]);
   const historyRowByMessage = useMemo(() => messageRowIndex(historyVirtualRows), [historyVirtualRows]);
   const historyRowByViewIndex = useMemo(() => viewRowIndex(historyVirtualRows), [historyVirtualRows]);
+  const historyRowByToolCall = useMemo(() => toolCallRowIndex(historyVirtualRows), [historyVirtualRows]);
   virtualRowsRef.current = historyVirtualRows;
   rowIndexByKeyRef.current = historyRowByKey;
   messageRowIndexRef.current = historyRowByMessage;
   viewRowIndexRef.current = historyRowByViewIndex;
+  toolCallRowIndexRef.current = historyRowByToolCall;
 
   // 只虚拟化历史段；实时尾段继续按普通流渲染在虚拟占位之后。行仍是 `TurnViewEntry`
   // 粗粒度行（user / 回合折叠 / 过程块 / 正文），保留 `.chat-col` 原有的子午线几何。
@@ -2486,6 +2491,47 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
     window.addEventListener(REVEAL_ENTRY_EVENT, onReveal);
     return () => window.removeEventListener(REVEAL_ENTRY_EVENT, onReveal);
   }, [flashEntry, revealVirtualRow]);
+  // 状态卡里点看板缩略图：滚回对话里那次看板结果并原地展开（会话 id 对得上才接）。
+  // 行在历史段（含被虚拟化卸下的）按 key 粗定位再等挂载；在实时尾段按 DOM 找；都没有（那一轮在更早的、还没翻出来的分页里）
+  // 就退回打开右栏插件页——不在这里一路翻页：翻页要等多次落定，缩略图这一下点击不值得
+  useEffect(
+    () =>
+      onRevealBoardRequest((request) => {
+        if (request.sessionId !== props.sessionId) return;
+        const findBoard = (): HTMLElement | null => {
+          const found = scrollRef.current?.querySelector(`[data-board-call="${CSS.escape(request.toolCallId)}"]`);
+          return found instanceof HTMLElement ? found : null;
+        };
+        // 展开后外框高度才落定；等两帧再把看板顶部对到转录区顶部，并闪一下框线
+        const settleOnBoard = (): void => {
+          window.requestAnimationFrame(() =>
+            window.requestAnimationFrame(() => {
+              const board = findBoard();
+              if (board === null) return;
+              scrollToTop(board, board.getBoundingClientRect(), "auto");
+              board.classList.remove("board-revealed");
+              void board.offsetWidth;
+              board.classList.add("board-revealed");
+            }),
+          );
+        };
+        const index = toolCallRowIndexRef.current.get(request.toolCallId);
+        const row = index === undefined ? undefined : virtualRowsRef.current[index];
+        if (row !== undefined) {
+          boardExpandStore.set(request.toolCallId, true);
+          revealVirtualRow(row.entry.key, settleOnBoard);
+          return;
+        }
+        if (findBoard() !== null) {
+          forceReading(followTrackerRef.current);
+          boardExpandStore.set(request.toolCallId, true);
+          settleOnBoard();
+          return;
+        }
+        requestOpenPluginBoard({ plugin: request.plugin, draftPath: request.draftPath });
+      }),
+    [props.sessionId, revealVirtualRow],
+  );
   useEffect(() => {
     if (cutIndex < 0) return;
     forceReading(followTrackerRef.current);
