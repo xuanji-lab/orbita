@@ -56,3 +56,16 @@ export function sessionOutputs(records: readonly TranscriptRecord[]): SessionOut
   const shown = new Set(outputs.map((output) => output.path));
   return { outputs, edited: [...edited].filter((path) => !shown.has(path)) };
 }
+
+/**
+ * 子会话这一轮收尾了吗（交回卡算产出前要问）：子会话交回（report_to_parent）时它的轮还没收尾——
+ * 轮尾文件账（file-turn，含音视频候选）在交回之后几秒才落盘。只看交回那一刻的记录会漏掉它。
+ * 收尾了 = 最后一条是 file-turn；或最后一条是不带工具调用的 assistant 正文、且记录条数与上一次读到的一样
+ * （轮结束了、这一轮没有改文件，不会再有文件账）。`previousLength` 是上一次读到的条数（第一次读传 -1）。
+ */
+export function childRunSettled(records: readonly TranscriptRecord[], previousLength: number): boolean {
+  const last = records[records.length - 1];
+  if (last === undefined) return false;
+  if (last.role === "file-turn") return true;
+  return last.role === "assistant" && !last.content.some((block) => block.type === "toolCall") && records.length === previousLength;
+}

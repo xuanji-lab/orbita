@@ -181,7 +181,7 @@ import { InlineName } from "../../shell/InlineName";
 import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { MarkdownBlock } from "./MarkdownBlock";
-import { sessionOutputs, type SessionOutputs } from "./child-outputs.ts";
+import { childRunSettled, sessionOutputs, type SessionOutputs } from "./child-outputs.ts";
 import { ChatFileScopeContext, loadChatImage, openChatFile, revealChatFile, useChatFileScope, useChatImage, type ChatFileScope } from "./chat-file-scope.ts";
 import { requestOpenPanel } from "../../shell/open-panel.ts";
 import {
@@ -5396,31 +5396,47 @@ function OutputGroupCard(props: { type: OutputGroupType; outputs: readonly TurnO
 /** 子会话整条记录（交回卡算它的产出用）：按 id 读一次、缓存；读不到 = null */
 const childRecordsCache = new Map<string, Promise<readonly TranscriptRecord[] | null>>();
 
-/** 读一条交回消息对应的子会话产出（同一条只读一次；新的交回换一个键重读）；读不到 null */
-function loadChildOutputs(childId: string, messageId: string): Promise<SessionOutputs | null> {
+/** 交回时子会话的轮还没收尾：文件账几秒后才落盘，隔 CHILD_POLL_MS 重读，最多 CHILD_POLL_MAX 次 */
+const CHILD_POLL_MS = 2000;
+const CHILD_POLL_MAX = 8;
+
+/**
+ * 读一条交回消息对应的子会话产出（首读走缓存）；子会话的轮没收尾（childRunSettled）就隔几秒重读到收尾，
+ * 每读到一次回调一次。返回取消函数。读不到 = null。
+ */
+function watchChildOutputs(childId: string, messageId: string, onValue: (outputs: SessionOutputs | null) => void): () => void {
   const key = `${childId}:${messageId}`;
-  let promise = childRecordsCache.get(key);
-  if (promise === undefined) {
-    promise = api.session
-      .load(childId)
-      .then((detail) => (detail === null ? null : (detail.transcript as readonly TranscriptRecord[])))
-      .catch(() => null);
-    childRecordsCache.set(key, promise);
-  }
-  return promise.then((records) => (records === null ? null : sessionOutputs(records)));
+  let alive = true;
+  let timer: number | undefined;
+  let tries = 0;
+  let previousLength = -1;
+  const step = async (fresh: boolean): Promise<void> => {
+    let promise = childRecordsCache.get(key);
+    if (promise === undefined || fresh) {
+      promise = api.session
+        .load(childId)
+        .then((detail) => (detail === null ? null : (detail.transcript as readonly TranscriptRecord[])))
+        .catch(() => null);
+      childRecordsCache.set(key, promise);
+    }
+    const records = await promise;
+    if (!alive) return;
+    onValue(records === null ? null : sessionOutputs(records));
+    if (records === null || childRunSettled(records, previousLength) || tries >= CHILD_POLL_MAX) return;
+    previousLength = records.length;
+    tries += 1;
+    timer = window.setTimeout(() => void step(true), CHILD_POLL_MS);
+  };
+  void step(false);
+  return () => {
+    alive = false;
+    if (timer !== undefined) window.clearTimeout(timer);
+  };
 }
 
 function useChildOutputs(childId: string, messageId: string): SessionOutputs | null | undefined {
   const [value, setValue] = useState<SessionOutputs | null | undefined>(undefined);
-  useEffect(() => {
-    let alive = true;
-    void loadChildOutputs(childId, messageId).then((outputs) => {
-      if (alive) setValue(outputs);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [childId, messageId]);
+  useEffect(() => watchChildOutputs(childId, messageId, setValue), [childId, messageId]);
   return value;
 }
 
@@ -5429,14 +5445,11 @@ function useChildrenOutputs(children: readonly { peerId: string; messageId: stri
   const [loaded, setLoaded] = useState<ReadonlyMap<string, SessionOutputs | null>>(new Map());
   const signature = children.map((child) => `${child.peerId}:${child.messageId}`).join("|");
   useEffect(() => {
-    let alive = true;
-    for (const child of children) {
-      void loadChildOutputs(child.peerId, child.messageId).then((outputs) => {
-        if (alive) setLoaded((previous) => new Map(previous).set(child.messageId, outputs));
-      });
-    }
+    const stops = children.map((child) =>
+      watchChildOutputs(child.peerId, child.messageId, (outputs) => setLoaded((previous) => new Map(previous).set(child.messageId, outputs))),
+    );
     return () => {
-      alive = false;
+      for (const stop of stops) stop();
     };
     // children 的内容由 signature 代表
     // eslint-disable-next-line react-hooks/exhaustive-deps

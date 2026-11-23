@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { TranscriptRecord } from "../../../../shared/session.ts";
-import { sessionOutputs } from "./child-outputs.ts";
+import { childRunSettled, sessionOutputs } from "./child-outputs.ts";
 
 const rec = (r: unknown) => r as TranscriptRecord;
 
@@ -63,4 +63,18 @@ describe("sessionOutputs：子会话整条记录做出来的东西", () => {
     );
     assert.deepEqual(edited, ["/w/src/util.ts"]);
   });
+});
+
+describe("childRunSettled：交回时子会话的轮还没收尾，要等它的文件账", () => {
+  const toolDone = rec({ id: "t", role: "tool", toolCallId: "c", toolName: "report_to_parent", input: {}, content: [], timestamp: 3, status: "complete", isError: false });
+  const finalText = rec({ id: "a", role: "assistant", content: [{ type: "text", text: "完成" }], timestamp: 4 });
+  const fileTurn = rec({ id: "f", role: "file-turn", timestamp: 5, changes: [], mediaArtifacts: [{ path: "/w/a.mp3" }] });
+  test("最后一条是 file-turn：收尾了", () => assert.equal(childRunSettled([toolDone, finalText, fileTurn], -1), true));
+  test("最后一条是工具结果（交回刚落账）：没收尾", () => assert.equal(childRunSettled([toolDone], -1), false));
+  test("最后一条是正文但条数还在变：没收尾；两次读到同样条数：收尾了（这一轮没改文件）", () => {
+    assert.equal(childRunSettled([toolDone, finalText], -1), false);
+    assert.equal(childRunSettled([toolDone, finalText], 1), false);
+    assert.equal(childRunSettled([toolDone, finalText], 2), true);
+  });
+  test("空记录：没收尾", () => assert.equal(childRunSettled([], -1), false));
 });
