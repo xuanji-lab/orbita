@@ -5396,9 +5396,11 @@ function OutputGroupCard(props: { type: OutputGroupType; outputs: readonly TurnO
 /** 子会话整条记录（交回卡算它的产出用）：按 id 读一次、缓存；读不到 = null */
 const childRecordsCache = new Map<string, Promise<readonly TranscriptRecord[] | null>>();
 
-/** 交回时子会话的轮还没收尾：文件账几秒后才落盘，隔 CHILD_POLL_MS 重读，最多 CHILD_POLL_MAX 次 */
-const CHILD_POLL_MS = 2000;
-const CHILD_POLL_MAX = 8;
+/**
+ * 交回时子会话的轮还没收尾：它交回（report_to_parent）之后还要说完收尾的话，文件账才落盘——实测慢模型要 30–40 秒
+ * （2026-11-23，deepseek-flash）。按这张间隔表重读（逐步放慢，共约 80 秒），收尾了就停。
+ */
+const CHILD_POLL_SCHEDULE_MS = [2000, 2000, 3000, 3000, 5000, 5000, 5000, 5000, 8000, 8000, 8000, 8000, 10000, 10000];
 
 /**
  * 读一条交回消息对应的子会话产出（首读走缓存）；子会话的轮没收尾（childRunSettled）就隔几秒重读到收尾，
@@ -5422,10 +5424,11 @@ function watchChildOutputs(childId: string, messageId: string, onValue: (outputs
     const records = await promise;
     if (!alive) return;
     onValue(records === null ? null : sessionOutputs(records));
-    if (records === null || childRunSettled(records, previousLength) || tries >= CHILD_POLL_MAX) return;
+    const wait = CHILD_POLL_SCHEDULE_MS[tries];
+    if (records === null || childRunSettled(records, previousLength) || wait === undefined) return;
     previousLength = records.length;
     tries += 1;
-    timer = window.setTimeout(() => void step(true), CHILD_POLL_MS);
+    timer = window.setTimeout(() => void step(true), wait);
   };
   void step(false);
   return () => {
