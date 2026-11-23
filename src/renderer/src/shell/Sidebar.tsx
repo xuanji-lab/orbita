@@ -13,7 +13,7 @@ import { WorkspaceFiles } from "./focus/WorkspaceFiles.tsx";
 import { AgentRow } from "./AgentRow.tsx";
 import { useScrollEdges } from "./scroll-inset.ts";
 import { orderAgentRows } from "../features/chat/agent-status.ts";
-import { scopeSummary, stateIndexOf } from "../features/chat/galaxy-data.ts";
+import { NO_STATES, scopeSummary, stateIndexOf } from "../features/chat/galaxy-data.ts";
 import {
   EMPTY_SELECTION,
   nextSelection,
@@ -741,7 +741,7 @@ export function Sidebar(props: {
             ) : workspaceList.body === "list" ? (
               orderAgentRows(
                 [null, ...session.workspaces].map((workspace) => {
-                  const summary = scopeSummary(session.sessions, workspace?.id ?? null, agentStates?.state ?? (() => null), openId);
+                  const summary = scopeSummary(session.sessions, workspace?.id ?? null, agentStates ?? NO_STATES, openId);
                   return { workspace, summary };
                 }),
                 (row) => ({ pinned: row.workspace === null, waiting: row.summary.waiting, lastActive: row.summary.lastActive }),

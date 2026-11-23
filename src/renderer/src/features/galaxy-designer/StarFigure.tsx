@@ -1,5 +1,5 @@
 import "./galaxy-designer.css";
-import { useId } from "react";
+import { useEffect, useId, useState } from "react";
 import { avatarScale, bodyArt, displayRadius, ELEMENTS_OF, radiusOf, withStar, type BodyArt, type GalaxyDesign } from "./design.ts";
 
 /**
@@ -82,6 +82,57 @@ export function StarBody(props: { design: GalaxyDesign; x: number; y: number; r:
   );
 }
 
+/**
+ * 地表图暗不暗（平均明度 < SURFACE_DARK）：深色地表上眼睛描一圈很淡的亮边，不然黑眼睛融进深蓝 / 深灰的球
+ * （2026-11-24 设计审查 R10：orbita 深蓝球上的黑眼睛几乎看不见）。只给深色地表加，浅色的不描。
+ * 地表图是主进程抠好的 data URL（同源），缩到 16×16 读一次像素；同一张图只算一次（按 src 缓存）。
+ */
+const SURFACE_DARK = 0.38;
+const darkness = new Map<string, boolean>();
+
+function useSurfaceDark(src: string | null): boolean {
+  const [dark, setDark] = useState(() => (src === null ? false : (darkness.get(src) ?? false)));
+  useEffect(() => {
+    if (src === null) {
+      setDark(false);
+      return;
+    }
+    const known = darkness.get(src);
+    if (known !== undefined) {
+      setDark(known);
+      return;
+    }
+    let live = true;
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 16;
+      canvas.height = 16;
+      const ctx = canvas.getContext("2d");
+      if (ctx === null) return;
+      ctx.drawImage(img, 0, 0, 16, 16);
+      const { data } = ctx.getImageData(0, 0, 16, 16);
+      let sum = 0;
+      let n = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        const alpha = (data[i + 3] ?? 0) / 255;
+        if (alpha < 0.5) continue;
+        // 相对明度（sRGB 近似）
+        sum += (0.2126 * (data[i] ?? 0) + 0.7152 * (data[i + 1] ?? 0) + 0.0722 * (data[i + 2] ?? 0)) / 255;
+        n += 1;
+      }
+      const result = n > 0 && sum / n < SURFACE_DARK;
+      darkness.set(src, result);
+      if (live) setDark(result);
+    };
+    img.src = src;
+    return () => {
+      live = false;
+    };
+  }, [src]);
+  return dark;
+}
+
 /** 地表贴图比圆大一点点：球缘那一圈半透明的羽化边落到裁切圆外面，不在球缘描出一道浅边 */
 const IMAGE_OVERSCAN = 1.04;
 
@@ -92,6 +143,7 @@ export function BodyFigure(props: { art: BodyArt; uid: string }) {
   const halo = `${uid}-halo`;
   const shade = `${uid}-shade`;
   const image = art.image;
+  const darkSurface = useSurfaceDark(image === null ? null : image.src);
   return (
     <g className="gd-body" data-surface={art.surface}>
       <defs>
@@ -162,9 +214,17 @@ export function BodyFigure(props: { art: BodyArt; uid: string }) {
       </g>
       {/* 只有一双竖胶囊眼：不画嘴、鼻子、腮红、眉毛、瞳孔、高光 */}
       {art.eyes !== null && (
-        <g className="gd-eyes" transform={`rotate(${art.eyesTilt})`}>
+        <g className="gd-eyes" data-rim={darkSurface || undefined} transform={`rotate(${art.eyesTilt})`}>
           {art.eyes.map((eye) => (
-            <rect key={eye.x} className="gd-eye" x={eye.x - eye.w / 2} y={eye.y - eye.h / 2} width={eye.w} height={eye.h} rx={eye.w / 2} />
+            <rect key={eye.x}
+              className="gd-eye"
+              x={eye.x - eye.w / 2}
+              y={eye.y - eye.h / 2}
+              width={eye.w}
+              height={eye.h}
+              rx={eye.w / 2}
+              strokeWidth={darkSurface ? eye.w * 0.45 : undefined}
+            />
           ))}
         </g>
       )}

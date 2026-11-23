@@ -40,6 +40,7 @@ import { WorkspaceCapsule } from "./shell/WorkspaceCapsule";
 import { OrchestraPanel } from "./features/chat/OrchestraPanel.tsx";
 import { headerStatusOf } from "./features/chat/agent-status.ts";
 import { latestWorkspaceId, scopeRecent, scopeSummary, stateIndexOf } from "./features/chat/galaxy-data.ts";
+import { GalaxyActionsContext, type DesignerFocus, type GalaxyActions } from "./features/chat/galaxy-actions.ts";
 import { useFocusShell } from "./features/focus/use-focus-shell.tsx";
 import { docPanelLayout } from "./features/doc-panel/doc-panel-width.ts";
 import { DocPaperContext, effectivePaper } from "./features/doc-panel/doc-paper.ts";
@@ -142,6 +143,8 @@ export function App() {
   const [rightPanel, setRightPanel] = useState<RightPanelKind | null>(null);
   /** 星系设计面板（原型）在设计哪个工作区：DIY 键定它，主槽换工作区时跟过去（design.ts 的 designerFollow） */
   const [galaxyTarget, setGalaxyTarget] = useState<string | null>(null);
+  // 设计面板要停在哪颗天体（星系上点了主星 / 行星）：nonce 每点一次 +1
+  const [designerFocus, setDesignerFocus] = useState<DesignerFocus | null>(null);
   /**
    * Archived 子视图的开关（入口在右栏底部，2026-09-22 裁决）。
    * 状态跟着入口住在 App，Sidebar 受控渲染子视图本体。
@@ -935,6 +938,8 @@ export function App() {
   const toggleGalaxyDesigner = useCallback(
     (workspaceId: string) => {
       const next = designerClick({ panel: rightPanel, target: galaxyTarget }, workspaceId);
+      // 画笔键开面板：不带星系上次点的那颗（落在面板自己记着的那一页）
+      setDesignerFocus(null);
       setGalaxyTarget(next.target);
       setRightPanel(next.panel);
     },
@@ -1431,12 +1436,19 @@ export function App() {
           <WorkspaceCapsule
             workspaceId={wsId}
             name={session.workspaces.find((item) => item.id === wsId)?.name ?? t.agents.home}
-            status={headerStatusOf(scopeSummary(session.sessions, wsId, state, mainOpenId === "" ? null : mainOpenId))}
+            status={headerStatusOf(scopeSummary(session.sessions, wsId, orchestrateStates, mainOpenId === "" ? null : mainOpenId))}
             task={inSession ? { title: capsuleTitle, onRename: mainOpenId === "" ? undefined : (title) => session.renameSession(mainOpenId, title) } : null}
             recent={scopeRecent(session.sessions, wsId, state)}
             now={Date.now()}
             onOpenSession={(id) => void session.openSession(id)}
             onSeeAll={() => changeSettings({ appMode: "agent" })}
+            onOpenHome={() => {
+              // 页头名字 = 回这个主智能体的 New Task 页（同侧栏点这一行）
+              setOverlay(null);
+              const workspace = session.workspaces.find((item) => item.id === wsId);
+              if (workspace === undefined) session.newTask();
+              else session.newTaskIn(workspace);
+            }}
           />
         );
       })()
@@ -1455,6 +1467,33 @@ export function App() {
         }
       />
     );
+
+  // 星系上能点的东西各去哪（New Task 页的大星系与右栏星系图共用；单智能体首页那颗 fixture 星系拿不到它）
+  const galaxyActions: GalaxyActions | null = orchestrate
+    ? {
+        openSession: (id) => {
+          setOverlay(null);
+          void session.openSession(id);
+        },
+        openPlanet: (workspaceId, planetId) => {
+          setOverlay(null);
+          setGalaxyTarget(workspaceId);
+          setDesignerFocus((prev) => ({ kind: "planet", id: planetId, nonce: (prev?.nonce ?? 0) + 1 }));
+          setRightPanel("galaxy");
+        },
+        openStar: (workspaceId) => {
+          setOverlay(null);
+          setGalaxyTarget(workspaceId);
+          setDesignerFocus((prev) => ({ kind: "star", nonce: (prev?.nonce ?? 0) + 1 }));
+          setRightPanel("galaxy");
+        },
+        openTree: () => {
+          setOverlay(null);
+          changeSettings({ orchestraView: "tree" });
+          setRightPanel("orchestra");
+        },
+      }
+    : null;
 
   const railEntries: RailEntry[] = [
     {
@@ -1503,6 +1542,7 @@ export function App() {
     <AutomationRunSessionsContext.Provider value={runSessionIds}>
     <PastedTextCollapseContext.Provider value={settings.collapsePastedText ?? true}>
     <CitationOpenContext.Provider value={openCitation}>
+    <GalaxyActionsContext.Provider value={galaxyActions}>
     <ToolbarPanelSlotContext.Provider value={panelSlot}>
     <div className="app-shell">
       <div className="layer">
@@ -1783,9 +1823,11 @@ export function App() {
                     changeSettings({ rightPanelWidth: width });
                   }}
                   onSeeAll={() => changeSettings({ appMode: "agent" })}
+                  onNewTaskPage={mainOpenId === "" && session.opened === null}
+                  currentId={mainOpenId === "" ? (session.opened?.id ?? null) : mainOpenId}
                 />
               ) : shownPanel === "galaxy" ? (
-                <GalaxyDesigner workspace={session.workspaces.find((workspace) => workspace.id === galaxyTarget) ?? null} />
+                <GalaxyDesigner workspace={session.workspaces.find((workspace) => workspace.id === galaxyTarget) ?? null} focus={designerFocus} />
               ) : shownPanel === "intent" ? (
                 <IntentPanel
                   sessionId={session.sessionId ?? session.opened?.id ?? null}
@@ -1850,6 +1892,7 @@ export function App() {
       {onboardingOpen && <OnboardingView theme={resolvedTheme} startAt={onboardingStart} onClose={closeOnboarding} onTry={tryFromOnboarding} />}
     </div>
     </ToolbarPanelSlotContext.Provider>
+    </GalaxyActionsContext.Provider>
     </CitationOpenContext.Provider>
     </PastedTextCollapseContext.Provider>
     </AutomationRunSessionsContext.Provider>

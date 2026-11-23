@@ -707,12 +707,17 @@ export function drawFrame(
     items.push(depth === arc.depth ? arc : { ...arc, depth });
   }
   if (layout.rockOrbit !== null) {
+    // 碎石块永远小于行星（层级：碎石 < 行星 < 主星；2026-11-24 设计审查 R3 量到窄窗里碎石比行星大）：
+    // 不超过此刻最小那颗行星的一半
+    let smallest = Number.POSITIVE_INFINITY;
+    for (const item of items) if (item.kind === "planet") smallest = Math.min(smallest, item.r);
+    const rockR = Number.isFinite(smallest) ? Math.min(ROCK_PX, smallest * 0.5) : ROCK_PX;
     const omega = angularSpeed(layout.rockOrbit);
     for (const rock of layout.rocks) {
       const theta = rock.theta0 + omega * t;
       const p = project(orbitPoint(layout.rockOrbit, 0, 0, theta), camera);
       const s = toScreen(p, vp);
-      items.push({ kind: "rock", key: `rock-${rock.id}`, planetId: rock.id, state: rock.state, label: rock.label, depth: p.depth, x: s.x, y: s.y, r: ROCK_PX });
+      items.push({ kind: "rock", key: `rock-${rock.id}`, planetId: rock.id, state: rock.state, label: rock.label, depth: p.depth, x: s.x, y: s.y, r: rockR });
     }
   }
   if (layout.belt !== null) {

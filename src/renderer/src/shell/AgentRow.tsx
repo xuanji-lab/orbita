@@ -5,7 +5,7 @@ import { IconButton } from "./IconButton";
 import { StatusPie } from "./StatusPie";
 import { sessionAgeLabel } from "./relative-time.ts";
 import { DustFigure, StarFigure } from "../features/galaxy-designer/StarFigure.tsx";
-import { useAvatarBySize, useGalaxyDesign } from "../features/galaxy-designer/useGalaxyDesign.ts";
+import { useGalaxyDesign } from "../features/galaxy-designer/useGalaxyDesign.ts";
 import { useProtoVariants } from "../features/chat/proto-variants-store.ts";
 import { rowLabelOf } from "../features/chat/proto-variants.ts";
 import { agentLineOf, type AgentLine } from "../features/chat/agent-status.ts";
@@ -40,7 +40,6 @@ export function AgentRow(props: {
   const t = useT();
   const { workspace, summary } = props;
   const name = workspace === null ? t.agents.home : workspace.name;
-  const bySize = useAvatarBySize();
   const { design } = useGalaxyDesign(workspace?.id ?? "");
   // 主标签仍是工作区名；候选 agentName=on 时写「智能体名 · 工作区名」（window.orbitaProto，默认关）
   const variants = useProtoVariants();
@@ -72,7 +71,8 @@ export function AgentRow(props: {
           {workspace === null ? (
             <DustFigure size={28} label={t.agents.homeAvatar} />
           ) : (
-            <StarFigure bySize={bySize} design={design} size={28} label={t.agents.avatar(name)} />
+            // 固定直径（设计审查 R10：按质量缩放的 3px 差别读不出「谁更重」，只剩左缘参差）
+            <StarFigure bySize={false} design={design} size={26} label={t.agents.avatar(name)} />
           )}
         </span>
         <span className="agent-body">

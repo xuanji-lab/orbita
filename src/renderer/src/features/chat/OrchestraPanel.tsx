@@ -15,6 +15,8 @@ import { StarFigure } from "../galaxy-designer/StarFigure.tsx";
 import { useAvatarBySize, useGalaxyDesign } from "../galaxy-designer/useGalaxyDesign.ts";
 import { agentInputsOf, agentMapOf, agentPlanetsOf, starExtentRatio, starOf } from "../galaxy-designer/design.ts";
 import { LocaleContext, useT } from "../../locale.ts";
+import { useProtoVariants } from "./proto-variants-store.ts";
+import { nameOrderOf } from "./proto-variants.ts";
 import type { SessionRunState } from "../notify/completion-notice.ts";
 import { headerStatusOf } from "./agent-status.ts";
 import { HomeGalaxy } from "./HomeGalaxy.tsx";
@@ -52,13 +54,21 @@ export function OrchestraPanel(props: {
   width: number;
   onWiden: (width: number) => void;
   onSeeAll: () => void;
+  /**
+   * 眼下在 New Task 页（还没打开会话）：页面本身就是这座星系，右栏不再画第二座（设计审查 R3）——
+   * 视图里没有「星系图」，存着的是星系图也按树状图显示（设置里的选择不改，回到对话页仍是星系图）
+   */
+  onNewTaskPage: boolean;
+  /** 主面板正开着的会话 id（树里标「你在这儿」，R7）；New Task 页为 null */
+  currentId: string | null;
 }) {
   const t = useT();
   const to = t.orchestra;
+  const view: OrchestraView = props.onNewTaskPage && props.view === "galaxy" ? "tree" : props.view;
   const states = stateIndexOf(props.session);
   const now = Date.now();
   const tree = orchestraTree({ sessions: props.session.sessions, workspaceId: props.workspaceId, stateOf: states.state, now });
-  const summary = scopeSummary(props.session.sessions, props.workspaceId, states.state);
+  const summary = scopeSummary(props.session.sessions, props.workspaceId, states);
   return (
     <RightPanelFrame
       contentKey={`orchestra-${props.workspaceId ?? "home"}`}
@@ -74,15 +84,16 @@ export function OrchestraPanel(props: {
         <div className="orch-views">
           <Segmented
             label={to.viewLabel}
-            value={props.view}
-            options={(["tree", "galaxy", "graph"] as const).map((value) => ({ value, label: to.views[value] }))}
+            value={view}
+            options={(props.onNewTaskPage ? (["tree", "graph"] as const) : (["tree", "galaxy", "graph"] as const)).map((value) => ({ value, label: to.views[value] }))}
             onChange={props.onView}
           />
         </div>
       }
     >
-      {props.view === "tree" ? (
+      {view === "tree" ? (
         <TreeView
+          currentId={props.currentId}
           tree={tree}
           workspaceId={props.workspaceId}
           name={props.workspaceName}
@@ -91,7 +102,7 @@ export function OrchestraPanel(props: {
           onOpen={props.onOpenSession}
           onSeeAll={props.onSeeAll}
         />
-      ) : props.view === "galaxy" ? (
+      ) : view === "galaxy" ? (
         <GalaxyView
           session={props.session}
           workspaceId={props.workspaceId}
@@ -115,11 +126,14 @@ export function OrchestraPanel(props: {
 
 // ── 树状图 ──────────────────────────────────────────────────────────────
 
-function MainCard(props: { workspaceId: string | null; name: string; status: ReturnType<typeof headerStatusOf> }) {
+function MainCard(props: { workspaceId: string | null; name: string; status: ReturnType<typeof headerStatusOf>; sessions: number }) {
   const t = useT();
   const bySize = useAvatarBySize();
-  const { design } = useGalaxyDesign(props.workspaceId ?? "");
+  const { design, origin } = useGalaxyDesign(props.workspaceId ?? "");
   const word = t.agents.status[props.status.status];
+  // 名字顺序与页头同一条：工作区名为主、智能体名为副（候选 agentName=on 时反过来）
+  const names = nameOrderOf(useProtoVariants().agentName, props.name, design.star?.name ?? "");
+  const planets = agentPlanetsOf(design, origin).length;
   return (
     <div className="orch-main">
       <span className="orch-main-avatar">
@@ -127,7 +141,8 @@ function MainCard(props: { workspaceId: string | null; name: string; status: Ret
       </span>
       <span className="orch-main-body">
         <span className="orch-main-l1">
-          <strong className="orch-main-name">{props.name}</strong>
+          <strong className="orch-main-name">{names.primary}</strong>
+          {names.secondary !== null && <span className="orch-main-alias">{names.secondary}</span>}
           <span className="orch-main-status" data-kind={props.status.status}>
             {props.status.status === "idle" ? (
               <span className="cap-status-dot" aria-hidden="true" />
@@ -138,7 +153,8 @@ function MainCard(props: { workspaceId: string | null; name: string; status: Ret
           </span>
         </span>
         <span className="orch-main-l2">
-          {t.orchestra.mainRole} · {t.orchestra.mainRoleLine}
+          {/* 真信息，不是口号（R16：原来写「主智能体 · 接你的话、派活、收结果」） */}
+          {t.agents.mainLine(planets, props.sessions)}
         </span>
       </span>
     </div>
@@ -146,6 +162,7 @@ function MainCard(props: { workspaceId: string | null; name: string; status: Ret
 }
 
 function TreeView(props: {
+  currentId: string | null;
   tree: ReturnType<typeof orchestraTree>;
   workspaceId: string | null;
   name: string;
@@ -157,7 +174,8 @@ function TreeView(props: {
   const t = useT();
   const to = t.orchestra;
   const { tree } = props;
-  const [olderOpen, setOlderOpen] = useState(false);
+  // 正开着的会话在「更早」那一组里：那一组默认展开，让「你在这儿」看得见
+  const [olderOpen, setOlderOpen] = useState(() => props.currentId !== null && tree.older.some((node) => holds(node, props.currentId)));
   const home = props.workspaceId === null;
   const body = (
     <>
@@ -170,7 +188,7 @@ function TreeView(props: {
         ) : tree.recent.length > 0 ? (
           <div className="ssp-card">
             {tree.recent.map((node) => (
-              <TreeRow key={node.meta.id} node={node} now={props.now} onOpen={props.onOpen} />
+              <TreeRow key={node.meta.id} node={node} now={props.now} onOpen={props.onOpen} currentId={props.currentId} />
             ))}
           </div>
         ) : null}
@@ -186,7 +204,7 @@ function TreeView(props: {
             </header>
             <div className="ssp-card">
               {tree.older.map((node) => (
-                <TreeRow key={node.meta.id} node={node} now={props.now} onOpen={props.onOpen} />
+                <TreeRow key={node.meta.id} node={node} now={props.now} onOpen={props.onOpen} currentId={props.currentId} />
               ))}
             </div>
           </section>
@@ -210,7 +228,7 @@ function TreeView(props: {
   }
   return (
     <div className="ssp-list orch-tree" data-view="tree">
-      <MainCard workspaceId={props.workspaceId} name={props.name} status={props.status} />
+      <MainCard workspaceId={props.workspaceId} name={props.name} status={props.status} sessions={tree.total} />
       <div className="orch-branch">{body}</div>
     </div>
   );
@@ -219,20 +237,31 @@ function TreeView(props: {
 function stateWord(t: ReturnType<typeof useT>, state: SessionRunState): string | null {
   if (state === "waiting") return t.agents.status.waiting;
   if (state === "running") return t.agents.status.running;
+  // 跑完 / 出错也写字，不只靠圆点的颜色（R6：状态优先用文字，颜色是第二信号）
+  if (state === "done") return t.orchestra.rowDone;
+  if (state === "failed") return t.orchestra.rowFailed;
   return null;
 }
 
+/** 这个节点或它下面某一层就是 id */
+function holds(node: TreeNode, id: string | null): boolean {
+  if (id === null) return false;
+  return node.meta.id === id || node.children.some((child) => holds(child, id));
+}
+
 /** 树的一行：状态饼（没状态是一颗空心点）+ 名字 + 行尾时间；有子会话的行首多一个展开键，子会话缩进一层、左边一根发丝线 */
-function TreeRow(props: { node: TreeNode; now: number; onOpen: (id: string) => void; depth?: number }) {
+function TreeRow(props: { node: TreeNode; now: number; onOpen: (id: string) => void; depth?: number; currentId: string | null }) {
   const t = useT();
   const { node } = props;
-  const [open, setOpen] = useState(node.activeBelow);
+  const current = props.currentId !== null && node.meta.id === props.currentId;
+  // 正开着的会话在它下面：默认展开到它（R7）
+  const [open, setOpen] = useState(node.activeBelow || node.children.some((child) => holds(child, props.currentId)));
   const title = node.meta.title.trim() === "" ? t.common.newTask : node.meta.title;
   const kids = node.children.length;
   const word = stateWord(t, node.state);
   return (
     <>
-      <div className="ssp-row orch-row" data-state={node.state ?? undefined} data-depth={props.depth ?? 0}>
+      <div className="ssp-row orch-row" data-state={node.state ?? undefined} data-depth={props.depth ?? 0} data-current={current || undefined}>
         <span className="orch-twisty-slot">
           {kids > 0 && (
             <button
@@ -246,7 +275,7 @@ function TreeRow(props: { node: TreeNode; now: number; onOpen: (id: string) => v
             </button>
           )}
         </span>
-        <button type="button" className="ssp-row-main" title={title} onClick={() => props.onOpen(node.meta.id)}>
+        <button type="button" className="ssp-row-main" title={title} aria-current={current ? "page" : undefined} onClick={() => props.onOpen(node.meta.id)}>
           <span className="ssp-bot">
             {node.state === null ? <span className="orch-idle-dot" aria-hidden="true" /> : <StatusPie state={node.state} />}
           </span>
@@ -262,7 +291,7 @@ function TreeRow(props: { node: TreeNode; now: number; onOpen: (id: string) => v
       {open && kids > 0 && (
         <div className="orch-kids">
           {node.children.map((child) => (
-            <TreeRow key={child.meta.id} node={child} now={props.now} onOpen={props.onOpen} depth={(props.depth ?? 0) + 1} />
+            <TreeRow key={child.meta.id} node={child} now={props.now} onOpen={props.onOpen} depth={(props.depth ?? 0) + 1} currentId={props.currentId} />
           ))}
         </div>
       )}
@@ -302,7 +331,16 @@ function GalaxyView(props: { session: ChatSession; workspaceId: string | null; n
   });
   return (
     <div className="orch-galaxy" data-view="galaxy">
-      <HomeGalaxy spec={data.spec} label={to.galaxyFigure(props.name)} starDesign={design} agents={agentMap} fill emptyHint={t.agents.emptyHint} />
+      <HomeGalaxy
+        spec={data.spec}
+        label={to.galaxyFigure(props.name)}
+        starDesign={design}
+        agents={agentMap}
+        fill
+        emptyHint={t.agents.emptyHint}
+        workspaceId={props.workspaceId}
+        starName={props.name}
+      />
     </div>
   );
 }

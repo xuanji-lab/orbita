@@ -72,7 +72,7 @@ import { builtinCommand, type DetailRow, docEditLabel, docEditPath, docEditSecti
 import { getOpenDocumentText } from "../doc-panel/open-document.ts";
 import { ExitCard } from "./ExitCard";
 import { ProcessViewContext } from "./process-view-context";
-import { sessionRunState, type SessionRunState } from "../notify/completion-notice.ts";
+import { runStateOf, sessionRunState, type SessionRunState } from "../notify/completion-notice.ts";
 import { scopeGalaxy, stateIndexOf } from "./galaxy-data.ts";
 import { useGalaxyDesign } from "../galaxy-designer/useGalaxyDesign.ts";
 import { agentInputsOf, agentMapOf, agentPlanetsOf, starExtentRatio, starOf } from "../galaxy-designer/design.ts";
@@ -1422,6 +1422,16 @@ function ChatViewBody(props: {
   // 加载 / 错误态跟各自的那仨定：只有气泡（子侧）用得到，父流胶囊没有正文也退化为只报名字
   const channelLoading = ownSide === "child" ? taskChannel.loading : false;
   const channelError = ownSide === "child" ? taskChannel.error : null;
+  // 编排形态：派出卡的状态与侧栏 / 树同一份运行态、同一套词（在跑 / 等你 / 空闲，设计审查 R6）。
+  // 读最新的会话表走 ref，函数本身稳定——不让通道上下文每帧换一个，派出卡的 memo 照旧生效
+  const runStateSourceRef = useRef(session);
+  runStateSourceRef.current = session;
+  const orchestrateCards = props.orchestrate === true;
+  const childRunState = useCallback((id: string): SessionRunState => {
+    const source = runStateSourceRef.current;
+    const meta = source.sessions.find((item) => item.id === id);
+    return meta === undefined ? null : runStateOf(source, meta);
+  }, []);
   const channel = useMemo<ChannelViewContext>(
     () => ({
       ownSide,
@@ -1432,6 +1442,7 @@ function ChatViewBody(props: {
       ownModelName: session.model === null ? null : modelDisplayNameOf(session.model.modelId),
       channelSummaries,
       childPhaseOf: session.phaseOf,
+      childRunState: orchestrateCards ? childRunState : null,
       openSubSession,
       litSubSessionId,
       channelMessages,
@@ -1447,6 +1458,8 @@ function ChatViewBody(props: {
       session.model,
       channelSummaries,
       session.phaseOf,
+      orchestrateCards,
+      childRunState,
       openSubSession,
       litSubSessionId,
       channelMessages,
@@ -1546,7 +1559,10 @@ function ChatViewBody(props: {
           ? t.quote.replyPlaceholder(session.quotes.length)
           : homeActive
             ? scopedHome
-              ? t.chat.placeholderTo(scopeNameOf(session, t.agents.home))
+              ? // 星际空间没有主智能体：不说「给 星际空间 发消息」（那是在给谁发？设计审查 R15）
+                session.workspaceId === null
+                ? t.agents.homePlaceholder
+                : t.chat.placeholderTo(scopeNameOf(session, t.agents.home))
               : t.chat.placeholderNew
             : t.chat.placeholderReply
       }
@@ -1555,7 +1571,7 @@ function ChatViewBody(props: {
       bottomSlot={
         <ComposerBar
           session={session}
-          scopeChip={!galaxyHome}
+          scopeChip={!galaxyHome && props.orchestrate !== true}
           modeChip={props.orchestrate !== true}
           starredModels={props.starredModels ?? []}
           onToggleStarModel={props.onToggleStarModel ?? (() => {})}
@@ -1721,6 +1737,8 @@ function ChatViewBody(props: {
                   agents={galaxyAgentMap}
                   fill
                   emptyHint={t.agents.emptyHint}
+                  workspaceId={session.workspaceId}
+                  starName={scopeName}
                 />
               )}
             </div>
@@ -6469,15 +6487,20 @@ function DelegateToolLine(props: {
   // 状态优先读通道摘要的终态（done/failed/waiting/stopped）；否则看子会话在 renderer
   // 会话槽里的 phase——不为 idle 就是还在跑（子会话 PR4a 的「状态从哪来」）。
   // stopped 不读的话，用户终止过的子会话在派出卡上会退回「空闲」（验收发现）
+  // 编排形态多一层：通道摘要没说终态时，读子会话的运行态（与树、侧栏同一份）——[ask] 停下来问你的子会话
+  // 在树里是「等你」，卡上不能还写「空闲」（设计审查 R6 B）
+  const runState = props.channel.childRunState?.(card.childId) ?? null;
   const status: DelegateCardStatus =
     summary?.status === "done" ||
     summary?.status === "failed" ||
     summary?.status === "waiting" ||
     summary?.status === "stopped"
       ? summary.status
-      : props.channel.childPhaseOf(card.childId) !== "idle"
-        ? "running"
-        : "idle";
+      : runState === "waiting"
+        ? "waiting"
+        : runState === "running" || props.channel.childPhaseOf(card.childId) !== "idle"
+          ? "running"
+          : "idle";
   const openSubSession = props.channel.openSubSession;
   return (
     <DelegateCardView
@@ -6487,6 +6510,7 @@ function DelegateToolLine(props: {
       onClick={openSubSession === null ? undefined : () => openSubSession(card.childId)}
       lit={props.channel.litSubSessionId === card.childId}
       modelName={props.channel.modelNameOf(card.modelId)}
+      agentWords={props.channel.childRunState != null}
     />
   );
 }

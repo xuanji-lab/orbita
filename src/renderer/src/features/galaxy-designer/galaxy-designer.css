@@ -61,7 +61,7 @@
   min-width: 0;
   overflow: hidden;
   font-size: var(--font-size-sm);
-  color: var(--color-text-tertiary);
+  color: var(--color-text-secondary);
   white-space: nowrap;
   text-overflow: ellipsis;
 }
@@ -161,6 +161,12 @@
 .gd-eye {
   fill: var(--gd-eye);
 }
+/* 深色地表：眼睛外描一圈很淡的亮边（受光色），描在填色外面（paint-order），不让眼睛变细 */
+.gd-eyes[data-rim] .gd-eye {
+  stroke: var(--gd-light);
+  stroke-opacity: 0.5;
+  paint-order: stroke;
+}
 .gd-ring {
   fill: none;
   stroke: var(--color-text-tertiary);
@@ -254,12 +260,6 @@
   stroke: var(--color-danger);
   stroke-width: 1.5;
   vector-effect: non-scaling-stroke;
-}
-.gd-well-note {
-  margin: 0;
-  font-size: var(--font-size-xs);
-  line-height: var(--line-height-ui);
-  color: var(--color-text-tertiary);
 }
 /* 行星页：头像与轨道场景。宽面板左右并排（头像左、场景右），窄面板上下叠 */
 .gd-stage[data-body="planet"] {
@@ -440,4 +440,14 @@
   padding: 0 0 var(--space-2);
   font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
+}
+
+/* 面板标题里的副名（工作区名为主时它是智能体名，反之亦然）：淡墨一档，同页头的 .cap-ws */
+.gd-cap-agent {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }

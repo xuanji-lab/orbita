@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { SessionMeta } from "@shared/session";
-import { runStateOf, type SessionRunState } from "../notify/completion-notice.ts";
+import { runStateOf, type RunStateSource, type SessionRunState } from "../notify/completion-notice.ts";
 import { FRAME_EXTENT, PLANET_MASS, PLANET_ZONE, STAR_MASS, VISIBLE_ORBIT_CAP, layoutGalaxy, planetRadius, starRadius } from "./galaxy.ts";
 import { IDLE_CHILD_MS, ORBIT_FIRST, ORBIT_SPREAD_MAX, ORBIT_STEP, RECENT_MENU_LIMIT, latestWorkspaceId, orbitRadiusOf, ROCK_CAP, planetMassOf, scopeGalaxy, scopeRecent, scopeSummary, scopeTone, stateIndexOf, stateOfIndex } from "./galaxy-data.ts";
 
@@ -184,14 +184,14 @@ describe("planetMassOf —— 行星质量来自 token 量", () => {
 });
 
 describe("scopeSummary / scopeTone —— 侧栏行与页头说的那句状态", () => {
-  test("只数根会话：等你压过在跑；最近活动取最新一条；空工作区全零", () => {
+  test("按件数：根会话自己 + 子会话各算一件；等你压过在跑；最近活动只看根会话；空工作区全零", () => {
     const sessions = [
       meta({ id: "a", updatedAt: 10, title: "旧的" }),
       meta({ id: "b", updatedAt: 30, title: "最新的" }),
       meta({ id: "b-kid", updatedAt: 99, parentId: "b" }),
     ];
     const summary = scopeSummary(sessions, "ws", states({ a: "running", b: "waiting", "b-kid": "running" }));
-    assert.deepEqual(summary, { waiting: 1, running: 1, total: 2, lastActive: 30, lastTitle: "最新的", waitingId: "b", attention: 1 });
+    assert.deepEqual(summary, { waiting: 1, running: 2, total: 2, lastActive: 30, lastTitle: "最新的", waitingId: "b", attention: 1 });
     assert.equal(scopeTone(summary), "waiting");
     assert.equal(scopeTone({ waiting: 0, running: 2 }), "running");
     const empty = scopeSummary([], "ws", states({}));
@@ -325,5 +325,43 @@ describe("编排星系：行星 = 子智能体，会话 = 碎石", () => {
     const data = scopeGalaxy({ sessions, workspaceId: ws, stateOf: (m) => (m.id === "s0" ? "waiting" : "running"), now: at, starMass: 600, designedPlanet: null, agents });
     assert.equal(data.spec.rocks?.length, ROCK_CAP);
     assert.equal(data.spec.rocks?.[0]?.id, "s0");
+  });
+});
+
+describe("「等你」件数：页头 / 侧栏（scopeSummary）与星系碎石（scopeGalaxy）同一个数（2026-11-24 设计审查 R2）", () => {
+  // 复现 ann-1：一条母会话自己空着，派出去的三个子会话里两个停下来等你、一个在跑；另一条根会话自己在等你
+  const sessions = [
+    meta({ id: "main", updatedAt: 10, title: "主线" }),
+    meta({ id: "k1", updatedAt: 11, parentId: "main", title: "整理数据" }),
+    meta({ id: "k2", updatedAt: 12, parentId: "main", title: "核对图标" }),
+    meta({ id: "k3", updatedAt: 13, parentId: "main", title: "查内存" }),
+    meta({ id: "ask", updatedAt: 20, title: "问一句" }),
+    meta({ id: "idle", updatedAt: 5 }),
+  ];
+  // 真实的运行态来源：母会话的汇总态由子会话推出来（stateIndexOf），不是测试里写死
+  const source: RunStateSource = {
+    sessions,
+    phaseOf: (id) => (id === "k3" ? "turn" : "idle"),
+    approvalsOf: (id) => (id === "k1" || id === "k2" || id === "ask" ? [{ id: `${id}-approval` }] : []),
+  };
+  const index = stateIndexOf(source);
+  const agents = [{ id: "p1", mass: 20, composition: "rock" as const, orbitRadius: 19 }];
+
+  test("三处同一个数：等你 3 件（两个子会话 + 一条根会话），在跑 1 件", () => {
+    const summary = scopeSummary(sessions, "ws", index);
+    const galaxy = scopeGalaxy({ sessions, workspaceId: "ws", stateOf: index.state, ownStateOf: index.own, now: 100, starMass: 620, designedPlanet: null, agents });
+    const rocks = galaxy.spec.rocks ?? [];
+    assert.equal(summary.waiting, 3);
+    assert.equal(summary.running, 1);
+    assert.equal(rocks.filter((rock) => rock.state === "waiting").length, summary.waiting);
+    assert.equal(rocks.filter((rock) => rock.state === "running").length, summary.running);
+    // 胶囊直达最近一件等你的（可以是子会话）
+    assert.equal(summary.waitingId, "ask");
+  });
+
+  test("只传一个函数（没有 own）时退成同一个口径，不重复数母会话", () => {
+    const flat = scopeSummary(sessions, "ws", states({ k1: "waiting", k2: "waiting", ask: "waiting", k3: "running" }));
+    assert.equal(flat.waiting, 3);
+    assert.equal(flat.running, 1);
   });
 });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { agentNameVariantOf, avatarVariantOf, mergeVariants, rowLabelOf, wsTitleVariantOf } from "./proto-variants.ts";
+import { agentNameVariantOf, avatarVariantOf, mergeVariants, nameOrderOf, rowLabelOf, wsTitleVariantOf } from "./proto-variants.ts";
 
 describe("编排工作区页候选版式", () => {
   test("地址参数：title=both 才是带大标题的第一版，其余（含缺省、坏值）都是页头版（默认）", () => {
@@ -27,5 +27,19 @@ describe("编排工作区页候选版式", () => {
     assert.equal(rowLabelOf("on", "意图系统", "烛霓"), "烛霓 · 意图系统");
     assert.equal(rowLabelOf("on", "意图系统", " "), "意图系统");
     assert.equal(rowLabelOf("on", "orbita", "orbita"), "orbita");
+  });
+});
+
+describe("名字顺序（页头、设计面板、树根卡共用）：工作区名为主、智能体名为副，候选开关反过来", () => {
+  test("默认：工作区名为主", () => {
+    assert.deepEqual(nameOrderOf("off", "意图系统", "烛霓"), { primary: "意图系统", secondary: "烛霓" });
+  });
+  test("agentName=on：智能体名为主", () => {
+    assert.deepEqual(nameOrderOf("on", "意图系统", "烛霓"), { primary: "烛霓", secondary: "意图系统" });
+  });
+  test("没起名 / 与工作区同名 / 只有空白：只有主名", () => {
+    assert.deepEqual(nameOrderOf("on", "orbita", ""), { primary: "orbita", secondary: null });
+    assert.deepEqual(nameOrderOf("off", "orbita", "orbita"), { primary: "orbita", secondary: null });
+    assert.deepEqual(nameOrderOf("off", "orbita", "  "), { primary: "orbita", secondary: null });
   });
 });

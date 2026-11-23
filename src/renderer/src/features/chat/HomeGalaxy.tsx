@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import {
   advanceClock,
   drawFrame,
@@ -32,7 +32,8 @@ import { BodyFigure, StarBody } from "../galaxy-designer/StarFigure.tsx";
 import { bodyArt, planetFaceDesign, starExtentRatio, type GalaxyDesign, type PlanetDesign } from "../galaxy-designer/design.ts";
 import { fitScreenSafe } from "./screen-safe.ts";
 import { GalaxyCallouts } from "./GalaxyCallouts.tsx";
-import { placeNameTags, textWidth } from "./callouts.ts";
+import { lockFrame, placeNameTags, textWidth } from "./callouts.ts";
+import { useGalaxyActions } from "./galaxy-actions.ts";
 import type { PlanetItem, RockItem } from "./galaxy.ts";
 
 /** 碎石块的轮廓：七个顶点、半径按 id 抖一点（同一条会话永远同一块石头），不是圆点——它是会话，不是天体 */
@@ -185,8 +186,16 @@ export function HomeGalaxy(props: {
    * 行星可读半径放大一档（AGENT_READABLE_MAX）；会话不再是行星，在做事的会话是带锁定框的碎石块（spec.rocks）。
    */
   agents?: ReadonlyMap<string, PlanetDesign>;
+  /**
+   * 这座星系属于哪个工作区：给了且有 GalaxyActions（App 提供）时星系能点——碎石开会话、行星 / 主星开设计面板、
+   * 角上「另有 N 条会话」开右栏树状图（2026-11-24 设计审查 R1）。
+   */
+  workspaceId?: string | null;
+  /** 主星的名字（读屏与悬停提示「X（主星）：在设计面板里打开」）；缺省用主星设计稿的名字 */
+  starName?: string;
 }) {
   const t = useT();
+  const actions = useGalaxyActions();
   const uid = useId().replace(/:/g, "");
   const svgRef = useRef<SVGSVGElement | null>(null);
   const seconds = useGalaxyClock(svgRef);
@@ -252,7 +261,11 @@ export function HomeGalaxy(props: {
       ? []
       : placeNameTags({
           planets: visiblePlanets.map((planet) => ({ id: planet.planetId, x: planet.x, y: planet.y, r: planet.r, name: agents.get(planet.planetId)?.name ?? "" })),
-          bodies: [...planetItems, ...rockItems].map((body) => ({ id: body.planetId, x: body.x, y: body.y, r: body.r })),
+          // 碎石块按它的锁定框算：名字牌不能被框压住（ann-2 E：框压在「定盘星」身上，名字被吃掉）
+          bodies: [
+            ...planetItems.map((body) => ({ id: body.planetId, x: body.x, y: body.y, r: body.r })),
+            ...rockItems.map((body) => ({ id: body.planetId, x: body.x, y: body.y, r: lockFrame(body.r).half })),
+          ],
           star: starItem === undefined || starItem.kind !== "star" ? null : { x: starItem.x, y: starItem.y, r: starItem.r * starExtent },
           width: scene.viewport.width,
           height: scene.viewport.height,
@@ -260,7 +273,19 @@ export function HomeGalaxy(props: {
         });
   // 锁定框与引线只认在做事的：子智能体行星（没有运行态）+ 在做事的碎石块
   const calloutBodies = agents === undefined ? visiblePlanets : [...visiblePlanets.map((planet) => ({ ...planet, label: null })), ...rockItems];
-  const folded = scene === null || props.fill !== true ? null : foldedMarkAt(layout, scene.camera, scene.viewport);
+  // 能点的星系：只有编排的工作区星系（有 App 给的去处、有工作区 id、不是星际空间）
+  const workspaceId = props.workspaceId ?? null;
+  const live = props.fill === true && props.starless !== true && actions !== null && workspaceId !== null ? { actions, workspaceId } : null;
+  // 角上那一行「另有 N 条会话」：星屑带折掉的 + 这一帧没画出来的碎石块（窄画布里整圈碎石块出画时归进这一行）
+  const rocksHidden = layout.rockOrbit === null ? layout.rocks.length : 0;
+  const foldedCount = (layout.belt?.folded ?? 0) + rocksHidden;
+  const foldedLine = scene === null || props.fill !== true || props.starless === true || foldedCount <= 0 ? null : t.agents.more(foldedCount);
+  const foldedBox =
+    foldedLine === null || scene === null
+      ? null
+      : { x: 12, y: scene.viewport.height - 12, w: textWidth(foldedLine, glyphPx) };
+  // 星际空间仍用星屑带旁边那个「+N」（它没有树状图可去）
+  const folded = scene === null || props.fill !== true || props.starless !== true ? null : foldedMarkAt(layout, scene.camera, scene.viewport);
   const hint = scene === null || props.emptyHint === undefined ? null : emptyHintAt(layout, scene.camera, scene.viewport);
   const starGradient = `${uid}-star`;
   const render = (item: DrawItem) => {
@@ -323,7 +348,7 @@ export function HomeGalaxy(props: {
       role="img"
       aria-label={props.label}
       data-planets={props.starless === true ? 0 : layout.planets.length}
-      data-rocks={props.starless === true ? 0 : layout.rocks.length}
+      data-rocks={props.starless === true || layout.rockOrbit === null ? 0 : layout.rocks.length}
       data-starless={props.starless === true || undefined}
       data-min-planet={minPlanetPx > 0 ? minPlanetPx.toFixed(1) : undefined}
       data-hidden={layout.hidden}
@@ -351,14 +376,48 @@ export function HomeGalaxy(props: {
           reserved={[
             ...nameTags.map((tag) => tag.box),
             // 「+N」也占一块：引线标签不压它（满载右栏里两者曾叠在一起）
-            ...(folded === null || layout.belt === null ? [] : [{ x0: folded.x, y0: folded.y - glyphPx, x1: folded.x + textWidth(t.agents.more(layout.belt.folded), glyphPx), y1: folded.y + glyphPx }]),
+            ...(foldedBox === null ? [] : [{ x0: foldedBox.x - 4, y0: foldedBox.y - glyphPx - 4, x1: foldedBox.x + foldedBox.w + 4, y1: foldedBox.y + glyphPx }]),
           ]}
           rankOf={rankOf}
           star={starItem === undefined ? null : { x: starItem.x, y: starItem.y, r: starItem.r * starExtent }}
           width={scene.viewport.width}
           height={scene.viewport.height}
           waitingWord={t.agents.status.waiting}
+          onActivate={live === null ? undefined : live.actions.openSession}
+          activateLabel={t.agents.openRock}
         />
+      )}
+      {/* 主星与子智能体行星能点：一层透明命中圈叠在天体上（键盘可达，悬停 / 聚焦亮一圈细环）；被主星挡住的行星不给 */}
+      {live !== null && (
+        <g className="galaxy-targets">
+          {starItem !== undefined && starItem.kind === "star" && (
+            <GalaxyTarget
+              kind="star"
+              id="star"
+              x={starItem.x}
+              y={starItem.y}
+              r={starItem.r}
+              label={t.agents.openStar(props.starName ?? props.starDesign?.star?.name ?? props.label)}
+              onActivate={() => live.actions.openStar(live.workspaceId)}
+            />
+          )}
+          {agents !== undefined &&
+            visiblePlanets.map((planet) => {
+              const name = agents.get(planet.planetId)?.name ?? planet.planetId;
+              return (
+                <GalaxyTarget
+                  key={`target-${planet.planetId}`}
+                  kind="planet"
+                  id={planet.planetId}
+                  x={planet.x}
+                  y={planet.y}
+                  r={planet.r}
+                  label={t.agents.openPlanet(name)}
+                  onActivate={() => live.actions.openPlanet(live.workspaceId, planet.planetId)}
+                />
+              );
+            })}
+        </g>
       )}
       {props.fill === true && agents !== undefined && (
         <g className="galaxy-names" data-names={nameTags.length}>
@@ -377,6 +436,33 @@ export function HomeGalaxy(props: {
           {props.emptyHint}
         </text>
       )}
+      {foldedLine !== null && foldedBox !== null && (
+        // 一行看得懂的字，不是悬空的「+431」（设计审查 R9）；能点的星系里点了打开右栏树状图
+        <g
+          className="galaxy-more"
+          data-count={foldedCount}
+          {...(live === null
+            ? {}
+            : {
+                role: "button",
+                tabIndex: 0,
+                "aria-label": t.agents.foldedTip(foldedCount),
+                "data-link": "true",
+                onClick: live.actions.openTree,
+                onKeyDown: (event: KeyboardEvent<SVGGElement>) => {
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
+                  live.actions.openTree();
+                },
+              })}
+        >
+          <title>{t.agents.foldedTip(foldedCount)}</title>
+          <rect className="galaxy-more-hit" x={foldedBox.x - 6} y={foldedBox.y - glyphPx} width={foldedBox.w + 12} height={glyphPx * 2} rx={4} />
+          <text className="galaxy-folded" x={foldedBox.x} y={foldedBox.y} textAnchor="start" dominantBaseline="central">
+            {foldedLine}
+          </text>
+        </g>
+      )}
       {folded !== null && layout.belt !== null && (
         <text className="galaxy-folded" x={folded.x} y={folded.y} textAnchor="start" dominantBaseline="central">
           <title>{t.agents.foldedTip(layout.belt.folded)}</title>
@@ -393,3 +479,30 @@ export function HomeGalaxy(props: {
  * 页面地址在一次加载里不变，所以模块加载时算一次。
  */
 export const PROTO_GALAXY_SPEC: GalaxySpec = galaxySpecOf(galaxyFixtureOf(window.location.search) ?? "typical");
+
+/**
+ * 星系上一颗能点的天体（主星 / 子智能体行星）：透明命中圈 + 悬停 / 聚焦时的一圈细环。
+ * role=button、tabIndex=0、Enter / 空格触发；key 按天体 id 稳定，天体每帧在动，焦点不丢。
+ */
+function GalaxyTarget(props: { kind: "star" | "planet"; id: string; x: number; y: number; r: number; label: string; onActivate: () => void }) {
+  return (
+    <g
+      className="galaxy-target"
+      data-target={props.kind}
+      data-planet={props.kind === "planet" ? props.id : undefined}
+      role="button"
+      tabIndex={0}
+      aria-label={props.label}
+      onClick={props.onActivate}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        props.onActivate();
+      }}
+    >
+      <title>{props.label}</title>
+      <circle className="galaxy-hit" cx={props.x} cy={props.y} r={props.r + (props.kind === "star" ? 2 : 5)} />
+      <circle className="galaxy-target-ring" cx={props.x} cy={props.y} r={props.r + (props.kind === "star" ? 4 : 3)} />
+    </g>
+  );
+}

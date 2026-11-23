@@ -515,16 +515,21 @@
    于是同一个会话列下底栏比改版前窄 32px：右栏打开文档 / 演示文稿时聊天列守硬底线 410，
    底栏只剩 ~199px，模型芯片的 60px 底与档位 53px 加起来压住隔壁（实测重叠 3px）。
    这一档把两个「可缩」的芯片再让一步：模型只留头像（名字仍在 title），档位包裹层缩到 32。 */
-@container (max-width: 210px) {
-  .composer-bottom-bar .chip-model {
-    min-width: 36px;
-  }
+/* 2026-11-24 设计审查 R3 D：1024 宽开着右栏时输入框只剩 ~170px，模型芯片残成头像 + 半个字。
+   这一档先把思考档位芯片整个让出去（档位在宽一点时再出现），把位子留给模型名 */
+@container (max-width: 260px) {
+  /* 包裹层带内联 display（Menu 的锚），要盖过只能 !important */
   .composer-bottom-bar > :has(> .chip-think) {
-    min-width: 32px;
+    display: none !important;
   }
 }
-/* 更窄（面板 300 + 聊天列 330–390 的最小窗口）：36px 里只剩头像与半个字的碎片，干脆删到只留头像 */
-@container (max-width: 170px) {
+/* 再窄（New Task 页 1024 宽开着右栏，底栏只剩 ~45px）：名字放不下就整个不写，只留完整的头像键（名字在悬停提示里），
+   不留「头像 + 半个字」的碎片 */
+@container (max-width: 120px) {
+  .composer-bottom-bar .chip-model {
+    min-width: 0;
+    flex: 0 0 auto;
+  }
   .composer-bottom-bar .chip-model .chip-label {
     display: none;
   }
@@ -7414,6 +7419,67 @@ button.turn-output-from.link:hover {
   font-variant-numeric: tabular-nums;
   fill: var(--color-text-tertiary);
   pointer-events: auto;
+}
+
+/*
+ * 星系上能点的东西（2026-11-24 设计审查 R1）：主星、子智能体行星、在做事的碎石块、角上「另有 N 条会话」。
+ * 命中圈透明；悬停与键盘聚焦时亮一圈发丝细环（次级墨，不用 accent——accent 只给主操作）。
+ * svg 里的 <g> 用全局 :focus-visible 的 outline 会画成一个大方框，这里换成那圈细环。
+ */
+.galaxy-target,
+.galaxy-tag.galaxy-target,
+.galaxy-more[data-link],
+.galaxy-callout[data-link] {
+  cursor: pointer;
+  /* 整张 .home-galaxy 是 pointer-events: none（星系只是图）；能点的这几样单独打开 */
+  pointer-events: auto;
+}
+.galaxy-target:focus-visible,
+.galaxy-more[data-link]:focus-visible {
+  outline: none;
+}
+.galaxy-target .galaxy-hit {
+  fill: transparent;
+  pointer-events: all;
+}
+.galaxy-target-ring {
+  fill: none;
+  stroke: var(--color-text-secondary);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+.galaxy-target:hover .galaxy-target-ring {
+  opacity: 0.55;
+}
+.galaxy-target:focus-visible .galaxy-target-ring {
+  opacity: 1;
+  stroke: var(--color-accent);
+  stroke-width: 1.5;
+}
+.galaxy-target:focus-visible .galaxy-tag-text {
+  opacity: 1;
+}
+.galaxy-more-hit {
+  fill: transparent;
+  pointer-events: all;
+}
+.galaxy-more .galaxy-folded {
+  font-size: var(--font-size-sm);
+  fill: var(--color-text-secondary);
+}
+.galaxy-more[data-link]:hover .galaxy-folded {
+  fill: var(--color-text-primary);
+  text-decoration: underline;
+}
+.galaxy-more[data-link]:focus-visible .galaxy-more-hit {
+  stroke: var(--color-accent);
+  stroke-width: 1.5;
+}
+.galaxy-callout[data-link]:hover .galaxy-callout-text {
+  text-decoration: underline;
 }
 
 /* 编排侧栏的列表：下面还有内容没滚到时，底部 24px 渐隐（最后一行不被切一半还像完整的一行）；到底即消 */

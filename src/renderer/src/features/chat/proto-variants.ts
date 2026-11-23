@@ -7,7 +7,8 @@
  *   品牌句，不说这个工作区的事；空星系下一步该做什么由星系下面那一句「还没有派出的活，在下面写一件事」说；
  *   title=both：页头胶囊之外，页面左上还有大标题「<工作区名> 星系 ⌄」+ slogan（第一版的样子，留作对比）。
  * - avatar=seeded（缺省）：没设计过的工作区按 id 取一套稳定的种子稿；avatar=same：全部同一颗默认主星（现状）。
- * - agentName=off（缺省）：侧栏主标签是工作区名（用户原话「头像加工作区名字」）；agentName=on：侧栏写「智能体名 · 工作区名」
+ * - agentName=off（缺省）：侧栏、页头、设计面板都以工作区名为主名、智能体名为副（用户原话「头像加工作区名字」）；
+ *   agentName=on：反过来，侧栏写「智能体名 · 工作区名」、页头与面板以智能体名为主。
  *   （主智能体还没起名的工作区照旧只写工作区名）。window.orbitaProto.set({ agentName: "on" })
  */
 export type WsTitleVariant = "both" | "header";
@@ -28,6 +29,16 @@ export function agentNameVariantOf(search: string): AgentNameVariant {
 export function rowLabelOf(variant: AgentNameVariant, workspaceName: string, agentName: string): string {
   const agent = agentName.trim();
   return variant === "on" && agent !== "" && agent !== workspaceName ? `${agent} · ${workspaceName}` : workspaceName;
+}
+
+/**
+ * 页头与设计面板的名字顺序（用户原话「左侧栏是头像加工作区名字」）：默认工作区名为主、智能体名为副；
+ * 候选 agentName=on 时反过来。智能体还没起名（或与工作区同名）时只有主名。
+ */
+export function nameOrderOf(variant: AgentNameVariant, workspaceName: string, agentName: string): { primary: string; secondary: string | null } {
+  const agent = agentName.trim();
+  if (agent === "" || agent === workspaceName) return { primary: workspaceName, secondary: null };
+  return variant === "on" ? { primary: agent, secondary: workspaceName } : { primary: workspaceName, secondary: agent };
 }
 
 export function wsTitleVariantOf(search: string): WsTitleVariant {

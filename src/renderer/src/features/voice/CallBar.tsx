@@ -15,8 +15,20 @@ import type { CallPhase } from "./call-machine.ts";
 import type { CallProblem, VoiceCall } from "./useVoiceCall.ts";
 import "./call-bar.css";
 
-/** 电平条的格数与每格的门槛（RMS 很少过 0.3，按对数感受分档） */
-const METER_STEPS = [0.01, 0.03, 0.07, 0.14] as const;
+/**
+ * 麦克风电平画成一小段对称的声波（中间高两边低），不是递增的四格——那像手机信号格，在想 / 在说时整排灰着读成「没信号」
+ * （2026-11-24 设计审查 R12）。只在「在听」时出现；每根的高度 = 底高 + 电平 × 这一根的系数。
+ */
+const WAVE = [0.45, 0.8, 1, 0.8, 0.45] as const;
+/** 电平到振幅：RMS 很少过 0.3，0.14 左右就算说得很响 */
+const LEVEL_FULL = 0.14;
+const WAVE_BASE_PX = 3;
+const WAVE_SPAN_PX = 11;
+
+function waveHeights(level: number): number[] {
+  const amp = Math.min(1, Math.max(0, Math.sqrt(Math.max(level, 0) / LEVEL_FULL)));
+  return WAVE.map((k) => Math.round((WAVE_BASE_PX + amp * k * WAVE_SPAN_PX) * 10) / 10);
+}
 
 function phaseIcon(phase: CallPhase, muted: boolean): { name: IconName; spin?: boolean; breath?: boolean } {
   if (phase === "connecting" || phase === "thinking") return { name: "loader-circle", spin: true };
@@ -107,10 +119,9 @@ export function CallBar(props: { call: VoiceCall; onOpenSettings: (() => void) |
           />
           <span className="call-state-label">{phaseLabel(call.phase, call.muted, t)}</span>
         </span>
+        {/* 电平只在「在听」时出现；在想 / 在说时这一格空着（状态图标已经在说它在干什么） */}
         <span className="call-meter" aria-hidden="true" data-live={listening ? "true" : undefined}>
-          {METER_STEPS.map((step) => (
-            <span key={step} className="call-meter-bar" data-on={listening && call.level >= step ? "true" : undefined} />
-          ))}
+          {listening && waveHeights(call.level).map((height, index) => <span key={index} className="call-meter-bar" style={{ height }} />)}
         </span>
         <span className="call-clock">{clock(call.elapsed)}</span>
         {heard !== null && (
@@ -119,14 +130,17 @@ export function CallBar(props: { call: VoiceCall; onOpenSettings: (() => void) |
           </span>
         )}
         <span className="row-trailing call-actions">
-          <IconButton
-            label={call.muted ? t.voice.call.unmute : t.voice.call.mute}
-            size={28}
-            active={call.muted}
+          {/* 静音键带字（与挂断对称，R12：只有图标时不知道点了会怎样） */}
+          <button
+            type="button"
+            className="quiet-control call-mute"
+            aria-pressed={call.muted}
+            title={call.muted ? t.voice.call.unmute : t.voice.call.mute}
             onClick={call.toggleMute}
           >
-            <Icon name={call.muted ? "mic-off" : "mic"} size={15} strokeWidth={1.8} />
-          </IconButton>
+            <Icon name={call.muted ? "mic-off" : "mic"} size={14} strokeWidth={1.8} />
+            {call.muted ? t.voice.call.unmute : t.voice.call.mute}
+          </button>
           <button type="button" className="quiet-control call-hangup" onClick={call.hangUp}>
             <Icon name="phone-off" size={14} strokeWidth={1.8} />
             {t.voice.call.hangUp}

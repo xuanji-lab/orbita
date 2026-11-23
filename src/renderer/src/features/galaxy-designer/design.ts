@@ -768,3 +768,15 @@ export function formatNumber(value: number): string {
 }
 
 export { clamp as clampValue };
+
+/**
+ * 插件稿里主星 / 行星的故事只留第一句（2026-11-24 设计审查 R16：一段带破折号的抒情长句占了面板三行）：
+ * 取第一个句号 / 问号 / 叹号之前的部分，破折号之后的展开不要；全文仍在悬停提示里。
+ */
+export function storyLineOf(note: string): string {
+  const text = note.trim();
+  const dash = text.indexOf("——");
+  const head = dash > 0 ? text.slice(0, dash) : text;
+  const end = head.search(/[。！？.!?]/);
+  return (end > 0 ? head.slice(0, end + 1) : head).trim();
+}

@@ -381,3 +381,25 @@ button.orch-node-job:hover {
 .orch-graph[data-hot] .orch-edge-label:not([data-hot]) {
   opacity: 0.45;
 }
+
+/* 树里「你在这儿」：主面板正开着的那条会话，侧栏行同款选中底 + 半粗（设计审查 R7） */
+.orch-row[data-current] .ssp-row-main {
+  background: var(--option-active-bg);
+}
+.orch-row[data-current] .ssp-title {
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+.orch-row[data-state="failed"] .orch-row-word {
+  color: var(--color-danger);
+}
+/* 根卡主名后的副名（智能体名或工作区名）：淡墨一档，同页头 */
+.orch-main-alias {
+  flex: 0 10 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}

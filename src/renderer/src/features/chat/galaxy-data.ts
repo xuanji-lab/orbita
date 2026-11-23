@@ -263,11 +263,15 @@ function agentGalaxy(input: ScopeGalaxyInput, agents: readonly AgentPlanetInput[
 }
 
 /**
- * 工作区此刻的样子（侧栏智能体行的第二行与时间、工作区页页头的状态胶囊共用）：只数根会话——
- * 子会话的在跑 / 等你已经由 runStateOf 记到母会话上，再数一遍就重复了。
+ * 工作区此刻的样子（侧栏智能体行的第二行与时间、工作区页页头的状态胶囊、星系碎石共用）。
+ * 「等你 / 在跑」按**件**数（2026-11-24 设计审查 R2：页头说 1、星系画 3，同一屏两个数）：
+ * 根会话看它自己的槽（不含子会话），子会话各算一件——与星系拎成碎石块的口径（agentGalaxy）逐件一致。
+ * 一条母会话自己空着、两个孩子都在等你 = 两件，不是一件。
  */
 export interface ScopeSummary {
+  /** 等你的件数（根会话自己 + 子会话） */
   waiting: number;
+  /** 在跑的件数（同上） */
   running: number;
   /** 根会话总数（不含归档） */
   total: number;
@@ -275,7 +279,7 @@ export interface ScopeSummary {
   lastActive: number | null;
   /** 最近活动的那条会话的标题（第二行在不忙时说「最近在聊什么」） */
   lastTitle: string | null;
-  /** 最近一条等你的根会话（页头「等你」胶囊点了直达它）；没有为 null */
+  /** 最近一件等你的会话（根会话或子会话；页头「等你」胶囊点了直达它）；没有为 null */
   waitingId: string | null;
   /**
    * 要你看一眼的根会话数：等你的 + 跑完没看 / 出错没看的，**不含眼下正开着的那条**（你正看着它，就不算「没看」）。
@@ -284,35 +288,51 @@ export interface ScopeSummary {
   attention: number;
 }
 
+/**
+ * 状态来源：StateIndex（state 含子会话的汇总态、own 只看自己的槽）；只给一个函数时两者同一个（测试里逐条写死状态时用）。
+ */
+export type SummaryStates = Pick<StateIndex, "state" | "own"> | ((meta: SessionMeta) => SessionRunState);
+
+/** 没有运行态可读时（单智能体侧栏不算编排状态）：一律空闲 */
+export const NO_STATES: SummaryStates = () => null;
+
 export function scopeSummary(
   sessions: readonly SessionMeta[],
   workspaceId: string | null,
-  stateOf: (meta: SessionMeta) => SessionRunState,
+  states: SummaryStates,
   viewedId: string | null = null,
 ): ScopeSummary {
-  const { roots } = scopeMembers(sessions, workspaceId);
+  const { roots, children } = scopeMembers(sessions, workspaceId);
+  const stateOf = typeof states === "function" ? states : states.state;
+  const ownOf = typeof states === "function" ? states : states.own;
   let attention = 0;
   let waiting = 0;
   let running = 0;
   let last: SessionMeta | null = null;
-  let waitingMeta: SessionMeta | null = null;
-  for (const meta of roots) {
-    const state = stateOf(meta);
-    if (state !== null && state !== "running" && meta.id !== viewedId) attention += 1;
+  // 闭包里改的东西放进对象：let 在闭包里赋值，TS 收窄不到
+  const pick: { waiting: SessionMeta | null } = { waiting: null };
+  const count = (meta: SessionMeta, state: SessionRunState): void => {
     if (state === "waiting") {
       waiting += 1;
-      if (waitingMeta === null || meta.updatedAt > waitingMeta.updatedAt) waitingMeta = meta;
-    }
-    else if (state === "running") running += 1;
+      if (pick.waiting === null || meta.updatedAt > pick.waiting.updatedAt) pick.waiting = meta;
+    } else if (state === "running") running += 1;
+  };
+  for (const meta of roots) {
+    // 小圆点（要你看一眼）仍按根会话的汇总态：它说的是「侧栏这一行有没有要点开的」
+    const state = stateOf(meta);
+    if (state !== null && state !== "running" && meta.id !== viewedId) attention += 1;
+    count(meta, ownOf(meta));
     if (last === null || meta.updatedAt > last.updatedAt) last = meta;
   }
+  // 子会话各算一件（与星系碎石同口径：子会话读 state，孙会话的事记在它头上）
+  for (const meta of children) count(meta, stateOf(meta));
   return {
     waiting,
     running,
     total: roots.length,
     lastActive: last?.updatedAt ?? null,
     lastTitle: last === null ? null : last.title.trim() || null,
-    waitingId: waitingMeta === null ? null : waitingMeta.id,
+    waitingId: pick.waiting === null ? null : pick.waiting.id,
     attention,
   };
 }

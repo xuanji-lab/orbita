@@ -23,6 +23,7 @@ import {
   type Viewport,
 } from "./galaxy.ts";
 import { ORBIT_STEP } from "./galaxy-data.ts";
+import { LOCK_GAP } from "./callouts.ts";
 
 /**
  * 屏幕安全的星系布局（工作区页与右栏星系图；纯计算，可被 node --test 直接加载）。
@@ -43,6 +44,15 @@ import { ORBIT_STEP } from "./galaxy-data.ts";
 
 /** 两个天体轮廓之间至少留的屏幕间距（px）：能分辨是两颗 */
 export const SCREEN_GAP = 4;
+/**
+ * 子智能体行星的屏幕半径下限（px）：再小两只竖胶囊眼睛就挤成一个点（2026-11-24 设计审查 R3 / R8：窄窗里行星只剩 6px）。
+ * 画布小到主星放不下这么大的行星时，宁可把画面放大、让外圈行星与碎石块出画（少画外圈），也不把行星缩到看不清。
+ */
+export const AGENT_READABLE_FLOOR = 10;
+/** 碎石块那一圈让开别的天体时按锁定框算：框比石头大一圈（LOCK_GAP），框压在行星上也是「压在别人身上」 */
+export const ROCK_CLEAR_PX = ROCK_PX + LOCK_GAP;
+/** 放大后的画面里，天体（连锁定框）离画布边至少留这么多 */
+const EDGE_PX = 6;
 /** 俯角上限：再高就成了俯视的靶心，读不出「绕着转」 */
 export const SAFE_ELEVATION_MAX = 66;
 /** 抬俯角的步长 */
@@ -90,6 +100,10 @@ function placeOrbits(
   lower: readonly number[],
   starPx: number,
   minPx: number,
+  /** 放大过的画面：行星整颗要落在画布里，落不下就算装不下（外圈退场） */
+  inside = false,
+  /** 两颗天体轮廓之间至少留多少（px）：子智能体星系按行星半径的一半给（bodyGapOf） */
+  gap = SCREEN_GAP,
 ): number[] | null {
   const star = screenOf(camera, vp, 0, 0);
   const orbits: number[] = [];
@@ -105,13 +119,14 @@ function placeOrbits(
       const far = screenOf(camera, vp, a, FAR);
       const rNear = bodyPx(body, near.depth, vp, minPx);
       const rFar = bodyPx(body, far.depth, vp, minPx);
-      let ok = Math.hypot(near.x - star.x, near.y - star.y) >= starPx + rNear + SCREEN_GAP;
+      if (inside && !orbitInside(camera, vp, a, Math.max(rNear, rFar))) return null;
+      let ok = Math.hypot(near.x - star.x, near.y - star.y) >= starPx + rNear + gap;
       if (ok && prevA !== undefined && prevBody !== undefined) {
         const pNear = screenOf(camera, vp, prevA, NEAR);
         const pFar = screenOf(camera, vp, prevA, FAR);
         ok =
-          Math.abs(near.y - pNear.y) >= rNear + bodyPx(prevBody, pNear.depth, vp, minPx) + SCREEN_GAP &&
-          Math.abs(far.y - pFar.y) >= rFar + bodyPx(prevBody, pFar.depth, vp, minPx) + SCREEN_GAP;
+          Math.abs(near.y - pNear.y) >= rNear + bodyPx(prevBody, pNear.depth, vp, minPx) + gap &&
+          Math.abs(far.y - pFar.y) >= rFar + bodyPx(prevBody, pFar.depth, vp, minPx) + gap;
       }
       if (ok) break;
       a += ORBIT_NUDGE;
@@ -122,10 +137,32 @@ function placeOrbits(
 }
 
 /**
+ * 子智能体星系里两颗天体之间的间距：行星半径的一半（不少于 SCREEN_GAP）。4px 在数值上分得开，
+ * 眼睛看上去仍是「贴着」（设计审查 R8：琉璃与主星下缘只隔 2–4px）
+ */
+export function bodyGapOf(minPx: number): number {
+  return Math.max(SCREEN_GAP, minPx * 0.5);
+}
+
+/** 半径 a 的轨道（放平）连同上面半径 r 的天体，整圈都在画布里（留 EDGE_PX） */
+function orbitInside(camera: Camera, vp: Viewport, a: number, r: number): boolean {
+  const near = screenOf(camera, vp, a, NEAR);
+  const far = screenOf(camera, vp, a, FAR);
+  const right = screenOf(camera, vp, a, 0);
+  const left = screenOf(camera, vp, a, Math.PI);
+  return (
+    Math.min(left.x, right.x) - r >= EDGE_PX &&
+    Math.max(left.x, right.x) + r <= vp.width - EDGE_PX &&
+    Math.min(near.y, far.y) - r >= EDGE_PX &&
+    Math.max(near.y, far.y) + r <= vp.height - EDGE_PX
+  );
+}
+
+/**
  * 碎石块那一圈：在碎石带里取 ROCK_ORBIT_AT 处，再按屏幕约束往外让——近侧 / 远侧短轴端点与最外一颗行星竖向留出
  * 两者屏幕半径之和 + SCREEN_GAP，近侧离主星同理。最多推到画框外沿。碎石块彼此同一圈等角排开，永远不相撞。
  */
-function placeRockOrbit(camera: Camera, vp: Viewport, layout: GalaxyLayout, minPx: number, starPx: number): number | null {
+function placeRockOrbit(camera: Camera, vp: Viewport, layout: GalaxyLayout, minPx: number, starPx: number, inside = false): number | null {
   if (layout.rockOrbit === null) return null;
   const star = screenOf(camera, vp, 0, 0);
   const last = layout.planets[layout.planets.length - 1];
@@ -134,17 +171,20 @@ function placeRockOrbit(camera: Camera, vp: Viewport, layout: GalaxyLayout, minP
   for (; a < FRAME_EXTENT; a += ORBIT_NUDGE) {
     const near = screenOf(camera, vp, a, NEAR);
     const far = screenOf(camera, vp, a, FAR);
-    let ok = Math.hypot(near.x - star.x, near.y - star.y) >= starPx + ROCK_PX + SCREEN_GAP;
+    let ok = Math.hypot(near.x - star.x, near.y - star.y) >= starPx + ROCK_CLEAR_PX + SCREEN_GAP;
     if (ok && last !== undefined && lastBody !== null) {
       const pNear = screenOf(camera, vp, last.orbitRadius, NEAR);
       const pFar = screenOf(camera, vp, last.orbitRadius, FAR);
       ok =
-        Math.abs(near.y - pNear.y) >= ROCK_PX + bodyPx(lastBody, pNear.depth, vp, minPx) + SCREEN_GAP &&
-        Math.abs(far.y - pFar.y) >= ROCK_PX + bodyPx(lastBody, pFar.depth, vp, minPx) + SCREEN_GAP;
+        Math.abs(near.y - pNear.y) >= ROCK_CLEAR_PX + bodyPx(lastBody, pNear.depth, vp, minPx) + SCREEN_GAP &&
+        Math.abs(far.y - pFar.y) >= ROCK_CLEAR_PX + bodyPx(lastBody, pFar.depth, vp, minPx) + SCREEN_GAP;
     }
     if (ok) break;
   }
-  return Math.min(a, FRAME_EXTENT);
+  const placed = Math.min(a, FRAME_EXTENT);
+  // 放大过的窄画面：碎石块那一圈出画就整圈不画——它们归进角上那一行「另有 N 条会话」（HomeGalaxy）
+  if (inside && !orbitInside(camera, vp, placed, ROCK_CLEAR_PX)) return null;
+  return placed;
 }
 
 export function fitScreenSafe(
@@ -165,15 +205,26 @@ export function fitScreenSafe(
     const bodies: Body[] = shown.map((planet) => ({ radius: planet.radius, waiting: planet.state === "waiting" }));
     for (let e = Math.max(baseElevationDeg, CAMERA_ELEVATION_DEG); e <= SAFE_ELEVATION_MAX; e += ELEVATION_STEP) {
       const camera = makeCamera(FRAME_EXTENT, e);
-      const viewport = frameViewport(camera, width, height, box);
+      let viewport = frameViewport(camera, width, height, box);
       const starDepth = project({ x: 0, y: 0, z: 0 }, camera).depth;
-      const starPx = (viewport.focal * starExtent) / starDepth;
-      const starBodyPx = (viewport.focal * starRadius(spec.starMass)) / starDepth;
+      let starPx = (viewport.focal * starExtent) / starDepth;
+      let starBodyPx = (viewport.focal * starRadius(spec.starMass)) / starDepth;
       // 行星再大也要比主星明显小（等你放大一档之后也是）
       const agentMode = readableMax > PLANET_READABLE_MAX;
+      // 窄画布：主星小到容不下一颗看得清的行星（AGENT_READABLE_FLOOR × 主星倍数）就把画面放大，
+      // 主星与行星一起变大；放大后出画的外圈由 placeOrbits / placeRockOrbit 的 inside 约束退场
+      const needStar = AGENT_READABLE_FLOOR * STAR_OVER_PLANET * WAITING_SCALE;
+      const zoomed = agentMode && bodies.length > 0 && starBodyPx < needStar;
+      if (zoomed) {
+        const k = needStar / starBodyPx;
+        viewport = { ...viewport, focal: viewport.focal * k };
+        starPx *= k;
+        starBodyPx *= k;
+      }
       const readable = readablePlanetPx(camera, viewport, ORBIT_STEP, readableMax, agentMode ? AGENT_READABLE_GAP : PLANET_READABLE_GAP);
-      const minPx = agentMode ? Math.min(readable, starBodyPx / (STAR_OVER_PLANET * WAITING_SCALE)) : readable;
-      const orbits = placeOrbits(camera, viewport, bodies, shown.map((planet) => planet.orbitRadius), starPx, minPx);
+      const starCap = starBodyPx / (STAR_OVER_PLANET * WAITING_SCALE);
+      const minPx = agentMode ? Math.min(Math.max(readable, AGENT_READABLE_FLOOR), starCap) : readable;
+      const orbits = placeOrbits(camera, viewport, bodies, shown.map((planet) => planet.orbitRadius), starPx, minPx, zoomed, agentMode ? bodyGapOf(minPx) : SCREEN_GAP);
       if (orbits === null) continue;
       const planets = shown.map((planet, i) => {
         const a = orbits[i] ?? planet.orbitRadius;
@@ -196,7 +247,7 @@ export function fitScreenSafe(
         hidden: base.hidden + dropped,
         expectedOrbit: base.expectedOrbit,
       };
-      return { camera, viewport, layout: { ...layout, rockOrbit: placeRockOrbit(camera, viewport, layout, minPx, starPx) }, elevationDeg: e, minPlanetPx: minPx, dropped };
+      return { camera, viewport, layout: { ...layout, rockOrbit: placeRockOrbit(camera, viewport, layout, minPx, starPx, zoomed) }, elevationDeg: e, minPlanetPx: minPx, dropped };
     }
     if (shown.length === 0) {
       const camera = makeCamera(FRAME_EXTENT, baseElevationDeg);

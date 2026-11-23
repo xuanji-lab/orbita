@@ -19,7 +19,8 @@ import {
   type StarItem,
 } from "./galaxy.ts";
 import { orbitRadiusOf } from "./galaxy-data.ts";
-import { fitScreenSafe, SAFE_ELEVATION_MAX } from "./screen-safe.ts";
+import { AGENT_READABLE_FLOOR, ROCK_CLEAR_PX, bodyGapOf, fitScreenSafe, SAFE_ELEVATION_MAX } from "./screen-safe.ts";
+import { lockFrame } from "./callouts.ts";
 
 /** 画布：New Task 页（无右栏 / 开着右栏）、右栏星系图（宽 / 最窄可用） */
 const CANVASES = [
@@ -185,5 +186,68 @@ describe("编排星系（行星 = 子智能体、会话 = 碎石）：屏幕上�
       }
     }
     assert.ok(WAITING_SCALE > 1);
+  });
+});
+
+/**
+ * 窄窗（2026-11-24 设计审查 R3 / R8，ann-2：1024×720 的窗口开着右栏，New Task 页的星系只剩约 200px 宽）：
+ * 宁可少画外圈、把碎石块归进角上那一行字，也要保住——行星表情可读、碎石永远小于行星、锁定框不压别的天体、天体都在画布里。
+ */
+const NARROW_CANVASES = [
+  ["窄窗页面 + 右栏（ann-2）", 196, 214],
+  ["窄窗页面 + 右栏 · 矮", 240, 160],
+  ["窄窗页面", 560, 420],
+  ["右栏最窄", 336, 269],
+  ["页面（宽窗，ann-1 的琉璃）", 1088, 726],
+] as const;
+
+describe("编排星系 · 窄窗：行星可读、碎石小于行星、锁定框不压天体、天体不出画", () => {
+  for (const [specName, spec] of AGENT_SPECS) {
+    for (const [canvasName, w, h] of NARROW_CANVASES) {
+      test(`${specName} × ${canvasName}（${w}×${h}）`, () => {
+        const box = galaxyBox(w, h, GALAXY_MAX_FILL);
+        const scene = fitScreenSafe(spec, w, h, box, elevationFor(box), AGENT_READABLE_MAX);
+        const arcs = orbitArcs(scene.layout, scene.camera, scene.viewport);
+        const problems: string[] = [];
+        for (let t = 0; t <= 600; t += 7.3) {
+          const items = drawFrame(scene.layout, scene.camera, scene.viewport, arcs, t, scene.minPlanetPx, DUST_PX, false);
+          const star = items.find((item): item is StarItem => item.kind === "star");
+          const planets = items.filter((item): item is PlanetItem => item.kind === "planet");
+          const rocks = items.filter((item): item is RockItem => item.kind === "rock");
+          for (const p of planets) {
+            // 近侧（画在主星前面）的行星离主星轮廓至少半个行星半径（R8：屏上近相切）
+            if (star !== undefined && p.depth < star.depth) {
+              const gap = Math.hypot(p.x - star.x, p.y - star.y) - star.r * (Math.max(starRadius(spec.starMass), spec.starExtent ?? 0) / starRadius(spec.starMass)) - p.r;
+              if (gap < bodyGapOf(scene.minPlanetPx) - 0.6) problems.push(`t=${t.toFixed(1)} ${p.planetId} 离主星只有 ${gap.toFixed(1)}px`);
+            }
+            if (p.r < AGENT_READABLE_FLOOR - 0.01) problems.push(`t=${t.toFixed(1)} ${p.planetId} 半径 ${p.r.toFixed(1)} < ${AGENT_READABLE_FLOOR}`);
+            if (p.x - p.r < 0 || p.x + p.r > w || p.y - p.r < 0 || p.y + p.r > h) problems.push(`t=${t.toFixed(1)} ${p.planetId} 出画`);
+            if (star !== undefined && star.r < p.r * STAR_OVER_PLANET * 0.99) problems.push(`主星 ${star.r.toFixed(1)} 不够大（行星 ${p.r.toFixed(1)}）`);
+          }
+          for (const rock of rocks) {
+            const smallest = Math.min(...planets.map((p) => p.r));
+            if (planets.length > 0 && rock.r >= smallest) problems.push(`t=${t.toFixed(1)} 碎石 ${rock.r.toFixed(1)} 不小于行星 ${smallest.toFixed(1)}`);
+            // 锁定框（以碎石为中心的方框，半边 = r + LOCK_GAP）不压任何行星；整个框在画布里
+            const { half } = lockFrame(rock.r);
+            for (const p of planets) {
+              const dx = Math.max(Math.abs(rock.x - p.x) - half, 0);
+              const dy = Math.max(Math.abs(rock.y - p.y) - half, 0);
+              if (Math.hypot(dx, dy) < p.r) problems.push(`t=${t.toFixed(1)} 碎石 ${rock.planetId} 的锁定框压在 ${p.planetId} 上`);
+            }
+            if (rock.x - half < 0 || rock.x + half > w || rock.y - half < 0 || rock.y + half > h) problems.push(`t=${t.toFixed(1)} 碎石 ${rock.planetId} 的锁定框出画`);
+          }
+        }
+        assert.deepEqual(problems.slice(0, 5), [], `${problems.length} 处`);
+      });
+    }
+  }
+
+  test("ann-2 那块画布：至少还画着一颗行星（不是整座星系退成一颗主星）；锁定框让开的距离按框算，不按石头算", () => {
+    const [, spec] = AGENT_SPECS[3] as [string, GalaxySpec];
+    const box = galaxyBox(196, 214, GALAXY_MAX_FILL);
+    const scene = fitScreenSafe(spec, 196, 214, box, elevationFor(box), AGENT_READABLE_MAX);
+    assert.ok(scene.layout.planets.length >= 1, `只剩 ${scene.layout.planets.length} 颗`);
+    assert.ok(scene.minPlanetPx >= AGENT_READABLE_FLOOR);
+    assert.ok(ROCK_CLEAR_PX > 4.5);
   });
 });

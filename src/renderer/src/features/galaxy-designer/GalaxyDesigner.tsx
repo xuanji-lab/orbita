@@ -39,6 +39,10 @@ import {
   type PlanetDesign,
 } from "./design.ts";
 import { galaxyDesigns, persistDesign } from "./useGalaxyDesign.ts";
+import type { DesignerFocus } from "../chat/galaxy-actions.ts";
+import { useProtoVariants } from "../chat/proto-variants-store.ts";
+import { nameOrderOf } from "../chat/proto-variants.ts";
+import { storyLineOf } from "./design.ts";
 import { BodyFigure } from "./StarFigure.tsx";
 import { flatStage, ORBIT_BOX, orbitStage, previewPlan, starStage, type GridLine, type WellBox } from "./well.ts";
 
@@ -58,7 +62,7 @@ import { flatStage, ORBIT_BOX, orbitStage, previewPlan, starStage, type GridLine
 /** 设计稿仓库是全应用一份（useGalaxyDesign.ts）：面板写，侧栏头像与工作区页的星系读 */
 const store = galaxyDesigns;
 
-export function GalaxyDesigner(props: { workspace: Workspace | null }) {
+export function GalaxyDesigner(props: { workspace: Workspace | null; focus?: DesignerFocus | null }) {
   const t = useT();
   const tg = t.galaxyDesigner;
   if (props.workspace === null) {
@@ -71,10 +75,10 @@ export function GalaxyDesigner(props: { workspace: Workspace | null }) {
     );
   }
   // key：换工作区整块重挂，本地状态只从这个工作区的设计稿来，不会把上一个的数带过去
-  return <Designer key={props.workspace.id} workspace={props.workspace} />;
+  return <Designer key={props.workspace.id} workspace={props.workspace} focus={props.focus ?? null} />;
 }
 
-function Designer(props: { workspace: Workspace }) {
+function Designer(props: { workspace: Workspace; focus: DesignerFocus | null }) {
   const t = useT();
   const tg = t.galaxyDesigner;
   const id = props.workspace.id;
@@ -85,6 +89,23 @@ function Designer(props: { workspace: Workspace }) {
     persistDesign(id);
   };
   const planets = design.planets ?? [];
+  // 星系上点了主星 / 行星：落到那一页（nonce 变了才落，挂上时也落一次）。只改「正在编辑哪颗」，不动参数
+  const focus = props.focus;
+  useEffect(() => {
+    if (focus === null) return;
+    const current = store.get(id);
+    if (focus.kind === "star") {
+      if (current.editing !== "star") setDesign({ ...current, editing: "star" });
+      return;
+    }
+    const list = current.planets ?? [];
+    const index = list.findIndex((planet, i) => (planet.id ?? `planet-${i + 1}`) === focus.id);
+    if (index >= 0) setDesign(selectPlanet(current, index));
+    // eslint 不在本仓；依赖只认 nonce：同一颗连点两次也要重新落位
+  }, [focus?.nonce]);
+  // 名字：工作区名为主、智能体名为副（候选 agentName=on 时反过来），与页头同一个顺序
+  const variants = useProtoVariants();
+  const names = nameOrderOf(variants.agentName, props.workspace.name, design.star?.name ?? "");
   const kind = design.editing;
   const body: BodyDesign | PlanetDesign | null = kind === "star" ? design.star : design.planet;
   const patchBody = (patch: Partial<PlanetDesign>): void => {
@@ -114,8 +135,9 @@ function Designer(props: { workspace: Workspace }) {
         <>
           <PanelTitle icon="orbit" title={tg.title} />
           <span className="gd-cap-ws" title={props.workspace.path}>
-            {props.workspace.name}
+            {names.primary}
           </span>
+          {names.secondary !== null && <span className="gd-cap-agent">{names.secondary}</span>}
         </>
       }
       headerExtra={<PanelHelp label={tg.helpLabel} text={tg.help} />}
@@ -152,7 +174,6 @@ function Designer(props: { workspace: Workspace }) {
               )}
             </p>
           )}
-          <p className="gd-well-note">{tg.wellNote}</p>
           {/* 钉在顶上的总提示：下面标红的行可能滚出去了，这里一直说着「有几处不合规则」 */}
           {errors.length > 0 && (
             <p className="gd-error gd-error-sum" role="status" data-error-count={errors.length}>
@@ -166,35 +187,32 @@ function Designer(props: { workspace: Workspace }) {
       <div className="gd" data-workspace={id}>
         {/* 这一页画的是谁：主星页写「主星 · 工作区名」（它就是这个工作区的主智能体本人），行星页写「行星 = 子智能体」 */}
         <PanelGroupHead label={kind === "star" ? tg.starWho(props.workspace.name) : tg.planetWho} />
-        <p className="gd-who" data-kind={kind}>
-          {kind === "star" ? tg.starWhoLine : tg.planetWhoLine}
-        </p>
         {/* 主星的一句故事 / 行星的职责：插件稿与伴随文件里来，只读 */}
-        {body !== null && typeof body.note === "string" && body.note !== "" && (
-          <p className="gd-who gd-note" data-kind={kind}>
-            {body.note}
+        {/* 故事只留第一句（插件稿里是一段抒情长句，设计审查 R16） */}
+        {body !== null && typeof body.note === "string" && storyLineOf(body.note) !== "" && (
+          <p className="gd-who gd-note" data-kind={kind} title={body.note}>
+            {storyLineOf(body.note)}
           </p>
         )}
-        {/* 有几颗子智能体就有几颗行星：行星页先挑这一页在改哪一颗 */}
-        {kind === "planet" && planets.length > 1 && (
-          <Row name={tg.whichPlanet}>
-            <Segmented<string>
-              label={tg.whichPlanet}
-              value={String(design.planetIndex ?? 0)}
-              options={planets.map((planet, index) => ({ value: String(index), label: planet.name || tg.unnamedPlanet }))}
-              onChange={(value) => setDesign(selectPlanet(design, Number(value)))}
-            />
-          </Row>
-        )}
-        <Row name={tg.kind} desc={tg.kindDesc}>
-          <Segmented<BodyKind>
-            label={tg.kind}
-            value={kind}
+        {/*
+          一个选择器挑「在改哪颗天体」：主星 | 每颗子智能体（设计审查 R13：原来的「天体类型 主星 / 行星」看着像能把行星改成主星，
+          其实只是切页；两套切换上下分开放）。还没有行星时多一个「行星」，落到添加行星的空页
+        */}
+        <Row name={tg.bodyGroup}>
+          <Segmented<string>
+            label={tg.bodyGroup}
+            value={kind === "star" ? "star" : planets.length > 0 ? `p${design.planetIndex ?? 0}` : "planet"}
             options={[
-              { value: "star", label: tg.star },
-              { value: "planet", label: tg.planet },
+              { value: "star", label: tg.starOption((design.star?.name ?? "").trim() || props.workspace.name) },
+              ...(planets.length > 0
+                ? planets.map((planet, index) => ({ value: `p${index}`, label: planet.name || tg.unnamedPlanet }))
+                : [{ value: "planet", label: tg.planet }]),
             ]}
-            onChange={(editing) => setDesign({ ...design, editing })}
+            onChange={(value) => {
+              if (value === "star") setDesign({ ...design, editing: "star" });
+              else if (value === "planet") setDesign({ ...design, editing: "planet" });
+              else setDesign(selectPlanet(design, Number(value.slice(1))));
+            }}
           />
         </Row>
         {body === null ? (

@@ -32,29 +32,22 @@
   min-width: 3em;
 }
 
-/* 麦克风电平：四根细竖条，亮几根看声音多大；只有「在听」时亮，别的阶段整排淡掉 */
+/* 麦克风电平：五根细竖条排成对称的一小段声波，高度随电平（内联 height）；只在「在听」时出现 */
 .call-meter {
   display: inline-flex;
-  align-items: flex-end;
+  align-items: center;
   gap: var(--space-0-5);
-  height: 12px;
+  /* 占住五根的宽：在想 / 在说时空着，后面的时长不跳 */
+  width: calc(3px * 5 + var(--space-0-5) * 4);
+  height: 14px;
   flex: 0 0 auto;
 }
 
 .call-meter-bar {
   width: 3px;
   border-radius: var(--radius-pill);
-  background: var(--color-border-strong);
-  transition: background-color 80ms linear;
-}
-
-.call-meter-bar:nth-child(1) { height: 4px; }
-.call-meter-bar:nth-child(2) { height: 7px; }
-.call-meter-bar:nth-child(3) { height: 10px; }
-.call-meter-bar:nth-child(4) { height: 12px; }
-
-.call-meter-bar[data-on="true"] {
   background: var(--color-text-secondary);
+  transition: height 80ms linear;
 }
 
 .call-clock {
@@ -79,6 +72,24 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
+}
+
+/* 静音：与挂断同一个形（图标 + 字），次级墨；按下（已静音）铺一层底色 */
+.call-bar .call-mute {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-height-sm);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.call-bar .call-mute[aria-pressed="true"] {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
 }
 
 /* 挂断：危险红字，hover 铺 danger-soft（设计系统「危险红字、hover --color-danger-soft」）。

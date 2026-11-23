@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { orbitStage, previewPlan } from "./well.ts";
 import { describe, test } from "node:test";
 import { DENSITY, MIN_CLEARANCE, PLANET_MASS, PLANET_ZONE, STAR_DENSITY, STAR_MASS, bodyRadius } from "../chat/galaxy.ts";
-import {
+import { storyLineOf,
   bodyArt,
   createDesignStore,
   seededDesign,
@@ -651,5 +651,14 @@ describe("starExtentRatio —— 主星外缘", () => {
     assert.equal(starExtentRatio(off), 1);
     assert.equal(starExtentRatio({ ...off, star: { ...off.star, elements: { ...off.star.elements, corona: true } } }), 1.32);
     assert.equal(starExtentRatio({ ...off, star: { ...off.star, elements: { ...off.star.elements, ring: true, corona: true } } }), RING.rx);
+  });
+});
+
+describe("storyLineOf —— 设计面板里的故事只留第一句", () => {
+  test("破折号之后的展开不要，取第一个句号前", () => {
+    assert.equal(storyLineOf("烛霓的橙红云带里流转着霓虹风暴——任何一句含混的意图飘进它的大气，都会被拆开。第二句。"), "烛霓的橙红云带里流转着霓虹风暴");
+    assert.equal(storyLineOf("一颗安静的冰质卫星。它记得每一件交过的活。"), "一颗安静的冰质卫星。");
+    assert.equal(storyLineOf("  没有标点  "), "没有标点");
+    assert.equal(storyLineOf(""), "");
   });
 });

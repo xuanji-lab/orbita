@@ -213,16 +213,50 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* 窄到放不下时先让状态胶囊让位，名字最后才省略（同会话胶囊的让位顺序） */
+/*
+ * 窄窗让位顺序（设计审查 R3：1024 宽开着右栏时胶囊被挤没）：会话标题最先省略 → 副名 → 主名；状态胶囊永远保留、不缩。
+ * flex-shrink 拉开档位：标题 100、副名 10、主名 1、胶囊 0
+ */
+.cap-sess .cap-sc > .cap-task {
+  flex-shrink: 100;
+}
+.cap-sess .cap-sc > .cap-status {
+  flex: none;
+}
+/* 再窄（胶囊位 ≤ 300px）：副名整个让出去，主名只省略不被挤成一两个字 */
 @container (max-width: 300px) {
-  .cap-sess .cap-status {
+  .cap-sess .cap-home > .cap-ws {
     display: none;
   }
+}
+/* 头像 + 名字 = 回 New Task 页的按钮：不画底，悬停给一层底色，与状态胶囊同一个圆角档 */
+.cap-home {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  overflow: hidden;
+  height: var(--control-height-xs);
+  padding: 0 var(--space-1) 0 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.cap-home:hover {
+  background: var(--color-bg-hover);
+}
+.cap-home > .cap-title {
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 /* 页头：主智能体名字之后的工作区名（一档淡墨、小一档），说明「这是哪座星系的主智能体」 */
 .cap-ws {
-  flex: 0 1 auto;
+  flex: 0 10 auto;
   min-width: 0;
   overflow: hidden;
   font-size: var(--font-size-sm);

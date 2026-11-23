@@ -32,6 +32,12 @@ export function GalaxyCallouts(props: {
   width: number;
   height: number;
   waitingWord: string;
+  /**
+   * 给了 = 在做事的天体（碎石块 = 会话）能点：点了 / 回车 / 空格打开它（GalaxyActions.openSession）。
+   * 命中圈比天体大一圈，悬停与键盘聚焦时亮一圈细环，没写引线的那块同时出名字。
+   */
+  onActivate?: ((id: string) => void) | undefined;
+  activateLabel?: ((title: string) => string) | undefined;
 }) {
   const [glyphPx, setFontSize] = useState(12);
   const probeRef = useRef<SVGTextElement | null>(null);
@@ -80,7 +86,8 @@ export function GalaxyCallouts(props: {
       <text ref={probeRef} className="galaxy-callout-text" x={-999} y={-999} aria-hidden="true">
         {""}
       </text>
-      {working.map((planet) => (
+      {/* 锁定框只给写了引线的：没有字的框什么也没说明（2026-11-24 设计审查 R9），其余在做事的只是一块碎石，悬停出名字 */}
+      {working.filter((planet) => byId.has(planet.planetId)).map((planet) => (
         <path
           key={`lock-${planet.planetId}`}
           className="galaxy-lock"
@@ -92,7 +99,16 @@ export function GalaxyCallouts(props: {
       {placed.map((item) => {
         const target = targets.find((each) => each.id === item.id);
         return (
-          <g key={`callout-${item.id}`} className="galaxy-callout" data-planet={item.id} data-state={target?.state} data-dir={item.dir}>
+          // 引线上的字也能点（鼠标）：与它那块碎石同一个去处；键盘焦点只落在碎石上，不重复一个 tab 位
+          <g
+            key={`callout-${item.id}`}
+            className="galaxy-callout"
+            data-planet={item.id}
+            data-state={target?.state}
+            data-dir={item.dir}
+            data-link={props.onActivate === undefined ? undefined : "true"}
+            onClick={props.onActivate === undefined ? undefined : () => props.onActivate?.(item.id)}
+          >
             <path
               className="galaxy-callout-line"
               d={`M${item.start.x.toFixed(1)} ${item.start.y.toFixed(1)}L${item.elbow.x.toFixed(1)} ${item.elbow.y.toFixed(1)}L${item.end.x.toFixed(1)} ${item.end.y.toFixed(1)}`}
@@ -104,22 +120,51 @@ export function GalaxyCallouts(props: {
         );
       })}
       {/* 没画引线的行星：悬停出名字（命中圈比星体大一圈）。有引线的已经写着了，不重复 */}
-      {ordered.map((planet) =>
-        byId.has(planet.planetId) || planet.label === null || planet.label === "" ? null : (
+      {ordered.map((planet) => {
+        const labelled = planet.label !== null && planet.label !== "";
+        const busy = planet.state === "waiting" || planet.state === "running";
+        const tagX = planet.x > props.width * 0.65 ? planet.x - planet.r - 7 : planet.x + planet.r + 7;
+        const anchor = planet.x > props.width * 0.65 ? "end" : "start";
+        const tag =
+          byId.has(planet.planetId) || !labelled ? null : (
+            <text className="galaxy-tag-text" x={tagX} y={planet.y} textAnchor={anchor} dominantBaseline="central">
+              {truncateLabel(planet.label ?? "")}
+            </text>
+          );
+        const activate = props.onActivate;
+        if (activate !== undefined && busy && labelled) {
+          // 能点的碎石：一个键盘可达的按钮（role=button + tabIndex），key 按 id 稳定——它每帧都在动，焦点不丢
+          const label = props.activateLabel?.(planet.label ?? "") ?? planet.label ?? "";
+          return (
+            <g
+              key={`hit-${planet.planetId}`}
+              className="galaxy-tag galaxy-target"
+              data-target="rock"
+              data-planet={planet.planetId}
+              role="button"
+              tabIndex={0}
+              aria-label={label}
+              onClick={() => activate(planet.planetId)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                activate(planet.planetId);
+              }}
+            >
+              <title>{label}</title>
+              <circle className="galaxy-hit" cx={planet.x} cy={planet.y} r={Math.max(planet.r + 7, 12)} />
+              <circle className="galaxy-target-ring" cx={planet.x} cy={planet.y} r={planet.r + 4} />
+              {tag}
+            </g>
+          );
+        }
+        return tag === null ? null : (
           <g key={`tag-${planet.planetId}`} className="galaxy-tag">
             <circle className="galaxy-hit" cx={planet.x} cy={planet.y} r={planet.r + 7} />
-            <text
-              className="galaxy-tag-text"
-              x={planet.x > props.width * 0.65 ? planet.x - planet.r - 7 : planet.x + planet.r + 7}
-              y={planet.y}
-              textAnchor={planet.x > props.width * 0.65 ? "end" : "start"}
-              dominantBaseline="central"
-            >
-              {truncateLabel(planet.label)}
-            </text>
+            {tag}
           </g>
-        ),
-      )}
+        );
+      })}
     </g>
   );
 }
