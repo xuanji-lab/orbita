@@ -22,7 +22,7 @@ describe("RightPanelMemoryStore", () => {
     strictEqual(await new RightPanelMemoryStore(file).load(), null);
     await writeFile(file, "{not json");
     strictEqual(await new RightPanelMemoryStore(file).load(), null);
-    await writeFile(file, JSON.stringify({ version: 2, entries: [] }));
+    await writeFile(file, JSON.stringify({ version: 3, entries: [] }));
     strictEqual(await new RightPanelMemoryStore(file).load(), null);
   });
 
@@ -32,6 +32,16 @@ describe("RightPanelMemoryStore", () => {
     await new RightPanelMemoryStore(file).save(body);
     deepStrictEqual(JSON.parse(await readFile(file, "utf8")), body);
     deepStrictEqual(await new RightPanelMemoryStore(file).load(), body);
+  });
+
+  it("version 1（旧格式）与 2 都能读回，版本原样保留", async () => {
+    const file = await scratch();
+    const old = { version: 1, entries: [{ id: "a", panel: "plugins", sub: { selected: "x" } }] };
+    await writeFile(file, JSON.stringify(old));
+    deepStrictEqual(await new RightPanelMemoryStore(file).load(), old);
+    const next = { version: 2, entries: [{ id: "a", panel: "docs", subs: { plugins: { selected: "x" } } }] };
+    await new RightPanelMemoryStore(file).save(next);
+    deepStrictEqual(await new RightPanelMemoryStore(file).load(), next);
   });
 
   it("连着 save 两次：后到的一份最后落盘", async () => {

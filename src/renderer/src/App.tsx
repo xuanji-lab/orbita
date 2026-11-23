@@ -40,23 +40,24 @@ import { docPanelLayout } from "./features/doc-panel/doc-panel-width.ts";
 import { DocPaperContext, effectivePaper } from "./features/doc-panel/doc-paper.ts";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
 import {
-  CLOSED_ENTRY,
   composeEntry,
   forgetMissing,
   hasEntry,
   hasSubLayer,
   mergeLoaded,
   panelFromHome,
+  pathOf,
   parseMemoryFile,
-  parsePath,
   recallEntry,
   rememberEntry,
   resolveSubSessionsSub,
+  subOf,
   taskTabOf,
   toMemoryFile,
   type PanelEntry,
   type PanelMemory,
   type PanelPath,
+  withPanelRoot,
 } from "./shell/right-panel-memory.ts";
 import { dropDraft, putDraft, shouldOpenDraft, draftOf, type PluginDraftTarget, type PluginDrafts } from "./features/plugins/plugin-draft.ts";
 import type { PluginOpenRequest } from "./features/plugins/PluginsView.tsx";
@@ -596,7 +597,13 @@ export function App() {
   /** 右栏此刻属于哪条会话（null = 首页 / 还没有会话，不写记忆）与第几次恢复；面板内容的 key 用 */
   const [railCtx, setRailCtx] = useState<{ owner: string | null; epoch: number }>(() => ({ owner: mainOpenId === "" ? null : mainOpenId, epoch: 0 }));
   /** 当前面板自己报上来的「停在哪一层」；panel 与 rightPanel 不一致的那份是过期的，下面的 effect 会清掉 */
-  const [railPath, setRailPath] = useState<PanelPath>(CLOSED_ENTRY);
+  const [railPath, setRailPath] = useState<PanelPath>({ panel: null });
+  /**
+   * 交给面板的路径：railPath 的 panel 与 rightPanel 不一致 = 刚换面板、面板还没报——这一拍直接取记忆里该面板
+   * 自己的 sub，面板挂载时就能从上次的位置起（不等 effect 把 railPath 换过去再重挂）
+   */
+  const livePath: PanelPath =
+    railPath.panel === rightPanel ? railPath : pathOf(recallEntry(panelMemoryRef.current, railCtx.owner), rightPanel);
   /**
    * 一次性：恢复成这个面板，而不是会话自己的记忆。`sessionId` 为 null = 下一条**还没记过面板的新会话**拿到 id 时
    * （「和智能体一起做一个」用）；给了 id = 只在切到**那一条**会话时（「正在做」的「回到对话」用：它早就有自己的面板记忆）。
@@ -1075,6 +1082,7 @@ export function App() {
         if (event.type !== "pluginDraft") return;
         setPluginDrafts((drafts) => putDraft(drafts, event.sessionId, event.path));
         if (shouldOpenDraft({ eventSessionId: event.sessionId, viewedSessionId: draftContext.current })) {
+          setOpenedDraft(null); // 新预览优先于早先点开、后来切走的那份
           setRightPanel("plugins");
         }
       }),
@@ -1178,12 +1186,11 @@ export function App() {
   sessionsRef.current = session.sessions;
   /** 面板换了：上一个面板报的第二层作废（面板自己挂上后会报新的） */
   useEffect(() => {
-    setRailPath((current) => (current.panel === rightPanel ? current : (parsePath({ panel: rightPanel }) ?? CLOSED_ENTRY)));
+    setRailPath((current) => (current.panel === rightPanel ? current : pathOf(recallEntry(panelMemoryRef.current, railCtx.owner), rightPanel)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- owner 只在切会话时变，那一拍由下面「按会话恢复」整批设好
   }, [rightPanel]);
-  /** 点开的草稿属于插件面板：面板换走就放下（同其余面板「换走回到根」） */
-  useEffect(() => {
-    if (rightPanel !== "plugins") setOpenedDraft(null);
-  }, [rightPanel]);
+  // 点开的草稿是插件面板的第二层：换到别的面板**不放下**它（放下就等于「关了」，切回来只剩列表）；
+  // 关草稿走 leavePluginDraft，由写穿把记忆里 subs.plugins.draft 清掉。切会话时按那条会话的记忆重设（见下）
   // 切主槽会话：恢复目标会话记着的路径（没记过 = 关着）。面板、页签、第二层、子会话面板的层、
   // 草稿在同一批里设好；epoch +1 让面板内容重挂。一次性信号（审查定位、记忆页签、「/ + 空格」选取态）
   // 都属于离开的那条会话，不带过去——否则重挂后会拿着旧会话的路径去定位
@@ -1195,25 +1202,24 @@ export function App() {
     let recalled: PanelEntry = recallEntry(panelMemoryRef.current, target);
     const carry = carryPanelRef.current;
     if (carry !== null && target !== null && (carry.sessionId === null ? !hasEntry(panelMemoryRef.current, target) : carry.sessionId === target)) {
-      const bare = parsePath({ panel: carry.panel }) ?? CLOSED_ENTRY;
-      recalled = recalled.taskTab === undefined ? bare : { ...bare, taskTab: recalled.taskTab };
+      recalled = withPanelRoot(recalled, carry.panel);
       carryPanelRef.current = null;
     }
     // 从首页发第一句：开着的是文档 / 演示文稿面板就留着（panelFromHome）
     const keepFromHome = panelFromHome(panelMemoryRef.current, previous, target, rightPanel);
     if (keepFromHome !== null) {
-      const bare = parsePath({ panel: keepFromHome }) ?? CLOSED_ENTRY;
-      recalled = recalled.taskTab === undefined ? bare : { ...bare, taskTab: recalled.taskTab };
+      recalled = withPanelRoot(recalled, keepFromHome);
     }
     const nextTab = taskTabOf(recalled);
     // 恢复出来的面板不是用户打开的：面板打开次数不记它（见下方 countPanel 的效果）
     if (recalled.panel !== rightPanel || nextTab !== taskTab) panelRestoredRef.current = true;
     const children = new Set(target === null ? [] : childSessions(sessionsRef.current, target).map((meta) => meta.id));
-    const nav = recalled.panel === "subsessions" ? resolveSubSessionsSub(recalled.sub, children) : undefined;
+    // 子会话层 / 草稿是各自面板的第二层：不论恢复出来开着哪个面板，都按记忆接回（切到别的面板不算关）
+    const nav = resolveSubSessionsSub(subOf(recalled, "subsessions"), children);
     setRightPanel(recalled.panel);
     setTaskTab(nextTab);
-    setRailPath(parsePath(recalled) ?? CLOSED_ENTRY);
-    setOpenedDraft(recalled.panel === "plugins" ? (recalled.sub?.draft ?? null) : null);
+    setRailPath(pathOf(recalled));
+    setOpenedDraft(subOf(recalled, "plugins")?.draft ?? null);
     setSubSessionsNav(nav === undefined ? SUB_SESSIONS_LIST : openSubSession(nav.sessionId));
     setReviewFocus(null);
     setMemoryFocus(null);
@@ -1240,7 +1246,7 @@ export function App() {
   const openedSubSessionId = subSessionsNav.kind === "session" ? subSessionsNav.sessionId : null;
   useEffect(() => {
     if (railCtx.owner === null) return;
-    const entry = composeEntry({ rightPanel, path: railPath, openedDraft, subSessionId: openedSubSessionId, taskTab });
+    const entry = composeEntry({ rightPanel, path: railPath, openedDraft, subSessionId: openedSubSessionId, taskTab }, panelMemoryRef.current.get(railCtx.owner));
     const next = rememberEntry(panelMemoryRef.current, railCtx.owner, entry);
     if (next === panelMemoryRef.current) return;
     panelMemoryRef.current = next;
@@ -1616,7 +1622,7 @@ export function App() {
                   onJumpExcerpt={openExcerpt}
                   onOpenInFiles={focus.openFile}
                   memoryFocus={memoryFocus}
-                  {...(railPath.panel === "review" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  {...(livePath.panel === "review" && livePath.sub !== undefined ? { sub: livePath.sub } : {})}
                   onSubChange={(sub) => reportRailPath({ panel: "review", ...(sub === undefined ? {} : { sub }) })}
                 />
               ) : shownPanel === "automation" ? (
@@ -1636,7 +1642,7 @@ export function App() {
                     void session.openSession(id);
                   }}
                   onAskInChat={() => session.setDraft(t.automation.addByChatDraft)}
-                  {...(railPath.panel === "automation" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  {...(livePath.panel === "automation" && livePath.sub !== undefined ? { sub: livePath.sub } : {})}
                   onSubChange={(sub) => reportRailPath({ panel: "automation", ...(sub === undefined ? {} : { sub }) })}
                 />
               ) : shownPanel === "terminal" ? (
@@ -1671,7 +1677,7 @@ export function App() {
                   cwd={session.cwd ?? ""}
                   tab={taskTab}
                   onTab={setTaskTab}
-                  {...(railPath.panel === "context" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  {...(livePath.panel === "context" && livePath.sub !== undefined ? { sub: livePath.sub } : {})}
                   onSubChange={(sub) => reportRailPath({ panel: "context", ...(sub === undefined ? {} : { sub }) })}
                   runState={mainMeta === undefined ? null : runStateOf(session, mainMeta)}
                   onStartGoalTask={startGoalTask}
@@ -1690,7 +1696,7 @@ export function App() {
                   onOpenDraft={openPluginDraft}
                   onOpenSession={openDraftSession}
                   picker={tokenPickerOn ? tokenPicker : undefined}
-                  {...(railPath.panel === "plugins" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  {...(livePath.panel === "plugins" && livePath.sub !== undefined ? { sub: livePath.sub } : {})}
                   onSubChange={(sub) => reportRailPath({ panel: "plugins", ...(sub === undefined ? {} : { sub }) })}
                 />
               ) : shownPanel === "intent" ? (
@@ -1706,7 +1712,7 @@ export function App() {
                   liveTurnIds={intentLiveTurnIds}
                   openableSessionIds={intentOpenableIds}
                   onOpenSession={openInSideChat}
-                  {...(railPath.panel === "intent" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  {...(livePath.panel === "intent" && livePath.sub !== undefined ? { sub: livePath.sub } : {})}
                   onSubChange={(sub) => reportRailPath({ panel: "intent", ...(sub === undefined ? {} : { sub }) })}
                 />
               ) : shownPanel === "subsessions" && channelParentId !== null ? (
