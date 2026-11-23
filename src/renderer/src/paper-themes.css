@@ -86,9 +86,7 @@
 }
 
 :root[data-theme="copybook"] .composer-chip-face {
-  box-shadow:
-    inset 0 0 0 1px var(--chip-stroke),
-    0 1px 1.5px color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+  box-shadow: 0 1px 1.5px color-mix(in srgb, var(--color-text-primary) 10%, transparent);
 }
 
 /* 粘贴展开段（copybook 变体，方案 C）：不涂修正液也不白底——它是正文不是涂改，

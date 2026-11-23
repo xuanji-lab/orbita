@@ -1,5 +1,5 @@
 import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Icon } from "./Icon";
+import { Icon, type IconName } from "./Icon";
 import { IconButton } from "./IconButton";
 import { Menu } from "./Menu";
 import { MaterialStack } from "./composer-material-stack.tsx";
@@ -29,7 +29,6 @@ import {
 import {
   chipRangeAfter,
   chipRangeBefore,
-  chipRemovalRange,
   chipIconName,
   mirrorSegments,
   parseChips,
@@ -84,38 +83,20 @@ function syncMirror(textarea: HTMLTextAreaElement, mirror: HTMLDivElement): void
 }
 
 /**
- * 指针下是哪颗胶囊的 ×（返回那颗 chip 的起点）。textarea 盖在镜像上，× 收不到指针事件——
- * 按坐标对镜像里的 × 量。外扩 2px：12px 的字形太小，点偏一点也算。
- */
-function chipCloseAt(mirror: HTMLDivElement | null, x: number, y: number): number | null {
-  if (mirror === null) return null;
-  for (const close of mirror.querySelectorAll<HTMLElement>(".composer-chip-x")) {
-    const box = close.getBoundingClientRect();
-    if (x >= box.left - 2 && x <= box.right + 2 && y >= box.top - 2 && y <= box.bottom + 2) {
-      const start = Number(close.dataset["chipStart"]);
-      return Number.isInteger(start) ? start : null;
-    }
-  }
-  return null;
-}
-
-/**
- * 胶囊的脸：类别图标 + 名字 + ×，盖在 token 原文自己的格子上（原文透明、只占位）。
+ * 胶囊的脸：图标 + 名字，盖在 token 原文自己的格子上（原文透明、只占位）。没有 ×：
+ * 删整颗走退格 / Delete（2026-11-23 用户：「我们可以用 delete 键，为什么要用 x 呢」）。
  * **不贡献任何文字**：镜像的 textContent 必须与 textarea 逐字一致（caret-point 的
  * locateText 靠它）——图标是无文本的 SVG，名字走 ::before 的 attr(data-name)。
- * 名字继承输入框的字（同字体、同字号、同字距），所以它的宽度就是原文里名字那一截的宽度，
- * 藏掉的 `/skill:`（34px）/ `/mcp:`（37.5px）正好让给图标、× 与左右留白。
- * 插件 chip 写的是**显示名**（可能是中文，宽度与标识不同）：名字槽可收缩、放不下时省略号截断，
- * 胶囊永远不超出 token 原文占的格子（超出会盖住后面的字）。
+ * 名字继承输入框的字（同字体、同字号、同字距）；原文比脸宽时（藏掉的 `/skill:` 前缀、
+ * 插件写中文显示名）脸在格子里居中，多出来的宽度均分成两头的留白。
+ * 放不下（名字比原文宽）时名字省略号截断，胶囊永远不超出 token 原文占的格子（超出会盖住后面的字）。
+ * 五种胶囊一个长相，只是颜色不同：技能绿、MCP 蓝、插件橙；粘贴的长文本、附图「图 N」是中性灰。
  */
-function ChipFace(props: { kind: ChipKind; name: string; start: number }) {
+function ChipFace(props: { icon: IconName; name: string }) {
   return (
     <span className="composer-chip-face" aria-hidden="true">
-      <Icon name={chipIconName(props.kind)} size={12} strokeWidth={1.8} />
+      <Icon name={props.icon} size={12} strokeWidth={1.8} />
       <span className="composer-chip-name" data-name={props.name} />
-      <span className="composer-chip-x" data-chip-start={props.start}>
-        <Icon name="x" size={12} strokeWidth={2} />
-      </span>
     </span>
   );
 }
@@ -201,10 +182,8 @@ export function Composer(props: {
   const chips = useMemo(() => parseChips(props.value), [props.value]);
   // 插件 chip 写显示名（中文）；表由插件页与首次订阅填
   const pluginNames = usePluginNames();
-  // 镜像里的 chip 段按起点找回那颗 chip（胶囊的名字、× 的归属都要它）
+  // 镜像里的 chip 段按起点找回那颗 chip（胶囊的名字要它）
   const chipAt = useMemo(() => new Map(chips.map((chip) => [chip.start, chip])), [chips]);
-  // 指针停在哪颗胶囊的 × 上（chip 起点）：× 提亮、指针变手
-  const [closeHover, setCloseHover] = useState<number | null>(null);
   // 光标吸附（snapSelection）要的上一次选区：键盘移动靠它判方向；按着鼠标时不吸（拖选中），
   // 松手再按「指针」口径吸一次
   const lastSelectionRef = useRef<TextSelection>({ start: 0, end: 0 });
@@ -217,17 +196,6 @@ export function Composer(props: {
       el.setSelectionRange(snapped.start, snapped.end, el.selectionDirection);
     }
     lastSelectionRef.current = snapped;
-  };
-  /** 点胶囊的 ×：删整颗（连带一个空格，chipRemovalRange）。走 execCommand 保撤销栈；被拒退 setRangeText */
-  const removeChip = (el: HTMLTextAreaElement, start: number): void => {
-    const chip = parseChips(el.value).find((each) => each.start === start);
-    if (chip === undefined) return;
-    const range = chipRemovalRange(el.value, chip);
-    el.focus({ preventScroll: true });
-    el.setSelectionRange(range.start, range.end);
-    if (!document.execCommand("delete")) el.setRangeText("", range.start, range.end, "end");
-    lastSelectionRef.current = { start: range.start, end: range.start };
-    setCloseHover(null);
   };
   // ── 句中粘贴块（方案 C，paste-blocks.ts）──────────────────────────────
   // token 只画有主的：块已沉默（删了又没发）或手打的 token 形状只是普通文字，
@@ -283,6 +251,27 @@ export function Composer(props: {
       return { segment, offset: at };
     });
   }, [segments]);
+  // 每颗胶囊的脸（种类、图标、名字），按镜像段的起点查：技能 / MCP / 插件按 token，
+  // 粘贴的长文本写「粘贴 1 · 40 行」、附图写编号——都去掉方括号、配图标（2026-11-23 用户定）。
+  // 粘贴名字去掉原文里的空格：方括号 + 空格省下的宽度刚好让给图标与两头留白（原文 `[粘贴 1 · 40 行]`
+  // 与脸同字同号）；附图的原文 `[图 1]` 太窄，图标后面只写编号，「图」由图标表达
+  const pasteAt = useMemo(() => new Map(paintedPasteTokens.map((token) => [token.start, token])), [paintedPasteTokens]);
+  const imageRefAt = useMemo(() => new Map(imageRefs.map((ref) => [ref.start, ref])), [imageRefs]);
+  const chipFaceAt = (offset: number): { kind: string; icon: IconName; name: string } | null => {
+    const chip = chipAt.get(offset);
+    if (chip !== undefined) {
+      return {
+        kind: chip.kind,
+        icon: chipIconName(chip.kind),
+        name: chip.kind === "plugin" ? pluginChipName(pluginNames, chip.target) : chip.target,
+      };
+    }
+    const paste = pasteAt.get(offset);
+    if (paste !== undefined) return { kind: "paste", icon: "clipboard-list", name: t.composer.pasteChipName(paste.seq, paste.lines) };
+    const ref = imageRefAt.get(offset);
+    if (ref !== undefined) return { kind: "image", icon: "image", name: String(ref.n) };
+    return null;
+  };
   /** 展开一块：token 换回全文（execCommand 保撤销栈），区间写回块状态。
    *  区间里的文字从块存的全文来——收起态下它就是唯一真相 */
   const expandPaste = (seq: number): void => {
@@ -433,18 +422,11 @@ export function Composer(props: {
         */}
         <div ref={mirrorRef} className="composer-input composer-mirror" data-script={script} aria-hidden="true">
           {segmentsWithOffsets.map(({ segment, offset }, index) => {
-            const chip = segment.chipKind !== undefined ? chipAt.get(offset) : undefined;
+            const face = segment.chip ? chipFaceAt(offset) : null;
             return segment.chip ? (
-              <span
-                key={index}
-                className="composer-chip"
-                data-kind={segment.chipKind ?? undefined}
-                data-close-hover={chip !== undefined && closeHover === offset ? "" : undefined}
-              >
+              <span key={index} className="composer-chip" data-kind={face?.kind}>
                 {segment.text}
-                {chip !== undefined && (
-                  <ChipFace kind={chip.kind} name={chip.kind === "plugin" ? pluginChipName(pluginNames, chip.target) : chip.target} start={chip.start} />
-                )}
+                {face !== null && <ChipFace icon={face.icon} name={face.name} />}
               </span>
             ) : segment.pasteRun ? (
               <span key={index} className="composer-paste-run">
@@ -506,13 +488,6 @@ export function Composer(props: {
           onMouseDown={(event) => {
             if (event.button !== 0) return;
             const el = event.currentTarget;
-            // 点在胶囊的 × 上：不动光标、不开始拖选，直接删整颗
-            const close = chipCloseAt(mirrorRef.current, event.clientX, event.clientY);
-            if (close !== null && !disabled && !dictating) {
-              event.preventDefault();
-              removeChip(el, close);
-              return;
-            }
             pointerDownRef.current = true;
             // 按下的那一下光标可能落在胶囊中间：下一帧就挂到最近的一边，不等松手（继续拖的话
             // 浏览器仍从自己的锚点扩选，松手时再整颗吸）
@@ -527,13 +502,6 @@ export function Composer(props: {
               },
               { once: true },
             );
-          }}
-          onMouseMove={(event) => {
-            const close = chipCloseAt(mirrorRef.current, event.clientX, event.clientY);
-            if (close !== closeHover) setCloseHover(close);
-          }}
-          onMouseLeave={() => {
-            if (closeHover !== null) setCloseHover(null);
           }}
           onClick={(event) => {
             // 点在句中粘贴胶囊上 = 展开（方案 C：点开 = 全文真正回到输入框里）。
@@ -723,7 +691,6 @@ export function Composer(props: {
             overflowY: "hidden",
             outline: "none",
             // 字的颜色不在这里：textarea 的字透明、由镜像层画（styles.css 的 .composer-field > textarea）
-            cursor: closeHover !== null ? "pointer" : undefined,
           }}
         />
       </div>

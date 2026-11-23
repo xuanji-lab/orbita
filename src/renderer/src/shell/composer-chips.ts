@@ -10,7 +10,7 @@
  * 2026-10-30 起 chip 画成胶囊（图标 + 名字 + ×，前缀不显示）：textarea 的字透明、
  * 全部的字由镜像层画，token 原文在两层里照样占位（排版逐像素一致，光标与选区
  * 对得上），胶囊盖在原文自己的格子上。于是原文里 chip 中间的位置在屏幕上不存在了——
- * 光标与选区的端点要吸到 chip 的边上（snapSelection），× 删整颗（chipRemovalRange）。
+ * 光标与选区的端点要吸到 chip 的边上（snapSelection）。胶囊没有 ×（2026-11-23 用户：「我们可以用 delete 键，为什么要用 x」），删整颗走退格 / Delete。
  *
  * **token 识别复用发送端的 `findInvocationTokens`**（src/shared/invocation.ts）：
  * 发送时会组装指令块的边界（`/` 前是行首或空白、target 到下一个空白）就是 chip
@@ -127,22 +127,6 @@ export function snapSelection(
     end = prev !== null && prev.end >= endChip.end ? endChip.start : endChip.end;
   }
   return start <= end ? { start, end } : { start: end, end: end };
-}
-
-/** 「空白」的口径：空格、制表、全角空格（token 的边界允许的那几种，换行除外） */
-function isInlineSpace(char: string | undefined): boolean {
-  return char === " " || char === "\t" || char === "\u3000";
-}
-
-/**
- * 点胶囊的 × 删掉的区间：整颗 token，连带它后面的一个空格（插入 token 时自带的那个）；
- * 后面没有空格（句末 / 换行前）就带走前面的一个——删完不留双空格，也不留行尾空格。
- * 退格整删（chipRangeBefore）只删 token 本身：光标就在 token 尾，多吃一个空格反而意外。
- */
-export function chipRemovalRange(text: string, chip: { start: number; end: number }): TextSelection {
-  if (isInlineSpace(text[chip.end])) return { start: chip.start, end: chip.end + 1 };
-  if (chip.start > 0 && isInlineSpace(text[chip.start - 1])) return { start: chip.start - 1, end: chip.end };
-  return { start: chip.start, end: chip.end };
 }
 
 /** 镜像层的渲染分段：修正液、chip 与粘贴展开段三层区间叠在同一份文本上 */
