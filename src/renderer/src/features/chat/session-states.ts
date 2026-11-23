@@ -34,13 +34,6 @@ import type { FileTurnView, RevertRecord, UndoRecord } from "@shared/revert";
 import type { TranscriptRecord } from "@shared/session";
 import type { Messages } from "../../messages-en.ts";
 
-/** 一次待应答的工具审批。requestId = `${sessionId}:${toolCallId}`，全局唯一。 */
-export interface PendingApproval {
-  requestId: string;
-  toolName: string;
-  input: unknown;
-}
-
 /**
  * 排队里的一条。
  *
@@ -158,7 +151,6 @@ export interface SessionEntry {
    * observedThinkingFor**，不直接拿 supported（切型号不清这里，按型号判过期）。
    */
   thinking: ObservedThinking | null;
-  approvals: PendingApproval[];
   /**
    * 轮尾文件账（revert.ts，与 marks 同一条纪律）：不进归约器，卡片层直接消费；
    * 实时事件（fileTurnView，剥掉正文的视图）与盘上种子（FileTurnRecord，视图的
@@ -242,7 +234,6 @@ export const EMPTY_ENTRY: SessionEntry = {
   turnError: null,
   stats: null,
   thinking: null,
-  approvals: [],
   fileTurns: [],
   reverts: [],
   undos: [],
@@ -254,7 +245,7 @@ export const EMPTY_ENTRY: SessionEntry = {
 };
 
 /**
- * 事件的唯一入口。progress / phase / permission / failed 各进各的槽；
+ * 事件的唯一入口。progress / phase / failed 各进各的槽；
  * ready / builtins / created 与槽无关（live 集合是 hook 自己的账）。
  * 没有对应槽时**就地建槽**——renderer 重载后事件照样开始累积。
  */
@@ -282,10 +273,8 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
       // 回合失败标注只随「新一轮开跑」消失：非 idle 的 phase 事件清它；
       // 落定的 idle **不清**——failed(turn) 之后紧随的 agent_settled 正是 idle
       ...(event.phase === "idle" ? null : { turnError: null }),
-      // 轮结束就不可能还有挂起的审批：停止 / 抢跑时 runtime 已按拒绝把它们结清
-      // （审批不听 abort，只能手动结）。卡片留着的话，用户会去回答一个已经不存在的请求。
-      // 乐观回显同理：真回显没来轮就落定 = 它失败了，不留鬼影
-      ...(event.phase === "idle" ? { approvals: [], pendingEcho: null } : null),
+      // 乐观回显：真回显没来轮就落定 = 它失败了，不留鬼影
+      ...(event.phase === "idle" ? { pendingEcho: null } : null),
     }));
   }
   if (event.type === "retry") {
@@ -336,15 +325,6 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
         level: event.level,
         supported: event.supported,
       },
-    }));
-  }
-  if (event.type === "permission") {
-    return update(states, event.sessionId, (entry) => ({
-      ...entry,
-      approvals: [
-        ...entry.approvals,
-        { requestId: event.requestId, toolName: event.toolName, input: event.input },
-      ],
     }));
   }
   // 意图系统（实验功能）：流事件归约运行卡、终态记录落桶并收摊运行卡、确认请示挂起
@@ -536,7 +516,6 @@ export function seedFromDisk(
     stats,
     // 思考档真值不落盘（meta 里的意图档才是持久事实）：种盘即空，等下一次开轮的推送
     thinking: null,
-    approvals: [],
     fileTurns,
     reverts,
     undos,
@@ -716,19 +695,6 @@ export function compactionBoundaryStatus(record: CompactedRecord, t: Messages): 
     return t.chat.tokensApprox(before);
   }
   return t.chat.tokensArrow(before, record.tokensAfter.toLocaleString("en-US"));
-}
-
-/** 按 requestId 跨槽摘除一条审批。没有匹配就原样返回（同一引用）。 */export function removeApproval(states: SessionStates, requestId: string): SessionStates {
-  for (const [sessionId, entry] of states) {
-    if (!entry.approvals.some((approval) => approval.requestId === requestId)) continue;
-    const next = new Map(states);
-    next.set(sessionId, {
-      ...entry,
-      approvals: entry.approvals.filter((approval) => approval.requestId !== requestId),
-    });
-    return next;
-  }
-  return states;
 }
 
 /** 按 requestId 跨槽摘掉挂起的意图确认请示。没有匹配就原样返回（同一引用）。 */

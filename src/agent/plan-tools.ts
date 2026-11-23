@@ -7,13 +7,12 @@
  * 落在转录上。界面（右栏「这条任务 › 进度」）从转录里推出版本线（plan-timeline.ts）——
  * 回退、分支、重开会话都跟着转录走，不会出现「计划还在、对话已经回退」的两份真相。
  *
- * 权限：三档一律放行（shared/permission.ts 的 PLAN_TOOL）——它只是把打算说出来，
- * 不碰用户的文件与 shell；plan 档尤其要用得上。
+ * 它只是把打算说出来，不碰用户的文件与 shell。
  *
  * **停下来对齐，在聊天里对齐**（2026-10-30 用户：「我不希望这方面老是找用户确认，打扰用户……要确认可以在聊天框里面
  * 确认，不要在交互页面上让用户点什么确认或者修改……还是以 agent 和用户对齐后，agent 为用户代写为主」）：
- * 下面三种情况写完计划这一轮先停（decidePlanStop）——plan 档、带了 confirm 问题、「先给我看计划」——
- * 但停下的方式是**让 agent 用正文说话**：回执要求它在回复里用自然语言把问题问出来（或说一句要开工请切出 plan 档），
+ * 下面两种情况写完计划这一轮先停（decidePlanStop）——带了 confirm 问题、「先给我看计划」——
+ * 但停下的方式是**让 agent 用正文说话**：回执要求它在回复里用自然语言把问题问出来，
  * 然后这一轮不再调工具；用户在输入框里回答，下一轮 agent 按回答改计划。界面上没有任何确认 / 修改按钮。
  * 不用 pi 的 terminate：它会让这一轮在工具之后直接结束、没有最后一句话，agent 就没机会开口。
  * 「不再调工具」由 createPlanGate 兜底：已决定停之后，本轮其余工具调用在 tool_call 闸门里被拦（返回 block，不抛错），
@@ -36,22 +35,18 @@ import {
   type PlanItem,
   type PlanToolDetails,
 } from "../shared/plan.ts";
-import type { PermissionMode } from "../shared/permission.ts";
 import type { PlanDiff } from "../shared/plan-diff.ts";
 
-/** 为什么停：带了问题 / plan 档写完计划 / 用户开了「先给我看计划」 */
-export type PlanStopReason = "confirm" | "plan-mode" | "plan-first";
+/** 为什么停：带了问题 / 用户开了「先给我看计划」 */
+export type PlanStopReason = "confirm" | "plan-first";
 
 /**
  * 这一次 update_plan 要不要让这一轮停下来等用户。
  * - 带了 confirm 问题：任何档位都停（模型自己判断需要先问）；
- * - plan 档：新计划（没有上一张 / 与上一张一步都对不上）或结构改了就停；只打勾不停——
- *   用户批准后切档继续，或 plan 档里边读边勾，不该每勾一下就停一次；
  * - 「先给我看计划」：只在这个任务的**第一张**计划上停（上一张没有 / 与它一步都对不上）；
- * - 全部已勾完的计划不为 plan 档 / 偏好停（那是收尾，不是要对齐的计划）。
+ * - 全部已勾完的计划不为偏好停（那是收尾，不是要对齐的计划）。
  */
 export function decidePlanStop(input: {
-  mode: PermissionMode;
   planFirst: boolean;
   call: PlanCall;
   /** 对上一张计划的对齐结果（没有上一张 = fresh 的空对比） */
@@ -61,7 +56,6 @@ export function decidePlanStop(input: {
   if (input.call.confirm.length > 0) return "confirm";
   if (input.call.items.every((item) => item.status === "done")) return null;
   const isNew = !input.hadPlan || input.diff.fresh;
-  if (input.mode === "plan" && (isNew || input.diff.changes.length > 0)) return "plan-mode";
   if (input.planFirst && isNew) return "plan-first";
   return null;
 }
@@ -109,12 +103,6 @@ export function stopReceipt(reason: PlanStopReason): string {
         "Plan shown to the user. Your turn pauses here: write your reply now and ask the question(s) from `confirm` " +
         "in plain prose (the user answers in the chat box; there are no buttons), then call no more tools this turn."
       );
-    case "plan-mode":
-      return (
-        "Plan shown to the user. You are in plan mode, so the plan is the deliverable: reply now with a short summary " +
-        "and say that to have you start, they need to switch the permission out of plan mode and tell you to go. " +
-        "Call no more tools this turn."
-      );
     case "plan-first":
       return (
         "Plan shown to the user, who asked to see the plan before any work starts. Reply now in one or two sentences " +
@@ -129,8 +117,6 @@ export interface PlanStopState {
 }
 
 export interface PlanToolOptions {
-  /** 当前权限档（读账本：中途切档下一次调用就按新档） */
-  getMode: () => PermissionMode;
   /** 「先给我看计划」偏好（随开轮命令来） */
   planFirst: boolean;
   /** pi 本子当前叶子路径（取上一张计划用） */
@@ -150,7 +136,6 @@ export function createPlanGate(options: PlanToolOptions) {
       }
       const previous = previousPlanFrom(options.branch(), event.toolCallId);
       const reason = decidePlanStop({
-        mode: options.getMode(),
         planFirst: options.planFirst,
         call,
         diff: diffPlans(previous, call.items),
@@ -272,7 +257,6 @@ export function createPlanTools(options: PlanToolOptions): ToolDefinition[] {
       const previous = previousPlanFrom(options.branch(), toolCallId);
       const diff = diffPlans(previous, call.items);
       const reason = decidePlanStop({
-        mode: options.getMode(),
         planFirst: options.planFirst,
         call,
         diff,

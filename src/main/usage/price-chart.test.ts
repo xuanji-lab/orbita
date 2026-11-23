@@ -60,7 +60,6 @@ function meta(id: string, createdAt: number, extra: Partial<SessionMeta> = {}): 
     recentQueries: [],
     providerId: "kimi-coding",
     modelId: "k3",
-    mode: "plan",
     thinkingLevel: "max",
     createdAt,
     updatedAt: createdAt,

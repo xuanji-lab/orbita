@@ -481,7 +481,7 @@ describe("importer 集成：claude 条目", () => {
     assert.equal(meta.title, "标题");
     assert.equal(meta.titleSource, "user");
     assert.equal(meta.cwd, DEFAULT_CWD);
-    assert.equal(meta.mode, "plan");
+    assert.equal(meta.mode, undefined);
     assert.equal(meta.thinkingLevel, "medium");
     assert.equal(meta.importedModel, "glm-5.1");
     assert.equal(meta.importedFrom, join(promaRoot, "agent-sessions", "c-1.jsonl"));

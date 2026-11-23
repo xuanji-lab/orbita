@@ -105,7 +105,7 @@ export function TaskProgress(props: {
   const [historyOpen, setHistoryOpen] = useState(false);
   // App 给的是侧栏同一个推导；meta 还没进列表（刚建的会话）时退回只看自己的槽
   const run =
-    props.runState ?? sessionRunState({ slot: { phase: entry.phase, approvals: entry.approvals.length }, children: [], unread: null });
+    props.runState ?? sessionRunState({ slot: { phase: entry.phase }, children: [], unread: null });
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!turnActive) return;

@@ -12,7 +12,7 @@ import { useT } from "../../locale.ts";
  * 确认面在收尾确认卡（WrapupCard），两者职责不混。v1 的旧回答只有留下的事。
  *
  * 表面用消息流卡片的既有配方（chat 卡底 + 细边框），**不用玻璃**——玻璃是
- * 浮层配方（ApprovalBar 一类要求回答才继续的卡），这条卡只是流内内容。
+ * 浮层配方（意图确认卡一类要求回答才继续的卡），这条卡只是流内内容。
  */
 export function CarryoverScanCard(props: { scan: ScanMessage }) {
   const t = useT();

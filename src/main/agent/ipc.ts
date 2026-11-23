@@ -22,7 +22,6 @@ import {
 } from "../../shared/invocation.ts";
 import { isSkillAvailable, matchSkillTarget } from "../../shared/skill.ts";
 import { withoutQuotes } from "../../shared/quote.ts";
-import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import { endpointHintsOf, knownProviderOf } from "../../shared/known-providers.ts";
@@ -58,7 +57,6 @@ import type { SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { TurnDirectories } from "../../shared/agent-ipc.ts";
 import { resolveTurnDirectories } from "./turn-directories.ts";
 import { turnFields } from "./turn-fields.ts";
-import { applyModeCascade } from "./mode-cascade.ts";
 import { browserDownloadDir } from "../browser/download-dir.ts";
 import { AgentHost } from "./host.ts";
 
@@ -409,7 +407,6 @@ export function registerAgentIpc(
       stats: null,
       providerId: input.providerId,
       modelId: input.modelId,
-      mode: input.mode,
       thinkingLevel: input.thinkingLevel,
       createdAt: now,
       updatedAt: now,
@@ -576,24 +573,6 @@ export function registerAgentIpc(
   });
 
   ipcMain.handle(
-    ipcChannels.agentSetMode,
-    async (_e, sessionId: string, mode: PermissionMode) => {
-      // 用户切档：自己 + 名下直接子会话一起切（单向：父带子，2026-09-30 用户裁决；
-      // 语义与理由见 mode-cascade.ts）。档位也落盘：重开这条会话时不该静默换档，
-      // 而这一档决定 bash 能不能跑
-      await applyModeCascade(
-        {
-          listSessions: () => sessions.list(),
-          setRuntimeMode: (id, next) => host.setMode(id, next),
-          setStoredMode: (id, next) => sessions.setMode(id, next),
-        },
-        sessionId,
-        mode,
-      );
-    },
-  );
-
-  ipcMain.handle(
     ipcChannels.agentSetThinkingLevel,
     async (_e, sessionId: string, level: ThinkingLevel) => {
       // 只落 meta，不经 agent 进程：无状态 runtime 每轮从 meta 装配开轮载荷，
@@ -612,11 +591,6 @@ export function registerAgentIpc(
     },
   );
 
-  // 用户对工具审批的回答，原样送回 agent 进程（按 requestId 对号）
-  ipcMain.handle(
-    ipcChannels.agentAnswerPermission,
-    (_e, requestId: string, answer: PermissionAnswer) => host.answerPermission(requestId, answer),
-  );
   ipcMain.handle(
     ipcChannels.agentAnswerIntentConfirm,
     (_e, requestId: string, decision: IntentConfirmDecision) => host.answerIntentConfirm(requestId, decision),

@@ -1,6 +1,6 @@
 /**
  * commit / PR 的 Orbita 标识 —— 讲给模型听的一段说明（拼进 system prompt，
- * 同 describePermissionMode 的注入方式）。**纯模块**：不 import electron，
+ * 同 describeProtectedData 的注入方式）。**纯模块**：不 import electron，
  * 可被 `node --test` 直接加载。
  *
  * 为什么是提示词而不是 git 钩子：提交由模型自己用 bash 发起，message 也由它写。

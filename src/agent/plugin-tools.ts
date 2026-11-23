@@ -1,8 +1,10 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { RequestBroker } from "./request-broker.ts";
-import type { PermissionMode } from "../shared/permission.ts";
 import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPreviewOutcome, PluginInstallRow } from "../shared/plugin.ts";
 import type { PluginBoardOutcome, PluginBoardResult } from "../shared/plugin-board.ts";
+
+/** 四个插件工具的名字：runtime 的提示词稳定性指纹与测试都认这一份。 */
+export const PLUGIN_TOOL_NAMES = ["install_plugin", "preview_plugin", "list_plugins", "show_plugin_board"] as const;
 
 /**
  * agent 的插件工具：install_plugin / preview_plugin / list_plugins / show_plugin_board。
@@ -12,12 +14,10 @@ import type { PluginBoardOutcome, PluginBoardResult } from "../shared/plugin-boa
  * 安装全在主进程（main/plugin/agent-requests.ts），agent 进程不碰 userData。
  *
  * **三个工具都立即返回，不等用户**（以前 install_plugin 挂起等用户点确认卡、超时 15 分钟，已删）。
- * install_plugin 要不要让用户点一下由主进程定：低风险直接装并在对话里留「已装上」一行；带 MCP / 范围是所有工作区 /
- * manual 档则不装，留一行带「安装」的行并让这一轮结束。那一行的数据放进工具结果的 `details.pluginInstall`
- * （随会话落盘，渲染层据此画出那一行）。权限档语义见 shared/permission.ts 的 SELF_CONFIRMING_TOOLS。
+ * install_plugin 要不要让用户点一下由主进程定：低风险直接装并在对话里留「已装上」一行；带 MCP / 范围是所有工作区
+ * 则不装，留一行带「安装」的行并让这一轮结束。那一行的数据放进工具结果的 `details.pluginInstall`
+ * （随会话落盘，渲染层据此画出那一行）。
  */
-
-export const PLUGIN_TOOL_NAMES = ["install_plugin", "preview_plugin", "list_plugins", "show_plugin_board"] as const;
 
 /** 讲给模型听的工具说明（字段说明在参数 schema 里，这里讲语义与会发生什么）。 */
 const INSTALL_DESCRIPTION =
@@ -28,7 +28,7 @@ const INSTALL_DESCRIPTION =
   "FIRST ask the user, in one plain sentence in their language, whether you may install it now, and call this tool only after they agree. " +
   "The call returns immediately; it never waits for the user. Two outcomes: " +
   '(1) "Installed": Orbita installed it and left a line "Installed <name> · [Uninstall]" in the conversation — do not repeat what the line says. ' +
-  '(2) "Not installed yet": the plugin starts an MCP server, is enabled for all workspaces, or the session is in Manual permission mode, so ' +
+  '(2) "Not installed yet": the plugin starts an MCP server, or is enabled for all workspaces, so ' +
   'Orbita did NOT install it and left a line with [Install] and [Details] in the conversation. End your turn right away: say in one short sentence that ' +
   "the line is waiting for the user's click (they can click it any time, also in a later session); do not repeat the command or the reason, the line already shows them. " +
   "Do not call this tool again for the same folder, do not poll, do not ask the same question in prose. " +
@@ -56,8 +56,8 @@ const BOARD_DESCRIPTION =
 
 type Outcome = PluginAgentInstallOutcome | PluginAgentListOutcome | PluginAgentPreviewOutcome | PluginBoardOutcome;
 
-/** 铸工具对。broker 由 runtime 持有并接回执；getMode 读此刻的权限档（manual 档主进程不直接装）。 */
-export function createPluginTools(broker: RequestBroker, sessionId: string, getMode: () => PermissionMode): ToolDefinition[] {
+/** 铸工具对。broker 由 runtime 持有并接回执。 */
+export function createPluginTools(broker: RequestBroker, sessionId: string): ToolDefinition[] {
   /** 发请求并等回执；这一轮被停掉（signal abort）就放手（terminal-tools.ts 同款）。 */
   const call = async <T extends Outcome>(event: Record<string, unknown>, signal: AbortSignal | undefined): Promise<T> => {
     if (signal?.aborted === true) throw new Error("Stopped");
@@ -96,7 +96,7 @@ export function createPluginTools(broker: RequestBroker, sessionId: string, getM
         throw new Error(`scope must be "workspace" or "global", got ${JSON.stringify(rawScope)}`);
       }
       const result = await call<PluginAgentInstallOutcome>(
-        { type: "pluginInstallRequest", sessionId, path, scope: rawScope ?? null, mode: getMode() },
+        { type: "pluginInstallRequest", sessionId, path, scope: rawScope ?? null },
         signal,
       );
       if (!result.ok) throw new Error(result.error);
@@ -198,7 +198,8 @@ export function describeBoard(board: PluginBoardResult): string {
 function pendingReason(reason: PluginInstallRow["reason"]): string {
   if (reason === "mcp") return "it starts an MCP server on the user's machine, so the user has to see the exact command first";
   if (reason === "global") return "it is enabled for all workspaces, so the user has to look first";
-  return "this session is in Manual permission mode, where every action needs the user's click";
+  // 旧行（档位删掉之前）才有 manual；新的安装结果走不到这里
+  return "this session was in Manual permission mode, where every action needed the user's click";
 }
 
 /** 安装结果回给模型的话（纯函数，带测试）。 */

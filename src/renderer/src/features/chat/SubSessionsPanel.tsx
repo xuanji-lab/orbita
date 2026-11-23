@@ -2,7 +2,7 @@
  * 右栏 Sub-sessions 面板（子会话 PR4c；2026-10-12 起列表层是**收件箱**）：主槽
  * 正看着一条有子会话的根会话时，这里是它们的唯一面板位——列表层（每个子会话
  * 一行：状态饼 + 名字 + 最新一句 + 相对时间；「在问你」的行展开回答框）与
- * 会话层（挑中的那条，只读查看 + 审批，不给输入框）。两层状态机在
+ * 会话层（挑中的那条，只读查看，不给输入框）。两层状态机在
  * `sub-sessions-state.ts`（纯函数，App 持有，本组件受控渲染）；排序 / 状态 /
  * 最新一句的推导在 `sub-sessions-rows.ts`。
  *
@@ -11,13 +11,12 @@
  * 先例（`Drawer.tsx`：标签条 + `ChatView`，标签条不是第二个 `RightPanelFrame`）：
  * 一条瘦头部（返回 / 状态 / Open as main）+ 用户控制行（终止等，见
  * `SubSessionControls`——用户裁决：这些权限归用户，不经过父模型）+ `ChatView`
- * （自带标题头 + transcript + 审批条，`hideComposer` 关掉输入框与排队条）。
+ * （自带标题头 + transcript，`hideComposer` 关掉输入框与排队条）。
  */
 import { useContext, useCallback, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { childSessions, type SessionMeta } from "@shared/session";
 import type { ModelPair } from "@shared/settings";
-import { PERMISSION_MODES } from "@shared/permission";
 import { Icon, type IconName } from "../../shell/Icon";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { StatusPie } from "../../shell/StatusPie";
@@ -49,7 +48,6 @@ import { useT } from "../../locale.ts";
 const STATUS_COLOR: Record<SubSessionRowStatus, string> = {
   running: "var(--color-accent)",
   waiting: "var(--color-warning)",
-  approval: "var(--color-warning)",
   done: "var(--color-success)",
   failed: "var(--color-danger)",
   // stopped 是用户的裁决不是故障：中性灰，区别于 failed 的红（图标已经在说话）
@@ -60,7 +58,6 @@ const STATUS_COLOR: Record<SubSessionRowStatus, string> = {
 const STATUS_ICON: Record<SubSessionRowStatus, IconName> = {
   running: "loader-circle",
   waiting: "message-square",
-  approval: "shield-check",
   done: "circle-check",
   failed: "triangle-alert",
   stopped: "octagon-x",
@@ -152,7 +149,7 @@ export function SubSessionsPanel(props: {
           />
         )}
         <div style={{ flex: 1, minHeight: 0 }}>
-          {/* 只读查看 + 审批：不给输入框（hideComposer）。「UI 只做一层」：面板里
+          {/* 只读查看：不给输入框（hideComposer）。「UI 只做一层」：面板里
               查看的子会话不再嵌一层它自己的子会话入口 */}
           <ChatView
             session={props.view}
@@ -170,7 +167,7 @@ export function SubSessionsPanel(props: {
     );
   }
 
-  // 列表层 = 收件箱（2026-10-12 用户裁决）：每个子会话一行——等你（question / 审批）
+  // 列表层 = 收件箱（2026-10-12 用户裁决）：每个子会话一行——等你（question）
   // 最前，其次 running、failed、done（2026-11-06 起在跑的提前），同组新的在前（sub-sessions-rows.ts）。
   // 最新一句来自通道账本（useParentChannels，上面已拉）。
   const rows = sortSubSessionRows(
@@ -182,7 +179,7 @@ export function SubSessionsPanel(props: {
       return { meta, status, lastAt, messages };
     }),
   );
-  const waitingCount = rows.filter((row) => row.status === "waiting" || row.status === "approval").length;
+  const waitingCount = rows.filter((row) => row.status === "waiting").length;
 
   return (
     <RightPanelFrame
@@ -351,18 +348,13 @@ function ChannelReplyBox(props: { parentId: string; childId: string }) {
 }
 
 /**
- * 会话层的控制行（用户裁决原话：「我觉得用户应该有自己修改子会话的权限，不管是
- * mode、模型、终止与否，这些目前都没有。」）：档位 / 模型菜单在左，终止在右。
- * 档位与模型复用输入卡底栏同一套件（Menu + Chip + ModelPickerMenu + t.permissionModes），
- * 不另写一套；动作走查看槽的 changeMode / chooseModel（与「Open as main 后在输入卡
- * 底栏里改」同一条路，含 lastUsed 启动恢复点的跟随）。
+ * 会话层的控制行：模型菜单在左，终止在右。权限档菜单已随「只留放行」删除。
+ * 模型复用输入卡底栏同一套件（Chip + ModelPickerMenu），动作走查看槽的 chooseModel。
  *
  * **与主槽的一个差别**：子会话的下一轮由主进程按 meta 装配（deliverToChild），
  * 不经 renderer 的排队投递——chooseModel 只在空闲时落 meta，子会话在跑时那一笔
  * 会丢（下一轮还是旧模型），所以在跑时补一发直连 IPC 把 meta 当场落下去。
- * changeMode 不用补：它不论空闲与否都发 agent:set-mode（档位联动子会话那一刀改的）。**在跑时两者都当场生效，不等下一轮**：档位改的是 agent 进程账本，工具
- * 审批闸门每次调用现场读账；模型经 pi 的 setModel 写进 agent.state.model，pi 在同一次
- * 运行的下一次模型调用前（prepareNextTurn）就换上新模型。
+ * 模型经 pi 的 setModel 写进 agent.state.model，pi 在同一次运行的下一次模型调用前换上。
  *
  * 终止的确认是**就地菜单**（不弹大窗）：点开菜单已是明确意图，后果行（fact）
  * 直接摆在 danger 确认键上方——与侧栏 Delete / Compact 的两段式同族，只是触发器
@@ -371,7 +363,7 @@ function ChannelReplyBox(props: { parentId: string; childId: string }) {
 function SubSessionControls(props: {
   parentId: string;
   childId: string;
-  /** 会话层的查看槽（正开着这条子会话）：mode / model / usable / catalog 与两个改档函数都从它走 */
+  /** 会话层的查看槽（正开着这条子会话）：model / usable / catalog 与改模型的函数都从它走 */
   view: ChatSession;
   stopped: boolean;
   starredModels: readonly ModelPair[];
@@ -404,13 +396,6 @@ function SubSessionControls(props: {
       .finally(() => setStopping(false));
   };
 
-  const modeItems: MenuItem[] = PERMISSION_MODES.map((value) => ({
-    id: value,
-    label: t.permissionModes[value].label,
-    checked: view.mode === value,
-    onSelect: () => view.changeMode(value),
-  }));
-
   const stopItems: MenuItem[] = [
     // 一句话说完的事实行：Menu 里无 hint 的事实行会换行，不会被省略号切掉半句
     { id: "stop-hint", label: t.subSessions.stopHint, fact: true },
@@ -436,23 +421,6 @@ function SubSessionControls(props: {
         borderBottom: "1px solid var(--color-border-subtle)",
       }}
     >
-      {/* 档位 / 模型：与输入卡底栏同一套菜单件，checked 标当前（状态优先图标与文字） */}
-      <Menu
-        items={modeItems}
-        panelMinWidth={112}
-        trigger={({ open, toggle }) => (
-          <Chip
-            icon="shield-check"
-            active={open}
-            fixedWidth={84}
-            chevron
-            title={t.permissionModes[view.mode].hint}
-            onClick={toggle}
-          >
-            {t.permissionModes[view.mode].label}
-          </Chip>
-        )}
-      />
       {/* 与输入卡的模型芯片同一张卡片（ModelPickerMenu）：左栏过滤、星标、定高定宽 */}
       {view.usable.length > 0 && (
         <ModelPickerMenu

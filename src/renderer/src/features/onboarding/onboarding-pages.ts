@@ -21,7 +21,6 @@ export const SHOT_IDS = [
   "general",
   "migration",
   "composer",
-  "permission",
   "working",
   "rewind",
   "plan",
@@ -217,7 +216,6 @@ const composer = {
   card: box("composer", "card"),
   clip: box("composer", "clip", 0.003),
   ws: box("composer", "ws", 0.003),
-  perm: box("composer", "perm", 0.003),
   model: box("composer", "model", 0.003),
   think: box("composer", "think", 0.003),
 };
@@ -263,13 +261,8 @@ export const GUIDE: readonly GuideChapter[] = [
         focus: composer.card,
         // 1–3 只在放大镜里（底栏小字原图里看不清）；原图上只留框住整张输入卡的 4，一页一套编号
         pins: [pin(4, composer.card, "tl")],
-        loupe: loupe(composerLoupe, { x: 0.2, y: 0.62 }, 2, [[1, composer.clip], [2, composer.ws], [3, composer.perm]]),
+        loupe: loupe(composerLoupe, { x: 0.2, y: 0.62 }, 2, [[1, composer.clip], [2, composer.ws], [3, union(composer.model, composer.think)]]),
         say: true,
-      }),
-      step("permission", "permission", {
-        focus: union(box("permission", "menu"), box("permission", "perm")),
-        pins: [pin(1, box("permission", "menu"), "tr")],
-        loupe: loupe(padded(union(box("permission", "menu"), box("permission", "perm")), 0.02), { x: 0.5, y: 0.38 }, 2.2),
       }),
       step("watch", "working", {
         focus: box("working", "block"),

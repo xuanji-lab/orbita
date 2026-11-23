@@ -24,9 +24,8 @@ import type { PluginInstallRow } from "@shared/plugin";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载，@shared 别名只能解析类型（AGENTS.md 硬规则）
 import { parseChannelPrompt } from "../../../../shared/channel.ts";
 import { parsePluginInstallRow } from "../../../../shared/plugin.ts";
-import { parseAutomationModeRow, type AutomationModeRow } from "../../../../shared/automation.ts";
-import { parsePluginBoardDetails, type PluginBoardResult } from "../../../../shared/plugin-board.ts";
-import { gatedCommandTimeout, PLUGIN_BOARD_TOOL } from "../../../../shared/permission.ts";
+import { parsePluginBoardDetails, PLUGIN_BOARD_TOOL, type PluginBoardResult } from "../../../../shared/plugin-board.ts";
+import { gatedCommandTimeout } from "../../../../shared/permission.ts";
 import { builtinCommand, DOC_EDIT_KEY, DOC_WRITE_KEY, docEditPath, isBuiltinCommand, PINNED_CARD_COMMANDS } from "./builtin-commands.ts";
 // 收尾扫描回答卡（scanAnswerCards）只用它认消息形状；纯模块，node --test 可直接加载
 import { matchScanMessage, type ScanMessage } from "./carryover-parse.ts";
@@ -195,9 +194,6 @@ const CHANNEL_TOOL_NAMES: ReadonlySet<string> = new Set([
   "report_to_parent",
   // 自动化：建出来的那张卡是给用户看的结果（在右栏查看 / 暂停），不是「工作过程」，不该被折叠吞掉
   "automation_create",
-  // 自动化改权限：留下的那一行（已改成放行 [改回只读] / 让它到点能写文件？[允许] [保持只读]）要用户看见、可能要点，
-  // 折进「N 个工具调用」里用户就找不到了——而 agent 已经结束这一轮在等
-  "automation_update",
 ]);
 
 /**
@@ -1287,15 +1283,6 @@ export function pluginInstallRowOf(result: ToolTranscriptItem | undefined): Plug
 }
 
 /**
- * automation_create / automation_update 结果 `details.automationMode` 里「改权限」那一行的数据（主进程写的，随会话落盘）。
- * 没有结果 / 还在跑 / 失败 / 形状不对 / 这次调用没留行（改成只读、本来就是放行）都为 null。
- */
-export function automationModeRowOf(result: ToolTranscriptItem | undefined): AutomationModeRow | null {
-  if (result === undefined || result.status === "running" || result.status === "error") return null;
-  return parseAutomationModeRow(result.details);
-}
-
-/**
  * show_plugin_board 结果 `details.pluginBoard` 的看板（主进程写的快照，随会话落盘）。
  * 没有结果 / 还在跑 / 失败 / 形状不对都为 null——调用方退回通用工具行。
  */
@@ -1629,7 +1616,7 @@ export function toolCallSummary(toolName: string, input: unknown): string | null
     // 受管浏览器：导航说去哪；读取类作用于当前页，入参里没有值得摘的，交给结果摘要
     case "browser_navigate":
       return str("url");
-    // 交互：模型给的 element 人话（审批卡上也是它）；缺了退回 ref / 坐标，至少知道点的哪
+    // 交互：模型给的 element 人话；缺了退回 ref / 坐标，至少知道点的哪
     case "browser_click": {
       const x = record["x"];
       const y = record["y"];

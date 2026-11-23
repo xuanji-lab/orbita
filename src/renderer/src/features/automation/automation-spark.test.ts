@@ -27,7 +27,6 @@ function auto(id: string, runs: AutomationRun[], kind: "interval" | "once" = "in
     prompt: "p",
     schedule: kind === "once" ? { kind: "once", at: NOW } : { kind: "interval", unit: "hour", every: 6 },
     target: { kind: "new_session", workspaceId: null },
-    mode: "plan",
     status: "active",
     createdBy: { kind: "user" },
     nextRunAt: null,

@@ -21,7 +21,6 @@ const meta = (patch: Partial<SessionMeta> = {}): SessionMeta => ({
   cwd: "/repo/orbita-lab",
   providerId: "zai",
   modelId: "glm-5.3",
-  mode: "plan",
   thinkingLevel: "medium",
   createdAt: 1000,
   updatedAt: 1000,
@@ -101,6 +100,34 @@ describe("SessionStore", () => {
     assert.deepEqual((await store.list()).map((m) => m.id), [ID]);
     assert.deepEqual((await store.load(ID))?.meta.id, ID);
     assert.deepEqual((await store.load(ID))?.transcript, []);
+  });
+
+  // 回滚兼容：旧版把缺的 mode 读成只读计划档，新版写的 meta 必须带 mode:"skip"。
+  describe("meta 的 mode 回滚兼容字段", () => {
+    const rawMeta = async (id: string): Promise<Record<string, unknown>> =>
+      JSON.parse(await readFile(join(dir, "sessions", `${id}.meta.json`), "utf8")) as Record<string, unknown>;
+
+    test("新建会话的 meta 带 mode:skip", async () => {
+      await store.ensureSession(meta());
+      assert.equal((await rawMeta(ID))["mode"], "skip");
+    });
+
+    test("旧会话 meta 是 plan，新版动过一次后改写成 skip；读回时不暴露 mode", async () => {
+      await mkdir(join(dir, "sessions"), { recursive: true });
+      await writeFile(join(dir, "sessions", `${ID}.meta.json`), JSON.stringify({ ...meta(), mode: "plan" }), "utf8");
+      await store.setPiSessionFile(ID, null);
+      assert.equal((await rawMeta(ID))["mode"], "skip");
+      assert.equal((await store.readMeta(ID))?.mode, undefined);
+    });
+
+    test("没被碰过的旧会话 meta 原样不动", async () => {
+      await mkdir(join(dir, "sessions"), { recursive: true });
+      const path = join(dir, "sessions", `${ID}.meta.json`);
+      const text = JSON.stringify({ ...meta(), mode: "manual" });
+      await writeFile(path, text, "utf8");
+      await store.list();
+      assert.equal(await readFile(path, "utf8"), text);
+    });
   });
 
   // list() 按 16 条一批并发读 meta：批边界前后顺序、坏 meta 跳过都必须与逐条读一致
@@ -203,14 +230,6 @@ describe("SessionStore", () => {
     assert.deepEqual((await store.load(ID))?.meta.recentQueries, ["真问题"]);
   });
 
-  test("收尾扫描轮压过的权限档不写回会话 meta（审核 F-4）", async () => {
-    // 扫描轮在已有会话上 submit：主进程走 settleFirstTurn → ensureSession（带着压成 manual 的档）+ 落扫描提问
-    await store.ensureSession(meta({ mode: "skip", piSessionFile: "/pi/a.jsonl" }));
-    await store.ensureSession(meta({ mode: "manual", piSessionFile: "/pi/a.jsonl" }));
-    await store.record(ID, userItem(buildClosingScanPrompt({ sinceTurn: 1, lastTurn: 1, turns: [] }), 4000));
-    assert.equal((await store.load(ID))?.meta.mode, "skip");
-  });
-
   test("列表按 updatedAt 倒序——新的在前", async () => {
     await store.ensureSession(meta({ id: ID, updatedAt: 1000 }));
     await store.ensureSession(meta({ id: OTHER, updatedAt: 5000 }));
@@ -255,12 +274,6 @@ describe("SessionStore", () => {
     await writeFile(join(dir, "sessions", `${ID}.jsonl`), '{"id":"u1"}\n', "utf8");
     assert.deepEqual(await store.list(), []);
     assert.equal(await store.load(ID), null);
-  });
-
-  test("setMode 落盘——重开会话不该静默换档", async () => {
-    await store.ensureSession(meta());
-    await store.setMode(ID, "skip");
-    assert.equal((await store.load(ID))?.meta.mode, "skip");
   });
 
   test("setThinkingLevel 落盘——重开与下一轮开机的装配都读它", async () => {

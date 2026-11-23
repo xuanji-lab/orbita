@@ -4,7 +4,6 @@
  * 范围刻意只有主题一项。设置面从极少的 tab 起步、但 UI 第一天就落（guideline §六）；
  * 字段等有真实消费者再加，不提前占位。
  */
-import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
 import { PRICE_CHART_CATEGORIES, type PriceChartCategory } from "./price-chart.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 import { MEMORY_VECTOR_MODELS, type MemoryVectorSettings } from "./memory.ts";
@@ -89,13 +88,11 @@ export const COMPACTION_DEFAULT: CompactionSetting = { reservePercent: 20, enabl
 export const COMPACTION_PERCENT = { min: 5, max: 50 } as const;
 
 /**
- * 上次使用的权限档与模型（A-0 复验 bug A：重启后 composer 忘了上次的选择）。
- * 会话各自的档/模型记在各条 meta 与内存 Map（按会话记账，cd0ee98）；这里是
- * **启动恢复点**：新会话槽的初始值。切换时逐键写回（改档只写 mode）。
- * 缺席 = 应用默认（DEFAULT_PERMISSION_MODE、第一个可用模型）。
+ * 上次使用的模型（A-0 复验 bug A：重启后 composer 忘了上次的选择）。
+ * 会话各自的模型记在各条 meta 与内存 Map；这里是新会话槽的启动恢复点。
+ * 缺席 = 第一个可用模型。旧版本在这里存过的权限档（mode）不再读。
  */
 export interface LastUsedIntent {
-  mode?: PermissionMode;
   providerId?: string;
   modelId?: string;
   // 思考档**不在这里**（wafo 2026-09-23）：彻底重启才落回模型的默认档，没重启就
@@ -262,7 +259,7 @@ export interface AppSettings {
   gitAttribution?: boolean;
   /**
    * 「先给我看计划」（2026-10-30）：agent 第一次写下一张新计划后先停下，等你点头再动手。
-   * **缺席 = 关**：默认不拦，只有 plan 档（计划就是它的产出）与 agent 带了具体问题（confirm）才停。
+   * **缺席 = 关**：默认不拦，只有用户开了「先给我看计划」或 agent 带了具体问题（confirm）才停。
    * 只认布尔，同 gitAttribution 的纪律。改动下一轮对话即生效（主进程每轮现读）。
    */
   planFirst?: boolean;
@@ -297,7 +294,7 @@ export interface AppSettings {
    * 存对子不存 modelId：光有 modelId 定位不到哪家的密钥（同 choreModel 的理由）。
    */
   starredModels?: ModelPair[];
-  /** 上次使用的权限档与模型；缺席 = 应用默认。 */
+  /** 上次使用的模型；缺席 = 应用默认。 */
   lastUsed?: LastUsedIntent;
   /**
    * 意图系统（实验功能 intent-system）的设置子对象。**只在实验开关打开时生效**；
@@ -796,16 +793,13 @@ function parseStarredModels(raw: unknown): ModelPair[] | undefined {
 }
 
 /**
- * lastUsed 逐字段校验：mode 必须在三档里，id 必须是非空字符串。
- * 整段缺席或三个键全无效 = 用户从没动过它（返回 undefined，不落盘）。
+ * lastUsed 逐字段校验：id 必须是非空字符串。
+ * 整段缺席或两个键全无效 = 用户从没动过它（返回 undefined，不落盘）。
  */
 function parseLastUsed(raw: unknown): LastUsedIntent | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
-  const record = raw as { mode?: unknown; providerId?: unknown; modelId?: unknown };
+  const record = raw as { providerId?: unknown; modelId?: unknown };
   const out: LastUsedIntent = {};
-  if ((PERMISSION_MODES as readonly unknown[]).includes(record.mode)) {
-    out.mode = record.mode as PermissionMode;
-  }
   if (typeof record.providerId === "string" && record.providerId !== "") {
     out.providerId = record.providerId;
   }

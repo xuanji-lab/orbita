@@ -518,15 +518,9 @@
 }
 
 @container (max-width: 410px) {
-  /* 工作区与权限芯片只留图标，文字仍在 title 里（Chip 本来就总是设 title） */
-  .composer-bottom-bar .chip-scope .chip-label,
-  .composer-bottom-bar .chip-mode .chip-label {
+  /* 工作区芯片只留图标，文字仍在 title 里（Chip 本来就总是设 title） */
+  .composer-bottom-bar .chip-scope .chip-label {
     display: none;
-  }
-  /* 权限芯片的 fixedWidth 是内联 min-width（84px），紧凑态不再需要留这么宽，
-     要盖过内联样式只能 !important */
-  .composer-bottom-bar .chip-mode {
-    min-width: 0 !important;
   }
 }
 
@@ -922,7 +916,7 @@
  * 3px 宽、每节 4px 的竖条在侧栏里读不出是哪一档）。**静态，无任何动效**。
  * 份数沿用竖条（同电池表）：
  * - running：1/3 扇形 + 细圈，--color-info（蓝）——在跑（含任一直接子会话在跑）
- * - waiting：2/3 扇形 + 细圈，--color-warning（橙）——挂着工具审批，在等用户
+ * - waiting：2/3 扇形 + 细圈，--color-warning（橙）——计划写好，在等用户回复
  * - done：满圆，--color-success（绿）——跑完、还没看（meta.unread）
  * - failed：满圆，--color-danger（红）——跑挂了、还没看（unread.failed）
  * 读完就不渲染。颜色用固定 token 不用 accent：暗色主题的 accent 是黄，会和橙混。

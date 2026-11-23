@@ -216,7 +216,6 @@ export async function applyDelegate(
     parentId: parent.id,
     providerId: resolved.providerId,
     modelId: resolved.modelId,
-    mode: parent.mode,
     thinkingLevel,
     piSessionFile: null,
     pinned: false,
@@ -238,7 +237,6 @@ export async function applyDelegate(
       resume: null,
       providerId: resolved.providerId,
       modelId: resolved.modelId,
-      mode: parent.mode,
       thinkingLevel,
       // 首条任务信封带上父会话工作台：子会话的重要产出要写到那里（角色指引说了落点
       // 规矩，路径在这里给）。父的行已不进系统提示词，这个信封是子知道父工作台的
@@ -509,7 +507,6 @@ async function deliverToChild(
       resume: child.piSessionFile === null ? null : { piSessionFile: child.piSessionFile },
       providerId: child.providerId,
       modelId: child.modelId,
-      mode: child.mode,
       thinkingLevel: child.thinkingLevel,
       text,
     });

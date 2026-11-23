@@ -20,7 +20,6 @@ import type { BrowserToolOutcome } from "../../shared/browser.ts";
 import type { DocOutcome } from "../../shared/doc.ts";
 import type { TerminalToolOutcome } from "../../shared/terminal.ts";
 import type { SlidesOutcome } from "../../shared/slides-export.ts";
-import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPreviewOutcome } from "../../shared/plugin.ts";
 import type { PluginBoardOutcome } from "../../shared/plugin-board.ts";
@@ -516,11 +515,6 @@ export class AgentHostCore {
     });
   }
 
-  async setMode(sessionId: string, mode: PermissionMode): Promise<void> {
-    await this.ensure();
-    this.post({ type: "setMode", sessionId, mode });
-  }
-
   /**
    * 会话内换模型（C-4）。**发完即回**：成功经 `model` 事件、失败经 `failed` 事件
    * 回传，调用方不等也不该等——切换是一次真实的注册与校验，忙碌态由事件链表达。
@@ -534,17 +528,12 @@ export class AgentHostCore {
     this.post({ type: "setModel", sessionId, provider, modelId });
   }
 
-  /** 用户的审批回答。**不需要 ensure**：进程没了的话请求也早没了。 */
-  answerPermission(requestId: string, answer: PermissionAnswer): void {
-    this.child?.postMessage({ type: "permissionAnswer", requestId, answer } satisfies AgentCommand);
-  }
-
-  /** 意图确认卡的回答（实验功能 intent-system）。同 answerPermission：不 ensure、发完即回。 */
+  /** 意图确认卡的回答（实验功能 intent-system）。**不需要 ensure**：进程没了的话请求也早没了。 */
   answerIntentConfirm(requestId: string, decision: IntentConfirmDecision): void {
     this.child?.postMessage({ type: "intentConfirmResult", requestId, decision } satisfies AgentCommand);
   }
 
-  /** 写盘请求的回执（4-3）。同 answerPermission 的理由：不 ensure、发完即回。 */
+  /** 写盘请求的回执（4-3）。同 answerIntentConfirm 的理由：不 ensure、发完即回。 */
   answerSkillWrite(requestId: string, result: { ok: boolean; path?: string; error?: string }): void {
     this.child?.postMessage({
       type: "skillWriteResult",
@@ -678,8 +667,6 @@ export class AgentHostCore {
             text: outcome.text,
             ...(outcome.automation === undefined ? {} : { automation: outcome.automation }),
             ...(outcome.automations === undefined ? {} : { automations: outcome.automations }),
-            // 「改权限」那一行的数据：漏了它，工具结果里就没有那一行（2026-11-06 验收时抓到：按字段拷贝丢了新字段）
-            ...(outcome.modeRow === undefined ? {} : { modeRow: outcome.modeRow }),
           }
         : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);
@@ -733,7 +720,7 @@ export class AgentHostCore {
 
   /**
    * 释放一条会话（runtime 侧退订 + `session.dispose()` + 出 Map）。
-   * **不 ensure**：进程没起的话这条会话本来就不在 runtime 里（answerPermission 同款理由），
+   * **不 ensure**：进程没起的话这条会话本来就不在 runtime 里（answerIntentConfirm 同款理由），
    * 为释放去拉起一个进程才是本末倒置。发完即回，runtime 对不存在的 id 静默容忍。
    */
   disposeSession(sessionId: string): void {

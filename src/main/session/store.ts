@@ -2,7 +2,7 @@
  * 会话落盘 —— 每条会话两个文件（设计与被否决的方案见
  * `docs/plans/2026-08-25-会话存储与命名工作区.md`）：
  *
- *   sessions/<id>.meta.json   可变（标题 / updatedAt / 权限档），原子写
+ *   sessions/<id>.meta.json   可变（标题 / updatedAt / 模型），原子写
  *   sessions/<id>.jsonl       只追加，一行一个 SessionRecord
  *
  * 分两个文件的理由：meta 会变而 transcript 只增。把可变记录塞进只追加的日志里，
@@ -26,7 +26,6 @@ import { headStringField, scanJsonlLines } from "../jsonl-scan.ts";
 import { CitedPdfIndex } from "./cited-pdfs.ts";
 import { EXTERNAL_FILE_COPY_MAX_BYTES, type PromptFileRef, type SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
-import type { PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import type { SessionWrapup } from "../../shared/wrapup.ts";
 import { parseAutomationHeader } from "../../shared/automation.ts";
@@ -220,6 +219,15 @@ export class SessionStore {
     this.channels = channels;
     this.snapshots = new SnapshotStore(dir);
     this.citedPdfs = new CitedPdfIndex((id) => this.logPath(id));
+  }
+
+  /**
+   * meta 的唯一写入口：一律盖上 `mode: "skip"`。
+   * 只为回滚兼容——旧版把缺的 mode 读成只读计划档，装回旧版后新版聊过的会话会全部写不了文件。
+   * 新版自己不读它；不再支持回滚到带权限档的版本时可连同类型字段一起删掉。
+   */
+  private writeMeta(id: string, meta: SessionMeta): Promise<void> {
+    return writeJsonAtomic(this.metaPath(id), { ...meta, mode: "skip" });
   }
 
   private metaPath(id: string): string {
@@ -444,11 +452,11 @@ export class SessionStore {
     return this.queueMeta(meta.id, async () => {
       const current = await this.readMeta(meta.id);
       if (current === null) {
-        await writeJsonAtomic(this.metaPath(meta.id), meta);
+        await this.writeMeta(meta.id, meta);
         return;
       }
       if (current.piSessionFile === meta.piSessionFile) return;
-      await writeJsonAtomic(this.metaPath(meta.id), {
+      await this.writeMeta(meta.id, {
         ...current,
         piSessionFile: meta.piSessionFile,
       });
@@ -595,7 +603,7 @@ export class SessionStore {
     return this.queueMeta(id, async () => {
       const meta = await this.readMeta(id);
       if (meta === null || meta.providerId !== UNASSIGNED_PROVIDER_ID) return false;
-      await writeJsonAtomic(this.metaPath(id), { ...meta, providerId, modelId });
+      await this.writeMeta(id, { ...meta, providerId, modelId });
       return true;
     });
   }
@@ -613,7 +621,7 @@ export class SessionStore {
       if (meta === null) return;
       const patch = typeof changes === "function" ? changes(meta) : changes;
       if (patch === null) return;
-      await writeJsonAtomic(this.metaPath(id), { ...meta, ...patch });
+      await this.writeMeta(id, { ...meta, ...patch });
     });
   }
 
@@ -650,10 +658,6 @@ export class SessionStore {
     return this.update(id, { piSessionFile });
   }
 
-  setMode(id: string, mode: PermissionMode): Promise<void> {
-    return this.update(id, { mode });
-  }
-
   /**
    * 「转成普通会话」：把一条自动化新开的会话标成 promoted，从此进左侧栏。
    * 只对带 automationId 的会话有意义——别的会话原样不动（返回 false）。
@@ -668,7 +672,7 @@ export class SessionStore {
     return changed;
   }
 
-  /** 改思考档（照 setMode）：重开与下一轮开机的装配都读它 */
+  /** 改思考档：重开与下一轮开机的装配都读它 */
   setThinkingLevel(id: string, thinkingLevel: ThinkingLevel): Promise<void> {
     return this.update(id, { thinkingLevel });
   }
@@ -727,7 +731,7 @@ export class SessionStore {
         closedAt: same ? (meta.closedAt ?? Date.now()) : Date.now(),
       };
       delete next.resumedCarryovers;
-      await writeJsonAtomic(this.metaPath(id), next);
+      await this.writeMeta(id, next);
       return { resumed };
     });
   }
@@ -807,7 +811,6 @@ export class SessionStore {
         workspaceId: meta.workspaceId,
         providerId: meta.providerId,
         modelId: meta.modelId,
-        mode: meta.mode,
         thinkingLevel: meta.thinkingLevel,
         piSessionFile: null,
         pinned: false,
@@ -840,7 +843,7 @@ export class SessionStore {
     } catch (cause) {
       if (!isNotFound(cause)) throw cause;
     }
-    await writeJsonAtomic(this.metaPath(plan.meta.id), { ...plan.meta, piSessionFile });
+    await this.writeMeta(plan.meta.id, { ...plan.meta, piSessionFile });
     if (plan.records.length > 0) {
       await writeTextAtomic(
         this.logPath(plan.meta.id),
@@ -858,7 +861,7 @@ export class SessionStore {
    */
   async commitImported(meta: SessionMeta, records: readonly SessionRecord[]): Promise<void> {
     await mkdir(this.dir, { recursive: true });
-    await writeJsonAtomic(this.metaPath(meta.id), meta);
+    await this.writeMeta(meta.id, meta);
     if (records.length > 0) {
       await writeTextAtomic(
         this.logPath(meta.id),
@@ -886,7 +889,7 @@ export class SessionStore {
       const current = await this.readMeta(id);
       if (current === null) throw new Error("the session was deleted before the update landed");
       await writeTextAtomic(this.logPath(id), `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
-      await writeJsonAtomic(this.metaPath(id), { ...current, ...patch });
+      await this.writeMeta(id, { ...current, ...patch });
     });
   }
 

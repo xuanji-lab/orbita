@@ -9,7 +9,6 @@ import {
   type PlanStopState,
   type PlanToolOptions,
 } from "./plan-tools.ts";
-import { decidePermission, type PermissionMode } from "../shared/permission.ts";
 import { diffPlans } from "../shared/plan-diff.ts";
 import { parsePlanCall, type PlanItem } from "../shared/plan.ts";
 
@@ -24,7 +23,6 @@ function setup(over: Partial<Omit<PlanToolOptions, "branch">> & { branch?: unkno
   const state: PlanStopState = { stopping: false };
   const branch = over.branch ?? [];
   const options: PlanToolOptions = {
-    getMode: over.getMode ?? (() => "skip" as PermissionMode),
     planFirst: over.planFirst ?? false,
     branch: () => branch,
     state,
@@ -65,12 +63,6 @@ describe("update_plan", () => {
     assert.deepEqual((out as { details: unknown }).details, { plan: [{ text: "a", status: "in_progress" }] });
     assert.equal((out as { terminate?: boolean }).terminate, undefined);
     await assert.rejects(() => run("c2", { items: [] }), /requires "items"/);
-  });
-
-  test("三档权限一律放行（plan 档也能写计划）", () => {
-    for (const mode of ["plan", "manual", "skip"] as const) {
-      assert.deepEqual(decidePermission(mode, "update_plan"), { behavior: "allow" });
-    }
   });
 
   test("规则：in_progress 是此刻真在做的那一步，卡住的标 waiting（取代「前一步没完不能开后一步」）", () => {
@@ -125,10 +117,10 @@ describe("update_plan", () => {
     assert.doesNotMatch((withWhy as { content: { text: string }[] }).content[0]?.text ?? "", /pass `why`/);
   });
 
-  test("只是把卡住的步标 waiting（顺序不变）：不算结构改动，不提醒 why、plan 档也不因此停下", async () => {
+  test("只是把卡住的步标 waiting（顺序不变）：不算结构改动，不提醒 why、也不因此停下", async () => {
     const before = items(["装好", "in_progress"], ["立场表", "pending"]);
     const call = { items: [{ text: "装好", status: "waiting", waitingFor: "等你" }, { text: "立场表", status: "in_progress" }] };
-    const { run } = setup({ branch: [planEntry("p1", before), planEntry("p2", parsePlanCall(call).items)], getMode: () => "plan" });
+    const { run } = setup({ branch: [planEntry("p1", before), planEntry("p2", parsePlanCall(call).items)] });
     const out = await run("p2", call);
     assert.doesNotMatch((out as { content: { text: string }[] }).content[0]?.text ?? "", /pass `why`/);
     assert.equal((out as { details: { awaiting?: boolean } }).details.awaiting, undefined);
@@ -187,48 +179,37 @@ describe("previousPlanFrom：本子里上一张计划", () => {
 });
 
 describe("decidePlanStop：什么时候停下来等用户", () => {
-  const decide = (mode: PermissionMode, planFirst: boolean, prev: PlanItem[] | null, next: unknown) => {
+  const decide = (planFirst: boolean, prev: PlanItem[] | null, next: unknown) => {
     const call = parsePlanCall(next);
-    return decidePlanStop({ mode, planFirst, call, diff: diffPlans(prev, call.items), hadPlan: prev !== null });
+    return decidePlanStop({ planFirst, call, diff: diffPlans(prev, call.items), hadPlan: prev !== null });
   };
   const two = items(["看代码", "in_progress"], ["补测试", "pending"]);
 
-  test("带 confirm：任何档位都停", () => {
-    for (const mode of ["plan", "manual", "skip"] as const) {
-      assert.equal(decide(mode, false, null, { items: two, confirm: ["要兼容旧格式吗？"] }), "confirm");
-    }
+  test("带 confirm：停", () => {
+    assert.equal(decide(false, null, { items: two, confirm: ["要兼容旧格式吗？"] }), "confirm");
   });
 
-  test("plan 档：新计划停；结构改了停；只打勾不停；全勾完不停", () => {
-    assert.equal(decide("plan", false, null, { items: two }), "plan-mode");
-    assert.equal(decide("plan", false, two, { items: [...two, { text: "写 README", status: "pending" }] }), "plan-mode");
-    assert.equal(decide("plan", false, two, { items: items(["看代码", "done"], ["补测试", "in_progress"]) }), null);
-    assert.equal(decide("plan", false, two, { items: items(["看代码", "done"], ["补测试", "done"]) }), null);
-  });
-
-  test("manual / skip 默认不停", () => {
-    assert.equal(decide("manual", false, null, { items: two }), null);
-    assert.equal(decide("skip", false, null, { items: two }), null);
+  test("默认不停：新计划、结构改了、只打勾都不停（没有权限档了）", () => {
+    assert.equal(decide(false, null, { items: two }), null);
+    assert.equal(decide(false, two, { items: [...two, { text: "写 README", status: "pending" }] }), null);
+    assert.equal(decide(false, two, { items: items(["看代码", "done"], ["补测试", "in_progress"]) }), null);
   });
 
   test("先给我看计划：只在第一张（或换了一张新计划）上停，之后改动不停", () => {
-    assert.equal(decide("skip", true, null, { items: two }), "plan-first");
-    assert.equal(decide("skip", true, two, { items: [...two, { text: "写 README", status: "pending" }] }), null);
-    assert.equal(decide("skip", true, two, { items: items(["调研向量库", "in_progress"], ["写对比表", "pending"]) }), "plan-first");
+    assert.equal(decide(true, null, { items: two }), "plan-first");
+    assert.equal(decide(true, two, { items: [...two, { text: "写 README", status: "pending" }] }), null);
+    assert.equal(decide(true, two, { items: items(["调研向量库", "in_progress"], ["写对比表", "pending"]) }), "plan-first");
   });
 });
 
 describe("停下来：先停、让 agent 用正文说话（没有 terminate、没有按钮）", () => {
   const textOf = (out: unknown): string => (out as { content: { text: string }[] }).content[0]?.text ?? "";
 
-  test("plan 档写新计划：details.awaiting；回执要求在正文里说要开工请切出 plan 档，且不 terminate", async () => {
-    const { run } = setup({ getMode: () => "plan" });
+  test("新计划不带 confirm：不停、不 awaiting（以前 plan 档会停）", async () => {
+    const { run } = setup();
     const out = await run("c1", { items: [{ text: "a", status: "in_progress" }, { text: "b", status: "pending" }] });
-    assert.equal((out as { terminate?: boolean }).terminate, undefined);
-    assert.equal((out as { details: { awaiting?: boolean } }).details.awaiting, true);
-    assert.match(textOf(out), /plan mode/);
-    assert.match(textOf(out), /switch the permission out of plan mode/);
-    assert.match(textOf(out), /no more tools/);
+    assert.equal((out as { details: { awaiting?: boolean } }).details.awaiting, undefined);
+    assert.doesNotMatch(textOf(out), /plan mode/);
   });
 
   test("confirm：回执要求把问题在正文里问出来（用户在聊天框答，没有按钮）；问题不进 details", async () => {
@@ -246,10 +227,10 @@ describe("停下来：先停、让 agent 用正文说话（没有 terminate、�
   });
 
   test("闸门：update_plan 决定停之后，本轮其余工具调用被拦（block，不抛错、不带 terminate），让它回头用正文说话；之前的拦不住", () => {
-    const { gate, state } = setup({ getMode: () => "plan" });
+    const { gate, state } = setup();
     const event = (id: string, toolName: string, input: Record<string, unknown>) => ({ toolCallId: id, toolName, input });
     assert.equal(gate(event("r0", "read", { path: "a" })), null);
-    assert.equal(gate(event("p1", "update_plan", { items: [{ text: "a", status: "in_progress" }] })), null);
+    assert.equal(gate(event("p1", "update_plan", { items: [{ text: "a", status: "in_progress" }], confirm: ["删不删？"] })), null);
     assert.equal(state.stopping, true);
     const held = gate(event("r1", "read", { path: "b" }));
     assert.equal(held?.block, true);
@@ -264,8 +245,8 @@ describe("停下来：先停、让 agent 用正文说话（没有 terminate、�
     const { gate, state } = setup();
     assert.equal(gate({ toolCallId: "p1", toolName: "update_plan", input: { items: [{ text: "a", status: "in_progress" }] } }), null);
     assert.equal(gate({ toolCallId: "r1", toolName: "read", input: {} }), null);
-    const bad = setup({ getMode: () => "plan" });
-    assert.equal(bad.gate({ toolCallId: "p1", toolName: "update_plan", input: { items: [] } }), null);
+    const bad = setup();
+    assert.equal(bad.gate({ toolCallId: "p1", toolName: "update_plan", input: { items: [], confirm: ["删不删？"] } }), null);
     assert.equal(bad.state.stopping, false);
   });
 });

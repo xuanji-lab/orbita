@@ -20,7 +20,6 @@ const meta = (over: { id: string; updatedAt: number } & Partial<SessionMeta>): S
   workspaceId: null,
   providerId: "zai",
   modelId: "glm-5.3",
-  mode: "manual",
   thinkingLevel: "medium",
   piSessionFile: null,
   pinned: false,
@@ -134,8 +133,7 @@ describe("homeCardLine —— 卡上「此刻在干什么」那一句", () => {
   const text: HomeCardLineText = {
     thinking: "在想",
     doing: (step, now) => `${step}：${now}`,
-    approve: (what) => `等你批准：${what}`,
-    childWaiting: "子会话在等你批准",
+    waitingReply: "在等你回复",
     failed: "出错停下了",
     done: "跑完了",
     noText: "（没有文字）",
@@ -147,7 +145,7 @@ describe("homeCardLine —— 卡上「此刻在干什么」那一句", () => {
     ({ id, role: "assistant", content: blocks, timestamp }) as TranscriptItem;
   const tool = (o: Partial<ToolTranscriptItem> & Pick<ToolTranscriptItem, "toolCallId">): TranscriptItem =>
     ({ id: `item-${o.toolCallId}`, role: "tool", toolName: "read", input: {}, content: [], timestamp: 0, status: "complete", isError: false, ...o }) as TranscriptItem;
-  const base = { approval: null, turnError: null, lastAsk: "上次问的" } as const;
+  const base = { turnError: null, lastAsk: "上次问的" } as const;
 
   test("在跑：当前章节（agent 刚说的话）；有计划在做的那一步时带在前面", () => {
     const records = [
@@ -202,10 +200,8 @@ describe("homeCardLine —— 卡上「此刻在干什么」那一句", () => {
     assert.equal(homeCardLine({ ...base, state: "running", records }, text), "在想");
   });
 
-  test("等你：挂着的审批要做什么；自己没有审批（子会话在等）另一句", () => {
-    const approval = { toolName: "bash", input: { command: "git push origin main" } };
-    assert.equal(homeCardLine({ ...base, state: "waiting", records: null, approval }, text), "等你批准：bash git push origin main");
-    assert.equal(homeCardLine({ ...base, state: "waiting", records: null }, text), "子会话在等你批准");
+  test("等你：计划写好了等你回复", () => {
+    assert.equal(homeCardLine({ ...base, state: "waiting", records: null }, text), "在等你回复");
   });
 
   test("出错：错误原文第一行；没有原文（重启后只剩未读标记）说出错停下了", () => {
@@ -285,14 +281,13 @@ describe("visibleAsk / 首页记录行的「此刻」一格不露系统提示", 
   const text: HomeCardLineText = {
     thinking: "在想",
     doing: (step, now) => `${step}：${now}`,
-    approve: (what) => `等你批准：${what}`,
-    childWaiting: "子会话在等你批准",
+    waitingReply: "在等你回复",
     failed: "出错停下了",
     done: "跑完了",
     noText: "（没有文字）",
     verb: (toolName) => toolName,
   };
-  const idle = (lastAsk: string | null) => homeCardLine({ state: null, records: null, approval: null, turnError: null, lastAsk }, text);
+  const idle = (lastAsk: string | null) => homeCardLine({ state: null, records: null, turnError: null, lastAsk }, text);
 
   test("成对的系统包装块、自闭合标签整段剥掉，只留用户写的话", () => {
     assert.equal(

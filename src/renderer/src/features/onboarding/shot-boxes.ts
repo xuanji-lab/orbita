@@ -511,20 +511,6 @@ export const SHOT_BOXES: Readonly<Record<string, Readonly<Record<string, Box>>>>
       "h": 0.0117
     }
   },
-  "permission": {
-    "menu": {
-      "x": 0.3594,
-      "y": 0.8122,
-      "w": 0.0778,
-      "h": 0.1178
-    },
-    "perm": {
-      "x": 0.3594,
-      "y": 0.9367,
-      "w": 0.0583,
-      "h": 0.0267
-    }
-  },
   "plan": {
     "panel": {
       "x": 0.5722,

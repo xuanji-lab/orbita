@@ -6,7 +6,7 @@
  *
  * **pi 只当无状态循环**（B2，2026-09-11）：每轮 open → 跑 → dispose，
  * 不跨轮持有 AgentSession 对象。「对象在不在」这个问题消失，只剩「在不在跑」，
- * 由 `running` 按真值回答；跨轮要记住的东西（权限档、回声对账、标题鉴权面）
+ * 由 `running` 按真值回答；跨轮要记住的东西（回声对账、标题鉴权面）
  * 全在 `ledger`——它不持有任何 pi 对象。prompt cache 不受影响：缓存在 provider
  * 服务端按请求前缀命中，与客户端是否持有对象无关。
  *
@@ -23,7 +23,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { AgentCommand, AgentEvent, ProviderSecrets } from "../shared/agent-ipc.ts";
 import type { MemoryRecallOutcome } from "../shared/memory.ts";
-import type { PermissionAnswer, PermissionMode } from "../shared/permission.ts";
 import {
   registerAndResolveModel,
   toBuiltinProvider,
@@ -679,8 +678,6 @@ async function setLedgerModel(
 
 /** 跨轮账本里的一条：不持有任何 pi 对象，会话「不在跑」时也活着。 */
 interface LedgerNote {
-  /** 三档权限模式。每轮 open 的 before_agent_start 都会重讲（中途切档下一轮生效） */
-  mode: PermissionMode;
   /**
    * 已在本地回显（adapter.userPrompt 造过 item）的用户消息文本。pi 随后 emit 的
    * user `message_start` 是回声，命中即丢弃。跨轮保留：上一轮没消费完的回声
@@ -705,11 +702,11 @@ interface LedgerNote {
  */
 const ledger = new Map<string, LedgerNote>();
 
-/** 取账；没有就先落一条默认（setMode 等「会话不在跑也合法」的命令用）。 */
+/** 取账；没有就先落一条默认。 */
 function ledgerNote(sessionId: string): LedgerNote {
   let note = ledger.get(sessionId);
   if (note === undefined) {
-    note = { mode: "plan", echoed: new Set(), titleInFlight: false, apiKey: "", promptPrints: null };
+    note = { echoed: new Set(), titleInFlight: false, apiKey: "", promptPrints: null };
     ledger.set(sessionId, note);
   }
   return note;
@@ -773,14 +770,10 @@ const resolveShellPath = createShellPathResolver();
  */
 const requestBroker = new RequestBroker((event) => send(event as AgentEvent));
 
-/** 等待用户回答的审批请求。key 是 requestId——一次工具调用一个。 */
-const pendingPermissions = new Map<string, (answer: PermissionAnswer) => void>();
-
 /**
- * 回答前确认的等待编排（实验功能 intent-system）：与 pendingPermissions 同款
- * 请求-应答。**没有超时**（用户可能去泡杯咖啡再回来点）、**不听 abort**——停止 /
- * 抢跑 / 删会话必须显式调 settleIntentAsks 把等待按「取消」结掉，否则那一轮
- * 永远不收尾、running 表的坑永远占着。
+ * 回答前确认的等待编排（实验功能 intent-system）：requestId 请求-应答。
+ * **没有超时**、**不听 abort**——停止 / 抢跑 / 删会话必须显式调 settleIntentAsks，
+ * 否则那一轮永远不收尾、running 表的坑永远占着。
  */
 const intentConfirmWaiter = new IntentConfirmWaiter(send);
 const settleIntentAsks = (sessionId: string): void => intentConfirmWaiter.settle(sessionId);
@@ -827,44 +820,6 @@ function notePromptStability(
     if (changed.length > 0) console.error(`[prompt-stability] ${stabilityLogLine(sessionId, changed)}`);
   }
   note.promptPrints = prints;
-}
-
-/**
- * 向 UI 请示。**没有超时**：用户可能去泡杯咖啡再回来点。
- *
- * 但这个 promise 也**不听 abort**：pi 的 prepareToolCall 是 `await beforeToolCall(...)`
- * 之后才查 `signal.aborted`，所以卡在审批上时 AbortController 炸了也没人听。
- * 停止 / 抢跑 / 删会话都必须走 `settlePendingPermissions` 把它手动结掉，
- * 否则那一轮永远不会收尾（interrupt 还会卡在 `await lifecycle` 上）。
- */
-function askPermission(sessionId: string) {
-  return (request: { toolCallId: string; toolName: string; input: unknown }) =>
-    new Promise<PermissionAnswer>((resolve) => {
-      const requestId = `${sessionId}:${request.toolCallId}`;
-      pendingPermissions.set(requestId, resolve);
-      send({
-        type: "permission",
-        sessionId,
-        requestId,
-        toolName: request.toolName,
-        input: request.input,
-      });
-    });
-}
-
-/**
- * 把该会话挂起的审批一次结清，按拒绝放行——工具调用立刻拿到结果返回，
- * pi 的 loop 随即查到 `signal.aborted` 并收尾。
- *
- * 不结就掉引用（旧 dispose 分支的做法）的话，工具执行的闭包会挂在那里等一个
- * 永远不会到的回答。
- */
-function settlePendingPermissions(sessionId: string): void {
-  for (const [key, resolve] of pendingPermissions) {
-    if (!key.startsWith(`${sessionId}:`)) continue;
-    resolve({ behavior: "deny", message: "Stopped" });
-    pendingPermissions.delete(key);
-  }
 }
 
 /**
@@ -935,7 +890,7 @@ interface TurnImageBudget {
 /**
  * 开一轮：装配（provider → model → services → 订阅 → created 事件）。
  * 与 startTurn 分开只是为了把「纯装配」单独读——每轮都走，路径必须与旧
- * create 命令一字不差地同源（同一套注册解析、同一套审批门、同一套事件翻译）。
+ * create 命令一字不差地同源（同一套注册解析、同一套工具闸门、同一套事件翻译）。
  *
  * @param isCompactionTurn 这一轮的生命周期就是一次手动压缩（决定 compaction_end
  *   的相位翻译：手动压缩轮什么都不发——idle 只由 startTurn 的 finally 发，
@@ -948,7 +903,6 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   // 官方 DeepSeek 的 baseUrl 不是 opencode.ai，原对象返回，行为一字不变。
   const provider = withOpencodeSession(command.provider, command.sessionId);
   const note = ledgerNote(command.sessionId);
-  note.mode = command.mode;
   note.apiKey = provider.apiKey;
   if (provider.headers === undefined) delete note.headers;
   else note.headers = provider.headers;
@@ -984,21 +938,11 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   // 插件工具：命令带 pluginTools 才注册 install_plugin / preview_plugin / list_plugins（子会话不装插件，只有根会话注册）
   const pluginTools = command.pluginTools === true && role === "root";
 
-  // 审批走 pi 官方的 `tool_call` 扩展钩子：block 即拒绝，原地改 input 即改写入参。
-  // 内建工具默认全开，不需要我们自己装配。
-  // **模式读账本**：跨轮的 mode 在 ledger，不在 pi 对象上——对象这轮结束就销毁了。
-  // **会话文件不可变**：protectedPaths 由主进程随每轮发，闸门在档位判定之前拦。
-  const currentMode = () => ledgerNote(command.sessionId).mode;
-  const gate = createToolCallGate(
-    currentMode,
-    askPermission(command.sessionId),
-    command.protectedPaths,
-    command.cwd,
-  );
-  // 计划（update_plan）的「停下来对齐」：闸门里 update_plan 判定要停，本轮其余工具调用就被拦下，
+  // 工具闸门只剩抬超时与受保护路径；不再判档或问人。
+  const gate = createToolCallGate(command.protectedPaths, command.cwd);
+  // 计划（update_plan）的「停下来对齐」：confirm 与「先给我看计划」照旧。
   // 让 agent 回头用正文说话（plan-tools.ts 头注释）；下一轮开轮时复位
   const planOptions: PlanToolOptions = {
-    getMode: currentMode,
     planFirst: command.planFirst === true,
     branch: () => sessionManager.getBranch(),
     state: { stopping: false },
@@ -1006,8 +950,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   const planGate = createPlanGate(planOptions);
   // 压缩后挂在摘要末尾的目标与改动账（goal-compaction.ts）：按压缩条目 id 缓存，一轮之内只算一次
   const goalLedgerCache: LedgerAttachCache = new Map();
-  // 文件快照跟踪：闸门**放行之后**才记 before（拒掉的调用不会执行，记了是假账；
-  // ask 档等用户点了允许，读到的才是「这一批动手前」的内容）。prepare 阶段
+  // 文件快照跟踪：闸门放行之后才记 before（拒掉的调用不会执行，记了是假账）。prepare 阶段
   // pi 顺序跑钩子，同批并行调用的 before 互不踩。
   const tracker = new TurnFileTracker(command.cwd);
   // 网页产物旁路（web-artifacts.ts）：只记开轮时刻，不扫盘——按 mtime 判「本轮
@@ -1075,13 +1018,11 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
             pi.on("tool_call", async (event) => {
               const held = planGate(event);
               if (held !== null) return held;
-              const result = await gate(event);
+              const result = gate(event);
               if (!result.block) await tracker.noteAllowed(event.toolCallId, event.toolName, event.input);
               return result;
             });
-            // **每一轮都重讲一遍当前模式**。`before_agent_start` 逐轮触发，所以中途
-            // 切模式下一轮就生效；只在开机时讲一次的话，切了模式模型还按旧的答。
-            // 工具名单现场取（1-2）：MCP 重载后新工具集下一轮自动进这段话。
+            // 每轮重讲受保护数据；confirm 与「先给我看计划」的停止态在轮首复位。
             // 基底先过 adaptSystemPrompt（2026-10-12）：替换 pi 写死的 concise 行
             // （92% 工具轮零正文的问题）+ 追加进度说明段；每轮都从 pi 的原版基底
             // 开始跑，幂等由该函数自己兑底。
@@ -1094,8 +1035,6 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
               const extra = extraToolNames(role, command.workspaceId, memoryTools, automationTools, pluginTools);
               const segments = orbitaSystemSegments({
                 piBase: adaptSystemPrompt(event.systemPrompt),
-                mode: currentMode(),
-                extraToolNames: extra,
                 role,
                 workspace: command.workspaceId === null ? null : { name: command.workspaceName },
                 cwd: command.cwd,
@@ -1395,7 +1334,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     // update_goal（./goal-tools.ts）：agent 替用户记下会话级目标；目标就在转录里，不另存
     ...createGoalTools({ branch: () => sessionManager.getBranch() }),
     ...createStoreTools(requestBroker, command.sessionId),
-    ...(pluginTools ? createPluginTools(requestBroker, command.sessionId, currentMode) : []),
+    ...(pluginTools ? createPluginTools(requestBroker, command.sessionId) : []),
     ...createTaskTools(requestBroker, command.sessionId),
     ...createBrowserTools(requestBroker, command.sessionId),
     // 演示文稿（./slides-tools.ts）：slides_create / read / write / edit / insert_image / export。
@@ -1415,7 +1354,6 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
       writeRoots: [command.cwd, ...(command.directories?.attached ?? [])],
       workspaceId: command.workspaceId,
       imageReadRoots: imageReadRoots(command),
-      mode: currentMode,
     }),
     // agent 的终端工具组（PR2）：开可见终端、写命令、读输出。
     // 本分支只有用户发起这一种来源（没有定时任务 / 委派 / 外部桥），所以这里不按来源
@@ -1434,7 +1372,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
           turn: () => memory.turn ?? 1,
         })
       : []),
-    ...(automationTools ? createAutomationTools(requestBroker, command.sessionId, currentMode) : []),
+    ...(automationTools ? createAutomationTools(requestBroker, command.sessionId) : []),
   ];
   const { session } = await createAgentSessionFromServices({
     services,
@@ -2109,13 +2047,6 @@ async function handle(command: AgentCommand): Promise<void> {
     await catalogRefresher.request(command.scope, command.catalogIds);
     return;
   }
-  if (command.type === "permissionAnswer") {
-    // 回答到得比请求晚是正常的；请求早已不在（abort 等）就丢弃，不报错
-    pendingPermissions.get(command.requestId)?.(command.answer);
-    pendingPermissions.delete(command.requestId);
-    return;
-  }
-
   // 意图确认卡的回答（实验功能 intent-system）：对不上号的陈旧应答丢弃不串台
   if (command.type === "intentConfirmResult") {
     intentConfirmWaiter.answer(command.requestId, command.decision);
@@ -2160,8 +2091,7 @@ async function handle(command: AgentCommand): Promise<void> {
     // **抢跑语义：中间没有「空闲」**——旧轮收尾不发 idle（preempt），否则 renderer
     // 收到 idle 就投递队首，撞上新轮的 already running，排队项丢失。
     abortCycle(running, command.sessionId, { preempt: true });
-    // 旧轮可能正卡在审批 / 意图确认上；不结掉的话下面的 await lifecycle 永远不返回
-    settlePendingPermissions(command.sessionId);
+    // 旧轮可能正卡在意图确认上；不结掉的话下面的 await lifecycle 永远不返回
     settleIntentAsks(command.sessionId);
     await running.get(command.sessionId)?.lifecycle;
     try {
@@ -2186,8 +2116,7 @@ async function handle(command: AgentCommand): Promise<void> {
     // 全走 compaction_start / compaction_end 事件那条已接好的链。
     // 抢跑语义同 interrupt：旧轮收尾不发 idle（preempt），中间没有「空闲」可投递。
     abortCycle(running, command.sessionId, { preempt: true });
-    // 理由同 interrupt：卡在审批 / 意图确认的旧轮不结就等不到它收尾
-    settlePendingPermissions(command.sessionId);
+    // 理由同 interrupt：卡在意图确认的旧轮不结就等不到它收尾
     settleIntentAsks(command.sessionId);
     await running.get(command.sessionId)?.lifecycle;
     try {
@@ -2213,9 +2142,7 @@ async function handle(command: AgentCommand): Promise<void> {
     // 排队消息滞留在 renderer 的本地队列，idle 事件（startTurn 的 finally）到了
     // 自然逐条投递；不替用户清队（排队是用户的意图，停止不该替他放弃）。
     abortCycle(running, command.sessionId);
-    // **审批与意图确认都不听 abort**（见 askPermission / IntentConfirmWaiter）：不
-    // 在这里结掉的话，停止对「正卡在等用户点」的轮完全无效
-    settlePendingPermissions(command.sessionId);
+    // 意图确认不听 abort；不在这里结掉的话，停止对「正卡在等用户点」的轮完全无效
     settleIntentAsks(command.sessionId);
     return;
   }
@@ -2228,19 +2155,11 @@ async function handle(command: AgentCommand): Promise<void> {
     // 收尾跳过二次 dispose（退订与出表仍做），并等它完全收尾。
     await killCycle(running, command.sessionId);
     ledger.delete(command.sessionId);
-    // 审批 resolve 函数不随会话一起结的话，会把已销毁会话的工具执行闭包整条钉在内存里；
-    // 意图确认的等待同理（它也不听 abort）
-    settlePendingPermissions(command.sessionId);
+    // 意图确认的等待不听 abort，删会话时显式结掉
     settleIntentAsks(command.sessionId);
     return;
   }
 
-  if (command.type === "setMode") {
-    // 档位是账本字段：每轮 before_agent_start 都重讲，这里只改账。会话不在跑
-    // 也合法（Ctrl+R 后重开，renderer 会同步当前档位）——先落账，下一轮生效。
-    ledgerNote(command.sessionId).mode = command.mode;
-    return;
-  }
   if (command.type === "setModel") {
     // 会话内换模型（C-4）。fire-and-forget：成功经 `model` 事件、失败经 `failed`
     // 事件回传，主进程与 renderer 都靠事件对齐，这一跳不等结果。

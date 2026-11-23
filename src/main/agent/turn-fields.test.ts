@@ -15,7 +15,6 @@ const input = {
   workspaceId: "ws-1",
   providerId: "p",
   modelId: "m",
-  mode: "plan",
   thinkingLevel: "medium",
   resume: null,
 } as const;
@@ -72,6 +71,11 @@ describe("turnFields", () => {
       environment,
     );
     assert.equal(fields.piSessionFile, "/pi/2026-10-09_book.jsonl");
+  });
+
+  test("权限档不进开轮命令（旧输入即使多带了，也不会被转发）", () => {
+    const fields = turnFields({ ...input, mode: "plan" } as never, provider, "/pi", "/a", [], environment);
+    assert.equal("mode" in fields, false);
   });
 
   test("「先给我看计划」偏好随命令发给 agent（runtime 据此决定第一张新计划后停不停）", () => {
