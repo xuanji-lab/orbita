@@ -3,7 +3,7 @@ import { describe, test } from "node:test";
 import type { SessionMeta } from "@shared/session";
 import { runStateOf, type SessionRunState } from "../notify/completion-notice.ts";
 import { FRAME_EXTENT, PLANET_MASS, PLANET_ZONE, STAR_MASS, VISIBLE_ORBIT_CAP, layoutGalaxy, planetRadius, starRadius } from "./galaxy.ts";
-import { IDLE_CHILD_MS, ORBIT_FIRST, ORBIT_SPREAD_MAX, ORBIT_STEP, RECENT_MENU_LIMIT, latestWorkspaceId, orbitRadiusOf, planetMassOf, scopeGalaxy, scopeRecent, scopeSummary, scopeTone, stateIndexOf, stateOfIndex } from "./galaxy-data.ts";
+import { IDLE_CHILD_MS, ORBIT_FIRST, ORBIT_SPREAD_MAX, ORBIT_STEP, RECENT_MENU_LIMIT, latestWorkspaceId, orbitRadiusOf, ROCK_CAP, planetMassOf, scopeGalaxy, scopeRecent, scopeSummary, scopeTone, stateIndexOf, stateOfIndex } from "./galaxy-data.ts";
 
 const meta = (over: { id: string; updatedAt: number } & Partial<SessionMeta>): SessionMeta => ({
   title: `Task ${over.id}`,
@@ -301,5 +301,29 @@ describe("scopeGalaxy 的行星带名字", () => {
       designedPlanet: null,
     });
     assert.deepEqual(galaxy.spec.planets.map((planet) => planet.label), ["", "梳理周报"]);
+  });
+});
+
+describe("编排星系：行星 = 子智能体，会话 = 碎石", () => {
+  const ws = "ws";
+  const at = 1_000_000_000;
+  const mk = (id: string, over: Partial<SessionMeta> = {}): SessionMeta => meta({ id, updatedAt: at, ...over });
+  const agents = [
+    { id: "rec", mass: 22, composition: "rock" as const, orbitRadius: 19 },
+    { id: "eval", mass: 30, composition: "rock" as const, orbitRadius: 31 },
+  ];
+  test("行星只来自子智能体；在跑 / 等你的会话成碎石块（等你在前），其余会话只计数", () => {
+    const sessions = [mk("a"), mk("b"), mk("c"), mk("k", { parentId: "a" })];
+    const states: Record<string, "running" | "waiting" | null> = { a: "running", b: "waiting", c: null, k: "running" };
+    const data = scopeGalaxy({ sessions, workspaceId: ws, stateOf: (m) => states[m.id] ?? null, now: at, starMass: 600, designedPlanet: null, agents });
+    assert.deepEqual(data.spec.planets.map((p) => [p.id, p.mass, p.orbitRadius, p.state]), [["rec", 22, 19, null], ["eval", 30, 31, null]]);
+    assert.deepEqual(data.spec.rocks?.map((r) => [r.id, r.state]), [["b", "waiting"], ["a", "running"], ["k", "running"]]);
+    assert.equal(data.spec.sessions, 4);
+  });
+  test("在做事的会话再多，碎石块也只拎 ROCK_CAP 块，等你的一定在里面", () => {
+    const sessions = Array.from({ length: 20 }, (_, i) => mk(`s${i}`, { updatedAt: at + i }));
+    const data = scopeGalaxy({ sessions, workspaceId: ws, stateOf: (m) => (m.id === "s0" ? "waiting" : "running"), now: at, starMass: 600, designedPlanet: null, agents });
+    assert.equal(data.spec.rocks?.length, ROCK_CAP);
+    assert.equal(data.spec.rocks?.[0]?.id, "s0");
   });
 });

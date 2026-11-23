@@ -139,6 +139,9 @@ export interface ScopeGalaxyInput {
   agents?: readonly AgentPlanetInput[];
 }
 
+/** 同时拎成碎石块（带锁定框）的在做事会话上限：满载时 15 件同时在跑，一圈 15 个锁定框读不出谁要紧 */
+export const ROCK_CAP = 8;
+
 /** 一颗子智能体行星（来自设计稿） */
 export interface AgentPlanetInput {
   id: string;
@@ -231,7 +234,8 @@ function agentGalaxy(input: ScopeGalaxyInput, agents: readonly AgentPlanetInput[
     if (state === "running" || state === "waiting") active.push({ meta, state });
   }
   active.sort((a, b) => rankOf(a.state) - rankOf(b.state) || b.meta.updatedAt - a.meta.updatedAt || a.meta.id.localeCompare(b.meta.id));
-  const rocks: RockSpec[] = active.map(({ meta, state }) => ({ id: meta.id, state, label: meta.title.trim() }));
+  // 最多拎出 ROCK_CAP 块（等你的排在前面，一定在里面）；再多的只是星屑里的一粒，计数里有、「+N」里有
+  const rocks: RockSpec[] = active.slice(0, ROCK_CAP).map(({ meta, state }) => ({ id: meta.id, state, label: meta.title.trim() }));
   const planets: PlanetSpec[] = agents.map((agent) => {
     const hash = workspaceHash(agent.id);
     return {
