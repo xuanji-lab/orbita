@@ -606,13 +606,10 @@
   transform-origin: top left;
   pointer-events: none;
 }
-.cs-thumb-web {
-  position: absolute;
-  top: 0;
-  left: 0;
-  border: 0;
-  transform-origin: top left;
-  pointer-events: none;
+.cs-thumb-shot {
+  /* 网页截图是 1280×800 的顶部一屏：贴顶铺满，不留边 */
+  object-fit: cover;
+  object-position: top left;
 }
 .cs-thumb-pdf {
   display: block;
