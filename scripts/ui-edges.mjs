@@ -125,6 +125,23 @@ const CHECKS = [
     skipNoTrailing: true,
   },
   {
+    name: "编排侧栏·智能体行：「多久没动了」钉在右血线（悬停动作键叠在右上角，静止不占位）",
+    row: ".agent-row-main",
+    leading: ".agent-avatar",
+    trailing: ".agent-time",
+    // .agent-row-main 的右内边距 var(--space-2)、左内边距 var(--space-1)（头像落在会话行图标槽那条线上）
+    rightPad: 8,
+    skipNoTrailing: true,
+  },
+  {
+    name: "编排侧栏·智能体行：等你的小圆点钉在右血线",
+    row: ".agent-row-main",
+    leading: ".agent-avatar",
+    trailing: ".agent-dot",
+    rightPad: 8,
+    skipNoTrailing: true,
+  },
+  {
     name: "左栏·会话行：「多久没动了」钉在右血线（悬停层的键叠在同一格里，静止不占位）",
     row: ".task-row",
     leading: ".option-row span",

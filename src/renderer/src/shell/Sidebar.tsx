@@ -702,6 +702,7 @@ export function Sidebar(props: {
           <>
             <NodeHeader
               label={t.agents.header}
+              inset
               addLabel={t.sidebar.addWorkspace}
               addIcon="folder-plus"
               addMenu={addWorkspaceMenu}
@@ -1289,6 +1290,8 @@ function NodeHeader(props: {
   count?: number | undefined;
   /** 「+」左边的额外控件（「工作区」节的筛选键） */
   extra?: React.ReactNode;
+  /** 标题字缩进一格（--space-1），落在行首图标 / 头像的左缘那条线上（编排的「智能体」节：头像 28px 在 4px 内边距之后） */
+  inset?: boolean;
 }) {
   // 「+」静止时不露也不占位、悬停标题行 / 键盘聚焦 / 菜单开着才出现（styles.css 的 .node-header）：
   // 两节标题静止时只剩一个词，和 Kimi 的「项目 ⌄ / 任务 ⌄」一样干净（2026-11-23）
@@ -1324,6 +1327,10 @@ function NodeHeader(props: {
           folded={props.folded === true}
           onToggle={props.onToggleFold}
         />
+      ) : props.inset === true ? (
+        <span style={{ paddingInline: "var(--space-1)" }}>
+          <NodeLabel>{props.label}</NodeLabel>
+        </span>
       ) : (
         <NodeLabel>{props.label}</NodeLabel>
       )}
