@@ -197,7 +197,7 @@
  * `.composer-bottom-bar .chip` 的 `min-width: 0`**只能局部生效，不能写成全局
  * `.chip`**（2026-09-23 验收发现的真回归）：Chip 作为 flex 子项默认拿浏览器给的
  * 隐式 `min-width: auto`（撑住内容宽度，装不下就让容器溢出而不是自己收缩）；
- * 侧栏筛选行（`Sidebar.tsx` 的 `filterRowRef`）靠的正是这个「宁可溢出也不缩」的
+ * 当年侧栏筛选行（`Sidebar.tsx` 的 `filterRowRef`，2026-11-23 已收成一个筛选键、连同量宽逻辑删掉）靠的正是这个「宁可溢出也不缩」的
  * 默认行为——`nextFilterRowMode`（`filter-row-compact.ts`）用 `row.scrollWidth`
  * 在**展开态**量「四个带字 chip 的真实自然宽度」，`scrollWidth` 之所以可信，是因为
  * chip 此时不会被 flex-shrink 偷偷压小、也不会被 `overflow: hidden` 吃掉真实尺寸
@@ -1341,31 +1341,63 @@ html[data-pointer-drag] iframe {
 }
 
 /*
- * 工作区组头：hover 到组内任意位置（含下方的会话行）就浮出悬停动作键（「查看
- * 工作区文件」与删除键），原 onMouseEnter 挂在组的外层 div 上，:hover 的命中范围
- * 原样对应。**只点名 `.workspace-group-act`，不用通用的 `.reveal`**——组头与它
- * 下面的会话行是同一个 `.workspace-group` 的 DOM 兄弟，任务行自己的星标/完成/更多
- * 也叫 `.reveal`；用后代选择器裸配 `.reveal` 会连带点亮全组每一行的这些键
- * （2026-09-23 验收发现的真回归）。
+ * 工作区组头的动作簇（迁移任务 / 查看文件 / 删除 / 在这里新建任务）：静止时 display:none、**不占位**，
+ * 悬停组头这一行、键盘聚焦到组头里、菜单开着、删除已按下一次（data-armed）时才出现。
+ * 以前用 .reveal（opacity:0 但照样占位）挂在整组的 :hover 上：四颗隐形按钮常年占着行尾 ~90px，
+ * 工作区名被截成「ddpm-gener…」（2026-11-23 满载截图）。只认组头这一行的 :hover，
+ * 指针在下面的会话行上移动时组头不跟着变。
+ * 折叠组的运行态汇总（.ws-agg）反过来：静止时在，动作簇出来时让位。
  */
-.workspace-group:hover .workspace-group-act {
-  opacity: 1;
+.ws-head-acts {
+  display: none;
+  align-items: center;
+  gap: var(--space-0-5);
+}
+.ws-head:hover .ws-head-acts,
+.ws-head:has(:focus-visible) .ws-head-acts,
+.ws-head:has([aria-expanded="true"]:not(.ws-fold)) .ws-head-acts,
+.ws-head-acts[data-armed] {
+  display: inline-flex;
+}
+.ws-head:hover .ws-agg,
+.ws-head:has(:focus-visible) .ws-agg {
+  display: none;
 }
 
-/* 折叠组头的运行态汇总（.run-agg）：静止时盖在悬停动作键的位置上（右对齐），
-   悬停时让位给动作键——两样东西不同时出现，组头不为它多占一格 */
-.ws-agg {
-  position: absolute;
-  inset-block: 0;
-  right: 0;
-  transition: opacity var(--duration-instant) var(--ease-standard);
+/* 文件夹格 = 开合键：22×24，14px 图标左右各 --space-1，落在会话行图标槽那一列（见 .workspace-group） */
+.ws-fold {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-text-secondary);
 }
-.workspace-group:hover .ws-agg,
-.workspace-group:has(:focus-visible) .ws-agg {
-  opacity: 0;
+button.ws-fold {
+  cursor: pointer;
+}
+button.ws-fold:hover {
+  background: var(--option-hover-bg);
 }
 
-/* FoldHeaderButton（TASKS 节的整块折叠键）：只有底色跟着 hover，字色由 NodeLabel 自己定 */
+/*
+ * 两节标题（「工作区」「任务」）的「+」与没开着的筛选键：静止时 display:none、不占位（设计系统
+ * *Implementation rules*：悬停动作键不占位，行尾元素钉在行右内边距——开着的筛选芯片因此贴右缘），
+ * 悬停标题行 / 键盘聚焦 / 菜单开着（aria-pressed）才出现。
+ */
+.node-header .node-act {
+  display: none;
+}
+.node-header:hover .node-act,
+.node-header:has(:focus-visible) .node-act,
+.node-header .node-act:has([aria-pressed="true"]) {
+  display: inline-flex;
+}
+
+/* FoldHeaderButton（「工作区」「任务」两节的整块折叠键）：只有底色跟着 hover，字色由 NodeLabel 自己定 */
 .fold-header-btn {
   background: transparent;
 }
@@ -1514,16 +1546,19 @@ html[data-pointer-drag] iframe {
 }
 
 /*
- * 侧栏树：工作区下的会话行，字形落在父项名字的同一根竖线上（2026-10-29 精装审计）。
- * 改前子项文字在 49、父项名字在 76——子项比父项靠左 27px，读起来像会话不属于这个工作区。
+ * 侧栏只有两条左起线（2026-11-23，照 Kimi）：
+ * - 第一条 = 图标线：节标题的字（.fold-header-btn 左内边距 --space-1）、工作区的文件夹图标、
+ *   会话行的图标槽（NavRow 左内边距 --space-1）都从这里起；
+ * - 第二条 = 名字线：工作区名、工作区里的会话、「任务」里的会话，标题字全落在这一条上。
+ * 改前有四条（24 / 40 / 50 / 80）：工作区下的会话比「任务」下的再缩进 30px，
+ * 工作区名前面还挂着一列 chevron。层级改由「节标题 → 文件夹图标 → 会话」的形状来读，不再靠缩进。
  * 两个量都从各自的版式推出来，不写魔数：
- * - 组头（Sidebar.tsx 的 workspace-group）：开合键 24 + 文件夹格 24 + 两道 --space-1 的 gap
+ * - 组头（Sidebar.tsx 的 workspace-group）：文件夹格 22（--space-1 + 14 + --space-1）+ 一道 --space-1 的 gap
  * - 会话行（NavRow）：左内边距 --space-1 + 14px 图标槽 + --space-2 的 gap
- * 行的图标槽（子会话 git-fork / 置顶图钉）因此落在父项文件夹图标的那一列下面；
- * 悬停与选中的底跟着行一起缩进。
+ * 两者相等，所以 .tree-children 的缩进算出来是 0；留着这条算式，哪边的版式变了缩进自己跟着变。
  */
 .workspace-group {
-  --tree-name-x: calc(24px + 24px + 2 * var(--space-1));
+  --tree-name-x: calc(var(--space-1) + 14px + var(--space-1) + var(--space-1));
   --row-glyph-x: calc(var(--space-1) + 14px + var(--space-2));
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { IconButton } from "./IconButton";
 import { PanelEmpty } from "./PanelEmpty";
@@ -35,13 +35,13 @@ import { describeList } from "../features/chat/load-state.ts";
 import { rowStatusIcon } from "./row-status.ts";
 import { aggregateRunStates, runStateLabel, runStateOf } from "../features/notify/completion-notice.ts";
 import { StatusPie } from "./StatusPie";
-import { chipCompactAt, nextCompactLevel } from "./filter-row-compact.ts";
 import { ageCounts, filterByAge } from "./sidebar-age.ts";
 import { sessionAgeLabel } from "./relative-time.ts";
 import { useMinuteTick } from "./use-minute-tick.ts";
 import { effectiveSidebarFilters } from "./sidebar-filters.ts";
 import {
   TASKS_FOLD_KEY,
+  WORKSPACES_FOLD_KEY,
   foldKeyForWorkspace,
   groupVisibleLimit,
   isGroupFolded,
@@ -169,55 +169,6 @@ export function Sidebar(props: {
   const settingsOpen = props.overlay === "settings";
   /** 任一整页盖层（设置）开着：主列表、筛选行、子视图都让位 */
   const overlayOpen = props.overlay === "settings";
-  /**
-   * 筛选行的「收几个 chip 成图标」档位：容器放不下五个带字 chip 时，从最右边的字 chip 起往左
-   * 逐个只画图标（设计稿 c 图；判定在 `filter-row-compact.ts`，纯函数、不抖），这里只负责量宽度。
-   * 每个 chip 完整态的宽度量到就记住（图标态的宽度不可信）；语言或时间范围的有无变了、chip 宽度随之变，
-   * 就先回到 0 档重新量一遍（useLayoutEffect，首帧前完成，不闪）。
-   */
-  const filterRowRef = useRef<HTMLDivElement | null>(null);
-  const [filterLevel, setFilterLevel] = useState(0);
-  const chipFullWidths = useRef<(number | null)[]>([null, null, null]);
-  const chipWidthKey = useRef<{ t: Messages; aged: boolean } | null>(null);
-  useLayoutEffect(() => {
-    const row = filterRowRef.current;
-    if (row === null) return;
-    const aged = props.ageDays !== null;
-    if (chipWidthKey.current === null || chipWidthKey.current.t !== t || chipWidthKey.current.aged !== aged) {
-      chipWidthKey.current = { t, aged };
-      chipFullWidths.current = [null, null, null];
-      if (filterLevel !== 0) {
-        // 完整态才量得到完整宽度：先回 0 档，下一轮（依赖 filterLevel 变）再量
-        setFilterLevel(0);
-        return;
-      }
-    }
-    const measure = (): void => {
-      const chips = Array.from(row.querySelectorAll<HTMLElement>("button.chip"));
-      let compactWidth = 24;
-      chips.forEach((chip, index) => {
-        const width = chip.getBoundingClientRect().width;
-        if (chipCompactAt(filterLevel, index)) compactWidth = width;
-        else chipFullWidths.current[index] = width;
-      });
-      const next = nextCompactLevel({
-        fullWidths: chipFullWidths.current,
-        compactWidth,
-        gap: 4,
-        containerWidth: row.clientWidth,
-      });
-      if (next !== filterLevel) setFilterLevel(next);
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(row);
-    return () => observer.disconnect();
-    // 筛选行可能整个不渲染（无会话 / Archived / Settings 视图 / 侧栏收起），ref 空时不装观察者；
-    // 它回来时靠下面这几个依赖重跑一次。live 在后面才算，这里用 session.sessions.length 代替。
-    // props.collapsed 必须在里面：收起时整个侧栏 return null，旧观察者盯着被摘掉的节点、回报宽 0，
-    // 把档位推到「全图标」；再展开时没有依赖变化就不重装观察者，筛选行会一直停在全图标
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterLevel, props.ageDays, t, session.sessions.length, overlayOpen, props.showArchived, props.collapsed]);
   /**
    * 「Starred」叠加开关的开合——星标是用户的价值标记（「值得回来翻」），与时间范围叠加生效。
    * **只作用于主浏览列表**（Workspaces + Tasks）：Archived 是存储位置视图、
@@ -350,6 +301,8 @@ export function Sidebar(props: {
     ? session.workspaces.filter((workspace) => scoped.some((m) => m.workspaceId === workspace.id))
     : session.workspaces;
   const tasksFolded = isGroupFolded(groups, TASKS_FOLD_KEY);
+  /** 「工作区」整节收起（标题行的开合，同「任务」节）；默认展开 */
+  const workspacesFolded = isGroupFolded(groups, WORKSPACES_FOLD_KEY);
   // TASKS 的超长截断：默认列前 N 条，其余收进「Show N more」
   const looseVisible = visibleWithOpen(loose, limitFor(TASKS_FOLD_KEY), openId);
   const open = (id: string) => {
@@ -362,7 +315,7 @@ export function Sidebar(props: {
    * 再接 TASKS 的可见行——与下面的渲染顺序一致，折起的组、Show more 后藏着的不算。
    */
   const visibleOrder = [
-    ...(workspaceList.body === "list" ? workspaceMatches : []).flatMap((workspace) => {
+    ...(workspaceList.body === "list" && !workspacesFolded ? workspaceMatches : []).flatMap((workspace) => {
       const key = foldKeyForWorkspace(workspace.id);
       if (isGroupFolded(groups, key)) return [];
       const members = scoped.filter((m) => m.workspaceId === workspace.id);
@@ -372,6 +325,56 @@ export function Sidebar(props: {
   ];
   const batch = selectedInOrder(selection, visibleOrder);
   const listView = !overlayOpen && !props.showArchived;
+  const clearFilters = (): void => {
+    setStarredOnly(false);
+    if (ageDays !== null) props.onAgeDaysChange(null);
+  };
+  /**
+   * 「工作区」节的标题行。筛选键挂在这一行（2026-11-23 用户定：原来单独一整行的「全部 / 星标 / 时间」
+   * 收成标题旁的一个小图标）：筛选管的是整张列表（工作区 + 任务），所以挂在列表最上面那个标题上，
+   * 而不是「任务」标题上。筛选扑空时这一行也照样画（见下面的空态分支），筛选永远关得掉。
+   */
+  const workspacesHeader = (
+    <NodeHeader
+      label={t.sidebar.workspaces}
+      addLabel={t.sidebar.addWorkspace}
+      addIcon="folder-plus"
+      addMenu={[
+        // 命名新建：icon 用 plus——folder-plus 留给「选一个已有文件夹」，
+        // 两种添法在菜单里各占一个符号
+        {
+          id: "new-workspace",
+          label: t.sidebar.newWorkspace,
+          icon: "plus",
+          onSelect: () => {
+            // 节收着时先展开：就地命名的那一行长在节里，收着就看不见了
+            setGroups((current) => unfoldGroup(current, WORKSPACES_FOLD_KEY));
+            setCreatingWorkspace(true);
+          },
+        },
+        {
+          id: "add-folder",
+          label: t.sidebar.addFolder,
+          icon: "folder-plus",
+          onSelect: session.addWorkspace,
+        },
+      ]}
+      folded={workspacesFolded}
+      onToggleFold={() => setGroups((current) => toggleGroupFold(current, WORKSPACES_FOLD_KEY))}
+      extra={
+        live.length > 0 ? (
+          <FilterButton
+            starredOnly={starredOnly}
+            ageDays={ageDays}
+            ageCounts={ageCountsNow}
+            onStarredOnly={setStarredOnly}
+            onAgeDays={props.onAgeDaysChange}
+            onClear={clearFilters}
+          />
+        ) : undefined
+      }
+    />
+  );
   /** 行的高亮：多选进行中只亮选中的那几行（Finder 同款），否则亮正打开的那条 */
   const rowActive = (id: string): boolean => (batch.length > 0 ? selection.ids.has(id) : id === openId);
   /** 某一行菜单里「移到…」要搬哪些：它在多选里就搬整批，否则只搬它自己 */
@@ -544,80 +547,6 @@ export function Sidebar(props: {
         </ModeChip>
       </div>
 
-      {/**
-        筛选区：会话浏览的过滤 chips。「全部」= 没开任何筛选（点一下清掉星标与时间范围），
-        Starred 是叠加开关，时间范围是下拉——两者正交。「已完成」与「有待办」两个筛选已随会话
-        「完成」与遗留事项一起删除（2026-11-22）。**只在主列表视图显示**，且没有任何会话时
-        筛选无从谈起，不摆。
-      */}
-      {live.length > 0 && !overlayOpen && !props.showArchived && (
-        <div
-          ref={filterRowRef}
-          style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, overflow: "hidden" }}
-        >
-          <Chip
-            icon="list"
-            compact={chipCompactAt(filterLevel, 0)}
-            active={!filtered}
-            title={t.sidebar.filterAllTip}
-            onClick={() => {
-              setStarredOnly(false);
-              if (ageDays !== null) props.onAgeDaysChange(null);
-            }}
-          >
-            {t.sidebar.filterAll}
-          </Chip>
-          <Chip
-            icon="star"
-            compact={chipCompactAt(filterLevel, 1)}
-            active={starredOnly}
-            title={t.sidebar.filterStarredTip}
-            onClick={() => setStarredOnly((value) => !value)}
-          >
-            {t.sidebar.filterStarred}
-          </Chip>
-          {/*
-            时间范围（2026-11-07）：只列最近 N 天动过的。不限时只画「时钟 + ˅」不带字；选了某档才露出「3 天」，一眼看出范围开着。
-            菜单每档后面写命中条数（在其它筛选之上算的）。选择落盘（settings.sidebarAgeDays）。
-          */}
-          <Menu
-            items={[
-              { id: "age-header", label: t.sidebar.filterAgeHeader, header: true },
-              ...SIDEBAR_AGE_CHOICES.map(
-                (days): MenuItem => ({
-                  id: `age-${days}`,
-                  label: t.sidebar.filterAgeChoice(days),
-                  hint: String(ageCountsNow[days]),
-                  checked: ageDays === days,
-                  onSelect: () => props.onAgeDaysChange(days),
-                }),
-              ),
-              {
-                id: "age-any",
-                label: t.sidebar.filterAgeAny,
-                hint: String(ageCountsNow.any),
-                checked: ageDays === null,
-                onSelect: () => props.onAgeDaysChange(null),
-              },
-            ]}
-            align="end"
-            panelMinWidth={200}
-            trigger={({ toggle }) => (
-              <Chip
-                icon="clock"
-                compact={chipCompactAt(filterLevel, 2)}
-                chevron={!chipCompactAt(filterLevel, 2)}
-                active={ageDays !== null}
-                title={ageDays === null ? t.sidebar.filterAgeTip : t.sidebar.filterAgeChoice(ageDays)}
-                onClick={toggle}
-              >
-                {ageDays === null ? null : t.sidebar.filterAgeChip(ageDays)}
-              </Chip>
-            )}
-          />
-        </div>
-      )}
-
       {listView && (selecting || moveNote !== null) && (
         <div style={{ display: "grid", gap: "var(--space-1)" }}>
           {selecting && (
@@ -744,35 +673,21 @@ export function Sidebar(props: {
             ))}
           </>
         ) : filtered && scoped.length === 0 ? (
-          /* 筛选扑空：一条空态说清「为什么什么都没有、怎么才有」，而非留白两节空头 */
-          <Empty icon="list-filter">
-            {filterEmptyText(ageDays !== null && beforeAge.length > 0 ? ageDays : null, t)}
-          </Empty>
+          /*
+            筛选扑空：「工作区」标题行留着——筛选键就住在它上面，标题没了筛选也就关不掉了；
+            下面一条空态说清「为什么什么都没有」，并直接给一个清掉筛选的出口
+          */
+          <>
+            {workspacesHeader}
+            <Empty icon="list-filter" exit={{ label: t.sidebar.filterClear, onClick: clearFilters }}>
+              {filterEmptyText(ageDays !== null && beforeAge.length > 0 ? ageDays : null, t)}
+            </Empty>
+          </>
         ) : (
           <>
-            {(!filtered || workspaceMatches.length > 0) && (
+            {workspacesHeader}
+            {!workspacesFolded && (!filtered || workspaceMatches.length > 0) && (
               <>
-                <NodeHeader
-                  label={t.sidebar.workspaces}
-                  addLabel={t.sidebar.addWorkspace}
-                  addIcon="folder-plus"
-                  addMenu={[
-                    // 命名新建：icon 用 plus——folder-plus 留给「选一个已有文件夹」，
-                    // 两种添法在菜单里各占一个符号
-                    {
-                      id: "new-workspace",
-                      label: t.sidebar.newWorkspace,
-                      icon: "plus",
-                      onSelect: () => setCreatingWorkspace(true),
-                    },
-                    {
-                      id: "add-folder",
-                      label: t.sidebar.addFolder,
-                      icon: "folder-plus",
-                      onSelect: session.addWorkspace,
-                    },
-                  ]}
-                />
                 {creatingWorkspace && (
                   // 就地命名：与工作区组头同一套 icon 槽与行高，像「正在出生的那一行」。
                   // Enter 提交、Esc 放弃；失焦即提交（InlineName 的死规矩），空名不提交
@@ -1034,41 +949,38 @@ function WorkspaceGroup(props: {
       onMouseLeave={() => setArmed(false)}
     >
       <div
+        className="ws-head"
         style={{
           display: "grid",
-          gridTemplateColumns:
-            props.count === undefined ? "24px 24px minmax(0,1fr) auto 28px" : "24px 24px minmax(0,1fr) auto auto 28px",
+          // 22px 的文件夹格 = 图标左右各 --space-1：图标落在会话行图标槽那一列，名字落在会话标题那一列
+          // （两条左起线，见 styles.css 的 .workspace-group）
+          gridTemplateColumns: props.count === undefined ? "22px minmax(0,1fr) auto" : "22px minmax(0,1fr) auto auto",
           alignItems: "center",
           gap: "var(--space-1)",
           minHeight: "var(--control-height-md)",
         }}
       >
-        {/* 空组没有可折的东西，开关就不摆——一个点了什么都不发生的开关比没有更吵 */}
+        {/*
+          文件夹图标本身就是开合键（Kimi 同款：打开的文件夹 = 展开，合上的 = 收起），
+          不再另摆一个 chevron 占一列——那一列把工作区名推到了第四条左起线上。
+          开合仍只认这一个键，名字留给双击改名，两个手势不打架。空组没有可折的，图标只是图标。
+        */}
         {props.sessions.length > 0 ? (
-          <IconButton
-            label={props.folded ? t.sidebar.expandGroup : t.sidebar.collapseGroup}
-            ariaExpanded={!props.folded}
-            size={20}
+          <button
+            type="button"
+            className="ws-fold"
+            aria-label={props.folded ? t.sidebar.expandGroup : t.sidebar.collapseGroup}
+            aria-expanded={!props.folded}
+            title={props.folded ? t.sidebar.expandGroup : t.sidebar.collapseGroup}
             onClick={props.onToggleFold}
-            style={{ color: "var(--color-text-tertiary)" }}
           >
-            <FoldChevron folded={props.folded} />
-          </IconButton>
+            <Icon name={props.folded ? "folder" : "folder-open"} size={14} strokeWidth={1.8} />
+          </button>
         ) : (
-          <span />
+          <span className="ws-fold" aria-hidden="true">
+            <Icon name="folder" size={14} strokeWidth={1.8} />
+          </span>
         )}
-
-        <span
-          style={{
-            display: "grid",
-            placeItems: "center",
-            width: 24,
-            height: 24,
-            color: "var(--color-text-secondary)",
-          }}
-        >
-          <Icon name="folder" size={14} strokeWidth={1.8} />
-        </span>
 
         {editing === null ? (
           <strong
@@ -1116,7 +1028,13 @@ function WorkspaceGroup(props: {
           />
         )}
 
-        <span style={{ position: "relative", display: "inline-flex", alignItems: "center", justifyContent: "flex-end" }}>
+        {/*
+          行尾：静止时只有折叠组的运行态汇总（有才画）；悬停组头 / 键盘聚焦 / 菜单开着 / 删除已按下一次
+          才换成动作簇（迁移任务、查看文件、删除、在这里新建任务）。动作簇静止时**不占位**
+          （styles.css 的 .ws-head-acts）：以前四颗隐形按钮常年占着 ~90px，工作区名被截成「ddpm-gener…」。
+          勾选态的「完成」是出口，常显。
+        */}
+        <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "flex-end", gap: "var(--space-0-5)" }}>
           {agg.length > 0 && (
             <span className="run-agg ws-agg" aria-label={agg.map((a) => `${runStateLabel(a.state, t)} ${a.count}`).join(" · ")}>
               {agg.map((a) => (
@@ -1127,66 +1045,52 @@ function WorkspaceGroup(props: {
               ))}
             </span>
           )}
-          {/**
-            悬停动作簇（静止不占位）：「查看工作区文件」（list-tree，zcode 同款）
-            在删除键前面——浏览是常事，删除是两段式。
-          */}
-          {props.checking ? (
-            // 勾选态里常显的出口（不等悬停）：用户得一眼看到怎么退出
+          {props.checking && (
             <button type="button" className="sidebar-selection-move" onClick={props.onDoneChecking}>
               {t.sidebar.checkDone}
             </button>
-          ) : (
-            props.sessions.length > 0 && (
+          )}
+          <span className="ws-head-acts" data-armed={armed || undefined}>
+            {!props.checking && props.sessions.length > 0 && (
               <IconButton
                 label={t.sidebar.moveTasks}
                 title={t.sidebar.moveTasks}
                 size={20}
                 onClick={props.onStartChecking}
-                className="reveal workspace-group-act"
                 style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-tertiary)" }}
               >
                 <Icon name="folder-sync" size={14} strokeWidth={1.8} />
               </IconButton>
-            )
-          )}
-          <IconButton
-            label={t.focus.browseFiles}
-            title={t.focus.browseFiles}
-            size={20}
-            onClick={props.onBrowse}
-            className="reveal workspace-group-act"
-            style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-tertiary)" }}
-          >
-            <Icon name="list-tree" size={14} strokeWidth={1.8} />
-          </IconButton>
-          <IconButton
-            label={armed ? t.sidebar.removeArmed : t.sidebar.remove}
-            title={
-              armed
-                ? t.sidebar.removeArmedTip
-                : t.sidebar.removeTip
-            }
-            size={20}
-            onClick={() => (armed ? props.onRemove() : setArmed(true))}
-            className="reveal workspace-group-act"
-            style={{
-              borderRadius: "var(--radius-xs)",
-              color: armed ? "var(--color-danger)" : "var(--color-text-tertiary)",
-              // armed（二次确认已按下）常显，不等 hover——armed 只有 mouseleave 才清
-              opacity: armed ? 1 : undefined,
-            }}
-          >
-            <Icon name="trash-2" size={11} />
-          </IconButton>
+            )}
+            <IconButton
+              label={t.focus.browseFiles}
+              title={t.focus.browseFiles}
+              size={20}
+              onClick={props.onBrowse}
+              style={{ borderRadius: "var(--radius-xs)", color: "var(--color-text-tertiary)" }}
+            >
+              <Icon name="list-tree" size={14} strokeWidth={1.8} />
+            </IconButton>
+            <IconButton
+              label={armed ? t.sidebar.removeArmed : t.sidebar.remove}
+              title={armed ? t.sidebar.removeArmedTip : t.sidebar.removeTip}
+              size={20}
+              onClick={() => (armed ? props.onRemove() : setArmed(true))}
+              style={{
+                borderRadius: "var(--radius-xs)",
+                color: armed ? "var(--color-danger)" : "var(--color-text-tertiary)",
+              }}
+            >
+              <Icon name="trash-2" size={11} />
+            </IconButton>
+            <IconButton label={t.sidebar.newTaskInWorkspace} size={20} onClick={props.onNewTask} style={{ borderRadius: "var(--radius-xs)" }}>
+              <Icon name="plus" size={14} />
+            </IconButton>
+          </span>
         </span>
 
-        {/* 命中条数：单独占一列、不随悬停淡出（它是信息，不是动作）；落在「+」左边 */}
+        {/* 命中条数：单独占一列、不随悬停变（它是信息，不是动作） */}
         {props.count !== undefined && <GroupCount n={props.count} />}
-
-        <IconButton label={t.sidebar.newTaskInWorkspace} size={26} onClick={props.onNewTask}>
-          <Icon name="plus" size={14} />
-        </IconButton>
       </div>
 
       {!props.folded && (
@@ -1263,22 +1167,37 @@ function NodeHeader(props: {
    */
   addMenu?: MenuItem[];
   onAdd?: () => void;
-  /** 传了 onToggleFold 就说明这个节点的孩子可折叠：label 变成开合按钮（chevron + 名字） */
+  /** 传了 onToggleFold 就说明这个节点的孩子可折叠：label 变成开合按钮（名字 + chevron） */
   folded?: boolean;
   onToggleFold?: (() => void) | undefined;
   /** 时间范围开着时组头写命中条数（与工作区组头同口径）；undefined = 不写 */
   count?: number | undefined;
+  /** 「+」左边的额外控件（「工作区」节的筛选键） */
+  extra?: React.ReactNode;
 }) {
+  // 「+」静止时不露也不占位、悬停标题行 / 键盘聚焦 / 菜单开着才出现（styles.css 的 .node-header）：
+  // 两节标题静止时只剩一个词，和 Kimi 的「项目 ⌄ / 任务 ⌄」一样干净（2026-11-23）
   const addButton = (onClick: () => void, open: boolean): React.ReactNode => (
-    <IconButton label={props.addLabel} size={26} active={open} onClick={onClick}>
-      <Icon name={props.addIcon} size={14} />
-    </IconButton>
+    // 包一层 span 管显隐：IconButton 自带行内 display，挂在它身上的 class 盖不过
+    <span className="node-act">
+      <IconButton label={props.addLabel} size={26} active={open} onClick={onClick}>
+        <Icon name={props.addIcon} size={14} />
+      </IconButton>
+    </span>
   );
   return (
     <div
+      className="node-header"
       style={{
         display: "grid",
-        gridTemplateColumns: props.count === undefined ? "minmax(0,1fr) 26px" : "minmax(0,1fr) auto 26px",
+        gridTemplateColumns: [
+          "minmax(0,1fr)",
+          props.count === undefined ? null : "auto",
+          props.extra === undefined ? null : "auto",
+          "auto",
+        ]
+          .filter((col): col is string => col !== null)
+          .join(" "),
         alignItems: "center",
         gap: 2,
         minHeight: 28,
@@ -1294,6 +1213,7 @@ function NodeHeader(props: {
         <NodeLabel>{props.label}</NodeLabel>
       )}
       {props.count !== undefined && <GroupCount n={props.count} />}
+      {props.extra}
       {props.addMenu !== undefined ? (
         <Menu
           items={props.addMenu}
@@ -1306,6 +1226,83 @@ function NodeHeader(props: {
         addButton(props.onAdd, false)
       ) : null}
     </div>
+  );
+}
+
+/**
+ * 筛选键（2026-11-23 用户定：原来独占一整行的「全部 / 星标 / 时间」收成「工作区」标题旁的一个图标）。
+ * 没开筛选时只是一个图标，和「+」一起悬停才出现（不占位）；开着时常显、带一句「星标 · 3 天」——
+ * 一眼看出列表现在是被筛过的，不能让筛选悄悄开着。菜单里一项一项开关，「清除筛选」只在开着时出现。
+ */
+function FilterButton(props: {
+  starredOnly: boolean;
+  ageDays: SidebarAgeDays | null;
+  /** 时间范围每一档的命中条数（在星标之上算的，「选这一档我会看到几条」） */
+  ageCounts: Record<SidebarAgeDays | "any", number>;
+  onStarredOnly: (next: boolean) => void;
+  onAgeDays: (next: SidebarAgeDays | null) => void;
+  onClear: () => void;
+}) {
+  const t = useT();
+  const on = props.starredOnly || props.ageDays !== null;
+  const summary = [
+    props.starredOnly ? t.sidebar.filterStarred : null,
+    props.ageDays === null ? null : t.sidebar.filterAgeChip(props.ageDays),
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" · ");
+  const items: MenuItem[] = [
+    {
+      id: "starred",
+      label: t.sidebar.filterStarredTip,
+      icon: "star",
+      checked: props.starredOnly,
+      onSelect: () => props.onStarredOnly(!props.starredOnly),
+    },
+    { id: "age-rule", label: "", rule: true },
+    { id: "age-header", label: t.sidebar.filterAgeHeader, header: true },
+    ...SIDEBAR_AGE_CHOICES.map(
+      (days): MenuItem => ({
+        id: `age-${days}`,
+        label: t.sidebar.filterAgeChoice(days),
+        hint: String(props.ageCounts[days]),
+        checked: props.ageDays === days,
+        onSelect: () => props.onAgeDays(days),
+      }),
+    ),
+    {
+      id: "age-any",
+      label: t.sidebar.filterAgeAny,
+      hint: String(props.ageCounts.any),
+      checked: props.ageDays === null,
+      onSelect: () => props.onAgeDays(null),
+    },
+    ...(on
+      ? [
+          { id: "clear-rule", label: "", rule: true },
+          { id: "clear", label: t.sidebar.filterClear, icon: "x" as const, onSelect: props.onClear },
+        ]
+      : []),
+  ];
+  return (
+    <Menu
+      items={items}
+      align="end"
+      panelMinWidth={200}
+      trigger={({ open, toggle }) =>
+        on ? (
+          <Chip icon="list-filter" active title={t.sidebar.filterTip} onClick={toggle}>
+            {summary}
+          </Chip>
+        ) : (
+          <span className="node-act">
+            <IconButton label={t.sidebar.filter} title={t.sidebar.filterTip} size={26} active={open} onClick={toggle}>
+              <Icon name="list-filter" size={14} />
+            </IconButton>
+          </span>
+        )
+      }
+    />
   );
 }
 
@@ -1328,8 +1325,8 @@ function FoldChevron(props: { folded: boolean }) {
 }
 
 /**
- * 节点级的开合按钮（TASKS 用）：chevron + 名字整块可点，比工作区组的
- * 单个 chevron 大——它折的是整个 loose 列表，是最常用的那一刀。
+ * 节点级的开合按钮（「工作区」「任务」两节共用）：名字 + chevron 整块可点，
+ * 折的是整节。两节同一个样子——以前只有「任务」能折、「工作区」不能，两节标题长得不一样。
  */
 function FoldHeaderButton(props: { label: string; folded: boolean; onToggle: () => void }) {
   return (
@@ -1342,17 +1339,20 @@ function FoldHeaderButton(props: { label: string; folded: boolean; onToggle: () 
         display: "flex",
         alignItems: "center",
         gap: "var(--space-1)",
+        justifySelf: "start",
         minWidth: 0,
         minHeight: 28,
-        padding: 0,
+        // 字落在左起第一条线上（= 会话行图标槽的左缘 --space-1，与工作区文件夹图标同一条线）
+        padding: "0 var(--space-1)",
         border: 0,
         borderRadius: "var(--radius-xs)",
         cursor: "pointer",
         textAlign: "left",
       }}
     >
-      <FoldChevron folded={props.folded} />
+      {/* 名字在前、chevron 在后（Kimi 的「项目 ⌄」）：开头那一列留给标题字，和图标对齐 */}
       <NodeLabel>{props.label}</NodeLabel>
+      <FoldChevron folded={props.folded} />
     </button>
   );
 }
