@@ -13,7 +13,8 @@
  *
  * 攒着的东西叫 `HeldReport`；投递时合成一条信封（shared/channel.ts 的 composeChannelBatchPrompt）。
  */
-import type { ChannelMessage, ChannelMessageKind } from "../../../../shared/channel.ts";
+import { channelStatus, sortChannelMessages, type ChannelMessage, type ChannelMessageKind } from "../../../../shared/channel.ts";
+import type { TranscriptRecord } from "../../../../shared/session.ts";
 
 /**
  * 「静止」的窗口：最后一次滚动 / 选字 / 键盘输入之后过这么久才算读完。
@@ -100,9 +101,14 @@ export function shouldAutoRelease(input: {
   return input.held.some((item) => !item.recovered);
 }
 
-/** 入攒：按 id 去重，同一条事件重复到达不会出现两条 */
+/** 入攒：按 id 去重；同一子会话只留最新一条 progress，done / failed / question 全留 */
 export function addHeld(held: readonly HeldReport[], item: HeldReport): readonly HeldReport[] {
-  return held.some((entry) => entry.id === item.id) ? held : [...held, item];
+  if (held.some((entry) => entry.id === item.id)) return held;
+  const kept =
+    item.message.kind === "progress"
+      ? held.filter((entry) => !(entry.childId === item.childId && entry.message.kind === "progress"))
+      : held;
+  return [...kept, item];
 }
 
 /** 出攒：按 id 移出，找不到的原样返回同一引用 */
@@ -148,6 +154,21 @@ export function orderForDelivery(
     .flatMap((group) => group.list);
 }
 
+/** 界面上 delegate 结果卡的出现顺序：与用户在对话流里看到的委派顺序一致。 */
+export function delegateOrderFromTranscript(records: readonly TranscriptRecord[]): readonly string[] {
+  const out: string[] = [];
+  for (const record of records) {
+    if (record.role !== "tool" || record.toolName !== "delegate") continue;
+    const details: unknown = record.details;
+    if (typeof details !== "object" || details === null) continue;
+    const delegate = (details as Record<string, unknown>)["delegate"];
+    if (typeof delegate !== "object" || delegate === null) continue;
+    const childId = (delegate as Record<string, unknown>)["childId"];
+    if (typeof childId === "string" && childId !== "" && !out.includes(childId)) out.push(childId);
+  }
+  return out;
+}
+
 /** 提示条里的一行：每个子会话一行，说它最新的那条 */
 export interface HeldRow {
   childId: string;
@@ -179,6 +200,16 @@ export function oneLine(text: string, limit = 80): string {
   return first.length > limit ? `${first.slice(0, limit - 1)}…` : first;
 }
 
+/**
+ * 这条 question 是否仍在等回答：与 channelStatus / questionAnswered 同一条语义——
+ * 通道仍处 waiting，而且最新一条就是这条 question。后续 done / failed / progress 都让它成为历史。
+ */
+export function questionIsWaiting(messages: readonly ChannelMessage[], questionId: string): boolean {
+  const sorted = sortChannelMessages(messages);
+  const latest = sorted[sorted.length - 1];
+  return latest?.id === questionId && latest.kind === "question" && channelStatus(sorted) === "waiting";
+}
+
 export function summarizeHeld(held: readonly HeldReport[], limit = 80): HeldSummary {
   const byChild = new Map<string, HeldReport[]>();
   for (const item of held) {
@@ -189,12 +220,12 @@ export function summarizeHeld(held: readonly HeldReport[], limit = 80): HeldSumm
   const rows: HeldRow[] = [];
   let questions = 0;
   for (const [childId, list] of byChild) {
-    const latest = [...list].sort((a, b) => a.message.createdAt - b.message.createdAt)[list.length - 1];
+    const sorted = [...list].sort((a, b) => a.message.createdAt - b.message.createdAt);
+    const latest = sorted[sorted.length - 1];
     if (latest === undefined) continue;
-    if (list.some((item) => item.message.kind === "question")) questions += 1;
-    // question 没答完之前它就是这个子会话「最新」的事，哪怕后面还有别的进度
-    const shown = list.find((item) => item.message.kind === "question") ?? latest;
-    rows.push({ childId, count: list.length, kind: shown.message.kind, summary: oneLine(shown.message.text, limit) });
+    const waiting = latest.message.kind === "question" && questionIsWaiting(sorted.map((entry) => entry.message), latest.id);
+    if (waiting) questions += 1;
+    rows.push({ childId, count: list.length, kind: latest.message.kind, summary: oneLine(latest.message.text, limit) });
   }
   return { children: rows.length, rows, hasQuestion: questions > 0, questions };
 }

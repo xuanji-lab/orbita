@@ -81,7 +81,7 @@ describe("开关关着：靠读写信号兜底，done / failed / question 各自
 
   it("用户在读（往上翻）→ 先攒着；回到底部再静止 N 秒后自动投，合成一次", () => {
     const env = setupOff();
-    env.store.setViewing("p", { scrolledUp: true });
+    env.store.setViewing("main", "p", { scrolledUp: true });
     strictEqual(arrive(env, report("m1", "c1", "done")), "held");
     strictEqual(arrive(env, report("m2", "c2", "failed")), "held");
     strictEqual(env.store.getView("p")?.reading, "scrolled-up");
@@ -89,7 +89,7 @@ describe("开关关着：靠读写信号兜底，done / failed / question 各自
     env.store.tick(env.now());
     strictEqual(env.delivered.length, 0, "还往上翻着，不投");
 
-    env.store.setViewing("p", { scrolledUp: false }); // 滚回底部，本身算一次活动
+    env.store.setViewing("main", "p", { scrolledUp: false }); // 滚回底部，本身算一次活动
     env.advance(READING_QUIET_MS - 1);
     env.store.tick(env.now());
     strictEqual(env.delivered.length, 0, "静止窗口没过");
@@ -102,12 +102,12 @@ describe("开关关着：靠读写信号兜底，done / failed / question 各自
 
   it("输入框有字 → 攒；清空并静止后才投", () => {
     const env = setupOff();
-    env.store.setDraft("p", true);
+    env.store.setDraft("main", "p", true);
     strictEqual(arrive(env, report("m1", "c1", "done")), "held");
     env.advance(120_000);
     env.store.tick(env.now());
     strictEqual(env.delivered.length, 0);
-    env.store.setDraft("p", false);
+    env.store.setDraft("main", "p", false);
     env.store.noteActivity(env.now()); // 清空输入框是键盘动作
     env.advance(READING_QUIET_MS + 1);
     env.store.tick(env.now());
@@ -122,7 +122,7 @@ describe("开关关着：靠读写信号兜底，done / failed / question 各自
     env.store.tick(env.now());
     strictEqual(env.delivered.length, 0);
     env.store.setWindowFocused(true);
-    env.store.setViewing("p", { scrolledUp: false });
+    env.store.setViewing("main", "p", { scrolledUp: false });
     env.advance(READING_QUIET_MS + 1);
     env.store.tick(env.now());
     strictEqual(env.delivered.length, 1);
@@ -130,9 +130,9 @@ describe("开关关着：靠读写信号兜底，done / failed / question 各自
 
   it("父会话在跑：不自动投，轮结束（idle）后下一次复查才投", () => {
     const env = setupOff();
-    env.store.setDraft("p", true);
+    env.store.setDraft("main", "p", true);
     arrive(env, report("m1", "c1", "done"));
-    env.store.setDraft("p", false);
+    env.store.setDraft("main", "p", false);
     env.advance(READING_QUIET_MS + 1);
     env.setPhase("turn");
     env.store.tick(env.now());
@@ -175,6 +175,23 @@ describe("开关开着（默认）：不自动开轮", () => {
     strictEqual(env.store.getView("p")?.held.length, 0);
   });
 
+  it("「现在讨论」失败后 re-hold：提示与 pending 都回来，且不自动重试", () => {
+    const env = setup();
+    const item = report("m1", "c1", "done");
+    arrive(env, item);
+    env.store.release("p");
+    strictEqual(env.delivered.length, 1, "先尝试过一次强制投递");
+    env.store.setHoldOn("p", false);
+    // deliverNext 的 onFailure：IPC 失败，按原状态 re-hold
+    env.store.hold("p", [{ ...item, recovered: true }]);
+    deepStrictEqual(env.store.getView("p")?.held.map((entry) => entry.id), ["m1"]);
+    env.advance(60_000);
+    env.store.tick(env.now());
+    strictEqual(env.delivered.length, 1, "恢复项不自动重试");
+    const stored = JSON.parse(env.storage.data.get(HOLD_PENDING_KEY) ?? "{}") as Record<string, { messageId: string }[]>;
+    deepStrictEqual(stored["p"]?.map((ref) => ref.messageId), ["m1"]);
+  });
+
   it("打开开关的那一刻，排队里还没发的子回报也拉回攒着", () => {
     const env = setupOff();
     env.queuedForPull.push(report("m1", "c1", "done"));
@@ -196,6 +213,40 @@ describe("开关开着（默认）：不自动开轮", () => {
     env.store.setHoldOn("p", false);
     strictEqual(env.store.isHoldOn("p"), false);
     strictEqual(env.store.isHoldOn("other"), true);
+  });
+});
+
+describe("多视图的在读 / 草稿信号按归属聚合", () => {
+  it("一个视图卸载或清空，不会清掉另一个仍活着视图的信号", () => {
+    const env = setupOff();
+    env.store.setViewing("main", "p", { scrolledUp: false });
+    env.store.setViewing("drawer", "p", { scrolledUp: true });
+    env.store.setDraft("main", "p", true);
+    env.store.setDraft("drawer", "p", true);
+    strictEqual(env.store.reading("p"), "draft");
+
+    env.store.setDraft("main", "p", false);
+    strictEqual(env.store.reading("p"), "draft", "drawer 的草稿仍在");
+    env.store.setDraft("drawer", "p", false);
+    strictEqual(env.store.reading("p"), "scrolled-up", "drawer 仍在上翻");
+
+    env.store.setViewing("main", "p", null);
+    strictEqual(env.store.reading("p"), "scrolled-up", "主槽卸载不能清掉 drawer");
+    env.store.setViewing("drawer", "p", null);
+    strictEqual(env.store.reading("p"), null);
+  });
+});
+
+describe("高频 progress 的攒量与落盘引用", () => {
+  it("每个子会话只留最新 progress，旧引用同步抹掉；question / done 不丢", () => {
+    const env = setup();
+    arrive(env, report("q", "c1", "question", 1));
+    arrive(env, report("p1", "c1", "progress", 2));
+    arrive(env, report("p2", "c1", "progress", 3));
+    arrive(env, report("d", "c1", "done", 4));
+    deepStrictEqual(env.store.getView("p")?.held.map((item) => item.id), ["q", "p2", "d"]);
+    const stored = JSON.parse(env.storage.data.get(HOLD_PENDING_KEY) ?? "{}") as Record<string, { messageId: string }[]>;
+    deepStrictEqual(stored["p"]?.map((ref) => ref.messageId), ["q", "p2", "d"]);
   });
 });
 
@@ -263,6 +314,46 @@ describe("刷新 / 重启后攒着的还在", () => {
     deepStrictEqual(env.store.getView("p")?.held.map((item) => item.id), ["ok"]);
     const stored = JSON.parse(env.storage.data.get(HOLD_PENDING_KEY) ?? "{}") as Record<string, { messageId: string }[]>;
     deepStrictEqual(stored["p"]?.map((ref) => ref.messageId), ["ok"]);
+  });
+
+  it("恢复时读失败 ≠ 空账本：失败项保留并可下次恢复；只有读成功却找不到才清引用", async () => {
+    const saved = JSON.stringify({
+      p: [
+        { childId: "c-fail", messageId: "m-fail", childWorkbench: "/wb/c-fail" },
+        { childId: "c-gone", messageId: "m-gone", childWorkbench: "" },
+        { childId: "c-ok", messageId: "m-ok", childWorkbench: "/wb/c-ok" },
+      ],
+    });
+    const env = setup({ [HOLD_PENDING_KEY]: saved });
+    await env.store.restore(async (_p, child) => {
+      if (child === "c-fail") throw new Error("模拟 IPC 读失败");
+      if (child === "c-gone") return [];
+      return [report("m-ok", "c-ok", "done").message];
+    });
+    deepStrictEqual(env.store.getView("p")?.held.map((item) => item.id), ["m-ok"]);
+    let stored = JSON.parse(env.storage.data.get(HOLD_PENDING_KEY) ?? "{}") as Record<string, { messageId: string }[]>;
+    deepStrictEqual(stored["p"]?.map((ref) => ref.messageId), ["m-fail", "m-ok"], "失败引用还在；明确不存在的才删");
+
+    await env.store.restore(async (_p, child) => {
+      if (child === "c-fail") return [report("m-fail", "c-fail", "done").message];
+      return child === "c-ok" ? [report("m-ok", "c-ok", "done").message] : [];
+    });
+    deepStrictEqual(env.store.getView("p")?.held.map((item) => item.id), ["m-ok", "m-fail"], "下次读取成功能补回来，且不重复");
+    stored = JSON.parse(env.storage.data.get(HOLD_PENDING_KEY) ?? "{}") as Record<string, { messageId: string }[]>;
+    deepStrictEqual(stored["p"]?.map((ref) => ref.messageId), ["m-fail", "m-ok"]);
+  });
+
+  it("恢复 question → done：旧 question 不再恢复成等待，只留终态", async () => {
+    const saved = JSON.stringify({
+      p: [
+        { childId: "c1", messageId: "q", childWorkbench: "" },
+        { childId: "c1", messageId: "d", childWorkbench: "" },
+      ],
+    });
+    const env = setup({ [HOLD_PENDING_KEY]: saved });
+    await env.store.restore(async () => [report("q", "c1", "question", 1).message, report("d", "c1", "done", 2).message]);
+    deepStrictEqual(env.store.getView("p")?.held.map((item) => item.id), ["d"]);
+    strictEqual(env.store.getView("p")?.summary.hasQuestion, false);
   });
 
   it("投出去之后引用被抹掉：再重启不会重复出现", () => {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
 import { planAwaitingIn, planTimeline } from "../context/plan-timeline.ts";
 import { PLAN_TOOL_NAME } from "../../../../shared/plan.ts";
@@ -9,7 +9,8 @@ import type { IntentRecallRecord } from "@shared/session";
 import type { RecallCardState } from "@shared/intent-recall";
 import type { IntentConfirmDecision } from "@shared/intent-confirm";
 import { splitEchoBlocks } from "../../../../shared/prompt-attachments.ts";
-import { orderForDelivery, type HeldReport } from "./channel-hold.ts";
+import { delegateOrderFromTranscript, orderForDelivery, type HeldReport } from "./channel-hold.ts";
+import { deliverChannelSubmission } from "./channel-delivery.ts";
 import { channelHold, holdNow, installReadingListeners } from "./channel-hold-store.ts";
 import {
   EMPTY_ENTRY,
@@ -17,6 +18,7 @@ import {
   applyAgentEvent,
   enqueue,
   enqueueChannelMessage,
+  requeueFront,
   createSessionStates,
   moveQueued as moveQueuedIn,
   parseCompactCommand,
@@ -981,11 +983,10 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
           if (entry.queued.some((item) => !ids.has(item.id))) deliverNext(id);
           return;
         }
-        applyStates((prev) => run.reduce((acc, item) => dequeue(acc, id, item.id), prev));
         const turn = buildTurn(id);
         if (turn === null) return;
-        // 投出去了：抹掉落盘引用（重启后不再当「没投过」恢复）
-        channelHold.untrack(id, run.map((item) => item.id));
+        // buildTurn 失败时还在队里；出队只代表「正在尝试」，不代表已投出去。
+        applyStates((prev) => run.reduce((acc, item) => dequeue(acc, id, item.id), prev));
         const peers = run.map((item) => ({
           item,
           peer: {
@@ -999,20 +1000,34 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
         // 用户在收件箱里代父回复过的话，父模型上下文里没有：投递前从账本取出，拼在各自那条信封后
         // （userRepliesSincePreviousReport 的注释）。读账本失败就照原样投递，不拦这一轮。
         dispatch(async () => {
-          const ledgers = new Map<string, Awaited<ReturnType<typeof api.channel.load>>>();
-          await Promise.all(
-            [...new Set(run.map((item) => item.childId))].map(async (childId) => {
-              ledgers.set(childId, await api.channel.load({ parentId: id, childId }).catch(() => []));
-            }),
-          );
-          const text = composeChannelBatchPrompt(
-            peers.map(({ item, peer }) => ({
-              message: item.message,
-              peer,
-              note: userRepliesNote(userRepliesSincePreviousReport(ledgers.get(item.childId) ?? [], item.message.id)),
-            })),
-          );
-          await api.agent.submit({ sessionId: id, text, ...turn });
+          await deliverChannelSubmission({
+            submit: async () => {
+              const ledgers = new Map<string, Awaited<ReturnType<typeof api.channel.load>>>();
+              await Promise.all(
+                [...new Set(run.map((item) => item.childId))].map(async (childId) => {
+                  ledgers.set(childId, await api.channel.load({ parentId: id, childId }).catch(() => []));
+                }),
+              );
+              const text = composeChannelBatchPrompt(
+                peers.map(({ item, peer }) => ({
+                  message: item.message,
+                  peer,
+                  note: userRepliesNote(userRepliesSincePreviousReport(ledgers.get(item.childId) ?? [], item.message.id)),
+                })),
+              );
+              await api.agent.submit({ sessionId: id, text, ...turn });
+            },
+            onAccepted: () => channelHold.untrack(id, run.map((item) => item.id)),
+            onFailure: () => {
+              if (forced) {
+                // 「现在讨论」失败：回到待讨论；recovered 防止开关关着时每秒自动重试
+                channelHold.hold(id, run.map((item) => ({ ...heldFromQueued(item), recovered: true })));
+              } else {
+                // 普通队列直投失败：QueueStrip 重新出现，pending 没清，刷新后也能恢复
+                applyStates((prev) => requeueFront(prev, id, run));
+              }
+            },
+          });
         });
       } else {
         const turn = buildTurn(id);
@@ -1180,12 +1195,18 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
    * 并能把「现在讨论 / 静止后自动投」落到本引擎的队列上；启动时把上次没投出去的恢复回来。
    */
   useEffect(() => {
-    const rank = (childId: string): number =>
-      sessionsRef.current.find((meta) => meta.id === childId)?.createdAt ?? Number.POSITIVE_INFINITY;
     const detach = channelHold.attachHost({
       phaseOf: (parentId) => statesRef.current.get(parentId)?.phase ?? "idle",
       deliver: (parentId, items) => {
-        // 按子会话顺序排好、标 forced 入队（父在跑时就排着，轮结束照投，不会又被攒回去），再取队首
+        const delegated = delegateOrderFromTranscript(
+          selectTranscript(statesRef.current.get(parentId)?.transcript ?? EMPTY_ENTRY.transcript),
+        );
+        const rank = (childId: string): number => {
+          const at = delegated.indexOf(childId);
+          if (at !== -1) return at;
+          return sessionsRef.current.find((meta) => meta.id === childId)?.createdAt ?? Number.POSITIVE_INFINITY;
+        };
+        // 按界面 delegate 调用顺序排好、标 forced 入队；转录里找不到的才按 createdAt
         applyStates((prev) =>
           orderForDelivery(items, rank).reduce(
             (acc, entry) =>
@@ -1787,10 +1808,11 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   // 「用户在写」的信号：输入框里有没发出去的字 / 图 / 文件 / 引用。子会话回报到的时候，
   // 有这个信号就先攒着、不开轮（channel-hold.ts）。键 = 草稿键，换会话时抹掉旧键的信号。
   const hasDraft = draft.trim() !== "" || attachments.length > 0 || files.length > 0 || quotes.length > 0;
+  const draftViewId = useId();
   useEffect(() => {
-    channelHold.setDraft(draftKey, hasDraft);
-    return () => channelHold.setDraft(draftKey, false);
-  }, [draftKey, hasDraft]);
+    channelHold.setDraft(draftViewId, draftKey, hasDraft);
+    return () => channelHold.setDraft(draftViewId, draftKey, false);
+  }, [draftViewId, draftKey, hasDraft]);
 
   const addQuote = useCallback(
     (quote: TextQuote) => {
@@ -3106,9 +3128,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       const entry = engine.statesRef.current.get(id);
       const item = entry?.queued.find((queued) => queued.id === queuedId);
       if (entry === undefined || item === undefined) return;
-      engine.applyStates((prev) => dequeue(prev, id, queuedId));
-      // 立即发送的 channel 项马上就投：落盘引用同步抹掉
-      if (item.kind === "channel") channelHold.untrack(id, [item.id]);
+      // channel 要等 buildTurn 成功后才出队；其它类型沿用原路径。
+      if (item.kind !== "channel") engine.applyStates((prev) => dequeue(prev, id, queuedId));
       const fail = (cause: unknown): void => {
         engine.setError(ipcErrorText(cause));
         // IPC 直接失败（provider 装配等）不发 agent 事件，回填
@@ -3174,10 +3195,29 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         // 空闲直发同样乐观置 turn：不填 runtime 首个 phase 事件前的空档，期间的回车会
         // 被当成空闲直发、撞 already running（与 deliverNext 同因）
         const revertTurn = engine.beginOptimisticTurn(id);
-        void api.agent.submit({ sessionId: id, text, ...images, ...extras, ...turn }).catch((cause: unknown) => {
-          fail(cause);
-          revertTurn();
-        });
+        if (item.kind === "channel") {
+          engine.applyStates((prev) => dequeue(prev, id, queuedId));
+          void deliverChannelSubmission({
+            submit: () => api.agent.submit({ sessionId: id, text, ...images, ...extras, ...turn }),
+            onAccepted: () => channelHold.untrack(id, [item.id]),
+            onFailure: () => engine.applyStates((prev) => requeueFront(prev, id, [item])),
+          }).catch((cause: unknown) => {
+            fail(cause);
+            revertTurn();
+          });
+        } else {
+          void api.agent.submit({ sessionId: id, text, ...images, ...extras, ...turn }).catch((cause: unknown) => {
+            fail(cause);
+            revertTurn();
+          });
+        }
+      } else if (item.kind === "channel") {
+        engine.applyStates((prev) => dequeue(prev, id, queuedId));
+        void deliverChannelSubmission({
+          submit: () => api.agent.interrupt({ sessionId: id, text, ...images, ...extras, ...turn }),
+          onAccepted: () => channelHold.untrack(id, [item.id]),
+          onFailure: () => engine.applyStates((prev) => requeueFront(prev, id, [item])),
+        }).catch(fail);
       } else {
         void api.agent.interrupt({ sessionId: id, text, ...images, ...extras, ...turn }).catch(fail);
       }

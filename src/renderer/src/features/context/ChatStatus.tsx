@@ -192,23 +192,25 @@ export function ChatStatus(props: {
     const label = signal === null ? t.chatStatus.pill.quiet : t.chatStatus.pill[signal.kind](signal.count);
     return (
       <div className="cs-host" ref={hostRef}>
-        <button
-          type="button"
-          className="cs-pill"
-          data-signal={signal?.kind}
-          aria-label={t.chatStatus.name}
-          title={`${t.chatStatus.name} · ${label}`}
-          onClick={() => toggleOpen(true)}
-        >
-          {signal === null ? (
-            <Icon name={FEATURE_ICON.status} size={14} strokeWidth={1.8} />
-          ) : (
-            <StatusPie state={signal.kind === "waiting" || signal.kind === "stuck" ? "waiting" : signal.kind === "failed" ? "failed" : "running"} />
-          )}
-          {signal !== null && <span className="cs-pill-n">{label}</span>}
-        </button>
-        {/* 收起时也有入口：带字的开关与「有几件攒着」都不必先展开卡 */}
-        <HoldRow sessionId={sessionId} variant="pill" />
+        <div className="cs-collapsed">
+          <button
+            type="button"
+            className="cs-pill"
+            data-signal={signal?.kind}
+            aria-label={t.chatStatus.name}
+            title={`${t.chatStatus.name} · ${label}`}
+            onClick={() => toggleOpen(true)}
+          >
+            {signal === null ? (
+              <Icon name={FEATURE_ICON.status} size={14} strokeWidth={1.8} />
+            ) : (
+              <StatusPie state={signal.kind === "waiting" || signal.kind === "stuck" ? "waiting" : signal.kind === "failed" ? "failed" : "running"} />
+            )}
+            {signal !== null && <span className="cs-pill-n">{label}</span>}
+          </button>
+          {/* 与状态合并成同一枚小钮，不向下再叠一枚胶囊遮正文 */}
+          <HoldRow sessionId={sessionId} variant="pill" />
+        </div>
       </div>
     );
   }
@@ -393,7 +395,7 @@ function Resizer(props: { width: number; onChange: (width: number) => void; onCo
  * 「不打岔」开关（按会话记，默认开）：开着 = 子会话交回的东西先攒着，由用户决定什么时候讨论，
  * 不会自己给主会话开一轮；关着 = 只在用户没在读、没在输入时才送进来。
  * 两种样子，同一个开关：展开的卡里是卡头下面的一行（名字 + 一句说明 + 开关），
- * 收起时是小钮下面的一枚带字的小胶囊——两处都是文字加开关，不是只剩一个图标。
+ * 收起时与状态合并进同一枚小钮（图标 + 个数 + 开关），不再另叠一排浮层。
  * 有子会话在等回答时，图标上挂一枚 danger 小点；攒着的个数写在开关前面。
  */
 function HoldRow(props: { sessionId: string; variant: "card" | "pill" }) {

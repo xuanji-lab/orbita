@@ -1,4 +1,4 @@
-import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
@@ -1091,7 +1091,7 @@ function ChatViewBody(props: {
     }
     syncScrollToEnd();
     // 「用户在读」的信号：往上翻着（跟随态 Reading）就告诉子回报的投递判定，先攒着不开轮
-    if (openId !== "") channelHold.setViewing(openId, { scrolledUp: !isFollowing(followTrackerRef.current) });
+    if (openId !== "") channelHold.setViewing(channelViewId, openId, { scrolledUp: !isFollowing(followTrackerRef.current) });
     // 触顶就拉更早的一页（源侧分页）。**先记滚动几何再发请求**：回执并进窗口后
     // 靠它把 scrollTop 补回来（见下面的锚定 effect）。守卫在这里做——`loadOlder`
     // 自己也会 no-op，但锚点不能为一个没发出去的请求留着（那会把下一次真拉回来的
@@ -1185,12 +1185,13 @@ function ChatViewBody(props: {
 
   /** 这一屏是哪条会话：活着的优先，否则是打开的那条 */
   const openId = session.sessionId ?? session.opened?.id ?? "";
-  // 这一屏正被看着：子回报的「用户在读吗」只对被看着的会话成立；卸下 / 换会话就撤掉
+  const channelViewId = useId();
+  // 这一屏正被看着：子回报的「用户在读吗」只对被看着的会话成立；卸下 / 换会话只撤本视图的信号
   useEffect(() => {
     if (openId === "") return undefined;
-    channelHold.setViewing(openId, { scrolledUp: !isFollowing(followTrackerRef.current) });
-    return () => channelHold.setViewing(openId, null);
-  }, [openId]);
+    channelHold.setViewing(channelViewId, openId, { scrolledUp: !isFollowing(followTrackerRef.current) });
+    return () => channelHold.setViewing(channelViewId, openId, null);
+  }, [openId, channelViewId]);
   // 记忆：用户消息的动作行里挂「用到 N · 记住 M」（UserBubble）。
   // 账本按轮记，这里按时间把轮配到气泡上（不按计数，见 pairMemoryTurns）
   const memorySession = useMemorySession(openId !== "" ? openId : null);

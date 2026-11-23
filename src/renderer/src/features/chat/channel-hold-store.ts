@@ -10,6 +10,8 @@
  * - 开关：关着的会话 id 列表（默认开，见 HOLD_OFF_KEY）。
  * - 待投回报：{谁, 哪条}的引用（正文在通道账本里，恢复时回读），到达时记、投递 / 撤回 / 被回答时抹。
  *   这同时补上了此前的缺口：排队队列纯内存，重启 / 刷新就丢子会话的回报。
+ *   取舍：这是 renderer 的待投索引，不是第二份正文，体量小且 progress 已封顶；换架构成主进程 JSON
+ *   要新增 IPC 与跨进程事务，本 PR 不扩。风险是 localStorage 写失败时只退化到内存态，重启仍可能丢索引。
  */
 import { useSyncExternalStore } from "react";
 import type { ChannelMessage } from "../../../../shared/channel.ts";
@@ -23,6 +25,7 @@ import {
   removeHeld,
   shouldAutoRelease,
   shouldHold,
+  questionIsWaiting,
   summarizeHeld,
   type HeldReport,
   type HeldSummary,
@@ -87,9 +90,9 @@ export function createChannelHoldStore(options: {
   const held = new Map<string, readonly HeldReport[]>();
   const lastReading = new Map<string, ReadingReason | null>();
 
-  // 阅读信号
-  const drafts = new Set<string>();
-  const viewing = new Map<string, { scrolledUp: boolean }>();
+  // 阅读信号：按视图持有。一个视图卸载只能撤自己的那一份，不能清掉别的视图。
+  const drafts = new Map<string, Set<string>>();
+  const viewing = new Map<string, Map<string, { scrolledUp: boolean }>>();
   let focused = true;
   let lastActivityAt: number | null = null;
 
@@ -126,12 +129,12 @@ export function createChannelHoldStore(options: {
   };
 
   const signalsOf = (parentId: string): ReadingSignals => {
-    const seen = viewing.get(parentId);
+    const seen = [...(viewing.get(parentId)?.values() ?? [])];
     return {
       windowFocused: focused,
-      draftNonEmpty: drafts.has(parentId),
-      viewed: seen !== undefined,
-      scrolledUp: seen?.scrolledUp === true,
+      draftNonEmpty: (drafts.get(parentId)?.size ?? 0) > 0,
+      viewed: seen.length > 0,
+      scrolledUp: seen.some((state) => state.scrolledUp),
       lastActivityAt,
     };
   };
@@ -213,10 +216,7 @@ export function createChannelHoldStore(options: {
       // 打开的那一刻，排队里还没发的子回报也一并改成攒着，否则它们会在这一轮结束时照旧投出去
       if (next && host !== null) {
         const pulled = host.pullQueued(parentId);
-        if (pulled.length > 0) {
-          for (const item of pulled) held.set(parentId, addHeld(held.get(parentId) ?? EMPTY_HELD, item));
-          ensureTimer();
-        }
+        if (pulled.length > 0) self.hold(parentId, pulled);
       }
       emit();
       // 关掉：攒着的按「在不在读」重新判一次，不必等下个节拍
@@ -253,12 +253,15 @@ export function createChannelHoldStore(options: {
       }
     },
 
-    /** 先攒着 */
+    /** 先攒着；被新 progress 顶掉的旧 progress 同时撤下落盘引用，重启不会复活 */
     hold(parentId: string, items: readonly HeldReport[]): void {
       if (items.length === 0) return;
-      let list = held.get(parentId) ?? EMPTY_HELD;
+      const previous = held.get(parentId) ?? EMPTY_HELD;
+      let list = previous;
       for (const item of items) list = addHeld(list, item);
       held.set(parentId, list);
+      const superseded = previous.filter((item) => !list.some((entry) => entry.id === item.id)).map((item) => item.id);
+      if (superseded.length > 0) self.untrack(parentId, superseded);
       lastReading.set(parentId, readingOf(parentId, now()));
       emit();
       ensureTimer();
@@ -293,7 +296,8 @@ export function createChannelHoldStore(options: {
 
     /**
      * 启动时把落盘引用恢复成攒着的（recovered：不自动投）。loader 回读通道账本；
-     * 读不到的（会话已删 / 账本没了）抹掉。同一条已经在攒着的不重复。
+     * **读成功但消息不存在**才抹掉；读失败保留引用，等下次启动或显式重试。
+     * 同一条已经在攒着的不重复。
      */
     async restore(loader: (parentId: string, childId: string) => Promise<readonly ChannelMessage[]>): Promise<void> {
       const snapshot = [...pending];
@@ -302,23 +306,25 @@ export function createChannelHoldStore(options: {
         const ledgers = new Map<string, readonly ChannelMessage[]>();
         await Promise.all(
           childIds.map(async (childId) => {
-            ledgers.set(childId, await loader(parentId, childId).catch(() => []));
+            try {
+              ledgers.set(childId, await loader(parentId, childId));
+            } catch {
+              // 读取失败 ≠ 空账本：这个子会话的 pending 原样保留
+            }
           }),
         );
         const lost: string[] = [];
         const restored: HeldReport[] = [];
         for (const ref of refs) {
-          const ledger = ledgers.get(ref.childId) ?? [];
+          const ledger = ledgers.get(ref.childId);
+          if (ledger === undefined) continue;
           const message = ledger.find((entry) => entry.id === ref.messageId);
           if (message === undefined) {
             lost.push(ref.messageId);
             continue;
           }
-          // 该子会话的 question 之后父已经回过（收件箱代回复）：不必再留
-          const answered =
-            message.kind === "question" &&
-            ledger.some((entry) => entry.from === "parent" && entry.kind === "reply" && entry.createdAt > message.createdAt);
-          if (answered) {
+          // 与 questionAnswered 同语义：后续回复 / 终态 / 新消息都让旧 question 不再等待
+          if (message.kind === "question" && !questionIsWaiting(ledger, message.id)) {
             lost.push(ref.messageId);
             continue;
           }
@@ -330,21 +336,32 @@ export function createChannelHoldStore(options: {
     },
 
     /* ───── 阅读信号的写入口 ───── */
-    setDraft(sessionId: string, nonEmpty: boolean): void {
-      if (drafts.has(sessionId) === nonEmpty) return;
-      if (nonEmpty) drafts.add(sessionId);
-      else drafts.delete(sessionId);
+    setDraft(viewId: string, sessionId: string, nonEmpty: boolean): void {
+      const owners = drafts.get(sessionId);
+      const had = owners?.has(viewId) === true;
+      if (had === nonEmpty) return;
+      const next = new Set(owners);
+      if (nonEmpty) next.add(viewId);
+      else next.delete(viewId);
+      if (next.size === 0) drafts.delete(sessionId);
+      else drafts.set(sessionId, next);
       if (held.has(sessionId)) emit();
     },
-    /** 聊天面挂上 / 卸下这条会话；scrolledUp = 往上翻着；null = 不再被看着 */
-    setViewing(sessionId: string, state: { scrolledUp: boolean } | null): void {
-      const before = viewing.get(sessionId);
+    /** 某个聊天面挂上 / 卸下这条会话；只改这个 viewId，其他视图的在读状态不动 */
+    setViewing(viewId: string, sessionId: string, state: { scrolledUp: boolean } | null): void {
+      const owners = viewing.get(sessionId);
+      const before = owners?.get(viewId);
       if (state === null) {
         if (before === undefined) return;
-        viewing.delete(sessionId);
+        const next = new Map(owners);
+        next.delete(viewId);
+        if (next.size === 0) viewing.delete(sessionId);
+        else viewing.set(sessionId, next);
       } else {
         if (before?.scrolledUp === state.scrolledUp) return;
-        viewing.set(sessionId, state);
+        const next = new Map(owners);
+        next.set(viewId, state);
+        viewing.set(sessionId, next);
       }
       if (state !== null) lastActivityAt = now();
       if (held.has(sessionId)) emit();

@@ -149,8 +149,36 @@
   color: var(--color-text-tertiary);
   cursor: pointer;
 }
-/* 不打岔：卡头下面一行（名字 base + 一句说明 sm + 开关），收起时是小钮下面一枚带字的小胶囊。
-   待回答的 question 在图标右上角挂一枚小点；攒着的个数写在开关前面 */
+/* 收起态只有一枚小钮：状态与不打岔入口同排，不再在正文上叠第二排浮层。 */
+.cs-collapsed {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-height-sm);
+  padding-right: var(--space-1);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg);
+  box-shadow: var(--shadow-popover);
+}
+.cs-collapsed .cs-pill {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.cs-collapsed .cs-hold-pill {
+  gap: var(--space-1);
+  margin-top: 0;
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.cs-collapsed .cs-hold-name {
+  display: none;
+}
+
 .cs-hold-row {
   display: flex;
   align-items: center;
@@ -204,11 +232,6 @@
   background: var(--glass-bg);
   box-shadow: var(--shadow-popover);
 }
-.cs-hold-pill .cs-hold-name {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-}
-
 .cs-close:hover {
   background: var(--color-bg-hover);
   color: var(--color-text-primary);

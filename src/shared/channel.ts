@@ -218,6 +218,13 @@ function cleanEnvelopeTitle(title: string): string {
   return cleaned === "" ? "Untitled" : cleaned;
 }
 
+/** 信封结束后的说明行：解析批量信封时也用它定位**外层** `</channel>`。 */
+function channelPromptNotice(from: ChannelSide, peer: { id: string; title: string }): string {
+  return from === "parent"
+    ? "This message came from your parent session through the sub-session channel. Report back with report_to_parent (kind: question / progress / done / failed); text in your normal reply is not delivered to the parent."
+    : `This message came from your sub-session "${peer.title}" (id ${peer.id}) through its channel. To answer, call reply_subsession with that id; text in your normal reply is not delivered to the sub-session, so do not pretend to answer it here.`;
+}
+
 /**
  * 把一条通道消息包成投给模型看的信封。`peer` 是**接收方眼里的「对面」**：
  * 投给子时 peer 是父，投给父时 peer 是子——不是消息的 `from`（消息发送方）。
@@ -232,10 +239,7 @@ export function composeChannelPrompt(
     peer.workbench === undefined
       ? []
       : [`${message.from === "parent" ? "Parent session" : "Sub-session"} workbench: ${peer.workbench}`];
-  const notice =
-    message.from === "parent"
-      ? "This message came from your parent session through the sub-session channel. Report back with report_to_parent (kind: question / progress / done / failed); text in your normal reply is not delivered to the parent."
-      : `This message came from your sub-session "${title}" (id ${peer.id}) through its channel. To answer, call reply_subsession with that id; text in your normal reply is not delivered to the sub-session, so do not pretend to answer it here.`;
+  const notice = channelPromptNotice(message.from, { id: peer.id, title });
   return [
     `<channel from="${message.from}" kind="${message.kind}" peer="${peer.id}" message="${message.id}" title="${title}">`,
     ...workbench,
@@ -298,25 +302,39 @@ export function composeChannelBatchPrompt(
 }
 
 /**
- * 合并信封里每条信封的首行属性，按出现顺序。首段必须是合法信封，否则返回空数组
- * （与 `parseChannelPrompt` 同一条纪律：只有首行是信封的消息才不算用户说的话）。
- * 后续各段同样逐段过 `parseChannelPrompt`，认不出的段跳过。
- * 已知的边：子会话正文里若恰好出现「空行 + 信封首行」会多认出一段，后果只是
- * 多画一行指向不存在消息的标记——标记行查不到账本就退成最朴素的一行，不会替用户或模型编话。
+ * 合并信封里每条信封的首行属性，按出现顺序。
+ *
+ * **不按正文里的 `\n\n<channel` 切**：那会把子会话汇报 Orbita 通道实现时贴出的伪信封
+ * 当成新标记。这里沿 compose 产生的真实结构走：外层首行 → 与 peer/title 对应的
+ * `</channel> + 说明行` → 空行 → 下一条外层首行。正文里即使嵌了一整段假信封，
+ * 它的说明行指向另一个 peer，不会被当成外层边界。
  */
 export function parseChannelBatch(
   text: string,
 ): NonNullable<ReturnType<typeof parseChannelPrompt>>[] {
-  const parts = text.split("\n\n<channel ");
   const out: NonNullable<ReturnType<typeof parseChannelPrompt>>[] = [];
-  for (let i = 0; i < parts.length; i += 1) {
-    const part = parts[i] ?? "";
-    const parsed = parseChannelPrompt(i === 0 ? part : `<channel ${part}`);
-    if (parsed === null) {
-      if (i === 0) return [];
+  let rest = text;
+  while (rest !== "") {
+    const parsed = parseChannelPrompt(rest);
+    if (parsed === null) return out.length === 0 ? [] : out;
+    out.push(parsed);
+    const firstLine = rest.split("\n")[0] ?? "";
+    const title = / title="([^"]*)">$/.exec(firstLine)?.[1] ?? "Untitled";
+    const notice = channelPromptNotice(parsed.from, { id: parsed.peerId, title });
+    const boundary = `\n</channel>\n${notice}`;
+    const at = rest.indexOf(boundary);
+    // 单条旧信封保持 parseChannelPrompt 的兼容；没有下一条可认时到此为止
+    if (at === -1) return out;
+    const after = at + boundary.length;
+    if (rest.slice(after, after + 2) === "\n\n") {
+      rest = rest.slice(after + 2);
       continue;
     }
-    out.push(parsed);
+    // 代父回复 note 跟在外层说明之后、下一条信封之前（composeChannelBatchPrompt 的结构）。
+    // 它不属于子会话正文；只跨过这一段，仍不回退到全文搜 `<channel`。
+    const separator = rest.indexOf("\n\n", after);
+    if (separator === -1 || !rest.startsWith("<channel ", separator + 2)) return out;
+    rest = rest.slice(separator + 2);
   }
   return out;
 }

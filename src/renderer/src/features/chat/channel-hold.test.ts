@@ -1,9 +1,11 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ChannelMessage } from "../../../../shared/channel.ts";
+import type { TranscriptRecord } from "../../../../shared/session.ts";
 import {
   addHeld,
   decodePending,
+  delegateOrderFromTranscript,
   dropAnsweredQuestions,
   encodePending,
   oneLine,
@@ -123,6 +125,16 @@ describe("攒着的增删", () => {
     deepStrictEqual(removeHeld(once, new Set(["a"])), []);
   });
 
+  it("每个子会话只留最新一条 progress；done / failed / question 全留", () => {
+    const list = [
+      report("q", "c1", "question", "q", 1),
+      report("p1", "c1", "progress", "旧进度", 2),
+      report("d", "c2", "done", "另一个完成", 3),
+    ];
+    const next = addHeld(addHeld(addHeld(list, report("p2", "c1", "progress", "中间进度", 4)), report("p3", "c1", "progress", "最新进度", 5)), report("f", "c1", "failed", "失败", 6));
+    deepStrictEqual(next.map((item) => item.id), ["q", "d", "p3", "f"]);
+  });
+
   it("dropAnsweredQuestions：只丢该子会话里不晚于回复的 question，其余不动", () => {
     const list = [
       report("q-old", "c1", "question", "q", 5),
@@ -162,6 +174,28 @@ describe("合并投递的顺序", () => {
     );
   });
 
+  it("按转录里的 delegate 结果顺序，而不是 createdAt；找不到的才回退 createdAt", () => {
+    const delegated = (childId: string, timestamp: number): TranscriptRecord => ({
+      id: `tool-${childId}`,
+      role: "tool",
+      toolCallId: `call-${childId}`,
+      toolName: "delegate",
+      input: {},
+      content: [],
+      timestamp,
+      status: "complete",
+      isError: false,
+      details: { delegate: { childId } },
+    });
+    const records = [delegated("c1", 100), delegated("c2", 200), delegated("c3", 300)];
+    deepStrictEqual(delegateOrderFromTranscript(records), ["c1", "c2", "c3"]);
+    const delegatedAt = new Map(delegateOrderFromTranscript(records).map((id, index) => [id, index]));
+    const list = [report("c3-done", "c3", "done", "x", 1), report("c2-late", "c2", "done", "x", 9), report("c1-done", "c1", "done", "x", 7)];
+    deepStrictEqual(orderForDelivery(list, (id) => delegatedAt.get(id) ?? 999).map((item) => item.childId), ["c1", "c2", "c3"]);
+    // c2 没在转录里：回退 createdAt=50，排在有委派顺序的 c1/c3 之后、未知更晚的 c4 之前
+    deepStrictEqual(orderForDelivery([report("c4", "c4", "done"), report("c2", "c2", "done"), report("c1", "c1", "done")], (id) => delegatedAt.get(id) ?? ({ c2: 50, c4: 60 })[id] ?? Infinity).map((item) => item.childId), ["c1", "c2", "c4"]);
+  });
+
   it("不改入参", () => {
     const list = [report("b", "c2", "done"), report("a", "c1", "done")];
     orderForDelivery(list, rank);
@@ -184,15 +218,34 @@ describe("提示条摘要", () => {
     strictEqual(summary.hasQuestion, false);
   });
 
-  it("有 question：标出来，而且 question 压过同一子会话后来的进度", () => {
+  it("只有最新一条仍是 question 且通道仍 waiting 才显示等待；后续 progress 让旧问题成为历史", () => {
     const summary = summarizeHeld([
       report("q", "c1", "question", "要不要继续？", 1),
       report("p", "c1", "progress", "还在跑", 2),
       report("d", "c2", "done", "好了", 3),
     ]);
+    strictEqual(summary.hasQuestion, false);
+    strictEqual(summary.questions, 0);
+    strictEqual(summary.rows[0]?.kind, "progress");
+  });
+
+  for (const terminal of ["done", "failed"] as const) {
+    it(`question → ${terminal}：红点和「在等你回答」消失，摘要显示终态`, () => {
+      const summary = summarizeHeld([
+        report("q", "c1", "question", "要不要继续？", 1),
+        report("terminal", "c1", terminal, "已结束", 2),
+      ]);
+      strictEqual(summary.hasQuestion, false);
+      strictEqual(summary.questions, 0);
+      strictEqual(summary.rows[0]?.kind, terminal);
+      strictEqual(summary.rows[0]?.summary, "已结束");
+    });
+  }
+
+  it("question 是最新一条：仍显示等待", () => {
+    const summary = summarizeHeld([report("q", "c1", "question", "要不要继续？", 1)]);
     strictEqual(summary.hasQuestion, true);
     strictEqual(summary.questions, 1);
-    strictEqual(summary.rows[0]?.kind, "question");
   });
 
   it("空列表 = 0 个、没有 question", () => {
