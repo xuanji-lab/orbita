@@ -13,6 +13,7 @@ import {
   compactionBoundaryStatus,
   enqueue,
   enqueueChannelMessage,
+  requeueFront,
   markAllIdle,
   mergeSideRecords,
   moveQueued,
@@ -897,6 +898,14 @@ describe("子会话 PR4a：channel 队列条目", () => {
     assert.deepEqual(states.get("parent-1")?.queued.map((entry) => entry.id), ["m1", "m2"]);
   });
 
+  test("投递失败 requeueFront：按原顺序回队首，新到消息排后，重复 id 不翻倍", () => {
+    let states = enqueue(new Map(), "parent-1", item("m3"));
+    states = requeueFront(states, "parent-1", [item("m1"), item("m2")]);
+    assert.deepEqual(states.get("parent-1")?.queued.map((entry) => entry.id), ["m1", "m2", "m3"]);
+    states = requeueFront(states, "parent-1", [item("m2"), item("m1")]);
+    assert.deepEqual(states.get("parent-1")?.queued.map((entry) => entry.id), ["m2", "m1", "m3"]);
+  });
+
   test("nextDeliverable 对 channel 条目的规则同 text：只认 phase idle", () => {
     const idleStates = enqueue(new Map(), "parent-1", item("m1"));
     const idleEntry = idleStates.get("parent-1")!;
@@ -942,11 +951,28 @@ describe("nextDeliverable —— 投递节奏归我们，一次只放一条", ()
   });
 });
 
-describe("markAllIdle —— runtime 没了，排队的消息没人会发", () => {
-  test("队列一并清空，槽里不留尸体", () => {
+describe("markAllIdle —— runtime 没了，相位归位但不丢通道待投", () => {
+  test("text / compact 清空，channel 保留在 QueueStrip，无需刷新才找回", () => {
+    const channel: QueuedMessage = {
+      id: "channel-1",
+      kind: "channel",
+      childId: "child-1",
+      childWorkbench: "/wb/child-1",
+      message: {
+        id: "channel-1",
+        from: "child",
+        author: "model",
+        kind: "done",
+        text: "完成了",
+        delivery: "followUp",
+        createdAt: 1,
+      },
+    };
     let states = enqueue(new Map(), "A", { id: "1", kind: "text", text: "甲" });
+    states = enqueue(states, "A", { id: "2", kind: "compact" });
+    states = enqueue(states, "A", channel);
     states = markAllIdle(states);
-    assert.deepEqual(states.get("A")?.queued, []);
+    assert.deepEqual(states.get("A")?.queued.map((item) => item.id), ["channel-1"]);
     assert.equal(states.get("A")?.phase, "idle");
   });
 });

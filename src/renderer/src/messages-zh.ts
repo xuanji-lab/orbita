@@ -2370,6 +2370,32 @@ export const zh: Messages = {
     answerIt: "回答它…",
   },
 
+  /** 子会话回报的「不打岔」：对话流里的一行提示、状态卡上的开关、子会话面板里的「待讨论」组 */
+  channelHold: {
+    header: (n: number) => `${n} 个子会话交回了`,
+    withAsk: (n: number) => `其中 ${n} 个在等你回答`,
+    discuss: "现在讨论",
+    discussTitle: "把这些一起交给主会话，开一轮",
+    inPanel: "在面板里看",
+    inPanelTitle: "到右栏「子会话」面板里看内容、直接回复",
+    reasons: {
+      switch: "先放着，等你说讨论",
+      draft: "你在输入，先没打扰",
+      "scrolled-up": "你在往上翻着读，先没打扰",
+      active: "你刚在操作，先没打扰",
+      background: "窗口不在前台，先没打扰",
+      recovered: "上次没投出去的",
+    },
+    toggleName: "不打岔",
+    toggleHintOn: "子会话交回的先攒着，不会自己开一轮",
+    toggleHintOff: "你没在读、没在输入时，交回的会直接送进来",
+    heldCount: (n: number) => `${n} 个已攒`,
+    askDot: "有子会话在等你回答",
+    panelGroup: "待讨论",
+    panelGroupTip: "这些已经交回，主会话还没看到",
+    reply: "回复",
+  },
+
   queue: {
     queued: "排队的消息",
     haltedNote: "随你的下一条消息发出",

@@ -14,6 +14,8 @@ import type { ChatSession, SessionEngine } from "../chat/useChatSession";
 import { useTaskRecords } from "../chat/useTaskRecords.ts";
 import { useChannelSummaries } from "../chat/useChannelSummaries";
 import { useParentChannels } from "../chat/useChannelMessages";
+import { channelHold, useChannelHold } from "../chat/channel-hold-store.ts";
+import { Switch } from "../settings/SettingControls";
 import type { ChatFileScope } from "../chat/chat-file-scope.ts";
 import { formatDuration } from "../chat/named-outputs.ts";
 import { useMemorySession } from "../memory/useMemory.ts";
@@ -200,21 +202,25 @@ export function ChatStatus(props: {
     const label = signal === null ? t.chatStatus.pill.quiet : t.chatStatus.pill[signal.kind](signal.count);
     return (
       <div className="cs-host" ref={hostRef}>
-        <button
-          type="button"
-          className="cs-pill"
-          data-signal={signal?.kind}
-          aria-label={t.chatStatus.name}
-          title={`${t.chatStatus.name} · ${label}`}
-          onClick={() => toggleOpen(true)}
-        >
-          {signal === null ? (
-            <Icon name={FEATURE_ICON.status} size={14} strokeWidth={1.8} />
-          ) : (
-            <StatusPie state={signal.kind === "waiting" || signal.kind === "stuck" ? "waiting" : signal.kind === "failed" ? "failed" : "running"} />
-          )}
-          {signal !== null && <span className="cs-pill-n">{label}</span>}
-        </button>
+        <div className="cs-collapsed">
+          <button
+            type="button"
+            className="cs-pill"
+            data-signal={signal?.kind}
+            aria-label={t.chatStatus.name}
+            title={`${t.chatStatus.name} · ${label}`}
+            onClick={() => toggleOpen(true)}
+          >
+            {signal === null ? (
+              <Icon name={FEATURE_ICON.status} size={14} strokeWidth={1.8} />
+            ) : (
+              <StatusPie state={signal.kind === "waiting" || signal.kind === "stuck" ? "waiting" : signal.kind === "failed" ? "failed" : "running"} />
+            )}
+            {signal !== null && <span className="cs-pill-n">{label}</span>}
+          </button>
+          {/* 与状态合并成同一枚小钮，不向下再叠一枚胶囊遮正文 */}
+          <HoldRow sessionId={sessionId} variant="pill" />
+        </div>
       </div>
     );
   }
@@ -237,6 +243,8 @@ export function ChatStatus(props: {
             <Icon name="minimize-2" size={12} strokeWidth={1.8} />
           </button>
         </div>
+        {/* 不打岔：卡头下面一行，带字的开关——一眼能看到现在是开还是关 */}
+        <HoldRow sessionId={sessionId} variant="card" />
         <ScrollBox memo={memo}>
           {(hasPlan || children.length > 0) && (
             <ProgressSection
@@ -375,6 +383,51 @@ function Resizer(props: { width: number; onChange: (width: number) => void; onCo
         props.onCommit(next);
       }}
     />
+  );
+}
+
+// ───────────────────────── 不打岔 ─────────────────────────
+
+/**
+ * 「不打岔」开关（按会话记，默认开）：开着 = 子会话交回的东西先攒着，由用户决定什么时候讨论，
+ * 不会自己给主会话开一轮；关着 = 只在用户没在读、没在输入时才送进来。
+ * 两种样子，同一个开关：展开的卡里是卡头下面的一行（名字 + 一句说明 + 开关），
+ * 收起时与状态合并进同一枚小钮（图标 + 个数 + 开关），不再另叠一排浮层。
+ * 有子会话在等回答时，图标上挂一枚 danger 小点；攒着的个数写在开关前面。
+ */
+function HoldRow(props: { sessionId: string; variant: "card" | "pill" }) {
+  const t = useT();
+  const hold = useChannelHold(props.sessionId);
+  const on = hold?.holdOn !== false;
+  const held = hold?.summary.children ?? 0;
+  const ask = hold?.summary.hasQuestion === true;
+  const toggle = <Switch label={t.channelHold.toggleName} checked={on} onChange={(next) => channelHold.setHoldOn(props.sessionId, next)} />;
+  const lead = (
+    <span className="cs-hold-lead" title={ask ? t.channelHold.askDot : undefined}>
+      <Icon name={FEATURE_ICON.holdReports} size={14} strokeWidth={1.8} />
+      {ask && <span className="cs-hold-dot" aria-hidden="true" />}
+    </span>
+  );
+  if (props.variant === "pill") {
+    return (
+      <div className="cs-hold-pill">
+        {lead}
+        <span className="cs-hold-name">{t.channelHold.toggleName}</span>
+        {held > 0 && <span className="cs-hold-n">{t.channelHold.heldCount(held)}</span>}
+        {toggle}
+      </div>
+    );
+  }
+  return (
+    <div className="cs-hold-row">
+      {lead}
+      <span className="cs-hold-text">
+        <span className="cs-hold-name">{t.channelHold.toggleName}</span>
+        <span className="cs-hold-desc">{on ? t.channelHold.toggleHintOn : t.channelHold.toggleHintOff}</span>
+      </span>
+      {held > 0 && <span className="cs-hold-n">{t.channelHold.heldCount(held)}</span>}
+      {toggle}
+    </div>
   );
 }
 

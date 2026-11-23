@@ -1,4 +1,4 @@
-import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
@@ -6,6 +6,8 @@ import { QuoteToolbar, type QuoteCandidate } from "../../shell/QuoteToolbar";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
 import { QueueStrip } from "./QueueStrip";
+import { ChannelHoldBar } from "./ChannelHoldBar";
+import { channelHold } from "./channel-hold-store.ts";
 import { compactionBoundaryStatus, mergeSideRecords } from "./session-states";
 import type { TurnFailure } from "./session-states.ts";
 import {
@@ -764,6 +766,8 @@ function ChatViewBody(props: {
    * 也符合「UI 只做一层」：面板里查看的子会话不再嵌一层它自己的 Sub-sessions 入口。
    */
   onOpenSubSession?: (childId: string) => void;
+  /** 右栏「子会话」面板的列表层（收件箱）：对话流里的「N 个子会话交回了」提示行的「在面板里看」。不给就不显示该按钮 */
+  onOpenSubSessionsList?: () => void;
   /**
    * 解析后的主题：只给首页门面用（纸面两档的 slogan 与批语，HomeHero.tsx）。
    * 只有主槽的 ChatView 拿到它；辅助对话是 homeBare，本来就不出门面。
@@ -1098,6 +1102,8 @@ function ChatViewBody(props: {
       if (next === null) scrollMemory.forget(openId);
       else scrollMemory.record(openId, next);
     }
+    // 「用户在读」的信号：往上翻着（跟随态 Reading）就告诉子回报的投递判定，先攒着不开轮
+    if (openId !== "") channelHold.setViewing(channelViewId, openId, { scrolledUp: !isFollowing(followTrackerRef.current) });
     // 触顶就拉更早的一页（源侧分页）。**先记滚动几何再发请求**：回执并进窗口后
     // 靠它把 scrollTop 补回来（见下面的锚定 effect）。守卫在这里做——`loadOlder`
     // 自己也会 no-op，但锚点不能为一个没发出去的请求留着（那会把下一次真拉回来的
@@ -1191,6 +1197,13 @@ function ChatViewBody(props: {
 
   /** 这一屏是哪条会话：活着的优先，否则是打开的那条 */
   const openId = session.sessionId ?? session.opened?.id ?? "";
+  const channelViewId = useId();
+  // 这一屏正被看着：子回报的「用户在读吗」只对被看着的会话成立；卸下 / 换会话只撤本视图的信号
+  useEffect(() => {
+    if (openId === "") return undefined;
+    channelHold.setViewing(channelViewId, openId, { scrolledUp: !isFollowing(followTrackerRef.current) });
+    return () => channelHold.setViewing(channelViewId, openId, null);
+  }, [openId, channelViewId]);
   // 记忆：用户消息的动作行里挂「用到 N · 记住 M」（UserBubble）。
   // 账本按轮记，这里按时间把轮配到气泡上（不按计数，见 pairMemoryTurns）
   const memorySession = useMemorySession(openId !== "" ? openId : null);
@@ -1795,6 +1808,8 @@ function ChatViewBody(props: {
             */}
             {hideComposer !== true && (
               <>
+                {/* 子会话交回了 N 件：先攒在这里、不替用户开一轮（channel-hold.ts）；与排队条同一层 */}
+                {openId !== "" && <ChannelHoldBar sessionId={openId} onOpenPanel={props.onOpenSubSessionsList} />}
                 {/* 排队卡片：比 composer 高一层（等待发出的事），比审批低一层（审批要求回答才继续） */}
                 <QueueStrip
                   items={session.queued}

@@ -2578,6 +2578,32 @@ export const en = {
     answerIt: "Answer it…",
   },
 
+  /** 子会话回报的「不打岔」：对话流里的一行提示、状态卡上的开关、子会话面板里的「待讨论」组 */
+  channelHold: {
+    header: (n: number) => `${n} sub-session${n === 1 ? "" : "s"} reported back`,
+    withAsk: (n: number) => (n === 1 ? "1 is waiting for your answer" : `${n} are waiting for your answer`),
+    discuss: "Discuss now",
+    discussTitle: "Hand all of these to the main agent in one turn",
+    inPanel: "See in panel",
+    inPanelTitle: "Read them and reply in the Sub-sessions panel",
+    reasons: {
+      switch: "Held until you say so",
+      draft: "You have unsent text — held back",
+      "scrolled-up": "You're reading above — held back",
+      active: "You just moved — held back",
+      background: "Window is in the background — held back",
+      recovered: "Left over from before the restart",
+    },
+    toggleName: "Do not disturb",
+    toggleHintOn: "Reports from sub-sessions wait; they never start a turn by themselves.",
+    toggleHintOff: "Reports come in when you aren't reading or typing.",
+    heldCount: (n: number) => `${n} held`,
+    askDot: "A sub-session is waiting for your answer",
+    panelGroup: "To discuss",
+    panelGroupTip: "These reported back; the main agent hasn't seen them yet",
+    reply: "Reply",
+  },
+
   queue: {
     queued: "Queued messages",
     haltedNote: "Sends with your next message",
