@@ -39,7 +39,7 @@ export const FEATURE_ICON = {
   /** 子会话：右栏入口、面板头与空态、会话行的子会话角标、行状态、迁移视图、对话流里的派出 / 交回卡与子会话视图顶行（2026-11-22 由 git-fork 换成 bot：用户「子会话的 icon 都是机器人」） */
   subsessions: "bot",
   /** 编排：右栏「编排」面板（树状图 / 星系图 / 协作图）的入口与面板头 */
-  orchestra: "workflow",
+  orchestra: "git-fork",
   /** 意图：面板头与空态、输入框旁的意图开关、召回卡 */
   intent: "waypoints",
   /** 已归档（archive 同时是「归档状态」的通用图标） */
