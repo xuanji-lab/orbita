@@ -201,6 +201,7 @@ import {
 import { fileManagerKind } from "../../file-manager.ts";
 import { FileTypeIcon } from "../../shell/FileTypeIcon";
 import { HomeHero } from "./HomeHero";
+import { HomeGalaxy, PROTO_GALAXY_SPEC } from "./HomeGalaxy";
 import { HomeLog, type HomeLogRowView } from "./HomeLog";
 import { heroFace } from "./home-hero.ts";
 import { useExperimentalFeature } from "../../experimental.ts";
@@ -1447,6 +1448,10 @@ function ChatViewBody(props: {
    * `onOpenSubSessions` 是否给了决定是否可点，同 `ChannelMarkPill` 的门槛。
    */
 
+  // 星系首页（原型 proto/home-galaxy）：普通主题的主槽首页把工作区名拉到门面上，输入框里不再出现
+  // 工作区芯片；纸面两档与右抽屉里的极简首页没有门面，芯片照旧（不然就没地方选新任务放在哪）
+  const galaxyHome = homeActive && homeBare !== true && heroFace(props.theme) === "plain";
+
   const composer = (
     <Composer
       value={session.draft}
@@ -1474,6 +1479,7 @@ function ChatViewBody(props: {
       bottomSlot={
         <ComposerBar
           session={session}
+          scopeChip={!galaxyHome}
           starredModels={props.starredModels ?? []}
           onToggleStarModel={props.onToggleStarModel ?? (() => {})}
           onOpenProviders={props.onOpenProviders ?? (() => {})}
@@ -1665,8 +1671,33 @@ function ChatViewBody(props: {
         <div ref={stageRef} className="home-col" data-mode={logMode ? "log" : "cards"}>
           {/* 淡出组：slogan 向上走（--transition-layer，220ms） */}
           <div className="home-fade home-fade-head">
-            {/* 门面：slogan（纸面两档再加红笔批语），样子与理由在 HomeHero.tsx */}
-            <HomeHero theme={props.theme} />
+            {/* 门面：slogan（纸面两档再加红笔批语），样子与理由在 HomeHero.tsx。
+                星系首页：工作区名作为星系名站在最上面，点它选新任务放在哪（与对话里的芯片同一个菜单） */}
+            <HomeHero
+              theme={props.theme}
+              galaxy={
+                galaxyHome ? (
+                  <ScopeMenu
+                    session={session}
+                    namingWidth={240}
+                    placement="below"
+                    trigger={({ open, toggle, scope, title }) => (
+                      <button
+                        type="button"
+                        className="home-galaxy-name"
+                        aria-expanded={open}
+                        title={title}
+                        onClick={toggle}
+                      >
+                        <span className="home-galaxy-title">{scope}</span>
+                        <span className="home-galaxy-suffix">{t.chat.galaxySuffix}</span>
+                        <Icon name="chevron-down" size={16} />
+                      </button>
+                    )}
+                  />
+                ) : undefined
+              }
+            />
           </div>
           {/* 滑落组：notices 与 composer 一起滑向窗口底部（--transition-composer-exit，240ms） */}
           <div
@@ -1677,6 +1708,12 @@ function ChatViewBody(props: {
             {notices}
             {composer}
           </div>
+          {/* 星系：输入框下面一条安静的带子，随 slogan 一起淡出（原型 proto/home-galaxy） */}
+          {galaxyHome && (
+            <div className="home-fade home-fade-galaxy">
+              <HomeGalaxy spec={PROTO_GALAXY_SPEC} label={t.chat.galaxyFigure(scopeNameOf(session, t.chat.home))} />
+            </div>
+          )}
           {/* 记录组：在输入框下面（先写，再读别的活的进展），随 slogan 一起淡出。没有等你 / 进行中的
               活就整组不渲染——输入框下面留白，不留组名、子午线或空容器（2026-11-22 删掉「最近」组后的常态） */}
           {logMode && logGroups.length > 0 && (
@@ -3081,46 +3118,38 @@ function SubSessionsChip(props: { chip: { count: number; waiting: number }; onCl
 }
 
 /**
- * 输入卡底栏：作用域 / 权限档 / 模型——都是「这一句会以什么身份发出去」的事实。
- *
- * 三个都是菜单而不是并排的芯片：权限档摊开是三个、模型摊开是所有 provider 的所有模型，
- * 288px 之外的这条底栏放不下，摊开也把「当前是什么」淹没在选项里。
- * 菜单里当前项用 check 标出来——**状态优先图标与文字**。
+ * 这一槽眼下的工作区名。名字**原样**显示（「名字 == 路径」的老数据在 store 读时已治愈，wafo 裁决——
+ * 显示层不截尾，用户起的 `PhD/Year1` 不会再被截成 `Year1`）；没选工作区时落在 cwd，那才是真路径，
+ * 显示目录尾段。
  */
-function ComposerBar(props: {
+function scopeNameOf(session: ChatSession, homeLabel: string): string {
+  const workspace = session.workspaces.find((w) => w.id === session.workspaceId);
+  if (workspace !== undefined) return workspace.name;
+  if (session.cwd === null) return homeLabel;
+  return deriveWorkspaceName(session.cwd) || homeLabel;
+}
+
+/**
+ * 工作区（星系）菜单：选一项 = 首页新任务放在哪 / 对话里把这条移到哪（scopeChipAction）。
+ * 两个消费者：对话里输入框底栏的工作区芯片；首页门面里的星系名（原型 proto/home-galaxy：
+ * 首页的输入框里不再出现工作区，「新任务放在哪」跟着名字搬到星系名上）。
+ * 给新工作区起名时触发器**原位**换成输入框（InlineName），视线不跳去侧栏。
+ */
+function ScopeMenu(props: {
   session: ChatSession;
-  /** 星标过的模型（设置里那份）：行的星与左栏第一格都看它 */
-  starredModels: readonly ModelPair[];
-  onToggleStarModel: (pair: ModelPair) => void;
-  /** 卡片底部「配置模型」→ 设置面的服务商页 */
-  onOpenProviders: () => void;
-  /** 意图召回的会话级开关（实验功能）：null = 不渲染（实验关 / 子会话 / 新任务） */
-  intentToggle: { on: boolean; onToggle: (next: boolean) => void } | null;
-  /** 用量环浮层里的「查看上下文」；null = 不给（非主槽） */
-  onOpenContext: (() => void) | null;
+  /** 起名输入框的宽：触发器的锚 span 是 shrink-to-fit，width:100% 会塌 */
+  namingWidth: number;
+  /** 底栏芯片朝上开（2026-10-03 用户定）；首页门面在窗口上部，朝下开 */
+  placement: "above" | "below";
+  trigger: (args: { open: boolean; toggle: () => void; scope: string; title: string }) => ReactNode;
 }) {
   const t = useT();
   const { session } = props;
-  const workspace = session.workspaces.find((w) => w.id === session.workspaceId);
-  // 工作区名**原样**显示（「名字 == 路径」的老数据在 store 读时已治愈，wafo 裁决——
-  // 显示层不截尾，用户起的 `PhD/Year1` 不会再被截成 `Year1`）；没选工作区时落在
-  // cwd，那才是真路径，显示目录尾段
-  const scope =
-    workspace !== undefined
-      ? workspace.name
-      : session.cwd === null
-        ? t.chat.home
-        : deriveWorkspaceName(session.cwd) || t.chat.home;
-  // 命名新建工作区：scope 芯片**原位**换成输入框（InlineName）——就在用户点开的
-  // 地方接着打字，视线不跳去侧栏；窄窗侧栏折成图标条时这里照样能用
+  const scope = scopeNameOf(session, t.chat.home);
   const [namingWorkspace, setNamingWorkspace] = useState(false);
 
-  // pi 内建目录：模型项的 ctx 徽标要从这里查官方参数（与设置页同一套口径）。
-  // 一个 app 一次 fetch——引擎已经拉过一份，这里不再自己起第二次
-  const catalog = session.catalog;
-
   /**
-   * 芯片的两种语义（2026-10-31 用户认可）：首页 = 「新任务放在哪」；对话里 = 「把这条移到哪」
+   * 两种语义（2026-10-31 用户认可）：首页 = 「新任务放在哪」；对话里 = 「把这条移到哪」
    * ——以前对话里选别的工作区会清掉对话、去那边开空白新任务，这条会话本身不动，
    * 聊着发现该换地方时毫无办法。移动连工作目录一起换（session:move），在跑的不能移：
    * 项灰掉并说明原因，不弹窗。
@@ -3164,6 +3193,97 @@ function ComposerBar(props: {
       ...scopeEntry(item.id, () => session.newTaskIn(item)),
     })),
   ];
+
+  return (
+    <Menu
+      items={scopeItems}
+      placement={props.placement}
+      // 卡片：高不超过 520（视口不够时 placeMenu 会再封一道），宽随最长的那条路径自适应，
+      // 上限夹进视口——以前是固定 320 的菜单，长路径被截成光秃秃一节
+      panelMaxHeight={520}
+      panelMaxWidth={640}
+      // 「去哪」与「往清单里加东西」是两件事：动作收进底栏，发卡线分隔（同模型卡片的「配置模型」）
+      footer={(close) => (
+        <>
+          <button
+            type="button"
+            className="option-row"
+            style={menuFooterRowStyle}
+            onClick={() => {
+              close();
+              setNamingWorkspace(true);
+            }}
+          >
+            <Icon name="plus" size={13} strokeWidth={1.8} />
+            <span>{t.sidebar.newWorkspace}</span>
+          </button>
+          <button
+            type="button"
+            className="option-row"
+            style={menuFooterRowStyle}
+            onClick={() => {
+              close();
+              // 对话里：加进来的文件夹直接成为这条会话的新家（在跑时只加不移，主进程会跳过）
+              session.addWorkspace({ moveCurrent: moving });
+            }}
+          >
+            <Icon name="folder-plus" size={13} strokeWidth={1.8} />
+            <span>{t.sidebar.addFolder}</span>
+          </button>
+        </>
+      )}
+      trigger={({ open, toggle }) =>
+        namingWorkspace ? (
+          <InlineName
+            editing
+            value=""
+            placeholder={t.sidebar.workspaceName}
+            onCommit={(name) => {
+              setNamingWorkspace(false);
+              const trimmed = name.trim();
+              if (trimmed !== "") session.createWorkspace(trimmed, { moveCurrent: moving });
+            }}
+            onCancel={() => setNamingWorkspace(false)}
+            style={{ width: props.namingWidth }}
+          />
+        ) : (
+          props.trigger({ open, toggle, scope, title: t.chat.scopeTip(session.cwd ?? session.defaultCwd) })
+        )
+      }
+    />
+  );
+}
+
+/**
+ * 输入卡底栏：作用域 / 权限档 / 模型——都是「这一句会以什么身份发出去」的事实。
+ *
+ * 三个都是菜单而不是并排的芯片：权限档摊开是三个、模型摊开是所有 provider 的所有模型，
+ * 288px 之外的这条底栏放不下，摊开也把「当前是什么」淹没在选项里。
+ * 菜单里当前项用 check 标出来——**状态优先图标与文字**。
+ */
+function ComposerBar(props: {
+  session: ChatSession;
+  /**
+   * 工作区芯片画不画。原型 proto/home-galaxy：普通主题的首页把工作区名拉到星系门面上（同一个
+   * ScopeMenu），输入框里不再出现；对话里保留——在那里它是「把这条会话移到哪」的真实操作。
+   */
+  scopeChip: boolean;
+  /** 星标过的模型（设置里那份）：行的星与左栏第一格都看它 */
+  starredModels: readonly ModelPair[];
+  onToggleStarModel: (pair: ModelPair) => void;
+  /** 卡片底部「配置模型」→ 设置面的服务商页 */
+  onOpenProviders: () => void;
+  /** 意图召回的会话级开关（实验功能）：null = 不渲染（实验关 / 子会话 / 新任务） */
+  intentToggle: { on: boolean; onToggle: (next: boolean) => void } | null;
+  /** 用量环浮层里的「查看上下文」；null = 不给（非主槽） */
+  onOpenContext: (() => void) | null;
+}) {
+  const t = useT();
+  const { session } = props;
+
+  // pi 内建目录：模型项的 ctx 徽标要从这里查官方参数（与设置页同一套口径）。
+  // 一个 app 一次 fetch——引擎已经拉过一份，这里不再自己起第二次
+  const catalog = session.catalog;
 
   // 菜单卡片只有词，不带描述——与思考档菜单同一口径（描述是悬停在芯片上的事，
   // 展开卡片里一行行小字只会让它显得吵；宽度也因此能固定）
@@ -3220,64 +3340,17 @@ function ComposerBar(props: {
         「哪边空往哪开」会往下方弹（还会同一排芯片朝向不一）；聊天页钉底又全朝上。
         点名朝上，两边同一朝向（2026-10-03 用户定）
       */}
-      <Menu
-        items={scopeItems}
-        placement="above"
-        // 卡片：高不超过 520（视口不够时 placeMenu 会再封一道），宽随最长的那条路径自适应，
-        // 上限夹进视口——以前是固定 320 的菜单，长路径被截成光秃秃一节
-        panelMaxHeight={520}
-        panelMaxWidth={640}
-        // 「去哪」与「往清单里加东西」是两件事：动作收进底栏，发卡线分隔（同模型卡片的「配置模型」）
-        footer={(close) => (
-          <>
-            <button
-              type="button"
-              className="option-row"
-              style={menuFooterRowStyle}
-              onClick={() => {
-                close();
-                setNamingWorkspace(true);
-              }}
-            >
-              <Icon name="plus" size={13} strokeWidth={1.8} />
-              <span>{t.sidebar.newWorkspace}</span>
-            </button>
-            <button
-              type="button"
-              className="option-row"
-              style={menuFooterRowStyle}
-              onClick={() => {
-                close();
-                // 对话里：加进来的文件夹直接成为这条会话的新家（在跑时只加不移，主进程会跳过）
-                session.addWorkspace({ moveCurrent: moving });
-              }}
-            >
-              <Icon name="folder-plus" size={13} strokeWidth={1.8} />
-              <span>{t.sidebar.addFolder}</span>
-            </button>
-          </>
-        )}
-        trigger={({ open, toggle }) =>
-          namingWorkspace ? (
-            // 定宽：trigger 的锚 span 是 shrink-to-fit，width:100% 会塌——
-            // 与相邻芯片同一量级（scope 芯片 icon + 名字 + chevron ≈ 140px）
-            <InlineName
-              editing
-              value=""
-              placeholder={t.sidebar.workspaceName}
-              onCommit={(name) => {
-                setNamingWorkspace(false);
-                const trimmed = name.trim();
-                if (trimmed !== "") session.createWorkspace(trimmed, { moveCurrent: moving });
-              }}
-              onCancel={() => setNamingWorkspace(false)}
-              style={{ width: 140 }}
-            />
-          ) : (
+      {props.scopeChip && (
+        <ScopeMenu
+          session={session}
+          // 与相邻芯片同一量级（scope 芯片 icon + 名字 + chevron ≈ 140px）
+          namingWidth={140}
+          placement="above"
+          trigger={({ open, toggle, scope, title }) => (
             <Chip
               icon="folder"
               active={open}
-              title={t.chat.scopeTip(session.cwd ?? session.defaultCwd)}
+              title={title}
               onClick={toggle}
               chevron
               // 窄槽下只留图标（styles.css 的 .composer-bottom-bar 容器查询）
@@ -3285,9 +3358,9 @@ function ComposerBar(props: {
             >
               {scope}
             </Chip>
-          )
-        }
-      />
+          )}
+        />
+      )}
       <Menu
         items={modeItems}
         placement="above"

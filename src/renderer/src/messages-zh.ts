@@ -1909,6 +1909,8 @@ export const zh: Messages = {
     openSubSessions: "打开子会话",
     home: "主目录",
     scopeTip: (path) => `${path} · 切换会新开一个任务`,
+    galaxySuffix: "星系",
+    galaxyFigure: (name) => `${name} 星系：一颗主星、几颗行星与一条会话星屑带`,
     modelTip: "模型 · 下一条消息起生效",
     noModel: "没有模型",
     thinkingOffTip: "思考 · 这个模型不支持思考",

@@ -2666,6 +2666,59 @@ button.ws-fold {
 }
 
 /*
+ * 首页星系带（HomeGalaxy.tsx，原型 proto/home-galaxy）。只用墨色与发丝线：主星 = 墨色的球（--galaxy-star），
+ * 行星按成分取三级墨的三种深浅，轨道 = 默认发丝线，星屑 = 三级墨的点（浓淡随会话数，inline opacity）。
+ * 受光面的提亮色在明主题是纸面、暗档是正墨（暗档的纸面比天体还暗，提亮会变成压暗）。
+ * 渐变只做一件事：告诉你这是被主星照亮的球，不是平面圆片。
+ */
+.home-galaxy {
+  --galaxy-light: var(--color-bg-panel);
+  /* 明主题的主星用浅一档的墨：深灰实心球在白纸上太重，会和输入框抢；暗档用次级墨，最亮的就是它 */
+  --galaxy-star: color-mix(in srgb, var(--color-text-tertiary) 50%, var(--color-bg-panel));
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 900 / 240;
+  overflow: visible;
+  pointer-events: none;
+}
+:root:is([data-theme="graphite"], [data-theme="black"]) .home-galaxy {
+  --galaxy-light: var(--color-text-primary);
+  --galaxy-star: var(--color-text-secondary);
+}
+.galaxy-orbit {
+  fill: none;
+  stroke: var(--color-border-default);
+  stroke-width: 1;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+.galaxy-dust {
+  fill: var(--color-text-tertiary);
+}
+.galaxy-star-hi {
+  stop-color: color-mix(in srgb, var(--galaxy-star) 45%, var(--galaxy-light));
+}
+.galaxy-star-lo {
+  stop-color: var(--galaxy-star);
+}
+.galaxy-planet {
+  fill: var(--color-text-tertiary);
+}
+.galaxy-planet[data-composition="gas"] {
+  fill: color-mix(in srgb, var(--color-text-secondary) 60%, var(--color-text-tertiary));
+}
+.galaxy-planet[data-composition="ice"] {
+  fill: color-mix(in srgb, var(--color-text-tertiary) 70%, var(--color-bg-panel));
+}
+.galaxy-light {
+  stop-color: var(--galaxy-light);
+}
+.home-fade-galaxy {
+  margin-top: calc(-1 * var(--space-2));
+}
+
+/*
  * 点引用 chip 跳回原文：被引用的那段用 CSS Custom Highlight 标出来（不改 DOM，
  * 不会打断 markdown 渲染），找不到逐字位置时整块闪一下。颜色取 info——这是
  * 「告诉你在哪」，不是主操作，不用 accent。闪一下就退，动效在解释「引用来自这里」。
@@ -5614,6 +5667,68 @@ mark.intent-mark {
   }
   .home-fade-log {
     margin-top: var(--space-4);
+  }
+
+  /*
+   * 星系首页（原型 proto/home-galaxy）。版式登记：
+   * | 版式 | 用途 | 结构 | 现有最近的同类 |
+   * | 星系门面 | 首页说明「这是哪一座星系」，并选新任务放在哪 | 星系名（品牌衬线、slogan 档、最轻字重）+「星系」后缀（lg 次级墨）+ 16px chevron，整块是菜单按钮；下面 slogan 退成一行 base 三级墨 | Claude Projects 项目页的项目名 + 一句说明 |
+   * | 星系带 | 输入框下一条安静的、会动的星系 | 900×240 的 SVG，等比缩放；只用墨色与发丝线，不用 accent | 无（新） |
+   */
+  .home-hero[data-galaxy="true"] {
+    gap: var(--space-1);
+  }
+  .home-galaxy-head {
+    margin: 0;
+    font: inherit;
+  }
+  /* 名字是全屏最大的字、也是最轻的（越大越轻）；悬停 / 展开只铺中性的行悬停底，不变色 */
+  .home-galaxy-name {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-left: calc(-1 * var(--space-2));
+    padding: 0 var(--space-2);
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--color-text-primary);
+    font: inherit;
+    cursor: pointer;
+    transition: var(--transition-hover);
+  }
+  .home-galaxy-name:hover,
+  .home-galaxy-name[aria-expanded="true"] {
+    background: var(--option-hover-bg);
+  }
+  .home-galaxy-title {
+    white-space: nowrap;
+    font-family: var(--font-family-brand);
+    font-size: var(--font-size-slogan);
+    line-height: var(--line-height-brand);
+    font-weight: var(--weight-regular);
+    letter-spacing: var(--tracking-slogan);
+  }
+  .home-galaxy-suffix {
+    flex: 0 0 auto;
+    font-family: var(--font-family-brand);
+    font-size: var(--font-size-lg);
+    font-weight: var(--weight-regular);
+    color: var(--color-text-secondary);
+  }
+  .home-galaxy-name .orbita-icon {
+    flex: 0 0 auto;
+    color: var(--color-text-tertiary);
+  }
+  .home-galaxy-name:hover .orbita-icon {
+    color: var(--color-text-primary);
+  }
+  /* slogan 退成星系名下面的一句说明：品牌衬线不变，降到 base、三级墨 */
+  .home-hero[data-galaxy="true"] .home-slogan {
+    margin: 0;
+    font-size: var(--font-size-base);
+    line-height: var(--line-height-ui);
+    color: var(--color-text-tertiary);
   }
 
   /* 记录：一根子午线 + 若干组 */

@@ -2078,6 +2078,8 @@ export const en = {
     openSubSessions: "Open sub-sessions",
     home: "Home",
     scopeTip: (path: string) => `${path} · switching starts a new task`,
+    galaxySuffix: "galaxy",
+    galaxyFigure: (name: string) => `The ${name} galaxy: one main star, its planets and a belt of sessions`,
     modelTip: "Model · applies from the next message",
     noModel: "No model",
     thinkingOffTip: "Thinking · this model does not think",
