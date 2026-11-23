@@ -383,7 +383,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: var(--space-0-5);
+  gap: var(--space-1);
   padding: 0 var(--space-1);
   border-radius: var(--chip-radius);
   background: var(--chip-fill);
@@ -394,6 +394,11 @@
 
 .composer-chip-face > .orbita-icon {
   flex: 0 0 auto;
+}
+/* 粘贴与图 N 的原文只多出方括号与空格那点宽度：两头留白收窄一档，名字才不被截 */
+.composer-chip[data-kind="paste"] > .composer-chip-face,
+.composer-chip[data-kind="image"] > .composer-chip-face {
+  padding: 0 var(--space-0-5);
 }
 
 /* 名字放不下（比原文宽）就省略号截断，胶囊不超出原文的格子 */
