@@ -581,6 +581,15 @@ describe("isChannelMarkRecord", () => {
     strictEqual(isChannelMarkRecord("channel-mark"), false);
   });
 
+  it("also（合并投递的其余信封）缺席合法；出现了就必须逐条合法", () => {
+    const one = { peerId: "c2", messageId: "m2", from: "child", kind: "done" };
+    strictEqual(isChannelMarkRecord({ ...mark, also: [one] }), true);
+    strictEqual(isChannelMarkRecord({ ...mark, also: [] }), true);
+    strictEqual(isChannelMarkRecord({ ...mark, also: "m2" }), false);
+    strictEqual(isChannelMarkRecord({ ...mark, also: [{ ...one, kind: "nope" }] }), false);
+    strictEqual(isChannelMarkRecord({ ...mark, also: [{ ...one, messageId: 3 }] }), false);
+  });
+
   it("from 只认 parent / child；kind 只认六种——手改出来的其它值整行判坏", () => {
     strictEqual(isChannelMarkRecord({ ...mark, from: "sibling" }), false);
     strictEqual(isChannelMarkRecord({ ...mark, kind: "notice" }), false);

@@ -92,6 +92,33 @@ export interface ChannelMarkRecord {
    * 诚实比防御性收窄好） */
   kind: ChannelMessageKind;
   timestamp: number;
+  /**
+   * 合并投递：同一条 user 消息里还带了别的通道信封（几个子会话的回报合成一条，见
+   * `composeChannelBatchPrompt`）时，首条信封落在上面的字段，其余按顺序落在这里。
+   * 仍是一条记录顶替一条 user 消息——不破坏上面的「轮边界」不变量与分支按位对账。
+   * 缺席 = 单条投递（旧记录都是这样）。
+   */
+  also?: ChannelMarkAlso[];
+}
+
+/** 合并投递里首条之外的信封：只留画标记行要的冷数据 */
+export interface ChannelMarkAlso {
+  peerId: string;
+  messageId: string;
+  from: "parent" | "child";
+  kind: ChannelMessageKind;
+}
+
+function isChannelMarkAlso(raw: unknown): raw is ChannelMarkAlso {
+  if (typeof raw !== "object" || raw === null) return false;
+  const value = raw as Record<string, unknown>;
+  return (
+    typeof value["peerId"] === "string" &&
+    typeof value["messageId"] === "string" &&
+    (value["from"] === "parent" || value["from"] === "child") &&
+    typeof value["kind"] === "string" &&
+    (CHANNEL_MESSAGE_KINDS as readonly string[]).includes(value["kind"])
+  );
 }
 
 export function isChannelMarkRecord(raw: unknown): raw is ChannelMarkRecord {
@@ -105,7 +132,9 @@ export function isChannelMarkRecord(raw: unknown): raw is ChannelMarkRecord {
     (value["from"] === "parent" || value["from"] === "child") &&
     typeof value["kind"] === "string" &&
     (CHANNEL_MESSAGE_KINDS as readonly string[]).includes(value["kind"]) &&
-    typeof value["timestamp"] === "number"
+    typeof value["timestamp"] === "number" &&
+    // also 缺席合法（单条投递）；出现了就必须逐条合法——坏条目整行当坏行跳过
+    (value["also"] === undefined || (Array.isArray(value["also"]) && value["also"].every(isChannelMarkAlso)))
   );
 }
 

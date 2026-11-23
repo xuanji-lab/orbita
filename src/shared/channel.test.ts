@@ -3,8 +3,10 @@ import { describe, it } from "node:test";
 import {
   allowedKinds,
   channelStatus,
+  composeChannelBatchPrompt,
   composeChannelPrompt,
   hasExchange,
+  parseChannelBatch,
   parseChannelMessage,
   parseChannelPrompt,
   sortChannelMessages,
@@ -489,5 +491,48 @@ describe("userRepliesSincePreviousReport —— 用户代父回复要转告父�
     const note = userRepliesNote([msg("先不支持扫描件", "parent", "reply", 1, "user")]);
     deepStrictEqual(note.includes('- "先不支持扫描件"'), true);
     deepStrictEqual(note.includes("on your behalf"), true);
+  });
+});
+
+describe("composeChannelBatchPrompt / parseChannelBatch", () => {
+  const a = message({ id: "ma", from: "child", kind: "done", text: "A 做完了" });
+  const b = message({ id: "mb", from: "child", kind: "question", text: "B 要问你" });
+  const peerA = { id: "ca", title: "调研 A" };
+  const peerB = { id: "cb", title: "调研 B", workbench: "/tmp/b" };
+
+  it("只有一条时与单条信封逐字相同，旧路径不变", () => {
+    strictEqual(composeChannelBatchPrompt([{ message: a, peer: peerA }]), composeChannelPrompt(a, peerA));
+  });
+
+  it("多条按给定顺序排，每条仍是原样信封，代父回复的话紧跟自己那一条", () => {
+    const text = composeChannelBatchPrompt([
+      { message: a, peer: peerA, note: "NOTE-A" },
+      { message: b, peer: peerB },
+    ]);
+    const at = (needle: string): number => text.indexOf(needle);
+    strictEqual(at('message="ma"') < at("NOTE-A") && at("NOTE-A") < at('message="mb"'), true);
+    strictEqual(text.includes(composeChannelPrompt(b, peerB)), true);
+    strictEqual(text.startsWith(composeChannelPrompt(a, peerA)), true);
+  });
+
+  it("parseChannelBatch 按顺序还原每条信封；首行不是信封整条不算", () => {
+    const text = composeChannelBatchPrompt([
+      { message: a, peer: peerA, note: "NOTE-A" },
+      { message: b, peer: peerB },
+    ]);
+    deepStrictEqual(
+      parseChannelBatch(text).map((item) => [item.kind, item.peerId, item.messageId]),
+      [
+        ["done", "ca", "ma"],
+        ["question", "cb", "mb"],
+      ],
+    );
+    deepStrictEqual(parseChannelBatch(`随便一句\n\n${text}`), []);
+    deepStrictEqual(parseChannelBatch("普通用户消息"), []);
+  });
+
+  it("单条信封的 parseChannelBatch 与 parseChannelPrompt 同值", () => {
+    const text = composeChannelPrompt(a, peerA);
+    deepStrictEqual(parseChannelBatch(text), [parseChannelPrompt(text)]);
   });
 });
