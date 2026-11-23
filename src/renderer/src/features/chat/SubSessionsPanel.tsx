@@ -13,6 +13,7 @@
  * `SubSessionControls`——用户裁决：这些权限归用户，不经过父模型）+ `ChatView`
  * （自带标题头 + transcript + 审批条，`hideComposer` 关掉输入框与排队条）。
  */
+import { parseFoldBook, SUBSESSION_FOLD_KEY, toggleFold, writeFold } from "./sub-sessions-fold.ts";
 import { useContext, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
 import { createPortal } from "react-dom";
@@ -201,6 +202,7 @@ export function SubSessionsPanel(props: {
       ) : (
         <SubSessionList
           key={props.parentId}
+          parentId={props.parentId}
           children={children}
           summaries={summaries}
           channels={channels}
@@ -232,6 +234,23 @@ function ListWaitingCount(props: {
   );
 }
 
+function readUnfolded(parentId: string): ReadonlySet<PanelGroup> {
+  try {
+    return new Set(parseFoldBook(localStorage.getItem(SUBSESSION_FOLD_KEY))[parentId] ?? []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveUnfolded(parentId: string, unfolded: ReadonlySet<PanelGroup>): void {
+  try {
+    const book = writeFold(parseFoldBook(localStorage.getItem(SUBSESSION_FOLD_KEY)), parentId, unfolded);
+    localStorage.setItem(SUBSESSION_FOLD_KEY, JSON.stringify(book));
+  } catch {
+    // 存不下就只在这次打开里生效
+  }
+}
+
 interface PanelRow {
   meta: SessionMeta;
   state: PanelRowState;
@@ -244,6 +263,7 @@ interface PanelRow {
 }
 
 function SubSessionList(props: {
+  parentId: string;
   children: readonly SessionMeta[];
   summaries: ReadonlyMap<string, ChannelSummary>;
   channels: ReadonlyMap<string, readonly ChannelMessage[]>;
@@ -324,12 +344,12 @@ function SubSessionList(props: {
     rows.flatMap((row) => (row.since === null ? [] : [row.since])),
     setNow,
   );
-  const [unfolded, setUnfolded] = useState<ReadonlySet<PanelGroup>>(() => new Set());
+  // 「已交回 / 已停止」的开合按母会话记住（sub-sessions-fold.ts，存 localStorage）
+  const [unfolded, setUnfolded] = useState<ReadonlySet<PanelGroup>>(() => readUnfolded(props.parentId));
   const toggle = (group: PanelGroup): void =>
     setUnfolded((prev) => {
-      const next = new Set(prev);
-      if (next.has(group)) next.delete(group);
-      else next.add(group);
+      const next = toggleFold(prev, group);
+      saveUnfolded(props.parentId, next);
       return next;
     });
 
@@ -348,22 +368,19 @@ function SubSessionList(props: {
         }
         return (
           <section key={group} className="ssp-group" aria-label={t.subSessions.groups[group]}>
-            <header className="ssp-group-head">
-              <span>{t.subSessions.groups[group]}</span>
-              <span className="ssp-group-n">{list.length}</span>
-              {FOLDED_GROUPS.has(group) && (
-                <button
-                  type="button"
-                  className="ssp-group-fold row-trailing"
-                  aria-expanded
-                  title={t.subSessions.foldTip}
-                  aria-label={t.subSessions.foldTip}
-                  onClick={() => toggle(group)}
-                >
-                  <Icon name="chevron-up" size={12} strokeWidth={1.8} />
-                </button>
-              )}
-            </header>
+            {FOLDED_GROUPS.has(group) ? (
+              // 能收起的组：整行组头就是开合键（2026-11-23 用户：「已交回，能不能一整行都可以展开和收齐」）
+              <button type="button" className="ssp-group-head ssp-group-toggle" aria-expanded title={t.subSessions.foldTip} onClick={() => toggle(group)}>
+                <span>{t.subSessions.groups[group]}</span>
+                <span className="ssp-group-n">{list.length}</span>
+                <Icon name="chevron-up" size={12} strokeWidth={1.8} className="row-trailing" />
+              </button>
+            ) : (
+              <header className="ssp-group-head">
+                <span>{t.subSessions.groups[group]}</span>
+                <span className="ssp-group-n">{list.length}</span>
+              </header>
+            )}
             <div className="ssp-card">
               {list.map((row) => (
                 <SubSessionRow key={row.meta.id} row={row} now={now} onClick={() => props.onOpenChild(row.meta.id)} />
