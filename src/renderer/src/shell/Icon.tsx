@@ -106,7 +106,6 @@ import filePlus from "../../../../design-system/assets/icons/lucide/file-plus.sv
 import heading from "../../../../design-system/assets/icons/lucide/heading.svg?raw";
 import bold from "../../../../design-system/assets/icons/lucide/bold.svg?raw";
 import listFilter from "../../../../design-system/assets/icons/lucide/list-filter.svg?raw";
-import messageSquareText from "../../../../design-system/assets/icons/lucide/message-square-text.svg?raw";
 import listTodo from "../../../../design-system/assets/icons/lucide/list-todo.svg?raw";
 import listTree from "../../../../design-system/assets/icons/lucide/list-tree.svg?raw";
 import menu from "../../../../design-system/assets/icons/lucide/menu.svg?raw";
@@ -255,7 +254,6 @@ const ICONS = {
   "layout-grid": layoutGrid,
   layers,
   "list-filter": listFilter,
-  "message-square-text": messageSquareText,
   "list-todo": listTodo,
   "list-tree": listTree,
   // 三条等长横线。列表用 `list`（带项目符号，读作「清单」），这一枚是「全部」——
