@@ -82,6 +82,9 @@ export function StarBody(props: { design: GalaxyDesign; x: number; y: number; r:
   );
 }
 
+/** 地表贴图比圆大一点点：球缘那一圈半透明的羽化边落到裁切圆外面，不在球缘描出一道浅边 */
+const IMAGE_OVERSCAN = 1.04;
+
 export function BodyFigure(props: { art: BodyArt; uid: string }) {
   const { art, uid } = props;
   const clip = `${uid}-clip`;
@@ -131,10 +134,10 @@ export function BodyFigure(props: { art: BodyArt; uid: string }) {
           <image
             className="gd-surface-image"
             href={image.src}
-            x={-art.r}
-            y={-art.r}
-            width={art.r * 2}
-            height={art.r * 2}
+            x={-art.r * IMAGE_OVERSCAN}
+            y={-art.r * IMAGE_OVERSCAN}
+            width={art.r * 2 * IMAGE_OVERSCAN}
+            height={art.r * 2 * IMAGE_OVERSCAN}
             preserveAspectRatio="xMidYMid slice"
             transform={image.flip ? "scale(1 -1)" : undefined}
           />

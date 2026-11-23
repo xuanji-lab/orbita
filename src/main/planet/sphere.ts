@@ -1,6 +1,6 @@
 /**
  * 无脸地表图 → 只留那颗球（纯计算，可直测）。Qwen 出的地表是透明底上的一颗球，球不一定居中（提示词让它略偏左下），
- * 四周还有零星半透明噪点。按 alpha 取「足够不透明」的像素的外框，再以外框中心为心、长边为边取正方形——
+ * 四周还有零星半透明噪点，有的还自带一圈星环。按 alpha 取「足够不透明」的像素的外框，再以外框中心为心、短边为边取正方形——
  * 界面拿这块正方形当贴图塞进代码画的圆里，球缘与圆缘对齐。
  */
 
@@ -46,7 +46,8 @@ export function sphereCrop(bitmap: Uint8Array, width: number, height: number): C
   const h = y1 - y0 + 1;
   // 全不透明（没有透明底）：外框就是整张图，不裁
   if (w >= width && h >= height) return whole;
-  const size = Math.min(Math.max(w, h), width, height);
+  // 球是圆的：外框的短边就是球径。长边更长只会是 Qwen 顺手画上的星环（横向伸出去）或零星噪点——按短边取，球填满圆
+  const size = Math.min(w, h, width, height);
   const cx = (x0 + x1 + 1) / 2;
   const cy = (y0 + y1 + 1) / 2;
   const x = Math.round(Math.min(Math.max(cx - size / 2, 0), width - size));

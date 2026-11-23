@@ -110,6 +110,12 @@ describe("sphereCrop：从透明底里抠出球", () => {
     const box = sphereCrop(paint(100, 100, 40, 60, 30), 100, 100);
     assert.ok(Math.abs(box.x - 10) <= 1 && Math.abs(box.y - 30) <= 1 && Math.abs(box.size - 60) <= 1, JSON.stringify(box));
   });
+  it("自带星环（横向伸出去）的球：按短边取，球填满正方形", () => {
+    const img = paint(200, 200, 100, 100, 60);
+    for (let x = 10; x < 190; x++) for (const y of [99, 100, 101]) img[(y * 200 + x) * 4 + 3] = 255;
+    const box = sphereCrop(img, 200, 200);
+    assert.ok(Math.abs(box.size - 120) <= 1 && Math.abs(box.x - 40) <= 1 && Math.abs(box.y - 40) <= 1, JSON.stringify(box));
+  });
   it("孤立噪点不算；全透明 / 全不透明不裁", () => {
     const img = paint(100, 100, 50, 50, 20);
     img[3] = 255;
