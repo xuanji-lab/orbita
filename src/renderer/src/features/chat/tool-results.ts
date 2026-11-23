@@ -442,8 +442,6 @@ export interface TurnOutputsUnit {
   calls: readonly ToolCallUnit[];
   /** 这一轮做出来的网页（文件账里改到的与旁路生成的），各占一张预览卡，不再挤在文件账卡里 */
   web: readonly string[];
-  /** 本轮网页文件变动超过上限（像是批量操作）时的个数；不逐个列，结尾那摞里是一张没有预览按钮的卡。没有 = 0 */
-  webBatch: number;
   /**
    * 这一轮写 / 改的文档（.md / .markdown / .txt，文件账里的绝对路径）：和「文档」功能是同一种东西，
    * 各占一张预览卡，点了在文档面板里看（2026-11-22 用户：a.md 只出现在编辑文件里，没有预览卡）
@@ -686,14 +684,15 @@ function foldSegment(
           ? [...entry.record.changes.map((change) => change.path).filter((path) => isWebArtifactFile(path)), ...(entry.record.webArtifacts ?? [])]
           : [],
       );
-  const webBatch = !settled ? 0 : tailCards.reduce((sum, entry) => sum + (entry.kind === "fileTurn" ? (entry.record.webArtifactsBatch ?? 0) : 0), 0);
+  // 网页文件变动超过批量上限（git clone / checkout、解压归档）的轮：不出卡。那是批量操作的副作用，不是 agent 给用户做的东西——
+  // 以前出一张「250 个网页 · 批量生成」，用户以为 agent 看了 / 做了 250 个网页（2026-11-23，会话 bd3b49 clone 了一个仓库）
   const docs = !settled
     ? []
     : tailCards.flatMap((entry) => (entry.kind === "fileTurn" ? entry.record.changes.map((change) => change.path).filter((path) => DOC_FILE.test(path)) : []));
-  const hasMain = settled && results !== undefined && (turnOutputs(calls, results).length > 0 || web.length > 0 || docs.length > 0 || webBatch > 0);
+  const hasMain = settled && results !== undefined && (turnOutputs(calls, results).length > 0 || web.length > 0 || docs.length > 0);
   if (hasMain || children.length > 0) {
     const key = children.length > 0 ? `out:child:${children[0]?.messageId ?? ""}` : `out:${calls[0]?.key ?? tailCards[0]?.key ?? ""}`;
-    view.push({ kind: "turnOutputs", key, calls: settled ? calls : [], web, webBatch, docs, children });
+    view.push({ kind: "turnOutputs", key, calls: settled ? calls : [], web, docs, children });
   }
   return view;
 }

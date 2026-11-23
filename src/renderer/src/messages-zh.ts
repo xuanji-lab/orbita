@@ -716,10 +716,10 @@ export const zh: Messages = {
     open: "查看大图",
     prev: "上一张",
     next: "下一张",
-    openInFiles: "在右栏文件面板里预览 · 右键选大图 / 小图",
+    openInFiles: "在右栏文件面板里预览",
     imageRef: (name) => `图片 · ${name}`,
-    sizeLarge: "大图",
-    sizeSmall: "小图",
+    sizeLarge: "放大",
+    sizeSmall: "缩小",
   },
 
   rowStatus: {
@@ -2225,7 +2225,6 @@ export const zh: Messages = {
     outputDoc: "文档",
     outputWeb: "网页",
     outputPreview: "预览",
-    outputBatch: "批量生成",
     outputGroup: (type, n) => (type === "doc" ? `${n} 份文档` : type === "web" ? `${n} 个网页` : `${n} 个 PDF`),
     childReportHead: (title) => `「${title}」交回了`,
     outputFromChildShort: "来自子会话",

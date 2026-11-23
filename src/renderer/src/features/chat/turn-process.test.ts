@@ -276,25 +276,17 @@ describe("被打断的一轮（过程行写「被你打断」）", () => {
   });
 });
 
-describe("批量网页变动并进结尾那摞（不再是文件账里的一句说明）", () => {
+describe("批量网页变动不出卡（git clone / checkout 的副作用，不是 agent 做的东西）", () => {
   const withBatch = (changes: unknown[]) =>
     [
       user("u1", 1),
-      assistant("a1", 2, [call("b1", "bash", { command: "python export.py" })]),
+      assistant("a1", 2, [call("b1", "bash", { command: "git clone --depth 1 https://example.com/repo.git" })]),
       tool({ toolCallId: "b1", toolName: "bash", timestamp: 3 }),
-      assistant("a2", 4, [{ type: "text", text: "导完了。" }]),
-      { role: "file-turn", id: "ft1", timestamp: 5, changes, webArtifactsBatch: 37 } as unknown as TranscriptItem,
+      assistant("a2", 4, [{ type: "text", text: "读完了。" }]),
+      { role: "file-turn", id: "ft1", timestamp: 5, changes, webArtifactsBatch: 250 } as unknown as TranscriptItem,
     ] as TranscriptItem[];
-  test("只有批量网页变动、没有文件改动：出产物那摞，带个数", () => {
-    const v = view(withBatch([]), false);
-    const out = v.find((e) => e.kind === "turnOutputs");
-    assert.ok(out !== undefined && out.kind === "turnOutputs");
-    assert.equal(out.webBatch, 37);
-    assert.deepEqual(out.web, []);
-  });
-  test("没有批量时 webBatch 是 0，没有别的产物就不出这一摞", () => {
-    const records = withBatch([]).slice(0, 4);
-    assert.equal(view(records, false).some((e) => e.kind === "turnOutputs"), false);
+  test("只有批量网页变动、没有别的产物：不出结尾那摞", () => {
+    assert.equal(view(withBatch([]), false).some((e) => e.kind === "turnOutputs"), false);
   });
 });
 

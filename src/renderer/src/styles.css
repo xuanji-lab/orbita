@@ -1213,13 +1213,11 @@ body {
 }
 
 /*
- * 容器一种语言：底色或描边，不混用（方向 N，2026-11-07）。代码块原先是 muted 底 + 1px 发丝线——
- * 两种语言叠在同一个面上；N 只留底（暗档的底已抬到白 7%，比旧的 5% 多一档，靠底分得开）。
- * 用 `--color-chat-muted-bg` 的块与行内代码同一份底。纸面两档保持原样（它们的底与纸几乎同色，靠线）。
+ * 容器一种语言：底色或描边，不混用（方向 N，2026-11-07）。当年代码块是 muted 底，N 去掉了它的发丝线、只留底。
+ * 2026-11-22 起对话里只有用户的消息是灰的，代码块改成白底（.chat-md pre 的 --color-bg-panel）——白底放在白色的对话面上，
+ * 再没有线就整个看不见了（2026-11-23 用户：「是不是一个 block 但是没有渲染出来」）。所以这里不再去线：
+ * 白底 + 淡边，同结尾那摞白卡，仍然只有一种语言（线），底与对话面同色不算第二种。
  */
-:root:not([data-theme="copybook"], [data-theme="typescript"]) .chat-md pre {
-  border: 0;
-}
 
 /*
  * 内容面：左会话列（ChatView 自带 height:100% 的栅格根）+ 右侧面板壳。
@@ -5941,12 +5939,18 @@ html {
 
 /* 回答里的本地图（MarkdownBlock.ChatImage，2026-11-22）：一张图占一整行，下面紧跟的段落是它的解释。
    边与圆角同 show_image 的单图；点开看大图。 */
-/* 回答里的本地图：居中，一张占一行；大图最高 480、小图最高 160（右键切，2026-11-23）。左键在右栏文件面板预览 */
-.chat-md .chat-img-local {
+/* 回答里的本地图：居中，一张占一行；大图最高 480、小图最高 160。左键在右栏文件面板预览，
+   悬停右上角出一颗「放大 / 缩小」小工具条（.quote-toolbar 的按钮样子，2026-11-23） */
+.chat-md .chat-img-frame {
+  position: relative;
   display: block;
   width: fit-content;
   max-width: 100%;
   margin: var(--space-2) auto var(--space-1);
+}
+.chat-md .chat-img-local {
+  display: block;
+  max-width: 100%;
   padding: 0;
   border: 0;
   background: none;
@@ -5961,8 +5965,35 @@ html {
   border: 1px solid var(--color-border-subtle);
   background: var(--color-bg-panel);
 }
-.chat-md .chat-img-local[data-size="small"] img {
+.chat-md .chat-img-frame[data-size="small"] .chat-img-local img {
   max-height: 160px;
+}
+.chat-md .chat-img-tools {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-0-5);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-popover);
+  opacity: 0;
+  transition: opacity var(--duration-instant) var(--ease-standard);
+}
+.chat-md .chat-img-frame:hover .chat-img-tools,
+.chat-md .chat-img-frame:has(:focus-visible) .chat-img-tools {
+  opacity: 1;
+}
+.chat-md .chat-img-pending {
+  display: block;
+  height: 120px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+}
+.chat-md .chat-img-pending[data-size="small"] {
+  height: 80px;
 }
 /* 用户气泡里的图片语法：一颗小签（见 MarkdownBlock 的 BubbleImageRef），与附件芯片同一副骨架 */
 .chat-md .chat-img-ref {

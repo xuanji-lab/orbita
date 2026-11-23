@@ -66,6 +66,7 @@ import alignCenter from "../../../../design-system/assets/icons/lucide/align-cen
 import alignRight from "../../../../design-system/assets/icons/lucide/align-right.svg?raw";
 import monitorPlay from "../../../../design-system/assets/icons/lucide/monitor-play.svg?raw";
 import expand from "../../../../design-system/assets/icons/lucide/expand.svg?raw";
+import maximize2 from "../../../../design-system/assets/icons/lucide/maximize-2.svg?raw";
 import minimize2 from "../../../../design-system/assets/icons/lucide/minimize-2.svg?raw";
 import imagePlus from "../../../../design-system/assets/icons/lucide/image-plus.svg?raw";
 import scrollText from "../../../../design-system/assets/icons/lucide/scroll-text.svg?raw";
@@ -317,6 +318,7 @@ const ICONS = {
   "align-right": alignRight,
   "monitor-play": monitorPlay,
   "expand": expand,
+  "maximize-2": maximize2,
   "minimize-2": minimize2,
   "image-plus": imagePlus,
 } as const;
