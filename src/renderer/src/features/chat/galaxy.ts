@@ -573,6 +573,11 @@ export function drawFrame(
   minPlanetPx = 0,
   /** 星屑颗粒的屏幕半径区间（px）：缺省 0.6–2.2；星际空间里碎石就是会话本身，画大一档（DEBRIS_PX） */
   dustPx: readonly [number, number] = DUST_PX,
+  /**
+   * 等你的行星是否强行画在主星前面（单智能体首页的 fixture 星系沿用第二轮的做法）。工作区页 / 右栏传 false：
+   * 星系规则「天体不得相撞」——转到主星背后时就让主星挡住它，不画在主星上面（屏幕安全布局保证它在近侧不碰主星）
+   */
+  waitingInFront = true,
 ): DrawItem[] {
   const starP = project({ x: 0, y: 0, z: 0 }, camera);
   const starS = toScreen(starP, vp);
@@ -603,7 +608,7 @@ export function drawFrame(
       composition: planet.composition,
       state: planet.state,
       label: planet.label,
-      depth: waiting ? Math.min(p.depth, starP.depth - 1e-3) : p.depth,
+      depth: waiting && waitingInFront ? Math.min(p.depth, starP.depth - 1e-3) : p.depth,
       x: s.x,
       y: s.y,
       r: Math.max((vp.focal * planet.radius) / p.depth, minPlanetPx) * (waiting ? WAITING_SCALE : 1),
@@ -611,7 +616,7 @@ export function drawFrame(
       fy: 0.5 + (0.32 * dy) / dl,
       lit: (1 + cosPhase) / 2,
     });
-    planetAngle.set(planet.id, { theta: normalizeAngle(theta), depth: waiting ? Math.min(p.depth, starP.depth - 1e-3) : p.depth });
+    planetAngle.set(planet.id, { theta: normalizeAngle(theta), depth: waiting && waitingInFront ? Math.min(p.depth, starP.depth - 1e-3) : p.depth });
   }
   const span = (Math.PI * 2) / ARCS_PER_ORBIT;
   for (const arc of arcs) {

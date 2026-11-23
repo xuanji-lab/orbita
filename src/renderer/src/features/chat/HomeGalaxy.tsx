@@ -19,7 +19,6 @@ import {
   emptyHintAt,
   motionAllowed,
   orbitArcs,
-  readablePlanetPx,
   DEBRIS_PX,
   DUST_PX,
   type DrawItem,
@@ -29,7 +28,7 @@ import {
 import { useT } from "../../locale.ts";
 import { BodyFigure, StarBody } from "../galaxy-designer/StarFigure.tsx";
 import { bodyArt, planetFaceDesign, starExtentRatio, type GalaxyDesign } from "../galaxy-designer/design.ts";
-import { ORBIT_STEP } from "./galaxy-data.ts";
+import { fitScreenSafe } from "./screen-safe.ts";
 import { GalaxyCallouts } from "./GalaxyCallouts.tsx";
 import type { PlanetItem } from "./galaxy.ts";
 
@@ -170,26 +169,33 @@ export function HomeGalaxy(props: {
   const size = useBoxSize(svgRef);
   // 工作区页（fill）的碎石上限随画布面积缩放；单智能体首页的带子仍用原来的上限
   const dustCap = props.fill === true && size !== null ? dustCapFor(size.width, size.height) : undefined;
-  const layout = useMemo(
+  const baseLayout = useMemo(
     () => layoutGalaxy(dustCap === undefined ? props.spec : { ...props.spec, dustCap }),
     [props.spec, dustCap],
   );
   const scene = useMemo(() => {
     if (size === null || size.width < 2 || size.height < 2) return null;
     // 相机与视口只按统一画框 + 画布尺寸定：同一块画布上三档主星同大同位，不按星系自己的外缘缩放
-    // 俯角按画框形状定（elevationFor）：同一块画布上三档仍同大同位——俯角只看画布，不看内容
-    // 默认（全局首页那条带子）20° + 460 封顶，与原型一致；fill（工作区页）才按画框抬俯角、放宽封顶
-    const box = galaxyBox(size.width, size.height, props.fill === true ? GALAXY_MAX_FILL : GALAXY_MAX);
-    const camera = makeCamera(FRAME_EXTENT, props.fill === true ? elevationFor(box) : CAMERA_ELEVATION_DEG);
-    const viewport = frameViewport(camera, size.width, size.height, box);
-    return { camera, viewport, arcs: orbitArcs(layout, camera, viewport) };
-  }, [layout, size, props.fill]);
-  // 工作区页 / 右栏：行星至少画到表情可读的大小（两只眼看得见），但不压到隔壁轨道（readablePlanetPx）
-  const minPlanetPx = scene === null || props.fill !== true ? 0 : readablePlanetPx(scene.camera, scene.viewport, ORBIT_STEP);
+    // 默认（全局首页那条带子）20° + 460 封顶，与原型一致——单智能体首页这一支一个像素都不动
+    if (props.fill !== true) {
+      const box = galaxyBox(size.width, size.height, GALAXY_MAX);
+      const camera = makeCamera(FRAME_EXTENT, CAMERA_ELEVATION_DEG);
+      const viewport = frameViewport(camera, size.width, size.height, box);
+      return { camera, viewport, layout: baseLayout, minPlanetPx: 0, arcs: orbitArcs(baseLayout, camera, viewport) };
+    }
+    // 工作区页 / 右栏：屏幕安全布局（screen-safe.ts）——在屏幕坐标里排轨道，任何相位上天体都不在画面上相撞：
+    // 近侧行星让开主星，相邻两圈在短轴上留出间距，轨道放平；排不下就抬俯角，再不行少画最外一圈
+    const box = galaxyBox(size.width, size.height, GALAXY_MAX_FILL);
+    const safe = fitScreenSafe(dustCap === undefined ? props.spec : { ...props.spec, dustCap }, size.width, size.height, box, elevationFor(box));
+    return { camera: safe.camera, viewport: safe.viewport, layout: safe.layout, minPlanetPx: safe.minPlanetPx, arcs: orbitArcs(safe.layout, safe.camera, safe.viewport) };
+  }, [baseLayout, size, props.fill, props.spec, dustCap]);
+  const layout = scene?.layout ?? baseLayout;
+  const minPlanetPx = scene?.minPlanetPx ?? 0;
+  // 工作区页 / 右栏：等你的行星不再强行画在主星前面——转到主星背后就让主星挡住（天体不得画在主星上面）
   const drawn =
     scene === null
       ? []
-      : drawFrame(layout, scene.camera, scene.viewport, scene.arcs, seconds, minPlanetPx, props.starless === true ? DEBRIS_PX : DUST_PX);
+      : drawFrame(layout, scene.camera, scene.viewport, scene.arcs, seconds, minPlanetPx, props.starless === true ? DEBRIS_PX : DUST_PX, props.fill !== true);
   // 星际空间：不画主星、轨道与行星，只留碎石
   const items = props.starless === true ? drawn.filter((item) => item.kind === "dust") : drawn;
   // 工作区页（fill）：在做工的行星画锁定框，最要紧的几颗升起引线写任务名（GalaxyCallouts，与右栏星系图共用）
@@ -197,6 +203,13 @@ export function HomeGalaxy(props: {
   const planetItems = items.filter((item): item is PlanetItem => item.kind === "planet");
   const starItem = items.find((item) => item.kind === "star");
   const starExtent = props.starDesign === undefined ? 1 : starExtentRatio(props.starDesign);
+  // 被主星挡住的行星（在它背后、画面上与它重叠）：不画锁定框与引线，转出来再画——框画在主星上面也是「压在主星上」
+  const visiblePlanets =
+    starItem === undefined || starItem.kind !== "star"
+      ? planetItems
+      : planetItems.filter(
+          (planet) => !(planet.depth > starItem.depth && Math.hypot(planet.x - starItem.x, planet.y - starItem.y) < starItem.r * starExtent + planet.r),
+        );
   const folded = scene === null || props.fill !== true ? null : foldedMarkAt(layout, scene.camera, scene.viewport);
   const hint = scene === null || props.emptyHint === undefined ? null : emptyHintAt(layout, scene.camera, scene.viewport);
   const starGradient = `${uid}-star`;
@@ -278,7 +291,7 @@ export function HomeGalaxy(props: {
       {/* 锁定框、引线与悬停名字画在最上层；碎石折掉的会话数收成一个「+N」 */}
       {props.fill === true && scene !== null && props.starless !== true && (
         <GalaxyCallouts
-          planets={planetItems}
+          planets={visiblePlanets}
           rankOf={rankOf}
           star={starItem === undefined ? null : { x: starItem.x, y: starItem.y, r: starItem.r * starExtent }}
           width={scene.viewport.width}
