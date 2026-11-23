@@ -21,7 +21,14 @@
 
 import { pathTail } from "./path.ts";
 
-export type FileRootKind = "session" | "workspace" | "attached" | "attachments" | "cited";
+/**
+ * 根的种类。attachments / cited / subsession 三种**不进树**，只进白名单：
+ * - attachments：拖入的外部文件发送时复制进会话的副本；
+ * - cited：本会话 cite_pdf 核验过的 PDF（根就是文件本身）；
+ * - subsession：本会话派出的子会话（含子会话再派的）各自的工作台——子会话交回的产物在那里，
+ *   结尾那摞的「预览」要打得开（2026-11-23 用户：「我想看子会话交回的文件，但是不让我预览」）。
+ */
+export type FileRootKind = "session" | "workspace" | "attached" | "attachments" | "cited" | "subsession";
 
 export interface FileRoot {
   kind: FileRootKind;
@@ -101,7 +108,7 @@ export function sortFileEntries(entries: readonly FileEntry[]): FileEntry[] {
  * 空标题（会话还没命名）退回 fallback，不留空行。
  */
 export function fileRootLabel(kind: FileRootKind, path: string, title: string, fallback: string): string {
-  if (kind === "attached" || kind === "attachments" || kind === "cited") {
+  if (kind === "attached" || kind === "attachments" || kind === "cited" || kind === "subsession") {
     const last = pathTail(path);
     return last === "" ? path : last;
   }
