@@ -6,6 +6,7 @@ import claudeOpus from "../../../../../design-system/assets/model-avatars/claude
 import claudeSonnet from "../../../../../design-system/assets/model-avatars/claude-sonnet.svg";
 import deepseekV41Flash from "../../../../../design-system/assets/model-avatars/deepseek-v4.1-flash.png";
 import deepseekV4Pro from "../../../../../design-system/assets/model-avatars/deepseek-v4-pro.png";
+import glm54 from "../../../../../design-system/assets/model-avatars/glm-5.4.png";
 import glm53Flash from "../../../../../design-system/assets/model-avatars/glm-5.3-flash.png";
 import glm53 from "../../../../../design-system/assets/model-avatars/glm-5.3.png";
 import gptAstra from "../../../../../design-system/assets/model-avatars/gpt-astra.png";
@@ -31,7 +32,8 @@ import { VendorLogo } from "./VendorLogo";
  * - claude-*：platform.claude.com 文档页的四枚产品线线稿（/images/dashboard-discovery/），
  *   底色参照 Proma 截图配、烧进 SVG 里（界面代码不写颜色）；
  * - 公众号封面（推文在微信列表里显示的封面图，不是正文里的图；原件与裁切脚本在本地登记页
- *   docs/model-avatars/tools/）：kimi-k3（磁感线）、glm-5.3（数字三角）、glm-5.3-flash（光锥）、
+ *   docs/model-avatars/tools/）：kimi-k3（磁感线）、glm-5.3（数字三角）、glm-5.3-flash（光锥）、glm-5.4（三个环——
+ *   压一档色阶，细线圈 16px 下才不发灰），
  *   deepseek-v4.1-flash（抹掉封面上的字，鲸鱼标放进金色光环）、deepseek-v4-pro（标题下的
  *   橙紫波浪 + 同一枚鲸鱼标）、step-5-preview（大「5」）、mimo-v2.6-*（两只蝴蝶，不写字——2026-10-25 用户：「上一版的作为 pro，
  *   当前版的作为 flash，然后把 pro 和 flash 的字体移除掉」：Pro 用 V2.6 横幅里的正面蝴蝶（橙色翼尖），抹掉压在左翼的
@@ -52,6 +54,7 @@ import { VendorLogo } from "./VendorLogo";
 const OWN_AVATARS: Record<ModelAvatarKey, string> = {
   "kimi-k3.1": kimiK31,
   "kimi-k3": kimiK3,
+  "glm-5.4": glm54,
   "glm-5.3": glm53,
   "glm-5.3-flash": glm53Flash,
   "deepseek-v4-pro": deepseekV4Pro,
