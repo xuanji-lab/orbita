@@ -526,35 +526,6 @@
   color: var(--color-text-primary);
 }
 
-/* 不用等我（子会话汇报时机的开关）：进度节底部，只在有子会话时出现 */
-.cs-report {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin-top: var(--space-1);
-  padding: var(--space-1-5) var(--space-3);
-}
-.cs-report-text {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0 var(--space-1);
-}
-.cs-report-text > .cs-report-sub {
-  flex-basis: 100%;
-}
-/* info 浮层里的两行：开 / 关各一行 */
-.cs-report-tip {
-  display: grid;
-  gap: var(--space-1);
-}
-.cs-report-sub {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-tertiary);
-}
-
 /* ── 产物：一类一行，每行一排大缩略图，横向滑；最后一张露出下一张的一角 ── */
 .cs-og {
   padding: 0 var(--space-3);

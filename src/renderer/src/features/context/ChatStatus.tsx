@@ -9,8 +9,6 @@ import { Icon } from "../../shell/Icon";
 import { StatusPie } from "../../shell/StatusPie";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { requestOpenPanel, requestOpenPluginBoard } from "../../shell/open-panel.ts";
-import { Switch } from "../settings/SettingControls";
-import { InfoTip } from "../settings/InfoTip";
 import type { SessionEntry } from "../chat/session-states.ts";
 import type { ChatSession, SessionEngine } from "../chat/useChatSession";
 import { useTaskRecords } from "../chat/useTaskRecords.ts";
@@ -417,7 +415,6 @@ function ProgressSection(props: {
   );
   const [all, setAll] = useState(false);
   const [openStep, setOpenStep] = useState<string | null>(null);
-  const [reportOn, setReportOn] = useState(false);
   const sectionRef = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
     if (props.focus === null) return;
@@ -526,7 +523,7 @@ function ProgressSection(props: {
           <li data-step={UNASSIGNED} data-status="pseudo" data-open={openStep === UNASSIGNED || undefined}>
             <button type="button" className="cs-row cs-btn cs-step" aria-expanded={openStep === UNASSIGNED} title={t.chatStatus.unassignedTip} onClick={() => toggleStep(UNASSIGNED)}>
               <span className="cs-slot cs-mark">
-                <Icon name="git-fork" size={12} strokeWidth={1.8} />
+                <Icon name={FEATURE_ICON.subsessions} size={12} strokeWidth={1.8} />
               </span>
               <span className="cs-step-text">
                 {t.chatStatus.unassigned}
@@ -541,28 +538,6 @@ function ProgressSection(props: {
           </li>
         )}
       </ol>
-      {/*
-        「不用等我」（2026-11-22 22:34 用户定；先叫「直接打岔」、再叫「收齐就汇报」）：子会话的汇报什么时候交给主会话。
-        关（默认，「你在」）= 等同一批子会话全部收工、并且等你聊完，合成一轮汇报；只做完一部分时可以点「先汇报这几个」提前拿。
-        开（「你不在」）= 完成一个汇报一个，主会话立刻接着处理，不等同批其它子会话、也不等你（即 main 现在的做法）。
-        只在有子会话时出现；原型未接上投递。
-      */}
-      {props.children.length > 0 && (
-        <div className="cs-report">
-          {/* 说明交给名字旁的 info 图标（用户 22:36；复用设置页的 InfoTip：悬停 / 键盘聚焦出浮层，读屏经 aria-describedby 直接读到） */}
-          <span className="cs-report-text">
-            <span>{t.chatStatus.dontWait}</span>
-            <InfoTip label={t.chatStatus.dontWaitAbout}>
-              <span className="cs-report-tip">
-                <span>{t.chatStatus.dontWaitOn}</span>
-                <span>{t.chatStatus.dontWaitOff}</span>
-              </span>
-            </InfoTip>
-            {reportOn && <span className="cs-report-sub">{t.chatStatus.notWired}</span>}
-          </span>
-          <Switch label={t.chatStatus.dontWait} checked={false} onChange={() => setReportOn(true)} />
-        </div>
-      )}
     </section>
   );
 }

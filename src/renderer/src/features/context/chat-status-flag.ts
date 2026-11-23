@@ -1,6 +1,7 @@
 /**
- * 「状态」卡的原型开关（2026-11-22）：localStorage `orbita.proto.chatStatus` = off | on，缺席 = off（= 改前，#522 现状）。
- * 设置 › 外观里那一行切它；同一窗口里的别处靠一个窗口事件跟着变。原型定了转成真功能时，这个开关整个删掉。
+ * 「状态」卡的开关（2026-11-22 原型，2026-11-23 进体验包）：localStorage `orbita.proto.chatStatus` = off | on，
+ * **缺席 = on**（用户 11-23：「合进去」——体验期默认开着用；不想要在设置 › 外观里关掉）。
+ * 设置 › 外观里那一行切它；同一窗口里的别处靠一个窗口事件跟着变。定稿转成正式功能时，这个开关整个删掉。
  */
 import { useCallback, useEffect, useState } from "react";
 
@@ -9,9 +10,9 @@ const EVENT = "orbita:proto-chat-status";
 
 function read(): boolean {
   try {
-    return localStorage.getItem(KEY) === "on";
+    return localStorage.getItem(KEY) !== "off";
   } catch {
-    return false;
+    return true;
   }
 }
 
