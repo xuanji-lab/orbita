@@ -1368,6 +1368,20 @@ describe("SessionStore · 窗口分页", () => {
     assert.equal(page.hasMore, false);
   });
 
+  test("loadOlder：前一轮比一页还长时，回的是那一整轮，不是空页（实验分支：切换卡顿调查顺手抓到的）", async () => {
+    // 一轮 = 1 条 user + 1 条 assistant + N 条工具。第 0 轮很长（比一页多），第 1 轮很短
+    const longTurn = turnBlock(0, 30);
+    const shortTurn = turnBlock(1, 2);
+    await seedLog(ID, [...longTurn, ...shortTurn]);
+    // 一页只取 10 条：锚点 u1 之前的 10 条里没有轮边界
+    const page = await store.loadOlder(ID, "u1", 10);
+    // 改前：往后找轮边界越过了锚点，回 { records: [], hasMore: true }——更早的历史再也翻不到，
+    // 状态卡的「整个任务」拉取也在这里报错、每次进会话重试一遍
+    assert.equal(page.records.length, longTurn.length);
+    assert.equal(page.records[0]?.id, "u0");
+    assert.equal(page.hasMore, false);
+  });
+
   test("折叠语义不变：窗口从 fold 后的生效视图取，不是盘上的原始行", async () => {
     // 10 轮（50 条）+ 回退界碑（目标 = u5）+ 后两轮：生效视图只有 u5 之前 + 界碑 + 后两轮
     const records: SessionRecord[] = [

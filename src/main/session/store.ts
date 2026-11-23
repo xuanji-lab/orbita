@@ -938,7 +938,8 @@ export class SessionStore {
       console.error(`[session] 分页锚点在生效视图里找不到（会话可能刚被回退）：${id} / ${before}`);
       return { records: [], hasMore: false };
     }
-    const start = alignToTurnStart(effective, Math.max(0, end - pageRecords(limit)));
+    // 往后找轮边界不能越过 end：越过了就是把锚点自己当成起点，回一张空页却说「还有更多」
+    const start = alignToTurnStart(effective, Math.max(0, end - pageRecords(limit)), end);
     if (perfProbeOn) perfLog({ type: "loadOlder", id, total: effective.length, returned: end - start, hasMore: start > 0 });
     return { records: effective.slice(start, end), hasMore: start > 0 };
   }
@@ -1286,10 +1287,11 @@ function isTurnStart(record: SessionRecord | undefined): boolean {
  * 例如最后 600 条都在同一轮里）就往回找最近的那条——宁可窗口比一页稍大，
  * 也不给一段无主的历史。两边都没有（整条会话一条 user 记录也没有）只能按 start 切。
  */
-function alignToTurnStart(records: readonly SessionRecord[], start: number): number {
+function alignToTurnStart(records: readonly SessionRecord[], start: number, end: number = records.length): number {
   if (start <= 0) return 0;
   if (isTurnStart(records[start])) return start;
-  for (let i = start; i < records.length; i += 1) {
+  // 只在 [start, end) 里往后找：loadOlder 的 end 是锚点（它自己就是轮边界），找到它等于空页
+  for (let i = start; i < end; i += 1) {
     if (isTurnStart(records[i])) return i;
   }
   for (let i = start - 1; i >= 0; i -= 1) {
