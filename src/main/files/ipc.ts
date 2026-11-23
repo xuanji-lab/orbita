@@ -7,6 +7,7 @@ import { stat } from "node:fs/promises";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import {
   isPdfFile,
+  type FileMediaUrl,
   isWebPageFile,
   type FileLineIndex,
   type FileLineIndexRequest,
@@ -24,6 +25,7 @@ import { resolveFileRoots } from "./roots.ts";
 import { listDirectory, whitelistedPath } from "./list.ts";
 import { buildLineIndex, readLines } from "./lines.ts";
 import { readPdfFile, readPreview } from "./read.ts";
+import { issueMediaUrl, type MediaTokens } from "./media-stream.ts";
 
 /**
  * @param openInBrowser 在内置浏览器「你的」tab 打开一个本地网页（BrowserSandbox.openLocalFile）。
@@ -38,6 +40,7 @@ export function registerFilesIpc(
   workspaces: WorkspaceStore,
   sessions: SessionStore,
   openInBrowser: (path: string, roots: readonly string[]) => Promise<void>,
+  mediaTokens: MediaTokens,
 ): void {
   ipcMain.handle(ipcChannels.fsRoots, (_event, req: FileRootsRequest) =>
     resolveFileRoots(workspaces, sessions, req),
@@ -123,6 +126,16 @@ export function registerFilesIpc(
     const path = await whitelistedPath(roots, req);
     if (!isPdfFile(path)) throw new Error(`Not a PDF file: ${path}`);
     return readPdfFile(path);
+  });
+
+  /**
+   * 给音 / 视频文件发播放地址：同 fs:read 的白名单（root 白名单 + realpath 后在根内），外加只认媒体扩展名
+   * ——判定用 realpath 之后的路径，改名成 foo.mp3 的符号链接指向别的文件同样被拒；这条通道不能变成
+   * 「流式读任意文件」。token 映射到这个真实路径，`orbita-media://` 协议只认 token（media-stream.ts）。
+   */
+  ipcMain.handle(ipcChannels.fsMediaUrl, async (_event, req: FileListRequest): Promise<FileMediaUrl> => {
+    const roots = await resolveFileRoots(workspaces, sessions, req);
+    return issueMediaUrl(mediaTokens, roots, req);
   });
 
   /**
