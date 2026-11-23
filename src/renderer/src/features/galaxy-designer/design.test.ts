@@ -421,6 +421,30 @@ describe("每个工作区一份设计稿", () => {
   });
 });
 
+describe("设计稿仓库：侧栏头像与页面星系跟着面板变", () => {
+  test("没改过：每次返回同一个默认稿对象（快照稳定）、has 为假；改了通知订阅者、has 为真；恢复默认再通知一次；退订后不再通知", () => {
+    const store = createDesignStore("default");
+    let calls = 0;
+    const off = store.subscribe(() => {
+      calls += 1;
+    });
+    const first = store.get(WS_A);
+    assert.equal(store.get(WS_A), first);
+    assert.equal(store.has(WS_A), false);
+    store.set(WS_A, { ...first, star: { ...first.star, mass: 900 } });
+    assert.equal(calls, 1);
+    assert.equal(store.has(WS_A), true);
+    assert.equal(store.get(WS_A).star.mass, 900);
+    assert.equal(store.has(WS_B), false);
+    assert.equal(store.reset(WS_A), first);
+    assert.equal(calls, 2);
+    assert.equal(store.has(WS_A), false);
+    off();
+    store.set(WS_A, first);
+    assert.equal(calls, 2);
+  });
+});
+
 describe("面板开合与切工作区", () => {
   test("点 DIY：关着 → 打开这个工作区；开着同一个 → 收起；开着别的 → 换过去", () => {
     assert.deepEqual(designerClick({ panel: null, target: null }, WS_A), { panel: "galaxy", target: WS_A });

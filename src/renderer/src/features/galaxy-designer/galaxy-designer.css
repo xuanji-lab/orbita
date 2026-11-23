@@ -21,6 +21,24 @@
   --gd-eye: var(--color-bg-panel);
 }
 
+/*
+ * 面板外的同一个形象（StarFigure：侧栏工作区行的头像、工作区页页头、页面星系的主星）：
+ * 取与 .gd 同一组配比，形象在哪里都长一样。不带容器、不带内边距
+ */
+.gd-figure {
+  --gd-light: var(--color-bg-panel);
+  --gd-shade: var(--color-text-primary);
+  --gd-eye: var(--color-text-primary);
+  display: block;
+  flex: 0 0 auto;
+  overflow: visible;
+}
+:root:is([data-theme="graphite"], [data-theme="black"]) .gd-figure {
+  --gd-light: var(--color-text-primary);
+  --gd-shade: var(--color-bg-panel);
+  --gd-eye: var(--color-bg-panel);
+}
+
 /* 钉在滚动区上方的预览块：下面的参数怎么滚，预览都看得见 */
 .gd-head {
   padding-bottom: var(--space-2);

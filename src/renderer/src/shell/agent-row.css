@@ -1,0 +1,182 @@
+/*
+ * 编排侧栏的智能体行（AgentRow.tsx）。版式登记：
+ * | 版式 | 用途 | 结构 | 现有最近的同类 |
+ * | 智能体行 | 一个工作区的主智能体 | 左头像 28px；右两行：名字 + 时间 / 状态 + 小圆点 | Claude 桌面版 Bots 的行；侧栏会话行（.task-row）的悬停与选中底 |
+ * 选中 / 悬停的底与会话行同一对 token；悬停动作键叠在右上角、不占位，静止的时间让位（设计系统 *Trailing edges*）。
+ */
+.agent-row {
+  position: relative;
+  margin: var(--space-0-5) 0;
+}
+.agent-row-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1-5) var(--space-2) var(--space-1-5) var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.agent-row-main:hover {
+  background: var(--option-hover-bg);
+}
+/* 选中盖过悬停：规则在后（同 .option-row 的取舍） */
+.agent-row[data-active="true"] .agent-row-main {
+  background: var(--option-active-bg);
+}
+.agent-row[data-active="true"] .agent-name {
+  font-weight: var(--weight-semibold);
+}
+.agent-avatar {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+}
+.agent-body {
+  display: grid;
+  flex: 1 1 auto;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+.agent-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+}
+.agent-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-time {
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  transition: opacity var(--duration-instant) var(--ease-standard);
+}
+.agent-status {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+.agent-status-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 等你：行尾一枚实心小点（颜色是第二信号，第一信号是左边那句字） */
+.agent-dot {
+  width: var(--space-1-5);
+  height: var(--space-1-5);
+  border-radius: var(--radius-pill);
+  background: var(--color-warning);
+}
+.agent-name-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 22px;
+  padding: 0 var(--space-1);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-medium);
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* 悬停动作键：叠在右上角，不占位；静止的时间让位，名字的尾巴在键下面淡出 */
+.agent-acts {
+  position: absolute;
+  top: var(--space-1-5);
+  right: var(--space-2);
+  display: none;
+  align-items: center;
+  gap: var(--space-0-5);
+}
+.agent-row:hover .agent-acts,
+.agent-row:has(:focus-visible) .agent-acts,
+.agent-row[data-armed] .agent-acts,
+.agent-row[data-designing] .agent-acts {
+  display: inline-flex;
+}
+/* 星系设计面板开着这座星系：不悬停时只留点亮的画笔键，告诉你右栏在设计哪座 */
+.agent-row[data-designing]:not(:hover):not(:has(:focus-visible)):not([data-armed]) .agent-acts > :not(.agent-act-diy) {
+  display: none;
+}
+.agent-row:hover .agent-time,
+.agent-row:has(:focus-visible) .agent-time,
+.agent-row[data-armed] .agent-time,
+.agent-row[data-designing] .agent-time {
+  opacity: 0;
+}
+.agent-row:hover .agent-body > .agent-line:first-child,
+.agent-row:has(:focus-visible) .agent-body > .agent-line:first-child,
+.agent-row[data-armed] .agent-body > .agent-line:first-child {
+  mask-image: linear-gradient(to right, black calc(100% - 76px), transparent calc(100% - 56px));
+}
+
+/* 工作区页页头（WorkspaceCapsule）：主星头像 + 名字 + 状态胶囊，坐在工具栏居中的胶囊里（.cap-sess 左对齐） */
+.cap-avatar {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+}
+.cap-sess .cap-status {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  height: var(--control-height-xs);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-hover);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+.cap-status > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cap-sess button.cap-status {
+  cursor: pointer;
+}
+.cap-sess button.cap-status:hover {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+}
+.cap-status-dot {
+  flex: none;
+  width: var(--space-1-5);
+  height: var(--space-1-5);
+  border-radius: var(--radius-pill);
+  background: var(--color-text-tertiary);
+}
+/* 窄到放不下时先让状态胶囊让位，名字最后才省略（同会话胶囊的让位顺序） */
+@container (max-width: 300px) {
+  .cap-sess .cap-status {
+    display: none;
+  }
+}

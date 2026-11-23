@@ -71,6 +71,8 @@ import { getOpenDocumentText } from "../doc-panel/open-document.ts";
 import { ExitCard } from "./ExitCard";
 import { ProcessViewContext } from "./process-view-context";
 import { sessionRunState, type SessionRunState } from "../notify/completion-notice.ts";
+import { scopeGalaxy, stateIndexOf } from "./galaxy-data.ts";
+import { useGalaxyDesign } from "../galaxy-designer/useGalaxyDesign.ts";
 import { REVEAL_ENTRY_EVENT } from "../context/task-progress.ts";
 import { planAwaitingIn, planHistory, planNoticeOf, type PlanTimeline, type PlanVersion } from "../context/plan-timeline.ts";
 import { PlanCard } from "./PlanCard";
@@ -724,6 +726,11 @@ function ChatViewBody(props: {
    * 新任务用它——欢迎界面是主会话的仪式，辅助对话要的是直接开写（wafo 2026-09-12）。
    */
   homeBare?: boolean;
+  /**
+   * 编排形态（settings.appMode）：首页变成「工作区自己的 New Task 页」——输入框钉底、上方整块是这座星系（真实数据）。
+   * 缺席 / false = 单智能体，首页与此前逐项一致。
+   */
+  orchestrate?: boolean;
   /** 星标（收藏）的模型。**不是会话元数据**——它跟着用户走，存在设置里 */
   starredModels?: readonly ModelPair[];
   onToggleStarModel?: (pair: ModelPair) => void;
@@ -1451,6 +1458,30 @@ function ChatViewBody(props: {
   // 星系首页（原型 proto/home-galaxy）：普通主题的主槽首页把工作区名拉到门面上，输入框里不再出现
   // 工作区芯片；纸面两档与右抽屉里的极简首页没有门面，芯片照旧（不然就没地方选新任务放在哪）
   const galaxyHome = homeActive && homeBare !== true && heroFace(props.theme) === "plain";
+  /**
+   * 编排形态下的工作区自己的 New Task 页（侧栏点智能体行 / 工具栏新任务 / 星系名菜单选了某个工作区）：同一个首页，
+   * 作用域落在这个工作区——输入框钉在底部（与聊天页同位同形），上方整块给这座星系，星系用真实数据。
+   * 单智能体形态原样不动：版式仍是「标题与输入框在上、星系在下」，星系仍是写死的 fixture（PROTO_GALAXY_SPEC）。
+   */
+  const scopedHome = galaxyHome && props.orchestrate === true;
+  // 这座星系的主星设计稿（没选工作区时用「主目录」那一份）：面板里一改，页面星系同一帧跟着变
+  const galaxyDesign = useGalaxyDesign(session.workspaceId ?? "");
+  // 不缓存：运行态每个事件都可能变；stateIndexOf 先建子会话表，整趟 O(n)（2000 条也只是一遍）
+  const galaxyStates = scopedHome ? stateIndexOf(session) : null;
+  const galaxyData =
+    scopedHome && galaxyStates !== null
+      ? scopeGalaxy({
+          sessions: session.sessions,
+          workspaceId: session.workspaceId,
+          stateOf: galaxyStates.state,
+          ownStateOf: galaxyStates.own,
+          now: Date.now(),
+          starMass: galaxyDesign.design.star.mass,
+          designedPlanet: galaxyDesign.edited
+            ? { mass: galaxyDesign.design.planet.mass, composition: galaxyDesign.design.planet.composition }
+            : null,
+        })
+      : null;
 
   const composer = (
     <Composer
@@ -1563,6 +1594,62 @@ function ChatViewBody(props: {
           >
             {notices}
             {composer}
+          </div>
+        </div>
+      );
+    }
+    // 工作区自己的 New Task 页：骨架照聊天页（上面一块 1fr、下面页脚），输入框落在聊天页输入框的同一位置、同一形态——
+    // 发出第一句后它不用滑，原地变成聊天页的输入框；上方整块是这座星系，门面（星系名 + slogan）浮在星系左上。
+    // 首页记录（等你 / 进行中）不在这里列：要你动手的事由页头胶囊（点了直达）、侧栏这一行与等你的行星外圈来说，
+    // 星系不被一张列表挤小。
+    if (scopedHome && galaxyData !== null) {
+      const scopeName = scopeNameOf(session, t.chat.home);
+      return (
+        <div
+          ref={stageRef}
+          className="home-stage ws-home"
+          data-galaxy="true"
+          data-leaving={travel === "leaving" ? "true" : undefined}
+          data-travel={travel === "prep" || travel === "entering" ? travel : undefined}
+          data-workspace={session.workspaceId ?? undefined}
+        >
+          <div className="home-fade ws-home-sky">
+            <div className="ws-home-face">
+              <div className="ws-home-face-col">
+                <HomeHero
+                  theme={props.theme}
+                  galaxy={
+                    <ScopeMenu
+                      session={session}
+                      namingWidth={240}
+                      placement="below"
+                      trigger={({ open, toggle, scope, title }) => (
+                        <button
+                          type="button"
+                          className="home-galaxy-name"
+                          aria-expanded={open}
+                          title={title}
+                          onClick={toggle}
+                        >
+                          <span className="home-galaxy-title">{scope}</span>
+                          <span className="home-galaxy-suffix">{t.chat.galaxySuffix}</span>
+                          <Icon name="chevron-down" size={16} />
+                        </button>
+                      )}
+                    />
+                  }
+                />
+              </div>
+            </div>
+            <div className="ws-home-galaxy">
+              <HomeGalaxy spec={galaxyData.spec} label={t.chat.galaxyFigure(scopeName)} starDesign={galaxyDesign.design} fill />
+            </div>
+          </div>
+          <div ref={travelRef} className="chat-footer home-travel ws-home-foot">
+            <div className="chat-foot-col" style={{ display: "grid", gap: "var(--space-2)" }}>
+              {notices}
+              {composer}
+            </div>
           </div>
         </div>
       );

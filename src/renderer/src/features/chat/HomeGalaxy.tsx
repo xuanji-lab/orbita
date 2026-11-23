@@ -5,8 +5,13 @@ import {
   frameViewport,
   FRAME_EXTENT,
   FRAME_MS,
-  galaxyFixtureOf,
+  CAMERA_ELEVATION_DEG,
+  elevationFor,
+  galaxyBox,
   galaxySpecOf,
+  galaxyFixtureOf,
+  GALAXY_MAX,
+  GALAXY_MAX_FILL,
   layoutGalaxy,
   makeCamera,
   motionAllowed,
@@ -15,6 +20,8 @@ import {
   type GalaxySpec,
   type MotionInputs,
 } from "./galaxy.ts";
+import { BodyFigure } from "../galaxy-designer/GalaxyDesigner.tsx";
+import { bodyArt, type GalaxyDesign } from "../galaxy-designer/design.ts";
 
 /**
  * 画布的真实尺寸（CSS px）：ResizeObserver 量 svg 自己的盒子。星系占首页输入框下方剩下的全部空间，
@@ -126,12 +133,15 @@ function useGalaxyClock(target: RefObject<SVGSVGElement | null>): number {
 }
 
 /**
- * 首页输入框下的星系（原型）：一颗主星、若干小得多的行星、一条会话星屑带。
+ * 首页 / 工作区页的星系：一颗主星、若干小得多的行星、一条会话星屑带。数据是真实的（galaxy-data.ts）。
  * 真 3D 坐标 + 透视投影 + 画家算法，画成 SVG——几何与排序都在 galaxy.ts（有测试），
  * 这里只画。颜色全部取墨色与发丝线 token（styles.css 的 .home-galaxy），不用 accent：
- * 它是这座星系的样子，不是要你点的东西。
+ * 它是这座星系的样子，不是要你点的东西。唯一的状态色是「等你」行星外的一圈细环（warning）。
+ *
+ * starDesign：这座星系的主星设计稿（星系设计面板）。给了就把主星画成面板里那颗（眼睛、星环、日冕），
+ * 与侧栏头像同一个形象；不给是一颗素球。
  */
-export function HomeGalaxy(props: { spec: GalaxySpec; label: string }) {
+export function HomeGalaxy(props: { spec: GalaxySpec; label: string; starDesign?: GalaxyDesign; fill?: boolean }) {
   const uid = useId().replace(/:/g, "");
   const svgRef = useRef<SVGSVGElement | null>(null);
   const seconds = useGalaxyClock(svgRef);
@@ -140,10 +150,13 @@ export function HomeGalaxy(props: { spec: GalaxySpec; label: string }) {
   const scene = useMemo(() => {
     if (size === null || size.width < 2 || size.height < 2) return null;
     // 相机与视口只按统一画框 + 画布尺寸定：同一块画布上三档主星同大同位，不按星系自己的外缘缩放
-    const camera = makeCamera(FRAME_EXTENT);
-    const viewport = frameViewport(camera, size.width, size.height);
+    // 俯角按画框形状定（elevationFor）：同一块画布上三档仍同大同位——俯角只看画布，不看内容
+    // 默认（全局首页那条带子）20° + 460 封顶，与原型一致；fill（工作区页）才按画框抬俯角、放宽封顶
+    const box = galaxyBox(size.width, size.height, props.fill === true ? GALAXY_MAX_FILL : GALAXY_MAX);
+    const camera = makeCamera(FRAME_EXTENT, props.fill === true ? elevationFor(box) : CAMERA_ELEVATION_DEG);
+    const viewport = frameViewport(camera, size.width, size.height, box);
     return { camera, viewport, arcs: orbitArcs(layout, camera, viewport) };
-  }, [layout, size]);
+  }, [layout, size, props.fill]);
   const items = scene === null ? [] : drawFrame(layout, scene.camera, scene.viewport, scene.arcs, seconds);
   const starGradient = `${uid}-star`;
   const render = (item: DrawItem) => {
@@ -154,15 +167,24 @@ export function HomeGalaxy(props: { spec: GalaxySpec; label: string }) {
       return <path key={item.key} className="galaxy-dust" d={item.d} style={{ opacity: item.alpha }} />;
     }
     if (item.kind === "star") {
+      if (props.starDesign !== undefined) {
+        return (
+          <g key={item.key} className="gd-figure galaxy-star-figure" transform={`translate(${item.x} ${item.y})`}>
+            <BodyFigure art={bodyArt(props.starDesign, "star", item.r)} uid={`${uid}-sf`} />
+          </g>
+        );
+      }
       return <circle key={item.key} cx={item.x} cy={item.y} r={item.r} fill={`url(#${starGradient})`} />;
     }
     const lightId = `${uid}-${item.planetId}`;
     return (
       <g key={item.key}>
+        {item.state === "waiting" && <circle className="galaxy-planet-waiting" cx={item.x} cy={item.y} r={item.r + 3} />}
         <circle
           className="galaxy-planet"
           data-planet={item.planetId}
           data-composition={item.composition}
+          data-state={item.state ?? undefined}
           cx={item.x}
           cy={item.y}
           r={item.r}
@@ -202,7 +224,8 @@ export function HomeGalaxy(props: { spec: GalaxySpec; label: string }) {
 }
 
 /**
- * 原型用的星系数据：`?galaxy=empty|typical|full` 切三档，不带参数时是 typical。
- * 页面地址在一次加载里不变，所以模块加载时算一次。真实的行星 / 会话映射还没做（等编排落地）。
+ * 单智能体首页的星系数据（原型）：`?galaxy=empty|typical|full` 切三档，不带参数时是 typical。
+ * 单智能体侧原样保留写死的 fixture；编排侧的工作区页用真实数据（galaxy-data.ts）。
+ * 页面地址在一次加载里不变，所以模块加载时算一次。
  */
 export const PROTO_GALAXY_SPEC: GalaxySpec = galaxySpecOf(galaxyFixtureOf(window.location.search) ?? "typical");

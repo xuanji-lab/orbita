@@ -359,13 +359,16 @@ export function workspaceHash(id: string): number {
 /** 满载档的长名字：超过 NAME_MAX，用来看面板会不会被撑开、错误会不会报出来 */
 export const LONG_NAME = "一颗名字特别长用来检查面板会不会被撑开的行星开普勒四五二乙扩展版";
 
+/** 默认主星质量：没在面板里设计过的工作区、全局首页都用它（与原型三档 fixture 同一个数） */
+export const STAR_MASS_DEFAULT = 620;
+
 export function defaultDesign(workspaceId: string, level: DesignLevel): GalaxyDesign {
   const pick = workspaceHash(workspaceId) % PLANET_PRESETS.length;
   const preset = PLANET_PRESETS[pick] ?? PLANET_PRESETS[0];
   const elements = ELEMENT_PRESETS[pick] ?? ALL_OFF;
   const base: GalaxyDesign = {
     editing: "planet",
-    star: { name: "", mass: 620, elements: { ...ALL_OFF, eyes: true }, zoom: ZOOM_DEFAULT.star },
+    star: { name: "", mass: STAR_MASS_DEFAULT, elements: { ...ALL_OFF, eyes: true }, zoom: ZOOM_DEFAULT.star },
     planet: { name: "", elements, mass: 6, composition: "rock", orbitRadius: 22, zoom: ZOOM_DEFAULT.planet, ...preset },
     backdrop: "muted",
   };
@@ -388,21 +391,47 @@ export function defaultDesign(workspaceId: string, level: DesignLevel): GalaxyDe
  * 都还在；重启就回到 fixture。按工作区 id 分开存，切工作区不会把上一个的参数带过去。
  */
 export interface DesignStore {
+  /** 同一个工作区没改过时每次返回同一个对象（useSyncExternalStore 要求快照稳定，否则每次渲染都算变了） */
   get: (workspaceId: string) => GalaxyDesign;
+  /** 这个工作区在面板里改过（不是默认稿）：页面星系只在改过时才把设计的行星套到第一颗上 */
+  has: (workspaceId: string) => boolean;
   set: (workspaceId: string, design: GalaxyDesign) => void;
   reset: (workspaceId: string) => GalaxyDesign;
+  /** 任一工作区的设计稿变了就通知：侧栏头像与页面星系跟着重画。返回退订函数 */
+  subscribe: (listener: () => void) => () => void;
 }
 
 export function createDesignStore(level: DesignLevel): DesignStore {
   const designs = new Map<string, GalaxyDesign>();
+  const defaults = new Map<string, GalaxyDesign>();
+  const listeners = new Set<() => void>();
+  const notify = (): void => {
+    for (const listener of listeners) listener();
+  };
+  const fallback = (id: string): GalaxyDesign => {
+    const cached = defaults.get(id);
+    if (cached !== undefined) return cached;
+    const fresh = defaultDesign(id, level);
+    defaults.set(id, fresh);
+    return fresh;
+  };
   return {
-    get: (id) => designs.get(id) ?? defaultDesign(id, level),
+    get: (id) => designs.get(id) ?? fallback(id),
+    has: (id) => designs.has(id),
     set: (id, design) => {
       designs.set(id, design);
+      notify();
     },
     reset: (id) => {
       designs.delete(id);
-      return defaultDesign(id, level);
+      notify();
+      return fallback(id);
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
     },
   };
 }

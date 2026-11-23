@@ -12,9 +12,7 @@ import {
   BACKDROPS,
   bodyArt,
   clampValue,
-  createDesignStore,
   densityOf,
-  designLevelOf,
   displayRadius,
   ELEMENTS_OF,
   errorsAt,
@@ -34,6 +32,7 @@ import {
   type ElementKey,
   type GalaxyDesign,
 } from "./design.ts";
+import { galaxyDesigns } from "./useGalaxyDesign.ts";
 
 /**
  * 星系设计（原型，proto/planet-designer）：侧栏工作区行悬停出现的画笔键打开它，住在右栏面板位里。
@@ -43,8 +42,8 @@ import {
  * 只做面板与预览：不写配置、不接 agent 数据。设计稿按工作区存在这次运行的内存里（design.ts 的 DesignStore）。
  */
 
-/** 页面地址在一次加载里不变：`?designer=bare|full` 定 fixture 档，模块加载时建一次仓库 */
-const store = createDesignStore(designLevelOf(window.location.search));
+/** 设计稿仓库是全应用一份（useGalaxyDesign.ts）：面板写，侧栏头像与工作区页的星系读 */
+const store = galaxyDesigns;
 
 export function GalaxyDesigner(props: { workspace: Workspace | null }) {
   const t = useT();
@@ -400,7 +399,32 @@ function Preview(props: { design: GalaxyDesign; workspaceName: string; invalid: 
   );
 }
 
-function BodyFigure(props: { art: BodyArt; uid: string }) {
+/**
+ * 一颗主星的静态形象（侧栏工作区行的头像、工作区页页头）：与面板预览同一个 BodyFigure、同一份设计稿，
+ * 不自转、不带动效（用户定过：侧栏头像静态，页面星系才动）。画框按形象的外框（含星环 / 日冕）取，
+ * 所以开了星环的主星在头像里会小一些——整颗装进去，不裁。size 由调用方给（px）。
+ */
+export function StarFigure(props: { design: GalaxyDesign; size: number; label: string; className?: string }) {
+  const uid = useId().replace(/:/g, "");
+  const r = displayRadius(radiusOf(props.design, "star"));
+  const art = bodyArt(props.design, "star", r);
+  const half = Math.max(art.extent.x, art.extent.y) * 1.04;
+  return (
+    <svg
+      className={props.className === undefined ? "gd-figure" : `gd-figure ${props.className}`}
+      width={props.size}
+      height={props.size}
+      viewBox={`${-half} ${-half} ${half * 2} ${half * 2}`}
+      role="img"
+      aria-label={props.label}
+      data-elements={ELEMENTS_OF.star.filter((key) => props.design.star.elements[key]).join(" ")}
+    >
+      <BodyFigure art={art} uid={uid} />
+    </svg>
+  );
+}
+
+export function BodyFigure(props: { art: BodyArt; uid: string }) {
   const { art, uid } = props;
   const clip = `${uid}-clip`;
   const light = `${uid}-light`;

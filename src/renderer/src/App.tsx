@@ -35,6 +35,9 @@ import { Sidebar, type Overlay } from "./shell/Sidebar";
 import { COLLAPSE_BREAKPOINT } from "./shell/window-tools.ts";
 import { Toolbar, ToolbarPanelSlotContext } from "./shell/Toolbar";
 import { SessionCapsule } from "./shell/SessionCapsule";
+import { WorkspaceCapsule } from "./shell/WorkspaceCapsule";
+import { headerStatusOf } from "./features/chat/agent-status.ts";
+import { latestWorkspaceId, scopeRecent, scopeSummary, stateIndexOf } from "./features/chat/galaxy-data.ts";
 import { useFocusShell } from "./features/focus/use-focus-shell.tsx";
 import { docPanelLayout } from "./features/doc-panel/doc-panel-width.ts";
 import { DocPaperContext, effectivePaper } from "./features/doc-panel/doc-paper.ts";
@@ -88,7 +91,7 @@ import { useAutoOpenPanel } from "./features/chat/auto-open-panel.ts";
 import { liveFileOpen, onOpenPanelRequest, onOpenPluginBoardRequest, onOpenProgressRequest, requestOpenPanel } from "./shell/open-panel.ts";
 import type { ExcerptJump } from "./features/review/ExcerptsTab";
 import type { ExcerptJumpRequest } from "./features/chat/ChatView";
-import { BOARD_DAYS_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
+import { APP_MODE_DEFAULT, BOARD_DAYS_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
 import { Drawer, type DockedTab } from "./shell/Drawer";
 import { NEW_TASK_TAB, dockTab } from "./shell/drawer-state";
 import { isWindowInactive } from "./shell/window-activity.ts";
@@ -164,6 +167,15 @@ export function App() {
   const resolvedTheme = useTheme(settings.theme, settings.language);
   const locale = effectiveLanguage(resolvedTheme, settings.language);
   const t = messagesOf(locale);
+  /** 侧栏停在哪一形态（settings.appMode；缺席 = 单智能体）：运行时仍是同一套内核，这里只决定侧栏与新任务页长什么样 */
+  const appMode = settings.appMode ?? APP_MODE_DEFAULT;
+  const orchestrate = appMode === "orchestrate";
+  /**
+   * 进入编排（切过去，或启动时设置里就是编排）后先落在一座具体的星系上：编排没有「不属于任何工作区」的首页。
+   * 只在列表读完后落一次；眼下已经在看某条会话 / 盖着设置页 / 首页已选了工作区就不动，不把人从手上的事里带走。
+   * 退出编排再进来重新落一次。
+   */
+  const landedRef = useRef(false);
   const refresh = useCallback(async () => {
     try {
       setProviders(await api.provider.list());
@@ -384,12 +396,29 @@ export function App() {
    */
   const newTaskNonceRef = useRef(0);
   const [newTaskSignal, setNewTaskSignal] = useState(0);
+  useEffect(() => {
+    if (!orchestrate) {
+      landedRef.current = false;
+      return;
+    }
+    if (landedRef.current || session.loads.workspaces.kind !== "ready" || session.loads.sessions.kind !== "ready") return;
+    landedRef.current = true;
+    if (overlay !== null || session.sessionId !== null || session.opened !== null || session.workspaceId !== null) return;
+    const target = latestWorkspaceId(session.sessions, session.workspaces);
+    const workspace = session.workspaces.find((item) => item.id === target);
+    if (workspace !== undefined) session.newTaskIn(workspace);
+  }, [orchestrate, overlay, session]);
   const startNewTaskFromTools = (): void => {
     setOverlay(null);
     setSidebarCollapsed(false);
     newTaskNonceRef.current += 1;
     setNewTaskSignal(newTaskNonceRef.current);
-    session.newTask();
+    // 编排：新任务落在眼下这座星系（看着哪个工作区的会话就是哪个）；没有就退回「不属于任何工作区」
+    const here = orchestrate
+      ? session.workspaces.find((item) => item.id === (session.sessions.find((meta) => meta.id === (session.sessionId ?? session.opened?.id ?? ""))?.workspaceId ?? session.workspaceId))
+      : undefined;
+    if (here !== undefined) session.newTaskIn(here);
+    else session.newTask();
   };
   /**
    * 带着会话目标开新会话（右栏进度「目标」上的动作）：开工即回对话、侧栏展开、
@@ -1364,6 +1393,8 @@ export function App() {
    * 工具栏居中那颗胶囊的内容：设置页 = 标题（只有标题）；会话页 = SessionCapsule；
    * 首页 = 不渲染。
    */
+  // 编排页页头的状态与「会话」菜单读同一份运行态（只在编排首页那一支用；子会话表建一遍，整趟 O(n)）
+  const orchestrateStates = orchestrate ? stateIndexOf(session) : null;
   const sessionSlot =
     overlay === "settings" || overlay === "board" ? (
       <div className="cap-sess">
@@ -1373,7 +1404,19 @@ export function App() {
           </strong>
         </div>
       </div>
-    ) : mainOpenId === "" && session.opened === null ? null : (
+    ) : mainOpenId === "" && session.opened === null ? (
+      orchestrateStates !== null ? (
+        <WorkspaceCapsule
+          workspaceId={session.workspaceId}
+          name={session.workspaces.find((item) => item.id === session.workspaceId)?.name ?? t.chat.home}
+          status={headerStatusOf(scopeSummary(session.sessions, session.workspaceId, orchestrateStates.state))}
+          recent={scopeRecent(session.sessions, session.workspaceId, orchestrateStates.state)}
+          now={Date.now()}
+          onOpenSession={(id) => void session.openSession(id)}
+          onSeeAll={() => changeSettings({ appMode: "agent" })}
+        />
+      ) : null
+    ) : (
       <SessionCapsule
         title={capsuleTitle}
         shortId={capsuleShortId}
@@ -1475,6 +1518,8 @@ export function App() {
           onUsagePetChange={(usagePet) => changeSettings({ usagePet })}
           usageSay={focus.say}
           usageCard={focus.card}
+          appMode={appMode}
+          onAppMode={(next) => changeSettings({ appMode: next })}
           collapsed={sidebarCollapsed}
           onCollapsedChange={setSidebarCollapsed}
           newTaskSignal={newTaskSignal}
@@ -1538,6 +1583,7 @@ export function App() {
               <ChatView
                 session={session}
                 providersError={providersError}
+                orchestrate={orchestrate}
                 bareHeader
                 onOpenReviewAt={openReviewAt}
                 excerptJump={excerptJump}

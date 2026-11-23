@@ -2723,6 +2723,68 @@ button.ws-fold {
 .galaxy-light {
   stop-color: var(--galaxy-light);
 }
+/* 等你的行星：外面一圈 1px 的 warning 细环——星系里唯一的状态色，要你动手的那颗在一片墨色里认得出来
+   （与状态饼的「等你」同一个 token）。在跑的不加记号：它们本来就在转 */
+.galaxy-planet-waiting {
+  fill: none;
+  stroke: var(--color-warning);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+/* 星系里的主星画成面板里设计的那颗（StarFigure 同一套形象）：覆盖 .gd-figure 的 display，它在这里是一个 <g> */
+.galaxy-star-figure {
+  display: inline;
+}
+
+/*
+ * 工作区自己的 New Task 页（ChatView 的 scopedHome）。版式登记：
+ * | 版式 | 用途 | 结构 | 现有最近的同类 |
+ * | 工作区页 | 一个工作区（主智能体）的新任务页 | 上：星空（1fr，门面在左上、星系占满其余）；下：聊天页的页脚（.chat-footer + .chat-foot-col） | Claude 桌面版 Bots 的空态页；自己的聊天页骨架 |
+ * 输入框直接用聊天页页脚的两层类：发出第一句后原地变成聊天页的输入框，不滑、不跳。
+ */
+.home-stage.ws-home {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  /* 盖掉 .home-stage 的居中：不撑满的话列宽缩成内容宽，输入框只剩 300 来宽 */
+  align-items: stretch;
+  justify-content: stretch;
+  padding: 0;
+}
+.ws-home-sky.home-fade {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  min-height: 0;
+}
+/* 门面：星系名 + slogan。外层的左右内边距与页脚（.chat-footer）同一个，里层的列宽与输入框（.chat-foot-col）同一个，
+   所以任何窗口宽度下名字的左缘与输入框的左缘是同一条线 */
+.ws-home-face {
+  flex: 0 0 auto;
+  padding: var(--space-6) var(--space-5) 0;
+}
+.ws-home-face-col {
+  width: min(100%, var(--content-max-width));
+  margin: 0 auto;
+}
+.ws-home-face .home-hero {
+  align-items: flex-start;
+}
+/* 星系吃掉门面与输入框之间的全部空间；太矮时保底 160，宁可被裁也不压输入框 */
+.ws-home-galaxy {
+  flex: 1 1 auto;
+  min-height: 160px;
+}
+.ws-home-foot.home-travel {
+  transition: none;
+}
+
 /* 星系场：吃掉输入框下面剩下的全部高度（.home-col 是纵向 flex）；太矮时保底 160，宁可被 stage 裁掉也不压输入框 */
 .home-fade-galaxy {
   flex: 1 1 auto;

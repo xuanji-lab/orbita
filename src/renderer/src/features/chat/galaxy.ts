@@ -30,7 +30,14 @@ export interface PlanetSpec {
   nodeDeg: number;
   /** t = 0 时在轨道上的相位（度） */
   phaseDeg: number;
+  /**
+   * 这颗行星背后那件活眼下的状态（真实数据：runStateOf）。只给「等你」画一圈细环——要你动手的那颗
+   * 在一片墨色里认得出来；其它状态不加记号（状态优先图标与文字，那在侧栏行和页头胶囊里说）。缺席 = 没有状态
+   */
+  state?: PlanetState;
 }
+
+export type PlanetState = "waiting" | "running" | "done" | "failed" | null;
 
 export interface GalaxySpec {
   starMass: number;
@@ -98,6 +105,7 @@ export function angularSpeed(orbitRadius: number): number {
 export interface OrbitBody {
   id: string;
   composition: Composition;
+  state: PlanetState;
   radius: number;
   orbitRadius: number;
   inclination: number;
@@ -182,6 +190,7 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
     planets.push({
       id: planet.id,
       composition: planet.composition,
+      state: planet.state ?? null,
       radius,
       orbitRadius,
       inclination: clamp(planet.inclinationDeg, -8, 8) * DEG,
@@ -324,11 +333,31 @@ export interface Viewport {
  */
 export const GALAXY_MARGIN = 24;
 export const GALAXY_MAX = { width: 1280, height: 460 } as const;
+/** 工作区页（星系占输入框上方整块）的封顶：高度放宽，窗口一高星系跟着长，不留大块死白；宽度同上 */
+export const GALAXY_MAX_FILL = { width: 1280, height: 720 } as const;
 
-export function galaxyBox(width: number, height: number): { width: number; height: number } {
+/**
+ * 相机俯角随画框形状变（工作区页：星系占输入框上方整块，窗口一高，20° 的扁椭圆上下各留一大块白）：
+ * 画框越「方」俯角越大，椭圆越圆、越能填满竖向；扁的画框（全局首页那条带子）保持 20°。
+ * 夹在 [CAMERA_ELEVATION_DEG, ELEVATION_MAX]：再高就成了俯视的靶心，读不出「绕着转」。
+ * 只抬俯角、不压：limitInclinations 按 20° 收的倾角在更高的俯角下竖向间隔只会更大，轨道照样不交叉。
+ */
+export const ELEVATION_MAX = 38;
+
+export function elevationFor(box: { width: number; height: number }): number {
+  const ratio = box.height / Math.max(box.width, 1);
+  const fit = (Math.asin(clamp(ratio * 0.92, 0, 1)) * 180) / Math.PI;
+  return clamp(fit, CAMERA_ELEVATION_DEG, ELEVATION_MAX);
+}
+
+export function galaxyBox(
+  width: number,
+  height: number,
+  max: { width: number; height: number } = GALAXY_MAX,
+): { width: number; height: number } {
   return {
-    width: clamp(width - GALAXY_MARGIN * 2, 1, GALAXY_MAX.width),
-    height: clamp(height - GALAXY_MARGIN * 2, 1, GALAXY_MAX.height),
+    width: clamp(width - GALAXY_MARGIN * 2, 1, max.width),
+    height: clamp(height - GALAXY_MARGIN * 2, 1, max.height),
   };
 }
 
@@ -403,6 +432,7 @@ export interface PlanetItem {
   key: string;
   planetId: string;
   composition: Composition;
+  state: PlanetState;
   depth: number;
   x: number;
   y: number;
@@ -509,6 +539,7 @@ export function drawFrame(layout: GalaxyLayout, camera: Camera, vp: Viewport, ar
       key: `planet-${planet.id}`,
       planetId: planet.id,
       composition: planet.composition,
+      state: planet.state,
       depth: p.depth,
       x: s.x,
       y: s.y,

@@ -10,6 +10,8 @@ import { UsageMeter } from "./UsageMeter";
 import { WorkspaceFilterBar, useScrolledEdge, useWorkspaceFilter } from "./WorkspaceFilterBar.tsx";
 import { bucketCounts, buildOptions, defaultFilter, groupByWorkspace, type WsAllow, type WsFilter } from "./workspace-filter.ts";
 import { WorkspaceFiles } from "./focus/WorkspaceFiles.tsx";
+import { AgentRow } from "./AgentRow.tsx";
+import { scopeSummary, stateIndexOf } from "../features/chat/galaxy-data.ts";
 import {
   EMPTY_SELECTION,
   nextSelection,
@@ -23,6 +25,7 @@ import type { ChatSession } from "../features/chat/useChatSession";
 import { childSessions, rootSessions, type SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 import {
+  type AppMode,
   SIDEBAR_AGE_CHOICES,
   SIDEBAR_WIDTH_DEFAULT,
   SIDEBAR_WIDTH_MAX,
@@ -158,6 +161,9 @@ export function Sidebar(props: {
   onStartFocusHere: (workspaceId: string) => void;
   /** 双击 / Enter 打开左栏文件预览（绝对路径 → App → 右栏文件面板） */
   onOpenFile: (absPath: string) => void;
+  /** 侧栏停在哪一形态：单智能体（工作区 → 会话树）/ 编排（工作区 = 一行智能体，点进它自己的 New Task 页） */
+  appMode: AppMode;
+  onAppMode: (next: AppMode) => void;
   /** 星云的常驻小气泡（专注：正在整理 / 要不要总结）；null = 无 */
   usageSay: React.ReactNode | null;
   /** 星云头顶的卡片（专注时间到）；null = 无 */
@@ -314,6 +320,15 @@ export function Sidebar(props: {
     session.openSession(id);
   };
 
+  /** 切形态：只翻 settings.appMode；切进编排后落在哪座星系由 App 的落点 effect 定（启动时已是编排也走它） */
+  const switchMode = (next: AppMode): void => {
+    if (next !== props.appMode) props.onAppMode(next);
+  };
+  // 编排侧栏每行的运行态：子会话表建一遍，整趟 O(n)（单智能体侧不算）
+  const agentStates = props.appMode === "orchestrate" ? stateIndexOf(session) : null;
+  /** 编排侧栏里亮着哪一行：正在看的会话所在的工作区，否则是首页选中的工作区；盖着设置 / 周看板时都不亮 */
+  const activeAgentId = props.overlay !== null ? null : (openWorkspaceId ?? session.workspaceId);
+
   /**
    * 主列表从上到下**可见**的任务行（Shift 区间按它算）：展开着的工作区组各自的可见行，
    * 再接 TASKS 的可见行——与下面的渲染顺序一致，折起的组、Show more 后藏着的不算。
@@ -333,6 +348,27 @@ export function Sidebar(props: {
     setStarredOnly(false);
     if (ageDays !== null) props.onAgeDaysChange(null);
   };
+  /** 「+」菜单（单智能体的「工作区」节与编排的「智能体」节共用） */
+  const addWorkspaceMenu: MenuItem[] = [
+    // 命名新建：icon 用 plus——folder-plus 留给「选一个已有文件夹」，
+    // 两种添法在菜单里各占一个符号
+    {
+      id: "new-workspace",
+      label: t.sidebar.newWorkspace,
+      icon: "plus",
+      onSelect: () => {
+        // 节收着时先展开：就地命名的那一行长在节里，收着就看不见了
+        setGroups((current) => unfoldGroup(current, WORKSPACES_FOLD_KEY));
+        setCreatingWorkspace(true);
+      },
+    },
+    {
+      id: "add-folder",
+      label: t.sidebar.addFolder,
+      icon: "folder-plus",
+      onSelect: session.addWorkspace,
+    },
+  ];
   /**
    * 「工作区」节的标题行。筛选键挂在这一行（2026-11-23 用户定：原来单独一整行的「全部 / 星标 / 时间」
    * 收成标题旁的一个小图标）：筛选管的是整张列表（工作区 + 任务），所以挂在列表最上面那个标题上，
@@ -343,26 +379,7 @@ export function Sidebar(props: {
       label={t.sidebar.workspaces}
       addLabel={t.sidebar.addWorkspace}
       addIcon="folder-plus"
-      addMenu={[
-        // 命名新建：icon 用 plus——folder-plus 留给「选一个已有文件夹」，
-        // 两种添法在菜单里各占一个符号
-        {
-          id: "new-workspace",
-          label: t.sidebar.newWorkspace,
-          icon: "plus",
-          onSelect: () => {
-            // 节收着时先展开：就地命名的那一行长在节里，收着就看不见了
-            setGroups((current) => unfoldGroup(current, WORKSPACES_FOLD_KEY));
-            setCreatingWorkspace(true);
-          },
-        },
-        {
-          id: "add-folder",
-          label: t.sidebar.addFolder,
-          icon: "folder-plus",
-          onSelect: session.addWorkspace,
-        },
-      ]}
+      addMenu={addWorkspaceMenu}
       folded={workspacesFolded}
       onToggleFold={() => setGroups((current) => toggleGroupFold(current, WORKSPACES_FOLD_KEY))}
       extra={
@@ -543,10 +560,15 @@ export function Sidebar(props: {
       ) : (
       <>
       <div role="tablist" style={{ display: "flex", gap: 4 }}>
-        <ModeChip icon="bot" active>
+        <ModeChip icon="bot" active={props.appMode === "agent"} title={t.sidebar.agentModeTip} onClick={() => switchMode("agent")}>
           {t.sidebar.agentMode}
         </ModeChip>
-        <ModeChip icon="workflow" disabled title={t.sidebar.orchestratePlanned}>
+        <ModeChip
+          icon="workflow"
+          active={props.appMode === "orchestrate"}
+          title={t.sidebar.orchestrateTip}
+          onClick={() => switchMode("orchestrate")}
+        >
           {t.sidebar.orchestrate}
         </ModeChip>
       </div>
@@ -675,6 +697,58 @@ export function Sidebar(props: {
                 onClick={() => props.onSettingsTab(tab.id)}
               />
             ))}
+          </>
+        ) : props.appMode === "orchestrate" ? (
+          <>
+            <NodeHeader
+              label={t.agents.header}
+              addLabel={t.sidebar.addWorkspace}
+              addIcon="folder-plus"
+              addMenu={addWorkspaceMenu}
+            />
+            {creatingWorkspace && (
+              <div style={{ padding: "var(--space-1)" }}>
+                <InlineName
+                  editing
+                  value=""
+                  placeholder={t.sidebar.workspaceName}
+                  onCommit={(name) => {
+                    setCreatingWorkspace(false);
+                    const trimmed = name.trim();
+                    if (trimmed !== "") session.createWorkspace(trimmed);
+                  }}
+                  onCancel={() => setCreatingWorkspace(false)}
+                />
+              </div>
+            )}
+            {workspaceList.error !== null && <ListError message={workspaceList.error} onRetry={session.reloadWorkspaces} />}
+            {workspaceList.body === "loading" ? (
+              <Empty busy>{t.sidebar.loadingWorkspaces}</Empty>
+            ) : workspaceList.body === "empty" ? (
+              <Empty icon="folder" exit={{ label: t.sidebar.noWorkspaceExit, onClick: session.addWorkspace }}>
+                {t.sidebar.noWorkspace}
+              </Empty>
+            ) : workspaceList.body === "list" ? (
+              session.workspaces.map((workspace) => (
+                <AgentRow
+                  key={workspace.id}
+                  workspace={workspace}
+                  summary={scopeSummary(session.sessions, workspace.id, agentStates?.state ?? (() => null))}
+                  active={activeAgentId === workspace.id}
+                  designing={props.designingWorkspaceId === workspace.id}
+                  now={now}
+                  onOpen={() => {
+                    // 盖着设置 / 周看板时先退掉，再落到这座星系自己的 New Task 页
+                    props.onOverlay(null);
+                    session.newTaskIn(workspace);
+                  }}
+                  onRename={(name) => session.renameWorkspace(workspace.id, name)}
+                  onRemove={() => session.removeWorkspace(workspace.id)}
+                  onBrowse={() => props.onBrowseWorkspace(workspace.id)}
+                  onDesign={() => props.onDesignGalaxy(workspace.id)}
+                />
+              ))
+            ) : null}
           </>
         ) : filtered && scoped.length === 0 ? (
           /*
@@ -1971,6 +2045,7 @@ function ModeChip(props: {
   active?: boolean;
   disabled?: boolean;
   title?: string;
+  onClick?: () => void;
   children: React.ReactNode;
 }) {
   const disabled = props.disabled === true;
@@ -1982,6 +2057,7 @@ function ModeChip(props: {
       aria-selected={active}
       disabled={disabled}
       title={props.title}
+      onClick={props.onClick}
       className="quiet-control mode-tab"
       style={{
         display: "inline-flex",

@@ -3,6 +3,9 @@ import { describe, test } from "node:test";
 import {
   advanceClock,
   angularSpeed,
+  CAMERA_ELEVATION_DEG,
+  elevationFor,
+  ELEVATION_MAX,
   DENSITY,
   drawFrame,
   DUST_CAP,
@@ -11,6 +14,7 @@ import {
   frameViewport,
   GALAXY_MARGIN,
   GALAXY_MAX,
+  GALAXY_MAX_FILL,
   galaxyBox,
   galaxyFixtureOf,
   galaxySpecOf,
@@ -240,9 +244,9 @@ describe("透视投影", () => {
 
 describe("画面上轨道不交叉", () => {
   /** 以主星的投影为原点，沿每个方位角量每一圈轨道投影到画面上的距离；外圈必须处处在内圈之外 */
-  function screenRadii(spec: GalaxySpec): number[][] {
+  function screenRadii(spec: GalaxySpec, elevation = CAMERA_ELEVATION_DEG): number[][] {
     const layout = layoutGalaxy(spec);
-    const camera = makeCamera(FRAME_EXTENT);
+    const camera = makeCamera(FRAME_EXTENT, elevation);
     const center = project({ x: 0, y: 0, z: 0 }, camera);
     const bins = 180;
     return layout.planets.map((p) => {
@@ -270,16 +274,40 @@ describe("画面上轨道不交叉", () => {
       planets: [15, 22, 29, 36, 43].map((a, i) => planet(`s${i}`, a, { inclinationDeg: i % 2 === 0 ? 8 : -8, nodeDeg: i * 70 })),
       sessions: 0,
     };
-    for (const spec of [galaxySpecOf("typical"), galaxySpecOf("full"), steep]) {
-      const radii = screenRadii(spec);
-      for (let o = 1; o < radii.length; o++) {
-        const inner = radii[o - 1] ?? [];
-        const outer = radii[o] ?? [];
-        for (let b = 0; b < outer.length; b++) {
-          assert.ok((outer[b] ?? 0) > (inner[b] ?? 0), `orbit ${o} bin ${b}`);
+    // 工作区页的画框更「方」时俯角抬到 ELEVATION_MAX：同样一圈套一圈
+    for (const elevation of [CAMERA_ELEVATION_DEG, ELEVATION_MAX]) {
+      for (const spec of [galaxySpecOf("typical"), galaxySpecOf("full"), steep]) {
+        const radii = screenRadii(spec, elevation);
+        for (let o = 1; o < radii.length; o++) {
+          const inner = radii[o - 1] ?? [];
+          const outer = radii[o] ?? [];
+          for (let b = 0; b < outer.length; b++) {
+            assert.ok((outer[b] ?? 0) > (inner[b] ?? 0), `${elevation}° orbit ${o} bin ${b}`);
+          }
         }
       }
     }
+  });
+
+  test("俯角随画框形状：扁带子保持 20°，越方越高，封顶 ELEVATION_MAX；单调", () => {
+    assert.equal(elevationFor({ width: 1200, height: 240 }), CAMERA_ELEVATION_DEG);
+    assert.equal(elevationFor({ width: 800, height: 800 }), ELEVATION_MAX);
+    const mid = elevationFor({ width: 1200, height: 640 });
+    assert.ok(mid > CAMERA_ELEVATION_DEG && mid < ELEVATION_MAX, String(mid));
+    let prev = 0;
+    for (let h = 100; h <= 1200; h += 50) {
+      const e = elevationFor({ width: 1200, height: h });
+      assert.ok(e >= prev);
+      prev = e;
+    }
+  });
+});
+
+describe("画框封顶：默认带子 vs 工作区页（fill）", () => {
+  test("默认封顶高度 460 与原型一致；fill 放宽到 720、宽度不变；小画布两者相同", () => {
+    assert.deepEqual(galaxyBox(4000, 2000), { width: GALAXY_MAX.width, height: 460 });
+    assert.deepEqual(galaxyBox(4000, 2000, GALAXY_MAX_FILL), { width: GALAXY_MAX_FILL.width, height: 720 });
+    assert.deepEqual(galaxyBox(900, 240, GALAXY_MAX_FILL), galaxyBox(900, 240));
   });
 });
 
