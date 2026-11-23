@@ -29,7 +29,7 @@ import { parsePluginBoardDetails, type PluginBoardResult } from "../../../../sha
 import { gatedCommandTimeout, PLUGIN_BOARD_TOOL } from "../../../../shared/permission.ts";
 import { builtinCommand, DOC_EDIT_KEY, DOC_WRITE_KEY, docEditPath, isBuiltinCommand } from "./builtin-commands.ts";
 import { turnOutputs } from "./process-rows.ts";
-import { namedMedia } from "./media-outputs.ts";
+import { turnArtifacts } from "./turn-artifacts.ts";
 import { isWebArtifactFile } from "../../../../shared/files.ts";
 // 收尾扫描回答卡（scanAnswerCards）只用它认消息形状；纯模块，node --test 可直接加载
 import { matchScanMessage, type ScanMessage } from "./carryover-parse.ts";
@@ -451,7 +451,7 @@ export interface TurnOutputsUnit {
    */
   docs: readonly string[];
   /**
-   * 这一轮回答里**点了名**的音视频（脚本生成的 mp3 / mp4 等；候选来自轮尾扫描，过滤见 media-outputs.ts）：
+   * 这一轮回答里**点了名**的音视频（脚本生成的 mp3 / mp4 等；候选来自轮尾扫描，过滤见 named-outputs.ts）：
    * 分段、试音样本没被提到就不在这里。点开在右侧文件面板播放。
    */
   media: readonly MediaArtifact[];
@@ -685,46 +685,15 @@ function foldSegment(
   const children = head !== undefined && head.kind === "channelMark" && head.mark.kind === "done" ? [{ peerId: head.mark.peerId, messageId: head.mark.messageId }] : [];
   const calls = segment.flatMap((entry) => (entry.kind === "toolCall" ? [entry] : entry.kind === "toolGroup" ? [...entry.calls] : []));
   const settled = mode !== "live" && results !== undefined;
-  const web = !settled
-    ? []
-    : tailCards.flatMap((entry) =>
-        entry.kind === "fileTurn"
-          ? [...entry.record.changes.map((change) => change.path).filter((path) => isWebArtifactFile(path)), ...(entry.record.webArtifacts ?? [])]
-          : [],
-      );
-  // 网页文件变动超过批量上限（git clone / checkout、解压归档）的轮：不出卡。那是批量操作的副作用，不是 agent 给用户做的东西——
-  // 以前出一张「250 个网页 · 批量生成」，用户以为 agent 看了 / 做了 250 个网页（2026-11-23，会话 bd3b49 clone 了一个仓库）
-  const docs = !settled
-    ? []
-    : tailCards.flatMap((entry) => (entry.kind === "fileTurn" ? entry.record.changes.map((change) => change.path).filter((path) => DOC_FILE.test(path)) : []));
-  // 音视频：候选来自轮尾文件账（旁路扫描），只留这一轮**最终回答**（段尾连续的正文，跳过轮尾卡）里点了名的
-  const media = !settled
-    ? []
-    : namedMedia(
-        tailCards.flatMap((entry) => (entry.kind === "fileTurn" ? (entry.record.mediaArtifacts ?? []) : [])),
-        finalAnswerText(segment),
-      );
+  // 网页 / 文档 / 音视频候选只留这一轮最终回答里点了名的（turn-artifacts.ts，主会话、子会话交回、状态卡共用）：
+  // 顺手 edit 的 SKILL.md、批量 clone 下来的网页、别的会话同时写的网页、脚本留下的分段与试音，没点名就不是交给用户的东西
+  const { docs, web, media } = settled ? turnArtifacts(segment) : { docs: [], web: [], media: [] };
   const hasMain = settled && results !== undefined && (turnOutputs(calls, results).length > 0 || web.length > 0 || docs.length > 0 || media.length > 0);
   if (hasMain || children.length > 0) {
     const key = children.length > 0 ? `out:child:${children[0]?.messageId ?? ""}` : `out:${calls[0]?.key ?? tailCards[0]?.key ?? ""}`;
     view.push({ kind: "turnOutputs", key, calls: settled ? calls : [], web, docs, media, children });
   }
   return view;
-}
-
-/**
- * 一段的最终回答正文：从段尾往前收连续的正文（轮尾文件卡不挡路，思考 / 工具调用才是边界）。
- * 音视频产物按它点名过滤——过程中的旁白（「先生成两个试音文件 test_a.mp3」）不算交付。
- */
-function finalAnswerText(segment: readonly RenderEntry[]): string {
-  const parts: string[] = [];
-  for (let index = segment.length - 1; index >= 0; index -= 1) {
-    const entry = segment[index];
-    if (entry === undefined || entry.kind === "fileTurn") continue;
-    if (entry.kind !== "text") break;
-    parts.unshift(entry.text);
-  }
-  return parts.join("\n");
 }
 
 /**

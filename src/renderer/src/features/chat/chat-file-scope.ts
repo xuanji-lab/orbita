@@ -42,6 +42,23 @@ function rootsFor(scope: ChatFileScope): Promise<FileRoot[]> {
   return promise;
 }
 
+/** 这条会话的可读根清单（产物卡据此筛掉读不了的文件）；还没取回来 null */
+export function useChatRoots(): FileRoot[] | null {
+  const scope = useChatFileScope();
+  const [roots, setRoots] = useState<FileRoot[] | null>(null);
+  useEffect(() => {
+    if (scope === null) return undefined;
+    let alive = true;
+    void rootsFor(scope).then((list) => {
+      if (alive) setRoots(list);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [scope]);
+  return roots;
+}
+
 const imageCache = new Map<string, Promise<string | null>>();
 const MAX_IMAGES = 80;
 

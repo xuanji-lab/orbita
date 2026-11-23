@@ -56,7 +56,7 @@ export interface FileChangeView {
 /**
  * 一份音 / 视频产物（脚本生成的 mp3 / mp4 等）：绝对路径 + 时长（秒；agent 读容器头量得到才有，量不到缺席）。
  * 轮尾扫描把本轮窗口内落盘的媒体文件**全部**报上来（含分段、试音样本），卡片只显示回答里点了名的
- * （renderer 的 media-outputs.ts）。不参与撤销。
+ * （renderer 的 named-outputs.ts）。不参与撤销。
  */
 export interface MediaArtifact {
   path: string;

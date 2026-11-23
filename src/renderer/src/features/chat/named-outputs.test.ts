@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { formatDuration, namedMedia } from "./media-outputs.ts";
+import { formatDuration, namedMedia } from "./named-outputs.ts";
 
 const art = (path: string, duration?: number) => (duration === undefined ? { path } : { path, duration });
 const FINAL = "/Users/u/Orbita/Home/audio/wang_summary_zh_george.mp3";
