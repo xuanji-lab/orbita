@@ -5,6 +5,11 @@ import { DENSITY, MIN_CLEARANCE, PLANET_MASS, PLANET_ZONE, STAR_DENSITY, STAR_MA
 import {
   bodyArt,
   createDesignStore,
+  seededDesign,
+  avatarScale,
+  starExtentRatio,
+  AVATAR_SCALE,
+  STAR_MASS_STEPS,
   defaultDesign,
   densityOf,
   designerClick,
@@ -23,6 +28,7 @@ import {
   NAME_MAX,
   parseNumberInput,
   PREVIEW_FRAME,
+  RING,
   BACKDROPS,
   ZOOM_DEFAULT,
   previewFrame,
@@ -470,5 +476,93 @@ describe("面板开合与切工作区", () => {
     assert.equal(keepDesignerAcrossSessions("galaxy", "files"), "files");
     assert.equal(keepDesignerAcrossSessions("files", null), null);
     assert.equal(keepDesignerAcrossSessions(null, "review"), "review");
+  });
+});
+
+describe("seededDesign —— 没设计过的工作区的种子默认（头像各不相同）", () => {
+  const ids = Array.from({ length: 500 }, (_, i) => `ws-${i}-${(i * 2654435761) % 99991}`);
+
+  test("同一个 id 永远同一套；不同 id 之间有差异", () => {
+    assert.deepEqual(seededDesign(ids[0] ?? ""), seededDesign(ids[0] ?? ""));
+    const looks = new Set(ids.map((id) => JSON.stringify([seededDesign(id).star.mass, seededDesign(id).star.elements])));
+    assert.ok(looks.size >= 24, `500 个 id 只有 ${looks.size} 种外观`);
+    // 12 个工作区：大多数互不相同（散开，不要求全不同）
+    const twelve = new Set(ids.slice(0, 12).map((id) => JSON.stringify(seededDesign(id).star)));
+    assert.ok(twelve.size >= 9, `12 个里只有 ${twelve.size} 种`);
+  });
+
+  test("不违反引力语法与面板校验：质量在区间内、主星远大于行星、轨道合法、眼睛恒开、不带名字", () => {
+    for (const id of ids) {
+      for (const level of ["default", "bare"] as const) {
+        const design = seededDesign(id, level);
+        if (level === "default") assert.deepEqual(validateDesign(design), [], id);
+        assert.ok(design.star.mass >= STAR_MASS.min && design.star.mass <= STAR_MASS.max);
+        assert.ok(design.planet.mass >= PLANET_MASS.min && design.planet.mass <= PLANET_MASS.max);
+        assert.ok(radiusOf(design, "star") > radiusOf(design, "planet") * 1.5, id);
+        assert.equal(design.star.name, "");
+        if (level === "default") assert.equal(design.star.elements.eyes, true);
+      }
+    }
+  });
+
+  test("质量只取 STAR_MASS_STEPS 档整百；星环 / 日冕两个开关都会出现开与关", () => {
+    const masses = new Set(ids.map((id) => seededDesign(id).star.mass));
+    assert.equal(masses.size, STAR_MASS_STEPS);
+    for (const key of ["ring", "corona"] as const) {
+      const states = new Set(ids.map((id) => seededDesign(id).star.elements[key]));
+      assert.equal(states.size, 2, key);
+    }
+  });
+
+  test("仓库开了 seeded：没改过的工作区返回种子稿（快照稳定）；恢复默认回到种子稿；没开 seeded 仍是原默认稿", () => {
+    const store = createDesignStore("default", { seeded: true });
+    const first = store.get(WS_A);
+    assert.equal(store.get(WS_A), first);
+    assert.deepEqual(first, seededDesign(WS_A, "default"));
+    store.set(WS_A, { ...first, star: { ...first.star, mass: 300 } });
+    assert.equal(store.has(WS_A), true);
+    assert.deepEqual(store.reset(WS_A), seededDesign(WS_A, "default"));
+    assert.deepEqual(createDesignStore("default").get(WS_A), defaultDesign(WS_A, "default"));
+  });
+
+  test("seeded 可以是函数：refresh 丢掉缓存的默认稿并通知，之后按新的开关取；设计过的稿不受影响", () => {
+    let on = true;
+    const store = createDesignStore("default", { seeded: () => on });
+    let calls = 0;
+    store.subscribe(() => {
+      calls += 1;
+    });
+    assert.deepEqual(store.get(WS_A), seededDesign(WS_A, "default"));
+    store.set(WS_B, { ...store.get(WS_B), star: { ...store.get(WS_B).star, mass: 999 } });
+    on = false;
+    store.refresh();
+    assert.equal(calls, 2);
+    assert.deepEqual(store.get(WS_A), defaultDesign(WS_A, "default"));
+    assert.equal(store.get(WS_B).star.mass, 999);
+  });
+});
+
+describe("avatarScale —— 头像大小跟质量走", () => {
+  test("单调、两端取 AVATAR_SCALE 的 min / max、区间外夹住", () => {
+    assert.equal(avatarScale(STAR_MASS.min), AVATAR_SCALE.min);
+    assert.equal(avatarScale(STAR_MASS.max), AVATAR_SCALE.max);
+    assert.equal(avatarScale(1), AVATAR_SCALE.min);
+    assert.equal(avatarScale(99999), AVATAR_SCALE.max);
+    let prev = 0;
+    for (let m = STAR_MASS.min; m <= STAR_MASS.max; m += 50) {
+      const v = avatarScale(m);
+      assert.ok(v >= prev);
+      prev = v;
+    }
+  });
+});
+
+describe("starExtentRatio —— 主星外缘", () => {
+  test("元素都关 = 1；日冕 1.32；星环 RING.rx（取最大）", () => {
+    const d = defaultDesign(WS_A, "default");
+    const off = { ...d, star: { ...d.star, elements: { ...d.star.elements, ring: false, corona: false } } };
+    assert.equal(starExtentRatio(off), 1);
+    assert.equal(starExtentRatio({ ...off, star: { ...off.star, elements: { ...off.star.elements, corona: true } } }), 1.32);
+    assert.equal(starExtentRatio({ ...off, star: { ...off.star, elements: { ...off.star.elements, ring: true, corona: true } } }), RING.rx);
   });
 });

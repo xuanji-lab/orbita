@@ -1,11 +1,12 @@
 import type { SessionMeta } from "@shared/session";
 import { Icon } from "./Icon";
+import { CapTitle } from "./SessionCapsule.tsx";
 import { IconButton } from "./IconButton";
 import { Menu, type MenuItem } from "./Menu";
 import { StatusPie } from "./StatusPie";
 import { sessionAgeLabel } from "./relative-time.ts";
 import { StarFigure } from "../features/galaxy-designer/GalaxyDesigner.tsx";
-import { useGalaxyDesign } from "../features/galaxy-designer/useGalaxyDesign.ts";
+import { useAvatarBySize, useGalaxyDesign } from "../features/galaxy-designer/useGalaxyDesign.ts";
 import type { HeaderStatus } from "../features/chat/agent-status.ts";
 import type { SessionRunState } from "../features/notify/completion-notice.ts";
 import { useT } from "../locale.ts";
@@ -23,31 +24,30 @@ export function WorkspaceCapsule(props: {
   workspaceId: string | null;
   name: string;
   status: HeaderStatus;
+  /** 给了 = 正看着这个工作区的一条会话：页头变「头像 + 智能体名 › 任务名」，不摆状态胶囊（那是工作区页的），不露会话 id */
+  task?: { title: string; onRename?: ((title: string) => void) | undefined } | null;
   recent: { rows: { meta: SessionMeta; state: SessionRunState }[]; total: number };
   now: number;
   onOpenSession: (id: string) => void;
   onSeeAll: () => void;
 }) {
   const t = useT();
+  const bySize = useAvatarBySize();
   const { design } = useGalaxyDesign(props.workspaceId ?? "");
   const { status } = props;
-  const statusText =
-    status.kind === "waiting"
-      ? t.agents.statusWaiting(status.count)
-      : status.kind === "working"
-        ? t.agents.statusWorking(status.count)
-        : t.agents.statusReady;
+  const word = t.agents.status[status.status];
+  const statusText = status.count === null ? word : `${word} · ${status.count}`;
   const statusBody = (
     <>
-      {status.kind === "ready" ? (
+      {status.status === "idle" ? (
         <span className="cap-status-dot" aria-hidden="true" />
       ) : (
-        <StatusPie state={status.kind === "waiting" ? "waiting" : "running"} />
+        <StatusPie state={status.status === "waiting" ? "waiting" : "running"} />
       )}
       <span>{statusText}</span>
     </>
   );
-  const jump = status.kind === "waiting" ? status.sessionId : null;
+  const jump = status.sessionId;
   const items: MenuItem[] = [
     ...props.recent.rows.map(
       ({ meta, state }): MenuItem => ({
@@ -72,17 +72,22 @@ export function WorkspaceCapsule(props: {
       <div className="cap-sl" />
       <div className="cap-sc">
         <span className="cap-avatar">
-          <StarFigure design={design} size={22} label={t.agents.avatar(props.name)} />
+          <StarFigure bySize={bySize} design={design} size={22} label={t.agents.avatar(props.name)} />
         </span>
         <strong className="cap-title" title={props.name}>
           {props.name}
         </strong>
-        {jump !== null ? (
+        {props.task != null ? (
+          <>
+            <Icon name="chevron-right" size={12} strokeWidth={1.8} className="cap-sep" />
+            <CapTitle title={props.task.title} onRename={props.task.onRename} />
+          </>
+        ) : jump !== null ? (
           <button type="button" className="quiet-control cap-status" title={t.agents.statusWaitingTip} onClick={() => props.onOpenSession(jump)}>
             {statusBody}
           </button>
         ) : (
-          <span className="cap-status" data-kind={status.kind}>
+          <span className="cap-status" data-kind={status.status}>
             {statusBody}
           </span>
         )}

@@ -1,30 +1,70 @@
 import type { ScopeSummary } from "./galaxy-data.ts";
 
 /**
- * 侧栏智能体行第二行要说的那一句（类型，文案由调用方按语言填）：等你压过在跑，在跑压过「最近在聊什么」，
- * 都没有时说最近一条会话的标题；一个会话也没有就是空态。真实数据都来自 scopeSummary（根会话的运行态汇总）。
+ * 编排里「一个智能体此刻在干什么」只有三个词（状态词表，侧栏行与页头胶囊共用，文案在 messages 的 agents.status）：
+ * 等你（有活停在你这儿）> 在跑（有活在外面干）> 空闲。同一件事在两处永远是同一个词。
  */
-export type AgentLine =
-  | { kind: "waiting"; count: number }
-  | { kind: "working"; count: number }
-  | { kind: "last"; title: string }
-  | { kind: "empty" };
+export type AgentStatusKind = "waiting" | "running" | "idle";
 
-export function agentLineOf(summary: Pick<ScopeSummary, "waiting" | "running" | "lastTitle" | "total">): AgentLine {
-  if (summary.waiting > 0) return { kind: "waiting", count: summary.waiting };
-  if (summary.running > 0) return { kind: "working", count: summary.running };
-  if (summary.lastTitle !== null) return { kind: "last", title: summary.lastTitle };
-  return { kind: "empty" };
+export function agentStatusOf(summary: Pick<ScopeSummary, "waiting" | "running">): AgentStatusKind {
+  if (summary.waiting > 0) return "waiting";
+  if (summary.running > 0) return "running";
+  return "idle";
 }
 
-/** 页头状态胶囊：等你 > 在外面干活 > 就绪；等你时带上直达的会话 id */
-export type HeaderStatus =
-  | { kind: "waiting"; count: number; sessionId: string | null }
-  | { kind: "working"; count: number }
-  | { kind: "ready" };
+/** 状态后面的件数：等你 / 在跑才带；空闲没有 */
+export function agentStatusCount(summary: Pick<ScopeSummary, "waiting" | "running">): number | null {
+  const kind = agentStatusOf(summary);
+  return kind === "waiting" ? summary.waiting : kind === "running" ? summary.running : null;
+}
+
+/**
+ * 侧栏行第二行：永远先说状态；空闲时才在状态后面补「最近一件事」（措辞带前缀、灰度更浅，与状态区分）。
+ * 在跑 / 等你时不挤进别的东西。
+ */
+export interface AgentLine {
+  status: AgentStatusKind;
+  count: number | null;
+  /** 只有空闲且有会话时才有：最近一条会话的标题 */
+  recent: string | null;
+}
+
+export function agentLineOf(summary: Pick<ScopeSummary, "waiting" | "running" | "lastTitle">): AgentLine {
+  const status = agentStatusOf(summary);
+  return { status, count: agentStatusCount(summary), recent: status === "idle" ? summary.lastTitle : null };
+}
+
+/** 页头状态胶囊：同一份状态；等你时带直达的会话 id */
+export interface HeaderStatus {
+  status: AgentStatusKind;
+  count: number | null;
+  sessionId: string | null;
+}
 
 export function headerStatusOf(summary: Pick<ScopeSummary, "waiting" | "running" | "waitingId">): HeaderStatus {
-  if (summary.waiting > 0) return { kind: "waiting", count: summary.waiting, sessionId: summary.waitingId };
-  if (summary.running > 0) return { kind: "working", count: summary.running };
-  return { kind: "ready" };
+  const status = agentStatusOf(summary);
+  return { status, count: agentStatusCount(summary), sessionId: status === "waiting" ? summary.waitingId : null };
+}
+
+/**
+ * 侧栏行的次序：固定在前的（「主目录」）→ 等你的（新的在前）→ 其余按最近活动（新的在前，没有会话的垫底）；
+ * 同分按原列表次序。等你的事处理掉后，那一行自然落回它的时间位。纯函数，不改入参。
+ */
+export interface AgentOrderKey {
+  /** 固定在最前（不参与排序） */
+  pinned: boolean;
+  waiting: number;
+  lastActive: number | null;
+}
+
+export function orderAgentRows<T>(rows: readonly T[], keyOf: (row: T) => AgentOrderKey): T[] {
+  const indexed = rows.map((row, index) => ({ row, index, key: keyOf(row) }));
+  const tier = (key: AgentOrderKey): number => (key.pinned ? 0 : key.waiting > 0 ? 1 : 2);
+  indexed.sort(
+    (a, b) =>
+      tier(a.key) - tier(b.key) ||
+      (b.key.lastActive ?? Number.NEGATIVE_INFINITY) - (a.key.lastActive ?? Number.NEGATIVE_INFINITY) ||
+      a.index - b.index,
+  );
+  return indexed.map((item) => item.row);
 }

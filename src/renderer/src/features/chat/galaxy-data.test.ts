@@ -191,11 +191,11 @@ describe("scopeSummary / scopeTone —— 侧栏行与页头说的那句状态",
       meta({ id: "b-kid", updatedAt: 99, parentId: "b" }),
     ];
     const summary = scopeSummary(sessions, "ws", states({ a: "running", b: "waiting", "b-kid": "running" }));
-    assert.deepEqual(summary, { waiting: 1, running: 1, total: 2, lastActive: 30, lastTitle: "最新的", waitingId: "b" });
+    assert.deepEqual(summary, { waiting: 1, running: 1, total: 2, lastActive: 30, lastTitle: "最新的", waitingId: "b", attention: 1 });
     assert.equal(scopeTone(summary), "waiting");
     assert.equal(scopeTone({ waiting: 0, running: 2 }), "running");
     const empty = scopeSummary([], "ws", states({}));
-    assert.deepEqual(empty, { waiting: 0, running: 0, total: 0, lastActive: null, lastTitle: null, waitingId: null });
+    assert.deepEqual(empty, { waiting: 0, running: 0, total: 0, lastActive: null, lastTitle: null, waitingId: null, attention: 0 });
     assert.equal(scopeTone(empty), "idle");
   });
 });
@@ -273,5 +273,33 @@ describe("orbitRadiusOf —— 行星少时铺开，满了回到等距", () => {
     for (const n of [VISIBLE_ORBIT_CAP, 20, 56]) {
       for (let i = 0; i < VISIBLE_ORBIT_CAP; i++) assert.ok(Math.abs(orbitRadiusOf(i, n) - (ORBIT_FIRST + ORBIT_STEP * i)) < 1e-9);
     }
+  });
+});
+
+describe("scopeSummary.attention —— 小圆点只给没看过的", () => {
+  const sessions = [meta({ id: "w", updatedAt: 3 }), meta({ id: "d", updatedAt: 2 }), meta({ id: "f", updatedAt: 1 }), meta({ id: "r", updatedAt: 4 }), meta({ id: "n", updatedAt: 5 })];
+  const stateOf = states({ w: "waiting", d: "done", f: "failed", r: "running" });
+  test("等你 + 跑完没看 + 出错没看都算；在跑与无状态不算", () => {
+    assert.equal(scopeSummary(sessions, "ws", stateOf).attention, 3);
+  });
+  test("眼下正开着的那条不算（看过即退），但「等你」的件数不变", () => {
+    const viewing = scopeSummary(sessions, "ws", stateOf, "w");
+    assert.equal(viewing.attention, 2);
+    assert.equal(viewing.waiting, 1);
+    assert.equal(scopeSummary(sessions, "ws", stateOf, "nope").attention, 3);
+  });
+});
+
+describe("scopeGalaxy 的行星带名字", () => {
+  test("label = 会话标题（去首尾空白）；没有标题是空串（HomeGalaxy 不标）", () => {
+    const galaxy = scopeGalaxy({
+      sessions: [meta({ id: "a", updatedAt: 1, title: "  梳理周报  " }), meta({ id: "b", updatedAt: 2, title: "" })],
+      workspaceId: "ws",
+      now: 100_000,
+      stateOf: states({ a: "running", b: "running" }),
+      starMass: 620,
+      designedPlanet: null,
+    });
+    assert.deepEqual(galaxy.spec.planets.map((planet) => planet.label), ["", "梳理周报"]);
   });
 });

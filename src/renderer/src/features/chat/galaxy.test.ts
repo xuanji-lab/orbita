@@ -8,6 +8,16 @@ import {
   ELEVATION_MAX,
   DENSITY,
   drawFrame,
+  dustCapFor,
+  DUST_MIN_CAP,
+  DUST_REF_CAP,
+  foldedMarkAt,
+  emptyHintAt,
+  LABEL_ALWAYS_MAX,
+  planetTags,
+  truncateLabel,
+  WAITING_SCALE,
+  type PlanetItem,
   DUST_CAP,
   EXPECTED_ID,
   FRAME_EXTENT,
@@ -308,6 +318,87 @@ describe("画框封顶：默认带子 vs 工作区页（fill）", () => {
     assert.deepEqual(galaxyBox(4000, 2000), { width: GALAXY_MAX.width, height: 460 });
     assert.deepEqual(galaxyBox(4000, 2000, GALAXY_MAX_FILL), { width: GALAXY_MAX_FILL.width, height: 720 });
     assert.deepEqual(galaxyBox(900, 240, GALAXY_MAX_FILL), galaxyBox(900, 240));
+  });
+});
+
+describe("等你的行星：前置、放大；名字、碎石与「+N」", () => {
+  const camera = makeCamera(FRAME_EXTENT);
+  const vp = frameViewport(camera, 1000, 600);
+  const spec = (states: (PlanetSpec["state"])[], extra: Partial<GalaxySpec> = {}): GalaxySpec => ({
+    starMass: 620,
+    planets: states.map((state, i) => planet(`p${i}`, 14 + i * 9, { state, label: `任务 ${i}`, phaseDeg: i * 40 })),
+    sessions: 0,
+    ...extra,
+  });
+  const frameAt = (layout: ReturnType<typeof layoutGalaxy>, t: number) => drawFrame(layout, camera, vp, orbitArcs(layout, camera, vp), t);
+
+  test("等你的行星在任何时刻都画在主星之后（盖在主星上），并放大 WAITING_SCALE 倍；别的状态不变", () => {
+    const layout = layoutGalaxy(spec(["waiting", "running", null]));
+    for (const t of [0, 40, 95, 180, 400]) {
+      const items = frameAt(layout, t);
+      const starIndex = items.findIndex((item) => item.kind === "star");
+      const waiting = items.findIndex((item) => item.kind === "planet" && item.state === "waiting");
+      assert.ok(waiting > starIndex, `t=${t}：等你的行星必须在绘制表里排在主星之后`);
+    }
+    const items = frameAt(layout, 0);
+    const byState = (state: string | null) => items.find((item): item is PlanetItem => item.kind === "planet" && item.state === state);
+    const plain = frameAt(layoutGalaxy(spec([null, "running", null])), 0).find((item): item is PlanetItem => item.kind === "planet" && item.planetId === "p0");
+    assert.ok(Math.abs((byState("waiting")?.r ?? 0) / (plain?.r ?? 1) - WAITING_SCALE) < 1e-6);
+  });
+
+  test("轨道与行星一一对应：有几颗行星画几圈，不画空轨道（空星系只有一圈预期虚线）", () => {
+    const layout = layoutGalaxy(spec(["waiting", null, null, "running"]));
+    const rings = new Set(orbitArcs(layout, camera, vp).map((arc) => arc.planetId));
+    assert.deepEqual([...rings].sort(), layout.planets.map((p) => p.id).sort());
+    const empty = layoutGalaxy({ starMass: 620, planets: [], sessions: 0 });
+    assert.deepEqual([...new Set(orbitArcs(empty, camera, vp).map((arc) => arc.planetId))], [EXPECTED_ID]);
+  });
+
+  test("碎石：上限可给，超出的折成 folded；画出的颗粒数 = min(会话数, 上限)；随画布面积缩放并夹在 [DUST_MIN_CAP, DUST_REF_CAP]", () => {
+    const layout = layoutGalaxy(spec(["running"], { sessions: 2000, dustCap: DUST_REF_CAP }));
+    assert.equal(layout.belt?.particles.length, DUST_REF_CAP);
+    assert.equal(layout.belt?.folded, 2000 - DUST_REF_CAP);
+    const few = layoutGalaxy(spec(["running"], { sessions: 3, dustCap: DUST_REF_CAP }));
+    assert.equal(few.belt?.folded, 0);
+    assert.equal(foldedMarkAt(few, camera, vp), null);
+    assert.ok(foldedMarkAt(layout, camera, vp) !== null);
+    assert.equal(dustCapFor(1000, 600), DUST_REF_CAP);
+    assert.equal(dustCapFor(4000, 3000), DUST_REF_CAP);
+    assert.equal(dustCapFor(300, 200), DUST_MIN_CAP);
+    assert.ok(dustCapFor(700, 420) < DUST_REF_CAP && dustCapFor(700, 420) > DUST_MIN_CAP);
+    // 缺省仍是 DUST_CAP（单智能体首页原型不受影响）
+    assert.equal(layoutGalaxy(spec([], { sessions: 2000 })).belt?.particles.length, DUST_CAP);
+  });
+
+  test("主星带星环 / 日冕时第一圈轨道被推到外缘之外（行星不从星环里穿过）", () => {
+    const plain = layoutGalaxy({ starMass: 1000, planets: [planet("a", 12)], sessions: 0 });
+    const ringed = layoutGalaxy({ starMass: 1000, planets: [planet("a", 12)], sessions: 0, starExtent: starRadius(1000) * 1.7 });
+    const first = ringed.planets[0];
+    assert.ok(first !== undefined && first.orbitRadius >= starRadius(1000) * 1.7 + first.radius + MIN_CLEARANCE - 1e-9);
+    assert.ok((first?.orbitRadius ?? 0) > (plain.planets[0]?.orbitRadius ?? 0));
+    assert.deepEqual(ringed.adjusted, ["a"]);
+  });
+
+  test("空星系的提示位置在预期轨道下方；有行星或碎石就不出", () => {
+    const empty = layoutGalaxy({ starMass: 620, planets: [], sessions: 0 });
+    const at = emptyHintAt(empty, camera, vp);
+    assert.ok(at !== null && at.y > vp.cy);
+    assert.equal(emptyHintAt(layoutGalaxy(spec(["running"])), camera, vp), null);
+    assert.equal(emptyHintAt(layoutGalaxy({ starMass: 620, planets: [], sessions: 3 }), camera, vp), null);
+  });
+
+  test("名字标签：常显只给等你 / 在跑里排最前的 LABEL_ALWAYS_MAX 颗，其余悬停；没名字的不标；长名截断；靠右的行星名字写在左边", () => {
+    const states: PlanetSpec["state"][] = ["waiting", "waiting", "running", "running", null, "failed"];
+    const layout = layoutGalaxy({ ...spec(states), planets: spec(states).planets.map((p, i) => (i === 5 ? { ...p, label: "" } : p)) });
+    const tags = planetTags(layout, frameAt(layout, 0), vp.width);
+    assert.equal(tags.filter((tag) => tag.always).length, LABEL_ALWAYS_MAX);
+    assert.deepEqual(tags.filter((tag) => tag.always).map((tag) => tag.planetId), ["p0", "p1", "p2"]);
+    assert.equal(tags.find((tag) => tag.planetId === "p3")?.always, false);
+    assert.equal(tags.find((tag) => tag.planetId === "p5"), undefined);
+    assert.equal(truncateLabel("短名"), "短名");
+    assert.equal([...truncateLabel("一二三四五六七八九十一二三四五六七八")].length, 14);
+    assert.ok(truncateLabel("一二三四五六七八九十一二三四五六七八").endsWith("…"));
+    for (const tag of tags) assert.equal(tag.anchor, tag.x > vp.width * 0.65 ? "end" : "start");
   });
 });
 

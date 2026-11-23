@@ -5,8 +5,8 @@ import { IconButton } from "./IconButton";
 import { StatusPie } from "./StatusPie";
 import { sessionAgeLabel } from "./relative-time.ts";
 import { StarFigure } from "../features/galaxy-designer/GalaxyDesigner.tsx";
-import { useGalaxyDesign } from "../features/galaxy-designer/useGalaxyDesign.ts";
-import { agentLineOf } from "../features/chat/agent-status.ts";
+import { useAvatarBySize, useGalaxyDesign } from "../features/galaxy-designer/useGalaxyDesign.ts";
+import { agentLineOf, type AgentLine } from "../features/chat/agent-status.ts";
 import type { ScopeSummary } from "../features/chat/galaxy-data.ts";
 import { useT } from "../locale.ts";
 import "./agent-row.css";
@@ -21,7 +21,8 @@ import "./agent-row.css";
  * 靠名字区分：没有真实的差异来源就不编一个（不随机上色）。
  */
 export function AgentRow(props: {
-  workspace: Workspace;
+  /** null = 「主目录」（不属于任何工作区的会话）：没有路径，不能改名 / 移除 / 看文件 */
+  workspace: Workspace | null;
   summary: ScopeSummary;
   /** 这一行就是眼下打开的那座星系（页面或其中一条会话） */
   active: boolean;
@@ -36,7 +37,9 @@ export function AgentRow(props: {
 }) {
   const t = useT();
   const { workspace, summary } = props;
-  const { design } = useGalaxyDesign(workspace.id);
+  const name = workspace === null ? t.agents.home : workspace.name;
+  const bySize = useAvatarBySize();
+  const { design } = useGalaxyDesign(workspace?.id ?? "");
   const [armed, setArmed] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const line = agentLineOf(summary);
@@ -48,7 +51,7 @@ export function AgentRow(props: {
     <div
       className="agent-row"
       data-active={props.active || undefined}
-      data-waiting={line.kind === "waiting" || undefined}
+      data-waiting={line.status === "waiting" || undefined}
       data-designing={props.designing || undefined}
       data-armed={armed || undefined}
       onMouseLeave={() => setArmed(false)}
@@ -57,24 +60,24 @@ export function AgentRow(props: {
         type="button"
         className="agent-row-main"
         aria-current={props.active ? "page" : undefined}
-        title={t.agents.rowOpenTip(workspace.name)}
+        title={t.agents.rowOpenTip(name)}
         onClick={props.onOpen}
       >
         <span className="agent-avatar">
-          <StarFigure design={design} size={28} label={t.agents.avatar(workspace.name)} />
+          <StarFigure bySize={bySize} design={design} size={28} label={t.agents.avatar(name)} />
         </span>
         <span className="agent-body">
           <span className="agent-line">
             {editing === null ? (
               <strong
                 className="agent-name"
-                title={t.sidebar.workspacePathTip(workspace.path)}
+                title={workspace === null ? undefined : t.sidebar.workspacePathTip(workspace.path)}
                 onDoubleClick={(event) => {
                   event.stopPropagation();
-                  setEditing(workspace.name);
+                  if (workspace !== null) setEditing(workspace.name);
                 }}
               >
-                {workspace.name}
+                {name}
               </strong>
             ) : (
               <input
@@ -95,22 +98,14 @@ export function AgentRow(props: {
             )}
           </span>
           <span className="agent-line agent-status">
-            {line.kind === "waiting" && <span className="agent-status-text">{t.agents.rowWaiting(line.count)}</span>}
-            {line.kind === "working" && (
-              <>
-                <StatusPie state="running" />
-                <span className="agent-status-text">{t.agents.rowWorking(line.count)}</span>
-              </>
-            )}
-            {line.kind === "last" && <span className="agent-status-text">{line.title}</span>}
-            {line.kind === "empty" && <span className="agent-status-text">{t.agents.rowEmpty}</span>}
-            {line.kind === "waiting" && (
-              <span className="agent-dot row-trailing" role="img" aria-label={t.agents.rowWaiting(line.count)} />
+            <StatusLine line={line} />
+            {props.summary.attention > 0 && (
+              <span className="agent-dot row-trailing" data-kind={props.summary.waiting > 0 ? "waiting" : "unread"} role="img" aria-label={props.summary.waiting > 0 ? t.agents.status.waiting : t.agents.unread} />
             )}
           </span>
         </span>
       </button>
-      <span className="agent-acts">
+      {workspace !== null && <span className="agent-acts">
         <IconButton
           label={props.designing ? t.galaxyDesigner.diyOpen : t.galaxyDesigner.diy}
           title={props.designing ? t.galaxyDesigner.diyOpen : t.galaxyDesigner.diy}
@@ -138,9 +133,24 @@ export function AgentRow(props: {
           onClick={() => (armed ? props.onRemove() : setArmed(true))}
           style={{ borderRadius: "var(--radius-xs)", color: armed ? "var(--color-danger)" : "var(--color-text-tertiary)" }}
         >
-          <Icon name="trash-2" size={11} />
+          <Icon name="trash-2" size={14} strokeWidth={1.8} />
         </IconButton>
-      </span>
+      </span>}
     </div>
+  );
+}
+
+/** 第二行：先说状态词（等你 / 在跑带件数与状态饼，空闲只一个词）；空闲时再补一个更浅的「最近：标题」 */
+function StatusLine(props: { line: AgentLine }) {
+  const t = useT();
+  const { line } = props;
+  const word = t.agents.status[line.status];
+  return (
+    <>
+      {line.status === "running" && <StatusPie state="running" />}
+      {line.status === "waiting" && <StatusPie state="waiting" />}
+      <span className="agent-status-word">{line.count === null ? word : `${word} · ${line.count}`}</span>
+      {line.recent !== null && <span className="agent-status-recent">{`${t.agents.recent}：${line.recent}`}</span>}
+    </>
   );
 }

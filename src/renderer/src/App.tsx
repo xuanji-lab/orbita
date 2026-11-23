@@ -1404,19 +1404,26 @@ export function App() {
           </strong>
         </div>
       </div>
-    ) : mainOpenId === "" && session.opened === null ? (
-      orchestrateStates !== null ? (
-        <WorkspaceCapsule
-          workspaceId={session.workspaceId}
-          name={session.workspaces.find((item) => item.id === session.workspaceId)?.name ?? t.chat.home}
-          status={headerStatusOf(scopeSummary(session.sessions, session.workspaceId, orchestrateStates.state))}
-          recent={scopeRecent(session.sessions, session.workspaceId, orchestrateStates.state)}
-          now={Date.now()}
-          onOpenSession={(id) => void session.openSession(id)}
-          onSeeAll={() => changeSettings({ appMode: "agent" })}
-        />
-      ) : null
-    ) : (
+    ) : orchestrateStates !== null && (mainOpenId === "" || mainOpenMeta?.parentId === undefined) ? (
+      // 编排：页头永远是「头像 + 智能体名」；正看着某件活时后面接「› 任务名」（可改名），不露会话 id
+      (() => {
+        const inSession = !(mainOpenId === "" && session.opened === null);
+        const wsId = inSession ? (mainOpenMeta?.workspaceId ?? null) : session.workspaceId;
+        const state = orchestrateStates.state;
+        return (
+          <WorkspaceCapsule
+            workspaceId={wsId}
+            name={session.workspaces.find((item) => item.id === wsId)?.name ?? t.agents.home}
+            status={headerStatusOf(scopeSummary(session.sessions, wsId, state, mainOpenId === "" ? null : mainOpenId))}
+            task={inSession ? { title: capsuleTitle, onRename: mainOpenId === "" ? undefined : (title) => session.renameSession(mainOpenId, title) } : null}
+            recent={scopeRecent(session.sessions, wsId, state)}
+            now={Date.now()}
+            onOpenSession={(id) => void session.openSession(id)}
+            onSeeAll={() => changeSettings({ appMode: "agent" })}
+          />
+        );
+      })()
+    ) : mainOpenId === "" && session.opened === null ? null : (
       <SessionCapsule
         title={capsuleTitle}
         shortId={capsuleShortId}

@@ -11,6 +11,8 @@ import { WorkspaceFilterBar, useScrolledEdge, useWorkspaceFilter } from "./Works
 import { bucketCounts, buildOptions, defaultFilter, groupByWorkspace, type WsAllow, type WsFilter } from "./workspace-filter.ts";
 import { WorkspaceFiles } from "./focus/WorkspaceFiles.tsx";
 import { AgentRow } from "./AgentRow.tsx";
+import { useScrollEdges } from "./scroll-inset.ts";
+import { orderAgentRows } from "../features/chat/agent-status.ts";
 import { scopeSummary, stateIndexOf } from "../features/chat/galaxy-data.ts";
 import {
   EMPTY_SELECTION,
@@ -173,6 +175,8 @@ export function Sidebar(props: {
   const { session } = props;
   // 每分钟重渲染一次：行尾「刚刚 / N 分钟」与时间范围都在渲染时按 Date.now() 现算（理由见 use-minute-tick.ts）
   useMinuteTick();
+  // 编排列表：滚动条不占行宽（内容右缘不随滚动条左移）、没滚到底时底部渐隐；单智能体的列表原样
+  const listEdges = useScrollEdges(props.appMode === "orchestrate");
   const asideRef = useRef<HTMLElement | null>(null);
   /** 拖宽中禁掉 width 过渡——实时跟手（同右侧面板的 .dragging 纪律） */
   const [resizing, setResizing] = useState(false);
@@ -327,7 +331,7 @@ export function Sidebar(props: {
   // 编排侧栏每行的运行态：子会话表建一遍，整趟 O(n)（单智能体侧不算）
   const agentStates = props.appMode === "orchestrate" ? stateIndexOf(session) : null;
   /** 编排侧栏里亮着哪一行：正在看的会话所在的工作区，否则是首页选中的工作区；盖着设置 / 周看板时都不亮 */
-  const activeAgentId = props.overlay !== null ? null : (openWorkspaceId ?? session.workspaceId);
+  const activeAgentId: string | null | undefined = props.overlay !== null ? undefined : (openWorkspaceId ?? session.workspaceId);
 
   /**
    * 主列表从上到下**可见**的任务行（Shift 区间按它算）：展开着的工作区组各自的可见行，
@@ -649,13 +653,18 @@ export function Sidebar(props: {
 
       <div
         className="scroll"
+        ref={listEdges.ref}
+        data-fade={props.appMode === "orchestrate" && listEdges.edges.fade ? "true" : undefined}
         style={{
           flex: 1,
           minHeight: 0,
           marginRight: "calc(-1 * var(--space-3))",
-          paddingRight: "var(--space-3)",
+          paddingRight: `calc(var(--space-3) - ${props.appMode === "orchestrate" ? listEdges.edges.gap : 0}px)`,
         }}
-        onScroll={subviewEdge.onScroll}
+        onScroll={(event) => {
+          subviewEdge.onScroll(event);
+          listEdges.onScroll();
+        }}
       >
         {props.showArchived && !overlayOpen ? (
           <>
@@ -730,23 +739,30 @@ export function Sidebar(props: {
                 {t.sidebar.noWorkspace}
               </Empty>
             ) : workspaceList.body === "list" ? (
-              session.workspaces.map((workspace) => (
+              orderAgentRows(
+                [null, ...session.workspaces].map((workspace) => {
+                  const summary = scopeSummary(session.sessions, workspace?.id ?? null, agentStates?.state ?? (() => null), openId);
+                  return { workspace, summary };
+                }),
+                (row) => ({ pinned: row.workspace === null, waiting: row.summary.waiting, lastActive: row.summary.lastActive }),
+              ).map(({ workspace, summary }) => (
                 <AgentRow
-                  key={workspace.id}
+                  key={workspace?.id ?? "home"}
                   workspace={workspace}
-                  summary={scopeSummary(session.sessions, workspace.id, agentStates?.state ?? (() => null))}
-                  active={activeAgentId === workspace.id}
-                  designing={props.designingWorkspaceId === workspace.id}
+                  summary={summary}
+                  active={activeAgentId === (workspace?.id ?? null)}
+                  designing={props.designingWorkspaceId === (workspace?.id ?? null) && workspace !== null}
                   now={now}
                   onOpen={() => {
                     // 盖着设置 / 周看板时先退掉，再落到这座星系自己的 New Task 页
                     props.onOverlay(null);
-                    session.newTaskIn(workspace);
+                    if (workspace === null) session.newTask();
+                    else session.newTaskIn(workspace);
                   }}
-                  onRename={(name) => session.renameWorkspace(workspace.id, name)}
-                  onRemove={() => session.removeWorkspace(workspace.id)}
-                  onBrowse={() => props.onBrowseWorkspace(workspace.id)}
-                  onDesign={() => props.onDesignGalaxy(workspace.id)}
+                  onRename={(name) => workspace !== null && session.renameWorkspace(workspace.id, name)}
+                  onRemove={() => workspace !== null && session.removeWorkspace(workspace.id)}
+                  onBrowse={() => workspace !== null && props.onBrowseWorkspace(workspace.id)}
+                  onDesign={() => workspace !== null && props.onDesignGalaxy(workspace.id)}
                 />
               ))
             ) : null}

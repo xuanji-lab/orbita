@@ -62,7 +62,7 @@
   white-space: nowrap;
 }
 .agent-time {
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   font-variant-numeric: tabular-nums;
   color: var(--color-text-tertiary);
   white-space: nowrap;
@@ -72,11 +72,17 @@
   font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
-.agent-status-text {
+/* 状态词（等你 / 在跑 / 空闲）与时间同色同档（一行只用 base + sm 两档字号）；空闲时后面接的「最近：标题」再浅一档，截断在它自己身上 */
+.agent-status-word {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.agent-status-recent {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: color-mix(in srgb, var(--color-text-tertiary) 80%, var(--color-bg-panel));
 }
 /* 等你：行尾一枚实心小点（颜色是第二信号，第一信号是左边那句字） */
 .agent-dot {
@@ -84,6 +90,10 @@
   height: var(--space-1-5);
   border-radius: var(--radius-pill);
   background: var(--color-warning);
+}
+/* 只是跑完 / 出错还没看（不是等你）：小一档的中性点，不抢「等你」的 warning */
+.agent-dot[data-kind="unread"] {
+  background: var(--color-text-tertiary);
 }
 .agent-name-input {
   flex: 1 1 auto;
@@ -105,7 +115,8 @@
 .agent-acts {
   position: absolute;
   top: var(--space-1-5);
-  right: var(--space-2);
+  /* 最右一颗键的字形右缘 = 行右内边距（与时间同一条线）：实测 14px 字形在 20px 键里右侧留 5px，键框右移 5px 补上 */
+  right: calc(var(--space-2) - 5px);
   display: none;
   align-items: center;
   gap: var(--space-0-5);

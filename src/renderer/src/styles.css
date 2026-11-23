@@ -7326,3 +7326,63 @@ button.turn-output-from.link:hover {
   gap: var(--space-2);
   padding: 0 var(--space-3) var(--space-3) calc(var(--space-3) + var(--card-icon-w) + var(--space-3));
 }
+
+/* 工作区页的「页头版」：星系还没有任何会话时留的一行 slogan，靠左、轻字（与输入框同一条左缘）；有内容后整块不渲染 */
+.ws-home-quiet.home-slogan {
+  margin: 0;
+  text-align: left;
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-regular);
+  color: var(--color-text-tertiary);
+}
+
+/*
+ * 工作区页星系上的名字与「+N」（HomeGalaxy 的 fill）。名字：等你 / 在跑里最要紧的 3 颗常显，其余悬停才出；
+ * 字号 sm（12）、次级墨，带一圈页面底色的描边（paint-order）压在轨道线上也读得清。「+N」= 碎石折掉的会话数，三级墨。
+ */
+.galaxy-tag .galaxy-hit {
+  fill: transparent;
+  pointer-events: all;
+}
+.galaxy-tag-text {
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  fill: var(--color-text-secondary);
+  stroke: var(--color-bg-panel);
+  stroke-width: 3px;
+  paint-order: stroke;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-instant) var(--ease-standard);
+}
+.galaxy-tag[data-always] .galaxy-tag-text,
+.galaxy-tag:hover .galaxy-tag-text {
+  opacity: 1;
+}
+.galaxy-folded {
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  fill: var(--color-text-tertiary);
+  pointer-events: auto;
+}
+
+/* 编排侧栏的列表：下面还有内容没滚到时，底部 24px 渐隐（最后一行不被切一半还像完整的一行）；到底即消 */
+.scroll[data-fade="true"] {
+  mask-image: linear-gradient(to bottom, black calc(100% - var(--space-6)), transparent);
+}
+.galaxy-empty-hint {
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  fill: var(--color-text-tertiary);
+}
+
+/* 分段控件「单智能体 / 编排」的选中块：与页面白底同色的凸起块（不是更深的灰——灰底侧栏上灰块反差太弱） */
+.mode-tab[aria-selected="true"] {
+  background: var(--color-bg-panel);
+}
+
+/* 玄 / 黛下工作区页的轨道线提一档（border-default → border-strong）：量得 1.35:1 → 1.61:1（对页面底）。只动工作区页，单智能体首页的星系不变 */
+:root:is([data-theme="graphite"], [data-theme="black"]) .ws-home .galaxy-orbit {
+  stroke: var(--color-border-strong);
+}

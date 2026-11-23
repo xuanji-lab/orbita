@@ -11,6 +11,7 @@ import type { Messages } from "../../messages-en.ts";
 import {
   BACKDROPS,
   bodyArt,
+  avatarScale,
   clampValue,
   densityOf,
   displayRadius,
@@ -404,16 +405,18 @@ function Preview(props: { design: GalaxyDesign; workspaceName: string; invalid: 
  * 不自转、不带动效（用户定过：侧栏头像静态，页面星系才动）。画框按形象的外框（含星环 / 日冕）取，
  * 所以开了星环的主星在头像里会小一些——整颗装进去，不裁。size 由调用方给（px）。
  */
-export function StarFigure(props: { design: GalaxyDesign; size: number; label: string; className?: string }) {
+export function StarFigure(props: { design: GalaxyDesign; size: number; label: string; className?: string; bySize?: boolean }) {
   const uid = useId().replace(/:/g, "");
   const r = displayRadius(radiusOf(props.design, "star"));
   const art = bodyArt(props.design, "star", r);
   const half = Math.max(art.extent.x, art.extent.y) * 1.04;
+  // 质量大的主星头像大一点（只在种子默认下开）：与页面星系同一个规矩——质量决定大小
+  const px = props.bySize === true ? Math.round(props.size * avatarScale(props.design.star.mass)) : props.size;
   return (
     <svg
       className={props.className === undefined ? "gd-figure" : `gd-figure ${props.className}`}
-      width={props.size}
-      height={props.size}
+      width={px}
+      height={px}
       viewBox={`${-half} ${-half} ${half * 2} ${half * 2}`}
       role="img"
       aria-label={props.label}

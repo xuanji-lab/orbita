@@ -14,12 +14,17 @@ import {
   GALAXY_MAX_FILL,
   layoutGalaxy,
   makeCamera,
+  dustCapFor,
+  foldedMarkAt,
+  emptyHintAt,
+  planetTags,
   motionAllowed,
   orbitArcs,
   type DrawItem,
   type GalaxySpec,
   type MotionInputs,
 } from "./galaxy.ts";
+import { useT } from "../../locale.ts";
 import { BodyFigure } from "../galaxy-designer/GalaxyDesigner.tsx";
 import { bodyArt, type GalaxyDesign } from "../galaxy-designer/design.ts";
 
@@ -141,12 +146,18 @@ function useGalaxyClock(target: RefObject<SVGSVGElement | null>): number {
  * starDesign：这座星系的主星设计稿（星系设计面板）。给了就把主星画成面板里那颗（眼睛、星环、日冕），
  * 与侧栏头像同一个形象；不给是一颗素球。
  */
-export function HomeGalaxy(props: { spec: GalaxySpec; label: string; starDesign?: GalaxyDesign; fill?: boolean }) {
+export function HomeGalaxy(props: { spec: GalaxySpec; label: string; starDesign?: GalaxyDesign; fill?: boolean; emptyHint?: string }) {
+  const t = useT();
   const uid = useId().replace(/:/g, "");
   const svgRef = useRef<SVGSVGElement | null>(null);
   const seconds = useGalaxyClock(svgRef);
   const size = useBoxSize(svgRef);
-  const layout = useMemo(() => layoutGalaxy(props.spec), [props.spec]);
+  // 工作区页（fill）的碎石上限随画布面积缩放；单智能体首页的带子仍用原来的上限
+  const dustCap = props.fill === true && size !== null ? dustCapFor(size.width, size.height) : undefined;
+  const layout = useMemo(
+    () => layoutGalaxy(dustCap === undefined ? props.spec : { ...props.spec, dustCap }),
+    [props.spec, dustCap],
+  );
   const scene = useMemo(() => {
     if (size === null || size.width < 2 || size.height < 2) return null;
     // 相机与视口只按统一画框 + 画布尺寸定：同一块画布上三档主星同大同位，不按星系自己的外缘缩放
@@ -158,6 +169,9 @@ export function HomeGalaxy(props: { spec: GalaxySpec; label: string; starDesign?
     return { camera, viewport, arcs: orbitArcs(layout, camera, viewport) };
   }, [layout, size, props.fill]);
   const items = scene === null ? [] : drawFrame(layout, scene.camera, scene.viewport, scene.arcs, seconds);
+  const tags = scene === null || props.fill !== true ? [] : planetTags(layout, items, scene.viewport.width);
+  const folded = scene === null || props.fill !== true ? null : foldedMarkAt(layout, scene.camera, scene.viewport);
+  const hint = scene === null || props.emptyHint === undefined ? null : emptyHintAt(layout, scene.camera, scene.viewport);
   const starGradient = `${uid}-star`;
   const render = (item: DrawItem) => {
     if (item.kind === "orbit") {
@@ -219,6 +233,32 @@ export function HomeGalaxy(props: { spec: GalaxySpec; label: string; starDesign?
         )}
       </defs>
       {items.map(render)}
+      {/* 名字与「+N」画在最上层：等你 / 在跑的常显，其余悬停；碎石折掉的会话数收成一个「+N」 */}
+      {tags.map((tag) => (
+        <g key={tag.key} className="galaxy-tag" data-always={tag.always || undefined}>
+          <circle className="galaxy-hit" cx={tag.x} cy={tag.y} r={tag.r + 7} />
+          <text
+            className="galaxy-tag-text"
+            x={tag.anchor === "start" ? tag.x + tag.r + 7 : tag.x - tag.r - 7}
+            y={tag.y}
+            textAnchor={tag.anchor}
+            dominantBaseline="central"
+          >
+            {tag.text}
+          </text>
+        </g>
+      ))}
+      {hint !== null && props.emptyHint !== undefined && (
+        <text className="galaxy-empty-hint" x={hint.x} y={hint.y} textAnchor="middle" dominantBaseline="central">
+          {props.emptyHint}
+        </text>
+      )}
+      {folded !== null && layout.belt !== null && (
+        <text className="galaxy-folded" x={folded.x} y={folded.y} textAnchor="start" dominantBaseline="central">
+          <title>{t.agents.foldedTip(layout.belt.folded)}</title>
+          {t.agents.more(layout.belt.folded)}
+        </text>
+      )}
     </svg>
   );
 }

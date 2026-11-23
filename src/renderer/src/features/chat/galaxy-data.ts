@@ -124,6 +124,8 @@ export interface ScopeGalaxyInput {
   /** 现在（毫秒）：算「没动静的子会话」退场用 */
   now: number;
   starMass: number;
+  /** 主星连星环 / 日冕的外缘（世界单位，来自设计稿）；缺席 = 主星半径 */
+  starExtent?: number;
   /**
    * 星系设计面板里设计过的那颗行星（只有改过才给）：套到排第一的行星上（质量与成分），
    * 轨道次序仍按要紧程度排，不让面板里的轨道半径打乱「越要紧越靠内」。
@@ -184,11 +186,13 @@ export function scopeGalaxy(input: ScopeGalaxyInput): ScopeGalaxy {
       nodeDeg: (hash >>> 7) % 360,
       phaseDeg: (hash >>> 13) % 360,
       state,
+      label: meta.title.trim(),
     };
   });
   return {
     spec: {
       starMass: input.starMass,
+      ...(input.starExtent === undefined ? {} : { starExtent: input.starExtent }),
       planets,
       sessions: roots.filter((meta) => !planetIds.has(meta.id)).length + retired,
     },
@@ -209,22 +213,30 @@ export interface ScopeSummary {
   lastActive: number | null;
   /** 最近活动的那条会话的标题（第二行在不忙时说「最近在聊什么」） */
   lastTitle: string | null;
-  /** 最近一条等你的根会话（页头「等你确认」胶囊点了直达它）；没有为 null */
+  /** 最近一条等你的根会话（页头「等你」胶囊点了直达它）；没有为 null */
   waitingId: string | null;
+  /**
+   * 要你看一眼的根会话数：等你的 + 跑完没看 / 出错没看的，**不含眼下正开着的那条**（你正看着它，就不算「没看」）。
+   * 侧栏行的小圆点只在它 > 0 时出现；看过即退。等你的状态本身（「等你 · N」）不因看过而消失——事还没办。
+   */
+  attention: number;
 }
 
 export function scopeSummary(
   sessions: readonly SessionMeta[],
   workspaceId: string | null,
   stateOf: (meta: SessionMeta) => SessionRunState,
+  viewedId: string | null = null,
 ): ScopeSummary {
   const { roots } = scopeMembers(sessions, workspaceId);
+  let attention = 0;
   let waiting = 0;
   let running = 0;
   let last: SessionMeta | null = null;
   let waitingMeta: SessionMeta | null = null;
   for (const meta of roots) {
     const state = stateOf(meta);
+    if (state !== null && state !== "running" && meta.id !== viewedId) attention += 1;
     if (state === "waiting") {
       waiting += 1;
       if (waitingMeta === null || meta.updatedAt > waitingMeta.updatedAt) waitingMeta = meta;
@@ -239,6 +251,7 @@ export function scopeSummary(
     lastActive: last?.updatedAt ?? null,
     lastTitle: last === null ? null : last.title.trim() || null,
     waitingId: waitingMeta === null ? null : waitingMeta.id,
+    attention,
   };
 }
 

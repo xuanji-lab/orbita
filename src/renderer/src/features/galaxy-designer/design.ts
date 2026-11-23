@@ -219,6 +219,12 @@ function halfEllipse(rx: number, ry: number, half: "back" | "front"): string {
   return `M${round2(-rx)} 0A${round2(rx)} ${round2(ry)} 0 0 ${sweep} ${round2(rx)} 0`;
 }
 
+/** 主星连星环 / 日冕的外缘是主星半径的几倍（元素都关 = 1）：页面星系据此把第一圈轨道推出去，行星不从星环里穿过 */
+export function starExtentRatio(design: GalaxyDesign): number {
+  const { ring, corona } = design.star.elements;
+  return Math.max(1, ring ? RING.rx : 1, corona ? 1.32 : 1);
+}
+
 export function bodyArt(design: GalaxyDesign, kind: BodyKind, r: number): BodyArt {
   const body = kind === "star" ? design.star : design.planet;
   const on = (key: ElementKey): boolean => ELEMENTS_OF[kind].includes(key) && body.elements[key];
@@ -387,6 +393,39 @@ export function defaultDesign(workspaceId: string, level: DesignLevel): GalaxyDe
 }
 
 /**
+ * 没设计过的工作区的「种子默认」：以工作区 id 为种子，从面板已有的参数里取一套稳定的稿——
+ * 主星质量（300–1000，步长 100，决定主星半径）、星环、日冕（眼睛恒开：它是「这是个智能体」的脸）；行星的成分与元素沿用 defaultDesign 的三套预设。
+ * 只用面板里本来就有的开关与数值，颜色仍由主题 token 决定（主星没有可调的色），所以不会冒出裸 hex；
+ * 质量夹在 STAR_MASS / PLANET_MASS 里，行星轨道取合法区间内（不撞主星、不出行星区），所以不违反引力语法。
+ * 同一个 id 永远同一套；不同 id 在 8 档质量 × 星环 × 日冕 = 32 种之间散开（12 个工作区大概率各不相同，碰撞概率见测试）。
+ * 注意主星没有成分 / 色调 / 纹理 / 云带这些轴（那是行星的），所以主星头像的差异轴只有这三个。
+ */
+export const STAR_MASS_STEPS = 8;
+
+/** 头像按质量缩放的系数：最轻的主星 0.8、最重的 1（侧栏头像槽是固定的 28px，按这个系数在槽里放大放小） */
+export const AVATAR_SCALE = { min: 0.8, max: 1 } as const;
+
+export function avatarScale(mass: number): number {
+  const t = (clamp(mass, STAR_MASS.min, STAR_MASS.max) - STAR_MASS.min) / (STAR_MASS.max - STAR_MASS.min);
+  return AVATAR_SCALE.min + (AVATAR_SCALE.max - AVATAR_SCALE.min) * t;
+}
+
+export function seededDesign(workspaceId: string, level: DesignLevel = "default"): GalaxyDesign {
+  const base = defaultDesign(workspaceId, level);
+  const bits = workspaceHash(`${workspaceId}:star`);
+  const mass = STAR_MASS.min + 100 * ((bits >>> 3) % STAR_MASS_STEPS);
+  const star: BodyDesign = {
+    ...base.star,
+    mass: clamp(mass, STAR_MASS.min, STAR_MASS.max),
+    elements: { ...ALL_OFF, eyes: true, ring: (bits & 1) === 1, corona: (bits & 2) === 2 },
+  };
+  const draft: GalaxyDesign = { ...base, star };
+  // 行星轨道：预设值落在合法区间外（主星大了会撞）就挪到下限之上一格
+  const orbit = clamp(draft.planet.orbitRadius, minOrbit(draft) + 1, Math.max(minOrbit(draft) + 1, maxOrbit(draft)));
+  return { ...draft, planet: { ...draft.planet, orbitRadius: orbit } };
+}
+
+/**
  * 每个工作区一份设计稿，只活在这次运行的内存里（原型：尚未写入配置）。面板关了再开、切到别的工作区再切回来
  * 都还在；重启就回到 fixture。按工作区 id 分开存，切工作区不会把上一个的参数带过去。
  */
@@ -397,11 +436,14 @@ export interface DesignStore {
   has: (workspaceId: string) => boolean;
   set: (workspaceId: string, design: GalaxyDesign) => void;
   reset: (workspaceId: string) => GalaxyDesign;
+  /** 默认稿的来源变了（种子默认开 / 关）：丢掉缓存的默认稿、通知订阅者重画；用户设计过的稿不动 */
+  refresh: () => void;
   /** 任一工作区的设计稿变了就通知：侧栏头像与页面星系跟着重画。返回退订函数 */
   subscribe: (listener: () => void) => () => void;
 }
 
-export function createDesignStore(level: DesignLevel): DesignStore {
+export function createDesignStore(level: DesignLevel, options: { seeded?: boolean | (() => boolean) } = {}): DesignStore {
+  const isSeeded = (): boolean => (typeof options.seeded === "function" ? options.seeded() : options.seeded === true);
   const designs = new Map<string, GalaxyDesign>();
   const defaults = new Map<string, GalaxyDesign>();
   const listeners = new Set<() => void>();
@@ -411,13 +453,17 @@ export function createDesignStore(level: DesignLevel): DesignStore {
   const fallback = (id: string): GalaxyDesign => {
     const cached = defaults.get(id);
     if (cached !== undefined) return cached;
-    const fresh = defaultDesign(id, level);
+    const fresh = isSeeded() ? seededDesign(id, level) : defaultDesign(id, level);
     defaults.set(id, fresh);
     return fresh;
   };
   return {
     get: (id) => designs.get(id) ?? fallback(id),
     has: (id) => designs.has(id),
+    refresh: () => {
+      defaults.clear();
+      notify();
+    },
     set: (id, design) => {
       designs.set(id, design);
       notify();

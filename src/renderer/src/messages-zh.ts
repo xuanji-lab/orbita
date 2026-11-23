@@ -1895,6 +1895,7 @@ export const zh: Messages = {
     // 批改的落款：全角空格隔开评语与「阅 月.日」（原型「字迹工整　阅 9.25」）
     homeMark: (month, day) => `字迹工整　阅 ${month}.${day}`,
     placeholderNew: "问点什么，或交办一件事",
+    placeholderTo: (name) => `给 ${name} 发消息`,
     placeholderReply: "回一句，或调整方向",
     providersFailed: (error) => `服务商载入失败：${error}——打开设置重试。`,
     noProvider: "还没有能发消息的模型，草稿会留在这里。",
@@ -3570,13 +3571,13 @@ export const zh: Messages = {
   /** 编排形态：侧栏里的智能体行、工作区自己的 New Task 页页头 */
   agents: {
     header: "智能体",
-    rowWaiting: (n) => `等你确认 · ${n}`,
-    rowWorking: (n) => `${n} 件在跑`,
-    rowEmpty: "还没有任务",
+    home: "主目录",
+    /** 状态词表：侧栏智能体行与工作区页页头胶囊共用这三个词 */
+    status: { running: "在跑", waiting: "等你", idle: "空闲" },
+    /** 「空闲」之后接最近一件事时的前缀 */
+    recent: "最近",
+    unread: "跑完了，还没看",
     rowOpenTip: (name) => `打开 ${name} 的新任务页`,
-    statusReady: "就绪",
-    statusWorking: (n) => `在外面干活 · ${n}`,
-    statusWaiting: (n) => `等你确认 · ${n}`,
     statusWaitingTip: "打开等你确认的那件任务",
     sessionsMenu: "会话",
     sessionsMenuTip: "这个工作区最近的会话",
@@ -3584,6 +3585,9 @@ export const zh: Messages = {
     sessionsAll: "在单智能体里看全部",
     avatar: (name) => `${name} 的主星`,
     pageLabel: (name) => `${name} · 新任务`,
+    emptyHint: "还没有派出的活，在下面写一件事",
+    more: (n) => `+${n}`,
+    foldedTip: (n) => `另有 ${n} 条会话`,
   },
 
   galaxyDesigner: {

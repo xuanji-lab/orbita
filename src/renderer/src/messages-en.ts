@@ -2061,6 +2061,7 @@ export const en = {
      */
     homeMark: (month: number, day: number) => `Neat. — ${MARK_MONTHS[month - 1] ?? month} ${day}`,
     placeholderNew: "Ask anything, or start a task",
+    placeholderTo: (name: string) => `Message ${name}`,
     placeholderReply: "Reply, or steer the agent",
     providersFailed: (error: string) => `Providers failed to load: ${error} — open Settings to retry.`,
     // 阻塞提示 = 一句说清卡在哪 + 句尾一个出口（Notice 的 exit）；草稿不会丢，说出来
@@ -3801,13 +3802,13 @@ export const en = {
   /** 编排形态：侧栏里的智能体行、工作区自己的 New Task 页页头 */
   agents: {
     header: "Agents",
-    rowWaiting: (n: number) => `Waiting on you · ${n}`,
-    rowWorking: (n: number) => `${n} working`,
-    rowEmpty: "No tasks yet",
+    home: "Home",
+    /** 状态词表：侧栏智能体行与工作区页页头胶囊共用这三个词 */
+    status: { running: "Running", waiting: "Waiting", idle: "Idle" },
+    /** 「空闲」之后接最近一件事时的前缀 */
+    recent: "Last",
+    unread: "Finished, not seen yet",
     rowOpenTip: (name: string) => `Open ${name}'s home`,
-    statusReady: "Ready",
-    statusWorking: (n: number) => `Working outside this chat · ${n}`,
-    statusWaiting: (n: number) => `Waiting for you · ${n}`,
     statusWaitingTip: "Open the task that is waiting for you",
     sessionsMenu: "Sessions",
     sessionsMenuTip: "Recent sessions of this workspace",
@@ -3815,6 +3816,9 @@ export const en = {
     sessionsAll: "See all in Agent mode",
     avatar: (name: string) => `${name}'s main star`,
     pageLabel: (name: string) => `${name} · new task`,
+    emptyHint: "Nothing sent out yet. Write a task below.",
+    more: (n: number) => `+${n}`,
+    foldedTip: (n: number) => `${n} more sessions`,
   },
 
   galaxyDesigner: {

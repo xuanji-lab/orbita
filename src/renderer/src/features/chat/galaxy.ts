@@ -35,6 +35,8 @@ export interface PlanetSpec {
    * 在一片墨色里认得出来；其它状态不加记号（状态优先图标与文字，那在侧栏行和页头胶囊里说）。缺席 = 没有状态
    */
   state?: PlanetState;
+  /** 这件活的名字（会话标题）：只给「等你」「在跑」的行星常显，其余悬停才显示（HomeGalaxy 决定）；缺席 = 没名字 */
+  label?: string;
 }
 
 export type PlanetState = "waiting" | "running" | "done" | "failed" | null;
@@ -42,6 +44,10 @@ export type PlanetState = "waiting" | "running" | "done" | "failed" | null;
 export interface GalaxySpec {
   starMass: number;
   planets: readonly PlanetSpec[];
+  /** 主星连星环 / 日冕的外缘（世界单位）；缺席 = 主星半径。第一圈轨道不得压进这个外缘 */
+  starExtent?: number;
+  /** 碎石颗粒数上限；缺席 = DUST_CAP。工作区页按画布面积给（面积小就少画几颗，剩下的折成「+N」） */
+  dustCap?: number;
   /** 这座星系里的会话数：只决定星屑的颗粒数（封顶）与浓淡，不逐条画 */
   sessions: number;
 }
@@ -106,6 +112,7 @@ export interface OrbitBody {
   id: string;
   composition: Composition;
   state: PlanetState;
+  label: string | null;
   radius: number;
   orbitRadius: number;
   inclination: number;
@@ -126,6 +133,8 @@ export interface Belt {
   outer: number;
   /** 真实会话数（可能远大于 particles.length） */
   count: number;
+  /** 没画出来的会话数（count − 画出的颗粒数）：界面折成一个「+N」 */
+  folded: number;
   particles: DustParticle[];
   /** 碎石带浓淡：随会话数取对数，有上限——量再大也只是「更浓」，不会更多对象 */
   alpha: number;
@@ -180,7 +189,7 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
   const planets: OrbitBody[] = [];
   const adjusted: string[] = [];
   let prevOrbit = 0;
-  let prevRadius = star;
+  let prevRadius = Math.max(star, spec.starExtent ?? 0);
   for (const planet of shown) {
     const radius = planetRadius(planet);
     const minOrbit = prevOrbit + prevRadius + radius + MIN_CLEARANCE;
@@ -191,6 +200,7 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
       id: planet.id,
       composition: planet.composition,
       state: planet.state ?? null,
+      label: planet.label ?? null,
       radius,
       orbitRadius,
       inclination: clamp(planet.inclinationDeg, -8, 8) * DEG,
@@ -211,7 +221,7 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
     const outer = Math.max(FRAME_EXTENT, inner + 6);
     const rand = seeded(9173);
     const particles: DustParticle[] = [];
-    const n = Math.min(sessions, DUST_CAP);
+    const n = Math.min(sessions, Math.max(0, Math.floor(spec.dustCap ?? DUST_CAP)));
     for (let i = 0; i < n; i++) {
       const r = inner + rand() * (outer - inner);
       particles.push({
@@ -221,7 +231,7 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
         omega: angularSpeed(r),
       });
     }
-    belt = { inner, outer, count: sessions, particles, alpha: beltAlpha(sessions) };
+    belt = { inner, outer, count: sessions, folded: sessions - n, particles, alpha: beltAlpha(sessions) };
   }
   return {
     starRadius: star,
@@ -433,6 +443,7 @@ export interface PlanetItem {
   planetId: string;
   composition: Composition;
   state: PlanetState;
+  label: string | null;
   depth: number;
   x: number;
   y: number;
@@ -455,6 +466,27 @@ export interface DustItem {
 export type DrawItem = OrbitArc | StarItem | PlanetItem | DustItem;
 
 export const ARCS_PER_ORBIT = 16;
+
+/** 等你的行星画大一档（仍远小于主星：最大的行星质量 40 也只有主星半径的一半不到） */
+export const WAITING_SCALE = 1.35;
+
+/**
+ * 碎石上限随画布面积缩放（工作区页）：参考画布 1000×600 给 DUST_REF_CAP 颗，面积小就少画，
+ * 夹在 [DUST_MIN_CAP, DUST_REF_CAP]——窄窗口里碎石不会散到标题与输入框边缘。
+ */
+export const DUST_REF_CAP = 12;
+export const DUST_MIN_CAP = 4;
+export function dustCapFor(width: number, height: number): number {
+  const ratio = (Math.max(width, 0) * Math.max(height, 0)) / (1000 * 600);
+  return clamp(Math.round(DUST_REF_CAP * ratio), DUST_MIN_CAP, DUST_REF_CAP);
+}
+
+/** 「+N」标记的屏幕位置：碎石带外沿、近侧偏右一点（不压行星，也不压标题） */
+export function foldedMarkAt(layout: GalaxyLayout, camera: Camera, vp: Viewport): { x: number; y: number } | null {
+  if (layout.belt === null || layout.belt.folded <= 0) return null;
+  const p = project(orbitPoint(layout.belt.outer, 0, 0, -0.7), camera);
+  return toScreen(p, vp);
+}
 
 /**
  * 轨道是静止的几何：每条拆成 ARCS_PER_ORBIT 段，各带自己的平均深度。分段是为了遮挡——
@@ -534,21 +566,24 @@ export function drawFrame(layout: GalaxyLayout, camera: Camera, vp: Viewport, ar
     const dx = starS.x - s.x;
     const dy = starS.y - s.y;
     const dl = Math.hypot(dx, dy) || 1;
+    // 等你的行星：放大一档，并固定画在主星前面（再被主星挡住就等于看不见最要紧的那件事）
+    const waiting = planet.state === "waiting";
     items.push({
       kind: "planet",
       key: `planet-${planet.id}`,
       planetId: planet.id,
       composition: planet.composition,
       state: planet.state,
-      depth: p.depth,
+      label: planet.label,
+      depth: waiting ? Math.min(p.depth, starP.depth - 1e-3) : p.depth,
       x: s.x,
       y: s.y,
-      r: (vp.focal * planet.radius) / p.depth,
+      r: ((vp.focal * planet.radius) / p.depth) * (waiting ? WAITING_SCALE : 1),
       fx: 0.5 + (0.32 * dx) / dl,
       fy: 0.5 + (0.32 * dy) / dl,
       lit: (1 + cosPhase) / 2,
     });
-    planetAngle.set(planet.id, { theta: normalizeAngle(theta), depth: p.depth });
+    planetAngle.set(planet.id, { theta: normalizeAngle(theta), depth: waiting ? Math.min(p.depth, starP.depth - 1e-3) : p.depth });
   }
   const span = (Math.PI * 2) / ARCS_PER_ORBIT;
   for (const arc of arcs) {
@@ -657,4 +692,67 @@ export function galaxySpecOf(fixture: GalaxyFixture): GalaxySpec {
   // 主星大小只由质量定，不因为星系热闹就变大或变小
   if (fixture === "full") return { starMass: 620, planets: fullPlanets(), sessions: 2000 };
   return { starMass: 620, planets: TYPICAL_PLANETS, sessions: 14 };
+}
+
+/** 行星名字常显的上限：「等你」「在跑」里排最前（最要紧）的几颗；其余悬停才显示 */
+export const LABEL_ALWAYS_MAX = 3;
+export const LABEL_MAX_CHARS = 14;
+
+export interface PlanetTag {
+  key: string;
+  planetId: string;
+  text: string;
+  x: number;
+  y: number;
+  r: number;
+  /** 名字写在行星左边还是右边（行星靠右半边时写左边，不出画布） */
+  anchor: "start" | "end";
+  /** 常显（否则悬停才显示） */
+  always: boolean;
+}
+
+export function truncateLabel(text: string, max = LABEL_MAX_CHARS): string {
+  const chars = [...text.trim()];
+  return chars.length <= max ? chars.join("") : `${chars.slice(0, max - 1).join("")}…`;
+}
+
+/**
+ * 行星名字的标签表。「常显」只给等你 / 在跑里按轨道次序（= 要紧程度）排前的 LABEL_ALWAYS_MAX 颗，
+ * 别的行星不标，悬停才出名字。没名字的行星没有标签（不拿 id 凑）。
+ */
+export function planetTags(layout: GalaxyLayout, items: readonly DrawItem[], width: number): PlanetTag[] {
+  const rank = new Map(layout.planets.map((planet, index) => [planet.id, index]));
+  const always = new Set(
+    layout.planets
+      .filter((planet) => (planet.state === "waiting" || planet.state === "running") && planet.label !== null && planet.label !== "")
+      .slice(0, LABEL_ALWAYS_MAX)
+      .map((planet) => planet.id),
+  );
+  const tags: PlanetTag[] = [];
+  for (const item of items) {
+    if (item.kind !== "planet" || item.label === null || item.label === "") continue;
+    tags.push({
+      key: `tag-${item.planetId}`,
+      planetId: item.planetId,
+      text: truncateLabel(item.label),
+      x: item.x,
+      y: item.y,
+      r: item.r,
+      anchor: item.x > width * 0.65 ? "end" : "start",
+      always: always.has(item.planetId),
+    });
+  }
+  // 画家算法里的次序与要紧程度无关；标签按轨道次序稳定排列，保证 DOM 不随时间跳
+  return tags.sort((a, b) => (rank.get(a.planetId) ?? 0) - (rank.get(b.planetId) ?? 0));
+}
+
+/**
+ * 空星系（只有主星和预期轨道，没有行星也没有碎石）下一句提示的屏幕位置：预期轨道近侧再往下一行。
+ * 有任何行星 / 碎石就不出（返回 null）——这一句只在「还没有派出的活」时说。
+ */
+export function emptyHintAt(layout: GalaxyLayout, camera: Camera, vp: Viewport): { x: number; y: number } | null {
+  if (layout.planets.length > 0 || layout.belt !== null || layout.expectedOrbit === null) return null;
+  const p = project(orbitPoint(layout.expectedOrbit, 0, 0, -Math.PI / 2), camera);
+  const s = toScreen(p, vp);
+  return { x: s.x, y: s.y + 28 };
 }

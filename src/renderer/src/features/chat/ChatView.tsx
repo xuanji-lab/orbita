@@ -73,6 +73,8 @@ import { ProcessViewContext } from "./process-view-context";
 import { sessionRunState, type SessionRunState } from "../notify/completion-notice.ts";
 import { scopeGalaxy, stateIndexOf } from "./galaxy-data.ts";
 import { useGalaxyDesign } from "../galaxy-designer/useGalaxyDesign.ts";
+import { starExtentRatio } from "../galaxy-designer/design.ts";
+import { starRadius } from "./galaxy.ts";
 import { REVEAL_ENTRY_EVENT } from "../context/task-progress.ts";
 import { planAwaitingIn, planHistory, planNoticeOf, type PlanTimeline, type PlanVersion } from "../context/plan-timeline.ts";
 import { PlanCard } from "./PlanCard";
@@ -205,7 +207,9 @@ import { FileTypeIcon } from "../../shell/FileTypeIcon";
 import { HomeHero } from "./HomeHero";
 import { HomeGalaxy, PROTO_GALAXY_SPEC } from "./HomeGalaxy";
 import { HomeLog, type HomeLogRowView } from "./HomeLog";
-import { heroFace } from "./home-hero.ts";
+import { heroFace, sloganOf } from "./home-hero.ts";
+import { showQuietSlogan } from "./proto-variants.ts";
+import { useProtoVariants } from "./proto-variants-store.ts";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { FileTurnCard, RevertMarkView } from "./FileTurnCard";
 import type { MemorySessionTurnView, MemorySessionView } from "@shared/memory";
@@ -1464,6 +1468,7 @@ function ChatViewBody(props: {
    * 单智能体形态原样不动：版式仍是「标题与输入框在上、星系在下」，星系仍是写死的 fixture（PROTO_GALAXY_SPEC）。
    */
   const scopedHome = galaxyHome && props.orchestrate === true;
+  const protoVariants = useProtoVariants();
   // 这座星系的主星设计稿（没选工作区时用「主目录」那一份）：面板里一改，页面星系同一帧跟着变
   const galaxyDesign = useGalaxyDesign(session.workspaceId ?? "");
   // 不缓存：运行态每个事件都可能变；stateIndexOf 先建子会话表，整趟 O(n)（2000 条也只是一遍）
@@ -1477,6 +1482,7 @@ function ChatViewBody(props: {
           ownStateOf: galaxyStates.own,
           now: Date.now(),
           starMass: galaxyDesign.design.star.mass,
+          starExtent: starRadius(galaxyDesign.design.star.mass) * starExtentRatio(galaxyDesign.design),
           designedPlanet: galaxyDesign.edited
             ? { mass: galaxyDesign.design.planet.mass, composition: galaxyDesign.design.planet.composition }
             : null,
@@ -1502,7 +1508,9 @@ function ChatViewBody(props: {
         session.quotes.length > 0
           ? t.quote.replyPlaceholder(session.quotes.length)
           : homeActive
-            ? t.chat.placeholderNew
+            ? scopedHome
+              ? t.chat.placeholderTo(scopeNameOf(session, t.chat.home))
+              : t.chat.placeholderNew
             : t.chat.placeholderReply
       }
       disabled={session.usable.length === 0 || session.readOnly}
@@ -1614,35 +1622,45 @@ function ChatViewBody(props: {
           data-workspace={session.workspaceId ?? undefined}
         >
           <div className="home-fade ws-home-sky">
-            <div className="ws-home-face">
-              <div className="ws-home-face-col">
-                <HomeHero
-                  theme={props.theme}
-                  galaxy={
-                    <ScopeMenu
-                      session={session}
-                      namingWidth={240}
-                      placement="below"
-                      trigger={({ open, toggle, scope, title }) => (
-                        <button
-                          type="button"
-                          className="home-galaxy-name"
-                          aria-expanded={open}
-                          title={title}
-                          onClick={toggle}
-                        >
-                          <span className="home-galaxy-title">{scope}</span>
-                          <span className="home-galaxy-suffix">{t.chat.galaxySuffix}</span>
-                          <Icon name="chevron-down" size={16} />
-                        </button>
-                      )}
-                    />
-                  }
-                />
+            {protoVariants.title === "header" ? (
+              showQuietSlogan("header", galaxyData.spec) && (
+                <div className="ws-home-face">
+                  <div className="ws-home-face-col">
+                    <p className="home-slogan ws-home-quiet">{sloganOf("plain")}</p>
+                  </div>
+                </div>
+              )
+            ) : (
+              <div className="ws-home-face">
+                <div className="ws-home-face-col">
+                  <HomeHero
+                    theme={props.theme}
+                    galaxy={
+                      <ScopeMenu
+                        session={session}
+                        namingWidth={240}
+                        placement="below"
+                        trigger={({ open, toggle, scope, title }) => (
+                          <button
+                            type="button"
+                            className="home-galaxy-name"
+                            aria-expanded={open}
+                            title={title}
+                            onClick={toggle}
+                          >
+                            <span className="home-galaxy-title">{scope}</span>
+                            <span className="home-galaxy-suffix">{t.chat.galaxySuffix}</span>
+                            <Icon name="chevron-down" size={16} />
+                          </button>
+                        )}
+                      />
+                    }
+                  />
+                </div>
               </div>
-            </div>
+            )}
             <div className="ws-home-galaxy">
-              <HomeGalaxy spec={galaxyData.spec} label={t.chat.galaxyFigure(scopeName)} starDesign={galaxyDesign.design} fill />
+              <HomeGalaxy spec={galaxyData.spec} label={t.chat.galaxyFigure(scopeName)} starDesign={galaxyDesign.design} fill emptyHint={t.agents.emptyHint} />
             </div>
           </div>
           <div ref={travelRef} className="chat-footer home-travel ws-home-foot">
