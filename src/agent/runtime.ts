@@ -1359,7 +1359,11 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     // read_docx 同样直读（./docx-tools.ts）：word 文档的结构化提取，块号轴分片
     ...createDocxTools(command.cwd),
     // show_image 同样直读展示（./image-tools.ts）：模型「把图给用户看」的显式动作
-    ...createImageTools(command.cwd),
+    // 白名单外的图（如 /tmp）先拷进会话工作台的 shots/，回答里嵌的路径界面才读得到（2026-11-23）
+    ...createImageTools(command.cwd, {
+      roots: [...(command.directories?.attached ?? []), command.attachmentsDir],
+      workbench: command.directories?.workbench ?? null,
+    }),
     // update_plan（./plan-tools.ts）：agent 写下计划、做一步勾一步；计划就在转录里，不另存
     ...createPlanTools(planOptions),
     // update_goal（./goal-tools.ts）：agent 替用户记下会话级目标；目标就在转录里，不另存

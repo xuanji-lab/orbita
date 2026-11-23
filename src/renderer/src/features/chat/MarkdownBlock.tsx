@@ -323,7 +323,17 @@ function LocalChatImage(props: { path: string; alt: string; fallback: ImageProps
   // 挂载时读一次偏好当初值：之后别处改了偏好，已经画好的这张不跟着跳
   const [size, setSize] = useState(pref.size);
   if (url === undefined) return <span className="chat-img-pending" data-size={size} aria-hidden="true" />;
-  if (url === null) return <ImagePlaceholder {...props.fallback} />;
+  if (url === null) {
+    // 读不到（不在这条会话能看的文件夹里，或文件没了）：明说「打不开」，悬停给路径与原因——
+    // 以前退成一颗写着图片说明的签，看不出是坏图（2026-11-23 用户）
+    const name = props.path.split(/[\\/]/).pop() ?? props.path;
+    return (
+      <span className="chat-img-missing" title={t.lightbox.missingTip(props.path)}>
+        <Icon name="image-off" size={12} strokeWidth={1.8} />
+        {t.lightbox.missing(name)}
+      </span>
+    );
+  }
   const next = size === "large" ? "small" : "large";
   return (
     // 悬停图片右上角出一颗小工具条（与划选文字的「复制 / 引用」同一副样子）：大图时「缩小」、小图时「放大」，

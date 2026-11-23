@@ -720,6 +720,8 @@ export const zh: Messages = {
     next: "下一张",
     openInFiles: "在右栏文件面板里预览",
     imageRef: (name) => `图片 · ${name}`,
+    missing: (name) => `图片打不开 · ${name}`,
+    missingTip: (path) => `${path}\n不在这条会话能看的文件夹里（工作区、附加目录、会话工作台），或者文件已经不在了`,
     sizeLarge: "放大",
     sizeSmall: "缩小",
   },
