@@ -7,6 +7,7 @@
 
 /** 对话里一条记录的最小形状（与 pi 的 TranscriptItem 兼容，只取这里用到的字段） */
 export interface SpokenItem {
+  id?: string;
   role: string;
   content: readonly { type: string; text?: string }[];
 }
@@ -19,14 +20,18 @@ function textOf(item: SpokenItem): string {
 }
 
 /**
- * 锚点：从后往前找正文等于 asked 的那条用户消息。找不到回 -1（回显还没到）。
- * 用正文比而不是记下标：对话是尾窗，翻页会让下标漂。
+ * 锚点：从后往前找正文含 asked 的那条用户消息。找不到回 -1（回显还没到）。
+ * 用正文比而不是记下标：对话是尾窗，翻页会让下标漂。用「含」不用「等于」：运行时会在用户消息
+ * 前后包上下文块（发送时间、打开的文档等），正文不再与发出的字逐字相等。afterId = 发出那一刻的最后一条
+ * 记录：同一句话以前说过时，不能把旧的那次认成锚点（它后面的旧回答会被再念一遍）。
  */
-export function findAskedIndex(items: readonly SpokenItem[], asked: string): number {
+export function findAskedIndex(items: readonly SpokenItem[], asked: string, afterId: string | null = null): number {
   const target = asked.trim();
-  for (let index = items.length - 1; index >= 0; index -= 1) {
+  // 发出那一刻对话的最后一条：锚点只能在它后面（同一句话以前说过，不能认成那一次）
+  const floor = afterId === null ? -1 : items.findIndex((item) => item.id === afterId);
+  for (let index = items.length - 1; index > floor; index -= 1) {
     const item = items[index];
-    if (item !== undefined && item.role === "user" && textOf(item).trim() === target) return index;
+    if (item !== undefined && item.role === "user" && textOf(item).includes(target)) return index;
   }
   return -1;
 }

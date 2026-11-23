@@ -244,6 +244,12 @@ export function App() {
     [changeSettings],
   );
 
+  /** 通话缺配置时「去语音设置」的去处：设置面的语音页 */
+  const openVoiceTab = useCallback(() => {
+    setSettingsTab("voice");
+    setOverlay("settings");
+  }, []);
+
   /** 模型卡片底部「配置模型」的去处：设置面的服务商页（不是通用页） */
   const openProvidersTab = useCallback(() => {
     setSettingsTab("providers");
@@ -1591,6 +1597,7 @@ export function App() {
                 session={session}
                 providersError={providersError}
                 orchestrate={orchestrate}
+                onOpenVoiceSettings={openVoiceTab}
                 bareHeader
                 onOpenReviewAt={openReviewAt}
                 excerptJump={excerptJump}

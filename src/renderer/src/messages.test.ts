@@ -18,6 +18,8 @@ const ALLOWED_LATIN = new Set([
   // 品牌
   "orbita",
   "GitHub",
+  // 设置 › 语音：通话的语音合成厂商（2026-11-24）
+  "ElevenLabs",
   // 协议 / 格式 / 技术名
   "MCP",
   "Git",

@@ -134,7 +134,7 @@ test("锚点：从后往前找这句用户消息，只拼它之后 assistant 的
   const items = [
     { role: "user", content: [{ type: "text", text: "你好" }] },
     { role: "assistant", content: [{ type: "text", text: "旧回答" }] },
-    { role: "user", content: [{ type: "text", text: "你好" }] },
+    { role: "user", content: [{ type: "text", text: "<user_context>sent_at: x</user_context>" }, { type: "text", text: "你好" }] },
     { role: "assistant", content: [{ type: "thinking" }, { type: "text", text: "第一段" }, { type: "toolCall" }] },
     { role: "tool", content: [{ type: "text", text: "工具输出不念" }] },
     { role: "assistant", content: [{ type: "text", text: "第二段" }] },
@@ -143,6 +143,10 @@ test("锚点：从后往前找这句用户消息，只拼它之后 assistant 的
   assert.equal(anchor, 2);
   assert.equal(answerTextAfter(items, anchor), "第一段\n第二段");
   assert.equal(findAskedIndex(items, "没发过"), -1);
+  const withIds = items.map((item, index) => ({ ...item, id: `i${index}` }));
+  // 发出时最后一条是 i5：新的回显还没到，旧的同一句不算
+  assert.equal(findAskedIndex(withIds, "你好", "i5"), -1);
+  assert.equal(findAskedIndex(withIds, "你好", "i1"), 2);
   assert.equal(answerTextAfter(items, -1), "");
 });
 
