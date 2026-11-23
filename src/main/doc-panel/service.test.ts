@@ -249,3 +249,15 @@ async function waitFor(check: () => boolean, ms = 3000): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }
+
+describe("子会话工作台（subsession 根）里的文档", () => {
+  it("子会话交回的 .txt / .md 在文档面板里读得到", async () => {
+    const report = join(outside, "report.txt");
+    await writeFile(report, "子会话的报告\n");
+    const withChild: FileRoot[] = [...roots, { kind: "subsession", label: "child", path: outside, exists: true }];
+    const file = await readDoc(withChild, report);
+    assert.equal(file.text, "子会话的报告\n");
+    // 不带这条根就读不到（白名单只认本会话的后代）
+    await assert.rejects(readDoc(roots, report), /不在这条会话允许的目录里/);
+  });
+});

@@ -39,8 +39,11 @@ import { writeTextAtomic } from "../atomic-write.ts";
 import { errorCode, isNotFound } from "../fs-errors.ts";
 import { isInside, realpathInside } from "../path-boundary.ts";
 
-/** 能放文档的根：附件副本根只读，不放 */
-const WRITABLE_KINDS: ReadonlySet<FileRoot["kind"]> = new Set(["session", "workspace", "attached"]);
+/**
+ * 能放文档的根：附件副本根只读，不放。子会话的工作台（subsession）算：子会话交回的 .md / .txt
+ * 在文档面板里打开、改（2026-11-23 用户：子会话交回的文件要能预览）
+ */
+const WRITABLE_KINDS: ReadonlySet<FileRoot["kind"]> = new Set(["session", "workspace", "attached", "subsession"]);
 
 export function normalizeNewlines(text: string): string {
   return text.includes("\r") ? text.replace(/\r\n?/g, "\n") : text;
