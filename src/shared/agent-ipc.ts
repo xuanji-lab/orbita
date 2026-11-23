@@ -372,6 +372,9 @@ export const ipcChannels = {
   outboxPut: "outbox:put",
   outboxRemove: "outbox:remove",
   outboxList: "outbox:list",
+  /** 星系设计稿（shared/planet-design.ts）：读 / 写工作区 planet/ 里的插件设计稿与伴随文件 galaxy.json */
+  planetRead: "planet:read",
+  planetWrite: "planet:write",
   /** 审查面板：列一个来源的全部改动（task / unstaged / staged / branch） */
   reviewList: "review:list",
   /** 审查面板：拉一个文件的 diff 正文（unified diff，按需） */
