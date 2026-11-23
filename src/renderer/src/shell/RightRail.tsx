@@ -15,7 +15,7 @@ import { BellCard, useBellDismiss, type NoticeRow } from "../features/notify/Bel
  * **入口按类分组**（2026-10-31 用户裁决，原话：「会对右栏进行分类……每一类之间没有分隔，
  * 但是类和类之间有一个小横线做分隔」「全部都在右上，然后右下就简单一点」）：
  * 组的划分与理由见 `rail-groups.ts`，规矩见设计系统 readme「Rail entries are grouped」。
- * 右上堆「这条会话」「智能体」两组常驻，其后一条细线 + 「更多」⋮（以后再做 / 归档 / 通知），右下只留「应用」组（看板、设置）。只有这一种布局（2026-11-06 用户裁决，取代实验功能「精简右栏」的两态）。
+ * 右上堆「这条会话」「智能体」两组常驻，其后一条细线 + 「更多」⋮（归档 / 通知），右下只留「应用」组（看板、设置）。只有这一种布局（2026-11-06 用户裁决，取代实验功能「精简右栏」的两态）。
  * 此前是「上面一串、下面一串」，两串之间靠弹性空隙隔开，入口归哪串凭历史而不凭类。
  *
  * 面板类入口（文件 / 审查 / 这条任务 / 能力 / 终端 / 意图 / 子会话）**共用一个面板位**
@@ -68,7 +68,7 @@ export interface RailEntry {
 export function RightRail(props: {
   panel: RightPanelKind | null;
   onPanel: (next: RightPanelKind | null) => void;
-  /** 应用级入口（遗留 / 归档 / 浏览器 / 记忆 / 看板 / 设置），调用方组装；条上的组与顺序由 RightRail 定，与数组顺序无关 */
+  /** 应用级入口（归档 / 浏览器 / 记忆 / 看板 / 设置），调用方组装；条上的组与顺序由 RightRail 定，与数组顺序无关 */
   railEntries: RailEntry[];
   /**
    * Sub-sessions 面板入口（子会话 PR4c）：null = 不出现（没在看根会话，或这条

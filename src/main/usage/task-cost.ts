@@ -1,15 +1,13 @@
 /**
  * 「每任务成本」的口径 —— 价格 · 能力图的横轴。**纯模块**：不 import electron，可被 `node --test` 直接测。
  *
- * ## 什么是一个任务（用户 2026-10-24 拍板，第二版；2026-11-22 起主会话那一半不再增长）
- * - **主会话**：曾经「一个任务 = 收尾时确认的一件做完的事」。「完成 / 收尾」功能 2026-11-22 已删，
- *   不再产生新的确认；账本只读取旧会话 meta.wrapups 里已确认过的（回填 / 重建时补进），数字是当年
- *   确认那一刻算好的快照（花费 = 那几轮合计，算给那几轮里 token 最多的型号 × 档）。
- * - **子会话**交回结果就算一件做完的事：整个子会话一个任务，同样算给 token 最多的型号 × 档。
- *   这是现在价格图里**唯一还会增长**的一半。
+ * ## 什么是一个任务（用户 2026-10-24 拍板；2026-11-22 起只剩子会话）
+ * **子会话**交回结果就算一件做完的事：整个子会话一个任务，算给 token 最多的型号 × 档。
+ * 主会话不算任务：曾经的「收尾确认」（一件「做完的事」）随「完成 / 收尾」功能一起删了，账本也不再读旧会话里
+ * 留下的确认记录——价格图只画子会话交回的任务。
  *
  * 账本里另有一份「会话 × 型号 × 档的连续一段」（StoredTask）：那是**按天记 token** 用的
- * （侧栏用量格的每日合计，收尾轮次照算——那是真实花掉的 token），不再是价格图的任务。
+ * （侧栏用量格的每日合计，那是真实花掉的 token），不再是价格图的任务。
  * 第一版「一个会话里同一型号 × 同一档的连续一段 = 一个任务」只剩切段这一层意思。
  *
  * ## 每条回复花了多少
@@ -271,7 +269,7 @@ export function taskTotals(task: StoredTask): DayCounts {
   return Object.values(task.days).reduce(addDay, ZERO_DAY);
 }
 
-/** 价格图上的一个任务（收尾确认的一件做完的事，或一个子会话） */
+/** 价格图上的一个任务（一个子会话交回的结果） */
 export interface ChartTask {
   providerId: string;
   modelId: string;
@@ -279,55 +277,15 @@ export interface ChartTask {
   totals: DayCounts;
 }
 
-/** 旧版收尾确认的一件做完的事（账本里存的形状）：wrapupId 去重用 */
-export interface StoredDone {
-  sessionId: string;
-  wrapupId: string;
-  providerId: string;
-  modelId: string;
-  level: ThinkingLevel;
-  totals: DayCounts;
-}
-
 /**
- * 一次收尾记录 → 账本里的做完的事。没有归属（没指定轮次 / 那几轮没用量）或档不可考的不收：
- * 价格图按「型号 × 档」画，它们落不到任何一个点上。
- */
-export function storedDonesOf(
-  sessionId: string,
-  wrapup: { id: string; items: readonly { providerId: string | null; modelId: string | null; level: ThinkingLevel | null; tokens: TokenCounts; recordedCost: number; unpricedTokens: TokenCounts }[] },
-): StoredDone[] {
-  return wrapup.items.flatMap((item) =>
-    item.providerId === null || item.modelId === null || item.level === null || (tokenTotal(item.tokens) === 0 && !(item.recordedCost > 0))
-      ? []
-      : [
-          {
-            sessionId,
-            wrapupId: wrapup.id,
-            providerId: item.providerId,
-            modelId: item.modelId,
-            level: item.level,
-            totals: { tokens: { ...item.tokens }, recordedCost: item.recordedCost, unpricedTokens: { ...item.unpricedTokens } },
-          },
-        ],
-  );
-}
-
-/**
- * 价格图的任务全集：确认的做完的事 + 每个子会话一件（整个子会话合计，算给 token 最多的
- * 「服务商 × 型号 × 档」；最多的那组档不可考就不收）。没确认过的主会话不在里面。
+ * 价格图的任务全集：每个子会话一件（整个子会话合计，算给 token 最多的
+ * 「服务商 × 型号 × 档」；最多的那组档不可考就不收）。主会话不在里面。
  */
 export function chartTasks(
   segments: readonly StoredTask[],
-  dones: readonly StoredDone[],
   childIds: ReadonlySet<string>,
 ): ChartTask[] {
-  const out: ChartTask[] = dones.map((done) => ({
-    providerId: done.providerId,
-    modelId: done.modelId,
-    level: done.level,
-    totals: done.totals,
-  }));
+  const out: ChartTask[] = [];
   const children = new Map<string, Map<string, { providerId: string; modelId: string; level: ThinkingLevel | null; totals: DayCounts }>>();
   for (const segment of segments) {
     if (!childIds.has(segment.sessionId)) continue;

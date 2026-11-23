@@ -1394,7 +1394,7 @@ export const en = {
     compactSummary: "folds into a summary",
     choreModel: "Chore model",
     choreModelInfo:
-      "Small housekeeping calls — naming tasks, filtering throwaway imports · a fast model is enough · more chores will move here over time",
+      "Small housekeeping calls — naming tasks, filtering throwaway imports · a fast model is enough",
     choreModelTip: "Chores use the model the task is running",
     sameAsSession: "Same as session",
     sameAsSessionHint: "Use whichever model the task is running",
@@ -1784,7 +1784,7 @@ export const en = {
       borrowNote:
         "Levels the board didn't rate borrow the model's top rated level's score (dotted). The board skipping a level means it wasn't worth testing on its own — for real tasks, prefer the levels the board rated.",
       explainer:
-        "A task is one thing you confirmed as done when wrapping up a session: its cost is those turns added up, counted toward the model and thinking level that used the most tokens in them. A sub-session that reports back counts as one task. Sessions never wrapped up are not measured.",
+        "A task is one result a sub-session reports back: its cost is the whole sub-session added up, counted toward the model and thinking level that used the most tokens in it. Main sessions do not count as tasks and are not measured.",
       planNote: "Plans and subscriptions are converted at official prices.",
       source: (date: string, revision: string) =>
         `Scores: Arena (arena.ai) · lmarena-ai/leaderboard-dataset · CC BY 4.0 · board ${date} · revision ${revision} · subsets and columns selected by Orbita`,
@@ -2053,7 +2053,6 @@ export const en = {
     homeMark: (month: number, day: number) => `Neat. — ${MARK_MONTHS[month - 1] ?? month} ${day}`,
     placeholderNew: "Ask anything, or start a task",
     placeholderReply: "Reply, or steer the agent",
-    // 收尾扫描是会话里的一轮、不设超时（审核 S-4）：出口是输入卡的停止键，这里说出来
     providersFailed: (error: string) => `Providers failed to load: ${error} — open Settings to retry.`,
     // 阻塞提示 = 一句说清卡在哪 + 句尾一个出口（Notice 的 exit）；草稿不会丢，说出来
     noProvider: "No model to send with yet. Your draft stays here.",
@@ -3371,7 +3370,7 @@ export const en = {
           roles: {
             name: "Who does what",
             title: "Three jobs, one model each",
-            body: "The **main** model is the one you pick in the message box and does the real work; **sub-sessions** use theirs for helpers it sends out; **chores** — naming tasks, wrap-up scans — go to a small fast model.",
+            body: "The **main** model is the one you pick in the message box and does the real work; **sub-sessions** use theirs for helpers it sends out; **chores** — naming tasks, filtering throwaway imports — go to a small fast model.",
             notes: ["Chore model: Settings › General.", "Sub-session model: left alone, it follows the main one."],
           },
           import: {

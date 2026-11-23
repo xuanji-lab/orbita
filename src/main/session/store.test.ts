@@ -311,8 +311,8 @@ describe("SessionStore", () => {
   });
 
   // 「完成」与遗留事项已删：盘上旧会话的 meta 还带着 completion / closedAt / resumedCarryovers / 收尾记录，
-  // 读照常读（星标等保留），旧字段忽略；下一次写 meta 时不再带这三个键，收尾记录留着（任务账本重建要读）
-  test("旧版 meta 带着 completion / closedAt / resumedCarryovers：照常打开，改别的字段后这三个键消失，wrapups 与星标保留", async () => {
+  // 读照常读（星标等保留），旧字段忽略；下一次写 meta 时这些键全部不再带
+  test("旧版 meta 带着 completion / closedAt / resumedCarryovers：照常打开，改别的字段后这些键（含 wrapups）消失，星标保留", async () => {
     await store.ensureSession(meta({ starred: true }));
     const path = join(dir, "sessions", `${ID}.meta.json`);
     const onDisk = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
@@ -325,12 +325,12 @@ describe("SessionStore", () => {
     const read = (await store.list()).find((m) => m.id === ID);
     assert.equal(read?.starred, true);
     assert.equal(read !== undefined && "completion" in read, false);
+    assert.equal(read !== undefined && "wrapups" in read, false);
     await store.setPinned(ID, true);
     const rewritten = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
-    for (const key of ["completion", "closedAt", "resumedCarryovers"]) assert.equal(key in rewritten, false, key);
+    for (const key of ["completion", "closedAt", "resumedCarryovers", "wrapups"]) assert.equal(key in rewritten, false, key);
     assert.equal(rewritten["pinned"], true);
     assert.equal(rewritten["starred"], true);
-    assert.deepEqual(rewritten["wrapups"], [wrapup]);
   });
 
   // id 从 renderer 经 IPC 进来，直接拼路径的话一个 ../../ 就能写到别处

@@ -13,7 +13,7 @@ const TOOLTIP_DELAY_MS = 200;
  *  - **玻璃上禁用不用 opacity**：调暗的字在半透明面上既不是墨也不是壁纸，改用实色 tertiary
  *
  * **tooltip 是自绘的，不再用原生 `title`**（2026-09-22 真机反馈：macOS 原生 tooltip
- * 约 2 秒才出现，遗留事项行的 corner-up-right / corner-down-left hover 分不清谁是谁）。
+ * 约 2 秒才出现，相邻的几个图标 hover 分不清谁是谁）。
  * 定位走 portal + fixed——侧栏和面板是 overflow:hidden，::after 方案会被裁掉。
  * 这是对设计系统的一处偏离：readme 说「不发明 Tooltip 组件，icons get their meaning
  * from `title`」，但原生延迟不可调；IconButton 是所有纯图标控件的收口，改一处处处生效。
@@ -31,8 +31,6 @@ const TOOLTIP_DELAY_MS = 200;
 export function IconButton(props: {
   label: string;
   onClick?: () => void;
-  /** 右键透传（同一个按钮挂备选手势时用，如遗留事项的「继续」：左键新开 / 右键续原会话） */
-  onContextMenu?: (event: React.MouseEvent<HTMLButtonElement>) => void;
   /**
    * 外框尺寸：px 数，或 CSS 值字符串——顶部栏里的按钮传 "var(--titlebar-control)"
    * （一处定义，2026-10-19 公共规定），别处继续用数字。
@@ -69,12 +67,11 @@ export function IconButton(props: {
         aria-expanded={props.ariaExpanded}
         /**
          * 不用原生 `disabled`：禁用控件收不到鼠标事件，hover 解释无从谈起——
-         * 而「禁用更需要解释」（如遗留事项跳转按钮：来源已删才禁）。改用
+         * 而「禁用更需要解释」（如来源已删的跳转按钮）。改用
          * aria-disabled + 拦截点击，读屏语义不变，悬停与键盘聚焦仍然可达。
          */
         aria-disabled={disabled || undefined}
         onClick={disabled ? undefined : props.onClick}
-        onContextMenu={props.onContextMenu}
         onMouseEnter={tooltip.handlers.onMouseEnter}
         onMouseLeave={tooltip.handlers.onMouseLeave}
         onFocus={tooltip.handlers.onFocus}

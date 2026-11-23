@@ -74,8 +74,8 @@ export function ringLayers(compactions: number): RingLayers {
 }
 
 /**
- * 压缩过几次之后建议收尾（标记完成、剩下的事留到新会话）。
- * 第三次压缩的时候摘要已经是摘要的摘要——与其再压，不如带着遗留事项换一条会话（wafo 2026-10-24）。
+ * 压缩过几次之后建议换新会话。
+ * 第三次压缩的时候摘要已经是摘要的摘要——与其再压，不如换一条会话（wafo 2026-10-24）。
  */
 export const WRAP_UP_AFTER_COMPACTIONS = 2;
 

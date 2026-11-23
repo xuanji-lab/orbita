@@ -41,7 +41,7 @@
 /*
  * 玻璃卡的阴影按「浮多高」分三档（2026-10-29 精装第二笔）：`.glass-card`
  * （`tokens/glass.css`）静止是 --shadow-card；输入卡是唯一真正浮起的卡，`.composer-card`
- * 抬到 --shadow-composer；菜单 / 排队条 / 收尾确认卡 / 审批条这四处浮层再抬一级到
+ * 抬到 --shadow-composer；菜单 / 排队条 / 审批条这三处浮层再抬一级到
  * --shadow-popover（`.glass-float`）。都是修饰类，不覆盖 `.glass-card` 本身。
  */
 .composer-card {
@@ -58,7 +58,7 @@
  * Menu 弹层额外改实色面板（去 blur 的连带改动）：Menu.tsx 是这四处浮层里唯一真正
  * 压在任意内容之上的——它 portal 到 body、`position: fixed` 按锚点定位，随时可能
  * 浮在聊天正文、侧栏或任何东西上方。没有 blur 时半透明浮层会让背后的字直接漏出来、
- * 不可读，所以单独给它一层实色底。排队条 / 收尾确认卡 / 审批条不用这条：它们渲染在
+ * 不可读，所以单独给它一层实色底。排队条 / 审批条不用这条：它们渲染在
  * Pane 的 footer 网格行里，与 transcript 的滚动区是不重叠的两个 grid track——
  * transcript 会让位缩短而不是被它们盖住，背后本来就没有正文，维持原来的纯玻璃即可。
  * `--color-bg-panel` 三个主题都已定义，边框仍是 `--glass-border`，保持与玻璃卡同一圈
