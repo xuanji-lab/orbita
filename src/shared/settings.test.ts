@@ -309,6 +309,19 @@ describe("parseSettings 的 automationKeepAwake", () => {
   });
 });
 
+describe("parseSettings 的 chatImageSize", () => {
+  it("large / small 原样保留，缺席不落键（= 大图）", () => {
+    deepStrictEqual(parseSettings({ chatImageSize: "large" }).chatImageSize, "large");
+    deepStrictEqual(parseSettings({ chatImageSize: "small" }).chatImageSize, "small");
+    deepStrictEqual("chatImageSize" in parseSettings({ theme: "graphite" }), false);
+  });
+
+  it("别的值丢掉", () => {
+    deepStrictEqual(parseSettings({ chatImageSize: "huge" }).chatImageSize, undefined);
+    deepStrictEqual(parseSettings({ chatImageSize: 1 }).chatImageSize, undefined);
+  });
+});
+
 describe("parseSettings 的 collapsePastedText", () => {
   it("缺席 = 折叠（不落键，同 gitAttribution 的纪律）", () => {
     deepStrictEqual(parseSettings({ theme: "graphite" }), {
