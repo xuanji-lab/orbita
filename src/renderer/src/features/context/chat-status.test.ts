@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { TranscriptRecord } from "@shared/session";
-import { boardOf, childActivityOf, childStateOf, clampPanelWidth, fitsPanel, groupOutputs, nextTickIn, pillSignal, planWindow, STUCK_MS, toolCallLine } from "./chat-status.ts";
+import { boardOf, childActivityOf, childStateOf, clampPanelWidth, fitsPanel, goalHeadline, groupOutputs, nextTickIn, pillSignal, planWindow, STUCK_MS, toolCallLine } from "./chat-status.ts";
 
 describe("状态卡：计划收着露哪几步", () => {
   const steps = (statuses: string[]) => statuses.map((status, i) => ({ id: `s${i}`, status: status as "done" }));
@@ -95,5 +95,18 @@ describe("状态卡：拖宽的范围（挤对话列）", () => {
   it("对话区放不下最窄的卡 + 480 的对话列就默认收起", () => {
     assert.equal(fitsPanel(844), true);
     assert.equal(fitsPanel(843), false);
+  });
+});
+
+describe("goalHeadline：卡头目标的短标题", () => {
+  it("取第一个冒号前那一句", () => {
+    assert.equal(goalHeadline("补上璇玑的「最后一公里」：先把对话里的卡片定稿，再改提示词"), "补上璇玑的「最后一公里」");
+    assert.equal(goalHeadline("和用户一起形成两份 benchmark 设计文档：一份 urban planning"), "和用户一起形成两份 benchmark 设计文档");
+  });
+  it("没有冒号、冒号太靠前或太靠后：用全文", () => {
+    assert.equal(goalHeadline("把左栏改成两条左起线"), "把左栏改成两条左起线");
+    assert.equal(goalHeadline("改：左栏"), "改：左栏");
+    const long = "一".repeat(50) + "：二";
+    assert.equal(goalHeadline(long), long);
   });
 });

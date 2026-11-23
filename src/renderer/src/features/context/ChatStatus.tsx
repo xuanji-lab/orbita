@@ -42,6 +42,7 @@ import {
   type ChildActivity,
   type ChildState,
   type StatusOutput,
+  goalHeadline,
 } from "./chat-status.ts";
 import "./context-panel.css";
 import "./chat-status.css";
@@ -899,31 +900,36 @@ function useSessionAutomations(sessionId: string): Automation[] {
 
 // ───────────────────────── 目标 ─────────────────────────
 
+/**
+ * 卡头的目标：平时只露短标题；点一下（不管有几版）就地展开全文，有旧版本时下面接着列出来。
+ * 以前只有改过目标（第 2 版起）才能展开，第 1 版长目标被截成两行就再也看不全（2026-11-23 用户）。
+ */
 function GoalRow(props: { text: string; versions: readonly string[] }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const n = Math.max(1, props.versions.length);
+  const headline = goalHeadline(props.text);
+  const older = [...props.versions].reverse().slice(1);
   return (
     <section className="cs-goal">
-      <div className="cs-goal-line">
-        <span className="cs-goal-text" title={props.text}>
-          {props.text}
-        </span>
-        {n > 1 && (
-          <button type="button" className="cs-ver" aria-expanded={open} title={t.chatStatus.versionTip} onClick={() => setOpen((value) => !value)}>
-            {t.chatStatus.version(n)}
-          </button>
-        )}
-      </div>
+      <button type="button" className="cs-goal-line" aria-expanded={open} title={open ? undefined : props.text} onClick={() => setOpen((value) => !value)}>
+        <span className="cs-goal-text">{headline}</span>
+        {n > 1 && <span className="cs-ver">{t.chatStatus.version(n)}</span>}
+      </button>
       {open && (
-        <ol className="cs-vers">
-          {[...props.versions].reverse().map((text, index) => (
-            <li key={`${index}:${text}`} data-now={index === 0 || undefined}>
-              <span className="cs-ver-n">{index === 0 ? t.chatStatus.versionNow : t.chatStatus.versionN(n - index)}</span>
-              <span className="cs-ver-text">{text}</span>
-            </li>
-          ))}
-        </ol>
+        <div className="cs-goal-more">
+          <p className="cs-goal-full">{props.text}</p>
+          {older.length > 0 && (
+            <ol className="cs-vers">
+              {older.map((text, index) => (
+                <li key={`${index}:${text}`}>
+                  <span className="cs-ver-n">{t.chatStatus.versionN(n - 1 - index)}</span>
+                  <span className="cs-ver-text">{text}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
       )}
     </section>
   );
