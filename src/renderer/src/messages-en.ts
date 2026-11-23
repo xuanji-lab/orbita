@@ -1183,6 +1183,7 @@ export const en = {
     remove: "Remove from the list",
     removeArmedTip: "Click again to remove. The folder and its tasks stay — the tasks move to Tasks.",
     removeTip: "Remove from the list. The folder on disk is not touched.",
+    emptyWorkspaceNew: "No tasks yet · start one here",
     newTaskInWorkspace: "New task in this workspace",
     showLess: "Show less",
     showMore: (next: number, hidden: number) => (next === hidden ? `Show ${hidden} more` : `Show ${next} more (${hidden} hidden)`),

@@ -950,6 +950,15 @@ function WorkspaceGroup(props: {
     >
       <div
         className="ws-head"
+        // 整行点一下就开合（2026-11-23 用户：只有文件夹图标能点，点名字没反应，看着像没有折叠键）。
+        // 行里的动作键、勾选态「完成」、改名输入框各管各的，不触发开合。
+        // 双击名字改名：第一下 click 已经翻了一次，dblclick 里翻回来，开合状态不变、进入改名
+        onClick={(event) => {
+          if (editing !== null) return;
+          if ((event.target as HTMLElement).closest("button:not(.ws-fold), input") !== null) return;
+          if ((event.target as HTMLElement).closest(".ws-fold") !== null) return;
+          props.onToggleFold();
+        }}
         style={{
           display: "grid",
           // 22px 的文件夹格 = 图标左右各 --space-1：图标落在会话行图标槽那一列，名字落在会话标题那一列
@@ -965,27 +974,26 @@ function WorkspaceGroup(props: {
           不再另摆一个 chevron 占一列——那一列把工作区名推到了第四条左起线上。
           开合仍只认这一个键，名字留给双击改名，两个手势不打架。空组没有可折的，图标只是图标。
         */}
-        {props.sessions.length > 0 ? (
-          <button
-            type="button"
-            className="ws-fold"
-            aria-label={props.folded ? t.sidebar.expandGroup : t.sidebar.collapseGroup}
-            aria-expanded={!props.folded}
-            title={props.folded ? t.sidebar.expandGroup : t.sidebar.collapseGroup}
-            onClick={props.onToggleFold}
-          >
-            <Icon name={props.folded ? "folder" : "folder-open"} size={14} strokeWidth={1.8} />
-          </button>
-        ) : (
-          <span className="ws-fold" aria-hidden="true">
-            <Icon name="folder" size={14} strokeWidth={1.8} />
-          </span>
-        )}
+        {/* 键盘可达的开合键（Tab 到这里按空格 / 回车）；空工作区也能开合，展开后给一行「在这里新建」 */}
+        <button
+          type="button"
+          className="ws-fold"
+          aria-label={props.folded ? t.sidebar.expandGroup : t.sidebar.collapseGroup}
+          aria-expanded={!props.folded}
+          title={props.folded ? t.sidebar.expandGroup : t.sidebar.collapseGroup}
+          onClick={props.onToggleFold}
+        >
+          <Icon name={props.folded ? "folder" : "folder-open"} size={14} strokeWidth={1.8} />
+        </button>
 
         {editing === null ? (
           <strong
             title={t.sidebar.workspacePathTip(props.workspace.path)}
-            onDoubleClick={() => setEditing(props.workspace.name)}
+            onDoubleClick={() => {
+              // 双击的第一下 click 已经开合过一次，翻回来
+              props.onToggleFold();
+              setEditing(props.workspace.name);
+            }}
             style={{
               minWidth: 0,
               fontSize: "var(--font-size-base)",
@@ -993,7 +1001,7 @@ function WorkspaceGroup(props: {
               whiteSpace: "nowrap",
               overflow: "hidden",
               textOverflow: "ellipsis",
-              cursor: "default",
+              cursor: "pointer",
             }}
           >
             {/* 名字原样显示——「名字 == 路径」的老数据在 store 读时已治；悬停 tooltip 看全路径 */}
@@ -1096,6 +1104,17 @@ function WorkspaceGroup(props: {
       {!props.folded && (
         // 子项缩进到父项名字下（styles.css 的 .tree-children）：侧栏是索引，层级只能靠缩进读
         <div className="tree-children">
+          {props.sessions.length === 0 && (
+            // 空工作区展开后不是一片空白：一行灰字，点了就在这里新建任务
+            <NavRow
+              icon="plus"
+              label={t.sidebar.emptyWorkspaceNew}
+              active={false}
+              tone="var(--color-text-tertiary)"
+              onClick={props.onNewTask}
+              style={{ color: "var(--color-text-tertiary)" }}
+            />
+          )}
           {visible.map((meta) => (
             <SessionRow
               key={meta.id}
