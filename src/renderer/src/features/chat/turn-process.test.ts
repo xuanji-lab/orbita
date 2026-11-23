@@ -290,6 +290,39 @@ describe("批量网页变动不出卡（git clone / checkout 的副作用，不�
   });
 });
 
+describe("音视频产物：只显示最终回答里点了名的（13 个 mp3 的误报场景）", () => {
+  const candidates = [
+    { path: "/w/audio/final.mp3", duration: 231 },
+    { path: "/w/audio/part_1.mp3", duration: 38 },
+    { path: "/w/audio/part_2.mp3", duration: 40 },
+    { path: "/w/audio/test_bella.mp3", duration: 9 },
+  ];
+  const round = (answer: string, narration = "先生成两个试音文件 test_bella.mp3。") =>
+    [
+      user("u1", 1),
+      assistant("a1", 2, [{ type: "text", text: narration }, call("b1", "bash", { command: "say ... && ffmpeg ..." })]),
+      tool({ toolCallId: "b1", toolName: "bash", timestamp: 3 }),
+      assistant("a2", 4, [{ type: "text", text: answer }]),
+      { role: "file-turn", id: "ft1", timestamp: 5, changes: [], mediaArtifacts: candidates } as unknown as TranscriptItem,
+    ] as TranscriptItem[];
+  const mediaOf = (records: TranscriptItem[], active = false) => {
+    const out = view(records, active).find((e) => e.kind === "turnOutputs");
+    return out !== undefined && out.kind === "turnOutputs" ? out.media.map((m) => m.path) : null;
+  };
+  test("回答只点了成品：只出成品；过程里的旁白提到的试音文件不算", () => {
+    assert.deepEqual(mediaOf(round("成品是 final.mp3，3 分 51 秒。")), ["/w/audio/final.mp3"]);
+  });
+  test("回答没点名任何一个：不出结尾那摞", () => {
+    assert.equal(mediaOf(round("做好了，在 audio 目录里。")), null);
+  });
+  test("回答点了几个就出几个", () => {
+    assert.deepEqual(mediaOf(round("成品 final.mp3，另外 part_2.mp3 是第二段。")), ["/w/audio/final.mp3", "/w/audio/part_2.mp3"]);
+  });
+  test("还在跑的轮不出", () => {
+    assert.equal(mediaOf(round("成品是 final.mp3。"), true), null);
+  });
+});
+
 describe("钉在折叠外的工具：落定后卡片数据解析不出的收进过程行（2026-11-22 用户截图：show_plugin_board 一行英文名露在折叠外）", () => {
   const board = { plugin: "p", displayName: "P", title: "P", source: "installed", draftPath: null, at: 1, tuned: false, cards: [], skipped: [] };
   const round = (toolName: string, input: unknown, details: unknown, status: "complete" | "error" | "running" = "complete") =>

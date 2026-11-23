@@ -1,6 +1,8 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  MEDIA_ARTIFACT_BATCH_LIMIT,
+  capMediaArtifacts,
   dropSavedPages,
   foldWebArtifacts,
   isDownloadCommand,
@@ -380,5 +382,48 @@ describe("旁路网页只算这一条会话这一轮自己产生的（2026-11-22
     const accept = makeWebAccept("s1", windows.snapshot(T0 + 20_000), T0);
     const result = await scanWebArtifacts(oneRoot("/w"), T0 - 2000, fsOf({ "/w/old.html": T0 + 8_000, "/w/self.html": T0 + 8_000 }), { accept });
     deepStrictEqual(result.paths.map(normPosix), ["/w/old.html", "/w/self.html"]);
+  });
+});
+
+describe("音视频候选（同一次扫描、同一套时间窗）", () => {
+  it("扫描顺带收 mp3 / mp4 等，与网页分开放；旧文件与别的扩展名不收", async () => {
+    const fs = fakeFs(
+      { "/w": [
+        { name: "final.mp3", isDir: false },
+        { name: "part_1.MP3", isDir: false },
+        { name: "clip.mp4", isDir: false },
+        { name: "old.wav", isDir: false },
+        { name: "movie.mkv", isDir: false }, // 面板播不了的容器不收
+        { name: "page.html", isDir: false },
+      ] },
+      { "/w/final.mp3": 2000, "/w/part_1.MP3": 2000, "/w/clip.mp4": 2000, "/w/old.wav": 100, "/w/movie.mkv": 2000, "/w/page.html": 2000 },
+    );
+    const result = await scanWebArtifacts(oneRoot("/w"), 1000, fs);
+    deepStrictEqual(result.mediaPaths.map(normPosix), ["/w/clip.mp4", "/w/final.mp3", "/w/part_1.MP3"]);
+    deepStrictEqual(result.paths.map(normPosix), ["/w/page.html"]);
+  });
+
+  it("时间窗：mtime 不在脚本类工具窗口里的媒体不收（别的会话写的 / 模型想事情的空档）", async () => {
+    const fs = fakeFs({ "/w": [{ name: "in.mp3", isDir: false }, { name: "out.mp3", isDir: false }] }, { "/w/in.mp3": 5000, "/w/out.mp3": 90000 });
+    const accept = makeWebAccept("s1", [{ start: 4000, end: 6000 }], 1000);
+    const result = await scanWebArtifacts(oneRoot("/w"), 1000, fs, { accept });
+    deepStrictEqual(result.mediaPaths.map(normPosix), ["/w/in.mp3"]);
+  });
+
+  it("yt-dlp / youtube-dl 是下载命令：不开窗口（下载下来的不是本轮做的）", () => {
+    for (const command of ["yt-dlp -x --audio-format mp3 https://x/y", "youtube-dl https://x/y", "curl -O https://x/a.mp3"]) {
+      strictEqual(isDownloadCommand({ command }), true, command);
+      const windows = new ToolWindows();
+      windows.begin("c1", "bash", 1000, { command });
+      windows.finish("c1", 2000);
+      strictEqual(windows.snapshot(3000).length, 0, command);
+    }
+    strictEqual(isDownloadCommand({ command: "say -o a.aiff 你好 && ffmpeg -i a.aiff a.mp3" }), false);
+  });
+
+  it("capMediaArtifacts：超过批量上限一个不报", () => {
+    const few = Array.from({ length: MEDIA_ARTIFACT_BATCH_LIMIT }, (_, i) => `/w/${i}.mp3`);
+    deepStrictEqual(capMediaArtifacts(few), few);
+    deepStrictEqual(capMediaArtifacts([...few, "/w/extra.mp3"]), []);
   });
 });

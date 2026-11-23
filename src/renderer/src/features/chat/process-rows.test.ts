@@ -276,3 +276,28 @@ describe("stepVerb：子会话来往在过程行里的动作词", () => {
     assert.equal(stepVerb("report_to_parent", { kind: "failed", text: "崩了" }, zh.chat.stepVerb).verb, "报告失败");
   });
 });
+
+describe("音视频产物行（回答点了名的）", () => {
+  const media = [{ path: "/w/audio/final.mp3", duration: 231 }, { path: "/w/clip.mp4" }, { path: "/w/notes.txt" }];
+  test("按扩展名定音频 / 视频，带上量到的时长；认不得的扩展名不进", () => {
+    const outputs = allOutputs([], new Map(), [], [], media);
+    assert.deepEqual(outputs.map((o) => [o.kind, o.title, o.duration]), [["audio", "final.mp3", 231], ["video", "clip.mp4", undefined]]);
+  });
+  test("摆在 PDF 之后、网页之前；与文档同路径不重复", () => {
+    const outputs = allOutputs([], new Map(), ["/w/a.md"], ["/w/p.html"], [{ path: "/w/final.mp3" }]);
+    assert.deepEqual(outputs.map((o) => o.kind), ["doc", "audio", "web"]);
+  });
+  test("同类三份以上收成一张「3 段音频」", () => {
+    const slots = groupOutputs(allOutputs([], new Map(), [], [], [{ path: "/a/1.mp3" }, { path: "/a/2.mp3" }, { path: "/a/3.mp3" }]));
+    assert.equal(slots.length, 1);
+    const [slot] = slots;
+    assert.ok(slot !== undefined && slot.kind === "group" && slot.type === "audio");
+    assert.equal(zh.chat.outputGroup("audio", 3), "3 段音频");
+    assert.equal(en.chat.outputGroup("video", 2), "2 videos");
+  });
+  test("类型字：音频 · 3:51；量不到时长只写类型", () => {
+    assert.equal(zh.chat.outputMedia("audio", "3:51"), "音频 · 3:51");
+    assert.equal(zh.chat.outputMedia("video", null), "视频");
+    assert.equal(en.chat.outputMedia("audio", "3:51"), "Audio · 3:51");
+  });
+});

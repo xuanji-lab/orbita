@@ -448,6 +448,20 @@ describe("轮尾账 · 旁路网页产物（webArtifacts）", () => {
     assert.deepEqual((turns[0] as FileTurnRecord).webArtifacts, [html]);
   });
 
+  test("只有 mediaArtifacts（脚本生成的 mp3）的轮也落记录，时长原样读回；不参与撤销", async () => {
+    await store.record(ID, userItem("u1", "念成语音", 1000));
+    await store.record(ID, assistantItem("a1", 1100));
+    const mp3 = join(lab, "audio", "final.mp3");
+    const record = await store.recordFileTurn(ID, [], [], undefined, [{ path: mp3, duration: 231 }, { path: join(lab, "audio", "test_1.mp3") }]);
+    assert.ok(record !== null);
+    assert.equal(record.changes.length, 0);
+    assert.deepEqual(record.mediaArtifacts, [{ path: mp3, duration: 231 }, { path: join(lab, "audio", "test_1.mp3") }]);
+    const detail = await store.load(ID);
+    const turns = detail?.transcript.filter((entry) => entry.role === "file-turn") ?? [];
+    assert.equal(turns.length, 1);
+    assert.deepEqual((turns[0] as FileTurnRecord).mediaArtifacts, record.mediaArtifacts);
+  });
+
   test("changes 与 webArtifacts 都空 → 不落记录（没有产出的轮不产卡）", async () => {
     const record = await store.recordFileTurn(ID, []);
     assert.equal(record, null);

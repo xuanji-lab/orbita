@@ -65,6 +65,7 @@ import {
   type FileChange,
   type FileChangePayload,
   type FileTurnRecord,
+  type MediaArtifact,
 } from "../../shared/revert.ts";
 
 /**
@@ -506,8 +507,9 @@ export class SessionStore {
     changes: readonly FileChangePayload[],
     webArtifacts: readonly string[] = [],
     webArtifactsBatch?: number,
+    mediaArtifacts: readonly MediaArtifact[] = [],
   ): Promise<FileTurnRecord | null> {
-    if (changes.length === 0 && webArtifacts.length === 0 && webArtifactsBatch === undefined) return null;
+    if (changes.length === 0 && webArtifacts.length === 0 && webArtifactsBatch === undefined && mediaArtifacts.length === 0) return null;
     const persisted: FileChange[] = [];
     for (const change of changes) {
       persisted.push({
@@ -525,6 +527,7 @@ export class SessionStore {
       changes: persisted,
       ...(webArtifacts.length > 0 ? { webArtifacts: [...webArtifacts] } : {}),
       ...(webArtifactsBatch !== undefined ? { webArtifactsBatch } : {}),
+      ...(mediaArtifacts.length > 0 ? { mediaArtifacts: [...mediaArtifacts] } : {}),
     };
     await this.record(id, record);
     return record;

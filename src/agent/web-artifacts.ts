@@ -39,7 +39,7 @@
 import { open, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { TurnDirectories } from "../shared/agent-ipc.ts";
-import { isWebArtifactFile } from "../shared/files.ts";
+import { isMediaArtifactFile, isWebArtifactFile } from "../shared/files.ts";
 
 /**
  * mtime 判定的时钟余量（毫秒）。开轮时刻由 agent 进程的 `Date.now()` 记，文件
@@ -80,6 +80,11 @@ export interface ScanRoot {
 export interface WebScanResult {
   /** mtime 判为本轮新出现的网页文件绝对路径（按路径排序，显示稳定） */
   paths: string[];
+  /**
+   * 同一次扫描顺带收的音视频文件（mp3 / mp4 等，同样的 mtime 与时间窗判定，按路径排序）。
+   * 全部报上来、不在这里按名字筛——哪些是「交给用户的」由 renderer 按回答点名决定。
+   */
+  mediaPaths: string[];
   truncated: boolean;
 }
 
@@ -119,6 +124,7 @@ export async function scanWebArtifacts(
 ): Promise<WebScanResult> {
   const maxDepth = limits.maxDepth ?? SCAN_MAX_DEPTH;
   const paths = new Set<string>();
+  const mediaPaths = new Set<string>();
   let truncated = false;
   const scanned = new Set<string>();
   for (const { root, maxEntries } of roots) {
@@ -147,18 +153,18 @@ export async function scanWebArtifacts(
         if (entry.isDir) {
           if (SKIP_DIRS.has(entry.name) || depth + 1 > maxDepth) continue;
           queue.push({ dir: join(dir, entry.name), depth: depth + 1 });
-        } else if (isWebArtifactFile(entry.name)) {
+        } else if (isWebArtifactFile(entry.name) || isMediaArtifactFile(entry.name)) {
           const path = join(dir, entry.name);
           const mtimeMs = await fs.statFile(path);
           if (mtimeMs !== null && mtimeMs >= sinceMs && (limits.accept === undefined || limits.accept(path, mtimeMs))) {
-            paths.add(path);
+            (isWebArtifactFile(entry.name) ? paths : mediaPaths).add(path);
           }
         }
       }
     }
     if (rootTruncated) truncated = true;
   }
-  return { paths: [...paths].sort(), truncated };
+  return { paths: [...paths].sort(), mediaPaths: [...mediaPaths].sort(), truncated };
 }
 
 /**
@@ -175,7 +181,7 @@ export function isScriptTool(toolName: string): boolean {
  * 不是本轮做出来的东西（2026-11-23 会话 2defbe：调研时 curl 了五个官网页面去 grep，轮尾卡片把它们算成「5 个网页」）。
  * 这类命令不开窗口。代价：同一条命令里既下载又用脚本生成网页时，生成的那份漏报——宁可漏报，不替用户没做过的事背书。
  */
-const DOWNLOAD_COMMAND = /\b(?:curl|wget|Invoke-WebRequest|iwr)\b|\bgit\s+clone\b|\bgh\s+repo\s+clone\b/i;
+const DOWNLOAD_COMMAND = /\b(?:curl|wget|Invoke-WebRequest|iwr|yt-dlp|youtube-dl)\b|\bgit\s+clone\b|\bgh\s+repo\s+clone\b/i;
 
 export function isDownloadCommand(args: unknown): boolean {
   if (typeof args !== "object" || args === null || !("command" in args)) return false;
@@ -318,6 +324,16 @@ export function foldWebArtifacts(
     return { webArtifacts: [], webArtifactsBatch: paths.length };
   }
   return { webArtifacts: [...paths] };
+}
+
+/**
+ * 音视频候选的批量上限：超过就判定为批量操作（解压归档、整目录拷贝），一个不报——和网页的折叠同一条纪律，
+ * 只是媒体没有「N 个」那一行（卡片只显示回答点名的，没有批量计数可挂）。正常一轮脚本生成的分段 / 试音远低于此数。
+ */
+export const MEDIA_ARTIFACT_BATCH_LIMIT = 100;
+
+export function capMediaArtifacts(paths: readonly string[]): string[] {
+  return paths.length > MEDIA_ARTIFACT_BATCH_LIMIT ? [] : [...paths];
 }
 
 /**

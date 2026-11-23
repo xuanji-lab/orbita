@@ -425,6 +425,20 @@ describe("轮尾账的旁路网页产物（webArtifacts）", () => {
     assert.deepEqual(turns[0]?.webArtifacts, ["/w/out/proto.html"]);
   });
 
+  test("fileTurnView 只有 mediaArtifacts 也进槽（卡片按回答点名从候选里挑）", () => {
+    let states = applyAgentEvent(new Map(), progress("A", assistantDone("a1", "甲一")));
+    states = applyAgentEvent(states, {
+      type: "fileTurnView",
+      sessionId: "A",
+      turnId: "t1",
+      changes: [],
+      mediaArtifacts: [{ path: "/w/audio/final.mp3", duration: 231 }],
+    });
+    const turns = states.get("A")?.fileTurns ?? [];
+    assert.equal(turns.length, 1);
+    assert.deepEqual(turns[0]?.mediaArtifacts, [{ path: "/w/audio/final.mp3", duration: 231 }]);
+  });
+
   test("fileTurnView 两样都空不进槽（没有产出的轮不产卡）", () => {
     let states = applyAgentEvent(new Map(), progress("A", assistantDone("a1", "甲一")));
     states = applyAgentEvent(states, { type: "fileTurnView", sessionId: "A", turnId: "t1", changes: [] });

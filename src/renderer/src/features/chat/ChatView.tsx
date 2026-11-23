@@ -178,7 +178,7 @@ import { InlineName } from "../../shell/InlineName";
 import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { ImageRefCountContext, MarkdownBlock, TaskTitlesContext } from "./MarkdownBlock";
-import { sessionOutputs, type SessionOutputs } from "./child-outputs.ts";
+import { childRunSettled, sessionOutputs, type SessionOutputs } from "./child-outputs.ts";
 import { ChatFileScopeContext, loadChatImage, openChatFile, revealChatFile, useChatFileScope, useChatImage, type ChatFileScope } from "./chat-file-scope.ts";
 import { requestOpenPanel } from "../../shell/open-panel.ts";
 import {
@@ -192,12 +192,14 @@ import {
   allOutputs,
   mergeOutputs,
   groupOutputs,
+  type OutputGroupType,
   type ProcessImage,
   type ProcessRow,
   type StepVerb,
   type OutputSource,
   type TurnOutput,
 } from "./process-rows.ts";
+import { formatDuration } from "./media-outputs.ts";
 import { fileManagerKind } from "../../file-manager.ts";
 import { FileTypeIcon } from "../../shell/FileTypeIcon";
 import { HomeHero } from "./HomeHero";
@@ -5189,8 +5191,8 @@ function ProcessLightbox(props: { images: readonly ProcessImage[]; start: number
 function TurnOutputsBlock(props: { unit: TurnOutputsUnit; toolResults: ToolResultIndex; sessionId: string; channel: ChannelViewContext }) {
   const t = useT();
   const { channel } = props;
-  const mine = allOutputs(props.unit.calls, props.toolResults, props.unit.docs, props.unit.web);
-  const childOutputs = useChildrenOutputs(props.unit.children);
+  const mine = allOutputs(props.unit.calls, props.toolResults, props.unit.docs, props.unit.web, props.unit.media);
+  const childOutputs = useChildrenOutputs(props.unit.children, props.unit.children.map((child) => (channel.childPhaseOf(child.peerId) === "idle" ? "1" : "0")).join(""));
   // 子会话交回的产物和主会话自己的摆进同一摞：每张带上「来自子会话…」（标题 + 型号名）
   const fromChildren = props.unit.children.flatMap((child) => {
     const loaded = childOutputs.get(child.messageId);
@@ -5226,7 +5228,7 @@ function OutputStack(props: { outputs: readonly TurnOutput[]; sessionId: string;
   );
 }
 
-function OutputGroupCard(props: { type: "doc" | "pdf" | "web"; outputs: readonly TurnOutput[]; sessionId: string; openSession: ((childId: string) => void) | null }) {
+function OutputGroupCard(props: { type: OutputGroupType; outputs: readonly TurnOutput[]; sessionId: string; openSession: ((childId: string) => void) | null }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const first = props.outputs[0];
@@ -5258,53 +5260,71 @@ function OutputGroupCard(props: { type: "doc" | "pdf" | "web"; outputs: readonly
 }
 
 /** 子会话整条记录（交回卡算它的产出用）：按 id 读一次、缓存；读不到 = null */
-const childRecordsCache = new Map<string, Promise<readonly TranscriptRecord[] | null>>();
+const childRecordsCache = new Map<string, readonly TranscriptRecord[]>();
 
-/** 读一条交回消息对应的子会话产出（同一条只读一次；新的交回换一个键重读）；读不到 null */
-function loadChildOutputs(childId: string, messageId: string): Promise<SessionOutputs | null> {
+/**
+ * 交回时子会话的轮还没收尾：它交回（report_to_parent）之后还要说完收尾的话，文件账才落盘——实测慢模型要 30–40 秒
+ * （2026-11-23，deepseek-flash）。按这张间隔表重读（逐步放慢，共约 80 秒），收尾了就停。
+ */
+const CHILD_POLL_SCHEDULE_MS = [2000, 2000, 3000, 3000, 5000, 5000, 5000, 5000, 8000, 8000, 8000, 8000, 10000, 10000];
+
+/**
+ * 读一条交回消息对应的子会话产出；子会话的轮没收尾（childRunSettled）就按间隔表重读到收尾，
+ * 每读到一次回调一次。只有**收尾了**的记录才进缓存（没收尾的缓存下来就永远漏掉它的文件账）。
+ * 子会话转成空闲时调用方让它重新进来一次（useChildOutputs / useChildrenOutputs 的 idle 依赖；时间表之外的第二道触发，
+ * 慢模型收尾可能远超间隔表）。
+ * 返回取消函数。读不到 = null。
+ */
+function watchChildOutputs(childId: string, messageId: string, onValue: (outputs: SessionOutputs | null) => void): () => void {
   const key = `${childId}:${messageId}`;
-  let promise = childRecordsCache.get(key);
-  if (promise === undefined) {
-    promise = api.session
-      .load(childId)
-      .then((detail) => (detail === null ? null : (detail.transcript as readonly TranscriptRecord[])))
-      .catch(() => null);
-    childRecordsCache.set(key, promise);
-  }
-  return promise.then((records) => (records === null ? null : sessionOutputs(records)));
+  let alive = true;
+  let timer: number | undefined;
+  let tries = 0;
+  let previousLength = -1;
+  const step = async (): Promise<void> => {
+    let records: readonly TranscriptRecord[] | null = childRecordsCache.get(key) ?? null;
+    if (records === null) {
+      records = await api.session
+        .load(childId)
+        .then((detail) => (detail === null ? null : (detail.transcript as readonly TranscriptRecord[])))
+        .catch(() => null);
+      if (records !== null && childRunSettled(records, previousLength)) childRecordsCache.set(key, records);
+    }
+    if (!alive) return;
+    onValue(records === null ? null : sessionOutputs(records));
+    const wait = CHILD_POLL_SCHEDULE_MS[tries];
+    if (records === null || childRunSettled(records, previousLength) || wait === undefined) return;
+    previousLength = records.length;
+    tries += 1;
+    timer = window.setTimeout(() => void step(), wait);
+  };
+  void step();
+  return () => {
+    alive = false;
+    if (timer !== undefined) window.clearTimeout(timer);
+  };
 }
 
-function useChildOutputs(childId: string, messageId: string): SessionOutputs | null | undefined {
+function useChildOutputs(childId: string, messageId: string, idle: boolean): SessionOutputs | null | undefined {
   const [value, setValue] = useState<SessionOutputs | null | undefined>(undefined);
-  useEffect(() => {
-    let alive = true;
-    void loadChildOutputs(childId, messageId).then((outputs) => {
-      if (alive) setValue(outputs);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [childId, messageId]);
+  useEffect(() => watchChildOutputs(childId, messageId, setValue), [childId, messageId, idle]);
   return value;
 }
 
 /** 一轮里被交回的几个子会话的产出（按交回先后），读好一个出一个；键 = 交回消息 id */
-function useChildrenOutputs(children: readonly { peerId: string; messageId: string }[]): ReadonlyMap<string, SessionOutputs | null> {
+function useChildrenOutputs(children: readonly { peerId: string; messageId: string }[], idleKey: string): ReadonlyMap<string, SessionOutputs | null> {
   const [loaded, setLoaded] = useState<ReadonlyMap<string, SessionOutputs | null>>(new Map());
   const signature = children.map((child) => `${child.peerId}:${child.messageId}`).join("|");
   useEffect(() => {
-    let alive = true;
-    for (const child of children) {
-      void loadChildOutputs(child.peerId, child.messageId).then((outputs) => {
-        if (alive) setLoaded((previous) => new Map(previous).set(child.messageId, outputs));
-      });
-    }
+    const stops = children.map((child) =>
+      watchChildOutputs(child.peerId, child.messageId, (outputs) => setLoaded((previous) => new Map(previous).set(child.messageId, outputs))),
+    );
     return () => {
-      alive = false;
+      for (const stop of stops) stop();
     };
-    // children 的内容由 signature 代表
+    // children 的内容由 signature 代表；idleKey = 各子会话此刻是否空闲，变了就重新读一遍
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signature]);
+  }, [signature, idleKey]);
   return loaded;
 }
 
@@ -5318,7 +5338,7 @@ function ChildReportCard(props: { mark: { peerId: string; messageId: string; kin
   const title = peerTitleOf(channel, mark.peerId, t);
   const message = channel.channelMessages.get(mark.messageId);
   const first = (message?.text ?? "").split("\n").find((line) => line.trim() !== "")?.trim() ?? "";
-  const outputs = useChildOutputs(mark.peerId, mark.messageId);
+  const outputs = useChildOutputs(mark.peerId, mark.messageId, channel.childPhaseOf(mark.peerId) === "idle");
   const open = channel.openSubSession;
   const edited = outputs === undefined || outputs === null ? 0 : outputs.edited.length;
   // 一行：「「标题」交回了 · 型号名 · 报告第一行 ［看它的会话］」。它做出来的东西不再包在这里，摆进这一轮结尾的产物摞（TurnOutputsBlock）
@@ -5379,7 +5399,9 @@ function TurnOutputCard(props: { output: TurnOutput; sessionId: string; openSess
         ? t.chat.outputDeck(output.pages)
         : output.kind === "web"
           ? t.chat.outputWeb
-          : t.chat.outputDoc;
+          : output.kind === "audio" || output.kind === "video"
+            ? t.chat.outputMedia(output.kind, formatDuration(output.duration))
+            : t.chat.outputDoc;
   const preview = () => {
     setRefusal(null);
     if (output.kind === "web" && output.format === null) {

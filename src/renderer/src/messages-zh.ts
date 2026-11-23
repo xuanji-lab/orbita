@@ -2228,8 +2228,11 @@ export const zh: Messages = {
     outputDeck: (pages) => (pages === null ? "演示文稿" : `演示文稿 · ${pages} 页`),
     outputDoc: "文档",
     outputWeb: "网页",
+    /** 音频 / 视频行的类型字：「音频 · 3:51」；量不到时长就只写类型 */
+    outputMedia: (kind, clock) => `${kind === "audio" ? "音频" : "视频"}${clock === null ? "" : ` · ${clock}`}`,
     outputPreview: "预览",
-    outputGroup: (type, n) => (type === "doc" ? `${n} 份文档` : type === "web" ? `${n} 个网页` : `${n} 个 PDF`),
+    outputGroup: (type, n) =>
+      type === "doc" ? `${n} 份文档` : type === "web" ? `${n} 个网页` : type === "audio" ? `${n} 段音频` : type === "video" ? `${n} 个视频` : `${n} 个 PDF`,
     childReportHead: (title) => `「${title}」交回了`,
     outputFromChildShort: "来自子会话",
     outputFromLead: "来自",

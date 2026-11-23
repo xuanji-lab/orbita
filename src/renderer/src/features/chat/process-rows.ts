@@ -10,6 +10,8 @@
  * 纯模块：不 import React，可被 node --test 直接加载。
  */
 import { readCommandCard } from "../../../../shared/builtin-command.ts";
+import { mediaArtifactKind } from "../../../../shared/files.ts";
+import type { MediaArtifact } from "../../../../shared/revert.ts";
 import { parseQualifiedToolName } from "../../../../shared/mcp.ts";
 import { skillForReadPath } from "../../../../shared/skill.ts";
 import { builtinCommand, docEditPath, docEditLabel, fileLabel } from "./builtin-commands.ts";
@@ -241,7 +243,7 @@ export interface TurnOutput {
    * 按**文件类型**分（2026-11-22 用户：「这个导出的文件是什么意思」）：演示文稿（含导出的 PowerPoint）、文档（含导出的 Word / Markdown）、
    * PDF、网页。不再有「导出的文件」这一类。`format` 非 null = 这份是导出来的文件：预览在文件面板里开，不进演示文稿 / 文档编辑面板。
    */
-  kind: "slides" | "doc" | "pdf" | "web";
+  kind: "slides" | "doc" | "pdf" | "web" | "audio" | "video";
   /** 绝对路径（去重键） */
   path: string;
   title: string;
@@ -251,6 +253,8 @@ export interface TurnOutput {
   format: string | null;
   /** 导出文件的说明（「PDF · 3 页 · 171 KB」，工具结果卡上带的）；没有 null */
   detail: string | null;
+  /** 音视频的时长（秒；agent 读容器头量到才有，量不到缺席 = 不显示） */
+  duration?: number;
   /** 这份是哪个子会话交回来的（和主会话自己的产物摆在同一摞里，卡上多一行「来自子会话…」）；主会话自己的没有 */
   source?: OutputSource;
 }
@@ -389,12 +393,26 @@ export function fileOutputs(kind: "web" | "doc", paths: readonly string[]): Turn
 }
 
 /**
+ * 回答里点了名的音视频 → 产物行（类型由扩展名定，量得到时长就带上）。调用方已按点名过滤（media-outputs.ts）。
+ */
+export function mediaOutputs(media: readonly MediaArtifact[]): TurnOutput[] {
+  const out: TurnOutput[] = [];
+  for (const item of media) {
+    const kind = mediaArtifactKind(item.path);
+    if (kind === null) continue;
+    out.push({ kind, path: item.path, title: basename(item.path), pages: null, format: null, detail: null, ...(item.duration !== undefined ? { duration: item.duration } : {}) });
+  }
+  return out;
+}
+
+/**
  * 结尾这一摞产物：工具做出来的（演示文稿、文档、导出）+ 这一轮写的文档 + 网页，按路径去重（doc_open 打开过、
  * 又被 edit 改过的文档只算一份）。顺序：演示文稿与文档在前，导出的文件，最后网页。
  */
 /** 结尾那摞的顺序：演示文稿与文档在前，PDF，最后网页；同一类里保持原顺序（稳定排序） */
 export function sortOutputs(outputs: readonly TurnOutput[]): TurnOutput[] {
-  const order = (output: TurnOutput) => (output.kind === "slides" || output.kind === "doc" ? 0 : output.kind === "pdf" ? 1 : 2);
+  const order = (output: TurnOutput) =>
+    output.kind === "slides" || output.kind === "doc" ? 0 : output.kind === "pdf" ? 1 : output.kind === "audio" ? 2 : output.kind === "video" ? 3 : 4;
   return [...outputs].sort((a, b) => order(a) - order(b));
 }
 
@@ -415,11 +433,17 @@ export function mergeOutputs(main: readonly TurnOutput[], fromChildren: readonly
   return sortOutputs([...main, ...extra]);
 }
 
-export function allOutputs(calls: readonly ToolCallUnit[], results: ToolResultIndex, docs: readonly string[], web: readonly string[]): TurnOutput[] {
+export function allOutputs(
+  calls: readonly ToolCallUnit[],
+  results: ToolResultIndex,
+  docs: readonly string[],
+  web: readonly string[],
+  media: readonly MediaArtifact[] = [],
+): TurnOutput[] {
   const norm = (path: string) => path.replace(/\\/g, "/");
   const made = turnOutputs(calls, results);
   const seen = new Set(made.map((output) => norm(output.path)));
-  const more = [...fileOutputs("doc", docs), ...fileOutputs("web", web)].filter((output) => !seen.has(norm(output.path)));
+  const more = [...fileOutputs("doc", docs), ...fileOutputs("web", web), ...mediaOutputs(media)].filter((output) => !seen.has(norm(output.path)));
   return sortOutputs([...made, ...more]);
 }
 
@@ -584,7 +608,8 @@ export function processRows(steps: readonly ProcessStep[]): ProcessRow[] {
  */
 export const GROUP_MIN = 3;
 
-export type OutputSlot = { kind: "one"; output: TurnOutput } | { kind: "group"; type: "doc" | "pdf" | "web"; outputs: TurnOutput[] };
+export type OutputGroupType = "doc" | "pdf" | "web" | "audio" | "video";
+export type OutputSlot = { kind: "one"; output: TurnOutput } | { kind: "group"; type: OutputGroupType; outputs: TurnOutput[] };
 
 export function groupOutputs(outputs: readonly TurnOutput[]): OutputSlot[] {
   const count = new Map<string, number>();
