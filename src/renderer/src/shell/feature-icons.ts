@@ -18,6 +18,8 @@ export const FEATURE_ICON = {
   task: "clipboard-list",
   /** 以后再做（遗留事项）：侧栏子视图、收尾扫描卡、收工卡 */
   carryovers: "hourglass",
+  /** 状态卡：对话区右上角收起时那颗钮与卡头（2026-11-23 用户：与「这条任务」、会话胶囊撞了） */
+  status: "gauge",
   /** 记忆库：右栏入口、「用到 N 条记忆」chip、审查面板的记忆页签与空态 */
   memory: "notebook-text",
   /** 自动化：面板标题与空态、聊天里建自动化的卡与唤醒行、周看板的排定运行 */
