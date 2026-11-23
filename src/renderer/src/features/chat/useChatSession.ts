@@ -87,6 +87,7 @@ import {
   type ChannelMarkRecord,
   type CompactedRecord,
   type SessionMeta,
+  type SessionWindowDetail,
   type SessionMoveResult,
 } from "@shared/session";
 import type { FileTurnView, RevertPlan, RevertRecord, UndoPlan, UndoRecord } from "@shared/revert";
@@ -1278,6 +1279,8 @@ function filesField(files: readonly ComposerFileRef[] | undefined): { files?: Pr
 export function useSessionView(engine: SessionEngine, key: string): ChatSession {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  /** openSession 的票号：只有最后一次点开的那条落地（见 openSession） */
+  const openTicket = useRef(0);
   /** 本槽成功并入的早页数（滚动锚定的判据，见 ChatSession.olderPages） */
   const [olderPages, setOlderPages] = useState(0);
   const [opened, setOpened] = useState<SessionMeta | null>(null);
@@ -2160,11 +2163,21 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       if (id === sessionRef.current) return Promise.resolve();
       engine.setError(null);
       setLoadingHistory(true);
-      return api.session
-        .load(id)
-        .then((detail) => {
+      // 实验分支（切换会话卡顿）：
+      // 1. 槽已经在（这条会话本次启动里打开过 / 正在跑），转录本来就不会重种——那就别让主进程把整份
+      //    JSONL 读一遍解析一遍再丢掉，只取 meta（cwd / 归属 / 档位 / 模型）。
+      // 2. 后点的赢：连点两条时，先点的那条读得慢、晚回来，不能把后点的那条盖掉。
+      const ticket = (openTicket.current += 1);
+      const request: Promise<{ meta: SessionMeta; seed: SessionWindowDetail | null } | null> = engine.statesRef.current.has(id)
+        ? api.session.meta(id).then((meta) => (meta === null ? null : { meta, seed: null }))
+        : api.session.load(id).then((loaded) => (loaded === null ? null : { meta: loaded.meta, seed: loaded }));
+      return request
+        .then((opened) => {
+          if (ticket !== openTicket.current) return;
           setLoadingHistory(false);
-          if (detail === null) return;
+          if (opened === null) return;
+          const detail = { meta: opened.meta };
+          const seed = opened.seed;
           // meta（cwd / 归属 / 权限档 / 模型）两条路都要恢复
           setOpened(detail.meta);
           setCwd(detail.meta.cwd);
@@ -2211,13 +2224,14 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           const live = (engine.statesRef.current.get(id)?.phase ?? "idle") !== "idle";
           setSessionId(live ? id : null);
           sessionRef.current = live ? id : null;
-          if (!engine.statesRef.current.has(id)) {
+          if (seed !== null && !engine.statesRef.current.has(id)) {
             engine.applyStates((prev) =>
-              seedFromDisk(prev, id, detail.transcript, detail.meta.stats, detail.window),
+              seedFromDisk(prev, id, seed.transcript, seed.meta.stats, seed.window),
             );
           }
         })
         .catch((cause: unknown) => {
+          if (ticket !== openTicket.current) return;
           setLoadingHistory(false);
           engine.setError(cause instanceof Error ? cause.message : String(cause));
         });

@@ -11,12 +11,25 @@ import { useEffect, useState } from "react";
 import { api } from "../../api";
 import type { ChannelSummary } from "@shared/channel";
 
-export function useChannelSummaries(parentId: string | null): ReadonlyMap<string, ChannelSummary> {
-  const [summaries, setSummaries] = useState<ReadonlyMap<string, ChannelSummary>>(new Map());
+/** 摘要与它的归属：`loadedFor` 等于当前 parentId 才说明这份摘要是这个父的、而且已经取回来了 */
+export interface ChannelSummariesState {
+  summaries: ReadonlyMap<string, ChannelSummary>;
+  loadedFor: string | null;
+}
+
+const EMPTY: ReadonlyMap<string, ChannelSummary> = new Map();
+
+/**
+ * 带「取回来没有」的版本。以前只回一张 Map：刚挂载（或父会话刚换）时它是空的 / 还是上一个父的，
+ * 调用方分不清「这条子会话没有通道」与「还没取回来」——子会话面板把后者当成「通道还开着」，
+ * 于是每次切会话都把全部子会话的转录整份读一遍（实验分支：切换会话卡顿的根因之一）。
+ */
+export function useChannelSummariesState(parentId: string | null): ChannelSummariesState {
+  const [state, setState] = useState<ChannelSummariesState>({ summaries: EMPTY, loadedFor: null });
 
   useEffect(() => {
     if (parentId === null) {
-      setSummaries(new Map());
+      setState({ summaries: EMPTY, loadedFor: null });
       return;
     }
     let cancelled = false;
@@ -25,7 +38,7 @@ export function useChannelSummaries(parentId: string | null): ReadonlyMap<string
         .list(parentId)
         .then((list) => {
           if (cancelled) return;
-          setSummaries(new Map(list.map((summary) => [summary.childId, summary])));
+          setState({ summaries: new Map(list.map((summary) => [summary.childId, summary])), loadedFor: parentId });
         })
         .catch((cause: unknown) => {
           // 错误不吞：读不出来打到控制台，旧值保留——一次网络抖动不该让已知的
@@ -43,5 +56,10 @@ export function useChannelSummaries(parentId: string | null): ReadonlyMap<string
     };
   }, [parentId]);
 
-  return summaries;
+  // 父会话刚换、新的还没取回来：不拿上一个父的摘要充数
+  return state.loadedFor === parentId ? state : { summaries: EMPTY, loadedFor: null };
+}
+
+export function useChannelSummaries(parentId: string | null): ReadonlyMap<string, ChannelSummary> {
+  return useChannelSummariesState(parentId).summaries;
 }

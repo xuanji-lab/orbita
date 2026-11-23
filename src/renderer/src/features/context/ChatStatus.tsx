@@ -20,7 +20,7 @@ import { useProgressDigest } from "./TaskProgress";
 import { useGoalLedger } from "./useGoalLedger.ts";
 import type { PlanStep } from "./plan-timeline.ts";
 import { STATUS_FOCUS_EVENT, type StatusFocusDetail } from "./chat-status-flag.ts";
-import { LruCache } from "../../../../shared/lru.ts";
+import { childTailFresh, peekChildTail, readChildTail } from "../chat/child-tails.ts";
 import { OutputThumb, SlideStyles } from "./StatusThumb";
 import {
   childActivityOf,
@@ -797,22 +797,20 @@ function useTicker(sinces: readonly number[], setNow: (now: number) => void): vo
   }, [key]);
 }
 
-/**
- * 子会话尾窗的跨挂载缓存（按子会话 id；updatedAt 没变就不重读）：状态卡按会话重挂，
- * 不缓存的话每次切回都要把每个子会话重读一遍，卡里「在跑的」先空再出。
- */
-const childTailCache = new LruCache<{ updatedAt: number; records: readonly TranscriptRecord[] }>(60);
-
 function cachedTails(kids: readonly SessionMeta[]): ReadonlyMap<string, readonly TranscriptRecord[]> {
   const map = new Map<string, readonly TranscriptRecord[]>();
   for (const meta of kids) {
-    const hit = childTailCache.get(meta.id);
-    if (hit !== undefined) map.set(meta.id, hit.records);
+    const hit = peekChildTail(meta.id);
+    if (hit !== undefined) map.set(meta.id, hit);
   }
   return map;
 }
 
-/** 子会话的转录尾窗（原型：每个子会话读一次尾窗，meta 的 updatedAt 变了重读；真功能里应由主进程推一行「在跑什么」） */
+/**
+ * 子会话的转录尾窗（原型：每个子会话读一次尾窗，meta 的 updatedAt 变了重读；真功能里应由主进程推一行「在跑什么」）。
+ * 缓存与右栏子会话面板共用一份（chat/child-tails.ts）：按子会话 id，updatedAt 没变就不重读；卡按会话重挂，
+ * 不缓存的话每次切回都要把每个子会话重读一遍，卡里「在跑的」先空再出。
+ */
 function useChildTails(kids: readonly SessionMeta[]): ReadonlyMap<string, readonly TranscriptRecord[]> {
   // 第一帧就用缓存里旧的，后台再校验
   const [tails, setTails] = useState<ReadonlyMap<string, readonly TranscriptRecord[]>>(() => cachedTails(kids));
@@ -821,12 +819,12 @@ function useChildTails(kids: readonly SessionMeta[]): ReadonlyMap<string, readon
     let alive = true;
     setTails(cachedTails(kids));
     void (async () => {
-      const queue = kids.filter((meta) => childTailCache.get(meta.id)?.updatedAt !== meta.updatedAt);
+      const queue = kids.filter((meta) => !childTailFresh(meta));
       if (queue.length === 0) return;
       const worker = async () => {
-        for (let meta = queue.shift(); meta !== undefined; meta = queue.shift()) {
-          const detail = await api.session.load(meta.id).catch(() => null);
-          childTailCache.set(meta.id, { updatedAt: meta.updatedAt, records: (detail?.transcript ?? []) as readonly TranscriptRecord[] });
+        // 卡卸载（切走了）就不再往下读
+        for (let meta = queue.shift(); meta !== undefined && alive; meta = queue.shift()) {
+          await readChildTail(meta);
         }
       };
       await Promise.all([worker(), worker(), worker(), worker()]);

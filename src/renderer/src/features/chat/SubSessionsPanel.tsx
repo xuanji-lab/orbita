@@ -34,7 +34,8 @@ import { Chip } from "../../shell/Chip";
 import { Menu, type MenuItem } from "../../shell/Menu";
 import { api } from "../../api";
 import { modelChipParts, ModelPickerMenu } from "../settings/model-menu";
-import { useChannelSummaries } from "./useChannelSummaries";
+import { useChannelSummariesState } from "./useChannelSummaries";
+import { childTailFresh, peekChildTail, readChildTail } from "./child-tails.ts";
 import { useParentChannels } from "./useChannelMessages";
 import {
   childActivityOf,
@@ -104,7 +105,9 @@ export function SubSessionsPanel(props: {
 }) {
   const t = useT();
   const children = childSessions(props.session.sessions, props.parentId);
-  const summaries = useChannelSummaries(props.parentId);
+  const { summaries, loadedFor } = useChannelSummariesState(props.parentId);
+  // 摘要还没取回来时不能判断哪些子会话「通道还开着」（见 useChannelSummariesState 的注释）
+  const summariesReady = loadedFor === props.parentId;
   // 通道全文（收件箱行的最新一句）：hook 必须在两层分支之前——列表层用它，会话层
   // 不用也不能少这一条（hook 数量不能随层切换变，同 ChatView 首页分支的纪律）
   const channels = useParentChannels(props.parentId, children.map((meta) => meta.id));
@@ -205,6 +208,7 @@ export function SubSessionsPanel(props: {
           parentId={props.parentId}
           children={children}
           summaries={summaries}
+          summariesReady={summariesReady}
           channels={channels}
           engine={props.engine}
           session={props.session}
@@ -266,23 +270,28 @@ function SubSessionList(props: {
   parentId: string;
   children: readonly SessionMeta[];
   summaries: ReadonlyMap<string, ChannelSummary>;
+  /** 摘要是不是已经取回来了：没取回来之前谁「通道还开着」无从判断，一条都不读 */
+  summariesReady: boolean;
   channels: ReadonlyMap<string, readonly ChannelMessage[]>;
   engine: SessionEngine;
   session: ChatSession;
   onOpenChild: (childId: string) => void;
 }) {
   const t = useT();
-  const { children, summaries, channels, engine, session } = props;
-  // 转录尾巴只给「通道还开着」的读（在跑什么、计划在做哪步）；交回 / 失败 / 停止的不读，四十个里只读在跑的那十几个
+  const { children, summaries, summariesReady, channels, engine, session } = props;
+  // 转录尾巴只给「通道还开着」的读（在跑什么、计划在做哪步）；交回 / 失败 / 停止的不读，四十个里只读在跑的那十几个。
+  // **摘要没取回来时一条都不读**：那一瞬间每条的 status 都是 undefined，会被当成「全部在跑」把全部子会话整份读一遍
   const openIds = useMemo(
     () =>
-      children
-        .filter((meta) => {
-          const status = summaries.get(meta.id)?.status;
-          return status === undefined || status === "running";
-        })
-        .map((meta) => meta.id),
-    [children, summaries],
+      !summariesReady
+        ? []
+        : children
+            .filter((meta) => {
+              const status = summaries.get(meta.id)?.status;
+              return status === undefined || status === "running";
+            })
+            .map((meta) => meta.id),
+    [children, summaries, summariesReady],
   );
   const tails = useChildTails(children, openIds, engine);
   const [now, setNow] = useState(() => Date.now());
@@ -501,7 +510,8 @@ function useChildTails(
   ids: readonly string[],
   engine: SessionEngine,
 ): ReadonlyMap<string, readonly TranscriptRecord[]> {
-  const [loaded, setLoaded] = useState<ReadonlyMap<string, readonly TranscriptRecord[]>>(new Map());
+  // 版本号只为让缓存更新后重渲染；数据在 child-tails.ts 的共用缓存里（状态卡同一份）
+  const [, setVersion] = useState(0);
   const wanted = useMemo(() => new Set(ids), [ids]);
   const key = children
     .filter((meta) => wanted.has(meta.id) && engine.states.get(meta.id) === undefined)
@@ -509,28 +519,29 @@ function useChildTails(
     .join(",");
   useEffect(() => {
     let alive = true;
-    const queue = key === "" ? [] : key.split(",").map((part) => part.split(":")[0] ?? "");
+    const queue = children.filter((meta) => wanted.has(meta.id) && engine.states.get(meta.id) === undefined && !childTailFresh(meta));
+    if (queue.length === 0) return undefined;
     void (async () => {
-      const next = new Map<string, readonly TranscriptRecord[]>();
       const worker = async (): Promise<void> => {
-        for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
-          const detail = await api.session.load(id).catch(() => null);
-          next.set(id, (detail?.transcript ?? []) as readonly TranscriptRecord[]);
+        // 面板卸载（切走了）就不再往下读：以前队列会在后台读到底
+        for (let meta = queue.shift(); meta !== undefined && alive; meta = queue.shift()) {
+          await readChildTail(meta);
         }
       };
       await Promise.all([worker(), worker(), worker(), worker()]);
-      if (alive) setLoaded(next);
+      if (alive) setVersion((value) => value + 1);
     })();
     return () => {
       alive = false;
     };
+    // children / wanted 的内容由 key 代表
   }, [key]);
   const out = new Map<string, readonly TranscriptRecord[]>();
   for (const id of ids) {
     const entry = engine.states.get(id);
     if (entry !== undefined) out.set(id, selectTranscript(entry.transcript) as readonly TranscriptRecord[]);
     else {
-      const tail = loaded.get(id);
+      const tail = peekChildTail(id);
       if (tail !== undefined) out.set(id, tail);
     }
   }
