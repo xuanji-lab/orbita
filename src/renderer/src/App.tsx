@@ -930,7 +930,7 @@ export function App() {
 
   // ── 面板打开次数（shared/panel-usage.ts，本机的统计）──────
   // 只记用户自己打开的：右栏换成别的面板（不管从哪个入口：图标条、「更多」、对话里的
-  // 链接、快捷键、「/ + 空格」），「这条任务」开着时切到上下文页签，记忆库 / 遗留 / 归档
+  // 链接、快捷键、「/ + 空格」），「这条任务」开着时切到上下文页签，记忆库 / 归档
   // 打开，铃铛与内置浏览器在各自的入口记。按会话恢复的面板不记（panelRestoredRef）。
   // 只在本机、不上传；失败就算了——这是一份看个大概的统计，不值得打扰用户
   const countPanel = useCallback((key: PanelUsageKey) => {
@@ -1073,16 +1073,12 @@ export function App() {
   const mainMeta = mainSessionId === null ? undefined : session.sessions.find((meta) => meta.id === mainSessionId);
 
   /**
-   * 右栏底部的应用入口（wafo 2026-09-22：设置、遗留、归档全拸到右栏底部 stack，
+   * 右栏底部的应用入口（wafo 2026-09-22：设置、归档拸到右栏底部 stack，
    * 首页常驻——它们是应用入口不是会话动作）。点亮判定与互斥规则沿用侧栏
    * 底部行时代的行为：子视图互斥，设置盖着时谁也不亮。
    *
-   * 遗留事项入口**常驻**，0 条也在（wafo 2026-09-25）：以前 0 条不渲染，导入的会话
-   * 没走过收尾、一条遗留都没有，这个入口就整个不见了——用户不知道有这个功能，
-   * 也没法确认「现在确实没有遗留」。点进去是面板自己的空态。
-   *
    * 点亮判定与点击落点在 `rail-subview.ts`（纯函数，带测试）：没亮 = 打开该子视图
-   * 并**退出设置**——设置页里点这两个入口以前只是在底下翻转开关，界面不动。
+   * 并**退出设置**——设置页里点入口以前只是在底下翻转开关，界面不动。
    */
   // 子会话不参与归档（子会话 PR4c 2.3：session.ts 的契约），角标按根会话数
   const archivedCount = rootSessions(session.sessions).filter((m) => m.archived).length;

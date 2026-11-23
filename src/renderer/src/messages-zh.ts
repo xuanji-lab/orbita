@@ -1287,7 +1287,7 @@ export const zh: Messages = {
     compactHistory: "历史",
     compactSummary: "折成摘要",
     choreModel: "家务活模型",
-    choreModelInfo: "给任务起名、导入时过滤只发了一句的会话 · 一次小调用，快模型就够 · 以后还会把更多家务交给它",
+    choreModelInfo: "给任务起名、导入时过滤只发了一句的会话 · 一次小调用，快模型就够",
     choreModelTip: "家务活用任务正在用的模型",
     sameAsSession: "与会话相同",
     sameAsSessionHint: "用任务正在用的模型",
@@ -1635,7 +1635,7 @@ export const zh: Messages = {
       unpriced: "缺官方单价",
       unpricedTip: "在这个型号的设置里填上费率，就能画进图里",
       borrowNote: "榜单没评的档借同型号评过的最高档的分（点线框）。榜单没评，说明这一档不值得单独测——做任务推荐用榜单评过的档。",
-      explainer: "一个任务 = 收尾时确认的一件「做完的事」：花费是那几轮的合计，算给那几轮里 token 最多的型号 × 档；子会话交回结果算一件。没收尾确认过的会话不进实测。",
+      explainer: "一个任务 = 一个子会话交回的结果：花费是整个子会话的合计，算给它里面 token 最多的型号 × 档。主会话不算任务，不进实测。",
       planNote: "套餐与订阅按官方单价折算。",
       source: (date: string, revision: string) =>
         `分数：Arena（arena.ai）· lmarena-ai/leaderboard-dataset · CC BY 4.0 · 榜单 ${date} · revision ${revision} · Orbita 选取了子集与列`,
@@ -3130,7 +3130,7 @@ export const zh: Messages = {
           roles: {
             name: "模型分工",
             title: "三个岗位，各\u2060配一个模型",
-            body: "**主力**是你在输入框里选的那个，干正事；**子会话**是它派出去的帮手用的；**家务活**给任务起名、收尾扫描这类小活，快模型就够。",
+            body: "**主力**是你在输入框里选的那个，干正事；**子会话**是它派出去的帮手用的；**家务活**给任务起名、导入时过滤只发了一句的会话这类小活，快模型就够。",
             notes: ["家务活模型：设置 › 通用。", "子会话模型：不选就跟主力一样。"],
           },
           import: {

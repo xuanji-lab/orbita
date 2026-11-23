@@ -58,7 +58,6 @@ export function ContextPanel(props: {
   onTab: (tab: TaskPanelTab) => void;
   /** 会话运行态（runStateOf，侧栏状态饼同一个推导）：进度页签头一行的在跑 / 等你 */
   runState: SessionRunState;
-  /** 这条会话收割的遗留（进度页签的「留到以后」） */
   /** 「带着目标开新会话」（App 的 startGoalTask） */
   onStartGoalTask: (sourceSessionId: string, makeSeed: (sourceTitle: string | null) => string | null) => void;
   /**

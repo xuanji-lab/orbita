@@ -74,7 +74,7 @@ export function Drawer(props: {
   // 新任务发出第一句话、拿到真 id：它成为一个真标签，激活跟随。
   // 判据是「正激活着新任务页」，不是「docked 里有 new 占位」——占位从来不落盘，App 存进
   // docked 的列表里压根没有它（onDockedChange 把它滤掉了），按占位判的话这一步永远不触发，
-  // 新任务发完首句会一直挂着「新任务」没有 id、完成键与改名（顶部胶囊拿不到会话信息）。
+  // 新任务发完首句会一直挂着「新任务」没有 id、改名（顶部胶囊拿不到会话信息）。
   useEffect(() => {
     const id = props.view.sessionId;
     if (id === null || activeTab !== NEW_TASK_TAB) return;
@@ -143,8 +143,8 @@ export function Drawer(props: {
   const showPicker = picking || activeTab === null;
 
   // 页头住顶部右栏胶囊（DrawerCap）：左段是激活的会话，右段是其它标签 + 「+」。
-  // 激活的是落盘会话时，完成键 / 收尾仪式作用在抽屉槽正开着的那条——标签刚切换、槽还没
-  // 换过来的那一帧不摆完成键，免得把「完成」点到上一条会话头上
+  // 激活的是落盘会话时，改名作用在抽屉槽正开着的那条——标签刚切换、槽还没
+  // 换过来的那一帧不摆，免得改到上一条会话头上
   const realTab = activeTab !== null && activeTab !== NEW_TASK_TAB ? activeTab : null;
   const activeMeta = realTab === null ? null : findMeta(props.engine, realTab);
   const cap =

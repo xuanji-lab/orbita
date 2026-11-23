@@ -39,7 +39,7 @@ function post(message: MemoryServiceMessage): void {
 
 /* ---------- 家务活模型的真调用（核心模块只认 callModel 注入） ---------- */
 
-/** 记忆的小调用不比收尾清单大：120 秒已是宽限（主进程侧各路径不等它出结果）。 */
+/** 记忆的小调用不大：120 秒已是宽限（主进程侧各路径不等它出结果）。 */
 const CALL_TIMEOUT_MS = 120_000;
 
 let chore: MemoryChoreModel | null = null;

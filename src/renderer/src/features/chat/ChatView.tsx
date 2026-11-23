@@ -1650,7 +1650,7 @@ function ChatViewBody(props: {
         footer={
           <>
             {notices}
-            {/* 回退 / 撤销的预演确认栏：与审批条、收尾清单同位同配方（就地，不遮消息流） */}
+            {/* 回退 / 撤销的预演确认栏：与审批条同位同配方（就地，不遮消息流） */}
             {session.revertDialog !== null && (
               <RevertPreviewBar
                 mode="revert"

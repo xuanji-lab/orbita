@@ -138,19 +138,6 @@ describe("parseSessionMeta", () => {
     deepStrictEqual(parseSessionMeta(valid), { ...valid, mode: "manual" });
   });
 
-  it("旧版收尾记录（只读，任务账本重建要用）：好的留下，坏条目逐条丢，空了就缺席", () => {
-    const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-    const item = { title: "修登录", turns: [1, 2], providerId: "p", modelId: "m", level: "high", tokens: zero, recordedCost: 0.1, unpricedTokens: zero };
-    const good = { id: "w1", at: 1, throughTurn: 2, items: [item] };
-    const parsed = parseSessionMeta({
-      ...valid,
-      wrapups: [good, { ...good, id: "w2", items: [{ ...item, turns: [3, 1] }] }, { id: "w3" }],
-    });
-    deepStrictEqual(parsed?.wrapups, [good]);
-    const empty = parseSessionMeta({ ...valid, wrapups: [{ id: "bad" }] });
-    strictEqual(empty !== null && "wrapups" in empty, false);
-  });
-
   // 少一条会话，比多一条指向空白的假会话好
   it("缺关键字段返回 null，让调用方跳过这条", () => {
     for (const key of ["id", "cwd", "providerId", "modelId", "createdAt"]) {
@@ -260,10 +247,16 @@ describe("parseSessionMeta", () => {
   });
 
   // 「完成」与遗留事项已删：旧会话 meta 里的 completion / closedAt / resumedCarryovers 读时忽略，不报错、不出现在结果里
-  it("旧版 completion / closedAt / resumedCarryovers 读时忽略，会话照常打开", () => {
-    const meta = parseSessionMeta({ ...valid, completion: "done_with_todos", closedAt: 5000, resumedCarryovers: ["c1"] });
+  it("旧版 completion / closedAt / resumedCarryovers / wrapups 读时忽略（含坏形状的 wrapups），会话照常打开", () => {
+    const meta = parseSessionMeta({
+      ...valid,
+      completion: "done_with_todos",
+      closedAt: 5000,
+      resumedCarryovers: ["c1"],
+      wrapups: [{ id: "w1", at: 1, throughTurn: 2, items: [] }, { id: "bad" }],
+    });
     notStrictEqual(meta, null);
-    for (const key of ["completion", "closedAt", "resumedCarryovers"]) {
+    for (const key of ["completion", "closedAt", "resumedCarryovers", "wrapups"]) {
       strictEqual(meta !== null && key in meta, false, `${key} 不该出现`);
     }
     strictEqual(meta?.starred, false);

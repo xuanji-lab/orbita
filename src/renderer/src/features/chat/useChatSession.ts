@@ -2105,7 +2105,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    * 没在跑的才从盘上把 transcript 种进槽；**续跑推迟到用户真的说话时**
    * （send 里带 resume）——打开一条会话就起一个进程内的 session 太贵了，
    * 翻记录是最常见的动作。返回的 Promise 在历史种完（或读失败）时落定——
-   * 「打开后接着发消息」的编排（遗留事项续跑原会话）要等它，否则 submit 先行
+   * 「打开后接着发消息」的编排（先打开、再接着发）要等它，否则 submit 先行
    * 会把槽建出来，openSession 的种子看到槽已存在就不种历史了。
    */
   const openSession = useCallback(

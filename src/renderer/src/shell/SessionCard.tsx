@@ -1,4 +1,3 @@
-import { Icon, type IconName } from "./Icon";
 import { useT } from "../locale.ts";
 import { StatusPie } from "./StatusPie";
 import type { PieFill } from "./status-pie.ts";
@@ -8,7 +7,7 @@ import { InlineMarks } from "./InlineMarks";
 /**
  * 首页的最近会话卡（设计系统 components/surfaces/SessionCard 的实现）：
  * layer-3 玻璃卡，名字行 + 一句「此刻在干什么」（line，恒占两行、多了截断）+ 一行元信息
- * （meta：在哪 · 状态 · 多久前）。没在跑的待办卡改画行位槽（items，遗留事项，恒 4 槽）；
+ * （meta：在哪 · 状态 · 多久前）。没在跑的卡画行位槽（items，最近提问）；
  * 槽位不足就留空、恒渲染：一排卡片才齐得平。
  * hover 只从 composer 阴影抬到 popover 阴影，别的都不动
  * （设计系统 *Hover, press, disabled*）。
@@ -16,8 +15,8 @@ import { InlineMarks } from "./InlineMarks";
 export function SessionCard(props: {
   /** 会话名，单行截断 */
   name: string;
-  /** 行位数据：icon 有值是遗留事项行，无值是普通行（给了 line 时不画） */
-  items?: readonly { icon?: IconName; text: string }[];
+  /** 行位数据（给了 line 时不画） */
+  items?: readonly { text: string }[];
   /** 恒渲染槽位数；默认 3 */
   slots?: number;
   /**
@@ -103,29 +102,19 @@ export function SessionCard(props: {
                 }}
               >
                 {item !== undefined && (
-                  <>
-                    {item.icon !== undefined && (
-                      <Icon
-                        name={item.icon}
-                        size={12}
-                        strokeWidth={1.8}
-                        style={{ flex: "0 0 auto", color: "var(--color-text-tertiary)" }}
-                      />
-                    )}
-                    <span
-                      style={{
-                        minWidth: 0,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                        fontSize: "var(--font-size-sm)",
-                        lineHeight: "var(--line-height-ui)",
-                        color: "var(--color-text-secondary)",
-                      }}
-                    >
-                      {item.text}
-                    </span>
-                  </>
+                  <span
+                    style={{
+                      minWidth: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      fontSize: "var(--font-size-sm)",
+                      lineHeight: "var(--line-height-ui)",
+                      color: "var(--color-text-secondary)",
+                    }}
+                  >
+                    {item.text}
+                  </span>
                 )}
               </span>
             );
