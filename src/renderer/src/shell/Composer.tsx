@@ -6,6 +6,7 @@ import { MaterialStack } from "./composer-material-stack.tsx";
 import { PastedTextCollapseContext } from "./attachment-chips";
 import type { TextQuote } from "@shared/quote";
 import { isPastedTextLarge, pastedTextSize } from "@shared/prompt-attachments";
+import { parseImageRefs, type ImageRefSpan } from "@shared/prompt-image-refs";
 import { filesOf, type ComposerImage } from "./composer-images.ts";
 import type { ComposerFileRef } from "./composer-attachments.ts";
 import {
@@ -32,6 +33,7 @@ import {
   chipIconName,
   mirrorSegments,
   parseChips,
+  CHIPS_MAX_LENGTH,
   snapSelection,
   type ChipKind,
   type TextSelection,
@@ -142,8 +144,12 @@ export function Composer(props: {
   jumpToQuote: (quote: TextQuote) => (() => void) | undefined;
   /** 输入框里待发的附图（按会话隔离，状态在 useChatSession） */
   attachments: readonly ComposerImage[];
-  /** 挑选 / 粘贴 / 拖放进来的文件。分拣与报错在调用方，这里只管收 */
-  onAttach: (files: readonly File[]) => void;
+  /**
+   * 挑选 / 粘贴 / 拖放进来的文件。分拣与报错在调用方，这里只管收。caret = 附上那一刻的光标：
+   * 图的小签（「[图 N]」）就插在那里。图读完、小签写进草稿后 resolve 成新正文与小签之后的光标，
+   * 没有图（或没写进草稿）resolve null——Composer 据此把光标放回小签后面
+   */
+  onAttach: (files: readonly File[], caret?: number) => Promise<{ text: string; caret: number } | null>;
   onRemoveAttachment: (id: string) => void;
   /** 回形针菜单的「添加文件夹」：主进程目录选择器（Windows 不能与选文件同框，分两个入口） */
   onPickFolders: () => void;
@@ -245,12 +251,19 @@ export function Composer(props: {
   );
   // 画成胶囊的区间：skill / mcp 的 token（带 kind，按类别上色）+ 收着的粘贴
   // token（不带 kind，中性配方）——同一副药方，两种墨
+  // 图的小签「[图 N]」：只画有对应附图的（N ≤ 附图张数），否则是用户自己写的字。
+  // 与粘贴 token 同一套中性胶囊——文本里就是字面的 `[图 N]`，发出去也是它
+  const imageRefs = useMemo(
+    () => (props.value.length > CHIPS_MAX_LENGTH ? [] : parseImageRefs(props.value, props.attachments.length)),
+    [props.value, props.attachments.length],
+  );
   const chipSpans = useMemo(
     () => [
       ...chips.map((chip) => ({ start: chip.start, end: chip.end, kind: chip.kind })),
       ...paintedPasteTokens.map((token) => ({ start: token.start, end: token.end })),
+      ...imageRefs.map((ref) => ({ start: ref.start, end: ref.end })),
     ],
-    [chips, paintedPasteTokens],
+    [chips, paintedPasteTokens, imageRefs],
   );
   const segments = useMemo(
     () =>
@@ -337,6 +350,25 @@ export function Composer(props: {
     const el = textareaRef.current;
     if (el !== null) setCursor(el.selectionStart);
   }, [props.value]);
+  // 附图后光标落到新小签之后：小签是异步（读图）写进草稿的，外部改写 value 时 textarea 的光标会跳到末尾，
+  // 句中附图就把用户的位置丢了。只在正文还是写入那一版时落（期间用户又打了字 / 切了会话就不抢光标）
+  const [caretRequest, setCaretRequest] = useState<{ text: string; caret: number } | null>(null);
+  useLayoutEffect(() => {
+    if (caretRequest === null) return;
+    const el = textareaRef.current;
+    if (el !== null && el.value === caretRequest.text) {
+      el.setSelectionRange(caretRequest.caret, caretRequest.caret);
+      lastSelectionRef.current = { start: caretRequest.caret, end: caretRequest.caret };
+      setCursor(caretRequest.caret);
+    }
+    setCaretRequest(null);
+  }, [caretRequest, props.value]);
+  /** 附图：光标处插小签（props.onAttach 读图写草稿），写完把光标放到小签后面 */
+  const attach = (files: readonly File[], caret: number | undefined): void => {
+    void props.onAttach(files, caret).then((done) => {
+      if (done !== null) setCaretRequest(done);
+    });
+  };
 
   const disabled = props.disabled === true;
   const running = props.running === true;
@@ -521,7 +553,7 @@ export function Composer(props: {
             const files = filesOf(event.clipboardData);
             if (files.length > 0) {
               event.preventDefault();
-              props.onAttach(files);
+              attach(files, event.currentTarget.selectionStart);
               return;
             }
             // 纯文字粘贴：超过折叠阈值的一大段在**光标处**收成句中胶囊（方案 C：鼠标光标
@@ -637,12 +669,20 @@ export function Composer(props: {
                 const owner = paste !== null ? pasteBySeq.get(paste.seq) : undefined;
                 const pasteOwned =
                   paste !== null && owner !== undefined && owner.range === null ? paste : null;
+                // 图的小签同理整删（只认有对应附图的）：退格一次删掉整颗。图本身仍在附图里——
+                // 小签只是正文里的一处引用，删了它不是撤图（撤图点缩略图上的 ×，小签随之一起走）
+                const imageRef: ImageRefSpan | null =
+                  parseImageRefs(el.value, props.attachments.length).find((ref) =>
+                    backspace ? ref.end === el.selectionStart : ref.start === el.selectionEnd,
+                  ) ?? null;
                 const span =
                   chip !== null
                     ? { start: chip.start, end: chip.end }
                     : pasteOwned !== null
                       ? { start: pasteOwned.start, end: pasteOwned.end }
-                      : null;
+                      : imageRef !== null
+                        ? { start: imageRef.start, end: imageRef.end }
+                        : null;
                 if (span !== null) {
                   event.preventDefault();
                   el.setSelectionRange(span.start, span.end);
@@ -734,7 +774,7 @@ export function Composer(props: {
           multiple
           hidden
           onChange={(event) => {
-            props.onAttach(Array.from(event.target.files ?? []));
+            attach(Array.from(event.target.files ?? []), textareaRef.current?.selectionStart);
             // 清掉选择：同一张图移除后再选一次，change 才会再触发
             event.target.value = "";
           }}

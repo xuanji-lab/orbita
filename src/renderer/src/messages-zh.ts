@@ -601,6 +601,7 @@ export const zh: Messages = {
     attachFileAction: "添加文件…",
     attachFolderAction: "添加文件夹…",
     removeImage: "移除图片",
+    imageRefLabel: (n) => `图 ${n}`,
     materialBox: "材料",
     imageUnsupported: (name) => `${name}：只能发送 PNG、JPEG、GIF、WebP，请先转换格式。`,
     imageTooLarge: (name, mb) =>
