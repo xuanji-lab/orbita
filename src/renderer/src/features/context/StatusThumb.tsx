@@ -13,6 +13,7 @@ import { SlideStatic } from "../slides-editor/ElementView";
 import { parseDeckSafe } from "../slides-editor/use-deck-editor.ts";
 import type { StatusOutput } from "./chat-status.ts";
 import { createThumbCache } from "./thumb-cache.ts";
+import { pdfShots, shotFits, shotFresh, shotMatches, type PdfShot } from "./pdf-shot-cache.ts";
 // 静态页的外框样式（.se-static）在编辑器的样式表里：编辑器没打开过时它不在页面上
 import "../slides-editor/slides-editor.css";
 
@@ -61,8 +62,12 @@ export function OutputThumb(props: { output: StatusOutput; scope: ChatFileScope 
     // 路径变了（同一格复用）先换成这条路径缓存里的（没有就回到「读取中」）
     const cached = thumbCache.get(cacheKey);
     setData(cached?.data);
+    // PDF：一分钟内验过、位图还贴得上，就不再读盘（读整份字节 + 重画是最贵的一步）
+    const shot = output.kind === "pdf" ? pdfShots.get(cacheKey) : undefined;
+    if (shot !== undefined && shotFits(shot, boxRef.current?.clientWidth ?? 0, window.devicePixelRatio || 1) && shotFresh(shot, Date.now())) return undefined;
     void readThumbData(output.kind, props.scope, output.path).then((value) => {
       if (!alive) return;
+      if (shot !== undefined && value instanceof Uint8Array && shotMatches(shot, value)) shot.checkedAt = Date.now();
       const stamp = stampOf(value);
       // 读不到（null）不覆盖缓存里的好图：网页截图超时之类偶发失败，不该把已有的缩略图换成图标
       if (value === null && cached !== undefined && cached.data !== null) return;
@@ -75,15 +80,19 @@ export function OutputThumb(props: { output: StatusOutput; scope: ChatFileScope 
     };
   }, [output.path, cacheKey]);
   let body: React.ReactNode = null;
-  if (data === undefined || width === 0) body = null;
-  else if (data instanceof Uint8Array) body = <PdfFirstPage data={data} width={width} />;
+  // 画好的 PDF 首页还留着、字节也对得上（或还没读回来）：直接贴位图，不等读盘、不重画
+  const shot = output.kind === "pdf" && width > 0 ? pdfShots.get(cacheKey) : undefined;
+  const pasteShot = shot !== undefined && shotFits(shot, width, window.devicePixelRatio || 1) && (data === undefined || (data instanceof Uint8Array && shotMatches(shot, data)));
+  if (pasteShot) body = <PdfShotView shot={shot} />;
+  else if (data === undefined || width === 0) body = null;
+  else if (data instanceof Uint8Array) body = <PdfFirstPage data={data} width={width} cacheKey={cacheKey} />;
   else if (data !== null && "mime" in data && data.mime === "image/jpeg" && !("kind" in data)) body = <img className="cs-thumb-img cs-thumb-shot" alt="" src={`data:${data.mime};base64,${data.base64}`} />;
   else if (data !== null && "kind" in data && data.kind === "image") body = <img className="cs-thumb-img" alt="" src={`data:${data.mime};base64,${data.base64}`} />;
   else if (data !== null && "kind" in data && data.kind === "text" && output.kind === "slides") body = <DeckFirstPage text={data.text} width={width} />;
   else if (data !== null && "kind" in data && data.kind === "text" && output.kind === "doc") body = <DocHead text={data.text} width={width} />;
   else body = <IconCard output={output} />;
   return (
-    <div className="cs-thumb-box" ref={boxRef} data-kind={output.kind} data-loading={data === undefined || undefined}>
+    <div className="cs-thumb-box" ref={boxRef} data-kind={output.kind} data-loading={(data === undefined && !pasteShot) || undefined}>
       {body}
     </div>
   );
@@ -144,7 +153,23 @@ function DocHead(props: { text: string; width: number }) {
   );
 }
 
-function PdfFirstPage(props: { data: Uint8Array; width: number }) {
+/** 贴上次画好的首页位图（同步画，挂上那一帧就在） */
+function PdfShotView(props: { shot: PdfShot }) {
+  const ref = useRef<HTMLCanvasElement | null>(null);
+  useLayoutEffect(() => {
+    const canvas = ref.current;
+    if (canvas === null) return;
+    const { shot } = props;
+    canvas.width = shot.bitmap.width;
+    canvas.height = shot.bitmap.height;
+    canvas.style.width = `${shot.cssWidth}px`;
+    canvas.style.height = `${shot.cssHeight}px`;
+    canvas.getContext("2d")?.drawImage(shot.bitmap, 0, 0);
+  }, [props.shot]);
+  return <canvas ref={ref} className="cs-thumb-pdf" />;
+}
+
+function PdfFirstPage(props: { data: Uint8Array; width: number; cacheKey: string }) {
   const ref = useRef<HTMLCanvasElement | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
@@ -165,6 +190,13 @@ function PdfFirstPage(props: { data: Uint8Array; width: number }) {
         canvas.style.width = `${Math.floor(viewport.width)}px`;
         canvas.style.height = `${Math.floor(viewport.height)}px`;
         await page.render({ canvas, viewport, ...(ratio === 1 ? {} : { transform: [ratio, 0, 0, ratio, 0, 0] }) }).promise;
+        // 画好的首页留成位图：下次重挂（切回会话）直接贴
+        const bitmap = await createImageBitmap(canvas);
+        if (!alive) {
+          bitmap.close();
+          return;
+        }
+        pdfShots.set(props.cacheKey, { bitmap, stamp: props.data.byteLength, cssWidth: props.width, cssHeight: Math.floor(viewport.height), ratio, checkedAt: Date.now() });
       } catch {
         if (alive) setFailed(true);
       }
