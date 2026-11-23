@@ -20,6 +20,7 @@ import { useProgressDigest } from "./TaskProgress";
 import { useGoalLedger } from "./useGoalLedger.ts";
 import type { PlanStep } from "./plan-timeline.ts";
 import { STATUS_FOCUS_EVENT, type StatusFocusDetail } from "./chat-status-flag.ts";
+import { LruCache } from "../../../../shared/lru.ts";
 import { OutputThumb, SlideStyles } from "./StatusThumb";
 import {
   childActivityOf,
@@ -795,23 +796,40 @@ function useTicker(sinces: readonly number[], setNow: (now: number) => void): vo
   }, [key]);
 }
 
+/**
+ * 子会话尾窗的跨挂载缓存（按子会话 id；updatedAt 没变就不重读）：状态卡按会话重挂，
+ * 不缓存的话每次切回都要把每个子会话重读一遍，卡里「在跑的」先空再出。
+ */
+const childTailCache = new LruCache<{ updatedAt: number; records: readonly TranscriptRecord[] }>(60);
+
+function cachedTails(kids: readonly SessionMeta[]): ReadonlyMap<string, readonly TranscriptRecord[]> {
+  const map = new Map<string, readonly TranscriptRecord[]>();
+  for (const meta of kids) {
+    const hit = childTailCache.get(meta.id);
+    if (hit !== undefined) map.set(meta.id, hit.records);
+  }
+  return map;
+}
+
 /** 子会话的转录尾窗（原型：每个子会话读一次尾窗，meta 的 updatedAt 变了重读；真功能里应由主进程推一行「在跑什么」） */
 function useChildTails(kids: readonly SessionMeta[]): ReadonlyMap<string, readonly TranscriptRecord[]> {
-  const [tails, setTails] = useState<ReadonlyMap<string, readonly TranscriptRecord[]>>(new Map());
+  // 第一帧就用缓存里旧的，后台再校验
+  const [tails, setTails] = useState<ReadonlyMap<string, readonly TranscriptRecord[]>>(() => cachedTails(kids));
   const key = kids.map((meta) => `${meta.id}:${meta.updatedAt}`).join(",");
   useEffect(() => {
     let alive = true;
+    setTails(cachedTails(kids));
     void (async () => {
-      const next = new Map<string, readonly TranscriptRecord[]>();
-      const queue = [...kids];
+      const queue = kids.filter((meta) => childTailCache.get(meta.id)?.updatedAt !== meta.updatedAt);
+      if (queue.length === 0) return;
       const worker = async () => {
         for (let meta = queue.shift(); meta !== undefined; meta = queue.shift()) {
           const detail = await api.session.load(meta.id).catch(() => null);
-          next.set(meta.id, (detail?.transcript ?? []) as readonly TranscriptRecord[]);
+          childTailCache.set(meta.id, { updatedAt: meta.updatedAt, records: (detail?.transcript ?? []) as readonly TranscriptRecord[] });
         }
       };
       await Promise.all([worker(), worker(), worker(), worker()]);
-      if (alive) setTails(next);
+      if (alive) setTails(cachedTails(kids));
     })();
     return () => {
       alive = false;

@@ -15,6 +15,7 @@ import {
   type FileListRequest,
   type FilePreview,
   type PdfFile,
+  type WebThumb,
   type FileRootsRequest,
   type FsEntryFact,
 } from "../../shared/files.ts";
@@ -24,6 +25,7 @@ import { resolveFileRoots } from "./roots.ts";
 import { listDirectory, whitelistedPath } from "./list.ts";
 import { buildLineIndex, readLines } from "./lines.ts";
 import { readPdfFile, readPreview } from "./read.ts";
+import { webThumbOf } from "./web-thumb.ts";
 
 /**
  * @param openInBrowser 在内置浏览器「你的」tab 打开一个本地网页（BrowserSandbox.openLocalFile）。
@@ -153,6 +155,26 @@ export function registerFilesIpc(
     if (!isWebPageFile(path)) throw new Error(`Only web pages open in the built-in browser; ${path} is not one.`);
     // cited 根是「某一份引用过的 PDF」本身，不该顺带成为网页能读的范围
     await openInBrowser(
+      path,
+      roots.filter((root) => root.exists && root.kind !== "cited").map((root) => root.path),
+    );
+  });
+
+  /**
+   * 网页缩略图：同一道白名单，且须是网页文件（realpath 后判，与 fs:open-in-browser 同口径）。
+   * 页面里的 file:// 子资源只在这条会话的白名单根内放行（cited 根不算，同 fs:open-in-browser）。
+   * 截不出来（超时 / 加载失败）回 null——renderer 落成图标卡，不当错误处理。
+   */
+  ipcMain.handle(ipcChannels.fsWebThumb, async (_event, req: FileListRequest): Promise<WebThumb | null> => {
+    const roots = await resolveFileRoots(workspaces, sessions, req);
+    let path: string;
+    try {
+      path = await whitelistedPath(roots, req);
+    } catch {
+      return null;
+    }
+    if (!isWebPageFile(path)) return null;
+    return webThumbOf(
       path,
       roots.filter((root) => root.exists && root.kind !== "cited").map((root) => root.path),
     );

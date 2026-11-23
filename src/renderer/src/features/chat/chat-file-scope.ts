@@ -5,7 +5,7 @@
  * renderer 这边只是把绝对路径对到它所在的根上，传什么主进程都不信。不在任何根里的路径 = 读不到。
  */
 import { createContext, useContext, useEffect, useState } from "react";
-import type { FilePreview, FileRoot } from "@shared/files";
+import type { FilePreview, FileRoot, WebThumb } from "@shared/files";
 import { api } from "../../api";
 import { rootOf } from "./chat-paths.ts";
 
@@ -77,6 +77,17 @@ export async function readChatFile(scope: ChatFileScope, path: string): Promise<
   if (root === null) return null;
   try {
     return await api.files.read({ sessionId: scope.sessionId, workspaceId: scope.workspaceId, root: root.path, dir: path });
+  } catch {
+    return null;
+  }
+}
+
+/** 网页文件的缩略图（主进程隐藏窗口截的真图，脚本生成的内容也在）：同一道白名单；不在根里 / 截不出来 = null */
+export async function readChatWebThumb(scope: ChatFileScope, path: string): Promise<WebThumb | null> {
+  const root = rootOf(path, await rootsFor(scope));
+  if (root === null) return null;
+  try {
+    return await api.files.webThumb({ sessionId: scope.sessionId, workspaceId: scope.workspaceId, root: root.path, dir: path });
   } catch {
     return null;
   }
