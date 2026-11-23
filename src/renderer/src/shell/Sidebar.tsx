@@ -954,7 +954,8 @@ function WorkspaceGroup(props: {
         // 行里的动作键、勾选态「完成」、改名输入框各管各的，不触发开合。
         // 双击名字改名：第一下 click 已经翻了一次，dblclick 里翻回来，开合状态不变、进入改名
         onClick={(event) => {
-          if (editing !== null) return;
+          // 双击里的第二下 click（detail 2）不翻：第一下翻了一次，dblclick 再翻回来
+          if (editing !== null || event.detail > 1) return;
           if ((event.target as HTMLElement).closest("button:not(.ws-fold), input") !== null) return;
           if ((event.target as HTMLElement).closest(".ws-fold") !== null) return;
           props.onToggleFold();
