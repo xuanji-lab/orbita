@@ -7,6 +7,8 @@
  */
 import type { TranscriptRecord } from "../../../../shared/session.ts";
 import { isWebArtifactFile } from "../../../../shared/files.ts";
+import type { MediaArtifact } from "../../../../shared/revert.ts";
+import { namedMedia } from "./media-outputs.ts";
 import { allOutputs, type TurnOutput } from "./process-rows.ts";
 import { flattenRenderUnits, indexToolResults, type ToolCallUnit } from "./tool-results.ts";
 
@@ -24,9 +26,25 @@ export function sessionOutputs(records: readonly TranscriptRecord[]): SessionOut
   const results = indexToolResults(records);
   const docs: string[] = [];
   const web: string[] = [];
+  const media: MediaArtifact[] = [];
   const edited = new Set<string>();
+  // 最终回答：每轮结尾那段连续的 assistant 正文（遇到思考 / 工具调用 / 工具结果 / 用户消息就断），
+  // 与主会话结尾那摞同一条规则（tool-results.ts 的 finalAnswerText）；音视频只收这段话里点了名的
+  let answer: string[] = [];
   for (const record of records) {
+    if (record.role === "assistant") {
+      for (const block of record.content) {
+        if (block.type === "text") answer.push(block.text);
+        else answer = [];
+      }
+      continue;
+    }
+    if (record.role === "tool" || record.role === "user") {
+      answer = [];
+      continue;
+    }
     if (record.role !== "file-turn") continue;
+    media.push(...namedMedia(record.mediaArtifacts ?? [], answer.join("\n")));
     for (const change of record.changes) {
       if (DOC_FILE.test(change.path)) docs.push(change.path);
       else if (isWebArtifactFile(change.path)) web.push(change.path);
@@ -34,7 +52,7 @@ export function sessionOutputs(records: readonly TranscriptRecord[]): SessionOut
     }
     web.push(...(record.webArtifacts ?? []));
   }
-  const outputs = allOutputs(calls, results, docs, web);
+  const outputs = allOutputs(calls, results, docs, web, media);
   const shown = new Set(outputs.map((output) => output.path));
   return { outputs, edited: [...edited].filter((path) => !shown.has(path)) };
 }
