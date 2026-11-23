@@ -495,16 +495,20 @@ function arrowHead(x: number, y: number, dir: "down" | "left" | "right" | "up"):
   return `M${f(x - s * 1.4)} ${f(y - s)}L${f(x)} ${f(y)}L${f(x - s * 1.4)} ${f(y + s)}Z`;
 }
 
-function edgeText(t: ReturnType<typeof useT>, edge: CollabEdge, toMain: boolean): { lead: string; body: string } {
+/**
+ * 边上写什么。没有记录的不写（返回 null，那条边只剩线）：「没有任务说明记录」「没有文件记录」这类占位
+ * 和真信息占一样的版面（设计审查 R16）。「还没交回」是真状态，照写。
+ */
+function edgeText(t: ReturnType<typeof useT>, edge: CollabEdge, toMain: boolean): { lead: string; body: string } | null {
   const g = t.orchestra.graph;
-  const files = edge.files === null ? null : g.files(edge.files.files, edge.files.exts.join(" "));
-  if (edge.kind === "task") return { lead: g.sent, body: edge.text ?? g.noBrief };
+  const files = edge.files === null || edge.files.files === 0 ? null : g.files(edge.files.files, edge.files.exts.join(" "));
+  if (edge.kind === "task") return edge.text === null ? null : { lead: g.sent, body: edge.text };
   if (edge.kind === "report") {
     if (edge.pending) return { lead: g.returned, body: g.notBack };
     // session → 主智能体：没有「结果」这回事，只说产出（文件账）；子会话 → session：结果第一行 + 产出
-    if (toMain && files !== null) return { lead: g.output, body: files };
-    const result = edge.text ?? g.noReport;
-    return { lead: g.returned, body: files === null ? result : `${result} · ${files}` };
+    if (toMain) return files === null ? null : { lead: g.output, body: files };
+    if (edge.text === null) return files === null ? null : { lead: g.returned, body: files };
+    return { lead: g.returned, body: files === null ? edge.text : `${edge.text} · ${files}` };
   }
   // 活与活之间（演示）：道窄，线上只写交接物，文件数在悬停里
   return { lead: "", body: edge.text ?? (files ?? "") };
@@ -564,6 +568,7 @@ function CollabCanvas(props: {
         const geo = layout.edges.get(edge.id);
         if (geo === undefined) return null;
         const text = edgeText(t, edge, edge.to === mainNode?.id);
+        if (text === null) return null;
         return (
           <span
             key={`label-${edge.id}`}

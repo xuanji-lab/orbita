@@ -3904,8 +3904,6 @@ export const en = {
       sent: "Task",
       returned: "Back",
       notBack: "not handed back yet",
-      noReport: "no report on record",
-      noBrief: "no task note on record",
       files: (n: number, exts: string) => (n === 0 ? "no files on record" : `${n} file${n === 1 ? "" : "s"} · ${exts}`),
       peerPending: "Handoffs between sub-agents appear once the kernel line is connected.",
       hidden: (n: number) => `${n} more sessions and sub-sessions are in the tree.`,

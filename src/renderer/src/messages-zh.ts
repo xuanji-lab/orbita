@@ -3670,8 +3670,6 @@ export const zh: Messages = {
       sent: "派活",
       returned: "交回",
       notBack: "还没交回",
-      noReport: "没有交回记录",
-      noBrief: "没有任务说明记录",
       files: (n, exts) => (n === 0 ? "没有文件记录" : `${n} 个文件 · ${exts}`),
       peerPending: "子智能体之间的交接：等内核那条线接入后出现。",
       hidden: (n) => `另有 ${n} 条会话与子会话在树状图里。`,
