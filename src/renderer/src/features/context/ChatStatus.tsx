@@ -15,6 +15,7 @@ import { useTaskRecords } from "../chat/useTaskRecords.ts";
 import { useChannelSummaries } from "../chat/useChannelSummaries";
 import { useParentChannels } from "../chat/useChannelMessages";
 import type { ChatFileScope } from "../chat/chat-file-scope.ts";
+import { formatDuration } from "../chat/named-outputs.ts";
 import { useMemorySession } from "../memory/useMemory.ts";
 import { useProgressDigest } from "./TaskProgress";
 import { useGoalLedger } from "./useGoalLedger.ts";
@@ -58,7 +59,7 @@ import "./chat-status.css";
  * - 进度里母子一眼分得开：步骤是母节点（状态圆点），子会话从步骤「垂下来」（缩进到步骤文字线、一条竖引导线、小机器人图标、轻一档的字），
  *   折叠行（「还有 N 步」）不带状态圆点、用 chevron + 次级色；展开到底时收起键在最后一步下面；
  * - 产物按类型分行，每行一排大缩略图，横向滑（Shift + 滚轮 / 触控板横扫），点一下在右栏打开，悬停不弹东西；
- * - 产物口径同每轮结尾的产物卡（sessionOutputs），多图片与看板；按文件类型分行（同日 20:58）；
+ * - 产物口径同每轮结尾的产物卡（sessionOutputs），多图片与看板；音视频仍只收最终回答点名的；按文件类型分行（同日 20:58）；
  * - 记忆一行接在产物后面（第二版的「这次用到的」只留它）；目标最多两行；卡第一次打开时进度只露在做的步；
  * - 删掉底部的上下文 / 改动 / 摘抄与临时预览浮层。
  *
@@ -708,7 +709,10 @@ function OutputsSection(props: { memo: StatusMemo; outputs: readonly StatusOutpu
 
 /** 缩略图下的类型行：同一行里并进来的格式写具体（PPTX / Word）；演示文稿带页数；子会话做的补一句是谁做的 */
 function kindLine(t: Messages, output: StatusOutput): string {
-  const kind = output.pages === null ? t.chatStatus.kinds[output.kind] : `${t.chatStatus.kinds[output.kind]} · ${t.chatStatus.pages(output.pages)}`;
+  const duration = formatDuration(output.duration);
+  const kind = [t.chatStatus.kinds[output.kind], output.pages === null ? null : t.chatStatus.pages(output.pages), duration]
+    .filter((part): part is string => part !== null)
+    .join(" · ");
   return output.by === null ? kind : `${kind} · ${t.chatStatus.byChild(output.by)}`;
 }
 

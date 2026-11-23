@@ -617,6 +617,19 @@
   height: 100%;
   object-fit: contain;
 }
+.cs-thumb-source {
+  display: none;
+}
+.cs-thumb-video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+}
+.cs-thumb-video[data-ready] {
+  opacity: 1;
+}
 .cs-thumb-doc {
   position: absolute;
   top: 0;
