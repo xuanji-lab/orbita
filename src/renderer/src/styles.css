@@ -1408,7 +1408,13 @@ html[data-pointer-drag] iframe {
 button.ws-fold {
   cursor: pointer;
 }
-button.ws-fold:hover {
+/* 组头整行可点开合（Kimi 同款）：悬停整行铺底，和会话行的悬停底同一个 token */
+.ws-head {
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.ws-head:hover {
   background: var(--option-hover-bg);
 }
 

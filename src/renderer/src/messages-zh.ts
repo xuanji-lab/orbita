@@ -1094,6 +1094,7 @@ export const zh: Messages = {
     remove: "从列表移除",
     removeArmedTip: "再点一次即移除。文件夹和其中的任务都保留，任务移到「任务」下。",
     removeTip: "从列表移除。磁盘上的文件夹不受影响。",
+    emptyWorkspaceNew: "还没有任务 · 在这里新建",
     newTaskInWorkspace: "在此工作区新建任务",
     showLess: "收起",
     showMore: (next, hidden) => (next === hidden ? `再显示 ${hidden} 条` : `再显示 ${next} 条（还有 ${hidden} 条）`),
