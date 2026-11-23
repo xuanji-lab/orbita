@@ -7,6 +7,7 @@ import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-prot
 import { ApprovalBar } from "./ApprovalBar";
 import { QueueStrip } from "./QueueStrip";
 import { compactionBoundaryStatus, mergeSideRecords } from "./session-states";
+import type { TurnFailure } from "./session-states.ts";
 import {
   ChannelFromChildCard,
   ChildLineCard,
@@ -240,7 +241,10 @@ import {
   type ContextRing,
   type RingLayers,
 } from "./stats-format";
-import { isPlanBilling } from "@shared/known-providers";
+import { isPlanBilling, knownProviderQuota } from "@shared/known-providers";
+import { isProviderEnabled } from "@shared/provider";
+import type { QuotaResult } from "@shared/quota";
+import { quotaMenuItems, quotaExhaustedText } from "../settings/quota-view.ts";
 import { deriveWorkspaceName } from "@shared/workspace";
 import { modelCardFooter, modelChipParts, ModelPickerMenu, selectedModelAcceptsImage } from "../settings/model-menu";
 import { filesOf, imageSrc } from "../../shell/composer-images.ts";
@@ -1643,7 +1647,8 @@ function ChatViewBody(props: {
           state,
           records: entry === undefined ? null : selectTranscript(entry.transcript),
           approval: approval === undefined ? null : { toolName: approval.toolName, input: approval.input },
-          turnError: session.turnErrorOf(sessionId),
+          // 首页卡只要一行字：取厂商原文那一句；额度事实留在会话里的通知行（home-cards 只吃 string）
+          turnError: session.turnErrorOf(sessionId)?.message ?? null,
           lastAsk: meta?.recentQueries[0] ?? null,
         },
         lineText,
@@ -1867,7 +1872,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   marks: readonly ChannelMarkRecord[];
   phase: "idle" | "turn" | "compaction";
   retry: RetryStatus | null;
-  turnError: string | null;
+  turnError: TurnFailure | null;
   loadingHistory: boolean;
   /** 更早的一页在途（源侧分页触顶）：列首出一行次级灰提示 */
   loadingOlder: boolean;
@@ -2645,7 +2650,27 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
             justifyContent: transcript.at(-1)?.role === "user" ? "flex-end" : "flex-start",
           }}
         >
-          <Notice tone="bad">{props.turnError}</Notice>
+          <Notice tone="bad">
+            {/*
+             * 厂商原文永远是第一行——原文就是证据，也是这条红字的「原因」。
+             * 额度事实只能当副行：缓存只说明「某个窗口满了」，不说明这次失败是它
+             * 造成的（钥匙过期 + 恰好窗口满时，主因是 401）。把它摆在前面会让用户
+             * 去等 2 小时而不是换 key。
+             */}
+            <span>{props.turnError.message}</span>
+            {props.turnError.quota !== undefined && (
+              <span
+                style={{
+                  display: "block",
+                  marginTop: "var(--space-1)",
+                  color: "var(--color-text-secondary)",
+                  fontSize: "var(--font-size-sm)",
+                }}
+              >
+                {quotaExhaustedText(props.turnError.quota, Date.now(), t)}
+              </span>
+            )}
+          </Notice>
         </div>
       )}
       {props.phase === "turn" &&
@@ -3518,6 +3543,44 @@ function UsageRing(props: {
     session.model === null ? undefined : session.usable.find((item) => item.id === session.model?.providerId);
   const billing = provider !== undefined && isPlanBilling(provider) ? "plan" : "metered";
   /**
+   * 账号额度（decisions 8）：环卡是**常用入口**——一眼、只读、缓存优先。
+   * 能力为 none 的厂商（自建网关 / 未接入的三家）这一整段不出现。
+   *
+   * **悬停即开的菜单里不许有 loading**（`Menu.tsx:119`）：值只来自主进程缓存，
+   * 刷新在背后发生；首帧没有缓存时给「立即查询」，点了才打。
+   */
+  // 关着的服务商（单独开关）不查也不显示：这条会话的型号还指着它，也不去打探它的额度
+  const quotaProbe =
+    provider === undefined || !isProviderEnabled(provider) ? "none" : knownProviderQuota(provider);
+  const providerId = session.model?.providerId ?? null;
+  const [quota, setQuota] = useState<QuotaResult | null>(null);
+  const [quotaBusy, setQuotaBusy] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const loadQuota = useCallback(
+    async (refresh: boolean) => {
+      if (providerId === null) return;
+      setQuotaBusy(true);
+      try {
+        setQuota(await api.provider.quota(refresh ? { providerId, refresh: true } : { providerId }));
+      } catch {
+        // IPC reject：按网络类失败处理，保留上一次成功的值
+        setQuota((prev): QuotaResult => ({
+          status: "error",
+          reason: "network",
+          cached: prev === null || prev.status === "none" ? null : prev.status === "ok" ? prev.snapshot : prev.cached,
+        }));
+      } finally {
+        setQuotaBusy(false);
+      }
+    },
+    [providerId],
+  );
+  // 打开菜单才拉（打开 = 用户在看），不在背后轮询
+  useEffect(() => {
+    if (!menuOpen) return;
+    void loadQuota(false);
+  }, [menuOpen, loadQuota]);
+  /**
    * 压缩走两段式（与侧栏 Delete 同一副骨架，wafo 2026-09-03 裁决）：
    * 用户意愿优先——不再拿「内容太少」当拒绝理由，改说「价值不大」再让他确认。
    * 第二段的文案按规模分岔：阈值取 pi 的 keepRecentTokens 默认值（20k）——
@@ -3540,13 +3603,18 @@ function UsageRing(props: {
   const freshTokens =
     usageTokens === null ? null : lastCompactedTo === null ? usageTokens : Math.max(0, usageTokens - lastCompactedTo);
   const worthIt = freshTokens !== null && freshTokens > 20_000;
+  const usageRows = usageBreakdown(stats, t, billing);
   const items: MenuItem[] = [
-    ...usageBreakdown(stats, t, billing).map((row): MenuItem => ({
-      id: row.label,
-      label: row.label,
-      hint: row.value,
-      fact: true,
-    })),
+    // 新会话还没有用量：在「本会话」那一段原来的位置上留一行事实，否则菜单里第一个
+    // 出现的就是下方的额度段，读起来像原来的用量被换掉了（用户 2026-10-23 反馈）。
+    ...(usageRows.length === 0
+      ? [{ id: "usage-empty", label: t.stats.emptyUsage, fact: true } satisfies MenuItem]
+      : usageRows.map((row): MenuItem => ({
+          id: row.label,
+          label: row.label,
+          hint: row.value,
+          fact: true,
+        }))),
     // 压缩次数：0 次不出这一行（没压过就没什么可报的）
     ...(compactions > 0
       ? [
@@ -3580,6 +3648,16 @@ function UsageRing(props: {
           } satisfies MenuItem,
         ]
       : []),
+    // 账号额度（缓存优先，悬停菜单里不画 loading）
+    ...quotaMenuItems(
+      quota,
+      quotaProbe,
+      quotaBusy,
+      t,
+      provider?.displayName,
+      () => void loadQuota(true),
+      provider?.auth.scheme === "oauth",
+    ),
     ...(confirming
       ? [
           {
@@ -3630,6 +3708,7 @@ function UsageRing(props: {
         align="end"
         hoverOpen
         onOpenChange={(next) => {
+          setMenuOpen(next);
           if (!next) setConfirming(false);
         }}
         trigger={({ open, toggle }) => (

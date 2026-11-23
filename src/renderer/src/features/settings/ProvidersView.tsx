@@ -9,6 +9,7 @@ import {
   knownAccessFor,
   knownProviderDefaultName,
   knownProviderGroup,
+  knownProviderQuota,
   type KnownProvider,
 } from "@shared/known-providers";
 import type { PriceChartCategory } from "@shared/price-chart";
@@ -58,6 +59,7 @@ import { shouldShowPriceChart } from "./price-chart-model.ts";
 import { rateInputText, usdOf } from "../../utils/money.ts";
 import { useBuiltinCatalog } from "./model-menu";
 import { VendorLogo } from "./VendorLogo";
+import { QuotaBlock } from "./QuotaBlock";
 import { ipcErrorText } from "../../utils/ipc-error.ts";
 
 /**
@@ -1149,6 +1151,22 @@ export function ProvidersView(props: {
                   </div>
                 )}
               </section>
+
+              {/*
+                账号额度（余额 / 套餐窗口）：紧接连接区、在模型区之前——它回答的是
+                「这个 key 背后的账号还剩多少」，与上面那组身份字段同属「这个账号」这一层。
+                能力为 none 的厂商整块不渲染（QuotaBlock 自己返回 null），不留空块。
+                只给已落盘的实例查：查询靠 providerId 取密钥，新建表单里还没有 id。
+                「单独开关」关掉的服务商也不画、不查：关着就是「不用它」，对着一个不用的账号打探额度只会白耗它的限流。
+              */}
+              {!isNew && editing !== undefined && isProviderEnabled(editing) && knownProviderQuota(editing) !== "none" && (
+                <QuotaBlock
+                  providerId={editing.id}
+                  probe={knownProviderQuota(editing)}
+                  hasKey={hasCredentials(editing.auth)}
+                  oauth={editing.auth.scheme === "oauth"}
+                />
+              )}
 
               <div className="pv-mhead">
                 <span className="section-label">{t.providers.models}</span>
