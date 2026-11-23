@@ -27,7 +27,7 @@ import { readPdfFile, readPreview } from "./read.ts";
 
 /**
  * @param openInBrowser 在内置浏览器「你的」tab 打开一个本地网页（BrowserSandbox.openLocalFile）。
- * 传函数不传沙盒：文件面板只需要这一个动作。roots 是页面打开之后能读的本地范围（页面闸）
+ * 传函数不传沙盒：文件面板只需要这一个动作；页面可读根由浏览器按网页真实路径收窄。
  */
 /** 在途的行索引请求：`<窗口 id>:<requestId>` → 它的取消控制器 */
 const pendingIndexes = new Map<string, AbortController>();
@@ -37,7 +37,7 @@ const pendingKey = (senderId: number, requestId: string): string => `${senderId}
 export function registerFilesIpc(
   workspaces: WorkspaceStore,
   sessions: SessionStore,
-  openInBrowser: (path: string, roots: readonly string[]) => Promise<void>,
+  openInBrowser: (path: string) => Promise<void>,
 ): void {
   ipcMain.handle(ipcChannels.fsRoots, (_event, req: FileRootsRequest) =>
     resolveFileRoots(workspaces, sessions, req),
@@ -144,18 +144,13 @@ export function registerFilesIpc(
    * 路径：指向别的类型的 foo.html 软链接同样被拒。
    *
    * 入口闸只管第一个地址；页面打开之后它自己还能 fetch / iframe / 跳转到任意 file://（#365）。
-   * 所以把这条会话的白名单根一并交给浏览器：页面之后对 file:// 的请求只在这些根里放行——
-   * 与文件面板本身能读的范围一样，不多不少。
+   * 这里只交出已 realpath 的网页本身，由浏览器把页面可读根收窄到它所在的目录，而不是整条会话白名单。
    */
   ipcMain.handle(ipcChannels.fsOpenInBrowser, async (_event, req: FileListRequest): Promise<void> => {
     const roots = await resolveFileRoots(workspaces, sessions, req);
     const path = await whitelistedPath(roots, req);
     if (!isWebPageFile(path)) throw new Error(`Only web pages open in the built-in browser; ${path} is not one.`);
-    // cited 根是「某一份引用过的 PDF」本身，不该顺带成为网页能读的范围
-    await openInBrowser(
-      path,
-      roots.filter((root) => root.exists && root.kind !== "cited").map((root) => root.path),
-    );
+    await openInBrowser(path);
   });
 
   /**

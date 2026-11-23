@@ -1212,7 +1212,7 @@ void app.whenReady().then(async () => {
     await plugins.removeWorkspace(id);
   });
   // 文件面板（fs:roots / fs:list / fs:reveal）：根每次现算，不缓存
-  registerFilesIpc(workspaces, sessions, (path, roots) => browserSandbox.openLocalFile(path, roots));
+  registerFilesIpc(workspaces, sessions, (path) => browserSandbox.openLocalFile(path));
   // 文档 / 演示文稿面板（doc:*）：白名单同文件面板，写入比较后交换 + 原子写
   registerDocIpc(workspaces, sessions);
   registerSlidesIpc(workspaces, sessions);
