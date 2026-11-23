@@ -18,7 +18,7 @@ import { api } from "../../api";
 import { DICTATION_SAMPLE_RATE, type DictationProvider, type VoiceFailure } from "@shared/voice";
 import { joinSpoken } from "./dictation-text.ts";
 import { PcmChunker, toPcm16 } from "./pcm.ts";
-import { CALL_TIMING, initialCallState, reduceCall, type CallEffect, type CallEvent, type CallPhase, type CallState } from "./call-machine.ts";
+import { BargeDetector, CALL_TIMING, initialCallState, reduceCall, type CallEffect, type CallEvent, type CallPhase, type CallState } from "./call-machine.ts";
 import { AnswerReader, answerTextAfter, findAskedIndex, type SpokenItem } from "./speech-text.ts";
 import { playSpeech, type SpeechPlayback } from "./speech-playback.ts";
 import { encodeWav } from "./wav.ts";
@@ -77,8 +77,14 @@ interface Live {
   current: string;
   provider: DictationProvider;
   silenceTimer: ReturnType<typeof setTimeout> | null;
-  /** 它在说时你的声音持续了多久（打断判定） */
-  bargeMs: number;
+  /** 它在说时你开没开口（打断判定） */
+  barge: BargeDetector;
+  /**
+   * 不在听时最近的几段音频（约 0.8 秒）：打断要攒够 300ms 的声音才判得出来，这之前的开头
+   * 不补上就丢了（实测「等一下，先停一停」只识别出「一下……」）。打断后开新连接时先补发它
+   */
+  preroll: ArrayBuffer[];
+  prerollNext: boolean;
   /** 回答的读取位置（每发一句换新的） */
   reader: AnswerReader;
   /** 发出那一刻对话的最后一条记录：锚点只能在它后面 */
@@ -98,6 +104,9 @@ interface Live {
   manifest: ManifestEntry[];
   unsubscribe: () => void;
 }
+
+/** 打断时补发的开头：4 段 × 200 ms */
+const PREROLL_CHUNKS = 4;
 
 /** 通话目录名：本地时间到秒，`20261124-021530` */
 function callIdOf(date: Date): string {
@@ -220,7 +229,9 @@ export function useVoiceCall(input: {
       const dictationId = crypto.randomUUID();
       live.dictationId = dictationId;
       live.dictationConnected = false;
-      live.queue = [];
+      live.queue = live.prerollNext ? live.preroll : [];
+      live.preroll = [];
+      live.prerollNext = false;
       if (!keepText) {
         live.committed = "";
         live.current = "";
@@ -360,7 +371,7 @@ export function useVoiceCall(input: {
       const frameMs = (samples.length / context.sampleRate) * 1000;
       if (mutedRef.current) {
         levelRef.current = 0;
-        live.bargeMs = 0;
+        live.barge.reset();
         return;
       }
       const loudness = rms(samples);
@@ -371,16 +382,22 @@ export function useVoiceCall(input: {
         live.recordedSamples += pcm.length;
       }
       const phaseNow = live.state.phase;
+      const chunks = live.chunker.push(pcm);
+      if (phaseNow !== "listening") {
+        live.preroll.push(...chunks);
+        if (live.preroll.length > PREROLL_CHUNKS) live.preroll.splice(0, live.preroll.length - PREROLL_CHUNKS);
+      }
+      let barged = false;
       if (phaseNow === "speaking") {
-        live.bargeMs = loudness > CALL_TIMING.bargeInLevel ? live.bargeMs + frameMs : 0;
-        if (live.bargeMs >= CALL_TIMING.bargeInMs) {
-          live.bargeMs = 0;
+        if (live.barge.push(loudness, frameMs)) {
+          barged = true;
+          live.prerollNext = true;
           dispatchRef.current(live, { type: "bargeIn" });
         }
-      } else live.bargeMs = 0;
-      const chunks = live.chunker.push(pcm);
+      } else live.barge.reset();
       // 只有在听的时候才往识别连接里送；在想 / 在说时的声音只录不送
-      if (live.state.phase === "listening" && live.dictationId !== "") for (const chunk of chunks) sendAudio(live, chunk);
+      // （刚打断的这一帧已经在补发的开头里了，不再送一遍）
+      if (!barged && live.state.phase === "listening" && live.dictationId !== "") for (const chunk of chunks) sendAudio(live, chunk);
       if (loudness > CALL_TIMING.speechLevel) dispatchRef.current(live, { type: "voice" });
     };
     source.connect(processor);
@@ -420,7 +437,9 @@ export function useVoiceCall(input: {
       current: "",
       provider: selection.provider,
       silenceTimer: null,
-      bargeMs: 0,
+      barge: new BargeDetector(),
+      preroll: [],
+      prerollNext: false,
       reader: new AnswerReader(),
       baselineId: null,
       sawBusy: false,

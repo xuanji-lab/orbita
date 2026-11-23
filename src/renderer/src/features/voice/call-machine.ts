@@ -22,10 +22,13 @@ export const CALL_TIMING = {
   endOfUtteranceMs: 800,
   /** 麦克风电平（RMS，0..1）高过它算「在说话」 */
   speechLevel: 0.02,
-  /** 它在说时你的声音高过它（更高：扬声器回声不该把自己打断）…… */
-  bargeInLevel: 0.08,
-  /** ……并持续这么久，才算你开口打断 */
-  bargeInMs: 350,
+  /** 它在说时你的声音高过它（比 speechLevel 高：扬声器漏进来的回声不该把自己打断）…… */
+  bargeInLevel: 0.05,
+  /** ……在最近这么长的一段里…… */
+  bargeInWindowMs: 700,
+  /** ……累计响过这么久，才算你开口打断。不要求「连续」：说话的字与字之间本来就有空隙，
+   * 要求连续 350ms 在实测里一次都没触发（2026-11-24 假麦克风） */
+  bargeInMs: 300,
   /** 录音最长存这么久（16 kHz 单声道约 1 MB/分钟），超了只录前面这段 */
   maxRecordSeconds: 1800,
 } as const;
@@ -138,5 +141,38 @@ export function reduceCall(state: CallState, event: CallEvent): { state: CallSta
       // 只停播放、回到聆听；agent 这一轮不停，它写出来的字照样留在对话里，只是不再念
       if (state.phase !== "speaking") return { state, effects: [] };
       return { state: listening(state), effects: [{ type: "stopSpeech" }, { type: "openDictation" }] };
+  }
+}
+
+/**
+ * 打断判定：最近 bargeInWindowMs 里，电平高过 bargeInLevel 的帧累计够 bargeInMs 就算开口。
+ * 每帧喂一次（帧长随采样率变，约 85 ms），触发后清零重新计。
+ */
+export class BargeDetector {
+  private frames: { ms: number; loud: boolean }[] = [];
+
+  push(level: number, frameMs: number): boolean {
+    this.frames.push({ ms: frameMs, loud: level > CALL_TIMING.bargeInLevel });
+    let span = 0;
+    let loud = 0;
+    for (let index = this.frames.length - 1; index >= 0; index -= 1) {
+      const frame = this.frames[index];
+      if (frame === undefined) break;
+      if (span >= CALL_TIMING.bargeInWindowMs) {
+        this.frames = this.frames.slice(index + 1);
+        break;
+      }
+      span += frame.ms;
+      if (frame.loud) loud += frame.ms;
+    }
+    if (loud >= CALL_TIMING.bargeInMs) {
+      this.reset();
+      return true;
+    }
+    return false;
+  }
+
+  reset(): void {
+    this.frames = [];
   }
 }

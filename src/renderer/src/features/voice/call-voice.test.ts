@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { initialCallState, reduceCall, type CallEffect, type CallEvent, type CallState } from "./call-machine.ts";
+import { BargeDetector, CALL_TIMING, initialCallState, reduceCall, type CallEffect, type CallEvent, type CallState } from "./call-machine.ts";
 import { AnswerReader, answerTextAfter, findAskedIndex, proseOf, speakable, takeSentences } from "./speech-text.ts";
 import { encodeWav } from "./wav.ts";
 
@@ -159,4 +159,19 @@ test("录音 wav：44 字节头 + PCM，采样率与长度写对", () => {
   assert.equal(view.getUint32(24, true), 16000);
   assert.equal(view.getUint32(40, true), 8);
   assert.equal(view.getInt16(46, true), 1000);
+});
+
+test("打断判定：字间有空隙也算开口；零星的响声（回声、碰麦）不算", () => {
+  const frame = 85;
+  const speech = new BargeDetector();
+  // 响 - 静 - 响 - 静 - 响 - 响：700ms 里累计响 340ms
+  const pattern = [0.2, 0.01, 0.2, 0.01, 0.2, 0.2];
+  const fired = pattern.map((level) => speech.push(level, frame));
+  assert.deepEqual(fired, [false, false, false, false, false, true]);
+  const noise = new BargeDetector();
+  const sparse = Array.from({ length: 40 }, (_, index) => noise.push(index % 5 === 0 ? 0.3 : 0.01, frame));
+  assert.equal(sparse.some(Boolean), false);
+  // 低于门槛的持续声音也不算
+  const quiet = new BargeDetector();
+  assert.equal(Array.from({ length: 20 }, () => quiet.push(CALL_TIMING.bargeInLevel * 0.9, frame)).some(Boolean), false);
 });
