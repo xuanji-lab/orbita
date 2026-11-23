@@ -171,7 +171,12 @@ export function ContextMenu(props: {
                 color: "var(--color-text-secondary)",
               }}
             >
-              {item.icon !== undefined ? <Icon name={item.icon} size={13} strokeWidth={1.8} /> : null}
+              {/* 当前项画勾（同 Menu：状态优先用图标，不靠底色）——回答里图片的「大图 / 小图」用到 */}
+              {item.checked === true ? (
+                <Icon name="check" size={13} strokeWidth={2} />
+              ) : item.icon !== undefined ? (
+                <Icon name={item.icon} size={13} strokeWidth={1.8} />
+              ) : null}
             </span>
             <span
               style={{
