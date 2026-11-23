@@ -81,6 +81,7 @@ import { isProviderEnabled } from "../../../../shared/provider.ts";
 import { declaredThinkingLevels, enabledProviders, modelPreferenceById } from "../settings/providers-view-model.ts";
 import { reconcileThinkingLevel, resolveThinkingLevel } from "./thinking-choice.ts";
 import { modelRequiredText } from "./model-required.ts";
+import { createLatestWins, readOpenDetail } from "./open-session.ts";
 import {
   childSessions,
   SESSION_PAGE_RECORDS,
@@ -88,6 +89,7 @@ import {
   type CompactedRecord,
   type SessionMeta,
   type SessionMoveResult,
+  type SessionWindowDetail,
 } from "@shared/session";
 import type { FileTurnView, RevertPlan, RevertRecord, UndoPlan, UndoRecord } from "@shared/revert";
 import { splitUserTextBlocks } from "@shared/prompt-attachments";
@@ -1278,6 +1280,8 @@ function filesField(files: readonly ComposerFileRef[] | undefined): { files?: Pr
 export function useSessionView(engine: SessionEngine, key: string): ChatSession {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  /** openSession 的票号：连点两条时后点的赢（见 open-session.ts）；每个查看槽各一份 */
+  const [openWins] = useState(createLatestWins);
   /** 本槽成功并入的早页数（滚动锚定的判据，见 ChatSession.olderPages） */
   const [olderPages, setOlderPages] = useState(0);
   const [opened, setOpened] = useState<SessionMeta | null>(null);
@@ -2154,17 +2158,46 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    * 翻记录是最常见的动作。返回的 Promise 在历史种完（或读失败）时落定——
    * 「打开后接着发消息」的编排（先打开、再接着发）要等它，否则 submit 先行
    * 会把槽建出来，openSession 的种子看到槽已存在就不种历史了。
+   *
+   * **槽已经在就只取 meta、不再读整份转录**（转录本来就不会重种，见 open-session.ts）；
+   * **连点两条时后点的赢**：晚到的旧票只种它自己的槽，不动视图。
    */
   const openSession = useCallback(
     (id: string): Promise<void> => {
-      if (id === sessionRef.current) return Promise.resolve();
+      if (id === sessionRef.current) {
+        // 点回已经绑着的活会话：不读盘，但还在路上的上一次打开要作废——最后点的是它
+        openWins.supersede();
+        setLoadingHistory(false);
+        return Promise.resolve();
+      }
       engine.setError(null);
       setLoadingHistory(true);
-      return api.session
-        .load(id)
-        .then((detail) => {
+      const ticket = openWins.begin();
+      /** 把盘上的首屏尾窗种进这条会话的槽——槽已在（或本来就不用种）就什么都不做 */
+      const seedSlot = (seed: SessionWindowDetail | null): void => {
+        if (seed === null || engine.statesRef.current.has(id)) return;
+        engine.applyStates((prev) => seedFromDisk(prev, id, seed.transcript, seed.meta.stats, seed.window));
+      };
+      // 槽已经在（本次启动里打开过 / 正在跑）转录本来就不会重种，只取 meta；槽不在才读首屏尾窗
+      return readOpenDetail(id, engine.statesRef.current.has(id), api.session)
+        .then(async (first) => {
+          // 请求发出去之后槽被清掉了（会话刚被删 / 重置）：meta 够不着历史，补读一次尾窗
+          const opened =
+            first !== null && first.seed === null && !engine.statesRef.current.has(id)
+              ? await readOpenDetail(id, false, api.session)
+              : first;
+          if (opened === null) {
+            if (openWins.isLatest(ticket)) setLoadingHistory(false);
+            return;
+          }
+          // 晚到的旧票：历史照样种进它自己的槽（数据归会话 id，不归视图；调用方等着这一步），
+          // 但不碰视图——后点的那条已经（或即将）落地，不能被它盖掉
+          if (!openWins.isLatest(ticket)) {
+            seedSlot(opened.seed);
+            return;
+          }
           setLoadingHistory(false);
-          if (detail === null) return;
+          const detail = { meta: opened.meta };
           // meta（cwd / 归属 / 权限档 / 模型）两条路都要恢复
           setOpened(detail.meta);
           setCwd(detail.meta.cwd);
@@ -2211,18 +2244,16 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           const live = (engine.statesRef.current.get(id)?.phase ?? "idle") !== "idle";
           setSessionId(live ? id : null);
           sessionRef.current = live ? id : null;
-          if (!engine.statesRef.current.has(id)) {
-            engine.applyStates((prev) =>
-              seedFromDisk(prev, id, detail.transcript, detail.meta.stats, detail.window),
-            );
-          }
+          seedSlot(opened.seed);
         })
         .catch((cause: unknown) => {
+          // 已经被后点的顶替了：它的错误与用户此刻看的无关，不往界面上写
+          if (!openWins.isLatest(ticket)) return;
           setLoadingHistory(false);
           engine.setError(cause instanceof Error ? cause.message : String(cause));
         });
     },
-    [engine],
+    [engine, openWins],
   );
 
   /**
