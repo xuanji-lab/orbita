@@ -3,7 +3,7 @@
  * **纯模块**（store 注入），可被 `node --test` 直接测——ipc.ts import electron，
  * 逻辑放那里就没法直接测（turn-directories.ts 的同款先例）。
  *
- * 顺序固定 session → workspace → attached（→ 不进树的 attachments，见下）：session 是唯一随会话变的根（「这条任务
+ * 顺序固定 session → workspace → attached（→ 不进树的 attachments、cited、subsession，见下）：session 是唯一随会话变的根（「这条任务
  * 的草稿在这」），排最前；workspace 是 agent 的常驻地盘；attached 是用户后挂的，
  * 按挂上的顺序。每次现算、不缓存——工作台首次写入、挂 / 摘目录，面板下一次展开即生效。
  */
@@ -99,6 +99,15 @@ export async function resolveFileRoots(
         ),
       )),
     );
+  }
+  // subsession 根：本会话派出的子会话（含子会话再派的）各自的工作台。同样不进树，只为白名单——
+  // 子会话交回的产物（报告、截图、文稿）在那里，结尾那摞的「预览」、回答里的图都要读得到。
+  // 只认 parentId 链上的后代（store.descendants），别的会话的工作台借不到
+  if (req.sessionId !== null) {
+    for (const childId of await sessions.descendants(req.sessionId)) {
+      const path = sessions.workbenchPath(childId);
+      roots.push({ kind: "subsession", label: fileRootLabel("subsession", path, "", ""), path, exists: await pathExists(path) });
+    }
   }
   return roots;
 }
