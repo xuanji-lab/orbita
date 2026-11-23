@@ -1656,6 +1656,7 @@ function ChatViewBody(props: {
     return (
       <div
         className="home-stage"
+        data-galaxy={galaxyHome ? "true" : undefined}
         data-leaving={travel === "leaving" ? "true" : undefined}
         data-travel={travel === "prep" || travel === "entering" ? travel : undefined}
         style={{
@@ -1668,7 +1669,12 @@ function ChatViewBody(props: {
           overflow: "hidden",
         }}
       >
-        <div ref={stageRef} className="home-col" data-mode={logMode ? "log" : "cards"}>
+        <div
+          ref={stageRef}
+          className="home-col"
+          data-mode={logMode ? "log" : "cards"}
+          data-galaxy={galaxyHome ? "true" : undefined}
+        >
           {/* 淡出组：slogan 向上走（--transition-layer，220ms） */}
           <div className="home-fade home-fade-head">
             {/* 门面：slogan（纸面两档再加红笔批语），样子与理由在 HomeHero.tsx。
@@ -1708,17 +1714,18 @@ function ChatViewBody(props: {
             {notices}
             {composer}
           </div>
-          {/* 星系：输入框下面一条安静的带子，随 slogan 一起淡出（原型 proto/home-galaxy） */}
-          {galaxyHome && (
-            <div className="home-fade home-fade-galaxy">
-              <HomeGalaxy spec={PROTO_GALAXY_SPEC} label={t.chat.galaxyFigure(scopeNameOf(session, t.chat.home))} />
-            </div>
-          )}
           {/* 记录组：在输入框下面（先写，再读别的活的进展），随 slogan 一起淡出。没有等你 / 进行中的
               活就整组不渲染——输入框下面留白，不留组名、子午线或空容器（2026-11-22 删掉「最近」组后的常态） */}
           {logMode && logGroups.length > 0 && (
             <div className="home-fade home-fade-log">
               <HomeLog groups={logGroups} onOpen={openFromHome} />
+            </div>
+          )}
+          {/* 星系：占输入框（与等你 / 进行中的记录）下面剩下的全部空间，随 slogan 一起淡出（原型 proto/home-galaxy）。
+              记录在星系之上：要你动手的活比星系要紧；有记录时星系的画布变小，主星随画布一起缩，不随内容多少缩 */}
+          {galaxyHome && (
+            <div className="home-fade home-fade-galaxy">
+              <HomeGalaxy spec={PROTO_GALAXY_SPEC} label={t.chat.galaxyFigure(scopeNameOf(session, t.chat.home))} />
             </div>
           )}
         </div>

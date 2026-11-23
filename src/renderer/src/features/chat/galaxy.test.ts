@@ -9,7 +9,9 @@ import {
   EXPECTED_ID,
   FRAME_EXTENT,
   frameViewport,
-  GALAXY_BOX,
+  GALAXY_MARGIN,
+  GALAXY_MAX,
+  galaxyBox,
   galaxyFixtureOf,
   galaxySpecOf,
   layoutGalaxy,
@@ -176,35 +178,63 @@ describe("透视投影", () => {
     assert.ok(Math.abs(Math.hypot(tilted.x, tilted.y, tilted.z) - 30) < 1e-9);
   });
 
-  test("统一视口：三档的主星像素半径与中心完全一致；整座星系不越出 560×180 的包围盒", () => {
+  /** 某块画布上三档的主星（像素半径、圆心），并检查整座星系落在 galaxyBox 里 */
+  function starsIn(width: number, height: number) {
     const cam = makeCamera(FRAME_EXTENT);
-    const vp = frameViewport(cam, 900, 240);
-    const boxLeft = (900 - GALAXY_BOX.width) / 2;
-    const boxTop = (240 - GALAXY_BOX.height) / 2;
-    const stars = (["empty", "typical", "full"] as const).map((fixture) => {
+    const vp = frameViewport(cam, width, height);
+    const box = galaxyBox(width, height);
+    const boxLeft = (width - box.width) / 2;
+    const boxTop = (height - box.height) / 2;
+    return (["empty", "typical", "full"] as const).map((fixture) => {
       const layout = layoutGalaxy(galaxySpecOf(fixture));
       const items = drawFrame(layout, cam, vp, orbitArcs(layout, cam, vp), 7);
-      // 外缘一圈（含碎石带外沿）与所有行星都落在包围盒里（留 1px 投影 / 取整误差）
+      // 外缘一圈（含碎石带外沿）落在框里（留 1px 投影 / 取整误差）：轨道放大也不会顶到框外（也就顶不到输入框）
       for (let i = 0; i < 72; i++) {
         const p = project(orbitPoint(layout.extent, 0, 0, (i / 72) * Math.PI * 2), cam);
         const x = vp.cx + vp.focal * p.sx;
         const y = vp.cy + vp.focal * p.sy;
-        assert.ok(x >= boxLeft - 1 && x <= boxLeft + GALAXY_BOX.width + 1, `${fixture} x ${x}`);
-        assert.ok(y >= boxTop - 1 && y <= boxTop + GALAXY_BOX.height + 1, `${fixture} y ${y}`);
+        assert.ok(x >= boxLeft - 1 && x <= boxLeft + box.width + 1, `${width}x${height} ${fixture} x ${x}`);
+        assert.ok(y >= boxTop - 1 && y <= boxTop + box.height + 1, `${width}x${height} ${fixture} y ${y}`);
       }
       const star = items.find((item) => item.kind === "star");
       assert.ok(star?.kind === "star");
       return star;
     });
-    const [empty, typical, full] = stars;
-    assert.ok(empty !== undefined && typical !== undefined && full !== undefined);
-    for (const other of [empty, full]) {
-      assert.ok(Math.abs(other.r - typical.r) < 1e-9);
-      assert.ok(Math.abs(other.x - typical.x) < 1e-9 && Math.abs(other.y - typical.y) < 1e-9);
+  }
+
+  test("响应式统一视口：任一画布尺寸下，三档主星像素半径与圆心完全一致；星系不越出 galaxyBox", () => {
+    for (const [width, height] of [
+      [900, 240],
+      [1150, 420],
+      [712, 300],
+      [1900, 900],
+    ] as const) {
+      const [empty, typical, full] = starsIn(width, height);
+      assert.ok(empty !== undefined && typical !== undefined && full !== undefined);
+      for (const other of [empty, full]) {
+        assert.ok(Math.abs(other.r - typical.r) < 1e-9, `${width}x${height} r`);
+        assert.ok(Math.abs(other.x - typical.x) < 1e-9 && Math.abs(other.y - typical.y) < 1e-9, `${width}x${height} c`);
+      }
+      // 水平居中在画布正中
+      assert.ok(Math.abs(typical.x - width / 2) < 1e-6);
     }
-    // 主星画在画布正中附近，大小与平常档同级（不是 25px 的小点）
-    assert.ok(Math.abs(typical.x - 450) < 1e-6);
-    assert.ok(typical.r * 2 > 40, `star diameter ${typical.r * 2}`);
+  });
+
+  test("主星随画布放大而放大、随画布缩小而缩小；内容多少不影响；巨型画布封顶", () => {
+    const small = starsIn(712, 300)[1];
+    const medium = starsIn(1150, 420)[1];
+    const huge = starsIn(4000, 2000)[1];
+    const capped = starsIn(GALAXY_MAX.width + GALAXY_MARGIN * 2 + 600, GALAXY_MAX.height + GALAXY_MARGIN * 2 + 600)[1];
+    assert.ok(small !== undefined && medium !== undefined && huge !== undefined && capped !== undefined);
+    assert.ok(medium.r > small.r * 1.2, `${small.r} → ${medium.r}`);
+    // 超过 GALAXY_MAX 之后不再变大
+    assert.ok(Math.abs(huge.r - capped.r) < 1e-9);
+    assert.deepEqual(galaxyBox(4000, 2000), { width: GALAXY_MAX.width, height: GALAXY_MAX.height });
+    assert.deepEqual(galaxyBox(900, 240), { width: 900 - GALAXY_MARGIN * 2, height: 240 - GALAXY_MARGIN * 2 });
+    // 主星始终明显大于最大的行星（同一块画布、同一焦距）
+    const layout = layoutGalaxy(galaxySpecOf("full"));
+    const biggest = Math.max(...layout.planets.map((p) => p.radius));
+    assert.ok(layout.starRadius > biggest * 2);
   });
 });
 

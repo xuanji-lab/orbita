@@ -2677,14 +2677,13 @@ button.ws-fold {
   --galaxy-star: color-mix(in srgb, var(--color-text-tertiary) 50%, var(--color-bg-panel));
   display: block;
   width: 100%;
-  height: auto;
-  aspect-ratio: 900 / 240;
+  height: 100%;
   overflow: visible;
   pointer-events: none;
 }
 :root:is([data-theme="graphite"], [data-theme="black"]) .home-galaxy {
   --galaxy-light: var(--color-text-primary);
-  --galaxy-star: var(--color-text-secondary);
+  --galaxy-star: color-mix(in srgb, var(--color-text-secondary) 78%, var(--color-bg-panel));
 }
 .galaxy-orbit {
   fill: none;
@@ -2719,8 +2718,11 @@ button.ws-fold {
 .galaxy-light {
   stop-color: var(--galaxy-light);
 }
+/* 星系场：吃掉输入框下面剩下的全部高度（.home-col 是纵向 flex）；太矮时保底 160，宁可被 stage 裁掉也不压输入框 */
 .home-fade-galaxy {
-  margin-top: calc(-1 * var(--space-2));
+  flex: 1 1 auto;
+  min-height: 160px;
+  align-self: stretch;
 }
 
 /*
@@ -5678,8 +5680,30 @@ mark.intent-mark {
    * 星系首页（原型 proto/home-galaxy）。版式登记：
    * | 版式 | 用途 | 结构 | 现有最近的同类 |
    * | 星系门面 | 首页说明「这是哪一座星系」，并选新任务放在哪 | 星系名（品牌衬线、slogan 档、最轻字重）+「星系」后缀（lg 次级墨）+ 16px chevron，整块是菜单按钮；下面 slogan 退成一行 base 三级墨 | Claude Projects 项目页的项目名 + 一句说明 |
-   * | 星系带 | 输入框下一条安静的、会动的星系 | 900×240 的 SVG，等比缩放；只用墨色与发丝线，不用 accent | 无（新） |
+   * | 星系场 | 输入框（与记录）下面剩下的全部空间：一片安静的、会动的星系 | 填满剩余高度的 SVG，ResizeObserver 量真实尺寸；只用墨色与发丝线，不用 accent | 无（新） |
    */
+  /* v3（2026-11-23 用户：「星系太小了……把 composer 下移，居中，然后星系占满剩余的空间」）：
+     星系首页不再要索引边栏的左偏，门面 / 输入框 / 记录在内容区水平居中、整体下移；星系占下面剩下的全部高度 */
+  .home-stage[data-galaxy="true"] {
+    padding-top: 0;
+    align-items: stretch;
+  }
+  .home-col[data-galaxy="true"] {
+    width: 100%;
+    height: 100%;
+    padding-left: 0;
+    align-items: center;
+  }
+  .home-col[data-galaxy="true"] > :is(.home-fade-head, .home-travel, .home-fade-log) {
+    flex: 0 0 auto;
+    max-width: var(--content-max-width);
+  }
+  /* 门面 + 输入框整体下移：上方留一段按窗口高度取的空（22vh，夹在 24–260px），用一个不占语义的伪元素占位——
+     这是版面位置，不是组件间距，不进 --space-* 刻度 */
+  .home-col[data-galaxy="true"]::before {
+    content: "";
+    flex: 0 0 clamp(24px, 22vh, 260px);
+  }
   .home-hero[data-galaxy="true"] {
     gap: var(--space-1);
   }

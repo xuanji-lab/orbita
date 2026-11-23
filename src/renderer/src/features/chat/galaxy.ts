@@ -316,15 +316,32 @@ export interface Viewport {
   cy: number;
 }
 
-/** 整座星系（统一画框）在画布上的最大包围盒（CSS px）：与平常档同级，满载也不越过它 */
-export const GALAXY_BOX = { width: 560, height: 180 } as const;
+/**
+ * 整座星系（统一画框）在画布上占多大：由**容器的真实尺寸**决定（ResizeObserver 量出来），
+ * 四周各留 GALAXY_MARGIN，并封顶 GALAXY_MAX——大屏上不至于把一颗球放到半个屏幕。
+ * 只看容器、不看星系里有几颗行星，所以空 / 平常 / 满载在同一块地方主星一样大、圆心一样。
+ */
+export const GALAXY_MARGIN = 24;
+export const GALAXY_MAX = { width: 1280, height: 460 } as const;
+
+export function galaxyBox(width: number, height: number): { width: number; height: number } {
+  return {
+    width: clamp(width - GALAXY_MARGIN * 2, 1, GALAXY_MAX.width),
+    height: clamp(height - GALAXY_MARGIN * 2, 1, GALAXY_MAX.height),
+  };
+}
 
 /**
- * 统一视口：只按统一画框（FRAME_EXTENT 一圈 + 主星上下沿）定焦距与中心，不看某座星系自己的外缘。
- * 于是三档的主星同一个像素半径、同一个中心；星系本身再大也装在 GALAXY_BOX 里（layoutGalaxy 保证外缘
- * 不超过画框）。框在画布里水平、垂直都居中。
+ * 统一视口：只按统一画框（FRAME_EXTENT 一圈）定焦距与中心，不看某座星系自己的外缘。
+ * 于是同一块画布上三档的主星同一个像素半径、同一个中心；星系本身再大也装在 box 里（layoutGalaxy 保证
+ * 外缘不超过画框）。框在画布里水平、垂直都居中。画布变大，整座星系（主星、行星、轨道）等比变大。
  */
-export function frameViewport(camera: Camera, width: number, height: number, box: { width: number; height: number } = GALAXY_BOX): Viewport {
+export function frameViewport(
+  camera: Camera,
+  width: number,
+  height: number,
+  box: { width: number; height: number } = galaxyBox(width, height),
+): Viewport {
   const pts: Projected[] = [];
   for (let i = 0; i < 144; i++) pts.push(project(orbitPoint(FRAME_EXTENT, 0, 0, (i / 144) * Math.PI * 2), camera));
   let minX = Infinity;
@@ -522,7 +539,8 @@ export function drawFrame(layout: GalaxyLayout, camera: Camera, vp: Viewport, ar
       const theta = particle.theta0 + particle.omega * t;
       const p = project({ x: particle.r * Math.cos(theta), y: particle.r * Math.sin(theta), z: particle.z }, camera);
       const s = toScreen(p, vp);
-      const point = { x: s.x, y: s.y, r: Math.max(0.6, (0.9 * camera.distance) / p.depth) };
+      // 星屑随画布放大而变清楚（每单位像素 × 0.22，夹在 0.6–2.2px 之间），近大远小
+      const point = { x: s.x, y: s.y, r: clamp((vp.focal * 0.22) / p.depth, 0.6, 2.2) };
       if (p.depth > starP.depth) {
         back.push(point);
         backDepth += p.depth;

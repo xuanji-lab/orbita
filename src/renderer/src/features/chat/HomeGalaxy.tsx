@@ -16,9 +16,28 @@ import {
   type MotionInputs,
 } from "./galaxy.ts";
 
-/** 画布的逻辑尺寸：宽 = 内容列量度（900），高按「输入框下一条安静的带子」取 */
-const VIEW_W = 900;
-const VIEW_H = 240;
+/**
+ * 画布的真实尺寸（CSS px）：ResizeObserver 量 svg 自己的盒子。星系占首页输入框下方剩下的全部空间，
+ * 窗口 / 侧栏 / 右栏一变，画布跟着变，viewBox 与像素一比一（不靠 preserveAspectRatio 拉伸）。
+ * 还没量到（首帧）时不画天体，免得先按错误尺寸闪一下。
+ */
+function useBoxSize(target: RefObject<Element | null>): { width: number; height: number } | null {
+  const [size, setSize] = useState<{ width: number; height: number } | null>(null);
+  useEffect(() => {
+    const el = target.current;
+    if (el === null) return;
+    const observer = new ResizeObserver((entries) => {
+      const rect = entries[entries.length - 1]?.contentRect;
+      if (rect === undefined) return;
+      const width = Math.round(rect.width);
+      const height = Math.round(rect.height);
+      setSize((prev) => (prev !== null && prev.width === width && prev.height === height ? prev : { width, height }));
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [target]);
+  return size;
+}
 
 /**
  * 时钟：只在 motionAllowed 时走表——每帧 requestAnimationFrame 取时间并重绘，帧与帧之间隔 FRAME_MS
@@ -116,14 +135,16 @@ export function HomeGalaxy(props: { spec: GalaxySpec; label: string }) {
   const uid = useId().replace(/:/g, "");
   const svgRef = useRef<SVGSVGElement | null>(null);
   const seconds = useGalaxyClock(svgRef);
+  const size = useBoxSize(svgRef);
+  const layout = useMemo(() => layoutGalaxy(props.spec), [props.spec]);
   const scene = useMemo(() => {
-    const layout = layoutGalaxy(props.spec);
-    // 相机与视口只按统一画框定：三档的主星同大同位（不按这座星系自己的外缘缩放）
+    if (size === null || size.width < 2 || size.height < 2) return null;
+    // 相机与视口只按统一画框 + 画布尺寸定：同一块画布上三档主星同大同位，不按星系自己的外缘缩放
     const camera = makeCamera(FRAME_EXTENT);
-    const viewport = frameViewport(camera, VIEW_W, VIEW_H);
-    return { layout, camera, viewport, arcs: orbitArcs(layout, camera, viewport) };
-  }, [props.spec]);
-  const items = drawFrame(scene.layout, scene.camera, scene.viewport, scene.arcs, seconds);
+    const viewport = frameViewport(camera, size.width, size.height);
+    return { camera, viewport, arcs: orbitArcs(layout, camera, viewport) };
+  }, [layout, size]);
+  const items = scene === null ? [] : drawFrame(layout, scene.camera, scene.viewport, scene.arcs, seconds);
   const starGradient = `${uid}-star`;
   const render = (item: DrawItem) => {
     if (item.kind === "orbit") {
@@ -154,13 +175,12 @@ export function HomeGalaxy(props: { spec: GalaxySpec; label: string }) {
     <svg
       ref={svgRef}
       className="home-galaxy"
-      viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
-      preserveAspectRatio="xMidYMid meet"
+      viewBox={size === null ? undefined : `0 0 ${size.width} ${size.height}`}
       role="img"
       aria-label={props.label}
-      data-planets={scene.layout.planets.length}
-      data-hidden={scene.layout.hidden}
-      data-sessions={scene.layout.belt?.count ?? 0}
+      data-planets={layout.planets.length}
+      data-hidden={layout.hidden}
+      data-sessions={layout.belt?.count ?? 0}
     >
       <defs>
         <radialGradient id={starGradient} cx="50%" cy="50%" r="50%" fx="38%" fy="34%">
