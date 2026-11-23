@@ -34,7 +34,8 @@ import { Chip } from "../../shell/Chip";
 import { Menu, type MenuItem } from "../../shell/Menu";
 import { api } from "../../api";
 import { modelChipParts, ModelPickerMenu } from "../settings/model-menu";
-import { useChannelSummaries } from "./useChannelSummaries";
+import { useChannelSummariesState } from "./useChannelSummaries";
+import { childTailCache, openChildIds, readChildTails, type ChildTail } from "./child-tails.ts";
 import { useParentChannels } from "./useChannelMessages";
 import {
   childActivityOf,
@@ -104,7 +105,7 @@ export function SubSessionsPanel(props: {
 }) {
   const t = useT();
   const children = childSessions(props.session.sessions, props.parentId);
-  const summaries = useChannelSummaries(props.parentId);
+  const { summaries, ready: summariesReady } = useChannelSummariesState(props.parentId);
   // 通道全文（收件箱行的最新一句）：hook 必须在两层分支之前——列表层用它，会话层
   // 不用也不能少这一条（hook 数量不能随层切换变，同 ChatView 首页分支的纪律）
   const channels = useParentChannels(props.parentId, children.map((meta) => meta.id));
@@ -205,6 +206,7 @@ export function SubSessionsPanel(props: {
           parentId={props.parentId}
           children={children}
           summaries={summaries}
+          summariesReady={summariesReady}
           channels={channels}
           engine={props.engine}
           session={props.session}
@@ -266,23 +268,20 @@ function SubSessionList(props: {
   parentId: string;
   children: readonly SessionMeta[];
   summaries: ReadonlyMap<string, ChannelSummary>;
+  /** 这个父的通道摘要取回来过没有：没取回来之前不知道谁还开着，不读任何子会话 */
+  summariesReady: boolean;
   channels: ReadonlyMap<string, readonly ChannelMessage[]>;
   engine: SessionEngine;
   session: ChatSession;
   onOpenChild: (childId: string) => void;
 }) {
   const t = useT();
-  const { children, summaries, channels, engine, session } = props;
-  // 转录尾巴只给「通道还开着」的读（在跑什么、计划在做哪步）；交回 / 失败 / 停止的不读，四十个里只读在跑的那十几个
+  const { children, summaries, summariesReady, channels, engine, session } = props;
+  // 转录尾巴只给「通道还开着」的读（在跑什么、计划在做哪步）；交回 / 失败 / 停止的不读，四十个里只读在跑的那十几个；
+  // 摘要没回来之前一个都不读（见 openChildIds）
   const openIds = useMemo(
-    () =>
-      children
-        .filter((meta) => {
-          const status = summaries.get(meta.id)?.status;
-          return status === undefined || status === "running";
-        })
-        .map((meta) => meta.id),
-    [children, summaries],
+    () => openChildIds(children, summaries, summariesReady),
+    [children, summaries, summariesReady],
   );
   const tails = useChildTails(children, openIds, engine);
   const [now, setNow] = useState(() => Date.now());
@@ -492,7 +491,9 @@ function useTicker(sinces: readonly number[], setNow: (now: number) => void): vo
 
 /**
  * 子会话的转录尾巴：引擎槽里载着的（正在面板 / 主槽看着、或真在跑的）用槽里的实时记录；没载过的读一次尾窗
- * （api.session.load 的首屏窗口，与状态卡原型 useChildTails 同一做法），meta 的 updatedAt 变了重读。
+ * （api.session.load 的首屏窗口，与状态卡原型 useChildTails 同一做法）。
+ * 读过的按子会话 id 缓存在模块里（`childTailCache`，meta 的 updatedAt 变了才重读）——面板卸载重挂、
+ * 换个父会话再换回来，第一帧就是完整的，不重读；换父 / 卸载时排队里还没发出去的读取不再发。
  * 只读 `ids` 里的（通道还开着的）——交回 / 失败 / 停止的行不需要「在跑什么」。
  * 真做时这一段应由主进程推一行「在跑什么」（见报告：要不要改契约）。
  */
@@ -500,37 +501,37 @@ function useChildTails(
   children: readonly SessionMeta[],
   ids: readonly string[],
   engine: SessionEngine,
-): ReadonlyMap<string, readonly TranscriptRecord[]> {
-  const [loaded, setLoaded] = useState<ReadonlyMap<string, readonly TranscriptRecord[]>>(new Map());
-  const wanted = useMemo(() => new Set(ids), [ids]);
+): ReadonlyMap<string, ChildTail> {
+  // 读完往缓存里写，不进 state；这个计数只负责通知「缓存变了，重画」
+  const [, setReadVersion] = useState(0);
+  const wanted = new Set(ids);
   const key = children
     .filter((meta) => wanted.has(meta.id) && engine.states.get(meta.id) === undefined)
     .map((meta) => `${meta.id}:${meta.updatedAt}`)
     .join(",");
   useEffect(() => {
     let alive = true;
-    const queue = key === "" ? [] : key.split(",").map((part) => part.split(":")[0] ?? "");
-    void (async () => {
-      const next = new Map<string, readonly TranscriptRecord[]>();
-      const worker = async (): Promise<void> => {
-        for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
-          const detail = await api.session.load(id).catch(() => null);
-          next.set(id, (detail?.transcript ?? []) as readonly TranscriptRecord[]);
-        }
-      };
-      await Promise.all([worker(), worker(), worker(), worker()]);
-      if (alive) setLoaded(next);
-    })();
+    const list = key === "" ? [] : key.split(",").map((part) => {
+      const cut = part.lastIndexOf(":");
+      return { id: part.slice(0, cut), updatedAt: Number(part.slice(cut + 1)) };
+    });
+    void readChildTails(list, {
+      load: (id) => api.session.load(id),
+      cache: childTailCache,
+      isCancelled: () => !alive,
+    }).then(() => {
+      if (alive) setReadVersion((version) => version + 1);
+    });
     return () => {
       alive = false;
     };
   }, [key]);
-  const out = new Map<string, readonly TranscriptRecord[]>();
+  const out = new Map<string, ChildTail>();
   for (const id of ids) {
     const entry = engine.states.get(id);
-    if (entry !== undefined) out.set(id, selectTranscript(entry.transcript) as readonly TranscriptRecord[]);
+    if (entry !== undefined) out.set(id, selectTranscript(entry.transcript) as ChildTail);
     else {
-      const tail = loaded.get(id);
+      const tail = childTailCache.peek(id);
       if (tail !== undefined) out.set(id, tail);
     }
   }
