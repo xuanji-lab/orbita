@@ -168,6 +168,9 @@ if (fakeMicWav !== undefined && fakeMicWav !== "") {
   app.commandLine.appendSwitch("use-fake-ui-for-media-stream");
   app.commandLine.appendSwitch("use-fake-device-for-media-stream");
   app.commandLine.appendSwitch("use-file-for-fake-audio-capture", `${fakeMicWav}%noloop`);
+  // 音频服务默认在沙箱里的独立进程，读不到这个文件（实测报 Failed to read … Try disabling the sandbox）：
+  // 假麦克风开着时让它跑在主进程里、不进沙箱——只影响这种开发验收实例
+  app.commandLine.appendSwitch("disable-features", "AudioServiceOutOfProcess,AudioServiceSandbox");
 }
 
 /*

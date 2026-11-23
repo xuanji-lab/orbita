@@ -79,8 +79,9 @@
   gap: var(--space-1);
 }
 
-/* 挂断：危险红字，hover 铺 danger-soft（设计系统「危险红字、hover --color-danger-soft」） */
-.call-hangup {
+/* 挂断：危险红字，hover 铺 danger-soft（设计系统「危险红字、hover --color-danger-soft」）。
+   前面加 .call-bar 抬一级特异性：.quiet-control 的字色在 styles.css 里，加载顺序在后会盖掉红字（实测） */
+.call-bar .call-hangup {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
@@ -92,7 +93,7 @@
   color: var(--color-danger);
 }
 
-.call-hangup:hover {
+.call-bar .call-hangup:hover {
   background: var(--color-danger-soft);
   color: var(--color-danger);
 }

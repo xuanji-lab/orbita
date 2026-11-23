@@ -174,8 +174,8 @@ export function useVoiceCall(input: {
     setPhase(null);
     setLevel(0);
     setHeard("");
-    // 一句话都没说过、什么都没播的通话不留空目录
-    if (live.recordedSamples > 0 || live.manifest.length > 0) {
+    // 一句话都没发出去的通话不留目录（只录到静音的 mic.wav 没用，2026-11-24 实测一通空通话留下 2.8 MB 静音）
+    if (live.manifest.length > 0) {
       if (live.recordedSamples > 0) save(live, "mic.wav", encodeWav(live.recorded, DICTATION_SAMPLE_RATE));
       save(
         live,
