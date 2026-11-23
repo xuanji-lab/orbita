@@ -7327,14 +7327,6 @@ button.turn-output-from.link:hover {
   padding: 0 var(--space-3) var(--space-3) calc(var(--space-3) + var(--card-icon-w) + var(--space-3));
 }
 
-/* 工作区页的「页头版」：星系还没有任何会话时留的一行 slogan，靠左、轻字（与输入框同一条左缘）；有内容后整块不渲染 */
-.ws-home-quiet.home-slogan {
-  margin: 0;
-  text-align: left;
-  font-size: var(--font-size-base);
-  font-weight: var(--weight-regular);
-  color: var(--color-text-tertiary);
-}
 
 /*
  * 工作区页星系上的名字与「+N」（HomeGalaxy 的 fill）。名字：等你 / 在跑里最要紧的 3 颗常显，其余悬停才出；

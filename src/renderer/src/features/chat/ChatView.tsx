@@ -207,8 +207,7 @@ import { FileTypeIcon } from "../../shell/FileTypeIcon";
 import { HomeHero } from "./HomeHero";
 import { HomeGalaxy, PROTO_GALAXY_SPEC } from "./HomeGalaxy";
 import { HomeLog, type HomeLogRowView } from "./HomeLog";
-import { heroFace, sloganOf } from "./home-hero.ts";
-import { showQuietSlogan } from "./proto-variants.ts";
+import { heroFace } from "./home-hero.ts";
 import { useProtoVariants } from "./proto-variants-store.ts";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { FileTurnCard, RevertMarkView } from "./FileTurnCard";
@@ -1622,15 +1621,7 @@ function ChatViewBody(props: {
           data-workspace={session.workspaceId ?? undefined}
         >
           <div className="home-fade ws-home-sky">
-            {protoVariants.title === "header" ? (
-              showQuietSlogan("header", galaxyData.spec) && (
-                <div className="ws-home-face">
-                  <div className="ws-home-face-col">
-                    <p className="home-slogan ws-home-quiet">{sloganOf("plain")}</p>
-                  </div>
-                </div>
-              )
-            ) : (
+            {protoVariants.title === "both" && (
               <div className="ws-home-face">
                 <div className="ws-home-face-col">
                   <HomeHero

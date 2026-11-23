@@ -111,25 +111,35 @@
   box-shadow: var(--focus-ring);
 }
 
-/* 悬停动作键：叠在右上角，不占位；静止的时间让位，名字的尾巴在键下面淡出 */
+/*
+ * 悬停动作键：叠在右上角，不占位；静止的时间让位。静止时用 opacity: 0 + pointer-events: none 藏起来，**不用 display: none**——
+ * display: none 的键不可聚焦：键盘用户按 Tab 想从行主体走进动作键时，焦点一离开行主体，「行里有 :focus-visible」就不成立、
+ * 动作键当场 display: none，目标没了、焦点落到 body（CDP 复现过：Tab 第三下落到 BODY）。透明的键仍可聚焦，
+ * 焦点一到就因 :has(:focus-visible) 现形。
+ */
 .agent-acts {
   position: absolute;
   top: var(--space-1-5);
   /* 最右一颗键的字形右缘 = 行右内边距（与时间同一条线）：实测 14px 字形在 20px 键里右侧留 5px，键框右移 5px 补上 */
   right: calc(var(--space-2) - 5px);
-  display: none;
+  display: inline-flex;
   align-items: center;
   gap: var(--space-0-5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-instant) var(--ease-standard);
 }
 .agent-row:hover .agent-acts,
 .agent-row:has(:focus-visible) .agent-acts,
 .agent-row[data-armed] .agent-acts,
 .agent-row[data-designing] .agent-acts {
-  display: inline-flex;
+  opacity: 1;
+  pointer-events: auto;
 }
 /* 星系设计面板开着这座星系：不悬停时只留点亮的画笔键，告诉你右栏在设计哪座 */
 .agent-row[data-designing]:not(:hover):not(:has(:focus-visible)):not([data-armed]) .agent-acts > :not(.agent-act-diy) {
-  display: none;
+  opacity: 0;
+  pointer-events: none;
 }
 .agent-row:hover .agent-time,
 .agent-row:has(:focus-visible) .agent-time,
