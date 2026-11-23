@@ -292,6 +292,48 @@ export function userRepliesNote(replies: readonly ChannelMessage[]): string {
   ].join("\n");
 }
 
+/**
+ * 合并信封：几个子会话的回报凑成**一条**用户消息投给父模型（「现在讨论」/ 积压合并）。
+ * 每条回报仍是 `composeChannelPrompt` 的原样信封，模型看到的格式不变；
+ * 用户代父回复过的话（`userRepliesNote`）紧跟在它所属那条信封后面。
+ * 信封之间空一行——`parseChannelBatch` 靠「空行 + 信封首行」切段。
+ * 只有一条时与单条投递逐字相同（不多不少），旧路径不受影响。
+ */
+export function composeChannelBatchPrompt(
+  entries: readonly { message: ChannelMessage; peer: { id: string; title: string; workbench?: string }; note?: string }[],
+): string {
+  return entries
+    .map(({ message, peer, note }) => {
+      const envelope = composeChannelPrompt(message, peer);
+      return note === undefined || note === "" ? envelope : `${envelope}\n${note}`;
+    })
+    .join("\n\n");
+}
+
+/**
+ * 合并信封里每条信封的首行属性，按出现顺序。首段必须是合法信封，否则返回空数组
+ * （与 `parseChannelPrompt` 同一条纪律：只有首行是信封的消息才不算用户说的话）。
+ * 后续各段同样逐段过 `parseChannelPrompt`，认不出的段跳过。
+ * 已知的边：子会话正文里若恰好出现「空行 + 信封首行」会多认出一段，后果只是
+ * 多画一行指向不存在消息的标记——标记行查不到账本就退成最朴素的一行，不会替用户或模型编话。
+ */
+export function parseChannelBatch(
+  text: string,
+): NonNullable<ReturnType<typeof parseChannelPrompt>>[] {
+  const parts = text.split("\n\n<channel ");
+  const out: NonNullable<ReturnType<typeof parseChannelPrompt>>[] = [];
+  for (let i = 0; i < parts.length; i += 1) {
+    const part = parts[i] ?? "";
+    const parsed = parseChannelPrompt(i === 0 ? part : `<channel ${part}`);
+    if (parsed === null) {
+      if (i === 0) return [];
+      continue;
+    }
+    out.push(parsed);
+  }
+  return out;
+}
+
 /** 信封首行的属性顺序固定（from / kind / peer / message），锚定在字符串开头——只认首行。 */
 const CHANNEL_PROMPT_HEADER =
   /^<channel from="(parent|child)" kind="([a-z]+)" peer="([^"]+)" message="([^"]+)"/;
