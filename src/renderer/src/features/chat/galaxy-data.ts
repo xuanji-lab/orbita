@@ -235,7 +235,9 @@ function agentGalaxy(input: ScopeGalaxyInput, agents: readonly AgentPlanetInput[
   }
   active.sort((a, b) => rankOf(a.state) - rankOf(b.state) || b.meta.updatedAt - a.meta.updatedAt || a.meta.id.localeCompare(b.meta.id));
   // 最多拎出 ROCK_CAP 块（等你的排在前面，一定在里面）；再多的只是星屑里的一粒，计数里有、「+N」里有
-  const rocks: RockSpec[] = active.slice(0, ROCK_CAP).map(({ meta, state }) => ({ id: meta.id, state, label: meta.title.trim() }));
+  const rocks: RockSpec[] = active
+    .slice(0, ROCK_CAP)
+    .map(({ meta, state }) => ({ id: meta.id, state, label: meta.title.trim(), ...(meta.parentId === undefined ? {} : { child: true }) }));
   const planets: PlanetSpec[] = agents.map((agent) => {
     const hash = workspaceHash(agent.id);
     return {
@@ -249,13 +251,13 @@ function agentGalaxy(input: ScopeGalaxyInput, agents: readonly AgentPlanetInput[
       state: null,
     };
   });
-  const activeChildren = active.filter(({ meta }) => meta.parentId !== undefined).length;
   return {
     spec: {
       starMass: input.starMass,
       ...(input.starExtent === undefined ? {} : { starExtent: input.starExtent }),
       planets,
-      sessions: roots.length + activeChildren,
+      // 只数根会话：与右栏树主卡「N 条会话」（orchestraTree.total）同一个口径；子会话碎石块带 child 标记，不进这个数
+      sessions: roots.length,
       rocks,
     },
     planetIds: [],

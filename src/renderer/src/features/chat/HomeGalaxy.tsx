@@ -16,6 +16,7 @@ import {
   makeCamera,
   dustCapFor,
   foldedMarkAt,
+  foldedCountOf,
   emptyHintAt,
   motionAllowed,
   orbitArcs,
@@ -277,8 +278,7 @@ export function HomeGalaxy(props: {
   const workspaceId = props.workspaceId ?? null;
   const live = props.fill === true && props.starless !== true && actions !== null && workspaceId !== null ? { actions, workspaceId } : null;
   // 角上那一行「另有 N 条会话」：星屑带折掉的 + 这一帧没画出来的碎石块（窄画布里整圈碎石块出画时归进这一行）
-  const rocksHidden = layout.rockOrbit === null ? layout.rocks.length : 0;
-  const foldedCount = (layout.belt?.folded ?? 0) + rocksHidden;
+  const foldedCount = foldedCountOf(layout);
   const foldedLine = scene === null || props.fill !== true || props.starless === true || foldedCount <= 0 ? null : t.agents.more(foldedCount);
   const foldedBox =
     foldedLine === null || scene === null

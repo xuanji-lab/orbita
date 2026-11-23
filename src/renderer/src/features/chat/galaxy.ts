@@ -50,6 +50,11 @@ export interface RockSpec {
   state: "waiting" | "running";
   /** 会话标题（引线上写它） */
   label: string;
+  /**
+   * 子会话拎成的碎石块：它不在 spec.sessions（= 这座星系的根会话数，与右栏树主卡同源）里，
+   * 所以不从星屑带的颗粒数里扣，也不算进「另有 N 条会话」
+   */
+  child?: boolean;
 }
 
 export interface GalaxySpec {
@@ -158,6 +163,7 @@ export interface OrbitRock {
   id: string;
   state: "waiting" | "running";
   label: string;
+  child?: boolean;
   theta0: number;
 }
 
@@ -252,13 +258,15 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
   const lastEdge = expectedOrbit ?? prevOrbit + prevRadius;
   let belt: Belt | null = null;
   const rockSpecs = spec.rocks ?? [];
-  const sessions = Math.max(0, Math.floor(spec.sessions), rockSpecs.length);
-  if (sessions > 0) {
+  // 根会话拎成的碎石块是 spec.sessions 里的；子会话的不是（见 RockSpec.child）
+  const rootRocks = rockSpecs.filter((rock) => rock.child !== true).length;
+  const sessions = Math.max(0, Math.floor(spec.sessions), rootRocks);
+  if (sessions > 0 || rockSpecs.length > 0) {
     const inner = lastEdge + MIN_CLEARANCE * 2;
     const outer = Math.max(FRAME_EXTENT, inner + 6);
     const rand = seeded(9173);
     const particles: DustParticle[] = [];
-    const n = Math.min(sessions - rockSpecs.length, Math.max(0, Math.floor(spec.dustCap ?? DUST_CAP)));
+    const n = Math.min(sessions - rootRocks, Math.max(0, Math.floor(spec.dustCap ?? DUST_CAP)));
     for (let i = 0; i < n; i++) {
       const r = inner + rand() * (outer - inner);
       particles.push({
@@ -268,7 +276,8 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
         omega: angularSpeed(r),
       });
     }
-    belt = { inner, outer, count: sessions, folded: sessions - n - rockSpecs.length, particles, alpha: beltAlpha(sessions) };
+    // folded = 没画成星屑、也没拎成碎石块的根会话数（不含子会话：子会话不在 sessions 里）
+    belt = { inner, outer, count: sessions, folded: sessions - n - rootRocks, particles, alpha: beltAlpha(sessions) };
   }
   // 碎石块：等角排开，起点按第一块的 id 取（同一组会话每次排成同一个样子）
   const rockBase = rockSpecs[0] === undefined ? 0 : (hashText(rockSpecs[0].id) % 360) * DEG;
@@ -276,6 +285,7 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
     id: rock.id,
     state: rock.state,
     label: rock.label,
+    ...(rock.child === true ? { child: true } : {}),
     theta0: rockBase + (index * Math.PI * 2) / rockSpecs.length,
   }));
   return {
@@ -545,6 +555,18 @@ export function dustCapFor(width: number, height: number): number {
 }
 
 /** 「+N」标记的屏幕位置：碎石带外沿、近侧偏右一点（不压行星，也不压标题） */
+/**
+ * 画布角上「另有 N 条会话」的 N：这座星系的根会话总数（spec.sessions，与右栏树主卡「N 条会话」同源）
+ * 减去画面上已经画出来的——星屑颗粒（每颗一条根会话）与这一帧画出的根会话碎石块。
+ * 碎石块那一圈整圈出画（窄画布，rockOrbit = null）时，根会话碎石块加回来；子会话碎石块从来不算。
+ * 永远 0 ≤ N ≤ 总数（2026-11-24 主会话核对：窄窗曾写「另有 447」而总数只有 437——把子会话与出画碎石重复计入）。
+ */
+export function foldedCountOf(layout: GalaxyLayout): number {
+  if (layout.belt === null) return 0;
+  const hiddenRootRocks = layout.rockOrbit === null ? layout.rocks.filter((rock) => rock.child !== true).length : 0;
+  return Math.max(0, layout.belt.folded + hiddenRootRocks);
+}
+
 export function foldedMarkAt(layout: GalaxyLayout, camera: Camera, vp: Viewport): { x: number; y: number } | null {
   if (layout.belt === null || layout.belt.folded <= 0) return null;
   const p = project(orbitPoint(layout.belt.outer, 0, 0, -0.7), camera);

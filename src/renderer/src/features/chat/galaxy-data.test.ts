@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { SessionMeta } from "@shared/session";
 import { runStateOf, type RunStateSource, type SessionRunState } from "../notify/completion-notice.ts";
-import { FRAME_EXTENT, PLANET_MASS, PLANET_ZONE, STAR_MASS, VISIBLE_ORBIT_CAP, layoutGalaxy, planetRadius, starRadius } from "./galaxy.ts";
+import { AGENT_READABLE_MAX, FRAME_EXTENT, GALAXY_MAX_FILL, PLANET_MASS, PLANET_ZONE, STAR_MASS, VISIBLE_ORBIT_CAP, dustCapFor, elevationFor, foldedCountOf, galaxyBox, layoutGalaxy, planetRadius, starRadius } from "./galaxy.ts";
+import { fitScreenSafe } from "./screen-safe.ts";
+import { orchestraTree } from "./orchestra-data.ts";
 import { IDLE_CHILD_MS, ORBIT_FIRST, ORBIT_SPREAD_MAX, ORBIT_STEP, RECENT_MENU_LIMIT, latestWorkspaceId, orbitRadiusOf, ROCK_CAP, planetMassOf, scopeGalaxy, scopeRecent, scopeSummary, scopeTone, stateIndexOf, stateOfIndex } from "./galaxy-data.ts";
 
 const meta = (over: { id: string; updatedAt: number } & Partial<SessionMeta>): SessionMeta => ({
@@ -317,8 +319,9 @@ describe("编排星系：行星 = 子智能体，会话 = 碎石", () => {
     const states: Record<string, "running" | "waiting" | null> = { a: "running", b: "waiting", c: null, k: "running" };
     const data = scopeGalaxy({ sessions, workspaceId: ws, stateOf: (m) => states[m.id] ?? null, now: at, starMass: 600, designedPlanet: null, agents });
     assert.deepEqual(data.spec.planets.map((p) => [p.id, p.mass, p.orbitRadius, p.state]), [["rec", 22, 19, null], ["eval", 30, 31, null]]);
-    assert.deepEqual(data.spec.rocks?.map((r) => [r.id, r.state]), [["b", "waiting"], ["a", "running"], ["k", "running"]]);
-    assert.equal(data.spec.sessions, 4);
+    assert.deepEqual(data.spec.rocks?.map((r) => [r.id, r.state, r.child === true]), [["b", "waiting", false], ["a", "running", false], ["k", "running", true]]);
+    // 会话数只数根会话（与右栏树主卡同源）；子会话碎石块 k 带 child 标记，不进这个数
+    assert.equal(data.spec.sessions, 3);
   });
   test("在做事的会话再多，碎石块也只拎 ROCK_CAP 块，等你的一定在里面", () => {
     const sessions = Array.from({ length: 20 }, (_, i) => mk(`s${i}`, { updatedAt: at + i }));
@@ -364,4 +367,46 @@ describe("「等你」件数：页头 / 侧栏（scopeSummary）与星系碎石�
     assert.equal(flat.waiting, 3);
     assert.equal(flat.running, 1);
   });
+});
+
+describe("「另有 N 条会话」与右栏树主卡同源：N = 根会话总数 − 画面上已画出的，0 ≤ N ≤ 总数（2026-11-24 主会话核对：窄窗写「另有 447」、树主卡 437）", () => {
+  // 满载 orbita 的形状：40 条根会话，其中一条派出 14 个子会话（11 在跑、3 等你），另一条根会话自己在跑
+  const sessions = [
+    ...Array.from({ length: 40 }, (_, i) => meta({ id: `r${i}`, updatedAt: 100 + i })),
+    ...Array.from({ length: 14 }, (_, i) => meta({ id: `k${i}`, updatedAt: 200 + i, parentId: "r0" })),
+  ];
+  const source: RunStateSource = {
+    sessions,
+    phaseOf: (id) => (id === "r1" || /^k([0-9]|10)$/.test(id) ? "turn" : "idle"),
+    approvalsOf: (id) => (id === "k11" || id === "k12" || id === "k13" ? [{ id }] : []),
+  };
+  const index = stateIndexOf(source);
+  const agents = [19, 31, 43].map((orbitRadius, i) => ({ id: `p${i}`, mass: 20 + i * 5, composition: "rock" as const, orbitRadius }));
+  const galaxy = scopeGalaxy({ sessions, workspaceId: "ws", stateOf: index.state, ownStateOf: index.own, now: 1000, starMass: 620, designedPlanet: null, agents });
+  const tree = orchestraTree({ sessions, workspaceId: "ws", stateOf: index.state, now: 1000 });
+
+  test("星系的会话数就是树主卡的总数（只数根会话，子会话碎石块带 child 标记）", () => {
+    assert.equal(galaxy.spec.sessions, tree.total);
+    assert.equal(tree.total, 40);
+    const rocks = galaxy.spec.rocks ?? [];
+    assert.equal(rocks.length, ROCK_CAP);
+    assert.ok(rocks.some((rock) => rock.child === true));
+  });
+
+  for (const [name, w, h] of [
+    ["宽窗页面", 1088, 726],
+    ["右栏星系图", 416, 333],
+    ["窄窗页面 + 右栏（碎石块整圈出画）", 196, 214],
+  ] as const) {
+    test(`${name}（${w}×${h}）：另有 N + 星屑颗粒 + 画出的根会话碎石块 = 总数`, () => {
+      const box = galaxyBox(w, h, GALAXY_MAX_FILL);
+      const scene = fitScreenSafe({ ...galaxy.spec, dustCap: dustCapFor(w, h) }, w, h, box, elevationFor(box), AGENT_READABLE_MAX);
+      const layout = scene.layout;
+      const n = foldedCountOf(layout);
+      const dust = layout.belt?.particles.length ?? 0;
+      const rootRocksDrawn = layout.rockOrbit === null ? 0 : layout.rocks.filter((rock) => rock.child !== true).length;
+      assert.ok(n >= 0 && n <= tree.total, `另有 ${n}，总数 ${tree.total}`);
+      assert.equal(n + dust + rootRocksDrawn, tree.total);
+    });
+  }
 });
