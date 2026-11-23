@@ -641,6 +641,19 @@
   height: 100%;
   color: var(--color-text-tertiary);
 }
+/* 看板缩略图：铺满缩略框；卡在里面按固定一格宽排版、整块等比缩放居中（BoardThumb.tsx）。只是看的，不吃指针 */
+.cs-board-thumb {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.cs-board-stage {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform-origin: center;
+}
+
 .cs-thumb-name {
   display: flex;
   align-items: center;

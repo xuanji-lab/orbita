@@ -52,8 +52,11 @@ import {
   createRowHeightEstimator,
   DEFAULT_ROW_ESTIMATE,
   estimateRowHeight,
+  messageRowIndex,
   prependAnchorTarget,
   rowIndexByKey,
+  rowResizeCompensation,
+  toolCallRowIndex,
   viewRowIndex,
   virtualHistoryRows,
   type HeightCache,
@@ -66,6 +69,8 @@ import { clampToolBody } from "./tool-body-clamp.ts";
 import { noticeIconBoxStyle, noticeParagraphStyle, noticeTextStyle } from "./notice.ts";
 import { PluginInstallLine } from "../plugins/PluginInstallLine.tsx";
 import { PluginBoardResultView } from "../board/PluginBoardResult.tsx";
+import type { PluginBoardResult } from "../../../../shared/plugin-board.ts";
+import { boardExpandStore, boardRowEstimate } from "../board/board-expand.ts";
 import { builtinCommand, type DetailRow, docEditLabel, docEditPath, docEditSection, docEditSummary, toolWord } from "./builtin-commands.ts";
 import { getOpenDocumentText } from "../doc-panel/open-document.ts";
 import { ExitCard } from "./ExitCard";
@@ -178,10 +183,11 @@ import { InlineName } from "../../shell/InlineName";
 import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { ImageRefCountContext, MarkdownBlock, TaskTitlesContext } from "./MarkdownBlock";
+import { NebulaPet } from "../../shell/UsageMeter";
 import { childRunSettled, sessionOutputs, type SessionOutputs } from "./child-outputs.ts";
 import { ChatFileScopeContext, loadChatImage, openChatFile, revealChatFile, useChatFileScope, useChatImage, useChatRoots, type ChatFileScope } from "./chat-file-scope.ts";
 import { isReadablePath } from "./chat-paths.ts";
-import { requestOpenPanel } from "../../shell/open-panel.ts";
+import { onRevealBoardRequest, requestOpenPanel, requestOpenPluginBoard } from "../../shell/open-panel.ts";
 import {
   assignImages,
   imagesOf,
@@ -268,7 +274,7 @@ import { IntentRecallFinalCard, IntentRecallRunCard } from "./IntentRecallCard.t
 import { IntentConfirmCard } from "./IntentConfirmCard.tsx";
 import type { IntentRecallRecord } from "@shared/session";
 import type { RecallCardState } from "@shared/intent-recall";
-import { PERMISSION_MODES } from "@shared/permission";
+import { PERMISSION_MODES, PLUGIN_BOARD_TOOL } from "@shared/permission";
 import { THINKING_LEVELS, THINKING_LEVEL_LABELS } from "@shared/thinking";
 import {
   childSessions,
@@ -2192,6 +2198,19 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   const virtualizerRef = useRef<Virtualizer<HTMLDivElement, HTMLDivElement> | null>(null);
   const virtualRowsRef = useRef<readonly VirtualHistoryRow[]>([]);
   const rowIndexByKeyRef = useRef<ReadonlyMap<string, number>>(new Map());
+  const messageRowIndexRef = useRef<ReadonlyMap<string, number>>(new Map());
+  const toolCallRowIndexRef = useRef<ReadonlyMap<string, number>>(new Map());
+  // 看板结果行的估值要读快照（estimateSize 在虚拟器里被反复调用，解析结果按结果对象记下）
+  const historyToolResultsRef = useRef<ToolResultIndex | null>(null);
+  historyToolResultsRef.current = historySegment.toolResults;
+  const boardMemoRef = useRef(new WeakMap<ToolTranscriptItem, PluginBoardResult | null>());
+  const boardOfCall = useCallback((toolCallId: string): PluginBoardResult | null => {
+    const result = historyToolResultsRef.current?.get(toolCallId);
+    if (result === undefined) return null;
+    const memo = boardMemoRef.current;
+    if (!memo.has(result)) memo.set(result, pluginBoardOf(result));
+    return memo.get(result) ?? null;
+  }, []);
   const viewRowIndexRef = useRef<ReadonlyMap<number, number>>(new Map());
   const heightCacheRef = useRef<HeightCache | null>(null);
   if (heightCacheRef.current === null) heightCacheRef.current = createHeightCache(4000);
@@ -2314,10 +2333,14 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   );
   // 事件 / 布局 effect 里读最新映射（它们不在渲染期执行，但闭包不能拿旧数组）
   const historyRowByKey = useMemo(() => rowIndexByKey(historyVirtualRows), [historyVirtualRows]);
+  const historyRowByMessage = useMemo(() => messageRowIndex(historyVirtualRows), [historyVirtualRows]);
   const historyRowByViewIndex = useMemo(() => viewRowIndex(historyVirtualRows), [historyVirtualRows]);
+  const historyRowByToolCall = useMemo(() => toolCallRowIndex(historyVirtualRows), [historyVirtualRows]);
   virtualRowsRef.current = historyVirtualRows;
   rowIndexByKeyRef.current = historyRowByKey;
+  messageRowIndexRef.current = historyRowByMessage;
   viewRowIndexRef.current = historyRowByViewIndex;
+  toolCallRowIndexRef.current = historyRowByToolCall;
 
   // 只虚拟化历史段；实时尾段继续按普通流渲染在虚拟占位之后。行仍是 `TurnViewEntry`
   // 粗粒度行（user / 回合折叠 / 过程块 / 正文），保留 `.chat-col` 原有的行几何。
@@ -2336,6 +2359,17 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       const cache = heightCacheRef.current;
       const typical = typicalHeightRef.current;
       if (key === undefined || cache === null || typical === null) return DEFAULT_ROW_ESTIMATE;
+      // 没测过的看板结果行：高度能从快照直接算出来，不用 toolCall 的先验（230，差 130–200px，见 boardRowEstimate）
+      const entry = row?.entry;
+      if (entry !== undefined && entry.kind === "toolCall" && entry.toolName === PLUGIN_BOARD_TOOL && cache.get(key) === undefined) {
+        const board = boardOfCall(entry.toolCallId);
+        if (board !== null) {
+          const width = scrollRef.current?.querySelector(".chat-virtual")?.clientWidth ?? 0;
+          if (width > 0) {
+            return boardRowEstimate(board, { columnWidth: width, windowHeight: window.innerHeight, expanded: boardExpandStore.has(entry.toolCallId) });
+          }
+        }
+      }
       return estimateRowHeight(key, row?.entry.kind ?? null, cache, typical);
     }, []),
     getItemKey: useCallback((index: number) => virtualRowsRef.current[index]?.entry.key ?? `#${index}`, []),
@@ -2351,19 +2385,24 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
         const kind = element.querySelector("[data-kind]")?.getAttribute("data-kind") ?? null;
         const cache = heightCacheRef.current;
         const typical = typicalHeightRef.current;
-        // prev 与 estimateSize 同口径：有实测缓存用缓存，否则用该类估值。
-        const prev = cache?.get(key) ?? typical?.value(kind) ?? DEFAULT_ROW_ESTIMATE;
+        // 行下标来自 data-index，measure 时 measurementsCache 里还是本次测高前的坐标与尺寸。
+        const index = Number(element.getAttribute("data-index"));
+        const item = Number.isInteger(index) ? virtualizerRef.current?.measurementsCache[index] : undefined;
+        // prev 取虚拟器此刻对这一行的实际假设（见 rowResizeCompensation）。
+        const cached = cache?.get(key);
+        const kindEstimate = typical?.value(kind);
         cache?.set(key, height);
         typical?.push(kind, height);
         // 只累加「整行都在视口上方」的实测变化（与虚拟器默认补偿同口径）；跟随 /
-        // 前插落定在 flush 时再判一次。行下标来自 data-index，measure 时缓存里
-        // 还是本次测高前的坐标。
-        const index = Number(element.getAttribute("data-index"));
-        const item = Number.isInteger(index) ? virtualizerRef.current?.measurementsCache[index] : undefined;
-        const scrollTop = scrollRef.current?.scrollTop ?? 0;
-        if (item !== undefined && item.end <= scrollTop + 1) {
-          pendingCorrectionRef.current += height - prev;
-        }
+        // 前插落定在 flush 时再判一次。
+        pendingCorrectionRef.current += rowResizeCompensation({
+          height,
+          assumed: item?.size,
+          cached,
+          kindEstimate,
+          itemEnd: item?.end,
+          scrollTop: scrollRef.current?.scrollTop ?? 0,
+        });
       }
       return height;
     }, []),
@@ -2462,6 +2501,47 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
     window.addEventListener(REVEAL_ENTRY_EVENT, onReveal);
     return () => window.removeEventListener(REVEAL_ENTRY_EVENT, onReveal);
   }, [flashEntry, revealVirtualRow]);
+  // 状态卡里点看板缩略图：滚回对话里那次看板结果并原地展开（会话 id 对得上才接）。
+  // 行在历史段（含被虚拟化卸下的）按 key 粗定位再等挂载；在实时尾段按 DOM 找；都没有（那一轮在更早的、还没翻出来的分页里）
+  // 就退回打开右栏插件页——不在这里一路翻页：翻页要等多次落定，缩略图这一下点击不值得
+  useEffect(
+    () =>
+      onRevealBoardRequest((request) => {
+        if (request.sessionId !== props.sessionId) return;
+        const findBoard = (): HTMLElement | null => {
+          const found = scrollRef.current?.querySelector(`[data-board-call="${CSS.escape(request.toolCallId)}"]`);
+          return found instanceof HTMLElement ? found : null;
+        };
+        // 展开后外框高度才落定；等两帧再把看板顶部对到转录区顶部，并闪一下框线
+        const settleOnBoard = (): void => {
+          window.requestAnimationFrame(() =>
+            window.requestAnimationFrame(() => {
+              const board = findBoard();
+              if (board === null) return;
+              scrollToTop(board, board.getBoundingClientRect(), "auto");
+              board.classList.remove("board-revealed");
+              void board.offsetWidth;
+              board.classList.add("board-revealed");
+            }),
+          );
+        };
+        const index = toolCallRowIndexRef.current.get(request.toolCallId);
+        const row = index === undefined ? undefined : virtualRowsRef.current[index];
+        if (row !== undefined) {
+          boardExpandStore.set(request.toolCallId, true);
+          revealVirtualRow(row.entry.key, settleOnBoard);
+          return;
+        }
+        if (findBoard() !== null) {
+          forceReading(followTrackerRef.current);
+          boardExpandStore.set(request.toolCallId, true);
+          settleOnBoard();
+          return;
+        }
+        requestOpenPluginBoard({ plugin: request.plugin, draftPath: request.draftPath });
+      }),
+    [props.sessionId, revealVirtualRow],
+  );
   useEffect(() => {
     if (cutIndex < 0) return;
     forceReading(followTrackerRef.current);

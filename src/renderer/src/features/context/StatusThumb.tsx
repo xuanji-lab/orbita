@@ -5,6 +5,7 @@ import type { FilePreview, WebThumb } from "@shared/files";
 import { Icon } from "../../shell/Icon";
 import { FileTypeIcon } from "../../shell/FileTypeIcon";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
+import { BoardThumb } from "../board/BoardThumb.tsx";
 import { MarkdownBlock } from "../chat/MarkdownBlock";
 import { readChatFile, readChatPdf, readChatWebThumb, type ChatFileScope } from "../chat/chat-file-scope.ts";
 import { SLIDE_CSS } from "../../../../shared/slides-render.ts";
@@ -110,7 +111,7 @@ function IconCard(props: { output: StatusOutput }) {
   return (
     <div className="cs-thumb-icon">
       {output.kind === "board" ? (
-        <Icon name={FEATURE_ICON.board} size={32} strokeWidth={1.4} />
+        output.boardCall === null ? <Icon name={FEATURE_ICON.board} size={32} strokeWidth={1.4} /> : <BoardThumb call={output.boardCall} />
       ) : (
         <FileTypeIcon name={output.path.split(/[\\/]/).pop() ?? ""} size={40} />
       )}

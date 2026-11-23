@@ -891,9 +891,12 @@ export const en = {
     plannedTip: "Scheduled; it will run at that time",
     openSession: (caption: string) => `${caption}, open this run's session`,
     scrollHint: "Hold Shift and scroll to slide between days",
-    /** Board result in a session is capped at about half a screen; "Expand" opens the full board in the side panel */
+    /** Board result in a session is capped at about half a screen when collapsed; "Expand" opens it in place, "Collapse" folds it back, the corner icon opens the plugin page (current data) */
     expand: "Expand",
-    expandHint: "See the full board in the side panel",
+    expandHint: "Expand the full board here",
+    collapse: "Collapse",
+    collapseHint: "Collapse the board",
+    openInPlugin: "Open in plugin",
     /** Board result in a session: cards that were skipped */
     skipped: (items: string) => `Not shown: ${items}`,
     skipReason: {
