@@ -9,7 +9,7 @@
  * 要么改个标题就重写全文，要么读取时全文扫描找最后一条 meta。分开之后
  * **列会话只需读 N 个小 meta 文件，完全不碰日志**。
  */
-import { appendFile, copyFile, cp, lstat, mkdir, readFile, readdir, realpath, rename, rm } from "node:fs/promises";
+import { appendFile, copyFile, cp, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
@@ -894,7 +894,7 @@ export class SessionStore {
   async loadWindow(id: string, limit: number = SESSION_INITIAL_RECORDS): Promise<SessionWindowDetail | null> {
     const meta = await this.readMeta(id);
     if (meta === null) return null;
-    const effective = await this.readLog(id);
+    const effective = await this.readLogShared(id);
     const sliceStart = perfProbeOn ? performance.now() : 0;
     const start = alignToTurnStart(effective, Math.max(0, effective.length - pageRecords(limit)));
     const detail = {
@@ -932,7 +932,7 @@ export class SessionStore {
     before: string,
     limit: number = SESSION_PAGE_RECORDS,
   ): Promise<SessionOlderPage> {
-    const effective = await this.readLog(id);
+    const effective = await this.readLogShared(id);
     const end = effective.findIndex((record) => record.id === before);
     if (end < 0) {
       console.error(`[session] 分页锚点在生效视图里找不到（会话可能刚被回退）：${id} / ${before}`);
@@ -1011,6 +1011,7 @@ export class SessionStore {
     await this.queueMeta(id, async () => undefined);
     this.metaWrites.delete(id);
     this.citedPdfs.forget(id);
+    this.dropParsed(id);
     await rm(this.logPath(id), { force: true });
     await rm(this.metaPath(id), { force: true });
     // 原图在 meta 之后删：删失败最多残留一个没人引用的目录，不会出现「会话还在、图没了」
@@ -1092,6 +1093,66 @@ export class SessionStore {
     const effective = this.foldReverts(entries);
     if (perfProbeOn) perfLog({ type: "foldReverts", id, ms: Math.round((performance.now() - foldStart) * 100) / 100 });
     return effective;
+  }
+
+  /**
+   * 实验（切换会话卡顿）：`loadWindow` / `loadOlder` 共用的生效视图，刚解析过的留一小会儿。
+   *
+   * 这两条是分页接口，却每次都把整份 JSONL 读一遍解析一遍：状态卡把一条 194 MB 的会话一页页拉全，
+   * 14 页就是 14 次整份解析（主进程被堵 4 秒多）；聊天面往上翻一页也是一次。这里按「文件大小 + mtime」
+   * 校验：没变就复用上一次解析出来的数组，变了（追加了记录）照旧重读。
+   *
+   * 只给这两条只读的分页路径用，调用方只切片、不改数组；`load()` 的全量消费者（导出 / 回退 / 分支 /
+   * read_task）照旧各读各的，不共享可变对象。小文件不进（重读本来就便宜）；最多留 PARSED_KEEP 条，
+   * PARSED_TTL_MS 没人再要就丢——解析后的大会话在堆里是几百 MB，不能常驻。
+   */
+  private async readLogShared(id: string): Promise<readonly SessionRecord[]> {
+    let size = -1;
+    let mtimeMs = -1;
+    try {
+      const stats = await stat(this.logPath(id));
+      size = stats.size;
+      mtimeMs = stats.mtimeMs;
+    } catch {
+      return this.readLog(id);
+    }
+    const hit = this.parsed.get(id);
+    if (hit !== undefined && hit.size === size && hit.mtimeMs === mtimeMs) {
+      this.touchParsed(id, hit);
+      if (perfProbeOn) perfLog({ type: "readLogShared", id, hit: true });
+      return hit.pending;
+    }
+    // 在途的也算命中：并发的几次分页请求只解析一次
+    const pending = this.readLog(id);
+    if (size < PARSED_MIN_BYTES) return pending;
+    const entry = { size, mtimeMs, pending, timer: null as ReturnType<typeof setTimeout> | null };
+    this.parsed.delete(id);
+    this.parsed.set(id, entry);
+    while (this.parsed.size > PARSED_KEEP) {
+      const oldest = this.parsed.keys().next().value;
+      if (oldest === undefined) break;
+      this.dropParsed(oldest);
+    }
+    this.touchParsed(id, entry);
+    return pending;
+  }
+
+  private readonly parsed = new Map<
+    string,
+    { size: number; mtimeMs: number; pending: Promise<SessionRecord[]>; timer: ReturnType<typeof setTimeout> | null }
+  >();
+
+  private touchParsed(id: string, entry: { timer: ReturnType<typeof setTimeout> | null }): void {
+    if (entry.timer !== null) clearTimeout(entry.timer);
+    entry.timer = setTimeout(() => this.dropParsed(id), PARSED_TTL_MS);
+    entry.timer.unref?.();
+  }
+
+  private dropParsed(id: string): void {
+    const entry = this.parsed.get(id);
+    if (entry === undefined) return;
+    if (entry.timer !== null) clearTimeout(entry.timer);
+    this.parsed.delete(id);
   }
 
   /** 原始逐行解析（不折叠）。readLog / readRawLog 共用这一个循环。 */
@@ -1190,6 +1251,13 @@ export class SessionStore {
     return effective;
   }
 }
+
+/** readLogShared：多大的文件才值得留（小文件重读只要十几毫秒） */
+const PARSED_MIN_BYTES = 8 * 1024 * 1024;
+/** readLogShared：最多留几条会话的解析结果 */
+const PARSED_KEEP = 2;
+/** readLogShared：多久没人再要就丢 */
+const PARSED_TTL_MS = 20_000;
 
 /** IPC 进来的 limit 在这条线上夹住：它来自 renderer，不设上限就是给了一条自选的传输量 */
 const PAGE_RECORDS_MAX = 2000;
