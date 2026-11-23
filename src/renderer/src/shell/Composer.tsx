@@ -267,7 +267,7 @@ export function Composer(props: {
       };
     }
     const paste = pasteAt.get(offset);
-    if (paste !== undefined) return { kind: "paste", icon: "clipboard-list", name: t.composer.pasteChipName(paste.seq, paste.lines) };
+    if (paste !== undefined) return { kind: "paste", icon: "clipboard", name: t.composer.pasteChipName(paste.seq, paste.lines) };
     const ref = imageRefAt.get(offset);
     if (ref !== undefined) return { kind: "image", icon: "image", name: String(ref.n) };
     return null;
