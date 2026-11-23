@@ -1904,28 +1904,25 @@ html[data-pointer-drag] iframe {
   color: var(--color-text-secondary);
 }
 
+/* 能收起的组头：整行是按钮，样子同静态组头，悬停铺底 */
+button.ssp-group-toggle {
+  width: 100%;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+button.ssp-group-toggle:hover {
+  background: var(--option-hover-bg);
+  color: var(--color-text-primary);
+}
+
 .ssp-group-n {
   font-weight: var(--weight-regular);
   font-variant-numeric: tabular-nums;
   color: var(--color-text-tertiary);
-}
-
-.ssp-group-fold {
-  display: inline-grid;
-  place-items: center;
-  width: var(--control-height-xs);
-  height: var(--control-height-xs);
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--color-text-tertiary);
-  cursor: pointer;
-}
-
-.ssp-group-fold:hover {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
 }
 
 .ssp-card {
