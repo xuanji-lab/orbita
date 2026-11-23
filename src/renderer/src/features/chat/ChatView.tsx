@@ -52,6 +52,7 @@ import {
   messageRowIndex,
   prependAnchorTarget,
   rowIndexByKey,
+  rowResizeCompensation,
   toolCallRowIndex,
   viewRowIndex,
   virtualHistoryRows,
@@ -65,7 +66,8 @@ import { clampToolBody } from "./tool-body-clamp.ts";
 import { noticeIconBoxStyle, noticeParagraphStyle, noticeTextStyle } from "./notice.ts";
 import { PluginInstallLine } from "../plugins/PluginInstallLine.tsx";
 import { PluginBoardResultView } from "../board/PluginBoardResult.tsx";
-import { boardExpandStore } from "../board/board-expand.ts";
+import type { PluginBoardResult } from "../../../../shared/plugin-board.ts";
+import { boardExpandStore, boardRowEstimate } from "../board/board-expand.ts";
 import { builtinCommand, type DetailRow, docEditLabel, docEditPath, docEditSection, docEditSummary, toolWord } from "./builtin-commands.ts";
 import { getOpenDocumentText } from "../doc-panel/open-document.ts";
 import { ExitCard } from "./ExitCard";
@@ -261,7 +263,7 @@ import { IntentRecallFinalCard, IntentRecallRunCard } from "./IntentRecallCard.t
 import { IntentConfirmCard } from "./IntentConfirmCard.tsx";
 import type { IntentRecallRecord } from "@shared/session";
 import type { RecallCardState } from "@shared/intent-recall";
-import { PERMISSION_MODES } from "@shared/permission";
+import { PERMISSION_MODES, PLUGIN_BOARD_TOOL } from "@shared/permission";
 import { THINKING_LEVELS, THINKING_LEVEL_LABELS } from "@shared/thinking";
 import {
   childSessions,
@@ -2183,6 +2185,17 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   const rowIndexByKeyRef = useRef<ReadonlyMap<string, number>>(new Map());
   const messageRowIndexRef = useRef<ReadonlyMap<string, number>>(new Map());
   const toolCallRowIndexRef = useRef<ReadonlyMap<string, number>>(new Map());
+  // 看板结果行的估值要读快照（estimateSize 在虚拟器里被反复调用，解析结果按结果对象记下）
+  const historyToolResultsRef = useRef<ToolResultIndex | null>(null);
+  historyToolResultsRef.current = historySegment.toolResults;
+  const boardMemoRef = useRef(new WeakMap<ToolTranscriptItem, PluginBoardResult | null>());
+  const boardOfCall = useCallback((toolCallId: string): PluginBoardResult | null => {
+    const result = historyToolResultsRef.current?.get(toolCallId);
+    if (result === undefined) return null;
+    const memo = boardMemoRef.current;
+    if (!memo.has(result)) memo.set(result, pluginBoardOf(result));
+    return memo.get(result) ?? null;
+  }, []);
   const viewRowIndexRef = useRef<ReadonlyMap<number, number>>(new Map());
   const heightCacheRef = useRef<HeightCache | null>(null);
   if (heightCacheRef.current === null) heightCacheRef.current = createHeightCache(4000);
@@ -2364,6 +2377,17 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
       const cache = heightCacheRef.current;
       const typical = typicalHeightRef.current;
       if (key === undefined || cache === null || typical === null) return DEFAULT_ROW_ESTIMATE;
+      // 没测过的看板结果行：高度能从快照直接算出来，不用 toolCall 的先验（230，差 130–200px，见 boardRowEstimate）
+      const entry = row?.entry;
+      if (entry !== undefined && entry.kind === "toolCall" && entry.toolName === PLUGIN_BOARD_TOOL && cache.get(key) === undefined) {
+        const board = boardOfCall(entry.toolCallId);
+        if (board !== null) {
+          const width = scrollRef.current?.querySelector(".chat-virtual")?.clientWidth ?? 0;
+          if (width > 0) {
+            return boardRowEstimate(board, { columnWidth: width, windowHeight: window.innerHeight, expanded: boardExpandStore.has(entry.toolCallId) });
+          }
+        }
+      }
       return estimateRowHeight(key, row?.entry.kind ?? null, cache, typical);
     }, []),
     getItemKey: useCallback((index: number) => virtualRowsRef.current[index]?.entry.key ?? `#${index}`, []),
@@ -2379,19 +2403,24 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
         const kind = element.querySelector("[data-kind]")?.getAttribute("data-kind") ?? null;
         const cache = heightCacheRef.current;
         const typical = typicalHeightRef.current;
-        // prev 与 estimateSize 同口径：有实测缓存用缓存，否则用该类估值。
-        const prev = cache?.get(key) ?? typical?.value(kind) ?? DEFAULT_ROW_ESTIMATE;
+        // 行下标来自 data-index，measure 时 measurementsCache 里还是本次测高前的坐标与尺寸。
+        const index = Number(element.getAttribute("data-index"));
+        const item = Number.isInteger(index) ? virtualizerRef.current?.measurementsCache[index] : undefined;
+        // prev 取虚拟器此刻对这一行的实际假设（见 rowResizeCompensation）。
+        const cached = cache?.get(key);
+        const kindEstimate = typical?.value(kind);
         cache?.set(key, height);
         typical?.push(kind, height);
         // 只累加「整行都在视口上方」的实测变化（与虚拟器默认补偿同口径）；跟随 /
-        // 前插落定在 flush 时再判一次。行下标来自 data-index，measure 时缓存里
-        // 还是本次测高前的坐标。
-        const index = Number(element.getAttribute("data-index"));
-        const item = Number.isInteger(index) ? virtualizerRef.current?.measurementsCache[index] : undefined;
-        const scrollTop = scrollRef.current?.scrollTop ?? 0;
-        if (item !== undefined && item.end <= scrollTop + 1) {
-          pendingCorrectionRef.current += height - prev;
-        }
+        // 前插落定在 flush 时再判一次。
+        pendingCorrectionRef.current += rowResizeCompensation({
+          height,
+          assumed: item?.size,
+          cached,
+          kindEstimate,
+          itemEnd: item?.end,
+          scrollTop: scrollRef.current?.scrollTop ?? 0,
+        });
       }
       return height;
     }, []),

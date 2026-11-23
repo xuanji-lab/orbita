@@ -293,3 +293,26 @@ export function createHeightCache(limit = 4000): HeightCache {
     },
   };
 }
+
+/**
+ * 一次测高要不要补偿进 scrollTop，补多少（只补「整行都在视口上方」的变化，与虚拟器默认补偿同口径）。
+ *
+ * prev 必须是**虚拟器此刻对这一行的实际假设**，否则差额会被当成「上方行变高了」白白补进 scrollTop，视口里的内容凭空跳：
+ * - `cached`：这一行测过（同一次挂载的第二次测高回调也算）——虚拟器的假设就是上次测的值，再补一次会重复计数；
+ * - `assumed`：没测过——measurementsCache 里的 size，即 estimateSize 当时给的（看板结果行有自己的估值 boardRowEstimate）；
+ * - 之后才是 kind 估值 / 默认值（量不到 measurementsCache 项时的兜底）。
+ * 旧写法没测过时直接取「此刻的 kind 估值」：EMA 每测一行就挪一点，与虚拟器当时用的估值对不上，
+ * 实测往上滚 220 步，73 次整行在上方的测高里累计白补 −2070px，表现为 12 次视口跳变（最大 171px）。
+ */
+export function rowResizeCompensation(input: {
+  height: number;
+  cached: number | undefined;
+  assumed: number | undefined;
+  kindEstimate: number | undefined;
+  itemEnd: number | undefined;
+  scrollTop: number;
+}): number {
+  if (input.itemEnd === undefined || input.itemEnd > input.scrollTop + 1) return 0;
+  const prev = input.cached ?? input.assumed ?? input.kindEstimate ?? DEFAULT_ROW_ESTIMATE;
+  return input.height - prev;
+}

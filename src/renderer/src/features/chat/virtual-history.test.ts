@@ -12,6 +12,7 @@ import {
   messageRowIndex,
   prependAnchorTarget,
   rowIndexByKey,
+  rowResizeCompensation,
   toolCallRowIndex,
   viewRowIndex,
   virtualHistoryRows,
@@ -366,5 +367,34 @@ describe("createHeightCache", () => {
     cache.clear();
     assert.equal(cache.size, 0);
     assert.equal(cache.get("a"), undefined);
+  });
+});
+
+describe("测高补偿 rowResizeCompensation", () => {
+  const base = { cached: undefined, kindEstimate: 230, itemEnd: 1000, scrollTop: 5000 };
+  test("看板行：虚拟器假设 436、实测 436，总高没变就不补偿（回头用 kind 先验 230 会凭空补 +206）", () => {
+    assert.equal(rowResizeCompensation({ ...base, height: 436, assumed: 436 }), 0);
+  });
+  test("没测过、整行都在视口上方：补 实测 − 估值（估值取虚拟器的假设，不取此刻的 kind 估值）", () => {
+    assert.equal(rowResizeCompensation({ ...base, height: 300, assumed: 230 }), 70);
+    assert.equal(rowResizeCompensation({ ...base, height: 100, assumed: 230 }), -130);
+    // 此刻的 kind 估值已被 EMA 挪到 250：旧写法补 50，实际虚拟器当时用的是 230，该补 70
+    assert.equal(rowResizeCompensation({ ...base, kindEstimate: 250, height: 300, assumed: 230 }), 70);
+  });
+  test("同一次挂载的第二次测高回调：cached 已是新高度，不重复补", () => {
+    assert.equal(rowResizeCompensation({ ...base, height: 300, cached: 300, assumed: 230 }), 0);
+  });
+  test("测过的行高度变了：补 实测 − 缓存（缓存优先于 measurementsCache 里可能滞后的值）", () => {
+    assert.equal(rowResizeCompensation({ ...base, height: 330, cached: 300, assumed: 230 }), 30);
+  });
+  test("行在视口里或下方：不补", () => {
+    assert.equal(rowResizeCompensation({ ...base, height: 300, assumed: 230, itemEnd: 5200 }), 0);
+    assert.equal(rowResizeCompensation({ ...base, height: 300, assumed: 230, itemEnd: 5001 }), 70);
+  });
+  test("没有 measurementsCache 项：不补；assumed 缺失时依次退回缓存、kind 估值、默认值", () => {
+    assert.equal(rowResizeCompensation({ ...base, height: 300, assumed: 230, itemEnd: undefined }), 0);
+    assert.equal(rowResizeCompensation({ ...base, height: 300, assumed: undefined, cached: 250 }), 50);
+    assert.equal(rowResizeCompensation({ ...base, height: 300, assumed: undefined }), 70);
+    assert.equal(rowResizeCompensation({ ...base, height: 300, assumed: undefined, kindEstimate: undefined }), 300 - DEFAULT_ROW_ESTIMATE);
   });
 });
