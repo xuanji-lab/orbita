@@ -283,6 +283,64 @@ export function isPdfFile(path: string): boolean {
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
+// 音视频播放（`fs:media-url` 与 `orbita-media://` 协议）
+//
+// 大文件不能 base64 过 IPC，也要支持 Range（视频拖进度）。所以不读字节：renderer 问主进程要一个
+// 「播放地址」，主进程过完与 fs:read 同一道白名单后发一个不透明 token、映射到 realpath 之后的真实路径，
+// 回 `orbita-media://stream/<token>`；协议只认 token，URL 里没有路径，renderer 没有任何办法借它读别的文件。
+// ───────────────────────────────────────────────────────────────────────────────
+
+/** 自定义协议名与固定主机段（地址形如 `orbita-media://stream/<token>`） */
+export const MEDIA_SCHEME = "orbita-media";
+export const MEDIA_HOST = "stream";
+
+export type MediaKind = "audio" | "video";
+
+/** 面板里能播的扩展名 → MIME（Chromium 的 <audio> / <video> 播得了的；大小写不敏感，调用方先转小写） */
+const MEDIA_TYPES: Readonly<Record<string, { kind: MediaKind; mime: string }>> = {
+  mp3: { kind: "audio", mime: "audio/mpeg" },
+  wav: { kind: "audio", mime: "audio/wav" },
+  m4a: { kind: "audio", mime: "audio/mp4" },
+  aac: { kind: "audio", mime: "audio/aac" },
+  flac: { kind: "audio", mime: "audio/flac" },
+  ogg: { kind: "audio", mime: "audio/ogg" },
+  opus: { kind: "audio", mime: "audio/ogg" },
+  mp4: { kind: "video", mime: "video/mp4" },
+  m4v: { kind: "video", mime: "video/mp4" },
+  mov: { kind: "video", mime: "video/quicktime" },
+  webm: { kind: "video", mime: "video/webm" },
+};
+
+function mediaTypeOf(path: string): { kind: MediaKind; mime: string } | null {
+  const base = path.split(/[\\/]/).pop() ?? "";
+  const dot = base.lastIndexOf(".");
+  if (dot <= 0) return null;
+  return MEDIA_TYPES[base.slice(dot + 1).toLowerCase()] ?? null;
+}
+
+/** 这个路径是不是面板能播的音 / 视频；不是回 null */
+export function mediaKindOf(path: string): MediaKind | null {
+  return mediaTypeOf(path)?.kind ?? null;
+}
+
+/** 协议应答用的 Content-Type；不是媒体扩展名回 null */
+export function mediaMimeOf(path: string): string | null {
+  return mediaTypeOf(path)?.mime ?? null;
+}
+
+/**
+ * `fs:media-url` 的回执。`url` 只在本次应用运行内有效（token 在主进程内存里、有条数上限），
+ * 面板每次打开文件现要一个，不落盘不缓存。
+ */
+export interface FileMediaUrl {
+  kind: MediaKind;
+  url: string;
+  mime: string;
+  size: number;
+  modifiedAt: number;
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
 // 文件预览的尺寸门槛——**只有这一处**
 //
 // 预览管线上每一道「超过多大就换一条路」都在下面。renderer 的 preview-view / range-view /

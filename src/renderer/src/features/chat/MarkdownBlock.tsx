@@ -29,6 +29,9 @@ import { pluginChipName } from "../plugins/plugin-names.ts";
 import { usePluginNames } from "../plugins/usePluginNames.ts";
 import { dominantScript } from "./dominant-script";
 import { useT } from "../../locale.ts";
+import { useExperimentalFeature } from "../../experimental.ts";
+import { localMediaPathOfHref } from "../files/media-view.ts";
+import { openLocalMedia } from "../files/open-media-link.ts";
 import { citationIdOfHref, citationTitle, remarkCitationMarkers } from "./citation-markers.ts";
 import { CitationOpenContext, CitationTableContext } from "./citation-context.ts";
 import { ChatImageSizeContext, resolveChatPath, useChatFileScope, useChatImage } from "./chat-file-scope.ts";
@@ -251,6 +254,8 @@ function ExternalAnchor(props: AnchorProps) {
   const citeId = citationIdOfHref(href);
   if (citeId !== null) return <CitationAnchor id={citeId} label={children} />;
   const external = href !== undefined && /^(https?:|mailto:)/i.test(href);
+  // 指向本机音 / 视频文件的绝对路径：在右侧文件面板打开播放（其它本地路径照旧吞掉）
+  const mediaPath = external ? null : localMediaPathOfHref(href);
   return (
     <a
       {...rest}
@@ -261,8 +266,14 @@ function ExternalAnchor(props: AnchorProps) {
               event.preventDefault();
               window.open(href);
             }
-          : undefined
+          : mediaPath !== null
+            ? (event) => {
+                event.preventDefault();
+                openLocalMedia(mediaPath);
+              }
+            : undefined
       }
+      style={mediaPath !== null ? { cursor: "pointer" } : undefined}
     >
       {children}
     </a>
