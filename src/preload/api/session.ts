@@ -6,7 +6,7 @@ import { ipcRenderer } from "electron";
 import { ipcChannels, type SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
 import type { ArtifactOpenResult } from "../../shared/browser.ts";
 import type { PromptImage } from "../../shared/prompt-images.ts";
-import type { RevertPlan, UndoPlan } from "../../shared/revert.ts";
+import type { ArtifactSummary, RevertPlan, UndoPlan } from "../../shared/revert.ts";
 import type {
   ModelAssignEntry,
   ModelAssignGroups,
@@ -104,4 +104,7 @@ export const sessionApi = {
   /** 轮尾产物在系统文件管理器里定位（仅会话文件账里记过的文件） */
   revealArtifact: (id: string, path: string): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionRevealArtifact, id, path),
+  /** 编排面板协作图：一批会话的产物摘要（文件账里的文件数与扩展名）；读不到的 id 不在回执里 */
+  artifactSummary: (ids: readonly string[]): Promise<Record<string, ArtifactSummary>> =>
+    ipcRenderer.invoke(ipcChannels.sessionArtifactSummary, ids),
 };

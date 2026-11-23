@@ -278,7 +278,8 @@ import type { FileTurnView, RevertRecord, UndoRecord } from "@shared/revert";
 import type { RetryStatus } from "@shared/agent-ipc";
 import type { ChatSession } from "./useChatSession";
 import type { ModelPair, ThemePreference } from "@shared/settings";
-import { useT } from "../../locale.ts";
+import { LocaleContext, useT } from "../../locale.ts";
+import { dayLabel, dayStartsOf, mainConversationOf, orchestraKey } from "./orchestra-data.ts";
 import type { Messages } from "../../messages-en.ts";
 import { scopeChipAction } from "./scope-chip.ts";
 
@@ -716,6 +717,28 @@ interface HistoryVirtualController {
   scrollTopForAnchor(key: string, offsetTop: number): number | null;
 }
 
+/**
+ * 编排长对话的按天分隔（TranscriptColumn 提供：每天第一条用户消息 id → 日期键；单智能体为 null）。
+ * 走 context 而不是逐层传 props：分隔线长在用户消息那一行里（同一个渲染单元，虚拟化的行高照样量得到）。
+ */
+const DayStartsContext = createContext<ReadonlyMap<string, string> | null>(null);
+
+/** 一天的第一句上方：日期 + 一根发丝线（真正的边界才配一根线）。不是这一天第一句、或单智能体，什么都不画 */
+function DayMark(props: { id: string }) {
+  const starts = useContext(DayStartsContext);
+  const t = useT();
+  const locale = useContext(LocaleContext);
+  const day = starts?.get(props.id);
+  if (day === undefined) return null;
+  const label = dayLabel(day, Date.now(), t.orchestra, locale);
+  return (
+    <div className="day-divider" data-day={day} role="separator" aria-label={label}>
+      <span className="day-divider-label">{label}</span>
+      <span className="day-divider-rule" aria-hidden="true" />
+    </div>
+  );
+}
+
 /** 各会话离开时的阅读位置（仅内存，重启不保留；见 scroll-memory.ts） */
 const scrollMemory = createScrollMemory();
 
@@ -734,6 +757,16 @@ function ChatViewBody(props: {
    * 缺席 / false = 单智能体，首页与此前逐项一致。
    */
   orchestrate?: boolean;
+  /**
+   * 编排：每个工作区的主对话指针（settings.orchestraMain）。New Task 页发出的每一句都进这个工作区的主对话；
+   * 还没有就新开一条，并经 onMainCreated 记下来（顶替常驻主智能体，见 orchestra-data.ts）。
+   */
+  orchestraMain?: Readonly<Record<string, string>>;
+  onMainCreated?: (key: string, sessionId: string) => void;
+  /** 编排的长对话按天分隔：每天第一句上方一条日期线（单智能体不画） */
+  dayDividers?: boolean;
+  /** 编排里正看着的不是主对话：输入框上方一行说清楚，句尾「回到主对话」 */
+  notMain?: { title: string; onBack: () => void } | null;
   /** 星标（收藏）的模型。**不是会话元数据**——它跟着用户走，存在设置里 */
   starredModels?: readonly ModelPair[];
   onToggleStarModel?: (pair: ModelPair) => void;
@@ -1504,6 +1537,15 @@ function ChatViewBody(props: {
       onSubmit={() => {
         forceFollowLatest(followTrackerRef.current);
         if (homeActive) startLeave();
+        if (orchestrateHome) {
+          // 编排：一个工作区一条长对话——有主对话就发进它，没有就新开一条并记成主对话
+          const main = mainConversationOf(session.sessions, session.workspaceId, props.orchestraMain);
+          const key = orchestraKey(session.workspaceId);
+          session.sendInto(
+            main !== null ? { id: main.id } : { id: null, onCreated: (id) => props.onMainCreated?.(key, id) },
+          );
+          return;
+        }
         session.send();
       }}
       onStop={session.stop}
@@ -1578,6 +1620,11 @@ function ChatViewBody(props: {
       */}
       {session.readOnly && (
         <Notice icon="lock">{t.chat.readOnlyTask}</Notice>
+      )}
+      {props.notMain != null && !homeActive && (
+        <Notice icon="info" exit={{ label: t.orchestra.backToMain, onClick: props.notMain.onBack }}>
+          {t.orchestra.notMain(props.notMain.title)}
+        </Notice>
       )}
     </>
   );
@@ -1963,6 +2010,7 @@ function ChatViewBody(props: {
           historyControllerRef={historyControllerRef}
           hasMoreOlderRef={hasMoreRef}
           loadOlderRef={loadOlderRef}
+          dayDividers={props.dayDividers === true}
         />
         </RevertPreviewContext.Provider>
       </Pane>
@@ -2047,8 +2095,12 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   hasMoreOlderRef: React.RefObject<boolean>;
   /** 翻更早一页（引用稳定） */
   loadOlderRef: React.RefObject<() => void>;
+  /** 编排的长对话：每天第一句上方画日期线 */
+  dayDividers: boolean;
 }) {
   const t = useT();
+  // 按天分隔（编排）：每天第一条用户消息 → 日期键；单智能体为 null，不画也不算
+  const dayStarts = useMemo(() => (props.dayDividers ? dayStartsOf(props.transcript) : null), [props.dayDividers, props.transcript]);
   // 意图系统开关：关着时终态记录照渲染（历史还在），运行卡与入口全藏
   const intentOn = useExperimentalFeature("intent-system");
   const { transcript } = props;
@@ -2605,7 +2657,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
   }, [cutIndex, revealVirtualRow]);
 
   return (
-    <>
+    <DayStartsContext.Provider value={dayStarts}>
       {/* 子会话本身的对话：顶上一行「「父会话标题」的子会话」+ 它自己的型号名 */}
       {props.channel.ownSide === "child" && <ChildSessionHead channel={props.channel} />}
       {/* 历史恢复在途：一行安静的加载指示，正文区不再是一片无解释的空白 */}
@@ -2712,7 +2764,7 @@ const TranscriptColumn = memo(function TranscriptColumn(props: {
           )}
         </>
       )}
-    </>
+    </DayStartsContext.Provider>
   );
 });
 
@@ -3877,6 +3929,8 @@ function EntryView(props: {
     }
     const memoryRow = props.memory?.rows.get(entry.item.id);
     return (
+      <>
+      <DayMark id={entry.item.id} />
       <UserBubble
         item={entry.item}
         onRevertTo={props.onRevertTo}
@@ -3885,6 +3939,7 @@ function EntryView(props: {
         memory={memoryRow}
         onOpenMemoryReview={props.onOpenMemoryReview}
       />
+      </>
     );
   }
   if (entry.kind === "fileTurn") {

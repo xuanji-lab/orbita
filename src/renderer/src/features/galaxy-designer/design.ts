@@ -577,7 +577,8 @@ export function designerFollow(state: DesignerPanelState, workspaceId: string | 
  * 目标会话记着别的面板（文件、审查……），照记忆换过去。
  */
 export function keepDesignerAcrossSessions(current: RightPanelKind | null, recalled: RightPanelKind | null): RightPanelKind | null {
-  return current === "galaxy" && recalled === null ? "galaxy" : recalled;
+  // 编排面板同理：它是工作区级的全景，从树上点开一条会话不该把它收掉
+  return (current === "galaxy" || current === "orchestra") && recalled === null ? current : recalled;
 }
 
 /** 数字输入框的文字 → 数值；空串与非数字给 NaN（交给 validateDesign 报错，不默默回退） */

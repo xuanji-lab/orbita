@@ -366,6 +366,8 @@ export const ipcChannels = {
   sessionOpenArtifactInBrowser: "session:open-artifact-in-browser",
   /** 轮尾产物打开方式二：在系统文件管理器里定位它（仅会话文件账里记过的文件） */
   sessionRevealArtifact: "session:reveal-artifact",
+  /** 编排面板协作图：一批会话的产物摘要（文件账里的文件数与扩展名），id → ArtifactSummary；读不到的 id 不在回执里 */
+  sessionArtifactSummary: "session:artifact-summary",
   /** 审查面板：列一个来源的全部改动（task / unstaged / staged / branch） */
   reviewList: "review:list",
   /** 审查面板：拉一个文件的 diff 正文（unified diff，按需） */

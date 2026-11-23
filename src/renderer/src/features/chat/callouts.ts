@@ -74,12 +74,12 @@ export function calloutBudget(width: number): number {
 }
 
 /** 估一行字的宽度（px）：CJK 全角按 1em，其余按 0.58em。SVG 里量不到真实宽度之前用它排布 */
-export function textWidth(text: string, fontSize: number): number {
+export function textWidth(text: string, glyphPx: number): number {
   let w = 0;
   for (const ch of text) {
     const code = ch.codePointAt(0) ?? 0;
     const wide = (code >= 0x2e80 && code <= 0x9fff) || (code >= 0xf900 && code <= 0xfaff) || (code >= 0xff00 && code <= 0xffef) || (code >= 0x3000 && code <= 0x303f);
-    w += wide ? fontSize : fontSize * 0.58;
+    w += wide ? glyphPx : glyphPx * 0.58;
   }
   return w;
 }
@@ -110,7 +110,7 @@ export function lockFramePath(x: number, y: number, r: number): string {
 const DIRS: readonly CalloutDir[] = ["ne", "nw", "se", "sw"];
 
 /** 某颗行星按某方位、某档高度的引线与标签框 */
-export function calloutGeometry(target: CalloutTarget, dir: CalloutDir, lift: number, fontSize: number): CalloutPlacement {
+export function calloutGeometry(target: CalloutTarget, dir: CalloutDir, lift: number, glyphPx: number): CalloutPlacement {
   const { half } = lockFrame(target.r);
   const east = dir === "ne" || dir === "se";
   const north = dir === "ne" || dir === "nw";
@@ -120,8 +120,8 @@ export function calloutGeometry(target: CalloutTarget, dir: CalloutDir, lift: nu
   // 斜线 45°：水平走与竖直升同样的距离
   const ex = sx + (east ? rise * 0.6 : -rise * 0.6);
   const ey = sy + (north ? -rise : rise);
-  const w = textWidth(target.text, fontSize) + TEXT_SIDE * 2;
-  const h = fontSize + BOX_EXTRA;
+  const w = textWidth(target.text, glyphPx) + TEXT_SIDE * 2;
+  const h = glyphPx + BOX_EXTRA;
   const endX = ex + (east ? w : -w);
   const box: Box = east ? { x0: ex, y0: ey - h, x1: endX, y1: ey } : { x0: endX, y0: ey - h, x1: ex, y1: ey };
   return {
@@ -156,7 +156,7 @@ export interface PlaceInput {
   star: { x: number; y: number; r: number } | null;
   width: number;
   height: number;
-  fontSize: number;
+  glyphPx: number;
   /** 最多画几根（calloutBudget） */
   budget: number;
   /** 上一帧各颗选的方位：还放得下就沿用 */
@@ -179,7 +179,7 @@ export function placeCallouts(input: PlaceInput): CalloutPlacement[] {
     if (prev !== undefined) tries.push(prev);
     for (const lift of [0, 1]) for (const dir of DIRS) if (prev === undefined || prev.dir !== dir || prev.lift !== lift) tries.push({ dir, lift });
     for (const attempt of tries) {
-      const geo = calloutGeometry(target, attempt.dir, attempt.lift, input.fontSize);
+      const geo = calloutGeometry(target, attempt.dir, attempt.lift, input.glyphPx);
       const { box } = geo;
       if (box.x0 < bounds.x0 || box.x1 > bounds.x1 || box.y0 < bounds.y0 || box.y1 > bounds.y1) continue;
       if (placed.some((other) => overlaps(other.box, box, CALLOUT_PAD))) continue;

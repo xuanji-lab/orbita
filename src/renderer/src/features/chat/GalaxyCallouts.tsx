@@ -27,14 +27,14 @@ export function GalaxyCallouts(props: {
   height: number;
   waitingWord: string;
 }) {
-  const [fontSize, setFontSize] = useState(12);
+  const [glyphPx, setFontSize] = useState(12);
   const probeRef = useRef<SVGTextElement | null>(null);
   // 字号跟设计系统的 --font-size-sm 走（由 --ui-font-size 派生）：挂上后量一次真实字号，排布按它估字宽
   useLayoutEffect(() => {
     const el = probeRef.current;
     if (el === null) return;
     const size = Number.parseFloat(getComputedStyle(el).fontSize);
-    if (Number.isFinite(size) && size > 0 && size !== fontSize) setFontSize(size);
+    if (Number.isFinite(size) && size > 0 && size !== glyphPx) setFontSize(size);
   });
   const previousRef = useRef(new Map<string, { dir: CalloutDir; lift: number }>());
   const targets: CalloutTarget[] = [];
@@ -59,7 +59,7 @@ export function GalaxyCallouts(props: {
     star: props.star,
     width: props.width,
     height: props.height,
-    fontSize,
+    glyphPx,
     budget: calloutBudget(props.width),
     previous: previousRef.current,
   });

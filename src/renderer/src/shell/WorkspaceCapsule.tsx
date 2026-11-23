@@ -1,34 +1,33 @@
-import type { SessionMeta } from "@shared/session";
 import { Icon } from "./Icon";
-import { CapTitle } from "./SessionCapsule.tsx";
 import { IconButton } from "./IconButton";
 import { Menu, type MenuItem } from "./Menu";
 import { StatusPie } from "./StatusPie";
-import { sessionAgeLabel } from "./relative-time.ts";
 import { StarFigure } from "../features/galaxy-designer/StarFigure.tsx";
 import { useAvatarBySize, useGalaxyDesign } from "../features/galaxy-designer/useGalaxyDesign.ts";
 import type { HeaderStatus } from "../features/chat/agent-status.ts";
-import type { SessionRunState } from "../features/notify/completion-notice.ts";
 import { useT } from "../locale.ts";
 import "./agent-row.css";
 
 /**
- * 工作区自己的 New Task 页的页头（编排形态；照 Claude 桌面版 Bots 的页头：头像 + 名字 + 状态胶囊）。
- * 住在工具栏居中那颗胶囊里（与会话胶囊同一套 .cap-sess 几何，左对齐），不另造页头：
- * - 头像是这座星系的主星（与侧栏行同一份设计稿，静态）；名字是工作区名；
- * - 状态胶囊说真话：有等你的 → 「等你确认 · N」，点了直达那一件；有在跑的 → 「在外面干活 · N」；否则「就绪」。
- *   没有计时：数据里没有一次运行的起点，不拿「看到它的时刻」冒充；
- * - 右端「会话」菜单：编排侧不摆单智能体那套会话树，回看靠这里最近几条与「在单智能体里看全部」。
+ * 编排的页头（照 Claude 桌面版 Bots 的页头：头像 + 名字 + 状态胶囊）。New Task 页与对话页**始终**是这一个：
+ * - 头像就是主智能体本身（这座星系的主星，与侧栏行同一份设计稿，静态），不是缩小的星系；名字是工作区名；
+ * - 状态胶囊说真话：有等你的 → 「等你 · N」，点了直达那一件；有在跑的 → 「在跑 · N」；否则「空闲」。不出现任务标题；
+ * - 右端「会话」菜单按天回看这个工作区的主对话（一个工作区一条长对话）：点一天滚到那天的第一句。
+ *   只列已加载的那一段里的日子；更早的往上翻会加载（菜单尾说明）。
  */
 export function WorkspaceCapsule(props: {
   workspaceId: string | null;
   name: string;
   status: HeaderStatus;
-  /** 给了 = 正看着这个工作区的一条会话：页头变「头像 + 智能体名 › 任务名」，不摆状态胶囊（那是工作区页的），不露会话 id */
-  task?: { title: string; onRename?: ((title: string) => void) | undefined } | null;
-  recent: { rows: { meta: SessionMeta; state: SessionRunState }[]; total: number };
-  now: number;
+  /** 主对话的日子（新的在前）；还没有主对话为 null */
+  days: { day: string; label: string; count: number; firstUserId: string }[] | null;
+  /** 正看着的是不是主对话（不是的话菜单第一项是「回到主对话」） */
+  viewingMain: boolean;
+  /** 主对话还有更早的没加载 */
+  hasEarlier: boolean;
   onOpenSession: (id: string) => void;
+  onOpenMain: () => void;
+  onOpenDay: (firstUserId: string) => void;
   onSeeAll: () => void;
 }) {
   const t = useT();
@@ -48,25 +47,23 @@ export function WorkspaceCapsule(props: {
     </>
   );
   const jump = status.sessionId;
-  const items: MenuItem[] = [
-    ...props.recent.rows.map(
-      ({ meta, state }): MenuItem => ({
-        id: meta.id,
-        label: meta.title.trim() === "" ? t.common.newTask : meta.title,
-        hint: sessionAgeLabel(meta.updatedAt, props.now, t),
-        ...(state === null ? {} : { avatar: <StatusPie state={state} /> }),
-        onSelect: () => props.onOpenSession(meta.id),
-      }),
-    ),
-    ...(props.recent.rows.length === 0 ? [{ id: "none", label: t.agents.sessionsNone, disabled: true, onSelect: () => undefined }] : []),
-    { id: "all-rule", label: "", rule: true },
-    {
-      id: "all",
-      label: props.recent.total > props.recent.rows.length ? `${t.agents.sessionsAll} (${props.recent.total})` : t.agents.sessionsAll,
-      icon: "bot",
-      onSelect: props.onSeeAll,
-    },
-  ];
+  const tm = t.orchestra.dayMenu;
+  const items: MenuItem[] =
+    props.days === null
+      ? [{ id: "none", label: tm.none, disabled: true, onSelect: () => undefined }]
+      : [
+          ...(props.viewingMain ? [] : [{ id: "main", label: tm.openMain, icon: "message-square" as const, onSelect: props.onOpenMain }]),
+          ...props.days.map(
+            (day): MenuItem => ({
+              id: `day:${day.day}`,
+              label: day.label,
+              hint: tm.count(day.count),
+              onSelect: () => props.onOpenDay(day.firstUserId),
+            }),
+          ),
+          ...(props.hasEarlier ? [{ id: "earlier", label: tm.earlier, disabled: true, onSelect: () => undefined }] : []),
+        ];
+  items.push({ id: "all-rule", label: "", rule: true }, { id: "all", label: t.agents.sessionsAll, icon: "bot", onSelect: props.onSeeAll });
   return (
     <div className="cap-sess" style={{ width: "100%", height: "100%" }}>
       <div className="cap-sl" />
@@ -77,12 +74,7 @@ export function WorkspaceCapsule(props: {
         <strong className="cap-title" title={props.name}>
           {props.name}
         </strong>
-        {props.task != null ? (
-          <>
-            <Icon name="chevron-right" size={12} strokeWidth={1.8} className="cap-sep" />
-            <CapTitle title={props.task.title} onRename={props.task.onRename} />
-          </>
-        ) : jump !== null ? (
+        {jump !== null ? (
           <button type="button" className="quiet-control cap-status" title={t.agents.statusWaitingTip} onClick={() => props.onOpenSession(jump)}>
             {statusBody}
           </button>

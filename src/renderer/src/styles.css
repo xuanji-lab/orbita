@@ -7412,3 +7412,25 @@ button.turn-output-from.link:hover {
 :root:is([data-theme="graphite"], [data-theme="black"]) .ws-home .galaxy-orbit {
   stroke: var(--color-border-strong);
 }
+
+/*
+ * 编排长对话的按天分隔（ChatView 的 DayMark）：每天第一句上方一行「日期 + 发丝线」。
+ * 一天是真正的边界，才配一根线；字是 sm、次级墨、500，线是默认发丝线。上方留的空比下方多（标题上方空气更足）。
+ */
+.day-divider {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-5) 0 var(--space-3);
+}
+.day-divider-label {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.day-divider-rule {
+  height: 1px;
+  background: var(--color-border-default);
+}

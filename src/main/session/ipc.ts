@@ -24,6 +24,7 @@ import {
 import type { AgentHost } from "../agent/host.ts";
 import { executeRevert, executeUndo, fileTurnsIn, planRevert, planUndo, revertFromTurn } from "./revert.ts";
 import type { RevertFileOutcome } from "../../shared/revert.ts";
+import { artifactSummaries } from "./artifact-summary.ts";
 import type { ArtifactOpenResult } from "../../shared/browser.ts";
 import type { SessionRecord } from "../../shared/session.ts";
 import type { ProviderStore } from "../provider/store.ts";
@@ -246,6 +247,8 @@ export function registerSessionIpc(
   );
   // 第二个出口是「打开文件所在位置」而不是「默认浏览器」（用户 2026-10-01 裁决）：
   // 默认浏览器与内置浏览器是同一件事的两个版本，定位文件才是另一种需要（拷走、拖进别的应用）
+  // 编排面板协作图：一批会话的产物摘要（只读文件账，不碰文件本身）
+  ipcMain.handle(ipcChannels.sessionArtifactSummary, (_event, ids: unknown) => artifactSummaries(store, ids));
   ipcMain.handle(ipcChannels.sessionRevealArtifact, async (_event, id: string, path: string) => {
     await knownArtifact(id, path);
     shell.showItemInFolder(path);

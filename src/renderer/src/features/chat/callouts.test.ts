@@ -31,7 +31,7 @@ function input(targets: CalloutTarget[], over: Partial<PlaceInput> = {}): PlaceI
     star: null,
     width: 800,
     height: 500,
-    fontSize: 12,
+    glyphPx: 12,
     budget: 5,
     ...over,
   };

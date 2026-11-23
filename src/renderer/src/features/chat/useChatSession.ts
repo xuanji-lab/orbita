@@ -136,6 +136,12 @@ export interface UndoDialogState {
   plan: UndoPlan;
 }
 
+/** sendInto 的目标：id = 发进这条已有会话；null = 开新会话，onCreated 拿新 id */
+export interface SendInto {
+  id: string | null;
+  onCreated?: (id: string) => void;
+}
+
 export interface ChatSession {
   sessionId: string | null;
   /**
@@ -361,6 +367,12 @@ export interface ChatSession {
   confirmUndo: () => void;
   cancelUndo: () => void;
   send: () => void;
+  /**
+   * 把输入框里这句发进指定的会话（编排：工作区 New Task 页发的每一句都进这个工作区的主对话）。
+   * id 给了：先打开那条（种好历史），它在跑就排进它的队列，闲就直发；草稿从当前槽（New Task 页）清掉。
+   * id 为 null：照常开一条新会话，onCreated 在发出前拿到新会话的 id（调用方据此记主对话指针）。
+   */
+  sendInto: (target: SendInto) => void;
   /** 打断当前这一轮。pi 的 abort 走的是与工具审批不同的一条路，不需要等审批答复 */
   stop: () => void;
   /** 排队队列（当前槽），按显示顺序。唯一真源，操作一律按 id */
@@ -1975,7 +1987,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     [engine, model, mode, thinkingLevel, restoreSent],
   );
 
-  const send = useCallback(async () => {
+  /** send 在 openSession 之前定义：经 ref 取（发进主对话要先打开它） */
+  const openSessionRef = useRef<(id: string) => Promise<void>>(() => Promise.resolve());
+  const send = useCallback(async (into?: SendInto) => {
     const own = draft.trim();
     const images = attachments.map((item) => item.image);
     // 有主的粘贴（句中胶囊或展开区间）也算「有内容」——纯粘贴一条也能发
@@ -2000,8 +2014,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     // 「摘要」贴进对话，而什么都没压缩（真实发生过的事故）。
     // 手工输入时带附件（图 / 文件 / 粘贴块）不认压缩指令：压缩吃不了附件，当命令
     // 拦下会把附件悉数丢掉——按普通消息发。
+    // 发进主对话（into）时不认压缩指令：New Task 页没有「这条会话」可压，按普通消息发
     const compact =
-      images.length === 0 && quotes.length === 0 && files.length === 0 && !pasteActive
+      into === undefined && images.length === 0 && quotes.length === 0 && files.length === 0 && !pasteActive
         ? parseCompactCommand(text)
         : null;
     if (compact !== null) {
@@ -2053,11 +2068,24 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       });
       return;
     }
-    // 「本槽当前看哪条」：挂着的活会话，或从盘上打开的那条；首页两者皆无 → 开新的
-    let id: string | null = sessionId ?? opened?.id ?? null;
+    // 「本槽当前看哪条」：挂着的活会话，或从盘上打开的那条；首页两者皆无 → 开新的。
+    // 指定了目标会话（编排的主对话）：先把它打开进本槽（种好历史），再按它算忙闲——「先打开、再接着发」要等打开落定
+    let id: string | null = into === undefined ? (sessionId ?? opened?.id ?? null) : into.id;
+    if (into !== undefined && into.id !== null) {
+      const draftOf = draftKey;
+      writeDraft(draftOf, "");
+      writeAttachments(draftOf, () => []);
+      writeFiles(draftOf, () => []);
+      writeBlocks(draftOf, () => []);
+      writeQuotes(draftOf, () => []);
+      await openSessionRef.current(into.id);
+    }
     // **忙就排队，闲才直发**：这是队列归我们之后的核心分流。不再把消息推进 pi 的
     // steering/followUp——那边只有裸字符串、没有 id，正是一整晚竞态的来源。
-    const busy = id !== null && engine.statesRef.current.get(id)?.phase !== "idle";
+    // 发进主对话时：槽没种上（读盘失败）就当闲，不往一个不存在的槽里排队
+    const busy =
+      id !== null &&
+      (into === undefined ? engine.statesRef.current.get(id)?.phase : (engine.statesRef.current.get(id)?.phase ?? "idle")) !== "idle";
     if (id !== null && busy) {
       const queuedId = crypto.randomUUID();
       engine.applyStates((prev) =>
@@ -2088,7 +2116,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       const target = meta?.cwd ?? cwd ?? engine.defaultCwd;
       if (target === "") throw new Error(engine.messagesRef.current.session.noWorkspaceFolder);
       const workspace = meta?.workspaceId ?? workspaceId ?? null;
-      if (id === null) id = crypto.randomUUID();
+      if (id === null) {
+        id = crypto.randomUUID();
+        into?.onCreated?.(id);
+      }
       // 留回填快照：这条没落账就失败（provider 装配、图片解码……）时内容放回输入框。
       // 落账（用户条目回显）由事件订阅作废它；submitTurn 的 catch 兜底 IPC 直接失败的那类
       restoreRef.current = {
@@ -2113,6 +2144,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       engine.setError(cause instanceof Error ? cause.message : String(cause));
     }
   }, [engine, draft, attachments, quotes, files, pasted, sessionId, model, mode, cwd, workspaceId, opened, draftKey, writeDraft, writeAttachments, writeFiles, writeBlocks, writeQuotes, submitTurn]);
+  const sendInto = useCallback((target: SendInto) => void send(target), [send]);
 
   const stop = useCallback(() => {
     // 只停本槽当前轮。排队不动：pi 队列滞留给下次发送自动带上；压缩缓冲在压缩结束
@@ -2213,6 +2245,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     },
     [engine],
   );
+  openSessionRef.current = openSession;
 
   /**
    * 带着会话目标从来源会话新开一单带着种子开工（startGoalTask）：
@@ -3015,6 +3048,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     confirmUndo,
     cancelUndo,
     send: () => void send(),
+    sendInto,
     stop,
     queued: entry.queued,
     sendQueuedNow,

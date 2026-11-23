@@ -1,0 +1,378 @@
+/*
+ * 右栏「编排」面板（OrchestraPanel）。版式登记：
+ * - 树状图照子会话面板的列表配方（.ssp-list / .ssp-group / .ssp-card / .ssp-row，styles.css），不另造卡与行；
+ *   多出来的只有：顶上的主智能体卡（头像 + 名字 + 状态 + 职责一行）、行首的展开键槽、子会话缩进一层的左发丝线。
+ * - 星系图就是 New Task 页的 HomeGalaxy（同一套锁定框 + 引线），这里只给它一块高度。
+ * - 协作图：线与箭头一张 SVG，卡与边上的字是绝对定位的 HTML；卡与 .ssp-card 同一种语言（panel 底、淡边、radius-md）。
+ * 字号三档：名字 base、行与边上的字 sm、时间与来源 xs。颜色只用墨色与发丝线；等你 = warning、在跑 = info 只给状态饼与线。
+ */
+.orch-cap-ws {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.orch-views {
+  padding: var(--space-2) var(--space-3) var(--space-1);
+}
+
+.orch-pad {
+  padding: var(--space-3);
+}
+
+/* 主智能体卡：头像 28 + 两行（名字 + 状态 / 职责） */
+.orch-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.orch-main-avatar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+}
+
+.orch-main-body {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: var(--space-0-5);
+}
+
+.orch-main-l1 {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.orch-main-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+
+.orch-main-status {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.orch-main-status[data-kind="waiting"] {
+  color: var(--color-warning);
+}
+
+.orch-main-l2 {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+/* 主智能体下面的两组挂在一根竖发丝线上（树的主干），与主卡头像对齐 */
+.orch-branch {
+  display: grid;
+  gap: var(--space-4);
+  /* 主干对齐主卡头像的中线：卡内边距 + 头像一半（28 / 2 = 14），再减主干自己的 1px */
+  margin-left: calc(var(--space-3) + var(--space-3) + var(--space-0-5));
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--color-border-default);
+}
+
+.orch-note {
+  margin: 0;
+  padding: 0 var(--space-1);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+
+.orch-more {
+  margin: 0;
+  padding: var(--space-1) var(--space-2) var(--space-1) calc(var(--space-2) + var(--space-3) + var(--space-0-5) + var(--space-2));
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+/* 树的一行：行首一格给展开键（没有子会话也占位，行首的状态饼一列对齐） */
+.orch-row {
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+}
+
+.orch-twisty-slot {
+  display: grid;
+  place-items: center;
+  height: calc(var(--font-size-base) * var(--line-height-ui) + var(--space-2) * 2);
+}
+
+.orch-twisty {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+
+.orch-twisty:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.orch-row .ssp-row-main {
+  padding-left: var(--space-1);
+}
+
+.orch-row-word {
+  flex: none;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.orch-row[data-state="waiting"] .orch-row-word {
+  color: var(--color-warning);
+}
+
+.orch-idle-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: 1px solid var(--color-text-tertiary);
+}
+
+/* 子会话：缩进一层，左边一根发丝线（树的枝） */
+.orch-kids {
+  margin-left: calc(var(--space-4) + var(--space-1) + var(--space-1));
+  padding-left: var(--space-1);
+  border-left: 1px solid var(--color-border-default);
+}
+
+.orch-kids .orch-row {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
+
+/* ── 星系图 ── */
+.orch-galaxy {
+  height: min(560px, 78vh);
+  min-height: 320px;
+  padding: var(--space-1) 0;
+}
+
+/* ── 协作图 ── */
+.orch-graph-wrap {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3) var(--space-4);
+}
+
+.orch-graph-notes {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.orch-graph-notes .orch-note {
+  flex: 1;
+}
+
+.orch-demo-toggle {
+  flex: none;
+  font-size: var(--font-size-xs);
+}
+
+.orch-note-demo {
+  color: var(--color-text-secondary);
+}
+
+.orch-graph-host {
+  min-width: 0;
+}
+
+.orch-graph {
+  position: relative;
+}
+
+.orch-graph-lines {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.orch-edge-line {
+  fill: none;
+  stroke: var(--color-border-strong);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.orch-edge-arrow {
+  fill: var(--color-text-tertiary);
+}
+
+.orch-edge[data-kind="report"] .orch-edge-line {
+  stroke: var(--color-text-tertiary);
+}
+
+.orch-edge[data-pending] .orch-edge-line {
+  stroke-dasharray: 3 3;
+  stroke: var(--color-border-strong);
+}
+
+.orch-edge[data-pending] .orch-edge-arrow {
+  fill: var(--color-border-strong);
+}
+
+.orch-edge[data-kind="peer"] .orch-edge-line {
+  stroke: var(--color-text-secondary);
+}
+
+.orch-edge[data-hot] .orch-edge-line {
+  stroke: var(--color-text-primary);
+}
+
+.orch-edge[data-hot] .orch-edge-arrow {
+  fill: var(--color-text-primary);
+}
+
+.orch-node {
+  position: absolute;
+  box-sizing: border-box;
+}
+
+.orch-node-main .orch-main {
+  height: 100%;
+}
+
+.orch-node-job {
+  display: grid;
+  align-content: center;
+  gap: var(--space-0-5);
+  padding: var(--space-1) var(--space-2-5);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  font: inherit;
+  text-align: left;
+  color: var(--color-text-primary);
+  cursor: default;
+}
+
+button.orch-node-job {
+  cursor: pointer;
+}
+
+button.orch-node-job:hover {
+  background: linear-gradient(var(--color-bg-hover), var(--color-bg-hover)), var(--color-bg-panel);
+}
+
+.orch-node-job[data-dim] {
+  opacity: 0.55;
+}
+
+.orch-job-l1 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.orch-job-l1 .ssp-bot {
+  height: auto;
+}
+
+.orch-job-role {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-base);
+}
+
+.orch-job-l2 {
+  padding-left: calc(var(--space-2-5) + var(--space-2));
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.orch-node-job[data-state="waiting"] .orch-job-l2 {
+  color: var(--color-warning);
+}
+
+.orch-role-tag {
+  flex: none;
+  margin-left: auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* 边上的字：写在折线水平段的上方（下划线式，与星系的引线同一种读法） */
+.orch-edge-label {
+  position: absolute;
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-1-5);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-tight);
+  color: var(--color-text-secondary);
+  pointer-events: auto;
+}
+
+.orch-edge-lead {
+  flex: none;
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+
+.orch-edge-body {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.orch-edge-label[data-pending] .orch-edge-body {
+  color: var(--color-text-tertiary);
+}
+
+.orch-edge-label[data-kind="peer"] {
+  align-items: center;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.orch-graph[data-hot] .orch-edge-label:not([data-hot]) {
+  opacity: 0.45;
+}

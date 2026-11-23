@@ -36,8 +36,12 @@ import { COLLAPSE_BREAKPOINT } from "./shell/window-tools.ts";
 import { Toolbar, ToolbarPanelSlotContext } from "./shell/Toolbar";
 import { SessionCapsule } from "./shell/SessionCapsule";
 import { WorkspaceCapsule } from "./shell/WorkspaceCapsule";
+import { OrchestraPanel } from "./features/chat/OrchestraPanel.tsx";
 import { headerStatusOf } from "./features/chat/agent-status.ts";
-import { latestWorkspaceId, scopeRecent, scopeSummary, stateIndexOf } from "./features/chat/galaxy-data.ts";
+import { latestWorkspaceId, scopeSummary, stateIndexOf } from "./features/chat/galaxy-data.ts";
+import { dayLabel, daysOf, mainConversationOf } from "./features/chat/orchestra-data.ts";
+import { REVEAL_ENTRY_EVENT } from "./features/context/task-progress.ts";
+import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
 import { useFocusShell } from "./features/focus/use-focus-shell.tsx";
 import { docPanelLayout } from "./features/doc-panel/doc-panel-width.ts";
 import { DocPaperContext, effectivePaper } from "./features/doc-panel/doc-paper.ts";
@@ -91,7 +95,7 @@ import { useAutoOpenPanel } from "./features/chat/auto-open-panel.ts";
 import { liveFileOpen, onOpenPanelRequest, onOpenPluginBoardRequest, onOpenProgressRequest, requestOpenPanel } from "./shell/open-panel.ts";
 import type { ExcerptJump } from "./features/review/ExcerptsTab";
 import type { ExcerptJumpRequest } from "./features/chat/ChatView";
-import { APP_MODE_DEFAULT, BOARD_DAYS_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
+import { APP_MODE_DEFAULT, ORCHESTRA_VIEW_DEFAULT, BOARD_DAYS_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
 import { Drawer, type DockedTab } from "./shell/Drawer";
 import { NEW_TASK_TAB, dockTab } from "./shell/drawer-state";
 import { isWindowInactive } from "./shell/window-activity.ts";
@@ -471,6 +475,46 @@ export function App() {
   const capsuleTitle = mainOpenMeta?.title ?? t.common.newTask;
   const capsuleShortId = mainOpenId === "" ? null : mainOpenId.slice(0, 6);
   const capsuleParentId = mainOpenMeta?.parentId;
+
+  /**
+   * 编排：眼下这座星系（看着哪条会话就是它所在的工作区；New Task 页就是选中的工作区）与它的主对话。
+   * 主对话 = settings.orchestraMain 指向的那条普通会话（顶替常驻主智能体，见 orchestra-data.ts）。
+   * 「会话」菜单的日子从主对话已加载的那一段里分（只分得出已加载的，更早的往上翻会加载）。
+   */
+  const orchestraWsId =
+    mainOpenId === "" && session.opened === null ? session.workspaceId : (mainOpenMeta?.workspaceId ?? session.workspaceId);
+  const orchestraMainMeta = orchestrate ? mainConversationOf(session.sessions, orchestraWsId, settings.orchestraMain) : null;
+  const orchestraViewingMain = orchestraMainMeta !== null && mainOpenId === orchestraMainMeta.id;
+  const orchestraMainEntry = orchestraMainMeta === null ? undefined : session.entryOf(orchestraMainMeta.id);
+  const orchestraMainRecords = orchestraMainEntry === undefined ? undefined : selectTranscript(orchestraMainEntry.transcript);
+  const orchestraHere = orchestrate
+    ? {
+        workspaceId: orchestraWsId,
+        viewingMain: orchestraViewingMain,
+        days:
+          orchestraMainMeta === null
+            ? null
+            : daysOf(orchestraMainRecords ?? []).map((group) => ({
+                ...group,
+                label: dayLabel(group.day, Date.now(), t.orchestra, locale),
+              })),
+      }
+    : null;
+  const openMainConversation = (): void => {
+    if (orchestraMainMeta === null) return;
+    setOverlay(null);
+    void session.openSession(orchestraMainMeta.id);
+  };
+  /** 按天回看：滚到那天的第一句（不在主对话里就先打开它；不在已加载窗口里由对话列翻页去找） */
+  const openMainDay = (firstUserId: string): void => {
+    const reveal = (): void => {
+      window.dispatchEvent(new CustomEvent(REVEAL_ENTRY_EVENT, { detail: firstUserId }));
+    };
+    if (orchestraMainMeta === null) return;
+    setOverlay(null);
+    if (orchestraViewingMain) reveal();
+    else void session.openSession(orchestraMainMeta.id).then(() => window.setTimeout(reveal, 350));
+  };
 
   /** 主槽里的弹出宿主（完成提醒卡 / 铃铛清单 portal 进去）；state 而非 ref：挂上后要触发一次渲染 */
   const [popHost, setPopHost] = useState<HTMLDivElement | null>(null);
@@ -1404,25 +1448,23 @@ export function App() {
           </strong>
         </div>
       </div>
-    ) : orchestrateStates !== null && (mainOpenId === "" || mainOpenMeta?.parentId === undefined) ? (
-      // 编排：页头永远是「头像 + 智能体名」；正看着某件活时后面接「› 任务名」（可改名），不露会话 id
-      (() => {
-        const inSession = !(mainOpenId === "" && session.opened === null);
-        const wsId = inSession ? (mainOpenMeta?.workspaceId ?? null) : session.workspaceId;
-        const state = orchestrateStates.state;
-        return (
-          <WorkspaceCapsule
-            workspaceId={wsId}
-            name={session.workspaces.find((item) => item.id === wsId)?.name ?? t.agents.home}
-            status={headerStatusOf(scopeSummary(session.sessions, wsId, state, mainOpenId === "" ? null : mainOpenId))}
-            task={inSession ? { title: capsuleTitle, onRename: mainOpenId === "" ? undefined : (title) => session.renameSession(mainOpenId, title) } : null}
-            recent={scopeRecent(session.sessions, wsId, state)}
-            now={Date.now()}
-            onOpenSession={(id) => void session.openSession(id)}
-            onSeeAll={() => changeSettings({ appMode: "agent" })}
-          />
-        );
-      })()
+    ) : orchestrateStates !== null && orchestraHere !== null ? (
+      // 编排：页头始终是「主智能体头像 + 工作区名 + 状态胶囊」，New Task 页与对话页同一个，不出现任务标题；
+      // 「会话」菜单按天回看这个工作区的主对话
+      <WorkspaceCapsule
+        workspaceId={orchestraHere.workspaceId}
+        name={session.workspaces.find((item) => item.id === orchestraHere.workspaceId)?.name ?? t.agents.home}
+        status={headerStatusOf(
+          scopeSummary(session.sessions, orchestraHere.workspaceId, orchestrateStates.state, mainOpenId === "" ? null : mainOpenId),
+        )}
+        days={orchestraHere.days}
+        viewingMain={orchestraHere.viewingMain}
+        hasEarlier={orchestraHere.viewingMain && session.hasMoreHistory}
+        onOpenSession={(id) => void session.openSession(id)}
+        onOpenMain={openMainConversation}
+        onOpenDay={openMainDay}
+        onSeeAll={() => changeSettings({ appMode: "agent" })}
+      />
     ) : mainOpenId === "" && session.opened === null ? null : (
       <SessionCapsule
         title={capsuleTitle}
@@ -1591,6 +1633,14 @@ export function App() {
                 session={session}
                 providersError={providersError}
                 orchestrate={orchestrate}
+                orchestraMain={settings.orchestraMain}
+                onMainCreated={(key, id) => changeSettings({ orchestraMain: { [key]: id } })}
+                dayDividers={orchestraViewingMain}
+                notMain={
+                  orchestrate && orchestraMainMeta !== null && mainOpenId !== "" && !orchestraViewingMain
+                    ? { title: mainOpenMeta?.title ?? t.common.newTask, onBack: openMainConversation }
+                    : null
+                }
                 bareHeader
                 onOpenReviewAt={openReviewAt}
                 excerptJump={excerptJump}
@@ -1748,6 +1798,25 @@ export function App() {
                   {...(railPath.panel === "plugins" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
                   onSubChange={(sub) => reportRailPath({ panel: "plugins", ...(sub === undefined ? {} : { sub }) })}
                 />
+              ) : shownPanel === "orchestra" && orchestrate ? (
+                <OrchestraPanel
+                  session={session}
+                  workspaceId={orchestraWsId}
+                  workspaceName={session.workspaces.find((item) => item.id === orchestraWsId)?.name ?? t.agents.home}
+                  main={orchestraMainMeta}
+                  view={settings.orchestraView ?? ORCHESTRA_VIEW_DEFAULT}
+                  onView={(orchestraView) => changeSettings({ orchestraView })}
+                  onOpenSession={(id) => {
+                    setOverlay(null);
+                    void session.openSession(id);
+                  }}
+                  width={panelRenderedWidth}
+                  onWiden={(width) => {
+                    setPanelWidth(width);
+                    changeSettings({ rightPanelWidth: width });
+                  }}
+                  onSeeAll={() => changeSettings({ appMode: "agent" })}
+                />
               ) : shownPanel === "galaxy" ? (
                 <GalaxyDesigner workspace={session.workspaces.find((workspace) => workspace.id === galaxyTarget) ?? null} />
               ) : shownPanel === "intent" ? (
@@ -1792,6 +1861,7 @@ export function App() {
           onPanel={handlePanel}
           railEntries={railEntries}
           intentAvailable={settings.experimentalFeatures?.["intent-system"] === true}
+          orchestraAvailable={orchestrate}
           automation={{ running: runningCount(automations.automations) }}
           subSessions={
             channelParentId !== null && hasSubSessions

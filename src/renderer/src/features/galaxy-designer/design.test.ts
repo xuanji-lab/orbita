@@ -253,7 +253,10 @@ describe("元素组合与 2D 形象", () => {
   test("画形象的组件与样式里也没有嘴：眼睛组只画 rect，源码里没有嘴 / 鼻 / 腮红 / 眉毛 / 瞳孔 / 四肢", () => {
     // 注释里写着「不画嘴」之类的说明，先剥掉注释，只查真正会渲染的代码与样式
     const stripComments = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
-    const tsx = stripComments(readFileSync(new URL("./GalaxyDesigner.tsx", import.meta.url), "utf8"));
+    // 形象由 StarFigure.tsx 的 BodyFigure 画（面板、头像、星系共用），面板本身也一并查
+    const tsx = stripComments(
+      readFileSync(new URL("./StarFigure.tsx", import.meta.url), "utf8") + readFileSync(new URL("./GalaxyDesigner.tsx", import.meta.url), "utf8"),
+    );
     const css = stripComments(readFileSync(new URL("./galaxy-designer.css", import.meta.url), "utf8"));
     const forbidden = /\b(mouth|smile|nose|blush|cheeks?|eyebrows?|brows?|pupils?|lashes|limbs?|arms?|legs?|antennae?)\b|嘴|鼻|腮|眉|瞳/i;
     assert.doesNotMatch(tsx, forbidden);
@@ -544,6 +547,9 @@ describe("面板开合与切工作区", () => {
   test("切会话：设计面板开着、目标会话没记过面板就留着；记过别的面板照记忆换", () => {
     assert.equal(keepDesignerAcrossSessions("galaxy", null), "galaxy");
     assert.equal(keepDesignerAcrossSessions("galaxy", "files"), "files");
+    assert.equal(keepDesignerAcrossSessions("orchestra", null), "orchestra", "编排面板也是工作区级：点开树上的会话不收掉它");
+    assert.equal(keepDesignerAcrossSessions("orchestra", "review"), "review");
+    assert.equal(keepDesignerAcrossSessions("files", null), null);
     assert.equal(keepDesignerAcrossSessions("files", null), null);
     assert.equal(keepDesignerAcrossSessions(null, "review"), "review");
   });
