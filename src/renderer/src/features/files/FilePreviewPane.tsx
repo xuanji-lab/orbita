@@ -12,9 +12,10 @@ import { WindowedText } from "./WindowedText";
 import { RangeTextPreview } from "./RangeTextPreview";
 import { EmptyPreview, PreviewNotice } from "./PreviewChrome";
 import { DOC_MAX_BYTES } from "@shared/doc";
-import { isPdfFile, isWebPageFile, type FilePreview } from "@shared/files";
+import { isPdfFile, isWebPageFile, mediaKindOf, type FilePreview } from "@shared/files";
 import type { PromptImage } from "@shared/prompt-images";
 import { PdfView, type PdfJump } from "./PdfView";
+import { MediaView } from "./MediaView";
 import { DocEditPane } from "../doc-panel/DocEditPane";
 import { watchDocMeta } from "./doc-meta-refresh.ts";
 import type { TextQuote } from "@shared/quote";
@@ -71,13 +72,15 @@ export function FilePreviewPane(props: {
   const pdfCitations = useExperimentalFeature("pdf-citations");
   const pdf = sentImage === undefined && pdfCitations && isPdfFile(path);
   const [pdfReload, setPdfReload] = useState(0);
+  // 音视频走播放器（流式读，不过 fs:read）；附图不是媒体文件
+  const mediaKind = sentImage === undefined ? mediaKindOf(path) : null;
   const name = sentImage?.name ?? fileTabName(path);
   // 面包屑从所在的根开始（绝对路径放不下时截掉的总是末尾的文件名）；完整路径进 tooltip
   const segments =
     sentImage === undefined ? crumbSegmentsFromRoot(root, props.rootLabel, path) : [name];
   const previewMode = sentImage === undefined ? textPreviewMode(name) : "plain";
   const { state, refreshing, refresh } = usePreviewData(
-    sentImage === undefined,
+    sentImage === undefined && mediaKind === null,
     sessionId,
     workspaceId,
     extraWorkspaceId,
@@ -88,7 +91,7 @@ export function FilePreviewPane(props: {
   const loading =
     sentImage !== undefined
       ? imageState.status === "loading"
-      : state.status === "loading" || refreshing;
+      : mediaKind === null && (state.status === "loading" || refreshing);
 
   const [mode, setMode] = useState<"rendered" | "source" | "edit">(props.openInEdit === true ? "edit" : "rendered");
   // 切文件（标签重挂载或换 path）：Source / 编辑模式不带过去，新文件一律先看 Rendered（刚新建的直接进编辑）
@@ -228,7 +231,7 @@ export function FilePreviewPane(props: {
               title={t.files.refreshPreview}
               onClick={() => {
                 refresh();
-                if (pdf) setPdfReload((n) => n + 1);
+                if (pdf || mediaKind !== null) setPdfReload((n) => n + 1);
                 else setTextReload((n) => n + 1);
               }}
             >
@@ -258,7 +261,7 @@ export function FilePreviewPane(props: {
       )}
       <div
         className="file-preview-body"
-        data-kind={pdf ? "pdf" : editing || asDocument ? "edit" : undefined}
+        data-kind={pdf ? "pdf" : mediaKind !== null ? "media" : editing || asDocument ? "edit" : undefined}
         ref={bodyRef}
       >
         {asDocument ? (
@@ -280,6 +283,14 @@ export function FilePreviewPane(props: {
             path={path}
             onClose={() => pickMode("rendered")}
             {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
+          />
+        ) : mediaKind !== null ? (
+          <MediaView
+            request={{ sessionId, workspaceId, ...extra, root, dir: path }}
+            name={name}
+            kind={mediaKind}
+            reloadToken={pdfReload}
+            onOpenDefault={openDefault}
           />
         ) : pdf ? (
           <PdfView
