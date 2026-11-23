@@ -32,6 +32,7 @@ import { GuideSettings } from "./GuideSettings";
 import { SettingGroup, SettingRow } from "./SettingRow";
 import { Segmented, SelectButton, Switch } from "./SettingControls";
 import { UpdateCard } from "./UpdateCard";
+import { useChatStatusFlag } from "../context/chat-status-flag.ts";
 import { ProvidersView } from "./ProvidersView";
 import { ThemePicker } from "./ThemeCard";
 import { EXPERIMENTAL_FEATURES, pullRequestUrl, type ExperimentalFeature } from "../../experimental-features.ts";
@@ -402,6 +403,7 @@ function General(props: {
             </span>
           )}
         </SettingRow>
+        <ChatStatusToggle />
       </SettingGroup>
       {/* 原来的 Context / Git / Sessions 各只有一两行，三个分组标题比内容还显眼；
           它们调的都是「agent 怎么干活」，并成一组（实验开关与功能清单已搬到独立的实验功能 Tab） */}
@@ -1733,6 +1735,17 @@ function DataDirectoryRow() {
           <Icon name="folder" size={14} /> {t.settings.reveal}
         </PanelButton>
       </span>
+    </SettingRow>
+  );
+}
+
+/** 「状态」卡的原型开关（关 = 改前，#522 现状）：存在 localStorage，不进设置文件 */
+function ChatStatusToggle() {
+  const t = useT();
+  const [on, setOn] = useChatStatusFlag();
+  return (
+    <SettingRow name={t.chatStatus.toggleName} info={t.chatStatus.toggleInfo}>
+      <Switch label={t.chatStatus.toggleName} checked={on} onChange={setOn} />
     </SettingRow>
   );
 }

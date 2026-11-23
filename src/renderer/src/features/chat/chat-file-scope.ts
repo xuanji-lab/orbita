@@ -5,7 +5,7 @@
  * renderer 这边只是把绝对路径对到它所在的根上，传什么主进程都不信。不在任何根里的路径 = 读不到。
  */
 import { createContext, useContext, useEffect, useState } from "react";
-import type { FileRoot } from "@shared/files";
+import type { FilePreview, FileRoot } from "@shared/files";
 import { api } from "../../api";
 import { rootOf } from "./chat-paths.ts";
 
@@ -69,6 +69,29 @@ export function loadChatImage(scope: ChatFileScope, path: string): Promise<strin
     imageCache.delete(oldest);
   }
   return promise;
+}
+
+/** 读一个文件给临时预览用（状态卡的产物预览）：同一道白名单；不在根里 / 读失败 = null */
+export async function readChatFile(scope: ChatFileScope, path: string): Promise<FilePreview | null> {
+  const root = rootOf(path, await rootsFor(scope));
+  if (root === null) return null;
+  try {
+    return await api.files.read({ sessionId: scope.sessionId, workspaceId: scope.workspaceId, root: root.path, dir: path });
+  } catch {
+    return null;
+  }
+}
+
+/** 读一份 PDF 的字节给缩略图画首页（状态面板的产物行）：同一道白名单；不在根里 / 太大 / 读失败 = null */
+export async function readChatPdf(scope: ChatFileScope, path: string): Promise<Uint8Array | null> {
+  const root = rootOf(path, await rootsFor(scope));
+  if (root === null) return null;
+  try {
+    const file = await api.files.readPdf({ sessionId: scope.sessionId, workspaceId: scope.workspaceId, root: root.path, dir: path });
+    return file.kind === "pdf" ? file.data : null;
+  } catch {
+    return null;
+  }
 }
 
 /** 用系统默认应用打开一个文件（同一道白名单）；打不开返回 false */
