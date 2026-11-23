@@ -1368,6 +1368,47 @@ describe("SessionStore · 窗口分页", () => {
     assert.equal(page.hasMore, false);
   });
 
+  test("loadOlder：前一轮比一页还长时，回的是那一整轮，不是空页", async () => {
+    // 第 0 轮很长（32 条，比一页 10 条多），第 1 轮很短
+    const longTurn = turnBlock(0, 30);
+    await seedLog(ID, [...longTurn, ...turnBlock(1, 2)]);
+    // 锚点 u1 之前的 10 条里没有轮边界。改前：往后找越过锚点，回 { records: [], hasMore: true }，
+    // 聊天面再也翻不到这一轮之前，状态卡的整任务拉取也在这里失败
+    const page = await store.loadOlder(ID, "u1", 10);
+    assert.equal(page.records.length, longTurn.length);
+    assert.equal(page.records[0]?.id, "u0");
+    assert.equal(page.hasMore, false);
+  });
+
+  test("loadOlder：连续几轮都比一页长，一路翻得到顶，每页非空且无重叠", async () => {
+    const turns = [turnBlock(0, 30), turnBlock(1, 40), turnBlock(2, 25), turnBlock(3, 2)];
+    const all = turns.flat();
+    await seedLog(ID, all);
+    const collected: string[] = [];
+    let anchor = "u3";
+    for (let guard = 0; guard < 10; guard += 1) {
+      const page = await store.loadOlder(ID, anchor, 10);
+      assert.ok(page.records.length > 0, `第 ${guard} 页不应为空（hasMore 说还有更多时必须真的有记录）`);
+      collected.unshift(...page.records.map((record) => record.id));
+      if (!page.hasMore) break;
+      anchor = page.records[0]!.id;
+    }
+    assert.deepEqual(collected, all.slice(0, all.length - turns[3]!.length).map((record) => record.id));
+  });
+
+  test("loadWindow：最后一轮比一页还长，窗口往回对齐到那一轮的起点，hasMore 与下一页衔接", async () => {
+    // 同一个对齐函数的另一侧（右界是数组末尾）：不受 loadOlder 修复影响，这里钉住它的行为
+    const longTurn = turnBlock(1, 40);
+    await seedLog(ID, [...turnBlock(0, 2), ...longTurn]);
+    const detail = await store.loadWindow(ID, 10);
+    assert.equal(detail?.transcript[0]?.id, "u1");
+    assert.equal(detail?.transcript.length, longTurn.length);
+    assert.equal(detail?.window.hasMore, true);
+    const older = await store.loadOlder(ID, "u1", 10);
+    assert.deepEqual(older.records.map((record) => record.id), ["u0", "a0", "t0-0", "t0-1"]);
+    assert.equal(older.hasMore, false);
+  });
+
   test("折叠语义不变：窗口从 fold 后的生效视图取，不是盘上的原始行", async () => {
     // 10 轮（50 条）+ 回退界碑（目标 = u5）+ 后两轮：生效视图只有 u5 之前 + 界碑 + 后两轮
     const records: SessionRecord[] = [
