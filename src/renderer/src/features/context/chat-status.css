@@ -149,7 +149,11 @@
   color: var(--color-text-tertiary);
   cursor: pointer;
 }
-/* 收起态只有一枚小钮：状态与不打岔入口同排，不再在正文上叠第二排浮层。 */
+/* 收起态只有一枚小钮：状态与不打岔入口同排，不再在正文上叠第二排浮层。
+   同时给这枚钮留出真实的顶部空间——它不是「背景变不透明」就算不遮正文。 */
+.pane-main:has(.cs-collapsed) .chat-pane {
+  padding-top: calc(var(--control-height-sm) + var(--space-3));
+}
 .cs-collapsed {
   display: inline-flex;
   align-items: center;

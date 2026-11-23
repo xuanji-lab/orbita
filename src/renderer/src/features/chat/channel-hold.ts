@@ -154,9 +154,9 @@ export function orderForDelivery(
     .flatMap((group) => group.list);
 }
 
-/** 界面上 delegate 结果卡的出现顺序：与用户在对话流里看到的委派顺序一致。 */
+/** 界面上 delegate 调用的出现顺序：assistant 的 toolCall 顺序，按 toolCallId 对到结果里的 childId。 */
 export function delegateOrderFromTranscript(records: readonly TranscriptRecord[]): readonly string[] {
-  const out: string[] = [];
+  const childByCall = new Map<string, string>();
   for (const record of records) {
     if (record.role !== "tool" || record.toolName !== "delegate") continue;
     const details: unknown = record.details;
@@ -164,7 +164,17 @@ export function delegateOrderFromTranscript(records: readonly TranscriptRecord[]
     const delegate = (details as Record<string, unknown>)["delegate"];
     if (typeof delegate !== "object" || delegate === null) continue;
     const childId = (delegate as Record<string, unknown>)["childId"];
-    if (typeof childId === "string" && childId !== "" && !out.includes(childId)) out.push(childId);
+    if (typeof childId === "string" && childId !== "") childByCall.set(record.toolCallId, childId);
+  }
+  const out: string[] = [];
+  for (const record of records) {
+    if (record.role !== "assistant") continue;
+    for (const block of record.content) {
+      if (block.type !== "toolCall" || block.toolName !== "delegate") continue;
+      const childId = childByCall.get(block.toolCallId);
+      // 结果按完成先后返回（己→辛→庚），调用在 assistant 里的顺序才是界面顺序（己→庚→辛）
+      if (childId !== undefined && !out.includes(childId)) out.push(childId);
+    }
   }
   return out;
 }

@@ -187,7 +187,22 @@ describe("合并投递的顺序", () => {
       isError: false,
       details: { delegate: { childId } },
     });
-    const records = [delegated("c1", 100), delegated("c2", 200), delegated("c3", 300)];
+    const assistantCalls = (order: readonly string[]): TranscriptRecord => ({
+      id: "assistant-delegates",
+      role: "assistant",
+      content: order.map((childId) => ({
+        type: "toolCall" as const,
+        toolCallId: `call-${childId}`,
+        toolName: "delegate",
+        input: { title: childId },
+      })),
+      model: { provider: "test", id: "m" },
+      timestamp: 50,
+      status: "complete",
+      stopReason: "stop",
+    });
+    // 真实时序：调用己→庚→辛；结果按完成先后己→辛→庚。旧实现遍历结果就会排错。
+    const records = [assistantCalls(["c1", "c2", "c3"]), delegated("c1", 100), delegated("c3", 200), delegated("c2", 300)];
     deepStrictEqual(delegateOrderFromTranscript(records), ["c1", "c2", "c3"]);
     const delegatedAt = new Map(delegateOrderFromTranscript(records).map((id, index) => [id, index]));
     const list = [report("c3-done", "c3", "done", "x", 1), report("c2-late", "c2", "done", "x", 9), report("c1-done", "c1", "done", "x", 7)];
