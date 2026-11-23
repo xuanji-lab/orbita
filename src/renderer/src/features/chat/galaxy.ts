@@ -44,10 +44,22 @@ export const STAR_MASS = { min: 300, max: 1000 } as const;
 export const PLANET_MASS = { min: 1, max: 40 } as const;
 const STAR_DENSITY = 1.4;
 export const DENSITY: Readonly<Record<Composition, number>> = { rock: 5.5, ice: 2, gas: 1.3 };
-/** 一座星系最多画几颗行星；再多的不画（数量写进标签），见 layoutGalaxy */
-export const PLANET_CAP = 12;
-/** 星屑颗粒上限：2000 条会话也只画这么多粒，多出来的量只让碎石带更浓 */
-export const DUST_CAP = 240;
+/**
+ * 一座星系最多画几圈轨道（几颗行星）。超出的计进 hidden，不画、不滚动、不缩放：9 圈以上的
+ * 发丝线在 900×240 的带子里会叠成一个靶心（2026-11-23 视觉审查），6 圈还读得出「一圈一颗」。
+ */
+export const VISIBLE_ORBIT_CAP = 6;
+/** 星屑颗粒上限：2000 条会话也只画这么多粒，多出来的量只让碎石带更浓（240 粒时与轨道一起成了靶心） */
+export const DUST_CAP = 60;
+/**
+ * 统一画框（天体单位）：所有星系都装进这个半径里，相机与视口只按它定，不按某座星系自己的外缘——
+ * 这样空 / 平常 / 满载三档的主星同大、同位，满载不会因为外缘变大把主星缩小。
+ */
+export const FRAME_EXTENT = 64;
+/** 行星区外沿：再往外留给碎石带。用户给的轨道半径整体超出时按比例收进来（天体半径不缩） */
+export const PLANET_ZONE = 52;
+/** 空星系画一圈极淡的「预期落位轨道」：第一颗行星会落在这一带，空星系不至于读成一个 loading 球 */
+export const EXPECTED_ORBIT = 22;
 /** 相邻两个天体表面之间至少留的距离（与半径同单位） */
 export const MIN_CLEARANCE = 2.5;
 /** 开普勒第三定律的参考点：轨道半径 KEPLER_REF_RADIUS 处转一圈 KEPLER_REF_PERIOD_S 秒 */
@@ -113,8 +125,12 @@ export interface Belt {
 export interface GalaxyLayout {
   starRadius: number;
   planets: OrbitBody[];
-  /** 超过 PLANET_CAP 没画的行星数 */
+  /** 超过 VISIBLE_ORBIT_CAP 没画的行星数 */
   hidden: number;
+  /** 没有行星时的预期落位轨道半径；有行星时为 null */
+  expectedOrbit: number | null;
+  /** 用户给的轨道半径整体乘了多少才装进行星区（1 = 原样） */
+  orbitScale: number;
   belt: Belt | null;
   /** 最外缘（碎石带外沿或最外轨道 + 行星半径） */
   extent: number;
@@ -140,14 +156,18 @@ export function beltAlpha(count: number): number {
 }
 
 /**
- * 摆星系：按轨道半径排序，取最内的 PLANET_CAP 颗；逐圈检查「不相撞、留间距」，违反的向外推。
+ * 摆星系：按轨道半径排序，取最内的 VISIBLE_ORBIT_CAP 颗；轨道半径整体超出行星区时按同一比例收进来
+ * （比例不变，用户指定的相对远近保留）；再逐圈检查「不相撞、留间距」，违反的向外推。
  * 两条圆轨道半径差 ≥ 两颗行星半径之和 + 间距时，无论倾角如何都不会相交（任一点到原点的距离
  * 分别恒为 a1、a2，两点距离 ≥ a2 − a1），所以只需管半径差。
  */
 export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
   const star = starRadius(spec.starMass);
   const sorted = [...spec.planets].sort((a, b) => a.orbitRadius - b.orbitRadius);
-  const shown = sorted.slice(0, PLANET_CAP);
+  const shown = sorted.slice(0, VISIBLE_ORBIT_CAP);
+  const outermost = shown[shown.length - 1];
+  const orbitScale =
+    outermost === undefined ? 1 : Math.min(1, (PLANET_ZONE - planetRadius(outermost)) / outermost.orbitRadius);
   const planets: OrbitBody[] = [];
   const adjusted: string[] = [];
   let prevOrbit = 0;
@@ -155,8 +175,9 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
   for (const planet of shown) {
     const radius = planetRadius(planet);
     const minOrbit = prevOrbit + prevRadius + radius + MIN_CLEARANCE;
-    const orbitRadius = Math.max(planet.orbitRadius, minOrbit);
-    if (orbitRadius !== planet.orbitRadius) adjusted.push(planet.id);
+    const given = planet.orbitRadius * orbitScale;
+    const orbitRadius = Math.max(given, minOrbit);
+    if (orbitRadius !== given) adjusted.push(planet.id);
     planets.push({
       id: planet.id,
       composition: planet.composition,
@@ -171,12 +192,13 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
     prevRadius = radius;
   }
   limitInclinations(planets);
-  const lastEdge = planets.length === 0 ? star : prevOrbit + prevRadius;
+  const expectedOrbit = planets.length === 0 ? EXPECTED_ORBIT : null;
+  const lastEdge = expectedOrbit ?? prevOrbit + prevRadius;
   let belt: Belt | null = null;
   const sessions = Math.max(0, Math.floor(spec.sessions));
   if (sessions > 0) {
     const inner = lastEdge + MIN_CLEARANCE * 2;
-    const outer = inner + Math.max(8, inner * 0.14);
+    const outer = Math.max(FRAME_EXTENT, inner + 6);
     const rand = seeded(9173);
     const particles: DustParticle[] = [];
     const n = Math.min(sessions, DUST_CAP);
@@ -194,7 +216,9 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
   return {
     starRadius: star,
     planets,
-    hidden: Math.max(0, sorted.length - PLANET_CAP),
+    hidden: Math.max(0, sorted.length - VISIBLE_ORBIT_CAP),
+    expectedOrbit,
+    orbitScale,
     belt,
     extent: belt === null ? lastEdge : belt.outer,
     adjusted,
@@ -292,18 +316,17 @@ export interface Viewport {
   cy: number;
 }
 
-/**
- * 把星系装进视口：外缘一圈与主星上下沿投影后取包围盒，按宽高取较小的焦距，并封顶
- * 「原点处每单位多少像素」——小星系就画得小，不会因为只有一颗星就把它放大成满屏的球。
- */
-export const MAX_PIXELS_PER_UNIT = 3.4;
+/** 整座星系（统一画框）在画布上的最大包围盒（CSS px）：与平常档同级，满载也不越过它 */
+export const GALAXY_BOX = { width: 560, height: 180 } as const;
 
-export function fitViewport(layout: GalaxyLayout, camera: Camera, width: number, height: number, margin = 12, maxPixelsPerUnit = MAX_PIXELS_PER_UNIT): Viewport {
+/**
+ * 统一视口：只按统一画框（FRAME_EXTENT 一圈 + 主星上下沿）定焦距与中心，不看某座星系自己的外缘。
+ * 于是三档的主星同一个像素半径、同一个中心；星系本身再大也装在 GALAXY_BOX 里（layoutGalaxy 保证外缘
+ * 不超过画框）。框在画布里水平、垂直都居中。
+ */
+export function frameViewport(camera: Camera, width: number, height: number, box: { width: number; height: number } = GALAXY_BOX): Viewport {
   const pts: Projected[] = [];
-  const ring = Math.max(layout.extent, layout.starRadius);
-  for (let i = 0; i < 72; i++) pts.push(project(orbitPoint(ring, 0, 0, (i / 72) * Math.PI * 2), camera));
-  pts.push(project({ x: 0, y: 0, z: layout.starRadius }, camera));
-  pts.push(project({ x: 0, y: 0, z: -layout.starRadius }, camera));
+  for (let i = 0; i < 144; i++) pts.push(project(orbitPoint(FRAME_EXTENT, 0, 0, (i / 144) * Math.PI * 2), camera));
   let minX = Infinity;
   let maxX = -Infinity;
   let minY = Infinity;
@@ -314,11 +337,7 @@ export function fitViewport(layout: GalaxyLayout, camera: Camera, width: number,
     minY = Math.min(minY, p.sy);
     maxY = Math.max(maxY, p.sy);
   }
-  const focal = Math.min(
-    (width - margin * 2) / Math.max(maxX - minX, 1e-6),
-    (height - margin * 2) / Math.max(maxY - minY, 1e-6),
-    maxPixelsPerUnit * camera.distance,
-  );
+  const focal = Math.min(box.width / Math.max(maxX - minX, 1e-6), box.height / Math.max(maxY - minY, 1e-6));
   return {
     width,
     height,
@@ -336,10 +355,15 @@ function round1(value: number): string {
   return (Math.round(value * 10) / 10).toString();
 }
 
+/** 预期落位轨道的 planetId（它没有行星） */
+export const EXPECTED_ID = "expected";
+
 export interface OrbitArc {
   kind: "orbit";
   key: string;
   planetId: string;
+  /** 空星系的预期落位轨道：画得极淡 */
+  expected: boolean;
   /** 这段弧在轨道面里的角度区间 [from, to) */
   from: number;
   to: number;
@@ -391,14 +415,18 @@ export const ARCS_PER_ORBIT = 16;
 export function orbitArcs(layout: GalaxyLayout, camera: Camera, vp: Viewport, samplesPerArc = 6): OrbitArc[] {
   const arcs: OrbitArc[] = [];
   const span = (Math.PI * 2) / ARCS_PER_ORBIT;
-  for (const planet of layout.planets) {
+  const rings = layout.planets.map((p) => ({ id: p.id, a: p.orbitRadius, inclination: p.inclination, node: p.node, expected: false }));
+  if (layout.expectedOrbit !== null) {
+    rings.push({ id: EXPECTED_ID, a: layout.expectedOrbit, inclination: 0, node: 0, expected: true });
+  }
+  for (const planet of rings) {
     for (let k = 0; k < ARCS_PER_ORBIT; k++) {
       const from = k * span;
       let d = "";
       let depthSum = 0;
       for (let i = 0; i <= samplesPerArc; i++) {
         const theta = from + (span * i) / samplesPerArc;
-        const projected = project(orbitPoint(planet.orbitRadius, planet.inclination, planet.node, theta), camera);
+        const projected = project(orbitPoint(planet.a, planet.inclination, planet.node, theta), camera);
         const { x, y } = toScreen(projected, vp);
         d += `${i === 0 ? "M" : "L"}${round1(x)} ${round1(y)}`;
         depthSum += projected.depth;
@@ -407,6 +435,7 @@ export function orbitArcs(layout: GalaxyLayout, camera: Camera, vp: Viewport, sa
         kind: "orbit",
         key: `orbit-${planet.id}-${k}`,
         planetId: planet.id,
+        expected: planet.expected,
         from,
         to: from + span,
         depth: depthSum / (samplesPerArc + 1),
@@ -558,7 +587,7 @@ const COMPOSITIONS: readonly Composition[] = ["rock", "gas", "ice"];
 
 function fullPlanets(): PlanetSpec[] {
   const planets: PlanetSpec[] = [];
-  for (let i = 0; i < PLANET_CAP; i++) {
+  for (let i = 0; i < 12; i++) {
     planets.push({
       id: `p${i + 1}`,
       mass: [2, 9, 3.5, 22, 5, 1.6, 30, 6, 12, 2.8, 18, 4][i] ?? 3,
@@ -574,6 +603,8 @@ function fullPlanets(): PlanetSpec[] {
 
 export function galaxySpecOf(fixture: GalaxyFixture): GalaxySpec {
   if (fixture === "empty") return { starMass: 620, planets: [], sessions: 0 };
-  if (fixture === "full") return { starMass: 820, planets: fullPlanets(), sessions: 2000 };
+  // 满载：12 颗行星（只画最内 6 圈，其余计 hidden）、2000 条会话。主星质量与平常档相同——
+  // 主星大小只由质量定，不因为星系热闹就变大或变小
+  if (fixture === "full") return { starMass: 620, planets: fullPlanets(), sessions: 2000 };
   return { starMass: 620, planets: TYPICAL_PLANETS, sessions: 14 };
 }

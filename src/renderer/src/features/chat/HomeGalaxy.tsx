@@ -2,7 +2,8 @@ import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "rea
 import {
   advanceClock,
   drawFrame,
-  fitViewport,
+  frameViewport,
+  FRAME_EXTENT,
   FRAME_MS,
   galaxyFixtureOf,
   galaxySpecOf,
@@ -117,14 +118,17 @@ export function HomeGalaxy(props: { spec: GalaxySpec; label: string }) {
   const seconds = useGalaxyClock(svgRef);
   const scene = useMemo(() => {
     const layout = layoutGalaxy(props.spec);
-    const camera = makeCamera(layout.extent);
-    const viewport = fitViewport(layout, camera, VIEW_W, VIEW_H);
+    // 相机与视口只按统一画框定：三档的主星同大同位（不按这座星系自己的外缘缩放）
+    const camera = makeCamera(FRAME_EXTENT);
+    const viewport = frameViewport(camera, VIEW_W, VIEW_H);
     return { layout, camera, viewport, arcs: orbitArcs(layout, camera, viewport) };
   }, [props.spec]);
   const items = drawFrame(scene.layout, scene.camera, scene.viewport, scene.arcs, seconds);
   const starGradient = `${uid}-star`;
   const render = (item: DrawItem) => {
-    if (item.kind === "orbit") return <path key={item.key} className="galaxy-orbit" d={item.d} />;
+    if (item.kind === "orbit") {
+      return <path key={item.key} className={item.expected ? "galaxy-orbit galaxy-orbit-expected" : "galaxy-orbit"} d={item.d} />;
+    }
     if (item.kind === "dust") {
       return <path key={item.key} className="galaxy-dust" d={item.d} style={{ opacity: item.alpha }} />;
     }
@@ -155,6 +159,7 @@ export function HomeGalaxy(props: { spec: GalaxySpec; label: string }) {
       role="img"
       aria-label={props.label}
       data-planets={scene.layout.planets.length}
+      data-hidden={scene.layout.hidden}
       data-sessions={scene.layout.belt?.count ?? 0}
     >
       <defs>

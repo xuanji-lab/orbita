@@ -2693,6 +2693,11 @@ button.ws-fold {
   stroke-linecap: round;
   vector-effect: non-scaling-stroke;
 }
+/* 空星系的预期落位轨道：同一根发丝线、改成稀疏的虚线（墨量约为实线的三分之一）——说的是「行星会落在
+   这一带」，不是一条已有的轨道。不用 --color-border-subtle：暗档上它只有 6–7% 白，几乎看不见 */
+.galaxy-orbit-expected {
+  stroke-dasharray: 2 5;
+}
 .galaxy-dust {
   fill: var(--color-text-tertiary);
 }

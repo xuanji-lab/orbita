@@ -6,22 +6,25 @@ import {
   DENSITY,
   drawFrame,
   DUST_CAP,
-  fitViewport,
+  EXPECTED_ID,
+  FRAME_EXTENT,
+  frameViewport,
+  GALAXY_BOX,
   galaxyFixtureOf,
   galaxySpecOf,
   layoutGalaxy,
   makeCamera,
-  MAX_PIXELS_PER_UNIT,
   MAX_STEP_MS,
   MIN_CLEARANCE,
   motionAllowed,
   orbitArcs,
   orbitPoint,
-  PLANET_CAP,
+  PLANET_ZONE,
   PLANET_MASS,
   planetRadius,
   project,
   STAR_MASS,
+  VISIBLE_ORBIT_CAP,
   starRadius,
   type DrawItem,
   type GalaxySpec,
@@ -83,13 +86,29 @@ describe("轨道：半径独立指定、不相撞、开普勒角速度", () => {
 });
 
 describe("量：行星封顶、星屑聚合", () => {
-  test("超过 PLANET_CAP 的行星不画、计数；星屑颗粒封顶 DUST_CAP", () => {
-    const many: PlanetSpec[] = Array.from({ length: PLANET_CAP + 3 }, (_, i) => planet(`p${i}`, 15 + i * 12));
+  test("可见轨道最多 6 圈：超出的行星计进 hidden、不画；星屑颗粒封顶 60", () => {
+    assert.equal(VISIBLE_ORBIT_CAP, 6);
+    assert.equal(DUST_CAP, 60);
+    const many: PlanetSpec[] = Array.from({ length: 15 }, (_, i) => planet(`p${i}`, 15 + i * 12));
     const layout = layoutGalaxy({ starMass: 800, planets: many, sessions: 2000 });
-    assert.equal(layout.planets.length, PLANET_CAP);
-    assert.equal(layout.hidden, 3);
+    assert.equal(layout.planets.length, VISIBLE_ORBIT_CAP);
+    assert.equal(layout.hidden, 15 - VISIBLE_ORBIT_CAP);
+    // 留下的是最内的 6 颗
+    assert.deepEqual(layout.planets.map((p) => p.id), ["p0", "p1", "p2", "p3", "p4", "p5"]);
     assert.equal(layout.belt?.particles.length, DUST_CAP);
     assert.equal(layout.belt?.count, 2000);
+  });
+
+  test("轨道整体超出行星区时按同一比例收进来：相对远近不变，天体半径不缩", () => {
+    const wide = layoutGalaxy({ starMass: 600, planets: [planet("a", 40), planet("b", 80), planet("c", 160)], sessions: 0 });
+    assert.ok(wide.orbitScale < 1);
+    const [a, b, c] = wide.planets;
+    assert.ok(a !== undefined && b !== undefined && c !== undefined);
+    assert.ok(Math.abs(b.orbitRadius / a.orbitRadius - 2) < 1e-9 && Math.abs(c.orbitRadius / b.orbitRadius - 2) < 1e-9);
+    assert.ok(c.orbitRadius + c.radius <= PLANET_ZONE + 1e-9);
+    assert.equal(a.radius, planetRadius({ mass: 4, composition: "rock" }));
+    const narrow = layoutGalaxy({ starMass: 600, planets: [planet("a", 20)], sessions: 0 });
+    assert.equal(narrow.orbitScale, 1);
   });
 
   test("没有会话就没有碎石带；少量会话一条一粒；量越大越浓但有上限", () => {
@@ -101,12 +120,26 @@ describe("量：行星封顶、星屑聚合", () => {
     assert.ok(a < b && b <= c && c <= 0.72);
   });
 
-  test("碎石带在最外的行星轨道之外，不压行星", () => {
+  test("碎石带在最外的行星轨道之外，不压行星；三档外缘都不超出统一画框", () => {
     const layout = layoutGalaxy(galaxySpecOf("full"));
     const last = layout.planets[layout.planets.length - 1];
     assert.ok(last !== undefined && layout.belt !== null);
     assert.ok(layout.belt.inner > last.orbitRadius + last.radius);
     assert.equal(layout.extent, layout.belt.outer);
+    for (const fixture of ["empty", "typical", "full"] as const) {
+      assert.ok(layoutGalaxy(galaxySpecOf(fixture)).extent <= FRAME_EXTENT + 1e-9, fixture);
+    }
+  });
+
+  test("空星系有一圈预期落位轨道（画得出弧段）；有行星时没有", () => {
+    const empty = layoutGalaxy(galaxySpecOf("empty"));
+    assert.ok(empty.expectedOrbit !== null && empty.expectedOrbit > empty.starRadius + MIN_CLEARANCE);
+    const camera = makeCamera(FRAME_EXTENT);
+    const arcs = orbitArcs(empty, camera, frameViewport(camera, 900, 240));
+    assert.ok(arcs.length > 0 && arcs.every((arc) => arc.expected && arc.planetId === EXPECTED_ID));
+    const typical = layoutGalaxy(galaxySpecOf("typical"));
+    assert.equal(typical.expectedOrbit, null);
+    assert.ok(orbitArcs(typical, camera, frameViewport(camera, 900, 240)).every((arc) => !arc.expected));
   });
 });
 
@@ -143,19 +176,35 @@ describe("透视投影", () => {
     assert.ok(Math.abs(Math.hypot(tilted.x, tilted.y, tilted.z) - 30) < 1e-9);
   });
 
-  test("视口适配：外缘全部落在视口内；小星系按像素上限画小，不撑满", () => {
-    for (const fixture of ["empty", "typical", "full"] as const) {
+  test("统一视口：三档的主星像素半径与中心完全一致；整座星系不越出 560×180 的包围盒", () => {
+    const cam = makeCamera(FRAME_EXTENT);
+    const vp = frameViewport(cam, 900, 240);
+    const boxLeft = (900 - GALAXY_BOX.width) / 2;
+    const boxTop = (240 - GALAXY_BOX.height) / 2;
+    const stars = (["empty", "typical", "full"] as const).map((fixture) => {
       const layout = layoutGalaxy(galaxySpecOf(fixture));
-      const cam = makeCamera(layout.extent);
-      const vp = fitViewport(layout, cam, 900, 240);
-      for (let i = 0; i < 36; i++) {
-        const p = project(orbitPoint(layout.extent, 0, 0, (i / 36) * Math.PI * 2), cam);
+      const items = drawFrame(layout, cam, vp, orbitArcs(layout, cam, vp), 7);
+      // 外缘一圈（含碎石带外沿）与所有行星都落在包围盒里（留 1px 投影 / 取整误差）
+      for (let i = 0; i < 72; i++) {
+        const p = project(orbitPoint(layout.extent, 0, 0, (i / 72) * Math.PI * 2), cam);
         const x = vp.cx + vp.focal * p.sx;
         const y = vp.cy + vp.focal * p.sy;
-        assert.ok(x >= 0 && x <= 900 && y >= 0 && y <= 240, `${fixture} ${x},${y}`);
+        assert.ok(x >= boxLeft - 1 && x <= boxLeft + GALAXY_BOX.width + 1, `${fixture} x ${x}`);
+        assert.ok(y >= boxTop - 1 && y <= boxTop + GALAXY_BOX.height + 1, `${fixture} y ${y}`);
       }
-      assert.ok(vp.focal / cam.distance <= MAX_PIXELS_PER_UNIT + 1e-9);
+      const star = items.find((item) => item.kind === "star");
+      assert.ok(star?.kind === "star");
+      return star;
+    });
+    const [empty, typical, full] = stars;
+    assert.ok(empty !== undefined && typical !== undefined && full !== undefined);
+    for (const other of [empty, full]) {
+      assert.ok(Math.abs(other.r - typical.r) < 1e-9);
+      assert.ok(Math.abs(other.x - typical.x) < 1e-9 && Math.abs(other.y - typical.y) < 1e-9);
     }
+    // 主星画在画布正中附近，大小与平常档同级（不是 25px 的小点）
+    assert.ok(Math.abs(typical.x - 450) < 1e-6);
+    assert.ok(typical.r * 2 > 40, `star diameter ${typical.r * 2}`);
   });
 });
 
@@ -163,7 +212,7 @@ describe("画面上轨道不交叉", () => {
   /** 以主星的投影为原点，沿每个方位角量每一圈轨道投影到画面上的距离；外圈必须处处在内圈之外 */
   function screenRadii(spec: GalaxySpec): number[][] {
     const layout = layoutGalaxy(spec);
-    const camera = makeCamera(layout.extent);
+    const camera = makeCamera(FRAME_EXTENT);
     const center = project({ x: 0, y: 0, z: 0 }, camera);
     const bins = 180;
     return layout.planets.map((p) => {
@@ -207,8 +256,8 @@ describe("画面上轨道不交叉", () => {
 describe("按深度排序与遮挡", () => {
   function frameAt(spec: GalaxySpec, t: number): DrawItem[] {
     const layout = layoutGalaxy(spec);
-    const camera = makeCamera(layout.extent);
-    const vp = fitViewport(layout, camera, 900, 240);
+    const camera = makeCamera(FRAME_EXTENT);
+    const vp = frameViewport(camera, 900, 240);
     return drawFrame(layout, camera, vp, orbitArcs(layout, camera, vp), t);
   }
   const indexOf = (items: DrawItem[], key: string) => items.findIndex((item) => item.key === key);
@@ -297,17 +346,28 @@ describe("原型 fixture 参数", () => {
     assert.equal(galaxyFixtureOf(""), null);
   });
 
-  test("三档：空只有主星；平常 4 颗行星 + 少量星屑；满载 12 颗 + 聚合碎石带", () => {
+  test("三档：空只有主星 + 预期轨道；平常 4 颗行星 + 少量星屑；满载 12 颗只画 6 圈 + 聚合碎石带", () => {
     const empty = layoutGalaxy(galaxySpecOf("empty"));
     assert.equal(empty.planets.length, 0);
     assert.equal(empty.belt, null);
+    assert.ok(empty.expectedOrbit !== null);
     const typical = layoutGalaxy(galaxySpecOf("typical"));
     assert.equal(typical.planets.length, 4);
+    assert.equal(typical.hidden, 0);
+    assert.equal(typical.orbitScale, 1);
     assert.ok((typical.belt?.particles.length ?? 0) > 0 && (typical.belt?.particles.length ?? 0) < 40);
     assert.deepEqual(typical.adjusted, []);
-    const full = layoutGalaxy(galaxySpecOf("full"));
-    assert.equal(full.planets.length, 12);
+    const fullSpec = galaxySpecOf("full");
+    assert.equal(fullSpec.planets.length, 12);
+    assert.equal(fullSpec.sessions, 2000);
+    // 三档主星同一质量：主星大小只由质量定
+    assert.equal(fullSpec.starMass, galaxySpecOf("typical").starMass);
+    assert.equal(galaxySpecOf("empty").starMass, galaxySpecOf("typical").starMass);
+    const full = layoutGalaxy(fullSpec);
+    assert.equal(full.planets.length, VISIBLE_ORBIT_CAP);
+    assert.equal(full.hidden, 12 - VISIBLE_ORBIT_CAP);
     assert.equal(full.belt?.particles.length, DUST_CAP);
-    assert.deepEqual(full.adjusted, []);
+    assert.equal(full.belt?.count, 2000);
+    assert.ok(full.orbitScale < 1);
   });
 });
