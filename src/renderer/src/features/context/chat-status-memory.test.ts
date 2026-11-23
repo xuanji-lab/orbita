@@ -4,8 +4,8 @@ import { forgetMissing, mergeView, parseBook, parseView, STATUS_VIEW_LIMIT, stri
 
 describe("状态卡视图：规范形", () => {
   it("只留认识的字段，默认值不写", () => {
-    const view = parseView({ closed: true, step: "s2", all: true, more: ["s2"], handed: ["s2", "s2"], goal: true, strips: { doc: 320, nope: 5, web: 0 }, scroll: 187.6, junk: 1 });
-    assert.deepEqual(view, { closed: true, step: "s2", all: true, more: ["s2"], handed: ["s2"], goal: true, strips: { doc: 320 }, scroll: 188 });
+    const view = parseView({ closed: true, step: "s2", all: true, more: ["s2"], handed: ["s2", "s2"], goal: true, strips: { doc: 320, audio: 20, video: 40, nope: 5, web: 0 }, scroll: 187.6, junk: 1 });
+    assert.deepEqual(view, { closed: true, step: "s2", all: true, more: ["s2"], handed: ["s2"], goal: true, strips: { doc: 320, audio: 20, video: 40 }, scroll: 188 });
     assert.equal(parseView({ closed: false, all: false, scroll: 0, strips: {}, more: [] }), undefined);
     assert.equal(parseView("x"), undefined);
     assert.equal(parseView([1]), undefined);
