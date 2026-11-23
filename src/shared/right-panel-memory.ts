@@ -10,6 +10,13 @@
  * （没有文件内容、没有对话文本）。条目按「最近用过」从旧到新排，超过
  * RIGHT_PANEL_MEMORY_MAX_ENTRIES 条时 renderer 淘汰最旧的。
  *
+ * 版本：
+ *   1  每条会话只记一条路径 `{ id, panel, sub?, taskTab? }`——只有当前开着的那个面板的第二层，
+ *      换面板就把上一个面板的 sub 覆盖掉（用户 2026-11-23：「插件面板记不住我之前的足迹」）。
+ *   2  每条会话 `{ id, panel, subs?, taskTab? }`：panel 是开着哪个面板，subs 是**每个带第二层的
+ *      面板各自的 sub**（按面板种类的一张表），切到别的面板不覆盖。
+ * 读盘两版都认，renderer 把 1 迁成 2（旧条目的 sub 归到它那个面板名下）；写盘一律 2。
+ *
  * main 只认信封（`version` + 条数 + 体积），**不解读每条的内容**：条目形状（panel / sub）
  * 属于各面板，由 renderer 的 `shell/right-panel-memory.ts` 在读回时逐条校验，对不上的
  * 字段丢掉——读回来的数据不可信（文件可能被手改、可能是旧版本写的）。
@@ -23,6 +30,9 @@ export const rightPanelMemoryChannels = {
   save: "right-panel-memory:save",
 } as const;
 
+/** 现在写盘用的版本（读盘还认 1，由 renderer 迁移） */
+export const RIGHT_PANEL_MEMORY_VERSION = 2;
+
 /** 最多记多少条会话（最近用过的优先）：防无限增长 */
 export const RIGHT_PANEL_MEMORY_MAX_ENTRIES = 500;
 
@@ -31,7 +41,7 @@ export const RIGHT_PANEL_MEMORY_MAX_CHARS = 1_000_000;
 
 /** 落盘信封。entries 每项是 renderer 写的一条记忆（形状见 renderer 侧），这里不解读 */
 export interface RightPanelMemoryFile {
-  version: 1;
+  version: 1 | 2;
   entries: readonly unknown[];
 }
 
@@ -39,10 +49,10 @@ export interface RightPanelMemoryFile {
 export function parseRightPanelMemoryFile(raw: unknown): RightPanelMemoryFile | null {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
   const record = raw as Record<string, unknown>;
-  if (record.version !== 1 || !Array.isArray(record.entries)) return null;
+  if ((record.version !== 1 && record.version !== 2) || !Array.isArray(record.entries)) return null;
   // 超上限：只留最新的（数组末尾），不是整份作废
   const entries = record.entries.length > RIGHT_PANEL_MEMORY_MAX_ENTRIES
     ? record.entries.slice(record.entries.length - RIGHT_PANEL_MEMORY_MAX_ENTRIES)
     : record.entries;
-  return { version: 1, entries };
+  return { version: record.version, entries };
 }
