@@ -9,10 +9,12 @@ import { Segmented, Switch } from "../settings/SettingControls";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 import {
+  addPlanet,
   BACKDROPS,
   bodyArt,
   clampValue,
   createDesignStore,
+  createStar,
   densityOf,
   designLevelOf,
   displayRadius,
@@ -24,26 +26,34 @@ import {
   minOrbit,
   ORBIT_RANGE,
   parseNumberInput,
+  PREVIEW_FRAME,
   previewFrame,
   radiusOf,
   validateDesign,
   ZOOM,
   type BodyArt,
+  type BodyDesign,
   type BodyKind,
   type DesignError,
   type ElementKey,
   type GalaxyDesign,
+  type PlanetDesign,
 } from "./design.ts";
+import { flatStage, ORBIT_BOX, orbitStage, previewPlan, starStage, type GridLine, type WellBox } from "./well.ts";
 
 /**
  * 星系设计（原型，proto/planet-designer）：侧栏工作区行悬停出现的画笔键打开它，住在右栏面板位里。
  * 版式照 Nuphos「New Bot」的组织：预览在上 → 读数 → 参数与元素 → 预览背景；但没有人脸网格，
  * 全是参数与开关——同一套规则下的组合，不是抽卡。
  *
+ * 预览：主星页是主星压在一张弯曲的网格布上（引力的示意画法，质量越大坑越深，well.ts）；
+ * 行星页是行星自己的大头像 + 一块小场景（同一张网格布上的主星与这颗行星的轨道）。
+ * 行星依赖主星：没有主星时行星页是「先创建主星」的空态，加行星走 design.ts 的 addPlanet（数据层拒绝）。
+ *
  * 只做面板与预览：不写配置、不接 agent 数据。设计稿按工作区存在这次运行的内存里（design.ts 的 DesignStore）。
  */
 
-/** 页面地址在一次加载里不变：`?designer=bare|full` 定 fixture 档，模块加载时建一次仓库 */
+/** 页面地址在一次加载里不变：`?designer=bare|full|nostar` 定 fixture 档，模块加载时建一次仓库 */
 const store = createDesignStore(designLevelOf(window.location.search));
 
 export function GalaxyDesigner(props: { workspace: Workspace | null }) {
@@ -69,15 +79,17 @@ function Designer(props: { workspace: Workspace }) {
   const [design, setDesignState] = useState<GalaxyDesign>(() => store.get(id));
   const setDesign = (next: GalaxyDesign): void => {
     store.set(id, next);
-    setDesignState(next);
+    setDesignState(store.get(id));
   };
   const kind = design.editing;
-  const body = kind === "star" ? design.star : design.planet;
-  const patchBody = (patch: Partial<GalaxyDesign["planet"]>): void => {
+  const body: BodyDesign | PlanetDesign | null = kind === "star" ? design.star : design.planet;
+  const patchBody = (patch: Partial<PlanetDesign>): void => {
     if (kind === "star") {
+      if (design.star === null) return;
       const { composition: _c, orbitRadius: _o, ...rest } = patch;
       setDesign({ ...design, star: { ...design.star, ...rest } });
     } else {
+      if (design.planet === null) return;
       setDesign({ ...design, planet: { ...design.planet, ...patch } });
     }
   };
@@ -85,6 +97,11 @@ function Designer(props: { workspace: Workspace }) {
   const radius = radiusOf(design, kind);
   const range = massRange(kind);
   const nameFallback = kind === "star" ? props.workspace.name : tg.unnamedPlanet;
+  const onAddPlanet = (): void => {
+    const result = addPlanet(design, id);
+    // 没有主星时数据层拒绝：留在原页（面板上的出口本来就是「创建主星」，走不到这里）
+    if (result.ok) setDesign(result.design);
+  };
 
   return (
     <RightPanelFrame
@@ -111,32 +128,34 @@ function Designer(props: { workspace: Workspace }) {
         </>
       }
       subheader={
-        <div className="gd gd-head">
-        <Preview design={design} workspaceName={props.workspace.name} invalid={invalidFor(errors, kind)} />
-        <p className="gd-readout" data-testid="gd-readout">
-          <span>
-            {tg.readout.radius}<b data-radius={radius.toFixed(4)}>{formatNumber(radius)}</b>
-          </span>
-          <span>
-            {tg.readout.density}<b>{formatNumber(densityOf(kind, design.planet.composition))}</b>
-          </span>
-          <span>
-            {tg.readout.mass}<b>{formatNumber(body.mass)}</b>
-          </span>
-          {kind === "planet" && (
-            <span>
-              {tg.readout.orbit}<b>{formatNumber(design.planet.orbitRadius)}</b>
-            </span>
+        <div className="gd gd-head" data-has-star={design.star !== null || undefined} data-has-planet={design.planet !== null || undefined}>
+          <Preview design={design} workspaceName={props.workspace.name} invalid={invalidFor(errors, kind)} />
+          {body !== null && (
+            <p className="gd-readout" data-testid="gd-readout">
+              <span>
+                {tg.readout.radius}<b data-radius={radius.toFixed(4)}>{formatNumber(radius)}</b>
+              </span>
+              <span>
+                {tg.readout.density}<b>{formatNumber(densityOf(kind, design.planet?.composition ?? "rock"))}</b>
+              </span>
+              <span>
+                {tg.readout.mass}<b>{formatNumber(body.mass)}</b>
+              </span>
+              {kind === "planet" && design.planet !== null && (
+                <span>
+                  {tg.readout.orbit}<b>{formatNumber(design.planet.orbitRadius)}</b>
+                </span>
+              )}
+            </p>
           )}
-        </p>
-        <ScaleStrip design={design} label={tg.strip} />
-        {/* 钉在顶上的总提示：下面标红的行可能滚出去了，这里一直说着「有几处不合规则」 */}
-        {errors.length > 0 && (
-          <p className="gd-error gd-error-sum" role="status" data-error-count={errors.length}>
-            <Icon name="triangle-alert" size={12} strokeWidth={1.8} />
-            <span>{tg.errorSummary(errors.length)}</span>
-          </p>
-        )}
+          <p className="gd-well-note">{tg.wellNote}</p>
+          {/* 钉在顶上的总提示：下面标红的行可能滚出去了，这里一直说着「有几处不合规则」 */}
+          {errors.length > 0 && (
+            <p className="gd-error gd-error-sum" role="status" data-error-count={errors.length}>
+              <Icon name="triangle-alert" size={12} strokeWidth={1.8} />
+              <span>{tg.errorSummary(errors.length)}</span>
+            </p>
+          )}
         </div>
       }
     >
@@ -153,118 +172,139 @@ function Designer(props: { workspace: Workspace }) {
             onChange={(editing) => setDesign({ ...design, editing })}
           />
         </Row>
-        <Row name={tg.name} errors={errorsAt(errors, kind, "name")} t={t} wide>
-          <input
-            className="text-field gd-name"
-            value={body.name}
-            placeholder={nameFallback}
-            aria-label={tg.name}
-            aria-invalid={errorsAt(errors, kind, "name").length > 0 || undefined}
-            onChange={(event) => patchBody({ name: event.target.value })}
-          />
-        </Row>
-        <Row
-          name={tg.mass}
-          desc={tg.massDesc(formatNumber(range.min), formatNumber(range.max))}
-          errors={errorsAt(errors, kind, "mass")}
-          t={t}
-          slider={
-            <input
-              type="range"
-              className="gd-range"
-              min={range.min}
-              max={range.max}
-              step={kind === "star" ? 10 : 0.5}
-              value={Number.isFinite(body.mass) ? clampValue(body.mass, range.min, range.max) : range.min}
-              aria-label={tg.mass}
-              data-field="mass"
-              onChange={(event) => patchBody({ mass: Number(event.target.value) })}
-            />
-          }
-        >
-          <NumberField value={body.mass} label={tg.mass} field="mass" invalid={errorsAt(errors, kind, "mass").length > 0} onChange={(mass) => patchBody({ mass })} />
-        </Row>
-        {kind === "planet" ? (
-          <Row name={tg.composition} desc={tg.compositionDesc}>
-            <Segmented<Composition>
-              label={tg.composition}
-              value={design.planet.composition}
-              options={[
-                { value: "rock", label: tg.rock },
-                { value: "ice", label: tg.ice },
-                { value: "gas", label: tg.gas },
-              ]}
-              onChange={(composition) => patchBody({ composition })}
-            />
-          </Row>
+        {body === null ? (
+          // 空页：没主星（主星页、行星页都是先创建主星），或有主星还没行星（行星页：添加行星）
+          <div className="gd-empty" data-empty={design.star === null ? "no-star" : "no-planet"}>
+            {design.star === null ? (
+              <PanelEmpty
+                icon="orbit"
+                hint={kind === "planet" ? tg.planetNeedsStarHint : tg.noStarHint}
+                exit={{ label: tg.createStar, onClick: () => setDesign(createStar(design)) }}
+              >
+                {kind === "planet" ? tg.planetNeedsStar : tg.noStar}
+              </PanelEmpty>
+            ) : (
+              <PanelEmpty icon="orbit" hint={tg.noPlanetHint} exit={{ label: tg.addPlanet, onClick: onAddPlanet }}>
+                {tg.noPlanet}
+              </PanelEmpty>
+            )}
+          </div>
         ) : (
-          <Row name={tg.composition} desc={tg.starComposition}>
-            <span className="gd-fixed">{tg.plasma}</span>
-          </Row>
-        )}
-        {kind === "planet" && (
-          <Row
-            name={tg.orbit}
-            desc={tg.orbitDesc(formatNumber(minOrbit(design)), formatNumber(maxOrbit(design)))}
-            errors={errorsAt(errors, "planet", "orbit")}
-            t={t}
-            slider={
+          <>
+            <Row name={tg.name} errors={errorsAt(errors, kind, "name")} t={t} wide>
               <input
-                type="range"
-                className="gd-range"
-                min={ORBIT_RANGE.min}
-                max={ORBIT_RANGE.max}
-                step={ORBIT_RANGE.step}
-                value={Number.isFinite(design.planet.orbitRadius) ? clampValue(design.planet.orbitRadius, ORBIT_RANGE.min, ORBIT_RANGE.max) : ORBIT_RANGE.min}
-                aria-label={tg.orbit}
-                data-field="orbit"
-                onChange={(event) => patchBody({ orbitRadius: Number(event.target.value) })}
+                className="text-field gd-name"
+                value={body.name}
+                placeholder={nameFallback}
+                aria-label={tg.name}
+                aria-invalid={errorsAt(errors, kind, "name").length > 0 || undefined}
+                onChange={(event) => patchBody({ name: event.target.value })}
               />
-            }
-          >
-            <NumberField
-              value={design.planet.orbitRadius}
-              label={tg.orbit}
-              field="orbit"
-              invalid={errorsAt(errors, "planet", "orbit").length > 0}
-              onChange={(orbitRadius) => patchBody({ orbitRadius })}
-            />
-          </Row>
+            </Row>
+            <Row
+              name={tg.mass}
+              desc={kind === "star" ? tg.starMassDesc(formatNumber(range.min), formatNumber(range.max)) : tg.massDesc(formatNumber(range.min), formatNumber(range.max))}
+              errors={errorsAt(errors, kind, "mass")}
+              t={t}
+              slider={
+                <input
+                  type="range"
+                  className="gd-range"
+                  min={range.min}
+                  max={range.max}
+                  step={kind === "star" ? 10 : 0.5}
+                  value={Number.isFinite(body.mass) ? clampValue(body.mass, range.min, range.max) : range.min}
+                  aria-label={tg.mass}
+                  data-field="mass"
+                  onChange={(event) => patchBody({ mass: Number(event.target.value) })}
+                />
+              }
+            >
+              <NumberField value={body.mass} label={tg.mass} field="mass" invalid={errorsAt(errors, kind, "mass").length > 0} onChange={(mass) => patchBody({ mass })} />
+            </Row>
+            {kind === "planet" && design.planet !== null ? (
+              <Row name={tg.composition} desc={tg.compositionDesc}>
+                <Segmented<Composition>
+                  label={tg.composition}
+                  value={design.planet.composition}
+                  options={[
+                    { value: "rock", label: tg.rock },
+                    { value: "ice", label: tg.ice },
+                    { value: "gas", label: tg.gas },
+                  ]}
+                  onChange={(composition) => patchBody({ composition })}
+                />
+              </Row>
+            ) : (
+              <Row name={tg.composition} desc={tg.starComposition}>
+                <span className="gd-fixed">{tg.plasma}</span>
+              </Row>
+            )}
+            {kind === "planet" && design.planet !== null && (
+              <Row
+                name={tg.orbit}
+                desc={tg.orbitDesc(formatNumber(minOrbit(design)), formatNumber(maxOrbit(design)))}
+                errors={errorsAt(errors, "planet", "orbit")}
+                t={t}
+                slider={
+                  <input
+                    type="range"
+                    className="gd-range"
+                    min={ORBIT_RANGE.min}
+                    max={ORBIT_RANGE.max}
+                    step={ORBIT_RANGE.step}
+                    value={Number.isFinite(design.planet.orbitRadius) ? clampValue(design.planet.orbitRadius, ORBIT_RANGE.min, ORBIT_RANGE.max) : ORBIT_RANGE.min}
+                    aria-label={tg.orbit}
+                    data-field="orbit"
+                    onChange={(event) => patchBody({ orbitRadius: Number(event.target.value) })}
+                  />
+                }
+              >
+                <NumberField
+                  value={design.planet.orbitRadius}
+                  label={tg.orbit}
+                  field="orbit"
+                  invalid={errorsAt(errors, "planet", "orbit").length > 0}
+                  onChange={(orbitRadius) => patchBody({ orbitRadius })}
+                />
+              </Row>
+            )}
+
+            <PanelGroupHead label={tg.elementsGroup} />
+            {ELEMENTS_OF[kind].map((key) => (
+              <Row key={key} name={tg.elements[key]} desc={tg.elementDesc[key]}>
+                <span data-element={key}>
+                  <Switch
+                    label={tg.elements[key]}
+                    checked={body.elements[key]}
+                    onChange={(next) => patchBody({ elements: { ...body.elements, [key]: next } })}
+                  />
+                </span>
+              </Row>
+            ))}
+
+            <PanelGroupHead label={tg.previewGroup} />
+            <Row
+              name={tg.zoom}
+              desc={tg.zoomDesc}
+              slider={
+                <input
+                  type="range"
+                  className="gd-range"
+                  min={ZOOM.min}
+                  max={ZOOM.max}
+                  step={ZOOM.step}
+                  value={body.zoom}
+                  aria-label={tg.zoom}
+                  data-field="zoom"
+                  onChange={(event) => patchBody({ zoom: Number(event.target.value) })}
+                />
+              }
+            >
+              <span className="gd-value">{body.zoom}%</span>
+            </Row>
+          </>
         )}
-
-        <PanelGroupHead label={tg.elementsGroup} />
-        {ELEMENTS_OF[kind].map((key) => (
-          <Row key={key} name={tg.elements[key]} desc={tg.elementDesc[key]}>
-            <span data-element={key}>
-              <Switch
-                label={tg.elements[key]}
-                checked={body.elements[key]}
-                onChange={(next) => patchBody({ elements: { ...body.elements, [key]: next } })}
-              />
-            </span>
-          </Row>
-        ))}
-
-        <PanelGroupHead label={tg.previewGroup} />
-        <Row
-          name={tg.zoom}
-          desc={tg.zoomDesc}
-          slider={
-            <input
-              type="range"
-              className="gd-range"
-              min={ZOOM.min}
-              max={ZOOM.max}
-              step={ZOOM.step}
-              value={body.zoom}
-              aria-label={tg.zoom}
-              data-field="zoom"
-              onChange={(event) => patchBody({ zoom: Number(event.target.value) })}
-            />
-          }
-        >
-          <span className="gd-value">{body.zoom}%</span>
-        </Row>
         <Row name={tg.backdrop}>
           <span className="gd-swatches" role="group" aria-label={tg.backdrop}>
             {BACKDROPS.map((backdrop) => (
@@ -319,7 +359,10 @@ function Row(props: {
 
 /** 预览上这一颗要不要标红：它自己的质量 / 名字出错，或轨道相撞（两颗都牵涉）；轨道太远只算行星 */
 function invalidFor(errors: readonly DesignError[], kind: BodyKind): boolean {
-  return errors.some((error) => error.kind === "orbit-collision" || (error.kind === "orbit-far" ? kind === "planet" : error.body === kind));
+  return errors.some((error) => {
+    if (error.kind === "orbit-collision" || error.kind === "planet-without-star") return true;
+    return error.kind === "orbit-far" ? kind === "planet" : error.body === kind;
+  });
 }
 
 function errorText(error: DesignError, t: Messages): string {
@@ -329,6 +372,7 @@ function errorText(error: DesignError, t: Messages): string {
   }
   if (error.kind === "orbit-collision") return tg.errors.collision(formatNumber(error.value), formatNumber(error.min));
   if (error.kind === "orbit-far") return tg.errors.far(formatNumber(error.value), formatNumber(error.max));
+  if (error.kind === "planet-without-star") return tg.errors.planetWithoutStar;
   return tg.errors.nameLong(error.length, error.max);
 }
 
@@ -361,42 +405,189 @@ function NumberField(props: { value: number; label: string; field: string; inval
   );
 }
 
-/** 预览：只画正在编辑的那一颗，居中；缩放只作用在预览上 */
+/** 预览：主星页是网格布上的主星；行星页是大头像 + 轨道小场景；没有主星时是一张平的布 */
 function Preview(props: { design: GalaxyDesign; workspaceName: string; invalid: boolean }) {
   const t = useT();
   const tg = t.galaxyDesigner;
   const uid = useId().replace(/:/g, "");
   const { design } = props;
   const kind = design.editing;
-  const radius = radiusOf(design, kind);
-  const r = displayRadius(radius);
-  const art = bodyArt(design, kind, r);
-  const frame = previewFrame(art);
-  const zoom = (kind === "star" ? design.star : design.planet).zoom;
-  const name = (kind === "star" ? design.star.name : design.planet.name) || (kind === "star" ? props.workspaceName : tg.unnamedPlanet);
-  const on = ELEMENTS_OF[kind].filter((key: ElementKey) => (kind === "star" ? design.star : design.planet).elements[key]);
+  const plan = previewPlan(design);
+  const common = { "data-backdrop": design.backdrop, "data-invalid": props.invalid || undefined, "data-parts": plan.join(" ") };
+  if (design.star === null) {
+    const box = frameBox(PREVIEW_FRAME);
+    const flat = flatStage(box);
+    return (
+      <figure className="gd-stage" data-body={kind} data-empty="no-star" {...common}>
+        <svg className="gd-well" viewBox={viewBoxOf(box)} role="img" aria-label={tg.flatFigure} data-depth="0">
+          <GridLayer lines={flat.grid} box={box} id={`${uid}-fade`} depth={0} />
+          <circle className="gd-placeholder" cx={flat.center.x} cy={flat.center.y - 18} r={22} />
+        </svg>
+      </figure>
+    );
+  }
+  if (kind === "star") {
+    const star = design.star;
+    const r = displayRadius(radiusOf(design, "star"));
+    const art = bodyArt(design, "star", r);
+    const s = star.zoom / 100;
+    const frame = previewFrame({ extent: { x: art.extent.x * s, y: art.extent.y * s } });
+    const box = frameBox(frame);
+    const stage = starStage(box, star.mass, r, star.zoom);
+    const name = star.name || props.workspaceName;
+    return (
+      <figure className="gd-stage" data-body="star" {...common}>
+        <svg
+          className="gd-preview"
+          viewBox={viewBoxOf(box)}
+          role="img"
+          aria-label={tg.figure(name)}
+          data-body="star"
+          data-surface={art.surface}
+          data-display-r={r.toFixed(2)}
+          data-zoom={star.zoom}
+          data-elements={onElements(star, "star").join(" ")}
+          data-depth={stage.depth.toFixed(2)}
+          data-bottom-y={stage.bottom.y.toFixed(2)}
+          data-star-cy={stage.star.y.toFixed(2)}
+        >
+          <GridLayer lines={stage.grid} box={box} id={`${uid}-fade`} depth={stage.depth} />
+          <g transform={`translate(${stage.star.x.toFixed(2)} ${stage.star.y.toFixed(2)}) scale(${s})`}>
+            <BodyFigure art={art} uid={uid} />
+          </g>
+        </svg>
+        <figcaption className="gd-stage-name" title={name}>
+          {name}
+        </figcaption>
+      </figure>
+    );
+  }
+  const planet = design.planet;
   return (
-    <figure className="gd-stage" data-backdrop={design.backdrop} data-invalid={props.invalid || undefined}>
-      <svg
-        className="gd-preview"
-        viewBox={`${-frame.halfW} ${-frame.halfH} ${frame.halfW * 2} ${frame.halfH * 2}`}
-        data-frame-scale={frame.scale.toFixed(3)}
-        role="img"
-        aria-label={tg.figure(name)}
-        data-body={kind}
-        data-surface={art.surface}
-        data-display-r={r.toFixed(2)}
-        data-zoom={zoom}
-        data-elements={on.join(" ")}
-      >
-        <g transform={`scale(${zoom / 100})`}>
-          <BodyFigure art={art} uid={uid} />
-        </g>
-      </svg>
-      <figcaption className="gd-stage-name" title={name}>
-        {name}
-      </figcaption>
+    <figure className="gd-stage" data-body="planet" data-empty={planet === null ? "no-planet" : undefined} {...common}>
+      {planet !== null && <PlanetAvatar design={design} planet={planet} uid={uid} name={planet.name || tg.unnamedPlanet} />}
+      <OrbitScene design={design} uid={`${uid}-o`} label={tg.orbitFigure(planet === null ? props.workspaceName : planet.name || tg.unnamedPlanet)} />
+      {planet !== null && (
+        <figcaption className="gd-stage-name" title={planet.name || tg.unnamedPlanet}>
+          {planet.name || tg.unnamedPlanet}
+        </figcaption>
+      )}
     </figure>
+  );
+}
+
+function frameBox(frame: { halfW: number; halfH: number }): WellBox {
+  return { x: -frame.halfW, y: -frame.halfH, w: frame.halfW * 2, h: frame.halfH * 2 };
+}
+
+function viewBoxOf(box: WellBox): string {
+  return `${box.x} ${box.y} ${box.w} ${box.h}`;
+}
+
+function onElements(body: BodyDesign, kind: BodyKind): ElementKey[] {
+  return ELEMENTS_OF[kind].filter((key: ElementKey) => body.elements[key]);
+}
+
+/** 行星自己的大头像：居中、按预览缩放放大（与轨道场景分开：头像管「它长什么样」，场景管「它绕着谁转」） */
+function PlanetAvatar(props: { design: GalaxyDesign; planet: PlanetDesign; uid: string; name: string }) {
+  const t = useT();
+  const { design, planet } = props;
+  const r = displayRadius(radiusOf(design, "planet"));
+  const art = bodyArt(design, "planet", r);
+  const frame = previewFrame(art);
+  return (
+    <svg
+      className="gd-preview"
+      viewBox={viewBoxOf(frameBox(frame))}
+      data-frame-scale={frame.scale.toFixed(3)}
+      role="img"
+      aria-label={t.galaxyDesigner.figure(props.name)}
+      data-body="planet"
+      data-surface={art.surface}
+      data-display-r={r.toFixed(2)}
+      data-zoom={planet.zoom}
+      data-elements={onElements(planet, "planet").join(" ")}
+    >
+      <g transform={`scale(${planet.zoom / 100})`}>
+        <BodyFigure art={art} uid={props.uid} />
+      </g>
+    </svg>
+  );
+}
+
+/**
+ * 小场景里的天体只画轮廓、明暗和（够大时）眼睛：卫星、云带、日冕在几像素上只会糊成一团，
+ * 星环保留（它是这颗行星一眼认得出的轮廓）。
+ */
+function sceneDesign(design: GalaxyDesign, starR: number, planetR: number): GalaxyDesign {
+  const strip = (body: BodyDesign, r: number): BodyDesign["elements"] => ({
+    eyes: body.elements.eyes && r >= 8,
+    ring: body.elements.ring,
+    clouds: false,
+    moons: false,
+    corona: false,
+  });
+  return {
+    ...design,
+    star: design.star === null ? null : { ...design.star, elements: strip(design.star, starR) },
+    planet: design.planet === null ? null : { ...design.planet, elements: strip(design.planet, planetR) },
+  };
+}
+
+/** 轨道小场景：同一张网格布上，主星压在坑里，这颗行星的轨道贴着布面；最近的合法轨道画虚线，撞上时标红 */
+function OrbitScene(props: { design: GalaxyDesign; uid: string; label: string }) {
+  const stage = orbitStage(props.design);
+  if (stage === null) return null;
+  const small = sceneDesign(props.design, stage.star.r, stage.planet?.r ?? 0);
+  const starArt = bodyArt(small, "star", stage.star.r);
+  const planetArt = stage.planet === null ? null : bodyArt(small, "planet", stage.planet.r);
+  const p = stage.planet;
+  return (
+    <svg
+      className="gd-orbit"
+      viewBox={viewBoxOf(ORBIT_BOX)}
+      role="img"
+      aria-label={props.label}
+      data-depth={stage.depth.toFixed(2)}
+      data-star-r={stage.star.r.toFixed(2)}
+      data-orbit-a={p === null ? undefined : p.a.toFixed(2)}
+      data-planet-x={p === null ? undefined : p.x.toFixed(2)}
+      data-planet-r={p === null ? undefined : p.r.toFixed(2)}
+      data-collide={p?.collide || undefined}
+    >
+      <GridLayer lines={stage.grid} box={ORBIT_BOX} id={`${props.uid}-fade`} depth={stage.depth} />
+      {p !== null && <path className="gd-orbit-nearest" d={p.nearest.back} />}
+      {p !== null && <path className="gd-orbit-path" data-collide={p.collide || undefined} d={p.orbit.back} />}
+      <g transform={`translate(${stage.star.x.toFixed(2)} ${stage.star.y.toFixed(2)})`}>
+        <BodyFigure art={starArt} uid={`${props.uid}-s`} />
+      </g>
+      {p !== null && <path className="gd-orbit-nearest" d={p.nearest.front} />}
+      {p !== null && <path className="gd-orbit-path" data-collide={p.collide || undefined} d={p.orbit.front} />}
+      {p !== null && planetArt !== null && (
+        <g className="gd-orbit-planet" data-collide={p.collide || undefined} transform={`translate(${p.x.toFixed(2)} ${p.y.toFixed(2)})`}>
+          <BodyFigure art={planetArt} uid={`${props.uid}-p`} />
+        </g>
+      )}
+    </svg>
+  );
+}
+
+/** 网格布：线色是三级墨，往远处（画框上沿）渐隐 */
+function GridLayer(props: { lines: readonly GridLine[]; box: WellBox; id: string; depth: number }) {
+  const maxSag = props.lines.reduce((max, line) => Math.max(max, line.sag), 0);
+  return (
+    <g className="gd-grid" data-depth={props.depth.toFixed(2)} data-max-sag={maxSag.toFixed(2)} data-lines={props.lines.length}>
+      <defs>
+        <linearGradient id={props.id} gradientUnits="userSpaceOnUse" x1={0} y1={props.box.y} x2={0} y2={props.box.y + props.box.h}>
+          <stop offset="0" className="gd-grid-stop" stopOpacity={0.1} />
+          <stop offset="0.5" className="gd-grid-stop" stopOpacity={0.75} />
+          <stop offset="1" className="gd-grid-stop" stopOpacity={1} />
+        </linearGradient>
+      </defs>
+      {props.lines.map((line) => (
+        <path key={line.key} className="gd-grid-line" data-along={line.along} d={line.d} stroke={`url(#${props.id})`} />
+      ))}
+    </g>
   );
 }
 
@@ -468,34 +659,5 @@ function BodyFigure(props: { art: BodyArt; uid: string }) {
           <circle key={`${moon.x}`} className="gd-moon" cx={moon.x} cy={moon.y} r={moon.r} />
         ))}
     </g>
-  );
-}
-
-/**
- * 真实比例的侧视条：主星在左缘（只露半边），行星在它的轨道半径处，半径与轨道同一单位——
- * 预览为了读得出表情压了大小差距，这里给出没压过的样子；相撞时行星与主星叠在一起，并标红。
- */
-function ScaleStrip(props: { design: GalaxyDesign; label: string }) {
-  const { design } = props;
-  const width = 320;
-  const height = 40;
-  const scale = (width - 12) / (ORBIT_RANGE.max + 3);
-  const star = radiusOf(design, "star") * scale;
-  const planet = radiusOf(design, "planet") * scale;
-  const orbit = Number.isFinite(design.planet.orbitRadius) ? design.planet.orbitRadius : 0;
-  const x = orbit * scale;
-  const near = minOrbit(design) * scale;
-  const collide = orbit < minOrbit(design);
-  const mid = height / 2;
-  return (
-    <figure className="gd-strip">
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={props.label} data-collide={collide || undefined} data-orbit-x={x.toFixed(2)}>
-        <line className="gd-strip-axis" x1={0} y1={mid} x2={width} y2={mid} />
-        <line className="gd-strip-near" x1={near} y1={4} x2={near} y2={height - 4} />
-        <circle className="gd-strip-star" cx={0} cy={mid} r={star} />
-        <circle className="gd-strip-planet" data-collide={collide || undefined} cx={x} cy={mid} r={Math.max(planet, 1.5)} />
-      </svg>
-      <figcaption>{props.label}</figcaption>
-    </figure>
   );
 }

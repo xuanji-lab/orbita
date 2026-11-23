@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { orbitStage, previewPlan } from "./well.ts";
 import { describe, test } from "node:test";
 import { DENSITY, MIN_CLEARANCE, PLANET_MASS, PLANET_ZONE, STAR_DENSITY, STAR_MASS, bodyRadius } from "../chat/galaxy.ts";
 import {
@@ -25,17 +26,29 @@ import {
   PREVIEW_FRAME,
   BACKDROPS,
   ZOOM_DEFAULT,
+  addPlanet,
+  createStar,
+  fixtureDesign,
+  normalizeDesign,
   previewFrame,
   radiusOf,
   ringFrontPoints,
   validateDesign,
+  type CompleteDesign,
   type GalaxyDesign,
 } from "./design.ts";
 
 const WS_A = "ws-a";
 const WS_B = "ws-bbbb";
 
-function legal(): GalaxyDesign {
+/** 主星、行星都在的设计稿（不在就让测试失败） */
+function complete(design: GalaxyDesign): CompleteDesign {
+  const { star, planet } = design;
+  assert.ok(star !== null && planet !== null, "这份设计稿应当主星、行星都在");
+  return { ...design, star, planet };
+}
+
+function legal(): CompleteDesign {
   return defaultDesign(WS_A, "default");
 }
 
@@ -339,13 +352,14 @@ describe("预览画框", () => {
 });
 
 describe("默认预览缩放", () => {
-  test("行星默认 140%、主星默认 100%；三档 fixture 都按这个给", () => {
+  test("行星默认 140%、主星默认 70%（压在网格上要露出坑四周的弯线）；三档 fixture 都按这个给", () => {
     for (const level of ["default", "bare", "full"] as const) {
       const design = defaultDesign(WS_A, level);
       assert.equal(design.planet.zoom, ZOOM_DEFAULT.planet);
       assert.equal(design.star.zoom, ZOOM_DEFAULT.star);
     }
     assert.ok(ZOOM_DEFAULT.planet > 100);
+    assert.ok(ZOOM_DEFAULT.star < 100);
   });
 
   test("默认缩放下任何合法行星（最重、最松的成分、元素全开）都装得进固定画框，不溢出", () => {
@@ -401,23 +415,78 @@ describe("每个工作区一份设计稿", () => {
 
   test("改 A 不串到 B；关了再开（再 get）还在；恢复默认回到 fixture", () => {
     const store = createDesignStore("default");
-    const a = store.get(WS_A);
+    const a = complete(store.get(WS_A));
     const b0 = store.get(WS_B);
     store.set(WS_A, { ...a, planet: { ...a.planet, mass: 33, zoom: 150 } });
-    assert.equal(store.get(WS_A).planet.mass, 33);
-    assert.equal(store.get(WS_A).planet.zoom, 150);
-    assert.equal(store.get(WS_A).star.zoom, ZOOM_DEFAULT.star, "行星的缩放不带到主星");
-    assert.equal(store.get(WS_B).planet.zoom, ZOOM_DEFAULT.planet, "A 的缩放不串到 B");
+    assert.equal(complete(store.get(WS_A)).planet.mass, 33);
+    assert.equal(complete(store.get(WS_A)).planet.zoom, 150);
+    assert.equal(complete(store.get(WS_A)).star.zoom, ZOOM_DEFAULT.star, "行星的缩放不带到主星");
+    assert.equal(complete(store.get(WS_B)).planet.zoom, ZOOM_DEFAULT.planet, "A 的缩放不串到 B");
     assert.deepEqual(store.get(WS_B), b0);
     assert.deepEqual(store.reset(WS_A), defaultDesign(WS_A, "default"));
     assert.deepEqual(store.get(WS_A), defaultDesign(WS_A, "default"));
   });
 
-  test("fixture 档从地址读：?designer=bare|full，其余是默认", () => {
+  test("fixture 档从地址读：?designer=bare|full|nostar，其余是默认", () => {
+    assert.equal(designLevelOf("?designer=nostar"), "nostar");
     assert.equal(designLevelOf("?designer=full"), "full");
     assert.equal(designLevelOf("?designer=bare&galaxy=full"), "bare");
     assert.equal(designLevelOf("?designer=x"), "default");
     assert.equal(designLevelOf(""), "default");
+  });
+});
+
+describe("行星依赖主星（数据层不变量）", () => {
+  test("nostar 档：没有主星也没有行星，停在主星页；没有任何参数错误", () => {
+    const empty = fixtureDesign(WS_A, "nostar");
+    assert.equal(empty.star, null);
+    assert.equal(empty.planet, null);
+    assert.equal(empty.editing, "star");
+    assert.deepEqual(validateDesign(empty), []);
+    assert.deepEqual(previewPlan(empty), ["flat-well"]);
+    assert.deepEqual(previewPlan({ ...empty, editing: "planet" }), ["flat-well"], "行星页也只有平网格，没有头像");
+  });
+
+  test("没有主星时加行星被拒绝（不只是按钮置灰）；先创建主星再加就行", () => {
+    const empty = fixtureDesign(WS_A, "nostar");
+    assert.deepEqual(addPlanet(empty, WS_A), { ok: false, reason: "no-star" });
+    const withStar = createStar(empty);
+    assert.notEqual(withStar.star, null);
+    assert.equal(withStar.planet, null, "创建主星不会顺手塞一颗行星");
+    assert.equal(withStar.editing, "star");
+    const added = addPlanet(withStar, WS_A);
+    assert.ok(added.ok);
+    assert.notEqual(added.design.planet, null);
+    assert.equal(added.design.editing, "planet");
+    assert.deepEqual(validateDesign(added.design), []);
+    assert.equal(createStar(added.design).star, added.design.star, "已有主星时 createStar 不换掉它");
+  });
+
+  test("有行星没主星的数据：validateDesign 报 planet-without-star，normalizeDesign 与仓库都把行星拿掉", () => {
+    const broken: GalaxyDesign = { ...legal(), star: null };
+    assert.ok(validateDesign(broken).some((error) => error.kind === "planet-without-star"));
+    assert.equal(normalizeDesign(broken).planet, null);
+    const ok = legal();
+    assert.equal(normalizeDesign(ok), ok, "合规的原样返回");
+    const store = createDesignStore("default");
+    store.set(WS_A, broken);
+    assert.equal(store.get(WS_A).planet, null);
+    assert.equal(store.get(WS_A).star, null);
+  });
+
+  test("主星页 / 行星页两态：有主星时主星页画网格 + 主星，行星页同时有大头像与轨道；有主星没行星时只有轨道场景", () => {
+    const design = legal();
+    assert.deepEqual(previewPlan({ ...design, editing: "star" }), ["well", "star"]);
+    assert.deepEqual(previewPlan(design), ["avatar", "orbit-scene", "orbit"]);
+    assert.deepEqual(previewPlan({ ...design, planet: null }), ["orbit-scene"]);
+    assert.equal(orbitStage({ ...design, star: null, planet: null }), null);
+  });
+
+  test("没有主星时半径、轨道上下限都是 NaN（面板显示「—」），bodyArt 不画不存在的天体", () => {
+    const empty = fixtureDesign(WS_A, "nostar");
+    assert.ok(Number.isNaN(radiusOf(empty, "star")));
+    assert.ok(Number.isNaN(minOrbit(empty)));
+    assert.throws(() => bodyArt(empty, "planet", 20));
   });
 });
 

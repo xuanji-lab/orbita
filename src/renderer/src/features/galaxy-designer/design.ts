@@ -44,10 +44,10 @@ export const BACKDROPS: readonly Backdrop[] = ["well", "shell", "muted", "deep"]
 export const ZOOM = { min: 50, max: 200, step: 10 } as const;
 /**
  * 默认预览缩放，按天体分开存：行星小，100% 时宽面板里默认行星只有约 40px 直径、眼睛读不清，默认放到 140%；
- * 140% 下任何合法行星（最重的气态 + 星环 + 卫星）都装得进固定画框（见测试）。主星本来就大，留 100%，
- * 满载主星 + 日冕 + 星环再由 previewFrame 放大画框装下。
+ * 140% 下任何合法行星（最重的气态 + 星环 + 卫星）都装得进固定画框（见测试）。主星默认 70%：它压在一张引力网格布上
+ * （well.ts），100% 时主星把网格的坑整个盖住、看不出布怎么弯；70% 让坑四周的弯线露出来。满载主星 + 日冕 + 星环再由 previewFrame 放大画框装下。
  */
-export const ZOOM_DEFAULT: Readonly<Record<BodyKind, number>> = { star: 100, planet: 140 };
+export const ZOOM_DEFAULT: Readonly<Record<BodyKind, number>> = { star: 70, planet: 140 };
 /** 轨道半径滑块的范围；合法下限另由两颗天体的半径算（minOrbit），滑块能拖到下限以下，拖过去就报错 */
 export const ORBIT_RANGE = { min: 4, max: PLANET_ZONE, step: 0.5 } as const;
 /** 天体名字最多几个字（按字符数，中文一个字算一个） */
@@ -67,12 +67,25 @@ export interface PlanetDesign extends BodyDesign {
   orbitRadius: number;
 }
 
+/**
+ * 一座星系的设计稿。**不变量：没有主星就没有行星**——star 为 null 时 planet 必为 null
+ * （璇玑星系规则：行星是绕主星运行的子智能体）。所有写入口都过 normalizeDesign，加行星只走 addPlanet（没主星就拒绝），
+ * validateDesign 对违反不变量的数据报 planet-without-star；面板上不只是把按钮置灰。
+ */
 export interface GalaxyDesign {
-  /** 面板正在编辑哪一颗：主星或行星 */
+  /** 面板正在看哪一页：主星或行星（页可以是空的：没主星时行星页是「先创建主星」的空态） */
   editing: BodyKind;
+  /** null = 这座星系还没有主星 */
+  star: BodyDesign | null;
+  /** null = 还没有行星；star 为 null 时必为 null */
+  planet: PlanetDesign | null;
+  backdrop: Backdrop;
+}
+
+/** 主星和行星都在的设计稿：三档 fixture 与测试用的都是这种 */
+export interface CompleteDesign extends GalaxyDesign {
   star: BodyDesign;
   planet: PlanetDesign;
-  backdrop: Backdrop;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -87,9 +100,10 @@ export function densityOf(kind: BodyKind, composition: Composition): number {
   return kind === "star" ? STAR_DENSITY : DENSITY[composition];
 }
 
-/** 天体半径（与轨道同一单位）：galaxy.ts 的同一条公式，(质量 / 密度)^(1/3)，质量先夹进区间 */
+/** 天体半径（与轨道同一单位）：galaxy.ts 的同一条公式，(质量 / 密度)^(1/3)，质量先夹进区间。这颗天体不存在时是 NaN */
 export function radiusOf(design: GalaxyDesign, kind: BodyKind): number {
-  return kind === "star" ? starRadius(design.star.mass) : planetRadius(design.planet);
+  if (kind === "star") return design.star === null ? Number.NaN : starRadius(design.star.mass);
+  return design.planet === null ? Number.NaN : planetRadius(design.planet);
 }
 
 /** 行星轨道的合法下限：两颗天体的半径和 + 间距——再近就相撞 */
@@ -108,7 +122,9 @@ export type DesignError =
   | { kind: "mass-range"; body: BodyKind; min: number; max: number; value: number }
   | { kind: "orbit-collision"; min: number; value: number }
   | { kind: "orbit-far"; max: number; value: number }
-  | { kind: "name-long"; body: BodyKind; max: number; length: number };
+  | { kind: "name-long"; body: BodyKind; max: number; length: number }
+  /** 数据违反了不变量：有行星、没主星。面板里走不到（加行星要先有主星），读进来的坏数据才会有 */
+  | { kind: "planet-without-star" };
 
 export function nameLength(name: string): number {
   return [...name].length;
@@ -120,13 +136,17 @@ export function nameLength(name: string): number {
  */
 export function validateDesign(design: GalaxyDesign): DesignError[] {
   const errors: DesignError[] = [];
+  if (design.star === null && design.planet !== null) errors.push({ kind: "planet-without-star" });
   for (const body of ["star", "planet"] as const) {
+    const it = design[body];
+    if (it === null) continue;
     const { min, max } = massRange(body);
-    const value = design[body].mass;
+    const value = it.mass;
     if (!Number.isFinite(value) || value < min || value > max) errors.push({ kind: "mass-range", body, min, max, value });
-    const length = nameLength(design[body].name);
+    const length = nameLength(it.name);
     if (length > NAME_MAX) errors.push({ kind: "name-long", body, max: NAME_MAX, length });
   }
+  if (design.star === null || design.planet === null) return errors;
   const orbit = design.planet.orbitRadius;
   const near = minOrbit(design);
   const far = maxOrbit(design);
@@ -141,6 +161,7 @@ export function errorsAt(errors: readonly DesignError[], body: BodyKind, field: 
     if (error.kind === "mass-range") return field === "mass" && error.body === body;
     if (error.kind === "name-long") return field === "name" && error.body === body;
     if (error.kind === "orbit-collision") return (body === "planet" && field === "orbit") || (body === "star" && field === "mass");
+    if (error.kind === "planet-without-star") return false;
     return body === "planet" && field === "orbit";
   });
 }
@@ -221,8 +242,9 @@ function halfEllipse(rx: number, ry: number, half: "back" | "front"): string {
 
 export function bodyArt(design: GalaxyDesign, kind: BodyKind, r: number): BodyArt {
   const body = kind === "star" ? design.star : design.planet;
+  if (body === null) throw new Error(`bodyArt：这座星系没有${kind === "star" ? "主星" : "行星"}，调用方应先显示空态`);
   const on = (key: ElementKey): boolean => ELEMENTS_OF[kind].includes(key) && body.elements[key];
-  const surface: BodyArt["surface"] = kind === "star" ? "star" : design.planet.composition;
+  const surface: BodyArt["surface"] = design.planet !== null && kind === "planet" ? design.planet.composition : "star";
   const ring = on("ring")
     ? {
         back: halfEllipse(RING.rx * r, RING.ry * r, "back"),
@@ -324,12 +346,12 @@ export function ringFrontPoints(r: number, samples = 48): { x: number; y: number
 
 // ── 三档 fixture 与每个工作区一份的设计稿 ──────────────────────────────
 
-/** 原型专用：`?designer=bare|full` 切空元素 / 满载；不带参数是默认（一颗行星、常用元素） */
-export type DesignLevel = "default" | "bare" | "full";
+/** 原型专用：`?designer=bare|full|nostar` 切空元素 / 满载 / 还没有主星；不带参数是默认（一颗主星 + 一颗行星） */
+export type DesignLevel = "default" | "bare" | "full" | "nostar";
 
 export function designLevelOf(search: string): DesignLevel {
   const value = new URLSearchParams(search).get("designer");
-  return value === "bare" || value === "full" ? value : "default";
+  return value === "bare" || value === "full" || value === "nostar" ? value : "default";
 }
 
 const ALL_OFF: Readonly<Record<ElementKey, boolean>> = { eyes: false, ring: false, clouds: false, moons: false, corona: false };
@@ -359,14 +381,22 @@ export function workspaceHash(id: string): number {
 /** 满载档的长名字：超过 NAME_MAX，用来看面板会不会被撑开、错误会不会报出来 */
 export const LONG_NAME = "一颗名字特别长用来检查面板会不会被撑开的行星开普勒四五二乙扩展版";
 
-export function defaultDesign(workspaceId: string, level: DesignLevel): GalaxyDesign {
+function defaultStar(): BodyDesign {
+  return { name: "", mass: 620, elements: { ...ALL_OFF, eyes: true }, zoom: ZOOM_DEFAULT.star };
+}
+
+function defaultPlanet(workspaceId: string): PlanetDesign {
   const pick = workspaceHash(workspaceId) % PLANET_PRESETS.length;
   const preset = PLANET_PRESETS[pick] ?? PLANET_PRESETS[0];
   const elements = ELEMENT_PRESETS[pick] ?? ALL_OFF;
-  const base: GalaxyDesign = {
+  return { name: "", elements, mass: 6, composition: "rock", orbitRadius: 22, zoom: ZOOM_DEFAULT.planet, ...preset };
+}
+
+export function defaultDesign(workspaceId: string, level: Exclude<DesignLevel, "nostar">): CompleteDesign {
+  const base: CompleteDesign = {
     editing: "planet",
-    star: { name: "", mass: 620, elements: { ...ALL_OFF, eyes: true }, zoom: ZOOM_DEFAULT.star },
-    planet: { name: "", elements, mass: 6, composition: "rock", orbitRadius: 22, zoom: ZOOM_DEFAULT.planet, ...preset },
+    star: defaultStar(),
+    planet: defaultPlanet(workspaceId),
     backdrop: "muted",
   };
   if (level === "bare") {
@@ -383,6 +413,31 @@ export function defaultDesign(workspaceId: string, level: DesignLevel): GalaxyDe
   return base;
 }
 
+/** 某一档 fixture 的设计稿：nostar 是还没有主星（也就没有行星）的星系，停在主星页 */
+export function fixtureDesign(workspaceId: string, level: DesignLevel): GalaxyDesign {
+  if (level === "nostar") return { editing: "star", star: null, planet: null, backdrop: "muted" };
+  return defaultDesign(workspaceId, level);
+}
+
+/** 守不变量：没有主星就把行星一起拿掉。已经合规就原样返回（引用不变） */
+export function normalizeDesign(design: GalaxyDesign): GalaxyDesign {
+  return design.star === null && design.planet !== null ? { ...design, planet: null } : design;
+}
+
+/** 创建主星（已有就原样返回），并切到主星页 */
+export function createStar(design: GalaxyDesign): GalaxyDesign {
+  return design.star === null ? { ...design, star: defaultStar(), editing: "star" } : { ...design, editing: "star" };
+}
+
+export type AddPlanetResult = { ok: true; design: GalaxyDesign } | { ok: false; reason: "no-star" };
+
+/** 加一颗行星（已有就原样返回）。没有主星时拒绝——行星必须绕着主星，这是数据层的规矩，不靠按钮置灰 */
+export function addPlanet(design: GalaxyDesign, workspaceId: string): AddPlanetResult {
+  if (design.star === null) return { ok: false, reason: "no-star" };
+  if (design.planet !== null) return { ok: true, design: { ...design, editing: "planet" } };
+  return { ok: true, design: { ...design, planet: defaultPlanet(workspaceId), editing: "planet" } };
+}
+
 /**
  * 每个工作区一份设计稿，只活在这次运行的内存里（原型：尚未写入配置）。面板关了再开、切到别的工作区再切回来
  * 都还在；重启就回到 fixture。按工作区 id 分开存，切工作区不会把上一个的参数带过去。
@@ -396,13 +451,14 @@ export interface DesignStore {
 export function createDesignStore(level: DesignLevel): DesignStore {
   const designs = new Map<string, GalaxyDesign>();
   return {
-    get: (id) => designs.get(id) ?? defaultDesign(id, level),
+    get: (id) => designs.get(id) ?? fixtureDesign(id, level),
+    // 存之前再守一次不变量：哪条路径写进来的「有行星没主星」都存不进去
     set: (id, design) => {
-      designs.set(id, design);
+      designs.set(id, normalizeDesign(design));
     },
     reset: (id) => {
       designs.delete(id);
-      return defaultDesign(id, level);
+      return fixtureDesign(id, level);
     },
   };
 }
