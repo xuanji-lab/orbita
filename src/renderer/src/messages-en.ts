@@ -2443,10 +2443,20 @@ export const en = {
     outputDeck: (pages: number | null) => (pages === null ? "Deck" : `Deck · ${plural(pages, "slide")}`),
     outputDoc: "Document",
     outputWeb: "Web page",
+    /** 音频 / 视频行的类型字：「Audio · 3:51」；量不到时长就只写类型 */
+    outputMedia: (kind: "audio" | "video", clock: string | null) => `${kind === "audio" ? "Audio" : "Video"}${clock === null ? "" : ` · ${clock}`}`,
     outputPreview: "Preview",
     // 本轮网页文件变动超过上限（像是批量操作）：不逐个列，结尾那摞里一张「N web pages · 批量」卡，没有预览按钮
-    outputGroup: (type: "doc" | "pdf" | "web", n: number) =>
-      type === "doc" ? `${n} documents` : type === "web" ? `${n} web pages` : `${n} PDFs`,
+    outputGroup: (type: "doc" | "pdf" | "web" | "audio" | "video", n: number) =>
+      type === "doc"
+        ? `${n} documents`
+        : type === "web"
+          ? `${n} web pages`
+          : type === "audio"
+            ? `${n} audio files`
+            : type === "video"
+              ? `${n} videos`
+              : `${n} PDFs`,
     childReportHead: (title: string) => `"${title}" handed back`,
     outputFromChildShort: "From sub-session",
     outputFromLead: "From",

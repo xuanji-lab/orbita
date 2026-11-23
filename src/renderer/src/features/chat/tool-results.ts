@@ -19,7 +19,7 @@ import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-prot
 import type { DelegateCard, ReadTaskCard } from "@shared/agent-ipc";
 import type { ChannelMessageKind } from "@shared/channel";
 import type { CompactedRecord, IntentRecallRecord, SessionRecord, TranscriptRecord } from "@shared/session";
-import type { FileTurnRecord, FileTurnView, RevertRecord } from "@shared/revert";
+import type { FileTurnRecord, FileTurnView, MediaArtifact, RevertRecord } from "@shared/revert";
 import type { PluginInstallRow } from "@shared/plugin";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载，@shared 别名只能解析类型（AGENTS.md 硬规则）
 import { parseChannelPrompt } from "../../../../shared/channel.ts";
@@ -29,6 +29,7 @@ import { parsePluginBoardDetails, type PluginBoardResult } from "../../../../sha
 import { gatedCommandTimeout, PLUGIN_BOARD_TOOL } from "../../../../shared/permission.ts";
 import { builtinCommand, DOC_EDIT_KEY, DOC_WRITE_KEY, docEditPath, isBuiltinCommand } from "./builtin-commands.ts";
 import { turnOutputs } from "./process-rows.ts";
+import { namedMedia } from "./media-outputs.ts";
 import { isWebArtifactFile } from "../../../../shared/files.ts";
 // 收尾扫描回答卡（scanAnswerCards）只用它认消息形状；纯模块，node --test 可直接加载
 import { matchScanMessage, type ScanMessage } from "./carryover-parse.ts";
@@ -450,6 +451,11 @@ export interface TurnOutputsUnit {
    */
   docs: readonly string[];
   /**
+   * 这一轮回答里**点了名**的音视频（脚本生成的 mp3 / mp4 等；候选来自轮尾扫描，过滤见 media-outputs.ts）：
+   * 分段、试音样本没被提到就不在这里。点开在右侧文件面板播放。
+   */
+  media: readonly MediaArtifact[];
+  /**
    * 这一轮是被子会话交回开头的（channelMark done）：交回的子会话的产物也摆进这一摞里（渲染时异步读子会话记录），
    * 不再套在交回卡的框里。没有 = 空。
    */
@@ -691,12 +697,34 @@ function foldSegment(
   const docs = !settled
     ? []
     : tailCards.flatMap((entry) => (entry.kind === "fileTurn" ? entry.record.changes.map((change) => change.path).filter((path) => DOC_FILE.test(path)) : []));
-  const hasMain = settled && results !== undefined && (turnOutputs(calls, results).length > 0 || web.length > 0 || docs.length > 0);
+  // 音视频：候选来自轮尾文件账（旁路扫描），只留这一轮**最终回答**（段尾连续的正文，跳过轮尾卡）里点了名的
+  const media = !settled
+    ? []
+    : namedMedia(
+        tailCards.flatMap((entry) => (entry.kind === "fileTurn" ? (entry.record.mediaArtifacts ?? []) : [])),
+        finalAnswerText(segment),
+      );
+  const hasMain = settled && results !== undefined && (turnOutputs(calls, results).length > 0 || web.length > 0 || docs.length > 0 || media.length > 0);
   if (hasMain || children.length > 0) {
     const key = children.length > 0 ? `out:child:${children[0]?.messageId ?? ""}` : `out:${calls[0]?.key ?? tailCards[0]?.key ?? ""}`;
-    view.push({ kind: "turnOutputs", key, calls: settled ? calls : [], web, docs, children });
+    view.push({ kind: "turnOutputs", key, calls: settled ? calls : [], web, docs, media, children });
   }
   return view;
+}
+
+/**
+ * 一段的最终回答正文：从段尾往前收连续的正文（轮尾文件卡不挡路，思考 / 工具调用才是边界）。
+ * 音视频产物按它点名过滤——过程中的旁白（「先生成两个试音文件 test_a.mp3」）不算交付。
+ */
+function finalAnswerText(segment: readonly RenderEntry[]): string {
+  const parts: string[] = [];
+  for (let index = segment.length - 1; index >= 0; index -= 1) {
+    const entry = segment[index];
+    if (entry === undefined || entry.kind === "fileTurn") continue;
+    if (entry.kind !== "text") break;
+    parts.unshift(entry.text);
+  }
+  return parts.join("\n");
 }
 
 /**

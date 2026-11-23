@@ -195,12 +195,14 @@ import {
   allOutputs,
   mergeOutputs,
   groupOutputs,
+  type OutputGroupType,
   type ProcessImage,
   type ProcessRow,
   type StepVerb,
   type OutputSource,
   type TurnOutput,
 } from "./process-rows.ts";
+import { formatDuration } from "./media-outputs.ts";
 import { fileManagerKind } from "../../file-manager.ts";
 import { FileTypeIcon } from "../../shell/FileTypeIcon";
 import { HomeHero } from "./HomeHero";
@@ -5323,7 +5325,7 @@ function ProcessLightbox(props: { images: readonly ProcessImage[]; start: number
 function TurnOutputsBlock(props: { unit: TurnOutputsUnit; toolResults: ToolResultIndex; sessionId: string; channel: ChannelViewContext }) {
   const t = useT();
   const { channel } = props;
-  const mine = allOutputs(props.unit.calls, props.toolResults, props.unit.docs, props.unit.web);
+  const mine = allOutputs(props.unit.calls, props.toolResults, props.unit.docs, props.unit.web, props.unit.media);
   const childOutputs = useChildrenOutputs(props.unit.children);
   // 子会话交回的产物和主会话自己的摆进同一摞：每张带上「来自子会话…」（标题 + 型号名）
   const fromChildren = props.unit.children.flatMap((child) => {
@@ -5360,7 +5362,7 @@ function OutputStack(props: { outputs: readonly TurnOutput[]; sessionId: string;
   );
 }
 
-function OutputGroupCard(props: { type: "doc" | "pdf" | "web"; outputs: readonly TurnOutput[]; sessionId: string; openSession: ((childId: string) => void) | null }) {
+function OutputGroupCard(props: { type: OutputGroupType; outputs: readonly TurnOutput[]; sessionId: string; openSession: ((childId: string) => void) | null }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const first = props.outputs[0];
@@ -5513,7 +5515,9 @@ function TurnOutputCard(props: { output: TurnOutput; sessionId: string; openSess
         ? t.chat.outputDeck(output.pages)
         : output.kind === "web"
           ? t.chat.outputWeb
-          : t.chat.outputDoc;
+          : output.kind === "audio" || output.kind === "video"
+            ? t.chat.outputMedia(output.kind, formatDuration(output.duration))
+            : t.chat.outputDoc;
   const preview = () => {
     setRefusal(null);
     if (output.kind === "web" && output.format === null) {
