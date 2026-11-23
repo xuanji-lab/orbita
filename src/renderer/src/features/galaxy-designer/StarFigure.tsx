@@ -6,9 +6,8 @@ import { avatarScale, bodyArt, displayRadius, ELEMENTS_OF, radiusOf, withStar, t
  * 「画主星 / 画头像」的纯组件：输入一份设计稿，输出画面——不读仓库、不读设置、不带动效，同一份稿永远画出同一张图。
  * 侧栏头像、页头头像（StarFigure）与星系里的主星（StarBody）都只经过这里；星系设计面板的预览也用 BodyFigure。
  *
- * 给下一轮留的口子（主智能体样式换成 Qwen 出的球体图片，眼睛、星环、日冕仍由代码画）：
- * 在 GalaxyDesign.star 上加一个图片字段（例如 image: { src, ... }），然后只改 BodyFigure 里「gd-surface 那颗球 + 纹理」那一段——
- * 有图就画 <image clipPath=…>，没有就照旧画纹理；眼睛 / 星环 / 日冕 / 卫星的几何（bodyArt）不动，调用方一个都不用改。
+ * 地表图（插件 planet-forge 出的无脸地表，BodyDesign.surface）：有就在 BodyFigure 里把它裁进圆当贴图、叠代码画的明暗；
+ * 眼睛 / 星环 / 日冕 / 卫星的几何（bodyArt）照旧由代码画——侧栏头像、页头、New Task 星系、右栏星系图、设计面板预览五处同源。
  */
 
 /**
@@ -88,6 +87,8 @@ export function BodyFigure(props: { art: BodyArt; uid: string }) {
   const clip = `${uid}-clip`;
   const light = `${uid}-light`;
   const halo = `${uid}-halo`;
+  const shade = `${uid}-shade`;
+  const image = art.image;
   return (
     <g className="gd-body" data-surface={art.surface}>
       <defs>
@@ -98,6 +99,13 @@ export function BodyFigure(props: { art: BodyArt; uid: string }) {
           <stop offset="0%" className="gd-light" stopOpacity={0.62} />
           <stop offset="100%" className="gd-light" stopOpacity={0} />
         </radialGradient>
+        {image !== null && (
+          // 贴图上的明暗：受光点在左上，往右下的球缘渐暗（地表图本身不带光照，明暗只由这里给，不双重打光）
+          <radialGradient id={shade} cx="38%" cy="34%" r="74%">
+            <stop offset="45%" className="gd-shade-stop" stopOpacity={0} />
+            <stop offset="100%" className="gd-shade-stop" stopOpacity={0.62} />
+          </radialGradient>
+        )}
         <radialGradient id={halo} cx="50%" cy="50%" r="50%">
           <stop offset="60%" className="gd-halo" stopOpacity={0.28} />
           <stop offset="100%" className="gd-halo" stopOpacity={0} />
@@ -118,6 +126,21 @@ export function BodyFigure(props: { art: BodyArt; uid: string }) {
         <path className="gd-ring gd-ring-back" d={art.ring.back} transform={`rotate(${art.ring.tilt})`} strokeWidth={art.ring.width} />
       )}
       <circle className="gd-surface" r={art.r} />
+      {image !== null && (
+        <g clipPath={`url(#${clip})`} data-image="true">
+          <image
+            className="gd-surface-image"
+            href={image.src}
+            x={-art.r}
+            y={-art.r}
+            width={art.r * 2}
+            height={art.r * 2}
+            preserveAspectRatio="xMidYMid slice"
+            transform={image.flip ? "scale(1 -1)" : undefined}
+          />
+          <circle r={art.r} fill={`url(#${shade})`} />
+        </g>
+      )}
       <g clipPath={`url(#${clip})`}>
         {art.bands.map((band) => (
           <rect key={band.y} className="gd-band" x={-art.r} y={band.y} width={art.r * 2} height={band.h} />
@@ -132,7 +155,7 @@ export function BodyFigure(props: { art: BodyArt; uid: string }) {
         {art.clouds.map((cloud) => (
           <rect key={cloud.y} className="gd-cloud" x={cloud.x} y={cloud.y} width={cloud.w} height={cloud.h} rx={cloud.h / 2} />
         ))}
-        <circle r={art.r} fill={`url(#${light})`} />
+        <circle r={art.r} fill={`url(#${light})`} opacity={image === null ? 1 : 0.4} />
       </g>
       {/* 只有一双竖胶囊眼：不画嘴、鼻子、腮红、眉毛、瞳孔、高光 */}
       {art.eyes !== null && (

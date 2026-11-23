@@ -4,6 +4,7 @@
  */
 import { OutboxStore } from "./session/outbox.ts";
 import { registerOutboxIpc } from "./session/outbox-ipc.ts";
+import { registerPlanetIpc } from "./planet/ipc.ts";
 import { preferIPv4 } from "../shared/dial-v4.ts";
 import { CATALOG_CACHE_ENV } from "../shared/agent-ipc.ts";
 import { catalogIdsOfProviders } from "../shared/known-providers.ts";
@@ -1058,6 +1059,8 @@ void app.whenReady().then(async () => {
   });
   // 发件箱：点了发送的话先落盘再开跑，下次启动核对没落账的（session/outbox.ts）
   registerOutboxIpc(new OutboxStore(configDir));
+  // 星系设计稿：工作区 planet/ 里的插件稿与伴随文件（planet/store.ts）
+  registerPlanetIpc(workspaces);
   registerSessionIpc(
     sessions,
     (id) => {

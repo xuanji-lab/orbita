@@ -2,6 +2,11 @@ import {
   CAMERA_ELEVATION_DEG,
   FRAME_EXTENT,
   PLANET_ZONE,
+  PLANET_READABLE_MAX,
+  PLANET_READABLE_GAP,
+  AGENT_READABLE_GAP,
+  ROCK_PX,
+  STAR_OVER_PLANET,
   WAITING_SCALE,
   angularSpeed,
   frameViewport,
@@ -116,12 +121,40 @@ function placeOrbits(
   return orbits;
 }
 
+/**
+ * 碎石块那一圈：在碎石带里取 ROCK_ORBIT_AT 处，再按屏幕约束往外让——近侧 / 远侧短轴端点与最外一颗行星竖向留出
+ * 两者屏幕半径之和 + SCREEN_GAP，近侧离主星同理。最多推到画框外沿。碎石块彼此同一圈等角排开，永远不相撞。
+ */
+function placeRockOrbit(camera: Camera, vp: Viewport, layout: GalaxyLayout, minPx: number, starPx: number): number | null {
+  if (layout.rockOrbit === null) return null;
+  const star = screenOf(camera, vp, 0, 0);
+  const last = layout.planets[layout.planets.length - 1];
+  const lastBody: Body | null = last === undefined ? null : { radius: last.radius, waiting: last.state === "waiting" };
+  let a = layout.rockOrbit;
+  for (; a < FRAME_EXTENT; a += ORBIT_NUDGE) {
+    const near = screenOf(camera, vp, a, NEAR);
+    const far = screenOf(camera, vp, a, FAR);
+    let ok = Math.hypot(near.x - star.x, near.y - star.y) >= starPx + ROCK_PX + SCREEN_GAP;
+    if (ok && last !== undefined && lastBody !== null) {
+      const pNear = screenOf(camera, vp, last.orbitRadius, NEAR);
+      const pFar = screenOf(camera, vp, last.orbitRadius, FAR);
+      ok =
+        Math.abs(near.y - pNear.y) >= ROCK_PX + bodyPx(lastBody, pNear.depth, vp, minPx) + SCREEN_GAP &&
+        Math.abs(far.y - pFar.y) >= ROCK_PX + bodyPx(lastBody, pFar.depth, vp, minPx) + SCREEN_GAP;
+    }
+    if (ok) break;
+  }
+  return Math.min(a, FRAME_EXTENT);
+}
+
 export function fitScreenSafe(
   spec: GalaxySpec,
   width: number,
   height: number,
   box: { width: number; height: number },
   baseElevationDeg: number = CAMERA_ELEVATION_DEG,
+  /** 行星可读半径的上限（px）：子智能体行星传 AGENT_READABLE_MAX */
+  readableMax: number = PLANET_READABLE_MAX,
 ): SafeScene {
   const flat: GalaxySpec = { ...spec, planets: spec.planets.map((planet) => ({ ...planet, inclinationDeg: 0 })) };
   const base = layoutGalaxy(flat);
@@ -133,9 +166,13 @@ export function fitScreenSafe(
     for (let e = Math.max(baseElevationDeg, CAMERA_ELEVATION_DEG); e <= SAFE_ELEVATION_MAX; e += ELEVATION_STEP) {
       const camera = makeCamera(FRAME_EXTENT, e);
       const viewport = frameViewport(camera, width, height, box);
-      const minPx = readablePlanetPx(camera, viewport, ORBIT_STEP);
       const starDepth = project({ x: 0, y: 0, z: 0 }, camera).depth;
       const starPx = (viewport.focal * starExtent) / starDepth;
+      const starBodyPx = (viewport.focal * starRadius(spec.starMass)) / starDepth;
+      // 行星再大也要比主星明显小（等你放大一档之后也是）
+      const agentMode = readableMax > PLANET_READABLE_MAX;
+      const readable = readablePlanetPx(camera, viewport, ORBIT_STEP, readableMax, agentMode ? AGENT_READABLE_GAP : PLANET_READABLE_GAP);
+      const minPx = agentMode ? Math.min(readable, starBodyPx / (STAR_OVER_PLANET * WAITING_SCALE)) : readable;
       const orbits = placeOrbits(camera, viewport, bodies, shown.map((planet) => planet.orbitRadius), starPx, minPx);
       if (orbits === null) continue;
       const planets = shown.map((planet, i) => {
@@ -159,12 +196,14 @@ export function fitScreenSafe(
         hidden: base.hidden + dropped,
         expectedOrbit: base.expectedOrbit,
       };
-      return { camera, viewport, layout, elevationDeg: e, minPlanetPx: minPx, dropped };
+      return { camera, viewport, layout: { ...layout, rockOrbit: placeRockOrbit(camera, viewport, layout, minPx, starPx) }, elevationDeg: e, minPlanetPx: minPx, dropped };
     }
     if (shown.length === 0) {
       const camera = makeCamera(FRAME_EXTENT, baseElevationDeg);
       const viewport = frameViewport(camera, width, height, box);
-      return { camera, viewport, layout: base, elevationDeg: baseElevationDeg, minPlanetPx: readablePlanetPx(camera, viewport, ORBIT_STEP), dropped };
+      const minPx = readablePlanetPx(camera, viewport, ORBIT_STEP, readableMax);
+      const starPx = (viewport.focal * starExtent) / project({ x: 0, y: 0, z: 0 }, camera).depth;
+      return { camera, viewport, layout: { ...base, rockOrbit: placeRockOrbit(camera, viewport, base, minPx, starPx) }, elevationDeg: baseElevationDeg, minPlanetPx: minPx, dropped };
     }
     shown = shown.slice(0, -1);
     dropped += 1;

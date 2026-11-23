@@ -232,7 +232,8 @@ describe("元素组合与 2D 形象", () => {
   });
 
   test("任何天体、成分、元素组合都没有嘴：形象里只有眼睛，没有 mouth / nose / blush / 四肢之类的图形", () => {
-    const allowed = ["r", "surface", "corona", "ring", "craters", "cap", "cracks", "bands", "clouds", "eyes", "eyesTilt", "moons", "extent"].sort();
+    // image 是地表贴图（无脸地表），不是五官：眼睛照旧只由 eyes 画
+    const allowed = ["r", "image", "surface", "corona", "ring", "craters", "cap", "cracks", "bands", "clouds", "eyes", "eyesTilt", "moons", "extent"].sort();
     const base = defaultDesign(WS_A, "bare");
     for (let mask = 0; mask < 32; mask++) {
       const elements = { eyes: (mask & 1) > 0, ring: (mask & 2) > 0, clouds: (mask & 4) > 0, moons: (mask & 8) > 0, corona: (mask & 16) > 0 };

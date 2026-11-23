@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   advanceClock,
   drawFrame,
@@ -21,16 +21,35 @@ import {
   orbitArcs,
   DEBRIS_PX,
   DUST_PX,
+  AGENT_READABLE_MAX,
+  PLANET_READABLE_MAX,
   type DrawItem,
   type GalaxySpec,
   type MotionInputs,
 } from "./galaxy.ts";
 import { useT } from "../../locale.ts";
 import { BodyFigure, StarBody } from "../galaxy-designer/StarFigure.tsx";
-import { bodyArt, planetFaceDesign, starExtentRatio, type GalaxyDesign } from "../galaxy-designer/design.ts";
+import { bodyArt, planetFaceDesign, starExtentRatio, type GalaxyDesign, type PlanetDesign } from "../galaxy-designer/design.ts";
 import { fitScreenSafe } from "./screen-safe.ts";
 import { GalaxyCallouts } from "./GalaxyCallouts.tsx";
-import type { PlanetItem } from "./galaxy.ts";
+import { placeNameTags } from "./callouts.ts";
+import type { PlanetItem, RockItem } from "./galaxy.ts";
+
+/** 碎石块的轮廓：七个顶点、半径按 id 抖一点（同一条会话永远同一块石头），不是圆点——它是会话，不是天体 */
+export function rockPath(x: number, y: number, r: number, id: string): string {
+  let hash = 2166136261;
+  for (const ch of id) {
+    hash ^= ch.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 16777619);
+  }
+  let d = "";
+  for (let i = 0; i < 7; i++) {
+    const jitter = 0.72 + (((hash >>> (i * 4)) & 15) / 15) * 0.36;
+    const a = (i / 7) * Math.PI * 2;
+    d += `${i === 0 ? "M" : "L"}${(x + Math.cos(a) * r * jitter).toFixed(1)} ${(y + Math.sin(a) * r * jitter).toFixed(1)}`;
+  }
+  return `${d}Z`;
+}
 
 /**
  * 画布的真实尺寸（CSS px）：ResizeObserver 量 svg 自己的盒子。星系占首页输入框下方剩下的全部空间，
@@ -161,6 +180,11 @@ export function HomeGalaxy(props: {
    * 只画缓慢漂移的碎石，每颗是一条会话（量大了也只是更浓，余数折成「+N」）。
    */
   starless?: boolean;
+  /**
+   * 子智能体行星（编排星系：行星 = 子智能体，id → 设计稿）。给了就按设计稿画（地表图 + 代码眼睛）并常显名字，
+   * 行星可读半径放大一档（AGENT_READABLE_MAX）；会话不再是行星，在做事的会话是带锁定框的碎石块（spec.rocks）。
+   */
+  agents?: ReadonlyMap<string, PlanetDesign>;
 }) {
   const t = useT();
   const uid = useId().replace(/:/g, "");
@@ -186,9 +210,10 @@ export function HomeGalaxy(props: {
     // 工作区页 / 右栏：屏幕安全布局（screen-safe.ts）——在屏幕坐标里排轨道，任何相位上天体都不在画面上相撞：
     // 近侧行星让开主星，相邻两圈在短轴上留出间距，轨道放平；排不下就抬俯角，再不行少画最外一圈
     const box = galaxyBox(size.width, size.height, GALAXY_MAX_FILL);
-    const safe = fitScreenSafe(dustCap === undefined ? props.spec : { ...props.spec, dustCap }, size.width, size.height, box, elevationFor(box));
+    const readableMax = props.agents !== undefined && props.agents.size > 0 ? AGENT_READABLE_MAX : PLANET_READABLE_MAX;
+    const safe = fitScreenSafe(dustCap === undefined ? props.spec : { ...props.spec, dustCap }, size.width, size.height, box, elevationFor(box), readableMax);
     return { camera: safe.camera, viewport: safe.viewport, layout: safe.layout, minPlanetPx: safe.minPlanetPx, arcs: orbitArcs(safe.layout, safe.camera, safe.viewport) };
-  }, [baseLayout, size, props.fill, props.spec, dustCap]);
+  }, [baseLayout, size, props.fill, props.spec, dustCap, props.agents]);
   const layout = scene?.layout ?? baseLayout;
   const minPlanetPx = scene?.minPlanetPx ?? 0;
   // 工作区页 / 右栏：等你的行星不再强行画在主星前面——转到主星背后就让主星挡住（天体不得画在主星上面）
@@ -201,7 +226,17 @@ export function HomeGalaxy(props: {
   // 工作区页（fill）：在做工的行星画锁定框，最要紧的几颗升起引线写任务名（GalaxyCallouts，与右栏星系图共用）
   const rankOf = useMemo(() => new Map(layout.planets.map((planet, index) => [planet.id, index])), [layout]);
   const planetItems = items.filter((item): item is PlanetItem => item.kind === "planet");
+  const rockItems = items.filter((item): item is RockItem => item.kind === "rock");
   const starItem = items.find((item) => item.kind === "star");
+  // 名字牌的字号跟设计系统走：挂上后量一次（同 GalaxyCallouts）
+  const probeRef = useRef<SVGTextElement | null>(null);
+  const [glyphPx, setGlyphPx] = useState(12);
+  useLayoutEffect(() => {
+    const el = probeRef.current;
+    if (el === null) return;
+    const px = Number.parseFloat(getComputedStyle(el).fontSize);
+    if (Number.isFinite(px) && px > 0 && px !== glyphPx) setGlyphPx(px);
+  });
   const starExtent = props.starDesign === undefined ? 1 : starExtentRatio(props.starDesign);
   // 被主星挡住的行星（在它背后、画面上与它重叠）：不画锁定框与引线，转出来再画——框画在主星上面也是「压在主星上」
   const visiblePlanets =
@@ -210,6 +245,21 @@ export function HomeGalaxy(props: {
       : planetItems.filter(
           (planet) => !(planet.depth > starItem.depth && Math.hypot(planet.x - starItem.x, planet.y - starItem.y) < starItem.r * starExtent + planet.r),
         );
+  // 子智能体行星的名字常显；被主星挡住的不写（与锁定框同一个规矩）
+  const agents = props.agents;
+  const nameTags =
+    agents === undefined || scene === null || props.fill !== true
+      ? []
+      : placeNameTags({
+          planets: visiblePlanets.map((planet) => ({ id: planet.planetId, x: planet.x, y: planet.y, r: planet.r, name: agents.get(planet.planetId)?.name ?? "" })),
+          bodies: [...planetItems, ...rockItems].map((body) => ({ id: body.planetId, x: body.x, y: body.y, r: body.r })),
+          star: starItem === undefined || starItem.kind !== "star" ? null : { x: starItem.x, y: starItem.y, r: starItem.r * starExtent },
+          width: scene.viewport.width,
+          height: scene.viewport.height,
+          glyphPx,
+        });
+  // 锁定框与引线只认在做事的：子智能体行星（没有运行态）+ 在做事的碎石块
+  const calloutBodies = agents === undefined ? visiblePlanets : [...visiblePlanets.map((planet) => ({ ...planet, label: null })), ...rockItems];
   const folded = scene === null || props.fill !== true ? null : foldedMarkAt(layout, scene.camera, scene.viewport);
   const hint = scene === null || props.emptyHint === undefined ? null : emptyHintAt(layout, scene.camera, scene.viewport);
   const starGradient = `${uid}-star`;
@@ -220,6 +270,9 @@ export function HomeGalaxy(props: {
     if (item.kind === "dust") {
       return <path key={item.key} className="galaxy-dust" d={item.d} style={{ opacity: item.alpha }} />;
     }
+    if (item.kind === "rock") {
+      return <path key={item.key} className="galaxy-rock" data-rock={item.planetId} data-state={item.state} d={rockPath(item.x, item.y, item.r, item.planetId)} />;
+    }
     if (item.kind === "star") {
       if (props.starDesign !== undefined) {
         return <StarBody key={item.key} design={props.starDesign} x={item.x} y={item.y} r={item.r} uid={`${uid}-sf`} />;
@@ -228,7 +281,9 @@ export function HomeGalaxy(props: {
     }
     const lightId = `${uid}-${item.planetId}`;
     if (props.fill === true) {
-      // 工作区页：每颗行星都是一个带两只竖胶囊眼的小天体（与设计面板同一个 BodyFigure），不再是素圆点
+      // 工作区页：每颗行星都是一个带两只竖胶囊眼的小天体（与设计面板同一个 BodyFigure），不再是素圆点；
+      // 子智能体行星按它的设计稿画（地表图 + 代码眼睛）
+      const agent = props.agents?.get(item.planetId);
       return (
         <g
           key={item.key}
@@ -239,7 +294,7 @@ export function HomeGalaxy(props: {
           data-r={item.r.toFixed(1)}
           transform={`translate(${item.x} ${item.y})`}
         >
-          <BodyFigure art={bodyArt(planetFaceDesign(item.composition), "planet", item.r)} uid={`${lightId}-f`} />
+          <BodyFigure art={bodyArt(planetFaceDesign(item.composition, agent?.surface ?? null), "planet", item.r)} uid={`${lightId}-f`} />
         </g>
       );
     }
@@ -268,6 +323,7 @@ export function HomeGalaxy(props: {
       role="img"
       aria-label={props.label}
       data-planets={props.starless === true ? 0 : layout.planets.length}
+      data-rocks={props.starless === true ? 0 : layout.rocks.length}
       data-starless={props.starless === true || undefined}
       data-min-planet={minPlanetPx > 0 ? minPlanetPx.toFixed(1) : undefined}
       data-hidden={layout.hidden}
@@ -291,13 +347,26 @@ export function HomeGalaxy(props: {
       {/* 锁定框、引线与悬停名字画在最上层；碎石折掉的会话数收成一个「+N」 */}
       {props.fill === true && scene !== null && props.starless !== true && (
         <GalaxyCallouts
-          planets={visiblePlanets}
+          planets={calloutBodies}
+          reserved={nameTags.map((tag) => tag.box)}
           rankOf={rankOf}
           star={starItem === undefined ? null : { x: starItem.x, y: starItem.y, r: starItem.r * starExtent }}
           width={scene.viewport.width}
           height={scene.viewport.height}
           waitingWord={t.agents.status.waiting}
         />
+      )}
+      {props.fill === true && agents !== undefined && (
+        <g className="galaxy-names" data-names={nameTags.length}>
+          <text ref={probeRef} className="galaxy-name-text" x={-999} y={-999} aria-hidden="true">
+            {""}
+          </text>
+          {nameTags.map((tag) => (
+            <text key={`name-${tag.id}`} className="galaxy-name-text" data-planet={tag.id} x={tag.x} y={tag.y} textAnchor={tag.anchor} dominantBaseline="central">
+              {agents.get(tag.id)?.name}
+            </text>
+          ))}
+        </g>
       )}
       {hint !== null && props.emptyHint !== undefined && (
         <text className="galaxy-empty-hint" x={hint.x} y={hint.y} textAnchor="middle" dominantBaseline="central">

@@ -149,6 +149,10 @@
 .gd-light {
   stop-color: var(--gd-light);
 }
+/* 地表图上的球缘暗面：两档主题都取深色（明主题主墨、暗档井色），与眼睛同一种「近乎纯黑」 */
+.gd-shade-stop {
+  stop-color: var(--gd-shade);
+}
 .gd-halo {
   stop-color: var(--gd-surface);
 }

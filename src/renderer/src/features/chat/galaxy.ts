@@ -41,6 +41,17 @@ export interface PlanetSpec {
 
 export type PlanetState = "waiting" | "running" | "done" | "failed" | null;
 
+/**
+ * 一块「在做事的碎石」：编排的星系里行星是子智能体，会话是碎石；在跑 / 等你的会话从碎石带里单独拎出来画一块，
+ * 锁定框与引线标在它身上（其余会话仍是一整条不逐颗可点的星屑）。
+ */
+export interface RockSpec {
+  id: string;
+  state: "waiting" | "running";
+  /** 会话标题（引线上写它） */
+  label: string;
+}
+
 export interface GalaxySpec {
   starMass: number;
   planets: readonly PlanetSpec[];
@@ -50,6 +61,8 @@ export interface GalaxySpec {
   dustCap?: number;
   /** 这座星系里的会话数：只决定星屑的颗粒数（封顶）与浓淡，不逐条画 */
   sessions: number;
+  /** 在做事的会话（单独画成碎石块，带锁定框）；它们也计在 sessions 里 */
+  rocks?: readonly RockSpec[];
 }
 
 /** 主星与行星的质量区间互不重叠，且行星上限远低于主星下限 */
@@ -140,8 +153,19 @@ export interface Belt {
   alpha: number;
 }
 
+/** 碎石块在碎石带里的位置：同一圈、等角间隔（同一个角速度，永远不互相追上） */
+export interface OrbitRock {
+  id: string;
+  state: "waiting" | "running";
+  label: string;
+  theta0: number;
+}
+
 export interface GalaxyLayout {
   starRadius: number;
+  /** 在做事的碎石块；rockOrbit 是它们共用的轨道半径（碎石带里，屏幕安全布局会再往外让开最外一颗行星） */
+  rocks: OrbitRock[];
+  rockOrbit: number | null;
   planets: OrbitBody[];
   /** 超过 VISIBLE_ORBIT_CAP 没画的行星数 */
   hidden: number;
@@ -154,6 +178,18 @@ export interface GalaxyLayout {
   extent: number;
   /** 轨道半径被向外推过的行星 id（用户给的半径违反了间距规则） */
   adjusted: string[];
+}
+
+/** 碎石块那一圈在碎石带里的位置（0 = 内沿，1 = 外沿） */
+export const ROCK_ORBIT_AT = 0.3;
+
+function hashText(text: string): number {
+  let hash = 2166136261;
+  for (const ch of text) {
+    hash ^= ch.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
 }
 
 /** 确定性的伪随机（mulberry32）：同一个会话数每次排出同一条碎石带，截图可复现 */
@@ -215,13 +251,14 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
   const expectedOrbit = planets.length === 0 ? EXPECTED_ORBIT : null;
   const lastEdge = expectedOrbit ?? prevOrbit + prevRadius;
   let belt: Belt | null = null;
-  const sessions = Math.max(0, Math.floor(spec.sessions));
+  const rockSpecs = spec.rocks ?? [];
+  const sessions = Math.max(0, Math.floor(spec.sessions), rockSpecs.length);
   if (sessions > 0) {
     const inner = lastEdge + MIN_CLEARANCE * 2;
     const outer = Math.max(FRAME_EXTENT, inner + 6);
     const rand = seeded(9173);
     const particles: DustParticle[] = [];
-    const n = Math.min(sessions, Math.max(0, Math.floor(spec.dustCap ?? DUST_CAP)));
+    const n = Math.min(sessions - rockSpecs.length, Math.max(0, Math.floor(spec.dustCap ?? DUST_CAP)));
     for (let i = 0; i < n; i++) {
       const r = inner + rand() * (outer - inner);
       particles.push({
@@ -231,10 +268,20 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
         omega: angularSpeed(r),
       });
     }
-    belt = { inner, outer, count: sessions, folded: sessions - n, particles, alpha: beltAlpha(sessions) };
+    belt = { inner, outer, count: sessions, folded: sessions - n - rockSpecs.length, particles, alpha: beltAlpha(sessions) };
   }
+  // 碎石块：等角排开，起点按第一块的 id 取（同一组会话每次排成同一个样子）
+  const rockBase = rockSpecs[0] === undefined ? 0 : (hashText(rockSpecs[0].id) % 360) * DEG;
+  const rocks: OrbitRock[] = rockSpecs.map((rock, index) => ({
+    id: rock.id,
+    state: rock.state,
+    label: rock.label,
+    theta0: rockBase + (index * Math.PI * 2) / rockSpecs.length,
+  }));
   return {
     starRadius: star,
+    rocks,
+    rockOrbit: belt === null || rocks.length === 0 ? null : belt.inner + (belt.outer - belt.inner) * ROCK_ORBIT_AT,
     planets,
     hidden: Math.max(0, sorted.length - VISIBLE_ORBIT_CAP),
     expectedOrbit,
@@ -455,6 +502,19 @@ export interface PlanetItem {
   lit: number;
 }
 
+/** 在做事的一块碎石（屏幕坐标）：字段名与 PlanetItem 对齐（planetId / state / label），锁定框与引线层直接认它 */
+export interface RockItem {
+  kind: "rock";
+  key: string;
+  planetId: string;
+  state: "waiting" | "running";
+  label: string;
+  depth: number;
+  x: number;
+  y: number;
+  r: number;
+}
+
 export interface DustItem {
   kind: "dust";
   key: "dust-back" | "dust-front";
@@ -463,7 +523,10 @@ export interface DustItem {
   alpha: number;
 }
 
-export type DrawItem = OrbitArc | StarItem | PlanetItem | DustItem;
+export type DrawItem = OrbitArc | StarItem | PlanetItem | DustItem | RockItem;
+
+/** 碎石块的屏幕半径（px）：比星屑大一圈、远小于行星——它是会话，不是天体 */
+export const ROCK_PX = 4.5;
 
 export const ARCS_PER_ORBIT = 16;
 
@@ -558,10 +621,23 @@ export const DEBRIS_PX = [2.4, 4.4] as const;
 export const PLANET_READABLE_MIN = 5;
 export const PLANET_READABLE_GAP = 0.36;
 
-export function readablePlanetPx(camera: Camera, vp: Viewport, orbitStep: number): number {
+export function readablePlanetPx(camera: Camera, vp: Viewport, orbitStep: number, max: number = PLANET_READABLE_MAX, gap: number = PLANET_READABLE_GAP): number {
   const pxPerUnit = vp.focal / project({ x: 0, y: 0, z: 0 }, camera).depth;
-  return clamp(PLANET_READABLE_GAP * orbitStep * pxPerUnit, PLANET_READABLE_MIN, PLANET_READABLE_MAX);
+  return clamp(gap * orbitStep * pxPerUnit, PLANET_READABLE_MIN, max);
 }
+
+/**
+ * 子智能体行星（编排星系：行星 = 子智能体，带地表图与名字）的可读半径上限：一座星系只有几颗，
+ * 比「一件活一颗」的旧星系画大一档，地表与两只眼睛都看得清（星系规则：大小差距缩小到表情可读）。
+ * 主星仍明显最大：屏幕安全布局再把它夹在主星屏幕半径 / STAR_OVER_PLANET 以下。
+ */
+export const AGENT_READABLE_MAX = 20;
+/**
+ * 子智能体行星可读半径占「相邻轨道间距」的比例：比旧星系（PLANET_READABLE_GAP）放宽——子智能体只有几颗，
+ * 相邻两圈挨不挨着由屏幕安全布局（screen-safe.ts）在屏幕坐标里推轨道保证，不再靠把行星画小来躲
+ */
+export const AGENT_READABLE_GAP = 0.7;
+export const STAR_OVER_PLANET = 1.6;
 
 export function drawFrame(
   layout: GalaxyLayout,
@@ -629,6 +705,15 @@ export function drawFrame(
       if (near) depth = Math.max(depth, owner.depth + 1e-6);
     }
     items.push(depth === arc.depth ? arc : { ...arc, depth });
+  }
+  if (layout.rockOrbit !== null) {
+    const omega = angularSpeed(layout.rockOrbit);
+    for (const rock of layout.rocks) {
+      const theta = rock.theta0 + omega * t;
+      const p = project(orbitPoint(layout.rockOrbit, 0, 0, theta), camera);
+      const s = toScreen(p, vp);
+      items.push({ kind: "rock", key: `rock-${rock.id}`, planetId: rock.id, state: rock.state, label: rock.label, depth: p.depth, x: s.x, y: s.y, r: ROCK_PX });
+    }
   }
   if (layout.belt !== null) {
     const back: { x: number; y: number; r: number }[] = [];

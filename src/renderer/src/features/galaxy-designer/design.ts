@@ -10,6 +10,7 @@ import {
   type Composition,
 } from "../chat/galaxy.ts";
 import type { RightPanelKind } from "../../shell/RightRail.tsx";
+import type { PlanetWriteBody, PlanetWriteRequest, WorkspacePlanets } from "@shared/planet-design";
 
 /**
  * 星系设计面板（原型，proto/planet-designer）的纯内核：参数、校验、半径、2D 形象的几何、
@@ -53,6 +54,15 @@ export const ORBIT_RANGE = { min: 4, max: PLANET_ZONE, step: 0.5 } as const;
 /** 天体名字最多几个字（按字符数，中文一个字算一个） */
 export const NAME_MAX = 24;
 
+/**
+ * 无脸地表图（插件 planet-forge 出的 Qwen 地表，主进程裁成球、缩小后的 data URL）：画在代码画的圆里当贴图，
+ * 明暗由代码叠；眼睛、星环、日冕照旧由代码画——图里不出现眼睛和嘴。flip = 上下翻转（地表上的风暴落在眼睛下方会被读成嘴）。
+ */
+export interface SurfaceImage {
+  src: string;
+  flip: boolean;
+}
+
 export interface BodyDesign {
   /** 空串 = 用默认名（主星用工作区名，行星用「未命名行星」） */
   name: string;
@@ -60,11 +70,17 @@ export interface BodyDesign {
   elements: Readonly<Record<ElementKey, boolean>>;
   /** 这一颗的预览缩放（百分比）：主星与行星各记各的，切换天体类型不互相影响 */
   zoom: number;
+  /** 地表图；没有 = 代码画纹理（种子稿、没出过图的天体） */
+  surface?: SurfaceImage | null;
+  /** 主星的一句故事 / 行星的职责（插件稿与伴随文件里来，只显示） */
+  note?: string | null;
 }
 
 export interface PlanetDesign extends BodyDesign {
   composition: Composition;
   orbitRadius: number;
+  /** 子智能体的 id（伴随文件 planet/galaxy.json 里的）；面板里新加、还没落盘的没有 */
+  id?: string;
 }
 
 /**
@@ -80,6 +96,12 @@ export interface GalaxyDesign {
   /** null = 还没有行星；star 为 null 时必为 null */
   planet: PlanetDesign | null;
   backdrop: Backdrop;
+  /**
+   * 这座星系的全部子智能体（每颗一颗行星）。planet 是面板正在编辑的那一颗（= planets[planetIndex]），
+   * normalizeDesign 保证两者同步。缺席 = 只有 planet 这一颗（老的单行星稿、种子稿）。
+   */
+  planets?: readonly PlanetDesign[];
+  planetIndex?: number;
 }
 
 /** 主星和行星都在的设计稿：三档 fixture 与测试用的都是这种 */
@@ -196,6 +218,8 @@ export interface Circle {
 
 export interface BodyArt {
   r: number;
+  /** 地表图：有就画贴图（裁在圆里）+ 代码明暗，成分纹理（坑、极冠、带）不再画 */
+  image: SurfaceImage | null;
   /** star | rock | ice | gas：决定底色与纹理 */
   surface: "star" | Composition;
   corona: { r: number; halo: number } | null;
@@ -252,6 +276,8 @@ export function bodyArt(design: GalaxyDesign, kind: BodyKind, r: number): BodyAr
   if (body === null) throw new Error(`bodyArt：这座星系没有${kind === "star" ? "主星" : "行星"}，调用方应先显示空态`);
   const on = (key: ElementKey): boolean => ELEMENTS_OF[kind].includes(key) && body.elements[key];
   const surface: BodyArt["surface"] = design.planet !== null && kind === "planet" ? design.planet.composition : "star";
+  const image = body.surface ?? null;
+  const textured = image === null;
   const ring = on("ring")
     ? {
         back: halfEllipse(RING.rx * r, RING.ry * r, "back"),
@@ -276,7 +302,7 @@ export function bodyArt(design: GalaxyDesign, kind: BodyKind, r: number): BodyAr
     : [];
   const corona = on("corona") ? { r: 1.14 * r, halo: 1.32 * r } : null;
   const craters =
-    surface === "rock"
+    textured && surface === "rock"
       ? [
           { x: -0.46 * r, y: -0.42 * r, r: 0.13 * r },
           { x: 0.42 * r, y: 0.46 * r, r: 0.11 * r },
@@ -284,16 +310,16 @@ export function bodyArt(design: GalaxyDesign, kind: BodyKind, r: number): BodyAr
           { x: -0.34 * r, y: 0.56 * r, r: 0.07 * r },
         ]
       : [];
-  const cap = surface === "ice" ? { cx: 0, cy: -0.8 * r, rx: 0.6 * r, ry: 0.24 * r } : null;
+  const cap = textured && surface === "ice" ? { cx: 0, cy: -0.8 * r, rx: 0.6 * r, ry: 0.24 * r } : null;
   const cracks =
-    surface === "ice"
+    textured && surface === "ice"
       ? [
           `M${round2(0.12 * r)} ${round2(0.46 * r)}L${round2(0.34 * r)} ${round2(0.58 * r)}L${round2(0.56 * r)} ${round2(0.4 * r)}`,
           `M${round2(-0.62 * r)} ${round2(0.16 * r)}L${round2(-0.46 * r)} ${round2(0.32 * r)}L${round2(-0.52 * r)} ${round2(0.54 * r)}`,
         ]
       : [];
   const bands =
-    surface === "gas"
+    textured && surface === "gas"
       ? [
           { y: -0.66 * r, h: 0.1 * r },
           { y: -0.44 * r, h: 0.08 * r },
@@ -317,7 +343,7 @@ export function bodyArt(design: GalaxyDesign, kind: BodyKind, r: number): BodyAr
     ex = Math.max(ex, Math.abs(moon.x) + moon.r);
     ey = Math.max(ey, Math.abs(moon.y) + moon.r);
   }
-  return { r, surface, corona, ring, craters, cap, cracks, bands, clouds, eyes, eyesTilt: EYES.tiltDeg, moons, extent: { x: ex, y: ey } };
+  return { r, image, surface, corona, ring, craters, cap, cracks, bands, clouds, eyes, eyesTilt: EYES.tiltDeg, moons, extent: { x: ex, y: ey } };
 }
 
 /**
@@ -429,11 +455,11 @@ export function defaultDesign(workspaceId: string, level: Exclude<DesignLevel, "
  * 星系规则「主星与行星的大小差距应缩小到行星表情可读的程度」——页面上每颗行星都画成带两只竖胶囊眼的小天体，
  * 不再是一个素圆点；星环、云带、卫星在十来个像素上只会糊，不开。
  */
-export function planetFaceDesign(composition: Composition): CompleteDesign {
+export function planetFaceDesign(composition: Composition, surface: SurfaceImage | null = null): CompleteDesign {
   return {
     editing: "planet",
     star: defaultStar(),
-    planet: { name: "", mass: 6, composition, orbitRadius: 22, zoom: ZOOM_DEFAULT.planet, elements: { ...ALL_OFF, eyes: true } },
+    planet: { name: "", mass: 6, composition, orbitRadius: 22, zoom: ZOOM_DEFAULT.planet, elements: { ...ALL_OFF, eyes: true }, surface },
     backdrop: "muted",
   };
 }
@@ -454,9 +480,124 @@ export function fixtureDesign(workspaceId: string, level: DesignLevel): GalaxyDe
   return defaultDesign(workspaceId, level);
 }
 
-/** 守不变量：没有主星就把行星一起拿掉。已经合规就原样返回（引用不变） */
+/**
+ * 守不变量：没有主星就把行星一起拿掉；有行星名单时，正在编辑的那颗写回名单里它的位置（面板只改 planet，
+ * 名单跟着变）。已经合规就原样返回（引用不变）。
+ */
 export function normalizeDesign(design: GalaxyDesign): GalaxyDesign {
-  return design.star === null && design.planet !== null ? { ...design, planet: null } : design;
+  if (design.star === null) {
+    return design.planet !== null || (design.planets !== undefined && design.planets.length > 0) ? { ...design, planet: null, planets: [] } : design;
+  }
+  const list = design.planets;
+  if (list === undefined || design.planet === null) return design;
+  const index = clamp(design.planetIndex ?? 0, 0, Math.max(0, list.length - 1));
+  if (list[index] === design.planet) return design;
+  if (list.length === 0) return { ...design, planets: [design.planet], planetIndex: 0 };
+  return { ...design, planets: list.map((planet, i) => (i === index ? (design.planet as PlanetDesign) : planet)), planetIndex: index };
+}
+
+/** 面板切到第 index 颗子智能体（越界夹回来） */
+export function selectPlanet(design: GalaxyDesign, index: number): GalaxyDesign {
+  const list = design.planets;
+  if (list === undefined || list.length === 0) return design;
+  const i = clamp(Math.round(index), 0, list.length - 1);
+  return { ...design, planet: list[i] ?? null, planetIndex: i, editing: "planet" };
+}
+
+/**
+ * 页面星系上画哪些子智能体：设计稿有名单（工作区 planet/ 里读来的、或面板里改过的）就画名单；
+ * 没有名单的种子稿 / 默认稿不画行星——种子稿里那颗行星只是面板的示例，不是真的子智能体。
+ */
+export function agentPlanetsOf(design: GalaxyDesign, origin: DesignOrigin): readonly PlanetDesign[] {
+  if (design.star === null) return [];
+  if (design.planets !== undefined) return design.planets;
+  return origin === "edited" && design.planet !== null ? [design.planet] : [];
+}
+
+/** 星系数据层要的子智能体行星（galaxy-data 的 AgentPlanetInput）：没有 id 的按次序起一个 */
+export function agentInputsOf(planets: readonly PlanetDesign[]): { id: string; mass: number; composition: Composition; orbitRadius: number }[] {
+  return planets.map((planet, index) => ({
+    id: planet.id ?? `planet-${index + 1}`,
+    mass: Number.isFinite(planet.mass) ? planet.mass : 6,
+    composition: planet.composition,
+    orbitRadius: Number.isFinite(planet.orbitRadius) ? planet.orbitRadius : defaultAgentOrbit(index),
+  }));
+}
+
+/** HomeGalaxy 的 agents：行星 id → 设计稿（与 agentInputsOf 同一套 id） */
+export function agentMapOf(planets: readonly PlanetDesign[]): Map<string, PlanetDesign> {
+  return new Map(planets.map((planet, index) => [planet.id ?? `planet-${index + 1}`, planet]));
+}
+
+// ── 与工作区 planet/ 的换算（盘上 M⊕，界面单位 = M⊕ × 10）────────────────
+
+export const MASS_UNIT_PER_EARTH = 10;
+
+/** 没给轨道的第 i 颗子智能体的默认轨道（与 galaxy-data 的 orbitRadiusOf 同一个起点与步长） */
+export function defaultAgentOrbit(index: number): number {
+  return 19 + 12 * index;
+}
+
+/**
+ * 盘上读回的设计稿 → 面板的设计稿。读不到的字段取 fallback（按工作区 id 取的种子稿）；
+ * 主星不随机星环 / 日冕：盘上有就照盘上，没有只开眼睛（地表图已经是它的样子，不再给它加装饰）。
+ */
+export function designFromPlanets(data: WorkspacePlanets, fallback: GalaxyDesign): GalaxyDesign {
+  const baseStar = starOf(fallback);
+  const main = data.main;
+  const star: BodyDesign | null =
+    main === null
+      ? data.planets.length > 0
+        ? baseStar
+        : null
+      : {
+          name: main.name,
+          mass: main.massEarth === null ? baseStar.mass : main.massEarth * MASS_UNIT_PER_EARTH,
+          elements: { ...ALL_OFF, eyes: true, ...(main.elements ?? {}) },
+          zoom: ZOOM_DEFAULT.star,
+          surface: main.surface === null ? null : { src: main.surface, flip: main.flip },
+          note: main.note,
+        };
+  if (star === null) return fallback;
+  const planets: PlanetDesign[] = data.planets.map((body, index) => ({
+    id: body.id,
+    name: body.name,
+    mass: body.massEarth === null ? 6 : body.massEarth * MASS_UNIT_PER_EARTH,
+    composition: body.composition ?? "rock",
+    orbitRadius: body.orbit ?? defaultAgentOrbit(index),
+    elements: { ...ALL_OFF, eyes: true, ...(body.elements ?? {}) },
+    zoom: ZOOM_DEFAULT.planet,
+    surface: body.surface === null ? null : { src: body.surface, flip: body.flip },
+    note: body.note,
+  }));
+  return { editing: "star", star, planet: planets[0] ?? null, planets, planetIndex: 0, backdrop: fallback.backdrop };
+}
+
+function writeBody(id: string, body: BodyDesign, composition: Composition | null, orbit: number | null): PlanetWriteBody {
+  return {
+    id,
+    name: body.name,
+    massEarth: Math.round((body.mass / MASS_UNIT_PER_EARTH) * 1000) / 1000,
+    composition,
+    orbit,
+    elements: { ...body.elements },
+  };
+}
+
+/** 写回不合法的数（质量清空 = NaN）时不写：等它改回合法再写，盘上永远是一份读得回来的稿 */
+export function writableDesign(design: GalaxyDesign): boolean {
+  const all = [design.star, ...(design.planets ?? (design.planet === null ? [] : [design.planet]))];
+  return all.every((body) => body === null || (Number.isFinite(body.mass) && body.mass > 0));
+}
+
+/** 面板的设计稿 → 写回请求（没有 id 的新行星按次序起一个 planet-N） */
+export function planetsWriteOf(workspaceId: string, design: GalaxyDesign): PlanetWriteRequest {
+  const list = design.star === null ? [] : (design.planets ?? (design.planet === null ? [] : [design.planet]));
+  return {
+    workspaceId,
+    main: design.star === null ? null : writeBody("main", design.star, null, null),
+    planets: list.map((planet, index) => writeBody(planet.id ?? `planet-${index + 1}`, planet, planet.composition, planet.orbitRadius)),
+  };
 }
 
 /** 创建主星（已有就原样返回），并切到主星页 */
@@ -510,9 +651,17 @@ export function seededDesign(workspaceId: string, level: Exclude<DesignLevel, "n
  * 每个工作区一份设计稿，只活在这次运行的内存里（原型：尚未写入配置）。面板关了再开、切到别的工作区再切回来
  * 都还在；重启就回到 fixture。按工作区 id 分开存，切工作区不会把上一个的参数带过去。
  */
+/** 设计稿从哪来：面板里改过 / 工作区 planet/ 里读来的 / 默认（种子）稿 */
+export type DesignOrigin = "edited" | "file" | "default";
+
 export interface DesignStore {
   /** 同一个工作区没改过时每次返回同一个对象（useSyncExternalStore 要求快照稳定，否则每次渲染都算变了） */
   get: (workspaceId: string) => GalaxyDesign;
+  origin: (workspaceId: string) => DesignOrigin;
+  /** 从工作区 planet/ 读回来的稿（不算「改过」）；null = 盘上没有，回退种子稿 */
+  load: (workspaceId: string, design: GalaxyDesign | null) => void;
+  /** 默认稿（种子稿）：读盘失败 / 没有设计稿时用它，也是 designFromPlanets 的 fallback */
+  fallback: (workspaceId: string) => GalaxyDesign;
   /** 这个工作区在面板里改过（不是默认稿）：页面星系只在改过时才把设计的行星套到第一颗上 */
   has: (workspaceId: string) => boolean;
   set: (workspaceId: string, design: GalaxyDesign) => void;
@@ -526,6 +675,7 @@ export interface DesignStore {
 export function createDesignStore(level: DesignLevel, options: { seeded?: boolean | (() => boolean) } = {}): DesignStore {
   const isSeeded = (): boolean => (typeof options.seeded === "function" ? options.seeded() : options.seeded === true);
   const designs = new Map<string, GalaxyDesign>();
+  const loaded = new Map<string, GalaxyDesign>();
   const defaults = new Map<string, GalaxyDesign>();
   const listeners = new Set<() => void>();
   const notify = (): void => {
@@ -539,8 +689,15 @@ export function createDesignStore(level: DesignLevel, options: { seeded?: boolea
     return fresh;
   };
   return {
-    get: (id) => designs.get(id) ?? fallback(id),
-    has: (id) => designs.has(id),
+    get: (id) => designs.get(id) ?? loaded.get(id) ?? fallback(id),
+    has: (id) => designs.has(id) || loaded.has(id),
+    origin: (id) => (designs.has(id) ? "edited" : loaded.has(id) ? "file" : "default"),
+    fallback,
+    load: (id, design) => {
+      if (design === null) loaded.delete(id);
+      else loaded.set(id, normalizeDesign(design));
+      notify();
+    },
     refresh: () => {
       defaults.clear();
       notify();
@@ -553,7 +710,7 @@ export function createDesignStore(level: DesignLevel, options: { seeded?: boolea
     reset: (id) => {
       designs.delete(id);
       notify();
-      return fallback(id);
+      return loaded.get(id) ?? fallback(id);
     },
     subscribe: (listener) => {
       listeners.add(listener);

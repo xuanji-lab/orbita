@@ -161,6 +161,8 @@ export interface PlaceInput {
   budget: number;
   /** 上一帧各颗选的方位：还放得下就沿用 */
   previous?: ReadonlyMap<string, { dir: CalloutDir; lift: number }>;
+  /** 已经占了的字框（子智能体行星常显的名字）：引线的标签不压它们 */
+  reserved?: readonly Box[];
 }
 
 /**
@@ -183,6 +185,7 @@ export function placeCallouts(input: PlaceInput): CalloutPlacement[] {
       const { box } = geo;
       if (box.x0 < bounds.x0 || box.x1 > bounds.x1 || box.y0 < bounds.y0 || box.y1 > bounds.y1) continue;
       if (placed.some((other) => overlaps(other.box, box, CALLOUT_PAD))) continue;
+      if (input.reserved !== undefined && input.reserved.some((other) => overlaps(other, box, CALLOUT_PAD))) continue;
       if (input.bodies.some((body) => circleHitsBox(body.x, body.y, lockFrame(body.r).half, box))) continue;
       if (input.star !== null && circleHitsBox(input.star.x, input.star.y, input.star.r + 2, box)) continue;
       placed.push(geo);
@@ -195,4 +198,49 @@ export function placeCallouts(input: PlaceInput): CalloutPlacement[] {
 /** 候选次序：等你在前（rank 0 段），在跑在后；同档按轨道次序（index） */
 export function calloutRank(state: "waiting" | "running", orbitIndex: number): number {
   return (state === "waiting" ? 0 : 1000) + orbitIndex;
+}
+
+/** 名字牌：一颗子智能体行星常显的名字（写在星体正下方，放不下换右边、左边） */
+export interface NameTag {
+  id: string;
+  x: number;
+  y: number;
+  anchor: "start" | "middle" | "end";
+  box: Box;
+}
+
+/**
+ * 子智能体行星的名字常显（编排星系里行星就是子智能体，名字是它的身份，不是悬停才出的提示）。
+ * 依次试「正下方 → 右边 → 左边」，第一个不出画布、不压别的天体（含主星）、不压已放名字的位置就是它；
+ * 都放不下这一帧就不写（转开了再出现），绝不压在别的天体上。
+ */
+export function placeNameTags(input: {
+  planets: readonly { id: string; x: number; y: number; r: number; name: string }[];
+  bodies: readonly { id: string; x: number; y: number; r: number }[];
+  star: { x: number; y: number; r: number } | null;
+  width: number;
+  height: number;
+  glyphPx: number;
+}): NameTag[] {
+  const out: NameTag[] = [];
+  const h = input.glyphPx + 2;
+  for (const planet of input.planets) {
+    if (planet.name === "") continue;
+    const w = textWidth(planet.name, input.glyphPx);
+    const tries: NameTag[] = [
+      { id: planet.id, x: planet.x, y: planet.y + planet.r + 3 + h / 2, anchor: "middle", box: { x0: planet.x - w / 2, y0: planet.y + planet.r + 3, x1: planet.x + w / 2, y1: planet.y + planet.r + 3 + h } },
+      { id: planet.id, x: planet.x + planet.r + 5, y: planet.y, anchor: "start", box: { x0: planet.x + planet.r + 5, y0: planet.y - h / 2, x1: planet.x + planet.r + 5 + w, y1: planet.y + h / 2 } },
+      { id: planet.id, x: planet.x - planet.r - 5, y: planet.y, anchor: "end", box: { x0: planet.x - planet.r - 5 - w, y0: planet.y - h / 2, x1: planet.x - planet.r - 5, y1: planet.y + h / 2 } },
+    ];
+    for (const tag of tries) {
+      const { box } = tag;
+      if (box.x0 < CALLOUT_PAD || box.y0 < CALLOUT_PAD || box.x1 > input.width - CALLOUT_PAD || box.y1 > input.height - CALLOUT_PAD) continue;
+      if (input.bodies.some((body) => body.id !== planet.id && circleHitsBox(body.x, body.y, body.r + 2, box))) continue;
+      if (input.star !== null && circleHitsBox(input.star.x, input.star.y, input.star.r + 2, box)) continue;
+      if (out.some((other) => overlaps(other.box, box, 2))) continue;
+      out.push(tag);
+      break;
+    }
+  }
+  return out;
 }

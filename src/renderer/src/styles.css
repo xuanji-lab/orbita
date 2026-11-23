@@ -2705,6 +2705,24 @@ button.ws-fold {
 .galaxy-dust {
   fill: var(--color-text-tertiary);
 }
+/* 在做事的会话 = 一块碎石（不是天体）：比星屑深一档的墨，锁定框与引线标在它身上 */
+.galaxy-rock {
+  fill: var(--color-text-secondary);
+  stroke: var(--color-bg-panel);
+  stroke-width: 1px;
+  paint-order: stroke;
+}
+/* 子智能体行星的名字：常显（它是这颗行星的身份），字号 sm、次级墨、页面底色描边压住轨道线 */
+.galaxy-name-text {
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-medium);
+  fill: var(--color-text-secondary);
+  stroke: var(--color-bg-panel);
+  stroke-width: 3px;
+  paint-order: stroke;
+  pointer-events: none;
+}
 .galaxy-star-hi {
   stop-color: color-mix(in srgb, var(--galaxy-star) 45%, var(--galaxy-light));
 }

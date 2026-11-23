@@ -27,6 +27,7 @@ import {
   PREVIEW_FRAME,
   previewFrame,
   radiusOf,
+  selectPlanet,
   validateDesign,
   ZOOM,
   type BodyArt,
@@ -37,7 +38,7 @@ import {
   type GalaxyDesign,
   type PlanetDesign,
 } from "./design.ts";
-import { galaxyDesigns } from "./useGalaxyDesign.ts";
+import { galaxyDesigns, persistDesign } from "./useGalaxyDesign.ts";
 import { BodyFigure } from "./StarFigure.tsx";
 import { flatStage, ORBIT_BOX, orbitStage, previewPlan, starStage, type GridLine, type WellBox } from "./well.ts";
 
@@ -50,7 +51,8 @@ import { flatStage, ORBIT_BOX, orbitStage, previewPlan, starStage, type GridLine
  * 行星页是行星自己的大头像 + 一块小场景（同一张网格布上的主星与这颗行星的轨道）。
  * 行星依赖主星：没有主星时行星页是「先创建主星」的空态，加行星走 design.ts 的 addPlanet（数据层拒绝）。
  *
- * 只做面板与预览：不写配置、不接 agent 数据。设计稿按工作区存在这次运行的内存里（design.ts 的 DesignStore）。
+ * 设计稿的真源是工作区文件夹里的 planet/（与插件 planet-forge 同一份）：面板里的修改去抖后写回（persistDesign），
+ * 插件稿只改名字与质量，元素、轨道、子智能体名单进伴随文件 planet/galaxy.json。
  */
 
 /** 设计稿仓库是全应用一份（useGalaxyDesign.ts）：面板写，侧栏头像与工作区页的星系读 */
@@ -80,7 +82,9 @@ function Designer(props: { workspace: Workspace }) {
   const setDesign = (next: GalaxyDesign): void => {
     store.set(id, next);
     setDesignState(store.get(id));
+    persistDesign(id);
   };
+  const planets = design.planets ?? [];
   const kind = design.editing;
   const body: BodyDesign | PlanetDesign | null = kind === "star" ? design.star : design.planet;
   const patchBody = (patch: Partial<PlanetDesign>): void => {
@@ -165,6 +169,23 @@ function Designer(props: { workspace: Workspace }) {
         <p className="gd-who" data-kind={kind}>
           {kind === "star" ? tg.starWhoLine : tg.planetWhoLine}
         </p>
+        {/* 主星的一句故事 / 行星的职责：插件稿与伴随文件里来，只读 */}
+        {body !== null && typeof body.note === "string" && body.note !== "" && (
+          <p className="gd-who gd-note" data-kind={kind}>
+            {body.note}
+          </p>
+        )}
+        {/* 有几颗子智能体就有几颗行星：行星页先挑这一页在改哪一颗 */}
+        {kind === "planet" && planets.length > 1 && (
+          <Row name={tg.whichPlanet}>
+            <Segmented<string>
+              label={tg.whichPlanet}
+              value={String(design.planetIndex ?? 0)}
+              options={planets.map((planet, index) => ({ value: String(index), label: planet.name || tg.unnamedPlanet }))}
+              onChange={(value) => setDesign(selectPlanet(design, Number(value)))}
+            />
+          </Row>
+        )}
         <Row name={tg.kind} desc={tg.kindDesc}>
           <Segmented<BodyKind>
             label={tg.kind}

@@ -219,3 +219,15 @@
     display: none;
   }
 }
+
+/* 页头：主智能体名字之后的工作区名（一档淡墨、小一档），说明「这是哪座星系的主智能体」 */
+.cap-ws {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding-right: var(--space-1);
+}

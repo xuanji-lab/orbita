@@ -6,6 +6,8 @@ import { StatusPie } from "./StatusPie";
 import { sessionAgeLabel } from "./relative-time.ts";
 import { DustFigure, StarFigure } from "../features/galaxy-designer/StarFigure.tsx";
 import { useAvatarBySize, useGalaxyDesign } from "../features/galaxy-designer/useGalaxyDesign.ts";
+import { useProtoVariants } from "../features/chat/proto-variants-store.ts";
+import { rowLabelOf } from "../features/chat/proto-variants.ts";
 import { agentLineOf, type AgentLine } from "../features/chat/agent-status.ts";
 import type { ScopeSummary } from "../features/chat/galaxy-data.ts";
 import { useT } from "../locale.ts";
@@ -40,6 +42,9 @@ export function AgentRow(props: {
   const name = workspace === null ? t.agents.home : workspace.name;
   const bySize = useAvatarBySize();
   const { design } = useGalaxyDesign(workspace?.id ?? "");
+  // 主标签仍是工作区名；候选 agentName=on 时写「智能体名 · 工作区名」（window.orbitaProto，默认关）
+  const variants = useProtoVariants();
+  const label = workspace === null ? name : rowLabelOf(variants.agentName, name, design.star?.name ?? "");
   const [armed, setArmed] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const line = agentLineOf(summary);
@@ -81,7 +86,7 @@ export function AgentRow(props: {
                   if (workspace !== null) setEditing(workspace.name);
                 }}
               >
-                {name}
+                {label}
               </strong>
             ) : (
               <input

@@ -75,7 +75,7 @@ import { ProcessViewContext } from "./process-view-context";
 import { sessionRunState, type SessionRunState } from "../notify/completion-notice.ts";
 import { scopeGalaxy, stateIndexOf } from "./galaxy-data.ts";
 import { useGalaxyDesign } from "../galaxy-designer/useGalaxyDesign.ts";
-import { starExtentRatio, starOf } from "../galaxy-designer/design.ts";
+import { agentInputsOf, agentMapOf, agentPlanetsOf, starExtentRatio, starOf } from "../galaxy-designer/design.ts";
 import { starRadius } from "./galaxy.ts";
 import { REVEAL_ENTRY_EVENT } from "../context/task-progress.ts";
 import { planAwaitingIn, planHistory, planNoticeOf, type PlanTimeline, type PlanVersion } from "../context/plan-timeline.ts";
@@ -1503,6 +1503,9 @@ function ChatViewBody(props: {
   }, [orchestrateHome, session.mode, session.pinMode]);
   // 这座星系的主星设计稿（没选工作区时用「主目录」那一份）：面板里一改，页面星系同一帧跟着变
   const galaxyDesign = useGalaxyDesign(session.workspaceId ?? "");
+  // 子智能体行星（编排星系：行星 = 子智能体、会话 = 碎石）：工作区 planet/ 里读来的或面板里改过的名单
+  const galaxyAgents = useMemo(() => agentPlanetsOf(galaxyDesign.design, galaxyDesign.origin), [galaxyDesign.design, galaxyDesign.origin]);
+  const galaxyAgentMap = useMemo(() => agentMapOf(galaxyAgents), [galaxyAgents]);
   // 不缓存：运行态每个事件都可能变；stateIndexOf 先建子会话表，整趟 O(n)（2000 条也只是一遍）
   const galaxyStates = scopedHome ? stateIndexOf(session) : null;
   const galaxyData =
@@ -1515,10 +1518,9 @@ function ChatViewBody(props: {
           now: Date.now(),
           starMass: starOf(galaxyDesign.design).mass,
           starExtent: starRadius(starOf(galaxyDesign.design).mass) * starExtentRatio(galaxyDesign.design),
-          designedPlanet:
-            galaxyDesign.edited && galaxyDesign.design.planet !== null
-              ? { mass: galaxyDesign.design.planet.mass, composition: galaxyDesign.design.planet.composition }
-              : null,
+          designedPlanet: null,
+          // 星际空间（没有工作区）照旧规矩：会话当碎石画，没有子智能体
+          ...(session.workspaceId === null ? {} : { agents: agentInputsOf(galaxyAgents) }),
         })
       : null;
 
@@ -1712,7 +1714,14 @@ function ChatViewBody(props: {
                   emptyHint={t.agents.homeEmpty}
                 />
               ) : (
-                <HomeGalaxy spec={galaxyData.spec} label={t.chat.galaxyFigure(scopeName)} starDesign={galaxyDesign.design} fill emptyHint={t.agents.emptyHint} />
+                <HomeGalaxy
+                  spec={galaxyData.spec}
+                  label={t.chat.galaxyFigure(scopeName)}
+                  starDesign={galaxyDesign.design}
+                  agents={galaxyAgentMap}
+                  fill
+                  emptyHint={t.agents.emptyHint}
+                />
               )}
             </div>
           </div>

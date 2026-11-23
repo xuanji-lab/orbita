@@ -8,6 +8,7 @@ import {
   type Composition,
   type GalaxySpec,
   type PlanetSpec,
+  type RockSpec,
 } from "./galaxy.ts";
 
 /**
@@ -131,6 +132,19 @@ export interface ScopeGalaxyInput {
    * 轨道次序仍按要紧程度排，不让面板里的轨道半径打乱「越要紧越靠内」。
    */
   designedPlanet: { mass: number; composition: Composition } | null;
+  /**
+   * 子智能体（编排星系：行星 = 子智能体，会话 = 碎石）。给了就换一套规矩：行星只画这些子智能体（质量、成分、轨道照设计稿），
+   * 会话一律进碎石带，在跑 / 等你的会话单独拎成带锁定框的碎石块（spec.rocks）。缺席 = 旧规矩（会话当行星，星际空间仍用它）。
+   */
+  agents?: readonly AgentPlanetInput[];
+}
+
+/** 一颗子智能体行星（来自设计稿） */
+export interface AgentPlanetInput {
+  id: string;
+  mass: number;
+  composition: Composition;
+  orbitRadius: number;
 }
 
 export interface ScopeGalaxy {
@@ -152,6 +166,7 @@ export function scopeMembers(
 
 export function scopeGalaxy(input: ScopeGalaxyInput): ScopeGalaxy {
   const { roots, children } = scopeMembers(input.sessions, input.workspaceId);
+  if (input.agents !== undefined) return agentGalaxy(input, input.agents, roots, children);
   const candidates: { meta: SessionMeta; state: SessionRunState }[] = [];
   const planetIds = new Set<string>();
   let retired = 0;
@@ -197,6 +212,49 @@ export function scopeGalaxy(input: ScopeGalaxyInput): ScopeGalaxy {
       sessions: roots.filter((meta) => !planetIds.has(meta.id)).length + retired,
     },
     planetIds: candidates.map(({ meta }) => meta.id),
+  };
+}
+
+/**
+ * 编排星系：行星 = 子智能体（设计稿），会话 = 碎石。在做事的会话（根会话自己在跑 / 等你、子会话在跑 / 等你）
+ * 拎成碎石块，按「等你 > 在跑」、同档最近活动在前排序；其余会话都是星屑带里的一粒（只计数）。
+ */
+function agentGalaxy(input: ScopeGalaxyInput, agents: readonly AgentPlanetInput[], roots: readonly SessionMeta[], children: readonly SessionMeta[]): ScopeGalaxy {
+  const ownStateOf = input.ownStateOf ?? input.stateOf;
+  const active: { meta: SessionMeta; state: "waiting" | "running" }[] = [];
+  for (const meta of roots) {
+    const state = ownStateOf(meta);
+    if (state === "running" || state === "waiting") active.push({ meta, state });
+  }
+  for (const meta of children) {
+    const state = input.stateOf(meta);
+    if (state === "running" || state === "waiting") active.push({ meta, state });
+  }
+  active.sort((a, b) => rankOf(a.state) - rankOf(b.state) || b.meta.updatedAt - a.meta.updatedAt || a.meta.id.localeCompare(b.meta.id));
+  const rocks: RockSpec[] = active.map(({ meta, state }) => ({ id: meta.id, state, label: meta.title.trim() }));
+  const planets: PlanetSpec[] = agents.map((agent) => {
+    const hash = workspaceHash(agent.id);
+    return {
+      id: agent.id,
+      mass: agent.mass,
+      composition: agent.composition,
+      orbitRadius: agent.orbitRadius,
+      inclinationDeg: ((hash >>> 3) % 11) - 5,
+      nodeDeg: (hash >>> 7) % 360,
+      phaseDeg: (hash >>> 13) % 360,
+      state: null,
+    };
+  });
+  const activeChildren = active.filter(({ meta }) => meta.parentId !== undefined).length;
+  return {
+    spec: {
+      starMass: input.starMass,
+      ...(input.starExtent === undefined ? {} : { starExtent: input.starExtent }),
+      planets,
+      sessions: roots.length + activeChildren,
+      rocks,
+    },
+    planetIds: [],
   };
 }
 

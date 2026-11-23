@@ -13,7 +13,7 @@ import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { Segmented } from "../settings/SettingControls";
 import { StarFigure } from "../galaxy-designer/StarFigure.tsx";
 import { useAvatarBySize, useGalaxyDesign } from "../galaxy-designer/useGalaxyDesign.ts";
-import { starExtentRatio, starOf } from "../galaxy-designer/design.ts";
+import { agentInputsOf, agentMapOf, agentPlanetsOf, starExtentRatio, starOf } from "../galaxy-designer/design.ts";
 import { LocaleContext, useT } from "../../locale.ts";
 import type { SessionRunState } from "../notify/completion-notice.ts";
 import { headerStatusOf } from "./agent-status.ts";
@@ -275,7 +275,9 @@ function TreeRow(props: { node: TreeNode; now: number; onOpen: (id: string) => v
 function GalaxyView(props: { session: ChatSession; workspaceId: string | null; name: string; width: number; onWiden: () => void }) {
   const t = useT();
   const to = t.orchestra;
-  const { design, edited } = useGalaxyDesign(props.workspaceId ?? "");
+  const { design, origin } = useGalaxyDesign(props.workspaceId ?? "");
+  const agents = useMemo(() => agentPlanetsOf(design, origin), [design, origin]);
+  const agentMap = useMemo(() => agentMapOf(agents), [agents]);
   if (props.width < GALAXY_MIN_WIDTH) {
     return (
       <div className="orch-pad">
@@ -295,11 +297,12 @@ function GalaxyView(props: { session: ChatSession; workspaceId: string | null; n
     now: Date.now(),
     starMass: star.mass,
     starExtent: starRadius(star.mass) * starExtentRatio(design),
-    designedPlanet: edited && design.planet !== null ? { mass: design.planet.mass, composition: design.planet.composition } : null,
+    designedPlanet: null,
+    ...(props.workspaceId === null ? {} : { agents: agentInputsOf(agents) }),
   });
   return (
     <div className="orch-galaxy" data-view="galaxy">
-      <HomeGalaxy spec={data.spec} label={to.galaxyFigure(props.name)} starDesign={design} fill emptyHint={t.agents.emptyHint} />
+      <HomeGalaxy spec={data.spec} label={to.galaxyFigure(props.name)} starDesign={design} agents={agentMap} fill emptyHint={t.agents.emptyHint} />
     </div>
   );
 }

@@ -8,6 +8,7 @@ import {
   placeCallouts,
   type CalloutDir,
   type CalloutPlacement,
+  type Box,
   type CalloutTarget,
 } from "./callouts.ts";
 
@@ -18,8 +19,13 @@ import {
  * - 每帧按行星此刻的位置重排（placeCallouts，带滞回），线跟着天体转。
  * 其余没在做工的行星：悬停出名字（旧的 .galaxy-tag 规矩，不常显）。
  */
+/** 锁定框与引线层认的最小形状：行星（PlanetItem）与在做事的碎石块（RockItem）都满足 */
+export type CalloutBody = Pick<PlanetItem, "planetId" | "x" | "y" | "r" | "state" | "label">;
+
 export function GalaxyCallouts(props: {
-  planets: readonly PlanetItem[];
+  planets: readonly CalloutBody[];
+  /** 已占的字框（子智能体行星常显的名字）：引线标签不压它们 */
+  reserved?: readonly Box[];
   /** 行星 id → 轨道次序（越小越要紧） */
   rankOf: ReadonlyMap<string, number>;
   star: { x: number; y: number; r: number } | null;
@@ -62,6 +68,7 @@ export function GalaxyCallouts(props: {
     glyphPx,
     budget: calloutBudget(props.width),
     previous: previousRef.current,
+    ...(props.reserved === undefined ? {} : { reserved: props.reserved }),
   });
   // 记下这一帧的方位（下一帧先试它）：渲染期写 ref 只影响下一次排布，不触发重渲染
   previousRef.current = new Map(placed.map((item) => [item.id, { dir: item.dir, lift: item.lift }]));

@@ -33,6 +33,7 @@ export function WorkspaceCapsule(props: {
   const t = useT();
   const bySize = useAvatarBySize();
   const { design } = useGalaxyDesign(props.workspaceId ?? "");
+  const agentName = props.workspaceId === null ? "" : (design.star?.name ?? "").trim() === props.name ? "" : (design.star?.name ?? "").trim();
   const { status } = props;
   const word = t.agents.status[status.status];
   const statusText = status.count === null ? word : `${word} · ${status.count}`;
@@ -77,9 +78,11 @@ export function WorkspaceCapsule(props: {
             <StarFigure bySize={bySize} design={design} size={22} label={t.agents.avatar(props.name)} />
           )}
         </span>
-        <strong className="cap-title" title={props.name}>
-          {props.name}
+        {/* 主智能体有名字就写名字（烛霓），工作区名跟在后面一档淡墨；还没起名的只写工作区名 */}
+        <strong className="cap-title" title={props.name} data-agent={agentName === "" ? undefined : agentName}>
+          {agentName === "" ? props.name : agentName}
         </strong>
+        {agentName !== "" && <span className="cap-ws">{props.name}</span>}
         {jump !== null ? (
           <button type="button" className="quiet-control cap-status" title={t.agents.statusWaitingTip} onClick={() => props.onOpenSession(jump)}>
             {statusBody}

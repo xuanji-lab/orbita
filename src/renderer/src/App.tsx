@@ -11,6 +11,7 @@ import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { effectiveIntentSettings } from "@shared/settings";
 import { IntentPanel } from "./features/intent/IntentPanel.tsx";
 import { GalaxyDesigner } from "./features/galaxy-designer/GalaxyDesigner.tsx";
+import { usePlanetFiles } from "./features/galaxy-designer/useGalaxyDesign.ts";
 import { designerClick, designerFollow, keepDesignerAcrossSessions } from "./features/galaxy-designer/design.ts";
 import { ContextPanel, type TaskPanelTab } from "./features/context/ContextPanel.tsx";
 import { EMPTY_ENTRY } from "./features/chat/session-states.ts";
@@ -403,6 +404,8 @@ export function App() {
    */
   const newTaskNonceRef = useRef(0);
   const [newTaskSignal, setNewTaskSignal] = useState(0);
+  // 星系设计稿的真源是各工作区的 planet/（与插件 planet-forge 同一份）：工作区列表一变就读一遍
+  usePlanetFiles(session.workspaces);
   useEffect(() => {
     if (!orchestrate) {
       landedRef.current = false;
