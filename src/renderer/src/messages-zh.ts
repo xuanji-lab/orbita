@@ -623,6 +623,7 @@ export const zh: Messages = {
     pastedExpand: "展开粘贴全文",
     pastedCollapse: "收起粘贴",
     pasteToken: (seq, lines) => `[粘贴 ${seq} · ${lines} 行]`,
+    pasteChipName: (seq, lines) => `粘贴${seq}·${lines}行`,
     pasteRunLabel: (lines) => `${lines} 行 · 收起`,
     /** 意图召回的会话级开关（实验功能 intent-system）：输入框旁的小开关 */
     intentToggle: "意图召回",
