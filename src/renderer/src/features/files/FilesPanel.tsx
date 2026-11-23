@@ -147,8 +147,8 @@ export function FilesPanel(props: {
   // 可以当「宿主」的全部根：画进树的根 + 不进树的附件副本根 + 本会话引用过的 PDF（cited，每个文件一根）。
   // 预览白名单、引用跳转、左栏双击打开都认这一份
   const hostRoots = useMemo(
-    () => [...tree.roots, ...(tree.attachmentsRoot === null ? [] : [tree.attachmentsRoot]), ...tree.citedRoots],
-    [tree.roots, tree.attachmentsRoot, tree.citedRoots],
+    () => [...tree.roots, ...(tree.attachmentsRoot === null ? [] : [tree.attachmentsRoot]), ...tree.citedRoots, ...tree.subsessionRoots],
+    [tree.roots, tree.attachmentsRoot, tree.citedRoots, tree.subsessionRoots],
   );
 
   // 专注 / 浏览态结束（或换到另一个工作区）、以及专注到点（run → done）：之前那个
