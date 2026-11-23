@@ -286,7 +286,7 @@ export function Composer(props: {
     if (ref !== undefined) return { kind: "image", icon: "image", name: String(ref.n) };
     const task = taskAt.get(offset);
     if (task !== undefined) {
-      return { kind: "task", icon: FEATURE_ICON.task, name: task.task.title === "" ? t.common.newTask : task.task.title };
+      return { kind: "task", icon: FEATURE_ICON.taskRef, name: task.task.title === "" ? t.common.newTask : task.task.title };
     }
     return null;
   };

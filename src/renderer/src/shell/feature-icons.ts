@@ -40,6 +40,8 @@ export const FEATURE_ICON = {
   browser: "globe",
   /** 子会话：面板头与空态、会话行的子会话角标、行状态、迁移视图 */
   subsessions: "git-fork",
+  /** 会话引用：从左栏拖进输入框的会话胶囊、气泡里的同一颗（2026-11-23 用户：与「这条任务」、状态卡撞了） */
+  taskRef: "message-square-text",
   /** 意图：面板头与空态、输入框旁的意图开关、召回卡 */
   intent: "waypoints",
   /** 已归档（archive 同时是「归档状态」的通用图标） */

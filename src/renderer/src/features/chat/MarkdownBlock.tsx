@@ -455,7 +455,7 @@ function TaskRefChip(props: { token: string; classes: string[] }) {
   if (title === undefined) return <>{props.token}</>;
   return (
     <span className={props.classes.join(" ")} title={title}>
-      <Icon name={FEATURE_ICON.task} size={12} strokeWidth={1.8} className="bubble-chip-icon" />
+      <Icon name={FEATURE_ICON.taskRef} size={12} strokeWidth={1.8} className="bubble-chip-icon" />
       <span className="bubble-chip-target">{title === "" ? t.common.newTask : title}</span>
     </span>
   );
