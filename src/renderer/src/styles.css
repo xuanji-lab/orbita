@@ -6167,6 +6167,19 @@ html {
 .chat-md .chat-img-pending[data-size="small"] {
   height: 80px;
 }
+/* 回答里读不到的本地图：一颗「图片打不开 · 文件名」小签，悬停看路径与原因（与 .chat-img-ref 同一副骨架，字用三级灰） */
+.chat-md .chat-img-missing {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  padding: 1px var(--space-1-5);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
 /* 用户气泡里的图片语法：一颗小签（见 MarkdownBlock 的 BubbleImageRef），与附件芯片同一副骨架 */
 .chat-md .chat-img-ref {
   display: inline-flex;

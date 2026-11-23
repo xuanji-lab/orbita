@@ -71,6 +71,7 @@ import minimize2 from "../../../../design-system/assets/icons/lucide/minimize-2.
 import imagePlus from "../../../../design-system/assets/icons/lucide/image-plus.svg?raw";
 import scrollText from "../../../../design-system/assets/icons/lucide/scroll-text.svg?raw";
 import image from "../../../../design-system/assets/icons/lucide/image.svg?raw";
+import imageOff from "../../../../design-system/assets/icons/lucide/image-off.svg?raw";
 import info from "../../../../design-system/assets/icons/lucide/info.svg?raw";
 import foldVertical from "../../../../design-system/assets/icons/lucide/fold-vertical.svg?raw";
 import flaskConical from "../../../../design-system/assets/icons/lucide/flask-conical.svg?raw";
@@ -239,6 +240,7 @@ const ICONS = {
   "grid-3x3": grid3x3,
   "grip-vertical": gripVertical,
   image,
+  "image-off": imageOff,
   info,
   key,
   lightbulb,

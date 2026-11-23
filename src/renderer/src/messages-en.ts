@@ -801,6 +801,8 @@ export const en = {
     next: "Next image",
     openInFiles: "Preview in the files panel",
     imageRef: (name: string) => `Image · ${name}`,
+    missing: (name: string) => `Image unavailable · ${name}`,
+    missingTip: (path: string) => `${path}\nOutside the folders this task can see (workspace, attached folders, task workbench), or the file is gone`,
     sizeLarge: "Enlarge",
     sizeSmall: "Shrink",
   },

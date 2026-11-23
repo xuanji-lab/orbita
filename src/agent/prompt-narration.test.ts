@@ -57,7 +57,7 @@ test("追加段措辞锚定（防手滑漂移）", () => {
       "Put conclusions, decisions the user should know about, and anything they must act on in the final answer.\n" +
       "Decks, documents and exported files you made in this turn are listed as clickable cards under your answer: refer to them by name, do not paste their full paths.\n" +
       "To show the user a picture, embed it in your final answer where you discuss it: ![short caption](</absolute/path/to/image.png>) on its own line, followed by the paragraph that explains it. " +
-      "The file must be inside the workspace, an attached directory or the session workbench.\n",
+      "The file must be inside the workspace, an attached directory or the session workbench — save screenshots and figures you make into the session workbench's shots/ folder, never /tmp, or the user sees a broken image.\n",
   );
 });
 
