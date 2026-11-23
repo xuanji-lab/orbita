@@ -28,6 +28,8 @@
 .call-state-label {
   font-size: var(--font-size-base);
   font-weight: 500;
+  /* 状态词两到三个字（在听 / 已静音）：占住最宽那档，切换时后面的电平与时长不跳 */
+  min-width: 3em;
 }
 
 /* 麦克风电平：四根细竖条，亮几根看声音多大；只有「在听」时亮，别的阶段整排淡掉 */
@@ -105,6 +107,8 @@
 .call-problem-text {
   color: var(--color-danger);
   white-space: normal;
+  /* 提示行只有这一句话：与行尾「去语音设置」同一档，不比按钮字小 */
+  font-size: var(--font-size-base);
 }
 
 .call-problem-detail {

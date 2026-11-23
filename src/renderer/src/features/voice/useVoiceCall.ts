@@ -305,7 +305,8 @@ export function useVoiceCall(input: {
           clearSilence(live);
           live.silenceTimer = setTimeout(() => {
             live.silenceTimer = null;
-            dispatchRef.current(live, { type: "silence" });
+            // 静音中不收尾：说到一半按了静音，不该把半句话发出去；取消静音后有声音再重新计
+            if (!mutedRef.current) dispatchRef.current(live, { type: "silence" });
           }, CALL_TIMING.endOfUtteranceMs);
           return;
         case "finishDictation": {
@@ -369,15 +370,13 @@ export function useVoiceCall(input: {
       if (liveRef.current !== live) return;
       const samples = event.inputBuffer.getChannelData(0);
       const frameMs = (samples.length / context.sampleRate) * 1000;
-      if (mutedRef.current) {
-        levelRef.current = 0;
-        live.barge.reset();
-        return;
-      }
-      const loudness = rms(samples);
+      // 静音：照常往识别连接里送，但送的是等长的静音——一点音频都不送，服务端会当连接闲置断开
+      const muted = mutedRef.current;
+      const loudness = muted ? 0 : rms(samples);
       levelRef.current = loudness;
-      const pcm = toPcm16(samples, context.sampleRate);
-      if (live.recordedSamples < CALL_TIMING.maxRecordSeconds * DICTATION_SAMPLE_RATE) {
+      const spoken = toPcm16(samples, context.sampleRate);
+      const pcm = muted ? new Int16Array(spoken.length) : spoken;
+      if (!muted && live.recordedSamples < CALL_TIMING.maxRecordSeconds * DICTATION_SAMPLE_RATE) {
         live.recorded.push(pcm);
         live.recordedSamples += pcm.length;
       }
@@ -493,6 +492,9 @@ export function useVoiceCall(input: {
   const toggleMute = useCallback(() => {
     mutedRef.current = !mutedRef.current;
     setMuted(mutedRef.current);
+    // 取消静音：之前听到半句的，重新计停顿（不然那半句永远等不到收尾）
+    const live = liveRef.current;
+    if (live !== null && !mutedRef.current) dispatchRef.current(live, { type: "voice" });
   }, []);
 
   // 回答跟着对话长：找到这句的锚点，把新长出的完整句子送去合成；这一轮跑完再把尾巴送掉

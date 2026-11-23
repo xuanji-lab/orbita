@@ -872,6 +872,10 @@ a.exp-pr:hover {
     font-size: var(--font-size-base);
     font-weight: var(--weight-semibold);
     text-align: right;
+    /* 节名折行只在空格处折（「ElevenLabs 语音合成」折成两行整词，不剩一个「成」字在第二行）；
+       一整段放不下时才任意处折，不溢出 */
+    word-break: keep-all;
+    overflow-wrap: anywhere;
   }
   .set-page > .set-group > :not(.section-label) {
     grid-column: 2;
