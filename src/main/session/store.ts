@@ -958,6 +958,34 @@ export class SessionStore {
     return this.descendantsOf(id, await this.list(), new Set([id]));
   }
 
+  /** 同 descendants，但会话清单短时间内共用一份（见 listForDescendants）。只给文件面板的根清单用 */
+  async descendantsShared(id: string): Promise<string[]> {
+    return this.descendantsOf(id, await this.listForDescendants(), new Set([id]));
+  }
+
+  /**
+   * 实验（切换会话卡顿）：文件面板根清单用的会话清单，短时间内共用一份。
+   *
+   * `list()` 要把每条会话的 meta 文件读一遍（本机 2071 条，约 0.1 秒）。而文件面板的每一次 IPC
+   * （fs:roots / fs:read / fs:web-thumb / fs:read-pdf…）都要先算一遍根清单，根清单要 descendants——
+   * 状态卡有 10 张缩略图，切一次会话就是 10 次整表读盘、两万次小文件读，彼此挤在 libuv 的 4 个线程上，
+   * 每张缩略图拖到 0.36 秒才回来。这里让在途的与 LIST_SHARE_MS 内刚读完的共用一份。
+   * 只给根清单（白名单）用；删除的级联、删除确认的计数、`session:list` 照旧现读——那几处要的是此刻的真值。
+   */
+  private listForDescendants(): Promise<SessionMeta[]> {
+    const now = Date.now();
+    if (this.sharedList !== null && now - this.sharedList.at < LIST_SHARE_MS) return this.sharedList.pending;
+    const pending = this.list();
+    this.sharedList = { at: now, pending };
+    // 读失败不留着：下一次照常重读
+    pending.catch(() => {
+      if (this.sharedList?.pending === pending) this.sharedList = null;
+    });
+    return pending;
+  }
+
+  private sharedList: { at: number; pending: Promise<SessionMeta[]> } | null = null;
+
   private descendantsOf(id: string, metas: readonly SessionMeta[], visited: Set<string>): string[] {
     const result: string[] = [];
     for (const child of childSessions(metas, id)) {
@@ -1252,6 +1280,9 @@ export class SessionStore {
     return effective;
   }
 }
+
+/** listForDescendants：一份会话清单共用多久 */
+const LIST_SHARE_MS = 1500;
 
 /** readLogShared：多大的文件才值得留（小文件重读只要十几毫秒） */
 const PARSED_MIN_BYTES = 8 * 1024 * 1024;

@@ -104,7 +104,7 @@ export async function resolveFileRoots(
   // 子会话交回的产物（报告、截图、文稿）在那里，结尾那摞的「预览」、回答里的图都要读得到。
   // 只认 parentId 链上的后代（store.descendants），别的会话的工作台借不到
   if (req.sessionId !== null) {
-    for (const childId of await sessions.descendants(req.sessionId)) {
+    for (const childId of await sessions.descendantsShared(req.sessionId)) {
       const path = sessions.workbenchPath(childId);
       roots.push({ kind: "subsession", label: fileRootLabel("subsession", path, "", ""), path, exists: await pathExists(path) });
     }
