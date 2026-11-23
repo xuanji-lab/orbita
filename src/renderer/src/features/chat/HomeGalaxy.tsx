@@ -20,6 +20,8 @@ import {
   motionAllowed,
   orbitArcs,
   readablePlanetPx,
+  DEBRIS_PX,
+  DUST_PX,
   type DrawItem,
   type GalaxySpec,
   type MotionInputs,
@@ -184,7 +186,10 @@ export function HomeGalaxy(props: {
   }, [layout, size, props.fill]);
   // 工作区页 / 右栏：行星至少画到表情可读的大小（两只眼看得见），但不压到隔壁轨道（readablePlanetPx）
   const minPlanetPx = scene === null || props.fill !== true ? 0 : readablePlanetPx(scene.camera, scene.viewport, ORBIT_STEP);
-  const drawn = scene === null ? [] : drawFrame(layout, scene.camera, scene.viewport, scene.arcs, seconds, minPlanetPx);
+  const drawn =
+    scene === null
+      ? []
+      : drawFrame(layout, scene.camera, scene.viewport, scene.arcs, seconds, minPlanetPx, props.starless === true ? DEBRIS_PX : DUST_PX);
   // 星际空间：不画主星、轨道与行星，只留碎石
   const items = props.starless === true ? drawn.filter((item) => item.kind === "dust") : drawn;
   // 工作区页（fill）：在做工的行星画锁定框，最要紧的几颗升起引线写任务名（GalaxyCallouts，与右栏星系图共用）

@@ -179,8 +179,10 @@
 
 /* ── 星系图 ── */
 .orch-galaxy {
-  height: min(560px, 78vh);
-  min-height: 320px;
+  /* 右栏是竖长的：画布按 5:4 取，星系不在一大块空白顶上缩成一条 */
+  aspect-ratio: 5 / 4;
+  max-height: 560px;
+  min-height: 280px;
   padding: var(--space-1) 0;
 }
 
@@ -369,6 +371,9 @@ button.orch-node-job:hover {
 
 .orch-edge-label[data-kind="peer"] {
   align-items: center;
+  justify-content: center;
+  background: var(--color-bg-panel);
+  border-radius: var(--radius-sm);
   font-size: var(--font-size-xs);
   color: var(--color-text-secondary);
 }

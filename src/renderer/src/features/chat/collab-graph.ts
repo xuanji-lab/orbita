@@ -169,7 +169,7 @@ export const COLLAB_GEOMETRY = {
   indent: 22,
   trunkStep: 10,
   /** 演示里活与活之间的边走卡右侧这一条道 */
-  peerLane: 40,
+  peerLane: 84,
   /** 主干线与卡之间的空 */
   trunkGap: 12,
 } as const;
@@ -248,7 +248,8 @@ export function layoutCollab(graph: CollabGraph, width: number): CollabLayout {
       const bulge = Math.max(x0, x1) + (down ? lane * 0.4 : lane * 0.85);
       edges.set(edge.id, {
         d: `M${f(x0)} ${f(y0)}C${f(bulge)} ${f(y0)} ${f(bulge)} ${f(y1)} ${f(x1)} ${f(y1)}`,
-        label: { x: Math.max(x0, x1) + 2, y: (y0 + y1) / 2 - g.labelH / 2, w: bulge - Math.max(x0, x1) + 4, h: g.labelH },
+        // 标签压在道里（带纸面底，线从它后面穿过）：道宽就是标签宽
+        label: { x: Math.max(x0, x1) + 4, y: (y0 + y1) / 2 - g.labelH / 2, w: lane - 8, h: g.labelH },
         arrow: { x: x1, y: y1, dir: "left" },
       });
     }

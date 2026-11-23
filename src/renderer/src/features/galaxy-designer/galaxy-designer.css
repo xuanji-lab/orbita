@@ -433,7 +433,7 @@
 /* 「这一页画的是谁」：组名下一行说明，sm、三级墨（与设置行的说明同一种） */
 .gd-who {
   margin: 0;
-  padding: 0 var(--space-3) var(--space-2);
+  padding: 0 0 var(--space-2);
   font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }

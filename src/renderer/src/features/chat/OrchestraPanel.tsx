@@ -465,7 +465,8 @@ function edgeText(t: ReturnType<typeof useT>, edge: CollabEdge, toMain: boolean)
     const result = edge.text ?? g.noReport;
     return { lead: g.returned, body: files === null ? result : `${result} · ${files}` };
   }
-  return { lead: "", body: files === null ? (edge.text ?? "") : `${edge.text ?? ""} · ${files}` };
+  // 活与活之间（演示）：道窄，线上只写交接物，文件数在悬停里
+  return { lead: "", body: edge.text ?? (files ?? "") };
 }
 
 /**
@@ -530,7 +531,7 @@ function CollabCanvas(props: {
             data-pending={edge.pending || undefined}
             data-hot={isHot(edge) || undefined}
             style={boxStyle(geo.label)}
-            title={`${text.lead} ${text.body}`.trim()}
+            title={[text.lead, text.body, edge.kind === "peer" && edge.files !== null ? t.orchestra.graph.files(edge.files.files, edge.files.exts.join(" ")) : ""].filter((x) => x !== "").join(" · ")}
           >
             {text.lead !== "" && <span className="orch-edge-lead">{text.lead}</span>}
             <span className="orch-edge-body">{text.body}</span>

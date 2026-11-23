@@ -552,6 +552,9 @@ function dustPath(points: { x: number; y: number; r: number }[]): string {
  * 只在工作区页 / 右栏星系图用（drawFrame 的 minPlanetPx）；单智能体首页的 fixture 星系不动。
  */
 export const PLANET_READABLE_MAX = 11;
+/** 星屑默认的屏幕半径区间；星际空间（没有主星，碎石 = 会话）用大一档的 DEBRIS_PX */
+export const DUST_PX = [0.6, 2.2] as const;
+export const DEBRIS_PX = [2.4, 4.4] as const;
 export const PLANET_READABLE_MIN = 5;
 export const PLANET_READABLE_GAP = 0.36;
 
@@ -568,6 +571,8 @@ export function drawFrame(
   t: number,
   /** 行星屏幕半径的下限（px）：0 = 照物理半径画（单智能体首页） */
   minPlanetPx = 0,
+  /** 星屑颗粒的屏幕半径区间（px）：缺省 0.6–2.2；星际空间里碎石就是会话本身，画大一档（DEBRIS_PX） */
+  dustPx: readonly [number, number] = DUST_PX,
 ): DrawItem[] {
   const starP = project({ x: 0, y: 0, z: 0 }, camera);
   const starS = toScreen(starP, vp);
@@ -630,7 +635,7 @@ export function drawFrame(
       const p = project({ x: particle.r * Math.cos(theta), y: particle.r * Math.sin(theta), z: particle.z }, camera);
       const s = toScreen(p, vp);
       // 星屑随画布放大而变清楚（每单位像素 × 0.22，夹在 0.6–2.2px 之间），近大远小
-      const point = { x: s.x, y: s.y, r: clamp((vp.focal * 0.22) / p.depth, 0.6, 2.2) };
+      const point = { x: s.x, y: s.y, r: clamp((vp.focal * 0.22 * dustPx[1]) / (2.2 * p.depth), dustPx[0], dustPx[1]) };
       if (p.depth > starP.depth) {
         back.push(point);
         backDepth += p.depth;
