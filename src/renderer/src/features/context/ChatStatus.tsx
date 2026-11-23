@@ -20,6 +20,7 @@ import { useProgressDigest } from "./TaskProgress";
 import { useGoalLedger } from "./useGoalLedger.ts";
 import type { PlanStep } from "./plan-timeline.ts";
 import { STATUS_FOCUS_EVENT, type StatusFocusDetail } from "./chat-status-flag.ts";
+import { forgetViews, patchView, readView, type StatusView, type StatusViewPatch } from "./chat-status-memory.ts";
 import { LruCache } from "../../../../shared/lru.ts";
 import { OutputThumb, SlideStyles } from "./StatusThumb";
 import {
@@ -84,7 +85,9 @@ export function ChatStatus(props: {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const paneWidth = usePaneWidth(hostRef);
   const narrow = paneWidth > 0 && !fitsPanel(paneWidth);
-  const [openWide, setOpenWide] = useState(() => readOpen());
+  // 卡的状态按会话记（chat-status-memory.ts）：开 / 收、展开哪一步、滚到哪，切走再切回都在
+  const memo = useMemo<StatusMemo>(() => ({ get: () => readView(sessionId), patch: (patch) => patchView(sessionId, patch) }), [sessionId]);
+  const [openWide, setOpenWide] = useState(() => readView(sessionId)?.closed !== true);
   const [openNarrow, setOpenNarrow] = useState(false);
   const open = narrow ? openNarrow : openWide;
   // 从卡里点开右栏（产物、在跑的、这次用到的）：右栏一开对话区就窄了，但这是在卡里操作的——卡留着，不收成小钮
@@ -95,8 +98,13 @@ export function ChatStatus(props: {
       return;
     }
     setOpenWide(next);
-    writeOpen(next);
+    memo.patch({ closed: next ? null : true });
   };
+  // 会话被删：顺手清掉它的记忆。列表为空（还没读回 / 读失败）时不清——否则一次失败会抹掉全部
+  useEffect(() => {
+    if (!session.sessionsLoaded || session.sessions.length === 0) return;
+    forgetViews(new Set([...session.sessions.map((meta) => meta.id), sessionId]));
+  }, [session.sessions, session.sessionsLoaded, sessionId]);
   // 宽度：存的是用户拖到的值；显示时再按对话区宽度夹一次（窗口变窄时卡跟着让）
   const [wantWidth, setWantWidth] = useState(() => readWidth());
   const width = clampPanelWidth(wantWidth, paneWidth > 0 ? paneWidth : 1440);
@@ -223,14 +231,15 @@ export function ChatStatus(props: {
         />
         {/* 头：目标常驻（往下滚也看得见在为什么干活）+ 收起键；没有目标时只剩收起键 */}
         <div className="cs-top">
-          {ledger.goal !== null ? <GoalRow text={ledger.goal.text} versions={goalVersions.map((item) => (item.kind === "goal" ? item.to : ""))} /> : <span className="cs-top-fill" />}
+          {ledger.goal !== null ? <GoalRow memo={memo} text={ledger.goal.text} versions={goalVersions.map((item) => (item.kind === "goal" ? item.to : ""))} /> : <span className="cs-top-fill" />}
           <button type="button" className="cs-close" aria-label={t.chatStatus.collapse} title={t.chatStatus.collapse} onClick={() => toggleOpen(false)}>
             <Icon name="minimize-2" size={12} strokeWidth={1.8} />
           </button>
         </div>
-        <div className="cs-scroll">
+        <ScrollBox memo={memo}>
           {(hasPlan || children.length > 0) && (
             <ProgressSection
+              memo={memo}
               items={hasPlan ? (timeline?.current.items ?? []) : []}
               children={children}
               working={working}
@@ -272,7 +281,7 @@ export function ChatStatus(props: {
             </section>
           )}
 
-          {outputs.length > 0 && <OutputsSection outputs={outputs} scope={scope} onOpened={keepOpen} />}
+          {outputs.length > 0 && <OutputsSection memo={memo} outputs={outputs} scope={scope} onOpened={keepOpen} />}
 
           {usedMemory.length + remembered.length > 0 && (
             <MemoryRow
@@ -283,14 +292,14 @@ export function ChatStatus(props: {
                 props.onOpenMemory();
               }}
             />
-          )}        </div>
+          )}
+        </ScrollBox>
       </div>
     </div>
   );
 }
 
 const UNASSIGNED = "__unassigned";
-const OPEN_KEY = "orbita.proto.chatStatus.open";
 const WIDTH_KEY = "orbita.proto.chatStatus.width";
 
 function usePaneWidth(hostRef: React.RefObject<HTMLDivElement | null>): number {
@@ -307,20 +316,6 @@ function usePaneWidth(hostRef: React.RefObject<HTMLDivElement | null>): number {
   return width;
 }
 
-function readOpen(): boolean {
-  try {
-    return localStorage.getItem(OPEN_KEY) !== "off";
-  } catch {
-    return true;
-  }
-}
-function writeOpen(open: boolean): void {
-  try {
-    localStorage.setItem(OPEN_KEY, open ? "on" : "off");
-  } catch {
-    // 存不下就只在这次生效
-  }
-}
 function readWidth(): number {
   try {
     const raw = Number(localStorage.getItem(WIDTH_KEY));
@@ -395,6 +390,7 @@ const ROBOTS_SHOWN = 3;
  * 用 chevron + 次级色。一次只展开一步；展开到底，「收起」就在最后一行下面（不用回顶上找）。
  */
 function ProgressSection(props: {
+  memo: StatusMemo;
   items: readonly PlanStep[];
   children: readonly ChildRow[];
   working: boolean;
@@ -416,22 +412,31 @@ function ProgressSection(props: {
     () => new Set([...byStep.entries()].filter(([, rows]) => rows.some((row) => isWorking(row.state))).map(([key]) => key)),
     [byStep],
   );
-  const [all, setAll] = useState(false);
-  const [openStep, setOpenStep] = useState<string | null>(null);
+  // 展开哪一步、是否展开到全部：按会话记（切回来还在）
+  const [all, setAll] = useState(() => props.memo.get()?.all === true);
+  const [openStep, setOpenStep] = useState<string | null>(() => props.memo.get()?.step ?? null);
+  const updateAll = (next: boolean) => {
+    setAll(next);
+    props.memo.patch({ all: next ? true : null });
+  };
+  const updateOpenStep = (key: string | null) => {
+    setOpenStep(key);
+    props.memo.patch({ step: key });
+  };
   const sectionRef = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
     if (props.focus === null) return;
-    setOpenStep(props.focus.key);
-    if (props.focus.key !== UNASSIGNED) setAll(true);
+    updateOpenStep(props.focus.key);
+    if (props.focus.key !== UNASSIGNED) updateAll(true);
     requestAnimationFrame(() => sectionRef.current?.querySelector(`[data-step="${props.focus?.key}"]`)?.scrollIntoView({ block: "nearest" }));
   }, [props.focus?.token]);
   const done = items.filter((item) => item.status === "done").length;
   const rows = all ? items.map((_, index) => ({ kind: "step" as const, index })) : planWindow(items, live);
   const unassigned = byStep.get(UNASSIGNED) ?? [];
   const keepHeadInView = () => requestAnimationFrame(() => sectionRef.current?.scrollIntoView({ block: "nearest" }));
-  const toggleStep = (key: string) => setOpenStep((prev) => (prev === key ? null : key));
+  const toggleStep = (key: string) => updateOpenStep(openStep === key ? null : key);
   const closeStep = (key: string) => {
-    setOpenStep(null);
+    updateOpenStep(null);
     requestAnimationFrame(() => sectionRef.current?.querySelector(`[data-step="${key}"]`)?.scrollIntoView({ block: "nearest" }));
   };
 
@@ -476,7 +481,7 @@ function ProgressSection(props: {
         ) : (
           <div className="cs-row cs-step">{head}</div>
         )}
-        {shown && <KidList rows={kids} now={props.now} onOpen={props.onOpenChild} onClose={() => closeStep(item.id)} />}
+        {shown && <KidList memo={props.memo} stepKey={item.id} rows={kids} now={props.now} onOpen={props.onOpenChild} onClose={() => closeStep(item.id)} />}
       </li>
     );
   };
@@ -493,7 +498,7 @@ function ProgressSection(props: {
             const label = row.where === "before" ? t.chatStatus.foldBefore(row.count) : row.where === "after" ? t.chatStatus.foldAfter(row.count) : t.chatStatus.foldBetween(row.count);
             return (
               <li key={`fold-${index}`} data-status="fold">
-                <button type="button" className="cs-row cs-btn cs-fold" onClick={() => setAll(true)}>
+                <button type="button" className="cs-row cs-btn cs-fold" onClick={() => updateAll(true)}>
                   <span className="cs-slot">
                     <Icon name="chevron-down" size={12} strokeWidth={1.8} />
                   </span>
@@ -511,7 +516,7 @@ function ProgressSection(props: {
               type="button"
               className="cs-row cs-btn cs-fold"
               onClick={() => {
-                setAll(false);
+                updateAll(false);
                 keepHeadInView();
               }}
             >
@@ -537,7 +542,7 @@ function ProgressSection(props: {
                 <Icon name={openStep === UNASSIGNED ? "chevron-up" : "chevron-down"} size={12} strokeWidth={1.8} className="cs-step-chev" />
               </span>
             </button>
-            {openStep === UNASSIGNED && <KidList rows={unassigned} now={props.now} onOpen={props.onOpenChild} onClose={() => closeStep(UNASSIGNED)} />}
+            {openStep === UNASSIGNED && <KidList memo={props.memo} stepKey={UNASSIGNED} rows={unassigned} now={props.now} onOpen={props.onOpenChild} onClose={() => closeStep(UNASSIGNED)} />}
           </li>
         )}
       </ol>
@@ -546,10 +551,12 @@ function ProgressSection(props: {
 }
 
 /** 一步下面的子会话（从步骤垂下来的那一层）：要你的在前；已交回的收成一行；超过五个收成「还有 N 个」；底部「收起」 */
-function KidList(props: { rows: readonly ChildRow[]; now: number; onOpen: (childId: string) => void; onClose: () => void }) {
+function KidList(props: { memo: StatusMemo; stepKey: string; rows: readonly ChildRow[]; now: number; onOpen: (childId: string) => void; onClose: () => void }) {
   const t = useT();
-  const [more, setMore] = useState(false);
-  const [doneOpen, setDoneOpen] = useState(false);
+  // 「还有 N 个」「已交回」的开合按会话、按步骤记
+  const [more, setMore] = useState(() => props.memo.get()?.more?.includes(props.stepKey) === true);
+  const [doneOpen, setDoneOpen] = useState(() => props.memo.get()?.handed?.includes(props.stepKey) === true);
+  const remember = (field: "more" | "handed", on: boolean) => props.memo.patch({ [field]: withKey(props.memo.get()?.[field], props.stepKey, on) });
   const sorted = sortChildren(props.rows);
   const active = sorted.filter((row) => row.state !== "done");
   const done = sorted.filter((row) => row.state === "done");
@@ -561,7 +568,14 @@ function KidList(props: { rows: readonly ChildRow[]; now: number; onOpen: (child
       ))}
       {active.length > shown.length && (
         <li>
-          <button type="button" className="cs-kid-more" onClick={() => setMore(true)}>
+          <button
+            type="button"
+            className="cs-kid-more"
+            onClick={() => {
+              setMore(true);
+              remember("more", true);
+            }}
+          >
             <Icon name="chevron-down" size={12} strokeWidth={1.8} />
             {t.chatStatus.showAll(active.length - shown.length)}
           </button>
@@ -569,7 +583,15 @@ function KidList(props: { rows: readonly ChildRow[]; now: number; onOpen: (child
       )}
       {done.length > 0 && (
         <li>
-          <button type="button" className="cs-kid-more" aria-expanded={doneOpen} onClick={() => setDoneOpen((value) => !value)}>
+          <button
+            type="button"
+            className="cs-kid-more"
+            aria-expanded={doneOpen}
+            onClick={() => {
+              setDoneOpen(!doneOpen);
+              remember("handed", !doneOpen);
+            }}
+          >
             <Icon name={doneOpen ? "chevron-up" : "chevron-down"} size={12} strokeWidth={1.8} />
             {t.chatStatus.handedBack(done.length)}
           </button>
@@ -636,7 +658,7 @@ function KidRow(props: { row: ChildRow; now: number; onOpen: (childId: string) =
  * 触控板横扫原生就行，Shift + 滚轮在 mac 上鼠标会由系统转成横向，CDP / 部分鼠标不会，所以这里自己把
  * 「按着 Shift 的纵向滚动」换成横向。点一张 = 在右栏打开（演示文稿面板 / 文件面板 / 插件看板）；悬停不弹东西。
  */
-function OutputsSection(props: { outputs: readonly StatusOutput[]; scope: ChatFileScope; onOpened: () => void }) {
+function OutputsSection(props: { memo: StatusMemo; outputs: readonly StatusOutput[]; scope: ChatFileScope; onOpened: () => void }) {
   const t = useT();
   const groups = useMemo(() => groupOutputs(props.outputs), [props.outputs]);
   return (
@@ -652,7 +674,12 @@ function OutputsSection(props: { outputs: readonly StatusOutput[]; scope: ChatFi
             <span>{t.chatStatus.groups[group.key]}</span>
             <span className="cs-n">{group.items.length}</span>
           </div>
-          <ShiftScroll className="cs-strip" single={group.items.length === 1}>
+          <ShiftScroll
+            className="cs-strip"
+            single={group.items.length === 1}
+            initial={props.memo.get()?.strips?.[group.key] ?? 0}
+            onSave={(left) => props.memo.patch({ strips: withStrip(props.memo.get()?.strips, group.key, left) })}
+          >
             {group.items.map((output) => (
               <button
                 key={output.path}
@@ -702,8 +729,9 @@ function openOutput(output: StatusOutput, sessionId: string | null): void {
 }
 
 /** 横向滚动的一行：Shift + 纵向滚轮换成横向（passive: false 才能拦住纵向滚动） */
-function ShiftScroll(props: { className: string; single: boolean; children: React.ReactNode }) {
+function ShiftScroll(props: { className: string; single: boolean; initial: number; onSave: (left: number) => void; children: React.ReactNode }) {
   const ref = useRef<HTMLDivElement | null>(null);
+  useScrollMemory(ref, "left", props.initial, props.onSave);
   useEffect(() => {
     const node = ref.current;
     if (node === null) return undefined;
@@ -744,6 +772,141 @@ function MemoryRow(props: { read: number; remembered: number; onOpen: () => void
       </button>
     </section>
   );
+}
+
+// ───────────────────────── 按会话记的界面状态 ─────────────────────────
+
+/** 卡里各处读 / 写「这条会话的卡停在哪」的口（chat-status-memory.ts 的账本，按会话 id 绑好） */
+interface StatusMemo {
+  get: () => StatusView | undefined;
+  patch: (patch: StatusViewPatch) => void;
+}
+
+/** 键列表里加 / 去一个键；空了回默认（null） */
+function withKey(list: readonly string[] | undefined, key: string, on: boolean): string[] | null {
+  const rest = (list ?? []).filter((item) => item !== key);
+  const next = on ? [...rest, key] : rest;
+  return next.length === 0 ? null : next;
+}
+
+/** 某一组产物横向滚到 left：0 = 回到开头（不写），空了回默认（null） */
+function withStrip(strips: Readonly<Record<string, number>> | undefined, group: string, left: number): Record<string, number> | null {
+  const next = { ...strips };
+  if (left > 0) next[group] = left;
+  else delete next[group];
+  return Object.keys(next).length === 0 ? null : next;
+}
+
+/** 卡内纵向滚动的容器：挂上时滚回记着的位置，之后用户滚到哪记到哪 */
+function ScrollBox(props: { memo: StatusMemo; children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useScrollMemory(ref, "top", props.memo.get()?.scroll ?? 0, (top) => props.memo.patch({ scroll: top > 0 ? top : null }));
+  return (
+    <div className="cs-scroll" ref={ref}>
+      {props.children}
+    </div>
+  );
+}
+
+/** 恢复位置最多等多久：内容（异步到的步骤、产物）长够了就滚过去，3 秒还不够就算了 */
+const RESTORE_WAIT_MS = 3000;
+/** 滚动停下多久后记一次 */
+const SCROLL_SAVE_MS = 150;
+/** 用户最后一次动手（滚轮、按键、按下 / 抬起）之后多久内的滚动算「用户滚的」 */
+const GESTURE_WINDOW_MS = 600;
+
+/**
+ * 滚动位置的记忆：挂上时滚回 initial，用户滚到哪记到哪（停下 150ms 后写一次，卸载时补写）。
+ *
+ * 恢复期（用户还没动手、且不到 3 秒）里内容还在陆续长出来（子会话的产物、步骤晚到），位置会被夹小或被带偏，
+ * 所以每次内容变了就重新滚回 initial；用户一动手（滚轮、按下、触摸、按键）恢复期就结束、不再抢。
+ * 没动手之前不写盘：夹小 / 带偏的位置不是用户滚的，写进去会冲掉记着的位置。
+ *
+ * 横向（产物行）另有一道防线：行里有 scroll-snap，内容变了（比如晚到的产物插在前面）浏览器会跟着「吸住的那一张」
+ * 把 scrollLeft 往后推——实测 PDF / 网页行一进来就偏了一两张（base 上就有），记下来下次恢复还会再偏一次、越记越偏。
+ * 所以横向在用户没在动手（滚轮 / 按键 / 按着）的时候，任何滚动都滚回上次确认的位置，且不记。
+ */
+function useScrollMemory(ref: React.RefObject<HTMLElement | null>, axis: "top" | "left", initial: number, save: (px: number) => void): void {
+  const saveRef = useRef(save);
+  saveRef.current = save;
+  useLayoutEffect(() => {
+    const node = ref.current;
+    if (node === null) return undefined;
+    const read = () => (axis === "top" ? node.scrollTop : node.scrollLeft);
+    const write = (px: number) => {
+      if (axis === "top") node.scrollTop = px;
+      else node.scrollLeft = px;
+    };
+    const mountedAt = Date.now();
+    let touched = false;
+    let pressed = false;
+    let lastGesture = 0;
+    let pos = initial;
+    const restoring = () => !touched && Date.now() - mountedAt < RESTORE_WAIT_MS;
+    const userDriven = () => pressed || Date.now() - lastGesture < GESTURE_WINDOW_MS;
+    const hold = () => {
+      if (restoring() && Math.abs(read() - initial) > 1 && (initial > 0 || axis === "left")) write(initial);
+    };
+    hold();
+    let timer: number | undefined;
+    let dirty: number | null = null;
+    const flush = () => {
+      window.clearTimeout(timer);
+      timer = undefined;
+      if (dirty === null) return;
+      const value = dirty;
+      dirty = null;
+      saveRef.current(value);
+    };
+    const onScroll = () => {
+      if (axis === "left" && !userDriven()) {
+        if (Math.abs(read() - pos) > 1) write(pos);
+        return;
+      }
+      if (!touched) return;
+      pos = Math.round(read());
+      dirty = pos;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(flush, SCROLL_SAVE_MS);
+    };
+    const onGesture = () => {
+      touched = true;
+      lastGesture = Date.now();
+    };
+    const onDown = () => {
+      pressed = true;
+      onGesture();
+    };
+    const onUp = () => {
+      pressed = false;
+      lastGesture = Date.now();
+    };
+    // 恢复期内内容一变就再滚一次；到点 / 用户动手后不再看
+    const watchers = [new ResizeObserver(hold), new MutationObserver(hold)];
+    for (const watcher of watchers) {
+      if (watcher instanceof ResizeObserver) watcher.observe(node);
+      else watcher.observe(node, { childList: true, subtree: true });
+    }
+    const stopWatching = window.setTimeout(() => {
+      for (const watcher of watchers) watcher.disconnect();
+    }, RESTORE_WAIT_MS);
+    node.addEventListener("scroll", onScroll, { passive: true });
+    for (const type of ["wheel", "touchstart", "touchmove", "keydown"]) node.addEventListener(type, onGesture, { passive: true });
+    node.addEventListener("pointerdown", onDown, { passive: true });
+    node.addEventListener("pointerup", onUp, { passive: true });
+    node.addEventListener("pointercancel", onUp, { passive: true });
+    return () => {
+      flush();
+      window.clearTimeout(stopWatching);
+      for (const watcher of watchers) watcher.disconnect();
+      node.removeEventListener("scroll", onScroll);
+      for (const type of ["wheel", "touchstart", "touchmove", "keydown"]) node.removeEventListener(type, onGesture);
+      node.removeEventListener("pointerdown", onDown);
+      node.removeEventListener("pointerup", onUp);
+      node.removeEventListener("pointercancel", onUp);
+    };
+    // 只在挂上时恢复一次；卡按会话重挂（key），initial 不会中途换成别条会话的
+  }, []);
 }
 
 // ───────────────────────── 杂项 ─────────────────────────
@@ -913,15 +1076,24 @@ function useSessionAutomations(sessionId: string): Automation[] {
  * 卡头的目标：平时只露短标题；点一下（不管有几版）就地展开全文，有旧版本时下面接着列出来。
  * 以前只有改过目标（第 2 版起）才能展开，第 1 版长目标被截成两行就再也看不全（2026-11-23 用户）。
  */
-function GoalRow(props: { text: string; versions: readonly string[] }) {
+function GoalRow(props: { memo: StatusMemo; text: string; versions: readonly string[] }) {
   const t = useT();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(() => props.memo.get()?.goal === true);
   const n = Math.max(1, props.versions.length);
   const headline = goalHeadline(props.text);
   const older = [...props.versions].reverse().slice(1);
   return (
     <section className="cs-goal">
-      <button type="button" className="cs-goal-line" aria-expanded={open} title={open ? undefined : props.text} onClick={() => setOpen((value) => !value)}>
+      <button
+        type="button"
+        className="cs-goal-line"
+        aria-expanded={open}
+        title={open ? undefined : props.text}
+        onClick={() => {
+          setOpen(!open);
+          props.memo.patch({ goal: open ? null : true });
+        }}
+      >
         <span className="cs-goal-text">{headline}</span>
         {n > 1 && <span className="cs-ver">{t.chatStatus.version(n)}</span>}
       </button>
