@@ -2,6 +2,7 @@ import { deepStrictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   TASKS_FOLD_KEY,
+  WORKSPACES_FOLD_KEY,
   defaultGroupFolded,
   foldKeyForWorkspace,
   isGroupFolded,
@@ -22,6 +23,16 @@ describe("默认折叠态", () => {
     deepStrictEqual(isGroupFolded(empty(), TASKS_FOLD_KEY), false);
     deepStrictEqual(defaultGroupFolded(foldKeyForWorkspace("a")), true);
     deepStrictEqual(defaultGroupFolded(TASKS_FOLD_KEY), false);
+  });
+
+  it("「工作区」整节默认展开，折一次收起、再折一次归位；单个工作区组的开合不受它影响", () => {
+    deepStrictEqual(isGroupFolded(empty(), WORKSPACES_FOLD_KEY), false);
+    const folded = toggleGroupFold(empty(), WORKSPACES_FOLD_KEY);
+    deepStrictEqual(isGroupFolded(folded, WORKSPACES_FOLD_KEY), true);
+    deepStrictEqual(isGroupFolded(folded, foldKeyForWorkspace("a")), true);
+    deepStrictEqual(isGroupFolded(toggleGroupFold(folded, WORKSPACES_FOLD_KEY), WORKSPACES_FOLD_KEY), false);
+    // 工作区 id 恰好叫 "workspaces" 也撞不上节的 key（组 key 带 workspace: 前缀）
+    deepStrictEqual(foldKeyForWorkspace("workspaces") === WORKSPACES_FOLD_KEY, false);
   });
 });
 
