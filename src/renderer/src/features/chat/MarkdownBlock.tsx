@@ -29,7 +29,7 @@ import { dominantScript } from "./dominant-script";
 import { useT } from "../../locale.ts";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { localMediaPathOfHref } from "../files/media-view.ts";
-import { requestOpenPanel } from "../../shell/open-panel.ts";
+import { openLocalMedia } from "../files/open-media-link.ts";
 import { citationIdOfHref, citationTitle, remarkCitationMarkers } from "./citation-markers.ts";
 import { CitationOpenContext, CitationTableContext } from "./citation-context.ts";
 
@@ -248,7 +248,7 @@ function ExternalAnchor(props: AnchorProps) {
           : mediaPath !== null
             ? (event) => {
                 event.preventDefault();
-                requestOpenPanel({ kind: "files", path: mediaPath, force: true });
+                openLocalMedia(mediaPath);
               }
             : undefined
       }
