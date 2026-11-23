@@ -3,6 +3,7 @@
  * agent runtime 将跑在独立 utility 进程，不在这里 —— 见 docs/single-agent-guideline.md §二。
  */
 import { preferIPv4 } from "../shared/dial-v4.ts";
+import { installPerfProbe } from "./perf-probe.ts";
 import { CATALOG_CACHE_ENV } from "../shared/agent-ipc.ts";
 import { catalogIdsOfProviders } from "../shared/known-providers.ts";
 import { app, BrowserWindow, nativeTheme, powerMonitor, powerSaveBlocker, shell, type WebPreferences } from "electron";
@@ -392,6 +393,9 @@ async function forwardMemoryRecall(
     return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
   }
 }
+
+// 实验探针（ORBITA_PERF_LOG 没设时是空操作）：必须先于下面所有 ipcMain.handle 注册
+installPerfProbe();
 
 void app.whenReady().then(async () => {
   // 配置落在 Electron 的 userData 目录，不再依赖 pi 的 ~/.pi/agent。

@@ -23,6 +23,8 @@ import {
 } from "../../shared/prompt-images.ts";
 import { isNotFound } from "../fs-errors.ts";
 import { headStringField, scanJsonlLines } from "../jsonl-scan.ts";
+import { performance } from "node:perf_hooks";
+import { perfLog, perfProbeOn } from "../perf-log.ts";
 import { CitedPdfIndex } from "./cited-pdfs.ts";
 import { EXTERNAL_FILE_COPY_MAX_BYTES, type PromptFileRef, type SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
@@ -893,8 +895,9 @@ export class SessionStore {
     const meta = await this.readMeta(id);
     if (meta === null) return null;
     const effective = await this.readLog(id);
+    const sliceStart = perfProbeOn ? performance.now() : 0;
     const start = alignToTurnStart(effective, Math.max(0, effective.length - pageRecords(limit)));
-    return {
+    const detail = {
       meta,
       transcript: effective.slice(start),
       window: {
@@ -904,6 +907,16 @@ export class SessionStore {
         compactionsBefore: effective.slice(0, start).filter((record) => record.role === "compacted").length,
       },
     };
+    if (perfProbeOn) {
+      perfLog({
+        type: "loadWindow",
+        id,
+        total: effective.length,
+        returned: detail.transcript.length,
+        sliceMs: Math.round((performance.now() - sliceStart) * 100) / 100,
+      });
+    }
+    return detail;
   }
 
   /**
@@ -926,6 +939,7 @@ export class SessionStore {
       return { records: [], hasMore: false };
     }
     const start = alignToTurnStart(effective, Math.max(0, end - pageRecords(limit)));
+    if (perfProbeOn) perfLog({ type: "loadOlder", id, total: effective.length, returned: end - start, hasMore: start > 0 });
     return { records: effective.slice(start, end), hasMore: start > 0 };
   }
 
@@ -1073,17 +1087,52 @@ export class SessionStore {
    */
   private async readLog(id: string): Promise<SessionRecord[]> {
     // 生效视图 = 原始全量 + 回退界碑折叠（见 readRawLog 的注释：只有 task 来源要全量）
-    return this.foldReverts(await this.readLogEntries(id));
+    const entries = await this.readLogEntries(id);
+    const foldStart = perfProbeOn ? performance.now() : 0;
+    const effective = this.foldReverts(entries);
+    if (perfProbeOn) perfLog({ type: "foldReverts", id, ms: Math.round((performance.now() - foldStart) * 100) / 100 });
+    return effective;
   }
 
   /** 原始逐行解析（不折叠）。readLog / readRawLog 共用这一个循环。 */
   private async readLogEntries(id: string): Promise<SessionRecord[]> {
     let raw: string;
+    // 探针：把「读盘（异步，不堵主线程）」「解码成字符串（同步）」「逐行解析（同步）」分开计时。
+    // 开着时先读成 Buffer 再 toString——与 readFile(path, "utf8") 内部做的是同一件事，只是拆开了量
+    const probeStart = perfProbeOn ? performance.now() : 0;
+    let probeRead = probeStart;
+    let probeBytes = 0;
     try {
-      raw = await readFile(this.logPath(id), "utf8");
+      if (perfProbeOn) {
+        const bytes = await readFile(this.logPath(id));
+        probeRead = performance.now();
+        probeBytes = bytes.length;
+        raw = bytes.toString("utf8");
+      } else {
+        raw = await readFile(this.logPath(id), "utf8");
+      }
     } catch {
       return [];
     }
+    const probeDecoded = perfProbeOn ? performance.now() : 0;
+    const records = this.parseLogLines(raw);
+    if (perfProbeOn) {
+      const done = performance.now();
+      perfLog({
+        type: "readLog",
+        id,
+        bytes: probeBytes,
+        records: records.length,
+        readMs: Math.round((probeRead - probeStart) * 100) / 100,
+        decodeMs: Math.round((probeDecoded - probeRead) * 100) / 100,
+        parseMs: Math.round((done - probeDecoded) * 100) / 100,
+      });
+    }
+    return records;
+  }
+
+  /** 逐行解析（readLogEntries 的同步段，拆出来只为探针能单独计时；逻辑一个字没动） */
+  private parseLogLines(raw: string): SessionRecord[] {
     const records: SessionRecord[] = [];
     for (const line of raw.split("\n")) {
       if (line.trim() === "") continue;

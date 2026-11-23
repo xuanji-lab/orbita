@@ -49,7 +49,7 @@ function withTimeout(promise, ms, what) {
  * 连上应用页面。devPort 用来认页面：只连 URL 含 `127.0.0.1:<devPort>` 的 target，
  * 连到别的实例（另一个 worktree / 别的 electron 应用）当场失败，而不是对着它验收一轮。
  */
-export async function connectCdp({ cdpPort, devPort, commandTimeoutMs = 10_000, watchdogMs = 90_000 }) {
+export async function connectCdp({ cdpPort, devPort, urlMarker, commandTimeoutMs = 10_000, watchdogMs = 90_000 }) {
   watchdog(watchdogMs);
   const http = `http://127.0.0.1:${cdpPort}`;
 
@@ -64,11 +64,15 @@ export async function connectCdp({ cdpPort, devPort, commandTimeoutMs = 10_000, 
     process.exit(1);
   }
 
-  const marker = `127.0.0.1:${devPort}`;
+  // 实验分支：生产构建的页面是 file://…/out/renderer/index.html，没有 dev 端口可认——
+  // 调用方给 urlMarker（这个 worktree 的 out/renderer 路径）时按它认页面，纪律不变：认不出就当场失败
+  const marker = urlMarker ?? `127.0.0.1:${devPort}`;
   // 主窗口优先：内置浏览器的工具条（browser-toolbar.html）同源同端口，用 includes 会先撞上它
   const pages = targets.filter((t) => t.type === "page" && t.url.includes(marker));
   const page =
-    pages.find((t) => /^http:\/\/127\.0\.0\.1:\d+\/(index\.html)?([?#].*)?$/.test(t.url)) ?? pages[0];
+    pages.find((t) => /^http:\/\/127\.0\.0\.1:\d+\/(index\.html)?([?#].*)?$/.test(t.url)) ??
+    pages.find((t) => /\/index\.html([?#].*)?$/.test(t.url)) ??
+    pages[0];
   if (!page) {
     console.error(`✖ 这个 CDP 端口上没有 ${marker} 的页面——连到的不是你要验的那个实例。当前 targets：`);
     for (const t of targets) console.error(`  [${t.type}] ${t.url}`);
@@ -88,8 +92,19 @@ export async function connectCdp({ cdpPort, devPort, commandTimeoutMs = 10_000, 
 
   let seq = 0;
   const pending = new Map();
+  // 实验分支：CDP 事件（Tracing.dataCollected 等没有 id 的消息）按方法名派发给订阅者
+  const listeners = new Map();
+  const on = (method, handler) => {
+    const list = listeners.get(method) ?? [];
+    list.push(handler);
+    listeners.set(method, list);
+  };
   ws.onmessage = (event) => {
     const message = JSON.parse(event.data);
+    if (message.id === undefined) {
+      for (const handler of listeners.get(message.method) ?? []) handler(message.params);
+      return;
+    }
     const entry = pending.get(message.id);
     if (entry === undefined) return;
     pending.delete(message.id);
@@ -131,5 +146,5 @@ export async function connectCdp({ cdpPort, devPort, commandTimeoutMs = 10_000, 
     writeFileSync(path, Buffer.from(response.result.data, "base64"));
   };
 
-  return { send, evaluate, screenshot, close: () => ws.close() };
+  return { send, evaluate, screenshot, on, close: () => ws.close() };
 }
