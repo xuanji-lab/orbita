@@ -46,6 +46,7 @@ import { appendWithdrawn } from "./withdraw-draft.ts";
 import { admitImages, promptImagesBytes, readAsPromptImage, rejectionText, type ComposerImage } from "../../shell/composer-images.ts";
 import { PROMPT_IMAGE_MIME_TYPES, PROMPT_IMAGE_MAX_COUNT, type PromptImage } from "../../../../shared/prompt-images.ts";
 import { insertImageRefs, removeImageRef } from "../../../../shared/prompt-image-refs.ts";
+import { collapseTaskTags, expandTaskTokens, insertTaskToken, type TaskRef } from "../../../../shared/task-ref.ts";
 import {
   admitFileRefs,
   fileRefRejectionText,
@@ -208,6 +209,8 @@ export interface ChatSession {
   attachments: readonly ComposerImage[];
   /** 挑选 / 粘贴 / 拖进来的文件：图片读成 base64、其余按路径引用；被拒的点名报在 error 上 */
   attachIncoming: (files: readonly File[], caret?: number) => Promise<{ text: string; caret: number } | null>;
+  /** 把一条任务（侧栏会话行拖来的）以 [任务 xxxxxxxx] 小签追加到草稿末尾——拖在输入框之外松手的落点；框内按落点插入由 Composer 做 */
+  appendTaskRef: (task: TaskRef) => void;
   removeAttachment: (id: string) => void;
   /** 回形针「添加文件夹」：主进程目录选择器，选中目录按拖入同一套分拣入列 */
   attachFolderRefs: () => Promise<void>;
@@ -1671,6 +1674,14 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     [engine, draftKey, attachmentMap, fileMap, writeAttachments, writeFiles, writeDraft],
   );
 
+  const appendTaskRef = useCallback(
+    (task: TaskRef) => {
+      const before = draftsRef.current.get(draftKey)?.text ?? "";
+      writeDraft(draftKey, insertTaskToken(before, before.length, task).text);
+    },
+    [draftKey, writeDraft],
+  );
+
   /** 撤一张图：缩略图与正文里它的小签一起走，后面的图编号各减一（缩略图的角标与小签文字同步变） */
   const removeAttachment = useCallback(
     (id: string) => {
@@ -1988,7 +1999,12 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     // 引用展开进正文：模型、转录、pi 的本子看到的都是这一整段（解析回 chip 在显示时做）。
     // 句中粘贴胶囊就地组装成 <pasted-text> 块——位置保留（方案 C），展开的区间本就是
     // 正文。组装后的 text 从这里往下走：排队、投递都以它为准（回填快照另存草稿原文）
-    const raw = composeQuotedMessage(resolveQuotes(quotes), own, getOpenDocument() ?? undefined);
+    // 句中的 [任务 xxxxxxxx] 就地展开成 <referenced_task id title />（shared/task-ref.ts）
+    const raw = composeQuotedMessage(
+      resolveQuotes(quotes),
+      expandTaskTokens(own, engine.sessions),
+      getOpenDocument() ?? undefined,
+    );
     const text = assemblePasteDraft(raw, pasted);
     engine.setError(null);
     // 手动压缩指令在本地拦下，**不发给模型**——发出去模型会角色扮演一段
@@ -2542,7 +2558,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         nextPasteSeq,
         pasteLang,
       );
-      const { quotes: withdrawn, text } = parseQuotedMessage(textWithTokens);
+      // 展开过的 <referenced_task /> 折回 [任务 xxxxxxxx]：撤回的是「我要改这条」，改的是用户写的那样
+      const { quotes: withdrawn, text } = parseQuotedMessage(collapseTaskTags(textWithTokens).text);
       // 文本与粘贴块同拍写回：块的 token 在 text 里，分两拍会有一帧对不上账
       setDrafts((prev) => {
         const current = prev.get(draftKey);
@@ -2933,6 +2950,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     setDraft,
     attachments,
     attachIncoming,
+    appendTaskRef,
     removeAttachment,
     attachFolderRefs,
     files,

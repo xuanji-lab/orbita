@@ -48,23 +48,32 @@ function isInlineSpace(char: string | undefined): boolean {
 }
 
 /**
- * 在光标处插入若干张图的引用（附图那一刻的落点：光标在哪，小签就在哪）。
+ * 在指定位置插入若干个行内小签（图 N、会话引用等共用）：落点是附上 / 松手那一刻的位置。
  * 与前后文字之间补空格（前面是字、后面是字才补；换行与已有空白不再补），
- * 引用之间用一个空格隔开；返回新正文与插入后的光标（落在末尾空格之后）。
+ * 小签之间用一个空格隔开；返回新正文与插入后的光标（落在末尾空格之后）。
  */
-export function insertImageRefs(
+export function insertInlineTokens(
   text: string,
   caret: number,
-  numbers: readonly number[],
+  tokens: readonly string[],
 ): { text: string; caret: number } {
-  if (numbers.length === 0) return { text, caret: clamp(caret, text.length) };
+  if (tokens.length === 0) return { text, caret: clamp(caret, text.length) };
   const at = clamp(caret, text.length);
   const before = text[at - 1];
   const after = text[at];
   const lead = before !== undefined && before !== "\n" && !isInlineSpace(before) ? " " : "";
   const tail = after === undefined || (after !== "\n" && !isInlineSpace(after)) ? " " : "";
-  const inserted = lead + numbers.map(imageRefToken).join(" ") + tail;
+  const inserted = lead + tokens.join(" ") + tail;
   return { text: text.slice(0, at) + inserted + text.slice(at), caret: at + inserted.length };
+}
+
+/** 在光标处插入若干张图的引用（附图那一刻的落点：光标在哪，小签就在哪） */
+export function insertImageRefs(
+  text: string,
+  caret: number,
+  numbers: readonly number[],
+): { text: string; caret: number } {
+  return insertInlineTokens(text, caret, numbers.map(imageRefToken));
 }
 
 function clamp(value: number, max: number): number {

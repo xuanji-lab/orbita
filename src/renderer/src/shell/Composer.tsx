@@ -7,6 +7,9 @@ import { PastedTextCollapseContext } from "./attachment-chips";
 import type { TextQuote } from "@shared/quote";
 import { isPastedTextLarge, pastedTextSize } from "@shared/prompt-attachments";
 import { parseImageRefs, type ImageRefSpan } from "@shared/prompt-image-refs";
+import { TASK_REF_MIME, insertTaskToken, parseTaskRefPayload, resolveTaskTokens, type TaskRef } from "@shared/task-ref";
+import { FEATURE_ICON } from "./feature-icons.ts";
+import { dropIndexAtPoint } from "./drop-point.ts";
 import { filesOf, type ComposerImage } from "./composer-images.ts";
 import type { ComposerFileRef } from "./composer-attachments.ts";
 import {
@@ -131,6 +134,8 @@ export function Composer(props: {
    * 没有图（或没写进草稿）resolve null——Composer 据此把光标放回小签后面
    */
   onAttach: (files: readonly File[], caret?: number) => Promise<{ text: string; caret: number } | null>;
+  /** 能被 [任务 xxxxxxxx] 指到的会话（id + 标题）：胶囊的名字、发送时的展开都查它；查不到的 token 只是普通文字 */
+  tasks: readonly TaskRef[];
   onRemoveAttachment: (id: string) => void;
   /** 回形针菜单的「添加文件夹」：主进程目录选择器（Windows 不能与选文件同框，分两个入口） */
   onPickFolders: () => void;
@@ -191,7 +196,9 @@ export function Composer(props: {
   /** 把选区的端点吸到胶囊边上（端点不在胶囊中间就不动），并记下这一次的选区 */
   const snapToChips = (el: HTMLTextAreaElement, prev: TextSelection | null): void => {
     const next = { start: el.selectionStart, end: el.selectionEnd };
-    const snapped = snapSelection(parseChips(el.value), next, prev);
+    // 任务胶囊（[任务 xxxxxxxx]）原文里的位置在屏幕上同样不存在，与技能胶囊一起吸
+    const ranges = [...parseChips(el.value), ...resolveTaskTokens(el.value, props.tasks)];
+    const snapped = snapSelection(ranges, next, prev);
     if (snapped.start !== next.start || snapped.end !== next.end) {
       el.setSelectionRange(snapped.start, snapped.end, el.selectionDirection);
     }
@@ -225,13 +232,19 @@ export function Composer(props: {
     () => (props.value.length > CHIPS_MAX_LENGTH ? [] : parseImageRefs(props.value, props.attachments.length)),
     [props.value, props.attachments.length],
   );
+  // 任务引用的小签「[任务 xxxxxxxx]」：只画查得到会话的（名字取会话标题）
+  const taskTokens = useMemo(
+    () => (props.value.length > CHIPS_MAX_LENGTH ? [] : resolveTaskTokens(props.value, props.tasks)),
+    [props.value, props.tasks],
+  );
   const chipSpans = useMemo(
     () => [
       ...chips.map((chip) => ({ start: chip.start, end: chip.end, kind: chip.kind })),
       ...paintedPasteTokens.map((token) => ({ start: token.start, end: token.end })),
       ...imageRefs.map((ref) => ({ start: ref.start, end: ref.end })),
+      ...taskTokens.map((token) => ({ start: token.start, end: token.end })),
     ],
-    [chips, paintedPasteTokens, imageRefs],
+    [chips, paintedPasteTokens, imageRefs, taskTokens],
   );
   const segments = useMemo(
     () =>
@@ -257,6 +270,7 @@ export function Composer(props: {
   // 与脸同字同号）；附图的原文 `[图 1]` 太窄，图标后面只写编号，「图」由图标表达
   const pasteAt = useMemo(() => new Map(paintedPasteTokens.map((token) => [token.start, token])), [paintedPasteTokens]);
   const imageRefAt = useMemo(() => new Map(imageRefs.map((ref) => [ref.start, ref])), [imageRefs]);
+  const taskAt = useMemo(() => new Map(taskTokens.map((token) => [token.start, token])), [taskTokens]);
   const chipFaceAt = (offset: number): { kind: string; icon: IconName; name: string } | null => {
     const chip = chipAt.get(offset);
     if (chip !== undefined) {
@@ -270,6 +284,10 @@ export function Composer(props: {
     if (paste !== undefined) return { kind: "paste", icon: "clipboard", name: t.composer.pasteChipName(paste.seq, paste.lines) };
     const ref = imageRefAt.get(offset);
     if (ref !== undefined) return { kind: "image", icon: "image", name: String(ref.n) };
+    const task = taskAt.get(offset);
+    if (task !== undefined) {
+      return { kind: "task", icon: FEATURE_ICON.task, name: task.task.title === "" ? t.common.newTask : task.task.title };
+    }
     return null;
   };
   /** 展开一块：token 换回全文（execCommand 保撤销栈），区间写回块状态。
@@ -359,6 +377,34 @@ export function Composer(props: {
     });
   };
 
+  // ── 拖进来的东西落在指针处（drop-point.ts）：拖动时画一根插入竖线，松手在那里插小签 ──
+  const [dropAt, setDropAt] = useState<{ index: number; left: number; top: number; height: number } | null>(null);
+  const dropRanges = useMemo(() => chipSpans.map(({ start, end }) => ({ start, end })), [chipSpans]);
+  /** 任务胶囊：在 at 处插 token（execCommand 保撤销栈），光标落在它之后 */
+  const insertTaskAt = (task: TaskRef, at: number): void => {
+    const el = textareaRef.current;
+    const next = insertTaskToken(props.value, at, task);
+    if (el === null) {
+      props.onChange(next.text);
+      return;
+    }
+    el.focus();
+    el.setSelectionRange(next.from, next.from);
+    if (!document.execCommand("insertText", false, next.inserted)) props.onChange(next.text);
+    lastSelectionRef.current = { start: next.caret, end: next.caret };
+  };
+  // 拖动中途取消（Esc、拖出窗口）不一定触发 field 的 dragleave：全局兜底收掉竖线
+  useEffect(() => {
+    if (dropAt === null) return;
+    const clear = (): void => setDropAt(null);
+    window.addEventListener("dragend", clear);
+    window.addEventListener("drop", clear, true);
+    return () => {
+      window.removeEventListener("dragend", clear);
+      window.removeEventListener("drop", clear, true);
+    };
+  }, [dropAt === null]);
+
   const disabled = props.disabled === true;
   const running = props.running === true;
   // 材料清单（composer-materials.ts 的唯一数据来源）：叠放层与后续排布都吃它。
@@ -412,7 +458,48 @@ export function Composer(props: {
           outlineOffset: -5,
         }}
       >
-      <div className={`composer-field${pasteRuns.length > 0 ? " has-paste-run" : ""}`}>
+      <div
+        className={`composer-field${pasteRuns.length > 0 ? " has-paste-run" : ""}`}
+        onDragOver={(event) => {
+          const types = event.dataTransfer.types;
+          if (disabled || !(types.includes("Files") || types.includes(TASK_REF_MIME))) return;
+          event.preventDefault();
+          const el = textareaRef.current;
+          const index = el === null ? null : dropIndexAtPoint(el, event.clientX, event.clientY, dropRanges);
+          if (el === null || index === null) {
+            if (dropAt !== null) setDropAt(null);
+            return;
+          }
+          if (dropAt?.index === index) return;
+          const point = caretPoint(el, index);
+          setDropAt(
+            point === null
+              ? null
+              : { index, left: point.left + el.offsetLeft, top: point.top + el.offsetTop, height: point.height },
+          );
+        }}
+        onDragLeave={(event) => {
+          if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+          setDropAt(null);
+        }}
+        onDrop={(event) => {
+          setDropAt(null);
+          const types = event.dataTransfer.types;
+          const isTask = types.includes(TASK_REF_MIME);
+          if (disabled || !(isTask || types.includes("Files"))) return;
+          // preventDefault 同时是给外层 ChatView 的信号：这次已在落点处理过，别再追加到末尾
+          event.preventDefault();
+          const el = textareaRef.current;
+          const index = el === null ? null : dropIndexAtPoint(el, event.clientX, event.clientY, dropRanges);
+          if (isTask) {
+            const task = parseTaskRefPayload(event.dataTransfer.getData(TASK_REF_MIME));
+            if (task !== null) insertTaskAt(task, index ?? props.value.length);
+            return;
+          }
+          const files = filesOf(event.dataTransfer);
+          if (files.length > 0) attach(files, index ?? undefined);
+        }}
+      >
         {/*
           镜像层（全主题常驻）：与 textarea 同字体、同字距、同宽。**字由它画**（2026-10-30 起）：
           textarea 的字透明，只管光标、选区、输入法与撤销。句中 token 在这里包成 .composer-chip：
@@ -442,6 +529,13 @@ export function Composer(props: {
           })}
           {"\u200b"}
         </div>
+        {dropAt !== null && (
+          <span
+            className="composer-drop-caret"
+            aria-hidden="true"
+            style={{ left: dropAt.left, top: dropAt.top, height: dropAt.height }}
+          />
+        )}
         {/* 展开段的收起标签：浮在区间头上（.composer-field 内绝对定位，叠在 textarea
             之上可点击）。不在镜像层里——镜像的 textContent 必须与 textarea 逐字一致
             （caret-point 的 locateText 靠它），多一颗按钮就全乱了 */}
@@ -643,8 +737,14 @@ export function Composer(props: {
                   parseImageRefs(el.value, props.attachments.length).find((ref) =>
                     backspace ? ref.end === el.selectionStart : ref.start === el.selectionEnd,
                   ) ?? null;
+                const taskToken =
+                  resolveTaskTokens(el.value, props.tasks).find((token) =>
+                    backspace ? token.end === el.selectionStart : token.start === el.selectionEnd,
+                  ) ?? null;
                 const span =
-                  chip !== null
+                  taskToken !== null
+                    ? { start: taskToken.start, end: taskToken.end }
+                    : chip !== null
                     ? { start: chip.start, end: chip.end }
                     : pasteOwned !== null
                       ? { start: pasteOwned.start, end: pasteOwned.end }

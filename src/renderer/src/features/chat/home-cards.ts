@@ -90,10 +90,14 @@ const WRAPPER_TAGS = [
 const WRAPPER_BLOCK = new RegExp(`<(${WRAPPER_TAGS.join("|")})\\b[^>]*>[\\s\\S]*?</\\1>`, "g");
 const WRAPPER_SELF_CLOSING = new RegExp(`<(?:${WRAPPER_TAGS.join("|")})\\b[^>]*/>`, "g");
 
+/** 被截断在标签中间的残片（最近提问存的是前若干字，句中展开的 <referenced_task … /> 常被切断）：吞到结尾 */
+const WRAPPER_TRUNCATED = new RegExp(`<(?:${WRAPPER_TAGS.join("|")})\\b[^>]*$`);
+
 export function visibleAsk(text: string): string {
   return withoutQuotes(text)
     .replace(WRAPPER_BLOCK, "")
     .replace(WRAPPER_SELF_CLOSING, "")
+    .replace(WRAPPER_TRUNCATED, "")
     .replace(/<!--[\s\S]*?-->/g, "")
     .replace(/<!--[\s\S]*$/, "")
     .replace(/\s+/g, " ")
