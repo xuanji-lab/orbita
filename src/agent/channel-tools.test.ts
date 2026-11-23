@@ -163,6 +163,25 @@ describe("delegate", () => {
     await pending;
   });
 
+  test("planStep：参数里有这一项；给了就在回执里点出挂在哪一步、不上 delegateRequest（只落转录 input）；没给不提", async () => {
+    const { tools, fake } = setup("root");
+    const delegate = toolByName(tools, "delegate");
+    const props = (delegate.parameters as { properties: { planStep?: { type: string } } }).properties;
+    assert.equal(props.planStep?.type, "string");
+    assert.match(delegate.description, /planStep/);
+    const card = { childId: "c", title: "t", modelId: "m", thinkingLevel: "medium" as const, workbench: "/w" };
+
+    const withStep = delegate.execute("call-p1", { title: "t", task: "d", planStep: "  写测试\n并跑通 " }, undefined, undefined, undefined as never);
+    assert.equal("planStep" in (fake.sent[0] as Record<string, unknown>), false);
+    fake.answer(fake.requestIdAt(0), { ok: true, childId: "c", title: "t", card });
+    const text = ((await withStep).content[0] as { text: string }).text;
+    assert.match(text, /plan step "写测试 并跑通"/);
+
+    const without = delegate.execute("call-p2", { title: "t", task: "d", planStep: "   " }, undefined, undefined, undefined as never);
+    fake.answer(fake.requestIdAt(1), { ok: true, childId: "c", title: "t", card });
+    assert.doesNotMatch(((await without).content[0] as { text: string }).text, /plan step/);
+  });
+
   test("title / task 缺席或空白：不发请求，直接抛错", async () => {
     const { tools, fake } = setup("root");
     const delegate = toolByName(tools, "delegate");

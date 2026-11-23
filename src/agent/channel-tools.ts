@@ -1,6 +1,6 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { RequestBroker } from "./request-broker.ts";
-import type { ChannelDelivery } from "../shared/channel.ts";
+import { DELEGATE_PLAN_STEP_MAX_CHARS, parseDelegatePlanStep, type ChannelDelivery } from "../shared/channel.ts";
 import type { ChannelSendOutcome, DelegateCard, DelegateOutcome, ModelCostsOutcome } from "../shared/agent-ipc.ts";
 import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from "../shared/thinking.ts";
 
@@ -69,7 +69,11 @@ function delegateTool(broker: RequestBroker, sessionId: string): ToolDefinition 
       "running tests, research and data gathering rarely need a top-tier model; keep a mid tier at " +
       "medium thinking for design trade-offs; reserve the most expensive model with max thinking for " +
       "when the user names it or a cheaper tier has already failed. Project rules (AGENTS.md) that name " +
-      "a model for a kind of work take precedence.",
+      "a model for a kind of work take precedence. " +
+      "When the sub-session is for a step of your plan (update_plan), pass planStep: that step's text, copied " +
+      "as written in the plan, so the user sees the sub-session under that step. Also mark that step waiting " +
+      "and name the sub-session in waitingFor (for example \"子会话 <first 8 chars of its id> 在做\"); if you " +
+      "delegate before you update the plan, still pass planStep with the text the step will have.",
     parameters: {
       type: "object",
       properties: {
@@ -94,6 +98,12 @@ function delegateTool(broker: RequestBroker, sessionId: string): ToolDefinition 
           enum: [...THINKING_LEVELS],
           description: "Optional thinking level override for the sub-session.",
         },
+        planStep: {
+          type: "string",
+          description:
+            "Optional. The update_plan step this sub-session does, copied from the plan (up to " +
+            `${DELEGATE_PLAN_STEP_MAX_CHARS} characters). Pass it whenever the sub-session serves a plan step.`,
+        },
       },
       required: ["title", "task"],
     } as never,
@@ -110,6 +120,7 @@ function delegateTool(broker: RequestBroker, sessionId: string): ToolDefinition 
         }
         thinkingLevel = thinkingRaw;
       }
+      const planStep = parseDelegatePlanStep(args);
       const result = await broker.request<DelegateOutcome>({
         type: "delegateRequest",
         sessionId,
@@ -124,7 +135,10 @@ function delegateTool(broker: RequestBroker, sessionId: string): ToolDefinition 
         `Sub-session "${result.title}" (id ${result.childId}) started, running on ${card.modelId} ` +
         `(thinking: ${card.thinkingLevel}). Its private scratch workbench is ${card.workbench}. It is now working; its messages will arrive as <channel> ` +
         "blocks in a later turn. Unless you have unrelated work to do right now, end this turn — do " +
-        "not poll or wait for it.";
+        "not poll or wait for it." +
+        (planStep === null
+          ? ""
+          : ` It is shown under the plan step "${planStep}"; if that is not a step of your plan yet, the next update_plan must contain it, with the same text.`);
       return {
         content: [{ type: "text", text }],
         details: { delegate: card satisfies DelegateCard },

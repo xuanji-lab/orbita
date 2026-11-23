@@ -301,3 +301,20 @@ export function parseChannelPrompt(
   if (!allowedKinds(from as ChannelSide).includes(kind)) return null;
   return { from: from as ChannelSide, kind, peerId, messageId };
 }
+
+/**
+ * delegate 的可选参数 planStep（状态卡把子会话挂到计划的哪一步）：模型写 **update_plan 里那一步的文字**。
+ * 不用步骤 id——id 是系统按文字对齐算出来的（shared/plan-diff.ts），模型手里没有；文字是它自己写的。
+ * 参数随工具调用的 input 落在转录里（不经主进程、不进 details），agent 执行时与 renderer 读取时
+ * 用同一份解析：非字符串 / 空白 = 没写（null），折叠换行，超长截断（只用来对文字，不需要整段）。
+ */
+export const DELEGATE_PLAN_STEP_MAX_CHARS = 200;
+
+export function parseDelegatePlanStep(input: unknown): string | null {
+  if (typeof input !== "object" || input === null) return null;
+  const raw = (input as Record<string, unknown>)["planStep"];
+  if (typeof raw !== "string") return null;
+  const text = raw.replace(/\s+/g, " ").trim();
+  if (text === "") return null;
+  return text.length > DELEGATE_PLAN_STEP_MAX_CHARS ? text.slice(0, DELEGATE_PLAN_STEP_MAX_CHARS) : text;
+}
