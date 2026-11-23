@@ -8,7 +8,7 @@ import { PanelEmpty } from "../../shell/PanelEmpty";
 import { Segmented, Switch } from "../settings/SettingControls";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
-import {
+import { MASS_UNIT_PER_EARTH,
   addPlanet,
   BACKDROPS,
   bodyArt,
@@ -165,7 +165,7 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null }) 
                 {tg.readout.density}<b>{formatNumber(densityOf(kind, design.planet?.composition ?? "rock"))}</b>
               </span>
               <span>
-                {tg.readout.mass}<b>{formatNumber(body.mass)}</b>
+                {tg.readout.mass}<b>{`${formatNumber(earth(body.mass))} M⊕`}</b>
               </span>
               {kind === "planet" && design.planet !== null && (
                 <span>
@@ -246,7 +246,7 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null }) 
             </Row>
             <Row
               name={tg.mass}
-              desc={kind === "star" ? tg.starMassDesc(formatNumber(range.min), formatNumber(range.max)) : tg.massDesc(formatNumber(range.min), formatNumber(range.max))}
+              desc={kind === "star" ? tg.starMassDesc(formatNumber(earth(range.min)), formatNumber(earth(range.max))) : tg.massDesc(formatNumber(earth(range.min)), formatNumber(earth(range.max)))}
               errors={errorsAt(errors, kind, "mass")}
               t={t}
               slider={
@@ -263,7 +263,13 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null }) 
                 />
               }
             >
-              <NumberField value={body.mass} label={tg.mass} field="mass" invalid={errorsAt(errors, kind, "mass").length > 0} onChange={(mass) => patchBody({ mass })} />
+              <NumberField
+                value={earth(body.mass)}
+                label={tg.mass}
+                field="mass"
+                invalid={errorsAt(errors, kind, "mass").length > 0}
+                onChange={(mass) => patchBody({ mass: mass * MASS_UNIT_PER_EARTH })}
+              />
             </Row>
             {kind === "planet" && design.planet !== null ? (
               <Row name={tg.composition} desc={tg.compositionDesc}>
@@ -408,10 +414,18 @@ function invalidFor(errors: readonly DesignError[], kind: BodyKind): boolean {
   });
 }
 
+/**
+ * 质量在界面上一律写 M⊕（设计审查 R14：面板写 600、插件稿写 60 M⊕，两套单位）。设计稿内部仍是 M⊕ × 10
+ * （星系几何按它算），只在显示与输入时换算。
+ */
+function earth(mass: number): number {
+  return mass / MASS_UNIT_PER_EARTH;
+}
+
 function errorText(error: DesignError, t: Messages): string {
   const tg = t.galaxyDesigner;
   if (error.kind === "mass-range") {
-    return tg.errors.massRange(error.body === "star" ? tg.star : tg.planet, formatNumber(error.value), formatNumber(error.min), formatNumber(error.max));
+    return tg.errors.massRange(error.body === "star" ? tg.star : tg.planet, formatNumber(earth(error.value)), formatNumber(earth(error.min)), formatNumber(earth(error.max)));
   }
   if (error.kind === "orbit-collision") return tg.errors.collision(formatNumber(error.value), formatNumber(error.min));
   if (error.kind === "orbit-far") return tg.errors.far(formatNumber(error.value), formatNumber(error.max));
