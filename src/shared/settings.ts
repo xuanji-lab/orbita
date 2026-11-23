@@ -350,6 +350,11 @@ export interface AppSettings {
    */
   boardDays?: BoardDays;
   /**
+   * 侧栏顶部「单智能体 / 编排」切换停在哪一侧（2026-11-23 用户定：运行时仍一套内核，产品上两种形态有入口可切）。
+   * 缺席 = 单智能体（升级后行为与此前完全一致）；只认 "agent" / "orchestrate"，别的值丢掉。
+   */
+  appMode?: AppMode;
+  /**
    * 左栏会话列表的「时间范围」筛选（用户 2026-11-07：「会话生命周期如果可以有一个用最近一天、
    * 最近三天、最近五天、最近七天来筛选要显示的会话就好了」）：只列最后活动（updatedAt）落在
    * 最近 N 天内的会话。**缺席 = 不限**（打开后行为与此前完全一致）；只认 1 / 3 / 5 / 7，其余丢掉。
@@ -404,6 +409,15 @@ export interface ProvidersPageSettings {
 export const BOARD_DAYS_CHOICES = [3, 5, 7] as const;
 export type BoardDays = (typeof BOARD_DAYS_CHOICES)[number];
 export const BOARD_DAYS_DEFAULT: BoardDays = 5;
+
+/** 应用形态：单智能体（工作区 → 会话树）/ 编排（工作区 = 一座星系，只和它的主智能体沟通）。缺席 = 单智能体 */
+export const APP_MODES = ["agent", "orchestrate"] as const;
+export type AppMode = (typeof APP_MODES)[number];
+export const APP_MODE_DEFAULT: AppMode = "agent";
+
+export function isAppMode(value: unknown): value is AppMode {
+  return (APP_MODES as readonly unknown[]).includes(value);
+}
 
 /** 左栏时间范围筛选的可选天数（缺席 = 不限） */
 export const SIDEBAR_AGE_CHOICES = [1, 3, 5, 7] as const;
@@ -609,6 +623,7 @@ export function parseSettings(raw: unknown): AppSettings {
     providersPage?: unknown;
     pluginsPage?: unknown;
     boardDays?: unknown;
+    appMode?: unknown;
     sidebarAgeDays?: unknown;
     /** 旧键（2026-10-25 之前）：providersPage.cardSize 缺席时读它，任何一次写入都把它从盘上带走 */
     providerCardSize?: unknown;
@@ -699,6 +714,8 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(pluginsPage === undefined ? {} : { pluginsPage }),
     // 只认 3 / 5 / 7：别的数当作没选过（缺席 = 5）
     ...(isBoardDays(record.boardDays) ? { boardDays: record.boardDays } : {}),
+    // 只认两种形态：别的值当作没选过（缺席 = 单智能体）
+    ...(isAppMode(record.appMode) ? { appMode: record.appMode } : {}),
     // 只认 1 / 3 / 5 / 7：别的值（含补丁里的 null）当作「不限」，不落键
     ...(isSidebarAgeDays(record.sidebarAgeDays) ? { sidebarAgeDays: record.sidebarAgeDays } : {}),
     // 只认绝对路径（POSIX 以 / 开头，Windows 盘符或 UNC）：相对路径会随 cwd 漂，当作没设

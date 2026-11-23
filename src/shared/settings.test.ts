@@ -1,6 +1,7 @@
 import { deepStrictEqual, ok } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  APP_MODE_DEFAULT,
   BOARD_DAYS_DEFAULT,
   effectiveLanguage,
   selectableThemes,
@@ -610,6 +611,15 @@ describe("parseSettings 的 boardDays（周看板一屏几天）", () => {
     for (const bad of [4, 0, "5", null, 5.5, [5]]) deepStrictEqual("boardDays" in parseSettings({ boardDays: bad }), false);
     deepStrictEqual("boardDays" in parseSettings({}), false);
     deepStrictEqual(BOARD_DAYS_DEFAULT, 5);
+  });
+});
+
+describe("parseSettings 的 appMode（侧栏单智能体 / 编排）", () => {
+  it("只认 agent / orchestrate；缺席与坏值不落键（读侧缺席 = 单智能体）", () => {
+    for (const mode of ["agent", "orchestrate"]) deepStrictEqual(parseSettings({ appMode: mode }).appMode, mode);
+    for (const bad of ["Orchestrate", "", null, 1, ["agent"], "multi"]) deepStrictEqual("appMode" in parseSettings({ appMode: bad }), false);
+    deepStrictEqual("appMode" in parseSettings({}), false);
+    deepStrictEqual(APP_MODE_DEFAULT, "agent");
   });
 });
 
