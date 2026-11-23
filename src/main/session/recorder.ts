@@ -29,7 +29,7 @@
  */
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
-import { parseChannelPrompt } from "../../shared/channel.ts";
+import { parseChannelBatch } from "../../shared/channel.ts";
 import { parsePlanNotes, PLAN_TOOL_NAME } from "../../shared/plan.ts";
 import { stampedThinkingLevel, type ChannelMarkRecord, type SessionRecord } from "../../shared/session.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
@@ -128,7 +128,7 @@ export function createSessionRecorder(
           : null;
     if (item === null || isEmptyErrorAssistant(item)) return;
     // 通道投递信封的接收侧标记（子会话 2026-09-23 设计修订）：一条 user 的
-    // item_started，首个 text 块能被 parseChannelPrompt 解析，说明这不是用户
+    // item_started，首个 text 块能被 parseChannelBatch（首条同 parseChannelPrompt）解析，说明这不是用户
     // 说的话，是主进程投给这条会话的通道消息——落一条 ChannelMarkRecord，
     // 不落 user 消息（正文只有一份，在通道账本里）。
     if (item.role === "user") {
@@ -152,12 +152,16 @@ export function createSessionRecorder(
   };
 }
 
-/** user 记录的首个 text 块能否解出信封；不能（普通用户消息）返回 null。 */
+/**
+ * user 记录的首个 text 块能否解出信封；不能（普通用户消息）返回 null。
+ * 合并投递（几个子会话回报合成一条）时首条信封落主字段，其余落 `also`——
+ * 仍是一条记录顶替一条 user 消息。
+ */
 function channelMarkOf(item: Extract<TranscriptItem, { role: "user" }>): ChannelMarkRecord | null {
   const text = item.content.find((block) => block.type === "text");
   if (text === undefined || text.type !== "text") return null;
-  const parsed = parseChannelPrompt(text.text);
-  if (parsed === null) return null;
+  const [parsed, ...rest] = parseChannelBatch(text.text);
+  if (parsed === undefined) return null;
   return {
     role: "channel-mark",
     id: item.id,
@@ -166,5 +170,8 @@ function channelMarkOf(item: Extract<TranscriptItem, { role: "user" }>): Channel
     from: parsed.from,
     kind: parsed.kind,
     timestamp: item.timestamp,
+    ...(rest.length === 0
+      ? {}
+      : { also: rest.map((more) => ({ peerId: more.peerId, messageId: more.messageId, from: more.from, kind: more.kind })) }),
   };
 }

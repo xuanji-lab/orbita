@@ -52,4 +52,6 @@ export const FEATURE_ICON = {
   settings: "settings",
   /** 通知（右栏铃铛与通知卡空态） */
   bell: "bell",
+  /** 不打岔：状态卡上的开关与收起小钮上的标记（子会话回报先攒着、不自己开轮） */
+  holdReports: "bell-off",
 } as const satisfies Record<string, IconName>;

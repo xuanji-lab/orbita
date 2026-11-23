@@ -12,6 +12,7 @@ import arrowUp from "../../../../design-system/assets/icons/lucide/arrow-up.svg?
 import arrowUpRight from "../../../../design-system/assets/icons/lucide/arrow-up-right.svg?raw";
 import blend from "../../../../design-system/assets/icons/lucide/blend.svg?raw";
 import bell from "../../../../design-system/assets/icons/lucide/bell.svg?raw";
+import bellOff from "../../../../design-system/assets/icons/lucide/bell-off.svg?raw";
 import blocks from "../../../../design-system/assets/icons/lucide/blocks.svg?raw";
 import book from "../../../../design-system/assets/icons/lucide/book.svg?raw";
 import bookmark from "../../../../design-system/assets/icons/lucide/bookmark.svg?raw";
@@ -167,6 +168,7 @@ import zap from "../../../../design-system/assets/icons/lucide/zap.svg?raw";
 const ICONS = {
   archive,
   bell,
+  "bell-off": bellOff,
   blend,
   blocks,
   book,

@@ -6,6 +6,8 @@ import { QuoteToolbar, type QuoteCandidate } from "../../shell/QuoteToolbar";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
 import { QueueStrip } from "./QueueStrip";
+import { ChannelHoldBar } from "./ChannelHoldBar";
+import { channelHold } from "./channel-hold-store.ts";
 import { compactionBoundaryStatus, mergeSideRecords } from "./session-states";
 import {
   ChannelFromChildCard,
@@ -1086,6 +1088,8 @@ function ChatViewBody(props: {
       );
     }
     syncScrollToEnd();
+    // 「用户在读」的信号：往上翻着（跟随态 Reading）就告诉子回报的投递判定，先攒着不开轮
+    if (openId !== "") channelHold.setViewing(openId, { scrolledUp: !isFollowing(followTrackerRef.current) });
     // 触顶就拉更早的一页（源侧分页）。**先记滚动几何再发请求**：回执并进窗口后
     // 靠它把 scrollTop 补回来（见下面的锚定 effect）。守卫在这里做——`loadOlder`
     // 自己也会 no-op，但锚点不能为一个没发出去的请求留着（那会把下一次真拉回来的
@@ -1179,6 +1183,12 @@ function ChatViewBody(props: {
 
   /** 这一屏是哪条会话：活着的优先，否则是打开的那条 */
   const openId = session.sessionId ?? session.opened?.id ?? "";
+  // 这一屏正被看着：子回报的「用户在读吗」只对被看着的会话成立；卸下 / 换会话就撤掉
+  useEffect(() => {
+    if (openId === "") return undefined;
+    channelHold.setViewing(openId, { scrolledUp: !isFollowing(followTrackerRef.current) });
+    return () => channelHold.setViewing(openId, null);
+  }, [openId]);
   // 记忆：用户消息的动作行里挂「用到 N · 记住 M」（UserBubble）。
   // 账本按轮记，这里按时间把轮配到气泡上（不按计数，见 pairMemoryTurns）
   const memorySession = useMemorySession(openId !== "" ? openId : null);
@@ -1787,6 +1797,8 @@ function ChatViewBody(props: {
             */}
             {hideComposer !== true && (
               <>
+                {/* 子会话交回了 N 件：先攒在这里、不替用户开一轮（channel-hold.ts）；与排队条同一层 */}
+                {session.sessionId !== null && <ChannelHoldBar sessionId={session.sessionId} titles={channel.titles} />}
                 {/* 排队卡片：比 composer 高一层（等待发出的事），比审批低一层（审批要求回答才继续） */}
                 <QueueStrip
                   items={session.queued}

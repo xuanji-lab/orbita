@@ -14,6 +14,7 @@ import type { ChatSession, SessionEngine } from "../chat/useChatSession";
 import { useTaskRecords } from "../chat/useTaskRecords.ts";
 import { useChannelSummaries } from "../chat/useChannelSummaries";
 import { useParentChannels } from "../chat/useChannelMessages";
+import { channelHold, useChannelHold } from "../chat/channel-hold-store.ts";
 import type { ChatFileScope } from "../chat/chat-file-scope.ts";
 import { useMemorySession } from "../memory/useMemory.ts";
 import { useProgressDigest } from "./TaskProgress";
@@ -182,6 +183,25 @@ export function ChatStatus(props: {
     return () => window.removeEventListener(STATUS_FOCUS_EVENT, onFocus);
   }, [assign]);
 
+  // 不打岔：开关按会话记（channel-hold-store），子会话交回的东西先攒着、不替用户开一轮
+  const hold = useChannelHold(sessionId);
+  const holdOn = hold?.holdOn === true;
+  const heldKids = hold?.summary.children ?? 0;
+  const heldAsk = hold?.summary.hasQuestion === true;
+  const holdToggle = (
+    <button
+      type="button"
+      className="cs-hold"
+      aria-pressed={holdOn}
+      data-on={holdOn || undefined}
+      aria-label={t.channelHold.toggleName}
+      title={holdOn ? `${t.channelHold.toggleOn} ${t.channelHold.toggleTurnOff}` : `${t.channelHold.toggleOff} ${t.channelHold.toggleTurnOn}`}
+      onClick={() => channelHold.setHoldOn(sessionId, !holdOn)}
+    >
+      <Icon name={FEATURE_ICON.holdReports} size={12} strokeWidth={1.8} />
+      {heldAsk && <span className="cs-hold-dot" aria-hidden="true" />}
+    </button>
+  );
   const states = children.map((row) => row.state);
   const signal = pillSignal(states, (turnActive ? 1 : 0) + terminals.length);
   const scope: ChatFileScope = { sessionId, workspaceId: session.workspaceId, cwd: session.cwd };
@@ -205,6 +225,11 @@ export function ChatStatus(props: {
           )}
           {signal !== null && <span className="cs-pill-n">{label}</span>}
         </button>
+        {/* 收起时也有入口：开关与「有几件攒着」都不必先展开卡 */}
+        <div className="cs-pill-hold">
+          {holdToggle}
+          {heldKids > 0 && <span className="cs-hold-n">{t.channelHold.pillHeld(heldKids)}</span>}
+        </div>
       </div>
     );
   }
@@ -223,6 +248,7 @@ export function ChatStatus(props: {
         {/* 头：目标常驻（往下滚也看得见在为什么干活）+ 收起键；没有目标时只剩收起键 */}
         <div className="cs-top">
           {ledger.goal !== null ? <GoalRow text={ledger.goal.text} versions={goalVersions.map((item) => (item.kind === "goal" ? item.to : ""))} /> : <span className="cs-top-fill" />}
+          {holdToggle}
           <button type="button" className="cs-close" aria-label={t.chatStatus.collapse} title={t.chatStatus.collapse} onClick={() => toggleOpen(false)}>
             <Icon name="minimize-2" size={12} strokeWidth={1.8} />
           </button>
