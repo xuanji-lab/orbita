@@ -5,7 +5,7 @@ import { IconButton } from "./IconButton";
 import { Menu, type MenuItem } from "./Menu";
 import { StatusPie } from "./StatusPie";
 import { sessionAgeLabel } from "./relative-time.ts";
-import { StarFigure } from "../features/galaxy-designer/GalaxyDesigner.tsx";
+import { StarFigure } from "../features/galaxy-designer/StarFigure.tsx";
 import { useAvatarBySize, useGalaxyDesign } from "../features/galaxy-designer/useGalaxyDesign.ts";
 import type { HeaderStatus } from "../features/chat/agent-status.ts";
 import type { SessionRunState } from "../features/notify/completion-notice.ts";

@@ -2,6 +2,8 @@ import { deepStrictEqual, ok } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   APP_MODE_DEFAULT,
+  ORCHESTRA_HOME_KEY,
+  ORCHESTRA_VIEW_DEFAULT,
   BOARD_DAYS_DEFAULT,
   effectiveLanguage,
   selectableThemes,
@@ -620,6 +622,19 @@ describe("parseSettings 的 appMode（侧栏单智能体 / 编排）", () => {
     for (const bad of ["Orchestrate", "", null, 1, ["agent"], "multi"]) deepStrictEqual("appMode" in parseSettings({ appMode: bad }), false);
     deepStrictEqual("appMode" in parseSettings({}), false);
     deepStrictEqual(APP_MODE_DEFAULT, "agent");
+  });
+});
+
+describe("parseSettings 的编排面板视图与主对话指针", () => {
+  it("orchestraView 只认 tree / galaxy / graph；缺席与坏值不落键（读侧缺席 = 树状图）", () => {
+    for (const view of ["tree", "galaxy", "graph"]) deepStrictEqual(parseSettings({ orchestraView: view }).orchestraView, view);
+    for (const bad of ["Tree", "", null, 2, ["graph"], "dag"]) deepStrictEqual("orchestraView" in parseSettings({ orchestraView: bad }), false);
+    deepStrictEqual(ORCHESTRA_VIEW_DEFAULT, "tree");
+  });
+  it("orchestraMain 只留字符串键 → 非空字符串值；坏项丢掉，全坏 / 空表 / 非对象不落键", () => {
+    deepStrictEqual(parseSettings({ orchestraMain: { ws1: "s1", [ORCHESTRA_HOME_KEY]: "s2" } }).orchestraMain, { ws1: "s1", "~home": "s2" });
+    deepStrictEqual(parseSettings({ orchestraMain: { ws1: "s1", ws2: "", ws3: 3, ws4: null } }).orchestraMain, { ws1: "s1" });
+    for (const bad of [{}, { ws: "" }, null, "s1", ["s1"], 1]) deepStrictEqual("orchestraMain" in parseSettings({ orchestraMain: bad }), false);
   });
 });
 

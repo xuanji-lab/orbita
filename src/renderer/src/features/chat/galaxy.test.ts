@@ -13,8 +13,6 @@ import {
   DUST_REF_CAP,
   foldedMarkAt,
   emptyHintAt,
-  LABEL_ALWAYS_MAX,
-  planetTags,
   truncateLabel,
   WAITING_SCALE,
   type PlanetItem,
@@ -387,18 +385,10 @@ describe("等你的行星：前置、放大；名字、碎石与「+N」", () =>
     assert.equal(emptyHintAt(layoutGalaxy({ starMass: 620, planets: [], sessions: 3 }), camera, vp), null);
   });
 
-  test("名字标签：常显只给等你 / 在跑里排最前的 LABEL_ALWAYS_MAX 颗，其余悬停；没名字的不标；长名截断；靠右的行星名字写在左边", () => {
-    const states: PlanetSpec["state"][] = ["waiting", "waiting", "running", "running", null, "failed"];
-    const layout = layoutGalaxy({ ...spec(states), planets: spec(states).planets.map((p, i) => (i === 5 ? { ...p, label: "" } : p)) });
-    const tags = planetTags(layout, frameAt(layout, 0), vp.width);
-    assert.equal(tags.filter((tag) => tag.always).length, LABEL_ALWAYS_MAX);
-    assert.deepEqual(tags.filter((tag) => tag.always).map((tag) => tag.planetId), ["p0", "p1", "p2"]);
-    assert.equal(tags.find((tag) => tag.planetId === "p3")?.always, false);
-    assert.equal(tags.find((tag) => tag.planetId === "p5"), undefined);
+  test("名字截断：短名原样；超过 14 个字截成 13 个字 + 省略号（锁定框引线与悬停名字共用）", () => {
     assert.equal(truncateLabel("短名"), "短名");
     assert.equal([...truncateLabel("一二三四五六七八九十一二三四五六七八")].length, 14);
     assert.ok(truncateLabel("一二三四五六七八九十一二三四五六七八").endsWith("…"));
-    for (const tag of tags) assert.equal(tag.anchor, tag.x > vp.width * 0.65 ? "end" : "start");
   });
 });
 

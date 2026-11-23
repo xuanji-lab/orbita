@@ -7351,6 +7351,40 @@ button.turn-output-from.link:hover {
 .galaxy-tag:hover .galaxy-tag-text {
   opacity: 1;
 }
+/*
+ * 锁定框 + 引线（GalaxyCallouts：工作区页大星系与右栏编排面板的星系图共用）。
+ * 锁定框 = 四个角括号，次级墨；等你的框换 warning（状态色是第二信号，第一信号是线上写的「等你」）。
+ * 引线 = 一根 1px 次级墨的折线，任务名写在折线水平段的上方（下划线式），字号 sm、次级墨、带页面底色描边压得住轨道线。
+ * 线和字都不吃指针：悬停交给行星自己的命中圈。
+ */
+.galaxy-lock {
+  fill: none;
+  stroke: var(--color-text-secondary);
+  stroke-width: 1;
+  stroke-linecap: square;
+  vector-effect: non-scaling-stroke;
+}
+.galaxy-lock[data-state="waiting"] {
+  stroke: var(--color-warning);
+}
+.galaxy-callout-line {
+  fill: none;
+  stroke: var(--color-text-tertiary);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.galaxy-callout[data-state="waiting"] .galaxy-callout-line {
+  stroke: var(--color-warning);
+}
+.galaxy-callout-text {
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  fill: var(--color-text-primary);
+  stroke: var(--color-bg-panel);
+  stroke-width: 3px;
+  paint-order: stroke;
+  pointer-events: none;
+}
 .galaxy-folded {
   font-family: var(--font-family-base);
   font-size: var(--font-size-xs);

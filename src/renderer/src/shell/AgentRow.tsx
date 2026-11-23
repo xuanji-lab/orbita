@@ -4,7 +4,7 @@ import { Icon } from "./Icon";
 import { IconButton } from "./IconButton";
 import { StatusPie } from "./StatusPie";
 import { sessionAgeLabel } from "./relative-time.ts";
-import { StarFigure } from "../features/galaxy-designer/GalaxyDesigner.tsx";
+import { StarFigure } from "../features/galaxy-designer/StarFigure.tsx";
 import { useAvatarBySize, useGalaxyDesign } from "../features/galaxy-designer/useGalaxyDesign.ts";
 import { agentLineOf, type AgentLine } from "../features/chat/agent-status.ts";
 import type { ScopeSummary } from "../features/chat/galaxy-data.ts";

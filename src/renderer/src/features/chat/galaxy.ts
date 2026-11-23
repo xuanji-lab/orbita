@@ -694,56 +694,11 @@ export function galaxySpecOf(fixture: GalaxyFixture): GalaxySpec {
   return { starMass: 620, planets: TYPICAL_PLANETS, sessions: 14 };
 }
 
-/** 行星名字常显的上限：「等你」「在跑」里排最前（最要紧）的几颗；其余悬停才显示 */
-export const LABEL_ALWAYS_MAX = 3;
 export const LABEL_MAX_CHARS = 14;
-
-export interface PlanetTag {
-  key: string;
-  planetId: string;
-  text: string;
-  x: number;
-  y: number;
-  r: number;
-  /** 名字写在行星左边还是右边（行星靠右半边时写左边，不出画布） */
-  anchor: "start" | "end";
-  /** 常显（否则悬停才显示） */
-  always: boolean;
-}
 
 export function truncateLabel(text: string, max = LABEL_MAX_CHARS): string {
   const chars = [...text.trim()];
   return chars.length <= max ? chars.join("") : `${chars.slice(0, max - 1).join("")}…`;
-}
-
-/**
- * 行星名字的标签表。「常显」只给等你 / 在跑里按轨道次序（= 要紧程度）排前的 LABEL_ALWAYS_MAX 颗，
- * 别的行星不标，悬停才出名字。没名字的行星没有标签（不拿 id 凑）。
- */
-export function planetTags(layout: GalaxyLayout, items: readonly DrawItem[], width: number): PlanetTag[] {
-  const rank = new Map(layout.planets.map((planet, index) => [planet.id, index]));
-  const always = new Set(
-    layout.planets
-      .filter((planet) => (planet.state === "waiting" || planet.state === "running") && planet.label !== null && planet.label !== "")
-      .slice(0, LABEL_ALWAYS_MAX)
-      .map((planet) => planet.id),
-  );
-  const tags: PlanetTag[] = [];
-  for (const item of items) {
-    if (item.kind !== "planet" || item.label === null || item.label === "") continue;
-    tags.push({
-      key: `tag-${item.planetId}`,
-      planetId: item.planetId,
-      text: truncateLabel(item.label),
-      x: item.x,
-      y: item.y,
-      r: item.r,
-      anchor: item.x > width * 0.65 ? "end" : "start",
-      always: always.has(item.planetId),
-    });
-  }
-  // 画家算法里的次序与要紧程度无关；标签按轨道次序稳定排列，保证 DOM 不随时间跳
-  return tags.sort((a, b) => (rank.get(a.planetId) ?? 0) - (rank.get(b.planetId) ?? 0));
 }
 
 /**

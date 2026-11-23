@@ -17,7 +17,6 @@ import {
   dustCapFor,
   foldedMarkAt,
   emptyHintAt,
-  planetTags,
   motionAllowed,
   orbitArcs,
   type DrawItem,
@@ -25,8 +24,10 @@ import {
   type MotionInputs,
 } from "./galaxy.ts";
 import { useT } from "../../locale.ts";
-import { BodyFigure } from "../galaxy-designer/GalaxyDesigner.tsx";
-import { bodyArt, type GalaxyDesign } from "../galaxy-designer/design.ts";
+import { StarBody } from "../galaxy-designer/StarFigure.tsx";
+import { starExtentRatio, type GalaxyDesign } from "../galaxy-designer/design.ts";
+import { GalaxyCallouts } from "./GalaxyCallouts.tsx";
+import type { PlanetItem } from "./galaxy.ts";
 
 /**
  * 画布的真实尺寸（CSS px）：ResizeObserver 量 svg 自己的盒子。星系占首页输入框下方剩下的全部空间，
@@ -169,7 +170,11 @@ export function HomeGalaxy(props: { spec: GalaxySpec; label: string; starDesign?
     return { camera, viewport, arcs: orbitArcs(layout, camera, viewport) };
   }, [layout, size, props.fill]);
   const items = scene === null ? [] : drawFrame(layout, scene.camera, scene.viewport, scene.arcs, seconds);
-  const tags = scene === null || props.fill !== true ? [] : planetTags(layout, items, scene.viewport.width);
+  // 工作区页（fill）：在做工的行星画锁定框，最要紧的几颗升起引线写任务名（GalaxyCallouts，与右栏星系图共用）
+  const rankOf = useMemo(() => new Map(layout.planets.map((planet, index) => [planet.id, index])), [layout]);
+  const planetItems = items.filter((item): item is PlanetItem => item.kind === "planet");
+  const starItem = items.find((item) => item.kind === "star");
+  const starExtent = props.starDesign === undefined ? 1 : starExtentRatio(props.starDesign);
   const folded = scene === null || props.fill !== true ? null : foldedMarkAt(layout, scene.camera, scene.viewport);
   const hint = scene === null || props.emptyHint === undefined ? null : emptyHintAt(layout, scene.camera, scene.viewport);
   const starGradient = `${uid}-star`;
@@ -182,18 +187,15 @@ export function HomeGalaxy(props: { spec: GalaxySpec; label: string; starDesign?
     }
     if (item.kind === "star") {
       if (props.starDesign !== undefined) {
-        return (
-          <g key={item.key} className="gd-figure galaxy-star-figure" transform={`translate(${item.x} ${item.y})`}>
-            <BodyFigure art={bodyArt(props.starDesign, "star", item.r)} uid={`${uid}-sf`} />
-          </g>
-        );
+        return <StarBody key={item.key} design={props.starDesign} x={item.x} y={item.y} r={item.r} uid={`${uid}-sf`} />;
       }
       return <circle key={item.key} cx={item.x} cy={item.y} r={item.r} fill={`url(#${starGradient})`} />;
     }
     const lightId = `${uid}-${item.planetId}`;
     return (
       <g key={item.key}>
-        {item.state === "waiting" && <circle className="galaxy-planet-waiting" cx={item.x} cy={item.y} r={item.r + 3} />}
+        {/* 等你的细环只留给单智能体首页的 fixture 星系；工作区页改由锁定框说（见 GalaxyCallouts） */}
+        {item.state === "waiting" && props.fill !== true && <circle className="galaxy-planet-waiting" cx={item.x} cy={item.y} r={item.r + 3} />}
         <circle
           className="galaxy-planet"
           data-planet={item.planetId}
@@ -233,21 +235,17 @@ export function HomeGalaxy(props: { spec: GalaxySpec; label: string; starDesign?
         )}
       </defs>
       {items.map(render)}
-      {/* 名字与「+N」画在最上层：等你 / 在跑的常显，其余悬停；碎石折掉的会话数收成一个「+N」 */}
-      {tags.map((tag) => (
-        <g key={tag.key} className="galaxy-tag" data-always={tag.always || undefined}>
-          <circle className="galaxy-hit" cx={tag.x} cy={tag.y} r={tag.r + 7} />
-          <text
-            className="galaxy-tag-text"
-            x={tag.anchor === "start" ? tag.x + tag.r + 7 : tag.x - tag.r - 7}
-            y={tag.y}
-            textAnchor={tag.anchor}
-            dominantBaseline="central"
-          >
-            {tag.text}
-          </text>
-        </g>
-      ))}
+      {/* 锁定框、引线与悬停名字画在最上层；碎石折掉的会话数收成一个「+N」 */}
+      {props.fill === true && scene !== null && (
+        <GalaxyCallouts
+          planets={planetItems}
+          rankOf={rankOf}
+          star={starItem === undefined ? null : { x: starItem.x, y: starItem.y, r: starItem.r * starExtent }}
+          width={scene.viewport.width}
+          height={scene.viewport.height}
+          waitingWord={t.agents.status.waiting}
+        />
+      )}
       {hint !== null && props.emptyHint !== undefined && (
         <text className="galaxy-empty-hint" x={hint.x} y={hint.y} textAnchor="middle" dominantBaseline="central">
           {props.emptyHint}

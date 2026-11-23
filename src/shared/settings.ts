@@ -355,6 +355,18 @@ export interface AppSettings {
    */
   appMode?: AppMode;
   /**
+   * 编排右栏「编排」面板停在哪种视图（2026-11-24）：树状图 / 星系图 / 协作图，同一份数据三种看法。
+   * 缺席 = 树状图（窄右栏也看得清）；只认三个值。
+   */
+  orchestraView?: OrchestraView;
+  /**
+   * 每个工作区的「主对话」（编排：一个工作区一条长对话，从它的 New Task 页发的每一句都进这条）。
+   * 键 = 工作区 id，不属于任何工作区的「主目录」用 ORCHESTRA_HOME_KEY；值 = 会话 id。
+   * **这是顶替**：旧内核这条线上没有常驻主智能体，先拿一条普通会话当它的对话；指针放设置里、不写会话 meta，
+   * 内核那条线接入常驻主智能体后整块换掉。指向的会话被删 / 归档 / 移走时由读的一方当作没有（不在这里清）。
+   */
+  orchestraMain?: Readonly<Record<string, string>>;
+  /**
    * 左栏会话列表的「时间范围」筛选（用户 2026-11-07：「会话生命周期如果可以有一个用最近一天、
    * 最近三天、最近五天、最近七天来筛选要显示的会话就好了」）：只列最后活动（updatedAt）落在
    * 最近 N 天内的会话。**缺席 = 不限**（打开后行为与此前完全一致）；只认 1 / 3 / 5 / 7，其余丢掉。
@@ -417,6 +429,28 @@ export const APP_MODE_DEFAULT: AppMode = "agent";
 
 export function isAppMode(value: unknown): value is AppMode {
   return (APP_MODES as readonly unknown[]).includes(value);
+}
+
+/** 编排面板的三种视图：树状图（层级）/ 星系图（每颗行星一个智能体）/ 协作图（有向、允许成环的交接图） */
+export const ORCHESTRA_VIEWS = ["tree", "galaxy", "graph"] as const;
+export type OrchestraView = (typeof ORCHESTRA_VIEWS)[number];
+export const ORCHESTRA_VIEW_DEFAULT: OrchestraView = "tree";
+
+export function isOrchestraView(value: unknown): value is OrchestraView {
+  return (ORCHESTRA_VIEWS as readonly unknown[]).includes(value);
+}
+
+/** orchestraMain 里「主目录」（不属于任何工作区）的键：工作区 id 是 uuid，不会撞上 */
+export const ORCHESTRA_HOME_KEY = "~home";
+
+/** 只留「字符串键 → 非空字符串值」的项；一项都不剩就当没有（不落键） */
+function parseOrchestraMain(value: unknown): Record<string, string> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [key, id] of Object.entries(value)) {
+    if (key !== "" && typeof id === "string" && id !== "") out[key] = id;
+  }
+  return Object.keys(out).length === 0 ? undefined : out;
 }
 
 /** 左栏时间范围筛选的可选天数（缺席 = 不限） */
@@ -624,6 +658,8 @@ export function parseSettings(raw: unknown): AppSettings {
     pluginsPage?: unknown;
     boardDays?: unknown;
     appMode?: unknown;
+    orchestraView?: unknown;
+    orchestraMain?: unknown;
     sidebarAgeDays?: unknown;
     /** 旧键（2026-10-25 之前）：providersPage.cardSize 缺席时读它，任何一次写入都把它从盘上带走 */
     providerCardSize?: unknown;
@@ -635,6 +671,7 @@ export function parseSettings(raw: unknown): AppSettings {
     experimental?: unknown;
   };
   const theme = parseTheme(record.theme);
+  const orchestraMain = parseOrchestraMain(record.orchestraMain);
   const width = record.rightPanelWidth;
   const sidebar = record.sidebarWidth;
   const docWidth = record.docPanelWidth;
@@ -716,6 +753,9 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(isBoardDays(record.boardDays) ? { boardDays: record.boardDays } : {}),
     // 只认两种形态：别的值当作没选过（缺席 = 单智能体）
     ...(isAppMode(record.appMode) ? { appMode: record.appMode } : {}),
+    // 只认三种视图：别的值当作没选过（缺席 = 树状图）
+    ...(isOrchestraView(record.orchestraView) ? { orchestraView: record.orchestraView } : {}),
+    ...(orchestraMain === undefined ? {} : { orchestraMain }),
     // 只认 1 / 3 / 5 / 7：别的值（含补丁里的 null）当作「不限」，不落键
     ...(isSidebarAgeDays(record.sidebarAgeDays) ? { sidebarAgeDays: record.sidebarAgeDays } : {}),
     // 只认绝对路径（POSIX 以 / 开头，Windows 盘符或 UNC）：相对路径会随 cwd 漂，当作没设
