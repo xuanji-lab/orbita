@@ -1468,6 +1468,12 @@ function ChatViewBody(props: {
    */
   const scopedHome = galaxyHome && props.orchestrate === true;
   const protoVariants = useProtoVariants();
+  // 编排的新任务固定放行（用户 2026-11-16 定「只留放行」，不再向用户暴露档位）：首页槽的档位钉成 skip，
+  // 但不写 settings.lastUsed——单智能体记住的那一档不被顺手改掉。已落盘的老会话保持它自己的档（本刀不动）
+  const orchestrateHome = props.orchestrate === true && homeActive;
+  useEffect(() => {
+    if (orchestrateHome && session.mode !== "skip") session.pinMode("skip");
+  }, [orchestrateHome, session.mode, session.pinMode]);
   // 这座星系的主星设计稿（没选工作区时用「主目录」那一份）：面板里一改，页面星系同一帧跟着变
   const galaxyDesign = useGalaxyDesign(session.workspaceId ?? "");
   // 不缓存：运行态每个事件都可能变；stateIndexOf 先建子会话表，整趟 O(n)（2000 条也只是一遍）
@@ -1518,6 +1524,7 @@ function ChatViewBody(props: {
         <ComposerBar
           session={session}
           scopeChip={!galaxyHome}
+          modeChip={props.orchestrate !== true}
           starredModels={props.starredModels ?? []}
           onToggleStarModel={props.onToggleStarModel ?? (() => {})}
           onOpenProviders={props.onOpenProviders ?? (() => {})}
@@ -3371,6 +3378,8 @@ function ComposerBar(props: {
    * ScopeMenu），输入框里不再出现；对话里保留——在那里它是「把这条会话移到哪」的真实操作。
    */
   scopeChip: boolean;
+  /** 权限档芯片画不画：编排形态固定放行、不向用户暴露档位 */
+  modeChip: boolean;
   /** 星标过的模型（设置里那份）：行的星与左栏第一格都看它 */
   starredModels: readonly ModelPair[];
   onToggleStarModel: (pair: ModelPair) => void;
@@ -3464,25 +3473,27 @@ function ComposerBar(props: {
           )}
         />
       )}
-      <Menu
-        items={modeItems}
-        placement="above"
-        panelMinWidth={112}
-        trigger={({ open, toggle }) => (
-          <Chip
-            icon="shield-check"
-            active={open}
-            fixedWidth={84}
-            title={t.permissionModes[session.mode].hint}
-            onClick={toggle}
-            chevron
-            // 窄槽下只留图标，fixedWidth 也在同一断点被覆盖掉（见 styles.css）
-            className="chip-mode"
-          >
-            {t.permissionModes[session.mode].label}
-          </Chip>
-        )}
-      />
+      {props.modeChip && (
+        <Menu
+          items={modeItems}
+          placement="above"
+          panelMinWidth={112}
+          trigger={({ open, toggle }) => (
+            <Chip
+              icon="shield-check"
+              active={open}
+              fixedWidth={84}
+              title={t.permissionModes[session.mode].hint}
+              onClick={toggle}
+              chevron
+              // 窄槽下只留图标，fixedWidth 也在同一断点被覆盖掉（见 styles.css）
+              className="chip-mode"
+            >
+              {t.permissionModes[session.mode].label}
+            </Chip>
+          )}
+        />
+      )}
       {props.intentToggle !== null && (
         <Chip
           icon={FEATURE_ICON.intent}

@@ -231,6 +231,11 @@ export interface ChatSession {
   removeQuote: (index: number) => void;
   mode: PermissionMode;
   changeMode: (next: PermissionMode) => void;
+  /**
+   * 只把本槽的档位意图钉成 next，**不**写启动恢复点（settings.lastUsed）、不动已有会话的 meta：
+   * 编排形态的新任务固定放行（用户 2026-11-16 定「只留放行」，不再向用户暴露档位），而这不该顺手改掉单智能体记住的那一档。
+   */
+  pinMode: (next: PermissionMode) => void;
   /** 当前查看会话的思考档（意图；clamp 真值经事件自动纠） */
   thinkingLevel: ThinkingLevel;
   changeThinkingLevel: (next: ThinkingLevel) => void;
@@ -2461,6 +2466,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     [engine, opened],
   );
 
+  const pinMode = useCallback((next: PermissionMode) => setMode(next), []);
+
   const changeThinkingLevel = useCallback(
     (next: ThinkingLevel) => {
       // 同 changeMode 的整条规矩：本地即设（UI 即时）→ 记在会话名下（跑着时改不进
@@ -2947,6 +2954,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     removeQuote,
     mode,
     changeMode,
+    pinMode,
     thinkingLevel,
     changeThinkingLevel,
     // 只给当前型号报回的支持集；别的型号报的（切过型号还没开轮）当没有，菜单回落目录
