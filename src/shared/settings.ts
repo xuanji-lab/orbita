@@ -228,6 +228,11 @@ export interface AppSettings {
    */
   collapsePastedText?: boolean;
   /**
+   * 回答里本地图的默认尺寸（2026-11-23）：右键一张图选「大图 / 小图」，选的这一次记下来，之后新出现的图按它画。
+   * **缺席 = "large"**。已经画在屏幕上的图不跟着变（每张图挂载时读一次），免得右键一张、整页的图一起跳。
+   */
+  chatImageSize?: "large" | "small";
+  /**
    * 后台会话跑完时响一声提示音（客舱呼唤铃）。**缺席 = 响**：这个提醒的价值就在于
    * 人不在跟前时也能知道，默认关等于没做。只管声音——侧栏未读底色与辅助对话旁的
    * 卡片不受它影响（静音的人同样需要知道任务完了）。只认布尔，同 gitAttribution。
@@ -582,6 +587,7 @@ export function parseSettings(raw: unknown): AppSettings {
     sidebarWidth?: unknown;
     compaction?: unknown;
     collapsePastedText?: unknown;
+    chatImageSize?: unknown;
     completionSound?: unknown;
     processView?: unknown;
     /** 只读：旧版「一轮一行」展开后的排法，并进 processView（不再写） */
@@ -669,6 +675,8 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(typeof record.collapsePastedText === "boolean"
       ? { collapsePastedText: record.collapsePastedText }
       : {}),
+    // 只认两个值，别的丢掉（缺席 = 大图）
+    ...(record.chatImageSize === "large" || record.chatImageSize === "small" ? { chatImageSize: record.chatImageSize } : {}),
     ...(parseProcessView(record.processView, record.processLayout) === undefined
       ? {}
       : { processView: parseProcessView(record.processView, record.processLayout) }),
