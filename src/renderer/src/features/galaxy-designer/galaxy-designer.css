@@ -64,9 +64,10 @@
 .gd-swatch[data-backdrop="muted"] {
   --gd-backdrop: var(--color-bg-muted);
 }
-.gd-stage[data-backdrop="nebula"],
-.gd-swatch[data-backdrop="nebula"] {
-  --gd-backdrop: color-mix(in srgb, var(--color-nebula) 14%, var(--color-bg-panel));
+.gd-stage[data-backdrop="deep"],
+.gd-swatch[data-backdrop="deep"] {
+  /* 深衬底：衬底混一点主墨，仍是中性灰（明主题更深一档、暗档更亮一档），不借任何有职责的颜色 */
+  --gd-backdrop: color-mix(in srgb, var(--color-bg-muted) 88%, var(--color-text-primary));
 }
 .gd-preview {
   display: block;
@@ -297,9 +298,17 @@
 .gd .gd-name {
   height: var(--control-height-sm);
 }
-.gd-number[aria-invalid],
-.gd-name[aria-invalid] {
+.gd .gd-number[aria-invalid],
+.gd .gd-name[aria-invalid] {
   border-color: var(--color-danger);
+}
+/* 出错的框聚焦时仍是红的：.text-field:focus 的 accent 边、焦点环与全局 :focus-visible 的 accent 描边
+   都换成 danger——聚焦着改数时，不能只看到黄 / 蓝而看不出这个值不合法 */
+.gd .gd-number[aria-invalid]:focus,
+.gd .gd-name[aria-invalid]:focus {
+  border-color: var(--color-danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-danger) 22%, transparent);
+  outline-color: var(--color-danger);
 }
 .gd-value {
   font-family: var(--font-family-mono);

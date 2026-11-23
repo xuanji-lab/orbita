@@ -3604,7 +3604,7 @@ export const zh: Messages = {
     zoom: "预览缩放",
     zoomDesc: "只放大预览，不改半径；半径由质量与成分算出。",
     backdrop: "预览背景",
-    backdrops: { well: "纸面", shell: "外壳", muted: "衬底", nebula: "星云" },
+    backdrops: { well: "纸面", shell: "外壳", muted: "衬底", deep: "深衬底" },
     readout: { radius: "半径", density: "密度", mass: "质量", orbit: "轨道" },
     strip: "真实比例：半径与轨道同一单位",
     errors: {

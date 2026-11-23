@@ -256,14 +256,14 @@ function Designer(props: { workspace: Workspace }) {
               min={ZOOM.min}
               max={ZOOM.max}
               step={ZOOM.step}
-              value={design.zoom}
+              value={body.zoom}
               aria-label={tg.zoom}
               data-field="zoom"
-              onChange={(event) => setDesign({ ...design, zoom: Number(event.target.value) })}
+              onChange={(event) => patchBody({ zoom: Number(event.target.value) })}
             />
           }
         >
-          <span className="gd-value">{design.zoom}%</span>
+          <span className="gd-value">{body.zoom}%</span>
         </Row>
         <Row name={tg.backdrop}>
           <span className="gd-swatches" role="group" aria-label={tg.backdrop}>
@@ -372,6 +372,7 @@ function Preview(props: { design: GalaxyDesign; workspaceName: string; invalid: 
   const r = displayRadius(radius);
   const art = bodyArt(design, kind, r);
   const frame = previewFrame(art);
+  const zoom = (kind === "star" ? design.star : design.planet).zoom;
   const name = (kind === "star" ? design.star.name : design.planet.name) || (kind === "star" ? props.workspaceName : tg.unnamedPlanet);
   const on = ELEMENTS_OF[kind].filter((key: ElementKey) => (kind === "star" ? design.star : design.planet).elements[key]);
   return (
@@ -385,10 +386,10 @@ function Preview(props: { design: GalaxyDesign; workspaceName: string; invalid: 
         data-body={kind}
         data-surface={art.surface}
         data-display-r={r.toFixed(2)}
-        data-zoom={design.zoom}
+        data-zoom={zoom}
         data-elements={on.join(" ")}
       >
-        <g transform={`scale(${design.zoom / 100})`}>
+        <g transform={`scale(${zoom / 100})`}>
           <BodyFigure art={art} uid={uid} />
         </g>
       </svg>

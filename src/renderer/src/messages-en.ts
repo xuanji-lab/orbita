@@ -3835,7 +3835,7 @@ export const en = {
     zoom: "Preview zoom",
     zoomDesc: "Scales the preview only. The radius stays what mass and composition make it.",
     backdrop: "Preview background",
-    backdrops: { well: "Paper", shell: "Shell", muted: "Muted", nebula: "Nebula" },
+    backdrops: { well: "Paper", shell: "Shell", muted: "Muted", deep: "Deep muted" },
     readout: { radius: "Radius", density: "Density", mass: "Mass", orbit: "Orbit" },
     strip: "True scale: radius and orbit in one unit",
     errors: {

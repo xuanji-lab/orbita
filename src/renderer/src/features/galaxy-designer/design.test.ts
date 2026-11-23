@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 import { DENSITY, MIN_CLEARANCE, PLANET_MASS, PLANET_ZONE, STAR_DENSITY, STAR_MASS, bodyRadius } from "../chat/galaxy.ts";
 import {
@@ -21,6 +22,8 @@ import {
   NAME_MAX,
   parseNumberInput,
   PREVIEW_FRAME,
+  BACKDROPS,
+  ZOOM_DEFAULT,
   previewFrame,
   radiusOf,
   ringFrontPoints,
@@ -238,6 +241,59 @@ describe("预览画框", () => {
   });
 });
 
+describe("默认预览缩放", () => {
+  test("行星默认 140%、主星默认 100%；三档 fixture 都按这个给", () => {
+    for (const level of ["default", "bare", "full"] as const) {
+      const design = defaultDesign(WS_A, level);
+      assert.equal(design.planet.zoom, ZOOM_DEFAULT.planet);
+      assert.equal(design.star.zoom, ZOOM_DEFAULT.star);
+    }
+    assert.ok(ZOOM_DEFAULT.planet > 100);
+  });
+
+  test("默认缩放下任何合法行星（最重、最松的成分、元素全开）都装得进固定画框，不溢出", () => {
+    const full = defaultDesign(WS_A, "full");
+    for (const composition of ["rock", "ice", "gas"] as const) {
+      for (const mass of [PLANET_MASS.min, 6, 14, PLANET_MASS.max]) {
+        const design = { ...full, planet: { ...full.planet, composition, mass } };
+        const art = bodyArt(design, "planet", displayRadius(radiusOf(design, "planet")));
+        const k = ZOOM_DEFAULT.planet / 100;
+        assert.equal(previewFrame(art).scale, 1, `${composition} ${mass} 不该撑大画框`);
+        assert.ok(art.extent.x * k <= PREVIEW_FRAME.halfW && art.extent.y * k <= PREVIEW_FRAME.halfH, `${composition} ${mass}: ${art.extent.x * k} × ${art.extent.y * k}`);
+      }
+    }
+  });
+
+  test("默认缩放后最小的行星眼睛也够大（屏上 ≥ 2.5 个单位）；缩放不改半径读数", () => {
+    const design = { ...legal(), planet: { ...legal().planet, mass: PLANET_MASS.min, composition: "rock" as const } };
+    const art = bodyArt(design, "planet", displayRadius(radiusOf(design, "planet")));
+    assert.ok(art.face !== null);
+    assert.ok(art.face.eyes[0].r * (ZOOM_DEFAULT.planet / 100) >= 2.5);
+    const zoomed = { ...design, planet: { ...design.planet, zoom: 200 } };
+    assert.equal(radiusOf(zoomed, "planet"), radiusOf(design, "planet"));
+  });
+});
+
+describe("预览背景与出错的输入框（样式约束）", () => {
+  const css = readFileSync(new URL("./galaxy-designer.css", import.meta.url), "utf8");
+
+  test("四档背景都是中性 token，不借 --color-nebula（它只给用量）", () => {
+    assert.deepEqual([...BACKDROPS], ["well", "shell", "muted", "deep"]);
+    assert.doesNotMatch(css, /--color-nebula/);
+    for (const backdrop of BACKDROPS.filter((b) => b !== "well")) assert.match(css, new RegExp(`data-backdrop="${backdrop}"`));
+  });
+
+  test("出错的框聚焦时边框、焦点环、描边都是 danger，不被 accent 盖掉", () => {
+    const rule = /\.gd \.gd-number\[aria-invalid\]:focus,\s*\.gd \.gd-name\[aria-invalid\]:focus\s*\{([^}]*)\}/.exec(css);
+    assert.ok(rule !== null, "缺出错聚焦态的规则");
+    const body = rule[1] ?? "";
+    assert.match(body, /border-color:\s*var\(--color-danger\)/);
+    assert.match(body, /box-shadow:[^;]*--color-danger/);
+    assert.match(body, /outline-color:\s*var\(--color-danger\)/);
+    assert.doesNotMatch(body, /--color-accent/);
+  });
+});
+
 describe("每个工作区一份设计稿", () => {
   test("不同工作区的 fixture 可以不同，同一个工作区每次一样", () => {
     const ids = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"];
@@ -250,9 +306,11 @@ describe("每个工作区一份设计稿", () => {
     const store = createDesignStore("default");
     const a = store.get(WS_A);
     const b0 = store.get(WS_B);
-    store.set(WS_A, { ...a, planet: { ...a.planet, mass: 33 }, zoom: 150 });
+    store.set(WS_A, { ...a, planet: { ...a.planet, mass: 33, zoom: 150 } });
     assert.equal(store.get(WS_A).planet.mass, 33);
-    assert.equal(store.get(WS_A).zoom, 150);
+    assert.equal(store.get(WS_A).planet.zoom, 150);
+    assert.equal(store.get(WS_A).star.zoom, ZOOM_DEFAULT.star, "行星的缩放不带到主星");
+    assert.equal(store.get(WS_B).planet.zoom, ZOOM_DEFAULT.planet, "A 的缩放不串到 B");
     assert.deepEqual(store.get(WS_B), b0);
     assert.deepEqual(store.reset(WS_A), defaultDesign(WS_A, "default"));
     assert.deepEqual(store.get(WS_A), defaultDesign(WS_A, "default"));

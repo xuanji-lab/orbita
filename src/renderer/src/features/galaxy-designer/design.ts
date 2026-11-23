@@ -36,11 +36,18 @@ export const ELEMENTS_OF: Readonly<Record<BodyKind, readonly ElementKey[]>> = {
   planet: ["face", "ring", "clouds", "moons"],
 };
 
-export type Backdrop = "well" | "shell" | "muted" | "nebula";
-export const BACKDROPS: readonly Backdrop[] = ["well", "shell", "muted", "nebula"];
+/** 预览背景：四档都是中性的纸 / 壳 / 衬底色（「深衬底」= 衬底混一点主墨），不借有职责的颜色（nebula 只给用量） */
+export type Backdrop = "well" | "shell" | "muted" | "deep";
+export const BACKDROPS: readonly Backdrop[] = ["well", "shell", "muted", "deep"];
 
 /** 预览缩放（百分比）：只放大预览，不改天体半径 */
-export const ZOOM = { min: 50, max: 200, step: 10, initial: 100 } as const;
+export const ZOOM = { min: 50, max: 200, step: 10 } as const;
+/**
+ * 默认预览缩放，按天体分开存：行星小，100% 时宽面板里默认行星只有约 40px 直径、眼睛读不清，默认放到 140%；
+ * 140% 下任何合法行星（最重的气态 + 星环 + 卫星）都装得进固定画框（见测试）。主星本来就大，留 100%，
+ * 满载主星 + 日冕 + 星环再由 previewFrame 放大画框装下。
+ */
+export const ZOOM_DEFAULT: Readonly<Record<BodyKind, number>> = { star: 100, planet: 140 };
 /** 轨道半径滑块的范围；合法下限另由两颗天体的半径算（minOrbit），滑块能拖到下限以下，拖过去就报错 */
 export const ORBIT_RANGE = { min: 4, max: PLANET_ZONE, step: 0.5 } as const;
 /** 天体名字最多几个字（按字符数，中文一个字算一个） */
@@ -51,6 +58,8 @@ export interface BodyDesign {
   name: string;
   mass: number;
   elements: Readonly<Record<ElementKey, boolean>>;
+  /** 这一颗的预览缩放（百分比）：主星与行星各记各的，切换天体类型不互相影响 */
+  zoom: number;
 }
 
 export interface PlanetDesign extends BodyDesign {
@@ -63,7 +72,6 @@ export interface GalaxyDesign {
   editing: BodyKind;
   star: BodyDesign;
   planet: PlanetDesign;
-  zoom: number;
   backdrop: Backdrop;
 }
 
@@ -305,7 +313,7 @@ const ALL_OFF: Readonly<Record<ElementKey, boolean>> = { face: false, ring: fals
 const ALL_ON: Readonly<Record<ElementKey, boolean>> = { face: true, ring: true, clouds: true, moons: true, corona: true };
 
 /** 三个行星预设：工作区 id 的哈希挑一个。不同工作区一眼不一样，同一个工作区每次一样 */
-const PLANET_PRESETS: readonly Omit<PlanetDesign, "name" | "elements">[] = [
+const PLANET_PRESETS: readonly Omit<PlanetDesign, "name" | "elements" | "zoom">[] = [
   { mass: 6, composition: "rock", orbitRadius: 22 },
   { mass: 14, composition: "gas", orbitRadius: 30 },
   { mass: 3, composition: "ice", orbitRadius: 18 },
@@ -334,9 +342,8 @@ export function defaultDesign(workspaceId: string, level: DesignLevel): GalaxyDe
   const elements = ELEMENT_PRESETS[pick] ?? ALL_OFF;
   const base: GalaxyDesign = {
     editing: "planet",
-    star: { name: "", mass: 620, elements: { ...ALL_OFF, face: true } },
-    planet: { name: "", elements, mass: 6, composition: "rock", orbitRadius: 22, ...preset },
-    zoom: ZOOM.initial,
+    star: { name: "", mass: 620, elements: { ...ALL_OFF, face: true }, zoom: ZOOM_DEFAULT.star },
+    planet: { name: "", elements, mass: 6, composition: "rock", orbitRadius: 22, zoom: ZOOM_DEFAULT.planet, ...preset },
     backdrop: "muted",
   };
   if (level === "bare") {
@@ -346,8 +353,8 @@ export function defaultDesign(workspaceId: string, level: DesignLevel): GalaxyDe
     // 满载：所有元素开、质量顶到两个区间的上沿、名字超长、轨道近到与主星相撞——两条错误都要报出来
     return {
       ...base,
-      star: { name: LONG_NAME, mass: STAR_MASS.max, elements: ALL_ON },
-      planet: { name: LONG_NAME, mass: PLANET_MASS.max, composition: "gas", orbitRadius: 9, elements: ALL_ON },
+      star: { name: LONG_NAME, mass: STAR_MASS.max, elements: ALL_ON, zoom: ZOOM_DEFAULT.star },
+      planet: { name: LONG_NAME, mass: PLANET_MASS.max, composition: "gas", orbitRadius: 9, elements: ALL_ON, zoom: ZOOM_DEFAULT.planet },
     };
   }
   return base;
