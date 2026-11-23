@@ -130,6 +130,8 @@ function MediaPlayer(props: { src: string; kind: MediaKind; name: string; size: 
     const onPause = (): void => setPlaying(false);
     const onTime = (): void => setCurrent(el.currentTime);
     const onError = (): void => onFailRef.current();
+    // 清理时会 removeAttribute("src")；严格模式 / 重挂载会再跑一遍 setup，这里把 src 补回去
+    if (el.getAttribute("src") !== props.src) el.src = props.src;
     el.addEventListener("loadedmetadata", syncDuration);
     el.addEventListener("durationchange", syncDuration);
     el.addEventListener("play", onPlay);
@@ -153,7 +155,7 @@ function MediaPlayer(props: { src: string; kind: MediaKind; name: string; size: 
       el.removeAttribute("src");
       el.load();
     };
-  }, []);
+  }, [props.src]);
 
   useEffect(() => {
     if (!playing || scrub !== null) return undefined;
