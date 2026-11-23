@@ -558,6 +558,57 @@
 .dp-picker-note {
   padding: 0 var(--space-4);
 }
+/* 「新建的会放在 <目录>」：落在 PanelEmpty 的文字那一列（同一套 14px 图标槽 + 间距），三级灰，跟在「新建」那句下面 */
+.dp-where {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  column-gap: var(--space-2);
+  margin: calc(-1 * var(--space-2)) 0 0;
+  padding: 0 var(--space-4) var(--space-1);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+}
+.dp-where::before {
+  content: "";
+}
+/* 「<说明> <目录>」一行：说明与末级目录名写全，目录前段在中间被省略（按真实宽度，不按字数） */
+.dp-where-body {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  min-width: 0;
+  white-space: nowrap;
+}
+.dp-where-lead {
+  flex: 0 0 auto;
+}
+.dp-where-path {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.dp-where-head {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dp-where-tail {
+  flex: 0 0 auto;
+}
+/* 打开着一份：上面可有一行「刚新建了什么、放在哪」，编辑器吃剩下的高度 */
+.dp-open {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+.dp-created {
+  margin: 0;
+  display: block;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
 .dp-picker-list {
   display: flex;
   flex-direction: column;
@@ -588,6 +639,10 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 列表尾部「更早的在文件面板里找」：同一种行，文字退到次级灰 */
+.dp-picker-more {
+  color: var(--color-text-secondary);
 }
 .dp-picker-age {
   color: var(--color-text-tertiary);

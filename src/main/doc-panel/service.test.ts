@@ -1,6 +1,6 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FileRoot } from "../../shared/files.ts";
@@ -201,7 +201,7 @@ describe("列表", () => {
       await writeFile(join(lroot, "note.txt"), "不是");
       await writeFile(join(lroot, "v2.slides.json"), "{}");
       await utimes(join(lroot, "old.md"), new Date(2020, 1, 1), new Date(2020, 1, 1));
-      const entries = await listDocs([{ kind: "workspace", label: "l", path: lroot, exists: true }]);
+      const { entries } = await listDocs([{ kind: "workspace", label: "l", path: lroot, exists: true }]);
       assert.deepEqual(entries.map((e) => e.relative).sort(), ["deck.md", join("sub", "deep.md"), "old.md", "v2.slides.json"].sort());
       assert.equal(entries[entries.length - 1]?.name, "old.md");
       assert.equal(entries.find((e) => e.name === "deck.md")?.kind, "slides");
@@ -209,6 +209,93 @@ describe("列表", () => {
       assert.equal(entries.find((e) => e.name === "v2.slides.json")?.kind, "slides");
     } finally {
       await rm(lroot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("列表：先按类筛再取前 N 份（右栏入口的挑选列表）", () => {
+  /** 60 份 md（都比演示文稿新）+ 3 份演示文稿：混着取前 N 份时演示文稿一份都进不来 */
+  async function fixture(): Promise<{ lroot: string; roots: FileRoot[] }> {
+    const lroot = await mkdtemp(join(tmpdir(), "doc-list-kind-"));
+    await mkdir(join(lroot, "a", "b"), { recursive: true });
+    for (let i = 0; i < 60; i += 1) {
+      const path = join(lroot, i % 2 === 0 ? "a" : join("a", "b"), `n${String(i).padStart(2, "0")}.md`);
+      await writeFile(path, `# ${i}`);
+      const at = new Date(Date.now() - (i + 1) * 60_000);
+      await utimes(path, at, at);
+    }
+    for (let i = 0; i < 3; i += 1) {
+      const path = join(lroot, `deck${i}.slides.json`);
+      await writeFile(path, "{}");
+      const at = new Date(Date.now() - (100 + i) * 86400_000);
+      await utimes(path, at, at);
+    }
+    return { lroot, roots: [{ kind: "workspace", label: "l", path: lroot, exists: true }] };
+  }
+
+  it("kind=slides：被 60 份更新的 md 包围也能列出 3 份演示文稿；more=false", async () => {
+    const { lroot, roots: r } = await fixture();
+    try {
+      const listing = await listDocs(r, { kind: "slides", limit: 8 });
+      assert.deepEqual(listing.entries.map((e) => e.name), ["deck0.slides.json", "deck1.slides.json", "deck2.slides.json"]);
+      assert.equal(listing.more, false);
+    } finally {
+      await rm(lroot, { recursive: true, force: true });
+    }
+  });
+
+  it("kind=doc：只露最近 8 份、最近的在前、more=true；root 是工作区根", async () => {
+    const { lroot, roots: r } = await fixture();
+    try {
+      const listing = await listDocs(r, { kind: "doc", limit: 8 });
+      assert.equal(listing.entries.length, 8);
+      assert.equal(listing.more, true);
+      assert.deepEqual(listing.entries.map((e) => e.name), Array.from({ length: 8 }, (_, i) => `n${String(i).padStart(2, "0")}.md`));
+      assert.ok(listing.entries.every((e) => e.kind === "doc"));
+      assert.equal(listing.root, await realpath(lroot));
+    } finally {
+      await rm(lroot, { recursive: true, force: true });
+    }
+  });
+
+  it("恰好 limit 份时 more=false（多出一份才算还有）", async () => {
+    const { lroot, roots: r } = await fixture();
+    try {
+      const listing = await listDocs(r, { kind: "slides", limit: 3 });
+      assert.equal(listing.entries.length, 3);
+      assert.equal(listing.more, false);
+      assert.equal((await listDocs(r, { kind: "slides", limit: 2 })).more, true);
+    } finally {
+      await rm(lroot, { recursive: true, force: true });
+    }
+  });
+
+  it("remembered：比列表里最老的那份还老也认得出还在；删了 / 不是这一类 / 在根外都是 false", async () => {
+    const { lroot, roots: r } = await fixture();
+    try {
+      const oldest = join(lroot, "a", "b", "n59.md");
+      assert.equal((await listDocs(r, { kind: "doc", limit: 8, remembered: oldest })).rememberedExists, true);
+      assert.equal((await listDocs(r, { kind: "slides", limit: 8, remembered: oldest })).rememberedExists, false);
+      await rm(oldest);
+      assert.equal((await listDocs(r, { kind: "doc", limit: 8, remembered: oldest })).rememberedExists, false);
+      assert.equal((await listDocs(r, { kind: "doc", limit: 8, remembered: join(outside, "secret.md") })).rememberedExists, false);
+      assert.equal((await listDocs(r, { kind: "doc", limit: 8 })).rememberedExists, false);
+    } finally {
+      await rm(lroot, { recursive: true, force: true });
+    }
+  });
+
+  it("空工作区：没有条目、more=false；工作区目录不在：root=null", async () => {
+    const empty = await mkdtemp(join(tmpdir(), "doc-list-empty-"));
+    try {
+      const listing = await listDocs([{ kind: "workspace", label: "l", path: empty, exists: true }], { kind: "doc", limit: 8 });
+      assert.deepEqual(listing.entries, []);
+      assert.equal(listing.more, false);
+      assert.ok(listing.root !== null);
+      const gone = await listDocs([{ kind: "workspace", label: "l", path: join(empty, "nope"), exists: false }], { kind: "doc" });
+      assert.equal(gone.root, null);
+    } finally {
+      await rm(empty, { recursive: true, force: true });
     }
   });
 });

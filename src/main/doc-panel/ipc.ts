@@ -19,7 +19,7 @@ import {
   type DocSaveAsRequest,
   type DocSaveAsResult,
   type DocFile,
-  type DocListEntry,
+  type DocListing,
   type DocListRequest,
   type DocTarget,
   type DocWriteRequest,
@@ -53,8 +53,8 @@ export function registerDocIpc(workspaces: WorkspaceStore, sessions: SessionStor
     createDoc(await rootsOf(req), req),
   );
 
-  ipcMain.handle(ipcChannels.docList, async (_event, req: DocListRequest): Promise<DocListEntry[]> =>
-    listDocs(await rootsOf(req)),
+  ipcMain.handle(ipcChannels.docList, async (_event, req: DocListRequest): Promise<DocListing> =>
+    listDocs(await rootsOf(req), req),
   );
 
   ipcMain.handle(ipcChannels.docWatch, async (event, req: DocTarget): Promise<void> => {
