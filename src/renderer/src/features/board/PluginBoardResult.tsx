@@ -53,6 +53,7 @@ export function PluginBoardResultView(props: { sessionId: string | null; toolCal
   const [near, setNear] = useState(false);
   const [liveReady, setLiveReady] = useState(false);
   const [theme, setTheme] = useState(() => document.documentElement.dataset.theme ?? "");
+  const captureVersion = useRef(0);
   const cacheKey = sessionId === null ? null : boardShotKey(sessionId, toolCallId);
 
   // 量自己的宽度（layout effect：占位在第一帧画出来之前就有对的高度）
@@ -103,6 +104,7 @@ export function PluginBoardResultView(props: { sessionId: string | null; toolCal
     if (host.querySelectorAll("iframe.bd-iframe").length !== board.cards.length) return;
     const root = host.closest<HTMLElement>(SCROLL_ROOT);
     const ratio = window.devicePixelRatio || 1;
+    const version = ++captureVersion.current;
     void (async () => {
       // 阅读位置恢复与虚拟列表测高会在 iframe 就绪后继续挪动页面。连续两次几何不变才截，
       // 否则 rect 是量的时候的、像素是另一时刻的，贴回来就只剩某个局部（实测右下半张）。
@@ -144,7 +146,8 @@ export function PluginBoardResultView(props: { sessionId: string | null; toolCal
         Math.abs(currentRect.width - rect.width) >= 2 ||
         Math.abs(currentRect.height - rect.height) >= 2 ||
         Math.abs((root?.scrollTop ?? 0) - scrollTop) >= 1 ||
-        (document.documentElement.dataset.theme ?? "") !== theme
+        (document.documentElement.dataset.theme ?? "") !== theme ||
+        version !== captureVersion.current
       ) {
         bitmap.close();
         return;
