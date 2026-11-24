@@ -53,8 +53,6 @@ export function PluginBoardResultView(props: { sessionId: string | null; toolCal
   const [near, setNear] = useState(false);
   const [liveReady, setLiveReady] = useState(false);
   const [theme, setTheme] = useState(() => document.documentElement.dataset.theme ?? "");
-  const readyRef = useRef(false);
-  readyRef.current = liveReady;
   const cacheKey = sessionId === null ? null : boardShotKey(sessionId, toolCallId);
 
   // 量自己的宽度（layout effect：占位在第一帧画出来之前就有对的高度）
@@ -108,7 +106,7 @@ export function PluginBoardResultView(props: { sessionId: string | null; toolCal
     if (rect.left < 0 || rect.top < 0 || rect.right > window.innerWidth || rect.bottom > window.innerHeight || rect.width < 1 || rect.height < 1) return;
     const ratio = window.devicePixelRatio || 1;
     void api.board
-      .shot({ rect })
+      .shot({ rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } })
       .then(async (result) => {
         if (result === null) return;
         const bytes = Uint8Array.from(atob(result.base64), (char) => char.charCodeAt(0));
@@ -134,15 +132,15 @@ export function PluginBoardResultView(props: { sessionId: string | null; toolCal
 
   const onPainted = useCallback((): void => {
     setLiveReady(true);
-    capture();
-  }, [capture]);
+  }, []);
 
-  // 已经画着的看板改了宽度 / 展开状态 / 主题：重新留一张。初次挂载由 LiveBoard 的 onPainted 负责
+  // 真 iframe 就绪后留位图；已经画着的看板改宽 / 展开 / 换主题也重新留一张，下一宏任务再截，避开合成器回调
   useEffect(() => {
-    if (!live || !readyRef.current) return undefined;
+    if (!live || !liveReady) return undefined;
     const timer = window.setTimeout(capture, 200);
     return () => window.clearTimeout(timer);
-  }, [width, expanded, theme, live, capture]);
+  }, [width, expanded, theme, live, liveReady, capture]);
+
   useEffect(() => {
     if (!live) setLiveReady(false);
   }, [live]);
