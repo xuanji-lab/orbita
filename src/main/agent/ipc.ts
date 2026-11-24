@@ -332,7 +332,7 @@ export function registerAgentIpc(
   };
 
   /**
-   * 家务活模型（设置里的 choreModel：起名、收尾扫描、迁移的随手一句检查）装配成
+   * 家务活模型（设置里的 choreModel：起名、迁移的随手一句检查）装配成
    * 带密钥的载荷。没指定、指的 provider 已删、或密钥取不到，一律返回 undefined
    * 让 runtime 退回会话模型——家务是易耗品，不该因为一个删掉的 provider 就停掉；
    * 但原因要落到 dev 终端，否则「我选了模型为什么没生效」无从查起。
@@ -525,13 +525,6 @@ export function registerAgentIpc(
       }),
     });
     await settleFirstTurn(input, piSessionFile);
-    // 遗留清单「继续」开的轮：记下这条会话在接着做哪条遗留事项（收尾确认时自动标做完）。
-    // 必须在 settleFirstTurn 之后：新会话的 meta 在那里才建出来
-    if (input.carryoverId !== undefined) {
-      await sessions.addResumedCarryover(input.sessionId, input.carryoverId).catch((error: unknown) => {
-        console.error("[carryover] 记不下接着做的遗留事项（不影响发送）", error);
-      });
-    }
     // 标题生成（C-3）：门禁是 meta 的 titleSource 仍是 derived——用户改过名（user）
     // 或已生成过（auto）就不试；失败不改门禁，下一条用户消息自然重试。
     // fire-and-forget：生成在 agent 进程并发跑，这里不等它，成败也不碰发送。

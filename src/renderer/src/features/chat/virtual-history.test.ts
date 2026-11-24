@@ -9,7 +9,6 @@ import {
   MAX_ROW_ESTIMATE,
   MIN_ROW_ESTIMATE,
   ROW_KIND_ESTIMATES,
-  messageRowIndex,
   prependAnchorTarget,
   rowIndexByKey,
   viewRowIndex,
@@ -17,7 +16,7 @@ import {
   type VirtualHistoryRow,
 } from "./virtual-history.ts";
 import type { ToolTranscriptItem } from "@earendil-works/pi-protocol";
-import type { ScanAnswerCard, ToolResultIndex, TurnViewEntry } from "./tool-results.ts";
+import type { ToolResultIndex, TurnViewEntry } from "./tool-results.ts";
 
 /** 测试用的最小条目工厂：只塞判定会读到的字段 */
 function user(key: string): TurnViewEntry {
@@ -84,11 +83,10 @@ function resultIndex(ids: string[]): ToolResultIndex {
   return new Map(ids.map((id) => [id, completeResult(id)]));
 }
 
-const NO_CARDS: ReadonlyMap<string, ScanAnswerCard> = new Map();
 const NO_BRANCHES: ReadonlyMap<number, string> = new Map();
 
-function rows(view: TurnViewEntry[], results: ToolResultIndex = resultIndex([]), cards = NO_CARDS, branches = NO_BRANCHES) {
-  return virtualHistoryRows(view, results, cards, "parent", branches);
+function rows(view: TurnViewEntry[], results: ToolResultIndex = resultIndex([]), branches = NO_BRANCHES) {
+  return virtualHistoryRows(view, results, "parent", branches);
 }
 
 describe("virtualHistoryRows", () => {
@@ -113,16 +111,6 @@ describe("virtualHistoryRows", () => {
     assert.deepEqual(rows(view, results).map((row) => row.entry.key), ["t:0", "t:3", "t:4"]);
   });
 
-  test("同一条消息的后续 text 块被扫描卡吸收，但带分支行时保留", () => {
-    const view = [text("a:0", "a"), text("a:1", "a"), text("a:2", "a")];
-    const cards = new Map<string, ScanAnswerCard>([
-      ["a", { firstKey: "a:0", scan: {} } as unknown as ScanAnswerCard],
-    ]);
-    assert.deepEqual(rows(view, resultIndex([]), cards).map((row) => row.entry.key), ["a:0"]);
-    const branches = new Map([[2, "anchor"]]);
-    assert.deepEqual(rows(view, resultIndex([]), cards, branches).map((row) => row.entry.key), ["a:0", "a:2"]);
-  });
-
   test("通道标记：父看子非 progress 保留，父看子 progress 丢弃", () => {
     const mark = (key: string, from: "parent" | "child", kind: string): TurnViewEntry =>
       ({ kind: "channelMark", key, mark: { peerId: "p", messageId: `m-${key}`, from, kind }, timestamp: 0 } as TurnViewEntry);
@@ -134,7 +122,7 @@ describe("virtualHistoryRows", () => {
     const view: TurnViewEntry[] = [
       { kind: "channelMark", key: "k", mark: { peerId: "p", messageId: "m", from: "parent", kind: "task" }, timestamp: 0 } as TurnViewEntry,
     ];
-    const kept = virtualHistoryRows(view, resultIndex([]), NO_CARDS, "child", NO_BRANCHES);
+    const kept = virtualHistoryRows(view, resultIndex([]), "child", NO_BRANCHES);
     assert.equal(kept.length, 1);
   });
 });
@@ -153,19 +141,6 @@ describe("行下标映射", () => {
     assert.equal(map.get("turn:a:0"), 1);
     assert.equal(map.get("proc:b:0"), 2);
     assert.equal(map.get("nope"), undefined);
-  });
-
-  test("消息 id → 虚拟行下标，折叠成员与多消息组都能找到", () => {
-    const map = messageRowIndex(list);
-    assert.equal(map.get("u1"), 0);
-    assert.equal(map.get("a"), 1);
-    assert.equal(map.get("b"), 2);
-    assert.equal(map.get("c"), 2);
-  });
-
-  test("同一条消息占多行时取最后一行", () => {
-    const map = messageRowIndex(rows([text("a:0", "a"), text("a:1", "a")]));
-    assert.equal(map.get("a"), 1);
   });
 
   test("视图下标 → 虚拟行下标（过滤掉的行没有映射）", () => {

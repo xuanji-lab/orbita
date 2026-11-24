@@ -21,7 +21,6 @@ import { splitUserTextBlocks } from "./prompt-attachments.ts";
 import type { FileTurnRecord, FileTurnView, RevertRecord, UndoRecord } from "./revert.ts";
 import type { IntentAskView, IntentSelectedView, IntentUsageCount, RecallStageCell } from "./intent-recall.ts";
 import type { IntentConfirmAnswer } from "./intent-confirm.ts";
-import type { SessionWrapup, WrapupItem, WrapupTokens } from "./wrapup.ts";
 
 /** 标题上限。超出截断加省略号——标题要在 288px 的侧栏里一行放得下。 */
 export const SESSION_TITLE_MAX = 60;
@@ -308,119 +307,6 @@ export function recentQueriesFromRecords(records: readonly SessionRecord[]): str
 }
 
 /**
- * 完成状态：会话作为「一单任务」的闭环三态。语义与可撤销性见
- * `SessionMeta.completion` 的字段注释。
- */
-export type SessionCompletion = "open" | "done" | "done_with_todos";
-
-/**
- * 是否已完成（done / done_with_todos）。parse 已补默认，运行时恒有值；
- * `?? "open"` 只防构造点未写这三个键的 meta 字面量（构造点不写是既定决策）。
- * 抽成函数是因为判断有两个消费者（侧栏筛选/行内标识、会话头部按钮），
- * 各写一份 `completion !== "open"` 迟早漂移。
- */
-export function isSessionDone(meta: SessionMeta): boolean {
-  return (meta.completion ?? "open") !== "open";
-}
-
-/**
- * 收尾仪式（carryover）收割的一条遗留事项。真源是全局一份 `carryovers.jsonl`
- * （会话侧只存 `completion` 状态、不内嵌正文——避免两处真源）；侧栏「待办 N」角标
- * 与「Has todos」筛选都由 renderer 按 `sourceSessionId` 现算。reopen（回 open）
- * **不删不改**这些记录：遗留事项是收尾时收割的事实，不随会话状态回滚。
- */
-export interface Carryover {
-  id: string;
-  /** 一句话事项，清单 UI 里显示的就是它 */
-  title: string;
-  /** 上下文摘录（agent 从对话里摘的原句/概括），展开时看 */
-  detail: string;
-  /** 回链：从哪条会话收割的 */
-  sourceSessionId: string;
-  /** transcript 里的消息序号区间锚点；跳回原文定位用，算不出就 null */
-  sourceMessageRange: [number, number] | null;
-  /**
-   * 来源（2026-10-30「以后再做」：future work 与遗留事项合并成一个概念）：
-   * - noticed：做的过程中当场记下（agent 在 update_plan 的 later 里写的）；
-   * - wrapup：收尾时确认的（计划里没做完的步、老会话的回看收割、用户自己加的）。
-   * 旧记录没有这个键 = wrapup。
-   */
-  origin: CarryoverOrigin;
-  /**
-   * 锚点：记下它的那次 update_plan 调用的 toolCallId（点了让对话滚到那一章）；
-   * 没有锚点（收尾时确认的、旧记录）= null。
-   */
-  anchor: string | null;
-  /** open：待办；done：做完了；dismissed：丢掉（可找回，回 open） */
-  status: "open" | "done" | "dismissed";
-  createdAt: number;
-  doneAt: number | null;
-}
-
-export type CarryoverOrigin = "noticed" | "wrapup";
-
-/** carryover 的 status 取值（独立出来给 store 与 IPC 复用）。 */
-export type CarryoverStatus = Carryover["status"];
-
-/**
- * 批量创建的载荷（renderer → 主进程）：内容与锚点；id / status / 时间戳由
- * CarryoverStore 铸——落盘事实由写盘方定，renderer 不猜。
- * 放在 shared（而非 store）是因为 preload 与 renderer 都要引用它，而它们不得
- * import 主进程模块（preload 头部纪律）。
- */
-export interface CarryoverDraft {
-  title: string;
-  detail: string;
-  sourceMessageRange: [number, number] | null;
-  /** 缺席 = wrapup */
-  origin?: CarryoverOrigin;
-  /** 缺席 = null */
-  anchor?: string | null;
-}
-
-/**
- * 解析磁盘上的一条 carryover。**坏了返回 null，调用方跳过该行**（parseSessionMeta
- * 的纪律）：一条字段残缺的遗留事项混进清单，比少列一条更误导——用户会去办一件
- * 标题都没说清的事。
- */
-export function parseCarryover(raw: unknown): Carryover | null {
-  if (typeof raw !== "object" || raw === null) return null;
-  const value = raw as Record<string, unknown>;
-  const id = str(value["id"]);
-  const title = str(value["title"]);
-  const sourceSessionId = str(value["sourceSessionId"]);
-  if (id === null || title === null || sourceSessionId === null) return null;
-  if (typeof value["detail"] !== "string") return null;
-  const range = value["sourceMessageRange"];
-  if (
-    range !== null &&
-    (typeof range !== "object" ||
-      !Array.isArray(range) ||
-      typeof range[0] !== "number" ||
-      typeof range[1] !== "number" ||
-      !Number.isFinite(range[0]) ||
-      !Number.isFinite(range[1]))
-  ) {
-    return null;
-  }
-  const createdAt = num(value["createdAt"]);
-  if (createdAt === null) return null;
-  const doneAt = num(value["doneAt"]);
-  return {
-    id,
-    title,
-    detail: value["detail"],
-    sourceSessionId,
-    sourceMessageRange: range as [number, number] | null,
-    origin: value["origin"] === "noticed" ? "noticed" : "wrapup",
-    anchor: str(value["anchor"]),
-    status: value["status"] === "done" ? "done" : value["status"] === "dismissed" ? "dismissed" : "open",
-    createdAt,
-    doneAt,
-  };
-}
-
-/**
  * 批量迁移（`session:move`）的回执。moved 含连带迁过去的子会话；
  * skipped 是没动的根会话及原因——running = 它或它的子会话正在跑（这一轮已拿到旧 cwd），
  * missing = meta 已不在（列表是旧快照），failed = 写 pi 本子的通知失败（这一条整家没动）。
@@ -481,11 +367,7 @@ export interface SessionMeta {
   pinned: boolean;
   /** 归档。从主列表里移走，收进侧栏底部的 Archived——**不是删除** */
   archived: boolean;
-  /*
-   * 生命周期三字段（星标 / 完成状态 / 关闭时刻）是**可选**的：它们落地前构造的
-   * meta 字面量（importer、新建会话）不写这三个键，落盘即缺席，读回 parse 补
-   * 默认——与 importedFrom 的「缺席即否」同构。parse 出来的对象运行时恒有值。
-   */
+  /* 星标是**可选**字段：它落地前构造的 meta 字面量不写，落盘即缺席，读回 parse 补默认。 */
   /**
    * 星标：用户的价值标记，**与任务状态正交**——星一个会话说的是「值得回来翻」，
    * 不代表它做完了，也不参与排序（排序只认 pinned）。缺席即 false。
@@ -505,26 +387,6 @@ export interface SessionMeta {
    * 完会覆盖成新值。
    */
   unread?: { at: number; failed: boolean } | null;
-  /**
-   * 完成状态：open = 还在跑；done = 干完了；done_with_todos = 干完了但留了
-   * 遗留事项。**可撤销**——重开 done 的会话继续干活就回 open。缺席即 open。
-   */
-  completion?: SessionCompletion;
-  /**
-   * 关闭时刻（Unix ms）。completion 为 "open" 时恒为 null：翻到 done /
-   * done_with_todos 的那一刻写入，撤销（回 open）时清掉。缺席即 null。
-   */
-  closedAt?: number | null;
-  /**
-   * 收尾确认的记录（旧 → 新）：每次确认「做完的事」各一件，任务账本按它记账（价格 · 能力图的
-   * 实测任务只认这里与子会话）。下次收尾从最后一次的 throughTurn + 1 扫起。缺席即空。
-   */
-  wrapups?: SessionWrapup[];
-  /**
-   * 这条会话在接着做哪些遗留事项（carryover id）：从遗留清单「继续」开出的新会话、或在原会话
-   * 续跑时记下；这条会话收尾确认时，它们自动标为做完，然后清空。缺席即空。
-   */
-  resumedCarryovers?: string[];
   /**
    * 最近 3 条用户提问（新→旧，每条首行、截断规则同 title）。
    * 首页会话卡的三个提问槽吃它；**旧会话没有这个字段，显示空槽**。
@@ -710,12 +572,6 @@ function isTitleSource(value: unknown): value is TitleSource {
   return (TITLE_SOURCES as readonly unknown[]).includes(value);
 }
 
-const SESSION_COMPLETIONS: readonly SessionCompletion[] = ["open", "done", "done_with_todos"];
-
-function isSessionCompletion(value: unknown): value is SessionCompletion {
-  return (SESSION_COMPLETIONS as readonly unknown[]).includes(value);
-}
-
 /** 磁盘上的 recentQueries 只收「字符串数组的前 3 个」，其余全部丢掉，不给坏值过路。 */
 function parseRecentQueries(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -829,14 +685,9 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     // 两个开关都**默认关**：老会话不该因为加了字段就突然被置顶或藏起来
     pinned: value["pinned"] === true,
     archived: value["archived"] === true,
-    // 生命周期三字段的缺省即默认：老会话不因加字段而变样（星标关、open、无关闭时刻）；
-    // 坏值回落默认，不丢整条会话——与 mode / thinkingLevel 的坏值策略一致
+    // 星标缺省关：老会话不因加字段而变样。磁盘上旧版的 completion / closedAt / resumedCarryovers / wrapups
+    // 不再认——读时忽略（会话「完成」与遗留事项已删），下次写 meta 时自然不再带
     starred: value["starred"] === true,
-    completion: isSessionCompletion(value["completion"]) ? value["completion"] : "open",
-    closedAt: num(value["closedAt"]),
-    // 收尾记录与在做的遗留事项：缺席即空；坏条目逐条丢（一条坏账不连累整条会话）
-    ...parseWrapupsField(value["wrapups"]),
-    ...parseResumedField(value["resumedCarryovers"]),
     // 未读标记：缺 at 整条丢（当已读）——见 parseSessionUnread 的纪律
     unread: parseSessionUnread(value["unread"]),
     // 缺 recentQueries 的是会话卡之前存的会话：空槽显示，不补算（读日志太贵）
@@ -866,78 +717,6 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
   };
 }
 
-function parseTokens(raw: unknown): WrapupTokens | null {
-  if (typeof raw !== "object" || raw === null) return null;
-  const v = raw as Record<string, unknown>;
-  const keys = ["input", "output", "cacheRead", "cacheWrite"] as const;
-  if (!keys.every((key) => typeof v[key] === "number" && Number.isFinite(v[key]) && (v[key] as number) >= 0)) {
-    return null;
-  }
-  return { input: v["input"] as number, output: v["output"] as number, cacheRead: v["cacheRead"] as number, cacheWrite: v["cacheWrite"] as number };
-}
-
-function parseTurnRange(raw: unknown): [number, number] | null | undefined {
-  if (raw === null) return null;
-  if (!Array.isArray(raw) || raw.length !== 2) return undefined;
-  const [from, to] = raw as unknown[];
-  if (!Number.isInteger(from) || !Number.isInteger(to)) return undefined;
-  if ((from as number) < 1 || (to as number) < (from as number)) return undefined;
-  return [from as number, to as number];
-}
-
-function parseWrapupItem(raw: unknown): WrapupItem | null {
-  if (typeof raw !== "object" || raw === null) return null;
-  const v = raw as Record<string, unknown>;
-  if (typeof v["title"] !== "string") return null;
-  const turns = parseTurnRange(v["turns"]);
-  const tokens = parseTokens(v["tokens"]);
-  const unpricedTokens = parseTokens(v["unpricedTokens"]);
-  if (turns === undefined || tokens === null || unpricedTokens === null) return null;
-  const recordedCost = v["recordedCost"];
-  if (typeof recordedCost !== "number" || !Number.isFinite(recordedCost) || recordedCost < 0) return null;
-  const providerId = typeof v["providerId"] === "string" ? v["providerId"] : null;
-  const modelId = typeof v["modelId"] === "string" ? v["modelId"] : null;
-  return {
-    title: v["title"],
-    turns,
-    providerId,
-    modelId,
-    level: isThinkingLevel(v["level"]) ? v["level"] : null,
-    tokens,
-    recordedCost,
-    unpricedTokens,
-  };
-}
-
-/** 一次收尾确认；坏了返回 null（逐条丢） */
-export function parseSessionWrapup(raw: unknown): SessionWrapup | null {
-  if (typeof raw !== "object" || raw === null) return null;
-  const v = raw as Record<string, unknown>;
-  const id = str(v["id"]);
-  const at = num(v["at"]);
-  const through = v["throughTurn"];
-  if (id === null || at === null || !Number.isInteger(through) || (through as number) < 0) return null;
-  if (!Array.isArray(v["items"])) return null;
-  const items: WrapupItem[] = [];
-  for (const entry of v["items"] as unknown[]) {
-    const item = parseWrapupItem(entry);
-    if (item === null) return null;
-    items.push(item);
-  }
-  return { id, at, throughTurn: through as number, items };
-}
-
-function parseWrapupsField(raw: unknown): { wrapups?: SessionWrapup[] } {
-  if (!Array.isArray(raw)) return {};
-  const wrapups = raw.map(parseSessionWrapup).filter((w): w is SessionWrapup => w !== null);
-  return wrapups.length === 0 ? {} : { wrapups };
-}
-
-function parseResumedField(raw: unknown): { resumedCarryovers?: string[] } {
-  if (!Array.isArray(raw)) return {};
-  const ids = [...new Set(raw.filter((id): id is string => typeof id === "string" && id !== ""))];
-  return ids.length === 0 ? {} : { resumedCarryovers: ids };
-}
 
 /**
  * 会话列表的排序：**置顶的在前，其余按最近活动倒序**。

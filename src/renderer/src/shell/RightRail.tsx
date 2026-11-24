@@ -15,7 +15,7 @@ import { BellCard, useBellDismiss, type NoticeRow } from "../features/notify/Bel
  * **入口按类分组**（2026-10-31 用户裁决，原话：「会对右栏进行分类……每一类之间没有分隔，
  * 但是类和类之间有一个小横线做分隔」「全部都在右上，然后右下就简单一点」）：
  * 组的划分与理由见 `rail-groups.ts`，规矩见设计系统 readme「Rail entries are grouped」。
- * 右上堆「这条会话」「智能体」两组常驻，其后一条细线 + 「更多」⋮（以后再做 / 归档 / 通知），右下只留「应用」组（看板、设置）。只有这一种布局（2026-11-06 用户裁决，取代实验功能「精简右栏」的两态）。
+ * 右上堆「这条会话」「智能体」两组常驻，其后一条细线 + 「更多」⋮（归档 / 通知），右下只留「应用」组（看板、设置）。只有这一种布局（2026-11-06 用户裁决，取代实验功能「精简右栏」的两态）。
  * 此前是「上面一串、下面一串」，两串之间靠弹性空隙隔开，入口归哪串凭历史而不凭类。
  *
  * 面板类入口（文件 / 审查 / 这条任务 / 能力 / 终端 / 意图 / 子会话）**共用一个面板位**
@@ -25,7 +25,7 @@ import { BellCard, useBellDismiss, type NoticeRow } from "../features/notify/Bel
  * 天然与面板融合，不需要手调第二层值（规格 §1.1）。32px 条里 26px 的方块用
  * `--radius-sm`（md 太圆）。点亮与开关由 App 按模式算好传入。
  *
- * 应用入口（Archived / Carryovers / Memory / Settings / 浏览器）由 App 组装成 `railEntries`
+ * 应用入口（Archived / Settings / 浏览器）由 App 组装成 `railEntries`
  * 传入，**首页常驻**——它们是应用入口不是会话动作，不随会话消失（wafo 2026-09-22 裁决，
  * 覆盖 2026-09-12「底部只放会话动作」：复制转录已并入会话行的「导出」，右栏不再挂会话动作）。
  *
@@ -56,7 +56,7 @@ export type RightPanelKind =
  * 它们在条上的分组与精简态去留不由调用方定，由 RightRail 按 id 登记（见本文件的 `items`）。
  */
 export interface RailEntry {
-  id: "carryovers" | "archived" | "browser" | "board" | "settings";
+  id: "archived" | "browser" | "board" | "settings";
   icon: IconName;
   /** tooltip 与读屏共用这一句 */
   label: string;
@@ -68,7 +68,7 @@ export interface RailEntry {
 export function RightRail(props: {
   panel: RightPanelKind | null;
   onPanel: (next: RightPanelKind | null) => void;
-  /** 应用级入口（遗留 / 归档 / 浏览器 / 记忆 / 看板 / 设置），调用方组装；条上的组与顺序由 RightRail 定，与数组顺序无关 */
+  /** 应用级入口（归档 / 浏览器 / 记忆 / 看板 / 设置），调用方组装；条上的组与顺序由 RightRail 定，与数组顺序无关 */
   railEntries: RailEntry[];
   /**
    * Sub-sessions 面板入口（子会话 PR4c）：null = 不出现（没在看根会话，或这条
@@ -199,7 +199,6 @@ export function RightRail(props: {
       badge: props.automation.running,
     },
     // 收起来以后再看的：全部在「更多」菜单里（记忆库在设置里，不在右栏）
-    ...fromApp("carryovers", { group: "shelf", inMore: true }),
     ...fromApp("archived", { group: "shelf", inMore: true }),
     // 应用级：看板、设置，钉右下。通知收进「更多」，未读数写在菜单项上
     ...fromApp("board", { group: "app" }),

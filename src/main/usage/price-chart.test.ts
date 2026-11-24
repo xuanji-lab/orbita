@@ -127,7 +127,7 @@ function sources(logs: Record<string, SessionRecord[]>, metas: SessionMeta[], pr
     }
   }
   return {
-    tasks: async () => chartTasks(book.tasks, [], new Set(native.map((m) => m.id))),
+    tasks: async () => chartTasks(book.tasks, new Set(native.map((m) => m.id))),
     providers: async () => providers,
     catalog: async () => catalog,
   };
@@ -248,7 +248,7 @@ describe("buildPriceChart", () => {
     const book = emptyTaskBook();
     appendTaskRecord(book, "x", { id: "u1", providerId: "kimi-coding", modelId: "k3", tokens: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 }, cost: 5, timestamp: 1 }, () => "2026-10-24");
     assert.equal(book.tasks[0]?.level, null);
-    const tasks = chartTasks(book.tasks, [], new Set(["x"]));
+    const tasks = chartTasks(book.tasks, new Set(["x"]));
     assert.deepEqual(tasks, []);
     const data = await buildPriceChart({ tasks: async () => tasks, providers: async () => providers, catalog: async () => catalog }, snapshot);
     assert.equal(data.profile.reference, true);

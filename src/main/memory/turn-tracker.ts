@@ -26,7 +26,7 @@
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
 import { memoryScopeOf, type MemoryChoreModel } from "../../shared/memory.ts";
 import { parseChannelPrompt } from "../../shared/channel.ts";
-import { isClosingScanText } from "../../shared/wrapup-scan.ts";
+import { isClosingScanText } from "../../shared/legacy-closing-scan.ts";
 import type { SessionRecord } from "../../shared/session.ts";
 import type { MemoryTurnPayload } from "./host-core.ts";
 

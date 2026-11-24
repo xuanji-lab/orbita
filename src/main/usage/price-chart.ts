@@ -43,7 +43,7 @@ export interface ArenaSnapshot {
 }
 
 export interface PriceChartSources {
-  /** 价格图的任务全集（task-cost 的 chartTasks：收尾确认的做完的事 + 每个子会话一件） */
+  /** 价格图的任务全集（task-cost 的 chartTasks：每个子会话一件） */
   tasks(): Promise<readonly ChartTask[]>;
   providers(): Promise<Provider[]>;
   catalog(): Promise<BuiltinProvider[]>;

@@ -28,9 +28,8 @@ import { EXTERNAL_FILE_COPY_MAX_BYTES, type PromptFileRef, type SentFileRef } fr
 import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
 import type { PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
-import type { SessionWrapup } from "../../shared/wrapup.ts";
 import { parseAutomationHeader } from "../../shared/automation.ts";
-import { isClosingScanText } from "../../shared/wrapup-scan.ts";
+import { isClosingScanText } from "../../shared/legacy-closing-scan.ts";
 
 /** 收尾扫描的机器提问（用户消息形，但不是用户说的话） */
 function isMachinePrompt(record: SessionRecord): boolean {
@@ -51,7 +50,6 @@ import {
   SESSION_PAGE_RECORDS,
   sortSessions,
   UNASSIGNED_PROVIDER_ID,
-  type SessionCompletion,
   type SessionDetail,
   type SessionMeta,
   type SessionOlderPage,
@@ -733,61 +731,10 @@ export class SessionStore {
   }
 
   /**
-   * 完成状态：翻到 done / done_with_todos 的那一刻记下关闭时刻，reopen（回 open）
-   * 时清掉——closedAt 与 completion 同进退，不留「open 却带着关闭时刻」的半态。
-   * **同态幂等**：已是 done 再设 done 不刷新关闭时刻，「什么时候干完的」是历史
-   * 事实，不是最后一次点击。非 open 两态之间切换（done → done_with_todos）算一次
-   * 真实的翻档，刷新；本 PR 的 UI 只产生 open ↔ done，这条分支为 carryover 留着。
-   */
-  setCompletion(id: string, completion: SessionCompletion): Promise<void> {
-    return this.update(id, (meta) =>
-      (meta.completion ?? "open") === completion
-        ? null
-        : { completion, closedAt: completion === "open" ? null : Date.now() },
-    );
-  }
-
-  /**
-   * 收尾确认（session:wrapup-confirm）：一次 meta 写入里追加收尾记录、翻完成状态、取走这条会话
-   * 在接着做的遗留事项 id（返回给调用方去标做完）。会话不存在返回 null。
-   * 完成状态的翻法同 setCompletion：同态不刷新关闭时刻。
-   */
-  confirmWrapup(
-    id: string,
-    wrapup: SessionWrapup,
-    completion: Exclude<SessionCompletion, "open">,
-  ): Promise<{ resumed: string[] } | null> {
-    return this.queueMeta(id, async () => {
-      const meta = await this.readMeta(id);
-      if (meta === null) return null;
-      const resumed = meta.resumedCarryovers ?? [];
-      const same = (meta.completion ?? "open") === completion;
-      const next: SessionMeta = {
-        ...meta,
-        wrapups: [...(meta.wrapups ?? []), wrapup],
-        completion,
-        closedAt: same ? (meta.closedAt ?? Date.now()) : Date.now(),
-      };
-      delete next.resumedCarryovers;
-      await this.writeMeta(next);
-      return { resumed };
-    });
-  }
-
-  /** 记下这条会话在接着做某条遗留事项（遗留清单的「继续」）；重复的 id 不再记 */
-  addResumedCarryover(id: string, carryoverId: string): Promise<void> {
-    return this.update(id, (meta) =>
-      (meta.resumedCarryovers ?? []).includes(carryoverId)
-        ? null
-        : { resumedCarryovers: [...(meta.resumedCarryovers ?? []), carryoverId] },
-    );
-  }
-
-  /**
    * 未读标记（后台跑完还没看，2026-10-10 落盘）：`{ at, failed }` 标未读，null 清。
    * at / failed 由 renderer 在落定那一刻铸——什么时候跑完的、是不是挂了，是落定时
    * 的事实不是写盘时的事实。不做幂等判断：renderer 只在标 / 清那两次调，重复写
-   * 同值无害（setCompletion 防的是“重刷新关闭时刻”那类历史改写，这里没有）。
+   * 同值无害。
    */
   setUnread(id: string, unread: { at: number; failed: boolean } | null): Promise<void> {
     return this.update(id, { unread });

@@ -93,10 +93,6 @@
   padding: 0 var(--space-2) 0 var(--space-2-5);
   width: auto;
 }
-.toolbar-capsule .cap-subchip {
-  padding: 0 var(--space-2) 0 var(--space-1-5);
-  width: auto;
-}
 .toolbar-capsule .cap-crumb {
   padding: 0 var(--space-1-5) 0 0;
   width: auto;
@@ -195,16 +191,17 @@
   background: var(--color-accent-strong);
 }
 
-/* —— 会话胶囊（排法甲 · 地址栏式，用户裁决）：三栏网格，标题永远在胶囊正中 —— */
+/* —— 会话胶囊（2026-11-22 改左对齐）：[父会话面包屑] [标题] [id] [复制]，成组靠左，和右栏面板标题同一条规矩 ——
+ * 胶囊的左缘由工具栏几何给（window-tools.ts 的 sessionCapsule：对话列左缘 + 右栏同款内缩；侧栏收起时
+ * 紧跟左胶囊的专注键）。这里管组内：间距统一一个 --space-1，标题是唯一能缩的（min-width: 0 + 省略号），
+ * 其余各保住自己的宽；悬停才出现的铅笔 / 复制键用 visibility 占位，显形时一个像素都不挪。 */
 .cap-sess {
-  display: grid;
-  /* 中栏 minmax(0, max-content)：放得下时取标题全宽、两侧 1fr 对称——标题居中；
-   * 放不下时中栏先让（标题省略号），两侧 1fr 的下限是各自内容的 min-content，
-   * 不再被挤到内容以下——原先 1fr auto 1fr 的中栏不肯缩，右端短 id 溢进标题
-   * （2026-10-19 用户验收：窗口缩小后「…3」压在标题上） */
-  grid-template-columns: 1fr minmax(0, max-content) 1fr;
+  display: flex;
   align-items: center;
-  padding: 0 var(--space-0-5) 0 var(--space-1);
+  justify-content: flex-start;
+  gap: var(--space-1);
+  /* 左内边距 6：胶囊自己 2 + 这里 6 + 标题 4 = 标题文字离胶囊左缘 12（右栏标题键图标同样离 12） */
+  padding: 0 var(--space-0-5) 0 var(--space-1-5);
   /* 胶囊宽由工具栏几何给（sessionCapsule），这里按自身宽逐级让位 */
   container-type: inline-size;
   /* container-type: inline-size 让元素的宽**不再随内容撑开**——必须显式铺满胶囊。
@@ -219,22 +216,14 @@
    * 工具栏其余空白仍是拖拽把手 */
   -webkit-app-region: no-drag;
 }
-/* 让位顺序（窄到哪一档丢哪样；收工键始终在）：
- * ① 短 id 先藏（复制键仍在，悬停给提示）② 子会话芯片只留图标 + 数字 ③ 标题省略 */
+/* 让位顺序（窄到哪一档丢哪样）：① 短 id 先藏（复制键仍在，悬停给提示）② 面包屑只留箭头 ③ 标题省略 */
 @container (max-width: 380px) {
   .cap-sess .cap-sid {
     display: none;
   }
 }
 @container (max-width: 300px) {
-  .cap-sess .cap-subchip > span {
-    display: none;
-  }
   .cap-sess .cap-crumb > span {
-    display: none;
-  }
-  /* 标题两侧为悬停铅笔预留的 24px 占位（对称居中用）窄时让给标题；重命名仍可双击标题 */
-  .cap-sess .cap-sc > .cap-mini {
     display: none;
   }
 }
@@ -243,72 +232,31 @@
   align-items: center;
   min-width: 0;
 }
-/* 两侧保住自己的内容宽（覆盖上面 > * 的 min-width:0）：缺了它两侧轨道能被压到 0、
- * 内容照样画出来，子会话芯片 / 短 id 就叠到标题上。让位靠下面的 @container 逐级藏 */
-.cap-sess .cap-sl,
-.cap-sess .cap-sr {
-  min-width: max-content;
-}
+/* 面包屑保住自己的内容宽（覆盖上面 > * 的 min-width:0）；没有就不占位 */
 .cap-sess .cap-sl {
-  justify-self: start;
+  min-width: max-content;
+  margin-right: var(--space-2);
+}
+.cap-sess .cap-sl:empty {
+  display: none;
 }
 .cap-sess .cap-sc {
-  /* 钉中栏：设置页只有这一个孩子，不钉就落进第一列（1fr）、不居中 */
-  grid-column: 2;
-  /* 拉满中栏、在栏内居中：justify-self:center 会让它按内容（nowrap 标题的全长）
-   * 定宽，轨道缩了它照样溢出——标题省略号永远等不到 */
-  justify-self: stretch;
-  justify-content: center;
+  flex: 0 1 auto;
   overflow: hidden;
   gap: var(--space-0-5);
 }
 .cap-sess .cap-sr {
-  justify-self: end;
+  flex: 0 0 auto;
   gap: var(--space-0-5);
 }
-/*
- * 方向 N 返工（2026-11-07）：胶囊去底以后，「标题居中、右端 id / 收工键靠边」的三栏网格在壳上就成了
- * 三个各自漂着的字串（标题与 hash 隔 74px，父会话的 ⑂ N 又在更左边）——有底的药丸「装」着它们时看不出来。
- * 改成按内容宽度居中成一组：[⑂ N / ↑ 父标题] [标题] [hash] [复制] | [✓]，间距统一一个 --space-1，
- * 整组居中在会话列上。悬停才出现的铅笔 / 复制键仍用 visibility 占位（显形时一个像素都不挪），
- * 所以组内会有两处 24px 的空位——和相邻两组的间距同一个节奏。标题是唯一能缩的（min-width: 0 +
- * 省略号），其余各保住自己的宽；再窄时的让位顺序（短 id → 子会话文字）不变。
- * 左边那个对称用的铅笔占位在成组之后没有意义，去掉。
- */
-:root {
-  .cap-sess {
-    display: flex;
-    justify-content: center;
-    gap: var(--space-1);
-  }
-  .cap-sess .cap-sl:empty {
-    display: none;
-  }
-  .cap-sess .cap-sc {
-    flex: 0 1 auto;
-    justify-self: auto;
-    grid-column: auto;
-  }
-  .cap-sess .cap-sc > .cap-mini:first-child {
-    display: none;
-  }
-  .cap-sess .cap-sr {
-    flex: 0 0 auto;
-    justify-self: auto;
-  }
-  /* 悬停才显形的铅笔 / 复制键占位 24 → 20：组内相邻两件的间距收在同一个节奏上（标题 ↔ id、id ↔ 收工线
-     各约 30px，⑂N ↔ 标题 16px），不再是「标题与 hash 隔一大截」 */
-  .cap-sess .cap-sc > .cap-mini,
-  .cap-sess .cap-sr > .cap-mini {
-    width: var(--space-5);
-    height: var(--space-5);
-  }
-  .cap-sess .cap-sl {
-    margin-right: var(--space-2);
-  }
-  .cap-sess .cap-sid {
-    padding-left: 0;
-  }
+/* 悬停才显形的铅笔 / 复制键占位 24 → 20：组内相邻两件的间距收在同一个节奏上 */
+.cap-sess .cap-sc > .cap-mini,
+.cap-sess .cap-sr > .cap-mini {
+  width: var(--space-5);
+  height: var(--space-5);
+}
+.cap-sess .cap-sid {
+  padding-left: 0;
 }
 /* 标题是唯一的主体：titlebar 档、半粗、正墨 */
 .cap-title {
@@ -348,28 +296,7 @@
   letter-spacing: 0.02em;
   padding: 0 var(--space-0-5) 0 var(--space-1-5);
 }
-/* 左端子会话小芯片 / 面包屑 */
-.cap-subchip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  height: 22px;
-  padding: 0 var(--space-2) 0 var(--space-1-5);
-  font: inherit;
-  border-radius: var(--radius-pill);
-  background: var(--color-bg-muted);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-xs);
-  white-space: nowrap;
-}
-.cap-subchip .orbita-icon {
-  color: var(--color-text-tertiary);
-}
-.cap-subchip b {
-  font-family: var(--font-family-business);
-  font-weight: var(--weight-semibold);
-  color: var(--color-text-primary);
-}
+/* 左端父会话面包屑（子会话被 Open as main 时才有） */
 .cap-crumb {
   border: 0;
   background: transparent;

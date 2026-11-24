@@ -12,11 +12,7 @@ import type {
   ModelAssignGroups,
   ModelAssignRunResult,
 } from "../../shared/model-assign.ts";
-import type { WrapupConfirmInput, WrapupPlan, WrapupReviseInput, WrapupReviseResult } from "../../shared/wrapup.ts";
 import type {
-  Carryover,
-  CarryoverStatus,
-  SessionCompletion,
   SessionMeta,
   SessionMoveResult,
   SessionOlderPage,
@@ -62,9 +58,6 @@ export const sessionApi = {
   /** 星标：价值标记，与置顶正交——不置顶，只给侧栏标识与筛选 */
   star: (id: string, starred: boolean): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionStar, id, starred),
-  /** 完成状态：done/done_with_todos 记关闭时刻；回 open（reopen）清空。纯 meta 操作，只读会话也可用 */
-  setCompletion: (id: string, completion: SessionCompletion): Promise<void> =>
-    ipcRenderer.invoke(ipcChannels.sessionSetCompletion, id, completion),
   /** 意图召回的会话级开关（实验功能 intent-system）：只落 meta，下一轮生效 */
   setIntentEnabled: (id: string, enabled: boolean): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionSetIntentEnabled, id, enabled),
@@ -89,21 +82,6 @@ export const sessionApi = {
   /** 导出成 Markdown，走原生保存对话框；取消返回 null，否则返回落盘路径 */
   exportMarkdown: (id: string): Promise<string | null> =>
     ipcRenderer.invoke(ipcChannels.sessionExport, id),
-  // —— 遗留事项（收尾仪式）三通道 ——
-  /** 全部遗留事项，落盘顺序。角标与筛选按 sourceSessionId 在 renderer 现算 */
-  carryoverList: (): Promise<Carryover[]> => ipcRenderer.invoke(ipcChannels.carryoverList),
-  // —— 收尾（shared/wrapup.ts）三通道 ——
-  /** 这次要扫的轮次与各轮用量；会话不存在 / 没有新轮次 null */
-  wrapupPlan: (id: string): Promise<WrapupPlan | null> => ipcRenderer.invoke(ipcChannels.sessionWrapupPlan, id),
-  /** 按用户一句话改清单（家务活模型一次独立小调用，不进会话） */
-  wrapupRevise: (id: string, input: WrapupReviseInput): Promise<WrapupReviseResult> =>
-    ipcRenderer.invoke(ipcChannels.sessionWrapupRevise, id, input),
-  /** 确认：做完的事落账、留下的事进遗留清单、会话标完成、接着做的遗留事项标做完 */
-  wrapupConfirm: (id: string, input: WrapupConfirmInput): Promise<void> =>
-    ipcRenderer.invoke(ipcChannels.sessionWrapupConfirm, id, input),
-  /** 翻转一条的状态：done 记 doneAt，回 open 清掉 */
-  carryoverSetStatus: (id: string, status: CarryoverStatus): Promise<void> =>
-    ipcRenderer.invoke(ipcChannels.carryoverSetStatus, id, status),
   // —— 会话回退 / 单轮撤销（revert.ts）四通道 + 轮尾产物打开两通道 ——
   /** 回退计划（确认框列清单用）：目标消息及之后会被撤回什么 */
   revertPlan: (id: string, targetMessageId: string): Promise<RevertPlan> =>
