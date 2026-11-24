@@ -347,6 +347,9 @@ describe("AvatarJobs：历史", () => {
     await writeFile(join(dir, "candidates", "r1-s1-a1.png"), "one");
     await wait(40);
     assert.equal((await h.jobs.select({ workspaceId: "w1", bodyId: "main", candidateId: "r1-s1" })).ok, true);
+    const justSelected = await h.jobs.get({ workspaceId: "w1", bodyId: "main" });
+    assert.equal(justSelected.ok && justSelected.job?.state, "selected");
+    assert.equal(justSelected.ok && justSelected.job?.selected, "r1-s1");
 
     await h.jobs.generate({ workspaceId: "w1", bodyId: "main", instruction: "再暖一点", baseCandidateId: "r1-s1" });
     const pending = await h.jobs.history({ workspaceId: "w1", bodyId: "main" });

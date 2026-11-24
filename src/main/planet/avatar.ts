@@ -677,6 +677,9 @@ export class AvatarJobs {
     const read = await this.get(request);
     const job = read.ok ? read.job : null;
     const done: AvatarJob = { ...(job ?? this.emptyJob(request)), state: "selected", selected: cand.id, notes: [...(job?.notes ?? []), ...warnings] };
+    // 活任务还留着这一轮的计时与地点：选中结果也要写回它，否则紧随其后的 avatarJob 会读回 ready / null
+    const live = this.live.get(key);
+    if (live !== undefined) live.job = done;
     this.deps.emit(done);
     return { ok: true, job: done };
   }
