@@ -570,7 +570,7 @@ function OrbitSection(props: { design: GalaxyDesign; setDesign: (design: GalaxyD
   });
   const colors: Readonly<Record<OrbitLevel, string>> = { red: "var(--color-danger)", yellow: "var(--color-warning)", green: "var(--color-success)" };
   const aTrack = orbitTrackStops(status, ORBIT_RANGE.min, ORBIT_RANGE.max).map((stop) => `${colors[stop.color]} ${stop.at.toFixed(3)}%`).join(", ");
-  const ePct = (value: number): string => `${(clampValue(value / 0.6, 0, 1) * 100).toFixed(3)}%`;
+  const ePct = (value: number): string => `${(Number.isFinite(value) ? clampValue(value / 0.6, 0, 1) * 100 : 0).toFixed(3)}%`;
   const eTrack = [
     `${colors.green} 0%`,
     `${colors.green} ${ePct(status.comfortMaxE)}`,

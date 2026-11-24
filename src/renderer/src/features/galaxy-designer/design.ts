@@ -56,7 +56,7 @@ export const ZOOM = { min: 50, max: 200, step: 10 } as const;
  */
 export const ZOOM_DEFAULT: Readonly<Record<BodyKind, number>> = { star: 70, planet: 140 };
 /** 轨道半径滑块的范围；合法下限另由两颗天体的半径算（minOrbit），滑块能拖到下限以下，拖过去就报错 */
-export const ORBIT_RANGE = { min: 4, max: PLANET_ZONE, step: 0.5 } as const;
+export const ORBIT_RANGE = { min: 4, max: PLANET_ZONE, step: 0.1 } as const;
 /** 天体名字最多几个字（按字符数，中文一个字算一个） */
 export const NAME_MAX = 24;
 
