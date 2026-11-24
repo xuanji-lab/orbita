@@ -214,7 +214,6 @@ import { fileManagerKind } from "../../file-manager.ts";
 import { FileTypeIcon } from "../../shell/FileTypeIcon";
 import { HomeHero } from "./HomeHero";
 import { HomeLog, type HomeLogRowView } from "./HomeLog";
-import { heroFace } from "./home-hero.ts";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { FileTurnCard, RevertMarkView } from "./FileTurnCard";
 import type { MemorySessionTurnView, MemorySessionView } from "@shared/memory";
@@ -293,7 +292,7 @@ import {
 import type { FileTurnView, RevertRecord, UndoRecord } from "@shared/revert";
 import type { RetryStatus } from "@shared/agent-ipc";
 import type { ChatSession } from "./useChatSession";
-import type { ModelPair, ThemePreference } from "@shared/settings";
+import type { ModelPair } from "@shared/settings";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 import { scopeChipAction } from "./scope-chip.ts";
@@ -768,11 +767,6 @@ function ChatViewBody(props: {
   onOpenSubSession?: (childId: string) => void;
   /** 右栏「子会话」面板的列表层（收件箱）：对话流里的「N 个子会话交回了」提示行的「在面板里看」。不给就不显示该按钮 */
   onOpenSubSessionsList?: () => void;
-  /**
-   * 解析后的主题：只给首页门面用（纸面两档的 slogan 与批语，HomeHero.tsx）。
-   * 只有主槽的 ChatView 拿到它；辅助对话是 homeBare，本来就不出门面。
-   */
-  theme?: Exclude<ThemePreference, "system">;
   /**
    * 确认卡「在辅助对话打开」：来源会话在右抽屉打开（主槽不动）。只有主槽拿到它。
    */
@@ -1630,9 +1624,6 @@ function ChatViewBody(props: {
         })),
         unread: meta.unread ?? null,
       });
-    // 纸面两档（小学作业 / 打字稿）不套方向 N，首页只有 slogan 与输入框（原来的一排最近会话卡
-    // 2026-11-22 删掉）；别的主题在输入框下面列等你 / 进行中，没有就留白。
-    const logMode = heroFace(props.theme) === "plain";
     const lineText: HomeCardLineText = {
       thinking: t.homeCard.thinking,
       doing: t.homeCard.doing,
@@ -1677,22 +1668,20 @@ function ChatViewBody(props: {
       startLeave();
       session.openSession(sessionId);
     };
-    const logGroups = logMode
-      ? selectHomeLog(session.sessions, stateOf).map((group) => ({
-          group: group.group,
-          rows: group.rows.map((row): HomeLogRowView => {
-            const facts = homeFacts(row.sessionId);
-            return {
-              sessionId: row.sessionId,
-              title: row.title,
-              state: facts.state,
-              line: facts.line,
-              where: facts.where,
-              time: facts.time,
-            };
-          }),
-        }))
-      : [];
+    const logGroups = selectHomeLog(session.sessions, stateOf).map((group) => ({
+      group: group.group,
+      rows: group.rows.map((row): HomeLogRowView => {
+        const facts = homeFacts(row.sessionId);
+        return {
+          sessionId: row.sessionId,
+          title: row.title,
+          state: facts.state,
+          line: facts.line,
+          where: facts.where,
+          time: facts.time,
+        };
+      }),
+    }));
     return (
       <div
         className="home-stage"
@@ -1708,11 +1697,10 @@ function ChatViewBody(props: {
           overflow: "hidden",
         }}
       >
-        <div ref={stageRef} className="home-col" data-mode={logMode ? "log" : "cards"}>
+        <div ref={stageRef} className="home-col" data-mode="log">
           {/* 淡出组：slogan 向上走（--transition-layer，220ms） */}
           <div className="home-fade home-fade-head">
-            {/* 门面：slogan（纸面两档再加红笔批语），样子与理由在 HomeHero.tsx */}
-            <HomeHero theme={props.theme} />
+            <HomeHero />
           </div>
           {/* 滑落组：notices 与 composer 一起滑向窗口底部（--transition-composer-exit，240ms） */}
           <div
@@ -1725,7 +1713,7 @@ function ChatViewBody(props: {
           </div>
           {/* 记录组：在输入框下面（先写，再读别的活的进展），随 slogan 一起淡出。没有等你 / 进行中的
               活就整组不渲染——输入框下面留白，不留组名、子午线或空容器（2026-11-22 删掉「最近」组后的常态） */}
-          {logMode && logGroups.length > 0 && (
+          {logGroups.length > 0 && (
             <div className="home-fade home-fade-log">
               <HomeLog groups={logGroups} onOpen={openFromHome} />
             </div>

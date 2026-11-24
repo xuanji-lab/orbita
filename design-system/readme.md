@@ -33,11 +33,11 @@ of colour and counters, every colour with exactly one job.
 一、这是一张要坐一整天的编辑台，不是演示——agent 长时间跑，用户要一眼看出"谁在等我"，三张等重的会话卡与居中的 slogan 做不到，按状态分组的记录行与一根子午线可以。
 二、半透明阶梯让亮度随壁纸漂、随嵌套层数变，层次是"叠出来"的而不是"写下来"的；换成三个写明的实色后，同一页在任何桌面上读出来一样，对比度也才能被钉进测试（三级墨在每一种地上 ≥ 4.5）。
 三、玻璃是个人化的味道，纸是更安静的味道：靠发丝线而不是阴影分层，视线才不会被"浮起来的东西"拉走。
-**没改的**：纸面两档（小学作业 / 打字稿）仍是它们自己的世界，不套这段话；accent 的蓝 / 黄、品牌衬线 slogan、信息折叠的规矩原样。
+**没改的**：accent 的蓝 / 黄、品牌衬线 slogan、信息折叠的规矩原样。
 
 **English**: Orbita should feel like a **quiet, editorial workbench with brand-grade craft** — not a dashboard, not a cockpit. The core visual language is **a colored shell and a flat paper well, layered by hairlines**: the whole app sits on one opaque shell (a neutral light grey on light — moon-white until 2026-11-22, a blue-black night sky on dark); the chat surface is a flat paper well set into it, one step lighter (or darker); the input box is not a card floating over the well but the ledge at its foot; depth is three written colours (shell → well → card face) and 1px hairlines — never translucency stacking, never shadow. The conversation is not a chat of bubbles but **a log with a time axis**: one **meridian** line runs the whole page and pins who spoke, what was done and when to the same axis — your message is a hollow star, the agent's turn a filled one, every tool call a tick, the time sits in a left index gutter; the same gutter holds status group names on the home page and section names in settings, one grammar. Opening the app lands directly in Agent mode: the brand-serif slogan (left-aligned, the lightest thing on screen), then the input box, then a record grouped **Waiting for you / Running** (blank when nothing is) — write first, then read how the other work is going. Every new session starts on this page; when the first message is sent, the slogan and the record fade away while the input box glides to the bottom of the window and becomes the chat composer — the input keeps the same width across pages, and **motion only ever explains where things went, never decorates**. Information follows one rule: **simple by default, expandable on demand** — thinking, tool calls, and file reads collapse to a single line until clicked; the user needs to know what the agent is doing and be able to trace it, not drown in process. **Restraint is the discipline of this interface**: no emoji, no piles of color and counters (that is noise and childishness). Every color has exactly one job — accent is reserved for the primary action and a checked box; selection is a neutral grey; status prefers icons and words over color; **inline code is a grey pill with link-blue type** (machine content is told apart by mono + fill + blue, and the blue clears 4.5:1 on the pill on all three tiers). Density is balanced, never IDE-crowded. Structurally, the left and right sidebars are symmetric and collapse into slim icon-only strips; the right side stays closed by default and never pops open to steal attention. The primary work surface is a single-agent conversation; the complexity of multi-agent work hides inside the orchestration mode instead of spreading into a cockpit. The overall character: **a minimalist composer-first home with editor-grade order — quiet, clearly layered — so the user's attention lands only on "what do I do next."**
 
-**Why it changed** (the two phrases in the 2026-08-22 text: "frosted-glass cards with stacking translucency" and "the slogan and the input box are the whole weight of the home screen"): (1) this is a desk you sit at all day, not a demo — an agent runs for a long time and the user needs to see at a glance who is waiting on them; three equal cards and a centred slogan cannot say that, a record grouped by state and one meridian can. (2) A translucency ladder makes brightness drift with the wallpaper and with nesting depth — layers are *stacked*, not *written*; three written opaque colours read the same on any desktop and let contrast be pinned in a test (the tertiary ink clears 4.5:1 on every ground). (3) Glass is a personal taste, paper a quieter one: layering by hairline instead of shadow keeps the eye from being pulled toward whatever floats. **Unchanged:** the two paper themes are still their own worlds and do not follow this statement; the blue / yellow accent, the brand-serif slogan and the fold-by-default rule stand as written.
+**Why it changed** (the two phrases in the 2026-08-22 text: "frosted-glass cards with stacking translucency" and "the slogan and the input box are the whole weight of the home screen"): (1) this is a desk you sit at all day, not a demo — an agent runs for a long time and the user needs to see at a glance who is waiting on them; three equal cards and a centred slogan cannot say that, a record grouped by state and one meridian can. (2) A translucency ladder makes brightness drift with the wallpaper and with nesting depth — layers are *stacked*, not *written*; three written opaque colours read the same on any desktop and let contrast be pinned in a test (the tertiary ink clears 4.5:1 on every ground). (3) Glass is a personal taste, paper a quieter one: layering by hairline instead of shadow keeps the eye from being pulled toward whatever floats. **Unchanged:** the blue / yellow accent, the brand-serif slogan and the fold-by-default rule stand as written.
 
 ## Status: this file is the 真源
 
@@ -77,13 +77,10 @@ above still holds.
 
 ## Content fundamentals
 
-UI copy is English first, and **all Chinese under the Copybook theme** (小学作业). There is no language
-setting: the language follows the resolved theme (`localeOfTheme` in `src/renderer/src/locale.ts` —
-`copybook` → Chinese, every other theme, including what `system` lands on, → English). The
-reason is that orbita has no language picker and Copybook is the Chinese edition by design;
-Typescript is its English counterpart. A separate switch would only add the one combination users
-asked to remove — green grid, English letters that don't sit in the squares. `<html lang>` follows
-too (`zh-CN` / `en`), which drives CJK glyph selection and line breaking.
+UI copy is English first, with a Chinese table selected by Settings › Appearance › Language.
+`effectiveLanguage` in `src/shared/settings.ts` is the shared rule for the renderer and the main
+process (commit / PR attribution). `<html lang>` follows too (`zh-CN` / `en`), which drives CJK glyph
+selection and line breaking.
 
 Copy lives in one typed table, not in the components: `messages-en.ts` is the source of truth,
 `messages-zh.ts` is typed from it (a missing key fails typecheck). Components read it with
@@ -91,9 +88,8 @@ Copy lives in one typed table, not in the components: `messages-en.ts` is the so
 Latin words are allowed only for the brand (orbita), protocol / format names (MCP, API, URL, JSON),
 model and provider names, file names and paths, and key names; `messages.test.ts` enforces this with
 a whitelist. Chinese copy uses full-width punctuation, one space between CJK and digits / Latin
-(「2 个子会话」「编辑 mcp.json」), and a single `…` for menu items and in-flight states. Brand copy —
-the slogan 璇玑运转，诸事得序 — stays in Chinese under every theme except Typescript, whose home
-page is the English face of the Copybook page: "Set in motion, kept in order."  The rules below are written for
+(「2 个子会话」「编辑 mcp.json」), and a single `…` for menu items and in-flight states. The
+slogan 璇玑运转，诸事得序 stays Chinese in every language. The rules below are written for
 the English copy; the Chinese copy follows the same voice.
 
 - **Voice: flat, mechanical, unhurried.** Labels are nouns or bare verbs: "New Session", "Search",
@@ -115,7 +111,7 @@ the English copy; the Chinese copy follows the same voice.
   on the same baseline as the section's first row; below 620px of page the page is one column again and the title
   returns above its rows at `--font-size-lg`. Rows sit top-aligned with no hairline between them (8px above and
   below, 32px between sections); the page is 120 + 24 + 640 wide, not the content column's measure — 1000px put
-  "name ↔ control" half a screen apart. The paper themes keep the one-column page with row hairlines.
+  "name ↔ control" half a screen apart.
 - **A setting explains itself in place.** Name `base`/500, then its description below in `sm`
   tertiary, wrapping instead of truncating (`.set-row-desc`). Before 2026-10-30, General hid
   descriptions behind an ⓘ next to the name while Voice wrote them out — two ways of explaining on
@@ -160,16 +156,14 @@ the English copy; the Chinese copy follows the same voice.
 - **Mono for machine facts.** Paths, ids, branch names, durations, model names and counts are set in
   the mono/tabular face so a number never re-flows a row.
 - **The slogan is the one lyrical line in the product**: 璇玑运转，诸事得序 — set in the brand
-  serif, letter-spaced, **left-aligned at 28px and the lightest weight on screen** (2026-11-07; the two paper
-  themes keep their centred 36 / 30px stagings). Under it come the input box and the record of what is
-  waiting and running; nothing else on the home screen competes with the line. The two
-  paper themes restage it (see *Paper themes*) and add one teacher's mark beneath it in red pen
-  (「字迹工整」/ "Neat."); that mark is decoration, not copy — screen readers skip it.
+  serif, letter-spaced, **left-aligned at 28px and the lightest weight on screen** (2026-11-07).
+  Under it come the input box and the record of what is waiting and running; nothing else on the
+  home screen competes with the line.
 
 ## Visual foundations
 
 **Colour.** Themes: **white + blue** (light), the two dark tiers **黛 Slate + yellow** and
-**玄 Onyx + yellow**, and the two paper faces (below). A **neutral light-grey shell** (`#f5f5f5`, OKLCH L97.0 C0)
+**玄 Onyx + yellow**. A **neutral light-grey shell** (`#f5f5f5`, OKLCH L97.0 C0)
 with a near-white **paper well** (`#fefefe`, L99.7), three neutral text inks, three neutral hairline greys — the two
 grounds are opaque colours one step apart (ΔL 2.7, 1.08:1), not glass over the desktop (2026-11-07, direction N).
 **Why neutral and this light (2026-11-22, the user's pick):** the user found the 2026-11-07 moon-white (`#e7ebef`,
@@ -214,8 +208,7 @@ It sits a touch darker than the shell (L97.0), so a muted block on the shell rea
 this grey pill** — 2026-11-07 direction N briefly set it in ink, and the same day the user ruled the blue stays; the
 blue clears 4.5:1 on the pill on all three tiers: light 4.62, 黛 / 玄 ≈ 6.1). It is
 never the selection wash — `--color-bg-active` means *pressed*, and a release-notes card or a badge
-in that colour reads as pressed. The paper faces keep their own warm `#f4f4ef` (paper is warm on
-purpose); the dark tiers are unaffected.
+in that colour reads as pressed.
 
 **Category colours** (`--color-filetype-doc / -slides / -sheet`, added 2026-10): a shared
 three-colour set — blue for doc-ish, green for sheets, orange-red for slides — that tells file
@@ -236,8 +229,7 @@ token-usage squares and the nebula energy creature sitting on them (bottom-left)
 data, not an action or a status, so it borrows neither the accent nor any status colour; tiers
 are the same colour mixed at 30 / 62 / 100 % opacity. **Each theme carries its own nebula, like
 real nebulae each have a colour**: light reflection blue `#2f6bf0`, 黛 oxygen-emission cyan
-`#3ec1c9`, 玄 hydrogen-emission magenta `#e0588f`, Copybook ink green `#3b7a55`, Typescript
-red-pen vermilion `#c0442e`.
+`#3ec1c9`, 玄 hydrogen-emission magenta `#e0588f`.
 
 **Two dark tiers** (re-cut 2026-09-30; values lifted from the packaged colour systems of the
 user's two comfort apps — DeepSeek Harness and ZCode — not eyeballed). The layering grammar: **the
@@ -267,37 +259,6 @@ landing of `system`**; both are manual choices too, both keep the yellow accent 
 olive-brown `#39372d` on the shell). Tier ids
 stay `graphite` / `black` (the settings / IPC contract); the display names live in the message
 catalogues. Earlier dark pairings and their bounces live in those days' commits.
-
-**Paper themes** (added 2026-09-25): **Copybook** (小学作业) and **Typescript** (打字稿) are the two
-faces of the 稿纸 era from the 璇玑载体谱 skin study — the Chinese and English versions — loaded
-as two manual themes, and the interface language follows them: Copybook shows all-Chinese copy,
-Typescript English (see *Content fundamentals*). Both are **light only** (`system` never
-lands on them; the native layer runs light) and share one paper: `#e6e4dc` desk, near-opaque
-panels (glass `.92` — paper, not glass), ink `#1f1f1d / #52524e / #6e6e68` (the prototype's
-`#e2e0d8` desk and `#8a8a84` third ink fell to 2.6:1 on the desk; raised for WCAG). Copybook takes the
-grid's green as its accent (`#3b7a55`), the teacher's red pen (`#cc3a2e`) as danger and as the
-wavy underline on bold transcript text, a double green frame round the main pane, a green square
-grid in the composer (one Chinese character per cell; every Latin run sits on a white
-correction-fluid strip, `--color-paper-whiteout`, and a mostly-English draft drops the per-cell
-tracking), and serif text (Literata + Source Han Serif SC). Typescript takes typewriter
-ribbon blue (`#2f4f7f`), Courier Prime for text and Special Elite for the wordmark and slogan,
-ruled lines plus a red margin line in the composer only, and upper-cased transcript headings.
-On the home page Copybook sets the slogan one character per red 田字格 cell in Ma Shan Zheng,
-Typescript types the English slogan in Special Elite on a ruled line with a red margin, and both
-add the teacher's red-pen mark in Long Cang. The two hand faces ship as **subsets** — only the
-nine slogan characters (7 KB) and the mark's characters plus printable ASCII (20 KB) — so changing
-either line means re-subsetting (command in `tokens/fonts.css`).
-Tokens live in `tokens/colors.css` (the `--color-paper-*` group), `glass.css` and
-`typography.css`; the decoration layer is `src/renderer/src/paper-themes.css`. They are the only
-themes that change type, and the only place the accent is not blue or yellow.
-Source Han Serif SC ships as one weight (Medium), so Copybook's Chinese at 600 and above would only
-get the browser's faux bold (+13% ink, invisible next to Literata's real semibold). Copybook's
-stack therefore puts `"Orbita Serif CJK"` first (`tokens/fonts.css`): the same Medium below 600,
-and above it a real bold Song face found on the machine — Source Han / Noto Serif CJK Bold, else
-macOS Songti SC Black (+29% ink; Songti Bold was lighter than the faux bold). With none installed
-(Windows) the face fails to load and the stack falls through to the Medium, as before.
-Theme id `copybook`; a stored `"manuscript"` (its name for one day) still parses to it
-(`parseTheme` in `src/shared/settings.ts`).
 
 **Type.** Two families do everything. Brand serif **Literata** (variable, with Source Han Serif SC
 for CJK) appears in three places only: the home slogan, the sidebar wordmark, and the letter a
@@ -332,9 +293,8 @@ padding (that came to 22.5–23px). Never IDE-crowded.
 
 **Backgrounds.** No imagery, no illustration, no pattern, no texture, no photography — the product
 ships none and this system adds none. Since 2026-11-07 the app paints **opaque** grounds on every
-non-paper theme (`.layer` = the shell `--color-bg-app`, `.pane` = the well `--color-bg-panel`): the macOS
-window is still transparent, but nothing of the desktop shows through any more — the paper faces' `.92` paper
-is the only near-translucent ground left. Gradients appear only where they do a job — the nebula creature's radial glow and
+theme (`.layer` = the shell `--color-bg-app`, `.pane` = the well `--color-bg-panel`): the macOS
+window is still transparent, but nothing of the desktop shows through any more. Gradients appear only where they do a job — the nebula creature's radial glow and
 its legend bar (`--color-nebula` tiers), a mask that fades overflowing toolbar text, and a
 `linear-gradient` used as a flat overlay to stack hover over a card fill. Depth comes from three written colours (shell → well → card
 face) and 1px hairlines — not from translucency stacking, not from shadow.
@@ -346,8 +306,7 @@ recomposite the whole window every frame. The two dark tiers left the translucen
 so the same page reads the same on every desktop (the old `.60 / .84 / .936` ladder made the brightness drift
 with the wallpaper and with how deeply a surface happened to be nested). Layers are now three written colours
 — shell → well → card face — and the boundary between them is a hairline or the colour step itself.
-Only the two paper faces keep a translucent ladder (`.92`: paper, not glass). The class name `.glass-card`
-stays (renaming it touches the whole repo); it names "the one card recipe", not a material.
+The class name `.glass-card` stays (renaming it touches the whole repo); it names "the one card recipe", not a material.
 Text is always a solid `--color-text-*`; never a translucent glyph, and never a dimmed tertiary on
 glass, which reads as neither theme's ink. Layer 3 is close enough to opaque that content on it
 reads as if on paper.
@@ -356,10 +315,10 @@ exception: they skip the glass ladder for a solid `--color-bg-panel` fill, a hai
 and `--shadow-popover` — without blur behind them, a translucent float would let whatever text sits
 under it bleed straight through and become unreadable.
 
-**Corners and borders.** 8px base radius: 4/6/8px steps (the paper faces still have a 10px `--radius-xl`),
+**Corners and borders.** 8px base radius: 4/6/8px steps,
 a literal 14px for the user bubble (`--radius-bubble`), and `999px` only for true circles (dots, spinners,
 the round send button). **One surface radius, 8** (2026-11-07): `--radius-xl` collapses onto the base on every
-non-paper theme — 10 and 8 on one screen were two almost-equal radii that only made alignment uncertain.
+theme — 10 and 8 on one screen were two almost-equal radii that only made alignment uncertain.
 **Radius follows the surface**: every card takes `--radius-xl` whatever its layer —
 the composer included (2026-08-25: a glass card is a glass card; one exception buys nothing).
 Borders are always 1px hairlines; glass cards border with
@@ -367,7 +326,7 @@ Borders are always 1px hairlines; glass cards border with
 translucency step alone. No thick rules, no coloured left-border accents.
 
 **Cards.** One recipe: the single `--glass-bg`, 1px hairline `--glass-border`, `--shadow-card`, `--radius-xl`
-(8px; 10px on the paper themes). Shadows are `none` on every non-paper theme since 2026-11-07, so the composer is
+(8px). Shadows are `none` on every theme since 2026-11-07, so the composer is
 told apart by its hairline and its colour step, not by lift (`.composer-card` still names it). Chat-internal process cards (tool, thinking) have **no**
 border and **no** fill — they sit directly on the chat surface and are separated by 16px of space.
 External-capability events (skill use, MCP calls) render as **chip rows**: their identity (icon +
@@ -440,8 +399,8 @@ Solid panels (dialogs, drawers, menus, popovers) are white with a hairline and a
 
 **Shadows.** Five steps, all cool-grey and soft, **scaled to how high a surface floats, not to its
 size**: `--shadow-border` (a 1px inner hairline), `--shadow-card` and `--shadow-composer` (**none**, since
-2026-11-07 — a resting card, the input box and the content pane are told apart by hairline and colour step;
-the paper faces keep their old lift), `--shadow-popover` (menus, card hover), `--shadow-modal` (dialogs).
+2026-11-07 — a resting card, the input box and the content pane are told apart by hairline and colour step),
+`--shadow-popover` (menus, card hover), `--shadow-modal` (dialogs).
 Only what really floats over other content — a menu, a dialog — casts a shadow. (2026-10-29: one 28px blur
 on a 225px session card read as a small thing carrying a big shadow; N removes the question.) Focus is a 2px accent ring at 16% opacity, plus a solid accent outline
 on `:focus-visible`.
@@ -497,8 +456,7 @@ waiting rows carry no time: a "just now" that does not tick is worse than none).
 row's tooltip. The group names live in the **index gutter** left of the content column; the status pie sits
 on the **meridian**, a 1px line at gutter − 20px, with a 5px dot for tasks that have no state. Rows are
 buttons: keyboard reachable, hover is the `.option-row` wash. Under 760px of conversation column the gutter
-shrinks to 32px and the group name moves onto its own line above the group. The two paper themes show no record
-(their staging is the grid / typewriter page). **No "Recent" group** (2026-11-22): the sidebar already lists sessions by recency; repeating four of them under the input box was noise, so idle and finished-unread tasks leave home (the sidebar keeps the unread mark), and with nothing waiting or running the space under the input box stays blank — no group name, no meridian, no empty container. A memory recap (1 / 3 / 5 days of bullets) was tried in its place the same day and rejected by the user; the reason is in the commit message that removed this group. The sentence is derived, never stored — running: the current chapter, led by the plan step in
+shrinks to 32px and the group name moves onto its own line above the group. **No "Recent" group** (2026-11-22): the sidebar already lists sessions by recency; repeating four of them under the input box was noise, so idle and finished-unread tasks leave home (the sidebar keeps the unread mark), and with nothing waiting or running the space under the input box stays blank — no group name, no meridian, no empty container. A memory recap (1 / 3 / 5 days of bullets) was tried in its place the same day and rejected by the user; the reason is in the commit message that removed this group. The sentence is derived, never stored — running: the current chapter, led by the plan step in
 progress ("Re-check the status: the path was wrong, trying src"), else the tool running, else
 "Thinking"; waiting: what the pending approval wants to do; failed: the error's first line;
 finished unread: the answer's first line; idle: the last thing you asked (an idle task's own last
@@ -532,8 +490,7 @@ reads as misalignment, not hierarchy. Separate levels with **weight and colour f
   content, not interface: they keep their own values, but as declared tokens (`--line-height-code`,
   `-code-block`, `--font-size-terminal`, `--line-height-terminal`), never literals. Bare `px` or
   invented unitless leadings fail `design-tokens.test.ts`; only `0` / `1` (icon alignment) are free.
-- **Exceptions are tokens, not literals**: brand type (`--font-size-slogan`, `-slogan-mark`,
-  `-wordmark`) does not follow the base; em-relative sizes inside Markdown (inline code, citations)
+- **Exceptions are tokens, not literals**: brand type (`--font-size-slogan`, `-wordmark`) does not follow the base; em-relative sizes inside Markdown (inline code, citations)
   follow their parent and are allowed.
 - Learned from ZCode's `text-ui-*` scale (2026-10); our `xs` is base − 3, not − 4 — 10px CJK is
   below comfortable reading.
@@ -541,9 +498,8 @@ reads as misalignment, not hierarchy. Separate levels with **weight and colour f
 **The top toolbar is one regulated zone (顶部工具栏，方案 B v2, 2026-10-19).** The window's top is a
 single 52px toolbar (`.toolbar`, `--titlebar-row`) spanning the full width on the card, outside every
 content card — the whole strip is the drag region and **its direct children are capsules only**
-(`.toolbar-capsule`: full radius, **no fill and no ring on every non-paper theme since 2026-11-07** — just the text
-and line icons on the shell, as Claude's panel header does; the paper themes keep the material-chip face:
-`--glass-bg` · `--shadow-border`); Windows'
+(`.toolbar-capsule`: full radius, **no fill and no ring on every theme since 2026-11-07** — just the text
+and line icons on the shell, as Claude's panel header does); Windows'
 own min / max / close group (`.win-ctl`) is the one declared exception. Every capsule shares the height
 `--titlebar-capsule` (32 = `--control-height-md`) and sits at `--titlebar-capsule-top` (9) so the capsule
 **centre is the traffic-light centre line, y = 25** (`trafficLightPosition` stays at `{x:18, y:19}`, user
@@ -595,9 +551,9 @@ and its copy / revert / memory row appears on hover or keyboard focus only (opac
 **ledge** at the foot of the well: a hairline across the page, then the card with no fill, no border, no shadow.
 Below 760px of conversation column the gutter is 32px — only the line and its marks remain, and the times go
 back where they were (above the turn's rollup row; under the user tab, right-aligned). The turn's wrapper
-`.revert-keep` (formerly `display: contents`) becomes a real grid box on these themes so a star can be anchored;
+`.revert-keep` (formerly `display: contents`) becomes a real grid box so a star can be anchored;
 stars and ticks are chosen by `data-kind` and sibling selectors, because the transcript is a flat list, not a
-list of turns. The two paper themes keep the right-hand bubble and the floating composer.
+list of turns.
 
 **Controls stand on steps.** Icon buttons are 24 (inline, in rows) · 28 (capsules, panel heads,
 rails) · 32; icon glyphs are 12 (inline, chips) · 14 (rows) · 16 (toolbar, panel heads). The steps
@@ -662,8 +618,7 @@ stays ink); `caret-color` is the accent on every editable surface, the composer'
 included; every number that changes or lines up in a column — meta lines, trailing slots, segmented controls,
 timestamps, file-preview meta, diff line numbers — is `font-variant-numeric: tabular-nums`, so a changed number
 never re-flows its row; running Chinese text takes `text-wrap: pretty` so a line never ends on one orphan
-character. These apply to every theme (they read each theme's own accent); the icon stroke rule above is the one
-that the paper themes opt out of.
+character. These apply to every theme (they read each theme's own accent).
 
 **Tokens are checked.** `src/renderer/src/design-tokens.test.ts` fails on any `var(--x)` that is
 never declared, on any token in `tokens/` that nothing references, and on any hex colour outside
@@ -722,7 +677,7 @@ Checkboxes have no recipe: the ones in use (the Providers model list, the migrat
   rail icon beside it. `vector-effect: non-scaling-stroke` takes the stroke out of the scaling and the value is written
   as the physical one (`clamp(1.5px, strokeWidth × 0.75px, 2.25px)`: every `strokeWidth ≤ 2` is 1.5; an
   explicit emphasis stays an emphasis — 2.2 on the modal close and the send arrow is 1.65, 3 on the theme check is
-  2.25). The paper themes keep the old per-call weights.
+  2.25).
 - Icons inherit `currentColor` — tertiary grey at rest, primary on hover, `--color-info` for the
   thinking glyph, the accent inside the send button. The `Icon` component inlines the SVG so this works.
 - **Recurring vocabulary**: `bot` = agent mode, and also a sub-session (2026-11-22, replacing `git-fork`: a sub-session is an agent you sent off — the rail entry, its panel, the delegate / hand-back cards and the task-row slot), `workflow` = orchestration, `folder` = a workspace,
@@ -758,7 +713,7 @@ Checkboxes have no recipe: the ones in use (the Providers model list, the migrat
 | `tokens/elevation.css` | Shadows, focus ring, overlay backdrops (all three themes). |
 | `tokens/glass.css` | The single glass alpha, border, and the `.glass-card` recipe. |
 | `tokens/motion.css` | Durations, easings, the three composed transitions. |
-| `assets/fonts/` | Literata, Manrope, Source Han Serif SC Medium, Source Han Sans SC Regular, the paper faces' Courier Prime / Special Elite and the two subset hand faces (+ licences). |
+| `assets/fonts/` | Literata, Manrope, Source Han Serif SC Medium, Source Han Sans SC Regular (+ licences). |
 | `assets/icons/lucide/` | The Lucide glyphs copied in from upstream Lucide; only those registered in `Icon.tsx` ship. The ISC licence sits beside it, `assets/icons/LICENSE-lucide.txt`. |
 | `assets/vendor-logos/`, `assets/model-avatars/` | Provider marks (SVG) and per-model avatars (the one raster exception, see *Iconography*), each with its own licence / `NOTICE`. |
 | `assets/app-icon.svg` | The Dock / Finder icon (see *No logo*). |
@@ -802,10 +757,10 @@ classes listed under *Implementation rules*.
 
 ### 首页交互（2026-08-22 验收定案）
 
-- **新会话一律先进首页**：全局/工作区内/图标条/新建菜单的「会话、单 agent」入口都先呈现三卡首页（不立即创建 agent），**首条消息提交才 createAgent + prompt**；编排入口除外（保持原子创建）。
-- **输入框宽度连续性**：首页中卡宽度 = 聊天页内容区宽度（`--content-max-width`，2026-11-07 起 900px；原默认 1000px）——首页与聊天页的差别只有 slogan/会话卡消失 + 输入框滑落。
-- **首发过渡动画**（R5-05 白名单项）：首条消息发出时 slogan 与会话卡向上淡出、composer 卡向下滑向窗口底部（~240ms），随后聊天页 composer 落位。
-- **slogan 规格**：标题字体（见 §2.1 字体栈）+ `--font-size-slogan`（36px；打字稿主题 30px）品牌级字号。
+- **新会话一律先进首页**：全局/工作区内/图标条/新建菜单的「会话、单 agent」入口都先呈现 slogan、输入框与首页记录（不立即创建 agent），**首条消息提交才 createAgent + prompt**；编排入口除外（保持原子创建）。
+- **输入框宽度连续性**：首页输入框宽度 = 聊天页内容区宽度（`--content-max-width`，2026-11-07 起 900px；原默认 1000px）——首页与聊天页的差别只有 slogan/记录消失 + 输入框滑落。
+- **首发过渡动画**（R5-05 白名单项）：首条消息发出时 slogan 与记录向上淡出、composer 卡向下滑向窗口底部（~240ms），随后聊天页 composer 落位。
+- **slogan 规格**：标题字体（见 §2.1 字体栈）+ `--font-size-slogan`（28px）品牌级字号。
 - **模式选中色**（修正 R4-03 的"绿底"）：明主题蓝、暗主题黄——`--color-mode-active-bg` / `--color-mode-active-fg`，用于模式按钮与图标条当前项。
 
 ### 生效规范（摘要）
@@ -816,11 +771,11 @@ classes listed under *Implementation rules*.
 | 按钮 | 主操作 accent 实底（`.btn-accent`，一屏一个）；安静控件透明底、hover 铺半透明冷灰、不出边框（`.quiet-control`）；纯图标用 IconButton；危险红字、hover `--color-danger-soft`；卡片本身可为按钮（ThemeCard）。设置页次按钮现有两种写法：Providers 的 `.pv-btn` hover 加 `--color-border-strong` 描边，设置页导入入口（Import 行，其后的 Migration 页沿用）常驻 1px 发丝内描边——尚未统一 |
 | 选中态 | 列表选中行铺 `--color-bg-active` 淡底 + semibold（2026-08-25 选定）；模式按钮与安静控件的 pressed 用 `--color-mode-active-*`；hover 只铺中性半透明底 |
 | 长信息 | 默认折叠单行摘要，点击展开（tool 输出 / 文档阅读 / 日志统一） |
-| 消息形态 | Hybrid：用户指令是左对齐的纸签（纸面两档仍是右侧气泡）；agent 输出全宽文档式、默认折叠一行；时间 / 谁说的 / 做了几步钉在左侧子午线上（2026-11-07） |
+| 消息形态 | Hybrid：用户指令是左对齐的纸签；agent 输出全宽文档式、默认折叠一行；时间 / 谁说的 / 做了几步钉在左侧子午线上（2026-11-07） |
 | 强调色 | 仅选中 + 主操作，辅以有限语义色；颜色绝不作唯一状态信号 |
 | 文字 | 按角色分规则（导航/正文/代码/元数据）；UI 无衬线 + 代码等宽；表达性字体仅品牌标 |
 | 动效 | 白名单制：仅解释来源（面板开合/消息到达），无 idle 装饰 |
-| 界面语言 | 跟主题走，不设语言开关：Copybook（小学作业）全中文，其余主题英文。文案只在 `messages-en.ts` / `messages-zh.ts` 两张表里；中文表纯中文，拉丁字母词只允许白名单（`messages.test.ts` 把关） |
+| 界面语言 | 设置 › 外观 › 语言里选中英。文案只在 `messages-en.ts` / `messages-zh.ts` 两张表里；中文表纯中文，拉丁字母词只允许白名单（`messages.test.ts` 把关） |
 
 ### 硬规则
 

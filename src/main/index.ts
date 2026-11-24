@@ -301,7 +301,7 @@ function createMainWindow(
       appTray = installCloseToTray({
         window,
         icon,
-        language: effectiveLanguage(theme, language),
+        language: effectiveLanguage(language),
         readLanguage,
       });
     }
@@ -1434,7 +1434,7 @@ void app.whenReady().then(async () => {
   /** 托盘菜单文案要跟界面语言走；读一次最新设置即可（没有第二处消费者，不另开推送通道） */
   const readLanguage = async (): Promise<Language> => {
     const current = await settings.read();
-    return effectiveLanguage(current.theme, current.language);
+    return effectiveLanguage(current.language);
   };
 
   createMainWindow(initialSettings.theme, initialSettings.language, openLink, readLanguage);

@@ -72,7 +72,7 @@ export interface DocEditPaneProps {
 function MarkdownEditPane(props: DocEditPaneProps) {
   const t = useT();
   const { sessionId, workspaceId, path } = props;
-  const { paper, locked, setPaper } = useDocPaper();
+  const { paper, setPaper } = useDocPaper();
   // 外部合并结果怎么落进屏幕由具体视图（文档 / 演示文稿）决定，它们把处理函数挂在这里
   const externalRef = useRef<(change: ExternalChange) => void>(() => undefined);
   const docHandle = useRef<DocEditorHandle | null>(null);
@@ -348,7 +348,6 @@ function MarkdownEditPane(props: DocEditPaneProps) {
     id: value,
     label: paperName(value, t),
     checked: paper === value,
-    disabled: locked,
     onSelect: () => setPaper(value),
   }));
   const paperMenu = (
@@ -359,8 +358,7 @@ function MarkdownEditPane(props: DocEditPaneProps) {
         <SelectButton
           open={open}
           onClick={toggle}
-          disabled={locked}
-          title={`${t.doc.paperLabel}：${paperName(paper, t)}${locked ? `（${t.doc.paperLocked}）` : ""}`}
+          title={`${t.doc.paperLabel}：${paperName(paper, t)}`}
         >
           {paperName(paper, t)}
         </SelectButton>

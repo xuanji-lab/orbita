@@ -3,8 +3,6 @@ import { describe, it } from "node:test";
 import {
   BOARD_DAYS_DEFAULT,
   effectiveLanguage,
-  selectableThemes,
-  themeLanguage,
   clampRightPanelWidth,
   COMPACTION_DEFAULT,
   COMPACTION_PERCENT,
@@ -38,8 +36,10 @@ describe("parseSettings", () => {
     deepStrictEqual(parseSettings({ theme: null }), DEFAULT_SETTINGS);
   });
 
-  it("改名前的旧 id manuscript 落回 copybook，不退回 system", () => {
-    deepStrictEqual(parseSettings({ theme: "manuscript" }), { theme: "copybook", drawer: DEFAULT_SETTINGS.drawer });
+  it("删除的纸面主题及改名前 id 都回落 system，继续跟随系统深浅", () => {
+    for (const theme of ["copybook", "typescript", "manuscript"]) {
+      deepStrictEqual(parseSettings({ theme }), DEFAULT_SETTINGS);
+    }
   });
 
   it("退役档 dark（Warm）迁移到 graphite——同为「不近黑的暗档」的继任", () => {
@@ -480,19 +480,9 @@ describe("parseSettings 的 lastUsed（A-0 复验 bug A：重启忘了上次选�
 });
 
 describe("界面语言", () => {
-  it("单语主题说了算：小学作业恒中文、打字稿恒英文，不管设置", () => {
-    deepStrictEqual(effectiveLanguage("copybook", "en"), "zh");
-    deepStrictEqual(effectiveLanguage("typescript", "zh"), "en");
-    deepStrictEqual(themeLanguage("copybook"), "zh");
-    deepStrictEqual(themeLanguage("typescript"), "en");
-  });
-
-  it("双语主题听设置；没设过是英文（语言设置之前的行为）", () => {
-    for (const theme of ["system", "light", "graphite", "black"] as const) {
-      deepStrictEqual(themeLanguage(theme), null);
-      deepStrictEqual(effectiveLanguage(theme, "zh"), "zh");
-      deepStrictEqual(effectiveLanguage(theme, undefined), "en");
-    }
+  it("所有主题都听语言设置；没设过是英文（语言设置之前的行为）", () => {
+    deepStrictEqual(effectiveLanguage("zh"), "zh");
+    deepStrictEqual(effectiveLanguage(undefined), "en");
   });
 
   it("磁盘上的 language：认识的留下，坏值丢掉当没选过", () => {
@@ -636,17 +626,17 @@ describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
     deepStrictEqual("experimentalFeatures" in parseSettings({ experimentalFeatures: {} }), false);
   });
 
-  it("逐项只认布尔；不在 EXPERIMENTAL_FEATURE_IDS 里的 id 直接丢", () => {
+  it("逐项只认布尔；已删除与不在 EXPERIMENTAL_FEATURE_IDS 里的 id 直接丢", () => {
     deepStrictEqual(
       parseSettings({ experimentalFeatures: { "paper-themes": true, "intent-system": false } })
         .experimentalFeatures,
-      { "paper-themes": true, "intent-system": false },
+      { "intent-system": false },
     );
     // 转正的项（PDF 引用，2026-11-22）：盘上残留的旧键解析时丢掉、不报错
     deepStrictEqual(
       parseSettings({ experimentalFeatures: { "paper-themes": true, "pdf-citations": true } })
         .experimentalFeatures,
-      { "paper-themes": true },
+      undefined,
     );
     deepStrictEqual(
       parseSettings({ experimentalFeatures: { "pdf-citations": true } }).experimentalFeatures,
@@ -662,33 +652,28 @@ describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
     );
   });
 
-  it("旧总开关 experimental: true = paper-themes 开（会话生命周期已转正，不再有开关）", () => {
-    deepStrictEqual(parseSettings({ experimental: true }).experimentalFeatures, {
-      "paper-themes": true,
-    });
+  it("纸面开关与旧总开关都忽略；其它实验项不受牵连", () => {
+    deepStrictEqual(parseSettings({ experimental: true }).experimentalFeatures, undefined);
+    deepStrictEqual(
+      parseSettings({
+        experimental: true,
+        experimentalFeatures: { "paper-themes": true, "intent-system": false },
+      }).experimentalFeatures,
+      { "intent-system": false },
+    );
   });
 
   it("转正的 session-lifecycle：盘上残留的键开着关着都丢掉，不产生任何效果", () => {
     deepStrictEqual(parseSettings({ experimentalFeatures: { "session-lifecycle": true } }).experimentalFeatures, undefined);
     deepStrictEqual(
-      parseSettings({ experimentalFeatures: { "session-lifecycle": false, "paper-themes": true } }).experimentalFeatures,
-      { "paper-themes": true },
+      parseSettings({ experimentalFeatures: { "session-lifecycle": false, "intent-system": true } }).experimentalFeatures,
+      { "intent-system": true },
     );
   });
 
   it("旧总开关 false / 非布尔：不产生任何逐项键", () => {
     deepStrictEqual(parseSettings({ experimental: false }).experimentalFeatures, undefined);
     deepStrictEqual(parseSettings({ experimental: "yes" }).experimentalFeatures, undefined);
-  });
-
-  it("新键里已显式给值的项以新键为准，旧键只补缺席的项", () => {
-    deepStrictEqual(
-      parseSettings({
-        experimental: true,
-        experimentalFeatures: { "paper-themes": false },
-      }).experimentalFeatures,
-      { "paper-themes": false },
-    );
   });
 
   it("下架的输入框黑洞 / 俄罗斯方块：盘上残留的新旧键都丢掉，不报错", () => {
@@ -700,21 +685,6 @@ describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
       { "intent-system": true },
     );
     deepStrictEqual(parseSettings({ composerBlackhole: true }).experimentalFeatures, undefined);
-  });
-});
-
-describe("selectableThemes（主题选择卡的可选档位）", () => {
-  it("paper-themes 开：全六档都可选", () => {
-    deepStrictEqual(selectableThemes(true), THEME_PREFERENCES);
-  });
-
-  it("paper-themes 关：纸面两档（copybook / typescript）不出现", () => {
-    deepStrictEqual(selectableThemes(false), ["system", "light", "graphite", "black"]);
-  });
-
-  it("过滤只动选择卡：已存的 copybook 仍被 parseTheme 认（照常应用，只是不再可选）", () => {
-    deepStrictEqual(parseSettings({ theme: "copybook" }).theme, "copybook");
-    ok(selectableThemes(false).includes(parseSettings({ theme: "copybook" }).theme) === false);
   });
 });
 

@@ -221,9 +221,8 @@
  */
 /* 输入框本体。左右不留内边距：卡的 12px + 发丝已经把字送到血线（--content-hem）上，
    与正文、过程行同一根竖线（2026-10-29，原 4px 让输入的字比正文多缩 4px）。
-   底、内边距与行高放在 class 上（不在 Composer.tsx 的 inline style 里）：
-   纸面两档要在这里画格子与横线（paper-themes.css），inline 的 background 会把它们盖掉。
-   字体与字号也在这里：小学作业主题的镜像层（.composer-mirror）同用这个 class，排版才和 textarea 一致 */
+   底、内边距与行高放在 class 上（不在 Composer.tsx 的 inline style 里）。
+   镜像层（.composer-mirror）同用这个 class，排版才和 textarea 一致 */
 .composer-input {
   padding: var(--space-0-5) 0;
   background: transparent;
@@ -232,8 +231,8 @@
   font-size: var(--font-size-base);
 }
 
-/* 输入框外层：textarea 与镜像层叠在同一格里，镜像在下、textarea 在上（修正液与句中 chip，
-   Composer.tsx）。只有 textarea 时就是一层普通包裹。relative 给展开段的收起标签
+/* 输入框外层：textarea 与镜像层叠在同一格里，镜像在下、textarea 在上（句中 chip 与粘贴展开段，
+   Composer.tsx）。relative 给展开段的收起标签
    （.composer-paste-label）当定位参照系——它浮在 textarea 之上、要能收点击 */
 .composer-field {
   display: grid;
@@ -244,8 +243,8 @@
   --paste-headroom: 0px;
   padding-top: var(--paste-headroom);
   /* 句中胶囊淡色底的预混基（不透明）：胶囊铺在输入卡上，底色要混入「卡叠完的
-     实际颜色」才能不透明。明 / 纸面输入卡叠完近纯白（= --color-bg-panel，
-     实测 #ffffff / 打字稿 #fdfcf8 差 ≤7/255）；两暗档玻璃实底（= --glass-bg，
+     实际颜色」才能不透明。输入卡叠完近纯白（= --color-bg-panel）；
+     两暗档玻璃实底（= --glass-bg，
      实测精确相等）。见 .composer-chip 注释 */
   --chip-ground: var(--color-bg-panel);
 }
@@ -283,10 +282,9 @@
   grid-area: auto;
 }
 
-/* 镜像层（全主题常驻，垫在 textarea 下）：**画全部的字**（textarea 的字透明，见上），外加句中 chip、
-   （copybook 的）修正液与粘贴展开段的底色；
+/* 镜像层（垫在 textarea 下）：**画全部的字**（textarea 的字透明，见上），外加句中 chip 与
+   粘贴展开段的底色；
    换行规则照 textarea 的默认值，不出滚动条（滚动位置由 Composer 同步）。
-   曾经只在 copybook 渲染，句中 chip 要在全主题画，镜像层升级为常驻（2026-10-06）。
    absolute + inset:0：脱开 grid 的行高贡献——textarea 12 行封顶后，镜像若仍在流内，
    几十行的草稿会把格子撑到 textarea 之外（方案 C 粘贴展开实测：field 长到 928px），
    脱流后格子高度只由 textarea 决定，镜像随格子裁剪（overflow hidden + 滚动同步） */
@@ -1219,22 +1217,20 @@ body {
  * （嵌套只能往 tint 爬）表达不了「外壳浅、井更深」；且 Windows 窗口底是
  * 不透明的浅色 #f3f4f1，玻璃叠上去只会灰糊。井缘补一条发丝线——两个实色面
  * 之间需要那道界线。浮层（composer / 菜单 / 右栏面板）仍走 --glass-bg，
- * 暗档里它 = 卡面色（glass.css），压在井上就是浮起的那一层。浅色与纸面档
- * 维持玻璃阶梯不变；macOS 暗档因此不再透出桌面。
+ * 暗档里它 = 卡面色（glass.css），压在井上就是浮起的那一层。
  */
-:root:not([data-theme="copybook"], [data-theme="typescript"]) .layer {
+:root .layer {
   background: var(--color-bg-app);
 }
 
-:root:not([data-theme="copybook"], [data-theme="typescript"]) .pane {
+:root .pane {
   background: var(--color-bg-panel);
 }
 
 
 /*
  * 方向 N（2026-11-07）：浅色也是「有颜色的壳 + 平的纸面井」，不再是半透明玻璃叠在桌面上——
- * 上面两条把原先只给暗档的实色覆写扩到所有非纸面主题。纸面两档（小学作业 / 打字稿）仍是
- * 0.92 的纸 + 浮起的阴影，不套 N。
+ * 上面两条把原先只给暗档的实色覆写扩到所有主题。
  *
  * 壳上（侧栏、右图标条、顶栏）被选中的行与按下的键：用中性墨洗色 --color-bg-active（墨 10%），
  * 与井里、菜单里同一种选中，各档都一样。
@@ -1242,17 +1238,17 @@ body {
  * #f5f5f5 以后，纸色 #fefefe 摊在壳上只剩 1.08:1，几乎看不出选中了哪一行；墨 10% 压在壳上是
  * #e0e0e0，1.21:1，比旧的纸色摊在冷灰壳上（1.17）还清楚。暗档下面另有覆写（白 10%）。
  */
-:root:not([data-theme="copybook"], [data-theme="typescript"]) :is(.sidebar, .right-rail, .toolbar) {
+:root :is(.sidebar, .right-rail, .toolbar) {
   --option-active-bg: var(--color-bg-active);
   --color-mode-active-bg: var(--color-bg-active);
 }
 
 /*
  * 选中只换底，不换字重（方向 N，2026-11-07）：选中行字重 450 → 600，字变宽、整列文字抖一下
- * （Linear / Things / Raycast 都不这么做）。纸面两档保持原样。分段控件的按下段仍是 600——它的段是
+ * （Linear / Things / Raycast 都不这么做）。分段控件的按下段仍是 600——它的段是
  * 定宽的小框，靠底色加字重才分得出哪一段是当前。
  */
-:root:not([data-theme="copybook"], [data-theme="typescript"]) {
+:root {
   .option-row[aria-pressed="true"],
   .option-row[aria-selected="true"],
   .option-row[data-active="true"],
@@ -2120,20 +2116,13 @@ button.ssp-group-toggle:hover {
  * 浮钮面全主题统一 60% 不透明（用户 2026-09-27）：
  *  - 浅色默认档：--glass-bg 本就是 rgba(255,255,255,.6)，基态不用动；
  *  - 两暗档（graphite / black）：--glass-bg 是实色，60% 混透明派生；描边同档透明
- *    （--glass-border 的白丝在黑底上是清晰的圈，用户要求去掉）；
- *  - 纸面两档（copybook / typescript）：--glass-bg 自带 0.92 alpha（「纸不是玻璃」），
- *    65% 混透明 → 0.92 × 65% ≈ 0.6，与其余档对齐。
+ *    （--glass-border 的白丝在黑底上是清晰的圈，用户要求去掉）。
  * color-mix 从 token 派生不落裸色值（colors.css 同款写法）；箭头是 currentColor，恒满强度。
  */
 :root[data-theme="graphite"] .scroll-end-float,
 :root[data-theme="black"] .scroll-end-float {
   --scroll-end-face: color-mix(in srgb, var(--glass-bg) 60%, transparent);
   border-color: transparent;
-}
-
-:root[data-theme="copybook"] .scroll-end-float,
-:root[data-theme="typescript"] .scroll-end-float {
-  --scroll-end-face: color-mix(in srgb, var(--glass-bg) 65%, transparent);
 }
 
 /*
@@ -2648,20 +2637,15 @@ button.ssp-group-toggle:hover {
   animation: orbita-breath 1.6s ease-in-out infinite;
 }
 
-/* 首页门面（HomeHero.tsx）。slogan 是全产品唯一一句抒情的话。窄槽（侧栏 + 右栏都展开时
-   主槽变窄）会把它挤断成两行——没设 line-height 时继承正文的 22px，36px 的字一断行两行
-   几乎叠在一起。给大字号自己的行高（1.25），text-wrap: balance 让断行落在匀称的位置。
-   从 inline style 挪成 class：纸面两档要改它的字体、字号与排法（paper-themes.css），
-   inline 压得过任何主题规则。 */
+/* 首页门面（HomeHero.tsx）。slogan 是全产品唯一一句抒情的话。大字号有自己的行高（1.25），
+   text-wrap: balance 让窄槽断行落在匀称的位置。 */
 .home-hero {
   display: flex;
   flex-direction: column;
   align-items: center;
 }
 
-/* 首页舞台与内容列（原先是 ChatView 里的 inline style；方向 N 要在非纸面主题下改写它的宽、
-   对齐与纵向位置，inline 压得过任何主题规则，所以挪成 class——纸面两档保持原样：垂直居中、
-   居中对齐、三张卡） */
+/* 首页舞台与内容列：方向 N 的宽度、对齐与纵向位置都由 class 表达。 */
 .home-stage {
   display: flex;
   align-items: center;
@@ -5838,9 +5822,9 @@ mark.intent-mark {
  * | 子午线 | 把「谁在等我 / 在跑 / 没状态」钉在一根轴上 | 1px 竖线，`--gutter - 20px` 处；状态饼圆心压线，没状态的是线上一个 5px 小点 | 无（新） |
  * | 记录行 | 首页的会话列表 | 32px 行：名字（13em）｜一句此刻在干什么（次级墨、单行省略）｜行尾时间 | 侧栏会话行 |
  *
- * 只对非纸面主题生效（首页的 DOM 也只在那时渲染记录；纸面两档仍是三张卡，见 ChatView）。
+ * 所有主题共用这一套首页记录。
  */
-:root:not([data-theme="copybook"], [data-theme="typescript"]) {
+:root {
   .home-stage {
     align-items: flex-start;
     padding-top: 14vh;
@@ -5973,7 +5957,7 @@ mark.intent-mark {
   container: convo / inline-size;
 }
 @container convo (max-width: 760px) {
-  :root:not([data-theme="copybook"], [data-theme="typescript"]) {
+  :root {
     .home-col {
       --gutter: 32px;
     }
@@ -5990,7 +5974,7 @@ mark.intent-mark {
  * 对话：消息列 / 用户消息 / 输入框的骨架
  * ======================================================================
  * 下面第一段是原先 ChatView 里的 inline style 原样挪成 class（宽、对齐、气泡配方一个字没变）——
- * 方向 N 要在非纸面主题下改写它们，inline 压得过任何主题规则。第二段才是 N。
+ * 方向 N 要在各主题下改写它们，inline 压得过任何主题规则。第二段才是 N。
  */
 .chat-col {
   --chat-row-gap: var(--space-4);
@@ -6092,7 +6076,7 @@ mark.intent-mark {
  * agent 的回复在左，时间放在每个 user message 的右下角，agent 的话不标注时间」。
  * 所以：没有 gutter 缩进（消息列、输入框同一条左缘）；用户气泡靠右，宽度随内容、最宽 80%；时间在气泡下方右对齐（.user-msg-time）。
  */
-:root:not([data-theme="copybook"], [data-theme="typescript"]) {
+:root {
   .chat-col {
     --chat-row-gap: var(--space-5);
     position: relative;
@@ -6144,7 +6128,7 @@ mark.intent-mark {
  * - 图标线宽：物理 1.5px。lucide 在 24 视口里画 stroke-width 2；缩到 16 / 14 / 12px 时物理线宽是
  *   1.33 / 1.05（1.8 档）/ 1.0 ——同屏三种笔重，14px 的比旁边 16px 的细 21%。vector-effect: non-scaling-stroke
  *   让笔画脱离缩放，直接写物理值；调用点传的 strokeWidth 仍当「强调」读：≤2 的一律 1.5，
- *   2.2（关闭键、发送箭头）→ 1.65，3（主题勾）→ 2.25（clamp）。纸面两档保持原样。
+ *   2.2（关闭键、发送箭头）→ 1.65，3（主题勾）→ 2.25（clamp）。
  * - text-wrap: pretty：成段中文的末行不留孤字（卡片里只剩一个「准」、列表项末行只剩「度；」）。
  */
 ::selection {
@@ -6167,7 +6151,7 @@ html {
 .log-line {
   text-wrap: pretty;
 }
-:root:not([data-theme="copybook"], [data-theme="typescript"]) {
+:root {
   .orbita-icon svg {
     stroke-width: clamp(1.5px, calc(var(--icon-stroke, 2) * 0.75px), 2.25px);
   }

@@ -24,7 +24,6 @@ import {
 import { composerMaterials } from "./composer-materials.ts";
 import { composerBoxHeight, COMPOSER_MIN_ROWS } from "./composer-height.ts";
 import { isSubmitKey } from "./composer-keys.ts";
-import { composerScript } from "./composer-script.ts";
 import { caretPoint } from "./caret-point.ts";
 import {
   slashSpaceOpensPanel,
@@ -40,8 +39,6 @@ import {
   type ChipKind,
   type TextSelection,
 } from "./composer-chips.ts";
-import { whiteoutSegments, type CompositionRange } from "./whiteout-segments.ts";
-import type { DominantScript } from "../features/chat/dominant-script.ts";
 import { useDictation } from "../features/voice/useDictation.ts";
 import { DictationStatus } from "../features/voice/DictationStatus.tsx";
 import { useT } from "../locale.ts";
@@ -102,11 +99,6 @@ function ChipFace(props: { icon: IconName; name: string }) {
       <span className="composer-chip-name" data-name={props.name} />
     </span>
   );
-}
-
-/** 修正液只在小学作业主题下画。主题落在 <html data-theme> 上（useTheme.ts / main.tsx 写） */
-function isCopybook(): boolean {
-  return document.documentElement.dataset.theme === "copybook";
 }
 
 export function Composer(props: {
@@ -170,18 +162,9 @@ export function Composer(props: {
   const dictation = useDictation({ value: props.value, onChange: props.onChange, textareaRef });
   const dictating = dictation.phase !== "idle";
   const mirrorRef = useRef<HTMLDivElement>(null);
-  // 输入法组词中的范围（没在组词是 null）。拼音字母会先进 value：字距判法在组词期间沿用
-  // 上一次的结果，修正液不涂这一截
-  const [composition, setComposition] = useState<CompositionRange | null>(null);
-  // 以中文还是英文为主（composer-script.ts）：小学作业主题按它切字距。要记住上一次的结果——
-  // 渲染中按新输入调整 state，React 会在提交前重渲一遍
-  const [script, setScript] = useState<DominantScript>("cjk");
-  const nextScript = composerScript(script, props.value, composition !== null);
-  if (nextScript !== script) setScript(nextScript);
-  // 镜像层（全主题常驻，垫在 textarea 下面）：句中 chip 画在这一层（composer-chips.ts
-  // 切区间）；小学作业主题的修正液也画在同一层（whiteout-segments.ts，主题开启时才分段）。
-  // 两层区间叠在同一份文本上，chip 区间优先于修正液（mirrorSegments）
-  const [whiteout, setWhiteout] = useState(isCopybook);
+  // 输入法组词中的范围（没在组词是 null）：组词期间不把光标吸到 chip 边上
+  const [composition, setComposition] = useState<{ start: number; end: number } | null>(null);
+  // 镜像层（垫在 textarea 下面）：句中 chip 与粘贴展开段画在这一层（composer-chips.ts 切区间）
   // textarea 的滚动位置：展开段的收起标签跟着内容滚（标签在镜像上量坐标，量法吃它）
   const [scrollTop, setScrollTop] = useState(0);
   const chips = useMemo(() => parseChips(props.value), [props.value]);
@@ -248,12 +231,8 @@ export function Composer(props: {
   );
   const segments = useMemo(
     () =>
-      mirrorSegments(
-        whiteout ? whiteoutSegments(props.value, composition ?? undefined) : [{ text: props.value, whiteout: false }],
-        chipSpans,
-        pasteRuns,
-      ),
-    [whiteout, props.value, composition, chipSpans, pasteRuns],
+      mirrorSegments(props.value, chipSpans, pasteRuns),
+    [props.value, chipSpans, pasteRuns],
   );
   // 每段在原文里的起点：chip 段靠它对上 chipAt（名字、× 归哪颗）
   const segmentsWithOffsets = useMemo(() => {
@@ -322,8 +301,7 @@ export function Composer(props: {
   };
   // 随内容长高：撤回能把好几条排队消息堆进来，写死两行就只能盲着改。
   // useLayoutEffect 而非 useEffect——量完就改高度，放到绘制后会闪一帧。
-  // script 变了也要重量：字距一换行数就变，而组词结束时切换的那一下 value 没有变。
-  // 高度一变可能出现或收起滚动条，镜像跟着同步；镜像刚挂上（whiteout 变 true）时也要同步一次
+  // 高度一变可能出现或收起滚动条，镜像跟着同步。
   useLayoutEffect(() => {
     const el = textareaRef.current;
     if (el === null) return;
@@ -336,19 +314,7 @@ export function Composer(props: {
     for (const chip of mirror.querySelectorAll<HTMLElement>(".composer-chip[data-kind]")) {
       chip.toggleAttribute("data-wrapped", chip.getClientRects().length > 1);
     }
-  }, [props.value, script, whiteout]);
-  // 换主题也要重量：纸面两档的行高是 24px，浅 / 暗是 22px——只跟着 value 量，切主题后高度
-  // 停在上一档，方格的末行会被切掉半行（2026-09-25 实测）。同一个信号决定画不画修正液
-  useLayoutEffect(() => {
-    const el = textareaRef.current;
-    if (el === null) return;
-    const observer = new MutationObserver(() => {
-      fitComposerHeight(el);
-      setWhiteout(isCopybook());
-    });
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
-    return () => observer.disconnect();
-  }, []);
+  }, [props.value]);
   // ── 光标位置（「/ + 空格」开右栏选取的触发条件在 panel-token.ts）──────
   // 纯移动不经过 onChange，所以还要 onSelect 跟；value 被外部改写（草稿恢复、
   // token 插入）后从 DOM 回同步一次
@@ -504,10 +470,10 @@ export function Composer(props: {
           镜像层（全主题常驻）：与 textarea 同字体、同字距、同宽。**字由它画**（2026-10-30 起）：
           textarea 的字透明，只管光标、选区、输入法与撤销。句中 token 在这里包成 .composer-chip：
           原文透明占位，上面盖一颗胶囊（ChipFace）——两层共用同一套排版，光标与字才逐像素对齐；
-          修正液（copybook）、粘贴展开段的底色也画在这一层。
+          粘贴展开段的底色也画在这一层。
           末尾补一个零宽字符：textarea 末尾的换行会多出一行，div 里不会，滚动范围就对不上
         */}
-        <div ref={mirrorRef} className="composer-input composer-mirror" data-script={script} aria-hidden="true">
+        <div ref={mirrorRef} className="composer-input composer-mirror" aria-hidden="true">
           {segmentsWithOffsets.map(({ segment, offset }, index) => {
             const face = segment.chip ? chipFaceAt(offset) : null;
             return segment.chip ? (
@@ -517,10 +483,6 @@ export function Composer(props: {
               </span>
             ) : segment.pasteRun ? (
               <span key={index} className="composer-paste-run">
-                {segment.text}
-              </span>
-            ) : segment.whiteout ? (
-              <span key={index} className="composer-whiteout">
                 {segment.text}
               </span>
             ) : (
@@ -555,7 +517,6 @@ export function Composer(props: {
         <textarea
           ref={textareaRef}
           className="composer-input"
-          data-script={script}
           rows={COMPOSER_MIN_ROWS}
           value={props.value}
           disabled={disabled}

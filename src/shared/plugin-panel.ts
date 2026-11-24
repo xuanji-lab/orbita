@@ -223,7 +223,7 @@ export type PluginPanelActionResult = { ok: true } | { ok: false; reason: Plugin
 // ---------- 宿主 ↔ 模板的消息 ----------
 
 export interface PanelTheme {
-  /** `data-theme` 的值（light / black / graphite / copybook / typescript…） */
+  /** `data-theme` 的值（light / black / graphite…） */
   name: string;
   scheme: "light" | "dark";
   vars: Record<string, string>;

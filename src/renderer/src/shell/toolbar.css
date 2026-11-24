@@ -117,8 +117,8 @@
   box-shadow: var(--shadow-border);
 }
 /* 方向 N（2026-11-07）：胶囊去底去影，只剩字与线框图标（Claude 面板顶栏同法）——壳已经是
-   有颜色的实色，胶囊再叠一层白底就成了「壳上的三个药丸」。纸面两档保留材料芯片的面。 */
-:root:not([data-theme="copybook"], [data-theme="typescript"]) .toolbar-capsule {
+   有颜色的实色，胶囊再叠一层白底就成了「壳上的三个药丸」。 */
+:root .toolbar-capsule {
   background: transparent;
   box-shadow: none;
 }

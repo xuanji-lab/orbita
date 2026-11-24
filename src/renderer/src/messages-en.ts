@@ -14,8 +14,7 @@ import { enRevealLabel, enTrashName, type FileManagerKind } from "./file-manager
  * 值是字符串，或 `(…) => string`（数量、插值、单复数）。函数参数只用原始类型
  * （number / string），守卫测试（messages.test.ts）要能拿样例参数把每一条都调一遍。
  *
- * 用哪张表由 shared 的 `effectiveLanguage` 定：Copybook（小学作业）恒中文、Typescript 恒英文，
- * 其余主题跟设置里的语言走。
+ * 用哪张表由设置里的语言决定（shared 的 `effectiveLanguage`）。
  * 组件里用 `useT()` 取表；纯函数不读全局，由调用方把表传进去。
  *
  * 分组按界面区域，不按文件——同一句话在两处出现时放 `common`。
@@ -74,7 +73,6 @@ const VENDOR_NAMES: Record<DictationProvider, string> = {
 };
 
 /** 批语日期的月份写法（AP 缩写：Sept，不写 Sep；March–July 写全） */
-const MARK_MONTHS = ["Jan", "Feb", "March", "April", "May", "June", "July", "Aug", "Sept", "Oct", "Nov", "Dec"];
 
 const plural = (count: number, one: string, many: string = `${one}s`): string =>
   `${count} ${count === 1 ? one : many}`;
@@ -1072,7 +1070,6 @@ export const en = {
     paperQuiet: "Quiet desk",
     paperPrint: "Print layout",
     paperFocus: "Focus writing",
-    paperLocked: "Paper themes keep the quiet desk",
     slidesEmpty: "No pages yet. Add one, or ask the agent to.",
     addPage: "Add a page",
     pageCount: (count: number) => `${count} pages`,
@@ -1344,10 +1341,7 @@ export const en = {
     appearance: "Appearance",
     theme: "Theme",
     language: "Language",
-    languageInfo:
-      "Light, Dark and Black come in both languages. Copybook is Chinese-only and Typescript English-only — their ruled lines are drawn for that script. Commit and PR attribution follows the interface language.",
-    languageLockedZh: "This theme is Chinese-only",
-    languageLockedEn: "This theme is English-only",
+    languageInfo: "Choose the interface language. Commit and PR attribution follows it.",
     /** The "Guide" tab: one line of intro + "Start from the top", then the whole chapter list */
     guideLead: "One research project from start to finish — what Orbita can do. Pick any chapter below to jump straight to it.",
     guideStart: "Start from the top",
@@ -1552,11 +1546,7 @@ export const en = {
     light: "Light",
     graphite: "Slate",
     black: "Onyx",
-    copybook: "Copybook",
-    typescript: "Typescript",
     systemTip: "Follows your desktop's light or dark appearance · dark lands on Onyx",
-    copybookTip: "A green-grid Chinese school exercise book with red pen marks · light only",
-    typescriptTip: "A typewritten page with a red margin line, the English counterpart of Copybook · light only",
   },
 
   modelMenu: {
@@ -2059,11 +2049,6 @@ export const en = {
   chat: {
     moveHeader: "Move this task to… (the working folder moves too)",
     moveBlocked: "The task is running — stop it first, then move it",
-    /**
-     * 纸面两档首页 slogan 下的红笔批语（老师在作业本上写的那一行），落当天日期；只在纸面
-     * 两档出现。月份照美式批改的缩写（原型写「Sept 25」）：五个字母以内的月份写全
-     */
-    homeMark: (month: number, day: number) => `Neat. — ${MARK_MONTHS[month - 1] ?? month} ${day}`,
     placeholderNew: "Ask anything, or start a task",
     placeholderReply: "Reply, or steer the agent",
     providersFailed: (error: string) => `Providers failed to load: ${error} — open Settings to retry.`,

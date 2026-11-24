@@ -30,7 +30,7 @@ test("UserImages 的对齐交给 CSS 类，不写在内联 style 里", () => {
   assert.doesNotMatch(component, /justifyContent:/);
 });
 
-test("基础样式靠右（copybook / typescript 仍是右侧气泡）", () => {
+test("基础样式靠右，与用户气泡一致", () => {
   assert.match(styles, /\n\.user-images \{[^}]*justify-content: flex-end;/);
 });
 

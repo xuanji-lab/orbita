@@ -19,37 +19,20 @@ import { MEMORY_VECTOR_MODELS, type MemoryVectorSettings } from "./memory.ts";
  * **"black"**（玄 Onyx，纯灰、外壳亮堂）。**档位 id 沿用旧名不动**——它们是 settings/IPC
  * 契约，换的只是显示名（`themes` 在 messages-*.ts）。第三档 "dark"（Warm 微暖）
  * 2026-09-27 退役，存量设置迁移到 graphite（`parseTheme`）。
- *
- * "copybook"（小学作业）与 "typescript"（打字稿）是璇玑载体谱「稿纸」一档的中文与英文
- * 两版（wafo 2026-09-25 要求载入）：绿格作业本 + 红笔，与打字稿 + 红色页边线。**只有明**，
- * system 不落这两档，都是手动档。copybook 载入当天由 "manuscript"（稿纸）改名：那个年代
- * 小学生写字用的是绿格作业本，不是稿纸。旧 id 的兼容见 `parseTheme`。
  */
-export const THEME_PREFERENCES = ["system", "light", "graphite", "black", "copybook", "typescript"] as const;
+export const THEME_PREFERENCES = ["system", "light", "graphite", "black"] as const;
 export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 
-/** 界面语言。缺席 = "en"（语言设置落地之前，双语主题一直是英文界面） */
+/** 界面语言。缺席 = "en"（语言设置落地之前的默认） */
 export const LANGUAGES = ["en", "zh"] as const;
 export type Language = (typeof LANGUAGES)[number];
 
 /**
- * 主题自带的语言。**稿纸一档是单语的**：小学作业的绿格按汉字画、打字稿的横线按英文打字机
- * 画，换一门文字格子就对不上（wafo 2026-09-25 当初不加语言开关的理由，正是这种组合）；
- * 其余各档（system 与它落到的 light / black，以及 graphite）中英都成立，跟 `language` 走。
- * null = 这个主题不定语言。
+ * 实际生效的语言：跟设置走。**渲染层（文案表、`<html lang>`）与主进程
+ * （commit / PR 署名）都走这一条**——两边各判一次的话，界面是中文、署名是英文。
  */
-export function themeLanguage(theme: ThemePreference): Language | null {
-  if (theme === "copybook") return "zh";
-  if (theme === "typescript") return "en";
-  return null;
-}
-
-/**
- * 实际生效的语言：单语主题说了算，双语主题听设置。**渲染层（文案表、`<html lang>`）
- * 与主进程（commit / PR 署名）都走这一条**——两边各判一次的话，界面是中文、署名是英文。
- */
-export function effectiveLanguage(theme: ThemePreference, language: Language | undefined): Language {
-  return themeLanguage(theme) ?? language ?? "en";
+export function effectiveLanguage(language: Language | undefined): Language {
+  return language ?? "en";
 }
 
 /**
@@ -119,10 +102,7 @@ export interface ModelPair {
  * 各消费点的 `useExperimentalFeature(id)` 都从这里取类型。新功能挂进实验区 =
  * 这里加一个 id + 清单加一项；转正 = 两侧一起删（消费点的门同时拆）。
  */
-export const EXPERIMENTAL_FEATURE_IDS = [
-  "paper-themes",
-  "intent-system",
-] as const;
+export const EXPERIMENTAL_FEATURE_IDS = ["intent-system"] as const;
 export type ExperimentalFeatureId = (typeof EXPERIMENTAL_FEATURE_IDS)[number];
 
 /**
@@ -190,8 +170,7 @@ export function parseProcessView(view: unknown, legacyLayout: unknown): ProcessV
 export interface AppSettings {
   theme: ThemePreference;
   /**
-   * 界面语言偏好。**只在双语主题下生效**（见 `effectiveLanguage`）：选了小学作业 / 打字稿时
-   * 这个值留着不动，切回双语主题就恢复。缺席 = "en"。
+   * 界面语言偏好。缺席 = "en"。
    */
   language?: Language;
   /**
@@ -363,16 +342,11 @@ export interface AppSettings {
    * 不动数据——已存的主题照常应用、已星标的会话原样在盘上，
    * 开了就回来。
    *
-   * 各项的语义：
-   * - `paper-themes`：主题选择卡是否列出纸面两档（`selectableThemes`）。
-   *
-   * 旧键迁移（`parseSettings` 读这一层做，任何一次写入都把旧键从盘上带走）：
-   * - 旧总开关 `experimental: true` 等价于 paper-themes 开（当年还挂着会话生命周期，已转正）。
-   *
    * 下架的项（2026-10-23 输入框黑洞 / 俄罗斯方块，用户：「composer 的交互还不完善的
    * 基础上，暂时先下架华而不实的交互功能」）：id 从表里删掉即可——盘上残留的
    * `composer-blackhole` / `composer-tetris` 与更早的 `composerBlackhole` 不在表里，
-   * 解析时直接丢，下一次写入从盘上带走。
+   * 解析时直接丢，下一次写入从盘上带走。2026-11-24 删除的 `paper-themes` 与旧总开关
+   * `experimental` 也同样忽略，不影响其它仍在表的实验项。
    *
    * 转正的项同理（2026-10-24 会话生命周期转正，入口常驻；2026-11-22 PDF 引用转正，
    * cite_pdf 常注册、PDF 预览与引用编号常开）：盘上残留的 `session-lifecycle` /
@@ -503,27 +477,14 @@ function isThemePreference(value: unknown): value is ThemePreference {
 }
 
 /**
- * "manuscript" 是 copybook 改名前的 id（同一档）：settings.json 里存着旧值的落回这一档，
- * 不退回 system。下次写设置时磁盘上就是新 id 了。"dark"（Warm）2026-09-27 退役，
- * 存量值落到 graphite——同为「不近黑的暗档」，继任关系最直。
+ * 退役主题的读时迁移：`dark`（Warm）落到同为「不近黑暗档」的 graphite；
+ * 2026-11-24 删除的纸面两档与它们的旧别名没有直接继任，跟其他坏值一样回
+ * `DEFAULT_SETTINGS.theme`（system），继续跟随用户的系统深浅，不强行改成浅色。
  */
 function parseTheme(value: unknown): ThemePreference {
   if (isThemePreference(value)) return value;
-  if (value === "manuscript") return "copybook";
   if (value === "dark") return "graphite";
   return DEFAULT_SETTINGS.theme;
-}
-
-/**
- * 主题选择卡的可选档位。实验功能 `paper-themes` 关闭时纸面两档（copybook /
- * typescript）不出现（逐项开关 2026-10-12 之前的总开关 `experimental` 同此语义）。
- * **只藏入口不动数据**：已存的主题照常应用、已星标的会话
- * 原样在盘上，开关打开入口就回来。开源首发的默认门面（2026-10 用户裁决：
- * 不成熟的功能在公开快照里默认不出现）。
- */
-export function selectableThemes(paperThemes: boolean): readonly ThemePreference[] {
-  if (paperThemes) return THEME_PREFERENCES;
-  return THEME_PREFERENCES.filter((theme) => theme !== "copybook" && theme !== "typescript");
 }
 
 /** 设置 › 插件这一页的界面记忆（AppSettings.pluginsPage）；每个键缺席都是默认值 */
@@ -616,8 +577,6 @@ export function parseSettings(raw: unknown): AppSettings {
     /** 意图系统（实验）的设置子对象 */
     intent?: unknown;
     vector?: unknown;
-    /** 旧总开关（逐项开关之前）：true 等价于 paper-themes 开 */
-    experimental?: unknown;
   };
   const theme = parseTheme(record.theme);
   const width = record.rightPanelWidth;
@@ -637,7 +596,7 @@ export function parseSettings(raw: unknown): AppSettings {
   const starredModels = parseStarredModels(record.starredModels);
   const usagePet = parseUsagePet(record.usagePet);
   // 实验功能逐项开关（含旧键迁移，见 parseExperimentalFeatures）
-  const experimentalFeatures = parseExperimentalFeatures(record);
+  const experimentalFeatures = parseExperimentalFeatures(record.experimentalFeatures);
   const intent = parseIntentSettings(record.intent);
   const vector = parseVectorSettings(record.vector);
   const providersPage = parseProvidersPage(record.providersPage, record.providerCardSize);
@@ -736,22 +695,13 @@ function parseVectorSettings(raw: unknown): Partial<MemoryVectorSettings> | unde
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-function parseExperimentalFeatures(record: {
-  experimentalFeatures?: unknown;
-  experimental?: unknown;
-}): Partial<Record<ExperimentalFeatureId, boolean>> | undefined {
+function parseExperimentalFeatures(raw: unknown): Partial<Record<ExperimentalFeatureId, boolean>> | undefined {
   const out: Partial<Record<ExperimentalFeatureId, boolean>> = {};
-  const raw = record.experimentalFeatures;
   if (typeof raw === "object" && raw !== null) {
     for (const id of EXPERIMENTAL_FEATURE_IDS) {
       const value = (raw as Record<string, unknown>)[id];
       if (typeof value === "boolean") out[id] = value;
     }
-  }
-  // 旧总开关：true = 当年挂在它后面的 paper-themes 照常开（另一项会话生命周期已转正）。
-  // 新键里已显式给值的项以新键为准（??=）
-  if (record.experimental === true) {
-    out["paper-themes"] ??= true;
   }
   return Object.keys(out).length === 0 ? undefined : out;
 }

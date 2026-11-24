@@ -86,12 +86,10 @@ describe("shouldAutoOpenOnboarding：只在第一次打开时自动弹", () => {
 });
 
 describe("shotTheme：截图跟主题走", () => {
-  test("两档暗色用玄那套，浅色与纸面两档用浅色那套", () => {
+  test("两档暗色用玄那套，浅色用浅色那套", () => {
     assert.equal(shotTheme("black"), "dark");
     assert.equal(shotTheme("graphite"), "dark");
     assert.equal(shotTheme("light"), "light");
-    assert.equal(shotTheme("copybook"), "light");
-    assert.equal(shotTheme("typescript"), "light");
   });
 });
 

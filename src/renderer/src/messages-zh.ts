@@ -27,10 +27,10 @@ const INTERVAL_UNIT_ZH: Record<AutomationIntervalUnit, string> = { minute: "分�
 const ROLLUP_TOOL_ZH: Record<string, string> = { read: "读取", write: "写入", edit: "编辑", ls: "列目录", update_plan: "计划", update_goal: "目标", skill: "技能" };
 
 /**
- * 界面文案表——中文，Copybook（小学作业）主题下使用。类型由英文真源推出。
+ * 界面文案表——中文，在设置 › 外观 › 语言里选用。类型由英文真源推出。
  *
  * 写法（全表统一）：
- * - 用语优先照皮肤原型「稿纸」一档的中文版；原型没有的，用平实的现代中文产品说法。
+ * - 用平实的现代中文产品说法。
  * - 纯中文：只保留品牌名（orbita）、协议 / 格式名（MCP、API、JSON…）、模型与服务商名、
  *   路径、按键名的英文；守卫测试（messages.test.ts）按白名单把关。
  * - 全角标点；数字、西文与汉字之间留一个半角空格（同原型「2 个子会话」「编辑 mcp.json」）。
@@ -989,7 +989,6 @@ export const zh: Messages = {
     paperQuiet: "安静编辑台",
     paperPrint: "印刷版式",
     paperFocus: "专注写作",
-    paperLocked: "纸面主题下固定为安静编辑台",
     slidesEmpty: "还没有页，加一页或让智能体加。",
     addPage: "加一页",
     pageCount: (count) => `${count} 页`,
@@ -1244,10 +1243,7 @@ export const zh: Messages = {
     appearance: "外观",
     theme: "主题",
     language: "语言",
-    languageInfo:
-      "浅色、暗色、黑色主题中英都有；小学作业只有中文、打字稿只有英文——格子是照着那门文字画的。提交与 PR 署名跟着界面语言走。",
-    languageLockedZh: "这个主题只有中文",
-    languageLockedEn: "这个主题只有英文",
+    languageInfo: "选择界面语言。提交与 PR 署名跟着界面语言走。",
     /** 「新手引导」页签：顶上一句说明 + 「从头看」，下面整张章节目录 */
     guideLead: "拿一个研究课题从头走到尾，看 Orbita 能帮你做什么。点下面任意一章，直接翻到那一章。",
     guideStart: "从头看",
@@ -1435,11 +1431,7 @@ export const zh: Messages = {
     light: "浅色",
     graphite: "黛",
     black: "玄",
-    copybook: "小学作业",
-    typescript: "打字稿",
     systemTip: "按桌面的明暗切换 · 暗色落到「玄」",
-    copybookTip: "绿格作业本，红笔批改 · 只有浅色",
-    typescriptTip: "打字机打出的纸页，一道红色页边线，小学作业的英文版 · 只有浅色",
   },
 
   modelMenu: {
@@ -1896,8 +1888,6 @@ export const zh: Messages = {
   chat: {
     moveHeader: "把这条任务移到…（工作目录一起换）",
     moveBlocked: "任务正在运行，停下后再移",
-    // 批改的落款：全角空格隔开评语与「阅 月.日」（原型「字迹工整　阅 9.25」）
-    homeMark: (month, day) => `字迹工整　阅 ${month}.${day}`,
     placeholderNew: "问点什么，或交办一件事",
     placeholderReply: "回一句，或调整方向",
     providersFailed: (error) => `服务商载入失败：${error}——打开设置重试。`,

@@ -9,7 +9,6 @@ import {
   parseChips,
   snapSelection,
 } from "./composer-chips.ts";
-import { whiteoutSegments } from "./whiteout-segments.ts";
 
 describe("parseChips", () => {
   it("中英混排：句中的 /skill: token 认出来，散文不动", () => {
@@ -72,7 +71,7 @@ describe("parseChips", () => {
     deepStrictEqual(parseChips("用/mcp:x"), []);
   });
 
-  it("超长文本不解析（性能闸，与修正液同一阈值）", () => {
+  it("超长文本不解析（每次按键重扫的性能闸）", () => {
     deepStrictEqual(parseChips("x".repeat(CHIPS_MAX_LENGTH) + " /skill:a"), []);
     deepStrictEqual(parseChips(""), []);
   });
@@ -108,123 +107,67 @@ describe("chipRangeBefore / chipRangeAfter —— 整删判定", () => {
   });
 });
 
-describe("mirrorSegments —— 修正液与 chip 的叠加", () => {
-  it("chip 区间优先：本来垫修正液的英文 token 段改成 chip", () => {
+describe("mirrorSegments —— chip 与粘贴展开段的叠加", () => {
+  it("按 chip 区间切段，普通文字原样保留", () => {
     const text = "先 /skill:pdf-tools 处理";
-    const chips = parseChips(text);
-    deepStrictEqual(mirrorSegments(whiteoutSegments(text), chips), [
-      { text: "先 ", whiteout: false, chip: false, pasteRun: false },
-      { text: "/skill:pdf-tools", whiteout: false, chip: true, chipKind: "skill", pasteRun: false },
-      { text: " 处理", whiteout: false, chip: false, pasteRun: false },
+    deepStrictEqual(mirrorSegments(text, parseChips(text)), [
+      { text: "先 ", chip: false, pasteRun: false },
+      { text: "/skill:pdf-tools", chip: true, chipKind: "skill", pasteRun: false },
+      { text: " 处理", chip: false, pasteRun: false },
     ]);
   });
 
-  it("chip 前后的普通英文段照常垫修正液", () => {
-    const text = "use /skill:pdf now";
-    deepStrictEqual(mirrorSegments(whiteoutSegments(text), parseChips(text)), [
-      { text: "use ", whiteout: true, chip: false, pasteRun: false },
-      { text: "/skill:pdf", whiteout: false, chip: true, chipKind: "skill", pasteRun: false },
-      { text: " now", whiteout: true, chip: false, pasteRun: false },
+  it("没有 chip 与展开段时整段返回；空文本没有分段", () => {
+    deepStrictEqual(mirrorSegments("中文 english 继续", []), [
+      { text: "中文 english 继续", chip: false, pasteRun: false },
     ]);
-  });
-
-  it("组词中的段落不垫修正液，chip 不受组词影响（token 是已落定的文本）", () => {
-    const text = "abc /skill:x 拼音zhong";
-    // 光标在「拼音」后打拼音 zhong：组词区间 [15, 20)
-    const composition = { start: 15, end: 20 };
-    deepStrictEqual(mirrorSegments(whiteoutSegments(text, composition), parseChips(text)), [
-      { text: "abc ", whiteout: true, chip: false, pasteRun: false },
-      { text: "/skill:x", whiteout: false, chip: true, chipKind: "skill", pasteRun: false },
-      { text: " 拼音zhong", whiteout: false, chip: false, pasteRun: false },
-    ]);
-  });
-
-  it("无 chip 时与原修正液分段逐段一致", () => {
-    const text = "中文english继续";
-    deepStrictEqual(
-      mirrorSegments(whiteoutSegments(text), []),
-      whiteoutSegments(text).map((segment) => ({ ...segment, chip: false, pasteRun: false })),
-    );
-  });
-
-  it("非 copybook 路径：整段无修正液，只切 chip", () => {
-    deepStrictEqual(
-      mirrorSegments([{ text: "先 /skill:x 后", whiteout: false }], parseChips("先 /skill:x 后")),
-      [
-        { text: "先 ", whiteout: false, chip: false, pasteRun: false },
-        { text: "/skill:x", whiteout: false, chip: true, chipKind: "skill", pasteRun: false },
-        { text: " 后", whiteout: false, chip: false, pasteRun: false },
-      ],
-    );
+    deepStrictEqual(mirrorSegments("", []), []);
   });
 
   it("粘贴展开段：只铺底色的段与 chip 同层切出", () => {
-    deepStrictEqual(
-      mirrorSegments([{ text: "看这段AAABBB如何", whiteout: false }], [], [{ start: 3, end: 9 }]),
-      [
-        { text: "看这段", whiteout: false, chip: false, pasteRun: false },
-        { text: "AAABBB", whiteout: false, chip: false, pasteRun: true },
-        { text: "如何", whiteout: false, chip: false, pasteRun: false },
-      ],
-    );
+    deepStrictEqual(mirrorSegments("看这段AAABBB如何", [], [{ start: 3, end: 9 }]), [
+      { text: "看这段", chip: false, pasteRun: false },
+      { text: "AAABBB", chip: false, pasteRun: true },
+      { text: "如何", chip: false, pasteRun: false },
+    ]);
   });
 
-  it("chip 分段带 kind（上色用）：skill / mcp 各自带上，不带 kind 的区间是中性胶囊", () => {
+  it("chip 分段带 kind：skill / mcp 各自带上，不带 kind 的是中性胶囊", () => {
     const text = "用 /skill:a 和 /mcp:b 两个";
-    deepStrictEqual(mirrorSegments([{ text, whiteout: false }], parseChips(text)).filter((seg) => seg.chip), [
-      { text: "/skill:a", whiteout: false, chip: true, chipKind: "skill", pasteRun: false },
-      { text: "/mcp:b", whiteout: false, chip: true, chipKind: "mcp", pasteRun: false },
+    deepStrictEqual(mirrorSegments(text, parseChips(text)).filter((seg) => seg.chip), [
+      { text: "/skill:a", chip: true, chipKind: "skill", pasteRun: false },
+      { text: "/mcp:b", chip: true, chipKind: "mcp", pasteRun: false },
     ]);
-    // 粘贴 token 一类的中性胶囊（无 kind）不带 chipKind，落回默认配方
-    deepStrictEqual(mirrorSegments([{ text: "0123", whiteout: false }], [{ start: 1, end: 3 }]).filter((seg) => seg.chip), [
-      { text: "12", whiteout: false, chip: true, pasteRun: false },
+    deepStrictEqual(mirrorSegments("0123", [{ start: 1, end: 3 }]).filter((seg) => seg.chip), [
+      { text: "12", chip: true, pasteRun: false },
     ]);
   });
 
   it("展开段与 chip 交叠：chip 优先，交叠部分归 chip", () => {
-    deepStrictEqual(
-      mirrorSegments([{ text: "0123456789", whiteout: false }], [{ start: 2, end: 4 }], [{ start: 3, end: 7 }]),
-      [
-        { text: "01", whiteout: false, chip: false, pasteRun: false },
-        { text: "23", whiteout: false, chip: true, pasteRun: false },
-        { text: "456", whiteout: false, chip: false, pasteRun: true },
-        { text: "789", whiteout: false, chip: false, pasteRun: false },
-      ],
-    );
-  });
-
-  it("展开段在修正液之上：段的英文不再垫修正液，浅底色替代", () => {
-    const text = "说english话";
-    deepStrictEqual(mirrorSegments(whiteoutSegments(text), [], [{ start: 1, end: 8 }]), [
-      { text: "说", whiteout: false, chip: false, pasteRun: false },
-      { text: "english", whiteout: false, chip: false, pasteRun: true },
-      { text: "话", whiteout: false, chip: false, pasteRun: false },
+    deepStrictEqual(mirrorSegments("0123456789", [{ start: 2, end: 4 }], [{ start: 3, end: 7 }]), [
+      { text: "01", chip: false, pasteRun: false },
+      { text: "23", chip: true, pasteRun: false },
+      { text: "456", chip: false, pasteRun: true },
+      { text: "789", chip: false, pasteRun: false },
     ]);
   });
-});
 
-describe("mirrorSegments —— chip 整颗不切（胶囊盖在整颗 token 上）", () => {
-  it("小学作业：名字里有中文的 token 跨了修正液的两段，仍是一颗 chip", () => {
+  it("名字里有中文的 token 仍是一颗 chip，拼回去逐字等于原文", () => {
     const text = "用 /skill:笔记 整理";
-    const segments = mirrorSegments(whiteoutSegments(text), parseChips(text));
-    deepStrictEqual(
-      segments.filter((seg) => seg.chip),
-      [{ text: "/skill:笔记", whiteout: false, chip: true, chipKind: "skill", pasteRun: false }],
-    );
-    // 拼回去仍是原文：镜像的 textContent 必须与 textarea 逐字一致（caret-point 靠它）
+    const segments = mirrorSegments(text, parseChips(text));
+    deepStrictEqual(segments.filter((seg) => seg.chip), [
+      { text: "/skill:笔记", chip: true, chipKind: "skill", pasteRun: false },
+    ]);
     deepStrictEqual(segments.map((seg) => seg.text).join(""), text);
   });
 
-  it("展开段先开头、与后面的 chip 交叠：chip 仍是整颗，展开段在它前面截断", () => {
-    deepStrictEqual(
-      mirrorSegments([{ text: "0123456789", whiteout: false }], [{ start: 3, end: 6 }], [{ start: 1, end: 5 }]),
-      [
-        { text: "0", whiteout: false, chip: false, pasteRun: false },
-        { text: "12", whiteout: false, chip: false, pasteRun: true },
-        { text: "345", whiteout: false, chip: true, pasteRun: false },
-        { text: "6789", whiteout: false, chip: false, pasteRun: false },
-      ],
-    );
+  it("展开段先开头、与后面的 chip 交叠：chip 仍是整颗", () => {
+    deepStrictEqual(mirrorSegments("0123456789", [{ start: 3, end: 6 }], [{ start: 1, end: 5 }]), [
+      { text: "0", chip: false, pasteRun: false },
+      { text: "12", chip: false, pasteRun: true },
+      { text: "345", chip: true, pasteRun: false },
+      { text: "6789", chip: false, pasteRun: false },
+    ]);
   });
 });
 

@@ -6,7 +6,6 @@
  *   quiet 安静编辑台（默认：衬线正文、白纸、细发丝线、新增是 success 绿）
  *   print 印刷版式（书页式：窄行宽 ≈ 34 个汉字、首行缩进段间不空行、标题居中小号字距）
  *   focus 专注写作（深一档的纸色、当前段落以外降低不透明度、正文略大、不打字时工具栏淡出）
- * 纸面主题（Copybook / Typescript）下恒为 quiet（见 doc-paper.ts）。
  */
 .dp {
   --dp-bg: var(--color-bg-panel);

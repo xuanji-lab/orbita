@@ -195,7 +195,7 @@ describe("replySpeed —— 回答上的速度标注，按整轮加总", () => {
   });
 });
 
-describe("usageBreakdown / formatSpeed —— 中文（小学作业）", () => {
+describe("usageBreakdown / formatSpeed —— 中文界面", () => {
   test("分项名说中文，数字写法不变", () => {
     assert.deepEqual(
       usageBreakdown(stats({ cost: 0 }), zh).map((r) => r.label),
