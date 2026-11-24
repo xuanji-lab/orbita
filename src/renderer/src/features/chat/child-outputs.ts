@@ -37,5 +37,7 @@ export function childRunSettled(records: readonly TranscriptRecord[], previousLe
   const last = records[records.length - 1];
   if (last === undefined) return false;
   if (last.role === "file-turn") return true;
+  // 模型错误 / abort 已是确定终局；即使 error 回答里还留着 toolCall，也不能让交回产出轮询两分钟。
+  if (last.role === "assistant" && (last.status === "error" || last.status === "aborted")) return true;
   return last.role === "assistant" && !last.content.some((block) => block.type === "toolCall") && records.length === previousLength;
 }

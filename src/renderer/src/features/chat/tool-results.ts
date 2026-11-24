@@ -1451,6 +1451,8 @@ export function channelMarkLabel(
           return { text: c.markDone(peerTitle), tone: "done" };
         case "failed":
           return { text: c.markFailed(peerTitle), tone: "failed" };
+        case "interrupted":
+          return { text: c.markInterrupted(peerTitle), tone: "failed" };
         default:
           return { text: c.markOther(peerTitle, c.kinds[mark.kind]), tone: "neutral" };
       }

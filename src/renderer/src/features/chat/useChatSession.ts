@@ -1297,9 +1297,9 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     [refreshWorkspaces, workspaceFailed],
   );
 
-  // 引用稳定的按 id 查询：都经 ref 读最新值，闭包不必每次渲染重建——
-  // PR4a 的派出卡（TranscriptColumn 的 memo）新引入了 childPhaseOf 这个消费者，
-  // 不稳定的话每次引擎渲染都会传一个新函数进去，直接打穿那层 memo（见 TranscriptColumn 的注释）。
+  // 引用稳定的按 id 查询：都经 ref 读最新值，闭包不必每次渲染重建。
+  // 注意：稳定函数本身不是响应式依赖；TranscriptColumn 的 memo 消费者要同时传
+  // phase 值快照（ChatView 的 childPhaseKey / childPhases），否则只换函数引用永远等不到重绘。
   const phaseOf = useCallback(
     (id: string): SessionEntry["phase"] => statesRef.current.get(id)?.phase ?? "idle",
     [],
