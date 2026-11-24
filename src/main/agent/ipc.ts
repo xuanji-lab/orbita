@@ -265,7 +265,7 @@ export function registerAgentIpc(
     const effective = effectiveIntentSettings(current.intent);
     const meta = await sessions.readMeta(sessionId);
     // 自动化跑出的会话：无人值守，召回的确认卡会永远等一个不在场的人；提示词也不是用户亲口说的话
-    if (meta?.automationId !== undefined) return { ingest: false };
+    if (meta?.automationId !== undefined || meta?.backstage !== undefined) return { ingest: false };
     const detail = meta === null ? null : await sessions.load(sessionId);
     return intentTurnEnv({
       experimentOn: true,
@@ -321,7 +321,7 @@ export function registerAgentIpc(
    */
   const readAutomationTools = async (sessionId: string): Promise<boolean> => {
     const meta = await sessions.readMeta(sessionId).catch(() => null);
-    return meta?.automationId === undefined && meta?.parentId === undefined;
+    return meta?.automationId === undefined && meta?.parentId === undefined && meta?.backstage === undefined;
   };
 
   /**
@@ -338,7 +338,7 @@ export function registerAgentIpc(
     if (workspace === undefined) return {};
     const meta = await sessions.readMeta(input.sessionId).catch(() => null);
     const out: { subAgentTools?: true; subAgent?: SubAgentTurnIdentity } = {};
-    if (meta?.parentId === undefined && meta?.automationId === undefined && (await settings.read()).appMode === "orchestrate") out.subAgentTools = true;
+    if (meta?.parentId === undefined && meta?.automationId === undefined && meta?.backstage === undefined && (await settings.read()).appMode === "orchestrate") out.subAgentTools = true;
     const owner = meta === null ? null : attributionOf(meta);
     if (owner !== null) {
       const profile = await subAgentStore.profile(workspace.path, owner.subAgentId).catch(() => null);

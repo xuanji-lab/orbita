@@ -16,6 +16,11 @@ export interface SubAgentRequestDeps {
   settings: { read(): Promise<AppSettings> };
   store: SubAgentStore;
   broadcast(event: SubAgentsChanged): void;
+  /**
+   * 建完没带地表图时开一组形象候选（与星系设计面板「生成形象」同一套：planet/avatar.ts）。
+   * 缺席 = 不自动出图（测试 / 出图没接上），行星先用代码画的默认球。
+   */
+  startAvatar?: (workspaceId: string, bodyId: string) => Promise<{ ok: true } | { ok: false; error: string }>;
 }
 
 /** 这条会话能不能管子智能体：编排形态、属于某个工作区（星际空间没有主星）、是根会话（主智能体本人） */
@@ -63,7 +68,15 @@ export async function applySubAgentRequest(
     const created = await deps.store.create(workspace.path, request.input, "chat");
     if (!created.ok) return { ok: false, error: created.error };
     deps.broadcast({ workspaceId: workspace.id, subAgentId: created.value.id, action: "created", source: "chat", sessionId: event.sessionId });
-    const pending = request.input.surfacePath === undefined ? " Its avatar is the code-drawn default sphere for now (image pending)." : "";
+    let pending = "";
+    if (request.input.surfacePath === undefined) {
+      // 形象走面板同一套出图：候选出在设计面板里、由用户挑；主智能体自己不要再出图
+      const avatar = deps.startAvatar === undefined ? null : await deps.startAvatar(workspace.id, created.value.id).catch((cause: unknown) => ({ ok: false as const, error: cause instanceof Error ? cause.message : String(cause) }));
+      pending =
+        avatar !== null && avatar.ok
+          ? " Avatar candidates are now being generated in the background by the planet-forge plugin; they appear in the Galaxy Design panel and the user picks one there — do not generate or set an avatar image yourself."
+          : ` Its avatar is the code-drawn default sphere for now (image pending${avatar === null ? "" : `: avatar generation did not start — ${avatar.error}`}).`;
+    }
     return {
       ok: true,
       id: created.value.id,

@@ -4,7 +4,8 @@
  */
 import { OutboxStore } from "./session/outbox.ts";
 import { registerOutboxIpc } from "./session/outbox-ipc.ts";
-import { registerPlanetIpc } from "./planet/ipc.ts";
+import { broadcastAvatarJob, loadSurface, registerAvatarIpc, registerPlanetIpc } from "./planet/ipc.ts";
+import { AVATAR_PLUGIN, AVATAR_SKILL, AvatarJobs, execPluginScript } from "./planet/avatar.ts";
 import { SubAgentStore } from "./planet/sub-agents.ts";
 import { applySubAgentRequest } from "./planet/sub-agent-requests.ts";
 import { preferIPv4 } from "../shared/dial-v4.ts";
@@ -59,7 +60,7 @@ import { effectiveIntentSettings } from "../shared/settings.ts";
 import { broadcastChannelEvent, registerChannelIpc } from "./channel/ipc.ts";
 import { broadcastAutomationEvent, registerAutomationIpc } from "./automation/ipc.ts";
 import { KeepAwake } from "./automation/keep-awake.ts";
-import { deliverAutomationRun, launchAutomationRun, type LaunchDeps } from "./automation/launch.ts";
+import { deliverAutomationRun, launchAutomationRun, resolveAutomationModel, type LaunchDeps } from "./automation/launch.ts";
 import { applyAutomationRequest, type AutomationRequestDeps } from "./automation/requests.ts";
 import { AutomationScheduler } from "./automation/scheduler.ts";
 import { AutomationStore } from "./automation/store.ts";
@@ -538,6 +539,8 @@ void app.whenReady().then(async () => {
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
   const phases = new Map<string, SessionPhase>();
+  // 「生成形象」的任务表：在 agentIpc 之后才建（要它的 submitTurn），agent 事件先到的话这里是 null、不旁听
+  let avatarJobs: AvatarJobs | null = null;
   // 随包的 rg / fd 挂到 agent 进程 PATH 最前面：pi 的 grep / find 不再去 GitHub 下载（search-bins.ts）。
   // 目录不在（开发版没跑过 fetch 脚本）就原样给环境，pi 照旧自己找
   const searchBins = bundledBinDir({
@@ -647,7 +650,15 @@ void app.whenReady().then(async () => {
     // 子智能体：agent 的 create_sub_agent / update_sub_agent / list_sub_agents——写工作区 planet/ 在主进程，任何路径都回执
     if (event.type === "subAgentRequest") {
       void applySubAgentRequest(
-        { sessions, workspaces, settings, store: subAgentStore, broadcast: (change) => broadcastAgentEvent({ type: "subAgentsChanged", ...change }) },
+        {
+          sessions,
+          workspaces,
+          settings,
+          store: subAgentStore,
+          broadcast: (change) => broadcastAgentEvent({ type: "subAgentsChanged", ...change }),
+          // 聊天里建的子智能体没带地表图：走面板同一套出图（候选进同一个挑选面板）
+          startAvatar: async (workspaceId, bodyId) => (avatarJobs === null ? { ok: false, error: "出图还没就绪" } : avatarJobs.generate({ workspaceId, bodyId })),
+        },
         event,
       )
         .then((outcome) => agentHost.answerSubAgent(event.requestId, outcome))
@@ -674,6 +685,8 @@ void app.whenReady().then(async () => {
     // 活跑状态都不可信了，清空。**都不 return**——事件照常往下 record + broadcast
     // （failed(null) 本来就要转发给 renderer，告诉它进程挂了）。
     if (event.type === "phase") phases.set(event.sessionId, event.phase);
+    // 「生成形象」的幕后会话停了：收尾这一组候选（只旁听，不 return）
+    avatarJobs?.onAgentEvent(event);
     // 自动化的运行收尾 / this_session 的等待送达都靠这些事件（phase idle、最终回答、stats、failed）。
     // 只旁听，不 return：事件照常往下 record + broadcast
     automationScheduler.onAgentEvent(event);
@@ -1282,6 +1295,27 @@ void app.whenReady().then(async () => {
   // submitTurn 拿 agentIpc 刚返回的那个函数——子首轮与父→子空闲投递不重新拼一遍
   // turnFields/readDirectories 那一整套装配；steer 走 agentHost（AgentHostCore 的方法）；
   // abort 同源（agent:abort）；cancelBrowserHandoff 是 BrowserSandbox 的幂等取消。
+  // 「生成形象」：幕后会话跑插件「行星造物」的 planet-render 技能出候选，主进程读插件账本推进度（planet/avatar.ts）
+  avatarJobs = new AvatarJobs({
+    workspaces,
+    pluginRoot: async () => {
+      const record = (await plugins.records()).find((each) => each.name === AVATAR_PLUGIN);
+      if (record === undefined) return null;
+      const root = plugins.rootOf(record);
+      return existsSync(join(root, AVATAR_SKILL)) ? root : null;
+    },
+    sessions,
+    // 模型：子会话默认模型 → 上次用的模型（同自动化的解析）；不用杂务模型——画 SVG、按退出码重画是正经的多步活
+    resolveModel: async () => resolveAutomationModel({ automation: {}, settings: await settings.read(), providers: await providers.list() }),
+    submitTurn: (input) => agentIpc.submitTurn(input),
+    abort: (sessionId) => agentHost.abort(sessionId),
+    runScript: execPluginScript,
+    loadImage: loadSurface,
+    emit: broadcastAvatarJob,
+    now: Date.now,
+    newId: randomUUID,
+  });
+  registerAvatarIpc(avatarJobs);
   const deps: ChannelDeps = {
     sessions,
     channels,

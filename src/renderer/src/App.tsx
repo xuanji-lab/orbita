@@ -844,7 +844,7 @@ export function App() {
     // 打扰人——它们收在右栏自动化面板里，跑完的结果看那一条自动化的运行记录
     const settled = settledSessions(prev, engine.states).filter((id) => {
       const meta = session.sessions.find((candidate) => candidate.id === id);
-      return meta === undefined || (meta.parentId === undefined && (meta.automationId === undefined || meta.promoted === true));
+      return meta === undefined || (meta.parentId === undefined && meta.backstage === undefined && (meta.automationId === undefined || meta.promoted === true));
     });
     if (settled.length === 0 && heldNoticesRef.current.size === 0) return;
     // 子树还在跑的先压着，整棵停下那拍再提醒（母会话每被子会话叫醒一次就响一声的根因，

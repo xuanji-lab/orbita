@@ -43,7 +43,7 @@ function live(state: SessionRunState): boolean {
 
 /** 一条会话算不算在这座星系里：归档的、自动化开出来还没转正的不算（侧栏也不列它们） */
 function listed(meta: SessionMeta): boolean {
-  return !meta.archived && (meta.automationId === undefined || meta.promoted === true);
+  return !meta.archived && meta.backstage === undefined && (meta.automationId === undefined || meta.promoted === true);
 }
 
 export function orchestraTree(input: {
