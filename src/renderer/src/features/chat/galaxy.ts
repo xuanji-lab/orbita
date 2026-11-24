@@ -166,7 +166,12 @@ export const EXPECTED_ORBIT = 22;
 export const MIN_CLEARANCE = 2.5;
 /** 开普勒第三定律的参考点：轨道半径 KEPLER_REF_RADIUS 处转一圈 KEPLER_REF_PERIOD_S 秒 */
 export const KEPLER_REF_RADIUS = 20;
-export const KEPLER_REF_PERIOD_S = 56;
+/**
+ * 2026-11-24 从 56 秒放慢到 112 秒（用户：「确实，现在转的我觉得偏快」）：正好慢一半，行星与碎石带一起慢（碎石带的角速度也按这一条算）。
+ * 最内圈（半径 19）原来约 52 秒一圈、在 1040 宽的编排页上约 18px/s，现在约 104 秒、9px/s——看得出在转，不抢眼。
+ * 没有顺手降帧：steps() 低帧率转实测 GPU 反而更高（见 perf 提交），合成器动画本来就不占主线程
+ */
+export const KEPLER_REF_PERIOD_S = 112;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -300,7 +305,7 @@ export function beltOuterOf(inner: number, sessions: number): number {
   return Math.max(inner + 2, Math.min(inner + BELT_MAX_WIDTH * beltGrowthOf(sessions), FRAME_EXTENT * BELT_OVERSHOOT));
 }
 
-/** 碎石带整体的角速度：取轨道半径 BELT_SPIN_RADIUS 处的开普勒角速度（约 3 分 40 秒一圈） */
+/** 碎石带整体的角速度：取轨道半径 BELT_SPIN_RADIUS 处的开普勒角速度（约 7 分 20 秒一圈） */
 export const BELT_SPIN_RADIUS = 56;
 export const BELT_OMEGA = angularSpeed(BELT_SPIN_RADIUS);
 
