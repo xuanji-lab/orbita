@@ -3,6 +3,10 @@ Vendor logos in this directory come from @lobehub/icons-static-svg 1.95.1
 The marks themselves remain trademarks of their respective owners; they are used
 only to identify each provider.
 
+Added 2026-11 for the abilities list (same package, same 1.95.1; -color variants where lobe ships one):
+figma, google, obsidian, huggingface, elevenlabs, capcut, perplexity, firecrawl, tavily, exa,
+cloudflare, vercel, microsoft.
+
 Local modifications: <title>, width/height and inline style attributes removed;
 kimi.svg recolours the white "K" to currentColor so it reads on light themes.
 tokenrhythm.png is 基元律动's own favicon (token-rhythm-favicon-light.png,

@@ -70,7 +70,7 @@ export async function applyMcpWrite(
         ok: false,
         error:
           `server 配置认不出来：要 stdio {transport:"stdio", command, args?, env?} ` +
-          `或 http {transport:"http", url, headers?}；收到的是 ${JSON.stringify(event.server)}`,
+          `、http {transport:"http", url, headers?} 或旧式 SSE {transport:"sse", url, headers?}；收到的是 ${JSON.stringify(event.server)}`,
       };
     }
     // 已存在同名：拒绝（覆盖等于吃掉用户现有配置）；模型要改就去编辑文件

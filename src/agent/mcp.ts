@@ -18,13 +18,17 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 // 原生加载本文件的要求（裸导入 JSON 报 ERR_IMPORT_ATTRIBUTE_MISSING）
 import packageJson from "../../package.json" with { type: "json" };
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
+import { createAuthFetch, McpLoginRequiredError, type McpTokenSource } from "./mcp-auth.ts";
+import type { McpTokenOutcome } from "../shared/mcp-oauth.ts";
 import {
   isHttpServer,
   qualifiedToolName,
+  type McpHttpServer,
   type McpServer,
   type McpStatus,
   type McpStatusSnapshot,
@@ -100,9 +104,29 @@ export class McpHub {
   /** 回收真的拆掉了实例后调一次（runtime 挂它给面板推新快照——不然面板上还是陈旧的就绪）。 */
   onIdleDrop: (() => void) | null = null;
 
-  constructor(options: { idleMs?: number; sweepMs?: number } = {}) {
+  /** OAuth 型远端向主进程要 access token 的通道（runtime 接 requestBroker）；缺席 = 这个 hub 不会登录，OAuth 型一律报需要登录 */
+  private readonly requestToken: ((serverName: string, url: string, forceRefresh: boolean) => Promise<McpTokenOutcome>) | null;
+
+  constructor(
+    options: {
+      idleMs?: number;
+      sweepMs?: number;
+      requestToken?: (serverName: string, url: string, forceRefresh: boolean) => Promise<McpTokenOutcome>;
+    } = {},
+  ) {
     this.idleMs = options.idleMs ?? SCOPE_IDLE_MS;
     this.sweepMs = options.sweepMs ?? SWEEP_MS;
+    this.requestToken = options.requestToken ?? null;
+  }
+
+  /** 这台 server 的取 token 函数：只有标了 `auth: "oauth"` 的远端才有 */
+  private tokenSourceFor(serverName: string, server: McpServer): McpTokenSource | null {
+    if (!isHttpServer(server) || server.auth !== "oauth") return null;
+    const request = this.requestToken;
+    if (request === null) {
+      return async () => ({ ok: false, code: "login-required", error: `${serverName} 需要登录` });
+    }
+    return (forceRefresh) => request(serverName, server.url, forceRefresh);
   }
 
   /**
@@ -335,7 +359,8 @@ export class McpHub {
       this.touch(instance.scope);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      instance.status = { kind: "failed", message };
+      instance.status =
+        error instanceof McpLoginRequiredError ? { kind: "failed", message, needsLogin: true } : { kind: "failed", message };
       console.error(
         `[mcp] ${instance.serverName}（工作区 ${instance.label === "" ? "无" : instance.label}）连不上：${message}`,
       );
@@ -362,7 +387,7 @@ export class McpHub {
   ): Promise<Connected> {
     const client = new Client({ name: "orbita", version: packageJson.version }, { capabilities: {} });
     await withTimeout(
-      client.connect(createTransport(server)),
+      client.connect(createTransport(server, serverName, this.tokenSourceFor(serverName, server))),
       CONNECT_TIMEOUT_MS,
       `连接 ${serverName} 超时`,
     );
@@ -398,11 +423,16 @@ function mergeStatus(a: McpStatus, b: McpStatus): McpStatus {
   return a;
 }
 
-function createTransport(server: McpServer): Transport {
+function createTransport(server: McpServer, serverName: string, tokenSource: McpTokenSource | null): Transport {
   if (isHttpServer(server)) {
-    return new StreamableHTTPClientTransport(new URL(server.url), {
-      requestInit: server.headers === undefined ? {} : { headers: server.headers },
-    }) as Transport;
+    const requestInit = server.headers === undefined ? {} : { headers: server.headers };
+    // 鉴权壳（mcp-auth.ts）：OAuth 型带 Bearer 并在 401 时续期重试；其余远端把「401 + Bearer 挑战」翻成需要登录
+    const hasStaticAuthorization = Object.keys(server.headers ?? {}).some((name) => name.toLowerCase() === "authorization");
+    const fetch = createAuthFetch({ serverName, tokenSource, hasStaticAuthorization });
+    // SSE：只在配置显式写了 transport:"sse" 时才走。SDK 的 SSE 传输把 requestInit.headers 同时用在
+    // 开流的 GET 与之后的 POST 上（_commonHeaders），带 Authorization 的服务（百度网盘）两头都认得
+    if (server.transport === "sse") return new SSEClientTransport(new URL(server.url), { requestInit, fetch }) as Transport;
+    return new StreamableHTTPClientTransport(new URL(server.url), { requestInit, fetch }) as Transport;
   }
   return new StdioClientTransport({
     command: server.command,
@@ -513,6 +543,64 @@ function toResultContent(content: unknown): McpResultContent[] {
     }
   }
   return out;
+}
+
+/** 一次性实测远端 MCP 的结果：连通并列了工具 / 失败带原因（已抹掉请求头里的凭据） */
+export type McpProbeResult = { ok: true; tools: number } | { ok: false; message: string; needsLogin?: true };
+
+const PROBE_TIMEOUT_MS = 15_000;
+
+/**
+ * 一次性实测一台**远端** MCP（Streamable HTTP / SSE）：连上、列完工具、立刻关。
+ * 连接目录判「已连接」用它——真连一次，不看配置文件里「写着有」。
+ *
+ * 不进 McpHub：Hub 的实例按 (工作区, server) 分片、有闲置回收与代数，探一下的连接不该混进去，
+ * 也不该占住一个工作区的实例名额。只收 url 型：stdio 要起子进程，探一下的代价与副作用都大，
+ * 目录里没有这样的消费者。错误文案里凭据值一律替换成 `***`（SDK 的错误有时会带请求细节）。
+ */
+export async function probeRemoteMcp(
+  server: McpHttpServer,
+  timeoutMs: number = PROBE_TIMEOUT_MS,
+  /** OAuth 型要从主进程自己的凭据库取 token（实测跑在主进程，不必绕 agent 进程）；缺席 = 没法登录，OAuth 型报需要登录 */
+  auth: { serverName: string; tokenSource?: McpTokenSource } = { serverName: "" },
+): Promise<McpProbeResult> {
+  const serverName = auth.serverName;
+  const tokenSource = auth.tokenSource;
+  const client = new Client({ name: "orbita-probe", version: packageJson.version }, { capabilities: {} });
+  const scrub = (message: string): string => {
+    let out = message;
+    for (const value of Object.values(server.headers ?? {})) {
+      // 值本身与去掉 `Bearer ` 的 token 部分都抹
+      for (const secret of [value, value.replace(/^Bearer\s+/i, "")]) {
+        if (secret.length >= 4) out = out.split(secret).join("***");
+      }
+    }
+    return out;
+  };
+  try {
+    const source: McpTokenSource | null =
+      server.auth !== "oauth"
+        ? null
+        : (tokenSource ?? (async () => ({ ok: false, code: "login-required", error: `${serverName} 需要登录` })));
+    await withTimeout(client.connect(createTransport(server, serverName, source)), timeoutMs, `连接超时（${Math.round(timeoutMs / 1000)} 秒）`);
+    let tools = 0;
+    let cursor: string | undefined;
+    do {
+      const page = await withTimeout(
+        client.listTools(cursor === undefined ? {} : { cursor }),
+        timeoutMs,
+        `列工具超时（${Math.round(timeoutMs / 1000)} 秒）`,
+      );
+      tools += page.tools.length;
+      cursor = page.nextCursor;
+    } while (cursor !== undefined);
+    return { ok: true, tools };
+  } catch (error) {
+    const message = scrub(error instanceof Error ? error.message : String(error));
+    return error instanceof McpLoginRequiredError ? { ok: false, message, needsLogin: true } : { ok: false, message };
+  } finally {
+    await client.close().catch(() => undefined);
+  }
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {

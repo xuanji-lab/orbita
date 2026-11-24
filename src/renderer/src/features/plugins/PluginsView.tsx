@@ -21,13 +21,14 @@
  * → 展开里面的技能、Esc 取消；这个工作区没启用的排下面灰着、选了只提示（PluginPicker.tsx、plugin-picker.ts）。
  * 选中某个插件时同一槽里换成详情（一张长页）；详情里点「打开看板」右栏换成看板视图；旧技能 / MCP 面板本期保留不动。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { parsePluginViewId, type PluginDraftEntry, type PluginView } from "@shared/plugin";
 import type { Workspace } from "@shared/workspace";
 import type { CardSize, PluginsPageSettings } from "@shared/settings";
-import { useT } from "../../locale.ts";
+import { LocaleContext, useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 import { Icon } from "../../shell/Icon";
+import { Menu, type MenuItem } from "../../shell/Menu";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { PanelFilter, PanelIconButton, PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
 import { relativeTime } from "../../shell/relative-time";
@@ -38,6 +39,13 @@ import { parsePluginsSub, resolvePluginsSub, type PluginsSub } from "../../shell
 import { useReportSub } from "../../shell/use-report-sub.ts";
 import { describeList } from "../chat/load-state";
 import { InstallDialog } from "./InstallDialog.tsx";
+import { ConnectorsView } from "../connectors/ConnectorsView.tsx";
+import { loginFailureText } from "../connectors/connectors-view.ts";
+import { McpLoginButton, McpLoginContext } from "./McpLoginButton.tsx";
+import { statusNeedsLogin } from "./mcp-login.ts";
+import { useMcpLogin } from "./useMcpLogin.ts";
+import { useMcpRows } from "./useMcpRows.ts";
+import { useConnectors } from "../connectors/useConnectors.ts";
 import { PluginDetail } from "./PluginDetail.tsx";
 import { PluginDraftView } from "./PluginDraftView.tsx";
 import { PluginBoardView } from "./PluginBoardView.tsx";
@@ -47,7 +55,7 @@ import { PluginPickerBar, PluginPickerGroup } from "./PluginPicker.tsx";
 import { activateRow, buildPicker, clampPick, collapseRow, expandRow, indexOfPlugin, movePick, type PickerOutcome } from "./plugin-picker.ts";
 import { filterDrafts, groupDrafts, type PluginDraftTarget } from "./plugin-draft.ts";
 import { useDraftList } from "./useDraftList.ts";
-import { contentsParts, creatorAvailable, filterEnabled, filterPlugins, groupUsable, isMissingSkillView, legacyCounts, pluginFilterCounts, rangeOf, sourceKey, toggleTarget, isActive, type PluginGroup, type RangeLabel } from "./plugin-view.ts";
+import { contentsParts, creatorAvailable, filterEnabled, filterPlugins, groupUsable, isMissingSkillView, legacyCounts, pluginFilterCounts, rangeOf, rowKind, sourceKey, toggleTarget, isActive, type PluginGroup, type RangeLabel } from "./plugin-view.ts";
 import { usePlugins } from "./usePlugins.ts";
 import "./plugins.css";
 
@@ -82,6 +90,8 @@ export function PluginsView(props: {
   onPage?: (patch: PluginsPageSettings) => void;
   /** 「和智能体一起做一个」：新开一条会话并预填引导（App 接到会话引擎上；设置里的全屏版随之退场） */
   onMakeWithAgent: () => void;
+  /** 「连接」页签里命令行 / 引导型的「配置」「管理」：新开一条会话并预填这句话（App 接到会话引擎上） */
+  onStartConnectorSession: (draft: string) => void;
   /** 右栏版收到的请求：选中该插件（并按请求进它的看板视图）；处理完调 onOpenRequestHandled（全屏版不传） */
   openRequest?: PluginOpenRequest | null;
   onOpenRequestHandled?: () => void;
@@ -106,6 +116,9 @@ export function PluginsView(props: {
   const t = messages.plugins;
   const rail = props.chrome === "rail";
   const state = usePlugins(true);
+  const locale = useContext(LocaleContext);
+  // 页签：已装 / 连接（与「已装」并列，不并进禁用的「发现」）。连接是整台机器的事，不分工作区——选择条只属于「已装」
+  const [tab, setTab] = useState<"installed" | "connect">("installed");
   const draftList = useDraftList(true, state.plugins, props.draft?.path ?? null);
   const [selectedId, setSelectedIdRaw] = useState<string | null>(() => (rail ? (props.sub?.selected ?? null) : null));
   // 右栏里看的是详情还是看板视图：换了插件就回详情
@@ -113,6 +126,7 @@ export function PluginsView(props: {
   const setSelectedId = (id: string | null): void => {
     setSelectedIdRaw(id);
     setBoardOpen(false);
+    if (id !== null) setTab("installed");
   };
   const [installing, setInstalling] = useState(false);
   const [query, setQuery] = useState("");
@@ -168,6 +182,7 @@ export function PluginsView(props: {
     // 每次「/ + 空格」从干净的状态起：回列表（不在详情 / 草稿里）、清词、不展开、亮第一行
     setSelectedIdRaw(null);
     setBoardOpen(false);
+    setTab("installed");
     if (shownDraftTarget != null) onLeaveDraft?.();
     setQuery("");
     setPickIndex(0);
@@ -269,6 +284,7 @@ export function PluginsView(props: {
     const target = state.plugins.find((view) => view.origin === "plugin" && parsePluginViewId(view.id)?.key === openRequest.name);
     if (target !== undefined) {
       setSelectedIdRaw(target.id);
+      setTab("installed");
       setBoardOpen(openRequest.board);
       onOpenRequestHandled?.();
       return;
@@ -320,6 +336,17 @@ export function PluginsView(props: {
 
   const legacy = legacyCounts(state.plugins);
   const list = describeList(state.load, state.plugins.length);
+  // 连接页签：只在看着它时才实测（探测会跑命令、连远端）
+  const connectors = useConnectors(tab === "connect" && selected === null && !picking);
+  // 「已装」里需要登录的远程 MCP：状态来自 agent 的快照，列表行 / 卡片给「登录」入口（同连接目录的登录流程）
+  const mcpRows = useMcpRows(tab === "installed" && selected === null);
+  const refreshMcpRows = mcpRows.refresh;
+  const describeLoginFailure = useCallback((failure: Parameters<typeof loginFailureText>[1]) => loginFailureText(messages.connectors.oauth, failure), [messages]);
+  const mcpLogin = useMcpLogin(refreshMcpRows, setToggleError, describeLoginFailure);
+  const mcpLoginState = useMemo(
+    () => ({ needed: new Set(mcpRows.servers.filter((row) => !row.disabled && statusNeedsLogin(row.status, row.instances)).map((row) => row.name)), login: mcpLogin }),
+    [mcpRows.servers, mcpLogin],
+  );
   const filtering = query.trim() !== "";
   const makeAvailable = creatorAvailable(state.plugins);
   const enabledCount = state.plugins.filter(isActive).length;
@@ -333,27 +360,68 @@ export function PluginsView(props: {
     }
   };
 
-  // 「接入本地插件」「和智能体一起做一个」：两种外壳同一对按钮，只是摆的位置不同（右栏在列表顶上，全屏在页头右侧）
+  // 「+ 自定义能力」：一个醒目的主按钮（新开任务、预填一句「帮我做一个新能力，需求或来源：」让用户接着写，不自动发送），
+  // 旁边贴一个小下拉放「接入本地插件」（已有的插件文件夹，用得少，不配与主按钮并排）。
+  // 两种外壳同一组，只是摆的位置不同（右栏在列表顶上，全屏在页头右侧）
+  const connectLocalItems: MenuItem[] = [{ id: "local", label: t.connectLocal, icon: "folder-open", onSelect: () => setInstalling(true) }];
   const actions = (
-    <>
-      <button type="button" className="pl-btn" onClick={() => setInstalling(true)}>
-        <Icon name="folder-open" size={13} strokeWidth={1.8} />
-        {t.connectLocal}
-      </button>
+    <span className="pl-create">
       <button
         type="button"
-        className="pl-btn"
+        className="pl-btn btn-accent pl-create-main"
         disabled={!makeAvailable}
         title={makeAvailable ? t.makeWithAgentTip : t.makeWithAgentOffTip}
         onClick={props.onMakeWithAgent}
       >
-        <Icon name="bot" size={13} strokeWidth={1.8} />
+        <Icon name="plus" size={13} strokeWidth={2} />
         {t.makeWithAgent}
       </button>
-    </>
+      <Menu
+        align="end"
+        items={connectLocalItems}
+        trigger={({ open, toggle }) => (
+          <button type="button" className="pl-btn btn-accent pl-create-more" aria-label={t.createMore} title={t.createMore} aria-expanded={open} onClick={toggle}>
+            <Icon name="chevron-down" size={13} strokeWidth={2} />
+          </button>
+        )}
+      />
+    </span>
   );
 
-  const listBody = (
+  const connectBody = (
+    <ConnectorsView
+      chrome={rail ? "rail" : "page"}
+      locale={locale}
+      states={connectors.states}
+      query={query}
+      onRecheck={connectors.recheck}
+      onStartSession={props.onStartConnectorSession}
+      onShowInstalled={() => setTab("installed")}
+      saveToken={connectors.saveToken}
+      login={connectors.login}
+      cancelLogin={connectors.cancelLogin}
+      disconnect={connectors.disconnect}
+    />
+  );
+
+  /** 页签分段：右栏只有「已装 | 连接」（发现是计划中、右栏本来就没有它）；全屏版三格 */
+  const tabSeg = (
+    <span className={`pl-seg${rail ? " cn-seg-rail" : ""}`} role="group" aria-label={t.title}>
+      {!rail && (
+        <button type="button" disabled title={t.tabFindTip} aria-pressed={false}>
+          {t.tabFind}
+        </button>
+      )}
+      <button type="button" aria-pressed={tab === "installed"} onClick={() => setTab("installed")}>
+        {t.tabInstalled} <span className="pl-seg-count">{state.plugins.length}</span>
+      </button>
+      <button type="button" aria-pressed={tab === "connect"} onClick={() => setTab("connect")}>
+        {messages.connectors.tab}
+      </button>
+    </span>
+  );
+
+  const listInner = (
     <>
       {rail ? (
         <div className="pl-top">{actions}</div>
@@ -477,6 +545,8 @@ export function PluginsView(props: {
     </>
   );
 
+  const listBody = <McpLoginContext.Provider value={mcpLoginState}>{listInner}</McpLoginContext.Provider>;
+
   let pickOffset = 0;
   const pickBody = (
     <div ref={pickListRef} className="pl-pick-list" role="listbox" aria-label={t.title}>
@@ -597,7 +667,7 @@ export function PluginsView(props: {
               onChange={setQuery}
               placeholder={t.filterPlaceholder}
               ariaLabel={t.filterAria}
-              count={filtering ? `${filtered.length} / ${state.plugins.length}` : String(state.plugins.length)}
+              count={tab === "connect" ? undefined : filtering ? `${filtered.length} / ${state.plugins.length}` : String(state.plugins.length)}
             />
           )}
         </>
@@ -613,9 +683,16 @@ export function PluginsView(props: {
       <>
         <RightPanelFrame
           header={header}
-          contentKey={selected === null ? (restoring ? "restoring" : "list") : `${boardOf === null ? "detail" : "board"}:${selected.id}`}
+          contentKey={selected === null ? (restoring ? "restoring" : tab === "connect" ? "connect" : "list") : `${boardOf === null ? "detail" : "board"}:${selected.id}`}
           // 工作区选择条钉在列表上方（列表滚下去它还在）；详情 / 看板 / 选取态里不出
-          subheader={selected === null && !picking && !restoring ? <div className="pl-wsbar" data-chrome="rail">{wsBar}</div> : undefined}
+          subheader={
+            selected === null && !picking && !restoring ? (
+              <div className="pl-wsbar" data-chrome="rail">
+                {tabSeg}
+                {tab === "installed" && wsBar}
+              </div>
+            ) : undefined
+          }
           footer={picking && selected === null ? <PluginPickerBar expanded={collapseRow(pickModel.flat[pickIndex]).kind !== "none"} /> : undefined}
         >
           <div className="pl-page" data-chrome="rail" data-picking={picking && selected === null}>
@@ -623,7 +700,7 @@ export function PluginsView(props: {
               {boardOf !== null ? (
                 <PluginBoardView target={{ kind: "installed", name: parsePluginViewId(boardOf.id)?.key ?? "", workspaceId: props.currentWorkspaceId }} />
               ) : selected === null ? (
-                restoring ? <p className="pl-empty">{messages.common.loading}</p> : picking ? pickBody : listBody
+                restoring ? <p className="pl-empty">{messages.common.loading}</p> : picking ? pickBody : tab === "connect" ? connectBody : listBody
               ) : (
                 detailBody
               )}
@@ -639,23 +716,16 @@ export function PluginsView(props: {
     <div className="pl-page" data-chrome="page">
       {selected === null && (
         <div className="pl-head">
-          <span className="pl-seg" role="group" aria-label={t.title}>
-            <button type="button" disabled title={t.tabFindTip} aria-pressed={false}>
-              {t.tabFind}
-            </button>
-            <button type="button" aria-pressed={true}>
-              {t.tabInstalled} <span className="pl-seg-count">{state.plugins.length}</span>
-            </button>
-          </span>
+          {tabSeg}
           <span className="pl-head-actions">{actions}</span>
         </div>
       )}
-      {selected === null && (
+      {selected === null && tab === "installed" && (
         <div style={pageEdge.edgeStyle}>
           <div className="pl-wsbar">{wsBar}</div>
         </div>
       )}
-      <div className="pl-body scroll" onScroll={pageEdge.onScroll}>{selected === null ? listBody : detailBody}</div>
+      <div className="pl-body scroll" onScroll={pageEdge.onScroll}>{selected === null ? (tab === "connect" ? connectBody : listBody) : detailBody}</div>
       {dialog}
     </div>
   );
@@ -749,6 +819,7 @@ function PluginCard(props: { view: PluginView; range: RangeLabel | null; size: C
       {large && <span>{t.enabled}</span>}
     </span>
   ) : null;
+  const login = <McpLoginButton view={view} />;
   const toggle = (
     // 点开关不该同时进详情
     <span className="pl-card-switch" onClick={(event) => event.stopPropagation()}>
@@ -782,12 +853,14 @@ function PluginCard(props: { view: PluginView; range: RangeLabel | null; size: C
             <span className={`pv-vcard-note pl-vcard-note${view.origin === "user-mcp" ? " mono" : ""}`}>{view.description}</span>
           </span>
           <span className="pv-vcard-foot">{foot}</span>
+          {login}
         </>
       ) : (
         <>
           <PluginAvatar view={view} />
           <span className="pv-vcard-name">{view.name}</span>
           {badge}
+          {login}
         </>
       )}
       {toggle}
@@ -813,9 +886,17 @@ function PluginRow(props: { view: PluginView; range: RangeLabel | null; onOpen: 
   const { view } = props;
   const active = isActive(view);
   const { kindsLine, sourceLabel } = describePlugin(t, view);
+  // 断链的技能没有东西可开关：菜单里的开关停着，点进去清理
+  const missing = isMissingSkillView(view);
+  // 「内置」与开关不占行尾：一行只留 图标 · 名字 · 一行描述 · 种类（关着写「已关」），其余进 ⋯
+  const items: MenuItem[] = [
+    ...(rowKind(view) === "builtin" ? [{ id: "builtin", label: t.menuBuiltin, icon: "info" as const, fact: true }] : []),
+    { id: "toggle", label: active ? t.menuTurnOff : t.menuTurnOn, icon: "power", disabled: missing, onSelect: props.onToggle },
+    { id: "open", label: t.menuOpen, icon: "eye", onSelect: props.onOpen },
+  ];
   return (
     <div className="pl-row" data-active={active}>
-      {/* 窄了行里收起「里面有什么 / 来源」（plugins.css），悬停时仍能读到 */}
+      {/* 里面有什么 / 来源 / 范围退进悬停说明（以前在行尾占两列，窄了又藏起来） */}
       <button type="button" className="pl-row-main" title={`${kindsLine} · ${sourceLabel}`} onClick={props.onOpen}>
         <PluginAvatar view={view} />
         <span className="pl-name">
@@ -824,12 +905,20 @@ function PluginRow(props: { view: PluginView; range: RangeLabel | null; onOpen: 
             {props.range === null ? view.description : [rangeText(t, props.range), view.description].filter((part) => part !== "").join(" · ")}
           </small>
         </span>
-        <span className="pl-kinds">{kindsLine}</span>
-        <span className="pl-from">{sourceLabel}</span>
-        <KindTag view={view} />
+        <KindTag view={view} off={!active} />
       </button>
-      {/* 断链的技能没有东西可开关：开关停着，点进去清理 */}
-      <PluginSwitch checked={active} label={active ? t.toggleOff(view.name) : t.toggleOn(view.name)} disabled={isMissingSkillView(view)} onChange={props.onToggle} />
+      <McpLoginButton view={view} />
+      <span className="pl-more">
+        <Menu
+          align="end"
+          items={items}
+          trigger={({ open, toggle }) => (
+            <button type="button" className="pl-more-btn" aria-label={t.menuMore(view.name)} title={t.menuMoreTip} aria-expanded={open} onClick={toggle}>
+              <Icon name="ellipsis" size={14} strokeWidth={2} />
+            </button>
+          )}
+        />
+      </span>
     </div>
   );
 }
@@ -882,7 +971,7 @@ function DraftRow(props: { entry: PluginDraftEntry; onOpen: (draft: PluginDraftT
         title={entry.manifestProblem === null ? meta : `${t.draftManifestProblem}: ${entry.manifestProblem}`}
         onClick={() => props.onOpen({ path: entry.path, workspaceId: entry.workspaceId })}
       >
-        <PluginAvatar view={{ origin: "plugin" }} />
+        <PluginAvatar view={{ origin: "plugin", name: entry.displayName, description: entry.description }} />
         <span className="pl-name">
           <span className="pl-draft-head">
             <b>{entry.displayName}</b>
@@ -894,7 +983,6 @@ function DraftRow(props: { entry: PluginDraftEntry; onOpen: (draft: PluginDraftT
             )}
           </span>
           <small>{entry.description === "" ? t.notChatted : entry.description}</small>
-          <small className="pl-draft-meta">{meta}</small>
         </span>
       </button>
       {sessionId !== null && (

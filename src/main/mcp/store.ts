@@ -118,6 +118,17 @@ export class McpStore {
     });
   }
 
+  /**
+   * 有则整条替换、无则新增（连接目录「保存 token」用：用户重新贴 token = 换掉旧条目）。
+   * 与 `add` 的区别是**允许覆盖**——调用方必须是「这条本来就归我管」的（目录的 server 名固定），
+   * 不能拿它去覆盖用户手写的任意同名 server。
+   */
+  async upsert(name: string, server: McpServer): Promise<void> {
+    await this.mutate((servers) => {
+      servers[name] = server;
+    });
+  }
+
   /** 删一台。不存在就抛（面板只对列表里有的行出删除钮，抛错即状态漂了，该如实暴露）。 */
   async remove(name: string): Promise<void> {
     await this.mutate((servers) => {

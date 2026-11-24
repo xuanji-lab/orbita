@@ -34,11 +34,22 @@ export interface McpStdioServer extends McpWorkspaceScope {
   disabled?: boolean;
 }
 
-/** 远端 HTTP。Streamable HTTP，不是已废弃的 SSE。 */
+/**
+ * 远端 HTTP 服务。`transport: "http"` = Streamable HTTP（默认、首选）；
+ * `"sse"` = 旧的 HTTP+SSE 传输。MCP 规范已把 SSE 标为废弃，但仍有官方在线服务只提供它
+ * （百度网盘的 `https://mcp-pan.baidu.com/sse`，2026-11-08 核对），所以显式写 `"sse"` 才走它，
+ * 不会把 Streamable HTTP 的服务悄悄降级。
+ */
 export interface McpHttpServer extends McpWorkspaceScope {
-  transport: "http";
+  transport: "http" | "sse";
   url: string;
   headers?: Record<string, string>;
+  /**
+   * `"oauth"` = 这台远端靠 OAuth 登录（MCP 授权规范：Protected Resource Metadata → 动态注册 → PKCE 授权码）。
+   * **只是个标记**：client 信息与 token 加密存在 `mcp-oauth.secrets.json`，不进 mcp.json；
+   * 登录由主进程做，连接时 agent 进程向主进程要当前的 access token（见 shared/mcp-oauth.ts）。
+   */
+  auth?: "oauth";
   disabled?: boolean;
 }
 
@@ -55,7 +66,8 @@ export type McpStatus =
   | { kind: "idle" }
   | { kind: "connecting" }
   | { kind: "ready"; tools: string[] }
-  | { kind: "failed"; message: string };
+  /** `needsLogin` = 服务端要求 OAuth 登录（或已存的授权失效了），不是配置错 / 网络问题——界面给「登录」入口 */
+  | { kind: "failed"; message: string; needsLogin?: true };
 
 /** 插件自带 MCP 的服务名前缀：`plugin_<插件>_<服务>`（主进程拼名字与按名字筛运行时快照共用这一份）。 */
 export const PLUGIN_SERVER_PREFIX = "plugin_";
@@ -128,8 +140,9 @@ export function pluginServerRows(snapshot: McpStatusSnapshot | null): McpStatusS
   return (snapshot ?? []).filter((row) => row.name.startsWith(PLUGIN_SERVER_PREFIX));
 }
 
+/** 远端 URL 型 server（Streamable HTTP 或 SSE）；名字沿用，stdio 以外都是它。 */
 export function isHttpServer(server: McpServer): server is McpHttpServer {
-  return server.transport === "http";
+  return server.transport === "http" || server.transport === "sse";
 }
 
 /**
@@ -186,9 +199,9 @@ export function parseMcpConfig(raw: unknown): Record<string, McpServer> {
  * 被静默丢弃（用户 2026-10-11 报的「写进去了但列表里没有」就是这类裂缝）。
  *
  * 传输声明的认法：自家 `transport` 优先；缺席时看 Claude Desktop 系的 `type`
- * （`"http"` / `"streamable-http"`）；两处都没写但给了 `url` 也当 http
- * （stdio 必有 command，只有 url 的只可能是远端）。已废弃的 `"sse"` 不认：
- * 客户端不支持，认了等于静默空转。
+ * （`"http"` / `"streamable-http"` / `"sse"`）；两处都没写但给了 `url` 也当 http
+ * （stdio 必有 command，只有 url 的只可能是远端）。`"sse"` 只在**显式声明**时才认——
+ * 没声明传输的 url 永远当 Streamable HTTP，不去猜它是不是 SSE。
  */
 export function parseServer(raw: unknown): McpServer | null {
   if (typeof raw !== "object" || raw === null) return null;
@@ -200,15 +213,17 @@ export function parseServer(raw: unknown): McpServer | null {
   const isHttp =
     declared === "http" ||
     declared === "streamable-http" ||
+    declared === "sse" ||
     // 两处都没声明传输但只给了 url：stdio 必有 command，只可能是一台远端。
     // 同时给了 command 与 url 的是矛盾配置，落回 stdio 分支按 command 认
     (declared === undefined && url !== null && command === null);
   if (isHttp) {
     if (url === null) return null;
     return {
-      transport: "http",
+      transport: declared === "sse" ? "sse" : "http",
       url,
       ...(record(value["headers"]) !== null ? { headers: record(value["headers"]) as Record<string, string> } : {}),
+      ...(value["auth"] === "oauth" ? { auth: "oauth" as const } : {}),
       ...(disabled ? { disabled } : {}),
       ...scoped(value["workspaces"]),
     };

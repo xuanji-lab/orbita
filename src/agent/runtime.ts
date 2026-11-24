@@ -76,6 +76,7 @@ import {
 import { AUTOMATION_TOOL_NAMES, createAutomationTools } from "./automation-tools.ts";
 import { createChannelTools } from "./channel-tools.ts";
 import { McpHub } from "./mcp.ts";
+import type { McpTokenOutcome } from "../shared/mcp-oauth.ts";
 import { createImageTools } from "./image-tools.ts";
 import { attachGoalLedger, type LedgerAttachCache } from "./goal-compaction.ts";
 import { createGoalTools } from "./goal-tools.ts";
@@ -756,7 +757,12 @@ const running = new Map<string, CycleSlot<TurnParts>>();
  * MCP 连接。一个 hub 托管所有工作区的实例（连接按 工作区×server 分片，见 mcp.ts）——
  * 每条会话各拉一份 `npx some-server` 会让子进程数量随会话线性增长。
  */
-const mcpHub = new McpHub();
+const mcpHub = new McpHub({
+  // OAuth 型远端每个请求前向主进程要 access token（refresh token 不出主进程，见 mcp-auth.ts）。
+  // 45 秒：主进程那头续期最多等 30 秒的网络，再留一点余量；requestBroker 在下面定义，调用发生在它之后
+  requestToken: (serverName, url, forceRefresh) =>
+    requestBroker.request<McpTokenOutcome>({ type: "mcpTokenRequest", serverName, url, forceRefresh }, 45_000),
+});
 // 闲置工作区的实例被回收后，主进程缓存的状态就陈旧了（显示就绪但进程已退）——推新快照
 mcpHub.onIdleDrop = () => send({ type: "mcp", servers: mcpHub.describe() });
 /**
@@ -2277,6 +2283,15 @@ async function handle(command: AgentCommand): Promise<void> {
       command.ok
         ? { ok: true, ...(command.path === undefined ? {} : { path: command.path }) }
         : { ok: false, error: command.error ?? "Write failed" },
+    );
+    return;
+  }
+  if (command.type === "mcpTokenResult") {
+    requestBroker.resolve(
+      command.requestId,
+      command.ok
+        ? { ok: true, accessToken: command.accessToken }
+        : { ok: false, code: command.code, error: command.error },
     );
     return;
   }

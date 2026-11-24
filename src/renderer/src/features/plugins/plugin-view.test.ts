@@ -22,6 +22,8 @@ import {
   isMissingSkillView,
   nextAvailability,
   rowKind,
+  rowTailText,
+  tailKind,
   legacyCounts,
   sourceKey,
   toggleTarget,
@@ -257,6 +259,51 @@ describe("rowKind：列表行右侧的种类小标", () => {
     assert.equal(rowKind(view({ id: "plugin:b", name: "b", install: install("builtin") })), "builtin");
     assert.equal(rowKind(view({ id: "skill:s", name: "s", origin: "user-skill" })), "skill");
     assert.equal(rowKind(view({ id: "mcp:m", name: "m", origin: "user-mcp" })), "mcp");
+  });
+});
+
+describe("连接器：同一个叫法，MCP 服务名对上连接目录就是连接器", () => {
+  test("github / notion / tencent-docs 这些服务名是连接器；别的 MCP 还是 MCP", () => {
+    assert.equal(rowKind(view({ id: "mcp:github", name: "github", origin: "user-mcp" })), "connector");
+    assert.equal(rowKind(view({ id: "mcp:notion", name: "notion", origin: "user-mcp" })), "connector");
+    assert.equal(rowKind(view({ id: "mcp:tencent-docs", name: "tencent-docs", origin: "user-mcp" })), "connector");
+    assert.equal(rowKind(view({ id: "mcp:qgis", name: "qgis", origin: "user-mcp" })), "mcp");
+  });
+  test("技能与插件不因为名字像连接器就改种类", () => {
+    assert.equal(rowKind(view({ id: "skill:github-pr", name: "github-pr", origin: "user-skill" })), "skill");
+    assert.equal(rowKind(view({ id: "plugin:notion", name: "notion" })), "plugin");
+  });
+});
+
+describe("行尾：只留种类，关着写「已关」；内置不占行尾", () => {
+  const labels = { kinds: { plugin: "插件", builtin: "内置", skill: "技能", mcp: "MCP", connector: "连接器" }, off: "已关" };
+  const builtin = { source: { kind: "builtin" } } as PluginView["install"];
+  test("开着只有种类，关着是「已关 · 种类」", () => {
+    assert.equal(rowTailText("skill", false, labels), "技能");
+    assert.equal(rowTailText("skill", true, labels), "已关 · 技能");
+    assert.equal(rowTailText("connector", true, labels), "已关 · 连接器");
+  });
+  test("内置插件行尾是「插件」（内置标记在 ⋯ 菜单里），rowKind 仍认得出它是内置", () => {
+    const v = view({ id: "plugin:docs", name: "docs", install: builtin });
+    assert.equal(rowKind(v), "builtin");
+    assert.equal(tailKind(v), "plugin");
+  });
+});
+
+describe("filterPlugins：显示名与目录名都能搜", () => {
+  const skill = view({
+    id: "skill:orbita-pr-acceptance",
+    name: "ORBITA：PR 验收",
+    origin: "user-skill",
+    skills: [{ slug: "orbita-pr-acceptance", name: "ORBITA：PR 验收", description: "" }],
+  });
+  test("输中文显示名、输英文目录名、输目录名的一段都找得到", () => {
+    for (const q of ["验收", "pr-acceptance", "ORBITA-PR", "acceptance"]) assert.equal(filterPlugins([skill], q).length, 1, q);
+    assert.equal(filterPlugins([skill], "zzz").length, 0);
+  });
+  test("MCP 的服务名（视图 id 里的标识）也搜得到", () => {
+    const mcp = view({ id: "mcp:qwen-image-trx40", name: "qwen-image-trx40", origin: "user-mcp" });
+    assert.equal(filterPlugins([mcp], "trx40").length, 1);
   });
 });
 

@@ -39,6 +39,23 @@ import cornerDownLeft from "../../../../design-system/assets/icons/lucide/corner
 import cornerUpRight from "../../../../design-system/assets/icons/lucide/corner-up-right.svg?raw";
 import cpu from "../../../../design-system/assets/icons/lucide/cpu.svg?raw";
 import download from "../../../../design-system/assets/icons/lucide/download.svg?raw";
+import code from "../../../../design-system/assets/icons/lucide/code.svg?raw";
+import calendar from "../../../../design-system/assets/icons/lucide/calendar.svg?raw";
+import map from "../../../../design-system/assets/icons/lucide/map.svg?raw";
+import box from "../../../../design-system/assets/icons/lucide/box.svg?raw";
+import gamepad2 from "../../../../design-system/assets/icons/lucide/gamepad-2.svg?raw";
+import music from "../../../../design-system/assets/icons/lucide/music.svg?raw";
+import clapperboard from "../../../../design-system/assets/icons/lucide/clapperboard.svg?raw";
+import languages from "../../../../design-system/assets/icons/lucide/languages.svg?raw";
+import sigma from "../../../../design-system/assets/icons/lucide/sigma.svg?raw";
+import database from "../../../../design-system/assets/icons/lucide/database.svg?raw";
+import mail from "../../../../design-system/assets/icons/lucide/mail.svg?raw";
+import ellipsis from "../../../../design-system/assets/icons/lucide/ellipsis.svg?raw";
+import palette from "../../../../design-system/assets/icons/lucide/palette.svg?raw";
+import smartphone from "../../../../design-system/assets/icons/lucide/smartphone.svg?raw";
+import chartColumn from "../../../../design-system/assets/icons/lucide/chart-column.svg?raw";
+import banknote from "../../../../design-system/assets/icons/lucide/banknote.svg?raw";
+import camera from "../../../../design-system/assets/icons/lucide/camera.svg?raw";
 import ellipsisVertical from "../../../../design-system/assets/icons/lucide/ellipsis-vertical.svg?raw";
 import eye from "../../../../design-system/assets/icons/lucide/eye.svg?raw";
 import eyeOff from "../../../../design-system/assets/icons/lucide/eye-off.svg?raw";
@@ -201,6 +218,23 @@ const ICONS = {
   "corner-up-right": cornerUpRight,
   cpu,
   download,
+  code,
+  calendar,
+  map,
+  box,
+  "gamepad-2": gamepad2,
+  music,
+  clapperboard,
+  languages,
+  sigma,
+  database,
+  mail,
+  ellipsis,
+  palette,
+  smartphone,
+  "chart-column": chartColumn,
+  banknote,
+  camera,
   "ellipsis-vertical": ellipsisVertical,
   eye,
   "eye-off": eyeOff,

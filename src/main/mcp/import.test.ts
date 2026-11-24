@@ -15,7 +15,7 @@ afterEach(async () => {
 });
 
 describe("toOrbitaServer", () => {
-  test("stdio / http 两种形状；缺 type 按有无 command 判；SSE 与缺字段给出原因", () => {
+  test("stdio / http / sse 三种形状；缺 type 按有无 command 判；未知传输与缺字段给出原因", () => {
     assert.deepEqual(toOrbitaServer({ type: "stdio", command: "miyo", args: ["mcp"], env: { K: "v" }, enabled: true }), {
       transport: "stdio",
       command: "miyo",
@@ -29,7 +29,14 @@ describe("toOrbitaServer", () => {
       headers: { Authorization: "Bearer k" },
     });
     assert.deepEqual(toOrbitaServer({ url: "https://y/mcp" }), { transport: "http", url: "https://y/mcp" });
-    assert.equal(toOrbitaServer({ type: "sse", url: "https://z/sse" }), "SSE transport isn't supported here");
+    // SSE 保留旧传输（百度网盘等官方服务只提供它），不悄悄转成 Streamable HTTP
+    assert.deepEqual(toOrbitaServer({ type: "sse", url: "https://z/sse", headers: { Authorization: "Bearer k" } }), {
+      transport: "sse",
+      url: "https://z/sse",
+      headers: { Authorization: "Bearer k" },
+    });
+    assert.equal(toOrbitaServer({ type: "sse" }), "no URL");
+    assert.equal(toOrbitaServer({ type: "websocket", url: "wss://z/ws" }), "unknown transport: websocket");
     assert.equal(toOrbitaServer({ type: "stdio" }), "no command");
     assert.equal(toOrbitaServer("x"), "not a server entry");
   });
@@ -45,7 +52,8 @@ describe("读各家配置并按名字归并", () => {
         servers: {
           "web-search-prime": { type: "http", url: "https://proma/search", headers: { Authorization: "k" } },
           miyo: { type: "stdio", command: "/bin/miyo", args: ["mcp"] },
-          legacy: { type: "sse", url: "https://old/sse" },
+          legacy: { type: "websocket", url: "wss://old/ws" },
+          pan: { type: "sse", url: "https://pan/sse", headers: { Authorization: "Bearer k" } },
         },
       }),
     );
@@ -69,6 +77,7 @@ describe("读各家配置并按名字归并", () => {
         ["context7", "new", "http", false],
         ["legacy", "unsupported", "stdio", false],
         ["miyo", "in-orbita", "stdio", false],
+        ["pan", "new", "http", true],
         ["web-search-prime", "new", "http", true],
       ],
     );
@@ -77,8 +86,9 @@ describe("读各家配置并按名字归并", () => {
       { source: "claude-code", where: null },
     ]);
     assert.deepEqual(items.find((item) => item.name === "context7")?.origins, [{ source: "claude-code", where: "/repo/app" }]);
-    assert.equal(items.find((item) => item.name === "legacy")?.reason, "SSE transport isn't supported here");
-    assert.deepEqual([...servers.keys()].sort(), ["context7", "web-search-prime"]);
+    assert.equal(items.find((item) => item.name === "legacy")?.reason, "unknown transport: websocket");
+    assert.deepEqual([...servers.keys()].sort(), ["context7", "pan", "web-search-prime"]);
+    assert.deepEqual(servers.get("pan"), { transport: "sse", url: "https://pan/sse", headers: { Authorization: "Bearer k" } });
     assert.deepEqual(servers.get("web-search-prime"), {
       transport: "http",
       url: "https://proma/search",

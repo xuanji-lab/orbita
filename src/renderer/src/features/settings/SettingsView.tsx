@@ -86,6 +86,8 @@ export function SettingsView(props: {
   plugins: {
     currentWorkspaceId: string | null;
     onMakeWithAgent: () => void;
+    /** 「连接」页签的「配置」「管理」：退出设置，新开一条会话并预填引导 */
+    onStartConnectorSession: (draft: string) => void;
     onOpenBoard: (pluginName: string) => void;
     /** 「正在做」组里点一行 / 点「回到对话」：退出设置，右栏开该草稿 / 打开那条会话 */
     onOpenDraft: (draft: PluginDraftTarget) => void;

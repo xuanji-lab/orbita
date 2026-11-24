@@ -6,23 +6,28 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { McpInstanceInfo, McpServerInfo, McpStatus } from "@shared/mcp";
-import type { PluginArchiveEntry, PluginScope, PluginView } from "@shared/plugin";
+import { pluginViewId, type PluginArchiveEntry, type PluginScope, type PluginView } from "@shared/plugin";
 import type { SkillArchiveEntry, SkillContent } from "@shared/skill";
 import type { Workspace } from "@shared/workspace";
 import { api } from "../../api";
 import { useT } from "../../locale.ts";
 import { Chip } from "../../shell/Chip";
 import { Icon } from "../../shell/Icon";
+import { McpLoginAction } from "./McpLoginButton.tsx";
 import { PluginAvatar } from "./PluginParts.tsx";
+import { statusNeedsLogin } from "./mcp-login.ts";
 import { mcpErrors, readyWorkspaces } from "./mcp-row-display.ts";
 import { TOOL_CHIP_LIMIT, shortToolName, visibleTools } from "./mcp-tool-chips.ts";
 import type { WsFilter } from "../../shell/workspace-filter.ts";
-import { archivedRange, archivedUsableIn, availabilityScopeOf, mergeArchived, nextAvailability, rowKind, type ArchivedRow, type AvailabilityChip } from "./plugin-view.ts";
+import { archivedRange, archivedUsableIn, availabilityScopeOf, mergeArchived, nextAvailability, rowTailText, tailKind, type ArchivedRow, type AvailabilityChip } from "./plugin-view.ts";
 
-/** 列表行 / 选取行右侧的小字种类标：插件 / 内置 / 技能 / MCP。 */
-export function KindTag(props: { view: Pick<PluginView, "origin" | "install"> }) {
+/**
+ * 列表行 / 选取行右侧的小字种类标：插件 / 技能 / MCP / 连接器，行关着时前面带「已关」（rowTailText）。
+ * 名字与图标是主角，种类退成这一行灰字（2026-11-22 用户：「icon 和能力的名字最吸引人，描述次之」）。
+ */
+export function KindTag(props: { view: Pick<PluginView, "origin" | "install" | "id" | "name">; off?: boolean }) {
   const t = useT().plugins;
-  return <span className="pl-kind-tag">{t.rowKind[rowKind(props.view)]}</span>;
+  return <span className="pl-kind-tag">{rowTailText(tailKind(props.view), props.off === true, { kinds: t.rowKind, off: t.rowOff })}</span>;
 }
 
 // ---------- 技能：内容三格 ----------
@@ -171,6 +176,8 @@ export function McpStatusLine(props: {
   /** 重连进行中：非停用的都显示成连接中（实时状态还没回来，不装作不变） */
   reconnecting: boolean;
   onRetry: (() => void) | null;
+  /** 这是你自己配的远程 MCP 时给 server 名：失败是「需要登录」就在状态行里放登录钮（同「已装」列表那个） */
+  loginServer?: string;
 }) {
   const t = useT();
   const p = t.plugins;
@@ -192,6 +199,14 @@ export function McpStatusLine(props: {
           <p>{error.message}</p>
         </div>
       ))}
+      {props.loginServer !== undefined && statusNeedsLogin(status, props.instances) && (
+        <div className="pl-mcp-error">
+          <p>{p.mcpLoginNeeded}</p>
+          <span>
+            <McpLoginAction serverName={props.loginServer} />
+          </span>
+        </div>
+      )}
       {errors.length > 0 && props.onRetry !== null && (
         <span>
           <button type="button" className="pl-btn" disabled={props.reconnecting} onClick={props.onRetry}>
@@ -340,7 +355,7 @@ export function ArchivedAbilities(props: { refreshKey: unknown; workspaces: read
           return (
             <div key={`${row.kind}:${row.id}`} className="pl-row pl-archived-row">
               <span className="pl-row-main pl-archived-main">
-                <PluginAvatar view={{ origin: row.kind === "skill" ? "user-skill" : "plugin" }} />
+                <PluginAvatar view={{ origin: row.kind === "skill" ? "user-skill" : "plugin", name: row.name, id: pluginViewId(row.kind === "skill" ? "user-skill" : "plugin", row.slug ?? row.name) }} />
                 <span className="pl-name">
                   <b>{row.name}</b>
                   <small>{parts.filter((part) => part !== "").join(" · ")}</small>
