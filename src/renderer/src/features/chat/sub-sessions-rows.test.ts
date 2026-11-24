@@ -54,6 +54,13 @@ describe("subSessionRowStatus", () => {
     );
   });
 
+  it("通道 interrupted、不在跑、无审批：判 interrupted", () => {
+    strictEqual(
+      subSessionRowStatus({ channelStatus: "interrupted", needsApproval: false, running: false }),
+      "interrupted",
+    );
+  });
+
   it("通道 running（只有 task）、不在跑、无审批：判 idle", () => {
     strictEqual(
       subSessionRowStatus({ channelStatus: "running", needsApproval: false, running: false }),
@@ -149,12 +156,12 @@ describe("childActivityOf（转录尾巴 → 正在跑的调用）", () => {
   });
 });
 
-describe("panelRowState（卡住判定、转录尾巴补「在跑」）", () => {
+describe("panelRowState（活 phase 决定在跑，尾巴只决定卡住与在跑什么）", () => {
   const activity = (since: number) => ({ toolName: "bash", input: {}, since });
-  it("引擎没在跑，但通道开着、尾巴有在跑的调用：running", () => {
+  it("引擎没在跑：即使通道开着、尾巴有未答工具，也只能 idle——重启不能复活死轮", () => {
     strictEqual(
-      panelRowState({ channelStatus: "running", needsApproval: false, enginePhaseRunning: false, activity: activity(0), now: 1000 }),
-      "running",
+      panelRowState({ channelStatus: "running", needsApproval: false, enginePhaseRunning: false, activity: activity(0), now: STUCK_MS * 2 }),
+      "idle",
     );
   });
   it("同一个调用超过十分钟：stuck；正好十分钟还不算", () => {
@@ -162,10 +169,18 @@ describe("panelRowState（卡住判定、转录尾巴补「在跑」）", () => 
     strictEqual(panelRowState({ ...base, activity: activity(0), now: STUCK_MS + 1 }), "stuck");
     strictEqual(panelRowState({ ...base, activity: activity(0), now: STUCK_MS }), "running");
   });
-  it("通道已关（done / stopped）时尾巴里残留的 running 记录不算在跑", () => {
+  it("通道已关（done / failed / interrupted / stopped）时尾巴里残留的 running 记录不算在跑", () => {
     strictEqual(
       panelRowState({ channelStatus: "done", needsApproval: false, enginePhaseRunning: false, activity: activity(0), now: 1 }),
       "done",
+    );
+    strictEqual(
+      panelRowState({ channelStatus: "failed", needsApproval: false, enginePhaseRunning: false, activity: activity(0), now: STUCK_MS * 2 }),
+      "failed",
+    );
+    strictEqual(
+      panelRowState({ channelStatus: "interrupted", needsApproval: false, enginePhaseRunning: false, activity: activity(0), now: STUCK_MS * 2 }),
+      "interrupted",
     );
     strictEqual(
       panelRowState({ channelStatus: "stopped", needsApproval: false, enginePhaseRunning: false, activity: activity(0), now: STUCK_MS * 2 }),
@@ -249,6 +264,17 @@ describe("panelSecondLine（各状态第二行说什么）", () => {
     );
     const done = [msg("task", "任务"), msg("done", "三张截图都一致\n\n- 详情", 2)];
     strictEqual(panelSecondLine({ ...base, state: "done", messages: done }, callLine, zh).text, "三张截图都一致");
+  });
+  it("系统收尾显示可读分类；模型自己的 failed / done 仍用正文第一行", () => {
+    const quota = [{ ...msg("failed", "429 quota\n第二行", 2), author: "system" as const, endCause: "quota" as const }];
+    strictEqual(panelSecondLine({ ...base, state: "failed", messages: quota }, callLine, zh).text, "额度用尽或请求受限");
+    const interrupted = [
+      { ...msg("interrupted", "app exited", 2), author: "system" as const, endCause: "app-exit" as const },
+    ];
+    strictEqual(panelSecondLine({ ...base, state: "interrupted", messages: interrupted }, callLine, zh).text, "应用退出时中断");
+    strictEqual(panelGroupOf("interrupted"), "attention");
+    const explicit = [msg("failed", "分支被删了\n第二行", 2)];
+    strictEqual(panelSecondLine({ ...base, state: "failed", messages: explicit }, callLine, zh).text, "分支被删了");
   });
   it("通道正文拉不到：退到状态词，不写「读取失败」", () => {
     strictEqual(panelSecondLine({ ...base, state: "done" }, callLine, zh).text, zh.subSessions.rowStatus.done);

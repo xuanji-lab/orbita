@@ -55,6 +55,7 @@ import {
 } from "./sub-sessions-rows";
 import type { SubSessionsView } from "./sub-sessions-state";
 import { ChatView } from "./ChatView";
+import { SubSessionRecoveryActions } from "./ChannelViews";
 import type { ChatSession, SessionEngine } from "./useChatSession";
 import type { PendingApproval } from "./session-states.ts";
 import { planTimeline } from "../context/plan-timeline.ts";
@@ -69,6 +70,7 @@ const STATUS_COLOR: Record<SubSessionRowStatus, string> = {
   approval: "var(--color-warning)",
   done: "var(--color-success)",
   failed: "var(--color-danger)",
+  interrupted: "var(--color-danger)",
   // stopped 是用户的裁决不是故障：中性灰，区别于 failed 的红（图标已经在说话）
   stopped: "var(--color-text-tertiary)",
   idle: "var(--color-text-tertiary)",
@@ -80,6 +82,7 @@ const STATUS_ICON: Record<SubSessionRowStatus, IconName> = {
   approval: "shield-check",
   done: "circle-check",
   failed: "triangle-alert",
+  interrupted: "circle-off",
   stopped: "octagon-x",
   idle: "circle-off",
 };
@@ -164,6 +167,7 @@ export function SubSessionsPanel(props: {
             childId={child.id}
             view={props.view}
             stopped={summaries.get(child.id)?.status === "stopped"}
+            recoverable={status === "failed" || status === "interrupted"}
             starredModels={props.starredModels}
             onToggleStarModel={props.onToggleStarModel}
           />
@@ -462,8 +466,12 @@ function SubSessionRow(props: { row: PanelRow; now: number; onClick: () => void;
           </span>
         </span>
       </button>
-      {/* 在问你的行：去回答；「待讨论」组里交回的行：回复（直接对子会话说话，不经主会话） */}
-      {(row.state === "waiting" || props.held === true) && (
+      {/* 失败 / 中断优先给恢复动作；其它待讨论 / 在问你的行保留原回答框。 */}
+      {row.state === "failed" || row.state === "interrupted" ? (
+        <div className="ssp-answer">
+          <SubSessionRecoveryActions parentId={row.meta.parentId ?? ""} childId={row.meta.id} />
+        </div>
+      ) : (row.state === "waiting" || props.held === true) && (
         <div className="ssp-answer">
           {answering ? (
             <ChannelReplyBox parentId={row.meta.parentId ?? ""} childId={row.meta.id} autoFocus onCancel={() => setAnswering(false)} />
@@ -697,6 +705,7 @@ function SubSessionControls(props: {
   /** 会话层的查看槽（正开着这条子会话）：mode / model / usable / catalog 与两个改档函数都从它走 */
   view: ChatSession;
   stopped: boolean;
+  recoverable: boolean;
   starredModels: readonly ModelPair[];
   onToggleStarModel: (pair: ModelPair) => void;
 }) {
@@ -810,24 +819,28 @@ function SubSessionControls(props: {
       )}
       <span style={{ flex: 1 }} />
       {/* 终止不参与收缩：模型名长时由模型芯片省略，「终止」两字不被挤成「终…」（验收截图） */}
-      <span style={{ flex: "none", display: "inline-flex" }}>
-        <Menu
-          items={stopItems}
-          align="end"
-          trigger={({ open, toggle }) => (
-            <Chip
-              icon="octagon-x"
-              active={open}
-              chevron
-              disabled={props.stopped}
-              title={props.stopped ? t.subSessions.stoppedHint : t.subSessions.stopTip}
-              onClick={toggle}
-            >
-              {t.subSessions.stopLabel}
-            </Chip>
-          )}
-        />
-      </span>
+      {props.recoverable ? (
+        <SubSessionRecoveryActions parentId={props.parentId} childId={props.childId} />
+      ) : (
+        <span style={{ flex: "none", display: "inline-flex" }}>
+          <Menu
+            items={stopItems}
+            align="end"
+            trigger={({ open, toggle }) => (
+              <Chip
+                icon="octagon-x"
+                active={open}
+                chevron
+                disabled={props.stopped}
+                title={props.stopped ? t.subSessions.stoppedHint : t.subSessions.stopTip}
+                onClick={toggle}
+              >
+                {t.subSessions.stopLabel}
+              </Chip>
+            )}
+          />
+        </span>
+      )}
     </div>
   );
 }

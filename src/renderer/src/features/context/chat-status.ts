@@ -14,6 +14,7 @@ import { parsePluginBoardDetails, type PluginBoardResult } from "../../../../sha
 import type { PlanStep, PlanTimeline } from "./plan-timeline.ts";
 import type { TurnOutput } from "../chat/process-rows.ts";
 import { sessionOutputs } from "../chat/child-outputs.ts";
+import { subSessionRowStatus } from "../chat/sub-sessions-rows.ts";
 
 // ───────────────────────── 子会话此刻在跑什么 ─────────────────────────
 
@@ -81,12 +82,12 @@ function hostOf(url: string): string {
 /** 同一个工具调用跑了这么久就算「卡得异常久」（P97 的空档是 28 秒；一条命令十分钟没动静，人该看一眼） */
 export const STUCK_MS = 10 * 60_000;
 
-/** 状态卡里一个子会话的状态：在子会话面板那七档之上，多一档 stuck（在跑，但同一个调用跑太久了） */
-export type ChildState = "running" | "stuck" | "waiting" | "approval" | "done" | "failed" | "stopped" | "idle";
+/** 状态卡里一个子会话的状态：在子会话面板那八档之上，多一档 stuck（在跑，但同一个调用跑太久了） */
+export type ChildState = "running" | "stuck" | "waiting" | "approval" | "done" | "failed" | "interrupted" | "stopped" | "idle";
 
 /**
- * 一个子会话此刻的状态。running 的来源有二：引擎说它在跑（真跑着的）；或通道没关、转录尾巴有一次在跑的调用
- * （原型的合成数据没有真跑着的子会话，靠这一条；真实现里由引擎的 phase 说话，转录尾巴只给「在跑什么」）。
+ * 一个子会话此刻的状态。running 只认引擎活 phase；转录尾巴只提供正在跑的工具与卡住计时。
+ * 基础八档与面板 / 派出卡共用 subSessionRowStatus，不再各算一份。
  */
 export function childStateOf(input: {
   channelStatus: ChannelStatus | undefined;
@@ -95,15 +96,13 @@ export function childStateOf(input: {
   activity: ChildActivity | null;
   now: number;
 }): ChildState {
-  if (input.channelStatus === "waiting") return "waiting";
-  if (input.channelStatus === "stopped") return "stopped";
-  if (input.needsApproval) return "approval";
-  const open = input.channelStatus === undefined || input.channelStatus === "running";
-  const running = input.enginePhaseRunning || (open && input.activity !== null);
-  if (running) return input.activity !== null && input.now - input.activity.since > STUCK_MS ? "stuck" : "running";
-  if (input.channelStatus === "done") return "done";
-  if (input.channelStatus === "failed") return "failed";
-  return "idle";
+  const status = subSessionRowStatus({
+    channelStatus: input.channelStatus,
+    needsApproval: input.needsApproval,
+    running: input.enginePhaseRunning,
+  });
+  if (status === "running" && input.activity !== null && input.now - input.activity.since > STUCK_MS) return "stuck";
+  return status;
 }
 
 /** 「在干活」的：步骤行尾画机器人头像的那些 */
@@ -112,7 +111,7 @@ export function isWorking(state: ChildState): boolean {
 }
 
 /** 一步下面的子会话怎么排：要你的（在问 / 待批 / 卡住 / 失败）在前，其次在跑，已交回的最后 */
-const CHILD_ORDER: Record<ChildState, number> = { waiting: 0, approval: 0, stuck: 1, failed: 2, running: 3, idle: 4, stopped: 5, done: 6 };
+const CHILD_ORDER: Record<ChildState, number> = { waiting: 0, approval: 0, stuck: 1, failed: 2, interrupted: 2, running: 3, idle: 4, stopped: 5, done: 6 };
 
 export function sortChildren<T extends { state: ChildState; since: number }>(rows: readonly T[]): T[] {
   return [...rows].sort((a, b) => CHILD_ORDER[a.state] - CHILD_ORDER[b.state] || a.since - b.since);
@@ -190,7 +189,7 @@ export function pillSignal(states: readonly ChildState[], extraRunning: number):
   const count = (pick: (state: ChildState) => boolean) => states.filter(pick).length;
   const waiting = count((state) => state === "waiting" || state === "approval");
   if (waiting > 0) return { kind: "waiting", count: waiting };
-  const failed = count((state) => state === "failed");
+  const failed = count((state) => state === "failed" || state === "interrupted");
   if (failed > 0) return { kind: "failed", count: failed };
   const stuck = count((state) => state === "stuck");
   if (stuck > 0) return { kind: "stuck", count: stuck };

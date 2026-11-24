@@ -7,8 +7,8 @@
  * 不在两条流里对时间。模型侧另有一份：投递时通道消息作为内部消息喂进目标会话的
  * pi 本子——那是模型看到的，不是用户看到的。
  *
- * 通道只装两边**明确发出**的消息（模型调工具、用户在通道里代父发言），没有自动遥测：
- * progress 是子会话自己选择报的，不是系统每次工具调用记一笔。
+ * 通道装两边**明确发出**的消息，以及主进程确认一轮已经失败 / 中断后落的 system 终局。
+ * 普通工具进度不自动遥测：progress 仍是子会话自己选择报的，不是每次工具调用记一笔。
  */
 
 import { isReplyLang, type ReplyLang } from "./reply-language.ts";
@@ -20,6 +20,7 @@ export type ChannelSide = "parent" | "child";
  *   parent → task（派出时的任务说明，通道的第一条）、reply（回信 / 追加指令）、
  *     stop（用户终止这个子会话——**只能由用户发起**，见 parseChannelMessage 的作者约束）
  *   child  → question（等父答）、progress（报进度）、done（完成回报）、failed（无法完成）
+ *   child（仅系统作者）→ interrupted（轮异常中断；模型工具不能伪造这一类）
  */
 export type ChannelMessageKind =
   | "task"
@@ -28,7 +29,8 @@ export type ChannelMessageKind =
   | "question"
   | "progress"
   | "done"
-  | "failed";
+  | "failed"
+  | "interrupted";
 
 export const CHANNEL_MESSAGE_KINDS: readonly ChannelMessageKind[] = [
   "task",
@@ -38,10 +40,11 @@ export const CHANNEL_MESSAGE_KINDS: readonly ChannelMessageKind[] = [
   "progress",
   "done",
   "failed",
+  "interrupted",
 ];
 
 export function allowedKinds(from: ChannelSide): readonly ChannelMessageKind[] {
-  return from === "parent" ? ["task", "reply", "stop"] : ["question", "progress", "done", "failed"];
+  return from === "parent" ? ["task", "reply", "stop"] : ["question", "progress", "done", "failed", "interrupted"];
 }
 
 /**
@@ -53,18 +56,39 @@ export function allowedKinds(from: ChannelSide): readonly ChannelMessageKind[] {
  */
 export type ChannelDelivery = "steer" | "followUp";
 
+/** 系统收尾的机器原因；正文仍保留厂商原文，界面按这个字段给一句可读的分类。 */
+export const CHANNEL_END_CAUSES = [
+  "completed",
+  "model",
+  "quota",
+  "refusal",
+  "network",
+  "app-exit",
+  "process-exit",
+  "aborted",
+  "incomplete",
+] as const;
+export type ChannelEndCause = (typeof CHANNEL_END_CAUSES)[number];
+
+export function isChannelEndCause(value: unknown): value is ChannelEndCause {
+  return typeof value === "string" && (CHANNEL_END_CAUSES as readonly string[]).includes(value);
+}
+
 export interface ChannelMessage {
   id: string;
   from: ChannelSide;
   /**
-   * model = 该侧的模型经工具发的；user = 用户在通道里代父发的（只在 parent 侧出现）。
-   * 两者都以父的名义进子的队列，作者不同只在通道 UI 上用最轻的方式区分（`· you`）。
+   * model = 该侧的模型经工具发的；user = 用户在通道里代父发的（只在 parent 侧出现）；
+   * system = 主进程确认一轮已经失败 / 中断后落的收尾（只在 child 侧出现）。
+   * user 与 model 的区分只在通道 UI 上用最轻的方式表达（`· you`）。
    */
-  author: "model" | "user";
+  author: "model" | "user" | "system";
   kind: ChannelMessageKind;
   text: string;
   delivery: ChannelDelivery;
   createdAt: number;
+  /** 仅 system 的 done / failed / interrupted 可带：结束原因的机器分类。 */
+  endCause?: ChannelEndCause;
   /**
    * 用户的语言（只有父→子的消息带）：派出 / 回信时由主会话那边按「用户亲手打的字」算好，
    * 随信封送进子会话。子会话收到的每条消息都是信封，没有任何用户亲手打的字，
@@ -83,8 +107,8 @@ export interface ChannelKey {
 /**
  * 通道状态（纯派生，不落盘）：
  *   waiting = 最后一条是子的 question 且父还没 reply —— 用户此刻唯一需要动手的
- *   done / failed = 子发过 done / failed 之后**父还没回过信**——通道 closed，
- *     可 reopen：用户在通道里 reopen 后代父回信（一条 reply）就翻回 running，
+ *   done / failed / interrupted = 子交回、失败，或主进程确认轮已中断，且父还没回信——
+ *     通道 closed，可 reopen：用户在通道里 reopen 后代父回信（一条 reply）就翻回 running，
  *     不是永久终态（见 `channelStatus` 的 reopen 语义）
  *   stopped = **用户**终止了这个子会话（通道里一条 parent 侧的 stop）。比 closed
  *     更硬：父模型的 reply 不能重开它（重开等于父模型把用户的裁决绕了过去——
@@ -92,7 +116,16 @@ export interface ChannelKey {
  *     发信侧的硬拦在 `applyChannelSend`（主进程），这里的派生只管如实反映账本
  *   running = 其余
  */
-export type ChannelStatus = "running" | "waiting" | "done" | "failed" | "stopped";
+export type ChannelStatus = "running" | "waiting" | "done" | "failed" | "interrupted" | "stopped";
+
+export type ChannelTerminalKind = "done" | "failed" | "interrupted";
+
+export interface ChannelEndInfo {
+  messageId: string;
+  kind: ChannelTerminalKind;
+  text: string;
+  endCause?: ChannelEndCause;
+}
 
 /** 通道列表项：主进程按父会话现算，renderer 画通道列与右栏 Sub-sessions 面板的列表层 */
 export interface ChannelSummary extends ChannelKey {
@@ -101,6 +134,8 @@ export interface ChannelSummary extends ChannelKey {
   messageCount: number;
   /** 最后一条消息的时间；通道列按它倒序 */
   lastAt: number;
+  /** done / failed / interrupted 时对应的终局消息，派出卡不用读整份账本也能显示原因。 */
+  end?: ChannelEndInfo;
   /**
    * task 之外有没有往来。通道列只显示 true 的：只派出没说话的不占位
    * （派出这件事父流里的派出卡已经说了）。
@@ -131,15 +166,34 @@ export function parseChannelMessage(raw: unknown): ChannelMessage | null {
   const createdAt = typeof value["createdAt"] === "number" ? value["createdAt"] : null;
   if (id === null || from === null || kind === null || text === null || createdAt === null) return null;
   if (!allowedKinds(from).includes(kind)) return null;
-  const author = value["author"] === "user" ? "user" : "model";
+  const author = value["author"] === "user" ? "user" : value["author"] === "system" ? "system" : "model";
   if (author === "user" && from !== "parent") return null;
-  // stop 只能是用户发起的（channel:stop IPC）——model 作者的 stop 只能来自手改文件，
+  if (author === "system") {
+    // 系统收尾只能落在子侧；模型 / 用户都不能借手改账本伪装主进程。
+    if (from !== "child" || !["done", "failed", "interrupted"].includes(kind)) return null;
+  } else {
+    if (!allowedKinds(from).includes(kind)) return null;
+    if (kind === "interrupted") return null;
+  }
+  // stop 只能是用户发起的（channel:stop IPC）——model / system 作者的 stop 只能来自手改文件，
   // 静默接受它等于允许账本伪造「用户终止过」。
   if (kind === "stop" && author !== "user") return null;
   const delivery = value["delivery"] === "steer" ? "steer" : "followUp";
+  const endCause = isChannelEndCause(value["endCause"]) ? value["endCause"] : undefined;
+  if (endCause !== undefined && author !== "system") return null;
   // lang 只有父→子的消息有意义；不认识的值（手改文件 / 将来的新语言）当缺席，不拒整行
   const lang = from === "parent" && isReplyLang(value["lang"]) ? value["lang"] : undefined;
-  return { id, from, author, kind, text, delivery, createdAt, ...(lang === undefined ? {} : { lang }) };
+  return {
+    id,
+    from,
+    author,
+    kind,
+    text,
+    delivery,
+    createdAt,
+    ...(endCause === undefined ? {} : { endCause }),
+    ...(lang === undefined ? {} : { lang }),
+  };
 }
 
 /** 按时间正序（同一毫秒按账本顺序，sort 稳定）。通道是对话，不是活跃倒序。 */
@@ -148,15 +202,15 @@ export function sortChannelMessages(messages: readonly ChannelMessage[]): Channe
 }
 
 /**
- * 从消息序列派生状态。done / failed 是「closed，可 reopen」——不是永久终态：
+ * 从消息序列派生状态。done / failed / interrupted 是「closed，可 reopen」——不是永久终态：
  * 用户 reopen 后代父回信是一条 `reply`，之后的推导照常继续（question → waiting、
- * 再来一条 done → done）。**只有 `reply` 能重开**：done / failed 之后子自己又发的
+ * 再来一条 done → done）。**只有 `reply` 能重开**：终局之后子自己又发的
  * progress / question（没有经过父的 reopen）不重开——通道列该继续显示 closed，
  * 不能因为子多嘴一句就悄悄又变回「等你处理」。
  *
  * stopped 单独一档（用户裁决）：**只有 author 为 user 的父侧 reply 能重开**——
  * 父模型的 reply 不行（否则父模型一回信就把用户的终止绕了过去），子后续的
- * progress / question / done / failed 也不行（通道已经关了，发信侧在
+ * progress / question / done / failed / interrupted 也不行（通道已经关了，发信侧在
  * `applyChannelSend` 硬拦，这里只管派生不为「不会发生」的组合留缺口）。
  */
 export function channelStatus(messages: readonly ChannelMessage[]): ChannelStatus {
@@ -169,7 +223,7 @@ export function channelStatus(messages: readonly ChannelMessage[]): ChannelStatu
       }
       continue;
     }
-    // 用户终止（done / failed 之后同样适用：用户停掉一个已 closed 的通道，
+    // 用户终止（done / failed / interrupted 之后同样适用：用户停掉一个已 closed 的通道，
     // 意图正是封死父模型 reopen 的口子）。
     if (message.kind === "stop") {
       status = "stopped";
@@ -181,11 +235,11 @@ export function channelStatus(messages: readonly ChannelMessage[]): ChannelStatu
       continue;
     }
     // closed 期间，非 reply 的消息（子的 progress / question，理论上不该在没有
-    // reopen 的情况下出现）不改变状态——done / failed 只认 reply 一种解法。
-    if (status === "done" || status === "failed") continue;
-    if (message.kind === "done") status = "done";
-    else if (message.kind === "failed") status = "failed";
-    else if (message.kind === "question") status = "waiting";
+    // reopen 的情况下出现）不改变状态——done / failed / interrupted 只认 reply 一种解法。
+    if (status === "done" || status === "failed" || status === "interrupted") continue;
+    if (message.kind === "done" || message.kind === "failed" || message.kind === "interrupted") {
+      status = message.kind;
+    } else if (message.kind === "question") status = "waiting";
   }
   return status;
 }
@@ -202,13 +256,28 @@ export function summarizeChannel(
 ): ChannelSummary {
   const sorted = sortChannelMessages(messages);
   const last = sorted[sorted.length - 1];
+  const status = channelStatus(sorted);
+  const endMessage =
+    status === "done" || status === "failed" || status === "interrupted"
+      ? [...sorted].reverse().find((message) => message.from === "child" && message.kind === status)
+      : undefined;
   return {
     ...key,
     childTitle,
-    status: channelStatus(sorted),
+    status,
     messageCount: sorted.length,
     lastAt: last === undefined ? 0 : last.createdAt,
     hasExchange: hasExchange(sorted),
+    ...(endMessage === undefined
+      ? {}
+      : {
+          end: {
+            messageId: endMessage.id,
+            kind: endMessage.kind as ChannelTerminalKind,
+            text: endMessage.text,
+            ...(endMessage.endCause === undefined ? {} : { endCause: endMessage.endCause }),
+          },
+        }),
   };
 }
 
