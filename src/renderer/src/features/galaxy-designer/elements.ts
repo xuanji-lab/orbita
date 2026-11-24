@@ -111,3 +111,41 @@ export const ELEMENT_BY_SYMBOL: ReadonlyMap<string, ElementInfo> = new Map(ELEME
 
 /** 周期表上折叠起来的那几行：第 6 周期（铯以后）默认收起 */
 export const FOLDED_PERIODS: ReadonlySet<number> = new Set([6]);
+
+/**
+ * 周期表上的位置，两种排法：
+ * - 全表：18 列，列 = 族、行 = 周期；第 1–3 周期 3–12 族那块空白放元素卡（3–12 列 × 1–3 行）。
+ * - 紧凑（面板窄、18 列放不下最小格宽时）：10 列。主族（1、2、13–18 族）照周期排在第 1–2、5–10 列，
+ *   过渡金属（3–12 族）挪到主表下面，每个周期一行、占满 10 列；元素卡放在最底下，横跨整行、占两行。
+ * 行数固定、行高固定（CSS 里定），元素卡里字多字少都不会把行撑高——这是 2026-11-24「悬停时整张表突然等比变大」的修法。
+ */
+export interface TableSlot {
+  col: number;
+  row: number;
+  ccol: number;
+  crow: number;
+}
+
+/** 展开第 6 周期时主表有几行 */
+function mainRows(unfold: boolean): number {
+  return unfold ? 6 : 5;
+}
+
+export function tableSlot(element: Pick<ElementInfo, "group" | "period">, unfold: boolean): TableSlot {
+  const { group, period } = element;
+  const transition = group >= 3 && group <= 12;
+  const ccol = transition ? group - 2 : group <= 2 ? group : group - 8;
+  // 过渡金属从第 4 周期起才有：第 4 周期放在主表下的第一行
+  const crow = transition ? mainRows(unfold) + (period - 3) : period;
+  return { col: group, row: period, ccol, crow };
+}
+
+/** 镧系占位（第 6 周期、3 族）在两种排法里的位置 */
+export function lanthanideSlot(unfold: boolean): TableSlot {
+  return tableSlot({ group: 3, period: 6 }, unfold);
+}
+
+/** 紧凑排法里元素卡从第几行起（占两行） */
+export function compactCardRow(unfold: boolean): number {
+  return mainRows(unfold) + (unfold ? 3 : 2) + 1;
+}

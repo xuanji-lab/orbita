@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { DENSITY, planetRadius } from "../chat/galaxy.ts";
 import { agentInputsOf, defaultDesign, mixOf, planetsWriteOf, radiusOf, withMix } from "./design.ts";
-import { ELEMENTS, ELEMENT_BY_SYMBOL } from "./elements.ts";
+import { compactCardRow, ELEMENTS, ELEMENT_BY_SYMBOL, FOLDED_PERIODS, lanthanideSlot, tableSlot } from "./elements.ts";
 import {
   classOfDensity,
   clearShare,
@@ -37,6 +37,23 @@ describe("元素目录", () => {
     }
     assert.equal(ELEMENT_BY_SYMBOL.get("Fe")?.zh, "铁");
     assert.equal(ELEMENT_BY_SYMBOL.get("Ne")?.phase, "gas");
+  });
+});
+
+describe("周期表的两种排法", () => {
+  test("全表与紧凑都不撞格；全表的元素卡区（3–12 列 × 1–3 行）是空的；紧凑 10 列、元素卡在所有格子下面", () => {
+    for (const unfold of [false, true]) {
+      const shown = ELEMENTS.filter((e) => unfold || !FOLDED_PERIODS.has(e.period));
+      const slots = shown.map((e) => tableSlot(e, unfold));
+      if (unfold) slots.push(lanthanideSlot(true));
+      const full = new Set(slots.map((s) => `${s.col}:${s.row}`));
+      const compact = new Set(slots.map((s) => `${s.ccol}:${s.crow}`));
+      assert.equal(full.size, slots.length, "全表不撞格");
+      assert.equal(compact.size, slots.length, "紧凑不撞格");
+      assert.ok(slots.every((s) => !(s.col >= 3 && s.col <= 12 && s.row <= 3)), "元素卡区空着");
+      assert.ok(slots.every((s) => s.ccol >= 1 && s.ccol <= 10));
+      assert.ok(slots.every((s) => s.crow < compactCardRow(unfold)), "元素卡在最底下");
+    }
   });
 });
 

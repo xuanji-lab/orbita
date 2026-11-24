@@ -3,7 +3,7 @@ import { MIX_BASES, MIX_ITEMS_MAX, MIX_SCOPES, type MixBasis, type MixScope, typ
 import { Icon } from "../../shell/Icon";
 import { Segmented } from "../settings/SettingControls";
 import { LocaleContext, useT } from "../../locale.ts";
-import { ELEMENTS, ELEMENT_BY_SYMBOL, FOLDED_PERIODS, type ElementInfo } from "./elements.ts";
+import { compactCardRow, ELEMENTS, ELEMENT_BY_SYMBOL, FOLDED_PERIODS, lanthanideSlot, tableSlot, type ElementInfo, type TableSlot } from "./elements.ts";
 import {
   clearShare,
   colorNameOf,
@@ -80,7 +80,7 @@ export function MixSection(props: { mix: PlanetMix; cls: BodyClass; onChange: (m
             key={e.symbol}
             type="button"
             className="gd-pcell"
-            style={{ gridColumn: e.group, gridRow: e.period, ...(selected.has(e.symbol) ? ({ "--gd-el": cssColorOf(e.hint) } as React.CSSProperties) : {}) }}
+            style={{ ...slotStyle(tableSlot(e, unfold)), ...(selected.has(e.symbol) ? { "--gd-el": cssColorOf(e.hint) } : {}) } as React.CSSProperties}
             data-symbol={e.symbol}
             data-common={e.common || undefined}
             aria-pressed={selected.has(e.symbol)}
@@ -97,12 +97,12 @@ export function MixSection(props: { mix: PlanetMix; cls: BodyClass; onChange: (m
           </button>
         ))}
         {unfold && (
-          <span className="gd-pcell gd-pcell-fold" style={{ gridColumn: 3, gridRow: 6 }} title={tm.lanthanidesTip}>
+          <span className="gd-pcell gd-pcell-fold" style={slotStyle(lanthanideSlot(unfold)) as React.CSSProperties} title={tm.lanthanidesTip}>
             {tm.lanthanides}
           </span>
         )}
         {/* 元素卡：住在第 1–3 周期 3–12 族那块天然的空白里 */}
-        <div className="gd-pcard" style={{ gridColumn: "3 / 13", gridRow: "1 / 4" }} data-testid="gd-element-note" aria-live="polite">
+        <div className="gd-pcard" style={{ "--crow": compactCardRow(unfold) } as React.CSSProperties} data-testid="gd-element-note" aria-live="polite">
           {focused === undefined ? (
             <span className="gd-pcard-hint">{tm.cardHint}</span>
           ) : (
@@ -183,6 +183,11 @@ export function MixSection(props: { mix: PlanetMix; cls: BodyClass; onChange: (m
       </dl>
     </div>
   );
+}
+
+/** 格子的两套位置写成 CSS 变量，全表 / 紧凑由容器宽度（CSS 的容器查询）挑，不用 JS 量宽度 */
+function slotStyle(slot: TableSlot): Record<string, number> {
+  return { "--col": slot.col, "--row": slot.row, "--ccol": slot.ccol, "--crow": slot.crow };
 }
 
 function samePlace(a: { scope: MixScope; basis: MixBasis }, b: { scope: MixScope; basis: MixBasis }): boolean {
