@@ -14,15 +14,18 @@ import {
   seededDesign,
   selectPlanet,
   writableDesign,
+  eyeStyleOf,
+  EYE_SIZES,
 } from "./design.ts";
+import { isPlanetWriteRequest } from "../../../../shared/planet-design.ts";
 
 /** 意图系统的样子：主星烛霓 60 M⊕ + 三颗子智能体（地表都是插件出的无脸图） */
 const INTENT: WorkspacePlanets = {
-  main: { id: "main", name: "烛霓", massEarth: 60, composition: null, note: "故事", surface: "data:image/png;base64,AAA", flip: true, orbit: null, elements: null },
+  main: { id: "main", name: "烛霓", massEarth: 60, composition: null, note: "故事", surface: "data:image/png;base64,AAA", flip: true, orbit: null, elements: null, eyeStyle: null },
   planets: [
-    { id: "rec", name: "聆箴", massEarth: 2.2, composition: "rock", note: "会议", surface: "data:image/png;base64,BBB", flip: false, orbit: 19, elements: null },
-    { id: "eval", name: "衡璨", massEarth: 3, composition: "rock", note: null, surface: null, flip: false, orbit: 31, elements: { ring: true } },
-    { id: "mem", name: "银珀", massEarth: 1.6, composition: null, note: null, surface: null, flip: false, orbit: null, elements: null },
+    { id: "rec", name: "聆箴", massEarth: 2.2, composition: "rock", note: "会议", surface: "data:image/png;base64,BBB", flip: false, orbit: 19, elements: null, eyeStyle: "xl-white" },
+    { id: "eval", name: "衡璨", massEarth: 3, composition: "rock", note: null, surface: null, flip: false, orbit: 31, elements: { ring: true }, eyeStyle: "s" },
+    { id: "mem", name: "银珀", massEarth: 1.6, composition: null, note: null, surface: null, flip: false, orbit: null, elements: null, eyeStyle: null },
   ],
   warnings: [],
 };
@@ -71,6 +74,43 @@ describe("工作区 planet/ → 设计稿", () => {
     assert.equal(onlyPlanets.star?.mass, fallback.star?.mass);
     assert.equal(onlyPlanets.planets?.length, 3);
     assert.equal(designFromPlanets({ main: null, planets: [], warnings: [] }, fallback), fallback);
+  });
+});
+
+describe("眼睛样式（面板 DIY）", () => {
+  const design = designFromPlanets(INTENT, seededDesign("ws-intent"));
+
+  test("盘上设过的照盘上，没设过的不编一个（缺席），画的时候取默认「大」", () => {
+    assert.equal(design.star?.eyeStyle, undefined);
+    assert.deepEqual(design.planets?.map((p) => p.eyeStyle), ["xl-white", "s", undefined]);
+    assert.equal(eyeStyleOf(design.star), "l");
+    assert.equal(bodyArt(design, "star", 40).eyeStyle, "l");
+    assert.equal(bodyArt(selectPlanet(design, 1), "planet", 40).eyeStyle, "s");
+  });
+
+  test("没设过的默认是「大」：眼宽 = 大档几何，比小档大", () => {
+    const fresh = seededDesign("ws-new");
+    const art = bodyArt(fresh, "star", 40);
+    assert.equal(art.eyeStyle, "l");
+    assert.ok(Math.abs((art.eyes?.[0].w ?? 0) - EYE_SIZES.l.w * 40) < 1e-9);
+    const small = bodyArt({ ...fresh, star: { ...fresh.star, eyeStyle: "s" } }, "star", 40);
+    assert.ok((small.eyes?.[0].w ?? 0) < (art.eyes?.[0].w ?? 0));
+  });
+
+  test("白眼用特大的几何", () => {
+    const fresh = seededDesign("ws-new");
+    const white = bodyArt({ ...fresh, star: { ...fresh.star, eyeStyle: "xl-white" } }, "star", 40);
+    const xl = bodyArt({ ...fresh, star: { ...fresh.star, eyeStyle: "xl" } }, "star", 40);
+    assert.deepEqual(white.eyes, xl.eyes);
+    assert.equal(white.eyeStyle, "xl-white");
+  });
+
+  test("写回：设过的带上，没设过的不写（盘上原值不动）", () => {
+    const edited = { ...design, star: { ...(design.star as NonNullable<typeof design.star>), eyeStyle: "m" as const } };
+    const request = planetsWriteOf("ws-intent", edited);
+    assert.equal(request.main?.eyeStyle, "m");
+    assert.deepEqual(request.planets.map((p) => p.eyeStyle), ["xl-white", "s", undefined]);
+    assert.equal(isPlanetWriteRequest(request), true);
   });
 });
 

@@ -642,7 +642,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
       <OrbitChain key={`${layer}-${mover.id}`} mover={mover} layer={layer}>
         <Local box={square(mover.r * 1.6 + 2)}>
           <g className="gd-figure galaxy-planet-figure" data-planet={mover.id} data-composition={planet.composition} data-state={planet.state ?? undefined} data-r={mover.r.toFixed(1)}>
-            <BodyFigure art={bodyArt(planetFaceDesign(planet.composition, agent?.surface ?? null), "planet", mover.r)} uid={`${copyUid}-f`} />
+            <BodyFigure art={bodyArt(planetFaceDesign(planet.composition, agent?.surface ?? null, agent?.eyeStyle), "planet", mover.r)} uid={`${copyUid}-f`} />
           </g>
         </Local>
       </OrbitChain>

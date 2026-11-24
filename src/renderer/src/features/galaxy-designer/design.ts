@@ -10,7 +10,9 @@ import {
   type Composition,
 } from "../chat/galaxy.ts";
 import type { RightPanelKind } from "../../shell/RightRail.tsx";
-import type { PlanetWriteBody, PlanetWriteRequest, WorkspacePlanets } from "@shared/planet-design";
+import type { EyeStyle, PlanetWriteBody, PlanetWriteRequest, WorkspacePlanets } from "@shared/planet-design";
+// 值 import 走相对路径：node --test 解析不了 @shared 别名
+import { EYE_STYLE_DEFAULT } from "../../../../shared/planet-design.ts";
 
 /**
  * 星系设计面板（原型，proto/planet-designer）的纯内核：参数、校验、半径、2D 形象的几何、
@@ -74,6 +76,8 @@ export interface BodyDesign {
   surface?: SurfaceImage | null;
   /** 主星的一句故事 / 行星的职责（插件稿与伴随文件里来，只显示） */
   note?: string | null;
+  /** 眼睛样式（面板里 DIY，存进 planet/galaxy.json）；缺席 = 没设过，画成 EYE_STYLE_DEFAULT（大） */
+  eyeStyle?: EyeStyle;
 }
 
 export interface PlanetDesign extends BodyDesign {
@@ -241,6 +245,8 @@ export interface BodyArt {
   eyes: [Capsule, Capsule] | null;
   /** 双眼绕天体中心顺时针转的角度（度） */
   eyesTilt: number;
+  /** 眼睛样式（这颗天体设计稿里的，没设过取默认）：BodyFigure 据此决定白眼的填色与亮边宽 */
+  eyeStyle: EyeStyle;
   /** 卫星：behind 的先于天体画（被挡住一部分） */
   moons: (Circle & { behind: boolean })[];
   /** 整个形象的外框（含星环、卫星、日冕），预览用它判断会不会出框 */
@@ -255,33 +261,49 @@ export const RING = { rx: 1.7, ry: 0.3, tiltDeg: -8, width: 0.07 } as const;
 export const EYES = { x: 0.2, y: -0.1, w: 0.11, aspect: 2.5, tiltDeg: 12 } as const;
 
 /**
- * 眼睛尺寸的四档候选（2026-11-24 用户：「眼睛太小了，感觉不可爱。你看看 grok bot 的」）：s = 现在（眼高约直径的 14%），
+ * 眼睛尺寸的四档（2026-11-24 用户：「眼睛太小了，感觉不可爱。你看看 grok bot 的」，之后「开放一个选项可 diy 吧」）：s = 最早的尺寸（眼高约直径的 14%），
  * 往 grok bot 的方向放大——l 档眼高约直径的 30%、两眼间距约一只眼宽；长宽比守提示词的 2.2–2.8。
  * 眼睛越大，整双眼的中心越往下挪一点（不顶到天体上缘），歪头的倾角收一点（大眼睛转 12° 两眼高低差太明显）。
  * 「白眼」（xl 的几何 + 浅色填充）在规则外，只供讨论。
  */
 export type EyeSize = "s" | "m" | "l" | "xl";
-export const EYE_SIZES: Readonly<Record<EyeSize, { x: number; y: number; w: number; aspect: number; tiltDeg: number }>> = {
-  s: EYES,
-  m: { x: 0.2, y: -0.09, w: 0.17, aspect: 2.5, tiltDeg: 10 },
-  l: { x: 0.24, y: -0.08, w: 0.24, aspect: 2.5, tiltDeg: 8 },
-  xl: { x: 0.27, y: -0.06, w: 0.28, aspect: 2.5, tiltDeg: 8 },
+/**
+ * ringRy：这一档配的星环纵半轴（单位 = 天体半径）。眼睛大了下缘更低，星环前半要再开一点才能照旧从两眼下面绕过去
+ * （规则：星环不压眼睛），l / xl 的环看起来更「俯视」一些。
+ */
+export const EYE_SIZES: Readonly<Record<EyeSize, { x: number; y: number; w: number; aspect: number; tiltDeg: number; ringRy: number }>> = {
+  s: { ...EYES, ringRy: 0.3 },
+  m: { x: 0.2, y: -0.09, w: 0.17, aspect: 2.5, tiltDeg: 10, ringRy: 0.3 },
+  l: { x: 0.24, y: -0.08, w: 0.24, aspect: 2.5, tiltDeg: 8, ringRy: 0.42 },
+  xl: { x: 0.27, y: -0.06, w: 0.28, aspect: 2.5, tiltDeg: 8, ringRy: 0.56 },
 };
 
-/** 换眼睛尺寸（只动 eyes / eyesTilt；没开眼睛的形象原样返回）。s 返回原对象 */
-export function withEyeSize(art: BodyArt, size: EyeSize): BodyArt {
-  if (art.eyes === null || size === "s") return art;
-  const geo = EYE_SIZES[size];
-  const w = Math.max(geo.w * art.r, EYE_MIN);
-  const h = w * geo.aspect;
-  return {
-    ...art,
-    eyes: [
-      { x: -geo.x * art.r, y: geo.y * art.r, w, h },
-      { x: geo.x * art.r, y: geo.y * art.r, w, h },
-    ],
-    eyesTilt: geo.tiltDeg,
-  };
+/** 样式 → 几何档：白眼用特大的几何 */
+export function eyeSizeOf(style: EyeStyle): EyeSize {
+  return style === "xl-white" ? "xl" : style;
+}
+
+/** 一颗天体实际画的眼睛样式：设计稿里没设过的取默认（大） */
+export function eyeStyleOf(body: Pick<BodyDesign, "eyeStyle"> | null | undefined): EyeStyle {
+  return body?.eyeStyle ?? EYE_STYLE_DEFAULT;
+}
+
+/** 一只胶囊眼（歪头后）的中轴线段与半宽：纹理避让与测试都按它量 */
+export function eyeSegment(eye: Capsule, tiltDeg: number): { a: { x: number; y: number }; b: { x: number; y: number }; pad: number } {
+  const t = (tiltDeg * Math.PI) / 180;
+  const c = tiltedCenter(eye, tiltDeg);
+  const half = eye.h / 2 - eye.w / 2;
+  const dx = -Math.sin(t) * half;
+  const dy = Math.cos(t) * half;
+  return { a: { x: c.x - dx, y: c.y - dy }, b: { x: c.x + dx, y: c.y + dy }, pad: eye.w / 2 };
+}
+
+function segmentDistance(p: { x: number; y: number }, seg: ReturnType<typeof eyeSegment>): number {
+  const vx = seg.b.x - seg.a.x;
+  const vy = seg.b.y - seg.a.y;
+  const len = vx * vx + vy * vy;
+  const k = len === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - seg.a.x) * vx + (p.y - seg.a.y) * vy) / len));
+  return Math.hypot(p.x - seg.a.x - k * vx, p.y - seg.a.y - k * vy);
 }
 
 /**
@@ -317,22 +339,30 @@ export function bodyArt(design: GalaxyDesign, kind: BodyKind, r: number): BodyAr
   const surface: BodyArt["surface"] = design.planet !== null && kind === "planet" ? design.planet.composition : "star";
   const image = body.surface ?? null;
   const textured = image === null;
+  const eyeStyle = eyeStyleOf(body);
+  const geo = EYE_SIZES[eyeSizeOf(eyeStyle)];
   const ring = on("ring")
     ? {
-        back: halfEllipse(RING.rx * r, RING.ry * r, "back"),
-        front: halfEllipse(RING.rx * r, RING.ry * r, "front"),
+        back: halfEllipse(RING.rx * r, geo.ringRy * r, "back"),
+        front: halfEllipse(RING.rx * r, geo.ringRy * r, "front"),
         width: Math.max(RING.width * r, 1.5),
         tilt: RING.tiltDeg,
       }
     : null;
-  const eyeW = Math.max(EYES.w * r, EYE_MIN);
-  const eyeH = eyeW * EYES.aspect;
+  const eyeW = Math.max(geo.w * r, EYE_MIN);
+  const eyeH = eyeW * geo.aspect;
   const eyes: [Capsule, Capsule] | null = on("eyes")
     ? [
-        { x: -EYES.x * r, y: EYES.y * r, w: eyeW, h: eyeH },
-        { x: EYES.x * r, y: EYES.y * r, w: eyeW, h: eyeH },
+        { x: -geo.x * r, y: geo.y * r, w: eyeW, h: eyeH },
+        { x: geo.x * r, y: geo.y * r, w: eyeW, h: eyeH },
       ]
     : null;
+  // 纹理（坑、极冠裂纹、纬向带、云带）不压眼睛：眼睛大了，压到的那几笔不画（s 档的位置本来就避开了）
+  const segments = eyes === null ? [] : eyes.map((eye) => eyeSegment(eye, geo.tiltDeg));
+  const eyeTop = Math.min(...segments.flatMap((seg) => [seg.a.y, seg.b.y].map((y) => y - seg.pad))) - 1;
+  const eyeBottom = Math.max(...segments.flatMap((seg) => [seg.a.y, seg.b.y].map((y) => y + seg.pad))) + 1;
+  const clearOfEyes = (c: Circle): boolean => segments.every((seg) => segmentDistance(c, seg) > c.r + seg.pad);
+  const clearRow = (y: number, h: number): boolean => segments.length === 0 || y + h < eyeTop || y > eyeBottom;
   const moons = on("moons")
     ? [
         { x: 1.42 * r, y: -0.62 * r, r: Math.max(0.17 * r, 3), behind: false },
@@ -340,7 +370,7 @@ export function bodyArt(design: GalaxyDesign, kind: BodyKind, r: number): BodyAr
       ]
     : [];
   const corona = on("corona") ? { r: 1.14 * r, halo: 1.32 * r } : null;
-  const craters =
+  const craters = (
     textured && surface === "rock"
       ? [
           { x: -0.46 * r, y: -0.42 * r, r: 0.13 * r },
@@ -348,7 +378,8 @@ export function bodyArt(design: GalaxyDesign, kind: BodyKind, r: number): BodyAr
           { x: 0.58 * r, y: -0.24 * r, r: 0.08 * r },
           { x: -0.34 * r, y: 0.56 * r, r: 0.07 * r },
         ]
-      : [];
+      : []
+  ).filter(clearOfEyes);
   const cap = textured && surface === "ice" ? { cx: 0, cy: -0.8 * r, rx: 0.6 * r, ry: 0.24 * r } : null;
   const cracks =
     textured && surface === "ice"
@@ -357,7 +388,7 @@ export function bodyArt(design: GalaxyDesign, kind: BodyKind, r: number): BodyAr
           `M${round2(-0.62 * r)} ${round2(0.16 * r)}L${round2(-0.46 * r)} ${round2(0.32 * r)}L${round2(-0.52 * r)} ${round2(0.54 * r)}`,
         ]
       : [];
-  const bands =
+  const bands = (
     textured && surface === "gas"
       ? [
           { y: -0.66 * r, h: 0.1 * r },
@@ -365,13 +396,16 @@ export function bodyArt(design: GalaxyDesign, kind: BodyKind, r: number): BodyAr
           { y: 0.34 * r, h: 0.1 * r },
           { y: 0.58 * r, h: 0.12 * r },
         ]
-      : [];
-  const clouds = on("clouds")
-    ? [
-        { x: -0.62 * r, y: -0.58 * r, w: 0.7 * r, h: 0.1 * r },
-        { x: -0.05 * r, y: 0.44 * r, w: 0.66 * r, h: 0.1 * r },
-      ]
-    : [];
+      : []
+  ).filter((band) => clearRow(band.y, band.h));
+  const clouds = (
+    on("clouds")
+      ? [
+          { x: -0.62 * r, y: -0.58 * r, w: 0.7 * r, h: 0.1 * r },
+          { x: -0.05 * r, y: 0.44 * r, w: 0.66 * r, h: 0.1 * r },
+        ]
+      : []
+  ).filter((cloud) => clearRow(cloud.y, cloud.h));
   let ex = corona?.halo ?? r;
   let ey = corona?.halo ?? r;
   if (ring !== null) {
@@ -382,7 +416,7 @@ export function bodyArt(design: GalaxyDesign, kind: BodyKind, r: number): BodyAr
     ex = Math.max(ex, Math.abs(moon.x) + moon.r);
     ey = Math.max(ey, Math.abs(moon.y) + moon.r);
   }
-  return { r, image, surface, corona, ring, craters, cap, cracks, bands, clouds, eyes, eyesTilt: EYES.tiltDeg, moons, extent: { x: ex, y: ey } };
+  return { r, image, surface, corona, ring, craters, cap, cracks, bands, clouds, eyes, eyesTilt: geo.tiltDeg, eyeStyle, moons, extent: { x: ex, y: ey } };
 }
 
 /**
@@ -404,13 +438,13 @@ export function tiltedCenter(eye: Pick<Capsule, "x" | "y">, tiltDeg: number): { 
 }
 
 /** 星环前半上的采样点（已按 tilt 旋转）：测试用它证明星环从两眼下面绕过去 */
-export function ringFrontPoints(r: number, samples = 48): { x: number; y: number }[] {
+export function ringFrontPoints(r: number, samples = 48, ry: number = RING.ry): { x: number; y: number }[] {
   const tilt = (RING.tiltDeg * Math.PI) / 180;
   const points: { x: number; y: number }[] = [];
   for (let i = 0; i <= samples; i++) {
     const theta = (Math.PI * i) / samples;
     const x = -Math.cos(theta) * RING.rx * r;
-    const y = Math.sin(theta) * RING.ry * r;
+    const y = Math.sin(theta) * ry * r;
     points.push({ x: x * Math.cos(tilt) - y * Math.sin(tilt), y: x * Math.sin(tilt) + y * Math.cos(tilt) });
   }
   return points;
@@ -494,11 +528,11 @@ export function defaultDesign(workspaceId: string, level: Exclude<DesignLevel, "
  * 星系规则「主星与行星的大小差距应缩小到行星表情可读的程度」——页面上每颗行星都画成带两只竖胶囊眼的小天体，
  * 不再是一个素圆点；星环、云带、卫星在十来个像素上只会糊，不开。
  */
-export function planetFaceDesign(composition: Composition, surface: SurfaceImage | null = null): CompleteDesign {
+export function planetFaceDesign(composition: Composition, surface: SurfaceImage | null = null, eyeStyle?: EyeStyle): CompleteDesign {
   return {
     editing: "planet",
     star: defaultStar(),
-    planet: { name: "", mass: 6, composition, orbitRadius: 22, zoom: ZOOM_DEFAULT.planet, elements: { ...ALL_OFF, eyes: true }, surface },
+    planet: { name: "", mass: 6, composition, orbitRadius: 22, zoom: ZOOM_DEFAULT.planet, elements: { ...ALL_OFF, eyes: true }, surface, ...(eyeStyle === undefined ? {} : { eyeStyle }) },
     backdrop: "muted",
   };
 }
@@ -605,6 +639,7 @@ export function designFromPlanets(data: WorkspacePlanets, fallback: GalaxyDesign
           zoom: ZOOM_DEFAULT.star,
           surface: main.surface === null ? null : { src: main.surface, flip: main.flip },
           note: main.note,
+          ...(main.eyeStyle === null ? {} : { eyeStyle: main.eyeStyle }),
         };
   if (star === null) return fallback;
   const planets: PlanetDesign[] = data.planets.map((body, index) => ({
@@ -617,6 +652,7 @@ export function designFromPlanets(data: WorkspacePlanets, fallback: GalaxyDesign
     zoom: ZOOM_DEFAULT.planet,
     surface: body.surface === null ? null : { src: body.surface, flip: body.flip },
     note: body.note,
+    ...(body.eyeStyle === null ? {} : { eyeStyle: body.eyeStyle }),
   }));
   return { editing: "star", star, planet: planets[0] ?? null, planets, planetIndex: 0, backdrop: fallback.backdrop };
 }
@@ -629,6 +665,7 @@ function writeBody(id: string, body: BodyDesign, composition: Composition | null
     composition,
     orbit,
     elements: { ...body.elements },
+    ...(body.eyeStyle === undefined ? {} : { eyeStyle: body.eyeStyle }),
   };
 }
 

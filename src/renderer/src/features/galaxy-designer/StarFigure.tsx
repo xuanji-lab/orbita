@@ -1,7 +1,6 @@
 import "./galaxy-designer.css";
 import { useEffect, useId, useState } from "react";
-import { avatarScale, bodyArt, displayRadius, ELEMENTS_OF, eyeRimWidth, radiusOf, withEyeSize, withStar, type BodyArt, type EyeSize, type GalaxyDesign } from "./design.ts";
-import { useProtoVariants } from "../chat/proto-variants-store.ts";
+import { avatarScale, bodyArt, displayRadius, ELEMENTS_OF, eyeRimWidth, eyeSizeOf, radiusOf, withStar, type BodyArt, type GalaxyDesign } from "./design.ts";
 
 /**
  * 「画主星 / 画头像」的纯组件：输入一份设计稿，输出画面——不读仓库、不读设置、不带动效，同一份稿永远画出同一张图。
@@ -138,11 +137,10 @@ function useSurfaceDark(src: string | null): boolean {
 const IMAGE_OVERSCAN = 1.04;
 
 export function BodyFigure(props: { art: BodyArt; uid: string }) {
-  // 眼睛尺寸候选（proto-variants 的 eyes）：所有形象（侧栏、页头、星系、设计面板）都经过这里，一处换全换
-  const eyesVariant = useProtoVariants().eyes;
-  const eyeSize: EyeSize = eyesVariant === "xl-white" ? "xl" : eyesVariant;
-  const white = eyesVariant === "xl-white";
-  const art = withEyeSize(props.art, eyeSize);
+  // 眼睛样式来自这颗天体的设计稿（bodyArt 已按它换好几何）：侧栏、页头、星系、右栏星系图、设计面板同源
+  const eyeSize = eyeSizeOf(props.art.eyeStyle);
+  const white = props.art.eyeStyle === "xl-white";
+  const art = props.art;
   const { uid } = props;
   const clip = `${uid}-clip`;
   const light = `${uid}-light`;

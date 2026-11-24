@@ -44,7 +44,8 @@ import type { DesignerFocus } from "../chat/galaxy-actions.ts";
 import { useGalaxyTilt } from "../chat/galaxy-tilt.ts";
 import { useProtoVariants } from "../chat/proto-variants-store.ts";
 import { nameOrderOf } from "../chat/proto-variants.ts";
-import { storyLineOf } from "./design.ts";
+import { eyeStyleOf, storyLineOf } from "./design.ts";
+import { EYE_STYLES, type EyeStyle } from "@shared/planet-design";
 import { BodyFigure } from "./StarFigure.tsx";
 import { flatStage, ORBIT_BOX, orbitStage, previewPlan, starStage, type GridLine, type WellBox } from "./well.ts";
 
@@ -334,6 +335,31 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null }) 
                 </span>
               </Row>
             ))}
+            {/* 眼睛样式：每颗天体自己 DIY（存进 planet/galaxy.json）；关了眼睛就不显示这一行 */}
+            {body.elements.eyes && (
+              <Row name={tg.eyeStyle} desc={tg.eyeStyleDesc} wide>
+                <span className="gd-eye-style" data-field="eye-style">
+                  <Segmented<EyeStyle>
+                    label={tg.eyeStyle}
+                    value={eyeStyleOf(body)}
+                    options={EYE_STYLES.map((style) => ({
+                      value: style,
+                      title: style === "xl-white" ? tg.eyeOffRuleTip : undefined,
+                      label:
+                        style === "xl-white" ? (
+                          <>
+                            {tg.eyeStyles[style]}
+                            <span className="gd-off-rule">{tg.eyeOffRule}</span>
+                          </>
+                        ) : (
+                          tg.eyeStyles[style]
+                        ),
+                    }))}
+                    onChange={(eyeStyle) => patchBody({ eyeStyle })}
+                  />
+                </span>
+              </Row>
+            )}
 
             <PanelGroupHead label={tg.previewGroup} />
             <Row

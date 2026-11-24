@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { agentNameVariantOf, avatarVariantOf, eyesVariantOf, mergeVariants, nameOrderOf, orbitEVariantOf, rowLabelOf, wsTitleVariantOf } from "./proto-variants.ts";
+import { agentNameVariantOf, avatarVariantOf, mergeVariants, nameOrderOf, orbitEVariantOf, rowLabelOf, wsTitleVariantOf } from "./proto-variants.ts";
 
 describe("编排工作区页候选版式", () => {
   test("地址参数：title=both 才是带大标题的第一版，其余（含缺省、坏值）都是页头版（默认）", () => {
@@ -13,25 +13,23 @@ describe("编排工作区页候选版式", () => {
     for (const search of ["", "?avatar=seeded", "?avatar=x", "?title=header"]) assert.equal(avatarVariantOf(search), "seeded");
   });
   test("运行时切换：只认合法值，坏值忽略，没给的保持", () => {
-    const rest = { orbitE: "0.3", eyes: "s" } as const;
+    const rest = { orbitE: "0.3" } as const;
     const base = { title: "header", avatar: "seeded", agentName: "off", ...rest } as const;
     assert.deepEqual(mergeVariants(base, { title: "both" }), { title: "both", avatar: "seeded", agentName: "off", ...rest });
     assert.deepEqual(mergeVariants(base, { avatar: "same", title: "x" }), { title: "header", avatar: "same", agentName: "off", ...rest });
     assert.deepEqual(mergeVariants({ ...base, avatar: "same", agentName: "on" }, {}), { title: "header", avatar: "same", agentName: "on", ...rest });
     assert.equal(mergeVariants(base, { orbitE: "0.45" }).orbitE, "0.45");
     assert.equal(mergeVariants(base, { orbitE: 0.45 }).orbitE, "0.3");
-    assert.equal(mergeVariants(base, { eyes: "xl-white" }).eyes, "xl-white");
-    assert.equal(mergeVariants(base, { eyes: "huge" }).eyes, "s");
+    // 眼睛不再是临时开关（进了设计面板）：传 eyes 不改任何东西
+    const stale: Record<string, unknown> = { eyes: "xl" };
+    assert.deepEqual(mergeVariants(base, stale), base);
     assert.equal(mergeVariants(base, { agentName: "on" }).agentName, "on");
     assert.equal(mergeVariants(base, { agentName: "yes" }).agentName, "off");
   });
-  test("偏心率与眼睛候选：地址里给合法值才用，缺省是 0.3 与 s（现在的眼睛）", () => {
+  test("偏心率候选：地址里给合法值才用，缺省是 0.3", () => {
     assert.equal(orbitEVariantOf(""), "0.3");
     assert.equal(orbitEVariantOf("?orbitE=0.15"), "0.15");
     assert.equal(orbitEVariantOf("?orbitE=0.9"), "0.3");
-    assert.equal(eyesVariantOf(""), "s");
-    assert.equal(eyesVariantOf("?eyes=l"), "l");
-    assert.equal(eyesVariantOf("?eyes=L"), "s");
   });
   test("侧栏名字候选：默认只写工作区名；开了写「智能体名 · 工作区名」，没起名 / 同名时照旧", () => {
     assert.equal(agentNameVariantOf(""), "off");

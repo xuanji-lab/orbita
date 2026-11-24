@@ -14,30 +14,17 @@
 /*
  * - orbitE（缺省 "0.3"，2026-11-24 用户「这个轨道不够椭圆」）：编排页星系的开普勒偏心率三档 0.15 / 0.3 / 0.45。
  *   window.orbitaProto.set({ orbitE: "0.45" })；单智能体首页与编排页一起换
- * - eyes（缺省 "s" = 现在的尺寸，等用户和肖志锋挑）：形象的眼睛四档 s / m / l / xl，外加 xl-white
- *   （规则外的白眼，供讨论）。侧栏头像、页头、星系、设计面板一起换。window.orbitaProto.set({ eyes: "l" })
  */
 export type OrbitEVariant = "0.15" | "0.3" | "0.45";
-export type EyesVariant = "s" | "m" | "l" | "xl" | "xl-white";
 export const ORBIT_E_VARIANTS: readonly OrbitEVariant[] = ["0.15", "0.3", "0.45"];
-export const EYES_VARIANTS: readonly EyesVariant[] = ["s", "m", "l", "xl", "xl-white"];
 
 function isOrbitE(value: unknown): value is OrbitEVariant {
   return typeof value === "string" && (ORBIT_E_VARIANTS as readonly string[]).includes(value);
 }
 
-function isEyes(value: unknown): value is EyesVariant {
-  return typeof value === "string" && (EYES_VARIANTS as readonly string[]).includes(value);
-}
-
 export function orbitEVariantOf(search: string): OrbitEVariant {
   const value = new URLSearchParams(search).get("orbitE");
   return isOrbitE(value) ? value : "0.3";
-}
-
-export function eyesVariantOf(search: string): EyesVariant {
-  const value = new URLSearchParams(search).get("eyes");
-  return isEyes(value) ? value : "s";
 }
 
 export type WsTitleVariant = "both" | "header";
@@ -49,7 +36,6 @@ export interface ProtoVariants {
   avatar: AvatarVariant;
   agentName: AgentNameVariant;
   orbitE: OrbitEVariant;
-  eyes: EyesVariant;
 }
 
 export function agentNameVariantOf(search: string): AgentNameVariant {
@@ -87,6 +73,5 @@ export function mergeVariants(current: ProtoVariants, patch: Partial<Record<keyo
     avatar: patch.avatar === "same" || patch.avatar === "seeded" ? patch.avatar : current.avatar,
     agentName: patch.agentName === "on" || patch.agentName === "off" ? patch.agentName : current.agentName,
     orbitE: isOrbitE(patch.orbitE) ? patch.orbitE : current.orbitE,
-    eyes: isEyes(patch.eyes) ? patch.eyes : current.eyes,
   };
 }

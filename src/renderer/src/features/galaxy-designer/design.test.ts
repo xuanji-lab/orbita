@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EYE_STYLES } from "../../../../shared/planet-design.ts";
 import { readFileSync } from "node:fs";
 import { orbitStage, previewPlan } from "./well.ts";
 import { describe, test } from "node:test";
@@ -20,9 +21,9 @@ import { storyLineOf,
   ELEMENTS_OF,
   errorsAt,
   EYE_MIN,
-  EYES,
   eyeRimWidth,
-  withEyeSize,
+  EYE_SIZES,
+  eyeSizeOf,
   tiltedCenter,
   keepDesignerAcrossSessions,
   LONG_NAME,
@@ -233,12 +234,12 @@ describe("元素组合与 2D 形象", () => {
     }
   });
 
-  test("眼睛四档（s 现在 → xl）：一档比一档大；l 档眼高约直径的 30%、两眼间距约一只眼宽；各档都守 2.2–2.8 的长宽比、在天体里、左眼略高", () => {
+  test("眼睛四档（s 最早的尺寸 → xl）：一档比一档大；l 档眼高约直径的 30%、两眼间距约一只眼宽；各档都守 2.2–2.8 的长宽比、在天体里、左眼略高", () => {
     const design = legal();
     const heights: number[] = [];
     for (const size of ["s", "m", "l", "xl"] as const) {
       for (const r of [8, 12, 30, 48]) {
-        const art = withEyeSize(bodyArt(design, "planet", r), size);
+        const art = bodyArt({ ...design, planet: { ...design.planet, eyeStyle: size } }, "planet", r);
         assert.ok(art.eyes !== null);
         const [left, right] = art.eyes;
         for (const eye of art.eyes) {
@@ -263,16 +264,17 @@ describe("元素组合与 2D 形象", () => {
       }
     }
     for (let i = 1; i < heights.length; i++) assert.ok((heights[i] ?? 0) > (heights[i - 1] ?? 0));
-    // s 档原样（默认不变）；没开眼睛的形象原样；亮边：s 照旧 0.45 眼宽，放大档封顶不描粗圈
+    // 没设过 = 大档；亮边：s 照旧 0.45 眼宽，放大档封顶不描粗圈
     const plain = bodyArt(design, "planet", 30);
-    assert.equal(withEyeSize(plain, "s"), plain);
+    assert.equal(plain.eyeStyle, "l");
+    assert.deepEqual(plain.eyes, bodyArt({ ...design, planet: { ...design.planet, eyeStyle: "l" } }, "planet", 30).eyes);
     assert.equal(eyeRimWidth(2, 30, "s"), 0.9);
     assert.ok(eyeRimWidth(0.28 * 48, 48, "xl") <= 48 * 0.045 + 1e-9);
   });
 
   test("任何天体、成分、元素组合都没有嘴：形象里只有眼睛，没有 mouth / nose / blush / 四肢之类的图形", () => {
     // image 是地表贴图（无脸地表），不是五官：眼睛照旧只由 eyes 画
-    const allowed = ["r", "image", "surface", "corona", "ring", "craters", "cap", "cracks", "bands", "clouds", "eyes", "eyesTilt", "moons", "extent"].sort();
+    const allowed = ["r", "image", "surface", "corona", "ring", "craters", "cap", "cracks", "bands", "clouds", "eyes", "eyesTilt", "eyeStyle", "moons", "extent"].sort();
     const base = defaultDesign(WS_A, "bare");
     for (let mask = 0; mask < 32; mask++) {
       const elements = { eyes: (mask & 1) > 0, ring: (mask & 2) > 0, clouds: (mask & 4) > 0, moons: (mask & 8) > 0, corona: (mask & 16) > 0 };
@@ -337,22 +339,26 @@ describe("元素组合与 2D 形象", () => {
     for (const value of [light, graphite, black]) assert.ok(luminance(value) < 0.02, `${value} 亮度 ${luminance(value)}`);
   });
 
-  test("星环前半从两眼下面绕过去：两眼横向范围内，星环比眼睛低", () => {
-    for (const r of [16, 30, 80]) {
-      const art = bodyArt(legal(), "planet", r);
-      assert.ok(art.eyes !== null);
-      const eyesBottom = Math.max(...art.eyes.map((eye) => tiltedCenter(eye, art.eyesTilt).y + eye.h / 2));
-      const front = ringFrontPoints(r).filter((p) => Math.abs(p.x) <= (EYES.x + EYES.w) * r * 1.1);
-      assert.ok(front.length > 0);
-      for (const p of front) assert.ok(p.y > eyesBottom + 0.05 * r, `r=${r} 环 ${p.y} 眼 ${eyesBottom}`);
+  test("星环前半从两眼下面绕过去：五种眼睛样式下，两眼横向范围内星环都比眼睛低", () => {
+    for (const style of EYE_STYLES) {
+      const geo = EYE_SIZES[eyeSizeOf(style)];
+      for (const r of [16, 30, 80]) {
+        const design = legal();
+        const art = bodyArt({ ...design, planet: { ...design.planet, eyeStyle: style } }, "planet", r);
+        assert.ok(art.eyes !== null);
+        const eyesBottom = Math.max(...art.eyes.map((eye) => tiltedCenter(eye, art.eyesTilt).y + eye.h / 2));
+        const front = ringFrontPoints(r, 48, geo.ringRy).filter((p) => Math.abs(p.x) <= (geo.x + geo.w) * r * 1.1);
+        assert.ok(front.length > 0);
+        for (const p of front) assert.ok(p.y > eyesBottom + 0.05 * r, `${style} r=${r} 环 ${p.y} 眼 ${eyesBottom}`);
+      }
     }
   });
 
-  test("纹理、云带、卫星都不压在眼睛上；小行星的眼睛也不小于 EYE_MIN", () => {
+  test("纹理、云带、卫星都不压在眼睛上（五种眼睛样式）；小行星的眼睛也不小于 EYE_MIN", () => {
     const full = defaultDesign(WS_A, "full");
     const r = displayRadius(bodyRadius(PLANET_MASS.min, DENSITY.rock));
-    for (const composition of ["rock", "ice", "gas"] as const) {
-      const art = bodyArt({ ...full, planet: { ...full.planet, composition, mass: PLANET_MASS.min } }, "planet", r);
+    for (const [composition, eyeStyle] of (["rock", "ice", "gas"] as const).flatMap((c) => EYE_STYLES.map((e) => [c, e] as const))) {
+      const art = bodyArt({ ...full, planet: { ...full.planet, composition, mass: PLANET_MASS.min, eyeStyle } }, "planet", r);
       assert.ok(art.eyes !== null);
       // 每只眼睛 = 一条线段（胶囊的中轴，歪头后）加半宽 w/2；纹理离中轴的距离都要大于它自己的半径 + w/2
       const t = (art.eyesTilt * Math.PI) / 180;
