@@ -13,6 +13,8 @@
  * 质量单位同 planet-design：盘上 M⊕。
  */
 
+import { checkSystem, LEGACY_ORBIT_E, LEGACY_ORBIT_OMEGA_DEG, type OrbitSpec } from "./orbit-physics.ts";
+
 export const SUB_AGENTS_DIR = "agents";
 export const SUB_AGENT_FILE = "agent.json";
 export const SUB_AGENT_VERSION = 1;
@@ -277,6 +279,33 @@ export function defaultSubAgentOrbit(existing: readonly number[]): number {
     }
   }
   return best;
+}
+
+/**
+ * 新行星的硬合法空轨：先找靠近旧默认槽位的候选，再按 0.5 步长向两边找。
+ * 只看新行星涉及的冲突（旧稿本身的红区仍交给面板修），找不到返回 null，调用方不得先落档案。
+ */
+export function findSubAgentOrbit(
+  starMassEarth: number | null,
+  existing: readonly { massEarth: number | null; orbit: number | null; eccentricity?: number; periapsisDeg?: number }[],
+  newMassEarth: number,
+): number | null {
+  const star = starMassEarth !== null && Number.isFinite(starMassEarth) && starMassEarth > 0 ? starMassEarth : STAR_MASS_EARTH_FLOOR;
+  const planets: OrbitSpec[] = existing.map((planet, index) => ({
+    mass: planet.massEarth ?? SUB_AGENT_MASS_DEFAULT,
+    a: planet.orbit ?? 19 + 12 * index,
+    e: planet.eccentricity ?? LEGACY_ORBIT_E,
+    omegaDeg: planet.periapsisDeg ?? LEGACY_ORBIT_OMEGA_DEG,
+  }));
+  const preferred = defaultSubAgentOrbit(planets.map((planet) => planet.a));
+  const candidates = Array.from({ length: 97 }, (_, index) => 4 + index * 0.5).sort((a, b) => Math.abs(a - preferred) - Math.abs(b - preferred) || a - b);
+  for (const a of candidates) {
+    const next = [...planets, { mass: newMassEarth, a, e: 0, omegaDeg: LEGACY_ORBIT_OMEGA_DEG }];
+    const checked = checkSystem({ mass: star }, next);
+    const self = next.length - 1;
+    if (checked.warnings.every((warning) => warning.level !== "red" || (warning.innerIndex !== self && warning.outerIndex !== self))) return a;
+  }
+  return null;
 }
 
 // ── IPC（面板）与 agent 工具的载荷 ─────────────────────────────────────

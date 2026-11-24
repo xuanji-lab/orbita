@@ -113,12 +113,12 @@ describe("局部放大版式（loupe）", () => {
     }
   });
 
-  test("轨道变远，场景里的小行星跟着挪，引线起点跟着走", () => {
+  test("轨道变远，场景里的小行星跟着挪，引线起点跟着走（椭圆有朝向，比较离主星的距离而不是只看 x）", () => {
     const frame = loupeFrame(288);
     const at = (orbitRadius: number): number => {
       const stage = orbitStage(planetDesign({ orbitRadius }), 34, { box: frame.scene, ...LOUPE_VIEW.side });
       assert.ok(stage !== null && stage.planet !== null);
-      return stage.planet.x;
+      return Math.hypot(stage.planet.x - stage.star.x, stage.planet.y - stage.star.y);
     };
     assert.ok(at(ORBIT_RANGE.max) > at(24) + 10);
   });

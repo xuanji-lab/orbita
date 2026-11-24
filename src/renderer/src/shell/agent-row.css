@@ -265,3 +265,20 @@
   text-overflow: ellipsis;
   padding-right: var(--space-1);
 }
+
+/* 联星标记（BinaryMark）：主星头像右下角一颗小伴星，面板底色描边与头像隔开 */
+.agent-binary {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+.agent-binary-mark {
+  position: absolute;
+  right: calc(var(--space-1) * -1);
+  bottom: calc(var(--space-1) * -1);
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--color-bg-sidebar);
+  box-shadow: 0 0 0 1px var(--color-bg-sidebar);
+}

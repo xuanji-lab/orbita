@@ -128,6 +128,8 @@ export interface Mover {
   /** 轨道偏心率（0 = 正圆） */
   ecc: number;
   omega: number;
+  /** 轨道面内近日点方向（rad），仅行星有；rocks 为 0 */
+  periapsis: number;
   /** 屏幕半径（px），公转中不变 */
   r: number;
   waiting: boolean;
@@ -136,23 +138,24 @@ export interface Mover {
 }
 
 export function moversOf(layout: GalaxyLayout, camera: Camera, vp: Viewport, minPlanetPx: number, rockPx: number): Mover[] {
-  const far = farWindow(layout.ecc, camera.azimuth, FAR_MARGIN);
   const movers: Mover[] = layout.planets.map((planet) => ({
     id: planet.id,
     kind: "planet",
-    frame: orbitFrame(planet.orbitRadius, planet.inclination, planet.node, camera, vp, layout.ecc),
+    frame: orbitFrame(planet.orbitRadius, planet.inclination, planet.node, camera, vp, planet.ecc, planet.periapsis),
     phase: planet.phase,
-    ecc: layout.ecc,
+    ecc: planet.ecc,
     omega: planet.omega,
+    periapsis: planet.periapsis,
     r: planetPx(planet.radius, planet.state === "waiting", camera, vp, minPlanetPx),
     waiting: planet.state === "waiting",
-    far,
+    far: farWindow(planet.ecc, camera.azimuth + planet.periapsis, FAR_MARGIN),
   }));
   if (layout.rockOrbit !== null) {
     const frame = orbitFrame(layout.rockOrbit, 0, 0, camera, vp, layout.ecc);
     const omega = angularSpeed(layout.rockOrbit);
+    const far = farWindow(layout.ecc, camera.azimuth, FAR_MARGIN);
     for (const rock of layout.rocks) {
-      movers.push({ id: rock.id, kind: "rock", frame, phase: rock.theta0, ecc: layout.ecc, omega, r: rockPx, waiting: rock.state === "waiting", far });
+      movers.push({ id: rock.id, kind: "rock", frame, phase: rock.theta0, ecc: layout.ecc, omega, periapsis: 0, r: rockPx, waiting: rock.state === "waiting", far });
     }
   }
   return movers;

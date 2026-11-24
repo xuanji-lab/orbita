@@ -39,6 +39,20 @@ describe("伴随文件 planet/galaxy.json 的解析", () => {
     assert.equal(parsed.planets.length, PLANET_AGENTS_MAX);
   });
 
+  it("每颗自己的 e / ω 读写得回来；旧稿缺字段保持 undefined，坏值丢掉", () => {
+    const body = { id: "rec", name: "聆箴", massEarth: 2.2, composition: "rock" as const, orbit: 24, elements: { eyes: true } };
+    const parsed = parseCompanion({ planets: [{ id: "rec", orbit: 19, eccentricity: 0.25, periapsisDeg: 135 }, { id: "bad", eccentricity: 0.9, periapsisDeg: -2 }] });
+    assert.equal(parsed.planets[0]?.eccentricity, 0.25);
+    assert.equal(parsed.planets[0]?.periapsisDeg, 135);
+    assert.equal(parsed.planets[1]?.eccentricity, undefined);
+    assert.equal(parsed.planets[1]?.periapsisDeg, undefined);
+    const next = mergeCompanion(parsed, { main: null, planets: [{ ...body, eccentricity: 0.4, periapsisDeg: 280 }] }, { main: false, planets: new Set() });
+    assert.equal(next.planets[0]?.eccentricity, 0.4);
+    assert.equal(next.planets[0]?.periapsisDeg, 280);
+    assert.equal(isPlanetWriteRequest({ workspaceId: "w", main: null, planets: [{ ...body, eccentricity: 0.4, periapsisDeg: 280 }] }), true);
+    assert.equal(isPlanetWriteRequest({ workspaceId: "w", main: null, planets: [{ ...body, eccentricity: 0.7 }] }), false);
+  });
+
   it("不是对象 → 空稿，不抛", () => {
     assert.deepEqual(parseCompanion(null).planets, []);
     assert.deepEqual(parseCompanion("x").main, null);

@@ -30,6 +30,7 @@ import {
   inFarWindow,
   orbitFrame,
   eccOf,
+  hasIndependentOrbits,
   starRadius,
   type Camera,
   type GalaxyLayout,
@@ -414,13 +415,37 @@ function cachedLayout(spec: GalaxySpec, width: number, height: number, box: { wi
     layoutCache.set(key, hit);
     return hit;
   }
-  const scene = layoutOnce(spec, width, height, box, readableMax);
+  const scene = hasIndependentOrbits(spec) ? layoutIndependent(spec, width, height, box, readableMax) : layoutOnce(spec, width, height, box, readableMax);
   layoutCache.set(key, scene);
   if (layoutCache.size > LAYOUT_CACHE_MAX) {
     const oldest = layoutCache.keys().next().value;
     if (oldest !== undefined) layoutCache.delete(oldest);
   }
   return scene;
+}
+
+/**
+ * 独立轨道：a/e/ω 全是用户设计，不为屏幕投影暗改半长轴、不把不同的 e 退成同一档。
+ * 默认视角用统一的圆形包络取景，保证远日点也完整可见；转台只换相机，比例尺与布局照旧冻结。
+ */
+function layoutIndependent(spec: GalaxySpec, width: number, height: number, box: { width: number; height: number }, readableMax: number): SafeScene {
+  const layout = layoutGalaxy(spec);
+  const camera = makeCamera(FRAME_EXTENT, VIEW_REF_ELEVATION);
+  const viewport = frameViewport(camera, width, height, box, 0);
+  const readable = readablePlanetPx(camera, viewport, ORBIT_STEP, readableMax, readableMax > PLANET_READABLE_MAX ? AGENT_READABLE_GAP : PLANET_READABLE_GAP);
+  const starDepth = project({ x: 0, y: 0, z: 0 }, camera).depth;
+  const starPx = (viewport.focal * starRadius(spec.starMass)) / starDepth;
+  const preferred = readableMax > PLANET_READABLE_MAX ? Math.min(Math.max(readable, AGENT_READABLE_FLOOR), starPx / (STAR_OVER_PLANET * WAITING_SCALE)) : readable;
+  return {
+    camera,
+    viewport,
+    layout,
+    elevationDeg: VIEW_REF_ELEVATION,
+    minPlanetPx: Math.max(2.5, preferred),
+    dropped: 0,
+    layoutElevationDeg: VIEW_REF_ELEVATION,
+    preferredPx: Math.max(2.5, preferred),
+  };
 }
 
 /**
@@ -523,13 +548,14 @@ export function placeAt(
   // 只在默认视角上排（方位 0）：布局与视角分离之后，别的视角不再进这里
   const azimuthDeg = 0;
   const ecc = eccOf(flat.eccentricity);
-  const starExtent = Math.max(starRadius(flat.starMass), flat.starExtent ?? 0);
+  // 主星密度（红矮星）跟着 spec 走：缺席 = 默认密度，与原来逐位相同（gravity-scan 分支加的唯一一处语义改动在这两行）
+  const starExtent = Math.max(starRadius(flat.starMass, flat.starDensity), flat.starExtent ?? 0);
   const bodies: Body[] = shown.map((planet) => ({ radius: planet.radius, waiting: planet.state === "waiting" }));
   const camera = makeCamera(FRAME_EXTENT, e, undefined, ecc === 0 ? 0 : azimuthDeg);
   let viewport = frameViewport(camera, width, height, box, ecc);
   const starDepth = project({ x: 0, y: 0, z: 0 }, camera).depth;
   let starPx = (viewport.focal * starExtent) / starDepth;
-  let starBodyPx = (viewport.focal * starRadius(flat.starMass)) / starDepth;
+  let starBodyPx = (viewport.focal * starRadius(flat.starMass, flat.starDensity)) / starDepth;
   // 行星再大也要比主星明显小（等你放大一档之后也是）
   const agentMode = readableMax > PLANET_READABLE_MAX;
   // 窄画布：主星小到容不下一颗看得清的行星（AGENT_READABLE_FLOOR × 主星倍数）就把画面放大，主星与行星一起变大

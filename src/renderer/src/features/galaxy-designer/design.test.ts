@@ -90,10 +90,11 @@ describe("参数约束", () => {
     assert.equal(validateDesign({ ...design, star: { ...design.star, mass: Number.NaN } })[0]?.kind, "mass-range");
   });
 
-  test("轨道太近 = 相撞：下限是两颗半径和 + 间距；错同时挂在轨道行与主星质量行", () => {
+  test("轨道太近 = 相撞：半长轴下限让近日距放得下两颗半径和 + 间距；错同时挂在轨道行与主星质量行", () => {
     const design = legal();
     const near = minOrbit(design);
-    assert.ok(Math.abs(near - (radiusOf(design, "star") + radiusOf(design, "planet") + MIN_CLEARANCE)) < 1e-9);
+    const e = design.planet.eccentricity ?? 0;
+    assert.ok(Math.abs(near * (1 - e) - (radiusOf(design, "star") + radiusOf(design, "planet") + MIN_CLEARANCE)) < 1e-9);
     const atLimit = { ...design, planet: { ...design.planet, orbitRadius: near } };
     assert.deepEqual(validateDesign(atLimit), []);
     const inside = { ...design, planet: { ...design.planet, orbitRadius: near - 0.01 } };
@@ -104,7 +105,8 @@ describe("参数约束", () => {
   });
 
   test("非法组合：每个值都在区间里，但加大主星质量后合法轨道变成相撞", () => {
-    const design = { ...legal(), planet: { ...legal().planet, orbitRadius: 13 } };
+    const base = legal();
+    const design = { ...base, planet: { ...base.planet, orbitRadius: minOrbit(base) + 0.1 } };
     assert.deepEqual(validateDesign(design), []);
     const heavier = { ...design, star: { ...design.star, mass: STAR_MASS.max } };
     assert.equal(validateDesign(heavier)[0]?.kind, "orbit-collision");

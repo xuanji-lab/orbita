@@ -21,11 +21,11 @@ import { isPlanetWriteRequest } from "../../../../shared/planet-design.ts";
 
 /** 意图系统的样子：主星烛霓 60 M⊕ + 三颗子智能体（地表都是插件出的无脸图） */
 const INTENT: WorkspacePlanets = {
-  main: { id: "main", name: "烛霓", massEarth: 60, composition: null, note: "故事", surface: "data:image/png;base64,AAA", flip: true, orbit: null, elements: null, eyeStyle: null, mix: null },
+  main: { id: "main", name: "烛霓", massEarth: 60, composition: null, note: "故事", surface: "data:image/png;base64,AAA", flip: true, orbit: null, eccentricity: null, periapsisDeg: null, elements: null, eyeStyle: null, mix: null },
   planets: [
-    { id: "rec", name: "聆箴", massEarth: 2.2, composition: "rock", note: "会议", surface: "data:image/png;base64,BBB", flip: false, orbit: 19, elements: null, eyeStyle: "xl-white", mix: null },
-    { id: "eval", name: "衡璨", massEarth: 3, composition: "rock", note: null, surface: null, flip: false, orbit: 31, elements: { ring: true }, eyeStyle: "s", mix: null },
-    { id: "mem", name: "银珀", massEarth: 1.6, composition: null, note: null, surface: null, flip: false, orbit: null, elements: null, eyeStyle: null, mix: null },
+    { id: "rec", name: "聆箴", massEarth: 2.2, composition: "rock", note: "会议", surface: "data:image/png;base64,BBB", flip: false, orbit: 19, eccentricity: null, periapsisDeg: null, elements: null, eyeStyle: "xl-white", mix: null },
+    { id: "eval", name: "衡璨", massEarth: 3, composition: "rock", note: null, surface: null, flip: false, orbit: 31, eccentricity: null, periapsisDeg: null, elements: { ring: true }, eyeStyle: "s", mix: null },
+    { id: "mem", name: "银珀", massEarth: 1.6, composition: null, note: null, surface: null, flip: false, orbit: null, eccentricity: null, periapsisDeg: null, elements: null, eyeStyle: null, mix: null },
   ],
   warnings: [],
 };
@@ -54,6 +54,19 @@ describe("工作区 planet/ → 设计稿", () => {
     );
     assert.equal(design.planets?.[1]?.elements.ring, true);
     assert.equal(design.planet, design.planets?.[0]);
+  });
+
+  test("旧稿没有 e / ω：按旧的共用 0.3 与 0° 迁移；写回后变成每颗自己的字段", () => {
+    assert.deepEqual(design.planets?.map((planet) => [planet.eccentricity, planet.periapsisDeg]), [[0.3, 0], [0.3, 0], [0.3, 0]]);
+    const request = planetsWriteOf("ws-intent", design);
+    assert.deepEqual(request.planets.map((planet) => [planet.eccentricity, planet.periapsisDeg]), [[0.3, 0], [0.3, 0], [0.3, 0]]);
+    assert.equal(isPlanetWriteRequest(request), true);
+  });
+
+  test("行星质量跟着主星收紧：60 M⊕ 主星最多 4 M⊕；20 M⊕ 主星最多 2 M⊕", () => {
+    const light = designFromPlanets({ ...INTENT, main: { ...(INTENT.main as NonNullable<WorkspacePlanets["main"]>), massEarth: 20 } }, fallback);
+    assert.ok((light.planets?.[0]?.mass ?? 0) <= 20);
+    assert.ok((light.planets?.[1]?.mass ?? 0) <= 20);
   });
 
   test("地表图进 bodyArt.image，成分纹理（坑、极冠、带）不再画；眼睛照旧代码画", () => {

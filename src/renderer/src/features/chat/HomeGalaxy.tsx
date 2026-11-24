@@ -63,7 +63,7 @@ import {
 } from "./galaxy-motion.ts";
 import { useT } from "../../locale.ts";
 import { BodyFigure, StarBody } from "../galaxy-designer/StarFigure.tsx";
-import { bodyArt, planetFaceDesign, starExtentRatio, type GalaxyDesign, type PlanetDesign } from "../galaxy-designer/design.ts";
+import { bodyArt, planetFaceDesign, starExtentRatio, starOf, type GalaxyDesign, type PlanetDesign } from "../galaxy-designer/design.ts";
 import { fitScreenSafe } from "./screen-safe.ts";
 import {
   calloutBudget,
@@ -79,12 +79,28 @@ import {
   type CalloutTarget,
 } from "./callouts.ts";
 import { useGalaxyActions, type GalaxyActions } from "./galaxy-actions.ts";
-import { useProtoVariants } from "./proto-variants-store.ts";
 import { useGalaxyTilt, useGalaxyTiltSetter, useGalaxyView, type GalaxySurface, type GalaxyViewSetter } from "./galaxy-tilt.ts";
 import { anglesForSave, anglesLabel, dragAngles, isDragMove, keyAngles, VIEW_DEFAULT, type ViewAngles } from "./tilt-drag.ts";
 import { boxesOverlap, planOverlay } from "./overlay-plan.ts";
 import { beltSplit, liveProjection, type FrozenScene, type LiveProjection } from "./turntable.ts";
 import { USER_VIEW_DEFAULT, zoomAt, type UserView } from "./galaxy.ts";
+import { DENSITY, STAR_DENSITY, eccentricAnomaly, farWindow, framePoint, orbitFrame, orbitPoint, project, starRadius, type OrbitFrame } from "./galaxy.ts";
+import { FAR_MARGIN } from "./galaxy-motion.ts";
+import { binaryGeometry, binaryPhase, binaryPositions, type BinaryGeometry } from "./binary.ts";
+import { pitDepth, pitSoftening, unprojectToPlane, type Well } from "./gravity.ts";
+import { MassCard, ScanGrid, ScanToggle, useScanOn, type CardBody, type ScanFrame } from "./GalaxyScan.tsx";
+
+/** 伴星在 movers 里的 id 前缀（后面接伴星工作区 id）：它不是这座星系的行星，名字 / 命中 / 远近另算 */
+export const BINARY_ID = "binary:";
+
+/**
+ * 联星的一串轨道矩阵（正圆，主星在原点）：centered = 整座星系跟着本星绕质心走的那一串——中心归零，
+ * 链末端对 children 只剩「本星相对质心的位移」，里面照旧按根节点坐标画
+ */
+function binaryFrame(a: number, camera: Camera, vp: Viewport, centered: boolean): OrbitFrame {
+  const frame = orbitFrame(a, 0, 0, camera, vp, 0);
+  return centered ? { ...frame, cx: 0, cy: 0 } : frame;
+}
 
 /** 碎石块的轮廓：七个顶点、半径按 id 抖一点（同一条会话永远同一块石头），不是圆点——它是会话，不是天体 */
 export function rockPath(x: number, y: number, r: number, id: string): string {
@@ -133,19 +149,21 @@ function applyProjection(root: HTMLElement, proj: LiveProjection, movers: readon
   const byId = new Map(movers.map((mover) => [mover.id, mover]));
   for (const node of root.querySelectorAll<HTMLElement>("[data-orbit]")) {
     const mover = byId.get(node.dataset.orbit ?? "");
-    if (mover === undefined) continue;
-    const frame = mover.kind === "rock" ? proj.rock : proj.planets.get(mover.id);
+    // 联星的两串（GalaxyScan / binary.ts）：不在 proj.planets 里，按 data-binary-a（轨道半径）用新相机现算
+    const binaryA = node.dataset.binaryA === undefined ? null : Number(node.dataset.binaryA);
+    if (mover === undefined && binaryA === null) continue;
+    const frame = binaryA !== null ? binaryFrame(binaryA, proj.camera, proj.viewport, node.dataset.binaryCentered === "true") : mover?.kind === "rock" ? proj.rock : proj.planets.get(mover?.id ?? "");
     if (frame === null || frame === undefined) continue;
     const m = orbitMatrix(frame);
     node.style.transform = cssMatrix(m);
     const inv = node.querySelector<HTMLElement>("[data-orbit-inv]");
     // 缩放中天体本身也跟着放大缩小（行星在 far / near 两层；名字、锁定框那一层不放大字）
-    const grow = bodyScale !== 1 && node.dataset.layer !== "top" ? ` scale(${bodyScale.toFixed(4)})` : "";
+    const grow = bodyScale !== 1 && node.dataset.layer !== "top" && node.dataset.binaryCentered !== "true" ? ` scale(${bodyScale.toFixed(4)})` : "";
     if (inv !== null) inv.style.transform = cssMatrix(inverseLinear(m)) + grow;
   }
   // 远近分层每帧按新相机算：主星永远画在它挡住的天体前面
   const far = new Map<string, boolean>();
-  for (const mover of movers) far.set(mover.id, moverFar({ ...mover, far: proj.far }, tSec));
+  for (const mover of movers) far.set(mover.id, moverFar({ ...mover, far: mover.id.startsWith(BINARY_ID) ? farWindow(0, proj.camera.azimuth, FAR_MARGIN) : mover.kind === "planet" ? (proj.planetFar.get(mover.id) ?? proj.far) : proj.far }, tSec));
   for (const node of root.querySelectorAll<HTMLElement>("[data-body]")) {
     const isFar = far.get(node.dataset.body ?? "");
     if (isFar === undefined) continue;
@@ -783,7 +801,14 @@ function usePlan(compute: ((tSec: number) => OverlayPlan) | null, clock: GalaxyC
  * 一串「跟着轨道走」的 div：轨道矩阵 · 转 −θ · 平移到 R0 ·（捕获位移）· 转 +θ · 轨道矩阵的逆 → 对 children 只是平移。
  * 两个转动层带 data-spin，由 useGalaxyMotion 挂合成器动画。
  */
-function OrbitChain(props: { mover: Mover; layer: "far" | "near" | "top"; children: ReactNode; className?: string }) {
+function OrbitChain(props: {
+  mover: Mover;
+  layer: "far" | "near" | "top";
+  children: ReactNode;
+  className?: string;
+  /** 联星的串（binary.ts）：轨道半径（拖动中 applyProjection 按它现算矩阵）；centered = 整座星系跟着本星绕质心走的那一串 */
+  binary?: { a: number; centered: boolean };
+}) {
   const { mover } = props;
   const m = orbitMatrix(mover.frame);
   const period = periodMs(mover.omega);
@@ -794,8 +819,12 @@ function OrbitChain(props: { mover: Mover; layer: "far" | "near" | "top"; childr
       className={props.className === undefined ? "gx-node" : `gx-node ${props.className}`}
       style={{ transform: cssMatrix(m) }}
       data-orbit={mover.id}
-      data-body={props.layer === "top" ? undefined : mover.id}
+      data-ecc={mover.ecc}
+      data-periapsis={mover.periapsis}
+      data-body={props.layer === "top" || props.binary?.centered === true ? undefined : mover.id}
       data-layer={props.layer}
+      data-binary-a={props.binary?.a}
+      data-binary-centered={props.binary?.centered === true ? "true" : undefined}
     >
       <div className="gx-node" data-spin="" data-frames={out} data-period={period}>
         <div className="gx-node" style={{ transform: `translateX(${R0}px)` }}>
@@ -967,6 +996,11 @@ type HomeGalaxyProps = {
    * 给了：主星压不进去（画框整体下移到主星让开）；天体走进去时淡出、名字与引线不写进去。缺席 = 没有禁区
    */
   avoid?: Box | null;
+  /**
+   * 联星（Workspace.binaryWith，binary.ts）：伴星的工作区 id、名字、主星设计稿。给了就画两颗主星绕共同质心转：
+   * 这座星系（行星、碎石带）跟着本星走，伴星只画星体与名字。缺席 / null = 没有伴星
+   */
+  binary?: { workspaceId: string; name: string; design: GalaxyDesign } | null;
 };
 
 /**
@@ -987,8 +1021,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const size = useBoxSize(rootRef);
   const starless = props.starless === true;
-  // 轨道是开普勒椭圆（偏心率候选见 proto-variants），俯角是设置里的星系倾角（单智能体首页与编排页同一套）
-  const orbitE = Number(useProtoVariants().orbitE);
+  // 每颗行星的 a/e/ω 都在 spec 里；俯角与碎石密度是全局视图设置
   const tilt = useGalaxyTilt();
   const galaxyView = useGalaxyView();
   const azimuth = galaxyView.azimuth;
@@ -1002,15 +1035,27 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   // 设置页的小预览（surface = null）不接拖动：那里有滑块
   const setView = useGalaxyTiltSetter();
   // 碎石密度（设置 › 外观）：只删减碎石带里的普通会话，在跑 / 等你 / 最近的碎石块不受影响
-  const spec = useMemo(() => ({ ...props.spec, eccentricity: orbitE, dustKeep: galaxyView.dustKeep }), [props.spec, orbitE, galaxyView.dustKeep]);
+  const spec = useMemo(() => ({ ...props.spec, dustKeep: galaxyView.dustKeep }), [props.spec, galaxyView.dustKeep]);
   const baseLayout = useMemo(() => layoutGalaxy(spec), [spec]);
+  // 联星：间距、质心、画面要缩多少（binary.ts）。只在有工作区、有主星时成立
+  const binary = starless || props.workspaceId == null ? null : (props.binary ?? null);
+  const companionStar = binary === null ? null : starOf(binary.design);
+  const companionDensity = companionStar?.density ?? STAR_DENSITY;
+  const companionR = companionStar === null ? 0 : starRadius(companionStar.mass, companionDensity);
+  const geo: BinaryGeometry | null = useMemo(
+    () => (companionStar === null ? null : binaryGeometry(spec.starMass, companionStar.mass, baseLayout.extent, companionR)),
+    [companionStar, spec.starMass, baseLayout.extent, companionR],
+  );
+  const binaryPhase0 = binary === null || props.workspaceId == null ? 0 : binaryPhase(props.workspaceId, binary.workspaceId);
+  // 联星时画面整体缩一档，把伴星装进来（用户缩放乘在上面）
+  const sceneView = useMemo<UserView>(() => (geo === null || geo.zoom === 1 ? zoomView : { ...zoomView, zoom: zoomView.zoom * geo.zoom }), [geo, zoomView]);
   const scene = useMemo(() => {
     if (size === null || size.width < 2 || size.height < 2) return null;
     // 工作区页 / 右栏：屏幕安全布局（screen-safe.ts）——在屏幕坐标里排轨道，任何相位上天体都不在画面上相撞
     // fill：编排 New Task 页（星系占输入框上方整块，高度封顶放宽）；不是 fill：单智能体首页输入框下面那条带子
     const box = galaxyBox(size.width, size.height, props.fill === true ? GALAXY_MAX_FILL : GALAXY_MAX);
     const readableMax = props.agents !== undefined && props.agents.size > 0 ? AGENT_READABLE_MAX : PLANET_READABLE_MAX;
-    const safe = fitScreenSafe(spec, size.width, size.height, box, tilt, readableMax, azimuth, zoomView);
+    const safe = fitScreenSafe(spec, size.width, size.height, box, tilt, readableMax, azimuth, sceneView);
     let viewport = safe.viewport;
     const avoid = props.avoid ?? null;
     if (avoid !== null) {
@@ -1021,14 +1066,27 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
       if (delta > 0) viewport = { ...viewport, cy: viewport.cy + delta };
     }
     return { camera: safe.camera, viewport, layout: safe.layout, minPlanetPx: safe.minPlanetPx, elevation: safe.elevationDeg, box, size };
-  }, [size, spec, props.agents, props.fill, tilt, azimuth, props.avoid, props.starDesign, zoomView]);
+  }, [size, spec, props.agents, props.fill, tilt, azimuth, props.avoid, props.starDesign, sceneView]);
   const layout: GalaxyLayout = scene === null ? baseLayout : starless ? { ...scene.layout, planets: [] } : scene.layout;
   const arcs: OrbitArc[] = useMemo(() => (scene === null || starless ? [] : orbitArcs(layout, scene.camera, scene.viewport)), [scene, layout, starless]);
   // 一张 t = 0 的快照：主星的位置与半径、碎石块的大小（碎石 < 行星的规矩在 drawFrame 里）
   const snapshot = useMemo(() => (scene === null ? [] : drawFrame({ ...layout, belt: null }, scene.camera, scene.viewport, [], 0, scene.minPlanetPx)), [scene, layout]);
   const starItem = snapshot.find((item) => item.kind === "star");
   const rockPx = snapshot.find((item): item is RockItem => item.kind === "rock")?.r ?? ROCK_PX;
-  const movers = useMemo(() => (scene === null ? [] : moversOf(layout, scene.camera, scene.viewport, scene.minPlanetPx, rockPx)), [scene, layout, rockPx]);
+  const baseMovers = useMemo(() => (scene === null ? [] : moversOf(layout, scene.camera, scene.viewport, scene.minPlanetPx, rockPx)), [scene, layout, rockPx]);
+  // 联星的两串：伴星（绕本星，间距 sep，跟行星一样分远近两层画）、本星（整座星系绕质心，半径 r1）
+  const pxPerUnit = scene === null ? 1 : scene.viewport.focal / project({ x: 0, y: 0, z: 0 }, scene.camera).depth;
+  const companionId = binary === null ? null : `${BINARY_ID}${binary.workspaceId}`;
+  const companionMover = useMemo<Mover | null>(() => {
+    if (scene === null || geo === null || companionId === null) return null;
+    const far = farWindow(0, scene.camera.azimuth, FAR_MARGIN);
+    return { id: companionId, kind: "planet", frame: binaryFrame(geo.sep, scene.camera, scene.viewport, false), phase: binaryPhase0, ecc: 0, periapsis: 0, omega: geo.omega, r: Math.max(companionR * pxPerUnit, 6), waiting: false, far };
+  }, [scene, geo, companionId, binaryPhase0, companionR, pxPerUnit]);
+  const selfMover = useMemo<Mover | null>(() => {
+    if (scene === null || geo === null) return null;
+    return { id: `${BINARY_ID}self`, kind: "planet", frame: binaryFrame(geo.r1, scene.camera, scene.viewport, true), phase: binaryPhase0 + Math.PI, ecc: 0, periapsis: 0, omega: geo.omega, r: 0, waiting: false, far: farWindow(0, scene.camera.azimuth, FAR_MARGIN) };
+  }, [scene, geo, binaryPhase0]);
+  const movers = useMemo(() => (companionMover === null ? baseMovers : [...baseMovers, companionMover]), [baseMovers, companionMover]);
   const look = layout.belt === null ? null : dustLookOf(layout.belt.count, starless);
   const ids = useMemo(() => [...layout.rocks.map((rock) => rock.id), ...(layout.belt?.particles.map((particle) => particle.id) ?? [])], [layout]);
   const signature = useMemo(
@@ -1036,10 +1094,11 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
       JSON.stringify([
         size,
         movers.map((m) => [m.id, m.phase, m.ecc, m.omega, m.frame.cx, m.frame.cy, m.frame.m1x, m.frame.m2y]),
+        selfMover === null ? null : [selfMover.frame.m1x, selfMover.frame.m2y, selfMover.omega],
         layout.belt === null ? null : [layout.belt.inner, layout.belt.outer, layout.belt.particles.length],
         ids.length,
       ]),
-    [size, movers, layout.belt, ids.length],
+    [size, movers, layout.belt, ids.length, selfMover],
   );
   const motion = useGalaxyMotion(rootRef, signature, galaxyView.powerSave);
   useSides(rootRef, movers, motion.clock, motion.running, signature);
@@ -1091,6 +1150,59 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
     [scene, layout, starless, starExtent, agents, glyphPx, rankOf, t, props.avoid],
   );
   const { plan, replan } = usePlan(scene === null ? null : compute, motion.clock, motion.running, signature);
+  // 引力扫描的网格跟着转台 / 缩放重画：拖动中 replan 每 LIVE_FRAME_MS 一次，顺带叫它
+  const scanOn = useScanOn();
+  const scanRedraw = useRef<(() => void) | null>(null);
+  const probeRedraw = useRef<(() => void) | null>(null);
+  const replanAll = useCallback(() => {
+    replan();
+    scanRedraw.current?.();
+    probeRedraw.current?.();
+  }, [replan]);
+  // 质量卡：点了哪颗（"star" / 行星 id / 伴星 id）
+  const [selected, setSelected] = useState<string | null>(null);
+  // 同一颗再点一下收起；点别的换成那一颗
+  const toggleSelected = useCallback((id: string) => setSelected((current) => (current === id ? null : id)), []);
+  const planetSpecById = useMemo(() => new Map(spec.planets.map((planet) => [planet.id, planet])), [spec.planets]);
+  const starMassUi = spec.starMass;
+  const starDensity = spec.starDensity ?? STAR_DENSITY;
+  // 网格上每个天体此刻在哪、压多深（坑深只随质量，坑宽随画出来的大小）
+  const scanFrameAt = useCallback(
+    (tSec: number): ScanFrame | null => {
+      if (scene === null || starless) return null;
+      const camera = liveRef.current?.camera ?? scene.camera;
+      const viewport = liveRef.current?.viewport ?? scene.viewport;
+      const ppu = viewport.focal / project({ x: 0, y: 0, z: 0 }, camera).depth;
+      // 网格与测深线画在「跟着本星走」那一层里（与行星同一个仿射模型），所以这里一律以本星为原点；
+      // 伴星在本星的 sep 处（= 质心坐标里的 companion − self）。按质心坐标算再精确投影，行星的坑会与画出来的行星差几十像素
+      // （本星离质心 r₁ 远，透视比例与按主星算的轨道矩阵不同）
+      const pos = geo === null ? null : binaryPositions(geo, binaryPhase0, tSec);
+      const o = { x: 0, y: 0 };
+      const wells: Well[] = [{ id: "star", x: o.x, y: o.y, depth: pitDepth(starMassUi), soft: pitSoftening(layout.starRadius) }];
+      const moverById = new Map(baseMovers.map((mover) => [mover.id, mover]));
+      // 坑落在天体「画出来」的位置下面：按轨道矩阵算出屏幕点，再落回平面（gravity.unprojectToPlane）；落不回去（俯角 0）用精确位置
+      const planted = (frame: OrbitFrame, E: number, fallback: { x: number; y: number }): { x: number; y: number } => {
+        const s = framePoint(frame, E);
+        return unprojectToPlane(s.x, s.y, camera, viewport) ?? fallback;
+      };
+      for (const planet of layout.planets) {
+        const E = eccentricAnomaly(planet.phase + planet.omega * tSec, layout.ecc);
+        const p = orbitPoint(planet.orbitRadius, planet.inclination, planet.node, E, layout.ecc);
+        const at = planted(orbitFrame(planet.orbitRadius, planet.inclination, planet.node, camera, viewport, layout.ecc), E, { x: o.x + p.x, y: o.y + p.y });
+        const mover = moverById.get(planet.id);
+        const drawn = mover === undefined ? planet.radius : mover.r / ppu;
+        wells.push({ id: planet.id, x: at.x, y: at.y, depth: pitDepth(planetSpecById.get(planet.id)?.mass ?? 0), soft: pitSoftening(drawn) });
+      }
+      if (pos !== null && geo !== null && companionStar !== null && companionId !== null) {
+        const at = planted(binaryFrame(geo.sep, camera, viewport, false), binaryPhase0 + geo.omega * tSec, { x: pos.companion.x - pos.self.x, y: pos.companion.y - pos.self.y });
+        wells.push({ id: companionId, x: at.x, y: at.y, depth: pitDepth(companionStar.mass), soft: pitSoftening(companionR) });
+      }
+      const q = project({ x: o.x, y: o.y, z: 0 }, camera);
+      const reach = geo === null ? 0 : geo.sep + pitSoftening(companionR) * 2;
+      return { camera, viewport, wells, origin: { x: 0, y: 0 }, star: { x: viewport.cx + viewport.focal * q.sx, y: viewport.cy + viewport.focal * q.sy }, reach };
+    },
+    [scene, starless, geo, binaryPhase0, starMassUi, layout, baseMovers, planetSpecById, companionStar, companionId, companionR],
+  );
   // 转台：拖动按下时冻结的那一份（布局 + 角度），与给 applyProjection 的 movers
   const sceneRef = useRef<SceneNow | null>(null);
   sceneRef.current =
@@ -1109,7 +1221,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
     movers: moversRef,
     clock: motion.clock,
     live: liveRef,
-    replan,
+    replan: replanAll,
     badge: badgeRef,
     sceneId: scene,
     zoomView,
@@ -1136,6 +1248,18 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   const body = (mover: Mover, layer: "far" | "near") => {
     // 碎石块只画在最上层（overlay）
     if (mover.kind === "rock") return null;
+    if (mover.id === companionId && binary !== null && geo !== null) {
+      // 伴星：另一座星系的主星，按它自己的设计稿画（行星与碎石不画，见 binary.ts）
+      return (
+        <OrbitChain key={`${layer}-${mover.id}`} mover={mover} layer={layer} binary={{ a: geo.sep, centered: false }}>
+          <Local box={square(mover.r * starExtentRatio(binary.design) + 2)}>
+            <g className="galaxy-companion" data-companion={binary.workspaceId} data-r={mover.r.toFixed(1)}>
+              <StarBody design={binary.design} x={0} y={0} r={mover.r} uid={`${uid}-${layer}-companion`} gazeKey={`star:${binary.workspaceId}`} />
+            </g>
+          </Local>
+        </OrbitChain>
+      );
+    }
     const planet = planetById.get(mover.id);
     if (planet === undefined) return null;
     const copyUid = `${uid}-${layer}-${mover.id}`;
@@ -1156,6 +1280,24 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   // 碎石块只在这一层画一份：它在最外圈，不会被别的轨道线划过；转到主星背后、和主星重叠时整块藏起来（plan.hidden）。
   const overlayContent = (mover: Mover): { box: Box; content: ReactNode } | null => {
     if (plan.hidden.has(mover.id)) return null;
+    if (mover.id === companionId && binary !== null) {
+      // 伴星：名字写在星体下方，单击出质量卡
+      const w = binary.name.length * glyphPx + 8;
+      const box = union(square(mover.r + 6), { x0: -w, y0: 0, x1: w, y1: mover.r + glyphPx * 2 + 4 });
+      return {
+        box,
+        content: (
+          <>
+            <text className="galaxy-companion-name" x={0} y={mover.r + glyphPx + 2} textAnchor="middle" dominantBaseline="central">
+              {binary.name}
+            </text>
+            {live !== null && (
+              <GalaxyTarget kind="companion" id={mover.id} x={0} y={0} r={mover.r} label={t.gravity.cardLabel(binary.name)} selected={selected === mover.id} onActivate={() => toggleSelected(mover.id)} />
+            )}
+          </>
+        ),
+      };
+    }
     if (mover.kind === "planet") {
       const name = agents?.get(mover.id)?.name;
       const tag = plan.names.get(mover.id);
@@ -1166,7 +1308,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
         const w = name.length * glyphPx + 8;
         box = union(box, { x0: tag.dx - w, y0: tag.dy - glyphPx, x1: tag.dx + w, y1: tag.dy + glyphPx });
       }
-      const label = t.agents.openPlanet(name ?? mover.id);
+      const label = t.gravity.cardLabel(name ?? mover.id);
       return {
         box,
         content: (
@@ -1177,7 +1319,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
               </text>
             )}
             {target && live !== null && (
-              <GalaxyTarget kind="planet" id={mover.id} x={0} y={0} r={mover.r} label={label} onActivate={() => live.actions.openPlanet(live.workspaceId, mover.id)} />
+              <GalaxyTarget kind="planet" id={mover.id} x={0} y={0} r={mover.r} label={label} selected={selected === mover.id} onActivate={() => toggleSelected(mover.id)} />
             )}
           </>
         ),
@@ -1255,7 +1397,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   const overlay = (mover: Mover) => {
     const inner = overlayContent(mover);
     return (
-      <OrbitChain key={`top-${mover.id}`} mover={mover} layer="top">
+      <OrbitChain key={`top-${mover.id}`} mover={mover} layer="top" {...(mover.id === companionId && geo !== null ? { binary: { a: geo.sep, centered: false } } : {})}>
         {inner !== null && <Local box={inner.box}>{inner.content}</Local>}
       </OrbitChain>
     );
@@ -1284,6 +1426,30 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
       />
     );
   const total = layout.belt?.count ?? 0;
+  // 联星：整座星系（这一层以内的一切）跟着本星绕质心走
+  const wrapBinary = (children: ReactNode): ReactNode =>
+    selfMover === null || geo === null ? (
+      children
+    ) : (
+      <OrbitChain mover={selfMover} layer="top" binary={{ a: geo.r1, centered: true }}>
+        {children}
+      </OrbitChain>
+    );
+  // 质量卡：选中的那颗此刻的数
+  const card: CardBody | null = (() => {
+    if (selected === null || starless) return null;
+    if (selected === "star") {
+      return { id: "star", kind: "star", name: props.starName ?? props.starDesign?.star?.name ?? props.label, massUi: starMassUi, density: starDensity, looksBigger: false };
+    }
+    if (selected === companionId && binary !== null && companionStar !== null) {
+      return { id: selected, kind: "companion", name: binary.name, massUi: companionStar.mass, density: companionDensity, looksBigger: false };
+    }
+    const planet = planetSpecById.get(selected);
+    const mover = baseMovers.find((m) => m.id === selected);
+    if (planet === undefined || mover === undefined) return null;
+    const density = planet.density !== undefined && planet.density > 0 ? planet.density : DENSITY[planet.composition];
+    return { id: planet.id, kind: "planet", name: agents?.get(planet.id)?.name ?? planet.id, massUi: planet.mass, density, looksBigger: starItem !== undefined && mover.r > starItem.r };
+  })();
   return (
     <div
       ref={rootRef}
@@ -1297,6 +1463,9 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
       data-azimuth={azimuth}
       {...(handlers ?? {})}
       data-planets={starless ? 0 : layout.planets.length}
+      data-scan={scanOn && !starless ? "on" : undefined}
+      data-binary={binary?.workspaceId}
+      data-selected={selected ?? undefined}
       data-rocks={starless || layout.rockOrbit === null ? 0 : layout.rocks.length}
       data-starless={starless || undefined}
       data-elevation={scene === null ? undefined : scene.elevation.toFixed(1)}
@@ -1307,8 +1476,13 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
       data-dust={layout.belt?.particles.length ?? 0}
       data-belt={layout.belt === null ? undefined : `${layout.belt.inner.toFixed(1)}-${layout.belt.outer.toFixed(1)}`}
     >
-      {scene !== null && (
+      {scene !== null && geo !== null && starItem !== undefined && plane(binaryRings(geo, scene.camera, scene.viewport, starItem))}
+      {scene !== null &&
+        wrapBinary(
         <>
+          {scanOn && !starless && (
+            <ScanGrid layer="grid" width={width} height={height} running={motion.running} clock={motion.clock} frameAt={scanFrameAt} redraw={scanRedraw} />
+          )}
           {plane(arcPaths("back"))}
           <div className="gx-layer">
             {beltHalf("far")}
@@ -1353,8 +1527,9 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
                     x={starItem.x}
                     y={starItem.y}
                     r={starItem.r}
-                    label={t.agents.openStar(props.starName ?? props.starDesign?.star?.name ?? props.label)}
-                    onActivate={() => live.actions.openStar(live.workspaceId)}
+                    label={t.gravity.cardLabel(props.starName ?? props.starDesign?.star?.name ?? props.label)}
+                    selected={selected === "star"}
+                    onActivate={() => toggleSelected("star")}
                   />
                 </g>
               )}
@@ -1367,7 +1542,29 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
             "gx-plane gx-top",
           )}
           {!starless && <div className="gx-layer gx-top">{movers.map(overlay)}</div>}
-        </>
+          {scanOn && !starless && (
+            <ScanGrid layer="probe" width={width} height={height} running={motion.running} clock={motion.clock} frameAt={scanFrameAt} redraw={probeRedraw} />
+          )}
+        </>,
+        )}
+      {scene !== null && handlers !== null && !starless && <ScanToggle />}
+      {card !== null && (
+        <MassCard
+          body={card}
+          starMassUi={starMassUi}
+          onClose={() => setSelected(null)}
+          onDesign={
+            live === null
+              ? null
+              : card.kind === "star"
+                ? () => live.actions.openStar(live.workspaceId)
+                : card.kind === "planet"
+                  ? () => live.actions.openPlanet(live.workspaceId, card.id)
+                  : binary === null
+                    ? null
+                    : () => live.actions.openStar(binary.workspaceId)
+          }
+        />
       )}
       {/*
         「全部 N 条会话」：不占画面的入口（2026-11-24 起每条会话都画成碎石，不再有「另有 N 条」那行字）。
@@ -1421,15 +1618,41 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
 
 
 /**
+ * 联星的两圈（两颗主星各自绕质心走的路，虚线）与质心记号（一个小十字）：画在这座星系之下、不跟着本星走。
+ * 质心就是画面上主星原来的钉点（屏幕安全布局的转轴）
+ */
+function binaryRings(geo: BinaryGeometry, camera: Camera, vp: Viewport, star: { x: number; y: number }): ReactNode {
+  const ring = (a: number): string => {
+    const frame = orbitFrame(a, 0, 0, camera, vp, 0);
+    let d = "";
+    for (let i = 0; i <= 72; i++) {
+      const theta = (i / 72) * Math.PI * 2;
+      d += `${i === 0 ? "M" : "L"}${(frame.cx + frame.m1x * Math.cos(theta) + frame.m2x * Math.sin(theta)).toFixed(1)} ${(frame.cy + frame.m1y * Math.cos(theta) + frame.m2y * Math.sin(theta)).toFixed(1)}`;
+    }
+    return d;
+  };
+  const k = 4;
+  return (
+    <>
+      <path className="galaxy-binary-orbit" data-binary-ring="self" d={ring(geo.r1)} />
+      <path className="galaxy-binary-orbit" data-binary-ring="companion" d={ring(geo.r2)} />
+      <path className="galaxy-barycenter" d={`M${star.x - k} ${star.y}H${star.x + k}M${star.x} ${star.y - k}V${star.y + k}`} />
+    </>
+  );
+}
+
+/**
  * 星系上一颗能点的天体（主星 / 子智能体行星）：透明命中圈 + 悬停 / 聚焦时的一圈细环。
  * role=button、tabIndex=0、Enter / 空格触发；key 按天体 id 稳定，天体在动，焦点不丢。
  */
-function GalaxyTarget(props: { kind: "star" | "planet"; id: string; x: number; y: number; r: number; label: string; onActivate: () => void }) {
+function GalaxyTarget(props: { kind: "star" | "planet" | "companion"; id: string; x: number; y: number; r: number; label: string; onActivate: () => void; selected?: boolean }) {
   return (
     <g
       className="galaxy-target"
       data-target={props.kind}
-      data-planet={props.kind === "planet" ? props.id : undefined}
+      data-planet={props.kind === "star" ? undefined : props.id}
+      data-selected={props.selected === true ? "" : undefined}
+      aria-pressed={props.selected === true}
       role="button"
       tabIndex={0}
       aria-label={props.label}

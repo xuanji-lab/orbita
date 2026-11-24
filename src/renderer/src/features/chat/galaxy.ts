@@ -1,6 +1,7 @@
 import { isWindowInactive } from "../../shell/window-activity.ts";
 // 值 import 走相对路径：node --test 解析不了 @shared 别名
 import { GALAXY_ZOOM } from "../../../../shared/settings.ts";
+import { LEGACY_ORBIT_E, LEGACY_ORBIT_OMEGA_DEG, orbitalPeriod } from "../../../../shared/orbit-physics.ts";
 
 /**
  * 首页星系（原型，proto/home-galaxy）的纯内核：天体、轨道、透视投影、按深度排序、动效闸门。
@@ -28,6 +29,9 @@ export interface PlanetSpec {
   density?: number;
   /** 轨道半径：用户独立指定（与天体半径同一单位）。违反间距规则时向外推，记进 adjusted */
   orbitRadius: number;
+  /** 每颗自己的偏心率与近日点方向；给了就走独立轨道布局，不再套全局轨道 */
+  eccentricity?: number;
+  periapsisDeg?: number;
   /** 轨道面相对主星赤道面的小倾角（度）：让轨道不是一叠共面的同心椭圆 */
   inclinationDeg: number;
   /** 升交点经度（度）：倾斜朝哪个方向 */
@@ -76,6 +80,8 @@ export interface DustSeed {
 
 export interface GalaxySpec {
   starMass: number;
+  /** 主星密度（g/cm³）：缺席 = STAR_DENSITY。红矮星式的小致密主星给一个大的数（引力扫描 / 「大行星浅坑」演示） */
+  starDensity?: number;
   planets: readonly PlanetSpec[];
   /** 主星连星环 / 日冕的外缘（世界单位）；缺席 = 主星半径。第一圈轨道不得压进这个外缘 */
   starExtent?: number;
@@ -190,8 +196,12 @@ export function bodyRadius(mass: number, density: number): number {
   return Math.cbrt(mass / density);
 }
 
-export function starRadius(mass: number): number {
-  return bodyRadius(clamp(mass, STAR_MASS.min, STAR_MASS.max), STAR_DENSITY);
+/**
+ * 主星半径。density 缺席 = STAR_DENSITY（现有星系逐位不变）；给了（如红矮星：小而致密，真实的比邻星约 50 g/cm³）
+ * 就按它算——小主星可以比自己的气态巨行星还小（璇玑星系规则：体积不受质量高低约束，高低以质量为准）
+ */
+export function starRadius(mass: number, density: number = STAR_DENSITY): number {
+  return bodyRadius(clamp(mass, STAR_MASS.min, STAR_MASS.max), density > 0 && Number.isFinite(density) ? density : STAR_DENSITY);
 }
 
 export function planetRadius(planet: Pick<PlanetSpec, "mass" | "composition" | "density">): number {
@@ -199,9 +209,11 @@ export function planetRadius(planet: Pick<PlanetSpec, "mass" | "composition" | "
   return bodyRadius(clamp(planet.mass, PLANET_MASS.min, PLANET_MASS.max), density);
 }
 
-/** 开普勒：ω ∝ a^(-3/2)。内圈快、外圈慢；整体很慢（最内圈一圈半分钟以上） */
-export function angularSpeed(orbitRadius: number): number {
-  return ((2 * Math.PI) / KEPLER_REF_PERIOD_S) * Math.pow(orbitRadius / KEPLER_REF_RADIUS, -1.5);
+/** 开普勒：T² ∝ a³/(M+m)。相对视觉时钟以默认主星 620、a=20 时 112 秒一圈为参考 */
+export function angularSpeed(orbitRadius: number, starMass = 620, planetMass = 0): number {
+  const reference = orbitalPeriod({ mass: 620 }, { a: KEPLER_REF_RADIUS, mass: 0 });
+  const period = orbitalPeriod({ mass: starMass }, { a: orbitRadius, mass: planetMass });
+  return ((2 * Math.PI) / KEPLER_REF_PERIOD_S) * (reference / period);
 }
 
 export interface OrbitBody {
@@ -215,6 +227,9 @@ export interface OrbitBody {
   node: number;
   phase: number;
   omega: number;
+  /** 这颗自己的偏心率与轨道面内近日点方向（rad） */
+  ecc: number;
+  periapsis: number;
 }
 
 export interface DustParticle {
@@ -346,6 +361,11 @@ export function beltAlpha(count: number): number {
   return clamp(0.3 + 0.13 * Math.log10(count), 0.3, 0.72);
 }
 
+/** 只要有一颗带自己的根数，这座星系就按独立轨道画；全局 eccentricity 只留给碎石带与旧数据 */
+export function hasIndependentOrbits(spec: GalaxySpec): boolean {
+  return spec.planets.some((planet) => planet.eccentricity !== undefined || planet.periapsisDeg !== undefined);
+}
+
 /**
  * 摆星系：按轨道半径排序，取最内的 VISIBLE_ORBIT_CAP 颗；轨道半径整体超出行星区时按同一比例收进来
  * （比例不变，用户指定的相对远近保留）；再逐圈检查「不相撞、留间距」，违反的向外推。
@@ -353,23 +373,29 @@ export function beltAlpha(count: number): number {
  * 分别恒为 a1、a2，两点距离 ≥ a2 − a1），所以只需管半径差。
  */
 export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
-  const star = starRadius(spec.starMass);
+  const independent = hasIndependentOrbits(spec);
+  const star = starRadius(spec.starMass, spec.starDensity);
   const sorted = [...spec.planets].sort((a, b) => a.orbitRadius - b.orbitRadius);
-  const shown = sorted.slice(0, VISIBLE_ORBIT_CAP);
+  const shown = independent ? sorted : sorted.slice(0, VISIBLE_ORBIT_CAP);
   const outermost = shown[shown.length - 1];
-  const orbitScale =
-    outermost === undefined ? 1 : Math.min(1, (PLANET_ZONE - planetRadius(outermost)) / outermost.orbitRadius);
+  const orbitScale = independent
+    ? 1
+    : outermost === undefined
+      ? 1
+      : Math.min(1, (PLANET_ZONE - planetRadius(outermost)) / outermost.orbitRadius);
   const planets: OrbitBody[] = [];
   const adjusted: string[] = [];
   let prevOrbit = 0;
+  let prevApo = 0;
   let prevRadius = Math.max(star, spec.starExtent ?? 0);
   const ecc = eccOf(spec.eccentricity);
   for (const planet of shown) {
     const radius = planetRadius(planet);
-    // 偏心轨道是以主星为中心的位似椭圆：两圈最挤在近日点，那里的间隔只有半长轴差的 (1 − e) 倍
+    const ownEcc = eccOf(planet.eccentricity ?? (independent ? LEGACY_ORBIT_E : spec.eccentricity));
+    // 旧的共用轨道仍按屏幕安全规则向外推；独立轨道的 a/e/ω 是用户设计，不在这里暗改
     const minOrbit = ecc === 0 ? prevOrbit + prevRadius + radius + MIN_CLEARANCE : prevOrbit + (prevRadius + radius + MIN_CLEARANCE) / (1 - ecc);
     const given = planet.orbitRadius * orbitScale;
-    const orbitRadius = Math.max(given, minOrbit);
+    const orbitRadius = independent ? given : Math.max(given, minOrbit);
     if (orbitRadius !== given) adjusted.push(planet.id);
     planets.push({
       id: planet.id,
@@ -378,24 +404,27 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
       label: planet.label ?? null,
       radius,
       orbitRadius,
-      inclination: clamp(planet.inclinationDeg, -8, 8) * DEG,
-      node: planet.nodeDeg * DEG,
+      inclination: independent ? 0 : clamp(planet.inclinationDeg, -8, 8) * DEG,
+      node: independent ? 0 : planet.nodeDeg * DEG,
       phase: planet.phaseDeg * DEG,
-      omega: angularSpeed(orbitRadius),
+      omega: angularSpeed(orbitRadius, spec.starMass, planet.mass),
+      ecc: ownEcc,
+      periapsis: (independent ? (planet.periapsisDeg ?? LEGACY_ORBIT_OMEGA_DEG) : 0) * DEG,
     });
     prevOrbit = orbitRadius;
+    prevApo = orbitRadius * (1 + ownEcc);
     prevRadius = radius;
   }
   limitInclinations(planets);
   const expectedOrbit = planets.length === 0 ? EXPECTED_ORBIT : null;
-  const lastEdge = expectedOrbit ?? prevOrbit + prevRadius;
+  const lastEdge = expectedOrbit ?? (independent ? prevApo : prevOrbit) + prevRadius;
   let belt: Belt | null = null;
   const rockSpecs = spec.rocks ?? [];
   // 根会话拎成的碎石块是 spec.sessions 里的；子会话的不是（见 RockSpec.child）
   const rootRocks = rockSpecs.filter((rock) => rock.child !== true).length;
   const sessions = Math.max(0, Math.floor(spec.sessions), rootRocks);
   if (sessions > 0 || rockSpecs.length > 0) {
-    const beltFloor = ecc === 0 || planets.length === 0 ? lastEdge + MIN_CLEARANCE * 2 : prevOrbit + (prevRadius + MIN_CLEARANCE * 2) / (1 - ecc);
+    const beltFloor = independent ? lastEdge + MIN_CLEARANCE * 2 : ecc === 0 || planets.length === 0 ? lastEdge + MIN_CLEARANCE * 2 : prevOrbit + (prevRadius + MIN_CLEARANCE * 2) / (1 - ecc);
     const inner = Math.max(beltFloor, spec.beltInner ?? 0);
     // 碎石带随会话数长大：宽度按对数长（beltGrowthOf），几条和几千条都装得下
     const outer = beltOuterOf(inner, sessions);
@@ -431,7 +460,7 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
     rocks,
     rockOrbit: belt === null || rocks.length === 0 ? null : belt.inner + (belt.outer - belt.inner) * ROCK_ORBIT_AT,
     planets,
-    hidden: Math.max(0, sorted.length - VISIBLE_ORBIT_CAP),
+    hidden: independent ? 0 : Math.max(0, sorted.length - VISIBLE_ORBIT_CAP),
     expectedOrbit,
     orbitScale,
     belt,
@@ -474,15 +503,19 @@ export interface Vec3 {
  * ecc > 0 时是开普勒椭圆，theta 是偏近点角 E：平面内 (a(cos E − e), b·sin E)，b = a√(1−e²)，
  * 主星（原点）在焦点上，近日点在 theta = 0（升交点方向）。ecc = 0 时就是半径 a 的圆，与原来逐位相同
  */
-export function orbitPoint(a: number, inclination: number, node: number, theta: number, ecc = 0): Vec3 {
+export function orbitPoint(a: number, inclination: number, node: number, theta: number, ecc = 0, periapsis = 0): Vec3 {
   const c = ecc === 0 ? Math.cos(theta) : Math.cos(theta) - ecc;
   const s = ecc === 0 ? Math.sin(theta) : Math.sin(theta) * Math.sqrt(1 - ecc * ecc);
+  const cw = Math.cos(periapsis);
+  const sw = Math.sin(periapsis);
+  const turnedC = c * cw - s * sw;
+  const turnedS = c * sw + s * cw;
   const cn = Math.cos(node);
   const sn = Math.sin(node);
   const ci = Math.cos(inclination);
   return {
-    x: a * (cn * c - sn * s * ci),
-    y: a * (sn * c + cn * s * ci),
+    x: a * (cn * turnedC - sn * turnedS * ci),
+    y: a * (sn * turnedC + cn * turnedS * ci),
     z: a * s * Math.sin(inclination),
   };
 }
@@ -698,12 +731,12 @@ export interface OrbitFrame {
   m2y: number;
 }
 
-export function orbitFrame(a: number, inclination: number, node: number, camera: Camera, vp: Viewport, ecc = 0): OrbitFrame {
+export function orbitFrame(a: number, inclination: number, node: number, camera: Camera, vp: Viewport, ecc = 0, periapsis = 0): OrbitFrame {
   // 椭圆按偏近点角参数化之后仍是「中心 + 两个半轴向量」，仿射模型照样精确（中心在 −a·e，主星在焦点）
   // 转过方位角时取「对着镜头」的四个参数角（s = −方位角）：远近两点仍是屏幕上的短轴两端（透视下最准、屏幕安全布局在这里量），
   // 再换回原参数的 cos / sin 基。正圆轨道因此与方位角 0 时是同一个屏幕椭圆（只差相位）。方位角 0 时 s = 0，与原来逐位相同。
   const s0 = -camera.azimuth;
-  const at = (theta: number) => toScreen(project(orbitPoint(a, inclination, node, theta + s0, ecc), camera), vp);
+  const at = (theta: number) => toScreen(project(orbitPoint(a, inclination, node, theta + s0, ecc, periapsis), camera), vp);
   const right = at(0);
   const left = at(Math.PI);
   const far = at(Math.PI / 2);
@@ -835,20 +868,19 @@ export const WAITING_SCALE = 1.35;
 export function orbitArcs(layout: GalaxyLayout, camera: Camera, vp: Viewport, samplesPerArc = 6): OrbitArc[] {
   const arcs: OrbitArc[] = [];
   const span = (Math.PI * 2) / ARCS_PER_ORBIT;
-  const rings = layout.planets.map((p) => ({ id: p.id, a: p.orbitRadius, inclination: p.inclination, node: p.node, expected: false }));
+  const rings = layout.planets.map((p) => ({ id: p.id, a: p.orbitRadius, inclination: p.inclination, node: p.node, ecc: p.ecc, periapsis: p.periapsis, expected: false }));
   if (layout.expectedOrbit !== null) {
-    rings.push({ id: EXPECTED_ID, a: layout.expectedOrbit, inclination: 0, node: 0, expected: true });
+    rings.push({ id: EXPECTED_ID, a: layout.expectedOrbit, inclination: 0, node: 0, ecc: layout.ecc, periapsis: 0, expected: true });
   }
-  const ecc = layout.ecc;
   for (const planet of rings) {
-    const frame = orbitFrame(planet.a, planet.inclination, planet.node, camera, vp, ecc);
+    const frame = orbitFrame(planet.a, planet.inclination, planet.node, camera, vp, planet.ecc, planet.periapsis);
     for (let k = 0; k < ARCS_PER_ORBIT; k++) {
       const from = k * span;
       let d = "";
       let depthSum = 0;
       for (let i = 0; i <= samplesPerArc; i++) {
         const theta = from + (span * i) / samplesPerArc;
-        const projected = project(orbitPoint(planet.a, planet.inclination, planet.node, theta, ecc), camera);
+        const projected = project(orbitPoint(planet.a, planet.inclination, planet.node, theta, planet.ecc, planet.periapsis), camera);
         const { x, y } = framePoint(frame, theta);
         d += `${i === 0 ? "M" : "L"}${round1(x)} ${round1(y)}`;
         depthSum += projected.depth;
@@ -923,12 +955,11 @@ export function drawFrame(
     { kind: "star", key: "star", depth: starP.depth, x: starS.x, y: starS.y, r: (vp.focal * layout.starRadius) / starP.depth },
   ];
   const planetAngle = new Map<string, { theta: number; depth: number }>();
-  const ecc = layout.ecc;
   for (const planet of layout.planets) {
     // phase + ω·t 是平近点角；开普勒方程换成轨道上的位置（偏近点角）：近日点快、远日点慢，面积速度恒定
-    const theta = eccentricAnomaly(planet.phase + planet.omega * t, ecc);
-    const p = project(orbitPoint(planet.orbitRadius, planet.inclination, planet.node, theta, ecc), camera);
-    const s = framePoint(orbitFrame(planet.orbitRadius, planet.inclination, planet.node, camera, vp, ecc), theta);
+    const theta = eccentricAnomaly(planet.phase + planet.omega * t, planet.ecc);
+    const p = project(orbitPoint(planet.orbitRadius, planet.inclination, planet.node, theta, planet.ecc, planet.periapsis), camera);
+    const s = framePoint(orbitFrame(planet.orbitRadius, planet.inclination, planet.node, camera, vp, planet.ecc, planet.periapsis), theta);
     // 等你的行星放大一档；转到主星背后就让主星挡住（星系规则「天体不得相撞」，屏幕安全布局保证它在近侧不碰主星）
     const waiting = planet.state === "waiting";
     const depth = p.depth;
@@ -963,11 +994,11 @@ export function drawFrame(
     // 不超过此刻最小那颗行星的一半
     const rockR = rockPxOf(items);
     const omega = angularSpeed(layout.rockOrbit);
-    const frame = orbitFrame(layout.rockOrbit, 0, 0, camera, vp, ecc);
+    const frame = orbitFrame(layout.rockOrbit, 0, 0, camera, vp, layout.ecc);
     for (const rock of layout.rocks) {
       // 碎石块在平近点角上等距：同一个周期，永远不互相追上
-      const theta = eccentricAnomaly(rock.theta0 + omega * t, ecc);
-      const p = project(orbitPoint(layout.rockOrbit, 0, 0, theta, ecc), camera);
+      const theta = eccentricAnomaly(rock.theta0 + omega * t, layout.ecc);
+      const p = project(orbitPoint(layout.rockOrbit, 0, 0, theta, layout.ecc), camera);
       const s = framePoint(frame, theta);
       items.push({ kind: "rock", key: `rock-${rock.id}`, planetId: rock.id, state: rock.state, label: rock.label, depth: p.depth, x: s.x, y: s.y, r: rockR });
     }

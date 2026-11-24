@@ -40,8 +40,10 @@ export interface LiveProjection {
   planets: Map<string, OrbitFrame>;
   /** 碎石块那一圈（没有就 null） */
   rock: OrbitFrame | null;
-  /** 行星 / 碎石块画在主星背后那一层的偏近点角区间（已收 FAR_MARGIN） */
+  /** 每颗行星的远近分界可以不同（e、ω 不同）；rocks 共用这一份 */
   far: { lo: number; hi: number };
+  /** 行星 id → 它自己的远近分界 */
+  planetFar: Map<string, { lo: number; hi: number }>;
   /** 碎石带：矩阵与远近分界（转动层坐标里的半平面：先转 chi 度，再在 v < −offset 那边是远侧） */
   belt: { frame: OrbitFrame; chiDeg: number; offset: number } | null;
   /** 主星此刻在屏幕上的中心与半径 */
@@ -67,10 +69,14 @@ export function liveProjection(frozen: FrozenScene, tiltDeg: number, azimuthDeg:
   const ecc = layout.ecc;
   const camera = makeCamera(FRAME_EXTENT, tiltDeg, undefined, azimuthDeg);
   const planets = new Map<string, OrbitFrame>();
-  for (const planet of layout.planets) planets.set(planet.id, orbitFrame(planet.orbitRadius, planet.inclination, planet.node, camera, viewport, ecc));
+  const planetFar = new Map<string, { lo: number; hi: number }>();
+  for (const planet of layout.planets) {
+    planets.set(planet.id, orbitFrame(planet.orbitRadius, planet.inclination, planet.node, camera, viewport, planet.ecc, planet.periapsis));
+    planetFar.set(planet.id, farWindow(planet.ecc, camera.azimuth + planet.periapsis, FAR_MARGIN));
+  }
   const rock = layout.rockOrbit === null ? null : orbitFrame(layout.rockOrbit, 0, 0, camera, viewport, ecc);
   const belt = layout.belt === null ? null : { frame: beltFrame(layout.belt, camera, viewport), ...beltSplit(layout.belt.ecc, camera.azimuth) };
   const p = project({ x: 0, y: 0, z: 0 }, camera);
   const star = { x: viewport.cx + viewport.focal * p.sx, y: viewport.cy + viewport.focal * p.sy, r: (viewport.focal * layout.starRadius) / p.depth, depth: p.depth };
-  return { camera, viewport, planets, rock, far: farWindow(ecc, camera.azimuth, FAR_MARGIN), belt, star, arcs: orbitArcs(layout, camera, viewport) };
+  return { camera, viewport, planets, planetFar, rock, far: farWindow(ecc, camera.azimuth, FAR_MARGIN), belt, star, arcs: orbitArcs(layout, camera, viewport) };
 }

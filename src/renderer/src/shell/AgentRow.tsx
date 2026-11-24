@@ -14,6 +14,7 @@ import { ActivityAvatar, SessionCaret, SubAgentFaces } from "./AgentActivity.tsx
 import { realSubAgentFaces, type RowActivity } from "./sidebar-activity.ts";
 import { useSubAgentFixtures } from "./sidebar-activity-store.ts";
 import { useT } from "../locale.ts";
+import { BinaryMark } from "./BinaryMark.tsx";
 import "./agent-row.css";
 
 /**
@@ -28,6 +29,8 @@ import "./agent-row.css";
 export function AgentRow(props: {
   /** null = 「主目录」（不属于任何工作区的会话）：没有路径，不能改名 / 移除 / 看文件 */
   workspace: Workspace | null;
+  /** 联星的伴星（Workspace.binaryWith 指向的那个工作区）：头像旁挂一颗小伴星；没有为 null */
+  binaryPartner?: { id: string; name: string } | null;
   summary: ScopeSummary;
   /** 「谁在干活」（编排形态下 Sidebar 才算；缺席 = 不画日冕 / 插入符 / 子智能体） */
   activity?: RowActivity;
@@ -67,7 +70,7 @@ export function AgentRow(props: {
       <DustFigure size={28} label={avatarLabel} />
     ) : (
       // 固定直径（设计审查 R10：按质量缩放的 3px 差别读不出「谁更重」，只剩左缘参差）
-      <StarFigure bySize={false} design={design} size={26} label={avatarLabel} />
+      <BinaryMark partner={props.binaryPartner ?? null} figure={<StarFigure bySize={false} design={design} size={26} label={avatarLabel} />} />
     );
   const commit = (): void => {
     if (editing !== null) props.onRename(editing);

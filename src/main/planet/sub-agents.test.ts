@@ -25,11 +25,11 @@ async function readJsonFile(path: string): Promise<Record<string, unknown>> {
   return JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
 }
 
-/** 一座有主星（60 M⊕）和一颗老行星（聆箴，没有档案）的星系 */
+/** 一座有主星（600 M⊕）和一颗老行星（聆箴，没有档案）的星系：新规则下还放得下一颗圆轨道行星 */
 async function seeded(): Promise<string> {
   const dir = await workspace();
   await mkdir(join(dir, "planet"), { recursive: true });
-  await writeFile(join(dir, "planet", "design.json"), JSON.stringify({ name: "烛霓", mass: { value: 60, unit: "M⊕" } }));
+  await writeFile(join(dir, "planet", "design.json"), JSON.stringify({ name: "烛霓", mass: { value: 600, unit: "M⊕" } }));
   await writeFile(join(dir, "planet", "galaxy.json"), JSON.stringify({ version: 1, main: {}, planets: [{ id: "rec", name: "聆箴", massEarth: 2.2, orbit: 19 }] }));
   return dir;
 }
@@ -50,8 +50,9 @@ describe("SubAgentStore：建", () => {
     const planets = galaxy["planets"] as Record<string, unknown>[];
     assert.equal(planets.length, 2);
     assert.equal(planets[1]?.["id"], "agent-1");
-    // 已有 19 → 第一个离它 ≥ 12 的是 31
-    assert.equal(planets[1]?.["orbit"], 31);
+    // 老轨道 e=0.3、远日距 24.7；新圆轨道在 38 首次满足 2√3 个相互希尔半径
+    assert.equal(planets[1]?.["orbit"], 38);
+    assert.equal(planets[1]?.["eccentricity"], 0);
     assert.equal(planets[1]?.["massEarth"], 2);
     assert.deepEqual(planets[1]?.["elements"], { eyes: true });
     assert.equal(planets[1]?.["surface"], undefined);
@@ -89,14 +90,15 @@ describe("SubAgentStore：建", () => {
     await fail({ name: "烛霓", role: "x" }, "主星");
     await fail({ name: "新的", role: "   " }, "role");
     await fail({ name: "一".repeat(25), role: "x" }, "最多 24");
-    // 主星 60 M⊕ → 上限 4（夹在绝对上限）；给 5 越界
+    // 主星 600 M⊕ → 上限 4（夹在绝对上限）；给 5 越界
     await fail({ name: "新的", role: "x", massEarth: 5 }, "越过了上限 4");
     await fail({ name: "新的", role: "x", surfacePath: join(dir, "nope.png") }, "读不到");
     await fail({ name: "新的", role: "x", surfacePath: "relative.png" }, "绝对路径");
-    // 什么都没写进去
-    const galaxy = await readJsonFile(join(dir, "planet", "galaxy.json"));
-    assert.equal((galaxy["planets"] as unknown[]).length, 1);
-    for (let i = 0; i < 7; i++) assert.equal((await store.create(dir, { name: `p${i}`, role: "x" }, "panel")).ok, true);
+    // 前面的校验失败都没有写进去
+    const before = await readJsonFile(join(dir, "planet", "galaxy.json"));
+    assert.equal((before["planets"] as unknown[]).length, 1);
+    // 名单上限与轨道容量是两件事：直接备一份 8 颗名单，checkCreate 应先报名额满
+    await writeFile(join(dir, "planet", "galaxy.json"), JSON.stringify({ version: 1, main: {}, planets: Array.from({ length: 8 }, (_, i) => ({ id: `p${i}`, name: `p${i}`, massEarth: 0.1, orbit: 19 + i })) }));
     await fail({ name: "第九颗", role: "x" }, "最多 8");
     await rm(dir, { recursive: true });
   });
@@ -104,10 +106,22 @@ describe("SubAgentStore：建", () => {
   it("小主星：上限跟着主星走（主星 20 M⊕ → 行星最多 2）", async () => {
     const dir = await seeded();
     await writeFile(join(dir, "planet", "design.json"), JSON.stringify({ name: "红矮星", mass: { value: 20, unit: "M⊕" } }));
+    await writeFile(join(dir, "planet", "galaxy.json"), JSON.stringify({ version: 1, main: {}, planets: [] }));
     const store = new SubAgentStore({ newId: counter() });
     const over = await store.create(dir, { name: "大个子", role: "x", massEarth: 2.5 }, "chat");
     assert.equal(over.ok, false);
     assert.equal((await store.create(dir, { name: "大个子", role: "x", massEarth: 2 }, "chat")).ok, true);
+    await rm(dir, { recursive: true });
+  });
+
+  it("轨道容量：小主星带着老行星时排不下第二颗，提示加主星质量或调远，且不先写档案", async () => {
+    const dir = await seeded();
+    await writeFile(join(dir, "planet", "design.json"), JSON.stringify({ name: "红矮星", mass: { value: 20, unit: "M⊕" } }));
+    const result = await new SubAgentStore({ newId: counter() }).create(dir, { name: "挤不下", role: "x", massEarth: 2 }, "chat");
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.match(result.error, /增加主星质量|调远/);
+    const galaxy = await readJsonFile(join(dir, "planet", "galaxy.json"));
+    assert.equal((galaxy["planets"] as unknown[]).length, 1);
     await rm(dir, { recursive: true });
   });
 

@@ -169,6 +169,9 @@ export interface AgentPlanetInput {
   /** 按元素构成推出来的密度（g/cm³）；缺席按成分类别 */
   density?: number;
   orbitRadius: number;
+  /** 每颗自己的轨道根数；旧数据缺席时 renderer 按旧共用值迁移 */
+  eccentricity?: number;
+  periapsisDeg?: number;
 }
 
 export interface ScopeGalaxy {
@@ -289,14 +292,17 @@ function agentGalaxy(input: ScopeGalaxyInput, agents: readonly AgentPlanetInput[
   }));
   const planets: PlanetSpec[] = agents.map((agent) => {
     const hash = workspaceHash(agent.id);
+    const independent = agent.eccentricity !== undefined || agent.periapsisDeg !== undefined;
     return {
       id: agent.id,
       mass: agent.mass,
       composition: agent.composition,
       ...(agent.density === undefined ? {} : { density: agent.density }),
       orbitRadius: agent.orbitRadius,
-      inclinationDeg: ((hash >>> 3) % 11) - 5,
-      nodeDeg: (hash >>> 7) % 360,
+      ...(agent.eccentricity === undefined ? {} : { eccentricity: agent.eccentricity }),
+      ...(agent.periapsisDeg === undefined ? {} : { periapsisDeg: agent.periapsisDeg }),
+      inclinationDeg: independent ? 0 : ((hash >>> 3) % 11) - 5,
+      nodeDeg: independent ? 0 : (hash >>> 7) % 360,
       phaseDeg: (hash >>> 13) % 360,
       state: null,
     };
@@ -482,7 +488,7 @@ export function homeGalaxyOf(input: {
     ...(input.ownStateOf === undefined ? {} : { ownStateOf: input.ownStateOf }),
     now: input.now,
     starMass: star.mass,
-    starExtent: starRadius(star.mass) * starExtentRatio(input.design),
+    starExtent: starRadius(star.mass, star.density) * starExtentRatio(input.design),
     designedPlanet: null,
     ...(input.recent === undefined ? {} : { recent: input.recent }),
     ...(input.labels === undefined ? {} : { labels: input.labels }),
@@ -493,5 +499,7 @@ export function homeGalaxyOf(input: {
     // 星际空间：没有主智能体就没有主星与行星，原来算成行星的那几条也是碎石
     return { spec: { ...data.spec, planets: [], sessions: data.spec.sessions + data.spec.planets.length }, starless: true, agents: new Map() };
   }
-  return { spec: data.spec, starless: false, agents: agentMapOf(planets) };
+  // 主星密度（红矮星）：缺席不写字段，现有星系的 spec 逐位不变
+  const spec = star.density === undefined ? data.spec : { ...data.spec, starDensity: star.density };
+  return { spec, starless: false, agents: agentMapOf(planets) };
 }

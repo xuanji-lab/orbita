@@ -136,6 +136,7 @@ import octagonX from "../../../../design-system/assets/icons/lucide/octagon-x.sv
 import orbit from "../../../../design-system/assets/icons/lucide/orbit.svg?raw";
 import paintbrush from "../../../../design-system/assets/icons/lucide/paintbrush.svg?raw";
 import plus from "../../../../design-system/assets/icons/lucide/plus.svg?raw";
+import radar from "../../../../design-system/assets/icons/lucide/radar.svg?raw";
 import refreshCw from "../../../../design-system/assets/icons/lucide/refresh-cw.svg?raw";
 import shuffle from "../../../../design-system/assets/icons/lucide/shuffle.svg?raw";
 import rotateCcw from "../../../../design-system/assets/icons/lucide/rotate-ccw.svg?raw";
@@ -285,6 +286,7 @@ const ICONS = {
   "panel-left": panelLeft,
   "panel-right": panelRight,
   "pencil-line": pencilLine,
+  radar,
   pause,
   play,
   paperclip,

@@ -71,7 +71,7 @@ describe("PlanetStore：写回", () => {
     const store = new PlanetStore(fakeSurface);
     await store.write(dir, {
       main: { id: "main", name: "烛霓", massEarth: 75, composition: null, orbit: null, elements: { eyes: true, ring: true } },
-      planets: [{ id: "rec", name: "聆箴", massEarth: 3, composition: "rock", orbit: 26, elements: { eyes: true } }],
+      planets: [{ id: "rec", name: "聆箴", massEarth: 3, composition: "rock", orbit: 26, eccentricity: 0.2, periapsisDeg: 120, elements: { eyes: true } }],
     });
     const design = JSON.parse(await readFile(join(dir, "planet", "design.json"), "utf8")) as { mass: { value: number }; status: string };
     assert.equal(design.mass.value, 75);
@@ -82,6 +82,8 @@ describe("PlanetStore：写回", () => {
     assert.equal(read?.main?.surface, "data:surface.png");
     assert.equal(read?.planets[0]?.massEarth, 3);
     assert.equal(read?.planets[0]?.orbit, 26);
+    assert.equal(read?.planets[0]?.eccentricity, 0.2);
+    assert.equal(read?.planets[0]?.periapsisDeg, 120);
     await rm(dir, { recursive: true });
   });
 

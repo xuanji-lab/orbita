@@ -752,6 +752,7 @@ export function Sidebar(props: {
                 <AgentRow
                   key={workspace?.id ?? "home"}
                   workspace={workspace}
+                  binaryPartner={binaryPartnerOf(workspace, session.workspaces)}
                   summary={summary}
                   activity={activity}
                   active={activeAgentId === (workspace?.id ?? null)}
@@ -2123,4 +2124,11 @@ function ModeChip(props: {
       {props.children}
     </button>
   );
+}
+
+/** 侧栏行的联星伴星：binaryWith 指向的工作区还在列表里才算（另一边读回已守对称） */
+function binaryPartnerOf(workspace: Workspace | null, workspaces: readonly Workspace[]): { id: string; name: string } | null {
+  if (workspace === null || workspace.binaryWith === undefined) return null;
+  const partner = workspaces.find((w) => w.id === workspace.binaryWith);
+  return partner === undefined ? null : { id: partner.id, name: partner.name };
 }
