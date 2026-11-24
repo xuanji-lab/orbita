@@ -160,9 +160,9 @@ export function App() {
     // 语言同理（main.tsx 首帧的 <html lang> 也是按它写的）：不对齐的话选了中文的人先看一帧英文
     ...(api.initialLanguage === null ? {} : { language: api.initialLanguage }),
   });
-  // 界面语言：单语主题说了算，双语主题听语言设置（shared 的 effectiveLanguage）
+  // 界面语言跟设置走（shared 的 effectiveLanguage）
   const resolvedTheme = useTheme(settings.theme, settings.language);
-  const locale = effectiveLanguage(resolvedTheme, settings.language);
+  const locale = effectiveLanguage(settings.language);
   const t = messagesOf(locale);
   const refresh = useCallback(async () => {
     try {
@@ -193,11 +193,11 @@ export function App() {
     void api.settings.set(patch).then(setSettings);
   }, []);
 
-  /** 文档面板的纸面：设置里的值按当前主题折算（纸面主题下回落 quiet 并锁住切换） */
+  /** 文档 / 演示文稿面板的纸面：只用设置里的纸样，与应用主题无关 */
   const docPaper = useMemo(() => {
-    const { paper, locked } = effectivePaper(settings.docPaper, resolvedTheme);
-    return { paper, locked, setPaper: (next: DocPaper) => changeSettings({ docPaper: next }) };
-  }, [settings.docPaper, resolvedTheme, changeSettings]);
+    const paper = effectivePaper(settings.docPaper);
+    return { paper, setPaper: (next: DocPaper) => changeSettings({ docPaper: next }) };
+  }, [settings.docPaper, changeSettings]);
 
   /**
    * 星标是个**开关**：在库里就取消、不在就加到最后（新星的排在末尾，
@@ -1579,7 +1579,6 @@ export function App() {
                 onExcerptSaved={bumpExcerpts}
                 onOpenSubSession={openSubSessionInPanel}
                 litSubSessionId={litSubSessionId}
-                theme={resolvedTheme}
                 starredModels={settings.starredModels ?? []}
                 onToggleStarModel={toggleStarModel}
                 onOpenProviders={openProvidersTab}

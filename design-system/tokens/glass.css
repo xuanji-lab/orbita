@@ -17,7 +17,7 @@
   /* 方向 N（2026-11-07）：浅色也不再是玻璃——壳与井都是实色，纸不透光（alpha 1，bg 纯白）。
      半透明阶梯 .60 / .84 / .936 让亮度随壁纸漂、叠一层变一层，是「靠叠加出层次」的老办法；
      现在层次靠壳 → 井 → 卡面三个**写明的**色，边界是发丝线。`.glass-card` 这个类名保留（它是
-     「那一张卡」的配方名，改名牵动全仓），但它已经不是玻璃了。纸面两档仍是 .92（下面）。 */
+     「那一张卡」的配方名，改名牵动全仓），但它已经不是玻璃了。 */
   --glass-alpha: 1; /* @kind other */
   --glass-border: var(--color-border-default);
   --glass-bg: #ffffff;
@@ -29,7 +29,7 @@
  * 压在井上就是「浮起 +21 步」的那一层。地面（.layer 外壳 / .pane 井）不再走玻璃：
  * 透明度阶梯只能往 tint 爬，叠不出「外壳浅、井更深」；且 Windows 窗口底是不透明
  * 浅色 #f3f4f1，玻璃叠上去只会灰糊——实色覆写在 src/renderer/src/styles.css。
- * 浅色与纸面档维持玻璃阶梯不变；macOS 暗档因此不再透出桌面——暗面要挡而不是透
+ * 浅色档维持玻璃阶梯不变；macOS 暗档因此不再透出桌面——暗面要挡而不是透
  * （本文件头注释「dark blocks more」的原则，实色是它的终点）。
  */
 :root[data-theme="graphite"] {
@@ -42,14 +42,6 @@
   --glass-alpha: 1; /* @kind other */
   --glass-border: rgba(255, 255, 255, 0.11);
   --glass-bg: #1f232a;
-}
-
-/* 纸面两档（copybook / typescript）是纸，不是玻璃：面板几乎不透，桌面不从纸底下透出来。 */
-:root[data-theme="copybook"],
-:root[data-theme="typescript"] {
-  --glass-alpha: 0.92; /* @kind other */
-  --glass-border: rgba(255, 255, 255, 0.7);
-  --glass-bg: rgba(253, 252, 248, 0.92);
 }
 
 /* The single card recipe. Reused everywhere by changing only width/height.

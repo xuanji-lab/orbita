@@ -56,65 +56,6 @@ export function pullRequestUrl(pr: number): string {
 
 export const EXPERIMENTAL_FEATURES: readonly ExperimentalFeature[] = [
   {
-    id: "paper-themes",
-    icon: "notebook-pen",
-    name: { zh: "纸面皮肤", en: "Paper themes" },
-    summary: {
-      zh: "小学作业（中文稿纸）与打字稿（英文打字机）两档主题，在外观 › 主题里选。",
-      en: "Copybook (Chinese manuscript paper) and Typescript (English typewriter) themes, under Appearance › Theme.",
-    },
-    changelog: [
-      {
-        pr: 74,
-        date: "2026-09-25",
-        note: {
-          zh: "稿纸两档主题：中文稿纸的绿格红笔，英文打字稿的打字机字与红页边线。",
-          en: "Two paper themes: green grid and red pen for Chinese, typewriter face and red margin for English.",
-        },
-      },
-      {
-        pr: 76,
-        date: "2026-09-25",
-        note: {
-          zh: "界面语言跟主题走：稿纸主题下界面全中文，打字稿全英文。",
-          en: "Interface language follows the theme: all Chinese on manuscript paper, all English on Typescript.",
-        },
-      },
-      {
-        pr: 78,
-        date: "2026-09-25",
-        note: {
-          zh: "首页门面：红田字格里的标语、打字稿的英文标语与红笔批语。",
-          en: "Home screen: the slogan in red practice grids, an English slogan on Typescript, and a red-pen remark.",
-        },
-      },
-      {
-        pr: 80,
-        date: "2026-09-25",
-        note: {
-          zh: "稿纸主题改名「小学作业」，输入框里的英文垫修正液；首页批语落当天日期。",
-          en: "Manuscript renamed Copybook; English in the composer sits on correction fluid; the home remark carries today's date.",
-        },
-      },
-      {
-        pr: 184,
-        date: "2026-10-10",
-        note: {
-          zh: "挂到实验开关后面：关着时主题选择卡不列这两档，已选的照常生效。",
-          en: "Moved behind the experimental switch: hidden from the theme picker when off; a theme already chosen keeps applying.",
-        },
-      },
-      {
-        pr: 184,
-        date: "2026-10-12",
-        note: {
-          zh: "改为单独开关：这一项自己有开 / 关，不再跟总开关。",
-          en: "Given its own switch: on and off by itself, no longer tied to a master switch.",
-        },
-      },
-    ],
-  },
-  {
     id: "pdf-citations",
     icon: "quote",
     name: { zh: "PDF 引用", en: "PDF citations" },

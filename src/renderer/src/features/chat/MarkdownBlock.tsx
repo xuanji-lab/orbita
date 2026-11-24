@@ -25,7 +25,6 @@ import { Icon } from "../../shell/Icon";
 import { chipIconName, type ChipKind } from "../../shell/composer-chips.ts";
 import { pluginChipName } from "../plugins/plugin-names.ts";
 import { usePluginNames } from "../plugins/usePluginNames.ts";
-import { dominantScript } from "./dominant-script";
 import { useT } from "../../locale.ts";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { citationIdOfHref, citationTitle, remarkCitationMarkers } from "./citation-markers.ts";
@@ -169,8 +168,7 @@ export const MarkdownBlock = memo(function MarkdownBlock({
   }, [normalized, bubble, citations]);
 
   return (
-    // data-script：以中文为主还是拉丁为主（dominant-script.ts），Typescript 主题按它换阅读字
-    <div className={bubble ? "chat-md bubble-md" : "chat-md"} data-script={dominantScript(text)}>
+    <div className={bubble ? "chat-md bubble-md" : "chat-md"}>
       <MarkdownErrorBoundary>
         {blocks.map((block, index) => {
           // 只有仍在增长的尾块走流式取舍：已完成段的字符串不变、memo 命中，

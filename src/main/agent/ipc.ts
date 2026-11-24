@@ -246,7 +246,7 @@ export function registerAgentIpc(
   /** 署名语言同样每轮现读：换主题 / 改语言，下一轮的署名就跟上（规则在 shared 的 effectiveLanguage） */
   const readAttributionLanguage = async (): Promise<Language> => {
     const current = await settings.read();
-    return effectiveLanguage(current.theme, current.language);
+    return effectiveLanguage(current.language);
   };
 
   /**

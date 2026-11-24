@@ -328,15 +328,13 @@ function scanFontSizes(): string[] {
 const CSS_LINE_HEIGHT_RE = /(?<![-\w])line-height\s*:\s*([^;}\n]+)/g;
 // 只认对象属性位置（前面是 `{` / `,` / 行首）：`cond ? lineHeight : 22` 这类三元不是样式
 const TS_LINE_HEIGHT_RE = /(?:^|[{,])\s*lineHeight\s*:\s*([^,}\n]+)/g;
-const LINE_HEIGHT_OK = /^(["'`]?var\(--(line-height-[a-z-]+|paper-cell)\)["'`]?|["'`]?(0|1|normal|inherit)["'`]?)$/;
+const LINE_HEIGHT_OK = /^(["'`]?var\(--line-height-[a-z-]+\)["'`]?|["'`]?(0|1|normal|inherit)["'`]?)$/;
 /**
- * 按「文件: 值」豁免（加条目必须写清理由）——三处都是几何，不是排版：
- * - paper-themes.css 24px：打字稿主题输入框的行高要和每 24px 一条的横线背景对齐；
+ * 按「文件: 值」豁免（加条目必须写清理由）——两处都是几何，不是排版：
  * - styles.css 14px：右栏铃铛未读角标，行高 = 胶囊高度，把数字竖向居中；
  * - focus.css 32px：专注滚轮的选中档数字，行高 = 滚轮行高，把数字竖向居中在选中带里。
  */
 const LINE_HEIGHT_EXEMPTIONS = new Set<string>([
-  "src/renderer/src/paper-themes.css: 24px",
   "src/renderer/src/styles.css: 14px",
   "src/renderer/src/shell/focus/focus.css: 32px",
 ]);
@@ -446,7 +444,6 @@ const OFF_SCALE_SPACING_BUDGET = new Map<string, number>([
   ["src/renderer/src/features/settings/providers-view.css", 6],
   ["src/renderer/src/features/settings/settings-view.css", 5],
   ["src/renderer/src/features/settings/update-view.css", 1],
-  ["src/renderer/src/paper-themes.css", 2],
   ["src/renderer/src/shell/focus/focus.css", 8],
   ["src/renderer/src/shell/toolbar.css", 2],
   ["src/renderer/src/shell/usage.css", 7],

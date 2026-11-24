@@ -10,38 +10,10 @@ import { flattenRenderUnits, groupToolUnits, groupTurnsByTurn, toolCallSummary, 
 import { firstLine, processLive } from "./turn-process.ts";
 
 /**
- * 首页会话卡的选卡与行位规则（纯函数，ChatView 首页唯一消费者）。
- *
- * 规则：
- * - **候选与现状同一排除**：已归档、从未发过消息（无标题）的会话不进卡——归档是用户明确说「别翻出来」。
- * - **遗留事项不再让位**（2026-10-30 推翻 2026-09-22 的「有 open carryover 的会话优先占卡、行位换成遗留标题」）：
- *   用户说遗留没人用、太多、占首页卡，界面要「信息呈现得更高效，而不是更多」。遗留 / 以后再做只在
- *   那条任务的进度面板与侧栏的跨任务索引里，首页卡只讲「此刻在干什么」与最近提问。
- *
- * - **要你注意的先占卡**（2026-10-30，原型 `function home()`「只放需要你注意的三条：等你 >
- *   出错 > 在跑 > 最近」）：给了 `stateOf` 时，等你 / 出错 / 在跑的会话先按这个顺序占卡，
- *   其余照上面两轮补齐。卡上说的是「此刻在干什么」（homeCardLine），在跑的会话没上卡，
- *   这一句就说不出来。
- *
- * 前置条件：`sessions` 已按 `sortSessions` 排序（ChatView 吃的
- * `session.sessions` 由主进程 `list()` 排好）。函数不再排一次——排法必须
- * 只有 `sortSessions` 一份，这里重排迟早漂移。
- *
- * **子会话不进首页会话卡**（子会话 PR4c，2.3）：`session.sessions` 是全量列表
- * （含子会话），首页卡与左栏、辅助对话选择器一样只列根会话——子会话唯一的入口
- * 是母会话的右栏 Sub-sessions 面板。node --test 直接加载本文件，`rootSessions`
- * 这个值导入因此走相对路径带 `.ts` 后缀（`@shared` 别名只在构建期由
- * electron-vite 解析），其余仍是 type import。
+ * 首页记录的选行与「此刻在干什么」那一句（纯函数，ChatView 首页唯一消费者）。
+ * 已归档、无标题与子会话不进首页；输入已按 sortSessions 排好，这里不重排。
+ * node --test 直接加载本文件，值导入因此走相对路径带 `.ts` 后缀。
  */
-
-/** 普通卡的行位上限（现状三槽，recentQueries 本身就最多 3 条） */
-export const HOME_CARD_QUERY_ROWS = 3;
-
-/** 首页卡总数（现状恒三） */
-const HOME_CARD_COUNT = 3;
-
-/** 要你注意的先占卡，按这个顺序（与铃铛清单、折叠组头的汇总同序，跑完没看算「最近」） */
-const ATTENTION_ORDER: readonly Exclude<SessionRunState, null>[] = ["waiting", "failed", "running"];
 
 /**
  * 首页「记录」的三组上限（2026-11-07 方向 N：首页从三张等重的卡改成按状态分组的记录行）。
@@ -65,10 +37,9 @@ export interface HomeLogGroup {
 }
 
 /**
- * 首页记录的选行与分组（取代 selectHomeCards 在非纸面主题下的位置；纸面两档仍是三张卡，
- * 它们的版式是田字格 / 打字稿的整套，不套 N）。
+ * 首页记录的选行与分组。
  *
- * 候选与卡同一排除（子会话、归档、无标题）。顺序沿用列表序（sortSessions：置顶优先 + 最近活跃）。
+ * 候选排除子会话、归档、无标题。顺序沿用列表序（sortSessions：置顶优先 + 最近活跃）。
  * 分组按运行态：waiting / failed → 「等你」，running → 「进行中」，其余（没在跑、跑完没看）→ 「最近」。
  * 没有行的组不返回——空组只会在边栏里留一个无所指的组名。
  */
@@ -119,64 +90,6 @@ export function visibleAsk(text: string): string {
     .replace(/<!--[\s\S]*$/, "")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-/** 卡内一行的数据：最近提问，纯文本 */
-export interface HomeCardRow {
-  text: string;
-}
-
-/** 首页一张会话卡的完整数据 */
-export interface HomeCard {
-  sessionId: string;
-  title: string;
-  /** 行位吃 recentQueries（最多 3 条） */
-  rows: HomeCardRow[];
-}
-
-/**
- * 按上述规则选出首页的 3 张卡。
- */
-export function selectHomeCards(
-  sessions: readonly SessionMeta[],
-  /** 会话运行态（runStateOf）；不给 = 不按运行态排（旧口径） */
-  stateOf?: (meta: SessionMeta) => SessionRunState,
-): HomeCard[] {
-  // 候选与现状同一排除：子会话（子会话 PR4c 2.3）、归档、无标题。列表已按
-  // sortSessions 排序，相对顺序即「置顶优先 + 最近活跃」，两个轮次直接按序扫
-  const eligible = rootSessions(sessions).filter((m) => !m.archived && m.title !== "");
-
-  const cards: HomeCard[] = [];
-  const picked = new Set<string>();
-  const take = (meta: SessionMeta): void => {
-    cards.push(cardFor(meta));
-    picked.add(meta.id);
-  };
-  // 第零轮：要你注意的（等你 > 出错 > 在跑），同档内保持列表序
-  if (stateOf !== undefined) {
-    for (const want of ATTENTION_ORDER) {
-      for (const meta of eligible) {
-        if (cards.length >= HOME_CARD_COUNT) break;
-        if (!picked.has(meta.id) && stateOf(meta) === want) take(meta);
-      }
-    }
-  }
-  // 第一轮：剩余槽位按「最近活跃」补齐
-  for (const meta of eligible) {
-    if (cards.length >= HOME_CARD_COUNT) break;
-    if (picked.has(meta.id)) continue;
-    take(meta);
-  }
-  return cards;
-}
-
-/** 一张卡的行位数据：recentQueries 截断到 3 */
-function cardFor(meta: SessionMeta): HomeCard {
-  return {
-    sessionId: meta.id,
-    title: meta.title,
-    rows: meta.recentQueries.slice(0, HOME_CARD_QUERY_ROWS).map((text): HomeCardRow => ({ text })),
-  };
 }
 
 /** 卡上那一句要用到的文案（ChatView 从 t.homeCard / t.chat 拼好传进来；纯函数不碰语言表） */
