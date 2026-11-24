@@ -1387,6 +1387,8 @@ export const en = {
     galaxyTiltInfo: "The angle you view the galaxy from: low looks across the disc, high looks down on it. Applies to the home page, the workspace page, the side-panel galaxy and the designer.",
     galaxyTiltValue: (deg: number) => `${deg}°`,
     galaxyTiltPreview: "Galaxy tilt preview",
+    galaxyTiltRaised: (surface: "home" | "page" | "panel", deg: number) =>
+      `The ${surface === "panel" ? "side-panel galaxy" : surface === "page" ? "workspace page" : "home page"} is too narrow for every sub-agent, so it tilts up to ${deg}°`,
     /** The "Guide" tab: one line of intro + "Start from the top", then the whole chapter list */
     guideLead: "One research project from start to finish — what Orbita can do. Pick any chapter below to jump straight to it.",
     guideStart: "Start from the top",

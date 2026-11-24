@@ -63,7 +63,7 @@ import {
 } from "./callouts.ts";
 import { useGalaxyActions, type GalaxyActions } from "./galaxy-actions.ts";
 import { useProtoVariants } from "./proto-variants-store.ts";
-import { useGalaxyTilt } from "./galaxy-tilt.ts";
+import { reportElevation, useGalaxyTilt, type GalaxySurface } from "./galaxy-tilt.ts";
 
 /** 碎石块的轮廓：七个顶点、半径按 id 抖一点（同一条会话永远同一块石头），不是圆点——它是会话，不是天体 */
 export function rockPath(x: number, y: number, r: number, id: string): string {
@@ -474,6 +474,11 @@ type HomeGalaxyProps = {
   workspaceId?: string | null;
   /** 主星的名字（读屏与悬停提示「X（主星）：在设计面板里打开」）；缺省用主星设计稿的名字 */
   starName?: string;
+  /**
+   * 这是哪块画布（俯角被自动抬高时，设置页说明是哪一块）：home = 单智能体首页，page = 编排 New Task 页，panel = 右栏星系图；
+   * 缺省按 fill 推（fill → page，否则 home）。设置页的小预览传 null：不上报
+   */
+  surface?: GalaxySurface | null;
 };
 
 /**
@@ -508,6 +513,13 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
     const safe = fitScreenSafe(spec, size.width, size.height, box, tilt, readableMax);
     return { camera: safe.camera, viewport: safe.viewport, layout: safe.layout, minPlanetPx: safe.minPlanetPx, elevation: safe.elevationDeg };
   }, [size, spec, props.agents, props.fill, tilt]);
+  const surface = props.surface === undefined ? (props.fill === true ? "page" : "home") : props.surface;
+  const actualElevation = scene?.elevation ?? null;
+  useLayoutEffect(() => {
+    if (surface === null) return;
+    reportElevation(surface, tilt, actualElevation);
+    return () => reportElevation(surface, tilt, null);
+  }, [surface, tilt, actualElevation]);
   const layout: GalaxyLayout = scene === null ? baseLayout : starless ? { ...scene.layout, planets: [] } : scene.layout;
   const arcs: OrbitArc[] = useMemo(() => (scene === null || starless ? [] : orbitArcs(layout, scene.camera, scene.viewport)), [scene, layout, starless]);
   // 一张 t = 0 的快照：主星的位置与半径、碎石块的大小（碎石 < 行星的规矩在 drawFrame 里）

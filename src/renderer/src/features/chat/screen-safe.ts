@@ -3,6 +3,7 @@ import {
   PLANET_ZONE,
   PLANET_READABLE_MAX,
   PLANET_READABLE_GAP,
+  PLANET_READABLE_MIN,
   AGENT_READABLE_GAP,
   ROCK_PX,
   STAR_OVER_PLANET,
@@ -62,6 +63,9 @@ export const AGENT_READABLE_FLOOR = 10;
 export const ROCK_CLEAR_PX = ROCK_PX + LOCK_GAP;
 /** 放大后的画面里，天体（连锁定框）离画布边至少留这么多 */
 const EDGE_PX = 6;
+/** placeOrbits 每颗行星最多试多少次、轨道半长轴最多推到多远（世界单位） */
+const PLACE_ITER_MAX = 400;
+const PLACE_A_MAX = FRAME_EXTENT * 3;
 /** 推轨道半径的步长（世界单位） */
 const ORBIT_NUDGE = 0.2;
 
@@ -194,26 +198,35 @@ function placeOrbits(
   /** 两颗天体轮廓之间至少留多少（px）：子智能体星系按行星半径的一半给（bodyGapOf） */
   gap = SCREEN_GAP,
   ecc = 0,
+  /** 行星区外沿（世界单位）：平时 PLANET_ZONE（再往外是碎石带）；碎石先收的排法给到画框边 */
+  zone = PLANET_ZONE,
 ): number[] | null {
   const star = screenOf(camera, vp, 0, 0);
   const orbits: number[] = [];
+  // 轨道往外推一个单位，屏幕上的间距最多长 pxPerUnit：按差多少一次推够（不越过最小解），比逐 0.2 单位地试快一个量级
+  const pxPerUnit = vp.focal / project({ x: 0, y: 0, z: 0 }, camera).depth;
   for (let i = 0; i < bodies.length; i++) {
     const body = bodies[i] as Body;
     const prevA = orbits[i - 1];
     const prevBody = bodies[i - 1];
     let a = Math.max(lower[i] ?? 0, prevA === undefined ? 0 : prevA + ORBIT_NUDGE);
-    for (;;) {
+    // 硬上限：偏心时轨道间距不随 a 单调变大、主星距离会饱和，差额可能永远为正——任何输入都不许无界循环
+    for (let iter = 0; ; iter++) {
+      if (iter >= PLACE_ITER_MAX || a > PLACE_A_MAX) {
+        if (Number.isFinite(zone)) return null;
+        break; // 最后一搏（zone = ∞）：不再找，就放在这里
+      }
       // 行星整颗要在行星区里（外沿之外是碎石带）
-      if (a > PLANET_ZONE - body.radius) return null;
+      if (a > zone - body.radius) return null;
       const rNear = bodyPx(body, camera, vp, minPx);
       const rFar = bodyPx(body, camera, vp, minPx);
       if (inside && !orbitInside(camera, vp, a, Math.max(rNear, rFar), ecc)) return null;
-      let ok = starDistance(camera, vp, a, ecc, star) >= starPx + rNear + gap;
-      if (ok && prevA !== undefined && prevBody !== undefined) {
-        ok = orbitGap(ecc, orbitFrame(prevA, 0, 0, camera, vp, ecc), 1, orbitFrame(a, 0, 0, camera, vp, ecc), 1) >= Math.max(rNear, rFar) + bodyPx(prevBody, camera, vp, minPx) + gap;
+      let deficit = starPx + rNear + gap - starDistance(camera, vp, a, ecc, star);
+      if (deficit <= 0 && prevA !== undefined && prevBody !== undefined) {
+        deficit = Math.max(rNear, rFar) + bodyPx(prevBody, camera, vp, minPx) + gap - orbitGap(ecc, orbitFrame(prevA, 0, 0, camera, vp, ecc), 1, orbitFrame(a, 0, 0, camera, vp, ecc), 1);
       }
-      if (ok) break;
-      a += ORBIT_NUDGE;
+      if (deficit <= 0) break;
+      a += Math.max(ORBIT_NUDGE, deficit / pxPerUnit);
     }
     orbits.push(a);
   }
@@ -300,9 +313,14 @@ function placeBeltInner(camera: Camera, vp: Viewport, layout: GalaxyLayout, last
 }
 
 /**
- * 屏幕安全布局（对外入口）：先按 spec 给的偏心率排；偏心让近日点一侧要多留 1/(1 − e) 倍的空，小画布（窄窗 + 右栏、
- * 右栏星系图）会因此少画行星或丢掉碎石块那一圈。比正圆排得差时，偏心率按三分之二、三分之一往下退，取第一档不比正圆差的
- * ——宁可椭圆扁得少一点，也不为了椭圆少画一颗子智能体（星系规则：行星表情可读、天体不相撞优先）。
+ * 屏幕安全布局（对外入口）。子智能体行星是有名字、有身份的持久智能体，**永远全部画出**（2026-11-24 用户定）；
+ * 装不下时按这个顺序退：
+ * 1. 碎石与尘埃先收（碎石块那一圈让不开就整圈不画；碎石带往外挪、出画的被裁掉）；
+ * 2. 轨道不再守设计稿给的半径，压到屏幕安全的最小间距（pack = tight）；
+ * 3. 行星缩到最小可读半径（pack = small：AGENT_READABLE_FLOOR）；
+ * 4. 还装不下，就只对这一块画布把俯角抬到刚好装得下的最小值（elevationDeg > 设置值，设置页说明一句）。
+ * 偏心率：先按 spec 给的排；在设置的俯角上装不下时，偏心率按 2/3、1/3、0 往下退，取第一档在设置俯角上装得下的；
+ * 都要抬俯角时取抬得最少的那档。只看画布与设计稿，不看公转相位，同一块画布上结果稳定。
  */
 export function fitScreenSafe(
   spec: GalaxySpec,
@@ -314,114 +332,148 @@ export function fitScreenSafe(
   readableMax: number = PLANET_READABLE_MAX,
 ): SafeScene {
   const ecc = eccOf(spec.eccentricity);
-  const first = fitAt(spec, width, height, box, baseElevationDeg, readableMax);
-  if (ecc === 0) return first;
-  const cost = (scene: SafeScene) => scene.dropped * 2 + (scene.layout.rocks.length > 0 && scene.layout.rockOrbit === null ? 1 : 0);
-  if (cost(first) === 0) return first;
-  const round = fitAt({ ...spec, eccentricity: 0 }, width, height, box, baseElevationDeg, readableMax);
-  if (cost(first) <= cost(round)) return first;
-  for (const k of [2 / 3, 1 / 3]) {
-    const softer = fitAt({ ...spec, eccentricity: ecc * k }, width, height, box, baseElevationDeg, readableMax);
-    if (cost(softer) <= cost(round)) return softer;
+  const candidates = ecc === 0 ? [0] : [ecc, (ecc * 2) / 3, ecc / 3, 0];
+  // 好坏：少画了行星最差，其次是行星缩到可读下限以下，再其次是俯角抬得多
+  const floor = readableMax > PLANET_READABLE_MAX ? AGENT_READABLE_FLOOR : PLANET_READABLE_MIN;
+  const cost = (scene: SafeScene) => scene.dropped * 10_000 + (scene.minPlanetPx < floor - 1e-6 ? 1_000 : 0) + (scene.elevationDeg - baseElevationDeg);
+  let best: SafeScene | null = null;
+  for (const e of candidates) {
+    const scene = fitAll({ ...spec, eccentricity: e }, width, height, box, baseElevationDeg, readableMax);
+    if (cost(scene) === 0) return scene;
+    if (best === null || cost(scene) < cost(best)) best = scene;
   }
-  return round;
+  return best as SafeScene;
 }
 
-function fitAt(
-  spec: GalaxySpec,
+/** 抬俯角的上限：再高就是正俯视，仍装不下才走最后的退路（只在测试都覆盖不到的极小画布上） */
+const ELEVATION_LIMIT = 85;
+const PACKS = ["given", "tight", "small"] as const;
+type Pack = (typeof PACKS)[number];
+
+function fitAll(spec: GalaxySpec, width: number, height: number, box: { width: number; height: number }, tilt: number, readableMax: number): SafeScene {
+  const flat: GalaxySpec = { ...spec, planets: spec.planets.map((planet) => ({ ...planet, inclinationDeg: 0 })) };
+  const base = layoutGalaxy(flat);
+  const tryAt = (e: number): SafeScene | null => {
+    for (const pack of PACKS) {
+      const scene = placeAt(flat, base, width, height, box, e, readableMax, pack, base.planets);
+      if (scene !== null) return scene;
+    }
+    return null;
+  };
+  const atTilt = tryAt(tilt);
+  if (atTilt !== null) return atTilt;
+  // 粗找（每 5°）再细找（每 1°）：抬到刚好装得下的最小俯角
+  let lo = tilt;
+  for (let e = tilt + 5; e <= ELEVATION_LIMIT; e += 5) {
+    const coarse = tryAt(e);
+    if (coarse !== null) {
+      for (let f = lo + 1; f < e; f++) {
+        const fine = tryAt(f);
+        if (fine !== null) return fine;
+      }
+      return coarse;
+    }
+    lo = e;
+  }
+  // 最后的退路（抬到 ELEVATION_LIMIT 都装不下：子智能体多、画布又小）：就在这个俯角上把行星缩到可读下限以下
+  // （每次 ×0.85，最小 2.5px）。子智能体永远不藏——小一点总比没有好；「表情可读」只保证到这之前（见测试）
+  for (let px = AGENT_READABLE_FLOOR * 0.85; px >= 2.5; px *= 0.85) {
+    const scene = placeAt(flat, base, width, height, box, ELEVATION_LIMIT, readableMax, "small", base.planets, px);
+    if (scene !== null) return scene;
+  }
+  // 正圆轨道上间距随半径单调变大，最后一搏一定排得开（偏心时不一定）
+  const round: GalaxySpec = { ...flat, eccentricity: 0 };
+  const scene = placeAt(round, layoutGalaxy(round), width, height, box, ELEVATION_LIMIT, readableMax, "small", base.planets, 4, true);
+  return scene as SafeScene;
+}
+
+/** 在一个俯角、一种排法上把 shown 这几颗行星全部排进去；排不下返回 null（不少画） */
+export function placeAt(
+  flat: GalaxySpec,
+  base: GalaxyLayout,
   width: number,
   height: number,
   box: { width: number; height: number },
-  /** 相机俯角（度）：设置 › 外观 › 星系倾角 */
-  baseElevationDeg: number,
-  /** 行星可读半径的上限（px）：子智能体行星传 AGENT_READABLE_MAX */
-  readableMax: number = PLANET_READABLE_MAX,
-): SafeScene {
-  const flat: GalaxySpec = { ...spec, planets: spec.planets.map((planet) => ({ ...planet, inclinationDeg: 0 })) };
-  const base = layoutGalaxy(flat);
-  const ecc = eccOf(spec.eccentricity);
-  const starExtent = Math.max(starRadius(spec.starMass), spec.starExtent ?? 0);
-  let shown = base.planets;
-  let dropped = 0;
-  for (;;) {
-    const bodies: Body[] = shown.map((planet) => ({ radius: planet.radius, waiting: planet.state === "waiting" }));
-    // 只在用户选的这一个俯角上排（循环体里的 continue = 这个俯角装不下，少画一圈再来）
-    for (const e of [baseElevationDeg]) {
-      const camera = makeCamera(FRAME_EXTENT, e);
-      let viewport = frameViewport(camera, width, height, box, ecc);
-      const starDepth = project({ x: 0, y: 0, z: 0 }, camera).depth;
-      let starPx = (viewport.focal * starExtent) / starDepth;
-      let starBodyPx = (viewport.focal * starRadius(spec.starMass)) / starDepth;
-      // 行星再大也要比主星明显小（等你放大一档之后也是）
-      const agentMode = readableMax > PLANET_READABLE_MAX;
-      // 窄画布：主星小到容不下一颗看得清的行星（AGENT_READABLE_FLOOR × 主星倍数）就把画面放大，
-      // 主星与行星一起变大；放大后出画的外圈由 placeOrbits / placeRockOrbit 的 inside 约束退场
-      const needStar = AGENT_READABLE_FLOOR * STAR_OVER_PLANET * WAITING_SCALE;
-      const zoomed = agentMode && bodies.length > 0 && starBodyPx < needStar;
-      if (zoomed) {
-        const k = needStar / starBodyPx;
-        // 开普勒椭圆：主星偏在近日点一侧，绕主星放大会把远日点那一侧推出画——横向改成绕画布中线放大（正圆时 cx 就在中线上，不变）
-        viewport = { ...viewport, focal: viewport.focal * k, cx: ecc === 0 ? viewport.cx : width / 2 + (viewport.cx - width / 2) * k };
-        starPx *= k;
-        starBodyPx *= k;
-      }
-      const readable = readablePlanetPx(camera, viewport, ORBIT_STEP, readableMax, agentMode ? AGENT_READABLE_GAP : PLANET_READABLE_GAP);
-      const starCap = starBodyPx / (STAR_OVER_PLANET * WAITING_SCALE);
-      const minPx = agentMode ? Math.min(Math.max(readable, AGENT_READABLE_FLOOR), starCap) : readable;
-      const orbits = placeOrbits(camera, viewport, bodies, shown.map((planet) => planet.orbitRadius), starPx, minPx, zoomed, agentMode ? bodyGapOf(minPx) : SCREEN_GAP, ecc);
-      if (orbits === null) continue;
-      const planets = shown.map((planet, i) => {
-        const a = orbits[i] ?? planet.orbitRadius;
-        return { ...planet, orbitRadius: a, inclination: 0, omega: angularSpeed(a) };
-      });
-      // 碎石带跟着最外圈往外挪：重排之后带子的内沿仍在最外一颗行星之外
-      const placedSpec: GalaxySpec = {
-        ...flat,
-        planets: flat.planets.filter((planet) => planets.some((p) => p.id === planet.id)).map((planet) => ({
-          ...planet,
-          orbitRadius: planets.find((p) => p.id === planet.id)?.orbitRadius ?? planet.orbitRadius,
-        })),
-      };
-      const firstPass = layoutGalaxy(placedSpec);
-      const lastPlaced = planets[planets.length - 1];
-      const beltInner =
-        placeBeltInner(
-          camera,
-          viewport,
-          firstPass,
-          lastPlaced === undefined ? null : lastPlaced.orbitRadius,
-          lastPlaced === undefined ? 0 : bodyPx({ radius: lastPlaced.radius, waiting: lastPlaced.state === "waiting" }, camera, viewport, minPx),
-          agentMode ? bodyGapOf(minPx) : SCREEN_GAP,
-          starPx,
-        );
-      const relaid = beltInner === undefined ? firstPass : layoutGalaxy({ ...placedSpec, beltInner });
-      const layout: GalaxyLayout = {
-        ...relaid,
-        planets: relaid.planets.map((planet) => {
-          const fixed = planets.find((p) => p.id === planet.id);
-          // 放平的轨道上升交点只是相位：并进 phase、node 归零——orbitFrame 的远近两点才正好是短轴两端（合成器模型按它们拉椭圆）
-          return fixed === undefined ? planet : { ...planet, orbitRadius: fixed.orbitRadius, inclination: 0, node: 0, omega: fixed.omega, phase: fixed.phase + fixed.node };
-        }),
-        hidden: base.hidden + dropped,
-        expectedOrbit: base.expectedOrbit,
-      };
-      const rock = placeRockOrbit(camera, viewport, layout, minPx, starPx, zoomed);
-      // 碎石块那一圈到画框边上还让不开最外一颗行星（偏心、低俯角时会发生）：当作装不下，少画最外一圈
-      if (rock.cramped) continue;
-      return { camera, viewport, layout: { ...layout, rockOrbit: rock.orbit }, elevationDeg: e, minPlanetPx: minPx, dropped };
-    }
-    if (shown.length === 0) {
-      const camera = makeCamera(FRAME_EXTENT, baseElevationDeg);
-      const viewport = frameViewport(camera, width, height, box, ecc);
-      const minPx = readablePlanetPx(camera, viewport, ORBIT_STEP, readableMax);
-      const starPx = (viewport.focal * starExtent) / project({ x: 0, y: 0, z: 0 }, camera).depth;
-      // 一颗行星都不画了（只在极端俯角 + 小画布下）：行星全部计进 hidden，碎石块那一圈让不开就不画
-      const bare: GalaxyLayout = { ...base, planets: [], hidden: base.hidden + dropped };
-      const rock = placeRockOrbit(camera, viewport, bare, minPx, starPx);
-      return { camera, viewport, layout: { ...bare, rockOrbit: rock.cramped ? null : rock.orbit }, elevationDeg: baseElevationDeg, minPlanetPx: minPx, dropped };
-    }
-    shown = shown.slice(0, -1);
-    dropped += 1;
+  e: number,
+  readableMax: number,
+  pack: Pack,
+  shown: GalaxyLayout["planets"],
+  /** 最后的退路：行星屏幕半径直接给定（低于可读下限） */
+  forcedPx?: number,
+  /** 最后一搏：不管装不装得下都给一个结果（轨道按最小间距、越出画框也画） */
+  force = false,
+): SafeScene | null {
+  const ecc = eccOf(flat.eccentricity);
+  const starExtent = Math.max(starRadius(flat.starMass), flat.starExtent ?? 0);
+  const bodies: Body[] = shown.map((planet) => ({ radius: planet.radius, waiting: planet.state === "waiting" }));
+  const camera = makeCamera(FRAME_EXTENT, e);
+  let viewport = frameViewport(camera, width, height, box, ecc);
+  const starDepth = project({ x: 0, y: 0, z: 0 }, camera).depth;
+  let starPx = (viewport.focal * starExtent) / starDepth;
+  let starBodyPx = (viewport.focal * starRadius(flat.starMass)) / starDepth;
+  // 行星再大也要比主星明显小（等你放大一档之后也是）
+  const agentMode = readableMax > PLANET_READABLE_MAX;
+  // 窄画布：主星小到容不下一颗看得清的行星（AGENT_READABLE_FLOOR × 主星倍数）就把画面放大，主星与行星一起变大
+  const needStar = AGENT_READABLE_FLOOR * STAR_OVER_PLANET * WAITING_SCALE;
+  // 最后的退路（行星直接给定半径）不放大：放大后外圈出画，缩小行星就是为了不出画
+  // small 排法与最后的退路不放大：放大后外圈出画；这时主星可以比行星小（质量的高低才是铁律，画面大小不是）
+  const zoomed = agentMode && bodies.length > 0 && starBodyPx < needStar && forcedPx === undefined && pack !== "small";
+  if (zoomed) {
+    const k = needStar / starBodyPx;
+    // 开普勒椭圆：主星偏在近日点一侧，绕主星放大会把远日点那一侧推出画——横向改成绕画布中线放大（正圆时 cx 就在中线上，不变）
+    viewport = { ...viewport, focal: viewport.focal * k, cx: ecc === 0 ? viewport.cx : width / 2 + (viewport.cx - width / 2) * k };
+    starPx *= k;
+    starBodyPx *= k;
   }
+  const floor = agentMode ? AGENT_READABLE_FLOOR : PLANET_READABLE_MIN;
+  const readable = readablePlanetPx(camera, viewport, ORBIT_STEP, readableMax, agentMode ? AGENT_READABLE_GAP : PLANET_READABLE_GAP);
+  const starCap = starBodyPx / (STAR_OVER_PLANET * WAITING_SCALE);
+  const preferred = agentMode ? Math.min(Math.max(readable, AGENT_READABLE_FLOOR), starCap) : readable;
+  const minPx = forcedPx ?? (pack === "small" ? floor : preferred);
+  const lower = pack === "given" ? shown.map((planet) => planet.orbitRadius) : shown.map(() => 0);
+  // small：行星区不再以碎石带为界（碎石先收），只以画布为界（下面 inside 检查整颗在画布里）
+  const zone = pack === "small" ? PLACE_A_MAX : PLANET_ZONE;
+  // small 排法把行星推进碎石带那一圈（可能越过画框边距）：整颗要在画布里
+  const orbits = placeOrbits(camera, viewport, bodies, lower, starPx, minPx, (zoomed || pack === "small") && !force, agentMode ? bodyGapOf(minPx) : SCREEN_GAP, ecc, force ? Number.POSITIVE_INFINITY : zone);
+  if (orbits === null) return null;
+  const planets = shown.map((planet, i) => {
+    const a = orbits[i] ?? planet.orbitRadius;
+    return { ...planet, orbitRadius: a, inclination: 0, omega: angularSpeed(a) };
+  });
+  // 碎石带跟着最外圈往外挪：重排之后带子的内沿仍在最外一颗行星之外
+  const placedSpec: GalaxySpec = {
+    ...flat,
+    planets: flat.planets.filter((planet) => planets.some((p) => p.id === planet.id)).map((planet) => ({
+      ...planet,
+      orbitRadius: planets.find((p) => p.id === planet.id)?.orbitRadius ?? planet.orbitRadius,
+    })),
+  };
+  const firstPass = layoutGalaxy(placedSpec);
+  const lastPlaced = planets[planets.length - 1];
+  const beltInner = placeBeltInner(
+    camera,
+    viewport,
+    firstPass,
+    lastPlaced === undefined ? null : lastPlaced.orbitRadius,
+    lastPlaced === undefined ? 0 : bodyPx({ radius: lastPlaced.radius, waiting: lastPlaced.state === "waiting" }, camera, viewport, minPx),
+    agentMode ? bodyGapOf(minPx) : SCREEN_GAP,
+    starPx,
+  );
+  // 碎石先收：行星排进了碎石带那一圈（只在 small 排法下会发生），碎石带整条不画
+  const spilled = planets.some((planet) => planet.orbitRadius > PLANET_ZONE - planet.radius);
+  const relaidFull = beltInner === undefined ? firstPass : layoutGalaxy({ ...placedSpec, beltInner });
+  const relaid = spilled ? { ...relaidFull, belt: null, rockOrbit: null } : relaidFull;
+  const layout: GalaxyLayout = {
+    ...relaid,
+    planets: relaid.planets.map((planet) => {
+      const fixed = planets.find((p) => p.id === planet.id);
+      // 放平的轨道上升交点只是相位：并进 phase、node 归零——orbitFrame 的远近两点才正好是短轴两端（合成器模型按它们拉椭圆）
+      return fixed === undefined ? planet : { ...planet, orbitRadius: fixed.orbitRadius, inclination: 0, node: 0, omega: fixed.omega, phase: fixed.phase + fixed.node };
+    }),
+    hidden: base.hidden,
+    expectedOrbit: base.expectedOrbit,
+  };
+  // 碎石块那一圈让不开（最外一颗行星或主星）就整圈不画：碎石先收，不为它少画行星
+  const rock = placeRockOrbit(camera, viewport, layout, minPx, starPx, zoomed);
+  return { camera, viewport, layout: { ...layout, rockOrbit: rock.cramped ? null : rock.orbit }, elevationDeg: e, minPlanetPx: minPx, dropped: 0 };
 }
-

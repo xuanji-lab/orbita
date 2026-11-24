@@ -406,7 +406,10 @@ describe("每条根会话都是一颗碎石，与右栏树主卡同源：碎石 
       const box = galaxyBox(w, h, GALAXY_MAX_FILL);
       const scene = fitScreenSafe({ ...galaxy.spec }, w, h, box, TILT, AGENT_READABLE_MAX);
       const layout = scene.layout;
-      const dust = layout.belt?.particles ?? [];
+      // 碎石先收（2026-11-24 用户：子智能体永远不藏，少画只能少画碎石与尘埃）：画布小到行星挤进碎石带那一圈时整条不画
+      assert.equal(layout.planets.length, galaxy.spec.planets.length, "子智能体少画了");
+      if (layout.belt === null) return;
+      const dust = layout.belt.particles;
       const rootRocks = layout.rocks.filter((rock) => rock.child !== true);
       assert.equal(dust.length + rootRocks.length, tree.total);
       const ids = new Set(dust.map((p) => p.id));
@@ -462,7 +465,9 @@ describe("首页星系：作用域 → 星系（单智能体首页与编排页�
     const orchPlanets = orch.layout.planets.map((p) => [p.id, p.composition]);
     assert.deepEqual(single.layout.planets.map((p) => [p.id, p.composition]), orchPlanets.slice(0, single.layout.planets.length));
     assert.equal(single.layout.planets.length + single.layout.hidden, orch.layout.planets.length + orch.layout.hidden);
-    assert.deepEqual(single.layout.belt?.particles.map((p) => p.id), orch.layout.belt?.particles.map((p) => p.id));
+    // 碎石带：两边都画时是同一批（矮带子装不下时碎石先收）
+    if (single.layout.belt !== null && orch.layout.belt !== null) assert.deepEqual(single.layout.belt.particles.map((p) => p.id), orch.layout.belt.particles.map((p) => p.id));
+    assert.equal(single.layout.planets.length, 3, "单智能体首页那条带子里子智能体少画了");
     assert.equal(single.layout.ecc, orch.layout.ecc);
     assert.equal(single.elevationDeg, TILT);
     assert.equal(orch.elevationDeg, TILT);

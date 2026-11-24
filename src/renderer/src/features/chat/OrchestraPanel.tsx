@@ -337,6 +337,7 @@ function GalaxyView(props: { session: ChatSession; workspaceId: string | null; n
         starDesign={design}
         agents={agentMap}
         fill
+        surface="panel"
         emptyHint={t.agents.emptyHint}
         workspaceId={props.workspaceId}
         starName={props.name}

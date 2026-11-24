@@ -1287,6 +1287,8 @@ export const zh: Messages = {
     galaxyTiltInfo: "看星系的角度：小了像贴着盘面平视，大了像从上往下看。单智能体首页、编排页、右栏星系图和设计面板一起换。",
     galaxyTiltValue: (deg: number) => `${deg}°`,
     galaxyTiltPreview: "星系倾角预览",
+    galaxyTiltRaised: (surface: "home" | "page" | "panel", deg: number) =>
+      `${surface === "panel" ? "右栏星系图" : surface === "page" ? "编排页" : "单智能体首页"}较窄，放不下全部子智能体，自动抬高到 ${deg}°`,
     /** 「新手引导」页签：顶上一句说明 + 「从头看」，下面整张章节目录 */
     guideLead: "拿一个研究课题从头走到尾，看 Orbita 能帮你做什么。点下面任意一章，直接翻到那一章。",
     guideStart: "从头看",

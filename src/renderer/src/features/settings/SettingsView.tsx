@@ -54,6 +54,7 @@ import { panelUsageRows, type PanelUsageSnapshot } from "@shared/panel-usage";
 import { COMMIT_TRAILER, prAttributionLine } from "@shared/attribution";
 import { effectiveLanguage, GALAXY_TILT, galaxyTiltOf, LANGUAGES, themeLanguage, type Language, type ModelPair } from "@shared/settings";
 import { HomeGalaxy } from "../chat/HomeGalaxy.tsx";
+import { useRaisedSurfaces } from "../chat/galaxy-tilt.ts";
 import type { GalaxySpec } from "../chat/galaxy.ts";
 
 /** 星系倾角的小预览：一颗主星、三颗行星、三十来颗碎石（演示形状，不是哪个工作区的真数据） */
@@ -388,6 +389,8 @@ function General(props: {
 
   // 单语主题定死的语言（null = 双语主题，听设置）；芯片亮的是实际生效的那一门
   const lockedLanguage = themeLanguage(props.settings.theme);
+  // 哪块画布此刻因为装不下子智能体把俯角抬高了（星系组件挂着时上报）
+  const raisedSurfaces = useRaisedSurfaces();
   const shownLanguage = effectiveLanguage(props.settings.theme, props.settings.language);
 
   return (
@@ -422,7 +425,7 @@ function General(props: {
           below={
             // 小预览：同一个星系组件、同一个俯角（App 发下来的设置值），拖滑块时跟着变
             <div className="set-galaxy-preview">
-              <HomeGalaxy spec={TILT_PREVIEW_SPEC} label={t.settings.galaxyTiltPreview} />
+              <HomeGalaxy spec={TILT_PREVIEW_SPEC} label={t.settings.galaxyTiltPreview} surface={null} />
             </div>
           }
         >
@@ -439,6 +442,11 @@ function General(props: {
             />
             <span className="set-galaxy-tilt-value">{t.settings.galaxyTiltValue(galaxyTiltOf(props.settings))}</span>
           </span>
+          {[...raisedSurfaces].map(([surface, deg]) => (
+            <span key={surface} className="set-row-hint">
+              {t.settings.galaxyTiltRaised(surface, deg)}
+            </span>
+          ))}
         </SettingRow>
       </SettingGroup>
       {/* 原来的 Context / Git / Sessions 各只有一两行，三个分组标题比内容还显眼；

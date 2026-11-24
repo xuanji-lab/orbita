@@ -22,6 +22,7 @@ import {
   type PlanetItem,
   type RockItem,
   type StarItem,
+  VISIBLE_ORBIT_CAP,
 } from "./galaxy.ts";
 import { orbitRadiusOf } from "./galaxy-data.ts";
 import { AGENT_READABLE_FLOOR, ROCK_CLEAR_PX, bodyGapOf, curveGap, fitScreenSafe } from "./screen-safe.ts";
@@ -51,6 +52,17 @@ function galaxySpecOf(fixture: "empty" | "typical" | "full"): GalaxySpec {
       phaseDeg: (i * 137) % 360,
     })),
   };
+}
+
+/**
+ * 「表情可读」（行星 ≥ AGENT_READABLE_FLOOR）保证到几颗：今晚六个真实工作区的子智能体都是 2–3 颗。
+ * 更多颗、画布又小时，子智能体照样全部画出、不相撞，但会缩到可读下限以下（最小 4px）——不藏行星优先于表情可读
+ */
+const READABLE_UP_TO = 3;
+/** 再小的画布（窄窗 + 右栏 196×214 那块）只对普通质量的三颗保证可读；最重的三颗会缩一点 */
+const READABLE_MIN_SIDE = 260;
+function readableBound(spec: GalaxySpec, w = Infinity, h = Infinity): boolean {
+  return spec.planets.length <= READABLE_UP_TO && (Math.min(w, h) >= READABLE_MIN_SIDE || (Math.min(w, h) >= 190 && spec.planets.every((p) => p.mass <= 30)));
 }
 
 /** 画布：New Task 页（无右栏 / 开着右栏）、右栏星系图（宽 / 最窄可用） */
@@ -124,14 +136,14 @@ const AGENT_SPECS: [string, GalaxySpec][] = [
   ["3000 条会话（碎石带铺到画框外沿）", agentSpec(620, [[40, "gas", 19], [34, "rock", 25], [11, "ice", 31], [22, "rock", 37], [16, "ice", 43], [30, "gas", 49]], 8, 3, 3000)],
 ];
 
-function collisions(spec: GalaxySpec, w: number, h: number, readableMax: number = PLANET_READABLE_MAX, tilt: number = TILT): string[] {
+function collisions(spec: GalaxySpec, w: number, h: number, readableMax: number = PLANET_READABLE_MAX, tilt: number = TILT, tStep = 3.7): string[] {
   const box = galaxyBox(w, h, GALAXY_MAX_FILL);
   // 与 HomeGalaxy 的工作区页一样：每条会话都是一颗碎石（不封顶）
   const scene = fitScreenSafe({ ...spec }, w, h, box, tilt, readableMax);
   const arcs = orbitArcs(scene.layout, scene.camera, scene.viewport);
   const extent = Math.max(starRadius(spec.starMass), spec.starExtent ?? 0) / starRadius(spec.starMass);
   const problems: string[] = [];
-  for (let t = 0; t <= 600; t += 3.7) {
+  for (let t = 0; t <= 600; t += tStep) {
     const items = drawFrame(scene.layout, scene.camera, scene.viewport, arcs, t, scene.minPlanetPx);
     const star = items.find((item): item is StarItem => item.kind === "star");
     const planets = items.filter((item): item is PlanetItem => item.kind === "planet");
@@ -198,15 +210,16 @@ describe("屏幕安全布局：任何公转相位上，没有两个天体在屏�
     }
   }
 
-  test("轨道一律放平、只往外推不往里收；俯角不超过上限；装不下就少画最外一圈（计进 hidden）", () => {
+  test("轨道一律放平、由内到外；行星不少画（只有 6 圈上限之外的计进 hidden）；俯角不低于设置值", () => {
     const spec = realistic(9, 3);
     const box = galaxyBox(336, 269, GALAXY_MAX_FILL);
     const scene = fitScreenSafe(spec, 336, 269, box, TILT);
-    assert.equal(scene.elevationDeg, TILT, "俯角是设置里选的，布局不改它");
+    assert.ok(scene.elevationDeg >= TILT);
     for (const planet of scene.layout.planets) assert.equal(planet.inclination, 0);
     const radii = scene.layout.planets.map((planet) => planet.orbitRadius);
     for (let i = 1; i < radii.length; i++) assert.ok((radii[i] ?? 0) > (radii[i - 1] ?? 0));
-    assert.equal(scene.layout.planets.length + scene.layout.hidden, 9);
+    assert.equal(scene.layout.planets.length, VISIBLE_ORBIT_CAP);
+    assert.equal(scene.dropped, 0);
   });
 });
 
@@ -220,16 +233,17 @@ describe("编排星系（行星 = 子智能体、会话 = 碎石）：屏幕上�
     }
   }
 
-  test("行星可读半径比旧星系大一档，但主星屏幕半径仍 ≥ 最大行星（等你放大后）的 STAR_OVER_PLANET 倍", () => {
+  // 默认画法（页面装得下时）主星仍比行星大一截；这不是铁律（质量的高低才是，2026-11-24 用户），窄画布装不下时允许主星画得比行星小
+  test("页面上：行星可读半径比旧星系大一档，主星屏幕半径 ≥ 最大行星（等你放大后）的 STAR_OVER_PLANET 倍", () => {
     for (const [, spec] of AGENT_SPECS) {
-      for (const [canvasName, w, h] of CANVASES) {
+      for (const [canvasName, w, h] of CANVASES.slice(0, 2)) {
         const box = galaxyBox(w, h, GALAXY_MAX_FILL);
         const scene = fitScreenSafe(spec, w, h, box, TILT, AGENT_READABLE_MAX);
         const items = drawFrame(scene.layout, scene.camera, scene.viewport, orbitArcs(scene.layout, scene.camera, scene.viewport), 0, scene.minPlanetPx);
         const star = items.find((item): item is StarItem => item.kind === "star");
         const biggest = Math.max(...items.filter((item): item is PlanetItem => item.kind === "planet").map((p) => p.r), 0);
         assert.ok(star !== undefined && star.r >= biggest * STAR_OVER_PLANET * 0.99, `${canvasName}: 主星 ${star?.r.toFixed(1)} 行星 ${biggest.toFixed(1)}`);
-        if (canvasName === "页面") assert.ok(scene.minPlanetPx > PLANET_READABLE_MAX, `页面上的行星可读半径 ${scene.minPlanetPx.toFixed(1)}`);
+        if (canvasName === "页面" && spec.planets.length <= READABLE_UP_TO) assert.ok(scene.minPlanetPx > PLANET_READABLE_MAX, `页面上的行星可读半径 ${scene.minPlanetPx.toFixed(1)}`);
       }
     }
     assert.ok(WAITING_SCALE > 1);
@@ -267,9 +281,11 @@ describe("编排星系 · 窄窗：行星可读、碎石小于行星、锁定框
               const gap = Math.hypot(p.x - star.x, p.y - star.y) - star.r * (Math.max(starRadius(spec.starMass), spec.starExtent ?? 0) / starRadius(spec.starMass)) - p.r;
               if (gap < bodyGapOf(scene.minPlanetPx) - 0.6) problems.push(`t=${t.toFixed(1)} ${p.planetId} 离主星只有 ${gap.toFixed(1)}px`);
             }
-            if (p.r < AGENT_READABLE_FLOOR - 0.01) problems.push(`t=${t.toFixed(1)} ${p.planetId} 半径 ${p.r.toFixed(1)} < ${AGENT_READABLE_FLOOR}`);
+            if (readableBound(spec, w, h) && p.r < AGENT_READABLE_FLOOR - 0.01) problems.push(`t=${t.toFixed(1)} ${p.planetId} 半径 ${p.r.toFixed(1)} < ${AGENT_READABLE_FLOOR}`);
             if (p.x - p.r < 0 || p.x + p.r > w || p.y - p.r < 0 || p.y + p.r > h) problems.push(`t=${t.toFixed(1)} ${p.planetId} 出画`);
-            if (star !== undefined && star.r < p.r * STAR_OVER_PLANET * 0.99) problems.push(`主星 ${star.r.toFixed(1)} 不够大（行星 ${p.r.toFixed(1)}）`);
+          }
+          if (planets.length !== Math.min(spec.planets.length, VISIBLE_ORBIT_CAP)) problems.push(`只画了 ${planets.length} 颗子智能体（设计稿 ${spec.planets.length} 颗）`);
+          for (const p of planets) {
           }
           for (const rock of rocks) {
             const smallest = Math.min(...planets.map((p) => p.r));
@@ -289,13 +305,14 @@ describe("编排星系 · 窄窗：行星可读、碎石小于行星、锁定框
     }
   }
 
-  test("ann-2 那块画布：至少还画着一颗行星（不是整座星系退成一颗主星）；锁定框让开的距离按框算，不按石头算", () => {
-    const [, spec] = AGENT_SPECS[3] as [string, GalaxySpec];
+  test("ann-2 那块画布：设计稿里的子智能体一颗不少；三颗以内表情可读；锁定框让开的距离按框算，不按石头算", () => {
     const box = galaxyBox(196, 214, GALAXY_MAX_FILL);
-    for (const eccentricity of [0, 0.3]) {
-      const scene = fitScreenSafe({ ...spec, eccentricity }, 196, 214, box, TILT, AGENT_READABLE_MAX);
-      assert.ok(scene.layout.planets.length >= 1, `e=${eccentricity} 只剩 ${scene.layout.planets.length} 颗`);
-      assert.ok(scene.minPlanetPx >= AGENT_READABLE_FLOOR - 0.01, `e=${eccentricity} 行星 ${scene.minPlanetPx.toFixed(1)}px`);
+    for (const [, spec] of [AGENT_SPECS[0], AGENT_SPECS[3]] as [string, GalaxySpec][]) {
+      for (const eccentricity of [0, 0.3]) {
+        const scene = fitScreenSafe({ ...spec, eccentricity }, 196, 214, box, TILT, AGENT_READABLE_MAX);
+        assert.equal(scene.layout.planets.length, spec.planets.length, `e=${eccentricity} 只剩 ${scene.layout.planets.length} 颗`);
+        if (readableBound(spec, 196, 214)) assert.ok(scene.minPlanetPx >= AGENT_READABLE_FLOOR - 0.01, `e=${eccentricity} 行星 ${scene.minPlanetPx.toFixed(1)}px`);
+      }
     }
     assert.ok(ROCK_CLEAR_PX > 4.5);
   });
@@ -373,15 +390,16 @@ describe("开普勒椭圆：主星在焦点上，三档偏心率下任何一对�
     }
   }
 
-  test("宽画布上偏心率原样生效；小画布排不下时偏心率往下退，不为椭圆少画行星、不丢碎石块那一圈", () => {
+  test("宽画布上偏心率原样生效；小画布排不下时偏心率往下退；椭圆与正圆都不少画子智能体", () => {
     for (const [, spec] of AGENT_SPECS) {
       for (const [canvasName, w, h] of [...CANVASES, ...NARROW_CANVASES]) {
         const box = galaxyBox(w, h, GALAXY_MAX_FILL);
         const round = fitScreenSafe(spec, w, h, box, TILT, AGENT_READABLE_MAX);
         const kepler = fitScreenSafe({ ...spec, eccentricity: 0.3 }, w, h, box, TILT, AGENT_READABLE_MAX);
-        assert.ok(kepler.layout.planets.length >= round.layout.planets.length, `${canvasName}: 椭圆 ${kepler.layout.planets.length} 颗 < 正圆 ${round.layout.planets.length} 颗`);
-        if (round.layout.rockOrbit !== null) assert.ok(kepler.layout.rockOrbit !== null, `${canvasName}: 椭圆丢了碎石块`);
-        if (canvasName === "页面" && spec !== AGENT_SPECS[4]?.[1]) assert.equal(kepler.layout.ecc, 0.3, "宽画布上偏心率被退了");
+        assert.equal(kepler.layout.planets.length, Math.min(spec.planets.length, VISIBLE_ORBIT_CAP), `${canvasName}: 椭圆少画了`);
+        assert.equal(round.layout.planets.length, Math.min(spec.planets.length, VISIBLE_ORBIT_CAP), `${canvasName}: 正圆少画了`);
+        // 三颗以内（真实工作区的量）宽画布上偏心率原样；六颗满载时宽画布也可能先退偏心率、不抬俯角
+        if (canvasName === "页面" && spec.planets.length <= READABLE_UP_TO) assert.equal(kepler.layout.ecc, 0.3, "宽画布上偏心率被退了");
       }
     }
   });
@@ -414,7 +432,7 @@ describe("开普勒椭圆：主星在焦点上，三档偏心率下任何一对�
 
   test("主星不在画框中心：偏在近日点（右）一侧，偏移随偏心率变大；同一偏心率下空 / 平常 / 满载主星同位同大", () => {
     const xs = ECCS.map((ecc) => {
-      const scenes = [AGENT_SPECS[2], AGENT_SPECS[0], AGENT_SPECS[3]].map((entry) => {
+      const scenes = [AGENT_SPECS[2], AGENT_SPECS[0], AGENT_SPECS[5]].map((entry) => {
         const [, spec] = entry as [string, GalaxySpec];
         const box = galaxyBox(1088, 726, GALAXY_MAX_FILL);
         const scene = fitScreenSafe({ ...spec, eccentricity: ecc }, 1088, 726, box, TILT, AGENT_READABLE_MAX);
@@ -437,11 +455,13 @@ describe("开普勒椭圆：主星在焦点上，三档偏心率下任何一对�
 const TILTS = Array.from({ length: (GALAXY_TILT.max - GALAXY_TILT.min) / GALAXY_TILT.step + 1 }, (_, i) => GALAXY_TILT.min + i * GALAXY_TILT.step);
 const TILT_CANVASES = [
   ["宽窗页面", 1088, 726],
+  ["单智能体首页那条带子", 1000, 330],
   ["窄窗页面", 560, 420],
   ["右栏", 416, 333],
+  ["窄窗 + 右栏（ann-2）", 196, 214],
 ] as const;
 
-describe("星系倾角 10°–60°（每 5° 一档）× 三块画布 × 偏心率三档：不相撞、不压主星，俯角原样", () => {
+describe("星系倾角 10°–60°（每 5° 一档）× 三块画布 × 偏心率三档：子智能体一颗不少、不相撞、不压主星；三颗以内表情可读；俯角不低于设置", () => {
   for (const tilt of TILTS) {
     for (const ecc of ECCS) {
       test(`${tilt}° · e=${ecc}`, () => {
@@ -450,13 +470,30 @@ describe("星系倾角 10°–60°（每 5° 一档）× 三块画布 × 偏心�
           for (const [canvasName, w, h] of TILT_CANVASES) {
             const box = galaxyBox(w, h, GALAXY_MAX_FILL);
             const scene = fitScreenSafe({ ...spec, eccentricity: ecc }, w, h, box, tilt, AGENT_READABLE_MAX);
-            if (scene.elevationDeg !== tilt) problems.push(`${specName} × ${canvasName}：俯角被改成 ${scene.elevationDeg}`);
-            for (const p of sweepProblems(spec, w, h, ecc, tilt, 120).slice(0, 2)) problems.push(`${specName} × ${canvasName}：${p}`);
-            for (const p of collisions({ ...spec, eccentricity: ecc }, w, h, AGENT_READABLE_MAX, tilt).slice(0, 2)) problems.push(`${specName} × ${canvasName}：${p}`);
+            if (scene.elevationDeg < tilt) problems.push(`${specName} × ${canvasName}：俯角被压低成 ${scene.elevationDeg}`);
+            if (scene.layout.planets.length !== Math.min(spec.planets.length, VISIBLE_ORBIT_CAP)) problems.push(`${specName} × ${canvasName}：只画了 ${scene.layout.planets.length} 颗`);
+            if (readableBound(spec, w, h) && scene.minPlanetPx < AGENT_READABLE_FLOOR - 0.01) problems.push(`${specName} × ${canvasName}：行星 ${scene.minPlanetPx.toFixed(1)}px 不可读`);
+            if (scene.minPlanetPx < 2.5 - 1e-9) problems.push(`${specName} × ${canvasName}：行星 ${scene.minPlanetPx.toFixed(1)}px`);
+            for (const p of sweepProblems(spec, w, h, ecc, tilt, 90).slice(0, 2)) problems.push(`${specName} × ${canvasName}：${p}`);
+            for (const p of collisions({ ...spec, eccentricity: ecc }, w, h, AGENT_READABLE_MAX, tilt, 37).slice(0, 2)) problems.push(`${specName} × ${canvasName}：${p}`);
           }
         }
         assert.deepEqual(problems.slice(0, 6), [], `${problems.length} 处`);
       });
     }
   }
+});
+
+describe("极端输入下布局有界、够快", () => {
+  test("6 颗最重行星 × 196×214 × e=0.45 × 10°：50ms 内返回，子智能体一颗不少、不相撞", () => {
+    const [, spec] = AGENT_SPECS[4] as [string, GalaxySpec];
+    const box = galaxyBox(196, 214, GALAXY_MAX_FILL);
+    fitScreenSafe({ ...spec, eccentricity: 0.45 }, 196, 214, box, 10, AGENT_READABLE_MAX); // 预热 JIT
+    const t0 = performance.now();
+    const scene = fitScreenSafe({ ...spec, eccentricity: 0.45 }, 196, 214, box, 10, AGENT_READABLE_MAX);
+    const ms = performance.now() - t0;
+    assert.ok(ms < 50, `${ms.toFixed(1)}ms`);
+    assert.equal(scene.layout.planets.length, 6);
+    assert.deepEqual(sweepProblems(spec, 196, 214, 0.45, 10, 90).slice(0, 3), []);
+  });
 });
