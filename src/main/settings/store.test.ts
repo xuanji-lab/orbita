@@ -151,6 +151,9 @@ describe("SettingsStore", () => {
     assert.equal((await new SettingsStore(dir).read()).galaxyTilt, 37, "1° 精度");
     assert.equal((await new SettingsStore(dir).read()).galaxyAzimuth, 123);
     assert.equal((await new SettingsStore(dir).read()).galaxyTurntable, false);
+    await store.write({ galaxyZoom: 1.4 });
+    assert.equal((await new SettingsStore(dir).read()).galaxyZoom, 1.4, "缩放与倾角、方位一起存");
+    assert.equal((await new SettingsStore(dir).read()).galaxyAzimuth, 123);
     await store.write({ galaxyTilt: 37.5, galaxyAzimuth: 400 });
     const raw = JSON.parse(await readFile(join(dir, "settings.json"), "utf8")) as Record<string, unknown>;
     assert.equal("galaxyTilt" in raw, false, "不是整数度的值丢掉，回到默认");

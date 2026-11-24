@@ -226,6 +226,11 @@ export interface AppSettings {
   galaxyAzimuth?: number;
   /** 左右拖动旋转星系（转台）：缺席 = 开；关掉后左右拖动与左右方向键不改方位角，只能上下改倾角 */
   galaxyTurntable?: boolean;
+  /**
+   * 星系缩放（倍，GALAXY_ZOOM 区间，两位小数）：星系上滚轮 / 双指缩放，与倾角、方位一起全局存。缺席 = 1。
+   * 平移（以指针为中心缩放带出来的）不存：它按像素算，换一块画布就没意义；重开回到主星居中
+   */
+  galaxyZoom?: number;
   drawer: DrawerSettings;
   /**
    * 自动压缩偏好（A-1）。缺席 = COMPACTION_DEFAULT（主进程装配开轮命令时兜底）。
@@ -688,6 +693,16 @@ export function galaxyAzimuthOf(settings: Pick<AppSettings, "galaxyAzimuth">): n
   return settings.galaxyAzimuth ?? GALAXY_AZIMUTH_DEFAULT;
 }
 
+export const GALAXY_ZOOM = { min: 0.5, max: 3, default: 1 } as const;
+
+export function isGalaxyZoom(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= GALAXY_ZOOM.min && value <= GALAXY_ZOOM.max && Math.abs(Math.round(value * 100) - value * 100) < 1e-6;
+}
+
+export function galaxyZoomOf(settings: Pick<AppSettings, "galaxyZoom">): number {
+  return settings.galaxyZoom ?? GALAXY_ZOOM.default;
+}
+
 export function galaxyTurntableOf(settings: Pick<AppSettings, "galaxyTurntable">): boolean {
   return settings.galaxyTurntable ?? true;
 }
@@ -711,6 +726,7 @@ export function parseSettings(raw: unknown): AppSettings {
     galaxyTilt?: unknown;
     galaxyAzimuth?: unknown;
     galaxyTurntable?: unknown;
+    galaxyZoom?: unknown;
     compaction?: unknown;
     collapsePastedText?: unknown;
     chatImageSize?: unknown;
@@ -795,6 +811,7 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(isGalaxyTilt(record.galaxyTilt) ? { galaxyTilt: record.galaxyTilt } : {}),
     ...(isGalaxyAzimuth(record.galaxyAzimuth) ? { galaxyAzimuth: record.galaxyAzimuth } : {}),
     ...(typeof record.galaxyTurntable === "boolean" ? { galaxyTurntable: record.galaxyTurntable } : {}),
+    ...(isGalaxyZoom(record.galaxyZoom) ? { galaxyZoom: record.galaxyZoom } : {}),
     drawer: parseDrawer(record.drawer),
     ...(starredModels === undefined ? {} : { starredModels }),
     ...(usagePet === undefined ? {} : { usagePet }),

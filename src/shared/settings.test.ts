@@ -1,6 +1,6 @@
 import { deepStrictEqual, ok } from "node:assert/strict";
 import { describe, it } from "node:test";
-import { GALAXY_TILT, galaxyAzimuthOf, galaxyTiltOf, galaxyTurntableOf,
+import { GALAXY_TILT, galaxyZoomOf, galaxyAzimuthOf, galaxyTiltOf, galaxyTurntableOf,
   APP_MODE_DEFAULT,
   ORCHESTRA_VIEW_DEFAULT,
   ORCHESTRA_ENTRY_DEFAULT,
@@ -865,5 +865,13 @@ describe("parseSettings 的 galaxyAzimuth / galaxyTurntable（星系转台）", 
     deepStrictEqual(galaxyTurntableOf(parseSettings({})), true);
     deepStrictEqual(galaxyTurntableOf(parseSettings({ galaxyTurntable: false })), false);
     deepStrictEqual(parseSettings({ galaxyTurntable: "no" }).galaxyTurntable, undefined);
+  });
+});
+
+describe("parseSettings 的 galaxyZoom（星系缩放）", () => {
+  it("只认 0.5–3 之间、两位小数的数；缺席 = 1", () => {
+    deepStrictEqual(galaxyZoomOf(parseSettings({})), 1);
+    for (const ok of [0.5, 0.57, 1, 1.25, 2.4, 3]) deepStrictEqual(parseSettings({ galaxyZoom: ok }).galaxyZoom, ok);
+    for (const bad of [0.49, 3.01, 1.234, "1.2", null, Number.NaN, Number.POSITIVE_INFINITY]) deepStrictEqual(parseSettings({ galaxyZoom: bad }).galaxyZoom, undefined, String(bad));
   });
 });
