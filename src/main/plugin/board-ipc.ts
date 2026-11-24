@@ -6,7 +6,8 @@
  */
 import { ipcMain } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
-import type { BoardWeekResponse } from "../../shared/plugin-board.ts";
+import type { BoardShotResponse, BoardWeekResponse } from "../../shared/plugin-board.ts";
+import { boardShotRect } from "../../shared/plugin-board.ts";
 import { assembleBoardWeek, type BoardWeekDeps } from "./board-week.ts";
 import { boardFrameOf, type BoardTemplateStore } from "./board-snapshot.ts";
 import type { PanelFrames } from "./panel-frame.ts";
@@ -23,4 +24,17 @@ export function registerBoardIpc(deps: BoardIpcDeps): void {
     return assembleBoardWeek(deps.week, weekStart);
   });
   ipcMain.handle(ipcChannels.boardFrame, (_e, raw: unknown) => boardFrameOf(deps, raw));
+  // 只截发起调用的这个 webContents：renderer 给的是看板在自己页面里的 CSS 矩形，不能借它截别人的窗口
+  ipcMain.handle(ipcChannels.boardShot, async (event, raw: unknown): Promise<BoardShotResponse> => {
+    const rect = boardShotRect(raw);
+    if (rect === null) return null;
+    try {
+      const image = await event.sender.capturePage(rect);
+      if (image.isEmpty()) return null;
+      const size = image.getSize();
+      return { base64: image.toPNG().toString("base64"), width: size.width, height: size.height };
+    } catch {
+      return null;
+    }
+  });
 }

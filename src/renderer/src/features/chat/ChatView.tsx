@@ -3949,6 +3949,7 @@ function EntryView(props: {
       onOpenTask={props.onOpenTask}
       channel={props.channel}
       skills={props.skills}
+      sessionId={props.sessionId}
     />
   );
 }
@@ -5776,7 +5777,7 @@ function ToolLine(props: {
   // 失败 / 还在跑 / 形状不对照通用骨架走
   if (props.toolName === "show_plugin_board") {
     const board = pluginBoardOf(result);
-    if (board !== null) return <PluginBoardResultView toolCallId={props.toolCallId} board={board} />;
+    if (board !== null) return <PluginBoardResultView sessionId={props.sessionId ?? null} toolCallId={props.toolCallId} board={board} />;
   }
   // 子会话通道工具（子会话 PR4a）：三个工具的信息形状不是「调用 + 摘要」，各自
   // 早退，不复用下面的通用骨架。**三个都不在失败时早退**——照 ToolLine 的失败
@@ -6371,6 +6372,8 @@ function ToolGroupLine(props: {
   channel: ChannelViewContext;
   /** 透传给成员 ToolLine（read SKILL.md 徽标用） */
   skills: SkillMeta[];
+  /** 成员里的看板位图按会话 + 工具调用作缓存键 */
+  sessionId?: string;
 }) {
   const t = useT();
   const { group } = props;
@@ -6428,6 +6431,7 @@ function ToolGroupLine(props: {
               onOpenTask={props.onOpenTask}
               channel={props.channel}
               skills={props.skills}
+              sessionId={props.sessionId}
             />
           ))}
         </div>

@@ -13,14 +13,16 @@
  * 算出（`gridHeight`，与真实排版一致），所以卸 / 挂都不会让对话滚动跳动；回到视口再挂、重新换一次性地址。
  * 与周看板挂载「可视 ± 1 天」同一思路。
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PluginBoardResult as PluginBoardSnapshotResult } from "../../../../shared/plugin-board.ts";
 import { useT } from "../../locale.ts";
+import { api } from "../../api.ts";
 import { Icon } from "../../shell/Icon";
 import { requestOpenPluginBoard } from "../../shell/open-panel.ts";
 import { BoardGrid } from "../plugins/BoardGrid.tsx";
 import { containerLayout, gridHeight } from "../plugins/board-layout.ts";
 import { boardClip, boardExpandStore, collapseScrollDelta } from "./board-expand.ts";
+import { boardShotFits, boardShotKey, boardShots, type BoardShot } from "./board-shot-cache.ts";
 import { skippedText } from "./board-text.ts";
 import { useSnapshotCards, type SnapshotCardInput } from "./useSnapshotCards.ts";
 import "./board.css";
@@ -43,12 +45,17 @@ function useWindowHeight(): number {
   return height;
 }
 
-export function PluginBoardResultView(props: { toolCallId: string; board: PluginBoardSnapshotResult }) {
+export function PluginBoardResultView(props: { sessionId: string | null; toolCallId: string; board: PluginBoardSnapshotResult }) {
   const t = useT().board;
-  const { board, toolCallId } = props;
+  const { board, toolCallId, sessionId } = props;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(0);
   const [near, setNear] = useState(false);
+  const [liveReady, setLiveReady] = useState(false);
+  const [theme, setTheme] = useState(() => document.documentElement.dataset.theme ?? "");
+  const readyRef = useRef(false);
+  readyRef.current = liveReady;
+  const cacheKey = sessionId === null ? null : boardShotKey(sessionId, toolCallId);
 
   // 量自己的宽度（layout effect：占位在第一帧画出来之前就有对的高度）
   useLayoutEffect(() => {
@@ -57,6 +64,13 @@ export function PluginBoardResultView(props: { toolCallId: string; board: Plugin
     setWidth(host.clientWidth);
     const observer = new ResizeObserver(() => setWidth(host.clientWidth));
     observer.observe(host);
+    return () => observer.disconnect();
+  }, []);
+  // 主题变化后模板会重新收到配色；缓存也按主题分开，浅色的图不能贴到玄上
+  useEffect(() => {
+    const root = document.documentElement;
+    const observer = new MutationObserver(() => setTheme(root.dataset.theme ?? ""));
+    observer.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
     return () => observer.disconnect();
   }, []);
   // 在不在视口附近
@@ -80,6 +94,64 @@ export function PluginBoardResultView(props: { toolCallId: string; board: Plugin
   const expanded = useSyncExternalStore(boardExpandStore.subscribe, () => boardExpandStore.has(toolCallId));
   const windowHeight = useWindowHeight();
   const clip = boardClip({ contentHeight: placeholderHeight, windowHeight, expanded });
+  const visibleHeight = clip.maxHeight ?? placeholderHeight;
+
+  /** 真 iframe 已经画好：截宿主窗口里这一块，给下一次重挂用。失败只放弃优化，不影响正常加载。 */
+  const capture = useCallback((): void => {
+    if (cacheKey === null) return;
+    const host = hostRef.current?.querySelector<HTMLElement>(".board-clip");
+    if (host === null || host === undefined) return;
+    // 有卡坏了 / 还没都挂上时不截：残缺画面不该成为下次的第一帧
+    if (host.querySelectorAll("iframe.bd-iframe").length !== board.cards.length) return;
+    const rect = host.getBoundingClientRect();
+    // 只截完整落在窗口里的外框；半露的图贴回来会像被二次裁过
+    if (rect.left < 0 || rect.top < 0 || rect.right > window.innerWidth || rect.bottom > window.innerHeight || rect.width < 1 || rect.height < 1) return;
+    const ratio = window.devicePixelRatio || 1;
+    void api.board
+      .shot({ rect })
+      .then(async (result) => {
+        if (result === null) return;
+        const bytes = Uint8Array.from(atob(result.base64), (char) => char.charCodeAt(0));
+        const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+        const current = hostRef.current?.querySelector<HTMLElement>(".board-clip");
+        const currentRect = current?.getBoundingClientRect();
+        // IPC / 解码期间又挪了尺寸或换了主题：这份旧图不能落地
+        if (
+          current === null ||
+          current === undefined ||
+          currentRect === undefined ||
+          Math.abs(currentRect.width - rect.width) >= 2 ||
+          Math.abs(currentRect.height - rect.height) >= 2 ||
+          (document.documentElement.dataset.theme ?? "") !== theme
+        ) {
+          bitmap.close();
+          return;
+        }
+        boardShots.set(cacheKey, { bitmap, cssWidth: rect.width, cssHeight: rect.height, ratio, theme, capturedAt: Date.now() });
+      })
+      .catch(() => undefined);
+  }, [board.cards.length, cacheKey, theme]);
+
+  const onPainted = useCallback((): void => {
+    setLiveReady(true);
+    capture();
+  }, [capture]);
+
+  // 已经画着的看板改了宽度 / 展开状态 / 主题：重新留一张。初次挂载由 LiveBoard 的 onPainted 负责
+  useEffect(() => {
+    if (!live || !readyRef.current) return undefined;
+    const timer = window.setTimeout(capture, 200);
+    return () => window.clearTimeout(timer);
+  }, [width, expanded, theme, live, capture]);
+  useEffect(() => {
+    if (!live) setLiveReady(false);
+  }, [live]);
+
+  const shot = cacheKey === null || width === 0 ? undefined : boardShots.get(cacheKey);
+  const pasteShot =
+    shot !== undefined &&
+    boardShotFits(shot, { width, height: visibleHeight, ratio: window.devicePixelRatio || 1, theme, now: Date.now() }) &&
+    (!live || !liveReady);
   const collapse = (): void => {
     // 「收起」钮在展开的看板最底下：整块缩回半屏后，顶部若在视口上方就把它拉回视口里，别让用户迷路
     // （行在虚拟列表里是绝对定位，缩短不挪它的顶；下面的行等测高后才补位，所以这里直接按现在的顶部算）
@@ -93,12 +165,15 @@ export function PluginBoardResultView(props: { toolCallId: string; board: Plugin
   };
   return (
     <div className="board-result" data-source={board.source} data-live={live} data-board-call={toolCallId} data-expanded={expanded || undefined} ref={hostRef}>
-      <div className="board-clip" data-clipped={clip.clipped || undefined} style={clip.maxHeight === null ? undefined : { maxHeight: clip.maxHeight }}>
-        {live ? (
-          <LiveBoard toolCallId={toolCallId} board={board} />
-        ) : (
-          board.cards.length > 0 && <div className="board-placeholder" style={{ height: placeholderHeight }} aria-hidden="true" />
-        )}
+      <div
+        className="board-clip"
+        data-clipped={clip.clipped || undefined}
+        data-shot={pasteShot || undefined}
+        style={{ minHeight: visibleHeight, ...(clip.maxHeight === null ? {} : { maxHeight: clip.maxHeight }) }}
+      >
+        {live && <LiveBoard toolCallId={toolCallId} board={board} onPainted={onPainted} />}
+        {!live && !pasteShot && board.cards.length > 0 && <div className="board-placeholder" style={{ height: placeholderHeight }} aria-hidden="true" />}
+        {pasteShot && <BoardShotView shot={shot} />}
         {clip.clipped && (
           <button type="button" className="board-more" title={t.expandHint} onClick={() => boardExpandStore.set(toolCallId, true)}>
             <Icon name="chevron-down" size={14} />
@@ -126,15 +201,70 @@ export function PluginBoardResultView(props: { toolCallId: string; board: Plugin
   );
 }
 
+/** 位图同步贴上（layout effect）：挂载后的第一帧就有内容，不等 PNG 再解码一次 */
+function BoardShotView(props: { shot: BoardShot }) {
+  const ref = useRef<HTMLCanvasElement | null>(null);
+  useLayoutEffect(() => {
+    const canvas = ref.current;
+    if (canvas === null) return;
+    canvas.width = props.shot.bitmap.width;
+    canvas.height = props.shot.bitmap.height;
+    canvas.getContext("2d")?.drawImage(props.shot.bitmap, 0, 0);
+  }, [props.shot]);
+  return <canvas ref={ref} className="board-shot" aria-hidden="true" />;
+}
+
 /** 挂着的看板：换地址的 hook 在这里——卸载即丢掉已用掉的一次性地址，再挂载重新换 */
-function LiveBoard(props: { toolCallId: string; board: PluginBoardSnapshotResult }) {
-  const { board, toolCallId } = props;
+function LiveBoard(props: { toolCallId: string; board: PluginBoardSnapshotResult; onPainted: () => void }) {
+  const { board, toolCallId, onPainted } = props;
   const inputs = useMemo<SnapshotCardInput[]>(
     () => board.cards.map((snapshot) => ({ key: `${toolCallId}:${snapshot.id}:${snapshot.index}`, snapshot, at: board.at })),
     [board, toolCallId],
   );
   const { cards, refresh } = useSnapshotCards(inputs);
+  const loaded = useRef(new Set<string>());
+  const completed = useRef(false);
+  const timer = useRef<number | undefined>(undefined);
+  const fallback = useRef<number | undefined>(undefined);
+  const frameOne = useRef(0);
+  const frameTwo = useRef(0);
+  const complete = useCallback((): void => {
+    if (completed.current) return;
+    completed.current = true;
+    window.clearTimeout(timer.current);
+    window.clearTimeout(fallback.current);
+    onPainted();
+  }, [onPainted]);
+  // 正常路：全部 iframe load 后给模板收数据与合成留两帧；补路：模板缺失也不让旧位图永久盖住错误卡
+  useEffect(() => {
+    fallback.current = window.setTimeout(complete, 2000);
+    return () => {
+      window.clearTimeout(timer.current);
+      window.clearTimeout(fallback.current);
+      cancelAnimationFrame(frameOne.current);
+      cancelAnimationFrame(frameTwo.current);
+    };
+  }, [complete]);
+  const onFrameLoad = useCallback(
+    (key: string): void => {
+      loaded.current.add(key);
+      if (loaded.current.size < inputs.length || completed.current) return;
+      window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(() => {
+        frameOne.current = requestAnimationFrame(() => {
+          frameTwo.current = requestAnimationFrame(complete);
+        });
+      }, 100);
+    },
+    [inputs.length, complete],
+  );
   return (
-    <BoardGrid cards={cards} layout={{ mode: "container" }} actionName={board.source === "installed" ? board.plugin : null} onFrameStale={refresh} />
+    <BoardGrid
+      cards={cards}
+      layout={{ mode: "container" }}
+      actionName={board.source === "installed" ? board.plugin : null}
+      onFrameStale={refresh}
+      onFrameLoad={onFrameLoad}
+    />
   );
 }
