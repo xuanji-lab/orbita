@@ -24,6 +24,18 @@ export type PlanetComposition = "rock" | "ice" | "gas";
 export type PlanetElementKey = "eyes" | "ring" | "clouds" | "moons" | "corona";
 export type PlanetElements = Partial<Record<PlanetElementKey, boolean>>;
 
+/**
+ * 眼睛的样式（设计面板里每颗天体各自 DIY，2026-11-24 用户「开放一个选项可 diy 吧」）：小 / 中 / 大 / 特大四档竖胶囊，
+ * 外加规则外的「白眼」（特大的几何 + 浅色填充）。没设过 = EYE_STYLE_DEFAULT（大：用户嫌原来的小档太小）。
+ */
+export type EyeStyle = "s" | "m" | "l" | "xl" | "xl-white";
+export const EYE_STYLES: readonly EyeStyle[] = ["s", "m", "l", "xl", "xl-white"];
+export const EYE_STYLE_DEFAULT: EyeStyle = "l";
+
+export function isEyeStyle(value: unknown): value is EyeStyle {
+  return typeof value === "string" && (EYE_STYLES as readonly string[]).includes(value);
+}
+
 /** 读回来的一颗天体（主星或一颗子智能体行星） */
 export interface PlanetBody {
   /** 主星恒为 "main"；行星是伴随文件里的 id */
@@ -42,6 +54,8 @@ export interface PlanetBody {
   /** 轨道半径（界面星系单位）；主星与没指定的为 null */
   orbit: number | null;
   elements: PlanetElements | null;
+  /** 眼睛样式；没设过为 null（界面取 EYE_STYLE_DEFAULT） */
+  eyeStyle: EyeStyle | null;
 }
 
 export interface WorkspacePlanets {
@@ -61,6 +75,8 @@ export interface PlanetWriteBody {
   composition: PlanetComposition | null;
   orbit: number | null;
   elements: PlanetElements;
+  /** 眼睛样式；缺席 = 没设过（伴随文件里原有的值不动） */
+  eyeStyle?: EyeStyle;
 }
 
 export interface PlanetWriteRequest {
@@ -78,6 +94,7 @@ export interface CompanionBody {
   surface?: string;
   flip?: boolean;
   elements?: PlanetElements;
+  eyeStyle?: EyeStyle;
   /** 没有插件稿时，名字与质量记在这里 */
   name?: string;
   massEarth?: number;
@@ -142,6 +159,7 @@ function parseBody(raw: Record<string, unknown>): CompanionBody {
   if (typeof raw["flip"] === "boolean") body.flip = raw["flip"];
   const elements = parseElements(raw["elements"]);
   if (elements !== undefined) body.elements = elements;
+  if (isEyeStyle(raw["eyeStyle"])) body.eyeStyle = raw["eyeStyle"];
   const name = str(raw["name"]);
   if (name !== undefined) body.name = name;
   const mass = num(raw["massEarth"]);
@@ -271,6 +289,7 @@ export function mergeCompanion(
 ): GalaxyCompanion {
   const writeBody = (old: CompanionBody | null, body: PlanetWriteBody, designed: boolean): CompanionBody => {
     const next: CompanionBody = { ...(old ?? {}), elements: body.elements };
+    if (body.eyeStyle !== undefined) next.eyeStyle = body.eyeStyle;
     if (designed) {
       delete next.name;
       delete next.massEarth;
@@ -303,7 +322,8 @@ export function isPlanetWriteBody(raw: unknown): raw is PlanetWriteBody {
     raw["massEarth"] > 0 &&
     (raw["composition"] === null || isComposition(raw["composition"])) &&
     (raw["orbit"] === null || (typeof raw["orbit"] === "number" && Number.isFinite(raw["orbit"]))) &&
-    parseElements(raw["elements"]) !== undefined
+    parseElements(raw["elements"]) !== undefined &&
+    (raw["eyeStyle"] === undefined || isEyeStyle(raw["eyeStyle"]))
   );
 }
 

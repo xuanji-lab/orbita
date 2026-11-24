@@ -94,7 +94,25 @@ describe("PlanetStore：写回", () => {
     await rm(dir, { recursive: true });
   });
 
-  it("路径越界判定", () => {
+  it("眼睛样式：写进 planet/galaxy.json，再读回来；下次写不带样式时原值保留；没设过读回 null", async () => {
+    const dir = await workspace();
+    const store = new PlanetStore(fakeSurface);
+    const main = { id: "main", name: "", massEarth: 62, composition: null, orbit: null, elements: { eyes: true } };
+    const rec = { id: "rec", name: "聆箴", massEarth: 3, composition: "rock" as const, orbit: 26, elements: { eyes: true } };
+    await store.write(dir, { main: { ...main, eyeStyle: "xl-white" }, planets: [rec] });
+    const raw = JSON.parse(await readFile(join(dir, "planet", "galaxy.json"), "utf8")) as { main: { eyeStyle?: string } };
+    assert.equal(raw.main.eyeStyle, "xl-white");
+    let read = await store.read(dir);
+    assert.equal(read?.main?.eyeStyle, "xl-white");
+    assert.equal(read?.planets[0]?.eyeStyle, null);
+    await store.write(dir, { main, planets: [{ ...rec, eyeStyle: "m" }] });
+    read = await store.read(dir);
+    assert.equal(read?.main?.eyeStyle, "xl-white");
+    assert.equal(read?.planets[0]?.eyeStyle, "m");
+    await rm(dir, { recursive: true });
+  });
+
+    it("路径越界判定", () => {
     assert.equal(insidePlanetDir("/w", "a/b.png"), "/w/planet/a/b.png");
     assert.equal(insidePlanetDir("/w", "../x.png"), null);
   });

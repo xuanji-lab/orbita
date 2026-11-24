@@ -112,6 +112,23 @@ describe("写回伴随文件", () => {
     assert.equal(next.planets[0]?.massEarth, 2.2);
   });
 
+  it("眼睛样式：写进伴随文件、读得回来；请求里没带就保留盘上原值；坏值读时丢掉", () => {
+    const current = parseCompanion({ main: { eyeStyle: "xl" }, planets: [{ id: "rec", eyeStyle: "huge" }] });
+    assert.equal(current.main?.eyeStyle, "xl");
+    assert.equal(current.planets[0]?.eyeStyle, undefined);
+    const next = mergeCompanion(
+      current,
+      { main: { ...body, id: "main", composition: null, orbit: null, massEarth: 60 }, planets: [{ ...body, eyeStyle: "xl-white" }] },
+      { main: false, planets: new Set() },
+    );
+    assert.equal(next.main?.eyeStyle, "xl");
+    assert.equal(next.planets[0]?.eyeStyle, "xl-white");
+    const reread = parseCompanion(JSON.parse(JSON.stringify(next)));
+    assert.equal(reread.planets[0]?.eyeStyle, "xl-white");
+    assert.equal(isPlanetWriteRequest({ workspaceId: "w", main: null, planets: [{ ...body, eyeStyle: "l" }] }), true);
+    assert.equal(isPlanetWriteRequest({ workspaceId: "w", main: null, planets: [{ ...body, eyeStyle: "big" }] }), false);
+  });
+
   it("写回请求的形状校验", () => {
     assert.equal(isPlanetWriteRequest({ workspaceId: "w", main: null, planets: [body] }), true);
     assert.equal(isPlanetWriteRequest({ workspaceId: "w", main: null, planets: [{ ...body, id: "../x" }] }), false);
