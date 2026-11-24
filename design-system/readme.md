@@ -436,7 +436,7 @@ colour name the state — a 1/3 wedge in a thin ring, `--color-info` (blue) = ru
 `--color-warning` (orange) = waiting for your reply (a pending tool approval); a full disc,
 `--color-success` (green) = finished and not yet viewed; a full disc, `--color-danger` (red) =
 stopped with an error and not yet viewed. A viewed row shows nothing; a lit pie takes the slot over
-`git-fork` / `pin`; selection stays a full-row fill and the two never interfere. Fixed tokens
+`bot` (a sub-session is running) / `pin`; selection stays a full-row fill and the two never interfere. Fixed tokens
 rather than the accent are deliberate — the dark theme's accent is yellow and would blur into the
 orange. **A folded workspace sums its rows** on the group head — one pie and a count per lit
 state, ordered waiting › failed › running › done — so a collapsed group still says something is
@@ -680,9 +680,9 @@ Checkboxes have no recipe: the ones in use (the Providers model list, the migrat
   2.25).
 - Icons inherit `currentColor` — tertiary grey at rest, primary on hover, `--color-info` for the
   thinking glyph, the accent inside the send button. The `Icon` component inlines the SVG so this works.
-- **Recurring vocabulary**: `bot` = agent mode, `workflow` = orchestration, `folder` = a workspace,
+- **Recurring vocabulary**: `bot` = agent mode, and also a sub-session (2026-11-22, replacing `git-fork`: a sub-session is an agent you sent off — the rail entry, its panel, the delegate / hand-back cards and the task-row slot), `workflow` = orchestration, `folder` = a workspace,
   `plus` = new task, `folder-plus` = new workspace, `archive` = archived tasks,
-  `git-branch` = a worktree, and the task-row status slot — `git-fork` when a sub-session
+  `git-branch` = a worktree, and the task-row status slot — `bot` when a sub-session
   is running, empty otherwise (run states take the slot as a status pie, see *Motion*),
   `lock` = a field fixed by its preset or identity (Providers), `brain` = thinking,
   `terminal`/`wrench`/`file-text` = tool calls, `panel-left`/`panel-right` = the two sidebars,

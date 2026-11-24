@@ -22,6 +22,7 @@ import type { ChannelMessage, ChannelMessageKind, ChannelSummary } from "@shared
 import type { DelegateCard } from "@shared/agent-ipc";
 import { thinkingLevelLabel } from "@shared/thinking";
 import { Icon, type IconName } from "../../shell/Icon";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { questionAnswered, type ChannelMarkTone } from "./tool-results";
 import { EXIT_CARD_KICKER, EXIT_CARD_STYLE, ExitCard } from "./ExitCard";
 import { MarkdownBlock } from "./MarkdownBlock";
@@ -316,7 +317,7 @@ export function DelegateCardView(props: {
   return (
     <ExitCard
       kicker={t.channel.delegated}
-      icon="bot"
+      icon={FEATURE_ICON.subsessions}
       title={card.title}
       {...(props.modelName !== undefined ? { titleSuffix: <ModelNameLabel name={props.modelName} /> } : {})}
       status={{ text: t.channel.delegateStatus[status], color: delegateStatusColor(status), active: status === "running" }}
