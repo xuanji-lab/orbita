@@ -7,7 +7,7 @@
 import { ipcMain, type WebContents } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type { BoardShotResponse, BoardWeekResponse } from "../../shared/plugin-board.ts";
-import { boardShotRect } from "../../shared/plugin-board.ts";
+import { boardShotRect, boardShotScale } from "../../shared/plugin-board.ts";
 import { assembleBoardWeek, type BoardWeekDeps } from "./board-week.ts";
 import { captureRegion } from "../browser/frame-capture.ts";
 import { boardFrameOf, type BoardTemplateStore } from "./board-snapshot.ts";
@@ -22,20 +22,27 @@ export interface BoardIpcDeps {
 /** 同一页面里的多块看板可能一起画好；capturePage 并发会等不到帧，按 webContents 串行 */
 const boardShotQueues = new Map<number, Promise<BoardShotResponse>>();
 
-function captureBoardShot(contents: WebContents, rect: NonNullable<ReturnType<typeof boardShotRect>>): Promise<BoardShotResponse> {
+function captureBoardShot(contents: WebContents, rect: NonNullable<ReturnType<typeof boardShotRect>>, scale: number): Promise<BoardShotResponse> {
   const previous = boardShotQueues.get(contents.id) ?? Promise.resolve(null);
   const next = previous.then(async () => {
     try {
-      // 与浏览器截图的 forceFrame 同一处理：页面没在前台 / 没有新帧时，裸 capturePage 可能一直等
       contents.setBackgroundThrottling(false);
       contents.invalidate();
-      const image = await contents.capturePage(rect);
-      if (image.isEmpty()) {
-        // 没合成出新帧时原生 capturePage 会给空图；CDP 的区域截图走另一条取帧路径
-        const png = await captureRegion(contents, { ...rect, scale: 1 });
-        return png === null ? null : { base64: png.toString("base64"), width: rect.width, height: rect.height };
+      // 主路用 CDP：原生 capturePage 实测会偶发只回局部像素（840×400@2 变成 1112×496）
+      const png = await captureRegion(contents, { ...rect, scale });
+      if (png !== null) {
+        return { base64: png.toString("base64"), width: Math.round(rect.width * scale), height: Math.round(rect.height * scale) };
       }
+    } catch {
+      // 换原生补路
+    }
+    try {
+      const image = await contents.capturePage(rect);
+      if (image.isEmpty()) return null;
       const size = image.getSize();
+      const factor = image.getScaleFactors()[0] ?? scale;
+      // 原生补路也只接受完整矩形；局部图宁可没有位图，不能贴成错位的一帧
+      if (size.width !== Math.round(rect.width * factor) || size.height !== Math.round(rect.height * factor)) return null;
       return { base64: image.toPNG().toString("base64"), width: size.width, height: size.height };
     } catch {
       return null;
@@ -57,6 +64,6 @@ export function registerBoardIpc(deps: BoardIpcDeps): void {
   ipcMain.handle(ipcChannels.boardShot, async (event, raw: unknown): Promise<BoardShotResponse> => {
     const rect = boardShotRect(raw);
     if (rect === null) return null;
-    return captureBoardShot(event.sender, rect);
+    return captureBoardShot(event.sender, rect, boardShotScale(raw));
   });
 }

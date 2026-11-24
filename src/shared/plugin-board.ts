@@ -271,6 +271,8 @@ export interface BoardShotRect {
 
 export interface BoardShotRequest {
   rect: BoardShotRect;
+  /** 输出倍率（renderer 的 devicePixelRatio）；缺省 1，合法范围 1–3 */
+  scale?: number;
 }
 
 /** PNG 位图与它的物理像素尺寸；截不到回 null（优化失败不影响真 iframe 挂上） */
@@ -296,6 +298,13 @@ export function boardShotRect(raw: unknown): BoardShotRect | null {
   const height = Math.round(rect["height"] as number);
   if (x < 0 || y < 0 || width < 1 || height < 1 || width > 4096 || height > 4096 || width * height > 16_777_216) return null;
   return { x, y, width, height };
+}
+
+/** 输出倍率不可信：缺省 1；只接受 1–3 的有限数，其余退回 1。 */
+export function boardShotScale(raw: unknown): number {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return 1;
+  const scale = (raw as Record<string, unknown>)["scale"];
+  return typeof scale === "number" && Number.isFinite(scale) && scale >= 1 && scale <= 3 ? scale : 1;
 }
 
 // ---------- 全局周看板（`board:week`） ----------
