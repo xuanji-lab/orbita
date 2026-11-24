@@ -479,3 +479,94 @@
   font-size: var(--font-size-xs);
   font-weight: var(--weight-regular);
 }
+
+/* ── 行星页的「职能」一节与新建子智能体（SubAgentRole.tsx） ── */
+.gd .gd-role-text {
+  min-height: calc(var(--control-height-md) * 3);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+}
+.gd-role-status {
+  grid-column: 1 / -1;
+  min-height: 1lh;
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+.gd-role-status[data-save="error"] {
+  color: var(--color-danger);
+}
+.gd-role-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin: 0 0 var(--space-1);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+.gd-role-delete,
+.gd-new-entry {
+  display: flex;
+  padding: var(--space-1) 0 var(--space-2);
+}
+/* 文字链接样的次级动作：不抢主操作的 accent；删除用 danger 墨，悬停加一层 danger 软底 */
+.gd-link,
+.gd-link-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  height: var(--control-height-xs);
+  padding: 0 var(--space-1-5);
+  margin-left: calc(var(--space-1-5) * -1);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-xs);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.gd-link:hover {
+  background: var(--color-bg-muted);
+  color: var(--color-text-primary);
+}
+.gd-link-danger {
+  color: var(--color-danger);
+}
+.gd-link-danger:hover {
+  background: var(--color-danger-soft);
+}
+.gd-confirm {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 var(--space-2);
+  padding: var(--space-3);
+  background: var(--color-danger-soft);
+  border-radius: var(--radius-md);
+}
+.gd-confirm-text {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-primary);
+}
+.gd-confirm-acts,
+.gd-new-acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+.gd-new-acts {
+  padding: var(--space-2) 0;
+}
+.gd .gd-new-create {
+  height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--font-size-base);
+}

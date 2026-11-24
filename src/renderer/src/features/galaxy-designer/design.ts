@@ -11,6 +11,7 @@ import {
 } from "../chat/galaxy.ts";
 import type { RightPanelKind } from "../../shell/RightRail.tsx";
 import type { EyeStyle, PlanetWriteBody, PlanetWriteRequest, WorkspacePlanets } from "@shared/planet-design";
+import type { SubAgentProfile } from "@shared/sub-agent";
 // 值 import 走相对路径：node --test 解析不了 @shared 别名
 import { EYE_STYLE_DEFAULT } from "../../../../shared/planet-design.ts";
 
@@ -85,6 +86,8 @@ export interface PlanetDesign extends BodyDesign {
   orbitRadius: number;
   /** 子智能体的 id（伴随文件 planet/galaxy.json 里的）；面板里新加、还没落盘的没有 */
   id?: string;
+  /** 子智能体档案（planet/agents/<id>/agent.json：职能提示词等）；没有 / 读坏了为 null，缺席 = 没读过盘 */
+  profile?: SubAgentProfile | null;
 }
 
 /**
@@ -652,6 +655,7 @@ export function designFromPlanets(data: WorkspacePlanets, fallback: GalaxyDesign
     zoom: ZOOM_DEFAULT.planet,
     surface: body.surface === null ? null : { src: body.surface, flip: body.flip },
     note: body.note,
+    profile: body.profile ?? null,
     ...(body.eyeStyle === null ? {} : { eyeStyle: body.eyeStyle }),
   }));
   return { editing: "star", star, planet: planets[0] ?? null, planets, planetIndex: 0, backdrop: fallback.backdrop };

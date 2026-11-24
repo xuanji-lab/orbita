@@ -11,7 +11,7 @@ import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { effectiveIntentSettings, galaxyAzimuthOf, galaxyTiltOf, galaxyTurntableOf } from "@shared/settings";
 import { IntentPanel } from "./features/intent/IntentPanel.tsx";
 import { GalaxyDesigner } from "./features/galaxy-designer/GalaxyDesigner.tsx";
-import { usePlanetFiles } from "./features/galaxy-designer/useGalaxyDesign.ts";
+import { reloadAfterSubAgentChange, usePlanetFiles } from "./features/galaxy-designer/useGalaxyDesign.ts";
 import { designerClick, designerFollow, keepDesignerAcrossSessions } from "./features/galaxy-designer/design.ts";
 import { ContextPanel, type TaskPanelTab } from "./features/context/ContextPanel.tsx";
 import { EMPTY_ENTRY } from "./features/chat/session-states.ts";
@@ -1195,6 +1195,29 @@ export function App() {
         if (event.type !== "pluginsChanged" || event.installed === undefined) return;
         if (event.installed.sessionId !== viewedForInstallRef.current) return;
         openPluginRef.current(event.installed.name, false);
+      }),
+    [],
+  );
+  /**
+   * 子智能体档案变了（聊天里的 create_sub_agent / update_sub_agent，或面板里的新建 / 改 / 删）：重读那座星系。
+   * 新建的还要把右栏「星系设计」弹出来停在这颗新行星上，让用户定轨道与质量（位置不让主智能体猜）：
+   * 聊天里建的只在正看着那条会话时弹（别的会话里建的不抢右栏）；面板里建的面板本来就开着，落到新行星那一页。
+   * 只在编排形态弹——单智能体形态没有星系设计入口。
+   */
+  const subAgentViewRef = useRef({ sessionId: mainSessionId, orchestrate });
+  subAgentViewRef.current = { sessionId: mainSessionId, orchestrate };
+  useEffect(
+    () =>
+      api.agent.onEvent((event) => {
+        if (event.type !== "subAgentsChanged") return;
+        void reloadAfterSubAgentChange(event.workspaceId).then(() => {
+          if (event.action !== "created" || !subAgentViewRef.current.orchestrate) return;
+          if (event.source === "chat" && event.sessionId !== subAgentViewRef.current.sessionId) return;
+          setOverlay(null);
+          setGalaxyTarget(event.workspaceId);
+          setDesignerFocus((prev) => ({ kind: "planet", id: event.subAgentId, nonce: (prev?.nonce ?? 0) + 1 }));
+          setRightPanel("galaxy");
+        });
       }),
     [],
   );

@@ -217,3 +217,16 @@ describe("设计稿仓库：盘上的稿与面板改的稿", () => {
     assert.equal(store.origin("w"), "default");
   });
 });
+
+describe("子智能体档案进设计稿（面板「职能」一节读它）", () => {
+  test("有档案的行星带上 profile；没有的是 null；写回请求不带档案（档案另走 subagent:* IPC）", () => {
+    const profile = { id: "eval", name: "衡璨", role: "你负责没有标准答案的评测。", createdAt: 1, updatedAt: 1, source: "chat" as const };
+    const data: WorkspacePlanets = { ...INTENT, planets: INTENT.planets.map((planet) => (planet.id === "eval" ? { ...planet, profile } : planet)) };
+    const design = designFromPlanets(data, seededDesign("ws-intent"));
+    assert.equal(design.planets?.[1]?.profile?.role, "你负责没有标准答案的评测。");
+    assert.equal(design.planets?.[0]?.profile, null);
+    const request = planetsWriteOf("ws-intent", design);
+    assert.equal(isPlanetWriteRequest(request), true);
+    assert.equal(JSON.stringify(request).includes("没有标准答案"), false);
+  });
+});
