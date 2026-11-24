@@ -94,6 +94,22 @@ export interface GalaxySpec {
    * 缺席 = 0（正圆轨道）
    */
   eccentricity?: number;
+  /**
+   * 碎石带里实际画出来的比例（设置 › 外观 › 碎石密度：1 / 0.5 / 0.1 / 0）。只删减碎石带里的普通会话；在跑、等你、最近的是碎石块（rocks），
+   * 永远画。按会话 id 确定性抽样（dustKept），同一条会话今天画、明天也画；带子宽窄、浓淡、「全部 N 条会话」的计数都按全部会话算。缺席 = 1
+   */
+  dustKeep?: number;
+}
+
+/**
+ * 碎石密度的抽样：按会话 id 的哈希落在 [0, 1) 的哪儿，小于 keep 就画。同一个 id 永远同一个结果；
+ * 十分之一画出的那些一定也在一半里（同一把尺子），密度调高调低时碎石只增不跳。
+ * 哈希加了前缀，与方位角（theta0）用的哈希不相关，不会只留下某一扇面。
+ */
+export function dustKept(id: string, keep: number): boolean {
+  if (keep >= 1) return true;
+  if (keep <= 0) return false;
+  return (hashText(`dust-keep:${id}`) % 10000) / 10000 < keep;
 }
 
 /**
@@ -387,6 +403,8 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
       const rank = n <= 1 ? 0 : i / (n - 1);
       const jitter = ((hash >>> 8) & 1023) / 1023 - 0.5;
       const u = clamp(0.06 + 0.86 * rank + 0.12 * jitter, 0.02, 0.98);
+      // 碎石密度：只是不画这一颗，它的位置（名次、方位）照旧按全部会话排——调密度时留下的那些不挪
+      if (!dustKept(id, spec.dustKeep ?? 1)) continue;
       particles.push({ id, title: seed?.title ?? null, r: inner + (outer - inner) * u, theta0: ((hash % 3600) / 3600) * Math.PI * 2 });
     }
     belt = { inner, outer, count: sessions, particles, alpha: beltAlpha(sessions), omega: BELT_OMEGA, ecc };

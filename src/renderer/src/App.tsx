@@ -8,7 +8,7 @@ import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type DocPaper, t
 import { childSessions, rootSessions } from "@shared/session";
 import type { ChimeReason } from "@shared/notify";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
-import { effectiveIntentSettings, galaxyAzimuthOf, galaxyTiltOf, galaxyTurntableOf, galaxyZoomOf } from "@shared/settings";
+import { effectiveIntentSettings, galaxyAzimuthOf, galaxyTiltOf, galaxyTurntableOf, galaxyZoomOf, galaxyDustDensityOf, GALAXY_DUST_KEEP } from "@shared/settings";
 import { IntentPanel } from "./features/intent/IntentPanel.tsx";
 import { GalaxyDesigner } from "./features/galaxy-designer/GalaxyDesigner.tsx";
 import { usePlanetFiles } from "./features/galaxy-designer/useGalaxyDesign.ts";
@@ -225,7 +225,11 @@ export function App() {
   const galaxyAzimuth = galaxyAzimuthOf(settings);
   const galaxyTurntable = galaxyTurntableOf(settings);
   const galaxyZoom = galaxyZoomOf(settings);
-  const galaxyView = useMemo(() => ({ azimuth: galaxyAzimuth, turntable: galaxyTurntable, zoom: galaxyZoom }), [galaxyAzimuth, galaxyTurntable, galaxyZoom]);
+  const galaxyDustKeep = GALAXY_DUST_KEEP[galaxyDustDensityOf(settings)];
+  const galaxyView = useMemo(
+    () => ({ azimuth: galaxyAzimuth, turntable: galaxyTurntable, zoom: galaxyZoom, dustKeep: galaxyDustKeep }),
+    [galaxyAzimuth, galaxyTurntable, galaxyZoom, galaxyDustKeep],
+  );
 
   /** 回答里本地图的默认尺寸（右键一张图选的那次记下来，之后新图按它画；见 ChatImageSizeContext） */
   const chatImageSize = useMemo(

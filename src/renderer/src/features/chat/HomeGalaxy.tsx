@@ -975,7 +975,8 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   const surface = props.surface === undefined ? (props.fill === true ? "page" : "home") : props.surface;
   // 设置页的小预览（surface = null）不接拖动：那里有滑块
   const setView = useGalaxyTiltSetter();
-  const spec = useMemo(() => ({ ...props.spec, eccentricity: orbitE }), [props.spec, orbitE]);
+  // 碎石密度（设置 › 外观）：只删减碎石带里的普通会话，在跑 / 等你 / 最近的碎石块不受影响
+  const spec = useMemo(() => ({ ...props.spec, eccentricity: orbitE, dustKeep: galaxyView.dustKeep }), [props.spec, orbitE, galaxyView.dustKeep]);
   const baseLayout = useMemo(() => layoutGalaxy(spec), [spec]);
   const scene = useMemo(() => {
     if (size === null || size.width < 2 || size.height < 2) return null;

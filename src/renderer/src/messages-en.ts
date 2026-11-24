@@ -1387,6 +1387,9 @@ export const en = {
     galaxyTiltInfo: "The angle you view the galaxy from: low looks across the disc, high looks down on it. Applies to the home page, the workspace page, the side-panel galaxy and the designer.",
     galaxyTiltValue: (deg: number) => `${deg}°`,
     galaxyTiltPreview: "Galaxy tilt preview",
+    galaxyDust: "Debris density",
+    galaxyDustInfo: "How many sessions the galaxy's debris belt draws. More uses more power. Running, waiting and recent sessions are always drawn; counts still include every session.",
+    galaxyDustOptions: { all: "All", half: "Half", tenth: "A tenth", none: "None" },
     galaxyTurntable: "Drag sideways to spin the galaxy",
     galaxyTurntableInfo: (azimuth: number) =>
       `Drag left or right on empty space to turn the galaxy round its vertical axis (now at ${azimuth}°); drag up or down to tilt it. Double-click empty space to go back to 40° · 0°. Turn this off to tilt only.`,
