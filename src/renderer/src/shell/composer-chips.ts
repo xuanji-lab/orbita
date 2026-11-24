@@ -68,6 +68,12 @@ export function chipRangeAfter(text: string, caret: number): ChipSpan | null {
   return parseChips(text).find((chip) => chip.start === caret) ?? null;
 }
 
+/** 只要区间的胶囊——吸附不关心种类（技能 / MCP / 粘贴 / 图 / 任务的区间都能喂） */
+export interface ChipRange {
+  start: number;
+  end: number;
+}
+
 /**
  * 光标 / 选区（textarea 的 selectionStart / selectionEnd 口径）。
  */
@@ -77,7 +83,7 @@ export interface TextSelection {
 }
 
 /** chip 「严格包含」这个位置（两端不算——停在 chip 头 / 尾是合法的光标位） */
-function chipAround(chips: readonly ChipSpan[], position: number): ChipSpan | undefined {
+function chipAround<T extends ChipRange>(chips: readonly T[], position: number): T | undefined {
   return chips.find((chip) => chip.start < position && position < chip.end);
 }
 
@@ -94,7 +100,7 @@ function chipAround(chips: readonly ChipSpan[], position: number): ChipSpan | un
  * 不在 chip 中间的端点原样返回；没有 chip 时原样返回。
  */
 export function snapSelection(
-  chips: readonly ChipSpan[],
+  chips: readonly ChipRange[],
   next: TextSelection,
   prev: TextSelection | null,
 ): TextSelection {

@@ -177,7 +177,7 @@ import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { InlineName } from "../../shell/InlineName";
 import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
-import { ImageRefCountContext, MarkdownBlock } from "./MarkdownBlock";
+import { ImageRefCountContext, MarkdownBlock, TaskTitlesContext } from "./MarkdownBlock";
 import { sessionOutputs, type SessionOutputs } from "./child-outputs.ts";
 import { ChatFileScopeContext, loadChatImage, openChatFile, revealChatFile, useChatFileScope, useChatImage, type ChatFileScope } from "./chat-file-scope.ts";
 import { requestOpenPanel } from "../../shell/open-panel.ts";
@@ -239,6 +239,13 @@ import { PaperclipMark } from "../../shell/PaperclipMark";
 import { ImageIndexBadge, ImageThumb } from "../../shell/ImageThumb";
 import { QuoteChip } from "../../shell/QuoteChip";
 import { parseQuotedMessage, type TextQuote } from "@shared/quote";
+import {
+  TASK_REF_MIME,
+  taskIdKey,
+  collapseTaskTags,
+  parseTaskRefPayload,
+  type TaskRef,
+} from "@shared/task-ref";
 import { pastedTextSize, splitUserTextBlocks } from "@shared/prompt-attachments";
 import { FileRefChip, PastedTextChip } from "../../shell/attachment-chips";
 import { findQuoteSource, locateQuote, nthUserMessageId, quoteFromSelection } from "./quote-select.ts";
@@ -331,7 +338,9 @@ export function ChatView(props: ChatViewProps) {
   const [dropActive, setDropActive] = useState(false);
   const paneRef = useRef<HTMLDivElement | null>(null);
   const accepts = props.hideComposer !== true && session.usable.length > 0 && !session.readOnly;
-  const carriesFiles = (event: React.DragEvent) => accepts && event.dataTransfer.types.includes("Files");
+  // 文件，或从侧栏拖来的一条任务（TASK_REF_MIME）——两样都收在整个面板上，落在输入框里的由 Composer 按落点处理
+  const carriesFiles = (event: React.DragEvent) =>
+    accepts && (event.dataTransfer.types.includes("Files") || event.dataTransfer.types.includes(TASK_REF_MIME));
   // 回答里的本地图、过程缩略图、结尾产物的「打开」按这条会话能看到的目录读（chat-file-scope.ts）
   const fileScope = useMemo<ChatFileScope>(
     // 会话 id 取「正在看的那条」：只认 session.sessionId 的话，从侧栏点开 / 重启后看的旧会话是 null，
@@ -436,8 +445,12 @@ export function ChatView(props: ChatViewProps) {
       onDrop={(event) => {
         setDropActive(false);
         if (!carriesFiles(event)) return;
+        // Composer 已在落点处理过的（它 preventDefault 作信号）不再追加；输入框外松手 = 末尾
+        if (event.defaultPrevented) return;
         event.preventDefault();
-        void session.attachIncoming(filesOf(event.dataTransfer));
+        const task = parseTaskRefPayload(event.dataTransfer.getData(TASK_REF_MIME));
+        if (task !== null) session.appendTaskRef(task);
+        else void session.attachIncoming(filesOf(event.dataTransfer));
       }}
     >
       <QuoteJumpContext.Provider value={jumpToQuote}>
@@ -1441,6 +1454,11 @@ function ChatViewBody(props: {
    * `onOpenSubSessions` 是否给了决定是否可点，同 `ChannelMarkPill` 的门槛。
    */
 
+  // 输入框里 [任务 xxxxxxxx] 能指到的会话：胶囊名字与发送展开都查它
+  const taskTargets = useMemo<readonly TaskRef[]>(
+    () => session.sessions.map((meta) => ({ id: meta.id, title: meta.title })),
+    [session.sessions],
+  );
   const composer = (
     <Composer
       value={session.draft}
@@ -1485,6 +1503,7 @@ function ChatViewBody(props: {
       jumpToQuote={jumpToQuote}
       attachments={session.attachments}
       onAttach={session.attachIncoming}
+      tasks={taskTargets}
       onRemoveAttachment={session.removeAttachment}
       onPickFolders={session.attachFolderRefs}
       files={session.files}
@@ -3976,12 +3995,15 @@ function UserBubble(props: {
           .join("\n\n");
   const parsed = parseQuotedMessage(skillFreeText);
   const quotes = parsed.quotes;
+  // 已发出的 <referenced_task … /> 折回 [任务 xxxxxxxx]，气泡里画成胶囊（标题取自标签，会话删了也还在）
+  const taskRefs = collapseTaskTags(parsed.text);
+  const taskTitles = new Map(taskRefs.tasks.map((task) => [taskIdKey(task.id), task.title]));
   const copyText = parsed.text;
   const pastedBlocks = split.pasted.map((content) => ({ content, lines: pastedTextSize(content).lines }));
   const fileRefs = split.files;
   // markdown 轻量渲染（表格/粗体/代码块/数学放行，标题摊平——wafo 2026-09-20：
   // 「正文里渲染正确，user message 为什么不一并渲染」）。多块之间空行分段。
-  const text = parsed.text;
+  const text = taskRefs.text;
   const jumpToQuote = useContext(QuoteJumpContext);
   // 引用默认收成一行摘要，复制键旁的眼睛切全文（Proma 同款：发出去之后引用是背景，不该占满屏）
   const [quotesExpanded, setQuotesExpanded] = useState(false);
@@ -4060,7 +4082,9 @@ function UserBubble(props: {
               user-bubble-clamp.ts */}
           <div ref={clampRef} style={bubbleClampStyle(expanded)}>
             <ImageRefCountContext.Provider value={images.length}>
-              <MarkdownBlock text={text} variant="bubble" />
+              <TaskTitlesContext.Provider value={taskTitles}>
+                <MarkdownBlock text={text} variant="bubble" />
+              </TaskTitlesContext.Provider>
             </ImageRefCountContext.Provider>
           </div>
           {!expanded && overflowing && (

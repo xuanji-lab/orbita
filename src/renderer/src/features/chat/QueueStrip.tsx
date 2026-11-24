@@ -4,6 +4,7 @@ import { deriveSessionTitle } from "@shared/session";
 import { Icon, type IconName } from "../../shell/Icon";
 import type { QueuedMessage } from "./session-states.ts";
 import { parseQuotedMessage } from "@shared/quote";
+import { collapseTaskTags } from "@shared/task-ref";
 import { draftFromSentText } from "../../shell/paste-blocks.ts";
 import { dropPlacement } from "./queue-drop.ts";
 import { channelMarkLabel } from "./tool-results.ts";
@@ -118,7 +119,7 @@ function labelOf(item: QueuedMessage, titles: ReadonlyMap<string, string>, t: Me
     // 引用与附件各说个数——只发图 / 只发附件的那条没有字，不写就是一行空白。
     // 粘贴块已内联成 <pasted-text>（方案 C）：拆一遍拿个数与正文，标签不照搬标签
     const { quotes, text: bare } = parseQuotedMessage(
-      draftFromSentText(item.text, () => 0, () => "").draft,
+      collapseTaskTags(draftFromSentText(item.text, () => 0, () => "").draft).text,
     );
     const images = item.images?.length ?? 0;
     const files = item.files?.length ?? 0;
