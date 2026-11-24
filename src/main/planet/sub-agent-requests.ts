@@ -1,9 +1,10 @@
 /**
- * agent 的 create_sub_agent / update_sub_agent / list_sub_agents 落地（subAgentRequest 事件），纯核 + 注入，可直测。
- * runtime 只在「编排形态 + 有工作区 + 根会话」时注册这三个工具；这里再核一遍（工具描述被无视、设置在这一轮中途切了形态），
+ * agent 的 create_sub_agent / update_sub_agent / revise_sub_agent_avatar / list_sub_agents 落地（subAgentRequest 事件），纯核 + 注入，可直测。
+ * runtime 只在「编排形态 + 有工作区 + 根会话」时注册这些工具；这里再核一遍（工具描述被无视、设置在这一轮中途切了形态），
  * 信任边界在主进程。建完 / 改完广播 subAgentsChanged：renderer 重读星系，聊天里新建的弹出设计面板停在它上面。
  */
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
+import { AVATAR_INSTRUCTION_MAX } from "../../shared/planet-avatar.ts";
 import type { SessionMeta } from "../../shared/session.ts";
 import type { AppSettings } from "../../shared/settings.ts";
 import type { SubAgentListItem, SubAgentsChanged, SubAgentToolOutcome } from "../../shared/sub-agent.ts";
@@ -20,7 +21,7 @@ export interface SubAgentRequestDeps {
    * 建完没带地表图时开一组形象候选（与星系设计面板「生成形象」同一套：planet/avatar.ts）。
    * 缺席 = 不自动出图（测试 / 出图没接上），行星先用代码画的默认球。
    */
-  startAvatar?: (workspaceId: string, bodyId: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+  startAvatar?: (workspaceId: string, bodyId: string, instruction?: string) => Promise<{ ok: true } | { ok: false; error: string }>;
 }
 
 /** 这条会话能不能管子智能体：编排形态、属于某个工作区（星际空间没有主星）、是根会话（主智能体本人） */
@@ -84,6 +85,20 @@ export async function applySubAgentRequest(
         `Sub-agent "${created.value.name}" created (id ${created.value.id}) as a new planet in workspace "${workspace.name}", on a default free orbit.${pending} ` +
         "The Galaxy Design panel has opened on it so the user can set its orbit and mass — do not pick a position yourself. " +
         "Tell the user in one or two sentences what was saved and that they can adjust the orbit and mass in the panel.",
+    };
+  }
+  if (request.action === "reviseAvatar") {
+    const instruction = request.input.instruction.trim();
+    if (instruction === "" || instruction.length > AVATAR_INSTRUCTION_MAX) return { ok: false, error: `Avatar instruction must be 1–${AVATAR_INSTRUCTION_MAX} characters.` };
+    if (deps.startAvatar === undefined) return { ok: false, error: "Avatar generation is not available." };
+    const avatar = await deps.startAvatar(workspace.id, request.input.id, instruction).catch((cause: unknown) => ({ ok: false as const, error: cause instanceof Error ? cause.message : String(cause) }));
+    if (!avatar.ok) return avatar;
+    // action=avatar 让正看着这条主会话的界面弹到这颗行星；候选与面板里的「按这个改」完全同源
+    deps.broadcast({ workspaceId: workspace.id, subAgentId: request.input.id, action: "avatar", source: "chat", sessionId: event.sessionId });
+    return {
+      ok: true,
+      id: request.input.id,
+      text: `Avatar revision started for sub-agent ${request.input.id}: "${instruction}". The Galaxy Design panel has opened on it; new candidates will appear there and the user picks one. Do not generate, choose or set the avatar yourself.`,
     };
   }
   const updated = await deps.store.update(workspace.path, request.input, "chat");

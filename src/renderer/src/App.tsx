@@ -1241,8 +1241,8 @@ export function App() {
   );
   /**
    * 子智能体档案变了（聊天里的 create_sub_agent / update_sub_agent，或面板里的新建 / 改 / 删）：重读那座星系。
-   * 新建的还要把右栏「星系设计」弹出来停在这颗新行星上，让用户定轨道与质量（位置不让主智能体猜）：
-   * 聊天里建的只在正看着那条会话时弹（别的会话里建的不抢右栏）；面板里建的面板本来就开着，落到新行星那一页。
+   * 新建或从聊天里要求改形象的还要把右栏「星系设计」弹出来停在这颗行星上：新建让用户定轨道与质量，改形象让用户挑候选。
+   * 聊天里来的只在正看着那条会话时弹（别的会话里做的不抢右栏）；面板里建的面板本来就开着，落到新行星那一页。
    * 只在编排形态弹——单智能体形态没有星系设计入口。
    */
   const subAgentViewRef = useRef({ sessionId: mainSessionId, orchestrate });
@@ -1252,7 +1252,7 @@ export function App() {
       api.agent.onEvent((event) => {
         if (event.type !== "subAgentsChanged") return;
         void reloadAfterSubAgentChange(event.workspaceId).then(() => {
-          if (event.action !== "created" || !subAgentViewRef.current.orchestrate) return;
+          if ((event.action !== "created" && event.action !== "avatar") || !subAgentViewRef.current.orchestrate) return;
           if (event.source === "chat" && event.sessionId !== subAgentViewRef.current.sessionId) return;
           setOverlay(null);
           setGalaxyTarget(event.workspaceId);

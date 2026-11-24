@@ -4,7 +4,7 @@ import { decidePermission } from "../shared/permission.ts";
 import type { SubAgentToolOutcome, SubAgentToolRequest } from "../shared/sub-agent.ts";
 import { createChannelTools } from "./channel-tools.ts";
 import { RequestBroker } from "./request-broker.ts";
-import { createSubAgentTools, describeSubAgentIdentity, SUB_AGENT_TOOL_NAMES, SUB_AGENTS_MAIN_GUIDELINE, toCreateInput, toUpdateInput } from "./sub-agent-tools.ts";
+import { createSubAgentTools, describeSubAgentIdentity, SUB_AGENT_TOOL_NAMES, SUB_AGENTS_MAIN_GUIDELINE, toAvatarRevisionInput, toCreateInput, toUpdateInput } from "./sub-agent-tools.ts";
 import { joinSystemPrompt, orbitaSystemSegments, type SystemPromptInput } from "./system-prompt.ts";
 
 /** 假主进程：记下收到的请求事件，按给定回执回 */
@@ -27,11 +27,12 @@ function harness(outcome: SubAgentToolOutcome) {
 const noSignal = undefined as never;
 
 describe("子智能体工具：参数校验与请求形状", () => {
-  test("三个工具；list 三档放行，create / update 走默认写闸门（plan 拒、manual 问）", () => {
+  test("四个工具；list 三档放行，create / update / revise 走默认写闸门（plan 拒、manual 问）", () => {
     assert.deepEqual(harness({ ok: true, text: "" }).tools.map((tool) => tool.name), [...SUB_AGENT_TOOL_NAMES]);
     for (const mode of ["plan", "manual", "skip"] as const) assert.deepEqual(decidePermission(mode, "list_sub_agents"), { behavior: "allow" });
     assert.equal(decidePermission("plan", "create_sub_agent").behavior, "deny");
     assert.equal(decidePermission("manual", "update_sub_agent").behavior, "ask");
+    assert.equal(decidePermission("manual", "revise_sub_agent_avatar").behavior, "ask");
     assert.equal(decidePermission("skip", "create_sub_agent").behavior, "allow");
   });
 
@@ -54,6 +55,16 @@ describe("子智能体工具：参数校验与请求形状", () => {
     assert.throws(() => toUpdateInput({ id: "agent-1" }), /Nothing to update/);
     assert.deepEqual(toUpdateInput({ id: "agent-1", model: "" }), { id: "agent-1", modelId: null });
     assert.deepEqual(toUpdateInput({ id: "agent-1", role: "新职能" }), { id: "agent-1", role: "新职能" });
+  });
+
+  test("revise：修改要求去首尾空白、限长；调用走同一个 subAgentRequest", async () => {
+    assert.deepEqual(toAvatarRevisionInput({ id: "agent-1", instruction: "  再暖一点  " }), { id: "agent-1", instruction: "再暖一点" });
+    assert.throws(() => toAvatarRevisionInput({ id: "agent-1", instruction: "  " }), /instruction/);
+    assert.throws(() => toAvatarRevisionInput({ id: "agent-1", instruction: "x".repeat(1001) }), /1000/);
+    const ok = harness({ ok: true, text: "revision started", id: "agent-1" });
+    const result = await ok.byName("revise_sub_agent_avatar").execute("c-avatar", { id: "agent-1", instruction: "再暖一点" }, noSignal, undefined, undefined as never);
+    assert.deepEqual(ok.events[0]?.["request"] satisfies unknown as SubAgentToolRequest, { action: "reviseAvatar", input: { id: "agent-1", instruction: "再暖一点" } });
+    assert.deepEqual(result.details, { subAgentId: "agent-1" });
   });
 
   test("调用时把参数翻成 subAgentRequest；主进程的错误原样成为工具失败；成功的 details 带 id", async () => {
@@ -129,5 +140,6 @@ describe("系统提示：职能只在用到时出现", () => {
     assert.ok(prompt.includes(SUB_AGENTS_MAIN_GUIDELINE));
     assert.match(SUB_AGENTS_MAIN_GUIDELINE, /subAgentId/);
     assert.match(SUB_AGENTS_MAIN_GUIDELINE, /never pick its orbit/);
+    assert.match(SUB_AGENTS_MAIN_GUIDELINE, /revise_sub_agent_avatar/);
   });
 });

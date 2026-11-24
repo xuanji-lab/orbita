@@ -647,7 +647,7 @@ void app.whenReady().then(async () => {
         );
       return;
     }
-    // 子智能体：agent 的 create_sub_agent / update_sub_agent / list_sub_agents——写工作区 planet/ 在主进程，任何路径都回执
+    // 子智能体：agent 的 create_sub_agent / update_sub_agent / revise_sub_agent_avatar / list_sub_agents——写工作区 planet/ 在主进程，任何路径都回执
     if (event.type === "subAgentRequest") {
       void applySubAgentRequest(
         {
@@ -657,7 +657,8 @@ void app.whenReady().then(async () => {
           store: subAgentStore,
           broadcast: (change) => broadcastAgentEvent({ type: "subAgentsChanged", ...change }),
           // 聊天里建的子智能体没带地表图：走面板同一套出图（候选进同一个挑选面板）
-          startAvatar: async (workspaceId, bodyId) => (avatarJobs === null ? { ok: false, error: "出图还没就绪" } : avatarJobs.generate({ workspaceId, bodyId })),
+          startAvatar: async (workspaceId, bodyId, instruction) =>
+            avatarJobs === null ? { ok: false, error: "出图还没就绪" } : avatarJobs.generate({ workspaceId, bodyId, ...(instruction === undefined ? {} : { instruction, useCurrentSurface: true }) }),
         },
         event,
       )

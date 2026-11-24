@@ -3,7 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import { extname } from "node:path";
 import { ipcMain, nativeImage } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
-import { isAvatarBodyRef, isAvatarGenerateRequest, isAvatarSelectRequest, type AvatarJob, type AvatarJobEvent, type AvatarJobResult } from "../../shared/planet-avatar.ts";
+import { isAvatarBodyRef, isAvatarGenerateRequest, isAvatarSelectRequest, type AvatarHistoryResult, type AvatarJob, type AvatarJobEvent, type AvatarJobResult } from "../../shared/planet-avatar.ts";
 import { mainWindows } from "../window/main-windows.ts";
 import type { AvatarJobs } from "./avatar.ts";
 import { isPlanetWriteRequest, type PlanetReadResult, type PlanetWriteResult } from "../../shared/planet-design.ts";
@@ -119,7 +119,7 @@ export function broadcastAvatarJob(job: AvatarJob): void {
   for (const window of mainWindows.list()) window.webContents.send(ipcChannels.planetAvatarEvent, event);
 }
 
-/** 「生成形象」的四条通道（四层契约第 2 层）：入参全当不可信，形状在这里核，逻辑在 avatar.ts */
+/** 「生成形象」的通道（四层契约第 2 层）：入参全当不可信，形状在这里核，逻辑在 avatar.ts */
 export function registerAvatarIpc(jobs: AvatarJobs): void {
   const guard = async (run: () => Promise<AvatarJobResult>): Promise<AvatarJobResult> => {
     try {
@@ -128,9 +128,18 @@ export function registerAvatarIpc(jobs: AvatarJobs): void {
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
   };
+  const guardHistory = async (run: () => Promise<AvatarHistoryResult>): Promise<AvatarHistoryResult> => {
+    try {
+      return await run();
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  };
   const bad: AvatarJobResult = { ok: false, error: "请求的形状不对" };
+  const badHistory: AvatarHistoryResult = { ok: false, error: "请求的形状不对" };
   ipcMain.handle(ipcChannels.planetAvatarGenerate, (_event, request: unknown) => (isAvatarGenerateRequest(request) ? guard(() => jobs.generate(request)) : bad));
   ipcMain.handle(ipcChannels.planetAvatarGet, (_event, request: unknown) => (isAvatarBodyRef(request) ? guard(() => jobs.get(request)) : bad));
+  ipcMain.handle(ipcChannels.planetAvatarHistory, (_event, request: unknown) => (isAvatarBodyRef(request) ? guardHistory(() => jobs.history(request)) : badHistory));
   ipcMain.handle(ipcChannels.planetAvatarSelect, (_event, request: unknown) => (isAvatarSelectRequest(request) ? guard(() => jobs.select(request)) : bad));
   ipcMain.handle(ipcChannels.planetAvatarCancel, (_event, request: unknown) => (isAvatarBodyRef(request) ? guard(() => jobs.cancel(request)) : bad));
 }

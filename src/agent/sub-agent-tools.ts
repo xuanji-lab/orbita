@@ -1,5 +1,6 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { RequestBroker } from "./request-broker.ts";
+import { AVATAR_INSTRUCTION_MAX } from "../shared/planet-avatar.ts";
 import {
   SUB_AGENT_MASS_EARTH,
   SUB_AGENT_NAME_MAX,
@@ -12,7 +13,7 @@ import {
 } from "../shared/sub-agent.ts";
 
 /**
- * 子智能体工具：create_sub_agent / update_sub_agent / list_sub_agents（2026-11-24 用户：「主智能体拥有创建子智能体的权限吗……
+ * 子智能体工具：create_sub_agent / update_sub_agent / revise_sub_agent_avatar / list_sub_agents（2026-11-24 用户：「主智能体拥有创建子智能体的权限吗……
  * chat 可能主要是沉淀出子智能体的 prompt（职能）和 AVATAR，真正的位于星系什么位置，可以弹出右侧面板，让用户设置」）。
  *
  * 照 automation-tools 的范式：agent 进程只把参数翻成 subAgentRequest、把回执翻成工具结果；校验（名字、职能、质量不越过主星、
@@ -20,7 +21,7 @@ import {
  * 没有删除工具：删一个子智能体要用户在面板里确认。位置（轨道）也不让模型给——主进程放一圈默认空轨道，建完弹面板让用户定。
  */
 
-export const SUB_AGENT_TOOL_NAMES = ["create_sub_agent", "update_sub_agent", "list_sub_agents"] as const;
+export const SUB_AGENT_TOOL_NAMES = ["create_sub_agent", "update_sub_agent", "revise_sub_agent_avatar", "list_sub_agents"] as const;
 
 function optionalString(value: unknown, field: string): string | undefined {
   if (value === undefined) return undefined;
@@ -79,6 +80,14 @@ export function toUpdateInput(raw: unknown): SubAgentUpdateInput {
     throw new Error("Nothing to update: pass at least one of name, role, model, surfacePath.");
   }
   return input;
+}
+
+export function toAvatarRevisionInput(raw: unknown): { id: string; instruction: string } {
+  const args = (raw ?? {}) as Record<string, unknown>;
+  const id = requireString(args["id"], "id");
+  const instruction = requireString(args["instruction"], "instruction").trim();
+  if (instruction.length > AVATAR_INSTRUCTION_MAX) throw new Error(`"instruction" must be at most ${AVATAR_INSTRUCTION_MAX} characters.`);
+  return { id, instruction };
 }
 
 function toToolResult(outcome: SubAgentToolOutcome): { content: { type: "text"; text: string }[]; details: { subAgentId?: string } } {
@@ -146,6 +155,27 @@ export function createSubAgentTools(broker: RequestBroker, sessionId: string): T
       },
     },
     {
+      name: "revise_sub_agent_avatar",
+      label: "revise_sub_agent_avatar",
+      description:
+        "Revise an existing sub-agent's avatar with the user's natural-language instruction (for example 'warmer', 'more craters', 'bands like Jupiter'). " +
+        "Use this whenever the user wants to adjust the current image rather than replace its name, role or model. Call list_sub_agents first if you need the id. " +
+        "This starts the same planet-forge flow as the Galaxy Design panel, based on the currently selected candidate: image models edit the image or reuse its previous prompt, " +
+        "and SVG is edited in place. Candidates appear in that panel for the user to pick; do not generate, choose or set an avatar image yourself.",
+      promptSnippet: "Revise a sub-agent's current avatar with a natural-language instruction",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "The sub-agent id (from list_sub_agents)." },
+          instruction: { type: "string", description: `The user's visual change, at most ${AVATAR_INSTRUCTION_MAX} characters.` },
+        },
+        required: ["id", "instruction"],
+      } as never,
+      async execute(_toolCallId, params) {
+        return toToolResult(await ask({ action: "reviseAvatar", input: toAvatarRevisionInput(params) }));
+      },
+    },
+    {
       name: "list_sub_agents",
       label: "list_sub_agents",
       description:
@@ -169,6 +199,8 @@ the user agreed on. When a task fits one of them, call list_sub_agents and pass 
 as that sub-agent, with its role in the sub-session's system prompt, and shows up as its work in the sidebar. When the user wants a new
 sub-agent, follow the sub-agents skill: settle its responsibility, way of working and limits with the user, write the role prompt, then
 create_sub_agent; never pick its orbit or position yourself — the app opens the Galaxy Design panel for the user to place it.
+When the user asks to adjust a sub-agent's current avatar (warmer, more craters, cloud bands, …), call revise_sub_agent_avatar with the user's
+visual instruction; do not paint or choose the replacement yourself — candidates open in the same Galaxy Design panel for the user to pick.
 </orbita-sub-agents>`;
 
 /** 子会话这边：指名派给了某个子智能体时，它的职能进系统提示（runtime 每轮按命令里的 subAgent 讲） */
