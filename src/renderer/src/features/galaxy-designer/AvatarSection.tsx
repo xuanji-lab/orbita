@@ -1,5 +1,5 @@
-import { useEffect, useId, useState } from "react";
-import { isAvatarJobLive, type AvatarBackend, type AvatarJob, type AvatarSlot } from "@shared/planet-avatar";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { AVATAR_INSTRUCTION_MAX, isAvatarJobLive, type AvatarBackend, type AvatarHistory, type AvatarHistoryCandidate, type AvatarJob, type AvatarSlot } from "@shared/planet-avatar";
 import type { PlanetMix } from "@shared/planet-design";
 import { api } from "../../api";
 import { Icon } from "../../shell/Icon";
@@ -29,43 +29,75 @@ export function AvatarSection(props: {
   const t = useT();
   const ta = t.galaxyDesigner.avatar;
   const { workspaceId, bodyId } = props;
+  const instructionId = useId();
   const [job, setJob] = useState<AvatarJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [history, setHistory] = useState<AvatarHistory | null>(null);
+  const historySeq = useRef(0);
 
-  // 挂上 / 换天体：读这颗当前这一轮（活任务，或盘上账本的最后一轮），再听进度推送
+  const refreshHistory = useCallback(async (): Promise<void> => {
+    const ticket = ++historySeq.current;
+    if (bodyId === null) {
+      setHistory(null);
+      return;
+    }
+    const result = await api.planet.avatarHistory({ workspaceId, bodyId });
+    if (ticket !== historySeq.current) return;
+    if (result.ok) setHistory(result.history);
+    else setError(result.error);
+  }, [workspaceId, bodyId]);
+
+  // 挂上 / 换天体：读这颗当前这一轮与历史（活任务，或盘上账本的最后一轮），再听进度推送
   useEffect(() => {
     setJob(null);
     setError(null);
     setPicked(null);
+    setDraft("");
+    setHistory(null);
     if (bodyId === null) return;
     let alive = true;
     void api.planet.avatarJob({ workspaceId, bodyId }).then((result) => {
       if (alive && result.ok) setJob((current) => current ?? result.job);
     });
+    void refreshHistory();
     const off = api.planet.onAvatarJob(({ job: next }) => {
-      if (next.workspaceId === workspaceId && next.bodyId === bodyId) setJob(next);
+      if (next.workspaceId !== workspaceId || next.bodyId !== bodyId) return;
+      setJob(next);
+      if (!isAvatarJobLive(next)) void refreshHistory();
     });
     return () => {
       alive = false;
+      historySeq.current += 1;
       off();
     };
-  }, [workspaceId, bodyId]);
+  }, [workspaceId, bodyId, refreshHistory]);
 
   const live = isAvatarJobLive(job);
-  const generate = async (): Promise<void> => {
-    if (bodyId === null || live) return;
+  const start = async (instruction?: string): Promise<void> => {
+    if (bodyId === null || live || busy) return;
     setBusy(true);
     setError(null);
     setPicked(null);
-    const result = await api.planet.generateAvatar({ workspaceId, bodyId, mix: props.mix, name: props.name });
+    // 「再来一组」始终不以旧图为基础；只有「按这个改」把当前高亮 / 在用的那张作为基础
+    const baseCandidateId = instruction === undefined ? undefined : (picked ?? job?.selected ?? undefined);
+    const result = await api.planet.generateAvatar({ workspaceId, bodyId, mix: props.mix, name: props.name, ...(instruction === undefined ? {} : { instruction }), ...(baseCandidateId === undefined ? {} : { baseCandidateId }) });
     setBusy(false);
-    if (result.ok) setJob(result.job);
-    else setError(result.error);
+    if (result.ok) {
+      setJob(result.job);
+      if (instruction !== undefined) setDraft("");
+      void refreshHistory();
+    } else setError(result.error);
+  };
+  const revise = async (): Promise<void> => {
+    const instruction = draft.trim();
+    if (instruction === "") return;
+    await start(instruction);
   };
   const use = async (candidateId: string): Promise<void> => {
-    if (bodyId === null) return;
+    if (bodyId === null || live || busy) return;
     setBusy(true);
     setError(null);
     const result = await api.planet.selectAvatar({ workspaceId, bodyId, candidateId });
@@ -73,6 +105,7 @@ export function AvatarSection(props: {
     if (result.ok) {
       setJob(result.job);
       setPicked(null);
+      void refreshHistory();
     } else setError(result.error);
   };
   const cancel = (): void => {
@@ -81,6 +114,7 @@ export function AvatarSection(props: {
 
   const slots = job?.slots ?? [];
   const chosen = picked ?? null;
+  const baseCandidate = picked ?? job?.selected ?? null;
   const ended = job !== null && !live;
   const noneOut = ended && job.state === "pending";
   const usable = slots.filter((slot) => slot.state === "done");
@@ -96,6 +130,32 @@ export function AvatarSection(props: {
         <p className="gd-role-line">{ta.unsaved}</p>
       ) : (
         <>
+          <div className="gd-avatar-revise">
+            <div className="gd-avatar-revise-head">
+              <label className="gd-role-line" htmlFor={instructionId}>
+                {baseCandidate === null ? ta.reviseFresh : ta.reviseBase(baseCandidate)}
+              </label>
+              <PanelButton disabled={busy || live || draft.trim() === ""} onClick={() => void revise()}>
+                {ta.revise}
+              </PanelButton>
+            </div>
+            <textarea
+              id={instructionId}
+              className="text-field gd-avatar-instruction"
+              data-field="avatar-instruction"
+              rows={2}
+              maxLength={AVATAR_INSTRUCTION_MAX}
+              value={draft}
+              placeholder={ta.revisePlaceholder}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                  event.preventDefault();
+                  void revise();
+                }
+              }}
+            />
+          </div>
           {slots.length > 0 && (
             <ul className="gd-avatar-grid" aria-label={ta.group} data-count={slots.length}>
               {slots.map((slot) => (
@@ -157,16 +217,56 @@ export function AvatarSection(props: {
                   </button>
                 ) : null}
                 {job === null ? (
-                  <button type="button" className="btn-accent gd-avatar-generate" disabled={busy} data-action="avatar-generate" onClick={() => void generate()}>
+                  <button type="button" className="btn-accent gd-avatar-generate" disabled={busy} data-action="avatar-generate" onClick={() => void start()}>
                     <Icon name="image-plus" size={13} strokeWidth={1.8} />
                     <span>{ta.generate}</span>
                   </button>
                 ) : (
-                  <PanelButton onClick={() => void generate()}>{ta.again}</PanelButton>
+                  <PanelButton onClick={() => void start()}>{ta.again}</PanelButton>
                 )}
               </>
             )}
           </span>
+          {history !== null && history.entries.length > 0 && (
+            <details className="gd-avatar-history" data-history="avatar">
+              <summary>
+                <Icon name="history" size={12} strokeWidth={1.8} />
+                <span>{ta.history(history.entries.length)}</span>
+                <span className="row-trailing gd-avatar-history-chevron">
+                  <Icon name="chevron-down" size={12} strokeWidth={1.8} />
+                </span>
+              </summary>
+              <div className="gd-avatar-history-list">
+                {[...history.entries].reverse().map((entry) => (
+                  <section className="gd-avatar-history-entry" key={entry.id} data-round={entry.round ?? undefined}>
+                    <div className="gd-avatar-history-head">
+                      <p>{entry.instruction ?? ta.firstRound}</p>
+                      <span className="row-trailing">{entry.round === null ? ta.historyNotStarted : ta.historyRound(entry.round)}</span>
+                    </div>
+                    {entry.baseCandidateId !== null && <p className="gd-avatar-history-base">{ta.historyBase(entry.baseCandidateId)}</p>}
+                    {entry.candidates.length > 0 ? (
+                      <ul className="gd-avatar-grid" aria-label={entry.instruction ?? ta.firstRound}>
+                        {entry.candidates.map((candidate) => (
+                          <HistoryTile
+                            key={candidate.candidateId}
+                            candidate={candidate}
+                            selected={history.selected === candidate.candidateId}
+                            disabled={busy || live}
+                            kind={props.kind}
+                            design={props.design}
+                            onUse={() => void use(candidate.candidateId)}
+                            t={t}
+                          />
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="gd-avatar-history-empty">{ta.historyEmpty}</p>
+                    )}
+                  </section>
+                ))}
+              </div>
+            </details>
+          )}
         </>
       )}
     </div>
@@ -247,6 +347,45 @@ function CandidateTile(props: {
           {reason}
         </p>
       )}
+    </li>
+  );
+}
+
+/** 历史里的一张旧候选：点击即写回 planet/，不必先把它重新生成一遍 */
+function HistoryTile(props: {
+  candidate: AvatarHistoryCandidate;
+  selected: boolean;
+  disabled: boolean;
+  kind: BodyKind;
+  design: GalaxyDesign;
+  onUse: () => void;
+  t: Messages;
+}) {
+  const ta = props.t.galaxyDesigner.avatar;
+  const { candidate } = props;
+  const uid = useId().replace(/:/g, "");
+  const r = 30;
+  const status = props.selected ? ta.inUse : candidate.image === null ? ta.historyMissing : ta.historyUse(candidate.candidateId);
+  return (
+    <li className="gd-avatar-cell" data-candidate-id={candidate.candidateId} data-backend={candidate.backend}>
+      <button
+        type="button"
+        className="gd-avatar-tile"
+        aria-pressed={props.selected}
+        data-in-use={props.selected || undefined}
+        disabled={props.disabled || candidate.image === null}
+        onClick={props.onUse}
+        title={status}
+      >
+        <svg className="gd-avatar-figure" viewBox={`${-r - 6} ${-r - 6} ${2 * r + 12} ${2 * r + 12}`} role="img" aria-label={`${ta.backend[candidate.backend]} · ${status}`}>
+          {candidate.image === null ? <circle className="gd-avatar-slot" r={r} data-state="failed" /> : <BodyFigure art={candidateArt(props.design, props.kind, candidate.image, r)} uid={uid} gaze={0} />}
+        </svg>
+        <span className="gd-avatar-backend">{ta.backend[candidate.backend]}</span>
+        <span className="gd-avatar-status" data-state={candidate.image === null ? "failed" : "done"}>
+          {props.selected && <Icon name="check" size={11} strokeWidth={2} />}
+          <span>{status}</span>
+        </span>
+      </button>
     </li>
   );
 }
