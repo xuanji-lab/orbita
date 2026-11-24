@@ -13,6 +13,8 @@
  * 质量单位：盘上一律是 M⊕（插件的单位）；界面星系的质量单位 = M⊕ × 10（galaxy.ts 的 STAR_MASS 300–1000 ↔ 30–100 M⊕），换算在 renderer。
  */
 
+import type { SubAgentProfile } from "./sub-agent.ts";
+
 export const PLANET_DIR = "planet";
 export const PLANET_DESIGN_FILE = "design.json";
 export const PLANET_GALAXY_FILE = "galaxy.json";
@@ -56,6 +58,11 @@ export interface PlanetBody {
   elements: PlanetElements | null;
   /** 眼睛样式；没设过为 null（界面取 EYE_STYLE_DEFAULT） */
   eyeStyle: EyeStyle | null;
+  /**
+   * 子智能体档案（planet/agents/<id>/agent.json，shared/sub-agent.ts）：行星才有；没有 / 读坏了为 null——
+   * 星系照画，只是没有职能、不能被指名派活。主星恒为 null。
+   */
+  profile?: SubAgentProfile | null;
 }
 
 export interface WorkspacePlanets {

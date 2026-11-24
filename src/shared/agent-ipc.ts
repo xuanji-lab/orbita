@@ -32,6 +32,7 @@ import type {
   ChannelStatus,
 } from "./channel.ts";
 import type { AutomationToolOutcome, AutomationToolRequest } from "./automation.ts";
+import type { SubAgentsChanged, SubAgentToolOutcome, SubAgentToolRequest, SubAgentTurnIdentity } from "./sub-agent.ts";
 import type { IntentRecallModels } from "./intent-lab.ts";
 import type { IntentAskView, IntentRecallStreamEvent } from "./intent-recall.ts";
 import type { IntentConfirmDecision } from "./intent-confirm.ts";
@@ -380,6 +381,13 @@ export const ipcChannels = {
   /** 星系设计稿（shared/planet-design.ts）：读 / 写工作区 planet/ 里的插件设计稿与伴随文件 galaxy.json */
   planetRead: "planet:read",
   planetWrite: "planet:write",
+  /**
+   * 子智能体档案（shared/sub-agent.ts）：星系设计面板里新建 / 改 / 删一个子智能体，写 planet/agents/<id>/agent.json
+   * 与 galaxy.json 的名单。与聊天里 create_sub_agent / update_sub_agent 写的是同一份；写完主进程广播 subAgentsChanged。
+   */
+  subAgentCreate: "subagent:create",
+  subAgentUpdate: "subagent:update",
+  subAgentDelete: "subagent:delete",
   /** 审查面板：列一个来源的全部改动（task / unstaged / staged / branch） */
   reviewList: "review:list",
   /** 审查面板：拉一个文件的 diff 正文（unified diff，按需） */
@@ -934,6 +942,16 @@ export type AgentCommand =
        * automation_create / list / cancel。缺席 = 不注册，命令形状与 main 一字不差。
        */
       automationTools?: boolean;
+      /**
+       * 子智能体工具（create_sub_agent / update_sub_agent / list_sub_agents）的注册开关。**主进程装配**：
+       * 编排形态、会话属于某个工作区、且是根会话（主智能体）才带 true——星际空间没有主星，不能建行星。缺席 = 不注册。
+       */
+      subAgentTools?: boolean;
+      /**
+       * 这条会话是替哪个子智能体干活（attributionOf(meta)，指名派活时记下）：主进程每轮按它现读档案，
+       * runtime 把职能讲进系统提示。缺席 = 普通会话 / 档案读不到（降级成普通子会话，不拦开轮）。
+       */
+      subAgent?: SubAgentTurnIdentity;
     }
   /**
    * 用 text（一条用户消息）异步生成会话标题（C-3）。**结果不当场返回**：标题
@@ -1000,6 +1018,10 @@ export type AgentCommand =
       sessionMemory?: boolean;
       /** 自动化工具的注册开关，语义同 submit.automationTools */
       automationTools?: boolean;
+      /** 子智能体工具的注册开关，语义同 submit.subAgentTools */
+      subAgentTools?: boolean;
+      /** 替哪个子智能体干活，语义同 submit.subAgent */
+      subAgent?: SubAgentTurnIdentity;
       /** 随消息发的图片，语义同 submit */
       images?: SentImage[];
       /** 随消息引用的文件，语义同 submit */
@@ -1176,6 +1198,8 @@ export type AgentCommand =
   | ({ type: "channelSendResult"; requestId: string } & ChannelSendOutcome)
   /** 自动化：主进程对 automationRequest 的回执（delegateResult 同款） */
   | ({ type: "automationResult"; requestId: string } & AutomationToolOutcome)
+  /** 子智能体：主进程对 subAgentRequest 的回执（automationResult 同款 ok 双分支） */
+  | ({ type: "subAgentResult"; requestId: string } & SubAgentToolOutcome)
   | {
       /**
        * 会话回退的 pi 侧一刀（不依赖任何表，直接裁文件）：打开源本子 →
@@ -1291,6 +1315,8 @@ export interface DelegateCard {
   thinkingLevel: ThinkingLevel;
   /** 子会话的工作台路径——从派出卡跳到子会话的产出目录 */
   workbench: string;
+  /** 指名派给了哪个子智能体（delegate 的 subAgentId）；缺席 = 临时子会话 */
+  subAgentId?: string;
 }
 
 /** delegateRequest 的回执载荷：childId / title 供 runtime 拼给模型看的正文，card 给 UI */
@@ -1505,6 +1531,12 @@ export type AgentEvent =
        * 主进程写进 task 通道消息的 lang，子会话据此写可见文字与汇报。缺席 = 没算出来。
        */
       replyLang?: ReplyLang;
+      /**
+       * 指名派给哪个持久子智能体（planet/agents/<id>/agent.json；编排线第一次出现「归属」字段）。
+       * 主进程按父会话所在工作区读档案：读不到就拒（不静默退化成临时子会话），读到就记进子会话 meta.attribution（source assigned）、
+       * 职能讲进子会话的系统提示；档案里有默认模型且 delegate 没给 modelId 时用它。缺席 = 临时子会话（与以前一致）。
+       */
+      subAgentId?: string;
     }
   /**
    * 派发参考：agent 的 model_costs 工具请求。**数据在主进程**（任务账本 usage-tasks.json、
@@ -1522,6 +1554,12 @@ export type AgentEvent =
    * 其余在对话里留一行让用户点「允许」（automation_update / automation_create 的 mode 参数）。
    */
   | { type: "automationRequest"; requestId: string; sessionId: string; mode: PermissionMode; request: AutomationToolRequest }
+  /**
+   * 子智能体：agent 的 create_sub_agent / update_sub_agent / list_sub_agents。**存盘在主进程**（同 automationRequest）：
+   * 主进程再核一遍「编排形态 + 有工作区 + 根会话」、校验入参、写工作区 planet/，回 subAgentResult；
+   * 建完 / 改完广播 subAgentsChanged（建完 renderer 弹出星系设计面板停在新行星上）。
+   */
+  | { type: "subAgentRequest"; requestId: string; sessionId: string; request: SubAgentToolRequest }
   /**
    * 子会话：通道发信请求，主进程写账本并回 channelSendResult。父的 reply_subsession
    * （to = { childId }，kind 恒 reply）与子的 report_to_parent（to = "parent"，
@@ -1546,6 +1584,11 @@ export type AgentEvent =
  * 没有 sessionId：归属是全局事实，不属于哪条会话（同 mcp 事件）。
  */
 | { type: "skillsChanged" }
+/**
+ * 子智能体档案变了（主进程写完广播，聊天里的工具与面板都走这里）：renderer 重读这座星系的 planet/；
+ * 聊天里新建的、且正看着那条会话时，弹出右栏星系设计面板停在新行星上。
+ */
+| ({ type: "subAgentsChanged" } & SubAgentsChanged)
 /**
  * 记忆系统：记忆服务进程写盘后经主进程广播（提取落
  * 条目、事件段收尾 / 归档、记忆库写操作）。无载荷、无 sessionId——界面听到就

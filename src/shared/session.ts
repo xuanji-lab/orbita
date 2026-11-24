@@ -424,6 +424,17 @@ export interface SessionMeta {
    */
   parentId?: string;
   /**
+   * 这条会话归哪个持久子智能体（工作区 planet/agents/<id>/，shared/sub-agent.ts）。**这是编排线第一个归属字段**
+   * （AGENTS.md：归属 id 等真开编排时再加——子智能体有了档案、能被指名，就是这时候）。
+   * 两种来源，同一个字段（SessionAttribution）：
+   * - assigned：主智能体用 delegate 指名派活时主进程记下，确定的（本轮只实现这一种）；
+   * - inferred：以后记忆系统总结会话时判定各段问答和哪个子智能体的职能最相关，给出比例 share；
+   *   比例够高（≥ ATTRIBUTION_CAPTURE_SHARE）这条会话（碎石）就被它「引力捕获」。用户可以改，改过即 assigned。
+   * **读归属一律经 attributionOf(meta)**（侧栏小头像、以后的卫星 / 光环同一个函数），不直接读这个字段——
+   * 「推断的比例不够不算」这条规矩只写在那里。缺席 = 不属于任何子智能体。档案被删了也不清它：读的一方查不到就当没有。
+   */
+  attribution?: SessionAttribution;
+  /**
    * 这条会话是哪条自动化**新开**出来的（target = new_session）；
    * **缺席 = 用户自己开的会话**。this_session 的任务是叫醒一条普通会话，不在这条会话上留任何标记。
    *
@@ -675,6 +686,7 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
   const parentId = str(value["parentId"]);
   const automationId = str(value["automationId"]);
   const automationRun = parseAutomationRunLabel(value["automationRun"]);
+  const attribution = parseAttribution(value["attribution"]);
 
   return {
     id,
@@ -711,6 +723,8 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     // 母会话 id：非字符串 / 空串一律当根会话——一条指向乌有的 parentId 会让会话
     // 从左栏消失又无处可达，比多列一条根会话糟得多
     ...(parentId === null ? null : { parentId }),
+    // 子智能体归属：形状不对整份当没有（parseAttribution）
+    ...(attribution === null ? null : { attribution }),
     ...(automationId === null ? null : { automationId }),
     ...(automationId === null || automationRun === null ? null : { automationRun }),
     ...(automationId !== null && value["promoted"] === true ? { promoted: true } : null),
@@ -887,4 +901,44 @@ export function transcriptToMarkdown(
   }
 
   return `${parts.join("\n\n")}\n`;
+}
+
+// ── 会话归属（编排：这条会话归哪个子智能体）──────────────────────────────
+
+/** 归属从哪来：指名派活（确定）/ 记忆系统推断（带比例，以后做） */
+export type AttributionSource = "assigned" | "inferred";
+
+export interface SessionAttribution {
+  subAgentId: string;
+  source: AttributionSource;
+  /** 推断时：这条会话里和该子智能体职能相关的问答占多大比例（0–1）。assigned 不带 */
+  share?: number;
+}
+
+/** 推断的归属要占到多大比例才算被这个子智能体「引力捕获」（以后记忆系统接上时按真实数据再调） */
+export const ATTRIBUTION_CAPTURE_SHARE = 0.5;
+
+export function parseAttribution(raw: unknown): SessionAttribution | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const subAgentId: unknown = Reflect.get(raw, "subAgentId");
+  const source: unknown = Reflect.get(raw, "source");
+  const share: unknown = Reflect.get(raw, "share");
+  if (typeof subAgentId !== "string" || !/^[\w-]{1,64}$/.test(subAgentId)) return null;
+  if (source === "assigned") return { subAgentId, source };
+  if (source === "inferred" && typeof share === "number" && Number.isFinite(share) && share >= 0 && share <= 1) {
+    return { subAgentId, source, share };
+  }
+  return null;
+}
+
+/**
+ * 读一条会话归哪个子智能体——侧栏「谁在干活」、以后星系里的卫星 / 光环都只经这一个函数：
+ * 指名的一律算；推断的比例够高（≥ ATTRIBUTION_CAPTURE_SHARE）才算被捕获，不够的照旧是主智能体那条碎石带里的一颗。
+ * 返回 null = 不归任何子智能体。
+ */
+export function attributionOf(meta: Pick<SessionMeta, "attribution">): SessionAttribution | null {
+  const attribution = meta.attribution;
+  if (attribution === undefined) return null;
+  if (attribution.source === "assigned") return attribution;
+  return (attribution.share ?? 0) >= ATTRIBUTION_CAPTURE_SHARE ? attribution : null;
 }
