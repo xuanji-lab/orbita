@@ -1293,8 +1293,6 @@ export const zh: Messages = {
     galaxyTurntable: "左右拖动旋转星系",
     galaxyTurntableInfo: (azimuth: number) =>
       `在星系空白处左右拖动，绕竖直轴转着看（现在转到 ${azimuth}°）；上下拖动改倾角。双击星系空白处回到 40° · 0°。关掉后只能上下改倾角。`,
-    galaxyTiltRaised: (surface: "home" | "page" | "panel", deg: number) =>
-      `${surface === "panel" ? "右栏星系图" : surface === "page" ? "编排页" : "单智能体首页"}较窄，放不下全部子智能体，自动抬高到 ${deg}°`,
     /** 「新手引导」页签：顶上一句说明 + 「从头看」，下面整张章节目录 */
     guideLead: "拿一个研究课题从头走到尾，看 Orbita 能帮你做什么。点下面任意一章，直接翻到那一章。",
     guideStart: "从头看",
@@ -3667,7 +3665,6 @@ export const zh: Messages = {
     tiltValue: (deg) => `${deg}°`,
     spillLabel: "画面里放不下引线的会话",
     spillMore: (n: number) => `另 ${n} 条`,
-    tiltRaised: (deg) => `放不下全部子智能体，这里抬到 ${deg}°`,
     tiltHint: "在空白处按住拖动转动星系：上下改倾角，左右绕竖直轴转；也可用方向键，双击空白处复位",
     tiltHintVertical: "在空白处按住上下拖动，或按上下方向键，改星系倾角；双击空白处复位",
     openHomeTip: (name) => `回到 ${name} 的新任务页`,

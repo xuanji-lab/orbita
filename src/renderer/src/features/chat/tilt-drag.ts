@@ -81,12 +81,3 @@ export function anglesLabel(view: ViewAngles, zoom = 1): string {
   const saved = anglesForSave(view);
   return `${saved.tilt}° · ${saved.azimuth}° · ${Number(zoom.toFixed(1))}×`;
 }
-
-/**
- * 角度提示旁那一句：屏幕安全布局把这块画布抬得比设置高时（子智能体在设置的俯角下装不下），返回实际画的度数；没抬返回 null。
- * 半度以内当没抬（布局按 1° 细找，抬的值是整数）。
- */
-export function raisedTo(setting: number, actual: number | null): number | null {
-  if (actual === null || !Number.isFinite(actual) || actual <= setting + 0.5) return null;
-  return Math.round(actual);
-}

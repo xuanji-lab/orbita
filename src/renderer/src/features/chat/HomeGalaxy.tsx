@@ -80,8 +80,8 @@ import {
 } from "./callouts.ts";
 import { useGalaxyActions, type GalaxyActions } from "./galaxy-actions.ts";
 import { useProtoVariants } from "./proto-variants-store.ts";
-import { reportElevation, useGalaxyTilt, useGalaxyTiltSetter, useGalaxyView, type GalaxySurface, type GalaxyViewSetter } from "./galaxy-tilt.ts";
-import { anglesForSave, anglesLabel, dragAngles, isDragMove, keyAngles, raisedTo, VIEW_DEFAULT, type ViewAngles } from "./tilt-drag.ts";
+import { useGalaxyTilt, useGalaxyTiltSetter, useGalaxyView, type GalaxySurface, type GalaxyViewSetter } from "./galaxy-tilt.ts";
+import { anglesForSave, anglesLabel, dragAngles, isDragMove, keyAngles, VIEW_DEFAULT, type ViewAngles } from "./tilt-drag.ts";
 import { boxesOverlap, planOverlay } from "./overlay-plan.ts";
 import { beltSplit, liveProjection, type FrozenScene, type LiveProjection } from "./turntable.ts";
 import { USER_VIEW_DEFAULT, zoomAt, type UserView } from "./galaxy.ts";
@@ -215,7 +215,8 @@ interface SceneNow extends FrozenScene {
  * - 按下不拦：位移 ≤ 4px 是点击，点天体照旧打开；超过才算拖、抓住指针，松手后吞掉那一下 click。
  * - 拖动中冻结布局、每帧（requestAnimationFrame 合并指针事件）只重新投影，直接写 DOM；不 setState、不跑屏幕安全布局。
  * - 松手按 1° 写设置（倾角与设置 › 外观的滑块同一个字段，方位角另一个字段）；设置回填后 React 按新角度跑一次屏幕安全布局，
- *   根节点挂 gx-settling 让轨道矩阵在 SETTLE_MS 内滑过去（减少动效时不挂，直接落位）。
+ *   布局与视角无关，拖动最后一帧就是落位后的样子：不过渡；方向键 / 双击复位这种一下跳过去的才挂 gx-settling，SETTLE_MS 内滑过去
+ *   （减少动效时不挂）。
  * - 键盘：焦点在星系根节点上时 ↑ ↓ 改俯角、← → 改方位，每次 5°；双击空白处回到默认 40° · 0°。
  */
 interface TurntableOptions {
@@ -230,7 +231,6 @@ interface TurntableOptions {
   /** 拖动中让名字 / 锁定框的排布按新相机重算一次 */
   replan: () => void;
   badge: RefObject<HTMLSpanElement | null>;
-  raisedText: (deg: number) => string;
   /** 这一刻的布局对象（scene 的 useMemo）：落位只在它换了之后做 */
   sceneId: object | null;
   /** 用户缩放与平移（本组件的）与改它的入口 */
@@ -297,11 +297,13 @@ function useTurntable(options: TurntableOptions) {
   };
 
   /** 落位：按 scene（新角度跑完屏幕安全布局的那一份）把拖动时直接写过的 DOM 全部写回合规的值，带短过渡 */
-  const settle = (scene: SceneNow): void => {
+  // 布局与视角分离之后，拖动 / 滚轮松手时布局不变、拖动最后一帧就是落位后的样子：不过渡。只有方向键 / 双击复位这种一下跳过去的才过渡
+  const settleAnimate = useRef(false);
+  const settle = (scene: SceneNow, animateJump = settleAnimate.current): void => {
     const root = opts.current.root.current;
     opts.current.live.current = null;
     if (root === null) return;
-    const animate = !reducedMotion();
+    const animate = animateJump && !reducedMotion();
     const star = lastStar.current;
     if (animate && star !== null) {
       // 主星：React 已经按新布局画在新位置上，先挪回拖动时最后那一帧的样子，再滑过去
@@ -319,8 +321,7 @@ function useTurntable(options: TurntableOptions) {
     timers.current.settle = window.setTimeout(() => root.classList.remove("gx-settling"), SETTLE_MS + 40);
     opts.current.replan();
     const saved = anglesForSave({ tilt: opts.current.setting.tilt, azimuth: opts.current.setting.azimuth });
-    const raised = raisedTo(saved.tilt, scene.elevation);
-    showBadge(anglesLabel(saved, scene.view.zoom), raised === null ? null : opts.current.raisedText(raised), false);
+    showBadge(anglesLabel(saved, scene.view.zoom), null, false);
   };
 
   // 新的布局画好之后（设置回填 → React 按新角度跑完屏幕安全布局）落位
@@ -329,7 +330,7 @@ function useTurntable(options: TurntableOptions) {
   useLayoutEffect(() => {
     if (settlePending.current === false || sceneNow === null || sceneId === settlePending.current) return;
     settlePending.current = false;
-    settle(sceneNow);
+    settle(sceneNow, settleAnimate.current);
   });
 
   // 滚轮 / 双指缩放：以指针为中心，无极、跟手；连续滚动时冻结布局只重新投影，停下 220ms 后存盘并重排落位
@@ -360,10 +361,10 @@ function useTurntable(options: TurntableOptions) {
     zoomFrame();
     const zoom = Math.round(w.view.zoom * 100) / 100;
     const next: UserView = { zoom, panX: w.view.panX, panY: w.view.panY };
-    if (!reducedMotion()) root.classList.add("gx-settling");
     const scene = opts.current.scene.current;
+    settleAnimate.current = false;
     if (next.zoom === w.start.zoom && next.panX === w.start.panX && next.panY === w.start.panY) {
-      if (scene !== null) settle(scene);
+      if (scene !== null) settle(scene, false);
       return;
     }
     settlePending.current = opts.current.sceneId;
@@ -413,18 +414,19 @@ function useTurntable(options: TurntableOptions) {
   );
 
   /** 写设置；角度没变（设置不会回填）就直接落位 */
-  const commitView = (next: ViewAngles, root: HTMLElement, resetZoom = false): void => {
+  const commitView = (next: ViewAngles, root: HTMLElement, resetZoom = false, animate = true): void => {
     const commit = opts.current.commit;
     const saved = anglesForSave(next);
     const current = opts.current.setting;
     const zv = opts.current.zoomView;
     const zoomChanges = resetZoom && (zv.zoom !== 1 || zv.panX !== 0 || zv.panY !== 0);
-    if (!reducedMotion()) root.classList.add("gx-settling");
+    settleAnimate.current = animate;
+    if (animate && !reducedMotion()) root.classList.add("gx-settling");
     // 方向键 / 双击没有拖动帧：主星从此刻画着的位置滑过去
     const scene = opts.current.scene.current;
     if (lastStar.current === null && scene !== null) lastStar.current = liveProjection(scene, scene.elevation, scene.azimuth).star;
     if (commit === null || (saved.tilt === current.tilt && saved.azimuth === current.azimuth && !zoomChanges)) {
-      if (scene !== null) settle(scene);
+      if (scene !== null) settle(scene, animate);
       return;
     }
     settlePending.current = opts.current.sceneId;
@@ -447,10 +449,10 @@ function useTurntable(options: TurntableOptions) {
     if (root.hasPointerCapture(event.pointerId)) root.releasePointerCapture(event.pointerId);
     const final = view.current;
     view.current = null;
-    if (keep && final !== null) commitView(final, root);
+    if (keep && final !== null) commitView(final, root, false, false);
     else {
       const scene = opts.current.scene.current;
-      if (scene !== null) settle(scene);
+      if (scene !== null) settle(scene, false);
     }
   };
 
@@ -996,12 +998,6 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
     }
     return { camera: safe.camera, viewport, layout: safe.layout, minPlanetPx: safe.minPlanetPx, elevation: safe.elevationDeg, box, size };
   }, [size, spec, props.agents, props.fill, tilt, azimuth, props.avoid, props.starDesign, zoomView]);
-  const actualElevation = scene?.elevation ?? null;
-  useLayoutEffect(() => {
-    if (surface === null) return;
-    // 卸载时不清：设置页打开时编排页的星系已经卸了，那一句说的是「上次画这块画布时」
-    reportElevation(surface, tilt, actualElevation);
-  }, [surface, tilt, actualElevation]);
   const layout: GalaxyLayout = scene === null ? baseLayout : starless ? { ...scene.layout, planets: [] } : scene.layout;
   const arcs: OrbitArc[] = useMemo(() => (scene === null || starless ? [] : orbitArcs(layout, scene.camera, scene.viewport)), [scene, layout, starless]);
   // 一张 t = 0 的快照：主星的位置与半径、碎石块的大小（碎石 < 行星的规矩在 drawFrame 里）
@@ -1091,7 +1087,6 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
     live: liveRef,
     replan,
     badge: badgeRef,
-    raisedText: t.agents.tiltRaised,
     sceneId: scene,
     zoomView,
     setZoomView,
@@ -1291,7 +1286,8 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
           {plane(arcPaths("back"))}
           <div className="gx-layer">
             {beltHalf("far")}
-            {movers.map((mover) => body(mover, "far"))}
+            {/* 远半圈按远近叠：外圈离镜头更远，先画（倒序）；近半圈外圈更近，后画（正序）。主星前后由两层分开 */}
+            {[...movers].reverse().map((mover) => body(mover, "far"))}
           </div>
           {starItem !== undefined &&
             !starless &&
