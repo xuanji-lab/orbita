@@ -1145,7 +1145,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
       <OrbitChain key={`${layer}-${mover.id}`} mover={mover} layer={layer}>
         <Local box={square(mover.r * 1.6 + 2)}>
           <g className="gd-figure galaxy-planet-figure" data-masked={plan.masked.has(mover.id) || undefined} data-planet={mover.id} data-composition={planet.composition} data-state={planet.state ?? undefined} data-r={mover.r.toFixed(1)}>
-            <BodyFigure art={bodyArt(planetFaceDesign(planet.composition, agent?.surface ?? null, agent?.eyeStyle), "planet", mover.r)} uid={`${copyUid}-f`} />
+            <BodyFigure art={bodyArt(planetFaceDesign(planet.composition, agent?.surface ?? null, agent?.eyeStyle), "planet", mover.r)} uid={`${copyUid}-f`} gazeKey={`planet:${mover.id}`} />
           </g>
         </Local>
       </OrbitChain>
@@ -1327,7 +1327,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
                 </defs>
                 <g className="gx-star-wrap" data-star-wrap="" data-x={starItem.x} data-y={starItem.y} data-r={starItem.r}>
                   {props.starDesign !== undefined ? (
-                    <StarBody design={props.starDesign} x={starItem.x} y={starItem.y} r={starItem.r} uid={`${uid}-sf`} />
+                    <StarBody design={props.starDesign} x={starItem.x} y={starItem.y} r={starItem.r} uid={`${uid}-sf`} gazeKey={`star:${workspaceId ?? uid}`} />
                   ) : (
                     <circle cx={starItem.x} cy={starItem.y} r={starItem.r} fill={`url(#${starGradient})`} />
                   )}

@@ -503,23 +503,14 @@
 }
 
 /*
- * 眼睛跟着指针（gaze-runtime.ts 直接写 .gd-gaze 的 transform: translate）。眨眼：data-blink 期间两只眼睛竖向压扁再张开，
- * 慢慢眨（约 260ms）；按眼睛自己的中心缩（fill-box）。减少动效时运行时不挂 data-blink。
+ * 眼睛的心思（gaze-runtime.ts 直接写 .gd-gaze 的 transform: translate + rotate）。
+ * 眨眼：运行时按拍写 .gd-eye 的 scaleY（约 200ms 合上再张开），不用 CSS 动画——SVG 上的 CSS 动画每帧都要主线程出帧。
+ * 两处都按自己的中心转 / 缩（fill-box），不绕画布原点。
  */
-.gd-gaze[data-blink] .gd-eye {
+.gd-gaze,
+.gd-gaze .gd-eye {
   transform-box: fill-box;
   transform-origin: center;
-  animation: gd-blink 260ms var(--ease-in-out);
-}
-@keyframes gd-blink {
-  0%,
-  100% {
-    transform: scaleY(1);
-  }
-  45%,
-  55% {
-    transform: scaleY(0.12);
-  }
 }
 
 /*

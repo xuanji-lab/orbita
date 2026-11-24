@@ -1,6 +1,7 @@
 import "./galaxy-designer.css";
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { registerGaze, updateGazeReach } from "./gaze-runtime.ts";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { personaOf } from "./gaze.ts";
+import { registerGaze, updateGaze } from "./gaze-runtime.ts";
 import { avatarScale, bodyArt, displayRadius, ELEMENTS_OF, eyeRimWidth, eyeSizeOf, radiusOf, withStar, type BodyArt, type GalaxyDesign } from "./design.ts";
 
 /**
@@ -36,15 +37,18 @@ export function StarFigure(props: { design: GalaxyDesign; size: number; label: s
       data-elements={ELEMENTS_OF.star.filter((key) => design.star.elements[key]).join(" ")}
     >
       {/* 侧栏头像、页头：眼睛也跟着指针，但幅度小一些 */}
-      <BodyFigure art={art} uid={uid} gaze={AVATAR_GAZE} />
+      <BodyFigure art={art} uid={uid} gaze={AVATAR_GAZE} gazeKey={`avatar:${props.label}`} />
     </svg>
   );
 }
 
-/** 头像的眼睛跟随幅度（相对星系里的天体） */
-const AVATAR_GAZE = 0.6;
-/** 眼睛最多挪眼宽的几倍 */
-const GAZE_REACH = 0.4;
+/** 头像的眼睛跟随幅度（相对星系里的天体）：头像小（眼宽 2–3px），打折太多就看不出在动 */
+const AVATAR_GAZE = 0.8;
+/**
+ * 眼睛最多挪眼宽的几倍。第一版 0.4：星系里行星眼宽约 4.8px、最多挪 1.9px，侧栏头像最多 0.7px——用户看着「不会左右摆」。
+ * 0.7：大眼（l 档）往外挪到底，外缘离天体中心约 0.53 个半径，仍在脸内。
+ */
+const GAZE_REACH = 0.7;
 
 
 /**
@@ -81,10 +85,10 @@ export function DustFigure(props: { size: number; label: string; className?: str
 /**
  * 星系画布里的主星（一个 <g>，以 (x, y) 为心、半径 r 画）：与头像同一个形象。还没有主星的设计稿取默认主星画。
  */
-export function StarBody(props: { design: GalaxyDesign; x: number; y: number; r: number; uid: string }) {
+export function StarBody(props: { design: GalaxyDesign; x: number; y: number; r: number; uid: string; gazeKey?: string }) {
   return (
     <g className="gd-figure galaxy-star-figure" transform={`translate(${props.x} ${props.y})`}>
-      <BodyFigure art={bodyArt(withStar(props.design), "star", props.r)} uid={props.uid} />
+      <BodyFigure art={bodyArt(withStar(props.design), "star", props.r)} uid={props.uid} gazeKey={props.gazeKey} />
     </g>
   );
 }
@@ -143,7 +147,14 @@ function useSurfaceDark(src: string | null): boolean {
 /** 地表贴图比圆大一点点：球缘那一圈半透明的羽化边落到裁切圆外面，不在球缘描出一道浅边 */
 const IMAGE_OVERSCAN = 1.04;
 
-export function BodyFigure(props: { art: BodyArt; uid: string; /** 眼睛跟着指针的幅度（1 = 星系里的天体；0 = 不跟） */ gaze?: number }) {
+export function BodyFigure(props: {
+  art: BodyArt;
+  uid: string;
+  /** 眼睛跟着指针的幅度（1 = 星系里的天体；0 = 不跟） */
+  gaze?: number;
+  /** 天体 id：性格（歪头幅度、初始朝哪边、好奇心、两只眼的细微差别）按它稳定取；同 key 的几份共用一颗心思。缺席用 uid */
+  gazeKey?: string;
+}) {
   // 眼睛样式来自这颗天体的设计稿（bodyArt 已按它换好几何）：侧栏、页头、星系、右栏星系图、设计面板同源
   const eyeSize = eyeSizeOf(props.art.eyeStyle);
   const white = props.art.eyeStyle === "xl-white";
@@ -163,15 +174,19 @@ export function BodyFigure(props: { art: BodyArt; uid: string; /** 眼睛跟着�
   const reachRef = useRef(reach);
   reachRef.current = reach;
   const hasEyes = art.eyes !== null && gazeScale > 0;
+  const gazeKey = props.gazeKey ?? uid;
+  const persona = useMemo(() => personaOf(gazeKey), [gazeKey]);
+  const baseTiltRef = useRef(art.eyesTilt);
+  baseTiltRef.current = art.eyesTilt;
   useLayoutEffect(() => {
     const eyes = gazeRef.current;
     const body = bodyRef.current;
     if (!hasEyes || eyes === null || body === null) return;
-    return registerGaze(eyes, body, reachRef.current);
-  }, [hasEyes]);
+    return registerGaze(eyes, body, gazeKey, reachRef.current, baseTiltRef.current);
+  }, [hasEyes, gazeKey]);
   useLayoutEffect(() => {
-    if (gazeRef.current !== null) updateGazeReach(gazeRef.current, reach);
-  }, [reach]);
+    if (gazeRef.current !== null) updateGaze(gazeRef.current, reach, art.eyesTilt);
+  }, [reach, art.eyesTilt]);
   return (
     <g ref={bodyRef} className="gd-body" data-surface={art.surface}>
       <defs>
@@ -244,16 +259,21 @@ export function BodyFigure(props: { art: BodyArt; uid: string; /** 眼睛跟着�
       {art.eyes !== null && (
         <g ref={gazeRef} className="gd-gaze">
         <g className="gd-eyes" data-rim={(darkSurface && !white) || undefined} data-white={white || undefined} transform={`rotate(${art.eyesTilt})`}>
-          {art.eyes.map((eye) => (
-            <rect key={eye.x}
-              className="gd-eye"
-              x={eye.x - eye.w / 2}
-              y={eye.y - eye.h / 2}
-              width={eye.w}
-              height={eye.h}
-              rx={eye.w / 2}
-              strokeWidth={darkSurface || white ? eyeRimWidth(eye.w, art.r, eyeSize) : undefined}
-            />
+          {art.eyes.map((eye, index) => (
+            // 两只眼各自多转一点点（性格里的 eyeSkew，±2.5°）：不像复制粘贴；不跟眼睛的天体（gaze = 0）不转。
+            // 转在外面一层：眨眼动画写的是 .gd-eye 的 CSS transform，会盖掉 rect 自己的 transform 属性
+            // key 用序号：eye.x 随半径变（星系缩放、排布重算），拿它当 key 会让眼睛元素被换掉
+            <g key={index} transform={hasEyes ? `rotate(${persona.eyeSkew[index === 0 ? 0 : 1].toFixed(2)} ${eye.x} ${eye.y})` : undefined}>
+              <rect
+                className="gd-eye"
+                x={eye.x - eye.w / 2}
+                y={eye.y - eye.h / 2}
+                width={eye.w}
+                height={eye.h}
+                rx={eye.w / 2}
+                strokeWidth={darkSurface || white ? eyeRimWidth(eye.w, art.r, eyeSize) : undefined}
+              />
+            </g>
           ))}
         </g>
         </g>
