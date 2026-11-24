@@ -2,7 +2,7 @@
  * 用户消息里图片附件的左右对齐跟着主题的用户消息版式走。
  *
  * 仓里没有 renderer 组件测试设施（没有 jsdom），按源码文本钉住两处结构：
- * 子午线版式（除 copybook / typescript 外的主题）把用户消息改成左对齐纸签，
+ * 子午线版式把用户消息改成左对齐纸签，
  * 图片若把对齐写在 UserImages 的内联 style 里，主题块覆盖不到——2026-11-12 用户报
  * 「图片还在居右，换了新的 chatview 应该居左」就是这么来的。
  */
@@ -31,7 +31,7 @@ test("UserImages 的对齐交给 CSS 类，不写在内联 style 里", () => {
   assert.doesNotMatch(component, /justifyContent:/);
 });
 
-test("基础样式靠右（copybook / typescript 仍是右侧气泡）", () => {
+test("基础样式默认靠右，由后面的子午线规则覆盖", () => {
   assert.match(styles, /\n\.user-images \{[^}]*justify-content: flex-end;/);
 });
 

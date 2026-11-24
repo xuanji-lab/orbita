@@ -25,9 +25,4 @@ describe("resolveTheme", () => {
     strictEqual(resolveTheme("black", true), "black");
     strictEqual(resolveTheme("black", false), "black");
   });
-
-  it("纸面两档原样透传：只有明，系统深色也不换", () => {
-    strictEqual(resolveTheme("copybook", true), "copybook");
-    strictEqual(resolveTheme("typescript", true), "typescript");
-  });
 });

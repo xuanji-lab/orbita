@@ -13,14 +13,13 @@ import { htmlLang } from "../locale.ts";
 import { resolveTheme } from "@shared/theme-resolve";
 import { BrowserToolbar } from "./BrowserToolbar";
 import "../styles.css";
-import "../paper-themes.css";
 import "./browser-toolbar.css";
 
 // 首帧主题与语言：同主窗口 main.tsx，读建窗时塞进来的 --orbita-theme / --orbita-language
 if (api.initialTheme !== null) {
   const resolved = resolveTheme(api.initialTheme, window.matchMedia("(prefers-color-scheme: dark)").matches);
   document.documentElement.dataset["theme"] = resolved;
-  document.documentElement.lang = htmlLang(effectiveLanguage(resolved, api.initialLanguage ?? undefined));
+  document.documentElement.lang = htmlLang(effectiveLanguage(api.initialLanguage ?? undefined));
 }
 
 const container = document.getElementById("root");
