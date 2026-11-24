@@ -306,7 +306,7 @@ describe("元素组合与 2D 形象", () => {
     const group = /className="gd-eyes"[^>]*>([\s\S]*?)<\/g>/.exec(tsx);
     assert.ok(group !== null, "找不到眼睛组");
     const inner = group[1] ?? "";
-    assert.match(inner, /<rect /);
+    assert.match(inner, /<rect\b/);
     assert.doesNotMatch(inner, /<(path|circle|ellipse|line|polyline|polygon|text)\b/);
   });
 
