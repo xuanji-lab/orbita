@@ -255,11 +255,17 @@ export interface OrbitStage {
 
 /**
  * 轨道场景：真比例（主星、行星半径与轨道同一单位，同一张布），太小时按最小像素画。
- * elevationDeg = 设置里的星系倾角（与页面星系同一个值）；缺席按 ORBIT_VIEW 的 34°
+ * elevationDeg = 设置里的星系倾角（与页面星系同一个值）；缺席按 ORBIT_VIEW 的 34°。
+ * frame：画在哪一块、怎么取景（行星页局部放大版式的左半 / 上半，loupe.ts）；缺席按固定的 ORBIT_BOX。
  */
-export function orbitStage(design: GalaxyDesign, elevationDeg: number = ORBIT_VIEW.elevationDeg): OrbitStage | null {
+export function orbitStage(
+  design: GalaxyDesign,
+  elevationDeg: number = ORBIT_VIEW.elevationDeg,
+  frame: { box: WellBox; fitW: number; fitH: number; originY: number } = { box: ORBIT_BOX, fitW: ORBIT_VIEW.fitW, fitH: ORBIT_VIEW.fitH, originY: ORBIT_VIEW.originY },
+): OrbitStage | null {
   if (design.star === null) return null;
-  const scene = wellScene(ORBIT_BOX, { ...ORBIT_VIEW, elevationDeg });
+  const { box, ...fit } = frame;
+  const scene = wellScene(box, { ...ORBIT_VIEW, ...fit, elevationDeg });
   const depth = wellDepth(design.star.mass);
   const bottom = wellBottom(scene, depth);
   const starR = Math.max(radiusOf(design, "star") * pixelsPerUnit(scene, bottom), SCENE_STAR_MIN);

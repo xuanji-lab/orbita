@@ -268,25 +268,47 @@
   stroke-width: 1.5;
   vector-effect: non-scaling-stroke;
 }
-/* 行星页：头像与轨道场景。宽面板左右并排（头像左、场景右），窄面板上下叠 */
-.gd-stage[data-body="planet"] {
-  grid-template-columns: minmax(0, 1fr);
-  align-items: center;
-}
-.gd-stage[data-body="planet"] .gd-preview {
-  max-height: 22vh;
-}
+/*
+ * 行星页：局部放大版式（GalaxyDesigner.tsx 的 PlanetLoupe，几何在 loupe.ts）。一张 SVG 里画引力场与大形象，
+ * 宽时左右、窄时上下由 SVG 自己按量到的宽度排，这里只管线的样子。
+ */
 .gd-stage-name {
   grid-column: 1 / -1;
 }
-@container (min-width: 420px) {
-  .gd-stage[data-body="planet"]:not([data-empty]) {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
-  .gd-stage[data-body="planet"]:not([data-empty]) .gd-preview,
-  .gd-stage[data-body="planet"]:not([data-empty]) .gd-orbit {
-    max-height: 26vh;
-  }
+.gd-loupe {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* 与主星页同一个上限：矮窗里不让预览吃掉参数区（超了按比例收、居中） */
+  max-height: 28vh;
+  margin: 0 auto;
+}
+.gd-loupe-stage[data-layout="stack"] .gd-loupe {
+  max-height: 40vh;
+}
+/* 网格淡出用的遮罩只看透明度（mask-type: alpha），颜色取什么都不影响 */
+.gd-loupe-edge-mask {
+  mask-type: alpha;
+}
+.gd-loupe-edge-stop {
+  stop-color: currentColor;
+}
+/* 两幅视图之间的界：发丝线，最淡的一档 */
+.gd-loupe-divider {
+  stroke: var(--color-border-subtle);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+/* 引线与被放大那颗的标记圈：次级墨、1px、虚线——注记，不抢天体；与「最近合法轨道」（三级墨、2 4 点线）分开 */
+.gd-loupe-leader,
+.gd-loupe-mark {
+  fill: none;
+  stroke: var(--color-text-secondary);
+  stroke-width: 1;
+  stroke-opacity: 0.7;
+  stroke-dasharray: 3 3;
+  stroke-linecap: butt;
+  vector-effect: non-scaling-stroke;
 }
 .gd-empty {
   padding: var(--space-1) 0;
