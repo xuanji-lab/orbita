@@ -1,4 +1,6 @@
 import { isWindowInactive } from "../../shell/window-activity.ts";
+// 值 import 走相对路径：node --test 解析不了 @shared 别名
+import { GALAXY_ZOOM } from "../../../../shared/settings.ts";
 
 /**
  * 首页星系（原型，proto/home-galaxy）的纯内核：天体、轨道、透视投影、按深度排序、动效闸门。
@@ -603,6 +605,51 @@ export function frameViewport(
     cx: width / 2 - (focal * (minX + maxX)) / 2,
     cy: height / 2 - (focal * (minY + maxY)) / 2,
   };
+}
+
+/**
+ * 比例尺与视角无关（2026-11-24 用户：「为什么我拖动，那个轨道会跟着变大变小呢？」）：
+ * 原来每换一次相机就按投影后画框的外接矩形重算 focal，俯角、方位一变宽高比就变，比例尺跟着变。
+ * 现在世界单位 → 像素的比例尺只由画布与用户缩放定：按「默认视角」（VIEW_REF_ELEVATION、方位 0）把画框装进 box 定一个基准，
+ * 各角度共用；主星（转轴所在）钉在基准视角下它所在的屏幕位置，转台绕它转。为什么取默认视角而不取正俯视：
+ * 正俯视时画框是一个整圆，宽而矮的画布（单智能体首页那条带子）只能按高度装，40° 下星系会缩到原来的一半多；
+ * 取默认视角，默认时的样子与改前逐位相同，其他角度出画框或留白（Blender 视口也是这样），由用户缩放去调。
+ */
+export const VIEW_REF_ELEVATION = 40;
+
+export function baseViewport(width: number, height: number, box: { width: number; height: number } = galaxyBox(width, height), ecc = 0): Viewport {
+  return frameViewport(makeCamera(FRAME_EXTENT, VIEW_REF_ELEVATION), width, height, box, ecc);
+}
+
+/** 用户缩放与平移（滚轮 / 双指；以指针为中心）：zoom 绕主星放大，pan 是主星相对基准位置挪了多少像素 */
+export interface UserView {
+  zoom: number;
+  panX: number;
+  panY: number;
+}
+
+export const USER_VIEW_DEFAULT: Readonly<UserView> = { zoom: 1, panX: 0, panY: 0 };
+/** 缩放夹在设置的区间里（GALAXY_ZOOM：0.5×–3×） */
+export function clampZoom(zoom: number): number {
+  if (!Number.isFinite(zoom)) return GALAXY_ZOOM.default;
+  return Math.min(GALAXY_ZOOM.max, Math.max(GALAXY_ZOOM.min, zoom));
+}
+
+export function withUserView(vp: Viewport, view: UserView): Viewport {
+  if (view.zoom === 1 && view.panX === 0 && view.panY === 0) return vp;
+  return { ...vp, focal: vp.focal * view.zoom, cx: vp.cx + view.panX, cy: vp.cy + view.panY };
+}
+
+/**
+ * 以指针 (px, py) 为中心缩放到 next：指针下的那一点不动（主星绕它按比例挪）。base = 用户缩放之前的视口（主星在 base.cx, base.cy）。
+ * next 夹在 GALAXY_ZOOM 里；回到 1× 时平移照留（指针下那点不动），双击复位才清平移。
+ */
+export function zoomAt(view: UserView, base: Pick<Viewport, "cx" | "cy">, px: number, py: number, next: number): UserView {
+  const zoom = clampZoom(next);
+  const k = zoom / view.zoom;
+  const sx = base.cx + view.panX;
+  const sy = base.cy + view.panY;
+  return { zoom, panX: px + (sx - px) * k - base.cx, panY: py + (sy - py) * k - base.cy };
 }
 
 function toScreen(p: Projected, vp: Viewport): { x: number; y: number } {

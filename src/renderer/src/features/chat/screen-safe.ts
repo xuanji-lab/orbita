@@ -1,4 +1,5 @@
 import {
+  VIEW_REF_ELEVATION,
   FRAME_EXTENT,
   PLANET_ZONE,
   PLANET_READABLE_MAX,
@@ -9,7 +10,11 @@ import {
   STAR_OVER_PLANET,
   WAITING_SCALE,
   angularSpeed,
+  baseViewport,
   frameViewport,
+  withUserView,
+  USER_VIEW_DEFAULT,
+  type UserView,
   layoutGalaxy,
   makeCamera,
   orbitPoint,
@@ -68,6 +73,8 @@ const EDGE_PX = 6;
 /** placeOrbits 每颗行星最多试多少次、轨道半长轴最多推到多远（世界单位） */
 const PLACE_ITER_MAX = 400;
 const PLACE_A_MAX = FRAME_EXTENT * 3;
+/** 允许出画时，轨道最远推到画框的几倍 */
+const OVERFLOW_ZONE = 1.3;
 /** 推轨道半径的步长（世界单位） */
 const ORBIT_NUDGE = 0.2;
 
@@ -80,6 +87,8 @@ export interface SafeScene {
   minPlanetPx: number;
   /** 因为装不下而少画的行星数（已计进 layout.hidden） */
   dropped: number;
+  /** 这块画布在这个视角下装不下，允许了出画（比例尺不变） */
+  overflow?: boolean;
   /** 这块画布上行星本该画多大（px，可读半径）：minPlanetPx 比它小 = 走了「行星缩到可读下限」那一步 */
   preferredPx: number;
 }
@@ -348,6 +357,32 @@ export function fitScreenSafe(
   readableMax: number = PLANET_READABLE_MAX,
   /** 方位角（度，转台）：星系绕 z 轴转多少 */
   azimuthDeg = 0,
+  /** 用户缩放与平移：只改比例尺与主星位置，布局在这个比例尺上排 */
+  view: UserView = USER_VIEW_DEFAULT,
+): SafeScene {
+  // 比例尺与视角无关（2026-11-24）：先在默认视角（VIEW_REF_ELEVATION、方位 0、不缩放）上按改前的整套规则排一次——
+  // 那里的视口（比例尺 + 主星位置，含窄画布的自动放大）就是这块画布的比例尺，各视角共用；默认视角直接返回它，与改前逐位相同。
+  const ref = fitCore(spec, width, height, box, VIEW_REF_ELEVATION, readableMax, 0, { mode: "legacy" });
+  const isRef = baseElevationDeg === VIEW_REF_ELEVATION && azimuthDeg === 0 && view.zoom === 1 && view.panX === 0 && view.panY === 0;
+  if (isRef) return ref;
+  const zoomed = ref.viewport.focal > baseViewport(width, height, box, eccOf(spec.eccentricity)).focal * (1 + 1e-9);
+  return fitCore(spec, width, height, box, baseElevationDeg, readableMax, azimuthDeg, {
+    mode: "fixed",
+    viewport: withUserView(ref.viewport, view),
+    zoomed,
+    userZoomed: view.zoom > 1,
+  });
+}
+
+function fitCore(
+  spec: GalaxySpec,
+  width: number,
+  height: number,
+  box: { width: number; height: number },
+  baseElevationDeg: number,
+  readableMax: number,
+  azimuthDeg: number,
+  frame: ScaleFrame,
 ): SafeScene {
   const ecc = eccOf(spec.eccentricity);
   const candidates = ecc === 0 ? [0] : [ecc, (ecc * 2) / 3, ecc / 3, 0];
@@ -359,7 +394,7 @@ export function fitScreenSafe(
     scene.dropped * 10_000 + (scene.minPlanetPx < floor - 1e-6 ? 1_000 : 0) + (scene.minPlanetPx < scene.preferredPx - 1e-6 ? 100 : 0) + (scene.elevationDeg - baseElevationDeg);
   let best: SafeScene | null = null;
   for (const e of candidates) {
-    const scene = fitAll({ ...spec, eccentricity: e }, width, height, box, baseElevationDeg, readableMax, azimuthDeg);
+    const scene = fitAll({ ...spec, eccentricity: e }, width, height, box, baseElevationDeg, readableMax, azimuthDeg, frame);
     if (cost(scene) === 0) return scene;
     if (best === null || cost(scene) < cost(best)) best = scene;
   }
@@ -371,18 +406,42 @@ const ELEVATION_LIMIT = 85;
 const PACKS = ["given", "tight", "small"] as const;
 type Pack = (typeof PACKS)[number];
 
-function fitAll(spec: GalaxySpec, width: number, height: number, box: { width: number; height: number }, tilt: number, readableMax: number, azimuthDeg: number): SafeScene {
+/**
+ * 比例尺怎么来：legacy = 改前的规则（每个俯角重新把画框装进画布、窄画布按排法自动放大），只在默认视角上用来定比例尺；
+ * fixed = 用定好的视口（比例尺 + 主星位置），不随俯角、方位、排法变。
+ */
+type ScaleFrame =
+  | { mode: "legacy" }
+  | {
+      mode: "fixed";
+      viewport: Viewport;
+      /** 定比例尺时窄画布自动放大过：行星要整颗留在画布里（装不下才出画） */
+      zoomed: boolean;
+      /** 用户放大了：允许出画 */
+      userZoomed: boolean;
+      /** 允许出画：转到某些视角整座装不进画布，宁可出画也不缩比例尺、不把行星缩到看不清 */
+      overflow?: boolean;
+    };
+
+function fitAll(spec: GalaxySpec, width: number, height: number, box: { width: number; height: number }, tilt: number, readableMax: number, azimuthDeg: number, frame: ScaleFrame): SafeScene {
   const flat: GalaxySpec = { ...spec, planets: spec.planets.map((planet) => ({ ...planet, inclinationDeg: 0 })) };
   const base = layoutGalaxy(flat);
-  const tryAt = (e: number): SafeScene | null => {
+  const tryAt = (e: number, overflow = false): SafeScene | null => {
     for (const pack of PACKS) {
-      const scene = placeAt(flat, base, width, height, box, e, readableMax, pack, base.planets, undefined, false, azimuthDeg);
-      if (scene !== null) return scene;
+      const scene = placeAt(flat, base, width, height, box, e, readableMax, pack, base.planets, undefined, false, azimuthDeg, overflow && frame.mode === "fixed" ? { ...frame, overflow: true } : frame);
+      if (scene !== null) return overflow ? { ...scene, overflow: true } : scene;
     }
     return null;
   };
   const atTilt = tryAt(tilt);
   if (atTilt !== null) return atTilt;
+  // 比例尺与视角无关之后（2026-11-24），原来「抬俯角」那一步之所以管用，一半是因为抬了俯角重算视口时整座悄悄缩小了。
+  // 现在先在用户选的俯角上允许出画（行星照旧可读、不相撞，只是有一部分在画布外，Blender 视口也是这样），不改用户的视角；
+  // 出画也排不下（行星区里挤不开）才抬俯角
+  if (frame.mode === "fixed") {
+    const spill = tryAt(tilt, true);
+    if (spill !== null) return spill;
+  }
   // 粗找（每 5°）再细找（每 1°）：抬到刚好装得下的最小俯角
   let lo = tilt;
   for (let e = tilt + 5; e <= ELEVATION_LIMIT; e += 5) {
@@ -399,12 +458,12 @@ function fitAll(spec: GalaxySpec, width: number, height: number, box: { width: n
   // 最后的退路（抬到 ELEVATION_LIMIT 都装不下：子智能体多、画布又小）：就在这个俯角上把行星缩到可读下限以下
   // （每次 ×0.85，最小 2.5px）。子智能体永远不藏——小一点总比没有好；「表情可读」只保证到这之前（见测试）
   for (let px = AGENT_READABLE_FLOOR * 0.85; px >= 2.5; px *= 0.85) {
-    const scene = placeAt(flat, base, width, height, box, ELEVATION_LIMIT, readableMax, "small", base.planets, px, false, azimuthDeg);
+    const scene = placeAt(flat, base, width, height, box, ELEVATION_LIMIT, readableMax, "small", base.planets, px, false, azimuthDeg, frame);
     if (scene !== null) return scene;
   }
   // 正圆轨道上间距随半径单调变大，最后一搏一定排得开（偏心时不一定）
   const round: GalaxySpec = { ...flat, eccentricity: 0 };
-  const scene = placeAt(round, layoutGalaxy(round), width, height, box, ELEVATION_LIMIT, readableMax, "small", base.planets, 4, true, azimuthDeg);
+  const scene = placeAt(round, layoutGalaxy(round), width, height, box, ELEVATION_LIMIT, readableMax, "small", base.planets, 4, true, azimuthDeg, frame);
   return scene as SafeScene;
 }
 
@@ -425,12 +484,14 @@ export function placeAt(
   force = false,
   /** 方位角（度）。正圆轨道绕 z 轴转是对称的：排布用方位角 0 的相机算（正圆的量法按短轴两端，只在 0 时成立），结果相机再转过去 */
   azimuthDeg = 0,
+  /** 比例尺：缺省按改前的规则 */
+  frame: ScaleFrame = { mode: "legacy" },
 ): SafeScene | null {
   const ecc = eccOf(flat.eccentricity);
   const starExtent = Math.max(starRadius(flat.starMass), flat.starExtent ?? 0);
   const bodies: Body[] = shown.map((planet) => ({ radius: planet.radius, waiting: planet.state === "waiting" }));
   const camera = makeCamera(FRAME_EXTENT, e, undefined, ecc === 0 ? 0 : azimuthDeg);
-  let viewport = frameViewport(camera, width, height, box, ecc);
+  let viewport = frame.mode === "fixed" ? frame.viewport : frameViewport(camera, width, height, box, ecc);
   const starDepth = project({ x: 0, y: 0, z: 0 }, camera).depth;
   let starPx = (viewport.focal * starExtent) / starDepth;
   let starBodyPx = (viewport.focal * starRadius(flat.starMass)) / starDepth;
@@ -438,26 +499,36 @@ export function placeAt(
   const agentMode = readableMax > PLANET_READABLE_MAX;
   // 窄画布：主星小到容不下一颗看得清的行星（AGENT_READABLE_FLOOR × 主星倍数）就把画面放大，主星与行星一起变大
   const needStar = AGENT_READABLE_FLOOR * STAR_OVER_PLANET * WAITING_SCALE;
-  // 最后的退路（行星直接给定半径）不放大：放大后外圈出画，缩小行星就是为了不出画
-  // small 排法与最后的退路不放大：放大后外圈出画；这时主星可以比行星小（质量的高低才是铁律，画面大小不是）
-  const zoomed = agentMode && bodies.length > 0 && starBodyPx < needStar && forcedPx === undefined && pack !== "small";
-  if (zoomed) {
-    const k = needStar / starBodyPx;
+  // 这一步只看画布与主星质量（starBodyPx 与视角无关），所以各视角、各排法同一个放大倍数——不再「换个角度整座忽大忽小」。
+  // 原来 small 排法与最后的退路不放大，结果某些视角掉进 small 时整座突然缩小；现在一律放大，装不下就交给后面几步
+  // （行星缩小、抬俯角），比例尺不动
+  // fixed：比例尺已定（默认视角上定的，含窄画布的放大），这里不再放大
+  const autoZoom = frame.mode === "legacy" && agentMode && bodies.length > 0 && starBodyPx < needStar && forcedPx === undefined && pack !== "small";
+  const k = autoZoom ? needStar / starBodyPx : 1;
+  const zoomed = frame.mode === "fixed" ? frame.zoomed : autoZoom;
+  if (autoZoom) {
     // 开普勒椭圆：主星偏在近日点一侧，绕主星放大会把远日点那一侧推出画——横向改成绕画布中线放大（正圆时 cx 就在中线上，不变）
     viewport = { ...viewport, focal: viewport.focal * k, cx: ecc === 0 ? viewport.cx : width / 2 + (viewport.cx - width / 2) * k };
     starPx *= k;
     starBodyPx *= k;
   }
+  // 用户放大了就允许出画（是他要看细节）；允许出画那一步（overflow）也不要求整颗在画布里
+  const userZoomed = frame.mode === "fixed" && (frame.userZoomed || frame.overflow === true);
   const floor = agentMode ? AGENT_READABLE_FLOOR : PLANET_READABLE_MIN;
   const readable = readablePlanetPx(camera, viewport, ORBIT_STEP, readableMax, agentMode ? AGENT_READABLE_GAP : PLANET_READABLE_GAP);
   const starCap = starBodyPx / (STAR_OVER_PLANET * WAITING_SCALE);
   const preferred = agentMode ? Math.min(Math.max(readable, AGENT_READABLE_FLOOR), starCap) : readable;
+  // fixed：比例尺不再为「主星小到容不下可读行星」放大，given / tight 排法下行星会被主星倍数夹到可读下限以下——这时直接交给 small
+  // （行星按可读下限画、主星可以比行星小：质量高低才是铁律，画面大小不是），不画看不清的行星
+  if (frame.mode === "fixed" && agentMode && pack !== "small" && forcedPx === undefined && preferred < floor - 1e-6) return null;
   const minPx = forcedPx ?? (pack === "small" ? floor : preferred);
   const lower = pack === "given" ? shown.map((planet) => planet.orbitRadius) : shown.map(() => 0);
   // small：行星区不再以碎石带为界（碎石先收），只以画布为界（下面 inside 检查整颗在画布里）
-  const zone = pack === "small" ? PLACE_A_MAX : PLANET_ZONE;
+  // 允许出画那一步也有边：轨道推到画框 1.3 倍以外，相机离得太近、透视的仿射近似就不准了（测试里 6 颗在 20° 推到 168 单位、相邻两颗相交）。
+  // 再排不下才抬俯角
+  const zone = pack === "small" ? (frame.mode === "fixed" && frame.overflow === true ? FRAME_EXTENT * OVERFLOW_ZONE : PLACE_A_MAX) : PLANET_ZONE;
   // small 排法把行星推进碎石带那一圈（可能越过画框边距）：整颗要在画布里
-  const orbits = placeOrbits(camera, viewport, bodies, lower, starPx, minPx, (zoomed || pack === "small") && !force, agentMode ? bodyGapOf(minPx) : SCREEN_GAP, ecc, force ? Number.POSITIVE_INFINITY : zone);
+  const orbits = placeOrbits(camera, viewport, bodies, lower, starPx, minPx, (zoomed || pack === "small") && !force && !userZoomed, agentMode ? bodyGapOf(minPx) : SCREEN_GAP, ecc, force ? Number.POSITIVE_INFINITY : zone);
   if (orbits === null) return null;
   const planets = shown.map((planet, i) => {
     const a = orbits[i] ?? planet.orbitRadius;
@@ -497,7 +568,7 @@ export function placeAt(
     expectedOrbit: base.expectedOrbit,
   };
   // 碎石块那一圈让不开（最外一颗行星或主星）就整圈不画：碎石先收，不为它少画行星
-  const rock = placeRockOrbit(camera, viewport, layout, minPx, starPx, zoomed);
+  const rock = placeRockOrbit(camera, viewport, layout, minPx, starPx, zoomed && !userZoomed);
   // 正圆：排布在方位角 0 上算完，换成转过去的相机（画框是圆，视口不变）
   const viewCamera = ecc === 0 && azimuthDeg !== 0 ? makeCamera(FRAME_EXTENT, e, undefined, azimuthDeg) : camera;
   return { camera: viewCamera, viewport, layout: { ...layout, rockOrbit: rock.cramped ? null : rock.orbit }, elevationDeg: e, minPlanetPx: minPx, dropped: 0, preferredPx: preferred };

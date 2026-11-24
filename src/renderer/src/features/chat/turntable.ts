@@ -2,7 +2,6 @@ import {
   beltFrame,
   FRAME_EXTENT,
   farWindow,
-  frameViewport,
   makeCamera,
   orbitArcs,
   orbitFrame,
@@ -19,7 +18,7 @@ import { FAR_MARGIN } from "./galaxy-motion.ts";
  * 拖动中的「只重新投影」（纯计算，可被 node --test 直接加载）。
  *
  * 屏幕安全布局（screen-safe.fitScreenSafe）一次 30–50ms，每帧跑就掉到十几帧。所以拖动时**冻结布局**：轨道半径、哪些天体显示、
- * 偏心率、行星屏幕半径都用按下那一刻的；每帧只换相机（俯角、方位角）重新投影——视口（画框按新相机重新装进画布，保留布局时的放大倍数）、
+ * 偏心率、行星屏幕半径都用按下那一刻的；每帧只换相机（俯角、方位角）重新投影——视口不动（比例尺与视角无关，主星钉在原处）、
  * 每圈轨道的仿射矩阵、碎石带的矩阵与远近分界、主星的位置与大小、轨道弧的远近分段。这里不 import screen-safe：拖动中不可能调到它。
  * 松手后才按新角度跑一次屏幕安全布局，再用短过渡落到合规的位置（HomeGalaxy）。
  *
@@ -50,12 +49,6 @@ export interface LiveProjection {
   arcs: OrbitArc[];
 }
 
-/** 布局时在画框之外又放大了多少（窄画布的 zoomed，见 screen-safe.placeAt）：按下时量一次，拖动中保持 */
-export function zoomOf(frozen: FrozenScene): number {
-  const base = frameViewport(frozen.camera, frozen.width, frozen.height, frozen.box, frozen.layout.ecc);
-  return frozen.viewport.focal / Math.max(base.focal, 1e-9);
-}
-
 /** 碎石带远近分界（转动层坐标）：与 farWindow 同一个式子 sin(E + χ) > k，k 按带子中间那一圈换成像素（R0 = 1000） */
 export function beltSplit(ecc: number, azimuth: number): { chiDeg: number; offset: number } {
   const A = Math.sin(azimuth);
@@ -66,14 +59,13 @@ export function beltSplit(ecc: number, azimuth: number): { chiDeg: number; offse
   return { chiDeg: (chi * 180) / Math.PI, offset: k * 1000 };
 }
 
-export function liveProjection(frozen: FrozenScene, tiltDeg: number, azimuthDeg: number, zoom = zoomOf(frozen)): LiveProjection {
-  const { layout, width, height, box } = frozen;
+/**
+ * viewport：比例尺与主星位置。转台拖动时就是按下时那一份（比例尺与视角无关，2026-11-24）；滚轮缩放时调用方按新的缩放与平移给。
+ */
+export function liveProjection(frozen: FrozenScene, tiltDeg: number, azimuthDeg: number, viewport: Viewport = frozen.viewport): LiveProjection {
+  const { layout } = frozen;
   const ecc = layout.ecc;
   const camera = makeCamera(FRAME_EXTENT, tiltDeg, undefined, azimuthDeg);
-  const base = frameViewport(camera, width, height, box, ecc);
-  // 与 placeAt 的放大同一个式子：正圆绕主星放大（cx 不动），偏心时横向绕画布中线放大
-  const viewport: Viewport =
-    zoom === 1 ? base : { ...base, focal: base.focal * zoom, cx: ecc === 0 ? base.cx : width / 2 + (base.cx - width / 2) * zoom };
   const planets = new Map<string, OrbitFrame>();
   for (const planet of layout.planets) planets.set(planet.id, orbitFrame(planet.orbitRadius, planet.inclination, planet.node, camera, viewport, ecc));
   const rock = layout.rockOrbit === null ? null : orbitFrame(layout.rockOrbit, 0, 0, camera, viewport, ecc);
