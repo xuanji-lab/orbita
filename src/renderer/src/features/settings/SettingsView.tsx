@@ -62,9 +62,9 @@ const TILT_PREVIEW_SPEC: GalaxySpec = {
   starMass: 620,
   sessions: 36,
   planets: [
-    { id: "p1", mass: 14, composition: "rock", orbitRadius: 19, inclinationDeg: 0, nodeDeg: 0, phaseDeg: 200 },
-    { id: "p2", mass: 22, composition: "gas", orbitRadius: 31, inclinationDeg: 0, nodeDeg: 0, phaseDeg: 320 },
-    { id: "p3", mass: 9, composition: "ice", orbitRadius: 43, inclinationDeg: 0, nodeDeg: 0, phaseDeg: 70 },
+    { id: "p1", mass: 4, composition: "rock", orbitRadius: 19, inclinationDeg: 0, nodeDeg: 0, phaseDeg: 200 },
+    { id: "p2", mass: 6, composition: "gas", orbitRadius: 31, inclinationDeg: 0, nodeDeg: 0, phaseDeg: 320 },
+    { id: "p3", mass: 3, composition: "ice", orbitRadius: 43, inclinationDeg: 0, nodeDeg: 0, phaseDeg: 70 },
   ],
 };
 

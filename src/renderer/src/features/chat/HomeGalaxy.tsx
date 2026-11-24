@@ -517,8 +517,8 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   const actualElevation = scene?.elevation ?? null;
   useLayoutEffect(() => {
     if (surface === null) return;
+    // 卸载时不清：设置页打开时编排页的星系已经卸了，那一句说的是「上次画这块画布时」
     reportElevation(surface, tilt, actualElevation);
-    return () => reportElevation(surface, tilt, null);
   }, [surface, tilt, actualElevation]);
   const layout: GalaxyLayout = scene === null ? baseLayout : starless ? { ...scene.layout, planets: [] } : scene.layout;
   const arcs: OrbitArc[] = useMemo(() => (scene === null || starless ? [] : orbitArcs(layout, scene.camera, scene.viewport)), [scene, layout, starless]);
