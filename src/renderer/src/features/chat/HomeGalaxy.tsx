@@ -831,7 +831,8 @@ function union(a: Box, b: Box): Box {
  * memo：拖动中名字排布重算会让星系重渲染，几百颗碎石这一大块不跟着重算。
  */
 const BeltHalf = memo(function BeltHalf(props: {
-  side: "far" | "near";
+  /** whole = 整条不裁、画在主星背后那一层（碎石密度低于「全部」时，省电） */
+  side: "far" | "near" | "whole";
   belt: Belt;
   camera: Camera;
   viewport: Viewport;
@@ -855,15 +856,11 @@ const BeltHalf = memo(function BeltHalf(props: {
   const period = periodMs(props.belt.omega);
   const dot = (x: number, y: number) => `M${(x - rho).toFixed(1)} ${y.toFixed(1)}a${rho.toFixed(2)} ${rho.toFixed(2)} 0 1 0 ${(rho * 2).toFixed(2)} 0a${rho.toFixed(2)} ${rho.toFixed(2)} 0 1 0 ${(-rho * 2).toFixed(2)} 0`;
   const split = beltSplit(props.belt.ecc, props.camera.azimuth);
-  const box = beltBox(props.side, L, split.offset);
+  const box = beltBox(props.side === "near" ? "near" : "far", L, split.offset);
   const half: CSSProperties = box;
   const back: CSSProperties = { left: -box.left, top: -box.top };
-  return (
-    <div className="gx-node" data-belt-outer="" style={{ transform: cssMatrix(m) }}>
-      <div className="gx-node" data-belt-rot="" style={{ transform: `rotate(${split.chiDeg.toFixed(3)}deg)` }}>
-      <div className="gx-half" data-belt-half={props.side} data-l={L} style={half}>
-        <div className="gx-node" data-belt-back="" style={back}>
-          <div className="gx-node" data-belt-unrot="" style={{ transform: `rotate(${(-split.chiDeg).toFixed(3)}deg)` }}>
+  // 碎石转动层（一张静止 SVG，整层由合成器转）
+  const spinLayer = (
           <div className="gx-node" data-spin="" data-from={0} data-to={-360} data-period={period}>
             <svg className="gx-local" style={{ left: -L, top: -L }} width={2 * L} height={2 * L} viewBox={`${-L} ${-L} ${2 * L} ${2 * L}`}>
               {props.clickable && props.onOpen !== null ? (
@@ -891,6 +888,24 @@ const BeltHalf = memo(function BeltHalf(props: {
               </div>
             ))}
           </div>
+  );
+  // 整条（碎石密度低于「全部」时）：不裁半平面、整条画在主星背后那一层——实测 GPU 花在两半的半平面裁切上（裁切让合成器每帧另开离屏面），
+  // 不在颗数，也不在这一层转（orbita 435 条：裁成两半 GPU 26–28%，整条不裁 15.4–15.6%，不画碎石带 16.5–16.8%）。
+  // 代价：近侧那一段碎石从主星前面经过时被主星挡住（只在低俯角、主星大时看得出）
+  if (props.side === "whole") {
+    return (
+      <div className="gx-node" data-belt-outer="" data-belt-whole="" style={{ transform: cssMatrix(m) }}>
+        {spinLayer}
+      </div>
+    );
+  }
+  return (
+    <div className="gx-node" data-belt-outer="" style={{ transform: cssMatrix(m) }}>
+      <div className="gx-node" data-belt-rot="" style={{ transform: `rotate(${split.chiDeg.toFixed(3)}deg)` }}>
+      <div className="gx-half" data-belt-half={props.side} data-l={L} style={half}>
+        <div className="gx-node" data-belt-back="" style={back}>
+          <div className="gx-node" data-belt-unrot="" style={{ transform: `rotate(${(-split.chiDeg).toFixed(3)}deg)` }}>
+          {spinLayer}
           </div>
         </div>
       </div>
@@ -1243,10 +1258,12 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
       {children}
     </svg>
   );
+  // 碎石密度「全部」照旧裁成远近两半（近侧碎石盖在主星前面）；低于「全部」整条画在主星背后（省电，见 BeltHalf）
+  const wholeBelt = galaxyView.dustKeep < 1;
   const beltHalf = (side: "far" | "near") =>
-    scene === null || layout.belt === null || look === null ? null : (
+    scene === null || layout.belt === null || look === null || (wholeBelt && side === "near") ? null : (
       <BeltHalf
-        side={side}
+        side={wholeBelt ? "whole" : side}
         belt={layout.belt}
         camera={scene.camera}
         viewport={scene.viewport}
