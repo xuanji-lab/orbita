@@ -9,6 +9,9 @@ import {
   GALAXY_MAX_FILL,
   galaxySpecOf,
   orbitArcs,
+  orbitFrame,
+  framePoint,
+  planetPx,
   starRadius,
   AGENT_READABLE_MAX,
   PLANET_READABLE_MAX,
@@ -20,7 +23,8 @@ import {
   type StarItem,
 } from "./galaxy.ts";
 import { orbitRadiusOf } from "./galaxy-data.ts";
-import { AGENT_READABLE_FLOOR, ROCK_CLEAR_PX, bodyGapOf, fitScreenSafe, SAFE_ELEVATION_MAX } from "./screen-safe.ts";
+import { AGENT_READABLE_FLOOR, ROCK_CLEAR_PX, bodyGapOf, curveGap, fitScreenSafe, SAFE_ELEVATION_MAX } from "./screen-safe.ts";
+import { FAR_MARGIN } from "./galaxy-motion.ts";
 import { lockFrame } from "./callouts.ts";
 
 /** 画布：New Task 页（无右栏 / 开着右栏）、右栏星系图（宽 / 最窄可用） */
@@ -266,5 +270,119 @@ describe("编排星系 · 窄窗：行星可读、碎石小于行星、锁定框
     assert.ok(scene.layout.planets.length >= 1, `只剩 ${scene.layout.planets.length} 颗`);
     assert.ok(scene.minPlanetPx >= AGENT_READABLE_FLOOR);
     assert.ok(ROCK_CLEAR_PX > 4.5);
+  });
+});
+
+/**
+ * 开普勒椭圆（2026-11-24 用户：「这个轨道不够椭圆」）：主星在焦点上，所有轨道共用偏心率与近日点方向。
+ * 两颗行星周期不同，迟早会出现任意一对相位——所以不只按时间抽样，还把相邻两圈的相位两两组合扫一遍（含近日点那一侧最挤的地方）。
+ */
+const ECCS = [0.15, 0.3, 0.45] as const;
+const PHASES = 240;
+
+function sweepProblems(spec: GalaxySpec, w: number, h: number, ecc: number): string[] {
+  const box = galaxyBox(w, h, GALAXY_MAX_FILL);
+  const scene = fitScreenSafe({ ...spec, eccentricity: ecc, dustCap: Number.POSITIVE_INFINITY, growth: true }, w, h, box, elevationFor(box), AGENT_READABLE_MAX);
+  const { layout, camera, viewport } = scene;
+  const problems: string[] = [];
+  if (layout.ecc !== ecc) problems.push(`偏心率没传进来：${layout.ecc}`);
+  const star = drawFrame({ ...layout, belt: null }, camera, viewport, [], 0, scene.minPlanetPx, false).find((item): item is StarItem => item.kind === "star");
+  if (star === undefined) return ["没有主星"];
+  const starReach = star.r * (Math.max(starRadius(spec.starMass), spec.starExtent ?? 0) / starRadius(spec.starMass));
+  // 每条轨道（行星 + 碎石块那一圈）在一圈相位上的屏幕位置与半径
+  const rings = layout.planets.map((planet) => {
+    const frame = orbitFrame(planet.orbitRadius, 0, 0, camera, viewport, layout.ecc);
+    const r = planetPx(planet.radius, planet.state === "waiting", camera, viewport, scene.minPlanetPx);
+    return { id: planet.id, r, points: Array.from({ length: PHASES }, (_, i) => framePoint(frame, (i / PHASES) * Math.PI * 2)) };
+  });
+  if (layout.rockOrbit !== null && layout.rocks.length > 0) {
+    const frame = orbitFrame(layout.rockOrbit, 0, 0, camera, viewport, layout.ecc);
+    rings.push({ id: "碎石块", r: ROCK_CLEAR_PX, points: Array.from({ length: PHASES }, (_, i) => framePoint(frame, (i / PHASES) * Math.PI * 2)) });
+  }
+  for (const ring of rings) {
+    // 画在主星前面那一段（不在远层）不碰主星
+    ring.points.forEach((p, i) => {
+      const theta = (i / PHASES) * Math.PI * 2;
+      if (theta > FAR_MARGIN && theta < Math.PI - FAR_MARGIN) return;
+      const d = Math.hypot(p.x - star.x, p.y - star.y);
+      if (d < starReach + ring.r) problems.push(`${ring.id} 在相位 ${((theta * 180) / Math.PI).toFixed(0)}° 压在主星上（${d.toFixed(1)} < ${(starReach + ring.r).toFixed(1)}）`);
+    });
+  }
+  // 相邻两圈：任意一对相位都不相交（行星之间、最外行星与碎石块的锁定框之间）
+  for (let k = 1; k < rings.length; k++) {
+    const a = rings[k - 1];
+    const b = rings[k];
+    if (a === undefined || b === undefined) continue;
+    let best = Infinity;
+    let at = "";
+    for (let i = 0; i < PHASES; i++) {
+      const p = a.points[i] as { x: number; y: number };
+      for (let j = 0; j < PHASES; j++) {
+        const q = b.points[j] as { x: number; y: number };
+        const d = Math.hypot(p.x - q.x, p.y - q.y);
+        if (d < best) {
+          best = d;
+          at = `${((i / PHASES) * 360).toFixed(0)}°/${((j / PHASES) * 360).toFixed(0)}°`;
+        }
+      }
+    }
+    if (best < a.r + b.r) problems.push(`${a.id} 与 ${b.id} 在相位 ${at} 相交（${best.toFixed(1)} < ${(a.r + b.r).toFixed(1)}）`);
+  }
+  return problems;
+}
+
+describe("开普勒椭圆：主星在焦点上，三档偏心率下任何一对相位都不相撞、不压主星", () => {
+  for (const ecc of ECCS) {
+    for (const [specName, spec] of AGENT_SPECS) {
+      for (const [canvasName, w, h] of [...CANVASES, ...NARROW_CANVASES.slice(0, 2)]) {
+        test(`e=${ecc} · ${specName} × ${canvasName}（${w}×${h}）`, () => {
+          const swept = sweepProblems(spec, w, h, ecc);
+          assert.deepEqual(swept.slice(0, 5), [], `${swept.length} 处（相位两两组合）`);
+          const timed = collisions({ ...spec, eccentricity: ecc }, w, h, AGENT_READABLE_MAX);
+          assert.deepEqual(timed.slice(0, 5), [], `${timed.length} 处（按时间抽样，含碎石带）`);
+        });
+      }
+    }
+  }
+
+  test("近日点那一侧确实是最挤的：相邻两圈的最近距离出现在近日点附近（|相位| < 90°），且比正圆时的同一对更近", () => {
+    const [, spec] = AGENT_SPECS[3] as [string, GalaxySpec];
+    const box = galaxyBox(1088, 726, GALAXY_MAX_FILL);
+    const scene = fitScreenSafe({ ...spec, eccentricity: 0.45, dustCap: Number.POSITIVE_INFINITY, growth: true }, 1088, 726, box, elevationFor(box), AGENT_READABLE_MAX);
+    const [inner, outer] = scene.layout.planets;
+    assert.ok(inner !== undefined && outer !== undefined);
+    const fa = orbitFrame(inner.orbitRadius, 0, 0, scene.camera, scene.viewport, 0.45);
+    const fb = orbitFrame(outer.orbitRadius, 0, 0, scene.camera, scene.viewport, 0.45);
+    let best = Infinity;
+    let bestTheta = 0;
+    for (let i = 0; i < 360; i++) {
+      const theta = (i / 360) * Math.PI * 2;
+      const p = framePoint(fa, theta);
+      for (let j = 0; j < 360; j++) {
+        const q = framePoint(fb, (j / 360) * Math.PI * 2);
+        const d = Math.hypot(p.x - q.x, p.y - q.y);
+        if (d < best) {
+          best = d;
+          bestTheta = theta;
+        }
+      }
+    }
+    assert.ok(Math.cos(bestTheta) > 0, `最近处在相位 ${((bestTheta * 180) / Math.PI).toFixed(0)}°，不在近日点一侧`);
+    assert.ok(Math.abs(curveGap(fa, 1, fb, 1) - best) < 1.5, `curveGap ${curveGap(fa, 1, fb, 1).toFixed(2)} 与穷举 ${best.toFixed(2)} 对不上`);
+  });
+
+  test("主星不在画框中心：偏在近日点（右）一侧，偏移随偏心率变大；同一偏心率下空 / 平常 / 满载主星同位同大", () => {
+    const xs = ECCS.map((ecc) => {
+      const scenes = [AGENT_SPECS[2], AGENT_SPECS[0], AGENT_SPECS[3]].map((entry) => {
+        const [, spec] = entry as [string, GalaxySpec];
+        const box = galaxyBox(1088, 726, GALAXY_MAX_FILL);
+        const scene = fitScreenSafe({ ...spec, eccentricity: ecc, growth: true }, 1088, 726, box, elevationFor(box), AGENT_READABLE_MAX);
+        const star = drawFrame({ ...scene.layout, belt: null }, scene.camera, scene.viewport, [], 0, scene.minPlanetPx, false).find((item): item is StarItem => item.kind === "star");
+        return star?.x ?? 0;
+      });
+      return scenes;
+    });
+    for (const row of xs) assert.ok((row[0] ?? 0) > 1088 / 2 + 5, `主星 x=${row[0]?.toFixed(1)}`);
+    assert.ok((xs[0]?.[0] ?? 0) < (xs[1]?.[0] ?? 0) && (xs[1]?.[0] ?? 0) < (xs[2]?.[0] ?? 0));
   });
 });

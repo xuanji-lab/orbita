@@ -1,11 +1,13 @@
 import { useSyncExternalStore } from "react";
-import { agentNameVariantOf, avatarVariantOf, mergeVariants, wsTitleVariantOf, type ProtoVariants } from "./proto-variants.ts";
+import { agentNameVariantOf, avatarVariantOf, eyesVariantOf, mergeVariants, orbitEVariantOf, wsTitleVariantOf, type ProtoVariants } from "./proto-variants.ts";
 
 /** 候选版式的运行时状态（见 proto-variants.ts）：初值读地址，之后用 window.orbitaProto.set 切 */
 let current: ProtoVariants = {
   title: wsTitleVariantOf(window.location.search),
   avatar: avatarVariantOf(window.location.search),
   agentName: agentNameVariantOf(window.location.search),
+  orbitE: orbitEVariantOf(window.location.search),
+  eyes: eyesVariantOf(window.location.search),
 };
 const listeners = new Set<() => void>();
 
@@ -15,7 +17,7 @@ export function getProtoVariants(): ProtoVariants {
 
 export function setProtoVariants(patch: Partial<Record<keyof ProtoVariants, unknown>>): ProtoVariants {
   const next = mergeVariants(current, patch);
-  if (next.title === current.title && next.avatar === current.avatar && next.agentName === current.agentName) return current;
+  if ((Object.keys(next) as (keyof ProtoVariants)[]).every((key) => next[key] === current[key])) return current;
   current = next;
   for (const listener of listeners) listener();
   return current;

@@ -90,6 +90,42 @@ export interface GalaxySpec {
    * 越老越靠外、带宽按对数长。缺席 = 单智能体首页的原型带子（d12f2e2a 原样，用户定「单智能体原样保留」）
    */
   growth?: boolean;
+  /**
+   * 轨道偏心率（开普勒椭圆，编排页按 proto-variants 的 orbitE 传，默认 0.3）：主星在椭圆的一个焦点上，所有轨道（连碎石带）
+   * 共用这个偏心率与同一个近日点方向（+x，画面右侧）——以主星为中心的位似椭圆，天然不相交；行星近主星快、远主星慢。
+   * 缺席 = 0（正圆轨道：单智能体首页的原型星系原样）
+   */
+  eccentricity?: number;
+}
+
+/**
+ * 偏心率上限（编排页的三档候选 0.15 / 0.3 / 0.45 在 proto-variants.ts，2026-11-24 用户：「这个轨道不够椭圆。
+ * 行星绕主星，一般是椭圆的吧」）：再扁，近日点那一侧行星要贴着主星过，屏幕安全布局只能把轨道整体推远、行星缩小
+ */
+export const ECC_MAX = 0.6;
+
+export function eccOf(value: number | undefined): number {
+  return value === undefined || !Number.isFinite(value) ? 0 : clamp(value, 0, ECC_MAX);
+}
+
+/**
+ * 开普勒方程 M = E − e·sin E：由平近点角 M（随时间匀速走）解偏近点角 E（轨道上的位置参数）。
+ * 牛顿迭代，e ≤ 0.6 时 6 步就到 1e-12。e = 0 时 E = M（正圆，匀速）
+ */
+export function eccentricAnomaly(meanAnomaly: number, e: number): number {
+  if (e === 0) return meanAnomaly;
+  let E = meanAnomaly + e * Math.sin(meanAnomaly);
+  for (let i = 0; i < 8; i++) {
+    const f = E - e * Math.sin(E) - meanAnomaly;
+    E -= f / (1 - e * Math.cos(E));
+    if (Math.abs(f) < 1e-13) break;
+  }
+  return E;
+}
+
+/** 反过来：偏近点角 E 对应的平近点角（算「几秒后走到哪」用） */
+export function meanAnomalyOf(E: number, e: number): number {
+  return E - e * Math.sin(E);
 }
 
 /** 主星与行星的质量区间互不重叠，且行星上限远低于主星下限 */
@@ -185,6 +221,8 @@ export interface Belt {
   alpha: number;
   /** 碎石带整体转动的角速度（rad/s）：整条带子一起转（合成器转一个分组），不随会话数变，长大时不跳 */
   omega: number;
+  /** 与行星轨道同一个偏心率（同一族椭圆） */
+  ecc: number;
 }
 
 /** 碎石块在碎石带里的位置：同一圈、等角间隔（同一个角速度，永远不互相追上） */
@@ -213,6 +251,8 @@ export interface GalaxyLayout {
   extent: number;
   /** 轨道半径被向外推过的行星 id（用户给的半径违反了间距规则） */
   adjusted: string[];
+  /** 轨道偏心率（spec.eccentricity，0 = 正圆）；orbitRadius 是半长轴 */
+  ecc: number;
 }
 
 /** 碎石块那一圈在碎石带里的位置（0 = 内沿，1 = 外沿） */
@@ -318,9 +358,11 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
   const adjusted: string[] = [];
   let prevOrbit = 0;
   let prevRadius = Math.max(star, spec.starExtent ?? 0);
+  const ecc = eccOf(spec.eccentricity);
   for (const planet of shown) {
     const radius = planetRadius(planet);
-    const minOrbit = prevOrbit + prevRadius + radius + MIN_CLEARANCE;
+    // 偏心轨道是以主星为中心的位似椭圆：两圈最挤在近日点，那里的间隔只有半长轴差的 (1 − e) 倍
+    const minOrbit = ecc === 0 ? prevOrbit + prevRadius + radius + MIN_CLEARANCE : prevOrbit + (prevRadius + radius + MIN_CLEARANCE) / (1 - ecc);
     const given = planet.orbitRadius * orbitScale;
     const orbitRadius = Math.max(given, minOrbit);
     if (orbitRadius !== given) adjusted.push(planet.id);
@@ -358,9 +400,10 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
       const r = inner + rand() * (outer - inner);
       particles.push({ id: `dust-${i}`, title: null, r, theta0: rand() * Math.PI * 2, z: (rand() - 0.5) * (outer - inner) * 0.14, omega: angularSpeed(r) });
     }
-    belt = { inner, outer, count: sessions, particles, alpha: beltAlpha(sessions), omega: BELT_OMEGA };
+    belt = { inner, outer, count: sessions, particles, alpha: beltAlpha(sessions), omega: BELT_OMEGA, ecc };
   } else if (sessions > 0 || rockSpecs.length > 0) {
-    const inner = Math.max(lastEdge + MIN_CLEARANCE * 2, spec.beltInner ?? 0);
+    const beltFloor = ecc === 0 || planets.length === 0 ? lastEdge + MIN_CLEARANCE * 2 : prevOrbit + (prevRadius + MIN_CLEARANCE * 2) / (1 - ecc);
+    const inner = Math.max(beltFloor, spec.beltInner ?? 0);
     // 碎石带随会话数长大：宽度按对数长（beltGrowthOf），几条和几千条都装得下
     const outer = beltOuterOf(inner, sessions);
     const n = Math.min(sessions - rootRocks, Math.max(0, Math.floor(spec.dustCap ?? DUST_CAP)));
@@ -376,7 +419,7 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
       const u = clamp(0.06 + 0.86 * rank + 0.12 * jitter, 0.02, 0.98);
       particles.push({ id, title: seed?.title ?? null, r: inner + (outer - inner) * u, theta0: ((hash % 3600) / 3600) * Math.PI * 2, z: 0, omega: BELT_OMEGA });
     }
-    belt = { inner, outer, count: sessions, particles, alpha: beltAlpha(sessions), omega: BELT_OMEGA };
+    belt = { inner, outer, count: sessions, particles, alpha: beltAlpha(sessions), omega: BELT_OMEGA, ecc };
   }
   // 碎石块：等角排开，起点按第一块的 id 取（同一组会话每次排成同一个样子）
   const rockBase = rockSpecs[0] === undefined ? 0 : (hashText(rockSpecs[0].id) % 360) * DEG;
@@ -398,6 +441,7 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
     belt,
     extent: belt === null ? lastEdge : belt.outer,
     adjusted,
+    ecc,
   };
 }
 
@@ -429,10 +473,14 @@ export interface Vec3 {
   z: number;
 }
 
-/** 轨道面内角度 theta 处的点：先在平面内，再绕升交点线倾斜 inclination */
-export function orbitPoint(a: number, inclination: number, node: number, theta: number): Vec3 {
-  const c = Math.cos(theta);
-  const s = Math.sin(theta);
+/**
+ * 轨道面内参数 theta 处的点：先在平面内，再绕升交点线倾斜 inclination。
+ * ecc > 0 时是开普勒椭圆，theta 是偏近点角 E：平面内 (a(cos E − e), b·sin E)，b = a√(1−e²)，
+ * 主星（原点）在焦点上，近日点在 theta = 0（升交点方向）。ecc = 0 时就是半径 a 的圆，与原来逐位相同
+ */
+export function orbitPoint(a: number, inclination: number, node: number, theta: number, ecc = 0): Vec3 {
+  const c = ecc === 0 ? Math.cos(theta) : Math.cos(theta) - ecc;
+  const s = ecc === 0 ? Math.sin(theta) : Math.sin(theta) * Math.sqrt(1 - ecc * ecc);
   const cn = Math.cos(node);
   const sn = Math.sin(node);
   const ci = Math.cos(inclination);
@@ -537,9 +585,11 @@ export function frameViewport(
   width: number,
   height: number,
   box: { width: number; height: number } = galaxyBox(width, height),
+  /** 轨道偏心率：画框也是同一族椭圆（半长轴 FRAME_EXTENT），主星于是偏在画框中心的近日点一侧 */
+  ecc = 0,
 ): Viewport {
   const pts: Projected[] = [];
-  for (let i = 0; i < 144; i++) pts.push(project(orbitPoint(FRAME_EXTENT, 0, 0, (i / 144) * Math.PI * 2), camera));
+  for (let i = 0; i < 144; i++) pts.push(project(orbitPoint(FRAME_EXTENT, 0, 0, (i / 144) * Math.PI * 2, ecc), camera));
   let minX = Infinity;
   let maxX = -Infinity;
   let minY = Infinity;
@@ -580,8 +630,9 @@ export interface OrbitFrame {
   m2y: number;
 }
 
-export function orbitFrame(a: number, inclination: number, node: number, camera: Camera, vp: Viewport): OrbitFrame {
-  const at = (theta: number) => toScreen(project(orbitPoint(a, inclination, node, theta), camera), vp);
+export function orbitFrame(a: number, inclination: number, node: number, camera: Camera, vp: Viewport, ecc = 0): OrbitFrame {
+  // 椭圆按偏近点角参数化之后仍是「中心 + 两个半轴向量」，仿射模型照样精确（中心在 −a·e，主星在焦点）
+  const at = (theta: number) => toScreen(project(orbitPoint(a, inclination, node, theta, ecc), camera), vp);
   const right = at(0);
   const left = at(Math.PI);
   const far = at(Math.PI / 2);
@@ -605,7 +656,7 @@ export function framePoint(frame: OrbitFrame, theta: number, scale = 1): { x: nu
 
 /** 碎石带共用的那一圈（内外沿的正中）：整条带子按它转 */
 export function beltFrame(belt: Belt, camera: Camera, vp: Viewport): OrbitFrame {
-  return orbitFrame((belt.inner + belt.outer) / 2, 0, 0, camera, vp);
+  return orbitFrame((belt.inner + belt.outer) / 2, 0, 0, camera, vp, belt.ecc);
 }
 
 /** 远半圈（θ ∈ (0, π)，主星背后）：画在主星之前；近半圈画在主星之后 */
@@ -708,15 +759,16 @@ export function orbitArcs(layout: GalaxyLayout, camera: Camera, vp: Viewport, sa
   if (layout.expectedOrbit !== null) {
     rings.push({ id: EXPECTED_ID, a: layout.expectedOrbit, inclination: 0, node: 0, expected: true });
   }
+  const ecc = layout.ecc;
   for (const planet of rings) {
-    const frame = orbitFrame(planet.a, planet.inclination, planet.node, camera, vp);
+    const frame = orbitFrame(planet.a, planet.inclination, planet.node, camera, vp, ecc);
     for (let k = 0; k < ARCS_PER_ORBIT; k++) {
       const from = k * span;
       let d = "";
       let depthSum = 0;
       for (let i = 0; i <= samplesPerArc; i++) {
         const theta = from + (span * i) / samplesPerArc;
-        const projected = project(orbitPoint(planet.a, planet.inclination, planet.node, theta), camera);
+        const projected = project(orbitPoint(planet.a, planet.inclination, planet.node, theta, ecc), camera);
         const { x, y } = framePoint(frame, theta);
         d += `${i === 0 ? "M" : "L"}${round1(x)} ${round1(y)}`;
         depthSum += projected.depth;
@@ -796,10 +848,12 @@ export function drawFrame(
     { kind: "star", key: "star", depth: starP.depth, x: starS.x, y: starS.y, r: (vp.focal * layout.starRadius) / starP.depth },
   ];
   const planetAngle = new Map<string, { theta: number; depth: number }>();
+  const ecc = layout.ecc;
   for (const planet of layout.planets) {
-    const theta = planet.phase + planet.omega * t;
-    const p = project(orbitPoint(planet.orbitRadius, planet.inclination, planet.node, theta), camera);
-    const s = framePoint(orbitFrame(planet.orbitRadius, planet.inclination, planet.node, camera, vp), theta);
+    // phase + ω·t 是平近点角；开普勒方程换成轨道上的位置（偏近点角）：近日点快、远日点慢，面积速度恒定
+    const theta = eccentricAnomaly(planet.phase + planet.omega * t, ecc);
+    const p = project(orbitPoint(planet.orbitRadius, planet.inclination, planet.node, theta, ecc), camera);
+    const s = framePoint(orbitFrame(planet.orbitRadius, planet.inclination, planet.node, camera, vp, ecc), theta);
     // 等你的行星：放大一档；单智能体首页固定画在主星前面（再被主星挡住就等于看不见最要紧的那件事）
     const waiting = planet.state === "waiting";
     const depth = waiting && waitingInFront ? Math.min(p.depth, starP.depth - 1e-3) : p.depth;
@@ -834,10 +888,11 @@ export function drawFrame(
     // 不超过此刻最小那颗行星的一半
     const rockR = rockPxOf(items);
     const omega = angularSpeed(layout.rockOrbit);
-    const frame = orbitFrame(layout.rockOrbit, 0, 0, camera, vp);
+    const frame = orbitFrame(layout.rockOrbit, 0, 0, camera, vp, ecc);
     for (const rock of layout.rocks) {
-      const theta = rock.theta0 + omega * t;
-      const p = project(orbitPoint(layout.rockOrbit, 0, 0, theta), camera);
+      // 碎石块在平近点角上等距：同一个周期，永远不互相追上
+      const theta = eccentricAnomaly(rock.theta0 + omega * t, ecc);
+      const p = project(orbitPoint(layout.rockOrbit, 0, 0, theta, ecc), camera);
       const s = framePoint(frame, theta);
       items.push({ kind: "rock", key: `rock-${rock.id}`, planetId: rock.id, state: rock.state, label: rock.label, depth: p.depth, x: s.x, y: s.y, r: rockR });
     }
@@ -927,7 +982,7 @@ export function truncateLabel(text: string, max = LABEL_MAX_CHARS): string {
  */
 export function emptyHintAt(layout: GalaxyLayout, camera: Camera, vp: Viewport): { x: number; y: number } | null {
   if (layout.planets.length > 0 || layout.belt !== null || layout.expectedOrbit === null) return null;
-  const p = project(orbitPoint(layout.expectedOrbit, 0, 0, -Math.PI / 2), camera);
+  const p = project(orbitPoint(layout.expectedOrbit, 0, 0, -Math.PI / 2, layout.ecc), camera);
   const s = toScreen(p, vp);
   return { x: s.x, y: s.y + 28 };
 }

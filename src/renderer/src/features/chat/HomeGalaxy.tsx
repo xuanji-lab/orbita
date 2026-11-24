@@ -44,7 +44,7 @@ import {
   msToNextSide,
   orbitMatrix,
   periodMs,
-  spinFrames,
+  spinKeyframes,
   type Mover,
 } from "./galaxy-motion.ts";
 import { useT } from "../../locale.ts";
@@ -65,6 +65,7 @@ import {
 } from "./callouts.ts";
 import { useGalaxyActions, type GalaxyActions } from "./galaxy-actions.ts";
 import { ClassicGalaxy } from "./ClassicGalaxy.tsx";
+import { useProtoVariants } from "./proto-variants-store.ts";
 
 /** 碎石块的轮廓：七个顶点、半径按 id 抖一点（同一条会话永远同一块石头），不是圆点——它是会话，不是天体 */
 export function rockPath(x: number, y: number, r: number, id: string): string {
@@ -201,11 +202,15 @@ function useGalaxyMotion(target: RefObject<HTMLDivElement | null>, signature: st
     const now = clock.now();
     const list: Animation[] = [];
     for (const node of el.querySelectorAll<HTMLElement>("[data-spin]")) {
-      const from = Number(node.dataset.from);
-      const to = Number(node.dataset.to);
       const period = Number(node.dataset.period);
       if (!Number.isFinite(period) || period <= 0) continue;
-      const anim = node.animate([{ transform: `rotate(${from}deg)` }, { transform: `rotate(${to}deg)` }], { duration: period, iterations: Infinity, easing: "linear" });
+      // 开普勒轨道：data-frames 是按平近点角等分的一串角度（galaxy-motion.spinKeyframes），offset 等分、段内线性；
+      // 正圆轨道与碎石带只有起止两帧
+      const frames = node.dataset.frames === undefined ? [Number(node.dataset.from), Number(node.dataset.to)] : node.dataset.frames.split(",").map(Number);
+      const anim = node.animate(
+        frames.map((deg) => ({ transform: `rotate(${deg}deg)` })),
+        { duration: period, iterations: Infinity, easing: "linear" },
+      );
       anim.currentTime = now % period;
       if (!runningRef.current) anim.pause();
       list.push(anim);
@@ -332,14 +337,14 @@ function OrbitChain(props: { mover: Mover; layer: "far" | "near" | "top"; childr
   const { mover } = props;
   const m = orbitMatrix(mover.frame);
   const period = periodMs(mover.omega);
-  const out = spinFrames(mover.phase, -1);
-  const back = spinFrames(mover.phase, 1);
+  const out = spinKeyframes(mover.phase, mover.ecc, -1).map((deg) => Number(deg.toFixed(4))).join(",");
+  const back = spinKeyframes(mover.phase, mover.ecc, 1).map((deg) => Number(deg.toFixed(4))).join(",");
   return (
     <div className={props.className === undefined ? "gx-node" : `gx-node ${props.className}`} style={{ transform: cssMatrix(m) }} data-body={props.layer === "top" ? undefined : mover.id} data-layer={props.layer}>
-      <div className="gx-node" data-spin="" data-from={out.from} data-to={out.to} data-period={period}>
+      <div className="gx-node" data-spin="" data-frames={out} data-period={period}>
         <div className="gx-node" style={{ transform: `translateX(${R0}px)` }}>
           <div className="gx-node" data-capture={mover.id} data-cx={R0} data-cy={0}>
-            <div className="gx-node" data-spin="" data-from={back.from} data-to={back.to} data-period={period}>
+            <div className="gx-node" data-spin="" data-frames={back} data-period={period}>
               <div className="gx-node" style={{ transform: cssMatrix(inverseLinear(m)) }}>
                 {props.children}
               </div>
@@ -492,8 +497,9 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const size = useBoxSize(rootRef);
   const starless = props.starless === true;
-  // 编排页：每条会话都是一颗碎石（不封顶），碎石带随会话数长大
-  const spec = useMemo(() => ({ ...props.spec, dustCap: Number.POSITIVE_INFINITY, growth: true }), [props.spec]);
+  // 编排页：每条会话都是一颗碎石（不封顶），碎石带随会话数长大；轨道是开普勒椭圆（偏心率候选见 proto-variants）
+  const orbitE = Number(useProtoVariants().orbitE);
+  const spec = useMemo(() => ({ ...props.spec, dustCap: Number.POSITIVE_INFINITY, growth: true, eccentricity: orbitE }), [props.spec, orbitE]);
   const baseLayout = useMemo(() => layoutGalaxy(spec), [spec]);
   const scene = useMemo(() => {
     if (size === null || size.width < 2 || size.height < 2) return null;
@@ -516,7 +522,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
     () =>
       JSON.stringify([
         size,
-        movers.map((m) => [m.id, m.phase, m.omega, m.frame.cx, m.frame.cy, m.frame.m1x, m.frame.m2y]),
+        movers.map((m) => [m.id, m.phase, m.ecc, m.omega, m.frame.cx, m.frame.cy, m.frame.m1x, m.frame.m2y]),
         layout.belt === null ? null : [layout.belt.inner, layout.belt.outer, layout.belt.particles.length],
         ids.length,
       ]),

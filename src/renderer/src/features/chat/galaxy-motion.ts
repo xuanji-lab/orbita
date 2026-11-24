@@ -1,4 +1,4 @@
-import { angularSpeed, ARCS_PER_ORBIT, orbitFrame, planetPx, type Belt, type Camera, type GalaxyLayout, type OrbitFrame, type Viewport } from "./galaxy.ts";
+import { angularSpeed, ARCS_PER_ORBIT, eccentricAnomaly, meanAnomalyOf, orbitFrame, planetPx, type Belt, type Camera, type GalaxyLayout, type OrbitFrame, type Viewport } from "./galaxy.ts";
 
 /**
  * 星系公转交给合成器（纯计算，可被 node --test 直接加载；HomeGalaxy 按这里算出的矩阵与关键帧搭 DOM）。
@@ -81,13 +81,52 @@ export function spinFrames(phaseRad: number, dir: 1 | -1): { from: number; to: n
   return { from, to: from + dir * 360 };
 }
 
+/**
+ * 开普勒轨道的转动层关键帧（偏心率 ecc > 0）：转动层转的是偏近点角 E，它随时间不匀速（近日点快、远日点慢）。
+ * 合成器只会在关键帧之间线性插值，所以按「平近点角等分」取 KEPLER_FRAMES 段——第 k 帧在 offset k/N 处，
+ * 角度 = dir · E(phase + 2πk/N)（度，连续展开、单调）。动画仍是一个周期、线性 easing、无限循环；
+ * 点永远在椭圆上（转动层只转、M 把单位圆送到椭圆上），插值误差只在时间上：e = 0.45 时最多约 0.15°（见测试）。
+ * ecc = 0 时就是 spinFrames 的两帧。
+ */
+export const KEPLER_FRAMES = 72;
+
+export function spinKeyframes(phaseRad: number, ecc: number, dir: 1 | -1): number[] {
+  if (ecc === 0) {
+    const { from, to } = spinFrames(phaseRad, dir);
+    return [from, to];
+  }
+  const out: number[] = [];
+  const E0 = eccentricAnomaly(phaseRad, ecc);
+  for (let k = 0; k <= KEPLER_FRAMES; k++) {
+    // E(M + 2πk/N) − E(M) 落在 [0, 2π]：按偏移累加，得到连续展开的角度
+    const E = eccentricAnomaly(phaseRad + (Math.PI * 2 * k) / KEPLER_FRAMES, ecc);
+    let delta = E - E0;
+    if (k === KEPLER_FRAMES) delta = Math.PI * 2;
+    else delta = ((delta % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+    out.push((dir * (E0 + delta) * 180) / Math.PI);
+  }
+  return out;
+}
+
+/** 关键帧（等分 offset）在 progress ∈ [0,1) 处的线性插值——与 Web Animations 的取值一致（测试用） */
+export function keyframeAt(frames: readonly number[], progress: number): number {
+  const n = frames.length - 1;
+  const x = Math.min(Math.max(progress, 0), 1) * n;
+  const k = Math.min(Math.floor(x), n - 1);
+  const a = frames[k] ?? 0;
+  const b = frames[k + 1] ?? a;
+  return a + (b - a) * (x - k);
+}
+
 /** 一个在轨道上走的天体（行星或在做事的碎石块） */
 export interface Mover {
   id: string;
   kind: "planet" | "rock";
   frame: OrbitFrame;
-  /** t = 0 的轨道角（rad） */
+  /** t = 0 的平近点角（rad；正圆轨道上就是轨道角） */
   phase: number;
+  /** 轨道偏心率（0 = 正圆） */
+  ecc: number;
   omega: number;
   /** 屏幕半径（px），公转中不变 */
   r: number;
@@ -98,17 +137,18 @@ export function moversOf(layout: GalaxyLayout, camera: Camera, vp: Viewport, min
   const movers: Mover[] = layout.planets.map((planet) => ({
     id: planet.id,
     kind: "planet",
-    frame: orbitFrame(planet.orbitRadius, planet.inclination, planet.node, camera, vp),
+    frame: orbitFrame(planet.orbitRadius, planet.inclination, planet.node, camera, vp, layout.ecc),
     phase: planet.phase,
+    ecc: layout.ecc,
     omega: planet.omega,
     r: planetPx(planet.radius, planet.state === "waiting", camera, vp, minPlanetPx),
     waiting: planet.state === "waiting",
   }));
   if (layout.rockOrbit !== null) {
-    const frame = orbitFrame(layout.rockOrbit, 0, 0, camera, vp);
+    const frame = orbitFrame(layout.rockOrbit, 0, 0, camera, vp, layout.ecc);
     const omega = angularSpeed(layout.rockOrbit);
     for (const rock of layout.rocks) {
-      movers.push({ id: rock.id, kind: "rock", frame, phase: rock.theta0, omega, r: rockPx, waiting: rock.state === "waiting" });
+      movers.push({ id: rock.id, kind: "rock", frame, phase: rock.theta0, ecc: layout.ecc, omega, r: rockPx, waiting: rock.state === "waiting" });
     }
   }
   return movers;
@@ -128,16 +168,17 @@ function wrap(theta: number): number {
 
 /** 此刻在不在远半圈那一层（主星背后）：θ ∈ (FAR_MARGIN, π − FAR_MARGIN) */
 export function moverFar(mover: Mover, tSec: number): boolean {
-  const theta = wrap(mover.phase + mover.omega * tSec);
+  // 远近按轨道上的位置（偏近点角）分：椭圆上 sin E > 0 就是主星背后那半圈
+  const theta = wrap(eccentricAnomaly(mover.phase + mover.omega * tSec, mover.ecc));
   return theta > FAR_MARGIN && theta < Math.PI - FAR_MARGIN;
 }
 
-/** 离下一次换层（θ 走到 FAR_MARGIN 或 π − FAR_MARGIN）还有多少毫秒 */
+/** 离下一次换层（偏近点角走到 FAR_MARGIN 或 π − FAR_MARGIN）还有多少毫秒：边界换成平近点角，时间与它成正比 */
 export function msToNextSide(mover: Mover, tSec: number): number {
-  const theta = wrap(mover.phase + mover.omega * tSec);
+  const mean = wrap(mover.phase + mover.omega * tSec);
   let best = Infinity;
   for (const edge of [FAR_MARGIN, Math.PI - FAR_MARGIN]) {
-    const ahead = wrap(edge - theta);
+    const ahead = wrap(meanAnomalyOf(edge, mover.ecc) - mean);
     best = Math.min(best, ahead < 1e-6 ? Math.PI * 2 : ahead);
   }
   return (best / Math.max(mover.omega, 1e-9)) * 1000;

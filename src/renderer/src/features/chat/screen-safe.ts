@@ -19,8 +19,10 @@ import {
   planetPx,
   dustLookOf,
   beltOuterOf,
+  BELT_OVERSHOOT,
   framePoint,
   orbitFrame,
+  eccOf,
   starRadius,
   type Camera,
   type GalaxyLayout,
@@ -29,6 +31,7 @@ import {
   type Viewport,
 } from "./galaxy.ts";
 import { ORBIT_STEP } from "./galaxy-data.ts";
+import { FAR_MARGIN } from "./galaxy-motion.ts";
 import { LOCK_GAP } from "./callouts.ts";
 
 /**
@@ -103,6 +106,71 @@ function shortAxisGap(a: OrbitFrame, aScale: number, b: OrbitFrame, bScale: numb
 }
 
 /**
+ * 开普勒椭圆（偏心率 > 0）：主星在焦点上，同心椭圆「最窄在短轴」那条捷径不成立——位似椭圆最挤在近日点一侧，
+ * 而且最窄处不在任何一个固定的参数角上。所以沿两条曲线各取 CURVE_SAMPLES 个点，量 A 上每个点到 B 的折线的最短距离。
+ * 两圈是以主星为中心的位似椭圆，最近点的参数角相差不大，只在 ±CURVE_WINDOW 个点里找。
+ */
+const CURVE_SAMPLES = 96;
+const CURVE_WINDOW = 6;
+
+function samples(frame: OrbitFrame, scale: number): { x: number; y: number }[] {
+  const out: { x: number; y: number }[] = [];
+  for (let i = 0; i < CURVE_SAMPLES; i++) out.push(framePoint(frame, (i / CURVE_SAMPLES) * Math.PI * 2, scale));
+  return out;
+}
+
+function segmentDistance(p: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  const u = len2 === 0 ? 0 : Math.min(1, Math.max(0, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2));
+  return Math.hypot(p.x - (a.x + dx * u), p.y - (a.y + dy * u));
+}
+
+export function curveGap(a: OrbitFrame, aScale: number, b: OrbitFrame, bScale: number): number {
+  const pa = samples(a, aScale);
+  const pb = samples(b, bScale);
+  let best = Infinity;
+  for (let i = 0; i < CURVE_SAMPLES; i++) {
+    const p = pa[i] as { x: number; y: number };
+    for (let k = -CURVE_WINDOW; k < CURVE_WINDOW; k++) {
+      const j = (i + k + CURVE_SAMPLES) % CURVE_SAMPLES;
+      best = Math.min(best, segmentDistance(p, pb[j] as { x: number; y: number }, pb[(j + 1) % CURVE_SAMPLES] as { x: number; y: number }));
+    }
+  }
+  return best;
+}
+
+/** 两圈之间的屏幕间距：正圆轨道照旧量短轴两端（与改前逐位相同），开普勒椭圆沿整条曲线量 */
+function orbitGap(ecc: number, a: OrbitFrame, aScale: number, b: OrbitFrame, bScale: number): number {
+  return ecc === 0 ? shortAxisGap(a, aScale, b, bScale) : curveGap(a, aScale, b, bScale);
+}
+
+/**
+ * 画在主星前面的那一段（不在远层：偏近点角不在 (FAR_MARGIN, π − FAR_MARGIN) 里）离主星中心最近多远。
+ * 正圆轨道就是近侧短轴端点；开普勒椭圆上最近的一点偏向近日点那一侧，取样量。
+ */
+function frontDistance(frame: OrbitFrame, star: { x: number; y: number }): number {
+  let best = Infinity;
+  for (let i = 0; i < 144; i++) {
+    const theta = (i / 144) * Math.PI * 2;
+    if (theta > FAR_MARGIN && theta < Math.PI - FAR_MARGIN) continue;
+    const p = framePoint(frame, theta);
+    best = Math.min(best, Math.hypot(p.x - star.x, p.y - star.y));
+  }
+  return best;
+}
+
+/** 某圈轨道上「画在主星前面」那一段到主星的最近距离 */
+function starDistance(camera: Camera, vp: Viewport, a: number, ecc: number, star: { x: number; y: number }): number {
+  if (ecc === 0) {
+    const near = screenOf(camera, vp, a, NEAR);
+    return Math.hypot(near.x - star.x, near.y - star.y);
+  }
+  return frontDistance(orbitFrame(a, 0, 0, camera, vp, ecc), star);
+}
+
+/**
  * 在给定相机下按屏幕约束排出每颗行星的轨道半径；装不下返回 null。
  * bodies 按轨道次序（由内到外，= 要紧程度），lower 是每颗原来的轨道半径（只往外推，不往里收）。
  */
@@ -117,6 +185,7 @@ function placeOrbits(
   inside = false,
   /** 两颗天体轮廓之间至少留多少（px）：子智能体星系按行星半径的一半给（bodyGapOf） */
   gap = SCREEN_GAP,
+  ecc = 0,
 ): number[] | null {
   const star = screenOf(camera, vp, 0, 0);
   const orbits: number[] = [];
@@ -128,14 +197,12 @@ function placeOrbits(
     for (;;) {
       // 行星整颗要在行星区里（外沿之外是碎石带）
       if (a > PLANET_ZONE - body.radius) return null;
-      const near = screenOf(camera, vp, a, NEAR);
-      const far = screenOf(camera, vp, a, FAR);
       const rNear = bodyPx(body, camera, vp, minPx);
       const rFar = bodyPx(body, camera, vp, minPx);
-      if (inside && !orbitInside(camera, vp, a, Math.max(rNear, rFar))) return null;
-      let ok = Math.hypot(near.x - star.x, near.y - star.y) >= starPx + rNear + gap;
+      if (inside && !orbitInside(camera, vp, a, Math.max(rNear, rFar), ecc)) return null;
+      let ok = starDistance(camera, vp, a, ecc, star) >= starPx + rNear + gap;
       if (ok && prevA !== undefined && prevBody !== undefined) {
-        ok = shortAxisGap(orbitFrame(prevA, 0, 0, camera, vp), 1, orbitFrame(a, 0, 0, camera, vp), 1) >= Math.max(rNear, rFar) + bodyPx(prevBody, camera, vp, minPx) + gap;
+        ok = orbitGap(ecc, orbitFrame(prevA, 0, 0, camera, vp, ecc), 1, orbitFrame(a, 0, 0, camera, vp, ecc), 1) >= Math.max(rNear, rFar) + bodyPx(prevBody, camera, vp, minPx) + gap;
       }
       if (ok) break;
       a += ORBIT_NUDGE;
@@ -153,12 +220,13 @@ export function bodyGapOf(minPx: number): number {
   return Math.max(SCREEN_GAP, minPx * 0.5);
 }
 
-/** 半径 a 的轨道（放平）连同上面半径 r 的天体，整圈都在画布里（留 EDGE_PX） */
-function orbitInside(camera: Camera, vp: Viewport, a: number, r: number): boolean {
-  const near = screenOf(camera, vp, a, NEAR);
-  const far = screenOf(camera, vp, a, FAR);
-  const right = screenOf(camera, vp, a, 0);
-  const left = screenOf(camera, vp, a, Math.PI);
+/** 半径 a 的轨道（放平）连同上面半径 r 的天体，整圈都在画布里（留 EDGE_PX）。椭圆的四个极点仍在参数角 0 / π / ±π/2 上 */
+function orbitInside(camera: Camera, vp: Viewport, a: number, r: number, ecc = 0): boolean {
+  const at = (theta: number) => (ecc === 0 ? screenOf(camera, vp, a, theta) : framePoint(orbitFrame(a, 0, 0, camera, vp, ecc), theta));
+  const near = at(NEAR);
+  const far = at(FAR);
+  const right = at(0);
+  const left = at(Math.PI);
   return (
     Math.min(left.x, right.x) - r >= EDGE_PX &&
     Math.max(left.x, right.x) + r <= vp.width - EDGE_PX &&
@@ -171,25 +239,27 @@ function orbitInside(camera: Camera, vp: Viewport, a: number, r: number): boolea
  * 碎石块那一圈：在碎石带里取 ROCK_ORBIT_AT 处，再按屏幕约束往外让——近侧 / 远侧短轴端点与最外一颗行星竖向留出
  * 两者屏幕半径之和 + SCREEN_GAP，近侧离主星同理。最多推到画框外沿。碎石块彼此同一圈等角排开，永远不相撞。
  */
-function placeRockOrbit(camera: Camera, vp: Viewport, layout: GalaxyLayout, minPx: number, starPx: number, inside = false): number | null {
-  if (layout.rockOrbit === null) return null;
+function placeRockOrbit(camera: Camera, vp: Viewport, layout: GalaxyLayout, minPx: number, starPx: number, inside = false): { orbit: number | null; cramped: boolean } {
+  const ecc = layout.ecc;
+  if (layout.rockOrbit === null) return { orbit: null, cramped: false };
   const star = screenOf(camera, vp, 0, 0);
   const last = layout.planets[layout.planets.length - 1];
   const lastBody: Body | null = last === undefined ? null : { radius: last.radius, waiting: last.state === "waiting" };
+  // 开普勒椭圆：近日点一侧两圈只隔半长轴差的 (1 − e) 倍，碎石块那一圈允许伸进画框四周的边距（与碎石带外沿同一个上限）
+  const cap = ecc === 0 ? FRAME_EXTENT : FRAME_EXTENT * BELT_OVERSHOOT;
   let a = layout.rockOrbit;
-  for (; a < FRAME_EXTENT; a += ORBIT_NUDGE) {
-    const near = screenOf(camera, vp, a, NEAR);
-    const far = screenOf(camera, vp, a, FAR);
-    let ok = Math.hypot(near.x - star.x, near.y - star.y) >= starPx + ROCK_CLEAR_PX + SCREEN_GAP;
+  let ok = false;
+  for (; a < cap; a += ORBIT_NUDGE) {
+    ok = starDistance(camera, vp, a, ecc, star) >= starPx + ROCK_CLEAR_PX + SCREEN_GAP;
     if (ok && last !== undefined && lastBody !== null) {
-      ok = shortAxisGap(orbitFrame(last.orbitRadius, 0, 0, camera, vp), 1, orbitFrame(a, 0, 0, camera, vp), 1) >= ROCK_CLEAR_PX + bodyPx(lastBody, camera, vp, minPx) + SCREEN_GAP;
+      ok = orbitGap(ecc, orbitFrame(last.orbitRadius, 0, 0, camera, vp, ecc), 1, orbitFrame(a, 0, 0, camera, vp, ecc), 1) >= ROCK_CLEAR_PX + bodyPx(lastBody, camera, vp, minPx) + SCREEN_GAP;
     }
     if (ok) break;
   }
-  const placed = Math.min(a, FRAME_EXTENT);
+  const placed = Math.min(a, cap);
   // 放大过的窄画面：碎石块那一圈出画就整圈不画（它们仍是碎石带里的碎石，键盘从「全部 N 条会话」去树状图）
-  if (inside && !orbitInside(camera, vp, placed, ROCK_CLEAR_PX)) return null;
-  return placed;
+  if (inside && !orbitInside(camera, vp, placed, ROCK_CLEAR_PX, ecc)) return { orbit: null, cramped: false };
+  return { orbit: placed, cramped: !ok };
 }
 
 /**
@@ -201,11 +271,12 @@ function placeBeltInner(camera: Camera, vp: Viewport, layout: GalaxyLayout, last
   const belt = layout.belt;
   if (belt === null) return undefined;
   const dustPx = dustLookOf(belt.count).px;
-  const planetFrame = orbitFrame(lastOrbit, 0, 0, camera, vp);
+  const ecc = layout.ecc;
+  const planetFrame = orbitFrame(lastOrbit, 0, 0, camera, vp, ecc);
   let inner = belt.inner;
   for (let i = 0; i < 400; i++) {
     const mid = (inner + beltOuterOf(inner, belt.count)) / 2;
-    if (shortAxisGap(planetFrame, 1, orbitFrame(mid, 0, 0, camera, vp), inner / mid) >= lastPx + dustPx + gap) break;
+    if (orbitGap(ecc, planetFrame, 1, orbitFrame(mid, 0, 0, camera, vp, ecc), inner / mid) >= lastPx + dustPx + gap) break;
     inner += ORBIT_NUDGE;
   }
   return inner;
@@ -222,6 +293,7 @@ export function fitScreenSafe(
 ): SafeScene {
   const flat: GalaxySpec = { ...spec, planets: spec.planets.map((planet) => ({ ...planet, inclinationDeg: 0 })) };
   const base = layoutGalaxy(flat);
+  const ecc = eccOf(spec.eccentricity);
   const starExtent = Math.max(starRadius(spec.starMass), spec.starExtent ?? 0);
   let shown = base.planets;
   let dropped = 0;
@@ -229,7 +301,7 @@ export function fitScreenSafe(
     const bodies: Body[] = shown.map((planet) => ({ radius: planet.radius, waiting: planet.state === "waiting" }));
     for (let e = Math.max(baseElevationDeg, CAMERA_ELEVATION_DEG); e <= SAFE_ELEVATION_MAX; e += ELEVATION_STEP) {
       const camera = makeCamera(FRAME_EXTENT, e);
-      let viewport = frameViewport(camera, width, height, box);
+      let viewport = frameViewport(camera, width, height, box, ecc);
       const starDepth = project({ x: 0, y: 0, z: 0 }, camera).depth;
       let starPx = (viewport.focal * starExtent) / starDepth;
       let starBodyPx = (viewport.focal * starRadius(spec.starMass)) / starDepth;
@@ -241,14 +313,15 @@ export function fitScreenSafe(
       const zoomed = agentMode && bodies.length > 0 && starBodyPx < needStar;
       if (zoomed) {
         const k = needStar / starBodyPx;
-        viewport = { ...viewport, focal: viewport.focal * k };
+        // 开普勒椭圆：主星偏在近日点一侧，绕主星放大会把远日点那一侧推出画——横向改成绕画布中线放大（正圆时 cx 就在中线上，不变）
+        viewport = { ...viewport, focal: viewport.focal * k, cx: ecc === 0 ? viewport.cx : width / 2 + (viewport.cx - width / 2) * k };
         starPx *= k;
         starBodyPx *= k;
       }
       const readable = readablePlanetPx(camera, viewport, ORBIT_STEP, readableMax, agentMode ? AGENT_READABLE_GAP : PLANET_READABLE_GAP);
       const starCap = starBodyPx / (STAR_OVER_PLANET * WAITING_SCALE);
       const minPx = agentMode ? Math.min(Math.max(readable, AGENT_READABLE_FLOOR), starCap) : readable;
-      const orbits = placeOrbits(camera, viewport, bodies, shown.map((planet) => planet.orbitRadius), starPx, minPx, zoomed, agentMode ? bodyGapOf(minPx) : SCREEN_GAP);
+      const orbits = placeOrbits(camera, viewport, bodies, shown.map((planet) => planet.orbitRadius), starPx, minPx, zoomed, agentMode ? bodyGapOf(minPx) : SCREEN_GAP, ecc);
       if (orbits === null) continue;
       const planets = shown.map((planet, i) => {
         const a = orbits[i] ?? planet.orbitRadius;
@@ -277,14 +350,17 @@ export function fitScreenSafe(
         hidden: base.hidden + dropped,
         expectedOrbit: base.expectedOrbit,
       };
-      return { camera, viewport, layout: { ...layout, rockOrbit: placeRockOrbit(camera, viewport, layout, minPx, starPx, zoomed) }, elevationDeg: e, minPlanetPx: minPx, dropped };
+      const rock = placeRockOrbit(camera, viewport, layout, minPx, starPx, zoomed);
+      // 碎石块那一圈让不开最外一颗行星（只在开普勒椭圆的近日点一侧会发生）：当作装不下，抬俯角或少画最外一圈
+      if (rock.cramped && ecc > 0) continue;
+      return { camera, viewport, layout: { ...layout, rockOrbit: rock.orbit }, elevationDeg: e, minPlanetPx: minPx, dropped };
     }
     if (shown.length === 0) {
       const camera = makeCamera(FRAME_EXTENT, baseElevationDeg);
-      const viewport = frameViewport(camera, width, height, box);
+      const viewport = frameViewport(camera, width, height, box, ecc);
       const minPx = readablePlanetPx(camera, viewport, ORBIT_STEP, readableMax);
       const starPx = (viewport.focal * starExtent) / project({ x: 0, y: 0, z: 0 }, camera).depth;
-      return { camera, viewport, layout: { ...base, rockOrbit: placeRockOrbit(camera, viewport, base, minPx, starPx) }, elevationDeg: baseElevationDeg, minPlanetPx: minPx, dropped };
+      return { camera, viewport, layout: { ...base, rockOrbit: placeRockOrbit(camera, viewport, base, minPx, starPx).orbit }, elevationDeg: baseElevationDeg, minPlanetPx: minPx, dropped };
     }
     shown = shown.slice(0, -1);
     dropped += 1;
